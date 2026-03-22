@@ -34,6 +34,8 @@ import { RuffClient } from "./clients/ruff-client.js";
 import { BiomeClient } from "./clients/biome-client.js";
 import { KnipClient } from "./clients/knip-client.js";
 import { TodoScanner } from "./clients/todo-scanner.js";
+import { JscpdClient } from "./clients/jscpd-client.js";
+import { TypeCoverageClient } from "./clients/type-coverage-client.js";
 import { DependencyChecker } from "./clients/dependency-checker.js";
 import * as path from "node:path";
 import * as nodeFs from "node:fs";
@@ -63,6 +65,8 @@ export default function (pi: ExtensionAPI) {
   const biomeClient = new BiomeClient();
   const knipClient = new KnipClient();
   const todoScanner = new TodoScanner();
+  const jscpdClient = new JscpdClient();
+  const typeCoverageClient = new TypeCoverageClient();
   const depChecker = new DependencyChecker();
 
   // --- Flags ---
@@ -235,6 +239,8 @@ export default function (pi: ExtensionAPI) {
     if (ruffClient.isAvailable()) tools.push("Ruff");
     if (knipClient.isAvailable()) tools.push("Knip");
     if (depChecker.isAvailable()) tools.push("Madge");
+    if (jscpdClient.isAvailable()) tools.push("jscpd");
+    if (typeCoverageClient.isAvailable()) tools.push("type-coverage");
 
     log(`Active tools: ${tools.join(", ")}`);
 
@@ -251,6 +257,20 @@ export default function (pi: ExtensionAPI) {
       const knipResult = knipClient.analyze(cwd);
       const knipReport = knipClient.formatResult(knipResult);
       if (knipReport) parts.push(knipReport);
+    }
+
+    // Duplicate code detection
+    if (jscpdClient.isAvailable()) {
+      const jscpdResult = jscpdClient.scan(cwd);
+      const jscpdReport = jscpdClient.formatResult(jscpdResult);
+      if (jscpdReport) parts.push(jscpdReport);
+    }
+
+    // TypeScript type coverage
+    if (typeCoverageClient.isAvailable()) {
+      const tcResult = typeCoverageClient.scan(cwd);
+      const tcReport = typeCoverageClient.formatResult(tcResult);
+      if (tcReport) parts.push(tcReport);
     }
 
     if (parts.length > 0) {

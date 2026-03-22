@@ -16,6 +16,8 @@ Real-time code quality feedback for [pi](https://github.com/mariozechner/pi-codi
 ### At session start (injected into first tool result)
 - **TODO/FIXME/HACK/BUG scanner** — regex scan of the whole project, grouped by severity, so the agent knows what's already flagged as broken or incomplete
 - **Knip** — unused exports, types, and unlisted dependencies
+- **jscpd** — duplicate code blocks (copy-paste detection across the whole project)
+- **type-coverage** — percentage of identifiers properly typed; lists exact locations of implicit/explicit `any`
 
 ### On-demand commands
 | Command | Description |
@@ -109,3 +111,5 @@ Rules live in `rules/ast-grep-rules/rules/`. Categories:
 | `knip` | `npm i -D knip` | Dead code detection |
 | `madge` | `npm i -D madge` | Circular deps |
 | `ruff` | `pip install ruff` | Python lint + format |
+| `jscpd` | `npm i -D jscpd` | Duplicate code detection |
+| `type-coverage` | `npm i -D type-coverage` | TypeScript type coverage |

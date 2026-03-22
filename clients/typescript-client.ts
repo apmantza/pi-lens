@@ -22,16 +22,29 @@ import type {
 const TS_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx"]);
 
 // Default compiler options when no tsconfig is found
-const DEFAULT_COMPILER_OPTIONS: ts.CompilerOptions = {
-  target: ts.ScriptTarget.ES2020,
-  module: ts.ModuleKind.ESNext,
-  moduleResolution: ts.ModuleResolutionKind.Bundler,
-  strict: true,
-  esModuleInterop: true,
-  skipLibCheck: true,
-  lib: ["lib.es2020.d.ts", "lib.dom.d.ts", "lib.dom.iterable.d.ts"],
-  types: [],
-};
+/**
+ * Build default CompilerOptions through TypeScript's own config parser so that
+ * lib name → file path resolution works correctly in the Language Service.
+ * Direct assignment of `lib: ["lib.es2020.d.ts"]` doesn't work because the
+ * Language Service looks up those names relative to cwd, not the TS install dir.
+ */
+function buildDefaultCompilerOptions(): ts.CompilerOptions {
+  const fakeConfig = {
+    compilerOptions: {
+      target: "ES2020",
+      module: "ESNext",
+      moduleResolution: "bundler",
+      strict: true,
+      esModuleInterop: true,
+      skipLibCheck: true,
+      lib: ["es2020", "dom", "dom.iterable"],
+    },
+  };
+  const parsed = ts.parseJsonConfigFileContent(fakeConfig, ts.sys, process.cwd());
+  return { ...parsed.options, skipLibCheck: true };
+}
+
+const DEFAULT_COMPILER_OPTIONS: ts.CompilerOptions = buildDefaultCompilerOptions();
 
 /**
  * Walk up from startDir until we find a tsconfig.json, or hit the fs root.
