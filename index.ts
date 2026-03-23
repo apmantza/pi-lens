@@ -263,11 +263,12 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "ast_grep_search",
 		label: "AST Search",
-		description: "Search code patterns using AST-aware matching. Use meta-variables: $VAR (single node), $$$ (multiple). Examples: 'console.log($MSG)', 'def $FUNC($$$):'",
+		description: "Search code using AST-aware pattern matching. IMPORTANT: Use specific AST patterns, NOT text search. Examples:\n- Find function: 'function $NAME() { $$$BODY }'\n- Find call: 'fetchMetrics($ARGS)'\n- Find import: 'import { $NAMES } from \"$PATH\"'\n- Generic identifier (broad): 'fetchMetrics'\n\nAlways prefer specific patterns with context over bare identifiers. Use 'paths' to scope to specific files/folders.",
+		promptSnippet: "Use ast_grep_search for AST-aware code search",
 		parameters: Type.Object({
-			pattern: Type.String({ description: "AST pattern with meta-variables" }),
+			pattern: Type.String({ description: "AST pattern (use function/class/call context, not text)" }),
 			lang: Type.Union(LANGUAGES.map((l) => Type.Literal(l)), { description: "Target language" }),
-			paths: Type.Optional(Type.Array(Type.String(), { description: "Paths to search (default: .)" })),
+			paths: Type.Optional(Type.Array(Type.String(), { description: "Specific files/folders to search" })),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			if (!astGrepClient.isAvailable()) {
@@ -290,12 +291,13 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool({
 		name: "ast_grep_replace",
 		label: "AST Replace",
-		description: "Replace code patterns with AST-aware rewriting. Dry-run by default (preview changes). Use apply=true to apply. Example: pattern='console.log($MSG)' rewrite='logger.info($MSG)'",
+		description: "Replace code using AST-aware pattern matching. IMPORTANT: Use specific AST patterns, not text. Dry-run by default (use apply=true to apply).\n\nExamples:\n- pattern='console.log($MSG)' rewrite='logger.info($MSG)'\n- pattern='var $X' rewrite='let $X'\n- pattern='function $NAME() { }' rewrite='' (delete)\n\nAlways use 'paths' to scope to specific files/folders. Dry-run first to preview changes.",
+		promptSnippet: "Use ast_grep_replace for AST-aware find-and-replace",
 		parameters: Type.Object({
-			pattern: Type.String({ description: "AST pattern to match" }),
-			rewrite: Type.String({ description: "Replacement pattern" }),
+			pattern: Type.String({ description: "AST pattern to match (be specific with context)" }),
+			rewrite: Type.String({ description: "Replacement using meta-variables from pattern" }),
 			lang: Type.Union(LANGUAGES.map((l) => Type.Literal(l)), { description: "Target language" }),
-			paths: Type.Optional(Type.Array(Type.String(), { description: "Paths to search (default: .)" })),
+			paths: Type.Optional(Type.Array(Type.String(), { description: "Specific files/folders" })),
 			apply: Type.Optional(Type.Boolean({ description: "Apply changes (default: false)" })),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
