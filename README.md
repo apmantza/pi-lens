@@ -70,6 +70,7 @@ Example:
 | `/dead-code` | Find unused exports/files/dependencies (requires knip) |
 | `/check-deps` | Circular dependency scan (requires madge) |
 | `/format [file|--all]` | Apply Biome formatting |
+| `/design-review [path]` | Analyze files for design smells (long methods, large classes, etc.) |
 
 ### On-demand tools
 
@@ -135,6 +136,9 @@ Each rule includes a `message` and `note` that are shown in diagnostics, so the 
 
 **Patterns**
 `no-console-log`, `no-alert`, `no-delete-operator`, `no-shadow`, `no-star-imports`, `switch-needs-default`
+
+**Design Smells**
+`long-method`, `long-parameter-list`, `large-class`
 
 ---
 

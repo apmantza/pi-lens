@@ -187,6 +187,88 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	pi.registerCommand("design-review", {
+		description:
+			"Analyze files for design smells (long methods, large classes, deep nesting). Usage: /design-review [path]",
+		handler: async (args, ctx) => {
+			if (!astGrepClient.isAvailable()) {
+				ctx.ui.notify(
+					"ast-grep not installed. Run: npm i -D @ast-grep/cli",
+					"error",
+				);
+				return;
+			}
+
+			const targetPath = args.trim() || ctx.cwd || process.cwd();
+			ctx.ui.notify("🔍 Analyzing design smells...", "info");
+
+			const configPath = path.join(
+				typeof __dirname !== "undefined" ? __dirname : ".",
+				"rules",
+				"ast-grep-rules",
+				".sgconfig.yml",
+			);
+
+			try {
+				const result = require("node:child_process").spawnSync("npx", [
+					"sg",
+					"scan",
+					"--config", configPath,
+					"--json",
+					targetPath,
+				], {
+					encoding: "utf-8",
+					timeout: 30000,
+					shell: true,
+				});
+
+				const output = result.stdout || result.stderr || "";
+				if (!output.trim() || result.status !== 1) {
+					ctx.ui.notify("✓ No design smells found", "info");
+					return;
+				}
+
+				let issues: Array<{line: number; rule: string; message: string}> = [];
+				const lines = output.split("\n").filter((l: string) => l.trim());
+
+				for (const line of lines) {
+					try {
+						const item = JSON.parse(line);
+						const ruleId = item.ruleId || item.name || "unknown";
+						const ruleDesc = astGrepClient.getRuleDescription?.(ruleId);
+						const message = ruleDesc?.message || item.message || ruleId;
+						const lineNum = item.labels?.[0]?.range?.start?.line || 
+							item.spans?.[0]?.range?.start?.line || 0;
+
+						issues.push({
+							line: lineNum + 1,
+							rule: ruleId,
+							message: message,
+						});
+					} catch {
+						// Skip unparseable lines
+					}
+				}
+
+				if (issues.length === 0) {
+					ctx.ui.notify("✓ No design smells found", "info");
+					return;
+				}
+
+				let report = `[Design Review] ${issues.length} design smell(s) found:\n`;
+				for (const issue of issues.slice(0, 20)) {
+					report += `  L${issue.line}: ${issue.rule} — ${issue.message}\n`;
+				}
+				if (issues.length > 20) {
+					report += `  ... and ${issues.length - 20} more\n`;
+				}
+				ctx.ui.notify(report, "info");
+			} catch (err: any) {
+				ctx.ui.notify(`Design review failed: ${err.message}`, "error");
+			}
+		},
+	});
+
 	pi.registerCommand("format", {
 		description:
 			"Apply Biome formatting to files. Usage: /format [file-path] or /format --all",

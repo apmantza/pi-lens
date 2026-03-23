@@ -411,7 +411,7 @@ export class AstGrepClient {
     return null;
   }
 
-  private getRuleDescription(ruleId: string): RuleDescription | undefined {
+  getRuleDescription(ruleId: string): RuleDescription | undefined {
     const descriptions = this.loadRuleDescriptions();
     return descriptions.get(ruleId);
   }

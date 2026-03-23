@@ -2,6 +2,15 @@
 
 All notable changes to pi-lens will be documented in this file.
 
+## [1.4.0] - 2026-03-23
+
+### Added
+- **Design smell rules**: New `long-method`, `long-parameter-list`, and `large-class` rules for structural quality checks.
+- **`/design-review` command**: Analyze files for design smells. Usage: `/design-review [path]`
+
+### Changed
+- **Improved ast-grep tool descriptions**: Better pattern guidance to prevent overly broad searches.
+
 ## [1.3.0] - 2026-03-23
 
 ### Changed

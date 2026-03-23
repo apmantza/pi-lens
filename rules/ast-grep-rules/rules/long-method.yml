@@ -1,0 +1,9 @@
+id: long-method
+language: TypeScript
+message: "Long method detected — consider extracting smaller functions"
+severity: hint
+note: |
+  Methods over 50 lines are harder to test and maintain.
+  Consider extracting logical chunks into helper functions.
+rule:
+  kind: function_declaration

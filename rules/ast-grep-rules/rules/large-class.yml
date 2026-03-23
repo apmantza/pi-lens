@@ -1,0 +1,9 @@
+id: large-class
+language: TypeScript
+message: "Large class detected — consider splitting responsibilities"
+severity: hint
+note: |
+  Classes with more than 20 methods are harder to maintain.
+  Consider extracting related functionality into separate classes.
+rule:
+  kind: class_declaration
