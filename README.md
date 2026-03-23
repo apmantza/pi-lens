@@ -104,7 +104,7 @@ pip install ruff
 
 | Flag | Default | Description |
 |---|---|---|
-| `--autofix-biome` | **`true`** | Auto-fix Biome lint/format issues on every write |
+| `--autofix-biome` | `false` | Auto-fix Biome lint/format issues on every write |
 | `--autofix-ruff` | **`true`** | Auto-fix Ruff issues on every write |
 | `--no-biome` | `false` | Disable Biome |
 | `--no-ast-grep` | `false` | Disable ast-grep |

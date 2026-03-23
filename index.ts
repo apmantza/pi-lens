@@ -10,9 +10,9 @@
  * Proactive hints before write/edit:
  * - Warns when target file already has existing violations
  *
- * Auto-fix on write (enable with autofix-biome / autofix-ruff flags):
- * - Biome: applies --write --unsafe (lint + format fixes)
- * - Ruff: applies --fix + format (lint + format fixes)
+	 * Auto-fix on write (enable with --autofix-ruff flag, Biome auto-fix disabled by default):
+	 * - Biome: feedback only by default, use /format to apply fixes
+	 * - Ruff: applies --fix + format (lint + format fixes)
  *
  * On-demand commands:
  * - /format - Apply Biome formatting
@@ -115,7 +115,7 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Auto-fix Biome lint/format issues on write (applies --write --unsafe)",
 		type: "boolean",
-		default: true,
+		default: false,
 	});
 
 	pi.registerFlag("autofix-ruff", {
