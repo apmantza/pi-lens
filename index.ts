@@ -11,14 +11,14 @@
  * - Warns when target file already has existing violations
  *
 	 * Auto-fix on write (enable with --autofix-ruff flag, Biome auto-fix disabled by default):
-	 * - Biome: feedback only by default, use /format to apply fixes
+	 * - Biome: feedback only by default, use /lens-format to apply fixes
 	 * - Ruff: applies --fix + format (lint + format fixes)
  *
  * On-demand commands:
- * - /format - Apply Biome formatting
- * - /find-todos - Scan for TODO/FIXME/HACK annotations
- * - /dead-code - Find unused exports/dependencies (requires knip)
- * - /check-deps - Full circular dependency scan (requires madge)
+ * - /lens-format - Apply Biome formatting
+ * - /lens-todos - Scan for TODO/FIXME/HACK annotations
+ * - /lens-dead-code - Find unused exports/dependencies (requires knip)
+ * - /lens-deps - Full circular dependency scan (requires madge)
  *
  * External dependencies:
  * - npm: @biomejs/biome, @ast-grep/cli, knip, madge
@@ -154,9 +154,9 @@ export default function (pi: ExtensionAPI) {
 
 	// --- Commands ---
 
-	pi.registerCommand("find-todos", {
+	pi.registerCommand("lens-todos", {
 		description:
-			"Scan for TODO/FIXME/HACK annotations. Usage: /find-todos [path]",
+			"Scan for TODO/FIXME/HACK annotations. Usage: /lens-todos [path]",
 		handler: async (args, ctx) => {
 			const targetPath = args.trim() || ctx.cwd || process.cwd();
 			ctx.ui.notify("🔍 Scanning for TODOs...", "info");
@@ -172,8 +172,8 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("dead-code", {
-		description: "Check for unused exports, files, and dependencies",
+	pi.registerCommand("lens-dead-code", {
+		description: "Check for unused exports, files, and dependencies. Usage: /lens-dead-code [path]",
 		handler: async (args, ctx) => {
 			if (!knipClient.isAvailable()) {
 				ctx.ui.notify("Knip not installed. Run: npm install -D knip", "error");
@@ -192,8 +192,8 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("check-deps", {
-		description: "Check for circular dependencies in the project",
+	pi.registerCommand("lens-deps", {
+		description: "Check for circular dependencies. Usage: /lens-deps [path]",
 		handler: async (args, ctx) => {
 			if (!depChecker.isAvailable()) {
 				ctx.ui.notify(
@@ -215,95 +215,78 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("design-review", {
+	pi.registerCommand("lens-review", {
 		description:
-			"Analyze files for design smells (long methods, large classes, deep nesting). Usage: /design-review [path]",
+			"Code review: design smells + complexity metrics. Usage: /lens-review [path]",
 		handler: async (args, ctx) => {
-			if (!astGrepClient.isAvailable()) {
-				ctx.ui.notify(
-					"ast-grep not installed. Run: npm i -D @ast-grep/cli",
-					"error",
+			const targetPath = args.trim() || ctx.cwd || process.cwd();
+			ctx.ui.notify("🔍 Running code review...", "info");
+
+			const parts: string[] = [];
+
+			// Part 1: Design smells via ast-grep
+			if (astGrepClient.isAvailable()) {
+				const configPath = path.join(
+					typeof __dirname !== "undefined" ? __dirname : ".",
+					"rules",
+					"ast-grep-rules",
+					".sgconfig.yml",
 				);
-				return;
-			}
 
-			const targetPath = args.trim() || ctx.cwd || process.cwd();
-			ctx.ui.notify("🔍 Analyzing design smells...", "info");
+				try {
+					const result = require("node:child_process").spawnSync("npx", [
+						"sg",
+						"scan",
+						"--config", configPath,
+						"--json",
+						targetPath,
+					], {
+						encoding: "utf-8",
+						timeout: 30000,
+						shell: true,
+					});
 
-			const configPath = path.join(
-				typeof __dirname !== "undefined" ? __dirname : ".",
-				"rules",
-				"ast-grep-rules",
-				".sgconfig.yml",
-			);
+					const output = result.stdout || result.stderr || "";
+					if (output.trim() && result.status === 1) {
+						let issues: Array<{line: number; rule: string; message: string}> = [];
+						const lines = output.split("\n").filter((l: string) => l.trim());
 
-			try {
-				const result = require("node:child_process").spawnSync("npx", [
-					"sg",
-					"scan",
-					"--config", configPath,
-					"--json",
-					targetPath,
-				], {
-					encoding: "utf-8",
-					timeout: 30000,
-					shell: true,
-				});
+						for (const line of lines) {
+							try {
+								const item = JSON.parse(line);
+								const ruleId = item.ruleId || item.name || "unknown";
+								const ruleDesc = astGrepClient.getRuleDescription?.(ruleId);
+								const message = ruleDesc?.message || item.message || ruleId;
+								const lineNum = item.labels?.[0]?.range?.start?.line ||
+									item.spans?.[0]?.range?.start?.line || 0;
 
-				const output = result.stdout || result.stderr || "";
-				if (!output.trim() || result.status !== 1) {
-					ctx.ui.notify("✓ No design smells found", "info");
-					return;
-				}
+								issues.push({
+									line: lineNum + 1,
+									rule: ruleId,
+									message: message,
+								});
+							} catch {
+								// Skip unparseable lines
+							}
+						}
 
-				let issues: Array<{line: number; rule: string; message: string}> = [];
-				const lines = output.split("\n").filter((l: string) => l.trim());
-
-				for (const line of lines) {
-					try {
-						const item = JSON.parse(line);
-						const ruleId = item.ruleId || item.name || "unknown";
-						const ruleDesc = astGrepClient.getRuleDescription?.(ruleId);
-						const message = ruleDesc?.message || item.message || ruleId;
-						const lineNum = item.labels?.[0]?.range?.start?.line || 
-							item.spans?.[0]?.range?.start?.line || 0;
-
-						issues.push({
-							line: lineNum + 1,
-							rule: ruleId,
-							message: message,
-						});
-					} catch {
-						// Skip unparseable lines
+						if (issues.length > 0) {
+							let report = `[Design Smells] ${issues.length} issue(s) found:\n`;
+							for (const issue of issues.slice(0, 20)) {
+								report += `  L${issue.line}: ${issue.rule} — ${issue.message}\n`;
+							}
+							if (issues.length > 20) {
+								report += `  ... and ${issues.length - 20} more\n`;
+							}
+							parts.push(report);
+						}
 					}
+				} catch (err: any) {
+					// ast-grep scan failed, skip
 				}
-
-				if (issues.length === 0) {
-					ctx.ui.notify("✓ No design smells found", "info");
-					return;
-				}
-
-				let report = `[Design Review] ${issues.length} design smell(s) found:\n`;
-				for (const issue of issues.slice(0, 20)) {
-					report += `  L${issue.line}: ${issue.rule} — ${issue.message}\n`;
-				}
-				if (issues.length > 20) {
-					report += `  ... and ${issues.length - 20} more\n`;
-				}
-				ctx.ui.notify(report, "info");
-			} catch (err: any) {
-				ctx.ui.notify(`Design review failed: ${err.message}`, "error");
 			}
-		},
-	});
 
-	pi.registerCommand("lens-metrics", {
-		description: "Scan project for complexity metrics (maintainability, cognitive complexity, etc.). Usage: /lens-metrics [path]",
-		handler: async (args, ctx) => {
-			const targetPath = args.trim() || ctx.cwd || process.cwd();
-			ctx.ui.notify("🔍 Scanning project metrics...", "info");
-
-			const startTime = Date.now();
+			// Part 2: Complexity metrics
 			const results: import("./clients/complexity-client.js").FileComplexity[] = [];
 
 			const scanDir = (dir: string) => {
@@ -325,127 +308,49 @@ export default function (pi: ExtensionAPI) {
 			};
 
 			scanDir(targetPath);
-			const duration = Date.now() - startTime;
 
-			if (results.length === 0) {
-				ctx.ui.notify("✓ No TS/JS files found", "info");
-				return;
-			}
+			if (results.length > 0) {
+				const avgMI = results.reduce((a, b) => a + b.maintainabilityIndex, 0) / results.length;
+				const avgCognitive = results.reduce((a, b) => a + b.cognitiveComplexity, 0) / results.length;
+				const avgCyclomatic = results.reduce((a, b) => a + b.cyclomaticComplexity, 0) / results.length;
+				const maxNesting = Math.max(...results.map(r => r.maxNestingDepth));
 
-			// Calculate aggregates
-			const avgMI = results.reduce((a, b) => a + b.maintainabilityIndex, 0) / results.length;
-			const avgCognitive = results.reduce((a, b) => a + b.cognitiveComplexity, 0) / results.length;
-			const avgCyclomatic = results.reduce((a, b) => a + b.cyclomaticComplexity, 0) / results.length;
-			const maxNesting = Math.max(...results.map(r => r.maxNestingDepth));
-			const avgHalstead = results.reduce((a, b) => a + b.halsteadVolume, 0) / results.length;
+				const lowMI = results.filter(r => r.maintainabilityIndex < 60).sort((a, b) => a.maintainabilityIndex - b.maintainabilityIndex);
+				const highCognitive = results.filter(r => r.cognitiveComplexity > 20).sort((a, b) => b.cognitiveComplexity - a.cognitiveComplexity);
 
-			// Find problem files
-			const lowMI = results.filter(r => r.maintainabilityIndex < 60).sort((a, b) => a.maintainabilityIndex - b.maintainabilityIndex);
-			const highCognitive = results.filter(r => r.cognitiveComplexity > 20).sort((a, b) => b.cognitiveComplexity - a.cognitiveComplexity);
-			const highNesting = results.filter(r => r.maxNestingDepth > 5).sort((a, b) => b.maxNestingDepth - a.maxNestingDepth);
+				let summary = `[Complexity] ${results.length} file(s) scanned\n`;
+				summary += `  Maintainability: ${avgMI.toFixed(1)} avg | Cognitive: ${avgCognitive.toFixed(1)} avg | Max Nesting: ${maxNesting} levels\n`;
 
-			// Build markdown report
-			const now = new Date();
-			const timestamp = now.toISOString().replace(/[:.]/g, "-").slice(0, 19);
-			const dateStr = now.toISOString().slice(0, 10);
-			const timeStr = now.toISOString().slice(11, 19);
-
-			let report = `# Lens Metrics Report\n\n`;
-			report += `**Date:** ${dateStr} ${timeStr}\n`;
-			report += `**Files scanned:** ${results.length}\n`;
-			report += `**Scan time:** ${duration}ms\n\n`;
-			report += `## Aggregate\n\n`;
-			report += `| Metric | Value |\n`;
-			report += `|--------|-------|\n`;
-			report += `| Maintainability Index | ${avgMI.toFixed(1)} (avg) |\n`;
-			report += `| Cognitive Complexity | ${avgCognitive.toFixed(1)} (avg) |\n`;
-			report += `| Cyclomatic Complexity | ${avgCyclomatic.toFixed(1)} (avg) |\n`;
-			report += `| Halstead Volume | ${avgHalstead.toFixed(1)} (avg) |\n`;
-			report += `| Max Nesting Depth | ${maxNesting} levels |\n\n`;
-
-			if (lowMI.length > 0) {
-				report += `## Low Maintainability (MI < 60)\n\n`;
-				report += `| File | MI |\n`;
-				report += `|------|-----|\n`;
-				for (const f of lowMI) {
-					report += `| ${f.filePath} | ${f.maintainabilityIndex.toFixed(1)} |\n`;
+				if (lowMI.length > 0) {
+					summary += `\n  Low Maintainability (MI < 60):\n`;
+					for (const f of lowMI.slice(0, 5)) {
+						summary += `    ✗ ${f.filePath}: MI ${f.maintainabilityIndex.toFixed(1)}\n`;
+					}
+					if (lowMI.length > 5) summary += `    ... and ${lowMI.length - 5} more\n`;
 				}
-				report += `\n`;
-			}
 
-			if (highCognitive.length > 0) {
-				report += `## High Cognitive Complexity (> 20)\n\n`;
-				report += `| File | Cognitive | Cyclomatic | Max Nesting |\n`;
-				report += `|------|-----------|------------|-------------|\n`;
-				for (const f of highCognitive) {
-					report += `| ${f.filePath} | ${f.cognitiveComplexity} | ${f.cyclomaticComplexity} | ${f.maxNestingDepth} |\n`;
+				if (highCognitive.length > 0) {
+					summary += `\n  High Cognitive Complexity (> 20):\n`;
+					for (const f of highCognitive.slice(0, 5)) {
+						summary += `    ⚠ ${f.filePath}: ${f.cognitiveComplexity}\n`;
+					}
+					if (highCognitive.length > 5) summary += `    ... and ${highCognitive.length - 5} more\n`;
 				}
-				report += `\n`;
+
+				parts.push(summary);
 			}
 
-			if (highNesting.length > 0) {
-				report += `## Deep Nesting (> 5 levels)\n\n`;
-				report += `| File | Max Nesting |\n`;
-				report += `|------|-------------|\n`;
-				for (const f of highNesting) {
-					report += `| ${f.filePath} | ${f.maxNestingDepth} levels |\n`;
-				}
-				report += `\n`;
+			if (parts.length === 0) {
+				ctx.ui.notify("✓ Code review clean", "info");
+			} else {
+				ctx.ui.notify(parts.join("\n\n"), "info");
 			}
-
-			// All files sorted by MI
-			report += `## All Files\n\n`;
-			report += `| File | MI | Cognitive | Cyclomatic | Nesting | Halstead |\n`;
-			report += `|------|-----|-----------|------------|---------|----------|\n`;
-			for (const f of results.sort((a, b) => a.maintainabilityIndex - b.maintainabilityIndex)) {
-				report += `| ${f.filePath} | ${f.maintainabilityIndex.toFixed(1)} | ${f.cognitiveComplexity} | ${f.cyclomaticComplexity} | ${f.maxNestingDepth} | ${f.halsteadVolume.toFixed(0)} |\n`;
-			}
-
-			// Save report
-			const fs = require("node:fs");
-			const metricsDir = path.join(targetPath, ".pi-lens", "metrics");
-			if (!fs.existsSync(metricsDir)) {
-				fs.mkdirSync(metricsDir, { recursive: true });
-			}
-			const timestampedPath = path.join(metricsDir, `metrics-${timestamp}.md`);
-			const latestPath = path.join(metricsDir, "latest.md");
-			fs.writeFileSync(timestampedPath, report);
-			fs.writeFileSync(latestPath, report);
-
-			// Build summary for UI (shorter)
-			let summary = `[Lens Metrics] ${results.length} file(s) scanned in ${duration}ms\n\n`;
-			summary += `── Aggregate ──\n`;
-			summary += `  Maintainability Index: ${avgMI.toFixed(1)} (avg)\n`;
-			summary += `  Cognitive Complexity: ${avgCognitive.toFixed(1)} (avg)\n`;
-			summary += `  Cyclomatic Complexity: ${avgCyclomatic.toFixed(1)} (avg)\n`;
-			summary += `  Halstead Volume: ${avgHalstead.toFixed(1)} (avg)\n`;
-			summary += `  Max Nesting Depth: ${maxNesting} levels\n`;
-
-			if (lowMI.length > 0) {
-				summary += `\n── Low Maintainability (MI < 60) ──\n`;
-				for (const f of lowMI.slice(0, 5)) {
-					summary += `  ✗ ${f.filePath}: MI ${f.maintainabilityIndex.toFixed(1)}\n`;
-				}
-				if (lowMI.length > 5) summary += `  ... and ${lowMI.length - 5} more\n`;
-			}
-
-			if (highCognitive.length > 0) {
-				summary += `\n── High Cognitive Complexity (> 20) ──\n`;
-				for (const f of highCognitive.slice(0, 5)) {
-					summary += `  ⚠ ${f.filePath}: ${f.cognitiveComplexity}\n`;
-				}
-				if (highCognitive.length > 5) summary += `  ... and ${highCognitive.length - 5} more\n`;
-			}
-
-			summary += `\n📁 Full report saved to: .pi-lens/metrics/latest.md`;
-
-			ctx.ui.notify(summary, "info");
 		},
 	});
 
-	pi.registerCommand("format", {
+	pi.registerCommand("lens-format", {
 		description:
-			"Apply Biome formatting to files. Usage: /format [file-path] or /format --all",
+			"Apply Biome formatting to files. Usage: /lens-format [file-path] or /lens-format --all",
 		handler: async (args, ctx) => {
 			if (!biomeClient.isAvailable()) {
 				ctx.ui.notify(
@@ -871,7 +776,7 @@ export default function (pi: ExtensionAPI) {
 				const fixable = biomeDiags.filter((d) => d.fixable);
 				lspOutput += `\n\n${biomeClient.formatDiagnostics(biomeDiags, filePath)}`;
 				if (fixable.length > 0) {
-					lspOutput += `\n\n[Biome] ${fixable.length} fixable — enable --autofix-biome flag or run /format`;
+					lspOutput += `\n\n[Biome] ${fixable.length} fixable — enable --autofix-biome flag or run /lens-format`;
 				}
 			}
 		}

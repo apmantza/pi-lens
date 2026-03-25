@@ -2,6 +2,20 @@
 
 All notable changes to pi-lens will be documented in this file.
 
+## [1.5.0] - 2026-03-23
+
+### Added
+- **Real-time jscpd duplicate detection**: Code duplication is now detected on every write. Duplicates involving the edited file are shown to the agent in real-time.
+- **`/lens-review` command**: Combined code review: design smells + complexity metrics in one command.
+
+### Changed
+- **Consistent command prefix**: All commands now start with `lens-`.
+  - `/find-todos` → `/lens-todos`
+  - `/dead-code` → `/lens-dead-code`
+  - `/check-deps` → `/lens-deps`
+  - `/format` → `/lens-format`
+  - `/design-review` + `/lens-metrics` → `/lens-review`
+
 ## [1.4.0] - 2026-03-23
 
 ### Added

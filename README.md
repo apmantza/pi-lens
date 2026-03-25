@@ -12,10 +12,11 @@ Real-time code quality feedback for [pi](https://github.com/mariozechner/pi-codi
 |---|---|
 | **TypeScript LSP** | Type errors and warnings, using the project's `tsconfig.json` (walks up from the file to find it; falls back to `ES2020 + DOM` defaults) |
 | **ast-grep** | 60+ structural rules: `no-var`, `no-eval`, `no-debugger`, `no-as-any`, `prefer-template`, `no-throw-string`, `no-hardcoded-secrets`, `no-return-await`, nested ternaries, strict equality, and more |
-| **Biome** | Lint + format for JS/TS/JSX/TSX/CSS/JSON. Auto-fixes on every write by default |
+| **Biome** | Lint + format for JS/TS/JSX/TSX/CSS/JSON. Auto-fix disabled by default, use `/lens-format` to apply |
 | **Ruff** | Lint + format for Python. Auto-fixes on every write by default |
 | **Test Runner** | Runs corresponding test file when you edit source code (vitest, jest, pytest). Silent if no test file exists. |
 | **Complexity Metrics** | AST-based analysis: Maintainability Index, Cyclomatic/Cognitive Complexity, Halstead Volume, nesting depth, function length. |
+| **jscpd** | Code duplication detection. Warns when editing a file that has duplicates with other files in the project. |
 
 ### Pre-write hints
 
@@ -68,12 +69,11 @@ Example:
 
 | Command | Description |
 |---|---|
-| `/find-todos [path]` | Scan for TODO/FIXME/HACK annotations |
-| `/dead-code` | Find unused exports/files/dependencies (requires knip) |
-| `/check-deps` | Circular dependency scan (requires madge) |
-| `/format [file|--all]` | Apply Biome formatting |
-| `/design-review [path]` | Analyze files for design smells (long methods, large classes, etc.) |
-| `/lens-metrics [path]` | Full project complexity scan (Maintainability Index, Cognitive/Cyclomatic Complexity, Halstead Volume) |
+| `/lens-todos [path]` | Scan for TODO/FIXME/HACK annotations |
+| `/lens-dead-code` | Find unused exports/files/dependencies (requires knip) |
+| `/lens-deps` | Circular dependency scan (requires madge) |
+| `/lens-format [file\|--all]` | Apply Biome formatting |
+| `/lens-review [path]` | Code review: design smells + complexity metrics |
 
 ### On-demand tools
 
