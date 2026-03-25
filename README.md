@@ -103,7 +103,8 @@ Example:
 | `/lens-dead-code` | Find unused exports/files/dependencies (requires knip) |
 | `/lens-deps` | Circular dependency scan (requires madge) |
 | `/lens-format [file\|--all]` | Apply Biome formatting |
-| `/lens-booboo [path]` | Code review: design smells + complexity metrics |
+| `/lens-booboo [path]` | Full code review: design smells, complexity, AI slop, TODOs, dead code, duplicates, type coverage. Saves full report to `.pi-lens/reviews/` |
+| `/lens-metrics [path]` | Measure complexity metrics for all files. Exports `report.md` with grades (A-F), summary stats, and top 10 worst files |
 
 ### On-demand tools
 
