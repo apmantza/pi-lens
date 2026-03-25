@@ -192,8 +192,8 @@ function long(): number {
 				const shortResult = client.analyzeFile(shortPath);
 				const longResult = client.analyzeFile(longPath);
 
-				expect(shortResult?.maxFunctionLength).toBeLessThan(
-					longResult?.maxFunctionLength,
+				expect(shortResult?.maxFunctionLength ?? 0).toBeLessThan(
+					longResult?.maxFunctionLength ?? 0,
 				);
 			} finally {
 			}

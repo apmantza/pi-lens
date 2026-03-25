@@ -252,10 +252,10 @@ export class TypeScriptClient {
 				.map((diag) => {
 					const startPos = diag.file?.getLineAndCharacterOfPosition(
 						diag.start!,
-					);
+					)!;
 					const endPos = diag.file?.getLineAndCharacterOfPosition(
 						diag.start! + diag.length!,
-					);
+					)!;
 					return {
 						range: {
 							start: { line: startPos.line, character: startPos.character },

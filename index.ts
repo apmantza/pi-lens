@@ -1098,7 +1098,9 @@ export default function (pi: ExtensionAPI) {
 
 			// Notify and inject into conversation
 			ctx.ui.notify(`📄 Fix plan saved: ${planPath}`, "info");
-			pi.sendUserMessage(fixPlan);
+			// Use steer delivery — agent is busy processing this tool call
+			// steer interrupts mid-processing with the next fix plan
+			pi.sendUserMessage(fixPlan, { deliverAs: "steer" });
 		},
 	});
 
