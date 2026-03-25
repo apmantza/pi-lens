@@ -245,6 +245,7 @@ export default function (pi: ExtensionAPI) {
 						"--globs", "!**/*.test.ts",
 						"--globs", "!**/*.spec.ts",
 						"--globs", "!**/test-utils.ts",
+						"--globs", "!**/.pi-lens/**",
 						targetPath,
 					], {
 						encoding: "utf-8",
