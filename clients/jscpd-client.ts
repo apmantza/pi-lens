@@ -73,7 +73,7 @@ export class JscpdClient {
         "--min-tokens", String(minTokens),
         "--reporters", "json",
         "--output", outDir,
-        "--ignore", "**/node_modules/**,**/dist/**,**/build/**,**/.git/**",
+        "--ignore", "**/node_modules/**,**/dist/**,**/build/**,**/.git/**,**/.pi-lens/**,**/*.md,**/*.txt,**/*.json,**/*.yaml,**/*.yml,**/*.toml,**/*.lock",
       ], {
         encoding: "utf-8",
         timeout: 30000,
