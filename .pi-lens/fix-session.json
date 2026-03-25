@@ -1,0 +1,8 @@
+{
+  "iteration": 1,
+  "counts": {
+    "agent_ast": 107,
+    "biome_lint": 0,
+    "slop_files": 5
+  }
+}

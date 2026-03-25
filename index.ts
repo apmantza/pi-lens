@@ -10,9 +10,9 @@
  * Proactive hints before write/edit:
  * - Warns when target file already has existing violations
  *
-	 * Auto-fix on write (enable with --autofix-ruff flag, Biome auto-fix disabled by default):
-	 * - Biome: feedback only by default, use /lens-format to apply fixes
-	 * - Ruff: applies --fix + format (lint + format fixes)
+ * Auto-fix on write (enable with --autofix-ruff flag, Biome auto-fix disabled by default):
+ * - Biome: feedback only by default, use /lens-format to apply fixes
+ * - Ruff: applies --fix + format (lint + format fixes)
  *
  * On-demand commands:
  * - /lens-format - Apply Biome formatting
@@ -28,21 +28,21 @@
 import * as nodeFs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
+import { Type } from "@sinclair/typebox";
 import { AstGrepClient } from "./clients/ast-grep-client.js";
 import { BiomeClient } from "./clients/biome-client.js";
+import { ComplexityClient } from "./clients/complexity-client.js";
 import { DependencyChecker } from "./clients/dependency-checker.js";
+import { GoClient } from "./clients/go-client.js";
 import { JscpdClient } from "./clients/jscpd-client.js";
 import { KnipClient } from "./clients/knip-client.js";
-import { RuffClient } from "./clients/ruff-client.js";
-import { TodoScanner } from "./clients/todo-scanner.js";
-import { ComplexityClient } from "./clients/complexity-client.js";
-import { GoClient } from "./clients/go-client.js";
 import { MetricsClient } from "./clients/metrics-client.js";
+import { RuffClient } from "./clients/ruff-client.js";
 import { RustClient } from "./clients/rust-client.js";
 import { TestRunnerClient } from "./clients/test-runner-client.js";
+import { TodoScanner } from "./clients/todo-scanner.js";
 import { TypeCoverageClient } from "./clients/type-coverage-client.js";
 import { TypeScriptClient } from "./clients/typescript-client.js";
 
@@ -67,7 +67,6 @@ function log(msg: string) {
 // --- Extension ---
 
 export default function (pi: ExtensionAPI) {
-
 	const tsClient = new TypeScriptClient();
 	const astGrepClient = new AstGrepClient();
 	const ruffClient = new RuffClient();
@@ -173,7 +172,8 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerCommand("lens-dead-code", {
-		description: "Check for unused exports, files, and dependencies. Usage: /lens-dead-code [path]",
+		description:
+			"Check for unused exports, files, and dependencies. Usage: /lens-dead-code [path]",
 		handler: async (args, ctx) => {
 			if (!knipClient.isAvailable()) {
 				ctx.ui.notify("Knip not installed. Run: npm install -D knip", "error");
@@ -224,7 +224,10 @@ export default function (pi: ExtensionAPI) {
 
 			const parts: string[] = [];
 			const fullReport: string[] = [];
-			const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+			const timestamp = new Date()
+				.toISOString()
+				.replace(/[:.]/g, "-")
+				.slice(0, 19);
 			const reviewDir = path.join(process.cwd(), ".pi-lens", "reviews");
 
 			// Part 1: Design smells via ast-grep
@@ -237,46 +240,70 @@ export default function (pi: ExtensionAPI) {
 				);
 
 				try {
-					const result = require("node:child_process").spawnSync("npx", [
-						"sg",
-						"scan",
-						"--config", configPath,
-						"--json",
-						"--globs", "!**/*.test.ts",
-						"--globs", "!**/*.spec.ts",
-						"--globs", "!**/test-utils.ts",
-						"--globs", "!**/.pi-lens/**",
-						targetPath,
-					], {
-						encoding: "utf-8",
-						timeout: 30000,
-						shell: true,
-						maxBuffer: 32 * 1024 * 1024, // 32MB
-					});
+					const result = require("node:child_process").spawnSync(
+						"npx",
+						[
+							"sg",
+							"scan",
+							"--config",
+							configPath,
+							"--json",
+							"--globs",
+							"!**/*.test.ts",
+							"--globs",
+							"!**/*.spec.ts",
+							"--globs",
+							"!**/test-utils.ts",
+							"--globs",
+							"!**/.pi-lens/**",
+							targetPath,
+						],
+						{
+							encoding: "utf-8",
+							timeout: 30000,
+							shell: true,
+							maxBuffer: 32 * 1024 * 1024, // 32MB
+						},
+					);
 
 					const output = result.stdout || result.stderr || "";
 					if (output.trim() && result.status !== undefined) {
-						let issues: Array<{line: number; rule: string; message: string}> = [];
+						const issues: Array<{
+							line: number;
+							rule: string;
+							message: string;
+						}> = [];
 
 						// ast-grep outputs either a JSON array or NDJSON (one object per line)
 						// biome-ignore lint/suspicious/noExplicitAny: ast-grep JSON output is untyped
 						const parseItems = (raw: string): Record<string, any>[] => {
 							const trimmed = raw.trim();
 							if (trimmed.startsWith("[")) {
-								try { return JSON.parse(trimmed); } catch { return []; }
+								try {
+									return JSON.parse(trimmed);
+								} catch {
+									return [];
+								}
 							}
 							return raw.split("\n").flatMap((l: string) => {
-								try { return [JSON.parse(l)]; } catch { return []; }
+								try {
+									return [JSON.parse(l)];
+								} catch {
+									return [];
+								}
 							});
 						};
 
 						for (const item of parseItems(output)) {
-							const ruleId = item.ruleId || item.rule?.title || item.name || "unknown";
+							const ruleId =
+								item.ruleId || item.rule?.title || item.name || "unknown";
 							const ruleDesc = astGrepClient.getRuleDescription?.(ruleId);
 							const message = ruleDesc?.message || item.message || ruleId;
-							const lineNum = item.labels?.[0]?.range?.start?.line ||
+							const lineNum =
+								item.labels?.[0]?.range?.start?.line ||
 								item.spans?.[0]?.range?.start?.line ||
-								item.range?.start?.line || 0;
+								item.range?.start?.line ||
+								0;
 
 							issues.push({
 								line: lineNum + 1,
@@ -298,26 +325,30 @@ export default function (pi: ExtensionAPI) {
 
 							// Full report for file
 							let fullSection = `## ast-grep (Structural Issues)\n\n**${issues.length} issue(s) found**\n\n`;
-							fullSection += "| Line | Rule | Message |\n|------|------|--------|\n";
+							fullSection +=
+								"| Line | Rule | Message |\n|------|------|--------|\n";
 							for (const issue of issues) {
 								fullSection += `| ${issue.line} | ${issue.rule} | ${issue.message} |\n`;
 							}
 							fullReport.push(fullSection);
 						}
 					}
-				} catch (err: any) {
+				} catch (_err: any) {
 					// ast-grep scan failed, skip
 				}
 			}
 
 			// Part 2: Similar functions (advanced duplicate detection)
 			if (astGrepClient.isAvailable()) {
-				const similarGroups = await astGrepClient.findSimilarFunctions(targetPath, "typescript");
+				const similarGroups = await astGrepClient.findSimilarFunctions(
+					targetPath,
+					"typescript",
+				);
 				if (similarGroups.length > 0) {
 					// UI summary (truncated)
 					let report = `[Similar Functions] ${similarGroups.length} group(s) of structurally similar functions:\n`;
 					for (const group of similarGroups.slice(0, 5)) {
-						report += `  Pattern: ${group.functions.map(f => f.name).join(", ")}\n`;
+						report += `  Pattern: ${group.functions.map((f) => f.name).join(", ")}\n`;
 						for (const fn of group.functions) {
 							report += `    ${fn.name} (${path.basename(fn.file)}:${fn.line})\n`;
 						}
@@ -330,8 +361,9 @@ export default function (pi: ExtensionAPI) {
 					// Full report for file
 					let fullSection = `## Similar Functions\n\n**${similarGroups.length} group(s) of structurally similar functions**\n\n`;
 					for (const group of similarGroups) {
-						fullSection += `### Pattern: ${group.functions.map(f => f.name).join(", ")}\n\n`;
-						fullSection += "| Function | File | Line |\n|----------|------|------|\n";
+						fullSection += `### Pattern: ${group.functions.map((f) => f.name).join(", ")}\n\n`;
+						fullSection +=
+							"| Function | File | Line |\n|----------|------|------|\n";
 						for (const fn of group.functions) {
 							fullSection += `| ${fn.name} | ${fn.file} | ${fn.line} |\n`;
 						}
@@ -342,17 +374,30 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// Part 3: Complexity metrics + AI slop detection
-			const results: import("./clients/complexity-client.js").FileComplexity[] = [];
+			const results: import("./clients/complexity-client.js").FileComplexity[] =
+				[];
 			const aiSlopIssues: string[] = [];
 
 			const scanDir = (dir: string) => {
 				if (!require("node:fs").existsSync(dir)) return;
-				const entries = require("node:fs").readdirSync(dir, { withFileTypes: true });
+				const entries = require("node:fs").readdirSync(dir, {
+					withFileTypes: true,
+				});
 
 				for (const entry of entries) {
 					const fullPath = path.join(dir, entry.name);
 					if (entry.isDirectory()) {
-						if (["node_modules", ".git", "dist", "build", ".next", ".pi-lens"].includes(entry.name)) continue;
+						if (
+							[
+								"node_modules",
+								".git",
+								"dist",
+								"build",
+								".next",
+								".pi-lens",
+							].includes(entry.name)
+						)
+							continue;
 						scanDir(fullPath);
 					} else if (complexityClient.isSupportedFile(fullPath)) {
 						const metrics = complexityClient.analyzeFile(fullPath);
@@ -377,15 +422,27 @@ export default function (pi: ExtensionAPI) {
 			scanDir(targetPath);
 
 			if (results.length > 0) {
-				const avgMI = results.reduce((a, b) => a + b.maintainabilityIndex, 0) / results.length;
-				const avgCognitive = results.reduce((a, b) => a + b.cognitiveComplexity, 0) / results.length;
-				const avgCyclomatic = results.reduce((a, b) => a + b.cyclomaticComplexity, 0) / results.length;
-				const maxNesting = Math.max(...results.map(r => r.maxNestingDepth));
-				const maxCognitive = Math.max(...results.map(r => r.cognitiveComplexity));
-				const minMI = Math.min(...results.map(r => r.maintainabilityIndex));
+				const avgMI =
+					results.reduce((a, b) => a + b.maintainabilityIndex, 0) /
+					results.length;
+				const avgCognitive =
+					results.reduce((a, b) => a + b.cognitiveComplexity, 0) /
+					results.length;
+				const avgCyclomatic =
+					results.reduce((a, b) => a + b.cyclomaticComplexity, 0) /
+					results.length;
+				const maxNesting = Math.max(...results.map((r) => r.maxNestingDepth));
+				const maxCognitive = Math.max(
+					...results.map((r) => r.cognitiveComplexity),
+				);
+				const minMI = Math.min(...results.map((r) => r.maintainabilityIndex));
 
-				const lowMI = results.filter(r => r.maintainabilityIndex < 60).sort((a, b) => a.maintainabilityIndex - b.maintainabilityIndex);
-				const highCognitive = results.filter(r => r.cognitiveComplexity > 20).sort((a, b) => b.cognitiveComplexity - a.cognitiveComplexity);
+				const lowMI = results
+					.filter((r) => r.maintainabilityIndex < 60)
+					.sort((a, b) => a.maintainabilityIndex - b.maintainabilityIndex);
+				const highCognitive = results
+					.filter((r) => r.cognitiveComplexity > 20)
+					.sort((a, b) => b.cognitiveComplexity - a.cognitiveComplexity);
 
 				// UI summary (truncated)
 				let summary = `[Complexity] ${results.length} file(s) scanned\n`;
@@ -396,7 +453,8 @@ export default function (pi: ExtensionAPI) {
 					for (const f of lowMI.slice(0, 5)) {
 						summary += `    ✗ ${f.filePath}: MI ${f.maintainabilityIndex.toFixed(1)}\n`;
 					}
-					if (lowMI.length > 5) summary += `    ... and ${lowMI.length - 5} more\n`;
+					if (lowMI.length > 5)
+						summary += `    ... and ${lowMI.length - 5} more\n`;
 				}
 
 				if (highCognitive.length > 0) {
@@ -404,7 +462,8 @@ export default function (pi: ExtensionAPI) {
 					for (const f of highCognitive.slice(0, 5)) {
 						summary += `    ⚠ ${f.filePath}: ${f.cognitiveComplexity}\n`;
 					}
-					if (highCognitive.length > 5) summary += `    ... and ${highCognitive.length - 5} more\n`;
+					if (highCognitive.length > 5)
+						summary += `    ... and ${highCognitive.length - 5} more\n`;
 				}
 
 				// Add AI slop issues
@@ -450,7 +509,9 @@ export default function (pi: ExtensionAPI) {
 				fullSection += `### All Files\n\n`;
 				fullSection += `| File | MI | Cognitive | Cyclomatic | Nesting | Entropy |\n`;
 				fullSection += `|------|-----|-----------|------------|---------|--------|\n`;
-				for (const f of results.sort((a, b) => a.maintainabilityIndex - b.maintainabilityIndex)) {
+				for (const f of results.sort(
+					(a, b) => a.maintainabilityIndex - b.maintainabilityIndex,
+				)) {
 					fullSection += `| ${f.filePath} | ${f.maintainabilityIndex.toFixed(1)} | ${f.cognitiveComplexity} | ${f.cyclomaticComplexity} | ${f.maxNestingDepth} | ${f.codeEntropy.toFixed(2)} |\n`;
 				}
 				fullSection += "\n";
@@ -573,34 +634,82 @@ export default function (pi: ExtensionAPI) {
 			fs.writeFileSync(reportPath, mdReport, "utf-8");
 
 			if (parts.length === 0) {
-				ctx.ui.notify("✓ Code review clean — saved to .pi-lens/reviews/", "info");
+				ctx.ui.notify(
+					"✓ Code review clean — saved to .pi-lens/reviews/",
+					"info",
+				);
 			} else {
-				ctx.ui.notify(`${parts.join("\n\n")}\n\n📄 Full report: ${reportPath}`, "info");
+				ctx.ui.notify(
+					`${parts.join("\n\n")}\n\n📄 Full report: ${reportPath}`,
+					"info",
+				);
 			}
 		},
 	});
 
 	// --- Rule action map for lens-booboo-fix ---
-	const RULE_ACTIONS: Record<string, { type: "biome" | "agent" | "skip"; note: string }> = {
-		"no-var":            { type: "biome",  note: "auto-fixed by Biome --write" },
-		"prefer-template":   { type: "biome",  note: "auto-fixed by Biome --write" },
-		"no-useless-concat": { type: "biome",  note: "auto-fixed by Biome --write" },
-		"no-lonely-if":      { type: "biome",  note: "auto-fixed by Biome --write" },
-		"prefer-const":      { type: "biome",  note: "auto-fixed by Biome --write" },
-		"empty-catch":       { type: "agent",  note: "Add this.log('Error: ' + err.message) to the catch block" },
-		"silent-failure":    { type: "agent",  note: "Add this.log('Error: ' + err.message) or rethrow" },
-		"no-console-log":    { type: "agent",  note: "Remove or replace with class logger method" },
-		"no-debugger":       { type: "agent",  note: "Remove the debugger statement" },
-		"no-return-await":   { type: "agent",  note: "Remove the unnecessary `return await`" },
-		"nested-ternary":    { type: "agent",  note: "Extract to if/else or a named variable" },
-		"no-throw-string":   { type: "agent",  note: "Wrap in `new Error(...)` instead of throwing a string" },
-		"no-star-imports":   { type: "skip",   note: "Requires knowing which exports are actually used." },
-		"no-as-any":         { type: "skip",   note: "Replacing `as any` requires knowing the correct type." },
-		"no-non-null-assertion": { type: "skip", note: "Each `!` needs nullability analysis in context." },
-		"large-class":       { type: "skip",   note: "Splitting a class requires architectural decisions." },
-		"long-method":       { type: "skip",   note: "Extraction requires understanding the function's purpose." },
-		"long-parameter-list": { type: "skip", note: "Redesigning the signature requires an API decision." },
-		"no-shadow":         { type: "skip",   note: "Renaming requires understanding all variable scopes." },
+	const RULE_ACTIONS: Record<
+		string,
+		{ type: "biome" | "agent" | "skip"; note: string }
+	> = {
+		"no-var": { type: "biome", note: "auto-fixed by Biome --write" },
+		"prefer-template": { type: "biome", note: "auto-fixed by Biome --write" },
+		"no-useless-concat": { type: "biome", note: "auto-fixed by Biome --write" },
+		"no-lonely-if": { type: "biome", note: "auto-fixed by Biome --write" },
+		"prefer-const": { type: "biome", note: "auto-fixed by Biome --write" },
+		"empty-catch": {
+			type: "agent",
+			note: "Add this.log('Error: ' + err.message) to the catch block",
+		},
+		"silent-failure": {
+			type: "agent",
+			note: "Add this.log('Error: ' + err.message) or rethrow",
+		},
+		"no-console-log": {
+			type: "agent",
+			note: "Remove or replace with class logger method",
+		},
+		"no-debugger": { type: "agent", note: "Remove the debugger statement" },
+		"no-return-await": {
+			type: "agent",
+			note: "Remove the unnecessary `return await`",
+		},
+		"nested-ternary": {
+			type: "agent",
+			note: "Extract to if/else or a named variable",
+		},
+		"no-throw-string": {
+			type: "agent",
+			note: "Wrap in `new Error(...)` instead of throwing a string",
+		},
+		"no-star-imports": {
+			type: "skip",
+			note: "Requires knowing which exports are actually used.",
+		},
+		"no-as-any": {
+			type: "skip",
+			note: "Replacing `as any` requires knowing the correct type.",
+		},
+		"no-non-null-assertion": {
+			type: "skip",
+			note: "Each `!` needs nullability analysis in context.",
+		},
+		"large-class": {
+			type: "skip",
+			note: "Splitting a class requires architectural decisions.",
+		},
+		"long-method": {
+			type: "skip",
+			note: "Extraction requires understanding the function's purpose.",
+		},
+		"long-parameter-list": {
+			type: "skip",
+			note: "Redesigning the signature requires an API decision.",
+		},
+		"no-shadow": {
+			type: "skip",
+			note: "Renaming requires understanding all variable scopes.",
+		},
 	};
 
 	pi.registerCommand("lens-booboo-fix", {
@@ -609,10 +718,16 @@ export default function (pi: ExtensionAPI) {
 		handler: async (args, ctx) => {
 			const targetPath = args.trim() || ctx.cwd || process.cwd();
 			const fs = require("node:fs") as typeof import("node:fs");
-			const sessionFile = path.join(process.cwd(), ".pi-lens", "fix-session.json");
+			const sessionFile = path.join(
+				process.cwd(),
+				".pi-lens",
+				"fix-session.json",
+			);
 			const configPath = path.join(
 				typeof __dirname !== "undefined" ? __dirname : ".",
-				"rules", "ast-grep-rules", ".sgconfig.yml",
+				"rules",
+				"ast-grep-rules",
+				".sgconfig.yml",
 			);
 
 			ctx.ui.notify("🔧 Running booboo fix loop...", "info");
@@ -620,13 +735,24 @@ export default function (pi: ExtensionAPI) {
 			const MAX_ITERATIONS = 3;
 
 			// Load session state
-			let session: { iteration: number; counts: Record<string, number> } = { iteration: 0, counts: {} };
-			try { if (fs.existsSync(sessionFile)) session = JSON.parse(fs.readFileSync(sessionFile, "utf-8")); } catch (e) { dbg(`fix-session load failed: ${e}`); }
+			let session: { iteration: number; counts: Record<string, number> } = {
+				iteration: 0,
+				counts: {},
+			};
+			try {
+				if (fs.existsSync(sessionFile))
+					session = JSON.parse(fs.readFileSync(sessionFile, "utf-8"));
+			} catch (e) {
+				dbg(`fix-session load failed: ${e}`);
+			}
 			session.iteration++;
 
 			// Hard stop at max iterations
 			if (session.iteration > MAX_ITERATIONS) {
-				ctx.ui.notify(`⛔ Max iterations (${MAX_ITERATIONS}) reached. Run /lens-booboo for full remaining report, or delete .pi-lens/fix-session.json to reset.`, "warning");
+				ctx.ui.notify(
+					`⛔ Max iterations (${MAX_ITERATIONS}) reached. Run /lens-booboo for full remaining report, or delete .pi-lens/fix-session.json to reset.`,
+					"warning",
+				);
 				return;
 			}
 			const prevCounts = { ...session.counts };
@@ -634,42 +760,100 @@ export default function (pi: ExtensionAPI) {
 			// --- Step 1: Auto-fix with Biome ---
 			let biomeRan = false;
 			if (!pi.getFlag("no-biome") && biomeClient.isAvailable()) {
-				require("node:child_process").spawnSync("npx", [
-					"@biomejs/biome", "check", "--write", "--unsafe", targetPath,
-				], { encoding: "utf-8", timeout: 30000, shell: true });
+				require("node:child_process").spawnSync(
+					"npx",
+					["@biomejs/biome", "check", "--write", "--unsafe", targetPath],
+					{ encoding: "utf-8", timeout: 30000, shell: true },
+				);
 				biomeRan = true;
 			}
 
 			// --- Step 2: Auto-fix with Ruff ---
 			let ruffRan = false;
 			if (!pi.getFlag("no-ruff") && ruffClient.isAvailable()) {
-				require("node:child_process").spawnSync("ruff", ["check", "--fix", targetPath], { encoding: "utf-8", timeout: 15000, shell: true });
-				require("node:child_process").spawnSync("ruff", ["format", targetPath], { encoding: "utf-8", timeout: 15000, shell: true });
+				require("node:child_process").spawnSync(
+					"ruff",
+					["check", "--fix", targetPath],
+					{ encoding: "utf-8", timeout: 15000, shell: true },
+				);
+				require("node:child_process").spawnSync(
+					"ruff",
+					["format", targetPath],
+					{ encoding: "utf-8", timeout: 15000, shell: true },
+				);
 				ruffRan = true;
 			}
 
 			// --- Step 3: ast-grep scan (after auto-fix) ---
-			type AstIssue = { rule: string; file: string; line: number; message: string };
+			type AstIssue = {
+				rule: string;
+				file: string;
+				line: number;
+				message: string;
+			};
 			const astIssues: AstIssue[] = [];
 			if (astGrepClient.isAvailable()) {
-				const result = require("node:child_process").spawnSync("npx", [
-					"sg", "scan", "--config", configPath, "--json",
-					"--globs", "!**/*.test.ts", "--globs", "!**/*.spec.ts",
-					"--globs", "!**/test-utils.ts", "--globs", "!**/.pi-lens/**",
-					targetPath,
-				], { encoding: "utf-8", timeout: 30000, shell: true, maxBuffer: 32 * 1024 * 1024 });
+				const result = require("node:child_process").spawnSync(
+					"npx",
+					[
+						"sg",
+						"scan",
+						"--config",
+						configPath,
+						"--json",
+						"--globs",
+						"!**/*.test.ts",
+						"--globs",
+						"!**/*.spec.ts",
+						"--globs",
+						"!**/test-utils.ts",
+						"--globs",
+						"!**/.pi-lens/**",
+						targetPath,
+					],
+					{
+						encoding: "utf-8",
+						timeout: 30000,
+						shell: true,
+						maxBuffer: 32 * 1024 * 1024,
+					},
+				);
 
 				const raw = result.stdout?.trim() ?? "";
 				// biome-ignore lint/suspicious/noExplicitAny: ast-grep JSON output is untyped
 				const items: Record<string, any>[] = raw.startsWith("[")
-					? (() => { try { return JSON.parse(raw); } catch (e) { dbg(`ast-grep parse failed: ${e}`); return []; } })()
-					: raw.split("\n").flatMap((l: string) => { try { return [JSON.parse(l)]; } catch { return []; } });
+					? (() => {
+							try {
+								return JSON.parse(raw);
+							} catch (e) {
+								dbg(`ast-grep parse failed: ${e}`);
+								return [];
+							}
+						})()
+					: raw.split("\n").flatMap((l: string) => {
+							try {
+								return [JSON.parse(l)];
+							} catch {
+								return [];
+							}
+						});
 
 				for (const item of items) {
-					const rule = item.ruleId || item.rule?.title || item.name || "unknown";
-					const line = (item.labels?.[0]?.range?.start?.line ?? item.range?.start?.line ?? 0) + 1;
-					const relFile = path.relative(targetPath, item.file ?? "").replace(/\\/g, "/");
-					astIssues.push({ rule, file: relFile, line, message: item.message ?? rule });
+					const rule =
+						item.ruleId || item.rule?.title || item.name || "unknown";
+					const line =
+						(item.labels?.[0]?.range?.start?.line ??
+							item.range?.start?.line ??
+							0) + 1;
+					const relFile = path
+						.relative(targetPath, item.file ?? "")
+						.replace(/\\/g, "/");
+					astIssues.push({
+						rule,
+						file: relFile,
+						line,
+						message: item.message ?? rule,
+					});
 				}
 			}
 
@@ -680,16 +864,38 @@ export default function (pi: ExtensionAPI) {
 				for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
 					const fullPath = path.join(dir, entry.name);
 					if (entry.isDirectory()) {
-						if (["node_modules", ".git", "dist", "build", ".next", ".pi-lens"].includes(entry.name)) continue;
+						if (
+							[
+								"node_modules",
+								".git",
+								"dist",
+								"build",
+								".next",
+								".pi-lens",
+							].includes(entry.name)
+						)
+							continue;
 						slopScanDir(fullPath);
-					} else if (complexityClient.isSupportedFile(fullPath) && !/\.(test|spec)\.[jt]sx?$/.test(entry.name)) {
+					} else if (
+						complexityClient.isSupportedFile(fullPath) &&
+						!/\.(test|spec)\.[jt]sx?$/.test(entry.name)
+					) {
 						const metrics = complexityClient.analyzeFile(fullPath);
 						if (metrics) {
-							const warnings = complexityClient.checkThresholds(metrics).filter(w =>
-								w.includes("AI-style") || w.includes("try/catch") || w.includes("single-use") || w.includes("Excessive comments")
-							);
+							const warnings = complexityClient
+								.checkThresholds(metrics)
+								.filter(
+									(w) =>
+										w.includes("AI-style") ||
+										w.includes("try/catch") ||
+										w.includes("single-use") ||
+										w.includes("Excessive comments"),
+								);
 							if (warnings.length > 0) {
-								slopFiles.push({ file: path.relative(targetPath, fullPath).replace(/\\/g, "/"), warnings });
+								slopFiles.push({
+									file: path.relative(targetPath, fullPath).replace(/\\/g, "/"),
+									warnings,
+								});
 							}
 						}
 					}
@@ -698,13 +904,27 @@ export default function (pi: ExtensionAPI) {
 			slopScanDir(targetPath);
 
 			// --- Step 5: Remaining Biome lint ---
-			const remainingBiome: Array<{ file: string; line: number; rule: string; message: string; fixable: boolean }> = [];
+			const remainingBiome: Array<{
+				file: string;
+				line: number;
+				rule: string;
+				message: string;
+				fixable: boolean;
+			}> = [];
 			if (!pi.getFlag("no-biome") && biomeClient.isAvailable()) {
 				// Sample a few key files for remaining lint (not whole project — Biome just ran)
 				// Just report counts from a quick scan
-				const checkResult = require("node:child_process").spawnSync("npx", [
-					"@biomejs/biome", "check", "--reporter=json", "--max-diagnostics=50", targetPath,
-				], { encoding: "utf-8", timeout: 20000, shell: true });
+				const checkResult = require("node:child_process").spawnSync(
+					"npx",
+					[
+						"@biomejs/biome",
+						"check",
+						"--reporter=json",
+						"--max-diagnostics=50",
+						targetPath,
+					],
+					{ encoding: "utf-8", timeout: 20000, shell: true },
+				);
 				try {
 					const data = JSON.parse(checkResult.stdout ?? "{}");
 					for (const diag of (data.diagnostics ?? []).slice(0, 20)) {
@@ -715,10 +935,15 @@ export default function (pi: ExtensionAPI) {
 						const fixable = diag.tags?.includes("fixable") ?? false;
 						remainingBiome.push({
 							file: path.relative(targetPath, filePath).replace(/\\/g, "/"),
-							line: line + 1, rule, message: diag.message ?? rule, fixable,
+							line: line + 1,
+							rule,
+							message: diag.message ?? rule,
+							fixable,
 						});
 					}
-				} catch (e) { dbg(`biome lint parse failed: ${e}`); }
+				} catch (e) {
+					dbg(`biome lint parse failed: ${e}`);
+				}
 			}
 
 			// --- Categorize ast-grep issues ---
@@ -754,7 +979,8 @@ export default function (pi: ExtensionAPI) {
 			fs.writeFileSync(sessionFile, JSON.stringify(session, null, 2), "utf-8");
 
 			// --- Check if done ---
-			const totalFixable = agentTasks.length + remainingBiome.length + slopFiles.length;
+			const totalFixable =
+				agentTasks.length + remainingBiome.length + slopFiles.length;
 			if (totalFixable === 0) {
 				const msg = `✅ BOOBOO FIX LOOP COMPLETE — No more fixable issues found after ${session.iteration} iteration(s).\n\nRemaining skipped items are architectural — see /lens-booboo for full report.`;
 				ctx.ui.notify(msg, "info");
@@ -768,18 +994,25 @@ export default function (pi: ExtensionAPI) {
 				const prevTotal = Object.values(prevCounts).reduce((a, b) => a + b, 0);
 				const currTotal = totalFixable;
 				const fixed = prevTotal - currTotal;
-				deltaLine = fixed > 0 ? `✅ Fixed ${fixed} issues since last iteration.` : `⚠️ No change since last iteration — check if fixes were applied.`;
+				deltaLine =
+					fixed > 0
+						? `✅ Fixed ${fixed} issues since last iteration.`
+						: `⚠️ No change since last iteration — check if fixes were applied.`;
 			}
 
 			// --- Build the fix plan message ---
 			const lines: string[] = [];
-			lines.push(`📋 BOOBOO FIX PLAN — Iteration ${session.iteration}/${MAX_ITERATIONS} (${totalFixable} fixable items remaining)`);
+			lines.push(
+				`📋 BOOBOO FIX PLAN — Iteration ${session.iteration}/${MAX_ITERATIONS} (${totalFixable} fixable items remaining)`,
+			);
 			if (deltaLine) lines.push(deltaLine);
 			lines.push("");
 
 			// Auto-fix note
 			if (biomeRan || ruffRan) {
-				lines.push(`⚡ Auto-fixed: ${[biomeRan && "Biome --write --unsafe", ruffRan && "Ruff --fix + format"].filter(Boolean).join(", ")} already ran.`);
+				lines.push(
+					`⚡ Auto-fixed: ${[biomeRan && "Biome --write --unsafe", ruffRan && "Ruff --fix + format"].filter(Boolean).join(", ")} already ran.`,
+				);
 				lines.push("");
 			}
 
@@ -801,19 +1034,23 @@ export default function (pi: ExtensionAPI) {
 					for (const issue of issues.slice(0, 15)) {
 						lines.push(`  - \`${issue.file}:${issue.line}\``);
 					}
-					if (issues.length > 15) lines.push(`  ... and ${issues.length - 15} more`);
+					if (issues.length > 15)
+						lines.push(`  ... and ${issues.length - 15} more`);
 					lines.push("");
 				}
 			}
 
 			// Remaining Biome lint
 			if (remainingBiome.length > 0) {
-				lines.push(`## 🟠 Remaining Biome lint [${remainingBiome.length} items]`);
+				lines.push(
+					`## 🟠 Remaining Biome lint [${remainingBiome.length} items]`,
+				);
 				lines.push("→ Fix each manually or run `/lens-format` from the UI:");
 				for (const d of remainingBiome.slice(0, 10)) {
 					lines.push(`  - \`${d.file}:${d.line}\` [${d.rule}] ${d.message}`);
 				}
-				if (remainingBiome.length > 10) lines.push(`  ... and ${remainingBiome.length - 10} more`);
+				if (remainingBiome.length > 10)
+					lines.push(`  ... and ${remainingBiome.length - 10} more`);
 				lines.push("");
 			}
 
@@ -821,15 +1058,20 @@ export default function (pi: ExtensionAPI) {
 			if (slopFiles.length > 0) {
 				lines.push(`## 🤖 AI Slop indicators [${slopFiles.length} files]`);
 				for (const { file, warnings } of slopFiles.slice(0, 10)) {
-					lines.push(`  - \`${file}\`: ${warnings.map(w => w.split(" — ")[0]).join(", ")}`);
+					lines.push(
+						`  - \`${file}\`: ${warnings.map((w) => w.split(" — ")[0]).join(", ")}`,
+					);
 				}
-				if (slopFiles.length > 10) lines.push(`  ... and ${slopFiles.length - 10} more`);
+				if (slopFiles.length > 10)
+					lines.push(`  ... and ${slopFiles.length - 10} more`);
 				lines.push("");
 			}
 
 			// Skips
 			if (skipRules.size > 0) {
-				lines.push(`## ⏭️ Skip [${[...skipRules.values()].reduce((a, b) => a + b.count, 0)} items — architectural]`);
+				lines.push(
+					`## ⏭️ Skip [${[...skipRules.values()].reduce((a, b) => a + b.count, 0)} items — architectural]`,
+				);
 				for (const [rule, { note, count }] of skipRules) {
 					lines.push(`  - **${rule}** (${count}): ${note}`);
 				}
@@ -837,14 +1079,22 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			lines.push("---");
-			lines.push("Fix the items above, then run `/lens-booboo-fix` again for the next iteration.");
-			lines.push("If an item in '🔨 Fix these' is not safe to fix, skip it with one sentence why.");
+			lines.push(
+				"Fix the items above, then run `/lens-booboo-fix` again for the next iteration.",
+			);
+			lines.push(
+				"If an item in '🔨 Fix these' is not safe to fix, skip it with one sentence why.",
+			);
 
 			const fixPlan = lines.join("\n");
 
 			// Save plan for reference
 			const planPath = path.join(process.cwd(), ".pi-lens", "fix-plan.md");
-			fs.writeFileSync(planPath, `# Fix Plan — Iteration ${session.iteration}\n\n${fixPlan}`, "utf-8");
+			fs.writeFileSync(
+				planPath,
+				`# Fix Plan — Iteration ${session.iteration}\n\n${fixPlan}`,
+				"utf-8",
+			);
 
 			// Notify and inject into conversation
 			ctx.ui.notify(`📄 Fix plan saved: ${planPath}`, "info");
@@ -861,10 +1111,14 @@ export default function (pi: ExtensionAPI) {
 
 			const fs = require("node:fs");
 			const reviewDir = path.join(process.cwd(), ".pi-lens", "reviews");
-			const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+			const timestamp = new Date()
+				.toISOString()
+				.replace(/[:.]/g, "-")
+				.slice(0, 19);
 			const projectName = path.basename(process.cwd());
 
-			const results: import("./clients/complexity-client.js").FileComplexity[] = [];
+			const results: import("./clients/complexity-client.js").FileComplexity[] =
+				[];
 
 			const scanDir = (dir: string) => {
 				if (!fs.existsSync(dir)) return;
@@ -873,7 +1127,17 @@ export default function (pi: ExtensionAPI) {
 				for (const entry of entries) {
 					const fullPath = path.join(dir, entry.name);
 					if (entry.isDirectory()) {
-						if (["node_modules", ".git", "dist", "build", ".next", ".pi-lens"].includes(entry.name)) continue;
+						if (
+							[
+								"node_modules",
+								".git",
+								"dist",
+								"build",
+								".next",
+								".pi-lens",
+							].includes(entry.name)
+						)
+							continue;
 						scanDir(fullPath);
 					} else if (complexityClient.isSupportedFile(fullPath)) {
 						const metrics = complexityClient.analyzeFile(fullPath);
@@ -892,18 +1156,26 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// Calculate aggregates
-			const avgMI = results.reduce((a, b) => a + b.maintainabilityIndex, 0) / results.length;
-			const avgCognitive = results.reduce((a, b) => a + b.cognitiveComplexity, 0) / results.length;
-			const avgCyclomatic = results.reduce((a, b) => a + b.cyclomaticComplexity, 0) / results.length;
-			const avgFunctionLength = results.reduce((a, b) => a + b.avgFunctionLength, 0) / results.length;
-			const maxNesting = Math.max(...results.map(r => r.maxNestingDepth));
-			const maxCognitive = Math.max(...results.map(r => r.cognitiveComplexity));
-			const minMI = Math.min(...results.map(r => r.maintainabilityIndex));
+			const avgMI =
+				results.reduce((a, b) => a + b.maintainabilityIndex, 0) /
+				results.length;
+			const avgCognitive =
+				results.reduce((a, b) => a + b.cognitiveComplexity, 0) / results.length;
+			const avgCyclomatic =
+				results.reduce((a, b) => a + b.cyclomaticComplexity, 0) /
+				results.length;
+			const avgFunctionLength =
+				results.reduce((a, b) => a + b.avgFunctionLength, 0) / results.length;
+			const maxNesting = Math.max(...results.map((r) => r.maxNestingDepth));
+			const maxCognitive = Math.max(
+				...results.map((r) => r.cognitiveComplexity),
+			);
+			const minMI = Math.min(...results.map((r) => r.maintainabilityIndex));
 			const totalFunctions = results.reduce((a, b) => a + b.functionCount, 0);
 			const totalLOC = results.reduce((a, b) => a + b.linesOfCode, 0);
 
 			// Grade distribution
-			const grades = results.map(r => {
+			const grades = results.map((r) => {
 				const mi = r.maintainabilityIndex;
 				if (mi >= 80) return { letter: "A", color: "🟢" };
 				if (mi >= 60) return { letter: "B", color: "🟡" };
@@ -913,7 +1185,7 @@ export default function (pi: ExtensionAPI) {
 			});
 
 			const gradeCount = { A: 0, B: 0, C: 0, D: 0, F: 0 };
-			grades.forEach(g => gradeCount[g.letter as keyof typeof gradeCount]++);
+			grades.forEach((g) => gradeCount[g.letter as keyof typeof gradeCount]++);
 
 			// Build report
 			let report = `# Code Metrics Report: ${projectName}\n\n`;
@@ -925,10 +1197,16 @@ export default function (pi: ExtensionAPI) {
 			const totalAISlopWarnings = results.reduce((a, b) => {
 				return a + complexityClient.checkThresholds(b).length;
 			}, 0);
-			const totalEmojiComments = results.reduce((a, b) => a + b.aiCommentPatterns, 0);
+			const totalEmojiComments = results.reduce(
+				(a, b) => a + b.aiCommentPatterns,
+				0,
+			);
 			const totalTryCatch = results.reduce((a, b) => a + b.tryCatchCount, 0);
-			const totalSingleUse = results.reduce((a, b) => a + b.singleUseFunctions, 0);
-			const maxParams = Math.max(...results.map(r => r.maxParamsInFunction));
+			const totalSingleUse = results.reduce(
+				(a, b) => a + b.singleUseFunctions,
+				0,
+			);
+			const maxParams = Math.max(...results.map((r) => r.maxParamsInFunction));
 
 			// Summary
 			report += `## Summary\n\n`;
@@ -961,8 +1239,11 @@ export default function (pi: ExtensionAPI) {
 			report += `|-------|-------|------------|\n`;
 			for (const [grade, count] of Object.entries(gradeCount)) {
 				const pct = ((count / results.length) * 100).toFixed(1);
-				const icon = grade === "A" ? "🟢" : grade === "B" ? "🟡" : grade === "C" ? "🟠" : grade === "D" ? "🔴" : "⚫";
-				report += `| ${icon} ${grade} (MI ≥ ${grade === "A" ? 80 : grade === "B" ? 60 : grade === "C" ? 40 : grade === "D" ? 20 : 0}) | ${count} | ${pct}% |\n`;
+				const gradeIcons: Record<string, string> = { A: "🟢", B: "🟡", C: "🟠", D: "🔴" };
+				const gradeThresholds: Record<string, number> = { A: 80, B: 60, C: 40, D: 20 };
+				const icon = gradeIcons[grade] ?? "⚫";
+				const threshold = gradeThresholds[grade] ?? 0;
+				report += `| ${icon} ${grade} (MI ≥ ${threshold}) | ${count} | ${pct}% |\n`;
 			}
 			report += `\n`;
 
@@ -971,7 +1252,9 @@ export default function (pi: ExtensionAPI) {
 			report += `| Grade | File | MI | Cognitive | Cyclomatic | Nesting | Functions | LOC | Entropy |\n`;
 			report += `|-------|------|-----|-----------|------------|---------|-----------|-----|--------|\n`;
 
-			const sorted = [...results].sort((a, b) => a.maintainabilityIndex - b.maintainabilityIndex);
+			const sorted = [...results].sort(
+				(a, b) => a.maintainabilityIndex - b.maintainabilityIndex,
+			);
 			for (const f of sorted) {
 				const mi = f.maintainabilityIndex;
 				let grade: string;
@@ -998,14 +1281,22 @@ export default function (pi: ExtensionAPI) {
 
 				if (f.maintainabilityIndex < 20) warnings.push("🔴 Critical: MI < 20");
 				else if (f.maintainabilityIndex < 40) warnings.push("🟠 Low: MI < 40");
-				if (f.cognitiveComplexity > 50) warnings.push(`High cognitive (${f.cognitiveComplexity})`);
-				if (f.maxNestingDepth > 5) warnings.push(`Deep nesting (${f.maxNestingDepth})`);
-				if (f.maxFunctionLength > 50) warnings.push(`Long functions (max ${f.maxFunctionLength})`);
+				if (f.cognitiveComplexity > 50)
+					warnings.push(`High cognitive (${f.cognitiveComplexity})`);
+				if (f.maxNestingDepth > 5)
+					warnings.push(`Deep nesting (${f.maxNestingDepth})`);
+				if (f.maxFunctionLength > 50)
+					warnings.push(`Long functions (max ${f.maxFunctionLength})`);
 
 				// AI slop indicators
 				const slopWarnings = complexityClient.checkThresholds(f);
 				for (const w of slopWarnings) {
-					if (w.includes("AI-style") || w.includes("try/catch") || w.includes("single-use") || w.includes("parameter list")) {
+					if (
+						w.includes("AI-style") ||
+						w.includes("try/catch") ||
+						w.includes("single-use") ||
+						w.includes("parameter list")
+					) {
 						warnings.push(`🤖 ${w.split(" — ")[0]}`);
 					}
 				}
@@ -1110,83 +1401,186 @@ export default function (pi: ExtensionAPI) {
 	// --- Tools ---
 
 	const LANGUAGES = [
-		"c", "cpp", "csharp", "css", "dart", "elixir", "go", "haskell", "html",
-		"java", "javascript", "json", "kotlin", "lua", "php", "python", "ruby",
-		"rust", "scala", "sql", "swift", "tsx", "typescript", "yaml",
+		"c",
+		"cpp",
+		"csharp",
+		"css",
+		"dart",
+		"elixir",
+		"go",
+		"haskell",
+		"html",
+		"java",
+		"javascript",
+		"json",
+		"kotlin",
+		"lua",
+		"php",
+		"python",
+		"ruby",
+		"rust",
+		"scala",
+		"sql",
+		"swift",
+		"tsx",
+		"typescript",
+		"yaml",
 	] as const;
 
 	pi.registerTool({
 		name: "ast_grep_search",
 		label: "AST Search",
-		description: "Search code using AST-aware pattern matching. IMPORTANT: Use specific AST patterns, NOT text search. Examples:\n- Find function: 'function $NAME() { $$$BODY }'\n- Find call: 'fetchMetrics($ARGS)'\n- Find import: 'import { $NAMES } from \"$PATH\"'\n- Generic identifier (broad): 'fetchMetrics'\n\nAlways prefer specific patterns with context over bare identifiers. Use 'paths' to scope to specific files/folders.",
+		description:
+			"Search code using AST-aware pattern matching. IMPORTANT: Use specific AST patterns, NOT text search. Examples:\n- Find function: 'function $NAME() { $$$BODY }'\n- Find call: 'fetchMetrics($ARGS)'\n- Find import: 'import { $NAMES } from \"$PATH\"'\n- Generic identifier (broad): 'fetchMetrics'\n\nAlways prefer specific patterns with context over bare identifiers. Use 'paths' to scope to specific files/folders.",
 		promptSnippet: "Use ast_grep_search for AST-aware code search",
 		parameters: Type.Object({
-			pattern: Type.String({ description: "AST pattern (use function/class/call context, not text)" }),
-			lang: Type.Union(LANGUAGES.map((l) => Type.Literal(l)), { description: "Target language" }),
-			paths: Type.Optional(Type.Array(Type.String(), { description: "Specific files/folders to search" })),
+			pattern: Type.String({
+				description: "AST pattern (use function/class/call context, not text)",
+			}),
+			lang: Type.Union(
+				LANGUAGES.map((l) => Type.Literal(l)),
+				{ description: "Target language" },
+			),
+			paths: Type.Optional(
+				Type.Array(Type.String(), {
+					description: "Specific files/folders to search",
+				}),
+			),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			if (!astGrepClient.isAvailable()) {
-				return { content: [{ type: "text", text: "ast-grep CLI not found. Install: npm i -D @ast-grep/cli" }], isError: true, details: {} };
+				return {
+					content: [
+						{
+							type: "text",
+							text: "ast-grep CLI not found. Install: npm i -D @ast-grep/cli",
+						},
+					],
+					isError: true,
+					details: {},
+				};
 			}
 
-			const { pattern, lang, paths } = params as { pattern: string; lang: string; paths?: string[] };
+			const { pattern, lang, paths } = params as {
+				pattern: string;
+				lang: string;
+				paths?: string[];
+			};
 			const searchPaths = paths?.length ? paths : [ctx.cwd || "."];
 			const result = await astGrepClient.search(pattern, lang, searchPaths);
 
 			if (result.error) {
-				return { content: [{ type: "text", text: `Error: ${result.error}` }], isError: true, details: {} };
+				return {
+					content: [{ type: "text", text: `Error: ${result.error}` }],
+					isError: true,
+					details: {},
+				};
 			}
 
 			const output = astGrepClient.formatMatches(result.matches);
-			return { content: [{ type: "text", text: output }], details: { matchCount: result.matches.length } };
+			return {
+				content: [{ type: "text", text: output }],
+				details: { matchCount: result.matches.length },
+			};
 		},
 	});
 
 	pi.registerTool({
 		name: "ast_grep_replace",
 		label: "AST Replace",
-		description: "Replace code using AST-aware pattern matching. IMPORTANT: Use specific AST patterns, not text. Dry-run by default (use apply=true to apply).\n\nExamples:\n- pattern='console.log($MSG)' rewrite='logger.info($MSG)'\n- pattern='var $X' rewrite='let $X'\n- pattern='function $NAME() { }' rewrite='' (delete)\n\nAlways use 'paths' to scope to specific files/folders. Dry-run first to preview changes.",
+		description:
+			"Replace code using AST-aware pattern matching. IMPORTANT: Use specific AST patterns, not text. Dry-run by default (use apply=true to apply).\n\nExamples:\n- pattern='console.log($MSG)' rewrite='logger.info($MSG)'\n- pattern='var $X' rewrite='let $X'\n- pattern='function $NAME() { }' rewrite='' (delete)\n\nAlways use 'paths' to scope to specific files/folders. Dry-run first to preview changes.",
 		promptSnippet: "Use ast_grep_replace for AST-aware find-and-replace",
 		parameters: Type.Object({
-			pattern: Type.String({ description: "AST pattern to match (be specific with context)" }),
-			rewrite: Type.String({ description: "Replacement using meta-variables from pattern" }),
-			lang: Type.Union(LANGUAGES.map((l) => Type.Literal(l)), { description: "Target language" }),
-			paths: Type.Optional(Type.Array(Type.String(), { description: "Specific files/folders" })),
-			apply: Type.Optional(Type.Boolean({ description: "Apply changes (default: false)" })),
+			pattern: Type.String({
+				description: "AST pattern to match (be specific with context)",
+			}),
+			rewrite: Type.String({
+				description: "Replacement using meta-variables from pattern",
+			}),
+			lang: Type.Union(
+				LANGUAGES.map((l) => Type.Literal(l)),
+				{ description: "Target language" },
+			),
+			paths: Type.Optional(
+				Type.Array(Type.String(), { description: "Specific files/folders" }),
+			),
+			apply: Type.Optional(
+				Type.Boolean({ description: "Apply changes (default: false)" }),
+			),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			if (!astGrepClient.isAvailable()) {
-				return { content: [{ type: "text", text: "ast-grep CLI not found. Install: npm i -D @ast-grep/cli" }], isError: true, details: {} };
+				return {
+					content: [
+						{
+							type: "text",
+							text: "ast-grep CLI not found. Install: npm i -D @ast-grep/cli",
+						},
+					],
+					isError: true,
+					details: {},
+				};
 			}
 
-			const { pattern, rewrite, lang, paths, apply } = params as { pattern: string; rewrite: string; lang: string; paths?: string[]; apply?: boolean };
+			const { pattern, rewrite, lang, paths, apply } = params as {
+				pattern: string;
+				rewrite: string;
+				lang: string;
+				paths?: string[];
+				apply?: boolean;
+			};
 			const searchPaths = paths?.length ? paths : [ctx.cwd || "."];
-			const result = await astGrepClient.replace(pattern, rewrite, lang, searchPaths, apply ?? false);
+			const result = await astGrepClient.replace(
+				pattern,
+				rewrite,
+				lang,
+				searchPaths,
+				apply ?? false,
+			);
 
 			if (result.error) {
-				return { content: [{ type: "text", text: `Error: ${result.error}` }], isError: true, details: {} };
+				return {
+					content: [{ type: "text", text: `Error: ${result.error}` }],
+					isError: true,
+					details: {},
+				};
 			}
 
 			const isDryRun = !apply;
 			let output = astGrepClient.formatMatches(result.matches, isDryRun);
-			if (isDryRun && result.matches.length > 0) output += "\n\n(Dry run - use apply=true to apply)";
-			if (apply && result.matches.length > 0) output = `Applied ${result.matches.length} replacements:\n${output}`;
+			if (isDryRun && result.matches.length > 0)
+				output += "\n\n(Dry run - use apply=true to apply)";
+			if (apply && result.matches.length > 0)
+				output = `Applied ${result.matches.length} replacements:\n${output}`;
 
-			return { content: [{ type: "text", text: output }], details: { matchCount: result.matches.length, applied: apply ?? false } };
+			return {
+				content: [{ type: "text", text: output }],
+				details: { matchCount: result.matches.length, applied: apply ?? false },
+			};
 		},
 	});
 
 	// Delivered once into the first tool_result of the session, then cleared
 	let sessionSummary: string | null = null;
 	let sessionMetricsShown = false;
-	let cachedJscpdClones: import("./clients/jscpd-client.js").DuplicateClone[] = [];
-	let cachedExports = new Map<string, string>(); // function name -> file path
-	const complexityBaselines: Map<string, import("./clients/complexity-client.js").FileComplexity> = new Map();
+	let cachedJscpdClones: import("./clients/jscpd-client.js").DuplicateClone[] =
+		[];
+	const cachedExports = new Map<string, string>(); // function name -> file path
+	const complexityBaselines: Map<
+		string,
+		import("./clients/complexity-client.js").FileComplexity
+	> = new Map();
 
 	// Delta baselines: store pre-write diagnostics to diff against post-write
-	const astGrepBaselines = new Map<string, import("./clients/ast-grep-client.js").AstGrepDiagnostic[]>();
-	const biomeBaselines = new Map<string, import("./clients/biome-client.js").BiomeDiagnostic[]>();
+	const astGrepBaselines = new Map<
+		string,
+		import("./clients/ast-grep-client.js").AstGrepDiagnostic[]
+	>();
+	const biomeBaselines = new Map<
+		string,
+		import("./clients/biome-client.js").BiomeDiagnostic[]
+	>();
 
 	// --- Events ---
 
@@ -1287,11 +1681,9 @@ export default function (pi: ExtensionAPI) {
 	const preWriteHints = new Map<string, string>();
 
 	pi.on("tool_call", async (event, _ctx) => {
-		const filePath = isToolCallEventType("write", event)
+		const filePath = (isToolCallEventType("write", event) || isToolCallEventType("edit", event))
 			? (event.input as { path: string }).path
-			: isToolCallEventType("edit", event)
-				? (event.input as { path: string }).path
-				: undefined;
+			: undefined;
 
 		if (!filePath) return;
 
@@ -1305,7 +1697,10 @@ export default function (pi: ExtensionAPI) {
 		metricsClient.recordBaseline(filePath);
 
 		// Record complexity baseline for TS/JS files
-		if (complexityClient.isSupportedFile(filePath) && !complexityBaselines.has(filePath)) {
+		if (
+			complexityClient.isSupportedFile(filePath) &&
+			!complexityBaselines.has(filePath)
+		) {
 			const baseline = complexityClient.analyzeFile(filePath);
 			if (baseline) {
 				complexityBaselines.set(filePath, baseline);
@@ -1329,8 +1724,17 @@ export default function (pi: ExtensionAPI) {
 			astGrepBaselines.set(filePath, astGrepClient.scanFile(filePath));
 		}
 
-		if (!pi.getFlag("no-biome") && biomeClient.isAvailable() && biomeClient.isSupportedFile(filePath)) {
-			biomeBaselines.set(filePath, biomeClient.checkFile(filePath).filter(d => d.category === "lint" || d.severity === "error"));
+		if (
+			!pi.getFlag("no-biome") &&
+			biomeClient.isAvailable() &&
+			biomeClient.isSupportedFile(filePath)
+		) {
+			biomeBaselines.set(
+				filePath,
+				biomeClient
+					.checkFile(filePath)
+					.filter((d) => d.category === "lint" || d.severity === "error"),
+			);
 		}
 
 		dbg(`  pre-write hints: ${hints.length} — ${hints.join(" | ") || "none"}`);
@@ -1379,8 +1783,12 @@ export default function (pi: ExtensionAPI) {
 			const diags = tsClient.getDiagnostics(filePath);
 			if (diags.length > 0) {
 				// Separate unused imports (TS6133, TS6196) from other diagnostics
-				const unusedImports = diags.filter(d => d.code === 6133 || d.code === 6196);
-				const otherDiags = diags.filter(d => d.code !== 6133 && d.code !== 6196);
+				const unusedImports = diags.filter(
+					(d) => d.code === 6133 || d.code === 6196,
+				);
+				const otherDiags = diags.filter(
+					(d) => d.code !== 6133 && d.code !== 6196,
+				);
 
 				if (unusedImports.length > 0) {
 					lspOutput += `\n\n🧹 Remove ${unusedImports.length} unused import(s) — they are dead code:\n`;
@@ -1390,8 +1798,8 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				if (otherDiags.length > 0) {
-					const errors = otherDiags.filter(d => d.severity !== 2);
-					const warnings = otherDiags.filter(d => d.severity === 2);
+					const errors = otherDiags.filter((d) => d.severity !== 2);
+					const warnings = otherDiags.filter((d) => d.severity === 2);
 					if (errors.length > 0) {
 						lspOutput += `\n\n🔴 Fix ${errors.length} TypeScript error(s) — these must be resolved:\n`;
 						for (const d of errors.slice(0, 10)) {
@@ -1462,15 +1870,21 @@ export default function (pi: ExtensionAPI) {
 			// Count by rule before/after
 			const countBefore = new Map<string, number>();
 			const countAfter = new Map<string, number>();
-			for (const d of before) countBefore.set(d.rule, (countBefore.get(d.rule) ?? 0) + 1);
-			for (const d of after) countAfter.set(d.rule, (countAfter.get(d.rule) ?? 0) + 1);
+			for (const d of before)
+				countBefore.set(d.rule, (countBefore.get(d.rule) ?? 0) + 1);
+			for (const d of after)
+				countAfter.set(d.rule, (countAfter.get(d.rule) ?? 0) + 1);
 
 			// Find new/increased rules
 			const newViolations: typeof after = [];
 			for (const d of after) {
 				const ruleBefore = countBefore.get(d.rule) ?? 0;
 				const ruleAfter = countAfter.get(d.rule) ?? 0;
-				if (ruleAfter > ruleBefore && newViolations.filter(x => x.rule === d.rule).length < (ruleAfter - ruleBefore)) {
+				if (
+					ruleAfter > ruleBefore &&
+					newViolations.filter((x) => x.rule === d.rule).length <
+						ruleAfter - ruleBefore
+				) {
 					newViolations.push(d);
 				}
 			}
@@ -1483,10 +1897,11 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (newViolations.length > 0) {
-				const hasFixable = newViolations.some(v => v.fix);
+				const hasFixable = newViolations.some((v) => v.fix);
 				lspOutput += `\n\n🔴 You introduced ${newViolations.length} new structural violation(s) — fix before moving on:\n`;
 				lspOutput += astGrepClient.formatDiagnostics(newViolations);
-				if (hasFixable) lspOutput += `\n  Some are fixable — check the → hints above`;
+				if (hasFixable)
+					lspOutput += `\n  Some are fixable — check the → hints above`;
 			}
 			if (fixedRules.length > 0) {
 				lspOutput += `\n\n✅ ast-grep: fixed ${fixedRules.join(", ")}`;
@@ -1498,25 +1913,36 @@ export default function (pi: ExtensionAPI) {
 
 		// Biome: lint only — delta mode
 		const biomeAvailable = biomeClient.isAvailable();
-		if (!pi.getFlag("no-biome") && biomeAvailable && biomeClient.isSupportedFile(filePath)) {
+		if (
+			!pi.getFlag("no-biome") &&
+			biomeAvailable &&
+			biomeClient.isSupportedFile(filePath)
+		) {
 			const allDiags = biomeClient.checkFile(filePath);
-			const after = allDiags.filter((d) => d.category === "lint" || d.severity === "error");
+			const after = allDiags.filter(
+				(d) => d.category === "lint" || d.severity === "error",
+			);
 			const before = biomeBaselines.get(filePath) ?? [];
 			biomeBaselines.set(filePath, after);
 
 			// Count by rule before/after
 			const countBefore = new Map<string, number>();
 			const countAfter = new Map<string, number>();
-			const ruleKey = (d: typeof after[0]) => d.rule ?? d.message;
-			for (const d of before) countBefore.set(ruleKey(d), (countBefore.get(ruleKey(d)) ?? 0) + 1);
-			for (const d of after) countAfter.set(ruleKey(d), (countAfter.get(ruleKey(d)) ?? 0) + 1);
+			const ruleKey = (d: (typeof after)[0]) => d.rule ?? d.message;
+			for (const d of before)
+				countBefore.set(ruleKey(d), (countBefore.get(ruleKey(d)) ?? 0) + 1);
+			for (const d of after)
+				countAfter.set(ruleKey(d), (countAfter.get(ruleKey(d)) ?? 0) + 1);
 
 			const newDiags: typeof after = [];
 			for (const d of after) {
 				const key = ruleKey(d);
 				const n_before = countBefore.get(key) ?? 0;
 				const n_after = countAfter.get(key) ?? 0;
-				if (n_after > n_before && newDiags.filter(x => ruleKey(x) === key).length < (n_after - n_before)) {
+				if (
+					n_after > n_before &&
+					newDiags.filter((x) => ruleKey(x) === key).length < n_after - n_before
+				) {
 					newDiags.push(d);
 				}
 			}
@@ -1531,8 +1957,11 @@ export default function (pi: ExtensionAPI) {
 				const fixResult = biomeClient.fixFile(filePath);
 				if (fixResult.success && fixResult.changed) {
 					lspOutput += `\n\n[Biome] Auto-fixed ${fixResult.fixed} issue(s) — file updated on disk`;
-					const remaining = biomeClient.checkFile(filePath).filter((d) => d.category === "lint" || d.severity === "error");
-					if (remaining.length > 0) lspOutput += `\n\n${biomeClient.formatDiagnostics(remaining, filePath)}`;
+					const remaining = biomeClient
+						.checkFile(filePath)
+						.filter((d) => d.category === "lint" || d.severity === "error");
+					if (remaining.length > 0)
+						lspOutput += `\n\n${biomeClient.formatDiagnostics(remaining, filePath)}`;
 					else lspOutput += `\n\n[Biome] ✓ All issues resolved`;
 				} else if (after.length > 0) {
 					lspOutput += `\n\n${biomeClient.formatDiagnostics(after, filePath)}`;
@@ -1542,7 +1971,8 @@ export default function (pi: ExtensionAPI) {
 					const fixable = newDiags.filter((d) => d.fixable);
 					lspOutput += `\n\n🟠 You introduced ${newDiags.length} new Biome violation(s) — fix before moving on:\n`;
 					lspOutput += biomeClient.formatDiagnostics(newDiags, filePath);
-					if (fixable.length > 0) lspOutput += `\n  → Auto-fixable: \`npx @biomejs/biome check --write ${path.basename(filePath)}\``;
+					if (fixable.length > 0)
+						lspOutput += `\n  → Auto-fixable: \`npx @biomejs/biome check --write ${path.basename(filePath)}\``;
 				}
 				if (fixedRules.length > 0) {
 					lspOutput += `\n\n✅ Biome: fixed ${fixedRules.join(", ")}`;
@@ -1554,7 +1984,11 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		// Go — go vet diagnostics
-		if (!pi.getFlag("no-go") && goClient.isGoFile(filePath) && goClient.isGoAvailable()) {
+		if (
+			!pi.getFlag("no-go") &&
+			goClient.isGoFile(filePath) &&
+			goClient.isGoAvailable()
+		) {
 			const goDiags = goClient.checkFile(filePath);
 			if (goDiags.length > 0) {
 				lspOutput += `\n\n${goClient.formatDiagnostics(goDiags)}`;
@@ -1562,7 +1996,11 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		// Rust — cargo check diagnostics
-		if (!pi.getFlag("no-rust") && rustClient.isRustFile(filePath) && rustClient.isAvailable()) {
+		if (
+			!pi.getFlag("no-rust") &&
+			rustClient.isRustFile(filePath) &&
+			rustClient.isAvailable()
+		) {
 			const cwd = process.cwd();
 			const rustDiags = rustClient.checkFile(filePath, cwd);
 			if (rustDiags.length > 0) {
@@ -1596,7 +2034,9 @@ export default function (pi: ExtensionAPI) {
 			dbg(`  test runner: detected runner: ${detected?.runner || "none"}`);
 			if (detected) {
 				const testInfo = testRunnerClient.findTestFile(filePath, cwd);
-				dbg(`  test runner: testInfo: ${testInfo ? testInfo.testFile : "none"}`);
+				dbg(
+					`  test runner: testInfo: ${testInfo ? testInfo.testFile : "none"}`,
+				);
 				if (testInfo) {
 					dbg(`  test file found: ${testInfo.testFile} (${testInfo.runner})`);
 					const testResult = testRunnerClient.runTestFile(
@@ -1618,16 +2058,18 @@ export default function (pi: ExtensionAPI) {
 		// Check for code duplication involving the edited file
 		if (cachedJscpdClones.length > 0) {
 			const fileClones = cachedJscpdClones.filter(
-				clone => path.resolve(clone.fileA) === path.resolve(filePath) ||
-				         path.resolve(clone.fileB) === path.resolve(filePath)
+				(clone) =>
+					path.resolve(clone.fileA) === path.resolve(filePath) ||
+					path.resolve(clone.fileB) === path.resolve(filePath),
 			);
 			if (fileClones.length > 0) {
 				dbg(`  jscpd: ${fileClones.length} duplicate(s) involving ${filePath}`);
 				let dupReport = `🟠 This file has ${fileClones.length} duplicate block(s) — extract to shared utilities:\n`;
 				for (const clone of fileClones.slice(0, 3)) {
-					const other = path.resolve(clone.fileA) === path.resolve(filePath)
-						? `${path.basename(clone.fileB)}:${clone.startB}`
-						: `${path.basename(clone.fileA)}:${clone.startA}`;
+					const other =
+						path.resolve(clone.fileA) === path.resolve(filePath)
+							? `${path.basename(clone.fileB)}:${clone.startB}`
+							: `${path.basename(clone.fileA)}:${clone.startA}`;
 					dupReport += `  ${clone.lines} lines duplicated with ${other}\n`;
 				}
 				if (fileClones.length > 3) {
@@ -1640,12 +2082,18 @@ export default function (pi: ExtensionAPI) {
 		// Check for duplicate exports (function already exists elsewhere)
 		if (cachedExports.size > 0 && /\.(ts|tsx|js|jsx)$/.test(filePath)) {
 			try {
-				const newExports = await astGrepClient.scanExports(filePath, "typescript");
+				const newExports = await astGrepClient.scanExports(
+					filePath,
+					"typescript",
+				);
 				const dupes: string[] = [];
-				for (const [name, file] of newExports) {
+				for (const [name, _file] of newExports) {
 					if (cachedExports.has(name)) {
 						const existingFile = cachedExports.get(name);
-						if (existingFile && path.resolve(existingFile) !== path.resolve(filePath)) {
+						if (
+							existingFile &&
+							path.resolve(existingFile) !== path.resolve(filePath)
+						) {
 							dupes.push(`${name} (already in ${path.basename(existingFile)})`);
 						}
 					}
