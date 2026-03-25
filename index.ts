@@ -254,7 +254,7 @@ export default function (pi: ExtensionAPI) {
 					});
 
 					const output = result.stdout || result.stderr || "";
-					if (output.trim() && result.status === 1) {
+					if (output.trim() && result.status !== undefined) {
 						let issues: Array<{line: number; rule: string; message: string}> = [];
 						const lines = output.split("\n").filter((l: string) => l.trim());
 
