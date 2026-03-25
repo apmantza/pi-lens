@@ -266,6 +266,35 @@ export class ComplexityClient {
   }
 
   /**
+   * Check thresholds and return actionable warnings
+   */
+  checkThresholds(metrics: FileComplexity): string[] {
+    const warnings: string[] = [];
+
+    if (metrics.maintainabilityIndex < 60) {
+      warnings.push(`Maintainability dropped to ${metrics.maintainabilityIndex} — extract logic into helper functions`);
+    }
+
+    if (metrics.cyclomaticComplexity > 10) {
+      warnings.push(`High complexity (${metrics.cyclomaticComplexity}) — use early returns or switch expressions`);
+    }
+
+    if (metrics.cognitiveComplexity > 15) {
+      warnings.push(`Cognitive complexity (${metrics.cognitiveComplexity}) — simplify logic flow`);
+    }
+
+    if (metrics.maxNestingDepth > 4) {
+      warnings.push(`Deep nesting (${metrics.maxNestingDepth} levels) — extract nested logic into separate functions`);
+    }
+
+    if (metrics.codeEntropy > 3.5) {
+      warnings.push(`High entropy (${metrics.codeEntropy.toFixed(1)} bits) — follow project conventions`);
+    }
+
+    return warnings;
+  }
+
+  /**
    * Format delta for session summary
    */
   formatDelta(previous: FileComplexity, current: FileComplexity): string {

@@ -829,6 +829,21 @@ export default function (pi: ExtensionAPI) {
 			}
 		}
 
+		// Complexity threshold warnings (actionable)
+		if (complexityClient.isSupportedFile(filePath)) {
+			const metrics = complexityClient.analyzeFile(filePath);
+			if (metrics) {
+				const warnings = complexityClient.checkThresholds(metrics);
+				if (warnings.length > 0) {
+					let warningReport = `[Complexity Warnings]\n`;
+					for (const w of warnings) {
+						warningReport += `  ⚠ ${w}\n`;
+					}
+					lspOutput += `\n\n${warningReport}`;
+				}
+			}
+		}
+
 		// Test runner — run tests for the edited file
 		if (!pi.getFlag("no-tests")) {
 			const cwd = process.cwd();
