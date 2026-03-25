@@ -256,25 +256,32 @@ export default function (pi: ExtensionAPI) {
 					const output = result.stdout || result.stderr || "";
 					if (output.trim() && result.status !== undefined) {
 						let issues: Array<{line: number; rule: string; message: string}> = [];
-						const lines = output.split("\n").filter((l: string) => l.trim());
 
-						for (const line of lines) {
-							try {
-								const item = JSON.parse(line);
-								const ruleId = item.ruleId || item.name || "unknown";
-								const ruleDesc = astGrepClient.getRuleDescription?.(ruleId);
-								const message = ruleDesc?.message || item.message || ruleId;
-								const lineNum = item.labels?.[0]?.range?.start?.line ||
-									item.spans?.[0]?.range?.start?.line || 0;
-
-								issues.push({
-									line: lineNum + 1,
-									rule: ruleId,
-									message: message,
-								});
-							} catch {
-								// Skip unparseable lines
+						// ast-grep outputs either a JSON array or NDJSON (one object per line)
+						// biome-ignore lint/suspicious/noExplicitAny: ast-grep JSON output is untyped
+						const parseItems = (raw: string): Record<string, any>[] => {
+							const trimmed = raw.trim();
+							if (trimmed.startsWith("[")) {
+								try { return JSON.parse(trimmed); } catch { return []; }
 							}
+							return raw.split("\n").flatMap((l: string) => {
+								try { return [JSON.parse(l)]; } catch { return []; }
+							});
+						};
+
+						for (const item of parseItems(output)) {
+							const ruleId = item.ruleId || item.rule?.title || item.name || "unknown";
+							const ruleDesc = astGrepClient.getRuleDescription?.(ruleId);
+							const message = ruleDesc?.message || item.message || ruleId;
+							const lineNum = item.labels?.[0]?.range?.start?.line ||
+								item.spans?.[0]?.range?.start?.line ||
+								item.range?.start?.line || 0;
+
+							issues.push({
+								line: lineNum + 1,
+								rule: ruleId,
+								message: message,
+							});
 						}
 
 						if (issues.length > 0) {
