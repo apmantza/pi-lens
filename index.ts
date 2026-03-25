@@ -1883,6 +1883,19 @@ export default function (pi: ExtensionAPI) {
 			const before = astGrepBaselines.get(filePath) ?? [];
 			astGrepBaselines.set(filePath, after);
 
+			// Update TDR metrics with current diagnostics
+			const tdrEntries: import("./clients/metrics-client.js").TDREntry[] = after
+				.filter((d) => d.ruleDescription?.grade !== undefined)
+				.map((d) => {
+					const desc = d.ruleDescription;
+					return {
+						category: d.rule,
+						count: desc?.grade ?? 0,
+						severity: d.severity === "error" ? "error" : "warning",
+					};
+				});
+			metricsClient.updateTDR(filePath, tdrEntries);
+
 			// Count by rule before/after
 			const countBefore = new Map<string, number>();
 			const countAfter = new Map<string, number>();

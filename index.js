@@ -1564,6 +1564,18 @@ export default function (pi) {
             const after = astGrepClient.scanFile(filePath);
             const before = astGrepBaselines.get(filePath) ?? [];
             astGrepBaselines.set(filePath, after);
+            // Update TDR metrics with current diagnostics
+            const tdrEntries = after
+                .filter((d) => d.ruleDescription?.grade !== undefined)
+                .map((d) => {
+                const desc = d.ruleDescription;
+                return {
+                    category: d.rule,
+                    count: desc?.grade ?? 0,
+                    severity: d.severity === "error" ? "error" : "warning",
+                };
+            });
+            metricsClient.updateTDR(filePath, tdrEntries);
             // Count by rule before/after
             const countBefore = new Map();
             const countAfter = new Map();

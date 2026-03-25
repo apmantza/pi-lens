@@ -10,87 +10,19 @@
 import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { AstGrepParser } from "./ast-grep-parser.js";
+import { AstGrepRuleManager } from "./ast-grep-rule-manager.js";
 // --- Client ---
 export class AstGrepClient {
     constructor(ruleDir, verbose = false) {
         this.available = null;
-        this.ruleDescriptions = null;
         this.ruleDir =
             ruleDir ||
                 path.join(typeof __dirname !== "undefined" ? __dirname : ".", "..", "rules");
         this.log = verbose
             ? (msg) => console.log(`[ast-grep] ${msg}`)
             : () => { };
-    }
-    /**
-     * Load rule descriptions from YAML files
-     */
-    loadRuleDescriptions() {
-        if (this.ruleDescriptions !== null)
-            return this.ruleDescriptions;
-        const descriptions = new Map();
-        // Find the rules directory - check more specific paths first
-        const possiblePaths = [
-            path.join(this.ruleDir, "ast-grep-rules", "rules"),
-            path.join(this.ruleDir, "rules"),
-            this.ruleDir,
-        ];
-        const rulesPath = possiblePaths.find((p) => fs.existsSync(p));
-        if (!rulesPath) {
-            this.log(`Rule descriptions: no rules directory found in ${possiblePaths.join(", ")}`);
-            this.ruleDescriptions = descriptions;
-            return descriptions;
-        }
-        try {
-            const files = fs.readdirSync(rulesPath).filter((f) => f.endsWith(".yml"));
-            this.log(`Loaded ${files.length} rule descriptions from ${rulesPath}`);
-            for (const file of files) {
-                const filePath = path.join(rulesPath, file);
-                const content = fs.readFileSync(filePath, "utf-8");
-                const rule = this.parseRuleYaml(content);
-                if (rule) {
-                    descriptions.set(rule.id, rule);
-                }
-            }
-        }
-        catch (err) {
-            this.log(`Failed to load rule descriptions: ${err.message}`);
-        }
-        this.ruleDescriptions = descriptions;
-        return descriptions;
-    }
-    /**
-     * Simple YAML parser for rule descriptions
-     */
-    parseRuleYaml(content) {
-        const result = {};
-        // Extract id
-        const idMatch = content.match(/^id:\s*(.+)$/m);
-        if (idMatch)
-            result.id = idMatch[1].trim();
-        // Extract message (handle quoted strings)
-        const msgMatch = content.match(/^message:\s*"([^"]+)"/m) ||
-            content.match(/^message:\s*'([^']+)'/m) ||
-            content.match(/^message:\s*(.+)$/m);
-        if (msgMatch)
-            result.message = (msgMatch[3] || msgMatch[2] || msgMatch[1]).trim();
-        // Extract note (multiline, indented lines)
-        const noteMatch = content.match(/^note:\s*\|([\s\S]*?)(?=^\w|\n\n|\nrule:)/m);
-        if (noteMatch) {
-            result.note = noteMatch[1]
-                .split("\n")
-                .map((line) => line.trim())
-                .filter((line) => line.length > 0)
-                .join(" ");
-        }
-        // Extract severity
-        const sevMatch = content.match(/^severity:\s*(.+)$/m);
-        if (sevMatch)
-            result.severity = this.mapSeverity(sevMatch[1].trim());
-        if (result.id && result.message) {
-            return result;
-        }
-        return null;
+        this.ruleManager = new AstGrepRuleManager(this.ruleDir, this.log);
     }
     /**
      * Check if ast-grep CLI is available
@@ -144,79 +76,31 @@ export class AstGrepClient {
         return { matches: result.matches, applied: apply, error: result.error };
     }
     /**
-     * Find similar functions by comparing normalized AST structure
+     * Run a one-off scan with a temporary rule and configuration
      */
-    async findSimilarFunctions(dir, lang = "typescript") {
+    runTempScan(dir, ruleId, ruleYaml, timeout = 30000) {
         if (!this.isAvailable())
             return [];
         const tmpDir = require("node:os").tmpdir();
         const ts = Date.now();
-        const ruleDir = require("node:path").join(tmpDir, `pi-lens-similar-${ts}`);
-        const rulesSubdir = require("node:path").join(ruleDir, "rules");
-        const ruleFile = require("node:path").join(rulesSubdir, "find-functions.yml");
-        const configFile = require("node:path").join(ruleDir, ".sgconfig.yml");
-        require("node:fs").mkdirSync(rulesSubdir, { recursive: true });
-        require("node:fs").writeFileSync(configFile, `ruleDirs:\n  - ./rules\n`);
-        require("node:fs").writeFileSync(ruleFile, `id: find-functions
-language: ${lang}
-rule:
-  kind: function_declaration
-severity: info
-message: found
-`);
+        const sessionDir = path.join(tmpDir, `pi-lens-temp-${ruleId}-${ts}`);
+        const rulesSubdir = path.join(sessionDir, "rules");
+        const ruleFile = path.join(rulesSubdir, `${ruleId}.yml`);
+        const configFile = path.join(sessionDir, ".sgconfig.yml");
         try {
+            fs.mkdirSync(rulesSubdir, { recursive: true });
+            fs.writeFileSync(configFile, `ruleDirs:\n  - ./rules\n`);
+            fs.writeFileSync(ruleFile, ruleYaml);
             const result = spawnSync("npx", ["sg", "scan", "--config", configFile, "--json", dir], {
                 encoding: "utf-8",
-                timeout: 30000,
+                timeout,
                 shell: true,
             });
             const output = result.stdout || result.stderr || "";
             if (!output.trim())
                 return [];
             const items = JSON.parse(output);
-            const matches = Array.isArray(items) ? items : [items];
-            // Normalize each function by removing identifiers
-            const normalized = new Map();
-            for (const item of matches) {
-                const text = item.text || "";
-                const nameMatch = text.match(/function\s+(\w+)/);
-                if (!nameMatch?.[1])
-                    continue;
-                // Normalize by replacing function name with FN, parameters with P1..Pn, and removing specific values
-                const normalizedText = text
-                    .replace(/function\s+\w+/, "function FN")
-                    .replace(/\bconst\b|\blet\b|\bvar\b/g, "VAR")
-                    .replace(/["'].*?["']/g, "STR")
-                    .replace(/`[^`]*`/g, "TMPL")
-                    .replace(/\b\d+\b/g, "NUM")
-                    .replace(/\btrue\b|\bfalse\b/g, "BOOL")
-                    .replace(/\/\/.*/g, "")
-                    .replace(/\/\*[\s\S]*?\*\//g, "")
-                    .replace(/\s+/g, " ")
-                    .trim();
-                // Extract just the body structure
-                const bodyMatch = normalizedText.match(/\{(.*)\}/);
-                const body = bodyMatch ? bodyMatch[1].trim() : normalizedText;
-                // Use first 200 chars as signature
-                const signature = body.slice(0, 200);
-                if (!normalized.has(signature)) {
-                    normalized.set(signature, []);
-                }
-                const line = item.range?.start?.line || item.labels?.[0]?.range?.start?.line || 0;
-                normalized.get(signature)?.push({
-                    name: nameMatch[1],
-                    file: item.file,
-                    line: line + 1,
-                });
-            }
-            // Return groups with more than one function
-            const result_groups = [];
-            for (const [pattern, functions] of normalized) {
-                if (functions.length > 1) {
-                    result_groups.push({ pattern, functions });
-                }
-            }
-            return result_groups;
+            return Array.isArray(items) ? items : [items];
         }
         catch (err) {
             void err;
@@ -224,7 +108,7 @@ message: found
         }
         finally {
             try {
-                require("node:fs").rmSync(ruleDir, { recursive: true, force: true });
+                fs.rmSync(sessionDir, { recursive: true, force: true });
             }
             catch (err) {
                 void err;
@@ -232,63 +116,85 @@ message: found
         }
     }
     /**
-     * Scan for exported function names in a directory
+     * Find similar functions by comparing normalized AST structure
      */
-    async scanExports(dir, lang = "typescript") {
-        const exports = new Map();
-        if (!this.isAvailable()) {
-            return exports;
-        }
-        const tmpDir = require("node:os").tmpdir();
-        const ts = Date.now();
-        const ruleDir = require("node:path").join(tmpDir, `pi-lens-exports-${ts}`);
-        const rulesSubdir = require("node:path").join(ruleDir, "rules");
-        const ruleFile = require("node:path").join(rulesSubdir, "find-functions.yml");
-        const configFile = require("node:path").join(ruleDir, ".sgconfig.yml");
-        require("node:fs").mkdirSync(rulesSubdir, { recursive: true });
-        require("node:fs").writeFileSync(configFile, `ruleDirs:\n  - ./rules\n`);
-        require("node:fs").writeFileSync(ruleFile, `id: find-functions
+    async findSimilarFunctions(dir, lang = "typescript") {
+        const ruleYaml = `id: find-functions
 language: ${lang}
 rule:
   kind: function_declaration
 severity: info
 message: found
-`);
-        try {
-            const result = spawnSync("npx", ["sg", "scan", "--config", configFile, "--json", dir], {
-                encoding: "utf-8",
-                timeout: 15000,
-                shell: true,
+`;
+        const matches = this.runTempScan(dir, "find-functions", ruleYaml);
+        if (matches.length === 0)
+            return [];
+        return this.groupSimilarFunctions(matches);
+    }
+    groupSimilarFunctions(matches) {
+        const normalized = new Map();
+        for (const item of matches) {
+            const text = item.text || "";
+            const nameMatch = text.match(/function\s+(\w+)/);
+            if (!nameMatch?.[1])
+                continue;
+            const signature = this.normalizeFunction(text);
+            if (!normalized.has(signature)) {
+                normalized.set(signature, []);
+            }
+            const line = item.range?.start?.line || item.labels?.[0]?.range?.start?.line || 0;
+            normalized.get(signature)?.push({
+                name: nameMatch[1],
+                file: item.file,
+                line: line + 1,
             });
-            const output = result.stdout || result.stderr || "";
-            this.log(`scanExports output length: ${output.length}`);
-            if (output.trim()) {
-                try {
-                    const items = JSON.parse(output);
-                    const matches = Array.isArray(items) ? items : [items];
-                    for (const item of matches) {
-                        const text = item.text || "";
-                        const nameMatch = text.match(/function\s+(\w+)/);
-                        if (nameMatch?.[1]) {
-                            this.log(`scanExports found: ${nameMatch[1]} in ${item.file}`);
-                            exports.set(nameMatch[1], item.file);
-                        }
-                    }
-                }
-                catch (e) {
-                    this.log(`scanExports parse error: ${e}`);
-                }
+        }
+        const result_groups = [];
+        for (const [pattern, functions] of normalized) {
+            if (functions.length > 1) {
+                result_groups.push({ pattern, functions });
             }
         }
-        catch (err) {
-            this.log(`scanExports error: ${err.message}`);
-        }
-        finally {
-            try {
-                require("node:fs").rmSync(ruleDir, { recursive: true, force: true });
-            }
-            catch (err) {
-                void err;
+        return result_groups;
+    }
+    normalizeFunction(text) {
+        const normalizedText = text
+            .replace(/function\s+\w+/, "function FN")
+            .replace(/\bconst\b|\blet\b|\bvar\b/g, "VAR")
+            .replace(/["'].*?["']/g, "STR")
+            .replace(/`[^`]*`/g, "TMPL")
+            .replace(/\b\d+\b/g, "NUM")
+            .replace(/\btrue\b|\bfalse\b/g, "BOOL")
+            .replace(/\/\/.*/g, "")
+            .replace(/\/\*[\s\S]*?\*\//g, "")
+            .replace(/\s+/g, " ")
+            .trim();
+        // Extract just the body structure
+        const bodyMatch = normalizedText.match(/\{(.*)\}/);
+        const body = bodyMatch ? bodyMatch[1].trim() : normalizedText;
+        // Use first 200 chars as signature
+        return body.slice(0, 200);
+    }
+    /**
+     * Scan for exported function names in a directory
+     */
+    async scanExports(dir, lang = "typescript") {
+        const exports = new Map();
+        const ruleYaml = `id: find-functions
+language: ${lang}
+rule:
+  kind: function_declaration
+severity: info
+message: found
+`;
+        const matches = this.runTempScan(dir, "find-functions", ruleYaml, 15000);
+        this.log(`scanExports output length: ${matches.length}`);
+        for (const item of matches) {
+            const text = item.text || "";
+            const nameMatch = text.match(/function\s+(\w+)/);
+            if (nameMatch?.[1]) {
+                this.log(`scanExports found: ${nameMatch[1]} in ${item.file}`);
+                exports.set(nameMatch[1], item.file);
             }
         }
         return exports;
@@ -376,7 +282,8 @@ message: found
             const output = result.stdout || result.stderr || "";
             if (!output.trim())
                 return [];
-            return this.parseOutput(output, absolutePath);
+            const parser = new AstGrepParser((id) => this.getRuleDescription(id), (sev) => this.mapSeverity(sev));
+            return parser.parseOutput(output, absolutePath);
         }
         catch (err) {
             this.log(`Scan error: ${err.message}`);
@@ -407,7 +314,6 @@ message: found
                 : d.rule;
             const fix = d.fix || d.ruleDescription?.note ? " [fixable]" : "";
             output += `  ${ruleInfo} (${loc})${fix}\n`;
-            // Include note for actionable guidance
             if (d.ruleDescription?.note) {
                 const shortNote = d.ruleDescription.note.split("\n")[0];
                 output += `    → ${shortNote}\n`;
@@ -418,91 +324,8 @@ message: found
         }
         return output;
     }
-    // --- Internal ---
-    parseOutput(output, filterFile) {
-        const diagnostics = [];
-        const resolvedFilterFile = path.resolve(filterFile);
-        // Try parsing as JSON array first (new format)
-        try {
-            const items = JSON.parse(output);
-            if (Array.isArray(items)) {
-                for (const item of items) {
-                    const diag = this.parseDiagnostic(item, resolvedFilterFile);
-                    if (diag)
-                        diagnostics.push(diag);
-                }
-                return diagnostics;
-            }
-        }
-        catch (err) {
-            void err;
-            // Not a JSON array, try ndjson format (legacy)
-        }
-        // Parse ndjson (one JSON object per line) - legacy format
-        const lines = output.split("\n").filter((l) => l.trim());
-        for (const line of lines) {
-            try {
-                const item = JSON.parse(line);
-                const diag = this.parseDiagnostic(item, resolvedFilterFile);
-                if (diag)
-                    diagnostics.push(diag);
-            }
-            catch (err) {
-                void err;
-                // Skip unparseable lines
-            }
-        }
-        return diagnostics;
-    }
-    parseDiagnostic(item, filterFile) {
-        // New format uses labels array
-        if (item.labels && item.labels.length > 0) {
-            const label = item.labels.find((l) => l.style === "primary") || item.labels[0];
-            const filePath = path.resolve(label.file || filterFile);
-            // Filter to our file
-            if (filePath !== filterFile)
-                return null;
-            const start = label.range?.start || { line: 0, column: 0 };
-            const end = label.range?.end || start;
-            return {
-                line: start.line + 1, // ast-grep is 0-indexed, we want 1-indexed
-                column: start.column,
-                endLine: end.line + 1,
-                endColumn: end.column,
-                severity: this.mapSeverity(item.severity),
-                message: item.message || "Unknown issue",
-                rule: item.ruleId || "unknown",
-                ruleDescription: this.getRuleDescription(item.ruleId || "unknown"),
-                file: filePath,
-            };
-        }
-        // Legacy format uses spans array
-        if (item.spans && item.spans.length > 0) {
-            const span = item.spans[0];
-            const filePath = path.resolve(span.file || filterFile);
-            // Filter to our file
-            if (filePath !== filterFile)
-                return null;
-            const start = span.range?.start || { line: 0, column: 0 };
-            const end = span.range?.end || start;
-            const ruleId = item.name || item.ruleId || "unknown";
-            return {
-                line: start.line + 1,
-                column: start.column,
-                endLine: end.line + 1,
-                endColumn: end.column,
-                severity: this.mapSeverity(item.severity || item.Severity || "warning"),
-                message: item.Message?.text || item.message || "Unknown issue",
-                rule: ruleId,
-                ruleDescription: this.getRuleDescription(ruleId),
-                file: filePath,
-            };
-        }
-        return null;
-    }
     getRuleDescription(ruleId) {
-        const descriptions = this.loadRuleDescriptions();
-        return descriptions.get(ruleId);
+        return this.ruleManager.loadRuleDescriptions().get(ruleId);
     }
     mapSeverity(severity) {
         const lower = severity.toLowerCase();

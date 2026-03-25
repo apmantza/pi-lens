@@ -53,6 +53,7 @@ export class MetricsClient {
 	private fileBaselines: Map<string, { content: string; entropy: number }> =
 		new Map();
 	private fileSessionWrites: Map<string, number> = new Map(); // agent-written lines
+	private tdrFindings: Map<string, TDREntry[]> = new Map();
 
 	constructor(verbose = false) {
 		this.log = verbose
@@ -75,6 +76,31 @@ export class MetricsClient {
 		this.log(
 			`Baseline recorded: ${path.basename(filePath)} (entropy: ${entropy.toFixed(2)})`,
 		);
+	}
+
+	/**
+	 * Update TDR findings for a file
+	 */
+	updateTDR(filePath: string, entries: TDREntry[]): void {
+		const absolutePath = path.resolve(filePath);
+		this.tdrFindings.set(absolutePath, entries);
+	}
+
+	/**
+	 * Get overall TDR score for the session
+	 * 0-100, where 100 is high debt.
+	 */
+	getTDRScore(): number {
+		let totalScore = 0;
+		for (const entries of this.tdrFindings.values()) {
+			for (const entry of entries) {
+				// Each entry adds to the debt index based on its Grade (count as the Grade value)
+				totalScore += entry.count;
+			}
+		}
+		// Normalize to 0-100? Or just return the raw Index.
+		// SCA.md says "Technical Debt Index"
+		return totalScore;
 	}
 
 	/**
@@ -242,11 +268,19 @@ export class MetricsClient {
 	formatSessionSummary(): string {
 		const aiRatio = this.getAICodeRatio();
 		const entropyDeltas = this.getEntropyDeltas();
+		const tdrScore = this.getTDRScore();
 		const fileCount = this.fileSessionWrites.size;
 
 		if (fileCount === 0) return ""; // No files touched
 
 		const parts: string[] = [];
+
+		// Technical Debt Index
+		if (tdrScore > 0) {
+			parts.push(
+				`[TDR Index] Total Debt: ${tdrScore.toFixed(1)} (based on architectural rule grades)`,
+			);
+		}
 
 		// AI Code Ratio
 		const pct = (aiRatio.ratio * 100).toFixed(1);
