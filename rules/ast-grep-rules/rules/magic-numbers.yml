@@ -7,8 +7,3 @@ note: |
   Extract to a named constant with a descriptive name.
 rule:
   kind: number
-files:
-  exclude:
-    - "**/*.test.ts"
-    - "**/*.spec.ts"
-    - "**/test-utils.ts"
