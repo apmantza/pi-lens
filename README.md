@@ -195,8 +195,8 @@ Each rule includes a `message` and `note` that are shown in diagnostics, so the 
 **TypeScript**
 `no-any-type`, `no-as-any`, `no-non-null-assertion`
 
-**Style**
-`no-var`, `prefer-const`, `prefer-template`, `no-useless-concat`, `prefer-nullish-coalescing`, `prefer-optional-chain`, `nested-ternary`, `no-lonely-if`
+**Style** (Biome handles `no-var`, `prefer-const`, `prefer-template`, `no-useless-concat` natively)
+`prefer-nullish-coalescing`, `prefer-optional-chain`, `nested-ternary`, `no-lonely-if`
 
 **Correctness**
 `no-debugger`, `no-throw-string`, `no-return-await`, `no-await-in-loop`, `no-await-in-promise-all`, `require-await`, `empty-catch`, `strict-equality`, `strict-inequality`

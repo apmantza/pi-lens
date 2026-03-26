@@ -2,6 +2,18 @@
 
 All notable changes to pi-lens will be documented in this file.
 
+## [2.0.29] - 2026-03-26
+
+### Added
+- **`clients/ts-service.ts`**: Shared TypeScript service that creates one `ts.Program` per session. Both `complexity-client` and `type-safety-client` now share the same program instead of creating a new one per file. Significant performance improvement on large codebases.
+
+### Removed
+- **3 redundant ast-grep rules** that overlap with Biome: `no-var`, `prefer-template`, `no-useless-concat`. Biome handles these natively with auto-fix. ast-grep no longer duplicates this coverage.
+- **`prefer-const` from RULE_ACTIONS** — no longer needed (Biome handles directly).
+
+### Changed
+- **Consolidated rule overlap**: Biome is now the single source of truth for style/format rules. ast-grep focuses on structural patterns Biome doesn't cover (security, design smells, AI slop).
+
 ## [2.0.27] - 2026-03-26
 
 ### Added

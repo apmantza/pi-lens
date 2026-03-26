@@ -613,11 +613,7 @@ export default function (pi: ExtensionAPI) {
 		string,
 		{ type: "biome" | "agent" | "skip"; note: string }
 	> = {
-		"no-var": { type: "biome", note: "auto-fixed by Biome --write" },
-		"prefer-template": { type: "biome", note: "auto-fixed by Biome --write" },
-		"no-useless-concat": { type: "biome", note: "auto-fixed by Biome --write" },
 		"no-lonely-if": { type: "biome", note: "auto-fixed by Biome --write" },
-		"prefer-const": { type: "biome", note: "auto-fixed by Biome --write" },
 		"empty-catch": {
 			type: "agent",
 			note: "Add this.log('Error: ' + err.message) to the catch block",

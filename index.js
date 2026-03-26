@@ -521,11 +521,7 @@ export default function (pi) {
     // Rules marked "skip" are architectural — they need deliberate user decisions.
     // They are excluded from inline tool_result hard stops (use /lens-refactor instead).
     const RULE_ACTIONS = {
-        "no-var": { type: "biome", note: "auto-fixed by Biome --write" },
-        "prefer-template": { type: "biome", note: "auto-fixed by Biome --write" },
-        "no-useless-concat": { type: "biome", note: "auto-fixed by Biome --write" },
         "no-lonely-if": { type: "biome", note: "auto-fixed by Biome --write" },
-        "prefer-const": { type: "biome", note: "auto-fixed by Biome --write" },
         "empty-catch": {
             type: "agent",
             note: "Add this.log('Error: ' + err.message) to the catch block",

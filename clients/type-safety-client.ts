@@ -2,7 +2,7 @@
  * Type Safety Client for pi-lens
  *
  * Detects type safety violations that can cause runtime bugs.
- * Uses the TypeScript compiler API for type-aware analysis.
+ * Uses the shared TypeScriptService for efficient type checking.
  *
  * Checks:
  * - Switch Exhaustiveness: Missing cases in union type switches
@@ -13,6 +13,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as ts from "typescript";
+import { getTypeScriptService } from "./ts-service.js";
 
 // --- Types ---
 
@@ -87,6 +88,11 @@ export class TypeSafetyClient {
 		const checker = this.getTypeChecker(sourceFile);
 		if (!checker) return;
 
+		// Use the source file from the program (has proper type information)
+		const tsService = getTypeScriptService();
+		const programSourceFile = tsService.getSourceFileFromProgram(sourceFile.fileName);
+		if (!programSourceFile) return;
+
 		const visit = (node: ts.Node) => {
 			if (ts.isSwitchStatement(node)) {
 				const exprType = checker.getTypeAtLocation(node.expression);
@@ -137,15 +143,15 @@ export class TypeSafetyClient {
 					);
 
 					if (missingCases.length > 0 && !hasDefault) {
-						const line = sourceFile.getLineAndCharacterOfPosition(
+						const line = programSourceFile.getLineAndCharacterOfPosition(
 							node.getStart(),
 						).line + 1;
 
-						const exprText = node.expression.getText(sourceFile);
+						const exprText = node.expression.getText(programSourceFile);
 						const typeStr = missingCases.map((c) => `'${c}'`).join(", ");
 
 						issues.push({
-							filePath: sourceFile.fileName,
+							filePath: programSourceFile.fileName,
 							rule: "switch-exhaustiveness",
 							line,
 							message: `Switch on '${exprText}' is not exhaustive. Missing cases: ${typeStr}`,
@@ -159,41 +165,24 @@ export class TypeSafetyClient {
 			ts.forEachChild(node, visit);
 		};
 
-		ts.forEachChild(sourceFile, visit);
+		ts.forEachChild(programSourceFile, visit);
 	}
 
 	/**
-	 * Get type checker for the source file
+	 * Get type checker from shared service
 	 */
 	private getTypeChecker(sourceFile: ts.SourceFile): ts.TypeChecker | null {
-		try {
-			const compilerOptions: ts.CompilerOptions = {
-				target: ts.ScriptTarget.Latest,
-				module: ts.ModuleKind.ESNext,
-				strict: true,
-				noEmit: true,
-				skipLibCheck: true,
-			};
+		const tsService = getTypeScriptService();
 
-			// Create a host that uses our pre-parsed source file
-			const host = ts.createCompilerHost(compilerOptions);
-			const originalGetSourceFile = host.getSourceFile;
-			host.getSourceFile = (fileName, languageVersion) => {
-				if (fileName === sourceFile.fileName) return sourceFile;
-				return originalGetSourceFile(fileName, languageVersion);
-			};
+		// Update the file in the shared service
+		const content = fs.readFileSync(sourceFile.fileName, "utf-8");
+		tsService.updateFile(sourceFile.fileName, content);
 
-			const program = ts.createProgram(
-				[sourceFile.fileName],
-				compilerOptions,
-				host,
-			);
-
-			return program.getTypeChecker();
-		} catch {
-			this.log("Could not create type checker, skipping exhaustiveness check");
-			return null;
+		const checker = tsService.getChecker();
+		if (!checker) {
+			this.log("Could not get type checker, skipping exhaustiveness check");
 		}
+		return checker;
 	}
 
 }
