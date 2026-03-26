@@ -1,11 +1,12 @@
 /**
  * Shared architectural debt scanning — used by booboo-fix and booboo-refactor.
- * Scans ast-grep skip rules + complexity metrics, scores files by combined signal.
+ * Scans ast-grep skip rules + complexity metrics + architect.yaml rules.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AstGrepClient } from "./ast-grep-client.js";
 import type { ComplexityClient } from "./complexity-client.js";
+import type { ArchitectClient } from "./architect-client.js";
 
 export type SkipIssue = { rule: string; line: number; note: string };
 export type FileMetrics = { mi: number; cognitive: number; nesting: number };
@@ -87,13 +88,63 @@ export function scanComplexityMetrics(
 }
 
 /**
+ * Scan for architectural rule violations grouped by absolute file path.
+ * Returns map of absolute file path → list of violation messages.
+ */
+export function scanArchitectViolations(
+	architectClient: ArchitectClient,
+	targetPath: string,
+): Map<string, string[]> {
+	const violationsByFile = new Map<string, string[]>();
+	if (!architectClient.hasConfig()) return violationsByFile;
+
+	const scanDir = (dir: string) => {
+		if (!fs.existsSync(dir)) return;
+		for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+			const full = path.join(dir, entry.name);
+			if (entry.isDirectory()) {
+				if (["node_modules", ".git", "dist", "build", ".next", ".pi-lens"].includes(entry.name)) continue;
+				scanDir(full);
+			} else if (/\.(ts|tsx|js|jsx|py|go|rs)$/.test(entry.name)) {
+				const relPath = path.relative(targetPath, full).replace(/\\/g, "/");
+				const content = fs.readFileSync(full, "utf-8");
+				const lineCount = content.split("\n").length;
+				const msgs: string[] = [];
+
+				// Check pattern violations
+				for (const v of architectClient.checkFile(relPath, content)) {
+					msgs.push(v.message);
+				}
+
+				// Check file size
+				const sizeV = architectClient.checkFileSize(relPath, lineCount);
+				if (sizeV) {
+					msgs.push(sizeV.message);
+				}
+
+				if (msgs.length > 0) {
+					violationsByFile.set(full, msgs);
+				}
+			}
+		}
+	};
+	scanDir(targetPath);
+	return violationsByFile;
+}
+
+/**
  * Score each file by combined debt signal. Higher = worse.
  */
 export function scoreFiles(
 	skipByFile: Map<string, SkipIssue[]>,
 	metricsByFile: Map<string, FileMetrics>,
+	architectViolations?: Map<string, string[]>,
 ): { file: string; score: number }[] {
-	const allFiles = new Set([...skipByFile.keys(), ...metricsByFile.keys()]);
+	const allFiles = new Set([
+		...skipByFile.keys(),
+		...metricsByFile.keys(),
+		...(architectViolations?.keys() ?? []),
+	]);
 	return [...allFiles]
 		.map((file) => {
 			let score = 0;
@@ -107,6 +158,11 @@ export function scoreFiles(
 				if (issue.rule === "large-class") score += 5;
 				else if (issue.rule === "no-as-any") score += 2;
 				else score += 1;
+			}
+			// Architect violations are high-priority signals
+			const archMsgs = architectViolations?.get(file);
+			if (archMsgs && archMsgs.length > 0) {
+				score += archMsgs.length * 3; // Each violation = 3 points
 			}
 			return { file, score };
 		})

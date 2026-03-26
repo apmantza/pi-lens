@@ -43,7 +43,7 @@ import { TodoScanner } from "./clients/todo-scanner.js";
 import { TypeCoverageClient } from "./clients/type-coverage-client.js";
 import { TypeScriptClient } from "./clients/typescript-client.js";
 import { buildInterviewer } from "./clients/interviewer.js";
-import { scanSkipViolations, scanComplexityMetrics, scoreFiles, extractCodeSnippet } from "./clients/scan-architectural-debt.js";
+import { scanSkipViolations, scanComplexityMetrics, scanArchitectViolations, scoreFiles, extractCodeSnippet } from "./clients/scan-architectural-debt.js";
 const DEBUG_LOG = path.join(os.homedir(), "pi-lens-debug.log");
 function dbg(msg) {
     const line = `[${new Date().toISOString()}] ${msg}\n`;
@@ -1013,7 +1013,10 @@ export default function (pi) {
             const isTsProject = fs.existsSync(path.join(targetPath, "tsconfig.json"));
             const skipByFile = scanSkipViolations(astGrepClient, configPath, targetPath, isTsProject, SKIP_RULES, RULE_ACTIONS);
             const metricsByFile = scanComplexityMetrics(complexityClient, targetPath, isTsProject);
-            const scored = scoreFiles(skipByFile, metricsByFile);
+            const architectViolations = architectClient.hasConfig()
+                ? scanArchitectViolations(architectClient, targetPath)
+                : new Map();
+            const scored = scoreFiles(skipByFile, metricsByFile, architectViolations);
             if (scored.length === 0) {
                 ctx.ui.notify("✅ No architectural debt found — codebase is clean.", "info");
                 return;
@@ -1022,6 +1025,7 @@ export default function (pi) {
             const relFile = path.relative(targetPath, worstFile).replace(/\\/g, "/");
             const issues = skipByFile.get(worstFile) ?? [];
             const metrics = metricsByFile.get(worstFile);
+            const archIssues = architectViolations.get(worstFile) ?? [];
             const snippetResult = issues.length > 0 ? extractCodeSnippet(worstFile, issues[0].line) : null;
             const snippet = snippetResult?.snippet ?? "";
             const snippetStart = snippetResult?.start ?? 1;
@@ -1033,6 +1037,9 @@ export default function (pi) {
             const issuesSummary = [...ruleGroups.entries()]
                 .map(([r, n]) => `- \`${r}\` (×${n})${RULE_ACTIONS[r] ? ` — ${RULE_ACTIONS[r].note}` : ""}`)
                 .join("\n");
+            const archSummary = archIssues.length > 0
+                ? archIssues.map((m) => `- ${m}`).join("\n")
+                : "None";
             const metricsSummary = metrics
                 ? `MI: ${metrics.mi.toFixed(1)}, Cognitive: ${metrics.cognitive}, Nesting: ${metrics.nesting}`
                 : "";
@@ -1044,6 +1051,7 @@ export default function (pi) {
                 metrics ? `**Complexity**: ${metricsSummary}` : "",
                 "",
                 issues.length > 0 ? `**Violations**:\n${issuesSummary}` : "",
+                archIssues.length > 0 ? `**Architectural rules violated**:\n${archSummary}` : "",
                 "",
                 `**Code** (\`${relFile}\` lines ${snippetStart}–${snippetEnd}):`,
                 "```typescript",
