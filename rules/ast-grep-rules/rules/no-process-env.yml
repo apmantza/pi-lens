@@ -1,0 +1,18 @@
+id: no-process-env
+language: TypeScript
+message: "Do not access process.env directly — use dependency injection or a config module"
+severity: error
+note: |
+  Direct process.env access makes code untestable and tightly coupled to the
+  runtime environment. Use a configuration service or DI container instead.
+  
+  BAD: const dbUrl = process.env.DATABASE_URL;
+  GOOD: constructor(private config: ConfigService) {}
+        const dbUrl = this.config.get('DATABASE_URL');
+  
+  Grade 2.0 — critical architectural violation for testability.
+rule:
+  any:
+    - pattern: process.env.$KEY
+    - pattern: process.env[$KEY]
+    - pattern: Deno.env.get($KEY)

@@ -662,6 +662,26 @@ export default function (pi: ExtensionAPI) {
 			type: "skip",
 			note: "Renaming requires understanding all variable scopes.",
 		},
+		"no-process-env": {
+			type: "skip",
+			note: "Using process.env directly makes code untestable. Use DI or a config module.",
+		},
+		"no-param-reassign": {
+			type: "agent",
+			note: "Create a new variable instead of reassigning the parameter.",
+		},
+		"no-single-char-var": {
+			type: "skip",
+			note: "Renaming requires understanding the variable's purpose.",
+		},
+		"switch-without-default": {
+			type: "agent",
+			note: "Add a default case to handle unexpected values.",
+		},
+		"no-architecture-violation": {
+			type: "skip",
+			note: "Layer boundary violations require architectural decisions.",
+		},
 	};
 
 	// Derived from RULE_ACTIONS — used to suppress architectural rules from inline hard stops.

@@ -1,0 +1,15 @@
+id: no-architecture-violation
+language: TypeScript
+message: "Forbidden import — layer boundary violation: importing from database/model layer"
+severity: error
+note: |
+  This import crosses an architectural layer boundary.
+  Use dependency injection or a shared types/interfaces module instead.
+  
+  BAD: import { User } from '../models/user';
+  GOOD: import { User } from '../types/user';
+rule:
+  pattern: import { $$$ } from "$PATH"
+constraints:
+  PATH:
+    regex: ".*models.*|.*database.*|.*prisma.*"

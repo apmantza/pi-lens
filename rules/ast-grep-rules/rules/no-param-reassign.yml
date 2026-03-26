@@ -1,0 +1,16 @@
+id: no-param-reassign
+language: TypeScript
+message: "Do not reassign function parameters — create a new variable instead"
+severity: warning
+note: |
+  Reassigning parameters makes code harder to debug and reason about.
+  It can cause unexpected side effects when the caller's reference changes.
+  Create a new variable with a descriptive name instead.
+  
+  BAD: function update(user) { user = { ...user, active: true }; }
+  GOOD: function update(user) { const updated = { ...user, active: true }; }
+rule:
+  pattern: |
+    function $FUNC($PARAM, $$$) {
+      $PARAM = $VALUE
+    }

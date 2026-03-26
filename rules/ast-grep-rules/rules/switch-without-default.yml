@@ -1,0 +1,12 @@
+id: switch-without-default
+language: TypeScript
+message: "Switch statement is missing a default case"
+severity: warning
+note: |
+  Every switch should have a default case. Without it, new enum values won't be caught at runtime.
+rule:
+  all:
+    - pattern: switch ($EXPR) { $$$CASES }
+    - not:
+        has:
+          pattern: "default: $$$"

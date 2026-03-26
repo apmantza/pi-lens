@@ -1,0 +1,12 @@
+id: no-single-char-var
+language: TypeScript
+message: "Avoid single-character variable names — use descriptive names"
+severity: info
+note: |
+  Single-character variable names reduce readability.
+  Exception: loop counters (i, j, k) in short loops are acceptable.
+rule:
+  pattern: const $VAR = $VALUE
+constraints:
+  VAR:
+    regex: "^[a-z]$"
