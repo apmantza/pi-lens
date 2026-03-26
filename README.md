@@ -15,41 +15,34 @@ Real-time code quality feedback for [pi](https://github.com/mariozechner/pi-codi
 | **Biome** | Lint + format for JS/TS/JSX/TSX/CSS/JSON. Auto-fix disabled by default, use `/lens-format` to apply |
 | **Ruff** | Lint + format for Python. Auto-fixes on every write by default |
 | **Test Runner** | Runs corresponding test file when you edit source code (vitest, jest, pytest). Silent if no test file exists. |
-| **Complexity Metrics** | AST-based analysis: Maintainability Index, Cyclomatic/Cognitive Complexity, Halstead Volume, nesting depth, function length, code entropy. AI slop indicators: emoji comments, try/catch density, over-abstraction, long parameter lists. |
 | **jscpd** | Code duplication detection. Warns when editing a file that has duplicates with other files in the project. |
 | **Duplicate Exports** | Detects when you redefine a function that already exists elsewhere in the codebase. |
 
-### Delta-mode feedback (new in 2.0)
+### Delta-mode feedback
 
-ast-grep and Biome run in **delta mode** — only violations *introduced by the current edit* are shown. Pre-existing issues are silent. Fixed violations are acknowledged.
+ast-grep and Biome run in **delta mode** — only violations *introduced by the current edit* are shown. Pre-existing issues are silent. Fixed violations are acknowledged. Skipped rules (`long-method`, `large-class`, etc.) are suppressed — they're architectural and handled by `/lens-booboo-refactor`.
 
 ```
 🔴 Fix 2 TypeScript error(s) — these must be resolved:
   L10: Type 'string' is not assignable to type 'number'
 
-🔴 You introduced 1 new structural violation(s) — fix before moving on:
+🔴 STOP — you introduced 1 new structural violation(s). Fix before continuing:
   no-var: Use 'const' or 'let' instead of 'var' (L23)
     → var has function scope and can lead to unexpected hoisting behavior.
-  (18 total remaining)
+  → Auto-fixable: check the hints above
 
 ✅ ast-grep: fixed no-console-log (-1)
 
-🟠 You introduced 1 new Biome violation(s) — fix before moving on:
+🔴 STOP — you introduced 1 new Biome violation(s). Fix before continuing:
   L23:5 [style/useConst] This let declares a variable that is only assigned once.
   → Auto-fixable: `npx @biomejs/biome check --write utils.ts`
-  (4 total remaining)
 
-🟠 This file has 1 duplicate block(s) — extract to shared utilities:
+🔴 STOP — this file has 1 duplicate block(s). Extract to a shared utility before adding more code:
   15 lines duplicated with helpers.ts:20
 
 🔴 Do not redefine — 1 function(s) already exist elsewhere:
   formatDate (already in helpers.ts)
   → Import the existing function instead
-
-🟡 Complexity issues — refactor when you get a chance:
-  ⚠ Maintainability dropped to 55 — extract logic into helper functions
-  ⚠ AI-style comments (6) — remove hand-holding comments
-  ⚠ Many try/catch blocks (7) — consolidate error handling
 
 [Tests] ✗ 1/3 failed, 2 passed
   ✗ should format date
@@ -64,50 +57,26 @@ Before every write or edit, the agent is warned about blocking TypeScript errors
 ⚠ Pre-write: file already has 5 TypeScript error(s) — fix before adding more
 ```
 
-### Session start summary (injected into first tool result)
+### Session start (silent caching)
 
-On every new session, the following scans run against the whole project and are delivered once into the first tool result:
+On every new session, scans run silently in the background. Data is cached for real-time feedback during the session and surfaced on-demand via explicit commands:
 
-| Tool | What it reports |
+| Scanner | Cached for |
 |---|---|
-| **TODO scanner** | All TODO / FIXME / HACK / BUG / DEPRECATED annotations, sorted by severity |
-| **Knip** | Unused exports, types, and unlisted dependencies |
-| **jscpd** | Duplicate code blocks — file, line, size, percentage of codebase |
-| **type-coverage** | Percentage of identifiers properly typed; lists exact locations of `any` |
-
-Example:
-
-```
-[Session Start]
-[TODOs] 3 annotation(s) found (2 FIXME, 1 TODO):
-  🔴 src/auth.ts:42 — FIXME: token refresh not implemented
-  🟠 src/parser.ts:17 — HACK: bypassing validation
-  📝 src/api.ts:88 — TODO: add rate limiting
-
-[Knip] 2 issue(s) — 2 unused export(s):
-  Unused exports:
-    - legacyFormat (utils.ts)
-    - oldParser (parser.ts)
-
-[jscpd] 2 duplicate block(s) — 1.2% of codebase (47/3920 lines):
-  16 lines — openrouter.ts:183 ↔ openrouter.ts:135
-  11 lines — cline-auth.ts:51 ↔ kilo-auth.ts:9
-
-[type-coverage] ⚠ 94.3% typed (3870/4107 identifiers):
-  auth.ts:138:44 — undefined as any
-  config.ts:52:12 — err
-  ... and 12 more
-```
+| **TODO scanner** | `/lens-booboo` reports |
+| **Knip** | Dead code detection in `/lens-booboo` and `/lens-booboo-fix` |
+| **jscpd** | Duplicate detection on write; `/lens-booboo` reports |
+| **type-coverage** | `/lens-booboo` reports |
+| **Complexity baselines** | Regressed/improved delta tracking via `/lens-metrics` |
 
 ### On-demand commands
 
 | Command | Description |
 |---|---|
-| `/lens-todos [path]` | Scan for TODO/FIXME/HACK annotations |
-| `/lens-dead-code` | Find unused exports/files/dependencies (requires knip) |
-| `/lens-deps` | Circular dependency scan (requires madge) |
+| `/lens-booboo [path]` | Full code review: TODOs, dead code, duplicates, type coverage, circular dependencies. Saves full report to `.pi-lens/reviews/` |
+| `/lens-booboo-fix [path]` | Iterative automated fix loop. Runs Biome/Ruff autofix, then scans for fixable issues (ast-grep agent rules, dead code). Generates a fix plan for the agent to execute. Re-run for up to 3 iterations, then reset. |
+| `/lens-booboo-refactor [path]` | Interactive architectural refactor. Scans for worst offender by combined debt score (ast-grep skip rules + complexity metrics). Opens a browser interview with impact metrics — agent proposes refactoring options with rationale, user picks one, agent implements and shows a post-change report. |
 | `/lens-format [file\|--all]` | Apply Biome formatting |
-| `/lens-booboo [path]` | Full code review: design smells, complexity, AI slop, TODOs, dead code, duplicates, type coverage. Saves full report to `.pi-lens/reviews/` |
 | `/lens-metrics [path]` | Measure complexity metrics for all files. Exports `report.md` with grades (A-F), summary stats, and top 10 worst files |
 
 ### On-demand tools
@@ -154,6 +123,63 @@ pip install ruff
 | `--no-go` | `false` | Disable Go linting |
 | `--no-rust` | `false` | Disable Rust linting |
 | `--lens-verbose` | `false` | Enable verbose logging |
+
+---
+
+## Fix loop commands
+
+### `/lens-booboo-fix` — automated mechanical fixes
+
+Iterative loop that auto-fixes what it can, then generates a fix plan for the agent. Scan order:
+
+1. **Biome + Ruff** — auto-fix lint/format issues silently
+2. **jscpd** — within-file duplicate blocks (extract to shared utilities)
+3. **Knip** — dead code (delete unused exports/files)
+4. **ast-grep** — structural violations on surviving code (agent fixes)
+5. **AI slop** — files with 2+ complexity signals
+6. **Remaining Biome** — issues that couldn't be auto-fixed even with `--unsafe`
+
+Run up to 3 iterations per session. Session auto-resets after hitting max — just run again.
+
+```
+📋 BOOBOO FIX PLAN — Iteration 1/3 (44 fixable items remaining)
+✅ Fixed 249 issues since last iteration.
+
+⚡ Auto-fixed: Biome --write --unsafe, Ruff --fix + format already ran.
+
+## 🔨 Fix these [12 items]
+
+### no-console-log (14)
+→ Remove or replace with class logger method
+  - `clients/ruff-client.ts:47`
+  - `clients/biome-client.ts:48`
+  ...
+
+## ⏭️ Skip [109 items — architectural]
+  - **long-method** (79): Extraction requires understanding the function's purpose.
+  - **large-class** (16): Splitting a class requires architectural decisions.
+```
+
+### `/lens-booboo-refactor` — interactive architectural refactoring
+
+Surfaces the worst offender in the codebase by combined debt score (ast-grep skip rules + complexity metrics). The agent analyzes the code, generates refactoring options with impact estimates, and presents them in a browser interview.
+
+**Two-step flow:**
+1. **Option selection** — browser opens with numbered radio cards, each showing rationale + impact metrics (`linesReduced`, `miProjection`, `cognitiveProjection`). One option is recommended.
+2. **Post-change report** — after implementing, agent shows what changed (git diff + line counts) and how metrics evolved. User can say "looks good" or request changes via chat.
+
+```
+🏗️ BOOBOO REFACTOR — worst offender identified
+
+File: index.ts (debt score: 35)
+Complexity: MI: 2.7, Cognitive: 1590, Nesting: 10
+
+Violations:
+  - long-method (×18)
+  - long-parameter-list (×6)
+```
+
+The agent then calls the built-in `interviewer` tool, which opens a browser form with the generated options. Zero dependencies — Node's built-in `http` module + platform CLI (`start`/`open`/`xdg-open`).
 
 ---
 
