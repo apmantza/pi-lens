@@ -1359,9 +1359,9 @@ export default function (pi: ExtensionAPI) {
 				"   - `options`: array of { value, label, context, recommended, impact: { linesReduced, miProjection, cognitiveProjection } }",
 				"6. The user picks an option or types a free-text response in the browser form.",
 				"7. Based on their choice, write the proposed changes to TEMP files (e.g. /tmp/). Compute a unified diff: `diff -u <original> <temp>`.",
-				"8. Call the `interviewer` tool AGAIN with confirmationMode=true, plan (your step-by-step plan), and diff (the unified diff). The user sees the plan + diff + line counts and clicks Confirm or Cancel.",
-				"9. If confirmed: apply changes to the real files. If cancelled: delete temp files, make no changes.",
-				"10. After confirmation, apply the refactoring.",
+				"8. Call the `interviewer` tool AGAIN with confirmationMode=true, plan (your step-by-step plan), and diff (the unified diff). The user sees the plan + diff + line counts and clicks Confirm, Cancel, or describes a different approach.",
+				"9. If the user types a different approach: delete temp files, re-generate the plan+diff based on their feedback, call interviewer with confirmationMode again. Repeat until confirmed or cancelled.",
+				"10. If confirmed: apply changes to the real files. If cancelled: delete temp files, make no changes.",
 			].join("\n");
 
 			pi.sendUserMessage(steer, { deliverAs: "steer" });
@@ -1772,19 +1772,36 @@ h2{font-size:16px;color:#58a6ff;margin-bottom:14px}
 .diff-stats{display:flex;gap:10px}.stat-add{color:#3fb950}.stat-del{color:#ff7b72}
 .diff-pre{padding:12px;font-family:'Fira Code',Consolas,monospace;font-size:12px;line-height:1.55;overflow-x:auto;white-space:pre;margin:0}
 .da{color:#3fb950;display:block}.dd{color:#ff7b72;display:block}.dh{color:#79c0ff;display:block}.df{color:#8b949e;display:block}.dc{color:#e6edf3;display:block}
-.actions{display:flex;gap:10px}.btn-c{background:#238636;color:#fff;border:1px solid #2ea043;padding:10px 24px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer}
-.btn-c:hover{background:#2ea043}.btn-x{background:#21262d;color:#e6edf3;border:1px solid #30363d;padding:10px 24px;border-radius:6px;font-size:14px;cursor:pointer}
-.btn-x:hover{background:#30363d}.hint{color:#6e7681;font-size:12px;margin-top:8px}
+.actions{display:flex;gap:10px;flex-wrap:wrap}
+.btn-c{background:#238636;color:#fff;border:1px solid #2ea043;padding:10px 24px;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer}
+.btn-c:hover{background:#2ea043}
+.btn-r{background:#1a2332;color:#79c0ff;border:1px solid #1f6feb;padding:10px 24px;border-radius:6px;font-size:14px;cursor:pointer}
+.btn-r:hover{background:#1f3050}
+.btn-x{background:#21262d;color:#e6edf3;border:1px solid #30363d;padding:10px 24px;border-radius:6px;font-size:14px;cursor:pointer}
+.btn-x:hover{background:#30363d}
+.redo-area{display:none;margin-top:12px}
+textarea{width:100%;background:#161b22;border:1px solid #30363d;color:#e6edf3;padding:9px;border-radius:6px;font-family:inherit;font-size:13px;resize:vertical;min-height:72px;outline:none}
+textarea:focus{border-color:#58a6ff}
+.hint{color:#6e7681;font-size:12px;margin-top:10px}
 </style></head><body>
 <h2>${esc(question)}</h2>
 <div class="plan"><strong>Plan:</strong><p>${mdToHtml(plan)}</p></div>
 <div class="diff-wrap"><div class="diff-hdr"><span>Changes</span><div class="diff-stats"><span class="stat-add">+${(diff.match(/^\+/gm) || []).length}</span><span class="stat-del">−${(diff.match(/^-/gm) || []).length - (diff.match(/^---/gm) || []).length}</span></div></div><pre class="diff-pre">${diffHtml}</pre></div>
-<form method="POST">
-<input type="hidden" name="choice" value="Confirm">
-<div class="actions"><button class="btn-c" type="submit">✅ Confirm and apply</button><button class="btn-x" type="submit" name="choice" value="Cancel">❌ Cancel — no changes</button></div>
+<form method="POST" id="f">
+<input type="hidden" name="choice" id="c" value="Confirm">
+<div class="actions">
+<button class="btn-c" type="submit" onclick="document.getElementById('c').value='Confirm'">✅ Confirm and apply</button>
+<button class="btn-r" type="button" onclick="toggleRedo()">🔄 Describe a different approach</button>
+<button class="btn-x" type="submit" onclick="document.getElementById('c').value='Cancel'">❌ Cancel</button>
+</div>
+<div class="redo-area" id="ra"><textarea name="freeText" placeholder="What would you do differently? The agent will re-generate the plan and diff..."></textarea>
+<div style="margin-top:8px"><button class="btn-c" type="submit" onclick="document.getElementById('c').value='Redo'">Submit revised approach</button></div></div>
 </form>
-<p class="hint">Tab auto-closes after submit · Ctrl+Enter to confirm</p>
-<script>document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){document.querySelector('.btn-c').click();}});</script>
+<p class="hint">Ctrl+Enter to confirm · Tab stays open until you decide</p>
+<script>
+function toggleRedo(){const r=document.getElementById('ra');r.style.display=r.style.display==='none'?'block':'none';if(r.style.display==='block')r.querySelector('textarea').focus();}
+document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){const r=document.getElementById('ra');if(r.style.display==='block'){document.getElementById('c').value='Redo';}document.getElementById('f').submit();}});
+</script>
 </body></html>`;
 	};
 
