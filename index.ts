@@ -581,6 +581,55 @@ export default function (pi: ExtensionAPI) {
 				}
 			}
 
+			// Part 9: Architectural Rules
+			if (architectClient.hasConfig()) {
+				const archViolations: Array<{ file: string; message: string }> = [];
+				const archScanDir = (dir: string) => {
+					for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+						const full = path.join(dir, entry.name);
+						if (entry.isDirectory()) {
+							if (
+								["node_modules", ".git", "dist", "build", ".next", ".pi-lens"].includes(
+									entry.name,
+								)
+							)
+								continue;
+							archScanDir(full);
+						} else if (/\.(ts|tsx|js|jsx|py|go|rs)$/.test(entry.name)) {
+							const relPath = path.relative(targetPath, full).replace(/\\/g, "/");
+							const content = fs.readFileSync(full, "utf-8");
+							const lineCount = content.split("\n").length;
+
+							// Check pattern violations
+							const violations = architectClient.checkFile(relPath, content);
+							for (const v of violations) {
+								archViolations.push({ file: relPath, message: v.message });
+							}
+
+							// Check file size
+							const sizeV = architectClient.checkFileSize(relPath, lineCount);
+							if (sizeV) {
+								archViolations.push({ file: relPath, message: sizeV.message });
+							}
+						}
+					}
+				};
+				archScanDir(targetPath);
+
+				if (archViolations.length > 0) {
+					parts.push(
+						`🔴 ${archViolations.length} architectural violation(s) — fix before adding new code`,
+					);
+					let fullSection = `## Architectural Rules\n\n`;
+					fullSection += `**${archViolations.length} violation(s) found**\n\n`;
+					for (const v of archViolations) {
+						fullSection += `- **${v.file}**: ${v.message}\n`;
+					}
+					fullSection += "\n";
+					fullReport.push(fullSection);
+				}
+			}
+
 			// Build and save full markdown report
 			const fs = require("node:fs");
 			fs.mkdirSync(reviewDir, { recursive: true });
