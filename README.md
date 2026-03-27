@@ -77,7 +77,7 @@ On every new session, scans run silently in the background. Data is cached for r
 | `/lens-booboo-fix [path]` | Iterative automated fix loop. Runs Biome/Ruff autofix, then scans for fixable issues (ast-grep agent rules, dead code). Generates a fix plan for the agent to execute. Re-run for up to 3 iterations, then reset. |
 | `/lens-booboo-refactor [path]` | Interactive architectural refactor. Scans for worst offender by combined debt score (ast-grep skip rules + complexity metrics). Opens a browser interview with impact metrics — agent proposes refactoring options with rationale, user picks one, agent implements and shows a post-change report. |
 | `/lens-format [file\|--all]` | Apply Biome formatting |
-| `/lens-metrics [path]` | Measure complexity metrics for all files. Exports `report.md` with grades (A-F), summary stats, and top 10 worst files |
+| `/lens-metrics [path]` | Measure complexity metrics for all files. Exports `report.md` with grades (A-F), summary stats, top 10 worst files, and **historical trends** (📈📉 per file) |
 
 ### On-demand tools
 

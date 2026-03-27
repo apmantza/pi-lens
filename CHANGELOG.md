@@ -2,6 +2,13 @@
 
 All notable changes to pi-lens will be documented in this file.
 
+## [2.0.39] - 2026-03-27
+
+### Added
+- **Historical metrics tracking**: New `clients/metrics-history.ts` module captures complexity snapshots per commit. Tracks MI, cognitive complexity, and nesting depth across sessions.
+- **Trend analysis in `/lens-metrics`**: New "Trend" column shows 📈/📉/➡️ with MI delta. "Trend Summary" section aggregates improving/stable/regressing counts with worst regressions.
+- **Passive capture**: Snapshots captured on session start cache + every `/lens-metrics` run. Max 20 snapshots per file (sliding window).
+
 ## [2.0.38] - 2026-03-27
 
 ### Changed
