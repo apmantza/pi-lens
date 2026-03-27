@@ -2,8 +2,7 @@
 node_modules/
 
 # pi-lens internal
-.pi-lens/metrics/
-.pi-lens/reviews/
+.pi-lens/
 
 # Session data
 .pisessionsummaries/
