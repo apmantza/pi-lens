@@ -1,6 +1,6 @@
 {
 	"name": "pi-lens",
-	"version": "2.0.42",
+	"version": "2.0.43",
 	"description": "Real-time code quality feedback for pi — TypeScript LSP, Biome, ast-grep, Ruff, complexity metrics, duplicate detection. Includes automated fix loop (/lens-booboo-fix) and interactive architectural refactoring (/lens-booboo-refactor) with browser-based interviews.",
 	"repository": {
 		"type": "git",
@@ -33,6 +33,7 @@
 	"files": [
 		"index.ts",
 		"clients/",
+		"commands/",
 		"rules/",
 		"default-architect.yaml",
 		"tsconfig.json",
