@@ -452,8 +452,8 @@ export default function (pi: ExtensionAPI) {
 
 			// All files table (sorted by MI ascending)
 			report += `## All Files\n\n`;
-			report += `| Grade | File | MI | Cognitive | Nesting | LOC | Trend |\n`;
-			report += `|-------|------|-----|-----------|---------|-----|-------|\n`;
+			report += `| Grade | File | MI | Cognitive | LOC | Entropy | Trend |\n`;
+			report += `|-------|------|-----|-----------|-----|---------|-------|\n`;
 
 			const sorted = [...results].sort(
 				(a, b) => a.maintainabilityIndex - b.maintainabilityIndex,
@@ -470,8 +470,9 @@ export default function (pi: ExtensionAPI) {
 				// Make path relative for readability
 				const relPath = path.relative(targetPath, f.filePath);
 				const trendCell = formatTrendCell(f.filePath, history);
+				const entropyCell = f.codeEntropy > 0 ? f.codeEntropy.toFixed(2) : "—";
 
-				report += `| ${grade} | ${relPath} | ${mi.toFixed(1)} | ${f.cognitiveComplexity} | ${f.maxNestingDepth} | ${f.linesOfCode} | ${trendCell} |\n`;
+				report += `| ${grade} | ${relPath} | ${mi.toFixed(1)} | ${f.cognitiveComplexity} | ${f.linesOfCode} | ${entropyCell} | ${trendCell} |\n`;
 			}
 			report += `\n`;
 
