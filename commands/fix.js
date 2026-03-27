@@ -2,6 +2,25 @@ import * as childProcess from "node:child_process";
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
 import { shouldIgnoreFile } from "../clients/scan-utils.js";
+import { createAutoLoop } from "../clients/auto-loop.js";
+// Auto-loop singleton for fix command
+let fixLoop = null;
+function getFixLoop(pi) {
+    if (!fixLoop) {
+        fixLoop = createAutoLoop(pi, {
+            name: "fix",
+            maxIterations: 3,
+            command: "/lens-booboo-fix --loop",
+            exitPatterns: [
+                /✅ BOOBOO FIX LOOP COMPLETE/,
+                /⚠️ BOOBOO FIX LOOP STOPPED/,
+                /No more fixable issues/,
+                /Max iterations.*reached/,
+            ],
+        });
+    }
+    return fixLoop;
+}
 const getExtensionDir = () => {
     if (typeof __dirname !== "undefined") {
         return __dirname;
@@ -20,14 +39,21 @@ function dbg(msg) {
 }
 export async function handleFix(args, ctx, clients, pi, ruleActions) {
     const resetRequested = args.includes("--reset");
+    const loopMode = args.includes("--loop");
     const fpMatch = args.match(/--false-positive\s+"([^"]+)"/);
     const falsePositiveId = fpMatch?.[1];
     // Clean args for path
     const cleanArgs = args
         .replace("--reset", "")
+        .replace("--loop", "")
         .replace(/--false-positive\s+"[^"]+"/, "")
         .trim();
     const targetPath = cleanArgs || ctx.cwd || process.cwd();
+    // Initialize auto-loop
+    const loop = getFixLoop(pi);
+    if (loopMode && !loop.getState().active) {
+        loop.start(ctx);
+    }
     const sessionFile = path.join(process.cwd(), ".pi-lens", "fix-session.json");
     const configPath = path.join(getExtensionDir(), "..", "rules", "ast-grep-rules", ".sgconfig.yml");
     // Load or init session
@@ -67,7 +93,7 @@ export async function handleFix(args, ctx, clients, pi, ruleActions) {
         return;
     }
     ctx.ui.notify("🔧 Running booboo fix loop...", "info");
-    const MAX_ITERATIONS = 10;
+    const MAX_ITERATIONS = 3;
     const isTsProject = nodeFs.existsSync(path.join(targetPath, "tsconfig.json"));
     dbg(`booboo-fix: isTsProject=${isTsProject}`);
     session.iteration++;

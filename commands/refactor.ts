@@ -14,6 +14,28 @@ import {
 	scanSkipViolations,
 	scoreFiles,
 } from "../clients/scan-architectural-debt.js";
+import { createAutoLoop } from "../clients/auto-loop.js";
+
+// Auto-loop singleton for refactor command
+let refactorLoop: ReturnType<typeof createAutoLoop> | null = null;
+
+function getRefactorLoop(pi: ExtensionAPI) {
+	if (!refactorLoop) {
+		refactorLoop = createAutoLoop(pi, {
+			name: "refactor",
+			maxIterations: 5,
+			command: "/lens-booboo-refactor --loop",
+			exitPatterns: [
+				/✅ No architectural debt found/,
+				/No more files to refactor/,
+			],
+			completionPatterns: [
+				/✅ No architectural debt found/,
+			],
+		});
+	}
+	return refactorLoop;
+}
 
 export async function handleRefactor(
 	args: string,
@@ -27,7 +49,15 @@ export async function handleRefactor(
 	skipRules: Set<string>,
 	ruleActions: Record<string, { note: string }>,
 ) {
-	const targetPath = args.trim() || ctx.cwd || process.cwd();
+	const loopMode = args.includes("--loop");
+	const cleanArgs = args.replace("--loop", "").trim();
+	const targetPath = cleanArgs || ctx.cwd || process.cwd();
+
+	// Initialize auto-loop if --loop flag
+	const loop = getRefactorLoop(pi);
+	if (loopMode && !loop.getState().active) {
+		loop.start(ctx);
+	}
 
 	ctx.ui.notify("🏗️ Scanning for architectural debt...", "info");
 

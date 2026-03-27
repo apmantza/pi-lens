@@ -12,6 +12,27 @@ import type { JscpdClient } from "../clients/jscpd-client.js";
 import type { KnipClient } from "../clients/knip-client.js";
 import type { RuffClient } from "../clients/ruff-client.js";
 import { shouldIgnoreFile } from "../clients/scan-utils.js";
+import { createAutoLoop } from "../clients/auto-loop.js";
+
+// Auto-loop singleton for fix command
+let fixLoop: ReturnType<typeof createAutoLoop> | null = null;
+
+function getFixLoop(pi: ExtensionAPI) {
+	if (!fixLoop) {
+		fixLoop = createAutoLoop(pi, {
+			name: "fix",
+			maxIterations: 3,
+			command: "/lens-booboo-fix --loop",
+			exitPatterns: [
+				/✅ BOOBOO FIX LOOP COMPLETE/,
+				/⚠️ BOOBOO FIX LOOP STOPPED/,
+				/No more fixable issues/,
+				/Max iterations.*reached/,
+			],
+		});
+	}
+	return fixLoop;
+}
 
 const getExtensionDir = () => {
 	if (typeof __dirname !== "undefined") {
@@ -49,15 +70,23 @@ export async function handleFix(
 	ruleActions: Record<string, { type: string; note: string }>,
 ) {
 	const resetRequested = args.includes("--reset");
+	const loopMode = args.includes("--loop");
 	const fpMatch = args.match(/--false-positive\s+"([^"]+)"/);
 	const falsePositiveId = fpMatch?.[1];
 
 	// Clean args for path
 	const cleanArgs = args
 		.replace("--reset", "")
+		.replace("--loop", "")
 		.replace(/--false-positive\s+"[^"]+"/, "")
 		.trim();
 	const targetPath = cleanArgs || ctx.cwd || process.cwd();
+
+	// Initialize auto-loop
+	const loop = getFixLoop(pi);
+	if (loopMode && !loop.getState().active) {
+		loop.start(ctx);
+	}
 
 	const sessionFile = path.join(process.cwd(), ".pi-lens", "fix-session.json");
 	const configPath = path.join(
@@ -106,7 +135,7 @@ export async function handleFix(
 
 	ctx.ui.notify("🔧 Running booboo fix loop...", "info");
 
-	const MAX_ITERATIONS = 10;
+	const MAX_ITERATIONS = 3;
 	const isTsProject = nodeFs.existsSync(path.join(targetPath, "tsconfig.json"));
 	dbg(`booboo-fix: isTsProject=${isTsProject}`);
 
