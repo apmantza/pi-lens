@@ -92,14 +92,26 @@ export class BiomeClient {
 		].includes(ext);
 	}
 
+	// --- Internal helpers ---
+
+	/**
+	 * Validate path and availability — returns path or null on failure
+	 */
+	private withValidatedPath(filePath: string): string | null {
+		if (!this.isAvailable()) return null;
+
+		const absolutePath = path.resolve(filePath);
+		if (!fs.existsSync(absolutePath)) return null;
+
+		return absolutePath;
+	}
+
 	/**
 	 * Run biome check (format + lint) without fixing — returns diagnostics
 	 */
 	checkFile(filePath: string): BiomeDiagnostic[] {
-		if (!this.isAvailable()) return [];
-
-		const absolutePath = path.resolve(filePath);
-		if (!fs.existsSync(absolutePath)) return [];
+		const absolutePath = this.withValidatedPath(filePath);
+		if (!absolutePath) return [];
 
 		try {
 			const result = spawnSync(
@@ -137,12 +149,13 @@ export class BiomeClient {
 		changed: boolean;
 		error?: string;
 	} {
-		if (!this.isAvailable())
-			return { success: false, changed: false, error: "Biome not available" };
-
-		const absolutePath = path.resolve(filePath);
-		if (!fs.existsSync(absolutePath))
-			return { success: false, changed: false, error: "File not found" };
+		const absolutePath = this.withValidatedPath(filePath);
+		if (!absolutePath)
+			return {
+				success: false,
+				changed: false,
+				error: this.isAvailable() ? "File not found" : "Biome not available",
+			};
 
 		const content = fs.readFileSync(absolutePath, "utf-8");
 
@@ -184,21 +197,13 @@ export class BiomeClient {
 		fixed: number;
 		error?: string;
 	} {
-		if (!this.isAvailable())
+		const absolutePath = this.withValidatedPath(filePath);
+		if (!absolutePath)
 			return {
 				success: false,
 				changed: false,
 				fixed: 0,
-				error: "Biome not available",
-			};
-
-		const absolutePath = path.resolve(filePath);
-		if (!fs.existsSync(absolutePath))
-			return {
-				success: false,
-				changed: false,
-				fixed: 0,
-				error: "File not found",
+				error: this.isAvailable() ? "File not found" : "Biome not available",
 			};
 
 		const content = fs.readFileSync(absolutePath, "utf-8");
@@ -288,10 +293,8 @@ export class BiomeClient {
 	 * Generate a diff-like summary of formatting changes
 	 */
 	getFormatDiff(filePath: string): string {
-		if (!this.isAvailable()) return "";
-
-		const absolutePath = path.resolve(filePath);
-		if (!fs.existsSync(absolutePath)) return "";
+		const absolutePath = this.withValidatedPath(filePath);
+		if (!absolutePath) return "";
 
 		const content = fs.readFileSync(absolutePath, "utf-8");
 
