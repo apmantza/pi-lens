@@ -82,8 +82,11 @@ Based on analysis of pi-lens architecture and patterns from pi-formatter.
 
 #### 2.5 Integration ✅
 - [x] dispatchLint() helper in integration.ts
-- [x] Flag --dispatch to enable (opt-in)
+- [x] Dispatcher now runs by default (no flag needed)
+- [x] Replaced 422 lines with 6-line dispatch call
 - [x] Project-wide checks remain in index.ts (need global state)
+
+**Stats**: 1632 → 1275 lines (-357 lines, -22%)
 
 **Note**: Project-wide checks (duplicate exports, circular deps, test runner,
 jscpd) require global state and remain in index.ts.
