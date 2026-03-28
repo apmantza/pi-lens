@@ -23,14 +23,16 @@ export const TOOL_PLANS: Record<string, ToolPlan> = {
 	jsts: {
 		name: "JavaScript/TypeScript Linting",
 		groups: [
-			// TypeScript LSP always runs first
+			// TypeScript LSP always runs first - blocks on errors
 			{ mode: "all", runnerIds: ["ts-lsp"], filterKinds: ["jsts"] },
 			// Then biome for fast linting
 			{ mode: "fallback", runnerIds: ["biome-lint"] },
-			// Then type safety checks
+			// Type safety checks
 			{ mode: "fallback", runnerIds: ["type-safety"] },
-			// Finally structural analysis
+			// Structural analysis
 			{ mode: "fallback", runnerIds: ["ast-grep"] },
+			// Architectural rules
+			{ mode: "fallback", runnerIds: ["architect"] },
 		],
 	},
 
@@ -41,9 +43,9 @@ export const TOOL_PLANS: Record<string, ToolPlan> = {
 		name: "Python Linting",
 		groups: [
 			// Ruff handles both formatting and linting
-			{ mode: "fallback", runnerIds: ["ruff-lint", "ruff-format"] },
-			// Type safety for Python (if type-checking enabled)
-			{ mode: "fallback", runnerIds: ["pyright"] },
+			{ mode: "fallback", runnerIds: ["ruff-lint"] },
+			// Architectural rules
+			{ mode: "fallback", runnerIds: ["architect"] },
 		],
 	},
 
@@ -53,8 +55,10 @@ export const TOOL_PLANS: Record<string, ToolPlan> = {
 	go: {
 		name: "Go Linting",
 		groups: [
-			// Go fmt + lint
-			{ mode: "fallback", runnerIds: ["gofmt", "golangci-lint"] },
+			// Go vet
+			{ mode: "fallback", runnerIds: ["go-vet"] },
+			// Architectural rules
+			{ mode: "fallback", runnerIds: ["architect"] },
 		],
 	},
 
@@ -64,8 +68,10 @@ export const TOOL_PLANS: Record<string, ToolPlan> = {
 	rust: {
 		name: "Rust Linting",
 		groups: [
-			// Rustfmt + clippy
-			{ mode: "fallback", runnerIds: ["rustfmt", "clippy"] },
+			// Cargo clippy
+			{ mode: "fallback", runnerIds: ["rust-clippy"] },
+			// Architectural rules
+			{ mode: "fallback", runnerIds: ["architect"] },
 		],
 	},
 
@@ -75,10 +81,8 @@ export const TOOL_PLANS: Record<string, ToolPlan> = {
 	cxx: {
 		name: "C/C++ Linting",
 		groups: [
-			// clang-format for formatting
-			{ mode: "fallback", runnerIds: ["clang-format"] },
-			// clang-tidy for linting
-			{ mode: "fallback", runnerIds: ["clang-tidy"] },
+			// Architectural rules
+			{ mode: "fallback", runnerIds: ["architect"] },
 		],
 	},
 
@@ -89,7 +93,7 @@ export const TOOL_PLANS: Record<string, ToolPlan> = {
 		name: "JSON Processing",
 		groups: [
 			// Biome handles JSON well
-			{ mode: "fallback", runnerIds: ["biome-json"] },
+			{ mode: "fallback", runnerIds: ["biome-lint"] },
 		],
 	},
 
@@ -99,8 +103,7 @@ export const TOOL_PLANS: Record<string, ToolPlan> = {
 	markdown: {
 		name: "Markdown Processing",
 		groups: [
-			// Prettier or other markdown formatters
-			{ mode: "fallback", runnerIds: ["prettier-markdown", "markdownlint"] },
+			// No specific linting for markdown yet
 		],
 	},
 
@@ -110,8 +113,8 @@ export const TOOL_PLANS: Record<string, ToolPlan> = {
 	shell: {
 		name: "Shell Script Linting",
 		groups: [
-			// shellcheck for shell scripts
-			{ mode: "fallback", runnerIds: ["shellcheck", "shfmt"] },
+			// Architectural rules
+			{ mode: "fallback", runnerIds: ["architect"] },
 		],
 	},
 
@@ -121,8 +124,8 @@ export const TOOL_PLANS: Record<string, ToolPlan> = {
 	cmake: {
 		name: "CMake Processing",
 		groups: [
-			// cmake-format for formatting
-			{ mode: "fallback", runnerIds: ["cmake-format"] },
+			// Architectural rules
+			{ mode: "fallback", runnerIds: ["architect"] },
 		],
 	},
 };
