@@ -96,6 +96,12 @@ function dbg(msg: string) {
 let _verbose = false;
 let projectRoot = process.cwd();
 
+// Error debt tracking: baseline at turn start
+let errorDebtBaseline: {
+	testsPassed: boolean;
+	buildPassed: boolean;
+} | null = null;
+
 function log(msg: string) {
 	if (_verbose) console.error(`[pi-lens] ${msg}`);
 }
@@ -177,6 +183,13 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerFlag("no-tests", {
 		description: "Disable test runner on write",
+		type: "boolean",
+		default: false,
+	});
+
+	pi.registerFlag("error-debt", {
+		description:
+			"Track test failures and block if tests start failing (error debt tracker)",
 		type: "boolean",
 		default: false,
 	});
@@ -975,6 +988,56 @@ export default function (pi: ExtensionAPI) {
 		dbg(
 			`session_start: scans complete (${parts.length} part(s)), cached for commands`,
 		);
+
+		// --- Error debt: check if tests ran since last session ---
+		// If files were modified in previous turn, run tests and check for regression
+		const errorDebtEnabled = pi.getFlag("error-debt");
+		const pendingDebt = cacheManager.readCache<{
+			pendingCheck: boolean;
+			baselineTestsPassed: boolean;
+		}>("errorDebt", cwd);
+
+		if (errorDebtEnabled && detectedRunner && pendingDebt?.data?.pendingCheck) {
+			dbg("session_start: running pending error debt check");
+			const testResult = testRunnerClient.runTestFile(
+				".",
+				cwd,
+				detectedRunner.runner,
+				detectedRunner.config,
+			);
+			const testsPassed = testResult.failed === 0 && !testResult.error;
+			const baselinePassed = pendingDebt.data.baselineTestsPassed;
+
+			// Regression detected!
+			if (baselinePassed && !testsPassed) {
+				const msg = `🔴 ERROR DEBT: Tests were passing but now failing (${testResult.failed} failure(s)). Fix before continuing.`;
+				dbg(`session_start ERROR DEBT: ${msg}`);
+				parts.push(msg);
+			}
+
+			// Update baseline
+			errorDebtBaseline = {
+				testsPassed: testsPassed,
+				buildPassed: true,
+			};
+		} else if (errorDebtEnabled && detectedRunner) {
+			// No pending check - establish fresh baseline
+			dbg("session_start: establishing fresh error debt baseline");
+			const testResult = testRunnerClient.runTestFile(
+				".",
+				cwd,
+				detectedRunner.runner,
+				detectedRunner.config,
+			);
+			const testsPassed = testResult.failed === 0 && !testResult.error;
+			errorDebtBaseline = {
+				testsPassed: testsPassed,
+				buildPassed: true,
+			};
+			dbg(
+				`session_start error debt baseline: testsPassed=${errorDebtBaseline.testsPassed}`,
+			);
+		}
 	});
 
 	// --- Pre-write proactive hints ---
@@ -1270,6 +1333,22 @@ export default function (pi: ExtensionAPI) {
 		} else {
 			// No issues — clear state for next batch of edits
 			cacheManager.clearTurnState(cwd);
+		}
+
+		// --- Error debt: trigger background test run for next session ---
+		// We don't wait - just set a flag that tests should run at next session_start
+		// This way tests run async (session_start is when agent is idle)
+		if (errorDebtBaseline && files.length > 0) {
+			dbg("turn_end: marking error debt check for next session");
+			// Write a marker file - next session_start will pick this up
+			cacheManager.writeCache(
+				"errorDebt",
+				{
+					pendingCheck: true,
+					baselineTestsPassed: errorDebtBaseline.testsPassed,
+				},
+				cwd,
+			);
 		}
 	});
 }
