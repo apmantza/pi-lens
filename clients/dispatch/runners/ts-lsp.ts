@@ -4,8 +4,13 @@
  * Wraps the existing TypeScriptClient for LSP diagnostics.
  */
 
-import type { DispatchContext, Diagnostic, RunnerDefinition, RunnerResult } from "../types.js";
 import { TypeScriptClient } from "../../typescript-client.js";
+import type {
+	Diagnostic,
+	DispatchContext,
+	RunnerDefinition,
+	RunnerResult,
+} from "../types.js";
 import { readFileContent } from "./utils.js";
 
 const tsLspRunner: RunnerDefinition = {
@@ -39,7 +44,8 @@ const tsLspRunner: RunnerDefinition = {
 		const diagnostics: Diagnostic[] = [];
 
 		for (const d of diags) {
-			const severity = d.severity === 1 ? "error" : d.severity === 2 ? "warning" : "info";
+			const severity =
+				d.severity === 1 ? "error" : d.severity === 2 ? "warning" : "info";
 			diagnostics.push({
 				id: `ts-${d.range.start.line}-${d.code}`,
 				message: d.message,
@@ -53,7 +59,9 @@ const tsLspRunner: RunnerDefinition = {
 		}
 
 		return {
-			status: diagnostics.some((d) => d.severity === "error") ? "failed" : "succeeded",
+			status: diagnostics.some((d) => d.severity === "error")
+				? "failed"
+				: "succeeded",
 			diagnostics,
 			semantic: "warning",
 		};

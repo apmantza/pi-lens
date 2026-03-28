@@ -185,9 +185,7 @@ export class ComplexityClient {
 	/**
 	 * Read file and parse to TypeScript AST
 	 */
-	private readAndParse(
-		filePath: string,
-	): {
+	private readAndParse(filePath: string): {
 		absolutePath: string;
 		content: string;
 		sourceFile: ts.SourceFile;
@@ -387,7 +385,7 @@ export class ComplexityClient {
 		let count = 0;
 
 		const aiPatterns = [
-			/[🔍✅📝🔧🐛⚠️🚀💡🎯📌🏷️🔑🏗️🧪🗑️🔄♻️📋🔖📊💬🔥💎⭐🌟🎯🎨🔧🛠️]/,
+			/[🔍✅📝🔧🐛⚠️🚀💡🎯📌🏷️🔑🏗️🧪🗑️🔄♻️📋🔖📊💬🔥💎⭐🌟🎯🎨🔧🛠️]/u,
 			/\/\/\s*(Initialize|Setup|Clean up|Create|Define|Check if|Handle|Process|Validate|Return|Get|Set|Add|Remove|Update|Fetch)\b/i,
 			/\/\/\s*(This function|This method|This code|Here we|Now we)\b/i,
 			/\/\*\*?\s*(Overview|Summary|Description|Example|Usage)\s*\*?\//i,
@@ -675,12 +673,6 @@ export class ComplexityClient {
 		});
 
 		return maxDepth;
-	}
-
-	// --- Private: Cyclomatic Complexity ---
-
-	private calculateCyclomaticComplexity(node: ts.Node): number {
-		return this.nodeCyclomaticComplexity(node, 0);
 	}
 
 	private isLogicalOperator(node: ts.Node): boolean {

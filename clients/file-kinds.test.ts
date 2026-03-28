@@ -3,16 +3,16 @@
  * Centralized file type detection
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
 	detectFileKind,
-	isFileKind,
-	isCodeKind,
-	isConfigKind,
-	isScannableFile,
-	getLanguageId,
 	getExtensionsForKind,
 	getFileKindLabel,
+	getLanguageId,
+	isCodeKind,
+	isConfigKind,
+	isFileKind,
+	isScannableFile,
 } from "./file-kinds.js";
 
 describe("detectFileKind", () => {

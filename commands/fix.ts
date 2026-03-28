@@ -13,17 +13,17 @@ import type {
 	ExtensionContext,
 } from "@mariozechner/pi-coding-agent";
 import type { AstGrepClient } from "../clients/ast-grep-client.js";
+import { createAutoLoop } from "../clients/auto-loop.js";
 import type { BiomeClient } from "../clients/biome-client.js";
 import type { ComplexityClient } from "../clients/complexity-client.js";
+import {
+	type AstIssue,
+	type FixScanResults,
+	scanAll,
+} from "../clients/fix-scanners.js";
 import type { JscpdClient } from "../clients/jscpd-client.js";
 import type { KnipClient } from "../clients/knip-client.js";
 import type { RuffClient } from "../clients/ruff-client.js";
-import { createAutoLoop } from "../clients/auto-loop.js";
-import {
-	scanAll,
-	type FixScanResults,
-	type AstIssue,
-} from "../clients/fix-scanners.js";
 
 // --- Auto-loop singleton ---
 let fixLoop: ReturnType<typeof createAutoLoop> | null = null;
@@ -90,7 +90,7 @@ const isFalsePositive = (id: string, session: FixSession): boolean =>
 function generatePlan(
 	results: FixScanResults,
 	session: FixSession,
-	isTsProject: boolean,
+	_isTsProject: boolean,
 	prevCounts: Record<string, number>,
 ): string {
 	const MAX_ITERATIONS = 3;
@@ -242,7 +242,7 @@ export async function handleFix(
 		complexity: ComplexityClient;
 	},
 	pi: ExtensionAPI,
-	ruleActions: Record<string, { type: string; note: string }>,
+	_ruleActions: Record<string, { type: string; note: string }>,
 ) {
 	const resetRequested = args.includes("--reset");
 	const loopMode = args.includes("--loop");

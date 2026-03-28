@@ -13,9 +13,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { AstGrepParser } from "./ast-grep-parser.js";
 import { AstGrepRuleManager } from "./ast-grep-rule-manager.js";
-import { SgRunner, type SgMatch } from "./sg-runner.js";
+import { type SgMatch, SgRunner } from "./sg-runner.js";
 
-const getExtensionDir = () => {
+const _getExtensionDir = () => {
 	if (typeof __dirname !== "undefined") {
 		return __dirname;
 	}

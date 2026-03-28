@@ -4,7 +4,6 @@
 
 import * as fs from "node:fs";
 import type { Diagnostic } from "../types.js";
-import { stripAnsi } from "../../sanitize.js";
 
 /**
  * Read file content, returning undefined if it can't be read
@@ -38,7 +37,11 @@ export function isCommandAvailable(command: string): boolean {
  * Parse common tool output line into a diagnostic
  * Format: file:line:col message (category)
  */
-export function parseToolLine(line: string, toolName: string, filePath: string): Diagnostic | null {
+export function parseToolLine(
+	line: string,
+	toolName: string,
+	filePath: string,
+): Diagnostic | null {
 	const match = line.match(/^(.+?):(\d+):(\d+)\s+(.+?)\s*\((.+?)\)/);
 	if (!match) return null;
 

@@ -3,17 +3,17 @@
  * Tool output sanitization
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-	stripAnsi,
+	extractErrorMessage,
 	normalizeWhitespace,
+	sanitizeBiomeOutput,
 	sanitizeLine,
 	sanitizeOutput,
-	extractErrorMessage,
-	truncateMessage,
-	sanitizeToolOutput,
-	sanitizeBiomeOutput,
 	sanitizeRuffOutput,
+	sanitizeToolOutput,
+	stripAnsi,
+	truncateMessage,
 } from "./sanitize.js";
 
 describe("stripAnsi", () => {
@@ -47,8 +47,12 @@ describe("normalizeWhitespace", () => {
 
 describe("sanitizeLine", () => {
 	it("should remove common error prefixes", () => {
-		expect(sanitizeLine("[error] Something went wrong")).toBe("Something went wrong");
-		expect(sanitizeLine("error: Something went wrong")).toBe("Something went wrong");
+		expect(sanitizeLine("[error] Something went wrong")).toBe(
+			"Something went wrong",
+		);
+		expect(sanitizeLine("error: Something went wrong")).toBe(
+			"Something went wrong",
+		);
 	});
 
 	it("should remove check/cross marks", () => {
@@ -101,7 +105,9 @@ describe("extractErrorMessage", () => {
 	});
 
 	it("should find error by keyword", () => {
-		const result = extractErrorMessage("warning: low severity\nfailed: operation");
+		const result = extractErrorMessage(
+			"warning: low severity\nfailed: operation",
+		);
 		// extractErrorMessage returns the first line with error indicators
 		// "failed:" contains "failed" which matches ERROR_INDICATORS
 		expect(result).toBe("failed: operation");
@@ -117,7 +123,7 @@ describe("truncateMessage", () => {
 	it("should truncate long messages", () => {
 		const msg = "A".repeat(200);
 		const result = truncateMessage(msg, 50);
-		expect(result).toBe("A".repeat(49) + "…");
+		expect(result).toBe(`${"A".repeat(49)}…`);
 	});
 
 	it("should use default max length of 140", () => {
@@ -154,7 +160,7 @@ describe("sanitizeToolOutput", () => {
 	});
 
 	it("should respect max summary length", () => {
-		const output = "error: " + "x".repeat(200);
+		const output = `error: ${"x".repeat(200)}`;
 		const result = sanitizeToolOutput(output, 50);
 		expect(result.summary?.length).toBeLessThanOrEqual(50);
 	});
@@ -165,7 +171,10 @@ describe("sanitizeBiomeOutput", () => {
 		const json = JSON.stringify({
 			diagnostics: [
 				{
-					location: { path: "file.ts", span: { start: { line: 10, column: 0 } } },
+					location: {
+						path: "file.ts",
+						span: { start: { line: 10, column: 0 } },
+					},
 					message: "Unexpected token",
 				},
 			],

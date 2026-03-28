@@ -56,5 +56,14 @@
 		"extensions": [
 			"./index.ts"
 		]
+	},
+	"knip": {
+		"entry": [
+			"index.ts"
+		],
+		"project": [
+			"**/*.ts",
+			"!**/*.test.ts"
+		]
 	}
 }

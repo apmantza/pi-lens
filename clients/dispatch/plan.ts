@@ -10,8 +10,8 @@
  * - "first-success": Run until one succeeds
  */
 
-import type { ToolPlan } from "./types.js";
 import type { FileKind } from "../file-kinds.js";
+import type { ToolPlan } from "./types.js";
 
 /**
  * Tool plans organized by purpose

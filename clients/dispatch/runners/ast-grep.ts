@@ -7,9 +7,14 @@
  * - security anti-patterns
  */
 
-import type { DispatchContext, Diagnostic, RunnerDefinition, RunnerResult } from "../types.js";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
+import type {
+	Diagnostic,
+	DispatchContext,
+	RunnerDefinition,
+	RunnerResult,
+} from "../types.js";
 
 const astGrepRunner: RunnerDefinition = {
 	id: "ast-grep",
@@ -36,12 +41,7 @@ const astGrepRunner: RunnerDefinition = {
 		}
 
 		// Run ast-grep scan on the file
-		const args = [
-			"scan",
-			"--config", configPath,
-			"--json",
-			ctx.filePath,
-		];
+		const args = ["scan", "--config", configPath, "--json", ctx.filePath];
 
 		const result = spawnSync("sg", args, {
 			encoding: "utf-8",
@@ -106,7 +106,9 @@ function parseAstGrepOutput(raw: string, filePath: string): Diagnostic[] {
 					tool: "ast-grep",
 					rule: item.rule || "unknown",
 					fixable: !!item.replacement,
-					fixSuggestion: item.replacement ? "Run `sg fix` to auto-fix" : undefined,
+					fixSuggestion: item.replacement
+						? "Run `sg fix` to auto-fix"
+						: undefined,
 				});
 			}
 		}

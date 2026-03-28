@@ -18,15 +18,15 @@ import type { FileKind } from "../file-kinds.js";
 import { detectFileKind } from "../file-kinds.js";
 
 import type {
+	BaselineStore,
 	Diagnostic,
 	DispatchContext,
 	DispatchResult,
 	OutputSemantic,
+	PiAgentAPI,
 	RunnerDefinition,
 	RunnerGroup,
 	RunnerResult,
-	BaselineStore,
-	PiAgentAPI,
 } from "./types.js";
 
 // --- In-Memory Baseline Store ---
@@ -63,7 +63,9 @@ export function getRunner(id: string): RunnerDefinition | undefined {
 	return globalRegistry.get(id);
 }
 
-export function getRunnersForKind(kind: FileKind | undefined): RunnerDefinition[] {
+export function getRunnersForKind(
+	kind: FileKind | undefined,
+): RunnerDefinition[] {
 	if (!kind) return [];
 	const runners: RunnerDefinition[] = [];
 	for (const runner of globalRegistry.values()) {
@@ -185,7 +187,7 @@ function formatDiagnostics(
 	}
 
 	for (const d of diagnostics.slice(0, maxDisplay)) {
-		output += formatDiagnostic(d) + "\n";
+		output += `${formatDiagnostic(d)}\n`;
 	}
 
 	if (diagnostics.length > maxDisplay) {
@@ -202,7 +204,7 @@ export async function dispatchForFile(
 	groups: RunnerGroup[],
 ): Promise<DispatchResult> {
 	const allDiagnostics: Diagnostic[] = [];
-	const fixed: Diagnostic[] = [];
+	const _fixed: Diagnostic[] = [];
 	let stopped = false;
 
 	for (const group of groups) {
@@ -214,7 +216,7 @@ export async function dispatchForFile(
 		const runnerIds = group.filterKinds
 			? group.runnerIds.filter((id) => {
 					const runner = getRunner(id);
-					return runner && ctx.kind && group.filterKinds!.includes(ctx.kind);
+					return runner && ctx.kind && group.filterKinds?.includes(ctx.kind);
 				})
 			: group.runnerIds;
 
@@ -236,7 +238,11 @@ export async function dispatchForFile(
 			if (ctx.deltaMode && result.semantic !== "silent") {
 				const before = ctx.baselines.get(ctx.filePath);
 				if (before) {
-					const filtered = filterDelta(diagnostics, before as Diagnostic[], (d) => d.id);
+					const filtered = filterDelta(
+						diagnostics,
+						before as Diagnostic[],
+						(d) => d.id,
+					);
 					diagnostics = filtered.new;
 					// TODO: Track fixed diagnostics
 				}

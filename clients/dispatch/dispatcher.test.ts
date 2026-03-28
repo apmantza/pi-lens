@@ -2,15 +2,15 @@
  * Tests for declarative dispatch system
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
-	registerRunner,
+	createDispatchContext,
 	getRunner,
 	getRunnersForKind,
 	listRunners,
-	createDispatchContext,
+	registerRunner,
 } from "./dispatcher.js";
-import type { RunnerDefinition, DispatchContext, RunnerResult } from "./types.js";
+import type { RunnerDefinition, RunnerResult } from "./types.js";
 
 // --- Test Runners ---
 
@@ -95,11 +95,7 @@ describe("Dispatch Context", () => {
 	it("should create a dispatch context", () => {
 		const mockPi = { getFlag: (flag: string) => flag === "autofix" };
 
-		const ctx = createDispatchContext(
-			"test.ts",
-			"/project",
-			mockPi,
-		);
+		const ctx = createDispatchContext("test.ts", "/project", mockPi);
 
 		expect(ctx.filePath).toBe("test.ts");
 		expect(ctx.cwd).toBe("/project");
@@ -121,7 +117,7 @@ describe("Dispatch Context", () => {
 	});
 
 	it("should respect autofix flag", () => {
-		const mockPiNoFix = { getFlag: (f: string) => false };
+		const mockPiNoFix = { getFlag: (_f: string) => false };
 		const ctx1 = createDispatchContext("test.ts", "/project", mockPiNoFix);
 		expect(ctx1.autofix).toBe(false);
 

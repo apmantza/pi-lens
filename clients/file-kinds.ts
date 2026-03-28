@@ -10,17 +10,17 @@ import { basename, extname } from "node:path";
 // --- Types ---
 
 export type FileKind =
-	| "jsts"       // JavaScript/TypeScript (js, jsx, ts, tsx, mjs, cjs)
-	| "python"     // Python (.py)
-	| "go"         // Go (.go)
-	| "rust"       // Rust (.rs)
-	| "cxx"        // C/C++ (.c, .cc, .cpp, .h, .hpp, .cxx, etc.)
-	| "cmake"      // CMake (.cmake, CMakeLists.txt)
-	| "shell"      // Shell (.sh, .bash)
-	| "json"       // JSON (.json)
-	| "markdown"   // Markdown (.md, .mdx)
-	| "css"        // CSS (.css, .scss, .less)
-	| "yaml";      // YAML (.yaml, .yml)
+	| "jsts" // JavaScript/TypeScript (js, jsx, ts, tsx, mjs, cjs)
+	| "python" // Python (.py)
+	| "go" // Go (.go)
+	| "rust" // Rust (.rs)
+	| "cxx" // C/C++ (.c, .cc, .cpp, .h, .hpp, .cxx, etc.)
+	| "cmake" // CMake (.cmake, CMakeLists.txt)
+	| "shell" // Shell (.sh, .bash)
+	| "json" // JSON (.json)
+	| "markdown" // Markdown (.md, .mdx)
+	| "css" // CSS (.css, .scss, .less)
+	| "yaml"; // YAML (.yaml, .yml)
 
 // --- Extension Maps ---
 
@@ -30,8 +30,19 @@ const KIND_EXTENSIONS: Record<FileKind, readonly string[]> = {
 	go: [".go"],
 	rust: [".rs"],
 	cxx: [
-		".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx",
-		".ixx", ".ipp", ".inl", ".tpp", ".txx",
+		".c",
+		".cc",
+		".cpp",
+		".cxx",
+		".h",
+		".hh",
+		".hpp",
+		".hxx",
+		".ixx",
+		".ipp",
+		".inl",
+		".tpp",
+		".txx",
 	],
 	cmake: [".cmake"],
 	shell: [".sh", ".bash", ".zsh", ".fish"],
@@ -88,11 +99,11 @@ export function detectFileKind(filePath: string): FileKind | undefined {
 
 /**
  * Check if a file kind is supported by a specific tool or capability.
- * 
+ *
  * @example
  * // Check if TypeScript file
  * if (isFileKind(filePath, "jsts")) { ... }
- * 
+ *
  * // Check for multiple kinds
  * if (isFileKind(filePath, ["jsts", "python"])) { ... }
  */

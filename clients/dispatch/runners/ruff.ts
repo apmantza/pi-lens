@@ -4,9 +4,14 @@
  * Ruff handles both formatting and linting for Python files.
  */
 
-import type { DispatchContext, Diagnostic, RunnerDefinition, RunnerResult } from "../types.js";
 import { spawnSync } from "node:child_process";
 import { stripAnsi } from "../../sanitize.js";
+import type {
+	Diagnostic,
+	DispatchContext,
+	RunnerDefinition,
+	RunnerResult,
+} from "../types.js";
 
 const ruffRunner: RunnerDefinition = {
 	id: "ruff-lint",

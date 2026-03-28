@@ -6,6 +6,7 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 import type { ArchitectClient } from "../clients/architect-client.js";
 import type { AstGrepClient } from "../clients/ast-grep-client.js";
+import { createAutoLoop } from "../clients/auto-loop.js";
 import type { ComplexityClient } from "../clients/complexity-client.js";
 import {
 	extractCodeSnippet,
@@ -14,7 +15,6 @@ import {
 	scanSkipViolations,
 	scoreFiles,
 } from "../clients/scan-architectural-debt.js";
-import { createAutoLoop } from "../clients/auto-loop.js";
 
 // Auto-loop singleton for refactor command (initialized at module load)
 let refactorLoop: ReturnType<typeof createAutoLoop> | null = null;

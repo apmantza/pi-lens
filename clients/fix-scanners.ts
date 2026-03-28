@@ -103,6 +103,9 @@ export function scanDeadCode(
 
 	const knipResult = knip.analyze(targetPath);
 	return knipResult.issues.filter((i) => {
+		// Filter out 'file' type issues - false positives for extensions
+		// (knip thinks all .ts files are unused when there's no npm entry point)
+		if (i.type === "file") return false;
 		if (!i.file) return true;
 		return !shouldIgnoreFile(i.file, isTsProject);
 	});

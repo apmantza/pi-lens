@@ -2,8 +2,13 @@
  * Biome runner for dispatch system
  */
 
-import type { DispatchContext, Diagnostic, RunnerDefinition, RunnerResult } from "../types.js";
 import { spawnSync } from "node:child_process";
+import type {
+	Diagnostic,
+	DispatchContext,
+	RunnerDefinition,
+	RunnerResult,
+} from "../types.js";
 
 const biomeRunner: RunnerDefinition = {
 	id: "biome-lint",
@@ -51,7 +56,11 @@ const biomeRunner: RunnerDefinition = {
 	},
 };
 
-function parseBiomeOutput(raw: string, filePath: string, autofix: boolean): Diagnostic[] {
+function parseBiomeOutput(
+	raw: string,
+	filePath: string,
+	autofix: boolean,
+): Diagnostic[] {
 	const clean = raw.replace(/\x1b\[[0-9;]*m/g, "");
 	const lines = clean.split("\n").filter((l) => l.trim());
 	const diagnostics: Diagnostic[] = [];
@@ -71,7 +80,9 @@ function parseBiomeOutput(raw: string, filePath: string, autofix: boolean): Diag
 				tool: "biome",
 				rule: match[5],
 				fixable: true,
-				fixSuggestion: autofix ? "Auto-fix applied" : "Run with --autofix-biome to fix",
+				fixSuggestion: autofix
+					? "Auto-fix applied"
+					: "Run with --autofix-biome to fix",
 			});
 		}
 	}

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { AgentBehaviorClient } from "./agent-behavior-client.js";
 
 describe("AgentBehaviorClient", () => {

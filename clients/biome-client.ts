@@ -11,8 +11,7 @@
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { isFileKind, type FileKind } from "./file-kinds.js";
-import { sanitizeBiomeOutput } from "./sanitize.js";
+import { isFileKind } from "./file-kinds.js";
 
 // --- Types ---
 

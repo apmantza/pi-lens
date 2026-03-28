@@ -138,7 +138,8 @@ export async function handleBooboo(
 					summaryItems.push({
 						category: "ast-grep",
 						count: issues.length,
-						severity: issues.length > 10 ? "🔴" : "🟡", fixable: true,
+						severity: issues.length > 10 ? "🔴" : "🟡",
+						fixable: true,
 					});
 
 					let fullSection = `## ast-grep (Structural Issues)\n\n**${issues.length} issue(s) found**\n\n`;
@@ -166,7 +167,8 @@ export async function handleBooboo(
 			summaryItems.push({
 				category: "Similar Functions",
 				count: similarGroups.length,
-				severity: "🟡", fixable: true
+				severity: "🟡",
+				fixable: true,
 			});
 
 			let fullSection = `## Similar Functions\n\n**${similarGroups.length} group(s) of structurally similar functions**\n\n`;
@@ -226,49 +228,53 @@ export async function handleBooboo(
 			.filter((r) => r.cognitiveComplexity > 20)
 			.sort((a, b) => b.cognitiveComplexity - a.cognitiveComplexity);
 
-		let summary = `[Complexity] ${results.length} file(s) scanned\n`;
-		summary += `  Maintainability: ${avgMI.toFixed(1)} avg | Cognitive: ${avgCognitive.toFixed(1)} avg | Max Nesting: ${maxNesting} levels\n`;
+		let _summary = `[Complexity] ${results.length} file(s) scanned\n`;
+		_summary += `  Maintainability: ${avgMI.toFixed(1)} avg | Cognitive: ${avgCognitive.toFixed(1)} avg | Max Nesting: ${maxNesting} levels\n`;
 
 		if (lowMI.length > 0) {
-			summary += `\n  Low Maintainability (MI < 60):\n`;
+			_summary += `\n  Low Maintainability (MI < 60):\n`;
 			for (const f of lowMI.slice(0, 5)) {
-				summary += `    ✗ ${f.filePath}: MI ${f.maintainabilityIndex.toFixed(1)}\n`;
+				_summary += `    ✗ ${f.filePath}: MI ${f.maintainabilityIndex.toFixed(1)}\n`;
 			}
-			if (lowMI.length > 5) summary += `    ... and ${lowMI.length - 5} more\n`;
+			if (lowMI.length > 5)
+				_summary += `    ... and ${lowMI.length - 5} more\n`;
 		}
 
 		if (highCognitive.length > 0) {
-			summary += `\n  High Cognitive Complexity (> 20):\n`;
+			_summary += `\n  High Cognitive Complexity (> 20):\n`;
 			for (const f of highCognitive.slice(0, 5)) {
-				summary += `    ⚠ ${f.filePath}: ${f.cognitiveComplexity}\n`;
+				_summary += `    ⚠ ${f.filePath}: ${f.cognitiveComplexity}\n`;
 			}
 			if (highCognitive.length > 5)
-				summary += `    ... and ${highCognitive.length - 5} more\n`;
+				_summary += `    ... and ${highCognitive.length - 5} more\n`;
 		}
 
 		if (aiSlopIssues.length > 0) {
-			summary += `\n[AI Slop Indicators]\n${aiSlopIssues.join("\n")}`;
+			_summary += `\n[AI Slop Indicators]\n${aiSlopIssues.join("\n")}`;
 		}
 		// Add complexity summary items
 		if (lowMI.length > 0) {
 			summaryItems.push({
 				category: "Low MI",
 				count: lowMI.length,
-				severity: lowMI.some((f) => f.maintainabilityIndex < 20) ? "🔴" : "🟡", fixable: false,
+				severity: lowMI.some((f) => f.maintainabilityIndex < 20) ? "🔴" : "🟡",
+				fixable: false,
 			});
 		}
 		if (highCognitive.length > 0) {
 			summaryItems.push({
 				category: "High Complexity",
 				count: highCognitive.length,
-				severity: "🟡", fixable: true
+				severity: "🟡",
+				fixable: true,
 			});
 		}
 		if (aiSlopIssues.length > 0) {
 			summaryItems.push({
 				category: "AI Slop",
 				count: (aiSlopIssues.length / 2) | 0,
-				severity: "🟡", fixable: true
+				severity: "🟡",
+				fixable: true,
 			}); // Each issue is 2 lines
 		}
 
@@ -315,7 +321,8 @@ export async function handleBooboo(
 		summaryItems.push({
 			category: "TODOs",
 			count: todoResult.items.length,
-			severity: "ℹ️", fixable: false
+			severity: "ℹ️",
+			fixable: false,
 		});
 		let fullSection = `## TODOs / Annotations\n\n`;
 		if (todoResult.items.length > 0) {
@@ -337,7 +344,8 @@ export async function handleBooboo(
 			summaryItems.push({
 				category: "Dead Code",
 				count: knipResult.issues.length,
-				severity: "🟡", fixable: true
+				severity: "🟡",
+				fixable: true,
 			});
 			let fullSection = `## Dead Code (Knip)\n\n`;
 			if (knipResult.issues.length > 0) {
@@ -360,7 +368,8 @@ export async function handleBooboo(
 			summaryItems.push({
 				category: "Duplicates",
 				count: jscpdResult.clones.length,
-				severity: "🟡", fixable: true
+				severity: "🟡",
+				fixable: true,
 			});
 			let fullSection = `## Code Duplication (jscpd)\n\n`;
 			if (jscpdResult.clones.length > 0) {
@@ -384,7 +393,8 @@ export async function handleBooboo(
 			summaryItems.push({
 				category: "Untyped",
 				count: untyped,
-				severity: tcResult.percentage < 90 ? "🟡" : "ℹ️", fixable: false,
+				severity: tcResult.percentage < 90 ? "🟡" : "ℹ️",
+				fixable: false,
 			});
 			let fullSection = `## Type Coverage\n\n**${tcResult.percentage.toFixed(1)}% typed** (${tcResult.typed}/${tcResult.total} identifiers)\n\n`;
 			if (tcResult.untypedLocations.length > 0) {
@@ -405,7 +415,8 @@ export async function handleBooboo(
 			summaryItems.push({
 				category: "Circular Deps",
 				count: circular.length,
-				severity: "🔴", fixable: false,
+				severity: "🔴",
+				fixable: false,
 			});
 			let fullSection = `## Circular Dependencies (Madge)\n\n**${circular.length} circular chain(s) found**\n\n`;
 			for (const dep of circular) {
@@ -455,7 +466,8 @@ export async function handleBooboo(
 			summaryItems.push({
 				category: "Architectural",
 				count: archViolations.length,
-				severity: "🔴", fixable: false,
+				severity: "🔴",
+				fixable: false,
 			});
 			let fullSection = `## Architectural Rules\n\n**${archViolations.length} violation(s) found**\n\n`;
 			for (const v of archViolations) {

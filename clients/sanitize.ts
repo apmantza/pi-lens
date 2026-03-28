@@ -31,8 +31,8 @@ const DETAIL_PATTERNS = [
 	/^note:/i,
 	/^hint:/i,
 	/^→/,
-	/^\s*at\s+/,  // Stack traces
-	/^    /,      // Indented continuation
+	/^\s*at\s+/, // Stack traces
+	/^ {4}/, // Indented continuation
 ];
 
 // --- Core Sanitization Functions ---
@@ -41,9 +41,7 @@ const DETAIL_PATTERNS = [
  * Remove ANSI escape sequences from a string.
  */
 export function stripAnsi(text: string): string {
-	return text
-		.replace(ANSI_ESCAPE, "")
-		.replace(ANSI_ESCAPE_EXTENDED, "");
+	return text.replace(ANSI_ESCAPE, "").replace(ANSI_ESCAPE_EXTENDED, "");
 }
 
 /**
@@ -140,11 +138,14 @@ export function extractErrorMessage(output: string): string | undefined {
 /**
  * Truncate a message to a maximum length, adding ellipsis if needed.
  */
-export function truncateMessage(message: string, maxLength: number = 140): string {
+export function truncateMessage(
+	message: string,
+	maxLength: number = 140,
+): string {
 	if (message.length <= maxLength) {
 		return message;
 	}
-	return message.slice(0, maxLength - 1) + "…";
+	return `${message.slice(0, maxLength - 1)}…`;
 }
 
 // --- Tool-Specific Sanitizers ---
@@ -230,8 +231,7 @@ export function sanitizeRustOutput(output: string): string {
 	return extractDiagnosticLines(output, (line) => {
 		const clean = stripAnsi(line);
 		return (
-			isErrorLine(clean) ||
-			/^\s*-->\s+/.test(clean) // rustc source locations
+			isErrorLine(clean) || /^\s*-->\s+/.test(clean) // rustc source locations
 		);
 	});
 }
@@ -335,7 +335,10 @@ export function sanitizeToolOutput(
 
 	// Summary: first line with error indicators, or first line
 	const summary = extractErrorMessage(output);
-	const truncatedSummary = truncateMessage(summary ?? lines[0], maxSummaryLength);
+	const truncatedSummary = truncateMessage(
+		summary ?? lines[0],
+		maxSummaryLength,
+	);
 
 	// Details: all lines up to a reasonable limit
 	const MAX_DETAIL_LINES = 20;
@@ -345,7 +348,9 @@ export function sanitizeToolOutput(
 
 	return {
 		summary: truncatedSummary,
-		details: truncated ? `${details}\n... and ${lines.length - MAX_DETAIL_LINES} more lines` : details,
+		details: truncated
+			? `${details}\n... and ${lines.length - MAX_DETAIL_LINES} more lines`
+			: details,
 		truncated,
 	};
 }

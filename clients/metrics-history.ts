@@ -183,7 +183,7 @@ export function captureSnapshots(
 		};
 	}>,
 ): MetricsHistory {
-	let history = loadHistory();
+	const history = loadHistory();
 
 	for (const file of files) {
 		const relativePath = path.relative(process.cwd(), file.filePath);
@@ -301,13 +301,14 @@ export function getTrendSummary(history: MetricsHistory): {
 			case "improving":
 				improving++;
 				break;
-			case "regressing":
+			case "regressing": {
 				regressing++;
 				const delta = getDelta(fileHistory);
 				if (delta) {
 					regressions.push({ file, miDelta: delta.mi });
 				}
 				break;
+			}
 			default:
 				stable++;
 		}

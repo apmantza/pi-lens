@@ -5,9 +5,9 @@
  * with the existing index.ts tool_result handler.
  */
 
-import type { PiAgentAPI } from "./types.js";
-import { createDispatchContext, createBaselineStore } from "./dispatcher.js";
 import { detectFileKind } from "../file-kinds.js";
+import { createBaselineStore, createDispatchContext } from "./dispatcher.js";
+import type { PiAgentAPI } from "./types.js";
 
 // Import runners to register them
 import "./runners/index.js";

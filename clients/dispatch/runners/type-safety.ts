@@ -7,9 +7,13 @@
  * - Type safety issues
  */
 
-import type { DispatchContext, Diagnostic, RunnerDefinition, RunnerResult } from "../types.js";
+import type {
+	Diagnostic,
+	DispatchContext,
+	RunnerDefinition,
+	RunnerResult,
+} from "../types.js";
 import { readFileContent } from "./utils.js";
-import * as fs from "node:fs";
 
 const typeSafetyRunner: RunnerDefinition = {
 	id: "type-safety",
@@ -52,7 +56,10 @@ const typeSafetyRunner: RunnerDefinition = {
 	},
 };
 
-function checkSwitchExhaustiveness(content: string, filePath: string): Diagnostic[] {
+function checkSwitchExhaustiveness(
+	content: string,
+	filePath: string,
+): Diagnostic[] {
 	const diagnostics: Diagnostic[] = [];
 
 	const switchRegex = /switch\s*\(\s*(\w+)\s*\)\s*\{/g;
@@ -64,7 +71,7 @@ function checkSwitchExhaustiveness(content: string, filePath: string): Diagnosti
 
 		// Find the switch block
 		let braceCount = 0;
-		let blockStart = content.indexOf("{", switchStart);
+		const blockStart = content.indexOf("{", switchStart);
 		let blockEnd = blockStart;
 
 		while (blockEnd < content.length && braceCount >= 0) {
@@ -76,7 +83,7 @@ function checkSwitchExhaustiveness(content: string, filePath: string): Diagnosti
 		const switchBlock = content.slice(blockStart, blockEnd);
 
 		// Check if it has a default case
-		if (!/\bdefault\s*:/ .test(switchBlock)) {
+		if (!/\bdefault\s*:/.test(switchBlock)) {
 			const caseCount = (switchBlock.match(/\bcase\s+/g) || []).length;
 
 			if (caseCount > 2) {
@@ -108,7 +115,11 @@ function checkMissingReturns(content: string, filePath: string): Diagnostic[] {
 	while ((match = funcRegex.exec(content)) !== null) {
 		const returnType = match[2].trim();
 
-		if (returnType === "void" || returnType === "never" || returnType.includes("Promise<void>")) {
+		if (
+			returnType === "void" ||
+			returnType === "never" ||
+			returnType.includes("Promise<void>")
+		) {
 			continue;
 		}
 
@@ -117,7 +128,7 @@ function checkMissingReturns(content: string, filePath: string): Diagnostic[] {
 
 		// Find function block
 		let braceCount = 0;
-		let blockStart = content.indexOf("{", funcStart);
+		const blockStart = content.indexOf("{", funcStart);
 		let blockEnd = blockStart;
 
 		while (blockEnd < content.length && braceCount >= 0) {

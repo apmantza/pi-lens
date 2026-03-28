@@ -1,12 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
-import * as path from "node:path";
 import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	CacheManager,
-	type TurnState,
 	type ModifiedRange,
-	type CacheEntry,
+	type TurnState,
 } from "./cache-manager.js";
 
 describe("CacheManager", () => {
@@ -34,9 +33,9 @@ describe("CacheManager", () => {
 
 			const result = manager.readCache<typeof data>("knip", testDir);
 			expect(result).not.toBeNull();
-			expect(result!.data).toEqual(data);
-			expect(result!.meta.scanDurationMs).toBe(1500);
-			expect(result!.meta.timestamp).toBeDefined();
+			expect(result?.data).toEqual(data);
+			expect(result?.meta.scanDurationMs).toBe(1500);
+			expect(result?.meta.timestamp).toBeDefined();
 		});
 
 		it("should return null for stale cache", () => {
@@ -148,7 +147,7 @@ describe("CacheManager", () => {
 			const ranges = state.files[key]?.modifiedRanges;
 
 			expect(ranges).toHaveLength(1); // Merged into one
-			expect(ranges![0]).toEqual({ start: 1, end: 20 });
+			expect(ranges?.[0]).toEqual({ start: 1, end: 20 });
 			expect(state.files[key].importsChanged).toBe(true);
 		});
 

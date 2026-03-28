@@ -832,7 +832,7 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	let cachedJscpdClones: import("./clients/jscpd-client.js").DuplicateClone[] =
+	let _cachedJscpdClones: import("./clients/jscpd-client.js").DuplicateClone[] =
 		[];
 	const cachedExports = new Map<string, string>(); // function name -> file path
 	const complexityBaselines: Map<
@@ -940,13 +940,13 @@ export default function (pi: ExtensionAPI) {
 			);
 			if (cached) {
 				dbg(`session_start jscpd: cache hit`);
-				cachedJscpdClones = cached.data.clones;
+				_cachedJscpdClones = cached.data.clones;
 				const jscpdReport = jscpdClient.formatResult(cached.data);
 				if (jscpdReport) parts.push(jscpdReport);
 			} else {
 				const startMs = Date.now();
 				const jscpdResult = jscpdClient.scan(cwd);
-				cachedJscpdClones = jscpdResult.clones;
+				_cachedJscpdClones = jscpdResult.clones;
 				cacheManager.writeCache("jscpd", jscpdResult, cwd, {
 					scanDurationMs: Date.now() - startMs,
 				});
@@ -1284,7 +1284,7 @@ export default function (pi: ExtensionAPI) {
 					parts.push(report);
 				}
 				// Update the global cache with fresh results
-				cachedJscpdClones = result.clones;
+				_cachedJscpdClones = result.clones;
 				cacheManager.writeCache("jscpd", result, cwd);
 			}
 		}

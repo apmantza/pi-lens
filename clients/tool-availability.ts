@@ -124,7 +124,9 @@ export function isToolAvailable(toolName: string): boolean {
 		const available = !result.error && result.status === 0;
 		TOOL_CACHE.set(toolName, {
 			available,
-			version: available ? extractVersion(result.stdout + result.stderr, /(\S+)/) : undefined,
+			version: available
+				? extractVersion(result.stdout + result.stderr, /(\S+)/)
+				: undefined,
 			timestamp: Date.now(),
 		});
 		return available;
@@ -139,7 +141,9 @@ export function isToolAvailable(toolName: string): boolean {
 		});
 		const available = !result.error && result.status === 0;
 		const output = result.stdout + result.stderr;
-		const version = tool.versionPattern ? extractVersion(output, tool.versionPattern) : undefined;
+		const version = tool.versionPattern
+			? extractVersion(output, tool.versionPattern)
+			: undefined;
 
 		TOOL_CACHE.set(toolName, {
 			available,
@@ -172,7 +176,9 @@ export function getToolVersion(toolName: string): string | undefined {
 		});
 		if (!result.error && result.status === 0) {
 			const output = result.stdout + result.stderr;
-			return tool.versionPattern ? extractVersion(output, tool.versionPattern) : output.trim();
+			return tool.versionPattern
+				? extractVersion(output, tool.versionPattern)
+				: output.trim();
 		}
 	}
 

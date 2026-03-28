@@ -4,9 +4,14 @@
  * Runs `cargo clippy` for Rust files to catch common mistakes.
  */
 
-import type { DispatchContext, Diagnostic, RunnerDefinition, RunnerResult } from "../types.js";
 import { spawnSync } from "node:child_process";
 import { stripAnsi } from "../../sanitize.js";
+import type {
+	Diagnostic,
+	DispatchContext,
+	RunnerDefinition,
+	RunnerResult,
+} from "../types.js";
 
 const rustClippyRunner: RunnerDefinition = {
 	id: "rust-clippy",

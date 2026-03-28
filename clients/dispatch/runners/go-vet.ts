@@ -4,9 +4,14 @@
  * Runs `go vet` for Go files to catch common mistakes.
  */
 
-import type { DispatchContext, Diagnostic, RunnerDefinition, RunnerResult } from "../types.js";
 import { spawnSync } from "node:child_process";
 import { stripAnsi } from "../../sanitize.js";
+import type {
+	Diagnostic,
+	DispatchContext,
+	RunnerDefinition,
+	RunnerResult,
+} from "../types.js";
 
 const goVetRunner: RunnerDefinition = {
 	id: "go-vet",
@@ -27,15 +32,11 @@ const goVetRunner: RunnerDefinition = {
 		}
 
 		// Run go vet on the file
-		const result = spawnSync(
-			"go",
-			["vet", ctx.filePath],
-			{
-				encoding: "utf-8",
-				timeout: 30000,
-				shell: true,
-			},
-		);
+		const result = spawnSync("go", ["vet", ctx.filePath], {
+			encoding: "utf-8",
+			timeout: 30000,
+			shell: true,
+		});
 
 		const raw = stripAnsi(result.stdout + result.stderr);
 
