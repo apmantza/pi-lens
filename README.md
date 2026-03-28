@@ -78,6 +78,12 @@ const kind = detectFileKind(filePath); // "jsts" | "python" | "go" | "rust" | ..
 const runners = getRunnersForKind(kind); // All applicable runners
 ```
 
+### Project Rules Integration
+
+pi-lens now scans for project-specific rule files (`.claude/rules/`, `.agents/rules/`, `CLAUDE.md`, `AGENTS.md`) at session start. These are surfaced in the system prompt so the agent knows to read them when relevant.
+
+This works **alongside** pi-lens architect rules — your project's markdown rules provide general guidance, while pi-lens handles automated regex-based checks on every write.
+
 ---
 
 ## Features
@@ -144,6 +150,25 @@ On every new session, scans run silently in the background. Data is cached for r
 | **jscpd** | Duplicate detection on write; `/lens-booboo` reports |
 | **type-coverage** | `/lens-booboo` reports |
 | **Complexity baselines** | Regressed/improved delta tracking via `/lens-metrics` |
+| **Project rules** | Scans for `.claude/rules/`, `.agents/rules/`, `CLAUDE.md`, `AGENTS.md` |
+
+### Project Rules Integration
+
+pi-lens scans for project-specific rule files at session start. If found, they're listed in the system prompt so the agent knows to read them when relevant:
+
+```
+📋 Project rules found: 2 file(s) in .claude/rules, root. These apply alongside pi-lens defaults.
+```
+
+**Scanned locations:**
+| Location | Description |
+|----------|-------------|
+| `.claude/rules/` | Claude Code rule files (recursive) |
+| `.agents/rules/` | Generic agent rule files (recursive) |
+| `CLAUDE.md` | Claude Code project context |
+| `AGENTS.md` | Generic agent context |
+
+These files provide **general project guidance** (coding conventions, workflow rules, architecture notes). They coexist with pi-lens architect rules — your rules inform the agent's behavior, while pi-lens provides automated regex-based checks on every write.
 
 ### On-demand commands
 
