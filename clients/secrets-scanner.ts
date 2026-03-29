@@ -19,9 +19,11 @@ interface SecretPattern {
 	message: string;
 }
 
+// Patterns ordered by specificity - first match wins per line
 const SECRET_PATTERNS: SecretPattern[] = [
+	// High-confidence: specific key prefixes
 	{
-		pattern: /sk-[a-zA-Z0-9]{20,}/g,
+		pattern: /sk-[a-zA-Z0-9-]{20,}/g,
 		name: "stripe-openai-key",
 		message: "Possible Stripe or OpenAI API key (sk-*)",
 	},
@@ -55,11 +57,24 @@ const SECRET_PATTERNS: SecretPattern[] = [
 		name: "private-key",
 		message: "Private key material detected",
 	},
+	// Medium-confidence: quoted credentials
+	{
+		pattern: /password\s*[:=]\s*["'][^"']{4,}["']/gi,
+		name: "hardcoded-password",
+		message: "Possible hardcoded password",
+	},
 	{
 		pattern:
-			/(?:password|passwd|secret|api_?key|token)\s*[:=]\s*["'][a-zA-Z0-9_\-/.]{8,}["']/gi,
-		name: "hardcoded-credential",
-		message: "Possible hardcoded credential",
+			/(?:secret|api_?key|token|access_?key)\s*[:=]\s*["'][a-zA-Z0-9_\-/.]{8,}["']/gi,
+		name: "hardcoded-secret",
+		message: "Possible hardcoded secret or API key",
+	},
+	// .env format: KEY=VALUE (no quotes)
+	{
+		pattern:
+			/^(?:API_?KEY|SECRET|TOKEN|PASSWORD|AWS_?ACCESS_?KEY)\s*=\s*\S{8,}/gim,
+		name: "env-file-secret",
+		message: "Possible secret in .env format",
 	},
 ];
 
@@ -78,14 +93,17 @@ export function scanForSecrets(content: string): SecretFinding[] {
 
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i];
+		let matched = false;
 		for (const pattern of SECRET_PATTERNS) {
-			pattern.pattern.lastIndex = 0;
-			if (pattern.pattern.test(line)) {
+			// Reset lastIndex before each test (important for global regex)
+			const regex = new RegExp(pattern.pattern.source, pattern.pattern.flags);
+			if (regex.test(line)) {
 				findings.push({
 					line: i + 1,
 					message: pattern.message,
 				});
-				break; // One finding per line is enough
+				matched = true;
+				break; // One finding per line
 			}
 		}
 	}
@@ -103,7 +121,7 @@ export function formatSecrets(
 	if (findings.length === 0) return "";
 
 	const lines = [
-		`🔴 STOP — ${findings.length} potential secret(s) detected in ${filePath}:`,
+		`🔴 STOP — ${findings.length} potential secret(s) in ${filePath}:`,
 	];
 	for (const f of findings.slice(0, 5)) {
 		lines.push(`  L${f.line}: ${f.message}`);
@@ -111,8 +129,6 @@ export function formatSecrets(
 	if (findings.length > 5) {
 		lines.push(`  ... and ${findings.length - 5} more`);
 	}
-	lines.push(
-		"  → Remove secrets before continuing. Use environment variables.",
-	);
+	lines.push("  → Remove before continuing. Use env vars instead.");
 	return lines.join("\n");
 }
