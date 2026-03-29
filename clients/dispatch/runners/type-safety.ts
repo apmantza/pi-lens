@@ -20,6 +20,7 @@ const typeSafetyRunner: RunnerDefinition = {
 	appliesTo: ["jsts"],
 	priority: 20,
 	enabledByDefault: true,
+	skipIfUnchanged: true, // Skip type-coverage if file unchanged
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		// Only check TypeScript files

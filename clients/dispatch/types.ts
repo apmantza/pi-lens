@@ -96,6 +96,10 @@ export interface RunnerDefinition {
 	appliesTo: readonly FileKind[];
 	priority: number;
 	enabledByDefault: boolean;
+	/** Skip this runner for test files (false positive reduction) */
+	skipTestFiles?: boolean;
+	/** Skip if file unchanged since last run (check mtime) */
+	skipIfUnchanged?: boolean;
 	/** Check if runner should run */
 	when?: (ctx: DispatchContext) => Promise<boolean> | boolean;
 	/** Execute the runner */

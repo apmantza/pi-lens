@@ -21,6 +21,7 @@ const astGrepRunner: RunnerDefinition = {
 	appliesTo: ["jsts", "python", "go", "rust", "cxx"],
 	priority: 30,
 	enabledByDefault: false,
+	skipTestFiles: true, // Many rules are noisy in tests
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		// Check if ast-grep is available

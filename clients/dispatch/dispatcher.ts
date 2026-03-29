@@ -14,6 +14,7 @@
  * - BaselineStore: Track pre-existing issues for delta mode
  */
 
+import * as fs from "node:fs";
 import type { FileKind } from "../file-kinds.js";
 import { detectFileKind } from "../file-kinds.js";
 
@@ -51,6 +52,9 @@ export function createBaselineStore(): BaselineStore {
 
 const globalRegistry = new Map<string, RunnerDefinition>();
 
+// Track last-run mtime per file+runner to skip unchanged files
+const lastRunMtimes = new Map<string, number>(); // key: `${runnerId}:${filePath}` -> mtimeMs
+
 export function registerRunner(runner: RunnerDefinition): void {
 	if (globalRegistry.has(runner.id)) {
 		console.error(`[dispatch] Duplicate runner: ${runner.id}`);
@@ -65,15 +69,34 @@ export function getRunner(id: string): RunnerDefinition | undefined {
 
 export function getRunnersForKind(
 	kind: FileKind | undefined,
+	filePath?: string,
 ): RunnerDefinition[] {
 	if (!kind) return [];
 	const runners: RunnerDefinition[] = [];
+	const isTestFile = filePath ? isTest(filePath) : false;
+
 	for (const runner of globalRegistry.values()) {
+		// Skip runners that shouldn't run on test files
+		if (isTestFile && runner.skipTestFiles) continue;
+
 		if (runner.appliesTo.includes(kind) || runner.appliesTo.length === 0) {
 			runners.push(runner);
 		}
 	}
 	return runners.sort((a, b) => a.priority - b.priority);
+}
+
+function isTest(filePath: string): boolean {
+	const normalized = filePath.replace(/\\/g, "/");
+	return (
+		normalized.includes(".test.") ||
+		normalized.includes(".spec.") ||
+		normalized.includes("/test/") ||
+		normalized.includes("/tests/") ||
+		normalized.includes("__tests__/") ||
+		normalized.includes("test-utils") ||
+		normalized.startsWith("test-")
+	);
 }
 
 export function listRunners(): RunnerDefinition[] {
@@ -288,6 +311,22 @@ async function runRunner(
 	runner: RunnerDefinition,
 	defaultSemantic: OutputSemantic,
 ): Promise<RunnerResult> {
+	// Skip if file unchanged (optimization for expensive runners)
+	if (runner.skipIfUnchanged) {
+		const cacheKey = `${runner.id}:${ctx.filePath}`;
+		try {
+			const stats = fs.statSync(ctx.filePath);
+			const lastMtime = lastRunMtimes.get(cacheKey);
+			if (lastMtime && stats.mtimeMs <= lastMtime) {
+				return { status: "skipped", diagnostics: [], semantic: "none" };
+			}
+			// Update mtime after run (below)
+			lastRunMtimes.set(cacheKey, stats.mtimeMs);
+		} catch {
+			// File doesn't exist or stat failed, continue with run
+		}
+	}
+
 	try {
 		const result = await runner.run(ctx);
 		return {
