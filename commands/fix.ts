@@ -139,90 +139,100 @@ function generatePlan(
 		return `⚠️ BOOBOO FIX LOOP STOPPED — No progress after ${session.iteration} iteration(s).\n\nRemaining items may be false positives. Mark with: /lens-booboo-fix --false-positive "<type>:<file>:<line>"`;
 	}
 
-	// Build plan
-	const lines: string[] = [];
-	lines.push(
-		`📋 BOOBOO FIX PLAN — Iteration ${session.iteration}/${MAX_ITERATIONS} (${totalFixable} fixable items remaining)`,
-	);
-	lines.push("");
+	// --- Write TSV plan file for agent to read ---
+	const reportDir = path.join(process.cwd(), ".pi-lens", "reports");
+	nodeFs.mkdirSync(reportDir, { recursive: true });
+	const reportPath = path.join(reportDir, "fix-plan.tsv");
+
+	const tsvRows: string[] = ["type\tfile\trule\tmessage"];
 
 	// Duplicates
-	if (filteredDups.length > 0) {
-		lines.push(
-			`## 🔁 Duplicate code [${filteredDups.length} block(s)] — fix first`,
+	for (const clone of filteredDups) {
+		tsvRows.push(
+			`dup\t${clone.fileA}:${clone.startA}\tduplicate-code\t${clone.lines} lines duplicated with ${clone.fileB}:${clone.startB}`,
 		);
-		lines.push("→ Extract duplicated blocks into shared utilities.");
-		for (const clone of filteredDups.slice(0, 5)) {
-			lines.push(
-				`  - ${clone.lines} lines: \`${clone.fileA}:${clone.startA}\` ↔ \`${clone.fileB}:${clone.startB}\``,
-			);
-		}
-		if (filteredDups.length > 5)
-			lines.push(`  ... and ${filteredDups.length - 5} more`);
-		lines.push("");
 	}
 
 	// Dead code
-	if (filteredDeadCode.length > 0) {
-		lines.push(`## 🗑️ Dead code [${filteredDeadCode.length} item(s)]`);
-		for (const issue of filteredDeadCode.slice(0, 10)) {
-			lines.push(
-				`  - [${issue.type}] \`${issue.name}\`${issue.file ? ` in ${issue.file}` : ""}`,
-			);
-		}
-		if (filteredDeadCode.length > 10)
-			lines.push(`  ... and ${filteredDeadCode.length - 10} more`);
-		lines.push("");
+	for (const issue of filteredDeadCode) {
+		tsvRows.push(
+			`dead\t${issue.file || issue.name}\t${issue.type}\t${issue.name} is unused`,
+		);
 	}
 
-	// AST issues to fix
-	if (agentTasks.length > 0) {
-		lines.push(`## 🔨 Fix these [${agentTasks.length} items]`);
-		const grouped = new Map<string, AstIssue[]>();
-		for (const t of agentTasks) {
-			const list = grouped.get(t.rule) ?? [];
-			list.push(t);
-			grouped.set(t.rule, list);
-		}
-		for (const [rule, issues] of grouped) {
-			lines.push(`### ${rule} (${issues.length})`);
-			for (const issue of issues.slice(0, 10)) {
-				lines.push(`  - \`${issue.file}:${issue.line}\``);
-			}
-			if (issues.length > 10)
-				lines.push(`  ... and ${issues.length - 10} more`);
-			lines.push("");
+	// AST issues
+	for (const issue of agentTasks) {
+		tsvRows.push(
+			`ast\t${issue.file}:${issue.line}\t${issue.rule}\t${issue.message}`,
+		);
+	}
+
+	// Biome
+	for (const issue of filteredBiome) {
+		tsvRows.push(
+			`biome\t${issue.file}:${issue.line}\t${issue.rule}\t${issue.message}`,
+		);
+	}
+
+	// Slop
+	for (const { file, warnings } of filteredSlop) {
+		for (const w of warnings) {
+			tsvRows.push(`slop\t${file}\tcomplexity\t${w}`);
 		}
 	}
 
-	// Biome lint
-	if (filteredBiome.length > 0) {
-		lines.push(`## 🟠 Biome lint [${filteredBiome.length} items]`);
-		for (const d of filteredBiome.slice(0, 5)) {
-			lines.push(`  - \`${d.file}:${d.line}\` [${d.rule}] ${d.message}`);
-		}
-		if (filteredBiome.length > 5)
-			lines.push(`  ... and ${filteredBiome.length - 5} more`);
-		lines.push("");
-	}
+	nodeFs.writeFileSync(reportPath, tsvRows.join("\n"), "utf-8");
 
-	// AI slop
-	if (filteredSlop.length > 0) {
-		lines.push(`## 🤖 AI Slop indicators [${filteredSlop.length} files]`);
-		for (const { file, warnings } of filteredSlop.slice(0, 5)) {
-			lines.push(
-				`  - \`${file}\`: ${warnings.map((w) => w.split(" — ")[0]).join(", ")}`,
-			);
-		}
-		lines.push("");
-	}
-
-	lines.push("---");
+	// --- Build compact summary for terminal ---
+	const lines: string[] = [];
 	lines.push(
-		"**ACTION REQUIRED**: Fix items above, then run `/lens-booboo-fix --loop` again.",
+		`📋 FIX PLAN — Iteration ${session.iteration}/${MAX_ITERATIONS} — ${totalFixable} issues`,
+	);
+	lines.push(`📄 Full plan: .pi-lens/reports/fix-plan.tsv\n`);
+
+	// Summary by category with counts
+	if (filteredDups.length > 0) {
+		lines.push(
+			`🔁 Duplicates: ${filteredDups.length} block(s) — extract to shared utils`,
+		);
+	}
+	if (filteredDeadCode.length > 0) {
+		lines.push(
+			`🗑️ Dead code: ${filteredDeadCode.length} item(s) — remove unused exports`,
+		);
+	}
+	if (agentTasks.length > 0) {
+		// Group by rule, show top 5 rules
+		const grouped = new Map<string, number>();
+		for (const t of agentTasks) {
+			grouped.set(t.rule, (grouped.get(t.rule) ?? 0) + 1);
+		}
+		const sorted = [...grouped.entries()].sort((a, b) => b[1] - a[1]);
+		lines.push(`🔨 Lint: ${agentTasks.length} item(s)`);
+		for (const [rule, count] of sorted.slice(0, 5)) {
+			lines.push(`   ${rule}: ${count}`);
+		}
+		if (sorted.length > 5)
+			lines.push(`   ... and ${sorted.length - 5} more rules`);
+	}
+	if (filteredBiome.length > 0) {
+		lines.push(`🟠 Biome: ${filteredBiome.length} item(s) — auto-fixable`);
+	}
+	if (filteredSlop.length > 0) {
+		lines.push(
+			`🤖 AI Slop: ${filteredSlop.length} file(s) — review complexity`,
+		);
+	}
+
+	lines.push("\n---");
+	lines.push(
+		"📖 **Read plan**: `read .pi-lens/reports/fix-plan.tsv` for full details",
 	);
 	lines.push(
-		'Mark false positives with: `/lens-booboo-fix --false-positive "type:file:line"`',
+		"🚀 **Fix & loop**: Fix items, then run `/lens-booboo-fix --loop`",
+	);
+	lines.push(
+		'🚫 **False positive**: `/lens-booboo-fix --false-positive "type:file:line"`',
 	);
 
 	return lines.join("\n");
