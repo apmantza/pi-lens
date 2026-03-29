@@ -1,0 +1,118 @@
+/**
+ * Content-level secrets scanner
+ *
+ * Scans file content for potential secret patterns before write.
+ * Works on all file types via regex matching.
+ *
+ * Detected patterns:
+ * - Stripe/OpenAI keys (sk-*)
+ * - GitHub tokens (ghp_*, gho_*, github_pat_*)
+ * - AWS keys (AKIA*)
+ * - Slack tokens (xoxp-*, xoxb-*)
+ * - Private keys (BEGIN PRIVATE KEY)
+ * - Generic API key/password patterns
+ */
+
+interface SecretPattern {
+	pattern: RegExp;
+	name: string;
+	message: string;
+}
+
+const SECRET_PATTERNS: SecretPattern[] = [
+	{
+		pattern: /sk-[a-zA-Z0-9]{20,}/g,
+		name: "stripe-openai-key",
+		message: "Possible Stripe or OpenAI API key (sk-*)",
+	},
+	{
+		pattern: /ghp_[a-zA-Z0-9]{36}/g,
+		name: "github-personal-token",
+		message: "GitHub personal access token (ghp_*)",
+	},
+	{
+		pattern: /gho_[a-zA-Z0-9]{36}/g,
+		name: "github-oauth-token",
+		message: "GitHub OAuth token (gho_*)",
+	},
+	{
+		pattern: /github_pat_[a-zA-Z_]{82}/g,
+		name: "github-fine-grained-pat",
+		message: "GitHub fine-grained PAT (github_pat_*)",
+	},
+	{
+		pattern: /AKIA[0-9A-Z]{16}/g,
+		name: "aws-access-key",
+		message: "AWS access key ID (AKIA*)",
+	},
+	{
+		pattern: /xox[bp]-[a-zA-Z0-9]{10,}/g,
+		name: "slack-token",
+		message: "Slack token (xoxb-*/xoxp-*)",
+	},
+	{
+		pattern: /-----BEGIN\s+(RSA\s+)?PRIVATE KEY-----/g,
+		name: "private-key",
+		message: "Private key material detected",
+	},
+	{
+		pattern:
+			/(?:password|passwd|secret|api_?key|token)\s*[:=]\s*["'][a-zA-Z0-9_\-/.]{8,}["']/gi,
+		name: "hardcoded-credential",
+		message: "Possible hardcoded credential",
+	},
+];
+
+export interface SecretFinding {
+	line: number;
+	message: string;
+}
+
+/**
+ * Scan content for potential secrets
+ * Returns findings with line numbers
+ */
+export function scanForSecrets(content: string): SecretFinding[] {
+	const findings: SecretFinding[] = [];
+	const lines = content.split("\n");
+
+	for (let i = 0; i < lines.length; i++) {
+		const line = lines[i];
+		for (const pattern of SECRET_PATTERNS) {
+			pattern.pattern.lastIndex = 0;
+			if (pattern.pattern.test(line)) {
+				findings.push({
+					line: i + 1,
+					message: pattern.message,
+				});
+				break; // One finding per line is enough
+			}
+		}
+	}
+
+	return findings;
+}
+
+/**
+ * Format secrets findings for terminal output
+ */
+export function formatSecrets(
+	findings: SecretFinding[],
+	filePath: string,
+): string {
+	if (findings.length === 0) return "";
+
+	const lines = [
+		`🔴 STOP — ${findings.length} potential secret(s) detected in ${filePath}:`,
+	];
+	for (const f of findings.slice(0, 5)) {
+		lines.push(`  L${f.line}: ${f.message}`);
+	}
+	if (findings.length > 5) {
+		lines.push(`  ... and ${findings.length - 5} more`);
+	}
+	lines.push(
+		"  → Remove secrets before continuing. Use environment variables.",
+	);
+	return lines.join("\n");
+}

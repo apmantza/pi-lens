@@ -31,6 +31,7 @@ import {
 } from "./clients/rules-scanner.js";
 import { RustClient } from "./clients/rust-client.js";
 import { getSourceFiles } from "./clients/scan-utils.js";
+import { formatSecrets, scanForSecrets } from "./clients/secrets-scanner.js";
 import { TestRunnerClient } from "./clients/test-runner-client.js";
 import { TodoScanner } from "./clients/todo-scanner.js";
 import { TypeCoverageClient } from "./clients/type-coverage-client.js";
@@ -1243,11 +1244,27 @@ export default function (pi: ExtensionAPI) {
 
 		// Record write for metrics (silent tracking)
 
+		let fileContent: string | undefined;
 		try {
-			const content = nodeFs.readFileSync(filePath, "utf-8");
-			metricsClient.recordWrite(filePath, content);
+			fileContent = nodeFs.readFileSync(filePath, "utf-8");
+			metricsClient.recordWrite(filePath, fileContent);
 		} catch (err) {
 			void err;
+		}
+
+		// --- Secrets scan (blocking - must check before other linting) ---
+		if (fileContent) {
+			const secretFindings = scanForSecrets(fileContent);
+			if (secretFindings.length > 0) {
+				const secretsOutput = formatSecrets(secretFindings, filePath);
+				return {
+					content: [
+						...event.content,
+						{ type: "text" as const, text: `\n\n${secretsOutput}` },
+					],
+					isError: true,
+				};
+			}
 		}
 
 		let lspOutput = preHint ? `\n\n${preHint}` : "";
