@@ -634,6 +634,40 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	pi.registerCommand("lens-tdi", {
+		description:
+			"Show Technical Debt Index (TDI) and project health trend. Usage: /lens-tdi",
+		handler: async (_args, ctx) => {
+			const { loadHistory, computeTDI } = await import(
+				"./clients/metrics-history.js"
+			);
+			const history = loadHistory();
+			const tdi = computeTDI(history);
+
+			const lines = [
+				`📊 TECHNICAL DEBT INDEX: ${tdi.score}/100 (${tdi.grade})`,
+				``,
+				`Files analyzed: ${tdi.filesAnalyzed}`,
+				`Files with debt: ${tdi.filesWithDebt}`,
+				`Avg MI: ${tdi.avgMI}`,
+				`Total cognitive complexity: ${tdi.totalCognitive}`,
+				``,
+				`Debt breakdown:`,
+				`  Maintainability: ${tdi.byCategory.maintainability}%`,
+				`  Complexity: ${tdi.byCategory.complexity}%`,
+				`  Nesting: ${tdi.byCategory.nesting}%`,
+				``,
+				tdi.score <= 30
+					? "✅ Codebase is healthy!"
+					: tdi.score <= 60
+						? "⚠️ Moderate debt — consider refactoring"
+						: "🔴 High debt — run /lens-booboo-refactor",
+			];
+
+			ctx.ui.notify(lines.join("\n"), "info");
+		},
+	});
+
 	pi.registerCommand("lens-format", {
 		description:
 			"Apply Biome formatting to files. Usage: /lens-format [file-path] or /lens-format --all",

@@ -348,3 +348,104 @@ export function formatTrendCell(
 
 	return `${emoji} ${miColor}${miSign}${delta.mi}`;
 }
+
+// --- Technical Debt Index (TDI) ---
+
+export interface ProjectTDI {
+	score: number; // 0-100, higher = more debt
+	grade: string; // A-F
+	avgMI: number;
+	totalCognitive: number;
+	filesAnalyzed: number;
+	filesWithDebt: number;
+	byCategory: {
+		complexity: number;
+		maintainability: number;
+		nesting: number;
+	};
+}
+
+/**
+ * Calculate Technical Debt Index for the project.
+ * Score: 0 = perfect, 100 = maximum debt.
+ */
+export function computeTDI(history: MetricsHistory): ProjectTDI {
+	const files = Object.values(history.files);
+	if (files.length === 0) {
+		return {
+			score: 0,
+			grade: "N/A",
+			avgMI: 100,
+			totalCognitive: 0,
+			filesAnalyzed: 0,
+			filesWithDebt: 0,
+			byCategory: { complexity: 0, maintainability: 0, nesting: 0 },
+		};
+	}
+
+	let totalMI = 0;
+	let totalCognitive = 0;
+	let totalNesting = 0;
+	let filesWithDebt = 0;
+	let debtFromMI = 0;
+	let debtFromCognitive = 0;
+	let debtFromNesting = 0;
+
+	for (const file of files) {
+		const snap = file.latest;
+		totalMI += snap.mi;
+		totalCognitive += snap.cognitive;
+		totalNesting += snap.nesting;
+
+		// Accumulate debt points
+		let fileDebt = 0;
+
+		// MI debt: 0 at MI=100, max at MI=0
+		const miDebt = Math.max(0, (100 - snap.mi) / 100);
+		debtFromMI += miDebt;
+
+		// Cognitive debt: 0 at 0, max at 500+
+		const cogDebt = Math.min(1, snap.cognitive / 200);
+		debtFromCognitive += cogDebt;
+
+		// Nesting debt: 0 at 1-3, max at 10+
+		const nestDebt = Math.min(1, Math.max(0, snap.nesting - 3) / 7);
+		debtFromNesting += nestDebt;
+
+		fileDebt = miDebt + cogDebt + nestDebt;
+		if (fileDebt > 1) filesWithDebt++; // File has at least some debt
+	}
+
+	const avgMI = totalMI / files.length;
+
+	// Normalize to 0-100 scale
+	const avgMIDebt = debtFromMI / files.length; // 0-1
+	const avgCogDebt = debtFromCognitive / files.length; // 0-1
+	const avgNestDebt = debtFromNesting / files.length; // 0-1
+
+	// Weighted: MI matters most (50%), cognitive (35%), nesting (15%)
+	const rawScore = avgMIDebt * 50 + avgCogDebt * 35 + avgNestDebt * 15;
+	const score = Math.round(rawScore * 100) / 100;
+
+	// Grade
+	let grade: string;
+	if (score <= 15) grade = "A";
+	else if (score <= 30) grade = "B";
+	else if (score <= 50) grade = "C";
+	else if (score <= 70) grade = "D";
+	else grade = "F";
+
+	return {
+		score,
+		grade,
+		avgMI: Math.round(avgMI * 10) / 10,
+		totalCognitive,
+		filesAnalyzed: files.length,
+		filesWithDebt,
+		byCategory: {
+			complexity: Math.round(avgCogDebt * 100),
+			maintainability: Math.round(avgMIDebt * 100),
+			nesting: Math.round(avgNestDebt * 100),
+		},
+	};
+}
