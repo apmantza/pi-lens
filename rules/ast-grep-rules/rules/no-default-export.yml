@@ -3,13 +3,17 @@ message: >-
   Use named exports instead of default exports.
   Named exports improve grep-ability: agents can precisely locate
   `export const Foo` and all `import { Foo } from` usages.
-severity: warning
+severity: info
 language: typescript
 rule:
   pattern: export default $X
 note: |
+  Named exports make code searchable for agents and humans.
+
   Before:
     export default function helper() { }
 
   After:
     export function helper() { }
+
+  Exception: Entry points (index.ts) typically require default exports.

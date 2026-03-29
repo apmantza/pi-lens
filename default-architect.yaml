@@ -67,14 +67,12 @@ rules:
       - pattern: '\.then\('
         message: "Prefer async/await over .then() chains for better readability and error handling."
 
-  # --- Grep-ability (Agent-Native Development) ---
-  # See: https://factory.ai/news/using-linters-to-direct-agents
+  # --- Grep-ability & Agent Search ---
+  # Note: 'export default' is acceptable for entry points (index.ts)
   - pattern: "**/*.{ts,tsx}"
     must_not:
-      - pattern: 'export\s+default\s+'
-        message: "Use named exports instead of default exports for better grep-ability and agent search."
-      - pattern: "from\s+['\"]\.\./\.\./"
-        message: "Avoid relative imports across package boundaries — use absolute imports (@app/...) for agent reasoning."
+      - pattern: "from\s+['\"]\.\./\.\./\.\./"
+        message: "Avoid deep relative imports (3+ levels) — use absolute imports (@app/...) for agent reasoning."
 
 # =============================================================================
 # PYTHON-SPECIFIC RULES
