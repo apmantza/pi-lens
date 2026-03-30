@@ -85,12 +85,21 @@ export async function handleFixFromBooboo(
 		return;
 	}
 
+	// Debug: log the structure we received
+	console.error("[fix-from-booboo] Review structure:", JSON.stringify(latestReview, null, 2).substring(0, 500));
+
+	// Check if meta exists
+	if (!latestReview.meta) {
+		ctx.ui.notify("❌ Invalid booboo review format (missing meta). Run `/lens-booboo` again.", "error");
+		return;
+	}
+
 	// Use meta properties directly (summary object doesn't exist in JSON)
-	const totalIssues = latestReview.meta?.totalIssues ?? 0;
-	const fixableCount = latestReview.meta?.fixableCount ?? 0;
-	const refactorNeeded = latestReview.meta?.refactorNeeded ?? 0;
-	const timestamp = latestReview.meta?.timestamp ?? "unknown";
-	const runners = latestReview.meta?.runners ?? [];
+	const totalIssues = latestReview.meta.totalIssues ?? 0;
+	const fixableCount = latestReview.meta.fixableCount ?? 0;
+	const refactorNeeded = latestReview.meta.refactorNeeded ?? 0;
+	const timestamp = latestReview.meta.timestamp ?? "unknown";
+	const runners = latestReview.meta.runners ?? [];
 
 	ctx.ui.notify(
 		`🔧 Fixing from review: ${timestamp} (${fixableCount} fixable issues)`,
