@@ -12,6 +12,7 @@ import { CacheManager } from "./clients/cache-manager.js";
 import { ComplexityClient } from "./clients/complexity-client.js";
 import { DependencyChecker } from "./clients/dependency-checker.js";
 import { dispatchLint } from "./clients/dispatch/integration.js";
+import { dispatchLintWithBus } from "./clients/dispatch/bus-dispatcher.js";
 import { GoClient } from "./clients/go-client.js";
 import { buildInterviewer } from "./clients/interviewer.js";
 import { JscpdClient } from "./clients/jscpd-client.js";
@@ -42,6 +43,14 @@ import { handleFixFromBooboo } from "./commands/fix-from-booboo.js";
 import { handleFixSimplified } from "./commands/fix-simplified.js";
 import { handleRate } from "./commands/rate.js";
 import { handleRefactor, initRefactorLoop } from "./commands/refactor.js";
+import {
+	initBusIntegration,
+	shutdownBusIntegration,
+	SessionStarted,
+	TurnEnded,
+	FileModified,
+	enableDebug as enableBusDebug,
+} from "./clients/bus/index.js";
 
 /** Parse a diff to extract modified line ranges in the new file.
  * Handles pi's custom diff format:
@@ -210,6 +219,18 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerFlag("no-rust", {
 		description: "Disable Rust linting (cargo check)",
+		type: "boolean",
+		default: false,
+	});
+
+	pi.registerFlag("lens-bus", {
+		description: "Enable event bus system for diagnostic aggregation (Phase 1)",
+		type: "boolean",
+		default: false,
+	});
+
+	pi.registerFlag("lens-bus-debug", {
+		description: "Enable verbose bus event logging",
 		type: "boolean",
 		default: false,
 	});
@@ -707,6 +728,19 @@ export default function (pi: ExtensionAPI) {
 		_verbose = !!pi.getFlag("lens-verbose");
 		dbg("session_start fired");
 
+		// Initialize event bus system (Phase 1)
+		const busEnabled = pi.getFlag("lens-bus");
+		if (busEnabled) {
+			const busDebug = pi.getFlag("lens-bus-debug");
+			initBusIntegration(pi, { debug: !!busDebug });
+			if (busDebug) enableBusDebug(true);
+			SessionStarted.publish({
+				cwd: ctx.cwd ?? process.cwd(),
+				timestamp: Date.now(),
+			});
+			dbg("session_start: bus integration initialized");
+		}
+
 		// Reset session state
 		metricsClient.reset();
 		complexityBaselines.clear();
@@ -1086,6 +1120,15 @@ export default function (pi: ExtensionAPI) {
 			void err;
 		}
 
+		// --- Publish file modified event to bus (Phase 1) ---
+		if (pi.getFlag("lens-bus")) {
+			FileModified.publish({
+				filePath,
+				content: fileContent,
+				changeType: event.toolName === "edit" ? "edit" : "write",
+			});
+		}
+
 		// --- Secrets scan (blocking - must check before other linting) ---
 		if (fileContent) {
 			const secretFindings = scanForSecrets(fileContent, filePath);
@@ -1142,7 +1185,12 @@ export default function (pi: ExtensionAPI) {
 		// --- Declarative dispatch: run all applicable lint tools ---
 		// Phase 2: Replaced ~400 lines of if/else with unified dispatch system
 		dbg(`dispatch: running lint tools for ${filePath}`);
-		const dispatchOutput = await dispatchLint(filePath, projectRoot, pi);
+		
+		// Use bus-enabled dispatcher if flag is set (Phase 1)
+		const dispatchOutput = pi.getFlag("lens-bus")
+			? await dispatchLintWithBus(filePath, projectRoot, pi)
+			: await dispatchLint(filePath, projectRoot, pi);
+		
 		if (dispatchOutput) {
 			lspOutput += `\n\n${dispatchOutput}`;
 		}
@@ -1234,7 +1282,6 @@ export default function (pi: ExtensionAPI) {
 		if (filePath.endsWith(".ts") || filePath.endsWith(".tsx")) {
 			try {
 				const tsClient = new TypeScriptClient();
-				const projectRoot = findProjectRoot(filePath);
 				
 				// Track the file in the language service
 				tsClient.addFile(filePath, fileContent || "");
@@ -1250,12 +1297,14 @@ export default function (pi: ExtensionAPI) {
 						const code = (d as any).code;
 						if (code === 2304) return false; // "Cannot find name"
 						if (code === 2307) return false; // "Cannot find module"
-						return d.severity === "error" || (d.severity === "warning" && !code);
+						// DiagnosticSeverity.Error = 1, Warning = 2
+						return d.severity === 1 || (d.severity === 2 && !code);
 					});
 					
 					if (importantDiags.length > 0) {
 						const tsOutput = importantDiags.slice(0, 5).map(d => {
-							const severity = d.severity === "error" ? "🔴" : "🟡";
+							// DiagnosticSeverity.Error = 1
+							const severity = d.severity === 1 ? "🔴" : "🟡";
 							return `  ${severity} [TS${(d as any).code}] ${d.message.split("\n")[0]}`;
 						}).join("\n");
 						lspOutput += `\n\n📐 TypeScript Diagnostics:\n${tsOutput}`;
@@ -1293,6 +1342,15 @@ export default function (pi: ExtensionAPI) {
 		const cwd = ctx.cwd ?? process.cwd();
 		const turnState = cacheManager.readTurnState(cwd);
 		const files = Object.keys(turnState.files);
+
+		// Publish turn ended event to bus (Phase 1)
+		if (pi.getFlag("lens-bus") && files.length > 0) {
+			TurnEnded.publish({
+				cwd,
+				modifiedFiles: files,
+				timestamp: Date.now(),
+			});
+		}
 
 		if (files.length === 0) return;
 
