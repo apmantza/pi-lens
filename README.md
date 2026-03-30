@@ -283,6 +283,100 @@ The compiler options are refreshed automatically when you switch between project
 
 ---
 
+## Additional Safeguards
+
+Beyond the runner system, pi-lens includes safeguards that run **before** the dispatch system:
+
+### Secrets Scanning (Pre-flight Security)
+
+**Not a runner** — runs on every file write/edit **before** any other checks.
+
+Scans file content for potential secrets using regex patterns:
+- Stripe/OpenAI keys (`sk-*`)
+- GitHub tokens (`ghp_*`, `github_pat_*`)
+- AWS keys (`AKIA*`)
+- Slack tokens (`xoxb-*`, `xoxp-*`)
+- Private keys (`BEGIN PRIVATE KEY`)
+- Hardcoded passwords and API keys
+
+**Behavior:** Always blocking, always runs on all file types. Cannot be disabled or bypassed — security takes precedence over all other checks.
+
+---
+
+## Caching Architecture
+
+pi-lens uses a multi-layer caching strategy to avoid redundant work:
+
+### 1. Tool Availability Cache
+
+**Location:** `clients/tool-availability.ts`
+
+```
+┌─────────────────────────────────────────┐
+│         TOOL AVAILABILITY CACHE          │
+│  Map<toolName, {available, version}>     │
+│  • Persisted for session lifetime         │
+│  • Refreshed on extension restart        │
+└─────────────────────────────────────────┘
+```
+
+Avoids repeated `which`/`where` calls to check if `biome`, `ruff`, `pyright`, etc. are installed.
+
+### 2. Dispatch Baselines (Delta Mode)
+
+**Location:** `clients/dispatch/dispatcher.ts`
+
+```
+┌─────────────────────────────────────────┐
+│         DISPATCH BASELINES              │
+│  Map<filePath, Diagnostic[]>            │
+│  • Cleared at turn start                 │
+│  • Updated after each runner execution   │
+│  • Filters: only NEW issues shown        │
+└─────────────────────────────────────────┘
+```
+
+Delta mode tracking: first edit shows all issues, subsequent edits only show issues that weren't there before.
+
+### 3. Client-Level Caches
+
+| Client | Cache | TTL | Purpose |
+|--------|-------|-----|---------|
+| **Knip** | `clients/cache-manager.ts` | 5 min | Dead code analysis (slow) |
+| **jscpd** | `clients/cache-manager.ts` | 5 min | Duplicate detection (slow) |
+| **Type Coverage** | In-memory | Session | `any` type percentage |
+| **Complexity** | In-memory | File-level | MI, cognitive complexity per file |
+
+### 4. Session Turn State
+
+**Location:** `clients/cache-manager.ts`
+
+```
+┌─────────────────────────────────────────┐
+│         TURN STATE TRACKING               │
+│  • Modified files this turn              │
+│  • Modified line ranges per file         │
+│  • Import changes detected               │
+│  • Turn cycle counter (max 10)           │
+└─────────────────────────────────────────┘
+```
+
+Tracks which files were edited in the current agent turn for:
+- jscpd: Only re-scan modified files
+- Madge: Only check deps if imports changed
+- Cycle detection: Prevents infinite fix loops
+
+### 5. Runner Internal Caches
+
+| Runner | Cache | Notes |
+|--------|-------|-------|
+| `ast-grep-napi` | Rule descriptions | Loaded once per session |
+| `biome` | Tool availability | Checked once, cached |
+| `pyright` | Command path | Venv lookup cached |
+| `ruff` | Command path | Venv lookup cached |
+
+---
+
 ## Project Structure
 
 ```
