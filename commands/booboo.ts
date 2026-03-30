@@ -118,15 +118,8 @@ export async function handleBooboo(
 	const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
 	const reviewDir = path.join(process.cwd(), ".pi-lens", "reviews");
 
-	// Initialize runner tracker
-	const tracker = new RunnerTracker({
-		onProgress: (runner, index) => {
-			ctx.ui.notify(
-				`🔍 [${index + 1}/10] ${runner.name}...`,
-				"info",
-			);
-		},
-	});
+	// Initialize runner tracker (no per-runner progress to avoid UI overwriting)
+	const tracker = new RunnerTracker();
 
 	// Helper to format elapsed time
 	const formatElapsed = (ms: number): string =>
