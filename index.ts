@@ -39,10 +39,9 @@ import { TypeCoverageClient } from "./clients/type-coverage-client.js";
 import { TypeScriptClient } from "./clients/typescript-client.js";
 import { TreeSitterClient } from "./clients/tree-sitter-client.js";
 import { handleBooboo } from "./commands/booboo.js";
-import { handleFixFromBooboo } from "./commands/fix-from-booboo.js";
 import { handleFixSimplified } from "./commands/fix-simplified.js";
 import { handleRate } from "./commands/rate.js";
-import { handleRefactor, initRefactorLoop } from "./commands/refactor.js";
+import { initRefactorLoop } from "./commands/refactor.js";
 import {
 	initBusIntegration,
 	shutdownBusIntegration,
@@ -272,114 +271,16 @@ export default function (pi: ExtensionAPI) {
 			),
 	});
 
-	// --- Rule action map for lens-booboo-fix ---
-	// Rules marked "skip" are architectural — they need deliberate user decisions.
-	// They are excluded from inline tool_result hard stops (use /lens-refactor instead).
-	const RULE_ACTIONS: Record<
-		string,
-		{ type: "biome" | "agent" | "skip"; note: string }
-	> = {
-		"no-lonely-if": { type: "biome", note: "auto-fixed by Biome --write" },
-		"empty-catch": {
-			type: "agent",
-			note: "Add this.log('Error: ' + err.message) to the catch block",
-		},
-		"no-console-log": {
-			type: "agent",
-			note: "Remove or replace with class logger method",
-		},
-		"no-debugger": { type: "agent", note: "Remove the debugger statement" },
-		"no-return-await": {
-			type: "agent",
-			note: "Remove the unnecessary `return await`",
-		},
-		"nested-ternary": {
-			type: "agent",
-			note: "Extract to if/else or a named variable",
-		},
-		"no-throw-string": {
-			type: "agent",
-			note: "Wrap in `new Error(...)` instead of throwing a string",
-		},
-		"no-star-imports": {
-			type: "skip",
-			note: "Requires knowing which exports are actually used.",
-		},
-		"no-as-any": {
-			type: "skip",
-			note: "Replacing `as any` requires knowing the correct type.",
-		},
-		"no-non-null-assertion": {
-			type: "skip",
-			note: "Each `!` needs nullability analysis in context.",
-		},
-		"large-class": {
-			type: "skip",
-			note: "Splitting a class requires architectural decisions.",
-		},
-		"long-method": {
-			type: "skip",
-			note: "Extraction requires understanding the function's purpose.",
-		},
-		"long-parameter-list": {
-			type: "skip",
-			note: "Redesigning the signature requires an API decision.",
-		},
-		"no-shadow": {
-			type: "skip",
-			note: "Renaming requires understanding all variable scopes.",
-		},
-		"no-process-env": {
-			type: "skip",
-			note: "Using process.env directly makes code untestable. Use DI or a config module.",
-		},
-		"no-param-reassign": {
-			type: "agent",
-			note: "Create a new variable instead of reassigning the parameter.",
-		},
-		"no-single-char-var": {
-			type: "skip",
-			note: "Renaming requires understanding the variable's purpose.",
-		},
-		"switch-without-default": {
-			type: "agent",
-			note: "Add a default case to handle unexpected values.",
-		},
-		"no-architecture-violation": {
-			type: "skip",
-			note: "Layer boundary violations require architectural decisions.",
-		},
-		"switch-exhaustiveness": {
-			type: "agent",
-			note: "Add the missing case(s) or a default clause to handle all union values.",
-		},
-	};
-
-	// Derived from RULE_ACTIONS — used to suppress architectural rules from inline hard stops.
-	const SKIP_RULES = new Set(
-		Object.entries(RULE_ACTIONS)
-			.filter(([, v]) => v.type === "skip")
-			.map(([k]) => k),
-	);
-
+	// DISABLED: lens-booboo-fix command - disabled per user request
 	pi.registerCommand("lens-booboo-fix", {
 		description:
-			"Sequential automated fixing: reads /lens-booboo results and applies fixes for design smells, duplicates, dead code, and AI slop. Usage: /lens-booboo-fix [--apply]",
-		handler: (args, ctx) =>
-			handleFixFromBooboo(
-				args,
-				ctx,
-				{
-					tsClient,
-					astGrep: astGrepClient,
-					ruff: ruffClient,
-					biome: biomeClient,
-					knip: knipClient,
-					jscpd: jscpdClient,
-					complexity: complexityClient,
-				},
-				pi,
-			),
+			"[DISABLED] This command is currently disabled.",
+		handler: async (_args, ctx) => {
+			ctx.ui.notify(
+				"⚠️ /lens-booboo-fix is currently disabled. Use /lens-booboo to see code quality analysis.",
+				"warning",
+			);
+		},
 	});
 
 	pi.registerCommand("lens-booboo-delta", {
@@ -402,22 +303,16 @@ export default function (pi: ExtensionAPI) {
 			),
 	});
 
+	// DISABLED: lens-booboo-refactor command - disabled per user request
 	pi.registerCommand("lens-booboo-refactor", {
 		description:
-			"Interactive architectural refactor: scans for worst offender, opens a browser interview with options + recommendation, then steers the agent with your decision. Usage: /lens-booboo-refactor [path]",
-		handler: (args, ctx) =>
-			handleRefactor(
-				args,
-				ctx,
-				{
-					astGrep: astGrepClient,
-					complexity: complexityClient,
-					architect: architectClient,
-				},
-				pi,
-				SKIP_RULES,
-				RULE_ACTIONS,
-			),
+			"[DISABLED] This command is currently disabled.",
+		handler: async (_args, ctx) => {
+			ctx.ui.notify(
+				"⚠️ /lens-booboo-refactor is currently disabled. Use /lens-booboo to see code quality analysis.",
+				"warning",
+			);
+		},
 	});
 
 	pi.registerCommand("lens-metrics", {
