@@ -39,7 +39,6 @@ import { TypeCoverageClient } from "./clients/type-coverage-client.js";
 import { TypeScriptClient } from "./clients/typescript-client.js";
 import { TreeSitterClient } from "./clients/tree-sitter-client.js";
 import { handleBooboo } from "./commands/booboo.js";
-import { handleFixSimplified } from "./commands/fix-simplified.js";
 import { handleRate } from "./commands/rate.js";
 import { initRefactorLoop } from "./commands/refactor.js";
 import {
@@ -283,24 +282,16 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	// DISABLED: lens-booboo-delta command - disabled per user request
 	pi.registerCommand("lens-booboo-delta", {
 		description:
-			"One-shot review of changed files only: analyzes git-modified files for issues. Usage: /lens-booboo-delta [path] [--apply] [--false-positive 'type:file:line']",
-		handler: (args, ctx) =>
-			handleFixSimplified(
-				args,
-				ctx,
-				{
-					tsClient,
-					astGrep: astGrepClient,
-					ruff: ruffClient,
-					biome: biomeClient,
-					knip: knipClient,
-					jscpd: jscpdClient,
-					complexity: complexityClient,
-				},
-				pi,
-			),
+			"[DISABLED] This command is currently disabled.",
+		handler: async (_args, ctx) => {
+			ctx.ui.notify(
+				"⚠️ /lens-booboo-delta is currently disabled. Use /lens-booboo to see code quality analysis.",
+				"warning",
+			);
+		},
 	});
 
 	// DISABLED: lens-booboo-refactor command - disabled per user request
