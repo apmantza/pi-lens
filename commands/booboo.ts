@@ -30,6 +30,33 @@ const getExtensionDir = () => {
 	return ".";
 };
 
+/**
+ * Centralized test file exclusion for booboo runners.
+ * Mirrors the dispatch system's skipTestFiles behavior.
+ */
+function shouldIncludeFile(filePath: string): boolean {
+	return !isTestFile(filePath);
+}
+
+/** Standard test file glob exclusions for CLI tools */
+const TEST_FILE_EXCLUDES = [
+	"!**/*.test.ts",
+	"!**/*.test.tsx",
+	"!**/*.test.js",
+	"!**/*.test.jsx",
+	"!**/*.spec.ts",
+	"!**/*.spec.tsx",
+	"!**/*.spec.js",
+	"!**/*.spec.jsx",
+	"!**/*.poc.test.ts",
+	"!**/*.poc.test.tsx",
+	"!**/test-utils.ts",
+	"!**/test-*.ts",
+	"!**/__tests__/**",
+	"!**/tests/**",
+	"!**/test/**",
+];
+
 export async function handleBooboo(
 	args: string,
 	ctx: ExtensionContext,
@@ -256,16 +283,24 @@ export async function handleBooboo(
 			"typescript",
 		);
 
-		if (similarGroups.length > 0) {
+		// Filter out test files using centralized exclusion
+		const filteredGroups = similarGroups
+			.map((group) => ({
+				...group,
+				functions: group.functions.filter((fn) => shouldIncludeFile(fn.file)),
+			}))
+			.filter((group) => group.functions.length > 1); // Need at least 2 non-test functions
+
+		if (filteredGroups.length > 0) {
 			summaryItems.push({
 				category: "Similar Functions",
-				count: similarGroups.length,
+				count: filteredGroups.length,
 				severity: "🟡",
 				fixable: true,
 			});
 
-			let fullSection = `## Similar Functions\n\n**${similarGroups.length} group(s) of structurally similar functions**\n\n`;
-			for (const group of similarGroups) {
+			let fullSection = `## Similar Functions\n\n**${filteredGroups.length} group(s) of structurally similar functions**\n\n`;
+			for (const group of filteredGroups) {
 				fullSection += `### Pattern: ${group.functions.map((f) => f.name).join(", ")}\n\n`;
 				fullSection +=
 					"| Function | File | Line |\n|----------|------|------|\n";
@@ -277,7 +312,7 @@ export async function handleBooboo(
 			fullReport.push(fullSection);
 		}
 
-		return { findings: similarGroups.length, status: "done" };
+		return { findings: filteredGroups.length, status: "done" };
 	});
 
 	// Runner 3: Semantic similarity
@@ -289,7 +324,15 @@ export async function handleBooboo(
 				ignore: [
 					"**/node_modules/**",
 					"**/*.test.ts",
+					"**/*.test.tsx",
 					"**/*.spec.ts",
+					"**/*.spec.tsx",
+					"**/*.poc.test.ts",
+					"**/*.poc.test.tsx",
+					"**/test-utils.ts",
+					"**/test-*.ts",
+					"**/__tests__/**",
+					"**/tests/**",
 					"**/dist/**",
 				],
 			});
@@ -298,7 +341,10 @@ export async function handleBooboo(
 				return { findings: 0, status: "done" };
 			}
 
-			const absoluteFiles = sourceFiles.map((f) => path.join(targetPath, f));
+			// Filter out test files using centralized exclusion
+			const absoluteFiles = sourceFiles
+				.map((f) => path.join(targetPath, f))
+				.filter(shouldIncludeFile);
 			const index = await buildProjectIndex(targetPath, absoluteFiles);
 			const topPairs = findTopSimilarPairs(index, 10);
 
@@ -338,20 +384,19 @@ export async function handleBooboo(
 		const isTsProject = nodeFs.existsSync(
 			path.join(targetPath, "tsconfig.json"),
 		);
-		const files = getSourceFiles(targetPath, isTsProject);
+		const files = getSourceFiles(targetPath, isTsProject).filter(shouldIncludeFile);
 
 		for (const fullPath of files) {
 			if (clients.complexity.isSupportedFile(fullPath)) {
 				const metrics = clients.complexity.analyzeFile(fullPath);
 				if (metrics) {
 					results.push(metrics);
-					if (!/\.(test|spec)\.[jt]sx?$/.test(path.basename(fullPath))) {
-						const warnings = clients.complexity.checkThresholds(metrics);
-						if (warnings.length > 0) {
-							aiSlopIssues.push(`  ${metrics.filePath}:`);
-							for (const w of warnings) {
-								aiSlopIssues.push(`    ⚠ ${w}`);
-							}
+					// AI slop check - already filtered by shouldIncludeFile above
+					const warnings = clients.complexity.checkThresholds(metrics);
+					if (warnings.length > 0) {
+						aiSlopIssues.push(`  ${metrics.filePath}:`);
+						for (const w of warnings) {
+							aiSlopIssues.push(`    ⚠ ${w}`);
 						}
 					}
 				}
@@ -492,28 +537,45 @@ export async function handleBooboo(
 			return { findings: 0, status: "skipped" };
 		}
 
-		const knipResult = clients.knip.analyze(targetPath);
+		// Exclude test files from Knip analysis
+		const knipResult = clients.knip.analyze(targetPath, [
+			"**/*.test.ts",
+			"**/*.test.tsx",
+			"**/*.test.js",
+			"**/*.spec.ts",
+			"**/*.spec.tsx",
+			"**/*.spec.js",
+			"**/*.poc.test.ts",
+			"**/*.poc.test.tsx",
+			"**/__tests__/**",
+			"**/tests/**",
+		]);
 
-		if (knipResult.issues.length > 0) {
+		// Filter out test file issues as additional safeguard
+		const filteredIssues = knipResult.issues.filter(
+			(issue) => !issue.file || shouldIncludeFile(issue.file),
+		);
+
+		if (filteredIssues.length > 0) {
 			summaryItems.push({
 				category: "Dead Code",
-				count: knipResult.issues.length,
+				count: filteredIssues.length,
 				severity: "🟡",
 				fixable: true,
 			});
 
 			let fullSection = `## Dead Code (Knip)\n\n`;
-			fullSection += `**${knipResult.issues.length} issue(s) found**\n\n`;
+			fullSection += `**${filteredIssues.length} issue(s) found**\n\n`;
 			fullSection +=
 				"| Type | Name | File |\n|------|------|------|\n";
-			for (const issue of knipResult.issues) {
+			for (const issue of filteredIssues) {
 				fullSection += `| ${issue.type} | ${issue.name} | ${issue.file ?? ""} |\n`;
 			}
 			fullSection += "\n";
 			fullReport.push(fullSection);
 		}
 
-		return { findings: knipResult.issues.length, status: "done" };
+		return { findings: filteredIssues.length, status: "done" };
 	});
 
 	// Runner 7: Duplicate code
@@ -524,26 +586,31 @@ export async function handleBooboo(
 
 		const jscpdResult = clients.jscpd.scan(targetPath);
 
-		if (jscpdResult.clones.length > 0) {
+		// Filter out test file duplicates using centralized exclusion
+		const filteredClones = jscpdResult.clones.filter(
+			(dup) => shouldIncludeFile(dup.fileA) && shouldIncludeFile(dup.fileB),
+		);
+
+		if (filteredClones.length > 0) {
 			summaryItems.push({
 				category: "Duplicates",
-				count: jscpdResult.clones.length,
+				count: filteredClones.length,
 				severity: "🟡",
 				fixable: true,
 			});
 
 			let fullSection = `## Code Duplication (jscpd)\n\n`;
-			fullSection += `**${jscpdResult.clones.length} duplicate block(s) found** (${jscpdResult.duplicatedLines}/${jscpdResult.totalLines} lines, ${jscpdResult.percentage.toFixed(1)}%)\n\n`;
+			fullSection += `**${filteredClones.length} duplicate block(s) found** (${jscpdResult.duplicatedLines}/${jscpdResult.totalLines} lines, ${jscpdResult.percentage.toFixed(1)}%)\n\n`;
 			fullSection +=
 				"| File A | Line A | File B | Line B | Lines | Tokens |\n|--------|--------|--------|--------|-------|--------|\n";
-			for (const dup of jscpdResult.clones) {
+			for (const dup of filteredClones) {
 				fullSection += `| ${dup.fileA} | ${dup.startA} | ${dup.fileB} | ${dup.startB} | ${dup.lines} | ${dup.tokens} |\n`;
 			}
 			fullSection += "\n";
 			fullReport.push(fullSection);
 		}
 
-		return { findings: jscpdResult.clones.length, status: "done" };
+		return { findings: filteredClones.length, status: "done" };
 	});
 
 	// Runner 8: Type coverage
@@ -555,8 +622,13 @@ export async function handleBooboo(
 		const tcResult = clients.typeCoverage.scan(targetPath);
 
 		if (tcResult.percentage < 100) {
+			// Filter out test file locations using centralized exclusion
+			const filteredLocations = tcResult.untypedLocations.filter(
+				(u) => shouldIncludeFile(u.file),
+			);
+
 			const filesWithLowCoverage = new Set(
-				tcResult.untypedLocations
+				filteredLocations
 					.filter(() => tcResult.percentage < 90)
 					.map((u) => u.file),
 			).size;
@@ -570,10 +642,11 @@ export async function handleBooboo(
 
 			let fullSection = `## Type Coverage\n\n**${tcResult.percentage.toFixed(1)}% typed** (${tcResult.typed}/${tcResult.total} identifiers)\n\n`;
 			const byFile: Record<string, number> = {};
-			for (const u of tcResult.untypedLocations) {
+			for (const u of filteredLocations) {
 				byFile[u.file] = (byFile[u.file] || 0) + 1;
 			}
 			const sortedFiles = Object.entries(byFile)
+				.filter(([file]) => shouldIncludeFile(file))
 				.sort((a, b) => b[1] - a[1])
 				.slice(0, 10);
 
@@ -603,23 +676,29 @@ export async function handleBooboo(
 
 		const { circular } = clients.depChecker.scanProject(targetPath);
 
-		if (circular.length > 0) {
+		// Filter out circular deps involving only test files using centralized exclusion
+		const filteredCircular = circular.filter((dep) => {
+			// Keep if ANY file in the chain is not a test file
+			return dep.path.some((file) => shouldIncludeFile(file));
+		});
+
+		if (filteredCircular.length > 0) {
 			summaryItems.push({
 				category: "Circular Deps",
-				count: circular.length,
+				count: filteredCircular.length,
 				severity: "🔴",
 				fixable: false,
 			});
 
 			let fullSection = `## Circular Dependencies (Madge)\n\n`;
-			fullSection += `**${circular.length} circular chain(s) found**\n\n`;
-			for (const dep of circular) {
+			fullSection += `**${filteredCircular.length} circular chain(s) found**\n\n`;
+			for (const dep of filteredCircular) {
 				fullSection += `- ${dep.path.join(" → ")}\n`;
 			}
 			fullReport.push(`${fullSection}\n`);
 		}
 
-		return { findings: circular.length, status: "done" };
+		return { findings: filteredCircular.length, status: "done" };
 	});
 
 	// Runner 10: Arch rules

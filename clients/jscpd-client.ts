@@ -109,7 +109,7 @@ export class JscpdClient {
 					"--output",
 					outDir,
 					"--ignore",
-					"**/node_modules/**,**/dist/**,**/build/**,**/.git/**,**/.pi-lens/**,**/*.md,**/*.txt,**/*.json,**/*.yaml,**/*.yml,**/*.toml,**/*.lock,**/*.test.*,**/*.spec.*",
+					"**/node_modules/**,**/dist/**,**/build/**,**/.git/**,**/.pi-lens/**,**/*.md,**/*.txt,**/*.json,**/*.yaml,**/*.yml,**/*.toml,**/*.lock,**/*.test.*,**/*.spec.*,**/*.poc.test.*,**/__tests__/**,**/tests/**"
 				],
 				{
 					timeout: 30000,
