@@ -48,6 +48,32 @@ Every file write/edit triggers the **dispatcher-runner system** in delta mode:
 
 > **Note:** Only **blocking** issues (`ts-lsp`, `pyright` errors, `type-safety` switch errors, secrets) appear inline. Warnings are tracked but not shown inline (noise reduction) — run `/lens-booboo` to see all warnings.
 
+### At Session Start
+
+When pi starts a new session, pi-lens performs initialization scans to establish baselines and surface existing technical debt:
+
+**Initialization sequence:**
+1. **Reset session state** — Clear metrics and complexity baselines
+2. **Detect available tools** — Biome, ast-grep, Ruff, Knip, jscpd, Madge, type-coverage, Go, Rust
+3. **Load architect rules** — If `architect.yml` or `.architect.yml` present
+4. **Detect test runner** — Jest, Vitest, Pytest, etc.
+5. **Error ownership reminder** — "Fix errors even if you didn't cause them"
+6. **Scan project rules** — `.claude/rules/`, `.agents/rules/`, `CLAUDE.md`, `AGENTS.md`
+
+**Cached scans** (with 5-min TTL):
+| Scan | Tool | Cached | Purpose |
+|------|------|--------|---------|
+| **TODOs** | Internal | No | Tech debt markers |
+| **Dead code** | Knip | Yes | Unused exports/files/deps |
+| **Duplicates** | jscpd | Yes | Copy-paste detection |
+| **Exports** | ast-grep | No | Function index for similarity |
+
+**Error debt tracking** (with `--error-debt` flag):
+- If tests passed at end of previous session but fail now → **regression detected**
+- Blocks agent until tests pass again
+
+**Output:** Scan results appear in session startup notification
+
 ### Code Review
 
 ```
