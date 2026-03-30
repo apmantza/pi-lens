@@ -31,7 +31,7 @@ Enable full Language Server Protocol support with `--lens-lsp`:
 | **Config** | YAML, JSON, Prisma |
 | **Web** | Vue, Svelte, CSS/SCSS/Sass/Less |
 
-**Auto-installation:** When `--lens-lsp` is enabled, required language servers are automatically installed on first use (via npm/pip) to `.pi-lens/tools/`.
+**Auto-installation (14/31):** When `--lens-lsp` is enabled, 14 npm/pip-installable servers auto-install on first use to `.pi-lens/tools/`. Remaining 17 require manual installation (SDKs, compilers, platform-specific).
 
 **Usage:**
 ```bash
@@ -462,7 +462,13 @@ Fully supported with multiple runners:
 | ESLint | vscode-eslint | npm |
 | CSS/SCSS | vscode-css-languageserver | npm |
 
-**Auto-install:** Core tools (typescript-language-server, pyright, biome, etc.) auto-install when `--lens-lsp` is enabled. Others require manual installation.
+**Auto-install:** 14 LSP servers auto-install when `--lens-lsp` is enabled:
+- **Core:** typescript-language-server, pyright, yaml-language-server, json-languageserver, bash-language-server
+- **Web:** @vue/language-server, svelte-language-server, eslint-language-server, css-languageserver
+- **DevOps/Config:** dockerfile-language-server, prisma-language-server
+- **Linting:** biome, ruff, ast-grep
+
+Others (17 servers) require manual installation.
 
 ---
 
