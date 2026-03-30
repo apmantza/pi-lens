@@ -33,19 +33,18 @@ interface FixClients {
 interface BoobooReview {
 	meta: {
 		timestamp: string;
+		project: string;
 		path: string;
-	};
-	summary: {
 		totalIssues: number;
 		fixableCount: number;
 		refactorNeeded: number;
+		runners: Array<{
+			name: string;
+			status: string;
+			findings: number;
+			time: string;
+		}>;
 	};
-	runners: Array<{
-		name: string;
-		status: string;
-		findings: number;
-		time: string;
-	}>;
 }
 
 export async function handleFixFromBooboo(
@@ -86,8 +85,15 @@ export async function handleFixFromBooboo(
 		return;
 	}
 
+	// Use meta properties directly (summary object doesn't exist in JSON)
+	const totalIssues = latestReview.meta?.totalIssues ?? 0;
+	const fixableCount = latestReview.meta?.fixableCount ?? 0;
+	const refactorNeeded = latestReview.meta?.refactorNeeded ?? 0;
+	const timestamp = latestReview.meta?.timestamp ?? "unknown";
+	const runners = latestReview.meta?.runners ?? [];
+
 	ctx.ui.notify(
-		`🔧 Fixing from review: ${latestReview.meta.timestamp} (${latestReview.summary.fixableCount} fixable issues)`,
+		`🔧 Fixing from review: ${timestamp} (${fixableCount} fixable issues)`,
 		"info",
 	);
 
@@ -136,7 +142,7 @@ export async function handleFixFromBooboo(
 	const findingsToReview: string[] = [];
 
 	// Check for issues from booboo review runners
-	for (const runner of latestReview.runners) {
+	for (const runner of runners) {
 		if (runner.findings === 0) continue;
 
 		switch (runner.name) {
@@ -163,8 +169,8 @@ export async function handleFixFromBooboo(
 
 	// Summary
 	const outputParts = [
-		`🔧 /lens-booboo-fix from ${latestReview.meta.timestamp}`,
-		`Found ${latestReview.summary.totalIssues} total issues, ${latestReview.summary.fixableCount} fixable`,
+		`🔧 /lens-booboo-fix from ${timestamp}`,
+		`Found ${totalIssues} total issues, ${fixableCount} fixable`,
 		"",
 		"=== Automatic Fixes ===",
 		...(results.length > 0 ? results : ["ℹ️ No automatic fixes applied"]),
