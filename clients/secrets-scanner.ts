@@ -13,6 +13,8 @@
  * - Generic API key/password patterns
  */
 
+import { isTestFile } from "./file-utils.js";
+
 interface SecretPattern {
 	pattern: RegExp;
 	name: string;
@@ -81,24 +83,6 @@ const SECRET_PATTERNS: SecretPattern[] = [
 export interface SecretFinding {
 	line: number;
 	message: string;
-}
-
-/**
- * Check if file path is a test file (should skip secrets scan)
- */
-function isTestFile(filePath: string): boolean {
-	const normalized = filePath.replace(/\\/g, "/");
-	return (
-		normalized.includes(".test.") ||
-		normalized.includes(".spec.") ||
-		normalized.includes("/test/") ||
-		normalized.includes("/tests/") ||
-		normalized.includes("__tests__/") ||
-		normalized.includes("test-utils") ||
-		normalized.startsWith("test-") ||
-		normalized.includes(".fixture.") ||
-		normalized.includes(".mock.")
-	);
 }
 
 /**

@@ -12,6 +12,7 @@ import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
 import type { ArchitectClient } from "../clients/architect-client.js";
 import type { ComplexityClient } from "../clients/complexity-client.js";
 import type { KnipClient } from "../clients/knip-client.js";
+import { EXCLUDED_DIRS, isTestFile } from "../clients/file-utils.js";
 import { getSourceFiles } from "../clients/scan-utils.js";
 import type { TypeCoverageClient } from "../clients/type-coverage-client.js";
 
@@ -118,21 +119,6 @@ export async function gatherScores(
 		},
 	];
 
-	function isTestFile(filePath: string): boolean {
-		const normalized = filePath.replace(/\\/g, "/");
-		return (
-			normalized.includes(".test.") ||
-			normalized.includes(".spec.") ||
-			normalized.includes("/test/") ||
-			normalized.includes("/tests/") ||
-			normalized.includes("__tests__/") ||
-			normalized.includes("test-utils") ||
-			normalized.startsWith("test-") ||
-			normalized.includes(".fixture.") ||
-			normalized.includes(".mock.")
-		);
-	}
-
 	for (const file of files.slice(0, 100)) {
 		// Skip test files
 		if (isTestFile(file)) continue;
@@ -174,17 +160,7 @@ export async function gatherScores(
 			for (const entry of nodeFs.readdirSync(dir, { withFileTypes: true })) {
 				const full = path.join(dir, entry.name);
 				if (entry.isDirectory()) {
-					if (
-						[
-							"node_modules",
-							".git",
-							"dist",
-							"build",
-							".next",
-							".pi-lens",
-						].includes(entry.name)
-					)
-						continue;
+					if (EXCLUDED_DIRS.includes(entry.name)) continue;
 					scanDir(full);
 				} else if (/\.(ts|tsx|js|jsx|py|go|rs)$/.test(entry.name)) {
 					const relPath = path.relative(targetPath, full).replace(/\\/g, "/");

@@ -8,6 +8,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as ts from "typescript";
+import { EXCLUDED_DIRS } from "../../file-utils.js";
 import {
 	buildProjectIndex,
 	findSimilarFunctions,
@@ -297,14 +298,16 @@ async function loadOrBuildIndex(
 
 	// Build new index
 	const { glob } = await import("glob");
+	// Build ignore patterns from centralized EXCLUDED_DIRS
+	const ignorePatterns = [
+		...EXCLUDED_DIRS.map((d) => `**/${d}/**`),
+		"**/*.test.ts",
+		"**/*.spec.ts",
+		"**/*.poc.test.ts",
+	];
 	const files = await glob("**/*.ts", {
 		cwd: projectRoot,
-		ignore: [
-			"**/node_modules/**",
-			"**/*.test.ts",
-			"**/*.spec.ts",
-			"**/dist/**",
-		],
+		ignore: ignorePatterns,
 	});
 
 	if (files.length === 0) {
