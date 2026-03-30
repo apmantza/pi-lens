@@ -9,6 +9,7 @@
 
 import path from "path";
 import { launchLSP, launchViaPackageManager, launchViaNode, type LSPProcess } from "./launch.js";
+import { ensureTool, getToolPath, getToolEnvironment } from "../installer/index.js";
 
 // --- Types ---
 
@@ -85,8 +86,16 @@ export const TypeScriptServer: LSPServerInfo = {
 		"package.json",
 	]),
 	async spawn(root) {
-		// Check for typescript-language-server
-		const proc = launchViaPackageManager("typescript-language-server", ["--stdio"], { cwd: root });
+		// Ensure typescript-language-server is installed
+		const toolPath = await ensureTool("typescript-language-server");
+		if (!toolPath) {
+			console.error("[lsp] typescript-language-server not found and could not be installed");
+			return undefined;
+		}
+
+		// Use the installed tool
+		const env = await getToolEnvironment();
+		const proc = launchLSP("typescript-language-server", ["--stdio"], { cwd: root, env });
 		return { process: proc };
 	},
 };
@@ -104,7 +113,15 @@ export const PythonServer: LSPServerInfo = {
 		"poetry.lock",
 	]),
 	async spawn(root) {
-		const proc = launchViaPackageManager("pyright-langserver", ["--stdio"], { cwd: root });
+		// Ensure pyright is installed
+		const toolPath = await ensureTool("pyright");
+		if (!toolPath) {
+			console.error("[lsp] pyright not found and could not be installed");
+			return undefined;
+		}
+
+		const env = await getToolEnvironment();
+		const proc = launchLSP("pyright-langserver", ["--stdio"], { cwd: root, env });
 		
 		// Detect virtual environment
 		const initialization: Record<string, unknown> = {};
