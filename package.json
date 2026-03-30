@@ -45,7 +45,8 @@
 		"@mariozechner/pi-coding-agent": "*"
 	},
 	"dependencies": {
-		"@sinclair/typebox": "^0.34.0"
+		"@sinclair/typebox": "^0.34.0",
+		"effect": "^3.21.0"
 	},
 	"optionalDependencies": {
 		"tree-sitter-wasms": "npm:null@^0.11.0",
