@@ -507,8 +507,8 @@ export const DockerServer: LSPServerInfo = {
 	extensions: [".dockerfile", "Dockerfile"],
 	root: async () => process.cwd(),
 	async spawn() {
-		// Manual install required: npm install -g dockerfile-language-server-nodejs
-		const proc = launchLSP("dockerfile-language-server-nodejs", ["--stdio"], {});
+		// Use npx since it's not auto-installed
+		const proc = launchViaPackageManager("dockerfile-language-server-nodejs", ["--stdio"], {});
 		return { process: proc };
 	},
 };
@@ -555,8 +555,8 @@ export const PrismaServer: LSPServerInfo = {
 	extensions: [".prisma"],
 	root: createRootDetector(["prisma/schema.prisma"], [".pi-lens"]),
 	async spawn(root) {
-		// Manual install required: npm install -g @prisma/language-server
-		const proc = launchLSP("prisma-language-server", ["--stdio"], { cwd: root });
+		// Use npx since it's not auto-installed
+		const proc = launchViaPackageManager("@prisma/language-server", ["--stdio"], { cwd: root });
 		return { process: proc };
 	},
 };
@@ -569,8 +569,8 @@ export const VueServer: LSPServerInfo = {
 	extensions: [".vue"],
 	root: createRootDetector(["package-lock.json", "bun.lockb", "bun.lock", "pnpm-lock.yaml", "yarn.lock"], [".pi-lens"]),
 	async spawn(root) {
-		// Manual install required: npm install -g @vue/language-server
-		const proc = launchLSP("vue-language-server", ["--stdio"], { cwd: root });
+		// Use npx since it's not auto-installed
+		const proc = launchViaPackageManager("@vue/language-server", ["--stdio"], { cwd: root });
 		return { process: proc };
 	},
 };
@@ -581,8 +581,8 @@ export const SvelteServer: LSPServerInfo = {
 	extensions: [".svelte"],
 	root: createRootDetector(["package-lock.json", "bun.lockb", "bun.lock", "pnpm-lock.yaml", "yarn.lock"], [".pi-lens"]),
 	async spawn(root) {
-		// Manual install required: npm install -g svelte-language-server
-		const proc = launchLSP("svelteserver", ["--stdio"], { cwd: root });
+		// Use npx since it's not auto-installed
+		const proc = launchViaPackageManager("svelte-language-server", ["--stdio"], { cwd: root });
 		return { process: proc };
 	},
 };
@@ -618,8 +618,8 @@ export const CssServer: LSPServerInfo = {
 	extensions: [".css", ".scss", ".sass", ".less"],
 	root: async () => process.cwd(),
 	async spawn() {
-		// Manual install required: npm install -g vscode-langservers-extracted
-		const proc = launchLSP("vscode-css-languageserver", ["--stdio"], {});
+		// Use npx since it's not auto-installed
+		const proc = launchViaPackageManager("vscode-css-languageserver", ["--stdio"], {});
 		return { process: proc };
 	},
 };
