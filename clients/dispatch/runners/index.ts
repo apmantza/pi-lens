@@ -4,14 +4,15 @@
 
 import { registerRunner } from "../dispatcher.js";
 import architectRunner from "./architect.js";
+import astGrepRunner from "./ast-grep.js";
 // Import all runners
 import astGrepNapiRunner from "./ast-grep-napi.js";
-import astGrepRunner from "./ast-grep.js";
 import biomeRunner from "./biome.js";
+import configValidationRunner from "./config-validation.js";
 import goVetRunner from "./go-vet.js";
 import oxlintRunner from "./oxlint.js";
-import pythonSlopRunner from "./python-slop.js";
 import pyrightRunner from "./pyright.js";
+import pythonSlopRunner from "./python-slop.js";
 import ruffRunner from "./ruff.js";
 import rustClippyRunner from "./rust-clippy.js";
 import shellcheckRunner from "./shellcheck.js";
@@ -25,6 +26,7 @@ import typeSafetyRunner from "./type-safety.js";
 // Register all runners (ordered by priority)
 registerRunner(tsLspRunner); // TypeScript type-checking (priority 5)
 registerRunner(pyrightRunner); // Python type-checking (priority 5)
+registerRunner(configValidationRunner); // Config/env validation (priority 8)
 registerRunner(astGrepNapiRunner); // TS/JS structural analysis via NAPI (priority 15)
 registerRunner(biomeRunner); // Biome formatting/linting (priority 10)
 registerRunner(oxlintRunner); // Oxlint fast JS/TS linter (priority 12)
