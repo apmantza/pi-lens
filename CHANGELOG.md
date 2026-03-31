@@ -2,6 +2,43 @@
 
 All notable changes to pi-lens will be documented in this file.
 
+## [2.7.0] - 2026-03-31
+
+### Added - New Lint Runners
+
+Three new lint runners with full test coverage:
+
+- **Spellcheck runner** (`clients/dispatch/runners/spellcheck.ts`): Markdown spellchecking
+  - Uses `typos-cli` (Rust-based, fast, low false positives)
+  - Checks `.md` and `.mdx` files
+  - Priority 30, runs after code quality checks
+  - Zero-config by default
+  - Install: `cargo install typos-cli`
+
+- **Oxlint runner** (`clients/dispatch/runners/oxlint.ts`): Fast JS/TS linting
+  - Uses `oxlint` from Oxc project (Rust-based, ~100x faster than ESLint)
+  - Zero-config by default
+  - JSON output with fix suggestions
+  - Priority 12 (between biome=10 and slop=25)
+  - Fallback mode after biome
+  - Install: `npm install -D oxlint` or `cargo install oxlint`
+  - Flag: `--no-oxlint` to disable
+
+- **Shellcheck runner** (`clients/dispatch/runners/shellcheck.ts`): Shell script linting
+  - Industry-standard linter for bash/sh/zsh/fish
+  - Detects syntax errors, undefined variables, quoting issues
+  - Priority 20 (same as type-safety)
+  - JSON output parsing
+  - Install: `apt install shellcheck`, `brew install shellcheck`, or `cargo install shellcheck`
+  - Flag: `--no-shellcheck` to disable
+
+### Changed
+- Updated README.md with new runners in dispatcher diagram and available runners table
+- Added installation instructions for new tools in Dependent Tools section
+- Added new flags to Flag Reference
+
+---
+
 ## [2.6.0] - 2026-03-30
 
 ### Added - Phase 1: Event Bus Architecture

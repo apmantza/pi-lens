@@ -133,7 +133,8 @@ Every file write/edit triggers the **dispatcher-runner system**:
 5. **Runners execute** by priority (5 → 50):
    - TypeScript type-checking (`ts-lsp` — built-in or LSP)
    - Python type-checking (`pyright`)
-   - Linting (`biome`, `ruff`)
+   - Linting (`biome`, `ruff`, `oxlint`, `shellcheck`)
+   - Spellcheck (`spellcheck` for Markdown)
    - Structural analysis (`ast-grep-napi`, `ast-grep`)
    - Type safety (`type-safety`)
    - AI slop detection (`python-slop`)
@@ -431,23 +432,30 @@ pi-lens uses a **dispatcher-runner architecture** for extensible multi-language 
 │ (prio 5) │           │ (prio 5) │           │ (prio 10)    │
 │ TS type  │           │ Py type  │           │ TS/JS lint   │
 └──────────┘           └──────────┘           └──────────────┘
-                                                      │
-    ┌─────────────────────────┼───────────────────────┘
+    │                         │                    │
+    │                         │                    │
+    ▼                         ▼                    ▼
+┌──────────┐           ┌──────────────┐    ┌──────────────┐
+│ ruff     │           │ oxlint       │    │ ast-grep-napi│
+│ (prio 10)│           │ (prio 12)    │    │ (prio 15)    │
+│ Py lint  │           │ Fast JS lint │    │ TS/JS struct │
+└──────────┘           └──────────────┘    └──────────────┘
+    │                         │
     │                         │
     ▼                         ▼
-┌──────────┐           ┌──────────────┐
-│ ruff     │           │ ast-grep-napi│
-│ (prio 10)│           │ (prio 15)    │
-│ Py lint  │           │ TS/JS struct │
-└──────────┘           └──────────────┘
+┌──────────────┐      ┌──────────┐
+│ shellcheck   │      │type-safe │
+│ (prio 20)    │      │(prio 20) │
+│ Shell lint   │      │TS switch │
+└──────────────┘      └──────────┘
                               │
     ┌─────────────────────────┼─────────────────────────┐
     │                         │                         │
     ▼                         ▼                         ▼
 ┌──────────┐           ┌──────────┐           ┌──────────┐
-│type-safe │           │py-slop   │           │ast-grep  │
-│(prio 20) │           │(prio 25) │           │(prio 30) │
-│TS switch │           │Py slop   │           │Other lang│
+│py-slop   │           │spellcheck│           │ast-grep  │
+│(prio 25) │           │(prio 30) │           │(prio 30) │
+│Py slop   │           │Markdown  │           │Other lang│
 └──────────┘           └──────────┘           └──────────┘
                                                       │
     ┌─────────────────────────┼─────────────────────────┘
@@ -477,9 +485,12 @@ pi-lens uses a **dispatcher-runner architecture** for extensible multi-language 
 | **pyright** | Python | 5 | Blocking | Python type errors (hard stops) |
 | **biome** | TS/JS | 10 | Warning | Linting issues (delta-tracked) |
 | **ruff** | Python | 10 | Warning | Python linting (delta-tracked) |
+| **oxlint** | TS/JS | 12 | Warning | Fast Rust-based JS/TS linter |
 | **ast-grep-napi** | TS/JS | 15 | Warning | **100x faster** structural analysis |
 | **type-safety** | TS | 20 | Mixed | Switch exhaustiveness (blocking), other (warning) |
+| **shellcheck** | Shell | 20 | Warning | Bash/sh/zsh/fish linting |
 | **python-slop** | Python | 25 | Warning | AI slop detection (~40 patterns) |
+| **spellcheck** | Markdown | 30 | Warning | Typo detection in docs |
 | **ast-grep** | Go, Rust, Python, etc. | 30 | Warning | Structural analysis via CLI (fallback for non-TS/JS) |
 | **similarity** | TS | 35 | Silent | Semantic duplicate detection (metrics only) |
 | **architect** | All | 40 | Warning | Architectural rule violations |
@@ -579,11 +590,13 @@ pi-lens works out of the box for TypeScript/JavaScript. For full language suppor
 | Tool | Install | What it does |
 |------|---------|--------------|
 | `@biomejs/biome` | `npm i -D @biomejs/biome` | Linting + formatting |
+| `oxlint` | `npm i -D oxlint` | Fast Rust-based JS/TS linting |
 | `knip` | `npm i -D knip` | Dead code / unused exports |
 | `jscpd` | `npm i -D jscpd` | Copy-paste detection |
 | `type-coverage` | `npm i -D type-coverage` | TypeScript `any` coverage % |
 | `@ast-grep/napi` | `npm i -D @ast-grep/napi` | Fast structural analysis (TS/JS) |
 | `@ast-grep/cli` | `npm i -D @ast-grep/cli` | Structural pattern matching (all languages) |
+| `typos-cli` | `cargo install typos-cli` | Spellcheck for Markdown |
 
 ### Python
 
@@ -603,6 +616,12 @@ pi-lens works out of the box for TypeScript/JavaScript. For full language suppor
 | Tool | Install | What it does |
 |------|---------|--------------|
 | `rust` + `clippy` | [rustup.rs](https://rustup.rs) | Linting via `cargo clippy` |
+
+### Shell
+
+| Tool | Install | What it does |
+|------|---------|--------------|
+| `shellcheck` | `apt install shellcheck` / `brew install shellcheck` | Shell script linting (bash/sh/zsh/fish) |
 
 ---
 
@@ -636,6 +655,8 @@ pi-lens works out of the box for TypeScript/JavaScript. For full language suppor
 | `--no-autoformat` | Disable automatic formatting (formatting is **enabled by default**) |
 | `--autofix-biome` | Auto-fix lint issues with Biome |
 | `--autofix-ruff` | Auto-fix lint issues with Ruff (Python) |
+| `--no-oxlint` | Skip Oxlint linting |
+| `--no-shellcheck` | Skip shellcheck for shell scripts |
 | `--no-tests` | Disable automatic test running on file write |
 | `--no-madge` | Skip circular dependency checks |
 | `--no-ast-grep` | Skip ast-grep structural analysis |
