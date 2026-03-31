@@ -47,11 +47,12 @@ jscpd-report.json
 # Linter caches
 .ruff_cache/
 
-# Documentation files - only keep AGENTS.md, README.md, CHANGELOG.md in public repo
+# Documentation files - only keep specific docs in public repo
 *.md
 !AGENTS.md
 !README.md
 !CHANGELOG.md
+!AST_GREP_RULES.md
 
 # docs folder entirely
 docs/

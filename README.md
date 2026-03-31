@@ -206,6 +206,22 @@ Before the dispatch runners execute, pi-lens performs **fast structural analysis
 
 **Status:** Shows inline in tool results (non-blocking warnings). Also included in `/lens-booboo` reports.
 
+#### Custom ast-grep Rules
+
+Create your own structural rules in `.pi-lens/rules/`:
+
+```yaml
+# .pi-lens/rules/no-console-prod.yml
+id: no-console-prod
+language: javascript
+rule:
+  pattern: console.$METHOD($$$ARGS)
+message: "Remove console statements before production"
+severity: warning
+```
+
+See [docs/ast-grep-rules.md](docs/ast-grep-rules.md) for full guide.
+
 ---
 
 ### At Session Start
