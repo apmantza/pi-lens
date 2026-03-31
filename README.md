@@ -315,6 +315,61 @@ All runners operate in **delta mode**:
 └─────────────────────────────────────────────────────────────┘
 ```
 
+### LSP Architecture (Phase 3)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   GENERIC LSP CLIENT                        │
+│  (clients/lsp/client.ts)                                    │
+│                                                             │
+│  • JSON-RPC message handling                                │
+│  • Debounced diagnostics (150ms)                           │
+│  • Bus-based wait (no polling)                              │
+│  • Windows path normalization                              │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              │ spawns
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   LSP SERVER DEFINITIONS                      │
+│  (clients/lsp/server.ts)                                      │
+│                                                               │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐           │
+│  │ TypeScript  │  │   Python    │  │     Go      │  + 28 more │
+│  │  Server     │  │   Server    │  │   Server    │           │
+│  │             │  │             │  │             │           │
+│  │ • Find      │  │ • npx       │  │ • gopls     │           │
+│  │   local tss │  │   pyright   │  │   binary    │           │
+│  │ • Set       │  │ • Detect    │  │ • Default   │           │
+│  │   tsserver  │  │   venv      │  │   spawn     │           │
+│  │   path      │  │ • pythonPath│  │             │           │
+│  │             │  │   in init   │  │             │           │
+│  └─────────────┘  └─────────────┘  └─────────────┘           │
+│                                                               │
+│  Each server: spawn() → returns {process, initialization}     │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              │ publishes
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   EVENT BUS (DiagnosticFound)                 │
+│                                                             │
+│  LSP publishes → Bus routes → Aggregator builds report     │
+│                                                             │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐     │
+│  │ LSP Server  │───▶│    BUS      │───▶│  waitFor    │     │
+│  │ publishDiags│    │  subscribe  │    │ Diagnostics│     │
+│  │             │    │             │    │  (no poll)  │     │
+│  └─────────────┘    └─────────────┘    └─────────────┘     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key Differences from Old Architecture:**
+- **One generic client** — No language-specific code in client.ts (following OpenCode pattern)
+- **Server-specific spawn** — Each language handles its own quirks (npx, local binary, venv, etc.)
+- **Bus-based waiting** — `waitForDiagnostics()` uses event subscription instead of polling
+- **No artificial delays** — Pyright's 3s indexing happens server-side; client waits via bus
+
 ### Runner System
 
 pi-lens uses a **dispatcher-runner architecture** for extensible multi-language support. Runners are executed by priority (lower = earlier).
