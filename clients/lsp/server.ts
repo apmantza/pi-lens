@@ -600,9 +600,15 @@ export const ESLintServer: LSPServerInfo = {
 		"package.json",
 	]),
 	async spawn(root) {
-		// Manual install required: npm install -g vscode-langservers-extracted
-		const proc = launchLSP("vscode-eslint-language-server", ["--stdio"], { cwd: root });
-		return { process: proc };
+		// Try via package manager (npx) since it's not auto-installed
+		try {
+			const proc = launchViaPackageManager("vscode-eslint-language-server", ["--stdio"], { cwd: root });
+			return { process: proc };
+		} catch {
+			// Fall back to global install message
+			console.error("[lsp] ESLint Language Server not found. Install: npm install -g vscode-langservers-extracted");
+			return undefined;
+		}
 	},
 };
 
