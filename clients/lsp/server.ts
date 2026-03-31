@@ -77,14 +77,17 @@ export const TypeScriptServer: LSPServerInfo = {
 	id: "typescript",
 	name: "TypeScript Language Server",
 	extensions: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"],
-	root: createRootDetector([
-		"package-lock.json",
-		"bun.lockb",
-		"bun.lock",
-		"pnpm-lock.yaml",
-		"yarn.lock",
-		"package.json",
-	]),
+	root: createRootDetector(
+		[
+			"package-lock.json",
+			"bun.lockb",
+			"bun.lock",
+			"pnpm-lock.yaml",
+			"yarn.lock",
+			"package.json",
+		],
+		[".pi-lens"]
+	),
 	async spawn(root) {
 		const path = await import("path");
 		const fs = await import("fs/promises");
@@ -153,14 +156,17 @@ export const PythonServer: LSPServerInfo = {
 	id: "python",
 	name: "Pyright Language Server",
 	extensions: [".py", ".pyi"],
-	root: createRootDetector([
-		"pyproject.toml",
-		"setup.py",
-		"setup.cfg",
-		"requirements.txt",
-		"Pipfile",
-		"poetry.lock",
-	]),
+	root: createRootDetector(
+		[
+			"pyproject.toml",
+			"setup.py",
+			"setup.cfg",
+			"requirements.txt",
+			"Pipfile",
+			"poetry.lock",
+		],
+		[".pi-lens"]
+	),
 	async spawn(root) {
 		const env = await getToolEnvironment();
 		const proc = launchViaPackageManager("pyright-langserver", ["--stdio"], { cwd: root, env });
@@ -195,7 +201,7 @@ export const GoServer: LSPServerInfo = {
 	id: "go",
 	name: "gopls",
 	extensions: [".go"],
-	root: createRootDetector(["go.mod", "go.sum"]),
+	root: createRootDetector(["go.mod", "go.sum"], [".pi-lens"]),
 	async spawn(root) {
 		const proc = launchLSP("gopls", [], { cwd: root });
 		return { process: proc };
@@ -206,7 +212,7 @@ export const RustServer: LSPServerInfo = {
 	id: "rust",
 	name: "rust-analyzer",
 	extensions: [".rs"],
-	root: createRootDetector(["Cargo.toml", "Cargo.lock"]),
+	root: createRootDetector(["Cargo.toml", "Cargo.lock"], [".pi-lens"]),
 	async spawn(root) {
 		const proc = launchLSP("rust-analyzer", [], { cwd: root });
 		return { process: proc };
@@ -217,7 +223,7 @@ export const RubyServer: LSPServerInfo = {
 	id: "ruby",
 	name: "Ruby LSP",
 	extensions: [".rb", ".rake", ".gemspec", ".ru"],
-	root: createRootDetector(["Gemfile", ".ruby-version"]),
+	root: createRootDetector(["Gemfile", ".ruby-version"], [".pi-lens"]),
 	async spawn(root) {
 		// Try ruby-lsp first, fall back to solargraph
 		try {
@@ -234,7 +240,7 @@ export const PHPServer: LSPServerInfo = {
 	id: "php",
 	name: "Intelephense",
 	extensions: [".php"],
-	root: createRootDetector(["composer.json", "composer.lock"]),
+	root: createRootDetector(["composer.json", "composer.lock"], [".pi-lens"]),
 	async spawn(root) {
 		const proc = launchViaPackageManager("intelephense", ["--stdio"], { cwd: root });
 		return { process: proc, initialization: { storagePath: path.join(__dirname, ".intelephense") } };
@@ -245,7 +251,7 @@ export const CSharpServer: LSPServerInfo = {
 	id: "csharp",
 	name: "csharp-ls",
 	extensions: [".cs"],
-	root: createRootDetector([".sln", ".csproj", ".slnx"]),
+	root: createRootDetector([".sln", ".csproj", ".slnx"], [".pi-lens"]),
 	async spawn(root) {
 		const proc = launchLSP("csharp-ls", [], { cwd: root });
 		return { process: proc };
@@ -256,7 +262,7 @@ export const FSharpServer: LSPServerInfo = {
 	id: "fsharp",
 	name: "FSAutocomplete",
 	extensions: [".fs", ".fsi", ".fsx"],
-	root: createRootDetector([".sln", ".fsproj"]),
+	root: createRootDetector([".sln", ".fsproj"], [".pi-lens"]),
 	async spawn(root) {
 		const proc = launchLSP("fsautocomplete", [], { cwd: root });
 		return { process: proc };
@@ -267,7 +273,7 @@ export const JavaServer: LSPServerInfo = {
 	id: "java",
 	name: "JDT Language Server",
 	extensions: [".java"],
-	root: createRootDetector(["pom.xml", "build.gradle", ".classpath"]),
+	root: createRootDetector(["pom.xml", "build.gradle", ".classpath"], [".pi-lens"]),
 	async spawn(root) {
 		// JDTLS requires special handling - paths to launcher jar
 		const jdtlsPath = process.env.JDTLS_PATH || "jdtls";
@@ -280,7 +286,7 @@ export const KotlinServer: LSPServerInfo = {
 	id: "kotlin",
 	name: "Kotlin Language Server",
 	extensions: [".kt", ".kts"],
-	root: createRootDetector(["build.gradle.kts", "build.gradle", "pom.xml"]),
+	root: createRootDetector(["build.gradle.kts", "build.gradle", "pom.xml"], [".pi-lens"]),
 	async spawn(root) {
 		const proc = launchLSP("kotlin-language-server", [], { cwd: root });
 		return { process: proc };
@@ -291,7 +297,7 @@ export const SwiftServer: LSPServerInfo = {
 	id: "swift",
 	name: "SourceKit-LSP",
 	extensions: [".swift"],
-	root: createRootDetector(["Package.swift"]),
+	root: createRootDetector(["Package.swift"], [".pi-lens"]),
 	async spawn(root) {
 		const proc = launchLSP("sourcekit-lsp", [], { cwd: root });
 		return { process: proc };
@@ -302,7 +308,7 @@ export const DartServer: LSPServerInfo = {
 	id: "dart",
 	name: "Dart Analysis Server",
 	extensions: [".dart"],
-	root: createRootDetector(["pubspec.yaml"]),
+	root: createRootDetector(["pubspec.yaml"], [".pi-lens"]),
 	async spawn(root) {
 		const proc = launchLSP("dart", ["language-server", "--protocol=lsp"], { cwd: root });
 		return { process: proc };
@@ -313,7 +319,7 @@ export const LuaServer: LSPServerInfo = {
 	id: "lua",
 	name: "Lua Language Server",
 	extensions: [".lua"],
-	root: createRootDetector([".luarc.json", ".luacheckrc"]),
+	root: createRootDetector([".luarc.json", ".luacheckrc"], [".pi-lens"]),
 	async spawn(root) {
 		const proc = launchLSP("lua-language-server", [], { cwd: root });
 		return { process: proc };
@@ -340,7 +346,7 @@ export const ZigServer: LSPServerInfo = {
 	id: "zig",
 	name: "ZLS",
 	extensions: [".zig", ".zon"],
-	root: createRootDetector(["build.zig"]),
+	root: createRootDetector(["build.zig"], [".pi-lens"]),
 	async spawn(root) {
 		const proc = launchLSP("zls", [], { cwd: root });
 		return { process: proc };
@@ -351,7 +357,7 @@ export const HaskellServer: LSPServerInfo = {
 	id: "haskell",
 	name: "Haskell Language Server",
 	extensions: [".hs", ".lhs"],
-	root: createRootDetector(["stack.yaml", "cabal.project", "*.cabal"]),
+	root: createRootDetector(["stack.yaml", "cabal.project", "*.cabal"], [".pi-lens"]),
 	async spawn(root) {
 		const proc = launchLSP("haskell-language-server-wrapper", ["--lsp"], { cwd: root });
 		return { process: proc };
@@ -362,7 +368,7 @@ export const ElixirServer: LSPServerInfo = {
 	id: "elixir",
 	name: "ElixirLS",
 	extensions: [".ex", ".exs"],
-	root: createRootDetector(["mix.exs"]),
+	root: createRootDetector(["mix.exs"], [".pi-lens"]),
 	async spawn(root) {
 		const proc = launchLSP("elixir-ls", [], { cwd: root });
 		return { process: proc };
@@ -373,7 +379,7 @@ export const GleamServer: LSPServerInfo = {
 	id: "gleam",
 	name: "Gleam LSP",
 	extensions: [".gleam"],
-	root: createRootDetector(["gleam.toml"]),
+	root: createRootDetector(["gleam.toml"], [".pi-lens"]),
 	async spawn(root) {
 		const proc = launchLSP("gleam", ["lsp"], { cwd: root });
 		return { process: proc };
@@ -384,7 +390,7 @@ export const OCamlServer: LSPServerInfo = {
 	id: "ocaml",
 	name: "ocamllsp",
 	extensions: [".ml", ".mli"],
-	root: createRootDetector(["dune-project", "opam"]),
+	root: createRootDetector(["dune-project", "opam"], [".pi-lens"]),
 	async spawn(root) {
 		const proc = launchLSP("ocamllsp", [], { cwd: root });
 		return { process: proc };
@@ -395,7 +401,7 @@ export const ClojureServer: LSPServerInfo = {
 	id: "clojure",
 	name: "Clojure LSP",
 	extensions: [".clj", ".cljs", ".cljc", ".edn"],
-	root: createRootDetector(["deps.edn", "project.clj"]),
+	root: createRootDetector(["deps.edn", "project.clj"], [".pi-lens"]),
 	async spawn(root) {
 		const proc = launchLSP("clojure-lsp", [], { cwd: root });
 		return { process: proc };
@@ -406,7 +412,7 @@ export const TerraformServer: LSPServerInfo = {
 	id: "terraform",
 	name: "Terraform LSP",
 	extensions: [".tf", ".tfvars"],
-	root: createRootDetector([".terraform.lock.hcl"]),
+	root: createRootDetector([".terraform.lock.hcl"], [".pi-lens"]),
 	async spawn(root) {
 		const proc = launchLSP("terraform-ls", ["serve"], { cwd: root });
 		return { process: proc };
@@ -417,7 +423,7 @@ export const NixServer: LSPServerInfo = {
 	id: "nix",
 	name: "nixd",
 	extensions: [".nix"],
-	root: createRootDetector(["flake.nix"]),
+	root: createRootDetector(["flake.nix"], [".pi-lens"]),
 	async spawn(root) {
 		const proc = launchLSP("nixd", [], { cwd: root });
 		return { process: proc };
@@ -472,7 +478,7 @@ export const PrismaServer: LSPServerInfo = {
 	id: "prisma",
 	name: "Prisma Language Server",
 	extensions: [".prisma"],
-	root: createRootDetector(["prisma/schema.prisma"]),
+	root: createRootDetector(["prisma/schema.prisma"], [".pi-lens"]),
 	async spawn(root) {
 		const proc = launchViaPackageManager("@prisma/language-server", ["--stdio"], { cwd: root });
 		return { process: proc };
@@ -485,7 +491,7 @@ export const VueServer: LSPServerInfo = {
 	id: "vue",
 	name: "Vue Language Server",
 	extensions: [".vue"],
-	root: createRootDetector(["package-lock.json", "bun.lockb", "bun.lock", "pnpm-lock.yaml", "yarn.lock"]),
+	root: createRootDetector(["package-lock.json", "bun.lockb", "bun.lock", "pnpm-lock.yaml", "yarn.lock"], [".pi-lens"]),
 	async spawn(root) {
 		const proc = launchViaPackageManager("@vue/language-server", ["--stdio"], { cwd: root });
 		return { process: proc };
@@ -496,7 +502,7 @@ export const SvelteServer: LSPServerInfo = {
 	id: "svelte",
 	name: "Svelte Language Server",
 	extensions: [".svelte"],
-	root: createRootDetector(["package-lock.json", "bun.lockb", "bun.lock", "pnpm-lock.yaml", "yarn.lock"]),
+	root: createRootDetector(["package-lock.json", "bun.lockb", "bun.lock", "pnpm-lock.yaml", "yarn.lock"], [".pi-lens"]),
 	async spawn(root) {
 		const proc = launchViaPackageManager("svelte-language-server", ["--stdio"], { cwd: root });
 		return { process: proc };
