@@ -129,7 +129,7 @@ See [docs/LSP_CONFIG.md](docs/LSP_CONFIG.md) for configuration options.
 | Mode | Flag | Description |
 |------|------|-------------|
 | **Sequential** | (default) | Runners execute one at a time |
-| **Concurrent** | `--lens-effect` | All runners in parallel via Effect-TS |
+| **Concurrent** | `--lens-effect` | All runners in parallel via Effect-TS (Experimental) |
 
 **Recommended:** `pi --lens-lsp --lens-effect` for best performance.
 
@@ -674,7 +674,7 @@ pi-lens works out of the box for TypeScript/JavaScript. For full language suppor
 | Flag | Description |
 |------|-------------|
 | `--lens-lsp` | Use real Language Server Protocol servers instead of built-in type-checking |
-| `--lens-effect` | Run all runners **concurrently** (faster) instead of sequentially |
+| `--lens-effect` | Run all runners **concurrently** (faster) instead of sequentially (Experimental) |
 | `--lens-verbose` | Enable detailed console logging |
 | `--no-autoformat` | Disable automatic formatting (formatting is **enabled by default**) |
 | `--no-autofix` | Disable all auto-fixing (Biome + Ruff autofix is **enabled by default**) |
