@@ -205,17 +205,25 @@ export default function (pi: ExtensionAPI) {
 		default: false,
 	});
 
-	pi.registerFlag("autofix-biome", {
+	pi.registerFlag("no-autofix", {
 		description:
-			"Auto-fix Biome lint/format issues on write (applies --write --unsafe)",
+			"Disable auto-fixing of lint issues (Biome, Ruff). Use --no-autofix-biome or --no-autofix-ruff for individual control.",
 		type: "boolean",
 		default: false,
 	});
 
-	pi.registerFlag("autofix-ruff", {
-		description: "Auto-fix Ruff lint/format issues on write",
+	pi.registerFlag("no-autofix-biome", {
+		description:
+			"Disable Biome auto-fix on write (Biome autofix is enabled by default)",
 		type: "boolean",
-		default: true,
+		default: false,
+	});
+
+	pi.registerFlag("no-autofix-ruff", {
+		description:
+			"Disable Ruff auto-fix on write (Ruff autofix is enabled by default)",
+		type: "boolean",
+		default: false,
 	});
 
 	pi.registerFlag("no-tests", {
@@ -1127,14 +1135,16 @@ export default function (pi: ExtensionAPI) {
 
 		// --- Auto-fix on write (safely - track to prevent loops) ---
 		// Apply fixes BEFORE dispatch so dispatch only reports remaining issues
-		const autofixBiome = pi.getFlag("autofix-biome");
-		const autofixRuff = pi.getFlag("autofix-ruff");
+		// Autofix is enabled by default, use --no-autofix to disable
+		const noAutofix = pi.getFlag("no-autofix");
+		const noAutofixBiome = pi.getFlag("no-autofix-biome");
+		const noAutofixRuff = pi.getFlag("no-autofix-ruff");
 		let fixedCount = 0;
 
-		if (!fixedThisTurn.has(filePath)) {
-			// Python: Ruff auto-fix
+		if (!fixedThisTurn.has(filePath) && !noAutofix) {
+			// Python: Ruff auto-fix (enabled by default)
 			if (
-				autofixRuff &&
+				!noAutofixRuff &&
 				ruffClient.isAvailable() &&
 				ruffClient.isPythonFile(filePath)
 			) {
@@ -1146,9 +1156,9 @@ export default function (pi: ExtensionAPI) {
 				}
 			}
 
-			// JS/TS/JSON: Biome auto-fix
+			// JS/TS/JSON: Biome auto-fix (enabled by default)
 			if (
-				autofixBiome &&
+				!noAutofixBiome &&
 				biomeClient.isAvailable() &&
 				biomeClient.isSupportedFile(filePath)
 			) {
