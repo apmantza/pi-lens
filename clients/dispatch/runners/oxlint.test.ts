@@ -8,6 +8,12 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { DispatchContext } from "../types.js";
 
+/**
+ * Delay helper for Windows file cleanup
+ * Windows may hold file handles briefly after process exit
+ */
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 function createMockContext(
 	filePath: string,
 	overrides: Partial<DispatchContext> = {},
@@ -91,10 +97,12 @@ function test() {
 							(d.message.includes("console") ||
 								d.message.includes("unused") ||
 								d.message.includes("!!")),
-				),
-			).toBe(true);
+					),
+				).toBe(true);
 			}
 		} finally {
+			// Windows may hold file handles briefly - add small delay
+			await delay(100);
 			if (fs.existsSync(tmpFile)) {
 				fs.unlinkSync(tmpFile);
 			}
@@ -123,6 +131,8 @@ function test() {
 			const result = await runner.run(ctxWithFlag);
 			expect(result.status).toBe("skipped");
 		} finally {
+			// Windows may hold file handles briefly - add small delay
+			await delay(100);
 			if (fs.existsSync(tmpFile)) {
 				fs.unlinkSync(tmpFile);
 			}
@@ -153,6 +163,8 @@ const x = !!value;
 				expect(fixableDiags.length).toBeGreaterThanOrEqual(0);
 			}
 		} finally {
+			// Windows may hold file handles briefly - add small delay
+			await delay(100);
 			if (fs.existsSync(tmpFile)) {
 				fs.unlinkSync(tmpFile);
 			}
@@ -187,6 +199,8 @@ export { greet };
 				expect(result.status).toBe("succeeded");
 			}
 		} finally {
+			// Windows may hold file handles briefly - add small delay
+			await delay(100);
 			if (fs.existsSync(tmpFile)) {
 				fs.unlinkSync(tmpFile);
 			}
@@ -219,6 +233,8 @@ export { greet };
 				}
 			}
 		} finally {
+			// Windows may hold file handles briefly - add small delay
+			await delay(100);
 			if (fs.existsSync(tmpFile)) {
 				fs.unlinkSync(tmpFile);
 			}
@@ -253,6 +269,8 @@ export { greet };
 				expect(result.diagnostics).toHaveLength(0);
 			}
 		} finally {
+			// Windows may hold file handles briefly - add small delay
+			await delay(100);
 			if (fs.existsSync(tmpFile)) {
 				fs.unlinkSync(tmpFile);
 			}
@@ -275,6 +293,8 @@ export { greet };
 			// Should handle parse errors without crashing
 			expect(["succeeded", "failed", "skipped"]).toContain(result.status);
 		} finally {
+			// Windows may hold file handles briefly - add small delay
+			await delay(100);
 			if (fs.existsSync(tmpFile)) {
 				fs.unlinkSync(tmpFile);
 			}
