@@ -34,6 +34,23 @@ function _attachErrorHandler(proc: ChildProcess, context: string): void {
 		// Log the error but don't crash - the caller should handle this gracefully
 		console.error(`[lsp] Spawn error for ${context}:`, err.message);
 	});
+
+	// Also handle unexpected exit (process crash after successful spawn)
+	proc.on("exit", (code, signal) => {
+		if (code !== 0 && code !== null) {
+			console.error(
+				`[lsp] ${context} exited with code ${code}${signal ? ` (signal: ${signal})` : ""}`,
+			);
+		}
+	});
+
+	proc.on("close", (code, signal) => {
+		if (code !== 0 && code !== null) {
+			console.error(
+				`[lsp] ${context} closed with code ${code}${signal ? ` (signal: ${signal})` : ""}`,
+			);
+		}
+	});
 }
 
 /**
@@ -100,7 +117,15 @@ export function launchLSP(
 		throw new Error(`Failed to spawn LSP server: ${command}`);
 	}
 
-	// Attach error handler to prevent ENOENT crashes
+	// Check if process exited immediately (spawn failure - synchronous check)
+	if (proc.exitCode !== null || proc.killed) {
+		throw new Error(
+			`LSP server ${command} exited immediately (code: ${proc.exitCode}). ` +
+				`The binary may be missing or corrupted.`,
+		);
+	}
+
+	// Attach error handler to prevent ENOENT crashes and track later failures
 	_attachErrorHandler(proc, command);
 
 	return {

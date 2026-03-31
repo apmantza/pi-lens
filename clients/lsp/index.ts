@@ -127,6 +127,14 @@ export class LSPService {
 				console.error(
 					`[lsp] ${server.id} timed out during initialization (${errorMsg}). The server may be downloading or the project is large. Skipping.`,
 				);
+			} else if (errorMsg.includes("stream was destroyed")) {
+				console.error(
+					`[lsp] ${server.id} stream was destroyed. The server binary may be missing or crashed immediately. Try reinstalling: npm install -g ${server.id}-language-server`,
+				);
+			} else if (errorMsg.includes("exited immediately")) {
+				console.error(
+					`[lsp] ${server.id} ${errorMsg}. Try reinstalling: npm install -g ${server.id}-language-server`,
+				);
 			} else {
 				console.error(`[lsp] Failed to spawn ${server.id}:`, err);
 			}
