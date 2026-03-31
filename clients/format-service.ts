@@ -11,17 +11,16 @@
  * - Multiple formatters per file (e.g., biome + prettier both run)
  */
 
+import * as path from "node:path";
 import { Effect, pipe } from "effect";
-import * as path from "path";
-import * as fs from "fs/promises";
-import {
-	getFormattersForFile,
-	formatFile,
-	FormatterInfo,
-	FormatterResult,
-	clearFormatterCache,
-} from "./formatters.js";
 import { FileTime } from "./file-time.js";
+import {
+	clearFormatterCache,
+	type FormatterInfo,
+	type FormatterResult,
+	formatFile,
+	getFormattersForFile,
+} from "./formatters.js";
 
 // --- Types ---
 
@@ -59,7 +58,10 @@ export class FormatService {
 	 * Format a file with all detected formatters
 	 * Runs formatters concurrently via Effect-TS
 	 */
-	async formatFile(filePath: string, options: FormatOptions = {}): Promise<FormatSummary> {
+	async formatFile(
+		filePath: string,
+		options: FormatOptions = {},
+	): Promise<FormatSummary> {
 		const absolutePath = path.resolve(filePath);
 		const cwd = path.dirname(absolutePath);
 
@@ -75,7 +77,9 @@ export class FormatService {
 
 		// Check if file was modified externally (safety check)
 		if (this.fileTime.hasChanged(absolutePath)) {
-			console.warn(`[format] File ${absolutePath} modified externally, skipping format`);
+			console.warn(
+				`[format] File ${absolutePath} modified externally, skipping format`,
+			);
 			return {
 				filePath: absolutePath,
 				formatters: [],
@@ -99,14 +103,17 @@ export class FormatService {
 		}
 
 		// Run all formatters concurrently via Effect-TS
-		const results = await this.runFormattersConcurrently(absolutePath, formatters);
+		const results = await this.runFormattersConcurrently(
+			absolutePath,
+			formatters,
+		);
 
 		// Record new file state after formatting
 		this.fileTime.read(absolutePath);
 
 		// Build summary
-		const anyChanged = results.some(r => r.changed);
-		const allSucceeded = results.every(r => r.success);
+		const anyChanged = results.some((r) => r.changed);
+		const allSucceeded = results.every((r) => r.success);
 
 		return {
 			filePath: absolutePath,
@@ -126,10 +133,10 @@ export class FormatService {
 	 */
 	private async runFormattersConcurrently(
 		filePath: string,
-		formatters: FormatterInfo[]
+		formatters: FormatterInfo[],
 	): Promise<FormatterResult[]> {
 		// Create Effect for each formatter
-		const effects = formatters.map(formatter =>
+		const effects = formatters.map((formatter) =>
 			Effect.tryPromise({
 				try: () => formatFile(filePath, formatter),
 				catch: (error): FormatterResult => ({
@@ -137,7 +144,7 @@ export class FormatService {
 					changed: false,
 					error: error instanceof Error ? error.message : String(error),
 				}),
-			})
+			}),
 		);
 
 		// Run all concurrently with Effect.all
@@ -151,9 +158,9 @@ export class FormatService {
 						success: false,
 						changed: false,
 						error: "Timeout or concurrent execution failed",
-					}))
+					})),
 				);
-			})
+			}),
 		);
 
 		return Effect.runPromise(program);
@@ -163,12 +170,14 @@ export class FormatService {
 	 * Get formatters by name (for explicit formatter selection)
 	 */
 	private async getFormattersByName(names: string[]): Promise<FormatterInfo[]> {
-		const { listAllFormatters, ...formatters } = await import("./formatters.js");
+		const { listAllFormatters, ...formatters } = await import(
+			"./formatters.js"
+		);
 		const allNames = listAllFormatters();
 
 		return names
-			.filter(name => allNames.includes(name))
-			.map(name => {
+			.filter((name) => allNames.includes(name))
+			.map((name) => {
 				// Access formatter by name from the exports
 				const key = `${name}Formatter` as keyof typeof formatters;
 				return formatters[key] as FormatterInfo;
@@ -211,13 +220,16 @@ export class FormatService {
 let globalFormatService: FormatService | null = null;
 let currentSessionID: string | null = null;
 
-export function getFormatService(sessionID?: string, enabled: boolean = true): FormatService {
+export function getFormatService(
+	sessionID?: string,
+	enabled: boolean = true,
+): FormatService {
 	// Create new instance if:
 	// 1. No service exists yet
 	// 2. Session ID changed (different session)
-	const shouldCreateNew = !globalFormatService || 
-		(sessionID && sessionID !== currentSessionID);
-	
+	const shouldCreateNew =
+		!globalFormatService || (sessionID && sessionID !== currentSessionID);
+
 	if (shouldCreateNew) {
 		globalFormatService = new FormatService(sessionID ?? "default", enabled);
 		currentSessionID = sessionID ?? "default";
@@ -229,3 +241,14 @@ export function resetFormatService(): void {
 	globalFormatService = null;
 	currentSessionID = null;
 }
+
+/**
+ * Reset format service and clear all file tracking state.
+ * Use this in tests to ensure complete isolation.
+ */
+export function clearFormatServiceAndFileState(): void {
+	resetFormatService();
+}
+
+// Re-export for convenience
+export { clearAllSessions } from "./file-time.js";

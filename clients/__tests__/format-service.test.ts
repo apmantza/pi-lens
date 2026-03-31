@@ -5,13 +5,18 @@
  * and FileTime integration for safety.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { FormatService, getFormatService, resetFormatService } from "../format-service.js";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FileTimeError } from "../file-time.js";
-import { fileURLToPath } from "url";
-import { dirname } from "path";
+import {
+	FormatService,
+	getFormatService,
+	resetFormatService,
+} from "../format-service.js";
+import { clearAllSessions } from "../file-time.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -24,8 +29,9 @@ describe("FormatService", () => {
 
 	beforeEach(() => {
 		resetFormatService();
+		clearAllSessions(); // Clear FileTime global state for test isolation
 		formatService = new FormatService(sessionID, true);
-		
+
 		if (fs.existsSync(TEST_DIR)) {
 			fs.rmSync(TEST_DIR, { recursive: true });
 		}
@@ -34,6 +40,7 @@ describe("FormatService", () => {
 
 	afterEach(() => {
 		resetFormatService();
+		clearAllSessions(); // Clear FileTime global state for test isolation
 		if (fs.existsSync(TEST_DIR)) {
 			fs.rmSync(TEST_DIR, { recursive: true });
 		}
@@ -66,10 +73,10 @@ describe("FormatService", () => {
 		it("should skip when file modified externally", async () => {
 			const testFile = path.join(TEST_DIR, "external.txt");
 			fs.writeFileSync(testFile, "original");
-			
+
 			// Record read
 			formatService.recordRead(testFile);
-			
+
 			// Modify externally
 			fs.writeFileSync(testFile, "modified");
 
@@ -84,54 +91,54 @@ describe("FormatService", () => {
 			fs.writeFileSync(path.join(TEST_DIR, "biome.json"), '{"formatter": {}}');
 			const tsFile = path.join(TEST_DIR, "test.ts");
 			fs.writeFileSync(tsFile, "const x=1;");
-			
+
 			// Record read so format service knows initial state
 			formatService.recordRead(tsFile);
 
 			const result = await formatService.formatFile(tsFile);
 
 			expect(result.filePath).toBe(tsFile);
-			expect(result.formatters.some(f => f.name === "biome")).toBe(true);
+			expect(result.formatters.some((f) => f.name === "biome")).toBe(true);
 		});
 
 		it("should format Python file with ruff config", async () => {
 			fs.writeFileSync(
 				path.join(TEST_DIR, "pyproject.toml"),
-				"[tool.ruff]\nline-length = 100"
+				"[tool.ruff]\nline-length = 100",
 			);
 			const pyFile = path.join(TEST_DIR, "test.py");
 			fs.writeFileSync(pyFile, "x=1");
-			
+
 			// Record read so format service knows initial state
 			formatService.recordRead(pyFile);
 
 			const result = await formatService.formatFile(pyFile);
 
 			expect(result.filePath).toBe(pyFile);
-			expect(result.formatters.some(f => f.name === "ruff")).toBe(true);
+			expect(result.formatters.some((f) => f.name === "ruff")).toBe(true);
 		});
 
 		it("should run multiple formatters for same file", async () => {
 			fs.writeFileSync(path.join(TEST_DIR, "biome.json"), "{}");
 			fs.writeFileSync(
 				path.join(TEST_DIR, "package.json"),
-				JSON.stringify({ devDependencies: { prettier: "^3.0.0" } })
+				JSON.stringify({ devDependencies: { prettier: "^3.0.0" } }),
 			);
 			const tsFile = path.join(TEST_DIR, "test.ts");
 			fs.writeFileSync(tsFile, "const x = 1;");
-			
+
 			formatService.recordRead(tsFile);
 
 			const result = await formatService.formatFile(tsFile);
 
-			const names = result.formatters.map(f => f.name);
+			const names = result.formatters.map((f) => f.name);
 			expect(names).toContain("biome");
 		});
 
 		it("should return empty result for unsupported file", async () => {
 			const txtFile = path.join(TEST_DIR, "test.txt");
 			fs.writeFileSync(txtFile, "content");
-			
+
 			formatService.recordRead(txtFile);
 
 			const result = await formatService.formatFile(txtFile);
@@ -145,7 +152,7 @@ describe("FormatService", () => {
 			fs.writeFileSync(path.join(TEST_DIR, "biome.json"), "{}");
 			const tsFile = path.join(TEST_DIR, "test.ts");
 			fs.writeFileSync(tsFile, "const x = 1;");
-			
+
 			formatService.recordRead(tsFile);
 
 			await formatService.formatFile(tsFile);
@@ -157,7 +164,7 @@ describe("FormatService", () => {
 			fs.writeFileSync(path.join(TEST_DIR, "biome.json"), "{}");
 			const tsFile = path.join(TEST_DIR, "test.ts");
 			fs.writeFileSync(tsFile, "const x = 1;");
-			
+
 			formatService.recordRead(tsFile);
 
 			const result = await formatService.formatFile(tsFile);
@@ -175,10 +182,10 @@ describe("FormatService", () => {
 			fs.writeFileSync(path.join(TEST_DIR, "biome.json"), "{}");
 			const tsFile = path.join(TEST_DIR, "test.ts");
 			fs.writeFileSync(tsFile, "const x = 1;");
-			
+
 			formatService.recordRead(tsFile);
 
-			const result = await formatService.formatFile(tsFile);
+			const _result = await formatService.formatFile(tsFile);
 
 			const after = fs.readFileSync(tsFile, "utf-8");
 			expect(after).toBeDefined();
@@ -201,7 +208,9 @@ describe("FormatService", () => {
 
 			fs.writeFileSync(testFile, "changed");
 
-			expect(() => formatService.assertUnchanged(testFile)).toThrow(FileTimeError);
+			expect(() => formatService.assertUnchanged(testFile)).toThrow(
+				FileTimeError,
+			);
 		});
 	});
 
@@ -220,7 +229,7 @@ describe("FormatService", () => {
 			formatService.recordRead(testFile);
 
 			// Small delay to ensure different mtime (Windows has ~16ms resolution)
-			await new Promise(r => setTimeout(r, 50));
+			await new Promise((r) => setTimeout(r, 50));
 			fs.writeFileSync(testFile, "modified");
 
 			expect(formatService.hasChanged(testFile)).toBe(true);
@@ -251,7 +260,7 @@ describe("FormatService", () => {
 			const tsFile = path.join(TEST_DIR, "test.ts");
 			fs.writeFileSync(tsFile, "const x = 1;");
 			formatService.recordRead(tsFile);
-			
+
 			await formatService.formatFile(tsFile);
 
 			formatService.clearCache();
@@ -263,20 +272,20 @@ describe("FormatService", () => {
 	describe("Concurrency", () => {
 		it("should handle multiple files concurrently", async () => {
 			fs.writeFileSync(path.join(TEST_DIR, "biome.json"), "{}");
-			
+
 			const files = [
 				path.join(TEST_DIR, "file1.ts"),
 				path.join(TEST_DIR, "file2.ts"),
 				path.join(TEST_DIR, "file3.ts"),
 			];
-			
+
 			for (const file of files) {
 				fs.writeFileSync(file, "const x = 1;");
 				formatService.recordRead(file);
 			}
 
 			const results = await Promise.all(
-				files.map(f => formatService.formatFile(f))
+				files.map((f) => formatService.formatFile(f)),
 			);
 
 			expect(results).toHaveLength(3);

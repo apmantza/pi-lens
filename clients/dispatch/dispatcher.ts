@@ -18,8 +18,6 @@ import type { FileKind } from "../file-kinds.js";
 import { detectFileKind } from "../file-kinds.js";
 import { isTestFile } from "../file-utils.js";
 import { safeSpawn } from "../safe-spawn.js";
-import { formatDiagnostic, formatDiagnostics, EMOJI } from "./utils/format-utils.js";
-
 import type {
 	BaselineStore,
 	Diagnostic,
@@ -31,6 +29,7 @@ import type {
 	RunnerGroup,
 	RunnerResult,
 } from "./types.js";
+import { formatDiagnostics } from "./utils/format-utils.js";
 
 // --- In-Memory Baseline Store ---
 
@@ -87,6 +86,13 @@ export function getRunnersForKind(
 
 export function listRunners(): RunnerDefinition[] {
 	return Array.from(globalRegistry.values());
+}
+
+/**
+ * Clear all registered runners. Used primarily for testing.
+ */
+export function clearRunnerRegistry(): void {
+	globalRegistry.clear();
 }
 
 // --- Tool Availability Cache ---
