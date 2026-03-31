@@ -66,11 +66,17 @@ pi-lens **automatically formats** every file you write or edit. Formatters are a
 | **shfmt** | Shell | `shfmt` binary available | Manual (download binary) |
 | **mix format** | Elixir | `mix` binary available | Manual (included with Elixir) |
 
+**Priority:**
+- **Biome is the default** — if `biome.json` exists, only Biome runs (Prettier is skipped)
+- **Prettier is the fallback** — only runs when Biome is not configured
+- **No race conditions** — only one formatter per file type runs at a time
+
 **How it works:**
 1. Agent writes a file
 2. pi-lens detects formatters based on config files/dependencies
-3. All matching formatters run **concurrently** via Effect-TS
-4. FileTime tracking ensures safety (agents re-read if file changes externally)
+3. Biome takes priority; Prettier runs only if Biome is not configured
+4. Matching formatters run **concurrently** via Effect-TS
+5. FileTime tracking ensures safety (agents re-read if file changes externally)
 
 **Safety:** If a formatter changes the file, the agent is notified and must re-read before next edit — preventing stale content overwrites.
 
