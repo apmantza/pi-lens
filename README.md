@@ -51,25 +51,24 @@ pi install git:github.com/apmantza/pi-lens
 
 ### Auto-Formatting (Default Enabled)
 
-pi-lens **automatically formats** every file you write or edit. Formatters are auto-detected based on your project configuration:
+pi-lens **automatically formats** every file you write or edit. Formatters are auto-detected based on your project configuration.
 
-| Formatter | Languages | Detection | Installation |
-|-----------|-----------|-----------|--------------|
-| **Biome** | TS/JS/JSON/CSS | `biome.json` or `@biomejs/biome` in devDependencies | ✅ Automatic |
-| **Prettier** | TS/JS/JSON/CSS/Markdown | `.prettierrc` or `prettier` in devDependencies | Manual (`npm install -g prettier`) |
-| **Ruff** | Python | `[tool.ruff]` in `pyproject.toml` | ✅ Automatic |
-| **Black** | Python | `[tool.black]` in `pyproject.toml` | Manual (`pip install black`) |
-| **gofmt** | Go | `go` binary available | Manual (included with Go SDK) |
-| **rustfmt** | Rust | `rustfmt` binary available | Manual (included with Rust toolchain) |
-| **zig fmt** | Zig | `zig` binary available | Manual (included with Zig SDK) |
-| **dart format** | Dart | `dart` binary available | Manual (included with Dart SDK) |
-| **shfmt** | Shell | `shfmt` binary available | Manual (download binary) |
-| **mix format** | Elixir | `mix` binary available | Manual (included with Elixir) |
+**Priority:** **Biome** is the default. **Prettier** runs only if Biome is not configured. This prevents race conditions and ensures consistent formatting.
 
-**Priority:**
-- **Biome is the default** — if `biome.json` exists, only Biome runs (Prettier is skipped)
-- **Prettier is the fallback** — only runs when Biome is not configured
-- **No race conditions** — only one formatter per file type runs at a time
+| Formatter | Languages | Detection | Installation | Role |
+|-----------|-----------|-----------|--------------|------|
+| **Biome** ⭐ | TS/JS/JSON/CSS | `biome.json` or `@biomejs/biome` in devDependencies | ✅ Automatic | **Default** |
+| **Prettier** | TS/JS/JSON/CSS/Markdown | `.prettierrc` or `prettier` in devDependencies | Manual (`npm install -g prettier`) | Fallback |
+| **Ruff** ⭐ | Python | `[tool.ruff]` in `pyproject.toml` | ✅ Automatic | **Default** |
+| **Black** | Python | `[tool.black]` in `pyproject.toml` | Manual (`pip install black`) | Fallback |
+| **gofmt** | Go | `go` binary available | Manual (included with Go SDK) | Default |
+| **rustfmt** | Rust | `rustfmt` binary available | Manual (included with Rust toolchain) | Default |
+| **zig fmt** | Zig | `zig` binary available | Manual (included with Zig SDK) | Default |
+| **dart format** | Dart | `dart` binary available | Manual (included with Dart SDK) | Default |
+| **shfmt** | Shell | `shfmt` binary available | Manual (download binary) | Default |
+| **mix format** | Elixir | `mix` binary available | Manual (included with Elixir) | Default |
+
+⭐ = Auto-installed (no manual setup required)
 
 **How it works:**
 1. Agent writes a file
@@ -100,7 +99,7 @@ Enable full Language Server Protocol support with `--lens-lsp`:
 | **Config** | YAML, JSON, Prisma |
 | **Web** | Vue, Svelte, CSS/SCSS/Sass/Less |
 
-**Auto-installation (14/31):** When `--lens-lsp` is enabled, 14 npm/pip-installable servers auto-install on first use to `.pi-lens/tools/`. Remaining 17 require manual installation (SDKs, compilers, platform-specific).
+**Auto-installation (4 core tools):** TypeScript, Python, and formatting tools auto-install on first use to `.pi-lens/tools/`. Other LSP servers are launched via `npx` when available or require manual installation.
 
 **Usage:**
 ```bash
@@ -565,18 +564,22 @@ Fully supported with multiple runners:
 - `cargo clippy` (linting)
 - Full support via rust-clippy runner
 
-### Other Languages (with `--lens-lsp`)
+### LSP Servers (with `--lens-lsp`)
 
-| Language | LSP Server | Auto-install |
+| Language | LSP Server | Installation |
 |----------|------------|--------------|
+| **TypeScript** | typescript-language-server | ✅ **Auto-installed** |
+| **Python** | pyright | ✅ **Auto-installed** |
 | Ruby | ruby-lsp / solargraph | Manual |
-| PHP | intelephense | npm |
+| PHP | intelephense | `npx` (if available) |
 | C# | csharp-ls | Manual |
 | F# | fsautocomplete | Manual |
 | Java | JDTLS | Manual |
 | Kotlin | kotlin-language-server | Manual |
 | Swift | sourcekit-lsp | Xcode required |
 | Dart | dart | SDK required |
+| Go | gopls | Manual |
+| Rust | rust-analyzer | Manual |
 | Lua | lua-language-server | Manual |
 | C/C++ | clangd | Manual |
 | Zig | zls | Manual |
@@ -587,23 +590,20 @@ Fully supported with multiple runners:
 | Clojure | clojure-lsp | Manual |
 | Terraform | terraform-ls | Manual |
 | Nix | nixd | Manual |
-| Bash | bash-language-server | npm |
-| Docker | dockerfile-language-server | npm |
-| YAML | yaml-language-server | npm |
-| JSON | vscode-json-languageserver | npm |
-| Prisma | @prisma/language-server | npm |
-| Vue | @vue/language-server | npm |
-| Svelte | svelte-language-server | npm |
-| ESLint | vscode-eslint | npm |
-| CSS/SCSS | vscode-css-languageserver | npm |
+| Bash | bash-language-server | `npx` (if available) |
+| Docker | dockerfile-language-server | `npx` (if available) |
+| YAML | yaml-language-server | `npx` (if available) |
+| JSON | vscode-json-languageserver | `npx` (if available) |
+| Prisma | @prisma/language-server | `npx` (if available) |
+| Vue | @vue/language-server | `npx` (if available) |
+| Svelte | svelte-language-server | `npx` (if available) |
+| ESLint | vscode-eslint | `npx` (if available) |
+| CSS/SCSS | vscode-css-languageserver | `npx` (if available) |
 
-**Auto-install:** 14 LSP servers auto-install when `--lens-lsp` is enabled:
-- **Core:** typescript-language-server, pyright, yaml-language-server, json-languageserver, bash-language-server
-- **Web:** @vue/language-server, svelte-language-server, eslint-language-server, css-languageserver
-- **DevOps/Config:** dockerfile-language-server, prisma-language-server
-- **Linting:** biome, ruff, ast-grep
-
-Others (17 servers) require manual installation.
+**Legend:**
+- ✅ **Auto-installed** — Downloaded to `.pi-lens/tools/` on first use (4 tools: TypeScript, Python, Biome, Ruff)
+- **`npx`** — Runs via `npx -y <package>` if Node.js/npm available (prompts to install if missing)
+- **Manual** — Requires manual installation (SDK, compiler, or platform-specific binary)
 
 ---
 
@@ -993,7 +993,7 @@ See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 ### Latest Highlights
 
-- **LSP Support:** 31 Language Server Protocol clients with auto-installation (14 auto-install, 17 manual)
+- **LSP Support:** 31 Language Server Protocol clients (4 core auto-installed, others via npx or manual)
 - **Concurrent Execution:** Effect-TS-based parallel runner execution with `--lens-effect`
 - **NAPI Runner:** 100x faster TypeScript/JavaScript structural analysis (~9ms vs ~1200ms)
 - **Slop Detection:** 30+ TypeScript and 40+ Python patterns for AI-generated code quality issues
