@@ -18,7 +18,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { EXCLUDED_DIRS } from "./file-utils.js";
-import { TreeSitterQueryLoader, TreeSitterQuery } from "./tree-sitter-query-loader.js";
+import {
+	type TreeSitterQuery,
+	TreeSitterQueryLoader,
+} from "./tree-sitter-query-loader.js";
 
 // --- Type Declarations (local, no import needed) ---
 
@@ -46,7 +49,7 @@ interface TreeSitterParserInstance {
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: Module type
-let LanguageLoader: any = null;
+const _LanguageLoader: any = null;
 
 // --- WASM Grammar Mapping ---
 
@@ -112,37 +115,60 @@ export class TreeSitterClient {
 		const downloadedGrammars = [
 			path.join(process.cwd(), "node_modules", "web-tree-sitter", "grammars"),
 		];
-		
+
 		// Add __dirname-based paths if __dirname is available (CommonJS)
 		if (typeof __dirname !== "undefined") {
 			downloadedGrammars.push(
-				path.join(__dirname, "..", "..", "node_modules", "web-tree-sitter", "grammars"),
-				path.join(__dirname, "..", "node_modules", "web-tree-sitter", "grammars"),
+				path.join(
+					__dirname,
+					"..",
+					"..",
+					"node_modules",
+					"web-tree-sitter",
+					"grammars",
+				),
+				path.join(
+					__dirname,
+					"..",
+					"node_modules",
+					"web-tree-sitter",
+					"grammars",
+				),
 			);
 		}
-		
+
 		for (const dir of downloadedGrammars) {
-			if (fs.existsSync(dir) && fs.existsSync(path.join(dir, "tree-sitter-typescript.wasm"))) {
+			if (
+				fs.existsSync(dir) &&
+				fs.existsSync(path.join(dir, "tree-sitter-typescript.wasm"))
+			) {
 				return dir;
 			}
 		}
-		
+
 		// Fallback to legacy locations
 		const candidates: string[] = [
 			path.join(process.cwd(), "node_modules", "tree-sitter-wasms", "out"),
 		];
-		
+
 		if (typeof __dirname !== "undefined") {
 			candidates.push(
-				path.join(__dirname, "..", "..", "node_modules", "tree-sitter-wasms", "out"),
+				path.join(
+					__dirname,
+					"..",
+					"..",
+					"node_modules",
+					"tree-sitter-wasms",
+					"out",
+				),
 				path.join(__dirname, "..", "node_modules", "tree-sitter-wasms", "out"),
 			);
 		}
-		
+
 		for (const dir of candidates) {
 			if (fs.existsSync(dir)) return dir;
 		}
-		
+
 		// Default to web-tree-sitter/grammars (may need manual download)
 		return downloadedGrammars[0];
 	}
@@ -150,7 +176,7 @@ export class TreeSitterClient {
 	/** Initialize tree-sitter WASM runtime */
 	async init(): Promise<boolean> {
 		if (this.initialized) return true;
-		
+
 		try {
 			const mod = await import("web-tree-sitter");
 			// biome-ignore lint/suspicious/noExplicitAny: Dynamic import of optional dependency
@@ -159,20 +185,32 @@ export class TreeSitterClient {
 				this.dbg("Parser class not found or missing init method");
 				return false;
 			}
-			
+
 			// biome-ignore lint/suspicious/noExplicitAny: Parser class type
 			this.ParserClass = ParserClass as any;
 			// Store Language loader from module (not from Parser)
 			this.LanguageLoader = mod.Language;
-			
+
 			// Log what we're trying to load
-			const wasmPath = path.join(process.cwd(), "node_modules", "web-tree-sitter", "tree-sitter.wasm");
-			this.dbg(`Looking for WASM at: ${wasmPath}, exists: ${fs.existsSync(wasmPath)}`);
-			
+			const wasmPath = path.join(
+				process.cwd(),
+				"node_modules",
+				"web-tree-sitter",
+				"tree-sitter.wasm",
+			);
+			this.dbg(
+				`Looking for WASM at: ${wasmPath}, exists: ${fs.existsSync(wasmPath)}`,
+			);
+
 			await ParserClass.init({
 				locateFile: (scriptName: string) => {
 					// Always return the full path to the WASM file
-					const fullPath = path.join(process.cwd(), "node_modules", "web-tree-sitter", scriptName);
+					const fullPath = path.join(
+						process.cwd(),
+						"node_modules",
+						"web-tree-sitter",
+						scriptName,
+					);
 					this.dbg(`locateFile: ${scriptName} -> ${fullPath}`);
 					return fullPath;
 				},
@@ -188,7 +226,7 @@ export class TreeSitterClient {
 					// Continue anyway - fallbacks will work
 				}
 			}
-			
+
 			this.initialized = true;
 			return true;
 		} catch (err) {
@@ -198,14 +236,16 @@ export class TreeSitterClient {
 	}
 
 	/** Load language grammar */
-	private async loadLanguage(languageId: string): Promise<TreeSitterLanguage | null> {
+	private async loadLanguage(
+		languageId: string,
+	): Promise<TreeSitterLanguage | null> {
 		this.dbg(`Loading language: ${languageId}`);
-		
+
 		if (this.languages.has(languageId)) {
 			this.dbg(`Language ${languageId} already loaded`);
 			return this.languages.get(languageId)!;
 		}
-		
+
 		if (!this.ParserClass) {
 			this.dbg(`ParserClass not initialized`);
 			return null;
@@ -218,8 +258,10 @@ export class TreeSitterClient {
 		}
 
 		const grammarPath = path.join(this.grammarsDir, grammarFile);
-		this.dbg(`Grammar path: ${grammarPath}, exists: ${fs.existsSync(grammarPath)}`);
-		
+		this.dbg(
+			`Grammar path: ${grammarPath}, exists: ${fs.existsSync(grammarPath)}`,
+		);
+
 		if (!fs.existsSync(grammarPath)) {
 			this.dbg(`Grammar file not found: ${grammarPath}`);
 			return null;
@@ -244,7 +286,9 @@ export class TreeSitterClient {
 	}
 
 	/** Get or create parser for a language */
-	private async getParser(languageId: string): Promise<TreeSitterParserInstance | null> {
+	private async getParser(
+		languageId: string,
+	): Promise<TreeSitterParserInstance | null> {
 		if (this.parsers.has(languageId)) {
 			return this.parsers.get(languageId)!;
 		}
@@ -259,7 +303,10 @@ export class TreeSitterClient {
 	}
 
 	/** Parse a file and return the AST tree */
-	async parseFile(filePath: string, languageId: string): Promise<TreeSitterTree | null> {
+	async parseFile(
+		filePath: string,
+		languageId: string,
+	): Promise<TreeSitterTree | null> {
 		this.dbg(`Parsing ${filePath} with language ${languageId}`);
 		const parser = await this.getParser(languageId);
 		if (!parser) {
@@ -295,7 +342,7 @@ export class TreeSitterClient {
 
 	/**
 	 * Search for a structural pattern in files
-	 * 
+	 *
 	 * @param pattern - Pattern with metavariables (e.g., "console.log($MSG)")
 	 * @param languageId - Language ID (typescript, python, etc.)
 	 * @param rootDir - Directory to search
@@ -309,7 +356,7 @@ export class TreeSitterClient {
 		options: {
 			maxResults?: number;
 			fileFilter?: (path: string) => boolean;
-		} = {}
+		} = {},
 	): Promise<StructuralMatch[]> {
 		if (!this.initialized) {
 			const ok = await this.init();
@@ -328,7 +375,7 @@ export class TreeSitterClient {
 		// Collect source files
 		const files = this.collectFiles(rootDir, languageId, options.fileFilter);
 		this.dbg(`Scanning ${files.length} files...`);
-		
+
 		const matches: StructuralMatch[] = [];
 		const maxResults = options.maxResults ?? 50;
 
@@ -336,13 +383,13 @@ export class TreeSitterClient {
 			if (matches.length >= maxResults) break;
 
 			const fileMatches = await this.searchFileWithQuery(
-				file, 
-				compiled.query, 
-				compiled.metavars, 
+				file,
+				compiled.query,
+				compiled.metavars,
 				languageId,
 				pattern,
 				compiled.postFilter,
-				compiled.postFilterParams
+				compiled.postFilterParams,
 			);
 			matches.push(...fileMatches);
 		}
@@ -354,9 +401,12 @@ export class TreeSitterClient {
 	 * Convert pattern to tree-sitter query
 	 * First tries to load from query files, then falls back to inline patterns
 	 */
-	private patternToQuery(pattern: string, languageId: string): { 
-		query: string; 
-		metavars: string[]; 
+	private patternToQuery(
+		pattern: string,
+		languageId: string,
+	): {
+		query: string;
+		metavars: string[];
 		postFilter?: string;
 		// biome-ignore lint/suspicious/noExplicitAny: Post filter params
 		postFilterParams?: any;
@@ -364,7 +414,7 @@ export class TreeSitterClient {
 	} {
 		// Try to find matching query from loaded files
 		const loadedQuery = this.queryLoader.findMatchingQuery(pattern, languageId);
-		
+
 		if (loadedQuery) {
 			this.dbg(`Using loaded query: ${loadedQuery.id}`);
 			return {
@@ -372,20 +422,20 @@ export class TreeSitterClient {
 				metavars: loadedQuery.metavars,
 				postFilter: loadedQuery.post_filter,
 				postFilterParams: loadedQuery.post_filter_params,
-				queryDef: loadedQuery
+				queryDef: loadedQuery,
 			};
 		}
-		
+
 		// Fallback to inline patterns
 		return this.getInlinePattern(pattern);
 	}
-	
+
 	/**
 	 * Inline patterns as fallback when no query file matches
 	 */
-	private getInlinePattern(pattern: string): { 
-		query: string; 
-		metavars: string[]; 
+	private getInlinePattern(pattern: string): {
+		query: string;
+		metavars: string[];
 		postFilter?: string;
 		// biome-ignore lint/suspicious/noExplicitAny: Post filter params
 		postFilterParams?: any;
@@ -398,10 +448,10 @@ export class TreeSitterClient {
 					name: (identifier) @NAME
 					parameters: (formal_parameters) @PARAMS
 					body: (statement_block) @BODY)`,
-				metavars: ["NAME", "PARAMS", "BODY"]
+				metavars: ["NAME", "PARAMS", "BODY"],
 			};
 		}
-		
+
 		// Pattern: console.$METHOD($MSG)
 		if (pattern.includes("console")) {
 			return {
@@ -410,10 +460,10 @@ export class TreeSitterClient {
 						object: (identifier) @OBJ (#eq? @OBJ "console")
 						property: (property_identifier) @METHOD)
 					arguments: (arguments) @ARGS)`,
-				metavars: ["OBJ", "METHOD", "ARGS"]
+				metavars: ["OBJ", "METHOD", "ARGS"],
 			};
 		}
-		
+
 		// Pattern: function $NAME($$$PARAMS) { $BODY } - match long parameter lists
 		if (pattern.includes("function $NAME") && pattern.includes("PARAMS")) {
 			return {
@@ -423,10 +473,10 @@ export class TreeSitterClient {
 					body: (statement_block) @BODY)`,
 				metavars: ["NAME", "PARAMS", "BODY"],
 				postFilter: "count_params",
-				postFilterParams: { min_params: 6 }
+				postFilterParams: { min_params: 6 },
 			};
 		}
-		
+
 		// Pattern: promise chains with .then().catch().then() - 3+ levels
 		if (pattern.includes(".then") && pattern.includes(".catch")) {
 			return {
@@ -445,20 +495,20 @@ export class TreeSitterClient {
 					(#match? @M1 "^(then|catch)$")
 					(#match? @M2 "^(then|catch)$")
 					(#match? @M3 "^(then|catch)$")`,
-				metavars: ["M1", "M2", "M3"]
+				metavars: ["M1", "M2", "M3"],
 			};
 		}
-		
+
 		// Fallback: try to create a simple identifier capture
 		const simpleMatch = pattern.match(/\$([A-Z_][A-Z0-9_]*)/);
 		if (simpleMatch) {
 			const name = simpleMatch[1];
 			return {
 				query: `(identifier) @${name}`,
-				metavars: [name]
+				metavars: [name],
 			};
 		}
-		
+
 		// If we can't convert, return empty to trigger fallback
 		return { query: "", metavars: [] };
 	}
@@ -466,17 +516,27 @@ export class TreeSitterClient {
 	/** Compile a pattern into a tree-sitter Query */
 	private async compileQuery(
 		pattern: string,
-		languageId: string
-	): Promise<{ query: any; metavars: string[]; postFilter?: string; postFilterParams?: unknown } | null> {
+		languageId: string,
+	): Promise<{
+		query: any;
+		metavars: string[];
+		postFilter?: string;
+		postFilterParams?: unknown;
+	} | null> {
 		const language = await this.loadLanguage(languageId);
 		if (!language) {
 			this.dbg(`Could not load language ${languageId}`);
 			return null;
 		}
 
-		const { query: queryStr, metavars, postFilter, postFilterParams } = this.patternToQuery(pattern, languageId);
+		const {
+			query: queryStr,
+			metavars,
+			postFilter,
+			postFilterParams,
+		} = this.patternToQuery(pattern, languageId);
 		this.dbg(`Query string: ${queryStr.slice(0, 100)}...`);
-		
+
 		try {
 			// biome-ignore lint/suspicious/noExplicitAny: Query constructor
 			const Query = (await import("web-tree-sitter")).Query;
@@ -497,23 +557,23 @@ export class TreeSitterClient {
 		query: any,
 		metavars: string[],
 		languageId: string,
-		originalPattern?: string,
+		_originalPattern?: string,
 		postFilter?: string,
 		// biome-ignore lint/suspicious/noExplicitAny: Post filter params
-		postFilterParams?: any
+		postFilterParams?: any,
 	): Promise<StructuralMatch[]> {
 		const tree = await this.parseFile(filePath, languageId);
 		if (!tree) return [];
 
 		const matches: StructuralMatch[] = [];
-		
+
 		try {
 			// Use tree-sitter's native query matching
 			const queryMatches = query.matches(tree.rootNode);
-			
+
 			for (const match of queryMatches) {
 				const captures: Record<string, TreeSitterNode> = {};
-				
+
 				// Extract captured metavariables (store nodes, not just text)
 				for (const capture of match.captures) {
 					const name = capture.name;
@@ -522,47 +582,61 @@ export class TreeSitterClient {
 						captures[name] = node;
 					}
 				}
-				
+
 				// Apply post-filters if specified
 				if (postFilter === "count_params") {
-					const paramsNode = captures["PARAMS"];
+					const paramsNode = captures.PARAMS;
 					if (paramsNode) {
 						// biome-ignore lint/suspicious/noExplicitAny: Count parameter nodes
-						const paramCount = paramsNode.children.filter((c: any) => 
-							c.type === "required_parameter" || c.type === "optional_parameter"
+						const paramCount = paramsNode.children.filter(
+							(c: any) =>
+								c.type === "required_parameter" ||
+								c.type === "optional_parameter",
 						).length;
 						const minParams = postFilterParams?.min_params || 6;
 						if (paramCount < minParams) continue;
 					}
 				}
-				
+
 				if (postFilter === "empty_body") {
-					const bodyNode = captures["BODY"];
+					const bodyNode = captures.BODY;
 					if (bodyNode) {
 						// Check if body has meaningful statements (not just comments/braces)
 						// biome-ignore lint/suspicious/noExplicitAny: Check for meaningful statements
-						const meaningfulStatements = bodyNode.children.filter((c: any) => 
-							c.isNamed && 
-							c.type !== "comment" && 
-							c.type !== "line_comment" &&
-							c.type !== "block_comment"
+						const meaningfulStatements = bodyNode.children.filter(
+							(c: any) =>
+								c.isNamed &&
+								c.type !== "comment" &&
+								c.type !== "line_comment" &&
+								c.type !== "block_comment",
 						);
 						if (meaningfulStatements.length > 0) continue;
 					}
 				}
-				
+
 				if (postFilter === "bare_except_only") {
-					const clauseNode = captures["CLAUSE"];
+					const clauseNode = captures.CLAUSE;
 					if (clauseNode) {
 						// Check if this is a bare except (no identifier after except)
 						// biome-ignore lint/suspicious/noExplicitAny: Check for identifier
-						const hasIdentifier = clauseNode.children.some((c: any) => 
-							c.isNamed && c.type === "identifier"
+						const hasIdentifier = clauseNode.children.some(
+							(c: any) => c.isNamed && c.type === "identifier",
 						);
 						if (hasIdentifier) continue; // Skip if has identifier (not bare)
 					}
 				}
-				
+
+				if (postFilter === "has_mixed_async") {
+					const bodyNode = captures.BODY;
+					if (bodyNode) {
+						const bodyText = bodyNode.text;
+						// Check if body contains both await AND .then(
+						const hasAwait = bodyText.includes("await");
+						const hasThen = /\.\s*then\s*\(/.test(bodyText);
+						if (!hasAwait || !hasThen) continue; // Skip if not mixed
+					}
+				}
+
 				// Use first capture for position info
 				if (match.captures.length > 0) {
 					const firstNode = match.captures[0].node;
@@ -580,14 +654,16 @@ export class TreeSitterClient {
 					});
 				}
 			}
-			
+
 			if (matches.length > 0) {
-				this.dbg(`Found ${matches.length} matches in ${path.basename(filePath)}`);
+				this.dbg(
+					`Found ${matches.length} matches in ${path.basename(filePath)}`,
+				);
 			}
 		} catch (err) {
 			this.dbg(`Query matching error: ${err}`);
 		}
-		
+
 		return matches;
 	}
 
@@ -595,11 +671,11 @@ export class TreeSitterClient {
 	private collectFiles(
 		dir: string,
 		languageId: string,
-		fileFilter?: (path: string) => boolean
+		fileFilter?: (path: string) => boolean,
 	): string[] {
 		const files: string[] = [];
 		const extensions = this.getExtensionsForLanguage(languageId);
-		
+
 		const scan = (d: string) => {
 			try {
 				const entries = fs.readdirSync(d, { withFileTypes: true });
@@ -608,7 +684,7 @@ export class TreeSitterClient {
 					if (entry.isDirectory()) {
 						if (EXCLUDED_DIRS.includes(entry.name)) continue;
 						scan(full);
-					} else if (extensions.some(ext => entry.name.endsWith(ext))) {
+					} else if (extensions.some((ext) => entry.name.endsWith(ext))) {
 						if (!fileFilter || fileFilter(full)) {
 							files.push(full);
 						}
@@ -616,7 +692,7 @@ export class TreeSitterClient {
 				}
 			} catch {}
 		};
-		
+
 		scan(dir);
 		return files;
 	}
@@ -642,7 +718,12 @@ export class TreeSitterClient {
 // --- Pattern Node Types ---
 
 type PatternNode =
-	| { kind: "literal"; nodeType: string; text?: string; children: PatternNode[] }
+	| {
+			kind: "literal";
+			nodeType: string;
+			text?: string;
+			children: PatternNode[];
+	  }
 	| { kind: "single"; name: string }
 	| { kind: "variadic"; name: string };
 
@@ -655,7 +736,7 @@ type PatternNode =
 export function regexStructuralSearch(
 	pattern: string,
 	files: string[],
-	options: { maxResults?: number } = {}
+	options: { maxResults?: number } = {},
 ): StructuralMatch[] {
 	const matches: StructuralMatch[] = [];
 	const maxResults = options.maxResults ?? 50;

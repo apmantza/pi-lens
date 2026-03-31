@@ -1,0 +1,54 @@
+# Deep Nesting
+# Detects functions with 3+ levels of if-statement nesting
+id: deep-nesting
+name: Deep Nesting
+severity: warning
+category: complexity
+language: typescript
+
+message: "Deep nesting (3+ levels) — consider early returns or extract functions"
+
+description: |
+  Deeply nested code is hard to read and test. Flatten by:
+  1. Using early returns (guard clauses)
+  2. Extracting nested logic into separate functions
+  3. Inverting conditions to reduce nesting
+
+query: |
+  (statement_block
+    (if_statement
+      consequence: (statement_block
+        (if_statement
+          consequence: (statement_block
+            (if_statement
+              consequence: (statement_block) @INNER)))))))
+
+metavars:
+  - INNER
+
+tags:
+  - complexity
+  - readability
+  - best-practice
+
+examples:
+  bad: |
+    function process(user) {
+      if (user) {
+        if (user.active) {
+          if (user.permissions) {  // 3 levels deep!
+            return doSomething();
+          }
+        }
+      }
+    }
+  
+  good: |
+    function process(user) {
+      if (!user) return null;
+      if (!user.active) return null;
+      if (!user.permissions) return null;
+      return doSomething();
+    }
+
+has_fix: false

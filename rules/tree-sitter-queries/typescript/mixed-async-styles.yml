@@ -1,0 +1,49 @@
+# Mixed Async Styles
+# Detects mixing async/await with promise chains in the same function
+id: mixed-async-styles
+name: Mixed Async/Await and Promise Chains
+severity: warning
+category: style
+language: typescript
+
+message: "Mixed async/await + promise chains — use consistent async style"
+
+description: |
+  Mixing async/await with .then()/.catch() chains in the same function
+  is confusing and inconsistent. Choose one style per function.
+  
+  ✅ FIXES:
+  1. Convert all to async/await (preferred)
+  2. Convert all to promise chains (if needed for specific control flow)
+
+query: |
+  (function_declaration
+    (async_modifier)
+    body: (statement_block) @BODY)
+
+# Post-filter: Check if body contains both await and .then()
+post_filter: has_mixed_async
+
+metavars:
+  - BODY
+
+tags:
+  - style
+  - async
+  - consistency
+
+examples:
+  bad: |
+    async function getUser() {
+      const response = await fetch('/api/user');
+      return response.json().then(data => data.name); // Mixed!
+    }
+  
+  good: |
+    async function getUser() {
+      const response = await fetch('/api/user');
+      const data = await response.json(); // Consistent async/await
+      return data.name;
+    }
+
+has_fix: false
