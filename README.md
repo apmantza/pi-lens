@@ -29,7 +29,7 @@ pi --no-autoformat
 # Full LSP mode (31 language servers)
 pi --lens-lsp
 
-# Fastest mode (LSP + concurrent execution)
+# Fastest mode (LSP + concurrent execution) (Experimental)
 pi --lens-lsp --lens-effect
 ```
 
