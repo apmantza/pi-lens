@@ -5,26 +5,13 @@
  */
 
 import { safeSpawn } from "../../safe-spawn.js";
-import { createBiomeParser } from "./utils/diagnostic-parsers.js";
 import type {
 	DispatchContext,
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-
-// Cache biome availability check
-let biomeAvailable: boolean | null = null;
-
-function isBiomeAvailable(): boolean {
-	if (biomeAvailable !== null) return biomeAvailable;
-
-	// Check if biome CLI is available (do NOT auto-install via npx)
-	const check = safeSpawn("biome", ["--version"], {
-		timeout: 5000,
-	});
-	biomeAvailable = !check.error && check.status === 0;
-	return biomeAvailable;
-}
+import { createBiomeParser } from "./utils/diagnostic-parsers.js";
+import { biome } from "./utils/runner-helpers.js";
 
 const biomeRunner: RunnerDefinition = {
 	id: "biome-lint",
@@ -33,9 +20,21 @@ const biomeRunner: RunnerDefinition = {
 	enabledByDefault: true,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		// Skip if biome is not installed
-		if (!isBiomeAvailable()) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+		// Check if biome is available (via PATH, venv, or npx)
+		let cmd = biome.getCommand();
+		let useNpx = false;
+
+		if (!cmd || !biome.isAvailable(ctx.cwd)) {
+			// Try npx as fallback
+			const npxCheck = safeSpawn("npx", ["biome", "--version"], {
+				timeout: 5000,
+			});
+			if (!npxCheck.error && npxCheck.status === 0) {
+				cmd = "npx";
+				useNpx = true;
+			} else {
+				return { status: "skipped", diagnostics: [], semantic: "none" };
+			}
 		}
 
 		// IMPORTANT: Never use --write in dispatch runner to prevent infinite loops.
@@ -43,9 +42,11 @@ const biomeRunner: RunnerDefinition = {
 		// call dispatchLint again, creating a feedback loop.
 		// Use /lens-format command for explicit formatting, or autofix flags on
 		// the write/edit tools directly.
-		const args = ["check", ctx.filePath];
+		const args = useNpx
+			? ["biome", "check", ctx.filePath]
+			: ["check", ctx.filePath];
 
-		const result = safeSpawn("biome", args, {
+		const result = safeSpawn(cmd, args, {
 			timeout: 30000,
 		});
 
