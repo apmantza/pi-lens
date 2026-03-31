@@ -219,8 +219,13 @@ export async function dispatchForFile(
 
 			allDiagnostics.push(...diagnostics);
 
-			// Check for blockers
-			if (semantic === "blocking" && diagnostics.length > 0) {
+			// Check for blockers - use result semantic (not group default) and check individual diagnostics
+			const resultSemantic = result.semantic ?? semantic;
+			if (resultSemantic === "blocking" && diagnostics.length > 0) {
+				stopped = true;
+			}
+			// Also check if any individual diagnostic is blocking
+			if (diagnostics.some((d) => d.semantic === "blocking")) {
 				stopped = true;
 			}
 		}

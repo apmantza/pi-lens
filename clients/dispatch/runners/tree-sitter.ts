@@ -5,6 +5,7 @@
  * for fast AST-based pattern matching.
  */
 
+import path from "node:path";
 import { TreeSitterClient } from "../../tree-sitter-client.js";
 import { queryLoader } from "../../tree-sitter-query-loader.js";
 import type {
@@ -53,6 +54,11 @@ const treeSitterRunner: RunnerDefinition = {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
+		// Load queries if not already loaded
+		if (!queryLoader.getAllQueries().length) {
+			await queryLoader.loadQueries();
+		}
+
 		// Get all loaded queries for this language
 		const allQueries = queryLoader.getAllQueries();
 		const languageQueries = allQueries.filter(
@@ -70,10 +76,8 @@ const treeSitterRunner: RunnerDefinition = {
 		// Run each query against the file
 		for (const query of languageQueries) {
 			try {
-				// Extract directory from file path
-				const lastSlash = filePath.lastIndexOf("/");
-				const rootDir =
-					lastSlash >= 0 ? filePath.substring(0, lastSlash + 1) : ".";
+				// Extract directory from file path (use path.dirname for cross-platform)
+				const rootDir = path.dirname(filePath);
 
 				const matches = await client.structuralSearch(
 					query.id, // Use query ID as pattern (findMatchingQuery will resolve it)
