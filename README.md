@@ -231,17 +231,17 @@ pi-lens uses a **dispatcher-runner architecture** for extensible multi-language 
 
 **Tree-sitter runner patterns** (priority 14, AST-based structural analysis):
 
-TypeScript/JavaScript (10 patterns):
+TypeScript/JavaScript (12 patterns):
 - 🔴 **Error**: empty-catch, hardcoded-secrets, eval
-- 🟡 **Warning**: debugger, await-in-loop, console-statement, long-parameter-list, nested-ternary, deep-promise-chain
+- 🟡 **Warning**: debugger, await-in-loop, console-statement, long-parameter-list, nested-ternary, deep-promise-chain, mixed-async-styles, deep-nesting
 
 Python (6 patterns):
 - 🔴 **Error**: bare-except, mutable-default-arg, eval-exec, unreachable-except  
 - 🟡 **Warning**: wildcard-import, is-vs-equals
 
-**Note:** Two patterns from the old hardcoded checks (mixed async/await + .then(), deep nesting 3+ levels) are not yet in YAML files. These can be added to `rules/tree-sitter-queries/typescript/`.
-
 **Custom tree-sitter queries:** Add `.yml` files to `.pi-lens/rules/tree-sitter-queries/{typescript,python}/`
+
+**AI Slop Detection:** The `python-slop` runner (priority 25) detects low-quality patterns in Python code (~40 patterns). TypeScript/JavaScript slop detection is integrated into `ast-grep-napi` runner.
 
 #### Custom ast-grep Rules
 
@@ -376,15 +376,6 @@ pi-lens calculates comprehensive code quality metrics for every source file:
 **Usage:**
 - `/lens-booboo` — Shows complexity table for all files
 - `tool_result` — Complexity tracked per file, AI slop warnings inline
-
----
-
-### Delta-mode feedback
-
-All runners operate in **delta mode**:
-- **First write/edit:** Full scan, all issues tracked
-- **Subsequent edits:** Only **NEW** issues shown (pre-existing issues filtered out)
-- **Goal:** Reduce noise — don't spam agent with issues they didn't cause
 
 ---
 
@@ -703,36 +694,6 @@ pi                               # Default: auto-format, auto-fix, built-in type
 pi --lens-lsp                    # LSP type-checking (31 languages)
 pi --lens-lsp --lens-effect      # LSP + concurrent execution (fastest)
 ```
-
----
-
-## Slop Detection
-
-pi-lens detects "AI slop" — low-quality patterns common in AI-generated code:
-
-### TypeScript/JavaScript Slop Rules (30+)
-
-| Rule | Description |
-|------|-------------|
-| `ts-for-index-length` | `for (let i=0; i<arr.length; i++)` → prefer `for...of` |
-| `ts-empty-array-check` | `arr.length === 0` → prefer `!arr.length` |
-| `ts-unnecessary-array-isarray` | Redundant `Array.isArray()` checks |
-| `ts-redundant-filter-map` | `.filter().map()` chains → use `flatMap` |
-| `ts-double-negation` | `!!value` → prefer `Boolean(value)` |
-| `ts-unnecessary-array-from` | `Array.from(iterable)` in for-of |
-| `no-default-export` | Prefer named exports |
-
-### Python Slop Rules (40+)
-
-| Rule | Description |
-|------|-------------|
-| `py-chained-comparison` | `a < b and b < c` → `a < b < c` |
-| `py-manual-min-max` | Manual min/max loops → `min()`/`max()` |
-| `py-redundant-if-else` | Unnecessary if/else blocks |
-| `py-list-comprehension` | Filter/map loops → list comprehensions |
-| `py-unnecessary-else` | Else after return/raise |
-
-*Note: Some rules disabled due to false positives (e.g., `ts-for-index-length`, `ts-unnecessary-array-isarray`)*
 
 ---
 
