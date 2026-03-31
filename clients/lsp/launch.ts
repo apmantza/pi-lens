@@ -1,14 +1,18 @@
 /**
  * LSP Process Launch Utilities
- * 
+ *
  * Handles spawning LSP servers via various methods:
  * - Direct binary execution (using absolute paths on Windows)
  * - Node.js scripts (npx/bun)
  * - Package manager execution
  */
 
-import { spawn as nodeSpawn, type SpawnOptions, type ChildProcess } from "child_process";
-import path from "path";
+import {
+	type ChildProcess,
+	spawn as nodeSpawn,
+	type SpawnOptions,
+} from "node:child_process";
+import path from "node:path";
 
 export interface LSPProcess {
 	process: ChildProcess;
@@ -23,12 +27,12 @@ const isWindows = process.platform === "win32";
 
 /**
  * Spawn an LSP server process
- * 
+ *
  * Key fixes for Windows:
  * - Uses absolute paths (relative paths fail in shell mode)
  * - Uses shell: true for .cmd files
  * - Uses windowsHide to prevent console window popup
- * 
+ *
  * @param command - Command to run (e.g., "typescript-language-server")
  * @param args - Arguments (e.g., ["--stdio"])
  * @param options - Spawn options including cwd, env
@@ -37,7 +41,7 @@ const isWindows = process.platform === "win32";
 export function launchLSP(
 	command: string,
 	args: string[] = [],
-	options: SpawnOptions = {}
+	options: SpawnOptions = {},
 ): LSPProcess {
 	const cwd = String(options.cwd ?? process.cwd());
 	const env = { ...process.env, ...options.env };
@@ -46,20 +50,22 @@ export function launchLSP(
 	// - If already absolute, use as-is
 	// - If it's a simple command (no path separators), let system find it via PATH
 	// - Otherwise, resolve relative to cwd
-	const resolvedCommand = path.isAbsolute(command) 
-		? command 
-		: command.includes(path.sep) || command.includes('/')
+	const resolvedCommand = path.isAbsolute(command)
+		? command
+		: command.includes(path.sep) || command.includes("/")
 			? path.resolve(cwd, command)
 			: command; // Let system find it via PATH
 
 	// On Windows with shell: true, we need to quote the command if it has spaces
-	const needsShell = isWindows && (resolvedCommand.includes(" ") || resolvedCommand.includes(".cmd"));
-	
+	const needsShell =
+		isWindows &&
+		(resolvedCommand.includes(" ") || resolvedCommand.includes(".cmd"));
+
 	let proc: ChildProcess;
-	
+
 	if (needsShell) {
 		// Use shell mode with quoted command
-		const shellCommand = `"${resolvedCommand}" ${args.map(a => a.includes(" ") ? `"${a}"` : a).join(" ")}`;
+		const shellCommand = `"${resolvedCommand}" ${args.map((a) => (a.includes(" ") ? `"${a}"` : a)).join(" ")}`;
 		proc = nodeSpawn(shellCommand, [], {
 			cwd,
 			env,
@@ -83,6 +89,11 @@ export function launchLSP(
 		throw new Error(`Failed to spawn LSP server: ${command}`);
 	}
 
+	// Attach error handler to prevent unhandled 'error' events when process fails to spawn
+	proc.on("error", (_err) => {
+		// Error is already logged by the caller (spawnClient), just prevent crash
+	});
+
 	return {
 		process: proc,
 		stdin: proc.stdin,
@@ -98,23 +109,27 @@ export function launchLSP(
 export function launchViaPackageManager(
 	packageName: string,
 	args: string[] = [],
-	options: SpawnOptions = {}
+	options: SpawnOptions = {},
 ): LSPProcess {
 	// Prefer bun if available, fall back to npx (use .cmd on Windows)
 	const isWin = process.platform === "win32";
-	
+
 	if (process.env.BUN_INSTALL) {
-		return launchLSP(isWin ? "bun.exe" : "bun", ["x", packageName, ...args], options);
+		return launchLSP(
+			isWin ? "bun.exe" : "bun",
+			["x", packageName, ...args],
+			options,
+		);
 	}
-	
+
 	// For npx on Windows, use shell mode with the full command string
 	if (isWin) {
-		const argsStr = args.map(a => a.includes(" ") ? `"${a}"` : a).join(" ");
-		const shellCommand = `npx -y ${packageName}${argsStr ? " " + argsStr : ""}`;
-		
+		const argsStr = args.map((a) => (a.includes(" ") ? `"${a}"` : a)).join(" ");
+		const shellCommand = `npx -y ${packageName}${argsStr ? ` ${argsStr}` : ""}`;
+
 		const cwd = String(options.cwd ?? process.cwd());
 		const env = { ...process.env, ...options.env };
-		
+
 		const proc = nodeSpawn(shellCommand, [], {
 			cwd,
 			env,
@@ -123,7 +138,7 @@ export function launchViaPackageManager(
 			windowsHide: true,
 			shell: true,
 		});
-		
+
 		return {
 			process: proc,
 			stdin: proc.stdin!,
@@ -132,7 +147,7 @@ export function launchViaPackageManager(
 			pid: proc.pid ?? 0,
 		};
 	}
-	
+
 	return launchLSP("npx", ["-y", packageName, ...args], options);
 }
 
@@ -142,7 +157,7 @@ export function launchViaPackageManager(
 export function launchViaNode(
 	scriptPath: string,
 	args: string[] = [],
-	options: SpawnOptions = {}
+	options: SpawnOptions = {},
 ): LSPProcess {
 	return launchLSP(process.execPath, [scriptPath, ...args], options);
 }
@@ -153,7 +168,7 @@ export function launchViaNode(
 export function launchViaPython(
 	moduleName: string,
 	args: string[] = [],
-	options: SpawnOptions = {}
+	options: SpawnOptions = {},
 ): LSPProcess {
 	// On Windows, prefer 'py' launcher, fall back to 'python'
 	const pythonCmd = process.platform === "win32" ? "py" : "python3";
