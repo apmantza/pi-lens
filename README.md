@@ -205,8 +205,8 @@ pi-lens uses a **dispatcher-runner architecture** for extensible multi-language 
 | **biome** | TS/JS | 10 | Warning | Linting issues (delta-tracked) |
 | **ruff** | Python | 10 | Warning | Python linting (delta-tracked) |
 | **oxlint** | TS/JS | 12 | Warning | Fast Rust-based JS/TS linter |
-| **tree-sitter** | TS/JS, Python | 14 | Mixed | AST-based structural analysis (21 patterns) |
-| **ast-grep-napi** | TS/JS | 15 | — | **Disabled by default** — causes random crashes in realtime dispatch. Full linter uses CLI ast-grep. |
+| **tree-sitter** | TS/JS, Python | 14 | Mixed | AST-based structural analysis (21 patterns) — **singleton WASM client** |
+| **ast-grep-napi** | TS/JS | 15 | — | **Disabled by default** — heavy; use `/lens-booboo` for full analysis |
 | **type-safety** | TS | 20 | Mixed | Switch exhaustiveness (blocking), other (warning) |
 | **shellcheck** | Shell | 20 | Warning | Bash/sh/zsh/fish linting |
 | **python-slop** | Python | 25 | Warning | AI slop detection (~40 patterns) |
@@ -491,7 +491,7 @@ pi-lens works out of the box for TypeScript/JavaScript. For full language suppor
 | `--lens-effect` | Run all runners **concurrently** (faster) instead of sequentially (Experimental) |
 | `--lens-verbose` | Enable detailed console logging |
 | `--no-autoformat` | Disable automatic formatting (formatting is **enabled by default**) |
-| `--no-autofix` | Disable all auto-fixing (Biome + Ruff autofix is **enabled by default**) |
+| `--no-autofix` | Disable all auto-fixing (Biome safe fixes + Ruff autofix **enabled by default**). Unsafe fixes (e.g. removing unused vars) are never applied automatically — use `/lens-booboo` with explicit confirmation. |
 | `--no-autofix-biome` | Disable Biome auto-fix only |
 | `--no-autofix-ruff` | Disable Ruff auto-fix only |
 | `--no-oxlint` | Skip Oxlint linting |

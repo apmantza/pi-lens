@@ -2,6 +2,49 @@
 
 All notable changes to pi-lens will be documented in this file.
 
+## [3.1.3] - 2026-04-02
+
+### Fixed
+- **Biome autofix: removed `--unsafe` flag** — `--unsafe` silently deleted unused variables
+  and interfaces, removing code the agent was mid-way through writing (e.g. a new interface
+  not yet wired up). Only safe fixes (`--write`) are now applied automatically on every write.
+  Unsafe fixes require explicit opt-in.
+- **Tree-sitter WASM crash on concurrent writes** — The tree-sitter runner was creating a
+  `new TreeSitterClient()` on every post-write event. Each construction re-invoked
+  `Parser.init()` → `C._ts_init()`, which resets the module-level `TRANSFER_BUFFER` pointer
+  used by all active WASM operations. Concurrent writes (fast multi-file edits) raced on
+  `_ts_init()` and corrupted shared WASM state → process crash. Fixed with a module-level
+  singleton (`getSharedClient()`). Also fixes the secondary bug where each fresh client had
+  an empty internal `queryLoader`, making the tree-sitter runner a silent no-op.
+- **`blockingOnly` missing in bus/effect dispatchers** — `dispatchLintWithBus` and
+  `dispatchLintWithEffect` were not passing `blockingOnly: true` to `createDispatchContext`,
+  causing warning-level runners to execute on every write when `--lens-bus` or `--lens-effect`
+  was active. Now consistent with the standard `dispatchLint` behaviour.
+- **Async `when` condition silently ignored in bus dispatcher** — `dispatchConcurrent` was
+  filtering runners with `.filter(r => r.when ? r.when(ctx) : true)`. Since `r.when(ctx)`
+  returns `Promise<boolean>`, a truthy promise object was always passing the filter regardless
+  of the actual condition. The check is now awaited properly inside `runRunner()`.
+
+### Performance
+- **Biome: local binary instead of npx** — `BiomeClient` now resolves
+  `node_modules/.bin/biome.cmd` (Windows) or `node_modules/.bin/biome` before falling back
+  to `npx @biomejs/biome`. Eliminates ~1 s npx startup overhead per invocation.
+  Result: `checkFile` 1029 ms → **176 ms**, `fixFile` 2012 ms → **158 ms**.
+- **Biome: eliminated redundant pre-flight `checkFile` in `fixFile`** — `fixFile` was calling
+  `checkFile` (a full `biome check --reporter=json`) solely to count fixable issues for
+  logging, then running `biome check --write` anyway. The count is now derived from the
+  content diff (`changed ? 1 : 0`), saving one full biome invocation per write.
+  Combined with the format phase, biome now runs at most **2×** per write (format + fix)
+  instead of 3×.
+- **TypeScript pre-write check: halved `getSemanticDiagnostics` calls** — `getAllCodeFixes()`
+  was calling `getDiagnostics()` internally, but `index.ts` also called `getDiagnostics()`
+  immediately before it — running the full TypeScript semantic analysis twice per pre-write
+  event (~1.2 s each on a 1700-line file). `getAllCodeFixes` now accepts an optional
+  `precomputedDiags` parameter; `index.ts` passes the already-computed result.
+  `ts_pre_check` latency: ~2400 ms → **~1200 ms**.
+
+---
+
 ## [3.1.1] - 2026-04-01
 
 ### Added
