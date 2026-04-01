@@ -1053,7 +1053,8 @@ export default function (pi: ExtensionAPI) {
 			const tsPreCheckStart = Date.now();
 			tsClient.updateFile(filePath, nodeFs.readFileSync(filePath, "utf-8"));
 			const diags = tsClient.getDiagnostics(filePath);
-			const fixes = tsClient.getAllCodeFixes(filePath);
+			// Pass pre-computed diags to avoid a second getSemanticDiagnostics call (~1s on large files)
+			const fixes = tsClient.getAllCodeFixes(filePath, diags);
 			const errorDiags = diags.filter((d) => d.severity === 1);
 			if (errorDiags.length > 0) {
 				hints.push(

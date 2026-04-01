@@ -617,7 +617,14 @@ export class TypeScriptClient {
 	 * Get all quick fixes for all diagnostics in a file.
 	 * Returns a map of diagnostic line → fixes.
 	 */
-	getAllCodeFixes(filePath: string): Map<
+	/**
+	 * Accept pre-computed diagnostics to avoid a second getSemanticDiagnostics call
+	 * when the caller already has them (saves ~1–2s on large files).
+	 */
+	getAllCodeFixes(
+		filePath: string,
+		precomputedDiags?: Diagnostic[],
+	): Map<
 		number,
 		Array<{
 			description: string;
@@ -644,7 +651,7 @@ export class TypeScriptClient {
 			}>
 		>();
 
-		const diagnostics = this.getDiagnostics(filePath);
+		const diagnostics = precomputedDiags ?? this.getDiagnostics(filePath);
 		for (const diag of diagnostics) {
 			if (diag.severity !== 1 || diag.code === undefined) continue;
 			const fixes = this.getCodeFixes(

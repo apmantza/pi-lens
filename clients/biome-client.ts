@@ -42,6 +42,7 @@ interface BiomeJsonDiagnostic {
 
 export class BiomeClient {
 	private biomeAvailable: boolean | null = null;
+	private localBinaryPath: string | null = null;
 	private log: (msg: string) => void;
 
 	constructor(verbose = false) {
@@ -51,15 +52,50 @@ export class BiomeClient {
 	}
 
 	/**
+	 * Resolve the fastest available biome binary.
+	 * Prefers local node_modules/.bin/biome (skip npx overhead ~1s).
+	 * Falls back to global biome, then npx.
+	 */
+	private getBiomeBinary(): { cmd: string; args: string[] } {
+		if (this.localBinaryPath) return { cmd: this.localBinaryPath, args: [] };
+
+		// Walk up from cwd looking for node_modules/.bin/biome.
+		// On Windows prefer .cmd (native batch) over the sh wrapper — 2x faster.
+		const isWin = process.platform === "win32";
+		const candidates = isWin
+			? [
+					path.join(process.cwd(), "node_modules", ".bin", "biome.cmd"),
+					path.join(process.cwd(), "node_modules", ".bin", "biome"),
+				]
+			: [
+					path.join(process.cwd(), "node_modules", ".bin", "biome"),
+					path.join(process.cwd(), "node_modules", ".bin", "biome.cmd"),
+				];
+		for (const p of candidates) {
+			if (fs.existsSync(p)) {
+				this.localBinaryPath = p;
+				return { cmd: p, args: [] };
+			}
+		}
+		// Fallback: npx (slower but works anywhere)
+		return { cmd: "npx", args: ["@biomejs/biome"] };
+	}
+
+	/**
+	 * Spawn biome with the fastest available binary.
+	 */
+	private spawnBiome(args: string[], timeout = 15000) {
+		const { cmd, args: prefix } = this.getBiomeBinary();
+		return safeSpawn(cmd, [...prefix, ...args], { timeout });
+	}
+
+	/**
 	 * Check if biome CLI is available
 	 */
 	isAvailable(): boolean {
 		if (this.biomeAvailable !== null) return this.biomeAvailable;
 
-		// Try npx biome first (works without global install)
-		const result = safeSpawn("npx", ["@biomejs/biome", "--version"], {
-			timeout: 10000,
-		});
+		const result = this.spawnBiome(["--version"], 10000);
 
 		this.biomeAvailable = !result.error && result.status === 0;
 		if (this.biomeAvailable) {
@@ -103,19 +139,12 @@ export class BiomeClient {
 		if (!absolutePath) return [];
 
 		try {
-			const result = safeSpawn(
-				"npx",
-				[
-					"@biomejs/biome",
-					"check",
-					"--reporter=json",
-					"--max-diagnostics=50",
-					absolutePath,
-				],
-				{
-					timeout: 15000,
-				},
-			);
+			const result = this.spawnBiome([
+				"check",
+				"--reporter=json",
+				"--max-diagnostics=50",
+				absolutePath,
+			]);
 
 			// Biome exits 0 on success, 1 on issues found
 			const output = result.stdout || "";
@@ -149,13 +178,7 @@ export class BiomeClient {
 		const content = fs.readFileSync(absolutePath, "utf-8");
 
 		try {
-			const result = safeSpawn(
-				"npx",
-				["@biomejs/biome", "format", "--write", absolutePath],
-				{
-					timeout: 15000,
-				},
-			);
+			const result = this.spawnBiome(["format", "--write", absolutePath]);
 
 			if (result.error) {
 				return { success: false, changed: false, error: result.error.message };
@@ -200,19 +223,9 @@ export class BiomeClient {
 		const content = fs.readFileSync(absolutePath, "utf-8");
 
 		try {
-			// First, count issues before fixing
-			const beforeDiags = this.checkFile(filePath);
-			const fixableCount = beforeDiags.filter((d) => d.fixable).length;
-
-			// Apply safe fixes only — --unsafe removes unused vars/imports which can delete
-			// code the agent is mid-way through writing (e.g. a new interface not yet wired up)
-			const result = safeSpawn(
-				"npx",
-				["@biomejs/biome", "check", "--write", absolutePath],
-				{
-					timeout: 15000,
-				},
-			);
+			// Single invocation: check --write applies safe formatting + lint fixes.
+			// No pre-flight checkFile() needed — content diff tells us if anything changed.
+			const result = this.spawnBiome(["check", "--write", absolutePath]);
 
 			if (result.error) {
 				return {
@@ -227,12 +240,10 @@ export class BiomeClient {
 			const changed = content !== fixed;
 
 			if (changed) {
-				this.log(
-					`Fixed ${fixableCount} issue(s) in ${path.basename(filePath)}`,
-				);
+				this.log(`Fixed issue(s) in ${path.basename(filePath)}`);
 			}
 
-			return { success: true, changed, fixed: fixableCount };
+			return { success: true, changed, fixed: changed ? 1 : 0 };
 		} catch (err) {
 			return {
 				success: false,
