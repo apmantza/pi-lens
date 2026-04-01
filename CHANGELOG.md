@@ -2,6 +2,18 @@
 
 All notable changes to pi-lens will be documented in this file.
 
+## [3.2.0] - 2026-04-02
+
+### Fixed
+- **LSP server initialization errors** — Fixed `workspaceFolders` capability format that caused gopls and rust-analyzer to crash with JSON RPC parse errors. Changed from object `{supported: true, changeNotifications: true}` to simple boolean `true` for broader compatibility.
+- **Formatter cwd not passed** — `formatFile` now passes `cwd` to `safeSpawn`, fixing Biome's "nested root configuration" error when formatting files in subdirectories.
+- **LSP runner error handling** — Added try-catch around LSP operations to properly detect and report server spawn/connection failures instead of silently returning empty success.
+
+### Changed
+- **Go/Rust LSP initialization** — Added server-specific initialization options for better compatibility.
+
+---
+
 ## [3.1.3] - 2026-04-02
 
 ### Fixed
