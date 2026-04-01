@@ -182,11 +182,14 @@ export async function launchLSP(
 			: command; // Let system find it via PATH
 
 	// Compute needsShell based on command
-	// On Windows, shell: true is needed to execute extensionless binaries
-	// (the shell resolves typescript-language-server -> typescript-language-server.cmd)
-	const hasExecExtension = /\.(exe|cmd|bat)$/i.test(resolvedCommand);
+	// On Windows, shell: true is needed for .cmd/.bat files and extensionless binaries
+	// .exe files can be spawned directly, but .cmd/.bat require shell interpretation
+	const hasScriptExtension = /\.(cmd|bat)$/i.test(resolvedCommand);
 	let needsShell =
-		isWindows && (resolvedCommand.includes(" ") || !hasExecExtension);
+		isWindows &&
+		(resolvedCommand.includes(" ") ||
+			hasScriptExtension ||
+			!/\.(exe|cmd|bat)$/i.test(resolvedCommand));
 
 	// Try to spawn the process
 	// If command not found, try npm global as fallback (handles PATH caching after install)

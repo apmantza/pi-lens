@@ -213,9 +213,8 @@ const astGrepNapiRunner: RunnerDefinition = {
 	id: "ast-grep-napi",
 	appliesTo: ["jsts"],
 	priority: 15,
-	// DISABLED by default - ast-grep-napi causes random crashes in realtime/post-write.
-	// Full linter (/lens-booboo) uses CLI-based AstGrepClient instead.
-	// Re-enable with --ast-grep-napi flag if stability improves.
+	// Post-write disabled in plan.ts (removed from TOOL_PLANS.jsts.groups).
+	// Still enabled for /lens-booboo via FULL_LINT_PLANS.
 	enabledByDefault: false,
 	skipTestFiles: true,
 

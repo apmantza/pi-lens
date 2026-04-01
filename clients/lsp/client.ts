@@ -279,8 +279,10 @@ export async function createLSPClient(options: {
 
 			async change(filePath, content) {
 				const uri = pathToFileURL(filePath).href;
-				const version = (documentVersions.get(filePath) ?? 0) + 1;
-				documentVersions.set(filePath, version);
+				// Normalize path for Windows case-insensitive lookup
+				const normalizedPath = normalizeMapKey(filePath);
+				const version = (documentVersions.get(normalizedPath) ?? 0) + 1;
+				documentVersions.set(normalizedPath, version);
 
 				await connection.sendNotification("textDocument/didChange", {
 					textDocument: { uri, version },

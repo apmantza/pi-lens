@@ -30,9 +30,8 @@ registerRunner(lspRunner); // Unified LSP type-checking for all languages (prior
 registerRunner(tsLspRunner); // TypeScript type-checking (priority 5) - fallback when --lens-lsp disabled
 registerRunner(pyrightRunner); // Python type-checking (priority 5) - fallback when --lens-lsp disabled
 registerRunner(configValidationRunner); // Config/env validation (priority 8)
-// DISABLED: ast-grep-napi causes random crashes in realtime/post-write dispatch.
-// Full linter (/lens-booboo) uses CLI-based ast-grep instead.
-registerRunner(astGrepNapiRunner); // TS/JS structural analysis via NAPI (priority 15, disabled by default)
+// DISABLED in post-write dispatch - ast-grep-napi can crash. Enabled via /lens-booboo plan only.
+registerRunner(astGrepNapiRunner); // TS/JS structural analysis via NAPI (priority 15, post-write disabled)
 registerRunner(biomeRunner); // Biome formatting/linting (priority 10)
 registerRunner(oxlintRunner); // Oxlint fast JS/TS linter (priority 12)
 registerRunner(treeSitterRunner); // Tree-sitter structural analysis (priority 14)

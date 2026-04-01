@@ -18,6 +18,7 @@ import type { FileKind } from "../file-kinds.js";
 import { detectFileKind } from "../file-kinds.js";
 import { isTestFile } from "../file-utils.js";
 import { logLatency } from "../latency-logger.js";
+import { normalizeMapKey } from "../path-utils.js";
 import { safeSpawn } from "../safe-spawn.js";
 import type {
 	BaselineStore,
@@ -40,10 +41,10 @@ export function createBaselineStore(): BaselineStore {
 
 	return {
 		get(filePath) {
-			return baselines.get(filePath);
+			return baselines.get(normalizeMapKey(filePath));
 		},
 		set(filePath, diagnostics) {
-			baselines.set(filePath, diagnostics);
+			baselines.set(normalizeMapKey(filePath), diagnostics);
 		},
 		clear() {
 			baselines.clear();
@@ -124,10 +125,12 @@ export function createDispatchContext(
 	baselines?: BaselineStore,
 	blockingOnly?: boolean,
 ): DispatchContext {
-	const kind = detectFileKind(filePath);
+	// Normalize path for consistent Map key usage on Windows
+	const normalizedFilePath = normalizeMapKey(filePath);
+	const kind = detectFileKind(normalizedFilePath);
 
 	return {
-		filePath,
+		filePath: normalizedFilePath,
 		cwd,
 		kind,
 		pi,
