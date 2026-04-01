@@ -9,19 +9,23 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import type {
 	Diagnostic,
 	DispatchContext,
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+import {
+	calculateRuleComplexity,
+	isStructuredRule,
+	loadYamlRules,
+	MAX_BLOCKING_RULE_COMPLEXITY,
+	type YamlRule,
+	type YamlRuleCondition,
+} from "./yaml-rule-parser.js";
 
 // Lazy load the napi package
 let sg: typeof import("@ast-grep/napi") | undefined;
-let _sgLoadError: Error | undefined;
 let sgLoadAttempted = false;
 
 async function loadSg(): Promise<typeof import("@ast-grep/napi") | undefined> {
@@ -31,61 +35,9 @@ async function loadSg(): Promise<typeof import("@ast-grep/napi") | undefined> {
 	try {
 		sg = await import("@ast-grep/napi");
 		return sg;
-	} catch (err) {
-		_sgLoadError = err instanceof Error ? err : new Error(String(err));
+	} catch {
 		return undefined;
 	}
-}
-
-// --- Rule Caching ---
-// Cache parsed YAML rules to avoid re-parsing on every file edit
-// Separate caches for "all" rules vs "error-only" (blocking) rules
-interface CachedRules {
-	rules: YamlRule[];
-	mtime: number;
-}
-
-const rulesCache = new Map<string, CachedRules>();
-const blockingRulesCache = new Map<string, CachedRules>();
-
-/** Get cached rules or reload if cache is stale */
-function _getCachedRules(
-	ruleDir: string,
-	severityFilter?: "error",
-): YamlRule[] {
-	// Check if directory exists
-	if (!fs.existsSync(ruleDir)) {
-		return [];
-	}
-
-	// Get directory mtime to detect changes
-	let currentMtime = 0;
-	try {
-		const stats = fs.statSync(ruleDir);
-		currentMtime = stats.mtimeMs;
-	} catch {
-		return [];
-	}
-
-	// Use appropriate cache based on filter
-	const cache = severityFilter === "error" ? blockingRulesCache : rulesCache;
-
-	// Check cache
-	const cached = cache.get(ruleDir);
-	if (cached && cached.mtime === currentMtime) {
-		return cached.rules;
-	}
-
-	// Load and cache (with severity filter if specified)
-	const rules = loadYamlRulesUncached(ruleDir, severityFilter);
-	cache.set(ruleDir, { rules, mtime: currentMtime });
-	return rules;
-}
-
-/** Clear rules cache (useful for testing or when rules change) */
-export function clearRulesCache(): void {
-	rulesCache.clear();
-	blockingRulesCache.clear();
 }
 
 // Supported extensions for NAPI
@@ -97,57 +49,17 @@ const MAX_MATCHES_PER_RULE = 10;
 /** Maximum total diagnostics per file to prevent output spam */
 const MAX_TOTAL_DIAGNOSTICS = 50;
 
-/** Threshold for warning about overly broad patterns that match everything */
-const _EXCESSIVE_MATCHES_THRESHOLD = 50;
-
-/** Maximum recursion depth for structured rule execution to prevent stack overflow */
-const _MAX_RECURSION_DEPTH = 10;
-
 /** Maximum AST depth to traverse to prevent stack overflow on deeply nested files */
-const _MAX_AST_DEPTH = 50;
+const MAX_AST_DEPTH = 50;
 
 /** Maximum recursion depth for structured rule execution */
-const _MAX_RULE_DEPTH = 5;
-
-/** Overly broad patterns that match everything (cause false positive explosions) */
-const OVERLY_BROAD_PATTERNS = [
-	"$NAME", // Matches every identifier
-	"$FIELD", // Matches every field access
-	"$_", // Matches every node
-	"$X", // Common catch-all variable
-	"$VAR", // Common catch-all variable
-	"$EXPR", // Common catch-all expression
-];
-
-/** Check if a pattern is overly broad and will cause false positive explosions */
-function isOverlyBroadPattern(pattern: string | undefined): boolean {
-	if (!pattern) return false;
-	// Check exact matches and simple patterns that are just variables
-	if (OVERLY_BROAD_PATTERNS.includes(pattern.trim())) return true;
-	// Check if pattern is just a single meta-variable (starts with $ and has no other content)
-	if (/^\$[A-Z_]+$/i.test(pattern.trim())) return true;
-	return false;
-}
-
-/** Check if a rule condition is valid (not empty) */
-function _isValidCondition(condition: YamlRuleCondition | undefined): boolean {
-	if (!condition) return false;
-	// Check for empty 'all' or 'any' arrays
-	if (condition.all !== undefined && condition.all.length === 0) return false;
-	if (condition.any !== undefined && condition.any.length === 0) return false;
-	// Check for overly broad pattern
-	if (isOverlyBroadPattern(condition.pattern)) return false;
-	return true;
-}
+const MAX_RULE_DEPTH = 5;
 
 function canHandle(filePath: string): boolean {
 	return SUPPORTED_EXTS.includes(path.extname(filePath).toLowerCase());
 }
 
-function getLang(
-	filePath: string,
-	sgModule: typeof import("@ast-grep/napi"),
-): any {
+function getLang(filePath: string, sgModule: typeof import("@ast-grep/napi")) {
 	const ext = path.extname(filePath).toLowerCase();
 	switch (ext) {
 		case ".ts":
@@ -167,350 +79,42 @@ function getLang(
 	}
 }
 
-// YAML rule types
-interface YamlRuleCondition {
-	kind?: string;
-	pattern?: string;
-	regex?: string;
-	has?: YamlRuleCondition;
-	any?: YamlRuleCondition[];
-	all?: YamlRuleCondition[];
-	not?: YamlRuleCondition;
-}
-
-interface YamlRule {
-	id: string;
-	language?: string;
-	severity?: string;
-	message?: string;
-	metadata?: { weight?: number; category?: string };
-	rule?: YamlRuleCondition;
-}
-
-function loadYamlRulesUncached(
-	ruleDir: string,
-	severityFilter?: "error",
-): YamlRule[] {
-	const rules: YamlRule[] = [];
-	if (!fs.existsSync(ruleDir)) return rules;
-
-	const files = fs.readdirSync(ruleDir).filter((f) => f.endsWith(".yml"));
-
-	for (const file of files) {
-		try {
-			const content = fs.readFileSync(path.join(ruleDir, file), "utf-8");
-			// Split by --- to handle multiple YAML documents in one file
-			const documents = content.split(/^---$/m).filter((d) => d.trim());
-
-			for (const doc of documents) {
-				const rule = parseSimpleYaml(doc.trim());
-				if (rule?.id) {
-					// Filter by severity if specified (for blocking-only mode)
-					if (severityFilter && rule.severity !== severityFilter) {
-						continue;
-					}
-					rules.push(rule);
-				}
-			}
-		} catch {
-			// Skip invalid files
-		}
-	}
-
-	return rules;
-}
-
-/** Load rules with caching - use this for production */
-function loadYamlRules(ruleDir: string, severityFilter?: "error"): YamlRule[] {
-	return _getCachedRules(ruleDir, severityFilter);
-}
-
-function parseSimpleYaml(content: string): YamlRule | null {
-	const lines = content.split("\n");
-	const rule: YamlRule = { id: "", metadata: {} };
-	let _currentSection: "root" | "rule" | "metadata" = "root";
-	const sectionStack: Array<{ name: string; indent: number; obj: any }> = [];
-	let multilineBuffer: string[] = [];
-	let multilineKey = "";
-
-	function getCurrentObj(): any {
-		if (sectionStack.length === 0) return rule;
-		return sectionStack[sectionStack.length - 1].obj;
-	}
-
-	function getIndent(line: string): number {
-		let count = 0;
-		for (const char of line) {
-			if (char === " ") count++;
-			else if (char === "\t") count += 2;
-			else break;
-		}
-		return count;
-	}
-
-	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i];
-		const trimmed = line.trim();
-		if (!trimmed || trimmed.startsWith("#")) continue;
-
-		if (trimmed === "---") continue;
-
-		const indent = getIndent(line);
-
-		// Pop stack if indent decreased
-		while (
-			sectionStack.length > 0 &&
-			indent <= sectionStack[sectionStack.length - 1].indent
-		) {
-			sectionStack.pop();
-		}
-
-		// Check for multiline continuation
-		if (line.startsWith(" ") && !trimmed.includes(":") && multilineKey) {
-			multilineBuffer.push(trimmed);
-			continue;
-		}
-
-		// Flush multiline buffer
-		if (multilineKey && multilineBuffer.length > 0) {
-			const value = multilineBuffer.join("\n");
-			const current = getCurrentObj();
-			if (multilineKey === "pattern" && current) {
-				current.pattern = value;
-			}
-			multilineKey = "";
-			multilineBuffer = [];
-		}
-
-		const colonIndex = trimmed.indexOf(":");
-		const key =
-			colonIndex > 0 ? trimmed.substring(0, colonIndex).trim() : trimmed;
-		const value =
-			colonIndex > 0 ? trimmed.substring(colonIndex + 1).trim() : "";
-
-		if (key === "id") {
-			rule.id = value.replace(/^["']|["']$/g, "");
-		} else if (key === "language") {
-			rule.language = value;
-		} else if (key === "severity") {
-			rule.severity = value;
-		} else if (key === "message") {
-			if (value === "|") {
-				multilineKey = "message";
-			} else {
-				rule.message = value.replace(/^["']|["']$/g, "");
-			}
-		} else if (key === "metadata") {
-			_currentSection = "metadata";
-			const newObj = {};
-			rule.metadata = newObj;
-			sectionStack.push({ name: "metadata", indent, obj: newObj });
-		} else if (key === "rule") {
-			_currentSection = "rule";
-			const newObj: YamlRuleCondition = {};
-			rule.rule = newObj;
-			sectionStack.push({ name: "rule", indent, obj: newObj });
-		} else if (sectionStack.length > 0) {
-			const current = getCurrentObj();
-			const currentSectionName = sectionStack[sectionStack.length - 1]?.name;
-
-			if (key === "weight" && currentSectionName === "metadata") {
-				if (!rule.metadata) rule.metadata = {};
-				rule.metadata.weight = parseInt(value, 10) || 3;
-			} else if (key === "category" && currentSectionName === "metadata") {
-				if (!rule.metadata) rule.metadata = {};
-				rule.metadata.category = value.replace(/^["']|["']$/g, "");
-			} else if (key === "pattern") {
-				if (value === "|") {
-					multilineKey = "pattern";
-				} else {
-					// Strip all surrounding quotes (handle nested quotes from YAML)
-					let stripped = value;
-					while (
-						stripped.startsWith('"') &&
-						stripped.endsWith('"') &&
-						stripped.length > 1
-					) {
-						stripped = stripped.slice(1, -1);
-					}
-					while (
-						stripped.startsWith("'") &&
-						stripped.endsWith("'") &&
-						stripped.length > 1
-					) {
-						stripped = stripped.slice(1, -1);
-					}
-					current.pattern = stripped;
-				}
-			} else if (key === "kind") {
-				current.kind = value;
-			} else if (key === "regex") {
-				// Strip all surrounding quotes
-				let stripped = value;
-				while (
-					stripped.startsWith('"') &&
-					stripped.endsWith('"') &&
-					stripped.length > 1
-				) {
-					stripped = stripped.slice(1, -1);
-				}
-				while (
-					stripped.startsWith("'") &&
-					stripped.endsWith("'") &&
-					stripped.length > 1
-				) {
-					stripped = stripped.slice(1, -1);
-				}
-				current.regex = stripped;
-			} else if (key === "has" || key === "not") {
-				const newObj: YamlRuleCondition = {};
-				current[key] = newObj;
-				sectionStack.push({ name: key, indent, obj: newObj });
-			} else if (key === "any" || key === "all") {
-				if (!current[key]) current[key] = [];
-				// Check if next lines with more indent are list items
-				let j = i + 1;
-				while (j < lines.length) {
-					const nextLine = lines[j];
-					const nextTrimmed = nextLine.trim();
-					if (!nextTrimmed || nextTrimmed.startsWith("#")) {
-						j++;
-						continue;
-					}
-					const nextIndent = getIndent(nextLine);
-					if (nextIndent <= indent) break;
-
-					if (nextTrimmed.startsWith("- ")) {
-						// New list item
-						const itemObj: YamlRuleCondition = {};
-						current[key].push(itemObj);
-						sectionStack.push({ name: key, indent: nextIndent, obj: itemObj });
-						// Parse the item content after "- "
-						const itemContent = nextTrimmed.substring(2);
-						if (itemContent.includes(":")) {
-							const [itemKey, itemVal] = itemContent.split(":", 2);
-							if (itemKey.trim() === "pattern") {
-								itemObj.pattern = itemVal.trim().replace(/^["']|["']$/g, "");
-							} else if (itemKey.trim() === "kind") {
-								itemObj.kind = itemVal.trim();
-							}
-						} else if (itemContent) {
-							// Assume it's a pattern
-							itemObj.pattern = itemContent.replace(/^["']|["']$/g, "");
-						}
-					}
-					j++;
-				}
-			}
-		}
-	}
-
-	// Flush remaining multiline buffer
-	if (multilineKey && multilineBuffer.length > 0) {
-		const value = multilineBuffer.join("\n");
-		const current = getCurrentObj();
-		if (multilineKey === "pattern" && current) {
-			current.pattern = value;
-		} else if (multilineKey === "message") {
-			rule.message = value;
-		}
-	}
-
-	return rule.id ? rule : null;
-}
-
-/**
- * Check if a rule uses structured conditions (has/any/all/not/regex)
- */
-function isStructuredRule(rule: YamlRule): boolean {
-	if (!rule.rule) return false;
-	return !!(
-		rule.rule.has ||
-		rule.rule.any ||
-		rule.rule.all ||
-		rule.rule.not ||
-		rule.rule.regex
-	);
-}
-
-/**
- * Calculate complexity score for structured rules
- * Used to skip overly expensive rules when blockingOnly=true
- */
-function calculateRuleComplexity(
-	condition: YamlRuleCondition | undefined,
-): number {
-	if (!condition) return 0;
-
-	let score = 0;
-
-	// Base cost for each condition type
-	if (condition.has) score += 3;
-	if (condition.not) score += 2;
-	if (condition.regex) score += 2;
-	if (condition.any) score += condition.any.length * 2;
-	if (condition.all) score += condition.all.length * 3; // 'all' is more expensive
-
-	// Recursively calculate nested conditions
-	if (condition.has) score += calculateRuleComplexity(condition.has);
-	if (condition.not) score += calculateRuleComplexity(condition.not);
-	if (condition.any) {
-		for (const sub of condition.any) {
-			score += calculateRuleComplexity(sub);
-		}
-	}
-	if (condition.all) {
-		for (const sub of condition.all) {
-			score += calculateRuleComplexity(sub);
-		}
-	}
-
-	return score;
-}
-
-/** Maximum complexity score for rules in blockingOnly mode */
-const MAX_BLOCKING_RULE_COMPLEXITY = 8;
-
 /**
  * Execute a structured rule using manual AST traversal
  */
 function executeStructuredRule(
 	rootNode: any,
 	condition: YamlRuleCondition,
-	matches: any[] = [],
+	matches: unknown[] = [],
 	depth = 0,
-): any[] {
-	// Prevent infinite recursion from nested rules
-	if (depth > _MAX_RULE_DEPTH) {
-		return matches;
-	}
+): unknown[] {
+	if (depth > MAX_RULE_DEPTH) return matches;
 
-	// Start with finding nodes by kind or pattern
-	let candidates: any[] = [];
+	let candidates: unknown[] = [];
 
 	if (condition.pattern) {
-		// Use pattern matching via findAll
 		try {
 			candidates = rootNode.findAll(condition.pattern);
 		} catch {
 			return matches;
 		}
 	} else if (condition.kind) {
-		// Manual traversal for kind matching with depth limit
 		candidates = findByKind(rootNode, condition.kind, 0);
 	} else {
-		// No kind or pattern, search all nodes with depth limit
 		candidates = getAllNodes(rootNode, 0);
 	}
 
-	// Filter candidates by conditions
 	for (const candidate of candidates) {
+		const node = candidate as {
+			text(): string;
+			kind(): string;
+			children(): unknown[];
+		};
 		let matchesCondition = true;
 
-		// Check 'has' condition
 		if (condition.has && matchesCondition) {
 			const subMatches = executeStructuredRule(
-				candidate,
+				node,
 				condition.has,
 				[],
 				depth + 1,
@@ -518,10 +122,9 @@ function executeStructuredRule(
 			if (subMatches.length === 0) matchesCondition = false;
 		}
 
-		// Check 'not' condition
 		if (condition.not && matchesCondition) {
 			const subMatches = executeStructuredRule(
-				candidate,
+				node,
 				condition.not,
 				[],
 				depth + 1,
@@ -529,12 +132,11 @@ function executeStructuredRule(
 			if (subMatches.length > 0) matchesCondition = false;
 		}
 
-		// Check 'any' condition (at least one must match)
 		if (condition.any && matchesCondition) {
 			let anyMatches = false;
 			for (const subCondition of condition.any) {
 				const subMatches = executeStructuredRule(
-					candidate,
+					node,
 					subCondition,
 					[],
 					depth + 1,
@@ -547,11 +149,10 @@ function executeStructuredRule(
 			if (!anyMatches) matchesCondition = false;
 		}
 
-		// Check 'all' condition (all must match)
 		if (condition.all && matchesCondition) {
 			for (const subCondition of condition.all) {
 				const subMatches = executeStructuredRule(
-					candidate,
+					node,
 					subCondition,
 					[],
 					depth + 1,
@@ -563,20 +164,18 @@ function executeStructuredRule(
 			}
 		}
 
-		// Check 'regex' condition with error handling
 		if (condition.regex && matchesCondition) {
 			try {
-				const text = candidate.text();
+				const text = node.text();
 				const regex = new RegExp(condition.regex);
 				if (!regex.test(text)) matchesCondition = false;
 			} catch {
-				// Invalid regex, skip this condition
 				matchesCondition = false;
 			}
 		}
 
 		if (matchesCondition) {
-			matches.push(candidate);
+			matches.push(node);
 		}
 	}
 
@@ -586,14 +185,10 @@ function executeStructuredRule(
 /**
  * Find all nodes of a specific kind with depth limit
  */
-function findByKind(node: any, kind: string, currentDepth: number): any[] {
-	if (currentDepth > _MAX_AST_DEPTH) {
-		return [];
-	}
-	const results: any[] = [];
-	if (node.kind() === kind) {
-		results.push(node);
-	}
+function findByKind(node: any, kind: string, currentDepth: number): unknown[] {
+	if (currentDepth > MAX_AST_DEPTH) return [];
+	const results: unknown[] = [];
+	if (node.kind() === kind) results.push(node);
 	for (const child of node.children()) {
 		results.push(...findByKind(child, kind, currentDepth + 1));
 	}
@@ -603,10 +198,8 @@ function findByKind(node: any, kind: string, currentDepth: number): any[] {
 /**
  * Get all nodes with depth limit to prevent stack overflow
  */
-function getAllNodes(node: any, currentDepth: number): any[] {
-	if (currentDepth > _MAX_AST_DEPTH) {
-		return [];
-	}
+function getAllNodes(node: any, currentDepth: number): unknown[] {
+	if (currentDepth > MAX_AST_DEPTH) return [];
 	const results = [node];
 	for (const child of node.children()) {
 		results.push(...getAllNodes(child, currentDepth + 1));
@@ -614,20 +207,19 @@ function getAllNodes(node: any, currentDepth: number): any[] {
 	return results;
 }
 
+// --- Runner Definition ---
+
 const astGrepNapiRunner: RunnerDefinition = {
 	id: "ast-grep-napi",
-	appliesTo: ["jsts"], // TypeScript/JavaScript only
-	priority: 15, // Run early (after type checkers, before other linters)
-	enabledByDefault: true,
+	appliesTo: ["jsts"],
+	priority: 15,
+	// DISABLED by default - ast-grep-napi causes random crashes in realtime/post-write.
+	// Full linter (/lens-booboo) uses CLI-based AstGrepClient instead.
+	// Re-enable with --ast-grep-napi flag if stability improves.
+	enabledByDefault: false,
 	skipTestFiles: true,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		// DISABLED on post-write (blockingOnly) - too slow for inline feedback
-		// Full analysis available via /lens-booboo command instead
-		if (ctx.blockingOnly) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
-		}
-
 		if (!canHandle(ctx.filePath)) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
@@ -646,10 +238,8 @@ const astGrepNapiRunner: RunnerDefinition = {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
-		// Check file size to avoid parsing extremely large files
 		const stats = fs.statSync(ctx.filePath);
-		const MAX_FILE_SIZE = 1024 * 1024; // 1MB
-		if (stats.size > MAX_FILE_SIZE) {
+		if (stats.size > 1024 * 1024) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
@@ -662,13 +252,11 @@ const astGrepNapiRunner: RunnerDefinition = {
 
 		let root: import("@ast-grep/napi").SgRoot;
 		try {
-			// Use the language object's parse method directly
 			root = lang.parse(content);
 		} catch {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
-		const diagnostics: Diagnostic[] = [];
 		let rootNode: any;
 		try {
 			rootNode = root.root();
@@ -676,84 +264,61 @@ const astGrepNapiRunner: RunnerDefinition = {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
-		// CONSOLIDATED: Use ast-grep-rules (unified with CLI tools)
-		// Includes both security/architecture rules + slop patterns
+		const diagnostics: Diagnostic[] = [];
+
 		const ruleDirs = [
 			path.join(process.cwd(), "rules/ast-grep-rules/rules"),
-			path.join(process.cwd(), "rules/ast-grep-rules"), // For slop-patterns.yml
+			path.join(process.cwd(), "rules/ast-grep-rules"),
 		];
 
 		for (const ruleDir of ruleDirs) {
 			let rules: YamlRule[];
 			try {
-				// OPTIMIZATION: When blockingOnly is set, only load error-level rules
-				// This avoids parsing ~50 warning-level rules from disk
 				rules = loadYamlRules(ruleDir, ctx.blockingOnly ? "error" : undefined);
 			} catch {
-				continue; // Skip this rule directory on error
+				continue;
 			}
 
 			for (const rule of rules) {
-				// Skip rules for different languages (case-insensitive)
 				const lang = rule.language?.toLowerCase();
 				if (lang && lang !== "typescript" && lang !== "javascript") {
 					continue;
 				}
 
-				// OPTIMIZATION: Skip overly complex structured rules in blockingOnly mode
-				// Complex rules with nested has/any/all/not can cause exponential slowdown
 				if (ctx.blockingOnly && rule.rule) {
 					const complexity = calculateRuleComplexity(rule.rule);
 					if (complexity > MAX_BLOCKING_RULE_COMPLEXITY) {
-						// Skip expensive rules - they'll run in full /lens-booboo instead
 						continue;
 					}
 				}
 
 				try {
-					let matches: any[] = [];
+					let matches: unknown[] = [];
 
 					if (isStructuredRule(rule) && rule.rule) {
-						// Use structured rule execution
 						matches = executeStructuredRule(rootNode, rule.rule, []);
 					} else if (rule.rule?.pattern || rule.rule?.kind) {
-						// Use simple pattern matching
 						const pattern = rule.rule.pattern || rule.rule.kind;
 						if (pattern) {
 							try {
 								matches = rootNode.findAll(pattern);
 							} catch {
-								// Pattern failed, try manual traversal for kind
 								if (rule.rule.kind) {
-									const findByKindLocal = (
-										node: any,
-										kind: string,
-										depth = 0,
-									): any[] => {
-										if (depth > _MAX_AST_DEPTH) return [];
-										const results: any[] = [];
-										if (node.kind() === kind) results.push(node);
-										for (const child of node.children()) {
-											results.push(...findByKindLocal(child, kind, depth + 1));
-										}
-										return results;
-									};
-									matches = findByKindLocal(rootNode, rule.rule.kind);
+									matches = findByKind(rootNode, rule.rule.kind, 0);
 								}
 							}
 						}
 					}
 
-					// Limit matches per rule to prevent excessive false positives
 					const limitedMatches = matches.slice(0, MAX_MATCHES_PER_RULE);
 
 					for (const match of limitedMatches) {
-						// Skip if we've hit the total diagnostic limit
-						if (diagnostics.length >= MAX_TOTAL_DIAGNOSTICS) {
-							break;
-						}
+						if (diagnostics.length >= MAX_TOTAL_DIAGNOSTICS) break;
 
-						const range = match.range();
+						const node = match as {
+							range(): { start: { line: number; column: number } };
+						};
+						const range = node.range();
 						const weight = rule.metadata?.weight || 3;
 						const severity = weight >= 4 ? "error" : "warning";
 
@@ -771,21 +336,17 @@ const astGrepNapiRunner: RunnerDefinition = {
 						});
 					}
 
-					// Stop processing more rules if we've hit the limit
-					if (diagnostics.length >= MAX_TOTAL_DIAGNOSTICS) {
-						break;
-					}
+					if (diagnostics.length >= MAX_TOTAL_DIAGNOSTICS) break;
 				} catch {
 					// Rule failed, skip
 				}
 			}
 		}
 
-		// Return succeeded even when finding diagnostics - they are warnings, not runner failures
 		return {
 			status: "succeeded",
 			diagnostics,
-			semantic: diagnostics.length > 0 ? "warning" : "none",
+			semantic: diagnostics.length > 0 ? "warning" : ("none" as const),
 		};
 	},
 };

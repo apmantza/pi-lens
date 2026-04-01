@@ -56,10 +56,7 @@ export function createBaselineStore(): BaselineStore {
 const globalRegistry = new Map<string, RunnerDefinition>();
 
 export function registerRunner(runner: RunnerDefinition): void {
-	if (globalRegistry.has(runner.id)) {
-		console.error(`[dispatch] Duplicate runner: ${runner.id}`);
-		return;
-	}
+	if (globalRegistry.has(runner.id)) return; // Already registered, skip silently
 	globalRegistry.set(runner.id, runner);
 }
 

@@ -205,8 +205,8 @@ pi-lens uses a **dispatcher-runner architecture** for extensible multi-language 
 | **biome** | TS/JS | 10 | Warning | Linting issues (delta-tracked) |
 | **ruff** | Python | 10 | Warning | Python linting (delta-tracked) |
 | **oxlint** | TS/JS | 12 | Warning | Fast Rust-based JS/TS linter |
-| **tree-sitter** | TS/JS, Python | 14 | Mixed | AST-based structural analysis (17 patterns) |
-| **ast-grep-napi** | TS/JS | 15 | Warning | **Unified structural analysis** (104 rules) — ⚠️ Temporarily disabled for debugging |
+| **tree-sitter** | TS/JS, Python | 14 | Mixed | AST-based structural analysis (21 patterns) |
+| **ast-grep-napi** | TS/JS | 15 | — | **Disabled by default** — causes random crashes in realtime dispatch. Full linter uses CLI ast-grep. |
 | **type-safety** | TS | 20 | Mixed | Switch exhaustiveness (blocking), other (warning) |
 | **shellcheck** | Shell | 20 | Warning | Bash/sh/zsh/fish linting |
 | **python-slop** | Python | 25 | Warning | AI slop detection (~40 patterns) |
@@ -228,13 +228,17 @@ pi-lens uses a **dispatcher-runner architecture** for extensible multi-language 
 - **Warning** — Shown in `/lens-booboo`, not inline (noise reduction)
 - **Silent** — Tracked in metrics only, never shown
 
-**Consolidated runners:** `ast-grep` (CLI) and `ts-slop` merged into `ast-grep-napi` — unified 104-rule set
+**Consolidated runners:** `ts-slop` merged into `ast-grep-napi` (disabled by default) — CLI ast-grep used for full linter only
 
 **Tree-sitter runner patterns** (priority 14, AST-based structural analysis):
 
-TypeScript/JavaScript (12 patterns):
+TypeScript/JavaScript (13 patterns):
 - 🔴 **Error**: empty-catch, hardcoded-secrets, eval
-- 🟡 **Warning**: debugger, await-in-loop, console-statement, long-parameter-list, nested-ternary, deep-promise-chain, mixed-async-styles, deep-nesting
+- 🟡 **Warning**: debugger, await-in-loop, console-statement, long-parameter-list, nested-ternary, deep-promise-chain, mixed-async-styles, deep-nesting, constructor-super, no-dupe-class-members
+
+TSX (2 patterns):
+- 🔴 **Error**: dangerously-set-inner-html
+- 🟡 **Warning**: no-nested-links
 
 Python (6 patterns):
 - 🔴 **Error**: bare-except, mutable-default-arg, eval-exec, unreachable-except  
@@ -244,7 +248,7 @@ Python (6 patterns):
 
 **AI Slop Detection:** 
 - `python-slop` runner (priority 25): ~40 patterns for Python code quality
-- `ast-grep-napi` runner (priority 15): 33 slop patterns + 71 security/architecture rules for TypeScript/JavaScript
+- `ast-grep-napi` runner (priority 15): 33 slop patterns + 68 security/architecture rules for TypeScript/JavaScript (disabled by default — use `/lens-booboo` for full ast-grep analysis via CLI)
 
 ---
 
@@ -429,7 +433,7 @@ pi-lens works out of the box for TypeScript/JavaScript. For full language suppor
 | `knip` | `npm i -D knip` | Dead code / unused exports |
 | `jscpd` | `npm i -D jscpd` | Copy-paste detection |
 | `type-coverage` | `npm i -D type-coverage` | TypeScript `any` coverage % |
-| `@ast-grep/napi` | `npm i -D @ast-grep/napi` | Fast structural analysis (TS/JS) |
+| `@ast-grep/napi` | `npm i -D @ast-grep/napi` | Fast structural analysis (TS/JS) — currently disabled in realtime |
 | `@ast-grep/cli` | `npm i -D @ast-grep/cli` | Structural pattern matching (all languages) |
 | `typos-cli` | `cargo install typos-cli` | Spellcheck for Markdown |
 
@@ -640,7 +644,7 @@ Tracks which files were edited in the current agent turn for:
 
 | Runner | Cache | Notes |
 |--------|-------|-------|
-| `ast-grep-napi` | Rule descriptions | Loaded once per session |
+| `ast-grep-napi` | Rule descriptions | Loaded once per session (disabled by default) |
 | `biome` | Tool availability | Checked once, cached |
 | `pyright` | Command path | Venv lookup cached |
 | `ruff` | Command path | Venv lookup cached |
@@ -659,7 +663,7 @@ pi-lens/
 │   ├── dispatch/         # Dispatcher and runners
 │   │   ├── dispatcher.ts
 │   │   └── runners/      # Individual runners
-│   │       ├── ast-grep-napi.ts      # Fast TS/JS runner
+│   │       ├── ast-grep-napi.ts      # Fast TS/JS runner (disabled by default)
 │   │       ├── python-slop.ts        # Python slop detection
 │   │       ├── ts-lsp.ts             # TS type checking
 │   │       ├── biome.ts
@@ -702,8 +706,8 @@ See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 - **LSP Support:** 31 Language Server Protocol clients (4 core auto-installed, others via npx or manual)
 - **Concurrent Execution:** Effect-TS-based parallel runner execution with `--lens-effect`
-- **NAPI Runner:** 100x faster TypeScript/JavaScript structural analysis (~9ms vs ~1200ms)
-- **Slop Detection:** 30+ TypeScript and 40+ Python patterns for AI-generated code quality issues
+- **NAPI Runner:** 100x faster TypeScript/JavaScript structural analysis (~9ms vs ~1200ms) — currently disabled in realtime due to stability
+- **Slop Detection:** 33+ TypeScript and 40+ Python patterns for AI-generated code quality issues
 
 ---
 

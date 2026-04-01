@@ -4,7 +4,8 @@
  * Runs `cargo clippy` for Rust files to catch common mistakes.
  */
 
-import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { safeSpawn } from "../../safe-spawn.js";
 import { stripAnsi } from "../../sanitize.js";
 import type {
@@ -74,9 +75,6 @@ const rustClippyRunner: RunnerDefinition = {
 };
 
 function findCargoToml(filePath: string): string | undefined {
-	const { dirname, join } = require("node:path");
-	const { existsSync } = require("node:fs");
-
 	let dir = dirname(filePath);
 	while (dir !== "/" && dir !== ".") {
 		const cargoPath = join(dir, "Cargo.toml");

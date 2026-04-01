@@ -182,9 +182,11 @@ export async function launchLSP(
 			: command; // Let system find it via PATH
 
 	// Compute needsShell based on command
+	// On Windows, shell: true is needed to execute extensionless binaries
+	// (the shell resolves typescript-language-server -> typescript-language-server.cmd)
+	const hasExecExtension = /\.(exe|cmd|bat)$/i.test(resolvedCommand);
 	let needsShell =
-		isWindows &&
-		(resolvedCommand.includes(" ") || resolvedCommand.includes(".cmd"));
+		isWindows && (resolvedCommand.includes(" ") || !hasExecExtension);
 
 	// Try to spawn the process
 	// If command not found, try npm global as fallback (handles PATH caching after install)
@@ -199,10 +201,9 @@ export async function launchLSP(
 		const npmGlobalPath = _findBinaryInNpmGlobal(command);
 		if (npmGlobalPath) {
 			spawnCommand = npmGlobalPath;
-			// Recompute needsShell for npm global path (may be .cmd on Windows)
-			needsShell =
-				isWindows &&
-				(spawnCommand.includes(" ") || spawnCommand.includes(".cmd"));
+			// Recompute needsShell for npm global path
+			const globalHasExt = /\.(exe|cmd|bat)$/i.test(spawnCommand);
+			needsShell = isWindows && (spawnCommand.includes(" ") || !globalHasExt);
 		}
 	}
 
@@ -221,9 +222,9 @@ export async function launchLSP(
 			if (npmGlobalPath && npmGlobalPath !== spawnCommand) {
 				console.error(`[lsp] Trying npm global: ${npmGlobalPath}`);
 				// Recompute needsShell for npm global path
+				const globalHasExt = /\.(exe|cmd|bat)$/i.test(npmGlobalPath);
 				const needsShellGlobal =
-					isWindows &&
-					(npmGlobalPath.includes(" ") || npmGlobalPath.includes(".cmd"));
+					isWindows && (npmGlobalPath.includes(" ") || !globalHasExt);
 				proc = trySpawn(npmGlobalPath, args, cwd, env, needsShellGlobal);
 			} else {
 				throw err;

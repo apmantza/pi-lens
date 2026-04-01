@@ -3,6 +3,7 @@
  *
  * Executes all loaded tree-sitter query files from rules/tree-sitter-queries/
  * for fast AST-based pattern matching.
+ * Updated: ast-grep-napi test
  */
 
 import path from "node:path";
@@ -133,3 +134,4 @@ const treeSitterRunner: RunnerDefinition = {
 };
 
 export default treeSitterRunner;
+// test ast-grep-napi re-enable
