@@ -82,9 +82,9 @@ export async function handleBooboo(
 
 	// Detect project metadata for richer reporting
 	const projectMeta = detectProjectMetadata(targetPath);
-	const metaDisplay = formatProjectMetadata(projectMeta);
+	const _metaDisplay = formatProjectMetadata(projectMeta);
 
-	ctx.ui.notify(`🔍 Running full codebase review...\n${metaDisplay}`, "info");
+	// No noisy notification at start - just run the review silently
 
 	// Detect project type once for all runners
 	const isTsProject = nodeFs.existsSync(path.join(targetPath, "tsconfig.json"));
@@ -1229,9 +1229,7 @@ ${fullReport.join("\n")}`;
 		const summaryLines = [
 			`📊 Code Review: ${totalIssues} issues`,
 			...runnerLines,
-			`  🔧 ${fixableCount} fixable | 🏗️ ${refactorNeeded} refactor`,
 			`  ⏱️  Total: ${jsonReport.meta.totalTime}`,
-			`📄 JSON: ${jsonPath}`,
 			`📄 MD: ${mdPath}`,
 		];
 
