@@ -338,6 +338,11 @@ export class TreeSitterClient {
 		return language !== null;
 	}
 
+	/** Get loaded language for symbol extraction */
+	getLanguage(languageId: string): TreeSitterLanguage | null {
+		return this.languages.get(languageId) || null;
+	}
+
 	// --- Structural Search ---
 
 	/**
