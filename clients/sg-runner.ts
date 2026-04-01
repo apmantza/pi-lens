@@ -5,7 +5,7 @@
  * Handles: spawn, spawnSync, temp dir management, JSON parsing.
  */
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -17,10 +17,10 @@ import { safeSpawn } from "./safe-spawn.js";
  */
 function escapeWindowsArg(arg: string): string {
 	// If no special characters, return as-is
-	if (!/[\s\"]/.test(arg)) return arg;
+	if (!/[\s"]/.test(arg)) return arg;
 
 	// Escape quotes by doubling them
-	return `"${arg.replace(/"/g, "\"\"")}"`;
+	return `"${arg.replace(/"/g, '""')}"`;
 }
 
 export interface SgMatch {
@@ -40,6 +40,8 @@ export interface SgResult {
 
 export class SgRunner {
 	private log: (msg: string) => void;
+	private sgPath: string | null = null;
+	private available: boolean | null = null;
 
 	constructor(verbose = false) {
 		this.log = verbose
@@ -48,13 +50,58 @@ export class SgRunner {
 	}
 
 	/**
-	 * Check if ast-grep CLI is available
+	 * Check if ast-grep CLI is available, auto-install if not
+	 */
+	async ensureAvailable(): Promise<boolean> {
+		// Fast path: already checked
+		if (this.available !== null) return this.available;
+
+		// Check if available in PATH (fast)
+		const pathResult = safeSpawn("sg", ["--version"], {
+			timeout: 5000,
+		});
+		if (!pathResult.error && pathResult.status === 0) {
+			this.sgPath = "sg";
+			this.available = true;
+			this.log("ast-grep found in PATH");
+			return true;
+		}
+
+		// Auto-install via pi-lens installer
+		this.log("ast-grep not found, attempting auto-install...");
+		const { ensureTool } = await import("./installer/index.js");
+		const installedPath = await ensureTool("ast-grep");
+
+		if (installedPath) {
+			this.sgPath = installedPath;
+			this.available = true;
+			this.log(`ast-grep auto-installed: ${installedPath}`);
+			return true;
+		}
+
+		this.available = false;
+		return false;
+	}
+
+	/**
+	 * Check if ast-grep CLI is available (legacy sync method)
+	 * Prefer ensureAvailable() for auto-install behavior
 	 */
 	isAvailable(): boolean {
+		if (this.available !== null) return this.available;
+
 		const result = safeSpawn("npx", ["sg", "--version"], {
 			timeout: 10000,
 		});
-		return !result.error && result.status === 0;
+		this.available = !result.error && result.status === 0;
+		return this.available;
+	}
+
+	/**
+	 * Get the sg command to use (local binary or "sg" from PATH)
+	 */
+	private getSgCommand(): string {
+		return this.sgPath || "sg";
 	}
 
 	/**
@@ -77,19 +124,19 @@ export class SgRunner {
 						return `'${arg.replace(/'/g, "'\\''")}'`;
 					}
 					// For other args with spaces/special chars, use double quotes
-					if (/[\s\"]/.test(arg)) {
-						return `"${arg.replace(/"/g, "\\\"")}"`;
+					if (/[\s"]/.test(arg)) {
+						return `"${arg.replace(/"/g, '\\"')}"`;
 					}
 					return arg;
 				});
-				const bashCommand = `npx sg ${escapedArgs.join(" ")}`;
+				const bashCommand = `${this.getSgCommand()} ${escapedArgs.join(" ")}`;
 				proc = spawn("bash", ["-c", bashCommand], {
 					stdio: ["ignore", "pipe", "pipe"],
 					windowsHide: true,
 				});
 			} else if (isWindows) {
 				// Fallback: use cmd.exe with standard escaping
-				const fullCommand = `npx sg ${args.map(escapeWindowsArg).join(" ")}`;
+				const fullCommand = `${this.getSgCommand()} ${args.map(escapeWindowsArg).join(" ")}`;
 				proc = spawn(fullCommand, {
 					stdio: ["ignore", "pipe", "pipe"],
 					shell: true,
@@ -97,7 +144,7 @@ export class SgRunner {
 				});
 			} else {
 				// Unix: normal spawn without shell
-				proc = spawn("npx", ["sg", ...args], {
+				proc = spawn(this.getSgCommand(), args, {
 					stdio: ["ignore", "pipe", "pipe"],
 				});
 			}
@@ -206,11 +253,7 @@ export class SgRunner {
 	/**
 	 * Run a rule file scan (temporary config approach) - alias for tempScan
 	 */
-	scanWithRule(
-		ruleYaml: string,
-		dir: string,
-		timeout = 30000,
-	): SgMatch[] {
+	scanWithRule(ruleYaml: string, dir: string, timeout = 30000): SgMatch[] {
 		const sessionDir = path.join(os.tmpdir(), `sg-scan-${Date.now()}`);
 		const rulesSubdir = path.join(sessionDir, "rules");
 		const configFile = path.join(sessionDir, ".sgconfig.yml");

@@ -4,13 +4,15 @@
  * Minimal auto-install: Core tools that run frequently.
  * Other tools require manual installation with clear instructions.
  *
- * Auto-install (6 tools):
+ * Auto-install (8 tools):
  * - typescript-language-server (TypeScript LSP)
  * - pyright (Python LSP)
  * - ruff (Python linting)
  * - @biomejs/biome (JS/TS/JSON linting/formatting)
  * - madge (circular dependency detection)
  * - jscpd (duplicate code detection)
+ * - @ast-grep/cli (structural code search)
+ * - knip (dead code detection)
  *
  * Manual install required (25+ tools):
  * - yaml-language-server: npm install -g yaml-language-server
@@ -20,7 +22,6 @@
  * - vscode-eslint-language-server: npm install -g vscode-langservers-extracted
  * - vscode-css-languageserver: npm install -g vscode-langservers-extracted
  * - @prisma/language-server: npm install -g @prisma/language-server
- * - @ast-grep/cli: npm install -g @ast-grep/cli
  * - dockerfile-language-server: npm install -g dockerfile-language-server-nodejs
  * - @vue/language-server: npm install -g @vue/language-server
  * - And all language-specific servers (gopls, rust-analyzer, etc.)
@@ -107,6 +108,25 @@ const TOOLS: ToolDefinition[] = [
 		installStrategy: "npm",
 		packageName: "jscpd",
 		binaryName: "jscpd",
+	},
+	// Structural search and dead code detection
+	{
+		id: "ast-grep",
+		name: "ast-grep CLI",
+		checkCommand: "sg",
+		checkArgs: ["--version"],
+		installStrategy: "npm",
+		packageName: "@ast-grep/cli",
+		binaryName: "sg",
+	},
+	{
+		id: "knip",
+		name: "Knip",
+		checkCommand: "knip",
+		checkArgs: ["--version"],
+		installStrategy: "npm",
+		packageName: "knip",
+		binaryName: "knip",
 	},
 ];
 

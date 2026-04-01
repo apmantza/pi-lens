@@ -9,7 +9,6 @@
  * Docs: https://knip.dev/
  */
 
-import { spawnSync } from "node:child_process";
 import * as path from "node:path";
 import { safeSpawn } from "./safe-spawn.js";
 
@@ -46,7 +45,40 @@ export class KnipClient {
 	}
 
 	/**
-	 * Check if knip CLI is available
+	 * Check if knip CLI is available, auto-install if not
+	 */
+	async ensureAvailable(): Promise<boolean> {
+		// Fast path: already checked
+		if (this.knipAvailable !== null) return this.knipAvailable;
+
+		// Check if available in PATH (fast)
+		const pathResult = safeSpawn("knip", ["--version"], {
+			timeout: 5000,
+		});
+		if (!pathResult.error && pathResult.status === 0) {
+			this.knipAvailable = true;
+			this.log("Knip found in PATH");
+			return true;
+		}
+
+		// Auto-install via pi-lens installer
+		this.log("Knip not found, attempting auto-install...");
+		const { ensureTool } = await import("./installer/index.js");
+		const installedPath = await ensureTool("knip");
+
+		if (installedPath) {
+			this.knipAvailable = true;
+			this.log(`Knip auto-installed: ${installedPath}`);
+			return true;
+		}
+
+		this.knipAvailable = false;
+		return false;
+	}
+
+	/**
+	 * Check if knip CLI is available (legacy sync method)
+	 * Prefer ensureAvailable() for auto-install behavior
 	 */
 	isAvailable(): boolean {
 		if (this.knipAvailable !== null) return this.knipAvailable;
