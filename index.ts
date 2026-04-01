@@ -29,6 +29,7 @@ import { ensureTool } from "./clients/installer/index.js";
 import { buildInterviewer } from "./clients/interviewer.js";
 import { JscpdClient } from "./clients/jscpd-client.js";
 import { KnipClient } from "./clients/knip-client.js";
+import { logLatency } from "./clients/latency-logger.js";
 import { getLSPService, resetLSPService } from "./clients/lsp/index.js";
 import { MetricsClient } from "./clients/metrics-client.js";
 import { captureSnapshot } from "./clients/metrics-history.js";
@@ -1075,9 +1076,14 @@ export default function (pi: ExtensionAPI) {
 			if (secretFindings.length > 0) {
 				const secretsOutput = formatSecrets(secretFindings, filePath);
 				const elapsed = Date.now() - toolResultStart;
-				console.error(
-					`[LATENCY] ${toolName} on ${filePath.split("/").pop()}: ${elapsed}ms (BLOCKED by secrets)`,
-				);
+				logLatency({
+					type: "tool_result",
+					toolName,
+					filePath,
+					durationMs: elapsed,
+					result: "blocked_secrets",
+					metadata: { secretsFound: secretFindings.length },
+				});
 				return {
 					content: [
 						...event.content,
@@ -1169,12 +1175,26 @@ export default function (pi: ExtensionAPI) {
 				);
 				const detectedRunner = testRunnerClient.detectRunner(cwd);
 				if (detectedRunner) {
+					const testStart = Date.now();
 					const testResult = testRunnerClient.runTestFile(
 						testInfo.testFile,
 						cwd,
 						detectedRunner.runner,
 						detectedRunner.config,
 					);
+					const testDuration = Date.now() - testStart;
+					logLatency({
+						type: "phase",
+						toolName,
+						filePath,
+						phase: "test_runner",
+						durationMs: testDuration,
+						metadata: {
+							testFile: testInfo.testFile,
+							runner: detectedRunner.runner,
+							success: !testResult?.error,
+						},
+					});
 					if (testResult && !testResult.error) {
 						const testOutput = testRunnerClient.formatResult(testResult);
 						if (testOutput) {
@@ -1234,11 +1254,23 @@ export default function (pi: ExtensionAPI) {
 		// LATENCY TRACKING: Log timing before returning
 		const elapsed = Date.now() - toolResultStart;
 		if (!lspOutput) {
-			console.error(`[LATENCY] ${toolName} on ${filePath.split("/").pop()}: ${elapsed}ms (no output)`);
+			logLatency({
+				type: "tool_result",
+				toolName,
+				filePath,
+				durationMs: elapsed,
+				result: "no_output",
+			});
 			return;
 		}
 
-		console.error(`[LATENCY] ${toolName} on ${filePath.split("/").pop()}: ${elapsed}ms (completed)`);
+		logLatency({
+			type: "tool_result",
+			toolName,
+			filePath,
+			durationMs: elapsed,
+			result: "completed",
+		});
 
 		return {
 			content: [...event.content, { type: "text" as const, text: lspOutput }],

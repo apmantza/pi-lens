@@ -18,6 +18,7 @@ import type { FileKind } from "../file-kinds.js";
 import { detectFileKind } from "../file-kinds.js";
 import { isTestFile } from "../file-utils.js";
 import { safeSpawn } from "../safe-spawn.js";
+import { logLatency, type LatencyEntry } from "../latency-logger.js";
 import type {
 	BaselineStore,
 	Diagnostic,
@@ -395,7 +396,20 @@ export async function dispatchForFile(
 		latencyReports.shift();
 	}
 
-	// Always log to stderr for real-time monitoring
+	// Log each runner as separate entry for detailed analysis
+	for (const runner of runnerLatencies) {
+		logLatency({
+			type: "runner",
+			filePath: ctx.filePath,
+			runnerId: runner.runnerId,
+			durationMs: runner.durationMs,
+			status: runner.status,
+			diagnosticCount: runner.diagnosticCount,
+			semantic: runner.semantic,
+		});
+	}
+
+	// Log summary to stderr for real-time monitoring
 	console.error(formatLatencyReport(latencyReport));
 
 	return {
