@@ -49,8 +49,8 @@ const lspRunner: RunnerDefinition = {
 
 		// Open file in LSP and get diagnostics
 		await lspService.openFile(ctx.filePath, content);
-		// Small delay to let diagnostics propagate
-		await new Promise((r) => setTimeout(r, 500));
+		// getDiagnostics() internally calls waitForDiagnostics() with bus
+		// subscription + 150ms debounce + 3s timeout
 		const lspDiags = await lspService.getDiagnostics(ctx.filePath);
 
 		// Convert LSP diagnostics to our format

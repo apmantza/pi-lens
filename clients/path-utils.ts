@@ -4,12 +4,15 @@
  * Handles cross-platform path normalization, particularly
  * Windows case-insensitivity issues when using paths as Map keys.
  *
- * Inspired by OpenCode's separator-agnostic path handling:
- * - Convert backslashes to forward slashes for comparison
- * - Case-insensitive only on Windows (drive letter or UNC paths)
- * - Preserve original casing for URIs
+ * Approach (inspired by OpenCode's Filesystem.normalizePath):
+ * - On Windows: try realpathSync.native() for canonical casing
+ * - Falls back to lowercase for files that don't exist yet
+ * - On non-Windows: return path as-is (case-sensitive filesystem)
+ * - Always convert backslashes to forward slashes for Map key consistency
  */
 
+import { existsSync, realpathSync } from "node:fs";
+import { dirname, win32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 /**
@@ -22,19 +25,81 @@ function isWindowsPath(filePath: string): boolean {
 /**
  * Normalize a file path for consistent Map key usage.
  *
- * - Converts backslashes to forward slashes (separator-agnostic)
- * - On Windows: lowercases (case-insensitive filesystem)
- * - On other platforms: returns as-is (case-sensitive filesystem)
+ * On Windows:
+ * - If the file exists: uses realpathSync.native() to get the canonical
+ *   filesystem path (actual casing, resolved symlinks)
+ * - If the file doesn't exist: resolves the path and lowercases
+ *   (needed for new files where we haven't written yet)
  *
- * This ensures that "C:\Foo\bar.ts" and "c:/foo/bar.ts" resolve to the same key.
+ * On non-Windows: returns path as-is (case-sensitive filesystem).
+ *
+ * Always converts backslashes to forward slashes for consistent Map keys.
  */
 export function normalizeFilePath(filePath: string): string {
 	// Convert backslashes to forward slashes first
 	const normalized = filePath.replace(/\\/g, "/");
-	if (process.platform === "win32" || isWindowsPath(normalized)) {
-		return normalized.toLowerCase();
+
+	if (process.platform !== "win32" && !isWindowsPath(normalized)) {
+		return normalized;
 	}
-	return normalized;
+
+	// Windows: try realpathSync.native() for canonical casing
+	// This resolves symlinks and returns the actual filesystem casing
+	try {
+		const canonical = realpathSync.native(filePath);
+		return canonical.replace(/\\/g, "/");
+	} catch {
+		// File doesn't exist yet (new file) — resolve path and lowercase
+		// We need to walk up the directory tree to find the nearest existing
+		// parent, resolve its casing, then append the non-existent parts
+		try {
+			return resolveNonExisting(filePath);
+		} catch {
+			// Last resort: just lowercase the resolved path
+			const resolved = win32.normalize(win32.resolve(filePath));
+			return resolved.replace(/\\/g, "/").toLowerCase();
+		}
+	}
+}
+
+/**
+ * Resolve a non-existing path by finding the nearest existing parent,
+ * getting its canonical casing, then appending the non-existent parts lowercased.
+ *
+ * Example: C:\Users\Foo\newdir\file.ts
+ * - C:\Users\Foo exists → realpathSync gives C:\Users\Foo
+ * - newdir\file.ts doesn't exist → lowercased
+ * - Result: C:/Users/Foo/newdir/file.ts
+ */
+function resolveNonExisting(filePath: string): string {
+	const resolved = win32.resolve(filePath);
+	let current = resolved;
+	const nonExistentParts: string[] = [];
+
+	// Walk up until we find an existing directory
+	while (true) {
+		if (existsSync(current)) {
+			// Found existing ancestor — get its canonical casing
+			const canonical = realpathSync.native(current);
+			if (nonExistentParts.length === 0) {
+				return canonical.replace(/\\/g, "/");
+			}
+			// Append non-existent parts (lowercased for consistency)
+			const tail = nonExistentParts.reverse().join("/").toLowerCase();
+			const base = canonical.replace(/\\/g, "/");
+			return base.endsWith("/") ? base + tail : `${base}/${tail}`;
+		}
+
+		const parent = dirname(current);
+		if (parent === current) {
+			// Reached filesystem root without finding existing dir
+			// Fall back to full lowercase
+			throw new Error("No existing parent found");
+		}
+
+		nonExistentParts.push(win32.basename(current));
+		current = parent;
+	}
 }
 
 /**
@@ -70,9 +135,6 @@ export function normalizeMapKey(filePath: string): string {
 /**
  * Compare two file paths for equality, handling Windows case-insensitivity
  * and mixed separators (backslash vs forward slash).
- *
- * Like OpenCode's approach: normalize both for comparison, but don't
- * assume the platform — detect Windows paths by content.
  */
 export function pathsEqual(a: string, b: string): boolean {
 	return normalizeFilePath(a) === normalizeFilePath(b);

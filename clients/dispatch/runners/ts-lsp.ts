@@ -7,8 +7,8 @@
  * @deprecated The built-in TypeScriptClient is deprecated. Use --lens-lsp for full LSP support.
  */
 
-import { TypeScriptClient } from "../../typescript-client.js";
 import { getLSPService } from "../../lsp/index.js";
+import { TypeScriptClient } from "../../typescript-client.js";
 import type {
 	Diagnostic,
 	DispatchContext,
@@ -60,8 +60,8 @@ async function runWithLSPClient(ctx: DispatchContext): Promise<RunnerResult> {
 
 	// Open file in LSP and get diagnostics
 	await lspService.openFile(ctx.filePath, content);
-	// Small delay to let diagnostics propagate
-	await new Promise(r => setTimeout(r, 500));
+	// getDiagnostics() internally calls waitForDiagnostics() with bus
+	// subscription + 150ms debounce + 3s timeout
 	const lspDiags = await lspService.getDiagnostics(ctx.filePath);
 
 	// Convert LSP diagnostics to our format
@@ -74,7 +74,8 @@ async function runWithLSPClient(ctx: DispatchContext): Promise<RunnerResult> {
 			filePath: ctx.filePath,
 			line: d.range.start.line + 1,
 			column: d.range.start.character + 1,
-			severity: d.severity === 1 ? "error" : d.severity === 2 ? "warning" : "info",
+			severity:
+				d.severity === 1 ? "error" : d.severity === 2 ? "warning" : "info",
 			semantic: d.severity === 1 ? "blocking" : "warning",
 			tool: "ts-lsp",
 			code: String(d.code ?? ""),
@@ -91,7 +92,9 @@ async function runWithLSPClient(ctx: DispatchContext): Promise<RunnerResult> {
  * Run with deprecated built-in TypeScriptClient
  * @deprecated Use runWithLSPClient instead
  */
-async function runWithBuiltinClient(ctx: DispatchContext): Promise<RunnerResult> {
+async function runWithBuiltinClient(
+	ctx: DispatchContext,
+): Promise<RunnerResult> {
 	const tsClient = new TypeScriptClient();
 
 	const content = readFileContent(ctx.filePath);
