@@ -2,6 +2,36 @@
 
 All notable changes to pi-lens will be documented in this file.
 
+## [3.6.0] - 2026-04-02
+
+### Added
+- **Enhanced TDI (Technical Debt Index) with 5-factor formula** — Now captures "worst offender" functions and code unpredictability:
+  - **Max Cyclomatic (10%)**: Catches worst function complexity (avg hides bad apples)
+  - **Entropy (5%)**: Measures code unpredictability/vocabulary richness in bits
+  - Rebalanced weights: MI (45%), Cognitive (30%), Nesting (10%), MaxCyc (10%), Entropy (5%)
+  - New thresholds: MaxCyc >10 bad, >30 critical; Entropy >4.0 bits risky, >7.0 critical
+
+### Removed
+- **TDR (Technical Debt Ratio)** — Removed orphaned metric tracking system:
+  - Deleted `TDREntry`, `TDRCategory` types, `tdrFindings` Map, `updateTDR()` method
+  - Removed `convertDiagnosticsToTDREntries()` helper and all `tdrCategory` assignments
+  - Deleted TDR test file
+  - TDI is sufficient for code health tracking; inline diagnostics provide immediate feedback
+
+### Changed
+- **Updated `/lens-tdi` display** — Shows 5 category breakdown with descriptions:
+  ```
+  Debt breakdown:
+    Maintainability: 45% (MI-based)
+    Cognitive: 30%
+    Nesting: 10%
+    Max Cyclomatic: 10% (worst function)
+    Entropy: 5% (code unpredictability)
+  ```
+- **Extended MetricSnapshot** — Added `maxCyclomatic` and `entropy` fields for historical tracking
+
+---
+
 ## [3.5.0] - 2026-04-02
 
 ### Added
