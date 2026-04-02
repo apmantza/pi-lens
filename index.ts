@@ -1215,6 +1215,7 @@ export default function (pi: ExtensionAPI) {
 		}
 		// Record this write so future assertions know the agent has the current state
 		sessionFileTime.read(filePath);
+		const toolResultStart = Date.now();
 		dbg(
 			`tool_result: tracking turn state for ${event.toolName} on ${filePath}`,
 		);
@@ -1262,7 +1263,15 @@ export default function (pi: ExtensionAPI) {
 			dbg(`turn state tracking error stack: ${(err as Error).stack}`);
 		}
 
-		dbg(`tool_result fired for: ${filePath}`);
+		const turnStateMs = Date.now() - toolResultStart;
+		logLatency({
+			type: "phase",
+			toolName: event.toolName,
+			filePath,
+			phase: "turn_state_tracking",
+			durationMs: turnStateMs,
+		});
+		dbg(`tool_result fired for: ${filePath} (turn_state: ${turnStateMs}ms)`);
 
 		const result = await runPipeline(
 			{
@@ -1298,6 +1307,15 @@ export default function (pi: ExtensionAPI) {
 		if (behaviorWarnings.length > 0) {
 			output += `\n\n${agentBehaviorClient.formatWarnings(behaviorWarnings)}`;
 		}
+
+		const totalMs = Date.now() - toolResultStart;
+		logLatency({
+			type: "tool_result",
+			toolName: event.toolName,
+			filePath,
+			durationMs: totalMs,
+			result: output ? "completed" : "no_output",
+		});
 
 		if (!output) return;
 

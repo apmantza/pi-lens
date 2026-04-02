@@ -202,12 +202,12 @@ pi-lens uses a **dispatcher-runner architecture** for extensible multi-language 
 | **ruff** | Python | 10 | Warning | Python linting (delta-tracked) |
 | **oxlint** | TS/JS | 12 | Warning | Fast Rust-based JS/TS linter |
 | **tree-sitter** | TS/JS, Python | 14 | Mixed | AST-based structural analysis (21 patterns) — **singleton WASM client** |
-| **ast-grep-napi** | TS/JS | 15 | — | **Disabled by default** — heavy; use `/lens-booboo` for full analysis |
+| **ast-grep-napi** | TS/JS | 15 | Blocking | Security rules inline (no-eval, jwt-no-verify, no-hardcoded-secrets, etc.) |
 | **type-safety** | TS | 20 | Mixed | Switch exhaustiveness (blocking), other (warning) |
 | **shellcheck** | Shell | 20 | Warning | Bash/sh/zsh/fish linting |
 | **python-slop** | Python | 25 | Warning | AI slop detection (~40 patterns) |
 | **spellcheck** | Markdown | 30 | Warning | Typo detection in docs |
-| **similarity** | TS | 35 | Silent | Semantic duplicate detection (metrics only) |
+| **similarity** | TS | 35 | Warning | Semantic duplicate detection (structural similarity) |
 | **architect** | All | 40 | Warning | Architectural rule violations |
 | **go-vet** | Go | 50 | Warning | Go static analysis |
 | **rust-clippy** | Rust | 50 | Warning | Rust linting |
@@ -224,7 +224,7 @@ pi-lens uses a **dispatcher-runner architecture** for extensible multi-language 
 - **Warning** — Shown in `/lens-booboo`, not inline (noise reduction)
 - **Silent** — Tracked in metrics only, never shown
 
-**Consolidated runners:** `ts-slop` merged into `ast-grep-napi` (disabled by default) — CLI ast-grep used for full linter only
+**Consolidated runners:** `ts-slop` merged into `ast-grep-napi` — CLI ast-grep used for full linter via `/lens-booboo`
 
 **Tree-sitter runner patterns** (priority 14, AST-based structural analysis):
 
@@ -244,7 +244,7 @@ Python (6 patterns):
 
 **AI Slop Detection:** 
 - `python-slop` runner (priority 25): ~40 patterns for Python code quality
-- `ast-grep-napi` runner (priority 15): 33 slop patterns + 68 security/architecture rules for TypeScript/JavaScript (disabled by default — use `/lens-booboo` for full ast-grep analysis via CLI)
+- `ast-grep-napi` runner (priority 15): Security rules fire inline (blocking); slop/architecture warnings via `/lens-booboo` only. Skips 5 rules already covered by tree-sitter.
 
 ---
 
@@ -639,7 +639,7 @@ Tracks which files were edited in the current agent turn for:
 
 | Runner | Cache | Notes |
 |--------|-------|-------|
-| `ast-grep-napi` | Rule descriptions | Loaded once per session (disabled by default) |
+| `ast-grep-napi` | Rule descriptions | Loaded once per session |
 | `biome` | Tool availability | Checked once, cached |
 | `pyright` | Command path | Venv lookup cached |
 | `ruff` | Command path | Venv lookup cached |
@@ -658,7 +658,7 @@ pi-lens/
 │   ├── dispatch/         # Dispatcher and runners
 │   │   ├── dispatcher.ts
 │   │   └── runners/      # Individual runners
-│   │       ├── ast-grep-napi.ts      # Fast TS/JS runner (disabled by default)
+│   │       ├── ast-grep-napi.ts      # Security rules inline, warnings in booboo
 │   │       ├── python-slop.ts        # Python slop detection
 │   │       ├── ts-lsp.ts             # TS type checking
 │   │       ├── biome.ts

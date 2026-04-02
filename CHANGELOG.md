@@ -2,6 +2,26 @@
 
 All notable changes to pi-lens will be documented in this file.
 
+## [3.4.0] - 2026-04-02
+
+### Fixed
+- **Delta mode was broken** — `dispatchLint()` created a fresh empty baseline store on every call, making delta filtering a complete no-op. Every issue looked "new" every time. Now uses a persistent session-level baseline store. First write captures baseline, subsequent writes only show NEW issues.
+- **Duplicate type-checking with `--lens-lsp`** — Both the `lsp` runner (priority 4) and `ts-lsp` runner (priority 5) were calling the same LSP service for TypeScript files. `ts-lsp` now skips when `--lens-lsp` is active.
+
+### Added
+- **Inline security rules via ast-grep-napi** — Re-enabled the ast-grep-napi runner for real-time blocking on security violations (`no-eval`, `jwt-no-verify`, `no-hardcoded-secrets`, `weak-rsa-key`, `no-open-redirect`, etc.). Only error-severity rules fire inline; warnings remain in `/lens-booboo`. Skips 5 rules already covered by tree-sitter to avoid duplicates. ~9ms execution time.
+- **Pre-write duplicate detection (two layers):**
+  - **Exact name match** — Checks exported names in new content against the session’s cached export index. If a function/class/type already exists in another file, blocks the write: `🔴 STOP — function X already exists in utils.ts. Import instead.`
+  - **Structural similarity** — Parses new functions, builds AST state matrices, compares against the project index (built at session start). Functions with ≥80% structural similarity trigger a warning with the match location. Non-blocking.
+- **Project similarity index at session start** — Builds 57×72 state matrices for all TS functions at session start (cached to `.pi-lens/index.json`). Makes pre-write similarity checks ~50ms instead of seconds.
+
+### Changed
+- **Extracted post-write pipeline** — Moved the entire post-write pipeline (secrets, format, autofix, dispatch, tests, cascade diagnostics) from `index.ts` into `clients/pipeline.ts`. `index.ts` reduced from 1764 to 1439 lines.
+- **Removed inline complexity warnings** — `⚠️ Complexity increased: +4 cognitive` no longer shown on every write. No agent acts on this mid-task. Complexity data still captured for `/lens-booboo` and `/lens-tdi`.
+- **Simplified pre-write handler** — Removed pre-write TypeScript and LSP diagnostics checks (checked old content before write landed — post-write catches everything). Kept only complexity baseline capture and duplicate detection.
+
+---
+
 ## [3.3.1] - 2026-04-02
 
 ### Fixed
