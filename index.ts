@@ -799,6 +799,14 @@ export default function (pi: ExtensionAPI) {
 		metricsClient.reset();
 		complexityBaselines.clear();
 
+		// Reset LSP service so the new session starts with fresh diagnostics.
+		// Without this, stale cascade errors from a previous session persist
+		// if the extension module stayed hot between reloads.
+		if (pi.getFlag("lens-lsp")) {
+			resetLSPService();
+			dbg("session_start: LSP service reset");
+		}
+
 		// Log available tools
 		const tools: string[] = [];
 		tools.push("TypeScript LSP"); // Always available
