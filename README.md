@@ -28,10 +28,7 @@ pi
 # Disable auto-formatting if needed
 pi --no-autoformat
 
-# Full LSP mode (31 language servers)
-pi --lens-lsp
-
-# LSP mode (recommended for large projects)
+# Full LSP mode (31 language servers) — recommended for large/multi-language projects
 pi --lens-lsp
 ```
 
@@ -153,14 +150,6 @@ pi --lens-lsp                    # Enable LSP
 **Recommendation:** Use `pi` for TypeScript/Python projects. Use `pi --lens-lsp` for multi-language projects or when you need full language server features.
 
 See [docs/LSP_CONFIG.md](docs/LSP_CONFIG.md) for configuration options.
-
----
-
-### Execution Modes
-
-| Mode | Flag | Description |
-|------|------|-------------|
-| **Sequential** | (default) | Runners execute one at a time |
 
 ---
 
@@ -294,7 +283,7 @@ message: "Remove console statements before production"
 severity: warning
 ```
 
-See [docs/ast-grep-rules.md](docs/ast-grep-rules.md) for full guide.
+See [AST_GREP_RULES.md](AST_GREP_RULES.md) for full guide.
 
 ---
 
@@ -393,125 +382,20 @@ Running the full suite on every edit would be too slow. Targeted testing gives i
 
 ### Complexity Metrics
 
-pi-lens calculates comprehensive code quality metrics for every source file:
+pi-lens tracks code quality metrics for every file:
 
-| Metric | Range | Description | Thresholds |
-|--------|-------|-------------|------------|
-| **Maintainability Index (MI)** | 0-100 | Composite score combining complexity, size, and structure | <20: 🔴 Unmaintainable, 20-40: 🟡 Poor, >60: ✅ Good |
-| **Cognitive Complexity** | 0+ | Human mental effort to understand code (nesting penalties) | >20: 🟡 Hard to understand, >50: 🔴 Very complex |
-| **Cyclomatic Complexity** | 1+ | Independent code paths (branch points + 1) | >10: 🟡 Complex function, >20: 🔴 Highly complex |
-| **Max Cyclomatic** | 1+ | Worst function in file | >10 flagged |
-| **Nesting Depth** | 0+ | Maximum block nesting level | >4: 🟡 Deep nesting, >6: 🔴 Excessive |
-| **Code Entropy** | 0-8+ bits | Shannon entropy — unpredictability of code patterns | >4.0: 🟡 Risky, >7.0: 🔴 Very unpredictable |
-| **Halstead Volume** | 0+ | Vocabulary × length — unique ops/operands | High = many different operations |
+| Metric | Description | Threshold |
+|--------|-------------|-----------|
+| **Maintainability Index** | 0-100 composite score | >60 ✅ <20 🔴 |
+| **Cognitive Complexity** | Mental effort to understand | >20 🟡 >50 🔴 |
+| **Cyclomatic Complexity** | Independent code paths | >10 🟡 >20 🔴 |
+| **Code Entropy** | Shannon entropy in bits | >4.0 🟡 >7.0 🔴 |
 
-#### Metric Calculations
+**Commands:**
+- `/lens-tdi` — Technical Debt Index (0-100) with grades A-F
+- `/lens-booboo` — Full complexity table for all files
 
-**Maintainability Index (Microsoft's Formula)**
-```
-MI = max(0, (171 - 5.2*ln(Halstead) - 0.23*Cyclomatic - 16.2*ln(LOC)) * 100/171) + commentBonus
-
-Where:
-- Halstead = Halstead Volume (vocabulary-based complexity)
-- Cyclomatic = Average cyclomatic complexity across functions
-- LOC = Lines of code
-- commentBonus = up to +10% for well-commented code
-```
-
-**Cognitive Complexity (SonarSource Spec)**
-- +1 for each structural node (if, for, while, case, catch, switch)
-- +1 for each level of nesting (nested structures add nesting penalty)
-- +1 for each && and || in binary expressions (logical operators)
-- Exception: else-if chains don't add nesting
-
-**Cyclomatic Complexity (McCabe's Formula)**
-```
-M = E - N + 2P
-
-Where:
-- E = Number of edges in control flow graph
-- N = Number of nodes
-- P = Number of connected components (usually 1)
-
-Simplified: Count branch points (if, while, for, case, &&, ||) + 1
-```
-
-**Max Cyclomatic**
-- Single value: the highest cyclomatic complexity of any function in the file
-- Catches "worst offender" functions that average metrics hide
-
-**Code Entropy (Shannon Entropy in Bits)**
-```
-H = -Σ(p(i) * log2(p(i)))
-
-Where:
-- p(i) = frequency of token i / total tokens
-- Measures unpredictability/vocabulary richness
-
-Thresholds:
-- ≤4.0 bits: Predictable, conventional code ✅
-- 4.0-7.0 bits: Moderate complexity 🟡
-- ≥7.0 bits: Unpredictable, hard to maintain 🔴
-```
-
-**Halstead Volume**
-```
-V = N * log2(n)
-
-Where:
-- N = total operators + operands (program length)
-- n = unique operators + operands (vocabulary size)
-
-Measures: How much information the reader must absorb
-```
-
----
-
-### Technical Debt Index (TDI)
-
-The TDI provides a single score (0-100) representing overall codebase health. Lower is better.
-
-**TDI Formula (5-Factor Weighted)**
-```
-TDI = MI-debt(45%) + cognitive(30%) + nesting(10%) + maxCyc(10%) + entropy(5%)
-```
-
-**Debt Calculation for Each Factor:**
-
-| Factor | Debt Formula | Good | Bad |
-|--------|---------------|------|-----|
-| **MI** | `(100 - MI) / 100` | 100 | 0 |
-| **Cognitive** | `min(1, cognitive / 200)` | 0 | ≥500 |
-| **Nesting** | `max(0, nesting - 3) / 7` | ≤3 | ≥10 |
-| **Max Cyclomatic** | `max(0, maxCyc - 10) / 20` | ≤10 | ≥30 |
-| **Entropy** | `max(0, entropy - 4.0) / 3.0` | ≤4.0 | ≥7.0 |
-
-**Grades:**
-- **A** (0-15%): Excellent codebase health
-- **B** (16-30%): Good, minor improvements possible
-- **C** (31-50%): Moderate debt, consider refactoring
-- **D** (51-70%): Significant debt, plan refactoring
-- **F** (71%+): High debt, immediate attention needed
-
-**Usage:**
-```bash
-/lens-tdi  # Display TDI score with breakdown by category
-```
-
----
-
-### AI Slop Indicators
-
-Metrics that suggest potentially AI-generated low-quality code:
-
-- **Low MI + high cognitive + high entropy** = potential spaghetti code
-- **Excessive comments (>40%) + low MI** = hand-holding anti-patterns
-- **Single-use helpers with high entropy** = over-abstraction
-- **Many small functions with high cyclomatic** = fragmented complexity
-
-**Usage:**
-- `/lens-booboo` — Shows complexity table for all files
-- `tool_result` — Complexity tracked per file, AI slop warnings inline
+See [docs/COMPLEXITY_METRICS.md](docs/COMPLEXITY_METRICS.md) for formulas and detailed calculations.
 
 ---
 
@@ -528,7 +412,7 @@ pi-lens works out of the box for TypeScript/JavaScript. For full language suppor
 | `knip` | `npm i -D knip` | Dead code / unused exports |
 | `jscpd` | `npm i -D jscpd` | Copy-paste detection |
 | `type-coverage` | `npm i -D type-coverage` | TypeScript `any` coverage % |
-| `@ast-grep/napi` | `npm i -D @ast-grep/napi` | Fast structural analysis (TS/JS) — currently disabled in realtime |
+| `@ast-grep/napi` | `npm i -D @ast-grep/napi` | Fast structural analysis (TS/JS) — security rules inline, slop in booboo |
 | `@ast-grep/cli` | `npm i -D @ast-grep/cli` | Structural pattern matching (all languages) |
 | `typos-cli` | `cargo install typos-cli` | Spellcheck for Markdown |
 
@@ -606,141 +490,19 @@ pi --lens-lsp                    # LSP type-checking (31 languages)
 
 ## TypeScript LSP — tsconfig detection
 
-The LSP walks up from the edited file's directory until it finds a `tsconfig.json`. If found, it uses that project's exact `compilerOptions` (paths, strict settings, lib, etc.). If not found, it falls back to sensible defaults:
-
-- `target: ES2020`
-- `lib: ["es2020", "dom", "dom.iterable"]`
-- `moduleResolution: bundler`
-- `strict: true`
-
-The compiler options are refreshed automatically when you switch between projects within a session.
+The LSP walks up from edited files to find `tsconfig.json`, using its `compilerOptions` (paths, strict settings, etc.). Falls back to sensible defaults if not found.
 
 ---
 
-## Exclusion Criteria
+## File Exclusions
 
-pi-lens automatically excludes certain files from analysis to reduce noise and focus on production code.
-
-### Test Files
-
-All runners respect test file exclusions — both in the dispatch system (`skipTestFiles: true`) and the `/lens-booboo` command.
-
-**Excluded patterns:**
-```
-**/*.test.ts      **/*.test.tsx      **/*.test.js      **/*.test.jsx
-**/*.spec.ts      **/*.spec.tsx      **/*.spec.js      **/*.spec.jsx
-**/*.poc.test.ts  **/*.poc.test.tsx
-**/test-utils.ts  **/test-*.ts
-**/__tests__/**  **/tests/**  **/test/**
-```
-
-**Why:** Test files intentionally duplicate patterns (test fixtures, mock setups) and have different complexity standards. Including them creates false positives.
-
-### Build Artifacts (TypeScript Projects)
-
-In TypeScript projects (detected by `tsconfig.json` presence), compiled `.js` files are excluded:
-
-```
-**/*.js   **/*.jsx   (when corresponding .ts/.tsx exists)
-```
-
-**Why:** In TS projects, `.js` files are build artifacts. Analyzing them duplicates every issue (once in source `.ts`, once in compiled `.js`).
-
-**Note:** In pure JavaScript projects (no `tsconfig.json`), `.js` files are **included** as they are the source files.
-
-### Excluded Directories
-
-| Directory | Reason |
-|-----------|--------|
-| `node_modules/` | Third-party dependencies |
-| `.git/` | Version control metadata |
-| `dist/`, `build/` | Build outputs |
-| `.pi-lens/`, `.pi/` | pi agent internal files |
-| `.next/`, `.ruff_cache/` | Framework/build caches |
-| `coverage/` | Test coverage reports |
-
-### Per-Runner Exclusion Summary
-
-| Runner | Test Files | Build Artifacts | Directories |
-|--------|-----------|-----------------|-------------|
-| **dispatch runners** | ✅ `skipTestFiles` | ✅ `.js` excluded in TS | ✅ `EXCLUDED_DIRS` |
-| **booboo /lens-booboo** | ✅ `shouldIncludeFile()` | ✅ `isTsProject` check | ✅ `EXCLUDED_DIRS` |
-| **Secrets scan** | ❌ No exclusion (security) | ❌ No exclusion | ✅ Dirs excluded |
+Test files (`*.test.ts`, `__tests__/`), build artifacts (`.js` next to `.ts`), and dependency directories (`node_modules/`) are automatically excluded. See [docs/EXCLUSIONS.md](docs/EXCLUSIONS.md) for full patterns.
 
 ---
 
-## Caching Architecture
+## Caching
 
-pi-lens uses a multi-layer caching strategy to avoid redundant work:
-
-### 1. Tool Availability Cache
-
-**Location:** `clients/tool-availability.ts`
-
-```
-┌─────────────────────────────────────────┐
-│         TOOL AVAILABILITY CACHE          │
-│  Map<toolName, {available, version}>     │
-│  • Persisted for session lifetime         │
-│  • Refreshed on extension restart        │
-└─────────────────────────────────────────┘
-```
-
-Avoids repeated `which`/`where` calls to check if `biome`, `ruff`, `pyright`, etc. are installed.
-
-### 2. Dispatch Baselines (Delta Mode)
-
-**Location:** `clients/dispatch/dispatcher.ts`
-
-```
-┌─────────────────────────────────────────┐
-│         DISPATCH BASELINES              │
-│  Map<filePath, Diagnostic[]>            │
-│  • Cleared at turn start                 │
-│  • Updated after each runner execution   │
-│  • Filters: only NEW issues shown        │
-└─────────────────────────────────────────┘
-```
-
-Delta mode tracking: first edit shows all issues, subsequent edits only show issues that weren't there before.
-
-### 3. Client-Level Caches
-
-| Client | Cache | TTL | Purpose |
-|--------|-------|-----|---------|
-| **Knip** | `clients/cache-manager.ts` | 5 min | Dead code analysis (slow) |
-| **jscpd** | `clients/cache-manager.ts` | 5 min | Duplicate detection (slow) |
-| **Type Coverage** | In-memory | Session | `any` type percentage |
-| **Complexity** | In-memory | File-level | MI, cognitive complexity per file |
-
-### 4. Session Turn State
-
-**Location:** `clients/cache-manager.ts`
-
-```
-┌─────────────────────────────────────────┐
-│         TURN STATE TRACKING               │
-│  • Modified files this turn              │
-│  • Modified line ranges per file         │
-│  • Import changes detected               │
-│  • Turn cycle counter (max 10)           │
-└─────────────────────────────────────────┘
-```
-
-Tracks which files were edited in the current agent turn for:
-- jscpd: Only re-scan modified files
-- Madge: Only check deps if imports changed
-- Cycle detection: Prevents infinite fix loops
-
-### 5. Runner Internal Caches
-
-| Runner | Cache | Notes |
-|--------|-------|-------|
-| `tree-sitter` | Compiled query cache | `.wasm-cache` files with mtime-based invalidation. 10× faster startup. |
-| `ast-grep-napi` | Rule descriptions | Loaded once per session |
-| `biome` | Tool availability | Checked once, cached |
-| `pyright` | Command path | Venv lookup cached |
-| `ruff` | Command path | Venv lookup cached |
+Multi-layer caching (tool availability, delta baselines, file-level) improves performance. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 
 ---
 
@@ -748,48 +510,16 @@ Tracks which files were edited in the current agent turn for:
 
 ```
 pi-lens/
-├── clients/              # Lint tool wrappers and utilities
-│   ├── bus/              # Event bus system (Phase 1)
-│   │   ├── bus.ts
-│   │   ├── events.ts
-│   │   └── integration.ts
-│   ├── cache/            # Rule compilation cache
-│   │   └── rule-cache.ts # Disk-backed cache with mtime invalidation
-│   ├── dispatch/         # Dispatcher and runners
-│   │   ├── dispatcher.ts
-│   │   └── runners/      # Individual runners
-│   │       ├── ast-grep-napi.ts      # Security rules inline, warnings in booboo
-│   │       ├── python-slop.ts        # Python slop detection
-│   │       ├── ts-lsp.ts             # TS type checking
-│   │       ├── biome.ts
-│   │       ├── ruff.ts
-│   │       ├── pyright.ts
-│   │       ├── go-vet.ts
-│   │       └── rust-clippy.ts
-│   ├── lsp/              # LSP client system (Phase 3)
-│   │   ├── client.ts
-│   │   ├── server.ts     # 31 LSP server definitions
-│   │   ├── language.ts
-│   │   ├── launch.ts
-│   │   └── config.ts     # Custom LSP configuration
-│   ├── installer/          # Auto-installation (Phase 4)
-│   │   └── index.ts
-│   ├── services/           # Effect-TS services (Phase 2)
-│   │   ├── runner-service.ts
-│   │   └── effect-integration.ts
-│   ├── complexity-client.ts
-│   ├── type-safety-client.ts
-│   └── secrets-scanner.ts
-├── commands/             # pi commands
-│   ├── booboo.ts
-│   └── fix-simplified.ts
-├── docs/                 # Documentation
-│   └── LSP_CONFIG.md     # LSP configuration guide
-├── rules/                # AST-grep rules
-│   └── ast-grep-rules/   # General structural rules
-├── index.ts              # Main entry point
+├── clients/          # Lint tools, LSP clients, formatters
+├── commands/         # /lens-booboo, /lens-format commands
+├── docs/             # Documentation
+├── rules/            # AST-grep rules
+├── skills/           # Built-in pi skills
+├── index.ts          # Main extension entry point
 └── package.json
 ```
+
+See source for detailed structure.
 
 ---
 
@@ -862,7 +592,7 @@ See [CHANGELOG.md](CHANGELOG.md) for full history.
 
 - **Tree-sitter Query Cache:** Compiled query cache with mtime-based invalidation — 10× faster structural analysis startup
 - **LSP Support:** 31 Language Server Protocol clients (4 core auto-installed, others via npx or manual)
-- **NAPI Runner:** 100x faster TypeScript/JavaScript structural analysis (~9ms vs ~1200ms) — currently disabled in realtime due to stability
+- **NAPI Runner:** 100x faster TypeScript/JavaScript structural analysis (~9ms vs ~1200ms) — security rules fire inline
 - **Slop Detection:** 33+ TypeScript and 40+ Python patterns for AI-generated code quality issues
 
 ---

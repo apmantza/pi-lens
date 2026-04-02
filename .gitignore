@@ -31,6 +31,7 @@ tests/
 test-files/
 test-lsp-files/
 test-filetime/
+test-projects/
 scripts/
 test-*.ts
 test-*.js
@@ -52,6 +53,10 @@ migrate-*.js
 !README.md
 !CHANGELOG.md
 !AST_GREP_RULES.md
+!docs/LSP_CONFIG.md
+!docs/COMPLEXITY_METRICS.md
+!docs/ARCHITECTURE.md
+!docs/EXCLUSIONS.md
 !skills/**/*.md
 
 # Auto-generated reports (CAPS)
