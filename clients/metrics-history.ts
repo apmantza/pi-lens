@@ -186,6 +186,8 @@ export function captureSnapshots(
 			cognitiveComplexity: number;
 			maxNestingDepth: number;
 			linesOfCode: number;
+			maxCyclomatic: number;
+			entropy: number;
 		};
 	}>,
 ): MetricsHistory {
@@ -202,6 +204,8 @@ export function captureSnapshots(
 			cognitive: file.metrics.cognitiveComplexity,
 			nesting: file.metrics.maxNestingDepth,
 			lines: file.metrics.linesOfCode,
+			maxCyclomatic: file.metrics.maxCyclomatic,
+			entropy: Math.round(file.metrics.entropy * 100) / 100,
 		};
 
 		const existing = history.files[relativePath];
@@ -387,7 +391,13 @@ export function computeTDI(history: MetricsHistory): ProjectTDI {
 			totalCognitive: 0,
 			filesAnalyzed: 0,
 			filesWithDebt: 0,
-			byCategory: { complexity: 0, maintainability: 0, nesting: 0 },
+			byCategory: {
+				maintainability: 0,
+				cognitive: 0,
+				nesting: 0,
+				maxCyclomatic: 0,
+				entropy: 0,
+			},
 		};
 	}
 
@@ -398,8 +408,8 @@ export function computeTDI(history: MetricsHistory): ProjectTDI {
 	let debtFromMI = 0;
 	let debtFromCognitive = 0;
 	let debtFromNesting = 0;
-	const debtFromMaxCyclomatic = 0; // NEW
-	const debtFromEntropy = 0; // NEW
+	let debtFromMaxCyclomatic = 0; // NEW
+	let debtFromEntropy = 0; // NEW
 
 	for (const file of files) {
 		const snap = file.latest;
