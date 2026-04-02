@@ -494,18 +494,6 @@ The LSP walks up from edited files to find `tsconfig.json`, using its `compilerO
 
 ---
 
-## File Exclusions
-
-Test files (`*.test.ts`, `__tests__/`), build artifacts (`.js` next to `.ts`), and dependency directories (`node_modules/`) are automatically excluded. See [docs/EXCLUSIONS.md](docs/EXCLUSIONS.md) for full patterns.
-
----
-
-## Caching
-
-Multi-layer caching (tool availability, delta baselines, file-level) improves performance. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
-
----
-
 ## Project Structure
 
 ```
