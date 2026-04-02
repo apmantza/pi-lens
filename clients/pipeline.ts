@@ -20,10 +20,7 @@ import type { PiAgentAPI } from "./dispatch/types.js";
 import type { FormatService } from "./format-service.js";
 import { logLatency } from "./latency-logger.js";
 import { getLSPService } from "./lsp/index.js";
-import {
-	convertDiagnosticsToTDREntries,
-	type MetricsClient,
-} from "./metrics-client.js";
+import type { MetricsClient } from "./metrics-client.js";
 import type { RuffClient } from "./ruff-client.js";
 import { formatSecrets, scanForSecrets } from "./secrets-scanner.js";
 import type { TestRunnerClient } from "./test-runner-client.js";
@@ -232,22 +229,10 @@ export async function runPipeline(
 		getFlag: getFlag as (flag: string) => boolean | string | undefined,
 	};
 
-	// Get full dispatch result for TDR tracking
 	const dispatchResult = await dispatchLintWithResult(filePath, cwd, piApi);
 
 	if (dispatchResult.output) {
 		output += `\n\n${dispatchResult.output}`;
-	}
-
-	// Update TDR metrics with diagnostics from dispatch
-	if (dispatchResult.diagnostics.length > 0) {
-		const tdrEntries = convertDiagnosticsToTDREntries(
-			dispatchResult.diagnostics,
-		);
-		metricsClient.updateTDR(filePath, tdrEntries);
-		dbg(
-			`tdr: recorded ${tdrEntries.length} categories for ${path.basename(filePath)}`,
-		);
 	}
 
 	if (fixedCount > 0) {
