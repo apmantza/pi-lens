@@ -36,17 +36,6 @@ export type OutputSemantic =
 	/** Not applicable / skipped */
 	| "none";
 
-/** TDR (Technical Debt Ratio) category for metrics tracking */
-export type TDRCategory =
-	| "type_errors"
-	| "security"
-	| "architecture"
-	| "complexity"
-	| "style"
-	| "tests"
-	| "dead_code"
-	| "duplication";
-
 export interface Diagnostic {
 	/** Unique identifier for deduplication */
 	id: string;
@@ -70,8 +59,6 @@ export interface Diagnostic {
 	fixable?: boolean;
 	/** Auto-fix command/suggestion */
 	fixSuggestion?: string;
-	/** TDR category for metrics tracking */
-	tdrCategory?: TDRCategory;
 }
 
 export interface DispatchResult {
