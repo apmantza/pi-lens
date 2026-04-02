@@ -16,6 +16,7 @@ import {
 	dispatchLint,
 	resetDispatchBaselines,
 } from "./clients/dispatch/integration.js";
+import { extractFunctions } from "./clients/dispatch/runners/similarity.js";
 import { createFileTime, FileTimeError } from "./clients/file-time.js";
 import {
 	getFormatService,
@@ -33,6 +34,7 @@ import { MetricsClient } from "./clients/metrics-client.js";
 import { captureSnapshot } from "./clients/metrics-history.js";
 import {
 	buildProjectIndex,
+	findSimilarFunctions,
 	loadIndex,
 	type ProjectIndex,
 } from "./clients/project-index.js";
@@ -1125,6 +1127,55 @@ export default function (pi: ExtensionAPI) {
 						block: true,
 						reason: `🔴 STOP — Redefining existing export(s). Import instead:\n${dupeWarnings.map((w) => `  • ${w}`).join("\n")}`,
 					};
+				}
+
+				// --- Structural similarity check (Phase 7b) ---
+				// If the project index was built at session_start, check new
+				// functions against it for structural clones (~50ms).
+				if (
+					cachedProjectIndex &&
+					cachedProjectIndex.entries.size > 0 &&
+					/\.(ts|tsx)$/.test(filePath)
+				) {
+					try {
+						const ts = await import("typescript");
+						const sourceFile = ts.createSourceFile(
+							filePath,
+							newContent,
+							ts.ScriptTarget.Latest,
+							true,
+						);
+						const newFunctions = extractFunctions(sourceFile, newContent);
+						const simWarnings: string[] = [];
+						const relPath = path.relative(projectRoot, filePath);
+
+						for (const func of newFunctions) {
+							if (func.transitionCount < 20) continue;
+							const matches = findSimilarFunctions(
+								func.matrix,
+								cachedProjectIndex,
+								0.8,
+								1,
+							);
+							for (const match of matches) {
+								// Skip self-matches
+								if (match.targetId === `${relPath}:${func.name}`) continue;
+								const pct = Math.round(match.similarity * 100);
+								simWarnings.push(
+									`\`${func.name}\` is ${pct}% similar to \`${match.targetName}\` in ${match.targetLocation}`,
+								);
+							}
+						}
+
+						if (simWarnings.length > 0) {
+							return {
+								block: false,
+								reason: `⚠️ Structural similarity detected — consider reusing existing code:\n${simWarnings.map((w) => `  • ${w}`).join("\n")}`,
+							};
+						}
+					} catch {
+						// Parsing failed — skip similarity check silently
+					}
 				}
 			}
 		}

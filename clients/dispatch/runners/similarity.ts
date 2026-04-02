@@ -139,7 +139,7 @@ const similarityRunner: RunnerDefinition = {
 // Function Extraction
 // ============================================================================
 
-interface ExtractedFunction {
+export interface ExtractedFunction {
 	name: string;
 	line: number;
 	column: number;
@@ -148,7 +148,7 @@ interface ExtractedFunction {
 	signature: string;
 }
 
-function extractFunctions(
+export function extractFunctions(
 	sourceFile: ts.SourceFile,
 	_fullContent: string,
 ): ExtractedFunction[] {
