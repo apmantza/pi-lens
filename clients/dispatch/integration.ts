@@ -15,13 +15,11 @@ import {
 	getLatencyReports,
 	type RunnerLatency,
 } from "./dispatcher.js";
-import type { PiAgentAPI } from "./types.js";
+import type { BaselineStore, DispatchResult, PiAgentAPI } from "./types.js";
 
 export type { DispatchLatencyReport, RunnerLatency };
 // Re-export latency tracking types and functions
 export { clearLatencyReports, formatLatencyReport, getLatencyReports };
-
-import type { BaselineStore } from "./types.js";
 
 // Import runners to register them
 import "./runners/index.js";
@@ -72,6 +70,47 @@ export async function dispatchLint(
 
 	const result = await dispatchForFile(ctx, plan.groups);
 	return result.output;
+}
+
+/**
+ * Run linting and return full result (including diagnostics for TDR)
+ */
+export async function dispatchLintWithResult(
+	filePath: string,
+	cwd: string,
+	pi: PiAgentAPI,
+): Promise<DispatchResult> {
+	const ctx = createDispatchContext(filePath, cwd, pi, sessionBaselines, true);
+
+	const { dispatchForFile } = await import("./dispatcher.js");
+	const { getRunnersForKind } = await import("./dispatcher.js");
+	const { TOOL_PLANS } = await import("./plan.js");
+
+	const kind = ctx.kind;
+	if (!kind) {
+		return {
+			diagnostics: [],
+			blockers: [],
+			warnings: [],
+			fixed: [],
+			output: "",
+			hasBlockers: false,
+		};
+	}
+
+	const plan = TOOL_PLANS[kind];
+	if (!plan) {
+		return {
+			diagnostics: [],
+			blockers: [],
+			warnings: [],
+			fixed: [],
+			output: "",
+			hasBlockers: false,
+		};
+	}
+
+	return await dispatchForFile(ctx, plan.groups);
 }
 
 /**

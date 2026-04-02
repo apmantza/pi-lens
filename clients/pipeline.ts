@@ -15,12 +15,15 @@
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
 import type { BiomeClient } from "./biome-client.js";
-import { dispatchLint } from "./dispatch/integration.js";
+import { dispatchLintWithResult } from "./dispatch/integration.js";
 import type { PiAgentAPI } from "./dispatch/types.js";
 import type { FormatService } from "./format-service.js";
 import { logLatency } from "./latency-logger.js";
 import { getLSPService } from "./lsp/index.js";
-import type { MetricsClient } from "./metrics-client.js";
+import {
+	convertDiagnosticsToTDREntries,
+	type MetricsClient,
+} from "./metrics-client.js";
 import type { RuffClient } from "./ruff-client.js";
 import { formatSecrets, scanForSecrets } from "./secrets-scanner.js";
 import type { TestRunnerClient } from "./test-runner-client.js";
@@ -229,10 +232,23 @@ export async function runPipeline(
 	const piApi: PiAgentAPI = {
 		getFlag: getFlag as (flag: string) => boolean | string | undefined,
 	};
-	const dispatchOutput = await dispatchLint(filePath, cwd, piApi);
 
-	if (dispatchOutput) {
-		output += `\n\n${dispatchOutput}`;
+	// Get full dispatch result for TDR tracking
+	const dispatchResult = await dispatchLintWithResult(filePath, cwd, piApi);
+
+	if (dispatchResult.output) {
+		output += `\n\n${dispatchResult.output}`;
+	}
+
+	// Update TDR metrics with diagnostics from dispatch
+	if (dispatchResult.diagnostics.length > 0) {
+		const tdrEntries = convertDiagnosticsToTDREntries(
+			dispatchResult.diagnostics,
+		);
+		metricsClient.updateTDR(filePath, tdrEntries);
+		dbg(
+			`tdr: recorded ${tdrEntries.length} categories for ${path.basename(filePath)}`,
+		);
 	}
 
 	if (fixedCount > 0) {
@@ -242,7 +258,10 @@ export async function runPipeline(
 	if (formatChanged || fixedCount > 0) {
 		output += `\n\n⚠️ **File modified by auto-format/fix. Re-read before next edit.**`;
 	}
-	phase.end("dispatch_lint", { hasOutput: !!dispatchOutput });
+	phase.end("dispatch_lint", {
+		hasOutput: !!dispatchResult.output,
+		diagnosticCount: dispatchResult.diagnostics.length,
+	});
 
 	// --- 6. Test runner ---
 	phase.start("test_runner");
