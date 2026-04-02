@@ -115,6 +115,47 @@ function log(msg: string) {
 	if (_verbose) console.error(`[pi-lens] ${msg}`);
 }
 
+/**
+ * Find and delete stale tsconfig.tsbuildinfo files in the project.
+ *
+ * A tsbuildinfo is stale when its `root` array references files that no
+ * longer exist on disk. The TypeScript Language Server reads this cache
+ * on startup and will report phantom "Cannot find module" errors for
+ * every deleted file until the cache is cleared.
+ *
+ * Only called when --lens-lsp is active (that’s when tsserver runs).
+ */
+function cleanStaleTsBuildInfo(cwd: string): string[] {
+	const cleaned: string[] = [];
+	try {
+		// Find all tsbuildinfo files in the project (max depth 3 to avoid crawling)
+		const candidates = nodeFs
+			.readdirSync(cwd)
+			.filter((f) => f.endsWith(".tsbuildinfo"))
+			.map((f) => path.join(cwd, f));
+
+		for (const infoPath of candidates) {
+			try {
+				const data = JSON.parse(nodeFs.readFileSync(infoPath, "utf-8"));
+				const root: string[] = data.root ?? [];
+				const dir = path.dirname(infoPath);
+				const isStale = root.some(
+					(f) => !nodeFs.existsSync(path.resolve(dir, f)),
+				);
+				if (isStale) {
+					nodeFs.unlinkSync(infoPath);
+					cleaned.push(infoPath);
+				}
+			} catch {
+				// Malformed or unreadable — skip
+			}
+		}
+	} catch {
+		// readdirSync failed — skip
+	}
+	return cleaned;
+}
+
 // --- Extension ---
 
 export default function (pi: ExtensionAPI) {
@@ -771,6 +812,22 @@ export default function (pi: ExtensionAPI) {
 
 		log(`Active tools: ${tools.join(", ")}`);
 		dbg(`session_start tools: ${tools.join(", ")}`);
+
+		// Clean up stale TypeScript build caches before LSP starts.
+		// tsconfig.tsbuildinfo caches the full file list from the last build.
+		// If files have been deleted since then, the LSP reads the stale list
+		// and reports phantom "Cannot find module" cascade errors for files
+		// the agent never touched.
+		if (pi.getFlag("lens-lsp")) {
+			const cleaned = cleanStaleTsBuildInfo(ctx.cwd ?? process.cwd());
+			if (cleaned.length > 0) {
+				ctx.ui.notify(
+					`🧹 Deleted stale TypeScript build cache (${cleaned.map((f) => path.basename(f)).join(", ")}) — phantom errors suppressed.`,
+					"info",
+				);
+				dbg(`session_start: cleaned stale tsbuildinfo: ${cleaned.join(", ")}`);
+			}
+		}
 
 		// Pre-install TypeScript LSP if --lens-lsp flag is set (avoid delay on first use)
 		if (pi.getFlag("lens-lsp")) {
