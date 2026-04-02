@@ -49,6 +49,15 @@ const MAX_MATCHES_PER_RULE = 10;
 /** Maximum total diagnostics per file to prevent output spam */
 const MAX_TOTAL_DIAGNOSTICS = 50;
 
+/** Rules already covered by tree-sitter runner (priority 14, runs first) */
+const TREE_SITTER_OVERLAP = new Set([
+	"constructor-super",
+	"empty-catch",
+	"long-parameter-list",
+	"nested-ternary",
+	"no-dupe-class-members",
+]);
+
 /** Maximum AST depth to traverse to prevent stack overflow on deeply nested files */
 const MAX_AST_DEPTH = 50;
 
@@ -213,9 +222,7 @@ const astGrepNapiRunner: RunnerDefinition = {
 	id: "ast-grep-napi",
 	appliesTo: ["jsts"],
 	priority: 15,
-	// Post-write disabled in plan.ts (removed from TOOL_PLANS.jsts.groups).
-	// Still enabled for /lens-booboo via FULL_LINT_PLANS.
-	enabledByDefault: false,
+	enabledByDefault: true,
 	skipTestFiles: true,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
@@ -279,6 +286,9 @@ const astGrepNapiRunner: RunnerDefinition = {
 			}
 
 			for (const rule of rules) {
+				// Skip rules already handled by tree-sitter runner (priority 14)
+				if (TREE_SITTER_OVERLAP.has(rule.id)) continue;
+
 				const lang = rule.language?.toLowerCase();
 				if (lang && lang !== "typescript" && lang !== "javascript") {
 					continue;

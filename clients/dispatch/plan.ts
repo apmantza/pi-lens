@@ -35,8 +35,8 @@ export const TOOL_PLANS: Record<string, ToolPlan> = {
 			// Tree-sitter native structural analysis (blocking rules: constructor-super, dangerouslySetInnerHTML, etc.)
 			{ mode: "all", runnerIds: ["tree-sitter"], filterKinds: ["jsts"] },
 			// AST structural analysis (blocking: no-dupe-keys, no-hardcoded-secrets, jwt-no-verify, etc.)
-			// DISABLED in post-write - ast-grep-napi can crash. Runs via /lens-booboo only.
-			// { mode: "all", runnerIds: ["ast-grep-napi"], filterKinds: ["jsts"] },
+			// Only error-severity rules fire inline (blockingOnly=true). Warnings are booboo-only.
+			{ mode: "all", runnerIds: ["ast-grep-napi"], filterKinds: ["jsts"] },
 			// Type safety checks (has some blocking errors)
 			{ mode: "fallback", runnerIds: ["type-safety"], filterKinds: ["jsts"] },
 			// Note: ast-grep CLI kept for ast_grep_search/ast_grep_replace tools only
