@@ -42,14 +42,24 @@ pub struct Stats {
     pub sum: i32,
 }
 
-// Intentional issue: unused variable
-const UNUSED_CONSTANT: &str = "I am not used";
+/// Calculate GCD using Euclidean algorithm
+pub fn gcd(a: i32, b: i32) -> i32 {
+    let mut a = a.abs();
+    let mut b = b.abs();
+    while b != 0 {
+        let temp = b;
+        b = a % b;
+        a = temp;
+    }
+    a
+}
 
-// Intentional issue: function with dead code
-pub fn messy_function(x: i32) -> i32 {
-    let y = x + 1;
-    let z = y * 2; // z is calculated but not used
-    y
+/// Calculate LCM
+pub fn lcm(a: i32, b: i32) -> i32 {
+    if a == 0 || b == 0 {
+        return 0;
+    }
+    (a * b).abs() / gcd(a, b)
 }
 
 /// Process items - has potential issues

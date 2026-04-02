@@ -51,20 +51,15 @@ def messy_function(x, y):  # Missing type hints
 
 API_KEY = "sk-test-12345-abcdef"  # Intentional secret pattern
 
-def power(base: int, exponent: int) -> int:
-    """Calculate base raised to the power of exponent."""
-    if exponent < 0:
-        raise ValueError("Exponent must be non-negative")
-    result = 1
-    for _ in range(exponent):
-        result *= base
-    return result
+def gcd(a: int, b: int) -> int:
+    """Calculate greatest common divisor using Euclidean algorithm."""
+    while b:
+        a, b = b, a % b
+    return a
 
 
-def factorial(n: int) -> int:
-    """Calculate factorial of n."""
-    if n < 0:
-        raise ValueError("n must be non-negative")
-    if n <= 1:
-        return 1
-    return n * factorial(n - 1)
+def lcm(a: int, b: int) -> int:
+    """Calculate least common multiple."""
+    if a == 0 or b == 0:
+        return 0
+    return abs(a * b) // gcd(a, b)

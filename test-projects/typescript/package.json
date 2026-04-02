@@ -4,9 +4,11 @@
 	"type": "module",
 	"scripts": {
 		"test": "vitest",
-		"lint": "tsc --noEmit"
+		"lint": "tsc --noEmit",
+		"format": "biome format --write"
 	},
 	"devDependencies": {
+		"@biomejs/biome": "^1.5.0",
 		"typescript": "^5.0.0",
 		"vitest": "^1.0.0"
 	}

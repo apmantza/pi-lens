@@ -1,6 +1,7 @@
 import * as nodeFs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+// RELOADED: Testing format/lsp flow on large file
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";

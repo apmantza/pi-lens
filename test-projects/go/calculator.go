@@ -26,9 +26,27 @@ func Divide(a, b int) (float64, error) {
 	return float64(a) / float64(b), nil
 }
 
-// UnusedFunction is not used anywhere - should be flagged
-func UnusedFunction() string {
-	return "I am not used"
+// GCD calculates the greatest common divisor using Euclidean algorithm.
+func GCD(a, b int) int {
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return a
+}
+
+// LCM calculates the least common multiple.
+func LCM(a, b int) int {
+	if a == 0 || b == 0 {
+		return 0
+	}
+	return abs(a*b) / GCD(a, b)
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 // ProcessData processes a slice of strings
