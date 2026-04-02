@@ -428,32 +428,6 @@ const astGrepNapiRunner: RunnerDefinition = {
 						const range = node.range();
 						const severity = rule.severity === "error" ? "error" : "warning";
 
-						// Determine TDR category based on rule
-						let tdrCategory:
-							| "security"
-							| "architecture"
-							| "complexity"
-							| "style" = "style";
-						if (
-							rule.id.includes("eval") ||
-							rule.id.includes("secret") ||
-							rule.id.includes("jwt") ||
-							rule.id.includes("dangerous") ||
-							rule.id.includes("security")
-						) {
-							tdrCategory = "security";
-						} else if (
-							rule.id.includes("architect") ||
-							rule.id.includes("cross-layer")
-						) {
-							tdrCategory = "architecture";
-						} else if (
-							rule.id.includes("complex") ||
-							rule.id.includes("nesting")
-						) {
-							tdrCategory = "complexity";
-						}
-
 						diagnostics.push({
 							id: `ast-grep-napi-${range.start.line}-${rule.id}`,
 							message: `[${rule.metadata?.category || "slop"}] ${rule.message || rule.id}`,
@@ -465,7 +439,6 @@ const astGrepNapiRunner: RunnerDefinition = {
 							tool: "ast-grep-napi",
 							rule: rule.id,
 							fixable: false,
-							tdrCategory,
 						});
 					}
 

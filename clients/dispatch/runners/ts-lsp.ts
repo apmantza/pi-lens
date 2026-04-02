@@ -80,7 +80,6 @@ async function runWithLSPClient(ctx: DispatchContext): Promise<RunnerResult> {
 			semantic: d.severity === 1 ? "blocking" : "warning",
 			tool: "ts-lsp",
 			code: String(d.code ?? ""),
-			tdrCategory: "type_errors" as const,
 		}));
 
 	return {
@@ -145,7 +144,6 @@ async function runWithBuiltinClient(
 			tool: "ts-lsp",
 			fixable: !!lineFixes && lineFixes.length > 0,
 			fixSuggestion: fixDescription,
-			tdrCategory: "type_errors" as const,
 		});
 	}
 
