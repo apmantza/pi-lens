@@ -2,7 +2,7 @@
 
 All notable changes to pi-lens will be documented in this file.
 
-## [Unreleased]
+## [3.3.0] - 2026-04-02
 
 ### Removed
 - **`--lens-bus`**: Removed the experimental event bus system (Phase 1). The sequential dispatcher has richer features (delta mode, per-runner latency, baseline tracking) that the bus system never had.
