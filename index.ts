@@ -1,6 +1,7 @@
 import * as nodeFs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 // RELOADED: Testing format/lsp flow on large file
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
@@ -896,6 +897,17 @@ export default function (pi: ExtensionAPI) {
 
 	// Project rules scan result (from .claude/rules, .agents/rules, etc.)
 	let projectRulesScan: RuleScanResult = { rules: [], hasCustomRules: false };
+
+	// --- Register skills with pi ---
+	pi.on("resources_discover", async (_event, _ctx) => {
+		// Get the extension directory (where this file is located)
+		const extensionDir = path.dirname(fileURLToPath(import.meta.url));
+		const skillsDir = path.join(extensionDir, "skills");
+
+		return {
+			skillPaths: [skillsDir],
+		};
+	});
 
 	// --- Events ---
 
