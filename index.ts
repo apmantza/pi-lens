@@ -12,10 +12,7 @@ import { BiomeClient } from "./clients/biome-client.js";
 import { CacheManager } from "./clients/cache-manager.js";
 import { ComplexityClient } from "./clients/complexity-client.js";
 import { DependencyChecker } from "./clients/dependency-checker.js";
-import {
-	dispatchLint,
-	resetDispatchBaselines,
-} from "./clients/dispatch/integration.js";
+import { resetDispatchBaselines } from "./clients/dispatch/integration.js";
 import { extractFunctions } from "./clients/dispatch/runners/similarity.js";
 import { createFileTime, FileTimeError } from "./clients/file-time.js";
 import {
@@ -32,6 +29,7 @@ import { logLatency } from "./clients/latency-logger.js";
 import { getLSPService, resetLSPService } from "./clients/lsp/index.js";
 import { MetricsClient } from "./clients/metrics-client.js";
 import { captureSnapshot } from "./clients/metrics-history.js";
+import { runPipeline } from "./clients/pipeline.js";
 import {
 	buildProjectIndex,
 	findSimilarFunctions,
@@ -46,7 +44,6 @@ import {
 } from "./clients/rules-scanner.js";
 import { RustClient } from "./clients/rust-client.js";
 import { getSourceFiles } from "./clients/scan-utils.js";
-import { formatSecrets, scanForSecrets } from "./clients/secrets-scanner.js";
 import { TestRunnerClient } from "./clients/test-runner-client.js";
 import { TodoScanner } from "./clients/todo-scanner.js";
 import { TypeCoverageClient } from "./clients/type-coverage-client.js";
@@ -1183,39 +1180,6 @@ export default function (pi: ExtensionAPI) {
 
 	// Real-time feedback on file writes/edits
 	pi.on("tool_result", async (event) => {
-		// ═══════════════════════════════════════════════════════════════════
-		// LATENCY TRACKING: Comprehensive phase-based logging
-		// ═══════════════════════════════════════════════════════════════════
-		const toolResultStart = Date.now();
-		const toolName = event.toolName;
-		const phases: Array<{
-			name: string;
-			start: number;
-			end?: number;
-			duration?: number;
-		}> = [];
-
-		function phaseStart(name: string) {
-			phases.push({ name, start: Date.now() });
-		}
-		function phaseEnd(name: string, metadata?: Record<string, unknown>) {
-			const p = phases.find((x) => x.name === name && !x.end);
-			if (p) {
-				p.end = Date.now();
-				p.duration = p.end - p.start;
-				if (filePath) {
-					logLatency({
-						type: "phase",
-						toolName,
-						filePath,
-						phase: name,
-						durationMs: p.duration,
-						metadata,
-					});
-				}
-			}
-		}
-
 		// Track tool call for behavior analysis (all tool types)
 		const filePath = (event.input as { path?: string }).path;
 		const behaviorWarnings = agentBehaviorClient.recordToolCall(
@@ -1254,8 +1218,6 @@ export default function (pi: ExtensionAPI) {
 		dbg(
 			`tool_result: tracking turn state for ${event.toolName} on ${filePath}`,
 		);
-		phaseStart("total");
-		phaseStart("turn_state_tracking");
 
 		// --- Track modified ranges in turn state for async jscpd/madge at turn_end ---
 		const cwd = projectRoot;
@@ -1301,311 +1263,48 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		dbg(`tool_result fired for: ${filePath}`);
-		dbg(`  cwd: ${process.cwd()}`);
-		dbg(
-			`  __dirname: ${typeof __dirname !== "undefined" ? __dirname : "undefined"}`,
+
+		const result = await runPipeline(
+			{
+				filePath,
+				cwd: projectRoot,
+				toolName: event.toolName,
+				getFlag: (name: string) => pi.getFlag(name),
+				dbg,
+			},
+			{
+				biomeClient,
+				ruffClient,
+				testRunnerClient,
+				metricsClient,
+				getFormatService,
+				fixedThisTurn,
+			},
 		);
 
-		// Prepend any pre-write hints collected during tool_call
-
-		// Record write for metrics (silent tracking)
-		phaseEnd("turn_state_tracking");
-		phaseStart("read_file");
-
-		let fileContent: string | undefined;
-		try {
-			fileContent = nodeFs.readFileSync(filePath, "utf-8");
-			metricsClient.recordWrite(filePath, fileContent);
-		} catch (err) {
-			void err;
-		}
-		phaseEnd("read_file");
-
-		// --- Auto-format on write (default enabled) ---
-		phaseStart("format");
-		// Runs detected formatters concurrently via Effect-TS
-		let formatChanged = false;
-		let formattersUsed: string[] = [];
-		if (!pi.getFlag("no-autoformat") && fileContent) {
-			const formatService = getFormatService();
-			try {
-				// Record file read to establish FileTime baseline before formatting
-				// This prevents "modified externally" false positives when agent writes file
-				formatService.recordRead(filePath);
-				const result = await formatService.formatFile(filePath);
-				formattersUsed = result.formatters.map((f) => f.name);
-				if (result.anyChanged) {
-					formatChanged = true;
-					dbg(
-						`autoformat: ${result.formatters.map((f) => `${f.name}(${f.changed ? "changed" : "unchanged"})`).join(", ")}`,
-					);
-					// Re-read content after formatting for downstream processing
-					fileContent = nodeFs.readFileSync(filePath, "utf-8");
-				}
-			} catch (err) {
-				dbg(`autoformat error: ${err}`);
-			}
-		}
-		phaseEnd("format", { formattersUsed, formatChanged });
-
-		// --- Publish file modified event to bus (Phase 1) ---
-		// --- LSP integration (Phase 3) ---
-		if (pi.getFlag("lens-lsp") && fileContent) {
-			const lspService = getLSPService();
-			lspService
-				.hasLSP(filePath)
-				.then(async (hasLSP) => {
-					if (hasLSP) {
-						// Open or update file in LSP
-						if (event.toolName === "write") {
-							await lspService.openFile(filePath, fileContent);
-						} else {
-							await lspService.updateFile(filePath, fileContent);
-						}
-					}
-				})
-				.catch((err) => {
-					dbg(`LSP error: ${err}`);
-				});
+		// Secrets found — block immediately
+		if (result.isError) {
+			return {
+				content: [
+					...event.content,
+					{ type: "text" as const, text: result.output },
+				],
+				isError: true,
+			};
 		}
 
-		// --- Secrets scan (blocking - must check before other linting) ---
-		if (fileContent) {
-			const secretFindings = scanForSecrets(fileContent, filePath);
-			if (secretFindings.length > 0) {
-				const secretsOutput = formatSecrets(secretFindings, filePath);
-				const elapsed = Date.now() - toolResultStart;
-				logLatency({
-					type: "tool_result",
-					toolName,
-					filePath,
-					durationMs: elapsed,
-					result: "blocked_secrets",
-					metadata: { secretsFound: secretFindings.length },
-				});
-				return {
-					content: [
-						...event.content,
-						{ type: "text" as const, text: `\n\n${secretsOutput}` },
-					],
-					isError: true,
-				};
-			}
-		}
-
-		let lspOutput = "";
-
-		// --- Auto-fix on write (safely - track to prevent loops) ---
-		phaseStart("autofix");
-		// Apply fixes BEFORE dispatch so dispatch only reports remaining issues
-		// Autofix is enabled by default, use --no-autofix to disable
-		const noAutofix = pi.getFlag("no-autofix");
-		const noAutofixBiome = pi.getFlag("no-autofix-biome");
-		const noAutofixRuff = pi.getFlag("no-autofix-ruff");
-		let fixedCount = 0;
-
-		if (!fixedThisTurn.has(filePath) && !noAutofix) {
-			// Python: Ruff auto-fix (enabled by default)
-			if (
-				!noAutofixRuff &&
-				(await ruffClient.ensureAvailable()) &&
-				ruffClient.isPythonFile(filePath)
-			) {
-				const result = ruffClient.fixFile(filePath);
-				if (result.success && result.fixed > 0) {
-					fixedCount += result.fixed;
-					fixedThisTurn.add(filePath);
-					dbg(`autofix: ruff fixed ${result.fixed} issue(s) in ${filePath}`);
-				}
-			}
-
-			// JS/TS/JSON: Biome auto-fix (enabled by default)
-			if (
-				!noAutofixBiome &&
-				biomeClient.isAvailable() &&
-				biomeClient.isSupportedFile(filePath)
-			) {
-				const result = biomeClient.fixFile(filePath);
-				if (result.success && result.fixed > 0) {
-					fixedCount += result.fixed;
-					fixedThisTurn.add(filePath);
-					dbg(`autofix: biome fixed ${result.fixed} issue(s) in ${filePath}`);
-				}
-			}
-		}
-		phaseEnd("autofix", { fixedCount, tools: ["ruff", "biome"] });
-
-		// --- Declarative dispatch: run all applicable lint tools ---
-		phaseStart("dispatch_lint");
-		// Phase 2: Replaced ~400 lines of if/else with unified dispatch system
-		dbg(`dispatch: running lint tools for ${filePath}`);
-
-		const dispatchOutput = await dispatchLint(filePath, projectRoot, pi);
-
-		if (dispatchOutput) {
-			lspOutput += `\n\n${dispatchOutput}`;
-		}
-
-		// Report autofix results
-		if (fixedCount > 0) {
-			lspOutput += `\n\n✅ Auto-fixed ${fixedCount} issue(s) in ${path.basename(filePath)}`;
-		}
-
-		// Warn agent if file was modified by auto-format or auto-fix
-		// This ensures they know to re-read before next edit
-		if (formatChanged || fixedCount > 0) {
-			lspOutput += `\n\n⚠️ **File modified by auto-format/fix. Re-read before next edit.**`;
-		}
-		phaseEnd("dispatch_lint", {
-			hasOutput: !!dispatchOutput,
-		});
-
-		// --- Test runner: run corresponding tests on write ---
-		phaseStart("test_runner");
-		let testInfoFound = false;
-		let testRunnerRan = false;
-		if (!pi.getFlag("no-tests")) {
-			const testInfo = testRunnerClient.findTestFile(filePath, cwd);
-			testInfoFound = !!testInfo;
-			if (testInfo) {
-				dbg(
-					`test-runner: found test file ${testInfo.testFile} for ${filePath}`,
-				);
-				const detectedRunner = testRunnerClient.detectRunner(cwd);
-				if (detectedRunner) {
-					testRunnerRan = true;
-					const testStart = Date.now();
-					const testResult = testRunnerClient.runTestFile(
-						testInfo.testFile,
-						cwd,
-						detectedRunner.runner,
-						detectedRunner.config,
-					);
-					const testDuration = Date.now() - testStart;
-					logLatency({
-						type: "phase",
-						toolName,
-						filePath,
-						phase: "test_runner",
-						durationMs: testDuration,
-						metadata: {
-							testFile: testInfo.testFile,
-							runner: detectedRunner.runner,
-							success: !testResult?.error,
-						},
-					});
-					if (testResult && !testResult.error) {
-						const testOutput = testRunnerClient.formatResult(testResult);
-						if (testOutput) {
-							lspOutput += `\n\n${testOutput}`;
-						}
-					}
-				}
-			}
-		}
-		phaseEnd("test_runner", { found: testInfoFound, ran: testRunnerRan });
-
-		// Note: TypeScript diagnostics are handled by the ts-lsp dispatch runner above.
-		// No inline TypeScriptClient check here — dispatch already covers it.
-
-		// Note: Complexity tracking removed from inline output — no agent acts
-		// on MI/cognitive scores mid-task. Baselines captured in tool_call for
-		// /lens-booboo and /lens-tdi historical analysis.
-
-		// Agent behavior warnings (blind writes, thrashing)
+		// Append behavior warnings
+		let output = result.output;
 		if (behaviorWarnings.length > 0) {
-			lspOutput += `\n\n${agentBehaviorClient.formatWarnings(behaviorWarnings)}`;
+			output += `\n\n${agentBehaviorClient.formatWarnings(behaviorWarnings)}`;
 		}
 
-		// --- Cascade diagnostics: check other files for errors (when --lens-lsp) ---
-		if (pi.getFlag("lens-lsp") && !pi.getFlag("no-lsp")) {
-			const MAX_CASCADE_FILES = 5;
-			const MAX_DIAGNOSTICS_PER_FILE = 20;
-			const cascadeStart = Date.now();
-
-			try {
-				const lspService = getLSPService();
-				const allDiags = await lspService.getAllDiagnostics();
-				const normalizedEditedPath = path.resolve(filePath);
-				const otherFileErrors: Array<{
-					file: string;
-					errors: import("./clients/lsp/client.js").LSPDiagnostic[];
-				}> = [];
-
-				for (const [diagPath, diags] of allDiags) {
-					if (path.resolve(diagPath) === normalizedEditedPath) continue; // Skip edited file (dispatch already covered it)
-					const errors = diags.filter((d) => d.severity === 1);
-					if (errors.length > 0) {
-						otherFileErrors.push({ file: diagPath, errors });
-					}
-				}
-
-				if (otherFileErrors.length > 0) {
-					lspOutput += `\n\n📐 Cascade errors detected in ${otherFileErrors.length} other file(s):`;
-					for (const { file, errors } of otherFileErrors.slice(
-						0,
-						MAX_CASCADE_FILES,
-					)) {
-						const limited = errors.slice(0, MAX_DIAGNOSTICS_PER_FILE);
-						const suffix =
-							errors.length > MAX_DIAGNOSTICS_PER_FILE
-								? `\n... and ${errors.length - MAX_DIAGNOSTICS_PER_FILE} more`
-								: "";
-						// Structured XML format (like OpenCode) for cleaner parsing
-						lspOutput += `\n<diagnostics file="${file}">`;
-						for (const e of limited) {
-							const line = (e.range?.start?.line ?? 0) + 1;
-							const col = (e.range?.start?.character ?? 0) + 1;
-							const code = e.code ? ` [${e.code}]` : "";
-							lspOutput += `\n  ${code} (${line}:${col}) ${e.message.split("\n")[0].slice(0, 100)}`;
-						}
-						lspOutput += `${suffix}\n</diagnostics>`;
-					}
-					if (otherFileErrors.length > MAX_CASCADE_FILES) {
-						lspOutput += `\n... and ${otherFileErrors.length - MAX_CASCADE_FILES} more files with errors`;
-					}
-				}
-
-				logLatency({
-					type: "phase",
-					toolName,
-					filePath,
-					phase: "cascade_diagnostics",
-					durationMs: Date.now() - cascadeStart,
-					metadata: { filesWithErrors: otherFileErrors.length },
-				});
-			} catch (err) {
-				dbg(`cascade diagnostics error: ${err}`);
-			}
-		}
-
-		// LATENCY TRACKING: Log timing before returning
-		const elapsed = Date.now() - toolResultStart;
-		phaseEnd("total", { hasOutput: !!lspOutput });
-		if (!lspOutput) {
-			logLatency({
-				type: "tool_result",
-				toolName,
-				filePath,
-				durationMs: elapsed,
-				result: "no_output",
-			});
-			return;
-		}
-
-		logLatency({
-			type: "tool_result",
-			toolName,
-			filePath,
-			durationMs: elapsed,
-			result: "completed",
-		});
+		if (!output) return;
 
 		return {
-			content: [...event.content, { type: "text" as const, text: lspOutput }],
+			content: [...event.content, { type: "text" as const, text: output }],
 		};
 	});
-
 	// --- Inject project rules into system prompt ---
 	pi.on("before_agent_start", async (event) => {
 		if (!projectRulesScan.hasCustomRules) return;
