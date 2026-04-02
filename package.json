@@ -2,7 +2,7 @@
 	"name": "pi-lens",
 	"version": "3.6.0",
 	"type": "module",
-	"description": "pi extension for real-time code quality — 31 LSP servers, tree-sitter structural analysis, AST pattern matching, auto-install for TypeScript/Python tooling, duplicate detection, complexity metrics, and inline blockers with comprehensive /lens-booboo reports",
+	"description": "Real-time code feedback for pi — LSP, linters, formatters, type-checking, structural analysis",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/apmantza/pi-lens.git"
