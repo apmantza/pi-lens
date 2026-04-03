@@ -2,6 +2,39 @@
 
 All notable changes to pi-lens will be documented in this file.
 
+## [3.6.3] - 2026-04-03
+
+### Removed (Dead Code Cleanup)
+- **Deleted unused interviewer tool** — Browser-based interview with diff confirmation was never used:
+  - Removed `clients/interviewer.ts` (290 lines)
+  - Removed `clients/interviewer-templates.ts` (240 lines)
+  - Removed initialization from `index.ts`
+  
+- **Deleted deprecated commands** — All were superseded by `/lens-booboo`:
+  - `/lens-booboo-fix` command (fix-from-booboo.ts, 430 lines) — showed warning to use `/lens-booboo`
+  - `/lens-fix-simplified` command (fix-simplified.ts, 770 lines) — never registered, unused
+  - `/lens-rate` command (rate.ts, 340 lines) — showed warning to use `/lens-booboo`
+  - `/lens-booboo-refactor` command (refactor.ts, 207 lines) — depended on removed interviewer tool
+
+- **Deleted duplicate safe-spawn module**:
+  - Removed `clients/safe-spawn-async.ts` (220 lines) — 100% duplicate of functions in `safe-spawn.ts`
+  - All imports already used `safe-spawn.ts`, making `safe-spawn-async.ts` pure dead code
+
+### Test Suite Overhaul
+- **Removed ~85 wasteful/broken test files**:
+  - "Is tool available" tests (8 files) — just checked if external CLIs installed
+  - Heavy integration tests (2 files) — 5s timeouts, full codebase scans
+  - Broken LSP tests (7 files) — import path errors
+  - Broken runner tests (7 files) — thin CLI wrappers with wrong imports
+  - Trivial utility tests (5 files) — file extension parsing, string sanitization
+  
+- **Added meaningful integration tests**:
+  - `tests/clients/dispatch/dispatcher-flow.test.ts` — Runner registration, execution, delta mode, conditional runners
+  - `tests/extension-hooks.test.ts` — pi API: tool/command/flag registration, event handlers
+  - `tests/mocks/runner-factory.ts` — Mock runners for testing without real CLI tools
+
+- **Results:** 22 tests passing in 1.2s (was 104 tests in ~18s with 48 failures)
+
 ## [3.6.2] - 2026-04-02
 
 ### Added

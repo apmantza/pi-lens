@@ -575,13 +575,6 @@ pattern: "TODO"  // Use grep instead
 
 See [CHANGELOG.md](CHANGELOG.md) for full history.
 
-### Latest Highlights
-
-- **Tree-sitter Query Cache:** Compiled query cache with mtime-based invalidation — 10× faster structural analysis startup
-- **LSP Support:** 31 Language Server Protocol clients (4 core auto-installed, others via npx or manual)
-- **NAPI Runner:** 100x faster TypeScript/JavaScript structural analysis (~9ms vs ~1200ms) — security rules fire inline
-- **Slop Detection:** 33+ TypeScript and 40+ Python patterns for AI-generated code quality issues
-
 ---
 
 ## License
