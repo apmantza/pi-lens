@@ -49,7 +49,6 @@ import { TodoScanner } from "./clients/todo-scanner.js";
 import { TypeCoverageClient } from "./clients/type-coverage-client.js";
 import { TypeScriptClient } from "./clients/typescript-client.js";
 import { handleBooboo } from "./commands/booboo.js";
-import { initRefactorLoop } from "./commands/refactor.js";
 
 /** Parse a diff to extract modified line ranges in the new file.
  * Handles pi's custom diff format:
@@ -183,9 +182,6 @@ export default function (pi: ExtensionAPI) {
 	const rustClient = new RustClient();
 	const agentBehaviorClient = new AgentBehaviorClient();
 	const cacheManager = new CacheManager();
-
-	// --- Initialize auto-loops ---
-	initRefactorLoop(pi);
 
 	// --- Flags ---
 
