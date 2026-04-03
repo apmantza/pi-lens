@@ -128,7 +128,7 @@ Enable full Language Server Protocol support with `--lens-lsp`:
 | **Config** | YAML, JSON, Prisma |
 | **Web** | Vue, Svelte, CSS/SCSS/Sass/Less |
 
-**Auto-installation (8 tools):** TypeScript, Python, Biome, Ruff, and analysis tools (Madge, jscpd, ast-grep, Knip) auto-install on first use to `.pi-lens/tools/`. Other LSP servers are launched via `npx` when available or require manual installation.
+**Auto-installation (8 tools):** TypeScript, Python, Biome, Ruff, and analysis tools (Madge, jscpd, ast-grep, Knip) auto-install on first use to `.pi-lens/tools/`. Other LSP servers require manual installation or are launched via `npx` when available.
 
 **Usage:**
 ```bash
