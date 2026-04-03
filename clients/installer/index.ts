@@ -39,6 +39,19 @@ import path from "node:path";
 // Global installation directory for pi-lens tools
 const TOOLS_DIR = path.join(process.cwd(), ".pi-lens", "tools");
 
+// Debug flag - set via PI_LENS_DEBUG=1 or --debug
+const DEBUG =
+	process.env.PI_LENS_DEBUG === "1" || process.argv.includes("--debug");
+
+/**
+ * Log debug messages only when DEBUG is enabled
+ */
+function debugLog(...args: unknown[]): void {
+	if (DEBUG) {
+		console.error("[auto-install:debug]", ...args);
+	}
+}
+
 // --- Tool Definitions ---
 
 interface ToolDefinition {
