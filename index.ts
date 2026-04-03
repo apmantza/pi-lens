@@ -402,9 +402,6 @@ export default function (pi: ExtensionAPI) {
 		"yaml",
 	] as const;
 
-	// --- Interviewer tool (browser-based interview with diff confirmation) ---
-	buildInterviewer(pi, dbg);
-
 	pi.registerTool({
 		name: "ast_grep_search",
 		label: "AST Search",
