@@ -143,6 +143,53 @@ pattern: "console.log($$$ARGS)"
 
 **Error: "Multiple AST nodes detected"** → Your pattern has multiple code fragments. Use metavariables like `$TEST` instead of literal text in quotes.
 
+## Object Literal Patterns
+
+Matching objects has two specific gotchas:
+
+**1. Trailing commas cause Exit code 1 / no matches**
+```typescript
+// ❌ Trailing comma breaks the pattern
+pattern: "logLatency({ type: $T, status: $S, })"
+//                                           ^
+// ✅ No trailing comma
+pattern: "logLatency({ type: $T, status: $S })"
+```
+
+**2. ES6 shorthand properties must stay shorthand — can't use `key: $VAR`**
+```typescript
+// ❌ Won't match { runnerId } (shorthand property)
+pattern: "logLatency({ runnerId: $RID })"
+
+// ✅ Match shorthand as shorthand
+pattern: "logLatency({ runnerId })"
+
+// ✅ Or use $$$ARGS to skip the specific property
+pattern: "logLatency({ runnerId, $$$REST })"
+```
+
+**3. Start wide, then narrow — especially for object calls**
+
+When matching a function call with a complex object argument, don't start
+with the full object shape. You'll likely get no matches due to property
+ordering or shorthand issues. Instead:
+
+```typescript
+// Step 1: confirm the call exists at all
+ast_grep_search({ pattern: "logLatency($$$ARGS)", ... })
+// → see all calls, pick which properties uniquely identify your target
+
+// Step 2: add ONE distinguishing literal property
+ast_grep_search({ pattern: "logLatency({ type: \"runner\", $$$REST })", ... })
+// → narrows to just runner calls
+
+// Step 3: add more properties to hit the exact subset you want
+ast_grep_search({ pattern: "logLatency({ type: \"runner\", filePath: $FP, runnerId, durationMs: 0, status: $S, diagnosticCount: $C, semantic: $SEM })", ... })
+// → exactly the two not_registered / when_skipped calls
+```
+
+This progressive approach — wide → narrow — avoids wasted attempts.
+
 **No matches found?** → Simplify on 2nd try:
 
 ```typescript
@@ -160,6 +207,8 @@ ast_grep_search({ pattern: "console", ... })
 2. **2nd try: Simplify pattern** — remove constraints, test base match
 3. Check metavariables capture what you expect
 4. Ensure quotes/parentheses balance in pattern
+5. **No trailing commas** in object patterns
+6. **Shorthand properties** (`{ key }`) must stay shorthand in pattern — don't use `key: $VAR`
 
 **Fallback:** If pattern fails twice → `grep -rn "pattern" src/`
 
