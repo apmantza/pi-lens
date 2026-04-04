@@ -12,7 +12,13 @@
 		"build": "tsc",
 		"watch": "tsc --watch",
 		"test": "vitest run",
-		"test:watch": "vitest"
+		"test:watch": "vitest",
+		"rust:fmt": "cargo fmt --manifest-path rust/Cargo.toml --all --check",
+		"rust:fmt:write": "cargo fmt --manifest-path rust/Cargo.toml --all",
+		"rust:check": "cargo check --manifest-path rust/Cargo.toml --all-targets --all-features",
+		"rust:lint": "cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features -- -D warnings",
+		"rust:test": "cargo test --manifest-path rust/Cargo.toml --all-targets --all-features",
+		"rust:build": "cargo build --manifest-path rust/Cargo.toml --release"
 	},
 	"keywords": [
 		"pi",

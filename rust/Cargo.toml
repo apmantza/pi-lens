@@ -1,0 +1,36 @@
+[package]
+name = "pi-lens-core"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "pi_lens_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pi-lens-core"
+path = "src/main.rs"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ignore = "0.4"
+rayon = "1.8"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+ndarray = "0.15"
+tree-sitter = "0.22"
+tree-sitter-typescript = "0.21"
+walkdir = "2.5"
+anyhow = "1.0"
+tempfile = "3.10"
+
+[lints.rust]
+unsafe_code = "forbid"
+warnings = "deny"
+rust_2024_compatibility = "deny"
+missing_debug_implementations = "deny"
+missing_docs = "deny"
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"
