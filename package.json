@@ -45,6 +45,8 @@
 		"commands/**/*.ts",
 		"rules/",
 		"skills/",
+		"rust/src/",
+		"rust/Cargo.toml",
 		"default-architect.yaml",
 		"tsconfig.json",
 		"README.md",

@@ -18,9 +18,6 @@ out/
 *.js.map
 *.d.ts
 
-# Rust
-src/main.rs
-
 # Internal planning docs
 featureideas.md
 SCA.md
