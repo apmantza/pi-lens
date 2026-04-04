@@ -263,7 +263,9 @@ export async function runPipeline(
 			if (detectedRunner) {
 				testRunnerRan = true;
 				const testStart = Date.now();
-				const testResult = testRunnerClient.runTestFile(
+				// Use async variant — keeps the event loop free while tests run
+				// so LSP messages and other file writes proceed concurrently.
+				const testResult = await testRunnerClient.runTestFileAsync(
 					testInfo.testFile,
 					cwd,
 					detectedRunner.runner,

@@ -13,7 +13,7 @@
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { safeSpawn } from "./safe-spawn.js";
+import { safeSpawn, safeSpawnAsync } from "./safe-spawn.js";
 
 // --- Types ---
 
@@ -432,6 +432,91 @@ export class TestRunnerClient {
 			}
 
 			// Parse output based on runner
+			switch (runner) {
+				case "vitest":
+					return this.parseVitestOutput(
+						stdout,
+						stderr,
+						absoluteTestFile,
+						cwd,
+						runner,
+					);
+				case "jest":
+					return this.parseJestOutput(
+						stdout,
+						stderr,
+						absoluteTestFile,
+						cwd,
+						runner,
+					);
+				case "pytest":
+					return this.parsePytestOutput(
+						stdout,
+						stderr,
+						result.status ?? 0,
+						absoluteTestFile,
+						cwd,
+						runner,
+					);
+				default:
+					return this.emptyResult(
+						absoluteTestFile,
+						"",
+						runner,
+						"Unknown runner",
+					);
+			}
+		} catch (err: any) {
+			this.log(`Run error: ${err.message}`);
+			return this.emptyResult(absoluteTestFile, "", runner, err.message);
+		}
+	}
+
+	/**
+	 * Async version of runTestFile — does NOT block the event loop.
+	 *
+	 * Use this in the per-write pipeline (pipeline.ts) so that LSP messages,
+	 * other file writes, and all async operations continue while tests run.
+	 * The sync runTestFile is kept for session_start where blocking is acceptable.
+	 */
+	async runTestFileAsync(
+		testFile: string,
+		cwd: string,
+		runner: string,
+		config: RunnerConfig,
+	): Promise<TestResult> {
+		const absoluteTestFile = path.resolve(testFile);
+		if (!fs.existsSync(absoluteTestFile)) {
+			return this.emptyResult(
+				absoluteTestFile,
+				"",
+				runner,
+				"Test file not found",
+			);
+		}
+
+		try {
+			const args = config.args(absoluteTestFile, cwd);
+			this.log(`Running (async): ${config.command} ${args.join(" ")}`);
+
+			const result = await safeSpawnAsync(config.command, args, {
+				cwd,
+				timeout: 60000,
+			});
+
+			const stdout = result.stdout || "";
+			const stderr = result.stderr || "";
+
+			if (result.error) {
+				this.log(`Runner error: ${result.error.message}`);
+				return this.emptyResult(
+					absoluteTestFile,
+					"",
+					runner,
+					`Runner error: ${result.error.message}`,
+				);
+			}
+
 			switch (runner) {
 				case "vitest":
 					return this.parseVitestOutput(
