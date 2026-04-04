@@ -9,6 +9,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { resolvePackagePath } from "../../../package-root.js";
 import { safeSpawn } from "../../../safe-spawn.js";
 
 // =============================================================================
@@ -119,14 +120,13 @@ export function createConfigFinder(
 			return localPath;
 		}
 
-		// Fall back to extension rules
 		const extensionPaths = [
-			`rules/${ruleDirName}/.sgconfig.yml`,
-			`../rules/${ruleDirName}/.sgconfig.yml`,
+			resolvePackagePath(import.meta.url, "rules", ruleDirName, ".sgconfig.yml"),
+			path.resolve(cwd, `rules/${ruleDirName}/.sgconfig.yml`),
+			path.resolve(cwd, `../rules/${ruleDirName}/.sgconfig.yml`),
 		];
 
-		for (const candidate of extensionPaths) {
-			const fullPath = path.resolve(cwd, candidate);
+		for (const fullPath of extensionPaths) {
 			if (fs.existsSync(fullPath)) {
 				return fullPath;
 			}

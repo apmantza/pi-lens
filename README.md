@@ -289,7 +289,9 @@ See [AST_GREP_RULES.md](AST_GREP_RULES.md) for full guide.
 
 ### At Session Start
 
-When pi starts a new session, pi-lens performs initialization scans to establish baselines and surface existing technical debt:
+When pi starts a new session, pi-lens performs initialization scans to establish baselines and surface existing technical debt.
+
+**Startup safety:** eager cache warmups only run inside a detected project root and are skipped for generic directories (for example `$HOME`) or very large trees. In those cases, pi-lens stays responsive and falls back to on-demand analysis.
 
 **Initialization sequence:**
 1. **Reset session state** — Clear metrics and complexity baselines
@@ -299,7 +301,7 @@ When pi starts a new session, pi-lens performs initialization scans to establish
 5. **Load architect rules** — If `architect.yml` or `.architect.yml` present
 6. **Detect test runner** — Jest, Vitest, Pytest, etc.
 
-**Cached scans** (with 5-min TTL):
+**Cached scans** (with 5-min TTL, only when startup safety allows eager warmup):
 | Scan | Tool | Cached | Purpose |
 |------|------|--------|---------|
 | **TODOs** | Internal | No | Tech debt markers |

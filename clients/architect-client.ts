@@ -12,6 +12,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { minimatch } from "minimatch";
+import { resolvePackagePath } from "./package-root.js";
 
 // --- Types ---
 
@@ -88,22 +89,11 @@ export class ArchitectClient {
 
 		// Fall back to built-in default
 		try {
-			// Try multiple possible locations for the default config
 			const possibleDefaultPaths = [
 				path.join(projectRoot, "default-architect.yaml"),
-				path.join(projectRoot, "..", "default-architect.yaml"),
-				path.join(process.cwd(), "default-architect.yaml"),
+				path.join(projectRoot, ".pi-lens", "default-architect.yaml"),
+				resolvePackagePath(import.meta.url, "default-architect.yaml"),
 			];
-
-			// Handle both CommonJS and ESM environments
-			if (typeof __dirname !== "undefined") {
-				possibleDefaultPaths.push(
-					path.join(__dirname, "..", "default-architect.yaml"),
-				);
-				possibleDefaultPaths.push(
-					path.join(__dirname, "..", "..", "default-architect.yaml"),
-				);
-			}
 
 			for (const defaultPath of possibleDefaultPaths) {
 				try {

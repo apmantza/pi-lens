@@ -28,6 +28,8 @@ review.md
 
 # Test directories and files
 tests/
+!tests/
+!tests/*.test.ts
 test-files/
 test-lsp-files/
 test-filetime/

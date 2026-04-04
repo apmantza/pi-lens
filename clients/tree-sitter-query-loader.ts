@@ -7,9 +7,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+import { resolvePackagePath } from "./package-root.js";
 
 export interface TreeSitterQuery {
 	id: string;
@@ -56,38 +54,42 @@ export class TreeSitterQueryLoader {
 	async loadQueries(): Promise<Map<string, TreeSitterQuery[]>> {
 		if (this.loaded) return this.queries;
 
-		const queriesDir = path.join(process.cwd(), "rules", "tree-sitter-queries");
+		const queryDirs = [...new Set([
+			path.join(process.cwd(), "rules", "tree-sitter-queries"),
+			resolvePackagePath(import.meta.url, "rules", "tree-sitter-queries"),
+		])];
 
-		if (!fs.existsSync(queriesDir)) {
-			this.dbg(`Queries directory not found: ${queriesDir}`);
-			return this.queries;
-		}
-
-		// Load queries from each language subdirectory
-		const languageDirs = fs
-			.readdirSync(queriesDir, { withFileTypes: true })
-			.filter((d) => d.isDirectory())
-			.map((d) => d.name);
-
-		for (const lang of languageDirs) {
-			const langDir = path.join(queriesDir, lang);
-			const queryFiles = fs
-				.readdirSync(langDir)
-				.filter((f) => f.endsWith(".yml"));
-
-			const langQueries: TreeSitterQuery[] = [];
-
-			for (const file of queryFiles) {
-				const filePath = path.join(langDir, file);
-				const query = this.parseQueryFile(filePath, lang);
-				if (query) {
-					langQueries.push(query);
-				}
+		for (const queriesDir of queryDirs) {
+			if (!fs.existsSync(queriesDir)) {
+				this.dbg(`Queries directory not found: ${queriesDir}`);
+				continue;
 			}
 
-			if (langQueries.length > 0) {
-				this.queries.set(lang, langQueries);
-				this.dbg(`Loaded ${langQueries.length} queries for ${lang}`);
+			const languageDirs = fs
+				.readdirSync(queriesDir, { withFileTypes: true })
+				.filter((d) => d.isDirectory())
+				.map((d) => d.name);
+
+			for (const lang of languageDirs) {
+				const langDir = path.join(queriesDir, lang);
+				const queryFiles = fs
+					.readdirSync(langDir)
+					.filter((f) => f.endsWith(".yml"));
+
+				const langQueries = this.queries.get(lang) ?? [];
+
+				for (const file of queryFiles) {
+					const filePath = path.join(langDir, file);
+					const query = this.parseQueryFile(filePath, lang);
+					if (query) {
+						langQueries.push(query);
+					}
+				}
+
+				if (langQueries.length > 0) {
+					this.queries.set(lang, langQueries);
+					this.dbg(`Loaded ${langQueries.length} queries for ${lang}`);
+				}
 			}
 		}
 

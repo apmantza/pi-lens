@@ -18,6 +18,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { EXCLUDED_DIRS } from "./file-utils.js";
+import { resolvePackagePath } from "./package-root.js";
 import {
 	type TreeSitterQuery,
 	TreeSitterQueryLoader,
@@ -113,31 +114,16 @@ export class TreeSitterClient {
 
 	/** Find tree-sitter grammar directory */
 	private findGrammarsDir(): string {
-		// Check for downloaded grammars in web-tree-sitter/grammars first
+		const packageWebTreeSitterGrammars = resolvePackagePath(
+			import.meta.url,
+			"node_modules",
+			"web-tree-sitter",
+			"grammars",
+		);
 		const downloadedGrammars = [
 			path.join(process.cwd(), "node_modules", "web-tree-sitter", "grammars"),
+			packageWebTreeSitterGrammars,
 		];
-
-		// Add __dirname-based paths if __dirname is available (CommonJS)
-		if (typeof __dirname !== "undefined") {
-			downloadedGrammars.push(
-				path.join(
-					__dirname,
-					"..",
-					"..",
-					"node_modules",
-					"web-tree-sitter",
-					"grammars",
-				),
-				path.join(
-					__dirname,
-					"..",
-					"node_modules",
-					"web-tree-sitter",
-					"grammars",
-				),
-			);
-		}
 
 		for (const dir of downloadedGrammars) {
 			if (
@@ -148,31 +134,16 @@ export class TreeSitterClient {
 			}
 		}
 
-		// Fallback to legacy locations
 		const candidates: string[] = [
 			path.join(process.cwd(), "node_modules", "tree-sitter-wasms", "out"),
+			resolvePackagePath(import.meta.url, "node_modules", "tree-sitter-wasms", "out"),
 		];
-
-		if (typeof __dirname !== "undefined") {
-			candidates.push(
-				path.join(
-					__dirname,
-					"..",
-					"..",
-					"node_modules",
-					"tree-sitter-wasms",
-					"out",
-				),
-				path.join(__dirname, "..", "node_modules", "tree-sitter-wasms", "out"),
-			);
-		}
 
 		for (const dir of candidates) {
 			if (fs.existsSync(dir)) return dir;
 		}
 
-		// Default to web-tree-sitter/grammars (may need manual download)
-		return downloadedGrammars[0];
+		return packageWebTreeSitterGrammars;
 	}
 
 	/** Initialize tree-sitter WASM runtime */
@@ -193,9 +164,8 @@ export class TreeSitterClient {
 			// Store Language loader from module (not from Parser)
 			this.LanguageLoader = mod.Language;
 
-			// Log what we're trying to load
-			const wasmPath = path.join(
-				process.cwd(),
+			const wasmPath = resolvePackagePath(
+				import.meta.url,
 				"node_modules",
 				"web-tree-sitter",
 				"tree-sitter.wasm",
@@ -206,9 +176,8 @@ export class TreeSitterClient {
 
 			await ParserClass.init({
 				locateFile: (scriptName: string) => {
-					// Always return the full path to the WASM file
-					const fullPath = path.join(
-						process.cwd(),
+					const fullPath = resolvePackagePath(
+						import.meta.url,
 						"node_modules",
 						"web-tree-sitter",
 						scriptName,

@@ -9,6 +9,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { resolvePackagePath } from "../../package-root.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import type {
 	Diagnostic,
@@ -94,15 +95,15 @@ const astGrepRunner: RunnerDefinition = {
 
 function findAstGrepConfig(cwd: string): string | undefined {
 	const candidates = [
-		"rules/ast-grep-rules/.sgconfig.yml",
-		".sgconfig.yml",
-		"sgconfig.yml",
+		path.join(cwd, "rules", "ast-grep-rules", ".sgconfig.yml"),
+		path.join(cwd, ".sgconfig.yml"),
+		path.join(cwd, "sgconfig.yml"),
+		resolvePackagePath(import.meta.url, "rules", "ast-grep-rules", ".sgconfig.yml"),
 	];
 
 	for (const candidate of candidates) {
-		const fullPath = `${cwd}/${candidate}`;
-		if (fs.existsSync(fullPath)) {
-			return fullPath;
+		if (fs.existsSync(candidate)) {
+			return candidate;
 		}
 	}
 
@@ -119,8 +120,8 @@ function parseAstGrepOutput(
 	// Try to parse as JSON
 	// Determine rule directory for fix: extraction
 	const ruleDir = _configPath
-		? path.dirname(_configPath).replace("/.sgconfig.yml", "/rules")
-		: path.join(process.cwd(), "rules", "ast-grep-rules", "rules");
+		? path.join(path.dirname(_configPath), "rules")
+		: resolvePackagePath(import.meta.url, "rules", "ast-grep-rules", "rules");
 
 	try {
 		const parsed = JSON.parse(raw);
