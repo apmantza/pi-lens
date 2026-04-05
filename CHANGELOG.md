@@ -2,6 +2,23 @@
 
 All notable changes to pi-lens will be documented in this file.
 
+## [3.7.2] - 2026-04-05
+
+### Added
+- **ESLint `--fix` in autofix phase** — Projects with an ESLint config now have fixable
+  issues auto-corrected (import ordering, jsx style, etc.) before dispatch runs, using
+  `--fix-dry-run` to get the accurate fixed count then `--fix` to apply. Availability
+  is cached per session. Only fires on JS/TS files with an ESLint config present.
+
+### Fixed
+- **Misleading infinite-loop comment in biome/ruff runners** — The comment incorrectly
+  stated that writing files from runners would trigger infinite loops (formatters already
+  prove this isn't true). Updated to explain the real reason: dispatch runners report
+  issues for agent understanding; silently rewriting would leave the agent's context
+  window stale.
+
+---
+
 ## [3.7.1] - 2026-04-05
 
 ### Added

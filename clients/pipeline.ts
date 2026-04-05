@@ -5,7 +5,7 @@
  * Runs sequentially on every file write/edit:
  *   1. Secrets scan (blocking — early exit)
  *   2. Auto-format (Biome, Prettier, Ruff, gofmt, etc.)
- *   3. Auto-fix (Biome --write, Ruff --fix)
+ *   3. Auto-fix (Biome --write, Ruff --fix, ESLint --fix)
  *   4. LSP file sync (open/update in LSP servers)
  *   5. Dispatch lint (type errors, security rules)
  *   6. Test runner (run corresponding test file)
@@ -22,6 +22,7 @@ import { logLatency } from "./latency-logger.js";
 import { getLSPService } from "./lsp/index.js";
 import type { MetricsClient } from "./metrics-client.js";
 import type { RuffClient } from "./ruff-client.js";
+import { safeSpawnAsync } from "./safe-spawn.js";
 import { formatSecrets, scanForSecrets } from "./secrets-scanner.js";
 import type { TestRunnerClient } from "./test-runner-client.js";
 
@@ -88,6 +89,109 @@ function createPhaseTracker(toolName: string, filePath: string): PhaseTracker {
 			}
 		},
 	};
+}
+
+// --- ESLint autofix helpers ---
+
+const ESLINT_CONFIGS = [
+	".eslintrc",
+	".eslintrc.js",
+	".eslintrc.cjs",
+	".eslintrc.json",
+	".eslintrc.yaml",
+	".eslintrc.yml",
+	"eslint.config.js",
+	"eslint.config.mjs",
+	"eslint.config.cjs",
+];
+
+const JSTS_EXTS = new Set([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"]);
+
+function isJsTs(filePath: string): boolean {
+	return JSTS_EXTS.has(path.extname(filePath).toLowerCase());
+}
+
+function hasEslintConfig(cwd: string): boolean {
+	for (const cfg of ESLINT_CONFIGS) {
+		if (nodeFs.existsSync(path.join(cwd, cfg))) return true;
+	}
+	try {
+		const pkg = JSON.parse(
+			nodeFs.readFileSync(path.join(cwd, "package.json"), "utf-8"),
+		);
+		if (pkg.eslintConfig) return true;
+	} catch {}
+	return false;
+}
+
+let _eslintAvailable: boolean | null = null;
+let _eslintBin: string | null = null;
+
+function findEslintBin(cwd: string): string {
+	const isWin = process.platform === "win32";
+	const local = path.join(
+		cwd,
+		"node_modules",
+		".bin",
+		isWin ? "eslint.cmd" : "eslint",
+	);
+	if (nodeFs.existsSync(local)) return local;
+	return "eslint";
+}
+
+/**
+ * Run eslint --fix on a file. Returns number of fixable issues resolved,
+ * or 0 if ESLint is not configured / not available.
+ */
+async function tryEslintFix(filePath: string, cwd: string): Promise<number> {
+	if (!hasEslintConfig(cwd)) return 0;
+	if (_eslintAvailable === false) return 0;
+	if (_eslintAvailable === null) {
+		const candidate = findEslintBin(cwd);
+		const check = await safeSpawnAsync(candidate, ["--version"], {
+			timeout: 5000,
+			cwd,
+		});
+		_eslintAvailable = !check.error && check.status === 0;
+		if (_eslintAvailable) _eslintBin = candidate;
+	}
+	if (!_eslintAvailable || !_eslintBin) return 0;
+	const cmd = _eslintBin;
+	// --fix-dry-run returns JSON with fixable counts without writing to disk.
+	// Use it to get the real count, then apply with --fix only if needed.
+	const dry = await safeSpawnAsync(
+		cmd,
+		[
+			"--fix-dry-run",
+			"--format",
+			"json",
+			"--no-error-on-unmatched-pattern",
+			filePath,
+		],
+		{ timeout: 30000, cwd },
+	);
+	if (dry.status === 2) return 0;
+	let fixableCount = 0;
+	try {
+		const results: Array<{
+			fixableErrorCount?: number;
+			fixableWarningCount?: number;
+		}> = JSON.parse(dry.stdout);
+		fixableCount = results.reduce(
+			(sum, r) =>
+				sum + (r.fixableErrorCount ?? 0) + (r.fixableWarningCount ?? 0),
+			0,
+		);
+	} catch {}
+	if (fixableCount === 0) return 0;
+	// Apply the fixes
+	const fix = await safeSpawnAsync(
+		cmd,
+		["--fix", "--no-error-on-unmatched-pattern", filePath],
+		{ timeout: 30000, cwd },
+	);
+	if (fix.status === 2) return 0;
+	return fixableCount;
 }
 
 // --- Main Pipeline ---
@@ -222,7 +326,17 @@ export async function runPipeline(
 			}
 		}
 	}
-	phase.end("autofix", { fixedCount, tools: ["ruff", "biome"] });
+	// ESLint --fix: only for jsts files in projects that use ESLint
+	if (!noAutofix && isJsTs(filePath)) {
+		const eslintFixed = await tryEslintFix(filePath, cwd);
+		if (eslintFixed > 0) {
+			fixedCount += eslintFixed;
+			fixedThisTurn.add(filePath);
+			dbg(`autofix: eslint fixed ${eslintFixed} issue(s) in ${filePath}`);
+		}
+	}
+
+	phase.end("autofix", { fixedCount, tools: ["ruff", "biome", "eslint"] });
 
 	// --- 5. Dispatch lint ---
 	phase.start("dispatch_lint");
