@@ -105,6 +105,7 @@ function dbg(msg: string) {
 	try {
 		nodeFs.appendFileSync(DEBUG_LOG, line);
 	} catch (e) {
+		// Pipeline error logged
 		console.error("[pi-lens-debug] write failed:", e);
 	}
 }
@@ -1012,8 +1013,6 @@ export default function (pi: ExtensionAPI) {
 				dbg("session_start: no project rules found");
 			}
 
-			// TODO/FIXME scan — fast, no deps
-			// Stored as baseline so turn_end can diff and report only NEW TODOs added this turn.
 			const todoResult = todoScanner.scanDirectory(cwd);
 			dbg(
 				`session_start TODO scan: ${todoResult.items.length} items (baseline stored)`,
@@ -1050,7 +1049,6 @@ export default function (pi: ExtensionAPI) {
 				} else {
 					dbg(`session_start Knip: not available`);
 				}
-				// Note: Knip results not shown at session start — use /lens-booboo to see dead code
 
 				// Duplicate code detection — use cache if fresh, auto-install if needed (cached for on-demand reporting)
 				if (await jscpdClient.ensureAvailable()) {
@@ -1070,9 +1068,8 @@ export default function (pi: ExtensionAPI) {
 				} else {
 					dbg(`session_start jscpd: not available`);
 				}
-				// Note: jscpd results not shown at session start — use /lens-booboo to see duplicates
 
-				// Note: type-coverage runs on-demand via /lens-booboo only (not at session_start)
+				// Type-coverage runs on-demand via /lens-booboo only (not at session_start)
 
 				// Scan for exported functions (cached for duplicate detection on write)
 				if (await astGrepClient.ensureAvailable()) {
@@ -1572,7 +1569,7 @@ export default function (pi: ExtensionAPI) {
 				}
 			}
 
-			// TODOs: diff against session_start baseline — report only net-new ones added this turn
+			// Diff TODOs against baseline — report only net-new ones added this turn
 			const todoBaseline = cacheManager.readCache<{
 				items: import("./clients/todo-scanner.js").TodoItem[];
 			}>("todo-baseline", cwd);
@@ -1663,9 +1660,9 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// --- Inject turn-end findings into next agent turn ---
-	// jscpd, madge, and TODO-delta results are cached at turn_end and consumed here
+	// jscpd, madge, and turn-end delta results are cached at turn_end and consumed here
 	// via the context event, which fires before each provider request.
-	// Cast to any: overload exists in types but TS resolution fails on complex signatures.
+	// biome-ignore lint/suspicious/noExplicitAny: pi.on("context") overload has TS resolution bug
 	(pi as any).on("context", async (_event: unknown, ctx: { cwd?: string }) => {
 		try {
 			const cwd = ctx.cwd ?? process.cwd();

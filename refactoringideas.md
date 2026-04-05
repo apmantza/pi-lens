@@ -486,3 +486,125 @@ Future exploration worth doing:
 2. **Migrate cache → `appendEntry()`** — only if session portability becomes important
 
 Everything else is architectural mismatch or premature optimization.
+
+---
+
+## Agent-Centric Pipeline Assessment: Where Real-Time Feedback Falls Short
+
+*Assessed 2026-04-05 against 3.8.0 codebase. Author: the agent itself.*
+
+### What Works
+
+**The parallel dispatch is the crown jewel.** 5 runners fire simultaneously, saving ~57%
+wall-clock time per edit (~2.8s total on a 1,700-line file). Feedback arrives before context
+drifts. That's the difference between "I'll fix this now" and "I forgot about that 20 messages
+ago."
+
+**The blocker vs warnings split is correct.** Inlining only type errors and security violations
+while deferring complexity warnings to `/lens-booboo` matches how agents actually work. An agent
+doesn't restructure a long parameter list mid-task — it panics over a red squiggle.
+
+**Auto-install is underrated.** Biome, pyright, ruff just work without "first install X."
+The gap between "works on my machine" and "works" is one of the most underrated UX wins
+in this project.
+
+### What's Broken or At Risk
+
+#### 1. Pipeline Fires on Every Edit, Even Mid-Draft
+
+When building a complex function across 3 writes, that's 3×2.8s overhead with partial-code
+lint output on each intermediate state. There's no concept of "draft mode" vs "commit ready."
+Every keystroke echo gets the full treatment. This is the single biggest source of noise.
+
+**Fix:** Batch/cascade defer concept (already documented above as Idea #2). Extend it to
+LSP errors on the *edited* file itself when they're syntax-only (parse failures), since those
+are often transient mid-edit. Keep semantic errors (unused vars, type mismatches) immediate.
+
+#### 2. No Cross-File Impact Analysis
+
+I change a function signature in `utils.ts`. The pipeline checks `utils.ts` — it's clean.
+But three other files that import that function now have type errors sitting there. The LSP
+runner is file-gated. This is the most dangerous gap — silent breakage in callers that won't
+surface until the agent runs a test (which it often skips).
+
+**Fix:** After dispatch, run workspace diagnostics on files that import the edited file.
+LSP can do this — it just needs the workspace-level `textDocument/references` or a
+workspace-wide diagnostic pass. Gate it: only fire when the edited file exports symbols
+that other files reference.
+
+#### 3. Autofix is Destructive Without a Safety Net
+
+The biome `--unsafe` incident (deleted unused interfaces mid-write) was a symptom of a
+deeper problem: autofix rewrites code without the agent reviewing the diff. Even with
+`--unsafe` removed, `biome --write` still makes opinionated rewrites. On fast multi-file
+edits, the agent's mental model of what it wrote gets corrupted by auto-formatting it
+didn't consent to.
+
+**Fix:** Autofix should report what it changed before letting the pipeline proceed:
+`Auto-fixed: reordered 3 imports (biome)` — not silently rewritten. The agent already
+gets this via `fixedCount`, but the actual diff should be surfaced for review when
+the change is non-trivial (>10 lines or non-formatting).
+
+#### 4. Silent Runner Failures
+
+If tree-sitter crashes or LSP disconnects mid-session, the pipeline returns "no diagnostics"
+— indistinguishable from a clean file. An agent gets false confidence. The `"no_output"`
+result type exists but isn't surfaced inline.
+
+**Fix:** In `tool_result` handler, when `result === "no_output"`, emit a one-liner:
+`⚠ 2 runners skipped (tree-sitter crashed, LSP disconnected)` — not silence.
+
+#### 5. Session-Level Delta, Not Git-Level Delta
+
+Delta mode tracks "what's new since my last edit" but has no idea what was already broken.
+Open a legacy codebase with 200 existing type errors and pi-lens can't tell me "these 200
+are pre-existing, these 3 are yours." Every finding looks like it was always there.
+
+**Fix:** Capture a full-project lint baseline at `session_start` (already doing this for
+knip/jscpd — extend to LSP + ast-grep-napi). Diff against that baseline, not against
+the previous write. One-time cost (~10s) at session start, but every subsequent delta
+report is accurate against the project's actual state.
+
+### What's Missing Entirely
+
+#### 6. No Import Resolution Checking
+
+The most common agent mistake: importing from a file that doesn't exist yet, or typos in
+import paths. This falls through the cracks because LSP type-checking needs the import to
+resolve first. If I type `import { foo } from "./utilsd"` (typo), the error shows up as
+"cannot find name 'foo'" — which is misleading. The real error is the path typo.
+
+#### 7. No "What Did I Just Break?" Summary
+
+After an edit cycle, there's no summary saying "your changes introduced 2 new type errors,
+fixed 3, and left 12 pre-existing untouched." The agent just gets a raw dump. No delta
+summary means no learning loop.
+
+#### 8. Test Coverage is Naive
+
+The test runner finds `foo.test.ts` when `foo.ts` changes. It does NOT run integration tests,
+e2e tests, or tests that import the changed file transitively. If I change a shared utility
+and only the utility's unit test runs, I'm blind to integration breakage.
+
+### The Verdict
+
+**As a linter wrapper with parallel dispatch, pi-lens is genuinely good.** It's fast, it's
+comprehensive, and the agent-centric design (blockers inline, warnings deferred) is correct
+in principle.
+
+**As "real-time code feedback," it's not there yet.** Real-time means telling me I'm about
+to break something *before* I move on to the next task. Right now, the pipeline is a fast
+post-mortem, not a guard rail. The gap is in cross-file awareness and intent detection —
+knowing when I'm drafting vs when I'm done, and knowing what my change ripples to.
+
+### Priority Order
+
+| # | Fix | Impact | Effort | Notes |
+|---|-----|--------|--------|-------|
+| 1 | Cross-file type error propagation | High | Medium | Workspace diagnostics on importers |
+| 2 | Git-level delta (pre-existing vs new) | High | Medium | Session-start baseline for all runners |
+| 3 | Silent failure detection | Medium | Low | Distinguish "clean" from "runner crashed" |
+| 4 | Import path typo detection | Medium | Low | Before it cascades into confusing type errors |
+| 5 | Draft mode / batch edit defer | Medium | Medium | Extend cascade defer to syntax errors |
+| 6 | Delta summary after edits | Low | Low | "+2 errors, -3 fixed, 12 pre-existing" |
+| 7 | Transitive test discovery | Low | High | Graph-based test runner |
