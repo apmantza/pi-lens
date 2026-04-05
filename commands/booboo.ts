@@ -24,6 +24,10 @@ import {
 import { RunnerTracker } from "../clients/runner-tracker.js";
 import { safeSpawn } from "../clients/safe-spawn.js";
 import { getSourceFiles } from "../clients/scan-utils.js";
+import {
+	collectSourceFiles,
+	getFilterStats,
+} from "../clients/source-filter.js";
 import { calculateSimilarity } from "../clients/state-matrix.js";
 import type { TodoScanner } from "../clients/todo-scanner.js";
 import { TreeSitterClient } from "../clients/tree-sitter-client.js";
@@ -88,6 +92,35 @@ export async function handleBooboo(
 
 	// Detect project type once for all runners
 	const isTsProject = nodeFs.existsSync(path.join(targetPath, "tsconfig.json"));
+
+	// Collect source files once with unified artifact filtering
+	// This ensures all scanners work on the same deduplicated file set
+	const sourceFiles = collectSourceFiles(targetPath);
+	const allFiles = collectSourceFiles(targetPath, {
+		extensions: [
+			".ts",
+			".tsx",
+			".js",
+			".jsx",
+			".mjs",
+			".cjs",
+			".py",
+			".go",
+			".rs",
+			".rb",
+		],
+	});
+	const filterStats = getFilterStats(allFiles, sourceFiles);
+
+	if (filterStats.skipped > 0) {
+		const byTypeStr = Object.entries(filterStats.byType)
+			.map(([ext, count]) => `${count} ${ext}`)
+			.join(", ");
+		// biome-ignore lint/suspicious/noConsole: CLI output
+		console.log(
+			`[lens-booboo] Filtered ${filterStats.skipped} build artifacts (${byTypeStr}), scanning ${filterStats.kept} source files`,
+		);
+	}
 
 	// Get available commands for the project
 	const availableCommands = getAvailableCommands(projectMeta);
@@ -390,9 +423,8 @@ export async function handleBooboo(
 		const results: import("../clients/complexity-client.js").FileComplexity[] =
 			[];
 		const aiSlopIssues: string[] = [];
-		const files = getSourceFiles(targetPath, isTsProject).filter(
-			shouldIncludeFile,
-		);
+		// Use pre-collected sourceFiles (already filtered for artifacts)
+		const files = sourceFiles.filter(shouldIncludeFile);
 
 		for (const fullPath of files) {
 			if (clients.complexity.isSupportedFile(fullPath)) {
@@ -937,40 +969,20 @@ export async function handleBooboo(
 			return { findings: 0, status: "skipped" };
 		}
 
-		// Detect TypeScript project - skip .js files in TS projects (compiled artifacts)
-		const isTsProject = nodeFs.existsSync(
-			path.join(targetPath, "tsconfig.json"),
-		);
-
 		const archViolations: Array<{ file: string; message: string }> = [];
-		const archScanDir = (dir: string) => {
-			for (const entry of nodeFs.readdirSync(dir, { withFileTypes: true })) {
-				const full = path.join(dir, entry.name);
-				if (entry.isDirectory()) {
-					if (EXCLUDED_DIRS.includes(entry.name)) continue;
-					archScanDir(full);
-				} else if (/\.(ts|tsx|js|jsx|py|go|rs)$/.test(entry.name)) {
-					if (isTestFile(full)) continue;
-					// In TS projects, skip .js files (they're compiled artifacts)
-					if (
-						isTsProject &&
-						/\.(js|jsx)$/.test(entry.name) &&
-						nodeFs.existsSync(full.replace(/\.(js|jsx)$/, ".ts"))
-					)
-						continue;
-					const relPath = path.relative(targetPath, full).replace(/\\/g, "/");
-					const content = nodeFs.readFileSync(full, "utf-8");
-					const lineCount = content.split("\n").length;
-					for (const v of clients.architect.checkFile(relPath, content)) {
-						archViolations.push({ file: relPath, message: v.message });
-					}
-					const sizeV = clients.architect.checkFileSize(relPath, lineCount);
-					if (sizeV)
-						archViolations.push({ file: relPath, message: sizeV.message });
-				}
+
+		// Use pre-collected sourceFiles (already filtered for artifacts and exclusions)
+		for (const fullPath of sourceFiles) {
+			if (isTestFile(fullPath)) continue;
+			const relPath = path.relative(targetPath, fullPath).replace(/\\/g, "/");
+			const content = nodeFs.readFileSync(fullPath, "utf-8");
+			const lineCount = content.split("\n").length;
+			for (const v of clients.architect.checkFile(relPath, content)) {
+				archViolations.push({ file: relPath, message: v.message });
 			}
-		};
-		archScanDir(targetPath);
+			const sizeV = clients.architect.checkFileSize(relPath, lineCount);
+			if (sizeV) archViolations.push({ file: relPath, message: sizeV.message });
+		}
 
 		if (archViolations.length > 0) {
 			summaryItems.push({
