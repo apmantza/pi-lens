@@ -814,6 +814,10 @@ export default function (pi: ExtensionAPI) {
 
 	const cachedExports = new Map<string, string>(); // function name -> file path
 	let cachedProjectIndex: ProjectIndex | null = null; // similarity index for pre-write checks
+	// Last cascade snapshot from pipeline — updated each file write, flushed at turn_end.
+	// Storing only the last (not accumulating) because it reflects LSP state after the
+	// most recent edit — if agent fixed all cascade errors before their last write, this is empty.
+	let _lastCascadeOutput = "";
 	const complexityBaselines: Map<
 		string,
 		import("./clients/complexity-client.js").FileComplexity
@@ -1380,7 +1384,7 @@ export default function (pi: ExtensionAPI) {
 		});
 		dbg(`tool_result fired for: ${filePath} (turn_state: ${turnStateMs}ms)`);
 
-		let result: { output: string; isError?: boolean };
+		let result: { output: string; isError?: boolean; cascadeOutput?: string };
 		try {
 			result = await runPipeline(
 				{
@@ -1403,6 +1407,14 @@ export default function (pi: ExtensionAPI) {
 			dbg(`runPipeline crashed: ${pipelineErr}`);
 			dbg(`runPipeline crash stack: ${(pipelineErr as Error).stack}`);
 			return;
+		}
+
+		// Capture cascade snapshot (replaces previous — last write in turn is most current)
+		if (result.cascadeOutput) {
+			_lastCascadeOutput = result.cascadeOutput;
+		} else if (result.cascadeOutput === undefined && pi.getFlag("lens-lsp")) {
+			// Pipeline ran with LSP active and found no cascade errors — clear stale snapshot
+			_lastCascadeOutput = "";
 		}
 
 		// Secrets found — block immediately
@@ -1448,6 +1460,11 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// --- Turn end: batch jscpd/madge on collected files, then clear state ---
+	// Clear cascade snapshot at start of each new turn so stale data never leaks
+	pi.on("turn_start", () => {
+		_lastCascadeOutput = "";
+	});
+
 	pi.on("turn_end", async (_event, ctx) => {
 		try {
 			const cwd = ctx.cwd ?? process.cwd();
@@ -1470,6 +1487,14 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const parts: string[] = [];
+
+			// Cascade diagnostics: deferred from per-write pipeline.
+			// Last snapshot = LSP state after the final edit of this turn.
+			// Empty means agent resolved all cascade errors during the turn.
+			if (_lastCascadeOutput) {
+				parts.push(_lastCascadeOutput);
+				_lastCascadeOutput = "";
+			}
 
 			// jscpd: scan modified files, filter results to modified line ranges
 			if (jscpdClient.isAvailable()) {

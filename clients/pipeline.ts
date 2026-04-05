@@ -51,6 +51,12 @@ export interface PipelineDeps {
 export interface PipelineResult {
 	/** Text to append to tool_result content */
 	output: string;
+	/**
+	 * Cascade diagnostics (errors in OTHER files caused by this edit).
+	 * Intentionally NOT included in output — surfaced at turn_end instead
+	 * so mid-refactor intermediate errors don't derail the agent.
+	 */
+	cascadeOutput?: string;
 	/** True if secrets found — block the agent */
 	isError: boolean;
 	/** True if file was modified by format/autofix */
@@ -424,6 +430,11 @@ export async function runPipeline(
 	phase.end("test_runner", { found: testInfoFound, ran: testRunnerRan });
 
 	// --- 7. Cascade diagnostics (LSP only) ---
+	// Deferred: cascade errors are errors in OTHER files caused by this edit.
+	// They are NOT shown inline (mid-refactor they are always noisy — agent is
+	// still editing the other files). Returned in cascadeOutput so index.ts can
+	// surface the LAST snapshot at turn_end once all edits in the turn are done.
+	let cascadeOutput: string | undefined;
 	if (getFlag("lens-lsp") && !getFlag("no-lsp")) {
 		const MAX_CASCADE_FILES = 5;
 		const MAX_DIAGNOSTICS_PER_FILE = 20;
@@ -447,7 +458,7 @@ export async function runPipeline(
 			}
 
 			if (otherFileErrors.length > 0) {
-				output += `\n\n📐 Cascade errors detected in ${otherFileErrors.length} other file(s):`;
+				let c = `📐 Cascade errors in ${otherFileErrors.length} other file(s) — fix before finishing turn:`;
 				for (const { file, errors } of otherFileErrors.slice(
 					0,
 					MAX_CASCADE_FILES,
@@ -457,18 +468,19 @@ export async function runPipeline(
 						errors.length > MAX_DIAGNOSTICS_PER_FILE
 							? `\n... and ${errors.length - MAX_DIAGNOSTICS_PER_FILE} more`
 							: "";
-					output += `\n<diagnostics file="${file}">`;
+					c += `\n<diagnostics file="${file}">`;
 					for (const e of limited) {
 						const line = (e.range?.start?.line ?? 0) + 1;
 						const col = (e.range?.start?.character ?? 0) + 1;
 						const code = e.code ? ` [${e.code}]` : "";
-						output += `\n  ${code} (${line}:${col}) ${e.message.split("\n")[0].slice(0, 100)}`;
+						c += `\n  ${code} (${line}:${col}) ${e.message.split("\n")[0].slice(0, 100)}`;
 					}
-					output += `${suffix}\n</diagnostics>`;
+					c += `${suffix}\n</diagnostics>`;
 				}
 				if (otherFileErrors.length > MAX_CASCADE_FILES) {
-					output += `\n... and ${otherFileErrors.length - MAX_CASCADE_FILES} more files with errors`;
+					c += `\n... and ${otherFileErrors.length - MAX_CASCADE_FILES} more files with errors`;
 				}
+				cascadeOutput = c;
 			}
 
 			logLatency({
@@ -528,6 +540,7 @@ export async function runPipeline(
 
 	return {
 		output,
+		cascadeOutput,
 		isError: false,
 		fileModified: formatChanged || fixedCount > 0,
 	};
