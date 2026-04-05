@@ -812,8 +812,6 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	let _cachedJscpdClones: import("./clients/jscpd-client.js").DuplicateClone[] =
-		[];
 	const cachedExports = new Map<string, string>(); // function name -> file path
 	let cachedProjectIndex: ProjectIndex | null = null; // similarity index for pre-write checks
 	const complexityBaselines: Map<
@@ -1043,11 +1041,9 @@ export default function (pi: ExtensionAPI) {
 				);
 				if (cached) {
 					dbg(`session_start jscpd: cache hit`);
-					_cachedJscpdClones = cached.data.clones;
 				} else {
 					const startMs = Date.now();
 					const jscpdResult = jscpdClient.scan(cwd);
-					_cachedJscpdClones = jscpdResult.clones;
 					cacheManager.writeCache("jscpd", jscpdResult, cwd, {
 						scanDurationMs: Date.now() - startMs,
 					});
@@ -1205,8 +1201,14 @@ export default function (pi: ExtensionAPI) {
 		// --- Pre-write duplicate detection ---
 		// Check if new content redefines functions that already exist elsewhere.
 		// Uses cachedExports (populated at session_start via ast-grep scan).
-		if (isToolCallEventType("write", event) && cachedExports.size > 0) {
-			const newContent = (event.input as { content?: string }).content;
+		const isWriteOrEdit =
+			isToolCallEventType("write", event) || isToolCallEventType("edit", event);
+		if (isWriteOrEdit && cachedExports.size > 0) {
+			const newContent = isToolCallEventType("write", event)
+				? (event.input as { content?: string }).content
+				: (event.input as { edits?: Array<{ newText?: string }> }).edits
+						?.map((e) => e.newText ?? "")
+						.join("\n");
 			if (newContent) {
 				const dupeWarnings: string[] = [];
 				const exportRe =
@@ -1498,8 +1500,6 @@ export default function (pi: ExtensionAPI) {
 						}
 						parts.push(report);
 					}
-					// Update the global cache with fresh results
-					_cachedJscpdClones = result.clones;
 					cacheManager.writeCache("jscpd", result, cwd);
 				}
 			}
