@@ -1571,9 +1571,16 @@ export default function (pi: ExtensionAPI) {
 			cacheManager.incrementTurnCycle(cwd);
 
 			if (parts.length > 0) {
-				dbg(`turn_end: ${parts.length} issue(s) found`);
-				// Issues found — state persists so next turn re-checks.
-				// After maxCycles, clearTurnState forces through.
+				dbg(
+					`turn_end: ${parts.length} issue(s) found, persisting for next context`,
+				);
+				// Persist findings so the context event can inject them into the
+				// next agent turn's messages. Cleared once consumed.
+				cacheManager.writeCache(
+					"turn-end-findings",
+					{ content: parts.join("\n\n") },
+					cwd,
+				);
 			} else {
 				// No issues — clear state for next batch of edits
 				cacheManager.clearTurnState(cwd);
@@ -1609,6 +1616,37 @@ export default function (pi: ExtensionAPI) {
 		} catch (turnEndErr) {
 			dbg(`turn_end crashed: ${turnEndErr}`);
 			dbg(`turn_end crash stack: ${(turnEndErr as Error).stack}`);
+		}
+	});
+
+	// --- Inject turn-end findings into next agent turn ---
+	// jscpd, madge, and TODO-delta results are cached at turn_end and consumed here
+	// via the context event, which fires before each provider request.
+	// Cast to any: overload exists in types but TS resolution fails on complex signatures.
+	(pi as any).on("context", async (_event: unknown, ctx: { cwd?: string }) => {
+		try {
+			const cwd = ctx.cwd ?? process.cwd();
+			const findings = cacheManager.readCache<{ content: string }>(
+				"turn-end-findings",
+				cwd,
+			);
+			if (!findings?.data?.content) return;
+			// Consume immediately — only inject once per turn
+			cacheManager.writeCache(
+				"turn-end-findings",
+				null as unknown as { content: string },
+				cwd,
+			);
+			return {
+				messages: [
+					{
+						role: "user" as const,
+						content: `[pi-lens] End-of-turn findings:\n\n${findings.data.content}`,
+					},
+				],
+			};
+		} catch (err) {
+			dbg(`context event error: ${err}`);
 		}
 	});
 }
