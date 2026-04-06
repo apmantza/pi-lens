@@ -2,6 +2,11 @@
 
 All notable changes to pi-lens will be documented in this file.
 
+## [3.8.2] - 2026-04-06
+
+### Fixed
+- **npm publish bump** — 3.8.1 was already published with the broken postinstall; 3.8.2 contains the actual fix.
+
 ## [3.8.1] - 2026-04-06
 
 ### Fixed
