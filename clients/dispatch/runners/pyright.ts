@@ -26,6 +26,12 @@ const pyrightRunner: RunnerDefinition = {
 	enabledByDefault: true,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
+		// When --lens-lsp is active, the `lsp` runner (priority 4) already provides
+		// Pyright diagnostics via the language server — skip the CLI to avoid duplication.
+		if (ctx.pi.getFlag("lens-lsp")) {
+			return { status: "skipped", diagnostics: [], semantic: "none" };
+		}
+
 		const cwd = ctx.cwd || process.cwd();
 
 		// Get pyright command - try multiple strategies

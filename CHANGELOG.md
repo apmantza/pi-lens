@@ -2,6 +2,15 @@
 
 All notable changes to pi-lens will be documented in this file.
 
+## [3.8.5] - 2026-04-06
+
+### Fixed
+- **Pyright CLI duplicates LSP under `--lens-lsp`** — The Pyright CLI runner now skips
+  itself when `--lens-lsp` is active, mirroring the existing `ts-lsp` behaviour. The
+  `lsp` runner (priority 4, Pyright language server) already covers Python type-checking
+  in that mode; running the CLI in parallel was redundant.
+
+
 ## [3.8.2] - 2026-04-06
 
 ### Fixed
