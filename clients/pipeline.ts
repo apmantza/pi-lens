@@ -15,6 +15,8 @@
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
 import type { BiomeClient } from "./biome-client.js";
+import { getDiagnosticLogger } from "./diagnostic-logger.js";
+import { getDiagnosticTracker } from "./diagnostic-tracker.js";
 import { dispatchLintWithResult } from "./dispatch/integration.js";
 import type { PiAgentAPI } from "./dispatch/types.js";
 import { detectFileKind, getFileKindLabel } from "./file-kinds.js";
@@ -368,6 +370,21 @@ export async function runPipeline(
 	};
 
 	const dispatchResult = await dispatchLintWithResult(filePath, cwd, piApi);
+
+	// Log and track diagnostics for analytics
+	if (dispatchResult.diagnostics.length > 0) {
+		const logger = getDiagnosticLogger();
+		const tracker = getDiagnosticTracker();
+		tracker.trackShown(dispatchResult.diagnostics);
+		for (const d of dispatchResult.diagnostics) {
+			logger.logCaught(d, {
+				model: "unknown", // TODO: get from pi session
+				sessionId: "unknown",
+				turnIndex: 0,
+				writeIndex: 0,
+			});
+		}
+	}
 
 	if (dispatchResult.output) {
 		output += `\n\n${dispatchResult.output}`;
