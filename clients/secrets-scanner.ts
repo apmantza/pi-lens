@@ -21,6 +21,43 @@ interface SecretPattern {
 	message: string;
 }
 
+const SAFE_HEADER_KEYS = new Set([
+	"user-agent",
+	"accept",
+	"accept-language",
+	"accept-encoding",
+	"content-type",
+	"content-length",
+	"origin",
+	"referer",
+	"host",
+	"connection",
+	"cache-control",
+	"pragma",
+	"x-requested-with",
+]);
+
+function extractHeaderKey(line: string): string | null {
+	const m = line.match(/["']([A-Za-z][A-Za-z0-9-]{0,63})["']\s*:\s*["'][^"']+/);
+	if (!m) return null;
+	return m[1].toLowerCase();
+}
+
+function shouldIgnorePatternMatch(line: string, patternName: string): boolean {
+	// Ignore obvious non-secret HTTP header literals such as "User-Agent".
+	if (
+		patternName === "hardcoded-secret" ||
+		patternName === "hardcoded-password"
+	) {
+		const key = extractHeaderKey(line);
+		if (key && SAFE_HEADER_KEYS.has(key)) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
 // Patterns ordered by specificity - first match wins per line
 const SECRET_PATTERNS: SecretPattern[] = [
 	// High-confidence: specific key prefixes
@@ -109,6 +146,9 @@ export function scanForSecrets(
 			// Reset lastIndex before each test (important for global regex)
 			const regex = new RegExp(pattern.pattern.source, pattern.pattern.flags);
 			if (regex.test(line)) {
+				if (shouldIgnorePatternMatch(line, pattern.name)) {
+					continue;
+				}
 				findings.push({
 					line: i + 1,
 					message: pattern.message,
