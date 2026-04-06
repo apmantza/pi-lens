@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  install-test:
+    name: Install test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Pack tarball
+        run: npm pack
+
+      - name: Verify required files in tarball
+        shell: bash
+        run: |
+          TARBALL=$(ls pi-lens-*.tgz)
+          echo "Checking tarball: $TARBALL"
+          tar -tzf "$TARBALL" | grep -E "scripts/download-grammars\.js|index\.ts|package\.json" | sort
+          tar -tzf "$TARBALL" | grep "scripts/download-grammars.js" || \
+            (echo "ERROR: scripts/download-grammars.js missing from tarball" && exit 1)
+
+      - name: Install from tarball (simulates pi install npm:pi-lens)
+        shell: bash
+        run: |
+          TARBALL=$(ls pi-lens-*.tgz)
+          npm install -g "$TARBALL"
+
+      - name: Verify grammars were downloaded
+        shell: bash
+        run: |
+          # Find where npm installed pi-lens globally
+          GLOBAL_MODULES=$(npm root -g)
+          GRAMMARS_DIR="$GLOBAL_MODULES/pi-lens/node_modules/web-tree-sitter/grammars"
+          echo "Checking grammars at: $GRAMMARS_DIR"
+          ls "$GRAMMARS_DIR"
+          test -f "$GRAMMARS_DIR/tree-sitter-typescript.wasm" || \
+            (echo "ERROR: tree-sitter-typescript.wasm not downloaded" && exit 1)
+          echo "All grammar checks passed"
