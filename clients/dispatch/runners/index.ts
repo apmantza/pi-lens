@@ -6,6 +6,7 @@ import { registerRunner } from "../dispatcher.js";
 import architectRunner from "./architect.js";
 import astGrepNapiRunner from "./ast-grep-napi.js";
 import biomeRunner from "./biome.js";
+import biomeCheckJsonRunner from "./biome-check.js";
 import configValidationRunner from "./config-validation.js";
 import eslintRunner from "./eslint.js";
 import goVetRunner from "./go-vet.js";
@@ -33,10 +34,10 @@ registerRunner(lspRunner); // Unified LSP type-checking for all languages (prior
 registerRunner(tsLspRunner); // TypeScript type-checking (priority 5) - fallback when --lens-lsp disabled
 registerRunner(pyrightRunner); // Python type-checking (priority 5) - fallback when --lens-lsp disabled
 registerRunner(configValidationRunner); // Config/env validation (priority 8)
+registerRunner(biomeCheckJsonRunner); // Biome check with JSON output for diagnostic capture (priority 9)
 // DISABLED in post-write dispatch - ast-grep-napi can crash. Enabled via /lens-booboo plan only.
 registerRunner(astGrepNapiRunner); // TS/JS structural analysis via NAPI (priority 15, post-write disabled)
 registerRunner(biomeRunner); // Biome formatting/linting (priority 10)
-registerRunner(oxlintRunner); // Oxlint fast JS/TS linter (priority 12)
 registerRunner(treeSitterRunner); // Tree-sitter structural analysis (priority 14)
 registerRunner(ruffRunner); // Python linting (priority 10)
 registerRunner(tsSlopRunner); // DISABLED - TypeScript slop via CLI (disabled, use NAPI)

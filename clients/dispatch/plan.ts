@@ -32,6 +32,9 @@ export const TOOL_PLANS: Record<string, ToolPlan> = {
 		groups: [
 			// LSP type checking (unified for all languages) - priority 4, blocking errors
 			{ mode: "all", runnerIds: ["lsp"], filterKinds: ["jsts"] },
+			// Biome check with JSON diagnostic capture - priority 9, runs before tree-sitter
+			// Captures Biome diagnostics, shows to agent, then auto-fixes
+			{ mode: "all", runnerIds: ["biome-check-json"], filterKinds: ["jsts"] },
 			// Tree-sitter native structural analysis (blocking rules: constructor-super, dangerouslySetInnerHTML, etc.)
 			{ mode: "all", runnerIds: ["tree-sitter"], filterKinds: ["jsts"] },
 			// AST structural analysis (blocking: no-dupe-keys, no-hardcoded-secrets, jwt-no-verify, etc.)
