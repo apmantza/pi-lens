@@ -72,4 +72,41 @@ describe("test-runner-client", () => {
 		expect(target?.strategy).toBe("failed-first");
 		expect(target?.testFile).toBe(path.resolve(testFile));
 	});
+
+	it("does not infer pytest from pyproject without pytest section", () => {
+		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
+		cleanups.push(cleanup);
+
+		fs.writeFileSync(
+			path.join(tmpDir, "pyproject.toml"),
+			"[project]\nname='demo'\nversion='0.1.0'\n",
+		);
+
+		const client = new TestRunnerClient(false);
+		const detected = client.detectRunner(tmpDir, path.join(tmpDir, "index.ts"));
+		expect(detected?.runner).not.toBe("pytest");
+	});
+
+	it("infers pytest when pyproject has pytest.ini_options", () => {
+		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
+		cleanups.push(cleanup);
+
+		fs.writeFileSync(
+			path.join(tmpDir, "pyproject.toml"),
+			"[tool.pytest.ini_options]\naddopts='-q'\n",
+		);
+
+		const client = new TestRunnerClient(false);
+		const detected = client.detectRunner(tmpDir, path.join(tmpDir, "main.py"));
+		expect(detected?.runner).toBe("pytest");
+	});
+
+	it("does not use global pytest fallback for non-Python files", () => {
+		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
+		cleanups.push(cleanup);
+
+		const client = new TestRunnerClient(false);
+		const detected = client.detectRunner(tmpDir, path.join(tmpDir, "index.ts"));
+		expect(detected).toBeNull();
+	});
 });

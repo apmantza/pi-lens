@@ -190,6 +190,84 @@ describe("Dispatch Flow", () => {
 			// Should not throw, just skip missing runner
 			expect(result.diagnostics).toHaveLength(0);
 		});
+
+		it("fallback mode should continue after failed runner and use next success", async () => {
+			const calls: string[] = [];
+			registerRunner({
+				id: "first-fail",
+				appliesTo: ["jsts"],
+				priority: 10,
+				enabledByDefault: true,
+				async run() {
+					calls.push("first-fail");
+					return {
+						status: "failed",
+						diagnostics: [
+							{
+								id: "fail-1",
+								message: "first failed",
+								filePath: "test.ts",
+								severity: "warning",
+								semantic: "warning",
+								tool: "first-fail",
+							},
+						],
+						semantic: "warning",
+					};
+				},
+			});
+
+			registerRunner({
+				id: "second-success",
+				appliesTo: ["jsts"],
+				priority: 11,
+				enabledByDefault: true,
+				async run() {
+					calls.push("second-success");
+					return {
+						status: "succeeded",
+						diagnostics: [
+							{
+								id: "warn-2",
+								message: "second ran",
+								filePath: "test.ts",
+								severity: "warning",
+								semantic: "warning",
+								tool: "second-success",
+							},
+						],
+						semantic: "warning",
+					};
+				},
+			});
+
+			registerRunner({
+				id: "third-skipped",
+				appliesTo: ["jsts"],
+				priority: 12,
+				enabledByDefault: true,
+				async run() {
+					calls.push("third-skipped");
+					return { status: "succeeded", diagnostics: [], semantic: "none" };
+				},
+			});
+
+			const ctx = createMockContext("test.ts");
+			const groups: RunnerGroup[] = [
+				{
+					mode: "fallback",
+					runnerIds: ["first-fail", "second-success", "third-skipped"],
+				},
+			];
+
+			const result = await dispatchForFile(ctx, groups);
+
+			expect(calls).toEqual(["first-fail", "second-success"]);
+			expect(result.diagnostics.map((d) => d.id).sort()).toEqual([
+				"fail-1",
+				"warn-2",
+			]);
+		});
 	});
 
 	describe("Delta Mode (Baseline Filtering)", () => {
@@ -319,6 +397,42 @@ describe("Dispatch Flow", () => {
 
 			expect(ctx.autofix).toBe(false);
 			expect(result.diagnostics).toHaveLength(0);
+		});
+
+		it("should skip runner when when() throws and continue others", async () => {
+			registerRunner(
+				createMockRunner({
+					id: "throws-when",
+					appliesTo: ["jsts"],
+					when: async () => {
+						throw new Error("bad precondition");
+					},
+					runResult: {
+						status: "succeeded",
+						diagnostics: [
+							{
+								id: "should-not-run",
+								message: "should not run",
+								filePath: "test.ts",
+								severity: "warning",
+								semantic: "warning",
+								tool: "throws-when",
+							},
+						],
+						semantic: "warning",
+					},
+				}),
+			);
+			registerRunner(createWarningRunner("healthy"));
+
+			const ctx = createMockContext("test.ts");
+			const groups: RunnerGroup[] = [
+				{ mode: "all", runnerIds: ["throws-when", "healthy"] },
+			];
+
+			const result = await dispatchForFile(ctx, groups);
+
+			expect(result.diagnostics.map((d) => d.id)).toEqual(["healthy-warning"]);
 		});
 	});
 });
