@@ -2,6 +2,16 @@
 
 All notable changes to pi-lens will be documented in this file.
 
+## [3.8.9] - 2026-04-07
+
+### Changed
+- **README restructured** — Expanded the "What It Does" section with write/edit, session_start, and turn_end behavior; added a complete runner list and a dependency table with auto-installed vs manual tools.
+- **Test runner strategy improved** — Added hybrid test targeting: rerun known failures first, otherwise run related tests for the edited file.
+
+### Fixed
+- **Non-JSON test runner parsing** — Go/Cargo/Dotnet/Gradle/Maven/RSpec/Minitest now use generic parsing instead of returning "Unknown runner".
+- **Dispatch delta baseline compatibility** — Baseline lookups now support both normalized absolute and cwd-relative keys to prevent stale/new misclassification in mixed-key scenarios.
+
 ## [3.8.8] - 2026-04-07
 
 ### Changed

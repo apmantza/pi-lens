@@ -199,7 +199,8 @@ function dedupeOverlappingDiagnostics(diagnostics: Diagnostic[]): Diagnostic[] {
 		const defectClass = d.defectClass ?? classifyDiagnostic(d);
 		const line = d.line ?? 1;
 		const column = d.column ?? 1;
-		const key = `${d.filePath}:${line}:${column}:${defectClass}`;
+		const ruleKey = d.rule || d.id || "unknown";
+		const key = `${d.filePath}:${line}:${column}:${defectClass}:${ruleKey}`;
 		const current = byKey.get(key);
 		if (!current) {
 			byKey.set(key, { ...d, defectClass });
@@ -469,8 +470,10 @@ export async function dispatchForFile(
 	);
 
 	// Count baseline warnings before filtering (for delta count display)
+	const relativeKey = path.relative(ctx.cwd, ctx.filePath).replace(/\\/g, "/");
 	const previousBaseline = ctx.deltaMode
-		? (ctx.baselines.get(ctx.filePath) as Diagnostic[] | undefined)
+		? ((ctx.baselines.get(ctx.filePath) as Diagnostic[] | undefined) ??
+			(ctx.baselines.get(relativeKey) as Diagnostic[] | undefined))
 		: undefined;
 	const baselineWarnings = previousBaseline?.filter(
 		(d) => d.semantic === "warning" || d.semantic === "none",
@@ -502,6 +505,7 @@ export async function dispatchForFile(
 	// Persist full current snapshot for next run (not delta-filtered subset).
 	if (ctx.deltaMode) {
 		ctx.baselines.set(ctx.filePath, [...dedupedDiagnostics]);
+		ctx.baselines.set(relativeKey, [...dedupedDiagnostics]);
 	}
 
 	// Categorize results

@@ -505,22 +505,22 @@ export async function runPipeline(
 	let testInfoFound = false;
 	let testRunnerRan = false;
 	if (!getFlag("no-tests")) {
-		const testInfo = testRunnerClient.findTestFile(filePath, cwd);
-		testInfoFound = !!testInfo;
-		if (testInfo) {
-			dbg(`test-runner: found test file ${testInfo.testFile} for ${filePath}`);
-			const detectedRunner = testRunnerClient.detectRunner(cwd);
-			if (detectedRunner) {
-				testRunnerRan = true;
-				const testStart = Date.now();
-				// Use async variant — keeps the event loop free while tests run
-				// so LSP messages and other file writes proceed concurrently.
-				const testResult = await testRunnerClient.runTestFileAsync(
-					testInfo.testFile,
-					cwd,
-					detectedRunner.runner,
-					detectedRunner.config,
-				);
+		const target = testRunnerClient.getTestRunTarget(filePath, cwd);
+		testInfoFound = !!target;
+		if (target) {
+			dbg(
+				`test-runner: ${target.strategy} target ${target.testFile} (${target.runner}) for ${filePath}`,
+			);
+			testRunnerRan = true;
+			const testStart = Date.now();
+			// Use async variant — keeps the event loop free while tests run
+			// so LSP messages and other file writes proceed concurrently.
+			const testResult = await testRunnerClient.runTestFileAsync(
+				target.testFile,
+				cwd,
+				target.runner,
+				target.config,
+			);
 				const testDuration = Date.now() - testStart;
 				logLatency({
 					type: "phase",
@@ -529,8 +529,9 @@ export async function runPipeline(
 					phase: "test_runner",
 					durationMs: testDuration,
 					metadata: {
-						testFile: testInfo.testFile,
-						runner: detectedRunner.runner,
+						testFile: target.testFile,
+						runner: target.runner,
+						strategy: target.strategy,
 						success: !testResult?.error,
 					},
 				});
@@ -545,7 +546,6 @@ export async function runPipeline(
 						output += `\n\n${testOutput}`;
 					}
 				}
-			}
 		}
 	}
 	phase.end("test_runner", { found: testInfoFound, ran: testRunnerRan });
