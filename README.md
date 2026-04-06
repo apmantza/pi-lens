@@ -6,13 +6,14 @@ pi-lens focuses on real-time inline code feedback for AI agents.
 
 ### On Write/Edit
 
-On every `write` and `edit`, pi-lens runs a fast pipeline:
+On every `write` and `edit`, pi-lens runs a fast, language-aware pipeline (checks depend on file language, project config, and installed tools):
 
-- **Formatting + autofix**: Biome/Ruff/ESLint-safe fixes where available
-- **Type checking**: unified LSP (`--lens-lsp`) with `ts-lsp`/`pyright` fallbacks
+- **Formatting + autofix**: language/tool-specific formatters and safe autofixers (Biome, Ruff, ESLint, and other toolchain-native formatters when available)
+- **Type checking**: unified LSP (`--lens-lsp`) with language fallbacks (for example `ts-lsp`, `pyright`)
+- **Lint + static analysis**: active runners for the current language and config
 - **Test running**: related-file tests, with failed-first reruns for faster feedback
 - **Security checks**: secret scanning and structural security rules
-- **Structural analysis**: tree-sitter + ast-grep for real bug patterns
+- **Structural analysis**: tree-sitter + ast-grep for bug patterns across supported languages
 - **Delta reporting**: prioritize new issues over legacy baseline noise
 
 ### Session Start
@@ -80,6 +81,8 @@ Registered dispatch runners:
 Some runners are language/config-gated and may skip when not applicable.
 
 ## Dependencies
+
+Core defaults are auto-installed below. Other language/toolchain-specific tools run when present and configured.
 
 | Tool | Purpose | Auto-installed |
 |---|---|---|
