@@ -2,6 +2,13 @@
 
 All notable changes to pi-lens will be documented in this file.
 
+## [3.8.7] - 2026-04-06
+
+### Fixed
+- **Baseline duplication in dispatch delta mode** — `ctx.baselines.set()` was called with `[...allDiagnostics, ...diagnostics]`, but `allDiagnostics` already contained `diagnostics` from the push below. Baseline inflated by N items per dispatch, causing `filterDelta` to misidentify issues on subsequent writes.
+- **No delta on warnings** — `DispatchResult.warnings` was cumulative (total warning count across all runs), so the `N warning(s) -> /lens-booboo` message never decreased even when the agent fixed warnings. Added `baselineWarningCount` to track the baseline separately. Message now shows `3 new (15 total) warning(s)` so the agent sees progress.
+- **LSP sync fire-and-forget** — Phase 3 (LSP file sync) was attached via `.then()` without being awaited, so dispatch lint (phase 5) and cascade diagnostics (phase 7) ran against stale LSP state. Now properly `await`ed before subsequent phases.
+
 ## [3.8.6] - 2026-04-06
 
 ### Changed
