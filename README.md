@@ -77,6 +77,7 @@ Registered dispatch runners:
 - `go-vet`, `golangci-lint`, `rust-clippy`, `rubocop`
 
 Some runners are language/config-gated and may skip when not applicable.
+`ast-grep-napi` runs in post-write dispatch for JS/TS with blocker-focused filtering; `/lens-booboo` additionally runs full CLI ast-grep scans.
 
 ## Dependencies
 
