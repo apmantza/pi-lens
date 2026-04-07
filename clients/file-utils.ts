@@ -31,7 +31,44 @@ export const EXCLUDED_DIRS = [
 	"__pycache__",
 	".tox",
 	".pytest_cache",
+	"*.dSYM",
 ];
+
+function globToRegExp(glob: string): RegExp {
+	const escaped = glob
+		.replace(/[.+^${}()|[\]\\]/g, "\\$&")
+		.replace(/\*/g, ".*")
+		.replace(/\?/g, ".");
+	return new RegExp(`^${escaped}$`, "i");
+}
+
+/**
+ * Match directory name against exclusion patterns.
+ * Supports exact names and lightweight glob patterns (for example `*.dSYM`).
+ */
+export function isExcludedDirName(
+	dirName: string,
+	extraPatterns: string[] = [],
+): boolean {
+	const candidate = dirName.trim();
+	if (!candidate) return false;
+
+	const patterns = [...EXCLUDED_DIRS, ...extraPatterns]
+		.map((p) => p.trim())
+		.filter((p) => p.length > 0);
+	const candidateLower = candidate.toLowerCase();
+
+	for (const pattern of patterns) {
+		const patLower = pattern.toLowerCase();
+		if (!patLower.includes("*") && !patLower.includes("?")) {
+			if (candidateLower === patLower) return true;
+			continue;
+		}
+		if (globToRegExp(pattern).test(candidate)) return true;
+	}
+
+	return false;
+}
 
 /**
  * Convert excluded directory names into glob patterns used by scanners.

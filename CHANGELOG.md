@@ -2,6 +2,17 @@
 
 All notable changes to pi-lens will be documented in this file.
 
+## [3.8.12] - 2026-04-07
+
+### Changed
+- **Excluded-dir policy consolidated** — scanners now share `isExcludedDirName(...)` matching logic from `file-utils` instead of ad-hoc `EXCLUDED_DIRS.includes(...)` checks.
+- **Pattern-aware exclusions** — exclusion matching now supports case-insensitive exact matches and lightweight glob patterns (for example `*.dSYM`).
+- **Cross-scanner consistency** — startup scan, source filter, jscpd precheck, tree-sitter file collection, slop scan, production-readiness scan, and legacy scan-utils path checks now use the same exclusion semantics.
+
+### Tests
+- Added exclusion matcher coverage in `tests/clients/file-utils.test.ts`.
+- Expanded source-filter coverage for glob exclusions (`*.dSYM`) and case-insensitive directory exclusion in `tests/source-filter.test.ts`.
+
 ## [3.8.11] - 2026-04-07
 
 ### Added

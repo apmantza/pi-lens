@@ -17,7 +17,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { EXCLUDED_DIRS } from "./file-utils.js";
+import { isExcludedDirName } from "./file-utils.js";
 import { resolvePackagePath } from "./package-root.js";
 import { TreeCache } from "./tree-sitter-cache.js";
 import { TreeSitterNavigator } from "./tree-sitter-navigator.js";
@@ -966,7 +966,7 @@ export class TreeSitterClient {
 				for (const entry of entries) {
 					const full = path.join(d, entry.name);
 					if (entry.isDirectory()) {
-						if (EXCLUDED_DIRS.includes(entry.name)) continue;
+						if (isExcludedDirName(entry.name)) continue;
 						scan(full);
 					} else if (extensions.some((ext) => entry.name.endsWith(ext))) {
 						if (!fileFilter || fileFilter(full)) {

@@ -19,6 +19,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { isExcludedDirName } from "./file-utils.js";
 
 /**
  * Mapping of file extension to the extensions it shadows (build artifacts).
@@ -140,20 +141,7 @@ export function collectSourceFiles(
 		followSymlinks?: boolean;
 	},
 ): string[] {
-	const excludeDirs = new Set([
-		"node_modules",
-		".git",
-		"dist",
-		"build",
-		".next",
-		"coverage",
-		"__pycache__",
-		".cache",
-		"target", // Rust
-		"out",
-		"*.dSYM", // macOS debug symbols
-		...(options?.excludeDirs || []),
-	]);
+	const extraExcludePatterns = options?.excludeDirs ?? [];
 
 	const extensions = new Set(options?.extensions || ALL_SCANNABLE_EXTENSIONS);
 
@@ -171,7 +159,7 @@ export function collectSourceFiles(
 			const fullPath = path.join(currentDir, entry.name);
 
 			if (entry.isDirectory()) {
-				if (excludeDirs.has(entry.name)) continue;
+				if (isExcludedDirName(entry.name, extraExcludePatterns)) continue;
 				if (!options?.followSymlinks && entry.isSymbolicLink()) continue;
 				scan(fullPath);
 			} else if (entry.isFile()) {

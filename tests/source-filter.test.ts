@@ -388,6 +388,46 @@ describe("collectSourceFiles", () => {
 		cleanup();
 	});
 
+	it("should exclude glob-style directory patterns like *.dSYM", () => {
+		const { dir, cleanup } = createTempDir({
+			"src/main.ts": "// source",
+			"MyApp.dSYM/Contents/Resources/symbol.ts": "// debug symbol payload",
+		});
+
+		const result = collectSourceFiles(dir);
+
+		expect(result).toContain(path.join(dir, "src", "main.ts"));
+		expect(result).not.toContain(
+			path.join(
+				dir,
+				"MyApp.dSYM",
+				"Contents",
+				"Resources",
+				"symbol.ts",
+			),
+		);
+
+		cleanup();
+	});
+
+	it("should exclude directories case-insensitively", () => {
+		const { dir, cleanup } = createTempDir({
+			"src/main.ts": "// source",
+			"NODE_MODULES/pkg/index.ts": "// should be excluded",
+			"Coverage/report.ts": "// should be excluded",
+		});
+
+		const result = collectSourceFiles(dir);
+
+		expect(result).toContain(path.join(dir, "src", "main.ts"));
+		expect(result).not.toContain(
+			path.join(dir, "NODE_MODULES", "pkg", "index.ts"),
+		);
+		expect(result).not.toContain(path.join(dir, "Coverage", "report.ts"));
+
+		cleanup();
+	});
+
 	it("should return empty array for non-existent directory", () => {
 		const result = collectSourceFiles("/non/existent/path");
 		expect(result).toEqual([]);

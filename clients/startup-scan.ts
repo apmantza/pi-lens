@@ -10,7 +10,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { EXCLUDED_DIRS } from "./file-utils.js";
+import { isExcludedDirName } from "./file-utils.js";
 
 export const PROJECT_ROOT_MARKERS = [
 	".git",
@@ -75,7 +75,7 @@ export function countSourceFilesWithinLimit(
 
 		for (const entry of entries) {
 			if (entry.isDirectory()) {
-				if (EXCLUDED_DIRS.includes(entry.name)) continue;
+				if (isExcludedDirName(entry.name)) continue;
 				stack.push(path.join(current, entry.name));
 				continue;
 			}

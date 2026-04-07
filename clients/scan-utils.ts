@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { EXCLUDED_DIRS, isTestFile } from "./file-utils.js";
+import { isExcludedDirName, isTestFile } from "./file-utils.js";
 import { collectSourceFiles, isBuildArtifact } from "./source-filter.js";
 
 /**
@@ -54,7 +54,10 @@ export function shouldIgnoreFile(
 	if (isTestFile(filePath)) return true;
 
 	// Ignore hidden directories and common build outputs
-	if (EXCLUDED_DIRS.some((d) => relPath.includes(`/${d}/`))) return true;
+	const pathParts = relPath.split("/").filter(Boolean);
+	for (const segment of pathParts.slice(0, -1)) {
+		if (isExcludedDirName(segment)) return true;
+	}
 
 	return false;
 }

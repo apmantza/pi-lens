@@ -18,7 +18,7 @@ import {
 	getSgCommand,
 	isSgAvailable,
 } from "./dispatch/runners/utils/runner-helpers.js";
-import { EXCLUDED_DIRS } from "./file-utils.js";
+import { isExcludedDirName } from "./file-utils.js";
 import type { JscpdClient } from "./jscpd-client.js";
 import type { KnipClient } from "./knip-client.js";
 import { safeSpawn } from "./safe-spawn.js";
@@ -249,7 +249,7 @@ export function scanSlop(
 		for (const entry of nodeFs.readdirSync(dir, { withFileTypes: true })) {
 			const fullPath = path.join(dir, entry.name);
 			if (entry.isDirectory()) {
-				if (EXCLUDED_DIRS.includes(entry.name)) continue;
+				if (isExcludedDirName(entry.name)) continue;
 				scanDir(fullPath);
 			} else if (complexity.isSupportedFile(fullPath)) {
 				const metrics = complexity.analyzeFile(fullPath);

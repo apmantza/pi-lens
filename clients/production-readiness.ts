@@ -8,7 +8,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { EXCLUDED_DIRS } from "./file-utils.js";
+import { isExcludedDirName } from "./file-utils.js";
 
 // --- Types ---
 
@@ -385,7 +385,7 @@ function findSourceFiles(root: string): string[] {
 			for (const entry of entries) {
 				const full = path.join(dir, entry.name);
 				if (entry.isDirectory()) {
-					if (EXCLUDED_DIRS.includes(entry.name)) continue;
+					if (isExcludedDirName(entry.name)) continue;
 					scan(full);
 				} else if (exts.some(ext => entry.name.endsWith(ext)) && !entry.name.includes(".test.") && !entry.name.includes(".spec.")) {
 					files.push(full);
@@ -409,7 +409,7 @@ function findTestFiles(root: string): string[] {
 			for (const entry of entries) {
 				const full = path.join(dir, entry.name);
 				if (entry.isDirectory()) {
-					if (EXCLUDED_DIRS.includes(entry.name)) continue;
+					if (isExcludedDirName(entry.name)) continue;
 					// Check if it's a test directory
 					if (testDirs.includes(entry.name) || entry.name.endsWith("-tests")) {
 						// Collect all files in test directories

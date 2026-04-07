@@ -11,7 +11,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { EXCLUDED_DIRS, getExcludedDirGlobs } from "./file-utils.js";
+import { getExcludedDirGlobs, isExcludedDirName } from "./file-utils.js";
 import { safeSpawn } from "./safe-spawn.js";
 
 // --- Types ---
@@ -67,7 +67,7 @@ export class JscpdClient {
 				visited += 1;
 				if (entry.isSymbolicLink()) continue;
 				if (entry.isDirectory()) {
-					if (EXCLUDED_DIRS.includes(entry.name)) continue;
+					if (isExcludedDirName(entry.name)) continue;
 					stack.push(path.join(dir, entry.name));
 					continue;
 				}
