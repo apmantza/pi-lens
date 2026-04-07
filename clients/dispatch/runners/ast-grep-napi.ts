@@ -565,7 +565,7 @@ const astGrepNapiRunner: RunnerDefinition = {
 
 		const hasBlocking = diagnostics.some((d) => d.semantic === "blocking");
 		return {
-			status: "succeeded",
+			status: hasBlocking ? "failed" : "succeeded",
 			diagnostics,
 			semantic: hasBlocking
 				? "blocking"
