@@ -1,0 +1,31 @@
+Inline Contract
+
+This document defines the user-visible inline contract for pi-lens.
+
+1) Blockers First
+
+- On write/edit, inline output prioritizes blockers and fixed items.
+- Non-blocking warnings are summarized and routed to /lens-booboo.
+
+2) Behavior Warnings Are Secondary
+
+- Agent behavior warnings (for example, blind-write/thrashing) are shown only when there are no active blockers.
+- If blockers exist, behavior warnings are suppressed to reduce cognitive overload.
+
+3) Session Start Is Compact
+
+- session_start emits one compact informational startup note.
+- High-priority notices remain separate warnings:
+  - stale TypeScript build cache cleanup
+  - error debt regression (tests were passing, now failing)
+
+4) Turn-End Findings Are Deferred and One-Shot
+
+- Turn-end blockers are cached and injected in the next context message.
+- Findings are consumed once and not replayed repeatedly.
+
+Verification Tests
+
+- tests/clients/runtime-tool-result.test.ts
+- tests/clients/runtime-session.test.ts
+- tests/clients/runtime-event-flow.test.ts

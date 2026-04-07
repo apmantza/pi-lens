@@ -28,6 +28,7 @@ import { captureSnapshot } from "./clients/metrics-history.js";
 import { findSimilarFunctions } from "./clients/project-index.js";
 import { RuffClient } from "./clients/ruff-client.js";
 import { RuntimeCoordinator } from "./clients/runtime-coordinator.js";
+import { consumeTurnEndFindings } from "./clients/runtime-context.js";
 import { handleSessionStart } from "./clients/runtime-session.js";
 import { handleToolResult } from "./clients/runtime-tool-result.js";
 import { handleTurnEnd } from "./clients/runtime-turn.js";
@@ -709,25 +710,7 @@ pi.on("turn_end", async (_event, ctx) => {
 (pi as any).on("context", async (_event: unknown, ctx: { cwd?: string }) => {
 	try {
 		const cwd = ctx.cwd ?? process.cwd();
-		const findings = cacheManager.readCache<{ content: string }>(
-			"turn-end-findings",
-			cwd,
-		);
-		if (!findings?.data?.content) return;
-		// Consume immediately — only inject once per turn
-		cacheManager.writeCache(
-			"turn-end-findings",
-			null as unknown as { content: string },
-			cwd,
-		);
-		return {
-			messages: [
-				{
-					role: "user" as const,
-					content: `[pi-lens] End-of-turn findings:\n\n${findings.data.content}`,
-				},
-			],
-		};
+		return consumeTurnEndFindings(cacheManager, cwd);
 	} catch (err) {
 		dbg(`context event error: ${err}`);
 	}
