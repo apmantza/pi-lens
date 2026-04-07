@@ -1,0 +1,142 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { handleToolResult } from "../../clients/runtime-tool-result.js";
+import { setupTestEnvironment } from "./test-utils.js";
+
+vi.mock("../../clients/pipeline.js", () => ({
+	runPipeline: vi.fn(),
+}));
+
+describe("runtime-tool-result inline behavior warnings", () => {
+	beforeEach(async () => {
+		const pipeline = await import("../../clients/pipeline.js");
+		vi.mocked(pipeline.runPipeline).mockReset();
+	});
+
+	it("does not append behavior warnings when blockers are present", async () => {
+		const { runPipeline } = await import("../../clients/pipeline.js");
+		vi.mocked(runPipeline).mockResolvedValue({
+			output: "🔴 blocker output",
+			hasBlockers: true,
+			isError: false,
+			fileModified: false,
+		});
+
+		const env = setupTestEnvironment("pi-lens-runtime-tool-");
+		try {
+			const filePath = path.join(env.tmpDir, "src", "app.ts");
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(filePath, "export const x = 1;\n");
+
+			const response = await handleToolResult({
+				event: {
+					toolName: "write",
+					input: { path: filePath },
+					details: {},
+					content: [{ type: "text", text: "base" }],
+				},
+				getFlag: () => false,
+				dbg: () => {},
+				runtime: {
+					projectRoot: env.tmpDir,
+					setTelemetryIdentity: () => {},
+					nextWriteIndex: () => 1,
+					turnIndex: 1,
+					telemetryModel: "test-model",
+					telemetrySessionId: "test-session",
+					fixedThisTurn: new Set<string>(),
+					formatPipelineCrashNotice: () => "",
+					lastCascadeOutput: "",
+				},
+				cacheManager: {
+					addModifiedRange: () => {},
+					readTurnState: () => ({}),
+				},
+				biomeClient: {},
+				ruffClient: {},
+				testRunnerClient: {},
+				metricsClient: {},
+				resetLSPService: () => {},
+				agentBehaviorRecord: () => [
+					{
+						type: "blind-write",
+						message: "⚠ BLIND WRITE",
+						severity: "warning",
+						details: {},
+					},
+				],
+				formatBehaviorWarnings: () => "⚠ BLIND WRITE",
+			} as any);
+
+			const text = response?.content.at(-1)?.text ?? "";
+			expect(text).toContain("🔴 blocker output");
+			expect(text).not.toContain("⚠ BLIND WRITE");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("appends behavior warnings when no blockers are present", async () => {
+		const { runPipeline } = await import("../../clients/pipeline.js");
+		vi.mocked(runPipeline).mockResolvedValue({
+			output: "✓ no blockers",
+			hasBlockers: false,
+			isError: false,
+			fileModified: false,
+		});
+
+		const env = setupTestEnvironment("pi-lens-runtime-tool-");
+		try {
+			const filePath = path.join(env.tmpDir, "src", "app.ts");
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(filePath, "export const x = 1;\n");
+
+			const response = await handleToolResult({
+				event: {
+					toolName: "write",
+					input: { path: filePath },
+					details: {},
+					content: [{ type: "text", text: "base" }],
+				},
+				getFlag: () => false,
+				dbg: () => {},
+				runtime: {
+					projectRoot: env.tmpDir,
+					setTelemetryIdentity: () => {},
+					nextWriteIndex: () => 1,
+					turnIndex: 1,
+					telemetryModel: "test-model",
+					telemetrySessionId: "test-session",
+					fixedThisTurn: new Set<string>(),
+					formatPipelineCrashNotice: () => "",
+					lastCascadeOutput: "",
+				},
+				cacheManager: {
+					addModifiedRange: () => {},
+					readTurnState: () => ({}),
+				},
+				biomeClient: {},
+				ruffClient: {},
+				testRunnerClient: {},
+				metricsClient: {},
+				resetLSPService: () => {},
+				agentBehaviorRecord: () => [
+					{
+						type: "blind-write",
+						message: "⚠ BLIND WRITE",
+						severity: "warning",
+						details: {},
+					},
+				],
+				formatBehaviorWarnings: () => "⚠ BLIND WRITE",
+			} as any);
+
+			const text = response?.content.at(-1)?.text ?? "";
+			expect(text).toContain("✓ no blockers");
+			expect(text).toContain("⚠ BLIND WRITE");
+		} finally {
+			env.cleanup();
+		}
+	});
+});
