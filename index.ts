@@ -69,6 +69,21 @@ function log(msg: string) {
 	if (_verbose) console.error(`[pi-lens] ${msg}`);
 }
 
+function updateRuntimeIdentityFromEvent(event: unknown): void {
+	const raw = event as {
+		provider?: string;
+		model?: string;
+		sessionId?: string;
+		session?: { id?: string };
+		id?: string;
+	};
+	runtime.setTelemetryIdentity({
+		provider: raw.provider,
+		model: raw.model,
+		sessionId: raw.sessionId ?? raw.session?.id ?? raw.id,
+	});
+}
+
 /**
  * Find and delete stale tsconfig.tsbuildinfo files in the project.
  *
@@ -441,10 +456,11 @@ pi.on("resources_discover", async (_event, _ctx) => {
 
 // --- Events ---
 
-pi.on("session_start", async (_event, ctx) => {
+pi.on("session_start", async (event, ctx) => {
 	try {
 		_verbose = !!pi.getFlag("lens-verbose");
 		dbg("session_start fired");
+		updateRuntimeIdentityFromEvent(event);
 
 		await handleSessionStart({
 			ctxCwd: ctx.cwd,
@@ -630,6 +646,7 @@ pi.on("tool_call", async (event, _ctx) => {
 // Real-time feedback on file writes/edits
 // biome-ignore lint/suspicious/noExplicitAny: pi.on overload mismatch for tool_result event type
 (pi as any).on("tool_result", async (event: any) => {
+	updateRuntimeIdentityFromEvent(event);
 	return handleToolResult({
 		event: event as any,
 		getFlag: (name: string) => pi.getFlag(name),
@@ -649,6 +666,7 @@ pi.on("tool_call", async (event, _ctx) => {
 });
 // --- Inject project rules into system prompt ---
 pi.on("before_agent_start", async (event) => {
+	updateRuntimeIdentityFromEvent(event);
 	if (!runtime.projectRulesScan.hasCustomRules) return;
 
 	const rulesSection = formatRulesForPrompt(runtime.projectRulesScan);

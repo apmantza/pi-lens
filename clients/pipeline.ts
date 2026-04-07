@@ -65,6 +65,12 @@ export interface PipelineContext {
 	cwd: string;
 	toolName: string;
 	modifiedRanges?: { start: number; end: number }[];
+	telemetry?: {
+		model: string;
+		sessionId: string;
+		turnIndex: number;
+		writeIndex: number;
+	};
 	/** pi.getFlag accessor */
 	getFlag: (name: string) => boolean | string | undefined;
 	/** Debug logger */
@@ -479,10 +485,10 @@ export async function runPipeline(
 		for (const d of dispatchResult.diagnostics) {
 			const shownInline = inlineKeys.has(toKey(d));
 			logger.logCaught(d, {
-				model: "unknown", // TODO: get from pi session
-				sessionId: "unknown",
-				turnIndex: 0,
-				writeIndex: 0,
+				model: ctx.telemetry?.model ?? "unknown",
+				sessionId: ctx.telemetry?.sessionId ?? "unknown",
+				turnIndex: ctx.telemetry?.turnIndex ?? 0,
+				writeIndex: ctx.telemetry?.writeIndex ?? 0,
 			}, shownInline);
 		}
 	}

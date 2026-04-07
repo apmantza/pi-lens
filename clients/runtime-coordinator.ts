@@ -22,6 +22,10 @@ export class RuntimeCoordinator {
 		rules: [],
 		hasCustomRules: false,
 	};
+	private _telemetrySessionId = `lens-${Date.now().toString(36)}`;
+	private _telemetryModel = "unknown";
+	private _turnIndex = 0;
+	private _writeIndex = 0;
 
 	resetForSession(): void {
 		this._complexityBaselines.clear();
@@ -30,10 +34,53 @@ export class RuntimeCoordinator {
 		this._cachedProjectIndex = null;
 		this._lastCascadeOutput = "";
 		this._fixedThisTurn.clear();
+		this._telemetrySessionId =
+			`lens-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+		this._telemetryModel = "unknown";
+		this._turnIndex = 0;
+		this._writeIndex = 0;
 	}
 
 	beginTurn(): void {
 		this._lastCascadeOutput = "";
+		this._turnIndex += 1;
+		this._writeIndex = 0;
+	}
+
+	nextWriteIndex(): number {
+		this._writeIndex += 1;
+		return this._writeIndex;
+	}
+
+	setTelemetryIdentity(identity: {
+		sessionId?: string;
+		model?: string;
+		provider?: string;
+	}): void {
+		if (identity.sessionId && identity.sessionId.trim()) {
+			this._telemetrySessionId = identity.sessionId.trim();
+		}
+		const model = identity.model?.trim();
+		const provider = identity.provider?.trim();
+		if (model && provider) {
+			this._telemetryModel = `${provider}/${model}`;
+		} else if (model) {
+			this._telemetryModel = model;
+		} else if (provider) {
+			this._telemetryModel = provider;
+		}
+	}
+
+	get telemetrySessionId(): string {
+		return this._telemetrySessionId;
+	}
+
+	get telemetryModel(): string {
+		return this._telemetryModel;
+	}
+
+	get turnIndex(): number {
+		return this._turnIndex;
 	}
 
 	formatPipelineCrashNotice(filePath: string, err: unknown): string {

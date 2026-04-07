@@ -15,6 +15,10 @@ interface ToolResultEvent {
 	input: unknown;
 	details?: unknown;
 	content: Array<{ type: string; text?: string }>;
+	provider?: string;
+	model?: string;
+	sessionId?: string;
+	session?: { id?: string };
 }
 
 interface ToolResultDeps {
@@ -110,6 +114,14 @@ export async function handleToolResult(
 	dbg(`tool_result: tracking turn state for ${event.toolName} on ${filePath}`);
 
 	const cwd = runtime.projectRoot;
+	if (event.model || event.provider || event.sessionId || event.session?.id) {
+		runtime.setTelemetryIdentity({
+			model: event.model,
+			provider: event.provider,
+			sessionId: event.sessionId ?? event.session?.id,
+		});
+	}
+	const writeIndex = runtime.nextWriteIndex();
 	let modifiedRanges: Array<{ start: number; end: number }> | undefined;
 	try {
 		const details = event.details as { diff?: string } | undefined;
@@ -169,6 +181,12 @@ export async function handleToolResult(
 				cwd: runtime.projectRoot,
 				toolName: event.toolName,
 				modifiedRanges,
+				telemetry: {
+					model: runtime.telemetryModel,
+					sessionId: runtime.telemetrySessionId,
+					turnIndex: runtime.turnIndex,
+					writeIndex,
+				},
 				getFlag,
 				dbg,
 			},
