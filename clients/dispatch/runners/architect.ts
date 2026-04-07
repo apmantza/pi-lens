@@ -9,6 +9,7 @@
  * - File size limits
  */
 
+import * as path from "node:path";
 import { ArchitectClient } from "../../architect-client.js";
 import type {
 	Diagnostic,
@@ -22,11 +23,17 @@ import { readFileContent } from "./utils.js";
 let _client: ArchitectClient | null = null;
 let _loadedCwd: string | null = null;
 
+function normalizeCwd(cwd: string): string {
+	const resolved = path.resolve(cwd);
+	return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
 function getClient(cwd: string): ArchitectClient {
-	if (_client && _loadedCwd === cwd) return _client;
+	const normalized = normalizeCwd(cwd);
+	if (_client && _loadedCwd === normalized) return _client;
 	_client = new ArchitectClient();
 	_client.loadConfig(cwd);
-	_loadedCwd = cwd;
+	_loadedCwd = normalized;
 	return _client;
 }
 
@@ -38,7 +45,7 @@ const architectRunner: RunnerDefinition = {
 	skipTestFiles: true, // Skip test files - rules can be noisy there
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		const relPath = ctx.filePath.replace(ctx.cwd, "").replace(/\\/g, "/");
+		const relPath = path.relative(ctx.cwd, ctx.filePath).replace(/\\/g, "/");
 		const content = readFileContent(ctx.filePath);
 
 		if (!content) {

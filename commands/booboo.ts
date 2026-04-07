@@ -958,9 +958,8 @@ export async function handleBooboo(
 
 	// Runner 10: Arch rules
 	await tracker.run("architectural rules", async () => {
-		if (!clients.architect.hasConfig()) {
-			clients.architect.loadConfig(targetPath);
-		}
+		// Always refresh config for the requested target path.
+		clients.architect.loadConfig(targetPath);
 
 		if (!clients.architect.hasConfig()) {
 			return { findings: 0, status: "skipped" };
