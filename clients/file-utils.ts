@@ -11,6 +11,16 @@ export const EXCLUDED_DIRS = [
 	".git",
 	"dist",
 	"build",
+	".turbo",
+	".cache",
+	"target",
+	"out",
+	".parcel-cache",
+	".svelte-kit",
+	".nuxt",
+	".yarn",
+	".pnpm-store",
+	".gradle",
 	".next",
 	".pi-lens",
 	".pi",              // pi agent directory
@@ -22,6 +32,13 @@ export const EXCLUDED_DIRS = [
 	".tox",
 	".pytest_cache",
 ];
+
+/**
+ * Convert excluded directory names into glob patterns used by scanners.
+ */
+export function getExcludedDirGlobs(): string[] {
+	return EXCLUDED_DIRS.map((dir) => `**/${dir}/**`);
+}
 
 /**
  * Check if file path is a test/fixture/mock file.

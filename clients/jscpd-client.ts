@@ -11,7 +11,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { EXCLUDED_DIRS } from "./file-utils.js";
+import { EXCLUDED_DIRS, getExcludedDirGlobs } from "./file-utils.js";
 import { safeSpawn } from "./safe-spawn.js";
 
 // --- Types ---
@@ -169,12 +169,26 @@ export class JscpdClient {
 		const outDir = path.join(os.tmpdir(), `pi-lens-jscpd-${Date.now()}`);
 		fs.mkdirSync(outDir, { recursive: true });
 
-		// Build ignore pattern - exclude .js in TS projects (compiled artifacts)
-		const baseIgnores =
-			"**/node_modules/**,**/dist/**,**/build/**,**/.git/**,**/.pi-lens/**,**/*.md,**/*.txt,**/*.json,**/*.yaml,**/*.yml,**/*.toml,**/*.lock,**/*.test.*,**/*.spec.*,**/*.poc.test.*,**/__tests__/**,**/tests/**";
-		const ignorePattern = isTsProject
-			? `${baseIgnores},**/*.js,**/*.jsx`
-			: baseIgnores;
+		// Build ignore pattern from shared exclusions + scanner-specific patterns.
+		const baseIgnores = [
+			...getExcludedDirGlobs(),
+			"**/*.md",
+			"**/*.txt",
+			"**/*.json",
+			"**/*.yaml",
+			"**/*.yml",
+			"**/*.toml",
+			"**/*.lock",
+			"**/*.test.*",
+			"**/*.spec.*",
+			"**/*.poc.test.*",
+			"**/__tests__/**",
+			"**/tests/**",
+		];
+		if (isTsProject) {
+			baseIgnores.push("**/*.js", "**/*.jsx");
+		}
+		const ignorePattern = baseIgnores.join(",");
 
 		try {
 			safeSpawn(
