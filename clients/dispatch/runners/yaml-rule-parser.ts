@@ -40,6 +40,8 @@ export interface YamlRule {
 	language?: string;
 	severity?: string;
 	message?: string;
+	note?: string;
+	fix?: string;
 	metadata?: { weight?: number; category?: string };
 	rule?: YamlRuleCondition;
 	constraints?: Record<string, { regex?: string }>;
@@ -275,6 +277,10 @@ export function parseSimpleYaml(content: string): YamlRule | null {
 		if (multilineKey === "pattern") obj.pattern = value;
 		else if (multilineKey === "message")
 			(rule as unknown as YamlNode).message = value;
+		else if (multilineKey === "note")
+			(rule as unknown as YamlNode).note = value;
+		else if (multilineKey === "fix")
+			(rule as unknown as YamlNode).fix = value;
 		multilineKey = "";
 		multilineBuffer = [];
 	};
@@ -311,6 +317,10 @@ export function parseSimpleYaml(content: string): YamlRule | null {
 			value === "|"
 				? (multilineKey = "message")
 				: (rule.message = stripQuotes(value));
+		} else if (key === "note") {
+			value === "|" ? (multilineKey = "note") : (rule.note = stripQuotes(value));
+		} else if (key === "fix") {
+			value === "|" ? (multilineKey = "fix") : (rule.fix = stripQuotes(value));
 		} else if (key === "constraints") {
 			rule.constraints = {};
 			stack.push({

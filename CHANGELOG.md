@@ -2,6 +2,15 @@
 
 All notable changes to pi-lens will be documented in this file.
 
+## [3.8.16] - 2026-04-07
+
+### Changed
+- **Ast-grep fix guidance upgraded** — ast-grep diagnostics now prefer explicit rule-level guidance from YAML (`fix` first, then `note`) before falling back to generic defect-class suggestions.
+- **Rule parser metadata support** — YAML rule parsing now supports top-level `note` and `fix` fields (including multiline values) for agent-facing remediation text.
+
+### Tests
+- Added parser coverage for `note`/`fix` extraction in `tests/clients/dispatch/runners/yaml-rule-parser.test.ts`.
+
 ## [3.8.15] - 2026-04-07
 
 ### Added

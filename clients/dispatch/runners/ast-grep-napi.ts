@@ -109,6 +109,13 @@ function defaultFixSuggestion(defectClass: string, ruleId: string): string {
 	return "Refactor this pattern to the safer equivalent used in the codebase.";
 }
 
+function explicitRuleFixSuggestion(rule: YamlRule): string | undefined {
+	const raw = (rule.fix ?? rule.note ?? "").trim();
+	if (!raw) return undefined;
+	const oneLine = raw.replace(/\s+/g, " ").trim();
+	return oneLine.length > 240 ? `${oneLine.slice(0, 237)}...` : oneLine;
+}
+
 const ESLINT_CONFIGS = [
 	".eslintrc",
 	".eslintrc.js",
@@ -536,6 +543,7 @@ const astGrepNapiRunner: RunnerDefinition = {
 							"ast-grep-napi",
 							rule.message || rule.id,
 						);
+						const ruleFix = explicitRuleFixSuggestion(rule);
 
 						diagnostics.push({
 							id: `ast-grep-napi-${range.start.line}-${rule.id}`,
@@ -548,11 +556,11 @@ const astGrepNapiRunner: RunnerDefinition = {
 							tool: "ast-grep-napi",
 							rule: rule.id,
 							defectClass,
-							fixable: false,
+							fixable: !!ruleFix,
 							fixSuggestion:
 								semantic === "blocking"
-									? defaultFixSuggestion(defectClass, rule.id)
-									: undefined,
+									? (ruleFix ?? defaultFixSuggestion(defectClass, rule.id))
+									: ruleFix,
 						});
 					}
 
