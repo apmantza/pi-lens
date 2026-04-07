@@ -26,6 +26,8 @@ export class RuntimeCoordinator {
 	private _telemetryModel = "unknown";
 	private _turnIndex = 0;
 	private _writeIndex = 0;
+	private _gitGuardHasBlockers = false;
+	private _gitGuardSummary = "";
 
 	resetForSession(): void {
 		this._complexityBaselines.clear();
@@ -39,6 +41,32 @@ export class RuntimeCoordinator {
 		this._telemetryModel = "unknown";
 		this._turnIndex = 0;
 		this._writeIndex = 0;
+		this._gitGuardHasBlockers = false;
+		this._gitGuardSummary = "";
+	}
+
+	updateGitGuardStatus(hasBlockers: boolean, output: string): void {
+		this._gitGuardHasBlockers = hasBlockers;
+		if (!hasBlockers) {
+			this._gitGuardSummary = "";
+			return;
+		}
+		const firstLine = output
+			.split("\n")
+			.map((line) => line.trim())
+			.find((line) => line.length > 0);
+		this._gitGuardSummary = (firstLine ?? "Unresolved blockers detected").slice(
+			0,
+			160,
+		);
+	}
+
+	get gitGuardHasBlockers(): boolean {
+		return this._gitGuardHasBlockers;
+	}
+
+	get gitGuardSummary(): string {
+		return this._gitGuardSummary;
 	}
 
 	beginTurn(): void {

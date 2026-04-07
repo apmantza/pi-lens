@@ -245,6 +245,7 @@ export async function handleToolResult(
 	}
 
 	let output = result.output;
+	runtime.updateGitGuardStatus(result.hasBlockers, result.output);
 	if (behaviorWarnings.length > 0 && !result.hasBlockers) {
 		output += `\n\n${formatBehaviorWarnings(behaviorWarnings)}`;
 	}

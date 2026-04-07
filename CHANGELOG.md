@@ -2,6 +2,19 @@
 
 All notable changes to pi-lens will be documented in this file.
 
+## [3.8.11] - 2026-04-07
+
+### Added
+- **Experimental git guard flag** — added `--lens-guard` to gate commit/push attempts behind a blocker preflight check.
+- **Git guard commit preflight** — when enabled, `bash` calls containing `git commit` or `git push` are blocked if unresolved inline blockers or pending turn-end blockers exist.
+
+### Changed
+- **Guard status tracking** — runtime now tracks blocker state/summary from post-write pipeline output so commit blocking messages stay concise and actionable.
+
+### Tests
+- Added focused coverage for git guard command detection and block/allow behavior in `tests/clients/git-guard.test.ts`.
+- Updated runtime tool-result tests for guard status updates in `tests/clients/runtime-tool-result.test.ts`.
+
 ## [3.8.10] - 2026-04-07
 
 ### Changed

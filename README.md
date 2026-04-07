@@ -100,6 +100,7 @@ LSP is enabled by default. pi-lens includes many language-server definitions (in
 Optional safety switch:
 
 - `--no-lsp` disables unified LSP dispatch and falls back to language-specific checks where available (for example `ts-lsp`, `pyright`).
+- `--lens-guard` (experimental) blocks `git commit`/`git push` attempts when unresolved pi-lens blockers are pending.
 
 ## Notes
 

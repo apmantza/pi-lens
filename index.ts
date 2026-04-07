@@ -18,6 +18,7 @@ import {
 } from "./clients/dispatch/integration.js";
 import { extractFunctions } from "./clients/dispatch/runners/similarity.js";
 import { resetFormatService } from "./clients/format-service.js";
+import { evaluateGitGuard, isGitCommitOrPushAttempt } from "./clients/git-guard.js";
 import { GoClient } from "./clients/go-client.js";
 import { ensureTool } from "./clients/installer/index.js";
 import { JscpdClient } from "./clients/jscpd-client.js";
@@ -280,6 +281,13 @@ export default function (pi: ExtensionAPI) {
 		default: false,
 	});
 
+	pi.registerFlag("lens-guard", {
+		description:
+			"Experimental: block git commit/push when unresolved pi-lens blockers exist",
+		type: "boolean",
+		default: false,
+	});
+
 	// --- Commands ---
 
 	pi.registerCommand("lens-booboo", {
@@ -496,7 +504,22 @@ pi.on("session_start", async (event, ctx) => {
 	}
 });
 
-pi.on("tool_call", async (event, _ctx) => {
+pi.on("tool_call", async (event, ctx) => {
+	const toolName = (event as { toolName?: string }).toolName ?? "";
+	if (pi.getFlag("lens-guard") && isGitCommitOrPushAttempt(toolName, event.input)) {
+		const guard = evaluateGitGuard(
+			runtime,
+			cacheManager,
+			ctx.cwd ?? runtime.projectRoot,
+		);
+		if (guard.block) {
+			return {
+				block: true,
+				reason: guard.reason,
+			};
+		}
+	}
+
 	const filePath =
 		isToolCallEventType("write", event) || isToolCallEventType("edit", event)
 			? (event.input as { path: string }).path

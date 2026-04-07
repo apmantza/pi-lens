@@ -38,10 +38,11 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				},
 				getFlag: () => false,
 				dbg: () => {},
-				runtime: {
-					projectRoot: env.tmpDir,
-					setTelemetryIdentity: () => {},
-					nextWriteIndex: () => 1,
+					runtime: {
+						projectRoot: env.tmpDir,
+						setTelemetryIdentity: () => {},
+						updateGitGuardStatus: () => {},
+						nextWriteIndex: () => 1,
 					turnIndex: 1,
 					telemetryModel: "test-model",
 					telemetrySessionId: "test-session",
@@ -101,10 +102,11 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				},
 				getFlag: () => false,
 				dbg: () => {},
-				runtime: {
-					projectRoot: env.tmpDir,
-					setTelemetryIdentity: () => {},
-					nextWriteIndex: () => 1,
+					runtime: {
+						projectRoot: env.tmpDir,
+						setTelemetryIdentity: () => {},
+						updateGitGuardStatus: () => {},
+						nextWriteIndex: () => 1,
 					turnIndex: 1,
 					telemetryModel: "test-model",
 					telemetrySessionId: "test-session",
