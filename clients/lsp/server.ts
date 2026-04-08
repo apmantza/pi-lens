@@ -240,9 +240,9 @@ export function NearestRoot(
 	stopDir?: string,
 ): RootFunction {
 	return async (file: string): Promise<string | undefined> => {
-		let currentDir = path.dirname(file);
+		let currentDir = path.resolve(path.dirname(file));
 		const fsRoot = path.parse(currentDir).root;
-		const stop = stopDir ?? fsRoot;
+		const stop = stopDir ? path.resolve(stopDir) : fsRoot;
 
 		while (currentDir !== fsRoot) {
 			// Bail out if we've reached the stop boundary

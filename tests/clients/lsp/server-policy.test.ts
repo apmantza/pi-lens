@@ -57,6 +57,27 @@ describe("lsp server policy", () => {
 		expect(root).toBe(workspace);
 	});
 
+	it("resolves relative file roots without hanging", async () => {
+		const { NearestRoot } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-relative-root-"));
+		dirs.push(tmp);
+
+		const prev = process.cwd();
+		process.chdir(tmp);
+		try {
+			const resolver = NearestRoot(["go.mod", "go.sum"]);
+			const result = await Promise.race([
+				resolver("test_lens_go.go"),
+				new Promise<string | undefined>((_, reject) =>
+					setTimeout(() => reject(new Error("root resolution timed out")), 500),
+				),
+			]);
+			expect(result).toBeUndefined();
+		} finally {
+			process.chdir(prev);
+		}
+	});
+
 	it("uses git root fallback for ruby files without ruby config", async () => {
 		const { RubyServer } = await import("../../../clients/lsp/server.js");
 		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ruby-root-"));
