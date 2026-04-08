@@ -1,0 +1,50 @@
+# Ruby Security
+# Detects weak digest algorithm usage.
+id: ruby-weak-hash
+name: Weak Hash Primitive
+severity: warning
+category: security
+defect_class: injection
+inline_tier: warning
+language: ruby
+
+message: "Weak hash primitive detected (MD5/SHA1) — use SHA-256+ for security-sensitive contexts"
+
+description: |
+  Digest::MD5 and Digest::SHA1 are not suitable for secure hashing.
+
+  ✅ FIX: use Digest::SHA256 or stronger algorithms.
+
+query: |
+  (call_expression
+    receiver: (constant) @MOD
+    method: (identifier) @FN
+    arguments: (argument_list) @ARGS)
+  (#match? @MOD "^(Digest::MD5|Digest::SHA1)$")
+  (#match? @FN "^(hexdigest|digest|base64digest)$")
+
+metavars:
+  - MOD
+  - FN
+  - ARGS
+
+cwe:
+  - CWE-327
+owasp:
+  - A02
+confidence: high
+
+has_fix: false
+
+tags:
+  - ruby
+  - security
+  - crypto
+  - weak-hash
+
+examples:
+  bad: |
+    Digest::MD5.hexdigest(data)
+
+  good: |
+    Digest::SHA256.hexdigest(data)

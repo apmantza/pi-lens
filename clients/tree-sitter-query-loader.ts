@@ -32,6 +32,9 @@ export interface TreeSitterQuery {
 		value: string | string[];
 	}>;
 	tags?: string[];
+	cwe?: string[];
+	owasp?: string[];
+	confidence?: "low" | "medium" | "high";
 	defect_class?: string;
 	inline_tier?: "blocking" | "warning" | "review";
 	has_fix: boolean;
@@ -172,6 +175,13 @@ export class TreeSitterQueryLoader {
 						}))
 					: undefined,
 				tags: Array.isArray(parsed.tags) ? parsed.tags.map(String) : undefined,
+				cwe: Array.isArray(parsed.cwe) ? parsed.cwe.map(String) : undefined,
+				owasp: Array.isArray(parsed.owasp)
+					? parsed.owasp.map(String)
+					: undefined,
+				confidence: parsed.confidence
+					? (String(parsed.confidence) as "low" | "medium" | "high")
+					: undefined,
 				has_fix: parsed.has_fix === true || parsed.has_fix === "true",
 				fix_action: parsed.fix_action ? String(parsed.fix_action) : undefined,
 				filePath,

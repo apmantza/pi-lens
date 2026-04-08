@@ -1,0 +1,51 @@
+# Python Security
+# Detects non-cryptographic randomness API usage in security-sensitive code paths.
+id: python-insecure-random
+name: Insecure Randomness
+severity: warning
+category: security
+defect_class: injection
+inline_tier: warning
+language: python
+
+message: "Insecure randomness source detected — use secrets or os.urandom for security-sensitive values"
+
+description: |
+  random.* is deterministic and unsuitable for security-sensitive tokens or secrets.
+
+  ✅ FIX: use secrets.token_urlsafe, secrets.randbelow, or os.urandom.
+
+query: |
+  (call
+    function: (attribute
+      object: (identifier) @MOD
+      attribute: (identifier) @FN)
+    arguments: (argument_list) @ARGS)
+  (#eq? @MOD "random")
+  (#match? @FN "^(random|randint|randrange|choice|choices)$")
+
+metavars:
+  - MOD
+  - FN
+  - ARGS
+
+cwe:
+  - CWE-330
+owasp:
+  - A02
+confidence: medium
+
+has_fix: false
+
+tags:
+  - python
+  - security
+  - randomness
+  - weak-prng
+
+examples:
+  bad: |
+    token = random.randint(100000, 999999)
+
+  good: |
+    token = secrets.randbelow(900000) + 100000

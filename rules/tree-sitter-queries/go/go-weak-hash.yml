@@ -1,0 +1,51 @@
+# Go Security
+# Detects weak cryptographic hash package usage.
+id: go-weak-hash
+name: Weak Hash Primitive
+severity: warning
+category: security
+defect_class: injection
+inline_tier: warning
+language: go
+
+message: "Weak hash primitive detected (md5/sha1) — use sha256+ for security-sensitive contexts"
+
+description: |
+  md5/sha1 are not suitable for security-sensitive hashing.
+
+  ✅ FIX: use crypto/sha256 or stronger alternatives.
+
+query: |
+  (call_expression
+    function: (selector_expression
+      operand: (identifier) @PKG
+      field: (field_identifier) @FN)
+    arguments: (argument_list) @ARGS)
+  (#match? @PKG "^(md5|sha1)$")
+  (#match? @FN "^(New|Sum)$")
+
+metavars:
+  - PKG
+  - FN
+  - ARGS
+
+cwe:
+  - CWE-327
+owasp:
+  - A02
+confidence: high
+
+has_fix: false
+
+tags:
+  - go
+  - security
+  - crypto
+  - weak-hash
+
+examples:
+  bad: |
+    sum := md5.Sum(data)
+
+  good: |
+    sum := sha256.Sum256(data)

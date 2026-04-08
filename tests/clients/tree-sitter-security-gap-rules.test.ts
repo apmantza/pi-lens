@@ -70,6 +70,18 @@ describe("tree-sitter security gap rules", () => {
 		expect(matches.length).toBeGreaterThan(0);
 	});
 
+	it("matches python weak hash usage and exposes metadata", async () => {
+		const client = new TreeSitterClient();
+		const query = await getQuery("python-weak-hash");
+		expect(query.cwe).toContain("CWE-327");
+		expect(query.owasp).toContain("A02");
+		expect(query.confidence).toBe("high");
+
+		const filePath = writeTempFile("py", `import hashlib\nhashlib.md5(data)\n`);
+		const matches = await client.runQueryOnFile(query, filePath, "python");
+		expect(matches.length).toBeGreaterThan(0);
+	});
+
 	it("matches go sql injection sink", async () => {
 		const client = new TreeSitterClient();
 		const query = await getQuery("go-sql-injection");
@@ -97,9 +109,38 @@ describe("tree-sitter security gap rules", () => {
 		expect(matches.length).toBeGreaterThan(0);
 	});
 
+	it("matches go insecure random usage", async () => {
+		const client = new TreeSitterClient();
+		const query = await getQuery("go-insecure-random");
+		const filePath = writeTempFile(
+			"go",
+			`package main\nimport \"math/rand\"\nfunc run(){ _ = rand.Intn(10) }\n`,
+		);
+		const matches = await client.runQueryOnFile(query, filePath, "go");
+		expect(matches.length).toBeGreaterThan(0);
+	});
+
+	it("matches typescript weak hash usage", async () => {
+		const client = new TreeSitterClient();
+		const query = await getQuery("ts-weak-hash");
+		const filePath = writeTempFile(
+			"ts",
+			`import crypto from \"crypto\";\ncrypto.createHash("md5").update(data);\n`,
+		);
+		const matches = await client.runQueryOnFile(query, filePath, "typescript");
+		expect(matches.length).toBeGreaterThan(0);
+	});
+
 	it("loads ruby insecure deserialization rule", async () => {
 		const query = await getQuery("ruby-insecure-deserialization");
 		expect(query.language).toBe("ruby");
 		expect(query.id).toBe("ruby-insecure-deserialization");
+	});
+
+	it("loads ruby weak hash and insecure random rules", async () => {
+		const weakHash = await getQuery("ruby-weak-hash");
+		expect(weakHash.cwe).toContain("CWE-327");
+		const weakRandom = await getQuery("ruby-insecure-random");
+		expect(weakRandom.cwe).toContain("CWE-330");
 	});
 });

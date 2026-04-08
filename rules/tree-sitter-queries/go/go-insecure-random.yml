@@ -1,0 +1,51 @@
+# Go Security
+# Detects use of math/rand in potentially security-sensitive contexts.
+id: go-insecure-random
+name: Insecure Randomness
+severity: warning
+category: security
+defect_class: injection
+inline_tier: warning
+language: go
+
+message: "Insecure randomness source detected — use crypto/rand for security-sensitive values"
+
+description: |
+  math/rand is deterministic and not suitable for security-sensitive randomness.
+
+  ✅ FIX: use crypto/rand for tokens, keys, nonces, and secrets.
+
+query: |
+  (call_expression
+    function: (selector_expression
+      operand: (identifier) @PKG
+      field: (field_identifier) @FN)
+    arguments: (argument_list) @ARGS)
+  (#eq? @PKG "rand")
+  (#match? @FN "^(Int|Intn|Int63|Uint32|Uint64|Read|Float64)$")
+
+metavars:
+  - PKG
+  - FN
+  - ARGS
+
+cwe:
+  - CWE-330
+owasp:
+  - A02
+confidence: medium
+
+has_fix: false
+
+tags:
+  - go
+  - security
+  - randomness
+  - weak-prng
+
+examples:
+  bad: |
+    code := rand.Intn(1000000)
+
+  good: |
+    _, _ = rand.Read(buf) // from crypto/rand

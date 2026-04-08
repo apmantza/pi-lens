@@ -1,0 +1,51 @@
+# Python Security
+# Detects weak cryptographic hash primitives.
+id: python-weak-hash
+name: Weak Hash Primitive
+severity: warning
+category: security
+defect_class: injection
+inline_tier: warning
+language: python
+
+message: "Weak hash primitive detected (MD5/SHA1) — use SHA-256+ for security-sensitive contexts"
+
+description: |
+  MD5 and SHA1 are collision-prone and not suitable for security-sensitive hashing.
+
+  ✅ FIX: prefer hashlib.sha256/sha512 (or stronger, context-appropriate algorithms).
+
+query: |
+  (call
+    function: (attribute
+      object: (identifier) @MOD
+      attribute: (identifier) @FN)
+    arguments: (argument_list) @ARGS)
+  (#eq? @MOD "hashlib")
+  (#match? @FN "^(md5|sha1)$")
+
+metavars:
+  - MOD
+  - FN
+  - ARGS
+
+cwe:
+  - CWE-327
+owasp:
+  - A02
+confidence: high
+
+has_fix: false
+
+tags:
+  - python
+  - security
+  - crypto
+  - weak-hash
+
+examples:
+  bad: |
+    digest = hashlib.md5(data).hexdigest()
+
+  good: |
+    digest = hashlib.sha256(data).hexdigest()

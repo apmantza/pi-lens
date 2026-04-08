@@ -1,0 +1,54 @@
+# Ruby Security
+# Detects non-cryptographic randomness usage.
+id: ruby-insecure-random
+name: Insecure Randomness
+severity: warning
+category: security
+defect_class: injection
+inline_tier: warning
+language: ruby
+
+message: "Insecure randomness source detected — use SecureRandom for security-sensitive values"
+
+description: |
+  Kernel.rand/Random.new are not suitable for security-sensitive tokens.
+
+  ✅ FIX: use SecureRandom.hex/base64/uuid.
+
+query: |
+  [
+    (call
+      method: (identifier) @FN
+      arguments: (argument_list) @ARGS)
+    (call_expression
+      receiver: (constant) @MOD
+      method: (identifier) @FN
+      arguments: (argument_list) @ARGS)
+  ]
+  (#match? @FN "^(rand|srand)$")
+
+metavars:
+  - MOD
+  - FN
+  - ARGS
+
+cwe:
+  - CWE-330
+owasp:
+  - A02
+confidence: medium
+
+has_fix: false
+
+tags:
+  - ruby
+  - security
+  - randomness
+  - weak-prng
+
+examples:
+  bad: |
+    token = rand(10_000_000)
+
+  good: |
+    token = SecureRandom.hex(16)

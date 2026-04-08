@@ -1,0 +1,52 @@
+# JS/TS Security
+# Detects weak hash algorithm selection in crypto hashing APIs.
+id: ts-weak-hash
+name: Weak Hash Primitive
+severity: warning
+category: security
+defect_class: injection
+inline_tier: warning
+language: typescript
+
+message: "Weak hash primitive selected (md5/sha1) — use sha256+ for security-sensitive contexts"
+
+description: |
+  Using MD5/SHA1 in cryptographic hashing contexts is insecure.
+
+  ✅ FIX: use SHA-256 or stronger algorithms.
+
+query: |
+  (call_expression
+    function: (member_expression
+      property: (property_identifier) @FN)
+    arguments: (arguments
+      (string (string_fragment) @ALG)
+      (_)*))
+  (#eq? @FN "createHash")
+  (#match? @ALG "^(md5|sha1)$")
+
+metavars:
+  - FN
+  - ALG
+
+cwe:
+  - CWE-327
+owasp:
+  - A02
+confidence: high
+
+has_fix: false
+
+tags:
+  - javascript
+  - typescript
+  - security
+  - crypto
+  - weak-hash
+
+examples:
+  bad: |
+    const hash = crypto.createHash("md5").update(data).digest("hex")
+
+  good: |
+    const hash = crypto.createHash("sha256").update(data).digest("hex")

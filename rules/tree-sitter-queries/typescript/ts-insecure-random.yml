@@ -1,0 +1,52 @@
+# JS/TS Security
+# Detects non-cryptographic randomness usage.
+id: ts-insecure-random
+name: Insecure Randomness
+severity: warning
+category: security
+defect_class: injection
+inline_tier: warning
+language: typescript
+
+message: "Insecure randomness source detected — use crypto.getRandomValues or secure RNG APIs"
+
+description: |
+  Math.random is not suitable for security-sensitive tokens and identifiers.
+
+  ✅ FIX: use crypto.getRandomValues / crypto.randomUUID / secure server-side RNG.
+
+query: |
+  (call_expression
+    function: (member_expression
+      object: (identifier) @OBJ
+      property: (property_identifier) @FN)
+    arguments: (arguments) @ARGS)
+  (#eq? @OBJ "Math")
+  (#eq? @FN "random")
+
+metavars:
+  - OBJ
+  - FN
+  - ARGS
+
+cwe:
+  - CWE-330
+owasp:
+  - A02
+confidence: medium
+
+has_fix: false
+
+tags:
+  - javascript
+  - typescript
+  - security
+  - randomness
+  - weak-prng
+
+examples:
+  bad: |
+    const token = Math.random().toString(36)
+
+  good: |
+    const token = crypto.randomUUID()
