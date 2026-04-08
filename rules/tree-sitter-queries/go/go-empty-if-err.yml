@@ -1,0 +1,47 @@
+# Go Error Handling
+# Detects empty `if err != nil` handlers
+id: go-empty-if-err
+name: Empty Error Handler
+severity: error
+category: error-handling
+defect_class: silent-error
+inline_tier: blocking
+language: go
+
+message: "Empty error handler — handle err or return it"
+
+description: |
+  An `if err != nil {}` block silently ignores failures.
+
+  ✅ FIX: return, wrap, or log the error with context.
+
+query: |
+  (if_statement
+    condition: (binary_expression
+      left: (identifier) @ERR
+      right: (nil))
+    consequence: (block) @BODY)
+  (#eq? @ERR "err")
+
+metavars:
+  - ERR
+  - BODY
+
+post_filter: empty_body
+
+has_fix: false
+
+tags:
+  - go
+  - error-handling
+  - reliability
+
+examples:
+  bad: |
+    if err != nil {
+    }
+
+  good: |
+    if err != nil {
+        return fmt.Errorf("load config: %w", err)
+    }

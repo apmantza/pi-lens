@@ -1,0 +1,45 @@
+# Go Reliability
+# Detects direct panic calls in application/library code.
+id: go-direct-panic
+name: Direct panic() Call
+severity: error
+category: reliability
+defect_class: safety
+inline_tier: blocking
+language: go
+
+message: "Direct panic() call can crash the process — return or propagate an error instead"
+
+description: |
+  Calling `panic(...)` for ordinary error paths can terminate the process and bypass
+  normal recovery/cleanup flow.
+
+  ✅ FIX: return an error, wrap it, or handle it at the boundary layer.
+
+query: |
+  (call_expression
+    function: (identifier) @FN
+    arguments: (argument_list) @ARGS)
+  (#eq? @FN "panic")
+
+metavars:
+  - FN
+  - ARGS
+
+has_fix: false
+
+tags:
+  - go
+  - reliability
+  - safety
+
+examples:
+  bad: |
+    if err != nil {
+        panic(err)
+    }
+
+  good: |
+    if err != nil {
+        return fmt.Errorf("failed: %w", err)
+    }

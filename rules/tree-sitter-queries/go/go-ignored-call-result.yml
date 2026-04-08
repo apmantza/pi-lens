@@ -1,0 +1,51 @@
+# Go Reliability
+# Detects discarded call results using blank identifier assignment.
+id: go-ignored-call-result
+name: Ignored Call Result
+severity: warning
+category: error-handling
+defect_class: silent-error
+inline_tier: warning
+language: go
+
+message: "Call result assigned to '_' — verify this discard is intentional"
+
+description: |
+  Assigning a call result to `_` can hide failures or important return values.
+
+  ✅ FIX: handle the returned value/error or document intentional discard.
+
+query: |
+  [
+    (short_var_declaration
+      left: (expression_list
+        (identifier) @VAR)
+      right: (expression_list
+        (call_expression) @CALL))
+    (assignment_statement
+      left: (expression_list
+        (identifier) @VAR)
+      right: (expression_list
+        (call_expression) @CALL))
+  ]
+  (#eq? @VAR "_")
+
+metavars:
+  - VAR
+  - CALL
+
+has_fix: false
+
+tags:
+  - go
+  - reliability
+  - code-smell
+
+examples:
+  bad: |
+    _ = doWork()
+
+  good: |
+    if err := doWork(); err != nil {
+        return err
+    }
