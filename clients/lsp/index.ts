@@ -16,7 +16,7 @@ import { createLSPClient } from "./client.js";
 import { getServersForFileWithConfig } from "./config.js";
 import { getLanguageId } from "./language.js";
 import type { LSPServerInfo } from "./server.js";
-import { uriToPath } from "../path-utils.js";
+import { normalizeMapKey, uriToPath } from "../path-utils.js";
 import { detectFileKind } from "../file-kinds.js";
 import { detectProjectLanguageProfile } from "../language-profile.js";
 
@@ -77,9 +77,7 @@ export class LSPService {
 			if (!root) continue;
 			const allowInstall = this.shouldAllowInstall(filePath, root);
 
-			// Normalize root path for consistent cache key on Windows
-			const normalizedRoot =
-				process.platform === "win32" ? root.toLowerCase() : root;
+			const normalizedRoot = normalizeMapKey(root);
 			const key = `${server.id}:${normalizedRoot}`;
 
 			// Check cache first (fast path)
@@ -138,7 +136,7 @@ export class LSPService {
 		const kind = detectFileKind(filePath);
 		if (!kind) return true;
 
-		const cacheKey = `${root}:${kind}`;
+		const cacheKey = `${normalizeMapKey(root)}:${kind}`;
 		const now = Date.now();
 		const cached = this.languagePolicyCache.get(cacheKey);
 		if (cached && cached.expiresAt > now) {

@@ -3,6 +3,7 @@ import type { FileComplexity } from "./complexity-client.js";
 import type { RuleScanResult } from "./rules-scanner.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
 import type { ProjectIndex } from "./project-index.js";
+import { normalizeMapKey } from "./path-utils.js";
 
 export interface ErrorDebtBaseline {
 	testsPassed: boolean;
@@ -10,7 +11,7 @@ export interface ErrorDebtBaseline {
 }
 
 export class RuntimeCoordinator {
-	private _projectRoot = process.cwd();
+	private _projectRoot = normalizeMapKey(process.cwd());
 	private _sessionGeneration = 0;
 	private _errorDebtBaseline: ErrorDebtBaseline | null = null;
 	private _pipelineCrashCounts = new Map<string, number>();
@@ -167,7 +168,7 @@ export class RuntimeCoordinator {
 	}
 
 	set projectRoot(value: string) {
-		this._projectRoot = value;
+		this._projectRoot = normalizeMapKey(value);
 	}
 
 	get errorDebtBaseline(): ErrorDebtBaseline | null {

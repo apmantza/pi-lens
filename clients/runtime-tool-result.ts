@@ -181,7 +181,7 @@ export async function handleToolResult(
 		result = await runPipeline(
 			{
 				filePath,
-				cwd: runtime.projectRoot,
+				cwd,
 				toolName: event.toolName,
 				modifiedRanges,
 				telemetry: {
