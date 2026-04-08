@@ -205,6 +205,11 @@ describe("Dispatch Flow", () => {
 			expect(result.output).toContain(
 				"Pi-lens analysis unavailable. Tools for go not installed.",
 			);
+
+			const secondResult = await dispatchForFile(ctx, groups);
+			expect(secondResult.output).not.toContain(
+				"Pi-lens analysis unavailable. Tools for go not installed.",
+			);
 		});
 
 		it("should execute multiple runners in group", async () => {

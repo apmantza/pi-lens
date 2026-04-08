@@ -353,6 +353,10 @@ function buildCoverageNotice(
 	);
 	if (!allSkipped) return undefined;
 
+	const onceKey = `${ctx.kind}:${normalizeMapKey(ctx.filePath)}`;
+	if (coverageNoticeSeen.has(onceKey)) return undefined;
+	coverageNoticeSeen.add(onceKey);
+
 	return {
 		id: `coverage-unavailable:${ctx.kind}:${path.basename(ctx.filePath)}`,
 		message: `Pi-lens analysis unavailable. Tools for ${ctx.kind} not installed.`,
@@ -364,6 +368,7 @@ function buildCoverageNotice(
 }
 
 const latencyReports: DispatchLatencyReport[] = [];
+const coverageNoticeSeen = new Set<string>();
 
 export function getLatencyReports(): DispatchLatencyReport[] {
 	return [...latencyReports];
@@ -371,6 +376,10 @@ export function getLatencyReports(): DispatchLatencyReport[] {
 
 export function clearLatencyReports(): void {
 	latencyReports.length = 0;
+}
+
+export function clearCoverageNoticeState(): void {
+	coverageNoticeSeen.clear();
 }
 
 export function formatLatencyReport(report: DispatchLatencyReport): string {

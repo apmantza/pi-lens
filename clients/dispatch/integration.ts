@@ -13,6 +13,7 @@ import {
 } from "../language-policy.js";
 import {
 	clearLatencyReports,
+	clearCoverageNoticeState,
 	createBaselineStore,
 	createDispatchContext,
 	type DispatchLatencyReport,
@@ -104,6 +105,7 @@ export function getDispatchGroupsForKind(
  */
 export function resetDispatchBaselines(): void {
 	sessionBaselines.clear();
+	clearCoverageNoticeState();
 }
 
 /**

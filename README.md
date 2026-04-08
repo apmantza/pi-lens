@@ -15,6 +15,7 @@ On every `write` and `edit`, pi-lens runs a fast, language-aware pipeline (check
 - **Security checks**: secret scanning and structural security rules
 - **Structural analysis**: tree-sitter + ast-grep for bug patterns across supported languages
 - **Delta reporting**: prioritize new issues over legacy baseline noise
+- **Coverage transparency**: when primary analysis tools are unavailable for a file kind, pi-lens emits a non-blocking inline "analysis unavailable" warning (deduped per file per session)
 
 ### Session Start
 
@@ -25,6 +26,7 @@ At `session_start`, pi-lens:
 - applies language-aware startup defaults for tool preinstall
 - warms caches and optional indexes (with overlap/session guardrails)
 - emits missing-tool install hints for detected languages when relevant
+- injects session guidance through internal context (non-user channel) to reduce acknowledgement-only first responses
 
 ### Turn End
 

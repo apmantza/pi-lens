@@ -2,6 +2,15 @@
 
 All notable changes to pi-lens will be documented in this file.
 
+## [3.8.21] - 2026-04-08
+
+### Changed
+- **Session guidance channeling** — session-start guidance is now injected as `system` context instead of synthetic `user` context, reducing acknowledgement-only first replies before task execution.
+- **Coverage warning dedupe** — "Pi-lens analysis unavailable" warnings are now shown once per file per session and reset on session baseline reset.
+
+### Fixed
+- **Turn-end read-loop pressure** — turn-end findings now suppress duplicate persisted blocker prompts and avoid imperative "read this file" phrasing that could trigger repeated read loops.
+
 ## [3.8.20] - 2026-04-08
 
 ### Changed
