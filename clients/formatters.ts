@@ -346,6 +346,9 @@ export const ruffFormatter: FormatterInfo = {
 	async resolveCommand(filePath, cwd) {
 		const venv = await findInVenv("ruff", cwd);
 		if (venv) return [venv, "format", filePath];
+		const { getToolPath } = await import("./installer/index.js");
+		const installed = await getToolPath("ruff");
+		if (installed) return [installed, "format", filePath];
 		return null;
 	},
 	async detect(cwd: string) {
@@ -372,10 +375,11 @@ export const ruffFormatter: FormatterInfo = {
 			}
 		}
 
-		// Only enable if the project explicitly uses ruff (config or deps).
-		// Do NOT fall back to "ruff binary is installed" — that would format
-		// projects that never asked for ruff.
-		return false;
+		// No-config fallback: if Ruff is already available, allow formatter usage.
+		// This keeps Python default behavior consistent with startup defaults.
+		const { getToolPath } = await import("./installer/index.js");
+		const installed = await getToolPath("ruff");
+		return Boolean(installed);
 	},
 };
 
