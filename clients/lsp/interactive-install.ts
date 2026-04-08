@@ -14,6 +14,20 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
+function canUseInteractivePrompt(): boolean {
+	return process.stdin.isTTY === true && process.stdout.isTTY === true;
+}
+
+async function isToolOnPath(toolId: string): Promise<boolean> {
+	const locator = process.platform === "win32" ? "where" : "which";
+
+	return new Promise((resolve) => {
+		const proc = spawn(locator, [toolId], { stdio: "ignore", shell: false });
+		proc.on("close", (code) => resolve(code === 0));
+		proc.on("error", () => resolve(false));
+	});
+}
+
 /**
  * Install strategy:
  * - "npm":    npm install -g <packageName>  (managed by pi-lens, goes into .pi-lens/tools)
@@ -255,16 +269,16 @@ function promptUser(timeoutMs: number): Promise<"yes" | "no"> {
 
 		process.stdin.on("data", onData);
 
-		// Auto-accept after timeout
+		// Auto-decline after timeout
 		const timeout = setTimeout(() => {
 			cleanup();
-			resolve("yes");
+			resolve("no");
 		}, timeoutMs);
 
 		// Handle stdin closing
 		process.stdin.on("end", () => {
 			cleanup();
-			resolve("yes");
+			resolve("no");
 		});
 
 		function cleanup() {
@@ -310,7 +324,9 @@ async function installTool(config: LanguageConfig): Promise<boolean> {
 	const [cmd, ...args] =
 		installStrategy === "npm" && packageName
 			? ["npm", "install", "-g", packageName]
-			: ["sh", "-c", installCommand];
+			: process.platform === "win32"
+				? ["powershell", "-NoProfile", "-Command", installCommand]
+				: ["sh", "-c", installCommand];
 
 	return new Promise((resolve) => {
 		const proc = spawn(cmd, args, { stdio: "inherit", shell: false });
@@ -360,17 +376,13 @@ export async function promptForInstall(
 		const thirtyDays = 30 * 24 * 60 * 60 * 1000;
 		if (Date.now() - cached.timestamp < thirtyDays) {
 			if (cached.choice === "yes" || cached.choice === "auto") {
-				// Verify binary actually exists before trusting cache
-				try {
-					const { execSync } = await import("node:child_process");
-					execSync(`which ${config.toolId}`, { stdio: "ignore" });
-					return true; // Binary exists, cache is valid
-				} catch {
-					// Binary not found, invalidate cache and continue to install
-					console.error(
-						`[pi-lens] Cached ${config.toolId} not found, re-installing...`,
-					);
+				const toolAvailable = await isToolOnPath(config.toolId);
+				if (toolAvailable) {
+					return true;
 				}
+				console.error(
+					`[pi-lens] Cached ${config.toolId} not found, re-installing...`,
+				);
 			} else {
 				return false; // User previously declined
 			}
@@ -386,6 +398,13 @@ export async function promptForInstall(
 		return await installTool(config);
 	}
 
+	if (!canUseInteractivePrompt()) {
+		console.error(
+			`[pi-lens] ${config.toolName} missing and interactive prompt unavailable; skipping install. Use --auto-install to allow automatic setup.`,
+		);
+		return false;
+	}
+
 	// Show interactive prompt
 	console.error(`\n⚠️  ${config.toolName} not found`);
 	console.error(`   Install: ${config.installCommand}`);
@@ -394,9 +413,9 @@ export async function promptForInstall(
 		await saveChoice(cwd, config.toolId, "no");
 		return false;
 	}
-	console.error(`\n   Install now? [Y/n] (auto-accepts in 30s)`);
+	console.error(`\n   Install now? [Y/n] (auto-declines in 10s)`);
 
-	const answer = await promptUser(30000);
+	const answer = await promptUser(10000);
 	await saveChoice(cwd, config.toolId, answer);
 
 	if (answer === "yes") {
