@@ -16,6 +16,7 @@ import {
 	hasLanguage,
 	isLanguageConfigured,
 } from "./language-profile.js";
+import { canRunStartupHeavyScans } from "./language-policy.js";
 import type { MetricsClient } from "./metrics-client.js";
 import {
 	buildProjectIndex,
@@ -347,9 +348,10 @@ export async function handleSessionStart(
 		);
 		dbg(`session_start: skipping TODO scan (${startupScan.reason ?? "unknown"})`);
 	} else {
-		const canRunJsTsHeavyScans =
-			hasLanguage(languageProfile, "jsts") &&
-			isLanguageConfigured(languageProfile, "jsts");
+		const canRunJsTsHeavyScans = canRunStartupHeavyScans(
+			languageProfile,
+			"jsts",
+		);
 		const scanNames = ["todo"];
 		if (canRunJsTsHeavyScans) {
 			scanNames.push("knip", "jscpd", "ast-grep exports", "project index");

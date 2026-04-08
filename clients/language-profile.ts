@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { detectFileKind, type FileKind } from "./file-kinds.js";
+import { getStartupDefaultsForProfile } from "./language-policy.js";
 import { getSourceFiles } from "./scan-utils.js";
 
 export const SUPPORTED_FILE_KINDS: readonly FileKind[] = [
@@ -17,21 +18,6 @@ export const SUPPORTED_FILE_KINDS: readonly FileKind[] = [
 	"yaml",
 	"sql",
 	"ruby",
-];
-
-export const LSP_CAPABLE_FILE_KINDS: readonly FileKind[] = [
-	"jsts",
-	"python",
-	"go",
-	"rust",
-	"ruby",
-	"cxx",
-	"cmake",
-	"shell",
-	"json",
-	"markdown",
-	"css",
-	"yaml",
 ];
 
 const PROJECT_MARKERS_BY_KIND: Partial<Record<FileKind, readonly string[]>> = {
@@ -151,26 +137,7 @@ export function isLanguageConfigured(
 export function getDefaultStartupTools(
 	profile: ProjectLanguageProfile,
 ): string[] {
-	const tools = new Set<string>();
-
-	if (hasLanguage(profile, "jsts")) {
-		tools.add("typescript-language-server");
-	}
-
-	if (hasLanguage(profile, "python")) {
-		tools.add("pyright");
-		tools.add("ruff");
-	}
-
-	if (hasLanguage(profile, "yaml") && isLanguageConfigured(profile, "yaml")) {
-		tools.add("yamllint");
-	}
-
-	if (hasLanguage(profile, "sql") && isLanguageConfigured(profile, "sql")) {
-		tools.add("sqlfluff");
-	}
-
-	return [...tools];
+	return getStartupDefaultsForProfile(profile);
 }
 
 export function resolveLanguageRootForFile(
