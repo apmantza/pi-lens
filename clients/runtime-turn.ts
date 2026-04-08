@@ -137,7 +137,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					report += `  ${displayA}:${clone.startA} ↔ ${displayB}:${clone.startB} (${clone.lines} lines)\n`;
 				}
 				if (firstPath) {
-					report += `  Inspect first location with read ${firstPath}\n`;
+					report += `  First location: ${firstPath}\n`;
 				}
 				blockerParts.push(report);
 			}
@@ -182,7 +182,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					report += `  ${display}${issue.line ? `:${issue.line}` : ""} — ${issue.type}: ${issue.name}\n`;
 				}
 				if (firstPath) {
-					report += `  Inspect first location with read ${firstPath}\n`;
+					report += `  First location: ${firstPath}\n`;
 				}
 				blockerParts.push(report);
 			}
@@ -235,7 +235,20 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			`turn_end: ${blockerParts.length} blocker section(s) found, persisting for next context`,
 		);
 		const content = capTurnEndMessage(blockerParts.join("\n\n"));
+		const signature = `${files.slice().sort().join("|")}::${content}`;
+		const last = cacheManager.readCache<{ signature: string }>(
+			"turn-end-findings-last",
+			cwd,
+		);
+		if (last?.data?.signature === signature) {
+			dbg("turn_end: duplicate blocker findings detected, suppressing re-prompt");
+			cacheManager.clearTurnState(cwd);
+			runtime.fixedThisTurn.clear();
+			resetFormatService();
+			return;
+		}
 		cacheManager.writeCache("turn-end-findings", { content }, cwd);
+		cacheManager.writeCache("turn-end-findings-last", { signature }, cwd);
 	} else {
 		cacheManager.clearTurnState(cwd);
 	}
