@@ -1,0 +1,51 @@
+# JS/TS Security
+# Detects outbound HTTP sinks invoked with dynamic URL expressions.
+id: ts-ssrf
+name: SSRF Risk
+severity: error
+category: security
+defect_class: injection
+inline_tier: blocking
+language: typescript
+
+message: "Potential SSRF sink — validate and allowlist outbound URLs"
+
+description: |
+  Outbound requests with untrusted URL input can lead to server-side request forgery.
+
+  ✅ FIX: validate URL host/scheme and allowlist external targets.
+
+query: |
+  [
+    (call_expression
+      function: (identifier) @FN
+      arguments: (arguments [(identifier) (member_expression) (call_expression)] @URL))
+    (call_expression
+      function: (member_expression
+        object: (identifier) @OBJ
+        property: (property_identifier) @FN)
+      arguments: (arguments [(identifier) (member_expression) (call_expression)] @URL))
+  ]
+  (#match? @FN "^(fetch|get|post|put|patch|delete|request)$")
+
+metavars:
+  - OBJ
+  - FN
+  - URL
+
+has_fix: false
+
+tags:
+  - javascript
+  - typescript
+  - security
+  - ssrf
+  - cwe-918
+  - owasp-a10
+
+examples:
+  bad: |
+    await fetch(userUrl)
+
+  good: |
+    if (ALLOWED_HOSTS.has(url.host)) await fetch(url.toString())

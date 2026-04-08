@@ -1,0 +1,53 @@
+# Go Security
+# Detects SQL query APIs fed by fmt.Sprintf/format-composed strings.
+id: go-sql-injection
+name: SQL Injection Risk
+severity: error
+category: security
+defect_class: injection
+inline_tier: blocking
+language: go
+
+message: "Potential SQL injection sink — use parameterized queries"
+
+description: |
+  Building SQL with string formatting before Query/Exec can enable injection.
+
+  ✅ FIX: use placeholders and bind parameters in Query/Exec methods.
+
+query: |
+  (call_expression
+    function: (selector_expression
+      field: (field_identifier) @DBFN)
+    arguments: (argument_list
+      (call_expression
+        function: (selector_expression
+          operand: (identifier) @FMTPKG
+          field: (field_identifier) @FMTFN)
+        arguments: (argument_list) @FMTARGS)
+      (_)*))
+  (#match? @DBFN "^(Query|QueryContext|QueryRow|QueryRowContext|Exec|ExecContext)$")
+  (#eq? @FMTPKG "fmt")
+  (#eq? @FMTFN "Sprintf")
+
+metavars:
+  - DBFN
+  - FMTPKG
+  - FMTFN
+  - FMTARGS
+
+has_fix: false
+
+tags:
+  - go
+  - security
+  - sql-injection
+  - cwe-89
+  - owasp-a03
+
+examples:
+  bad: |
+    db.Query(fmt.Sprintf("SELECT * FROM users WHERE id=%s", userID))
+
+  good: |
+    db.Query("SELECT * FROM users WHERE id=$1", userID)

@@ -1,0 +1,46 @@
+# Python Security
+# Detects unsafe deserialization APIs.
+id: python-insecure-deserialization
+name: Insecure Deserialization
+severity: error
+category: security
+defect_class: injection
+inline_tier: blocking
+language: python
+
+message: "Potential insecure deserialization sink — avoid unsafe loaders"
+
+description: |
+  Deserializing untrusted input with pickle/yaml unsafe loaders can lead to code execution.
+
+  ✅ FIX: use safe parsing formats or safe loaders and strict schema validation.
+
+query: |
+  (call
+    function: (attribute
+      object: (identifier) @MOD
+      attribute: (identifier) @FN)
+    arguments: (argument_list (_) @DATA))
+  (#match? @MOD "^(pickle|yaml)$")
+  (#match? @FN "^(load|loads|unsafe_load)$")
+
+metavars:
+  - MOD
+  - FN
+  - DATA
+
+has_fix: false
+
+tags:
+  - python
+  - security
+  - deserialization
+  - cwe-502
+  - owasp-a08
+
+examples:
+  bad: |
+    obj = pickle.loads(request_body)
+
+  good: |
+    obj = json.loads(request_body)

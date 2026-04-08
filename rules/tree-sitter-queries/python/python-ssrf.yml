@@ -1,0 +1,48 @@
+# Python Security
+# Detects user-controlled URL usage in outbound HTTP request sinks.
+id: python-ssrf
+name: SSRF Risk
+severity: error
+category: security
+defect_class: injection
+inline_tier: blocking
+language: python
+
+message: "Potential SSRF sink — validate/allowlist outbound URLs"
+
+description: |
+  Outbound HTTP calls with untrusted URLs can allow server-side request forgery.
+
+  ✅ FIX: enforce allowlisted hosts/schemes and reject private/internal targets.
+
+query: |
+  (call
+    function: (attribute
+      object: (identifier) @MOD
+      attribute: (identifier) @FN)
+    arguments: (argument_list
+      [(identifier) (subscript) (call)] @URL))
+  (#eq? @MOD "requests")
+  (#match? @FN "^(get|post|put|patch|delete|request|head|options)$")
+
+metavars:
+  - MOD
+  - FN
+  - URL
+
+has_fix: false
+
+tags:
+  - python
+  - security
+  - ssrf
+  - cwe-918
+  - owasp-a10
+
+examples:
+  bad: |
+    requests.get(user_url)
+
+  good: |
+    if host in ALLOWLIST:
+        requests.get(url)

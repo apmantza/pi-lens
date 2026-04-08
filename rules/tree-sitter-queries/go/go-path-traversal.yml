@@ -1,0 +1,49 @@
+# Go Security
+# Detects file-system sink calls with dynamic path expressions.
+id: go-path-traversal
+name: Path Traversal Risk
+severity: error
+category: security
+defect_class: injection
+inline_tier: blocking
+language: go
+
+message: "Potential path traversal sink — sanitize and constrain file paths"
+
+description: |
+  File operations with user-controlled paths can access unintended files.
+
+  ✅ FIX: clean/canonicalize paths and enforce a fixed base directory.
+
+query: |
+  (call_expression
+    function: (selector_expression
+      operand: (identifier) @PKG
+      field: (field_identifier) @FN)
+    arguments: (argument_list
+      [(identifier) (binary_expression) (call_expression)] @PATH
+      (_)*))
+  (#match? @PKG "^(os|ioutil)$")
+  (#match? @FN "^(Open|OpenFile|ReadFile|WriteFile|Create|Remove|RemoveAll)$")
+
+metavars:
+  - PKG
+  - FN
+  - PATH
+
+has_fix: false
+
+tags:
+  - go
+  - security
+  - path-traversal
+  - cwe-22
+  - owasp-a01
+
+examples:
+  bad: |
+    os.ReadFile(base + userPath)
+
+  good: |
+    p := filepath.Clean(userPath)
+    os.ReadFile(filepath.Join(baseDir, p))

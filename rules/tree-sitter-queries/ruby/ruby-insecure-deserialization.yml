@@ -1,0 +1,45 @@
+# Ruby Security
+# Detects unsafe deserialization APIs.
+id: ruby-insecure-deserialization
+name: Insecure Deserialization
+severity: error
+category: security
+defect_class: injection
+inline_tier: blocking
+language: ruby
+
+message: "Potential insecure deserialization sink — avoid unsafe loaders"
+
+description: |
+  Deserializing untrusted data with Marshal/YAML loaders can enable code execution.
+
+  ✅ FIX: use safe serialization formats and strict schema validation.
+
+query: |
+  (call_expression
+    receiver: (constant) @MOD
+    method: (identifier) @FN
+    arguments: (argument_list (_) @DATA))
+  (#match? @MOD "^(Marshal|YAML|Psych)$")
+  (#match? @FN "^(load|unsafe_load)$")
+
+metavars:
+  - MOD
+  - FN
+  - DATA
+
+has_fix: false
+
+tags:
+  - ruby
+  - security
+  - deserialization
+  - cwe-502
+  - owasp-a08
+
+examples:
+  bad: |
+    Marshal.load(payload)
+
+  good: |
+    JSON.parse(payload)

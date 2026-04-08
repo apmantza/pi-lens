@@ -1,0 +1,53 @@
+# Python Security
+# Detects file access APIs used with dynamic path expressions.
+id: python-path-traversal
+name: Path Traversal Risk
+severity: error
+category: security
+defect_class: injection
+inline_tier: blocking
+language: python
+
+message: "Potential path traversal sink — sanitize and constrain file paths"
+
+description: |
+  File operations with user-controlled paths can access unintended files.
+
+  ✅ FIX: normalize paths and enforce a fixed base directory allowlist.
+
+query: |
+  [
+    (call
+      function: (identifier) @FN
+      arguments: (argument_list
+        [(identifier) (binary_operator) (call)] @PATH))
+    (call
+      function: (attribute
+        object: (identifier) @MOD
+        attribute: (identifier) @FN)
+      arguments: (argument_list
+        [(identifier) (binary_operator) (call)] @PATH))
+  ]
+  (#match? @FN "^(open|read_text|read_bytes|write_text|write_bytes|remove|unlink|rmdir)$")
+
+metavars:
+  - MOD
+  - FN
+  - PATH
+
+has_fix: false
+
+tags:
+  - python
+  - security
+  - path-traversal
+  - cwe-22
+  - owasp-a01
+
+examples:
+  bad: |
+    open(base + user_path)
+
+  good: |
+    safe = os.path.normpath(user_path)
+    open(os.path.join(BASE_DIR, safe))
