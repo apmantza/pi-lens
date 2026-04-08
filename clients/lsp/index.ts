@@ -17,6 +17,8 @@ import { getServersForFileWithConfig } from "./config.js";
 import { getLanguageId } from "./language.js";
 import type { LSPServerInfo } from "./server.js";
 import { uriToPath } from "../path-utils.js";
+import { detectFileKind } from "../file-kinds.js";
+import { detectProjectLanguageProfile } from "../language-profile.js";
 
 // --- Types ---
 
@@ -50,6 +52,7 @@ export interface SpawnedServer {
 
 export class LSPService {
 	private state: LSPState;
+	private languagePolicyCache = new Map<string, { allowInstall: boolean; expiresAt: number }>();
 
 	constructor() {
 		this.state = {
@@ -72,6 +75,7 @@ export class LSPService {
 		for (const server of servers) {
 			const root = await server.root(filePath);
 			if (!root) continue;
+			const allowInstall = this.shouldAllowInstall(filePath, root);
 
 			// Normalize root path for consistent cache key on Windows
 			const normalizedRoot =
@@ -113,7 +117,7 @@ export class LSPService {
 			}
 
 			// Create the spawn promise and store it
-			const spawnPromise = this.spawnClient(server, root, key);
+			const spawnPromise = this.spawnClient(server, root, key, filePath, allowInstall);
 			this.state.inFlight.set(key, spawnPromise);
 
 			try {
@@ -128,6 +132,38 @@ export class LSPService {
 		return undefined;
 	}
 
+	private shouldAllowInstall(filePath: string, root: string): boolean {
+		if (process.env.PI_LENS_AUTO_INSTALL === "1") return true;
+
+		const kind = detectFileKind(filePath);
+		if (!kind) return true;
+
+		const cacheKey = `${root}:${kind}`;
+		const now = Date.now();
+		const cached = this.languagePolicyCache.get(cacheKey);
+		if (cached && cached.expiresAt > now) {
+			return cached.allowInstall;
+		}
+
+		let allowInstall = true;
+		try {
+			const profile = detectProjectLanguageProfile(root);
+			const count = profile.counts[kind] ?? 0;
+			const configured = !!profile.configured[kind];
+			const singleLanguageProject = profile.detectedKinds.length <= 1;
+			allowInstall = configured || count > 1 || singleLanguageProject;
+		} catch {
+			allowInstall = true;
+		}
+
+		this.languagePolicyCache.set(cacheKey, {
+			allowInstall,
+			expiresAt: now + 10_000,
+		});
+
+		return allowInstall;
+	}
+
 	/**
 	 * Internal: spawn a client for a server/root combination
 	 */
@@ -135,13 +171,15 @@ export class LSPService {
 		server: LSPServerInfo,
 		root: string,
 		key: string,
+		filePath: string,
+		allowInstall: boolean,
 	): Promise<SpawnedServer | undefined> {
 		const startedAt = Date.now();
 		logSessionStart(
-			`lsp spawn ${server.id}: start root=${root} policy=${server.installPolicy ?? "unknown"}`,
+			`lsp spawn ${server.id}: start root=${root} policy=${server.installPolicy ?? "unknown"} install=${allowInstall ? "enabled" : "disabled"} file=${filePath}`,
 		);
 		try {
-			const spawned = await server.spawn(root);
+			const spawned = await server.spawn(root, { allowInstall });
 			if (!spawned) {
 				logSessionStart(
 					`lsp spawn ${server.id}: unavailable (${Date.now() - startedAt}ms)`,

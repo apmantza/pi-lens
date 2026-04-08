@@ -85,6 +85,19 @@ describe("lsp server policy", () => {
 		expect(spawned).toBeUndefined();
 	});
 
+	it("skips managed TypeScript install when install is disallowed for file", async () => {
+		const { TypeScriptServer } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ts-install-off-"));
+		dirs.push(tmp);
+		fs.writeFileSync(path.join(tmp, "package.json"), "{}\n");
+
+		ensureTool.mockResolvedValue(undefined);
+
+		const spawned = await TypeScriptServer.spawn(tmp, { allowInstall: false });
+		expect(spawned).toBeUndefined();
+		expect(ensureTool).not.toHaveBeenCalled();
+	});
+
 	it("skips package-manager fallback when lsp install is disabled", async () => {
 		const { SvelteServer } = await import("../../../clients/lsp/server.js");
 		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-sv-policy-"));
@@ -95,6 +108,19 @@ describe("lsp server policy", () => {
 		launchLSP.mockRejectedValue(new Error("ENOENT: command not found"));
 
 		const spawned = await SvelteServer.spawn(tmp);
+		expect(spawned?.process).toBeUndefined();
+		expect(launchViaPackageManager).not.toHaveBeenCalled();
+	});
+
+	it("skips package-manager fallback when install is disallowed for file", async () => {
+		const { SvelteServer } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-sv-install-off-"));
+		dirs.push(tmp);
+		fs.writeFileSync(path.join(tmp, "package.json"), "{}\n");
+
+		launchLSP.mockRejectedValue(new Error("ENOENT: command not found"));
+
+		const spawned = await SvelteServer.spawn(tmp, { allowInstall: false });
 		expect(spawned?.process).toBeUndefined();
 		expect(launchViaPackageManager).not.toHaveBeenCalled();
 	});
