@@ -33,7 +33,11 @@ export interface LSPServerInfo {
 	spawn(
 		root: string,
 	): Promise<
-		| { process: LSPProcess; initialization?: Record<string, unknown> }
+		| {
+				process: LSPProcess;
+				initialization?: Record<string, unknown>;
+				source?: "direct" | "managed" | "package-manager" | "interactive";
+		  }
 		| undefined
 	>;
 	autoInstall?: () => Promise<boolean>;
@@ -214,6 +218,7 @@ export const TypeScriptServer: LSPServerInfo = {
 	async spawn(root) {
 		const path = await import("node:path");
 		const fs = await import("node:fs/promises");
+		let source: "direct" | "managed" = "direct";
 
 		// Find typescript-language-server - prefer local project version
 		let lspPath: string | undefined;
@@ -245,6 +250,7 @@ export const TypeScriptServer: LSPServerInfo = {
 		if (!lspPath) {
 			if (!isLspInstallDisabled()) {
 				lspPath = await ensureTool("typescript-language-server");
+				source = "managed";
 			}
 			if (!lspPath) {
 				console.error("[lsp] typescript-language-server not found");
@@ -298,6 +304,7 @@ export const TypeScriptServer: LSPServerInfo = {
 
 		return {
 			process: proc,
+			source,
 			initialization: tsserverPath
 				? { tsserver: { path: tsserverPath } }
 				: undefined,
@@ -323,6 +330,7 @@ export const PythonServer: LSPServerInfo = {
 		const path = await import("node:path");
 		const fs = await import("node:fs/promises");
 		const env = await getToolEnvironment();
+		let source: "direct" | "managed" | "package-manager" = "direct";
 
 		// Strategy 1: Find pyright - prefer local project version
 		let pyrightPath: string | undefined;
@@ -349,6 +357,7 @@ export const PythonServer: LSPServerInfo = {
 		if (!pyrightPath) {
 			if (!isLspInstallDisabled()) {
 				pyrightPath = await ensureTool("pyright");
+				source = "managed";
 			}
 			if (!pyrightPath) {
 				console.error("[lsp] pyright not found, falling back to npx");
@@ -410,6 +419,7 @@ export const PythonServer: LSPServerInfo = {
 					cwd: root,
 					env,
 				});
+				source = "package-manager";
 			}
 		}
 
@@ -438,7 +448,7 @@ export const PythonServer: LSPServerInfo = {
 			}
 		}
 
-		return { process: proc, initialization };
+		return { process: proc, initialization, source };
 	},
 };
 
@@ -530,7 +540,7 @@ export const RubyServer: LSPServerInfo = {
 				}
 			},
 		);
-		return proc ? { process: proc } : undefined;
+		return proc ? { process: proc, source: "package-manager" } : undefined;
 	},
 };
 
@@ -568,7 +578,7 @@ export const CSharpServer: LSPServerInfo = {
 			{ cwd: root },
 			async () => await launchLSP("csharp-ls", [], { cwd: root }),
 		);
-		return proc ? { process: proc } : undefined;
+		return proc ? { process: proc, source: "package-manager" } : undefined;
 	},
 };
 
@@ -960,6 +970,7 @@ export const VueServer: LSPServerInfo = {
 	]),
 	async spawn(root) {
 		let proc: LSPProcess | undefined;
+		let source: "direct" | "package-manager" = "direct";
 		try {
 			proc = await launchLSP("vue-language-server", ["--stdio"], {
 				cwd: root,
@@ -973,9 +984,10 @@ export const VueServer: LSPServerInfo = {
 				["--stdio"],
 				{ cwd: root },
 			);
+			source = "package-manager";
 		}
 		if (!proc) return undefined;
-		return { process: proc };
+		return { process: proc, source };
 	},
 };
 
@@ -993,6 +1005,7 @@ export const SvelteServer: LSPServerInfo = {
 	]),
 	async spawn(root) {
 		let proc: LSPProcess | undefined;
+		let source: "direct" | "package-manager" = "direct";
 		try {
 			proc = await launchLSP("svelteserver", ["--stdio"], {
 				cwd: root,
@@ -1006,9 +1019,10 @@ export const SvelteServer: LSPServerInfo = {
 				["--stdio"],
 				{ cwd: root },
 			);
+			source = "package-manager";
 		}
 		if (!proc) return undefined;
-		return { process: proc };
+		return { process: proc, source };
 	},
 };
 
@@ -1034,7 +1048,7 @@ export const ESLintServer: LSPServerInfo = {
 				{ cwd: root },
 			);
 			if (!proc) return undefined;
-			return { process: proc };
+			return { process: proc, source: "package-manager" };
 		} catch {
 			// Fall back to global install message
 			console.error(
@@ -1059,7 +1073,7 @@ export const CssServer: LSPServerInfo = {
 			{ cwd: process.cwd() },
 		);
 		if (!proc) return undefined;
-		return { process: proc };
+		return { process: proc, source: "package-manager" };
 	},
 };
 

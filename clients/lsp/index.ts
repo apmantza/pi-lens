@@ -8,6 +8,9 @@
  * - Resource cleanup
  */
 
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { LSPClientInfo } from "./client.js";
 import { createLSPClient } from "./client.js";
 import { getServersForFileWithConfig } from "./config.js";
@@ -25,6 +28,18 @@ export interface LSPState {
 }
 
 const BROKEN_RETRY_COOLDOWN_MS = 15_000;
+const SESSIONSTART_LOG_DIR = path.join(os.homedir(), ".pi-lens");
+const SESSIONSTART_LOG = path.join(SESSIONSTART_LOG_DIR, "sessionstart.log");
+
+function logSessionStart(msg: string): void {
+	const line = `[${new Date().toISOString()}] ${msg}\n`;
+	void fs
+		.mkdir(SESSIONSTART_LOG_DIR, { recursive: true })
+		.then(() => fs.appendFile(SESSIONSTART_LOG, line))
+		.catch(() => {
+			// best-effort logging
+		});
+}
 
 export interface SpawnedServer {
 	client: LSPClientInfo;
@@ -121,12 +136,19 @@ export class LSPService {
 		root: string,
 		key: string,
 	): Promise<SpawnedServer | undefined> {
+		const startedAt = Date.now();
+		logSessionStart(
+			`lsp spawn ${server.id}: start root=${root} policy=${server.installPolicy ?? "unknown"}`,
+		);
 		try {
 			const spawned = await server.spawn(root);
-				if (!spawned) {
-					this.state.broken.set(key, Date.now() + BROKEN_RETRY_COOLDOWN_MS);
-					return undefined;
-				}
+			if (!spawned) {
+				logSessionStart(
+					`lsp spawn ${server.id}: unavailable (${Date.now() - startedAt}ms)`,
+				);
+				this.state.broken.set(key, Date.now() + BROKEN_RETRY_COOLDOWN_MS);
+				return undefined;
+			}
 
 			const client = await createLSPClient({
 				serverId: server.id,
@@ -136,8 +158,14 @@ export class LSPService {
 			});
 
 			this.state.clients.set(key, client);
+			logSessionStart(
+				`lsp spawn ${server.id}: success source=${spawned.source ?? server.installPolicy ?? "unknown"} (${Date.now() - startedAt}ms)`,
+			);
 			return { client, info: server };
 		} catch (err) {
+			logSessionStart(
+				`lsp spawn ${server.id}: failed (${Date.now() - startedAt}ms) error=${err instanceof Error ? err.message : String(err)}`,
+			);
 			const errorMsg = err instanceof Error ? err.message : String(err);
 			if (errorMsg.includes("Timeout")) {
 				console.error(
