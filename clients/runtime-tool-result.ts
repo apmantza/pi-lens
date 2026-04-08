@@ -1,5 +1,5 @@
 import * as nodeFs from "node:fs";
-import { FileTimeError, createFileTime } from "./file-time.js";
+import { createFileTime } from "./file-time.js";
 import { getFormatService } from "./format-service.js";
 import { resolveLanguageRootForFile } from "./language-profile.js";
 import { logLatency } from "./latency-logger.js";
@@ -102,13 +102,8 @@ export async function handleToolResult(
 	}
 
 	const sessionFileTime = createFileTime("default");
-	try {
-		sessionFileTime.assert(filePath);
-	} catch (err: unknown) {
-		if (err instanceof FileTimeError) {
-			dbg(`⚠️ FileTime warning: ${err.message}`);
-		}
-	}
+	// tool_result is emitted after write/edit has already been applied.
+	// Asserting pre-write stamps here produces false positives on rapid edits.
 	sessionFileTime.read(filePath);
 
 	const toolResultStart = Date.now();

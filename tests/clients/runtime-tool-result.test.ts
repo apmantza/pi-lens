@@ -141,4 +141,81 @@ describe("runtime-tool-result inline behavior warnings", () => {
 			env.cleanup();
 		}
 	});
+
+	it("does not emit file-time warnings on rapid consecutive edits", async () => {
+		const { runPipeline } = await import("../../clients/pipeline.js");
+		vi.mocked(runPipeline).mockResolvedValue({
+			output: "✓ no blockers",
+			hasBlockers: false,
+			isError: false,
+			fileModified: false,
+		});
+
+		const env = setupTestEnvironment("pi-lens-runtime-tool-");
+		try {
+			const filePath = path.join(env.tmpDir, "src", "rapid.py");
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(filePath, "value = 1\n");
+
+			const logs: string[] = [];
+			const dbg = (msg: string) => logs.push(msg);
+
+			const deps = {
+				getFlag: () => false,
+				dbg,
+				runtime: {
+					projectRoot: env.tmpDir,
+					setTelemetryIdentity: () => {},
+					updateGitGuardStatus: () => {},
+					nextWriteIndex: () => 1,
+					turnIndex: 1,
+					telemetryModel: "test-model",
+					telemetrySessionId: "test-session",
+					fixedThisTurn: new Set<string>(),
+					formatPipelineCrashNotice: () => "",
+					lastCascadeOutput: "",
+				},
+				cacheManager: {
+					addModifiedRange: () => {},
+					readTurnState: () => ({}),
+				},
+				biomeClient: {},
+				ruffClient: {},
+				testRunnerClient: {},
+				metricsClient: {},
+				resetLSPService: () => {},
+				agentBehaviorRecord: () => [],
+				formatBehaviorWarnings: () => "",
+			} as any;
+
+			await handleToolResult({
+				...deps,
+				event: {
+					toolName: "edit",
+					input: { path: filePath },
+					details: { diff: "+  1 value = 2" },
+					content: [{ type: "text", text: "base" }],
+				},
+			});
+
+			fs.writeFileSync(filePath, "value = 2\n");
+
+			await handleToolResult({
+				...deps,
+				event: {
+					toolName: "edit",
+					input: { path: filePath },
+					details: { diff: "+  1 value = 3" },
+					content: [{ type: "text", text: "base" }],
+				},
+			});
+
+			expect(logs.filter((entry) => entry.includes("tool_result fired for")).length).toBe(
+				2,
+			);
+			expect(vi.mocked(runPipeline)).toHaveBeenCalledTimes(2);
+		} finally {
+			env.cleanup();
+		}
+	});
 });
