@@ -27,6 +27,7 @@ import type { RuffClient } from "./ruff-client.js";
 import { scanProjectRules } from "./rules-scanner.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 import type { RustClient } from "./rust-client.js";
+import { safeSpawn } from "./safe-spawn.js";
 import { getSourceFiles } from "./scan-utils.js";
 import { resolveStartupScanContext } from "./startup-scan.js";
 import type { TestRunnerClient } from "./test-runner-client.js";
@@ -58,6 +59,34 @@ interface SessionStartDeps {
 	cleanStaleTsBuildInfo: (cwd: string) => string[];
 	resetDispatchBaselines: () => void;
 	resetLSPService: () => void;
+}
+
+function isCommandAvailable(command: string, args: string[] = ["--version"]): boolean {
+	const result = safeSpawn(command, args, { timeout: 5000 });
+	return !result.error && result.status === 0;
+}
+
+function getLanguageInstallHints(
+	languageProfile: ReturnType<typeof detectProjectLanguageProfile>,
+): string[] {
+	const hints: string[] = [];
+
+	if (hasLanguage(languageProfile, "go") && !isCommandAvailable("gopls")) {
+		hints.push("Go detected: install gopls (`go install golang.org/x/tools/gopls@latest`).");
+	}
+	if (
+		hasLanguage(languageProfile, "rust") &&
+		!isCommandAvailable("rust-analyzer")
+	) {
+		hints.push(
+			"Rust detected: install rust-analyzer (`rustup component add rust-analyzer`).",
+		);
+	}
+	if (hasLanguage(languageProfile, "ruby") && !isCommandAvailable("ruby-lsp")) {
+		hints.push("Ruby detected: install ruby-lsp (`gem install ruby-lsp`).");
+	}
+
+	return hints;
 }
 
 export async function handleSessionStart(
@@ -242,6 +271,11 @@ export async function handleSessionStart(
 		);
 	} else {
 		dbg("session_start: no project rules found");
+	}
+
+	const installHints = getLanguageInstallHints(languageProfile);
+	if (installHints.length > 0) {
+		startupNotes.push(`🧰 Tooling hints: ${installHints.join(" ")}`);
 	}
 
 	const sessionGeneration = runtime.sessionGeneration;
