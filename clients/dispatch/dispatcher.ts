@@ -17,6 +17,7 @@
 import * as path from "node:path";
 import type { FileKind } from "../file-kinds.js";
 import { detectFileKind } from "../file-kinds.js";
+import { resolveLanguageRootForFile } from "../language-profile.js";
 import { isTestFile } from "../file-utils.js";
 import { logLatency } from "../latency-logger.js";
 import { normalizeMapKey } from "../path-utils.js";
@@ -129,7 +130,9 @@ export function createDispatchContext(
 	blockingOnly?: boolean,
 	modifiedRanges?: import("./types.js").ModifiedRange[],
 ): DispatchContext {
-	const normalizedCwd = normalizeMapKey(path.resolve(cwd));
+	const normalizedCwd = normalizeMapKey(
+		resolveLanguageRootForFile(path.resolve(cwd, filePath), cwd),
+	);
 	const normalizedFilePath = resolveRunnerPath(normalizedCwd, filePath);
 	const kind = detectFileKind(normalizedFilePath);
 

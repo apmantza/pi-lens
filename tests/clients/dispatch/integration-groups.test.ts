@@ -32,11 +32,13 @@ import { getDispatchGroupsForKind } from "../../../clients/dispatch/integration.
 		expect(lspGroups).toHaveLength(1);
 	});
 
-	it("keeps original groups when lens-lsp is disabled", () => {
+	it("returns baseline plan groups when lens-lsp is disabled", () => {
 		const groups = getDispatchGroupsForKind("css", {
 			getFlag: () => false,
 		});
 
-		expect(groups).toEqual([]);
+		expect(groups).toHaveLength(1);
+		expect(groups[0].runnerIds).toEqual(["lsp"]);
+		expect(groups[0].filterKinds).toEqual(["css"]);
 	});
 });

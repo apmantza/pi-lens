@@ -176,13 +176,14 @@ export async function handleSessionStart(
 	const useScanRootForSignals =
 		startupScan.canWarmCaches || startupScan.reason === "too-many-source-files";
 	const analysisRoot = useScanRootForSignals ? scanRoot : cwd;
-	runtime.projectRoot = analysisRoot;
+	runtime.projectRoot = cwd;
 	const languageProfile = detectProjectLanguageProfile(analysisRoot);
 	dbg(`session_start cwd: ${cwd}`);
 	dbg(
 		`session_start scan root: ${scanRoot} (warmCaches=${startupScan.canWarmCaches}${startupScan.reason ? `, reason=${startupScan.reason}` : ""})`,
 	);
 	dbg(`session_start analysis root: ${analysisRoot}`);
+	dbg(`session_start workspace root: ${runtime.projectRoot}`);
 	dbg(
 		`session_start language profile: ${languageProfile.detectedKinds.join(", ") || "none"}`,
 	);

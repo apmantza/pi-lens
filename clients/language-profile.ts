@@ -44,11 +44,40 @@ const PROJECT_MARKERS_BY_KIND: Partial<Record<FileKind, readonly string[]>> = {
 	sql: [".sqlfluff", "pyproject.toml"],
 };
 
+const ROOT_MARKERS_BY_KIND: Partial<Record<FileKind, readonly string[]>> = {
+	jsts: ["package.json", "tsconfig.json", "jsconfig.json", "pnpm-workspace.yaml"],
+	python: ["pyproject.toml", "requirements.txt", "setup.py", "setup.cfg", "Pipfile"],
+	go: ["go.work", "go.mod", "go.sum"],
+	rust: ["Cargo.toml"],
+	ruby: ["Gemfile", "Rakefile"],
+	yaml: [".yamllint", ".yamllint.yml", ".yamllint.yaml"],
+	sql: [".sqlfluff", "pyproject.toml", "setup.cfg", "tox.ini"],
+};
+
 export interface ProjectLanguageProfile {
 	present: Record<FileKind, boolean>;
 	configured: Partial<Record<FileKind, boolean>>;
 	counts: Partial<Record<FileKind, number>>;
 	detectedKinds: FileKind[];
+}
+
+function nearestRoot(start: string, markers: readonly string[]): string | undefined {
+	let dir = path.resolve(start);
+	const { root } = path.parse(dir);
+
+	while (true) {
+		for (const marker of markers) {
+			if (fs.existsSync(path.join(dir, marker))) {
+				return dir;
+			}
+		}
+		if (dir === root) break;
+		const parent = path.dirname(dir);
+		if (parent === dir) break;
+		dir = parent;
+	}
+
+	return undefined;
 }
 
 export function detectProjectLanguageProfile(
@@ -142,4 +171,30 @@ export function getDefaultStartupTools(
 	}
 
 	return [...tools];
+}
+
+export function resolveLanguageRootForFile(
+	filePath: string,
+	workspaceRoot: string,
+): string {
+	const absoluteFilePath = path.resolve(filePath);
+	const startDir = path.dirname(absoluteFilePath);
+	const kind = detectFileKind(absoluteFilePath);
+	if (!kind) return path.resolve(workspaceRoot);
+
+	const markers = ROOT_MARKERS_BY_KIND[kind];
+	if (!markers || markers.length === 0) {
+		return path.resolve(workspaceRoot);
+	}
+
+	const found = nearestRoot(startDir, markers);
+	if (!found) return path.resolve(workspaceRoot);
+
+	const workspace = path.resolve(workspaceRoot);
+	const relative = path.relative(workspace, found);
+	if (relative.startsWith("..") || path.isAbsolute(relative)) {
+		return workspace;
+	}
+
+	return found;
 }

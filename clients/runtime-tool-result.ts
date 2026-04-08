@@ -1,6 +1,7 @@
 import * as nodeFs from "node:fs";
 import { FileTimeError, createFileTime } from "./file-time.js";
 import { getFormatService } from "./format-service.js";
+import { resolveLanguageRootForFile } from "./language-profile.js";
 import { logLatency } from "./latency-logger.js";
 import { runPipeline } from "./pipeline.js";
 import type { BiomeClient } from "./biome-client.js";
@@ -113,7 +114,9 @@ export async function handleToolResult(
 	const toolResultStart = Date.now();
 	dbg(`tool_result: tracking turn state for ${event.toolName} on ${filePath}`);
 
-	const cwd = runtime.projectRoot;
+	const workspaceRoot = runtime.projectRoot;
+	const cwd = resolveLanguageRootForFile(filePath, workspaceRoot);
+	dbg(`tool_result: resolved dispatch cwd ${cwd} for ${filePath}`);
 	if (event.model || event.provider || event.sessionId || event.session?.id) {
 		runtime.setTelemetryIdentity({
 			model: event.model,
