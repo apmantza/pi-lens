@@ -1,0 +1,53 @@
+# Go Security
+# Detects shell command execution via exec.Command(..., "-c"|"/c", ...).
+id: go-command-injection
+name: Command Injection Sink
+severity: error
+category: security
+defect_class: injection
+inline_tier: blocking
+language: go
+
+message: "Potential command injection sink — avoid shell command composition with user input"
+
+description: |
+  Using exec.Command with a shell (`sh -c`, `bash -c`, `cmd /c`) executes command strings.
+
+  ✅ FIX: invoke binaries directly with explicit argument arrays and strict allowlists.
+
+query: |
+  (call_expression
+    function: (selector_expression
+      operand: (identifier) @PKG
+      field: (field_identifier) @FN)
+    arguments: (argument_list
+      (interpreted_string_literal) @SHELL
+      (interpreted_string_literal) @FLAG
+      (_) @CMD))
+  (#eq? @PKG "exec")
+  (#match? @FN "^(Command|CommandContext)$")
+  (#match? @SHELL "^\"(sh|bash|zsh|cmd|powershell|pwsh)\"$")
+  (#match? @FLAG "^\"(-c|/c)\"$")
+
+metavars:
+  - PKG
+  - FN
+  - SHELL
+  - FLAG
+  - CMD
+
+has_fix: false
+
+tags:
+  - go
+  - security
+  - command-injection
+  - cwe-78
+  - owasp-a03
+
+examples:
+  bad: |
+    exec.Command("sh", "-c", userInput)
+
+  good: |
+    exec.Command("git", "status")

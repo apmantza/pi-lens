@@ -1,0 +1,54 @@
+# Ruby Security
+# Detects shell execution sinks frequently involved in command injection.
+id: ruby-command-injection
+name: Command Injection Sink
+severity: error
+category: security
+defect_class: injection
+inline_tier: blocking
+language: ruby
+
+message: "Potential command injection sink — avoid shell execution with untrusted input"
+
+description: |
+  Ruby shell execution APIs (`system`, `exec`, `spawn`, backticks) can execute
+  user-controlled command strings.
+
+  ✅ FIX: avoid shell interpolation and use safer APIs with strict allowlists.
+
+query: |
+  (call
+    method: (identifier) @FN
+    arguments: (argument_list) @ARGS)
+  (#match? @FN "^(system|exec|spawn|popen|capture3|capture2|capture2e)$")
+
+  (command
+    method: (identifier) @FN
+    argument: (_) @ARGS)
+  (#match? @FN "^(system|exec|spawn|popen)$")
+
+  (call_expression
+    receiver: (constant) @NS
+    method: (identifier) @FN
+    arguments: (argument_list) @ARGS)
+  (#match? @FN "^(system|exec|spawn|popen|capture3|capture2|capture2e)$")
+
+metavars:
+  - FN
+  - ARGS
+
+has_fix: false
+
+tags:
+  - ruby
+  - security
+  - command-injection
+  - cwe-78
+  - owasp-a03
+
+examples:
+  bad: |
+    system("sh -c #{params[:cmd]}")
+
+  good: |
+    Open3.capture3("git", "status")

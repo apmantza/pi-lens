@@ -1,0 +1,61 @@
+# Python Security
+# Detects shell command execution sinks that commonly lead to command injection.
+id: python-command-injection
+name: Command Injection Sink
+severity: error
+category: security
+defect_class: injection
+inline_tier: blocking
+language: python
+
+message: "Potential command injection sink — avoid shell execution with dynamic input"
+
+description: |
+  Calling shell execution APIs with user-controlled data can lead to command injection.
+
+  ✅ FIX: avoid shell execution; prefer argument arrays and strict input allowlists.
+
+query: |
+  (call
+    function: (attribute
+      object: (identifier) @MOD
+      attribute: (identifier) @FN)
+    arguments: (argument_list) @ARGS)
+  (#eq? @MOD "os")
+  (#match? @FN "^(system|popen)$")
+
+  (call
+    function: (attribute
+      object: (identifier) @MOD
+      attribute: (identifier) @FN)
+    arguments: (argument_list
+      (keyword_argument
+        name: (identifier) @KW
+        value: (true))))
+  (#eq? @MOD "subprocess")
+  (#match? @FN "^(run|Popen|call|check_output|check_call)$")
+  (#eq? @KW "shell")
+
+metavars:
+  - MOD
+  - FN
+  - ARGS
+  - KW
+
+has_fix: false
+
+tags:
+  - python
+  - security
+  - command-injection
+  - cwe-78
+  - owasp-a03
+
+examples:
+  bad: |
+    import os
+    os.system(user_input)
+
+  good: |
+    import subprocess
+    subprocess.run(["git", "status"], check=True)

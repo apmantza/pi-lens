@@ -8,6 +8,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { RuleCache } from "../../cache/rule-cache.js";
+import { getSourceFiles } from "../../scan-utils.js";
 import { TreeSitterClient } from "../../tree-sitter-client.js";
 import { logTreeSitter } from "../../tree-sitter-logger.js";
 import { classifyDefect } from "../diagnostic-taxonomy.js";
@@ -26,6 +27,241 @@ import type {
 // Creating a new TreeSitterClient() on every write resets TRANSFER_BUFFER (a module-level
 // WASM pointer) — concurrent writes race on _ts_init() and corrupt shared WASM state → crash.
 let _sharedClient: TreeSitterClient | null = null;
+const entitySnapshotByFile = new Map<string, Map<string, string>>();
+const blastFileCache = new Map<string, { expiresAt: number; files: string[] }>();
+const BLAST_CACHE_TTL_MS = 30_000;
+const MAX_BLAST_FILES = 300;
+const MAX_BLAST_ENTITIES = 8;
+
+interface EntityQueryDef {
+	id: string;
+	kind: string;
+	query: string;
+}
+
+const ENTITY_QUERIES: Partial<Record<string, EntityQueryDef[]>> = {
+	typescript: [
+		{
+			id: "entity-ts-function",
+			kind: "function",
+			query: "(function_declaration name: (identifier) @NAME)",
+		},
+		{
+			id: "entity-ts-class",
+			kind: "class",
+			query: "(class_declaration name: (type_identifier) @NAME)",
+		},
+		{
+			id: "entity-ts-method",
+			kind: "method",
+			query: "(method_definition name: (property_identifier) @NAME)",
+		},
+	],
+	javascript: [
+		{
+			id: "entity-js-function",
+			kind: "function",
+			query: "(function_declaration name: (identifier) @NAME)",
+		},
+		{
+			id: "entity-js-class",
+			kind: "class",
+			query: "(class_declaration name: (identifier) @NAME)",
+		},
+		{
+			id: "entity-js-method",
+			kind: "method",
+			query: "(method_definition name: (property_identifier) @NAME)",
+		},
+	],
+	python: [
+		{
+			id: "entity-py-function",
+			kind: "function",
+			query: "(function_definition name: (identifier) @NAME)",
+		},
+		{
+			id: "entity-py-class",
+			kind: "class",
+			query: "(class_definition name: (identifier) @NAME)",
+		},
+	],
+	go: [
+		{
+			id: "entity-go-function",
+			kind: "function",
+			query: "(function_declaration name: (identifier) @NAME)",
+		},
+		{
+			id: "entity-go-method",
+			kind: "method",
+			query: "(method_declaration name: (field_identifier) @NAME)",
+		},
+		{
+			id: "entity-go-type",
+			kind: "type",
+			query: "(type_spec name: (type_identifier) @NAME)",
+		},
+	],
+	rust: [
+		{
+			id: "entity-rs-function",
+			kind: "function",
+			query: "(function_item name: (identifier) @NAME)",
+		},
+		{
+			id: "entity-rs-struct",
+			kind: "struct",
+			query: "(struct_item name: (type_identifier) @NAME)",
+		},
+		{
+			id: "entity-rs-enum",
+			kind: "enum",
+			query: "(enum_item name: (type_identifier) @NAME)",
+		},
+	],
+	ruby: [
+		{
+			id: "entity-rb-method",
+			kind: "method",
+			query: "(method name: (identifier) @NAME)",
+		},
+		{
+			id: "entity-rb-class",
+			kind: "class",
+			query: "(class name: (constant) @NAME)",
+		},
+		{
+			id: "entity-rb-module",
+			kind: "module",
+			query: "(module name: (constant) @NAME)",
+		},
+	],
+};
+
+function escapeRegex(name: string): string {
+	return name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function extractEntitySnapshot(
+	client: TreeSitterClient,
+	filePath: string,
+	languageId: string,
+): Promise<Map<string, string>> {
+	const defs = ENTITY_QUERIES[languageId] ?? [];
+	const snapshot = new Map<string, string>();
+
+	for (const def of defs) {
+		const matches = await client.runQueryOnFile(
+			{
+				id: def.id,
+				name: def.id,
+				severity: "info",
+				category: "entity",
+				language: languageId,
+				message: "",
+				query: def.query,
+				metavars: ["NAME"],
+				has_fix: false,
+				filePath: "",
+			},
+			filePath,
+			languageId,
+			{ maxResults: 200 },
+		);
+
+		for (const match of matches) {
+			const name = match.captures.NAME?.trim();
+			if (!name) continue;
+			const key = `${def.kind}:${name}`;
+			snapshot.set(key, `${match.line}:${match.matchedText.slice(0, 400)}`);
+		}
+	}
+
+	return snapshot;
+}
+
+function diffEntitySnapshot(
+	prev: Map<string, string> | undefined,
+	next: Map<string, string>,
+): { added: string[]; removed: string[]; modified: string[] } {
+	if (!prev) {
+		return { added: [...next.keys()], removed: [], modified: [] };
+	}
+
+	const added: string[] = [];
+	const removed: string[] = [];
+	const modified: string[] = [];
+
+	for (const [key, value] of next.entries()) {
+		if (!prev.has(key)) {
+			added.push(key);
+			continue;
+		}
+		if (prev.get(key) !== value) {
+			modified.push(key);
+		}
+	}
+
+	for (const key of prev.keys()) {
+		if (!next.has(key)) {
+			removed.push(key);
+		}
+	}
+
+	return { added, removed, modified };
+}
+
+function getBlastFiles(cwd: string): string[] {
+	const now = Date.now();
+	const cached = blastFileCache.get(cwd);
+	if (cached && cached.expiresAt > now) return cached.files;
+
+	const files = getSourceFiles(cwd).slice(0, MAX_BLAST_FILES);
+	blastFileCache.set(cwd, { files, expiresAt: now + BLAST_CACHE_TTL_MS });
+	return files;
+}
+
+function computeBlastRadius(
+	entityNames: string[],
+	filePath: string,
+	cwd: string,
+): Array<{ entity: string; dependentFiles: number; references: number }> {
+	const limited = entityNames.slice(0, MAX_BLAST_ENTITIES);
+	if (limited.length === 0) return [];
+
+	const regexByEntity = new Map(
+		limited.map((name) => [name, new RegExp(`\\b${escapeRegex(name)}\\b`, "g")]),
+	);
+	const files = getBlastFiles(cwd);
+	const stats = new Map(
+		limited.map((name) => [name, { dependentFiles: 0, references: 0 }]),
+	);
+
+	for (const candidate of files) {
+		if (path.resolve(candidate) === path.resolve(filePath)) continue;
+		let content = "";
+		try {
+			content = fs.readFileSync(candidate, "utf-8");
+		} catch {
+			continue;
+		}
+
+		for (const [name, regex] of regexByEntity.entries()) {
+			const matches = content.match(regex);
+			if (!matches || matches.length === 0) continue;
+			const current = stats.get(name);
+			if (!current) continue;
+			current.dependentFiles += 1;
+			current.references += matches.length;
+		}
+	}
+
+	return limited
+		.map((name) => ({ entity: name, ...stats.get(name)! }))
+		.sort((a, b) => b.dependentFiles - a.dependentFiles)
+		.slice(0, 5);
+}
 
 const SILENT_ERROR_QUERY_IDS = new Set([
 	"empty-catch",
@@ -297,6 +533,39 @@ const treeSitterRunner: RunnerDefinition = {
 		}
 
 		if (diagnostics.length === 0) {
+			try {
+				const snapshot = await extractEntitySnapshot(client, filePath, languageId);
+				const prev = entitySnapshotByFile.get(filePath);
+				const diff = diffEntitySnapshot(prev, snapshot);
+				entitySnapshotByFile.set(filePath, snapshot);
+				const changedEntityKeys = [...diff.added, ...diff.modified, ...diff.removed];
+				const changedNames = [...new Set(changedEntityKeys.map((k) => k.split(":")[1]).filter(Boolean))];
+
+				if (changedEntityKeys.length > 0) {
+					logTreeSitter({
+						phase: "entity_diff",
+						filePath,
+						languageId,
+						metadata: {
+							added: diff.added,
+							modified: diff.modified,
+							removed: diff.removed,
+							totalChanged: changedEntityKeys.length,
+						},
+					});
+
+					const blastRadius = computeBlastRadius(changedNames, filePath, ctx.cwd);
+					if (blastRadius.length > 0) {
+						logTreeSitter({
+							phase: "blast_radius",
+							filePath,
+							languageId,
+							metadata: { entities: blastRadius, scannedFiles: getBlastFiles(ctx.cwd).length },
+						});
+					}
+				}
+			} catch {}
+
 			logTreeSitter({
 				phase: "runner_complete",
 				filePath,
@@ -315,6 +584,39 @@ const treeSitterRunner: RunnerDefinition = {
 		const blockingCount = diagnostics.filter(
 			(d) => d.semantic === "blocking",
 		).length;
+		try {
+			const snapshot = await extractEntitySnapshot(client, filePath, languageId);
+			const prev = entitySnapshotByFile.get(filePath);
+			const diff = diffEntitySnapshot(prev, snapshot);
+			entitySnapshotByFile.set(filePath, snapshot);
+			const changedEntityKeys = [...diff.added, ...diff.modified, ...diff.removed];
+			const changedNames = [...new Set(changedEntityKeys.map((k) => k.split(":")[1]).filter(Boolean))];
+
+			if (changedEntityKeys.length > 0) {
+				logTreeSitter({
+					phase: "entity_diff",
+					filePath,
+					languageId,
+					metadata: {
+						added: diff.added,
+						modified: diff.modified,
+						removed: diff.removed,
+						totalChanged: changedEntityKeys.length,
+					},
+				});
+
+				const blastRadius = computeBlastRadius(changedNames, filePath, ctx.cwd);
+				if (blastRadius.length > 0) {
+					logTreeSitter({
+						phase: "blast_radius",
+						filePath,
+						languageId,
+						metadata: { entities: blastRadius, scannedFiles: getBlastFiles(ctx.cwd).length },
+					});
+				}
+			}
+		} catch {}
+
 		logTreeSitter({
 			phase: "runner_complete",
 			filePath,

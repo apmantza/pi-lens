@@ -1,0 +1,58 @@
+# JS/TS Security
+# Detects command execution sinks via child_process APIs.
+id: ts-command-injection
+name: Command Injection Sink
+severity: error
+category: security
+defect_class: injection
+inline_tier: blocking
+language: typescript
+
+message: "Potential command injection sink — avoid child_process command execution with untrusted input"
+
+description: |
+  child_process command APIs (`exec`, `execSync`) execute shell commands and are
+  vulnerable when command strings include untrusted input.
+
+  ✅ FIX: prefer `spawn`/`execFile` with explicit argument arrays and strict allowlists.
+
+query: |
+  [
+    (call_expression
+      function: (member_expression
+        object: (identifier) @MOD
+        property: (property_identifier) @FN)
+      arguments: (arguments) @ARGS)
+    (call_expression
+      function: (member_expression
+        object: (member_expression
+          object: (identifier) @MOD
+          property: (property_identifier) @NS)
+        property: (property_identifier) @FN)
+      arguments: (arguments) @ARGS)
+  ]
+  (#eq? @MOD "child_process")
+  (#match? @FN "^(exec|execSync)$")
+
+metavars:
+  - MOD
+  - NS
+  - FN
+  - ARGS
+
+has_fix: false
+
+tags:
+  - javascript
+  - typescript
+  - security
+  - command-injection
+  - cwe-78
+  - owasp-a03
+
+examples:
+  bad: |
+    child_process.exec(userInput)
+
+  good: |
+    spawn("git", ["status"])

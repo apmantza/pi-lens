@@ -18,7 +18,9 @@ export interface TreeSitterLogEntry {
 		| "runner_skip"
 		| "queries_loaded"
 		| "query_error"
-		| "runner_complete";
+		| "runner_complete"
+		| "entity_diff"
+		| "blast_radius";
 	filePath: string;
 	languageId?: string;
 	queryId?: string;
