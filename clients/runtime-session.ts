@@ -216,24 +216,34 @@ export async function handleSessionStart(
 		dbg("session_start: no project rules found");
 	}
 
+	const sessionGeneration = runtime.sessionGeneration;
+	const runStartupTask = (name: string, task: () => Promise<void>): void => {
+		runtime.markStartupScanInFlight(name, sessionGeneration);
+		void task()
+			.catch((err) => dbg(`session_start: ${name} background scan failed: ${err}`))
+			.finally(() => {
+				runtime.clearStartupScanInFlight(name, sessionGeneration);
+			});
+	};
+
 	// Fire off all heavy scans as background tasks — don't block session start.
 	// Each consumer already handles the "not ready yet" case gracefully
 	// (cachedExports.size > 0, cachedProjectIndex != null, cache miss paths).
 
 	// TODO scan is lightweight and synchronous — run in background via promise
-	Promise.resolve()
-		.then(() => {
-			const todoResult = todoScanner.scanDirectory(analysisRoot);
-			dbg(
-				`session_start TODO scan: ${todoResult.items.length} items (baseline stored)`,
-			);
-			cacheManager.writeCache(
-				"todo-baseline",
-				{ items: todoResult.items },
-				analysisRoot,
-			);
-		})
-		.catch((err) => dbg(`session_start: TODO scan failed: ${err}`));
+	runStartupTask("todo", async () => {
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+		const todoResult = todoScanner.scanDirectory(analysisRoot);
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+		dbg(
+			`session_start TODO scan: ${todoResult.items.length} items (baseline stored)`,
+		);
+		cacheManager.writeCache(
+			"todo-baseline",
+			{ items: todoResult.items },
+			analysisRoot,
+		);
+	});
 
 	if (!startupScan.canWarmCaches) {
 		dbg(
@@ -245,12 +255,14 @@ export async function handleSessionStart(
 		);
 
 		// Knip — dead code / unused exports
-		(async () => {
+		runStartupTask("knip", async () => {
 			if (await knipClient.ensureAvailable()) {
+				if (!runtime.isCurrentSession(sessionGeneration)) return;
 				const cached = cacheManager.readCache<
 					ReturnType<KnipClient["analyze"]>
 				>("knip", analysisRoot);
 				if (cached) {
+					if (!runtime.isCurrentSession(sessionGeneration)) return;
 					dbg(
 						`session_start Knip: cache hit (${Math.round((Date.now() - new Date(cached.meta.timestamp).getTime()) / 1000)}s ago)`,
 					);
@@ -260,66 +272,70 @@ export async function handleSessionStart(
 						analysisRoot,
 						getKnipIgnorePatterns(),
 					);
+					if (!runtime.isCurrentSession(sessionGeneration)) return;
 					cacheManager.writeCache("knip", knipResult, analysisRoot, {
 						scanDurationMs: Date.now() - startMs,
 					});
 					dbg(`session_start Knip scan done (${Date.now() - startMs}ms)`);
 				}
 			} else {
+				if (!runtime.isCurrentSession(sessionGeneration)) return;
 				dbg("session_start Knip: not available");
 			}
-		})().catch((err) =>
-			dbg(`session_start: Knip background scan failed: ${err}`),
-		);
+		});
 
 		// jscpd — duplicate code detection
-		(async () => {
+		runStartupTask("jscpd", async () => {
 			if (await jscpdClient.ensureAvailable()) {
+				if (!runtime.isCurrentSession(sessionGeneration)) return;
 				const cached = cacheManager.readCache<ReturnType<JscpdClient["scan"]>>(
 					"jscpd",
 					analysisRoot,
 				);
 				if (cached) {
+					if (!runtime.isCurrentSession(sessionGeneration)) return;
 					dbg("session_start jscpd: cache hit");
 				} else {
 					const startMs = Date.now();
 					const jscpdResult = jscpdClient.scan(analysisRoot);
+					if (!runtime.isCurrentSession(sessionGeneration)) return;
 					cacheManager.writeCache("jscpd", jscpdResult, analysisRoot, {
 						scanDurationMs: Date.now() - startMs,
 					});
 					dbg(`session_start jscpd scan done (${Date.now() - startMs}ms)`);
 				}
 			} else {
+				if (!runtime.isCurrentSession(sessionGeneration)) return;
 				dbg("session_start jscpd: not available");
 			}
-		})().catch((err) =>
-			dbg(`session_start: jscpd background scan failed: ${err}`),
-		);
+		});
 
 		// ast-grep — export scan for duplicate detection
-		(async () => {
+		runStartupTask("ast-grep-exports", async () => {
 			if (await astGrepClient.ensureAvailable()) {
+				if (!runtime.isCurrentSession(sessionGeneration)) return;
 				const exports = await astGrepClient.scanExports(
 					analysisRoot,
 					"typescript",
 				);
+				if (!runtime.isCurrentSession(sessionGeneration)) return;
 				dbg(`session_start exports scan: ${exports.size} functions found`);
 				for (const [name, file] of exports) {
 					runtime.cachedExports.set(name, file);
 				}
 			}
-		})().catch((err) =>
-			dbg(`session_start: ast-grep exports scan failed: ${err}`),
-		);
+		});
 
 		// Project index — structural similarity detection
-		(async () => {
+		runStartupTask("project-index", async () => {
 			const existing = await loadIndex(analysisRoot);
+			if (!runtime.isCurrentSession(sessionGeneration)) return;
 			if (
 				existing &&
 				existing.entries.size > 0 &&
 				(await isIndexFresh(analysisRoot))
 			) {
+				if (!runtime.isCurrentSession(sessionGeneration)) return;
 				runtime.cachedProjectIndex = existing;
 				dbg(
 					`session_start: loaded fresh project index (${existing.entries.size} entries)`,
@@ -334,17 +350,17 @@ export async function handleSessionStart(
 						analysisRoot,
 						tsFiles,
 					);
+					if (!runtime.isCurrentSession(sessionGeneration)) return;
 					await saveIndex(runtime.cachedProjectIndex, analysisRoot);
 					dbg(
 						`session_start: built project index (${runtime.cachedProjectIndex.entries.size} entries from ${tsFiles.length} files)`,
 					);
 				} else {
+					if (!runtime.isCurrentSession(sessionGeneration)) return;
 					dbg(`session_start: skipped project index (${tsFiles.length} files)`);
 				}
 			}
-		})().catch((err) =>
-			dbg(`session_start: project index build failed: ${err}`),
-		);
+		});
 	}
 
 	dbg(

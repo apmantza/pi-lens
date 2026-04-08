@@ -82,7 +82,9 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		blockerParts.push(runtime.consumeLastCascadeOutput());
 	}
 
-	if (await jscpdClient.ensureAvailable()) {
+	if (runtime.isStartupScanInFlight("jscpd")) {
+		dbg("turn_end: skipping jscpd (startup scan still in flight)");
+	} else if (await jscpdClient.ensureAvailable()) {
 		const jscpdFiles = cacheManager.getFilesForJscpd(cwd);
 		if (jscpdFiles.length > 0) {
 			dbg(`turn_end: jscpd scanning ${jscpdFiles.length} file(s)`);
@@ -143,7 +145,9 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		}
 	}
 
-	if (await knipClient.ensureAvailable()) {
+	if (runtime.isStartupScanInFlight("knip")) {
+		dbg("turn_end: skipping knip (startup scan still in flight)");
+	} else if (await knipClient.ensureAvailable()) {
 		const knipResult = knipClient.analyze(cwd, getKnipIgnorePatterns());
 		const prevKnip = cacheManager.readCache<ReturnType<KnipClient["analyze"]>>(
 			"knip",

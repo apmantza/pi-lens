@@ -11,10 +11,12 @@ export interface ErrorDebtBaseline {
 
 export class RuntimeCoordinator {
 	private _projectRoot = process.cwd();
+	private _sessionGeneration = 0;
 	private _errorDebtBaseline: ErrorDebtBaseline | null = null;
 	private _pipelineCrashCounts = new Map<string, number>();
 	private _cachedExports = new Map<string, string>();
 	private _cachedProjectIndex: ProjectIndex | null = null;
+	private _startupScansInFlight = new Map<string, number>();
 	private _lastCascadeOutput = "";
 	private _complexityBaselines = new Map<string, FileComplexity>();
 	private _fixedThisTurn = new Set<string>();
@@ -30,10 +32,12 @@ export class RuntimeCoordinator {
 	private _gitGuardSummary = "";
 
 	resetForSession(): void {
+		this._sessionGeneration += 1;
 		this._complexityBaselines.clear();
 		this._pipelineCrashCounts.clear();
 		this._cachedExports.clear();
 		this._cachedProjectIndex = null;
+		this._startupScansInFlight.clear();
 		this._lastCascadeOutput = "";
 		this._fixedThisTurn.clear();
 		this._telemetrySessionId =
@@ -109,6 +113,29 @@ export class RuntimeCoordinator {
 
 	get turnIndex(): number {
 		return this._turnIndex;
+	}
+
+	get sessionGeneration(): number {
+		return this._sessionGeneration;
+	}
+
+	isCurrentSession(generation: number): boolean {
+		return this._sessionGeneration === generation;
+	}
+
+	markStartupScanInFlight(name: string, generation: number): void {
+		this._startupScansInFlight.set(name, generation);
+	}
+
+	clearStartupScanInFlight(name: string, generation: number): void {
+		const owner = this._startupScansInFlight.get(name);
+		if (owner === generation) {
+			this._startupScansInFlight.delete(name);
+		}
+	}
+
+	isStartupScanInFlight(name: string): boolean {
+		return this._startupScansInFlight.has(name);
 	}
 
 	formatPipelineCrashNotice(filePath: string, err: unknown): string {
