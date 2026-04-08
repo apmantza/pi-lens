@@ -36,10 +36,11 @@
 
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 // Global installation directory for pi-lens tools
-const TOOLS_DIR = path.join(process.cwd(), ".pi-lens", "tools");
+const TOOLS_DIR = path.join(os.homedir(), ".pi-lens", "tools");
 
 // Debug flag - set via PI_LENS_DEBUG=1 or --debug
 const DEBUG =
@@ -204,27 +205,7 @@ async function isCommandAvailable(
  * Check if a tool is installed (globally or locally)
  */
 export async function isToolInstalled(toolId: string): Promise<boolean> {
-	const tool = TOOLS.find((t) => t.id === toolId);
-	if (!tool) return false;
-
-	// Check global PATH
-	if (await isCommandAvailable(tool.checkCommand, tool.checkArgs)) {
-		return true;
-	}
-
-	// Check local tools directory
-	const localPath = path.join(
-		TOOLS_DIR,
-		"node_modules",
-		".bin",
-		tool.binaryName || tool.id,
-	);
-	try {
-		await fs.access(localPath);
-		return true;
-	} catch {
-		return false;
-	}
+	return (await getToolPath(toolId)) !== undefined;
 }
 
 /**
@@ -237,6 +218,13 @@ export async function getToolPath(toolId: string): Promise<string | undefined> {
 	// Check if global
 	if (await isCommandAvailable(tool.checkCommand, tool.checkArgs)) {
 		return tool.checkCommand;
+	}
+
+	if (tool.installStrategy === "npm") {
+		const npmPath = await findNpmGlobalToolPath(tool.binaryName || tool.id);
+		if (npmPath) {
+			return npmPath;
+		}
 	}
 
 	// For pip tools, also probe user-level script locations
@@ -260,6 +248,76 @@ export async function getToolPath(toolId: string): Promise<string | undefined> {
 	} catch {
 		return undefined;
 	}
+}
+
+async function findNpmGlobalToolPath(
+	binaryName: string,
+): Promise<string | undefined> {
+	const isWindows = process.platform === "win32";
+	const binDirs = await getNpmGlobalBinCandidates();
+
+	for (const dir of binDirs) {
+		const candidates = isWindows
+			? [
+					path.join(dir, `${binaryName}.cmd`),
+					path.join(dir, `${binaryName}.ps1`),
+					path.join(dir, `${binaryName}.exe`),
+					path.join(dir, binaryName),
+				]
+			: [path.join(dir, binaryName)];
+
+		for (const candidate of candidates) {
+			try {
+				await fs.access(candidate);
+				if (await verifyToolBinary(candidate)) {
+					return candidate;
+				}
+			} catch {
+				// continue
+			}
+		}
+	}
+
+	return undefined;
+}
+
+async function getNpmGlobalBinCandidates(): Promise<string[]> {
+	const dirs: string[] = [];
+	const seen = new Set<string>();
+
+	const add = (value: string | undefined): void => {
+		if (!value) return;
+		const normalized = path.resolve(value.trim());
+		if (!normalized) return;
+		if (seen.has(normalized)) return;
+		seen.add(normalized);
+		dirs.push(normalized);
+	};
+
+	if (process.platform === "win32") {
+		add(path.join(process.env.APPDATA || "", "npm"));
+	} else {
+		add(path.join(os.homedir(), ".npm-global", "bin"));
+	}
+
+	const pm = process.platform === "win32" ? "npm.cmd" : "npm";
+	const prefix = await new Promise<string>((resolve) => {
+		const proc = spawn(pm, ["config", "get", "prefix"], {
+			stdio: ["ignore", "pipe", "pipe"],
+			shell: process.platform === "win32",
+		});
+
+		let stdout = "";
+		proc.stdout?.on("data", (data: Buffer | string) => (stdout += data));
+		proc.on("exit", (code) => resolve(code === 0 ? stdout.trim() : ""));
+		proc.on("error", () => resolve(""));
+	});
+
+	if (prefix) {
+		add(process.platform === "win32" ? prefix : path.join(prefix, "bin"));
+	}
+
+	return dirs;
 }
 
 async function findPipUserToolPath(
