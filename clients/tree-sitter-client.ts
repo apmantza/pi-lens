@@ -892,6 +892,26 @@ export class TreeSitterClient {
 					if (!secretPatterns.some((p) => p.test(varName))) continue;
 				}
 
+				// Go: only keep bare-return-call matches when enclosing function returns error.
+				if (postFilter === "returns_error") {
+					const first = Object.values(captures)[0];
+					if (!first) continue;
+					const funcNode = this.navigator.findParent(first, [
+						"function_declaration",
+						"method_declaration",
+					]);
+					if (!funcNode) continue;
+
+					const fnText = String(funcNode.text ?? "");
+					const signature = fnText.split("{", 1)[0]?.trim() ?? "";
+					const returnPartMatch = signature.match(
+						/func\s*(?:\([^)]*\)\s*)?[A-Za-z_]\w*\s*\([^)]*\)\s*(.*)$/s,
+					);
+					const returnPart = returnPartMatch?.[1]?.trim() ?? "";
+					const returnsError = returnPart.length > 0 && /\berror\b/.test(returnPart);
+					if (!returnsError) continue;
+				}
+
 				// Python: except body that only contains pass (effectively empty)
 				if (postFilter === "python_empty_except") {
 					const bodyNode = captures.BODY;

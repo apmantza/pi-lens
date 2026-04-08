@@ -16,16 +16,28 @@ description: |
   ✅ FIX: Handle the error before returning, or document why it's safe.
 
 query: |
-  (function_declaration
-    body: (block
-      (return_statement
-        (expression_list
-          (call_expression) @CALL))))
+  [
+    (function_declaration
+      result: (type_identifier) @RET
+      body: (block
+        (return_statement
+          (expression_list
+            (call_expression) @CALL)))
+      (#eq? @RET "error"))
+    (function_declaration
+      result: (parameter_list
+        (parameter_declaration
+          type: (type_identifier) @RET))
+      body: (block
+        (return_statement
+          (expression_list
+            (call_expression) @CALL)))
+      (#eq? @RET "error"))
+  ]
 
 metavars:
+  - RET
   - CALL
-
-post_filter: returns_error
 
 has_fix: false
 

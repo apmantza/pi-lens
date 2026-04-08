@@ -31,6 +31,29 @@ afterAll(() => {
 });
 
 describe("tree-sitter go rules", () => {
+	it("matches go-bare-error only when function returns error", async () => {
+		const client = new TreeSitterClient();
+		const query = await getGoQuery("go-bare-error");
+
+		const positivePath = writeTempGoFile(`package main
+
+func run() error {
+	return doWork()
+}
+`);
+		const positive = await client.runQueryOnFile(query, positivePath, "go");
+		expect(positive.length).toBeGreaterThan(0);
+
+		const negativePath = writeTempGoFile(`package main
+
+func run() int {
+	return compute()
+}
+`);
+		const negative = await client.runQueryOnFile(query, negativePath, "go");
+		expect(negative.length).toBe(0);
+	});
+
 	it("matches go-empty-if-err on empty err handler", async () => {
 		const client = new TreeSitterClient();
 		const query = await getGoQuery("go-empty-if-err");
