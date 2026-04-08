@@ -29,6 +29,7 @@ export interface LSPServerInfo {
 	name: string;
 	extensions: string[];
 	root: RootFunction;
+	installPolicy?: "none" | "interactive" | "managed" | "package-manager";
 	spawn(
 		root: string,
 	): Promise<
@@ -36,6 +37,43 @@ export interface LSPServerInfo {
 		| undefined
 	>;
 	autoInstall?: () => Promise<boolean>;
+}
+
+function isLspInstallDisabled(): boolean {
+	return process.env.PI_LENS_DISABLE_LSP_INSTALL === "1";
+}
+
+function isCommandNotFoundError(error: unknown): boolean {
+	const msg = String(error);
+	return msg.includes("not found") || msg.includes("ENOENT");
+}
+
+async function launchViaPackageManagerWithPolicy(
+	packageName: string,
+	args: string[],
+	options: { cwd: string },
+): Promise<LSPProcess | undefined> {
+	if (isLspInstallDisabled()) {
+		return undefined;
+	}
+	return launchViaPackageManager(packageName, args, options);
+}
+
+export function PriorityRoot(
+	markerGroups: string[][],
+	excludePatterns?: string[],
+	stopDir?: string,
+): RootFunction {
+	const resolvers = markerGroups.map((markers) =>
+		NearestRoot(markers, excludePatterns, stopDir),
+	);
+	return async (file: string) => {
+		for (const resolve of resolvers) {
+			const root = await resolve(file);
+			if (root) return root;
+		}
+		return undefined;
+	};
 }
 
 // --- Root Detection Helpers ---
@@ -64,6 +102,9 @@ async function spawnWithInteractiveInstall(
 	try {
 		return await spawnFn();
 	} catch (error) {
+		if (isLspInstallDisabled()) {
+			return undefined;
+		}
 		// Check if this is a "command not found" error
 		const errorMsg = String(error);
 		if (!errorMsg.includes("not found") && !errorMsg.includes("ENOENT")) {
@@ -160,6 +201,7 @@ export const createRootDetector = NearestRoot;
 export const TypeScriptServer: LSPServerInfo = {
 	id: "typescript",
 	name: "TypeScript Language Server",
+	installPolicy: "managed",
 	extensions: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"],
 	root: createRootDetector([
 		"package-lock.json",
@@ -201,7 +243,9 @@ export const TypeScriptServer: LSPServerInfo = {
 
 		// Fall back to auto-installed version
 		if (!lspPath) {
-			lspPath = await ensureTool("typescript-language-server");
+			if (!isLspInstallDisabled()) {
+				lspPath = await ensureTool("typescript-language-server");
+			}
 			if (!lspPath) {
 				console.error("[lsp] typescript-language-server not found");
 				return undefined;
@@ -264,6 +308,7 @@ export const TypeScriptServer: LSPServerInfo = {
 export const PythonServer: LSPServerInfo = {
 	id: "python",
 	name: "Pyright Language Server",
+	installPolicy: "managed",
 	extensions: [".py", ".pyi"],
 	root: createRootDetector([
 		".git",
@@ -302,7 +347,9 @@ export const PythonServer: LSPServerInfo = {
 
 		// Strategy 2: Fall back to auto-installed version
 		if (!pyrightPath) {
-			pyrightPath = await ensureTool("pyright");
+			if (!isLspInstallDisabled()) {
+				pyrightPath = await ensureTool("pyright");
+			}
 			if (!pyrightPath) {
 				console.error("[lsp] pyright not found, falling back to npx");
 			}
@@ -347,12 +394,23 @@ export const PythonServer: LSPServerInfo = {
 				env,
 			});
 		} else {
-			// Fallback to npx for auto-download
-			console.error("[lsp] Falling back to npx for pyright-langserver");
-			proc = await launchViaPackageManager("pyright-langserver", ["--stdio"], {
-				cwd: root,
-				env,
-			});
+			if (isLspInstallDisabled()) {
+				try {
+					proc = await launchLSP("pyright-langserver", ["--stdio"], {
+						cwd: root,
+						env,
+					});
+				} catch {
+					return undefined;
+				}
+			} else {
+				// Fallback to npx for auto-download
+				console.error("[lsp] Falling back to npx for pyright-langserver");
+				proc = await launchViaPackageManager("pyright-langserver", ["--stdio"], {
+					cwd: root,
+					env,
+				});
+			}
 		}
 
 		// Detect virtual environment
@@ -388,7 +446,8 @@ export const GoServer: LSPServerInfo = {
 	id: "go",
 	name: "gopls",
 	extensions: [".go"],
-	root: createRootDetector(["go.mod", "go.sum"]),
+	installPolicy: "interactive",
+	root: PriorityRoot([["go.work"], ["go.mod", "go.sum"]]),
 	async spawn(root) {
 		const proc = await spawnWithInteractiveInstall(
 			"go",
@@ -417,6 +476,7 @@ export const RustServer: LSPServerInfo = {
 	id: "rust",
 	name: "rust-analyzer",
 	extensions: [".rs"],
+	installPolicy: "interactive",
 	root: createRootDetector(["Cargo.toml", "Cargo.lock"]),
 	async spawn(root) {
 		const proc = await spawnWithInteractiveInstall(
@@ -767,6 +827,7 @@ export const BashServer: LSPServerInfo = {
 	id: "bash",
 	name: "Bash Language Server",
 	extensions: [".sh", ".bash", ".zsh"],
+	installPolicy: "interactive",
 	root: async () => process.cwd(),
 	async spawn() {
 		const cwd = process.cwd();
@@ -801,6 +862,7 @@ export const YamlServer: LSPServerInfo = {
 	id: "yaml",
 	name: "YAML Language Server",
 	extensions: [".yaml", ".yml"],
+	installPolicy: "interactive",
 	root: async () => process.cwd(),
 	async spawn() {
 		const cwd = process.cwd();
@@ -819,6 +881,7 @@ export const JsonServer: LSPServerInfo = {
 	id: "json",
 	name: "VSCode JSON Language Server",
 	extensions: [".json", ".jsonc"],
+	installPolicy: "interactive",
 	root: async () => process.cwd(),
 	async spawn() {
 		const cwd = process.cwd();
@@ -856,6 +919,7 @@ export const VueServer: LSPServerInfo = {
 	id: "vue",
 	name: "Vue Language Server",
 	extensions: [".vue"],
+	installPolicy: "package-manager",
 	root: createRootDetector([
 		"package-lock.json",
 		"bun.lockb",
@@ -864,14 +928,22 @@ export const VueServer: LSPServerInfo = {
 		"yarn.lock",
 	]),
 	async spawn(root) {
-		// Use npx since it's not auto-installed
-		const proc = await launchViaPackageManager(
-			"@vue/language-server",
-			["--stdio"],
-			{
+		let proc: LSPProcess | undefined;
+		try {
+			proc = await launchLSP("vue-language-server", ["--stdio"], {
 				cwd: root,
-			},
-		);
+			});
+		} catch (error) {
+			if (!isCommandNotFoundError(error)) {
+				throw error;
+			}
+			proc = await launchViaPackageManagerWithPolicy(
+				"@vue/language-server",
+				["--stdio"],
+				{ cwd: root },
+			);
+		}
+		if (!proc) return undefined;
 		return { process: proc };
 	},
 };
@@ -880,6 +952,7 @@ export const SvelteServer: LSPServerInfo = {
 	id: "svelte",
 	name: "Svelte Language Server",
 	extensions: [".svelte"],
+	installPolicy: "package-manager",
 	root: createRootDetector([
 		"package-lock.json",
 		"bun.lockb",
@@ -888,12 +961,22 @@ export const SvelteServer: LSPServerInfo = {
 		"yarn.lock",
 	]),
 	async spawn(root) {
-		// Use npx since it's not auto-installed
-		const proc = await launchViaPackageManager(
-			"svelte-language-server",
-			["--stdio"],
-			{ cwd: root },
-		);
+		let proc: LSPProcess | undefined;
+		try {
+			proc = await launchLSP("svelteserver", ["--stdio"], {
+				cwd: root,
+			});
+		} catch (error) {
+			if (!isCommandNotFoundError(error)) {
+				throw error;
+			}
+			proc = await launchViaPackageManagerWithPolicy(
+				"svelte-language-server",
+				["--stdio"],
+				{ cwd: root },
+			);
+		}
+		if (!proc) return undefined;
 		return { process: proc };
 	},
 };

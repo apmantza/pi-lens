@@ -20,9 +20,11 @@ import { uriToPath } from "../path-utils.js";
 export interface LSPState {
 	clients: Map<string, LSPClientInfo>; // key: "serverId:root"
 	servers: Map<string, LSPServerInfo>;
-	broken: Set<string>; // servers that failed to initialize
+	broken: Map<string, number>; // servers that failed to initialize with retry-at timestamp
 	inFlight: Map<string, Promise<SpawnedServer | undefined>>; // prevent duplicate spawns
 }
+
+const BROKEN_RETRY_COOLDOWN_MS = 15_000;
 
 export interface SpawnedServer {
 	client: LSPClientInfo;
@@ -38,7 +40,7 @@ export class LSPService {
 		this.state = {
 			clients: new Map(),
 			servers: new Map(),
-			broken: new Set(),
+			broken: new Map(),
 			inFlight: new Map(),
 		};
 	}
@@ -78,8 +80,12 @@ export class LSPService {
 			}
 
 			// Check if broken
-			if (this.state.broken.has(key)) {
+			const brokenUntil = this.state.broken.get(key);
+			if (typeof brokenUntil === "number" && brokenUntil > Date.now()) {
 				continue;
+			}
+			if (typeof brokenUntil === "number" && brokenUntil <= Date.now()) {
+				this.state.broken.delete(key);
 			}
 
 			// Check if there's already an in-flight spawn for this key
@@ -117,10 +123,10 @@ export class LSPService {
 	): Promise<SpawnedServer | undefined> {
 		try {
 			const spawned = await server.spawn(root);
-			if (!spawned) {
-				this.state.broken.add(key);
-				return undefined;
-			}
+				if (!spawned) {
+					this.state.broken.set(key, Date.now() + BROKEN_RETRY_COOLDOWN_MS);
+					return undefined;
+				}
 
 			const client = await createLSPClient({
 				serverId: server.id,
@@ -148,7 +154,7 @@ export class LSPService {
 			} else {
 				console.error(`[lsp] Failed to spawn ${server.id}:`, err);
 			}
-			this.state.broken.add(key);
+			this.state.broken.set(key, Date.now() + BROKEN_RETRY_COOLDOWN_MS);
 			return undefined;
 		}
 	}

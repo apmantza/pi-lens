@@ -144,6 +144,13 @@ export async function handleSessionStart(
 		delete process.env.PI_LENS_AUTO_INSTALL;
 	}
 
+	if (getFlag("no-lsp-install")) {
+		process.env.PI_LENS_DISABLE_LSP_INSTALL = "1";
+		dbg("session_start: LSP install disabled (PI_LENS_DISABLE_LSP_INSTALL=1)");
+	} else {
+		delete process.env.PI_LENS_DISABLE_LSP_INSTALL;
+	}
+
 	const tools: string[] = [];
 	if (getFlag("lens-lsp") && !getFlag("no-lsp")) {
 		tools.push("LSP Service");
