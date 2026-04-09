@@ -37,6 +37,8 @@ metavars:
   - FN
   - ARGS
 
+post_filter: ruby_command_injection_sink
+
 has_fix: false
 
 tags:

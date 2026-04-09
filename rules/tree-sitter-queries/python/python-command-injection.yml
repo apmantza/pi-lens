@@ -42,6 +42,8 @@ metavars:
   - ARGS
   - KW
 
+post_filter: py_command_injection_sink
+
 has_fix: false
 
 tags:

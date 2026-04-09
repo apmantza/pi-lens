@@ -28,6 +28,8 @@ metavars:
   - FN
   - DATA
 
+post_filter: ruby_insecure_deserialization_sink
+
 has_fix: false
 
 tags:

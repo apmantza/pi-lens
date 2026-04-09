@@ -36,6 +36,8 @@ metavars:
   - FLAG
   - CMD
 
+post_filter: go_command_injection_sink
+
 has_fix: false
 
 tags:

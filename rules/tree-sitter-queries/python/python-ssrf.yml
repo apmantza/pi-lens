@@ -30,6 +30,8 @@ metavars:
   - FN
   - URL
 
+post_filter: py_ssrf_sink
+
 has_fix: false
 
 tags:

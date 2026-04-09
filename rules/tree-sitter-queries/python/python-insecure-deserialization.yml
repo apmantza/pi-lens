@@ -29,6 +29,8 @@ metavars:
   - FN
   - DATA
 
+post_filter: py_insecure_deserialization_sink
+
 has_fix: false
 
 tags:

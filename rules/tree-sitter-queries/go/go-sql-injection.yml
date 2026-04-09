@@ -36,6 +36,8 @@ metavars:
   - FMTFN
   - FMTARGS
 
+post_filter: go_sql_injection_sink
+
 has_fix: false
 
 tags:

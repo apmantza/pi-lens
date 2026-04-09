@@ -28,6 +28,8 @@ metavars:
   - FN
   - SQL
 
+post_filter: py_sql_injection_sink
+
 has_fix: false
 
 tags:

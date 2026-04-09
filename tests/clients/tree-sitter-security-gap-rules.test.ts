@@ -43,12 +43,28 @@ describe("tree-sitter security gap rules", () => {
 		expect(matches.length).toBeGreaterThan(0);
 	});
 
+	it("does not match safe python literal URL request", async () => {
+		const client = new TreeSitterClient();
+		const query = await getQuery("python-ssrf");
+		const filePath = writeTempFile("py", `import requests\nrequests.get("https://example.com")\n`);
+		const matches = await client.runQueryOnFile(query, filePath, "python");
+		expect(matches.length).toBe(0);
+	});
+
 	it("matches python path traversal sink", async () => {
 		const client = new TreeSitterClient();
 		const query = await getQuery("python-path-traversal");
 		const filePath = writeTempFile("py", `open(base + user_path)\n`);
 		const matches = await client.runQueryOnFile(query, filePath, "python");
 		expect(matches.length).toBeGreaterThan(0);
+	});
+
+	it("does not match static python file path", async () => {
+		const client = new TreeSitterClient();
+		const query = await getQuery("python-path-traversal");
+		const filePath = writeTempFile("py", `open("/tmp/safe.txt")\n`);
+		const matches = await client.runQueryOnFile(query, filePath, "python");
+		expect(matches.length).toBe(0);
 	});
 
 	it("matches python sql injection sink", async () => {
@@ -62,12 +78,31 @@ describe("tree-sitter security gap rules", () => {
 		expect(matches.length).toBeGreaterThan(0);
 	});
 
+	it("does not match parameterized python sql", async () => {
+		const client = new TreeSitterClient();
+		const query = await getQuery("python-sql-injection");
+		const filePath = writeTempFile(
+			"py",
+			`cursor.execute("SELECT * FROM users WHERE id=%s", (user_id,))\n`,
+		);
+		const matches = await client.runQueryOnFile(query, filePath, "python");
+		expect(matches.length).toBe(0);
+	});
+
 	it("matches python insecure deserialization sink", async () => {
 		const client = new TreeSitterClient();
 		const query = await getQuery("python-insecure-deserialization");
 		const filePath = writeTempFile("py", `import pickle\npickle.loads(payload)\n`);
 		const matches = await client.runQueryOnFile(query, filePath, "python");
 		expect(matches.length).toBeGreaterThan(0);
+	});
+
+	it("does not match safe python json deserialization", async () => {
+		const client = new TreeSitterClient();
+		const query = await getQuery("python-insecure-deserialization");
+		const filePath = writeTempFile("py", `import json\njson.loads(payload)\n`);
+		const matches = await client.runQueryOnFile(query, filePath, "python");
+		expect(matches.length).toBe(0);
 	});
 
 	it("matches python weak hash usage and exposes metadata", async () => {
@@ -91,6 +126,17 @@ describe("tree-sitter security gap rules", () => {
 		);
 		const matches = await client.runQueryOnFile(query, filePath, "go");
 		expect(matches.length).toBeGreaterThan(0);
+	});
+
+	it("does not match parameterized go sql", async () => {
+		const client = new TreeSitterClient();
+		const query = await getQuery("go-sql-injection");
+		const filePath = writeTempFile(
+			"go",
+			`package main\nfunc run(db DB, id string){ db.Query("SELECT * FROM users WHERE id=$1", id) }\n`,
+		);
+		const matches = await client.runQueryOnFile(query, filePath, "go");
+		expect(matches.length).toBe(0);
 	});
 
 	it("matches typescript ssrf sink", async () => {

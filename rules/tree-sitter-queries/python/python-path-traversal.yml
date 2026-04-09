@@ -35,6 +35,8 @@ metavars:
   - FN
   - PATH
 
+post_filter: py_path_traversal_sink
+
 has_fix: false
 
 tags:

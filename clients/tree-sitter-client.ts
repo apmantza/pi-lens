@@ -999,6 +999,90 @@ export class TreeSitterClient {
 					}
 				}
 
+				if (postFilter === "py_command_injection_sink") {
+					const mod = captures.MOD?.text ?? "";
+					const fn = captures.FN?.text ?? "";
+					const kw = captures.KW?.text ?? "";
+					const isOs = mod === "os" && /^(system|popen)$/.test(fn);
+					const isSubprocess =
+						mod === "subprocess" &&
+						/^(run|Popen|call|check_output|check_call)$/.test(fn) &&
+						kw === "shell";
+					if (!isOs && !isSubprocess) continue;
+				}
+
+				if (postFilter === "go_command_injection_sink") {
+					const pkg = captures.PKG?.text ?? "";
+					const fn = captures.FN?.text ?? "";
+					const shell = captures.SHELL?.text ?? "";
+					const flag = captures.FLAG?.text ?? "";
+					if (pkg !== "exec") continue;
+					if (!/^(Command|CommandContext)$/.test(fn)) continue;
+					if (!/^"(sh|bash|zsh|cmd|powershell|pwsh)"$/.test(shell)) continue;
+					if (!/^"(-c|\/c)"$/.test(flag)) continue;
+				}
+
+				if (postFilter === "ruby_command_injection_sink") {
+					const fn = captures.FN?.text ?? "";
+					if (!/^(system|exec|spawn|popen|capture3|capture2|capture2e)$/.test(fn)) {
+						continue;
+					}
+				}
+
+				if (postFilter === "py_ssrf_sink") {
+					const mod = captures.MOD?.text ?? "";
+					const fn = captures.FN?.text ?? "";
+					if (mod !== "requests") continue;
+					if (!/^(get|post|put|patch|delete|request|head|options)$/.test(fn))
+						continue;
+				}
+
+				if (postFilter === "py_path_traversal_sink") {
+					const fn = captures.FN?.text ?? "";
+					if (
+						!/^(open|read_text|read_bytes|write_text|write_bytes|remove|unlink|rmdir)$/.test(
+							fn,
+						)
+					)
+						continue;
+				}
+
+				if (postFilter === "go_path_traversal_sink") {
+					const pkg = captures.PKG?.text ?? "";
+					const fn = captures.FN?.text ?? "";
+					if (!/^(os|ioutil)$/.test(pkg)) continue;
+					if (!/^(Open|OpenFile|ReadFile|WriteFile|Create|Remove|RemoveAll)$/.test(fn))
+						continue;
+				}
+
+				if (postFilter === "py_sql_injection_sink") {
+					const fn = captures.FN?.text ?? "";
+					if (!/^(execute|executemany|query|raw)$/.test(fn)) continue;
+				}
+
+				if (postFilter === "go_sql_injection_sink") {
+					const dbFn = captures.DBFN?.text ?? "";
+					const fmtPkg = captures.FMTPKG?.text ?? "";
+					const fmtFn = captures.FMTFN?.text ?? "";
+					if (!/^(Query|QueryContext|QueryRow|QueryRowContext|Exec|ExecContext)$/.test(dbFn))
+						continue;
+					if (fmtPkg !== "fmt" || fmtFn !== "Sprintf") continue;
+				}
+
+				if (postFilter === "py_insecure_deserialization_sink") {
+					const mod = captures.MOD?.text ?? "";
+					const fn = captures.FN?.text ?? "";
+					if (!/^(pickle|yaml)$/.test(mod)) continue;
+					if (!/^(load|loads|unsafe_load)$/.test(fn)) continue;
+				}
+
+				if (postFilter === "ruby_insecure_deserialization_sink") {
+					const mod = captures.MOD?.text ?? "";
+					const fn = captures.FN?.text ?? "";
+					if (!/^(Marshal|YAML|Psych)$/.test(mod)) continue;
+					if (!/^(load|unsafe_load)$/.test(fn)) continue;
+				}
+
 				// Use first capture for position info
 				if (match.captures.length > 0) {
 					const firstNode = match.captures[0].node;

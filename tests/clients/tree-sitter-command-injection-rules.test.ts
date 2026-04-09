@@ -44,6 +44,18 @@ describe("tree-sitter command injection rules", () => {
 		expect(matches.length).toBeGreaterThan(0);
 	});
 
+	it("does not match safe python subprocess invocation", async () => {
+		const client = new TreeSitterClient();
+		const query = await getQuery("python-command-injection");
+		const filePath = writeTempFile(
+			"py",
+			`import subprocess\nsubprocess.run([\"git\",\"status\"], check=True)\n`,
+		);
+
+		const matches = await client.runQueryOnFile(query, filePath, "python");
+		expect(matches.length).toBe(0);
+	});
+
 	it("matches go command injection sink", async () => {
 		const client = new TreeSitterClient();
 		const query = await getQuery("go-command-injection");
@@ -54,6 +66,18 @@ describe("tree-sitter command injection rules", () => {
 
 		const matches = await client.runQueryOnFile(query, filePath, "go");
 		expect(matches.length).toBeGreaterThan(0);
+	});
+
+	it("does not match safe go command invocation", async () => {
+		const client = new TreeSitterClient();
+		const query = await getQuery("go-command-injection");
+		const filePath = writeTempFile(
+			"go",
+			`package main\nimport \"os/exec\"\nfunc run(){ _ = exec.Command(\"git\", \"status\") }\n`,
+		);
+
+		const matches = await client.runQueryOnFile(query, filePath, "go");
+		expect(matches.length).toBe(0);
 	});
 
 	it("matches ruby command injection sink", async () => {
@@ -76,5 +100,14 @@ describe("tree-sitter command injection rules", () => {
 
 		const matches = await client.runQueryOnFile(query, filePath, "typescript");
 		expect(matches.length).toBeGreaterThan(0);
+	});
+
+	it("does not match non-child-process exec-like calls", async () => {
+		const client = new TreeSitterClient();
+		const query = await getQuery("ts-command-injection");
+		const filePath = writeTempFile("ts", `const tool = { exec: () => {} }; tool.exec();\n`);
+
+		const matches = await client.runQueryOnFile(query, filePath, "typescript");
+		expect(matches.length).toBe(0);
 	});
 });

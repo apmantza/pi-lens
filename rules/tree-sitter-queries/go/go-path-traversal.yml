@@ -31,6 +31,8 @@ metavars:
   - FN
   - PATH
 
+post_filter: go_path_traversal_sink
+
 has_fix: false
 
 tags:
