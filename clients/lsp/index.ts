@@ -330,7 +330,13 @@ export class LSPService {
 	/**
 	 * Navigation: workspace-wide symbol search
 	 */
-	async workspaceSymbol(query: string) {
+	async workspaceSymbol(query: string, filePath?: string) {
+		if (filePath) {
+			const spawned = await this.getClientForFile(filePath);
+			if (!spawned) return [];
+			return spawned.client.workspaceSymbol(query);
+		}
+
 		// Use the first active client for workspace-level queries
 		const clients = Array.from(this.state.clients.values());
 		if (clients.length === 0) return [];

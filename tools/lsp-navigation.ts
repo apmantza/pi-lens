@@ -229,7 +229,9 @@ export function createLspNavigationTool(
 			const lspService = getLSPService();
 			if (operation === "workspaceDiagnostics") {
 				const allDiagnostics = await lspService.getAllDiagnostics();
-				const wsDiagSupport = await lspService.getWorkspaceDiagnosticsSupport();
+				const wsDiagSupport = await lspService.getWorkspaceDiagnosticsSupport(
+					rawPath ? filePath : undefined,
+				);
 				diagnosticsMode = wsDiagSupport?.mode ?? "unknown";
 				const result = Array.from(allDiagnostics.entries()).map(
 					([trackedFile, diags]) => ({
@@ -333,7 +335,7 @@ export function createLspNavigationTool(
 					case "workspaceSymbol":
 						supported = operationSupportStatus(
 							operation,
-							await lspService.getOperationSupport(),
+							await lspService.getOperationSupport(rawPath ? filePath : undefined),
 						);
 						if (supported === false) {
 							return {
@@ -363,7 +365,10 @@ export function createLspNavigationTool(
 								details: {},
 							};
 						}
-						result = await lspService.workspaceSymbol(query ?? "");
+						result = await lspService.workspaceSymbol(
+							query ?? "",
+							rawPath ? filePath : undefined,
+						);
 						break;
 					case "codeAction":
 						result = await lspService.codeAction(
