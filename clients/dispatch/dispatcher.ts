@@ -104,21 +104,34 @@ export function clearRunnerRegistry(): void {
 
 // --- Tool Availability Cache ---
 
-const toolCache = new Map<string, boolean>();
+/**
+ * Normalize a command name to a FactStore session key.
+ * Strips .cmd/.exe suffixes (case-insensitive) and lowercases,
+ * then prefixes with "session.toolCache.".
+ */
+export function normalizeCacheKey(cmd: string): string {
+	const normalized = cmd.replace(/\.(cmd|exe)$/i, "").toLowerCase();
+	return `session.toolCache.${normalized}`;
+}
 
-async function checkToolAvailability(command: string): Promise<boolean> {
-	if (toolCache.has(command)) {
-		return toolCache.get(command)!;
+async function checkToolAvailability(
+	command: string,
+	facts: FactStore,
+): Promise<boolean> {
+	const key = normalizeCacheKey(command);
+	const cached = facts.getSessionFact<boolean>(key);
+	if (cached !== undefined) {
+		return cached;
 	}
 	try {
 		const result = await safeSpawnAsync(command, ["--version"], {
 			timeout: 5000,
 		});
 		const available = result.status === 0;
-		toolCache.set(command, available);
+		facts.setSessionFact(key, available);
 		return available;
 	} catch {
-		toolCache.set(command, false);
+		facts.setSessionFact(key, false);
 		return false;
 	}
 }
@@ -153,7 +166,7 @@ export function createDispatchContext(
 		modifiedRanges,
 
 		async hasTool(command: string): Promise<boolean> {
-			return checkToolAvailability(command);
+			return checkToolAvailability(command, facts);
 		},
 
 		log(message: string): void {
