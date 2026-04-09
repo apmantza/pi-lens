@@ -40,6 +40,12 @@ export { clearLatencyReports, formatLatencyReport, getLatencyReports };
 // Import runners to register them
 import "./runners/index.js";
 
+// Register fact providers
+import { registerProvider } from "./fact-runner.js";
+import { runProviders } from "./fact-runner.js";
+import { fileContentProvider } from "./facts/file-content.js";
+registerProvider(fileContentProvider);
+
 // --- Persistent Baseline Store ---
 // Survives across dispatchLint calls within a session.
 // Without this, delta mode is a no-op: every call creates a fresh empty
@@ -144,6 +150,7 @@ export async function dispatchLint(
 	const groups = getDispatchGroupsForKind(kind, pi);
 	if (groups.length === 0) return "";
 
+	await runProviders(ctx);
 	const result = await dispatchForFile(ctx, groups);
 	return result.output;
 }
@@ -195,6 +202,7 @@ export async function dispatchLintWithResult(
 		};
 	}
 
+	await runProviders(ctx);
 	return dispatchForFile(ctx, groups);
 }
 
