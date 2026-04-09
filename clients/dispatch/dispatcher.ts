@@ -36,51 +36,46 @@ import type {
 	PiAgentAPI,
 	RunnerDefinition,
 	RunnerGroup,
+	RunnerRegistry as RunnerRegistryContract,
 	RunnerResult,
 } from "./types.js";
 import { formatDiagnostics } from "./utils/format-utils.js";
 
 // --- Runner Registry ---
 
-const globalRegistry = new Map<string, RunnerDefinition>();
+export class RunnerRegistry implements RunnerRegistryContract {
+	private readonly runners = new Map<string, RunnerDefinition>();
 
-export function registerRunner(runner: RunnerDefinition): void {
-	if (globalRegistry.has(runner.id)) return; // Already registered, skip silently
-	globalRegistry.set(runner.id, runner);
-}
-
-export function getRunner(id: string): RunnerDefinition | undefined {
-	return globalRegistry.get(id);
-}
-
-export function getRunnersForKind(
-	kind: FileKind | undefined,
-	filePath?: string,
-): RunnerDefinition[] {
-	if (!kind) return [];
-	const runners: RunnerDefinition[] = [];
-	const isTest = filePath ? isTestFile(filePath) : false;
-
-	for (const runner of globalRegistry.values()) {
-		// Skip runners that shouldn't run on test files
-		if (isTest && runner.skipTestFiles) continue;
-
-		if (runner.appliesTo.includes(kind) || runner.appliesTo.length === 0) {
-			runners.push(runner);
-		}
+	register(runner: RunnerDefinition): void {
+		if (this.runners.has(runner.id)) return;
+		this.runners.set(runner.id, runner);
 	}
-	return runners.sort((a, b) => a.priority - b.priority);
-}
 
-export function listRunners(): RunnerDefinition[] {
-	return Array.from(globalRegistry.values());
-}
+	get(id: string): RunnerDefinition | undefined {
+		return this.runners.get(id);
+	}
 
-/**
- * Clear all registered runners. Used primarily for testing.
- */
-export function clearRunnerRegistry(): void {
-	globalRegistry.clear();
+	getForKind(kind: FileKind, filePath?: string): RunnerDefinition[] {
+		const matching: RunnerDefinition[] = [];
+		const isTest = filePath ? isTestFile(filePath) : false;
+
+		for (const runner of this.runners.values()) {
+			if (isTest && runner.skipTestFiles) continue;
+			if (runner.appliesTo.includes(kind) || runner.appliesTo.length === 0) {
+				matching.push(runner);
+			}
+		}
+
+		return matching.sort((a, b) => a.priority - b.priority);
+	}
+
+	list(): RunnerDefinition[] {
+		return Array.from(this.runners.values());
+	}
+
+	clear(): void {
+		this.runners.clear();
+	}
 }
 
 // --- Tool Availability Cache ---
@@ -432,6 +427,7 @@ interface GroupResult {
 async function runGroup(
 	ctx: DispatchContext,
 	group: RunnerGroup,
+	registry: RunnerRegistryContract,
 ): Promise<GroupResult> {
 	const diagnostics: Diagnostic[] = [];
 	const latencies: RunnerLatency[] = [];
@@ -440,16 +436,16 @@ async function runGroup(
 	// Filter runners by kind if specified
 	const runnerIds = group.filterKinds
 		? group.runnerIds.filter((id) => {
-				const runner = getRunner(id);
+				const runner = registry.get(id);
 				return runner && ctx.kind && group.filterKinds?.includes(ctx.kind);
-			})
+		  })
 		: group.runnerIds;
 
 	const semantic = group.semantic ?? "warning";
 
 	for (const runnerId of runnerIds) {
 		const runnerStart = Date.now();
-		const runner = getRunner(runnerId);
+		const runner = registry.get(runnerId);
 
 		if (!runner) {
 			latencies.push({
@@ -553,6 +549,7 @@ async function runGroup(
 export async function dispatchForFile(
 	ctx: DispatchContext,
 	groups: RunnerGroup[],
+	registry: RunnerRegistryContract,
 ): Promise<DispatchResult> {
 	const _overallStart = Date.now();
 	const allDiagnostics: Diagnostic[] = [];
@@ -579,7 +576,7 @@ export async function dispatchForFile(
 	// preserved (sequential first-success). Results are merged in original
 	// group order so output is deterministic.
 	const groupResults = await Promise.all(
-		groups.map((group) => runGroup(ctx, group)),
+		groups.map((group) => runGroup(ctx, group, registry)),
 	);
 
 	// Count baseline warnings before filtering (for delta count display)
@@ -795,12 +792,14 @@ export async function dispatchLint(
 	cwd: string,
 	pi: PiAgentAPI,
 	facts: FactStore,
+	registry: RunnerRegistryContract,
 ): Promise<string> {
 	// By default, only run BLOCKING rules for fast feedback on file write
 	const ctx = createDispatchContext(filePath, cwd, pi, facts, true);
 
 	// Get runners for this file kind
-	const runners = getRunnersForKind(ctx.kind);
+	if (!ctx.kind) return "";
+	const runners = registry.getForKind(ctx.kind, ctx.filePath);
 	if (runners.length === 0) {
 		return "";
 	}
@@ -813,6 +812,6 @@ export async function dispatchLint(
 		},
 	];
 
-	const result = await dispatchForFile(ctx, groups);
+	const result = await dispatchForFile(ctx, groups, registry);
 	return result.output;
 }

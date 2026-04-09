@@ -4,6 +4,13 @@
 
 import type { SessionStats } from "./diagnostic-tracker.js";
 
+export interface SlopScoreSummary {
+	totalRuleDiagnostics: number;
+	totalKlocWritten: number;
+	scorePerKloc: number;
+	ruleCounts: Array<{ ruleId: string; count: number }>;
+}
+
 export function formatSessionSummary(stats: SessionStats): string {
 	if (stats.totalShown === 0) return "";
 
@@ -29,4 +36,18 @@ export function formatSessionSummary(stats: SessionStats): string {
 function pct(part: number, total: number): string {
 	if (total === 0) return "0";
 	return Math.round((part / total) * 100).toString();
+}
+
+export function formatSlopScoreSummary(summary: SlopScoreSummary): string {
+	if (summary.totalRuleDiagnostics === 0 || summary.totalKlocWritten <= 0) {
+		return "";
+	}
+
+	const topRules = summary.ruleCounts.slice(0, 3);
+	const detail =
+		topRules.length > 0
+			? `  (${topRules.map((entry) => `${entry.ruleId} ×${entry.count}`).join(", ")})`
+			: "";
+
+	return `Slop score: ${summary.scorePerKloc.toFixed(1)}/KLOC${detail}`;
 }

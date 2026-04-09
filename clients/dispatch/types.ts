@@ -153,6 +153,7 @@ export interface RunnerGroup {
 export interface RunnerRegistry {
 	register(runner: RunnerDefinition): void;
 	get(id: string): RunnerDefinition | undefined;
-	getForKind(kind: FileKind): RunnerDefinition[];
+	getForKind(kind: FileKind, filePath?: string): RunnerDefinition[];
 	list(): RunnerDefinition[];
+	clear(): void;
 }

@@ -13,6 +13,7 @@ import { ComplexityClient } from "./clients/complexity-client.js";
 import { DependencyChecker } from "./clients/dependency-checker.js";
 import { getDiagnosticTracker } from "./clients/diagnostic-tracker.js";
 import {
+	getDispatchSlopScoreLine,
 	getLatencyReports,
 	resetDispatchBaselines,
 } from "./clients/dispatch/integration.js";
@@ -378,6 +379,7 @@ export default function (pi: ExtensionAPI) {
 				`Pipeline crashes (session): ${totalCrashes}`,
 				`Files affected: ${crashEntries.length}`,
 			];
+			const slopScoreLine = getDispatchSlopScoreLine();
 
 			if (crashEntries.length > 0) {
 				lines.push("", "Top crash files:");
@@ -430,6 +432,10 @@ export default function (pi: ExtensionAPI) {
 					const pathSuffix = samplePath ? ` (e.g. ${samplePath})` : "";
 					lines.push(`  ${v.ruleId}: ${v.count}${pathSuffix}`);
 				}
+			}
+
+			if (slopScoreLine) {
+				lines.push("", slopScoreLine);
 			}
 
 			ctx.ui.notify(lines.join("\n"), "info");

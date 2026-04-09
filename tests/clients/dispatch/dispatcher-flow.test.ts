@@ -11,12 +11,9 @@
 
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-	clearRunnerRegistry,
 	createDispatchContext,
-	dispatchForFile,
-	getRunner,
-	getRunnersForKind,
-	registerRunner,
+	dispatchForFile as runDispatchForFile,
+	RunnerRegistry,
 } from "../../../clients/dispatch/dispatcher.js";
 import { FactStore } from "../../../clients/dispatch/fact-store.js";
 import { normalizeMapKey } from "../../../clients/path-utils.js";
@@ -30,8 +27,19 @@ import {
 } from "../../mocks/runner-factory.js";
 
 describe("Dispatch Flow", () => {
+	let registry: RunnerRegistry;
+
+	const registerRunner = (runner: Parameters<RunnerRegistry["register"]>[0]) => {
+		registry.register(runner);
+	};
+	const getRunner = (id: string) => registry.get(id);
+	const getRunnersForKind = (kind: "jsts" | "python") =>
+		registry.getForKind(kind);
+	const dispatchForFile = (ctx: Parameters<typeof runDispatchForFile>[0], groups: Parameters<typeof runDispatchForFile>[1]) =>
+		runDispatchForFile(ctx, groups, registry);
+
 	beforeEach(() => {
-		clearRunnerRegistry();
+		registry = new RunnerRegistry();
 	});
 
 	describe("Runner Registration", () => {

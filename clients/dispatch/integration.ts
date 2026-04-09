@@ -11,16 +11,20 @@ import {
 	getLspCapableKinds,
 	getPrimaryDispatchGroup,
 } from "../language-policy.js";
+import {
+	formatSlopScoreSummary,
+	type SlopScoreSummary,
+} from "../session-summary.js";
 import { FactStore } from "./fact-store.js";
 import {
 	clearLatencyReports,
 	clearCoverageNoticeState,
 	createDispatchContext,
+	RunnerRegistry,
 	type DispatchLatencyReport,
 	dispatchForFile,
 	formatLatencyReport,
 	getLatencyReports,
-	getRunnersForKind,
 	type RunnerLatency,
 } from "./dispatcher.js";
 import { TOOL_PLANS } from "./plan.js";
@@ -35,8 +39,7 @@ export type { DispatchLatencyReport, RunnerLatency };
 // Re-export latency tracking types and functions
 export { clearLatencyReports, formatLatencyReport, getLatencyReports };
 
-// Import runners to register them
-import "./runners/index.js";
+import { registerDefaultRunners } from "./runners/index.js";
 
 // Register fact providers
 import { registerProvider } from "./fact-runner.js";
@@ -64,7 +67,86 @@ registerRule(passThroughWrappersRule);
 registerRule(placeholderCommentsRule);
 
 const sessionFacts = new FactStore();
+const sessionRunnerRegistry = new RunnerRegistry();
+registerDefaultRunners(sessionRunnerRegistry);
 const LSP_CAPABLE_KINDS = new Set<FileKind>(getLspCapableKinds());
+const FACT_RULE_IDS = new Set([
+	"error-obscuring",
+	"error-swallowing",
+	"async-noise",
+	"pass-through-wrappers",
+	"placeholder-comments",
+]);
+const sessionSlopRuleCounts = new Map<string, number>();
+let sessionSlopDiagnosticCount = 0;
+let sessionWrittenLineCount = 0;
+
+function resetSessionSlopScore(): void {
+	sessionSlopRuleCounts.clear();
+	sessionSlopDiagnosticCount = 0;
+	sessionWrittenLineCount = 0;
+}
+
+function detectFactRuleId(diagnostic: {
+	id?: string;
+	rule?: string;
+	tool?: string;
+}): string | undefined {
+	if (diagnostic.rule && FACT_RULE_IDS.has(diagnostic.rule)) {
+		return diagnostic.rule;
+	}
+	if (diagnostic.tool && FACT_RULE_IDS.has(diagnostic.tool)) {
+		return diagnostic.tool;
+	}
+	if (diagnostic.id) {
+		const prefix = diagnostic.id.split(":", 1)[0];
+		if (FACT_RULE_IDS.has(prefix)) {
+			return prefix;
+		}
+	}
+	return undefined;
+}
+
+function trackSessionSlopStats(
+	ctx: ReturnType<typeof createDispatchContext>,
+	diagnostics: DispatchResult["diagnostics"],
+): void {
+	const lineCount = ctx.facts.getFileFact<number>(ctx.filePath, "file.lineCount");
+	if (typeof lineCount === "number" && Number.isFinite(lineCount) && lineCount > 0) {
+		sessionWrittenLineCount += lineCount;
+	}
+
+	for (const diagnostic of diagnostics) {
+		const ruleId = detectFactRuleId(diagnostic);
+		if (!ruleId) continue;
+		sessionSlopDiagnosticCount += 1;
+		sessionSlopRuleCounts.set(ruleId, (sessionSlopRuleCounts.get(ruleId) ?? 0) + 1);
+	}
+}
+
+export function getDispatchSlopScoreSummary(): SlopScoreSummary | undefined {
+	if (sessionSlopDiagnosticCount === 0 || sessionWrittenLineCount <= 0) {
+		return undefined;
+	}
+
+	const totalKlocWritten = sessionWrittenLineCount / 1000;
+	const ruleCounts = [...sessionSlopRuleCounts.entries()]
+		.map(([ruleId, count]) => ({ ruleId, count }))
+		.sort((a, b) => b.count - a.count || a.ruleId.localeCompare(b.ruleId));
+
+	return {
+		totalRuleDiagnostics: sessionSlopDiagnosticCount,
+		totalKlocWritten,
+		scorePerKloc: sessionSlopDiagnosticCount / totalKlocWritten,
+		ruleCounts,
+	};
+}
+
+export function getDispatchSlopScoreLine(): string {
+	const summary = getDispatchSlopScoreSummary();
+	if (!summary) return "";
+	return formatSlopScoreSummary(summary);
+}
 
 function withPrimaryPolicyGroup(
 	kind: keyof typeof TOOL_PLANS,
@@ -124,6 +206,7 @@ export function getDispatchGroupsForKind(
  */
 export function resetDispatchBaselines(): void {
 	sessionFacts.clearAll();
+	resetSessionSlopScore();
 	clearCoverageNoticeState();
 }
 
@@ -161,7 +244,8 @@ export async function dispatchLint(
 	if (groups.length === 0) return "";
 
 	await runProviders(ctx);
-	const result = await dispatchForFile(ctx, groups);
+	const result = await dispatchForFile(ctx, groups, sessionRunnerRegistry);
+	trackSessionSlopStats(ctx, result.diagnostics);
 	return result.output;
 }
 
@@ -213,7 +297,9 @@ export async function dispatchLintWithResult(
 	}
 
 	await runProviders(ctx);
-	return dispatchForFile(ctx, groups);
+	const result = await dispatchForFile(ctx, groups, sessionRunnerRegistry);
+	trackSessionSlopStats(ctx, result.diagnostics);
+	return result;
 }
 
 /**
@@ -232,6 +318,10 @@ export async function getAvailableRunners(filePath: string): Promise<string[]> {
 	const kind = detectFileKind(filePath);
 	if (!kind) return [];
 
-	const runners = getRunnersForKind(kind);
+	const normalizedPath = filePath.replace(/\\/g, "/");
+	const pathForFilter = normalizedPath.startsWith("/")
+		? normalizedPath
+		: `/${normalizedPath}`;
+	const runners = sessionRunnerRegistry.getForKind(kind, pathForFilter);
 	return runners.map((r) => r.id);
 }
