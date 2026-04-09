@@ -15,7 +15,6 @@ import { FactStore } from "./fact-store.js";
 import {
 	clearLatencyReports,
 	clearCoverageNoticeState,
-	createBaselineStore,
 	createDispatchContext,
 	type DispatchLatencyReport,
 	dispatchForFile,
@@ -26,7 +25,6 @@ import {
 } from "./dispatcher.js";
 import { TOOL_PLANS } from "./plan.js";
 import type {
-	BaselineStore,
 	DispatchResult,
 	ModifiedRange,
 	PiAgentAPI,
@@ -65,12 +63,6 @@ registerRule(asyncNoiseRule);
 registerRule(passThroughWrappersRule);
 registerRule(placeholderCommentsRule);
 
-// --- Persistent Baseline Store ---
-// Survives across dispatchLint calls within a session.
-// Without this, delta mode is a no-op: every call creates a fresh empty
-// store, so baselines.get() always returns undefined and every issue
-// looks "new" every time.
-const sessionBaselines: BaselineStore = createBaselineStore();
 const sessionFacts = new FactStore();
 const LSP_CAPABLE_KINDS = new Set<FileKind>(getLspCapableKinds());
 
@@ -131,7 +123,6 @@ export function getDispatchGroupsForKind(
  * starts with a clean slate.
  */
 export function resetDispatchBaselines(): void {
-	sessionBaselines.clear();
 	sessionFacts.clearAll();
 	clearCoverageNoticeState();
 }
@@ -157,7 +148,6 @@ export async function dispatchLint(
 		filePath,
 		cwd,
 		pi,
-		sessionBaselines,
 		sessionFacts,
 		true,
 		modifiedRanges,
@@ -188,7 +178,6 @@ export async function dispatchLintWithResult(
 		filePath,
 		cwd,
 		pi,
-		sessionBaselines,
 		sessionFacts,
 		true,
 		modifiedRanges,
@@ -225,13 +214,6 @@ export async function dispatchLintWithResult(
 
 	await runProviders(ctx);
 	return dispatchForFile(ctx, groups);
-}
-
-/**
- * Create a baseline store for delta mode tracking
- */
-export function createLintBaselines() {
-	return createBaselineStore();
 }
 
 /**

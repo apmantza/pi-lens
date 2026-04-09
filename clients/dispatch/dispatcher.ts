@@ -29,7 +29,6 @@ import { FactStore } from "./fact-store.js";
 import { resolveRunnerPath } from "./runner-context.js";
 import { getToolProfile } from "./tool-profile.js";
 import type {
-	BaselineStore,
 	Diagnostic,
 	DispatchContext,
 	DispatchResult,
@@ -40,24 +39,6 @@ import type {
 	RunnerResult,
 } from "./types.js";
 import { formatDiagnostics } from "./utils/format-utils.js";
-
-// --- In-Memory Baseline Store ---
-
-export function createBaselineStore(): BaselineStore {
-	const baselines = new Map<string, unknown[]>();
-
-	return {
-		get(filePath) {
-			return baselines.get(normalizeMapKey(filePath));
-		},
-		set(filePath, diagnostics) {
-			baselines.set(normalizeMapKey(filePath), diagnostics);
-		},
-		clear() {
-			baselines.clear();
-		},
-	};
-}
 
 // --- Runner Registry ---
 
@@ -142,7 +123,6 @@ export function createDispatchContext(
 	filePath: string,
 	cwd: string,
 	pi: PiAgentAPI,
-	baselines: BaselineStore,
 	facts: FactStore,
 	blockingOnly?: boolean,
 	modifiedRanges?: import("./types.js").ModifiedRange[],
@@ -160,7 +140,6 @@ export function createDispatchContext(
 		pi,
 		autofix: !!(pi.getFlag("autofix-biome") || pi.getFlag("autofix-ruff")),
 		deltaMode: !pi.getFlag("no-delta"),
-		baselines,
 		facts,
 		blockingOnly,
 		modifiedRanges,
@@ -605,9 +584,11 @@ export async function dispatchForFile(
 
 	// Count baseline warnings before filtering (for delta count display)
 	const relativeKey = path.relative(ctx.cwd, ctx.filePath).replace(/\\/g, "/");
+	const baselineAbsKey = `session.baseline.${normalizeMapKey(ctx.filePath)}`;
+	const baselineRelKey = `session.baseline.${normalizeMapKey(relativeKey)}`;
 	const previousBaseline = ctx.deltaMode
-		? ((ctx.baselines.get(ctx.filePath) as Diagnostic[] | undefined) ??
-			(ctx.baselines.get(relativeKey) as Diagnostic[] | undefined))
+		? (ctx.facts.getSessionFact<Diagnostic[]>(baselineAbsKey) ??
+			ctx.facts.getSessionFact<Diagnostic[]>(baselineRelKey))
 		: undefined;
 	const baselineWarnings = previousBaseline?.filter(
 		(d) => d.semantic === "warning" || d.semantic === "none",
@@ -639,8 +620,8 @@ export async function dispatchForFile(
 
 	// Persist full current snapshot for next run (not delta-filtered subset).
 	if (ctx.deltaMode) {
-		ctx.baselines.set(ctx.filePath, [...dedupedDiagnostics]);
-		ctx.baselines.set(relativeKey, [...dedupedDiagnostics]);
+		ctx.facts.setSessionFact(baselineAbsKey, [...dedupedDiagnostics]);
+		ctx.facts.setSessionFact(baselineRelKey, [...dedupedDiagnostics]);
 	}
 
 	// Categorize results
@@ -813,10 +794,10 @@ export async function dispatchLint(
 	filePath: string,
 	cwd: string,
 	pi: PiAgentAPI,
-	baselines: BaselineStore,
+	facts: FactStore,
 ): Promise<string> {
 	// By default, only run BLOCKING rules for fast feedback on file write
-	const ctx = createDispatchContext(filePath, cwd, pi, baselines, new FactStore(), true);
+	const ctx = createDispatchContext(filePath, cwd, pi, facts, true);
 
 	// Get runners for this file kind
 	const runners = getRunnersForKind(ctx.kind);

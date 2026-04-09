@@ -88,17 +88,6 @@ export interface DispatchResult {
 	hasBlockers: boolean;
 }
 
-// --- Baseline Management ---
-
-export interface BaselineStore {
-	/** Get baseline for a file */
-	get(filePath: string): unknown[] | undefined;
-	/** Set baseline for a file */
-	set(filePath: string, diagnostics: unknown[]): void;
-	/** Clear all baselines */
-	clear(): void;
-}
-
 // --- Runner Definition ---
 
 export type RunnerMode = "all" | "fallback" | "first-success";
@@ -135,7 +124,6 @@ export interface DispatchContext {
 	readonly pi: PiAgentAPI;
 	readonly autofix: boolean;
 	readonly deltaMode: boolean;
-	readonly baselines: BaselineStore;
 	readonly facts: import("./fact-store.js").FactStore;
 	/** Only run blocking rules (severity: error) - used for fast feedback on file write */
 	readonly blockingOnly?: boolean;

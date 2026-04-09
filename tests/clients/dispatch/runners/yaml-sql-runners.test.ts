@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { FactStore } from "../../../../clients/dispatch/fact-store.js";
 import { setupTestEnvironment } from "../../test-utils.js";
 
 vi.mock("../../../../clients/safe-spawn.js", () => ({
@@ -22,7 +23,7 @@ function createCtx(kind: "yaml" | "sql", filePath: string, cwd = process.cwd()) 
 		pi: { getFlag: () => false },
 		autofix: false,
 		deltaMode: true,
-		baselines: { get: () => undefined, set: () => {}, clear: () => {} },
+		facts: new FactStore(),
 		hasTool: async () => true,
 		log: () => {},
 	};

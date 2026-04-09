@@ -12,13 +12,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
 	clearRunnerRegistry,
-	createBaselineStore,
 	createDispatchContext,
 	dispatchForFile,
 	getRunner,
 	getRunnersForKind,
 	registerRunner,
 } from "../../../clients/dispatch/dispatcher.js";
+import { FactStore } from "../../../clients/dispatch/fact-store.js";
+import { normalizeMapKey } from "../../../clients/path-utils.js";
 import type { RunnerGroup } from "../../../clients/dispatch/types.js";
 import {
 	createCleanRunner,
@@ -422,8 +423,11 @@ describe("Dispatch Flow", () => {
 
 	describe("Delta Mode (Baseline Filtering)", () => {
 		it("should filter pre-existing issues in delta mode", async () => {
-			const baselines = createBaselineStore();
-			baselines.set("test.ts", [{ id: "old-issue", message: "Old" }]);
+			const facts = new FactStore();
+			setBaselineFacts(facts, "/project/test.ts", [{
+				id: "old-issue",
+				message: "Old",
+			}]);
 
 			registerRunner(
 				createMockRunner({
@@ -458,7 +462,7 @@ describe("Dispatch Flow", () => {
 				"test.ts",
 				"/project",
 				{ getFlag: () => false },
-				baselines,
+				facts,
 			);
 			const groups: RunnerGroup[] = [{ mode: "all", runnerIds: ["reporter"] }];
 
@@ -470,8 +474,11 @@ describe("Dispatch Flow", () => {
 		});
 
 		it("should report all issues when delta mode disabled", async () => {
-			const baselines = createBaselineStore();
-			baselines.set("test.ts", [{ id: "old-issue", message: "Old" }]);
+			const facts = new FactStore();
+			setBaselineFacts(facts, "/project/test.ts", [{
+				id: "old-issue",
+				message: "Old",
+			}]);
 
 			registerRunner(
 				createMockRunner({
@@ -501,7 +508,7 @@ describe("Dispatch Flow", () => {
 				"test.ts",
 				"/project",
 				mockPi,
-				baselines,
+				facts,
 			);
 			const groups: RunnerGroup[] = [{ mode: "all", runnerIds: ["reporter"] }];
 
@@ -512,8 +519,8 @@ describe("Dispatch Flow", () => {
 		});
 
 		it("promotes new unused-value diagnostics to blockers in delta mode", async () => {
-			const baselines = createBaselineStore();
-			baselines.set("test.ts", []);
+			const facts = new FactStore();
+			setBaselineFacts(facts, "/project/test.ts", []);
 
 			registerRunner(
 				createMockRunner({
@@ -541,7 +548,7 @@ describe("Dispatch Flow", () => {
 				"test.ts",
 				"/project",
 				{ getFlag: () => false },
-				baselines,
+				facts,
 			);
 			const groups: RunnerGroup[] = [{ mode: "all", runnerIds: ["reporter"] }];
 
@@ -567,7 +574,7 @@ describe("Dispatch Flow", () => {
 				"test.ts",
 				"/project",
 				mockPi,
-				createBaselineStore(),
+				new FactStore(),
 			);
 			const groups: RunnerGroup[] = [
 				{ mode: "all", runnerIds: ["conditional"] },
@@ -589,7 +596,7 @@ describe("Dispatch Flow", () => {
 				"test.ts",
 				"/project",
 				mockPi,
-				createBaselineStore(),
+				new FactStore(),
 			);
 			const groups: RunnerGroup[] = [
 				{ mode: "all", runnerIds: ["conditional"] },
@@ -643,5 +650,16 @@ describe("Dispatch Flow", () => {
 function createMockContext(filePath: string) {
 	return createDispatchContext(filePath, "/project", {
 		getFlag: () => false,
-	}, createBaselineStore());
+	}, new FactStore());
+}
+
+function setBaselineFacts(
+	facts: FactStore,
+	normalizedFilePath: string,
+	diagnostics: unknown[],
+): void {
+	const absKey = `session.baseline.${normalizeMapKey(normalizedFilePath)}`;
+	const relKey = `session.baseline.${normalizeMapKey("test.ts")}`;
+	facts.setSessionFact(absKey, diagnostics);
+	facts.setSessionFact(relKey, diagnostics);
 }
