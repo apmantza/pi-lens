@@ -10,6 +10,40 @@ import { Type } from "@sinclair/typebox";
 import type { LSPCallHierarchyItem } from "../clients/lsp/client.js";
 import { getLSPService } from "../clients/lsp/index.js";
 
+function operationSupportStatus(
+	operation: string,
+	support: import("../clients/lsp/client.js").LSPOperationSupport | null,
+): boolean | null {
+	if (!support) return null;
+	if (operation === "definition") return support.definition;
+	if (operation === "references") return support.references;
+	if (operation === "hover") return support.hover;
+	if (operation === "signatureHelp") return support.signatureHelp;
+	if (operation === "documentSymbol") return support.documentSymbol;
+	if (operation === "workspaceSymbol") return support.workspaceSymbol;
+	if (operation === "codeAction") return support.codeAction;
+	if (operation === "rename") return support.rename;
+	if (operation === "implementation") return support.implementation;
+	if (
+		operation === "prepareCallHierarchy" ||
+		operation === "incomingCalls" ||
+		operation === "outgoingCalls"
+	)
+		return support.callHierarchy;
+	return null;
+}
+
+function emptyReasonForOperation(operation: string): string {
+	if (operation === "signatureHelp") return "position-sensitive-or-no-signature";
+	if (operation === "codeAction") return "no-applicable-actions";
+	if (operation === "rename") return "no-rename-edits-or-symbol-not-renamable";
+	if (operation === "workspaceSymbol")
+		return "no-matching-symbols-or-server-index-unavailable";
+	if (operation === "incomingCalls" || operation === "outgoingCalls")
+		return "no-call-hierarchy-results";
+	return "no-results";
+}
+
 export function createLspNavigationTool(
 	getFlag: (name: string) => boolean | string | undefined,
 ) {
@@ -135,6 +169,9 @@ export function createLspNavigationTool(
 			_onUpdate: unknown,
 			ctx: { cwd?: string },
 		) {
+			let supported: boolean | null = null;
+			let diagnosticsMode: "pull" | "push-only" | "unknown" = "unknown";
+
 			if (!getFlag("lens-lsp") || getFlag("no-lsp")) {
 				return {
 					content: [
@@ -192,6 +229,8 @@ export function createLspNavigationTool(
 			const lspService = getLSPService();
 			if (operation === "workspaceDiagnostics") {
 				const allDiagnostics = await lspService.getAllDiagnostics();
+				const wsDiagSupport = await lspService.getWorkspaceDiagnosticsSupport();
+				diagnosticsMode = wsDiagSupport?.mode ?? "unknown";
 				const result = Array.from(allDiagnostics.entries()).map(
 					([trackedFile, diags]) => ({
 						filePath: trackedFile,
@@ -199,13 +238,24 @@ export function createLspNavigationTool(
 						count: diags.length,
 					}),
 				);
+				const note =
+					diagnosticsMode === "push-only"
+						? "Note: push-only tracked diagnostics snapshot (not full workspace pull diagnostics)."
+						: diagnosticsMode === "pull"
+							? "Note: server advertises workspace pull diagnostics support."
+							: "Note: workspace diagnostics mode unknown (no active capability snapshot).";
 				return {
 					content: [
-						{ type: "text" as const, text: JSON.stringify(result, null, 2) },
+						{
+							type: "text" as const,
+							text: `${note}\n${JSON.stringify(result, null, 2)}`,
+						},
 					],
 					details: {
 						operation,
 						resultCount: result.length,
+						diagnosticsMode,
+						coverage: "tracked-open-files",
 					},
 				};
 			}
@@ -226,21 +276,8 @@ export function createLspNavigationTool(
 
 			if (needsFilePath) {
 				const support = await lspService.getOperationSupport(filePath);
-				const unsupported =
-					(operation === "definition" && support?.definition === false) ||
-					(operation === "references" && support?.references === false) ||
-					(operation === "hover" && support?.hover === false) ||
-					(operation === "signatureHelp" && support?.signatureHelp === false) ||
-					(operation === "documentSymbol" && support?.documentSymbol === false) ||
-					(operation === "workspaceSymbol" && support?.workspaceSymbol === false) ||
-					(operation === "codeAction" && support?.codeAction === false) ||
-					(operation === "rename" && support?.rename === false) ||
-					(operation === "implementation" && support?.implementation === false) ||
-					((operation === "prepareCallHierarchy" ||
-						operation === "incomingCalls" ||
-						operation === "outgoingCalls") &&
-						support?.callHierarchy === false);
-				if (unsupported) {
+				supported = operationSupportStatus(operation, support);
+				if (supported === false) {
 					return {
 						content: [
 							{
@@ -249,7 +286,7 @@ export function createLspNavigationTool(
 							},
 						],
 						isError: true,
-						details: {},
+						details: { operation, supported: false, emptyReason: "unsupported" },
 					};
 				}
 
@@ -277,7 +314,7 @@ export function createLspNavigationTool(
 
 			let result: unknown;
 			try {
-				switch (operation) {
+					switch (operation) {
 					case "definition":
 						result = await lspService.definition(filePath, lspLine, lspChar);
 						break;
@@ -294,6 +331,26 @@ export function createLspNavigationTool(
 						result = await lspService.documentSymbol(filePath);
 						break;
 					case "workspaceSymbol":
+						supported = operationSupportStatus(
+							operation,
+							await lspService.getOperationSupport(),
+						);
+						if (supported === false) {
+							return {
+								content: [
+									{
+										type: "text" as const,
+										text: "Active LSP server does not advertise support for workspaceSymbol",
+									},
+								],
+								isError: true,
+								details: {
+									operation,
+									supported: false,
+									emptyReason: "unsupported",
+								},
+							};
+						}
 						if (!query || query.trim().length === 0) {
 							return {
 								content: [
@@ -405,6 +462,8 @@ export function createLspNavigationTool(
 				content: [{ type: "text" as const, text: output }],
 				details: {
 					operation,
+					supported,
+					emptyReason: isEmpty ? emptyReasonForOperation(operation) : undefined,
 					resultCount: Array.isArray(result) ? result.length : result ? 1 : 0,
 				},
 			};

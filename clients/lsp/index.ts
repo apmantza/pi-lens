@@ -53,6 +53,7 @@ export interface SpawnedServer {
 export class LSPService {
 	private state: LSPState;
 	private languagePolicyCache = new Map<string, { allowInstall: boolean; expiresAt: number }>();
+	private workspaceProbeLogged = new Set<string>();
 
 	constructor() {
 		this.state = {
@@ -205,9 +206,12 @@ export class LSPService {
 			logSessionStart(
 				`lsp spawn ${server.id}: success source=${spawned.source ?? server.installPolicy ?? "unknown"} (${Date.now() - startedAt}ms)`,
 			);
-			logSessionStart(
-				`lsp workspace-diag probe ${server.id}: advertised=${wsDiag.advertised} mode=${wsDiag.mode} provider=${wsDiag.diagnosticProviderKind}`,
-			);
+			if (!this.workspaceProbeLogged.has(key)) {
+				logSessionStart(
+					`lsp workspace-diag probe ${server.id}: advertised=${wsDiag.advertised} mode=${wsDiag.mode} provider=${wsDiag.diagnosticProviderKind}`,
+				);
+				this.workspaceProbeLogged.add(key);
+			}
 			return { client, info: server };
 		} catch (err) {
 			logSessionStart(
@@ -356,6 +360,28 @@ export class LSPService {
 	}
 
 	/**
+	 * Capability snapshot for workspace diagnostics support.
+	 * If filePath is provided, probes that server; otherwise uses first active client.
+	 */
+	async getWorkspaceDiagnosticsSupport(filePath?: string): Promise<
+		import("./client.js").LSPWorkspaceDiagnosticsSupport | null
+	> {
+		if (filePath) {
+			const spawned = await this.getClientForFile(filePath);
+			if (!spawned) return null;
+			const getter = spawned.client.getWorkspaceDiagnosticsSupport;
+			if (typeof getter !== "function") return null;
+			return getter();
+		}
+
+		const first = this.state.clients.values().next().value;
+		if (!first) return null;
+		const getter = first.getWorkspaceDiagnosticsSupport;
+		if (typeof getter !== "function") return null;
+		return getter();
+	}
+
+	/**
 	 * Navigation: available code actions at position/range
 	 */
 	async codeAction(
@@ -479,6 +505,7 @@ export class LSPService {
 		}
 		this.state.clients.clear();
 		this.state.broken.clear();
+		this.workspaceProbeLogged.clear();
 	}
 
 	/**
