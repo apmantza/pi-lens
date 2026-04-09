@@ -672,8 +672,8 @@ export async function runPipeline(
 					for (const e of limited) {
 						const line = (e.range?.start?.line ?? 0) + 1;
 						const col = (e.range?.start?.character ?? 0) + 1;
-						const code = e.code ? ` [${e.code}]` : "";
-						c += `\n  ${code} (${line}:${col}) ${e.message.split("\n")[0].slice(0, 100)}`;
+						const code = e.code ? ` code=${String(e.code)}` : "";
+						c += `\n  line ${line}, col ${col}${code}: ${e.message.split("\n")[0].slice(0, 100)}`;
 					}
 					c += `${suffix}\n</diagnostics>`;
 				}

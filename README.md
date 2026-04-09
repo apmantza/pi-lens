@@ -28,6 +28,8 @@ At `session_start`, pi-lens:
 - emits missing-tool install hints for detected languages when relevant
 - injects session guidance through internal context (non-user channel) to reduce acknowledgement-only first responses
 
+For one-shot print sessions (for example `pi --print ...`), pi-lens auto-uses a quick startup path that skips heavy bootstrap work to reduce startup latency. You can override startup behavior with `PI_LENS_STARTUP_MODE=full|minimal|quick`.
+
 ### Turn End
 
 At `turn_end`, pi-lens:

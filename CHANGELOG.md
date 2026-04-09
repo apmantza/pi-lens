@@ -2,6 +2,14 @@
 
 All notable changes to pi-lens will be documented in this file.
 
+## [3.8.22] - 2026-04-09
+
+### Changed
+- **Quick startup path for one-shot print sessions** — `--print`/`-p` now auto-selects quick startup mode to skip heavy bootstrap work and reduce startup latency. Added `PI_LENS_STARTUP_MODE=full|minimal|quick` override for explicit control.
+
+### Fixed
+- **Cascade diagnostics formatting clarity** — turn-end cascade entries now render source location as `line <n>, col <m> code=<id>:` so diagnostic codes (for example `TS2322`) are no longer formatted in a way that can be mistaken for file line numbers.
+
 ## [3.8.21] - 2026-04-08
 
 ### Changed
