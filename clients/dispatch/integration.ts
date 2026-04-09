@@ -58,10 +58,12 @@ import { errorObscuringRule } from "./rules/error-obscuring.js";
 import { errorSwallowingRule } from "./rules/error-swallowing.js";
 import { asyncNoiseRule } from "./rules/async-noise.js";
 import { passThroughWrappersRule } from "./rules/pass-through-wrappers.js";
+import { placeholderCommentsRule } from "./rules/placeholder-comments.js";
 registerRule(errorObscuringRule);
 registerRule(errorSwallowingRule);
 registerRule(asyncNoiseRule);
 registerRule(passThroughWrappersRule);
+registerRule(placeholderCommentsRule);
 
 // --- Persistent Baseline Store ---
 // Survives across dispatchLint calls within a session.
