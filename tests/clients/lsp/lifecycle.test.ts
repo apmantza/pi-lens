@@ -241,8 +241,11 @@ describe("LSP Client Lifecycle", () => {
 		await expect(client.definition(DUMMY_FILE, 1, 1)).resolves.toEqual([]);
 		await expect(client.references(DUMMY_FILE, 1, 1)).resolves.toEqual([]);
 		await expect(client.hover(DUMMY_FILE, 1, 1)).resolves.toBeNull();
+		await expect(client.signatureHelp(DUMMY_FILE, 1, 1)).resolves.toBeNull();
 		await expect(client.documentSymbol(DUMMY_FILE)).resolves.toEqual([]);
 		await expect(client.workspaceSymbol("anything")).resolves.toEqual([]);
+		await expect(client.codeAction(DUMMY_FILE, 1, 1, 1, 1)).resolves.toEqual([]);
+		await expect(client.rename(DUMMY_FILE, 1, 1, "renamedSymbol")).resolves.toBeNull();
 		await expect(client.implementation(DUMMY_FILE, 1, 1)).resolves.toEqual([]);
 		await expect(
 			client.prepareCallHierarchy(DUMMY_FILE, 1, 1),

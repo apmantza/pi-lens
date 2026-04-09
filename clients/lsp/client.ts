@@ -49,6 +49,40 @@ export interface LSPHover {
 	range?: LSPLocation["range"];
 }
 
+export interface LSPSignatureHelp {
+	signatures: Array<{
+		label: string;
+		documentation?: string | { kind: string; value: string };
+		parameters?: Array<{
+			label: string | [number, number];
+			documentation?: string | { kind: string; value: string };
+		}>;
+	}>;
+	activeSignature?: number;
+	activeParameter?: number;
+}
+
+export interface LSPCodeAction {
+	title: string;
+	kind?: string;
+	diagnostics?: LSPDiagnostic[];
+	edit?: unknown;
+	command?: unknown;
+	data?: unknown;
+}
+
+export interface LSPWorkspaceEdit {
+	changes?: Record<string, unknown[]>;
+	documentChanges?: unknown[];
+	changeAnnotations?: Record<string, unknown>;
+}
+
+export interface LSPWorkspaceDiagnosticsSupport {
+	advertised: boolean;
+	mode: "pull" | "push-only";
+	diagnosticProviderKind: string;
+}
+
 export interface LSPSymbol {
 	name: string;
 	kind: number;
@@ -93,6 +127,8 @@ export interface LSPClientInfo {
 	waitForDiagnostics(filePath: string, timeoutMs?: number): Promise<void>;
 	/** Get all tracked diagnostics (for cascade checking) */
 	getAllDiagnostics(): Map<string, LSPDiagnostic[]>;
+	/** Capability snapshot for workspace diagnostics support */
+	getWorkspaceDiagnosticsSupport(): LSPWorkspaceDiagnosticsSupport;
 	/** Go to definition — returns Location[] */
 	definition(
 		filePath: string,
@@ -112,10 +148,31 @@ export interface LSPClientInfo {
 		line: number,
 		character: number,
 	): Promise<LSPHover | null>;
+	/** Signature help at position */
+	signatureHelp(
+		filePath: string,
+		line: number,
+		character: number,
+	): Promise<LSPSignatureHelp | null>;
 	/** Symbols in a document */
 	documentSymbol(filePath: string): Promise<LSPSymbol[]>;
 	/** Workspace-wide symbol search */
 	workspaceSymbol(query: string): Promise<LSPSymbol[]>;
+	/** Available code actions at a range */
+	codeAction(
+		filePath: string,
+		line: number,
+		character: number,
+		endLine: number,
+		endCharacter: number,
+	): Promise<LSPCodeAction[]>;
+	/** Rename symbol at position */
+	rename(
+		filePath: string,
+		line: number,
+		character: number,
+		newName: string,
+	): Promise<LSPWorkspaceEdit | null>;
 	/** Go to implementation */
 	implementation(
 		filePath: string,
@@ -141,8 +198,18 @@ export interface LSPClientInfo {
 
 // --- Constants ---
 
-const DIAGNOSTICS_DEBOUNCE_MS = 150; // ms — waits for follow-up semantic diagnostics
-const INITIALIZE_TIMEOUT_MS = 15_000; // 15s — npx downloads are handled by ensureTool, not here
+const DIAGNOSTICS_DEBOUNCE_MS = positiveIntFromEnv(
+	"PI_LENS_LSP_DIAGNOSTICS_DEBOUNCE_MS",
+	150,
+); // ms — waits for follow-up semantic diagnostics
+const INITIALIZE_TIMEOUT_MS = positiveIntFromEnv(
+	"PI_LENS_LSP_INIT_TIMEOUT_MS",
+	15_000,
+); // 15s — npx downloads are handled by ensureTool, not here
+const DIAGNOSTICS_WAIT_TIMEOUT_MS = positiveIntFromEnv(
+	"PI_LENS_LSP_DIAGNOSTICS_WAIT_MS",
+	10_000,
+);
 
 // --- Client Factory ---
 
@@ -327,6 +394,8 @@ export async function createLSPClient(options: {
 		);
 	}
 
+	const workspaceDiagnosticsSupport = detectWorkspaceDiagnosticsSupport(initResult);
+
 	// Send initialized notification
 	await safeSendNotification(connection, "initialized", {});
 
@@ -437,7 +506,11 @@ export async function createLSPClient(options: {
 			return new Map(diagnostics);
 		},
 
-		async waitForDiagnostics(filePath, timeoutMs = 10000) {
+		getWorkspaceDiagnosticsSupport() {
+			return workspaceDiagnosticsSupport;
+		},
+
+		async waitForDiagnostics(filePath, timeoutMs = DIAGNOSTICS_WAIT_TIMEOUT_MS) {
 			const normalizedPath = normalizeMapKey(filePath);
 
 			// Fast path: diagnostics already available
@@ -517,6 +590,20 @@ export async function createLSPClient(options: {
 			return result ?? null;
 		},
 
+		async signatureHelp(filePath, line, character) {
+			if (!isProcessAlive()) return null;
+			const uri = pathToFileURL(filePath).href;
+			const result = await safeSendRequest<LSPSignatureHelp>(
+				connection,
+				"textDocument/signatureHelp",
+				{
+					textDocument: { uri },
+					position: { line, character },
+				},
+			);
+			return result ?? null;
+		},
+
 		async documentSymbol(filePath) {
 			if (!isProcessAlive()) return [];
 			const uri = pathToFileURL(filePath).href;
@@ -540,6 +627,51 @@ export async function createLSPClient(options: {
 				},
 			);
 			return result ?? [];
+		},
+
+		async codeAction(
+			filePath,
+			line,
+			character,
+			endLine,
+			endCharacter,
+		) {
+			if (!isProcessAlive()) return [];
+			const uri = pathToFileURL(filePath).href;
+			const result = await safeSendRequest<unknown[]>(
+				connection,
+				"textDocument/codeAction",
+				{
+					textDocument: { uri },
+					range: {
+						start: { line, character },
+						end: { line: endLine, character: endCharacter },
+					},
+					context: {
+						diagnostics: diagnostics.get(normalizeMapKey(filePath)) ?? [],
+					},
+				},
+			);
+			if (!result || !Array.isArray(result)) return [];
+			return result.filter(
+				(item): item is LSPCodeAction =>
+					typeof item === "object" && item !== null && "title" in item,
+			);
+		},
+
+		async rename(filePath, line, character, newName) {
+			if (!isProcessAlive()) return null;
+			const uri = pathToFileURL(filePath).href;
+			const result = await safeSendRequest<LSPWorkspaceEdit>(
+				connection,
+				"textDocument/rename",
+				{
+					textDocument: { uri },
+					position: { line, character },
+					newName,
+				},
+			);
+			return result ?? null;
 		},
 
 		async implementation(filePath, line, character) {
@@ -721,4 +853,51 @@ async function withTimeout<T>(
 			),
 		),
 	]);
+}
+
+function positiveIntFromEnv(name: string, fallback: number): number {
+	const raw = process.env[name];
+	if (!raw) return fallback;
+	const parsed = Number.parseInt(raw, 10);
+	if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+	return parsed;
+}
+
+function detectWorkspaceDiagnosticsSupport(
+	initResult: unknown,
+): LSPWorkspaceDiagnosticsSupport {
+	const capabilities =
+		typeof initResult === "object" && initResult !== null
+			? (initResult as { capabilities?: Record<string, unknown> }).capabilities
+			: undefined;
+	const diagnosticProvider = capabilities?.diagnosticProvider;
+	if (!diagnosticProvider) {
+		return {
+			advertised: false,
+			mode: "push-only",
+			diagnosticProviderKind: "none",
+		};
+	}
+
+	if (typeof diagnosticProvider === "boolean") {
+		return {
+			advertised: diagnosticProvider,
+			mode: diagnosticProvider ? "pull" : "push-only",
+			diagnosticProviderKind: "boolean",
+		};
+	}
+
+	if (typeof diagnosticProvider === "object") {
+		return {
+			advertised: true,
+			mode: "pull",
+			diagnosticProviderKind: "object",
+		};
+	}
+
+	return {
+		advertised: false,
+		mode: "push-only",
+		diagnosticProviderKind: typeof diagnosticProvider,
+	};
 }

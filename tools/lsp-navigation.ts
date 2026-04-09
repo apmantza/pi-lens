@@ -22,12 +22,16 @@ export function createLspNavigationTool(
 			"- definition: Jump to where a symbol is defined\n" +
 			"- references: Find all usages of a symbol\n" +
 			"- hover: Get type/doc info at a position\n" +
+			"- signatureHelp: Show callable signatures at cursor\n" +
 			"- documentSymbol: List all symbols (functions/classes/vars) in a file\n" +
 			"- workspaceSymbol: Search symbols across the whole project\n" +
+			"- codeAction: Find available quick fixes/refactors at a range\n" +
+			"- rename: Compute workspace edits for renaming a symbol\n" +
 			"- implementation: Jump to interface implementations\n" +
 			"- prepareCallHierarchy: Get callable item at position (for incoming/outgoing)\n" +
 			"- incomingCalls: Find all functions/methods that CALL this function\n" +
-			"- outgoingCalls: Find all functions/methods CALLED by this function\n\n" +
+			"- outgoingCalls: Find all functions/methods CALLED by this function\n" +
+			"- workspaceDiagnostics: List all diagnostics tracked by active LSP clients\n\n" +
 			"Line and character are 1-based (as shown in editors).",
 		promptSnippet:
 			"Use lsp_navigation to find definitions, references, and hover info via LSP",
@@ -37,12 +41,16 @@ export function createLspNavigationTool(
 					Type.Literal("definition"),
 					Type.Literal("references"),
 					Type.Literal("hover"),
+					Type.Literal("signatureHelp"),
 					Type.Literal("documentSymbol"),
 					Type.Literal("workspaceSymbol"),
+					Type.Literal("codeAction"),
+					Type.Literal("rename"),
 					Type.Literal("implementation"),
 					Type.Literal("prepareCallHierarchy"),
 					Type.Literal("incomingCalls"),
 					Type.Literal("outgoingCalls"),
+					Type.Literal("workspaceDiagnostics"),
 				],
 				{ description: "LSP operation to perform" },
 			),
@@ -59,6 +67,23 @@ export function createLspNavigationTool(
 				Type.Number({
 					description:
 						"Character offset (1-based). Required for definition/references/hover/implementation",
+				}),
+			),
+			endLine: Type.Optional(
+				Type.Number({
+					description:
+						"End line (1-based). Optional; used by codeAction range.",
+				}),
+			),
+			endCharacter: Type.Optional(
+				Type.Number({
+					description:
+						"End character (1-based). Optional; used by codeAction range.",
+				}),
+			),
+			newName: Type.Optional(
+				Type.String({
+					description: "Required for rename operation.",
 				}),
 			),
 			query: Type.Optional(
@@ -125,12 +150,18 @@ export function createLspNavigationTool(
 				filePath: rawPath,
 				line,
 				character,
+				endLine,
+				endCharacter,
+				newName,
 				query,
 			} = params as {
 				operation: string;
 				filePath: string;
 				line?: number;
 				character?: number;
+				endLine?: number;
+				endCharacter?: number;
+				newName?: string;
 				query?: string;
 			};
 
@@ -171,6 +202,8 @@ export function createLspNavigationTool(
 			// Convert 1-based editor coords to 0-based LSP coords
 			const lspLine = (line ?? 1) - 1;
 			const lspChar = (character ?? 1) - 1;
+			const lspEndLine = (endLine ?? line ?? 1) - 1;
+			const lspEndChar = (endCharacter ?? character ?? 1) - 1;
 
 			let result: unknown;
 			try {
@@ -184,18 +217,41 @@ export function createLspNavigationTool(
 					case "hover":
 						result = await lspService.hover(filePath, lspLine, lspChar);
 						break;
+					case "signatureHelp":
+						result = await lspService.signatureHelp(filePath, lspLine, lspChar);
+						break;
 					case "documentSymbol":
 						result = await lspService.documentSymbol(filePath);
 						break;
 					case "workspaceSymbol":
 						result = await lspService.workspaceSymbol(query ?? "");
 						break;
-					case "implementation":
-						result = await lspService.implementation(
+					case "codeAction":
+						result = await lspService.codeAction(
 							filePath,
 							lspLine,
 							lspChar,
+							lspEndLine,
+							lspEndChar,
 						);
+						break;
+					case "rename":
+						if (!newName || newName.trim().length === 0) {
+							return {
+								content: [
+									{
+										type: "text" as const,
+										text: "newName parameter required for rename",
+									},
+								],
+								isError: true,
+								details: {},
+							};
+						}
+						result = await lspService.rename(filePath, lspLine, lspChar, newName);
+						break;
+					case "implementation":
+						result = await lspService.implementation(filePath, lspLine, lspChar);
 						break;
 					case "prepareCallHierarchy":
 						result = await lspService.prepareCallHierarchy(
@@ -240,6 +296,17 @@ export function createLspNavigationTool(
 							};
 						}
 						result = await lspService.outgoingCalls(callItem);
+						break;
+					}
+					case "workspaceDiagnostics": {
+						const allDiagnostics = await lspService.getAllDiagnostics();
+						result = Array.from(allDiagnostics.entries()).map(
+							([trackedFile, diags]) => ({
+								filePath: trackedFile,
+								diagnostics: diags,
+								count: diags.length,
+							}),
+						);
 						break;
 					}
 					default:

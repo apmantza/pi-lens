@@ -272,7 +272,7 @@ function computeBlastRadius(
 		if (path.resolve(candidate) === path.resolve(filePath)) continue;
 		let size = 0;
 		try {
-			size = nodeFs.statSync(candidate).size;
+			size = fs.statSync(candidate).size;
 		} catch {
 			continue;
 		}
@@ -658,8 +658,14 @@ const treeSitterRunner: RunnerDefinition = {
 			const prev = entitySnapshotByFile.get(filePath);
 			const diff = diffEntitySnapshot(prev, snapshot);
 			entitySnapshotByFile.set(filePath, snapshot);
-			const changedEntityKeys = [...diff.added, ...diff.modified, ...diff.removed];
-			const changedNames = [...new Set(changedEntityKeys.map((k) => k.split(":")[1]).filter(Boolean))];
+			const changedEntityKeys = [
+				...diff.added,
+				...diff.modified,
+				...diff.removed,
+			];
+			const changedNames = [
+				...new Set(changedEntityKeys.map((k) => k.split(":")[1]).filter(Boolean)),
+			];
 
 			if (changedEntityKeys.length > 0) {
 				logTreeSitter({
@@ -699,9 +705,10 @@ const treeSitterRunner: RunnerDefinition = {
 						},
 					});
 				}
-				}
 			}
-		} catch {}
+		} catch {
+			// best-effort experimental telemetry only
+		}
 
 		logTreeSitter({
 			phase: "runner_complete",

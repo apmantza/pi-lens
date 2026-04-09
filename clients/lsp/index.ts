@@ -192,10 +192,21 @@ export class LSPService {
 				root,
 				initialization: spawned.initialization,
 			});
+			const wsDiag =
+				typeof client.getWorkspaceDiagnosticsSupport === "function"
+					? client.getWorkspaceDiagnosticsSupport()
+					: {
+						advertised: false,
+						mode: "push-only" as const,
+						diagnosticProviderKind: "unavailable",
+					};
 
 			this.state.clients.set(key, client);
 			logSessionStart(
 				`lsp spawn ${server.id}: success source=${spawned.source ?? server.installPolicy ?? "unknown"} (${Date.now() - startedAt}ms)`,
+			);
+			logSessionStart(
+				`lsp workspace-diag probe ${server.id}: advertised=${wsDiag.advertised} mode=${wsDiag.mode} provider=${wsDiag.diagnosticProviderKind}`,
 			);
 			return { client, info: server };
 		} catch (err) {
@@ -295,6 +306,15 @@ export class LSPService {
 	}
 
 	/**
+	 * Navigation: signature help at cursor position
+	 */
+	async signatureHelp(filePath: string, line: number, character: number) {
+		const spawned = await this.getClientForFile(filePath);
+		if (!spawned) return null;
+		return spawned.client.signatureHelp(filePath, line, character);
+	}
+
+	/**
 	 * Navigation: symbols in document
 	 */
 	async documentSymbol(filePath: string) {
@@ -311,6 +331,41 @@ export class LSPService {
 		const clients = Array.from(this.state.clients.values());
 		if (clients.length === 0) return [];
 		return clients[0].workspaceSymbol(query);
+	}
+
+	/**
+	 * Navigation: available code actions at position/range
+	 */
+	async codeAction(
+		filePath: string,
+		line: number,
+		character: number,
+		endLine: number,
+		endCharacter: number,
+	) {
+		const spawned = await this.getClientForFile(filePath);
+		if (!spawned) return [];
+		return spawned.client.codeAction(
+			filePath,
+			line,
+			character,
+			endLine,
+			endCharacter,
+		);
+	}
+
+	/**
+	 * Navigation: rename symbol at position
+	 */
+	async rename(
+		filePath: string,
+		line: number,
+		character: number,
+		newName: string,
+	) {
+		const spawned = await this.getClientForFile(filePath);
+		if (!spawned) return null;
+		return spawned.client.rename(filePath, line, character, newName);
 	}
 
 	/**

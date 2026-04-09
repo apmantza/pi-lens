@@ -8,6 +8,7 @@ const tryLazyInstall = vi.fn(async () => true);
 const hasLSP = vi.fn();
 const openFile = vi.fn();
 const getDiagnostics = vi.fn();
+const codeAction = vi.fn();
 const readFileContent = vi.fn(() => "const x = 1;\n");
 
 vi.mock("../../../../clients/safe-spawn.js", () => ({
@@ -23,6 +24,7 @@ vi.mock("../../../../clients/lsp/index.js", () => ({
 		hasLSP,
 		openFile,
 		getDiagnostics,
+		codeAction,
 		getClientForFile: vi.fn(),
 	}),
 }));
@@ -54,6 +56,7 @@ describe("runner status/semantic edge cases", () => {
 		hasLSP.mockReset();
 		openFile.mockReset();
 		getDiagnostics.mockReset();
+		codeAction.mockReset();
 		readFileContent.mockReset();
 		readFileContent.mockReturnValue("const x = 1;\n");
 	});
@@ -182,6 +185,48 @@ describe("runner status/semantic edge cases", () => {
 			expect(result.status).toBe("failed");
 			expect(result.semantic).toBe("warning");
 			expect(result.diagnostics[0]?.message).toContain("LSP server failed");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("lsp runner surfaces codeAction guidance for blocking diagnostics", async () => {
+		const runner = (await import(
+			"../../../../clients/dispatch/runners/lsp.js"
+		)).default;
+		const env = setupTestEnvironment("pi-lens-lsp-fix-");
+		try {
+			const filePath = path.join(env.tmpDir, "main.ts");
+			fs.writeFileSync(filePath, "const a: string = 1;\n");
+
+			hasLSP.mockResolvedValue(true);
+			openFile.mockResolvedValue(undefined);
+			getDiagnostics.mockResolvedValue([
+				{
+					severity: 1,
+					message: "Type 'number' is not assignable to type 'string'.",
+					range: {
+						start: { line: 0, character: 6 },
+						end: { line: 0, character: 7 },
+					},
+					code: "2322",
+				},
+			]);
+			codeAction.mockResolvedValue([
+				{ title: "Change type of 'a' to 'number'", kind: "quickfix" },
+				{ title: "Convert number to string", kind: "quickfix" },
+			]);
+
+			const result = await runner.run(ctx(filePath, env.tmpDir) as never);
+			expect(result.status).toBe("failed");
+			expect(result.semantic).toBe("blocking");
+			expect(result.diagnostics[0]?.fixable).toBe(true);
+			expect(result.diagnostics[0]?.fixSuggestion).toContain(
+				"LSP quick fixes:",
+			);
+			expect(result.diagnostics[0]?.fixSuggestion).toContain(
+				"Change type of 'a' to 'number'",
+			);
 		} finally {
 			env.cleanup();
 		}

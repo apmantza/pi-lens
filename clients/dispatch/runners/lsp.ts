@@ -25,6 +25,35 @@ import { readFileContent } from "./utils.js";
 
 const LSP_MAX_FILE_BYTES = RUNTIME_CONFIG.pipeline.lspMaxFileBytes;
 const LSP_MAX_FILE_LINES = RUNTIME_CONFIG.pipeline.lspMaxFileLines;
+const MAX_CODE_ACTION_LOOKUPS = 6;
+const MAX_CODE_ACTION_TITLES = 3;
+
+function normalizeActionTitle(title: string): string {
+	return title.replace(/\s+/g, " ").trim();
+}
+
+function buildCodeActionSuggestion(
+	actions: import("../../lsp/client.js").LSPCodeAction[],
+): string | undefined {
+	if (!actions.length) return undefined;
+
+	const quickFixFirst = [...actions].sort((a, b) => {
+		const aQuick = a.kind?.startsWith("quickfix") ? 0 : 1;
+		const bQuick = b.kind?.startsWith("quickfix") ? 0 : 1;
+		return aQuick - bQuick;
+	});
+
+	const titles = Array.from(
+		new Set(
+			quickFixFirst
+				.map((action) => normalizeActionTitle(action.title))
+				.filter((title) => title.length > 0),
+		),
+	).slice(0, MAX_CODE_ACTION_TITLES);
+
+	if (!titles.length) return undefined;
+	return `LSP quick fixes: ${titles.join("; ")}`;
+}
 
 const lspRunner: RunnerDefinition = {
 	id: "lsp",
@@ -125,9 +154,35 @@ const lspRunner: RunnerDefinition = {
 
 		// Convert LSP diagnostics to our format
 		// Defensive: filter out malformed diagnostics that may lack range
-		const diagnostics: Diagnostic[] = lspDiags
-			.filter((d) => d.range?.start?.line !== undefined)
-			.map((d) => ({
+		const validLspDiags = lspDiags.filter((d) => d.range?.start?.line !== undefined);
+		const fixSuggestionByIndex = new Map<number, string>();
+
+		const blockingDiagIndexes = validLspDiags
+			.map((d, idx) => ({ d, idx }))
+			.filter(({ d }) => d.severity === 1)
+			.slice(0, MAX_CODE_ACTION_LOOKUPS);
+
+		for (const { d, idx } of blockingDiagIndexes) {
+			try {
+				const start = d.range.start;
+				const end = d.range.end ?? d.range.start;
+				const actions = await lspService.codeAction(
+					ctx.filePath,
+					start.line,
+					start.character,
+					end.line,
+					end.character,
+				);
+				const suggestion = buildCodeActionSuggestion(actions);
+				if (suggestion) {
+					fixSuggestionByIndex.set(idx, suggestion);
+				}
+			} catch {
+				// Best-effort enrichment only; base diagnostics remain authoritative.
+			}
+		}
+
+		const diagnostics: Diagnostic[] = validLspDiags.map((d, idx) => ({
 				id: `lsp:${d.code ?? "unknown"}:${d.range.start.line}`,
 				message: d.message,
 				filePath: diagnosticPath,
@@ -143,6 +198,8 @@ const lspRunner: RunnerDefinition = {
 							: "none",
 				tool: "lsp",
 				code: String(d.code ?? ""),
+				fixable: fixSuggestionByIndex.has(idx),
+				fixSuggestion: fixSuggestionByIndex.get(idx),
 			}));
 
 		const hasErrors = diagnostics.some((d) => d.semantic === "blocking");

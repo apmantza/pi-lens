@@ -135,6 +135,9 @@ export async function handleSessionStart(
 	if (getFlag("lens-lsp") && !getFlag("no-lsp")) {
 		resetLSPService();
 		dbg("session_start: LSP service reset");
+		dbg(
+			"session_start: phase0 workspace diagnostics observation enabled (capability probe only)",
+		);
 	}
 
 	if (getFlag("auto-install")) {
