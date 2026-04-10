@@ -740,20 +740,36 @@ pi.on("turn_end", async (_event, ctx) => {
 // --- Inject turn-end findings into next agent turn ---
 // jscpd, madge, and turn-end delta results are cached at turn_end and consumed here
 // via the context event, which fires before each provider request.
+// Important: context handlers must APPEND to the existing message list, not replace it.
+// Replacing `event.messages` can drop the user's first prompt entirely, which causes
+// OpenAI Responses requests to fail with: "One of input/previous_response_id/prompt/conversation_id must be provided."
 // biome-ignore lint/suspicious/noExplicitAny: pi.on("context") overload has TS resolution bug
-(pi as any).on("context", async (_event: unknown, ctx: { cwd?: string }) => {
-	try {
-		const cwd = ctx.cwd ?? process.cwd();
-		const turnEndFindings = consumeTurnEndFindings(cacheManager, cwd);
-		const sessionGuidance = consumeSessionStartGuidance(cacheManager, cwd);
-		const messages = [
-			...(sessionGuidance?.messages ?? []),
-			...(turnEndFindings?.messages ?? []),
-		];
-		if (messages.length === 0) return;
-		return { messages };
-	} catch (err) {
-		dbg(`context event error: ${err}`);
-	}
-});
+(pi as any).on(
+	"context",
+	async (
+		event: { messages?: Array<{ role: string; content: unknown }> } | unknown,
+		ctx: { cwd?: string },
+	) => {
+		try {
+			const cwd = ctx.cwd ?? process.cwd();
+			const turnEndFindings = consumeTurnEndFindings(cacheManager, cwd);
+			const sessionGuidance = consumeSessionStartGuidance(cacheManager, cwd);
+			const injectedMessages = [
+				...(sessionGuidance?.messages ?? []),
+				...(turnEndFindings?.messages ?? []),
+			];
+			if (injectedMessages.length === 0) return;
+
+			const existingMessages =
+				(event as { messages?: Array<{ role: string; content: unknown }> })
+					?.messages ?? [];
+
+			return {
+				messages: [...existingMessages, ...injectedMessages],
+			};
+		} catch (err) {
+			dbg(`context event error: ${err}`);
+		}
+	},
+);
 }
