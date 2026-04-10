@@ -424,6 +424,55 @@ export const TypeScriptServer: LSPServerInfo = {
 	},
 };
 
+export const DenoServer: LSPServerInfo = {
+	id: "deno",
+	name: "Deno Language Server",
+	installPolicy: "none",
+	extensions: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"],
+	root: createRootDetector(["deno.json", "deno.jsonc"]),
+	async spawn(root) {
+		try {
+			const proc = await launchLSP("deno", ["lsp"], { cwd: root });
+			return { process: proc, source: "direct" };
+		} catch {
+			return undefined;
+		}
+	},
+};
+
+export const BiomeLspServer: LSPServerInfo = {
+	id: "biome-lsp",
+	name: "Biome LSP Proxy",
+	installPolicy: "package-manager",
+	extensions: [
+		".ts",
+		".tsx",
+		".js",
+		".jsx",
+		".mjs",
+		".cjs",
+		".mts",
+		".cts",
+		".json",
+		".jsonc",
+		".css",
+		".scss",
+		".sass",
+		".less",
+	],
+	root: PriorityRoot([["biome.json", "biome.jsonc", "package.json"], [".git"]]),
+	async spawn(root, options) {
+		const launched = await launchWithDirectOrPackageManager(
+			nodeBinCandidates(root, "biome"),
+			"@biomejs/biome",
+			["lsp-proxy"],
+			{ cwd: root, allowInstall: options?.allowInstall },
+		);
+		if (!launched) return undefined;
+		return { process: launched.process, source: launched.source };
+	},
+};
+
 export const PythonServer: LSPServerInfo = {
 	id: "python",
 	name: "Pyright Language Server",
@@ -507,7 +556,7 @@ export const PythonServer: LSPServerInfo = {
 		}
 
 		// Spawn the LSP server
-		let proc;
+		let proc: LSPProcess;
 		if (langserverPath) {
 			// Use resolved langserver path
 			proc = await launchLSP(langserverPath, ["--stdio"], {
@@ -564,6 +613,30 @@ export const PythonServer: LSPServerInfo = {
 		}
 
 		return { process: proc, initialization, source };
+	},
+};
+
+export const PythonPylspServer: LSPServerInfo = {
+	id: "python-pylsp",
+	name: "Python LSP Server (pylsp)",
+	installPolicy: "none",
+	extensions: [".py", ".pyi"],
+	root: createRootDetector([
+		".git",
+		"pyproject.toml",
+		"setup.py",
+		"setup.cfg",
+		"requirements.txt",
+		"Pipfile",
+		"poetry.lock",
+	]),
+	async spawn(root) {
+		try {
+			const proc = await launchLSP("pylsp", [], { cwd: root });
+			return { process: proc, source: "direct" };
+		} catch {
+			return undefined;
+		}
 	},
 };
 
@@ -660,6 +733,22 @@ export const RubyServer: LSPServerInfo = {
 	},
 };
 
+export const RubySolargraphServer: LSPServerInfo = {
+	id: "ruby-solargraph",
+	name: "Solargraph",
+	installPolicy: "none",
+	extensions: [".rb", ".rake", ".gemspec", ".ru"],
+	root: PriorityRoot([["Gemfile", ".ruby-version"], [".git"]]),
+	async spawn(root) {
+		try {
+			const proc = await launchLSP("solargraph", ["stdio"], { cwd: root });
+			return { process: proc, source: "direct" };
+		} catch {
+			return undefined;
+		}
+	},
+};
+
 export const PHPServer: LSPServerInfo = {
 	id: "php",
 	name: "Intelephense",
@@ -689,6 +778,16 @@ export const CSharpServer = createInteractiveServer({
 	root: createRootDetector([".sln", ".csproj", ".slnx"]),
 	language: "csharp",
 	command: "csharp-ls",
+});
+
+export const OmniSharpServer = createInteractiveServer({
+	id: "omnisharp",
+	name: "OmniSharp",
+	extensions: [".cs"],
+	root: createRootDetector([".sln", ".csproj", ".slnx"]),
+	language: "csharp",
+	command: "OmniSharp",
+	args: ["--languageserver"],
 });
 
 export const FSharpServer = createInteractiveServer({
@@ -912,6 +1011,34 @@ export const JsonServer: LSPServerInfo = {
 	},
 };
 
+export const HtmlServer: LSPServerInfo = {
+	id: "html",
+	name: "VSCode HTML Language Server",
+	installPolicy: "package-manager",
+	extensions: [".html", ".htm"],
+	root: PriorityRoot([["package.json", "index.html", "vite.config.ts"], [".git"]]),
+	async spawn(_root, options) {
+		const launched = await launchWithDirectOrPackageManager(
+			nodeBinCandidates(process.cwd(), "vscode-html-language-server"),
+			"vscode-html-languageserver-bin",
+			["--stdio"],
+			{ cwd: process.cwd(), allowInstall: options?.allowInstall },
+		);
+		if (!launched) return undefined;
+		return { process: launched.process, source: launched.source };
+	},
+};
+
+export const TomlServer = createInteractiveServer({
+	id: "toml",
+	name: "Taplo",
+	extensions: [".toml"],
+	root: PriorityRoot([["pyproject.toml", "Cargo.toml", "taplo.toml"], [".git"]]),
+	language: "toml",
+	command: "taplo",
+	args: ["lsp", "stdio"],
+});
+
 export const PrismaServer: LSPServerInfo = {
 	id: "prisma",
 	name: "Prisma Language Server",
@@ -1036,12 +1163,17 @@ export const CssServer: LSPServerInfo = {
 
 export const LSP_SERVERS: LSPServerInfo[] = [
 	TypeScriptServer,
+	DenoServer,
+	BiomeLspServer,
 	PythonServer,
+	PythonPylspServer,
 	GoServer,
 	RustServer,
 	RubyServer,
+	RubySolargraphServer,
 	PHPServer,
 	CSharpServer,
+	OmniSharpServer,
 	FSharpServer,
 	JavaServer,
 	KotlinServer,
@@ -1061,6 +1193,8 @@ export const LSP_SERVERS: LSPServerInfo[] = [
 	DockerServer,
 	YamlServer,
 	JsonServer,
+	HtmlServer,
+	TomlServer,
 	PrismaServer,
 	// Web frameworks & styling
 	VueServer,
