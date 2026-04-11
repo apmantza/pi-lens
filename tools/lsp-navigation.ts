@@ -64,6 +64,7 @@ function classifyCodeActions(
 async function openFileBestEffort(
 	lspService: ReturnType<typeof getLSPService>,
 	filePath: string,
+	waitForDiagnostics = false,
 ): Promise<void> {
 	let fileContent: string | undefined;
 	try {
@@ -73,7 +74,11 @@ async function openFileBestEffort(
 	}
 	if (!fileContent) return;
 	try {
-		await lspService.openFile(filePath, fileContent);
+		if (typeof lspService.touchFile === "function") {
+			await lspService.touchFile(filePath, fileContent, waitForDiagnostics);
+		} else {
+			await lspService.openFile(filePath, fileContent);
+		}
 	} catch {
 		/* LSP server may not be ready yet — proceed anyway */
 	}
@@ -519,8 +524,7 @@ export function createLspNavigationTool(
 						"implementation",
 					].includes(operation);
 				if (shouldRetryOnEmpty) {
-					await new Promise((resolve) => setTimeout(resolve, 180));
-					await openFileBestEffort(lspService, filePath);
+					await openFileBestEffort(lspService, filePath, true);
 					result = await runOperation();
 				}
 			} catch (err) {
