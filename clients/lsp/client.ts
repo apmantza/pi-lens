@@ -225,6 +225,14 @@ const DIAGNOSTICS_WAIT_TIMEOUT_MS = positiveIntFromEnv(
 	"PI_LENS_LSP_DIAGNOSTICS_WAIT_MS",
 	10_000,
 );
+const PULL_DIAGNOSTICS_RETRY_BUDGET_MS = positiveIntFromEnv(
+	"PI_LENS_LSP_PULL_RETRY_BUDGET_MS",
+	1200,
+);
+const PULL_DIAGNOSTICS_RETRY_INTERVAL_MS = positiveIntFromEnv(
+	"PI_LENS_LSP_PULL_RETRY_INTERVAL_MS",
+	250,
+);
 
 const LSP_CRASH_CODES = new Set([
 	"ERR_STREAM_DESTROYED",
@@ -592,8 +600,27 @@ export async function createLSPClient(options: {
 			const normalizedPath = normalizeMapKey(filePath);
 
 			if (workspaceDiagnosticsSupport.mode === "pull") {
-				const pulled = await requestPullDiagnostics(filePath);
-				if (pulled) return;
+				const firstPullCount = await requestPullDiagnostics(filePath);
+				if (firstPullCount > 0) return;
+
+				const retryBudgetMs = Math.min(
+					timeoutMs,
+					PULL_DIAGNOSTICS_RETRY_BUDGET_MS,
+				);
+				const startedAt = Date.now();
+				let latestCount = firstPullCount;
+
+				while (
+					latestCount === 0 &&
+					Date.now() - startedAt < retryBudgetMs
+				) {
+					await new Promise((resolve) =>
+						setTimeout(resolve, PULL_DIAGNOSTICS_RETRY_INTERVAL_MS),
+					);
+					latestCount = await requestPullDiagnostics(filePath);
+				}
+
+				return;
 			}
 
 			// Fast path: diagnostics already available
@@ -841,8 +868,8 @@ export async function createLSPClient(options: {
 		},
 	};
 
-	async function requestPullDiagnostics(filePath: string): Promise<boolean> {
-		if (!isProcessAlive()) return false;
+	async function requestPullDiagnostics(filePath: string): Promise<number> {
+		if (!isProcessAlive()) return 0;
 		const uri = pathToFileURL(filePath).href;
 		try {
 			const report = await safeSendRequest<{
@@ -853,24 +880,28 @@ export async function createLSPClient(options: {
 				textDocument: { uri },
 			});
 
-			if (!report) return false;
+			if (!report) return 0;
 
 			const normalizedPath = normalizeMapKey(filePath);
-			diagnostics.set(normalizedPath, report.items ?? []);
+			const primaryItems = report.items ?? [];
+			diagnostics.set(normalizedPath, primaryItems);
+			let totalCount = primaryItems.length;
 
 			if (report.relatedDocuments) {
 				for (const [relatedUri, related] of Object.entries(
 					report.relatedDocuments,
 				)) {
 					const relatedPath = uriToPath(relatedUri);
-					diagnostics.set(normalizeMapKey(relatedPath), related?.items ?? []);
+					const relatedItems = related?.items ?? [];
+					diagnostics.set(normalizeMapKey(relatedPath), relatedItems);
+					totalCount += relatedItems.length;
 				}
 			}
 
 			diagnosticEmitter.emit("diagnostics", normalizedPath);
-			return true;
+			return totalCount;
 		} catch {
-			return false;
+			return 0;
 		}
 	}
 }
