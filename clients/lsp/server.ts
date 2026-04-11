@@ -712,11 +712,11 @@ export const RubyServer: LSPServerInfo = {
 		const proc = await spawnWithInteractiveInstall(
 			"ruby",
 			"ruby-lsp",
-			["--stdio"],
+			[],
 			{ cwd: root, allowInstall: options?.allowInstall },
 			async () => {
 				try {
-					return await launchLSP("ruby-lsp", ["--stdio"], { cwd: root });
+					return await launchLSP("ruby-lsp", [], { cwd: root });
 				} catch {
 					try {
 						return await launchLSP("solargraph", ["stdio"], { cwd: root });
