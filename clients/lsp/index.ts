@@ -325,20 +325,26 @@ export class LSPService {
 		content: string,
 		waitForDiagnostics = false,
 		source = "unknown",
+		useAllClients = false,
 	): Promise<void> {
 		const startedAt = Date.now();
 		const normalizedPath = normalizeMapKey(filePath);
-		const spawned = await this.getClientsForFile(filePath);
+		const spawned = useAllClients
+			? await this.getClientsForFile(filePath)
+			: await this.getClientForFile(filePath).then((entry) =>
+					entry ? [entry] : [],
+				);
 		if (spawned.length === 0) {
 			logLatency({
 				type: "phase",
 				phase: "lsp_touch_file",
 				filePath: normalizedPath,
 				durationMs: Date.now() - startedAt,
-				metadata: {
-					serverCountReady: 0,
-					failureKind: "no_clients",
-				},
+			metadata: {
+				serverCountReady: 0,
+				clientScope: useAllClients ? "all" : "primary",
+				failureKind: "no_clients",
+			},
 			});
 			return;
 		}
@@ -363,6 +369,7 @@ export class LSPService {
 			durationMs: Date.now() - startedAt,
 			metadata: {
 				serverCountReady: spawned.length,
+				clientScope: useAllClients ? "all" : "primary",
 				waitForDiagnostics,
 				source,
 				failureKind: "success",
