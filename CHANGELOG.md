@@ -2,6 +2,20 @@
 
 All notable changes to pi-lens will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **LSP auto-touch warm-up** — tool-call flow now proactively opens/syncs supported files (`read`/`write`/`edit`/`lsp_navigation`) so LSP clients warm up earlier and first semantic requests are less likely to return cold-start empties.
+
+### Changed
+- **Ruby LSP spawn resilience on Windows** — Ruby command discovery now tries `ruby-lsp`/`solargraph` from PATH plus common Ruby install locations before marking servers unavailable.
+- **LSP diagnostics dedupe strategy** — multi-server diagnostics aggregation now dedupes using a simpler key (`line`, `character`, `message`) to better collapse equivalent findings across servers.
+
+### Fixed
+- **LSP diagnostics key normalization** — publish diagnostics now store/update using normalized file-path keys, fixing Windows path mismatches that could hide diagnostics in some languages.
+- **Pull diagnostics fallback path** — when a server advertises pull diagnostics, `textDocument/diagnostic` is now attempted before push-wait fallback.
+- **Navigation diagnostics/health observability** — `lsp_navigation` and diagnostics aggregation now emit explicit `failureKind`/health metadata to latency logs and tool details for faster root-cause triage (`no_server`, `unsupported`, `empty_result`, `lsp_error`, etc.).
+
 ## [3.8.22] - 2026-04-09
 
 ### Changed
