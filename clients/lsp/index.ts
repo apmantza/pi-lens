@@ -55,6 +55,7 @@ export class LSPService {
 	private state: LSPState;
 	private languagePolicyCache = new Map<string, { allowInstall: boolean; expiresAt: number }>();
 	private workspaceProbeLogged = new Set<string>();
+	private warmStartLogged = new Set<string>();
 	private emitConsoleLspErrors = process.env.PI_LENS_CONSOLE_LSP === "1";
 
 	constructor() {
@@ -142,6 +143,12 @@ export class LSPService {
 				this.state.clients.delete(key);
 				this.state.broken.delete(key);
 			} else {
+				if (!this.warmStartLogged.has(key)) {
+					logSessionStart(
+						`lsp warm-start ${server.id}: reused root=${root} file=${filePath}`,
+					);
+					this.warmStartLogged.add(key);
+				}
 				return { client: existing, info: server };
 			}
 		}
@@ -317,6 +324,7 @@ export class LSPService {
 		filePath: string,
 		content: string,
 		waitForDiagnostics = false,
+		source = "unknown",
 	): Promise<void> {
 		const startedAt = Date.now();
 		const normalizedPath = normalizeMapKey(filePath);
@@ -356,6 +364,7 @@ export class LSPService {
 			metadata: {
 				serverCountReady: spawned.length,
 				waitForDiagnostics,
+				source,
 				failureKind: "success",
 			},
 		});
@@ -683,6 +692,7 @@ export class LSPService {
 		this.state.clients.clear();
 		this.state.broken.clear();
 		this.workspaceProbeLogged.clear();
+		this.warmStartLogged.clear();
 	}
 
 	/**

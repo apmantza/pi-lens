@@ -564,7 +564,7 @@ pi.on("tool_call", async (event, ctx) => {
 		try {
 			const fileContent = nodeFs.readFileSync(filePath, "utf-8");
 			void getLSPService()
-				.touchFile(filePath, fileContent, false)
+				.touchFile(filePath, fileContent, false, `tool_call:${toolName}`)
 				.catch((err) => dbg(`lsp auto-touch failed for ${filePath}: ${err}`));
 		} catch {
 			// Best effort only; never block tool calls.
