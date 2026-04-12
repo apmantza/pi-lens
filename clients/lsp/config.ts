@@ -55,17 +55,25 @@ const CONFIG_PATHS = [".pi-lens/lsp.json", ".pi-lens.json", "pi-lsp.json"];
  * Load LSP configuration from file
  */
 export async function loadLSPConfig(cwd: string): Promise<LSPConfig> {
-	for (const configPath of CONFIG_PATHS) {
-		const fullPath = path.join(cwd, configPath);
-		try {
-			const content = await fs.readFile(fullPath, "utf-8");
-			const config = JSON.parse(content) as LSPConfig;
-			console.error(`[lsp-config] Loaded config from ${configPath}`);
-			return config;
-		} catch {
-			// File doesn't exist or is invalid, try next
+	let dir = path.resolve(cwd);
+	while (true) {
+		for (const configPath of CONFIG_PATHS) {
+			const fullPath = path.join(dir, configPath);
+			try {
+				const content = await fs.readFile(fullPath, "utf-8");
+				const config = JSON.parse(content) as LSPConfig;
+				console.error(`[lsp-config] Loaded config from ${fullPath}`);
+				return config;
+			} catch {
+				// File doesn't exist or is invalid, try next
+			}
 		}
+
+		const parent = path.dirname(dir);
+		if (parent === dir) break;
+		dir = parent;
 	}
+
 	return {};
 }
 
