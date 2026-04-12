@@ -41,7 +41,7 @@ function createArchitectFallback(): ArchitectClient {
 		checkFile: () => [],
 		checkFileSize: () => null,
 		getHints: () => [],
-	} as ArchitectClient;
+	} as unknown as ArchitectClient;
 }
 
 export function loadBootstrapClients(): Promise<BootstrapClients> {

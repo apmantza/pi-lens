@@ -16,7 +16,11 @@ import {
 import { extractFunctions } from "./clients/dispatch/runners/similarity.js";
 import { resetFormatService } from "./clients/format-service.js";
 import { evaluateGitGuard, isGitCommitOrPushAttempt } from "./clients/git-guard.js";
+import { ensureTool } from "./clients/installer/index.js";
+import { initLSPConfig } from "./clients/lsp/config.js";
 import { getLSPService, resetLSPService } from "./clients/lsp/index.js";
+import { captureSnapshot } from "./clients/metrics-history.js";
+import { findSimilarFunctions } from "./clients/project-index.js";
 import { RuntimeCoordinator } from "./clients/runtime-coordinator.js";
 import {
 	consumeSessionStartGuidance,
@@ -55,9 +59,17 @@ function dbg(msg: string) {
 
 let _verbose = false;
 const runtime = new RuntimeCoordinator();
+const _lspConfigInitializedCwds = new Set<string>();
 
 function log(msg: string) {
 	if (_verbose) console.error(`[pi-lens] ${msg}`);
+}
+
+async function ensureLSPConfigInitialized(cwd: string): Promise<void> {
+	const normalizedCwd = path.resolve(cwd);
+	if (_lspConfigInitializedCwds.has(normalizedCwd)) return;
+	await initLSPConfig(normalizedCwd);
+	_lspConfigInitializedCwds.add(normalizedCwd);
 }
 
 function updateRuntimeIdentityFromEvent(event: unknown): void {
@@ -453,6 +465,11 @@ pi.on("session_start", async (event, ctx) => {
 		_verbose = !!pi.getFlag("lens-verbose");
 		dbg("session_start fired");
 		updateRuntimeIdentityFromEvent(event);
+		try {
+			await ensureLSPConfigInitialized(ctx.cwd ?? process.cwd());
+		} catch (cfgErr) {
+			dbg(`lsp config init failed: ${cfgErr}`);
+		}
 
 		const {
 			metricsClient,
@@ -530,6 +547,17 @@ pi.on("tool_call", async (event, ctx) => {
 			? rawFilePath
 			: path.resolve(ctx.cwd ?? runtime.projectRoot, rawFilePath)
 		: undefined;
+
+	if (pi.getFlag("lens-lsp") && !pi.getFlag("no-lsp")) {
+		try {
+			const configCwd = filePath
+				? path.dirname(filePath)
+				: (ctx.cwd ?? runtime.projectRoot ?? process.cwd());
+			await ensureLSPConfigInitialized(configCwd);
+		} catch (cfgErr) {
+			dbg(`lsp config init failed during tool_call: ${cfgErr}`);
+		}
+	}
 
 	if (!filePath) return;
 

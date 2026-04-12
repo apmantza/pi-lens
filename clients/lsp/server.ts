@@ -740,7 +740,7 @@ export const RubyServer: LSPServerInfo = {
 	extensions: [".rb", ".rake", ".gemspec", ".ru"],
 	root: PriorityRoot([["Gemfile", ".ruby-version"], [".git"]]),
 	async spawn(root, options) {
-		// Try ruby-lsp first (prompts to install via gem if missing), fall back to solargraph
+		// Try ruby-lsp first, then solargraph, then rubocop --lsp
 		const proc = await spawnWithInteractiveInstall(
 			"ruby",
 			"ruby-lsp",
@@ -760,6 +760,14 @@ export const RubyServer: LSPServerInfo = {
 						return await launchLSP(command, ["stdio"], { cwd: root });
 					} catch {
 						// try next solargraph candidate
+					}
+				}
+
+				for (const command of ["rubocop", ...rubyBinCandidates("rubocop")]) {
+					try {
+						return await launchLSP(command, ["--lsp"], { cwd: root });
+					} catch {
+						// try next rubocop candidate
 					}
 				}
 
