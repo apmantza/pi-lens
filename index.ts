@@ -4,13 +4,9 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
-import { AgentBehaviorClient } from "./clients/agent-behavior-client.js";
-import { ArchitectClient } from "./clients/architect-client.js";
 import { AstGrepClient } from "./clients/ast-grep-client.js";
-import { BiomeClient } from "./clients/biome-client.js";
 import { CacheManager } from "./clients/cache-manager.js";
-import { ComplexityClient } from "./clients/complexity-client.js";
-import { DependencyChecker } from "./clients/dependency-checker.js";
+import { loadBootstrapClients } from "./clients/bootstrap.js";
 import { getDiagnosticTracker } from "./clients/diagnostic-tracker.js";
 import {
 	getDispatchSlopScoreLine,
@@ -20,15 +16,7 @@ import {
 import { extractFunctions } from "./clients/dispatch/runners/similarity.js";
 import { resetFormatService } from "./clients/format-service.js";
 import { evaluateGitGuard, isGitCommitOrPushAttempt } from "./clients/git-guard.js";
-import { GoClient } from "./clients/go-client.js";
-import { ensureTool } from "./clients/installer/index.js";
-import { JscpdClient } from "./clients/jscpd-client.js";
-import { KnipClient } from "./clients/knip-client.js";
 import { getLSPService, resetLSPService } from "./clients/lsp/index.js";
-import { MetricsClient } from "./clients/metrics-client.js";
-import { captureSnapshot } from "./clients/metrics-history.js";
-import { findSimilarFunctions } from "./clients/project-index.js";
-import { RuffClient } from "./clients/ruff-client.js";
 import { RuntimeCoordinator } from "./clients/runtime-coordinator.js";
 import {
 	consumeSessionStartGuidance,
@@ -38,11 +26,6 @@ import { handleSessionStart } from "./clients/runtime-session.js";
 import { handleToolResult } from "./clients/runtime-tool-result.js";
 import { handleTurnEnd } from "./clients/runtime-turn.js";
 import { formatRulesForPrompt } from "./clients/rules-scanner.js";
-import { RustClient } from "./clients/rust-client.js";
-import { TestRunnerClient } from "./clients/test-runner-client.js";
-import { TodoScanner } from "./clients/todo-scanner.js";
-import { TypeCoverageClient } from "./clients/type-coverage-client.js";
-import { TypeScriptClient } from "./clients/typescript-client.js";
 import { handleBooboo } from "./commands/booboo.js";
 import { createAstGrepReplaceTool } from "./tools/ast-grep-replace.js";
 import { createAstGrepSearchTool } from "./tools/ast-grep-search.js";
@@ -136,23 +119,9 @@ function cleanStaleTsBuildInfo(cwd: string): string[] {
 // --- Extension ---
 
 export default function (pi: ExtensionAPI) {
-	const tsClient = new TypeScriptClient();
 	const astGrepClient = new AstGrepClient();
-	const ruffClient = new RuffClient();
-	const biomeClient = new BiomeClient();
-	const knipClient = new KnipClient();
-	const todoScanner = new TodoScanner();
-	const jscpdClient = new JscpdClient();
-	const typeCoverageClient = new TypeCoverageClient();
-	const depChecker = new DependencyChecker();
-	const testRunnerClient = new TestRunnerClient();
-	const metricsClient = new MetricsClient();
-	const complexityClient = new ComplexityClient();
-	const architectClient = new ArchitectClient();
-	const goClient = new GoClient();
-	const rustClient = new RustClient();
-	const agentBehaviorClient = new AgentBehaviorClient();
 	const cacheManager = new CacheManager();
+
 
 	// --- Flags ---
 
@@ -299,8 +268,9 @@ export default function (pi: ExtensionAPI) {
 	pi.registerCommand("lens-booboo", {
 		description:
 			"Full codebase review: design smells, complexity, AI slop detection, TODOs, dead code, duplicates, type coverage. Results saved to .pi-lens/reviews/. Usage: /lens-booboo [path]",
-		handler: (args, ctx) =>
-			handleBooboo(
+		handler: async (args, ctx) => {
+			const { complexityClient, todoScanner, knipClient, jscpdClient, typeCoverageClient, depChecker, architectClient } = await loadBootstrapClients();
+			return handleBooboo(
 				args,
 				ctx,
 				{
@@ -310,11 +280,12 @@ export default function (pi: ExtensionAPI) {
 					knip: knipClient,
 					jscpd: jscpdClient,
 					typeCoverage: typeCoverageClient,
-					depChecker: depChecker,
+					depChecker,
 					architect: architectClient,
 				},
 				pi,
-			),
+			);
+		},
 	});
 
 	// DISABLED: lens-booboo-fix command - disabled per user request
@@ -483,6 +454,20 @@ pi.on("session_start", async (event, ctx) => {
 		dbg("session_start fired");
 		updateRuntimeIdentityFromEvent(event);
 
+		const {
+			metricsClient,
+			todoScanner,
+			biomeClient,
+			ruffClient,
+			knipClient,
+			jscpdClient,
+			typeCoverageClient,
+			depChecker,
+			architectClient,
+			testRunnerClient,
+			goClient,
+			rustClient,
+		} = await loadBootstrapClients();
 		await handleSessionStart({
 			ctxCwd: ctx.cwd,
 			getFlag: (name: string) => pi.getFlag(name),
@@ -571,6 +556,7 @@ pi.on("tool_call", async (event, ctx) => {
 		}
 	}
 
+	const { complexityClient } = await loadBootstrapClients();
 	// Record complexity baseline for historical tracking (booboo/tdi).
 	// Not shown inline — just captured for delta analysis.
 	if (
@@ -711,6 +697,13 @@ pi.on("tool_call", async (event, ctx) => {
 // biome-ignore lint/suspicious/noExplicitAny: pi.on overload mismatch for tool_result event type
 (pi as any).on("tool_result", async (event: any) => {
 	updateRuntimeIdentityFromEvent(event);
+	const {
+		biomeClient,
+		ruffClient,
+		testRunnerClient,
+		metricsClient,
+		agentBehaviorClient,
+	} = await loadBootstrapClients();
 	return handleToolResult({
 		event: event as any,
 		getFlag: (name: string) => pi.getFlag(name),
@@ -747,6 +740,7 @@ pi.on("turn_start", () => {
 
 pi.on("turn_end", async (_event, ctx) => {
 	try {
+		const { jscpdClient, knipClient, depChecker } = await loadBootstrapClients();
 		await handleTurnEnd({
 			ctxCwd: ctx.cwd,
 			getFlag: (name: string) => pi.getFlag(name),
