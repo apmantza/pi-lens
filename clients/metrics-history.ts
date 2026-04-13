@@ -46,9 +46,29 @@ const MAX_HISTORY_PER_FILE = 20;
 // --- Git Helpers ---
 
 /**
+ * Check whether cwd is inside a Git worktree.
+ */
+function isInsideGitRepo(startDir: string): boolean {
+	let dir = path.resolve(startDir);
+	while (true) {
+		if (fs.existsSync(path.join(dir, ".git"))) {
+			return true;
+		}
+		const parent = path.dirname(dir);
+		if (parent === dir) break;
+		dir = parent;
+	}
+	return false;
+}
+
+/**
  * Get current git commit hash (short)
  */
 function getCurrentCommit(): string {
+	if (!isInsideGitRepo(process.cwd())) {
+		return "unknown";
+	}
+
 	try {
 		return execSync("git rev-parse --short HEAD", {
 			encoding: "utf-8",
