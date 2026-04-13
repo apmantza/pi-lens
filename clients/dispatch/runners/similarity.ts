@@ -40,6 +40,7 @@ const CONFIG = {
 	SIMILARITY_THRESHOLD: 0.96, // align with booboo: stricter to reduce boilerplate false positives
 	MIN_TRANSITIONS: 40, // stronger signal floor for structural comparisons
 	MIN_FUNCTION_LINES: 8, // Ignore tiny helpers/wrappers
+	MIN_FILE_CHARS: 140, // Skip tiny/trivial files early
 	MAX_TRANSITION_RATIO: 1.8, // Skip pairs with highly mismatched complexity/size
 	MAX_SUGGESTIONS: 3, // Max 3 suggestions per file
 	MAX_PER_TARGET_NAME: 1, // Avoid one-to-many spam for the same target utility
@@ -115,9 +116,23 @@ const similarityRunner: RunnerDefinition = {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
+		const lineCount = content.split(/\r?\n/).length;
+		if (
+			content.trim().length < CONFIG.MIN_FILE_CHARS ||
+			lineCount < CONFIG.MIN_FUNCTION_LINES + 2 ||
+			!/(\bfunction\b|=>)/.test(content)
+		) {
+			return { status: "skipped", diagnostics: [], semantic: "none" };
+		}
+
 		// Find project root and load index
 		const projectRoot = await findProjectRoot(filePath);
 		if (!projectRoot) {
+			return { status: "skipped", diagnostics: [], semantic: "none" };
+		}
+
+		const cachedIndex = await loadCachedIndex(projectRoot);
+		if (!cachedIndex || cachedIndex.entries.size === 0) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
@@ -139,10 +154,7 @@ const similarityRunner: RunnerDefinition = {
 		}
 		// ── TypeScript fallback ─────────────────────────────────────────────────
 
-		const index = await loadOrBuildIndex(projectRoot);
-		if (!index || index.entries.size === 0) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
-		}
+		const index = cachedIndex;
 
 		// Parse the file
 		const sourceFile = ts.createSourceFile(
@@ -531,6 +543,21 @@ async function loadOrBuildIndex(
 
 	indexCache.set(projectRoot, index);
 	return index;
+}
+
+async function loadCachedIndex(projectRoot: string): Promise<ProjectIndex | null> {
+	const cached = indexCache.get(projectRoot);
+	if (cached) {
+		return cached;
+	}
+
+	const existing = await loadIndex(projectRoot);
+	if (!existing) {
+		return null;
+	}
+
+	indexCache.set(projectRoot, existing);
+	return existing;
 }
 
 // ============================================================================
