@@ -13,7 +13,6 @@ import {
 	getLatencyReports,
 	resetDispatchBaselines,
 } from "./clients/dispatch/integration.js";
-import { extractFunctions } from "./clients/dispatch/runners/similarity.js";
 import { resetFormatService } from "./clients/format-service.js";
 import { evaluateGitGuard, isGitCommitOrPushAttempt } from "./clients/git-guard.js";
 import { ensureTool } from "./clients/installer/index.js";
@@ -506,7 +505,8 @@ pi.on("session_start", async (event, ctx) => {
 			testRunnerClient,
 			goClient,
 			rustClient,
-			ensureTool,
+			ensureTool: async (name: string) =>
+				(await import("./clients/installer/index.js")).ensureTool(name),
 			cleanStaleTsBuildInfo,
 			resetDispatchBaselines,
 			resetLSPService,
@@ -594,6 +594,9 @@ pi.on("tool_call", async (event, ctx) => {
 		const baseline = complexityClient.analyzeFile(filePath);
 		if (baseline) {
 			runtime.complexityBaselines.set(filePath, baseline);
+			const { captureSnapshot } = await import(
+				"./clients/metrics-history.js"
+			);
 			captureSnapshot(filePath, {
 				maintainabilityIndex: baseline.maintainabilityIndex,
 				cognitiveComplexity: baseline.cognitiveComplexity,
@@ -659,6 +662,8 @@ pi.on("tool_call", async (event, ctx) => {
 						ts.ScriptTarget.Latest,
 						true,
 					);
+					const { extractFunctions } = await import("./clients/dispatch/runners/similarity.js");
+					const { findSimilarFunctions } = await import("./clients/project-index.js");
 					const newFunctions = extractFunctions(sourceFile, newContent);
 					const simWarnings: string[] = [];
 					let simHintsTruncated = false;

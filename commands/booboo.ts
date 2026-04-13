@@ -369,33 +369,13 @@ export async function handleBooboo(
 	// Runner 3: Semantic similarity
 	await tracker.run("semantic similarity (Amain)", async () => {
 		try {
-			const { glob } = await import("glob");
-			const sourceFiles = await glob("**/*.ts", {
-				cwd: targetPath,
-				ignore: [
-					"**/node_modules/**",
-					"**/*.test.ts",
-					"**/*.test.tsx",
-					"**/*.spec.ts",
-					"**/*.spec.tsx",
-					"**/*.poc.test.ts",
-					"**/*.poc.test.tsx",
-					"**/test-utils.ts",
-					"**/test-*.ts",
-					"**/__tests__/**",
-					"**/tests/**",
-					"**/dist/**",
-				],
-			});
+			const absoluteFiles = collectSourceFiles(targetPath, {
+				extensions: [".ts"],
+			}).filter(shouldIncludeFile);
 
-			if (sourceFiles.length === 0) {
+			if (absoluteFiles.length === 0) {
 				return { findings: 0, status: "done" };
 			}
-
-			// Filter out test files using centralized exclusion
-			const absoluteFiles = sourceFiles
-				.map((f) => path.join(targetPath, f))
-				.filter(shouldIncludeFile);
 			const index = await buildProjectIndex(targetPath, absoluteFiles);
 			const topPairs = findTopSimilarPairs(index, 10);
 

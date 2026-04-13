@@ -10,13 +10,13 @@ import { getKnipIgnorePatterns } from "./file-utils.js";
 import type { GoClient } from "./go-client.js";
 import type { JscpdClient } from "./jscpd-client.js";
 import type { KnipClient } from "./knip-client.js";
+import { canRunStartupHeavyScans } from "./language-policy.js";
 import {
 	detectProjectLanguageProfile,
 	getDefaultStartupTools,
 	hasLanguage,
 	isLanguageConfigured,
 } from "./language-profile.js";
-import { canRunStartupHeavyScans } from "./language-policy.js";
 import type { MetricsClient } from "./metrics-client.js";
 import {
 	buildProjectIndex,
@@ -64,7 +64,10 @@ interface SessionStartDeps {
 
 type StartupMode = "full" | "minimal" | "quick";
 
-function isCommandAvailable(command: string, args: string[] = ["--version"]): boolean {
+function isCommandAvailable(
+	command: string,
+	args: string[] = ["--version"],
+): boolean {
 	const result = safeSpawn(command, args, { timeout: 5000 });
 	return !result.error && result.status === 0;
 }
@@ -97,7 +100,9 @@ function getLanguageInstallHints(
 	};
 
 	if (hasStrongSignal("go") && !isCommandAvailable("gopls")) {
-		hints.push("Go detected: install gopls (`go install golang.org/x/tools/gopls@latest`).");
+		hints.push(
+			"Go detected: install gopls (`go install golang.org/x/tools/gopls@latest`).",
+		);
 	}
 	if (hasStrongSignal("rust") && !isCommandAvailable("rust-analyzer")) {
 		hints.push(
@@ -174,6 +179,25 @@ export async function handleSessionStart(
 		delete process.env.PI_LENS_DISABLE_LSP_INSTALL;
 	}
 
+	const hasWorkspaceCwd = typeof ctxCwd === "string" && ctxCwd.length > 0;
+	const cwd = ctxCwd ?? process.cwd();
+	if (quickMode) {
+		runtime.projectRoot = cwd;
+		const quickTools: string[] = [];
+		if (getFlag("lens-lsp") && !getFlag("no-lsp")) {
+			quickTools.push("LSP Service");
+		}
+		log(`Active tools: ${quickTools.join(", ")}`);
+		dbg(
+			`session_start tools: ${quickTools.join(", ") || "deferred (quick mode)"}`,
+		);
+		dbg(
+			"session_start: quick mode active - skipping slow tool probes, language profiling, preinstall, scans, and error debt baseline",
+		);
+		dbg(`session_start total: ${Date.now() - sessionStartMs}ms`);
+		return;
+	}
+
 	const tools: string[] = [];
 	if (getFlag("lens-lsp") && !getFlag("no-lsp")) {
 		tools.push("LSP Service");
@@ -198,17 +222,6 @@ export async function handleSessionStart(
 			);
 			dbg(`session_start: cleaned stale tsbuildinfo: ${cleaned.join(", ")}`);
 		}
-	}
-
-	const hasWorkspaceCwd = typeof ctxCwd === "string" && ctxCwd.length > 0;
-	const cwd = ctxCwd ?? process.cwd();
-	if (quickMode) {
-		runtime.projectRoot = cwd;
-		dbg(
-			"session_start: quick mode active - skipping language profiling, preinstall, scans, and error debt baseline",
-		);
-		dbg(`session_start total: ${Date.now() - sessionStartMs}ms`);
-		return;
 	}
 
 	const startupScan = resolveStartupScanContext(cwd);
@@ -236,18 +249,20 @@ export async function handleSessionStart(
 	}
 
 	const lensLspEnabled = !!getFlag("lens-lsp") && !getFlag("no-lsp");
-	const startupDefaults = getDefaultStartupTools(languageProfile).filter((tool) => {
-		if (
-			(tool === "typescript-language-server" || tool === "pyright") &&
-			!lensLspEnabled
-		) {
-			return false;
-		}
-		if (tool === "ruff" && getFlag("no-autofix-ruff")) {
-			return false;
-		}
-		return true;
-	});
+	const startupDefaults = getDefaultStartupTools(languageProfile).filter(
+		(tool) => {
+			if (
+				(tool === "typescript-language-server" || tool === "pyright") &&
+				!lensLspEnabled
+			) {
+				return false;
+			}
+			if (tool === "ruff" && getFlag("no-autofix-ruff")) {
+				return false;
+			}
+			return true;
+		},
+	);
 
 	if (!allowBootstrapTasks) {
 		dbg("session_start: skipping tool preinstall (startup mode)");
@@ -369,7 +384,9 @@ export async function handleSessionStart(
 		runtime.markStartupScanInFlight(name, sessionGeneration);
 		void task()
 			.then(() => {
-				dbg(`session_start task ${name}: success (${Date.now() - startedAt}ms)`);
+				dbg(
+					`session_start task ${name}: success (${Date.now() - startedAt}ms)`,
+				);
 			})
 			.catch((err) => {
 				dbg(`session_start: ${name} background scan failed: ${err}`);
@@ -391,7 +408,9 @@ export async function handleSessionStart(
 		dbg(
 			`session_start: skipping heavy scans (${startupScan.reason ?? "unknown"})`,
 		);
-		dbg(`session_start: skipping TODO scan (${startupScan.reason ?? "unknown"})`);
+		dbg(
+			`session_start: skipping TODO scan (${startupScan.reason ?? "unknown"})`,
+		);
 	} else {
 		const canRunJsTsHeavyScans = canRunStartupHeavyScans(
 			languageProfile,
@@ -401,9 +420,7 @@ export async function handleSessionStart(
 		if (canRunJsTsHeavyScans) {
 			scanNames.push("knip", "jscpd", "ast-grep exports", "project index");
 		}
-		dbg(
-			`session_start: launching background scans (${scanNames.join(", ")})`,
-		);
+		dbg(`session_start: launching background scans (${scanNames.join(", ")})`);
 
 		runStartupTask("todo", async () => {
 			if (!runtime.isCurrentSession(sessionGeneration)) return;
@@ -458,10 +475,9 @@ export async function handleSessionStart(
 			runStartupTask("jscpd", async () => {
 				if (await jscpdClient.ensureAvailable()) {
 					if (!runtime.isCurrentSession(sessionGeneration)) return;
-					const cached = cacheManager.readCache<ReturnType<JscpdClient["scan"]>>(
-						"jscpd",
-						analysisRoot,
-					);
+					const cached = cacheManager.readCache<
+						ReturnType<JscpdClient["scan"]>
+					>("jscpd", analysisRoot);
 					if (cached) {
 						if (!runtime.isCurrentSession(sessionGeneration)) return;
 						dbg("session_start jscpd: cache hit");
@@ -527,7 +543,9 @@ export async function handleSessionStart(
 						);
 					} else {
 						if (!runtime.isCurrentSession(sessionGeneration)) return;
-						dbg(`session_start: skipped project index (${tsFiles.length} files)`);
+						dbg(
+							`session_start: skipped project index (${tsFiles.length} files)`,
+						);
 					}
 				}
 			});

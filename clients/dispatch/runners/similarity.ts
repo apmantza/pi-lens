@@ -9,8 +9,8 @@ import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as ts from "typescript";
-import { EXCLUDED_DIRS } from "../../file-utils.js";
 import { NativeRustCoreClient } from "../../native-rust-client.js";
+import { collectSourceFiles } from "../../source-filter.js";
 import {
 	buildProjectIndex,
 	findSimilarFunctions,
@@ -512,24 +512,21 @@ async function loadOrBuildIndex(
 	}
 
 	// Build new index
-	const { glob } = await import("glob");
-	// Build ignore patterns from centralized EXCLUDED_DIRS
-	const ignorePatterns = [
-		...EXCLUDED_DIRS.map((d) => `**/${d}/**`),
-		"**/*.test.ts",
-		"**/*.spec.ts",
-		"**/*.poc.test.ts",
-	];
-	const files = await glob("**/*.ts", {
-		cwd: projectRoot,
-		ignore: ignorePatterns,
+	const absoluteFiles = collectSourceFiles(projectRoot, {
+		extensions: [".ts"],
+	}).filter((filePath) => {
+		const normalized = filePath.replace(/\\/g, "/");
+		return (
+			!normalized.endsWith(".test.ts") &&
+			!normalized.endsWith(".spec.ts") &&
+			!normalized.endsWith(".poc.test.ts")
+		);
 	});
 
-	if (files.length === 0) {
+	if (absoluteFiles.length === 0) {
 		return null;
 	}
 
-	const absoluteFiles = files.map((f) => path.join(projectRoot, f));
 	const index = await buildProjectIndex(projectRoot, absoluteFiles);
 
 	indexCache.set(projectRoot, index);
