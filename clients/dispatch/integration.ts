@@ -62,11 +62,15 @@ import { errorSwallowingRule } from "./rules/error-swallowing.js";
 import { asyncNoiseRule } from "./rules/async-noise.js";
 import { passThroughWrappersRule } from "./rules/pass-through-wrappers.js";
 import { placeholderCommentsRule } from "./rules/placeholder-comments.js";
+import { highComplexityRule } from "./rules/high-complexity.js";
+import { unsafeBoundaryRule } from "./rules/unsafe-boundary.js";
 registerRule(errorObscuringRule);
 registerRule(errorSwallowingRule);
 registerRule(asyncNoiseRule);
 registerRule(passThroughWrappersRule);
 registerRule(placeholderCommentsRule);
+registerRule(highComplexityRule);
+registerRule(unsafeBoundaryRule);
 
 const sessionFacts = new FactStore();
 const sessionRunnerRegistry = new RunnerRegistry();
@@ -78,6 +82,8 @@ const FACT_RULE_IDS = new Set([
 	"async-noise",
 	"pass-through-wrappers",
 	"placeholder-comments",
+	"high-complexity",
+	"unsafe-boundary",
 ]);
 const sessionSlopRuleCounts = new Map<string, number>();
 let sessionSlopDiagnosticCount = 0;
