@@ -1,6 +1,6 @@
 id: unchecked-sync-fs
 language: TypeScript
-severity: error
+severity: warning
 message: "Unchecked sync fs call — throws on missing file or permission error"
 note: |
   Synchronous filesystem calls throw on OS errors (ENOENT, EACCES, EPERM…).

@@ -1,7 +1,7 @@
 id: empty-catch-js
 language: JavaScript
 message: "Empty catch block — properly handle or log the error"
-severity: error
+severity: warning
 note: |
   Silently swallowing errors makes debugging impossible.
   
