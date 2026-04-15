@@ -67,6 +67,16 @@ import { unsafeBoundaryRule } from "./rules/unsafe-boundary.js";
 import { asyncUnnecessaryWrapperRule } from "./rules/async-unnecessary-wrapper.js";
 import { missingErrorPropagationRule } from "./rules/missing-error-propagation.js";
 import { highFanOutRule } from "./rules/high-fan-out.js";
+import {
+	commentedOutCodeRule,
+	duplicateStringLiteralRule,
+	functionInLoopRule,
+	jwtWithoutVerifyRule,
+	corsWildcardRule,
+	dynamicRegexpRule,
+	maxSwitchCasesRule,
+	commentedCredentialsRule,
+} from "./rules/sonar-rules.js";
 registerRule(errorObscuringRule);
 registerRule(errorSwallowingRule);
 registerRule(asyncNoiseRule);
@@ -77,6 +87,14 @@ registerRule(unsafeBoundaryRule);
 registerRule(asyncUnnecessaryWrapperRule);
 registerRule(missingErrorPropagationRule);
 registerRule(highFanOutRule);
+registerRule(commentedOutCodeRule);
+registerRule(duplicateStringLiteralRule);
+registerRule(functionInLoopRule);
+registerRule(jwtWithoutVerifyRule);
+registerRule(corsWildcardRule);
+registerRule(dynamicRegexpRule);
+registerRule(maxSwitchCasesRule);
+registerRule(commentedCredentialsRule);
 
 const sessionFacts = new FactStore();
 const sessionRunnerRegistry = new RunnerRegistry();
@@ -93,6 +111,14 @@ const FACT_RULE_IDS = new Set([
 	"async-unnecessary-wrapper",
 	"missing-error-propagation",
 	"high-fan-out",
+	"commented-out-code",
+	"duplicate-string-literal",
+	"function-in-loop",
+	"jwt-without-verify",
+	"cors-wildcard",
+	"dynamic-regexp",
+	"max-switch-cases",
+	"no-commented-credentials",
 ]);
 const sessionSlopRuleCounts = new Map<string, number>();
 let sessionSlopDiagnosticCount = 0;

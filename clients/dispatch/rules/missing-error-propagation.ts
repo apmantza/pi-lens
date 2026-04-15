@@ -44,9 +44,12 @@ export const missingErrorPropagationRule: FactRule = {
 			for (const c of relevantCatches) {
 				if (c.isEmpty || c.hasRethrow) continue;
 				if (!c.hasLogging) continue;
-				// Catch body that returns a structured value is valid error handling
-				if (/\breturn\b/.test(c.bodyText)) continue;
-				// Catch body that sets a variable signals intentional state management
+				// Structured return or documented fallback = intentional error handling
+				if (c.catchReturnsDefault) continue;
+				if (c.catchReturnsStructuredError) continue;
+				if (c.isDocumentedLocalFallback) continue;
+				if (c.isFilesystemExistenceProbe) continue;
+				// Catch body that sets an error-flag variable = intentional state management
 				if (/\b(serverFailed|failed|error)\s*=/.test(c.bodyText)) continue;
 
 				diagnostics.push({

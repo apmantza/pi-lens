@@ -27,6 +27,10 @@ import yamllintRunner from "./yamllint.js";
 import treeSitterRunner from "./tree-sitter.js";
 import tsLspRunner from "./ts-lsp.js";
 import typeSafetyRunner from "./type-safety.js";
+import markdownlintRunner from "./markdownlint.js";
+import mypyRunner from "./mypy.js";
+import stylelintRunner from "./stylelint.js";
+import shfmtRunner from "./shfmt.js";
 
 export function registerDefaultRunners(registry: RunnerRegistry): void {
 	// Register all runners (ordered by priority)
@@ -55,4 +59,8 @@ export function registerDefaultRunners(registry: RunnerRegistry): void {
 	registry.register(sqlfluffRunner); // SQL lint (priority 24)
 	registry.register(goVetRunner); // Go analysis (priority 50)
 	registry.register(rustClippyRunner); // Rust analysis (priority 50)
+	registry.register(markdownlintRunner); // Markdown lint (priority 30)
+	registry.register(mypyRunner); // Python type checking — mypy (priority 20, config-gated)
+	registry.register(stylelintRunner); // CSS/SCSS/Less lint (priority 10, config-gated)
+	registry.register(shfmtRunner); // Shell formatting check (priority 10)
 }
