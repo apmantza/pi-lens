@@ -344,7 +344,7 @@ function isOnPath(command: string): boolean {
 /**
  * Try to install gopls via `go install`. Resolves true if the install succeeded.
  */
-async function tryGoInstallGopls(): Promise<boolean> {
+function tryGoInstallGopls(): Promise<boolean> {
 	return new Promise((resolve) => {
 		const isWindows = process.platform === "win32";
 		const proc = spawnSync(
@@ -959,8 +959,8 @@ export const BashServer: LSPServerInfo = {
 	id: "bash",
 	name: "Bash Language Server",
 	extensions: [".sh", ".bash", ".zsh"],
-	root: async () => process.cwd(),
-	async spawn(_root, options) {
+	root: () => Promise.resolve(process.cwd()),
+	spawn(_root, options) {
 		return resolveAndLaunch(
 			{ candidates: ["bash-language-server"], args: ["start"], cwd: process.cwd(), managedToolId: "bash-language-server" },
 			options?.allowInstall,
@@ -973,7 +973,7 @@ export const DockerServer: LSPServerInfo = {
 	name: "Dockerfile Language Server",
 	extensions: [".dockerfile", "Dockerfile"],
 	root: PriorityRoot([["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"], [".git"]]),
-	async spawn(_root, options) {
+	spawn(_root, options) {
 		return resolveAndLaunch(
 			{ candidates: nodeBinCandidates(process.cwd(), "docker-langserver"), args: ["--stdio"], cwd: process.cwd(), managedToolId: "dockerfile-language-server-nodejs" },
 			options?.allowInstall,
@@ -986,7 +986,7 @@ export const YamlServer: LSPServerInfo = {
 	name: "YAML Language Server",
 	extensions: [".yaml", ".yml"],
 	root: PriorityRoot([[".yamllint", "yamllint.yml", "yamllint.yaml", "pyproject.toml"], [".git"]]),
-	async spawn(_root, options) {
+	spawn(_root, options) {
 		return resolveAndLaunch(
 			{ candidates: ["yaml-language-server"], args: ["--stdio"], cwd: process.cwd(), managedToolId: "yaml-language-server" },
 			options?.allowInstall,
@@ -999,7 +999,7 @@ export const JsonServer: LSPServerInfo = {
 	name: "VSCode JSON Language Server",
 	extensions: [".json", ".jsonc"],
 	root: PriorityRoot([["package.json", "tsconfig.json", "jsconfig.json"], [".git"]]),
-	async spawn(_root, options) {
+	spawn(_root, options) {
 		return resolveAndLaunch(
 			{ candidates: ["vscode-json-language-server"], args: ["--stdio"], cwd: process.cwd(), managedToolId: "vscode-json-language-server" },
 			options?.allowInstall,
@@ -1012,7 +1012,7 @@ export const HtmlServer: LSPServerInfo = {
 	name: "VSCode HTML Language Server",
 	extensions: [".html", ".htm"],
 	root: PriorityRoot([["package.json", "index.html", "vite.config.ts"], [".git"]]),
-	async spawn(_root, options) {
+	spawn(_root, options) {
 		return resolveAndLaunch(
 			{ candidates: nodeBinCandidates(process.cwd(), "vscode-html-language-server"), args: ["--stdio"], cwd: process.cwd(), managedToolId: "vscode-html-languageserver-bin" },
 			options?.allowInstall,
@@ -1035,7 +1035,7 @@ export const PrismaServer: LSPServerInfo = {
 	name: "Prisma Language Server",
 	extensions: [".prisma"],
 	root: createRootDetector(["prisma/schema.prisma"]),
-	async spawn(root, options) {
+	spawn(root, options) {
 		return resolveAndLaunch(
 			{ candidates: nodeBinCandidates(root, "prisma-language-server"), args: ["--stdio"], cwd: root, managedToolId: "@prisma/language-server" },
 			options?.allowInstall,
@@ -1056,7 +1056,7 @@ export const VueServer: LSPServerInfo = {
 		"pnpm-lock.yaml",
 		"yarn.lock",
 	]),
-	async spawn(root, options) {
+	spawn(root, options) {
 		return resolveAndLaunch(
 			{ candidates: nodeBinCandidates(root, "vue-language-server"), args: ["--stdio"], cwd: root, managedToolId: "@vue/language-server" },
 			options?.allowInstall,
@@ -1075,7 +1075,7 @@ export const SvelteServer: LSPServerInfo = {
 		"pnpm-lock.yaml",
 		"yarn.lock",
 	]),
-	async spawn(root, options) {
+	spawn(root, options) {
 		return resolveAndLaunch(
 			{ candidates: [...nodeBinCandidates(root, "svelteserver"), ...nodeBinCandidates(root, "svelte-language-server")], args: ["--stdio"], cwd: root, managedToolId: "svelte-language-server" },
 			options?.allowInstall,
@@ -1095,7 +1095,7 @@ export const ESLintServer: LSPServerInfo = {
 		"eslint.config.mjs",
 		"package.json",
 	]),
-	async spawn(root, options) {
+	spawn(root, options) {
 		return resolveAndLaunch(
 			{ candidates: nodeBinCandidates(root, "vscode-eslint-language-server"), args: ["--stdio"], cwd: root, managedToolId: "vscode-langservers-extracted" },
 			options?.allowInstall,
@@ -1108,7 +1108,7 @@ export const CssServer: LSPServerInfo = {
 	name: "CSS Language Server",
 	extensions: [".css", ".scss", ".sass", ".less"],
 	root: PriorityRoot([["package.json", "postcss.config.js", "tailwind.config.js", "vite.config.ts"], [".git"]]),
-	async spawn(_root, options) {
+	spawn(_root, options) {
 		return resolveAndLaunch(
 			{ candidates: nodeBinCandidates(process.cwd(), "vscode-css-language-server"), args: ["--stdio"], cwd: process.cwd(), managedToolId: "vscode-css-languageserver" },
 			options?.allowInstall,
