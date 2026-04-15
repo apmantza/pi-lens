@@ -100,7 +100,7 @@ export function createDiagnosticLogger(): DiagnosticLogger {
 		try {
 			await fs.promises.appendFile(getLogFile(), lines);
 		} catch (err) {
-			// Log write failure but don't block
+			// pi-lens-ignore: missing-error-propagation — fire-and-forget log write, must not throw
 			console.error("Failed to write diagnostic log:", err);
 		}
 		writing = false;

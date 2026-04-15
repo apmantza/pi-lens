@@ -719,6 +719,254 @@ export class TreeSitterClient {
 		}
 	}
 
+	/**
+	 * Post-filter predicate: returns true if the match should be kept, false to skip.
+	 * Each branch is an independent filter identified by name — flat dispatch, no nesting.
+	 */
+	// biome-ignore lint/suspicious/noExplicitAny: postFilterParams is untyped per-filter config
+	private applyPostFilter(
+		postFilter: string,
+		postFilterParams: any,
+		captures: Record<string, TreeSitterNode>,
+	): boolean {
+		switch (postFilter) {
+			case "count_params": {
+				const paramsNode = captures.PARAMS;
+				if (!paramsNode) return true;
+				// biome-ignore lint/suspicious/noExplicitAny: Count parameter nodes
+				const paramCount = paramsNode.children.filter(
+					(c: any) =>
+						c.type === "required_parameter" || c.type === "optional_parameter",
+				).length;
+				return paramCount >= (postFilterParams?.min_params ?? 6);
+			}
+			case "empty_body": {
+				const bodyNode = captures.BODY;
+				if (!bodyNode) return true;
+				// biome-ignore lint/suspicious/noExplicitAny: Check for meaningful statements
+				const meaningful = bodyNode.children.filter(
+					(c: any) =>
+						c.isNamed &&
+						c.type !== "comment" &&
+						c.type !== "line_comment" &&
+						c.type !== "block_comment",
+				);
+				return meaningful.length === 0;
+			}
+			case "bare_except_only": {
+				const clauseNode = captures.CLAUSE;
+				if (!clauseNode) return true;
+				// biome-ignore lint/suspicious/noExplicitAny: Check for identifier
+				return !clauseNode.children.some(
+					(c: any) => c.isNamed && c.type === "identifier",
+				);
+			}
+			case "has_mixed_async": {
+				const bodyNode = captures.BODY;
+				if (!bodyNode) return true;
+				const bodyText = bodyNode.text;
+				return (
+					bodyText.includes("await") &&
+					/\.\s*(then|catch)\s*\(/.test(bodyText)
+				);
+			}
+			case "no_super_call": {
+				const bodyNode = captures.BODY;
+				if (!bodyNode) return true;
+				return !/(?<!\/\/.*)super\s*\(/.test(bodyNode.text);
+			}
+			case "in_test_block": {
+				const first = Object.values(captures)[0];
+				return !!first && this.navigator.isInTestBlock(first);
+			}
+			case "not_in_test_block": {
+				const first = Object.values(captures)[0];
+				return !first || !this.navigator.isInTestBlock(first);
+			}
+			case "not_in_try_catch": {
+				const first = Object.values(captures)[0];
+				return !first || !this.navigator.isInTryCatch(first);
+			}
+			case "in_try_catch": {
+				const first = Object.values(captures)[0];
+				return !!first && this.navigator.isInTryCatch(first);
+			}
+			case "name_matches_param": {
+				const nameNode = captures.NAME;
+				const paramNode = captures.PARAM;
+				return !!nameNode && !!paramNode && nameNode.text === paramNode.text;
+			}
+			case "not_in_function": {
+				const first = Object.values(captures)[0];
+				return (
+					!first ||
+					!this.navigator.isInside(first, [
+						"function_definition",
+						"function_declaration",
+						"method_definition",
+						"arrow_function",
+					])
+				);
+			}
+			case "check_secret_pattern": {
+				const varName = (captures.VARNAME?.text ?? "").toLowerCase();
+				return [
+					/api[_-]?key/,
+					/api[_-]?secret/,
+					/password/,
+					/passwd/,
+					/secret/,
+					/token/,
+					/auth/,
+					/private[_-]?key/,
+					/access[_-]?token/,
+					/credentials/,
+					/aws[_-]?secret/,
+					/github[_-]?token/,
+					/client[_-]?secret/,
+				].some((p) => p.test(varName));
+			}
+			case "returns_error": {
+				const first = Object.values(captures)[0];
+				if (!first) return false;
+				const funcNode = this.navigator.findParent(first, [
+					"function_declaration",
+					"method_declaration",
+				]);
+				if (!funcNode) return false;
+				const signature =
+					String(funcNode.text ?? "").split("{", 1)[0]?.trim() ?? "";
+				const returnPart =
+					signature
+						.match(/func\s*(?:\([^)]*\)\s*)?[A-Za-z_]\w*\s*\([^)]*\)\s*(.*)$/s)?.[1]
+						?.trim() ?? "";
+				return returnPart.length > 0 && /\berror\b/.test(returnPart);
+			}
+			case "python_empty_except": {
+				const bodyNode = captures.BODY;
+				if (!bodyNode) return true;
+				// biome-ignore lint/suspicious/noExplicitAny: tree-sitter node
+				return !bodyNode.children.some(
+					(c: any) =>
+						c.isNamed && c.type !== "pass_statement" && c.type !== "comment",
+				);
+			}
+			case "ruby_empty_rescue": {
+				const bodyNode = captures.BODY;
+				if (!bodyNode) return true;
+				// biome-ignore lint/suspicious/noExplicitAny: tree-sitter node
+				return !bodyNode.children.some(
+					(c: any) =>
+						c.isNamed && !["comment", "nil", "nil_literal"].includes(c.type),
+				);
+			}
+			case "ts_command_injection_sink":
+				return (
+					captures.MOD?.text === "child_process" &&
+					/^(exec|execSync)$/.test(captures.FN?.text ?? "")
+				);
+			case "ts_ssrf_sink": {
+				const fn = captures.FN?.text ?? "";
+				const obj = captures.OBJ?.text ?? "";
+				const allowedFns = new Set([
+					"fetch",
+					"request",
+					"get",
+					"post",
+					"put",
+					"patch",
+					"delete",
+				]);
+				if (!allowedFns.has(fn)) return false;
+				if (!obj) return fn === "fetch";
+				return new Set([
+					"axios",
+					"http",
+					"https",
+					"got",
+					"request",
+					"superagent",
+					"undici",
+				]).has(obj);
+			}
+			case "ts_weak_hash_algorithm":
+				return (
+					captures.FN?.text === "createHash" &&
+					/^(md5|sha1)$/i.test(captures.ALG?.text ?? "")
+				);
+			case "ts_insecure_random_source":
+				return captures.OBJ?.text === "Math" && captures.FN?.text === "random";
+			case "ts_detached_async_call":
+				return /(Async$|fetch$|request$)/.test(captures.FN?.text ?? "");
+			case "py_command_injection_sink": {
+				const mod = captures.MOD?.text ?? "";
+				const fn = captures.FN?.text ?? "";
+				const kw = captures.KW?.text ?? "";
+				return (
+					(mod === "os" && /^(system|popen)$/.test(fn)) ||
+					(mod === "subprocess" &&
+						/^(run|Popen|call|check_output|check_call)$/.test(fn) &&
+						kw === "shell")
+				);
+			}
+			case "go_command_injection_sink":
+				return (
+					captures.PKG?.text === "exec" &&
+					/^(Command|CommandContext)$/.test(captures.FN?.text ?? "") &&
+					/^"(sh|bash|zsh|cmd|powershell|pwsh)"$/.test(
+						captures.SHELL?.text ?? "",
+					) &&
+					/^"(-c|\/c)"$/.test(captures.FLAG?.text ?? "")
+				);
+			case "ruby_command_injection_sink":
+				return /^(system|exec|spawn|popen|capture3|capture2|capture2e)$/.test(
+					captures.FN?.text ?? "",
+				);
+			case "py_ssrf_sink":
+				return (
+					captures.MOD?.text === "requests" &&
+					/^(get|post|put|patch|delete|request|head|options)$/.test(
+						captures.FN?.text ?? "",
+					)
+				);
+			case "py_path_traversal_sink":
+				return /^(open|read_text|read_bytes|write_text|write_bytes|remove|unlink|rmdir)$/.test(
+					captures.FN?.text ?? "",
+				);
+			case "go_path_traversal_sink":
+				return (
+					/^(os|ioutil)$/.test(captures.PKG?.text ?? "") &&
+					/^(Open|OpenFile|ReadFile|WriteFile|Create|Remove|RemoveAll)$/.test(
+						captures.FN?.text ?? "",
+					)
+				);
+			case "py_sql_injection_sink":
+				return /^(execute|executemany|query|raw)$/.test(
+					captures.FN?.text ?? "",
+				);
+			case "go_sql_injection_sink":
+				return (
+					/^(Query|QueryContext|QueryRow|QueryRowContext|Exec|ExecContext)$/.test(
+						captures.DBFN?.text ?? "",
+					) &&
+					captures.FMTPKG?.text === "fmt" &&
+					captures.FMTFN?.text === "Sprintf"
+				);
+			case "py_insecure_deserialization_sink":
+				return (
+					/^(pickle|yaml)$/.test(captures.MOD?.text ?? "") &&
+					/^(load|loads|unsafe_load)$/.test(captures.FN?.text ?? "")
+				);
+			case "ruby_insecure_deserialization_sink":
+				return (
+					/^(Marshal|YAML|Psych)$/.test(captures.MOD?.text ?? "") &&
+					/^(load|unsafe_load)$/.test(captures.FN?.text ?? "")
+				);
+			default:
+				return true;
+		}
+	}
+
 	/** Search a single file using tree-sitter Query */
 	private async searchFileWithQuery(
 		filePath: string,
@@ -738,359 +986,26 @@ export class TreeSitterClient {
 		const matches: StructuralMatch[] = [];
 
 		try {
-			// Use tree-sitter's native query matching
 			const queryMatches = query.matches(tree.rootNode);
 
 			for (const match of queryMatches) {
 				const captures: Record<string, TreeSitterNode> = {};
 
-				// Extract captured metavariables (store nodes, not just text)
 				for (const capture of match.captures) {
-					const name = capture.name;
-					const node = capture.node;
-					if (metavars.includes(name)) {
-						captures[name] = node;
+					if (metavars.includes(capture.name)) {
+						captures[capture.name] = capture.node;
 					}
 				}
 
-				// Apply post-filters if specified
-				if (postFilter === "count_params") {
-					const paramsNode = captures.PARAMS;
-					if (paramsNode) {
-						// biome-ignore lint/suspicious/noExplicitAny: Count parameter nodes
-						const paramCount = paramsNode.children.filter(
-							(c: any) =>
-								c.type === "required_parameter" ||
-								c.type === "optional_parameter",
-						).length;
-						const minParams = postFilterParams?.min_params || 6;
-						if (paramCount < minParams) continue;
-					}
+				if (
+					postFilter &&
+					!this.applyPostFilter(postFilter, postFilterParams, captures)
+				) {
+					continue;
 				}
 
-				if (postFilter === "empty_body") {
-					const bodyNode = captures.BODY;
-					if (bodyNode) {
-						// Check if body has meaningful statements (not just comments/braces)
-						// biome-ignore lint/suspicious/noExplicitAny: Check for meaningful statements
-						const meaningfulStatements = bodyNode.children.filter(
-							(c: any) =>
-								c.isNamed &&
-								c.type !== "comment" &&
-								c.type !== "line_comment" &&
-								c.type !== "block_comment",
-						);
-						if (meaningfulStatements.length > 0) continue;
-					}
-				}
-
-				if (postFilter === "bare_except_only") {
-					const clauseNode = captures.CLAUSE;
-					if (clauseNode) {
-						// Check if this is a bare except (no identifier after except)
-						// biome-ignore lint/suspicious/noExplicitAny: Check for identifier
-						const hasIdentifier = clauseNode.children.some(
-							(c: any) => c.isNamed && c.type === "identifier",
-						);
-						if (hasIdentifier) continue; // Skip if has identifier (not bare)
-					}
-				}
-
-				if (postFilter === "has_mixed_async") {
-					const bodyNode = captures.BODY;
-					if (bodyNode) {
-						const bodyText = bodyNode.text;
-						// Check if body contains both await AND (.then() or .catch())
-						const hasAwait = bodyText.includes("await");
-						const hasPromiseChain = /\.\s*(then|catch)\s*\(/.test(bodyText);
-						if (!hasAwait || !hasPromiseChain) continue; // Skip if not mixed
-					}
-				}
-
-				if (postFilter === "no_super_call") {
-					const bodyNode = captures.BODY;
-					if (bodyNode) {
-						// Check if body contains actual super() call (not in comments)
-						const bodyText = bodyNode.text;
-						// Match super() or super.method() but not // super() in comments
-						const superCallRegex = /(?<!\/\/.*)super\s*\(/;
-						const hasSuperCall = superCallRegex.test(bodyText);
-						if (hasSuperCall) continue; // Skip if has super() - this is the GOOD case
-					}
-				}
-
-				// Scope-aware: keep only matches inside test blocks
-				if (postFilter === "in_test_block") {
-					const capturesArray = Object.values(captures);
-					if (capturesArray.length > 0 && capturesArray[0]) {
-						if (!this.navigator.isInTestBlock(capturesArray[0])) continue;
-					}
-				}
-
-				// Structural: keep only matches NOT inside a try/catch (or begin/rescue in Ruby)
-				if (postFilter === "not_in_try_catch") {
-					const capturesArray = Object.values(captures);
-					if (capturesArray.length > 0 && capturesArray[0]) {
-						if (this.navigator.isInTryCatch(capturesArray[0])) continue;
-					}
-				}
-
-				// Structural: keep only matches that ARE inside a try/catch (or begin/rescue)
-				if (postFilter === "in_try_catch") {
-					const capturesArray = Object.values(captures);
-					if (capturesArray.length > 0 && capturesArray[0]) {
-						if (!this.navigator.isInTryCatch(capturesArray[0])) continue;
-					}
-				}
-
-				// Scope-aware: keep only matches outside test blocks
-				if (postFilter === "not_in_test_block") {
-					const capturesArray = Object.values(captures);
-					if (capturesArray.length > 0 && capturesArray[0]) {
-						if (this.navigator.isInTestBlock(capturesArray[0])) continue;
-					}
-				}
-
-				// Structural: NAME capture must equal PARAM capture (actual shadowing check)
-				if (postFilter === "name_matches_param") {
-					const nameNode = captures.NAME;
-					const paramNode = captures.PARAM;
-					if (!nameNode || !paramNode) continue;
-					if (nameNode.text !== paramNode.text) continue;
-				}
-
-				// Scope: skip matches inside any function/method definition
-				if (postFilter === "not_in_function") {
-					const first = Object.values(captures)[0];
-					if (
-						first &&
-						this.navigator.isInside(first, [
-							"function_definition",
-							"function_declaration",
-							"method_definition",
-							"arrow_function",
-						])
-					)
-						continue;
-				}
-
-				// Security: variable name must match secret naming patterns
-				if (postFilter === "check_secret_pattern") {
-					const varName = (captures.VARNAME?.text ?? "").toLowerCase();
-					const secretPatterns = [
-						/api[_-]?key/,
-						/api[_-]?secret/,
-						/password/,
-						/passwd/,
-						/secret/,
-						/token/,
-						/auth/,
-						/private[_-]?key/,
-						/access[_-]?token/,
-						/credentials/,
-						/aws[_-]?secret/,
-						/github[_-]?token/,
-						/private[_-]?key/,
-						/client[_-]?secret/,
-					];
-					if (!secretPatterns.some((p) => p.test(varName))) continue;
-				}
-
-				// Go: only keep bare-return-call matches when enclosing function returns error.
-				if (postFilter === "returns_error") {
-					const first = Object.values(captures)[0];
-					if (!first) continue;
-					const funcNode = this.navigator.findParent(first, [
-						"function_declaration",
-						"method_declaration",
-					]);
-					if (!funcNode) continue;
-
-					const fnText = String(funcNode.text ?? "");
-					const signature = fnText.split("{", 1)[0]?.trim() ?? "";
-					const returnPartMatch = signature.match(
-						/func\s*(?:\([^)]*\)\s*)?[A-Za-z_]\w*\s*\([^)]*\)\s*(.*)$/s,
-					);
-					const returnPart = returnPartMatch?.[1]?.trim() ?? "";
-					const returnsError = returnPart.length > 0 && /\berror\b/.test(returnPart);
-					if (!returnsError) continue;
-				}
-
-				// Python: except body that only contains pass (effectively empty)
-				if (postFilter === "python_empty_except") {
-					const bodyNode = captures.BODY;
-					if (bodyNode) {
-						// biome-ignore lint/suspicious/noExplicitAny: tree-sitter node
-						const realStmts = bodyNode.children.filter(
-							(c: any) =>
-								c.isNamed &&
-								c.type !== "pass_statement" &&
-								c.type !== "comment",
-						);
-						if (realStmts.length > 0) continue; // has real statements
-					}
-				}
-
-				// Ruby: rescue body with no meaningful statements
-				if (postFilter === "ruby_empty_rescue") {
-					const bodyNode = captures.BODY;
-					if (bodyNode) {
-						// biome-ignore lint/suspicious/noExplicitAny: tree-sitter node
-						const realStmts = bodyNode.children.filter(
-							(c: any) =>
-								c.isNamed &&
-								!["comment", "nil", "nil_literal"].includes(c.type),
-						);
-						if (realStmts.length > 0) continue;
-					}
-				}
-
-				// TS security/concurrency: strict sink filtering (query predicates are not reliable in this runtime)
-				if (postFilter === "ts_command_injection_sink") {
-					const mod = captures.MOD?.text ?? "";
-					const fn = captures.FN?.text ?? "";
-					if (mod !== "child_process") continue;
-					if (!/^(exec|execSync)$/.test(fn)) continue;
-				}
-
-				if (postFilter === "ts_ssrf_sink") {
-					const fn = captures.FN?.text ?? "";
-					const obj = captures.OBJ?.text ?? "";
-					const allowedFns = new Set([
-						"fetch",
-						"request",
-						"get",
-						"post",
-						"put",
-						"patch",
-						"delete",
-					]);
-					if (!allowedFns.has(fn)) continue;
-
-					if (!obj) {
-						if (fn !== "fetch") continue;
-					} else {
-						const allowedObjs = new Set([
-							"axios",
-							"http",
-							"https",
-							"got",
-							"request",
-							"superagent",
-							"undici",
-						]);
-						if (!allowedObjs.has(obj)) continue;
-					}
-				}
-
-				if (postFilter === "ts_weak_hash_algorithm") {
-					const fn = captures.FN?.text ?? "";
-					const alg = captures.ALG?.text ?? "";
-					if (fn !== "createHash") continue;
-					if (!/^(md5|sha1)$/i.test(alg)) continue;
-				}
-
-				if (postFilter === "ts_insecure_random_source") {
-					const obj = captures.OBJ?.text ?? "";
-					const fn = captures.FN?.text ?? "";
-					if (obj !== "Math" || fn !== "random") continue;
-				}
-
-				if (postFilter === "ts_detached_async_call") {
-					const fn = captures.FN?.text ?? "";
-					if (!/(Async$|fetch$|request$)/.test(fn)) {
-						continue;
-					}
-				}
-
-				if (postFilter === "py_command_injection_sink") {
-					const mod = captures.MOD?.text ?? "";
-					const fn = captures.FN?.text ?? "";
-					const kw = captures.KW?.text ?? "";
-					const isOs = mod === "os" && /^(system|popen)$/.test(fn);
-					const isSubprocess =
-						mod === "subprocess" &&
-						/^(run|Popen|call|check_output|check_call)$/.test(fn) &&
-						kw === "shell";
-					if (!isOs && !isSubprocess) continue;
-				}
-
-				if (postFilter === "go_command_injection_sink") {
-					const pkg = captures.PKG?.text ?? "";
-					const fn = captures.FN?.text ?? "";
-					const shell = captures.SHELL?.text ?? "";
-					const flag = captures.FLAG?.text ?? "";
-					if (pkg !== "exec") continue;
-					if (!/^(Command|CommandContext)$/.test(fn)) continue;
-					if (!/^"(sh|bash|zsh|cmd|powershell|pwsh)"$/.test(shell)) continue;
-					if (!/^"(-c|\/c)"$/.test(flag)) continue;
-				}
-
-				if (postFilter === "ruby_command_injection_sink") {
-					const fn = captures.FN?.text ?? "";
-					if (!/^(system|exec|spawn|popen|capture3|capture2|capture2e)$/.test(fn)) {
-						continue;
-					}
-				}
-
-				if (postFilter === "py_ssrf_sink") {
-					const mod = captures.MOD?.text ?? "";
-					const fn = captures.FN?.text ?? "";
-					if (mod !== "requests") continue;
-					if (!/^(get|post|put|patch|delete|request|head|options)$/.test(fn))
-						continue;
-				}
-
-				if (postFilter === "py_path_traversal_sink") {
-					const fn = captures.FN?.text ?? "";
-					if (
-						!/^(open|read_text|read_bytes|write_text|write_bytes|remove|unlink|rmdir)$/.test(
-							fn,
-						)
-					)
-						continue;
-				}
-
-				if (postFilter === "go_path_traversal_sink") {
-					const pkg = captures.PKG?.text ?? "";
-					const fn = captures.FN?.text ?? "";
-					if (!/^(os|ioutil)$/.test(pkg)) continue;
-					if (!/^(Open|OpenFile|ReadFile|WriteFile|Create|Remove|RemoveAll)$/.test(fn))
-						continue;
-				}
-
-				if (postFilter === "py_sql_injection_sink") {
-					const fn = captures.FN?.text ?? "";
-					if (!/^(execute|executemany|query|raw)$/.test(fn)) continue;
-				}
-
-				if (postFilter === "go_sql_injection_sink") {
-					const dbFn = captures.DBFN?.text ?? "";
-					const fmtPkg = captures.FMTPKG?.text ?? "";
-					const fmtFn = captures.FMTFN?.text ?? "";
-					if (!/^(Query|QueryContext|QueryRow|QueryRowContext|Exec|ExecContext)$/.test(dbFn))
-						continue;
-					if (fmtPkg !== "fmt" || fmtFn !== "Sprintf") continue;
-				}
-
-				if (postFilter === "py_insecure_deserialization_sink") {
-					const mod = captures.MOD?.text ?? "";
-					const fn = captures.FN?.text ?? "";
-					if (!/^(pickle|yaml)$/.test(mod)) continue;
-					if (!/^(load|loads|unsafe_load)$/.test(fn)) continue;
-				}
-
-				if (postFilter === "ruby_insecure_deserialization_sink") {
-					const mod = captures.MOD?.text ?? "";
-					const fn = captures.FN?.text ?? "";
-					if (!/^(Marshal|YAML|Psych)$/.test(mod)) continue;
-					if (!/^(load|unsafe_load)$/.test(fn)) continue;
-				}
-
-				// Use first capture for position info
 				if (match.captures.length > 0) {
 					const firstNode = match.captures[0].node;
-					// Convert captures to text for the result
 					const textCaptures: Record<string, string> = {};
 					for (const [name, node] of Object.entries(captures)) {
 						textCaptures[name] = (node as TreeSitterNode).text;

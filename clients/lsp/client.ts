@@ -275,6 +275,294 @@ function installCrashGuard(): void {
 	});
 }
 
+// --- Client State + Module-level helpers ---
+
+interface LSPClientState {
+	isConnected: boolean;
+	isDestroyed: boolean;
+	connectionDisposed: boolean;
+	lastError: Error | undefined;
+	readonly connection: MessageConnection;
+	readonly diagnostics: Map<string, LSPDiagnostic[]>;
+	readonly pendingDiagnostics: Map<string, ReturnType<typeof setTimeout>>;
+	readonly diagnosticEmitter: EventEmitter;
+	readonly documentVersions: Map<string, number>;
+	readonly openDocuments: Set<string>;
+	readonly workspaceDiagnosticsSupport: LSPWorkspaceDiagnosticsSupport;
+	readonly operationSupport: LSPOperationSupport;
+	readonly serverId: string;
+	readonly root: string;
+	readonly lspProcess: LSPProcess;
+}
+
+function isClientAlive(state: LSPClientState): boolean {
+	return (
+		state.isConnected && !state.isDestroyed && !state.lspProcess.process.killed
+	);
+}
+
+function disposeClientConnection(state: LSPClientState): void {
+	if (state.connectionDisposed) return;
+	state.connectionDisposed = true;
+	try {
+		state.connection.dispose();
+	} catch {
+		// ignore
+	}
+}
+
+function setupIncomingHandlers(
+	state: LSPClientState,
+	initialization: Record<string, unknown> | undefined,
+): void {
+	state.connection.onNotification(
+		"textDocument/publishDiagnostics",
+		(params: { uri: string; diagnostics?: LSPDiagnostic[] }) => {
+			const filePath = uriToPath(params.uri);
+			const normalizedPath = normalizeMapKey(filePath);
+			const newDiags: LSPDiagnostic[] = params.diagnostics || [];
+
+			const existingTimer = state.pendingDiagnostics.get(normalizedPath);
+			if (existingTimer) clearTimeout(existingTimer);
+
+			const timer = setTimeout(() => {
+				state.diagnostics.set(normalizedPath, newDiags);
+				state.pendingDiagnostics.delete(normalizedPath);
+				state.diagnosticEmitter.emit("diagnostics", normalizedPath);
+			}, DIAGNOSTICS_DEBOUNCE_MS);
+
+			state.pendingDiagnostics.set(normalizedPath, timer);
+		},
+	);
+
+	state.connection.onRequest("workspace/workspaceFolders", () => [
+		{ name: "workspace", uri: pathToFileURL(state.root).href },
+	]);
+	state.connection.onRequest("client/registerCapability", async () => {});
+	state.connection.onRequest("client/unregisterCapability", async () => {});
+	state.connection.onRequest(
+		"workspace/configuration",
+		async () => [initialization ?? {}],
+	);
+	state.connection.onRequest("window/workDoneProgress/create", async () => {});
+}
+
+function setupConnectionLifecycle(state: LSPClientState): void {
+	state.connection.onError((error) => {
+		state.lastError =
+			error instanceof Error ? error : new Error(String(error));
+		state.isConnected = false;
+		state.isDestroyed = true;
+		disposeClientConnection(state);
+		console.error(
+			`[lsp] ${state.serverId} connection error:`,
+			state.lastError.message,
+		);
+	});
+
+	state.connection.onClose(() => {
+		state.isConnected = false;
+		state.isDestroyed = true;
+		disposeClientConnection(state);
+	});
+
+	state.lspProcess.process.on("exit", (code) => {
+		state.isConnected = false;
+		state.isDestroyed = true;
+		disposeClientConnection(state);
+		if (code !== 0 && code !== null) {
+			console.error(
+				`[lsp] ${state.serverId} process exited with code ${code}`,
+			);
+		}
+	});
+}
+
+async function clientRequestPullDiagnostics(
+	state: LSPClientState,
+	filePath: string,
+): Promise<number> {
+	if (!isClientAlive(state)) return 0;
+	const uri = pathToFileURL(filePath).href;
+	try {
+		const report = await safeSendRequest<{
+			kind?: string;
+			items?: LSPDiagnostic[];
+			relatedDocuments?: Record<string, { items?: LSPDiagnostic[] }>;
+		}>(state.connection, "textDocument/diagnostic", { textDocument: { uri } });
+
+		if (!report) return 0;
+
+		const normalizedPath = normalizeMapKey(filePath);
+		const primaryItems = report.items ?? [];
+		state.diagnostics.set(normalizedPath, primaryItems);
+		let totalCount = primaryItems.length;
+
+		if (report.relatedDocuments) {
+			for (const [relatedUri, related] of Object.entries(
+				report.relatedDocuments,
+			)) {
+				const relatedPath = uriToPath(relatedUri);
+				const relatedItems = related?.items ?? [];
+				state.diagnostics.set(normalizeMapKey(relatedPath), relatedItems);
+				totalCount += relatedItems.length;
+			}
+		}
+
+		state.diagnosticEmitter.emit("diagnostics", normalizedPath);
+		return totalCount;
+	} catch {
+		return 0;
+	}
+}
+
+async function clientWaitForDiagnostics(
+	state: LSPClientState,
+	filePath: string,
+	timeoutMs: number,
+): Promise<void> {
+	const normalizedPath = normalizeMapKey(filePath);
+
+	if (state.workspaceDiagnosticsSupport.mode === "pull") {
+		const firstPullCount = await clientRequestPullDiagnostics(state, filePath);
+		if (firstPullCount > 0) return;
+
+		const retryBudgetMs = Math.min(timeoutMs, PULL_DIAGNOSTICS_RETRY_BUDGET_MS);
+		const startedAt = Date.now();
+		let latestCount = firstPullCount;
+
+		while (latestCount === 0 && Date.now() - startedAt < retryBudgetMs) {
+			await new Promise((resolve) =>
+				setTimeout(resolve, PULL_DIAGNOSTICS_RETRY_INTERVAL_MS),
+			);
+			latestCount = await clientRequestPullDiagnostics(state, filePath);
+		}
+		if (latestCount > 0) return;
+	}
+
+	if (state.diagnostics.has(normalizedPath)) return;
+
+	return new Promise<void>((resolve) => {
+		let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+
+		const onDiagnostics = (fp: string) => {
+			if (normalizeMapKey(fp) !== normalizedPath) return;
+			if (debounceTimer) clearTimeout(debounceTimer);
+			debounceTimer = setTimeout(() => {
+				state.diagnosticEmitter.off("diagnostics", onDiagnostics);
+				clearTimeout(timeout);
+				resolve();
+			}, DIAGNOSTICS_DEBOUNCE_MS);
+		};
+
+		state.diagnosticEmitter.on("diagnostics", onDiagnostics);
+
+		const timeout = setTimeout(() => {
+			if (debounceTimer) clearTimeout(debounceTimer);
+			state.diagnosticEmitter.off("diagnostics", onDiagnostics);
+			resolve();
+		}, timeoutMs);
+	});
+}
+
+async function handleNotifyOpen(
+	state: LSPClientState,
+	filePath: string,
+	content: string,
+	languageId: string,
+): Promise<void> {
+	if (!isClientAlive(state)) return;
+	const uri = pathToFileURL(filePath).href;
+	const normalizedPath = normalizeMapKey(filePath);
+
+	if (state.openDocuments.has(normalizedPath)) {
+		const version = (state.documentVersions.get(normalizedPath) ?? 0) + 1;
+		state.documentVersions.set(normalizedPath, version);
+		await safeSendNotification(state.connection, "textDocument/didChange", {
+			textDocument: { uri, version },
+			contentChanges: [{ text: content }],
+		});
+		return;
+	}
+
+	state.documentVersions.set(normalizedPath, 0);
+	state.diagnostics.delete(normalizedPath);
+
+	// Send workspace notification first (like opencode does)
+	await safeSendNotification(
+		state.connection,
+		"workspace/didChangeWatchedFiles",
+		{ changes: [{ uri, type: 1 }] },
+	);
+
+	if (!isClientAlive(state)) return;
+
+	await safeSendNotification(state.connection, "textDocument/didOpen", {
+		textDocument: { uri, languageId, version: 0, text: content },
+	});
+	state.openDocuments.add(normalizedPath);
+}
+
+async function handleNotifyChange(
+	state: LSPClientState,
+	filePath: string,
+	content: string,
+): Promise<void> {
+	if (!isClientAlive(state)) return;
+	const uri = pathToFileURL(filePath).href;
+	const normalizedPath = normalizeMapKey(filePath);
+
+	if (!state.openDocuments.has(normalizedPath)) {
+		// Safety fallback: keep protocol ordering valid even if caller sends
+		// didChange before first didOpen for this document.
+		await safeSendNotification(state.connection, "textDocument/didOpen", {
+			textDocument: { uri, languageId: "plaintext", version: 0, text: content },
+		});
+		state.documentVersions.set(normalizedPath, 0);
+		state.openDocuments.add(normalizedPath);
+		return;
+	}
+
+	const version = (state.documentVersions.get(normalizedPath) ?? 0) + 1;
+	state.documentVersions.set(normalizedPath, version);
+	await safeSendNotification(state.connection, "textDocument/didChange", {
+		textDocument: { uri, version },
+		contentChanges: [{ text: content }],
+	});
+}
+
+async function clientShutdown(state: LSPClientState): Promise<void> {
+	state.isConnected = false;
+	state.isDestroyed = true;
+	for (const timer of state.pendingDiagnostics.values()) {
+		clearTimeout(timer);
+	}
+	state.pendingDiagnostics.clear();
+	state.openDocuments.clear();
+	state.diagnosticEmitter.removeAllListeners();
+	try {
+		await safeSendRequest(state.connection, "shutdown", {});
+	} catch {
+		/* ignore */
+	}
+	try {
+		await safeSendNotification(state.connection, "exit", {});
+	} catch {
+		/* ignore */
+	}
+	disposeClientConnection(state);
+	state.lspProcess.process.kill();
+}
+
+async function navRequest<T>(
+	state: LSPClientState,
+	method: string,
+	params: Record<string, unknown>,
+): Promise<T | null | undefined> {
+	if (!isClientAlive(state)) return null;
+	return safeSendRequest<T>(state.connection, method, params);
+}
+
 // --- Client Factory ---
 
 export async function createLSPClient(options: {
@@ -293,16 +581,8 @@ export async function createLSPClient(options: {
 	// may emit 'error' (ERR_STREAM_DESTROYED / EPIPE / ECONNRESET) on them.
 	// Without a listener that becomes an uncaught exception.
 	//
-	// vscode-jsonrpc attaches its own error listeners to stdin/stdout via
-	// WritableStreamWrapper / ReadableStreamWrapper, but those listeners are
-	// removed when connection.dispose() is called. Our listeners are permanent
-	// so they cover the window between dispose() and process.kill(), as well as
-	// any cases where the process dies before the connection is set up.
-	//
-	// stderr: nobody else ever attaches an error listener here.
-	// stdout: vscode-jsonrpc covers it during the connection lifetime, but not
-	//         after dispose(). After dispose() the stream is about to be
-	//         destroyed anyway, so we just swallow the error.
+	// vscode-jsonrpc covers stdin/stdout during the connection lifetime but
+	// removes its listeners on dispose(). Our permanent listeners cover the gap.
 	const streamErrorHandler =
 		(label: string) => (err: Error & { code?: string }) => {
 			if (
@@ -314,7 +594,6 @@ export async function createLSPClient(options: {
 				return;
 			console.error(`[lsp] ${serverId} ${label} stream error:`, err.message);
 		};
-
 	(lspProcess.stdin as NodeJS.WritableStream).on(
 		"error",
 		streamErrorHandler("stdin"),
@@ -328,140 +607,55 @@ export async function createLSPClient(options: {
 		streamErrorHandler("stderr"),
 	);
 
-	// Create JSON-RPC connection
 	const connection = createMessageConnection(
 		new StreamMessageReader(lspProcess.stdout),
 		new StreamMessageWriter(lspProcess.stdin),
 	);
 
-	// Track diagnostics per file
-	const diagnostics = new Map<string, LSPDiagnostic[]>();
-	const pendingDiagnostics = new Map<string, ReturnType<typeof setTimeout>>();
-
 	// Local event emitter — signals waitForDiagnostics when new diagnostics arrive.
-	// Scoped to this client instance; replaces global bus pub/sub.
-	// setMaxListeners guards against Node.js warning for concurrent waitForDiagnostics calls.
+	// Scoped to this client instance. setMaxListeners guards against Node.js warning
+	// for concurrent waitForDiagnostics calls.
 	const diagnosticEmitter = new EventEmitter();
 	diagnosticEmitter.setMaxListeners(50);
 
-	// Handle incoming diagnostics with debouncing
-	connection.onNotification(
-		"textDocument/publishDiagnostics",
-		(params: { uri: string; diagnostics?: LSPDiagnostic[] }) => {
-			const filePath = uriToPath(params.uri);
-			const normalizedPath = normalizeMapKey(filePath);
-			const newDiags: LSPDiagnostic[] = params.diagnostics || [];
+	const state: LSPClientState = {
+		isConnected: true,
+		isDestroyed: false,
+		connectionDisposed: false,
+		lastError: undefined,
+		connection,
+		diagnostics: new Map(),
+		pendingDiagnostics: new Map(),
+		diagnosticEmitter,
+		documentVersions: new Map(),
+		openDocuments: new Set(),
+		// these are filled in after initialize — cast to avoid two-phase init
+		workspaceDiagnosticsSupport: undefined as unknown as LSPWorkspaceDiagnosticsSupport,
+		operationSupport: undefined as unknown as LSPOperationSupport,
+		serverId,
+		root,
+		lspProcess,
+	};
 
-			// Debounce: clear existing timer and set new one
-			const existingTimer = pendingDiagnostics.get(normalizedPath);
-			if (existingTimer) clearTimeout(existingTimer);
-
-			const timer = setTimeout(() => {
-				diagnostics.set(normalizedPath, newDiags);
-				pendingDiagnostics.delete(normalizedPath);
-
-				// Signal any active waitForDiagnostics calls for this file.
-				diagnosticEmitter.emit("diagnostics", normalizedPath);
-			}, DIAGNOSTICS_DEBOUNCE_MS);
-
-			pendingDiagnostics.set(normalizedPath, timer);
-		},
-	);
-
-	// Handle server requests
-	connection.onRequest("workspace/workspaceFolders", () => [
-		{
-			name: "workspace",
-			uri: pathToFileURL(root).href,
-		},
-	]);
-
-	connection.onRequest("client/registerCapability", async () => {});
-	connection.onRequest("client/unregisterCapability", async () => {});
-	connection.onRequest("workspace/configuration", async () => [
-		initialization ?? {},
-	]);
-	connection.onRequest("window/workDoneProgress/create", async () => {});
-
-	// Start listening
+	setupIncomingHandlers(state, initialization);
 	connection.listen();
+	setupConnectionLifecycle(state);
 
-	// Track connection state
-	let isConnected = true;
-	let lastError: Error | undefined;
-	let isDestroyed = false;
-	let connectionDisposed = false;
-
-	function disposeConnection(): void {
-		if (connectionDisposed) return;
-		connectionDisposed = true;
-		try {
-			connection.dispose();
-		} catch {
-			// ignore
-		}
-	}
-
-	// Handle connection errors and close events
-	connection.onError((error) => {
-		lastError = error instanceof Error ? error : new Error(String(error));
-		isConnected = false;
-		isDestroyed = true;
-		disposeConnection();
-		console.error(`[lsp] ${serverId} connection error:`, lastError.message);
-	});
-
-	connection.onClose(() => {
-		isConnected = false;
-		isDestroyed = true;
-		disposeConnection();
-	});
-
-	// Also handle process exit to catch crashes immediately
-	lspProcess.process.on("exit", (code) => {
-		isConnected = false;
-		isDestroyed = true;
-		disposeConnection();
-		if (code !== 0 && code !== null) {
-			console.error(`[lsp] ${serverId} process exited with code ${code}`);
-		}
-	});
-
-	// Helper to check if process is still alive before operations
-	function isProcessAlive(): boolean {
-		return isConnected && !isDestroyed && !lspProcess.process.killed;
-	}
-
-	// Send initialize request with error handling
 	const initResult = await withTimeout(
 		safeSendRequest(connection, "initialize", {
 			processId: process.pid,
 			rootUri: pathToFileURL(root).href,
-			workspaceFolders: [
-				{
-					name: "workspace",
-					uri: pathToFileURL(root).href,
-				},
-			],
+			workspaceFolders: [{ name: "workspace", uri: pathToFileURL(root).href }],
 			capabilities: {
-				window: {
-					workDoneProgress: true,
-				},
+				window: { workDoneProgress: true },
 				workspace: {
-					workspaceFolders: true, // Simple boolean for broader compatibility
+					workspaceFolders: true,
 					configuration: true,
-					didChangeWatchedFiles: {
-						dynamicRegistration: true,
-					},
+					didChangeWatchedFiles: { dynamicRegistration: true },
 				},
 				textDocument: {
-					synchronization: {
-						didOpen: true,
-						didChange: true,
-					},
-					publishDiagnostics: {
-						versionSupport: true,
-					},
+					synchronization: { didOpen: true, didChange: true },
+					publishDiagnostics: { versionSupport: true },
 				},
 			},
 			initializationOptions: initialization,
@@ -476,278 +670,111 @@ export async function createLSPClient(options: {
 		);
 	}
 
-	const workspaceDiagnosticsSupport = detectWorkspaceDiagnosticsSupport(initResult);
-	const operationSupport = detectOperationSupport(initResult);
+	(state as { workspaceDiagnosticsSupport: LSPWorkspaceDiagnosticsSupport }).workspaceDiagnosticsSupport =
+		detectWorkspaceDiagnosticsSupport(initResult);
+	(state as { operationSupport: LSPOperationSupport }).operationSupport =
+		detectOperationSupport(initResult);
 
-	// Send initialized notification
 	await safeSendNotification(connection, "initialized", {});
-
-	// Send configuration if provided (helps pyright and other servers)
 	if (initialization) {
 		await safeSendNotification(connection, "workspace/didChangeConfiguration", {
 			settings: initialization,
 		});
 	}
 
-	// Track open documents with version numbers
-	const documentVersions = new Map<string, number>();
-	const openDocuments = new Set<string>();
-
 	return {
 		serverId,
 		root,
 		connection,
-		isAlive: () => isProcessAlive(),
+		isAlive: () => isClientAlive(state),
 
 		notify: {
 			async open(filePath, content, languageId) {
-				if (!isProcessAlive()) return;
-				const uri = pathToFileURL(filePath).href;
-				// Normalize path for Windows case-insensitive lookup
-				const normalizedPath = normalizeMapKey(filePath);
-
-				// Some servers are strict about duplicate didOpen. If the document is
-				// already open, treat this as a full-content update instead.
-				if (openDocuments.has(normalizedPath)) {
-					const version = (documentVersions.get(normalizedPath) ?? 0) + 1;
-					documentVersions.set(normalizedPath, version);
-					await safeSendNotification(connection, "textDocument/didChange", {
-						textDocument: { uri, version },
-						contentChanges: [{ text: content }],
-					});
-					return;
-				}
-
-				documentVersions.set(normalizedPath, 0);
-				diagnostics.delete(normalizedPath); // Clear stale diagnostics
-
-				// Send workspace notification first (like opencode does)
-				await safeSendNotification(
-					connection,
-					"workspace/didChangeWatchedFiles",
-					{
-						changes: [
-							{
-								uri,
-								type: 1, // Created
-							},
-						],
-					},
-				);
-
-				if (!isProcessAlive()) return;
-
-				await safeSendNotification(connection, "textDocument/didOpen", {
-					textDocument: {
-						uri,
-						languageId,
-						version: 0,
-						text: content,
-					},
-				});
-				openDocuments.add(normalizedPath);
+				return handleNotifyOpen(state, filePath, content, languageId);
 			},
-
 			async change(filePath, content) {
-				if (!isProcessAlive()) return;
-				const uri = pathToFileURL(filePath).href;
-				// Normalize path for Windows case-insensitive lookup
-				const normalizedPath = normalizeMapKey(filePath);
-				if (!openDocuments.has(normalizedPath)) {
-					// Safety fallback: keep protocol ordering valid even if caller sends
-					// didChange before first didOpen for this document.
-					await safeSendNotification(connection, "textDocument/didOpen", {
-						textDocument: {
-							uri,
-							languageId: "plaintext",
-							version: 0,
-							text: content,
-						},
-					});
-					documentVersions.set(normalizedPath, 0);
-					openDocuments.add(normalizedPath);
-					return;
-				}
-				const version = (documentVersions.get(normalizedPath) ?? 0) + 1;
-				documentVersions.set(normalizedPath, version);
-
-				await safeSendNotification(connection, "textDocument/didChange", {
-					textDocument: { uri, version },
-					contentChanges: [{ text: content }],
-				});
+				return handleNotifyChange(state, filePath, content);
 			},
 		},
 
 		getDiagnostics(filePath) {
-			// Normalize path for Windows case-insensitive lookup
-			const normalizedPath = normalizeMapKey(filePath);
-			return diagnostics.get(normalizedPath) ?? [];
+			return state.diagnostics.get(normalizeMapKey(filePath)) ?? [];
 		},
 
 		getAllDiagnostics() {
-			// Return copy of all tracked diagnostics (for cascade checking)
-			return new Map(diagnostics);
+			return new Map(state.diagnostics);
 		},
 
 		getWorkspaceDiagnosticsSupport() {
-			return workspaceDiagnosticsSupport;
+			return state.workspaceDiagnosticsSupport;
 		},
 
 		getOperationSupport() {
-			return operationSupport;
+			return state.operationSupport;
 		},
 
 		async waitForDiagnostics(filePath, timeoutMs = DIAGNOSTICS_WAIT_TIMEOUT_MS) {
-			const normalizedPath = normalizeMapKey(filePath);
-
-			if (workspaceDiagnosticsSupport.mode === "pull") {
-				const firstPullCount = await requestPullDiagnostics(filePath);
-				if (firstPullCount > 0) return;
-
-				const retryBudgetMs = Math.min(
-					timeoutMs,
-					PULL_DIAGNOSTICS_RETRY_BUDGET_MS,
-				);
-				const startedAt = Date.now();
-				let latestCount = firstPullCount;
-
-				while (
-					latestCount === 0 &&
-					Date.now() - startedAt < retryBudgetMs
-				) {
-					await new Promise((resolve) =>
-						setTimeout(resolve, PULL_DIAGNOSTICS_RETRY_INTERVAL_MS),
-					);
-					latestCount = await requestPullDiagnostics(filePath);
-				}
-
-				if (latestCount > 0) return;
-			}
-
-			// Fast path: diagnostics already available
-			if (diagnostics.has(normalizedPath)) return;
-
-			return new Promise<void>((resolve) => {
-				let debounceTimer: ReturnType<typeof setTimeout> | undefined;
-
-				// Listen on the local emitter for this client's diagnostic notifications.
-				// No runnerId filter needed — this emitter is scoped to this client instance.
-				const onDiagnostics = (fp: string) => {
-					if (normalizeMapKey(fp) !== normalizedPath) return;
-
-					// Debounce: reset on each event to catch follow-up semantic diagnostics
-					// (LSP often sends syntax diagnostics first, semantic ones shortly after).
-					if (debounceTimer) clearTimeout(debounceTimer);
-					debounceTimer = setTimeout(() => {
-						diagnosticEmitter.off("diagnostics", onDiagnostics);
-						clearTimeout(timeout);
-						resolve();
-					}, DIAGNOSTICS_DEBOUNCE_MS);
-				};
-
-				diagnosticEmitter.on("diagnostics", onDiagnostics);
-
-				// Timeout fallback: resolve even if no diagnostics arrive
-				// (some files have no errors, or the server may be slow)
-				const timeout = setTimeout(() => {
-					if (debounceTimer) clearTimeout(debounceTimer);
-					diagnosticEmitter.off("diagnostics", onDiagnostics);
-					resolve();
-				}, timeoutMs);
-			});
+			return clientWaitForDiagnostics(state, filePath, timeoutMs);
 		},
 
 		async definition(filePath, line, character) {
-			if (!isProcessAlive()) return [];
-			const uri = pathToFileURL(filePath).href;
-			const result = await safeSendRequest<LSPLocation | LSPLocation[]>(
-				connection,
+			const result = await navRequest<LSPLocation | LSPLocation[]>(
+				state,
 				"textDocument/definition",
-				{
-					textDocument: { uri },
-					position: { line, character },
-				},
+				{ textDocument: { uri: pathToFileURL(filePath).href }, position: { line, character } },
 			);
 			if (!result) return [];
 			return Array.isArray(result) ? result : [result];
 		},
 
 		async references(filePath, line, character, includeDeclaration = true) {
-			if (!isProcessAlive()) return [];
-			const uri = pathToFileURL(filePath).href;
-			const result = await safeSendRequest<LSPLocation[]>(
-				connection,
+			const result = await navRequest<LSPLocation[]>(
+				state,
 				"textDocument/references",
-				{
-					textDocument: { uri },
-					position: { line, character },
-					context: { includeDeclaration },
-				},
+				{ textDocument: { uri: pathToFileURL(filePath).href }, position: { line, character }, context: { includeDeclaration } },
 			);
 			return result ?? [];
 		},
 
 		async hover(filePath, line, character) {
-			if (!isProcessAlive()) return null;
-			const uri = pathToFileURL(filePath).href;
-			const result = await safeSendRequest<LSPHover>(
-				connection,
+			const result = await navRequest<LSPHover>(
+				state,
 				"textDocument/hover",
-				{
-					textDocument: { uri },
-					position: { line, character },
-				},
+				{ textDocument: { uri: pathToFileURL(filePath).href }, position: { line, character } },
 			);
 			return result ?? null;
 		},
 
 		async signatureHelp(filePath, line, character) {
-			if (!isProcessAlive()) return null;
-			const uri = pathToFileURL(filePath).href;
-			const result = await safeSendRequest<LSPSignatureHelp>(
-				connection,
+			const result = await navRequest<LSPSignatureHelp>(
+				state,
 				"textDocument/signatureHelp",
-				{
-					textDocument: { uri },
-					position: { line, character },
-				},
+				{ textDocument: { uri: pathToFileURL(filePath).href }, position: { line, character } },
 			);
 			return result ?? null;
 		},
 
 		async documentSymbol(filePath) {
-			if (!isProcessAlive()) return [];
-			const uri = pathToFileURL(filePath).href;
-			const result = await safeSendRequest<LSPSymbol[]>(
-				connection,
+			const result = await navRequest<LSPSymbol[]>(
+				state,
 				"textDocument/documentSymbol",
-				{
-					textDocument: { uri },
-				},
+				{ textDocument: { uri: pathToFileURL(filePath).href } },
 			);
 			return result ?? [];
 		},
 
 		async workspaceSymbol(query) {
-			if (!isProcessAlive()) return [];
+			if (!isClientAlive(state)) return [];
 			const result = await safeSendRequest<LSPSymbol[]>(
 				connection,
 				"workspace/symbol",
-				{
-					query,
-				},
+				{ query },
 			);
 			return result ?? [];
 		},
 
-		async codeAction(
-			filePath,
-			line,
-			character,
-			endLine,
-			endCharacter,
-		) {
-			if (!isProcessAlive()) return [];
+		async codeAction(filePath, line, character, endLine, endCharacter) {
+			if (!isClientAlive(state)) return [];
 			const uri = pathToFileURL(filePath).href;
 			const result = await safeSendRequest<unknown[]>(
 				connection,
@@ -759,7 +786,8 @@ export async function createLSPClient(options: {
 						end: { line: endLine, character: endCharacter },
 					},
 					context: {
-						diagnostics: diagnostics.get(normalizeMapKey(filePath)) ?? [],
+						diagnostics:
+							state.diagnostics.get(normalizeMapKey(filePath)) ?? [],
 					},
 				},
 			);
@@ -771,44 +799,29 @@ export async function createLSPClient(options: {
 		},
 
 		async rename(filePath, line, character, newName) {
-			if (!isProcessAlive()) return null;
-			const uri = pathToFileURL(filePath).href;
-			const result = await safeSendRequest<LSPWorkspaceEdit>(
-				connection,
+			const result = await navRequest<LSPWorkspaceEdit>(
+				state,
 				"textDocument/rename",
-				{
-					textDocument: { uri },
-					position: { line, character },
-					newName,
-				},
+				{ textDocument: { uri: pathToFileURL(filePath).href }, position: { line, character }, newName },
 			);
 			return result ?? null;
 		},
 
 		async implementation(filePath, line, character) {
-			if (!isProcessAlive()) return [];
-			const uri = pathToFileURL(filePath).href;
-			const result = await safeSendRequest<LSPLocation | LSPLocation[]>(
-				connection,
+			const result = await navRequest<LSPLocation | LSPLocation[]>(
+				state,
 				"textDocument/implementation",
-				{
-					textDocument: { uri },
-					position: { line, character },
-				},
+				{ textDocument: { uri: pathToFileURL(filePath).href }, position: { line, character } },
 			);
 			if (!result) return [];
 			return Array.isArray(result) ? result : [result];
 		},
 
-		// --- Call Hierarchy Methods ---
-
 		async prepareCallHierarchy(filePath, line, character) {
-			if (!isProcessAlive()) return [];
-			const uri = pathToFileURL(filePath).href;
-			const result = await safeSendRequest<
+			const result = await navRequest<
 				LSPCallHierarchyItem | LSPCallHierarchyItem[]
-			>(connection, "textDocument/prepareCallHierarchy", {
-				textDocument: { uri },
+			>(state, "textDocument/prepareCallHierarchy", {
+				textDocument: { uri: pathToFileURL(filePath).href },
 				position: { line, character },
 			});
 			if (!result) return [];
@@ -816,95 +829,27 @@ export async function createLSPClient(options: {
 		},
 
 		async incomingCalls(item) {
-			if (!isProcessAlive()) return [];
-			const result = await safeSendRequest<LSPCallHierarchyIncomingCall[]>(
-				connection,
+			const result = await navRequest<LSPCallHierarchyIncomingCall[]>(
+				state,
 				"callHierarchy/incomingCalls",
-				{
-					item,
-				},
+				{ item },
 			);
 			return result ?? [];
 		},
 
 		async outgoingCalls(item) {
-			if (!isProcessAlive()) return [];
-			const result = await safeSendRequest<LSPCallHierarchyOutgoingCall[]>(
-				connection,
+			const result = await navRequest<LSPCallHierarchyOutgoingCall[]>(
+				state,
 				"callHierarchy/outgoingCalls",
-				{
-					item,
-				},
+				{ item },
 			);
 			return result ?? [];
 		},
 
 		async shutdown() {
-			isConnected = false;
-			isDestroyed = true;
-			// Clear pending timers
-			for (const timer of pendingDiagnostics.values()) {
-				clearTimeout(timer);
-			}
-			pendingDiagnostics.clear();
-			openDocuments.clear();
-
-			// Remove all diagnostic listeners (cancels any in-flight waitForDiagnostics)
-			diagnosticEmitter.removeAllListeners();
-
-			// Graceful shutdown - ignore errors from destroyed streams
-			try {
-				await safeSendRequest(connection, "shutdown", {});
-			} catch {
-				/* ignore */
-			}
-			try {
-				await safeSendNotification(connection, "exit", {});
-			} catch {
-				/* ignore */
-			}
-
-			disposeConnection();
-			lspProcess.process.kill();
+			return clientShutdown(state);
 		},
 	};
-
-	async function requestPullDiagnostics(filePath: string): Promise<number> {
-		if (!isProcessAlive()) return 0;
-		const uri = pathToFileURL(filePath).href;
-		try {
-			const report = await safeSendRequest<{
-				kind?: string;
-				items?: LSPDiagnostic[];
-				relatedDocuments?: Record<string, { items?: LSPDiagnostic[] }>;
-			}>(connection, "textDocument/diagnostic", {
-				textDocument: { uri },
-			});
-
-			if (!report) return 0;
-
-			const normalizedPath = normalizeMapKey(filePath);
-			const primaryItems = report.items ?? [];
-			diagnostics.set(normalizedPath, primaryItems);
-			let totalCount = primaryItems.length;
-
-			if (report.relatedDocuments) {
-				for (const [relatedUri, related] of Object.entries(
-					report.relatedDocuments,
-				)) {
-					const relatedPath = uriToPath(relatedUri);
-					const relatedItems = related?.items ?? [];
-					diagnostics.set(normalizeMapKey(relatedPath), relatedItems);
-					totalCount += relatedItems.length;
-				}
-			}
-
-			diagnosticEmitter.emit("diagnostics", normalizedPath);
-			return totalCount;
-		} catch {
-			return 0;
-		}
-	}
 }
 
 // Helper to safely send notifications - catches stream destruction

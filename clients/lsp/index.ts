@@ -865,6 +865,7 @@ export class LSPService {
 			try {
 				await client.shutdown();
 			} catch (err) {
+				// pi-lens-ignore: missing-error-propagation — per-client shutdown failure, must not abort remaining shutdowns
 				console.error(`[lsp] Error shutting down ${key}:`, err);
 			}
 		}

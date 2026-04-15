@@ -68,7 +68,7 @@ export async function buildProjectIndex(
 				entries.set(entry.id, entry);
 			}
 		} catch (error) {
-			// Skip files that can't be parsed
+			// pi-lens-ignore: missing-error-propagation — per-file indexing failure, skip unparseable files
 			console.error(`Failed to index ${filePath}:`, error);
 		}
 	}

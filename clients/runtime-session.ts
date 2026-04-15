@@ -116,6 +116,317 @@ function getLanguageInstallHints(
 	return hints;
 }
 
+// --- Session-start helpers ---
+
+function applyEnvFlags(
+	getFlag: SessionStartDeps["getFlag"],
+	dbg: SessionStartDeps["dbg"],
+): void {
+	if (getFlag("auto-install")) {
+		process.env.PI_LENS_AUTO_INSTALL = "1";
+		dbg("session_start: LSP auto-install enabled (PI_LENS_AUTO_INSTALL=1)");
+	} else {
+		delete process.env.PI_LENS_AUTO_INSTALL;
+	}
+
+	if (getFlag("no-lsp-install")) {
+		process.env.PI_LENS_DISABLE_LSP_INSTALL = "1";
+		dbg("session_start: LSP install disabled (PI_LENS_DISABLE_LSP_INSTALL=1)");
+	} else {
+		delete process.env.PI_LENS_DISABLE_LSP_INSTALL;
+	}
+}
+
+function firePreinstallDefaults(
+	ensureTool: SessionStartDeps["ensureTool"],
+	dbg: SessionStartDeps["dbg"],
+	startupDefaults: string[],
+): void {
+	for (const tool of startupDefaults) {
+		const startedAt = Date.now();
+		dbg(`session_start preinstall ${tool}: start`);
+		ensureTool(tool)
+			.then((toolPath) => {
+				if (toolPath) {
+					dbg(`session_start: ${tool} ready at ${toolPath}`);
+					dbg(
+						`session_start preinstall ${tool}: success (${Date.now() - startedAt}ms)`,
+					);
+				} else {
+					dbg(`session_start: ${tool} installation unavailable`);
+					dbg(
+						`session_start preinstall ${tool}: unavailable (${Date.now() - startedAt}ms)`,
+					);
+				}
+			})
+			.catch((err) => {
+				dbg(`session_start: ${tool} pre-install error: ${err}`);
+				dbg(
+					`session_start preinstall ${tool}: error (${Date.now() - startedAt}ms)`,
+				);
+			});
+	}
+}
+
+async function probePrettierInstall(
+	ensureTool: SessionStartDeps["ensureTool"],
+	dbg: SessionStartDeps["dbg"],
+	analysisRoot: string,
+): Promise<void> {
+	const pkgPath = path.join(analysisRoot, "package.json");
+	try {
+		const raw = await nodeFs.promises.readFile(pkgPath, "utf-8");
+		const pkg = JSON.parse(raw) as {
+			dependencies?: Record<string, string>;
+			devDependencies?: Record<string, string>;
+			prettier?: unknown;
+		};
+		const usesPrettier =
+			!!pkg.devDependencies?.prettier ||
+			!!pkg.dependencies?.prettier ||
+			pkg.prettier !== undefined;
+		if (usesPrettier) {
+			dbg("session_start: project uses prettier, ensuring install...");
+			ensureTool("prettier")
+				.then((p) => {
+					if (p) dbg(`session_start: prettier ready at ${p}`);
+					else dbg("session_start: prettier install failed silently");
+				})
+				.catch((err) => dbg(`session_start: prettier install error: ${err}`));
+		}
+	} catch {
+		// no package.json at cwd root
+	}
+}
+
+// Fire off heavy scans as background tasks — don't block session start.
+// Each consumer already handles the "not ready yet" case gracefully
+// (cachedExports.size > 0, cachedProjectIndex != null, cache miss paths).
+function scheduleStartupScans(
+	deps: SessionStartDeps,
+	runtime: RuntimeCoordinator,
+	sessionGeneration: number,
+	analysisRoot: string,
+	languageProfile: ReturnType<typeof detectProjectLanguageProfile>,
+	dbg: SessionStartDeps["dbg"],
+): void {
+	const { todoScanner, cacheManager, knipClient, jscpdClient, astGrepClient } =
+		deps;
+
+	const runTask = (name: string, task: () => Promise<void>): void => {
+		const startedAt = Date.now();
+		dbg(`session_start task ${name}: start`);
+		runtime.markStartupScanInFlight(name, sessionGeneration);
+		void task()
+			.then(() => {
+				dbg(
+					`session_start task ${name}: success (${Date.now() - startedAt}ms)`,
+				);
+			})
+			.catch((err) => {
+				dbg(`session_start: ${name} background scan failed: ${err}`);
+				dbg(`session_start task ${name}: failed (${Date.now() - startedAt}ms)`);
+			})
+			.finally(() => {
+				runtime.clearStartupScanInFlight(name, sessionGeneration);
+				dbg(`session_start task ${name}: end`);
+			});
+	};
+
+	const canRunJsTsHeavyScans = canRunStartupHeavyScans(languageProfile, "jsts");
+	const scanNames = ["todo"];
+	if (canRunJsTsHeavyScans) {
+		scanNames.push("knip", "jscpd", "ast-grep exports", "project index");
+	}
+	dbg(`session_start: launching background scans (${scanNames.join(", ")})`);
+
+	runTask("todo", async () => {
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+		const todoResult = todoScanner.scanDirectory(analysisRoot);
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+		dbg(
+			`session_start TODO scan: ${todoResult.items.length} items (baseline stored)`,
+		);
+		cacheManager.writeCache(
+			"todo-baseline",
+			{ items: todoResult.items },
+			analysisRoot,
+		);
+	});
+
+	if (!canRunJsTsHeavyScans) {
+		dbg(
+			"session_start: skipping JS/TS startup scans (requires JS/TS language + project config)",
+		);
+		return;
+	}
+
+	// Knip — dead code / unused exports
+	runTask("knip", async () => {
+		if (await knipClient.ensureAvailable()) {
+			if (!runtime.isCurrentSession(sessionGeneration)) return;
+			const cached = cacheManager.readCache<ReturnType<KnipClient["analyze"]>>(
+				"knip",
+				analysisRoot,
+			);
+			if (cached) {
+				if (!runtime.isCurrentSession(sessionGeneration)) return;
+				dbg(
+					`session_start Knip: cache hit (${Math.round((Date.now() - new Date(cached.meta.timestamp).getTime()) / 1000)}s ago)`,
+				);
+			} else {
+				const startMs = Date.now();
+				const knipResult = knipClient.analyze(
+					analysisRoot,
+					getKnipIgnorePatterns(),
+				);
+				if (!runtime.isCurrentSession(sessionGeneration)) return;
+				cacheManager.writeCache("knip", knipResult, analysisRoot, {
+					scanDurationMs: Date.now() - startMs,
+				});
+				dbg(`session_start Knip scan done (${Date.now() - startMs}ms)`);
+			}
+		} else {
+			if (!runtime.isCurrentSession(sessionGeneration)) return;
+			dbg("session_start Knip: not available");
+		}
+	});
+
+	// jscpd — duplicate code detection
+	runTask("jscpd", async () => {
+		if (await jscpdClient.ensureAvailable()) {
+			if (!runtime.isCurrentSession(sessionGeneration)) return;
+			const cached = cacheManager.readCache<ReturnType<JscpdClient["scan"]>>(
+				"jscpd",
+				analysisRoot,
+			);
+			if (cached) {
+				if (!runtime.isCurrentSession(sessionGeneration)) return;
+				dbg("session_start jscpd: cache hit");
+			} else {
+				const startMs = Date.now();
+				const jscpdResult = jscpdClient.scan(analysisRoot);
+				if (!runtime.isCurrentSession(sessionGeneration)) return;
+				cacheManager.writeCache("jscpd", jscpdResult, analysisRoot, {
+					scanDurationMs: Date.now() - startMs,
+				});
+				dbg(`session_start jscpd scan done (${Date.now() - startMs}ms)`);
+			}
+		} else {
+			if (!runtime.isCurrentSession(sessionGeneration)) return;
+			dbg("session_start jscpd: not available");
+		}
+	});
+
+	// ast-grep — export scan for duplicate detection
+	runTask("ast-grep-exports", async () => {
+		if (await astGrepClient.ensureAvailable()) {
+			if (!runtime.isCurrentSession(sessionGeneration)) return;
+			const exports = await astGrepClient.scanExports(
+				analysisRoot,
+				"typescript",
+			);
+			if (!runtime.isCurrentSession(sessionGeneration)) return;
+			dbg(`session_start exports scan: ${exports.size} functions found`);
+			for (const [name, file] of exports) {
+				runtime.cachedExports.set(name, file);
+			}
+		}
+	});
+
+	// Project index — structural similarity detection
+	runTask("project-index", async () => {
+		const existing = await loadIndex(analysisRoot);
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+		if (
+			existing &&
+			existing.entries.size > 0 &&
+			(await isIndexFresh(analysisRoot))
+		) {
+			if (!runtime.isCurrentSession(sessionGeneration)) return;
+			runtime.cachedProjectIndex = existing;
+			dbg(
+				`session_start: loaded fresh project index (${existing.entries.size} entries)`,
+			);
+		} else {
+			const sourceFiles = getSourceFiles(analysisRoot, true);
+			const tsFiles = sourceFiles.filter(
+				(f) => f.endsWith(".ts") || f.endsWith(".tsx"),
+			);
+			if (tsFiles.length > 0 && tsFiles.length <= 500) {
+				runtime.cachedProjectIndex = await buildProjectIndex(
+					analysisRoot,
+					tsFiles,
+				);
+				if (!runtime.isCurrentSession(sessionGeneration)) return;
+				await saveIndex(runtime.cachedProjectIndex, analysisRoot);
+				dbg(
+					`session_start: built project index (${runtime.cachedProjectIndex.entries.size} entries from ${tsFiles.length} files)`,
+				);
+			} else {
+				if (!runtime.isCurrentSession(sessionGeneration)) return;
+				dbg(`session_start: skipped project index (${tsFiles.length} files)`);
+			}
+		}
+	});
+}
+
+function runErrorDebtBaseline(
+	deps: Pick<
+		SessionStartDeps,
+		"testRunnerClient" | "cacheManager" | "notify" | "dbg" | "runtime"
+	>,
+	detectedRunner: ReturnType<SessionStartDeps["testRunnerClient"]["detectRunner"]>,
+	analysisRoot: string,
+	allowBootstrapTasks: boolean,
+	getFlag: SessionStartDeps["getFlag"],
+): void {
+	const { testRunnerClient, cacheManager, notify, dbg, runtime } = deps;
+	const errorDebtEnabled = allowBootstrapTasks && getFlag("error-debt");
+	const pendingDebt = cacheManager.readCache<{
+		pendingCheck: boolean;
+		baselineTestsPassed: boolean;
+	}>("errorDebt", analysisRoot);
+
+	if (errorDebtEnabled && detectedRunner && pendingDebt?.data?.pendingCheck) {
+		dbg("session_start: running pending error debt check");
+		const testResult = testRunnerClient.runTestFile(
+			".",
+			analysisRoot,
+			detectedRunner.runner,
+			detectedRunner.config,
+		);
+		const testsPassed = testResult.failed === 0 && !testResult.error;
+		const baselinePassed = pendingDebt.data.baselineTestsPassed;
+
+		if (baselinePassed && !testsPassed) {
+			const msg = `🔴 ERROR DEBT: Tests were passing but now failing (${testResult.failed} failure(s)). Fix before continuing.`;
+			dbg(`session_start ERROR DEBT: ${msg}`);
+			notify(msg, "warning");
+		}
+
+		runtime.errorDebtBaseline = { testsPassed, buildPassed: true };
+		cacheManager.writeCache(
+			"errorDebt",
+			{ pendingCheck: false, baselineTestsPassed: testsPassed },
+			analysisRoot,
+		);
+	} else if (errorDebtEnabled && detectedRunner) {
+		dbg("session_start: establishing fresh error debt baseline");
+		const testResult = testRunnerClient.runTestFile(
+			".",
+			analysisRoot,
+			detectedRunner.runner,
+			detectedRunner.config,
+		);
+		const testsPassed = testResult.failed === 0 && !testResult.error;
+		runtime.errorDebtBaseline = { testsPassed, buildPassed: true };
+		dbg(
+			`session_start error debt baseline: testsPassed=${runtime.errorDebtBaseline.testsPassed}`,
+		);
+	}
+}
+
 export async function handleSessionStart(
 	deps: SessionStartDeps,
 ): Promise<void> {
@@ -132,8 +443,6 @@ export async function handleSessionStart(
 		runtime,
 		metricsClient,
 		cacheManager,
-		todoScanner,
-		astGrepClient,
 		biomeClient,
 		ruffClient,
 		knipClient,
@@ -144,6 +453,7 @@ export async function handleSessionStart(
 		testRunnerClient,
 		goClient,
 		rustClient,
+		astGrepClient,
 		ensureTool,
 		cleanStaleTsBuildInfo,
 		resetDispatchBaselines,
@@ -165,19 +475,7 @@ export async function handleSessionStart(
 		);
 	}
 
-	if (getFlag("auto-install")) {
-		process.env.PI_LENS_AUTO_INSTALL = "1";
-		dbg("session_start: LSP auto-install enabled (PI_LENS_AUTO_INSTALL=1)");
-	} else {
-		delete process.env.PI_LENS_AUTO_INSTALL;
-	}
-
-	if (getFlag("no-lsp-install")) {
-		process.env.PI_LENS_DISABLE_LSP_INSTALL = "1";
-		dbg("session_start: LSP install disabled (PI_LENS_DISABLE_LSP_INSTALL=1)");
-	} else {
-		delete process.env.PI_LENS_DISABLE_LSP_INSTALL;
-	}
+	applyEnvFlags(getFlag, dbg);
 
 	const hasWorkspaceCwd = typeof ctxCwd === "string" && ctxCwd.length > 0;
 	const cwd = ctxCwd ?? process.cwd();
@@ -199,9 +497,7 @@ export async function handleSessionStart(
 	}
 
 	const tools: string[] = [];
-	if (getFlag("lens-lsp") && !getFlag("no-lsp")) {
-		tools.push("LSP Service");
-	}
+	if (getFlag("lens-lsp") && !getFlag("no-lsp")) tools.push("LSP Service");
 	if (biomeClient.isAvailable()) tools.push("Biome");
 	if (astGrepClient.isAvailable()) tools.push("ast-grep");
 	if (ruffClient.isAvailable()) tools.push("Ruff");
@@ -257,9 +553,7 @@ export async function handleSessionStart(
 			) {
 				return false;
 			}
-			if (tool === "ruff" && getFlag("no-autofix-ruff")) {
-				return false;
-			}
+			if (tool === "ruff" && getFlag("no-autofix-ruff")) return false;
 			return true;
 		},
 	);
@@ -268,59 +562,13 @@ export async function handleSessionStart(
 		dbg("session_start: skipping tool preinstall (startup mode)");
 	} else if (startupDefaults.length > 0) {
 		dbg(`session_start: pre-install defaults -> ${startupDefaults.join(", ")}`);
-		for (const tool of startupDefaults) {
-			const startedAt = Date.now();
-			dbg(`session_start preinstall ${tool}: start`);
-			ensureTool(tool)
-				.then((toolPath) => {
-					if (toolPath) {
-						dbg(`session_start: ${tool} ready at ${toolPath}`);
-						dbg(
-							`session_start preinstall ${tool}: success (${Date.now() - startedAt}ms)`,
-						);
-					} else {
-						dbg(`session_start: ${tool} installation unavailable`);
-						dbg(
-							`session_start preinstall ${tool}: unavailable (${Date.now() - startedAt}ms)`,
-						);
-					}
-				})
-				.catch((err) => {
-					dbg(`session_start: ${tool} pre-install error: ${err}`);
-					dbg(
-						`session_start preinstall ${tool}: error (${Date.now() - startedAt}ms)`,
-					);
-				});
-		}
+		firePreinstallDefaults(ensureTool, dbg, startupDefaults);
 	} else {
 		dbg("session_start: no language defaults selected for pre-install");
 	}
 
 	if (allowBootstrapTasks) {
-		const pkgPath = path.join(analysisRoot, "package.json");
-		try {
-			const raw = await nodeFs.promises.readFile(pkgPath, "utf-8");
-			const pkg = JSON.parse(raw) as {
-				dependencies?: Record<string, string>;
-				devDependencies?: Record<string, string>;
-				prettier?: unknown;
-			};
-			const usesPrettier =
-				!!pkg.devDependencies?.prettier ||
-				!!pkg.dependencies?.prettier ||
-				pkg.prettier !== undefined;
-			if (usesPrettier) {
-				dbg("session_start: project uses prettier, ensuring install...");
-				ensureTool("prettier")
-					.then((p) => {
-						if (p) dbg(`session_start: prettier ready at ${p}`);
-						else dbg("session_start: prettier install failed silently");
-					})
-					.catch((err) => dbg(`session_start: prettier install error: ${err}`));
-			}
-		} catch {
-			// no package.json at cwd root
-		}
+		await probePrettierInstall(ensureTool, dbg, analysisRoot);
 	} else {
 		dbg("session_start: skipping prettier preinstall probe (startup mode)");
 	}
@@ -329,19 +577,16 @@ export async function handleSessionStart(
 	if (hasArchitectRules) tools.push("Architect rules");
 
 	const detectedRunner = testRunnerClient.detectRunner(analysisRoot);
-	if (detectedRunner) {
-		tools.push(`Test runner (${detectedRunner.runner})`);
-	}
+	if (detectedRunner) tools.push(`Test runner (${detectedRunner.runner})`);
 	if (goClient.isGoAvailable()) tools.push("Go (go vet)");
 	if (rustClient.isAvailable()) tools.push("Rust (cargo)");
 	log(`Active tools: ${tools.join(", ")}`);
 	dbg(`session_start tools: ${tools.join(", ")}`);
 
 	const startupNotes: string[] = [];
-	const agentStartupGuidance: string[] = [];
-	agentStartupGuidance.push(
+	const agentStartupGuidance = [
 		"📌 pi-lens active — as you work on this project, fix any errors you encounter (including pre-existing). Prefer: lsp_navigation for definitions/references, ast_grep_search for code patterns, grep for text/TODO search.",
-	);
+	];
 
 	runtime.projectRulesScan = scanProjectRules(analysisRoot);
 	if (runtime.projectRulesScan.hasCustomRules) {
@@ -369,39 +614,13 @@ export async function handleSessionStart(
 		dbg("session_start: skipping tooling hints (workspace cwd unavailable)");
 	}
 
-	if (agentStartupGuidance.length > 0) {
-		cacheManager.writeCache(
-			"session-start-guidance",
-			{ content: agentStartupGuidance.join("\n") },
-			analysisRoot,
-		);
-	}
+	cacheManager.writeCache(
+		"session-start-guidance",
+		{ content: agentStartupGuidance.join("\n") },
+		analysisRoot,
+	);
 
 	const sessionGeneration = runtime.sessionGeneration;
-	const runStartupTask = (name: string, task: () => Promise<void>): void => {
-		const startedAt = Date.now();
-		dbg(`session_start task ${name}: start`);
-		runtime.markStartupScanInFlight(name, sessionGeneration);
-		void task()
-			.then(() => {
-				dbg(
-					`session_start task ${name}: success (${Date.now() - startedAt}ms)`,
-				);
-			})
-			.catch((err) => {
-				dbg(`session_start: ${name} background scan failed: ${err}`);
-				dbg(`session_start task ${name}: failed (${Date.now() - startedAt}ms)`);
-			})
-			.finally(() => {
-				runtime.clearStartupScanInFlight(name, sessionGeneration);
-				dbg(`session_start task ${name}: end`);
-			});
-	};
-
-	// Fire off heavy scans as background tasks — don't block session start.
-	// Each consumer already handles the "not ready yet" case gracefully
-	// (cachedExports.size > 0, cachedProjectIndex != null, cache miss paths).
-
 	if (!allowBootstrapTasks) {
 		dbg("session_start: skipping startup background scans (startup mode)");
 	} else if (!startupScan.canWarmCaches) {
@@ -412,202 +631,27 @@ export async function handleSessionStart(
 			`session_start: skipping TODO scan (${startupScan.reason ?? "unknown"})`,
 		);
 	} else {
-		const canRunJsTsHeavyScans = canRunStartupHeavyScans(
+		scheduleStartupScans(
+			deps,
+			runtime,
+			sessionGeneration,
+			analysisRoot,
 			languageProfile,
-			"jsts",
+			dbg,
 		);
-		const scanNames = ["todo"];
-		if (canRunJsTsHeavyScans) {
-			scanNames.push("knip", "jscpd", "ast-grep exports", "project index");
-		}
-		dbg(`session_start: launching background scans (${scanNames.join(", ")})`);
-
-		runStartupTask("todo", async () => {
-			if (!runtime.isCurrentSession(sessionGeneration)) return;
-			const todoResult = todoScanner.scanDirectory(analysisRoot);
-			if (!runtime.isCurrentSession(sessionGeneration)) return;
-			dbg(
-				`session_start TODO scan: ${todoResult.items.length} items (baseline stored)`,
-			);
-			cacheManager.writeCache(
-				"todo-baseline",
-				{ items: todoResult.items },
-				analysisRoot,
-			);
-		});
-
-		if (!canRunJsTsHeavyScans) {
-			dbg(
-				"session_start: skipping JS/TS startup scans (requires JS/TS language + project config)",
-			);
-		} else {
-			// Knip — dead code / unused exports
-			runStartupTask("knip", async () => {
-				if (await knipClient.ensureAvailable()) {
-					if (!runtime.isCurrentSession(sessionGeneration)) return;
-					const cached = cacheManager.readCache<
-						ReturnType<KnipClient["analyze"]>
-					>("knip", analysisRoot);
-					if (cached) {
-						if (!runtime.isCurrentSession(sessionGeneration)) return;
-						dbg(
-							`session_start Knip: cache hit (${Math.round((Date.now() - new Date(cached.meta.timestamp).getTime()) / 1000)}s ago)`,
-						);
-					} else {
-						const startMs = Date.now();
-						const knipResult = knipClient.analyze(
-							analysisRoot,
-							getKnipIgnorePatterns(),
-						);
-						if (!runtime.isCurrentSession(sessionGeneration)) return;
-						cacheManager.writeCache("knip", knipResult, analysisRoot, {
-							scanDurationMs: Date.now() - startMs,
-						});
-						dbg(`session_start Knip scan done (${Date.now() - startMs}ms)`);
-					}
-				} else {
-					if (!runtime.isCurrentSession(sessionGeneration)) return;
-					dbg("session_start Knip: not available");
-				}
-			});
-
-			// jscpd — duplicate code detection
-			runStartupTask("jscpd", async () => {
-				if (await jscpdClient.ensureAvailable()) {
-					if (!runtime.isCurrentSession(sessionGeneration)) return;
-					const cached = cacheManager.readCache<
-						ReturnType<JscpdClient["scan"]>
-					>("jscpd", analysisRoot);
-					if (cached) {
-						if (!runtime.isCurrentSession(sessionGeneration)) return;
-						dbg("session_start jscpd: cache hit");
-					} else {
-						const startMs = Date.now();
-						const jscpdResult = jscpdClient.scan(analysisRoot);
-						if (!runtime.isCurrentSession(sessionGeneration)) return;
-						cacheManager.writeCache("jscpd", jscpdResult, analysisRoot, {
-							scanDurationMs: Date.now() - startMs,
-						});
-						dbg(`session_start jscpd scan done (${Date.now() - startMs}ms)`);
-					}
-				} else {
-					if (!runtime.isCurrentSession(sessionGeneration)) return;
-					dbg("session_start jscpd: not available");
-				}
-			});
-
-			// ast-grep — export scan for duplicate detection
-			runStartupTask("ast-grep-exports", async () => {
-				if (await astGrepClient.ensureAvailable()) {
-					if (!runtime.isCurrentSession(sessionGeneration)) return;
-					const exports = await astGrepClient.scanExports(
-						analysisRoot,
-						"typescript",
-					);
-					if (!runtime.isCurrentSession(sessionGeneration)) return;
-					dbg(`session_start exports scan: ${exports.size} functions found`);
-					for (const [name, file] of exports) {
-						runtime.cachedExports.set(name, file);
-					}
-				}
-			});
-
-			// Project index — structural similarity detection
-			runStartupTask("project-index", async () => {
-				const existing = await loadIndex(analysisRoot);
-				if (!runtime.isCurrentSession(sessionGeneration)) return;
-				if (
-					existing &&
-					existing.entries.size > 0 &&
-					(await isIndexFresh(analysisRoot))
-				) {
-					if (!runtime.isCurrentSession(sessionGeneration)) return;
-					runtime.cachedProjectIndex = existing;
-					dbg(
-						`session_start: loaded fresh project index (${existing.entries.size} entries)`,
-					);
-				} else {
-					const sourceFiles = getSourceFiles(analysisRoot, true);
-					const tsFiles = sourceFiles.filter(
-						(f) => f.endsWith(".ts") || f.endsWith(".tsx"),
-					);
-					if (tsFiles.length > 0 && tsFiles.length <= 500) {
-						runtime.cachedProjectIndex = await buildProjectIndex(
-							analysisRoot,
-							tsFiles,
-						);
-						if (!runtime.isCurrentSession(sessionGeneration)) return;
-						await saveIndex(runtime.cachedProjectIndex, analysisRoot);
-						dbg(
-							`session_start: built project index (${runtime.cachedProjectIndex.entries.size} entries from ${tsFiles.length} files)`,
-						);
-					} else {
-						if (!runtime.isCurrentSession(sessionGeneration)) return;
-						dbg(
-							`session_start: skipped project index (${tsFiles.length} files)`,
-						);
-					}
-				}
-			});
-		}
 	}
 
 	dbg(
 		`session_start: background scans launched (${startupNotes.length} startup note(s))`,
 	);
 
-	const errorDebtEnabled = allowBootstrapTasks && getFlag("error-debt");
-	const pendingDebt = cacheManager.readCache<{
-		pendingCheck: boolean;
-		baselineTestsPassed: boolean;
-	}>("errorDebt", analysisRoot);
-
-	if (errorDebtEnabled && detectedRunner && pendingDebt?.data?.pendingCheck) {
-		dbg("session_start: running pending error debt check");
-		const testResult = testRunnerClient.runTestFile(
-			".",
-			analysisRoot,
-			detectedRunner.runner,
-			detectedRunner.config,
-		);
-		const testsPassed = testResult.failed === 0 && !testResult.error;
-		const baselinePassed = pendingDebt.data.baselineTestsPassed;
-
-		if (baselinePassed && !testsPassed) {
-			const msg = `🔴 ERROR DEBT: Tests were passing but now failing (${testResult.failed} failure(s)). Fix before continuing.`;
-			dbg(`session_start ERROR DEBT: ${msg}`);
-			notify(msg, "warning");
-		}
-
-		runtime.errorDebtBaseline = {
-			testsPassed,
-			buildPassed: true,
-		};
-		cacheManager.writeCache(
-			"errorDebt",
-			{
-				pendingCheck: false,
-				baselineTestsPassed: testsPassed,
-			},
-			analysisRoot,
-		);
-	} else if (errorDebtEnabled && detectedRunner) {
-		dbg("session_start: establishing fresh error debt baseline");
-		const testResult = testRunnerClient.runTestFile(
-			".",
-			analysisRoot,
-			detectedRunner.runner,
-			detectedRunner.config,
-		);
-		const testsPassed = testResult.failed === 0 && !testResult.error;
-		runtime.errorDebtBaseline = {
-			testsPassed,
-			buildPassed: true,
-		};
-		dbg(
-			`session_start error debt baseline: testsPassed=${runtime.errorDebtBaseline.testsPassed}`,
-		);
-	}
+	runErrorDebtBaseline(
+		deps,
+		detectedRunner,
+		analysisRoot,
+		allowBootstrapTasks,
+		getFlag,
+	);
 
 	if (startupNotes.length > 0) {
 		notify(startupNotes.join("\n"), "info");

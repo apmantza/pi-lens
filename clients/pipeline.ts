@@ -268,142 +268,67 @@ async function tryEslintFix(filePath: string, cwd: string): Promise<number> {
 	return fixableCount;
 }
 
-// --- Main Pipeline ---
+// --- Pipeline phase helpers ---
 
-export async function runPipeline(
-	ctx: PipelineContext,
-	deps: PipelineDeps,
-): Promise<PipelineResult> {
-	const { filePath, cwd, toolName, getFlag, dbg } = ctx;
-	const {
-		biomeClient,
-		ruffClient,
-		testRunnerClient,
-		metricsClient,
-		getFormatService,
-		fixedThisTurn,
-	} = deps;
+async function syncLspFile(
+	filePath: string,
+	fileContent: string,
+	cwd: string,
+	getFlag: PipelineContext["getFlag"],
+	dbg: PipelineContext["dbg"],
+	ruffClient: RuffClient,
+	biomeClient: BiomeClient,
+): Promise<{ completed: boolean; phaseEnded: boolean }> {
+	if (!getFlag("lens-lsp") || getFlag("no-lsp")) {
+		return { completed: true, phaseEnded: false };
+	}
 
-	const phase = createPhaseTracker(toolName, filePath);
-	const pipelineStart = Date.now();
-	phase.start("total");
+	const deferLspSync =
+		!getFlag("no-autofix") &&
+		(ruffClient.isPythonFile(filePath) ||
+			(biomeClient.isSupportedFile(filePath) && hasBiomeConfig(cwd)) ||
+			isJsTs(filePath));
 
-	// --- Read file content ---
-	phase.start("read_file");
-	let fileContent: string | undefined;
+	if (deferLspSync) {
+		return { completed: true, phaseEnded: true };
+	}
+
+	const limitCheck = exceedsLspSyncLimits(filePath, fileContent);
+	if (limitCheck.tooLarge) {
+		dbg(`LSP sync skipped for ${filePath}: ${limitCheck.reason}`);
+		return { completed: true, phaseEnded: false };
+	}
+
 	try {
-		fileContent = nodeFs.readFileSync(filePath, "utf-8");
-	} catch {
-		// File may not exist (e.g., deleted)
-	}
-	phase.end("read_file");
-
-	// --- 1. Secrets scan (blocking — early exit) ---
-	if (fileContent) {
-		const secretFindings = scanForSecrets(fileContent, filePath);
-		if (secretFindings.length > 0) {
-			const secretsOutput = formatSecrets(secretFindings, filePath);
-			logLatency({
-				type: "tool_result",
-				toolName,
-				filePath,
-				durationMs: Date.now() - pipelineStart,
-				result: "blocked_secrets",
-				metadata: { secretsFound: secretFindings.length },
-			});
-			return {
-				output: `\n\n${secretsOutput}`,
-				hasBlockers: true,
-				isError: true,
-				fileModified: false,
-			};
+		const lspService = getLSPService();
+		const hasLSP = await lspService.hasLSP(filePath);
+		if (hasLSP) {
+			await lspService.openFile(filePath, fileContent);
 		}
+	} catch (err) {
+		dbg(`LSP sync error: ${err}`);
 	}
+	return { completed: true, phaseEnded: false };
+}
 
-	// --- 2. Auto-format ---
-	phase.start("format");
-	let formatChanged = false;
-	let formattersUsed: string[] = [];
-	let needsContentRefresh = false;
-	if (!getFlag("no-autoformat") && fileContent) {
-		const formatService = getFormatService();
-		try {
-			formatService.recordRead(filePath);
-			const result = await formatService.formatFile(filePath);
-			formattersUsed = result.formatters.map((f) => f.name);
-			if (result.anyChanged) {
-				formatChanged = true;
-				needsContentRefresh = true;
-				dbg(
-					`autoformat: ${result.formatters.map((f) => `${f.name}(${f.changed ? "changed" : "unchanged"})`).join(", ")}`,
-				);
-			}
-		} catch (err) {
-			dbg(`autoformat error: ${err}`);
-		}
-	}
-	phase.end("format", { formattersUsed, formatChanged });
-
-	// --- 3. LSP file sync ---
-	// Awaited so that dispatch lint (phase 5) and cascade diagnostics
-	// (phase 7) run with fresh LSP state, not stale diagnostics.
-	// Fire-and-forget would cause cascade diagnostics to see pre-write state.
-	phase.start("lsp_sync");
-	let lspSyncCompleted = false;
-	let lspPhaseEnded = false;
-	if (getFlag("lens-lsp") && !getFlag("no-lsp") && fileContent) {
-		const deferLspSync =
-			!getFlag("no-autofix") &&
-			(ruffClient.isPythonFile(filePath) ||
-				(biomeClient.isSupportedFile(filePath) && hasBiomeConfig(cwd)) ||
-				isJsTs(filePath));
-
-		if (deferLspSync) {
-			lspSyncCompleted = true;
-			phase.end("lsp_sync", { completed: true, deferred: true });
-			lspPhaseEnded = true;
-		} else {
-			const limitCheck = exceedsLspSyncLimits(filePath, fileContent);
-			if (limitCheck.tooLarge) {
-				dbg(`LSP sync skipped for ${filePath}: ${limitCheck.reason}`);
-				lspSyncCompleted = true;
-			} else {
-				const lspService = getLSPService();
-				try {
-					const hasLSP = await lspService.hasLSP(filePath);
-					if (hasLSP) {
-						// Always go through openFile. The client dedupes duplicate didOpen
-						// by converting to didChange when already open.
-						await lspService.openFile(filePath, fileContent);
-					}
-					lspSyncCompleted = true;
-				} catch (err) {
-					dbg(`LSP sync error: ${err}`);
-					lspSyncCompleted = true; // Continue even if LSP fails
-				}
-			}
-		}
-	} else {
-		lspSyncCompleted = true;
-	}
-	if (!lspPhaseEnded) {
-		phase.end("lsp_sync", { completed: lspSyncCompleted });
-	}
-
-	let output = "";
-	const autofixTools: string[] = []; // track which tools fixed something
-	let testSummary: { passed: number; total: number; failed: number } | null =
-		null;
-	let hasBlockers = false;
-
-	// --- 4. Auto-fix ---
-	// Biome (TS/JS) and Ruff (Python) never touch the same file, so their
-	// availability checks can run in parallel.
-	phase.start("autofix");
+async function runAutofix(
+	filePath: string,
+	cwd: string,
+	getFlag: PipelineContext["getFlag"],
+	dbg: PipelineContext["dbg"],
+	deps: Pick<PipelineDeps, "biomeClient" | "ruffClient" | "fixedThisTurn">,
+): Promise<{
+	fixedCount: number;
+	autofixTools: string[];
+	needsContentRefresh: boolean;
+}> {
+	const { biomeClient, ruffClient, fixedThisTurn } = deps;
 	const noAutofix = getFlag("no-autofix");
 	const noAutofixBiome = getFlag("no-autofix-biome");
 	const noAutofixRuff = getFlag("no-autofix-ruff");
 	let fixedCount = 0;
+	const autofixTools: string[] = [];
+	let needsContentRefresh = false;
 
 	if (!fixedThisTurn.has(filePath) && !noAutofix) {
 		const [ruffReady, biomeReady] = await Promise.all([
@@ -439,7 +364,7 @@ export async function runPipeline(
 			}
 		}
 	}
-	// ESLint --fix: only for jsts files in projects that use ESLint
+
 	if (!noAutofix && isJsTs(filePath)) {
 		const eslintFixed = await tryEslintFix(filePath, cwd);
 		if (eslintFixed > 0) {
@@ -451,6 +376,258 @@ export async function runPipeline(
 		}
 	}
 
+	return { fixedCount, autofixTools, needsContentRefresh };
+}
+
+async function resyncLspFile(
+	filePath: string,
+	fileContent: string,
+	needsContentRefresh: boolean,
+	lspSyncCompleted: boolean,
+	getFlag: PipelineContext["getFlag"],
+	dbg: PipelineContext["dbg"],
+): Promise<void> {
+	if (!getFlag("lens-lsp") || getFlag("no-lsp")) return;
+	if (!needsContentRefresh && lspSyncCompleted) return;
+
+	const limitCheck = exceedsLspSyncLimits(filePath, fileContent);
+	if (limitCheck.tooLarge) return;
+
+	try {
+		const lspService = getLSPService();
+		const hasLSP = await lspService.hasLSP(filePath);
+		if (hasLSP) {
+			await lspService.openFile(filePath, fileContent);
+		}
+	} catch (err) {
+		dbg(`LSP resync after autofix error: ${err}`);
+	}
+}
+
+async function gatherCascadeDiagnostics(
+	filePath: string,
+	cwd: string,
+	toolName: string,
+	getFlag: PipelineContext["getFlag"],
+	dbg: PipelineContext["dbg"],
+): Promise<string | undefined> {
+	if (!getFlag("lens-lsp") || getFlag("no-lsp")) return undefined;
+
+	const MAX_CASCADE_FILES = RUNTIME_CONFIG.pipeline.cascadeMaxFiles;
+	const MAX_DIAGNOSTICS_PER_FILE =
+		RUNTIME_CONFIG.pipeline.cascadeMaxDiagnosticsPerFile;
+	const cascadeStart = Date.now();
+
+	try {
+		const lspService = getLSPService();
+		const allDiags = await lspService.getAllDiagnostics();
+		const normalizedEditedPath = resolveRunnerPath(cwd, filePath);
+		let stalePathsSkipped = 0;
+		const otherFileErrors: Array<{
+			file: string;
+			errors: import("./lsp/client.js").LSPDiagnostic[];
+		}> = [];
+
+		for (const [diagPath, diags] of allDiags) {
+			const normalizedDiagPath = resolveRunnerPath(cwd, diagPath);
+			if (normalizeMapKey(normalizedDiagPath) === normalizedEditedPath) continue;
+			if (!nodeFs.existsSync(normalizedDiagPath)) {
+				stalePathsSkipped++;
+				continue;
+			}
+			const errors = diags.filter((d) => d.severity === 1);
+			if (errors.length > 0) {
+				otherFileErrors.push({
+					file: toRunnerDisplayPath(cwd, normalizedDiagPath),
+					errors,
+				});
+			}
+		}
+
+		otherFileErrors.sort((a, b) => b.errors.length - a.errors.length);
+
+		let cascadeOutput: string | undefined;
+		if (otherFileErrors.length > 0) {
+			let c = `📐 Cascade errors in ${otherFileErrors.length} other file(s) — fix before finishing turn:`;
+			for (const { file, errors } of otherFileErrors.slice(
+				0,
+				MAX_CASCADE_FILES,
+			)) {
+				const limited = errors.slice(0, MAX_DIAGNOSTICS_PER_FILE);
+				const suffix =
+					errors.length > MAX_DIAGNOSTICS_PER_FILE
+						? `\n... and ${errors.length - MAX_DIAGNOSTICS_PER_FILE} more`
+						: "";
+				c += `\n<diagnostics file="${file}">`;
+				for (const e of limited) {
+					const line = (e.range?.start?.line ?? 0) + 1;
+					const col = (e.range?.start?.character ?? 0) + 1;
+					const code = e.code ? ` code=${String(e.code)}` : "";
+					c += `\n  line ${line}, col ${col}${code}: ${e.message.split("\n")[0].slice(0, 100)}`;
+				}
+				c += `${suffix}\n</diagnostics>`;
+			}
+			if (otherFileErrors.length > MAX_CASCADE_FILES) {
+				c += `\n... and ${otherFileErrors.length - MAX_CASCADE_FILES} more files with errors`;
+			}
+			cascadeOutput = c;
+		}
+
+		logLatency({
+			type: "phase",
+			toolName,
+			filePath,
+			phase: "cascade_diagnostics",
+			durationMs: Date.now() - cascadeStart,
+			metadata: {
+				filesWithErrors: otherFileErrors.length,
+				stalePathsSkipped,
+			},
+		});
+
+		return cascadeOutput;
+	} catch (err) {
+		dbg(`cascade diagnostics error: ${err}`);
+		return undefined;
+	}
+}
+
+type DispatchResult = Awaited<ReturnType<typeof dispatchLintWithResult>>;
+type TestSummary = { passed: number; total: number; failed: number } | null;
+
+function buildAllClearOutput(
+	dispatchResult: DispatchResult,
+	testSummary: TestSummary,
+	elapsed: number,
+	filePath: string,
+): string {
+	const kind = detectFileKind(filePath);
+	const langLabel = kind ? getFileKindLabel(kind) : path.extname(filePath);
+	const parts: string[] = [];
+
+	if (dispatchResult.warnings.length > 0) {
+		const newWarnings = dispatchResult.warnings.length;
+		const totalWarnings = newWarnings + dispatchResult.baselineWarningCount;
+		const totalStr =
+			totalWarnings === newWarnings
+				? `${totalWarnings} warning(s)`
+				: `${newWarnings} new (${totalWarnings} total)`;
+		parts.push(`no blockers`);
+		parts.push(`${totalStr} -> /lens-booboo`);
+	} else if (kind) {
+		parts.push(`${langLabel} clean`);
+	}
+
+	if (testSummary && testSummary.failed === 0) {
+		parts.push(`${testSummary.passed}/${testSummary.total} tests`);
+	}
+
+	parts.push(`${elapsed}ms`);
+	return `checkmark ${parts.join(" · ")}`.replace("checkmark", "\u2713");
+}
+
+// --- Main Pipeline ---
+
+export async function runPipeline(
+	ctx: PipelineContext,
+	deps: PipelineDeps,
+): Promise<PipelineResult> {
+	const { filePath, cwd, toolName, getFlag, dbg } = ctx;
+	const { biomeClient, ruffClient, testRunnerClient, getFormatService } = deps;
+
+	const phase = createPhaseTracker(toolName, filePath);
+	const pipelineStart = Date.now();
+	phase.start("total");
+
+	// --- 1. Read file content ---
+	phase.start("read_file");
+	let fileContent: string | undefined;
+	try {
+		fileContent = nodeFs.readFileSync(filePath, "utf-8");
+	} catch {
+		// File may not exist (e.g., deleted)
+	}
+	phase.end("read_file");
+
+	// --- 2. Secrets scan (blocking — early exit) ---
+	if (fileContent) {
+		const secretFindings = scanForSecrets(fileContent, filePath);
+		if (secretFindings.length > 0) {
+			logLatency({
+				type: "tool_result",
+				toolName,
+				filePath,
+				durationMs: Date.now() - pipelineStart,
+				result: "blocked_secrets",
+				metadata: { secretsFound: secretFindings.length },
+			});
+			return {
+				output: `\n\n${formatSecrets(secretFindings, filePath)}`,
+				hasBlockers: true,
+				isError: true,
+				fileModified: false,
+			};
+		}
+	}
+
+	// --- 3. Auto-format ---
+	phase.start("format");
+	let formatChanged = false;
+	let formattersUsed: string[] = [];
+	let needsContentRefresh = false;
+	if (!getFlag("no-autoformat") && fileContent) {
+		const formatService = getFormatService();
+		try {
+			formatService.recordRead(filePath);
+			const result = await formatService.formatFile(filePath);
+			formattersUsed = result.formatters.map((f) => f.name);
+			if (result.anyChanged) {
+				formatChanged = true;
+				needsContentRefresh = true;
+				dbg(
+					`autoformat: ${result.formatters.map((f) => `${f.name}(${f.changed ? "changed" : "unchanged"})`).join(", ")}`,
+				);
+			}
+		} catch (err) {
+			dbg(`autoformat error: ${err}`);
+		}
+	}
+	phase.end("format", { formattersUsed, formatChanged });
+
+	// --- 4. LSP file sync ---
+	// Awaited so that dispatch lint (phase 6) and cascade diagnostics (phase 8)
+	// run with fresh LSP state. Fire-and-forget would cause stale diagnostics.
+	phase.start("lsp_sync");
+	let lspSyncCompleted = false;
+	let lspPhaseEnded = false;
+	if (fileContent) {
+		const sync = await syncLspFile(
+			filePath,
+			fileContent,
+			cwd,
+			getFlag,
+			dbg,
+			ruffClient,
+			biomeClient,
+		);
+		lspSyncCompleted = sync.completed;
+		lspPhaseEnded = sync.phaseEnded;
+	} else {
+		lspSyncCompleted = true;
+	}
+	if (!lspPhaseEnded) {
+		phase.end("lsp_sync", { completed: lspSyncCompleted });
+	} else {
+		phase.end("lsp_sync", { completed: true, deferred: true });
+	}
+
+	// --- 5. Auto-fix ---
+	// Biome (TS/JS) and Ruff (Python) never touch the same file, so their
+	// availability checks run in parallel.
+	phase.start("autofix");
+	const { fixedCount, autofixTools, needsContentRefresh: fixRefresh } =
+		await runAutofix(filePath, cwd, getFlag, dbg, deps);
+	if (fixRefresh) needsContentRefresh = true;
 	phase.end("autofix", { fixedCount, tools: ["ruff", "biome", "eslint"] });
 
 	if (needsContentRefresh) {
@@ -461,45 +638,33 @@ export async function runPipeline(
 		}
 	}
 
-	// Re-sync LSP after format/autofix changes so dispatch uses current code,
-	// not diagnostics from the pre-fix snapshot.
-	if (
-		getFlag("lens-lsp") &&
-		!getFlag("no-lsp") &&
-		fileContent &&
-		(needsContentRefresh || !lspSyncCompleted)
-	) {
-		const limitCheck = exceedsLspSyncLimits(filePath, fileContent);
-		if (!limitCheck.tooLarge) {
-			try {
-				const lspService = getLSPService();
-				const hasLSP = await lspService.hasLSP(filePath);
-				if (hasLSP) {
-					await lspService.openFile(filePath, fileContent);
-				}
-			} catch (err) {
-				dbg(`LSP resync after autofix error: ${err}`);
-			}
-		}
+	// Re-sync LSP after format/autofix changes so dispatch uses current code.
+	if (fileContent) {
+		await resyncLspFile(
+			filePath,
+			fileContent,
+			needsContentRefresh,
+			lspSyncCompleted,
+			getFlag,
+			dbg,
+		);
 	}
 
-	// --- 5. Dispatch lint ---
+	// --- 6. Dispatch lint ---
 	phase.start("dispatch_lint");
 	dbg(`dispatch: running lint tools for ${filePath}`);
 
 	const piApi: PiAgentAPI = {
 		getFlag: getFlag as (flag: string) => boolean | string | undefined,
 	};
-
 	const dispatchResult = await dispatchLintWithResult(
 		filePath,
 		cwd,
 		piApi,
 		ctx.modifiedRanges,
 	);
-	hasBlockers = dispatchResult.hasBlockers;
+	let hasBlockers = dispatchResult.hasBlockers;
 
-	// Log and track diagnostics for analytics
 	if (dispatchResult.diagnostics.length > 0) {
 		const logger = getDiagnosticLogger();
 		const tracker = getDiagnosticTracker();
@@ -519,7 +684,6 @@ export async function runPipeline(
 				.map(toKey),
 		);
 		for (const d of dispatchResult.diagnostics) {
-			const shownInline = inlineKeys.has(toKey(d));
 			logger.logCaught(
 				d,
 				{
@@ -528,31 +692,22 @@ export async function runPipeline(
 					turnIndex: ctx.telemetry?.turnIndex ?? 0,
 					writeIndex: ctx.telemetry?.writeIndex ?? 0,
 				},
-				shownInline,
+				inlineKeys.has(toKey(d)),
 			);
 		}
 	}
 
-	if (fixedCount > 0) {
-		const tracker = getDiagnosticTracker();
-		tracker.trackAutoFixed(fixedCount);
-	}
+	if (fixedCount > 0) getDiagnosticTracker().trackAutoFixed(fixedCount);
+	if (dispatchResult.resolvedCount > 0)
+		getDiagnosticTracker().trackAgentFixed(dispatchResult.resolvedCount);
 
-	if (dispatchResult.resolvedCount > 0) {
-		const tracker = getDiagnosticTracker();
-		tracker.trackAgentFixed(dispatchResult.resolvedCount);
-	}
-
-	if (dispatchResult.output) {
-		output += `\n\n${dispatchResult.output}`;
-	}
-
+	let output = "";
+	if (dispatchResult.output) output += `\n\n${dispatchResult.output}`;
 	if (fixedCount > 0) {
 		const detail =
 			autofixTools.length > 0 ? ` (${autofixTools.join(", ")})` : "";
 		output += `\n\n✅ Auto-fixed ${fixedCount} issue(s)${detail}`;
 	}
-
 	if (formatChanged || fixedCount > 0) {
 		output += `\n\n⚠️ **File modified by auto-format/fix. Re-read before next edit.**`;
 	}
@@ -561,8 +716,9 @@ export async function runPipeline(
 		diagnosticCount: dispatchResult.diagnostics.length,
 	});
 
-	// --- 6. Test runner ---
+	// --- 7. Test runner ---
 	phase.start("test_runner");
+	let testSummary: TestSummary = null;
 	let testInfoFound = false;
 	let testRunnerRan = false;
 	if (!getFlag("no-tests")) {
@@ -574,21 +730,18 @@ export async function runPipeline(
 			);
 			testRunnerRan = true;
 			const testStart = Date.now();
-			// Use async variant — keeps the event loop free while tests run
-			// so LSP messages and other file writes proceed concurrently.
 			const testResult = await testRunnerClient.runTestFileAsync(
 				target.testFile,
 				cwd,
 				target.runner,
 				target.config,
 			);
-			const testDuration = Date.now() - testStart;
 			logLatency({
 				type: "phase",
 				toolName,
 				filePath,
 				phase: "test_runner",
-				durationMs: testDuration,
+				durationMs: Date.now() - testStart,
 				metadata: {
 					testFile: target.testFile,
 					runner: target.runner,
@@ -602,141 +755,32 @@ export async function runPipeline(
 					total: testResult.passed + testResult.failed + testResult.skipped,
 					failed: testResult.failed,
 				};
-				if (testSummary.failed > 0) {
-					hasBlockers = true;
-				}
+				if (testSummary.failed > 0) hasBlockers = true;
 				const testOutput = testRunnerClient.formatResult(testResult);
-				if (testOutput) {
-					output += `\n\n${testOutput}`;
-				}
+				if (testOutput) output += `\n\n${testOutput}`;
 			}
 		}
 	}
 	phase.end("test_runner", { found: testInfoFound, ran: testRunnerRan });
 
-	// --- 7. Cascade diagnostics (LSP only) ---
-	// Deferred: cascade errors are errors in OTHER files caused by this edit.
-	// They are NOT shown inline (mid-refactor they are always noisy — agent is
-	// still editing the other files). Returned in cascadeOutput so index.ts can
-	// surface the LAST snapshot at turn_end once all edits in the turn are done.
-	let cascadeOutput: string | undefined;
-	if (getFlag("lens-lsp") && !getFlag("no-lsp")) {
-		const MAX_CASCADE_FILES = RUNTIME_CONFIG.pipeline.cascadeMaxFiles;
-		const MAX_DIAGNOSTICS_PER_FILE =
-			RUNTIME_CONFIG.pipeline.cascadeMaxDiagnosticsPerFile;
-		const cascadeStart = Date.now();
+	// --- 8. Cascade diagnostics (LSP only) ---
+	// Deferred: cascade errors in OTHER files are NOT shown inline — surfaced at
+	// turn_end so mid-refactor intermediate errors don't derail the agent.
+	const cascadeOutput = await gatherCascadeDiagnostics(
+		filePath,
+		cwd,
+		toolName,
+		getFlag,
+		dbg,
+	);
 
-		try {
-			const lspService = getLSPService();
-			const allDiags = await lspService.getAllDiagnostics();
-			const normalizedEditedPath = resolveRunnerPath(cwd, filePath);
-			let stalePathsSkipped = 0;
-			const otherFileErrors: Array<{
-				file: string;
-				errors: import("./lsp/client.js").LSPDiagnostic[];
-			}> = [];
-
-			for (const [diagPath, diags] of allDiags) {
-				const normalizedDiagPath = resolveRunnerPath(cwd, diagPath);
-				if (normalizeMapKey(normalizedDiagPath) === normalizedEditedPath)
-					continue;
-
-				if (!nodeFs.existsSync(normalizedDiagPath)) {
-					stalePathsSkipped++;
-					continue;
-				}
-
-				const errors = diags.filter((d) => d.severity === 1);
-				if (errors.length > 0) {
-					otherFileErrors.push({
-						file: toRunnerDisplayPath(cwd, normalizedDiagPath),
-						errors,
-					});
-				}
-			}
-
-			otherFileErrors.sort((a, b) => b.errors.length - a.errors.length);
-
-			if (otherFileErrors.length > 0) {
-				let c = `📐 Cascade errors in ${otherFileErrors.length} other file(s) — fix before finishing turn:`;
-				for (const { file, errors } of otherFileErrors.slice(
-					0,
-					MAX_CASCADE_FILES,
-				)) {
-					const limited = errors.slice(0, MAX_DIAGNOSTICS_PER_FILE);
-					const suffix =
-						errors.length > MAX_DIAGNOSTICS_PER_FILE
-							? `\n... and ${errors.length - MAX_DIAGNOSTICS_PER_FILE} more`
-							: "";
-					c += `\n<diagnostics file="${file}">`;
-					for (const e of limited) {
-						const line = (e.range?.start?.line ?? 0) + 1;
-						const col = (e.range?.start?.character ?? 0) + 1;
-						const code = e.code ? ` code=${String(e.code)}` : "";
-						c += `\n  line ${line}, col ${col}${code}: ${e.message.split("\n")[0].slice(0, 100)}`;
-					}
-					c += `${suffix}\n</diagnostics>`;
-				}
-				if (otherFileErrors.length > MAX_CASCADE_FILES) {
-					c += `\n... and ${otherFileErrors.length - MAX_CASCADE_FILES} more files with errors`;
-				}
-				cascadeOutput = c;
-			}
-
-			logLatency({
-				type: "phase",
-				toolName,
-				filePath,
-				phase: "cascade_diagnostics",
-				durationMs: Date.now() - cascadeStart,
-				metadata: {
-					filesWithErrors: otherFileErrors.length,
-					stalePathsSkipped,
-				},
-			});
-		} catch (err) {
-			dbg(`cascade diagnostics error: ${err}`);
-		}
-	}
-
-	// --- Final timing ---
+	// --- Final timing + all-clear ---
 	const elapsed = Date.now() - pipelineStart;
-
-	// --- All-clear / warnings notice ---
-	// When no blocking output exists, emit a one-liner so the agent knows
-	// checks actually ran and what the result was.
 	if (!output) {
-		const kind = detectFileKind(filePath);
-		const langLabel = kind ? getFileKindLabel(kind) : path.extname(filePath);
-		const parts: string[] = [];
-
-		if (dispatchResult.warnings.length > 0) {
-			// Has non-blocking warnings — show delta count (new vs total)
-			const newWarnings = dispatchResult.warnings.length;
-			const totalWarnings = newWarnings + dispatchResult.baselineWarningCount;
-			const totalStr =
-				totalWarnings === newWarnings
-					? `${totalWarnings} warning(s)`
-					: `${newWarnings} new (${totalWarnings} total)`;
-			parts.push(`no blockers`);
-			parts.push(`${totalStr} -> /lens-booboo`);
-		} else if (kind) {
-			parts.push(`${langLabel} clean`);
-		}
-
-		if (testSummary) {
-			if (testSummary.failed === 0) {
-				parts.push(`${testSummary.passed}/${testSummary.total} tests`);
-			}
-			// failing tests already have their own output above — skip here
-		}
-
-		parts.push(`${elapsed}ms`);
-		output = `checkmark ${parts.join(" · ")}`.replace("checkmark", "\u2713");
+		output = buildAllClearOutput(dispatchResult, testSummary, elapsed, filePath);
 	}
 
 	phase.end("total", { hasOutput: !!output });
-
 	logLatency({
 		type: "tool_result",
 		toolName,

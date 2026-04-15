@@ -781,6 +781,7 @@ export async function getFormattersForFile(
 				enabled.push(biomeFormatter);
 			}
 		} catch (err) {
+			// pi-lens-ignore: missing-error-propagation — optional formatter detection, skip on failure
 			console.error(
 				`[format] Detection failed for ${biomeFormatter.name}:`,
 				err,
@@ -805,7 +806,7 @@ export async function getFormattersForFile(
 				enabled.push(formatter);
 			}
 		} catch (err) {
-			// Detection failed, skip this formatter
+			// pi-lens-ignore: missing-error-propagation — optional formatter detection, skip on failure
 			console.error(`[format] Detection failed for ${formatter.name}:`, err);
 		}
 	}

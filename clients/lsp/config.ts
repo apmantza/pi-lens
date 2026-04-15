@@ -128,6 +128,7 @@ export async function initLSPConfig(cwd: string): Promise<void> {
 					`[lsp-config] Registered custom server: ${id} (${serverConfig.name})`,
 				);
 			} catch (err) {
+				// pi-lens-ignore: missing-error-propagation — per-server registration, skip bad entries
 				console.error(`[lsp-config] Failed to register server ${id}:`, err);
 			}
 		}

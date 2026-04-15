@@ -588,7 +588,7 @@ const treeSitterRunner: RunnerDefinition = {
 					});
 				}
 			} catch (err) {
-				// Individual query failure shouldn't stop other queries
+				// pi-lens-ignore: missing-error-propagation — per-query resilience loop, intentional
 				console.error(`[tree-sitter] Query ${query.id} failed:`, err);
 				logTreeSitter({
 					phase: "query_error",
