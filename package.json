@@ -73,8 +73,10 @@
 		"@mariozechner/pi-coding-agent": "*"
 	},
 	"dependencies": {
+		"@ast-grep/napi": "^0.42.1",
 		"@sinclair/typebox": "^0.34.0",
 		"cross-spawn": "^7.0.6",
+		"js-yaml": "^4.1.1",
 		"minimatch": "^10.2.5",
 		"typescript": "^5.0.0",
 		"vscode-jsonrpc": "^8.2.1"
@@ -85,7 +87,6 @@
 	},
 	"devDependencies": {
 		"@ast-grep/cli": "^0.42.1",
-		"@ast-grep/napi": "^0.42.0",
 		"@biomejs/biome": "^2.4.10",
 		"@types/cross-spawn": "^6.0.6",
 		"@types/js-yaml": "^4.0.9",
