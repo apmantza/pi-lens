@@ -23,8 +23,6 @@ rule:
     - pattern: new URL($URL)
     - pattern: execSync($CMD)
     - pattern: execSync($CMD, $OPTS)
-    - pattern: spawnSync($CMD, $ARGS)
-    - pattern: spawnSync($CMD, $ARGS, $OPTS)
   not:
     inside:
       stopBy: end
