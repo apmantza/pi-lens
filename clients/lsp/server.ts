@@ -9,6 +9,7 @@
 
 import { stat } from "node:fs/promises";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { ensureTool, getToolEnvironment } from "../installer/index.js";
 import {
 	promptForInstall,
@@ -336,6 +337,62 @@ export function NearestRoot(
 /** Alias kept for backward compatibility */
 export const createRootDetector = NearestRoot;
 
+// --- Runtime Tool Helpers ---
+
+/**
+ * Check if a command is available on system PATH (synchronous, no process spawn overhead).
+ */
+function isOnPath(command: string): boolean {
+	const isWindows = process.platform === "win32";
+	const result = spawnSync(isWindows ? "where" : "which", [command], {
+		stdio: "ignore",
+		shell: false,
+	});
+	return result.status === 0;
+}
+
+/**
+ * Try to install gopls via `go install`. Resolves true if the install succeeded.
+ */
+async function tryGoInstallGopls(): Promise<boolean> {
+	return new Promise((resolve) => {
+		const isWindows = process.platform === "win32";
+		const proc = spawnSync(
+			isWindows ? "go.exe" : "go",
+			["install", "golang.org/x/tools/gopls@latest"],
+			{ stdio: "ignore", shell: false },
+		);
+		resolve(proc.status === 0);
+	});
+}
+
+/**
+ * Try to install a gem to the pi-lens bin dir. Resolves true if the install succeeded.
+ */
+async function tryGemInstall(gem: string): Promise<boolean> {
+	const { join } = await import("node:path");
+	const { homedir } = await import("node:os");
+	const binDir = join(homedir(), ".pi-lens", "bin");
+	const { mkdir } = await import("node:fs/promises");
+	await mkdir(binDir, { recursive: true });
+
+	return new Promise((resolve) => {
+		const proc = spawnSync(
+			"gem",
+			["install", gem, "--bindir", binDir, "--no-document"],
+			{ stdio: "ignore", shell: false },
+		);
+		// Add binDir to PATH so subsequent lookups find the installed gem
+		if (proc.status === 0) {
+			const sep = process.platform === "win32" ? ";" : ":";
+			if (!process.env.PATH?.includes(binDir)) {
+				process.env.PATH = `${binDir}${sep}${process.env.PATH ?? ""}`;
+			}
+		}
+		resolve(proc.status === 0);
+	});
+}
+
 // --- Server Definitions ---
 
 export const TypeScriptServer: LSPServerInfo = {
@@ -655,29 +712,40 @@ export const GoServer: LSPServerInfo = {
 	id: "go",
 	name: "gopls",
 	extensions: [".go"],
-	installPolicy: "interactive",
+	installPolicy: "managed",
 	root: PriorityRoot([["go.work"], ["go.mod", "go.sum"]]),
 	async spawn(root, options) {
-		const proc = await spawnWithInteractiveInstall(
-			"go",
-			"gopls",
-			[],
-			{ cwd: root, allowInstall: options?.allowInstall },
-			async () => await launchLSP("gopls", [], { cwd: root }),
-		);
-		// gopls works best with minimal initialization options
-		// The client capabilities fix (workspaceFolders: true) is the key fix
-		return proc
-			? {
-					process: proc,
-					initialization: {
-						// Disable experimental features that may cause issues
-						ui: {
-							semanticTokens: true,
-						},
-					},
+		// Try to launch gopls directly from PATH first
+		try {
+			const proc = await launchLSP("gopls", [], { cwd: root });
+			return {
+				process: proc,
+				source: "direct",
+				initialization: { ui: { semanticTokens: true } },
+			};
+		} catch {
+			// not on PATH
+		}
+
+		// If `go` is on PATH and installs are allowed, run `go install gopls`
+		if (canInstall(options?.allowInstall) && isOnPath("go")) {
+			console.error("[lsp] gopls not found — installing via `go install golang.org/x/tools/gopls@latest`");
+			const ok = await tryGoInstallGopls();
+			if (ok) {
+				try {
+					const proc = await launchLSP("gopls", [], { cwd: root });
+					return {
+						process: proc,
+						source: "managed",
+						initialization: { ui: { semanticTokens: true } },
+					};
+				} catch {
+					// install succeeded but gopls still not launchable
 				}
-			: undefined;
+			}
+		}
+
+		return undefined;
 	},
 };
 
@@ -715,45 +783,48 @@ export const RustServer: LSPServerInfo = {
 export const RubyServer: LSPServerInfo = {
 	id: "ruby",
 	name: "Ruby LSP",
-	installPolicy: "interactive",
+	installPolicy: "managed",
 	extensions: [".rb", ".rake", ".gemspec", ".ru"],
 	root: PriorityRoot([["Gemfile", ".ruby-version"], [".git"]]),
 	async spawn(root, options) {
-		// Try ruby-lsp first, then solargraph, then rubocop --lsp
-		const proc = await spawnWithInteractiveInstall(
-			"ruby",
-			"ruby-lsp",
-			[],
-			{ cwd: root, allowInstall: options?.allowInstall },
-			async () => {
-				for (const command of ["ruby-lsp", ...rubyBinCandidates("ruby-lsp")]) {
-					try {
-						return await launchLSP(command, [], { cwd: root });
-					} catch {
-						// try next ruby-lsp candidate
-					}
+		// Helper: try a list of candidate commands in order
+		const tryLaunch = async (
+			commands: string[],
+			args: string[],
+		): Promise<LSPProcess | undefined> => {
+			for (const command of commands) {
+				try {
+					return await launchLSP(command, args, { cwd: root });
+				} catch {
+					// try next
 				}
+			}
+			return undefined;
+		};
 
-				for (const command of ["solargraph", ...rubyBinCandidates("solargraph")]) {
-					try {
-						return await launchLSP(command, ["stdio"], { cwd: root });
-					} catch {
-						// try next solargraph candidate
-					}
-				}
+		// 1. Try ruby-lsp (preferred)
+		let proc = await tryLaunch(["ruby-lsp", ...rubyBinCandidates("ruby-lsp")], []);
+		if (proc) return { process: proc, source: "direct" };
 
-				for (const command of ["rubocop", ...rubyBinCandidates("rubocop")]) {
-					try {
-						return await launchLSP(command, ["--lsp"], { cwd: root });
-					} catch {
-						// try next rubocop candidate
-					}
-				}
+		// 2. Try solargraph
+		proc = await tryLaunch(["solargraph", ...rubyBinCandidates("solargraph")], ["stdio"]);
+		if (proc) return { process: proc, source: "direct" };
 
-				throw new Error("ENOENT: command not found");
-			},
-		);
-		return proc ? { process: proc, source: "interactive" } : undefined;
+		// 3. Try rubocop --lsp
+		proc = await tryLaunch(["rubocop", ...rubyBinCandidates("rubocop")], ["--lsp"]);
+		if (proc) return { process: proc, source: "direct" };
+
+		// 4. If `gem` is available and installs are allowed, install ruby-lsp
+		if (canInstall(options?.allowInstall) && isOnPath("gem")) {
+			console.error("[lsp] ruby-lsp not found — installing via `gem install ruby-lsp`");
+			const ok = await tryGemInstall("ruby-lsp");
+			if (ok) {
+				proc = await tryLaunch(["ruby-lsp", ...rubyBinCandidates("ruby-lsp")], []);
+				if (proc) return { process: proc, source: "managed" };
+			}
+		}
+
+		return undefined;
 	},
 };
 
