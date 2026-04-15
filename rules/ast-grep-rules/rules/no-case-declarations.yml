@@ -14,3 +14,8 @@ rule:
     - inside:
         kind: switch_case
         stopBy: end
+    - not:
+        inside:
+          kind: statement_block
+          inside:
+            kind: switch_case

@@ -13,10 +13,8 @@ note: |
 rule:
   kind: expression_statement
   has:
-    stopBy: end
     kind: new_expression
     has:
-      stopBy: end
       pattern: $CLASS
       regex: "Error$"
   not:

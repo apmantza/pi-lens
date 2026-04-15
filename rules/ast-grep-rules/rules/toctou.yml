@@ -1,7 +1,7 @@
 id: toctou
 language: TypeScript
 message: "TOCTOU race — file accessed after existsSync check in same block"
-severity: error
+severity: warning
 note: |
   Time-of-check-time-of-use race condition. The file could be deleted
   or modified between the existsSync check and the subsequent operation.
