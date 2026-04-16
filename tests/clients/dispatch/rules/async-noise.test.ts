@@ -24,7 +24,8 @@ describe("asyncNoiseRule", () => {
     const filePath = "/tmp/noise.ts";
     const content = `
 async function noisy(v: number) {
-  return v + 1;
+  const result = v + 1;
+  return result;
 }
 `;
 
