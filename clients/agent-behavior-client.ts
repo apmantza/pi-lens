@@ -8,6 +8,8 @@
  * No external dependencies — purely tracks tool call history.
  */
 
+import { normalizeMapKey } from "./path-utils.js";
+
 // --- Types ---
 
 export type BehaviorWarning = {
@@ -107,9 +109,10 @@ export class AgentBehaviorClient {
 
 			// Track edits per file
 			if (filePath) {
+				const key = normalizeMapKey(filePath);
 				this.fileEditCount.set(
-					filePath,
-					(this.fileEditCount.get(filePath) ?? 0) + 1,
+					key,
+					(this.fileEditCount.get(key) ?? 0) + 1,
 				);
 			}
 		}

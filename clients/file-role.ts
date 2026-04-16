@@ -88,9 +88,11 @@ export function detectFileRole(filePath: string, content?: string): FileRole {
 	if (content && isGeneratedContent(content)) return "generated";
 
 	// --- Migrations ---
+	// Normalize separators before regex so the pattern works on Windows too
+	const forwardDir = dir.replace(/\\/g, "/");
 	if (
-		dir.includes("/migrations/") || dir.includes("/migration/") ||
-		/\/\d{4,}_[a-z]/.test(dir + "/" + base)
+		forwardDir.includes("/migrations/") || forwardDir.includes("/migration/") ||
+		/\/\d{4,}_[a-z]/.test(forwardDir + "/" + base)
 	) return "migration";
 
 	// --- Config ---

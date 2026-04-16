@@ -7,6 +7,7 @@
 
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
+import { normalizeFilePath } from "./path-utils.js";
 
 export interface CachedTree {
 	tree: any; // Tree-sitter Tree instance
@@ -44,7 +45,7 @@ export class TreeCache {
 	 * Get cache key for a file
 	 */
 	private getCacheKey(filePath: string, languageId: string): string {
-		return `${languageId}:${filePath}`;
+		return `${languageId}:${normalizeFilePath(filePath)}`;
 	}
 
 	/**
