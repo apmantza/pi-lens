@@ -298,9 +298,9 @@ const TOOLS: ToolDefinition[] = [
 		github: {
 			repo: "hadolint/hadolint",
 			assetMatch: (platform, arch) => {
-				if (platform === "linux") return arch === "arm64" ? "Linux-arm64" : "Linux-x86_64";
-				if (platform === "darwin") return arch === "arm64" ? "Darwin-arm64" : "Darwin-x86_64";
-				if (platform === "win32") return "Windows-x86_64.exe";
+				if (platform === "linux") return arch === "arm64" ? "linux.aarch64" : "linux.x86_64";
+				if (platform === "darwin") return arch === "arm64" ? "macos-arm64" : "macos-x86_64";
+				if (platform === "win32") return "windows-x86_64.exe";
 				return undefined;
 			},
 		},

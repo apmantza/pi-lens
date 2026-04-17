@@ -100,12 +100,12 @@ const PRIMARY_DISPATCH_GROUPS: Partial<Record<FileKind, RunnerGroup>> = {
 	},
 	html: {
 		mode: "fallback",
-		runnerIds: ["lsp", "htmlhint"],
+		runnerIds: ["lsp"],
 		filterKinds: ["html"],
 	},
 	docker: {
 		mode: "fallback",
-		runnerIds: ["lsp", "hadolint"],
+		runnerIds: ["lsp"],
 		filterKinds: ["docker"],
 	},
 	php: {

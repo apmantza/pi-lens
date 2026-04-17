@@ -127,12 +127,18 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<FileKind, CapabilityMatrixEntry>
 	html: {
 		name: "HTML Linting",
 		capabilities: ["lint"],
-		writeGroups: [primary("html")],
+		writeGroups: [
+			primary("html"),
+			{ mode: "all", runnerIds: ["htmlhint"], filterKinds: ["html"] },
+		],
 	},
 	docker: {
 		name: "Dockerfile Linting",
 		capabilities: ["lint"],
-		writeGroups: [primary("docker")],
+		writeGroups: [
+			primary("docker"),
+			{ mode: "all", runnerIds: ["hadolint"], filterKinds: ["docker"] },
+		],
 	},
 	php: {
 		name: "PHP Linting",
