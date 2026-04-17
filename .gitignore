@@ -84,3 +84,4 @@ clients/dispatch/debug.log
 clients/lsp/.intelephense/
 AGENTS.md
 .npmignore
+.claude/settings.local.json
