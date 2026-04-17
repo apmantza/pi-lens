@@ -166,8 +166,11 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<FileKind, CapabilityMatrixEntry>
 	},
 	kotlin: {
 		name: "Kotlin Linting",
-		capabilities: ["types", "lint"],
-		writeGroups: [primary("kotlin")],
+		capabilities: ["types", "lint", "format"],
+		writeGroups: [
+			primary("kotlin"),
+			{ mode: "all", runnerIds: ["ktlint"], filterKinds: ["kotlin"] },
+		],
 	},
 	swift: {
 		name: "Swift Linting",
@@ -217,7 +220,10 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<FileKind, CapabilityMatrixEntry>
 	terraform: {
 		name: "Terraform Linting",
 		capabilities: ["types", "lint"],
-		writeGroups: [primary("terraform")],
+		writeGroups: [
+			primary("terraform"),
+			{ mode: "all", runnerIds: ["tflint"], filterKinds: ["terraform"] },
+		],
 	},
 	nix: {
 		name: "Nix Linting",
@@ -226,8 +232,11 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<FileKind, CapabilityMatrixEntry>
 	},
 	toml: {
 		name: "TOML Linting",
-		capabilities: ["lint"],
-		writeGroups: [primary("toml")],
+		capabilities: ["lint", "format"],
+		writeGroups: [
+			primary("toml"),
+			{ mode: "all", runnerIds: ["taplo"], filterKinds: ["toml"] },
+		],
 	},
 };
 

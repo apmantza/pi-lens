@@ -711,6 +711,23 @@ export const ormoluFormatter: FormatterInfo = {
 	},
 };
 
+export const taploFormatter: FormatterInfo = {
+	name: "taplo",
+	command: ["taplo", "fmt", "$FILE"],
+	extensions: [".toml"],
+	async resolveCommand(filePath, _cwd) {
+		const { getToolPath } = await import("./installer/index.js");
+		const installed = await getToolPath("taplo");
+		if (installed) return [installed, "fmt", filePath];
+		return null;
+	},
+	async detect(_cwd: string) {
+		if ((await which("taplo")) !== null) return true;
+		const { getToolPath } = await import("./installer/index.js");
+		return Boolean(await getToolPath("taplo"));
+	},
+};
+
 // --- Registry ---
 
 const ALL_FORMATTERS: FormatterInfo[] = [
@@ -739,6 +756,7 @@ const ALL_FORMATTERS: FormatterInfo[] = [
 	rubocopFormatter,
 	standardrbFormatter,
 	gleamFormatter,
+	taploFormatter,
 ];
 
 const DEFAULT_BIOME_EXTENSIONS = new Set([

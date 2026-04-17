@@ -37,6 +37,9 @@ import hadolintRunner from "./hadolint.js";
 import phpLintRunner from "./php-lint.js";
 import psScriptAnalyzerRunner from "./psscriptanalyzer.js";
 import prismaValidateRunner from "./prisma-validate.js";
+import ktlintRunner from "./ktlint.js";
+import tflintRunner from "./tflint.js";
+import taploRunner from "./taplo.js";
 
 export function registerDefaultRunners(registry: RunnerRegistry): void {
 	// Register all runners (ordered by priority)
@@ -75,4 +78,7 @@ export function registerDefaultRunners(registry: RunnerRegistry): void {
 	registry.register(phpLintRunner); // PHP syntax validation via php -l (priority 20)
 	registry.register(psScriptAnalyzerRunner); // PowerShell linting via PSScriptAnalyzer module (priority 20)
 	registry.register(prismaValidateRunner); // Prisma schema validation via CLI (priority 20)
+	registry.register(ktlintRunner); // Kotlin linting via ktlint (priority 10)
+	registry.register(tflintRunner); // Terraform linting via tflint (priority 20)
+	registry.register(taploRunner); // TOML linting/validation via taplo (priority 10)
 }

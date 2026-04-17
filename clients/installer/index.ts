@@ -450,6 +450,58 @@ const TOOLS: ToolDefinition[] = [
 			binaryInArchive: "golangci-lint",
 		},
 	},
+	{
+		id: "ktlint",
+		name: "ktlint",
+		checkCommand: "ktlint",
+		checkArgs: ["--version"],
+		installStrategy: "github",
+		binaryName: "ktlint",
+		github: {
+			repo: "pinterest/ktlint",
+			assetMatch: (platform, arch) => {
+				if (platform === "linux") return arch === "arm64" ? "ktlint-aarch64" : "ktlint";
+				if (platform === "darwin") return arch === "arm64" ? "ktlint-aarch64" : "ktlint";
+				if (platform === "win32") return "ktlint.exe";
+				return undefined;
+			},
+		},
+	},
+	{
+		id: "tflint",
+		name: "tflint",
+		checkCommand: "tflint",
+		checkArgs: ["--version"],
+		installStrategy: "github",
+		binaryName: "tflint",
+		github: {
+			repo: "terraform-linters/tflint",
+			assetMatch: (platform, arch) => {
+				if (platform === "linux") return arch === "arm64" ? "linux_arm64.zip" : "linux_amd64.zip";
+				if (platform === "darwin") return arch === "arm64" ? "darwin_arm64.zip" : "darwin_amd64.zip";
+				if (platform === "win32") return arch === "arm64" ? "windows_arm64.zip" : "windows_amd64.zip";
+				return undefined;
+			},
+			binaryInArchive: "tflint",
+		},
+	},
+	{
+		id: "taplo",
+		name: "taplo",
+		checkCommand: "taplo",
+		checkArgs: ["--version"],
+		installStrategy: "github",
+		binaryName: "taplo",
+		github: {
+			repo: "tamasfe/taplo",
+			assetMatch: (platform, arch) => {
+				if (platform === "linux") return arch === "arm64" ? "taplo-linux-aarch64.gz" : "taplo-linux-x86_64.gz";
+				if (platform === "darwin") return arch === "arm64" ? "taplo-darwin-aarch64.gz" : "taplo-darwin-x86_64.gz";
+				if (platform === "win32") return "taplo-windows-x86_64.gz";
+				return undefined;
+			},
+		},
+	},
 ];
 
 const ensureInFlight = new Map<string, Promise<string | undefined>>();
