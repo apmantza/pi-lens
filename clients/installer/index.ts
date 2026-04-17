@@ -435,10 +435,10 @@ const TOOLS: ToolDefinition[] = [
 			assetMatch: (platform, arch) => {
 				if (platform === "linux") return arch === "arm64" ? "aarch64-unknown-linux-gnu.gz" : "x86_64-unknown-linux-gnu.gz";
 				if (platform === "darwin") return arch === "arm64" ? "aarch64-apple-darwin.gz" : "x86_64-apple-darwin.gz";
-				if (platform === "win32") return "x86_64-pc-windows-msvc.gz";
+				if (platform === "win32") return "x86_64-pc-windows-msvc.zip";
 				return undefined;
 			},
-			// bare .gz — decompressed file IS the binary
+			// Linux/macOS: bare .gz; Windows: .zip archive containing rust-analyzer.exe
 		},
 	},
 	{
