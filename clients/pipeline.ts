@@ -34,6 +34,7 @@ import { RUNTIME_CONFIG } from "./runtime-config.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { formatSecrets, scanForSecrets } from "./secrets-scanner.js";
 import type { TestRunnerClient } from "./test-runner-client.js";
+import { ensureTool } from "./installer/index.js";
 
 const LSP_MAX_FILE_BYTES = RUNTIME_CONFIG.pipeline.lspMaxFileBytes;
 const LSP_MAX_FILE_LINES = RUNTIME_CONFIG.pipeline.lspMaxFileLines;
@@ -146,8 +147,6 @@ function createPhaseTracker(toolName: string, filePath: string): PhaseTracker {
 
 // --- ESLint autofix helpers ---
 
-const BIOME_CONFIGS = ["biome.json", "biome.jsonc"];
-
 const ESLINT_CONFIGS = [
 	".eslintrc",
 	".eslintrc.js",
@@ -160,23 +159,54 @@ const ESLINT_CONFIGS = [
 	"eslint.config.cjs",
 ];
 
+const STYLELINT_CONFIGS = [
+	".stylelintrc",
+	".stylelintrc.json",
+	".stylelintrc.jsonc",
+	".stylelintrc.yaml",
+	".stylelintrc.yml",
+	".stylelintrc.js",
+	".stylelintrc.cjs",
+	"stylelint.config.js",
+	"stylelint.config.cjs",
+	"stylelint.config.mjs",
+];
+
+const SQLFLUFF_CONFIGS = [".sqlfluff", "pyproject.toml", "setup.cfg", "tox.ini"];
+
 const JSTS_EXTS = new Set([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"]);
+const CSS_EXTS = new Set([".css", ".scss", ".sass", ".less"]);
+const RUBY_EXTS = new Set([".rb", ".rake", ".gemspec", ".ru"]);
+const SQL_EXTS = new Set([".sql"]);
+const AUTOFIX_EXTS = new Set([
+	...JSTS_EXTS,
+	".json",
+	".jsonc",
+	...CSS_EXTS,
+	".py",
+	".pyi",
+	...RUBY_EXTS,
+	...SQL_EXTS,
+]);
 
 function isJsTs(filePath: string): boolean {
 	return JSTS_EXTS.has(path.extname(filePath).toLowerCase());
 }
 
-function hasBiomeConfig(cwd: string): boolean {
-	for (const cfg of BIOME_CONFIGS) {
-		if (nodeFs.existsSync(path.join(cwd, cfg))) return true;
-	}
-	try {
-		const pkg = JSON.parse(
-			nodeFs.readFileSync(path.join(cwd, "package.json"), "utf-8"),
-		);
-		if (pkg.devDependencies?.["@biomejs/biome"]) return true;
-	} catch {}
-	return false;
+function isCssLike(filePath: string): boolean {
+	return CSS_EXTS.has(path.extname(filePath).toLowerCase());
+}
+
+function isRubyLike(filePath: string): boolean {
+	return RUBY_EXTS.has(path.extname(filePath).toLowerCase());
+}
+
+function isSqlFile(filePath: string): boolean {
+	return SQL_EXTS.has(path.extname(filePath).toLowerCase());
+}
+
+function supportsAutofix(filePath: string): boolean {
+	return AUTOFIX_EXTS.has(path.extname(filePath).toLowerCase());
 }
 
 function hasEslintConfig(cwd: string): boolean {
@@ -189,6 +219,52 @@ function hasEslintConfig(cwd: string): boolean {
 		);
 		if (pkg.eslintConfig) return true;
 	} catch {}
+	return false;
+}
+
+function hasStylelintConfig(cwd: string): boolean {
+	if (STYLELINT_CONFIGS.some((cfg) => nodeFs.existsSync(path.join(cwd, cfg)))) {
+		return true;
+	}
+	try {
+		const pkg = JSON.parse(
+			nodeFs.readFileSync(path.join(cwd, "package.json"), "utf-8"),
+		);
+		if (pkg.stylelint) return true;
+	} catch {}
+	return false;
+}
+
+function hasSqlfluffConfig(cwd: string): boolean {
+	for (const cfg of SQLFLUFF_CONFIGS) {
+		const cfgPath = path.join(cwd, cfg);
+		if (!nodeFs.existsSync(cfgPath)) continue;
+		if (cfg === "pyproject.toml") {
+			try {
+				const content = nodeFs.readFileSync(cfgPath, "utf-8");
+				if (content.includes("[tool.sqlfluff]")) return true;
+			} catch {}
+			continue;
+		}
+		if (cfg === "setup.cfg" || cfg === "tox.ini") {
+			try {
+				const content = nodeFs.readFileSync(cfgPath, "utf-8");
+				if (content.includes("[sqlfluff]")) return true;
+			} catch {}
+			continue;
+		}
+		return true;
+	}
+
+	for (const depFile of ["requirements.txt", "Pipfile", "pyproject.toml"]) {
+		const depPath = path.join(cwd, depFile);
+		if (!nodeFs.existsSync(depPath)) continue;
+		try {
+			const content = nodeFs.readFileSync(depPath, "utf-8").toLowerCase();
+			if (content.includes("sqlfluff")) return true;
+		} catch {}
+	}
+
 	return false;
 }
 
@@ -209,12 +285,69 @@ function findEslintBin(cwd: string): string {
 	return "eslint";
 }
 
+function findStylelintBin(cwd: string): string {
+	const isWin = process.platform === "win32";
+	const local = path.join(
+		cwd,
+		"node_modules",
+		".bin",
+		isWin ? "stylelint.cmd" : "stylelint",
+	);
+	if (nodeFs.existsSync(local)) return local;
+	return "stylelint";
+}
+
+function findRubocopCommand(cwd: string): { cmd: string; args: string[] } {
+	const gemfile = path.join(cwd, "Gemfile");
+	if (nodeFs.existsSync(gemfile)) {
+		try {
+			const content = nodeFs.readFileSync(gemfile, "utf-8");
+			if (content.includes("rubocop")) {
+				return { cmd: "bundle", args: ["exec", "rubocop"] };
+			}
+		} catch {}
+	}
+	return { cmd: "rubocop", args: [] };
+}
+
+async function detectFileChangedAfterCommand(
+	filePath: string,
+	command: string,
+	args: string[],
+	cwd: string,
+	ignoreStatuses: number[] = [],
+): Promise<number> {
+	let before = "";
+	try {
+		before = nodeFs.readFileSync(filePath, "utf-8");
+	} catch {
+		return 0;
+	}
+
+	const result = await safeSpawnAsync(command, args, {
+		timeout: 30000,
+		cwd,
+	});
+	if (result.error) return 0;
+	if (result.status !== 0 && !ignoreStatuses.includes(result.status ?? -1)) {
+		return 0;
+	}
+
+	try {
+		const after = nodeFs.readFileSync(filePath, "utf-8");
+		return before !== after ? 1 : 0;
+	} catch {
+		return 0;
+	}
+}
+
 /**
  * Run eslint --fix on a file. Returns number of fixable issues resolved,
  * or 0 if ESLint is not configured / not available.
  */
 async function tryEslintFix(filePath: string, cwd: string): Promise<number> {
-	if (!hasEslintConfig(cwd)) return 0;
+	const userHasConfig = hasEslintConfig(cwd);
+	if (!userHasConfig) return 0;
 	const cacheKey = path.resolve(cwd);
 	let cached = _eslintCache.get(cacheKey);
 	if (!cached) {
@@ -231,6 +364,7 @@ async function tryEslintFix(filePath: string, cwd: string): Promise<number> {
 	}
 	if (!cached.available || !cached.bin) return 0;
 	const cmd = cached.bin;
+	const configArgs: string[] = [];
 	// --fix-dry-run returns JSON with fixable counts without writing to disk.
 	// Use it to get the real count, then apply with --fix only if needed.
 	const dry = await safeSpawnAsync(
@@ -240,6 +374,7 @@ async function tryEslintFix(filePath: string, cwd: string): Promise<number> {
 			"--format",
 			"json",
 			"--no-error-on-unmatched-pattern",
+			...configArgs,
 			filePath,
 		],
 		{ timeout: 30000, cwd },
@@ -261,11 +396,87 @@ async function tryEslintFix(filePath: string, cwd: string): Promise<number> {
 	// Apply the fixes
 	const fix = await safeSpawnAsync(
 		cmd,
-		["--fix", "--no-error-on-unmatched-pattern", filePath],
+		["--fix", "--no-error-on-unmatched-pattern", ...configArgs, filePath],
 		{ timeout: 30000, cwd },
 	);
 	if (fix.status === 2) return 0;
 	return fixableCount;
+}
+
+async function tryStylelintFix(filePath: string, cwd: string): Promise<number> {
+	if (!hasStylelintConfig(cwd)) return 0;
+	let cmd = findStylelintBin(cwd);
+	let versionCheck = await safeSpawnAsync(cmd, ["--version"], {
+		timeout: 5000,
+		cwd,
+	});
+	if (versionCheck.error || versionCheck.status !== 0) {
+		const installed = await ensureTool("stylelint");
+		if (!installed) return 0;
+		cmd = installed;
+		versionCheck = await safeSpawnAsync(cmd, ["--version"], {
+			timeout: 5000,
+			cwd,
+		});
+		if (versionCheck.error || versionCheck.status !== 0) return 0;
+	}
+
+	return detectFileChangedAfterCommand(
+		filePath,
+		cmd,
+		["--fix", "--allow-empty-input", filePath],
+		cwd,
+		[2],
+	);
+}
+
+async function trySqlfluffFix(filePath: string, cwd: string): Promise<number> {
+	let cmd = "sqlfluff";
+	let versionCheck = await safeSpawnAsync(cmd, ["--version"], {
+		timeout: 5000,
+		cwd,
+	});
+	if (versionCheck.error || versionCheck.status !== 0) {
+		const installed = await ensureTool("sqlfluff");
+		if (!installed) return 0;
+		cmd = installed;
+		versionCheck = await safeSpawnAsync(cmd, ["--version"], {
+			timeout: 5000,
+			cwd,
+		});
+		if (versionCheck.error || versionCheck.status !== 0) return 0;
+	}
+
+	const args = ["fix", "--force", filePath];
+	if (!hasSqlfluffConfig(cwd)) {
+		args.splice(2, 0, "--dialect", "ansi");
+	}
+	return detectFileChangedAfterCommand(filePath, cmd, args, cwd);
+}
+
+async function tryRubocopFix(filePath: string, cwd: string): Promise<number> {
+	const { cmd, args } = findRubocopCommand(cwd);
+	let versionCheck = await safeSpawnAsync(cmd, [...args, "--version"], {
+		timeout: 10000,
+		cwd,
+	});
+	if (versionCheck.error || versionCheck.status !== 0) {
+		const installed = await ensureTool("rubocop");
+		if (!installed) return 0;
+		versionCheck = await safeSpawnAsync(cmd, [...args, "--version"], {
+			timeout: 10000,
+			cwd,
+		});
+		if (versionCheck.error || versionCheck.status !== 0) return 0;
+	}
+
+	return detectFileChangedAfterCommand(
+		filePath,
+		cmd,
+		[...args, "-a", "--no-color", filePath],
+		cwd,
+		[1],
+	);
 }
 
 // --- Pipeline phase helpers ---
@@ -284,10 +495,7 @@ async function syncLspFile(
 	}
 
 	const deferLspSync =
-		!getFlag("no-autofix") &&
-		(ruffClient.isPythonFile(filePath) ||
-			(biomeClient.isSupportedFile(filePath) && hasBiomeConfig(cwd)) ||
-			isJsTs(filePath));
+		!getFlag("no-autofix") && supportsAutofix(filePath);
 
 	if (deferLspSync) {
 		return { completed: true, phaseEnded: true };
@@ -331,13 +539,14 @@ async function runAutofix(
 	let needsContentRefresh = false;
 
 	if (!fixedThisTurn.has(filePath) && !noAutofix) {
+		const preferEslintForJsTs = isJsTs(filePath) && hasEslintConfig(cwd);
 		const [ruffReady, biomeReady] = await Promise.all([
 			!noAutofixRuff && ruffClient.isPythonFile(filePath)
 				? ruffClient.ensureAvailable()
 				: Promise.resolve(false),
 			!noAutofixBiome &&
 			biomeClient.isSupportedFile(filePath) &&
-			hasBiomeConfig(cwd)
+			!preferEslintForJsTs
 				? biomeClient.ensureAvailable()
 				: Promise.resolve(false),
 		]);
@@ -365,13 +574,46 @@ async function runAutofix(
 		}
 	}
 
-	if (!noAutofix && isJsTs(filePath)) {
+	if (!noAutofix && isJsTs(filePath) && hasEslintConfig(cwd)) {
 		const eslintFixed = await tryEslintFix(filePath, cwd);
 		if (eslintFixed > 0) {
 			fixedCount += eslintFixed;
 			autofixTools.push(`eslint:${eslintFixed}`);
 			fixedThisTurn.add(filePath);
 			dbg(`autofix: eslint fixed ${eslintFixed} issue(s) in ${filePath}`);
+			needsContentRefresh = true;
+		}
+	}
+
+	if (!noAutofix && isCssLike(filePath)) {
+		const stylelintFixed = await tryStylelintFix(filePath, cwd);
+		if (stylelintFixed > 0) {
+			fixedCount += stylelintFixed;
+			autofixTools.push(`stylelint:${stylelintFixed}`);
+			fixedThisTurn.add(filePath);
+			dbg(`autofix: stylelint fixed ${stylelintFixed} issue(s) in ${filePath}`);
+			needsContentRefresh = true;
+		}
+	}
+
+	if (!noAutofix && isSqlFile(filePath)) {
+		const sqlfluffFixed = await trySqlfluffFix(filePath, cwd);
+		if (sqlfluffFixed > 0) {
+			fixedCount += sqlfluffFixed;
+			autofixTools.push(`sqlfluff:${sqlfluffFixed}`);
+			fixedThisTurn.add(filePath);
+			dbg(`autofix: sqlfluff fixed ${sqlfluffFixed} issue(s) in ${filePath}`);
+			needsContentRefresh = true;
+		}
+	}
+
+	if (!noAutofix && isRubyLike(filePath)) {
+		const rubocopFixed = await tryRubocopFix(filePath, cwd);
+		if (rubocopFixed > 0) {
+			fixedCount += rubocopFixed;
+			autofixTools.push(`rubocop:${rubocopFixed}`);
+			fixedThisTurn.add(filePath);
+			dbg(`autofix: rubocop fixed ${rubocopFixed} issue(s) in ${filePath}`);
 			needsContentRefresh = true;
 		}
 	}
@@ -628,7 +870,7 @@ export async function runPipeline(
 	const { fixedCount, autofixTools, needsContentRefresh: fixRefresh } =
 		await runAutofix(filePath, cwd, getFlag, dbg, deps);
 	if (fixRefresh) needsContentRefresh = true;
-	phase.end("autofix", { fixedCount, tools: ["ruff", "biome", "eslint"] });
+	phase.end("autofix", { fixedCount, tools: autofixTools });
 
 	if (needsContentRefresh) {
 		try {

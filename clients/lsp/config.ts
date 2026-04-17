@@ -47,6 +47,11 @@ export interface LSPConfig {
 	disabledServers?: string[];
 }
 
+interface RegisteredLSPConfig {
+	customServers: LSPServerInfo[];
+	disabledServerIds: Set<string>;
+}
+
 // --- Config Loading ---
 
 const CONFIG_PATHS = [".pi-lens/lsp.json", ".pi-lens.json", "pi-lsp.json"];
@@ -62,7 +67,6 @@ export async function loadLSPConfig(cwd: string): Promise<LSPConfig> {
 			try {
 				const content = await fs.readFile(fullPath, "utf-8");
 				const config = JSON.parse(content) as LSPConfig;
-				console.error(`[lsp-config] Loaded config from ${fullPath}`);
 				return config;
 			} catch {
 				// File doesn't exist or is invalid, try next
@@ -105,49 +109,77 @@ export function createCustomServer(
 
 // --- Registry Management ---
 
-let customServers: LSPServerInfo[] = [];
-let disabledServerIds: Set<string> = new Set();
+const EMPTY_CONFIG: RegisteredLSPConfig = {
+	customServers: [],
+	disabledServerIds: new Set(),
+};
+
+const workspaceConfigs = new Map<string, RegisteredLSPConfig>();
+
+function normalizeWorkspacePath(cwd: string): string {
+	return path.resolve(cwd);
+}
+
+function isSameOrChildPath(filePath: string, candidateRoot: string): boolean {
+	if (filePath === candidateRoot) return true;
+	return filePath.startsWith(`${candidateRoot}${path.sep}`);
+}
+
+function getConfigForFile(filePath: string): RegisteredLSPConfig {
+	const resolvedFilePath = path.resolve(filePath);
+	let bestMatch: { root: string; config: RegisteredLSPConfig } | undefined;
+
+	for (const [root, config] of workspaceConfigs) {
+		if (!isSameOrChildPath(resolvedFilePath, root)) continue;
+		if (!bestMatch || root.length > bestMatch.root.length) {
+			bestMatch = { root, config };
+		}
+	}
+
+	return bestMatch?.config ?? EMPTY_CONFIG;
+}
 
 /**
  * Initialize LSP configuration (call at session start)
  */
 export async function initLSPConfig(cwd: string): Promise<void> {
+	const normalizedCwd = normalizeWorkspacePath(cwd);
 	const config = await loadLSPConfig(cwd);
+	const customServers: LSPServerInfo[] = [];
+	const disabledServerIds = new Set(config.disabledServers ?? []);
 
-	// Clear previous custom servers
-	customServers = [];
-	disabledServerIds = new Set(config.disabledServers ?? []);
-
-	// Register custom servers from config
 	if (config.servers) {
 		for (const [id, serverConfig] of Object.entries(config.servers)) {
 			try {
 				const server = createCustomServer(serverConfig, id);
 				customServers.push(server);
-				console.error(
-					`[lsp-config] Registered custom server: ${id} (${serverConfig.name})`,
-				);
-			} catch (err) {
+			} catch {
 				// pi-lens-ignore: missing-error-propagation — per-server registration, skip bad entries
-				console.error(`[lsp-config] Failed to register server ${id}:`, err);
 			}
 		}
 	}
+
+	workspaceConfigs.set(normalizedCwd, {
+		customServers,
+		disabledServerIds,
+	});
 }
 
 /**
  * Get all available servers (built-in + custom, minus disabled)
  */
-export function getAllServers(): LSPServerInfo[] {
-	const all = [...LSP_SERVERS, ...customServers];
-	return all.filter((s) => !disabledServerIds.has(s.id));
+export function getAllServers(filePath?: string): LSPServerInfo[] {
+	const config = filePath ? getConfigForFile(filePath) : EMPTY_CONFIG;
+	const all = [...LSP_SERVERS, ...config.customServers];
+	return all.filter((s) => !config.disabledServerIds.has(s.id));
 }
 
 /**
  * Check if a server is disabled
  */
-export function isServerDisabled(serverId: string): boolean {
-	return disabledServerIds.has(serverId);
+export function isServerDisabled(serverId: string, filePath?: string): boolean {
+	const config = filePath ? getConfigForFile(filePath) : EMPTY_CONFIG;
+	return config.disabledServerIds.has(serverId);
 }
 
 // --- Override getServersForFile to include custom servers
@@ -155,10 +187,14 @@ export function isServerDisabled(serverId: string): boolean {
 export function getServersForFileWithConfig(filePath: string): LSPServerInfo[] {
 	const ext = path.extname(filePath).toLowerCase();
 	const base = path.basename(filePath).toLowerCase();
-	return getAllServers().filter((server) => {
+	return getAllServers(filePath).filter((server) => {
 		const extensions = server.extensions.map((value) => value.toLowerCase());
 		return extensions.includes(ext) || extensions.includes(base);
 	});
+}
+
+export function resetLSPConfigStateForTests(): void {
+	workspaceConfigs.clear();
 }
 
 // Re-export with config support

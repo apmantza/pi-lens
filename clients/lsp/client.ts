@@ -354,10 +354,6 @@ function setupConnectionLifecycle(state: LSPClientState): void {
 		state.isConnected = false;
 		state.isDestroyed = true;
 		disposeClientConnection(state);
-		console.error(
-			`[lsp] ${state.serverId} connection error:`,
-			state.lastError.message,
-		);
 	});
 
 	state.connection.onClose(() => {
@@ -370,11 +366,6 @@ function setupConnectionLifecycle(state: LSPClientState): void {
 		state.isConnected = false;
 		state.isDestroyed = true;
 		disposeClientConnection(state);
-		if (code !== 0 && code !== null) {
-			console.error(
-				`[lsp] ${state.serverId} process exited with code ${code}`,
-			);
-		}
 	});
 }
 
@@ -623,7 +614,6 @@ export async function createLSPClient(options: {
 				err.code === "ECONNRESET"
 			)
 				return;
-			console.error(`[lsp] ${serverId} ${label} stream error:`, err.message);
 		};
 	(lspProcess.stdin as NodeJS.WritableStream).on(
 		"error",

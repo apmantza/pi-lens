@@ -221,4 +221,72 @@ describe("lsp server policy", () => {
 		expect(spawned?.process).toBeUndefined();
 		expect(launchViaPackageManager).not.toHaveBeenCalled();
 	});
+
+	it("keeps custom LSP config scoped per workspace", async () => {
+		const {
+			getServersForFileWithConfig,
+			initLSPConfig,
+		} = await import("../../../clients/lsp/config.js");
+
+		const workspaceA = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-lsp-config-a-"),
+		);
+		const workspaceB = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-lsp-config-b-"),
+		);
+		dirs.push(workspaceA, workspaceB);
+
+		fs.mkdirSync(path.join(workspaceA, ".pi-lens"), { recursive: true });
+		fs.writeFileSync(
+			path.join(workspaceA, ".pi-lens", "lsp.json"),
+			JSON.stringify({
+				servers: {
+					workspaceAOnly: {
+						name: "Workspace A Only",
+						extensions: [".foo"],
+						command: "a-lsp",
+					},
+				},
+				disabledServers: ["typescript"],
+			}),
+		);
+
+		fs.mkdirSync(path.join(workspaceB, ".pi-lens"), { recursive: true });
+		fs.writeFileSync(
+			path.join(workspaceB, ".pi-lens", "lsp.json"),
+			JSON.stringify({
+				servers: {
+					workspaceBOnly: {
+						name: "Workspace B Only",
+						extensions: [".bar"],
+						command: "b-lsp",
+					},
+				},
+			}),
+		);
+
+		const fileA = path.join(workspaceA, "src", "index.foo");
+		const fileB = path.join(workspaceB, "src", "index.bar");
+		fs.mkdirSync(path.dirname(fileA), { recursive: true });
+		fs.mkdirSync(path.dirname(fileB), { recursive: true });
+		fs.writeFileSync(fileA, "content\n");
+		fs.writeFileSync(fileB, "content\n");
+
+		await initLSPConfig(workspaceA);
+		await initLSPConfig(workspaceB);
+
+		const serversA = getServersForFileWithConfig(fileA).map((server) => server.id);
+		const serversB = getServersForFileWithConfig(fileB).map((server) => server.id);
+		const tsFileA = path.join(workspaceA, "src", "index.ts");
+		fs.writeFileSync(tsFileA, "export const a = 1;\n");
+		const tsServersA = getServersForFileWithConfig(tsFileA).map(
+			(server) => server.id,
+		);
+
+		expect(serversA).toContain("workspaceAOnly");
+		expect(serversA).not.toContain("workspaceBOnly");
+		expect(serversB).toContain("workspaceBOnly");
+		expect(serversB).not.toContain("workspaceAOnly");
+		expect(tsServersA).not.toContain("typescript");
+	});
 });

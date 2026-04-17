@@ -67,7 +67,6 @@ export class LSPService {
 	private state: LSPState;
 	private workspaceProbeLogged = new Set<string>();
 	private warmStartLogged = new Set<string>();
-	private emitConsoleLspErrors = process.env.PI_LENS_CONSOLE_LSP === "1";
 	private optionalFailureLogged = new Set<string>();
 	private optionalDisabled = new Set<string>();
 	private recentTouches = new Map<
@@ -348,24 +347,6 @@ export class LSPService {
 				);
 				if (isOptionalServer) {
 					this.optionalFailureLogged.add(key);
-				}
-			}
-			const errorMsg = err instanceof Error ? err.message : String(err);
-			if (this.emitConsoleLspErrors && !isOptionalServer) {
-				if (errorMsg.includes("Timeout")) {
-					console.error(
-						`[lsp] ${server.id} timed out during initialization (${errorMsg}). The server may be downloading or the project is large. Skipping.`,
-					);
-				} else if (errorMsg.includes("stream was destroyed")) {
-					console.error(
-						`[lsp] ${server.id} stream was destroyed. The server binary may be missing or crashed immediately. Try reinstalling: npm install -g ${server.id}-language-server`,
-					);
-				} else if (errorMsg.includes("exited immediately")) {
-					console.error(
-						`[lsp] ${server.id} ${errorMsg}. Try reinstalling: npm install -g ${server.id}-language-server`,
-					);
-				} else {
-					console.error(`[lsp] Failed to spawn ${server.id}:`, err);
 				}
 			}
 			this.state.broken.set(
@@ -835,9 +816,8 @@ export class LSPService {
 		for (const [key, client] of this.state.clients) {
 			try {
 				await client.shutdown();
-			} catch (err) {
+			} catch {
 				// pi-lens-ignore: missing-error-propagation — per-client shutdown failure, must not abort remaining shutdowns
-				console.error(`[lsp] Error shutting down ${key}:`, err);
 			}
 		}
 		this.state.clients.clear();

@@ -596,7 +596,6 @@ export const TypeScriptServer: LSPServerInfo = {
 				source = "managed";
 			}
 			if (!lspPath) {
-				console.error("[lsp] typescript-language-server not found");
 				return undefined;
 			}
 		}
@@ -736,9 +735,6 @@ export const PythonServer: LSPServerInfo = {
 				pyrightPath = await ensureTool("pyright");
 				source = "managed";
 			}
-			if (!pyrightPath) {
-				console.error("[lsp] pyright not found, falling back to npx");
-			}
 		}
 
 		// Strategy 3: Use found pyright to derive pyright-langserver path
@@ -761,9 +757,6 @@ export const PythonServer: LSPServerInfo = {
 				try {
 					await fs.access(candidate);
 					langserverPath = candidate;
-					if (process.env.PI_LENS_DEBUG === "1") {
-						console.error(`[lsp] Found pyright-langserver: ${candidate}`);
-					}
 					break;
 				} catch {
 					/* not found */

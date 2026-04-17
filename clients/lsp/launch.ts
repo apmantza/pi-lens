@@ -14,6 +14,7 @@ import {
 	type SpawnOptions,
 } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 export interface LSPProcess {
@@ -25,6 +26,24 @@ export interface LSPProcess {
 }
 
 const isWindows = process.platform === "win32";
+const SESSIONSTART_LOG_DIR = path.join(os.homedir(), ".pi-lens");
+const SESSIONSTART_LOG = path.join(SESSIONSTART_LOG_DIR, "sessionstart.log");
+
+function logSessionStart(msg: string): void {
+	const line = `[${new Date().toISOString()}] ${msg}\n`;
+	try {
+		fs.mkdirSync(SESSIONSTART_LOG_DIR, { recursive: true });
+		fs.appendFileSync(SESSIONSTART_LOG, line);
+	} catch {}
+}
+
+function compactLogValue(value: string, max = 280): string {
+	const normalized = value.replace(/\s+/g, " ").trim();
+	if (!normalized) return "";
+	return normalized.length > max
+		? `${normalized.slice(0, max)}...`
+		: normalized;
+}
 
 function delimiterForPlatform(platform: NodeJS.Platform): string {
 	return platform === "win32" ? ";" : ":";
@@ -196,11 +215,28 @@ function trySpawn(
 function _attachErrorHandler(
 	proc: ChildProcess,
 	context: string,
+	logContext?: {
+		command: string;
+		args: string[];
+		cwd: string;
+		pid?: number;
+	},
 	rejectOnImmediateError?: (err: Error) => void,
 ): void {
+	let stderrPreview = "";
+	let closeLogged = false;
+	const onStderr = (chunk: Buffer | string): void => {
+		if (stderrPreview.length >= 4000) return;
+		stderrPreview += chunk.toString();
+	};
+	proc.stderr?.on("data", onStderr);
+
 	proc.on("error", (err) => {
-		// Log the error but don't crash - the caller should handle this gracefully
-		console.error(`[lsp] Spawn error for ${context}:`, err.message);
+		if (logContext) {
+			logSessionStart(
+				`lsp process ${context}: spawn-error command=${logContext.command} args=${JSON.stringify(logContext.args)} cwd=${logContext.cwd} pid=${logContext.pid ?? 0} error=${err.message}${stderrPreview ? ` stderr=${compactLogValue(stderrPreview)}` : ""}`,
+			);
+		}
 
 		// If we have a reject function and this is an immediate spawn error, reject
 		if (
@@ -211,19 +247,19 @@ function _attachErrorHandler(
 		}
 	});
 
-	// Also handle unexpected exit (process crash after successful spawn)
-	proc.on("exit", (code, signal) => {
-		if (code !== 0 && code !== null) {
-			console.error(
-				`[lsp] ${context} exited with code ${code}${signal ? ` (signal: ${signal})` : ""}`,
-			);
-		}
-	});
-
 	proc.on("close", (code, signal) => {
+		if (closeLogged) return;
+		closeLogged = true;
+		proc.stderr?.off("data", onStderr);
 		if (code !== 0 && code !== null) {
-			console.error(
-				`[lsp] ${context} closed with code ${code}${signal ? ` (signal: ${signal})` : ""}`,
+			if (logContext) {
+				logSessionStart(
+					`lsp process ${context}: closed code=${code}${signal ? ` signal=${signal}` : ""} command=${logContext.command} args=${JSON.stringify(logContext.args)} cwd=${logContext.cwd} pid=${logContext.pid ?? 0}${stderrPreview ? ` stderr=${compactLogValue(stderrPreview)}` : ""}`,
+				);
+			}
+		} else if (signal && logContext) {
+			logSessionStart(
+				`lsp process ${context}: closed signal=${signal} command=${logContext.command} args=${JSON.stringify(logContext.args)} cwd=${logContext.cwd} pid=${logContext.pid ?? 0}${stderrPreview ? ` stderr=${compactLogValue(stderrPreview)}` : ""}`,
 			);
 		}
 	});
@@ -312,7 +348,6 @@ export async function launchLSP(
 		) {
 			const npmGlobalPath = _findBinaryInNpmGlobal(command);
 			if (npmGlobalPath && npmGlobalPath !== spawnCommand) {
-				console.error(`[lsp] Trying npm global: ${npmGlobalPath}`);
 				// Recompute needsShell for npm global path
 				const needsShellGlobal =
 					isWindows &&
@@ -340,12 +375,14 @@ export async function launchLSP(
 		);
 	}
 
+	logSessionStart(
+		`lsp launch: command=${command} resolved=${spawnCommand} args=${JSON.stringify(args)} cwd=${cwd} shell=${needsShell ? "true" : "false"} pid=${proc.pid ?? 0}`,
+	);
+
 	const formatStartupStderr = (stderr: string): string => {
-		const normalized = stderr.replace(/\s+/g, " ").trim();
+		const normalized = compactLogValue(stderr);
 		if (!normalized) return "";
-		const max = 280;
-		const clipped = normalized.length > max ? `${normalized.slice(0, max)}...` : normalized;
-		return ` stderr=${clipped}`;
+		return ` stderr=${normalized}`;
 	};
 
 	let startupStderr = "";
@@ -400,7 +437,12 @@ export async function launchLSP(
 	}
 
 	// Re-attach the permanent error handler now that we've passed the danger zone
-	_attachErrorHandler(proc, command);
+	_attachErrorHandler(proc, command, {
+		command: spawnCommand,
+		args,
+		cwd,
+		pid: proc.pid ?? 0,
+	});
 
 	return {
 		process: proc,

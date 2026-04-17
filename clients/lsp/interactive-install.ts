@@ -313,13 +313,8 @@ async function installTool(config: LanguageConfig): Promise<boolean> {
 		config;
 
 	if (installStrategy === "manual") {
-		console.error(
-			`[pi-lens] ${toolName} must be installed manually:\n   ${installCommand}`,
-		);
 		return false;
 	}
-
-	console.error(`[pi-lens] Installing ${toolId}...`);
 
 	const [cmd, ...args] =
 		installStrategy === "npm" && packageName
@@ -333,18 +328,13 @@ async function installTool(config: LanguageConfig): Promise<boolean> {
 
 		proc.on("close", (code) => {
 			if (code === 0) {
-				console.error(`[pi-lens] ✓ ${toolId} installed successfully`);
 				resolve(true);
 			} else {
-				console.error(
-					`[pi-lens] ✗ ${toolId} installation failed (exit code ${code})`,
-				);
 				resolve(false);
 			}
 		});
 
-		proc.on("error", (err) => {
-			console.error(`[pi-lens] ✗ ${toolId} installation error:`, err.message);
+		proc.on("error", () => {
 			resolve(false);
 		});
 	});
@@ -380,9 +370,6 @@ export async function promptForInstall(
 				if (toolAvailable) {
 					return true;
 				}
-				console.error(
-					`[pi-lens] Cached ${config.toolId} not found, re-installing...`,
-				);
 			} else {
 				return false; // User previously declined
 			}
@@ -391,38 +378,25 @@ export async function promptForInstall(
 
 	// Check auto-install flag
 	if (isAutoInstallEnabled()) {
-		console.error(
-			`[pi-lens] Auto-install enabled, installing ${config.toolName}...`,
-		);
 		await saveChoice(cwd, config.toolId, "auto");
 		return await installTool(config);
 	}
 
 	if (!canUseInteractivePrompt()) {
-		console.error(
-			`[pi-lens] ${config.toolName} missing and interactive prompt unavailable; skipping install. Use --auto-install to allow automatic setup.`,
-		);
 		return false;
 	}
 
-	// Show interactive prompt
-	console.error(`\n⚠️  ${config.toolName} not found`);
-	console.error(`   Install: ${config.installCommand}`);
-	// For manual-only tools, skip the Y/n prompt — user must install themselves
+	// For manual-only tools, skip the Y/n prompt because user must install manually.
 	if (config.installStrategy === "manual") {
 		await saveChoice(cwd, config.toolId, "no");
 		return false;
 	}
-	console.error(`\n   Install now? [Y/n] (auto-declines in 10s)`);
-
 	const answer = await promptUser(10000);
 	await saveChoice(cwd, config.toolId, answer);
 
 	if (answer === "yes") {
 		return await installTool(config);
 	}
-
-	console.error(`[pi-lens] Skipped ${config.toolName} installation`);
 	return false;
 }
 
@@ -448,3 +422,6 @@ export function getInstallStrategy(
 export function supportsInteractiveInstall(language: string): boolean {
 	return language in COMMON_LANGUAGES;
 }
+
+
+

@@ -741,6 +741,17 @@ const ALL_FORMATTERS: FormatterInfo[] = [
 	gleamFormatter,
 ];
 
+const DEFAULT_BIOME_EXTENSIONS = new Set([
+	".js",
+	".jsx",
+	".mjs",
+	".cjs",
+	".ts",
+	".tsx",
+	".mts",
+	".cts",
+]);
+
 // Cache for detection results - stores array of enabled formatter names per cwd+ext
 const detectionCache = new Map<string, Map<string, string[]>>();
 
@@ -770,15 +781,19 @@ export async function getFormattersForFile(
 	// Detect formatters for this extension
 	const matching = ALL_FORMATTERS.filter((f) => f.extensions.includes(ext));
 	const enabled: FormatterInfo[] = [];
+	const preferBiomeDefault = DEFAULT_BIOME_EXTENSIONS.has(ext);
 
 	// Check for Biome first (preferred default)
 	const biomeFormatter = matching.find((f) => f.name === "biome");
+	const prettierFormatter = matching.find((f) => f.name === "prettier");
 	let biomeEnabled = false;
+	let prettierEnabled = false;
 	if (biomeFormatter) {
 		try {
 			biomeEnabled = await biomeFormatter.detect(cwd);
-			if (biomeEnabled) {
+			if (biomeEnabled || (preferBiomeDefault && !prettierFormatter)) {
 				enabled.push(biomeFormatter);
+				biomeEnabled = true;
 			}
 		} catch (err) {
 			// pi-lens-ignore: missing-error-propagation — optional formatter detection, skip on failure
@@ -789,6 +804,26 @@ export async function getFormattersForFile(
 		}
 	}
 
+	if (prettierFormatter) {
+		try {
+			prettierEnabled = await prettierFormatter.detect(cwd);
+			if (prettierEnabled && !biomeEnabled) {
+				enabled.push(prettierFormatter);
+			}
+		} catch (err) {
+			// pi-lens-ignore: missing-error-propagation — optional formatter detection, skip on failure
+			console.error(
+				`[format] Detection failed for ${prettierFormatter.name}:`,
+				err,
+			);
+		}
+	}
+
+	if (preferBiomeDefault && !biomeEnabled && !prettierEnabled && biomeFormatter) {
+		enabled.push(biomeFormatter);
+		biomeEnabled = true;
+	}
+
 	// If Biome is enabled, skip Prettier for overlapping extensions
 	// (Biome is the preferred default, Prettier is fallback)
 	const skipPrettier = biomeEnabled;
@@ -796,6 +831,7 @@ export async function getFormattersForFile(
 	for (const formatter of matching) {
 		// Skip Biome (already checked above)
 		if (formatter.name === "biome") continue;
+		if (formatter.name === "prettier") continue;
 
 		// Skip Prettier if Biome is enabled (prevents race condition)
 		if (skipPrettier && formatter.name === "prettier") continue;
