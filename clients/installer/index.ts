@@ -280,15 +280,6 @@ const TOOLS: ToolDefinition[] = [
 		binaryName: "htmlhint",
 	},
 	{
-		id: "intelephense",
-		name: "Intelephense (PHP Language Server)",
-		checkCommand: "intelephense",
-		checkArgs: ["--version"],
-		installStrategy: "npm",
-		packageName: "intelephense",
-		binaryName: "intelephense",
-	},
-	{
 		id: "hadolint",
 		name: "Hadolint",
 		checkCommand: "hadolint",
@@ -985,6 +976,7 @@ const NEEDS_POSTINSTALL = new Set([
 	"@biomejs/biome",
 	"@ast-grep/napi",
 	"esbuild",
+	"intelephense", // postinstall fetches platform binary; --ignore-scripts breaks install
 ]);
 
 async function installNpmTool(

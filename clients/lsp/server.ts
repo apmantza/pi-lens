@@ -743,7 +743,7 @@ export const RustServer: LSPServerInfo = {
 	id: "rust",
 	name: "rust-analyzer",
 	extensions: [".rs"],
-	root: createRootDetector(["Cargo.toml", "Cargo.lock"]),
+	root: RootWithFallback(createRootDetector(["Cargo.toml", "Cargo.lock"])),
 	async spawn(root, options) {
 		// Prefer rustup-installed rust-analyzer; fall back to GitHub-downloaded managed copy
 		const result = await resolveAndLaunch(
