@@ -60,7 +60,19 @@
       "Bash(awk -F'|' '{print $1, $2}')",
       "Bash(git add *)",
       "Bash(git rm *)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(sed -n '609,615p' \"C:/Users/apman/OneDrive/Desktop/pi-lens/clients/lsp/server.ts\")",
+      "Bash(sed -n '625,632p' \"C:/Users/apman/OneDrive/Desktop/pi-lens/clients/lsp/server.ts\")",
+      "Bash(sed -n '766,772p' \"C:/Users/apman/OneDrive/Desktop/pi-lens/clients/lsp/server.ts\")",
+      "Bash(sed -n '875,882p' \"C:/Users/apman/OneDrive/Desktop/pi-lens/clients/lsp/server.ts\")",
+      "Bash(npx vitest *)",
+      "Bash(xargs -I {} basename {})",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(sed -n '25,50p' /c/Users/apman/OneDrive/Desktop/pi-lens/clients/dispatch/runners/eslint.ts)",
+      "Bash(sed -n '25,45p' /c/Users/apman/OneDrive/Desktop/pi-lens/clients/dispatch/runners/golangci-lint.ts)",
+      "Bash(sed -n '566,610p' /c/Users/apman/OneDrive/Desktop/pi-lens/clients/formatters.ts)",
+      "Bash(sed -n '598,630p' /c/Users/apman/OneDrive/Desktop/pi-lens/clients/formatters.ts)"
     ]
   }
 }
