@@ -498,16 +498,21 @@ export async function handleSessionStart(
 
 	const tools: string[] = [];
 	if (getFlag("lens-lsp") && !getFlag("no-lsp")) tools.push("LSP Service");
-	if (biomeClient.isAvailable()) tools.push("Biome");
-	if (astGrepClient.isAvailable()) tools.push("ast-grep");
-	if (ruffClient.isAvailable()) tools.push("Ruff");
-	if (knipClient.isAvailable()) tools.push("Knip");
-	if (depChecker.isAvailable()) tools.push("Madge");
-	if (jscpdClient.isAvailable()) tools.push("jscpd");
-	if (typeCoverageClient.isAvailable()) tools.push("type-coverage");
 
-	log(`Active tools: ${tools.join(", ")}`);
-	dbg(`session_start tools: ${tools.join(", ")}`);
+	// Warm npm-based tool availability caches after startup returns. These sync
+	// subprocess calls (biome --version, npx knip --version, etc.) take ~500ms-2s
+	// each and were blocking the critical startup path with no functional benefit —
+	// each runner re-checks availability lazily when it first runs.
+	setImmediate(() => {
+		const b = biomeClient.isAvailable();
+		const a = astGrepClient.isAvailable();
+		const r = ruffClient.isAvailable();
+		knipClient.isAvailable();
+		depChecker.isAvailable();
+		jscpdClient.isAvailable();
+		typeCoverageClient.isAvailable();
+		dbg(`session_start tools (deferred probes complete): biome=${b} ast-grep=${a} ruff=${r}`);
+	});
 
 	if (allowBootstrapTasks && getFlag("lens-lsp") && !getFlag("no-lsp")) {
 		const cleaned = cleanStaleTsBuildInfo(ctxCwd ?? process.cwd());
