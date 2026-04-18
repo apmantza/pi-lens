@@ -62,8 +62,9 @@ const prettierCheckRunner: RunnerDefinition = {
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = ctx.cwd || process.cwd();
+		const fileDir = path.dirname(path.resolve(cwd, ctx.filePath));
 
-		if (!hasPrettierConfig(cwd)) {
+		if (!hasPrettierConfig(fileDir) && !hasPrettierConfig(cwd)) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 

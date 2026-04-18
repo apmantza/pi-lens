@@ -89,8 +89,9 @@ const stylelintRunner: RunnerDefinition = {
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = ctx.cwd || process.cwd();
+		const fileDir = path.dirname(path.resolve(cwd, ctx.filePath));
 
-		if (!hasStylelintConfig(cwd)) {
+		if (!hasStylelintConfig(fileDir) && !hasStylelintConfig(cwd)) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
