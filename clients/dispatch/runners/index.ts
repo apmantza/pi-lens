@@ -45,6 +45,9 @@ import javacRunner from "./javac.js";
 import dotnetBuildRunner from "./dotnet-build.js";
 import zigCheckRunner from "./zig-check.js";
 import gleamCheckRunner from "./gleam-check.js";
+import credoRunner from "./credo.js";
+import prettierCheckRunner from "./prettier-check.js";
+import phpstanRunner from "./phpstan.js";
 
 export function registerDefaultRunners(registry: RunnerRegistry): void {
 	// Register all runners (ordered by priority)
@@ -91,4 +94,7 @@ export function registerDefaultRunners(registry: RunnerRegistry): void {
 	registry.register(dotnetBuildRunner); // C# compile diagnostics via dotnet build (priority 20)
 	registry.register(zigCheckRunner); // Zig compile diagnostics via zig build-exe (priority 20)
 	registry.register(gleamCheckRunner); // Gleam project diagnostics via gleam check (priority 20)
+	registry.register(credoRunner); // Elixir static analysis via credo (priority 20, mix.exs-gated)
+	registry.register(prettierCheckRunner); // Prettier format check for CSS/HTML (priority 10, config-gated)
+	registry.register(phpstanRunner); // PHP static analysis via phpstan (priority 20, config-gated)
 }

@@ -103,7 +103,7 @@ const PRIMARY_DISPATCH_GROUPS: Partial<Record<FileKind, RunnerGroup>> = {
 		runnerIds: ["spellcheck"],
 		filterKinds: ["markdown"],
 	},
-	css: { mode: "fallback", runnerIds: ["lsp"], filterKinds: ["css"] },
+	css: { mode: "fallback", runnerIds: ["lsp", "stylelint", "prettier-check"], filterKinds: ["css"] },
 	yaml: {
 		mode: "fallback",
 		runnerIds: ["lsp", "yamllint"],
@@ -116,7 +116,7 @@ const PRIMARY_DISPATCH_GROUPS: Partial<Record<FileKind, RunnerGroup>> = {
 	},
 	html: {
 		mode: "fallback",
-		runnerIds: ["lsp", "htmlhint"],
+		runnerIds: ["lsp", "htmlhint", "prettier-check"],
 		filterKinds: ["html"],
 	},
 	docker: {
@@ -126,7 +126,7 @@ const PRIMARY_DISPATCH_GROUPS: Partial<Record<FileKind, RunnerGroup>> = {
 	},
 	php: {
 		mode: "fallback",
-		runnerIds: ["lsp", "php-lint"],
+		runnerIds: ["lsp", "php-lint", "phpstan"],
 		filterKinds: ["php"],
 	},
 	powershell: {
@@ -156,13 +156,13 @@ const PRIMARY_DISPATCH_GROUPS: Partial<Record<FileKind, RunnerGroup>> = {
 	lua: { mode: "fallback", runnerIds: ["lsp"], filterKinds: ["lua"] },
 	zig: { mode: "fallback", runnerIds: ["lsp", "zig-check"], filterKinds: ["zig"] },
 	haskell: { mode: "fallback", runnerIds: ["lsp"], filterKinds: ["haskell"] },
-	elixir: { mode: "fallback", runnerIds: ["lsp"], filterKinds: ["elixir"] },
+	elixir: { mode: "fallback", runnerIds: ["lsp", "credo"], filterKinds: ["elixir"] },
 	gleam: { mode: "fallback", runnerIds: ["lsp", "gleam-check"], filterKinds: ["gleam"] },
 	ocaml: { mode: "fallback", runnerIds: ["lsp"], filterKinds: ["ocaml"] },
 	clojure: { mode: "fallback", runnerIds: ["lsp"], filterKinds: ["clojure"] },
 	terraform: { mode: "fallback", runnerIds: ["lsp", "tflint"], filterKinds: ["terraform"] },
 	nix: { mode: "fallback", runnerIds: ["lsp"], filterKinds: ["nix"] },
-	toml: { mode: "fallback", runnerIds: ["lsp"], filterKinds: ["toml"] },
+	toml: { mode: "fallback", runnerIds: ["lsp", "taplo"], filterKinds: ["toml"] },
 };
 
 export function getLspCapableKinds(): FileKind[] {
