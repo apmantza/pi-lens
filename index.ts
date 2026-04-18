@@ -571,10 +571,13 @@ pi.on("tool_call", async (event, ctx) => {
 	);
 	if (!nodeFs.existsSync(filePath)) return;
 
+	// Only pre-touch LSP for read and lsp_navigation — these need the server
+	// warmed up before the tool executes.  Do NOT pre-touch for write/edit:
+	// the file hasn't been modified yet, so we'd send stale content to the LS
+	// which caches stale diagnostics that the pipeline then returns immediately.
+	// The pipeline's own syncLspFile step handles write/edit with correct content.
 	const shouldAutoTouch =
 		(toolName === "read" ||
-			toolName === "write" ||
-			toolName === "edit" ||
 			toolName === "lsp_navigation") &&
 		!!pi.getFlag("lens-lsp") &&
 		!pi.getFlag("no-lsp");

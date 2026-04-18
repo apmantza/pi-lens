@@ -469,6 +469,9 @@ async function handleNotifyOpen(
 	if (state.openDocuments.has(normalizedPath)) {
 		const version = (state.documentVersions.get(normalizedPath) ?? 0) + 1;
 		state.documentVersions.set(normalizedPath, version);
+		// Clear cached diagnostics so waitForDiagnostics actually waits for
+		// fresh results from the server instead of returning stale ones.
+		state.diagnostics.delete(normalizedPath);
 		await safeSendNotification(state.connection, "textDocument/didChange", {
 			textDocument: { uri, version },
 			contentChanges: [{ text: content }],
@@ -516,6 +519,9 @@ async function handleNotifyChange(
 
 	const version = (state.documentVersions.get(normalizedPath) ?? 0) + 1;
 	state.documentVersions.set(normalizedPath, version);
+	// Clear cached diagnostics so waitForDiagnostics actually waits for
+	// fresh results from the server instead of returning stale ones.
+	state.diagnostics.delete(normalizedPath);
 	await safeSendNotification(state.connection, "textDocument/didChange", {
 		textDocument: { uri, version },
 		contentChanges: [{ text: content }],
