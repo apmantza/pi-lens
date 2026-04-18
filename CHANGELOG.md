@@ -4,6 +4,107 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Review graph impact cascade** — turn-end cascade now renders a review-graph impact view showing which files were affected and how diagnostics propagated.
+- **Fact-rule pipeline in dispatch** — new `fact-rules` dispatch runner computes function-level facts (depth, cyclomatic complexity, call counts) and evaluates quality rules inline, replacing the bespoke tree-sitter booboo runner.
+- **Function facts: depth / CC / calls** — tree-sitter extracts per-function cyclomatic complexity, nesting depth, and outgoing call count for fact-rule evaluation.
+- **File role classification** — dispatch classifies files as `source`, `test`, `config`, or `vendor` and adjusts rule severity accordingly.
+- **Inline suppression directives** — sources can suppress diagnostics with `// pi-lens-ignore` or `# pi-lens-ignore` comments; suppressed items are omitted from inline output.
+- **High-complexity fact rule** — flags functions exceeding configurable cyclomatic complexity thresholds.
+- **Unsafe-boundary fact rule** — detects dangerous boundary crossings (unvalidated user input → trusted context).
+- **High-fan-out fact rule** — flags functions with excessive outgoing call count (default threshold 20).
+- **`async-unnecessary-wrapper` ast-grep rule** — detects trivial async wrappers that just await and return.
+- **`missing-error-propagation` ast-grep rule** — detects catch blocks that swallow errors without re-throwing or logging.
+- **36 new ast-grep rules** — expanded coverage for security, correctness, and style across TypeScript, JavaScript, and Python.
+- **5 quality fact rules** — structured quality checks driven by function-level metrics.
+- **8 SonarJS-aligned rules** — try-catch enrichment and 8 rules ported from SonarJS patterns.
+- **Slop-detection rules** — identifies low-signal / boilerplate-heavy code regions with observability log entries.
+- **Dart-analyze dispatch runner** — runs `dart analyze` on `.dart` files.
+- **Ktlint dispatch runner** — runs `ktlint` on `.kt` / `.kts` files.
+- **TFLint dispatch runner** — runs `tflint` on `.tf` / `.tfvars` files.
+- **Taplo dispatch runner + formatter** — runs `taplo` for TOML lint and format.
+- **Credo dispatch runner** — runs `mix credo` on Elixir files (falls back to LSP).
+- **Phpstan dispatch runner** — runs `phpstan` on PHP files (falls back to LSP).
+- **Prettier-check dispatch runner** — runs `prettier --check` as a lint runner (not auto-fix, purely diagnostic).
+- **PSScriptAnalyzer runner** — PowerShell linting via `Invoke-ScriptAnalyzer`, using temp `-File` instead of `-Command` to avoid cmd.exe mangling.
+- **Hadolint dispatch runner** — Dockerfile lint with always-run dispatch gating.
+- **Htmlhint dispatch runner** — HTML lint with tag-pair detection.
+- **Docker / PHP / PowerShell / Prisma FileKind** — new language kind mappings enable LSP and dispatch for Dockerfile, `.php`, `.ps1`/`.psm1`, and `.prisma` files.
+- **GitHub release downloader for installer** — `shellcheck`, `shfmt`, `rust-analyzer`, and `golangci-lint` are now auto-installed from GitHub releases with asset selection across platforms.
+- **Auto-install gopls and ruby-lsp** — `gopls` installed via `go install`; `ruby-lsp` installed via `gem install` when not found.
+- **Biome as default JS/TS linter** — when no ESLint or oxlint config exists, Biome runs as the default linter for write-path dispatch instead of silently skipping.
+- **Bundled ruff config fallback** — Python projects without a `ruff.toml` / `pyproject.toml` ruff section now use a bundled safe-default config so ruff still produces useful findings.
+- **Ruff autofix after diagnostics** — the ruff dispatch runner now applies safe autofixes after capturing diagnostics, mirroring Biome's write-path behavior.
+- **Diagnostic history logging** — tree-sitter warnings and debounced ast-grep findings are now logged to session history for observability and `/lens-booboo` review.
+- **Tree-sitter grammar downloads expanded** — additional grammars downloaded at install time for broader language coverage.
+- **Java and C# fallback analysis** — dispatch includes fallback analysis paths for Java (`.java`) and C# (`.cs`) when LSP is unavailable.
+- **CI: tsc type-check + vitest + install gate** — CI now runs `tsc --noEmit` and `vitest` as separate jobs; install-test is gated on both passing.
+- **CI: tsx extension load check** — CI verifies that required extensions load correctly to catch missing dependency errors early.
+
+### Changed
+- **Promote LSP-backed languages into dispatch** — languages with active LSP servers now route through dispatch's standard pipeline instead of ad-hoc paths.
+- **Dispatch language fallbacks aligned** — LSP-backed and fallback runner selection now uses consistent language-to-capability mapping.
+- **CSS / HTML / TOML / Elixir fallback wiring** — dispatch fallbacks now include CSS (stylelint), HTML (htmlhint), TOML (taplo), and Elixir (credo).
+- **Prettier-check and stylelint cwd handling** — both runners now resolve project root correctly instead of skipping when the working directory overshoots.
+- **OS portability: vendor/bin and sg resolution** — `vendor/bin` tools resolve with multi-extension support (`.bat`/`.cmd`/no-ext); `sg` candidate list works across platforms.
+- **LSP: live Windows registry PATH** — LSP spawn reads the live `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment\Path` at launch time so newly installed tools are immediately discoverable.
+- **LSP: unified resolveAndLaunch** — four separate resolution mechanisms (local binary, global, npx, package manager) collapsed into a single `resolveAndLaunch` flow with clear fallback ordering.
+- **LSP: telemetry and logging tightened** — init failures logged to `sessionstart.log`; terminal noise reduced; basename matching improved.
+- **YAML LSP root fallback** — YAML language server uses `RootWithFallback` for seamless multi-root project support.
+- **Dart / Terraform / TOML LSP: RootWithFallback** — same root-fallback pattern applied across these servers for reliable workspace detection.
+- **Terraform-ls HashiCorp install fallback** — improved install path resolution for terraform-ls.
+- **`empty-catch` and `unchecked-sync-fs` downgraded to warning** — too many false positives as errors; now `warning` severity.
+- **High-fan-out threshold raised to 20** — reduced noise from earlier threshold of 10.
+- **High-complexity and unsafe-boundary thresholds tightened** — reduced false positives at the default severity boundaries.
+- **False-positive reduction: 8 rules + 3 error rules** — tuned OAuth/constants-related patterns, removed 3 error-level rules that flagged too broadly, and fixed `ts-ssrf` identifier argument matching.
+- **Removed unused/noisy ast-grep rules** — culled rules that overlapped with tree-sitter coverage or produced excessive noise.
+- **Moved duplicate TS tree-sitter rules** — overlapping rules relocated to `typescript-disabled/` to avoid double-reporting.
+- **LSP crash diagnostics** — startup stderr captured and logged for faster root-cause analysis.
+- **Tool PATH normalization** — cross-platform PATH resolution unified for LSP and dispatch tool spawning.
+- **Cleaned up runtime dependencies** — moved `@ast-grep/napi` and `js-yaml` to `dependencies` (were `devDependencies`); removed unused deps.
+- **Complexity reduction** — decomposed four highest-complexity functions (CC 75–153 → <20 each) for maintainability.
+
+### Fixed
+- **Windows LSP startup fallback** — hardened spawn logic for `.cmd` wrappers, PATH resolution, and process creation on Windows.
+- **C# launch and secondary language fallbacks** — C# LSP and secondary language servers start reliably in more project layouts.
+- **Prettier-check / stylelint cwd overshoot** — both runners now find the project root correctly instead of silently skipping.
+- **Hadolint asset name case** — GitHub release downloader resolves case-sensitive asset names.
+- **Htmlhint / hadolint always-run dispatch** — both runners fire correctly regardless of file presence heuristics.
+- **Bash LSP re-spawn** — bash-language-server restarts cleanly after unexpected exit.
+- **HTML dispatch + htmlhint tag-pair detection** — HTML file kind wired into dispatch; htmlhint catches missing closing tags.
+- **Intelephense needs `scripts`** — PHP LSP installed with `--scripts` flag so its postinstall binary is available.
+- **Rust-analyzer: RootWithFallback + Windows .zip asset** — both root detection and Windows asset extraction fixed.
+- **Managed Pyright launch path** — pyright LSP binary resolves correctly when installed as a managed tool.
+- **Terraform / Kotlin / coverage fallback handling** — all three dispatch paths handle missing tools or configs gracefully.
+- **Shellcheck auto-install** — auto-installer works across platforms with GitHub release asset selection.
+- **Ktlint asset names** — ktlint release assets resolved with correct URL patterns.
+- **Coverage notice for mode:all linters** — mode:all linters that can't generate coverage now emit a notice instead of crashing.
+- **npm install 120s timeout** — `ensureTool` npm installs have a hard 120s timeout to prevent indefinite hangs.
+- **npm install ERESOLVE retry** — installer retries npm installs on ERESOLVE dependency conflicts.
+- **Remove spawnSync from `unchecked-throwing-call` rule** — rule no longer flags `spawnSync` calls as unhandled throwing calls.
+- **`flush()` drain before write-complete** — diagnostic history flush now drains pending entries before awaiting write completion, preventing data loss on session end.
+- **Runner checks diagnostics-only** — dispatch runner checks are now diagnostics-only, avoiding stale LSP state mutations.
+- **Biome-lsp server removed** — duplicate `biome-lsp` server entry removed; Biome LSP is accessed through the standard biome binary.
+- **Size guards + path caching for ensureTool** — tool availability checks are cached and sized to avoid re-probing on every call.
+- **Test assertions after runner wiring** — test expectations updated for new runner ordering and diagnostics pipeline.
+- **OS path separator normalization** — path separators and map keys normalized for cross-platform compatibility in diagnostics and LSP.
+- **Drop unnecessary async from `ensureAvailable`** — removed spurious `async` that added nothing and complicated error handling.
+- **Tree-sitter rule false positives** — fixed query syntax, scan scripts, and architect glob patterns that produced incorrect findings.
+
+### Performance
+- **Startup: defer npm tool availability probes** — tool availability checks (Biome, ESLint, etc.) now run lazily out of the critical path, reducing session start latency.
+- **Defer TypeScript loading in similarity runner** — similarity detection lazily imports the TypeScript parser, eliminating cold-start cost on first call.
+
+### Refactored
+- **LSP: collapse resolution into `resolveAndLaunch`** — unified four spawn mechanisms into one function with clear platform-aware fallbacks.
+- **Booboo: replace bespoke tree-sitter runner** — `/lens-booboo` tree-sitter checks now use the same fact-rule pipeline as dispatch, eliminating code duplication.
+- **Drop redundant async from LSP spawn** — removed unnecessary `async`/`await` from functions that already return Promises.
+
+### Tests
+- **GitHub release asset selection and PATH tests** — installer asset URL construction and PATH resolution covered by unit tests.
+- **Rust-analyzer Windows .zip asset expectation** — test fixture updated for `.zip` extension on Windows.
+- **Async-noise test multi-statement function** — test rule updated to match multi-statement function bodies.
+
 ## [3.8.26] - 2026-04-15
 
 ### Fixed
