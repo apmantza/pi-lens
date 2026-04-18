@@ -291,11 +291,10 @@ export function getDispatchGroupsForKind(
 ): RunnerGroup[] {
 	const plan = TOOL_PLANS[kind];
 	if (!plan) {
-		if (
-			pi.getFlag("lens-lsp") &&
-			!pi.getFlag("no-lsp") &&
-			LSP_CAPABLE_KINDS.has(kind as FileKind)
-		) {
+		const lspEnabled = !!pi.getFlag("lens-lsp") && !pi.getFlag("no-lsp");
+		const policyGroup = getPrimaryDispatchGroup(kind as FileKind, lspEnabled);
+		if (policyGroup) return [policyGroup];
+		if (lspEnabled && LSP_CAPABLE_KINDS.has(kind as FileKind)) {
 			return [{ mode: "all", runnerIds: ["lsp"], filterKinds: [kind as FileKind] }];
 		}
 		return [];

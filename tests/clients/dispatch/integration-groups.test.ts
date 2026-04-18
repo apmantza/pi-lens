@@ -8,7 +8,7 @@ import { getDispatchGroupsForKind } from "../../../clients/dispatch/integration.
 		});
 
 		expect(groups.length).toBeGreaterThan(0);
-		expect(groups[0].runnerIds).toEqual(["lsp"]);
+		expect(groups[0].runnerIds).toEqual(["lsp", "stylelint", "prettier-check"]);
 		expect(groups[0].filterKinds).toEqual(["css"]);
 	});
 
@@ -31,11 +31,12 @@ import { getDispatchGroupsForKind } from "../../../clients/dispatch/integration.
 		expect(lspGroups).toHaveLength(1);
 	});
 
-	it("strips lsp-only groups when lens-lsp is disabled", () => {
+	it("strips lsp from css group when lens-lsp is disabled", () => {
 		const groups = getDispatchGroupsForKind("css", {
 			getFlag: () => false,
 		});
 
-		expect(groups).toEqual([]);
+		expect(groups).toHaveLength(1);
+		expect(groups[0].runnerIds).toEqual(["stylelint", "prettier-check"]);
 	});
 });
