@@ -18,6 +18,7 @@ import type { BiomeClient } from "./biome-client.js";
 import { getDiagnosticLogger } from "./diagnostic-logger.js";
 import { getDiagnosticTracker } from "./diagnostic-tracker.js";
 import { dispatchLintWithResult } from "./dispatch/integration.js";
+import { computeImpactCascadeForFile } from "./dispatch/integration.js";
 import {
 	resolveRunnerPath,
 	toRunnerDisplayPath,
@@ -104,6 +105,7 @@ export interface PipelineResult {
 	 * so mid-refactor intermediate errors don't derail the agent.
 	 */
 	cascadeOutput?: string;
+	impactCascadeOutput?: string;
 	/** True if secrets found — block the agent */
 	isError: boolean;
 	/** True if file was modified by format/autofix */
@@ -1021,6 +1023,7 @@ export async function runPipeline(
 		getFlag,
 		dbg,
 	);
+	const impactCascadeOutput = await computeImpactCascadeForFile(filePath, cwd);
 
 	// --- Final timing + all-clear ---
 	const elapsed = Date.now() - pipelineStart;
@@ -1041,6 +1044,7 @@ export async function runPipeline(
 		output,
 		hasBlockers,
 		cascadeOutput,
+		impactCascadeOutput,
 		isError: false,
 		fileModified: formatChanged || fixedCount > 0,
 	};

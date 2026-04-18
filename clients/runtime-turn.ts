@@ -81,6 +81,9 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	if (runtime.lastCascadeOutput) {
 		blockerParts.push(runtime.consumeLastCascadeOutput());
 	}
+	if (runtime.lastImpactCascadeOutput) {
+		blockerParts.push(runtime.consumeLastImpactCascadeOutput());
+	}
 
 	if (runtime.isStartupScanInFlight("jscpd")) {
 		dbg("turn_end: skipping jscpd (startup scan still in flight)");

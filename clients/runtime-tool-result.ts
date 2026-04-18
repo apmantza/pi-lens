@@ -182,6 +182,7 @@ export async function handleToolResult(
 		hasBlockers: boolean;
 		isError?: boolean;
 		cascadeOutput?: string;
+		impactCascadeOutput?: string;
 	};
 	try {
 		result = await runPipeline(
@@ -239,6 +240,11 @@ export async function handleToolResult(
 		!getFlag("no-lsp")
 	) {
 		runtime.lastCascadeOutput = "";
+	}
+	if (result.impactCascadeOutput) {
+		runtime.lastImpactCascadeOutput = result.impactCascadeOutput;
+	} else {
+		runtime.lastImpactCascadeOutput = "";
 	}
 
 	if (result.isError) {

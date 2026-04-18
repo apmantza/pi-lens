@@ -11,16 +11,17 @@ import { setupTestEnvironment } from "./test-utils.js";
 
 vi.mock("../../clients/pipeline.js", () => ({
 	runPipeline: vi.fn(async () => ({
-		output: "✓ no blockers",
+		output: "no blockers",
 		hasBlockers: false,
 		isError: false,
 		fileModified: false,
-		cascadeOutput: "📐 cascade from edited file",
+		cascadeOutput: "cascade from edited file",
+		impactCascadeOutput: "impact cascade from edited file",
 	})),
 }));
 
 describe("runtime event flow", () => {
-	it("flows session_start -> tool_call -> tool_result -> turn_end -> context", async () => {
+	it("flows session_start -> tool_result -> turn_end -> context", async () => {
 		const env = setupTestEnvironment("pi-lens-event-flow-");
 		const runtime = new RuntimeCoordinator();
 		const cacheManager = new CacheManager(false);
@@ -82,15 +83,12 @@ describe("runtime event flow", () => {
 				formatBehaviorWarnings: () => "",
 			} as any);
 
-			// Simulate tool_call-stage turn tracking (modified ranges) before turn_end.
-			cacheManager.addModifiedRange(
-				filePath,
-				{ start: 1, end: 1 },
-				false,
-				env.tmpDir,
-			);
+			cacheManager.addModifiedRange(filePath, { start: 1, end: 1 }, false, env.tmpDir);
 
 			expect(runtime.lastCascadeOutput).toContain("cascade from edited file");
+			expect(runtime.lastImpactCascadeOutput).toContain(
+				"impact cascade from edited file",
+			);
 
 			await handleTurnEnd({
 				ctxCwd: env.tmpDir,
@@ -106,13 +104,15 @@ describe("runtime event flow", () => {
 			} as any);
 
 			expect(runtime.lastCascadeOutput).toBe("");
+			expect(runtime.lastImpactCascadeOutput).toBe("");
 
 			const firstContext = consumeTurnEndFindings(cacheManager, env.tmpDir);
 			expect(firstContext?.messages[0]?.content).toContain(
 				"[pi-lens] End-of-turn findings:",
 			);
+			expect(firstContext?.messages[0]?.content).toContain("cascade from edited file");
 			expect(firstContext?.messages[0]?.content).toContain(
-				"cascade from edited file",
+				"impact cascade from edited file",
 			);
 
 			const secondContext = consumeTurnEndFindings(cacheManager, env.tmpDir);

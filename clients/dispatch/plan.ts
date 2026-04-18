@@ -87,10 +87,7 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<FileKind, CapabilityMatrixEntry>
 	cxx: {
 		name: "C/C++ Linting",
 		capabilities: ["types", "lint"],
-		writeGroups: [
-			primary("cxx"),
-			{ mode: "all", runnerIds: ["cpp-check"], filterKinds: ["cxx"] },
-		],
+		writeGroups: [primary("cxx")],
 	},
 	cmake: {
 		name: "CMake Processing",
@@ -170,10 +167,7 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<FileKind, CapabilityMatrixEntry>
 	kotlin: {
 		name: "Kotlin Linting",
 		capabilities: ["types", "lint", "format"],
-		writeGroups: [
-			primary("kotlin"),
-			{ mode: "all", runnerIds: ["ktlint"], filterKinds: ["kotlin"] },
-		],
+		writeGroups: [primary("kotlin")],
 	},
 	swift: {
 		name: "Swift Linting",
@@ -183,10 +177,7 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<FileKind, CapabilityMatrixEntry>
 	dart: {
 		name: "Dart Linting",
 		capabilities: ["types", "lint"],
-		writeGroups: [
-			primary("dart"),
-			{ mode: "all", runnerIds: ["dart-analyze"], filterKinds: ["dart"] },
-		],
+		writeGroups: [primary("dart")],
 	},
 	lua: {
 		name: "Lua Linting",
@@ -206,10 +197,7 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<FileKind, CapabilityMatrixEntry>
 	elixir: {
 		name: "Elixir Linting",
 		capabilities: ["types", "lint"],
-		writeGroups: [
-			primary("elixir"),
-			{ mode: "all", runnerIds: ["elixir-check"], filterKinds: ["elixir"] },
-		],
+		writeGroups: [primary("elixir")],
 	},
 	gleam: {
 		name: "Gleam Linting",
@@ -229,10 +217,7 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<FileKind, CapabilityMatrixEntry>
 	terraform: {
 		name: "Terraform Linting",
 		capabilities: ["types", "lint"],
-		writeGroups: [
-			primary("terraform"),
-			{ mode: "all", runnerIds: ["tflint"], filterKinds: ["terraform"] },
-		],
+		writeGroups: [primary("terraform")],
 	},
 	nix: {
 		name: "Nix Linting",
@@ -242,10 +227,7 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<FileKind, CapabilityMatrixEntry>
 	toml: {
 		name: "TOML Linting",
 		capabilities: ["lint", "format"],
-		writeGroups: [
-			primary("toml"),
-			{ mode: "all", runnerIds: ["taplo"], filterKinds: ["toml"] },
-		],
+		writeGroups: [primary("toml")],
 	},
 };
 

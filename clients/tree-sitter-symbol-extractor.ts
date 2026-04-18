@@ -117,6 +117,50 @@ const SYMBOL_QUERIES: Record<string, { defs: string; refs: string }> = {
           field: (field_identifier) @callField)) @callFieldRef
     `,
 	},
+	go: {
+		defs: `
+      (function_declaration
+        name: (identifier) @funcName
+        parameters: (parameter_list) @funcParams) @funcDef
+
+      (method_declaration
+        name: (field_identifier) @methodName
+        parameters: (parameter_list) @methodParams) @methodDef
+
+      (type_spec
+        name: (type_identifier) @typeName) @typeDef
+    `,
+		refs: `
+      (call_expression
+        function: (identifier) @callIdent) @callRef
+
+      (call_expression
+        function: (selector_expression
+          field: (field_identifier) @callMethod)) @callMethodRef
+    `,
+	},
+	ruby: {
+		defs: `
+      (method
+        name: (identifier) @methodName) @methodDef
+
+      (singleton_method
+        name: (identifier) @methodName) @methodDef
+
+      (class
+        name: (constant) @className) @classDef
+
+      (module
+        name: (constant) @moduleName) @moduleDef
+    `,
+		refs: `
+      (call
+        method: (identifier) @callIdent) @callRef
+
+      (call
+        method: (constant) @typeIdent) @typeRef
+    `,
+	},
 };
 
 export interface ExtractedSymbols {
@@ -247,6 +291,10 @@ export class TreeSitterSymbolExtractor {
 			kind = "type";
 			// biome-ignore lint/suspicious/noExplicitAny: Node type
 			defNode = captures.typeDef?.node as any;
+		} else if (captures.moduleName) {
+			name = captures.moduleName.text;
+			kind = "class";
+			defNode = captures.moduleDef?.node as any;
 		}
 
 		if (!name || !kind || !defNode) return null;

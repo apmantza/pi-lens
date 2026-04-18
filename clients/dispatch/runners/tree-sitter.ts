@@ -8,7 +8,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { RuleCache } from "../../cache/rule-cache.js";
-import { getSourceFiles } from "../../scan-utils.js";
 import { TreeSitterClient } from "../../tree-sitter-client.js";
 import { logTreeSitter } from "../../tree-sitter-logger.js";
 import { classifyDefect } from "../diagnostic-taxonomy.js";
@@ -23,20 +22,17 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import { PRIORITY } from "../priorities.js";
+import {
+	buildOrUpdateGraph,
+	computeImpactCascade,
+	recordEntitySnapshotDiff,
+} from "../../review-graph/service.js";
 
 // Module-level singleton: web-tree-sitter WASM must only be initialized once per process.
 // Creating a new TreeSitterClient() on every write resets TRANSFER_BUFFER (a module-level
 // WASM pointer) — concurrent writes race on _ts_init() and corrupt shared WASM state → crash.
 let _sharedClient: TreeSitterClient | null = null;
-const entitySnapshotByFile = new Map<string, Map<string, string>>();
-const blastFileCache = new Map<string, { expiresAt: number; files: string[] }>();
 const blastCooldownByFile = new Map<string, number>();
-const BLAST_CACHE_TTL_MS = 30_000;
-const MAX_BLAST_FILES = 300;
-const MAX_BLAST_ENTITIES = 8;
-const BLAST_MAX_FILE_BYTES = 128 * 1024;
-const BLAST_MAX_TOTAL_BYTES = 2 * 1024 * 1024;
-const BLAST_MAX_ELAPSED_MS = 120;
 const BLAST_COOLDOWN_MS = 5_000;
 
 interface EntityQueryDef {
@@ -145,10 +141,6 @@ const ENTITY_QUERIES: Partial<Record<string, EntityQueryDef[]>> = {
 	],
 };
 
-function escapeRegex(name: string): string {
-	return name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 async function extractEntitySnapshot(
 	client: TreeSitterClient,
 	filePath: string,
@@ -185,136 +177,6 @@ async function extractEntitySnapshot(
 	}
 
 	return snapshot;
-}
-
-function diffEntitySnapshot(
-	prev: Map<string, string> | undefined,
-	next: Map<string, string>,
-): { added: string[]; removed: string[]; modified: string[] } {
-	if (!prev) {
-		return { added: [...next.keys()], removed: [], modified: [] };
-	}
-
-	const added: string[] = [];
-	const removed: string[] = [];
-	const modified: string[] = [];
-
-	for (const [key, value] of next.entries()) {
-		if (!prev.has(key)) {
-			added.push(key);
-			continue;
-		}
-		if (prev.get(key) !== value) {
-			modified.push(key);
-		}
-	}
-
-	for (const key of prev.keys()) {
-		if (!next.has(key)) {
-			removed.push(key);
-		}
-	}
-
-	return { added, removed, modified };
-}
-
-function getBlastFiles(cwd: string): string[] {
-	const now = Date.now();
-	const cached = blastFileCache.get(cwd);
-	if (cached && cached.expiresAt > now) return cached.files;
-
-	const files = getSourceFiles(cwd).slice(0, MAX_BLAST_FILES);
-	blastFileCache.set(cwd, { files, expiresAt: now + BLAST_CACHE_TTL_MS });
-	return files;
-}
-
-function computeBlastRadius(
-	entityNames: string[],
-	filePath: string,
-	cwd: string,
-): {
-	entities: Array<{ entity: string; dependentFiles: number; references: number }>;
-	scannedFiles: number;
-	scannedBytes: number;
-	totalCandidates: number;
-	truncated: boolean;
-	elapsedMs: number;
-} {
-	const startedAt = Date.now();
-	const limited = entityNames.slice(0, MAX_BLAST_ENTITIES);
-	if (limited.length === 0) {
-		return {
-			entities: [],
-			scannedFiles: 0,
-			scannedBytes: 0,
-			totalCandidates: 0,
-			truncated: false,
-			elapsedMs: 0,
-		};
-	}
-
-	const regexByEntity = new Map(
-		limited.map((name) => [name, new RegExp(`\\b${escapeRegex(name)}\\b`, "g")]),
-	);
-	const files = getBlastFiles(cwd);
-	const stats = new Map(
-		limited.map((name) => [name, { dependentFiles: 0, references: 0 }]),
-	);
-	let scannedFiles = 0;
-	let scannedBytes = 0;
-	let truncated = false;
-
-	for (const candidate of files) {
-		if (Date.now() - startedAt > BLAST_MAX_ELAPSED_MS) {
-			truncated = true;
-			break;
-		}
-
-		if (path.resolve(candidate) === path.resolve(filePath)) continue;
-		let size = 0;
-		try {
-			size = fs.statSync(candidate).size;
-		} catch {
-			continue;
-		}
-		if (size > BLAST_MAX_FILE_BYTES) continue;
-		if (scannedBytes + size > BLAST_MAX_TOTAL_BYTES) {
-			truncated = true;
-			break;
-		}
-
-		let content = "";
-		try {
-			content = fs.readFileSync(candidate, "utf-8");
-		} catch {
-			continue;
-		}
-		scannedFiles += 1;
-		scannedBytes += size;
-
-		for (const [name, regex] of regexByEntity.entries()) {
-			const matches = content.match(regex);
-			if (!matches || matches.length === 0) continue;
-			const current = stats.get(name);
-			if (!current) continue;
-			current.dependentFiles += 1;
-			current.references += matches.length;
-		}
-	}
-
-	const entities = limited
-		.map((name) => ({ entity: name, ...stats.get(name)! }))
-		.sort((a, b) => b.dependentFiles - a.dependentFiles)
-		.slice(0, 5);
-
-	return {
-		entities,
-		scannedFiles,
-		scannedBytes,
-		totalCandidates: files.length,
-		truncated,
-		elapsedMs: Date.now() - startedAt,
-	};
 }
 
 const SILENT_ERROR_QUERY_IDS = new Set([
@@ -436,7 +298,7 @@ const treeSitterRunner: RunnerDefinition = {
 				...fs
 					.readdirSync(rulesDir)
 					.filter((f) => f.endsWith(".yml"))
-					.map((f) => path.join(rulesDir, f)),
+					.map((f: string) => path.join(rulesDir, f)),
 			);
 		}
 
@@ -607,11 +469,8 @@ const treeSitterRunner: RunnerDefinition = {
 		if (diagnostics.length === 0) {
 			try {
 				const snapshot = await extractEntitySnapshot(client, filePath, languageId);
-				const prev = entitySnapshotByFile.get(filePath);
-				const diff = diffEntitySnapshot(prev, snapshot);
-				entitySnapshotByFile.set(filePath, snapshot);
+				const diff = recordEntitySnapshotDiff(ctx.facts, filePath, snapshot);
 				const changedEntityKeys = [...diff.added, ...diff.modified, ...diff.removed];
-				const changedNames = [...new Set(changedEntityKeys.map((k) => k.split(":")[1]).filter(Boolean))];
 
 				if (changedEntityKeys.length > 0) {
 					logTreeSitter({
@@ -636,18 +495,18 @@ const treeSitterRunner: RunnerDefinition = {
 						});
 					} else {
 						blastCooldownByFile.set(filePath, Date.now());
-						const blastRadius = computeBlastRadius(changedNames, filePath, ctx.cwd);
+						const graph = await buildOrUpdateGraph(ctx.cwd, [filePath], ctx.facts);
+						const impact = computeImpactCascade(graph, filePath);
 						logTreeSitter({
 							phase: "blast_radius",
 							filePath,
 							languageId,
 							metadata: {
-								entities: blastRadius.entities,
-								scannedFiles: blastRadius.scannedFiles,
-								scannedBytes: blastRadius.scannedBytes,
-								totalCandidates: blastRadius.totalCandidates,
-								truncated: blastRadius.truncated,
-								elapsedMs: blastRadius.elapsedMs,
+								changedSymbols: impact.changedSymbols,
+								neighborFiles: impact.neighborFiles,
+								directImporters: impact.directImporters,
+								directCallers: impact.directCallers,
+								riskFlags: impact.riskFlags,
 							},
 						});
 					}
@@ -674,16 +533,11 @@ const treeSitterRunner: RunnerDefinition = {
 		).length;
 		try {
 			const snapshot = await extractEntitySnapshot(client, filePath, languageId);
-			const prev = entitySnapshotByFile.get(filePath);
-			const diff = diffEntitySnapshot(prev, snapshot);
-			entitySnapshotByFile.set(filePath, snapshot);
+			const diff = recordEntitySnapshotDiff(ctx.facts, filePath, snapshot);
 			const changedEntityKeys = [
 				...diff.added,
 				...diff.modified,
 				...diff.removed,
-			];
-			const changedNames = [
-				...new Set(changedEntityKeys.map((k) => k.split(":")[1]).filter(Boolean)),
 			];
 
 			if (changedEntityKeys.length > 0) {
@@ -709,18 +563,18 @@ const treeSitterRunner: RunnerDefinition = {
 					});
 				} else {
 					blastCooldownByFile.set(filePath, Date.now());
-					const blastRadius = computeBlastRadius(changedNames, filePath, ctx.cwd);
+					const graph = await buildOrUpdateGraph(ctx.cwd, [filePath], ctx.facts);
+					const impact = computeImpactCascade(graph, filePath);
 					logTreeSitter({
 						phase: "blast_radius",
 						filePath,
 						languageId,
 						metadata: {
-							entities: blastRadius.entities,
-							scannedFiles: blastRadius.scannedFiles,
-							scannedBytes: blastRadius.scannedBytes,
-							totalCandidates: blastRadius.totalCandidates,
-							truncated: blastRadius.truncated,
-							elapsedMs: blastRadius.elapsedMs,
+							changedSymbols: impact.changedSymbols,
+							neighborFiles: impact.neighborFiles,
+							directImporters: impact.directImporters,
+							directCallers: impact.directCallers,
+							riskFlags: impact.riskFlags,
 						},
 					});
 				}

@@ -41,6 +41,12 @@ export type { DispatchLatencyReport, RunnerLatency };
 export { clearLatencyReports, formatLatencyReport, getLatencyReports };
 
 import { registerDefaultRunners } from "./runners/index.js";
+import {
+	buildOrUpdateGraph,
+	computeImpactCascade,
+	formatImpactCascade,
+} from "../review-graph/service.js";
+import { resolveRunnerPath } from "./runner-context.js";
 
 // Register fact providers
 import { registerProvider } from "./fact-runner.js";
@@ -310,6 +316,16 @@ export function resetDispatchBaselines(): void {
 	sessionFacts.clearAll();
 	resetSessionSlopScore();
 	clearCoverageNoticeState();
+}
+
+export async function computeImpactCascadeForFile(
+	filePath: string,
+	cwd: string,
+): Promise<string | undefined> {
+	const normalizedFile = resolveRunnerPath(cwd, filePath);
+	const graph = await buildOrUpdateGraph(cwd, [normalizedFile], sessionFacts);
+	const impact = computeImpactCascade(graph, normalizedFile);
+	return formatImpactCascade(impact);
 }
 
 /**
