@@ -8,7 +8,6 @@
 import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import * as ts from "typescript";
 import { NativeRustCoreClient } from "../../native-rust-client.js";
 import { collectSourceFiles } from "../../source-filter.js";
 import {
@@ -28,6 +27,15 @@ import { PRIORITY } from "../priorities.js";
 
 // Singleton Rust client — initialised once, reused across runner invocations.
 const rustClient = new NativeRustCoreClient();
+type TypeScriptModule = typeof import("typescript");
+let tsModulePromise: Promise<TypeScriptModule | null> | undefined;
+
+async function loadTypeScript(): Promise<TypeScriptModule | null> {
+	if (!tsModulePromise) {
+		tsModulePromise = import("typescript").catch(() => null);
+	}
+	return tsModulePromise;
+}
 
 /** Feature flag: set to false to force the pure-TypeScript path. */
 const USE_RUST = true;
@@ -159,6 +167,11 @@ const similarityRunner: RunnerDefinition = {
 		}
 		// ── TypeScript fallback ─────────────────────────────────────────────────
 
+		const ts = await loadTypeScript();
+		if (!ts) {
+			return { status: "skipped", diagnostics: [], semantic: "none" };
+		}
+
 		const index = cachedIndex;
 
 		// Parse the file
@@ -171,7 +184,7 @@ const similarityRunner: RunnerDefinition = {
 		);
 
 		// Extract functions and check for similarities
-		const newFunctions = extractFunctions(sourceFile, content);
+		const newFunctions = extractFunctions(ts, sourceFile, content);
 
 		const diagnostics: Diagnostic[] = [];
 		const seenTargets = new Map<string, number>();
@@ -278,14 +291,15 @@ export interface ExtractedFunction {
 }
 
 export function extractFunctions(
-	sourceFile: ts.SourceFile,
+	tsModule: TypeScriptModule,
+	sourceFile: import("typescript").SourceFile,
 	_fullContent: string,
 ): ExtractedFunction[] {
 	const functions: ExtractedFunction[] = [];
 
-	function visit(node: ts.Node) {
+	function visit(node: import("typescript").Node) {
 		// Function declarations
-		if (ts.isFunctionDeclaration(node) && node.name) {
+		if (tsModule.isFunctionDeclaration(node) && node.name) {
 			const startPos = sourceFile.getLineAndCharacterOfPosition(
 				node.getStart(sourceFile),
 			);
@@ -301,16 +315,16 @@ export function extractFunctions(
 				lineCount: Math.max(1, endPos.line - startPos.line + 1),
 				matrix,
 				transitionCount,
-				signature: getSignature(node),
+				signature: getSignature(tsModule, node),
 			});
 		}
 
 		// Arrow functions assigned to const
-		if (ts.isVariableStatement(node)) {
-			extractArrowFunctions(node, functions, sourceFile);
+		if (tsModule.isVariableStatement(node)) {
+			extractArrowFunctions(tsModule, node, functions, sourceFile);
 		}
 
-		ts.forEachChild(node, visit);
+		tsModule.forEachChild(node, visit);
 	}
 
 	visit(sourceFile);
@@ -318,17 +332,18 @@ export function extractFunctions(
 }
 
 function extractArrowFunctions(
-	node: ts.VariableStatement,
+	tsModule: TypeScriptModule,
+	node: import("typescript").VariableStatement,
 	functions: ExtractedFunction[],
-	sourceFile: ts.SourceFile,
+	sourceFile: import("typescript").SourceFile,
 ): void {
 	for (const decl of node.declarationList.declarations) {
-		if (!ts.isIdentifier(decl.name) || !decl.initializer) {
+		if (!tsModule.isIdentifier(decl.name) || !decl.initializer) {
 			continue;
 		}
 
 		const func = decl.initializer;
-		if (!ts.isArrowFunction(func) && !ts.isFunctionExpression(func)) {
+		if (!tsModule.isArrowFunction(func) && !tsModule.isFunctionExpression(func)) {
 			continue;
 		}
 
@@ -347,27 +362,36 @@ function extractArrowFunctions(
 			lineCount: Math.max(1, endPos.line - startPos.line + 1),
 			matrix,
 			transitionCount,
-			signature: getArrowSignature(func),
+			signature: getArrowSignature(tsModule, func),
 		});
 	}
 }
 
-function getNodeText(node: ts.Node, sourceFile: ts.SourceFile): string {
+function getNodeText(
+	node: import("typescript").Node,
+	sourceFile: import("typescript").SourceFile,
+): string {
 	return sourceFile.text.substring(node.getStart(sourceFile), node.getEnd());
 }
 
-function getSignature(node: ts.FunctionDeclaration): string {
+function getSignature(
+	tsModule: TypeScriptModule,
+	node: import("typescript").FunctionDeclaration,
+): string {
 	const params = node.parameters
-		.map((p) => (ts.isIdentifier(p.name) ? p.name.text : "param"))
+		.map((p) => (tsModule.isIdentifier(p.name) ? p.name.text : "param"))
 		.join(", ");
 	return `(${params})`;
 }
 
 function getArrowSignature(
-	node: ts.ArrowFunction | ts.FunctionExpression,
+	tsModule: TypeScriptModule,
+	node:
+		| import("typescript").ArrowFunction
+		| import("typescript").FunctionExpression,
 ): string {
 	const params = node.parameters
-		.map((p) => (ts.isIdentifier(p.name) ? p.name.text : "param"))
+		.map((p) => (tsModule.isIdentifier(p.name) ? p.name.text : "param"))
 		.join(", ");
 	return `(${params})`;
 }

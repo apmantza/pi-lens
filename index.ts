@@ -678,7 +678,7 @@ pi.on("tool_call", async (event, ctx) => {
 					);
 					const { extractFunctions } = await import("./clients/dispatch/runners/similarity.js");
 					const { findSimilarFunctions } = await import("./clients/project-index.js");
-					const newFunctions = extractFunctions(sourceFile, newContent);
+					const newFunctions = extractFunctions(ts, sourceFile, newContent);
 					const simWarnings: string[] = [];
 					let simHintsTruncated = false;
 					const relPath = path.relative(runtime.projectRoot, filePath);
