@@ -2,7 +2,7 @@
 
 All notable changes to pi-lens will be documented in this file.
 
-## [3.8.5] - 2026-04-19
+## [3.8.27] - 2026-04-19
 
 ### Added
 - **Review graph impact cascade** — turn-end cascade now renders a review-graph impact view showing which files were affected and how diagnostics propagated.
