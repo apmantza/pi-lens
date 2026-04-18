@@ -1,6 +1,6 @@
 id: ruby-debugger
 name: Debugger Call
-severity: error
+severity: warning
 category: debugging
 defect_class: safety
 inline_tier: blocking

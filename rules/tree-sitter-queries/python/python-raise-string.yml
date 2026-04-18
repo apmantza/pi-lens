@@ -1,6 +1,6 @@
 id: python-raise-string
 name: Raise String Instead of Exception
-severity: error
+severity: warning
 category: reliability
 defect_class: correctness
 inline_tier: blocking

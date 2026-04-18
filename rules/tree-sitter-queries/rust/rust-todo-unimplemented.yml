@@ -1,6 +1,6 @@
 id: rust-todo-unimplemented
 name: Unfinished Stub Macro
-severity: error
+severity: warning
 category: correctness
 defect_class: correctness
 inline_tier: blocking

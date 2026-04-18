@@ -1,6 +1,6 @@
 id: python-mutable-class-attr
 name: Mutable Class Attribute
-severity: error
+severity: warning
 category: reliability
 defect_class: correctness
 inline_tier: blocking

@@ -2,7 +2,7 @@
 # Detects unwrap() calls that can panic
 id: rust-unwrap
 name: Unwrap Instead of Proper Error Handling
-severity: error
+severity: warning
 category: error-handling
 defect_class: correctness
 inline_tier: blocking

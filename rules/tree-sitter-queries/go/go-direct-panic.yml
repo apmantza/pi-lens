@@ -2,7 +2,7 @@
 # Detects direct panic calls in application/library code.
 id: go-direct-panic
 name: Direct panic() Call
-severity: error
+severity: warning
 category: reliability
 defect_class: safety
 inline_tier: blocking

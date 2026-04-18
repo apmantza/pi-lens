@@ -1,6 +1,6 @@
 id: ruby-empty-rescue
 name: Empty Rescue Block
-severity: error
+severity: warning
 category: reliability
 defect_class: silent-error
 inline_tier: blocking

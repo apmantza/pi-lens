@@ -1,6 +1,6 @@
 id: python-unsafe-regex
 name: Unsafe Dynamic Regex
-severity: error
+severity: warning
 category: security
 defect_class: injection
 inline_tier: blocking

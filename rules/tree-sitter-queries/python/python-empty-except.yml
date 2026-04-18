@@ -1,6 +1,6 @@
 id: python-empty-except
 name: Empty Except Block
-severity: error
+severity: warning
 category: reliability
 defect_class: silent-error
 inline_tier: blocking

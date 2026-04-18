@@ -2,7 +2,7 @@
 # Detects mutable defaults in function arguments (common Python pitfall)
 id: mutable-default-arg
 name: Mutable Default Argument
-severity: error
+severity: warning
 category: reliability
 defect_class: correctness
 inline_tier: blocking

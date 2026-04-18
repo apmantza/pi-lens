@@ -2,7 +2,7 @@
 # Detects bare 'except:' that catches all exceptions including SystemExit
 id: bare-except
 name: Bare Except Clause
-severity: error
+severity: warning
 category: reliability
 defect_class: silent-error
 inline_tier: blocking

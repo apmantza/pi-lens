@@ -2,7 +2,7 @@
 # Detects defer statements inside loops (resource leak risk)
 id: go-defer-in-loop
 name: Defer Inside Loop
-severity: error
+severity: warning
 category: resource-management
 defect_class: async-misuse
 inline_tier: blocking

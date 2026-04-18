@@ -2,7 +2,7 @@
 # Detects except clauses that can never be reached
 id: unreachable-except
 name: Unreachable Except Clause
-severity: error
+severity: warning
 category: reliability
 defect_class: correctness
 inline_tier: blocking

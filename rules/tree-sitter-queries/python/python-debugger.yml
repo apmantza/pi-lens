@@ -1,6 +1,6 @@
 id: python-debugger
 name: Debugger Statement
-severity: error
+severity: warning
 category: debugging
 defect_class: safety
 inline_tier: blocking

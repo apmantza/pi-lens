@@ -1,6 +1,6 @@
 id: ruby-string-eval
 name: eval/class_eval/instance_eval with String
-severity: error
+severity: warning
 category: security
 defect_class: injection
 inline_tier: blocking

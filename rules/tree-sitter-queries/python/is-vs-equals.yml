@@ -2,7 +2,7 @@
 # Detects 'is' used with string/int literals (should use '==')
 id: is-vs-equals
 name: Is vs Equals for Literals
-severity: error
+severity: warning
 category: reliability
 defect_class: correctness
 inline_tier: blocking

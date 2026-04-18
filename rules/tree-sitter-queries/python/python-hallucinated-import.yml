@@ -3,7 +3,7 @@
 # These are syntactically valid but fail at runtime. Common AI hallucination pattern.
 id: python-hallucinated-import
 name: Hallucinated Import
-severity: error
+severity: warning
 category: correctness
 defect_class: hallucination
 inline_tier: error

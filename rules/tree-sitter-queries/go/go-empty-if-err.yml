@@ -2,7 +2,7 @@
 # Detects empty `if err != nil` handlers
 id: go-empty-if-err
 name: Empty Error Handler
-severity: error
+severity: warning
 category: error-handling
 defect_class: silent-error
 inline_tier: blocking

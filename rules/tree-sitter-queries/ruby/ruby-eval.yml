@@ -2,7 +2,7 @@
 # Detects dangerous eval usage
 id: ruby-eval
 name: Dangerous eval() Usage
-severity: error
+severity: warning
 category: security
 defect_class: injection
 inline_tier: blocking

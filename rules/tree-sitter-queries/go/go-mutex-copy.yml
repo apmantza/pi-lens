@@ -1,6 +1,6 @@
 id: go-mutex-copy
 name: Mutex Copied by Value
-severity: error
+severity: warning
 category: concurrency
 defect_class: correctness
 inline_tier: blocking

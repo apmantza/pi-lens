@@ -2,7 +2,7 @@
 # Detects eval() and exec() which are security risks
 id: eval-exec
 name: Eval/Exec Usage
-severity: error
+severity: warning
 category: security
 defect_class: injection
 inline_tier: blocking

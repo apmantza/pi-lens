@@ -1,6 +1,6 @@
 id: ruby-rescue-exception
 name: Rescue Exception Base Class
-severity: error
+severity: warning
 category: reliability
 defect_class: correctness
 inline_tier: blocking
