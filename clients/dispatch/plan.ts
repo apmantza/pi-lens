@@ -87,7 +87,10 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<FileKind, CapabilityMatrixEntry>
 	cxx: {
 		name: "C/C++ Linting",
 		capabilities: ["types", "lint"],
-		writeGroups: [primary("cxx")],
+		writeGroups: [
+			primary("cxx"),
+			{ mode: "all", runnerIds: ["cpp-check"], filterKinds: ["cxx"] },
+		],
 	},
 	cmake: {
 		name: "CMake Processing",
@@ -203,7 +206,10 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<FileKind, CapabilityMatrixEntry>
 	elixir: {
 		name: "Elixir Linting",
 		capabilities: ["types", "lint"],
-		writeGroups: [primary("elixir")],
+		writeGroups: [
+			primary("elixir"),
+			{ mode: "all", runnerIds: ["elixir-check"], filterKinds: ["elixir"] },
+		],
 	},
 	gleam: {
 		name: "Gleam Linting",

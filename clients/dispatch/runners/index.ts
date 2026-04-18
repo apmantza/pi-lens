@@ -46,6 +46,8 @@ import dotnetBuildRunner from "./dotnet-build.js";
 import zigCheckRunner from "./zig-check.js";
 import gleamCheckRunner from "./gleam-check.js";
 import credoRunner from "./credo.js";
+import elixirCheckRunner from "./elixir-check.js";
+import cppCheckRunner from "./cpp-check.js";
 import prettierCheckRunner from "./prettier-check.js";
 import phpstanRunner from "./phpstan.js";
 
@@ -92,9 +94,11 @@ export function registerDefaultRunners(registry: RunnerRegistry): void {
 	registry.register(dartAnalyzeRunner); // Dart analysis via dart analyze (priority 20)
 	registry.register(javacRunner); // Java compile diagnostics via javac (priority 20)
 	registry.register(dotnetBuildRunner); // C# compile diagnostics via dotnet build (priority 20)
+	registry.register(cppCheckRunner); // C/C++ compile diagnostics via compiler syntax checks (priority 20)
 	registry.register(zigCheckRunner); // Zig compile diagnostics via zig build-exe (priority 20)
 	registry.register(gleamCheckRunner); // Gleam project diagnostics via gleam check (priority 20)
 	registry.register(credoRunner); // Elixir static analysis via credo (priority 20, mix.exs-gated)
+	registry.register(elixirCheckRunner); // Elixir compile/syntax diagnostics via mix/elixirc (priority 20)
 	registry.register(prettierCheckRunner); // Prettier format check for CSS/HTML (priority 10, config-gated)
 	registry.register(phpstanRunner); // PHP static analysis via phpstan (priority 20, config-gated)
 }

@@ -10,15 +10,19 @@ vi.mock("../../../../clients/safe-spawn.js", () => ({
 	safeSpawnAsync,
 }));
 
-vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
-	createAvailabilityChecker: (command: string) => ({
-		isAvailable: () => true,
-		getCommand: () => command,
-	}),
-}));
+function mockRunnerHelpers(
+	isAvailable: (command: string) => boolean = () => true,
+): void {
+	vi.doMock("../../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
+		createAvailabilityChecker: (command: string) => ({
+			isAvailable: () => isAvailable(command),
+			getCommand: () => command,
+		}),
+	}));
+}
 
 function createCtx(
-	kind: "dart" | "zig" | "gleam",
+	kind: "dart" | "zig" | "gleam" | "elixir",
 	filePath: string,
 	cwd: string,
 ) {
@@ -39,6 +43,7 @@ describe("secondary language fallback runners", () => {
 	beforeEach(() => {
 		vi.resetModules();
 		safeSpawnAsync.mockReset();
+		mockRunnerHelpers();
 	});
 
 	it("surfaces a warning when dart analyze exits non-zero without machine diagnostics", async () => {
@@ -66,6 +71,39 @@ describe("secondary language fallback runners", () => {
 			expect(result.status).toBe("failed");
 			expect(result.semantic).toBe("warning");
 			expect(result.diagnostics[0]?.message).toContain("dart analyze failed");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("falls back to flutter analyze when dart is unavailable", async () => {
+		vi.resetModules();
+		mockRunnerHelpers((command) => command === "flutter");
+
+		const env = setupTestEnvironment("pi-lens-dart-flutter-runner-");
+		try {
+			const filePath = path.join(env.tmpDir, "lib", "main.dart");
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(filePath, "void main() {}\n");
+
+			safeSpawnAsync.mockResolvedValue({
+				error: null,
+				status: 1,
+				stdout: "",
+				stderr: `warning|static_warning|unused_import|${filePath}|2|1|1|Unused import`,
+			});
+
+			const runner = (await import(
+				"../../../../clients/dispatch/runners/dart-analyze.js"
+			)).default;
+
+			const result = await runner.run(
+				createCtx("dart", filePath, env.tmpDir) as never,
+			);
+
+			expect(result.status).toBe("succeeded");
+			expect(result.semantic).toBe("warning");
+			expect(safeSpawnAsync.mock.calls[0]?.[0]).toBe("flutter");
 		} finally {
 			env.cleanup();
 		}
@@ -126,6 +164,39 @@ describe("secondary language fallback runners", () => {
 			expect(result.status).toBe("failed");
 			expect(result.semantic).toBe("blocking");
 			expect(result.diagnostics[0]?.message).toContain("gleam check failed");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("surfaces a blocking diagnostic when elixir compile exits non-zero without structured output", async () => {
+		const env = setupTestEnvironment("pi-lens-elixir-runner-");
+		try {
+			const filePath = path.join(env.tmpDir, "lib", "app.ex");
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(path.join(env.tmpDir, "mix.exs"), "defmodule Demo.MixProject do end\n");
+			fs.writeFileSync(filePath, "defmodule App do\n");
+
+			safeSpawnAsync
+				.mockResolvedValueOnce({ error: null, status: 0, stdout: "Mix 1.18.0", stderr: "" })
+				.mockResolvedValueOnce({
+					error: null,
+					status: 1,
+					stdout: "",
+					stderr: "** (SyntaxError) lib/app.ex:1:1: unexpected end of file",
+				});
+
+			const runner = (await import(
+				"../../../../clients/dispatch/runners/elixir-check.js"
+			)).default;
+
+			const result = await runner.run(
+				createCtx("elixir", filePath, env.tmpDir) as never,
+			);
+
+			expect(result.status).toBe("failed");
+			expect(result.semantic).toBe("blocking");
+			expect(result.diagnostics[0]?.tool).toBe("elixir-check");
 		} finally {
 			env.cleanup();
 		}

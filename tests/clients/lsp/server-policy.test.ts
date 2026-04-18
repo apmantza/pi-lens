@@ -120,13 +120,50 @@ describe("lsp server policy", () => {
 		expect(root).toBe(path.dirname(file));
 	});
 
+	it("tries pi-lens managed csharp candidates before legacy global dotnet tools", async () => {
+		const { CSharpServer } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-csharp-candidates-"));
+		dirs.push(tmp);
+
+		launchLSP.mockRejectedValue(new Error("ENOENT: command not found"));
+
+		const spawned = await CSharpServer.spawn(tmp, { allowInstall: false });
+		expect(spawned).toBeUndefined();
+		expect(launchLSP).toHaveBeenCalled();
+		const commands = launchLSP.mock.calls.map((call) => String(call[0] ?? ""));
+		expect(commands.some((command) => command.includes(path.join(".pi-lens", "bin", "csharp-ls")))).toBe(true);
+	});
+
+	it("falls back to file directory for standalone cpp/zig/elixir/gleam files", async () => {
+		const { CppServer, ZigServer, ElixirServer, GleamServer } = await import(
+			"../../../clients/lsp/server.js"
+		);
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-secondary-roots-"));
+		dirs.push(tmp);
+
+		const cppFile = path.join(tmp, "src", "main.cpp");
+		const zigFile = path.join(tmp, "src", "main.zig");
+		const elixirFile = path.join(tmp, "lib", "app.ex");
+		const gleamFile = path.join(tmp, "src", "app.gleam");
+		fs.mkdirSync(path.dirname(cppFile), { recursive: true });
+		fs.mkdirSync(path.dirname(elixirFile), { recursive: true });
+		fs.writeFileSync(cppFile, "int main() { return 0; }\n");
+		fs.writeFileSync(zigFile, "pub fn main() void {}\n");
+		fs.writeFileSync(elixirFile, "defmodule App do end\n");
+		fs.writeFileSync(gleamFile, "pub fn main() { Nil }\n");
+
+		await expect(CppServer.root(cppFile)).resolves.toBe(path.dirname(cppFile));
+		await expect(ZigServer.root(zigFile)).resolves.toBe(path.dirname(zigFile));
+		await expect(ElixirServer.root(elixirFile)).resolves.toBe(path.dirname(elixirFile));
+		await expect(GleamServer.root(gleamFile)).resolves.toBe(path.dirname(gleamFile));
+	});
+
 	it("resolves relative file roots without hanging", async () => {
 		const { NearestRoot } = await import("../../../clients/lsp/server.js");
 		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-relative-root-"));
 		dirs.push(tmp);
 
-		const prev = process.cwd();
-		process.chdir(tmp);
+		const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(tmp);
 		try {
 			const resolver = NearestRoot(["go.mod", "go.sum"]);
 			const result = await Promise.race([
@@ -137,7 +174,7 @@ describe("lsp server policy", () => {
 			]);
 			expect(result).toBeUndefined();
 		} finally {
-			process.chdir(prev);
+			cwdSpy.mockRestore();
 		}
 	});
 
@@ -155,14 +192,14 @@ describe("lsp server policy", () => {
 		fs.mkdirSync(path.join(parent, ".git"), { recursive: true });
 		fs.writeFileSync(file, "export const ok = true;\n");
 
-		const prev = process.cwd();
-		process.chdir(path.join(parent, "project"));
+		const stopDir = path.join(parent, "project");
+		const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(stopDir);
 		try {
-			const resolver = NearestRoot([".git"], undefined, process.cwd());
+			const resolver = NearestRoot([".git"], undefined, stopDir);
 			const result = await resolver(file);
 			expect(result).toBeUndefined();
 		} finally {
-			process.chdir(prev);
+			cwdSpy.mockRestore();
 		}
 	});
 

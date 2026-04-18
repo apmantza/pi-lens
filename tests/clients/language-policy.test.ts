@@ -104,6 +104,9 @@ describe("language-policy", () => {
 		const csharp = getPrimaryDispatchGroup("csharp", false);
 		expect(csharp?.runnerIds).toEqual(["dotnet-build"]);
 
+		const cxx = getPrimaryDispatchGroup("cxx", false);
+		expect(cxx?.runnerIds).toEqual(["cpp-check"]);
+
 		const terraform = getPrimaryDispatchGroup("terraform", true);
 		expect(terraform?.runnerIds).toEqual(["lsp", "tflint"]);
 
@@ -118,5 +121,8 @@ describe("language-policy", () => {
 
 		const gleam = getPrimaryDispatchGroup("gleam", false);
 		expect(gleam?.runnerIds).toEqual(["gleam-check"]);
+
+		const elixir = getPrimaryDispatchGroup("elixir", false);
+		expect(elixir?.runnerIds).toEqual(["elixir-check", "credo"]);
 	});
 });

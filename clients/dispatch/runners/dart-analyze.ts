@@ -10,6 +10,7 @@ import type {
 import { PRIORITY } from "../priorities.js";
 
 const dart = createAvailabilityChecker("dart", ".exe");
+const flutter = createAvailabilityChecker("flutter", ".bat");
 
 // dart analyze --format=machine output:
 // severity|type|code|file|line|col|length|message
@@ -65,17 +66,20 @@ const dartAnalyzeRunner: RunnerDefinition = {
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = ctx.cwd || process.cwd();
-
-		if (!dart.isAvailable(cwd)) {
+		const absPath = path.resolve(cwd, ctx.filePath);
+		const dartAvailable = dart.isAvailable(cwd);
+		const flutterAvailable = !dartAvailable && flutter.isAvailable(cwd);
+		if (!dartAvailable && !flutterAvailable) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
-
-		const cmd = dart.getCommand(cwd)!;
-		const absPath = path.resolve(cwd, ctx.filePath);
+		const cmd = dartAvailable ? dart.getCommand(cwd)! : flutter.getCommand(cwd)!;
+		const args = dartAvailable
+			? ["analyze", "--format=machine", absPath]
+			: ["analyze", "--machine", absPath];
 
 		const result = await safeSpawnAsync(
 			cmd,
-			["analyze", "--format=machine", absPath],
+			args,
 			{ cwd, timeout: 30000 },
 		);
 

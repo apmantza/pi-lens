@@ -7,6 +7,7 @@
  * - Platform-specific handling
  */
 
+import { mkdirSync } from "node:fs";
 import { appendFile, mkdir, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -60,6 +61,7 @@ function isCommandNotFoundError(error: unknown): boolean {
 
 const SESSIONSTART_LOG_DIR = path.join(os.homedir(), ".pi-lens");
 const SESSIONSTART_LOG = path.join(SESSIONSTART_LOG_DIR, "sessionstart.log");
+const PI_LENS_BIN_DIR = path.join(os.homedir(), ".pi-lens", "bin");
 
 function logSessionStart(message: string): void {
 	const line = `[${new Date().toISOString()}] ${message}\n`;
@@ -519,9 +521,10 @@ function tryGoInstallGopls(): Promise<boolean> {
 
 function tryDotnetToolInstall(tool: string): Promise<boolean> {
 	return new Promise((resolve) => {
+		mkdirSync(PI_LENS_BIN_DIR, { recursive: true });
 		const proc = spawnSync(
 			"dotnet",
-			["tool", "install", "-g", tool],
+			["tool", "install", "--tool-path", PI_LENS_BIN_DIR, tool],
 			{ stdio: "ignore", shell: false },
 		);
 		if (proc.status === 0) {
@@ -531,11 +534,23 @@ function tryDotnetToolInstall(tool: string): Promise<boolean> {
 
 		const updateProc = spawnSync(
 			"dotnet",
-			["tool", "update", "-g", tool],
+			["tool", "update", "--tool-path", PI_LENS_BIN_DIR, tool],
 			{ stdio: "ignore", shell: false },
 		);
 		resolve(updateProc.status === 0);
 	});
+}
+
+function dotnetToolCandidates(tool: string): string[] {
+	const userProfile = process.env.USERPROFILE;
+	return [
+		path.join(PI_LENS_BIN_DIR, `${tool}.exe`),
+		path.join(PI_LENS_BIN_DIR, `${tool}.cmd`),
+		path.join(PI_LENS_BIN_DIR, tool),
+		userProfile ? path.join(userProfile, ".dotnet", "tools", `${tool}.exe`) : "",
+		userProfile ? path.join(userProfile, ".dotnet", "tools", tool) : "",
+		tool,
+	].filter(Boolean);
 }
 
 /**
@@ -967,12 +982,7 @@ export const CSharpServer: LSPServerInfo = {
 	extensions: [".cs"],
 	root: RootWithFallback(createRootDetector([".sln", ".csproj", ".slnx"])),
 	async spawn(root, options) {
-		const userProfile = process.env.USERPROFILE;
-		const candidates = [
-			userProfile ? path.join(userProfile, ".dotnet", "tools", "csharp-ls.exe") : "",
-			userProfile ? path.join(userProfile, ".dotnet", "tools", "csharp-ls") : "",
-			"csharp-ls",
-		].filter(Boolean);
+		const candidates = dotnetToolCandidates("csharp-ls");
 
 		return resolveAndLaunch(
 			{
@@ -1059,12 +1069,12 @@ export const CppServer = createInteractiveServer({
 	id: "cpp",
 	name: "clangd",
 	extensions: [".c", ".cpp", ".cc", ".cxx", ".h", ".hpp"],
-	root: createRootDetector([
+	root: RootWithFallback(createRootDetector([
 		"compile_commands.json",
 		".clangd",
 		"CMakeLists.txt",
 		"Makefile",
-	]),
+	])),
 	language: "cpp",
 	command: "clangd",
 	args: ["--background-index"],
@@ -1074,7 +1084,7 @@ export const ZigServer = createInteractiveServer({
 	id: "zig",
 	name: "ZLS",
 	extensions: [".zig", ".zon"],
-	root: createRootDetector(["build.zig"]),
+	root: RootWithFallback(createRootDetector(["build.zig"])),
 	language: "zig",
 	command: "zls",
 });
@@ -1093,7 +1103,7 @@ export const ElixirServer = createInteractiveServer({
 	id: "elixir",
 	name: "ElixirLS",
 	extensions: [".ex", ".exs"],
-	root: createRootDetector(["mix.exs"]),
+	root: RootWithFallback(createRootDetector(["mix.exs"])),
 	language: "elixir",
 	command: "elixir-ls",
 });
@@ -1102,7 +1112,7 @@ export const GleamServer = createInteractiveServer({
 	id: "gleam",
 	name: "Gleam LSP",
 	extensions: [".gleam"],
-	root: createRootDetector(["gleam.toml"]),
+	root: RootWithFallback(createRootDetector(["gleam.toml"])),
 	language: "gleam",
 	command: "gleam",
 	args: ["lsp"],

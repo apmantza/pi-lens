@@ -90,7 +90,7 @@ const PRIMARY_DISPATCH_GROUPS: Partial<Record<FileKind, RunnerGroup>> = {
 		runnerIds: ["lsp", "rubocop"],
 		filterKinds: ["ruby"],
 	},
-	cxx: { mode: "fallback", runnerIds: ["lsp"], filterKinds: ["cxx"] },
+	cxx: { mode: "fallback", runnerIds: ["lsp", "cpp-check"], filterKinds: ["cxx"] },
 	cmake: { mode: "fallback", runnerIds: ["lsp"], filterKinds: ["cmake"] },
 	shell: {
 		mode: "fallback",
@@ -156,7 +156,7 @@ const PRIMARY_DISPATCH_GROUPS: Partial<Record<FileKind, RunnerGroup>> = {
 	lua: { mode: "fallback", runnerIds: ["lsp"], filterKinds: ["lua"] },
 	zig: { mode: "fallback", runnerIds: ["lsp", "zig-check"], filterKinds: ["zig"] },
 	haskell: { mode: "fallback", runnerIds: ["lsp"], filterKinds: ["haskell"] },
-	elixir: { mode: "fallback", runnerIds: ["lsp", "credo"], filterKinds: ["elixir"] },
+	elixir: { mode: "fallback", runnerIds: ["lsp", "elixir-check", "credo"], filterKinds: ["elixir"] },
 	gleam: { mode: "fallback", runnerIds: ["lsp", "gleam-check"], filterKinds: ["gleam"] },
 	ocaml: { mode: "fallback", runnerIds: ["lsp"], filterKinds: ["ocaml"] },
 	clojure: { mode: "fallback", runnerIds: ["lsp"], filterKinds: ["clojure"] },

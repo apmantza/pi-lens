@@ -97,4 +97,40 @@ describe("java/csharp fallback runners", () => {
 			env.cleanup();
 		}
 	});
+
+	it("parses cxx compiler diagnostics for the edited file", async () => {
+		const env = setupTestEnvironment("pi-lens-cpp-runner-");
+		try {
+			const filePath = path.join(env.tmpDir, "main.cpp");
+			fs.writeFileSync(filePath, "int main() { return nope; }\n");
+
+			safeSpawn.mockImplementation((command: string, args?: string[]) => {
+				if (command === "clang++" && args?.[0] === "--version") {
+					return { error: null, status: 0, stdout: "clang version 17", stderr: "" };
+				}
+				return {
+					error: null,
+					status: 1,
+					stdout: "",
+					stderr: `${filePath}:4:13: error: use of undeclared identifier 'nope'`,
+				};
+			});
+
+			const runner = (await import(
+				"../../../../clients/dispatch/runners/cpp-check.js"
+			)).default;
+			const result = await runner.run(
+				{
+					...createCtx("java", filePath, env.tmpDir),
+					kind: "cxx",
+				} as never,
+			);
+
+			expect(result.status).toBe("failed");
+			expect(result.semantic).toBe("blocking");
+			expect(result.diagnostics[0]?.tool).toBe("cpp-check");
+		} finally {
+			env.cleanup();
+		}
+	});
 });
