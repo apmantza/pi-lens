@@ -26,10 +26,20 @@ function primary(kind: FileKind): RunnerGroup {
 	return group;
 }
 
-export const LANGUAGE_CAPABILITY_MATRIX: Record<FileKind, CapabilityMatrixEntry> = {
+export const LANGUAGE_CAPABILITY_MATRIX: Record<
+	FileKind,
+	CapabilityMatrixEntry
+> = {
 	jsts: {
 		name: "JavaScript/TypeScript Linting",
-		capabilities: ["types", "security", "smells", "format", "lint", "architecture"],
+		capabilities: [
+			"types",
+			"security",
+			"smells",
+			"format",
+			"lint",
+			"architecture",
+		],
 		writeGroups: [
 			primary("jsts"),
 			{ mode: "all", runnerIds: ["biome-check-json"], filterKinds: ["jsts"] },
@@ -41,7 +51,11 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<FileKind, CapabilityMatrixEntry>
 			{ mode: "fallback", runnerIds: ["architect"], filterKinds: ["jsts"] },
 		],
 		fullOnlyGroups: [
-			{ mode: "fallback", runnerIds: ["biome-lint", "oxlint"], filterKinds: ["jsts"] },
+			{
+				mode: "fallback",
+				runnerIds: ["biome-lint", "oxlint"],
+				filterKinds: ["jsts"],
+			},
 		],
 	},
 	python: {
@@ -50,6 +64,7 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<FileKind, CapabilityMatrixEntry>
 		writeGroups: [
 			primary("python"),
 			{ mode: "fallback", runnerIds: ["ruff-lint"], filterKinds: ["python"] },
+			{ mode: "all", runnerIds: ["tree-sitter"], filterKinds: ["python"] },
 			{ mode: "fallback", runnerIds: ["architect"], filterKinds: ["python"] },
 		],
 		fullOnlyGroups: [
@@ -263,6 +278,7 @@ function toFullPlan(kind: FileKind, entry: CapabilityMatrixEntry): ToolPlan {
 			groups: [
 				primaryGroup,
 				{ mode: "fallback", runnerIds: ["ruff-lint"], filterKinds: ["python"] },
+				{ mode: "all", runnerIds: ["tree-sitter"], filterKinds: ["python"] },
 				...(entry.fullOnlyGroups ?? []),
 				{ mode: "fallback", runnerIds: ["architect"], filterKinds: ["python"] },
 			],

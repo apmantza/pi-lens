@@ -81,7 +81,7 @@ pi-lens supports **35+ languages** through dispatch runners and LSP integration:
 | Language | LSP | Dispatch Runners | Formatter |
 |---|---|---|---|
 | JavaScript/TypeScript | ✓ | lsp, ts-lsp, biome-check-json, tree-sitter, ast-grep-napi, type-safety, similarity, fact-rules, eslint, architect | biome, prettier |
-| Python | ✓ | lsp, pyright, ruff-lint, python-slop, architect | ruff, black |
+| Python | ✓ | lsp, pyright, ruff-lint, tree-sitter, python-slop, architect | ruff, black |
 | Go | ✓ | lsp, go-vet, golangci-lint, tree-sitter | gofmt |
 | Rust | ✓ | lsp, rust-clippy, tree-sitter | rustfmt |
 | Ruby | ✓ | lsp, rubocop, tree-sitter | rubocop, standardrb |
@@ -157,7 +157,7 @@ LSP servers for: TypeScript, Deno, Python (pyright + pylsp), Go, Rust, Ruby (rub
 |---|---|
 | LSP | `lsp`, `ts-lsp`, `pyright` |
 | JS/TS | `biome-check-json`, `eslint`, `ast-grep-napi`, `type-safety`, `similarity`, `tree-sitter`, `fact-rules` |
-| Python | `ruff-lint`, `python-slop`, `mypy` |
+| Python | `ruff-lint`, `tree-sitter`, `python-slop`, `mypy` |
 | Go | `go-vet`, `golangci-lint` |
 | Rust | `rust-clippy` |
 | Ruby | `rubocop` |
