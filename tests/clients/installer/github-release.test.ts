@@ -12,6 +12,7 @@ const GITHUB_TOOLS = [
 	"golangci-lint",
 	"ktlint",
 	"tflint",
+	"terraform-ls",
 ] as const;
 type GitHubToolId = (typeof GITHUB_TOOLS)[number];
 
@@ -139,6 +140,20 @@ describe("GitHub release asset selection", () => {
 					"tflint_windows_amd64.zip",
 				),
 			).toBe("tflint.exe");
+			expect(
+				resolveGitHubArchiveBinaryCandidates(
+					"terraform-ls",
+					"win32",
+					"terraform-ls_0.38.2_windows_amd64.zip",
+				),
+			).toContain("terraform-ls.exe");
+			expect(
+				resolveGitHubInstalledBinaryName(
+					"terraform-ls",
+					"win32",
+					"terraform-ls_0.38.2_windows_amd64.zip",
+				),
+			).toBe("terraform-ls.exe");
 		});
 
 		it("preserves batch launchers like ktlint.bat on Windows", async () => {
@@ -153,6 +168,27 @@ describe("GitHub release asset selection", () => {
 			expect(
 				resolveGitHubInstalledBinaryName("ktlint", "win32", "ktlint.bat"),
 			).toBe("ktlint.bat");
+		});
+	});
+
+	describe("HashiCorp release fallback", () => {
+		it("derives terraform-ls download URLs from the release tag when GitHub assets are absent", async () => {
+			const { resolveDerivedHashiCorpReleaseAsset } = await import(
+				"../../../clients/installer/index.ts"
+			);
+
+			expect(
+				resolveDerivedHashiCorpReleaseAsset(
+					"terraform-ls",
+					"v0.38.2",
+					"win32",
+					"x64",
+				),
+			).toEqual({
+				name: "terraform-ls_0.38.2_windows_amd64.zip",
+				browser_download_url:
+					"https://releases.hashicorp.com/terraform-ls/0.38.2/terraform-ls_0.38.2_windows_amd64.zip",
+			});
 		});
 	});
 });

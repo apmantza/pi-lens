@@ -99,6 +99,7 @@ interface GitHubAssetSpec {
 	 * For bare .gz files (e.g. rust-analyzer) leave undefined — the asset IS the binary.
 	 */
 	binaryInArchive?: string;
+	hashiCorpReleaseProduct?: string;
 }
 
 interface ToolDefinition {
@@ -513,6 +514,7 @@ const TOOLS: ToolDefinition[] = [
 		binaryName: "terraform-ls",
 		github: {
 			repo: "hashicorp/terraform-ls",
+			hashiCorpReleaseProduct: "terraform-ls",
 			assetMatch: (platform, arch) => {
 				if (platform === "linux") return arch === "arm64" ? "linux_arm64.zip" : "linux_amd64.zip";
 				if (platform === "darwin") return arch === "arm64" ? "darwin_arm64.zip" : "darwin_amd64.zip";
@@ -928,7 +930,10 @@ async function installGitHubTool(tool: ToolDefinition): Promise<string | undefin
 
 	// Fetch latest release metadata from GitHub API
 	logSessionStart(`github-install ${tool.id}: fetching release metadata from ${spec.repo}`);
-	let releaseJson: { assets: Array<{ name: string; browser_download_url: string }> };
+	let releaseJson: {
+		tag_name?: string;
+		assets: Array<{ name: string; browser_download_url: string }>;
+	};
 	try {
 		const body = await httpsGet(`https://api.github.com/repos/${spec.repo}/releases/latest`);
 		releaseJson = JSON.parse(body.toString("utf8"));
@@ -938,7 +943,9 @@ async function installGitHubTool(tool: ToolDefinition): Promise<string | undefin
 		return undefined;
 	}
 
-	const asset = releaseJson.assets.find((a) => a.name.includes(assetSubstring));
+	const asset =
+		releaseJson.assets.find((a) => a.name.includes(assetSubstring)) ??
+		deriveHashiCorpReleaseAsset(tool, releaseJson.tag_name, assetSubstring);
 	if (!asset) {
 		console.error(`[auto-install] ${tool.name}: no asset matching "${assetSubstring}" in release`);
 		logSessionStart(`github-install ${tool.id}: no asset matched "${assetSubstring}"`);
@@ -1563,4 +1570,37 @@ export function resolveGitHubArchiveBinaryCandidates(
 	if (!tool) return undefined;
 	const binaryName = tool.github?.binaryInArchive ?? tool.binaryName ?? tool.id;
 	return getArchiveBinaryCandidates(binaryName, platform, assetName);
+}
+
+type DownloadAsset = { name: string; browser_download_url: string };
+
+function deriveHashiCorpReleaseAsset(
+	tool: ToolDefinition,
+	tagName: string | undefined,
+	assetSubstring: string,
+): DownloadAsset | undefined {
+	const product = tool.github?.hashiCorpReleaseProduct;
+	if (!product || !tagName) return undefined;
+
+	const version = tagName.replace(/^v/, "").trim();
+	if (!version) return undefined;
+
+	const assetName = `${product}_${version}_${assetSubstring}`;
+	return {
+		name: assetName,
+		browser_download_url: `https://releases.hashicorp.com/${product}/${version}/${assetName}`,
+	};
+}
+
+export function resolveDerivedHashiCorpReleaseAsset(
+	toolId: string,
+	tagName: string,
+	platform: string,
+	arch: string,
+): DownloadAsset | undefined {
+	const tool = TOOLS.find((t) => t.id === toolId);
+	if (!tool) return undefined;
+	const assetSubstring = tool.github?.assetMatch(platform, arch);
+	if (!assetSubstring) return undefined;
+	return deriveHashiCorpReleaseAsset(tool, tagName, assetSubstring);
 }
