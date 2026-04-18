@@ -97,6 +97,28 @@ function resolvePathValue(env: NodeJS.ProcessEnv): string {
 	return combinePathValuesForPlatform([env.PATH, env.Path, env.path]);
 }
 
+/** Read live system+user PATH from Windows registry (bypasses stale process.env.PATH). */
+function readWindowsRegistryPath(): string {
+	try {
+		const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
+		const out = execFileSync("powershell.exe", [
+			"-NoProfile", "-NonInteractive", "-Command",
+			"[System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')",
+		], { timeout: 3000, encoding: "utf8" });
+		return out.trim();
+	} catch {
+		return "";
+	}
+}
+
+let _liveWindowsPath: string | null = null;
+function getLiveWindowsPath(): string {
+	if (_liveWindowsPath === null) {
+		_liveWindowsPath = readWindowsRegistryPath();
+	}
+	return _liveWindowsPath;
+}
+
 function buildAugmentedPath(basePath?: string): string {
 	const candidates: string[] = [];
 	const nodeDir = path.dirname(process.execPath);
@@ -119,8 +141,14 @@ function buildAugmentedPath(basePath?: string): string {
 		candidates.push(path.join("C:\\", "Ruby33-x64", "bin"));
 	}
 
+	// On Windows, merge the live registry PATH so newly installed tools are visible
+	// even if the pi agent process started before they were installed.
+	const effectiveBase = isWindows
+		? combinePathValuesForPlatform([basePath, getLiveWindowsPath()])
+		: basePath;
+
 	const existing = new Set<string>();
-	for (const entry of splitPathEntries(basePath, path.delimiter)) {
+	for (const entry of splitPathEntries(effectiveBase, path.delimiter)) {
 		if (!entry) continue;
 		existing.add(normalizePathEntry(entry, process.platform));
 	}
