@@ -69,7 +69,6 @@ pi --no-autofix           # Skip auto-fix (Biome, Ruff, ESLint)
 pi --no-autofix-biome   # Skip Biome autofix only
 pi --no-autofix-ruff    # Skip Ruff autofix only
 pi --no-tests             # Skip test runner
-pi --lens-verbose         # Verbose diagnostic output
 pi --lens-blocking-only    # Only show blocking issues
 pi --no-biome             # Disable Biome runner
 pi --no-oxlint            # Disable oxlint runner
