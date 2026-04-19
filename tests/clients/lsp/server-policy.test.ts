@@ -228,6 +228,19 @@ describe("lsp server policy", () => {
 		expect(root).toBe(workspace);
 	});
 
+	it("falls back to the file directory for standalone ruby files", async () => {
+		const { RubyServer } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ruby-filedir-"));
+		dirs.push(tmp);
+
+		const file = path.join(tmp, "scripts", "tool.rb");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, "puts 'ok'\n");
+
+		const root = await RubyServer.root(file);
+		expect(root).toBe(path.dirname(file));
+	});
+
 	it("skips managed TypeScript install when lsp install is disabled", async () => {
 		const { TypeScriptServer } = await import("../../../clients/lsp/server.js");
 		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ts-policy-"));
@@ -400,6 +413,21 @@ describe("lsp server policy", () => {
 					(command.endsWith("pyright.cmd") || command === "pyright"),
 			),
 		).toBe(false);
+	});
+
+	it("falls back to the file directory for standalone python files", async () => {
+		const { PythonServer, PythonPylspServer } = await import(
+			"../../../clients/lsp/server.js"
+		);
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-python-filedir-"));
+		dirs.push(tmp);
+
+		const file = path.join(tmp, "scripts", "tool.py");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, "print('ok')\n");
+
+		await expect(PythonServer.root(file)).resolves.toBe(path.dirname(file));
+		await expect(PythonPylspServer.root(file)).resolves.toBe(path.dirname(file));
 	});
 
 	it("launches taplo LSP from managed taplo install", async () => {

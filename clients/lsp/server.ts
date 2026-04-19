@@ -729,15 +729,17 @@ export const PythonServer: LSPServerInfo = {
 	id: "python",
 	name: "Pyright Language Server",
 	extensions: [".py", ".pyi"],
-	root: createRootDetector([
-		".git",
-		"pyproject.toml",
-		"setup.py",
-		"setup.cfg",
-		"requirements.txt",
-		"Pipfile",
-		"poetry.lock",
-	]),
+	root: RootWithFallback(
+		createRootDetector([
+			".git",
+			"pyproject.toml",
+			"setup.py",
+			"setup.cfg",
+			"requirements.txt",
+			"Pipfile",
+			"poetry.lock",
+		]),
+	),
 	async spawn(root, options) {
 		const path = await import("node:path");
 		const fs = await import("node:fs/promises");
@@ -838,15 +840,17 @@ export const PythonPylspServer: LSPServerInfo = {
 	id: "python-pylsp",
 	name: "Python LSP Server (pylsp)",
 	extensions: [".py", ".pyi"],
-	root: createRootDetector([
-		".git",
-		"pyproject.toml",
-		"setup.py",
-		"setup.cfg",
-		"requirements.txt",
-		"Pipfile",
-		"poetry.lock",
-	]),
+	root: RootWithFallback(
+		createRootDetector([
+			".git",
+			"pyproject.toml",
+			"setup.py",
+			"setup.cfg",
+			"requirements.txt",
+			"Pipfile",
+			"poetry.lock",
+		]),
+	),
 	async spawn(root) {
 		try {
 			const proc = await launchLSP("pylsp", [], { cwd: root });
@@ -909,7 +913,7 @@ export const RubyServer: LSPServerInfo = {
 	id: "ruby",
 	name: "Ruby LSP",
 	extensions: [".rb", ".rake", ".gemspec", ".ru"],
-	root: PriorityRoot([["Gemfile", ".ruby-version"], [".git"]]),
+	root: RootWithFallback(PriorityRoot([["Gemfile", ".ruby-version"], [".git"]])),
 	async spawn(root, options) {
 		// Try ruby-lsp first, then solargraph, then rubocop --lsp
 		// Each has different args so we can't use a single resolveAndLaunch call
@@ -947,7 +951,7 @@ export const RubySolargraphServer: LSPServerInfo = {
 	id: "ruby-solargraph",
 	name: "Solargraph",
 	extensions: [".rb", ".rake", ".gemspec", ".ru"],
-	root: PriorityRoot([["Gemfile", ".ruby-version"], [".git"]]),
+	root: RootWithFallback(PriorityRoot([["Gemfile", ".ruby-version"], [".git"]])),
 	async spawn(root) {
 		for (const command of ["solargraph", ...rubyBinCandidates("solargraph")]) {
 			try {
