@@ -94,4 +94,39 @@ describe("LSPService race hardening", () => {
 		expect(spawn).toHaveBeenCalledTimes(2);
 		now.mockRestore();
 	});
+
+	it("uses a server-specific wait budget override for slow startup", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+
+		const spawn = vi.fn(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			return {
+				process: {
+					process: { killed: false },
+					stdin: {} as any,
+					stdout: {} as any,
+					stderr: {} as any,
+					pid: 456,
+				},
+			};
+		});
+
+		getServersForFileWithConfig.mockReturnValue([
+			{
+				id: "ruby",
+				name: "Ruby LSP",
+				extensions: [".rb"],
+				root: async () => "C:/repo",
+				clientWaitTimeoutMs: 50,
+				spawn,
+			},
+		]);
+
+		const file = "C:/repo/main.rb";
+		const result = await service.getClientForFile(file, 1);
+
+		expect(spawn).toHaveBeenCalledTimes(1);
+		expect(result?.client).toBeTruthy();
+	});
 });

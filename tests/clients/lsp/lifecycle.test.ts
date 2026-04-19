@@ -409,4 +409,18 @@ describe("LSP Client Lifecycle", () => {
 		await client2.shutdown();
 		expect(client2.isAlive()).toBe(false);
 	});
+
+	it("respects a custom initialize timeout budget", async () => {
+		const proc = spawnMockLSP({ MOCK_LSP_SLOW_INIT_MS: "40" });
+		procs.push(proc);
+
+		await expect(
+			createLSPClient({
+				serverId: "mock-timeout",
+				process: proc,
+				root: FIXTURE_ROOT,
+				initializeTimeoutMs: 10,
+			}),
+		).rejects.toThrow("Timeout after 10ms");
+	});
 });

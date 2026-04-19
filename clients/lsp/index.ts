@@ -133,8 +133,14 @@ export class LSPService {
 		filePath: string,
 		maxWaitMs?: number,
 	): Promise<SpawnedServer | undefined> {
-		const withBudget = async (): Promise<SpawnedServer | undefined> => {
 		const servers = getServersForFileWithConfig(filePath);
+		const serverWaitOverrideMs = servers.reduce(
+			(max, server) => Math.max(max, server.clientWaitTimeoutMs ?? 0),
+			0,
+		);
+		const effectiveMaxWaitMs = Math.max(maxWaitMs ?? 0, serverWaitOverrideMs);
+
+		const withBudget = async (): Promise<SpawnedServer | undefined> => {
 		if (servers.length === 0) return undefined;
 
 		// Try each matching server
@@ -169,14 +175,14 @@ export class LSPService {
 		return undefined;
 		};
 
-		if (!maxWaitMs || maxWaitMs <= 0) {
+		if (!effectiveMaxWaitMs || effectiveMaxWaitMs <= 0) {
 			return withBudget();
 		}
 
 		const timeoutResult = await Promise.race<SpawnedServer | undefined>([
 			withBudget(),
 			new Promise<undefined>((resolve) =>
-				setTimeout(() => resolve(undefined), maxWaitMs),
+				setTimeout(() => resolve(undefined), effectiveMaxWaitMs),
 			),
 		]);
 
@@ -185,9 +191,9 @@ export class LSPService {
 				type: "phase",
 				phase: "lsp_client_wait_timeout",
 				filePath,
-				durationMs: maxWaitMs,
+				durationMs: effectiveMaxWaitMs,
 				metadata: {
-					maxWaitMs,
+					maxWaitMs: effectiveMaxWaitMs,
 				},
 			});
 		}
@@ -315,6 +321,7 @@ export class LSPService {
 				process: spawned.process,
 				root,
 				initialization: spawned.initialization,
+				initializeTimeoutMs: server.initializeTimeoutMs,
 			});
 			const wsDiag =
 				typeof client.getWorkspaceDiagnosticsSupport === "function"

@@ -32,6 +32,17 @@ export interface LSPServerInfo {
 	name: string;
 	extensions: string[];
 	root: RootFunction;
+	/**
+	 * Optional per-server initialize timeout.
+	 * Useful for servers like Ruby LSP that do real project bootstrap work
+	 * before they can answer initialize.
+	 */
+	initializeTimeoutMs?: number;
+	/**
+	 * Optional per-server wait budget for navigation requests that need a client
+	 * to become ready first.
+	 */
+	clientWaitTimeoutMs?: number;
 	spawn(
 		root: string,
 		options?: LSPSpawnOptions,
@@ -914,6 +925,10 @@ export const RubyServer: LSPServerInfo = {
 	name: "Ruby LSP",
 	extensions: [".rb", ".rake", ".gemspec", ".ru"],
 	root: RootWithFallback(PriorityRoot([["Gemfile", ".ruby-version"], [".git"]])),
+	// Ruby LSP may need extra time to finish composed-bundle setup before it can
+	// answer initialize/documentSymbol on cold start.
+	initializeTimeoutMs: 30_000,
+	clientWaitTimeoutMs: 30_000,
 	async spawn(root, options) {
 		// Try ruby-lsp first, then solargraph, then rubocop --lsp
 		// Each has different args so we can't use a single resolveAndLaunch call

@@ -561,10 +561,17 @@ export async function createLSPClient(options: {
 	process: LSPProcess;
 	root: string;
 	initialization?: Record<string, unknown>;
+	initializeTimeoutMs?: number;
 }): Promise<LSPClientInfo> {
 	installCrashGuard();
 
-	const { serverId, process: lspProcess, root, initialization } = options;
+	const {
+		serverId,
+		process: lspProcess,
+		root,
+		initialization,
+		initializeTimeoutMs = INITIALIZE_TIMEOUT_MS,
+	} = options;
 
 	const startupState: {
 		exitCode: number | null;
@@ -683,7 +690,7 @@ export async function createLSPClient(options: {
 				},
 				initializationOptions: initialization,
 			}),
-			INITIALIZE_TIMEOUT_MS,
+			initializeTimeoutMs,
 		);
 	} finally {
 		(lspProcess.stderr as NodeJS.ReadableStream).off("data", onStartupStderr);
