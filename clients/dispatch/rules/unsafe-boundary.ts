@@ -12,24 +12,30 @@ import type { TryCatchSummary } from "../facts/try-catch-facts.js";
  * Simple pass-throughs are excluded — they're expected to propagate errors.
  */
 
-const IO_PREFIXES = [
-	"fetch", "axios", "got", "request",
+// Entries ending with '.' are namespace prefixes (startsWith match).
+// All other entries are exact callee names — prevents e.g. "spawn" matching "spawned.map"
+// or "fetch" matching "fetchWithRetry".
+const IO_NAMESPACE_PREFIXES = [
 	"db.", "prisma.", "knex.", "mongoose.", "sequelize.",
 	"http.", "https.", "net.", "dns.",
 	"redis.", "mongo.", "pg.", "mysql.",
 	"s3.", "storage.", "bucket.",
-	"spawn", "exec(",
-	// Async fs only — sync variants (existsSync, readFileSync, etc.) don't produce rejections
-	"fs.promises.", "fs/promises",
-	"readFile(", "writeFile(", "appendFile(", "readdir(", "mkdir(", "unlink(", "stat(",
+	"fs.promises.",
 ];
+
+const IO_EXACT_CALLEES = new Set([
+	"fetch", "axios", "got", "request",
+	"spawn", "exec", "execSync", "spawnSync",
+	"readFile", "writeFile", "appendFile", "readdir", "mkdir", "unlink", "stat",
+]);
 
 const CC_THRESHOLD = 6; // raised from 4 — avoids flagging simple async wrappers with one IO call
 
 function callsToBoundary(outgoingCalls: string[]): string | undefined {
 	for (const callee of outgoingCalls) {
 		const lower = callee.toLowerCase();
-		if (IO_PREFIXES.some((p) => lower.startsWith(p))) return callee;
+		if (IO_EXACT_CALLEES.has(lower)) return callee;
+		if (IO_NAMESPACE_PREFIXES.some((p) => lower.startsWith(p))) return callee;
 	}
 	return undefined;
 }
