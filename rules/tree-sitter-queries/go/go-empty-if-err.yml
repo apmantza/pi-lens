@@ -20,8 +20,8 @@ query: |
     condition: (binary_expression
       left: (identifier) @ERR
       right: (nil))
-    consequence: (block) @BODY)
-  (#eq? @ERR "err")
+    consequence: (block) @BODY
+    (#eq? @ERR "err"))
 
 metavars:
   - ERR

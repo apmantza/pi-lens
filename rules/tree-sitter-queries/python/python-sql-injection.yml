@@ -21,8 +21,8 @@ query: |
       attribute: (identifier) @FN)
     arguments: (argument_list
       [(binary_operator) (identifier) (call)] @SQL
-      (_)*))
-  (#match? @FN "^(execute|executemany|query|raw)$")
+      (_)*)
+    (#match? @FN "^(execute|executemany|query|raw)$"))
 
 metavars:
   - FN

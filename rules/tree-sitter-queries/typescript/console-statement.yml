@@ -22,8 +22,7 @@ query: |
       property: (property_identifier) @METHOD (#not-eq? @METHOD "dbg"))
     arguments: (arguments) @ARGS)
 
-# Skip matches inside test blocks — no-console-in-tests handles that case
-post_filter: not_in_test_block
+post_filter: not_in_test_block  # skip test blocks — no-console-in-tests handles that case
 
 metavars:
   - OBJ

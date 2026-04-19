@@ -22,17 +22,19 @@ query: |
       function: (member_expression
         object: (identifier) @MOD
         property: (property_identifier) @FN)
-      arguments: (arguments) @ARGS)
+      arguments: (arguments) @ARGS
+      (#eq? @MOD "child_process")
+      (#match? @FN "^(exec|execSync)$"))
     (call_expression
       function: (member_expression
         object: (member_expression
           object: (identifier) @MOD
           property: (property_identifier) @NS)
         property: (property_identifier) @FN)
-      arguments: (arguments) @ARGS)
+      arguments: (arguments) @ARGS
+      (#eq? @MOD "child_process")
+      (#match? @FN "^(exec|execSync)$"))
   ]
-  (#eq? @MOD "child_process")
-  (#match? @FN "^(exec|execSync)$")
 
 metavars:
   - MOD

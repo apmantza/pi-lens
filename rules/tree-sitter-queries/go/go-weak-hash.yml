@@ -20,9 +20,9 @@ query: |
     function: (selector_expression
       operand: (identifier) @PKG
       field: (field_identifier) @FN)
-    arguments: (argument_list) @ARGS)
-  (#match? @PKG "^(md5|sha1)$")
-  (#match? @FN "^(New|Sum)$")
+    arguments: (argument_list) @ARGS
+    (#match? @PKG "^(md5|sha1)$")
+    (#match? @FN "^(New|Sum)$"))
 
 metavars:
   - PKG

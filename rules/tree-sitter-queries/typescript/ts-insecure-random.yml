@@ -22,10 +22,10 @@ query: |
       function: (member_expression
         object: (identifier) @OBJ
         property: (property_identifier) @FN)
-      arguments: (arguments) @ARGS))
-  (#eq? @OBJ "Math")
-  (#eq? @FN "random")
-  (#match? @VAR "(?i)(token|secret|password|key|nonce|salt|csrf|auth|session|credential|hash|otp|pin)")
+      arguments: (arguments) @ARGS)
+    (#eq? @OBJ "Math")
+    (#eq? @FN "random")
+    (#match? @VAR "(?i)(token|secret|password|key|nonce|salt|csrf|auth|session|credential|hash|otp|pin)"))
 
 metavars:
   - OBJ

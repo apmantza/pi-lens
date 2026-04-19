@@ -21,14 +21,15 @@ query: |
       left: (expression_list
         (identifier) @VAR)
       right: (expression_list
-        (call_expression) @CALL))
+        (call_expression) @CALL)
+      (#eq? @VAR "_"))
     (assignment_statement
       left: (expression_list
         (identifier) @VAR)
       right: (expression_list
-        (call_expression) @CALL))
+        (call_expression) @CALL)
+      (#eq? @VAR "_"))
   ]
-  (#eq? @VAR "_")
 
 metavars:
   - VAR

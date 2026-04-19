@@ -21,9 +21,9 @@ query: |
     function: (selector_expression
       operand: (identifier) @PKG
       field: (field_identifier) @METHOD)
-    arguments: (argument_list) @ARGS)
-  (#eq? @PKG "log")
-  (#match? @METHOD "^(Fatal|Fatalf|Fatalln|Panic|Panicf|Panicln)$")
+    arguments: (argument_list) @ARGS
+    (#eq? @PKG "log")
+    (#match? @METHOD "^(Fatal|Fatalf|Fatalln|Panic|Panicf|Panicln)$"))
 
 metavars:
   - PKG

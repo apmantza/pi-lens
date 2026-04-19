@@ -25,10 +25,10 @@ query: |
           operand: (identifier) @FMTPKG
           field: (field_identifier) @FMTFN)
         arguments: (argument_list) @FMTARGS)
-      (_)*))
-  (#match? @DBFN "^(Query|QueryContext|QueryRow|QueryRowContext|Exec|ExecContext)$")
-  (#eq? @FMTPKG "fmt")
-  (#eq? @FMTFN "Sprintf")
+      (_)*)
+    (#match? @DBFN "^(Query|QueryContext|QueryRow|QueryRowContext|Exec|ExecContext)$")
+    (#eq? @FMTPKG "fmt")
+    (#eq? @FMTFN "Sprintf"))
 
 metavars:
   - DBFN

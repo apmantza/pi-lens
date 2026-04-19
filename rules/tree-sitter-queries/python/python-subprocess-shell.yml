@@ -29,10 +29,10 @@ query: |
     arguments: (argument_list
       (keyword_argument
         name: (identifier) @KW
-        value: (true) @VAL)))
-  (#eq? @MOD "subprocess")
-  (#match? @FN "^(run|Popen|call|check_output|check_call)$")
-  (#eq? @KW "shell")
+        value: (true) @VAL))
+    (#eq? @MOD "subprocess")
+    (#match? @FN "^(run|Popen|call|check_output|check_call)$")
+    (#eq? @KW "shell"))
 
 metavars:
   - MOD

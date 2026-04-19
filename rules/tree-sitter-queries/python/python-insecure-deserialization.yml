@@ -20,9 +20,9 @@ query: |
     function: (attribute
       object: (identifier) @MOD
       attribute: (identifier) @FN)
-    arguments: (argument_list (_) @DATA))
-  (#match? @MOD "^(pickle|yaml)$")
-  (#match? @FN "^(load|loads|unsafe_load)$")
+    arguments: (argument_list (_) @DATA)
+    (#match? @MOD "^(pickle|yaml)$")
+    (#match? @FN "^(load|loads|unsafe_load)$"))
 
 metavars:
   - MOD

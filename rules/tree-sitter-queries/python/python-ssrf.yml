@@ -21,9 +21,9 @@ query: |
       object: (identifier) @MOD
       attribute: (identifier) @FN)
     arguments: (argument_list
-      [(identifier) (subscript) (call)] @URL))
-  (#eq? @MOD "requests")
-  (#match? @FN "^(get|post|put|patch|delete|request|head|options)$")
+      [(identifier) (subscript) (call)] @URL)
+    (#eq? @MOD "requests")
+    (#match? @FN "^(get|post|put|patch|delete|request|head|options)$"))
 
 metavars:
   - MOD

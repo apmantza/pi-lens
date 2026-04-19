@@ -20,9 +20,9 @@ query: |
     function: (attribute
       object: (identifier) @MOD
       attribute: (identifier) @FN)
-    arguments: (argument_list) @ARGS)
-  (#eq? @MOD "random")
-  (#match? @FN "^(random|randint|randrange|choice|choices)$")
+    arguments: (argument_list) @ARGS
+    (#eq? @MOD "random")
+    (#match? @FN "^(random|randint|randrange|choice|choices)$"))
 
 metavars:
   - MOD

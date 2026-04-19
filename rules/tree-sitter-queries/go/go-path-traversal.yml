@@ -22,9 +22,9 @@ query: |
       field: (field_identifier) @FN)
     arguments: (argument_list
       [(identifier) (binary_expression) (call_expression)] @PATH
-      (_)*))
-  (#match? @PKG "^(os|ioutil)$")
-  (#match? @FN "^(Open|OpenFile|ReadFile|WriteFile|Create|Remove|RemoveAll)$")
+      (_)*)
+    (#match? @PKG "^(os|ioutil)$")
+    (#match? @FN "^(Open|OpenFile|ReadFile|WriteFile|Create|Remove|RemoveAll)$"))
 
 metavars:
   - PKG

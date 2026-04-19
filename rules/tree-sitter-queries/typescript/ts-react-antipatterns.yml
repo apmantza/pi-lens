@@ -19,13 +19,15 @@ description: |
 query: |
   [
     (for_statement
-      body: (_) @BODY)
+      (statement_block) @BODY
+      (#match? @BODY "set[A-Z]"))
     (for_in_statement
-      body: (_) @BODY)
+      (statement_block) @BODY
+      (#match? @BODY "set[A-Z]"))
     (while_statement
-      body: (_) @BODY)
+      (statement_block) @BODY
+      (#match? @BODY "set[A-Z]"))
   ]
-  (#match? @BODY "set[A-Z]")
 
 metavars:
   - BODY

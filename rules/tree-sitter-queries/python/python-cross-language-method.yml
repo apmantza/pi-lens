@@ -26,8 +26,8 @@ query: |
   (call
     function: (attribute
       object: (_) @OBJ
-      attribute: (identifier) @METHOD))
-  (#match? @METHOD "^(push|forEach|indexOf|charAt|substring|hasOwnProperty|unshift|flatMap|padStart|padEnd|trimStart|trimEnd|equals|isEmpty|println|printf|getClass|hashCode|toCharArray|getBytes|compareTo|equalsIgnoreCase|startsWith|endsWith|each|collect|select|reject|detect|inject|chomp|chop|gsub|upcase|downcase|present|blank|Add|Contains|ToLower|ToUpper|Trim|Substring|WriteLine|ReadLine|TryParse|forEach|includes|assign|freeze|splice|unshift|shift|flatMap)$")
+      attribute: (identifier) @METHOD)
+    (#match? @METHOD "^(push|forEach|indexOf|charAt|substring|hasOwnProperty|unshift|flatMap|padStart|padEnd|trimStart|trimEnd|equals|isEmpty|println|printf|getClass|hashCode|toCharArray|getBytes|compareTo|equalsIgnoreCase|startsWith|endsWith|each|collect|select|reject|detect|inject|chomp|chop|gsub|upcase|downcase|present|blank|Add|Contains|ToLower|ToUpper|Trim|Substring|WriteLine|ReadLine|TryParse|forEach|includes|assign|freeze|splice|unshift|shift|flatMap)$"))
 
 metavars:
   - OBJ

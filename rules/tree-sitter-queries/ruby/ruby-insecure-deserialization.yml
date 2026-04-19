@@ -19,9 +19,9 @@ query: |
   (call_expression
     receiver: (constant) @MOD
     method: (identifier) @FN
-    arguments: (argument_list (_) @DATA))
-  (#match? @MOD "^(Marshal|YAML|Psych)$")
-  (#match? @FN "^(load|unsafe_load)$")
+    arguments: (argument_list (_) @DATA)
+    (#match? @MOD "^(Marshal|YAML|Psych)$")
+    (#match? @FN "^(load|unsafe_load)$"))
 
 metavars:
   - MOD

@@ -20,9 +20,9 @@ query: |
     function: (attribute
       object: (identifier) @MOD
       attribute: (identifier) @FN)
-    arguments: (argument_list) @ARGS)
-  (#eq? @MOD "hashlib")
-  (#match? @FN "^(md5|sha1)$")
+    arguments: (argument_list) @ARGS
+    (#eq? @MOD "hashlib")
+    (#match? @FN "^(md5|sha1)$"))
 
 metavars:
   - MOD

@@ -21,9 +21,9 @@ query: |
       property: (property_identifier) @FN)
     arguments: (arguments
       (string (string_fragment) @ALG)
-      (_)*))
-  (#eq? @FN "createHash")
-  (#match? @ALG "^(md5|sha1)$")
+      (_)*)
+    (#eq? @FN "createHash")
+    (#match? @ALG "^(md5|sha1)$"))
 
 metavars:
   - FN

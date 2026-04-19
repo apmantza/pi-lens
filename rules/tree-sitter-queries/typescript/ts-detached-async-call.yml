@@ -23,8 +23,8 @@ query: |
         (member_expression
           property: (property_identifier) @FN)
       ]
-      arguments: (arguments) @ARGS))
-  (#match? @FN "(Async$|fetch$|request$)")
+      arguments: (arguments) @ARGS)
+    (#match? @FN "(Async$|fetch$|request$)"))
 
 metavars:
   - FN

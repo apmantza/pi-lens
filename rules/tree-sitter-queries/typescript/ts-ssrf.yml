@@ -19,14 +19,15 @@ query: |
   [
     (call_expression
       function: (identifier) @FN
-      arguments: (arguments [(identifier) (member_expression) (call_expression) (await_expression)] @URL))
+      arguments: (arguments [(identifier) (member_expression) (call_expression) (await_expression)] @URL)
+      (#match? @FN "^(fetch|get|post|put|patch|delete|request)$"))
     (call_expression
       function: (member_expression
         object: (identifier) @OBJ
         property: (property_identifier) @FN)
-      arguments: (arguments [(identifier) (member_expression) (call_expression) (await_expression)] @URL))
+      arguments: (arguments [(identifier) (member_expression) (call_expression) (await_expression)] @URL)
+      (#match? @FN "^(fetch|get|post|put|patch|delete|request)$"))
   ]
-  (#match? @FN "^(fetch|get|post|put|patch|delete|request)$")
 
 metavars:
   - OBJ

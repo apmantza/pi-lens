@@ -23,11 +23,11 @@ query: |
     arguments: (argument_list
       (interpreted_string_literal) @SHELL
       (interpreted_string_literal) @FLAG
-      (_) @CMD))
-  (#eq? @PKG "exec")
-  (#match? @FN "^(Command|CommandContext)$")
-  (#match? @SHELL "^\"(sh|bash|zsh|cmd|powershell|pwsh)\"$")
-  (#match? @FLAG "^\"(-c|/c)\"$")
+      (_) @CMD)
+    (#eq? @PKG "exec")
+    (#match? @FN "^(Command|CommandContext)$")
+    (#match? @SHELL "^\"(sh|bash|zsh|cmd|powershell|pwsh)\"$")
+    (#match? @FLAG "^\"(-c|/c)\"$"))
 
 metavars:
   - PKG
