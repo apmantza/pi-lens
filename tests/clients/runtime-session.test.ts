@@ -61,8 +61,14 @@ async function runSessionStart(mode: "full" | "quick") {
 				ensureAvailable: async () => false,
 				scanExports: async () => new Map(),
 			},
-			biomeClient: { isAvailable: () => false },
-			ruffClient: { isAvailable: () => false },
+			biomeClient: {
+				isAvailable: () => false,
+				ensureAvailable: async () => false,
+			},
+			ruffClient: {
+				isAvailable: () => false,
+				ensureAvailable: async () => false,
+			},
 			knipClient: {
 				isAvailable: () => false,
 				ensureAvailable: async () => false,
@@ -72,7 +78,10 @@ async function runSessionStart(mode: "full" | "quick") {
 				ensureAvailable: async () => false,
 			},
 			typeCoverageClient: { isAvailable: () => false },
-			depChecker: { isAvailable: () => false },
+			depChecker: {
+				isAvailable: () => false,
+				ensureAvailable: async () => false,
+			},
 			architectClient: { loadConfig: () => false },
 			testRunnerClient: {
 				detectRunner: () => ({ runner: "vitest", config: null }),

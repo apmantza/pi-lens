@@ -9,6 +9,7 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { isFileKind } from "./file-kinds.js";
 import { safeSpawn, safeSpawnAsync } from "./safe-spawn.js";
@@ -60,16 +61,29 @@ export class BiomeClient {
 		if (this.localBinaryPath) return { cmd: this.localBinaryPath, args: [] };
 
 		// Walk up from cwd looking for node_modules/.bin/biome.
+		// Also check ~/.pi-lens/tools (where ensureTool("biome") auto-installs),
+		// so we avoid the ~1.5s `npx @biomejs/biome --version` fallback when
+		// the tool is already installed but not in the project's node_modules.
 		// On Windows prefer .cmd (native batch) over the sh wrapper — 2x faster.
 		const isWin = process.platform === "win32";
+		const piLensBin = path.join(
+			os.homedir(),
+			".pi-lens",
+			"tools",
+			"node_modules",
+			".bin",
+		);
 		const candidates = isWin
 			? [
 					path.join(process.cwd(), "node_modules", ".bin", "biome.cmd"),
 					path.join(process.cwd(), "node_modules", ".bin", "biome"),
+					path.join(piLensBin, "biome.cmd"),
+					path.join(piLensBin, "biome"),
 				]
 			: [
 					path.join(process.cwd(), "node_modules", ".bin", "biome"),
 					path.join(process.cwd(), "node_modules", ".bin", "biome.cmd"),
+					path.join(piLensBin, "biome"),
 				];
 		for (const p of candidates) {
 			if (fs.existsSync(p)) {

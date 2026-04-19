@@ -376,7 +376,9 @@ function runErrorDebtBaseline(
 		SessionStartDeps,
 		"testRunnerClient" | "cacheManager" | "notify" | "dbg" | "runtime"
 	>,
-	detectedRunner: ReturnType<SessionStartDeps["testRunnerClient"]["detectRunner"]>,
+	detectedRunner: ReturnType<
+		SessionStartDeps["testRunnerClient"]["detectRunner"]
+	>,
 	analysisRoot: string,
 	allowBootstrapTasks: boolean,
 	getFlag: SessionStartDeps["getFlag"],
@@ -499,20 +501,38 @@ export async function handleSessionStart(
 	const tools: string[] = [];
 	if (getFlag("lens-lsp") && !getFlag("no-lsp")) tools.push("LSP Service");
 
-	// Warm npm-based tool availability caches after startup returns. These sync
-	// subprocess calls (biome --version, npx knip --version, etc.) take ~500ms-2s
-	// each and were blocking the critical startup path with no functional benefit —
-	// each runner re-checks availability lazily when it first runs.
-	setImmediate(() => {
-		const b = biomeClient.isAvailable();
-		const a = astGrepClient.isAvailable();
-		const r = ruffClient.isAvailable();
-		knipClient.isAvailable();
-		depChecker.isAvailable();
-		jscpdClient.isAvailable();
-		typeCoverageClient.isAvailable();
-		dbg(`session_start tools (deferred probes complete): biome=${b} ast-grep=${a} ruff=${r}`);
-	});
+	// Warm tool availability caches off the critical startup path. The previous
+	// version used `setImmediate` + sync `isAvailable()`, which still blocked
+	// the Node event loop (each `isAvailable()` runs `spawnSync` — and six of
+	// the seven probes fall back to `npx <tool> --version` at ~1.5-2s each,
+	// summing to ~8-10s of main-thread freeze during session_start).
+	//
+	// We now run each probe through the client's async `ensureAvailable()`
+	// (which uses a fast bare-name PATH probe, falling back to `ensureTool`
+	// async install) inside a fire-and-forget IIFE. No main-thread blocking.
+	//
+	// Notes:
+	// - `typeCoverageClient` has no async probe and is only used by
+	//   `/lens-booboo`, so we let it probe lazily when first needed.
+	// - `ensureAvailable()` can auto-install missing tools into `~/.pi-lens/tools`.
+	//   This matches `firePreinstallDefaults`' existing behaviour for biome /
+	//   typescript-language-server.
+	void (async () => {
+		const warmStart = Date.now();
+		const [biomeReady, sgReady, ruffReady] = await Promise.all([
+			biomeClient.ensureAvailable().catch(() => false),
+			astGrepClient.ensureAvailable().catch(() => false),
+			ruffClient.ensureAvailable().catch(() => false),
+		]);
+		await Promise.allSettled([
+			knipClient.ensureAvailable().catch(() => false),
+			depChecker.ensureAvailable().catch(() => false),
+			jscpdClient.ensureAvailable().catch(() => false),
+		]);
+		dbg(
+			`session_start tools (deferred probes complete, ${Date.now() - warmStart}ms): biome=${biomeReady} ast-grep=${sgReady} ruff=${ruffReady}`,
+		);
+	})();
 
 	if (allowBootstrapTasks && getFlag("lens-lsp") && !getFlag("no-lsp")) {
 		const cleaned = cleanStaleTsBuildInfo(ctxCwd ?? process.cwd());
