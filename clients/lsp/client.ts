@@ -292,6 +292,7 @@ interface LSPClientState {
 	readonly diagnosticEmitter: EventEmitter;
 	readonly documentVersions: Map<string, number>;
 	readonly openDocuments: Set<string>;
+	readonly pendingOpens: Set<string>;
 	readonly workspaceDiagnosticsSupport: LSPWorkspaceDiagnosticsSupport;
 	readonly operationSupport: LSPOperationSupport;
 	readonly serverId: string;
@@ -470,7 +471,7 @@ async function handleNotifyOpen(
 	const uri = pathToFileURL(filePath).href;
 	const normalizedPath = normalizeMapKey(filePath);
 
-	if (state.openDocuments.has(normalizedPath)) {
+	if (state.openDocuments.has(normalizedPath) || state.pendingOpens.has(normalizedPath)) {
 		const version = (state.documentVersions.get(normalizedPath) ?? 0) + 1;
 		state.documentVersions.set(normalizedPath, version);
 		await safeSendNotification(state.connection, "textDocument/didChange", {
@@ -480,6 +481,7 @@ async function handleNotifyOpen(
 		return;
 	}
 
+	state.pendingOpens.add(normalizedPath);
 	state.documentVersions.set(normalizedPath, 0);
 	state.diagnostics.delete(normalizedPath);
 
@@ -495,6 +497,7 @@ async function handleNotifyOpen(
 	await safeSendNotification(state.connection, "textDocument/didOpen", {
 		textDocument: { uri, languageId, version: 0, text: content },
 	});
+	state.pendingOpens.delete(normalizedPath);
 	state.openDocuments.add(normalizedPath);
 }
 
@@ -533,6 +536,7 @@ async function clientShutdown(state: LSPClientState): Promise<void> {
 		clearTimeout(timer);
 	}
 	state.pendingDiagnostics.clear();
+	state.pendingOpens.clear();
 	state.openDocuments.clear();
 	state.diagnosticEmitter.removeAllListeners();
 	try {
@@ -669,6 +673,7 @@ export async function createLSPClient(options: {
 		diagnosticEmitter,
 		documentVersions: new Map(),
 		openDocuments: new Set(),
+		pendingOpens: new Set(),
 		// these are filled in after initialize — cast to avoid two-phase init
 		workspaceDiagnosticsSupport: undefined as unknown as LSPWorkspaceDiagnosticsSupport,
 		operationSupport: undefined as unknown as LSPOperationSupport,
