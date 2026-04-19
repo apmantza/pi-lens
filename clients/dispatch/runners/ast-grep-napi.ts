@@ -417,7 +417,12 @@ const astGrepNapiRunner: RunnerDefinition = {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
-		const stats = fs.statSync(ctx.filePath);
+		let stats: import("fs").Stats;
+		try {
+			stats = fs.statSync(ctx.filePath);
+		} catch {
+			return { status: "skipped", diagnostics: [], semantic: "none" };
+		}
 		if (stats.size > 1024 * 1024) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}

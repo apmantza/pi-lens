@@ -20,25 +20,30 @@ note: |
     const stats = await fs.promises.stat(path).catch(() => null);
 
 rule:
-  any:
-    - pattern: fs.statSync($$$)
-    - pattern: fs.lstatSync($$$)
-    - pattern: fs.readFileSync($$$)
-    - pattern: fs.readdirSync($$$)
-    - pattern: fs.writeFileSync($$$)
-    - pattern: fs.appendFileSync($$$)
-    - pattern: fs.unlinkSync($$$)
-    - pattern: fs.mkdirSync($$$)
-    - pattern: fs.rmdirSync($$$)
-    - pattern: fs.rmSync($$$)
-    - pattern: fs.renameSync($$$)
-    - pattern: fs.copyFileSync($$$)
-    - pattern: fs.accessSync($$$)
-    - pattern: fs.chmodSync($$$)
-    - pattern: fs.chownSync($$$)
-    - pattern: fs.truncateSync($$$)
-    - pattern: fs.realpathSync($$$)
-  not:
-    inside:
-      stopBy: end
-      kind: try_statement
+  all:
+    - any:
+        - pattern: fs.statSync($$$)
+        - pattern: fs.lstatSync($$$)
+        - pattern: fs.readFileSync($$$)
+        - pattern: fs.readdirSync($$$)
+        - pattern: fs.writeFileSync($$$)
+        - pattern: fs.appendFileSync($$$)
+        - pattern: fs.unlinkSync($$$)
+        - pattern: fs.rmdirSync($$$)
+        - pattern: fs.rmSync($$$)
+        - pattern: fs.renameSync($$$)
+        - pattern: fs.copyFileSync($$$)
+        - pattern: fs.accessSync($$$)
+        - pattern: fs.chmodSync($$$)
+        - pattern: fs.chownSync($$$)
+        - pattern: fs.truncateSync($$$)
+        - pattern: fs.realpathSync($$$)
+        # mkdirSync without { recursive: true } can throw EEXIST
+        - all:
+            - pattern: fs.mkdirSync($PATH)
+            - not:
+                pattern: fs.mkdirSync($PATH, $$$)
+    - not:
+        inside:
+          stopBy: end
+          kind: try_statement

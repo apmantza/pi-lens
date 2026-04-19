@@ -379,7 +379,7 @@ export async function promptForInstall(
 	// Check auto-install flag
 	if (isAutoInstallEnabled()) {
 		await saveChoice(cwd, config.toolId, "auto");
-		return await installTool(config);
+		return installTool(config);
 	}
 
 	if (!canUseInteractivePrompt()) {
@@ -395,7 +395,7 @@ export async function promptForInstall(
 	await saveChoice(cwd, config.toolId, answer);
 
 	if (answer === "yes") {
-		return await installTool(config);
+		return installTool(config);
 	}
 	return false;
 }
