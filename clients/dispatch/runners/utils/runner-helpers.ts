@@ -169,8 +169,11 @@ export function isSgAvailable(): boolean {
 
 	// 1. Local node_modules/.bin/sg — check pi-lens install dir first, then cwd
 	const isWin = process.platform === "win32";
+	// On Windows with Git Bash, prefer the bare 'sg' shim (bash-compatible) over
+	// .cmd/.ps1 which bash cannot execute. In plain cmd/PowerShell, .cmd is fine.
+	const hasBash = !!(process.env.MSYSTEM || process.env.GIT_SHELL || process.env.BASH);
 	const sgCandidates = isWin
-		? ["sg.cmd", "sg.ps1", "sg.exe", "sg"]
+		? (hasBash ? ["sg", "sg.exe", "sg.cmd", "sg.ps1"] : ["sg.cmd", "sg.ps1", "sg.exe", "sg"])
 		: ["sg"];
 	const binRoots = [_piLensRoot, process.cwd()];
 	for (const root of binRoots) {
