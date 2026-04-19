@@ -987,6 +987,18 @@ export class TreeSitterClient {
 		}
 	}
 
+	/**
+	 * Evaluate text predicates (#match?, #eq?) for a query match.
+	 * web-tree-sitter stores these as compiled functions in query.textPredicates[patternIndex]
+	 * and does NOT apply them automatically via .matches().
+	 */
+	// biome-ignore lint/suspicious/noExplicitAny: web-tree-sitter types
+	private evaluatePredicates(query: any, match: any): boolean {
+		const predicates: Array<(captures: unknown) => boolean> =
+			query.textPredicates?.[match.patternIndex] ?? [];
+		return predicates.every((fn) => fn(match.captures));
+	}
+
 	/** Search a single file using tree-sitter Query */
 	private async searchFileWithQuery(
 		filePath: string,
@@ -1015,6 +1027,11 @@ export class TreeSitterClient {
 					if (metavars.includes(capture.name)) {
 						captures[capture.name] = capture.node;
 					}
+				}
+
+				// Evaluate #match? and #eq? predicates that web-tree-sitter doesn't enforce automatically
+				if (!this.evaluatePredicates(query, match)) {
+					continue;
 				}
 
 				if (

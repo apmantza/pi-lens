@@ -32,11 +32,11 @@ query: |
           property: (property_identifier) @M3)
         arguments: (arguments))
       property: (property_identifier) @M4)
-    arguments: (arguments))
-  (#match? @M1 "^(then|catch|finally)$")
-  (#match? @M2 "^(then|catch|finally)$")
-  (#match? @M3 "^(then|catch|finally)$")
-  (#match? @M4 "^(then|catch|finally)$")
+    arguments: (arguments)
+    (#match? @M1 "^(then|catch|finally)$")
+    (#match? @M2 "^(then|catch|finally)$")
+    (#match? @M3 "^(then|catch|finally)$")
+    (#match? @M4 "^(then|catch|finally)$"))
 
 metavars:
   - M1
