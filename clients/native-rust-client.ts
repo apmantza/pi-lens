@@ -12,11 +12,34 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const _isWin = process.platform === "win32";
+const _binName = _isWin ? "pi-lens-core.exe" : "pi-lens-core";
+
+/**
+ * Walk up from startDir looking for rust/target/{release,debug}/pi-lens-core.
+ * Returns the first found path, or undefined. Works regardless of install depth.
+ */
+function findRustBinaryNearDir(startDir: string): string | undefined {
+	let current = startDir;
+	const fsRoot = path.parse(current).root;
+	while (current !== fsRoot) {
+		for (const profile of ["release", "debug"]) {
+			const candidate = path.join(current, "rust", "target", profile, _binName);
+			if (fs.existsSync(candidate)) return candidate;
+		}
+		const parent = path.dirname(current);
+		if (parent === current) break;
+		current = parent;
+	}
+	return undefined;
+}
 
 /** Recursively collect all `.rs` files under a directory. */
 async function collectRustSourceFiles(dir: string): Promise<string[]> {
@@ -135,24 +158,16 @@ export class NativeRustCoreClient {
 	private findBinary(): string | null {
 		if (this.binaryPath) return this.binaryPath;
 
-		// Possible locations (in order of preference)
+		// Possible locations (in order of preference):
+		// 1. Walk up from this file's directory — finds rust/target in dev or mono-repo layouts
+		// 2. ~/.pi-lens/bin — managed install location for shipped binaries
+		// 3. Global PATH
+		const managed = path.join(os.homedir(), ".pi-lens", "bin", _binName);
+		const walkResult = findRustBinaryNearDir(__dirname);
 		const candidates = [
-			// Development: relative to this file
-			path.join(
-				__dirname,
-				"..",
-				"rust",
-				"target",
-				"release",
-				"pi-lens-core.exe",
-			),
-			path.join(__dirname, "..", "rust", "target", "release", "pi-lens-core"),
-			// Development: debug build
-			path.join(__dirname, "..", "rust", "target", "debug", "pi-lens-core.exe"),
-			path.join(__dirname, "..", "rust", "target", "debug", "pi-lens-core"),
-			// PATH
-			"pi-lens-core.exe",
-			"pi-lens-core",
+			...(walkResult ? [walkResult] : []),
+			managed,
+			_binName,
 		];
 
 		for (const candidate of candidates) {

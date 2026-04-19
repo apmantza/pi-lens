@@ -244,8 +244,14 @@ function trySpawn(
 	let proc: ChildProcess;
 
 	if (needsShell) {
-		// Use shell mode with quoted command
-		const shellCommand = `"${command}" ${args.map((a) => (a.includes(" ") ? `"${a}"` : a)).join(" ")}`;
+		// Build a cmd.exe-safe command string: wrap in double quotes, escape internal
+		// quotes by doubling them, and escape cmd metacharacters (& | < > ^ ( ) !) with ^
+		const escapeCmdArg = (s: string): string => {
+			// Escape cmd.exe metacharacters first, then wrap in quotes if needed
+			const escaped = s.replace(/([&|<>^()!])/g, "^$1");
+			return /[\s"]/.test(escaped) ? `"${escaped.replace(/"/g, '""')}"` : escaped;
+		};
+		const shellCommand = `"${command}" ${args.map(escapeCmdArg).join(" ")}`;
 		proc = nodeSpawn(shellCommand, [], {
 			cwd,
 			env,
