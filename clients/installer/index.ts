@@ -614,15 +614,20 @@ export async function getToolPath(toolId: string): Promise<string | undefined> {
 	}
 
 	// Check local npm tools dir
-	const localPath = path.join(
-		TOOLS_DIR,
-		"node_modules",
-		".bin",
-		tool.binaryName || tool.id,
-	);
+	const localBase = path.join(TOOLS_DIR, "node_modules", ".bin", tool.binaryName || tool.id);
+	if (process.platform === "win32") {
+		// Prefer .cmd over extensionless — Node.js can't execute POSIX shell scripts on Windows
+		const cmdPath = `${localBase}.cmd`;
+		try {
+			await fs.access(cmdPath);
+			return cmdPath;
+		} catch {
+			// fall through to extensionless
+		}
+	}
 	try {
-		await fs.access(localPath);
-		return localPath;
+		await fs.access(localBase);
+		return localBase;
 	} catch {
 		return undefined;
 	}
