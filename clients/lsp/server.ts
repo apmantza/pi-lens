@@ -1329,14 +1329,14 @@ export const VueServer: LSPServerInfo = {
 	id: "vue",
 	name: "Vue Language Server",
 	extensions: [".vue"],
-	root: createRootDetector([
+	root: RootWithFallback(IgnoreHomeRoot(createRootDetector([
 		"package.json",
 		"package-lock.json",
 		"bun.lockb",
 		"bun.lock",
 		"pnpm-lock.yaml",
 		"yarn.lock",
-	]),
+	]))),
 	spawn(root, options) {
 		return resolveAndLaunch(
 			{ candidates: nodeBinCandidates(root, "vue-language-server"), args: ["--stdio"], cwd: root, managedToolId: "@vue/language-server" },
@@ -1349,14 +1349,14 @@ export const SvelteServer: LSPServerInfo = {
 	id: "svelte",
 	name: "Svelte Language Server",
 	extensions: [".svelte"],
-	root: createRootDetector([
+	root: RootWithFallback(IgnoreHomeRoot(createRootDetector([
 		"package.json",
 		"package-lock.json",
 		"bun.lockb",
 		"bun.lock",
 		"pnpm-lock.yaml",
 		"yarn.lock",
-	]),
+	]))),
 	spawn(root, options) {
 		return resolveAndLaunch(
 			{ candidates: [...nodeBinCandidates(root, "svelteserver"), ...nodeBinCandidates(root, "svelte-language-server")], args: ["--stdio"], cwd: root, managedToolId: "svelte-language-server" },
