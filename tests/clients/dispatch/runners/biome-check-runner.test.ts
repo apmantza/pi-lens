@@ -88,7 +88,7 @@ describe("biome-check runner", () => {
 			expect(
 				safeSpawnAsync.mock.calls.some(
 					(call) =>
-						(call[1] as string[])?.includes("check") &&
+						(call[1] as string[])?.includes("lint") &&
 						(call[1] as string[])?.includes("--reporter=json"),
 				),
 			).toBe(true);

@@ -144,19 +144,8 @@ const biomeCheckJsonRunner: RunnerDefinition = {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
-		// Check if Biome is available
+		// Check if Biome is available (resolve binary path)
 		const biomeBinary = findBiome(cwd);
-		const versionCheck = await safeSpawnAsync(
-			biomeBinary.cmd,
-			[...biomeBinary.argsPrefix, "--version"],
-			{
-				timeout: 5000,
-				cwd,
-			},
-		);
-		if (versionCheck.error || versionCheck.status !== 0) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
-		}
 
 		// Build config path — use user's if exists, else pi-lens config
 		const userHasConfig = hasUserBiomeConfig(cwd);
@@ -175,12 +164,12 @@ const biomeCheckJsonRunner: RunnerDefinition = {
 						resolvePackagePath(import.meta.url, "config/biome/core.jsonc"),
 				];
 
-		// Step 1: Capture diagnostics (before fixing)
+		// Run biome lint (diagnostics only - format is handled separately)
 		const checkResult = await safeSpawnAsync(
 			biomeBinary.cmd,
 			[
 				...biomeBinary.argsPrefix,
-				"check",
+				"lint",
 				"--reporter=json",
 				"--no-errors-on-unmatched",
 				...configArg,
@@ -188,6 +177,11 @@ const biomeCheckJsonRunner: RunnerDefinition = {
 			],
 			{ timeout: 30000, cwd },
 		);
+
+		// Handle spawn errors (e.g., binary not found)
+		if (checkResult.error) {
+			return { status: "skipped", diagnostics: [], semantic: "none" };
+		}
 
 		const parsed =
 			checkResult.status === 0 || checkResult.status === 1
