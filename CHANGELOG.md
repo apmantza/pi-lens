@@ -2,6 +2,17 @@
 
 All notable changes to pi-lens will be documented in this file.
 
+## [Unreleased]
+
+### Changed (Breaking)
+- **Simplified CLI flags** — removed 15 flags to reduce surface area and cognitive load:
+  - Removed per-tool disable flags: `--no-biome`, `--no-ast-grep`, `--no-shellcheck`, `--no-madge`, `--no-oxlint`, `--no-ruff`, `--no-go`, `--no-rust`
+  - Removed per-tool autofix flags: `--no-autofix-biome`, `--no-autofix-ruff`
+  - Removed feature flags: `--lens-verbose`, `--error-debt`, `--auto-install`
+  - Removed redundant `--lens-lsp` flag (LSP is default-on; use `--no-lsp` to disable)
+  - Removed internal dead flag: `--lens-blocking-only`
+  - New minimal flag set: `--no-lsp`, `--no-autoformat`, `--no-autofix`, `--no-tests`, `--lens-eslint-core`, `--lens-guard`
+
 ## [3.8.28] - 2026-04-19
 
 ### Fixed

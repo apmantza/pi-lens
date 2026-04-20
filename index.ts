@@ -168,6 +168,18 @@ export default function (pi: ExtensionAPI) {
 		default: false,
 	});
 
+	pi.registerFlag("no-delta", {
+		description: "Disable delta mode (show all diagnostics, not just new ones)",
+		type: "boolean",
+		default: false,
+	});
+
+	pi.registerFlag("no-lsp-install", {
+		description: "Disable automatic LSP server installation prompts",
+		type: "boolean",
+		default: false,
+	});
+
 	pi.registerFlag("lens-eslint-core", {
 		description:
 			"Use bundled ESLint core rules when project has no ESLint config (JS-only fallback)",

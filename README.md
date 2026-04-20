@@ -62,12 +62,14 @@ pi install git:github.com/apmantza/pi-lens
 pi
 
 # Optional switches
-pi --no-lsp              # Disable unified LSP, use language-specific fallbacks
+pi --no-lsp              # Disable unified LSP diagnostics
 pi --no-autoformat        # Skip auto-formatting
 pi --no-autofix           # Skip auto-fix (Biome, Ruff, ESLint, stylelint, sqlfluff, RuboCop)
 pi --no-tests             # Skip test runner
-pi --no-shellcheck        # Disable shellcheck runner
+pi --lens-eslint-core     # Use bundled ESLint rules (no project config needed)
 ```
+
+LSP is enabled by default. Use `--no-lsp` to use language-specific fallbacks (ts-lsp, pyright) instead of the unified LSP service.
 
 ## Key Commands
 
