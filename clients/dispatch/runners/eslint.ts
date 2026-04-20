@@ -9,7 +9,6 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { resolvePackagePath } from "../../package-root.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -42,11 +41,6 @@ function hasEslintConfig(cwd: string): boolean {
 		if (pkg.eslintConfig) return true;
 	} catch {}
 	return false;
-}
-
-function isJavaScriptFamily(filePath: string): boolean {
-	const ext = path.extname(filePath).toLowerCase();
-	return ext === ".js" || ext === ".jsx" || ext === ".mjs" || ext === ".cjs";
 }
 
 function findEslint(cwd: string): string {
