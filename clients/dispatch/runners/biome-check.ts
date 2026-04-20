@@ -7,6 +7,7 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { resolvePackagePath } from "../../package-root.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
@@ -65,7 +66,20 @@ function findBiome(cwd: string): string {
 		isWin ? "biome.cmd" : "biome",
 	);
 	if (fs.existsSync(local)) return local;
-	return "biome";
+
+	// Check pi-lens tools directory (where ensureTool("biome") auto-installs)
+	const piLensBin = path.join(
+		os.homedir(),
+		".pi-lens",
+		"tools",
+		"node_modules",
+		".bin",
+		isWin ? "biome.cmd" : "biome",
+	);
+	if (fs.existsSync(piLensBin)) return piLensBin;
+
+	// Fall back to npx (slower but works anywhere, auto-installs if needed)
+	return "npx";
 }
 
 interface BiomeDiagnostic {
