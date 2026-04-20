@@ -59,7 +59,7 @@ describe("biome-check runner", () => {
 			await runner.run(createCtx(filePath, env.tmpDir) as never);
 
 			const biomeCalls = safeSpawnAsync.mock.calls
-				.filter((call) => call[0] === "biome")
+				.filter((call) => call[0] === "biome" || (call[0] === "npx" && call[1]?.[0] === "@biomejs/biome"))
 				.map((call) => call[1] as string[]);
 
 			expect(
