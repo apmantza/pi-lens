@@ -57,7 +57,12 @@ function hasAlternateLinter(cwd: string): boolean {
 	return false;
 }
 
-function findBiome(cwd: string): string {
+interface BiomeBinary {
+	cmd: string;
+	argsPrefix: string[];
+}
+
+function findBiome(cwd: string): BiomeBinary {
 	const isWin = process.platform === "win32";
 	const local = path.join(
 		cwd,
@@ -65,7 +70,7 @@ function findBiome(cwd: string): string {
 		".bin",
 		isWin ? "biome.cmd" : "biome",
 	);
-	if (fs.existsSync(local)) return local;
+	if (fs.existsSync(local)) return { cmd: local, argsPrefix: [] };
 
 	// Check pi-lens tools directory (where ensureTool("biome") auto-installs)
 	const piLensBin = path.join(
@@ -76,10 +81,10 @@ function findBiome(cwd: string): string {
 		".bin",
 		isWin ? "biome.cmd" : "biome",
 	);
-	if (fs.existsSync(piLensBin)) return piLensBin;
+	if (fs.existsSync(piLensBin)) return { cmd: piLensBin, argsPrefix: [] };
 
 	// Fall back to npx (slower but works anywhere, auto-installs if needed)
-	return "npx";
+	return { cmd: "npx", argsPrefix: ["@biomejs/biome"] };
 }
 
 interface BiomeDiagnostic {
@@ -140,11 +145,15 @@ const biomeCheckJsonRunner: RunnerDefinition = {
 		}
 
 		// Check if Biome is available
-		const biomeCmd = findBiome(cwd);
-		const versionCheck = await safeSpawnAsync(biomeCmd, ["--version"], {
-			timeout: 5000,
-			cwd,
-		});
+		const biomeBinary = findBiome(cwd);
+		const versionCheck = await safeSpawnAsync(
+			biomeBinary.cmd,
+			[...biomeBinary.argsPrefix, "--version"],
+			{
+				timeout: 5000,
+				cwd,
+			},
+		);
 		if (versionCheck.error || versionCheck.status !== 0) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
@@ -168,8 +177,9 @@ const biomeCheckJsonRunner: RunnerDefinition = {
 
 		// Step 1: Capture diagnostics (before fixing)
 		const checkResult = await safeSpawnAsync(
-			biomeCmd,
+			biomeBinary.cmd,
 			[
+				...biomeBinary.argsPrefix,
 				"check",
 				"--reporter=json",
 				"--no-errors-on-unmatched",
