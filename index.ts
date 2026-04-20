@@ -57,6 +57,11 @@ function dbg(msg: string) {
 	}
 }
 
+// No-op log function (verbose console logging was removed with lens-verbose flag)
+function log(_msg: string) {
+	// Previously tied to --lens-verbose flag, now disabled
+}
+
 // --- State ---
 
 const runtime = new RuntimeCoordinator();
