@@ -11,7 +11,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { safeSpawn } from "./safe-spawn.js";
+import { safeSpawn, safeSpawnAsync } from "./safe-spawn.js";
 
 // --- Types ---
 
@@ -72,7 +72,7 @@ export class KnipClient {
 		if (this.knipAvailable !== null) return this.knipAvailable;
 
 		// Check if available in PATH (fast)
-		const pathResult = safeSpawn("knip", ["--version"], {
+		const pathResult = await safeSpawnAsync("knip", ["--version"], {
 			timeout: 5000,
 		});
 		if (!pathResult.error && pathResult.status === 0) {
@@ -186,7 +186,9 @@ export class KnipClient {
 	 * Find unused exports in a specific file
 	 */
 	findUnusedExports(filePath: string): string[] {
-		const result = this.analyze(this.resolveProjectRoot(path.dirname(filePath)));
+		const result = this.analyze(
+			this.resolveProjectRoot(path.dirname(filePath)),
+		);
 		const basename = path.basename(filePath);
 
 		return result.unusedExports
@@ -320,8 +322,13 @@ export class KnipClient {
 												: "file";
 					addIssue({
 						type,
-						name:
-							String(item.name ?? item.symbol ?? item.package ?? item.message ?? "unknown"),
+						name: String(
+							item.name ??
+								item.symbol ??
+								item.package ??
+								item.message ??
+								"unknown",
+						),
 						file: item.file ?? item.path ?? item.location?.file,
 						line: item.line ?? item.location?.line,
 						package: item.package,

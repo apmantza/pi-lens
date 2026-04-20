@@ -11,7 +11,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { safeSpawn } from "./safe-spawn.js";
+import { safeSpawn, safeSpawnAsync } from "./safe-spawn.js";
 
 // --- Types ---
 
@@ -63,7 +63,7 @@ export class DependencyChecker {
 		if (this.available !== null) return this.available;
 
 		// Check if available in PATH
-		const result = safeSpawn("madge", ["--version"], {
+		const result = await safeSpawnAsync("madge", ["--version"], {
 			timeout: 5000,
 		});
 		this.available = !result.error && result.status === 0;

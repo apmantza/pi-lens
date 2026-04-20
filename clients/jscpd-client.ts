@@ -12,7 +12,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getExcludedDirGlobs, isExcludedDirName } from "./file-utils.js";
-import { safeSpawn } from "./safe-spawn.js";
+import { safeSpawn, safeSpawnAsync } from "./safe-spawn.js";
 
 // --- Types ---
 
@@ -90,7 +90,7 @@ export class JscpdClient {
 		if (this.available !== null) return this.available;
 
 		// Check if available in PATH
-		const result = safeSpawn("jscpd", ["--version"], {
+		const result = await safeSpawnAsync("jscpd", ["--version"], {
 			timeout: 5000,
 		});
 		this.available = !result.error && result.status === 0;
