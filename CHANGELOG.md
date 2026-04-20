@@ -71,6 +71,8 @@ All notable changes to pi-lens will be documented in this file.
   - Added word boundaries to `hardcoded-secret` regex pattern
   - Added `looksLikeEnvVarName()` filter to skip UPPERCASE_SNAKE_CASE values
   - Prevents false positives when env var names are used as placeholder strings
+
+### Changed
 - **Biome check performance** — reduced lint latency from ~1.4s to ~100ms per file (92% improvement):
   - Removed redundant `--version` pre-check spawn (~200ms saved)
   - Switched from `biome check` to `biome lint` command (skip format validation)
