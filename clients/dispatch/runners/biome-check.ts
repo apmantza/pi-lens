@@ -62,7 +62,16 @@ interface BiomeBinary {
 	argsPrefix: string[];
 }
 
+// Cache binary resolution to avoid repeated fs checks
+let cachedBiomeBinary: BiomeBinary | null = null;
+let cachedCwd: string | null = null;
+
 function findBiome(cwd: string): BiomeBinary {
+	// Return cached result if cwd hasn't changed
+	if (cachedBiomeBinary && cachedCwd === cwd) {
+		return cachedBiomeBinary;
+	}
+
 	const isWin = process.platform === "win32";
 	const local = path.join(
 		cwd,
@@ -70,7 +79,11 @@ function findBiome(cwd: string): BiomeBinary {
 		".bin",
 		isWin ? "biome.cmd" : "biome",
 	);
-	if (fs.existsSync(local)) return { cmd: local, argsPrefix: [] };
+	if (fs.existsSync(local)) {
+		cachedBiomeBinary = { cmd: local, argsPrefix: [] };
+		cachedCwd = cwd;
+		return cachedBiomeBinary;
+	}
 
 	// Check pi-lens tools directory (where ensureTool("biome") auto-installs)
 	const piLensBin = path.join(
@@ -81,10 +94,16 @@ function findBiome(cwd: string): BiomeBinary {
 		".bin",
 		isWin ? "biome.cmd" : "biome",
 	);
-	if (fs.existsSync(piLensBin)) return { cmd: piLensBin, argsPrefix: [] };
+	if (fs.existsSync(piLensBin)) {
+		cachedBiomeBinary = { cmd: piLensBin, argsPrefix: [] };
+		cachedCwd = cwd;
+		return cachedBiomeBinary;
+	}
 
 	// Fall back to npx (slower but works anywhere, auto-installs if needed)
-	return { cmd: "npx", argsPrefix: ["@biomejs/biome"] };
+	cachedBiomeBinary = { cmd: "npx", argsPrefix: ["@biomejs/biome"] };
+	cachedCwd = cwd;
+	return cachedBiomeBinary;
 }
 
 interface BiomeDiagnostic {
