@@ -76,6 +76,10 @@ All notable changes to pi-lens will be documented in this file.
   - Switched from `biome check` to `biome lint` command (skip format validation)
   - Added binary path caching per cwd to avoid repeated fs checks
   - Benchmark: 107ms average vs 1400ms baseline
+- **Tree-sitter performance** — reduced structural analysis latency by 30-50%:
+  - Execute queries in parallel with concurrency limit of 6 (was sequential)
+  - Skip entity snapshot extraction for changes under 5 lines (~500-800ms saved for trivial edits)
+  - Reduces tree-sitter latency from ~3s to ~1-2s for typical files
 
 ## [3.8.28] - 2026-04-19
 
