@@ -24,6 +24,11 @@ All notable changes to pi-lens will be documented in this file.
 - **Cross-platform line ending handling** — all `.split("\n")` changed to `.split(/\r?\n/)` for Windows CRLF compatibility (11 files updated)
 
 ### Fixed
+- **Auto-install verification gap** — `getToolPath()` now verifies tool binaries actually work before using them:
+  - Runs `--version` check on local npm tools (not just file existence)
+  - Detects broken/corrupted installations (e.g., wrapper exists but package missing)
+  - Triggers automatic reinstall when binary verification fails
+  - Fixes case where `@biomejs/biome` package deleted but `.cmd` wrapper remained
 - **Error swallowing in tool availability checks** — `runtime-session.ts` now logs errors when biome/ast-grep/ruff/knip/dep/jscpd availability checks fail (was silently returning `false`)
 - **Biome check runner reliability** — fixed path resolution and configuration issues causing "skipped" status and parse errors:
   - Fixed biome flag: `--output-format=json` → `--reporter=json`
