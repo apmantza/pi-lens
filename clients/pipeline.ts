@@ -17,8 +17,10 @@ import * as path from "node:path";
 import type { BiomeClient } from "./biome-client.js";
 import { getDiagnosticLogger } from "./diagnostic-logger.js";
 import { getDiagnosticTracker } from "./diagnostic-tracker.js";
-import { dispatchLintWithResult } from "./dispatch/integration.js";
-import { computeImpactCascadeForFile } from "./dispatch/integration.js";
+import {
+	computeImpactCascadeForFile,
+	dispatchLintWithResult,
+} from "./dispatch/integration.js";
 import {
 	resolveRunnerPath,
 	toRunnerDisplayPath,
@@ -26,6 +28,7 @@ import {
 import type { PiAgentAPI } from "./dispatch/types.js";
 import { detectFileKind, getFileKindLabel } from "./file-kinds.js";
 import type { FormatService } from "./format-service.js";
+import { ensureTool } from "./installer/index.js";
 import { logLatency } from "./latency-logger.js";
 import { getLSPService } from "./lsp/index.js";
 import type { MetricsClient } from "./metrics-client.js";
@@ -35,7 +38,6 @@ import { RUNTIME_CONFIG } from "./runtime-config.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { formatSecrets, scanForSecrets } from "./secrets-scanner.js";
 import type { TestRunnerClient } from "./test-runner-client.js";
-import { ensureTool } from "./installer/index.js";
 
 const LSP_MAX_FILE_BYTES = RUNTIME_CONFIG.pipeline.lspMaxFileBytes;
 const LSP_MAX_FILE_LINES = RUNTIME_CONFIG.pipeline.lspMaxFileLines;
@@ -174,7 +176,12 @@ const STYLELINT_CONFIGS = [
 	"stylelint.config.mjs",
 ];
 
-const SQLFLUFF_CONFIGS = [".sqlfluff", "pyproject.toml", "setup.cfg", "tox.ini"];
+const SQLFLUFF_CONFIGS = [
+	".sqlfluff",
+	"pyproject.toml",
+	"setup.cfg",
+	"tox.ini",
+];
 
 const JSTS_EXTS = new Set([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"]);
 const CSS_EXTS = new Set([".css", ".scss", ".sass", ".less"]);
@@ -393,7 +400,9 @@ async function tryEslintFix(filePath: string, cwd: string): Promise<number> {
 				sum + (r.fixableErrorCount ?? 0) + (r.fixableWarningCount ?? 0),
 			0,
 		);
-	} catch { /* treat as zero fixable on error */ }
+	} catch {
+		/* treat as zero fixable on error */
+	}
 	if (fixableCount === 0) return 0;
 	// Apply the fixes
 	const fix = await safeSpawnAsync(
@@ -496,8 +505,7 @@ async function syncLspFile(
 		return { completed: true, phaseEnded: false };
 	}
 
-	const deferLspSync =
-		!getFlag("no-autofix") && supportsAutofix(filePath);
+	const deferLspSync = !getFlag("no-autofix") && supportsAutofix(filePath);
 
 	if (deferLspSync) {
 		return { completed: true, phaseEnded: true };
@@ -534,8 +542,6 @@ async function runAutofix(
 }> {
 	const { biomeClient, ruffClient, fixedThisTurn } = deps;
 	const noAutofix = getFlag("no-autofix");
-	const noAutofixBiome = getFlag("no-autofix-biome");
-	const noAutofixRuff = getFlag("no-autofix-ruff");
 	let fixedCount = 0;
 	const autofixTools: string[] = [];
 	let needsContentRefresh = false;
@@ -543,12 +549,10 @@ async function runAutofix(
 	if (!fixedThisTurn.has(filePath) && !noAutofix) {
 		const preferEslintForJsTs = isJsTs(filePath) && hasEslintConfig(cwd);
 		const [ruffReady, biomeReady] = await Promise.all([
-			!noAutofixRuff && ruffClient.isPythonFile(filePath)
+			ruffClient.isPythonFile(filePath)
 				? ruffClient.ensureAvailable()
 				: Promise.resolve(false),
-			!noAutofixBiome &&
-			biomeClient.isSupportedFile(filePath) &&
-			!preferEslintForJsTs
+			biomeClient.isSupportedFile(filePath) && !preferEslintForJsTs
 				? biomeClient.ensureAvailable()
 				: Promise.resolve(false),
 		]);
@@ -674,7 +678,8 @@ async function gatherCascadeDiagnostics(
 
 		for (const [diagPath, diags] of allDiags) {
 			const normalizedDiagPath = resolveRunnerPath(cwd, diagPath);
-			if (normalizeMapKey(normalizedDiagPath) === normalizedEditedPath) continue;
+			if (normalizeMapKey(normalizedDiagPath) === normalizedEditedPath)
+				continue;
 			if (!nodeFs.existsSync(normalizedDiagPath)) {
 				stalePathsSkipped++;
 				continue;
@@ -869,8 +874,11 @@ export async function runPipeline(
 	// Biome (TS/JS) and Ruff (Python) never touch the same file, so their
 	// availability checks run in parallel.
 	phase.start("autofix");
-	const { fixedCount, autofixTools, needsContentRefresh: fixRefresh } =
-		await runAutofix(filePath, cwd, getFlag, dbg, deps);
+	const {
+		fixedCount,
+		autofixTools,
+		needsContentRefresh: fixRefresh,
+	} = await runAutofix(filePath, cwd, getFlag, dbg, deps);
 	if (fixRefresh) needsContentRefresh = true;
 	phase.end("autofix", { fixedCount, tools: autofixTools });
 
@@ -1028,7 +1036,12 @@ export async function runPipeline(
 	// --- Final timing + all-clear ---
 	const elapsed = Date.now() - pipelineStart;
 	if (!output) {
-		output = buildAllClearOutput(dispatchResult, testSummary, elapsed, filePath);
+		output = buildAllClearOutput(
+			dispatchResult,
+			testSummary,
+			elapsed,
+			filePath,
+		);
 	}
 
 	phase.end("total", { hasOutput: !!output });

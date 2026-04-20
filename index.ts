@@ -157,22 +157,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	pi.registerFlag("no-autofix", {
-		description:
-			"Disable auto-fixing of lint issues (Biome, Ruff). Use --no-autofix-biome or --no-autofix-ruff for individual control.",
-		type: "boolean",
-		default: false,
-	});
-
-	pi.registerFlag("no-autofix-biome", {
-		description:
-			"Disable Biome auto-fix on write (Biome autofix is enabled by default)",
-		type: "boolean",
-		default: false,
-	});
-
-	pi.registerFlag("no-autofix-ruff", {
-		description:
-			"Disable Ruff auto-fix on write (Ruff autofix is enabled by default)",
+		description: "Disable auto-fixing of lint issues (Biome, Ruff, ESLint)",
 		type: "boolean",
 		default: false,
 	});

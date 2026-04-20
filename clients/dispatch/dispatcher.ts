@@ -135,7 +135,7 @@ export function createDispatchContext(
 		cwd: normalizedCwd,
 		kind,
 		pi,
-		autofix: !!(pi.getFlag("autofix-biome") || pi.getFlag("autofix-ruff")),
+		autofix: false,
 		deltaMode: !pi.getFlag("no-delta"),
 		facts,
 		blockingOnly,

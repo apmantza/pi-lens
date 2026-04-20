@@ -503,7 +503,7 @@ export async function handleSessionStart(
 		dbg(`session_start: monorepo analysis root override -> ${analysisRoot}`);
 	}
 
-	const lensLspEnabled = !!!getFlag("no-lsp");
+	const lensLspEnabled = !getFlag("no-lsp");
 	const startupDefaults = getDefaultStartupTools(languageProfile).filter(
 		(tool) => {
 			if (
@@ -512,7 +512,6 @@ export async function handleSessionStart(
 			) {
 				return false;
 			}
-			if (tool === "ruff" && getFlag("no-autofix-ruff")) return false;
 			return true;
 		},
 	);
