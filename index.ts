@@ -444,69 +444,6 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("lens-lsp", {
-		description:
-			"Show LSP server health: active clients. Use --full to test all 36 configured servers. Usage: /lens-lsp [--full]",
-		handler: async (_args, ctx) => {
-			const fullCheck = _args.includes("--full");
-			const lspService = getLSPService();
-			const clients = lspService.getStatus();
-
-			const lines: string[] = [
-				"🔌 PI-LENS LSP STATUS",
-				"",
-				`Active clients: ${clients.length}`,
-				"",
-			];
-
-			if (clients.length > 0) {
-				for (const client of clients) {
-					const status = client.connected ? "✓" : "✗";
-					lines.push(`  ${status} ${client.serverId} (${client.root})`);
-				}
-			} else {
-				lines.push("  No active LSP clients in current session.");
-			}
-
-			if (fullCheck) {
-				lines.push("", "🧪 Testing all 36 configured LSP servers...", "");
-
-				const { LSP_SERVERS } = await import("./clients/lsp/server.js");
-				const health = await lspService.healthCheckAllServers(LSP_SERVERS);
-
-				const ok = health.filter((h) => h.status === "ok");
-				const failed = health.filter((h) => h.status === "failed");
-				const skipped = health.filter((h) => h.status === "skipped");
-
-				if (ok.length > 0) {
-					lines.push(`Available (${ok.length}):`);
-					for (const s of ok) {
-						const src = s.source === "managed" ? "[auto]" : "[system]";
-						lines.push(`  ✓ ${s.name} ${src}`);
-					}
-				}
-
-				if (failed.length > 0) {
-					lines.push("", `Unavailable (${failed.length}):`);
-					for (const s of failed) {
-						const reason = s.error ? ` — ${s.error}` : "";
-						lines.push(`  ✗ ${s.name}${reason}`);
-					}
-				}
-
-				if (skipped.length > 0) {
-					lines.push("", `Skipped (${skipped.length}):`);
-					for (const s of skipped) {
-						lines.push(`  ○ ${s.name} — ${s.error}`);
-					}
-				}
-			}
-
-			lines.push("", "Tip: Use /lens-lsp --full to test spawn all servers");
-			ctx.ui.notify(lines.join("\n"), "info");
-		},
-	});
-
 	// --- Tools (extracted to tools/) ---
 	pi.registerTool(createAstGrepSearchTool(astGrepClient) as any);
 	pi.registerTool(createAstGrepReplaceTool(astGrepClient) as any);
