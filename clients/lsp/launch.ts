@@ -60,7 +60,10 @@ function delimiterForPlatform(platform: NodeJS.Platform): string {
 	return platform === "win32" ? ";" : ":";
 }
 
-function splitPathEntries(value: string | undefined, delimiter: string): string[] {
+function splitPathEntries(
+	value: string | undefined,
+	delimiter: string,
+): string[] {
 	if (!value) return [];
 	return value
 		.split(delimiter)
@@ -100,11 +103,18 @@ function resolvePathValue(env: NodeJS.ProcessEnv): string {
 /** Read live system+user PATH from Windows registry (bypasses stale process.env.PATH). */
 function readWindowsRegistryPath(): string {
 	try {
-		const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
-		const out = execFileSync("powershell.exe", [
-			"-NoProfile", "-NonInteractive", "-Command",
-			"[System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')",
-		], { timeout: 3000, encoding: "utf8" });
+		const { execFileSync } =
+			require("node:child_process") as typeof import("node:child_process");
+		const out = execFileSync(
+			"powershell.exe",
+			[
+				"-NoProfile",
+				"-NonInteractive",
+				"-Command",
+				"[System.Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [System.Environment]::GetEnvironmentVariable('Path','User')",
+			],
+			{ timeout: 3000, encoding: "utf8" },
+		);
 		return out.trim();
 	} catch {
 		return "";
@@ -196,12 +206,12 @@ function _findBinaryInNpmGlobal(command: string): string | undefined {
 				]
 			: [path.join(binDir, command)];
 
-	for (const candidate of candidates) {
-		if (fs.existsSync(candidate)) {
-			return candidate;
+		for (const candidate of candidates) {
+			if (fs.existsSync(candidate)) {
+				return candidate;
+			}
 		}
-	}
-	return undefined;
+		return undefined;
 	} catch {
 		return undefined;
 	}
@@ -254,11 +264,14 @@ function findBinaryOnPath(
 	env: NodeJS.ProcessEnv,
 ): string | undefined {
 	try {
-		const result = execSync(isWindows ? `where ${command}` : `which ${command}`, {
-			encoding: "utf-8",
-			stdio: ["ignore", "pipe", "ignore"],
-			env,
-		})
+		const result = execSync(
+			isWindows ? `where ${command}` : `which ${command}`,
+			{
+				encoding: "utf-8",
+				stdio: ["ignore", "pipe", "ignore"],
+				env,
+			},
+		)
 			.split(/\r?\n/)
 			.map((line) => line.trim())
 			.filter(Boolean);
@@ -291,7 +304,9 @@ function trySpawn(
 		const escapeCmdArg = (s: string): string => {
 			// Escape cmd.exe metacharacters first, then wrap in quotes if needed
 			const escaped = s.replace(/([&|<>^()!])/g, "^$1");
-			return /[\s"]/.test(escaped) ? `"${escaped.replace(/"/g, '""')}"` : escaped;
+			return /[\s"]/.test(escaped)
+				? `"${escaped.replace(/"/g, '""')}"`
+				: escaped;
 		};
 		const shellCommand = `"${command}" ${args.map(escapeCmdArg).join(" ")}`;
 		proc = nodeSpawn(shellCommand, [], {
@@ -545,42 +560,48 @@ export async function launchLSP(
 	// We need to wait a small tick to catch immediate spawn failures
 	try {
 		await new Promise<void>((resolve, reject) => {
-		let settled = false;
+			let settled = false;
 
-		// Attach error handler that can reject for immediate errors
-		proc.on("error", (err: Error & { code?: string }) => {
-			if (!settled && (err.code === "ENOENT" || err.code === "EINVAL")) {
-				settled = true;
-				reject(
-					new Error(
-						`LSP server binary not found: ${command}. ` +
-							`Install it or check your PATH.${formatStartupStderr(startupStderr)}`,
-					),
-				);
-			}
-		});
+			// Attach error handler that can reject for immediate errors
+			proc.on("error", (err: Error & { code?: string }) => {
+				if (!settled && (err.code === "ENOENT" || err.code === "EINVAL")) {
+					settled = true;
+					reject(
+						new Error(
+							`LSP server binary not found: ${command}. ` +
+								`Install it or check your PATH.${formatStartupStderr(startupStderr)}`,
+						),
+					);
+				}
+			});
 
-		// Also listen for immediate exit
-		proc.on("exit", (code: number | null) => {
-			if (!settled && code !== null) {
-				settled = true;
-				reject(
-					new Error(
-						`LSP server ${command} exited immediately with code ${code}. ` +
-							`The binary may be missing or corrupted.${formatStartupStderr(startupStderr)}`,
-					),
-				);
-			}
-		});
+			// Also listen for immediate exit
+			proc.on("exit", (code: number | null) => {
+				if (!settled && code !== null) {
+					settled = true;
+					// On Windows, .cmd shims fail with code 1 when the underlying binary isn't installed
+					// This is different from ENOENT - the shim exists but can't find the binary
+					const isWindowsCmd = isWindows && command.endsWith(".cmd");
+					const errorMsg =
+						isWindowsCmd && code === 1
+							? `npm .cmd shim failed (underlying binary not installed). Run 'npm install' in this project or use a global installation.`
+							: `The binary may be missing or corrupted.`;
+					reject(
+						new Error(
+							`LSP server ${command} exited immediately with code ${code}. ${errorMsg}${formatStartupStderr(startupStderr)}`,
+						),
+					);
+				}
+			});
 
-		// Give shell-backed Windows launches a slightly longer window because
-		// npm/cmd shims can fail asynchronously after the initial spawn succeeds.
-		setTimeout(() => {
-			if (!settled) {
-				settled = true;
-				resolve();
-			}
-		}, startupFailureWindowMs);
+			// Give shell-backed Windows launches a slightly longer window because
+			// npm/cmd shims can fail asynchronously after the initial spawn succeeds.
+			setTimeout(() => {
+				if (!settled) {
+					settled = true;
+					resolve();
+				}
+			}, startupFailureWindowMs);
 		});
 	} finally {
 		proc.stderr?.off("data", onStartupStderr);
