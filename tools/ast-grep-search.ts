@@ -90,7 +90,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			_onUpdate: unknown,
 			ctx: { cwd?: string },
 		) {
-			if (!astGrepClient.isAvailable()) {
+			if (!(await astGrepClient.ensureAvailable())) {
 				return {
 					content: [
 						{

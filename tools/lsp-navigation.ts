@@ -160,7 +160,7 @@ export function createLspNavigationTool(
 		name: "lsp_navigation" as const,
 		label: "LSP Navigate",
 			description:
-			"Navigate code using LSP (Language Server Protocol). Requires --lens-lsp flag.\n" +
+			"Navigate code using LSP (Language Server Protocol). LSP is enabled by default; disable with --no-lsp.\n" +
 			"Operations:\n" +
 			"- definition: Jump to where a symbol is defined\n" +
 			"- references: Find all usages of a symbol\n" +
@@ -320,13 +320,13 @@ export function createLspNavigationTool(
 				};
 			};
 
-			if (!getFlag("lens-lsp") || getFlag("no-lsp")) {
+			if (getFlag("no-lsp")) {
 				return finalize(
 					{
 					content: [
 						{
 							type: "text" as const,
-							text: "lsp_navigation requires LSP to be enabled. Use --lens-lsp (default) and ensure --no-lsp is not set.",
+							text: "lsp_navigation requires LSP to be enabled. Remove --no-lsp to use LSP navigation.",
 						},
 					],
 					isError: true,

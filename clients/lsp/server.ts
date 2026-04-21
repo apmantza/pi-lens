@@ -608,14 +608,16 @@ export const TypeScriptServer: LSPServerInfo = {
 	id: "typescript",
 	name: "TypeScript Language Server",
 	extensions: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"],
-	root: createRootDetector([
-		"package-lock.json",
-		"bun.lockb",
-		"bun.lock",
-		"pnpm-lock.yaml",
-		"yarn.lock",
-		"package.json",
-	]),
+	root: RootWithFallback(
+		IgnoreHomeRoot(createRootDetector([
+			"package-lock.json",
+			"bun.lockb",
+			"bun.lock",
+			"pnpm-lock.yaml",
+			"yarn.lock",
+			"package.json",
+		])),
+	),
 	async spawn(root, options) {
 		const path = await import("node:path");
 		const fs = await import("node:fs/promises");
@@ -1366,14 +1368,14 @@ export const ESLintServer: LSPServerInfo = {
 	id: "eslint",
 	name: "ESLint Language Server",
 	extensions: [".js", ".jsx", ".vue", ".svelte"], // Note: .ts/.tsx handled by TypeScript LSP + Biome
-	root: createRootDetector([
+	root: IgnoreHomeRoot(createRootDetector([
 		".eslintrc",
 		".eslintrc.json",
 		".eslintrc.js",
 		"eslint.config.js",
 		"eslint.config.mjs",
 		"package.json",
-	]),
+	])),
 	spawn(root, options) {
 		return resolveAndLaunch(
 			{ candidates: nodeBinCandidates(root, "vscode-eslint-language-server"), args: ["--stdio"], cwd: root, managedToolId: "vscode-langservers-extracted" },

@@ -61,7 +61,7 @@ jobs:
         run: npm ci
 
       - name: Dry-run publish (validates tarball + registry auth)
-        if: steps.meta.outputs.should_release == 'true'
+        if: steps.meta.outputs.should_release == 'true' && secrets.NPM_TOKEN != ''
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --dry-run
@@ -91,7 +91,7 @@ jobs:
   publish-npm:
     runs-on: ubuntu-latest
     needs: [prepare, release]
-    if: needs.prepare.outputs.should_release == 'true'
+    if: needs.prepare.outputs.should_release == 'true' && secrets.NPM_TOKEN != ''
     permissions:
       contents: read
     steps:

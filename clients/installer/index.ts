@@ -186,7 +186,7 @@ const TOOLS: ToolDefinition[] = [
 		checkCommand: "jscpd",
 		checkArgs: ["--version"],
 		installStrategy: "npm",
-		packageName: "jscpd",
+		packageName: "jscpd@3.5.10", // jscpd v4 introduced reprism dep whose lib/languages/ dir is missing from the published package — v3.5.x is the last stable release
 		binaryName: "jscpd",
 	},
 	// Structural search and dead code detection
@@ -866,6 +866,20 @@ export async function getToolPath(toolId: string): Promise<string | undefined> {
 				`auto-install verify: ${cmdPath} exists but is broken, will reinstall`,
 			);
 		} catch {
+			// fall through to .exe
+		}
+		// Also check .exe — some postinstall scripts (e.g. @ast-grep/cli) place a
+		// .exe directly without a .cmd wrapper
+		const exePath = `${localBase}.exe`;
+		try {
+			await fs.access(exePath);
+			if (await verifyToolBinary(exePath)) {
+				return exePath;
+			}
+			logSessionStart(
+				`auto-install verify: ${exePath} exists but is broken, will reinstall`,
+			);
+		} catch {
 			// fall through to extensionless
 		}
 	}
@@ -1373,6 +1387,7 @@ async function findFirstFileRecursive(
  */
 const NEEDS_POSTINSTALL = new Set([
 	"@biomejs/biome",
+	"@ast-grep/cli", // postinstall copies platform binary (ast-grep.exe/sg.exe) into place
 	"@ast-grep/napi",
 	"esbuild",
 	"intelephense", // postinstall fetches platform binary; --ignore-scripts breaks install
