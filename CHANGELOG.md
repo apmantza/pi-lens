@@ -4,6 +4,17 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **lsp_navigation permanently disabled** — removed stale `lens-lsp` flag check (flag was removed in 3.8.29) that caused every `lsp_navigation` call to short-circuit with `lsp_disabled`; tool now only gates on `--no-lsp`
+- **ast_grep_search / ast_grep_replace auto-install** — switched availability check from sync `isAvailable()` to async `ensureAvailable()` so the auto-installer triggers when `sg` is missing
+- **@ast-grep/cli postinstall skipped** — added `@ast-grep/cli` to `NEEDS_POSTINSTALL`; without it `--ignore-scripts` left ASCII stubs in place of `sg.exe` / `ast-grep.exe` on Windows
+- **Windows .exe binary lookup** — `getToolPath` now also probes the `.exe` extension on Windows, covering packages (like `@ast-grep/cli`) that place a `.exe` directly without a `.cmd` wrapper
+- **jscpd broken on Node 24** — pinned `jscpd` to `3.5.10`; v4 introduced a `reprism` dependency whose `lib/languages/` directory is absent from the published package
+- **TypeScript LSP using home dir as workspace root** — wrapped `TypeScriptServer` and `ESLintServer` roots with `IgnoreHomeRoot` so a `package.json` / eslint config in `~` can no longer hijack the workspace root; fallback is the file's own directory
+- **CI npm publish runs without token** — gated `publish-npm` job and dry-run step on `NPM_TOKEN` secret being set
+- **Stale compiled .js triggered test failures** — rebuilt project; `secrets-scanner.js` and `project-index.js` were from before the env-var-name false-positive fix and line-number capture fix respectively
+- **ast_grep_search test mock** — updated test mock from `isAvailable` to `ensureAvailable` to match the new async availability check
+
 ## [3.8.29] - 2026-04-21
 
 ### Added

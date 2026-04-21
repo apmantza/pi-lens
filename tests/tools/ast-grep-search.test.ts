@@ -5,7 +5,7 @@ describe("ast_grep_search tool", () => {
 	it("rejects plain text or rule-yaml-like patterns before search", async () => {
 		const search = vi.fn();
 		const astGrepClient = {
-			isAvailable: () => true,
+			ensureAvailable: async () => true,
 			search,
 			formatMatches: () => "",
 		};
@@ -31,7 +31,7 @@ describe("ast_grep_search tool", () => {
 			matches: [{ file: "src/a.ts", line: 1, text: "function x() {}" }],
 		});
 		const astGrepClient = {
-			isAvailable: () => true,
+			ensureAvailable: async () => true,
 			search,
 			formatMatches: () => "1 match",
 		};
