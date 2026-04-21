@@ -42,6 +42,7 @@ At `turn_end`, pi-lens:
 - persists turn findings for next context injection
 - updates debt/diagnostic tracking and cleans transient state
 - renders a review-graph impact cascade showing affected files and diagnostic propagation
+- manages LSP server lifecycle with a 240s idle timeout (resets when editing resumes)
 
 ## Install
 
@@ -66,6 +67,8 @@ pi --no-lsp              # Disable unified LSP diagnostics
 pi --no-autoformat        # Skip auto-formatting
 pi --no-autofix           # Skip auto-fix (Biome, Ruff, ESLint, stylelint, sqlfluff, RuboCop)
 pi --no-tests             # Skip test runner
+pi --no-delta             # Disable delta mode (show all diagnostics, not just new ones)
+pi --lens-guard           # Block git commit/push when unresolved blockers exist (experimental)
 ```
 
 LSP is enabled by default. Use `--no-lsp` to use language-specific fallbacks (ts-lsp, pyright) instead of the unified LSP service.
@@ -75,6 +78,7 @@ LSP is enabled by default. Use `--no-lsp` to use language-specific fallbacks (ts
 - `/lens-booboo` — full quality report for current project state
 - `/lens-health` — runtime health, latency, and diagnostic telemetry
 - `/lens-tools` — tool installation status: globally installed, auto-installed, or npx fallback
+- `/lens-tdi` — Technical Debt Index (TDI) and project health trend
 
 ## Language Coverage
 
@@ -148,6 +152,8 @@ pi-lens builds a review graph (`file → symbol → dependency`) during session 
 ## LSP Support
 
 pi-lens includes **37 language server definitions**. LSP is **enabled by default** (`--lsp` or no flag). Servers are auto-discovered from PATH, project `node_modules`, and managed installs. When a server is not installed, pi-lens offers an interactive install prompt.
+
+**LSP Idle Management:** LSP servers shut down after 240 seconds of inactivity (no files modified) to free resources. The timer resets when you resume editing, preventing cold-start penalties during active development.
 
 LSP servers for: TypeScript, Deno, Python (pyright + pylsp), Go, Rust, Ruby (ruby-lsp + solargraph), PHP, C# (omnisharp), F#, Java, Kotlin, Swift, Dart, Lua, C/C++, Zig, Haskell, Elixir, Gleam, OCaml, Clojure, Terraform, Nix, Bash, Docker, YAML, JSON, HTML, TOML, Prisma, Vue, Svelte, ESLint, CSS.
 

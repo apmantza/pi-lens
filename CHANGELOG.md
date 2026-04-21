@@ -4,6 +4,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+## [3.8.29] - 2026-04-21
+
 ### Added
 - **New diagnostic commands** — added `/lens-tools` and `/lens-health` for system visibility:
   - `/lens-tools` — shows tool installation status: globally installed, pi-lens auto-installed, or npx fallback
@@ -38,6 +40,15 @@ All notable changes to pi-lens will be documented in this file.
 - **Cross-platform line ending handling** — all `.split("\n")` changed to `.split(/\r?\n/)` for Windows CRLF compatibility (11 files updated)
 
 ### Fixed
+- **Biome VCS/ignore file errors eliminated** — disabled VCS integration in biome config to prevent "ignore file not found" errors:
+  - Changed `vcs.enabled: true` → `vcs.enabled: false` in `config/biome/core.jsonc`
+  - Biome was searching for `.gitignore` files that don't exist when running on arbitrary projects via pi-lens
+  - Eliminates biome:parse-error spam in logs when biome runs outside its config directory
+- **LSP server thrashing eliminated** — added 240s idle timeout to prevent repeated LSP shutdown/startup cycles:
+  - New `scheduleLSPIdleReset()` in `runtime-turn.ts` defers server reset when no files modified
+  - Cancel pending reset when active editing resumes (avoids interrupting workflows)
+  - Eliminates ~1-2s cold-start penalty during active development sessions
+  - Debug logging added for scheduling and cancellation events
 - **Biome check runner JSON parsing** — fixed error where biome's stderr warnings broke JSON parsing:
   - Changed from parsing `stdout || stderr` to parsing `stdout` only
   - Biome outputs text warnings (e.g., "couldn't find ignore file") to stderr which broke the JSON parser
