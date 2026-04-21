@@ -23,7 +23,6 @@ const GRAMMARS = [
     "tree-sitter-c.wasm",
     "tree-sitter-cpp.wasm",
     "tree-sitter-elixir.wasm",
-    "tree-sitter-gleam.wasm",
     "tree-sitter-ruby.wasm",
 ];
 function findGrammarsDir() {
