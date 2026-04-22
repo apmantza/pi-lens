@@ -5,6 +5,7 @@ All notable changes to pi-lens will be documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- **Tree-sitter `client_unavailable` log spam** — `TreeSitterClient.isAvailable()` now re-evaluates `grammarsDir` when the cached path goes missing, instead of caching an empty string forever. Added `resolveWebTreeSitterAsset()` helper with three strategies: (1) `createRequire` module resolution (hoisted installs — issue #20), (2) `resolvePackagePath(import.meta.url)` fallback (on-the-fly TS compilation by pi), (3) `process.cwd()` fallback. Fixes 108 skipped-runner log lines when the initial grammar probe failed transiently.
 - **Pipeline test assertion drift** — updated `tests/clients/pipeline.test.ts` to match the current auto-format warning text (`File was modified by auto-format/fix...`)
 
 ### Removed
@@ -15,6 +16,12 @@ All notable changes to pi-lens will be documented in this file.
 - **Similarity runner skips small edits** — when `modifiedRanges` total lines is below `MIN_FUNCTION_LINES` (8), the similarity runner exits early; a new function can't fit in fewer lines than that, so the ~1100ms scan is wasted on targeted fixes
 - **Stronger auto-format/fix re-read warning** — message now explicitly tells the agent it MUST re-read the file before any further edits, listing what may have changed (whitespace, indentation, quotes, code)
 - **Turn-end findings cap tightened** — reduced `maxLines` from 24 → 20 and `maxChars` from 1600 → 1000 to stay conservative with context budget
+
+### Tests
+- **Tree-sitter resolution regression tests** — added 3 tests to `tests/clients/tree-sitter-client-init.test.ts`:
+  - `TreeSitterClient.isAvailable returns true when grammars are installed` (smoke test)
+  - `falls back to resolvePackagePath when require.resolve fails` (on-the-fly compilation scenario)
+  - `re-evaluates grammarsDir when isAvailable is called after initial miss` (prevents cached-empty-string bug)
 
 ## [3.8.31] - 2026-04-23
 

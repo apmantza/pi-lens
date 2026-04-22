@@ -19,8 +19,10 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
 import { isExcludedDirName } from "./file-utils.js";
+import { resolvePackagePath } from "./package-root.js";
 
 const _require = createRequire(import.meta.url);
+
 import { TreeCache } from "./tree-sitter-cache.js";
 import { TreeSitterNavigator } from "./tree-sitter-navigator.js";
 import {
@@ -119,41 +121,80 @@ export class TreeSitterClient {
 		}
 	}
 
+	/**
+	 * Resolve a web-tree-sitter asset path using multiple strategies:
+	 * 1. Node module resolution via createRequire (handles hoisted installs — issue #20)
+	 * 2. Package-root walk from import.meta.url (handles on-the-fly TS compilation by pi)
+	 * 3. process.cwd() fallback
+	 */
+	private resolveWebTreeSitterAsset(asset: string): string | undefined {
+		// Strategy 1: Node module resolution (hoisted installs, pnpm workspaces)
+		try {
+			const resolved = _require.resolve(`web-tree-sitter/${asset}`);
+			if (fs.existsSync(resolved)) return resolved;
+		} catch {
+			/* fall through */
+		}
+
+		// Strategy 2: Walk up from this module to find package.json, then into node_modules.
+		// This is required when pi compiles TS on-the-fly to a temp directory —
+		// createRequire(import.meta.url) resolves from the temp dir and can't find
+		// web-tree-sitter, but the package root (where package.json lives) still has
+		// the correct node_modules layout.
+		try {
+			const candidate = resolvePackagePath(
+				import.meta.url,
+				"node_modules",
+				"web-tree-sitter",
+				asset,
+			);
+			if (fs.existsSync(candidate)) return candidate;
+		} catch {
+			/* fall through */
+		}
+
+		// Strategy 3: cwd fallback
+		const cwdCandidate = path.join(
+			process.cwd(),
+			"node_modules",
+			"web-tree-sitter",
+			asset,
+		);
+		if (fs.existsSync(cwdCandidate)) return cwdCandidate;
+
+		return undefined;
+	}
+
 	/** Find tree-sitter grammar directory */
 	private findGrammarsDir(): string {
-		// Resolve external dep locations via Node's module resolver so the path
-		// is correct regardless of whether the package manager hoisted them.
-		const resolveExternal = (pkg: string, asset: string): string | undefined => {
-			try {
-				return path.join(path.dirname(_require.resolve(`${pkg}/package.json`)), asset);
-			} catch {
-				return undefined;
-			}
-		};
-
-		const webTreeSitterGrammars = resolveExternal("web-tree-sitter", "grammars");
+		const grammarsDir = this.resolveWebTreeSitterAsset("grammars");
 		if (
-			webTreeSitterGrammars &&
-			fs.existsSync(webTreeSitterGrammars) &&
-			fs.existsSync(path.join(webTreeSitterGrammars, "tree-sitter-typescript.wasm"))
+			grammarsDir &&
+			fs.existsSync(path.join(grammarsDir, "tree-sitter-typescript.wasm"))
 		) {
-			return webTreeSitterGrammars;
+			return grammarsDir;
 		}
 
-		const treeSitterWasmsOut = resolveExternal("tree-sitter-wasms", "out");
-		if (treeSitterWasmsOut && fs.existsSync(treeSitterWasmsOut)) {
-			return treeSitterWasmsOut;
+		// Fallback: tree-sitter-wasms package (real installs, not npm:null)
+		try {
+			const wasmsOut = path.join(
+				path.dirname(_require.resolve("tree-sitter-wasms/package.json")),
+				"out",
+			);
+			if (fs.existsSync(wasmsOut)) return wasmsOut;
+		} catch {
+			/* fall through */
 		}
 
-		// Fallback: walk up from cwd (covers local dev where hoisting isn't a factor)
-		for (const candidate of [
-			path.join(process.cwd(), "node_modules", "tree-sitter-wasms", "out"),
-			path.join(process.cwd(), "node_modules", "web-tree-sitter", "grammars"),
-		]) {
-			if (fs.existsSync(candidate)) return candidate;
-		}
+		const cwdWasms = path.join(
+			process.cwd(),
+			"node_modules",
+			"tree-sitter-wasms",
+			"out",
+		);
+		if (fs.existsSync(cwdWasms)) return cwdWasms;
 
-		return resolveExternal("web-tree-sitter", "grammars") ?? "";
+		return "";
 	}
 
 	/** Initialize tree-sitter WASM runtime */
@@ -176,9 +217,13 @@ export class TreeSitterClient {
 				// Store Language loader from module (not from Parser)
 				this.LanguageLoader = mod.Language;
 
-				// Use Node's module resolver so the wasm is found regardless of
-				// whether the consumer uses hoisted (pnpm/npm v7+) or nested installs.
-				const wasmPath = _require.resolve("web-tree-sitter/tree-sitter.wasm");
+				// Resolve WASM path using same multi-strategy helper (hoisted installs +
+				// on-the-fly compilation by pi).
+				const wasmPath = this.resolveWebTreeSitterAsset("tree-sitter.wasm");
+				if (!wasmPath) {
+					this.dbg("Could not resolve tree-sitter.wasm");
+					return false;
+				}
 				const wasmDir = path.dirname(wasmPath);
 				this.dbg(
 					`Looking for WASM at: ${wasmPath}, exists: ${fs.existsSync(wasmPath)}`,
@@ -372,7 +417,11 @@ export class TreeSitterClient {
 
 	/** Check if tree-sitter is available (grammars installed) */
 	isAvailable(): boolean {
-		return fs.existsSync(this.grammarsDir);
+		if (fs.existsSync(this.grammarsDir)) return true;
+		// Re-evaluate in case grammars were installed after process start
+		const dir = this.findGrammarsDir();
+		this.grammarsDir = dir;
+		return fs.existsSync(dir);
 	}
 
 	/** Check if specific language is supported */
