@@ -48,11 +48,14 @@ All notable changes to pi-lens will be documented in this file.
 - **Dispatch integration tests** — `tests/clients/dispatch/integration.test.ts` (11 tests): `dispatchLintWithResult` empty results, result propagation, warnings-only; `shouldDispatch` for supported/unsupported; `getAvailableRunners` for supported/unsupported
 - **LSP client internals tests** — `tests/clients/lsp/client-internals.test.ts` (13 tests): `handleNotifyOpen` (first open, re-open, pending opens, clear diagnostics, skip when not alive), `handleNotifyChange` (didChange when open, fallback to didOpen, clear stale diagnostics, skip when not alive), `clientWaitForDiagnostics` (immediate resolve if cached, resolve via emitter, timeout, ignore other files)
 - **Runtime event flow test fix** — added missing `gatherCascadeDiagnostics` mock export to `tests/clients/runtime-event-flow.test.ts`
+- **LSP launch tests** — `tests/clients/lsp/launch.test.ts` (8 new tests): `isCmdShimValid` unit tests (target exists/missing, non-npm shim, unreadable file, `.mjs` extension), early `.cmd` shim rejection without spawning, `.ps1` bypass to `.cmd` sibling, `.ps1` fallback to direct `node <js>` execution
+- **Tree-sitter hoisted-install tests** — `tests/clients/tree-sitter-client-init.test.ts` (3 tests): wasm resolution via `require.resolve`, `locateFile` directory derivation, `findGrammarsDir` external package resolution
 
 ### Refactored
 - **Extract `detectFileChangedAfterCommand`** — moved from `clients/pipeline.ts` to `clients/file-utils.ts` and exported for reuse/testing; imported back into `pipeline.ts`; `tests/clients/autofix-helpers.test.ts` now imports the real function instead of reimplementing a copy
 - **Export testable pipeline helpers** — exported `hasEslintConfig`, `hasStylelintConfig`, `hasSqlfluffConfig` from `clients/pipeline.ts` so config detection is testable
 - **Export LSP client internals** — exported `clientWaitForDiagnostics`, `handleNotifyOpen`, `handleNotifyChange`, and `LSPClientState` from `clients/lsp/client.ts` for direct testing with mocks
+- **Export `isCmdShimValid`** — exported from `clients/lsp/launch.ts` so the npm `.cmd` shim validator is unit-testable
 
 ### CI
 - **Dead-code gate** — `lint-and-typecheck` job now runs `tsc --noUnusedLocals --noUnusedParameters --noEmit` alongside `--noEmit` so dead code regressions fail CI immediately
