@@ -9,6 +9,7 @@ import {
 import { getKnipIgnorePatterns } from "./file-utils.js";
 import type { JscpdClient } from "./jscpd-client.js";
 import type { KnipClient, KnipIssue } from "./knip-client.js";
+import { gatherCascadeDiagnostics } from "./pipeline.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 
@@ -103,11 +104,22 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 
 	const blockerParts: string[] = [];
 
-	if (runtime.lastCascadeOutput) {
-		blockerParts.push(runtime.consumeLastCascadeOutput());
-	}
-	if (runtime.lastImpactCascadeOutput) {
-		blockerParts.push(runtime.consumeLastImpactCascadeOutput());
+	// Re-gather cascade fresh so turn_end reflects the current LSP state, not
+	// the stale output from the last individual edit's pipeline run.
+	runtime.consumeLastCascadeOutput();
+	runtime.consumeLastImpactCascadeOutput();
+	if (!getFlag("no-lsp")) {
+		const excludePaths = new Set(
+			files.map((f) => resolveRunnerPath(cwd, f)),
+		);
+		const freshCascade = await gatherCascadeDiagnostics(
+			excludePaths,
+			cwd,
+			"turn_end",
+			getFlag,
+			dbg,
+		);
+		if (freshCascade) blockerParts.push(freshCascade);
 	}
 
 	if (runtime.isStartupScanInFlight("jscpd")) {

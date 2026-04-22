@@ -622,8 +622,8 @@ async function resyncLspFile(
 	}
 }
 
-async function gatherCascadeDiagnostics(
-	filePath: string,
+export async function gatherCascadeDiagnostics(
+	excludePaths: Set<string>,
 	cwd: string,
 	toolName: string,
 	getFlag: PipelineContext["getFlag"],
@@ -640,7 +640,9 @@ async function gatherCascadeDiagnostics(
 		const CASCADE_TTL_MS = 240_000;
 		const lspService = getLSPService();
 		const allDiags = await lspService.getAllDiagnostics();
-		const normalizedEditedPath = resolveRunnerPath(cwd, filePath);
+		const normalizedExcludePaths = new Set(
+			[...excludePaths].map((p) => normalizeMapKey(resolveRunnerPath(cwd, p))),
+		);
 		const now = Date.now();
 		let stalePathsSkipped = 0;
 		const otherFileErrors: Array<{
@@ -650,7 +652,7 @@ async function gatherCascadeDiagnostics(
 
 		for (const [diagPath, { diags, ts }] of allDiags) {
 			const normalizedDiagPath = resolveRunnerPath(cwd, diagPath);
-			if (normalizeMapKey(normalizedDiagPath) === normalizedEditedPath)
+			if (normalizedExcludePaths.has(normalizeMapKey(normalizedDiagPath)))
 				continue;
 			if (!nodeFs.existsSync(normalizedDiagPath)) {
 				stalePathsSkipped++;
@@ -701,7 +703,7 @@ async function gatherCascadeDiagnostics(
 		logLatency({
 			type: "phase",
 			toolName,
-			filePath,
+			filePath: [...excludePaths][0] ?? cwd,
 			phase: "cascade_diagnostics",
 			durationMs: Date.now() - cascadeStart,
 			metadata: {
@@ -1001,7 +1003,7 @@ export async function runPipeline(
 	// Deferred: cascade errors in OTHER files are NOT shown inline — surfaced at
 	// turn_end so mid-refactor intermediate errors don't derail the agent.
 	const cascadeOutput = await gatherCascadeDiagnostics(
-		filePath,
+		new Set([filePath]),
 		cwd,
 		toolName,
 		getFlag,

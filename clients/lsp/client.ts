@@ -481,6 +481,7 @@ async function handleNotifyOpen(
 	) {
 		const version = (state.documentVersions.get(normalizedPath) ?? 0) + 1;
 		state.documentVersions.set(normalizedPath, version);
+		state.diagnostics.delete(normalizedPath);
 		await safeSendNotification(state.connection, "textDocument/didChange", {
 			textDocument: { uri, version },
 			contentChanges: [{ text: content }],
@@ -530,6 +531,9 @@ async function handleNotifyChange(
 
 	const version = (state.documentVersions.get(normalizedPath) ?? 0) + 1;
 	state.documentVersions.set(normalizedPath, version);
+	// Clear stale diagnostics before sending new content so waitForDiagnostics
+	// doesn't return immediately with the previous edit's results.
+	state.diagnostics.delete(normalizedPath);
 	await safeSendNotification(state.connection, "textDocument/didChange", {
 		textDocument: { uri, version },
 		contentChanges: [{ text: content }],
