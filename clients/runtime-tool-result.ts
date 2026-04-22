@@ -41,7 +41,7 @@ interface ToolResultDeps {
 function parseDiffRanges(diff: string): { start: number; end: number }[] {
 	const changedLines: number[] = [];
 	for (const line of diff.split("\n")) {
-		const match = line.match(/^[+-]\s+(\d+)\s/);
+		const match = line.match(/^[+-]\s*(\d+)\s/);
 		if (match) {
 			changedLines.push(Number.parseInt(match[1], 10));
 		}
