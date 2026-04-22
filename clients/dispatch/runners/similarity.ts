@@ -145,6 +145,18 @@ const similarityRunner: RunnerDefinition = {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
+		// Skip for small edits — a new function needs at least MIN_FUNCTION_LINES
+		// lines to be worth checking; tiny changes can't introduce a meaningful duplicate
+		if (ctx.modifiedRanges) {
+			const totalLinesChanged = ctx.modifiedRanges.reduce(
+				(sum, r) => sum + (r.end - r.start + 1),
+				0,
+			);
+			if (totalLinesChanged < CONFIG.MIN_FUNCTION_LINES) {
+				return { status: "skipped", diagnostics: [], semantic: "none" };
+			}
+		}
+
 		// Find project root and load index
 		const projectRoot = await findProjectRoot(filePath);
 		if (!projectRoot) {
