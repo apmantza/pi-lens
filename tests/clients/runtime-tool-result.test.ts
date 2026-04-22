@@ -47,6 +47,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 					telemetryModel: "test-model",
 					telemetrySessionId: "test-session",
 					fixedThisTurn: new Set<string>(),
+					reportedThisTurn: new Set<string>(),
 					formatPipelineCrashNotice: () => "",
 					lastCascadeOutput: "",
 				},
@@ -111,6 +112,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 					telemetryModel: "test-model",
 					telemetrySessionId: "test-session",
 					fixedThisTurn: new Set<string>(),
+					reportedThisTurn: new Set<string>(),
 					formatPipelineCrashNotice: () => "",
 					lastCascadeOutput: "",
 				},
@@ -172,6 +174,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 					telemetryModel: "test-model",
 					telemetrySessionId: "test-session",
 					fixedThisTurn: new Set<string>(),
+					reportedThisTurn: new Set<string>(),
 					formatPipelineCrashNotice: () => "",
 					lastCascadeOutput: "",
 				},
@@ -210,10 +213,10 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				},
 			});
 
-			expect(logs.filter((entry) => entry.includes("tool_result fired for")).length).toBe(
-				2,
-			);
-			expect(vi.mocked(runPipeline)).toHaveBeenCalledTimes(2);
+			// Second call for same file within the same turn is suppressed by reportedThisTurn
+			expect(logs.filter((entry) => entry.includes("tool_result fired for")).length).toBe(1);
+			expect(vi.mocked(runPipeline)).toHaveBeenCalledTimes(1);
+			expect(logs.some((entry) => entry.includes("skipping already-reported file this turn"))).toBe(true);
 		} finally {
 			env.cleanup();
 		}
@@ -253,6 +256,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 					telemetryModel: "test-model",
 					telemetrySessionId: "test-session",
 					fixedThisTurn: new Set<string>(),
+					reportedThisTurn: new Set<string>(),
 					formatPipelineCrashNotice: () => "",
 					lastCascadeOutput: "",
 				},
