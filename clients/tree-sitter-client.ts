@@ -21,7 +21,6 @@ import * as path from "node:path";
 import { isExcludedDirName } from "./file-utils.js";
 
 const _require = createRequire(import.meta.url);
-import { resolvePackagePath } from "./package-root.js";
 import { TreeCache } from "./tree-sitter-cache.js";
 import { TreeSitterNavigator } from "./tree-sitter-navigator.js";
 import {
