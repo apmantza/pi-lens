@@ -202,7 +202,6 @@ export async function handleToolResult(
 		output: string;
 		hasBlockers: boolean;
 		isError?: boolean;
-		fileModified?: boolean;
 		cascadeOutput?: string;
 		impactCascadeOutput?: string;
 	};
@@ -281,9 +280,6 @@ export async function handleToolResult(
 
 	let output = result.output;
 	runtime.updateGitGuardStatus(result.hasBlockers, result.output);
-	if (result.fileModified) {
-		output += "\n\n⚠ File was auto-reformatted — re-read before next edit to avoid whitespace mismatches.";
-	}
 	if (behaviorWarnings.length > 0 && !result.hasBlockers) {
 		output += `\n\n${formatBehaviorWarnings(behaviorWarnings)}`;
 	}

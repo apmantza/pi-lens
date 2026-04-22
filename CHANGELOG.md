@@ -4,9 +4,6 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
-### Added
-- **Auto-reformat notice in tool_result** — when a formatter (Biome, Prettier, Ruff, etc.) or autofix changes the file after a write/edit, the tool_result now appends `⚠ File was auto-reformatted — re-read before next edit to avoid whitespace mismatches.`; prevents agents from making subsequent edits against a stale in-memory view of the file
-
 ### Changed
 - **Turn-end findings cap tightened** — reduced `maxLines` from 24 → 20 and `maxChars` from 1600 → 1000 to stay conservative with context budget
 
