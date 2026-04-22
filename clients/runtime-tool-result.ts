@@ -121,6 +121,14 @@ export async function handleToolResult(
 		return;
 	}
 
+	// Deduplicate sequential calls for the same file within the same turn.
+	// When pi processes an edit array serially, each hunk fires tool_result after
+	// the previous completes, bypassing the in-flight map above.
+	if (runtime.reportedThisTurn.has(filePath)) {
+		dbg(`tool_result: skipping already-reported file this turn for ${filePath}`);
+		return;
+	}
+
 	const sessionFileTime = createFileTime("default");
 	// tool_result is emitted after write/edit has already been applied.
 	// Asserting pre-write stamps here produces false positives on rapid edits.
@@ -284,6 +292,8 @@ export async function handleToolResult(
 		durationMs: totalMs,
 		result: output ? "completed" : "no_output",
 	});
+
+	runtime.reportedThisTurn.add(filePath);
 
 	if (!output) return;
 

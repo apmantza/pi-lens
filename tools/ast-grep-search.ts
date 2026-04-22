@@ -4,7 +4,7 @@
  * Extracted from index.ts for maintainability.
  */
 
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import type { AstGrepClient } from "../clients/ast-grep-client.js";
 import { LANGUAGES } from "./shared.js";
 

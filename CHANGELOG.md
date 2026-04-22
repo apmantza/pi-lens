@@ -4,6 +4,13 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Duplicate inline feedback on edit arrays** — `tool_result` calls for the same file are now deduplicated within a turn using a `reportedThisTurn` set on `RuntimeCoordinator`, cleared on each `turn_start`; previously pi's sequential per-hunk `tool_result` firing caused the pipeline to re-run and feedback to repeat N times per edit array
+- **Double latency logging on pipeline completion** — removed redundant `logLatency` call in `pipeline.ts`; `runtime-tool-result.ts` already logs the outer `tool_result completed` with full duration including format, autofix, and cascade phases
+
+### Changed
+- **TypeBox 0.34.x → 1.x migration** — updated `package.json` dependency from `@sinclair/typebox` to `typebox ^1.0.0` and updated imports in `tools/lsp-navigation.ts`, `tools/ast-grep-search.ts`, and `tools/ast-grep-replace.ts` to match pi-mono 0.69.0
+
 ## [3.8.30] - 2026-04-22
 
 ### Fixed

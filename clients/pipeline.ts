@@ -1014,13 +1014,6 @@ export async function runPipeline(
 	}
 
 	phase.end("total", { hasOutput: !!output });
-	logLatency({
-		type: "tool_result",
-		toolName,
-		filePath,
-		durationMs: elapsed,
-		result: output ? "completed" : "no_output",
-	});
 
 	return {
 		output,

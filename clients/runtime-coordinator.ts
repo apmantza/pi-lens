@@ -22,6 +22,7 @@ export class RuntimeCoordinator {
 	private _lastImpactCascadeOutput = "";
 	private _complexityBaselines = new Map<string, FileComplexity>();
 	private _fixedThisTurn = new Set<string>();
+	private _reportedThisTurn = new Set<string>();
 	private _projectRulesScan: RuleScanResult = {
 		rules: [],
 		hasCustomRules: false,
@@ -43,6 +44,7 @@ export class RuntimeCoordinator {
 		this._lastCascadeOutput = "";
 		this._lastImpactCascadeOutput = "";
 		this._fixedThisTurn.clear();
+		this._reportedThisTurn.clear();
 		this._telemetrySessionId =
 			`lens-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 		this._telemetryModel = "unknown";
@@ -81,6 +83,11 @@ export class RuntimeCoordinator {
 		this._lastImpactCascadeOutput = "";
 		this._turnIndex += 1;
 		this._writeIndex = 0;
+		this._reportedThisTurn.clear();
+	}
+
+	get reportedThisTurn(): Set<string> {
+		return this._reportedThisTurn;
 	}
 
 	nextWriteIndex(): number {
