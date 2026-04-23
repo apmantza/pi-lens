@@ -173,14 +173,16 @@ export default function (pi: ExtensionAPI) {
 
 	function updateLspStatus(
 		setStatus: (id: string, text: string | undefined) => void,
-		fg: (color: "accent" | "success" | "error", text: string) => string,
+		theme: {
+			fg: (color: "accent" | "success" | "error", text: string) => string;
+		},
 	) {
 		try {
 			const count = getLSPService().getAliveClientCount();
 			if (count > 0) {
-				setStatus("pi-lens-lsp", fg("success", `● LSP ${count}`));
+				setStatus("pi-lens-lsp", theme.fg("success", `● LSP ${count}`));
 			} else {
-				setStatus("pi-lens-lsp", fg("error", "● LSP —"));
+				setStatus("pi-lens-lsp", theme.fg("error", "● LSP —"));
 			}
 		} catch {
 			// Theme may not be fully initialized during early session startup.
@@ -567,7 +569,7 @@ export default function (pi: ExtensionAPI) {
 				resetDispatchBaselines,
 				resetLSPService,
 			});
-			updateLspStatus(ctx.ui.setStatus, ctx.ui.theme.fg);
+			updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
 		} catch (sessionErr) {
 			dbg(`session_start crashed: ${sessionErr}`);
 			dbg(`session_start crash stack: ${(sessionErr as Error).stack}`);
@@ -648,7 +650,7 @@ export default function (pi: ExtensionAPI) {
 						false,
 						maxClientWaitMs,
 					)
-					.then(() => updateLspStatus(ctx.ui.setStatus, ctx.ui.theme.fg))
+					.then(() => updateLspStatus(ctx.ui.setStatus, ctx.ui.theme))
 					.catch((err) => dbg(`lsp auto-touch failed for ${filePath}: ${err}`));
 			} catch {
 				// Best effort only; never block tool calls.
@@ -903,7 +905,7 @@ export default function (pi: ExtensionAPI) {
 				resetLSPService,
 				resetFormatService,
 			});
-			updateLspStatus(ctx.ui.setStatus, ctx.ui.theme.fg);
+			updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
 		} catch (turnEndErr) {
 			dbg(`turn_end crashed: ${turnEndErr}`);
 			dbg(`turn_end crash stack: ${(turnEndErr as Error).stack}`);
