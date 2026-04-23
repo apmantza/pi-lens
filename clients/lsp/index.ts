@@ -264,15 +264,7 @@ export class LSPService {
 
 		const existing = this.state.clients.get(key);
 		if (existing) {
-			if (!existing.isAlive()) {
-				try {
-					await existing.shutdown();
-				} catch {
-					/* ignore dead client shutdown errors */
-				}
-				this.state.clients.delete(key);
-				this.state.broken.delete(key);
-			} else {
+			if (existing.isAlive()) {
 				if (!this.warmStartLogged.has(key)) {
 					logSessionStart(
 						`lsp warm-start ${server.id}: reused root=${root} file=${filePath}`,
@@ -281,6 +273,13 @@ export class LSPService {
 				}
 				return { client: existing, info: server };
 			}
+			try {
+				await existing.shutdown();
+			} catch {
+				/* ignore dead client shutdown errors */
+			}
+			this.state.clients.delete(key);
+			this.state.broken.delete(key);
 		}
 
 		const brokenUntil = this.state.broken.get(key);
@@ -938,6 +937,18 @@ export class LSPService {
 			const [serverId, root] = key.split(":");
 			return { serverId, root, connected: true };
 		});
+	}
+
+	/**
+	 * Count clients that are currently alive (connected and initialized).
+	 * Lightweight — does not spawn or wait for anything.
+	 */
+	getAliveClientCount(): number {
+		let count = 0;
+		for (const client of this.state.clients.values()) {
+			if (client.isAlive()) count++;
+		}
+		return count;
 	}
 }
 

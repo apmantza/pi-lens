@@ -8,9 +8,9 @@ import * as nodeFs from "node:fs";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { Type } from "typebox";
+import { logLatency } from "../clients/latency-logger.js";
 import type { LSPCallHierarchyItem } from "../clients/lsp/client.js";
 import { getLSPService } from "../clients/lsp/index.js";
-import { logLatency } from "../clients/latency-logger.js";
 
 function operationSupportStatus(
 	operation: string,
@@ -36,7 +36,8 @@ function operationSupportStatus(
 }
 
 function emptyReasonForOperation(operation: string): string {
-	if (operation === "signatureHelp") return "position-sensitive-or-no-signature";
+	if (operation === "signatureHelp")
+		return "position-sensitive-or-no-signature";
 	if (operation === "codeAction") return "no-applicable-actions";
 	if (operation === "rename") return "no-rename-edits-or-symbol-not-renamable";
 	if (operation === "workspaceSymbol")
@@ -56,8 +57,7 @@ function tokenAtPosition(
 	if (!line) return undefined;
 	const chars = [...line];
 	const idx = Math.max(0, Math.min(chars.length - 1, char1 - 1));
-	const isWord = (ch: string | undefined) =>
-		!!ch && /[A-Za-z0-9_?!]/.test(ch);
+	const isWord = (ch: string | undefined) => !!ch && /[A-Za-z0-9_?!]/.test(ch);
 
 	let left = idx;
 	let right = idx;
@@ -67,7 +67,10 @@ function tokenAtPosition(
 	}
 	while (left > 0 && isWord(chars[left - 1])) left -= 1;
 	while (right < chars.length - 1 && isWord(chars[right + 1])) right += 1;
-	const token = chars.slice(left, right + 1).join("").trim();
+	const token = chars
+		.slice(left, right + 1)
+		.join("")
+		.trim();
 	return token.length > 0 ? token : undefined;
 }
 
@@ -114,10 +117,13 @@ function pickLocalSymbolLocation(
 		);
 }
 
-function classifyCodeActions(
-	actions: Array<{ kind?: string }> | undefined,
-): { quickfix: number; refactor: number; other: number } {
-	if (!actions || actions.length === 0) return { quickfix: 0, refactor: 0, other: 0 };
+function classifyCodeActions(actions: Array<{ kind?: string }> | undefined): {
+	quickfix: number;
+	refactor: number;
+	other: number;
+} {
+	if (!actions || actions.length === 0)
+		return { quickfix: 0, refactor: 0, other: 0 };
 	let quickfix = 0;
 	let refactor = 0;
 	let other = 0;
@@ -159,7 +165,7 @@ export function createLspNavigationTool(
 	return {
 		name: "lsp_navigation" as const,
 		label: "LSP Navigate",
-			description:
+		description:
 			"Navigate code using LSP (Language Server Protocol). LSP is enabled by default; disable with --no-lsp.\n" +
 			"Operations:\n" +
 			"- definition: Jump to where a symbol is defined\n" +
@@ -323,13 +329,13 @@ export function createLspNavigationTool(
 			if (getFlag("no-lsp")) {
 				return finalize(
 					{
-					content: [
-						{
-							type: "text" as const,
-							text: "lsp_navigation requires LSP to be enabled. Remove --no-lsp to use LSP navigation.",
-						},
-					],
-					isError: true,
+						content: [
+							{
+								type: "text" as const,
+								text: "lsp_navigation requires LSP to be enabled. Remove --no-lsp to use LSP navigation.",
+							},
+						],
+						isError: true,
 					},
 					{
 						operation: "precheck",
@@ -369,13 +375,13 @@ export function createLspNavigationTool(
 			if (needsFilePath && (!rawPath || rawPath.trim().length === 0)) {
 				return finalize(
 					{
-					content: [
-						{
-							type: "text" as const,
-							text: `filePath is required for ${operation}`,
-						},
-					],
-					isError: true,
+						content: [
+							{
+								type: "text" as const,
+								text: `filePath is required for ${operation}`,
+							},
+						],
+						isError: true,
 					},
 					{
 						operation,
@@ -462,11 +468,13 @@ export function createLspNavigationTool(
 				}
 
 				const allDiagnostics = await lspService.getAllDiagnostics();
-				const result = Array.from(allDiagnostics.entries()).map(([trackedFile, { diags }]) => ({
-					filePath: trackedFile,
-					diagnostics: diags,
-					count: diags.length,
-				}));
+				const result = Array.from(allDiagnostics.entries()).map(
+					([trackedFile, { diags }]) => ({
+						filePath: trackedFile,
+						diagnostics: diags,
+						count: diags.length,
+					}),
+				);
 				const note =
 					diagnosticsMode === "push-only"
 						? "Note: push-only tracked diagnostics snapshot (not full workspace pull diagnostics)."
@@ -475,26 +483,24 @@ export function createLspNavigationTool(
 							: "Note: workspace diagnostics mode unknown (no active capability snapshot).";
 				return finalize(
 					{
-					content: [
-						{
-							type: "text" as const,
-							text: `${note}\n${JSON.stringify(result, null, 2)}`,
+						content: [
+							{
+								type: "text" as const,
+								text: `${note}\n${JSON.stringify(result, null, 2)}`,
+							},
+						],
+						details: {
+							operation,
+							resultCount: result.length,
+							diagnosticsMode,
+							coverage: "tracked-open-files",
 						},
-					],
-					details: {
-						operation,
-						resultCount: result.length,
-						diagnosticsMode,
-						coverage: "tracked-open-files",
-					},
 					},
 					{
 						operation,
 						filePath: rawPath ? filePath : "(workspace)",
 						failureKind:
-							diagnosticsMode === "push-only"
-								? "tracked_snapshot"
-								: "success",
+							diagnosticsMode === "push-only" ? "tracked_snapshot" : "success",
 						resultCount: result.length,
 					},
 				);
@@ -504,13 +510,13 @@ export function createLspNavigationTool(
 			if (needsFilePath && !hasLSP) {
 				return finalize(
 					{
-					content: [
-						{
-							type: "text" as const,
-							text: `No LSP server available for ${path.basename(filePath)}. Check that the language server is installed.`,
-						},
-					],
-					isError: true,
+						content: [
+							{
+								type: "text" as const,
+								text: `No LSP server available for ${path.basename(filePath)}. Check that the language server is installed.`,
+							},
+						],
+						isError: true,
 					},
 					{
 						operation,
@@ -527,14 +533,18 @@ export function createLspNavigationTool(
 				if (supported === false) {
 					return finalize(
 						{
-						content: [
-							{
-								type: "text" as const,
-								text: `LSP server for ${path.basename(filePath)} does not advertise support for ${operation}`,
+							content: [
+								{
+									type: "text" as const,
+									text: `LSP server for ${path.basename(filePath)} does not advertise support for ${operation}`,
+								},
+							],
+							isError: true,
+							details: {
+								operation,
+								supported: false,
+								emptyReason: "unsupported",
 							},
-						],
-						isError: true,
-						details: { operation, supported: false, emptyReason: "unsupported" },
 						},
 						{ operation, filePath, failureKind: "unsupported", resultCount: 0 },
 					);
@@ -564,7 +574,9 @@ export function createLspNavigationTool(
 					case "workspaceSymbol":
 						supported = operationSupportStatus(
 							operation,
-							await lspService.getOperationSupport(rawPath ? filePath : undefined),
+							await lspService.getOperationSupport(
+								rawPath ? filePath : undefined,
+							),
 						);
 						if (supported === false) {
 							throw new Error(
@@ -572,16 +584,36 @@ export function createLspNavigationTool(
 							);
 						}
 						if (!query || query.trim().length === 0) {
-							throw new Error("__BADINPUT__ query parameter required for workspaceSymbol");
+							throw new Error(
+								"__BADINPUT__ query parameter required for workspaceSymbol",
+							);
 						}
 						if (rawPath) {
 							await openFileBestEffort(lspService, filePath);
 						}
 						try {
-							return await lspService.workspaceSymbol(
+							const raw = await lspService.workspaceSymbol(
 								query ?? "",
 								rawPath ? filePath : undefined,
 							);
+							// Filter to navigable symbol kinds and cap results to save context tokens
+							const NAVIGABLE_KINDS = new Set([
+								5, // Class
+								6, // Method
+								8, // Field
+								11, // Interface
+								12, // Function
+								13, // Variable
+								22, // EnumMember
+								23, // Struct
+							]);
+							const filtered = (Array.isArray(raw) ? raw : [raw]).filter(
+								(s) =>
+									typeof s === "object" &&
+									s !== null &&
+									(!s.kind || NAVIGABLE_KINDS.has(s.kind)),
+							);
+							return filtered.slice(0, 15);
 						} catch (err) {
 							const msg = err instanceof Error ? err.message : String(err);
 							if (rawPath && /No Project/i.test(msg)) {
@@ -601,7 +633,9 @@ export function createLspNavigationTool(
 						);
 					case "rename":
 						if (!newName || newName.trim().length === 0) {
-							throw new Error("__BADINPUT__ newName parameter required for rename");
+							throw new Error(
+								"__BADINPUT__ newName parameter required for rename",
+							);
 						}
 						return lspService.rename(filePath, lspLine, lspChar, newName);
 					case "implementation":
@@ -669,13 +703,19 @@ export function createLspNavigationTool(
 					const content = nodeFs.readFileSync(filePath, "utf-8");
 					const token =
 						operation === "workspaceSymbol"
-							? (query?.trim() || undefined)
+							? query?.trim() || undefined
 							: line && character
 								? tokenAtPosition(content, line, character)
 								: undefined;
 					if (token) {
-						const docSymbols = (await lspService.documentSymbol(filePath)) as SymbolNode[];
-						const locations = pickLocalSymbolLocation(docSymbols, token, filePath);
+						const docSymbols = (await lspService.documentSymbol(
+							filePath,
+						)) as SymbolNode[];
+						const locations = pickLocalSymbolLocation(
+							docSymbols,
+							token,
+							filePath,
+						);
 						if (locations.length > 0) {
 							result = locations;
 							usedDocumentSymbolFallback = true;
@@ -687,9 +727,18 @@ export function createLspNavigationTool(
 				if (msg.startsWith("__UNSUPPORTED__ ")) {
 					return finalize(
 						{
-						content: [{ type: "text" as const, text: msg.replace("__UNSUPPORTED__ ", "") }],
-						isError: true,
-						details: { operation, supported: false, emptyReason: "unsupported" },
+							content: [
+								{
+									type: "text" as const,
+									text: msg.replace("__UNSUPPORTED__ ", ""),
+								},
+							],
+							isError: true,
+							details: {
+								operation,
+								supported: false,
+								emptyReason: "unsupported",
+							},
 						},
 						{ operation, filePath, failureKind: "unsupported", resultCount: 0 },
 					);
@@ -697,23 +746,28 @@ export function createLspNavigationTool(
 				if (msg.startsWith("__BADINPUT__ ")) {
 					return finalize(
 						{
-						content: [{ type: "text" as const, text: msg.replace("__BADINPUT__ ", "") }],
-						isError: true,
-						details: {},
+							content: [
+								{
+									type: "text" as const,
+									text: msg.replace("__BADINPUT__ ", ""),
+								},
+							],
+							isError: true,
+							details: {},
 						},
 						{ operation, filePath, failureKind: "bad_input", resultCount: 0 },
 					);
 				}
 				return finalize(
 					{
-					content: [
-						{
-							type: "text" as const,
-							text: `LSP error: ${err instanceof Error ? err.message : String(err)}`,
-						},
-					],
-					isError: true,
-					details: {},
+						content: [
+							{
+								type: "text" as const,
+								text: `LSP error: ${err instanceof Error ? err.message : String(err)}`,
+							},
+						],
+						isError: true,
+						details: {},
 					},
 					{ operation, filePath, failureKind: "lsp_error", resultCount: 0 },
 				);
@@ -728,7 +782,8 @@ export function createLspNavigationTool(
 					"\nHint: provide filePath to scope workspaceSymbol to the active language server/root.";
 			}
 			if (usedDocumentSymbolFallback) {
-				output += "\nNote: served from documentSymbol fallback due to empty primary result.";
+				output +=
+					"\nNote: served from documentSymbol fallback due to empty primary result.";
 			}
 			if (
 				operation === "references" &&
@@ -749,14 +804,20 @@ export function createLspNavigationTool(
 				}
 			}
 
-			const resultCount = Array.isArray(result) ? result.length : result ? 1 : 0;
+			const resultCount = Array.isArray(result)
+				? result.length
+				: result
+					? 1
+					: 0;
 			return finalize(
 				{
 					content: [{ type: "text" as const, text: output }],
 					details: {
 						operation,
 						supported,
-						emptyReason: isEmpty ? emptyReasonForOperation(operation) : undefined,
+						emptyReason: isEmpty
+							? emptyReasonForOperation(operation)
+							: undefined,
 						codeActionKinds: actionStats ?? undefined,
 						resultCount,
 					},

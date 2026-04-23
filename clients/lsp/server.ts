@@ -965,11 +965,41 @@ export const GoServer: LSPServerInfo = {
 	},
 };
 
+async function hasWorkspaceSection(cargoPath: string): Promise<boolean> {
+	try {
+		const { readFile } = await import("node:fs/promises");
+		const content = await readFile(cargoPath, "utf-8");
+		return /^\s*\[workspace\]/m.test(content);
+	} catch {
+		return false;
+	}
+}
+
+function RustWorkspaceRoot(): RootFunction {
+	const crateRoot = createRootDetector(["Cargo.toml", "Cargo.lock"]);
+	return async (file: string): Promise<string | undefined> => {
+		const root = await crateRoot(file);
+		if (!root) return undefined;
+		let current = root;
+		const fsRoot = path.parse(current).root;
+		while (true) {
+			const parent = path.dirname(current);
+			if (parent === current || parent === fsRoot) break;
+			const parentCargo = path.join(parent, "Cargo.toml");
+			if (await hasWorkspaceSection(parentCargo)) {
+				return parent;
+			}
+			current = parent;
+		}
+		return root;
+	};
+}
+
 export const RustServer: LSPServerInfo = {
 	id: "rust",
 	name: "rust-analyzer",
 	extensions: [".rs"],
-	root: RootWithFallback(createRootDetector(["Cargo.toml", "Cargo.lock"])),
+	root: RootWithFallback(RustWorkspaceRoot()),
 	async spawn(root, options) {
 		// Prefer rustup-installed rust-analyzer; fall back to GitHub-downloaded managed copy
 		const result = await resolveAndLaunch(

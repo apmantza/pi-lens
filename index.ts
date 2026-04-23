@@ -171,6 +171,18 @@ export default function (pi: ExtensionAPI) {
 	const astGrepClient = new AstGrepClient();
 	const cacheManager = new CacheManager();
 
+	function updateLspStatus(
+		setStatus: (id: string, text: string | undefined) => void,
+		fg: (color: "accent" | "success" | "error", text: string) => string,
+	) {
+		const count = getLSPService().getAliveClientCount();
+		if (count > 0) {
+			setStatus("pi-lens-lsp", fg("success", `● LSP ${count}`));
+		} else {
+			setStatus("pi-lens-lsp", fg("error", "● LSP —"));
+		}
+	}
+
 	// --- Flags ---
 
 	pi.registerFlag("no-lsp", {
@@ -550,6 +562,7 @@ export default function (pi: ExtensionAPI) {
 				resetDispatchBaselines,
 				resetLSPService,
 			});
+			updateLspStatus(ctx.ui.setStatus, ctx.ui.theme.fg);
 		} catch (sessionErr) {
 			dbg(`session_start crashed: ${sessionErr}`);
 			dbg(`session_start crash stack: ${(sessionErr as Error).stack}`);
@@ -630,6 +643,7 @@ export default function (pi: ExtensionAPI) {
 						false,
 						maxClientWaitMs,
 					)
+					.then(() => updateLspStatus(ctx.ui.setStatus, ctx.ui.theme.fg))
 					.catch((err) => dbg(`lsp auto-touch failed for ${filePath}: ${err}`));
 			} catch {
 				// Best effort only; never block tool calls.
@@ -884,6 +898,7 @@ export default function (pi: ExtensionAPI) {
 				resetLSPService,
 				resetFormatService,
 			});
+			updateLspStatus(ctx.ui.setStatus, ctx.ui.theme.fg);
 		} catch (turnEndErr) {
 			dbg(`turn_end crashed: ${turnEndErr}`);
 			dbg(`turn_end crash stack: ${(turnEndErr as Error).stack}`);
