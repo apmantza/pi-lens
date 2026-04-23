@@ -180,9 +180,9 @@ export default function (pi: ExtensionAPI) {
 		try {
 			const count = getLSPService().getAliveClientCount();
 			if (count > 0) {
-				setStatus("pi-lens-lsp", theme.fg("success", `● LSP ${count}`));
+				setStatus("pi-lens-lsp", theme.fg("success", `LSP Active (${count})`));
 			} else {
-				setStatus("pi-lens-lsp", theme.fg("error", "● LSP —"));
+				setStatus("pi-lens-lsp", theme.fg("error", "LSP Inactive"));
 			}
 		} catch {
 			// Theme may not be fully initialized during early session startup.
