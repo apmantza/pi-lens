@@ -112,6 +112,8 @@ const EMPTY_CONFIG: RegisteredLSPConfig = {
 };
 
 const workspaceConfigs = new Map<string, RegisteredLSPConfig>();
+/** In-flight config initialization promises to prevent duplicate concurrent loads */
+const configInFlight = new Map<string, Promise<void>>();
 
 function normalizeWorkspacePath(cwd: string): string {
 	return path.resolve(cwd);
@@ -138,28 +140,42 @@ function getConfigForFile(filePath: string): RegisteredLSPConfig {
 
 /**
  * Initialize LSP configuration (call at session start)
+ * Deduplicates concurrent calls for the same workspace.
  */
 export async function initLSPConfig(cwd: string): Promise<void> {
 	const normalizedCwd = normalizeWorkspacePath(cwd);
-	const config = await loadLSPConfig(cwd);
-	const customServers: LSPServerInfo[] = [];
-	const disabledServerIds = new Set(config.disabledServers ?? []);
 
-	if (config.servers) {
-		for (const [id, serverConfig] of Object.entries(config.servers)) {
-			try {
-				const server = createCustomServer(serverConfig, id);
-				customServers.push(server);
-			} catch {
-				// pi-lens-ignore: missing-error-propagation — per-server registration, skip bad entries
+	const existing = configInFlight.get(normalizedCwd);
+	if (existing) return existing;
+
+	const promise = (async () => {
+		const config = await loadLSPConfig(cwd);
+		const customServers: LSPServerInfo[] = [];
+		const disabledServerIds = new Set(config.disabledServers ?? []);
+
+		if (config.servers) {
+			for (const [id, serverConfig] of Object.entries(config.servers)) {
+				try {
+					const server = createCustomServer(serverConfig, id);
+					customServers.push(server);
+				} catch {
+					// pi-lens-ignore: missing-error-propagation — per-server registration, skip bad entries
+				}
 			}
 		}
-	}
 
-	workspaceConfigs.set(normalizedCwd, {
-		customServers,
-		disabledServerIds,
-	});
+		workspaceConfigs.set(normalizedCwd, {
+			customServers,
+			disabledServerIds,
+		});
+	})();
+
+	configInFlight.set(normalizedCwd, promise);
+	try {
+		await promise;
+	} finally {
+		configInFlight.delete(normalizedCwd);
+	}
 }
 
 /**

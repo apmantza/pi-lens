@@ -75,6 +75,8 @@ export class LSPService {
 		string,
 		{ fingerprint: string; touchedAt: number; clientScope: "primary" | "all" }
 	>();
+	/** True after shutdown() has been called; blocks new operations */
+	private isDestroyed = false;
 
 	constructor() {
 		this.state = {
@@ -83,6 +85,11 @@ export class LSPService {
 			broken: new Map(),
 			inFlight: new Map(),
 		};
+	}
+
+	/** Guard: return true if service is shutting down or shut down */
+	private checkDestroyed(): boolean {
+		return this.isDestroyed;
 	}
 
 	private fingerprintContent(content: string): string {
@@ -135,6 +142,7 @@ export class LSPService {
 		filePath: string,
 		maxWaitMs?: number,
 	): Promise<SpawnedServer | undefined> {
+		if (this.checkDestroyed()) return undefined;
 		const servers = getServersForFileWithConfig(filePath);
 		const serverWaitOverrideMs = servers.reduce(
 			(max, server) => Math.max(max, server.clientWaitTimeoutMs ?? 0),
@@ -402,6 +410,7 @@ export class LSPService {
 	 * Open a file in LSP (sends textDocument/didOpen)
 	 */
 	async openFile(filePath: string, content: string): Promise<void> {
+		if (this.checkDestroyed()) return;
 		const spawned = await this.getClientForFile(filePath);
 		if (!spawned) return;
 
@@ -413,6 +422,7 @@ export class LSPService {
 	 * Update file content (sends textDocument/didChange)
 	 */
 	async updateFile(filePath: string, content: string): Promise<void> {
+		if (this.checkDestroyed()) return;
 		const spawned = await this.getClientForFile(filePath);
 		if (!spawned) return;
 
@@ -431,6 +441,7 @@ export class LSPService {
 		useAllClients = false,
 		maxClientWaitMs?: number,
 	): Promise<void> {
+		if (this.checkDestroyed()) return;
 		const startedAt = Date.now();
 		const normalizedPath = normalizeMapKey(filePath);
 		const clientScope = useAllClients ? "all" : "primary";
@@ -515,6 +526,7 @@ export class LSPService {
 	async getDiagnostics(
 		filePath: string,
 	): Promise<import("./client.js").LSPDiagnostic[]> {
+		if (this.checkDestroyed()) return [];
 		const startedAt = Date.now();
 		const normalizedPath = normalizeMapKey(filePath);
 		const spawned = await this.getClientsForFile(filePath);
@@ -549,8 +561,14 @@ export class LSPService {
 				await entry.client.waitForDiagnostics(filePath, 5000);
 				let diagnostics = entry.client.getDiagnostics(filePath);
 				const firstWaitMs = Date.now() - waitStart;
-				if (diagnostics.length === 0 && firstWaitMs < SEMANTIC_SETTLE_THRESHOLD_MS) {
-					await entry.client.waitForDiagnostics(filePath, SEMANTIC_SETTLE_WAIT_MS);
+				if (
+					diagnostics.length === 0 &&
+					firstWaitMs < SEMANTIC_SETTLE_THRESHOLD_MS
+				) {
+					await entry.client.waitForDiagnostics(
+						filePath,
+						SEMANTIC_SETTLE_WAIT_MS,
+					);
 					diagnostics = entry.client.getDiagnostics(filePath);
 				}
 				return {
@@ -873,6 +891,8 @@ export class LSPService {
 	 * Shutdown all LSP clients
 	 */
 	async shutdown(): Promise<void> {
+		if (this.checkDestroyed()) return;
+		this.isDestroyed = true;
 		// Cancel any in-flight spawns
 		this.state.inFlight.clear();
 
