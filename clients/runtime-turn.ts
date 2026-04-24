@@ -287,6 +287,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		}
 		if (targets.length > 0) {
 			dbg(`turn_end: firing ${targets.length} test target(s) async (non-blocking)`);
+			const firedAtTurn = runtime.turnIndex;
 			Promise.allSettled(
 				targets.map((t) =>
 					testRunnerClient.runTestFileAsync(
@@ -297,6 +298,11 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					),
 				),
 			).then((results) => {
+				// Drop stale results if the agent has already started a new turn.
+				if (runtime.turnIndex !== firedAtTurn) {
+					dbg(`turn_end: discarding test results — turn advanced while tests ran`);
+					return;
+				}
 				const failures: string[] = [];
 				for (const r of results) {
 					if (r.status === "fulfilled" && r.value.failed > 0) {
