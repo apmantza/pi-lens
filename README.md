@@ -71,7 +71,6 @@ pi --no-delta             # Disable delta mode (show all diagnostics, not just n
 pi --lens-guard           # Block git commit/push when unresolved blockers exist (experimental)
 ```
 
-LSP is enabled by default. Use `--no-lsp` to use language-specific fallbacks (ts-lsp, pyright) instead of the unified LSP service.
 
 ## Key Commands
 
