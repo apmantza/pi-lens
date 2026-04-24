@@ -236,6 +236,12 @@ export default function (pi: ExtensionAPI) {
 		default: false,
 	});
 
+	pi.registerFlag("no-read-guard", {
+		description: "Disable read-before-edit behavior monitor",
+		type: "boolean",
+		default: false,
+	});
+
 	// --- Commands ---
 
 	pi.registerCommand("lens-booboo", {
@@ -662,6 +668,31 @@ export default function (pi: ExtensionAPI) {
 			}
 		}
 
+		// --- Read-Before-Edit Guard: record reads ---
+		if (toolName === "read" && filePath) {
+			const readInput = event.input as {
+				filePath?: string;
+				offset?: number;
+				limit?: number;
+			};
+			const rawOffset = readInput.offset ?? 1;
+			const rawLimit = readInput.limit ?? 1;
+
+			// Record read immediately (before LSP expansion);
+			// LSP expansion data is captured below
+			runtime.readGuard.recordRead({
+				filePath,
+				requestedOffset: rawOffset,
+				requestedLimit: rawLimit,
+				effectiveOffset: rawOffset,
+				effectiveLimit: rawLimit,
+				expandedByLsp: false,
+				turnIndex: runtime.turnIndex,
+				writeIndex: runtime.nextWriteIndex(),
+				timestamp: Date.now(),
+			});
+		}
+
 		// --- Opportunistic LSP range expansion for single-line reads ---
 		if (toolName === "read" && !pi.getFlag("no-lsp") && filePath) {
 			const readInput = event.input as {
@@ -686,6 +717,22 @@ export default function (pi: ExtensionAPI) {
 								const endLine = match.range.end.line + 1;
 								readInput.offset = newOffset;
 								readInput.limit = endLine - newOffset + 1;
+
+								// Update read guard with expanded range
+								const reads = runtime.readGuard.getReadHistory(filePath);
+								const lastRead = reads[reads.length - 1];
+								if (lastRead) {
+									lastRead.effectiveOffset = newOffset;
+									lastRead.effectiveLimit = endLine - newOffset + 1;
+									lastRead.expandedByLsp = true;
+									lastRead.enclosingSymbol = {
+										name: match.name,
+										kind: String(match.kind),
+										startLine: match.range.start.line + 1,
+										endLine: match.range.end.line + 1,
+									};
+								}
+
 								logLatency({
 									type: "phase",
 									phase: "lsp_read_range_expansion",
@@ -735,11 +782,54 @@ export default function (pi: ExtensionAPI) {
 			}
 		}
 
+		// --- Read-Before-Edit Guard: check edits ---
+		const isWriteOrEdit =
+			isToolCallEventType("write", event) || isToolCallEventType("edit", event);
+		if (isWriteOrEdit && filePath && !pi.getFlag("no-read-guard")) {
+			const isNewFile = runtime.readGuard.isNewFile(filePath);
+			if (!isNewFile) {
+				// Compute touched lines for the edit
+				let touchedLines: [number, number] | undefined;
+				if (isToolCallEventType("edit", event)) {
+					const editInput = event.input as {
+						oldRange?: { start: { line: number }; end: { line: number } };
+						edits?: Array<{
+							range?: { start: { line: number }; end: { line: number } };
+						}>;
+					};
+					if (editInput.oldRange) {
+						touchedLines = [
+							editInput.oldRange.start.line,
+							editInput.oldRange.end.line,
+						];
+					} else if (editInput.edits?.length) {
+						// Find min/max line from all edits
+						const lines = editInput.edits.flatMap((e) => [
+							e.range?.start?.line ?? 1,
+							e.range?.end?.line ?? 1,
+						]);
+						touchedLines = [Math.min(...lines), Math.max(...lines)];
+					}
+				} else if (isToolCallEventType("write", event)) {
+					// For write, we consider the whole file
+					// This will be checked against any previous read of the file
+					// If the file was never read, it will be blocked by zero-read check
+					touchedLines = [1, Number.MAX_SAFE_INTEGER];
+				}
+
+				const verdict = runtime.readGuard.checkEdit(filePath, touchedLines);
+				if (verdict.action === "block") {
+					return {
+						block: true,
+						reason: verdict.reason,
+					};
+				}
+			}
+		}
+
 		// --- Pre-write duplicate detection ---
 		// Check if new content redefines functions that already exist elsewhere.
 		// Uses cachedExports (populated at session_start via ast-grep scan).
-		const isWriteOrEdit =
-			isToolCallEventType("write", event) || isToolCallEventType("edit", event);
 		if (isWriteOrEdit && runtime.cachedExports.size > 0) {
 			const newContent = isToolCallEventType("write", event)
 				? (event.input as { content?: string }).content

@@ -1,9 +1,10 @@
 import * as path from "node:path";
 import type { FileComplexity } from "./complexity-client.js";
+import { normalizeMapKey } from "./path-utils.js";
+import type { ProjectIndex } from "./project-index.js";
+import type { ReadGuard } from "./read-guard.js";
 import type { RuleScanResult } from "./rules-scanner.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
-import type { ProjectIndex } from "./project-index.js";
-import { normalizeMapKey } from "./path-utils.js";
 
 export interface ErrorDebtBaseline {
 	testsPassed: boolean;
@@ -33,6 +34,7 @@ export class RuntimeCoordinator {
 	private _writeIndex = 0;
 	private _gitGuardHasBlockers = false;
 	private _gitGuardSummary = "";
+	private _readGuard: ReadGuard | null = null;
 
 	resetForSession(): void {
 		this._sessionGeneration += 1;
@@ -45,8 +47,7 @@ export class RuntimeCoordinator {
 		this._lastImpactCascadeOutput = "";
 		this._fixedThisTurn.clear();
 		this._reportedThisTurn.clear();
-		this._telemetrySessionId =
-			`lens-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+		this._telemetrySessionId = `lens-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 		this._telemetryModel = "unknown";
 		this._turnIndex = 0;
 		this._writeIndex = 0;
@@ -243,5 +244,16 @@ export class RuntimeCoordinator {
 
 	set projectRulesScan(value: RuleScanResult) {
 		this._projectRulesScan = value;
+	}
+
+	get readGuard(): ReadGuard {
+		if (!this._readGuard) {
+			// Lazy import to avoid circular dependency issues
+			const { ReadGuard } = require("./read-guard.js") as {
+				ReadGuard: typeof import("./read-guard.js").ReadGuard;
+			};
+			this._readGuard = new ReadGuard(this._telemetrySessionId);
+		}
+		return this._readGuard!;
 	}
 }

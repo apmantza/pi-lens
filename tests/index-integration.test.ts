@@ -180,6 +180,15 @@ describe("index.ts integration", () => {
 				deps.runtime.cachedProjectIndex = {
 					entries: new Map([["existing", { id: "existing" }]]),
 				};
+				// Ensure readGuard exists for tests that don't explicitly mock it
+				if (!deps.runtime.readGuard) {
+					deps.runtime.readGuard = {
+						isNewFile: () => false,
+						checkEdit: () => ({ action: "allow" }),
+						recordRead: () => {},
+						getReadHistory: () => [],
+					};
+				}
 			},
 		}));
 		vi.doMock("../clients/metrics-history.js", () => ({
@@ -289,6 +298,11 @@ describe("index.ts integration", () => {
 				cachedExports = new Map();
 				cachedProjectIndex = null;
 				errorDebtBaseline = null;
+				readGuard = {
+					isNewFile: () => false,
+					checkEdit: () => ({ action: "allow" }),
+					recordRead: () => {},
+				};
 			},
 		}));
 		vi.doMock("../clients/dispatch/integration.js", async () => ({
