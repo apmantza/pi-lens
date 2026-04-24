@@ -45,7 +45,7 @@ describe("dispatch plan exposure", () => {
 			expect.arrayContaining(["types", "security", "smells", "lint"]),
 		);
 		expect(LANGUAGE_CAPABILITY_MATRIX.python.capabilities).toEqual(
-			expect.arrayContaining(["types", "lint", "architecture"]),
+			expect.arrayContaining(["types", "lint", "smells"]),
 		);
 		expect(LANGUAGE_CAPABILITY_MATRIX.go.capabilities).toEqual(
 			expect.arrayContaining(["types", "lint"]),
