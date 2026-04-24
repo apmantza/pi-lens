@@ -47,6 +47,10 @@ function makeCtx(
 	};
 }
 
+function escapeRegExp(string: string): string {
+	return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function createEmptyGraph(): ReviewGraph {
 	return {
 		version: REVIEW_GRAPH_VERSION,
@@ -220,7 +224,7 @@ function addJsTsFile(
 			symbolName: fn.name,
 			symbolKind: "function",
 			exported: new RegExp(
-				String.raw`export\s+(?:async\s+)?(?:function|const|let|var)\s+${fn.name}\b`,
+				String.raw`export\s+(?:async\s+)?(?:function|const|let|var)\s+${escapeRegExp(fn.name)}\b`,
 			).test(content),
 			metadata: {
 				line: fn.line,
