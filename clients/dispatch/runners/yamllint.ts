@@ -1,60 +1,20 @@
-import * as nodeFs from "node:fs";
-import * as path from "node:path";
-import { ensureTool } from "../../installer/index.js";
 import { safeSpawn } from "../../safe-spawn.js";
-import { createAvailabilityChecker } from "./utils/runner-helpers.js";
+import { hasYamllintConfig } from "../../tool-policy.js";
+import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
 	DispatchContext,
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import { PRIORITY } from "../priorities.js";
+import {
+	createAvailabilityChecker,
+	resolveToolCommandWithInstallFallback,
+} from "./utils/runner-helpers.js";
 
 const yamllint = createAvailabilityChecker("yamllint", ".exe");
 
-const YAMLLINT_CONFIGS = [
-	".yamllint",
-	".yamllint.yml",
-	".yamllint.yaml",
-	"pyproject.toml",
-	"setup.cfg",
-	"tox.ini",
-];
-
-export function hasYamllintConfig(cwd: string): boolean {
-	for (const cfg of YAMLLINT_CONFIGS) {
-		const cfgPath = path.join(cwd, cfg);
-		if (!nodeFs.existsSync(cfgPath)) continue;
-		if (cfg === "pyproject.toml") {
-			try {
-				const content = nodeFs.readFileSync(cfgPath, "utf-8");
-				if (content.includes("[tool.yamllint]")) return true;
-			} catch {}
-			continue;
-		}
-		if (cfg === "setup.cfg" || cfg === "tox.ini") {
-			try {
-				const content = nodeFs.readFileSync(cfgPath, "utf-8");
-				if (content.includes("[yamllint]")) return true;
-			} catch {}
-			continue;
-		}
-		return true;
-	}
-
-	// Dependency hint fallback for Python projects.
-	for (const depFile of ["requirements.txt", "Pipfile", "pyproject.toml"]) {
-		const depPath = path.join(cwd, depFile);
-		if (!nodeFs.existsSync(depPath)) continue;
-		try {
-			const content = nodeFs.readFileSync(depPath, "utf-8").toLowerCase();
-			if (content.includes("yamllint")) return true;
-		} catch {}
-	}
-
-	return false;
-}
+export { hasYamllintConfig };
 
 function parseYamllintParsable(raw: string, filePath: string): Diagnostic[] {
 	const diagnostics: Diagnostic[] = [];
@@ -99,11 +59,7 @@ const yamllintRunner: RunnerDefinition = {
 		if (yamllint.isAvailable(cwd)) {
 			cmd = yamllint.getCommand(cwd);
 		} else {
-			const installed = await ensureTool("yamllint");
-			if (!installed) {
-				return { status: "skipped", diagnostics: [], semantic: "none" };
-			}
-			cmd = installed;
+			cmd = await resolveToolCommandWithInstallFallback(cwd, "yamllint");
 		}
 
 		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };

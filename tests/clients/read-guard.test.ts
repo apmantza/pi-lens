@@ -122,7 +122,7 @@ describe("ReadGuard", () => {
 			guard.recordRead(
 				createReadRecord("/src/api.ts", {
 					effectiveOffset: 10,
-					effectiveLimit: 10, // lines 10-20
+					effectiveLimit: 11, // lines 10-20
 				}),
 			);
 

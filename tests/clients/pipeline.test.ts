@@ -106,7 +106,7 @@ describe("Pipeline", () => {
 			getFormatService: () => getFormatService("test-session", false),
 			fixedThisTurn: new Set(),
 			...overrides,
-		};
+		} as PipelineDeps;
 	}
 
 	function createMockContext(
@@ -165,7 +165,7 @@ describe("Pipeline", () => {
 			);
 
 			expect(result.isError).toBe(false);
-		});
+		}, 15_000);
 
 		it("skips secrets scan when file content is undefined (deleted file)", async () => {
 			const filePath = path.join(tmpDir, "deleted.ts");

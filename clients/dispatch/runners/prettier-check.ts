@@ -1,15 +1,18 @@
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
-import { ensureTool } from "../../installer/index.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
-import { createAvailabilityChecker } from "./utils/runner-helpers.js";
+import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
 	DispatchContext,
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import { PRIORITY } from "../priorities.js";
+import {
+	createAvailabilityChecker,
+	resolveToolCommand,
+	resolveToolCommandWithInstallFallback,
+} from "./utils/runner-helpers.js";
 
 const prettier = createAvailabilityChecker("prettier", ".cmd");
 
@@ -40,17 +43,9 @@ function hasPrettierConfig(cwd: string): boolean {
 
 async function resolvePrettier(cwd: string): Promise<string | null> {
 	if (prettier.isAvailable(cwd)) return prettier.getCommand(cwd);
-
-	const local = path.join(
-		cwd,
-		"node_modules",
-		".bin",
-		process.platform === "win32" ? "prettier.cmd" : "prettier",
-	);
-	if (nodeFs.existsSync(local)) return local;
-
-	const managed = await ensureTool("prettier");
-	return managed ?? null;
+	const resolved = resolveToolCommand(cwd, "prettier");
+	if (resolved && resolved !== "prettier") return resolved;
+	return resolveToolCommandWithInstallFallback(cwd, "prettier");
 }
 
 const prettierCheckRunner: RunnerDefinition = {
@@ -63,9 +58,9 @@ const prettierCheckRunner: RunnerDefinition = {
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = ctx.cwd || process.cwd();
 		const fileDir = path.dirname(path.resolve(cwd, ctx.filePath));
-
-		if (!hasPrettierConfig(fileDir) && !hasPrettierConfig(cwd)) {
-			return { status: "skipped", diagnostics: [], semantic: "none" };
+		const hasConfig = hasPrettierConfig(fileDir) || hasPrettierConfig(cwd);
+		if (!hasConfig) {
+			// Run with sensible defaults even without explicit config
 		}
 
 		const cmd = await resolvePrettier(cwd);

@@ -35,6 +35,10 @@ export class RuntimeCoordinator {
 	private _gitGuardHasBlockers = false;
 	private _gitGuardSummary = "";
 	private _readGuard: ReadGuard | null = null;
+	private _lspReadWarmState = new Map<
+		string,
+		{ status: "warming" | "ready"; ts: number }
+	>();
 
 	resetForSession(): void {
 		this._sessionGeneration += 1;
@@ -53,6 +57,8 @@ export class RuntimeCoordinator {
 		this._writeIndex = 0;
 		this._gitGuardHasBlockers = false;
 		this._gitGuardSummary = "";
+		this._readGuard = null;
+		this._lspReadWarmState.clear();
 	}
 
 	updateGitGuardStatus(hasBlockers: boolean, output: string): void {
@@ -251,5 +257,30 @@ export class RuntimeCoordinator {
 			this._readGuard = new ReadGuard(this._telemetrySessionId);
 		}
 		return this._readGuard;
+	}
+
+	shouldWarmLspOnRead(filePath: string, maxAgeMs = 120_000): boolean {
+		const state = this._lspReadWarmState.get(path.resolve(filePath));
+		if (!state) return true;
+		if (state.status === "warming") return false;
+		return Date.now() - state.ts > maxAgeMs;
+	}
+
+	markLspReadWarmStarted(filePath: string): void {
+		this._lspReadWarmState.set(path.resolve(filePath), {
+			status: "warming",
+			ts: Date.now(),
+		});
+	}
+
+	markLspReadWarmCompleted(filePath: string): void {
+		this._lspReadWarmState.set(path.resolve(filePath), {
+			status: "ready",
+			ts: Date.now(),
+		});
+	}
+
+	clearLspReadWarmState(filePath: string): void {
+		this._lspReadWarmState.delete(path.resolve(filePath));
 	}
 }

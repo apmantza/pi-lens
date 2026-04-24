@@ -1,14 +1,16 @@
 import * as path from "node:path";
-import { ensureTool } from "../../installer/index.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
-import { createAvailabilityChecker } from "./utils/runner-helpers.js";
+import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
 	DispatchContext,
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import { PRIORITY } from "../priorities.js";
+import {
+	createAvailabilityChecker,
+	resolveToolCommandWithInstallFallback,
+} from "./utils/runner-helpers.js";
 
 const htmlhint = createAvailabilityChecker("htmlhint");
 
@@ -68,8 +70,7 @@ const htmlhintRunner: RunnerDefinition = {
 		if (htmlhint.isAvailable(cwd)) {
 			cmd = htmlhint.getCommand(cwd);
 		} else {
-			const managed = await ensureTool("htmlhint");
-			if (managed) cmd = managed;
+			cmd = await resolveToolCommandWithInstallFallback(cwd, "htmlhint");
 		}
 
 		if (!cmd) {
@@ -77,11 +78,17 @@ const htmlhintRunner: RunnerDefinition = {
 		}
 
 		const rulesJson = JSON.stringify(HTMLHINT_RULES);
-		const result = await safeSpawnAsync(cmd, [
-			"--rules", rulesJson,
-			"--format", "unix",
-			path.resolve(cwd, ctx.filePath),
-		], { cwd });
+		const result = await safeSpawnAsync(
+			cmd,
+			[
+				"--rules",
+				rulesJson,
+				"--format",
+				"unix",
+				path.resolve(cwd, ctx.filePath),
+			],
+			{ cwd },
+		);
 
 		if (result.error && !result.stdout && !result.stderr) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };

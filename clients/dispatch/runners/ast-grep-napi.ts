@@ -10,6 +10,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { resolvePackagePath } from "../../package-root.js";
+import { hasEslintConfig } from "../../tool-policy.js";
 import { classifyDefect } from "../diagnostic-taxonomy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -115,33 +116,6 @@ function explicitRuleFixSuggestion(rule: YamlRule): string | undefined {
 	if (!raw) return undefined;
 	const oneLine = raw.replace(/\s+/g, " ").trim();
 	return oneLine.length > 240 ? `${oneLine.slice(0, 237)}...` : oneLine;
-}
-
-const ESLINT_CONFIGS = [
-	".eslintrc",
-	".eslintrc.js",
-	".eslintrc.cjs",
-	".eslintrc.json",
-	".eslintrc.yaml",
-	".eslintrc.yml",
-	"eslint.config.js",
-	"eslint.config.mjs",
-	"eslint.config.cjs",
-];
-
-function hasEslintConfig(cwd: string): boolean {
-	for (const cfg of ESLINT_CONFIGS) {
-		if (fs.existsSync(path.join(cwd, cfg))) return true;
-	}
-	try {
-		const pkg = JSON.parse(
-			fs.readFileSync(path.join(cwd, "package.json"), "utf-8"),
-		);
-		if (pkg.eslintConfig) return true;
-	} catch {
-		// ignore invalid or missing package.json
-	}
-	return false;
 }
 
 function normalizeRuleId(ruleId: string): string {
@@ -583,14 +557,16 @@ const astGrepNapiRunner: RunnerDefinition = {
 		}
 
 		const hasBlocking = diagnostics.some((d) => d.semantic === "blocking");
+		let semantic: "blocking" | "warning" | "none" = "none";
+		if (hasBlocking) {
+			semantic = "blocking";
+		} else if (diagnostics.length > 0) {
+			semantic = "warning";
+		}
 		return {
 			status: hasBlocking ? "failed" : "succeeded",
 			diagnostics,
-			semantic: hasBlocking
-				? "blocking"
-				: diagnostics.length > 0
-					? "warning"
-					: ("none" as const),
+			semantic,
 		};
 	},
 };

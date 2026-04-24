@@ -330,6 +330,190 @@ describe("index.ts integration", () => {
 		);
 	}, 15_000);
 
+	it("tool_call records full-file reads from read.path with full line coverage", async () => {
+		const recordRead = vi.fn();
+		const mockReadGuard = {
+			recordRead,
+			getReadHistory: () => [],
+			isNewFile: () => false,
+			checkEdit: () => ({ action: "allow" as const }),
+		};
+		const sourceFile = path.join(tmpDir, "src", "full-read.ts");
+		fs.mkdirSync(path.dirname(sourceFile), { recursive: true });
+		fs.writeFileSync(sourceFile, "one\ntwo\nthree\nfour\nfive\n");
+
+		vi.doMock("../clients/runtime-coordinator.js", () => ({
+			RuntimeCoordinator: class {
+				projectRoot = tmpDir;
+				turnIndex = 0;
+				complexityBaselines = new Map();
+				cachedExports = new Map();
+				cachedProjectIndex = null;
+				readGuard = mockReadGuard;
+				shouldWarmLspOnRead() {
+					return true;
+				}
+				markLspReadWarmStarted() {}
+				markLspReadWarmCompleted() {}
+				clearLspReadWarmState() {}
+				nextWriteIndex() {
+					return 1;
+				}
+				beginTurn() {}
+				resetForSession() {}
+				setTelemetryIdentity() {}
+				telemetrySessionId = "test-session";
+			},
+		}));
+		vi.doMock("../clients/bootstrap.js", () => ({
+			loadBootstrapClients: async () => ({
+				metricsClient: { reset: () => {} },
+				todoScanner: {},
+				biomeClient: { isAvailable: () => false },
+				ruffClient: { isAvailable: () => false },
+				knipClient: { isAvailable: () => false },
+				jscpdClient: { isAvailable: () => false },
+				typeCoverageClient: { isAvailable: () => false },
+				depChecker: { isAvailable: () => false },
+				architectClient: { loadConfig: () => false },
+				testRunnerClient: { detectRunner: () => null },
+				goClient: { isGoAvailable: () => false },
+				rustClient: { isAvailable: () => false },
+				agentBehaviorClient: {
+					recordToolCall: () => {},
+					formatWarnings: () => "",
+				},
+				complexityClient: {
+					isSupportedFile: () => false,
+					analyzeFile: () => null,
+				},
+			}),
+		}));
+
+		const { default: registerExtension } = await import("../index.ts");
+		const { pi, handlers } = createMockPi({ "no-lsp": true });
+		registerExtension(pi as any);
+
+		const toolCall = handlers.tool_call?.[0];
+		expect(toolCall).toBeTypeOf("function");
+
+		await toolCall?.(
+			{
+				toolName: "read",
+				input: {
+					path: sourceFile,
+				},
+			},
+			{ cwd: tmpDir },
+		);
+
+		expect(recordRead).toHaveBeenCalledTimes(1);
+		expect(recordRead).toHaveBeenCalledWith(
+			expect.objectContaining({
+				filePath: sourceFile,
+				requestedOffset: 1,
+				requestedLimit: 6,
+				effectiveOffset: 1,
+				effectiveLimit: 6,
+			}),
+		);
+	}, 15_000);
+
+	it("tool_call only warms LSP on the first read until warm state is cleared", async () => {
+		const touchFileMock = vi.fn().mockResolvedValue(undefined);
+		const shouldWarmLspOnRead = vi
+			.fn()
+			.mockReturnValueOnce(true)
+			.mockReturnValueOnce(false)
+			.mockReturnValueOnce(true);
+		const markLspReadWarmStarted = vi.fn();
+		const markLspReadWarmCompleted = vi.fn();
+		const clearLspReadWarmState = vi.fn();
+		const sourceFile = path.join(tmpDir, "src", "warm-read.ts");
+		fs.mkdirSync(path.dirname(sourceFile), { recursive: true });
+		fs.writeFileSync(sourceFile, "export const value = 1;\n");
+
+		vi.doMock("../clients/runtime-coordinator.js", () => ({
+			RuntimeCoordinator: class {
+				projectRoot = tmpDir;
+				turnIndex = 0;
+				complexityBaselines = new Map();
+				cachedExports = new Map();
+				cachedProjectIndex = null;
+				readGuard = {
+					recordRead: () => {},
+					getReadHistory: () => [],
+					isNewFile: () => false,
+					checkEdit: () => ({ action: "allow" as const }),
+				};
+				shouldWarmLspOnRead = shouldWarmLspOnRead;
+				markLspReadWarmStarted = markLspReadWarmStarted;
+				markLspReadWarmCompleted = markLspReadWarmCompleted;
+				clearLspReadWarmState = clearLspReadWarmState;
+				nextWriteIndex() {
+					return 1;
+				}
+				beginTurn() {}
+				resetForSession() {}
+				setTelemetryIdentity() {}
+				telemetrySessionId = "test-session";
+			},
+		}));
+		vi.doMock("../clients/bootstrap.js", () => ({
+			loadBootstrapClients: async () => ({
+				metricsClient: { reset: () => {} },
+				todoScanner: {},
+				biomeClient: { isAvailable: () => false },
+				ruffClient: { isAvailable: () => false },
+				knipClient: { isAvailable: () => false },
+				jscpdClient: { isAvailable: () => false },
+				typeCoverageClient: { isAvailable: () => false },
+				depChecker: { isAvailable: () => false },
+				architectClient: { loadConfig: () => false },
+				testRunnerClient: { detectRunner: () => null },
+				goClient: { isGoAvailable: () => false },
+				rustClient: { isAvailable: () => false },
+				agentBehaviorClient: {
+					recordToolCall: () => {},
+					formatWarnings: () => "",
+				},
+				complexityClient: {
+					isSupportedFile: () => false,
+					analyzeFile: () => null,
+				},
+			}),
+		}));
+		vi.doMock("../clients/lsp/index.js", async () => ({
+			getLSPService: () => ({ touchFile: touchFileMock }),
+		}));
+
+		const { default: registerExtension } = await import("../index.ts");
+		const { pi, handlers } = createMockPi({ "no-lsp": false });
+		registerExtension(pi as any);
+
+		const toolCall = handlers.tool_call?.[0];
+		expect(toolCall).toBeTypeOf("function");
+
+		for (let i = 0; i < 3; i += 1) {
+			await toolCall?.(
+				{
+					toolName: "read",
+					input: {
+						path: sourceFile,
+					},
+				},
+				{ cwd: tmpDir },
+			);
+			await Promise.resolve();
+		}
+
+		expect(shouldWarmLspOnRead).toHaveBeenCalledTimes(3);
+		expect(touchFileMock).toHaveBeenCalledTimes(2);
+		expect(markLspReadWarmStarted).toHaveBeenCalledTimes(2);
+		expect(markLspReadWarmCompleted).toHaveBeenCalledTimes(2);
+		expect(clearLspReadWarmState).not.toHaveBeenCalled();
+	}, 15_000);
+
 	it("lens-health command reports crash, latency, diagnostics, and slop telemetry", async () => {
 		vi.doMock("../clients/runtime-coordinator.js", () => ({
 			RuntimeCoordinator: class {

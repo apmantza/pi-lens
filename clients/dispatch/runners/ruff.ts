@@ -13,13 +13,13 @@ import { ensureTool } from "../../installer/index.js";
 import { resolvePackagePath } from "../../package-root.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { stripAnsi } from "../../sanitize.js";
+import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
 	DispatchContext,
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import { PRIORITY } from "../priorities.js";
 import { parseRuffOutput } from "./utils/diagnostic-parsers.js";
 import { createAvailabilityChecker } from "./utils/runner-helpers.js";
 
@@ -83,8 +83,6 @@ const ruffRunner: RunnerDefinition = {
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = ctx.cwd || process.cwd();
 		let cmd: string | null = null;
-
-		// Auto-install ruff if not available (it's one of the 4 auto-install tools)
 		if (ruff.isAvailable(cwd)) {
 			cmd = ruff.getCommand(cwd);
 		} else {
@@ -94,14 +92,16 @@ const ruffRunner: RunnerDefinition = {
 			}
 			cmd = installed;
 		}
-
 		if (!cmd) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
 		const configArgs: string[] = hasProjectRuffConfig(cwd)
 			? []
-			: ["--config", resolvePackagePath(import.meta.url, "config/ruff/core.toml")];
+			: [
+					"--config",
+					resolvePackagePath(import.meta.url, "config/ruff/core.toml"),
+				];
 
 		// Step 1: Capture diagnostics (before fixing) — teaching signal for the agent
 		const checkResult = await safeSpawnAsync(

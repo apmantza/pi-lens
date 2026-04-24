@@ -11,6 +11,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { resolvePackagePath } from "../../package-root.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
+import { getJstsLintPolicyForCwd, hasBiomeConfig } from "../../tool-policy.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -19,42 +20,8 @@ import type {
 	RunnerResult,
 } from "../types.js";
 
-const BIOME_CONFIGS = ["biome.json", "biome.jsonc"];
-
 function hasUserBiomeConfig(cwd: string): boolean {
-	for (const cfg of BIOME_CONFIGS) {
-		if (fs.existsSync(path.join(cwd, cfg))) return true;
-	}
-	return false;
-}
-
-const ESLINT_CONFIGS = [
-	".eslintrc",
-	".eslintrc.js",
-	".eslintrc.cjs",
-	".eslintrc.json",
-	".eslintrc.yaml",
-	".eslintrc.yml",
-	"eslint.config.js",
-	"eslint.config.mjs",
-	"eslint.config.cjs",
-];
-
-/** Returns true if the project has explicitly chosen ESLint or oxlint */
-function hasAlternateLinter(cwd: string): boolean {
-	for (const cfg of ESLINT_CONFIGS) {
-		if (fs.existsSync(path.join(cwd, cfg))) return true;
-	}
-	// eslintConfig in package.json
-	try {
-		const pkg = JSON.parse(
-			fs.readFileSync(path.join(cwd, "package.json"), "utf-8"),
-		);
-		if (pkg.eslintConfig) return true;
-	} catch {}
-	// oxlint config
-	if (fs.existsSync(path.join(cwd, ".oxlintrc.json"))) return true;
-	return false;
+	return hasBiomeConfig(cwd);
 }
 
 interface BiomeBinary {
@@ -156,10 +123,11 @@ const biomeCheckJsonRunner: RunnerDefinition = {
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = ctx.cwd || path.dirname(ctx.filePath);
+		const policy = getJstsLintPolicyForCwd(cwd);
 
 		// Defer to ESLint/oxlint if the project has explicitly configured one —
 		// biome runs as the default linter only when no alternative is present.
-		if (!hasUserBiomeConfig(cwd) && hasAlternateLinter(cwd)) {
+		if (!policy.hasBiomeConfig && policy.hasExplicitNonBiomeLinter) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 

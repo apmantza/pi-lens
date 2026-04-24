@@ -23,6 +23,7 @@ import ktlintRunner from "./ktlint.js";
 import lspRunner from "./lsp.js";
 import markdownlintRunner from "./markdownlint.js";
 import mypyRunner from "./mypy.js";
+import oxlintRunner from "./oxlint.js";
 import phpLintRunner from "./php-lint.js";
 import phpstanRunner from "./phpstan.js";
 import prettierCheckRunner from "./prettier-check.js";
@@ -68,6 +69,7 @@ export function registerDefaultRunners(registry: RunnerRegistry): void {
 	// CLI ast-grep kept for ast_grep_search/ast_grep_replace tools only
 	registry.register(similarityRunner); // Semantic reuse detection (priority 35)
 	registry.register(eslintRunner); // ESLint (priority 12, jsts, config-gated)
+	registry.register(oxlintRunner); // Oxlint (priority 12, jsts, config-aware default fallback)
 	registry.register(golangciRunner); // golangci-lint (priority 20, go, config-gated)
 	registry.register(rubocopRunner); // RuboCop lint (priority 10, ruby)
 	registry.register(spellcheckRunner); // Spellcheck for markdown/docs (priority 30)

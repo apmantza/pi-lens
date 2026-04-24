@@ -1,58 +1,27 @@
-import * as nodeFs from "node:fs";
-import * as path from "node:path";
-import { ensureTool } from "../../installer/index.js";
 import { safeSpawn } from "../../safe-spawn.js";
-import { createAvailabilityChecker } from "./utils/runner-helpers.js";
+import { hasMypyConfig } from "../../tool-policy.js";
+import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
 	DispatchContext,
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import { PRIORITY } from "../priorities.js";
+import {
+	createAvailabilityChecker,
+	resolveToolCommandWithInstallFallback,
+} from "./utils/runner-helpers.js";
 
 const mypy = createAvailabilityChecker("mypy", "");
-
-const MYPY_CONFIGS = [
-	"mypy.ini",
-	".mypy.ini",
-	"setup.cfg",
-	"pyproject.toml",
-];
-
-function hasMypyConfig(cwd: string): boolean {
-	for (const cfg of MYPY_CONFIGS) {
-		const cfgPath = path.join(cwd, cfg);
-		if (!nodeFs.existsSync(cfgPath)) continue;
-		if (cfg === "setup.cfg") {
-			try {
-				const content = nodeFs.readFileSync(cfgPath, "utf-8");
-				if (content.includes("[mypy]")) return true;
-			} catch {}
-			continue;
-		}
-		if (cfg === "pyproject.toml") {
-			try {
-				const content = nodeFs.readFileSync(cfgPath, "utf-8");
-				if (content.includes("[tool.mypy]")) return true;
-			} catch {}
-			continue;
-		}
-		return true;
-	}
-	return false;
-}
 
 // mypy output: file.py:10: error: Incompatible types [assignment]
 function parseMypyOutput(raw: string, filePath: string): Diagnostic[] {
 	const diagnostics: Diagnostic[] = [];
-	for (const line of raw.split(/\r?\n/)) {
-		if (!line.trim()) continue;
-		const match = line.match(
-			/^(.+?):(\d+)(?::(\d+))?:\s*(error|warning|note):\s*(.+?)(?:\s+\[([^\]]+)\])?$/,
-		);
-		if (!match) continue;
+	const linePattern =
+		/^(.+?):(\d+)(?::(\d+))?:\s*(error|warning|note):\s*(.+?)(?:\s+\[([^\]]+)\])?$/gm;
+	for (const match of raw.matchAll(linePattern)) {
 		const [, , lineNum, col, level, message, errorCode] = match;
+		if (!lineNum || !level || !message) continue;
 		if (level === "note") continue; // skip contextual notes
 		const severity = level === "error" ? "error" : "warning";
 		const rule = errorCode ?? "mypy";
@@ -90,11 +59,7 @@ const mypyRunner: RunnerDefinition = {
 		if (mypy.isAvailable(cwd)) {
 			cmd = mypy.getCommand(cwd);
 		} else {
-			const installed = await ensureTool("mypy");
-			if (!installed) {
-				return { status: "skipped", diagnostics: [], semantic: "none" };
-			}
-			cmd = installed;
+			cmd = await resolveToolCommandWithInstallFallback(cwd, "mypy");
 		}
 
 		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };

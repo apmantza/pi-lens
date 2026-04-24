@@ -1,14 +1,16 @@
 import * as path from "node:path";
-import { ensureTool } from "../../installer/index.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
-import { createAvailabilityChecker } from "./utils/runner-helpers.js";
+import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
 	DispatchContext,
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import { PRIORITY } from "../priorities.js";
+import {
+	createAvailabilityChecker,
+	resolveToolCommandWithInstallFallback,
+} from "./utils/runner-helpers.js";
 
 const ktlint = createAvailabilityChecker("ktlint", ".exe");
 
@@ -87,8 +89,7 @@ const ktlintRunner: RunnerDefinition = {
 		if (ktlint.isAvailable(cwd)) {
 			cmd = ktlint.getCommand(cwd);
 		} else {
-			const managed = await ensureTool("ktlint");
-			if (managed) cmd = managed;
+			cmd = await resolveToolCommandWithInstallFallback(cwd, "ktlint");
 		}
 
 		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };

@@ -12,6 +12,11 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { safeSpawn } from "./safe-spawn.js";
+import {
+	getAutoInstallToolIdForFormatter,
+	getFormatterPolicyForFile,
+	getSmartDefaultFormatterName,
+} from "./tool-policy.js";
 
 const _lazyInstallAttempts = new Set<string>();
 
@@ -234,6 +239,11 @@ export const biomeFormatter: FormatterInfo = {
 	async resolveCommand(filePath, cwd) {
 		const local = await findInNodeModules("biome", cwd);
 		if (local) return [local, "format", "--write", filePath];
+		const toolId = getAutoInstallToolIdForFormatter("biome");
+		if (!toolId) return null;
+		const { ensureTool } = await import("./installer/index.js");
+		const installed = await ensureTool(toolId);
+		if (installed) return [installed, "format", "--write", filePath];
 		return null;
 	},
 	extensions: [
@@ -348,8 +358,10 @@ export const ruffFormatter: FormatterInfo = {
 	async resolveCommand(filePath, cwd) {
 		const venv = await findInVenv("ruff", cwd);
 		if (venv) return [venv, "format", filePath];
-		const { getToolPath } = await import("./installer/index.js");
-		const installed = await getToolPath("ruff");
+		const toolId = getAutoInstallToolIdForFormatter("ruff");
+		if (!toolId) return null;
+		const { ensureTool } = await import("./installer/index.js");
+		const installed = await ensureTool(toolId);
 		if (installed) return [installed, "format", filePath];
 		return null;
 	},
@@ -761,17 +773,6 @@ const ALL_FORMATTERS: FormatterInfo[] = [
 	taploFormatter,
 ];
 
-const DEFAULT_BIOME_EXTENSIONS = new Set([
-	".js",
-	".jsx",
-	".mjs",
-	".cjs",
-	".ts",
-	".tsx",
-	".mts",
-	".cts",
-]);
-
 // Cache for detection results - stores array of enabled formatter names per cwd+ext
 const detectionCache = new Map<string, Map<string, string[]>>();
 
@@ -801,7 +802,9 @@ export async function getFormattersForFile(
 	// Detect formatters for this extension
 	const matching = ALL_FORMATTERS.filter((f) => f.extensions.includes(ext));
 	const enabled: FormatterInfo[] = [];
-	const preferBiomeDefault = DEFAULT_BIOME_EXTENSIONS.has(ext);
+	const formatterPolicy = getFormatterPolicyForFile(filePath);
+	const smartDefaultFormatterName = getSmartDefaultFormatterName(filePath);
+	const preferBiomeDefault = smartDefaultFormatterName === "biome";
 
 	// Check for Biome first (preferred default)
 	const biomeFormatter = matching.find((f) => f.name === "biome");
@@ -840,7 +843,7 @@ export async function getFormattersForFile(
 	}
 
 	if (
-		preferBiomeDefault &&
+		smartDefaultFormatterName === "biome" &&
 		!biomeEnabled &&
 		!prettierEnabled &&
 		biomeFormatter
@@ -849,11 +852,29 @@ export async function getFormattersForFile(
 		biomeEnabled = true;
 	}
 
+	if (smartDefaultFormatterName === "ruff") {
+		const ruffFormatter = matching.find((f) => f.name === "ruff");
+		const blackFormatter = matching.find((f) => f.name === "black");
+		const hasExplicitPythonFormatter = enabled.some(
+			(formatter) => formatter.name === "black" || formatter.name === "ruff",
+		);
+		if (!hasExplicitPythonFormatter && !blackFormatter && ruffFormatter) {
+			enabled.push(ruffFormatter);
+		}
+	}
+
 	// If Biome is enabled, skip Prettier for overlapping extensions
 	// (Biome is the preferred default, Prettier is fallback)
 	const skipPrettier = biomeEnabled;
 
 	for (const formatter of matching) {
+		if (
+			formatterPolicy &&
+			formatterPolicy.formatterNames.length > 0 &&
+			!formatterPolicy.formatterNames.includes(formatter.name)
+		) {
+			continue;
+		}
 		// Skip Biome (already checked above)
 		if (formatter.name === "biome") continue;
 		if (formatter.name === "prettier") continue;

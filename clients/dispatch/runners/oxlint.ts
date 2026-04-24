@@ -8,14 +8,18 @@
  */
 
 import { safeSpawnAsync } from "../../safe-spawn.js";
+import { getJstsLintPolicyForCwd } from "../../tool-policy.js";
+import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
 	DispatchContext,
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import { PRIORITY } from "../priorities.js";
-import { createAvailabilityChecker } from "./utils/runner-helpers.js";
+import {
+	createAvailabilityChecker,
+	resolveToolCommandWithInstallFallback,
+} from "./utils/runner-helpers.js";
 
 const oxlint = createAvailabilityChecker("oxlint", ".exe");
 
@@ -23,20 +27,29 @@ const oxlintRunner: RunnerDefinition = {
 	id: "oxlint",
 	appliesTo: ["jsts"],
 	priority: PRIORITY.LINT_SECONDARY,
-	enabledByDefault: false, // Opt-in: may conflict with ESLint in existing projects
+	enabledByDefault: true,
 	skipTestFiles: true,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = ctx.cwd || process.cwd();
+		const policy = getJstsLintPolicyForCwd(cwd);
+		if (!policy.preferredRunners.includes("oxlint")) {
+			return { status: "skipped", diagnostics: [], semantic: "none" };
+		}
 
-		// Check if oxlint is available
-		if (!oxlint.isAvailable(cwd)) {
+		let cmd: string | null = null;
+		if (oxlint.isAvailable(cwd)) {
+			cmd = oxlint.getCommand(cwd);
+		} else {
+			cmd = await resolveToolCommandWithInstallFallback(cwd, "oxlint");
+		}
+		if (!cmd) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
 		// Run oxlint on the file
 		const result = await safeSpawnAsync(
-			oxlint.getCommand(cwd)!,
+			cmd,
 			["--format", "unix", ctx.filePath],
 			{
 				timeout: 30000,

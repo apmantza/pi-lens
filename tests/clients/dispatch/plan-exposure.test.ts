@@ -3,9 +3,11 @@ import {
 	FULL_LINT_PLANS,
 	LANGUAGE_CAPABILITY_MATRIX,
 	TOOL_PLANS,
-} from "../../../clients/dispatch/plan.js";
+} from "../../../clients/dispatch/plan.ts";
 
-function flattenRunnerIds(plan: { groups: Array<{ runnerIds: string[] }> }): string[] {
+function flattenRunnerIds(plan: {
+	groups: Array<{ runnerIds: string[] }>;
+}): string[] {
 	return plan.groups.flatMap((g) => g.runnerIds);
 }
 
@@ -16,8 +18,10 @@ describe("dispatch plan exposure", () => {
 		expect(ids).toContain("lsp");
 		expect(ids).toContain("tree-sitter");
 		expect(ids).toContain("ast-grep-napi");
+		expect(ids).toContain("eslint");
+		expect(ids).toContain("oxlint");
+		expect(ids).toContain("biome-check-json");
 		expect(ids).not.toContain("biome-lint");
-		expect(ids).not.toContain("oxlint");
 	});
 
 	it("exposes warning-heavy linters in full plan for jsts/python", () => {
@@ -25,7 +29,9 @@ describe("dispatch plan exposure", () => {
 		const pythonIds = flattenRunnerIds(FULL_LINT_PLANS.python);
 
 		expect(jstsIds).toContain("biome-lint");
+		expect(jstsIds).toContain("eslint");
 		expect(jstsIds).toContain("oxlint");
+		expect(jstsIds).toContain("biome-check-json");
 		expect(pythonIds).toContain("ruff-lint");
 		expect(pythonIds).toContain("python-slop");
 	});
@@ -67,13 +73,21 @@ describe("dispatch plan exposure", () => {
 	});
 
 	it("routes html/docker/powershell/php/prisma through aligned primary plans", () => {
-		expect(flattenRunnerIds(TOOL_PLANS.html)).toEqual(["lsp", "htmlhint", "prettier-check"]);
+		expect(flattenRunnerIds(TOOL_PLANS.html)).toEqual([
+			"lsp",
+			"htmlhint",
+			"prettier-check",
+		]);
 		expect(flattenRunnerIds(TOOL_PLANS.docker)).toEqual(["lsp", "hadolint"]);
 		expect(flattenRunnerIds(TOOL_PLANS.powershell)).toEqual([
 			"lsp",
 			"psscriptanalyzer",
 		]);
-		expect(flattenRunnerIds(TOOL_PLANS.php)).toEqual(["lsp", "php-lint", "phpstan"]);
+		expect(flattenRunnerIds(TOOL_PLANS.php)).toEqual([
+			"lsp",
+			"php-lint",
+			"phpstan",
+		]);
 		expect(flattenRunnerIds(TOOL_PLANS.prisma)).toEqual([
 			"lsp",
 			"prisma-validate",

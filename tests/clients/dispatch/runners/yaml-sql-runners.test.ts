@@ -5,7 +5,12 @@ import { FactStore } from "../../../../clients/dispatch/fact-store.js";
 import { setupTestEnvironment } from "../../test-utils.js";
 
 vi.mock("../../../../clients/safe-spawn.js", () => ({
-	safeSpawn: vi.fn(() => ({ error: null, status: 0, stdout: "", stderr: "" })),
+	safeSpawn: vi.fn(() => ({
+		error: undefined,
+		status: 0,
+		stdout: "",
+		stderr: "",
+	})),
 }));
 
 vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
@@ -13,9 +18,16 @@ vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
 		isAvailable: () => true,
 		getCommand: () => command,
 	}),
+	resolveToolCommandWithInstallFallback: vi.fn(
+		async (_cwd: string, toolId: string) => toolId,
+	),
 }));
 
-function createCtx(kind: "yaml" | "sql", filePath: string, cwd = process.cwd()) {
+function createCtx(
+	kind: "yaml" | "sql",
+	filePath: string,
+	cwd = process.cwd(),
+) {
 	return {
 		filePath,
 		cwd,
@@ -38,14 +50,17 @@ describe("yaml/sql runners", () => {
 	it("yamllint runner maps error severity to blocking", async () => {
 		const env = setupTestEnvironment("pi-lens-yamllint-runner-");
 		try {
-			const runner = (await import(
-				"../../../../clients/dispatch/runners/yamllint.js"
-			)).default;
+			const runner = (
+				await import("../../../../clients/dispatch/runners/yamllint.js")
+			).default;
 			const safeSpawnMod = await import("../../../../clients/safe-spawn.js");
-			fs.writeFileSync(path.join(env.tmpDir, ".yamllint"), "extends: default\n");
+			fs.writeFileSync(
+				path.join(env.tmpDir, ".yamllint"),
+				"extends: default\n",
+			);
 
 			vi.mocked(safeSpawnMod.safeSpawn).mockReturnValue({
-				error: null,
+				error: undefined,
 				status: 1,
 				stdout:
 					"a.yaml:3:5: [error] syntax error: mapping values are not allowed (syntax)\n",
@@ -66,9 +81,9 @@ describe("yaml/sql runners", () => {
 	it("sqlfluff runner returns warning diagnostics", async () => {
 		const env = setupTestEnvironment("pi-lens-sqlfluff-runner-");
 		try {
-			const runner = (await import(
-				"../../../../clients/dispatch/runners/sqlfluff.js"
-			)).default;
+			const runner = (
+				await import("../../../../clients/dispatch/runners/sqlfluff.js")
+			).default;
 			const safeSpawnMod = await import("../../../../clients/safe-spawn.js");
 			fs.writeFileSync(
 				path.join(env.tmpDir, ".sqlfluff"),
@@ -76,7 +91,7 @@ describe("yaml/sql runners", () => {
 			);
 
 			vi.mocked(safeSpawnMod.safeSpawn).mockReturnValue({
-				error: null,
+				error: undefined,
 				status: 1,
 				stdout: JSON.stringify([
 					{
@@ -95,7 +110,11 @@ describe("yaml/sql runners", () => {
 			});
 
 			const result = await runner.run(
-				createCtx("sql", path.join(env.tmpDir, "query.sql"), env.tmpDir) as never,
+				createCtx(
+					"sql",
+					path.join(env.tmpDir, "query.sql"),
+					env.tmpDir,
+				) as never,
 			);
 			expect(result.status).toBe("failed");
 			expect(result.semantic).toBe("warning");

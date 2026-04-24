@@ -20,6 +20,9 @@ vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
 		isAvailable: () => true,
 		getCommand: () => command,
 	}),
+	resolveToolCommandWithInstallFallback: vi.fn(
+		async (_cwd: string, toolId: string) => toolId,
+	),
 }));
 
 function createCtx(
@@ -62,15 +65,19 @@ describe("terraform/kotlin runners", () => {
 				stderr: "",
 			});
 
-			const runner = (await import(
-				"../../../../clients/dispatch/runners/tflint.js"
-			)).default;
+			const runner = (
+				await import("../../../../clients/dispatch/runners/tflint.js")
+			).default;
 
 			await runner.run(createCtx("terraform", filePath, env.tmpDir) as never);
 
 			expect(safeSpawnAsync).toHaveBeenCalledWith(
 				"tflint",
-				expect.arrayContaining(["--format=json", "--no-color", "--filter=main.tf"]),
+				expect.arrayContaining([
+					"--format=json",
+					"--no-color",
+					"--filter=main.tf",
+				]),
 				expect.objectContaining({ cwd: nestedDir }),
 			);
 		} finally {
@@ -82,18 +89,18 @@ describe("terraform/kotlin runners", () => {
 		const env = setupTestEnvironment("pi-lens-ktlint-runner-");
 		try {
 			const filePath = path.join(env.tmpDir, "Main.kt");
-			fs.writeFileSync(filePath, "fun main() { println(\"hi\") }\n");
+			fs.writeFileSync(filePath, 'fun main() { println("hi") }\n');
 
 			safeSpawnAsync.mockResolvedValue({
 				error: null,
 				status: 1,
-				stdout: "{\"unexpected\":true}",
+				stdout: '{"unexpected":true}',
 				stderr: "wrapper noise",
 			});
 
-			const runner = (await import(
-				"../../../../clients/dispatch/runners/ktlint.js"
-			)).default;
+			const runner = (
+				await import("../../../../clients/dispatch/runners/ktlint.js")
+			).default;
 
 			const result = await runner.run(
 				createCtx("kotlin", filePath, env.tmpDir) as never,

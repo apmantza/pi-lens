@@ -34,17 +34,20 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<
 		capabilities: ["types", "security", "smells", "format", "lint"],
 		writeGroups: [
 			primary("jsts"),
-			{ mode: "all", runnerIds: ["biome-check-json"], filterKinds: ["jsts"] },
 			{ mode: "all", runnerIds: ["tree-sitter"], filterKinds: ["jsts"] },
 			{ mode: "all", runnerIds: ["ast-grep-napi"], filterKinds: ["jsts"] },
 			{ mode: "fallback", runnerIds: ["type-safety"], filterKinds: ["jsts"] },
 			{ mode: "fallback", runnerIds: ["similarity"], filterKinds: ["jsts"] },
-			{ mode: "fallback", runnerIds: ["eslint"], filterKinds: ["jsts"] },
+			{
+				mode: "fallback",
+				runnerIds: ["eslint", "oxlint", "biome-check-json"],
+				filterKinds: ["jsts"],
+			},
 		],
 		fullOnlyGroups: [
 			{
 				mode: "fallback",
-				runnerIds: ["biome-lint", "oxlint"],
+				runnerIds: ["biome-lint"],
 				filterKinds: ["jsts"],
 			},
 		],
@@ -255,7 +258,11 @@ function toFullPlan(kind: FileKind, entry: CapabilityMatrixEntry): ToolPlan {
 				...(entry.fullOnlyGroups ?? []),
 				{ mode: "fallback", runnerIds: ["type-safety"], filterKinds: ["jsts"] },
 				{ mode: "fallback", runnerIds: ["similarity"], filterKinds: ["jsts"] },
-				{ mode: "fallback", runnerIds: ["eslint"], filterKinds: ["jsts"] },
+				{
+					mode: "fallback",
+					runnerIds: ["eslint", "oxlint", "biome-check-json"],
+					filterKinds: ["jsts"],
+				},
 			],
 		};
 	}

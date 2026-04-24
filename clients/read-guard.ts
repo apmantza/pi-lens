@@ -135,7 +135,7 @@ export class ReadGuard {
 		if (!fileReads || fileReads.length === 0) {
 			const verdict = this.blockOrWarn(
 				"zero-read",
-				`🔴 BLOCKED — Edit without read\n\nYou are trying to edit \`${filePath}\` but have not read it in this conversation.\n\nTo proceed:\n  1. Read the file first: \`read filePath="${filePath}"\`\n  2. Or run \`/lens-allow-edit ${filePath}\` to override (use sparingly)`,
+				`🔴 BLOCKED — Edit without read\n\nYou are trying to edit \`${filePath}\` but have not read it in this conversation.\n\nTo proceed:\n  1. Read the file first: \`read path="${filePath}"\`\n  2. Or run \`/lens-allow-edit ${filePath}\` to override (use sparingly)`,
 			);
 			this.recordEdit(filePath, "edit", touchedLines ?? [1, 1], verdict);
 			return verdict;
@@ -146,7 +146,7 @@ export class ReadGuard {
 			const lastRead = fileReads[fileReads.length - 1];
 			const verdict = this.blockOrWarn(
 				"file-modified",
-				`🔴 BLOCKED — File modified since read\n\nYou last read \`${filePath}\` at ${new Date(lastRead.timestamp).toISOString()}.\nThe file has been modified on disk since then (auto-format, external tool, or previous edit).\n\nYour mental model is out of sync with the actual file content.\nTo proceed:\n  1. Re-read the file: \`read filePath="${filePath}"\``,
+				`🔴 BLOCKED — File modified since read\n\nYou last read \`${filePath}\` at ${new Date(lastRead.timestamp).toISOString()}.\nThe file has been modified on disk since then (auto-format, external tool, or previous edit).\n\nYour mental model is out of sync with the actual file content.\nTo proceed:\n  1. Re-read the file: \`read path="${filePath}"\``,
 			);
 			this.recordEdit(filePath, "edit", touchedLines ?? [1, 1], verdict);
 			return verdict;
@@ -171,14 +171,15 @@ export class ReadGuard {
 		// Not covered — block or warn
 		const lastRead = fileReads[fileReads.length - 1];
 		const [editStart, editEnd] = touchedLines;
+		const lastReadEnd = lastRead.effectiveOffset + lastRead.effectiveLimit - 1;
 		const verdict = this.blockOrWarn(
 			"out-of-range",
-			`🔴 BLOCKED — Edit outside read range\n\nYou read \`${filePath}\` lines ${lastRead.effectiveOffset}-${lastRead.effectiveOffset + lastRead.effectiveLimit}${lastRead.enclosingSymbol ? ` (${lastRead.enclosingSymbol.kind} \`${lastRead.enclosingSymbol.name}\`)` : ""}, but your edit touches lines ${editStart}-${editEnd}.\n\nThe edit target is outside the context you previously read.\nTo proceed:\n  1. Read the relevant section: \`read filePath="${filePath}" offset=${Math.max(1, editStart - 5)} limit=${Math.min(30, editEnd - editStart + 10)}\`\n  2. Or read the full file: \`read filePath="${filePath}"\``,
+			`🔴 BLOCKED — Edit outside read range\n\nYou read \`${filePath}\` lines ${lastRead.effectiveOffset}-${lastReadEnd}${lastRead.enclosingSymbol ? ` (${lastRead.enclosingSymbol.kind} \`${lastRead.enclosingSymbol.name}\`)` : ""}, but your edit touches lines ${editStart}-${editEnd}.\n\nThe edit target is outside the context you previously read.\nTo proceed:\n  1. Read the relevant section: \`read path="${filePath}" offset=${Math.max(1, editStart - 5)} limit=${Math.min(30, editEnd - editStart + 10)}\`\n  2. Or read the full file: \`read path="${filePath}"\``,
 			{
 				editRange: touchedLines,
 				readRanges: fileReads.map((r) => ({
 					start: r.effectiveOffset,
-					end: r.effectiveOffset + r.effectiveLimit,
+					end: r.effectiveOffset + r.effectiveLimit - 1,
 				})),
 				symbolRanges: fileReads
 					.filter((r) => r.enclosingSymbol)
@@ -295,7 +296,10 @@ export class ReadGuard {
 				read.effectiveOffset - this.config.contextLines,
 			);
 			const readEnd =
-				read.effectiveOffset + read.effectiveLimit + this.config.contextLines;
+				read.effectiveOffset +
+				read.effectiveLimit -
+				1 +
+				this.config.contextLines;
 
 			if (editStart >= readStart && editEnd <= readEnd) {
 				return { covered: true, viaSymbol: false };

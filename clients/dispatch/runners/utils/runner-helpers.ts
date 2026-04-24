@@ -11,7 +11,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { safeSpawn } from "../../../safe-spawn.js";
+import { ensureTool } from "../../../installer/index.js";
+import { safeSpawn, safeSpawnAsync } from "../../../safe-spawn.js";
+import {
+	getToolCommandSpec,
+	shouldAutoInstallTool,
+} from "../../../tool-policy.js";
 
 /**
  * Walk up from startDir until we find a directory containing node_modules/.bin.
@@ -33,10 +38,10 @@ function findNodeBinRoots(startDir: string): string[] {
 	return roots;
 }
 
-const _thisDir =
-	typeof __dirname !== "undefined"
-		? __dirname
-		: path.dirname(fileURLToPath(import.meta.url));
+let _thisDir = path.dirname(fileURLToPath(import.meta.url));
+if (typeof __dirname !== "undefined") {
+	_thisDir = __dirname;
+}
 
 // Managed tools directory (~/.pi-lens/tools) — where ensureTool() installs binaries
 const _managedToolsDir = path.join(os.homedir(), ".pi-lens", "tools");
@@ -138,6 +143,128 @@ export function createAvailabilityChecker(
 	return { isAvailable, getCommand };
 }
 
+export function resolveNodeToolCommand(
+	cwd: string,
+	toolName: string,
+	windowsExt = ".cmd",
+): string {
+	const isWin = process.platform === "win32";
+	const binName = isWin ? `${toolName}${windowsExt}` : toolName;
+	const local = path.join(cwd, "node_modules", ".bin", binName);
+	if (fs.existsSync(local)) return local;
+	return toolName;
+}
+
+export function resolveToolCommand(cwd: string, toolId: string): string | null {
+	const spec = getToolCommandSpec(toolId);
+	if (!spec) return null;
+	return resolveNodeToolCommand(cwd, spec.command, spec.windowsExt ?? ".cmd");
+}
+
+export async function resolveToolCommandWithInstallFallback(
+	cwd: string,
+	toolId: string,
+	timeout = 5000,
+): Promise<string | null> {
+	const spec = getToolCommandSpec(toolId);
+	if (!spec) return null;
+	return resolveCommandWithInstallFallback(
+		resolveToolCommand(cwd, toolId) ?? spec.command,
+		spec.managedToolId ?? toolId,
+		cwd,
+		spec.versionArgs ?? ["--version"],
+		timeout,
+	);
+}
+
+async function verifyOrInstallCommand(
+	command: string,
+	toolId: string,
+	cwd: string,
+	versionArgs: string[] = ["--version"],
+	timeout = 5000,
+): Promise<string | null> {
+	const versionCheck = await safeSpawnAsync(command, versionArgs, {
+		timeout,
+		cwd,
+	});
+	if (!versionCheck.error && versionCheck.status === 0) {
+		return command;
+	}
+	if (!shouldAutoInstallTool(toolId)) {
+		return null;
+	}
+	const installed = await ensureTool(toolId);
+	if (!installed) return null;
+	const installedCheck = await safeSpawnAsync(installed, versionArgs, {
+		timeout,
+		cwd,
+	});
+	if (installedCheck.error || installedCheck.status !== 0) {
+		return null;
+	}
+	return installed;
+}
+
+export async function resolveCommandArgsWithInstallFallback(
+	command: { cmd: string; args: string[] },
+	toolId: string,
+	cwd: string,
+	versionArgs: string[] = ["--version"],
+	timeout = 5000,
+): Promise<{ cmd: string; args: string[] } | null> {
+	const versionCheck = await safeSpawnAsync(
+		command.cmd,
+		[...command.args, ...versionArgs],
+		{ timeout, cwd },
+	);
+	if (!versionCheck.error && versionCheck.status === 0) {
+		return command;
+	}
+	const installed = await verifyOrInstallCommand(
+		command.cmd,
+		toolId,
+		cwd,
+		versionArgs,
+		timeout,
+	);
+	if (!installed) {
+		return null;
+	}
+	if (installed === command.cmd) {
+		return command;
+	}
+	return { cmd: installed, args: [] };
+}
+
+export async function resolveCommandWithInstallFallback(
+	command: string,
+	toolId: string,
+	cwd: string,
+	versionArgs: string[] = ["--version"],
+	timeout = 5000,
+): Promise<string | null> {
+	return verifyOrInstallCommand(command, toolId, cwd, versionArgs, timeout);
+}
+
+export async function resolveAvailableOrInstall(
+	checker: {
+		isAvailable: (cwd?: string) => boolean;
+		getCommand: (cwd?: string) => string | null;
+	},
+	toolId: string,
+	cwd: string,
+): Promise<string | null> {
+	if (checker.isAvailable(cwd)) {
+		return checker.getCommand(cwd);
+	}
+	if (!shouldAutoInstallTool(toolId)) {
+		return null;
+	}
+	const installed = await ensureTool(toolId);
+	return installed ?? null;
+}
+
 // =============================================================================
 // CONFIG FILE FINDER FACTORY
 // =============================================================================
@@ -194,10 +321,17 @@ export function isSgAvailable(): boolean {
 	const isWin = process.platform === "win32";
 	// On Windows with Git Bash, prefer the bare 'sg' shim (bash-compatible) over
 	// .cmd/.ps1 which bash cannot execute. In plain cmd/PowerShell, .cmd is fine.
-	const hasBash = !!(process.env.MSYSTEM || process.env.GIT_SHELL || process.env.BASH);
-	const sgCandidates = isWin
-		? (hasBash ? ["sg", "sg.exe", "sg.cmd"] : ["sg.cmd", "sg.exe", "sg"])
-		: ["sg"];
+	const hasBash = !!(
+		process.env.MSYSTEM ||
+		process.env.GIT_SHELL ||
+		process.env.BASH
+	);
+	let sgCandidates = ["sg"];
+	if (isWin) {
+		sgCandidates = hasBash
+			? ["sg", "sg.exe", "sg.cmd"]
+			: ["sg.cmd", "sg.exe", "sg"];
+	}
 
 	const binRoots = [
 		...findNodeBinRoots(_thisDir),

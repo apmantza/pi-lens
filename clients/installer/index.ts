@@ -4,7 +4,7 @@
  * Minimal auto-install: Core tools that run frequently.
  * Other tools require manual installation with clear instructions.
  *
- * Auto-install (20 tools):
+ * Auto-install (21 tools):
  * - typescript-language-server (TypeScript LSP)
  * - pyright (Python LSP)
  * - bash-language-server (Bash LSP)
@@ -12,6 +12,7 @@
  * - vscode-langservers-extracted (JSON LSP)
  * - ruff (Python linting)
  * - @biomejs/biome (JS/TS/JSON linting/formatting)
+ * - oxlint (JS/TS linting)
  * - madge (circular dependency detection)
  * - jscpd (duplicate code detection)
  * - @ast-grep/cli (structural code search)
@@ -379,6 +380,15 @@ const TOOLS: ToolDefinition[] = [
 		installStrategy: "npm",
 		packageName: "stylelint",
 		binaryName: "stylelint",
+	},
+	{
+		id: "oxlint",
+		name: "Oxlint",
+		checkCommand: "oxlint",
+		checkArgs: ["--version"],
+		installStrategy: "npm",
+		packageName: "oxlint",
+		binaryName: "oxlint",
 	},
 	// GitHub release binaries
 	{
@@ -1439,13 +1449,10 @@ async function installNpmTool(
 
 		// Install via npm or bun (use .cmd on Windows)
 		const isWindows = process.platform === "win32";
-		const pm = process.env.BUN_INSTALL
-			? isWindows
-				? "bun.exe"
-				: "bun"
-			: isWindows
-				? "npm.cmd"
-				: "npm";
+		let pm = isWindows ? "npm.cmd" : "npm";
+		if (process.env.BUN_INSTALL) {
+			pm = isWindows ? "bun.exe" : "bun";
+		}
 		// Use --ignore-scripts unless the package explicitly needs postinstall
 		// (e.g. biome downloads a platform-specific native binary via postinstall).
 		const needsScripts = NEEDS_POSTINSTALL.has(
