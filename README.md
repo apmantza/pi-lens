@@ -145,7 +145,7 @@ Structural rules are organized by language in `rules/tree-sitter-queries/`:
 
 Plus **180+ ast-grep rules** in `rules/ast-grep-rules/` covering security (no-eval, jwt-no-verify, no-hardcoded-secrets, no-insecure-randomness), correctness (strict-equality, empty-catch, no-cond-assign), and style patterns across JS/TS/Python.
 
-## Review Graph
+## Review Graph - Cascade Diagnostics
 
 pi-lens builds a review graph (`file → symbol → dependency`) during session and uses it at turn end to render an impact cascade: which files were affected by a change and how diagnostics propagated through the dependency graph. Nodes track kind, language, and export status; edges track contains/imports/calls/references.
 
@@ -154,6 +154,8 @@ pi-lens builds a review graph (`file → symbol → dependency`) during session 
 pi-lens includes **37 language server definitions**. LSP is **enabled by default** (`--lsp` or no flag). Servers are auto-discovered from PATH, project `node_modules`, and managed installs. When a server is not installed, pi-lens offers an interactive install prompt.
 
 **LSP Idle Management:** LSP servers shut down after 240 seconds of inactivity (no files modified) to free resources. The timer resets when you resume editing, preventing cold-start penalties during active development.
+
+**Opportunistic Read Expansion:** When the agent reads a single line of a file and a warm LSP client is already running for that language, pi-lens transparently expands the read to the full enclosing symbol (function, method, or class). This happens without blocking the read — if LSP responds in time, the agent sees the full context; otherwise the original line is returned unchanged.
 
 LSP servers for: TypeScript, Deno, Python (pyright + pylsp), Go, Rust, Ruby (ruby-lsp + solargraph), PHP, C# (omnisharp), F#, Java, Kotlin, Swift, Dart, Lua, C/C++, Zig, Haskell, Elixir, Gleam, OCaml, Clojure, Terraform, Nix, Bash, Docker, YAML, JSON, HTML, TOML, Prisma, Vue, Svelte, ESLint, CSS.
 
