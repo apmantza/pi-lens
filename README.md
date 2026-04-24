@@ -12,7 +12,7 @@ On every `write` and `edit`, pi-lens runs a fast, language-aware pipeline (check
 2. **Auto-format** — 26 language-specific formatters (Biome, Prettier, Ruff, gofmt, rustfmt, and 21 others)
 3. **Auto-fix** — safe autofixes from 6 tools (Biome `check --write`, Ruff `check --fix`, ESLint `--fix`, stylelint `--fix`, sqlfluff `fix`, RuboCop `-a`) applied before analysis
 4. **LSP file sync** — opens/updates the file in active language servers
-5. **Dispatch lint** — parallel runner groups: LSP diagnostics, tree-sitter structural rules, ast-grep security/correctness rules, fact rules, language-specific linters, similarity detection, and architect checks
+5. **Dispatch lint** — parallel runner groups: LSP diagnostics, tree-sitter structural rules, ast-grep security/correctness rules, fact rules, language-specific linters, similarity detection
 6. **Cascade diagnostics** — review-graph impact cascade showing which other files were affected and how diagnostics propagated
 
 Results are inline and actionable:
@@ -56,71 +56,37 @@ Or from git:
 pi install git:github.com/apmantza/pi-lens
 ```
 
-## Run
+## Features
 
-```bash
-# Standard mode (LSP enabled by default)
-pi
+### LSP Support
 
-# Optional switches
-pi --no-lsp              # Disable unified LSP diagnostics
-pi --no-autoformat        # Skip auto-formatting
-pi --no-autofix           # Skip auto-fix (Biome, Ruff, ESLint, stylelint, sqlfluff, RuboCop)
-pi --no-tests             # Skip test runner
-pi --no-delta             # Disable delta mode (show all diagnostics, not just new ones)
-pi --lens-guard           # Block git commit/push when unresolved blockers exist (experimental)
-```
+pi-lens includes **37 language server definitions**. LSP is **enabled by default** (`--lsp` or no flag). Servers are auto-discovered from PATH, project `node_modules`, and managed installs. When a server is not installed, pi-lens offers an interactive install prompt.
 
+**LSP Idle Management:** LSP servers shut down after 240 seconds of inactivity (no files modified) to free resources. The timer resets when you resume editing, preventing cold-start penalties during active development.
 
-## Key Commands
+LSP servers for: TypeScript, Deno, Python (pyright + pylsp), Go, Rust, Ruby (ruby-lsp + solargraph), PHP, C# (omnisharp), F#, Java, Kotlin, Swift, Dart, Lua, C/C++, Zig, Haskell, Elixir, Gleam, OCaml, Clojure, Terraform, Nix, Bash, Docker, YAML, JSON, HTML, TOML, Prisma, Vue, Svelte, ESLint, CSS.
 
-- `/lens-booboo` — full quality report for current project state
-- `/lens-health` — runtime health, latency, and diagnostic telemetry
-- `/lens-tools` — tool installation status: globally installed, auto-installed, or npx fallback
-- `/lens-tdi` — Technical Debt Index (TDI) and project health trend
+### Formatters
 
-## Language Coverage
+pi-lens auto-detects and runs **26 formatters** based on project config:
 
-pi-lens supports **35+ languages** through dispatch runners and LSP integration:
+biome, prettier, ruff, black, sqlfluff, gofmt, rustfmt, zig fmt, dart format, shfmt, nixfmt, mix format, ocamlformat, clang-format, ktlint, rubocop, standardrb, gleam format, terraform fmt, php-cs-fixer, csharpier, fantomas, swiftformat, stylua, ormolu, taplo
 
-| Language | LSP | Dispatch Runners | Formatter |
-|---|---|---|---|
-| JavaScript/TypeScript | ✓ | lsp, ts-lsp, biome-check-json, tree-sitter, ast-grep-napi, type-safety, similarity, fact-rules, eslint, architect | biome, prettier |
-| Python | ✓ | lsp, pyright, ruff-lint, tree-sitter, python-slop, architect | ruff, black |
-| Go | ✓ | lsp, go-vet, golangci-lint, tree-sitter | gofmt |
-| Rust | ✓ | lsp, rust-clippy, tree-sitter | rustfmt |
-| Ruby | ✓ | lsp, rubocop, tree-sitter | rubocop, standardrb |
-| C/C++ | ✓ | lsp, cpp-check | clang-format |
-| Shell | ✓ | lsp, shellcheck | shfmt |
-| CSS/SCSS/Less | ✓ | lsp, stylelint, prettier-check | biome, prettier |
-| HTML | ✓ | lsp, htmlhint, prettier-check | prettier |
-| YAML | ✓ | lsp, yamllint | prettier |
-| JSON | ✓ | lsp | biome, prettier |
-| SQL | — | sqlfluff | sqlfluff |
-| Markdown | — | spellcheck, markdownlint | prettier |
-| Docker | ✓ | lsp, hadolint | — |
-| PHP | ✓ | lsp, php-lint, phpstan | php-cs-fixer |
-| PowerShell | ✓ | lsp, psscriptanalyzer | — |
-| Prisma | ✓ | lsp, prisma-validate | — |
-| C# | ✓ | lsp, dotnet-build | csharpier |
-| F# | ✓ | lsp | fantomas |
-| Java | ✓ | lsp, javac | — |
-| Kotlin | ✓ | lsp, ktlint | ktlint |
-| Swift | ✓ | lsp | swiftformat |
-| Dart | ✓ | lsp, dart-analyze | dart format |
-| Lua | ✓ | lsp | stylua |
-| Zig | ✓ | lsp, zig-check | zig fmt |
-| Haskell | ✓ | lsp | ormolu |
-| Elixir | ✓ | lsp, elixir-check, credo | mix format |
-| Gleam | ✓ | lsp, gleam-check | gleam format |
-| OCaml | ✓ | lsp | ocamlformat |
-| Clojure | ✓ | lsp | — |
-| Terraform | ✓ | lsp, tflint | terraform fmt |
-| Nix | ✓ | lsp | nixfmt |
-| TOML | ✓ | lsp, taplo | taplo |
-| CMake | ✓ | lsp | — |
+Detection rules:
+- **Config-gated**: only runs when project config indicates usage (e.g. `biome.json`, `.prettierrc`, `ruff.toml`)
+- **Nearest-wins**: when multiple formatter configs exist at different directory levels, the one closest to the edited file wins
+- **Biome-default**: for JS/TS files without Prettier or Biome config, Biome is used as the default formatter
+- **Ruff-default**: for Python files without Black config, Ruff format is used when available
 
-## Fact Rules Pipeline
+### Review Graph - Cascade Diagnostics
+
+pi-lens builds a review graph (`file → symbol → dependency`) during session and uses it at turn end to render an impact cascade: which files were affected by a change and how diagnostics propagated through the dependency graph. Nodes track kind, language, and export status; edges track contains/imports/calls/references.
+
+### Opportunistic Read Expansion
+
+When the agent reads a single line of a file and a warm LSP client is already running for that language, pi-lens transparently expands the read to the full enclosing symbol (function, method, or class). This happens without blocking the read — if LSP responds in time, the agent sees the full context; otherwise the original line is returned unchanged.
+
+### Fact Rules Pipeline
 
 Covers JavaScript/TypeScript, Python, Go, Rust, Ruby, Shell, and CMake. Dispatch includes a fact-rule engine that extracts function-level metrics (cyclomatic complexity, nesting depth, outgoing calls) and evaluates quality rules inline:
 
@@ -132,7 +98,7 @@ Covers JavaScript/TypeScript, Python, Go, Rust, Ruby, Shell, and CMake. Dispatch
 - **import-facts** — detects circular/star/unused imports
 - **file-role** — classifies files as source/test/config/vendor and adjusts severity
 
-## Tree-sitter Rules
+### Tree-sitter Rules
 
 Structural rules are organized by language in `rules/tree-sitter-queries/`:
 
@@ -142,7 +108,7 @@ Structural rules are organized by language in `rules/tree-sitter-queries/`:
 - **Rust** (6 rules): unsafe blocks, unwrap outside tests, and more
 - **Ruby** (15 rules): empty rescue, rescue Exception, debugger, hardcoded secrets, and more
 
-## Ast-Grep Rules
+### Ast-Grep Rules
 
 **180+ rules** in `rules/ast-grep-rules/` across JS, TS, and Python:
 
@@ -150,34 +116,6 @@ Structural rules are organized by language in `rules/tree-sitter-queries/`:
 - **Correctness** — strict-equality, no-cond-assign, no-constant-condition, no-dupe-keys, no-nan-comparison, array-callback-return, constructor-super
 - **Style/smells** — nested-ternary, long-parameter-list, large-class, prefer-optional-chain, redundant-state, require-await
 - **Agent stubs** — no-unimplemented-stub, no-raise-not-implemented, no-ellipsis-body
-
-## Review Graph - Cascade Diagnostics
-
-pi-lens builds a review graph (`file → symbol → dependency`) during session and uses it at turn end to render an impact cascade: which files were affected by a change and how diagnostics propagated through the dependency graph. Nodes track kind, language, and export status; edges track contains/imports/calls/references.
-
-## Opportunistic Read Expansion
-
-When the agent reads a single line of a file and a warm LSP client is already running for that language, pi-lens transparently expands the read to the full enclosing symbol (function, method, or class). This happens without blocking the read — if LSP responds in time, the agent sees the full context; otherwise the original line is returned unchanged.
-
-## LSP Support
-
-pi-lens includes **37 language server definitions**. LSP is **enabled by default** (`--lsp` or no flag). Servers are auto-discovered from PATH, project `node_modules`, and managed installs. When a server is not installed, pi-lens offers an interactive install prompt.
-
-**LSP Idle Management:** LSP servers shut down after 240 seconds of inactivity (no files modified) to free resources. The timer resets when you resume editing, preventing cold-start penalties during active development.
-
-LSP servers for: TypeScript, Deno, Python (pyright + pylsp), Go, Rust, Ruby (ruby-lsp + solargraph), PHP, C# (omnisharp), F#, Java, Kotlin, Swift, Dart, Lua, C/C++, Zig, Haskell, Elixir, Gleam, OCaml, Clojure, Terraform, Nix, Bash, Docker, YAML, JSON, HTML, TOML, Prisma, Vue, Svelte, ESLint, CSS.
-
-## Formatters
-
-pi-lens auto-detects and runs **26 formatters** based on project config:
-
-biome, prettier, ruff, black, sqlfluff, gofmt, rustfmt, zig fmt, dart format, shfmt, nixfmt, mix format, ocamlformat, clang-format, ktlint, rubocop, standardrb, gleam format, terraform fmt, php-cs-fixer, csharpier, fantomas, swiftformat, stylua, ormolu, taplo
-
-Detection rules:
-- **Config-gated**: only runs when project config indicates usage (e.g. `biome.json`, `.prettierrc`, `ruff.toml`)
-- **Nearest-wins**: when multiple formatter configs exist at different directory levels, the one closest to the edited file wins
-- **Biome-default**: for JS/TS files without Prettier or Biome config, Biome is used as the default formatter
-- **Ruff-default**: for Python files without Black config, Ruff format is used when available
 
 ## Dependencies
 
@@ -229,18 +167,65 @@ Auto-install behavior depends on gate type:
 
 Additional language servers (gopls, ruby-lsp, solargraph, etc.) are auto-detected from PATH or installed via native package managers (`go install`, `gem install`) when their language is detected.
 
-## Notes
+## Run
 
-- Not every auto-install runs in every project: gate type decides when install is attempted.
-- Rule packs are customizable via project-level rule directories.
-- Inline suppression: `// pi-lens-ignore` or `# pi-lens-ignore` comments suppress diagnostic output for that line.
+```bash
+# Standard mode (LSP enabled by default)
+pi
 
-## Environment Variables
+# Optional switches
+pi --no-lsp              # Disable unified LSP diagnostics
+pi --no-autoformat        # Skip auto-formatting
+pi --no-autofix           # Skip auto-fix (Biome, Ruff, ESLint, stylelint, sqlfluff, RuboCop)
+pi --no-tests             # Skip test runner
+pi --no-delta             # Disable delta mode (show all diagnostics, not just new ones)
+pi --lens-guard           # Block git commit/push when unresolved blockers exist (experimental)
+```
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PI_LENS_STARTUP_MODE` | auto | `full`, `minimal`, or `quick` — override session startup behavior |
-| `PI_LENS_LOG_RETENTION_DAYS` | 7 | Days to retain log files before automatic cleanup |
-| `PI_LENS_MAX_LOG_SIZE_MB` | 10 | Max size in MB before rotating active log files |
+## Key Commands
 
-Logs are stored in `~/.pi-lens/` and automatically cleaned up at session start based on these settings.
+- `/lens-booboo` — full quality report for current project state
+- `/lens-health` — runtime health, latency, and diagnostic telemetry
+- `/lens-tools` — tool installation status: globally installed, auto-installed, or npx fallback
+- `/lens-tdi` — Technical Debt Index (TDI) and project health trend
+
+## Language Coverage
+
+pi-lens supports **35+ languages** through dispatch runners and LSP integration:
+
+| Language | LSP | Dispatch Runners | Formatter |
+|---|---|---|---|
+| JavaScript/TypeScript | ✓ | lsp, ts-lsp, biome-check-json, tree-sitter, ast-grep-napi, type-safety, similarity, fact-rules, eslint | biome, prettier |
+| Python | ✓ | lsp, pyright, ruff-lint, tree-sitter, python-slop | ruff, black |
+| Go | ✓ | lsp, go-vet, golangci-lint, tree-sitter | gofmt |
+| Rust | ✓ | lsp, rust-clippy, tree-sitter | rustfmt |
+| Ruby | ✓ | lsp, rubocop, tree-sitter | rubocop, standardrb |
+| C/C++ | ✓ | lsp, cpp-check | clang-format |
+| Shell | ✓ | lsp, shellcheck | shfmt |
+| CSS/SCSS/Less | ✓ | lsp, stylelint, prettier-check | biome, prettier |
+| HTML | ✓ | lsp, htmlhint, prettier-check | prettier |
+| YAML | ✓ | lsp, yamllint | prettier |
+| JSON | ✓ | lsp | biome, prettier |
+| SQL | — | sqlfluff | sqlfluff |
+| Markdown | — | spellcheck, markdownlint | prettier |
+| Docker | ✓ | lsp, hadolint | — |
+| PHP | ✓ | lsp, php-lint, phpstan | php-cs-fixer |
+| PowerShell | ✓ | lsp, psscriptanalyzer | — |
+| Prisma | ✓ | lsp, prisma-validate | — |
+| C# | ✓ | lsp, dotnet-build | csharpier |
+| F# | ✓ | lsp | fantomas |
+| Java | ✓ | lsp, javac | — |
+| Kotlin | ✓ | lsp, ktlint | ktlint |
+| Swift | ✓ | lsp | swiftformat |
+| Dart | ✓ | lsp, dart-analyze | dart format |
+| Lua | ✓ | lsp | stylua |
+| Zig | ✓ | lsp, zig-check | zig fmt |
+| Haskell | ✓ | lsp | ormolu |
+| Elixir | ✓ | lsp, elixir-check, credo | mix format |
+| Gleam | ✓ | lsp, gleam-check | gleam format |
+| OCaml | ✓ | lsp | ocamlformat |
+| Clojure | ✓ | lsp | — |
+| Terraform | ✓ | lsp, tflint | terraform fmt |
+| Nix | ✓ | lsp | nixfmt |
+| TOML | ✓ | lsp, taplo | taplo |
+| CMake | ✓ | lsp | — |
