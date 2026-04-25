@@ -429,13 +429,22 @@ export class LSPService {
 	/**
 	 * Open a file in LSP (sends textDocument/didOpen)
 	 */
-	async openFile(filePath: string, content: string): Promise<void> {
+	async openFile(
+		filePath: string,
+		content: string,
+		options?: { preserveDiagnostics?: boolean },
+	): Promise<void> {
 		if (this.checkDestroyed()) return;
 		const spawned = await this.getClientForFile(filePath);
 		if (!spawned) return;
 
 		const languageId = getLanguageId(filePath) ?? "plaintext";
-		await spawned.client.notify.open(filePath, content, languageId);
+		await spawned.client.notify.open(
+			filePath,
+			content,
+			languageId,
+			options?.preserveDiagnostics,
+		);
 	}
 
 	/**

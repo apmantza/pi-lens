@@ -542,8 +542,15 @@ export const ktlintFormatter: FormatterInfo = {
 	name: "ktlint",
 	command: ["ktlint", "-F", "$FILE"],
 	extensions: [".kt", ".kts"],
+	async resolveCommand(filePath, _cwd) {
+		const inPath = await which("ktlint");
+		if (inPath) return [inPath, "-F", filePath];
+		return resolveManagedSmartDefaultCommand("ktlint", filePath, ["-F"]);
+	},
 	async detect(_cwd: string) {
-		return (await which("ktlint")) !== null;
+		if ((await which("ktlint")) !== null) return true;
+		const { getToolPath } = await import("./installer/index.js");
+		return Boolean(await getToolPath("ktlint"));
 	},
 };
 

@@ -568,6 +568,7 @@ const AUTO_INSTALLABLE_DEFAULT_FORMATTERS = new Map<string, string>([
 	["prettier", "prettier"],
 	["shfmt", "shfmt"],
 	["taplo", "taplo"],
+	["ktlint", "ktlint"],
 ]);
 
 export function getFormatterPolicyForExtension(

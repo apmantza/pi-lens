@@ -134,7 +134,7 @@ export interface LSPClientInfo {
 	/** Check if the connection is still alive */
 	isAlive: () => boolean;
 	notify: {
-		open(filePath: string, content: string, languageId: string): Promise<void>;
+		open(filePath: string, content: string, languageId: string, preserveDiagnostics?: boolean): Promise<void>;
 		change(filePath: string, content: string): Promise<void>;
 	};
 	getDiagnostics(filePath: string): LSPDiagnostic[];
@@ -470,6 +470,7 @@ export async function handleNotifyOpen(
 	filePath: string,
 	content: string,
 	languageId: string,
+	preserveDiagnostics = false,
 ): Promise<void> {
 	if (!isClientAlive(state)) return;
 	const uri = pathToFileURL(filePath).href;
@@ -481,7 +482,12 @@ export async function handleNotifyOpen(
 	) {
 		const version = (state.documentVersions.get(normalizedPath) ?? 0) + 1;
 		state.documentVersions.set(normalizedPath, version);
-		state.diagnostics.delete(normalizedPath);
+		// preserveDiagnostics: skip cache clear for format-only resyncs so
+		// waitForDiagnostics fast-paths instead of waiting up to 5s for TypeScript
+		// to re-publish what it already knows (formatting doesn't change semantics).
+		if (!preserveDiagnostics) {
+			state.diagnostics.delete(normalizedPath);
+		}
 		await safeSendNotification(state.connection, "textDocument/didChange", {
 			textDocument: { uri, version },
 			contentChanges: [{ text: content }],
@@ -491,7 +497,7 @@ export async function handleNotifyOpen(
 
 	state.pendingOpens.add(normalizedPath);
 	state.documentVersions.set(normalizedPath, 0);
-	state.diagnostics.delete(normalizedPath);
+	state.diagnostics.delete(normalizedPath); // always clear for initial open
 
 	// Send workspace notification first (like opencode does)
 	await safeSendNotification(
@@ -792,8 +798,8 @@ export async function createLSPClient(options: {
 		isAlive: () => isClientAlive(state),
 
 		notify: {
-			async open(filePath, content, languageId) {
-				return handleNotifyOpen(state, filePath, content, languageId);
+			async open(filePath, content, languageId, preserveDiagnostics) {
+				return handleNotifyOpen(state, filePath, content, languageId, preserveDiagnostics);
 			},
 			async change(filePath, content) {
 				return handleNotifyChange(state, filePath, content);

@@ -492,6 +492,7 @@ async function resyncLspFile(
 	lspSyncCompleted: boolean,
 	getFlag: PipelineContext["getFlag"],
 	dbg: PipelineContext["dbg"],
+	formatChanged = false,
 ): Promise<void> {
 	if (getFlag("no-lsp")) return;
 	if (!needsContentRefresh && lspSyncCompleted) return;
@@ -503,7 +504,12 @@ async function resyncLspFile(
 		const lspService = getLSPService();
 		const hasLSP = await lspService.hasLSP(filePath);
 		if (hasLSP) {
-			await lspService.openFile(filePath, fileContent);
+			// Format-only resyncs preserve the existing diagnostics cache so
+			// waitForDiagnostics fast-paths instead of sitting the full 5s timeout
+			// waiting for TypeScript to re-confirm what it already knows.
+			await lspService.openFile(filePath, fileContent, {
+				preserveDiagnostics: formatChanged,
+			});
 		}
 	} catch (err) {
 		dbg(`LSP resync after autofix error: ${err}`);
@@ -755,6 +761,7 @@ export async function runPipeline(
 			lspSyncCompleted,
 			getFlag,
 			dbg,
+			formatChanged,
 		);
 	}
 
