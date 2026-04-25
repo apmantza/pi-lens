@@ -178,6 +178,8 @@ const AUTOFIX_EXTS = new Set([
 	...SQL_EXTS,
 	".kt",
 	".kts",
+	".rs",
+	".dart",
 ]);
 
 function supportsAutofix(filePath: string): boolean {
@@ -313,6 +315,63 @@ async function tryKtlintFix(filePath: string, cwd: string): Promise<number> {
 		["-F", filePath],
 		cwd,
 		[1],
+	);
+}
+
+async function tryRustClippyFix(
+	filePath: string,
+	_cwd: string,
+): Promise<number> {
+	const check = await safeSpawnAsync("cargo", ["--version"], { timeout: 5000 });
+	if (check.error || check.status !== 0) return 0;
+
+	let dir = path.dirname(path.resolve(filePath));
+	const root = path.parse(dir).root;
+	let cargoDir: string | undefined;
+	while (dir !== root) {
+		if (nodeFs.existsSync(path.join(dir, "Cargo.toml"))) {
+			cargoDir = dir;
+			break;
+		}
+		const parent = path.dirname(dir);
+		if (parent === dir) break;
+		dir = parent;
+	}
+	if (!cargoDir) return 0;
+
+	return detectFileChangedAfterCommand(
+		filePath,
+		"cargo",
+		["clippy", "--fix", "--allow-dirty", "--allow-staged", "-q"],
+		cargoDir,
+		[0],
+	);
+}
+
+async function tryDartFix(filePath: string, _cwd: string): Promise<number> {
+	const check = await safeSpawnAsync("dart", ["--version"], { timeout: 5000 });
+	if (check.error || check.status !== 0) return 0;
+
+	let dir = path.dirname(path.resolve(filePath));
+	const root = path.parse(dir).root;
+	let pubspecDir: string | undefined;
+	while (dir !== root) {
+		if (nodeFs.existsSync(path.join(dir, "pubspec.yaml"))) {
+			pubspecDir = dir;
+			break;
+		}
+		const parent = path.dirname(dir);
+		if (parent === dir) break;
+		dir = parent;
+	}
+	if (!pubspecDir) return 0;
+
+	return detectFileChangedAfterCommand(
+		filePath,
+		"dart",
+		["fix", "--apply"],
+		pubspecDir,
+		[0],
 	);
 }
 
@@ -532,6 +591,30 @@ async function runAutofix(
 				autofixTools.push(`ktlint:${ktlintFixed}`);
 				fixedThisTurn.add(filePath);
 				dbg(`autofix: ktlint fixed ${ktlintFixed} issue(s) in ${filePath}`);
+				needsContentRefresh = true;
+			}
+			continue;
+		}
+
+		if (toolName === "rust-clippy") {
+			const clippyFixed = await tryRustClippyFix(filePath, cwd);
+			if (clippyFixed > 0) {
+				fixedCount += clippyFixed;
+				autofixTools.push(`rust-clippy:${clippyFixed}`);
+				fixedThisTurn.add(filePath);
+				dbg(`autofix: rust-clippy fixed ${clippyFixed} issue(s) in ${filePath}`);
+				needsContentRefresh = true;
+			}
+			continue;
+		}
+
+		if (toolName === "dart-analyze") {
+			const dartFixed = await tryDartFix(filePath, cwd);
+			if (dartFixed > 0) {
+				fixedCount += dartFixed;
+				autofixTools.push(`dart-analyze:${dartFixed}`);
+				fixedThisTurn.add(filePath);
+				dbg(`autofix: dart fix applied ${dartFixed} change(s) in ${filePath}`);
 				needsContentRefresh = true;
 			}
 		}

@@ -634,7 +634,9 @@ export type AutofixToolName =
 	| "stylelint"
 	| "sqlfluff"
 	| "rubocop"
-	| "ktlint";
+	| "ktlint"
+	| "rust-clippy"
+	| "dart-analyze";
 
 export type LintRunnerName =
 	| JstsLintRunnerName
@@ -649,7 +651,16 @@ export type LintRunnerName =
 	| "golangci-lint"
 	| "phpstan"
 	| "ktlint"
-	| "taplo";
+	| "taplo"
+	| "rust-clippy"
+	| "shellcheck"
+	| "tflint"
+	| "credo"
+	| "cpp-check"
+	| "dart-analyze"
+	| "gleam-check"
+	| "psscriptanalyzer"
+	| "prisma-validate";
 
 export interface LinterPolicy {
 	runnerNames: LintRunnerName[];
@@ -713,6 +724,14 @@ const AUTOFIX_CAPABILITIES = new Map<string, AutofixCapability>([
 	],
 	[
 		"ktlint",
+		{ toolSupportsFix: true, safePipelineAutofix: true, fixKind: "pipeline" },
+	],
+	[
+		"rust-clippy",
+		{ toolSupportsFix: true, safePipelineAutofix: true, fixKind: "pipeline" },
+	],
+	[
+		"dart-analyze",
 		{ toolSupportsFix: true, safePipelineAutofix: true, fixKind: "pipeline" },
 	],
 ]);
@@ -1125,6 +1144,96 @@ export function getLinterPolicyForFile(
 		};
 	}
 
+	if (ext === ".rs") {
+		return {
+			runnerNames: ["rust-clippy"],
+			preferredRunners: ["rust-clippy"],
+			defaultRunner: "rust-clippy",
+			defaultWhenUnconfigured: true,
+			gate: "smart-default",
+		};
+	}
+
+	if ([".sh", ".bash"].includes(ext)) {
+		return {
+			runnerNames: ["shellcheck"],
+			preferredRunners: ["shellcheck"],
+			defaultRunner: "shellcheck",
+			defaultWhenUnconfigured: true,
+			gate: "smart-default",
+		};
+	}
+
+	if ([".tf", ".tfvars"].includes(ext)) {
+		return {
+			runnerNames: ["tflint"],
+			preferredRunners: ["tflint"],
+			defaultRunner: "tflint",
+			defaultWhenUnconfigured: true,
+			gate: "smart-default",
+		};
+	}
+
+	if ([".ex", ".exs", ".eex", ".heex", ".leex"].includes(ext)) {
+		return {
+			runnerNames: ["credo"],
+			preferredRunners: ["credo"],
+			defaultRunner: "credo",
+			defaultWhenUnconfigured: true,
+			gate: "smart-default",
+		};
+	}
+
+	if ([".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".ino"].includes(ext)) {
+		return {
+			runnerNames: ["cpp-check"],
+			preferredRunners: ["cpp-check"],
+			defaultRunner: "cpp-check",
+			defaultWhenUnconfigured: true,
+			gate: "smart-default",
+		};
+	}
+
+	if (ext === ".dart") {
+		return {
+			runnerNames: ["dart-analyze"],
+			preferredRunners: ["dart-analyze"],
+			defaultRunner: "dart-analyze",
+			defaultWhenUnconfigured: true,
+			gate: "smart-default",
+		};
+	}
+
+	if (ext === ".gleam") {
+		return {
+			runnerNames: ["gleam-check"],
+			preferredRunners: ["gleam-check"],
+			defaultRunner: "gleam-check",
+			defaultWhenUnconfigured: true,
+			gate: "smart-default",
+		};
+	}
+
+	if ([".ps1", ".psm1", ".psd1"].includes(ext)) {
+		return {
+			runnerNames: ["psscriptanalyzer"],
+			preferredRunners: ["psscriptanalyzer"],
+			defaultRunner: "psscriptanalyzer",
+			defaultWhenUnconfigured: true,
+			gate: "smart-default",
+		};
+	}
+
+	if (ext === ".prisma") {
+		return {
+			runnerNames: ["prisma-validate"],
+			preferredRunners: ["prisma-validate"],
+			defaultRunner: "prisma-validate",
+			defaultWhenUnconfigured: true,
+			gate: "smart-default",
+		};
+	}
+
 	return undefined;
 }
 
@@ -1233,6 +1342,28 @@ export function getAutofixPolicyForFile(
 			toolNames: ["ktlint"],
 			preferredTools: ["ktlint"],
 			defaultTool: "ktlint",
+			defaultWhenUnconfigured: true,
+			gate: "smart-default",
+			safe: true,
+		};
+	}
+
+	if (ext === ".rs") {
+		return {
+			toolNames: ["rust-clippy"],
+			preferredTools: ["rust-clippy"],
+			defaultTool: "rust-clippy",
+			defaultWhenUnconfigured: true,
+			gate: "smart-default",
+			safe: true,
+		};
+	}
+
+	if (ext === ".dart") {
+		return {
+			toolNames: ["dart-analyze"],
+			preferredTools: ["dart-analyze"],
+			defaultTool: "dart-analyze",
 			defaultWhenUnconfigured: true,
 			gate: "smart-default",
 			safe: true,

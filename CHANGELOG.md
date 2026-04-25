@@ -4,6 +4,20 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Linter dispatch runners promoted to always-on for 11 languages** — runners that previously fired only when LSP failed (`mode: "fallback"`) now run alongside LSP unconditionally (`mode: "all"`): `pyright` (Python), `rust-clippy` (Rust), `go-vet` (Go), `shellcheck` (Shell), `tflint` (Terraform), `elixir-check` + `credo` (Elixir), `cpp-check` (C/C++), `dart-analyze` (Dart), `gleam-check` (Gleam), `psscriptanalyzer` (PowerShell), `prisma-validate` (Prisma). These tools provide orthogonal signal to the LSP that was previously invisible on healthy sessions.
+
+### Added
+
+- **Linter policy entries for 9 languages** — `getLinterPolicyForFile` now covers Rust (rust-clippy, smart-default), Shell (shellcheck, smart-default), Terraform (tflint, smart-default), Elixir (credo, smart-default), C/C++ (cpp-check, smart-default), Dart (dart-analyze, smart-default), Gleam (gleam-check, smart-default), PowerShell (psscriptanalyzer, smart-default), and Prisma (prisma-validate, smart-default). These linters now participate in the full policy layer rather than being dispatch-only.
+- **`cargo clippy --fix` autofix for Rust** — `rust-clippy` is now a safe pipeline autofix tool for `.rs` files. After each edit, `cargo clippy --fix --allow-dirty --allow-staged` runs in the nearest `Cargo.toml` directory before dispatch lint, applying machine-fixable clippy suggestions. Gated `smart-default`; skips silently if `cargo` is unavailable or no `Cargo.toml` is found.
+- **`dart fix --apply` autofix for Dart** — `dart-analyze` is now a safe pipeline autofix tool for `.dart` files. After each edit, `dart fix --apply` runs in the nearest `pubspec.yaml` directory before dispatch lint. Gated `smart-default`; skips silently if `dart` is unavailable or no `pubspec.yaml` is found.
+
+### Fixed
+
+- **`ktlint` autofix case missing `continue`** — the `ktlint` branch in `runAutofix` lacked a `continue` guard, causing fall-through into the next tool match on every ktlint run.
+
 ## [3.8.32] - 2026-04-26
 
 ### Fixed
