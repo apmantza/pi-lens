@@ -1028,9 +1028,12 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		// --- Read-Before-Edit Guard: check edits ---
+		// write = full replacement; no prior read needed (you're starting fresh).
+		// edit = partial modification; guard enforced to prevent blind overwrites.
+		const isEditOnly = isToolCallEventType("edit", event);
 		const isWriteOrEdit =
-			isToolCallEventType("write", event) || isToolCallEventType("edit", event);
-		if (isWriteOrEdit && filePath && !pi.getFlag("no-read-guard")) {
+			isToolCallEventType("write", event) || isEditOnly;
+		if (isEditOnly && filePath && !pi.getFlag("no-read-guard")) {
 			const readGuard = runtime.readGuard;
 			const isExistingFile =
 				typeof readGuard?.isNewFile !== "function" ||
