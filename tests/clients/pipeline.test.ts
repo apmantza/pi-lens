@@ -234,6 +234,49 @@ describe("Pipeline", () => {
 			expect(result.output).toContain("File was modified by auto-format/fix");
 		});
 
+		it("surfaces formatter failures instead of plain clean output", async () => {
+			const filePath = createTempFile(
+				tmpDir,
+				"format-fails.ts",
+				"const x = 1;",
+			);
+			vi.mocked(scanForSecrets).mockReturnValue([]);
+			vi.mocked(dispatchLintWithResult).mockResolvedValue({
+				diagnostics: [],
+				blockers: [],
+				warnings: [],
+				baselineWarningCount: 0,
+				fixed: [],
+				resolvedCount: 0,
+				output: "",
+				hasBlockers: false,
+			});
+
+			const formatService = getFormatService("test", true);
+			formatService.formatFile = async (fp: string) => ({
+				filePath: fp,
+				formatters: [
+					{
+						name: "prettier",
+						success: false,
+						changed: false,
+						error: "timed out",
+					},
+				],
+				anyChanged: false,
+				allSucceeded: false,
+			});
+
+			const result = await runPipeline(
+				createMockContext(filePath),
+				createMockDeps({ getFormatService: () => formatService }),
+			);
+
+			expect(result.output).toContain("Auto-format failed");
+			expect(result.output).toContain("prettier: timed out");
+			expect(result.output).not.toMatch(/^✓ .*clean/);
+		});
+
 		it("skips format when --no-autoformat flag is set", async () => {
 			const filePath = createTempFile(tmpDir, "app.ts", "const x = 1;");
 			vi.mocked(scanForSecrets).mockReturnValue([]);

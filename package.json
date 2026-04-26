@@ -25,6 +25,10 @@
 		"audit:rule-catalog": "node scripts/validate-rule-catalog.mjs",
 		"download-grammars": "node scripts/download-grammars.js",
 		"harness:poc": "node scripts/run-harness.mjs cases/ts/pipeline-dispatch-poc --pi-bin \"C:\\Users\\R3LiC\\AppData\\Roaming\\npm\\pi.cmd\"",
+		"harness:python-poc": "node scripts/run-harness.mjs cases/python/pipeline-dispatch-poc --pi-bin \"C:\\Users\\R3LiC\\AppData\\Roaming\\npm\\pi.cmd\"",
+		"harness:ts-format-poc": "node scripts/run-harness.mjs cases/ts/format-default-poc --pi-bin \"C:\\Users\\R3LiC\\AppData\\Roaming\\npm\\pi.cmd\"",
+		"harness:python-autofix-poc": "node scripts/run-harness.mjs cases/python/autofix-default-poc --pi-bin \"C:\\Users\\R3LiC\\AppData\\Roaming\\npm\\pi.cmd\"",
+		"harness:go-poc": "node scripts/run-harness.mjs cases/go/pipeline-dispatch-poc --pi-bin \"C:\\Users\\R3LiC\\AppData\\Roaming\\npm\\pi.cmd\"",
 		"postinstall": "node scripts/download-grammars.js"
 	},
 	"keywords": [

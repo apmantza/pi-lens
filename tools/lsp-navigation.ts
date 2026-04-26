@@ -177,7 +177,11 @@ async function openFileBestEffort(
 	if (!fileContent) return;
 	try {
 		if (typeof lspService.touchFile === "function") {
-			await lspService.touchFile(filePath, fileContent, waitForDiagnostics);
+			await lspService.touchFile(filePath, fileContent, {
+				diagnostics: waitForDiagnostics ? "document" : "none",
+				source: "lsp_navigation",
+				clientScope: waitForDiagnostics ? "all" : "primary",
+			});
 		} else {
 			await lspService.openFile(filePath, fileContent);
 		}

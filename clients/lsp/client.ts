@@ -300,15 +300,23 @@ export interface LSPClientState {
 	connectionDisposed: boolean;
 	lastError: Error | undefined;
 	readonly connection: MessageConnection;
-	readonly diagnostics: Map<string, LSPDiagnostic[]>;
-	readonly diagnosticTimestamps: Map<string, number>;
+	readonly pushDiagnostics: Map<string, LSPDiagnostic[]>;
+	readonly pushDiagnosticTimestamps: Map<string, number>;
+	readonly documentPullDiagnostics: Map<string, LSPDiagnostic[]>;
+	readonly documentPullDiagnosticTimestamps: Map<string, number>;
 	readonly pendingDiagnostics: Map<string, ReturnType<typeof setTimeout>>;
 	readonly diagnosticEmitter: EventEmitter;
 	readonly documentVersions: Map<string, number>;
 	readonly openDocuments: Set<string>;
 	readonly pendingOpens: Set<string>;
-	readonly workspaceDiagnosticsSupport: LSPWorkspaceDiagnosticsSupport;
-	readonly operationSupport: LSPOperationSupport;
+	/** Mutable: updated by applyDynamicCapabilities after registerCapability events */
+	workspaceDiagnosticsSupport: LSPWorkspaceDiagnosticsSupport;
+	/** Mutable: upgraded by applyDynamicCapabilities after registerCapability events */
+	operationSupport: LSPOperationSupport;
+	/** Baseline mode from static initResult — used to revert on unregister */
+	staticDiagnosticsMode: "pull" | "push-only";
+	/** Live dynamic registrations from client/registerCapability: id → method */
+	readonly dynamicRegistrations: Map<string, string>;
 	readonly serverId: string;
 	readonly root: string;
 	readonly lspProcess: LSPProcess;
@@ -330,6 +338,106 @@ function disposeClientConnection(state: LSPClientState): void {
 	}
 }
 
+function mergeDiagnosticLists(
+	push: LSPDiagnostic[] | undefined,
+	pull: LSPDiagnostic[] | undefined,
+): LSPDiagnostic[] {
+	const merged: LSPDiagnostic[] = [];
+	const seen = new Set<string>();
+	for (const diagnostic of [...(push ?? []), ...(pull ?? [])]) {
+		const key = [
+			diagnostic.range.start.line,
+			diagnostic.range.start.character,
+			diagnostic.range.end.line,
+			diagnostic.range.end.character,
+			diagnostic.code ?? "",
+			diagnostic.source ?? "",
+			diagnostic.message,
+		].join(":");
+		if (seen.has(key)) continue;
+		seen.add(key);
+		merged.push(diagnostic);
+	}
+	return merged;
+}
+
+function getMergedDiagnosticsForPath(
+	state: LSPClientState,
+	normalizedPath: string,
+): LSPDiagnostic[] {
+	const legacy = state as unknown as {
+		diagnostics?: Map<string, LSPDiagnostic[]>;
+	};
+	return mergeDiagnosticLists(
+		state.pushDiagnostics?.get(normalizedPath) ??
+			legacy.diagnostics?.get(normalizedPath),
+		state.documentPullDiagnostics?.get(normalizedPath),
+	);
+}
+
+function clearDiagnosticsForPath(
+	state: LSPClientState,
+	normalizedPath: string,
+): void {
+	const legacy = state as unknown as {
+		diagnostics?: Map<string, LSPDiagnostic[]>;
+		diagnosticTimestamps?: Map<string, number>;
+	};
+	state.pushDiagnostics?.delete(normalizedPath);
+	state.pushDiagnosticTimestamps?.delete(normalizedPath);
+	state.documentPullDiagnostics?.delete(normalizedPath);
+	state.documentPullDiagnosticTimestamps?.delete(normalizedPath);
+	legacy.diagnostics?.delete(normalizedPath);
+	legacy.diagnosticTimestamps?.delete(normalizedPath);
+}
+
+// Methods that can be registered dynamically and map to operationSupport keys
+const DYNAMIC_OPERATION_METHOD_MAP: Record<string, keyof LSPOperationSupport> =
+	{
+		"textDocument/definition": "definition",
+		"textDocument/references": "references",
+		"textDocument/hover": "hover",
+		"textDocument/signatureHelp": "signatureHelp",
+		"textDocument/documentSymbol": "documentSymbol",
+		"workspace/symbol": "workspaceSymbol",
+		"textDocument/codeAction": "codeAction",
+		"textDocument/rename": "rename",
+		"textDocument/implementation": "implementation",
+		"textDocument/prepareCallHierarchy": "callHierarchy",
+	};
+
+export function applyDynamicCapabilities(state: LSPClientState): void {
+	const registeredMethods = new Set(state.dynamicRegistrations.values());
+
+	const hasDynamicPull =
+		registeredMethods.has("textDocument/diagnostic") ||
+		registeredMethods.has("workspace/diagnostic");
+
+	if (hasDynamicPull) {
+		state.workspaceDiagnosticsSupport = {
+			advertised: true,
+			mode: "pull",
+			diagnosticProviderKind: "dynamic",
+		};
+	} else if (
+		state.staticDiagnosticsMode === "push-only" &&
+		state.workspaceDiagnosticsSupport.diagnosticProviderKind === "dynamic"
+	) {
+		// Was only dynamically registered, now unregistered — revert to push-only
+		state.workspaceDiagnosticsSupport = {
+			advertised: false,
+			mode: "push-only",
+			diagnosticProviderKind: "none",
+		};
+	}
+
+	for (const [method, key] of Object.entries(DYNAMIC_OPERATION_METHOD_MAP)) {
+		if (registeredMethods.has(method)) {
+			state.operationSupport[key] = true;
+		}
+	}
+}
+
 function setupIncomingHandlers(
 	state: LSPClientState,
 	initialization: Record<string, unknown> | undefined,
@@ -345,8 +453,8 @@ function setupIncomingHandlers(
 			if (existingTimer) clearTimeout(existingTimer);
 
 			const timer = setTimeout(() => {
-				state.diagnostics.set(normalizedPath, newDiags);
-				state.diagnosticTimestamps.set(normalizedPath, Date.now());
+				state.pushDiagnostics.set(normalizedPath, newDiags);
+				state.pushDiagnosticTimestamps.set(normalizedPath, Date.now());
 				state.pendingDiagnostics.delete(normalizedPath);
 				state.diagnosticEmitter.emit("diagnostics", normalizedPath);
 			}, DIAGNOSTICS_DEBOUNCE_MS);
@@ -358,8 +466,32 @@ function setupIncomingHandlers(
 	state.connection.onRequest("workspace/workspaceFolders", () => [
 		{ name: "workspace", uri: pathToFileURL(state.root).href },
 	]);
-	state.connection.onRequest("client/registerCapability", async () => {});
-	state.connection.onRequest("client/unregisterCapability", async () => {});
+	state.connection.onRequest(
+		"client/registerCapability",
+		async (params: {
+			registrations?: Array<{ id: string; method: string }>;
+		}) => {
+			for (const reg of params?.registrations ?? []) {
+				if (reg.id && reg.method) {
+					state.dynamicRegistrations.set(reg.id, reg.method);
+				}
+			}
+			applyDynamicCapabilities(state);
+		},
+	);
+	state.connection.onRequest(
+		"client/unregisterCapability",
+		async (params: {
+			unregisterations?: Array<{ id: string }>;
+		}) => {
+			for (const unreg of params?.unregisterations ?? []) {
+				if (unreg.id) {
+					state.dynamicRegistrations.delete(unreg.id);
+				}
+			}
+			applyDynamicCapabilities(state);
+		},
+	);
 	state.connection.onRequest("workspace/configuration", async () => [
 		initialization ?? {},
 	]);
@@ -405,8 +537,8 @@ async function clientRequestPullDiagnostics(
 		const normalizedPath = normalizeMapKey(filePath);
 		const primaryItems = report.items ?? [];
 		const now = Date.now();
-		state.diagnostics.set(normalizedPath, primaryItems);
-		state.diagnosticTimestamps.set(normalizedPath, now);
+		state.documentPullDiagnostics.set(normalizedPath, primaryItems);
+		state.documentPullDiagnosticTimestamps.set(normalizedPath, now);
 		let totalCount = primaryItems.length;
 
 		if (report.relatedDocuments) {
@@ -415,8 +547,14 @@ async function clientRequestPullDiagnostics(
 			)) {
 				const relatedPath = uriToPath(relatedUri);
 				const relatedItems = related?.items ?? [];
-				state.diagnostics.set(normalizeMapKey(relatedPath), relatedItems);
-				state.diagnosticTimestamps.set(normalizeMapKey(relatedPath), now);
+				state.documentPullDiagnostics.set(
+					normalizeMapKey(relatedPath),
+					relatedItems,
+				);
+				state.documentPullDiagnosticTimestamps.set(
+					normalizeMapKey(relatedPath),
+					now,
+				);
 				totalCount += relatedItems.length;
 			}
 		}
@@ -452,7 +590,7 @@ export async function clientWaitForDiagnostics(
 		if (latestCount > 0) return;
 	}
 
-	if (state.diagnostics.has(normalizedPath)) return;
+	if (getMergedDiagnosticsForPath(state, normalizedPath).length > 0) return;
 
 	return new Promise<void>((resolve) => {
 		let debounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -498,7 +636,7 @@ export async function handleNotifyOpen(
 		// waitForDiagnostics fast-paths instead of waiting up to 5s for TypeScript
 		// to re-publish what it already knows (formatting doesn't change semantics).
 		if (!preserveDiagnostics) {
-			state.diagnostics.delete(normalizedPath);
+			clearDiagnosticsForPath(state, normalizedPath);
 		}
 		await safeSendNotification(state.connection, "textDocument/didChange", {
 			textDocument: { uri, version },
@@ -509,7 +647,7 @@ export async function handleNotifyOpen(
 
 	state.pendingOpens.add(normalizedPath);
 	state.documentVersions.set(normalizedPath, 0);
-	state.diagnostics.delete(normalizedPath); // always clear for initial open
+	clearDiagnosticsForPath(state, normalizedPath); // always clear for initial open
 
 	// Send workspace notification first (like opencode does)
 	await safeSendNotification(
@@ -551,7 +689,7 @@ export async function handleNotifyChange(
 	state.documentVersions.set(normalizedPath, version);
 	// Clear stale diagnostics before sending new content so waitForDiagnostics
 	// doesn't return immediately with the previous edit's results.
-	state.diagnostics.delete(normalizedPath);
+	clearDiagnosticsForPath(state, normalizedPath);
 	await safeSendNotification(state.connection, "textDocument/didChange", {
 		textDocument: { uri, version },
 		contentChanges: [{ text: content }],
@@ -703,8 +841,10 @@ export async function createLSPClient(options: {
 		connectionDisposed: false,
 		lastError: undefined,
 		connection,
-		diagnostics: new Map(),
-		diagnosticTimestamps: new Map(),
+		pushDiagnostics: new Map(),
+		pushDiagnosticTimestamps: new Map(),
+		documentPullDiagnostics: new Map(),
+		documentPullDiagnosticTimestamps: new Map(),
 		pendingDiagnostics: new Map(),
 		diagnosticEmitter,
 		documentVersions: new Map(),
@@ -714,6 +854,8 @@ export async function createLSPClient(options: {
 		workspaceDiagnosticsSupport:
 			undefined as unknown as LSPWorkspaceDiagnosticsSupport,
 		operationSupport: undefined as unknown as LSPOperationSupport,
+		staticDiagnosticsMode: "push-only",
+		dynamicRegistrations: new Map(),
 		serverId,
 		root,
 		lspProcess,
@@ -790,11 +932,9 @@ export async function createLSPClient(options: {
 		);
 	}
 
-	(
-		state as { workspaceDiagnosticsSupport: LSPWorkspaceDiagnosticsSupport }
-	).workspaceDiagnosticsSupport = detectWorkspaceDiagnosticsSupport(initResult);
-	(state as { operationSupport: LSPOperationSupport }).operationSupport =
-		detectOperationSupport(initResult);
+	state.workspaceDiagnosticsSupport = detectWorkspaceDiagnosticsSupport(initResult);
+	state.operationSupport = detectOperationSupport(initResult);
+	state.staticDiagnosticsMode = state.workspaceDiagnosticsSupport.mode;
 
 	await safeSendNotification(connection, "initialized", {});
 	if (initialization) {
@@ -825,15 +965,22 @@ export async function createLSPClient(options: {
 		},
 
 		getDiagnostics(filePath) {
-			return state.diagnostics.get(normalizeMapKey(filePath)) ?? [];
+			return getMergedDiagnosticsForPath(state, normalizeMapKey(filePath));
 		},
 
 		getAllDiagnostics() {
 			const result = new Map<string, { diags: LSPDiagnostic[]; ts: number }>();
-			for (const [key, diags] of state.diagnostics) {
+			const keys = new Set([
+				...state.pushDiagnostics.keys(),
+				...state.documentPullDiagnostics.keys(),
+			]);
+			for (const key of keys) {
 				result.set(key, {
-					diags,
-					ts: state.diagnosticTimestamps.get(key) ?? 0,
+					diags: getMergedDiagnosticsForPath(state, key),
+					ts: Math.max(
+						state.pushDiagnosticTimestamps.get(key) ?? 0,
+						state.documentPullDiagnosticTimestamps.get(key) ?? 0,
+					),
 				});
 			}
 			return result;
@@ -841,11 +988,18 @@ export async function createLSPClient(options: {
 
 		pruneDiagnostics(predicate) {
 			let removed = 0;
-			for (const [key, diags] of state.diagnostics) {
-				const ts = state.diagnosticTimestamps.get(key) ?? 0;
+			const keys = new Set([
+				...state.pushDiagnostics.keys(),
+				...state.documentPullDiagnostics.keys(),
+			]);
+			for (const key of keys) {
+				const diags = getMergedDiagnosticsForPath(state, key);
+				const ts = Math.max(
+					state.pushDiagnosticTimestamps.get(key) ?? 0,
+					state.documentPullDiagnosticTimestamps.get(key) ?? 0,
+				);
 				if (!predicate(key, ts, diags)) continue;
-				state.diagnostics.delete(key);
-				state.diagnosticTimestamps.delete(key);
+				clearDiagnosticsForPath(state, key);
 				removed++;
 			}
 			return removed;
@@ -944,7 +1098,10 @@ export async function createLSPClient(options: {
 						end: { line: endLine, character: endCharacter },
 					},
 					context: {
-						diagnostics: state.diagnostics.get(normalizeMapKey(filePath)) ?? [],
+						diagnostics: getMergedDiagnosticsForPath(
+							state,
+							normalizeMapKey(filePath),
+						),
 					},
 				},
 			);

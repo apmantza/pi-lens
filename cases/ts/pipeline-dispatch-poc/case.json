@@ -2,6 +2,8 @@
 	"name": "ts-pipeline-dispatch-poc",
 	"description": "PoC headless pi case that updates a tiny TypeScript project and captures pipeline/dispatch feedback.",
 	"model": "opencode/minimax-m2.5-free",
+	"allowedTools": ["read", "write", "edit", "bash"],
 	"expectedFiles": ["src/index.ts", "src/totals.ts"],
-	"expectedToolCalls": ["read", "write"]
+	"expectedToolCalls": ["read", "write"],
+	"forbiddenChangedFiles": ["package.json", "tsconfig.json"]
 }

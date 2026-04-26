@@ -65,6 +65,15 @@ const DIAGNOSTICS_SEMANTIC_SETTLE_WAIT_MS = Math.max(
 		10,
 	) || 400,
 );
+// Once the fastest client has diagnostics, remaining clients get this window before
+// we proceed with whatever results are ready. 0 disables early-unblock.
+const EARLY_UNBLOCK_GRACE_MS = Math.max(
+	0,
+	Number.parseInt(
+		process.env.PI_LENS_LSP_EARLY_UNBLOCK_GRACE_MS ?? "400",
+		10,
+	) || 400,
+);
 const CASCADE_DIAGNOSTICS_TTL_MS = 240_000;
 const SESSIONSTART_LOG_DIR = path.join(os.homedir(), ".pi-lens");
 const SESSIONSTART_LOG = path.join(SESSIONSTART_LOG_DIR, "sessionstart.log");
@@ -82,6 +91,16 @@ function logSessionStart(msg: string): void {
 export interface SpawnedServer {
 	client: LSPClientInfo;
 	info: LSPServerInfo;
+}
+
+export type LSPDiagnosticsMode = "none" | "document" | "full";
+export type LSPTouchClientScope = "primary" | "all";
+
+export interface LSPTouchFileOptions {
+	diagnostics?: LSPDiagnosticsMode;
+	source?: string;
+	clientScope?: LSPTouchClientScope;
+	maxClientWaitMs?: number;
 }
 
 // --- Service ---
@@ -483,24 +502,25 @@ export class LSPService {
 
 	/**
 	 * Touch a file like OpenCode's LSP flow: ensure document is open/synced,
-	 * and optionally wait briefly for diagnostics warm-up.
+	 * and optionally collect diagnostics with explicit scope.
 	 */
 	async touchFile(
 		filePath: string,
 		content: string,
-		waitForDiagnostics = false,
-		source = "unknown",
-		useAllClients = false,
-		maxClientWaitMs?: number,
+		options: LSPTouchFileOptions = {},
 	): Promise<void> {
 		if (this.checkDestroyed()) return;
 		const startedAt = Date.now();
 		const normalizedPath = normalizeMapKey(filePath);
-		const clientScope = useAllClients ? "all" : "primary";
+		const diagnosticsMode = options.diagnostics ?? "none";
+		const source = options.source ?? "unknown";
+		const clientScope: LSPTouchClientScope =
+			options.clientScope ?? (diagnosticsMode === "full" ? "all" : "primary");
+		const useAllClients = clientScope === "all";
 		const spawned = useAllClients
 			? await this.getClientsForFile(filePath)
-			: await this.getClientForFile(filePath, maxClientWaitMs).then((entry) =>
-					entry ? [entry] : [],
+			: await this.getClientForFile(filePath, options.maxClientWaitMs).then(
+					(entry) => (entry ? [entry] : []),
 				);
 		if (spawned.length === 0) {
 			logLatency({
@@ -511,6 +531,7 @@ export class LSPService {
 				metadata: {
 					serverCountReady: 0,
 					clientScope,
+					diagnosticsMode,
 					failureKind: "no_clients",
 				},
 			});
@@ -518,7 +539,12 @@ export class LSPService {
 		}
 
 		if (
-			this.shouldSkipTouch(filePath, content, clientScope, waitForDiagnostics)
+			this.shouldSkipTouch(
+				filePath,
+				content,
+				clientScope,
+				diagnosticsMode !== "none",
+			)
 		) {
 			logLatency({
 				type: "phase",
@@ -528,7 +554,7 @@ export class LSPService {
 				metadata: {
 					serverCountReady: spawned.length,
 					clientScope,
-					waitForDiagnostics,
+					diagnosticsMode,
 					source,
 					failureKind: "success",
 					skipped: true,
@@ -545,11 +571,12 @@ export class LSPService {
 			),
 		);
 
-		if (waitForDiagnostics) {
+		if (diagnosticsMode !== "none") {
+			const timeoutMs = diagnosticsMode === "full" ? 3000 : 1200;
 			await Promise.all(
 				spawned.map((entry) =>
 					entry.client
-						.waitForDiagnostics(filePath, 1200)
+						.waitForDiagnostics(filePath, timeoutMs)
 						.catch(() => undefined),
 				),
 			);
@@ -565,7 +592,7 @@ export class LSPService {
 			metadata: {
 				serverCountReady: spawned.length,
 				clientScope,
-				waitForDiagnostics,
+				diagnosticsMode,
 				source,
 				failureKind: "success",
 			},
@@ -605,33 +632,71 @@ export class LSPService {
 		// and semantic diagnostics shortly after. Keep the aggregate wait short for
 		// interactive edits, then do one brief settle pass only when the first
 		// response was empty and arrived quickly.
-		const perServer = await Promise.all(
-			spawned.map(async (entry) => {
-				const waitStart = Date.now();
+		//
+		// Early-unblock: each client writes into pendingResults as it finishes. The
+		// outer race exits as soon as all clients are done OR the first client finishes
+		// and the grace window elapses, whichever is sooner. Remaining slots are left
+		// undefined and filled with zero-diagnostic defaults before merging.
+		type PerServerEntry = {
+			serverId: string;
+			waitMs: number;
+			diagnosticCount: number;
+			diagnostics: import("./client.js").LSPDiagnostic[];
+		};
+		const pendingResults: (PerServerEntry | undefined)[] = new Array(
+			spawned.length,
+		).fill(undefined);
+
+		const clientWaits = spawned.map(async (entry, index) => {
+			const waitStart = Date.now();
+			await entry.client.waitForDiagnostics(
+				filePath,
+				DIAGNOSTICS_AGGREGATE_WAIT_MS,
+			);
+			let diagnostics = entry.client.getDiagnostics(filePath);
+			const firstWaitMs = Date.now() - waitStart;
+			if (
+				diagnostics.length === 0 &&
+				firstWaitMs < DIAGNOSTICS_SEMANTIC_SETTLE_THRESHOLD_MS
+			) {
 				await entry.client.waitForDiagnostics(
 					filePath,
-					DIAGNOSTICS_AGGREGATE_WAIT_MS,
+					DIAGNOSTICS_SEMANTIC_SETTLE_WAIT_MS,
 				);
-				let diagnostics = entry.client.getDiagnostics(filePath);
-				const firstWaitMs = Date.now() - waitStart;
-				if (
-					diagnostics.length === 0 &&
-					firstWaitMs < DIAGNOSTICS_SEMANTIC_SETTLE_THRESHOLD_MS
-				) {
-					await entry.client.waitForDiagnostics(
-						filePath,
-						DIAGNOSTICS_SEMANTIC_SETTLE_WAIT_MS,
-					);
-					diagnostics = entry.client.getDiagnostics(filePath);
-				}
-				return {
-					serverId: entry.info.id,
-					waitMs: Date.now() - waitStart,
-					diagnosticCount: diagnostics.length,
-					diagnostics,
-				};
-			}),
-		);
+				diagnostics = entry.client.getDiagnostics(filePath);
+			}
+			pendingResults[index] = {
+				serverId: entry.info.id,
+				waitMs: Date.now() - waitStart,
+				diagnosticCount: diagnostics.length,
+				diagnostics,
+			};
+			return pendingResults[index]!;
+		});
+
+		if (EARLY_UNBLOCK_GRACE_MS > 0 && spawned.length > 1) {
+			await Promise.race([
+				Promise.all(clientWaits),
+				Promise.race(clientWaits).then(
+					() =>
+						new Promise<void>((resolve) =>
+							setTimeout(resolve, EARLY_UNBLOCK_GRACE_MS),
+						),
+				),
+			]);
+		} else {
+			await Promise.all(clientWaits);
+		}
+
+		const earlyUnblockedCount = pendingResults.filter(
+			(r) => r === undefined,
+		).length;
+		const perServer: PerServerEntry[] = pendingResults.map((r, i) => r ?? {
+			serverId: spawned[i].info.id,
+			waitMs: DIAGNOSTICS_AGGREGATE_WAIT_MS,
+			diagnosticCount: 0,
+			diagnostics: [],
+		});
 
 		const merged: import("./client.js").LSPDiagnostic[] = [];
 		const seen = new Set<string>();
@@ -668,6 +733,7 @@ export class LSPService {
 				serverCountWithDiagnostics: serversWithDiagnostics,
 				mergedCount: merged.length,
 				dedupDroppedCount: rawCount - merged.length,
+				earlyUnblockedCount,
 				failureKind,
 				health: failureKind === "success" ? "ok" : "ok_empty",
 				servers: perServer.map((entry) => ({

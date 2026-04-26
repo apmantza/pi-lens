@@ -32,7 +32,10 @@ import {
 } from "./dispatch/runners/utils/runner-helpers.js";
 import type { PiAgentAPI } from "./dispatch/types.js";
 import { detectFileKind, getFileKindLabel } from "./file-kinds.js";
-import { detectFileChangedAfterCommand } from "./file-utils.js";
+import {
+	detectFileChangedAfterCommand,
+	isExcludedDirName,
+} from "./file-utils.js";
 import type { FormatService } from "./format-service.js";
 import { logLatency } from "./latency-logger.js";
 import { getLSPService } from "./lsp/index.js";
@@ -54,6 +57,56 @@ import {
 
 const LSP_MAX_FILE_BYTES = RUNTIME_CONFIG.pipeline.lspMaxFileBytes;
 const LSP_MAX_FILE_LINES = RUNTIME_CONFIG.pipeline.lspMaxFileLines;
+const AUTOFIX_CHANGED_FILE_SCAN_LIMIT = 5000;
+
+type FileSnapshot = Map<string, { mtimeMs: number; size: number }>;
+
+function snapshotProjectFiles(root: string): FileSnapshot {
+	const snapshot: FileSnapshot = new Map();
+	const stack = [path.resolve(root)];
+	while (stack.length > 0 && snapshot.size < AUTOFIX_CHANGED_FILE_SCAN_LIMIT) {
+		const dir = stack.pop()!;
+		let entries: nodeFs.Dirent[];
+		try {
+			entries = nodeFs.readdirSync(dir, { withFileTypes: true });
+		} catch {
+			continue;
+		}
+		for (const entry of entries) {
+			const fullPath = path.join(dir, entry.name);
+			if (entry.isDirectory()) {
+				if (!isExcludedDirName(entry.name)) stack.push(fullPath);
+				continue;
+			}
+			if (!entry.isFile()) continue;
+			try {
+				const stat = nodeFs.statSync(fullPath);
+				snapshot.set(path.resolve(fullPath), {
+					mtimeMs: stat.mtimeMs,
+					size: stat.size,
+				});
+			} catch {
+				// ignore vanished files
+			}
+		}
+	}
+	return snapshot;
+}
+
+function diffProjectSnapshot(root: string, before: FileSnapshot): string[] {
+	const after = snapshotProjectFiles(root);
+	const changed = new Set<string>();
+	for (const [filePath, next] of after) {
+		const prev = before.get(filePath);
+		if (!prev || prev.mtimeMs !== next.mtimeMs || prev.size !== next.size) {
+			changed.add(filePath);
+		}
+	}
+	for (const filePath of before.keys()) {
+		if (!after.has(filePath)) changed.add(filePath);
+	}
+	return [...changed].sort();
+}
 
 function exceedsLspSyncLimits(
 	_filePath: string,
@@ -124,6 +177,8 @@ export interface PipelineResult {
 	isError: boolean;
 	/** True if file was modified by format/autofix */
 	fileModified: boolean;
+	/** Files modified by pi-lens format/autofix, including side-effect files. */
+	changedFiles?: string[];
 }
 
 // --- Phase timing helpers ---
@@ -162,29 +217,6 @@ function createPhaseTracker(toolName: string, filePath: string): PhaseTracker {
 }
 
 // --- ESLint autofix helpers ---
-
-const JSTS_EXTS = new Set([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"]);
-const CSS_EXTS = new Set([".css", ".scss", ".sass", ".less"]);
-const RUBY_EXTS = new Set([".rb", ".rake", ".gemspec", ".ru"]);
-const SQL_EXTS = new Set([".sql"]);
-const AUTOFIX_EXTS = new Set([
-	...JSTS_EXTS,
-	".json",
-	".jsonc",
-	...CSS_EXTS,
-	".py",
-	".pyi",
-	...RUBY_EXTS,
-	...SQL_EXTS,
-	".kt",
-	".kts",
-	".rs",
-	".dart",
-]);
-
-function supportsAutofix(filePath: string): boolean {
-	return AUTOFIX_EXTS.has(path.extname(filePath).toLowerCase());
-}
 
 export {
 	hasEslintConfig,
@@ -318,12 +350,9 @@ async function tryKtlintFix(filePath: string, cwd: string): Promise<number> {
 	);
 }
 
-async function tryRustClippyFix(
-	filePath: string,
-	_cwd: string,
-): Promise<number> {
+async function tryRustClippyFix(filePath: string): Promise<string[]> {
 	const check = await safeSpawnAsync("cargo", ["--version"], { timeout: 5000 });
-	if (check.error || check.status !== 0) return 0;
+	if (check.error || check.status !== 0) return [];
 
 	let dir = path.dirname(path.resolve(filePath));
 	const root = path.parse(dir).root;
@@ -337,20 +366,21 @@ async function tryRustClippyFix(
 		if (parent === dir) break;
 		dir = parent;
 	}
-	if (!cargoDir) return 0;
+	if (!cargoDir) return [];
 
-	return detectFileChangedAfterCommand(
-		filePath,
+	const before = snapshotProjectFiles(cargoDir);
+	const result = await safeSpawnAsync(
 		"cargo",
 		["clippy", "--fix", "--allow-dirty", "--allow-staged", "-q"],
-		cargoDir,
-		[0],
+		{ timeout: 30000, cwd: cargoDir },
 	);
+	if (result.error || result.status !== 0) return [];
+	return diffProjectSnapshot(cargoDir, before);
 }
 
-async function tryDartFix(filePath: string, _cwd: string): Promise<number> {
+async function tryDartFix(filePath: string): Promise<string[]> {
 	const check = await safeSpawnAsync("dart", ["--version"], { timeout: 5000 });
-	if (check.error || check.status !== 0) return 0;
+	if (check.error || check.status !== 0) return [];
 
 	let dir = path.dirname(path.resolve(filePath));
 	const root = path.parse(dir).root;
@@ -364,54 +394,18 @@ async function tryDartFix(filePath: string, _cwd: string): Promise<number> {
 		if (parent === dir) break;
 		dir = parent;
 	}
-	if (!pubspecDir) return 0;
+	if (!pubspecDir) return [];
 
-	return detectFileChangedAfterCommand(
-		filePath,
-		"dart",
-		["fix", "--apply"],
-		pubspecDir,
-		[0],
-	);
+	const before = snapshotProjectFiles(pubspecDir);
+	const result = await safeSpawnAsync("dart", ["fix", "--apply"], {
+		timeout: 30000,
+		cwd: pubspecDir,
+	});
+	if (result.error || result.status !== 0) return [];
+	return diffProjectSnapshot(pubspecDir, before);
 }
 
 // --- Pipeline phase helpers ---
-
-async function syncLspFile(
-	filePath: string,
-	fileContent: string,
-	_cwd: string,
-	getFlag: PipelineContext["getFlag"],
-	dbg: PipelineContext["dbg"],
-	_ruffClient: RuffClient,
-	_biomeClient: BiomeClient,
-): Promise<{ completed: boolean; phaseEnded: boolean }> {
-	if (getFlag("no-lsp")) {
-		return { completed: true, phaseEnded: false };
-	}
-
-	const deferLspSync = !getFlag("no-autofix") && supportsAutofix(filePath);
-
-	if (deferLspSync) {
-		return { completed: true, phaseEnded: true };
-	}
-
-	const limitCheck = exceedsLspSyncLimits(filePath, fileContent);
-	if (limitCheck.tooLarge) {
-		dbg(`LSP sync skipped for ${filePath}: ${limitCheck.reason}`);
-		return { completed: true, phaseEnded: false };
-	}
-
-	try {
-		const lspService = getLSPService();
-		if (lspService.supportsLSP(filePath)) {
-			await lspService.openFile(filePath, fileContent);
-		}
-	} catch (err) {
-		dbg(`LSP sync error: ${err}`);
-	}
-	return { completed: true, phaseEnded: false };
-}
 
 async function runAutofix(
 	filePath: string,
@@ -423,6 +417,7 @@ async function runAutofix(
 	fixedCount: number;
 	autofixTools: string[];
 	attemptedTools: string[];
+	changedFiles: string[];
 	needsContentRefresh: boolean;
 	skipReason?: string;
 }> {
@@ -431,6 +426,8 @@ async function runAutofix(
 	let fixedCount = 0;
 	const autofixTools: string[] = [];
 	const attemptedTools: string[] = [];
+	const changedFiles = new Set<string>();
+	const markTargetChanged = () => changedFiles.add(path.resolve(filePath));
 	let needsContentRefresh = false;
 
 	if (fixedThisTurn.has(filePath)) {
@@ -439,6 +436,7 @@ async function runAutofix(
 			fixedCount,
 			autofixTools,
 			attemptedTools,
+			changedFiles: [],
 			needsContentRefresh,
 			skipReason: "already_fixed_this_turn",
 		};
@@ -450,6 +448,7 @@ async function runAutofix(
 			fixedCount,
 			autofixTools,
 			attemptedTools,
+			changedFiles: [],
 			needsContentRefresh,
 			skipReason: "disabled_by_flag",
 		};
@@ -477,6 +476,7 @@ async function runAutofix(
 			fixedCount,
 			autofixTools,
 			attemptedTools,
+			changedFiles: [],
 			needsContentRefresh,
 			skipReason: "no_policy",
 		};
@@ -488,6 +488,7 @@ async function runAutofix(
 			fixedCount,
 			autofixTools,
 			attemptedTools,
+			changedFiles: [],
 			needsContentRefresh,
 			skipReason: "no_safe_tools",
 		};
@@ -508,6 +509,7 @@ async function runAutofix(
 				fixedCount += result.fixed;
 				autofixTools.push(`ruff:${result.fixed}`);
 				fixedThisTurn.add(filePath);
+				markTargetChanged();
 				dbg(`autofix: ruff fixed ${result.fixed} issue(s) in ${filePath}`);
 				needsContentRefresh = true;
 			}
@@ -527,6 +529,7 @@ async function runAutofix(
 				fixedCount += result.fixed;
 				autofixTools.push(`biome:${result.fixed}`);
 				fixedThisTurn.add(filePath);
+				markTargetChanged();
 				dbg(`autofix: biome fixed ${result.fixed} issue(s) in ${filePath}`);
 				needsContentRefresh = true;
 			}
@@ -539,6 +542,7 @@ async function runAutofix(
 				fixedCount += eslintFixed;
 				autofixTools.push(`eslint:${eslintFixed}`);
 				fixedThisTurn.add(filePath);
+				markTargetChanged();
 				dbg(`autofix: eslint fixed ${eslintFixed} issue(s) in ${filePath}`);
 				needsContentRefresh = true;
 			}
@@ -551,6 +555,7 @@ async function runAutofix(
 				fixedCount += stylelintFixed;
 				autofixTools.push(`stylelint:${stylelintFixed}`);
 				fixedThisTurn.add(filePath);
+				markTargetChanged();
 				dbg(
 					`autofix: stylelint fixed ${stylelintFixed} issue(s) in ${filePath}`,
 				);
@@ -565,6 +570,7 @@ async function runAutofix(
 				fixedCount += sqlfluffFixed;
 				autofixTools.push(`sqlfluff:${sqlfluffFixed}`);
 				fixedThisTurn.add(filePath);
+				markTargetChanged();
 				dbg(`autofix: sqlfluff fixed ${sqlfluffFixed} issue(s) in ${filePath}`);
 				needsContentRefresh = true;
 			}
@@ -577,6 +583,7 @@ async function runAutofix(
 				fixedCount += rubocopFixed;
 				autofixTools.push(`rubocop:${rubocopFixed}`);
 				fixedThisTurn.add(filePath);
+				markTargetChanged();
 				dbg(`autofix: rubocop fixed ${rubocopFixed} issue(s) in ${filePath}`);
 				needsContentRefresh = true;
 			}
@@ -589,6 +596,7 @@ async function runAutofix(
 				fixedCount += ktlintFixed;
 				autofixTools.push(`ktlint:${ktlintFixed}`);
 				fixedThisTurn.add(filePath);
+				markTargetChanged();
 				dbg(`autofix: ktlint fixed ${ktlintFixed} issue(s) in ${filePath}`);
 				needsContentRefresh = true;
 			}
@@ -596,13 +604,15 @@ async function runAutofix(
 		}
 
 		if (toolName === "rust-clippy") {
-			const clippyFixed = await tryRustClippyFix(filePath, cwd);
-			if (clippyFixed > 0) {
-				fixedCount += clippyFixed;
-				autofixTools.push(`rust-clippy:${clippyFixed}`);
+			const clippyChangedFiles = await tryRustClippyFix(filePath);
+			if (clippyChangedFiles.length > 0) {
+				fixedCount += clippyChangedFiles.length;
+				autofixTools.push(`rust-clippy:${clippyChangedFiles.length}`);
 				fixedThisTurn.add(filePath);
+				for (const changedFile of clippyChangedFiles)
+					changedFiles.add(changedFile);
 				dbg(
-					`autofix: rust-clippy fixed ${clippyFixed} issue(s) in ${filePath}`,
+					`autofix: rust-clippy changed ${clippyChangedFiles.length} file(s) from ${filePath}`,
 				);
 				needsContentRefresh = true;
 			}
@@ -610,12 +620,16 @@ async function runAutofix(
 		}
 
 		if (toolName === "dart-analyze") {
-			const dartFixed = await tryDartFix(filePath, cwd);
-			if (dartFixed > 0) {
-				fixedCount += dartFixed;
-				autofixTools.push(`dart-analyze:${dartFixed}`);
+			const dartChangedFiles = await tryDartFix(filePath);
+			if (dartChangedFiles.length > 0) {
+				fixedCount += dartChangedFiles.length;
+				autofixTools.push(`dart-analyze:${dartChangedFiles.length}`);
 				fixedThisTurn.add(filePath);
-				dbg(`autofix: dart fix applied ${dartFixed} change(s) in ${filePath}`);
+				for (const changedFile of dartChangedFiles)
+					changedFiles.add(changedFile);
+				dbg(
+					`autofix: dart fix changed ${dartChangedFiles.length} file(s) from ${filePath}`,
+				);
 				needsContentRefresh = true;
 			}
 		}
@@ -631,6 +645,7 @@ async function runAutofix(
 		fixedCount,
 		autofixTools,
 		attemptedTools,
+		changedFiles: [...changedFiles],
 		needsContentRefresh,
 	};
 }
@@ -656,9 +671,13 @@ async function resyncLspFile(
 			// Format-only resyncs preserve the existing diagnostics cache so
 			// waitForDiagnostics fast-paths instead of sitting the full 5s timeout
 			// waiting for TypeScript to re-confirm what it already knows.
-			await lspService.openFile(filePath, fileContent, {
-				preserveDiagnostics: formatChanged,
-			});
+			if (formatChanged) {
+				await lspService.openFile(filePath, fileContent, {
+					preserveDiagnostics: true,
+				});
+			} else {
+				await lspService.openFile(filePath, fileContent);
+			}
 		}
 	} catch (err) {
 		dbg(`LSP resync after autofix error: ${err}`);
@@ -787,7 +806,7 @@ export async function runPipeline(
 	deps: PipelineDeps,
 ): Promise<PipelineResult> {
 	const { filePath, cwd, toolName, getFlag, dbg } = ctx;
-	const { biomeClient, ruffClient, getFormatService } = deps;
+	const { getFormatService } = deps;
 
 	const phase = createPhaseTracker(toolName, filePath);
 	const pipelineStart = Date.now();
@@ -820,6 +839,7 @@ export async function runPipeline(
 				hasBlockers: true,
 				isError: true,
 				fileModified: false,
+				changedFiles: [],
 			};
 		}
 	}
@@ -828,7 +848,8 @@ export async function runPipeline(
 	phase.start("format");
 	let formatChanged = false;
 	let formattersUsed: string[] = [];
-	let needsContentRefresh = false;
+	const formatFailures: string[] = [];
+	const piChangedFiles = new Set<string>();
 	if (!getFlag("no-autoformat") && fileContent) {
 		const formatService = getFormatService();
 		try {
@@ -837,62 +858,53 @@ export async function runPipeline(
 			formattersUsed = result.formatters.map((f) => f.name);
 			if (result.anyChanged) {
 				formatChanged = true;
-				needsContentRefresh = true;
 				dbg(
 					`autoformat: ${result.formatters.map((f) => `${f.name}(${f.changed ? "changed" : "unchanged"})`).join(", ")}`,
 				);
+				piChangedFiles.add(path.resolve(filePath));
+				try {
+					fileContent = nodeFs.readFileSync(filePath, "utf-8");
+				} catch {
+					fileContent = undefined;
+				}
 			}
 			if (!result.allSucceeded) {
 				const failures = result.formatters.filter((f) => !f.success);
+				formatFailures.push(
+					...failures.map((f) => `${f.name}: ${f.error ?? "unknown error"}`),
+				);
 				dbg(
 					`autoformat: ${failures.map((f) => `${f.name} failed: ${f.error ?? "unknown error"}`).join("; ")}`,
 				);
 			}
 		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			formatFailures.push(message);
 			dbg(`autoformat error: ${err}`);
 		}
 	}
 	phase.end("format", { formattersUsed, formatChanged });
 
-	// --- 4. LSP file sync ---
-	// Awaited so that dispatch lint (phase 6) and cascade diagnostics (phase 8)
-	// run with fresh LSP state. Fire-and-forget would cause stale diagnostics.
-	phase.start("lsp_sync");
-	let lspSyncCompleted = false;
-	let lspPhaseEnded = false;
-	if (fileContent) {
-		const sync = await syncLspFile(
-			filePath,
-			fileContent,
-			cwd,
-			getFlag,
-			dbg,
-			ruffClient,
-			biomeClient,
-		);
-		lspSyncCompleted = sync.completed;
-		lspPhaseEnded = sync.phaseEnded;
-	} else {
-		lspSyncCompleted = true;
-	}
-	if (lspPhaseEnded) {
-		phase.end("lsp_sync", { completed: true, deferred: true });
-	} else {
-		phase.end("lsp_sync", { completed: lspSyncCompleted });
-	}
-
-	// --- 5. Auto-fix ---
-	// Biome (TS/JS) and Ruff (Python) never touch the same file, so their
-	// availability checks run in parallel.
+	// --- 4. Auto-fix ---
 	phase.start("autofix");
 	const {
 		fixedCount,
 		autofixTools,
 		attemptedTools,
+		changedFiles: autofixChangedFiles,
 		needsContentRefresh: fixRefresh,
 		skipReason: autofixSkipReason,
 	} = await runAutofix(filePath, cwd, getFlag, dbg, deps);
-	if (fixRefresh) needsContentRefresh = true;
+	for (const changedFile of autofixChangedFiles) {
+		piChangedFiles.add(path.resolve(changedFile));
+	}
+	if (fixRefresh) {
+		try {
+			fileContent = nodeFs.readFileSync(filePath, "utf-8");
+		} catch {
+			fileContent = undefined;
+		}
+	}
 	phase.end("autofix", {
 		fixedCount,
 		tools: autofixTools,
@@ -900,26 +912,24 @@ export async function runPipeline(
 		skipReason: autofixSkipReason,
 	});
 
-	if (needsContentRefresh) {
-		try {
-			fileContent = nodeFs.readFileSync(filePath, "utf-8");
-		} catch {
-			fileContent = undefined;
-		}
-	}
-
-	// Re-sync LSP after format/autofix changes so dispatch uses current code.
+	// --- 5. LSP file sync ---
+	// Sync once with final post-format/post-fix content so dispatch and cascade
+	// diagnostics do not observe stale pre-format text.
+	phase.start("lsp_sync");
+	let lspSyncCompleted = true;
 	if (fileContent) {
 		await resyncLspFile(
 			filePath,
 			fileContent,
-			needsContentRefresh,
-			lspSyncCompleted,
+			true,
+			false,
 			getFlag,
 			dbg,
 			formatChanged && fixedCount === 0,
 		);
+		lspSyncCompleted = true;
 	}
+	phase.end("lsp_sync", { completed: lspSyncCompleted, finalContent: true });
 
 	// --- 6. Dispatch lint ---
 	phase.start("dispatch_lint");
@@ -985,8 +995,27 @@ export async function runPipeline(
 			autofixTools.length > 0 ? ` (${autofixTools.join(", ")})` : "";
 		output += `\n\n✅ Auto-fixed ${fixedCount} issue(s)${detail}`;
 	}
+	if (formatFailures.length > 0) {
+		const details = formatFailures.slice(0, 3).join("; ");
+		const suffix =
+			formatFailures.length > 3
+				? `; ... and ${formatFailures.length - 3} more`
+				: "";
+		output += `\n\n⚠️ Auto-format failed: ${details}${suffix}`;
+	}
 	if (formatChanged || fixedCount > 0) {
-		output += `\n\n⚠️ **File was modified by auto-format/fix. You MUST re-read the file before making any further edits — the content on disk has changed (whitespace, indentation, quotes, or code). Editing from memory will produce mismatches.**`;
+		const changedList = [...piChangedFiles].map((changedFile) =>
+			toRunnerDisplayPath(cwd, changedFile),
+		);
+		const fileList = changedList.length
+			? `\nModified files:\n${changedList
+					.slice(0, 8)
+					.map((f) => `  - ${f}`)
+					.join(
+						"\n",
+					)}${changedList.length > 8 ? `\n  - ... and ${changedList.length - 8} more` : ""}`
+			: "";
+		output += `\n\n⚠️ **File was modified by auto-format/fix. You MUST re-read modified file(s) before making any further edits — the content on disk has changed (whitespace, indentation, quotes, or code). Editing from memory will produce mismatches.**${fileList}`;
 	}
 	phase.end("dispatch_lint", {
 		hasOutput: !!dispatchResult.output,
@@ -1020,5 +1049,6 @@ export async function runPipeline(
 		impactCascadeOutput,
 		isError: false,
 		fileModified: formatChanged || fixedCount > 0,
+		changedFiles: [...piChangedFiles],
 	};
 }

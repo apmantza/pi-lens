@@ -1,13 +1,14 @@
+import * as nodeCrypto from "node:crypto";
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
+import type { BiomeClient } from "./biome-client.js";
+import type { CacheManager } from "./cache-manager.js";
 import { createFileTime } from "./file-time.js";
 import { getFormatService } from "./format-service.js";
 import { resolveLanguageRootForFile } from "./language-profile.js";
 import { logLatency } from "./latency-logger.js";
-import { runPipeline } from "./pipeline.js";
-import type { BiomeClient } from "./biome-client.js";
-import type { CacheManager } from "./cache-manager.js";
 import type { MetricsClient } from "./metrics-client.js";
+import { runPipeline } from "./pipeline.js";
 import type { RuffClient } from "./ruff-client.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 
@@ -66,14 +67,30 @@ function parseDiffRanges(diff: string): { start: number; end: number }[] {
 	return ranges;
 }
 
-// Deduplicates concurrent tool_result calls for the same file.
-// The pi framework fires tool_result once per edit when Edit receives an array
-// of hunks — both fire concurrently, producing duplicate pipeline output.
+// Deduplicates tool_result calls for the same post-write file state.
+// The pi framework can emit one tool_result per edit hunk; those events often
+// observe the same final file content. Deduping by file alone is unsafe because
+// a later same-turn edit to the same file must still run the pipeline.
 const inFlightPipelines = new Map<string, Promise<unknown>>();
+const lastAnalyzedStateByFile = new Map<
+	string,
+	{ turnIndex: number; stateHash: string }
+>();
 
-export async function handleToolResult(
-	deps: ToolResultDeps,
-): Promise<{ content: Array<{ type: string; text?: string }>; isError?: boolean } | void> {
+function getFileStateHash(filePath: string): string {
+	try {
+		const content = nodeFs.readFileSync(filePath);
+		return nodeCrypto.createHash("sha256").update(content).digest("hex");
+	} catch (err) {
+		const code = (err as { code?: string }).code ?? "unknown";
+		return `unreadable:${code}`;
+	}
+}
+
+export async function handleToolResult(deps: ToolResultDeps): Promise<{
+	content: Array<{ type: string; text?: string }>;
+	isError?: boolean;
+} | void> {
 	const {
 		event,
 		getFlag,
@@ -110,19 +127,28 @@ export async function handleToolResult(
 		return;
 	}
 
-	// Deduplicate concurrent calls for the same file (pi fires once per hunk in
-	// an Edit array, causing duplicate pipeline runs and doubled agent output).
-	if (inFlightPipelines.has(filePath)) {
-		dbg(`tool_result: skipping duplicate concurrent call for ${filePath}`);
-		await inFlightPipelines.get(filePath);
+	const initialStateHash = getFileStateHash(filePath);
+	const pipelineDedupeKey = `${filePath}:${initialStateHash}`;
+
+	// Deduplicate concurrent calls for the same final file state (pi can fire one
+	// tool_result per edit hunk). Do not dedupe by file alone: a distinct later
+	// same-turn edit to this file must still be analyzed.
+	if (inFlightPipelines.has(pipelineDedupeKey)) {
+		dbg(`tool_result: skipping duplicate concurrent state for ${filePath}`);
+		await inFlightPipelines.get(pipelineDedupeKey);
 		return;
 	}
 
-	// Deduplicate sequential calls for the same file within the same turn.
-	// When pi processes an edit array serially, each hunk fires tool_result after
-	// the previous completes, bypassing the in-flight map above.
-	if (runtime.reportedThisTurn.has(filePath)) {
-		dbg(`tool_result: skipping already-reported file this turn for ${filePath}`);
+	// Deduplicate sequential duplicate events for the same post-write state in the
+	// same turn while allowing later same-file edits whose content changed.
+	const lastAnalyzed = lastAnalyzedStateByFile.get(filePath);
+	if (
+		lastAnalyzed?.turnIndex === runtime.turnIndex &&
+		lastAnalyzed.stateHash === initialStateHash
+	) {
+		dbg(
+			`tool_result: skipping already-analyzed file state this turn for ${filePath}`,
+		);
 		return;
 	}
 
@@ -152,7 +178,9 @@ export async function handleToolResult(
 		);
 		if (event.toolName === "edit" && details?.diff) {
 			const diff = details.diff;
-			dbg(`tool_result: diff content (first 500 chars): ${diff.substring(0, 500)}`);
+			dbg(
+				`tool_result: diff content (first 500 chars): ${diff.substring(0, 500)}`,
+			);
 			const ranges = parseDiffRanges(diff);
 			modifiedRanges = ranges;
 			const importsChanged = /import\s/.test(diff) || /from\s+['"]/.test(diff);
@@ -201,6 +229,7 @@ export async function handleToolResult(
 		isError?: boolean;
 		cascadeOutput?: string;
 		impactCascadeOutput?: string;
+		changedFiles?: string[];
 	};
 	const pipelinePromise = runPipeline(
 		{
@@ -225,7 +254,7 @@ export async function handleToolResult(
 			fixedThisTurn: runtime.fixedThisTurn,
 		},
 	);
-	inFlightPipelines.set(filePath, pipelinePromise);
+	inFlightPipelines.set(pipelineDedupeKey, pipelinePromise);
 	try {
 		result = await pipelinePromise;
 	} catch (pipelineErr) {
@@ -250,15 +279,41 @@ export async function handleToolResult(
 			content: [...event.content, { type: "text", text: notice }],
 		};
 	} finally {
-		inFlightPipelines.delete(filePath);
+		inFlightPipelines.delete(pipelineDedupeKey);
+	}
+
+	lastAnalyzedStateByFile.set(filePath, {
+		turnIndex: runtime.turnIndex,
+		stateHash: getFileStateHash(filePath),
+	});
+
+	for (const changedFile of result.changedFiles ?? []) {
+		const resolvedChanged = path.resolve(changedFile);
+		if (resolvedChanged === path.resolve(filePath)) continue;
+		if (!nodeFs.existsSync(resolvedChanged)) continue;
+		try {
+			const content = nodeFs.readFileSync(resolvedChanged, "utf-8");
+			const lineCount = content.split("\n").length;
+			const hasImports = /^import\s/m.test(content);
+			cacheManager.addModifiedRange(
+				resolvedChanged,
+				{ start: 1, end: lineCount },
+				hasImports,
+				cwd,
+			);
+			dbg(
+				`tool_result: tracking pi-lens side-effect change for ${resolvedChanged}`,
+			);
+		} catch (err) {
+			dbg(
+				`tool_result: side-effect tracking failed for ${resolvedChanged}: ${err}`,
+			);
+		}
 	}
 
 	if (result.cascadeOutput) {
 		runtime.lastCascadeOutput = result.cascadeOutput;
-	} else if (
-		result.cascadeOutput === undefined &&
-		!getFlag("no-lsp")
-	) {
+	} else if (result.cascadeOutput === undefined && !getFlag("no-lsp")) {
 		runtime.lastCascadeOutput = "";
 	}
 	if (result.impactCascadeOutput) {

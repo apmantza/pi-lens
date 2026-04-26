@@ -38,11 +38,11 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				},
 				getFlag: () => false,
 				dbg: () => {},
-					runtime: {
-						projectRoot: env.tmpDir,
-						setTelemetryIdentity: () => {},
-						updateGitGuardStatus: () => {},
-						nextWriteIndex: () => 1,
+				runtime: {
+					projectRoot: env.tmpDir,
+					setTelemetryIdentity: () => {},
+					updateGitGuardStatus: () => {},
+					nextWriteIndex: () => 1,
 					turnIndex: 1,
 					telemetryModel: "test-model",
 					telemetrySessionId: "test-session",
@@ -103,11 +103,11 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				},
 				getFlag: () => false,
 				dbg: () => {},
-					runtime: {
-						projectRoot: env.tmpDir,
-						setTelemetryIdentity: () => {},
-						updateGitGuardStatus: () => {},
-						nextWriteIndex: () => 1,
+				runtime: {
+					projectRoot: env.tmpDir,
+					setTelemetryIdentity: () => {},
+					updateGitGuardStatus: () => {},
+					nextWriteIndex: () => 1,
 					turnIndex: 1,
 					telemetryModel: "test-model",
 					telemetrySessionId: "test-session",
@@ -213,10 +213,152 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				},
 			});
 
-			// Second call for same file within the same turn is suppressed by reportedThisTurn
-			expect(logs.filter((entry) => entry.includes("tool_result fired for")).length).toBe(1);
+			// Distinct same-file states in the same turn must both be analyzed.
+			expect(
+				logs.filter((entry) => entry.includes("tool_result fired for")).length,
+			).toBe(2);
+			expect(vi.mocked(runPipeline)).toHaveBeenCalledTimes(2);
+			expect(
+				logs.some((entry) =>
+					entry.includes("skipping already-analyzed file state this turn"),
+				),
+			).toBe(false);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("deduplicates repeated tool_result events for the same file state", async () => {
+		const { runPipeline } = await import("../../clients/pipeline.js");
+		vi.mocked(runPipeline).mockResolvedValue({
+			output: "✓ no blockers",
+			hasBlockers: false,
+			isError: false,
+			fileModified: false,
+		});
+
+		const env = setupTestEnvironment("pi-lens-runtime-tool-dedupe-");
+		try {
+			const filePath = path.join(env.tmpDir, "src", "same.ts");
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(filePath, "export const value = 1;\n");
+
+			const logs: string[] = [];
+			const deps = {
+				getFlag: () => false,
+				dbg: (msg: string) => logs.push(msg),
+				runtime: {
+					projectRoot: env.tmpDir,
+					setTelemetryIdentity: () => {},
+					updateGitGuardStatus: () => {},
+					nextWriteIndex: () => 1,
+					turnIndex: 1,
+					telemetryModel: "test-model",
+					telemetrySessionId: "test-session",
+					fixedThisTurn: new Set<string>(),
+					reportedThisTurn: new Set<string>(),
+					formatPipelineCrashNotice: () => "",
+					lastCascadeOutput: "",
+				},
+				cacheManager: {
+					addModifiedRange: () => {},
+					readTurnState: () => ({}),
+				},
+				biomeClient: {},
+				ruffClient: {},
+				testRunnerClient: {},
+				metricsClient: {},
+				resetLSPService: () => {},
+				agentBehaviorRecord: () => [],
+				formatBehaviorWarnings: () => "",
+			} as any;
+
+			const event = {
+				toolName: "edit",
+				input: { path: filePath },
+				details: { diff: "+  1 export const value = 1;" },
+				content: [{ type: "text", text: "base" }],
+			};
+
+			await handleToolResult({ ...deps, event });
+			await handleToolResult({ ...deps, event });
+
 			expect(vi.mocked(runPipeline)).toHaveBeenCalledTimes(1);
-			expect(logs.some((entry) => entry.includes("skipping already-reported file this turn"))).toBe(true);
+			expect(
+				logs.some((entry) =>
+					entry.includes("skipping already-analyzed file state this turn"),
+				),
+			).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("tracks side-effect files changed by the pipeline", async () => {
+		const { runPipeline } = await import("../../clients/pipeline.js");
+		const env = setupTestEnvironment("pi-lens-runtime-tool-side-effect-");
+		try {
+			const filePath = path.join(env.tmpDir, "src", "main.rs");
+			const sideEffectPath = path.join(env.tmpDir, "src", "helper.rs");
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(filePath, "mod helper;\n");
+			fs.writeFileSync(sideEffectPath, "pub fn helper() {}\n");
+
+			vi.mocked(runPipeline).mockResolvedValue({
+				output: "✅ Auto-fixed 1 issue(s)",
+				hasBlockers: false,
+				isError: false,
+				fileModified: true,
+				changedFiles: [filePath, sideEffectPath],
+			});
+
+			const modifiedRanges: Array<{
+				filePath: string;
+				range: { start: number; end: number };
+			}> = [];
+			await handleToolResult({
+				event: {
+					toolName: "edit",
+					input: { path: filePath },
+					details: { diff: "+  1 mod helper;" },
+					content: [{ type: "text", text: "base" }],
+				},
+				getFlag: () => false,
+				dbg: () => {},
+				runtime: {
+					projectRoot: env.tmpDir,
+					setTelemetryIdentity: () => {},
+					updateGitGuardStatus: () => {},
+					nextWriteIndex: () => 1,
+					turnIndex: 1,
+					telemetryModel: "test-model",
+					telemetrySessionId: "test-session",
+					fixedThisTurn: new Set<string>(),
+					reportedThisTurn: new Set<string>(),
+					formatPipelineCrashNotice: () => "",
+					lastCascadeOutput: "",
+				},
+				cacheManager: {
+					addModifiedRange: (
+						changedFile: string,
+						range: { start: number; end: number },
+					) => {
+						modifiedRanges.push({ filePath: changedFile, range });
+					},
+					readTurnState: () => ({}),
+				},
+				biomeClient: {},
+				ruffClient: {},
+				testRunnerClient: {},
+				metricsClient: {},
+				resetLSPService: () => {},
+				agentBehaviorRecord: () => [],
+				formatBehaviorWarnings: () => "",
+			} as any);
+
+			expect(modifiedRanges.map((entry) => entry.filePath)).toContain(
+				sideEffectPath,
+			);
 		} finally {
 			env.cleanup();
 		}

@@ -9,6 +9,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { MessageConnection } from "vscode-jsonrpc";
 import {
+	applyDynamicCapabilities,
 	clientWaitForDiagnostics,
 	handleNotifyChange,
 	handleNotifyOpen,
@@ -59,8 +60,10 @@ function createMockState(overrides?: Partial<LSPClientState>): LSPClientState {
 		connectionDisposed: false,
 		lastError: undefined,
 		connection: createMockConnection(),
-		diagnostics: new Map(),
-		diagnosticTimestamps: new Map(),
+		pushDiagnostics: new Map(),
+		pushDiagnosticTimestamps: new Map(),
+		documentPullDiagnostics: new Map(),
+		documentPullDiagnosticTimestamps: new Map(),
 		pendingDiagnostics: new Map(),
 		diagnosticEmitter,
 		documentVersions: new Map(),
@@ -83,6 +86,8 @@ function createMockState(overrides?: Partial<LSPClientState>): LSPClientState {
 			implementation: false,
 			callHierarchy: false,
 		},
+		staticDiagnosticsMode: "push-only",
+		dynamicRegistrations: new Map(),
 		serverId: "test-server",
 		root: "/project",
 		lspProcess: createMockLspProcess() as any,
@@ -133,7 +138,7 @@ describe("handleNotifyOpen", () => {
 
 	it("clears diagnostics on open", async () => {
 		const state = createMockState();
-		state.diagnostics.set(TEST_KEY, [
+		state.pushDiagnostics.set(TEST_KEY, [
 			{
 				severity: 1,
 				message: "old",
@@ -146,7 +151,7 @@ describe("handleNotifyOpen", () => {
 
 		await handleNotifyOpen(state, TEST_FILE, "const x = 1;", "typescript");
 
-		expect(state.diagnostics.has(TEST_KEY)).toBe(false);
+		expect(state.pushDiagnostics.has(TEST_KEY)).toBe(false);
 	});
 });
 
@@ -179,20 +184,31 @@ describe("handleNotifyChange", () => {
 		const state = createMockState();
 		state.openDocuments.add(TEST_KEY);
 		state.documentVersions.set(TEST_KEY, 0);
-		state.diagnostics.set(TEST_KEY, [
+		state.pushDiagnostics.set(TEST_KEY, [
 			{
 				severity: 1,
-				message: "old",
+				message: "old push",
 				range: {
 					start: { line: 0, character: 0 },
 					end: { line: 0, character: 0 },
 				},
 			},
 		]);
+		state.documentPullDiagnostics.set(TEST_KEY, [
+			{
+				severity: 1,
+				message: "old pull",
+				range: {
+					start: { line: 0, character: 1 },
+					end: { line: 0, character: 1 },
+				},
+			},
+		]);
 
 		await handleNotifyChange(state, TEST_FILE, "const y = 2;");
 
-		expect(state.diagnostics.has(TEST_KEY)).toBe(false);
+		expect(state.pushDiagnostics.has(TEST_KEY)).toBe(false);
+		expect(state.documentPullDiagnostics.has(TEST_KEY)).toBe(false);
 	});
 
 	it("does nothing when client is not alive", async () => {
@@ -206,7 +222,7 @@ describe("handleNotifyChange", () => {
 describe("clientWaitForDiagnostics", () => {
 	it("resolves immediately if diagnostics already cached", async () => {
 		const state = createMockState();
-		state.diagnostics.set(TEST_KEY, [
+		state.pushDiagnostics.set(TEST_KEY, [
 			{
 				severity: 1,
 				message: "error",
@@ -260,5 +276,103 @@ describe("clientWaitForDiagnostics", () => {
 		}, 100);
 
 		await waitPromise;
+	});
+});
+
+describe("applyDynamicCapabilities", () => {
+	it("upgrades to pull mode when textDocument/diagnostic is registered", () => {
+		const state = createMockState();
+		state.dynamicRegistrations.set("diag-1", "textDocument/diagnostic");
+
+		applyDynamicCapabilities(state);
+
+		expect(state.workspaceDiagnosticsSupport.mode).toBe("pull");
+		expect(state.workspaceDiagnosticsSupport.advertised).toBe(true);
+		expect(state.workspaceDiagnosticsSupport.diagnosticProviderKind).toBe(
+			"dynamic",
+		);
+	});
+
+	it("upgrades to pull mode when workspace/diagnostic is registered", () => {
+		const state = createMockState();
+		state.dynamicRegistrations.set("ws-diag-1", "workspace/diagnostic");
+
+		applyDynamicCapabilities(state);
+
+		expect(state.workspaceDiagnosticsSupport.mode).toBe("pull");
+	});
+
+	it("reverts to push-only when dynamic pull registration is removed", () => {
+		const state = createMockState();
+		state.dynamicRegistrations.set("diag-1", "textDocument/diagnostic");
+		applyDynamicCapabilities(state);
+		expect(state.workspaceDiagnosticsSupport.mode).toBe("pull");
+
+		state.dynamicRegistrations.delete("diag-1");
+		applyDynamicCapabilities(state);
+
+		expect(state.workspaceDiagnosticsSupport.mode).toBe("push-only");
+		expect(state.workspaceDiagnosticsSupport.advertised).toBe(false);
+	});
+
+	it("does not revert pull mode when statically advertised", () => {
+		const state = createMockState({
+			staticDiagnosticsMode: "pull",
+			workspaceDiagnosticsSupport: {
+				advertised: true,
+				mode: "pull",
+				diagnosticProviderKind: "object",
+			},
+		});
+		// Even with no dynamic registrations, static pull should remain
+		applyDynamicCapabilities(state);
+
+		expect(state.workspaceDiagnosticsSupport.mode).toBe("pull");
+		expect(state.workspaceDiagnosticsSupport.diagnosticProviderKind).toBe(
+			"object",
+		);
+	});
+
+	it("upgrades operation capabilities when methods are registered", () => {
+		const state = createMockState();
+		state.dynamicRegistrations.set("def-1", "textDocument/definition");
+		state.dynamicRegistrations.set("ref-1", "textDocument/references");
+		state.dynamicRegistrations.set("hover-1", "textDocument/hover");
+
+		applyDynamicCapabilities(state);
+
+		expect(state.operationSupport.definition).toBe(true);
+		expect(state.operationSupport.references).toBe(true);
+		expect(state.operationSupport.hover).toBe(true);
+		expect(state.operationSupport.rename).toBe(false); // not registered
+	});
+
+	it("does not downgrade already-true operation capabilities on unregister", () => {
+		const state = createMockState({
+			operationSupport: {
+				definition: true,
+				references: false,
+				hover: false,
+				signatureHelp: false,
+				documentSymbol: false,
+				workspaceSymbol: false,
+				codeAction: false,
+				rename: false,
+				implementation: false,
+				callHierarchy: false,
+			},
+		});
+		// No dynamic registrations — definition was statically true
+		applyDynamicCapabilities(state);
+
+		expect(state.operationSupport.definition).toBe(true);
+	});
+
+	it("ignores unknown registration methods without throwing", () => {
+		const state = createMockState();
+		state.dynamicRegistrations.set("unknown-1", "some/unknownMethod");
+
+		expect(() => applyDynamicCapabilities(state)).not.toThrow();
+		expect(state.workspaceDiagnosticsSupport.mode).toBe("push-only");
 	});
 });
