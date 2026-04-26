@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocked = vi.hoisted(() => ({
 	service: null as unknown,
@@ -16,13 +16,16 @@ import { createLspNavigationTool } from "../../tools/lsp-navigation.js";
 describe("lsp_navigation tool", () => {
 	beforeEach(() => {
 		mocked.service = {
+			supportsLSP: vi.fn().mockReturnValue(true),
 			hasLSP: vi.fn().mockResolvedValue(true),
 			openFile: vi.fn().mockResolvedValue(undefined),
 			getDiagnostics: vi.fn().mockResolvedValue([]),
 			getOperationSupport: vi.fn().mockResolvedValue(null),
-			codeAction: vi.fn().mockResolvedValue([
-				{ title: "Move to new file", kind: "refactor.move.newFile" },
-			]),
+			codeAction: vi
+				.fn()
+				.mockResolvedValue([
+					{ title: "Move to new file", kind: "refactor.move.newFile" },
+				]),
 			references: vi.fn().mockResolvedValue([
 				{
 					uri: "file:///tmp/sample.ts",
@@ -67,7 +70,10 @@ describe("lsp_navigation tool", () => {
 		);
 
 		expect(result.isError).toBeUndefined();
-		expect((mocked.service as { incomingCalls: ReturnType<typeof vi.fn> }).incomingCalls).toHaveBeenCalledOnce();
+		expect(
+			(mocked.service as { incomingCalls: ReturnType<typeof vi.fn> })
+				.incomingCalls,
+		).toHaveBeenCalledOnce();
 		expect(result.details?.operation).toBe("incomingCalls");
 	});
 
@@ -86,17 +92,20 @@ describe("lsp_navigation tool", () => {
 		expect(String(result.content[0]?.text)).toContain(
 			"Hint: provide filePath to scope workspaceSymbol",
 		);
-		expect((mocked.service as { workspaceSymbol: ReturnType<typeof vi.fn> }).workspaceSymbol).toHaveBeenCalledWith(
-			"ReportProcessor",
-			undefined,
-		);
+		expect(
+			(mocked.service as { workspaceSymbol: ReturnType<typeof vi.fn> })
+				.workspaceSymbol,
+		).toHaveBeenCalledWith("ReportProcessor", undefined);
 	});
 
 	it("opens scoped file before workspaceSymbol query", async () => {
 		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
 		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-nav-"));
 		const filePath = path.join(tmpDir, "sample.ts");
-		fs.writeFileSync(filePath, "export const normalizeMapKey = (x: string) => x;\n");
+		fs.writeFileSync(
+			filePath,
+			"export const normalizeMapKey = (x: string) => x;\n",
+		);
 
 		try {
 			const result = await tool.execute(
@@ -110,7 +119,10 @@ describe("lsp_navigation tool", () => {
 			expect(result.isError).toBeUndefined();
 			expect(
 				(mocked.service as { openFile: ReturnType<typeof vi.fn> }).openFile,
-			).toHaveBeenCalledWith(filePath, expect.stringContaining("normalizeMapKey"));
+			).toHaveBeenCalledWith(
+				filePath,
+				expect.stringContaining("normalizeMapKey"),
+			);
 			expect(
 				(mocked.service as { workspaceSymbol: ReturnType<typeof vi.fn> })
 					.workspaceSymbol,
@@ -219,7 +231,7 @@ describe("lsp_navigation tool", () => {
 		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
 		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-nav-"));
 		const filePath = path.join(tmpDir, "diag.rs");
-		fs.writeFileSync(filePath, "fn main() { let x: i32 = \"oops\"; }\n");
+		fs.writeFileSync(filePath, 'fn main() { let x: i32 = "oops"; }\n');
 		(
 			mocked.service as {
 				getWorkspaceDiagnosticsSupport: ReturnType<typeof vi.fn>;

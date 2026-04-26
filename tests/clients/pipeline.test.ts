@@ -69,6 +69,7 @@ describe("Pipeline", () => {
 
 	function createMockLSPService() {
 		return {
+			supportsLSP: vi.fn().mockReturnValue(true),
 			hasLSP: vi.fn().mockResolvedValue(true),
 			openFile: vi.fn().mockResolvedValue(undefined),
 			getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),

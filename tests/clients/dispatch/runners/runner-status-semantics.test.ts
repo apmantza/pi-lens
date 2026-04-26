@@ -7,6 +7,7 @@ import { setupTestEnvironment } from "../../test-utils.js";
 const safeSpawnAsync = vi.fn();
 const safeSpawn = vi.fn();
 const tryLazyInstall = vi.fn(async () => true);
+const supportsLSP = vi.fn();
 const hasLSP = vi.fn();
 const openFile = vi.fn();
 const getDiagnostics = vi.fn();
@@ -24,6 +25,7 @@ vi.mock("../../../../clients/dispatch/runners/utils/lazy-installer.js", () => ({
 
 vi.mock("../../../../clients/lsp/index.js", () => ({
 	getLSPService: () => ({
+		supportsLSP,
 		hasLSP,
 		openFile,
 		getDiagnostics,
@@ -57,12 +59,14 @@ describe("runner status/semantic edge cases", () => {
 		safeSpawn.mockReset();
 		safeSpawnAsync.mockReset();
 		tryLazyInstall.mockClear();
+		supportsLSP.mockReset();
 		hasLSP.mockReset();
 		openFile.mockReset();
 		getDiagnostics.mockReset();
 		codeAction.mockReset();
 		readFileContent.mockReset();
 		readFileContent.mockReturnValue("const x = 1;\n");
+		supportsLSP.mockReturnValue(true);
 	});
 
 	it("golangci-lint returns failed/blocking for error diagnostics", async () => {
@@ -202,6 +206,7 @@ describe("runner status/semantic edge cases", () => {
 			const filePath = path.join(env.tmpDir, "main.ts");
 			fs.writeFileSync(filePath, "const x = 1;\n");
 
+			supportsLSP.mockReturnValue(true);
 			hasLSP.mockResolvedValue(true);
 			openFile.mockRejectedValue(new Error("connection failed"));
 			getDiagnostics.mockResolvedValue([]);
