@@ -587,4 +587,197 @@ describe("lsp server policy", () => {
 		expect(spawned).toBeDefined();
 		expect(ensureTool).toHaveBeenCalledWith("zls");
 	});
+
+	// --- Deno / TypeScript disambiguation ---
+
+	it("TypeScript server yields to Deno when deno.json is present", async () => {
+		const { TypeScriptServer } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-deno-ts-"));
+		dirs.push(tmp);
+
+		const src = path.join(tmp, "src");
+		fs.mkdirSync(src, { recursive: true });
+		fs.writeFileSync(path.join(tmp, "deno.json"), '{"name":"proj"}');
+		fs.writeFileSync(path.join(src, "main.ts"), "const x: number = 1;\n");
+
+		const root = await TypeScriptServer.root(path.join(src, "main.ts"));
+		expect(root).toBeUndefined();
+	});
+
+	it("TypeScript server yields to Deno when deno.jsonc is present", async () => {
+		const { TypeScriptServer } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-deno-jsonc-"));
+		dirs.push(tmp);
+
+		fs.writeFileSync(path.join(tmp, "deno.jsonc"), "// deno\n{}");
+		fs.writeFileSync(path.join(tmp, "mod.ts"), "export default {};\n");
+
+		const root = await TypeScriptServer.root(path.join(tmp, "mod.ts"));
+		expect(root).toBeUndefined();
+	});
+
+	it("TypeScript server still claims TS files with package.json and no deno config", async () => {
+		const { TypeScriptServer } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ts-no-deno-"));
+		dirs.push(tmp);
+
+		const src = path.join(tmp, "src");
+		fs.mkdirSync(src, { recursive: true });
+		fs.writeFileSync(path.join(tmp, "package.json"), '{"name":"proj"}');
+		fs.writeFileSync(path.join(src, "main.ts"), "const x: number = 1;\n");
+
+		const root = await TypeScriptServer.root(path.join(src, "main.ts"));
+		expect(root).toBe(tmp);
+	});
+
+	// --- Python venv detection ---
+
+	it("detectPythonVenv finds .venv at project root", async () => {
+		const { detectPythonVenv } = await import(
+			"../../../clients/lsp/server.js"
+		);
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-venv-dot-"));
+		dirs.push(tmp);
+
+		const pythonPath =
+			process.platform === "win32"
+				? path.join(tmp, ".venv", "Scripts", "python.exe")
+				: path.join(tmp, ".venv", "bin", "python");
+		fs.mkdirSync(path.dirname(pythonPath), { recursive: true });
+		fs.writeFileSync(pythonPath, "#!/usr/bin/env python\n");
+
+		const origVENV = process.env.VIRTUAL_ENV;
+		const origCONDA = process.env.CONDA_PREFIX;
+		delete process.env.VIRTUAL_ENV;
+		delete process.env.CONDA_PREFIX;
+		try {
+			expect(await detectPythonVenv(tmp)).toBe(pythonPath);
+		} finally {
+			if (origVENV !== undefined) process.env.VIRTUAL_ENV = origVENV;
+			if (origCONDA !== undefined) process.env.CONDA_PREFIX = origCONDA;
+		}
+	});
+
+	it("detectPythonVenv picks up CONDA_PREFIX when VIRTUAL_ENV is absent", async () => {
+		const { detectPythonVenv } = await import(
+			"../../../clients/lsp/server.js"
+		);
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-conda-"));
+		dirs.push(tmp);
+
+		const condaEnv = path.join(tmp, "conda-env");
+		const pythonPath =
+			process.platform === "win32"
+				? path.join(condaEnv, "Scripts", "python.exe")
+				: path.join(condaEnv, "bin", "python");
+		fs.mkdirSync(path.dirname(pythonPath), { recursive: true });
+		fs.writeFileSync(pythonPath, "#!/usr/bin/env python\n");
+
+		const origVENV = process.env.VIRTUAL_ENV;
+		const origCONDA = process.env.CONDA_PREFIX;
+		delete process.env.VIRTUAL_ENV;
+		process.env.CONDA_PREFIX = condaEnv;
+		try {
+			expect(await detectPythonVenv(tmp)).toBe(pythonPath);
+		} finally {
+			if (origVENV !== undefined) process.env.VIRTUAL_ENV = origVENV;
+			if (origCONDA !== undefined) process.env.CONDA_PREFIX = origCONDA;
+			else delete process.env.CONDA_PREFIX;
+		}
+	});
+
+	it("detectPythonVenv prefers VIRTUAL_ENV over .venv at project root", async () => {
+		const { detectPythonVenv } = await import(
+			"../../../clients/lsp/server.js"
+		);
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-venv-prio-"));
+		dirs.push(tmp);
+
+		const externalEnv = path.join(tmp, "external-env");
+		const externalPython =
+			process.platform === "win32"
+				? path.join(externalEnv, "Scripts", "python.exe")
+				: path.join(externalEnv, "bin", "python");
+		const localPython =
+			process.platform === "win32"
+				? path.join(tmp, ".venv", "Scripts", "python.exe")
+				: path.join(tmp, ".venv", "bin", "python");
+
+		fs.mkdirSync(path.dirname(externalPython), { recursive: true });
+		fs.mkdirSync(path.dirname(localPython), { recursive: true });
+		fs.writeFileSync(externalPython, "#!/usr/bin/env python\n");
+		fs.writeFileSync(localPython, "#!/usr/bin/env python\n");
+
+		const origVENV = process.env.VIRTUAL_ENV;
+		const origCONDA = process.env.CONDA_PREFIX;
+		process.env.VIRTUAL_ENV = externalEnv;
+		delete process.env.CONDA_PREFIX;
+		try {
+			expect(await detectPythonVenv(tmp)).toBe(externalPython);
+		} finally {
+			if (origVENV !== undefined) process.env.VIRTUAL_ENV = origVENV;
+			else delete process.env.VIRTUAL_ENV;
+			if (origCONDA !== undefined) process.env.CONDA_PREFIX = origCONDA;
+		}
+	});
+
+	it("detectPythonVenv returns undefined when no venv exists", async () => {
+		const { detectPythonVenv } = await import(
+			"../../../clients/lsp/server.js"
+		);
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-no-venv-"));
+		dirs.push(tmp);
+
+		const origVENV = process.env.VIRTUAL_ENV;
+		const origCONDA = process.env.CONDA_PREFIX;
+		delete process.env.VIRTUAL_ENV;
+		delete process.env.CONDA_PREFIX;
+		try {
+			expect(await detectPythonVenv(tmp)).toBeUndefined();
+		} finally {
+			if (origVENV !== undefined) process.env.VIRTUAL_ENV = origVENV;
+			if (origCONDA !== undefined) process.env.CONDA_PREFIX = origCONDA;
+		}
+	});
+
+	it("PythonPylspServer passes jedi environment when venv is detected", async () => {
+		const { PythonPylspServer } = await import(
+			"../../../clients/lsp/server.js"
+		);
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-pylsp-venv-"),
+		);
+		dirs.push(tmp);
+
+		const pythonPath =
+			process.platform === "win32"
+				? path.join(tmp, ".venv", "Scripts", "python.exe")
+				: path.join(tmp, ".venv", "bin", "python");
+		fs.mkdirSync(path.dirname(pythonPath), { recursive: true });
+		fs.writeFileSync(pythonPath, "#!/usr/bin/env python\n");
+
+		const origVENV = process.env.VIRTUAL_ENV;
+		const origCONDA = process.env.CONDA_PREFIX;
+		delete process.env.VIRTUAL_ENV;
+		delete process.env.CONDA_PREFIX;
+
+		launchLSP.mockResolvedValue({
+			process: { killed: false } as never,
+			stdin: {} as never,
+			stdout: {} as never,
+			stderr: {} as never,
+			pid: 1111,
+		});
+
+		try {
+			const spawned = await PythonPylspServer.spawn(tmp);
+			expect(spawned).toBeDefined();
+			expect(spawned?.initialization).toMatchObject({
+				pylsp: { plugins: { jedi: { environment: pythonPath } } },
+			});
+		} finally {
+			if (origVENV !== undefined) process.env.VIRTUAL_ENV = origVENV;
+			if (origCONDA !== undefined) process.env.CONDA_PREFIX = origCONDA;
+		}
+	});
 });

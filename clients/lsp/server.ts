@@ -9,7 +9,7 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
-import { appendFile, mkdir, stat } from "node:fs/promises";
+import { access, appendFile, mkdir, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { ensureTool, getToolEnvironment } from "../installer/index.js";
@@ -691,26 +691,71 @@ async function tryGemInstall(gem: string): Promise<boolean> {
 	});
 }
 
+/**
+ * Wraps a root function so it returns undefined for files inside a Deno project.
+ * Prevents TypeScript LSP from being spawned alongside Deno LSP for the same file,
+ * which would produce false diagnostics for Deno-specific APIs.
+ */
+export function DenoExcludeRoot(primary: RootFunction): RootFunction {
+	const denoDetector = createRootDetector(["deno.json", "deno.jsonc"]);
+	return async (file: string): Promise<string | undefined> => {
+		const denoRoot = await denoDetector(file);
+		if (denoRoot) return undefined;
+		return primary(file);
+	};
+}
+
+/**
+ * Find the active Python interpreter inside the nearest virtual environment.
+ * Search order: VIRTUAL_ENV → CONDA_PREFIX → .venv → venv (all under root).
+ * Returns undefined when no venv python binary is found.
+ */
+export async function detectPythonVenv(
+	root: string,
+): Promise<string | undefined> {
+	const isWin = process.platform === "win32";
+	const candidates = [
+		process.env.VIRTUAL_ENV,
+		process.env.CONDA_PREFIX,
+		path.join(root, ".venv"),
+		path.join(root, "venv"),
+	].filter((v): v is string => Boolean(v));
+
+	for (const venv of candidates) {
+		const pythonPath = isWin
+			? path.join(venv, "Scripts", "python.exe")
+			: path.join(venv, "bin", "python");
+		try {
+			await access(pythonPath);
+			return pythonPath;
+		} catch {
+			// not found — try next candidate
+		}
+	}
+	return undefined;
+}
+
 // --- Server Definitions ---
 
 export const TypeScriptServer: LSPServerInfo = {
 	id: "typescript",
 	name: "TypeScript Language Server",
 	extensions: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"],
-	root: RootWithFallback(
-		IgnoreHomeRoot(
-			createRootDetector([
-				"package-lock.json",
-				"bun.lockb",
-				"bun.lock",
-				"pnpm-lock.yaml",
-				"yarn.lock",
-				"package.json",
-			]),
+	root: DenoExcludeRoot(
+		RootWithFallback(
+			IgnoreHomeRoot(
+				createRootDetector([
+					"package-lock.json",
+					"bun.lockb",
+					"bun.lock",
+					"pnpm-lock.yaml",
+					"yarn.lock",
+					"package.json",
+				]),
+			),
 		),
 	),
 	async spawn(root, options) {
-		const path = await import("node:path");
 		const fs = await import("node:fs/promises");
 		let source: "direct" | "managed" = "direct";
 
@@ -821,8 +866,6 @@ export const PythonServer: LSPServerInfo = {
 		]),
 	),
 	async spawn(root, options) {
-		const path = await import("node:path");
-		const fs = await import("node:fs/promises");
 		const env = await getToolEnvironment();
 		let source: "direct" | "managed" | "package-manager" = "direct";
 
@@ -832,33 +875,12 @@ export const PythonServer: LSPServerInfo = {
 			false,
 		);
 		if (direct) {
-			const proc = direct.process;
-			source = direct.source;
-			const initialization: Record<string, unknown> = {};
-
-			const venvPaths = [
-				path.join(root, ".venv"),
-				path.join(root, "venv"),
-				process.env.VIRTUAL_ENV,
-			].filter(Boolean);
-
-			for (const venv of venvPaths) {
-				if (!venv) continue;
-				try {
-					const pythonPath =
-						process.platform === "win32"
-							? path.join(venv, "Scripts", "python.exe")
-							: path.join(venv, "bin", "python");
-
-					await fs.access(pythonPath);
-					initialization.pythonPath = pythonPath;
-					break;
-				} catch {
-					/* not found */
-				}
-			}
-
-			return { process: proc, initialization, source };
+			const pythonPath = await detectPythonVenv(root);
+			return {
+				process: direct.process,
+				source: direct.source,
+				initialization: pythonPath ? { pythonPath } : {},
+			};
 		}
 
 		if (!canInstall(options?.allowInstall)) {
@@ -884,34 +906,13 @@ export const PythonServer: LSPServerInfo = {
 			false,
 		);
 		if (!resolved) return undefined;
-		const proc = resolved.process;
 
-		// Detect virtual environment
-		const initialization: Record<string, unknown> = {};
-		const venvPaths = [
-			path.join(root, ".venv"),
-			path.join(root, "venv"),
-			process.env.VIRTUAL_ENV,
-		].filter(Boolean);
-
-		for (const venv of venvPaths) {
-			if (!venv) continue;
-			try {
-				const pythonPath =
-					process.platform === "win32"
-						? path.join(venv, "Scripts", "python.exe")
-						: path.join(venv, "bin", "python");
-
-				await fs.access(pythonPath);
-				// Pyright expects pythonPath at top level, not nested
-				initialization.pythonPath = pythonPath;
-				break;
-			} catch {
-				/* not found */
-			}
-		}
-
-		return { process: proc, initialization, source };
+		const pythonPath = await detectPythonVenv(root);
+		return {
+			process: resolved.process,
+			source,
+			initialization: pythonPath ? { pythonPath } : {},
+		};
 	},
 };
 
@@ -933,7 +934,11 @@ export const PythonPylspServer: LSPServerInfo = {
 	async spawn(root) {
 		try {
 			const proc = await launchLSP("pylsp", [], { cwd: root });
-			return { process: proc, source: "direct" };
+			const pythonPath = await detectPythonVenv(root);
+			const initialization: Record<string, unknown> = pythonPath
+				? { pylsp: { plugins: { jedi: { environment: pythonPath } } } }
+				: {};
+			return { process: proc, source: "direct", initialization };
 		} catch {
 			return undefined;
 		}
