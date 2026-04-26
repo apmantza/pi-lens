@@ -14,7 +14,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	[
 		".js",
 		{
-			formatterNames: ["biome", "prettier"],
+			formatterNames: ["biome", "prettier", "oxfmt"],
 			defaultFormatter: "biome",
 			defaultWhenUnconfigured: true,
 			gate: "smart-default",
@@ -23,7 +23,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	[
 		".jsx",
 		{
-			formatterNames: ["biome", "prettier"],
+			formatterNames: ["biome", "prettier", "oxfmt"],
 			defaultFormatter: "biome",
 			defaultWhenUnconfigured: true,
 			gate: "smart-default",
@@ -32,7 +32,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	[
 		".mjs",
 		{
-			formatterNames: ["biome", "prettier"],
+			formatterNames: ["biome", "prettier", "oxfmt"],
 			defaultFormatter: "biome",
 			defaultWhenUnconfigured: true,
 			gate: "smart-default",
@@ -41,7 +41,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	[
 		".cjs",
 		{
-			formatterNames: ["biome", "prettier"],
+			formatterNames: ["biome", "prettier", "oxfmt"],
 			defaultFormatter: "biome",
 			defaultWhenUnconfigured: true,
 			gate: "smart-default",
@@ -50,7 +50,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	[
 		".ts",
 		{
-			formatterNames: ["biome", "prettier"],
+			formatterNames: ["biome", "prettier", "oxfmt"],
 			defaultFormatter: "biome",
 			defaultWhenUnconfigured: true,
 			gate: "smart-default",
@@ -59,7 +59,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	[
 		".tsx",
 		{
-			formatterNames: ["biome", "prettier"],
+			formatterNames: ["biome", "prettier", "oxfmt"],
 			defaultFormatter: "biome",
 			defaultWhenUnconfigured: true,
 			gate: "smart-default",
@@ -68,7 +68,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	[
 		".mts",
 		{
-			formatterNames: ["biome", "prettier"],
+			formatterNames: ["biome", "prettier", "oxfmt"],
 			defaultFormatter: "biome",
 			defaultWhenUnconfigured: true,
 			gate: "smart-default",
@@ -77,7 +77,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	[
 		".cts",
 		{
-			formatterNames: ["biome", "prettier"],
+			formatterNames: ["biome", "prettier", "oxfmt"],
 			defaultFormatter: "biome",
 			defaultWhenUnconfigured: true,
 			gate: "smart-default",
@@ -122,7 +122,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	[
 		".css",
 		{
-			formatterNames: ["biome", "prettier"],
+			formatterNames: ["biome", "prettier", "oxfmt"],
 			defaultFormatter: "biome",
 			defaultWhenUnconfigured: true,
 			gate: "smart-default",
@@ -131,7 +131,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	[
 		".scss",
 		{
-			formatterNames: ["biome", "prettier"],
+			formatterNames: ["biome", "prettier", "oxfmt"],
 			defaultFormatter: "biome",
 			defaultWhenUnconfigured: true,
 			gate: "smart-default",
@@ -140,7 +140,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	[
 		".sass",
 		{
-			formatterNames: ["biome", "prettier"],
+			formatterNames: ["biome", "prettier", "oxfmt"],
 			defaultFormatter: "biome",
 			defaultWhenUnconfigured: true,
 			gate: "smart-default",
@@ -1474,6 +1474,21 @@ export function getBiomeConfigPath(cwd: string): string | undefined {
 	const jsonPath = path.join(cwd, "biome.json");
 	if (fs.existsSync(jsonPath)) return jsonPath;
 	return undefined;
+}
+
+export function hasOxfmtConfig(cwd: string): boolean {
+	if (fs.existsSync(path.join(cwd, "oxfmt.toml"))) return true;
+	try {
+		const pkg = JSON.parse(
+			fs.readFileSync(path.join(cwd, "package.json"), "utf-8"),
+		) as Record<string, unknown>;
+		const deps = {
+			...(pkg.dependencies as Record<string, unknown> | undefined),
+			...(pkg.devDependencies as Record<string, unknown> | undefined),
+		};
+		if (deps["@oxc-project/oxfmt"]) return true;
+	} catch {}
+	return false;
 }
 
 export function hasStylelintConfig(cwd: string): boolean {

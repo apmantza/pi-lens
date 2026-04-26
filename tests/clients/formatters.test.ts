@@ -21,6 +21,7 @@ import {
 	blackFormatter,
 	clearFormatterRuntimeState,
 	getFormattersForFile,
+	oxfmtFormatter,
 	phpCsFixerFormatter,
 	prettierFormatter,
 	rubocopFormatter,
@@ -610,5 +611,74 @@ describe("detect — nearest-wins package.json", () => {
 			JSON.stringify({ prettier: { singleQuote: true } }),
 		);
 		expect(await prettierFormatter.detect(tmpDir)).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// oxfmt formatter
+// ---------------------------------------------------------------------------
+
+describe("oxfmt formatter — detection and policy selection", () => {
+	it("detected via oxfmt.toml", async () => {
+		createTempFile(tmpDir, "oxfmt.toml", "# oxfmt config\n");
+		expect(await oxfmtFormatter.detect(tmpDir)).toBe(true);
+	});
+
+	it("detected via @oxc-project/oxfmt in devDependencies", async () => {
+		createTempFile(
+			tmpDir,
+			"package.json",
+			JSON.stringify({ devDependencies: { "@oxc-project/oxfmt": "^0.1.0" } }),
+		);
+		expect(await oxfmtFormatter.detect(tmpDir)).toBe(true);
+	});
+
+	it("detected via @oxc-project/oxfmt in dependencies", async () => {
+		createTempFile(
+			tmpDir,
+			"package.json",
+			JSON.stringify({ dependencies: { "@oxc-project/oxfmt": "^0.1.0" } }),
+		);
+		expect(await oxfmtFormatter.detect(tmpDir)).toBe(true);
+	});
+
+	it("not detected when neither oxfmt.toml nor package.json dep is present", async () => {
+		expect(await oxfmtFormatter.detect(tmpDir)).toBe(false);
+	});
+
+	it("getFormattersForFile selects oxfmt for TypeScript when oxfmt.toml is present", async () => {
+		createTempFile(tmpDir, "oxfmt.toml", "# oxfmt config\n");
+		const filePath = fileIn(tmpDir, "index.ts");
+		const formatters = await getFormattersForFile(filePath, tmpDir);
+		expect(formatters.map((f) => f.name)).toEqual(["oxfmt"]);
+	});
+
+	it("getFormattersForFile selects oxfmt for JS when oxfmt.toml is present", async () => {
+		createTempFile(tmpDir, "oxfmt.toml", "# oxfmt config\n");
+		const formatters = await getFormattersForFile(fileIn(tmpDir, "app.js"), tmpDir);
+		expect(formatters.map((f) => f.name)).toEqual(["oxfmt"]);
+	});
+
+	it("biome wins over oxfmt when both configs are present", async () => {
+		createTempFile(tmpDir, "oxfmt.toml", "# oxfmt config\n");
+		createTempFile(tmpDir, "biome.json", JSON.stringify({ $schema: "https://biomejs.dev/schemas/1.0.0/schema.json" }));
+		const filePath = fileIn(tmpDir, "index.ts");
+		const formatters = await getFormattersForFile(filePath, tmpDir);
+		expect(formatters.map((f) => f.name)).toEqual(["biome"]);
+	});
+
+	it("biome is still the smart default when oxfmt is absent", async () => {
+		const filePath = fileIn(tmpDir, "index.ts");
+		const formatters = await getFormattersForFile(filePath, tmpDir);
+		expect(formatters.map((f) => f.name)).toEqual(["biome"]);
+	});
+
+	it("resolveCommand prefers node_modules/.bin/oxfmt", async () => {
+		const bin = nodeModulesBin(tmpDir, "oxfmt");
+		makeFakeExe(bin);
+		const filePath = fileIn(tmpDir, "index.ts");
+		const cmd = await oxfmtFormatter.resolveCommand!(filePath, tmpDir);
+		expect(cmd?.[0]).toBe(bin);
+		expect(cmd?.[1]).toBe(filePath);
 	});
 });
