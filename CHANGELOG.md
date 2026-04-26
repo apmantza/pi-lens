@@ -4,6 +4,27 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Early-unblock diagnostic aggregation** — `getDiagnostics()` now races `Promise.all` against a first-client-done + grace window (`PI_LENS_LSP_EARLY_UNBLOCK_GRACE_MS`, default 400ms). Once the fastest client delivers results, remaining clients have the grace window before the call returns with whatever is ready. Eliminates the previous worst case where a slow push-only server forced the full 1500ms aggregate wait even when a faster server already had errors. `earlyUnblockedCount` is logged in `lsp_diagnostics_aggregate` latency records.
+- **Dynamic LSP capability registration tracking** — `client/registerCapability` and `client/unregisterCapability` handlers now record live registrations (`id → method`) in `dynamicRegistrations`. `applyDynamicCapabilities()` upgrades `workspaceDiagnosticsSupport` to pull mode when `textDocument/diagnostic` or `workspace/diagnostic` is dynamically registered, and reverts when the last such registration is removed (unless statically advertised). Operation support flags are also upgraded for dynamically-registered nav methods. Servers that defer capability advertisement past `initialize` are now treated correctly.
+- **Deno/TypeScript server disambiguation** — `TypeScriptServer.root` now returns `undefined` for any file with a `deno.json` or `deno.jsonc` ancestor, preventing TypeScript LSP from being spawned alongside Deno LSP for the same file. Eliminates false diagnostics for Deno-specific APIs and removes the wasted parallel spawn.
+- **`CONDA_PREFIX` support in Python venv detection** — conda environments do not set `VIRTUAL_ENV`; venv detection now checks `CONDA_PREFIX` as a fallback between `VIRTUAL_ENV` and the local `.venv`/`venv` directories.
+- **pylsp venv initialization** — `PythonPylspServer.spawn` now passes `{ pylsp: { plugins: { jedi: { environment: pythonPath } } } }` when a virtual environment is detected. Previously pylsp always used the system Python, so completions and diagnostics resolved against the wrong package set in virtualenv projects.
+
+### Changed
+
+- **Push/pull LSP diagnostic caches split** — `LSPClientState` now maintains separate `pushDiagnostics` and `documentPullDiagnostics` maps with independent timestamps. Public API (`getDiagnostics`, `getAllDiagnostics`, `pruneDiagnostics`) operates on a merged, deduplicated view. Clears and prunes invalidate both sources independently. Makes diagnostic freshness and source attribution inspectable without changing caller behavior.
+- **Explicit LSP touch diagnostics modes** — `touchFile()` now takes `{ diagnostics: "none" | "document" | "full", clientScope: "primary" | "all", source, maxClientWaitMs }` instead of a boolean `waitForDiagnostics` flag. Read/tool-call warming uses `"none"`; write validation uses `"document"`. Latency records include `diagnosticsMode`, `clientScope`, and `source`.
+- **Pipeline reordered around final content** — format → refresh → autofix → refresh → LSP sync once with final content → dispatch. LSP diagnostics and dispatch runners now always operate on the final post-format/post-fix on-disk state. Removed previously-dead `supportsAutofix` / deferred sync logic.
+- **Python venv detection deduplicated** — `PythonServer.spawn` previously ran identical 20-line venv detection blocks in both the direct and managed code paths. Both now call the shared `detectPythonVenv(root)` helper.
+
+### Fixed
+
+- **Formatter failures now visible in output** — formatter crashes (missing binary, timeout, I/O error) now append `⚠️ Auto-format failed: <reason>` to pipeline output instead of silently writing to debug logs. Prevents misleading all-clear output when a required format phase failed.
+- **Same-file same-turn pipeline dedupe keyed on content hash** — previously any later pipeline for a file already reported in the same turn was skipped by file path alone, suppressing legitimate second edits. Dedupe is now keyed on post-write content hash: concurrent duplicate events for the same final content are collapsed, but a later edit with changed content runs the full pipeline again.
+- **Autofix side-effect files tracked in turn state** — `runAutofix()` now returns `changedFiles[]`. File-scoped fixers (ruff, biome, eslint, stylelint, sqlfluff, rubocop, ktlint) record the target file on a successful fix; project-wide fixers (cargo clippy --fix, dart fix --apply) snapshot the project tree before and after to detect side-effect changes. Non-target changed files are added to turn state via `cacheManager.addModifiedRange()` so cascade and read-guard see the full mutation set.
+
 ### Changed
 
 - **Linter dispatch runners promoted to always-on for 11 languages** — runners that previously fired only when LSP failed (`mode: "fallback"`) now run alongside LSP unconditionally (`mode: "all"`): `pyright` (Python), `rust-clippy` (Rust), `go-vet` (Go), `shellcheck` (Shell), `tflint` (Terraform), `elixir-check` + `credo` (Elixir), `cpp-check` (C/C++), `dart-analyze` (Dart), `gleam-check` (Gleam), `psscriptanalyzer` (PowerShell), `prisma-validate` (Prisma). These tools provide orthogonal signal to the LSP that was previously invisible on healthy sessions.
