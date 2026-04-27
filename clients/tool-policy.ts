@@ -1482,6 +1482,7 @@ export function getBiomeConfigPath(cwd: string): string | undefined {
 
 export function hasOxfmtConfig(cwd: string): boolean {
 	if (fs.existsSync(path.join(cwd, "oxfmt.toml"))) return true;
+	if (fs.existsSync(path.join(cwd, ".oxfmtrc.json"))) return true;
 	try {
 		const pkg = JSON.parse(
 			fs.readFileSync(path.join(cwd, "package.json"), "utf-8"),

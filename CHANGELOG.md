@@ -6,6 +6,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Added
 
+- **oxfmt `.oxfmtrc.json` detection** — `hasOxfmtConfig` now treats `.oxfmtrc.json` as an activation signal alongside `oxfmt.toml` and `@oxc-project/oxfmt` in package.json.
+
 ## [3.8.33] - 2026-04-27
 
 ### Fixed
