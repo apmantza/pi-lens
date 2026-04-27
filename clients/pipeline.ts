@@ -49,6 +49,7 @@ import {
 	getAutofixPolicyForFile,
 	getPreferredAutofixTools,
 	getRubocopCommand,
+	hasBiomeConfig,
 	hasEslintConfig,
 	hasRubocopConfig,
 	hasSqlfluffConfig,
@@ -459,6 +460,7 @@ async function runAutofix(
 		hasStylelintConfig: hasStylelintConfig(cwd),
 		hasSqlfluffConfig: hasSqlfluffConfig(cwd),
 		hasRubocopConfig: hasRubocopConfig(cwd),
+		hasBiomeConfig: hasBiomeConfig(cwd),
 	};
 	const autofixPolicy = getAutofixPolicyForFile(filePath, autofixContext);
 	const preferredAutofixTools = autofixPolicy?.safe

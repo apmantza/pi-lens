@@ -1004,6 +1004,7 @@ export interface AutofixPolicyContext {
 	hasStylelintConfig?: boolean;
 	hasSqlfluffConfig?: boolean;
 	hasRubocopConfig?: boolean;
+	hasBiomeConfig?: boolean;
 }
 
 export function getLinterPolicyForFile(
@@ -1293,12 +1294,15 @@ export function getAutofixPolicyForFile(
 	}
 
 	if ([".json", ".jsonc"].includes(ext)) {
+		if (!context.hasBiomeConfig) {
+			return undefined;
+		}
 		return {
 			toolNames: ["biome"],
 			preferredTools: ["biome"],
 			defaultTool: "biome",
-			defaultWhenUnconfigured: true,
-			gate: "smart-default",
+			defaultWhenUnconfigured: false,
+			gate: "config-first",
 			safe: true,
 		};
 	}

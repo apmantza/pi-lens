@@ -6,6 +6,14 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Added
 
+## [3.8.33] - 2026-04-27
+
+### Fixed
+
+- **JSON/JSONC autofix skipped without biome config** — `getAutofixPolicyForFile` now returns `undefined` for `.json`/`.jsonc` files when no `biome.json`/`biome.jsonc` is present, matching the format policy's `defaultWhenUnconfigured: false` gate. Previously biome was always invoked for JSON edits (~688ms) even when it had no config and fixed nothing. `hasBiomeConfig` added to `AutofixPolicyContext` and wired into the autofix context in `runAutofix`.
+
+### Added
+
 - **Early-unblock diagnostic aggregation** — `getDiagnostics()` now races `Promise.all` against a first-client-done + grace window (`PI_LENS_LSP_EARLY_UNBLOCK_GRACE_MS`, default 400ms). Once the fastest client delivers results, remaining clients have the grace window before the call returns with whatever is ready. Eliminates the previous worst case where a slow push-only server forced the full 1500ms aggregate wait even when a faster server already had errors. `earlyUnblockedCount` is logged in `lsp_diagnostics_aggregate` latency records.
 - **Dynamic LSP capability registration tracking** — `client/registerCapability` and `client/unregisterCapability` handlers now record live registrations (`id → method`) in `dynamicRegistrations`. `applyDynamicCapabilities()` upgrades `workspaceDiagnosticsSupport` to pull mode when `textDocument/diagnostic` or `workspace/diagnostic` is dynamically registered, and reverts when the last such registration is removed (unless statically advertised). Operation support flags are also upgraded for dynamically-registered nav methods. Servers that defer capability advertisement past `initialize` are now treated correctly.
 - **Deno/TypeScript server disambiguation** — `TypeScriptServer.root` now returns `undefined` for any file with a `deno.json` or `deno.jsonc` ancestor, preventing TypeScript LSP from being spawned alongside Deno LSP for the same file. Eliminates false diagnostics for Deno-specific APIs and removes the wasted parallel spawn.
