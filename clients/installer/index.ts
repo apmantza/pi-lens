@@ -615,21 +615,16 @@ const resolvedPathCache = new Map<string, string>();
 // --- Check Functions ---
 
 /**
- * Check if a command is available in PATH
+ * Check if a command is available in PATH.
+ * Uses where/which so .cmd wrappers resolve without shell: true.
  */
 async function isCommandAvailable(
 	command: string,
-	args: string[] = ["--version"],
+	_args: string[] = ["--version"],
 ): Promise<boolean> {
+	const finder = process.platform === "win32" ? "where" : "which";
 	return new Promise((resolve) => {
-		// On Windows, use shell: true to handle .cmd files
-		const isWindows = process.platform === "win32";
-		const proc = isWindows
-			? spawn(`${command} ${args.join(" ")}`, [], {
-					stdio: "ignore",
-					shell: true,
-				})
-			: spawn(command, args, { stdio: "ignore" });
+		const proc = spawn(finder, [command], { stdio: "ignore" });
 
 		let resolved = false;
 		const timeoutId = setTimeout(() => {
@@ -687,7 +682,9 @@ async function verifyToolBinary(binPath: string): Promise<boolean> {
 			}
 		}
 
-		const proc = spawn(execPath, ["--version"], {
+		// When shell:true (Windows .cmd), bake args into the command string to avoid DEP0190.
+		const spawnCmd = useShell ? `"${execPath}" --version` : execPath;
+		const proc = spawn(spawnCmd, useShell ? [] : ["--version"], {
 			timeout: 10000,
 			stdio: ["ignore", "pipe", "pipe"],
 			shell: useShell,
@@ -1147,9 +1144,14 @@ async function getPythonUserBaseCandidates(): Promise<string[]> {
 
 	for (const probe of probes) {
 		const userBase = await new Promise<string>((resolve) => {
-			const proc = spawn(probe.command, probe.args, {
+			const isWin = process.platform === "win32";
+			// Bake args into command string when shell:true on Windows to avoid DEP0190.
+			const spawnCmd = isWin
+				? [probe.command, ...probe.args].join(" ")
+				: probe.command;
+			const proc = spawn(spawnCmd, isWin ? [] : probe.args, {
 				stdio: ["ignore", "pipe", "pipe"],
-				shell: process.platform === "win32",
+				shell: isWin,
 			});
 
 			let stdout = "";

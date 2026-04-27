@@ -31,6 +31,19 @@ export interface SafeSpawnOptions {
 }
 
 // ============================================================================
+// INTERNAL HELPERS
+// ============================================================================
+
+/**
+ * Escape a single argument for cmd.exe when shell:true is required.
+ * Only used on Windows to avoid DEP0190 (args+shell concatenation warning).
+ */
+function cmdEscapeArg(arg: string): string {
+	if (!/[\s"&|<>^()]/.test(arg)) return arg;
+	return `"${arg.replace(/"/g, '""')}"`;
+}
+
+// ============================================================================
 // ASYNC VERSION (Recommended - Non-blocking)
 // ============================================================================
 
@@ -72,9 +85,14 @@ export async function safeSpawnAsync(
 		let killed = false;
 
 		// Spawn the process (non-blocking)
-		// On Windows, use shell mode for .cmd files (like pyright, biome)
+		// On Windows, use shell mode for .cmd files (like pyright, biome).
+		// Bake args into the command string when shell:true to avoid DEP0190.
 		const isWindows = process.platform === "win32";
-		const child = spawn(command, args, {
+		const spawnCmd = isWindows
+			? [command, ...args.map(cmdEscapeArg)].join(" ")
+			: command;
+		const spawnArgs = isWindows ? [] : args;
+		const child = spawn(spawnCmd, spawnArgs, {
 			cwd: options?.cwd,
 			env: { ...process.env, ...options?.env },
 			windowsHide: true,
@@ -251,6 +269,8 @@ export function safeSpawn(
 	options?: SafeSpawnOptions,
 ): SpawnResult {
 	if (process.platform === "win32") {
+		// shell:true here is justified only because this deprecated sync function
+		// predates safeSpawnAsync. It will be eliminated when safeSpawn is removed.
 		const fullCommand = buildWindowsCommand(command, args);
 		const result = spawnSync(fullCommand, {
 			...(options as SpawnOptions),
