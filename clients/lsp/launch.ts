@@ -9,6 +9,7 @@
 
 import {
 	type ChildProcess,
+	execFileSync,
 	execSync,
 	spawn as nodeSpawn,
 	type SpawnOptions,
@@ -286,8 +287,9 @@ function findBinaryOnPath(
 	env: NodeJS.ProcessEnv,
 ): string | undefined {
 	try {
-		const result = execSync(
-			isWindows ? `where ${command}` : `which ${command}`,
+		const result = execFileSync(
+			isWindows ? "where" : "which",
+			[command],
 			{
 				encoding: "utf-8",
 				stdio: ["ignore", "pipe", "ignore"],

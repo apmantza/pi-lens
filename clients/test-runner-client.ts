@@ -332,7 +332,7 @@ export class TestRunnerClient {
 
 			// Handle glob patterns (pytest style: test_*.py)
 			if (testExt.includes("*")) {
-				const pattern = testExt.replace("*", basename);
+				const pattern = testExt.replace(/\*/g, basename);
 				const searchDir = testDir === "." ? dir : path.join(cwd, testDir);
 
 				let files;

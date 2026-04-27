@@ -418,7 +418,7 @@ export class ReadGuard {
 		if (pattern.includes("*")) {
 			// Convert glob to regex
 			const regex = new RegExp(
-				`^${pattern.replace(/\./g, "\\.").replace(/\*/g, ".*")}$`,
+				`^${pattern.replace(/\\/g, "\\\\").replace(/\./g, "\\.").replace(/\*/g, ".*")}$`,
 			);
 			return regex.test(filePath);
 		}

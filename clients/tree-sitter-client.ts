@@ -1183,6 +1183,7 @@ export function regexStructuralSearch(
 	// Extract pattern structure for regex
 	// "console.log($MSG)" -> /console\.log\(([^)]+)\)/
 	const regexPattern = pattern
+		.replace(/\\/g, "\\\\")
 		.replace(/\./g, "\\.")
 		.replace(/\$\$\$[A-Z_][A-Z0-9_]*/g, "(.*?)") // variadic - non-greedy
 		.replace(/\$[A-Z_][A-Z0-9_]*/g, "([^,)]+)"); // single - capture group

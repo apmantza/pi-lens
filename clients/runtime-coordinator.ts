@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import * as path from "node:path";
 import type { FileComplexity } from "./complexity-client.js";
 import { normalizeMapKey } from "./path-utils.js";
@@ -51,7 +52,7 @@ export class RuntimeCoordinator {
 		this._lastImpactCascadeOutput = "";
 		this._fixedThisTurn.clear();
 		this._reportedThisTurn.clear();
-		this._telemetrySessionId = `lens-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+		this._telemetrySessionId = `lens-${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`;
 		this._telemetryModel = "unknown";
 		this._turnIndex = 0;
 		this._writeIndex = 0;

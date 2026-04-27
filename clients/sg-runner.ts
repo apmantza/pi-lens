@@ -126,7 +126,7 @@ export class SgRunner {
 					}
 					// For other args with spaces/special chars, use double quotes
 					if (/[\s"]/.test(arg)) {
-						return `"${arg.replace(/"/g, '\\"')}"`;
+						return `"${arg.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 					}
 					return arg;
 				});

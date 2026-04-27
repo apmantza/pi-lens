@@ -10,6 +10,8 @@ jobs:
   lint-and-typecheck:
     name: Lint & type-check
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +33,8 @@ jobs:
   test:
     name: Unit tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@v4
@@ -50,6 +54,8 @@ jobs:
     name: Install test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     needs: [lint-and-typecheck, test]
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
