@@ -87,3 +87,4 @@ AGENTS.md
 .npmignore
 .claude/settings.local.json
 autoresearch.jsonl
+coverage/
