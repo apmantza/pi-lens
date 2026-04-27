@@ -40,8 +40,8 @@ function parseDetektOutput(raw: string, filePath: string): Diagnostic[] {
 		if (path.resolve(file.trim()) !== absTarget) continue;
 
 		const severity = level === "error" ? "error" : "warning";
-		const lineNum = parseInt(lineStr, 10);
-		const colNum = parseInt(colStr, 10);
+		const lineNum = Number.parseInt(lineStr, 10);
+		const colNum = Number.parseInt(colStr, 10);
 
 		diagnostics.push({
 			id: `detekt-${rule ?? "unknown"}-${lineNum}-${colNum}`,

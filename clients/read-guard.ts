@@ -81,11 +81,11 @@ const DEFAULT_CONFIG: ReadGuardConfig = {
 // --- ReadGuard Class ---
 
 export class ReadGuard {
-	private config: ReadGuardConfig;
-	private reads = new Map<string, ReadRecord[]>();
-	private edits = new Map<string, EditRecord[]>();
-	private fileTime: FileTime;
-	private exemptions = new Set<string>(); // One-time exemptions via /lens-allow-edit
+	private readonly config: ReadGuardConfig;
+	private readonly reads = new Map<string, ReadRecord[]>();
+	private readonly edits = new Map<string, EditRecord[]>();
+	private readonly fileTime: FileTime;
+	private readonly exemptions = new Set<string>(); // One-time exemptions via /lens-allow-edit
 	private readonly sessionId: string;
 
 	constructor(sessionId: string, config: Partial<ReadGuardConfig> = {}) {

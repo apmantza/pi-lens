@@ -106,7 +106,7 @@ function diffProjectSnapshot(root: string, before: FileSnapshot): string[] {
 	for (const filePath of before.keys()) {
 		if (!after.has(filePath)) changed.add(filePath);
 	}
-	return [...changed].sort();
+	return [...changed].sort((a, b) => a.localeCompare(b));
 }
 
 function exceedsLspSyncLimits(
@@ -918,7 +918,7 @@ export async function runPipeline(
 	// Sync once with final post-format/post-fix content so dispatch and cascade
 	// diagnostics do not observe stale pre-format text.
 	phase.start("lsp_sync");
-	let lspSyncCompleted = true;
+	let lspSyncCompleted = false;
 	if (fileContent) {
 		await resyncLspFile(
 			filePath,

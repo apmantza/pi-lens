@@ -36,7 +36,7 @@ export class RuntimeCoordinator {
 	private _gitGuardHasBlockers = false;
 	private _gitGuardSummary = "";
 	private _readGuard: ReadGuard | null = null;
-	private _lspReadWarmState = new Map<
+	private readonly _lspReadWarmState = new Map<
 		string,
 		{ status: "warming" | "ready"; ts: number }
 	>();
@@ -254,9 +254,7 @@ export class RuntimeCoordinator {
 	}
 
 	get readGuard(): ReadGuard {
-		if (!this._readGuard) {
-			this._readGuard = new ReadGuard(this._telemetrySessionId);
-		}
+		this._readGuard ??= new ReadGuard(this._telemetrySessionId);
 		return this._readGuard;
 	}
 

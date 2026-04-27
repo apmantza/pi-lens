@@ -199,7 +199,7 @@ describe("getDiagnostics early-unblock", () => {
 
 		const result = await diagPromise;
 
-		expect(result.map((d) => d.message).sort()).toEqual([
+		expect(result.map((d) => d.message).sort((a, b) => a.localeCompare(b))).toEqual([
 			"error from A",
 			"error from B",
 		]);

@@ -507,7 +507,7 @@ const timing = {
 		turnTimeline.length > 0
 			? turnTimeline.reduce((slowest, turn) =>
 					(slowest?.durationMs || 0) >= (turn.durationMs || 0) ? slowest : turn,
-				)
+				turnTimeline[0])
 			: null,
 };
 
