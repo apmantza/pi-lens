@@ -27,6 +27,15 @@ const CHANGED_SYMBOLS_PREFIX = "session.reviewGraph.changedSymbols:";
 const treeSitterClient = new TreeSitterClient();
 const extractorCache = new Map<string, TreeSitterSymbolExtractor>();
 
+// Per-invocation Promise cache: deduplicates concurrent buildOrUpdateGraph calls
+// for the same (cwd, changedFiles). Cleared at the start of each pipeline
+// invocation via clearGraphCache() so each edit gets a fresh build.
+const _buildCache = new Map<string, Promise<ReviewGraph>>();
+
+export function clearGraphCache(): void {
+	_buildCache.clear();
+}
+
 function makeCtx(
 	filePath: string,
 	cwd: string,
@@ -386,7 +395,7 @@ function resolveDeferredSymbolEdges(graph: ReviewGraph): void {
 	rebuildIndexes(graph);
 }
 
-export async function buildOrUpdateGraph(
+async function _doBuildGraph(
 	cwd: string,
 	changedFiles: string[],
 	facts: FactStore,
@@ -422,4 +431,21 @@ export async function buildOrUpdateGraph(
 	graph.builtAt = new Date().toISOString();
 	facts.setSessionFact("session.reviewGraph", graph);
 	return graph;
+}
+
+export function buildOrUpdateGraph(
+	cwd: string,
+	changedFiles: string[],
+	facts: FactStore,
+): Promise<ReviewGraph> {
+	const cacheKey = `${cwd}|${[...changedFiles].sort().join(",")}`;
+	const cached = _buildCache.get(cacheKey);
+	if (cached) return cached;
+
+	const promise = _doBuildGraph(cwd, changedFiles, facts).catch((err) => {
+		_buildCache.delete(cacheKey);
+		throw err as Error;
+	});
+	_buildCache.set(cacheKey, promise);
+	return promise;
 }

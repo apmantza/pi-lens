@@ -21,6 +21,7 @@ import {
 	computeImpactCascadeForFile,
 	dispatchLintWithResult,
 } from "./dispatch/integration.js";
+import { clearGraphCache } from "./review-graph/builder.js";
 import {
 	resolveRunnerPath,
 	toRunnerDisplayPath,
@@ -812,6 +813,7 @@ export async function runPipeline(
 
 	const phase = createPhaseTracker(toolName, filePath);
 	const pipelineStart = Date.now();
+	clearGraphCache();
 	phase.start("total");
 
 	// --- 1. Read file content ---
