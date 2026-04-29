@@ -8,7 +8,6 @@
 import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { NativeRustCoreClient } from "../../native-rust-client.js";
 import {
 	buildProjectIndex,
 	findSimilarFunctions,
@@ -25,8 +24,6 @@ import type {
 	RunnerResult,
 } from "../types.js";
 
-// Singleton Rust client — initialised once, reused across runner invocations.
-const rustClient = new NativeRustCoreClient();
 type TypeScriptModule = typeof import("typescript");
 let tsModulePromise: Promise<TypeScriptModule | null> | undefined;
 
@@ -36,9 +33,6 @@ async function loadTypeScript(): Promise<TypeScriptModule | null> {
 	}
 	return tsModulePromise;
 }
-
-/** Feature flag: set to false to force the pure-TypeScript path. */
-const USE_RUST = true;
 
 // ============================================================================
 // Configuration
@@ -167,24 +161,6 @@ const similarityRunner: RunnerDefinition = {
 		if (!cachedIndex || cachedIndex.entries.size === 0) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
-
-		// ── Rust fast-path ─────────────────────────────────────────────────────
-		// Try Rust for file scanning + similarity detection. If the Rust binary
-		// is available, use it. On any failure, fall through to the pure-TS path.
-		if (USE_RUST && rustClient.isAvailable()) {
-			try {
-				const rustResult = await runWithRust(
-					filePath,
-					projectRoot,
-					CONFIG.SIMILARITY_THRESHOLD,
-					CONFIG.MAX_SUGGESTIONS,
-				);
-				if (rustResult !== null) return rustResult;
-			} catch {
-				// Fall through to TypeScript implementation.
-			}
-		}
-		// ── TypeScript fallback ─────────────────────────────────────────────────
 
 		const ts = await loadTypeScript();
 		if (!ts) {
@@ -448,103 +424,6 @@ function extractLocationPath(location: string): string {
 	const m = location.match(/^(.*):\d+$/);
 	if (m?.[1]) return m[1];
 	return location;
-}
-
-// ============================================================================
-// Rust fast-path
-// ============================================================================
-
-/**
- * Run similarity detection via the Rust binary.
- *
- * Flow:
- * 1. Scan project files with Rust (respects .gitignore, much faster than glob).
- * 2. Build the Rust index (persisted to .pi-lens/rust-index.json).
- * 3. Query similarity for the current file.
- * 4. Convert matches to Diagnostics.
- *
- * Returns `null` if the Rust path cannot produce results (no matches is still
- * a valid result — returned as an empty-diagnostic RunnerResult).
- */
-async function runWithRust(
-	filePath: string,
-	projectRoot: string,
-	threshold: number,
-	maxSuggestions: number,
-): Promise<RunnerResult | null> {
-	// 1. Scan project files.
-	const scanned = await rustClient.scanProject(projectRoot, [".ts", ".tsx"]);
-	if (scanned.length === 0) return null;
-
-	const relativeFiles = scanned.map((e) =>
-		path.relative(projectRoot, e.path).replace(/\\/g, "/"),
-	);
-
-	// 2. Build index (saves to .pi-lens/rust-index.json).
-	await rustClient.buildIndex(projectRoot, relativeFiles);
-
-	// 3. Find similarities for the current file.
-	const matches = await rustClient.findSimilarities(
-		projectRoot,
-		filePath,
-		threshold,
-	);
-
-	if (matches.length === 0) {
-		return { status: "succeeded", diagnostics: [], semantic: "none" };
-	}
-
-	// 4. Convert to Diagnostics.
-	const diagnostics: Diagnostic[] = [];
-	const seenTargets = new Map<string, number>();
-	for (const m of matches.slice(0, maxSuggestions)) {
-		const similarityPct = Math.round(m.similarity * 100);
-		// source_id / target_id format: "path/to/file.ts::funcName@line"
-		const parseId = (
-			id: string,
-		): { file: string; name: string; line: number } => {
-			const m = id.match(/^(.*)::([^@]+)@(\d+)$/);
-			if (!m) return { file: id, name: "?", line: 1 };
-			return {
-				file: m[1].replace(/\\/g, "/"),
-				name: m[2],
-				line: Number.parseInt(m[3], 10) || 1,
-			};
-		};
-		const source = parseId(m.source_id);
-		const target = parseId(m.target_id);
-		if (!hasMeaningfulNameOverlap(source.name, target.name)) {
-			continue;
-		}
-		const targetKey = `${target.name}@${target.file}:${target.line}`;
-		const seenForTarget = seenTargets.get(targetKey) ?? 0;
-		if (seenForTarget >= CONFIG.MAX_PER_TARGET_NAME) {
-			continue;
-		}
-		seenTargets.set(targetKey, seenForTarget + 1);
-		const resolvedTarget = path.isAbsolute(target.file)
-			? target.file
-			: path.join(projectRoot, target.file);
-		if (!nodeFs.existsSync(resolvedTarget)) {
-			continue;
-		}
-		diagnostics.push({
-			id: `similarity-rust-${m.source_id}-${m.target_id}`,
-			tool: "similarity",
-			filePath,
-			line: source.line,
-			column: 1,
-			message: `Function '${source.name}' has ${similarityPct}% similarity to '${target.name}()' at ${target.file}:${target.line}. Consider reusing it if behavior is equivalent.`,
-			severity: "warning" as const,
-			semantic: "warning" as const,
-		});
-	}
-
-	return {
-		status: "succeeded",
-		diagnostics,
-		semantic: diagnostics.length > 0 ? "warning" : "none",
-	};
 }
 
 // ============================================================================
