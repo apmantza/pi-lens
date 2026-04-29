@@ -438,7 +438,7 @@ export function buildOrUpdateGraph(
 	changedFiles: string[],
 	facts: FactStore,
 ): Promise<ReviewGraph> {
-	const cacheKey = `${cwd}|${[...changedFiles].sort().join(",")}`;
+	const cacheKey = `${cwd}|${[...changedFiles].sort((a, b) => a.localeCompare(b)).join(",")}`;
 	const cached = _buildCache.get(cacheKey);
 	if (cached) return cached;
 
