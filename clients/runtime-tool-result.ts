@@ -227,8 +227,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		output: string;
 		hasBlockers: boolean;
 		isError?: boolean;
-		cascadeOutput?: string;
-		impactCascadeOutput?: string;
+		cascadeResult?: import("./cascade-types.js").CascadeResult;
 		changedFiles?: string[];
 	};
 	const pipelinePromise = runPipeline(
@@ -311,15 +310,8 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		}
 	}
 
-	if (result.cascadeOutput) {
-		runtime.lastCascadeOutput = result.cascadeOutput;
-	} else if (result.cascadeOutput === undefined && !getFlag("no-lsp")) {
-		runtime.lastCascadeOutput = "";
-	}
-	if (result.impactCascadeOutput) {
-		runtime.lastImpactCascadeOutput = result.impactCascadeOutput;
-	} else {
-		runtime.lastImpactCascadeOutput = "";
+	if (result.cascadeResult) {
+		runtime.appendCascadeResult(result.cascadeResult);
 	}
 
 	if (result.isError) {

@@ -18,7 +18,7 @@ import type { BiomeClient } from "./biome-client.js";
 import { getDiagnosticLogger } from "./diagnostic-logger.js";
 import { getDiagnosticTracker } from "./diagnostic-tracker.js";
 import {
-	computeImpactCascadeForFile,
+	computeCascadeForFile,
 	dispatchLintWithResult,
 } from "./dispatch/integration.js";
 import { clearGraphCache } from "./review-graph/builder.js";
@@ -173,8 +173,7 @@ export interface PipelineResult {
 	 * Intentionally NOT included in output — surfaced at turn_end instead
 	 * so mid-refactor intermediate errors don't derail the agent.
 	 */
-	cascadeOutput?: string;
-	impactCascadeOutput?: string;
+	cascadeResult?: import("./cascade-types.js").CascadeResult;
 	/** True if secrets found — block the agent */
 	isError: boolean;
 	/** True if file was modified by format/autofix */
@@ -1029,14 +1028,12 @@ export async function runPipeline(
 	// --- 7. Cascade diagnostics (LSP only) ---
 	// Deferred: cascade errors in OTHER files are NOT shown inline — surfaced at
 	// turn_end so mid-refactor intermediate errors don't derail the agent.
-	const cascadeOutput = await gatherCascadeDiagnostics(
-		new Set([filePath]),
-		cwd,
-		toolName,
-		getFlag,
-		dbg,
-	);
-	const impactCascadeOutput = await computeImpactCascadeForFile(filePath, cwd);
+	const cascadeResult = getFlag("no-lsp")
+		? undefined
+		: await computeCascadeForFile(filePath, cwd, {
+				hasBlockers,
+				dbg,
+		  });
 
 	// --- Final timing + all-clear ---
 	const elapsed = Date.now() - pipelineStart;
@@ -1049,8 +1046,7 @@ export async function runPipeline(
 	return {
 		output,
 		hasBlockers,
-		cascadeOutput,
-		impactCascadeOutput,
+		cascadeResult,
 		isError: false,
 		fileModified: formatChanged || fixedCount > 0,
 		changedFiles: [...piChangedFiles],

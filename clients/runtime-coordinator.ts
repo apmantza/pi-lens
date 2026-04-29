@@ -21,8 +21,6 @@ export class RuntimeCoordinator {
 	private _cachedExports = new Map<string, string>();
 	private _cachedProjectIndex: ProjectIndex | null = null;
 	private _startupScansInFlight = new Map<string, number>();
-	private _lastCascadeOutput = "";
-	private _lastImpactCascadeOutput = "";
 	private _cascadeResults: CascadeResult[] = [];
 	private _complexityBaselines = new Map<string, FileComplexity>();
 	private _fixedThisTurn = new Set<string>();
@@ -50,8 +48,6 @@ export class RuntimeCoordinator {
 		this._cachedExports.clear();
 		this._cachedProjectIndex = null;
 		this._startupScansInFlight.clear();
-		this._lastCascadeOutput = "";
-		this._lastImpactCascadeOutput = "";
 		this._cascadeResults = [];
 		this._fixedThisTurn.clear();
 		this._reportedThisTurn.clear();
@@ -90,8 +86,6 @@ export class RuntimeCoordinator {
 	}
 
 	beginTurn(): void {
-		this._lastCascadeOutput = "";
-		this._lastImpactCascadeOutput = "";
 		this._cascadeResults = [];
 		this._turnIndex += 1;
 		this._writeIndex = 0;
@@ -211,34 +205,6 @@ export class RuntimeCoordinator {
 
 	set cachedProjectIndex(value: ProjectIndex | null) {
 		this._cachedProjectIndex = value;
-	}
-
-	get lastCascadeOutput(): string {
-		return this._lastCascadeOutput;
-	}
-
-	set lastCascadeOutput(value: string) {
-		this._lastCascadeOutput = value;
-	}
-
-	consumeLastCascadeOutput(): string {
-		const current = this._lastCascadeOutput;
-		this._lastCascadeOutput = "";
-		return current;
-	}
-
-	get lastImpactCascadeOutput(): string {
-		return this._lastImpactCascadeOutput;
-	}
-
-	set lastImpactCascadeOutput(value: string) {
-		this._lastImpactCascadeOutput = value;
-	}
-
-	consumeLastImpactCascadeOutput(): string {
-		const current = this._lastImpactCascadeOutput;
-		this._lastImpactCascadeOutput = "";
-		return current;
 	}
 
 	appendCascadeResult(result: CascadeResult): void {

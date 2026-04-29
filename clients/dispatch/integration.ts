@@ -46,10 +46,15 @@ import {
 	computeImpactCascade,
 	formatImpactCascade,
 } from "../review-graph/service.js";
+import type { CascadeResult } from "../cascade-types.js";
+import { logCascade } from "../cascade-logger.js";
+import { getLSPService } from "../lsp/index.js";
+import { isFileKind } from "../file-kinds.js";
+import * as nodeFs from "node:fs";
 // Register fact providers
 import { registerProvider, runProviders } from "./fact-runner.js";
 import { fileContentProvider } from "./facts/file-content.js";
-import { resolveRunnerPath } from "./runner-context.js";
+import { resolveRunnerPath, toRunnerDisplayPath } from "./runner-context.js";
 import { registerDefaultRunners } from "./runners/index.js";
 
 registerProvider(fileContentProvider);
@@ -347,6 +352,197 @@ export async function computeImpactCascadeForFile(
 	const graph = await buildOrUpdateGraph(cwd, [normalizedFile], sessionFacts);
 	const impact = computeImpactCascade(graph, normalizedFile);
 	return formatImpactCascade(impact);
+}
+
+/**
+ * Unified cascade orchestration — builds graph, discovers neighbors, and
+ * gathers per-file diagnostics with structured logging to cascade.log.
+ *
+ * autoPropagate (jsts): tsserver pushes diagnostics automatically, so we
+ * read from the passive snapshot instead of touching neighbors actively.
+ */
+export async function computeCascadeForFile(
+	filePath: string,
+	cwd: string,
+	options: {
+		hasBlockers?: boolean;
+		isNewFile?: boolean;
+		dbg?: (msg: string) => void;
+	} = {},
+): Promise<CascadeResult | undefined> {
+	const { hasBlockers = false, isNewFile = false, dbg } = options;
+
+	if (hasBlockers || isNewFile) {
+		logCascade({
+			phase: "cascade_skip",
+			filePath,
+			reason: hasBlockers ? "primary_has_blockers" : "new_file",
+		});
+		return undefined;
+	}
+
+	const normalizedFile = resolveRunnerPath(cwd, filePath);
+	const graphStart = Date.now();
+	const graph = await buildOrUpdateGraph(cwd, [normalizedFile], sessionFacts);
+	const graphMs = Date.now() - graphStart;
+
+	logCascade({
+		phase: "graph_build",
+		filePath,
+		graphBuiltMs: graphMs,
+	});
+
+	const impact = computeImpactCascade(graph, normalizedFile);
+	const neighborFiles = impact.neighborFiles.filter(
+		(n) => nodeFs.existsSync(n),
+	);
+
+	logCascade({
+		phase: "neighbors_computed",
+		filePath,
+		neighborCount: neighborFiles.length,
+		metadata: { neighbors: neighborFiles.slice(0, 10) },
+	});
+
+	const lspService = getLSPService();
+	const CASCADE_TTL_MS = 240_000;
+	const MAX_PER_FILE = 20;
+
+	const neighbors: CascadeResult["neighbors"] = [];
+
+	for (const neighborPath of neighborFiles) {
+		const neighborStart = Date.now();
+		const autoPropagate = isFileKind(neighborPath, "jsts");
+
+		if (autoPropagate) {
+			// tsserver tracks all files — read from passive snapshot
+			const allDiags = await lspService.getAllDiagnostics();
+			const entry = allDiags.get(neighborPath);
+			const diags = entry && Date.now() - entry.ts < CASCADE_TTL_MS
+				? entry.diags.filter((d) => d.severity === 1).slice(0, MAX_PER_FILE)
+				: [];
+			const durationMs = Date.now() - neighborStart;
+
+			logCascade({
+				phase: "neighbor_snapshot",
+				filePath,
+				neighborFile: neighborPath,
+				diagnosticCount: diags.length,
+				durationMs,
+				autoPropagate: true,
+			});
+
+			neighbors.push({
+				filePath: neighborPath,
+				reason: determineNeighborReason(impact, neighborPath),
+				diagnostics: diags,
+				lspTouched: false,
+				durationMs,
+			});
+		} else {
+			// Actively touch with silent=true to avoid triggering N project-wide rechecks
+			try {
+				const content = nodeFs.readFileSync(neighborPath, "utf8");
+				await lspService.touchFile(neighborPath, content, {
+					diagnostics: "full",
+					silent: true,
+					source: "cascade",
+				});
+				const rawDiags = await lspService.getDiagnostics(neighborPath);
+				const diags = rawDiags
+					.filter((d) => d.severity === 1)
+					.slice(0, MAX_PER_FILE);
+				const durationMs = Date.now() - neighborStart;
+
+				logCascade({
+					phase: "neighbor_touch",
+					filePath,
+					neighborFile: neighborPath,
+					diagnosticCount: diags.length,
+					durationMs,
+					lspTouched: true,
+				});
+
+				neighbors.push({
+					filePath: neighborPath,
+					reason: determineNeighborReason(impact, neighborPath),
+					diagnostics: diags,
+					lspTouched: true,
+					durationMs,
+				});
+			} catch (err) {
+				dbg?.(`cascade neighbor touch error for ${neighborPath}: ${err}`);
+				logCascade({
+					phase: "neighbor_fallback",
+					filePath,
+					neighborFile: neighborPath,
+					fallbackUsed: true,
+					error: String(err),
+				});
+				// Fall back to passive snapshot
+				const allDiags = await lspService.getAllDiagnostics();
+				const entry = allDiags.get(neighborPath);
+				const diags = entry && Date.now() - entry.ts < CASCADE_TTL_MS
+					? entry.diags.filter((d) => d.severity === 1).slice(0, MAX_PER_FILE)
+					: [];
+				neighbors.push({
+					filePath: neighborPath,
+					reason: "fallback",
+					diagnostics: diags,
+					lspTouched: false,
+				});
+			}
+		}
+	}
+
+	const formatted = formatCascadeResult(filePath, cwd, impact, neighbors);
+
+	logCascade({
+		phase: "cascade_result",
+		filePath,
+		neighborCount: neighbors.length,
+		diagnosticCount: neighbors.reduce((sum, n) => sum + n.diagnostics.length, 0),
+		metadata: { hasOutput: formatted.length > 0 },
+	});
+
+	return { filePath, impact, neighbors, formatted };
+}
+
+function determineNeighborReason(
+	impact: ReturnType<typeof computeImpactCascade>,
+	neighborPath: string,
+): CascadeResult["neighbors"][number]["reason"] {
+	if (impact.directImporters.includes(neighborPath)) return "imports";
+	if (impact.directCallers.includes(neighborPath)) return "calls";
+	return "references";
+}
+
+function formatCascadeResult(
+	filePath: string,
+	cwd: string,
+	impact: ReturnType<typeof computeImpactCascade>,
+	neighbors: CascadeResult["neighbors"],
+): string {
+	const withErrors = neighbors.filter((n) => n.diagnostics.length > 0);
+	if (withErrors.length === 0) return "";
+
+	const impactHeader = formatImpactCascade(impact);
+	let out = impactHeader ? `${impactHeader}\n` : "";
+	out += `📐 Cascade errors in ${withErrors.length} neighbor file(s) — fix before finishing turn:`;
+
+	for (const neighbor of withErrors) {
+		const display = toRunnerDisplayPath(cwd, neighbor.filePath);
+		out += `\n<diagnostics file="${display}">`;
+		for (const d of neighbor.diagnostics) {
+			const line = (d.range?.start?.line ?? 0) + 1;
+			const col = (d.range?.start?.character ?? 0) + 1;
+			const code = d.code ? ` code=${String(d.code)}` : "";
+			out += `\n  line ${line}, col ${col}${code}: ${d.message.split("\n")[0].slice(0, 100)}`;
+		}
+		out += "\n</diagnostics>";
+	}
+
+	return out;
 }
 
 /**

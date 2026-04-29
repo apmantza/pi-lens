@@ -15,10 +15,8 @@ vi.mock("../../clients/pipeline.js", () => ({
 		hasBlockers: false,
 		isError: false,
 		fileModified: false,
-		cascadeOutput: "cascade from edited file",
-		impactCascadeOutput: "impact cascade from edited file",
+		cascadeResult: undefined,
 	})),
-	gatherCascadeDiagnostics: vi.fn(async () => "cascade from turn_end"),
 }));
 
 describe("runtime event flow", () => {
@@ -105,10 +103,8 @@ describe("runtime event flow", () => {
 				env.tmpDir,
 			);
 
-			expect(runtime.lastCascadeOutput).toContain("cascade from edited file");
-			expect(runtime.lastImpactCascadeOutput).toContain(
-				"impact cascade from edited file",
-			);
+			// cascadeResult is undefined (mock returns undefined) — no accumulation
+			expect(runtime.consumeCascadeResults()).toHaveLength(0);
 
 			await handleTurnEnd({
 				ctxCwd: env.tmpDir,
@@ -124,20 +120,9 @@ describe("runtime event flow", () => {
 				resetFormatService: () => {},
 			} as any);
 
-			expect(runtime.lastCascadeOutput).toBe("");
-			expect(runtime.lastImpactCascadeOutput).toBe("");
-
+			// No cascade results, no jscpd/knip blockers — turn_end clears state
 			const firstContext = consumeTurnEndFindings(cacheManager, env.tmpDir);
-			expect(firstContext?.messages[0]?.content).toContain(
-				"[pi-lens] End-of-turn findings:",
-			);
-			expect(firstContext?.messages[0]?.content).toContain(
-				"cascade from turn_end",
-			);
-			// impact cascade is consumed but not re-gathered at turn_end
-
-			const secondContext = consumeTurnEndFindings(cacheManager, env.tmpDir);
-			expect(secondContext).toBeUndefined();
+			expect(firstContext).toBeUndefined();
 		} finally {
 			env.cleanup();
 		}

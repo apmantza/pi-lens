@@ -9,7 +9,7 @@ import {
 import { getKnipIgnorePatterns } from "./file-utils.js";
 import type { JscpdClient } from "./jscpd-client.js";
 import type { KnipClient, KnipIssue } from "./knip-client.js";
-import { gatherCascadeDiagnostics } from "./pipeline.js";
+import { logCascade } from "./cascade-logger.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 import type { TestRunnerClient } from "./test-runner-client.js";
@@ -118,22 +118,31 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 
 	const blockerParts: string[] = [];
 
-	// Re-gather cascade fresh so turn_end reflects the current LSP state, not
-	// the stale output from the last individual edit's pipeline run.
-	runtime.consumeLastCascadeOutput();
-	runtime.consumeLastImpactCascadeOutput();
-	if (!getFlag("no-lsp")) {
-		const excludePaths = new Set(
-			files.map((f) => resolveRunnerPath(cwd, f)),
-		);
-		const freshCascade = await gatherCascadeDiagnostics(
-			excludePaths,
-			cwd,
-			"turn_end",
-			getFlag,
-			dbg,
-		);
-		if (freshCascade) blockerParts.push(freshCascade);
+	// Merge accumulated cascade results from all pipeline runs this turn.
+	const cascadeResults = runtime.consumeCascadeResults();
+	if (cascadeResults.length > 0) {
+		// Deduplicate by filePath (last result wins — most recent LSP state)
+		const seen = new Map<string, (typeof cascadeResults)[number]>();
+		for (const r of cascadeResults) {
+			seen.set(r.filePath, r);
+		}
+		const mergedParts: string[] = [];
+		for (const result of seen.values()) {
+			if (result.formatted) mergedParts.push(result.formatted);
+		}
+		if (mergedParts.length > 0) {
+			blockerParts.push(mergedParts.join("\n\n"));
+		}
+		logCascade({
+			phase: "cascade_turn_end",
+			filePath: files[0] ?? cwd,
+			neighborCount: cascadeResults.reduce((s, r) => s + r.neighbors.length, 0),
+			diagnosticCount: cascadeResults.reduce(
+				(s, r) => s + r.neighbors.reduce((ns, n) => ns + n.diagnostics.length, 0),
+				0,
+			),
+			metadata: { fileCount: cascadeResults.length, merged: seen.size },
+		});
 	}
 
 	if (runtime.isStartupScanInFlight("jscpd")) {
