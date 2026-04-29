@@ -169,6 +169,7 @@ export function runLogCleanup(dbg?: (msg: string) => void): {
 		path.join(LOG_DIR, "latency.log"),
 		path.join(LOG_DIR, "sessionstart.log"),
 		path.join(LOG_DIR, "tree-sitter.log"),
+		path.join(LOG_DIR, "cascade.log"),
 	];
 
 	for (const logFile of mainLogs) {
