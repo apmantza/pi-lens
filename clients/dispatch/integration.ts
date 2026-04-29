@@ -43,6 +43,7 @@ export { clearLatencyReports, formatLatencyReport, getLatencyReports };
 import * as nodeFs from "node:fs";
 import { logCascade } from "../cascade-logger.js";
 import type { CascadeResult } from "../cascade-types.js";
+import { getDiagnosticTracker } from "../diagnostic-tracker.js";
 import { isFileKind } from "../file-kinds.js";
 import { getServersForFileWithConfig } from "../lsp/config.js";
 import { getLSPService } from "../lsp/index.js";
@@ -59,6 +60,7 @@ import { registerProvider, runProviders } from "./fact-runner.js";
 import { fileContentProvider } from "./facts/file-content.js";
 import { resolveRunnerPath, toRunnerDisplayPath } from "./runner-context.js";
 import { registerDefaultRunners } from "./runners/index.js";
+import { convertLspDiagnostics } from "./utils/lsp-diagnostics.js";
 
 registerProvider(fileContentProvider);
 
@@ -355,7 +357,7 @@ export function resetDispatchBaselines(): void {
 type NeighborCacheEntry = {
 	turnSeq: number;
 	writeSeq: number;
-	diagnostics: import("../lsp/client.js").LSPDiagnostic[];
+	diagnostics: import("./types.js").Diagnostic[];
 };
 const neighborTouchCache = new Map<string, NeighborCacheEntry>();
 
@@ -499,7 +501,11 @@ export async function computeCascadeForFile(
 			const snapshotValid =
 				entry != null && Date.now() - entry.ts < CASCADE_TTL_MS;
 			const diags = snapshotValid
-				? entry.diags.filter((d) => d.severity === 1).slice(0, MAX_PER_FILE)
+				? convertLspDiagnostics(
+						entry.diags.filter((d) => d.severity === 1).slice(0, MAX_PER_FILE),
+						neighborPath,
+						{ source: "cascade" },
+					)
 				: [];
 			if (snapshotValid) producedLspData = true;
 			const durationMs = Date.now() - neighborStart;
@@ -586,9 +592,11 @@ export async function computeCascadeForFile(
 				});
 				// Single wait — getDiagnostics handles multi-client aggregation (D7).
 				const rawDiags = await lspService.getDiagnostics(neighborPath);
-				const diags = rawDiags
-					.filter((d) => d.severity === 1)
-					.slice(0, MAX_PER_FILE);
+				const diags = convertLspDiagnostics(
+					rawDiags.filter((d) => d.severity === 1).slice(0, MAX_PER_FILE),
+					neighborPath,
+					{ source: "cascade" },
+				);
 				const durationMs = Date.now() - neighborStart;
 
 				// Update cache for this neighbor at the current write sequence
@@ -641,7 +649,13 @@ export async function computeCascadeForFile(
 				const entry = allDiags.get(normalizeMapKey(neighborPath));
 				const diags =
 					entry && Date.now() - entry.ts < CASCADE_TTL_MS
-						? entry.diags.filter((d) => d.severity === 1).slice(0, MAX_PER_FILE)
+						? convertLspDiagnostics(
+								entry.diags
+									.filter((d) => d.severity === 1)
+									.slice(0, MAX_PER_FILE),
+								neighborPath,
+								{ source: "cascade" },
+							)
 						: [];
 				neighbors.push({
 					filePath: neighborPath,
@@ -696,6 +710,8 @@ export async function computeCascadeForFile(
 
 	if (!formatted) return undefined;
 
+	getDiagnosticTracker().trackShown(neighbors.flatMap((n) => n.diagnostics));
+
 	return { filePath, impact, neighbors, formatted };
 }
 
@@ -714,7 +730,11 @@ function appendFallbackNeighbors(
 		if (diagKey === normalizedFileKey || seen.has(diagKey)) continue;
 		if (!nodeFs.existsSync(diagPath)) continue;
 		if (now - ts > CASCADE_TTL_MS) continue;
-		const errors = diags.filter((d) => d.severity === 1).slice(0, MAX_PER_FILE);
+		const errors = convertLspDiagnostics(
+			diags.filter((d) => d.severity === 1).slice(0, MAX_PER_FILE),
+			diagPath,
+			{ source: "cascade" },
+		);
 		if (errors.length === 0) continue;
 		neighbors.push({
 			filePath: diagPath,
@@ -754,9 +774,9 @@ function formatCascadeResult(
 		const display = toRunnerDisplayPath(cwd, neighbor.filePath);
 		out += `\n<diagnostics file="${display}">`;
 		for (const d of neighbor.diagnostics) {
-			const line = (d.range?.start?.line ?? 0) + 1;
-			const col = (d.range?.start?.character ?? 0) + 1;
-			const code = d.code ? ` code=${String(d.code)}` : "";
+			const line = d.line ?? 1;
+			const col = d.column ?? 1;
+			const code = d.rule ? ` rule=${d.rule}` : "";
 			out += `\n  line ${line}, col ${col}${code}: ${d.message.split("\n")[0].slice(0, 100)}`;
 		}
 		out += "\n</diagnostics>";

@@ -22,6 +22,7 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
+import { convertLspDiagnostics } from "../utils/lsp-diagnostics.js";
 import { readFileContent } from "./utils.js";
 
 const LSP_MAX_FILE_BYTES = RUNTIME_CONFIG.pipeline.lspMaxFileBytes;
@@ -204,28 +205,11 @@ const lspRunner: RunnerDefinition = {
 			}
 		}
 
-		const diagnostics: Diagnostic[] = validLspDiags.map((d, idx) => {
-			const severity =
-				d.severity === 1 ? "error" : d.severity === 2 ? "warning" : "info";
-			const semantic =
-				d.severity === 1 ? "blocking" : d.severity === 2 ? "warning" : "none";
-			const hasSuggestion = fixSuggestionByIndex.has(idx);
-			return {
-				id: `lsp:${d.code ?? "unknown"}:${d.range.start.line}`,
-				message: d.message,
-				filePath: diagnosticPath,
-				line: d.range.start.line + 1,
-				column: d.range.start.character + 1,
-				severity,
-				semantic,
-				tool: "lsp",
-				code: String(d.code ?? ""),
-				fixable: hasSuggestion,
-				autoFixAvailable: false,
-				fixKind: hasSuggestion ? "suggestion" : undefined,
-				fixSuggestion: fixSuggestionByIndex.get(idx),
-			};
-		});
+		const diagnostics: Diagnostic[] = convertLspDiagnostics(
+			validLspDiags,
+			diagnosticPath,
+			{ fixSuggestionByIndex },
+		);
 
 		const hasErrors = diagnostics.some((d) => d.semantic === "blocking");
 		const resultSemantic = hasErrors

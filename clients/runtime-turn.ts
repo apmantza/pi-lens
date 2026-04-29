@@ -138,9 +138,9 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				const display = toRunnerDisplayPath(cwd, neighbor.filePath);
 				merged += `\n<diagnostics file="${display}">`;
 				for (const d of neighbor.diagnostics) {
-					const line = (d.range?.start?.line ?? 0) + 1;
-					const col = (d.range?.start?.character ?? 0) + 1;
-					const code = d.code ? ` code=${String(d.code)}` : "";
+					const line = d.line ?? 1;
+					const col = d.column ?? 1;
+					const code = d.rule ? ` rule=${d.rule}` : "";
 					merged += `\n  line ${line}, col ${col}${code}: ${d.message.split("\n")[0].slice(0, 100)}`;
 				}
 				merged += "\n</diagnostics>";
