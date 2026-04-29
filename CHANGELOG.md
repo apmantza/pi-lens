@@ -6,6 +6,12 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Added
 
+- **`PILENS_DATA_DIR` env var for external project data storage** — when set, all project-generated data (caches, index, worklog, LSP install choices, elixir outputs, metrics history) is written to `$PILENS_DATA_DIR/<project-slug>/` instead of `<project>/.pi-lens/`. Keeps project folders clean for mounted, containerised, or ephemeral setups. Existing users are unaffected — default behaviour is unchanged. Slug is derived from the project's absolute path using the existing cross-platform `normalizeFilePath` utility.
+
+### Fixed
+
+- **Misleading LSP error when `filePath` is a directory** — `lsp_navigation` now stat-checks the resolved path before server lookup. Passing a directory (e.g. `.`) to `workspaceDiagnostics` falls through to workspace-scoped mode; file-scoped operations return a clear `filepath_is_directory` error instead of the previous "No LSP server available … Check that the language server is installed" message, which incorrectly implied an install problem.
+
 - **oxfmt `.oxfmtrc.json` detection** — `hasOxfmtConfig` now treats `.oxfmtrc.json` as an activation signal alongside `oxfmt.toml` and `@oxc-project/oxfmt` in package.json.
 
 ## [3.8.33] - 2026-04-27
