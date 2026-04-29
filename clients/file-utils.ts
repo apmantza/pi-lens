@@ -30,7 +30,8 @@ export function getProjectDataDir(cwd: string): string {
 		.replace(/^[a-z]:/i, "")      // strip Windows drive letter
 		.replace(/\/+/g, "-")          // separators → dashes
 		.replace(/[^A-Za-z0-9-]/g, "") // strip anything else
-		.replace(/^-+|-+$/g, "");      // trim leading/trailing dashes
+		.replace(/^-+/, "")            // trim leading dashes
+		.replace(/-+$/, "");           // trim trailing dashes
 	return path.join(base.trim(), slug || "default");
 }
 
