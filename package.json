@@ -81,7 +81,7 @@
 		"@ast-grep/napi": "^0.42.1",
 		"minimatch": "^10.2.5",
 		"typebox": "^1.0.0",
-		"typescript": "^5.0.0",
+		"typescript": "^6.0.3",
 		"vscode-jsonrpc": "^8.2.1"
 	},
 	"optionalDependencies": {
