@@ -22,10 +22,7 @@ import {
 	dispatchLintWithResult,
 } from "./dispatch/integration.js";
 import { clearGraphCache } from "./review-graph/builder.js";
-import {
-	resolveRunnerPath,
-	toRunnerDisplayPath,
-} from "./dispatch/runner-context.js";
+import { toRunnerDisplayPath } from "./dispatch/runner-context.js";
 import {
 	resolveCommandArgsWithInstallFallback,
 	resolveToolCommand,
@@ -41,7 +38,6 @@ import type { FormatService } from "./format-service.js";
 import { logLatency } from "./latency-logger.js";
 import { getLSPService } from "./lsp/index.js";
 import type { MetricsClient } from "./metrics-client.js";
-import { normalizeMapKey } from "./path-utils.js";
 import type { RuffClient } from "./ruff-client.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
@@ -683,103 +679,6 @@ async function resyncLspFile(
 		}
 	} catch (err) {
 		dbg(`LSP resync after autofix error: ${err}`);
-	}
-}
-
-export async function gatherCascadeDiagnostics(
-	excludePaths: Set<string>,
-	cwd: string,
-	toolName: string,
-	getFlag: PipelineContext["getFlag"],
-	dbg: PipelineContext["dbg"],
-): Promise<string | undefined> {
-	if (getFlag("no-lsp")) return undefined;
-
-	const MAX_CASCADE_FILES = RUNTIME_CONFIG.pipeline.cascadeMaxFiles;
-	const MAX_DIAGNOSTICS_PER_FILE =
-		RUNTIME_CONFIG.pipeline.cascadeMaxDiagnosticsPerFile;
-	const cascadeStart = Date.now();
-
-	try {
-		const CASCADE_TTL_MS = 240_000;
-		const lspService = getLSPService();
-		const allDiags = await lspService.getAllDiagnostics();
-		const normalizedExcludePaths = new Set(
-			[...excludePaths].map((p) => normalizeMapKey(resolveRunnerPath(cwd, p))),
-		);
-		const now = Date.now();
-		let stalePathsSkipped = 0;
-		const otherFileErrors: Array<{
-			file: string;
-			errors: import("./lsp/client.js").LSPDiagnostic[];
-		}> = [];
-
-		for (const [diagPath, { diags, ts }] of allDiags) {
-			const normalizedDiagPath = resolveRunnerPath(cwd, diagPath);
-			if (normalizedExcludePaths.has(normalizeMapKey(normalizedDiagPath)))
-				continue;
-			if (!nodeFs.existsSync(normalizedDiagPath)) {
-				stalePathsSkipped++;
-				continue;
-			}
-			if (now - ts > CASCADE_TTL_MS) {
-				stalePathsSkipped++;
-				continue;
-			}
-			const errors = diags.filter((d) => d.severity === 1);
-			if (errors.length > 0) {
-				otherFileErrors.push({
-					file: toRunnerDisplayPath(cwd, normalizedDiagPath),
-					errors,
-				});
-			}
-		}
-
-		otherFileErrors.sort((a, b) => b.errors.length - a.errors.length);
-
-		let cascadeOutput: string | undefined;
-		if (otherFileErrors.length > 0) {
-			let c = `📐 Cascade errors in ${otherFileErrors.length} other file(s) — fix before finishing turn:`;
-			for (const { file, errors } of otherFileErrors.slice(
-				0,
-				MAX_CASCADE_FILES,
-			)) {
-				const limited = errors.slice(0, MAX_DIAGNOSTICS_PER_FILE);
-				const suffix =
-					errors.length > MAX_DIAGNOSTICS_PER_FILE
-						? `\n... and ${errors.length - MAX_DIAGNOSTICS_PER_FILE} more`
-						: "";
-				c += `\n<diagnostics file="${file}">`;
-				for (const e of limited) {
-					const line = (e.range?.start?.line ?? 0) + 1;
-					const col = (e.range?.start?.character ?? 0) + 1;
-					const code = e.code ? ` code=${String(e.code)}` : "";
-					c += `\n  line ${line}, col ${col}${code}: ${e.message.split("\n")[0].slice(0, 100)}`;
-				}
-				c += `${suffix}\n</diagnostics>`;
-			}
-			if (otherFileErrors.length > MAX_CASCADE_FILES) {
-				c += `\n... and ${otherFileErrors.length - MAX_CASCADE_FILES} more files with errors`;
-			}
-			cascadeOutput = c;
-		}
-
-		logLatency({
-			type: "phase",
-			toolName,
-			filePath: [...excludePaths][0] ?? cwd,
-			phase: "cascade_diagnostics",
-			durationMs: Date.now() - cascadeStart,
-			metadata: {
-				filesWithErrors: otherFileErrors.length,
-				stalePathsSkipped,
-			},
-		});
-
-		return cascadeOutput;
-	} catch (err) {
-		dbg(`cascade diagnostics error: ${err}`);
-		return undefined;
 	}
 }
 

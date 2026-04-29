@@ -50,6 +50,8 @@ import type { CascadeResult } from "../cascade-types.js";
 import { logCascade } from "../cascade-logger.js";
 import { getLSPService } from "../lsp/index.js";
 import { isFileKind } from "../file-kinds.js";
+import { normalizeMapKey } from "../path-utils.js";
+import { RUNTIME_CONFIG } from "../runtime-config.js";
 import * as nodeFs from "node:fs";
 // Register fact providers
 import { registerProvider, runProviders } from "./fact-runner.js";
@@ -344,15 +346,9 @@ export function resetDispatchBaselines(): void {
 	clearGraphCache();
 }
 
-export async function computeImpactCascadeForFile(
-	filePath: string,
-	cwd: string,
-): Promise<string | undefined> {
-	const normalizedFile = resolveRunnerPath(cwd, filePath);
-	const graph = await buildOrUpdateGraph(cwd, [normalizedFile], sessionFacts);
-	const impact = computeImpactCascade(graph, normalizedFile);
-	return formatImpactCascade(impact);
-}
+const CASCADE_TTL_MS = 240_000;
+const MAX_PER_FILE = RUNTIME_CONFIG.pipeline.cascadeMaxDiagnosticsPerFile;
+const MAX_FILES = RUNTIME_CONFIG.pipeline.cascadeMaxFiles;
 
 /**
  * Unified cascade orchestration — builds graph, discovers neighbors, and
@@ -360,67 +356,79 @@ export async function computeImpactCascadeForFile(
  *
  * autoPropagate (jsts): tsserver pushes diagnostics automatically, so we
  * read from the passive snapshot instead of touching neighbors actively.
+ *
+ * Degraded fallback: when the graph produces no neighbors (ungraphed languages
+ * like Java/Kotlin/C#), fall back to the passive LSP snapshot from getAllDiagnostics
+ * to preserve cascade coverage.
  */
 export async function computeCascadeForFile(
 	filePath: string,
 	cwd: string,
 	options: {
 		hasBlockers?: boolean;
-		isNewFile?: boolean;
 		dbg?: (msg: string) => void;
 	} = {},
 ): Promise<CascadeResult | undefined> {
-	const { hasBlockers = false, isNewFile = false, dbg } = options;
+	const { hasBlockers = false, dbg } = options;
 
-	if (hasBlockers || isNewFile) {
-		logCascade({
-			phase: "cascade_skip",
-			filePath,
-			reason: hasBlockers ? "primary_has_blockers" : "new_file",
-		});
+	if (hasBlockers) {
+		logCascade({ phase: "cascade_skip", filePath, reason: "primary_has_blockers" });
 		return undefined;
 	}
 
 	const normalizedFile = resolveRunnerPath(cwd, filePath);
+	const normalizedFileKey = normalizeMapKey(normalizedFile);
 	const graphStart = Date.now();
 	const graph = await buildOrUpdateGraph(cwd, [normalizedFile], sessionFacts);
 	const graphMs = Date.now() - graphStart;
 
-	logCascade({
-		phase: "graph_build",
-		filePath,
-		graphBuiltMs: graphMs,
-	});
+	logCascade({ phase: "graph_build", filePath, graphBuiltMs: graphMs });
 
 	const impact = computeImpactCascade(graph, normalizedFile);
-	const neighborFiles = impact.neighborFiles.filter(
-		(n) => nodeFs.existsSync(n),
-	);
+
+	// Sort by relationship strength (B6) then cap to MAX_FILES.
+	// directImporters are most impactful, then callers, then reference edges.
+	const importerSet = new Set(impact.directImporters);
+	const callerSet = new Set(impact.directCallers);
+	const sortedNeighbors = [...impact.neighborFiles]
+		.filter((n) => nodeFs.existsSync(n))
+		.sort((a, b) => {
+			const rank = (p: string) =>
+				importerSet.has(p) ? 0 : callerSet.has(p) ? 1 : 2;
+			return rank(a) - rank(b);
+		})
+		.slice(0, MAX_FILES);
 
 	logCascade({
 		phase: "neighbors_computed",
 		filePath,
-		neighborCount: neighborFiles.length,
-		metadata: { neighbors: neighborFiles.slice(0, 10) },
+		neighborCount: sortedNeighbors.length,
+		metadata: {
+			totalNeighbors: impact.neighborFiles.length,
+			capped: impact.neighborFiles.length > MAX_FILES,
+			neighbors: sortedNeighbors.slice(0, 10),
+		},
 	});
 
 	const lspService = getLSPService();
-	const CASCADE_TTL_MS = 240_000;
-	const MAX_PER_FILE = 20;
+
+	// Hoist passive snapshot once — used for jsts neighbors and fallback path.
+	const allDiags = await lspService.getAllDiagnostics();
 
 	const neighbors: CascadeResult["neighbors"] = [];
 
-	for (const neighborPath of neighborFiles) {
-		const neighborStart = Date.now();
-		const autoPropagate = isFileKind(neighborPath, "jsts");
+	if (sortedNeighbors.length > 0) {
+		const jstsPaths = sortedNeighbors.filter((n) => isFileKind(n, "jsts"));
+		const activePaths = sortedNeighbors.filter((n) => !isFileKind(n, "jsts"));
 
-		if (autoPropagate) {
-			// tsserver tracks all files — read from passive snapshot
-			const allDiags = await lspService.getAllDiagnostics();
-			const entry = allDiags.get(neighborPath);
-			const diags = entry && Date.now() - entry.ts < CASCADE_TTL_MS
-				? entry.diags.filter((d) => d.severity === 1).slice(0, MAX_PER_FILE)
-				: [];
+		// jsts: tsserver auto-propagates — read passive snapshot with normalized key
+		for (const neighborPath of jstsPaths) {
+			const neighborStart = Date.now();
+			const entry = allDiags.get(normalizeMapKey(neighborPath));
+			const diags =
+				entry && Date.now() - entry.ts < CASCADE_TTL_MS
+					? entry.diags.filter((d) => d.severity === 1).slice(0, MAX_PER_FILE)
+					: [];
 			const durationMs = Date.now() - neighborStart;
 
 			logCascade({
@@ -434,20 +442,29 @@ export async function computeCascadeForFile(
 
 			neighbors.push({
 				filePath: neighborPath,
-				reason: determineNeighborReason(impact, neighborPath),
+				reason: neighborReason(importerSet, callerSet, neighborPath),
 				diagnostics: diags,
 				lspTouched: false,
 				durationMs,
 			});
-		} else {
-			// Actively touch with silent=true to avoid triggering N project-wide rechecks
-			try {
-				const content = nodeFs.readFileSync(neighborPath, "utf8");
+		}
+
+		// non-jsts: fan-out active touches in parallel (A3), single wait per neighbor (fix double-wait).
+		// touchFile("none") opens the doc; getDiagnostics waits once for fresh results.
+		const touchResults = await Promise.allSettled(
+			activePaths.map(async (neighborPath) => {
+				const neighborStart = Date.now();
+				// A6: async read to avoid blocking event loop for network-mounted drives
+				const content = await nodeFs.promises.readFile(neighborPath, "utf8");
+				// Open with silent=true (suppresses didChangeWatchedFiles rechecks, CR-1/C2).
+				// diagnostics:"none" so touchFile does NOT wait — getDiagnostics waits once below.
 				await lspService.touchFile(neighborPath, content, {
-					diagnostics: "full",
+					diagnostics: "none",
 					silent: true,
 					source: "cascade",
+					clientScope: "all",
 				});
+				// Single wait — getDiagnostics handles multi-client aggregation (D7).
 				const rawDiags = await lspService.getDiagnostics(neighborPath);
 				const diags = rawDiags
 					.filter((d) => d.severity === 1)
@@ -463,28 +480,36 @@ export async function computeCascadeForFile(
 					lspTouched: true,
 				});
 
-				neighbors.push({
+				return {
 					filePath: neighborPath,
-					reason: determineNeighborReason(impact, neighborPath),
+					reason: neighborReason(importerSet, callerSet, neighborPath),
 					diagnostics: diags,
-					lspTouched: true,
+					lspTouched: true as const,
 					durationMs,
-				});
-			} catch (err) {
-				dbg?.(`cascade neighbor touch error for ${neighborPath}: ${err}`);
+				} satisfies CascadeResult["neighbors"][number];
+			}),
+		);
+
+		for (let i = 0; i < touchResults.length; i++) {
+			const result = touchResults[i];
+			const neighborPath = activePaths[i];
+			if (result.status === "fulfilled") {
+				neighbors.push(result.value);
+			} else {
+				// A3: one failed LSP doesn't kill the rest — fall back to passive snapshot
+				dbg?.(`cascade neighbor touch error for ${neighborPath}: ${result.reason}`);
 				logCascade({
 					phase: "neighbor_fallback",
 					filePath,
 					neighborFile: neighborPath,
 					fallbackUsed: true,
-					error: String(err),
+					error: String(result.reason),
 				});
-				// Fall back to passive snapshot
-				const allDiags = await lspService.getAllDiagnostics();
-				const entry = allDiags.get(neighborPath);
-				const diags = entry && Date.now() - entry.ts < CASCADE_TTL_MS
-					? entry.diags.filter((d) => d.severity === 1).slice(0, MAX_PER_FILE)
-					: [];
+				const entry = allDiags.get(normalizeMapKey(neighborPath));
+				const diags =
+					entry && Date.now() - entry.ts < CASCADE_TTL_MS
+						? entry.diags.filter((d) => d.severity === 1).slice(0, MAX_PER_FILE)
+						: [];
 				neighbors.push({
 					filePath: neighborPath,
 					reason: "fallback",
@@ -493,9 +518,41 @@ export async function computeCascadeForFile(
 				});
 			}
 		}
+	} else {
+		// A2: degraded fallback — graph has no neighbors for this language (Java, Kotlin, C#…).
+		// Use passive LSP snapshot to preserve cascade coverage for ungraphed languages.
+		const now = Date.now();
+		for (const [diagPath, { diags, ts }] of allDiags) {
+			if (normalizeMapKey(diagPath) === normalizedFileKey) continue;
+			if (!nodeFs.existsSync(diagPath)) continue;
+			if (now - ts > CASCADE_TTL_MS) continue;
+			const errors = diags.filter((d) => d.severity === 1).slice(0, MAX_PER_FILE);
+			if (errors.length === 0) continue;
+			neighbors.push({
+				filePath: diagPath,
+				reason: "fallback",
+				diagnostics: errors,
+				lspTouched: false,
+			});
+			if (neighbors.length >= MAX_FILES) break;
+		}
+
+		if (neighbors.length > 0) {
+			logCascade({
+				phase: "neighbor_fallback",
+				filePath,
+				fallbackUsed: true,
+				neighborCount: neighbors.length,
+			});
+		}
 	}
 
-	const formatted = formatCascadeResult(filePath, cwd, impact, neighbors);
+	const formatted = formatCascadeResult(
+		cwd,
+		impact,
+		neighbors,
+		impact.neighborFiles.length,
+	);
 
 	logCascade({
 		phase: "cascade_result",
@@ -508,20 +565,21 @@ export async function computeCascadeForFile(
 	return { filePath, impact, neighbors, formatted };
 }
 
-function determineNeighborReason(
-	impact: ReturnType<typeof computeImpactCascade>,
+function neighborReason(
+	importerSet: Set<string>,
+	callerSet: Set<string>,
 	neighborPath: string,
 ): CascadeResult["neighbors"][number]["reason"] {
-	if (impact.directImporters.includes(neighborPath)) return "imports";
-	if (impact.directCallers.includes(neighborPath)) return "calls";
+	if (importerSet.has(neighborPath)) return "imports";
+	if (callerSet.has(neighborPath)) return "calls";
 	return "references";
 }
 
 function formatCascadeResult(
-	filePath: string,
 	cwd: string,
 	impact: ReturnType<typeof computeImpactCascade>,
 	neighbors: CascadeResult["neighbors"],
+	totalNeighbors: number,
 ): string {
 	const withErrors = neighbors.filter((n) => n.diagnostics.length > 0);
 	if (withErrors.length === 0) return "";
@@ -540,6 +598,19 @@ function formatCascadeResult(
 			out += `\n  line ${line}, col ${col}${code}: ${d.message.split("\n")[0].slice(0, 100)}`;
 		}
 		out += "\n</diagnostics>";
+	}
+
+	// A10: include truncated filenames so agent knows which files were cut
+	const truncated = totalNeighbors - neighbors.length;
+	if (truncated > 0) {
+		const truncatedNames = impact.neighborFiles
+			.slice(neighbors.length, neighbors.length + 3)
+			.map((p) => toRunnerDisplayPath(cwd, p))
+			.join(", ");
+		const moreLabel = truncatedNames
+			? `${truncated} more dependent file(s): ${truncatedNames}`
+			: `${truncated} more dependent file(s)`;
+		out += `\n... and ${moreLabel}`;
 	}
 
 	return out;
