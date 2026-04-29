@@ -553,9 +553,12 @@ export class LSPService {
 				filePath: normalizedPath,
 				durationMs: Date.now() - startedAt,
 				metadata: {
+					serverCountAttempted: getServersForFileWithConfig(filePath).length,
 					serverCountReady: 0,
 					clientScope,
 					diagnosticsMode,
+					source,
+					maxClientWaitMs: options.maxClientWaitMs,
 					failureKind: "no_clients",
 				},
 			});
