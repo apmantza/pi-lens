@@ -48,7 +48,10 @@ import { getDiagnosticTracker } from "../diagnostic-tracker.js";
 import { getServersForFileWithConfig } from "../lsp/config.js";
 import { getLSPService } from "../lsp/index.js";
 import { normalizeMapKey } from "../path-utils.js";
-import { clearGraphCache } from "../review-graph/builder.js";
+import {
+	clearReviewGraphWorkspaceCache,
+	getLastGraphBuildInfo,
+} from "../review-graph/builder.js";
 import {
 	buildOrUpdateGraph,
 	computeImpactCascade,
@@ -350,7 +353,7 @@ export function resetDispatchBaselines(): void {
 	sessionFacts.clearAll();
 	resetSessionSlopScore();
 	clearCoverageNoticeState();
-	clearGraphCache();
+	clearReviewGraphWorkspaceCache();
 	neighborTouchCache.clear();
 	primaryFilesThisTurn.clear();
 	cascadeDiagnosticBaselines.clear();
@@ -434,16 +437,18 @@ export async function computeCascadeForFile(
 		[...graph.nodes.values()].flatMap((n) => (n.filePath ? [n.filePath] : [])),
 	).size;
 
+	const graphBuildInfo = getLastGraphBuildInfo();
 	logCascade({
 		phase: "graph_build",
 		filePath,
 		graphBuiltMs: graphMs,
-		graphReused: false, // always full rebuild until incremental graph lands (E3)
+		graphReused: graphBuildInfo.reused,
 		graphNodeCount: graph.nodes.size,
 		graphFileCount,
 		graphChangedSymbolCount: (
 			graph.changedSymbolsByFile.get(normalizedFileKey) ?? []
 		).length,
+		metadata: { graphBuildMode: graphBuildInfo.mode },
 	});
 
 	const impact = computeImpactCascade(graph, normalizedFile);

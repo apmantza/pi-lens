@@ -3,6 +3,8 @@ import { FactStore } from "../../clients/dispatch/fact-store.js";
 import {
 	buildOrUpdateGraph,
 	clearGraphCache,
+	clearReviewGraphWorkspaceCache,
+	getLastGraphBuildInfo,
 } from "../../clients/review-graph/builder.js";
 
 // Mock out the expensive file system scanning — we only care about cache behaviour
@@ -12,7 +14,7 @@ vi.mock("../../clients/scan-utils.js", () => ({
 
 describe("buildOrUpdateGraph — Promise dedup cache", () => {
 	beforeEach(() => {
-		clearGraphCache();
+		clearReviewGraphWorkspaceCache();
 	});
 
 	it("returns the same Promise for identical cwd+changedFiles", async () => {
@@ -55,6 +57,15 @@ describe("buildOrUpdateGraph — Promise dedup cache", () => {
 		const p2 = buildOrUpdateGraph("/cwd", ["/cwd/a.ts"], facts);
 		expect(p1).not.toBe(p2);
 		await p2;
+	});
+
+	it("reuses the workspace graph when source signature is unchanged", async () => {
+		const facts = new FactStore();
+		await buildOrUpdateGraph("/cwd", ["/cwd/a.ts"], facts);
+		expect(getLastGraphBuildInfo().reused).toBe(false);
+		clearGraphCache();
+		await buildOrUpdateGraph("/cwd", ["/cwd/b.ts"], facts);
+		expect(getLastGraphBuildInfo()).toEqual({ reused: true, mode: "cached" });
 	});
 
 	it("resolves to a ReviewGraph with version and builtAt fields", async () => {

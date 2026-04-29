@@ -29,11 +29,33 @@ const extractorCache = new Map<string, TreeSitterSymbolExtractor>();
 
 // Per-invocation Promise cache: deduplicates concurrent buildOrUpdateGraph calls
 // for the same (cwd, changedFiles). Cleared at the start of each pipeline
-// invocation via clearGraphCache() so each edit gets a fresh build.
+// invocation. A separate workspace cache below preserves the expensive parsed
+// graph across invocations when source file mtimes/sizes have not changed.
 const _buildCache = new Map<string, Promise<ReviewGraph>>();
+const _workspaceGraphCache = new Map<
+	string,
+	{ signature: string; graph: ReviewGraph }
+>();
+let _lastGraphBuildInfo: { reused: boolean; mode: "full" | "cached" } = {
+	reused: false,
+	mode: "full",
+};
 
 export function clearGraphCache(): void {
 	_buildCache.clear();
+}
+
+export function clearReviewGraphWorkspaceCache(): void {
+	_buildCache.clear();
+	_workspaceGraphCache.clear();
+	_lastGraphBuildInfo = { reused: false, mode: "full" };
+}
+
+export function getLastGraphBuildInfo(): {
+	reused: boolean;
+	mode: "full" | "cached";
+} {
+	return _lastGraphBuildInfo;
 }
 
 function makeCtx(
@@ -72,6 +94,42 @@ function createEmptyGraph(): ReviewGraph {
 		symbolNodesByFile: new Map(),
 		changedSymbolsByFile: new Map(),
 	};
+}
+
+function cloneGraph(graph: ReviewGraph): ReviewGraph {
+	return {
+		version: graph.version,
+		builtAt: graph.builtAt,
+		nodes: new Map(graph.nodes),
+		edges: graph.edges.map((edge) => ({ ...edge })),
+		edgesByFrom: new Map(),
+		edgesByTo: new Map(),
+		fileNodes: new Map(),
+		symbolNodesByFile: new Map(),
+		changedSymbolsByFile: new Map(graph.changedSymbolsByFile),
+	};
+}
+
+function sourceSignature(files: string[]): string {
+	return files
+		.map((file) => {
+			try {
+				const stat = fs.statSync(file);
+				return `${file}:${stat.size}:${stat.mtimeMs}`;
+			} catch {
+				return `${file}:missing`;
+			}
+		})
+		.join("|");
+}
+
+function getGraphSourceFiles(cwd: string): string[] {
+	return getSourceFiles(cwd)
+		.map((file) => normalizeMapKey(file))
+		.filter((file) => {
+			const kind = detectFileKind(file);
+			return !!kind && MAIN_KINDS.has(kind);
+		});
 }
 
 function addNode(graph: ReviewGraph, node: ReviewGraphNode): void {
@@ -394,15 +452,23 @@ async function _doBuildGraph(
 	changedFiles: string[],
 	facts: FactStore,
 ): Promise<ReviewGraph> {
-	const graph = createEmptyGraph();
+	const normalizedCwd = normalizeMapKey(cwd);
 	const normalizedChanged = changedFiles.map((file) => normalizeMapKey(file));
-	const filesToBuild = getSourceFiles(cwd)
-		.map((file) => normalizeMapKey(file))
-		.filter((file) => {
-			const kind = detectFileKind(file);
-			return !!kind && MAIN_KINDS.has(kind);
-		});
+	const filesToBuild = getGraphSourceFiles(cwd);
+	const signature = sourceSignature(filesToBuild);
+	const cached = _workspaceGraphCache.get(normalizedCwd);
+	if (cached?.signature === signature) {
+		const graph = cloneGraph(cached.graph);
+		graph.changedSymbolsByFile.clear();
+		for (const file of normalizedChanged) {
+			upsertChangedSymbols(graph, facts, file);
+		}
+		_lastGraphBuildInfo = { reused: true, mode: "cached" };
+		facts.setSessionFact("session.reviewGraph", graph);
+		return graph;
+	}
 
+	const graph = createEmptyGraph();
 	for (const file of filesToBuild) {
 		const kind = detectFileKind(file);
 		if (!kind || !MAIN_KINDS.has(kind)) continue;
@@ -423,6 +489,11 @@ async function _doBuildGraph(
 	resolveDeferredSymbolEdges(graph);
 	graph.version = REVIEW_GRAPH_VERSION;
 	graph.builtAt = new Date().toISOString();
+	_workspaceGraphCache.set(normalizedCwd, {
+		signature,
+		graph: cloneGraph(graph),
+	});
+	_lastGraphBuildInfo = { reused: false, mode: "full" };
 	facts.setSessionFact("session.reviewGraph", graph);
 	return graph;
 }
