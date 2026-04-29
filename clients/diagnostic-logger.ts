@@ -108,6 +108,12 @@ export function createDiagnosticLogger(): DiagnosticLogger {
 
 	return {
 		log(entry: DiagnosticEntry) {
+			if (
+				process.env.PI_LENS_TEST_MODE === "1" ||
+				(process.env.VITEST && process.env.PI_LENS_TEST_MODE !== "0")
+			) {
+				return;
+			}
 			pending.push(entry);
 			writePending(); // async, non-blocking
 		},

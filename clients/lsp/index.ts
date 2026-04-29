@@ -79,6 +79,12 @@ const SESSIONSTART_LOG_DIR = path.join(os.homedir(), ".pi-lens");
 const SESSIONSTART_LOG = path.join(SESSIONSTART_LOG_DIR, "sessionstart.log");
 
 function logSessionStart(msg: string): void {
+	if (
+		process.env.PI_LENS_TEST_MODE === "1" ||
+		(process.env.VITEST && process.env.PI_LENS_TEST_MODE !== "0")
+	) {
+		return;
+	}
 	const line = `[${new Date().toISOString()}] ${msg}\n`;
 	void fs
 		.mkdir(SESSIONSTART_LOG_DIR, { recursive: true })
@@ -1039,7 +1045,10 @@ export class LSPService {
 			for (const [filePath, entry] of clientDiags) {
 				const existing = all.get(filePath);
 				if (existing) {
-					existing.diags = mergeLspDiagnostics([...existing.diags, ...entry.diags]);
+					existing.diags = mergeLspDiagnostics([
+						...existing.diags,
+						...entry.diags,
+					]);
 					existing.ts = Math.max(existing.ts, entry.ts);
 				} else {
 					all.set(filePath, { diags: [...entry.diags], ts: entry.ts });

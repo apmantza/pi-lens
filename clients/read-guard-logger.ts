@@ -27,6 +27,12 @@ export interface ReadGuardLogEntry {
 }
 
 export function logReadGuardEvent(entry: ReadGuardLogEntry): void {
+	if (
+		process.env.PI_LENS_TEST_MODE === "1" ||
+		(process.env.VITEST && process.env.PI_LENS_TEST_MODE !== "0")
+	) {
+		return;
+	}
 	const line = `${JSON.stringify({ ts: new Date().toISOString(), ...entry })}\n`;
 	try {
 		fs.appendFileSync(READ_GUARD_LOG_FILE, line);

@@ -36,6 +36,12 @@ export interface TreeSitterLogEntry {
 }
 
 export function logTreeSitter(entry: TreeSitterLogEntry): void {
+	if (
+		process.env.PI_LENS_TEST_MODE === "1" ||
+		(process.env.VITEST && process.env.PI_LENS_TEST_MODE !== "0")
+	) {
+		return;
+	}
 	const line = `${JSON.stringify({ ts: new Date().toISOString(), ...entry })}\n`;
 	try {
 		fs.appendFileSync(TREE_SITTER_LOG_FILE, line);

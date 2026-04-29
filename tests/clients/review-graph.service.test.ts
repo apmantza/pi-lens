@@ -1,12 +1,11 @@
-import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { FactStore } from "../../clients/dispatch/fact-store.js";
+import { normalizeMapKey } from "../../clients/path-utils.js";
 import {
 	buildOrUpdateGraph,
 	computeImpactCascade,
 	formatImpactCascade,
 } from "../../clients/review-graph/service.js";
-import { normalizeMapKey } from "../../clients/path-utils.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 
 describe("review graph service", () => {
@@ -53,7 +52,9 @@ describe("review graph service", () => {
 
 			const secondGraph = await buildOrUpdateGraph(env.tmpDir, [aPath], facts);
 			const uniqueEdges = new Set(
-				secondGraph.edges.map((edge) => `${edge.kind}:${edge.from}->${edge.to}`),
+				secondGraph.edges.map(
+					(edge) => `${edge.kind}:${edge.from}->${edge.to}`,
+				),
 			);
 			expect(uniqueEdges.size).toBe(secondGraph.edges.length);
 		} finally {
@@ -65,8 +66,16 @@ describe("review graph service", () => {
 		const env = setupTestEnvironment("pi-lens-review-graph-langs-");
 		try {
 			const paths = [
-				createTempFile(env.tmpDir, "pkg/main.py", "def greet(name):\n    return name\n"),
-				createTempFile(env.tmpDir, "pkg/main.go", "package main\n\nfunc greet() {}\n"),
+				createTempFile(
+					env.tmpDir,
+					"pkg/main.py",
+					"def greet(name):\n    return name\n",
+				),
+				createTempFile(
+					env.tmpDir,
+					"pkg/main.go",
+					"package main\n\nfunc greet() {}\n",
+				),
 				createTempFile(env.tmpDir, "pkg/main.rs", "fn greet() {}\n"),
 				createTempFile(env.tmpDir, "pkg/main.rb", "def greet\n  :ok\nend\n"),
 			];
@@ -105,7 +114,11 @@ describe("review graph service", () => {
 				["User"],
 			);
 
-			const graph = await buildOrUpdateGraph(env.tmpDir, [modelsPath, apiPath], facts);
+			const graph = await buildOrUpdateGraph(
+				env.tmpDir,
+				[modelsPath, apiPath],
+				facts,
+			);
 			const impact = computeImpactCascade(graph, modelsPath);
 			// references edges from api.py → models.py:User should surface api.py as a neighbor
 			expect(impact.neighborFiles).toContain(normalizeMapKey(apiPath));
@@ -141,6 +154,42 @@ describe("review graph service", () => {
 
 			const loneResult = computeImpactCascade(graph, lonePath);
 			expect(formatImpactCascade(loneResult)).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("rebuilds indexes on workspace cache hit so impact cascade still works", async () => {
+		const env = setupTestEnvironment("pi-lens-review-graph-cache-");
+		try {
+			const aPath = createTempFile(
+				env.tmpDir,
+				"src/a.ts",
+				"export function alpha() { return 1; }\n",
+			);
+			const bPath = createTempFile(
+				env.tmpDir,
+				"src/b.ts",
+				"import { alpha } from './a';\nexport function beta() { return alpha(); }\n",
+			);
+
+			const facts = new FactStore();
+			const firstGraph = await buildOrUpdateGraph(env.tmpDir, [aPath], facts);
+			expect(firstGraph.fileNodes.size).toBeGreaterThan(0);
+			expect(firstGraph.edgesByTo.size).toBeGreaterThan(0);
+
+			// Force workspace cache lookup on next call
+			const { clearGraphCache } = await import(
+				"../../clients/review-graph/builder.js"
+			);
+			clearGraphCache();
+
+			const secondGraph = await buildOrUpdateGraph(env.tmpDir, [bPath], facts);
+			expect(secondGraph.fileNodes.size).toBeGreaterThan(0);
+			expect(secondGraph.edgesByTo.size).toBeGreaterThan(0);
+
+			const impact = computeImpactCascade(secondGraph, aPath);
+			expect(impact.directImporters).toContain(normalizeMapKey(bPath));
 		} finally {
 			env.cleanup();
 		}

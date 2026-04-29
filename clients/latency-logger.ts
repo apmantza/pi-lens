@@ -38,6 +38,12 @@ export interface LatencyEntry {
 }
 
 export function logLatency(entry: LatencyEntry): void {
+	if (
+		process.env.PI_LENS_TEST_MODE === "1" ||
+		(process.env.VITEST && process.env.PI_LENS_TEST_MODE !== "0")
+	) {
+		return;
+	}
 	const line = `${JSON.stringify({ ts: new Date().toISOString(), ...entry })}\n`;
 	try {
 		fs.appendFileSync(LATENCY_LOG_FILE, line);

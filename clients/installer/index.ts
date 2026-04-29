@@ -75,6 +75,12 @@ function debugLog(...args: unknown[]): void {
 }
 
 function logSessionStart(msg: string): void {
+	if (
+		process.env.PI_LENS_TEST_MODE === "1" ||
+		(process.env.VITEST && process.env.PI_LENS_TEST_MODE !== "0")
+	) {
+		return;
+	}
 	const line = `[${new Date().toISOString()}] ${msg}\n`;
 	void fs
 		.mkdir(SESSIONSTART_LOG_DIR, { recursive: true })

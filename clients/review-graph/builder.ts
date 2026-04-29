@@ -459,6 +459,7 @@ async function _doBuildGraph(
 	const cached = _workspaceGraphCache.get(normalizedCwd);
 	if (cached?.signature === signature) {
 		const graph = cloneGraph(cached.graph);
+		rebuildIndexes(graph);
 		graph.changedSymbolsByFile.clear();
 		for (const file of normalizedChanged) {
 			upsertChangedSymbols(graph, facts, file);

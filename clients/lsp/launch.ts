@@ -41,6 +41,12 @@ const PI_LENS_TOOLS_BIN_DIR = path.join(
 );
 
 function logSessionStart(msg: string): void {
+	if (
+		process.env.PI_LENS_TEST_MODE === "1" ||
+		(process.env.VITEST && process.env.PI_LENS_TEST_MODE !== "0")
+	) {
+		return;
+	}
 	const line = `[${new Date().toISOString()}] ${msg}\n`;
 	try {
 		fs.mkdirSync(SESSIONSTART_LOG_DIR, { recursive: true });
@@ -230,7 +236,10 @@ export function isCmdShimValid(cmdPath: string): boolean {
 	try {
 		const content = fs.readFileSync(cmdPath, "utf-8");
 		// npm cmd shim pattern: "%~dp0\..\<relpath>" or "%~dp0/<relpath>"
-		const match = content.match(/"%~dp0[/\\]\.\.[/\\]([\w./@\\-]+\.(?:mjs|cjs|js))"/i);
+		// biome-ignore format: regex char-class \- must stay escaped — formatter strips it
+		const match = content.match(
+			/"%~dp0[/\\]\.\.[/\\]((?:[\w./@-]|\\)+\.(?:mjs|cjs|js))"/i,
+		);
 		if (!match) return true; // non-npm shim — let it through
 		const relPath = match[1].replace(/[/\\]/g, path.sep);
 		const target = path.resolve(path.dirname(cmdPath), "..", relPath);
@@ -261,8 +270,9 @@ function bypassPs1OnWindows(
 	// npm-generated PS1 pattern: "$basedir/../<package>/bin/cli.js"
 	try {
 		const content = fs.readFileSync(ps1Path, "utf-8");
+		// biome-ignore format: regex char-class \- must stay escaped — formatter strips it
 		const match = content.match(
-			/"\$basedir[/\\]\.\.[/\\]([\w./@-]+\.(?:mjs|cjs|js))"/i,
+			/"\$basedir[/\\]\.\.[/\\]((?:[\w./@-]|\\)+\.(?:mjs|cjs|js))"/i,
 		);
 		if (match) {
 			const relPath = match[1].replace(/[/\\]/g, path.sep);
@@ -287,15 +297,11 @@ function findBinaryOnPath(
 	env: NodeJS.ProcessEnv,
 ): string | undefined {
 	try {
-		const result = execFileSync(
-			isWindows ? "where" : "which",
-			[command],
-			{
-				encoding: "utf-8",
-				stdio: ["ignore", "pipe", "ignore"],
-				env,
-			},
-		)
+		const result = execFileSync(isWindows ? "where" : "which", [command], {
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "ignore"],
+			env,
+		})
 			.split(/\r?\n/)
 			.map((line) => line.trim())
 			.filter(Boolean);
@@ -505,7 +511,11 @@ export async function launchLSP(
 
 	// Pre-validate .cmd shims: if the underlying script is missing the shim will
 	// exit with code 1 after a 500ms wait. Catching this early avoids the delay.
-	if (isWindows && /\.(cmd|bat)$/i.test(spawnCommand) && !isCmdShimValid(spawnCommand)) {
+	if (
+		isWindows &&
+		/\.(cmd|bat)$/i.test(spawnCommand) &&
+		!isCmdShimValid(spawnCommand)
+	) {
 		logSessionStart(
 			`lsp cmd-shim-invalid: ${spawnCommand} target missing — skipping candidate`,
 		);

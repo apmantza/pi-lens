@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// Allow this test to exercise the real logger (it mocks fs, so no disk I/O).
+process.env.PI_LENS_TEST_MODE = "0";
+
 describe("tree-sitter-logger", () => {
 	afterEach(() => {
 		vi.resetModules();
@@ -29,7 +32,10 @@ describe("tree-sitter-logger", () => {
 		});
 
 		expect(appendFileSync).toHaveBeenCalledTimes(1);
-		const [filePath, payload] = appendFileSync.mock.calls[0] as [string, string];
+		const [filePath, payload] = appendFileSync.mock.calls[0] as [
+			string,
+			string,
+		];
 		expect(filePath).toContain("tree-sitter.log");
 		expect(payload).toContain('"phase":"runner_complete"');
 		expect(payload).toContain('"filePath":"src/main.go"');
