@@ -6,10 +6,15 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Added
 
+- **Cascade diagnostics unified through review graph + LSP touch flow** — cascade results now accumulate as structured `CascadeResult` values across the turn, merge/deduplicate by dependent file at turn end, use review-graph references for broader neighbor discovery, respect TypeScript/Deno auto-propagation capabilities, and fall back to passive LSP snapshots when no trustworthy neighbor LSP data is produced.
+- **Cascade LSP diagnostics now use shared conversion/tracking** — cascade diagnostics are converted through the shared LSP→dispatch diagnostic utility, participate in `DiagnosticTracker`, use separate cascade delta baselines (`session.baseline.cascade.*`), and share centralized cascade formatting.
+- **`touchFile({ collectDiagnostics: true })`** — LSP touch can now return merged diagnostics from the clients it opened/synced, allowing cascade to collect diagnostics from the same silently touched clients without a second aggregate `getDiagnostics()` call.
 - **`PILENS_DATA_DIR` env var for external project data storage** — when set, all project-generated data (caches, index, worklog, LSP install choices, elixir outputs, metrics history) is written to `$PILENS_DATA_DIR/<project-slug>/` instead of `<project>/.pi-lens/`. Keeps project folders clean for mounted, containerised, or ephemeral setups. Existing users are unaffected — default behaviour is unchanged. Slug is derived from the project's absolute path using the existing cross-platform `normalizeFilePath` utility.
 
 ### Fixed
 
+- **Cascade silent LSP opens no longer broadcast file-watch changes** — cascade neighbor reads now open documents with `silent: true`, suppressing `workspace/didChangeWatchedFiles` so TypeScript/Python servers do not schedule project-wide rechecks for every dependent file touched.
+- **Cascade cache/fallback correctness** — per-turn cascade caches are scoped by turn/write sequence, empty cascade results are suppressed, no-LSP neighbors are treated as no signal, and degraded fallback now triggers when no neighbor produced LSP data rather than only when the graph returned zero neighbors.
 - **Misleading LSP error when `filePath` is a directory** — `lsp_navigation` now stat-checks the resolved path before server lookup. Passing a directory (e.g. `.`) to `workspaceDiagnostics` falls through to workspace-scoped mode; file-scoped operations return a clear `filepath_is_directory` error instead of the previous "No LSP server available … Check that the language server is installed" message, which incorrectly implied an install problem.
 
 - **oxfmt `.oxfmtrc.json` detection** — `hasOxfmtConfig` now treats `.oxfmtrc.json` as an activation signal alongside `oxfmt.toml` and `@oxc-project/oxfmt` in package.json.
@@ -1031,6 +1036,7 @@ All runtime-applicable TypeScript ast-grep rules now have JavaScript equivalents
 - **Rust performance core (`pi-lens-core`)** — Optional Rust binary for CPU-intensive operations.
   All features fall back to TypeScript automatically if the binary is not available (it is **not**
   built automatically on `npm install` — run `npm run rust:build` once if you have Rust installed).
+
   - **File scanning** — ripgrep’s `ignore` crate for `.gitignore`-aware project scanning
   - **Similarity detection** — parallel 57×72 state-matrix index, persisted to
     `.pi-lens/rust-index.json` between invocations (fixes in-memory cache that reset on every
@@ -1084,6 +1090,7 @@ All runtime-applicable TypeScript ast-grep rules now have JavaScript equivalents
   - Removed `clients/interviewer-templates.ts` (240 lines)
   - Removed initialization from `index.ts`
 - **Deleted deprecated commands** — All were superseded by `/lens-booboo`:
+
   - `/lens-booboo-fix` command (fix-from-booboo.ts, 430 lines) — showed warning to use `/lens-booboo`
   - `/lens-fix-simplified` command (fix-simplified.ts, 770 lines) — never registered, unused
   - `/lens-rate` command (rate.ts, 340 lines) — showed warning to use `/lens-booboo`
@@ -1102,6 +1109,7 @@ All runtime-applicable TypeScript ast-grep rules now have JavaScript equivalents
   - Broken runner tests (7 files) — thin CLI wrappers with wrong imports
   - Trivial utility tests (5 files) — file extension parsing, string sanitization
 - **Added meaningful integration tests**:
+
   - `tests/clients/dispatch/dispatcher-flow.test.ts` — Runner registration, execution, delta mode, conditional runners
   - `tests/extension-hooks.test.ts` — pi API: tool/command/flag registration, event handlers
   - `tests/mocks/runner-factory.ts` — Mock runners for testing without real CLI tools
@@ -1437,6 +1445,7 @@ Migrated 20 critical security rules to NAPI (fast native execution):
 Three new lint runners with full test coverage:
 
 - **Spellcheck runner** (`clients/dispatch/runners/spellcheck.ts`): Markdown spellchecking
+
   - Uses `typos-cli` (Rust-based, fast, low false positives)
   - Checks `.md` and `.mdx` files
   - Priority 30, runs after code quality checks
@@ -1444,6 +1453,7 @@ Three new lint runners with full test coverage:
   - Install: `cargo install typos-cli`
 
 - **Oxlint runner** (`clients/dispatch/runners/oxlint.ts`): Fast JS/TS linting
+
   - Uses `oxlint` from Oxc project (Rust-based, ~100x faster than ESLint)
   - Zero-config by default
   - JSON output with fix suggestions

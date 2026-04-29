@@ -106,6 +106,34 @@ describe("handleNotifyOpen", () => {
 		expect(state.openDocuments.has(TEST_KEY)).toBe(true);
 	});
 
+	it("suppresses didChangeWatchedFiles in silent open mode", async () => {
+		const state = createMockState();
+		await handleNotifyOpen(
+			state,
+			TEST_FILE,
+			"const x = 1;",
+			"typescript",
+			false,
+			true,
+		);
+
+		const calls = vi.mocked(state.connection.sendNotification).mock.calls;
+		expect(calls.some((c) => c[0] === "workspace/didChangeWatchedFiles")).toBe(
+			false,
+		);
+		expect(calls.some((c) => c[0] === "textDocument/didOpen")).toBe(true);
+	});
+
+	it("sends didChangeWatchedFiles in normal open mode", async () => {
+		const state = createMockState();
+		await handleNotifyOpen(state, TEST_FILE, "const x = 1;", "typescript");
+
+		const calls = vi.mocked(state.connection.sendNotification).mock.calls;
+		expect(calls.some((c) => c[0] === "workspace/didChangeWatchedFiles")).toBe(
+			true,
+		);
+	});
+
 	it("sends didChange on re-open", async () => {
 		const state = createMockState();
 		state.openDocuments.add(TEST_KEY);
