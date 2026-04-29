@@ -81,7 +81,6 @@ async function runSessionStart(mode: "full" | "quick") {
 				isAvailable: () => false,
 				ensureAvailable: async () => false,
 			},
-			architectClient: { loadConfig: () => false },
 			testRunnerClient: {
 				detectRunner: () => ({ runner: "vitest", config: null }),
 				runTestFile: () => ({ failed: 1, error: false }),

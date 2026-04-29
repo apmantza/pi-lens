@@ -69,7 +69,6 @@ describe("runtime event flow", () => {
 					isAvailable: () => false,
 					ensureAvailable: async () => false,
 				},
-				architectClient: { loadConfig: () => false },
 				testRunnerClient: { detectRunner: () => null, runTestFile: () => ({}) },
 				goClient: { isGoAvailable: () => false },
 				rustClient: { isAvailable: () => false },

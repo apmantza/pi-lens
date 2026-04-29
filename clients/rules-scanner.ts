@@ -9,8 +9,7 @@
  * - AGENTS.md        — Generic agent context
  *
  * These are surfaced in the system prompt so the agent knows
- * to read them when relevant. pi-lens architect.yaml handles
- * the automated regex-based checks separately.
+ * to read them when relevant.
  */
 
 import * as fs from "node:fs";
