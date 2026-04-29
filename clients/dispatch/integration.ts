@@ -131,6 +131,10 @@ registerRule(highImportCouplingRule);
 registerRule(noComplexConditionalsRule);
 
 const sessionFacts = new FactStore();
+const cascadeDiagnosticBaselines = new Map<
+	string,
+	import("./types.js").Diagnostic[]
+>();
 const sessionRunnerRegistry = new RunnerRegistry();
 registerDefaultRunners(sessionRunnerRegistry);
 const LSP_CAPABLE_KINDS = new Set<FileKind>(getLspCapableKinds());
@@ -349,6 +353,7 @@ export function resetDispatchBaselines(): void {
 	clearGraphCache();
 	neighborTouchCache.clear();
 	primaryFilesThisTurn.clear();
+	cascadeDiagnosticBaselines.clear();
 }
 
 // A5: per-turn neighbor-touch cache keyed by normalized path.
@@ -684,21 +689,23 @@ export async function computeCascadeForFile(
 		}
 	}
 
+	const visibleNeighbors = applyCascadeDeltaBaselines(neighbors);
+
 	const formatted = formatCascadeResult(
 		cwd,
 		impact,
-		neighbors,
+		visibleNeighbors,
 		impact.neighborFiles.length,
 	);
 
-	const filesWithErrors = neighbors.filter(
+	const filesWithErrors = visibleNeighbors.filter(
 		(n) => n.diagnostics.length > 0,
 	).length;
 	logCascade({
 		phase: "cascade_result",
 		filePath,
-		neighborCount: neighbors.length,
-		diagnosticCount: neighbors.reduce(
+		neighborCount: visibleNeighbors.length,
+		diagnosticCount: visibleNeighbors.reduce(
 			(sum, n) => sum + n.diagnostics.length,
 			0,
 		),
@@ -706,16 +713,53 @@ export async function computeCascadeForFile(
 			filesWithErrors,
 			hasOutput: formatted.length > 0,
 			// Log when cascade ran but found nothing — distinguishes "clean" from "no signal"
-			noNeighbors: neighbors.length === 0,
-			noErrors: neighbors.length > 0 && filesWithErrors === 0,
+			noNeighbors: visibleNeighbors.length === 0,
+			noErrors: visibleNeighbors.length > 0 && filesWithErrors === 0,
 		},
 	});
 
 	if (!formatted) return undefined;
 
-	getDiagnosticTracker().trackShown(neighbors.flatMap((n) => n.diagnostics));
+	getDiagnosticTracker().trackShown(
+		visibleNeighbors.flatMap((n) => n.diagnostics),
+	);
 
-	return { filePath, impact, neighbors, formatted };
+	return { filePath, impact, neighbors: visibleNeighbors, formatted };
+}
+
+function diagnosticDeltaKey(
+	diagnostic: import("./types.js").Diagnostic,
+): string {
+	return [
+		diagnostic.id,
+		diagnostic.rule ?? "",
+		diagnostic.line ?? 0,
+		diagnostic.column ?? 0,
+		diagnostic.message,
+	].join(":");
+}
+
+function applyCascadeDeltaBaselines(
+	neighbors: CascadeResult["neighbors"],
+): CascadeResult["neighbors"] {
+	return neighbors.map((neighbor) => {
+		const baselineKey = `session.baseline.cascade.${normalizeMapKey(neighbor.filePath)}`;
+		const previous =
+			cascadeDiagnosticBaselines.get(baselineKey) ??
+			sessionFacts.getSessionFact<import("./types.js").Diagnostic[]>(
+				baselineKey,
+			);
+		cascadeDiagnosticBaselines.set(baselineKey, [...neighbor.diagnostics]);
+		sessionFacts.setSessionFact(baselineKey, [...neighbor.diagnostics]);
+		if (!previous) return neighbor;
+		const before = new Set(previous.map(diagnosticDeltaKey));
+		return {
+			...neighbor,
+			diagnostics: neighbor.diagnostics.filter(
+				(diagnostic) => !before.has(diagnosticDeltaKey(diagnostic)),
+			),
+		};
+	});
 }
 
 function appendFallbackNeighbors(

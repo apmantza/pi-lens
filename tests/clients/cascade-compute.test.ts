@@ -200,6 +200,49 @@ describe("computeCascadeForFile", () => {
 		}
 	});
 
+	it("filters repeated cascade diagnostics through cascade delta baselines", async () => {
+		const env = setupTestEnvironment("cascade-delta-");
+		try {
+			const primary = path.join(env.tmpDir, "src", "primary.ts");
+			const neighbor = path.join(env.tmpDir, "src", "neighbor.ts");
+			fs.mkdirSync(path.dirname(primary), { recursive: true });
+			fs.writeFileSync(primary, "export const x = 1;\n");
+			fs.writeFileSync(neighbor, "import { x } from './primary';\n");
+			mocks.computeImpactCascade.mockReturnValue(impact(primary, [neighbor]));
+			mocks.getLSPService.mockReturnValue({
+				getAllDiagnostics: vi
+					.fn()
+					.mockResolvedValue(
+						new Map([
+							[
+								neighbor.split(path.sep).join("/"),
+								{ diags: [lspError("same error")], ts: Date.now() },
+							],
+						]),
+					),
+				touchFile: vi.fn(),
+				getDiagnostics: vi.fn(),
+			});
+
+			const { computeCascadeForFile } = await import(
+				"../../clients/dispatch/integration.js"
+			);
+			const first = await computeCascadeForFile(primary, env.tmpDir, {
+				turnSeq: 1,
+				writeSeq: 1,
+			});
+			const second = await computeCascadeForFile(primary, env.tmpDir, {
+				turnSeq: 2,
+				writeSeq: 1,
+			});
+
+			expect(first?.formatted).toContain("same error");
+			expect(second).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("returns undefined for empty/clean cascade output", async () => {
 		const env = setupTestEnvironment("cascade-empty-");
 		try {
