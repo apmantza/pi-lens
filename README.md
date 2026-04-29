@@ -90,7 +90,7 @@ pi-lens enforces a **read-before-edit** policy on all file writes and edits. Bef
 - **File-modified block** — blocks if the file changed on disk since the last read (auto-format, external tool, or a previous edit that was then reformatted)
 - **Out-of-range block** — blocks if the edit target lines fall outside the ranges previously read, ensuring the agent cannot modify code it hasn't seen
 
-Coverage is tracked across multiple reads: two reads of lines 1–100 and 101–200 together satisfy a full-file write. LSP-expanded reads (single-line reads silently widened to the enclosing symbol) count toward coverage. Markdown, text, and log files are exempt.
+Coverage is tracked across multiple reads: two reads of lines 1–100 and 101–200 together satisfy a full-file write. Symbol-expanded reads (small reads silently widened to the enclosing symbol via tree-sitter) count toward coverage at the symbol level. Markdown, text, and log files are exempt.
 
 Override for a single edit: `/lens-allow-edit <path>`
 
@@ -98,7 +98,9 @@ Configure behavior with `--no-read-guard` to disable entirely, or set mode to `w
 
 ### Opportunistic Read Expansion
 
-When the agent reads a single line of a file and a warm LSP client is already running for that language, pi-lens transparently expands the read to the full enclosing symbol (function, method, or class). This happens without blocking the read — if LSP responds in time, the agent sees the full context; otherwise the original line is returned unchanged.
+When the agent reads a small slice of a file (≤ 60 lines), pi-lens transparently expands the read to the full enclosing symbol (function, method, or class) using the tree-sitter AST. The agent receives the full symbol as context, and the read guard records symbol-level coverage so edits anywhere within that symbol pass without requiring the agent to have read every line individually. Expansion runs within a 200 ms budget and falls back silently on unsupported file types or parse failures.
+
+Supported: TypeScript, TSX, JavaScript, JSX, Python, Go, Rust, Ruby.
 
 ### Fact Rules Pipeline
 
