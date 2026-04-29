@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import * as path from "node:path";
+import type { CascadeResult } from "./cascade-types.js";
 import type { FileComplexity } from "./complexity-client.js";
 import { normalizeMapKey } from "./path-utils.js";
 import type { ProjectIndex } from "./project-index.js";
@@ -22,6 +23,7 @@ export class RuntimeCoordinator {
 	private _startupScansInFlight = new Map<string, number>();
 	private _lastCascadeOutput = "";
 	private _lastImpactCascadeOutput = "";
+	private _cascadeResults: CascadeResult[] = [];
 	private _complexityBaselines = new Map<string, FileComplexity>();
 	private _fixedThisTurn = new Set<string>();
 	private _reportedThisTurn = new Set<string>();
@@ -50,6 +52,7 @@ export class RuntimeCoordinator {
 		this._startupScansInFlight.clear();
 		this._lastCascadeOutput = "";
 		this._lastImpactCascadeOutput = "";
+		this._cascadeResults = [];
 		this._fixedThisTurn.clear();
 		this._reportedThisTurn.clear();
 		this._telemetrySessionId = `lens-${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`;
@@ -89,6 +92,7 @@ export class RuntimeCoordinator {
 	beginTurn(): void {
 		this._lastCascadeOutput = "";
 		this._lastImpactCascadeOutput = "";
+		this._cascadeResults = [];
 		this._turnIndex += 1;
 		this._writeIndex = 0;
 		this._reportedThisTurn.clear();
@@ -235,6 +239,16 @@ export class RuntimeCoordinator {
 		const current = this._lastImpactCascadeOutput;
 		this._lastImpactCascadeOutput = "";
 		return current;
+	}
+
+	appendCascadeResult(result: CascadeResult): void {
+		this._cascadeResults.push(result);
+	}
+
+	consumeCascadeResults(): CascadeResult[] {
+		const results = this._cascadeResults;
+		this._cascadeResults = [];
+		return results;
 	}
 
 	get complexityBaselines(): Map<string, FileComplexity> {

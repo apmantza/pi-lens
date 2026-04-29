@@ -101,6 +101,8 @@ export interface LSPTouchFileOptions {
 	source?: string;
 	clientScope?: LSPTouchClientScope;
 	maxClientWaitMs?: number;
+	/** Skip workspace/didChangeWatchedFiles — use for cascade reads, not real fs changes */
+	silent?: boolean;
 }
 
 // --- Service ---
@@ -565,9 +567,10 @@ export class LSPService {
 		}
 
 		const languageId = getLanguageId(filePath) ?? "plaintext";
+		const silent = options.silent ?? false;
 		await Promise.all(
 			spawned.map((entry) =>
-				entry.client.notify.open(filePath, content, languageId),
+				entry.client.notify.open(filePath, content, languageId, undefined, silent),
 			),
 		);
 

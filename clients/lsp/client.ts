@@ -139,6 +139,7 @@ export interface LSPClientInfo {
 			content: string,
 			languageId: string,
 			preserveDiagnostics?: boolean,
+			silent?: boolean,
 		): Promise<void>;
 		change(filePath: string, content: string): Promise<void>;
 	};
@@ -621,6 +622,7 @@ export async function handleNotifyOpen(
 	content: string,
 	languageId: string,
 	preserveDiagnostics = false,
+	silent = false,
 ): Promise<void> {
 	if (!isClientAlive(state)) return;
 	const uri = pathToFileURL(filePath).href;
@@ -649,12 +651,17 @@ export async function handleNotifyOpen(
 	state.documentVersions.set(normalizedPath, 0);
 	clearDiagnosticsForPath(state, normalizedPath); // always clear for initial open
 
-	// Send workspace notification first (like opencode does)
-	await safeSendNotification(
-		state.connection,
-		"workspace/didChangeWatchedFiles",
-		{ changes: [{ uri, type: 1 }] },
-	);
+	// Send workspace notification first (like opencode does).
+	// Skipped in silent mode — cascade reads a file for diagnostics,
+	// not reporting a real filesystem change. Avoids N project-wide
+	// rechecks on push-diagnostics LSPs (TypeScript, Python) per CR-1.
+	if (!silent) {
+		await safeSendNotification(
+			state.connection,
+			"workspace/didChangeWatchedFiles",
+			{ changes: [{ uri, type: 1 }] },
+		);
+	}
 
 	if (!isClientAlive(state)) return;
 
@@ -950,13 +957,14 @@ export async function createLSPClient(options: {
 		isAlive: () => isClientAlive(state),
 
 		notify: {
-			async open(filePath, content, languageId, preserveDiagnostics) {
+			async open(filePath, content, languageId, preserveDiagnostics, silent) {
 				return handleNotifyOpen(
 					state,
 					filePath,
 					content,
 					languageId,
 					preserveDiagnostics,
+					silent,
 				);
 			},
 			async change(filePath, content) {
