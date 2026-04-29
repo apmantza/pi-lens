@@ -101,6 +101,10 @@ export class RuntimeCoordinator {
 		return this._writeIndex;
 	}
 
+	peekWriteIndex(): number {
+		return this._writeIndex;
+	}
+
 	setTelemetryIdentity(identity: {
 		sessionId?: string;
 		model?: string;

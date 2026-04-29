@@ -120,17 +120,32 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	const blockerParts: string[] = [];
 
 	// Merge accumulated cascade results from all pipeline runs this turn.
-	// Deduplicate by primary file (last writer wins — most recent LSP state).
-	// Use pre-built result.formatted to preserve impact headers and risk context.
+	// Two-pass dedup:
+	//   1. Primary-level: dedup by primary file (last writer wins).
+	//   2. Neighbor-level: each neighbor is claimed by the latest cascade result
+	//      that covers it — suppresses stale neighbor state from earlier writes.
 	const cascadeResults = runtime.consumeCascadeResults();
 	if (cascadeResults.length > 0) {
 		const seen = new Map<string, (typeof cascadeResults)[number]>();
 		for (const result of cascadeResults) {
 			seen.set(normalizeMapKey(result.filePath), result);
 		}
+		// Iterate in reverse so the latest result claims each neighbor first.
+		const neighborOwner = new Map<string, string>();
+		for (const result of [...seen.values()].reverse()) {
+			const pk = normalizeMapKey(result.filePath);
+			for (const n of result.neighbors) {
+				const nk = normalizeMapKey(n.filePath);
+				if (!neighborOwner.has(nk)) neighborOwner.set(nk, pk);
+			}
+		}
 		const parts: string[] = [];
 		for (const result of seen.values()) {
-			if (result.formatted) parts.push(result.formatted);
+			const pk = normalizeMapKey(result.filePath);
+			const ownsAny = result.neighbors.some(
+				(n) => neighborOwner.get(normalizeMapKey(n.filePath)) === pk,
+			);
+			if (ownsAny && result.formatted) parts.push(result.formatted);
 		}
 		if (parts.length > 0) blockerParts.push(parts.join("\n\n"));
 		logCascade({

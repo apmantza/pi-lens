@@ -28,6 +28,7 @@ function cascade(
 	neighbor: string,
 	message: string,
 ): CascadeResult {
+	const neighborBase = path.basename(neighbor);
 	return {
 		filePath: primary,
 		impact: {
@@ -46,7 +47,7 @@ function cascade(
 				lspTouched: false,
 			},
 		],
-		formatted: "not used by turn-end merge",
+		formatted: `Cascade errors in 1 dependent file\n${neighborBase}: ${message}`,
 	};
 }
 

@@ -357,6 +357,9 @@ describe("index.ts integration", () => {
 				nextWriteIndex() {
 					return 1;
 				}
+				peekWriteIndex() {
+					return 1;
+				}
 				beginTurn() {}
 				resetForSession() {}
 				setTelemetryIdentity() {}
@@ -450,6 +453,9 @@ describe("index.ts integration", () => {
 				nextWriteIndex() {
 					return 1;
 				}
+				peekWriteIndex() {
+					return 1;
+				}
 				beginTurn() {}
 				resetForSession() {}
 				setTelemetryIdentity() {}
@@ -537,6 +543,9 @@ describe("index.ts integration", () => {
 				nextWriteIndex() {
 					return 1;
 				}
+				peekWriteIndex() {
+					return 1;
+				}
 				beginTurn() {}
 				resetForSession() {}
 				setTelemetryIdentity() {}
@@ -617,6 +626,9 @@ describe("index.ts integration", () => {
 				markLspReadWarmCompleted() {}
 				clearLspReadWarmState() {}
 				nextWriteIndex() {
+					return 1;
+				}
+				peekWriteIndex() {
 					return 1;
 				}
 				beginTurn() {}

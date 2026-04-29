@@ -170,6 +170,7 @@ export function runLogCleanup(dbg?: (msg: string) => void): {
 		path.join(LOG_DIR, "sessionstart.log"),
 		path.join(LOG_DIR, "tree-sitter.log"),
 		path.join(LOG_DIR, "cascade.log"),
+		path.join(LOG_DIR, "read-guard.log"),
 	];
 
 	for (const logFile of mainLogs) {

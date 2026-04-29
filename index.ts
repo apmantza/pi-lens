@@ -21,8 +21,6 @@ import {
 } from "./clients/git-guard.js";
 import { getAllToolStatuses } from "./clients/installer/index.js";
 import { LANGUAGE_POLICY } from "./clients/language-policy.js";
-import { logLatency } from "./clients/latency-logger.js";
-import type { LSPSymbol } from "./clients/lsp/client.js";
 import { initLSPConfig } from "./clients/lsp/config.js";
 import { getLSPService, resetLSPService } from "./clients/lsp/index.js";
 import { logReadGuardEvent } from "./clients/read-guard-logger.js";
@@ -82,10 +80,6 @@ const LSP_TOOLCALL_NAV_TOUCH_BUDGET_MS = Math.max(
 const LSP_TOOLCALL_TOUCH_BUDGET_MS = Math.max(
 	0,
 	Number.parseInt(process.env.PI_LENS_TOOLCALL_TOUCH_MS ?? "750", 10) || 750,
-);
-const LSP_READ_EXPANSION_BUDGET_MS = Math.max(
-	0,
-	Number.parseInt(process.env.PI_LENS_READ_EXPANSION_MS ?? "200", 10) || 200,
 );
 
 async function ensureLSPConfigInitialized(cwd: string): Promise<void> {
@@ -228,67 +222,6 @@ function getNewContentFromToolCall(event: unknown): string | undefined {
 	return undefined;
 }
 
-/**
- * Find and delete stale tsconfig.tsbuildinfo files in the project.
- *
- * A tsbuildinfo is stale when its `root` array references files that no
- * longer exist on disk. The TypeScript Language Server reads this cache
- * on startup and will report phantom "Cannot find module" errors for
- * every deleted file until the cache is cleared.
- *
- * Only called when LSP is active (that's when tsserver runs).
- */
-function findSymbolAtLine(
-	symbols: LSPSymbol[],
-	line1: number,
-):
-	| {
-			name: string;
-			kind: number;
-			range: { start: { line: number }; end: { line: number } };
-	  }
-	| undefined {
-	const targetLine = line1 - 1;
-	function search(items: LSPSymbol[]): LSPSymbol | undefined {
-		for (const s of items) {
-			const start = s.range?.start?.line ?? 0;
-			const end = s.range?.end?.line ?? start;
-			if (targetLine >= start && targetLine <= end) {
-				if (s.children && s.children.length > 0) {
-					const child = search(s.children);
-					if (child) return child;
-				}
-				return s;
-			}
-		}
-		return undefined;
-	}
-	const match = search(symbols);
-	if (!match?.range) return undefined;
-	return {
-		name: match.name ?? "(unknown)",
-		kind: match.kind ?? 0,
-		range: match.range,
-	};
-}
-
-async function withTimeout<T>(
-	promise: Promise<T>,
-	timeoutMs: number,
-): Promise<T | undefined> {
-	if (timeoutMs <= 0) return undefined;
-	let timeout: ReturnType<typeof setTimeout> | undefined;
-	try {
-		return await Promise.race([
-			promise,
-			new Promise<undefined>((resolve) => {
-				timeout = setTimeout(() => resolve(undefined), timeoutMs);
-			}),
-		]);
-	} finally {
-		if (timeout) clearTimeout(timeout);
-	}
-}
 
 function cleanStaleTsBuildInfo(cwd: string): string[] {
 	const cleaned: string[] = [];
@@ -878,96 +811,6 @@ export default function (pi: ExtensionAPI) {
 		const requestedReadLimit = readInput?.limit;
 		let effectiveReadOffset = requestedReadOffset;
 		let effectiveReadLimit = getEffectiveReadLimit(filePath, readInput);
-		let expandedByLsp = false;
-		let enclosingSymbol:
-			| {
-					name: string;
-					kind: string;
-					startLine: number;
-					endLine: number;
-			  }
-			| undefined;
-
-		// --- Opportunistic LSP range expansion for single-line reads ---
-		// Guard invariant: effective ReadGuard coverage must match content actually
-		// delivered to the agent. Therefore expansion is awaited here, before the
-		// read tool proceeds; late async symbol results must not mutate read history.
-		if (toolName === "read" && !pi.getFlag("no-lsp") && filePath && readInput) {
-			const isSingleLine =
-				readInput.offset != null &&
-				(readInput.limit == null || readInput.limit <= 1);
-			if (isSingleLine) {
-				const startedAt = Date.now();
-				try {
-					const spawned = await withTimeout(
-						getLSPService().getWarmClientForFile(filePath),
-						LSP_READ_EXPANSION_BUDGET_MS,
-					);
-					const remainingBudget = Math.max(
-						0,
-						LSP_READ_EXPANSION_BUDGET_MS - (Date.now() - startedAt),
-					);
-					const symbols = spawned?.client.isAlive()
-						? await withTimeout(
-								spawned.client.documentSymbol(filePath),
-								remainingBudget,
-							)
-						: undefined;
-					const match = symbols
-						? findSymbolAtLine(symbols, readInput.offset!)
-						: undefined;
-					if (match) {
-						const originalOffset = readInput.offset!;
-						const newOffset = match.range.start.line + 1;
-						const endLine = match.range.end.line + 1;
-						readInput.offset = newOffset;
-						readInput.limit = endLine - newOffset + 1;
-						effectiveReadOffset = newOffset;
-						effectiveReadLimit = readInput.limit;
-						expandedByLsp = true;
-						enclosingSymbol = {
-							name: match.name,
-							kind: String(match.kind),
-							startLine: newOffset,
-							endLine,
-						};
-						logReadGuardEvent({
-							event: "lsp_range_expanded",
-							sessionId: runtime.telemetrySessionId,
-							filePath,
-							requestedOffset: requestedReadOffset,
-							requestedLimit: requestedReadLimit ?? 1,
-							effectiveOffset: newOffset,
-							effectiveLimit: readInput.limit,
-							symbol: match.name,
-							symbolKind: String(match.kind),
-							symbolStartLine: newOffset,
-							symbolEndLine: endLine,
-						});
-						logLatency({
-							type: "phase",
-							phase: "lsp_read_range_expansion",
-							filePath,
-							durationMs: Date.now() - startedAt,
-							metadata: {
-								symbol: match.name,
-								kind: match.kind,
-								fromLine: originalOffset,
-								toRange: `${newOffset}-${endLine}`,
-								serverId: spawned?.info.id,
-							},
-						});
-						dbg(
-							`lsp expanded read range: ${path.basename(filePath)} line ${originalOffset} → ${match.name} (${newOffset}-${endLine})`,
-						);
-					}
-				} catch {
-					// Best-effort only. If expansion cannot complete before the read,
-					// record only the original range that will be delivered.
-				}
-			}
-		}
-
 		// --- Read-Before-Edit Guard: record reads ---
 		if (toolName === "read" && filePath) {
 			const deliveredLimit = effectiveReadLimit ?? 1;
@@ -977,29 +820,11 @@ export default function (pi: ExtensionAPI) {
 				requestedLimit: requestedReadLimit ?? deliveredLimit,
 				effectiveOffset: effectiveReadOffset,
 				effectiveLimit: deliveredLimit,
-				expandedByLsp,
-				enclosingSymbol,
+				expandedByLsp: false,
+				enclosingSymbol: undefined,
 				turnIndex: runtime.turnIndex,
-				writeIndex: runtime.nextWriteIndex(),
+				writeIndex: runtime.peekWriteIndex(),
 				timestamp: Date.now(),
-			});
-			logReadGuardEvent({
-				event: "read_recorded_bridge",
-				sessionId: runtime.telemetrySessionId,
-				filePath,
-				requestedOffset: requestedReadOffset,
-				requestedLimit: requestedReadLimit ?? deliveredLimit,
-				effectiveOffset: effectiveReadOffset,
-				effectiveLimit: deliveredLimit,
-				symbol: enclosingSymbol?.name,
-				symbolKind: enclosingSymbol?.kind,
-				symbolStartLine: enclosingSymbol?.startLine,
-				symbolEndLine: enclosingSymbol?.endLine,
-				metadata: {
-					tool: "read",
-					turnIndex: runtime.turnIndex,
-					expandedByLsp,
-				},
 			});
 		}
 
