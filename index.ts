@@ -29,6 +29,12 @@ import {
 	getTouchedLinesForGuard,
 } from "./clients/read-guard-tool-lines.js";
 import {
+	EXPANSION_BUDGET_MS,
+	EXPANSION_LIMIT_LINES,
+	tryExpandRead,
+} from "./clients/read-expansion.js";
+import { TreeSitterClient } from "./clients/tree-sitter-client.js";
+import {
 	consumeSessionStartGuidance,
 	consumeTestFindings,
 	consumeTurnEndFindings,
@@ -68,6 +74,7 @@ function log(_msg: string) {
 
 const runtime = new RuntimeCoordinator();
 const _lspConfigInitializedCwds = new Set<string>();
+const _readExpansionClient = new TreeSitterClient();
 const LSP_TOOLCALL_NAV_TOUCH_BUDGET_MS = Math.max(
 	0,
 	Number.parseInt(
@@ -811,17 +818,105 @@ export default function (pi: ExtensionAPI) {
 		const requestedReadLimit = readInput?.limit;
 		let effectiveReadOffset = requestedReadOffset;
 		let effectiveReadLimit = getEffectiveReadLimit(filePath, readInput);
+
+		// --- Opportunistic read expansion via tree-sitter ---
+		// For partial reads (small limit, not from line 1), find the enclosing
+		// symbol and expand the read range to cover it. This gives the read guard
+		// accurate symbol-level coverage without requiring an LSP server.
+		let expandedByLsp = false;
+		let enclosingSymbol: {
+			name: string;
+			kind: string;
+			startLine: number;
+			endLine: number;
+		} | undefined;
+
+		if (
+			toolName === "read" &&
+			!pi.getFlag("no-lsp") &&
+			filePath &&
+			readInput &&
+			requestedReadLimit != null &&
+			requestedReadLimit <= EXPANSION_LIMIT_LINES
+		) {
+			const totalLines = effectiveReadLimit != null && requestedReadLimit == null
+				? effectiveReadLimit
+				: countFileLines(filePath);
+			try {
+				const expansion = await tryExpandRead(
+					filePath,
+					requestedReadOffset,
+					requestedReadLimit,
+					totalLines,
+					_readExpansionClient,
+				);
+				if (expansion) {
+					readInput.offset = expansion.newOffset;
+					readInput.limit = expansion.newLimit;
+					effectiveReadOffset = expansion.newOffset;
+					effectiveReadLimit = expansion.newLimit;
+					expandedByLsp = true;
+					enclosingSymbol = expansion.enclosingSymbol;
+					logReadGuardEvent({
+						event: "ts_range_expanded",
+						sessionId: runtime.telemetrySessionId,
+						filePath,
+						requestedOffset: requestedReadOffset,
+						requestedLimit: requestedReadLimit,
+						effectiveOffset: expansion.newOffset,
+						effectiveLimit: expansion.newLimit,
+						symbol: expansion.enclosingSymbol.name,
+						symbolKind: expansion.enclosingSymbol.kind,
+						symbolStartLine: expansion.enclosingSymbol.startLine,
+						symbolEndLine: expansion.enclosingSymbol.endLine,
+						metadata: {
+							durationMs: expansion.durationMs,
+							budgetMs: EXPANSION_BUDGET_MS,
+						},
+					});
+					dbg(
+						`ts expanded read: ${path.basename(filePath)} ` +
+						`lines ${requestedReadOffset}–${requestedReadOffset + requestedReadLimit - 1} ` +
+						`→ ${expansion.enclosingSymbol.name} ` +
+						`(${expansion.newOffset}–${expansion.newOffset + expansion.newLimit - 1})`,
+					);
+				}
+			} catch {
+				// Best-effort only.
+			}
+		}
+
 		// --- Read-Before-Edit Guard: record reads ---
 		if (toolName === "read" && filePath) {
+			const totalLines = countFileLines(filePath);
 			const deliveredLimit = effectiveReadLimit ?? 1;
+			logReadGuardEvent({
+				event: "read_pattern",
+				sessionId: runtime.telemetrySessionId,
+				filePath,
+				requestedOffset: requestedReadOffset,
+				requestedLimit: requestedReadLimit ?? deliveredLimit,
+				effectiveOffset: effectiveReadOffset,
+				effectiveLimit: deliveredLimit,
+				metadata: {
+					totalLines,
+					isPartial: requestedReadLimit != null && requestedReadLimit < totalLines,
+					fileKind: detectFileKind(filePath) ?? "unknown",
+					fractionRead:
+						totalLines > 0
+							? Math.round((deliveredLimit / totalLines) * 100) / 100
+							: 1,
+					expandedByTs: expandedByLsp,
+				},
+			});
 			runtime.readGuard.recordRead({
 				filePath,
 				requestedOffset: requestedReadOffset,
 				requestedLimit: requestedReadLimit ?? deliveredLimit,
 				effectiveOffset: effectiveReadOffset,
 				effectiveLimit: deliveredLimit,
-				expandedByLsp: false,
-				enclosingSymbol: undefined,
+				expandedByLsp,
+				enclosingSymbol,
 				turnIndex: runtime.turnIndex,
 				writeIndex: runtime.peekWriteIndex(),
 				timestamp: Date.now(),
