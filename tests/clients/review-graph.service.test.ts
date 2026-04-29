@@ -85,6 +85,35 @@ describe("review graph service", () => {
 		}
 	});
 
+	it("surfaces references-edge neighbors for non-jsts languages (Python)", async () => {
+		const env = setupTestEnvironment("pi-lens-review-graph-refs-");
+		try {
+			const modelsPath = createTempFile(
+				env.tmpDir,
+				"pkg/models.py",
+				"class User:\n    pass\n",
+			);
+			const apiPath = createTempFile(
+				env.tmpDir,
+				"pkg/api.py",
+				"from pkg.models import User\n\ndef get_user() -> User:\n    return User()\n",
+			);
+
+			const facts = new FactStore();
+			facts.setSessionFact(
+				`session.reviewGraph.changedSymbols:${normalizeMapKey(modelsPath)}`,
+				["User"],
+			);
+
+			const graph = await buildOrUpdateGraph(env.tmpDir, [modelsPath, apiPath], facts);
+			const impact = computeImpactCascade(graph, modelsPath);
+			// references edges from api.py → models.py:User should surface api.py as a neighbor
+			expect(impact.neighborFiles).toContain(normalizeMapKey(apiPath));
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("flags cycle-adjacent files and suppresses low-signal output", async () => {
 		const env = setupTestEnvironment("pi-lens-review-graph-cycle-");
 		try {

@@ -70,9 +70,18 @@ export function computeImpactCascade(
 		callerFiles = importerFiles;
 	}
 
+	// For non-jsts languages, import/call edges are absent but resolved
+	// `references` edges exist. Include them as supplemental neighbors.
+	const referenceFiles = dedupe(
+		collectIncomingEdges(graph, effectiveSymbolNodeIds, "references").flatMap(
+			(edge) => filePathFromNode(graph, edge.from) ?? [],
+		),
+	);
+
 	const neighborFiles = dedupe([
 		...importerFiles,
 		...callerFiles,
+		...referenceFiles,
 	]).filter((candidate) => normalizeMapKey(candidate) !== normalizedFile);
 	const directImports = dedupe(
 		(graph.edgesByFrom.get(fileNodeId) ?? [])

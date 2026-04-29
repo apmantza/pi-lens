@@ -378,15 +378,9 @@ function resolveDeferredSymbolEdges(graph: ReviewGraph): void {
 	}
 
 	graph.edges = graph.edges.map((edge) => {
-		const unresolvedName = String(edge.metadata?.unresolvedName ?? "");
-		if (
-			!unresolvedName ||
-			!graph.nodes.has(edge.to) ||
-			!graph.nodes.get(edge.to)?.metadata?.unresolvedName
-		) {
-			return edge;
-		}
-		const candidates = symbolNameToIds.get(unresolvedName) ?? [];
+		const targetNode = graph.nodes.get(edge.to);
+		if (!targetNode?.metadata?.unresolvedName) return edge;
+		const candidates = symbolNameToIds.get(targetNode.symbolName ?? "") ?? [];
 		if (candidates.length === 1) {
 			return { ...edge, to: candidates[0] };
 		}
