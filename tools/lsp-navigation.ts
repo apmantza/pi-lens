@@ -444,6 +444,15 @@ export function createLspNavigationTool(
 					: path.resolve(ctx.cwd || ".", rawPath)
 				: "";
 
+			let filePathIsDirectory = false;
+			if (filePath) {
+				try {
+					filePathIsDirectory = nodeFs.statSync(filePath).isDirectory();
+				} catch {
+					// non-existent path — existing error paths handle this
+				}
+			}
+
 			const lspService = getLSPService();
 			if (operation === "workspaceDiagnostics") {
 				const wsDiagSupport = await lspService.getWorkspaceDiagnosticsSupport(
@@ -451,7 +460,7 @@ export function createLspNavigationTool(
 				);
 				diagnosticsMode = wsDiagSupport?.mode ?? "unknown";
 
-				if (rawPath) {
+				if (rawPath && !filePathIsDirectory) {
 					const hasLSP = lspService.supportsLSP(filePath);
 					if (!hasLSP) {
 						return finalize(
@@ -548,6 +557,26 @@ export function createLspNavigationTool(
 						failureKind:
 							diagnosticsMode === "push-only" ? "tracked_snapshot" : "success",
 						resultCount: result.length,
+					},
+				);
+			}
+
+			if (needsFilePath && filePathIsDirectory) {
+				return finalize(
+					{
+						content: [
+							{
+								type: "text" as const,
+								text: `filePath must be a source file, got directory: ${filePath}. Pass a source file path, or omit filePath for workspace-level operations.`,
+							},
+						],
+						isError: true,
+					},
+					{
+						operation,
+						filePath,
+						failureKind: "filepath_is_directory",
+						resultCount: 0,
 					},
 				);
 			}
