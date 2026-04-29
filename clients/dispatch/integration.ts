@@ -826,7 +826,7 @@ function formatCascadeResult(
 	});
 	if (!diagnosticsBlock) return "";
 
-	const impactHeader = formatImpactCascade(impact);
+	const impactHeader = formatImpactCascade(impact, RUNTIME_CONFIG.pipeline.cascadeMaxFiles);
 	let out = impactHeader
 		? `${impactHeader}\n${diagnosticsBlock}`
 		: diagnosticsBlock;

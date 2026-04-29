@@ -1,15 +1,15 @@
 import * as path from "node:path";
 import type { ImpactCascadeResult } from "./types.js";
 
-const MAX_FILES = 4;
 const MAX_SYMBOLS = 5;
 
-function displayList(items: string[], map?: (item: string) => string): string[] {
-	return items.slice(0, MAX_FILES).map((item) => (map ? map(item) : item));
+function displayList(items: string[], maxFiles: number, map?: (item: string) => string): string[] {
+	return items.slice(0, maxFiles).map((item) => (map ? map(item) : item));
 }
 
 export function formatImpactCascade(
 	result: ImpactCascadeResult,
+	maxFiles = 4,
 ): string | undefined {
 	if (
 		result.changedSymbols.length === 0 &&
@@ -30,17 +30,17 @@ export function formatImpactCascade(
 	}
 	if (result.directImporters.length > 0) {
 		lines.push(
-			`Direct importers: ${displayList(result.directImporters, (item) => path.basename(item)).join(", ")}`,
+			`Direct importers: ${displayList(result.directImporters, maxFiles, (item) => path.basename(item)).join(", ")}`,
 		);
 	}
 	if (result.directCallers.length > 0) {
 		lines.push(
-			`Direct callers: ${displayList(result.directCallers, (item) => path.basename(item)).join(", ")}`,
+			`Direct callers: ${displayList(result.directCallers, maxFiles, (item) => path.basename(item)).join(", ")}`,
 		);
 	}
 	if (result.neighborFiles.length > 0) {
 		lines.push(
-			`Check next: ${displayList(result.neighborFiles, (item) => path.basename(item)).join(", ")}`,
+			`Check next: ${displayList(result.neighborFiles, maxFiles, (item) => path.basename(item)).join(", ")}`,
 		);
 	}
 	if (result.riskFlags.length > 0) {

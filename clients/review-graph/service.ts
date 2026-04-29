@@ -27,8 +27,9 @@ export function computeImpactCascade(
 
 export function formatImpactCascade(
 	result: ImpactCascadeResult,
+	maxFiles?: number,
 ): string | undefined {
-	return formatImpactCascadeImpl(result);
+	return formatImpactCascadeImpl(result, maxFiles);
 }
 
 export function recordEntitySnapshotDiff(

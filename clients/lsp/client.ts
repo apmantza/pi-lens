@@ -8,6 +8,7 @@
  * - Request/response handling
  */
 
+import { existsSync } from "node:fs";
 import { spawn as nodeSpawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { pathToFileURL } from "node:url";
@@ -659,7 +660,7 @@ export async function handleNotifyOpen(
 		await safeSendNotification(
 			state.connection,
 			"workspace/didChangeWatchedFiles",
-			{ changes: [{ uri, type: 1 }] },
+			{ changes: [{ uri, type: existsSync(filePath) ? 2 : 1 }] },
 		);
 	}
 
