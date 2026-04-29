@@ -302,17 +302,29 @@ function hasExplicitFormatterConfig(
 
 // --- Formatter Definitions ---
 
+async function hasEditorConfig(cwd: string): Promise<boolean> {
+	try {
+		await fs.access(path.join(cwd, ".editorconfig"));
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 export const biomeFormatter: FormatterInfo = {
 	name: "biome",
 	command: ["npx", "@biomejs/biome", "format", "--write", "$FILE"],
 	async resolveCommand(filePath, cwd) {
+		const editorConfigFlag = (await hasEditorConfig(cwd))
+			? ["--use-editorconfig=true"]
+			: [];
 		const local = await findInNodeModules("biome", cwd);
-		if (local) return [local, "format", "--write", filePath];
+		if (local) return [local, "format", "--write", ...editorConfigFlag, filePath];
 		const toolId = getAutoInstallToolIdForFormatter("biome");
 		if (!toolId) return null;
 		const { ensureTool } = await import("./installer/index.js");
 		const installed = await ensureTool(toolId);
-		if (installed) return [installed, "format", "--write", filePath];
+		if (installed) return [installed, "format", "--write", ...editorConfigFlag, filePath];
 		return null;
 	},
 	extensions: [

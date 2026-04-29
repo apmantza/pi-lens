@@ -40,6 +40,7 @@ export type { DispatchLatencyReport, RunnerLatency };
 // Re-export latency tracking types and functions
 export { clearLatencyReports, formatLatencyReport, getLatencyReports };
 
+import { clearGraphCache } from "../review-graph/builder.js";
 import {
 	buildOrUpdateGraph,
 	computeImpactCascade,
@@ -335,6 +336,7 @@ export function resetDispatchBaselines(): void {
 	sessionFacts.clearAll();
 	resetSessionSlopScore();
 	clearCoverageNoticeState();
+	clearGraphCache();
 }
 
 export async function computeImpactCascadeForFile(

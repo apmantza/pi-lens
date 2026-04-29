@@ -136,9 +136,9 @@ export class SgRunner {
 					windowsHide: true,
 				});
 			} else if (isWindows) {
-				// Fallback: use cmd.exe with standard escaping
-				const fullCommand = `${this.getSgCommand()} ${args.map(escapeWindowsArg).join(" ")}`;
-				proc = spawn(fullCommand, {
+				// Fallback: shell:true needed for npm-installed .cmd wrappers on Windows.
+				// Pass cmd and args separately — do not concatenate into one string.
+				proc = spawn(this.getSgCommand(), args.map(escapeWindowsArg), {
 					stdio: ["ignore", "pipe", "pipe"],
 					shell: true,
 					windowsHide: true,

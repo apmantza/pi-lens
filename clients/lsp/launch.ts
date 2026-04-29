@@ -332,6 +332,8 @@ function trySpawn(
 				? `"${escaped.replace(/"/g, '""')}"`
 				: escaped;
 		};
+		// shell:true justified: Windows .cmd/.bat LSP binaries (e.g. typescript-language-server.cmd)
+		// cannot be spawned via execFile — cmd.exe must interpret the script wrapper.
 		const shellCommand = `"${command}" ${args.map(escapeCmdArg).join(" ")}`;
 		proc = nodeSpawn(shellCommand, [], {
 			cwd,
@@ -678,7 +680,7 @@ export async function launchViaPackageManager(
 		);
 	}
 
-	// For npx on Windows, use shell mode with the full command string
+	// shell:true justified: npx on Windows is npx.cmd — requires shell to execute.
 	if (isWin) {
 		const argsStr = args.map((a) => (a.includes(" ") ? `"${a}"` : a)).join(" ");
 		// --no prevents silent download of uncached packages
