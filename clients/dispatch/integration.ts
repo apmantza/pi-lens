@@ -49,6 +49,7 @@ import {
 import type { CascadeResult } from "../cascade-types.js";
 import { logCascade } from "../cascade-logger.js";
 import { getLSPService } from "../lsp/index.js";
+import { getServersForFileWithConfig } from "../lsp/config.js";
 import { isFileKind } from "../file-kinds.js";
 import { normalizeMapKey } from "../path-utils.js";
 import { RUNTIME_CONFIG } from "../runtime-config.js";
@@ -382,7 +383,21 @@ export async function computeCascadeForFile(
 	const graph = await buildOrUpdateGraph(cwd, [normalizedFile], sessionFacts);
 	const graphMs = Date.now() - graphStart;
 
-	logCascade({ phase: "graph_build", filePath, graphBuiltMs: graphMs });
+	// Count files represented in the graph (nodes with a filePath).
+	const graphFileCount = new Set(
+		[...graph.nodes.values()].flatMap((n) => (n.filePath ? [n.filePath] : [])),
+	).size;
+
+	logCascade({
+		phase: "graph_build",
+		filePath,
+		graphBuiltMs: graphMs,
+		graphReused: false, // always full rebuild until incremental graph lands (E3)
+		graphNodeCount: graph.nodes.size,
+		graphFileCount,
+		graphChangedSymbolCount:
+			(graph.changedSymbolsByFile.get(normalizedFileKey) ?? []).length,
+	});
 
 	const impact = computeImpactCascade(graph, normalizedFile);
 
@@ -390,6 +405,11 @@ export async function computeCascadeForFile(
 	// directImporters are most impactful, then callers, then reference edges.
 	const importerSet = new Set(impact.directImporters);
 	const callerSet = new Set(impact.directCallers);
+	// neighbors that are neither direct importers nor callers are reference-edge neighbors
+	const importerOrCallerSet = new Set([...impact.directImporters, ...impact.directCallers]);
+	const referenceCount = impact.neighborFiles.filter(
+		(n) => !importerOrCallerSet.has(n),
+	).length;
 	const sortedNeighbors = [...impact.neighborFiles]
 		.filter((n) => nodeFs.existsSync(n))
 		.sort((a, b) => {
@@ -403,11 +423,12 @@ export async function computeCascadeForFile(
 		phase: "neighbors_computed",
 		filePath,
 		neighborCount: sortedNeighbors.length,
-		metadata: {
-			totalNeighbors: impact.neighborFiles.length,
-			capped: impact.neighborFiles.length > MAX_FILES,
-			neighbors: sortedNeighbors.slice(0, 10),
-		},
+		totalNeighborCount: impact.neighborFiles.length,
+		importerCount: impact.directImporters.length,
+		callerCount: impact.directCallers.length,
+		referenceCount: Math.max(0, referenceCount),
+		riskFlags: impact.riskFlags,
+		metadata: { neighbors: sortedNeighbors.slice(0, 10) },
 	});
 
 	const lspService = getLSPService();
@@ -425,10 +446,13 @@ export async function computeCascadeForFile(
 		for (const neighborPath of jstsPaths) {
 			const neighborStart = Date.now();
 			const entry = allDiags.get(normalizeMapKey(neighborPath));
-			const diags =
-				entry && Date.now() - entry.ts < CASCADE_TTL_MS
-					? entry.diags.filter((d) => d.severity === 1).slice(0, MAX_PER_FILE)
-					: [];
+			const snapshotAgeSec = entry
+				? Math.round((Date.now() - entry.ts) / 1000)
+				: undefined;
+			const snapshotValid = entry != null && Date.now() - entry.ts < CASCADE_TTL_MS;
+			const diags = snapshotValid
+				? entry.diags.filter((d) => d.severity === 1).slice(0, MAX_PER_FILE)
+				: [];
 			const durationMs = Date.now() - neighborStart;
 
 			logCascade({
@@ -438,6 +462,8 @@ export async function computeCascadeForFile(
 				diagnosticCount: diags.length,
 				durationMs,
 				autoPropagate: true,
+				snapshotMissing: entry == null,
+				snapshotAgeSec,
 			});
 
 			neighbors.push({
@@ -478,6 +504,7 @@ export async function computeCascadeForFile(
 					diagnosticCount: diags.length,
 					durationMs,
 					lspTouched: true,
+					lspServerCount: getServersForFileWithConfig(neighborPath).length,
 				});
 
 				return {
@@ -554,12 +581,19 @@ export async function computeCascadeForFile(
 		impact.neighborFiles.length,
 	);
 
+	const filesWithErrors = neighbors.filter((n) => n.diagnostics.length > 0).length;
 	logCascade({
 		phase: "cascade_result",
 		filePath,
 		neighborCount: neighbors.length,
 		diagnosticCount: neighbors.reduce((sum, n) => sum + n.diagnostics.length, 0),
-		metadata: { hasOutput: formatted.length > 0 },
+		metadata: {
+			filesWithErrors,
+			hasOutput: formatted.length > 0,
+			// Log when cascade ran but found nothing — distinguishes "clean" from "no signal"
+			noNeighbors: neighbors.length === 0,
+			noErrors: neighbors.length > 0 && filesWithErrors === 0,
+		},
 	});
 
 	return { filePath, impact, neighbors, formatted };

@@ -14,23 +14,43 @@ try {
 export interface CascadeLogEntry {
 	ts?: string;
 	phase:
-		| "cascade_skip"         // primary has blockers or new file — cascade suppressed
-		| "graph_build"          // graph built or reused
-		| "neighbors_computed"   // impact cascade result ready
-		| "neighbor_touch"       // single neighbor LSP touch result
-		| "neighbor_snapshot"    // neighbor read from passive snapshot (autoPropagate)
-		| "neighbor_fallback"    // neighbor fell back to getAllDiagnostics
-		| "cascade_result"       // final per-file cascade result
-		| "cascade_turn_end"     // merged result emitted at turn_end
-		| "silent_open";         // didChangeWatchedFiles suppressed (silent mode)
+		| "cascade_skip"       // primary has blockers — cascade suppressed
+		| "graph_build"        // graph built or reused
+		| "neighbors_computed" // impact cascade result ready
+		| "neighbor_touch"     // single neighbor LSP active touch result
+		| "neighbor_snapshot"  // neighbor read from passive snapshot (autoPropagate jsts)
+		| "neighbor_fallback"  // neighbor fell back to getAllDiagnostics (error or degraded)
+		| "cascade_result"     // final per-file cascade result
+		| "cascade_turn_end";  // merged result emitted at turn_end
 	filePath: string;
 	neighborFile?: string;
 	reason?: string;
+
+	// graph_build
 	graphBuiltMs?: number;
-	graphReused?: boolean;
+	graphReused?: boolean;   // true when FactStore cache was valid (future: incremental rebuild)
+	graphNodeCount?: number;
+	graphFileCount?: number;
+	graphChangedSymbolCount?: number;
+
+	// neighbors_computed
 	neighborCount?: number;
+	totalNeighborCount?: number; // before cap
+	importerCount?: number;
+	callerCount?: number;
+	referenceCount?: number;
+	riskFlags?: string[];
+
+	// neighbor_snapshot
+	snapshotMissing?: boolean; // true when file not found in allDiags
+	snapshotAgeSec?: number;   // age of snapshot entry in seconds
+
+	// neighbor_touch
+	lspServerCount?: number;   // number of LSP servers configured for this file type
 	touchedCount?: number;
 	snapshotCount?: number;
+
+	// shared
 	fallbackUsed?: boolean;
 	diagnosticCount?: number;
 	durationMs?: number;
