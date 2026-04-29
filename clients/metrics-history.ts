@@ -10,6 +10,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execSync } from "node:child_process";
+import { getProjectDataDir } from "./file-utils.js";
 
 // --- Types ---
 
@@ -40,7 +41,7 @@ export type TrendDirection = "improving" | "stable" | "regressing";
 
 // --- Constants ---
 
-const HISTORY_FILE = ".pi-lens/metrics-history.json";
+const HISTORY_FILE = "metrics-history.json";
 const MAX_HISTORY_PER_FILE = 20;
 
 // --- Git Helpers ---
@@ -85,7 +86,7 @@ function getCurrentCommit(): string {
  * Load history from disk (or return empty)
  */
 export function loadHistory(): MetricsHistory {
-	const historyPath = path.join(process.cwd(), HISTORY_FILE);
+	const historyPath = path.join(getProjectDataDir(process.cwd()), HISTORY_FILE);
 
 	if (!fs.existsSync(historyPath)) {
 		return {
@@ -111,7 +112,7 @@ export function loadHistory(): MetricsHistory {
  * Save history to disk
  */
 export function saveHistory(history: MetricsHistory): void {
-	const historyDir = path.join(process.cwd(), ".pi-lens");
+	const historyDir = getProjectDataDir(process.cwd());
 	if (!fs.existsSync(historyDir)) {
 		fs.mkdirSync(historyDir, { recursive: true });
 	}

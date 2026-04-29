@@ -3,7 +3,36 @@
  */
 
 import * as fs from "node:fs";
+import * as path from "node:path";
+import { normalizeFilePath } from "./path-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
+
+/**
+ * Return the directory where pi-lens stores project-specific data
+ * (caches, indexes, worklogs, etc.).
+ *
+ * Default: <project>/.pi-lens  (no change for existing users)
+ *
+ * Opt-in: set PILENS_DATA_DIR=/some/path — each project gets its own
+ * subdirectory named after a sanitized form of its absolute path, e.g.
+ *   PILENS_DATA_DIR=~/.pi-lens/projects
+ *   → ~/.pi-lens/projects/home-user-myapp/
+ *
+ * This keeps project folders clean for mounted/ephemeral setups.
+ */
+export function getProjectDataDir(cwd: string): string {
+	const base = process.env.PILENS_DATA_DIR;
+	if (!base || base.trim().length === 0) {
+		return path.join(cwd, ".pi-lens");
+	}
+	const normalized = normalizeFilePath(path.resolve(cwd));
+	const slug = normalized
+		.replace(/^[a-z]:/i, "")      // strip Windows drive letter
+		.replace(/\/+/g, "-")          // separators → dashes
+		.replace(/[^A-Za-z0-9-]/g, "") // strip anything else
+		.replace(/^-+|-+$/g, "");      // trim leading/trailing dashes
+	return path.join(base.trim(), slug || "default");
+}
 
 /**
  * Directories to exclude from all scans (build outputs, dependencies, caches).

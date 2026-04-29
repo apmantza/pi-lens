@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { getProjectDataDir } from "../../file-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -92,7 +93,7 @@ const elixirCheckRunner: RunnerDefinition = {
 			command = "mix";
 			args = ["compile", "--warnings-as-errors"];
 		} else if (await isCommandAvailable("elixirc")) {
-			const outDir = path.join(cwd, ".pi-lens", "elixir-check");
+			const outDir = path.join(getProjectDataDir(cwd), "elixir-check");
 			fs.mkdirSync(outDir, { recursive: true });
 			command = "elixirc";
 			args = ["-o", outDir, absPath];

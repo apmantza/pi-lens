@@ -8,6 +8,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Diagnostic } from "./dispatch/types.js";
+import { getProjectDataDir } from "./file-utils.js";
 
 // --- Types ---
 
@@ -27,7 +28,7 @@ export interface WorklogEntry {
 // --- Paths ---
 
 export function getWorklogPath(cwd: string): string {
-	return path.join(cwd, ".pi-lens", "worklog.jsonl");
+	return path.join(getProjectDataDir(cwd), "worklog.jsonl");
 }
 
 // --- Write ---

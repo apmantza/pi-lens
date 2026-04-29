@@ -8,6 +8,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as ts from "typescript";
+import { getProjectDataDir } from "./file-utils.js";
 import { getStateIndex, NUM_STATES, NUM_SYNTAX } from "./amain-types.js";
 import { calculateSimilarity, countTransitions } from "./state-matrix.js";
 
@@ -343,7 +344,7 @@ export function findSimilarFunctions(
 // Persistence
 // ============================================================================
 
-const INDEX_FILE = ".pi-lens/index.json";
+const INDEX_FILE = "index.json";
 
 /**
  * Save index to disk
@@ -352,7 +353,7 @@ export async function saveIndex(
 	index: ProjectIndex,
 	projectRoot: string,
 ): Promise<void> {
-	const indexPath = path.join(projectRoot, INDEX_FILE);
+	const indexPath = path.join(getProjectDataDir(projectRoot), INDEX_FILE);
 	await fs.mkdir(path.dirname(indexPath), { recursive: true });
 
 	// Convert Map to array for JSON serialization
@@ -371,7 +372,7 @@ export async function saveIndex(
 export async function loadIndex(
 	projectRoot: string,
 ): Promise<ProjectIndex | null> {
-	const indexPath = path.join(projectRoot, INDEX_FILE);
+	const indexPath = path.join(getProjectDataDir(projectRoot), INDEX_FILE);
 
 	try {
 		const data = await fs.readFile(indexPath, "utf-8");

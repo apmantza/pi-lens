@@ -13,6 +13,7 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { getProjectDataDir } from "../file-utils.js";
 
 function canUseInteractivePrompt(): boolean {
 	return process.stdin.isTTY === true && process.stdout.isTTY === true;
@@ -207,7 +208,7 @@ interface InstallChoice {
  * Get the cache file path for install choices
  */
 function getCachePath(cwd: string): string {
-	return path.join(cwd, ".pi-lens", "install-choices.json");
+	return path.join(getProjectDataDir(cwd), "install-choices.json");
 }
 
 /**

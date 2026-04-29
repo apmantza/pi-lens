@@ -11,6 +11,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { getProjectDataDir } from "./file-utils.js";
 import { normalizeMapKey } from "./path-utils.js";
 
 // --- Types ---
@@ -57,7 +58,7 @@ const DEFAULT_TURN_STATE: TurnState = {
 // --- Helpers ---
 
 function getLensDir(cwd: string): string {
-	return path.join(cwd, ".pi-lens");
+	return getProjectDataDir(cwd);
 }
 
 function getCacheDir(cwd: string): string {
