@@ -1039,7 +1039,7 @@ export class LSPService {
 			for (const [filePath, entry] of clientDiags) {
 				const existing = all.get(filePath);
 				if (existing) {
-					existing.diags.push(...entry.diags);
+					existing.diags = mergeLspDiagnostics([...existing.diags, ...entry.diags]);
 					existing.ts = Math.max(existing.ts, entry.ts);
 				} else {
 					all.set(filePath, { diags: [...entry.diags], ts: entry.ts });

@@ -555,8 +555,7 @@ export async function computeCascadeForFile(
 					writeSeq != null ? neighborTouchCache.get(cacheKey) : undefined;
 				if (
 					cached != null &&
-					cached.turnSeq === turnSeq &&
-					cached.writeSeq === writeSeq
+					cached.turnSeq === turnSeq
 				) {
 					producedLspData = true;
 					const durationMs = Date.now() - neighborStart;

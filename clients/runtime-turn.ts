@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { CacheManager } from "./cache-manager.js";
-import { formatCascadeNeighborDiagnostics } from "./cascade-format.js";
 import { logCascade } from "./cascade-logger.js";
+import { normalizeMapKey } from "./path-utils.js";
 import type { DependencyChecker } from "./dependency-checker.js";
 import {
 	resolveRunnerPath,
@@ -120,27 +120,19 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	const blockerParts: string[] = [];
 
 	// Merge accumulated cascade results from all pipeline runs this turn.
+	// Deduplicate by primary file (last writer wins — most recent LSP state).
+	// Use pre-built result.formatted to preserve impact headers and risk context.
 	const cascadeResults = runtime.consumeCascadeResults();
 	if (cascadeResults.length > 0) {
-		// Deduplicate by neighbor file path (last writer wins — most recent LSP state).
-		const mergedNeighbors = new Map<
-			string,
-			(typeof cascadeResults)[number]["neighbors"][number]
-		>();
+		const seen = new Map<string, (typeof cascadeResults)[number]>();
 		for (const result of cascadeResults) {
-			for (const neighbor of result.neighbors) {
-				if (neighbor.diagnostics.length === 0) continue;
-				mergedNeighbors.set(path.resolve(neighbor.filePath), neighbor);
-			}
+			seen.set(normalizeMapKey(result.filePath), result);
 		}
-		if (mergedNeighbors.size > 0) {
-			const merged = formatCascadeNeighborDiagnostics(
-				cwd,
-				[...mergedNeighbors.values()],
-				{ noun: "dependent", includeReason: true },
-			);
-			if (merged) blockerParts.push(merged);
+		const parts: string[] = [];
+		for (const result of seen.values()) {
+			if (result.formatted) parts.push(result.formatted);
 		}
+		if (parts.length > 0) blockerParts.push(parts.join("\n\n"));
 		logCascade({
 			phase: "cascade_turn_end",
 			filePath: files[0] ?? cwd,
@@ -152,7 +144,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			),
 			metadata: {
 				fileCount: cascadeResults.length,
-				mergedNeighbors: mergedNeighbors.size,
+				mergedResults: seen.size,
 			},
 		});
 	}
