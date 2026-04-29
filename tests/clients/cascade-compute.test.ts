@@ -122,11 +122,11 @@ describe("computeCascadeForFile", () => {
 			fs.writeFileSync(primary, "class User: pass\n");
 			fs.writeFileSync(neighbor, "from model import User\n");
 			mocks.computeImpactCascade.mockReturnValue(impact(primary, [neighbor]));
-			const touchFile = vi.fn().mockResolvedValue(undefined);
+			const touchFile = vi.fn().mockResolvedValue([lspError("python broken")]);
 			mocks.getLSPService.mockReturnValue({
 				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
 				touchFile,
-				getDiagnostics: vi.fn().mockResolvedValue([lspError("python broken")]),
+				getDiagnostics: vi.fn(),
 			});
 
 			const { computeCascadeForFile } = await import(
@@ -144,6 +144,7 @@ describe("computeCascadeForFile", () => {
 					silent: true,
 					source: "cascade",
 					clientScope: "all",
+					collectDiagnostics: true,
 				}),
 			);
 			expect(result?.neighbors[0]?.lspTouched).toBe(true);

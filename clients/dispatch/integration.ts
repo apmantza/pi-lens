@@ -584,16 +584,17 @@ export async function computeCascadeForFile(
 
 				// A6: async read to avoid blocking event loop on network-mounted drives
 				const content = await nodeFs.promises.readFile(neighborPath, "utf8");
-				// Open with silent=true (suppresses didChangeWatchedFiles rechecks, C2).
-				// diagnostics:"none" so touchFile does NOT wait — getDiagnostics waits once below.
-				await lspService.touchFile(neighborPath, content, {
-					diagnostics: "none",
+				// Open with silent=true (suppresses didChangeWatchedFiles rechecks, C2)
+				// and collect diagnostics from the same touched clients.
+				const rawDiags = await lspService.touchFile(neighborPath, content, {
+					diagnostics: "document",
+					collectDiagnostics: true,
+					maxClientWaitMs: 2000,
 					silent: true,
 					source: "cascade",
 					clientScope: "all",
 				});
-				// Single wait — getDiagnostics handles multi-client aggregation (D7).
-				const rawDiags = await lspService.getDiagnostics(neighborPath);
+				if (!rawDiags) return undefined;
 				const diags = convertLspDiagnostics(
 					rawDiags.filter((d) => d.severity === 1).slice(0, MAX_PER_FILE),
 					neighborPath,

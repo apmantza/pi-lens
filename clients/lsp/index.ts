@@ -93,6 +93,24 @@ export interface SpawnedServer {
 	info: LSPServerInfo;
 }
 
+function mergeLspDiagnostics(
+	diagnostics: import("./client.js").LSPDiagnostic[],
+): import("./client.js").LSPDiagnostic[] {
+	const merged: import("./client.js").LSPDiagnostic[] = [];
+	const seen = new Set<string>();
+	for (const diagnostic of diagnostics) {
+		const key = [
+			diagnostic.range.start.line,
+			diagnostic.range.start.character,
+			diagnostic.message,
+		].join(":");
+		if (seen.has(key)) continue;
+		seen.add(key);
+		merged.push(diagnostic);
+	}
+	return merged;
+}
+
 export type LSPDiagnosticsMode = "none" | "document" | "full";
 export type LSPTouchClientScope = "primary" | "all";
 
@@ -101,6 +119,8 @@ export interface LSPTouchFileOptions {
 	source?: string;
 	clientScope?: LSPTouchClientScope;
 	maxClientWaitMs?: number;
+	/** Return merged diagnostics from the clients touched by this call. */
+	collectDiagnostics?: boolean;
 	/** Skip workspace/didChangeWatchedFiles — use for cascade reads, not real fs changes */
 	silent?: boolean;
 }
@@ -510,11 +530,13 @@ export class LSPService {
 		filePath: string,
 		content: string,
 		options: LSPTouchFileOptions = {},
-	): Promise<void> {
+	): Promise<import("./client.js").LSPDiagnostic[] | undefined> {
 		if (this.checkDestroyed()) return;
 		const startedAt = Date.now();
 		const normalizedPath = normalizeMapKey(filePath);
-		const diagnosticsMode = options.diagnostics ?? "none";
+		const diagnosticsMode = options.collectDiagnostics
+			? (options.diagnostics ?? "document")
+			: (options.diagnostics ?? "none");
 		const source = options.source ?? "unknown";
 		const clientScope: LSPTouchClientScope =
 			options.clientScope ?? (diagnosticsMode === "full" ? "all" : "primary");
@@ -570,12 +592,19 @@ export class LSPService {
 		const silent = options.silent ?? false;
 		await Promise.all(
 			spawned.map((entry) =>
-				entry.client.notify.open(filePath, content, languageId, undefined, silent),
+				entry.client.notify.open(
+					filePath,
+					content,
+					languageId,
+					undefined,
+					silent,
+				),
 			),
 		);
 
 		if (diagnosticsMode !== "none") {
-			const timeoutMs = diagnosticsMode === "full" ? 3000 : 1200;
+			const timeoutMs =
+				options.maxClientWaitMs ?? (diagnosticsMode === "full" ? 3000 : 1200);
 			await Promise.all(
 				spawned.map((entry) =>
 					entry.client
@@ -584,6 +613,12 @@ export class LSPService {
 				),
 			);
 		}
+
+		const collected = options.collectDiagnostics
+			? mergeLspDiagnostics(
+					spawned.flatMap((entry) => entry.client.getDiagnostics(filePath)),
+				)
+			: undefined;
 
 		this.markTouched(filePath, content, clientScope);
 
@@ -598,8 +633,10 @@ export class LSPService {
 				diagnosticsMode,
 				source,
 				failureKind: "success",
+				collectedDiagnostics: collected?.length,
 			},
 		});
+		return collected;
 	}
 
 	/**
@@ -694,12 +731,15 @@ export class LSPService {
 		const earlyUnblockedCount = pendingResults.filter(
 			(r) => r === undefined,
 		).length;
-		const perServer: PerServerEntry[] = pendingResults.map((r, i) => r ?? {
-			serverId: spawned[i].info.id,
-			waitMs: DIAGNOSTICS_AGGREGATE_WAIT_MS,
-			diagnosticCount: 0,
-			diagnostics: [],
-		});
+		const perServer: PerServerEntry[] = pendingResults.map(
+			(r, i) =>
+				r ?? {
+					serverId: spawned[i].info.id,
+					waitMs: DIAGNOSTICS_AGGREGATE_WAIT_MS,
+					diagnosticCount: 0,
+					diagnostics: [],
+				},
+		);
 
 		const merged: import("./client.js").LSPDiagnostic[] = [];
 		const seen = new Set<string>();
