@@ -41,6 +41,7 @@ export type { DispatchLatencyReport, RunnerLatency };
 export { clearLatencyReports, formatLatencyReport, getLatencyReports };
 
 import * as nodeFs from "node:fs";
+import { formatCascadeNeighborDiagnostics } from "../cascade-format.js";
 import { logCascade } from "../cascade-logger.js";
 import type { CascadeResult } from "../cascade-types.js";
 import { getDiagnosticTracker } from "../diagnostic-tracker.js";
@@ -763,24 +764,16 @@ function formatCascadeResult(
 	neighbors: CascadeResult["neighbors"],
 	totalNeighbors: number,
 ): string {
-	const withErrors = neighbors.filter((n) => n.diagnostics.length > 0);
-	if (withErrors.length === 0) return "";
+	const diagnosticsBlock = formatCascadeNeighborDiagnostics(cwd, neighbors, {
+		noun: "neighbor",
+		includeReason: true,
+	});
+	if (!diagnosticsBlock) return "";
 
 	const impactHeader = formatImpactCascade(impact);
-	let out = impactHeader ? `${impactHeader}\n` : "";
-	out += `📐 Cascade errors in ${withErrors.length} neighbor file(s) — fix before finishing turn:`;
-
-	for (const neighbor of withErrors) {
-		const display = toRunnerDisplayPath(cwd, neighbor.filePath);
-		out += `\n<diagnostics file="${display}">`;
-		for (const d of neighbor.diagnostics) {
-			const line = d.line ?? 1;
-			const col = d.column ?? 1;
-			const code = d.rule ? ` rule=${d.rule}` : "";
-			out += `\n  line ${line}, col ${col}${code}: ${d.message.split("\n")[0].slice(0, 100)}`;
-		}
-		out += "\n</diagnostics>";
-	}
+	let out = impactHeader
+		? `${impactHeader}\n${diagnosticsBlock}`
+		: diagnosticsBlock;
 
 	// A10: include truncated filenames so agent knows which files were cut
 	const truncated = totalNeighbors - neighbors.length;

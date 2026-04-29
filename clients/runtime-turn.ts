@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { CacheManager } from "./cache-manager.js";
+import { formatCascadeNeighborDiagnostics } from "./cascade-format.js";
 import { logCascade } from "./cascade-logger.js";
 import type { DependencyChecker } from "./dependency-checker.js";
 import {
@@ -133,19 +134,12 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			}
 		}
 		if (mergedNeighbors.size > 0) {
-			let merged = `📐 Cascade errors in ${mergedNeighbors.size} dependent file(s) — fix before finishing turn:`;
-			for (const neighbor of mergedNeighbors.values()) {
-				const display = toRunnerDisplayPath(cwd, neighbor.filePath);
-				merged += `\n<diagnostics file="${display}">`;
-				for (const d of neighbor.diagnostics) {
-					const line = d.line ?? 1;
-					const col = d.column ?? 1;
-					const code = d.rule ? ` rule=${d.rule}` : "";
-					merged += `\n  line ${line}, col ${col}${code}: ${d.message.split("\n")[0].slice(0, 100)}`;
-				}
-				merged += "\n</diagnostics>";
-			}
-			blockerParts.push(merged);
+			const merged = formatCascadeNeighborDiagnostics(
+				cwd,
+				[...mergedNeighbors.values()],
+				{ noun: "dependent", includeReason: true },
+			);
+			if (merged) blockerParts.push(merged);
 		}
 		logCascade({
 			phase: "cascade_turn_end",
