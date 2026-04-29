@@ -40,20 +40,20 @@ export type { DispatchLatencyReport, RunnerLatency };
 // Re-export latency tracking types and functions
 export { clearLatencyReports, formatLatencyReport, getLatencyReports };
 
+import * as nodeFs from "node:fs";
+import { logCascade } from "../cascade-logger.js";
+import type { CascadeResult } from "../cascade-types.js";
+import { isFileKind } from "../file-kinds.js";
+import { getServersForFileWithConfig } from "../lsp/config.js";
+import { getLSPService } from "../lsp/index.js";
+import { normalizeMapKey } from "../path-utils.js";
 import { clearGraphCache } from "../review-graph/builder.js";
 import {
 	buildOrUpdateGraph,
 	computeImpactCascade,
 	formatImpactCascade,
 } from "../review-graph/service.js";
-import type { CascadeResult } from "../cascade-types.js";
-import { logCascade } from "../cascade-logger.js";
-import { getLSPService } from "../lsp/index.js";
-import { getServersForFileWithConfig } from "../lsp/config.js";
-import { isFileKind } from "../file-kinds.js";
-import { normalizeMapKey } from "../path-utils.js";
 import { RUNTIME_CONFIG } from "../runtime-config.js";
-import * as nodeFs from "node:fs";
 // Register fact providers
 import { registerProvider, runProviders } from "./fact-runner.js";
 import { fileContentProvider } from "./facts/file-content.js";
@@ -345,6 +345,31 @@ export function resetDispatchBaselines(): void {
 	resetSessionSlopScore();
 	clearCoverageNoticeState();
 	clearGraphCache();
+	neighborTouchCache.clear();
+	primaryFilesThisTurn.clear();
+}
+
+// A5: per-turn neighbor-touch cache keyed by normalized path.
+// Avoids re-touching the same neighbor on every write in a multi-file refactor.
+// Invalidated when writeSeq advances (i.e. a new write starts a new pipeline run).
+type NeighborCacheEntry = {
+	turnSeq: number;
+	writeSeq: number;
+	diagnostics: import("../lsp/client.js").LSPDiagnostic[];
+};
+const neighborTouchCache = new Map<string, NeighborCacheEntry>();
+
+// B10: tracks files that were the *primary* edited file this turn.
+// These are excluded from cascade neighbor results — their own pipeline run
+// already reported their diagnostics authoritatively.
+let cascadeTurnScope = 0;
+const primaryFilesThisTurn = new Set<string>();
+
+function ensureCascadeTurnScope(turnSeq: number): void {
+	if (turnSeq === cascadeTurnScope) return;
+	cascadeTurnScope = turnSeq;
+	primaryFilesThisTurn.clear();
+	neighborTouchCache.clear();
 }
 
 const CASCADE_TTL_MS = 240_000;
@@ -368,17 +393,31 @@ export async function computeCascadeForFile(
 	options: {
 		hasBlockers?: boolean;
 		dbg?: (msg: string) => void;
+		/** Turn/write sequence from RuntimeCoordinator — scopes cascade caches (A5/B10) */
+		turnSeq?: number;
+		writeSeq?: number;
 	} = {},
 ): Promise<CascadeResult | undefined> {
-	const { hasBlockers = false, dbg } = options;
+	const { hasBlockers = false, dbg, turnSeq = 0, writeSeq } = options;
+
+	ensureCascadeTurnScope(turnSeq);
 
 	if (hasBlockers) {
-		logCascade({ phase: "cascade_skip", filePath, reason: "primary_has_blockers" });
+		logCascade({
+			phase: "cascade_skip",
+			filePath,
+			reason: "primary_has_blockers",
+		});
 		return undefined;
 	}
 
 	const normalizedFile = resolveRunnerPath(cwd, filePath);
 	const normalizedFileKey = normalizeMapKey(normalizedFile);
+
+	// B10: record this file as a primary edit so later cascade calls in the same
+	// turn won't show it as a neighbor.
+	primaryFilesThisTurn.add(normalizedFileKey);
+
 	const graphStart = Date.now();
 	const graph = await buildOrUpdateGraph(cwd, [normalizedFile], sessionFacts);
 	const graphMs = Date.now() - graphStart;
@@ -395,8 +434,9 @@ export async function computeCascadeForFile(
 		graphReused: false, // always full rebuild until incremental graph lands (E3)
 		graphNodeCount: graph.nodes.size,
 		graphFileCount,
-		graphChangedSymbolCount:
-			(graph.changedSymbolsByFile.get(normalizedFileKey) ?? []).length,
+		graphChangedSymbolCount: (
+			graph.changedSymbolsByFile.get(normalizedFileKey) ?? []
+		).length,
 	});
 
 	const impact = computeImpactCascade(graph, normalizedFile);
@@ -406,12 +446,18 @@ export async function computeCascadeForFile(
 	const importerSet = new Set(impact.directImporters);
 	const callerSet = new Set(impact.directCallers);
 	// neighbors that are neither direct importers nor callers are reference-edge neighbors
-	const importerOrCallerSet = new Set([...impact.directImporters, ...impact.directCallers]);
+	const importerOrCallerSet = new Set([
+		...impact.directImporters,
+		...impact.directCallers,
+	]);
 	const referenceCount = impact.neighborFiles.filter(
 		(n) => !importerOrCallerSet.has(n),
 	).length;
 	const sortedNeighbors = [...impact.neighborFiles]
 		.filter((n) => nodeFs.existsSync(n))
+		// B10: exclude files already edited as primary this turn — their own pipeline
+		// run is the authoritative diagnostic source; showing them as neighbors is noise.
+		.filter((n) => !primaryFilesThisTurn.has(normalizeMapKey(n)))
 		.sort((a, b) => {
 			const rank = (p: string) =>
 				importerSet.has(p) ? 0 : callerSet.has(p) ? 1 : 2;
@@ -437,6 +483,7 @@ export async function computeCascadeForFile(
 	const allDiags = await lspService.getAllDiagnostics();
 
 	const neighbors: CascadeResult["neighbors"] = [];
+	let producedLspData = false;
 
 	if (sortedNeighbors.length > 0) {
 		const jstsPaths = sortedNeighbors.filter((n) => isFileKind(n, "jsts"));
@@ -449,10 +496,12 @@ export async function computeCascadeForFile(
 			const snapshotAgeSec = entry
 				? Math.round((Date.now() - entry.ts) / 1000)
 				: undefined;
-			const snapshotValid = entry != null && Date.now() - entry.ts < CASCADE_TTL_MS;
+			const snapshotValid =
+				entry != null && Date.now() - entry.ts < CASCADE_TTL_MS;
 			const diags = snapshotValid
 				? entry.diags.filter((d) => d.severity === 1).slice(0, MAX_PER_FILE)
 				: [];
+			if (snapshotValid) producedLspData = true;
 			const durationMs = Date.now() - neighborStart;
 
 			logCascade({
@@ -475,14 +524,59 @@ export async function computeCascadeForFile(
 			});
 		}
 
-		// non-jsts: fan-out active touches in parallel (A3), single wait per neighbor (fix double-wait).
+		// non-jsts: fan-out active touches in parallel (A3), single wait per neighbor.
 		// touchFile("none") opens the doc; getDiagnostics waits once for fresh results.
 		const touchResults = await Promise.allSettled(
 			activePaths.map(async (neighborPath) => {
 				const neighborStart = Date.now();
-				// A6: async read to avoid blocking event loop for network-mounted drives
+				const cacheKey = normalizeMapKey(neighborPath);
+
+				// A5: skip re-touch if this neighbor was already diagnosed at the current
+				// write sequence. A new write (higher writeSeq) invalidates the cache entry.
+				const cached =
+					writeSeq != null ? neighborTouchCache.get(cacheKey) : undefined;
+				if (
+					cached != null &&
+					cached.turnSeq === turnSeq &&
+					cached.writeSeq === writeSeq
+				) {
+					producedLspData = true;
+					const durationMs = Date.now() - neighborStart;
+					logCascade({
+						phase: "neighbor_snapshot",
+						filePath,
+						neighborFile: neighborPath,
+						diagnosticCount: cached.diagnostics.length,
+						durationMs,
+						autoPropagate: false,
+						snapshotMissing: false,
+						metadata: { cachedWriteSeq: writeSeq },
+					});
+					return {
+						filePath: neighborPath,
+						reason: neighborReason(importerSet, callerSet, neighborPath),
+						diagnostics: cached.diagnostics,
+						lspTouched: false,
+						durationMs,
+					} satisfies CascadeResult["neighbors"][number];
+				}
+
+				const configuredServerCount =
+					getServersForFileWithConfig(neighborPath).length;
+				if (configuredServerCount === 0) {
+					logCascade({
+						phase: "neighbor_fallback",
+						filePath,
+						neighborFile: neighborPath,
+						fallbackUsed: false,
+						error: "no_lsp_server_configured",
+					});
+					return undefined;
+				}
+
+				// A6: async read to avoid blocking event loop on network-mounted drives
 				const content = await nodeFs.promises.readFile(neighborPath, "utf8");
-				// Open with silent=true (suppresses didChangeWatchedFiles rechecks, CR-1/C2).
+				// Open with silent=true (suppresses didChangeWatchedFiles rechecks, C2).
 				// diagnostics:"none" so touchFile does NOT wait — getDiagnostics waits once below.
 				await lspService.touchFile(neighborPath, content, {
 					diagnostics: "none",
@@ -497,6 +591,16 @@ export async function computeCascadeForFile(
 					.slice(0, MAX_PER_FILE);
 				const durationMs = Date.now() - neighborStart;
 
+				// Update cache for this neighbor at the current write sequence
+				if (writeSeq != null) {
+					neighborTouchCache.set(cacheKey, {
+						turnSeq,
+						writeSeq,
+						diagnostics: diags,
+					});
+				}
+				producedLspData = true;
+
 				logCascade({
 					phase: "neighbor_touch",
 					filePath,
@@ -504,7 +608,7 @@ export async function computeCascadeForFile(
 					diagnosticCount: diags.length,
 					durationMs,
 					lspTouched: true,
-					lspServerCount: getServersForFileWithConfig(neighborPath).length,
+					lspServerCount: configuredServerCount,
 				});
 
 				return {
@@ -521,10 +625,12 @@ export async function computeCascadeForFile(
 			const result = touchResults[i];
 			const neighborPath = activePaths[i];
 			if (result.status === "fulfilled") {
-				neighbors.push(result.value);
+				if (result.value) neighbors.push(result.value);
 			} else {
 				// A3: one failed LSP doesn't kill the rest — fall back to passive snapshot
-				dbg?.(`cascade neighbor touch error for ${neighborPath}: ${result.reason}`);
+				dbg?.(
+					`cascade neighbor touch error for ${neighborPath}: ${result.reason}`,
+				);
 				logCascade({
 					phase: "neighbor_fallback",
 					filePath,
@@ -545,26 +651,13 @@ export async function computeCascadeForFile(
 				});
 			}
 		}
-	} else {
-		// A2: degraded fallback — graph has no neighbors for this language (Java, Kotlin, C#…).
-		// Use passive LSP snapshot to preserve cascade coverage for ungraphed languages.
-		const now = Date.now();
-		for (const [diagPath, { diags, ts }] of allDiags) {
-			if (normalizeMapKey(diagPath) === normalizedFileKey) continue;
-			if (!nodeFs.existsSync(diagPath)) continue;
-			if (now - ts > CASCADE_TTL_MS) continue;
-			const errors = diags.filter((d) => d.severity === 1).slice(0, MAX_PER_FILE);
-			if (errors.length === 0) continue;
-			neighbors.push({
-				filePath: diagPath,
-				reason: "fallback",
-				diagnostics: errors,
-				lspTouched: false,
-			});
-			if (neighbors.length >= MAX_FILES) break;
-		}
+	}
 
-		if (neighbors.length > 0) {
+	// CR-3/A2: degraded fallback when no neighbor produced trustworthy LSP data —
+	// not merely when the graph returned zero neighbors.
+	if (!producedLspData) {
+		appendFallbackNeighbors(neighbors, allDiags, normalizedFileKey);
+		if (neighbors.some((n) => n.reason === "fallback")) {
 			logCascade({
 				phase: "neighbor_fallback",
 				filePath,
@@ -581,12 +674,17 @@ export async function computeCascadeForFile(
 		impact.neighborFiles.length,
 	);
 
-	const filesWithErrors = neighbors.filter((n) => n.diagnostics.length > 0).length;
+	const filesWithErrors = neighbors.filter(
+		(n) => n.diagnostics.length > 0,
+	).length;
 	logCascade({
 		phase: "cascade_result",
 		filePath,
 		neighborCount: neighbors.length,
-		diagnosticCount: neighbors.reduce((sum, n) => sum + n.diagnostics.length, 0),
+		diagnosticCount: neighbors.reduce(
+			(sum, n) => sum + n.diagnostics.length,
+			0,
+		),
 		metadata: {
 			filesWithErrors,
 			hasOutput: formatted.length > 0,
@@ -596,7 +694,37 @@ export async function computeCascadeForFile(
 		},
 	});
 
+	if (!formatted) return undefined;
+
 	return { filePath, impact, neighbors, formatted };
+}
+
+function appendFallbackNeighbors(
+	neighbors: CascadeResult["neighbors"],
+	allDiags: Map<
+		string,
+		{ diags: import("../lsp/client.js").LSPDiagnostic[]; ts: number }
+	>,
+	normalizedFileKey: string,
+): void {
+	const now = Date.now();
+	const seen = new Set(neighbors.map((n) => normalizeMapKey(n.filePath)));
+	for (const [diagPath, { diags, ts }] of allDiags) {
+		const diagKey = normalizeMapKey(diagPath);
+		if (diagKey === normalizedFileKey || seen.has(diagKey)) continue;
+		if (!nodeFs.existsSync(diagPath)) continue;
+		if (now - ts > CASCADE_TTL_MS) continue;
+		const errors = diags.filter((d) => d.severity === 1).slice(0, MAX_PER_FILE);
+		if (errors.length === 0) continue;
+		neighbors.push({
+			filePath: diagPath,
+			reason: "fallback",
+			diagnostics: errors,
+			lspTouched: false,
+		});
+		seen.add(diagKey);
+		if (neighbors.length >= MAX_FILES) break;
+	}
 }
 
 function neighborReason(

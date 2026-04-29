@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { CacheManager } from "./cache-manager.js";
+import { logCascade } from "./cascade-logger.js";
 import type { DependencyChecker } from "./dependency-checker.js";
 import {
 	resolveRunnerPath,
@@ -9,7 +10,6 @@ import {
 import { getKnipIgnorePatterns } from "./file-utils.js";
 import type { JscpdClient } from "./jscpd-client.js";
 import type { KnipClient, KnipIssue } from "./knip-client.js";
-import { logCascade } from "./cascade-logger.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 import type { TestRunnerClient } from "./test-runner-client.js";
@@ -121,27 +121,45 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	// Merge accumulated cascade results from all pipeline runs this turn.
 	const cascadeResults = runtime.consumeCascadeResults();
 	if (cascadeResults.length > 0) {
-		// Deduplicate by filePath (last result wins — most recent LSP state)
-		const seen = new Map<string, (typeof cascadeResults)[number]>();
-		for (const r of cascadeResults) {
-			seen.set(r.filePath, r);
+		// Deduplicate by neighbor file path (last writer wins — most recent LSP state).
+		const mergedNeighbors = new Map<
+			string,
+			(typeof cascadeResults)[number]["neighbors"][number]
+		>();
+		for (const result of cascadeResults) {
+			for (const neighbor of result.neighbors) {
+				if (neighbor.diagnostics.length === 0) continue;
+				mergedNeighbors.set(path.resolve(neighbor.filePath), neighbor);
+			}
 		}
-		const mergedParts: string[] = [];
-		for (const result of seen.values()) {
-			if (result.formatted) mergedParts.push(result.formatted);
-		}
-		if (mergedParts.length > 0) {
-			blockerParts.push(mergedParts.join("\n\n"));
+		if (mergedNeighbors.size > 0) {
+			let merged = `📐 Cascade errors in ${mergedNeighbors.size} dependent file(s) — fix before finishing turn:`;
+			for (const neighbor of mergedNeighbors.values()) {
+				const display = toRunnerDisplayPath(cwd, neighbor.filePath);
+				merged += `\n<diagnostics file="${display}">`;
+				for (const d of neighbor.diagnostics) {
+					const line = (d.range?.start?.line ?? 0) + 1;
+					const col = (d.range?.start?.character ?? 0) + 1;
+					const code = d.code ? ` code=${String(d.code)}` : "";
+					merged += `\n  line ${line}, col ${col}${code}: ${d.message.split("\n")[0].slice(0, 100)}`;
+				}
+				merged += "\n</diagnostics>";
+			}
+			blockerParts.push(merged);
 		}
 		logCascade({
 			phase: "cascade_turn_end",
 			filePath: files[0] ?? cwd,
 			neighborCount: cascadeResults.reduce((s, r) => s + r.neighbors.length, 0),
 			diagnosticCount: cascadeResults.reduce(
-				(s, r) => s + r.neighbors.reduce((ns, n) => ns + n.diagnostics.length, 0),
+				(s, r) =>
+					s + r.neighbors.reduce((ns, n) => ns + n.diagnostics.length, 0),
 				0,
 			),
-			metadata: { fileCount: cascadeResults.length, merged: seen.size },
+			metadata: {
+				fileCount: cascadeResults.length,
+				mergedNeighbors: mergedNeighbors.size,
+			},
 		});
 	}
 
@@ -306,7 +324,9 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			}
 		}
 		if (targets.length > 0) {
-			dbg(`turn_end: firing ${targets.length} test target(s) async (non-blocking)`);
+			dbg(
+				`turn_end: firing ${targets.length} test target(s) async (non-blocking)`,
+			);
 			const firedAtTurn = runtime.turnIndex;
 			Promise.allSettled(
 				targets.map((t) =>
@@ -317,25 +337,29 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 						t.config,
 					),
 				),
-			).then((results) => {
-				// Drop stale results if the agent has already started a new turn.
-				if (runtime.turnIndex !== firedAtTurn) {
-					dbg(`turn_end: discarding test results — turn advanced while tests ran`);
-					return;
-				}
-				const failures: string[] = [];
-				for (const r of results) {
-					if (r.status === "fulfilled" && r.value.failed > 0) {
-						const formatted = testRunnerClient.formatResult(r.value);
-						if (formatted) failures.push(formatted);
+			)
+				.then((results) => {
+					// Drop stale results if the agent has already started a new turn.
+					if (runtime.turnIndex !== firedAtTurn) {
+						dbg(
+							`turn_end: discarding test results — turn advanced while tests ran`,
+						);
+						return;
 					}
-				}
-				if (failures.length > 0) {
-					const content = failures.join("\n\n");
-					cacheManager.writeCache("test-runner-findings", { content }, cwd);
-					dbg(`turn_end: test failures cached for next context injection`);
-				}
-			}).catch(() => {});
+					const failures: string[] = [];
+					for (const r of results) {
+						if (r.status === "fulfilled" && r.value.failed > 0) {
+							const formatted = testRunnerClient.formatResult(r.value);
+							if (formatted) failures.push(formatted);
+						}
+					}
+					if (failures.length > 0) {
+						const content = failures.join("\n\n");
+						cacheManager.writeCache("test-runner-findings", { content }, cwd);
+						dbg(`turn_end: test failures cached for next context injection`);
+					}
+				})
+				.catch(() => {});
 		}
 	}
 

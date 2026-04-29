@@ -21,7 +21,6 @@ import {
 	computeCascadeForFile,
 	dispatchLintWithResult,
 } from "./dispatch/integration.js";
-import { clearGraphCache } from "./review-graph/builder.js";
 import { toRunnerDisplayPath } from "./dispatch/runner-context.js";
 import {
 	resolveCommandArgsWithInstallFallback,
@@ -38,6 +37,7 @@ import type { FormatService } from "./format-service.js";
 import { logLatency } from "./latency-logger.js";
 import { getLSPService } from "./lsp/index.js";
 import type { MetricsClient } from "./metrics-client.js";
+import { clearGraphCache } from "./review-graph/builder.js";
 import type { RuffClient } from "./ruff-client.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
@@ -932,7 +932,9 @@ export async function runPipeline(
 		: await computeCascadeForFile(filePath, cwd, {
 				hasBlockers,
 				dbg,
-		  });
+				turnSeq: ctx.telemetry?.turnIndex,
+				writeSeq: ctx.telemetry?.writeIndex,
+			});
 
 	// --- Final timing + all-clear ---
 	const elapsed = Date.now() - pipelineStart;
