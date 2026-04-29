@@ -40,6 +40,11 @@ export interface LSPServerInfo {
 	 * to become ready first.
 	 */
 	clientWaitTimeoutMs?: number;
+	/**
+	 * Server recomputes/pushes dependent-file diagnostics after primary file changes.
+	 * Cascade can read its passive snapshot instead of actively touching neighbors.
+	 */
+	autoPropagateDiagnostics?: boolean;
 	spawn(
 		root: string,
 		options?: LSPSpawnOptions,
@@ -741,6 +746,7 @@ export const TypeScriptServer: LSPServerInfo = {
 	id: "typescript",
 	name: "TypeScript Language Server",
 	extensions: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"],
+	autoPropagateDiagnostics: true,
 	root: DenoExcludeRoot(
 		RootWithFallback(
 			IgnoreHomeRoot(
@@ -839,6 +845,7 @@ export const DenoServer: LSPServerInfo = {
 	id: "deno",
 	name: "Deno Language Server",
 	extensions: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"],
+	autoPropagateDiagnostics: true,
 	root: createRootDetector(["deno.json", "deno.jsonc"]),
 	async spawn(root) {
 		try {

@@ -45,7 +45,6 @@ import { formatCascadeNeighborDiagnostics } from "../cascade-format.js";
 import { logCascade } from "../cascade-logger.js";
 import type { CascadeResult } from "../cascade-types.js";
 import { getDiagnosticTracker } from "../diagnostic-tracker.js";
-import { isFileKind } from "../file-kinds.js";
 import { getServersForFileWithConfig } from "../lsp/config.js";
 import { getLSPService } from "../lsp/index.js";
 import { normalizeMapKey } from "../path-utils.js";
@@ -482,18 +481,20 @@ export async function computeCascadeForFile(
 
 	const lspService = getLSPService();
 
-	// Hoist passive snapshot once — used for jsts neighbors and fallback path.
+	// Hoist passive snapshot once — used for auto-propagating LSPs and fallback path.
 	const allDiags = await lspService.getAllDiagnostics();
 
 	const neighbors: CascadeResult["neighbors"] = [];
 	let producedLspData = false;
 
 	if (sortedNeighbors.length > 0) {
-		const jstsPaths = sortedNeighbors.filter((n) => isFileKind(n, "jsts"));
-		const activePaths = sortedNeighbors.filter((n) => !isFileKind(n, "jsts"));
+		const snapshotPaths = sortedNeighbors.filter(shouldReadCascadeFromSnapshot);
+		const activePaths = sortedNeighbors.filter(
+			(n) => !shouldReadCascadeFromSnapshot(n),
+		);
 
-		// jsts: tsserver auto-propagates — read passive snapshot with normalized key
-		for (const neighborPath of jstsPaths) {
+		// Auto-propagating LSPs (TypeScript/Deno) — read passive snapshot with normalized key.
+		for (const neighborPath of snapshotPaths) {
 			const neighborStart = Date.now();
 			const entry = allDiags.get(normalizeMapKey(neighborPath));
 			const snapshotAgeSec = entry
@@ -746,6 +747,12 @@ function appendFallbackNeighbors(
 		seen.add(diagKey);
 		if (neighbors.length >= MAX_FILES) break;
 	}
+}
+
+function shouldReadCascadeFromSnapshot(filePath: string): boolean {
+	return getServersForFileWithConfig(filePath).some(
+		(server) => server.autoPropagateDiagnostics === true,
+	);
 }
 
 function neighborReason(
