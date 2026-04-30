@@ -1635,7 +1635,7 @@ export function hasPrettierConfig(cwd: string): boolean {
 	if (pkgPath) {
 		try {
 			const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
-			if (pkg.prettier) return true;
+			if (Object.prototype.hasOwnProperty.call(pkg, "prettier")) return true;
 		} catch {}
 	}
 	return false;
