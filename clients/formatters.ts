@@ -319,12 +319,14 @@ export const biomeFormatter: FormatterInfo = {
 			? ["--use-editorconfig=true"]
 			: [];
 		const local = await findInNodeModules("biome", cwd);
-		if (local) return [local, "format", "--write", ...editorConfigFlag, filePath];
+		if (local)
+			return [local, "format", "--write", ...editorConfigFlag, filePath];
 		const toolId = getAutoInstallToolIdForFormatter("biome");
 		if (!toolId) return null;
 		const { ensureTool } = await import("./installer/index.js");
 		const installed = await ensureTool(toolId);
-		if (installed) return [installed, "format", "--write", ...editorConfigFlag, filePath];
+		if (installed)
+			return [installed, "format", "--write", ...editorConfigFlag, filePath];
 		return null;
 	},
 	extensions: [
@@ -407,16 +409,7 @@ export const oxfmtFormatter: FormatterInfo = {
 		if (found) return [found, filePath];
 		return null;
 	},
-	extensions: [
-		".js",
-		".jsx",
-		".mjs",
-		".cjs",
-		".ts",
-		".tsx",
-		".mts",
-		".cts",
-	],
+	extensions: [".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"],
 	async detect(cwd: string) {
 		return (
 			hasOxfmtConfig(cwd) ||
@@ -816,21 +809,33 @@ export async function getFormattersForFile(
 			hasExplicitFormatterConfig(formatter.name, cwd),
 		);
 		if (explicitlyConfigured.length > 0) {
+			// A formatter with explicit project config was found — use it.
+			// Prefer the policy's defaultFormatter only if it has explicit config,
+			// otherwise pick the first explicitly-configured formatter.
 			selected = formatterPolicy.defaultFormatter
 				? (explicitlyConfigured.find(
 						(f) => f.name === formatterPolicy.defaultFormatter,
 					) ?? explicitlyConfigured[0])
 				: explicitlyConfigured[0];
 		} else if (smartDefaultFormatterName) {
-			const smartDefaultFormatter = candidateFormatters.find(
-				(f) => f.name === smartDefaultFormatterName,
+			// Only activate the smart-default fallback when NO formatter in
+			// the candidate list has explicit project configuration. This
+			// prevents Biome from being auto-installed and overriding Prettier
+			// on projects that have a .prettierrc but no biome.json.
+			const anyCandidateHasConfig = candidateFormatters.some((formatter) =>
+				hasExplicitFormatterConfig(formatter.name, cwd),
 			);
-			if (smartDefaultFormatter) {
-				const autoInstallToolId = getAutoInstallToolIdForFormatter(
-					smartDefaultFormatter.name,
+			if (!anyCandidateHasConfig) {
+				const smartDefaultFormatter = candidateFormatters.find(
+					(f) => f.name === smartDefaultFormatterName,
 				);
-				if (autoInstallToolId || (await smartDefaultFormatter.detect(cwd))) {
-					selected = smartDefaultFormatter;
+				if (smartDefaultFormatter) {
+					const autoInstallToolId = getAutoInstallToolIdForFormatter(
+						smartDefaultFormatter.name,
+					);
+					if (autoInstallToolId || (await smartDefaultFormatter.detect(cwd))) {
+						selected = smartDefaultFormatter;
+					}
 				}
 			}
 		}

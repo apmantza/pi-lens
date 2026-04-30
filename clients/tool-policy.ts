@@ -1617,15 +1617,27 @@ export function hasMarkdownlintConfig(cwd: string): boolean {
 }
 
 export function hasPrettierConfig(cwd: string): boolean {
-	if (PRETTIER_CONFIGS.some((cfg) => fs.existsSync(path.join(cwd, cfg)))) {
-		return true;
+	// Walk up from cwd to find a Prettier config file
+	let dir = cwd;
+	const root = path.parse(dir).root;
+	while (true) {
+		if (PRETTIER_CONFIGS.some((cfg) => fs.existsSync(path.join(dir, cfg)))) {
+			return true;
+		}
+		if (dir === root) break;
+		const parent = path.dirname(dir);
+		if (parent === dir) break;
+		dir = parent;
 	}
-	try {
-		const pkg = JSON.parse(
-			fs.readFileSync(path.join(cwd, "package.json"), "utf-8"),
-		);
-		if (pkg.prettier) return true;
-	} catch {}
+
+	// Check nearest package.json for inline "prettier" field
+	const pkgPath = findNearestPackageJsonPath(cwd);
+	if (pkgPath) {
+		try {
+			const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+			if (pkg.prettier) return true;
+		} catch {}
+	}
 	return false;
 }
 
