@@ -8,7 +8,7 @@
  * - Event handlers (session_start, tool_call, tool_result, turn_end)
  */
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 describe("Extension Registration", () => {
 	let registeredTools: string[] = [];

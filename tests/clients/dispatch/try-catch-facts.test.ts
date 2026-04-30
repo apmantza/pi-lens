@@ -182,7 +182,7 @@ try {
   doSomething();
 } catch (e) {}
 `;
-    const { facts, ctx } = await runProviderWithContent(code);
+    const { ctx } = await runProviderWithContent(code);
     registerRule(errorSwallowingRule);
     const diagnostics = evaluateRules(ctx);
     expect(diagnostics.length).toBe(1);
@@ -220,7 +220,7 @@ try {
   doFallback();
 }
 `;
-    const { facts, ctx } = await runProviderWithContent(code);
+    const { ctx } = await runProviderWithContent(code);
     registerRule(errorObscuringRule);
     const diagnostics = evaluateRules(ctx);
     expect(diagnostics.length).toBe(1);

@@ -140,7 +140,6 @@ describe("findSourceSibling", () => {
 		const mjsPath = path.join(dir, "module.mjs");
 		const cjsPath = path.join(dir, "common.cjs");
 		const tsPath = path.join(dir, "module.ts");
-		const ctsPath = path.join(dir, "common.cts");
 
 		expect(findSourceSibling(mjsPath)).toBe(tsPath);
 		// .cts files aren't in precedence list, so .cjs won't be shadowed

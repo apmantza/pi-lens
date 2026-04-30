@@ -30,7 +30,7 @@ export function createMockRunner(config: MockRunnerConfig): RunnerDefinition {
 		enabledByDefault: config.enabledByDefault ?? true,
 		skipTestFiles: config.skipTestFiles ?? false,
 		when: config.when,
-		async run(ctx: DispatchContext): Promise<RunnerResult> {
+		async run(_ctx: DispatchContext): Promise<RunnerResult> {
 			// Simulate async work (CLI invocation)
 			if (config.runDelay) {
 				await new Promise((resolve) => setTimeout(resolve, config.runDelay));

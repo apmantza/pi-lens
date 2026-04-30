@@ -114,6 +114,8 @@ describe("getDiagnostics early-unblock", () => {
 			getDiagnostics: vi.fn(() => []),
 		};
 
+		void resolveSlowWait;
+
 		createLSPClient
 			.mockResolvedValueOnce(fastClient)
 			.mockResolvedValueOnce(slowClient);
