@@ -1,21 +1,10 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { GITHUB_TOOLS, GitHubToolId } from "../../../clients/installer/index.ts";
 
 // Ensure the real installer module is used, not any mock registered by other test files
 vi.unmock("../../../clients/installer/index.ts");
-
-const GITHUB_TOOLS = [
-	"shellcheck",
-	"shfmt",
-	"rust-analyzer",
-	"golangci-lint",
-	"ktlint",
-	"tflint",
-	"terraform-ls",
-	"zls",
-] as const;
-type GitHubToolId = (typeof GITHUB_TOOLS)[number];
 
 const SUPPORTED_PLATFORMS = ["linux", "darwin", "win32"] as const;
 const COMMON_ARCHES = ["x64", "arm64"] as const;
@@ -49,7 +38,7 @@ describe("GitHub release asset selection", () => {
 
 	it("returns undefined for unknown tool id", async () => {
 		const { resolveGitHubAsset } = await import("../../../clients/installer/index.ts");
-		expect(resolveGitHubAsset("nonexistent-tool", "linux", "x64")).toBeUndefined();
+		expect(resolveGitHubAsset("nonexistent-tool" as GitHubToolId, "linux", "x64")).toBeUndefined();
 	});
 
 	describe("shellcheck asset patterns", () => {

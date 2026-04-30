@@ -1957,13 +1957,25 @@ export function isKnownToolId(toolId: string): boolean {
 	return TOOLS.some((tool) => tool.id === toolId);
 }
 
+export const GITHUB_TOOLS = [
+	"shellcheck",
+	"shfmt",
+	"rust-analyzer",
+	"golangci-lint",
+	"ktlint",
+	"tflint",
+	"terraform-ls",
+	"zls",
+] as const;
+export type GitHubToolId = (typeof GITHUB_TOOLS)[number];
+
 /**
  * Resolve the GitHub asset filename substring for a tool on a given platform/arch.
  * Returns undefined if the tool has no GitHub spec or no asset for the platform.
  * Exported for testing only.
  */
 export function resolveGitHubAsset(
-	toolId: string,
+	toolId: GitHubToolId,
 	platform: string,
 	arch: string,
 ): string | undefined {
@@ -1972,7 +1984,7 @@ export function resolveGitHubAsset(
 }
 
 export function resolveGitHubInstalledBinaryName(
-	toolId: string,
+	toolId: GitHubToolId,
 	platform: string,
 	assetName: string,
 ): string | undefined {
@@ -1986,7 +1998,7 @@ export function resolveGitHubInstalledBinaryName(
 }
 
 export function resolveGitHubArchiveBinaryCandidates(
-	toolId: string,
+	toolId: GitHubToolId,
 	platform: string,
 	assetName: string,
 ): string[] | undefined {
