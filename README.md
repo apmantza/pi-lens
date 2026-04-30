@@ -198,6 +198,18 @@ pi --no-delta             # Disable delta mode (show all diagnostics, not just n
 pi --lens-guard           # Block git commit/push when unresolved blockers exist (experimental)
 ```
 
+## Environment Variables
+
+- `PILENS_DATA_DIR` — redirect per-project state (scanner caches,
+  turn-state.json) out of the project directory. By default pi-lens writes
+  `<cwd>/.pi-lens/`; if set, it writes to
+  `<PILENS_DATA_DIR>/<sanitized-cwd-slug>/` instead. Useful for keeping repos
+  clean or for mounted/ephemeral setups. Tool binaries always live in
+  `~/.pi-lens/bin/` regardless.
+- `PI_LENS_STARTUP_MODE` — `full` | `minimal` | `quick`. Override the
+  auto-selected startup path. One-shot `pi --print` sessions auto-use `quick`
+  to reduce latency.
+
 ## Key Commands
 
 - `/lens-booboo` — full quality report for current project state
