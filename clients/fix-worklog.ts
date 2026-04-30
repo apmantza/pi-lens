@@ -1,7 +1,7 @@
 /**
  * Fix Worklog for pi-lens
  *
- * Appends auto-fixed and fixable diagnostics to `.pi-lens/worklog.jsonl`
+ * Appends auto-fixed and fixable diagnostics to the project data worklog
  * so repair history is preserved across sessions.
  */
 

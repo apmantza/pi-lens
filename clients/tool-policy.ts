@@ -1517,18 +1517,21 @@ export function getBiomeConfigPath(cwd: string): string | undefined {
 }
 
 export function hasOxfmtConfig(cwd: string): boolean {
-	if (fs.existsSync(path.join(cwd, "oxfmt.toml"))) return true;
-	if (fs.existsSync(path.join(cwd, ".oxfmtrc.json"))) return true;
-	try {
-		const pkg = JSON.parse(
-			fs.readFileSync(path.join(cwd, "package.json"), "utf-8"),
-		) as Record<string, unknown>;
-		const deps = {
-			...(pkg.dependencies as Record<string, unknown> | undefined),
-			...(pkg.devDependencies as Record<string, unknown> | undefined),
-		};
-		if (deps["@oxc-project/oxfmt"]) return true;
-	} catch {}
+	for (const dir of walkUpDirsUntilPackageJson(cwd)) {
+		if (fs.existsSync(path.join(dir, "oxfmt.toml"))) return true;
+		if (fs.existsSync(path.join(dir, ".oxfmtrc.json"))) return true;
+		const pkgPath = path.join(dir, "package.json");
+		if (fs.existsSync(pkgPath)) {
+			try {
+				const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as Record<string, unknown>;
+				const deps = {
+					...(pkg.dependencies as Record<string, unknown> | undefined),
+					...(pkg.devDependencies as Record<string, unknown> | undefined),
+				};
+				if (deps["@oxc-project/oxfmt"]) return true;
+			} catch {}
+		}
+	}
 	return false;
 }
 

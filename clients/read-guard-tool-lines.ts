@@ -71,15 +71,43 @@ function resolveOldTextEdits(
 		const oldText = edits[i].oldText;
 		if (!oldText) continue;
 
-		const needle = normalizeContent(oldText);
-		const occurrenceLines = findOccurrenceLines(content, needle);
+		let needle = normalizeContent(oldText);
+		let occurrenceLines = findOccurrenceLines(content, needle);
 
 		if (occurrenceLines.length === 0) {
+			const corrected = tryCorrectIndentationMismatch(oldText, filePath);
+			if (corrected !== undefined) {
+				needle = normalizeContent(corrected);
+				occurrenceLines = findOccurrenceLines(content, needle);
+				if (occurrenceLines.length > 0) {
+					logReadGuardEvent({
+						event: "oldtext_indent_corrected",
+						sessionId,
+						filePath,
+						metadata: {
+							tool: "edit",
+							source: "edits_without_ranges",
+							editIndex: i,
+						},
+					});
+				}
+			}
+		}
+
+		if (occurrenceLines.length === 0) {
+			const preview = oldText.trimStart().substring(0, 60).replace(/\n/g, "↵");
+			errors.push(
+				`edits[${i}].oldText ("${preview}") was not found in the current file content. Re-read the file and refresh the edit target before retrying.`,
+			);
 			logReadGuardEvent({
 				event: "oldtext_not_found",
 				sessionId,
 				filePath,
-				metadata: { tool: "edit", source: "edits_without_ranges", editIndex: i },
+				metadata: {
+					tool: "edit",
+					source: "edits_without_ranges",
+					editIndex: i,
+				},
 			});
 		} else if (occurrenceLines.length === 1) {
 			const startLine = occurrenceLines[0];
@@ -117,10 +145,17 @@ function resolveOldTextEdits(
 		}
 	}
 
-	if (errors.length > 0) {
+	const oldTextEditCount = edits.filter((edit) => !!edit.oldText).length;
+	if (errors.length > 0 || resolvedRanges.length !== oldTextEditCount) {
+		const failureDetails =
+			errors.length > 0
+				? errors
+				: [
+						"One or more edit targets could not be resolved to exact lines. Re-read the file and retry with more precise oldText context.",
+					];
 		return {
 			touchedLines: undefined,
-			preflightError: `🔴 BLOCKED — Ambiguous edit target\n\n${errors.join("\n\n")}`,
+			preflightError: `🔴 BLOCKED — Ambiguous edit target\n\n${failureDetails.join("\n\n")}`,
 		};
 	}
 
@@ -140,7 +175,10 @@ function resolveOldTextEdits(
 
 	const starts = resolvedRanges.map(([s]) => s);
 	const ends = resolvedRanges.map(([, e]) => e);
-	const touchedLines: [number, number] = [Math.min(...starts), Math.max(...ends)];
+	const touchedLines: [number, number] = [
+		Math.min(...starts),
+		Math.max(...ends),
+	];
 	logReadGuardEvent({
 		event: "touched_lines_detected",
 		sessionId,
@@ -177,18 +215,35 @@ export function tryCorrectIndentationMismatch(
 
 	const conversions = [
 		// tabs → 2 spaces
-		(s: string) => s.split("\n").map((l) => l.replace(/^\t+/, (m) => "  ".repeat(m.length))).join("\n"),
+		(s: string) =>
+			s
+				.split("\n")
+				.map((l) => l.replace(/^\t+/, (m) => "  ".repeat(m.length)))
+				.join("\n"),
 		// tabs → 4 spaces
-		(s: string) => s.split("\n").map((l) => l.replace(/^\t+/, (m) => "    ".repeat(m.length))).join("\n"),
+		(s: string) =>
+			s
+				.split("\n")
+				.map((l) => l.replace(/^\t+/, (m) => "    ".repeat(m.length)))
+				.join("\n"),
 		// 2 spaces → tabs
-		(s: string) => s.split("\n").map((l) => l.replace(/^( {2})+/, (m) => "\t".repeat(m.length / 2))).join("\n"),
+		(s: string) =>
+			s
+				.split("\n")
+				.map((l) => l.replace(/^( {2})+/, (m) => "\t".repeat(m.length / 2)))
+				.join("\n"),
 		// 4 spaces → tabs
-		(s: string) => s.split("\n").map((l) => l.replace(/^( {4})+/, (m) => "\t".repeat(m.length / 4))).join("\n"),
+		(s: string) =>
+			s
+				.split("\n")
+				.map((l) => l.replace(/^( {4})+/, (m) => "\t".repeat(m.length / 4)))
+				.join("\n"),
 	];
 
 	for (const convert of conversions) {
 		const candidate = convert(normalized);
-		if (candidate !== normalized && content.includes(candidate)) return candidate;
+		if (candidate !== normalized && content.includes(candidate))
+			return candidate;
 	}
 
 	return undefined;

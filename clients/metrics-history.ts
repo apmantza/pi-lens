@@ -4,12 +4,12 @@
  * Persists complexity metrics per commit to track trends over time.
  * Captures snapshots passively (session start) and explicitly (/lens-metrics).
  *
- * Storage: .pi-lens/metrics-history.json
+ * Storage: <project-data>/metrics-history.json
  */
 
+import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execSync } from "node:child_process";
 import { getProjectDataDir } from "./file-utils.js";
 
 // --- Types ---

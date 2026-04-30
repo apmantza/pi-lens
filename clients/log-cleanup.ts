@@ -10,13 +10,13 @@
  *   - ~/.pi-lens/logs/*.jsonl (daily diagnostic logs)
  *   - ~/.pi-lens/*.log.* (rotated backups)
  *
- * Excluded (intentionally NOT cleaned - per-project or persistent):
- *   - {cwd}/.pi-lens/worklog.jsonl        - Agent fixable diagnostics
- *   - {cwd}/.pi-lens/metrics-history.json - Complexity trends (capped internally)
- *   - {cwd}/.pi-lens/reviews/*          - Code review snapshots
- *   - {cwd}/.pi-lens/turn-state.json    - Turn tracking
- *   - {cwd}/.pi-lens/fix-session.json   - Active fix sessions
- *   - {cwd}/.pi-lens/todo-baseline.json - TODO baseline
+ * Excluded (intentionally NOT cleaned - project-scoped or persistent):
+ *   - <project-data>/worklog.jsonl        - Agent fixable diagnostics
+ *   - <project-data>/metrics-history.json - Complexity trends (capped internally)
+ *   - <project-data>/reviews/*            - Code review snapshots
+ *   - <project-data>/turn-state.json      - Turn tracking
+ *   - <project-data>/fix-session.json     - Active fix sessions
+ *   - <project-data>/todo-baseline.json   - TODO baseline
  */
 
 import * as fs from "node:fs";

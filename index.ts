@@ -23,18 +23,17 @@ import { getAllToolStatuses } from "./clients/installer/index.js";
 import { LANGUAGE_POLICY } from "./clients/language-policy.js";
 import { initLSPConfig } from "./clients/lsp/config.js";
 import { getLSPService, resetLSPService } from "./clients/lsp/index.js";
+import {
+	EXPANSION_BUDGET_MS,
+	EXPANSION_LIMIT_LINES,
+	tryExpandRead,
+} from "./clients/read-expansion.js";
 import { logReadGuardEvent } from "./clients/read-guard-logger.js";
 import {
 	countFileLines,
 	getTouchedLinesForGuard,
 	tryCorrectIndentationMismatch,
 } from "./clients/read-guard-tool-lines.js";
-import {
-	EXPANSION_BUDGET_MS,
-	EXPANSION_LIMIT_LINES,
-	tryExpandRead,
-} from "./clients/read-expansion.js";
-import { TreeSitterClient } from "./clients/tree-sitter-client.js";
 import {
 	consumeSessionStartGuidance,
 	consumeTestFindings,
@@ -44,6 +43,7 @@ import { RuntimeCoordinator } from "./clients/runtime-coordinator.js";
 import { handleSessionStart } from "./clients/runtime-session.js";
 import { handleToolResult } from "./clients/runtime-tool-result.js";
 import { cancelLSPIdleReset, handleTurnEnd } from "./clients/runtime-turn.js";
+import { TreeSitterClient } from "./clients/tree-sitter-client.js";
 import { handleBooboo } from "./commands/booboo.js";
 import { createAstGrepReplaceTool } from "./tools/ast-grep-replace.js";
 import { createAstGrepSearchTool } from "./tools/ast-grep-search.js";
@@ -229,7 +229,6 @@ function getNewContentFromToolCall(event: unknown): string | undefined {
 	}
 	return undefined;
 }
-
 
 function cleanStaleTsBuildInfo(cwd: string): string[] {
 	const cleaned: string[] = [];
@@ -825,12 +824,14 @@ export default function (pi: ExtensionAPI) {
 		// symbol and expand the read range to cover it. This gives the read guard
 		// accurate symbol-level coverage without requiring an LSP server.
 		let expandedByLsp = false;
-		let enclosingSymbol: {
-			name: string;
-			kind: string;
-			startLine: number;
-			endLine: number;
-		} | undefined;
+		let enclosingSymbol:
+			| {
+					name: string;
+					kind: string;
+					startLine: number;
+					endLine: number;
+			  }
+			| undefined;
 
 		if (
 			toolName === "read" &&
@@ -840,9 +841,10 @@ export default function (pi: ExtensionAPI) {
 			requestedReadLimit != null &&
 			requestedReadLimit <= EXPANSION_LIMIT_LINES
 		) {
-			const totalLines = effectiveReadLimit != null && requestedReadLimit == null
-				? effectiveReadLimit
-				: countFileLines(filePath);
+			const totalLines =
+				effectiveReadLimit != null && requestedReadLimit == null
+					? effectiveReadLimit
+					: countFileLines(filePath);
 			try {
 				const expansion = await tryExpandRead(
 					filePath,
@@ -877,9 +879,9 @@ export default function (pi: ExtensionAPI) {
 					});
 					dbg(
 						`ts expanded read: ${path.basename(filePath)} ` +
-						`lines ${requestedReadOffset}–${requestedReadOffset + requestedReadLimit - 1} ` +
-						`→ ${expansion.enclosingSymbol.name} ` +
-						`(${expansion.newOffset}–${expansion.newOffset + expansion.newLimit - 1})`,
+							`lines ${requestedReadOffset}–${requestedReadOffset + requestedReadLimit - 1} ` +
+							`→ ${expansion.enclosingSymbol.name} ` +
+							`(${expansion.newOffset}–${expansion.newOffset + expansion.newLimit - 1})`,
 					);
 				}
 			} catch {
@@ -901,7 +903,8 @@ export default function (pi: ExtensionAPI) {
 				effectiveLimit: deliveredLimit,
 				metadata: {
 					totalLines,
-					isPartial: requestedReadLimit != null && requestedReadLimit < totalLines,
+					isPartial:
+						requestedReadLimit != null && requestedReadLimit < totalLines,
 					fileKind: detectFileKind(filePath) ?? "unknown",
 					fractionRead:
 						totalLines > 0
@@ -952,8 +955,36 @@ export default function (pi: ExtensionAPI) {
 		// write = full replacement; no prior read needed (you're starting fresh).
 		// edit = partial modification; guard enforced to prevent blind overwrites.
 		const isEditOnly = isToolCallEventType("edit", event);
-		const isWriteOrEdit =
-			isToolCallEventType("write", event) || isEditOnly;
+		const isWriteOrEdit = isToolCallEventType("write", event) || isEditOnly;
+
+		// --- Indentation mismatch correction ---
+		// Some models output spaces in oldText when the file uses tabs (or vice versa).
+		// Detect this before the read guard runs so a recoverable mismatch does not
+		// degrade into a no-line-info allow path.
+		if (isEditOnly && filePath) {
+			const editInput = (event as { input?: unknown }).input as {
+				oldText?: string;
+				edits?: Array<{ oldText?: string }>;
+			};
+			const oldTexts = editInput.oldText
+				? [editInput.oldText]
+				: ((editInput.edits ?? [])
+						.map((e) => e.oldText)
+						.filter(Boolean) as string[]);
+			for (const oldText of oldTexts) {
+				const corrected = tryCorrectIndentationMismatch(oldText, filePath);
+				if (corrected !== undefined) {
+					const preview = oldText.trimStart().slice(0, 60).replace(/\n/g, "↵");
+					return {
+						block: true,
+						reason:
+							`🔄 RETRYABLE — Indentation mismatch in oldText\n\n` +
+							`oldText ("${preview}…") uses different indentation than the file. ` +
+							`Corrected oldText (use this exactly):\n\n${corrected}`,
+					};
+				}
+			}
+		}
 		if (isEditOnly && filePath && !pi.getFlag("no-read-guard")) {
 			const readGuard = runtime.readGuard;
 			const isExistingFile =
@@ -986,33 +1017,6 @@ export default function (pi: ExtensionAPI) {
 					return {
 						block: true,
 						reason: verdict.reason,
-					};
-				}
-			}
-		}
-
-		// --- Indentation mismatch correction ---
-		// Some models output spaces in oldText when the file uses tabs (or vice versa).
-		// Detect this before the edit executes and return the corrected oldText so the
-		// model can retry immediately rather than hitting a cryptic "not found" error.
-		if (isEditOnly && filePath) {
-			const editInput = (event as { input?: unknown }).input as {
-				oldText?: string;
-				edits?: Array<{ oldText?: string }>;
-			};
-			const oldTexts = editInput.oldText
-				? [editInput.oldText]
-				: (editInput.edits ?? []).map((e) => e.oldText).filter(Boolean) as string[];
-			for (const oldText of oldTexts) {
-				const corrected = tryCorrectIndentationMismatch(oldText, filePath);
-				if (corrected !== undefined) {
-					const preview = oldText.trimStart().slice(0, 60).replace(/\n/g, "↵");
-					return {
-						block: true,
-						reason:
-							`🔄 RETRYABLE — Indentation mismatch in oldText\n\n` +
-							`oldText ("${preview}…") uses different indentation than the file. ` +
-							`Corrected oldText (use this exactly):\n\n${corrected}`,
 					};
 				}
 			}

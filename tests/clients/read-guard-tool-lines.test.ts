@@ -72,7 +72,12 @@ describe("read-guard tool line helpers", () => {
 				toolName: "edit",
 				input: {
 					path: filePath,
-					edits: [{ oldText: "function bar() {\n  return 2;\n}", newText: "function bar() {\n  return 99;\n}" }],
+					edits: [
+						{
+							oldText: "function bar() {\n  return 2;\n}",
+							newText: "function bar() {\n  return 99;\n}",
+						},
+					],
 				},
 			};
 
@@ -112,6 +117,62 @@ describe("read-guard tool line helpers", () => {
 			env.cleanup();
 		}
 	});
+
+	it("returns preflightError when oldText is not found", () => {
+		const env = setupTestEnvironment("read-guard-lines-missing-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			fs.writeFileSync(filePath, "function foo() {\n  return 1;\n}\n");
+
+			const event = {
+				toolName: "edit",
+				input: {
+					path: filePath,
+					edits: [
+						{ oldText: "function bar() {\n  return 2;\n}", newText: "noop" },
+					],
+				},
+			};
+
+			const result = getTouchedLinesForGuard(event, filePath);
+			expect(result.touchedLines).toBeUndefined();
+			expect(result.preflightError).toMatch(/BLOCKED/);
+			expect(result.preflightError).toMatch(/was not found/);
+			expect(result.preflightError).toMatch(/Re-read the file/);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("returns preflightError when only some edits resolve", () => {
+		const env = setupTestEnvironment("read-guard-lines-partial-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			fs.writeFileSync(
+				filePath,
+				"function foo() {\n  return 1;\n}\n\nfunction bar() {\n  return 2;\n}\n",
+			);
+
+			const event = {
+				toolName: "edit",
+				input: {
+					path: filePath,
+					edits: [
+						{ oldText: "function bar() {\n  return 2;\n}", newText: "ok" },
+						{ oldText: "function baz() {\n  return 3;\n}", newText: "missing" },
+					],
+				},
+			};
+
+			const result = getTouchedLinesForGuard(event, filePath);
+			expect(result.touchedLines).toBeUndefined();
+			expect(result.preflightError).toMatch(/BLOCKED/);
+			expect(result.preflightError).toMatch(/edits\[1\]/);
+			expect(result.preflightError).toMatch(/was not found/);
+		} finally {
+			env.cleanup();
+		}
+	});
 });
 
 describe("tryCorrectIndentationMismatch", () => {
@@ -120,7 +181,12 @@ describe("tryCorrectIndentationMismatch", () => {
 		try {
 			const filePath = path.join(env.tmpDir, "file.ts");
 			fs.writeFileSync(filePath, "function foo() {\n\treturn 1;\n}\n");
-			expect(tryCorrectIndentationMismatch("function foo() {\n\treturn 1;\n}", filePath)).toBeUndefined();
+			expect(
+				tryCorrectIndentationMismatch(
+					"function foo() {\n\treturn 1;\n}",
+					filePath,
+				),
+			).toBeUndefined();
 		} finally {
 			env.cleanup();
 		}
@@ -131,7 +197,10 @@ describe("tryCorrectIndentationMismatch", () => {
 		try {
 			const filePath = path.join(env.tmpDir, "file.ts");
 			fs.writeFileSync(filePath, "function foo() {\n\treturn 1;\n}\n");
-			const result = tryCorrectIndentationMismatch("function foo() {\n    return 1;\n}", filePath);
+			const result = tryCorrectIndentationMismatch(
+				"function foo() {\n    return 1;\n}",
+				filePath,
+			);
 			expect(result).toBe("function foo() {\n\treturn 1;\n}");
 		} finally {
 			env.cleanup();
@@ -143,7 +212,10 @@ describe("tryCorrectIndentationMismatch", () => {
 		try {
 			const filePath = path.join(env.tmpDir, "file.ts");
 			fs.writeFileSync(filePath, "function foo() {\n\treturn 1;\n}\n");
-			const result = tryCorrectIndentationMismatch("function foo() {\n  return 1;\n}", filePath);
+			const result = tryCorrectIndentationMismatch(
+				"function foo() {\n  return 1;\n}",
+				filePath,
+			);
 			expect(result).toBe("function foo() {\n\treturn 1;\n}");
 		} finally {
 			env.cleanup();
@@ -155,7 +227,10 @@ describe("tryCorrectIndentationMismatch", () => {
 		try {
 			const filePath = path.join(env.tmpDir, "file.ts");
 			fs.writeFileSync(filePath, "function foo() {\n    return 1;\n}\n");
-			const result = tryCorrectIndentationMismatch("function foo() {\n\treturn 1;\n}", filePath);
+			const result = tryCorrectIndentationMismatch(
+				"function foo() {\n\treturn 1;\n}",
+				filePath,
+			);
 			expect(result).toBe("function foo() {\n    return 1;\n}");
 		} finally {
 			env.cleanup();
@@ -167,7 +242,10 @@ describe("tryCorrectIndentationMismatch", () => {
 		try {
 			const filePath = path.join(env.tmpDir, "file.ts");
 			fs.writeFileSync(filePath, "function foo() {\n  return 1;\n}\n");
-			const result = tryCorrectIndentationMismatch("function foo() {\n\treturn 1;\n}", filePath);
+			const result = tryCorrectIndentationMismatch(
+				"function foo() {\n\treturn 1;\n}",
+				filePath,
+			);
 			expect(result).toBe("function foo() {\n  return 1;\n}");
 		} finally {
 			env.cleanup();
@@ -179,7 +257,12 @@ describe("tryCorrectIndentationMismatch", () => {
 		try {
 			const filePath = path.join(env.tmpDir, "file.ts");
 			fs.writeFileSync(filePath, "function foo() {\n\treturn 1;\n}\n");
-			expect(tryCorrectIndentationMismatch("function bar() {\n\treturn 2;\n}", filePath)).toBeUndefined();
+			expect(
+				tryCorrectIndentationMismatch(
+					"function bar() {\n\treturn 2;\n}",
+					filePath,
+				),
+			).toBeUndefined();
 		} finally {
 			env.cleanup();
 		}

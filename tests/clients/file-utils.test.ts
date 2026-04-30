@@ -1,29 +1,85 @@
-import { describe, expect, it } from "vitest";
-import { isExcludedDirName } from "../../clients/file-utils.js";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { getProjectDataDir } from "../../clients/file-utils.js";
+import { appendToWorklog } from "../../clients/fix-worklog.js";
 
-describe("file-utils exclusion matching", () => {
-	it("matches exact exclusions case-insensitively", () => {
-		expect(isExcludedDirName("node_modules")).toBe(true);
-		expect(isExcludedDirName("NODE_MODULES")).toBe(true);
-		expect(isExcludedDirName("Coverage")).toBe(true);
+const originalDataDir = process.env.PILENS_DATA_DIR;
+
+afterEach(() => {
+	if (originalDataDir === undefined) {
+		delete process.env.PILENS_DATA_DIR;
+	} else {
+		process.env.PILENS_DATA_DIR = originalDataDir;
+	}
+});
+
+describe("getProjectDataDir", () => {
+	it("defaults to a global pi-lens projects directory instead of the project folder", () => {
+		delete process.env.PILENS_DATA_DIR;
+		const cwd = path.resolve("/tmp/demo-project");
+
+		const result = getProjectDataDir(cwd);
+
+		expect(
+			result.startsWith(path.join(os.homedir(), ".pi-lens", "projects")),
+		).toBe(true);
+		expect(result.includes(`${path.sep}.pi-lens${path.sep}`)).toBe(true);
+		expect(result.startsWith(path.join(cwd, ".pi-lens"))).toBe(false);
 	});
 
-	it("matches glob exclusions like *.dSYM", () => {
-		expect(isExcludedDirName("MyApp.dSYM")).toBe(true);
-		expect(isExcludedDirName("myapp.DSYM")).toBe(true);
-		expect(isExcludedDirName("dSYM")).toBe(false);
+	it("reuses an existing legacy project .pi-lens directory when no env override is set", () => {
+		delete process.env.PILENS_DATA_DIR;
+		const cwd = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-legacy-project-"),
+		);
+		const legacyDir = path.join(cwd, ".pi-lens");
+		fs.mkdirSync(legacyDir, { recursive: true });
+
+		const result = getProjectDataDir(cwd);
+
+		expect(result).toBe(legacyDir);
 	});
 
-	it("supports caller-provided extra exclusion patterns", () => {
-		expect(isExcludedDirName("custom-out", ["custom-out"])).toBe(true);
-		expect(isExcludedDirName("build-cache", ["build-*"])).toBe(true);
-		expect(isExcludedDirName("custom-in", ["custom-out"])).toBe(false);
+	it("uses PILENS_DATA_DIR when provided", () => {
+		process.env.PILENS_DATA_DIR = path.join(os.tmpdir(), "pi-lens-data-root");
+		const cwd = path.resolve("/tmp/another-project");
+
+		const result = getProjectDataDir(cwd);
+
+		expect(result.startsWith(process.env.PILENS_DATA_DIR)).toBe(true);
+		expect(result.startsWith(path.join(cwd, ".pi-lens"))).toBe(false);
 	});
 
-	it("excludes common agent/tooling directories", () => {
-		expect(isExcludedDirName(".claude")).toBe(true);
-		expect(isExcludedDirName(".codex")).toBe(true);
-		expect(isExcludedDirName(".worktrees")).toBe(true);
-		expect(isExcludedDirName(".vscode")).toBe(true);
+	it("project-data writers do not create a .pi-lens folder inside the project", () => {
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-project-data-"));
+		process.env.PILENS_DATA_DIR = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-global-data-"),
+		);
+
+		appendToWorklog(
+			cwd,
+			[
+				{
+					id: "demo-id",
+					tool: "eslint",
+					severity: "warning",
+					semantic: "warning",
+					filePath: path.join(cwd, "src", "index.ts"),
+					message: "demo",
+					rule: "demo-rule",
+					line: 1,
+					column: 1,
+					fixable: true,
+				},
+			],
+			false,
+		);
+
+		expect(fs.existsSync(path.join(cwd, ".pi-lens"))).toBe(false);
+		expect(
+			fs.existsSync(path.join(getProjectDataDir(cwd), "worklog.jsonl")),
+		).toBe(true);
 	});
 });

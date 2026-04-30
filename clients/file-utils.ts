@@ -3,6 +3,7 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { normalizeFilePath } from "./path-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
@@ -11,27 +12,32 @@ import { safeSpawnAsync } from "./safe-spawn.js";
  * Return the directory where pi-lens stores project-specific data
  * (caches, indexes, worklogs, etc.).
  *
- * Default: <project>/.pi-lens  (no change for existing users)
+ * Default: reuse <project>/.pi-lens if it already exists, otherwise use
+ * ~/.pi-lens/projects/<project-slug>
  *
- * Opt-in: set PILENS_DATA_DIR=/some/path — each project gets its own
+ * Override: set PILENS_DATA_DIR=/some/path — each project gets its own
  * subdirectory named after a sanitized form of its absolute path, e.g.
  *   PILENS_DATA_DIR=~/.pi-lens/projects
  *   → ~/.pi-lens/projects/home-user-myapp/
  *
- * This keeps project folders clean for mounted/ephemeral setups.
+ * This keeps project folders clean and avoids creating .pi-lens folders
+ * inside user projects.
  */
 export function getProjectDataDir(cwd: string): string {
-	const base = process.env.PILENS_DATA_DIR;
-	if (!base || base.trim().length === 0) {
-		return path.join(cwd, ".pi-lens");
+	const legacyProjectDir = path.join(cwd, ".pi-lens");
+	const configuredBase = process.env.PILENS_DATA_DIR?.trim();
+	if (!configuredBase && fs.existsSync(legacyProjectDir)) {
+		return legacyProjectDir;
 	}
+	const base =
+		configuredBase || path.join(os.homedir(), ".pi-lens", "projects");
 	const normalized = normalizeFilePath(path.resolve(cwd));
 	const slug = normalized
-		.replace(/^[a-z]:/i, "")      // strip Windows drive letter
-		.replace(/\/+/g, "-")          // separators → dashes
+		.replace(/^[a-z]:/i, "") // strip Windows drive letter
+		.replace(/\/+/g, "-") // separators → dashes
 		.replace(/[^A-Za-z0-9-]/g, "") // strip anything else
-		.replace(/^-+/, "")            // trim leading dashes
-		.replace(/-+$/, "");           // trim trailing dashes
+		.replace(/^-+/, "") // trim leading dashes
+		.replace(/-+$/, ""); // trim trailing dashes
 	return path.join(base.trim(), slug || "default");
 }
 
