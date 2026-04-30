@@ -141,9 +141,11 @@ const KIND_EXTENSIONS: Record<FileKind, readonly string[]> = {
 	],
 	jsts: [
 		".cjs",
+		".cts",
 		".js",
 		".jsx",
 		".mjs",
+		".mts",
 		".svelte",
 		".ts",
 		".tsx",
@@ -180,6 +182,7 @@ const KIND_EXTENSIONS: Record<FileKind, readonly string[]> = {
 	],
 	python: [
 		".py",
+		".pyi",
 	],
 	ruby: [
 		".gemspec",
