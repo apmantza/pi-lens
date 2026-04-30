@@ -11,6 +11,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { logLatency } from "./latency-logger.js";
 import { safeSpawn } from "./safe-spawn.js";
 import {
 	getAutoInstallToolIdForFormatter,
@@ -847,6 +848,19 @@ export async function getFormattersForFile(
 	}
 
 	const enabled = selected ? [selected] : [];
+
+	const selectionReason = selected
+		? (formatterPolicy
+			? (candidateFormatters.some((f) => hasExplicitFormatterConfig(f.name, cwd)) ? "explicit-config" : "smart-default")
+			: "detect")
+		: "none";
+	logLatency({
+		type: "phase",
+		phase: "formatter_selected",
+		filePath: filePath,
+		durationMs: 0,
+		metadata: { formatter: selected?.name ?? null, reason: selectionReason, cwd },
+	});
 
 	// Store the list of enabled formatter names in cache
 	const enabledNames = enabled.map((f) => f.name);

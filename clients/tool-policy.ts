@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { logLatency } from "./latency-logger.js";
 
 export type ToolGate = "config-first" | "smart-default" | "mixed";
 
@@ -954,6 +955,7 @@ const PRETTIER_CONFIGS = [
 	"prettier.config.js",
 	"prettier.config.cjs",
 	"prettier.config.mjs",
+	"prettier.config.ts",
 ];
 
 const RUFF_PROJECT_CONFIGS = ["ruff.toml", ".ruff.toml"];
@@ -1250,7 +1252,7 @@ export function getLinterPolicyForCwd(
 	filePath: string,
 	cwd: string,
 ): LinterPolicy | undefined {
-	return getLinterPolicyForFile(filePath, {
+	const context: LinterPolicyContext = {
 		hasEslintConfig: hasEslintConfig(cwd),
 		hasOxlintConfig: hasOxlintConfig(cwd),
 		hasBiomeConfig: hasBiomeConfig(cwd),
@@ -1263,7 +1265,21 @@ export function getLinterPolicyForCwd(
 		hasPhpstanConfig: hasPhpstanConfig(cwd),
 		hasMypyConfig: hasMypyConfig(cwd),
 		hasDetektConfig: hasDetektConfig(cwd),
+	};
+	const policy = getLinterPolicyForFile(filePath, context);
+	logLatency({
+		type: "phase",
+		phase: "linter_selected",
+		filePath,
+		durationMs: 0,
+		metadata: {
+			runner: policy?.defaultRunner ?? null,
+			gate: policy?.gate ?? null,
+			cwd,
+			context,
+		},
 	});
+	return policy;
 }
 
 export function getAutofixPolicyForFile(
@@ -1404,7 +1420,23 @@ const ESLINT_CONFIGS = [
 	"eslint.config.js",
 	"eslint.config.mjs",
 	"eslint.config.cjs",
+	"eslint.config.ts",
 ];
+
+function walkUpDirsUntilPackageJson(cwd: string): string[] {
+	const dirs: string[] = [];
+	let dir = cwd;
+	const root = path.parse(dir).root;
+	while (true) {
+		dirs.push(dir);
+		if (fs.existsSync(path.join(dir, "package.json"))) break;
+		if (dir === root) break;
+		const parent = path.dirname(dir);
+		if (parent === dir) break;
+		dir = parent;
+	}
+	return dirs;
+}
 
 function findNearestPackageJsonPath(cwd: string): string | undefined {
 	let dir = cwd;
@@ -1456,9 +1488,7 @@ export function hasNearestPackageJsonField(
 }
 
 export function hasEslintConfig(cwd: string): boolean {
-	let dir = cwd;
-	const root = path.parse(dir).root;
-	while (true) {
+	for (const dir of walkUpDirsUntilPackageJson(cwd)) {
 		for (const cfg of ESLINT_CONFIGS) {
 			if (fs.existsSync(path.join(dir, cfg))) return true;
 		}
@@ -1468,10 +1498,6 @@ export function hasEslintConfig(cwd: string): boolean {
 				if (JSON.parse(fs.readFileSync(pkgPath, "utf-8")).eslintConfig) return true;
 			} catch {}
 		}
-		if (dir === root) break;
-		const parent = path.dirname(dir);
-		if (parent === dir) break;
-		dir = parent;
 	}
 	return false;
 }
@@ -1481,17 +1507,11 @@ export function hasBiomeConfig(cwd: string): boolean {
 }
 
 export function getBiomeConfigPath(cwd: string): string | undefined {
-	let dir = cwd;
-	const root = path.parse(dir).root;
-	while (true) {
+	for (const dir of walkUpDirsUntilPackageJson(cwd)) {
 		const jsoncPath = path.join(dir, "biome.jsonc");
 		if (fs.existsSync(jsoncPath)) return jsoncPath;
 		const jsonPath = path.join(dir, "biome.json");
 		if (fs.existsSync(jsonPath)) return jsonPath;
-		if (dir === root) break;
-		const parent = path.dirname(dir);
-		if (parent === dir) break;
-		dir = parent;
 	}
 	return undefined;
 }
@@ -1573,9 +1593,7 @@ export function hasRubocopConfig(cwd: string): boolean {
 }
 
 export function hasMypyConfig(cwd: string): boolean {
-	let dir = cwd;
-	const root = path.parse(dir).root;
-	while (true) {
+	for (const dir of walkUpDirsUntilPackageJson(cwd)) {
 		for (const cfg of MYPY_CONFIGS) {
 			const cfgPath = path.join(dir, cfg);
 			if (!fs.existsSync(cfgPath)) continue;
@@ -1593,10 +1611,6 @@ export function hasMypyConfig(cwd: string): boolean {
 			}
 			return true;
 		}
-		if (dir === root) break;
-		const parent = path.dirname(dir);
-		if (parent === dir) break;
-		dir = parent;
 	}
 	return false;
 }
@@ -1639,45 +1653,27 @@ export function hasMarkdownlintConfig(cwd: string): boolean {
 }
 
 export function hasPrettierConfig(cwd: string): boolean {
-	// Walk up from cwd to find a Prettier config file
-	let dir = cwd;
-	const root = path.parse(dir).root;
-	while (true) {
-		if (PRETTIER_CONFIGS.some((cfg) => fs.existsSync(path.join(dir, cfg)))) {
-			return true;
+	for (const dir of walkUpDirsUntilPackageJson(cwd)) {
+		if (PRETTIER_CONFIGS.some((cfg) => fs.existsSync(path.join(dir, cfg)))) return true;
+		const pkgPath = path.join(dir, "package.json");
+		if (fs.existsSync(pkgPath)) {
+			try {
+				const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+				if (Object.prototype.hasOwnProperty.call(pkg, "prettier")) return true;
+			} catch {}
 		}
-		if (dir === root) break;
-		const parent = path.dirname(dir);
-		if (parent === dir) break;
-		dir = parent;
-	}
-
-	// Check nearest package.json for inline "prettier" field
-	const pkgPath = findNearestPackageJsonPath(cwd);
-	if (pkgPath) {
-		try {
-			const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
-			if (Object.prototype.hasOwnProperty.call(pkg, "prettier")) return true;
-		} catch {}
 	}
 	return false;
 }
 
 export function hasBlackConfig(cwd: string): boolean {
-	// Walk up looking for pyproject.toml with [tool.black]
-	let dir = cwd;
-	const root = path.parse(dir).root;
-	while (true) {
+	for (const dir of walkUpDirsUntilPackageJson(cwd)) {
 		const pyproject = path.join(dir, "pyproject.toml");
 		if (fs.existsSync(pyproject)) {
 			try {
 				if (fs.readFileSync(pyproject, "utf-8").includes("[tool.black]")) return true;
 			} catch {}
 		}
-		if (dir === root) break;
-		const parent = path.dirname(dir);
-		if (parent === dir) break;
-		dir = parent;
 	}
 
 	// Dependency file checks are cwd-only (weaker signal, avoid false positives up the tree)
@@ -1693,9 +1689,7 @@ export function hasBlackConfig(cwd: string): boolean {
 }
 
 export function hasRuffConfig(cwd: string): boolean {
-	let dir = cwd;
-	const root = path.parse(dir).root;
-	while (true) {
+	for (const dir of walkUpDirsUntilPackageJson(cwd)) {
 		for (const cfg of RUFF_PROJECT_CONFIGS) {
 			if (fs.existsSync(path.join(dir, cfg))) return true;
 		}
@@ -1705,10 +1699,6 @@ export function hasRuffConfig(cwd: string): boolean {
 				if (fs.readFileSync(pyproject, "utf-8").includes("[tool.ruff]")) return true;
 			} catch {}
 		}
-		if (dir === root) break;
-		const parent = path.dirname(dir);
-		if (parent === dir) break;
-		dir = parent;
 	}
 	return false;
 }
@@ -1751,14 +1741,8 @@ const DETEKT_CONFIGS = [
 ];
 
 export function hasDetektConfig(cwd: string): boolean {
-	let dir = cwd;
-	const root = path.parse(dir).root;
-	while (true) {
+	for (const dir of walkUpDirsUntilPackageJson(cwd)) {
 		if (DETEKT_CONFIGS.some((cfg) => fs.existsSync(path.join(dir, cfg)))) return true;
-		if (dir === root) break;
-		const parent = path.dirname(dir);
-		if (parent === dir) break;
-		dir = parent;
 	}
 	return false;
 }
@@ -1790,17 +1774,11 @@ export function getRubocopCommand(cwd: string): {
 }
 
 export function hasOxlintConfig(cwd: string): boolean {
-	let dir = cwd;
-	const root = path.parse(dir).root;
-	while (true) {
+	for (const dir of walkUpDirsUntilPackageJson(cwd)) {
 		if (
 			fs.existsSync(path.join(dir, ".oxlintrc.json")) ||
 			fs.existsSync(path.join(dir, "oxlint.json"))
 		) return true;
-		if (dir === root) break;
-		const parent = path.dirname(dir);
-		if (parent === dir) break;
-		dir = parent;
 	}
 	return false;
 }
