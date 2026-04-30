@@ -530,6 +530,22 @@ describe("getFormattersForFile — policy selection", () => {
 		});
 	});
 
+	it("does not activate biome smart-default when prettier has explicit config in cwd", async () => {
+		createTempFile(tmpDir, ".prettierrc", "{}");
+		const filePath = fileIn(tmpDir, "index.ts");
+		const formatters = await getFormattersForFile(filePath, tmpDir);
+		expect(formatters.map((f) => f.name)).toEqual(["prettier"]);
+	});
+
+	it("does not activate biome smart-default when prettier config is in a parent directory", async () => {
+		createTempFile(tmpDir, ".prettierrc", "{}");
+		const subDir = path.join(tmpDir, "src");
+		fs.mkdirSync(subDir, { recursive: true });
+		const filePath = fileIn(subDir, "index.ts");
+		const formatters = await getFormattersForFile(filePath, subDir);
+		expect(formatters.map((f) => f.name)).toEqual(["prettier"]);
+	});
+
 	it("taplo resolveCommand falls back to managed install when not on PATH", async () => {
 		const managedPath = isWin
 			? path.join(tmpDir, "managed", "taplo.exe")

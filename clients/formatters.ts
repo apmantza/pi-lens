@@ -818,24 +818,17 @@ export async function getFormattersForFile(
 					) ?? explicitlyConfigured[0])
 				: explicitlyConfigured[0];
 		} else if (smartDefaultFormatterName) {
-			// Only activate the smart-default fallback when NO formatter in
-			// the candidate list has explicit project configuration. This
-			// prevents Biome from being auto-installed and overriding Prettier
-			// on projects that have a .prettierrc but no biome.json.
-			const anyCandidateHasConfig = candidateFormatters.some((formatter) =>
-				hasExplicitFormatterConfig(formatter.name, cwd),
+			// Reached only when explicitlyConfigured is empty, so no candidate
+			// has explicit config. Safe to activate the smart-default.
+			const smartDefaultFormatter = candidateFormatters.find(
+				(f) => f.name === smartDefaultFormatterName,
 			);
-			if (!anyCandidateHasConfig) {
-				const smartDefaultFormatter = candidateFormatters.find(
-					(f) => f.name === smartDefaultFormatterName,
+			if (smartDefaultFormatter) {
+				const autoInstallToolId = getAutoInstallToolIdForFormatter(
+					smartDefaultFormatter.name,
 				);
-				if (smartDefaultFormatter) {
-					const autoInstallToolId = getAutoInstallToolIdForFormatter(
-						smartDefaultFormatter.name,
-					);
-					if (autoInstallToolId || (await smartDefaultFormatter.detect(cwd))) {
-						selected = smartDefaultFormatter;
-					}
+				if (autoInstallToolId || (await smartDefaultFormatter.detect(cwd))) {
+					selected = smartDefaultFormatter;
 				}
 			}
 		}

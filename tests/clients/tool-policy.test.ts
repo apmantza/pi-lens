@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -395,6 +396,48 @@ describe("tool-policy", () => {
 				false,
 			);
 			expect(hasNearestPackageJsonField(subPkgDir, "prettier")).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("hasPrettierConfig detects config file in a parent directory", () => {
+		const env = setupTestEnvironment("pi-lens-tool-policy-prettier-walkup-");
+		try {
+			createTempFile(env.tmpDir, ".prettierrc", "{}");
+			const subDir = path.join(env.tmpDir, "src", "components");
+			fs.mkdirSync(subDir, { recursive: true });
+			expect(hasPrettierConfig(subDir)).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("hasPrettierConfig returns true when package.json has prettier set to false (field exists)", () => {
+		const env = setupTestEnvironment("pi-lens-tool-policy-prettier-false-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"package.json",
+				JSON.stringify({ prettier: false }),
+			);
+			// The field exists — this is an explicit config (even if it opts out).
+			// Old code used `if (pkg.prettier)` which would wrongly return false here.
+			expect(hasPrettierConfig(env.tmpDir)).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("hasPrettierConfig returns true when package.json has prettier set to null (field exists)", () => {
+		const env = setupTestEnvironment("pi-lens-tool-policy-prettier-null-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"package.json",
+				JSON.stringify({ prettier: null }),
+			);
+			expect(hasPrettierConfig(env.tmpDir)).toBe(true);
 		} finally {
 			env.cleanup();
 		}
