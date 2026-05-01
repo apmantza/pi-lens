@@ -6,6 +6,10 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Added
 
+- **LSP config warmFiles option** - added "warmFiles" option for LSP config. If defined, expects array of string file paths. pi-lens opens these files at full session startup to seed language servers that index translation units lazily, such as clangd. In a short-lived pinpoint-query context, a clangd `workspaceSymbol` request may return empty results for a symbol in a translation unit clangd has not built an AST for yet. Background indexing may make the query work, but that timing is unreliable in LLVM-scale projects. Specify project entry-point files (those that transitively depend on most of the other files in your project) as warmFiles in the LSP config.
+
+### Added
+
 - **Tab/space indentation mismatch correction in the edit hook** — some models output spaces in `oldText` when the file uses tabs (or vice versa), causing edits to fail with a cryptic "not found" error. The `tool_call` hook now detects this before execution by trying tabs↔2-spaces and tabs↔4-spaces conversions against the actual file. On mismatch it blocks with a `🔄 RETRYABLE` message containing the corrected `oldText` verbatim, so the model retries successfully on the next attempt at zero cost when `oldText` already matches.
 - **Global project-data storage is now the default for new projects** — project-scoped pi-lens artifacts (turn state, worklog, metrics history, index, install choices, runner scratch data) now default to `~/.pi-lens/projects/<project-slug>/` instead of creating `<project>/.pi-lens/`. Existing projects that already have `<project>/.pi-lens/` continue to reuse it unless `PILENS_DATA_DIR` is explicitly set. This closes issue #40 while preserving backward compatibility.
 - **`PILENS_DATA_DIR` and `PI_LENS_STARTUP_MODE` documented in README** — both env vars are now listed under a dedicated _Environment Variables_ section between `## Run` and `## Key Commands`.

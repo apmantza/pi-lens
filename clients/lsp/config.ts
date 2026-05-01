@@ -42,6 +42,8 @@ export interface CustomServerConfig {
 export interface LSPConfig {
 	servers?: Record<string, CustomServerConfig>;
 	disabledServers?: string[];
+	/** Files to open at session start to seed lazy LSP indexing (e.g., clangd). */
+	warmFiles?: string[];
 }
 
 interface RegisteredLSPConfig {

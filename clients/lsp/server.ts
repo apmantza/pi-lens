@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { access, appendFile, mkdir, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { KIND_EXTENSIONS } from "../file-kinds.js"
 import { ensureTool, getToolEnvironment } from "../installer/index.js";
 import { logLatency } from "../latency-logger.js";
 import { type LSPProcess, launchLSP } from "./launch.js";
@@ -27,7 +28,7 @@ export interface LSPSpawnOptions {
 export interface LSPServerInfo {
 	id: string;
 	name: string;
-	extensions: string[];
+	extensions: readonly string[];
 	root: RootFunction;
 	/**
 	 * Optional per-server initialize timeout.
@@ -392,7 +393,7 @@ type InitializationConfig = Record<string, unknown>;
 interface InteractiveServerSpec {
 	id: string;
 	name: string;
-	extensions: string[];
+	extensions: readonly string[];
 	root: RootFunction;
 	language: string;
 	command: string | ((root: string) => string);
@@ -748,10 +749,14 @@ export async function detectPythonVenv(
 
 // --- Server Definitions ---
 
+const JS_TS_LSP_EXTENSIONS = KIND_EXTENSIONS["jsts"].filter(
+	(ext) => ext !== ".svelte" && ext !== ".vue",
+);
+
 export const TypeScriptServer: LSPServerInfo = {
 	id: "typescript",
 	name: "TypeScript Language Server",
-	extensions: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"],
+	extensions: JS_TS_LSP_EXTENSIONS,
 	autoPropagateDiagnostics: true,
 	root: DenoExcludeRoot(
 		RootWithFallback(
@@ -850,7 +855,7 @@ export const TypeScriptServer: LSPServerInfo = {
 export const DenoServer: LSPServerInfo = {
 	id: "deno",
 	name: "Deno Language Server",
-	extensions: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"],
+	extensions: JS_TS_LSP_EXTENSIONS,
 	autoPropagateDiagnostics: true,
 	root: createRootDetector(["deno.json", "deno.jsonc"]),
 	async spawn(root) {
@@ -866,7 +871,7 @@ export const DenoServer: LSPServerInfo = {
 export const PythonServer: LSPServerInfo = {
 	id: "python",
 	name: "Pyright Language Server",
-	extensions: [".py", ".pyi"],
+	extensions: KIND_EXTENSIONS["python"],
 	root: RootWithFallback(
 		createRootDetector([
 			".git",
@@ -932,7 +937,7 @@ export const PythonServer: LSPServerInfo = {
 export const PythonPylspServer: LSPServerInfo = {
 	id: "python-pylsp",
 	name: "Python LSP Server (pylsp)",
-	extensions: [".py", ".pyi"],
+	extensions: KIND_EXTENSIONS["python"],
 	root: RootWithFallback(
 		createRootDetector([
 			".git",
@@ -961,7 +966,7 @@ export const PythonPylspServer: LSPServerInfo = {
 export const GoServer: LSPServerInfo = {
 	id: "go",
 	name: "gopls",
-	extensions: [".go"],
+	extensions: KIND_EXTENSIONS["go"],
 	root: RootWithFallback(
 		WorkspacePriorityRoot([["go.work"], ["go.mod", "go.sum"], [".git"]]),
 	),
@@ -1016,7 +1021,7 @@ function RustWorkspaceRoot(): RootFunction {
 export const RustServer: LSPServerInfo = {
 	id: "rust",
 	name: "rust-analyzer",
-	extensions: [".rs"],
+	extensions: KIND_EXTENSIONS["rust"],
 	root: RootWithFallback(RustWorkspaceRoot()),
 	async spawn(root, options) {
 		// Prefer rustup-installed rust-analyzer; fall back to GitHub-downloaded managed copy
@@ -1044,7 +1049,7 @@ export const RustServer: LSPServerInfo = {
 export const RubyServer: LSPServerInfo = {
 	id: "ruby",
 	name: "Ruby LSP",
-	extensions: [".rb", ".rake", ".gemspec", ".ru"],
+	extensions: KIND_EXTENSIONS["ruby"],
 	root: RootWithFallback(
 		PriorityRoot([["Gemfile", ".ruby-version"], [".git"]]),
 	),
@@ -1096,7 +1101,7 @@ export const RubyServer: LSPServerInfo = {
 export const RubySolargraphServer: LSPServerInfo = {
 	id: "ruby-solargraph",
 	name: "Solargraph",
-	extensions: [".rb", ".rake", ".gemspec", ".ru"],
+	extensions: KIND_EXTENSIONS["ruby"],
 	root: RootWithFallback(
 		PriorityRoot([["Gemfile", ".ruby-version"], [".git"]]),
 	),
@@ -1116,7 +1121,7 @@ export const RubySolargraphServer: LSPServerInfo = {
 export const PHPServer: LSPServerInfo = {
 	id: "php",
 	name: "Intelephense",
-	extensions: [".php"],
+	extensions: KIND_EXTENSIONS["php"],
 	root: RootWithFallback(
 		createRootDetector(["composer.json", "composer.lock"]),
 	),
@@ -1143,7 +1148,7 @@ export const PHPServer: LSPServerInfo = {
 export const CSharpServer: LSPServerInfo = {
 	id: "csharp",
 	name: "csharp-ls",
-	extensions: [".cs"],
+	extensions: KIND_EXTENSIONS["csharp"],
 	root: RootWithFallback(createRootDetector([".sln", ".csproj", ".slnx"])),
 	async spawn(root, options) {
 		const candidates = dotnetToolCandidates("csharp-ls");
@@ -1167,7 +1172,7 @@ export const CSharpServer: LSPServerInfo = {
 export const OmniSharpServer = createInteractiveServer({
 	id: "omnisharp",
 	name: "OmniSharp",
-	extensions: [".cs"],
+	extensions: KIND_EXTENSIONS["csharp"],
 	root: createRootDetector([".sln", ".csproj", ".slnx"]),
 	language: "csharp",
 	command: "OmniSharp",
@@ -1177,7 +1182,7 @@ export const OmniSharpServer = createInteractiveServer({
 export const FSharpServer = createInteractiveServer({
 	id: "fsharp",
 	name: "FSAutocomplete",
-	extensions: [".fs", ".fsi", ".fsx"],
+	extensions: KIND_EXTENSIONS["fsharp"],
 	root: createRootDetector([".sln", ".fsproj"]),
 	language: "fsharp",
 	command: "fsautocomplete",
@@ -1186,7 +1191,7 @@ export const FSharpServer = createInteractiveServer({
 export const JavaServer = createInteractiveServer({
 	id: "java",
 	name: "JDT Language Server",
-	extensions: [".java"],
+	extensions: KIND_EXTENSIONS["java"],
 	root: RootWithFallback(
 		createRootDetector(["pom.xml", "build.gradle", ".classpath"]),
 	),
@@ -1197,7 +1202,7 @@ export const JavaServer = createInteractiveServer({
 export const KotlinServer: LSPServerInfo = {
 	id: "kotlin",
 	name: "Kotlin Language Server",
-	extensions: [".kt", ".kts"],
+	extensions: KIND_EXTENSIONS["kotlin"],
 	root: RootWithFallback(
 		createRootDetector(["build.gradle.kts", "build.gradle", "pom.xml"]),
 	),
@@ -1218,7 +1223,7 @@ export const KotlinServer: LSPServerInfo = {
 export const SwiftServer = createInteractiveServer({
 	id: "swift",
 	name: "SourceKit-LSP",
-	extensions: [".swift"],
+	extensions: KIND_EXTENSIONS["swift"],
 	root: createRootDetector(["Package.swift"]),
 	language: "swift",
 	command: "sourcekit-lsp",
@@ -1227,7 +1232,7 @@ export const SwiftServer = createInteractiveServer({
 export const DartServer = createInteractiveServer({
 	id: "dart",
 	name: "Dart Analysis Server",
-	extensions: [".dart"],
+	extensions: KIND_EXTENSIONS["dart"],
 	root: RootWithFallback(createRootDetector(["pubspec.yaml"])),
 	language: "dart",
 	command: "dart",
@@ -1237,7 +1242,7 @@ export const DartServer = createInteractiveServer({
 export const LuaServer = createInteractiveServer({
 	id: "lua",
 	name: "Lua Language Server",
-	extensions: [".lua"],
+	extensions: KIND_EXTENSIONS["lua"],
 	root: createRootDetector([".luarc.json", ".luacheckrc"]),
 	language: "lua",
 	command: "lua-language-server",
@@ -1246,7 +1251,7 @@ export const LuaServer = createInteractiveServer({
 export const CppServer = createInteractiveServer({
 	id: "cpp",
 	name: "clangd",
-	extensions: [".c", ".cpp", ".cc", ".cxx", ".h", ".hpp"],
+	extensions: KIND_EXTENSIONS["cxx"],
 	root: RootWithFallback(
 		createRootDetector([
 			"compile_commands.json",
@@ -1263,7 +1268,7 @@ export const CppServer = createInteractiveServer({
 export const ZigServer: LSPServerInfo = {
 	id: "zig",
 	name: "ZLS",
-	extensions: [".zig", ".zon"],
+	extensions: KIND_EXTENSIONS["zig"],
 	root: RootWithFallback(createRootDetector(["build.zig"])),
 	spawn(root, options) {
 		return resolveAndLaunch(
@@ -1281,7 +1286,7 @@ export const ZigServer: LSPServerInfo = {
 export const HaskellServer = createInteractiveServer({
 	id: "haskell",
 	name: "Haskell Language Server",
-	extensions: [".hs", ".lhs"],
+	extensions: KIND_EXTENSIONS["haskell"],
 	root: createRootDetector(["stack.yaml", "cabal.project", "*.cabal"]),
 	language: "haskell",
 	command: "haskell-language-server-wrapper",
@@ -1291,7 +1296,7 @@ export const HaskellServer = createInteractiveServer({
 export const ElixirServer = createInteractiveServer({
 	id: "elixir",
 	name: "ElixirLS",
-	extensions: [".ex", ".exs"],
+	extensions: KIND_EXTENSIONS["elixir"],
 	root: RootWithFallback(createRootDetector(["mix.exs"])),
 	language: "elixir",
 	command: "elixir-ls",
@@ -1300,7 +1305,7 @@ export const ElixirServer = createInteractiveServer({
 export const GleamServer = createInteractiveServer({
 	id: "gleam",
 	name: "Gleam LSP",
-	extensions: [".gleam"],
+	extensions: KIND_EXTENSIONS["gleam"],
 	root: RootWithFallback(createRootDetector(["gleam.toml"])),
 	language: "gleam",
 	command: "gleam",
@@ -1310,7 +1315,7 @@ export const GleamServer = createInteractiveServer({
 export const OCamlServer = createInteractiveServer({
 	id: "ocaml",
 	name: "ocamllsp",
-	extensions: [".ml", ".mli"],
+	extensions: KIND_EXTENSIONS["ocaml"],
 	root: createRootDetector(["dune-project", "opam"]),
 	language: "ocaml",
 	command: "ocamllsp",
@@ -1319,7 +1324,7 @@ export const OCamlServer = createInteractiveServer({
 export const ClojureServer = createInteractiveServer({
 	id: "clojure",
 	name: "Clojure LSP",
-	extensions: [".clj", ".cljs", ".cljc", ".edn"],
+	extensions: KIND_EXTENSIONS["clojure"],
 	root: createRootDetector(["deps.edn", "project.clj"]),
 	language: "clojure",
 	command: "clojure-lsp",
@@ -1328,7 +1333,7 @@ export const ClojureServer = createInteractiveServer({
 export const TerraformServer: LSPServerInfo = {
 	id: "terraform",
 	name: "Terraform LSP",
-	extensions: [".tf", ".tfvars"],
+	extensions: KIND_EXTENSIONS["terraform"],
 	root: RootWithFallback(
 		createRootDetector([".terraform.lock.hcl", ".terraform"]),
 	),
@@ -1348,7 +1353,7 @@ export const TerraformServer: LSPServerInfo = {
 export const NixServer = createInteractiveServer({
 	id: "nix",
 	name: "nixd",
-	extensions: [".nix"],
+	extensions: KIND_EXTENSIONS["nix"],
 	root: createRootDetector(["flake.nix"]),
 	language: "nix",
 	command: "nixd",
@@ -1357,7 +1362,11 @@ export const NixServer = createInteractiveServer({
 export const BashServer: LSPServerInfo = {
 	id: "bash",
 	name: "Bash Language Server",
-	extensions: [".sh", ".bash", ".zsh"],
+	extensions: [
+		".bash",
+		".sh",
+		".zsh",
+	],
 	root: FileDirRoot,
 	spawn(root, options) {
 		return resolveAndLaunch(
@@ -1375,7 +1384,10 @@ export const BashServer: LSPServerInfo = {
 export const DockerServer: LSPServerInfo = {
 	id: "docker",
 	name: "Dockerfile Language Server",
-	extensions: [".dockerfile", "Dockerfile"],
+	extensions: [
+		".dockerfile",
+		"Dockerfile",
+	],
 	root: RootWithFallback(
 		PriorityRoot([
 			[
@@ -1403,7 +1415,7 @@ export const DockerServer: LSPServerInfo = {
 export const YamlServer: LSPServerInfo = {
 	id: "yaml",
 	name: "YAML Language Server",
-	extensions: [".yaml", ".yml"],
+	extensions: KIND_EXTENSIONS["yaml"],
 	root: RootWithFallback(
 		PriorityRoot([
 			[".yamllint", "yamllint.yml", "yamllint.yaml", "pyproject.toml"],
@@ -1426,7 +1438,7 @@ export const YamlServer: LSPServerInfo = {
 export const JsonServer: LSPServerInfo = {
 	id: "json",
 	name: "VSCode JSON Language Server",
-	extensions: [".json", ".jsonc"],
+	extensions: KIND_EXTENSIONS["json"],
 	root: RootWithFallback(
 		WorkspacePriorityRoot([
 			["package.json", "tsconfig.json", "jsconfig.json"],
@@ -1449,7 +1461,7 @@ export const JsonServer: LSPServerInfo = {
 export const HtmlServer: LSPServerInfo = {
 	id: "html",
 	name: "VSCode HTML Language Server",
-	extensions: [".html", ".htm"],
+	extensions: KIND_EXTENSIONS["html"],
 	root: RootWithFallback(
 		IgnoreHomeRoot(
 			PriorityRoot([["package.json", "index.html", "vite.config.ts"]]),
@@ -1471,7 +1483,7 @@ export const HtmlServer: LSPServerInfo = {
 export const TomlServer: LSPServerInfo = {
 	id: "toml",
 	name: "Taplo",
-	extensions: [".toml"],
+	extensions: KIND_EXTENSIONS["toml"],
 	root: RootWithFallback(
 		PriorityRoot([["pyproject.toml", "Cargo.toml", "taplo.toml"], [".git"]]),
 	),
@@ -1491,7 +1503,7 @@ export const TomlServer: LSPServerInfo = {
 export const PrismaServer: LSPServerInfo = {
 	id: "prisma",
 	name: "Prisma Language Server",
-	extensions: [".prisma"],
+	extensions: KIND_EXTENSIONS["prisma"],
 	root: RootWithFallback(
 		createRootDetector(["prisma/schema.prisma", "schema.prisma"]),
 	),
@@ -1513,7 +1525,9 @@ export const PrismaServer: LSPServerInfo = {
 export const VueServer: LSPServerInfo = {
 	id: "vue",
 	name: "Vue Language Server",
-	extensions: [".vue"],
+	extensions: [
+		".vue",
+	],
 	root: RootWithFallback(
 		IgnoreHomeRoot(
 			createRootDetector([
@@ -1563,7 +1577,9 @@ export const VueServer: LSPServerInfo = {
 export const SvelteServer: LSPServerInfo = {
 	id: "svelte",
 	name: "Svelte Language Server",
-	extensions: [".svelte"],
+	extensions: [
+		".svelte",
+	],
 	root: RootWithFallback(
 		IgnoreHomeRoot(
 			createRootDetector([
@@ -1604,7 +1620,13 @@ export const SvelteServer: LSPServerInfo = {
 export const ESLintServer: LSPServerInfo = {
 	id: "eslint",
 	name: "ESLint Language Server",
-	extensions: [".js", ".jsx", ".vue", ".svelte"], // Note: .ts/.tsx handled by TypeScript LSP + Biome
+	// Note: .ts/.tsx handled by TypeScript LSP + Biome
+	extensions: [
+		".js",
+		".jsx",
+		".svelte",
+		".vue",
+	],
 	root: IgnoreHomeRoot(
 		createRootDetector([
 			".eslintrc",
@@ -1631,7 +1653,7 @@ export const ESLintServer: LSPServerInfo = {
 export const CssServer: LSPServerInfo = {
 	id: "css",
 	name: "CSS Language Server",
-	extensions: [".css", ".scss", ".sass", ".less"],
+	extensions: KIND_EXTENSIONS["css"],
 	root: RootWithFallback(
 		IgnoreHomeRoot(
 			PriorityRoot([

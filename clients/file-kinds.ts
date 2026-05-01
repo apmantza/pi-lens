@@ -10,92 +10,216 @@ import { basename, extname } from "node:path";
 // --- Types ---
 
 export type FileKind =
-	| "jsts" // JavaScript/TypeScript/frameworks (js, jsx, ts, tsx, mjs, cjs, vue, svelte)
-	| "python" // Python (.py)
-	| "go" // Go (.go)
-	| "rust" // Rust (.rs)
-	| "cxx" // C/C++ (.c, .cc, .cpp, .h, .hpp, .cxx, etc.)
-	| "cmake" // CMake (.cmake, CMakeLists.txt)
-	| "shell" // Shell (.sh, .bash)
-	| "json" // JSON (.json)
-	| "markdown" // Markdown (.md, .mdx)
-	| "css" // CSS (.css, .scss, .less)
-	| "yaml" // YAML (.yaml, .yml)
-	| "sql" // SQL (.sql)
-	| "ruby" // Ruby (.rb, .rake, .gemspec, .ru)
-	| "html" // HTML (.html, .htm)
+	| "clojure" // Clojure
+	| "cmake" // CMake
+	| "csharp" // C#
+	| "css" // CSS
+	| "cxx" // C/C++
+	| "dart" // Dart
 	| "docker" // Dockerfile
-	| "php" // PHP (.php)
-	| "powershell" // PowerShell (.ps1, .psm1, .psd1)
-	| "prisma" // Prisma schema (.prisma)
-	| "csharp" // C# (.cs)
-	| "fsharp" // F# (.fs, .fsi, .fsx)
-	| "java" // Java (.java)
-	| "kotlin" // Kotlin (.kt, .kts)
-	| "swift" // Swift (.swift)
-	| "dart" // Dart (.dart)
-	| "lua" // Lua (.lua)
-	| "zig" // Zig (.zig, .zon)
-	| "haskell" // Haskell (.hs, .lhs)
-	| "elixir" // Elixir (.ex, .exs)
-	| "gleam" // Gleam (.gleam)
-	| "ocaml" // OCaml (.ml, .mli)
-	| "clojure" // Clojure (.clj, .cljs, .cljc, .edn)
-	| "terraform" // Terraform (.tf, .tfvars)
-	| "nix" // Nix (.nix)
-	| "toml"; // TOML (.toml)
+	| "elixir" // Elixir
+	| "fsharp" // F#
+	| "gleam" // Gleam
+	| "go" // Go
+	| "haskell" // Haskell
+	| "html" // HTML
+	| "java" // Java
+	| "json" // JSON
+	| "jsts" // JavaScript/TypeScript/frameworks
+	| "kotlin" // Kotlin
+	| "lua" // Lua
+	| "markdown" // Markdown
+	| "nix" // Nix
+	| "ocaml" // OCaml
+	| "php" // PHP
+	| "powershell" // PowerShell
+	| "prisma" // Prisma schema
+	| "python" // Python
+	| "ruby" // Ruby
+	| "rust" // Rust
+	| "shell" // Shell
+	| "sql" // SQL
+	| "swift" // Swift
+	| "terraform" // Terraform
+	| "toml" // TOML
+	| "yaml" // YAML
+	| "zig" // Zig
+	;
 
 // --- Extension Maps ---
 
-const KIND_EXTENSIONS: Record<FileKind, readonly string[]> = {
-	jsts: [".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".svelte", ".vue"],
-	python: [".py"],
-	go: [".go"],
-	rust: [".rs"],
+export const KIND_EXTENSIONS: Record<FileKind, readonly string[]> = {
+	clojure: [
+		".clj",
+		".cljc",
+		".cljs",
+		".edn",
+	],
+	cmake: [
+		".cmake",
+	],
+	csharp: [
+		".cs",
+	],
+	css: [
+		".css",
+		".less",
+		".sass",
+		".scss",
+	],
+	// From llvm-project/clang/lib/Driver/Types.cpp clang::driver::types::lookupTypeForExtension:
 	cxx: [
+		// C
 		".c",
+		".h",
+		// C++
+		".c++",
 		".cc",
+		".cp",
 		".cpp",
 		".cxx",
-		".h",
 		".hh",
 		".hpp",
 		".hxx",
-		".ixx",
-		".ipp",
+		// C++ include files
 		".inl",
+		".ipp",
 		".tpp",
 		".txx",
+		// C++20 module interface files
+		".c++m",
+		".cppm",
+		".cxxm",
+		".ixx",
+		// CUDA
+		".cu",
+		// HIP
+		".hip",
+		// Objective-C
+		".m",
+		".mm",
+		// OpenCL
+		".cl",
+		".clcpp",
 	],
-	cmake: [".cmake"],
-	shell: [".sh", ".bash", ".zsh", ".fish"],
-	json: [".json", ".jsonc", ".json5"],
-	markdown: [".md", ".mdx"],
-	css: [".css", ".scss", ".sass", ".less"],
-	yaml: [".yaml", ".yml"],
-	sql: [".sql"],
-	ruby: [".rb", ".rake", ".gemspec", ".ru"],
-	html: [".html", ".htm"],
-	docker: [".dockerfile"],
-	php: [".php"],
-	powershell: [".ps1", ".psm1", ".psd1"],
-	prisma: [".prisma"],
-	csharp: [".cs"],
-	fsharp: [".fs", ".fsi", ".fsx"],
-	java: [".java"],
-	kotlin: [".kt", ".kts"],
-	swift: [".swift"],
-	dart: [".dart"],
-	lua: [".lua"],
-	zig: [".zig", ".zon"],
-	haskell: [".hs", ".lhs"],
-	elixir: [".ex", ".exs"],
-	gleam: [".gleam"],
-	ocaml: [".ml", ".mli"],
-	clojure: [".clj", ".cljs", ".cljc", ".edn"],
-	terraform: [".tf", ".tfvars"],
-	nix: [".nix"],
-	toml: [".toml"],
+	dart: [
+		".dart",
+	],
+	docker: [
+		".dockerfile",
+	],
+	elixir: [
+		".ex",
+		".exs",
+	],
+	fsharp: [
+		".fs",
+		".fsi",
+		".fsx",
+	],
+	gleam: [
+		".gleam",
+	],
+	go: [
+		".go",
+	],
+	haskell: [
+		".hs",
+		".lhs",
+	],
+	html: [
+		".htm",
+		".html",
+	],
+	java: [
+		".java",
+	],
+	json: [
+		".json",
+		".json5",
+		".jsonc",
+	],
+	jsts: [
+		".cjs",
+		".cts",
+		".js",
+		".jsx",
+		".mjs",
+		".mts",
+		".svelte",
+		".ts",
+		".tsx",
+		".vue",
+	],
+	kotlin: [
+		".kt",
+		".kts",
+	],
+	lua: [
+		".lua",
+	],
+	markdown: [
+		".md",
+		".mdx",
+	],
+	nix: [
+		".nix",
+	],
+	ocaml: [
+		".ml",
+		".mli",
+	],
+	php: [
+		".php",
+	],
+	powershell: [
+		".ps1",
+		".psm1",
+		".psd1",
+	],
+	prisma: [
+		".prisma",
+	],
+	python: [
+		".py",
+		".pyi",
+	],
+	ruby: [
+		".gemspec",
+		".rake",
+		".rb",
+		".ru",
+	],
+	rust: [
+		".rs",
+	],
+	shell: [
+		".bash",
+		".fish",
+		".sh",
+		".zsh",
+	],
+	sql: [
+		".sql",
+	],
+	swift: [
+		".swift",
+	],
+	terraform: [
+		".tf",
+		".tfvars",
+	],
+	toml: [
+		".toml",
+	],
+	yaml: [
+		".yaml",
+		".yml",
+	],
+	zig: [
+		".zig",
+		".zon",
+	],
 };
 
 // Reverse map: extension → file kind (for fast lookup)
