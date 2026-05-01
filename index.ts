@@ -2,6 +2,7 @@ import * as nodeFs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { initI18n, t } from "./i18n.js";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
 import { AstGrepClient } from "./clients/ast-grep-client.js";
@@ -264,6 +265,7 @@ function cleanStaleTsBuildInfo(cwd: string): string[] {
 // --- Extension ---
 
 export default function (pi: ExtensionAPI) {
+	initI18n(pi);
 	const astGrepClient = new AstGrepClient();
 	const cacheManager = new CacheManager();
 
@@ -426,15 +428,15 @@ export default function (pi: ExtensionAPI) {
 				: [];
 
 			const lines: string[] = [
-				"🩺 PI-LENS HEALTH",
+				t("lens.health.title", "🩺 PI-LENS HEALTH"),
 				"",
-				`Pipeline crashes (session): ${totalCrashes}`,
-				`Files affected: ${crashEntries.length}`,
+				t("lens.health.crashes", "Pipeline crashes (session): {count}", { count: totalCrashes }),
+				t("lens.health.files", "Files affected: {count}", { count: crashEntries.length }),
 			];
 			const slopScoreLine = getDispatchSlopScoreLine();
 
 			if (crashEntries.length > 0) {
-				lines.push("", "Top crash files:");
+				lines.push("", t("lens.health.topCrashFiles", "Top crash files:"));
 				for (const [file, count] of crashEntries.slice(0, 5)) {
 					lines.push(`  ${path.basename(file)}: ${count}`);
 				}
@@ -454,19 +456,19 @@ export default function (pi: ExtensionAPI) {
 					}
 				}
 			} else {
-				lines.push("", "No dispatch latency reports yet.");
+				lines.push("", t("lens.health.noLatency", "No dispatch latency reports yet."));
 			}
 
 			lines.push(
 				"",
-				`Diagnostics shown: ${diagStats.totalShown}`,
-				`Auto-fixed: ${diagStats.totalAutoFixed}`,
-				`Agent-fixed: ${diagStats.totalAgentFixed}`,
-				`Unresolved carryover: ${diagStats.totalUnresolved}`,
+				t("lens.health.diagnosticsShown", "Diagnostics shown: {count}", { count: diagStats.totalShown }),
+				t("lens.health.autoFixed", "Auto-fixed: {count}", { count: diagStats.totalAutoFixed }),
+				t("lens.health.agentFixed", "Agent-fixed: {count}", { count: diagStats.totalAgentFixed }),
+				t("lens.health.unresolved", "Unresolved carryover: {count}", { count: diagStats.totalUnresolved }),
 			);
 
 			if (diagStats.repeatOffenders.length > 0) {
-				lines.push("Repeat offenders:");
+				lines.push(t("lens.health.repeatOffenders", "Repeat offenders:"));
 				for (const offender of diagStats.repeatOffenders.slice(0, 5)) {
 					lines.push(
 						`  ${path.basename(offender.filePath)}:${offender.line} ${offender.ruleId} (${offender.count}x)`,
@@ -475,7 +477,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (diagStats.topViolations.length > 0) {
-				lines.push("Top noisy rules:");
+				lines.push(t("lens.health.topNoisyRules", "Top noisy rules:"));
 				for (const v of diagStats.topViolations.slice(0, 5)) {
 					const samplePath =
 						v.samplePaths.length > 0

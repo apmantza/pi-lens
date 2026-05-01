@@ -2,7 +2,7 @@
 	"name": "pi-lens",
 	"version": "3.8.33",
 	"type": "module",
-	"description": "Real-time code feedback for pi — LSP, linters, formatters, type-checking, structural analysis & booboo",
+	"description": "Real-time code feedback for pi \u2014 LSP, linters, formatters, type-checking, structural analysis & booboo",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/apmantza/pi-lens.git"
@@ -51,6 +51,7 @@
 	"license": "MIT",
 	"files": [
 		"index.ts",
+		"i18n.ts",
 		"config/",
 		"tools/",
 		"clients/**/*.ts",
