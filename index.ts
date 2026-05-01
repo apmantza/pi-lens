@@ -45,6 +45,7 @@ import { handleToolResult } from "./clients/runtime-tool-result.js";
 import { cancelLSPIdleReset, handleTurnEnd } from "./clients/runtime-turn.js";
 import { TreeSitterClient } from "./clients/tree-sitter-client.js";
 import { handleBooboo } from "./commands/booboo.js";
+import { initI18n, t } from "./i18n.js";
 import { createAstGrepReplaceTool } from "./tools/ast-grep-replace.js";
 import { createAstGrepSearchTool } from "./tools/ast-grep-search.js";
 import { createLspNavigationTool } from "./tools/lsp-navigation.js";
@@ -264,6 +265,7 @@ function cleanStaleTsBuildInfo(cwd: string): string[] {
 // --- Extension ---
 
 export default function (pi: ExtensionAPI) {
+	initI18n(pi);
 	const astGrepClient = new AstGrepClient();
 	const cacheManager = new CacheManager();
 
@@ -276,9 +278,9 @@ export default function (pi: ExtensionAPI) {
 		try {
 			const count = getLSPService().getAliveClientCount();
 			if (count > 0) {
-				setStatus("pi-lens-lsp", theme.fg("success", `LSP Active (${count})`));
+				setStatus("pi-lens-lsp", theme.fg("success", t("status.lspActive", "LSP Active ({count})", { count })));
 			} else {
-				setStatus("pi-lens-lsp", theme.fg("error", "LSP Inactive"));
+				setStatus("pi-lens-lsp", theme.fg("error", t("status.lspInactive", "LSP Inactive")));
 			}
 		} catch {
 			// Theme may not be fully initialized during early session startup.
@@ -337,7 +339,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerCommand("lens-booboo", {
 		description:
-			"Full codebase review: design smells, complexity, AI slop detection, TODOs, dead code, duplicates, type coverage. Results saved to .pi-lens/reviews/. Usage: /lens-booboo [path]",
+			t("cmd.booboo.description", "Full codebase review: design smells, complexity, AI slop detection, TODOs, dead code, duplicates, type coverage. Results saved to .pi-lens/reviews/. Usage: /lens-booboo [path]"),
 		handler: async (args, ctx) => {
 			const {
 				complexityClient,
@@ -368,7 +370,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerCommand("lens-tdi", {
 		description:
-			"Show Technical Debt Index (TDI) and project health trend. Usage: /lens-tdi",
+			t("cmd.tdi.description", "Show Technical Debt Index (TDI) and project health trend. Usage: /lens-tdi"),
 		handler: async (_args, ctx) => {
 			const { loadHistory, computeTDI } = await import(
 				"./clients/metrics-history.js"
@@ -376,26 +378,26 @@ export default function (pi: ExtensionAPI) {
 			const history = loadHistory();
 			const tdi = computeTDI(history);
 
-			let summary = "🔴 High debt - run /lens-booboo-refactor";
+			let summary = t("tdi.highDebt", "🔴 High debt - run /lens-booboo-refactor");
 			if (tdi.score <= 30) {
-				summary = "✅ Codebase is healthy!";
+				summary = t("tdi.healthy", "✅ Codebase is healthy!");
 			} else if (tdi.score <= 60) {
-				summary = "⚠️ Moderate debt - consider refactoring";
+				summary = t("tdi.moderateDebt", "⚠️ Moderate debt - consider refactoring");
 			}
 			const lines = [
-				`📊 TECHNICAL DEBT INDEX: ${tdi.score}/100 (${tdi.grade})`,
+				t("tdi.header", "📊 TECHNICAL DEBT INDEX: {score}/100 ({grade})", { score: tdi.score, grade: tdi.grade }),
 				``,
-				`Files analyzed: ${tdi.filesAnalyzed}`,
-				`Files with debt: ${tdi.filesWithDebt}`,
-				`Avg MI: ${tdi.avgMI}`,
-				`Total cognitive complexity: ${tdi.totalCognitive}`,
+				t("tdi.filesAnalyzed", "Files analyzed: {count}", { count: tdi.filesAnalyzed }),
+				t("tdi.filesWithDebt", "Files with debt: {count}", { count: tdi.filesWithDebt }),
+				t("tdi.avgMi", "Avg MI: {value}", { value: tdi.avgMI }),
+				t("tdi.totalCognitive", "Total cognitive complexity: {value}", { value: tdi.totalCognitive }),
 				``,
-				`Debt breakdown:`,
-				`  Maintainability: ${tdi.byCategory.maintainability}% (MI-based)`,
-				`  Cognitive: ${tdi.byCategory.cognitive}%`,
-				`  Nesting: ${tdi.byCategory.nesting}%`,
-				`  Max Cyclomatic: ${tdi.byCategory.maxCyclomatic}% (worst function)`,
-				`  Entropy: ${tdi.byCategory.entropy}% (code unpredictability)`,
+				t("tdi.breakdown", "Debt breakdown:"),
+				t("tdi.maintainability", "  Maintainability: {value}% (MI-based)", { value: tdi.byCategory.maintainability }),
+				t("tdi.cognitive", "  Cognitive: {value}%", { value: tdi.byCategory.cognitive }),
+				t("tdi.nesting", "  Nesting: {value}%", { value: tdi.byCategory.nesting }),
+				t("tdi.maxCyclomatic", "  Max Cyclomatic: {value}% (worst function)", { value: tdi.byCategory.maxCyclomatic }),
+				t("tdi.entropy", "  Entropy: {value}% (code unpredictability)", { value: tdi.byCategory.entropy }),
 				``,
 				summary,
 			];
@@ -406,7 +408,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerCommand("lens-health", {
 		description:
-			"Show pi-lens runtime health: pipeline crashes, slow runners, and last dispatch latency. Usage: /lens-health",
+			t("cmd.health.description", "Show pi-lens runtime health: pipeline crashes, slow runners, and last dispatch latency. Usage: /lens-health"),
 		handler: async (_args, ctx) => {
 			const crashEntries = runtime
 				.getCrashEntries()
@@ -426,15 +428,15 @@ export default function (pi: ExtensionAPI) {
 				: [];
 
 			const lines: string[] = [
-				"🩺 PI-LENS HEALTH",
+				t("health.header", "🩺 PI-LENS HEALTH"),
 				"",
-				`Pipeline crashes (session): ${totalCrashes}`,
-				`Files affected: ${crashEntries.length}`,
+				t("health.pipelineCrashes", "Pipeline crashes (session): {count}", { count: totalCrashes }),
+				t("health.filesAffected", "Files affected: {count}", { count: crashEntries.length }),
 			];
 			const slopScoreLine = getDispatchSlopScoreLine();
 
 			if (crashEntries.length > 0) {
-				lines.push("", "Top crash files:");
+				lines.push("", t("health.topCrashFiles", "Top crash files:"));
 				for (const [file, count] of crashEntries.slice(0, 5)) {
 					lines.push(`  ${path.basename(file)}: ${count}`);
 				}
@@ -443,10 +445,10 @@ export default function (pi: ExtensionAPI) {
 			if (last) {
 				lines.push(
 					"",
-					`Last dispatch: ${path.basename(last.filePath)} (${last.totalDurationMs}ms, ${last.totalDiagnostics} diagnostics)`,
+					t("health.lastDispatch", "Last dispatch: {file} ({duration}ms, {diagnostics} diagnostics)", { file: path.basename(last.filePath), duration: last.totalDurationMs, diagnostics: last.totalDiagnostics }),
 				);
 				if (slowRunners.length > 0) {
-					lines.push("Top runners (last dispatch):");
+					lines.push(t("health.topRunners", "Top runners (last dispatch):"));
 					for (const runner of slowRunners) {
 						lines.push(
 							`  ${runner.runnerId}: ${runner.durationMs}ms (${runner.status})`,
@@ -454,19 +456,19 @@ export default function (pi: ExtensionAPI) {
 					}
 				}
 			} else {
-				lines.push("", "No dispatch latency reports yet.");
+				lines.push("", t("health.noLatency", "No dispatch latency reports yet."));
 			}
 
 			lines.push(
 				"",
-				`Diagnostics shown: ${diagStats.totalShown}`,
-				`Auto-fixed: ${diagStats.totalAutoFixed}`,
-				`Agent-fixed: ${diagStats.totalAgentFixed}`,
-				`Unresolved carryover: ${diagStats.totalUnresolved}`,
+				t("health.diagnosticsShown", "Diagnostics shown: {count}", { count: diagStats.totalShown }),
+				t("health.autoFixed", "Auto-fixed: {count}", { count: diagStats.totalAutoFixed }),
+				t("health.agentFixed", "Agent-fixed: {count}", { count: diagStats.totalAgentFixed }),
+				t("health.unresolved", "Unresolved carryover: {count}", { count: diagStats.totalUnresolved }),
 			);
 
 			if (diagStats.repeatOffenders.length > 0) {
-				lines.push("Repeat offenders:");
+				lines.push(t("health.repeatOffenders", "Repeat offenders:"));
 				for (const offender of diagStats.repeatOffenders.slice(0, 5)) {
 					lines.push(
 						`  ${path.basename(offender.filePath)}:${offender.line} ${offender.ruleId} (${offender.count}x)`,
@@ -475,7 +477,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (diagStats.topViolations.length > 0) {
-				lines.push("Top noisy rules:");
+				lines.push(t("health.topNoisyRules", "Top noisy rules:"));
 				for (const v of diagStats.topViolations.slice(0, 5)) {
 					const samplePath =
 						v.samplePaths.length > 0
@@ -498,7 +500,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerCommand("lens-tools", {
 		description:
-			"Show pi-lens tool installation status: globally installed, auto-installed, or npx fallback. Usage: /lens-tools",
+			t("cmd.tools.description", "Show pi-lens tool installation status: globally installed, auto-installed, or npx fallback. Usage: /lens-tools"),
 		handler: async (_args, ctx) => {
 			const statuses = await getAllToolStatuses();
 
@@ -513,14 +515,14 @@ export default function (pi: ExtensionAPI) {
 			};
 
 			const lines: string[] = [
-				"🔧 PI-LENS TOOLS STATUS",
+				t("tools.header", "🔧 PI-LENS TOOLS STATUS"),
 				"",
-				`Installed: ${statuses.filter((s) => s.installed).length}/${statuses.length}`,
+				t("tools.installed", "Installed: {installed}/{total}", { installed: statuses.filter((s) => s.installed).length, total: statuses.length }),
 			];
 
 			// Global PATH tools
 			if (bySource["global-path"].length > 0) {
-				lines.push("", `📍 Global PATH (${bySource["global-path"].length}):`);
+				lines.push("", t("tools.globalPath", "📍 Global PATH ({count}):", { count: bySource["global-path"].length }));
 				for (const tool of bySource["global-path"]) {
 					const version = tool.version ? ` (${tool.version})` : "";
 					lines.push(`  ✓ ${tool.name}${version}`);
@@ -529,7 +531,7 @@ export default function (pi: ExtensionAPI) {
 
 			// npm global tools
 			if (bySource["npm-global"].length > 0) {
-				lines.push("", `📦 npm global (${bySource["npm-global"].length}):`);
+				lines.push("", t("tools.npmGlobal", "📦 npm global ({count}):", { count: bySource["npm-global"].length }));
 				for (const tool of bySource["npm-global"]) {
 					lines.push(`  ✓ ${tool.name}`);
 				}
@@ -537,7 +539,7 @@ export default function (pi: ExtensionAPI) {
 
 			// pip user tools
 			if (bySource["pip-user"].length > 0) {
-				lines.push("", `🐍 pip user (${bySource["pip-user"].length}):`);
+				lines.push("", t("tools.pipUser", "🐍 pip user ({count}):", { count: bySource["pip-user"].length }));
 				for (const tool of bySource["pip-user"]) {
 					lines.push(`  ✓ ${tool.name}`);
 				}
@@ -547,7 +549,7 @@ export default function (pi: ExtensionAPI) {
 			if (bySource["github-release"].length > 0) {
 				lines.push(
 					"",
-					`⬇️ GitHub releases (${bySource["github-release"].length}):`,
+					t("tools.githubReleases", "⬇️ GitHub releases ({count}):", { count: bySource["github-release"].length }),
 				);
 				for (const tool of bySource["github-release"]) {
 					lines.push(`  ✓ ${tool.name}`);
@@ -558,7 +560,7 @@ export default function (pi: ExtensionAPI) {
 			if (bySource["pi-lens-auto"].length > 0) {
 				lines.push(
 					"",
-					`🤖 Auto-installed (${bySource["pi-lens-auto"].length}):`,
+					t("tools.autoInstalled", "🤖 Auto-installed ({count}):", { count: bySource["pi-lens-auto"].length }),
 				);
 				for (const tool of bySource["pi-lens-auto"]) {
 					lines.push(`  ✓ ${tool.name}`);
@@ -569,7 +571,7 @@ export default function (pi: ExtensionAPI) {
 			if (bySource["npx-fallback"].length > 0) {
 				lines.push(
 					"",
-					`📦 npx fallback (${bySource["npx-fallback"].length} - on-demand install):`,
+					t("tools.npxFallback", "📦 npx fallback ({count} - on-demand install):", { count: bySource["npx-fallback"].length }),
 				);
 				for (const tool of bySource["npx-fallback"]) {
 					lines.push(`  ⬜ ${tool.name}`);
@@ -581,13 +583,13 @@ export default function (pi: ExtensionAPI) {
 				(s) => s.strategy !== "npm",
 			);
 			if (trulyMissing.length > 0) {
-				lines.push("", `❌ Missing (${trulyMissing.length}):`);
+				lines.push("", t("tools.missing", "❌ Missing ({count}):", { count: trulyMissing.length }));
 				for (const tool of trulyMissing) {
 					lines.push(`  ✗ ${tool.name} (${tool.strategy})`);
 				}
 				lines.push(
 					"",
-					"Note: GitHub-release tools auto-install when you open files of those languages",
+					t("tools.githubAutoInstallNote", "Note: GitHub-release tools auto-install when you open files of those languages"),
 				);
 			}
 
@@ -597,11 +599,11 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerCommand("lens-allow-edit", {
 		description:
-			"Allow one edit to a file without a prior read. Usage: /lens-allow-edit <path>",
+			t("cmd.allowEdit.description", "Allow one edit to a file without a prior read. Usage: /lens-allow-edit <path>"),
 		handler: async (args, ctx) => {
 			const [rawTarget] = normalizeCommandArgs(args);
 			if (!rawTarget) {
-				ctx.ui.notify("Usage: /lens-allow-edit <path>", "warning");
+				ctx.ui.notify(t("allowEdit.usage", "Usage: /lens-allow-edit <path>"), "warning");
 				return;
 			}
 
@@ -610,7 +612,7 @@ export default function (pi: ExtensionAPI) {
 				: path.resolve(ctx.cwd ?? runtime.projectRoot, rawTarget);
 			runtime.readGuard.addExemption(targetPath);
 			ctx.ui.notify(
-				`Read guard override armed for next edit: ${targetPath}`,
+				t("allowEdit.armed", "Read guard override armed for next edit: {path}", { path: targetPath }),
 				"info",
 			);
 		},
