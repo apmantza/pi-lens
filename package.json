@@ -1,6 +1,6 @@
 {
 	"name": "pi-lens",
-	"version": "3.8.33",
+	"version": "3.8.34",
 	"type": "module",
 	"description": "Real-time code feedback for pi \u2014 LSP, linters, formatters, type-checking, structural analysis & booboo",
 	"repository": {
