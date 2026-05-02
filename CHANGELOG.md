@@ -8,6 +8,13 @@ All notable changes to pi-lens will be documented in this file.
 
 - **Cascade diagnostics now surface for TypeScript neighbors on cold sessions** — previously cascade silently returned zero diagnostics for TypeScript/Deno neighbors when no passive snapshot existed (i.e. the agent had not yet opened the file). Cold-snapshot neighbors now fall through into the parallel `touchFile` pool with a 1000ms budget (tighter than the 2000ms used for non-jsts neighbors, since the TypeScript server is expected to be warm). Valid snapshots still use the fast read path with no touch. New `coldSnapshot: true` field on `neighbor_touch` log entries tracks these in `cascade.log`.
 
+### Added
+
+- **`/lens-health` session timestamp** — output now opens with `Session started: HH:MM (Xh Ym ago)` so all session-scoped counters have clear time context.
+- **`/lens-health` LSP status section** — shows each currently running language server with a `✓`/`✗` connected indicator and workspace root. Makes dead servers immediately visible to the agent without needing to check logs. Also fixes `LSPService.getStatus()` which previously hardcoded `connected: true` instead of calling `isAlive()`.
+- **`/lens-health` cascade summary** — shows session-total cascade runs, diagnostics surfaced, and cold-snapshot touches (the new active-touch fallback for TypeScript neighbors with no snapshot).
+- **`/lens-health` i18n** — localizes status labels with English fallback; es, fr, and pt-BR strings included (PR #45 by @jerryfan).
+
 ### Improved
 
 - **`ast-grep` skill clarifies string literal behaviour** — exact string literals in patterns (e.g. `from "./utils"`) work correctly; only metavariables inside string literals (e.g. `from "$PATH"`) are not supported and should use grep instead. Previously the skill incorrectly implied import path matching was unsupported entirely, causing unnecessary grep fallbacks.
