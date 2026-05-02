@@ -4,6 +4,17 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+## [3.8.38] - 2026-05-02
+
+### Added
+
+- **`RuleCache` respects `PILENS_DATA_DIR`** — tree-sitter rule cache files are now stored under `getProjectDataDir(rootDir)` instead of `<cwd>/.pi-lens/cache`, consistent with all other pi-lens data files. Projects using `PILENS_DATA_DIR` no longer get a stray `.pi-lens` directory created in the project root. (PR #47 by @tifandotme)
+
+### Fixed
+
+- **ReDoS: `gleamRe` and `zigRe` compiler parsers** — residual `\s*` quantifiers (which match `\n` in JS) replaced with `[ \t]*` to eliminate cross-line backtracking. Completes the SonarCloud S5852 remediation started in 3.8.37.
+- **Test env leak in `file-utils.test.ts`** — `PILENS_DATA_DIR` is now saved and restored in a `finally` block so it doesn't bleed into subsequent tests in the suite.
+
 ## [3.8.37] - 2026-05-02
 
 ### Fixed

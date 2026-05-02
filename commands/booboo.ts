@@ -1395,7 +1395,7 @@ export async function handleBooboo(
 				});
 				const output = (result.stdout || "") + (result.stderr || "");
 				const gleamRe =
-					/^([^:\n]+):(\d+):(\d+)\s*(?:error|warning)[^\n]*\n([^\n]+)/gm;
+					/^([^:\n]+):(\d+):(\d+)[ \t]*(?:error|warning)[^\n]*\n([^\n]+)/gm;
 				for (const m of output.matchAll(gleamRe)) {
 					const [, file, line, col, msg] = m;
 					const absFile = path.isAbsolute(file)
@@ -1426,7 +1426,7 @@ export async function handleBooboo(
 					timeout: 120_000,
 				});
 				const output = (result.stdout || "") + (result.stderr || "");
-				const zigRe = /^([^:\n]+):(\d+):(\d+):\s*(error|warning|note):\s*([^\n]+)/gm;
+				const zigRe = /^([^:\n]+):(\d+):(\d+):[ \t]*(error|warning|note):[ \t]*([^\n]+)/gm;
 				for (const m of output.matchAll(zigRe)) {
 					const [, file, line, col, sev, msg] = m;
 					const absFile = path.isAbsolute(file)
