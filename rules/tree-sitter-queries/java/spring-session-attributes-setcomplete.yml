@@ -33,8 +33,7 @@ query: |
   (class_declaration
     (modifiers
       (annotation
-        name: (identifier) @ANNOT1 (#eq? @ANNOT1 "Controller")))
-    (modifiers
+        name: (identifier) @ANNOT1 (#eq? @ANNOT1 "Controller"))
       (annotation
         name: (identifier) @ANNOT2 (#eq? @ANNOT2 "SessionAttributes"))))
 

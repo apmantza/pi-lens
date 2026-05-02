@@ -27,16 +27,14 @@ description: |
 query: |
   (function_definition
     body: (block
-      (yield) @YIELD
       (return_statement
         (_) @RETURN_VAL) @RETURN))
 
 metavars:
-  - YIELD
   - RETURN
   - RETURN_VAL
 
-post_filter: return_has_value
+post_filter: is_generator_with_valued_return
 
 tags:
   - reliability

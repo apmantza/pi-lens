@@ -36,8 +36,8 @@ query: |
     (modifiers
       "static")
     body: (compound_statement
-      (variable_name
-        (name) @THIS (#eq? @THIS "$this")) @VAR))
+      ((variable_name) @THIS
+        (#eq? @THIS "$this"))))
 
 metavars:
   - THIS

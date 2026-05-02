@@ -27,8 +27,11 @@ description: |
 query: |
   (call_expression
     function: (qualified_identifier
-      (identifier) @FUNC (#match? @FUNC "^(move|forward)$"))
+      name: (identifier) @FUNC
+      (#match? @FUNC "^(move|forward)$"))
     arguments: (argument_list) @ARGS)
+
+post_filter: confused_move_forward
 
 metavars:
   - FUNC

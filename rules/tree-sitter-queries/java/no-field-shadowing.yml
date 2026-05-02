@@ -27,9 +27,8 @@ description: |
 
 query: |
   (class_declaration
-    (class_hereditary
-      (extends_clause
-        (type_identifier) @PARENT))
+    (extends_clause
+      (type_identifier) @PARENT)
     body: (class_body
       (field_declaration
         (variable_declarator

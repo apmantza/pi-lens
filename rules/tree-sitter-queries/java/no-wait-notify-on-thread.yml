@@ -27,8 +27,9 @@ description: |
 
 query: |
   (method_invocation
-    name: (identifier) @METHOD (#match? @METHOD "^(wait|notify|notifyAll)$")
-    object: (identifier) @OBJ)
+    object: (identifier) @OBJ
+    name: (identifier) @METHOD
+    (#match? @METHOD "^(wait|notify|notifyAll)$"))
 
 metavars:
   - METHOD

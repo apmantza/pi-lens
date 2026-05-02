@@ -24,7 +24,8 @@ query: |
   (template_type
     name: (type_identifier) @NAME (#eq? @NAME "auto_ptr")
     arguments: (template_argument_list) @ARGS)
-  (type_identifier) @NAME (#eq? @NAME "auto_ptr")
+  ((type_identifier) @NAME
+    (#eq? @NAME "auto_ptr"))
 
 metavars:
   - NAME

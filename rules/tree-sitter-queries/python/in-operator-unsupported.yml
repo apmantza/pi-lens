@@ -24,7 +24,12 @@ description: |
 query: |
   (comparison_operator
     (identifier) @OBJ
-    ("in" | "not in")
+    "in"
+    (identifier) @TARGET)
+  (comparison_operator
+    (identifier) @OBJ
+    "not"
+    "in"
     (identifier) @TARGET)
 
 metavars:
