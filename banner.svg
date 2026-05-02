@@ -67,7 +67,7 @@
     <rect x="505" y="196" width="152" height="24" rx="12" fill="#2f81f715" stroke="#2f81f740" stroke-width="1"/>
     <text x="581" y="213" fill="#58a6ff" text-anchor="middle">Structural Analysis</text>
 
-    <rect x="667" y="196" width="84"  height="24" rx="12" fill="#2f81f715" stroke="#2f81f740" stroke-width="1"/>
-    <text x="709" y="213" fill="#58a6ff" text-anchor="middle">Cascade</text>
+    <rect x="667" y="196" width="96"  height="24" rx="12" fill="#2f81f715" stroke="#2f81f740" stroke-width="1"/>
+    <text x="715" y="213" fill="#58a6ff" text-anchor="middle">Read-Guard</text>
   </g>
 </svg>
