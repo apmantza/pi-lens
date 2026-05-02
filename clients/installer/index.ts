@@ -1852,42 +1852,44 @@ export async function installTool(toolId: string): Promise<boolean> {
  * Ensure a tool is installed (check first, install if missing)
  */
 export async function ensureTool(toolId: string): Promise<string | undefined> {
-	// Fast path: return cached path without spawning a process
+	// Fast path: return cached path without spawning a process.
 	const cached = resolvedPathCache.get(toolId);
 	if (cached) return cached;
 
-	const ensureStartMs = Date.now();
-	logSessionStart(`auto-install ensure ${toolId}: start`);
-	// Check if already installed
-	const existingPath = await getToolPath(toolId);
-	if (existingPath) {
-		resolvedPathCache.set(toolId, existingPath);
-		logSessionStart(
-			`auto-install ensure ${toolId}: already available at ${existingPath} (${Date.now() - ensureStartMs}ms)`,
-		);
-		return existingPath;
-	}
-
+	// Coalesce the whole ensure operation, not just installation. Most startup
+	// duplicates race while checking already-installed tools, before installTool()
+	// would ever run.
 	const inFlight = ensureInFlight.get(toolId);
 	if (inFlight) {
 		logSessionStart(
-			`auto-install ensure ${toolId}: waiting for in-flight install`,
+			`auto-install ensure ${toolId}: waiting for in-flight ensure`,
 		);
 		return inFlight;
 	}
 
-	const installPromise = (async () => {
+	const ensureStartMs = Date.now();
+	const ensurePromise = (async () => {
+		logSessionStart(`auto-install ensure ${toolId}: start`);
+
+		// Check if already installed.
+		const existingPath = await getToolPath(toolId);
+		if (existingPath) {
+			resolvedPathCache.set(toolId, existingPath);
+			logSessionStart(
+				`auto-install ensure ${toolId}: already available at ${existingPath} (${Date.now() - ensureStartMs}ms)`,
+			);
+			return existingPath;
+		}
+
 		const installed = await installTool(toolId);
 		if (!installed) {
+			logSessionStart(
+				`auto-install ensure ${toolId}: unavailable (${Date.now() - ensureStartMs}ms)`,
+			);
 			return undefined;
 		}
 
-		return getToolPath(toolId);
-	})();
-
-	ensureInFlight.set(toolId, installPromise);
-	try {
-		const result = await installPromise;
+		const result = await getToolPath(toolId);
 		if (result) {
 			resolvedPathCache.set(toolId, result);
 			logSessionStart(
@@ -1899,6 +1901,11 @@ export async function ensureTool(toolId: string): Promise<string | undefined> {
 			);
 		}
 		return result;
+	})();
+
+	ensureInFlight.set(toolId, ensurePromise);
+	try {
+		return await ensurePromise;
 	} finally {
 		ensureInFlight.delete(toolId);
 	}

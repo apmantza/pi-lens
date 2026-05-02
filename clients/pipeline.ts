@@ -648,7 +648,7 @@ async function runAutofix(
 	};
 }
 
-async function resyncLspFile(
+export async function resyncLspFile(
 	filePath: string,
 	fileContent: string,
 	needsContentRefresh: boolean,
@@ -698,6 +698,58 @@ function buildAllClearOutput(
 
 	parts.push(`${elapsed}ms`);
 	return `checkmark ${parts.join(" · ")}`.replace("checkmark", "\u2713");
+}
+
+export interface FormatPhaseResult {
+	formatChanged: boolean;
+	formattersUsed: string[];
+	formatFailures: string[];
+	fileContent: string | undefined;
+}
+
+export async function runFormatPhase(
+	filePath: string,
+	getFormatService: () => FormatService,
+	dbg: PipelineContext["dbg"],
+): Promise<FormatPhaseResult> {
+	let formatChanged = false;
+	let formattersUsed: string[] = [];
+	const formatFailures: string[] = [];
+	let fileContent: string | undefined;
+
+	const formatService = getFormatService();
+	try {
+		formatService.recordRead(filePath);
+		const result = await formatService.formatFile(filePath);
+		formattersUsed = result.formatters.map((f) => f.name);
+		if (result.anyChanged) {
+			formatChanged = true;
+			dbg(
+				`autoformat: ${result.formatters.map((f) => `${f.name}(${f.changed ? "changed" : "unchanged"})`).join(", ")}`,
+			);
+		}
+		if (!result.allSucceeded) {
+			const failures = result.formatters.filter((f) => !f.success);
+			formatFailures.push(
+				...failures.map((f) => `${f.name}: ${f.error ?? "unknown error"}`),
+			);
+			dbg(
+				`autoformat: ${failures.map((f) => `${f.name} failed: ${f.error ?? "unknown error"}`).join("; ")}`,
+			);
+		}
+	} catch (err) {
+		const message = err instanceof Error ? err.message : String(err);
+		formatFailures.push(message);
+		dbg(`autoformat error: ${err}`);
+	}
+
+	try {
+		fileContent = nodeFs.readFileSync(filePath, "utf-8");
+	} catch {
+		fileContent = undefined;
+	}
+
+	return { formatChanged, formattersUsed, formatFailures, fileContent };
 }
 
 // --- Main Pipeline ---
@@ -750,42 +802,27 @@ export async function runPipeline(
 	phase.start("format");
 	let formatChanged = false;
 	let formattersUsed: string[] = [];
-	const formatFailures: string[] = [];
+	let formatFailures: string[] = [];
 	const piChangedFiles = new Set<string>();
-	if (!getFlag("no-autoformat") && fileContent) {
-		const formatService = getFormatService();
-		try {
-			formatService.recordRead(filePath);
-			const result = await formatService.formatFile(filePath);
-			formattersUsed = result.formatters.map((f) => f.name);
-			if (result.anyChanged) {
-				formatChanged = true;
-				dbg(
-					`autoformat: ${result.formatters.map((f) => `${f.name}(${f.changed ? "changed" : "unchanged"})`).join(", ")}`,
-				);
-				piChangedFiles.add(path.resolve(filePath));
-				try {
-					fileContent = nodeFs.readFileSync(filePath, "utf-8");
-				} catch {
-					fileContent = undefined;
-				}
-			}
-			if (!result.allSucceeded) {
-				const failures = result.formatters.filter((f) => !f.success);
-				formatFailures.push(
-					...failures.map((f) => `${f.name}: ${f.error ?? "unknown error"}`),
-				);
-				dbg(
-					`autoformat: ${failures.map((f) => `${f.name} failed: ${f.error ?? "unknown error"}`).join("; ")}`,
-				);
-			}
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			formatFailures.push(message);
-			dbg(`autoformat error: ${err}`);
-		}
+	const autoformatDisabled = !!getFlag("no-autoformat");
+	const immediateFormat = !!getFlag("immediate-format");
+	const formatDeferred =
+		!autoformatDisabled && !immediateFormat && !!fileContent;
+	if (!autoformatDisabled && immediateFormat && fileContent) {
+		const formatResult = await runFormatPhase(filePath, getFormatService, dbg);
+		formatChanged = formatResult.formatChanged;
+		formattersUsed = formatResult.formattersUsed;
+		formatFailures = formatResult.formatFailures;
+		fileContent = formatResult.fileContent;
+		if (formatChanged) piChangedFiles.add(path.resolve(filePath));
+	} else if (formatDeferred) {
+		dbg(`autoformat: deferred until agent_end for ${filePath}`);
 	}
-	phase.end("format", { formattersUsed, formatChanged });
+	phase.end("format", {
+		formattersUsed,
+		formatChanged,
+		deferred: formatDeferred,
+	});
 
 	// --- 4. Auto-fix ---
 	phase.start("autofix");

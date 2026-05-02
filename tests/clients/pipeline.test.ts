@@ -192,7 +192,34 @@ describe("Pipeline", () => {
 	});
 
 	describe("Format phase", () => {
-		it("marks file as modified when format changes content", async () => {
+		it("defers format by default", async () => {
+			const filePath = createTempFile(tmpDir, "unformatted.ts", "const x=1");
+			vi.mocked(scanForSecrets).mockReturnValue([]);
+			vi.mocked(dispatchLintWithResult).mockResolvedValue({
+				diagnostics: [],
+				blockers: [],
+				warnings: [],
+				baselineWarningCount: 0,
+				fixed: [],
+				resolvedCount: 0,
+				output: "",
+				hasBlockers: false,
+			});
+
+			const formatService = getFormatService("test", true);
+			const formatFile = vi.fn(formatService.formatFile.bind(formatService));
+			formatService.formatFile = formatFile;
+
+			const result = await runPipeline(
+				createMockContext(filePath),
+				createMockDeps({ getFormatService: () => formatService }),
+			);
+
+			expect(formatFile).not.toHaveBeenCalled();
+			expect(result.fileModified).toBe(false);
+		});
+
+		it("marks file as modified when immediate format changes content", async () => {
 			const filePath = createTempFile(tmpDir, "unformatted.ts", "const x=1");
 			vi.mocked(scanForSecrets).mockReturnValue([]);
 			vi.mocked(dispatchLintWithResult).mockResolvedValue({
@@ -228,7 +255,12 @@ describe("Pipeline", () => {
 				return result;
 			};
 
-			const result = await runPipeline(createMockContext(filePath), deps);
+			const result = await runPipeline(
+				createMockContext(filePath, {
+					getFlag: (name) => name === "immediate-format",
+				}),
+				deps,
+			);
 
 			expect(result.fileModified).toBe(true);
 			expect(result.output).toContain("File was modified by auto-format/fix");
@@ -268,7 +300,9 @@ describe("Pipeline", () => {
 			});
 
 			const result = await runPipeline(
-				createMockContext(filePath),
+				createMockContext(filePath, {
+					getFlag: (name) => name === "immediate-format",
+				}),
 				createMockDeps({ getFormatService: () => formatService }),
 			);
 

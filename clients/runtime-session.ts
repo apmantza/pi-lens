@@ -362,6 +362,56 @@ function scheduleStartupScans(
 	});
 }
 
+function scheduleDeferredToolProbes(
+	deps: SessionStartDeps,
+	languageProfile: ReturnType<typeof detectProjectLanguageProfile>,
+	startupDefaults: string[],
+	startupScansWillRun: boolean,
+	dbg: SessionStartDeps["dbg"],
+): void {
+	const { biomeClient, ruffClient, depChecker } = deps;
+	const defaultTools = new Set(startupDefaults);
+	const probes: Array<[name: string, run: () => Promise<boolean>]> = [];
+
+	// Do not probe tools already covered by startup preinstall or startup scans.
+	// This keeps session_start logs from showing duplicate "ensure X: start" lines
+	// while preserving lazy checks for tools that are actually relevant.
+	if (languageProfile.present.jsts && !defaultTools.has("biome")) {
+		probes.push(["biome", () => biomeClient.ensureAvailable()]);
+	}
+	if (languageProfile.present.python && !defaultTools.has("ruff")) {
+		probes.push(["ruff", () => ruffClient.ensureAvailable()]);
+	}
+	if (startupScansWillRun) {
+		probes.push(["madge", () => depChecker.ensureAvailable()]);
+	}
+
+	if (probes.length === 0) {
+		dbg("session_start tools: no deferred availability probes needed");
+		return;
+	}
+
+	void (async () => {
+		const warmStart = Date.now();
+		const results = await Promise.all(
+			probes.map(async ([name, run]) => {
+				try {
+					return [name, await run()] as const;
+				} catch (err) {
+					dbg(`session_start: ${name} availability check failed: ${err}`);
+					return [name, false] as const;
+				}
+			}),
+		);
+		const summary = results
+			.map(([name, ready]) => `${name}=${ready}`)
+			.join(" ");
+		dbg(
+			`session_start tools (deferred probes complete, ${Date.now() - warmStart}ms): ${summary}`,
+		);
+	})();
+}
+
 export async function handleSessionStart(
 	deps: SessionStartDeps,
 ): Promise<void> {
@@ -378,16 +428,10 @@ export async function handleSessionStart(
 		runtime,
 		metricsClient,
 		cacheManager,
-		biomeClient,
-		ruffClient,
-		knipClient,
-		jscpdClient,
 		typeCoverageClient: _typeCoverageClient,
-		depChecker,
 		testRunnerClient,
 		goClient,
 		rustClient,
-		astGrepClient,
 		ensureTool,
 		cleanStaleTsBuildInfo,
 		resetDispatchBaselines,
@@ -430,63 +474,14 @@ export async function handleSessionStart(
 		dbg(
 			"session_start: quick mode active - skipping slow tool probes, language profiling, preinstall, scans, and error debt baseline",
 		);
-		dbg(`session_start total: ${Date.now() - sessionStartMs}ms`);
+		dbg(
+			`session_start total: ${Date.now() - sessionStartMs}ms (interactive path)`,
+		);
 		return;
 	}
 
 	const tools: string[] = [];
 	if (!getFlag("no-lsp")) tools.push("LSP Service");
-
-	// Warm tool availability caches off the critical startup path. The previous
-	// version used `setImmediate` + sync `isAvailable()`, which still blocked
-	// the Node event loop (each `isAvailable()` runs `spawnSync` — and six of
-	// the seven probes fall back to `npx <tool> --version` at ~1.5-2s each,
-	// summing to ~8-10s of main-thread freeze during session_start).
-	//
-	// We now run each probe through the client's async `ensureAvailable()`
-	// (which uses a fast bare-name PATH probe, falling back to `ensureTool`
-	// async install) inside a fire-and-forget IIFE. No main-thread blocking.
-	//
-	// Notes:
-	// - `typeCoverageClient` has no async probe and is only used by
-	//   `/lens-booboo`, so we let it probe lazily when first needed.
-	// - `ensureAvailable()` can auto-install missing tools into `~/.pi-lens/tools`.
-	//   This matches `firePreinstallDefaults`' existing behaviour for biome /
-	//   typescript-language-server.
-	void (async () => {
-		const warmStart = Date.now();
-		const [biomeReady, sgReady, ruffReady] = await Promise.all([
-			biomeClient.ensureAvailable().catch((err) => {
-				dbg(`session_start: biome availability check failed: ${err}`);
-				return false;
-			}),
-			astGrepClient.ensureAvailable().catch((err) => {
-				dbg(`session_start: ast-grep availability check failed: ${err}`);
-				return false;
-			}),
-			ruffClient.ensureAvailable().catch((err) => {
-				dbg(`session_start: ruff availability check failed: ${err}`);
-				return false;
-			}),
-		]);
-		await Promise.allSettled([
-			knipClient.ensureAvailable().catch((err) => {
-				dbg(`session_start: knip availability check failed: ${err}`);
-				return false;
-			}),
-			depChecker.ensureAvailable().catch((err) => {
-				dbg(`session_start: dep-checker availability check failed: ${err}`);
-				return false;
-			}),
-			jscpdClient.ensureAvailable().catch((err) => {
-				dbg(`session_start: jscpd availability check failed: ${err}`);
-				return false;
-			}),
-		]);
-		dbg(
-			`session_start tools (deferred probes complete, ${Date.now() - warmStart}ms): biome=${biomeReady} ast-grep=${sgReady} ruff=${ruffReady}`,
-		);
-	})();
 
 	if (allowBootstrapTasks && !getFlag("no-lsp")) {
 		const cleaned = cleanStaleTsBuildInfo(ctxCwd ?? process.cwd());
@@ -543,6 +538,19 @@ export async function handleSessionStart(
 		firePreinstallDefaults(ensureTool, dbg, startupDefaults);
 	} else {
 		dbg("session_start: no language defaults selected for pre-install");
+	}
+
+	const startupScansWillRun = allowBootstrapTasks && startupScan.canWarmCaches;
+	const jstsHeavyScansWillRun =
+		startupScansWillRun && canRunStartupHeavyScans(languageProfile, "jsts");
+	if (allowBootstrapTasks) {
+		scheduleDeferredToolProbes(
+			deps,
+			languageProfile,
+			startupDefaults,
+			jstsHeavyScansWillRun,
+			dbg,
+		);
 	}
 
 	if (allowBootstrapTasks) {
@@ -603,8 +611,6 @@ export async function handleSessionStart(
 		);
 	}
 
-	dbg("session_start: background scans launched");
-
 	// LSP warm files — read config synchronously on the startup path (cheap file
 	// walk), then fire-and-forget the LSP touchFile loop so session start is not
 	// blocked by per-file LSP waits.
@@ -612,11 +618,13 @@ export async function handleSessionStart(
 		const lspConfig = await loadLSPConfig(cwd);
 		const warmFiles = lspConfig.warmFiles ?? [];
 		if (warmFiles.length > 0) {
-			igniteWarmFiles(cwd, warmFiles, runtime, sessionGeneration, dbg).catch((err) =>
-				dbg(`session_start lsp-warm: unhandled error: ${err}`),
+			igniteWarmFiles(cwd, warmFiles, runtime, sessionGeneration, dbg).catch(
+				(err) => dbg(`session_start lsp-warm: unhandled error: ${err}`),
 			);
 		}
 	}
 
-	dbg(`session_start total: ${Date.now() - sessionStartMs}ms`);
+	dbg(
+		`session_start total: ${Date.now() - sessionStartMs}ms (interactive path; background tasks may continue)`,
+	);
 }

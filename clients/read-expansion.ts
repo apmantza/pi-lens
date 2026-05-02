@@ -191,14 +191,18 @@ export async function tryExpandRead(
 		// biome-ignore lint/suspicious/noExplicitAny: endPosition not in local interface
 		const symbolEnd: number =
 			((enclosing as any).endPosition?.row ?? enclosing.startPosition.row) + 1;
-		const symbolSize = symbolEnd - symbolStart + 1;
+		const requestedStartLine = requestedOffset;
+		const requestedEndLine = requestedEndRow + 1;
+		const expandedStart = Math.min(requestedStartLine, symbolStart);
+		const expandedEnd = Math.max(requestedEndLine, symbolEnd);
+		const expandedSize = expandedEnd - expandedStart + 1;
 
-		if (symbolSize > EXPANDED_SIZE_CAP_LINES) return undefined;
-		if (symbolSize <= requestedLimit) return undefined;
+		if (expandedSize > EXPANDED_SIZE_CAP_LINES) return undefined;
+		if (expandedSize <= requestedLimit) return undefined;
 
 		return {
-			newOffset: symbolStart,
-			newLimit: symbolSize,
+			newOffset: expandedStart,
+			newLimit: expandedSize,
 			enclosingSymbol: {
 				name: getSymbolName(enclosing),
 				kind: enclosing.type as string,

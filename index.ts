@@ -2,7 +2,6 @@ import * as nodeFs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { initI18n, t } from "./i18n.js";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
 import { AstGrepClient } from "./clients/ast-grep-client.js";
@@ -16,7 +15,10 @@ import {
 	resetDispatchBaselines,
 } from "./clients/dispatch/integration.js";
 import { detectFileKind } from "./clients/file-kinds.js";
-import { resetFormatService } from "./clients/format-service.js";
+import {
+	getFormatService,
+	resetFormatService,
+} from "./clients/format-service.js";
 import {
 	evaluateGitGuard,
 	isGitCommitOrPushAttempt,
@@ -36,6 +38,7 @@ import {
 	getTouchedLinesForGuard,
 	tryCorrectIndentationMismatch,
 } from "./clients/read-guard-tool-lines.js";
+import { handleAgentEnd } from "./clients/runtime-agent-end.js";
 import {
 	consumeSessionStartGuidance,
 	consumeTestFindings,
@@ -47,6 +50,7 @@ import { handleToolResult } from "./clients/runtime-tool-result.js";
 import { cancelLSPIdleReset, handleTurnEnd } from "./clients/runtime-turn.js";
 import { TreeSitterClient } from "./clients/tree-sitter-client.js";
 import { handleBooboo } from "./commands/booboo.js";
+import { initI18n, t } from "./i18n.js";
 import { createAstGrepReplaceTool } from "./tools/ast-grep-replace.js";
 import { createAstGrepSearchTool } from "./tools/ast-grep-search.js";
 import { createLspNavigationTool } from "./tools/lsp-navigation.js";
@@ -300,7 +304,14 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerFlag("no-autoformat", {
 		description:
-			"Disable automatic formatting on file write (formatters run by default)",
+			"Disable automatic formatting entirely (deferred format runs at agent_end by default)",
+		type: "boolean",
+		default: false,
+	});
+
+	pi.registerFlag("immediate-format", {
+		description:
+			"Run automatic formatting immediately after each write/edit instead of deferring to agent_end",
 		type: "boolean",
 		default: false,
 	});
@@ -432,18 +443,25 @@ export default function (pi: ExtensionAPI) {
 			const sessionAge = Date.now() - runtime.sessionStartedAt;
 			const sessionMins = Math.floor(sessionAge / 60_000);
 			const sessionHrs = Math.floor(sessionMins / 60);
-			const sessionAgeStr = sessionHrs > 0
-				? `${sessionHrs}h ${sessionMins % 60}m`
-				: `${sessionMins}m`;
-			const startedAt = new Date(runtime.sessionStartedAt)
-				.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+			const sessionAgeStr =
+				sessionHrs > 0
+					? `${sessionHrs}h ${sessionMins % 60}m`
+					: `${sessionMins}m`;
+			const startedAt = new Date(runtime.sessionStartedAt).toLocaleTimeString(
+				[],
+				{ hour: "2-digit", minute: "2-digit" },
+			);
 
 			const lines: string[] = [
 				t("lens.health.title", "🩺 PI-LENS HEALTH"),
 				`Session started: ${startedAt} (${sessionAgeStr} ago)`,
 				"",
-				t("lens.health.crashes", "Pipeline crashes (session): {count}", { count: totalCrashes }),
-				t("lens.health.files", "Files affected: {count}", { count: crashEntries.length }),
+				t("lens.health.crashes", "Pipeline crashes (session): {count}", {
+					count: totalCrashes,
+				}),
+				t("lens.health.files", "Files affected: {count}", {
+					count: crashEntries.length,
+				}),
 			];
 			const slopScoreLine = getDispatchSlopScoreLine();
 
@@ -468,15 +486,26 @@ export default function (pi: ExtensionAPI) {
 					}
 				}
 			} else {
-				lines.push("", t("lens.health.noLatency", "No dispatch latency reports yet."));
+				lines.push(
+					"",
+					t("lens.health.noLatency", "No dispatch latency reports yet."),
+				);
 			}
 
 			lines.push(
 				"",
-				t("lens.health.diagnosticsShown", "Diagnostics shown: {count}", { count: diagStats.totalShown }),
-				t("lens.health.autoFixed", "Auto-fixed: {count}", { count: diagStats.totalAutoFixed }),
-				t("lens.health.agentFixed", "Agent-fixed: {count}", { count: diagStats.totalAgentFixed }),
-				t("lens.health.unresolved", "Unresolved carryover: {count}", { count: diagStats.totalUnresolved }),
+				t("lens.health.diagnosticsShown", "Diagnostics shown: {count}", {
+					count: diagStats.totalShown,
+				}),
+				t("lens.health.autoFixed", "Auto-fixed: {count}", {
+					count: diagStats.totalAutoFixed,
+				}),
+				t("lens.health.agentFixed", "Agent-fixed: {count}", {
+					count: diagStats.totalAgentFixed,
+				}),
+				t("lens.health.unresolved", "Unresolved carryover: {count}", {
+					count: diagStats.totalUnresolved,
+				}),
 			);
 
 			if (diagStats.repeatOffenders.length > 0) {
@@ -524,7 +553,9 @@ export default function (pi: ExtensionAPI) {
 					`Cascade diagnostics surfaced: ${cascadeStats.diagnosticsSurfaced}`,
 				);
 				if (cascadeStats.coldSnapshotTouches > 0) {
-					lines.push(`Cold-snapshot touches: ${cascadeStats.coldSnapshotTouches}`);
+					lines.push(
+						`Cold-snapshot touches: ${cascadeStats.coldSnapshotTouches}`,
+					);
 				}
 			}
 
@@ -1234,6 +1265,25 @@ export default function (pi: ExtensionAPI) {
 	// Clear cascade snapshot at start of each new turn so stale data never leaks
 	pi.on("turn_start", () => {
 		runtime.beginTurn();
+	});
+
+	pi.on("agent_end", async (_event, ctx) => {
+		try {
+			await handleAgentEnd({
+				ctxCwd: ctx.cwd,
+				getFlag: (name: string) => pi.getFlag(name),
+				notify: (msg, level) => ctx.ui.notify(msg, level),
+				dbg,
+				runtime,
+				cacheManager,
+				getFormatService: () =>
+					getFormatService(runtime.telemetrySessionId, true),
+			});
+			ctx.ui && updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
+		} catch (agentEndErr) {
+			dbg(`agent_end crashed: ${agentEndErr}`);
+			dbg(`agent_end crash stack: ${(agentEndErr as Error).stack}`);
+		}
 	});
 
 	pi.on("turn_end", async (_event, ctx) => {

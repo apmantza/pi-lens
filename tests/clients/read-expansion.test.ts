@@ -54,7 +54,7 @@ describe("tryExpandRead", () => {
 		}
 	});
 
-	it("expands when the read starts above a symbol but overlaps it", async () => {
+	it("expands overlapping reads without dropping originally requested lines", async () => {
 		const env = setupTestEnvironment("pi-lens-read-expansion-overlap-");
 		try {
 			const filePath = path.join(env.tmpDir, "file.ts");
@@ -73,8 +73,8 @@ describe("tryExpandRead", () => {
 
 			const result = await tryExpandRead(filePath, 2, 2, 6, tsClient as any);
 			expect(result).toMatchObject({
-				newOffset: 3,
-				newLimit: 3,
+				newOffset: 2,
+				newLimit: 4,
 				enclosingSymbol: {
 					name: "demo",
 					kind: "function_declaration",

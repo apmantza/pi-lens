@@ -14,6 +14,69 @@ describe("runtime-tool-result inline behavior warnings", () => {
 		vi.mocked(pipeline.runPipeline).mockReset();
 	});
 
+	it("queues successful write/edit files for deferred formatting by default", async () => {
+		const { runPipeline } = await import("../../clients/pipeline.js");
+		vi.mocked(runPipeline).mockResolvedValue({
+			output: "✓ no blockers",
+			hasBlockers: false,
+			isError: false,
+			fileModified: false,
+		});
+
+		const env = setupTestEnvironment("pi-lens-runtime-tool-deferred-format-");
+		try {
+			const filePath = path.join(env.tmpDir, "src", "app.ts");
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(filePath, "export const x = 1;\n");
+			const deferFormat = vi.fn();
+
+			await handleToolResult({
+				event: {
+					toolName: "edit",
+					input: { path: filePath },
+					details: { diff: "+  1 export const x = 1;" },
+					content: [{ type: "text", text: "base" }],
+				},
+				getFlag: () => false,
+				dbg: () => {},
+				runtime: {
+					projectRoot: env.tmpDir,
+					setTelemetryIdentity: () => {},
+					updateGitGuardStatus: () => {},
+					nextWriteIndex: () => 1,
+					turnIndex: 1,
+					telemetryModel: "test-model",
+					telemetrySessionId: "test-session",
+					fixedThisTurn: new Set<string>(),
+					reportedThisTurn: new Set<string>(),
+					formatPipelineCrashNotice: () => "",
+					lastCascadeOutput: "",
+					cachedExports: new Map(),
+					deferFormat,
+				},
+				cacheManager: {
+					addModifiedRange: () => {},
+					readTurnState: () => ({}),
+				},
+				biomeClient: {},
+				ruffClient: {},
+				testRunnerClient: {},
+				metricsClient: {},
+				resetLSPService: () => {},
+				agentBehaviorRecord: () => [],
+				formatBehaviorWarnings: () => "",
+			} as any);
+
+			expect(deferFormat).toHaveBeenCalledWith(
+				filePath,
+				expect.any(String),
+				"edit",
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("does not append behavior warnings when blockers are present", async () => {
 		const { runPipeline } = await import("../../clients/pipeline.js");
 		vi.mocked(runPipeline).mockResolvedValue({
@@ -51,6 +114,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 					formatPipelineCrashNotice: () => "",
 					lastCascadeOutput: "",
 					cachedExports: new Map(),
+					deferFormat: () => {},
 				},
 				cacheManager: {
 					addModifiedRange: () => {},
@@ -117,6 +181,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 					formatPipelineCrashNotice: () => "",
 					lastCascadeOutput: "",
 					cachedExports: new Map(),
+					deferFormat: () => {},
 				},
 				cacheManager: {
 					addModifiedRange: () => {},
@@ -180,6 +245,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 					formatPipelineCrashNotice: () => "",
 					lastCascadeOutput: "",
 					cachedExports: new Map(),
+					deferFormat: () => {},
 				},
 				cacheManager: {
 					addModifiedRange: () => {},
@@ -263,6 +329,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 					formatPipelineCrashNotice: () => "",
 					lastCascadeOutput: "",
 					cachedExports: new Map(),
+					deferFormat: () => {},
 				},
 				cacheManager: {
 					addModifiedRange: () => {},
@@ -342,6 +409,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 					formatPipelineCrashNotice: () => "",
 					lastCascadeOutput: "",
 					cachedExports: new Map(),
+					deferFormat: () => {},
 				},
 				cacheManager: {
 					addModifiedRange: (
@@ -407,6 +475,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 					formatPipelineCrashNotice: () => "",
 					lastCascadeOutput: "",
 					cachedExports: new Map(),
+					deferFormat: () => {},
 				},
 				cacheManager: {
 					addModifiedRange: () => {},

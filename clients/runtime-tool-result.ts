@@ -309,6 +309,24 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		stateHash: getFileStateHash(filePath),
 	});
 
+	if (
+		!result.isError &&
+		!getFlag("no-autoformat") &&
+		!getFlag("immediate-format") &&
+		nodeFs.existsSync(filePath)
+	) {
+		runtime.deferFormat(filePath, cwd, event.toolName);
+		dbg(`tool_result: queued deferred format for ${filePath}`);
+		logLatency({
+			type: "phase",
+			toolName: event.toolName,
+			filePath,
+			phase: "deferred_format_queued",
+			durationMs: 0,
+			metadata: { cwd },
+		});
+	}
+
 	for (const changedFile of result.changedFiles ?? []) {
 		const resolvedChanged = path.resolve(changedFile);
 		if (resolvedChanged === path.resolve(filePath)) continue;

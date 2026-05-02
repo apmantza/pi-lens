@@ -19,6 +19,14 @@ export interface CascadeSessionStats {
 	coldSnapshotTouches: number;
 }
 
+export interface DeferredFormatRecord {
+	filePath: string;
+	cwd: string;
+	firstTouchedAt: number;
+	lastTouchedAt: number;
+	toolNames: Set<"write" | "edit">;
+}
+
 export class RuntimeCoordinator {
 	private _projectRoot = normalizeMapKey(process.cwd());
 	private _sessionGeneration = 0;
@@ -29,7 +37,11 @@ export class RuntimeCoordinator {
 	private _cachedProjectIndex: ProjectIndex | null = null;
 	private _startupScansInFlight = new Map<string, number>();
 	private _cascadeResults: CascadeResult[] = [];
-	private _cascadeSessionStats: CascadeSessionStats = { runs: 0, diagnosticsSurfaced: 0, coldSnapshotTouches: 0 };
+	private _cascadeSessionStats: CascadeSessionStats = {
+		runs: 0,
+		diagnosticsSurfaced: 0,
+		coldSnapshotTouches: 0,
+	};
 	private _complexityBaselines = new Map<string, FileComplexity>();
 	private _fixedThisTurn = new Set<string>();
 	private _reportedThisTurn = new Set<string>();
@@ -44,6 +56,7 @@ export class RuntimeCoordinator {
 	private _gitGuardHasBlockers = false;
 	private _gitGuardSummary = "";
 	private _readGuard: ReadGuard | null = null;
+	private _pendingDeferredFormatFiles = new Map<string, DeferredFormatRecord>();
 	private readonly _lspReadWarmState = new Map<
 		string,
 		{ status: "warming" | "ready"; ts: number }
@@ -58,7 +71,11 @@ export class RuntimeCoordinator {
 		this._cachedProjectIndex = null;
 		this._startupScansInFlight.clear();
 		this._cascadeResults = [];
-		this._cascadeSessionStats = { runs: 0, diagnosticsSurfaced: 0, coldSnapshotTouches: 0 };
+		this._cascadeSessionStats = {
+			runs: 0,
+			diagnosticsSurfaced: 0,
+			coldSnapshotTouches: 0,
+		};
 		this._fixedThisTurn.clear();
 		this._reportedThisTurn.clear();
 		this._telemetrySessionId = `lens-${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`;
@@ -68,6 +85,7 @@ export class RuntimeCoordinator {
 		this._gitGuardHasBlockers = false;
 		this._gitGuardSummary = "";
 		this._readGuard = null;
+		this._pendingDeferredFormatFiles.clear();
 		this._lspReadWarmState.clear();
 	}
 
@@ -79,7 +97,10 @@ export class RuntimeCoordinator {
 		return this._cascadeSessionStats;
 	}
 
-	recordCascadeRun(diagnosticsSurfaced: number, coldSnapshotTouches: number): void {
+	recordCascadeRun(
+		diagnosticsSurfaced: number,
+		coldSnapshotTouches: number,
+	): void {
 		this._cascadeSessionStats.runs += 1;
 		this._cascadeSessionStats.diagnosticsSurfaced += diagnosticsSurfaced;
 		this._cascadeSessionStats.coldSnapshotTouches += coldSnapshotTouches;
@@ -264,6 +285,35 @@ export class RuntimeCoordinator {
 	get readGuard(): ReadGuard {
 		this._readGuard ??= new ReadGuard(this._telemetrySessionId);
 		return this._readGuard;
+	}
+
+	deferFormat(filePath: string, cwd: string, toolName: "write" | "edit"): void {
+		const key = path.resolve(filePath);
+		const now = Date.now();
+		const existing = this._pendingDeferredFormatFiles.get(key);
+		if (existing) {
+			existing.lastTouchedAt = now;
+			existing.cwd = cwd;
+			existing.toolNames.add(toolName);
+			return;
+		}
+		this._pendingDeferredFormatFiles.set(key, {
+			filePath: key,
+			cwd,
+			firstTouchedAt: now,
+			lastTouchedAt: now,
+			toolNames: new Set([toolName]),
+		});
+	}
+
+	get pendingDeferredFormatCount(): number {
+		return this._pendingDeferredFormatFiles.size;
+	}
+
+	consumeDeferredFormatFiles(): DeferredFormatRecord[] {
+		const records = [...this._pendingDeferredFormatFiles.values()];
+		this._pendingDeferredFormatFiles.clear();
+		return records;
 	}
 
 	shouldWarmLspOnRead(filePath: string, maxAgeMs = 120_000): boolean {

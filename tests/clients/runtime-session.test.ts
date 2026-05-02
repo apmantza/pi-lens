@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { handleSessionStart } from "../../clients/runtime-session.js";
-import { setupTestEnvironment } from "./test-utils.js";
+import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 
 function setStartupMode(mode: "full" | "quick"): () => void {
 	const prev = process.env.PI_LENS_STARTUP_MODE;
@@ -11,11 +11,21 @@ function setStartupMode(mode: "full" | "quick"): () => void {
 	};
 }
 
-async function runSessionStart(mode: "full" | "quick") {
+async function runSessionStart(
+	mode: "full" | "quick",
+	setup?: (tmpDir: string) => void,
+) {
 	const env = setupTestEnvironment("pi-lens-runtime-session-");
+	setup?.(env.tmpDir);
 	const notify = vi.fn();
 	const scanDirectory = vi.fn(() => ({ items: [] }));
 	const ensureTool = vi.fn(async () => null);
+	const astGrepEnsure = vi.fn(async () => false);
+	const biomeEnsure = vi.fn(async () => false);
+	const ruffEnsure = vi.fn(async () => false);
+	const knipEnsure = vi.fn(async () => false);
+	const jscpdEnsure = vi.fn(async () => false);
+	const depEnsure = vi.fn(async () => false);
 	const restoreStartupMode = setStartupMode(mode);
 
 	try {
@@ -57,29 +67,29 @@ async function runSessionStart(mode: "full" | "quick") {
 			todoScanner: { scanDirectory },
 			astGrepClient: {
 				isAvailable: () => false,
-				ensureAvailable: async () => false,
+				ensureAvailable: astGrepEnsure,
 				scanExports: async () => new Map(),
 			},
 			biomeClient: {
 				isAvailable: () => false,
-				ensureAvailable: async () => false,
+				ensureAvailable: biomeEnsure,
 			},
 			ruffClient: {
 				isAvailable: () => false,
-				ensureAvailable: async () => false,
+				ensureAvailable: ruffEnsure,
 			},
 			knipClient: {
 				isAvailable: () => false,
-				ensureAvailable: async () => false,
+				ensureAvailable: knipEnsure,
 			},
 			jscpdClient: {
 				isAvailable: () => false,
-				ensureAvailable: async () => false,
+				ensureAvailable: jscpdEnsure,
 			},
 			typeCoverageClient: { isAvailable: () => false },
 			depChecker: {
 				isAvailable: () => false,
-				ensureAvailable: async () => false,
+				ensureAvailable: depEnsure,
 			},
 			testRunnerClient: {
 				detectRunner: () => ({ runner: "vitest", config: null }),
@@ -93,7 +103,18 @@ async function runSessionStart(mode: "full" | "quick") {
 			resetLSPService: () => {},
 		} as any);
 
-		return { env, notify, scanDirectory, ensureTool };
+		return {
+			env,
+			notify,
+			scanDirectory,
+			ensureTool,
+			astGrepEnsure,
+			biomeEnsure,
+			ruffEnsure,
+			knipEnsure,
+			jscpdEnsure,
+			depEnsure,
+		};
 	} catch (error) {
 		env.cleanup();
 		throw error;
@@ -156,6 +177,39 @@ describe("runtime-session notifications", () => {
 			);
 			expect(scanDirectory).not.toHaveBeenCalled();
 			expect(ensureTool).not.toHaveBeenCalled();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("limits deferred availability probes to relevant uncovered tools", async () => {
+		const {
+			env,
+			biomeEnsure,
+			ruffEnsure,
+			depEnsure,
+			astGrepEnsure,
+			knipEnsure,
+			jscpdEnsure,
+		} = await runSessionStart("full", (tmpDir) => {
+			createTempFile(
+				tmpDir,
+				"package.json",
+				JSON.stringify({ type: "module" }),
+			);
+			createTempFile(tmpDir, "src/index.ts", "export const value = 1;\n");
+		});
+
+		try {
+			await vi.waitFor(() => expect(depEnsure).toHaveBeenCalledTimes(1));
+
+			// biome is covered by startup preinstall; ast-grep/knip/jscpd by startup
+			// scans. ruff is irrelevant for this JS/TS-only project.
+			expect(biomeEnsure).not.toHaveBeenCalled();
+			expect(ruffEnsure).not.toHaveBeenCalled();
+			expect(astGrepEnsure).toHaveBeenCalledTimes(1);
+			expect(knipEnsure).toHaveBeenCalledTimes(1);
+			expect(jscpdEnsure).toHaveBeenCalledTimes(1);
 		} finally {
 			env.cleanup();
 		}
