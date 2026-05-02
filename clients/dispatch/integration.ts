@@ -357,6 +357,13 @@ export function resetDispatchBaselines(): void {
 	neighborTouchCache.clear();
 	primaryFilesThisTurn.clear();
 	cascadeDiagnosticBaselines.clear();
+	cascadeSessionStats = { runs: 0, diagnosticsSurfaced: 0, coldSnapshotTouches: 0 };
+}
+
+let cascadeSessionStats = { runs: 0, diagnosticsSurfaced: 0, coldSnapshotTouches: 0 };
+
+export function getCascadeSessionStats(): { runs: number; diagnosticsSurfaced: number; coldSnapshotTouches: number } {
+	return { ...cascadeSessionStats };
 }
 
 // A5: per-turn neighbor-touch cache keyed by normalized path.
@@ -496,6 +503,7 @@ export async function computeCascadeForFile(
 
 	const neighbors: CascadeResult["neighbors"] = [];
 	let producedLspData = false;
+	let coldSnapshotPaths: string[] = [];
 
 	if (sortedNeighbors.length > 0) {
 		const snapshotPaths = sortedNeighbors.filter(shouldReadCascadeFromSnapshot);
@@ -507,7 +515,7 @@ export async function computeCascadeForFile(
 		// When the snapshot is valid, use it immediately (no touch needed — server already has
 		// fresh data from auto-propagation). When missing or stale, fall through to the active
 		// touch pool below so we get real diagnostics instead of silently returning zero.
-		const coldSnapshotPaths: string[] = [];
+		coldSnapshotPaths = [];
 		for (const neighborPath of snapshotPaths) {
 			const neighborStart = Date.now();
 			const entry = allDiags.get(normalizeMapKey(neighborPath));
@@ -749,6 +757,13 @@ export async function computeCascadeForFile(
 			noErrors: visibleNeighbors.length > 0 && filesWithErrors === 0,
 		},
 	});
+
+	cascadeSessionStats.runs += 1;
+	cascadeSessionStats.diagnosticsSurfaced += visibleNeighbors.reduce(
+		(sum, n) => sum + n.diagnostics.length,
+		0,
+	);
+	cascadeSessionStats.coldSnapshotTouches += coldSnapshotPaths.length;
 
 	if (!formatted) return undefined;
 

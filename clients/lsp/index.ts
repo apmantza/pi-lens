@@ -1111,9 +1111,9 @@ export class LSPService {
 	 * Get status of all active clients
 	 */
 	getStatus(): Array<{ serverId: string; root: string; connected: boolean }> {
-		return Array.from(this.state.clients.entries()).map(([key, _client]) => {
+		return Array.from(this.state.clients.entries()).map(([key, client]) => {
 			const [serverId, root] = key.split(":");
-			return { serverId, root, connected: true };
+			return { serverId, root, connected: client.isAlive() };
 		});
 	}
 

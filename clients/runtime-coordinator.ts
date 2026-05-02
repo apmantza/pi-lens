@@ -13,15 +13,23 @@ export interface ErrorDebtBaseline {
 	buildPassed: boolean;
 }
 
+export interface CascadeSessionStats {
+	runs: number;
+	diagnosticsSurfaced: number;
+	coldSnapshotTouches: number;
+}
+
 export class RuntimeCoordinator {
 	private _projectRoot = normalizeMapKey(process.cwd());
 	private _sessionGeneration = 0;
+	private _sessionStartedAt = Date.now();
 	private _errorDebtBaseline: ErrorDebtBaseline | null = null;
 	private _pipelineCrashCounts = new Map<string, number>();
 	private _cachedExports = new Map<string, string>();
 	private _cachedProjectIndex: ProjectIndex | null = null;
 	private _startupScansInFlight = new Map<string, number>();
 	private _cascadeResults: CascadeResult[] = [];
+	private _cascadeSessionStats: CascadeSessionStats = { runs: 0, diagnosticsSurfaced: 0, coldSnapshotTouches: 0 };
 	private _complexityBaselines = new Map<string, FileComplexity>();
 	private _fixedThisTurn = new Set<string>();
 	private _reportedThisTurn = new Set<string>();
@@ -43,12 +51,14 @@ export class RuntimeCoordinator {
 
 	resetForSession(): void {
 		this._sessionGeneration += 1;
+		this._sessionStartedAt = Date.now();
 		this._complexityBaselines.clear();
 		this._pipelineCrashCounts.clear();
 		this._cachedExports.clear();
 		this._cachedProjectIndex = null;
 		this._startupScansInFlight.clear();
 		this._cascadeResults = [];
+		this._cascadeSessionStats = { runs: 0, diagnosticsSurfaced: 0, coldSnapshotTouches: 0 };
 		this._fixedThisTurn.clear();
 		this._reportedThisTurn.clear();
 		this._telemetrySessionId = `lens-${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`;
@@ -59,6 +69,20 @@ export class RuntimeCoordinator {
 		this._gitGuardSummary = "";
 		this._readGuard = null;
 		this._lspReadWarmState.clear();
+	}
+
+	get sessionStartedAt(): number {
+		return this._sessionStartedAt;
+	}
+
+	get cascadeSessionStats(): CascadeSessionStats {
+		return this._cascadeSessionStats;
+	}
+
+	recordCascadeRun(diagnosticsSurfaced: number, coldSnapshotTouches: number): void {
+		this._cascadeSessionStats.runs += 1;
+		this._cascadeSessionStats.diagnosticsSurfaced += diagnosticsSurfaced;
+		this._cascadeSessionStats.coldSnapshotTouches += coldSnapshotTouches;
 	}
 
 	updateGitGuardStatus(hasBlockers: boolean, output: string): void {

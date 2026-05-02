@@ -900,12 +900,24 @@ describe("index.ts integration", () => {
 				cachedExports = new Map();
 				cachedProjectIndex = null;
 				errorDebtBaseline = null;
+				sessionStartedAt = Date.now() - 5 * 60_000;
 				readGuard = {
 					isNewFile: () => false,
 					checkEdit: () => ({ action: "allow" }),
 					recordRead: () => {},
 				};
 			},
+		}));
+		vi.doMock("../clients/lsp/index.js", () => ({
+			getLSPService: () => ({
+				getAliveClientCount: () => 1,
+				getStatus: () => [
+					{ serverId: "typescript", root: tmpDir, connected: true },
+				],
+				touchFile: vi.fn(),
+				resetLSPService: () => {},
+			}),
+			resetLSPService: () => {},
 		}));
 		vi.doMock("../clients/dispatch/integration.js", async () => ({
 			getDispatchSlopScoreLine: () => "Slop score: 12/100",
@@ -921,6 +933,7 @@ describe("index.ts integration", () => {
 					],
 				},
 			],
+			getCascadeSessionStats: () => ({ runs: 5, diagnosticsSurfaced: 3, coldSnapshotTouches: 2 }),
 			resetDispatchBaselines: () => {},
 		}));
 		vi.doMock("../clients/diagnostic-tracker.js", async () => ({
@@ -1001,5 +1014,11 @@ describe("index.ts integration", () => {
 		expect(message).toContain("Top noisy rules:");
 		expect(message).toContain("no-console: 6 (e.g. src/boom.ts)");
 		expect(message).toContain("Slop score: 12/100");
+		expect(message).toContain("Session started:");
+		expect(message).toContain("LSP servers:");
+		expect(message).toContain("✓ typescript");
+		expect(message).toContain("Cascade runs: 5");
+		expect(message).toContain("Cascade diagnostics surfaced: 3");
+		expect(message).toContain("Cold-snapshot touches: 2");
 	}, 15_000);
 });

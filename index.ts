@@ -10,6 +10,7 @@ import { loadBootstrapClients } from "./clients/bootstrap.js";
 import { CacheManager } from "./clients/cache-manager.js";
 import { getDiagnosticTracker } from "./clients/diagnostic-tracker.js";
 import {
+	getCascadeSessionStats,
 	getDispatchSlopScoreLine,
 	getLatencyReports,
 	resetDispatchBaselines,
@@ -427,8 +428,19 @@ export default function (pi: ExtensionAPI) {
 						.slice(0, 3)
 				: [];
 
+			// Session duration
+			const sessionAge = Date.now() - runtime.sessionStartedAt;
+			const sessionMins = Math.floor(sessionAge / 60_000);
+			const sessionHrs = Math.floor(sessionMins / 60);
+			const sessionAgeStr = sessionHrs > 0
+				? `${sessionHrs}h ${sessionMins % 60}m`
+				: `${sessionMins}m`;
+			const startedAt = new Date(runtime.sessionStartedAt)
+				.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
 			const lines: string[] = [
 				t("lens.health.title", "🩺 PI-LENS HEALTH"),
+				`Session started: ${startedAt} (${sessionAgeStr} ago)`,
 				"",
 				t("lens.health.crashes", "Pipeline crashes (session): {count}", { count: totalCrashes }),
 				t("lens.health.files", "Files affected: {count}", { count: crashEntries.length }),
@@ -487,6 +499,32 @@ export default function (pi: ExtensionAPI) {
 							: "";
 					const pathSuffix = samplePath ? ` (e.g. ${samplePath})` : "";
 					lines.push(`  ${v.ruleId}: ${v.count}${pathSuffix}`);
+				}
+			}
+
+			// LSP status
+			const lspClients = getLSPService().getStatus();
+			if (lspClients.length > 0) {
+				lines.push("", "LSP servers:");
+				for (const { serverId, root, connected } of lspClients) {
+					const state = connected ? "✓" : "✗";
+					const rootLabel = path.relative(runtime.projectRoot, root) || ".";
+					lines.push(`  ${state} ${serverId} (${rootLabel})`);
+				}
+			} else {
+				lines.push("", "LSP servers: none started");
+			}
+
+			// Cascade summary
+			const cascadeStats = getCascadeSessionStats();
+			if (cascadeStats.runs > 0) {
+				lines.push(
+					"",
+					`Cascade runs: ${cascadeStats.runs}`,
+					`Cascade diagnostics surfaced: ${cascadeStats.diagnosticsSurfaced}`,
+				);
+				if (cascadeStats.coldSnapshotTouches > 0) {
+					lines.push(`Cold-snapshot touches: ${cascadeStats.coldSnapshotTouches}`);
 				}
 			}
 
