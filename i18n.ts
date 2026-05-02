@@ -58,7 +58,7 @@ export function initI18n(pi: { events?: { emit?: (event: string, payload: unknow
 
 export function t(key: string, fallback: string, params: Params = {}): string {
 	const template = currentLocale === "en" ? fallback : translations[currentLocale]?.[key] ?? fallback;
-	return template.replace(/\{(\w+)\}/g, (_, name) => String(params[name] ?? `{${name}}`));
+	return template.replaceAll(/\{(\w+)\}/g, (_, name) => String(params[name] ?? `{${name}}`));
 }
 
 function isLocale(locale: string | undefined): locale is Locale {
