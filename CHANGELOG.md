@@ -4,6 +4,11 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **ReDoS S5852 final (gleam/zig parsers)** — rewrote `gleamRe` and `zigRe` as line-by-line parsers (`split("\n")` + single-line `exec`), eliminating the multiline flag entirely. Previous `[ \t]*` substitution was insufficient; SonarCloud continued flagging the alternation + `[^\n]*` combination.
+- **SonarCloud MAJOR code smells** — unnecessary `\[` escape in `csRe`; `_pendingDeferredFormatFiles` marked `readonly`; nested ternaries flattened in `formatters.ts`, `lsp-diagnostics.ts`, `lsp.ts`, `read-guard.ts`, `integration.ts`; optional chain applied in `pipeline.ts` and `integration.ts`; nested template literals extracted in `pipeline.ts`, `read-guard.ts`, and `lsp-navigation.ts`.
+
 ## [3.8.38] - 2026-05-02
 
 ### Added
