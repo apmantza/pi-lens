@@ -108,6 +108,7 @@ function resolveOldTextEdits(
 					tool: "edit",
 					source: "edits_without_ranges",
 					editIndex,
+					oldTextPreview: preview,
 				},
 			});
 		} else if (occurrenceLines.length === 1) {
@@ -141,6 +142,7 @@ function resolveOldTextEdits(
 					editIndex,
 					occurrenceCount: occurrenceLines.length,
 					occurrenceLines,
+					oldTextPreview: preview,
 				},
 			});
 		}

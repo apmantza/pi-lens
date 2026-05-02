@@ -200,6 +200,95 @@ describe("computeCascadeForFile", () => {
 		}
 	});
 
+	it("active-touches jsts neighbor when snapshot is missing (cold session)", async () => {
+		const env = setupTestEnvironment("cascade-cold-snapshot-");
+		try {
+			const primary = path.join(env.tmpDir, "src", "primary.ts");
+			const neighbor = path.join(env.tmpDir, "src", "neighbor.ts");
+			fs.mkdirSync(path.dirname(primary), { recursive: true });
+			fs.writeFileSync(primary, "export const x = 1;\n");
+			fs.writeFileSync(neighbor, "import { x } from './primary';\n");
+			mocks.computeImpactCascade.mockReturnValue(impact(primary, [neighbor]));
+			const touchFile = vi
+				.fn()
+				.mockResolvedValue([lspError("type error in neighbor")]);
+			mocks.getLSPService.mockReturnValue({
+				// Empty allDiags — no snapshot for neighbor (cold session)
+				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
+				touchFile,
+				getDiagnostics: vi.fn(),
+			});
+
+			const { computeCascadeForFile } = await import(
+				"../../clients/dispatch/integration.js"
+			);
+			const result = await computeCascadeForFile(primary, env.tmpDir, {
+				turnSeq: 1,
+				writeSeq: 1,
+			});
+
+			// Should have fallen through to active touch with tighter 1000ms budget
+			expect(touchFile).toHaveBeenCalledWith(
+				neighbor,
+				expect.any(String),
+				expect.objectContaining({
+					silent: true,
+					source: "cascade",
+					collectDiagnostics: true,
+					maxClientWaitMs: 1000,
+				}),
+			);
+			expect(result?.neighbors[0]?.lspTouched).toBe(true);
+			expect(result?.neighbors[0]?.diagnostics[0]?.message).toBe(
+				"type error in neighbor",
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("does not touch jsts neighbor when snapshot is valid (warm session)", async () => {
+		const env = setupTestEnvironment("cascade-warm-snapshot-");
+		try {
+			const primary = path.join(env.tmpDir, "src", "primary.ts");
+			const neighbor = path.join(env.tmpDir, "src", "neighbor.ts");
+			fs.mkdirSync(path.dirname(primary), { recursive: true });
+			fs.writeFileSync(primary, "export const x = 1;\n");
+			fs.writeFileSync(neighbor, "import { x } from './primary';\n");
+			mocks.computeImpactCascade.mockReturnValue(impact(primary, [neighbor]));
+			const touchFile = vi.fn();
+			mocks.getLSPService.mockReturnValue({
+				getAllDiagnostics: vi.fn().mockResolvedValue(
+					new Map([
+						[
+							neighbor.split(path.sep).join("/"),
+							{ diags: [lspError("existing warning")], ts: Date.now() },
+						],
+					]),
+				),
+				touchFile,
+				getDiagnostics: vi.fn(),
+			});
+
+			const { computeCascadeForFile } = await import(
+				"../../clients/dispatch/integration.js"
+			);
+			const result = await computeCascadeForFile(primary, env.tmpDir, {
+				turnSeq: 1,
+				writeSeq: 1,
+			});
+
+			// Valid snapshot — no touch should happen
+			expect(touchFile).not.toHaveBeenCalled();
+			expect(result?.neighbors[0]?.lspTouched).toBe(false);
+			expect(result?.neighbors[0]?.diagnostics[0]?.message).toBe(
+				"existing warning",
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("filters repeated cascade diagnostics through cascade delta baselines", async () => {
 		const env = setupTestEnvironment("cascade-delta-");
 		try {

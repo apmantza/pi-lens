@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/apmantza/pi-lens/master/banner.svg" alt="pi-lens" width="1100">
+</p>
+
 # pi-lens
 
 pi-lens focuses on real-time inline code feedback for AI agents.

@@ -504,6 +504,10 @@ export async function computeCascadeForFile(
 		);
 
 		// Auto-propagating LSPs (TypeScript/Deno) — read passive snapshot with normalized key.
+		// When the snapshot is valid, use it immediately (no touch needed — server already has
+		// fresh data from auto-propagation). When missing or stale, fall through to the active
+		// touch pool below so we get real diagnostics instead of silently returning zero.
+		const coldSnapshotPaths: string[] = [];
 		for (const neighborPath of snapshotPaths) {
 			const neighborStart = Date.now();
 			const entry = allDiags.get(normalizeMapKey(neighborPath));
@@ -512,14 +516,30 @@ export async function computeCascadeForFile(
 				: undefined;
 			const snapshotValid =
 				entry != null && Date.now() - entry.ts < CASCADE_TTL_MS;
-			const diags = snapshotValid
-				? convertLspDiagnostics(
-						entry.diags.filter((d) => d.severity === 1).slice(0, MAX_PER_FILE),
-						neighborPath,
-						{ source: "cascade" },
-					)
-				: [];
-			if (snapshotValid) producedLspData = true;
+
+			if (!snapshotValid) {
+				// No usable snapshot — queue for active touch alongside non-jsts neighbors.
+				logCascade({
+					phase: "neighbor_snapshot",
+					filePath,
+					neighborFile: neighborPath,
+					diagnosticCount: 0,
+					durationMs: Date.now() - neighborStart,
+					autoPropagate: true,
+					snapshotMissing: entry == null,
+					snapshotAgeSec,
+					coldSnapshot: true,
+				});
+				coldSnapshotPaths.push(neighborPath);
+				continue;
+			}
+
+			const diags = convertLspDiagnostics(
+				entry.diags.filter((d) => d.severity === 1).slice(0, MAX_PER_FILE),
+				neighborPath,
+				{ source: "cascade" },
+			);
+			producedLspData = true;
 			const durationMs = Date.now() - neighborStart;
 
 			logCascade({
@@ -529,7 +549,7 @@ export async function computeCascadeForFile(
 				diagnosticCount: diags.length,
 				durationMs,
 				autoPropagate: true,
-				snapshotMissing: entry == null,
+				snapshotMissing: false,
 				snapshotAgeSec,
 			});
 
@@ -542,10 +562,13 @@ export async function computeCascadeForFile(
 			});
 		}
 
-		// non-jsts: fan-out active touches in parallel (A3), single wait per neighbor.
-		// touchFile("none") opens the doc; getDiagnostics waits once for fresh results.
+		// fan-out active touches in parallel (A3):
+		// - non-jsts neighbors (always touched)
+		// - autoPropagate neighbors whose snapshot was missing/stale (coldSnapshotPaths)
+		//   use a tighter 1000ms budget since the server is expected to be warm already.
 		const touchResults = await Promise.allSettled(
-			activePaths.map(async (neighborPath) => {
+			[...activePaths, ...coldSnapshotPaths].map(async (neighborPath) => {
+				const isColdSnapshot = coldSnapshotPaths.includes(neighborPath);
 				const neighborStart = Date.now();
 				const cacheKey = normalizeMapKey(neighborPath);
 
@@ -595,10 +618,13 @@ export async function computeCascadeForFile(
 				const content = await nodeFs.promises.readFile(neighborPath, "utf8");
 				// Open with silent=true (suppresses didChangeWatchedFiles rechecks, C2)
 				// and collect diagnostics from the same touched clients.
+				// Cold-snapshot neighbors (autoPropagate LSP, server warm) use a tighter
+				// 1000ms budget — they should respond quickly; we'd rather return zero
+				// than block cascade for 2s on a slow open.
 				const rawDiags = await lspService.touchFile(neighborPath, content, {
 					diagnostics: "document",
 					collectDiagnostics: true,
-					maxClientWaitMs: 2000,
+					maxClientWaitMs: isColdSnapshot ? 1000 : 2000,
 					silent: true,
 					source: "cascade",
 					clientScope: "all",
@@ -629,6 +655,7 @@ export async function computeCascadeForFile(
 					durationMs,
 					lspTouched: true,
 					lspServerCount: configuredServerCount,
+					coldSnapshot: isColdSnapshot,
 				});
 
 				return {
@@ -641,9 +668,10 @@ export async function computeCascadeForFile(
 			}),
 		);
 
+		const allTouchPaths = [...activePaths, ...coldSnapshotPaths];
 		for (let i = 0; i < touchResults.length; i++) {
 			const result = touchResults[i];
-			const neighborPath = activePaths[i];
+			const neighborPath = allTouchPaths[i];
 			if (result.status === "fulfilled") {
 				if (result.value) neighbors.push(result.value);
 			} else {

@@ -12,7 +12,7 @@ Use `ast_grep_search` and `ast_grep_replace` for semantic code search/replace. a
 - Function calls, imports, class methods (structured code)
 - Safe replacements across files
 - "X inside Y" patterns (e.g., console.log inside classes)
-- **Use grep for:** comments/strings, URLs, or when ast-grep fails twice
+- **Use grep for:** partial string patterns, comments, URLs, or when ast-grep fails twice
 
 ## Golden Rules
 
@@ -20,7 +20,7 @@ Use `ast_grep_search` and `ast_grep_replace` for semantic code search/replace. a
 2. **Scope it** — Always specify `paths` to relevant files
 3. **Dry-run first** — Use `apply: false` before `apply: true`
 4. **Valid code only** — `function $NAME($$$) { $$$ }` not `function $NAME(`
-5. **Use metavariables** — `$X` for single node, `$$$` for multiple
+5. **Metavariables don't work inside strings** — `from "$PATH"` will NOT match; use grep for import path patterns
 
 ## Quick Reference
 
@@ -30,7 +30,7 @@ Use `ast_grep_search` and `ast_grep_replace` for semantic code search/replace. a
 |---------|---------|
 | `fetchMetrics($ARGS)` | Function call with any args |
 | `function $NAME($$$) { $$$ }` | Function declaration |
-| `import { $NAMES } from "$PATH"` | Import statement |
+| `import { $NAMES } from $PATH` | Import (any path — no quotes) |
 | `const $X = $Y` | Variable declaration |
 
 ### Composite (inside/has)
@@ -50,28 +50,22 @@ inside:
 | Single | `console.log($MSG)` | `console.log("hi")` |
 | Multiple | `console.log($$$ARGS)` | `console.log("hi", obj, 42)` |
 
-Whitespace is normalized — tabs vs spaces don't matter.
-
 ## Common Gotchas
 
-```typescript
-// ❌ Multiple AST nodes — use metavariables
-pattern: "it"test name""           → use `it($TEST)`
-pattern: "function $NAME("        → use `function $NAME($$$) { $$$ }`
-
-// ❌ Trailing comma in objects
-pattern: "{ type: $T, }"            → use `{ type: $T }`
-
-// ❌ Shorthand property mismatch  
-pattern: "{ runnerId: $RID }"      → won't match `{ runnerId }`
-// Use: `{ runnerId }` or widen with `{ runnerId, $$$REST }`
 ```
+❌ $VAR inside quotes — not a metavariable, matches literal text "$PATH"
+   from "$PATH"  →  use grep for wildcard path matching
+   from "./utils"  →  ✅ exact string literal works fine
 
-**Progressive narrowing:** Start wide (`logLatency($$$)`), then add constraints.
+❌ Trailing comma in objects
+   { type: $T, }  →  use { type: $T }
+
+❌ Shorthand property mismatch
+   { runnerId: $RID }  →  won't match { runnerId }
+   use { runnerId } or { runnerId, $$$REST }
+```
 
 **No matches?** Simplify and retry: `console.log($$$)` → `console` → narrow down.  
 **Fails twice?** Fall back to `grep`.
 
-## Debug
-
-Test patterns: https://ast-grep.github.io/playground.html
+Debug: https://ast-grep.github.io/playground.html

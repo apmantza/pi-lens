@@ -49,6 +49,7 @@ export interface CascadeLogEntry {
 	lspServerCount?: number; // number of LSP servers configured for this file type
 	touchedCount?: number;
 	snapshotCount?: number;
+	coldSnapshot?: boolean; // true when touch was triggered because autoPropagate snapshot was missing
 
 	// shared
 	fallbackUsed?: boolean;

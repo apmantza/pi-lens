@@ -81,15 +81,12 @@ function resolveStartupMode(): StartupMode {
 
 async function igniteWarmFiles(
 	cwd: string,
+	warmFiles: string[],
 	runtime: RuntimeCoordinator,
 	sessionGeneration: number,
 	dbg: (msg: string) => void,
 ): Promise<void> {
 	try {
-		const config = await loadLSPConfig(cwd);
-		const warmFiles = config.warmFiles ?? [];
-		if (warmFiles.length === 0) return;
-
 		dbg(`session_start lsp-warm: ${warmFiles.length} warm file(s) configured`);
 
 		await initLSPConfig(cwd);
@@ -608,10 +605,17 @@ export async function handleSessionStart(
 
 	dbg("session_start: background scans launched");
 
-	// LSP warm files — open configured files so clangd has AST/index context
-	// before short-lived workspaceSymbol queries that may otherwise return empty.
+	// LSP warm files — read config synchronously on the startup path (cheap file
+	// walk), then fire-and-forget the LSP touchFile loop so session start is not
+	// blocked by per-file LSP waits.
 	if (!getFlag("no-lsp") && allowBootstrapTasks) {
-		await igniteWarmFiles(cwd, runtime, sessionGeneration, dbg);
+		const lspConfig = await loadLSPConfig(cwd);
+		const warmFiles = lspConfig.warmFiles ?? [];
+		if (warmFiles.length > 0) {
+			igniteWarmFiles(cwd, warmFiles, runtime, sessionGeneration, dbg).catch((err) =>
+				dbg(`session_start lsp-warm: unhandled error: ${err}`),
+			);
+		}
 	}
 
 	dbg(`session_start total: ${Date.now() - sessionStartMs}ms`);

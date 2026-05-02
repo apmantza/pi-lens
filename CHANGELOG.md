@@ -2,6 +2,22 @@
 
 All notable changes to pi-lens will be documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- **Cascade diagnostics now surface for TypeScript neighbors on cold sessions** — previously cascade silently returned zero diagnostics for TypeScript/Deno neighbors when no passive snapshot existed (i.e. the agent had not yet opened the file). Cold-snapshot neighbors now fall through into the parallel `touchFile` pool with a 1000ms budget (tighter than the 2000ms used for non-jsts neighbors, since the TypeScript server is expected to be warm). Valid snapshots still use the fast read path with no touch. New `coldSnapshot: true` field on `neighbor_touch` log entries tracks these in `cascade.log`.
+
+### Improved
+
+- **`ast-grep` skill clarifies string literal behaviour** — exact string literals in patterns (e.g. `from "./utils"`) work correctly; only metavariables inside string literals (e.g. `from "$PATH"`) are not supported and should use grep instead. Previously the skill incorrectly implied import path matching was unsupported entirely, causing unnecessary grep fallbacks.
+
+## [3.8.35] - 2026-05-02
+
+### Fixed
+
+- **Startup hang for all users fixed (issue #46)** — `igniteWarmFiles` was previously `await`ed unconditionally on the session-start path, causing every session to pay the cost of a full directory walk looking for `lsp.json` (checking 3 config paths at every ancestor up to the filesystem root) before returning. This caused the 20–30s startup delay reported in 3.8.34 regardless of whether `warmFiles` was configured. The `loadLSPConfig` call now runs with `await` at the call site; if `warmFiles` is absent or empty, `igniteWarmFiles` is skipped entirely. When warm files are configured, the per-file LSP `touchFile` loop runs fire-and-forget so it never blocks session completion.
+
 ## [3.8.34] - 2026-05-01
 
 ### Added

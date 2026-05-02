@@ -136,7 +136,9 @@ describe("warmFiles session start", () => {
 		try {
 			await handleSessionStart(makeDeps({ ctxCwd: env.tmpDir }));
 
-			expect(mockTouchFile).toHaveBeenCalledTimes(2);
+			await vi.waitFor(() => expect(mockTouchFile).toHaveBeenCalledTimes(2), {
+				timeout: 5000,
+			});
 
 			const calls = mockTouchFile.mock.calls as Array<
 				[string, string, Record<string, unknown>]
