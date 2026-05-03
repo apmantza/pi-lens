@@ -83,6 +83,74 @@ describe("read-guard tool line helpers", () => {
 
 			const result = getTouchedLinesForGuard(event, filePath);
 			expect(result.touchedLines).toEqual([5, 7]);
+			expect(result.editRanges).toBeUndefined();
+			expect(result.preflightError).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("returns editRanges for multiple resolved oldText edits", () => {
+		const env = setupTestEnvironment("read-guard-lines-multi-oldtext-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			fs.writeFileSync(
+				filePath,
+				"function foo() {\n  return 1;\n}\n\nfunction bar() {\n  return 2;\n}\n",
+			);
+
+			const event = {
+				toolName: "edit",
+				input: {
+					path: filePath,
+					edits: [
+						{ oldText: "return 1;", newText: "return 10;" },
+						{ oldText: "return 2;", newText: "return 20;" },
+					],
+				},
+			};
+
+			const result = getTouchedLinesForGuard(event, filePath);
+			expect(result.touchedLines).toEqual([2, 6]);
+			expect(result.editRanges).toEqual([
+				[2, 2],
+				[6, 6],
+			]);
+			expect(result.preflightError).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("includes resolved oldText ranges in mixed range + oldText edits", () => {
+		const env = setupTestEnvironment("read-guard-lines-mixed-ranges-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			fs.writeFileSync(
+				filePath,
+				"function foo() {\n  return 1;\n}\n\nfunction bar() {\n  return 2;\n}\n",
+			);
+
+			const event = {
+				toolName: "edit",
+				input: {
+					path: filePath,
+					edits: [
+						{
+							range: { start: { line: 1 }, end: { line: 1 } },
+							newText: "function fooRenamed() {",
+						},
+						{ oldText: "return 2;", newText: "return 20;" },
+					],
+				},
+			};
+
+			const result = getTouchedLinesForGuard(event, filePath);
+			expect(result.touchedLines).toEqual([1, 6]);
+			expect(result.editRanges).toEqual([
+				[1, 1],
+				[6, 6],
+			]);
 			expect(result.preflightError).toBeUndefined();
 		} finally {
 			env.cleanup();

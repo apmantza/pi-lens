@@ -4,6 +4,9 @@ import { logReadGuardEvent } from "./read-guard-logger.js";
 
 export interface GuardLineResult {
 	touchedLines: [number, number] | undefined;
+	// Individual ranges for multi-edit calls (e.g. rename at 4 scattered spots).
+	// When set, read-guard checks each range independently instead of the bounding box.
+	editRanges?: [number, number][];
 	preflightError?: string;
 }
 
@@ -182,6 +185,7 @@ function resolveOldTextEdits(
 		Math.min(...starts),
 		Math.max(...ends),
 	];
+	const editRanges = resolvedRanges.length > 1 ? resolvedRanges : undefined;
 	logReadGuardEvent({
 		event: "touched_lines_detected",
 		sessionId,
@@ -194,7 +198,7 @@ function resolveOldTextEdits(
 			totalEditCount: edits.length,
 		},
 	});
-	return { touchedLines };
+	return { touchedLines, editRanges };
 }
 
 /**
@@ -309,6 +313,7 @@ export function getTouchedLinesForGuard(
 				return { touchedLines: undefined };
 			}
 			let oldTextTouchedLines: [number, number] | undefined;
+			let oldTextEditRanges: [number, number][] | undefined;
 			if (unresolvedOldTextEdits.length > 0 && filePath) {
 				const resolved = resolveOldTextEdits(
 					unresolvedOldTextEdits,
@@ -319,6 +324,7 @@ export function getTouchedLinesForGuard(
 					return resolved;
 				}
 				oldTextTouchedLines = resolved.touchedLines;
+				oldTextEditRanges = resolved.editRanges;
 			}
 			const starts = rangedEdits.map(([start]) => start);
 			const ends = rangedEdits.map(([, end]) => end);
@@ -330,6 +336,13 @@ export function getTouchedLinesForGuard(
 				Math.min(...starts),
 				Math.max(...ends),
 			];
+			const allEditRanges = [...rangedEdits];
+			if (oldTextEditRanges?.length) {
+				allEditRanges.push(...oldTextEditRanges);
+			} else if (oldTextTouchedLines) {
+				allEditRanges.push(oldTextTouchedLines);
+			}
+			const editRanges = allEditRanges.length > 1 ? allEditRanges : undefined;
 			if (filePath) {
 				logReadGuardEvent({
 					event: "touched_lines_detected",
@@ -348,7 +361,7 @@ export function getTouchedLinesForGuard(
 					},
 				});
 			}
-			return { touchedLines };
+			return { touchedLines, editRanges };
 		}
 		if (filePath) {
 			logReadGuardEvent({

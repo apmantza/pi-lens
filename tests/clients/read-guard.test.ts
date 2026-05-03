@@ -222,6 +222,82 @@ describe("ReadGuard", () => {
 
 			expect(verdict.action).toBe("allow");
 		});
+
+		it("allows multi-range edit when each range is individually covered", () => {
+			// Reproduces the pattern: grep finds 4 tool names, agent reads 4 small
+			// chunks around each, then submits a single edit touching all 4 spots.
+			// The bounding box spans unread lines, but each edit point was read.
+			const guard = createReadGuard("test-session");
+			guard.recordRead(
+				createReadRecord("/src/api.ts", {
+					effectiveOffset: 10,
+					effectiveLimit: 5,
+				}),
+			);
+			guard.recordRead(
+				createReadRecord("/src/api.ts", {
+					effectiveOffset: 30,
+					effectiveLimit: 5,
+				}),
+			);
+			guard.recordRead(
+				createReadRecord("/src/api.ts", {
+					effectiveOffset: 60,
+					effectiveLimit: 5,
+				}),
+			);
+			guard.recordRead(
+				createReadRecord("/src/api.ts", {
+					effectiveOffset: 90,
+					effectiveLimit: 5,
+				}),
+			);
+
+			const boundingBox: [number, number] = [10, 94];
+			const editRanges: [number, number][] = [
+				[10, 10],
+				[30, 30],
+				[60, 60],
+				[90, 94],
+			];
+			const verdict = guard.checkEdit("/src/api.ts", boundingBox, editRanges);
+
+			expect(verdict.action).toBe("allow");
+		});
+
+		it("blocks multi-range edit when any individual range is not covered", () => {
+			const guard = createReadGuard("test-session");
+			guard.recordRead(
+				createReadRecord("/src/api.ts", {
+					effectiveOffset: 10,
+					effectiveLimit: 5,
+				}),
+			);
+			guard.recordRead(
+				createReadRecord("/src/api.ts", {
+					effectiveOffset: 30,
+					effectiveLimit: 5,
+				}),
+			);
+			// Line 60 was NOT read
+			guard.recordRead(
+				createReadRecord("/src/api.ts", {
+					effectiveOffset: 90,
+					effectiveLimit: 5,
+				}),
+			);
+
+			const boundingBox: [number, number] = [10, 94];
+			const editRanges: [number, number][] = [
+				[10, 10],
+				[30, 30],
+				[60, 60],
+				[90, 94],
+			];
+			const verdict = guard.checkEdit("/src/api.ts", boundingBox, editRanges);
+
+			expect(verdict.action).toBe("block");
+		});
 	});
 
 	describe("Edge cases and error handling", () => {

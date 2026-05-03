@@ -136,6 +136,7 @@ export class ReadGuard {
 	checkEdit(
 		filePath: string,
 		touchedLines?: [number, number],
+		editRanges?: [number, number][],
 	): ReadGuardVerdict {
 		// Check exemptions
 		if (this.exemptions.has(filePath)) {
@@ -195,44 +196,50 @@ export class ReadGuard {
 		}
 
 		// 3. Range coverage check
-		const coverage = this.checkCoverage(filePath, touchedLines);
+		// When the edit touches multiple disjoint spots (e.g. rename across 4 tool
+		// registrations), check each spot independently. Collapsing to a bounding
+		// box would falsely flag reads that cover exactly the right lines.
+		const rangesToCheck: [number, number][] =
+			editRanges && editRanges.length > 1 ? editRanges : [touchedLines];
 
-		if (coverage.covered) {
-			const verdict = this.allow();
-			this.recordVerdict(filePath, "edit", touchedLines, verdict, {
-				reasonKind: coverage.viaSymbol ? "symbol_coverage" : "range_coverage",
-				viaSymbol: coverage.viaSymbol,
-			});
-			return verdict;
+		let viaSymbol = false;
+		for (const range of rangesToCheck) {
+			const coverage = this.checkCoverage(filePath, range);
+			if (!coverage.covered) {
+				const lastRead = fileReads[fileReads.length - 1];
+				const [editStart, editEnd] = range;
+				const lastReadEnd =
+					lastRead.effectiveOffset + lastRead.effectiveLimit - 1;
+				const verdict = this.blockOrWarn(
+					"out-of-range",
+					`🔴 BLOCKED — Edit outside read range\n\nYou read \`${filePath}\` lines ${lastRead.effectiveOffset}-${lastReadEnd}${lastRead.enclosingSymbol ? ` (${lastRead.enclosingSymbol.kind} \`${lastRead.enclosingSymbol.name}\`)` : ""}, but your edit touches lines ${editStart}-${editEnd}.\n\nThe edit target is outside the context you previously read.\nTo proceed:\n  1. Read the relevant section: \`read path="${filePath}" offset=${Math.max(1, editStart - 5)} limit=${Math.min(30, editEnd - editStart + 10)}\`\n  2. Or read the full file: \`read path="${filePath}"\``,
+					{
+						editRange: range,
+						readRanges: fileReads.map((r) => ({
+							start: r.effectiveOffset,
+							end: r.effectiveOffset + r.effectiveLimit - 1,
+						})),
+						symbolRanges: fileReads
+							.filter((r) => r.enclosingSymbol)
+							.map((r) => ({
+								name: r.enclosingSymbol!.name,
+								start: r.enclosingSymbol!.startLine,
+								end: r.enclosingSymbol!.endLine,
+							})),
+					},
+				);
+				this.recordVerdict(filePath, "edit", touchedLines, verdict, {
+					reasonKind: "out_of_range",
+				});
+				return verdict;
+			}
+			if (coverage.viaSymbol) viaSymbol = true;
 		}
 
-		// Not covered — block or warn
-		const lastRead = fileReads[fileReads.length - 1];
-		const [editStart, editEnd] = touchedLines;
-		const lastReadEnd = lastRead.effectiveOffset + lastRead.effectiveLimit - 1;
-		const symbolCtx = lastRead.enclosingSymbol
-			? ` (${lastRead.enclosingSymbol.kind} \`${lastRead.enclosingSymbol.name}\`)`
-			: "";
-		const verdict = this.blockOrWarn(
-			"out-of-range",
-			`🔴 BLOCKED — Edit outside read range\n\nYou read \`${filePath}\` lines ${lastRead.effectiveOffset}-${lastReadEnd}${symbolCtx}, but your edit touches lines ${editStart}-${editEnd}.\n\nThe edit target is outside the context you previously read.\nTo proceed:\n  1. Read the relevant section: \`read path="${filePath}" offset=${Math.max(1, editStart - 5)} limit=${Math.min(30, editEnd - editStart + 10)}\`\n  2. Or read the full file: \`read path="${filePath}"\``,
-			{
-				editRange: touchedLines,
-				readRanges: fileReads.map((r) => ({
-					start: r.effectiveOffset,
-					end: r.effectiveOffset + r.effectiveLimit - 1,
-				})),
-				symbolRanges: fileReads
-					.filter((r) => r.enclosingSymbol)
-					.map((r) => ({
-						name: r.enclosingSymbol!.name,
-						start: r.enclosingSymbol!.startLine,
-						end: r.enclosingSymbol!.endLine,
-					})),
-			},
-		);
+		const verdict = this.allow();
 		this.recordVerdict(filePath, "edit", touchedLines, verdict, {
-			reasonKind: "out_of_range",
+			reasonKind: viaSymbol ? "symbol_coverage" : "range_coverage",
+			viaSymbol,
 		});
 		return verdict;
 	}
@@ -473,7 +480,11 @@ export class ReadGuard {
 		const reads = this.reads.get(filePath) ?? [];
 		logReadGuardEvent({
 			event:
-				verdict.action === "allow" ? "edit_allowed" : (verdict.action === "warn" ? "edit_warned" : "edit_blocked"),
+				verdict.action === "allow"
+					? "edit_allowed"
+					: verdict.action === "warn"
+						? "edit_warned"
+						: "edit_blocked",
 			sessionId: this.sessionId,
 			filePath,
 			metadata: {
