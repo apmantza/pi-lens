@@ -8,9 +8,9 @@
  * - Request/response handling
  */
 
-import { existsSync } from "node:fs";
 import { spawn as nodeSpawn } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import type { MessageConnection } from "vscode-jsonrpc";
 import {
@@ -340,6 +340,33 @@ function disposeClientConnection(state: LSPClientState): void {
 	}
 }
 
+async function killProcessTree(
+	proc: { kill(signal?: NodeJS.Signals | number): boolean },
+	pid: number,
+): Promise<void> {
+	if (process.platform === "win32" && pid > 0) {
+		await new Promise<void>((resolve) => {
+			try {
+				// Absolute path avoids PATH-resolution: SystemRoot is set by Windows itself.
+				const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
+				const killer = nodeSpawn(taskkill, ["/F", "/T", "/PID", String(pid)], {
+					shell: false,
+					windowsHide: true,
+				});
+				killer.once("close", () => resolve());
+				killer.once("error", () => resolve());
+			} catch {
+				resolve();
+			}
+		});
+		return;
+	}
+
+	try {
+		proc.kill("SIGTERM");
+	} catch {}
+}
+
 function mergeDiagnosticLists(
 	push: LSPDiagnostic[] | undefined,
 	pull: LSPDiagnostic[] | undefined,
@@ -483,9 +510,7 @@ function setupIncomingHandlers(
 	);
 	state.connection.onRequest(
 		"client/unregisterCapability",
-		async (params: {
-			unregisterations?: Array<{ id: string }>;
-		}) => {
+		async (params: { unregisterations?: Array<{ id: string }> }) => {
 			for (const unreg of params?.unregisterations ?? []) {
 				if (unreg.id) {
 					state.dynamicRegistrations.delete(unreg.id);
@@ -726,20 +751,9 @@ async function clientShutdown(state: LSPClientState): Promise<void> {
 	}
 	disposeClientConnection(state);
 	const pid = state.lspProcess.pid;
-	state.lspProcess.process.kill("SIGTERM");
-	// On Windows, SIGTERM only kills the direct child process — grandchildren
-	// (e.g. tsserver.js spawned by typescript-language-server) are orphaned.
-	// Use taskkill /F /T to kill the full process tree, matching the crash path.
-	if (process.platform === "win32" && pid > 0) {
-		try {
-			// Absolute path avoids PATH-resolution: SystemRoot is set by Windows itself.
-			const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
-			nodeSpawn(taskkill, ["/F", "/T", "/PID", String(pid)], {
-				shell: false,
-				windowsHide: true,
-			});
-		} catch {}
-	}
+	// On Windows, killing the direct child first can orphan grandchildren before
+	// taskkill can traverse the tree. Kill the full tree first and wait briefly.
+	await killProcessTree(state.lspProcess.process, pid);
 }
 
 async function navRequest<T>(
@@ -916,18 +930,11 @@ export async function createLSPClient(options: {
 		// Hard-kill the hung process so it doesn't become a zombie.
 		// SIGTERM alone is unreliable on Windows for cmd.exe/PowerShell trees.
 		const pid = lspProcess.pid;
-		lspProcess.process.kill("SIGTERM");
-		if (process.platform === "win32" && pid > 0) {
-			try {
-				const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
-				nodeSpawn(taskkill, ["/F", "/T", "/PID", String(pid)], {
-					shell: false,
-					windowsHide: true,
-				});
-			} catch {}
-		}
+		void killProcessTree(lspProcess.process, pid);
 		setTimeout(() => {
-			if (!lspProcess.process.killed) lspProcess.process.kill("SIGKILL");
+			if (!lspProcess.process.killed && process.platform !== "win32") {
+				lspProcess.process.kill("SIGKILL");
+			}
 		}, 2000);
 		throw err;
 	} finally {
@@ -955,7 +962,8 @@ export async function createLSPClient(options: {
 		);
 	}
 
-	state.workspaceDiagnosticsSupport = detectWorkspaceDiagnosticsSupport(initResult);
+	state.workspaceDiagnosticsSupport =
+		detectWorkspaceDiagnosticsSupport(initResult);
 	state.operationSupport = detectOperationSupport(initResult);
 	state.staticDiagnosticsMode = state.workspaceDiagnosticsSupport.mode;
 

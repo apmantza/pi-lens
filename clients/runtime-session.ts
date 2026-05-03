@@ -5,6 +5,7 @@ import type { BiomeClient } from "./biome-client.js";
 import type { CacheManager } from "./cache-manager.js";
 import type { DependencyChecker } from "./dependency-checker.js";
 import { getDiagnosticTracker } from "./diagnostic-tracker.js";
+import { clearAllSessions as clearFileTimeSessions } from "./file-time.js";
 import { getKnipIgnorePatterns } from "./file-utils.js";
 import type { GoClient } from "./go-client.js";
 import type { JscpdClient } from "./jscpd-client.js";
@@ -440,6 +441,7 @@ export async function handleSessionStart(
 
 	metricsClient.reset();
 	getDiagnosticTracker().reset();
+	clearFileTimeSessions();
 	runtime.complexityBaselines.clear();
 	resetDispatchBaselines();
 	runtime.resetForSession();
