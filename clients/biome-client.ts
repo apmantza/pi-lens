@@ -263,9 +263,10 @@ export class BiomeClient {
 		const content = fs.readFileSync(absolutePath, "utf-8");
 
 		try {
-			// Single invocation: check --write applies safe formatting + lint fixes.
-			// No pre-flight checkFile() needed — content diff tells us if anything changed.
-			const result = this.spawnBiome(["check", "--write", absolutePath]);
+			// lint --write applies safe lint fixes only — no formatting.
+			// Formatting is deferred to agent_end to avoid mid-turn file modifications
+			// that trigger read-guard "file modified since read" blocks.
+			const result = this.spawnBiome(["lint", "--write", absolutePath]);
 
 			if (result.error) {
 				return {
@@ -325,7 +326,7 @@ export class BiomeClient {
 		try {
 			const before = await fs.promises.readFile(absolutePath, "utf-8");
 			const result = await this.spawnBiomeAsync([
-				"check",
+				"lint",
 				"--write",
 				absolutePath,
 			]);
