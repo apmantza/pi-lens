@@ -41,6 +41,7 @@ import { clearGraphCache } from "./review-graph/builder.js";
 import type { RuffClient } from "./ruff-client.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
+import { pushDispatchResult } from "./diagnostic-widget.js";
 import { formatSecrets, scanForSecrets } from "./secrets-scanner.js";
 import {
 	getAutofixPolicyForFile,
@@ -889,6 +890,7 @@ export async function runPipeline(
 			writeIndex: ctx.telemetry?.writeIndex ?? 0,
 		},
 	);
+	pushDispatchResult(dispatchResult, filePath);
 	const hasBlockers = dispatchResult.hasBlockers;
 
 	if (dispatchResult.diagnostics.length > 0) {

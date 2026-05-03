@@ -46,6 +46,11 @@ import {
 } from "./clients/runtime-context.js";
 import { RuntimeCoordinator } from "./clients/runtime-coordinator.js";
 import { handleSessionStart } from "./clients/runtime-session.js";
+import {
+	bindDiagnosticWidget,
+	clearDiagnosticWidget,
+	unbindDiagnosticWidget,
+} from "./clients/diagnostic-widget.js";
 import { clearLastAnalyzedStateCache, handleToolResult } from "./clients/runtime-tool-result.js";
 import { cancelLSPIdleReset, handleTurnEnd } from "./clients/runtime-turn.js";
 import { TreeSitterClient } from "./clients/tree-sitter-client.js";
@@ -762,10 +767,21 @@ export default function (pi: ExtensionAPI) {
 				resetLSPService,
 			});
 			ctx.ui && updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
+		bindDiagnosticWidget(
+			(key, lines, opts) => ctx.ui.setWidget(key as any, lines as any, opts as any),
+			runtime.projectRoot,
+		);
 		} catch (sessionErr) {
 			dbg(`session_start crashed: ${sessionErr}`);
 			dbg(`session_start crash stack: ${(sessionErr as Error).stack}`);
 		}
+	});
+
+	pi.on("session_switch", (_event, ctx) => {
+		bindDiagnosticWidget(
+			(key, lines, opts) => ctx.ui.setWidget(key as any, lines as any, opts as any),
+			runtime.projectRoot,
+		);
 	});
 
 	pi.on("tool_call", async (event, ctx) => {
@@ -1266,6 +1282,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("turn_start", () => {
 		runtime.beginTurn();
 		clearLastAnalyzedStateCache();
+		clearDiagnosticWidget();
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
@@ -1315,6 +1332,7 @@ export default function (pi: ExtensionAPI) {
 	// The LSP idle-reset timer (240s) is unref'd but we cancel it explicitly here
 	// so it does not fire after shutdown. resetLSPService shuts down any live clients.
 	(pi as any).on("session_shutdown", () => {
+		unbindDiagnosticWidget();
 		cancelLSPIdleReset();
 		resetLSPService();
 	});
