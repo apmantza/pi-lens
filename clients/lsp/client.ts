@@ -732,7 +732,9 @@ async function clientShutdown(state: LSPClientState): Promise<void> {
 	// Use taskkill /F /T to kill the full process tree, matching the crash path.
 	if (process.platform === "win32" && pid > 0) {
 		try {
-			nodeSpawn("taskkill", ["/F", "/T", "/PID", String(pid)], {
+			// Absolute path avoids PATH-resolution: SystemRoot is set by Windows itself.
+			const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
+			nodeSpawn(taskkill, ["/F", "/T", "/PID", String(pid)], {
 				shell: false,
 				windowsHide: true,
 			});
@@ -917,7 +919,8 @@ export async function createLSPClient(options: {
 		lspProcess.process.kill("SIGTERM");
 		if (process.platform === "win32" && pid > 0) {
 			try {
-				nodeSpawn("taskkill", ["/F", "/T", "/PID", String(pid)], {
+				const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
+				nodeSpawn(taskkill, ["/F", "/T", "/PID", String(pid)], {
 					shell: false,
 					windowsHide: true,
 				});
