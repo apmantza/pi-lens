@@ -16,6 +16,7 @@ import {
 	formatSlopScoreSummary,
 	type SlopScoreSummary,
 } from "../session-summary.js";
+import { resolveSemgrepConfig } from "../semgrep-config.js";
 import {
 	clearCoverageNoticeState,
 	clearLatencyReports,
@@ -288,6 +289,52 @@ export function getDispatchSlopScoreLine(): string {
 	const summary = getDispatchSlopScoreSummary();
 	if (!summary) return "";
 	return formatSlopScoreSummary(summary);
+}
+
+const SEMGREP_SUPPORTED_KINDS = new Set<FileKind>([
+	"csharp",
+	"css",
+	"cxx",
+	"dart",
+	"docker",
+	"go",
+	"html",
+	"java",
+	"json",
+	"jsts",
+	"kotlin",
+	"lua",
+	"php",
+	"python",
+	"ruby",
+	"rust",
+	"shell",
+	"swift",
+	"terraform",
+	"yaml",
+]);
+
+function withSemgrepGroup(
+	kind: FileKind,
+	groups: RunnerGroup[],
+	ctx: ReturnType<typeof createDispatchContext>,
+): RunnerGroup[] {
+	if (!SEMGREP_SUPPORTED_KINDS.has(kind)) return groups;
+	const config = resolveSemgrepConfig(ctx.cwd, {
+		enabled: Boolean(ctx.pi.getFlag("lens-semgrep")),
+		config: ctx.pi.getFlag("lens-semgrep-config"),
+	});
+	if (!config.enabled) return groups;
+	if (groups.some((group) => group.runnerIds.includes("semgrep"))) return groups;
+	return [
+		...groups,
+		{
+			mode: "all",
+			runnerIds: ["semgrep"],
+			filterKinds: [kind],
+			semantic: "warning",
+		},
+	];
 }
 
 function withPrimaryPolicyGroup(
@@ -919,7 +966,7 @@ export async function dispatchLint(
 	const kind = ctx.kind;
 	if (!kind) return "";
 
-	const groups = getDispatchGroupsForKind(kind, pi);
+	const groups = withSemgrepGroup(kind, getDispatchGroupsForKind(kind, pi), ctx);
 	if (groups.length === 0) return "";
 
 	await runProviders(ctx);
@@ -962,7 +1009,7 @@ export async function dispatchLintWithResult(
 		};
 	}
 
-	const groups = getDispatchGroupsForKind(kind, pi);
+	const groups = withSemgrepGroup(kind, getDispatchGroupsForKind(kind, pi), ctx);
 	if (groups.length === 0) {
 		return {
 			diagnostics: [],

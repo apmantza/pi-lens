@@ -395,7 +395,8 @@ export default function (pi: ExtensionAPI) {
 	// --- Commands ---
 
 	pi.registerCommand("lens-toggle", {
-		description: "Toggle pi-lens on/off for the current session. Usage: /lens-toggle",
+		description:
+			"Toggle pi-lens on/off for the current session. Usage: /lens-toggle",
 		handler: async (_args, ctx) => {
 			lensEnabled = !lensEnabled;
 			ctx.ui.notify(

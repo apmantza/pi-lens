@@ -136,12 +136,11 @@ export function renderWidget(
 		fg: (color: string, s: string) => string;
 	},
 ): string[] {
-	const { fg } = theme;
-	const dim = (s: string) => fg("dim", s);
-	const red = (s: string) => fg("error", s);
-	const yellow = (s: string) => fg("warning", s);
-	const green = (s: string) => fg("success", s);
-	const cyan = (s: string) => fg("accent", s);
+	const dim = (s: string) => theme.fg("dim", s);
+	const red = (s: string) => theme.fg("error", s);
+	const yellow = (s: string) => theme.fg("warning", s);
+	const green = (s: string) => theme.fg("success", s);
+	const cyan = (s: string) => theme.fg("accent", s);
 	const w = width || 80;
 
 	if (files.size === 0 && lspServers.size === 0) return [];
