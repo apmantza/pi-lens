@@ -177,7 +177,10 @@ export function renderWidget(
 			(d) => d.severity === "warning",
 		).length;
 		const dot = errors > 0 ? red("●") : warnings > 0 ? yellow("▲") : green("✓");
-		const runnerNames = [...rec.runners.keys()].join(" ");
+		const runnerNames = [...rec.runners.entries()]
+			.filter(([, r]) => r.status !== "skipped")
+			.map(([id]) => id)
+			.join(" ");
 		const counts =
 			errors > 0
 				? " " +
