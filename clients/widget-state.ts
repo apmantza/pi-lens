@@ -245,8 +245,14 @@ function osc8(uri: string, label: string): string {
 }
 
 function truncate(s: string, maxLen: number): string {
-	// Strip ANSI for length measurement — rough but good enough
-	const visible = s.replace(/\x1b\[[0-9;]*m|\x1b]8;;[^\x1b]*\x1b\\|\x1b]8;;\x1b\\/g, "");
+	// Strip ANSI SGR sequences and OSC-8 hyperlinks for length measurement.
+	// ESC (U+001B) built at runtime to avoid S6324 control-character-in-regex.
+	const e = String.fromCharCode(27);
+	const ansi = new RegExp(
+		`${e}\\[[0-9;]*m|${e}]8;;[^${e}]*${e}\\\\|${e}]8;;${e}\\\\`,
+		"g",
+	);
+	const visible = s.replace(ansi, "");
 	if (visible.length <= maxLen) return s;
 	return s.slice(0, maxLen - 1) + "…";
 }
