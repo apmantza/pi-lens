@@ -730,11 +730,15 @@ export class LSPService {
 		// Full mode: 400ms grace — wait a bit for other clients to catch up.
 		const graceMs = diagnosticsMode === "document" ? 0 : EARLY_UNBLOCK_GRACE_MS;
 
-		// Result-aware racing: only trigger early-unblock when at least one
-		// client has returned non-empty diagnostics.
+		// Result-aware racing: trigger early-unblock when any client has results,
+		// OR when a seedFirstPush server returns (its first push is authoritative
+		// even when empty — waiting longer yields nothing more).
 		const perServer = await raceToCompletion(
 			clientWaits,
-			(results) => results.some((r) => r.diagnosticCount > 0),
+			(results) =>
+				results.some(
+					(r) => r.diagnosticCount > 0 || getStrategy(r.serverId).seedFirstPush,
+				),
 			{
 				timeoutMs: Math.max(
 					...spawned.map((entry) => getStrategy(entry.info.id).aggregateWaitMs),
