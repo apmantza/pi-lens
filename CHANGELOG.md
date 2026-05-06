@@ -6,6 +6,11 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Added
 
+- **Precompiled package entrypoint** — package metadata now exposes `./dist/index.mjs` and `./dist/index.d.mts` through `main`, `exports`, and `types`.
+- **Dynamic startup module promises** — the extension entrypoint now uses dynamic `import()` promises for local clients, commands, tools, i18n, and utilities so startup can overlap module loading with registration work.
+- **Startup-shared client promises** — heavy shared clients are initialized once and awaited by consumers instead of being eagerly constructed as top-level entrypoint state.
+- **Domain barrel modules** — runtime, read-guard/read-expansion, diagnostics, commands, and ast-grep tools now have grouped index modules for deferred loading.
+
 - **Test runner: import-based fallback discovery** — when basename pattern lookup finds no test file for a modified source file (e.g. `cline.test.ts` for `cline-auth.ts`), the runner now scans `tests/`, `__tests__/`, and the source file's own directory for any `*.test.*` file whose content references the source basename in an import path. Fixes the silent `no test file found` for files whose test is named after a module rather than the source file.
 - **Test runner: prefer local `node_modules/.bin` binary over `npx`** — `vitest` and `jest` now resolve the project-local binary (`node_modules/.bin/vitest.cmd` on Windows, `node_modules/.bin/vitest` on Unix) before falling back to `npx`, saving ~150ms of startup overhead per test run.
 - **Turn-end test runner logging** — `turn_end` now logs the outcome of every test run: `turn_end: test vitest util.test.ts → PASS 8p/0f (412ms)` or `FAIL 2p/8f (930ms)`. Stale results (turn advanced while tests ran) are logged with a `[stale]` prefix instead of being silently discarded. All-pass turns are no longer silent.
@@ -14,6 +19,13 @@ All notable changes to pi-lens will be documented in this file.
 - **Cross-session turn state eviction** — turn state (modified file ranges) now carries the session ID set at first edit. If `turn_end` reads a turn state written by a different session, it evicts it immediately and logs `turn_end: evicting stale turn state (session X ≠ current Y)`, preventing stale cross-session file lists from triggering jscpd, madge, or test runs.
 
 ### Changed
+
+- **Extension factory is async** — startup registration can overlap with core client initialization while preserving command, tool, resource, and lifecycle hook registration.
+- **Build pipeline uses tsdown** — `npm run build` now emits bundled ESM output and declaration files in `dist/`.
+- **Package publishing includes built output** — `dist/` is included in packaged files so the compiled package entrypoint resolves after `npm pack` / publish.
+- **TypeScript build settings target bundled ESM output** — build config now supports the dynamic-import entrypoint and emitted `dist/` package files.
+- **Runtime files are grouped by domain** — runtime handlers moved under `clients/runtime/`, read helpers under `clients/read/`, diagnostics under `clients/diagnostics/`, and ast-grep tools under `tools/ast-grep/`.
+- **Tree-sitter initialization is async-aware** — availability checks and source collection avoid adding synchronous entrypoint pressure.
 
 - **Context injections framed as automated checks** — all three `consume*` injections (`turn-end findings`, `test findings`, `session guidance`) now prefix their content with `[pi-lens automated check — not a user request]` so the agent cannot mistake a hook-injected message for a direct user command. Advisory sections additionally carry `ℹ️ Advisory — no action required this turn:` before their content; blockers (🔴) continue to require action.
 
@@ -26,6 +38,9 @@ All notable changes to pi-lens will be documented in this file.
 - **Knip now surfaces unused-export regressions** — newly unused exports in modified files are shown as advisory end-of-turn findings when they were absent from the previous Knip cache.
 
 ### Fixed
+
+- **Startup module loading overhead** — loading pi-lens no longer eagerly evaluates most of the extension implementation graph just to register extension hooks.
+- **Published package entrypoint integrity** — dry-run package contents now include `dist/index.mjs` and `dist/index.d.mts`, matching the package entry metadata.
 
 - **Knip latency log now includes result metadata** — the `turn_end` Knip phase previously logged only duration with empty `metadata: {}`, making it impossible to distinguish a clean run from a silent failure. It now logs `success`, `totalIssues`, `newIssues`, `blockerIssues`, and `skipped` when the startup scan is still in flight.
 
