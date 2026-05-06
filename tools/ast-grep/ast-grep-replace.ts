@@ -4,11 +4,39 @@
  * Extracted from index.ts for maintainability.
  */
 
-import { Type } from "typebox";
-import type { AstGrepClient } from "../clients/ast-grep-client.js";
-import { LANGUAGES } from "./shared.js";
+import * as typebox from "typebox";
+import type { AstGrepClient } from "../../clients/ast-grep-client.js";
+import { LANGUAGES } from "../index.js";
 
-export function createAstGrepReplaceTool(astGrepClient: AstGrepClient) {
+export function createAstGrepReplaceTool(astGrepClientPromise: Promise<AstGrepClient>): {
+	name: "ast_grep_replace"; label: string; description: string; promptSnippet: string; parameters: typebox.TObject<{
+		pattern: typebox.TString;
+		rewrite: typebox.TString;
+		lang: typebox.TString;
+		paths: typebox.TOptional<typebox.TArray<typebox.TString>>;
+		apply: typebox.TOptional<typebox.TBoolean>;
+	}>; execute(_toolCallId: string, params: Record<string, unknown>, _signal: AbortSignal, _onUpdate: unknown, ctx: { cwd?: string; }): Promise<{
+		content: {
+			type: "text";
+			text: string;
+		}[];
+		isError: boolean;
+		details: {
+			matchCount?: undefined;
+			applied?: undefined;
+		};
+	} | {
+		content: {
+			type: "text";
+			text: string;
+		}[];
+		details: {
+			matchCount: number;
+			applied: boolean;
+		};
+		isError?: undefined;
+	}>;
+} {
 	return {
 		name: "ast_grep_replace" as const,
 		label: "AST Replace",
@@ -24,22 +52,22 @@ export function createAstGrepReplaceTool(astGrepClient: AstGrepClient) {
 			"  - Incomplete code fragments\n\n" +
 			"Always use 'paths' to scope to specific files/folders. Dry-run first to preview changes.",
 		promptSnippet: "Use ast_grep_replace for AST-aware find-and-replace",
-		parameters: Type.Object({
-			pattern: Type.String({
+		parameters: typebox.Type.Object({
+			pattern: typebox.Type.String({
 				description: "AST pattern to match (be specific with context)",
 			}),
-			rewrite: Type.String({
+			rewrite: typebox.Type.String({
 				description: "Replacement using meta-variables from pattern",
 			}),
-			lang: Type.String({
+			lang: typebox.Type.String({
 				enum: [...LANGUAGES] as string[],
 				description: "Target language",
 			}),
-			paths: Type.Optional(
-				Type.Array(Type.String(), { description: "Specific files/folders" }),
+			paths: typebox.Type.Optional(
+				typebox.Type.Array(typebox.Type.String(), { description: "Specific files/folders" }),
 			),
-			apply: Type.Optional(
-				Type.Boolean({ description: "Apply changes (default: false)" }),
+			apply: typebox.Type.Optional(
+				typebox.Type.Boolean({ description: "Apply changes (default: false)" }),
 			),
 		}),
 		async execute(
@@ -48,7 +76,28 @@ export function createAstGrepReplaceTool(astGrepClient: AstGrepClient) {
 			_signal: AbortSignal,
 			_onUpdate: unknown,
 			ctx: { cwd?: string },
-		) {
+		): Promise<{
+			content: {
+				type: "text";
+				text: string;
+			}[];
+			isError: boolean;
+			details: {
+				matchCount?: undefined;
+				applied?: undefined;
+			};
+		} | {
+			content: {
+				type: "text";
+				text: string;
+			}[];
+			details: {
+				matchCount: number;
+				applied: boolean;
+			};
+			isError?: undefined;
+		}> {
+			const astGrepClient = await astGrepClientPromise;
 			if (!(await astGrepClient.ensureAvailable())) {
 				return {
 					content: [

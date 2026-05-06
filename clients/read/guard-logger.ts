@@ -1,4 +1,4 @@
-import * as fs from "node:fs";
+import * as nodeFs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -19,8 +19,8 @@ const VERBOSE_READ_GUARD_LOG =
 const LOG_ALLOWED_EDITS = process.env.PI_LENS_READ_GUARD_LOG_ALLOWS === "1";
 
 try {
-	if (!fs.existsSync(READ_GUARD_LOG_DIR)) {
-		fs.mkdirSync(READ_GUARD_LOG_DIR, { recursive: true });
+	if (!nodeFs.existsSync(READ_GUARD_LOG_DIR)) {
+		nodeFs.mkdirSync(READ_GUARD_LOG_DIR, { recursive: true });
 	}
 } catch {}
 
@@ -54,13 +54,13 @@ function shouldLogEvent(event: string): boolean {
 
 function rotateIfNeeded(): void {
 	try {
-		if (!fs.existsSync(READ_GUARD_LOG_FILE)) return;
-		const size = fs.statSync(READ_GUARD_LOG_FILE).size;
+		if (!nodeFs.existsSync(READ_GUARD_LOG_FILE)) return;
+		const size = nodeFs.statSync(READ_GUARD_LOG_FILE).size;
 		if (size < MAX_LOG_BYTES) return;
 		try {
-			fs.rmSync(READ_GUARD_LOG_BACKUP_FILE, { force: true });
+			nodeFs.rmSync(READ_GUARD_LOG_BACKUP_FILE, { force: true });
 		} catch {}
-		fs.renameSync(READ_GUARD_LOG_FILE, READ_GUARD_LOG_BACKUP_FILE);
+		nodeFs.renameSync(READ_GUARD_LOG_FILE, READ_GUARD_LOG_BACKUP_FILE);
 	} catch {}
 }
 
@@ -75,7 +75,7 @@ export function logReadGuardEvent(entry: ReadGuardLogEntry): void {
 	const line = `${JSON.stringify({ ts: new Date().toISOString(), ...entry })}\n`;
 	try {
 		rotateIfNeeded();
-		fs.appendFileSync(READ_GUARD_LOG_FILE, line);
+		nodeFs.appendFileSync(READ_GUARD_LOG_FILE, line);
 	} catch {}
 }
 

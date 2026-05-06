@@ -64,8 +64,9 @@ describe("tree-sitter-client wasm resolution", () => {
 		const { TreeSitterClient } = await import(
 			"../../clients/tree-sitter-client.js"
 		);
-		const client = new TreeSitterClient();
-		expect(client.isAvailable()).toBe(true);
+		const client = await TreeSitterClient.create();
+		const isAvailable = await client.isAvailable();
+		expect(isAvailable).toBe(true);
 	});
 
 	it("falls back to resolvePackagePath when require.resolve fails (on-the-fly compilation)", async () => {
@@ -86,9 +87,10 @@ describe("tree-sitter-client wasm resolution", () => {
 		const { TreeSitterClient } = await import(
 			"../../clients/tree-sitter-client.js"
 		);
-		const client = new TreeSitterClient();
+		const client = await TreeSitterClient.create();
+		const isAvailable = await client.isAvailable();
 		// resolvePackagePath fallback should still find the grammars
-		expect(client.isAvailable()).toBe(true);
+		expect(isAvailable).toBe(true);
 	});
 
 	it("re-evaluates grammarsDir when isAvailable is called after initial miss", async () => {
@@ -113,10 +115,11 @@ describe("tree-sitter-client wasm resolution", () => {
 		const { TreeSitterClient } = await import(
 			"../../clients/tree-sitter-client.js"
 		);
-		const client = new TreeSitterClient();
+		const client = await TreeSitterClient.create();
+		const isAvailable = await client.isAvailable();
 
 		// Constructor cached a missing path
 		// isAvailable should re-evaluate and find the real path
-		expect(client.isAvailable()).toBe(true);
+		expect(isAvailable).toBe(true);
 	});
 });

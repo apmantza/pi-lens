@@ -1,18 +1,18 @@
 import * as path from "node:path";
-import type { CacheManager } from "./cache-manager.js";
-import { logCascade } from "./cascade-logger.js";
-import { normalizeMapKey } from "./path-utils.js";
-import type { DependencyChecker } from "./dependency-checker.js";
+import type { CacheManager } from "../cache-manager.js";
+import { logCascade } from "../cascade-logger.js";
+import { normalizeMapKey } from "../path-utils.js";
+import type { DependencyChecker } from "../dependency-checker.js";
 import {
 	resolveRunnerPath,
 	toRunnerDisplayPath,
-} from "./dispatch/runner-context.js";
-import { getKnipIgnorePatterns } from "./file-utils.js";
-import type { KnipClient, KnipIssue } from "./knip-client.js";
-import { logLatency } from "./latency-logger.js";
-import { RUNTIME_CONFIG } from "./runtime-config.js";
-import type { RuntimeCoordinator } from "./runtime-coordinator.js";
-import type { TestRunnerClient } from "./test-runner-client.js";
+} from "../dispatch/runner-context.js";
+import { getKnipIgnorePatterns } from "../file-utils.js";
+import type { KnipClient, KnipIssue } from "../knip-client.js";
+import { logLatency } from "../latency-logger.js";
+import { RUNTIME_CONFIG } from "./config.js";
+import type { RuntimeCoordinator } from "./coordinator.js";
+import type { TestRunnerClient } from "../test-runner-client.js";
 
 interface TurnEndDeps {
 	ctxCwd?: string;
@@ -192,6 +192,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		blockerIssues?: number;
 		reason?: string;
 	} = {};
+
 	if (runtime.isStartupScanInFlight("knip")) {
 		dbg("turn_end: skipping knip (startup scan still in flight)");
 		knipMeta = { skipped: true };

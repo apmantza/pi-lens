@@ -52,6 +52,7 @@ import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { createGunzip } from "node:zlib";
+import * as utils from "../../utils.js";
 
 // Global installation directory for pi-lens tools
 const TOOLS_DIR = path.join(os.homedir(), ".pi-lens", "tools");
@@ -827,8 +828,7 @@ export async function getAllToolStatuses(): Promise<ToolStatus[]> {
 		);
 		const localPath =
 			process.platform === "win32" ? `${localBase}.cmd` : localBase;
-		try {
-			await fs.access(localPath);
+		if (await utils.fileExists(localPath)) {
 			if (await verifyToolBinary(localPath)) {
 				status.installed = true;
 				status.source = "pi-lens-auto";
@@ -836,8 +836,6 @@ export async function getAllToolStatuses(): Promise<ToolStatus[]> {
 				statuses.push(status);
 				continue;
 			}
-		} catch {
-			// fall through to not-installed
 		}
 
 		// 6. Not installed - will use npx fallback if npm strategy
@@ -877,42 +875,33 @@ export async function getToolPath(toolId: string): Promise<string | undefined> {
 	if (process.platform === "win32") {
 		// Prefer .cmd over extensionless — Node.js can't execute POSIX shell scripts on Windows
 		const cmdPath = `${localBase}.cmd`;
-		try {
-			await fs.access(cmdPath);
+		if (await utils.fileExists(cmdPath)) {
 			if (await verifyToolBinary(cmdPath)) {
 				return cmdPath;
 			}
 			logSessionStart(
 				`auto-install verify: ${cmdPath} exists but is broken, will reinstall`,
 			);
-		} catch {
-			// fall through to .exe
 		}
 		// Also check .exe — some postinstall scripts (e.g. @ast-grep/cli) place a
 		// .exe directly without a .cmd wrapper
 		const exePath = `${localBase}.exe`;
-		try {
-			await fs.access(exePath);
+		if (await utils.fileExists(exePath)) {
 			if (await verifyToolBinary(exePath)) {
 				return exePath;
 			}
 			logSessionStart(
 				`auto-install verify: ${exePath} exists but is broken, will reinstall`,
 			);
-		} catch {
-			// fall through to extensionless
 		}
 	}
-	try {
-		await fs.access(localBase);
+	if (await utils.fileExists(localBase)) {
 		if (await verifyToolBinary(localBase)) {
 			return localBase;
 		}
 		logSessionStart(
 			`auto-install verify: ${localBase} exists but is broken, will reinstall`,
 		);
-	} catch {
-		// fall through to global checks
 	}
 
 	// Check if global
@@ -959,11 +948,8 @@ async function findGitHubToolPath(
 		: [path.join(GITHUB_BIN_DIR, binaryName)];
 
 	for (const candidate of candidates) {
-		try {
-			await fs.access(candidate);
+		if (await utils.fileExists(candidate)) {
 			return candidate;
-		} catch {
-			// continue
 		}
 	}
 	return undefined;
@@ -1018,13 +1004,8 @@ async function findNpmGlobalToolPath(
 			: [path.join(dir, binaryName)];
 
 		for (const candidate of candidates) {
-			try {
-				await fs.access(candidate);
-				if (await verifyToolBinary(candidate)) {
-					return candidate;
-				}
-			} catch {
-				// continue
+			if (await utils.fileExists(candidate)) {
+				return candidate;
 			}
 		}
 	}
@@ -1105,13 +1086,10 @@ async function findPipUserToolPath(
 				: [path.join(dir, binaryName)];
 
 			for (const candidate of candidates) {
-				try {
-					await fs.access(candidate);
+				if (await utils.fileExists(candidate)) {
 					if (await verifyToolBinary(candidate)) {
 						return candidate;
 					}
-				} catch {
-					// continue
 				}
 			}
 		}
@@ -1456,9 +1434,7 @@ async function installNpmTool(
 
 		// Create a minimal package.json if it doesn't exist
 		const packageJsonPath = path.join(TOOLS_DIR, "package.json");
-		try {
-			await fs.access(packageJsonPath);
-		} catch {
+		if (!await utils.fileExists(packageJsonPath)) {
 			await fs.writeFile(
 				packageJsonPath,
 				JSON.stringify({ name: "pi-lens-tools", version: "1.0.0" }, null, 2),
@@ -1702,8 +1678,7 @@ async function installPipTool(
 						.map((p) => p.trim());
 
 					for (const scriptsDir of candidateScriptDirs) {
-						try {
-							await fs.access(scriptsDir);
+						if (await utils.fileExists(scriptsDir)) {
 							if (!normalizedPath.includes(scriptsDir.toLowerCase())) {
 								const existingPath =
 									process.env.PATH ||
@@ -1717,7 +1692,7 @@ async function installPipTool(
 								}
 								debugLog(`Added pip user scripts dir to PATH: ${scriptsDir}`);
 							}
-						} catch {
+						} else {
 							debugLog(`pip user scripts dir not accessible: ${scriptsDir}`);
 						}
 					}

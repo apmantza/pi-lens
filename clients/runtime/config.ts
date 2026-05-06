@@ -5,7 +5,7 @@
 
 export const RUNTIME_CONFIG = {
 	pipeline: {
-		lspMaxFileBytes: 2 * 1024 * 1024,
+		lspMaxFileBytes: (2 * 1024 * 1024) satisfies number as number,
 		lspMaxFileLines: 5000,
 		cascadeMaxFiles: 5,
 		cascadeMaxDiagnosticsPerFile: 20,

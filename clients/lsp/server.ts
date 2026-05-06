@@ -9,9 +9,10 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
-import { access, appendFile, mkdir, stat } from "node:fs/promises";
+import { appendFile, mkdir, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import * as utils from "../../utils.js";
 import { KIND_EXTENSIONS } from "../file-kinds.js";
 import { ensureTool, getToolEnvironment } from "../installer/index.js";
 import { logLatency } from "../latency-logger.js";
@@ -649,7 +650,6 @@ async function findTsserverPath(
 	root: string,
 	allowInstall: boolean | undefined,
 ): Promise<string | undefined> {
-	const fs = await import("node:fs/promises");
 	const candidates = [
 		path.join(root, "node_modules", "typescript", "lib", "tsserver.js"),
 		path.join(
@@ -661,12 +661,7 @@ async function findTsserverPath(
 		),
 	];
 	for (const p of candidates) {
-		try {
-			await fs.access(p);
-			return p;
-		} catch {
-			/* not found */
-		}
+		if (await utils.fileExists(p)) return p;
 	}
 	if (canInstall(allowInstall)) {
 		const tscPath = await ensureTool("typescript");
@@ -688,12 +683,7 @@ async function findTsserverPath(
 					"tsserver.js",
 				),
 			]) {
-				try {
-					await fs.access(p);
-					return p;
-				} catch {
-					/* not found */
-				}
+				if (await utils.fileExists(p)) return p;
 			}
 		}
 	}
@@ -772,12 +762,7 @@ export async function detectPythonVenv(
 		const pythonPath = isWin
 			? path.join(venv, "Scripts", "python.exe")
 			: path.join(venv, "bin", "python");
-		try {
-			await access(pythonPath);
-			return pythonPath;
-		} catch {
-			// not found — try next candidate
-		}
+		if (await utils.fileExists(pythonPath)) return pythonPath;
 	}
 	return undefined;
 }
@@ -808,7 +793,6 @@ export const TypeScriptServer: LSPServerInfo = {
 		),
 	),
 	async spawn(root, options) {
-		const fs = await import("node:fs/promises");
 		let source: "direct" | "managed" = "direct";
 
 		// Find typescript-language-server - prefer local project version
@@ -828,12 +812,9 @@ export const TypeScriptServer: LSPServerInfo = {
 
 		// Check for local version first (Windows .cmd first, then Unix)
 		for (const checkPath of [localLspCmd, localLsp]) {
-			try {
-				await fs.access(checkPath);
+			if (await utils.fileExists(checkPath)) {
 				lspPath = checkPath;
 				break;
-			} catch {
-				/* not found */
 			}
 		}
 
@@ -858,11 +839,8 @@ export const TypeScriptServer: LSPServerInfo = {
 				"lib",
 				"tsserver.js",
 			);
-			try {
-				await fs.access(localCandidate);
+			if (await utils.fileExists(localCandidate)) {
 				tsserverPath = localCandidate;
-			} catch {
-				/* not found */
 			}
 		}
 		if (tsserverPath) source = "managed";

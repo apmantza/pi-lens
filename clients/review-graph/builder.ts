@@ -24,7 +24,7 @@ import type { ReviewGraph, ReviewGraphEdge, ReviewGraphNode } from "./types.js";
 const REVIEW_GRAPH_VERSION = "v1";
 const MAIN_KINDS = new Set(["jsts", "python", "go", "rust", "ruby"]);
 const CHANGED_SYMBOLS_PREFIX = "session.reviewGraph.changedSymbols:";
-const treeSitterClient = new TreeSitterClient();
+const treeSitterClient = TreeSitterClient.create();
 const extractorCache = new Map<string, TreeSitterSymbolExtractor>();
 
 // Per-invocation Promise cache: deduplicates concurrent buildOrUpdateGraph calls
@@ -347,8 +347,9 @@ function mapKindToTreeSitterLanguage(
 async function getExtractor(
 	languageId: string,
 ): Promise<TreeSitterSymbolExtractor | null> {
+	const client = await treeSitterClient;
 	if (extractorCache.has(languageId)) return extractorCache.get(languageId)!;
-	const extractor = new TreeSitterSymbolExtractor(languageId, treeSitterClient);
+	const extractor = new TreeSitterSymbolExtractor(languageId, client);
 	const ok = await extractor.init();
 	if (!ok) return null;
 	extractorCache.set(languageId, extractor);
@@ -359,10 +360,11 @@ async function extractTreeSitterSymbols(
 	filePath: string,
 	languageId: string,
 ): Promise<ExtractedSymbols> {
+	const client = await treeSitterClient;
 	const empty: ExtractedSymbols = { symbols: [], refs: [] };
-	const initialized = await treeSitterClient.init();
+	const initialized = await client.init();
 	if (!initialized) return empty;
-	const tree = await treeSitterClient.parseFile(filePath, languageId);
+	const tree = await client.parseFile(filePath, languageId);
 	if (!tree) return empty;
 	const extractor = await getExtractor(languageId);
 	if (!extractor) return empty;

@@ -1,319 +1,49 @@
-import * as nodeFs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
-import { AstGrepClient } from "./clients/ast-grep-client.js";
-import { loadBootstrapClients } from "./clients/bootstrap.js";
-import { CacheManager } from "./clients/cache-manager.js";
-import {
-	clearWidgetState,
-	renderWidget,
-	setRenderCallback,
-} from "./clients/widget-state.js";
-import { getDiagnosticTracker } from "./clients/diagnostic-tracker.js";
-import {
-	getCascadeSessionStats,
-	getDispatchSlopScoreLine,
-	getLatencyReports,
-	resetDispatchBaselines,
-} from "./clients/dispatch/integration.js";
-import { detectFileKind } from "./clients/file-kinds.js";
-import {
-	getFormatService,
-	resetFormatService,
-} from "./clients/format-service.js";
-import {
-	evaluateGitGuard,
-	isGitCommitOrPushAttempt,
-} from "./clients/git-guard.js";
-import { getAllToolStatuses } from "./clients/installer/index.js";
-import { LANGUAGE_POLICY } from "./clients/language-policy.js";
-import { initLSPConfig } from "./clients/lsp/config.js";
-import { getLSPService, resetLSPService } from "./clients/lsp/index.js";
-import {
-	EXPANSION_BUDGET_MS,
-	EXPANSION_LIMIT_LINES,
-	tryExpandRead,
-} from "./clients/read-expansion.js";
-import { logReadGuardEvent } from "./clients/read-guard-logger.js";
-import {
-	countFileLines,
-	getTouchedLinesForGuard,
-	tryCorrectIndentationMismatch,
-} from "./clients/read-guard-tool-lines.js";
-import { handleAgentEnd } from "./clients/runtime-agent-end.js";
-import {
-	consumeSessionStartGuidance,
-	consumeTestFindings,
-	consumeTurnEndFindings,
-} from "./clients/runtime-context.js";
-import { RuntimeCoordinator } from "./clients/runtime-coordinator.js";
-import { handleSessionStart } from "./clients/runtime-session.js";
-import {
-	clearLastAnalyzedStateCache,
-	handleToolResult,
-} from "./clients/runtime-tool-result.js";
-import { cancelLSPIdleReset, handleTurnEnd } from "./clients/runtime-turn.js";
-import { isExternalOrVendorFile } from "./clients/path-utils.js";
-import { safeSpawnAsync } from "./clients/safe-spawn.js";
-import {
-	createStarterSemgrepConfig,
-	findLocalSemgrepConfig,
-	loadPiLensSemgrepConfig,
-	removePiLensSemgrepConfig,
-	resolveSemgrepConfig,
-	savePiLensSemgrepConfig,
-} from "./clients/semgrep-config.js";
-import { TreeSitterClient } from "./clients/tree-sitter-client.js";
-import { handleBooboo } from "./commands/booboo.js";
-import { initI18n, t } from "./i18n.js";
-import { createAstGrepReplaceTool } from "./tools/ast-grep-replace.js";
-import { createAstGrepSearchTool } from "./tools/ast-grep-search.js";
-import { createLspNavigationTool } from "./tools/lsp-navigation.js";
+import type { ExtensionAPI, ToolCallEventResult } from "@mariozechner/pi-coding-agent";
 
-const DEBUG_LOG_DIR = path.join(os.homedir(), ".pi-lens");
-const DEBUG_LOG = path.join(DEBUG_LOG_DIR, "sessionstart.log");
-function dbg(msg: string) {
-	// Skip file logging during tests to isolate test output from production logs
-	if (process.env.PI_LENS_TEST_MODE === "1" || process.env.VITEST) {
-		return;
-	}
-	const line = `[${new Date().toISOString()}] ${msg}\n`;
-	try {
-		nodeFs.mkdirSync(DEBUG_LOG_DIR, { recursive: true });
-		nodeFs.appendFileSync(DEBUG_LOG, line);
-	} catch (e) {
-		// Pipeline error logged
-		console.error("[pi-lens-debug] write failed:", e);
-	}
-}
+const clients = import("./clients/index.js");
+const commands = import("./commands/index.js");
+const i18n = import("./i18n.js");
+const tools = import("./tools/index.js");
+const utils = import("./utils.js");
 
-// No-op log function (verbose console logging was removed with lens-verbose flag)
-function log(_msg: string) {
-	// Previously tied to --lens-verbose flag, now disabled
-}
-
-// --- State ---
-
-const runtime = new RuntimeCoordinator();
-const _lspConfigInitializedCwds = new Set<string>();
-const _readExpansionClient = new TreeSitterClient();
-const LSP_TOOLCALL_NAV_TOUCH_BUDGET_MS = Math.max(
-	0,
-	Number.parseInt(
-		process.env.PI_LENS_TOOLCALL_NAV_TOUCH_MS ??
-			process.env.PI_LENS_LSP_NAV_CLIENT_WAIT_MS ??
-			"1500",
-		10,
-	) || 1500,
-);
-const LSP_TOOLCALL_TOUCH_BUDGET_MS = Math.max(
-	0,
-	Number.parseInt(process.env.PI_LENS_TOOLCALL_TOUCH_MS ?? "750", 10) || 750,
-);
-
-async function ensureLSPConfigInitialized(cwd: string): Promise<void> {
-	const normalizedCwd = path.resolve(cwd);
-	if (_lspConfigInitializedCwds.has(normalizedCwd)) return;
-	await initLSPConfig(normalizedCwd);
-	_lspConfigInitializedCwds.add(normalizedCwd);
-}
-
-function updateRuntimeIdentityFromEvent(event: unknown): void {
-	const raw = event as {
-		provider?: string;
-		model?: string;
-		sessionId?: string;
-		session?: { id?: string };
-		id?: string;
+export default async function (pi: ExtensionAPI): Promise<void> {
+	// Immediately begin initializing components without blocking.
+	const promise = {
+		clients,
+		commands,
+		tools,
+		utils,
+		astGrepClient: (async () => {
+			return (await clients).astGrep.AstGrepClient.create();
+		})(),
+		cacheManager: (async () => {
+			return (await clients).cacheManager.CacheManager.create();
+		})(),
+		i18n: (async () => {
+			(await i18n).initI18n(pi);
+			return i18n;
+		})(),
+		runtime: (async () => {
+			return (await clients).runtime.RuntimeCoordinator.create();
+		})(),
+		_readExpansionClient: (async () => {
+			return (await clients).treeSitter.TreeSitterClient.create();
+		})(),
 	};
-	runtime.setTelemetryIdentity({
-		provider: raw.provider,
-		model: raw.model,
-		sessionId: raw.sessionId ?? raw.session?.id ?? raw.id,
-	});
-}
 
-function normalizeCommandArgs(args: unknown): string[] {
-	if (Array.isArray(args)) {
-		return args.filter((arg): arg is string => typeof arg === "string");
-	}
-	if (typeof args === "string") {
-		return args.trim().split(/\s+/).filter(Boolean);
-	}
-	return [];
-}
-
-function getToolCallRawFilePath(
-	toolName: string,
-	event: { input?: unknown },
-): string | undefined {
-	const inputObj = (event.input ?? {}) as Record<string, unknown>;
-
-	if (
-		isToolCallEventType("write", event as any) ||
-		isToolCallEventType("edit", event as any)
-	) {
-		const filePath = (event.input as { path?: unknown }).path;
-		return typeof filePath === "string" ? filePath : undefined;
-	}
-
-	if (toolName === "read") {
-		if (typeof inputObj.path === "string") return inputObj.path;
-		if (typeof inputObj.filePath === "string") return inputObj.filePath;
-		return undefined;
-	}
-
-	if (toolName === "lsp_navigation") {
-		return typeof inputObj.filePath === "string"
-			? inputObj.filePath
-			: undefined;
-	}
-
-	return undefined;
-}
-
-function resolveToolCallFilePath(
-	rawFilePath: string | undefined,
-	cwd: string | undefined,
-	projectRoot: string,
-): string | undefined {
-	if (!rawFilePath) return undefined;
-	if (path.isAbsolute(rawFilePath)) return rawFilePath;
-	return path.resolve(cwd ?? projectRoot, rawFilePath);
-}
-
-type ReadToolInput = {
-	path?: string;
-	filePath?: string;
-	offset?: number;
-	limit?: number;
-};
-
-function getReadToolInput(
-	toolName: string,
-	input: unknown,
-): ReadToolInput | undefined {
-	if (toolName !== "read") return undefined;
-	return input as ReadToolInput;
-}
-
-function getEffectiveReadLimit(
-	filePath: string | undefined,
-	readInput: ReadToolInput | undefined,
-): number | undefined {
-	if (!filePath || !readInput) return undefined;
-	const requestedOffset = readInput.offset ?? 1;
-	const requestedLimit = readInput.limit;
-	return (
-		requestedLimit ??
-		Math.max(1, countFileLines(filePath) - requestedOffset + 1)
+	const LSP_TOOLCALL_NAV_TOUCH_BUDGET_MS = Math.max(
+		0,
+		Number.parseInt(
+			process.env.PI_LENS_TOOLCALL_NAV_TOUCH_MS ??
+				process.env.PI_LENS_LSP_NAV_CLIENT_WAIT_MS ??
+				"1500",
+			10,
+		) || 1500,
 	);
-}
-
-function isLspCapableFile(filePath: string): boolean {
-	const kind = detectFileKind(filePath);
-	if (!kind) return false;
-	return LANGUAGE_POLICY[kind]?.lspCapable !== false;
-}
-
-function shouldSkipLspAutoTouch(
-	filePath: string,
-	projectRoot: string,
-): boolean {
-	const normalized = path.resolve(filePath).replace(/\\/g, "/").toLowerCase();
-	const base = path.basename(filePath).toLowerCase();
-
-	if (normalized.includes("/.pi-lens/")) return true;
-	if (normalized.includes("/.harness/")) return true;
-	if (isExternalOrVendorFile(filePath, projectRoot)) return true;
-	if (
-		base === "stdout.jsonl" ||
-		base === "stderr.txt" ||
-		base === "prompt.txt"
-	) {
-		return true;
-	}
-	if (base === "case.json" && normalized.includes("/cases/")) {
-		return true;
-	}
-	return false;
-}
-
-function getNewContentFromToolCall(event: unknown): string | undefined {
-	if (isToolCallEventType("write", event as any)) {
-		return ((event as { input?: unknown }).input as { content?: string })
-			.content;
-	}
-	if (isToolCallEventType("edit", event as any)) {
-		const edits = (
-			(event as { input?: unknown }).input as {
-				edits?: Array<{ newText?: string }>;
-			}
-		).edits;
-		return edits?.map((edit) => edit.newText ?? "").join("\n");
-	}
-	return undefined;
-}
-
-function cleanStaleTsBuildInfo(cwd: string): string[] {
-	const cleaned: string[] = [];
-	try {
-		// Find all tsbuildinfo files in the project (max depth 3 to avoid crawling)
-		const candidates = nodeFs
-			.readdirSync(cwd)
-			.filter((f) => f.endsWith(".tsbuildinfo"))
-			.map((f) => path.join(cwd, f));
-
-		for (const infoPath of candidates) {
-			try {
-				const data = JSON.parse(nodeFs.readFileSync(infoPath, "utf-8"));
-				const root: string[] = data.root ?? [];
-				const dir = path.dirname(infoPath);
-				const isStale = root.some(
-					(f) => !nodeFs.existsSync(path.resolve(dir, f)),
-				);
-				if (isStale) {
-					nodeFs.unlinkSync(infoPath);
-					cleaned.push(infoPath);
-				}
-			} catch {
-				// Malformed or unreadable - skip
-			}
-		}
-	} catch {
-		// readdirSync failed - skip
-	}
-	return cleaned;
-}
-
-// --- Extension ---
-
-export default function (pi: ExtensionAPI) {
-	initI18n(pi);
-	const astGrepClient = new AstGrepClient();
-	const cacheManager = new CacheManager();
-
-	function updateLspStatus(
-		setStatus: (id: string, text: string | undefined) => void,
-		theme: {
-			fg: (color: "accent" | "success" | "error", text: string) => string;
-		},
-	) {
-		try {
-			const count = getLSPService().getAliveClientCount();
-			if (count > 0) {
-				setStatus("pi-lens-lsp", theme.fg("success", `LSP Active (${count})`));
-			} else {
-				setStatus("pi-lens-lsp", theme.fg("error", "LSP Inactive"));
-			}
-		} catch {
-			// Theme may not be fully initialized during early session startup.
-			// Skip the status update rather than crashing the event handler.
-		}
-	}
+	const LSP_TOOLCALL_TOUCH_BUDGET_MS = Math.max(
+		0,
+		Number.parseInt(process.env.PI_LENS_TOOLCALL_TOUCH_MS ?? "750", 10) || 750,
+	);
 
 	// --- Flags ---
 
@@ -390,57 +120,15 @@ export default function (pi: ExtensionAPI) {
 		default: false,
 	});
 
-	let lensEnabled = !pi.getFlag("no-lens");
-	let lensWidgetVisible = true;
-	type LensWidgetTui = { requestRender: () => void };
-	type LensWidgetTheme = { fg: (color: string, s: string) => string };
-	type LensWidgetComponent = {
-		render: (width: number) => string[];
-		invalidate: () => void;
-	};
-	type LensWidgetFactory = (
-		tui: LensWidgetTui,
-		theme: LensWidgetTheme,
-	) => LensWidgetComponent;
-	type LensWidgetUi = { setWidget?: unknown };
-	type LensWidgetSetWidget = (
-		id: string,
-		widget: LensWidgetFactory | undefined,
-		options?: { placement: "belowEditor" },
-	) => void;
-
-	function mountLensWidget(ui: LensWidgetUi | undefined): boolean {
-		if (typeof ui?.setWidget !== "function") return false;
-		const setWidget = ui.setWidget as LensWidgetSetWidget;
-		setWidget(
-			"pi-lens",
-			(tui: LensWidgetTui, theme: LensWidgetTheme) => {
-				setRenderCallback(() => tui.requestRender());
-				return {
-					render: (width: number) => renderWidget(width, theme),
-					invalidate: () => setRenderCallback(() => {}),
-				};
-			},
-			{ placement: "belowEditor" },
-		);
-		return true;
-	}
-
-	function unmountLensWidget(ui: LensWidgetUi | undefined): boolean {
-		setRenderCallback(() => {});
-		if (typeof ui?.setWidget !== "function") return false;
-		const setWidget = ui.setWidget as LensWidgetSetWidget;
-		setWidget("pi-lens", undefined);
-		return true;
-	}
-
 	// --- Commands ---
 
 	pi.registerCommand("lens-toggle", {
 		description:
 			"Toggle pi-lens on/off for the current session. Usage: /lens-toggle",
 		handler: async (_args, ctx) => {
-			lensEnabled = !lensEnabled;
+			const clients = await promise.clients;
+			clients.widget.setLensEnabled(!clients.widget.getLensEnabled());
+			let lensEnabled = clients.widget.getLensEnabled();
 			ctx.ui.notify(
 				lensEnabled
 					? "pi-lens enabled for this session."
@@ -454,10 +142,11 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Show or hide the pi-lens diagnostics widget below the editor. Usage: /lens-widget-toggle",
 		handler: async (_args, ctx) => {
-			const nextVisible = !lensWidgetVisible;
+			const clients = await promise.clients;
+			const nextVisible = !clients.widget.getLensWidgetVisible();
 			const changed = nextVisible
-				? mountLensWidget(ctx.ui)
-				: unmountLensWidget(ctx.ui);
+				? clients.widget.mountLensWidget(ctx.ui)
+				: clients.widget.unmountLensWidget(ctx.ui);
 			if (!changed) {
 				ctx.ui.notify(
 					"pi-lens widget is not supported by this pi version.",
@@ -466,9 +155,9 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			lensWidgetVisible = nextVisible;
+			clients.widget.setLensWidgetVisible(nextVisible);
 			ctx.ui.notify(
-				lensWidgetVisible
+				clients.widget.getLensWidgetVisible()
 					? "pi-lens widget shown. Run /lens-widget-toggle to hide it."
 					: "pi-lens widget hidden. Run /lens-widget-toggle to show it.",
 				"info",
@@ -480,7 +169,12 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Manage Semgrep dispatch. Usage: /lens-semgrep status | enable [--config <auto|p/pack|path>] | disable | init",
 		handler: async (args, ctx) => {
-			const parts = normalizeCommandArgs(args);
+			const clients = await promise.clients;
+			const utils = await promise.utils;
+
+			const runtime = await promise.runtime;
+
+			const parts = utils.normalizeCommandArgs(args);
 			const action = parts[0] ?? "status";
 			const cwd = ctx.cwd ?? runtime.projectRoot;
 
@@ -494,7 +188,7 @@ export default function (pi: ExtensionAPI) {
 
 			if (action === "enable") {
 				const config = readConfigArg();
-				const localConfig = findLocalSemgrepConfig(cwd);
+				const localConfig = clients.semgrep.findLocalSemgrepConfig(cwd);
 				if (!config && !localConfig) {
 					ctx.ui.notify(
 						[
@@ -507,7 +201,7 @@ export default function (pi: ExtensionAPI) {
 					return;
 				}
 
-				const savedPath = savePiLensSemgrepConfig(cwd, {
+				const savedPath = clients.semgrep.savePiLensSemgrepConfig(cwd, {
 					enabled: true,
 					...(config ? { config } : {}),
 				});
@@ -519,13 +213,13 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (action === "disable") {
-				const savedPath = savePiLensSemgrepConfig(cwd, { enabled: false });
+				const savedPath = clients.semgrep.savePiLensSemgrepConfig(cwd, { enabled: false });
 				ctx.ui.notify(`Semgrep dispatch disabled. Saved ${savedPath}`, "info");
 				return;
 			}
 
 			if (action === "clear") {
-				const removed = removePiLensSemgrepConfig(cwd);
+				const removed = clients.semgrep.removePiLensSemgrepConfig(cwd);
 				ctx.ui.notify(
 					removed
 						? "Removed .pi-lens/semgrep.json; Semgrep now auto-enables only when local .semgrep.yml exists."
@@ -536,8 +230,8 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (action === "init") {
-				const configPath = createStarterSemgrepConfig(cwd);
-				const savedPath = savePiLensSemgrepConfig(cwd, { enabled: true });
+				const configPath = clients.semgrep.createStarterSemgrepConfig(cwd);
+				const savedPath = clients.semgrep.savePiLensSemgrepConfig(cwd, { enabled: true });
 				ctx.ui.notify(
 					`Created starter Semgrep config at ${configPath} and enabled Semgrep dispatch (${savedPath}).`,
 					"info",
@@ -553,13 +247,13 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			const localConfig = findLocalSemgrepConfig(cwd);
-			const piLensConfig = loadPiLensSemgrepConfig(cwd);
-			const resolved = resolveSemgrepConfig(cwd, {
+			const localConfig = clients.semgrep.findLocalSemgrepConfig(cwd);
+			const piLensConfig = clients.semgrep.loadPiLensSemgrepConfig(cwd);
+			const resolved = clients.semgrep.resolveSemgrepConfig(cwd, {
 				enabled: Boolean(pi.getFlag("lens-semgrep")),
 				config: pi.getFlag("lens-semgrep-config"),
 			});
-			const version = await safeSpawnAsync("semgrep", ["--version"], {
+			const version = await clients.spawn.safeSpawnAsync("semgrep", ["--version"], {
 				cwd,
 				timeout: 5000,
 			});
@@ -584,6 +278,10 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Full codebase review: design smells, complexity, AI slop detection, TODOs, dead code, duplicates, type coverage. Results saved to .pi-lens/reviews/. Usage: /lens-booboo [path]",
 		handler: async (args, ctx) => {
+			const clients = await promise.clients;
+			const commands = await promise.commands;
+
+			const astGrep = await promise.astGrepClient;
 			const {
 				complexityClient,
 				todoScanner,
@@ -591,12 +289,13 @@ export default function (pi: ExtensionAPI) {
 				jscpdClient,
 				typeCoverageClient,
 				depChecker,
-			} = await loadBootstrapClients();
-			return handleBooboo(
+			} = await clients.bootstrap.loadBootstrapClients();
+
+			return commands.booboo.handleBooboo(
 				args,
 				ctx,
 				{
-					astGrep: astGrepClient,
+					astGrep,
 					complexity: complexityClient,
 					todo: todoScanner,
 					knip: knipClient,
@@ -615,11 +314,9 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Show Technical Debt Index (TDI) and project health trend. Usage: /lens-tdi",
 		handler: async (_args, ctx) => {
-			const { loadHistory, computeTDI } = await import(
-				"./clients/metrics-history.js"
-			);
-			const history = loadHistory();
-			const tdi = computeTDI(history);
+			const clients = await promise.clients;
+			const history = clients.metrics.loadHistory();
+			const tdi = clients.metrics.computeTDI(history);
 
 			let summary = "🔴 High debt - run /lens-booboo-refactor";
 			if (tdi.score <= 30) {
@@ -653,6 +350,12 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Show pi-lens runtime health: pipeline crashes, slow runners, and last dispatch latency. Usage: /lens-health",
 		handler: async (_args, ctx) => {
+			const path = await import("node:path");
+			const clients = await promise.clients;
+			const i18n = await promise.i18n;
+
+			const runtime = await promise.runtime;
+
 			const crashEntries = runtime
 				.getCrashEntries()
 				.sort((a, b) => b[1] - a[1]);
@@ -661,9 +364,9 @@ export default function (pi: ExtensionAPI) {
 				0,
 			);
 
-			const reports = getLatencyReports();
+			const reports = clients.dispatch.integration.getLatencyReports();
 			const last = reports.length > 0 ? reports[reports.length - 1] : undefined;
-			const diagStats = getDiagnosticTracker().getStats();
+			const diagStats = clients.diagnostics.getDiagnosticTracker().getStats();
 			const slowRunners = last
 				? [...last.runners]
 						.sort((a, b) => b.durationMs - a.durationMs)
@@ -684,20 +387,20 @@ export default function (pi: ExtensionAPI) {
 			);
 
 			const lines: string[] = [
-				t("lens.health.title", "🩺 PI-LENS HEALTH"),
+				i18n.t("lens.health.title", "🩺 PI-LENS HEALTH"),
 				`Session started: ${startedAt} (${sessionAgeStr} ago)`,
 				"",
-				t("lens.health.crashes", "Pipeline crashes (session): {count}", {
+				i18n.t("lens.health.crashes", "Pipeline crashes (session): {count}", {
 					count: totalCrashes,
 				}),
-				t("lens.health.files", "Files affected: {count}", {
+				i18n.t("lens.health.files", "Files affected: {count}", {
 					count: crashEntries.length,
 				}),
 			];
-			const slopScoreLine = getDispatchSlopScoreLine();
+			const slopScoreLine = clients.dispatch.integration.getDispatchSlopScoreLine();
 
 			if (crashEntries.length > 0) {
-				lines.push("", t("lens.health.topCrashFiles", "Top crash files:"));
+				lines.push("", i18n.t("lens.health.topCrashFiles", "Top crash files:"));
 				for (const [file, count] of crashEntries.slice(0, 5)) {
 					lines.push(`  ${path.basename(file)}: ${count}`);
 				}
@@ -719,28 +422,28 @@ export default function (pi: ExtensionAPI) {
 			} else {
 				lines.push(
 					"",
-					t("lens.health.noLatency", "No dispatch latency reports yet."),
+					i18n.t("lens.health.noLatency", "No dispatch latency reports yet."),
 				);
 			}
 
 			lines.push(
 				"",
-				t("lens.health.diagnosticsShown", "Diagnostics shown: {count}", {
+				i18n.t("lens.health.diagnosticsShown", "Diagnostics shown: {count}", {
 					count: diagStats.totalShown,
 				}),
-				t("lens.health.autoFixed", "Auto-fixed: {count}", {
+				i18n.t("lens.health.autoFixed", "Auto-fixed: {count}", {
 					count: diagStats.totalAutoFixed,
 				}),
-				t("lens.health.agentFixed", "Agent-fixed: {count}", {
+				i18n.t("lens.health.agentFixed", "Agent-fixed: {count}", {
 					count: diagStats.totalAgentFixed,
 				}),
-				t("lens.health.unresolved", "Unresolved carryover: {count}", {
+				i18n.t("lens.health.unresolved", "Unresolved carryover: {count}", {
 					count: diagStats.totalUnresolved,
 				}),
 			);
 
 			if (diagStats.repeatOffenders.length > 0) {
-				lines.push(t("lens.health.repeatOffenders", "Repeat offenders:"));
+				lines.push(i18n.t("lens.health.repeatOffenders", "Repeat offenders:"));
 				for (const offender of diagStats.repeatOffenders.slice(0, 5)) {
 					lines.push(
 						`  ${path.basename(offender.filePath)}:${offender.line} ${offender.ruleId} (${offender.count}x)`,
@@ -749,7 +452,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			if (diagStats.topViolations.length > 0) {
-				lines.push(t("lens.health.topNoisyRules", "Top noisy rules:"));
+				lines.push(i18n.t("lens.health.topNoisyRules", "Top noisy rules:"));
 				for (const v of diagStats.topViolations.slice(0, 5)) {
 					const samplePath =
 						v.samplePaths.length > 0
@@ -763,7 +466,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// LSP status
-			const lspClients = getLSPService().getStatus();
+			const lspClients = clients.lsp.getLSPService().getStatus();
 			if (lspClients.length > 0) {
 				lines.push("", "LSP servers:");
 				for (const { serverId, root, connected } of lspClients) {
@@ -776,7 +479,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			// Cascade summary
-			const cascadeStats = getCascadeSessionStats();
+			const cascadeStats = clients.dispatch.integration.getCascadeSessionStats();
 			if (cascadeStats.runs > 0) {
 				lines.push(
 					"",
@@ -802,7 +505,9 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Show pi-lens tool installation status: globally installed, auto-installed, or npx fallback. Usage: /lens-tools",
 		handler: async (_args, ctx) => {
-			const statuses = await getAllToolStatuses();
+			const clients = await promise.clients;
+
+			const statuses = await clients.installer.getAllToolStatuses();
 
 			const bySource = {
 				"global-path": statuses.filter((s) => s.source === "global-path"),
@@ -901,7 +606,12 @@ export default function (pi: ExtensionAPI) {
 		description:
 			"Allow one edit to a file without a prior read. Usage: /lens-allow-edit <path>",
 		handler: async (args, ctx) => {
-			const [rawTarget] = normalizeCommandArgs(args);
+			const path = await import("node:path");
+			const utils = await promise.utils;
+
+			const runtime = await promise.runtime;
+
+			const [rawTarget] = utils.normalizeCommandArgs(args);
 			if (!rawTarget) {
 				ctx.ui.notify("Usage: /lens-allow-edit <path>", "warning");
 				return;
@@ -918,11 +628,6 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	// --- Tools (extracted to tools/) ---
-	pi.registerTool(createAstGrepSearchTool(astGrepClient) as any);
-	pi.registerTool(createAstGrepReplaceTool(astGrepClient) as any);
-	pi.registerTool(createLspNavigationTool((name) => pi.getFlag(name)) as any);
-
 	// REMOVED: ~450 lines of inline tool definitions moved to tools/
 	// See tools/ast-grep-search.ts, tools/ast-grep-replace.ts, tools/lsp-navigation.ts
 
@@ -932,9 +637,16 @@ export default function (pi: ExtensionAPI) {
 
 	// --- Register skills with pi ---
 	pi.on("resources_discover", async (_event, _ctx) => {
-		// Get the extension directory (where this file is located)
-		const extensionDir = path.dirname(fileURLToPath(import.meta.url));
-		const skillsDir = path.join(extensionDir, "skills");
+		const clients = await promise.clients;
+		const tools = await promise.tools;
+		const skillsDir = clients.packageRoot.resolvePackagePath(import.meta.url, "skills");
+
+		// --- Tools (extracted to tools/) ---
+		pi.registerTool(tools.astGrep.createAstGrepSearchTool(promise.astGrepClient) as any);
+		pi.registerTool(tools.astGrep.createAstGrepReplaceTool(promise.astGrepClient) as any);
+		pi.registerTool(tools.lspNavigation.createLspNavigationTool((name) => pi.getFlag(name)) as any);
+
+		clients.widget.setLensEnabled(!pi.getFlag("no-lens"));
 
 		return {
 			skillPaths: [skillsDir],
@@ -944,13 +656,20 @@ export default function (pi: ExtensionAPI) {
 	// --- Events ---
 
 	pi.on("session_start", async (event, ctx) => {
+		const clients = await promise.clients;
+		const utils = await promise.utils;
+
+		const runtime = await promise.runtime;
+		const astGrepClient = await promise.astGrepClient;
+		const cacheManager = await promise.cacheManager;
+
 		try {
-			dbg("session_start fired");
-			updateRuntimeIdentityFromEvent(event);
+			utils.dbg("session_start fired");
+			runtime.updateIdentityFromEvent(event);
 			try {
-				await ensureLSPConfigInitialized(ctx.cwd ?? process.cwd());
+				await clients.lsp.config.ensureLSPConfigInitialized(ctx.cwd ?? process.cwd());
 			} catch (cfgErr) {
-				dbg(`lsp config init failed: ${cfgErr}`);
+				utils.dbg(`lsp config init failed: ${cfgErr}`);
 			}
 
 			const {
@@ -965,13 +684,13 @@ export default function (pi: ExtensionAPI) {
 				testRunnerClient,
 				goClient,
 				rustClient,
-			} = await loadBootstrapClients();
-			await handleSessionStart({
+			} = await clients.bootstrap.loadBootstrapClients();
+			await clients.runtime.handleSessionStart({
 				ctxCwd: ctx.cwd,
 				getFlag: (name: string) => pi.getFlag(name),
 				notify: (msg, level) => ctx.ui.notify(msg, level),
-				dbg,
-				log,
+				dbg: utils.dbg,
+				log: utils.log,
 				runtime,
 				metricsClient,
 				cacheManager,
@@ -986,31 +705,51 @@ export default function (pi: ExtensionAPI) {
 				testRunnerClient,
 				goClient,
 				rustClient,
-				ensureTool: async (name: string) =>
-					(await import("./clients/installer/index.js")).ensureTool(name),
-				cleanStaleTsBuildInfo,
-				resetDispatchBaselines,
-				resetLSPService,
+				ensureTool: async (name: string) => clients.installer.ensureTool(name),
+				cleanStaleTsBuildInfo: utils.cleanStaleTsBuildInfo,
+				resetDispatchBaselines: clients.dispatch.integration.resetDispatchBaselines,
+				resetLSPService: clients.lsp.resetLSPService,
 			});
-			ctx.ui && updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
-			clearWidgetState();
-			if (lensWidgetVisible) {
-				mountLensWidget(ctx.ui);
+			ctx.ui && clients.lsp.updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
+			clients.widget.clearWidgetState();
+			if (ctx.ui?.setWidget) {
+				ctx.ui.setWidget(
+					"pi-lens",
+					(tui: any, theme: any) => {
+						clients.widget.setRenderCallback(() => tui.requestRender());
+						return {
+							render: (width: number) => clients.widget.renderWidget(width, theme),
+							invalidate: () => clients.widget.setRenderCallback(() => {}),
+						};
+					},
+					{ placement: "belowEditor" },
+				);
 			}
 		} catch (sessionErr) {
-			dbg(`session_start crashed: ${sessionErr}`);
-			dbg(`session_start crash stack: ${(sessionErr as Error).stack}`);
+			utils.dbg(`session_start crashed: ${sessionErr}`);
+			utils.dbg(`session_start crash stack: ${(sessionErr as Error).stack}`);
 		}
 	});
 
-	pi.on("tool_call", async (event, ctx) => {
+	// type Parameters<T extends (...args: any) => any> = T extends (...args: infer P) => any ? P : never
+	pi.on("tool_call", async (event, ctx): Promise<ToolCallEventResult | void> => {
+		const nodeFs = await import("node:fs");
+		const path = await import("node:path");
+		const piCodingAgent = await import("@mariozechner/pi-coding-agent");
+		const clients = await promise.clients;
+		const tools = await promise.tools;
+		const utils = await promise.utils;
+
+		const runtime = await promise.runtime;
+		const cacheManager = await promise.cacheManager;
+
 		const toolName = (event as { toolName?: string }).toolName ?? "";
-		if (!lensEnabled) return;
+		if (!clients.widget.getLensEnabled()) return;
 		if (
 			pi.getFlag("lens-guard") &&
-			isGitCommitOrPushAttempt(toolName, event.input)
+			clients.git.isGitCommitOrPushAttempt(toolName, event.input)
 		) {
-			const guard = evaluateGitGuard(
+			const guard = clients.git.evaluateGitGuard(
 				runtime,
 				cacheManager,
 				ctx.cwd ?? runtime.projectRoot,
@@ -1023,8 +762,8 @@ export default function (pi: ExtensionAPI) {
 			}
 		}
 
-		const rawFilePath = getToolCallRawFilePath(toolName, event);
-		const filePath = resolveToolCallFilePath(
+		const rawFilePath = utils.getToolCallRawFilePath(toolName, event);
+		const filePath = utils.resolveToolCallFilePath(
 			rawFilePath,
 			ctx.cwd,
 			runtime.projectRoot,
@@ -1035,26 +774,26 @@ export default function (pi: ExtensionAPI) {
 				const configCwd = filePath
 					? path.dirname(filePath)
 					: (ctx.cwd ?? runtime.projectRoot ?? process.cwd());
-				await ensureLSPConfigInitialized(configCwd);
+				await clients.lsp.config.ensureLSPConfigInitialized(configCwd);
 			} catch (cfgErr) {
-				dbg(`lsp config init failed during tool_call: ${cfgErr}`);
+				utils.dbg(`lsp config init failed during tool_call: ${cfgErr}`);
 			}
 		}
 
 		if (!filePath) return;
 
-		dbg(
+		utils.dbg(
 			`tool_call fired for: ${filePath} (exists: ${nodeFs.existsSync(filePath)})`,
 		);
 		if (!nodeFs.existsSync(filePath)) return;
 
-		const isExternalOrVendor = isExternalOrVendorFile(
+		const isExternalOrVendor = clients.path.isExternalOrVendorFile(
 			filePath,
 			runtime.projectRoot,
 		);
 
-		const lspCapableFile = isLspCapableFile(filePath);
-		const lspAutoTouchSkipped = shouldSkipLspAutoTouch(
+		const lspCapableFile = clients.file.isLspCapableFile(filePath);
+		const lspAutoTouchSkipped = clients.path.shouldSkipLspAutoTouch(
 			filePath,
 			runtime.projectRoot,
 		);
@@ -1071,11 +810,11 @@ export default function (pi: ExtensionAPI) {
 			!pi.getFlag("no-lsp") &&
 			lspAutoTouchEligible;
 		if (!lspCapableFile && !pi.getFlag("no-lsp")) {
-			dbg(
+			utils.dbg(
 				`lsp auto-touch skipped: ${path.basename(filePath)} (file kind not LSP-capable)`,
 			);
 		} else if (lspAutoTouchSkipped && !pi.getFlag("no-lsp")) {
-			dbg(
+			utils.dbg(
 				`lsp auto-touch skipped: ${path.basename(filePath)} (internal/support artifact)`,
 			);
 		}
@@ -1083,7 +822,7 @@ export default function (pi: ExtensionAPI) {
 			const readSkipReason = !lspAutoTouchEligible
 				? "file not eligible for LSP warm"
 				: "already warming or warmed recently";
-			dbg(
+			utils.dbg(
 				`lsp read warm skipped: ${path.basename(filePath)} (${readSkipReason})`,
 			);
 		}
@@ -1096,9 +835,9 @@ export default function (pi: ExtensionAPI) {
 						: LSP_TOOLCALL_TOUCH_BUDGET_MS;
 				if (toolName === "read") {
 					runtime.markLspReadWarmStarted(filePath);
-					dbg(`lsp read warm started: ${path.basename(filePath)}`);
+					utils.dbg(`lsp read warm started: ${path.basename(filePath)}`);
 				}
-				void getLSPService()
+				void clients.lsp.getLSPService()
 					.touchFile(filePath, fileContent, {
 						diagnostics: "none",
 						source: `tool_call:${toolName}`,
@@ -1108,17 +847,17 @@ export default function (pi: ExtensionAPI) {
 					.then(() => {
 						if (toolName === "read") {
 							runtime.markLspReadWarmCompleted(filePath);
-							dbg(`lsp read warm completed: ${path.basename(filePath)}`);
+							utils.dbg(`lsp read warm completed: ${path.basename(filePath)}`);
 						}
 						if (ctx.ui) {
-							ctx.ui && updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
+							ctx.ui && clients.lsp.updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
 						}
 					})
 					.catch((err) => {
 						if (toolName === "read") {
 							runtime.clearLspReadWarmState(filePath);
 						}
-						dbg(`lsp auto-touch failed for ${filePath}: ${err}`);
+						utils.dbg(`lsp auto-touch failed for ${filePath}: ${err}`);
 					});
 			} catch {
 				if (toolName === "read") {
@@ -1128,11 +867,11 @@ export default function (pi: ExtensionAPI) {
 			}
 		}
 
-		const readInput = getReadToolInput(toolName, event.input);
+		const readInput = tools.read.getReadToolInput(toolName, event.input);
 		const requestedReadOffset = readInput?.offset ?? 1;
 		const requestedReadLimit = readInput?.limit;
 		let effectiveReadOffset = requestedReadOffset;
-		let effectiveReadLimit = getEffectiveReadLimit(filePath, readInput);
+		let effectiveReadLimit = clients.read.getEffectiveReadLimit(filePath, readInput);
 
 		// --- Opportunistic read expansion via tree-sitter ---
 		// For partial reads (small limit, not from line 1), find the enclosing
@@ -1155,14 +894,15 @@ export default function (pi: ExtensionAPI) {
 			filePath &&
 			readInput &&
 			requestedReadLimit != null &&
-			requestedReadLimit <= EXPANSION_LIMIT_LINES
+			requestedReadLimit <= clients.read.EXPANSION_LIMIT_LINES
 		) {
+			const _readExpansionClient = await promise._readExpansionClient;
 			const totalLines =
 				effectiveReadLimit != null && requestedReadLimit == null
 					? effectiveReadLimit
-					: countFileLines(filePath);
+					: clients.read.countFileLines(filePath);
 			try {
-				const expansion = await tryExpandRead(
+				const expansion = await clients.read.tryExpandRead(
 					filePath,
 					requestedReadOffset,
 					requestedReadLimit,
@@ -1176,7 +916,7 @@ export default function (pi: ExtensionAPI) {
 					effectiveReadLimit = expansion.newLimit;
 					expandedByLsp = true;
 					enclosingSymbol = expansion.enclosingSymbol;
-					logReadGuardEvent({
+					clients.read.logReadGuardEvent({
 						event: "ts_range_expanded",
 						sessionId: runtime.telemetrySessionId,
 						filePath,
@@ -1190,10 +930,10 @@ export default function (pi: ExtensionAPI) {
 						symbolEndLine: expansion.enclosingSymbol.endLine,
 						metadata: {
 							durationMs: expansion.durationMs,
-							budgetMs: EXPANSION_BUDGET_MS,
+							budgetMs: clients.read.EXPANSION_BUDGET_MS,
 						},
 					});
-					dbg(
+					utils.dbg(
 						`ts expanded read: ${path.basename(filePath)} ` +
 							`lines ${requestedReadOffset}–${requestedReadOffset + requestedReadLimit - 1} ` +
 							`→ ${expansion.enclosingSymbol.name} ` +
@@ -1207,9 +947,9 @@ export default function (pi: ExtensionAPI) {
 
 		// --- Read-Before-Edit Guard: record reads ---
 		if (toolName === "read" && filePath && !isExternalOrVendor) {
-			const totalLines = countFileLines(filePath);
+			const totalLines = clients.read.countFileLines(filePath);
 			const deliveredLimit = effectiveReadLimit ?? 1;
-			logReadGuardEvent({
+			clients.read.logReadGuardEvent({
 				event: "read_pattern",
 				sessionId: runtime.telemetrySessionId,
 				filePath,
@@ -1221,7 +961,7 @@ export default function (pi: ExtensionAPI) {
 					totalLines,
 					isPartial:
 						requestedReadLimit != null && requestedReadLimit < totalLines,
-					fileKind: detectFileKind(filePath) ?? "unknown",
+					fileKind: clients.file.detectFileKind(filePath) ?? "unknown",
 					fractionRead:
 						totalLines > 0
 							? Math.round((deliveredLimit / totalLines) * 100) / 100
@@ -1243,7 +983,7 @@ export default function (pi: ExtensionAPI) {
 			});
 		}
 
-		const { complexityClient } = await loadBootstrapClients();
+		const { complexityClient } = await clients.bootstrap.loadBootstrapClients();
 		// Record complexity baseline for historical tracking (booboo/tdi).
 		// Not shown inline - just captured for delta analysis.
 		if (
@@ -1254,10 +994,7 @@ export default function (pi: ExtensionAPI) {
 			const baseline = complexityClient.analyzeFile(filePath);
 			if (baseline) {
 				runtime.complexityBaselines.set(filePath, baseline);
-				const { captureSnapshot } = await import(
-					"./clients/metrics-history.js"
-				);
-				captureSnapshot(filePath, {
+				clients.metrics.captureSnapshot(filePath, {
 					maintainabilityIndex: baseline.maintainabilityIndex,
 					cognitiveComplexity: baseline.cognitiveComplexity,
 					maxNestingDepth: baseline.maxNestingDepth,
@@ -1271,8 +1008,8 @@ export default function (pi: ExtensionAPI) {
 		// --- Read-Before-Edit Guard: check edits ---
 		// write = full replacement; no prior read needed (you're starting fresh).
 		// edit = partial modification; guard enforced to prevent blind overwrites.
-		const isEditOnly = isToolCallEventType("edit", event);
-		const isWriteOrEdit = isToolCallEventType("write", event) || isEditOnly;
+		const isEditOnly = piCodingAgent.isToolCallEventType("edit", event);
+		const isWriteOrEdit = piCodingAgent.isToolCallEventType("write", event) || isEditOnly;
 
 		// --- Indentation mismatch correction ---
 		// Some models output spaces in oldText when the file uses tabs (or vice versa).
@@ -1303,7 +1040,7 @@ export default function (pi: ExtensionAPI) {
 				.map(({ label, value }) => ({
 					label,
 					value,
-					corrected: tryCorrectIndentationMismatch(value, filePath),
+					corrected: clients.read.tryCorrectIndentationMismatch(value, filePath),
 				}))
 				.filter(
 					(
@@ -1340,17 +1077,20 @@ export default function (pi: ExtensionAPI) {
 				typeof readGuard?.isNewFile !== "function" ||
 				!readGuard.isNewFile(filePath);
 			if (readGuard && isExistingFile) {
-				const { touchedLines, editRanges, preflightError } =
-					getTouchedLinesForGuard(event, filePath, runtime.telemetrySessionId);
+				const { touchedLines, editRanges, preflightError } = clients.read.getTouchedLinesForGuard(
+					event,
+					filePath,
+					runtime.telemetrySessionId,
+				);
 				if (preflightError) {
 					return { block: true, reason: preflightError };
 				}
-				logReadGuardEvent({
+				clients.read.logReadGuardEvent({
 					event: "edit_check_started",
 					sessionId: runtime.telemetrySessionId,
 					filePath,
 					metadata: {
-						tool: isToolCallEventType("write", event) ? "write" : "edit",
+						tool: piCodingAgent.isToolCallEventType("write", event) ? "write" : "edit",
 						touchedLines: touchedLines ?? null,
 						isExistingFile,
 					},
@@ -1372,7 +1112,7 @@ export default function (pi: ExtensionAPI) {
 		// Check if new content redefines functions that already exist elsewhere.
 		// Uses cachedExports (populated at session_start via ast-grep scan).
 		if (isWriteOrEdit && runtime.cachedExports.size > 0) {
-			const newContent = getNewContentFromToolCall(event);
+			const newContent = utils.getNewContentFromToolCall(event);
 			if (newContent) {
 				const INLINE_SIMILARITY_THRESHOLD = 0.9;
 				const INLINE_SIMILARITY_MAX_HINTS = 3;
@@ -1435,13 +1175,7 @@ export default function (pi: ExtensionAPI) {
 							ts.ScriptTarget.Latest,
 							true,
 						);
-						const { extractFunctions } = await import(
-							"./clients/dispatch/runners/similarity.js"
-						);
-						const { findSimilarFunctions } = await import(
-							"./clients/project-index.js"
-						);
-						const newFunctions = extractFunctions(ts, sourceFile, newContent);
+						const newFunctions = clients.dispatch.runners.similarity.extractFunctions(ts, sourceFile, newContent);
 						const simWarnings: string[] = [];
 						let simHintsTruncated = false;
 						const relPath = path.relative(runtime.projectRoot, filePath);
@@ -1452,7 +1186,7 @@ export default function (pi: ExtensionAPI) {
 								break;
 							}
 							if (func.transitionCount < 20) continue;
-							const matches = findSimilarFunctions(
+							const matches = clients.projectIndex.findSimilarFunctions(
 								func.matrix,
 								runtime.cachedProjectIndex,
 								INLINE_SIMILARITY_THRESHOLD,
@@ -1508,20 +1242,26 @@ export default function (pi: ExtensionAPI) {
 	// Real-time feedback on file writes/edits
 	// biome-ignore lint/suspicious/noExplicitAny: pi.on overload mismatch for tool_result event type
 	(pi as any).on("tool_result", async (event: any) => {
-		if (!lensEnabled) return;
-		updateRuntimeIdentityFromEvent(event);
+		const clients = await promise.clients;
+		const utils = await promise.utils;
+
+		const runtime = await promise.runtime;
+		const cacheManager = await promise.cacheManager;
+
+		if (!clients.widget.getLensEnabled()) return;
+		runtime.updateIdentityFromEvent(event);
 		const { biomeClient, ruffClient, metricsClient, agentBehaviorClient } =
-			await loadBootstrapClients();
-		return handleToolResult({
+			await clients.bootstrap.loadBootstrapClients();
+		return clients.runtime.handleToolResult({
 			event: event as any,
 			getFlag: (name: string) => pi.getFlag(name),
-			dbg,
+			dbg: utils.dbg,
 			runtime,
 			cacheManager,
 			biomeClient,
 			ruffClient,
 			metricsClient,
-			resetLSPService,
+			resetLSPService: clients.lsp.resetLSPService,
 			agentBehaviorRecord: (toolName, filePath) =>
 				agentBehaviorClient.recordToolCall(toolName, filePath),
 			formatBehaviorWarnings: (warnings) =>
@@ -1531,61 +1271,76 @@ export default function (pi: ExtensionAPI) {
 
 	// --- Turn end: batch jscpd/madge on collected files, then clear state ---
 	// Clear cascade snapshot at start of each new turn so stale data never leaks
-	pi.on("turn_start", (_event: any) => {
+	pi.on("turn_start", async (_event: any) => {
+		const clients = await promise.clients;
+		const runtime = await promise.runtime;
 		runtime.beginTurn();
-		clearLastAnalyzedStateCache();
+		clients.runtime.clearLastAnalyzedStateCache();
 	});
 
 	pi.on("agent_end", async (_event, ctx) => {
-		if (!lensEnabled) return;
+		const clients = await promise.clients;
+		const utils = await promise.utils;
+
+		const runtime = await promise.runtime;
+		const cacheManager = await promise.cacheManager;
+
+		if (!clients.widget.getLensEnabled()) return;
 		try {
-			await handleAgentEnd({
+			await clients.runtime.handleAgentEnd({
 				ctxCwd: ctx.cwd,
 				getFlag: (name: string) => pi.getFlag(name),
 				notify: (msg, level) => ctx.ui.notify(msg, level),
-				dbg,
+				dbg: utils.dbg,
 				runtime,
 				cacheManager,
 				getFormatService: () =>
-					getFormatService(runtime.telemetrySessionId, true),
+					clients.format.getFormatService(runtime.telemetrySessionId, true),
 			});
-			ctx.ui && updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
+			ctx.ui && clients.lsp.updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
 		} catch (agentEndErr) {
-			dbg(`agent_end crashed: ${agentEndErr}`);
-			dbg(`agent_end crash stack: ${(agentEndErr as Error).stack}`);
+			utils.dbg(`agent_end crashed: ${agentEndErr}`);
+			utils.dbg(`agent_end crash stack: ${(agentEndErr as Error).stack}`);
 		}
 	});
 
 	pi.on("turn_end", async (_event: any, ctx) => {
-		if (!lensEnabled) return;
+		const clients = await promise.clients;
+		const utils = await promise.utils;
+
+		const runtime = await promise.runtime;
+		const cacheManager = await promise.cacheManager;
+
+		if (!clients.widget.getLensEnabled()) return;
 		try {
 			const { knipClient, depChecker, testRunnerClient } =
-				await loadBootstrapClients();
-			await handleTurnEnd({
+				await clients.bootstrap.loadBootstrapClients();
+			await clients.runtime.handleTurnEnd({
 				ctxCwd: ctx.cwd,
 				getFlag: (name: string) => pi.getFlag(name),
-				dbg,
+				dbg: utils.dbg,
 				runtime,
 				cacheManager,
 				knipClient,
 				depChecker,
 				testRunnerClient,
-				resetLSPService,
-				resetFormatService,
+				resetLSPService: clients.lsp.resetLSPService,
+				resetFormatService: clients.format.resetFormatService,
 			});
-			ctx.ui && updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
+			ctx.ui && clients.lsp.updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
 		} catch (turnEndErr) {
-			dbg(`turn_end crashed: ${turnEndErr}`);
-			dbg(`turn_end crash stack: ${(turnEndErr as Error).stack}`);
+			utils.dbg(`turn_end crashed: ${turnEndErr}`);
+			utils.dbg(`turn_end crash stack: ${(turnEndErr as Error).stack}`);
 		}
 	});
 
 	// --- Session shutdown: release all handles so subagent processes exit cleanly ---
 	// The LSP idle-reset timer (240s) is unref'd but we cancel it explicitly here
 	// so it does not fire after shutdown. resetLSPService shuts down any live clients.
-	(pi as any).on("session_shutdown", () => {
-		cancelLSPIdleReset();
-		resetLSPService();
+	pi.on("session_shutdown", async () => {
+		const clients = await promise.clients;
+		clients.runtime.cancelLSPIdleReset();
+		clients.lsp.resetLSPService();
 	});
 
 	// --- Inject turn-end findings into next agent turn ---
@@ -1595,18 +1350,17 @@ export default function (pi: ExtensionAPI) {
 	// treat the final message as the active user action, so pi-lens context must be
 	// prepended instead of appended.
 	// biome-ignore lint/suspicious/noExplicitAny: pi.on("context") overload has TS resolution bug
-	(pi as any).on(
-		"context",
-		async (
-			event: { messages?: Array<{ role: string; content: unknown }> } | unknown,
-			ctx: { cwd?: string },
-		) => {
-			if (!lensEnabled) return;
+	pi.on("context", async (event, ctx): Promise<any | void> => {
+			const clients = await promise.clients;
+			const utils = await promise.utils;
+
+			const cacheManager = await promise.cacheManager;
+			if (!clients.widget.getLensEnabled()) return;
 			try {
 				const cwd = ctx.cwd ?? process.cwd();
-				const turnEndFindings = consumeTurnEndFindings(cacheManager, cwd);
-				const sessionGuidance = consumeSessionStartGuidance(cacheManager, cwd);
-				const testFindings = consumeTestFindings(cacheManager, cwd);
+				const turnEndFindings = clients.runtime.consumeTurnEndFindings(cacheManager, cwd);
+				const sessionGuidance = clients.runtime.consumeSessionStartGuidance(cacheManager, cwd);
+				const testFindings = clients.runtime.consumeTestFindings(cacheManager, cwd);
 				const injectedMessages = [
 					...(sessionGuidance?.messages ?? []),
 					...(turnEndFindings?.messages ?? []),
@@ -1622,7 +1376,7 @@ export default function (pi: ExtensionAPI) {
 					messages: [...injectedMessages, ...existingMessages],
 				};
 			} catch (err) {
-				dbg(`context event error: ${err}`);
+				utils.dbg(`context event error: ${err}`);
 			}
 		},
 	);

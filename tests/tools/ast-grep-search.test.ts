@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { createAstGrepSearchTool } from "../../tools/ast-grep-search.js";
+import { createAstGrepSearchTool } from "../../tools/ast-grep/ast-grep-search.js";
 
-function makeClient(overrides: Partial<Parameters<typeof createAstGrepSearchTool>[0]> = {}) {
+async function makeClient(overrides: Partial<Awaited<Parameters<typeof createAstGrepSearchTool>[0]>> = {}) {
 	return {
 		ensureAvailable: async () => true,
 		search: vi.fn().mockResolvedValue({ matches: [] }),
 		formatMatches: () => "",
 		...overrides,
-	} as Parameters<typeof createAstGrepSearchTool>[0];
+	} as Awaited<Parameters<typeof createAstGrepSearchTool>[0]>;
 }
 
 describe("ast_grep_search tool", () => {

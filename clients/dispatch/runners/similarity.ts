@@ -8,6 +8,7 @@
 import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import * as utils from "../../../utils.js";
 import {
 	buildProjectIndex,
 	findSimilarFunctions,
@@ -432,10 +433,9 @@ const indexCache = new Map<string, ProjectIndex>();
 async function findProjectRoot(filePath: string): Promise<string | null> {
 	let dir = path.dirname(filePath);
 	while (dir !== path.dirname(dir)) {
-		try {
-			await fs.access(path.join(dir, "package.json"));
+		if (await utils.fileExists(path.join(dir, "package.json"))) {
 			return dir;
-		} catch {
+		} else {
 			dir = path.dirname(dir);
 		}
 	}

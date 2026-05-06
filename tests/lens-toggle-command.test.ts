@@ -1,4 +1,72 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const widgetHarness = vi.hoisted(() => {
+	let lensEnabled = true;
+	let lensWidgetVisible = true;
+	const widgetMock = {
+		setRenderCallback: vi.fn(() => ({})),
+		getLensEnabled: vi.fn(() => lensEnabled),
+		getLensWidgetVisible: vi.fn(() => lensWidgetVisible),
+		setLensEnabled: vi.fn((next: boolean) => {
+			lensEnabled = next;
+		}),
+		setLensWidgetVisible: vi.fn((next: boolean) => {
+			lensWidgetVisible = next;
+		}),
+		mountLensWidget: vi.fn((ui: { setWidget?: Function } | undefined) => {
+			ui?.setWidget?.("pi-lens", vi.fn(), { placement: "belowEditor" });
+			return true;
+		}),
+		unmountLensWidget: vi.fn((ui: { setWidget?: Function } | undefined) => {
+			ui?.setWidget?.("pi-lens", undefined);
+			return true;
+		}),
+	};
+	return {
+		widgetMock,
+		reset: () => {
+			lensEnabled = true;
+			lensWidgetVisible = true;
+		},
+	};
+});
+
+const { widgetMock } = widgetHarness;
+
+vi.mock("../clients", () => ({
+	astGrep: {
+		AstGrepClient: {
+			create: vi.fn(() => ({})),
+		},
+	},
+	cacheManager: {
+		CacheManager: {
+			create: vi.fn(() => ({})),
+		},
+	},
+	runtime: {
+		RuntimeCoordinator: {
+			create: vi.fn(() => ({})),
+		},
+	},
+	treeSitter: {
+		TreeSitterClient: {
+			create: vi.fn(() => ({})),
+		},
+	},
+	widget: widgetMock,
+}));
+
+vi.mock("../i18n", () => ({
+	initI18n: vi.fn(),
+}));
+
+vi.mock("../commands/index.js", () => ({}));
+
+vi.mock("../tools", () => ({}));
+
+vi.mock("../utils.js", () => ({}));
+
 import piLens from "../index.js";
 
 type CommandHandler = (
@@ -61,6 +129,11 @@ function installLens(flagValues: Record<string, unknown> = {}): Harness {
 }
 
 describe("lens-toggle command", () => {
+	beforeEach(() => {
+		widgetHarness.reset();
+		vi.clearAllMocks();
+	});
+
 	it("registers the single session-level lens toggle command", () => {
 		const { commands, flags } = installLens();
 
@@ -98,6 +171,7 @@ describe("lens-toggle command", () => {
 		const { commands } = installLens({ "no-lens": true });
 		const notify = vi.fn();
 		const command = commands.get("lens-toggle");
+		widgetMock.setLensEnabled(false);
 
 		await command?.handler([], { ui: { notify } });
 

@@ -1,6 +1,13 @@
 import * as nodeFs from "node:fs";
-import { isToolCallEventType } from "@mariozechner/pi-coding-agent";
-import { logReadGuardEvent } from "./read-guard-logger.js";
+import * as tools from "../../tools/index.js";
+import { logReadGuardEvent } from "./guard-logger.js";
+
+function isToolCallEventType(
+	toolName: string,
+	event: { toolName?: unknown },
+): boolean {
+	return event.toolName === toolName;
+}
 
 export interface GuardLineResult {
 	touchedLines: [number, number] | undefined;
@@ -18,6 +25,19 @@ export function countFileLines(filePath: string): number {
 	} catch {
 		return 1;
 	}
+}
+
+export function getEffectiveReadLimit(
+	filePath: string | undefined,
+	readInput: tools.read.ReadToolInput | undefined,
+): number | undefined {
+	if (!filePath || !readInput) return undefined;
+	const requestedOffset = readInput.offset ?? 1;
+	const requestedLimit = readInput.limit;
+	return (
+		requestedLimit ??
+		Math.max(1, countFileLines(filePath) - requestedOffset + 1)
+	);
 }
 
 function normalizeContent(text: string): string {

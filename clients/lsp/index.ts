@@ -22,6 +22,9 @@ import { getLanguageId } from "./language.js";
 import type { LSPServerInfo } from "./server.js";
 import { getStrategy } from "./server-strategies.js";
 import { raceToCompletion } from "./aggregation.js";
+import * as config from "./config.js";
+
+export { config };
 
 // --- Types ---
 
@@ -1184,4 +1187,23 @@ export function resetLSPService(): void {
 		globalLSPService.shutdown().catch(() => {});
 	}
 	globalLSPService = null;
+}
+
+export function updateLspStatus(
+	setStatus: (id: string, text: string | undefined) => void,
+	theme: {
+		fg: (color: "accent" | "success" | "error", text: string) => string;
+	},
+): void {
+	try {
+		const count = getLSPService().getAliveClientCount();
+		if (count > 0) {
+			setStatus("pi-lens-lsp", theme.fg("success", `LSP Active (${count})`));
+		} else {
+			setStatus("pi-lens-lsp", theme.fg("error", "LSP Inactive"));
+		}
+	} catch {
+		// Theme may not be fully initialized during early session startup.
+		// Skip the status update rather than crashing the event handler.
+	}
 }

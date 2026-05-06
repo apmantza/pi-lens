@@ -2,7 +2,7 @@
  * Session Summary — generates turn_end and session-end summaries
  */
 
-import type { SessionStats } from "./diagnostic-tracker.js";
+import type { SessionStats } from "./diagnostics/tracker.js";
 
 export interface SlopScoreSummary {
 	totalRuleDiagnostics: number;

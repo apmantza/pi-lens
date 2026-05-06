@@ -12,7 +12,7 @@
  */
 
 import { existsSync, realpathSync } from "node:fs";
-import { dirname, win32 } from "node:path";
+import { basename, dirname, resolve, win32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 /**
@@ -179,4 +179,27 @@ export function isExternalOrVendorFile(
 		? normalized.slice(rootNorm.length + 1)
 		: normalized;
 	return rel.split("/").some((seg) => VENDOR_DIR_NAMES.has(seg));
+}
+
+export function shouldSkipLspAutoTouch(
+	filePath: string,
+	projectRoot: string,
+): boolean {
+	const normalized = resolve(filePath).replace(/\\/g, "/").toLowerCase();
+	const base = basename(filePath).toLowerCase();
+
+	if (normalized.includes("/.pi-lens/")) return true;
+	if (normalized.includes("/.harness/")) return true;
+	if (isExternalOrVendorFile(filePath, projectRoot)) return true;
+	if (
+		base === "stdout.jsonl" ||
+		base === "stderr.txt" ||
+		base === "prompt.txt"
+	) {
+		return true;
+	}
+	if (base === "case.json" && normalized.includes("/cases/")) {
+		return true;
+	}
+	return false;
 }

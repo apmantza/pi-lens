@@ -31,7 +31,7 @@ import type {
 // Module-level singleton: web-tree-sitter WASM must only be initialized once per process.
 // Creating a new TreeSitterClient() on every write resets TRANSFER_BUFFER (a module-level
 // WASM pointer) — concurrent writes race on _ts_init() and corrupt shared WASM state → crash.
-let _sharedClient: TreeSitterClient | null = null;
+let _sharedClient: Promise<TreeSitterClient | null> = TreeSitterClient.create();
 // Once the wasm runtime aborts, the entire module-level wasm heap is corrupted — no
 // recovery is possible within this process. Flag it and skip all further tree-sitter work
 // rather than re-invoking the dead runtime (which prints "Aborted()" on every call and
@@ -249,12 +249,9 @@ function isLineInModifiedRanges(
 	return ranges.some((r) => line >= r.start && line <= r.end);
 }
 
-function getSharedClient(): TreeSitterClient | null {
+async function getSharedClient(): Promise<TreeSitterClient | null> {
 	if (_wasmAborted) return null;
-	if (!_sharedClient) {
-		_sharedClient = new TreeSitterClient();
-	}
-	return _sharedClient;
+	return await _sharedClient;
 }
 
 /**
@@ -280,7 +277,7 @@ const treeSitterRunner: RunnerDefinition = {
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		// Use singleton client — WASM must never be re-initialized after first call
-		const client = getSharedClient();
+		const client = await getSharedClient();
 		logTreeSitter({ phase: "runner_start", filePath: ctx.filePath });
 		if (!client || !client.isAvailable()) {
 			logTreeSitter({
@@ -517,7 +514,7 @@ const treeSitterRunner: RunnerDefinition = {
 						// Poison the singleton so no further queries attempt to use the dead runtime.
 						if (msg.includes("Aborted") || msg.includes("abort()")) {
 							_wasmAborted = true;
-							_sharedClient = null;
+							_sharedClient = Promise.resolve(null);
 							logTreeSitter({
 								phase: "query_error",
 								filePath,

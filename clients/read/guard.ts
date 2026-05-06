@@ -10,9 +10,9 @@
  * Falls back safely when LSP is unavailable.
  */
 
-import * as fs from "node:fs";
-import { createFileTime, type FileTime } from "./file-time.js";
-import { logReadGuardEvent } from "./read-guard-logger.js";
+import * as nodeFs from "node:fs";
+import { createFileTime, type FileTime } from "../file-time.js";
+import { logReadGuardEvent } from "./guard-logger.js";
 
 // --- Types ---
 
@@ -265,7 +265,7 @@ export class ReadGuard {
 	 */
 	isNewFile(filePath: string): boolean {
 		try {
-			return !fs.existsSync(filePath);
+			return !nodeFs.existsSync(filePath);
 		} catch {
 			return true; // Assume new if we can't stat
 		}

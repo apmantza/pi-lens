@@ -41,17 +41,17 @@ async function loadRunnerWithClient(isAvailable: boolean, initResult: boolean) {
 	vi.doMock("../../../../clients/cache/rule-cache.js", () => ({
 		RuleCache: function () { return { get: () => null, set: () => {} }; },
 	}));
-	vi.doMock("../../../../clients/tree-sitter-client.js", () => {
-		function MockTreeSitterClient() {
-			return {
+	vi.doMock("../../../../clients/tree-sitter-client.js", () => ({
+		TreeSitterClient: {
+			create: vi.fn().mockResolvedValue({
 				isAvailable: () => isAvailable,
 				init: () => Promise.resolve(initResult),
 				parseFile: () => Promise.resolve(null),
 				query: () => [],
-			};
-		}
-		return { TreeSitterClient: MockTreeSitterClient };
-	});
+				runQueryOnFile: () => Promise.resolve([]),
+			}),
+		},
+	}));
 
 	const mod = await import("../../../../clients/dispatch/runners/tree-sitter.js");
 	return mod.default;
@@ -62,8 +62,14 @@ describe("tree-sitter runner — metadata", () => {
 
 	it("has expected id and appliesTo languages", async () => {
 		vi.doMock("../../../../clients/tree-sitter-client.js", () => ({
-			TreeSitterClient: function () {
-				return { isAvailable: () => false, init: () => Promise.resolve(false), parseFile: () => Promise.resolve(null), query: () => [] };
+			TreeSitterClient: {
+				create: vi.fn().mockResolvedValue({
+					isAvailable: () => Promise.resolve(false),
+					init: () => Promise.resolve(false),
+					parseFile: () => Promise.resolve(null),
+					query: () => [],
+					runQueryOnFile: () => Promise.resolve([]),
+				}),
 			},
 		}));
 		vi.doMock("../../../../clients/tree-sitter-logger.js", () => ({ logTreeSitter: vi.fn() }));

@@ -1,21 +1,22 @@
-import * as fs from "node:fs";
+import * as nodeFs from "node:fs";
 import * as path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { handleToolResult } from "../../clients/runtime-tool-result.js";
-import { setupTestEnvironment } from "./test-utils.js";
 
-vi.mock("../../clients/pipeline.js", () => ({
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { handleToolResult } from "../../../clients/runtime/tool-result.js";
+import { setupTestEnvironment } from "../test-utils.js";
+
+vi.mock("../../../clients/pipeline.js", () => ({
 	runPipeline: vi.fn(),
 }));
 
 describe("runtime-tool-result inline behavior warnings", () => {
 	beforeEach(async () => {
-		const pipeline = await import("../../clients/pipeline.js");
+		const pipeline = await import("../../../clients/pipeline.js");
 		vi.mocked(pipeline.runPipeline).mockReset();
 	});
 
 	it("queues successful write/edit files for deferred formatting by default", async () => {
-		const { runPipeline } = await import("../../clients/pipeline.js");
+		const { runPipeline } = await import("../../../clients/pipeline.js");
 		vi.mocked(runPipeline).mockResolvedValue({
 			output: "✓ no blockers",
 			hasBlockers: false,
@@ -26,8 +27,8 @@ describe("runtime-tool-result inline behavior warnings", () => {
 		const env = setupTestEnvironment("pi-lens-runtime-tool-deferred-format-");
 		try {
 			const filePath = path.join(env.tmpDir, "src", "app.ts");
-			fs.mkdirSync(path.dirname(filePath), { recursive: true });
-			fs.writeFileSync(filePath, "export const x = 1;\n");
+			nodeFs.mkdirSync(path.dirname(filePath), { recursive: true });
+			nodeFs.writeFileSync(filePath, "export const x = 1;\n");
 			const deferFormat = vi.fn();
 
 			await handleToolResult({
@@ -78,7 +79,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 	});
 
 	it("does not append behavior warnings when blockers are present", async () => {
-		const { runPipeline } = await import("../../clients/pipeline.js");
+		const { runPipeline } = await import("../../../clients/pipeline.js");
 		vi.mocked(runPipeline).mockResolvedValue({
 			output: "🔴 blocker output",
 			hasBlockers: true,
@@ -89,8 +90,8 @@ describe("runtime-tool-result inline behavior warnings", () => {
 		const env = setupTestEnvironment("pi-lens-runtime-tool-");
 		try {
 			const filePath = path.join(env.tmpDir, "src", "app.ts");
-			fs.mkdirSync(path.dirname(filePath), { recursive: true });
-			fs.writeFileSync(filePath, "export const x = 1;\n");
+			nodeFs.mkdirSync(path.dirname(filePath), { recursive: true });
+			nodeFs.writeFileSync(filePath, "export const x = 1;\n");
 
 			const response = await handleToolResult({
 				event: {
@@ -145,7 +146,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 	});
 
 	it("appends behavior warnings when no blockers are present", async () => {
-		const { runPipeline } = await import("../../clients/pipeline.js");
+		const { runPipeline } = await import("../../../clients/pipeline.js");
 		vi.mocked(runPipeline).mockResolvedValue({
 			output: "✓ no blockers",
 			hasBlockers: false,
@@ -156,8 +157,8 @@ describe("runtime-tool-result inline behavior warnings", () => {
 		const env = setupTestEnvironment("pi-lens-runtime-tool-");
 		try {
 			const filePath = path.join(env.tmpDir, "src", "app.ts");
-			fs.mkdirSync(path.dirname(filePath), { recursive: true });
-			fs.writeFileSync(filePath, "export const x = 1;\n");
+			nodeFs.mkdirSync(path.dirname(filePath), { recursive: true });
+			nodeFs.writeFileSync(filePath, "export const x = 1;\n");
 
 			const response = await handleToolResult({
 				event: {
@@ -212,7 +213,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 	});
 
 	it("does not emit file-time warnings on rapid consecutive edits", async () => {
-		const { runPipeline } = await import("../../clients/pipeline.js");
+		const { runPipeline } = await import("../../../clients/pipeline.js");
 		vi.mocked(runPipeline).mockResolvedValue({
 			output: "✓ no blockers",
 			hasBlockers: false,
@@ -223,8 +224,8 @@ describe("runtime-tool-result inline behavior warnings", () => {
 		const env = setupTestEnvironment("pi-lens-runtime-tool-");
 		try {
 			const filePath = path.join(env.tmpDir, "src", "rapid.py");
-			fs.mkdirSync(path.dirname(filePath), { recursive: true });
-			fs.writeFileSync(filePath, "value = 1\n");
+			nodeFs.mkdirSync(path.dirname(filePath), { recursive: true });
+			nodeFs.writeFileSync(filePath, "value = 1\n");
 
 			const logs: string[] = [];
 			const dbg = (msg: string) => logs.push(msg);
@@ -270,7 +271,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				},
 			});
 
-			fs.writeFileSync(filePath, "value = 2\n");
+			nodeFs.writeFileSync(filePath, "value = 2\n");
 
 			await handleToolResult({
 				...deps,
@@ -298,7 +299,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 	});
 
 	it("deduplicates repeated tool_result events for the same file state", async () => {
-		const { runPipeline } = await import("../../clients/pipeline.js");
+		const { runPipeline } = await import("../../../clients/pipeline.js");
 		vi.mocked(runPipeline).mockResolvedValue({
 			output: "✓ no blockers",
 			hasBlockers: false,
@@ -309,8 +310,8 @@ describe("runtime-tool-result inline behavior warnings", () => {
 		const env = setupTestEnvironment("pi-lens-runtime-tool-dedupe-");
 		try {
 			const filePath = path.join(env.tmpDir, "src", "same.ts");
-			fs.mkdirSync(path.dirname(filePath), { recursive: true });
-			fs.writeFileSync(filePath, "export const value = 1;\n");
+			nodeFs.mkdirSync(path.dirname(filePath), { recursive: true });
+			nodeFs.writeFileSync(filePath, "export const value = 1;\n");
 
 			const logs: string[] = [];
 			const deps = {
@@ -366,14 +367,14 @@ describe("runtime-tool-result inline behavior warnings", () => {
 	});
 
 	it("tracks side-effect files changed by the pipeline", async () => {
-		const { runPipeline } = await import("../../clients/pipeline.js");
+		const { runPipeline } = await import("../../../clients/pipeline.js");
 		const env = setupTestEnvironment("pi-lens-runtime-tool-side-effect-");
 		try {
 			const filePath = path.join(env.tmpDir, "src", "main.rs");
 			const sideEffectPath = path.join(env.tmpDir, "src", "helper.rs");
-			fs.mkdirSync(path.dirname(filePath), { recursive: true });
-			fs.writeFileSync(filePath, "mod helper;\n");
-			fs.writeFileSync(sideEffectPath, "pub fn helper() {}\n");
+			nodeFs.mkdirSync(path.dirname(filePath), { recursive: true });
+			nodeFs.writeFileSync(filePath, "mod helper;\n");
+			nodeFs.writeFileSync(sideEffectPath, "pub fn helper() {}\n");
 
 			vi.mocked(runPipeline).mockResolvedValue({
 				output: "✅ Auto-fixed 1 issue(s)",
@@ -438,7 +439,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 	});
 
 	it("resolves relative tool_result paths against the workspace root", async () => {
-		const { runPipeline } = await import("../../clients/pipeline.js");
+		const { runPipeline } = await import("../../../clients/pipeline.js");
 		vi.mocked(runPipeline).mockResolvedValue({
 			output: "✓ no blockers",
 			hasBlockers: false,
@@ -450,8 +451,8 @@ describe("runtime-tool-result inline behavior warnings", () => {
 		try {
 			const projectRoot = path.join(env.tmpDir, "workspace");
 			const filePath = path.join(projectRoot, "python-utils", "app", "main.py");
-			fs.mkdirSync(path.dirname(filePath), { recursive: true });
-			fs.writeFileSync(filePath, "VALUE = 1\n");
+			nodeFs.mkdirSync(path.dirname(filePath), { recursive: true });
+			nodeFs.writeFileSync(filePath, "VALUE = 1\n");
 
 			await handleToolResult({
 				event: {

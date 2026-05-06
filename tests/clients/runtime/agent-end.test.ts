@@ -1,21 +1,22 @@
-import * as fs from "node:fs";
+import * as nodeFs from "node:fs";
+
 import { describe, expect, it, vi } from "vitest";
-import { handleAgentEnd } from "../../clients/runtime-agent-end.js";
-import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
-import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import { handleAgentEnd } from "../../../clients/runtime/agent-end.js";
+import { RuntimeCoordinator } from "../../../clients/runtime/coordinator.js";
+import { createTempFile, setupTestEnvironment } from "../test-utils.js";
 
 describe("runtime-agent-end deferred formatting", () => {
 	it("formats each queued file once and clears the queue", async () => {
 		const env = setupTestEnvironment("pi-lens-agent-end-format-");
 		try {
 			const filePath = createTempFile(env.tmpDir, "src/app.ts", "const x=1");
-			const runtime = new RuntimeCoordinator();
+			const runtime = await RuntimeCoordinator.create();
 			runtime.projectRoot = env.tmpDir;
 			runtime.deferFormat(filePath, env.tmpDir, "edit");
 			runtime.deferFormat(filePath, env.tmpDir, "write");
 
 			const formatFile = vi.fn(async (fp: string) => {
-				fs.writeFileSync(fp, "const x = 1;\n");
+				nodeFs.writeFileSync(fp, "const x = 1;\n");
 				return {
 					filePath: fp,
 					formatters: [{ name: "biome", success: true, changed: true }],
@@ -62,7 +63,7 @@ describe("runtime-agent-end deferred formatting", () => {
 		const env = setupTestEnvironment("pi-lens-agent-end-format-");
 		try {
 			const filePath = createTempFile(env.tmpDir, "src/app.ts", "const x=1");
-			const runtime = new RuntimeCoordinator();
+			const runtime = await RuntimeCoordinator.create();
 			runtime.projectRoot = env.tmpDir;
 			runtime.deferFormat(filePath, env.tmpDir, "edit");
 			const formatFile = vi.fn();

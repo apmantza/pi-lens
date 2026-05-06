@@ -36,6 +36,69 @@ const lspServers = new Map<string, LspRecord>();
 let sessionLanguages: string[] = [];
 let requestRenderFn: (() => void) | null = null;
 
+let lensEnabled: boolean = true;
+export function getLensEnabled(): boolean {
+	return lensEnabled;
+}
+export function setLensEnabled(enabled: boolean): boolean {
+	const wasEnabled = lensEnabled;
+	lensEnabled = enabled;
+	return wasEnabled;
+}
+
+let lensWidgetVisible: boolean = true;
+export function getLensWidgetVisible(): boolean {
+	return lensWidgetVisible;
+}
+export function setLensWidgetVisible(visible: boolean): boolean {
+	const wasVisible = lensWidgetVisible;
+	lensWidgetVisible = visible;
+	return wasVisible;
+}
+
+
+type LensWidgetTui = { requestRender: () => void };
+type LensWidgetTheme = { fg: (color: string, s: string) => string };
+type LensWidgetComponent = {
+	render: (width: number) => string[];
+	invalidate: () => void;
+};
+type LensWidgetFactory = (
+	tui: LensWidgetTui,
+	theme: LensWidgetTheme,
+) => LensWidgetComponent;
+type LensWidgetUi = { setWidget?: unknown };
+type LensWidgetSetWidget = (
+	id: string,
+	widget: LensWidgetFactory | undefined,
+	options?: { placement: "belowEditor" },
+) => void;
+
+export function mountLensWidget(ui: LensWidgetUi | undefined): boolean {
+	if (typeof ui?.setWidget !== "function") return false;
+	const setWidget = ui.setWidget as LensWidgetSetWidget;
+	setWidget(
+		"pi-lens",
+		(tui: LensWidgetTui, theme: LensWidgetTheme) => {
+			setRenderCallback(() => tui.requestRender());
+			return {
+				render: (width: number) => renderWidget(width, theme),
+				invalidate: () => setRenderCallback(() => {}),
+			};
+		},
+		{ placement: "belowEditor" },
+	);
+	return true;
+}
+
+export function unmountLensWidget(ui: LensWidgetUi | undefined): boolean {
+	setRenderCallback(() => {});
+	if (typeof ui?.setWidget !== "function") return false;
+	const setWidget = ui.setWidget as LensWidgetSetWidget;
+	setWidget("pi-lens", undefined);
+	return true;
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 export function setRenderCallback(fn: () => void): void {

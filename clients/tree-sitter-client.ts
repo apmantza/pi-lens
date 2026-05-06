@@ -15,9 +15,10 @@
  *   "function $NAME($$$PARAMS) { $BODY }" matches function declarations
  */
 
-import * as fs from "node:fs";
+import * as fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import * as path from "node:path";
+import * as utils from "../utils.js";
 import { isExcludedDirName } from "./file-utils.js";
 import { resolvePackagePath } from "./package-root.js";
 
@@ -98,7 +99,7 @@ export class TreeSitterClient {
 	private parsers: Map<string, TreeSitterParserInstance> = new Map();
 	private treeCache: TreeCache;
 	private navigator = new TreeSitterNavigator();
-	private grammarsDir: string;
+	private grammarsDir!: string;
 	// biome-ignore lint/suspicious/noExplicitAny: Optional dependency loaded dynamically
 	private ParserClass: any = null;
 	// biome-ignore lint/suspicious/noExplicitAny: Language loader from module
@@ -108,8 +109,14 @@ export class TreeSitterClient {
 	private queryLoader = new TreeSitterQueryLoader();
 	private verbose: boolean;
 
-	constructor(verbose = false) {
-		this.grammarsDir = this.findGrammarsDir();
+	static async create(verbose = false): Promise<TreeSitterClient> {
+		const self = new this(verbose);
+		self.grammarsDir = await this.findGrammarsDir();
+		return self;
+	}
+
+	private constructor(verbose = false) {
+		// this.grammarsDir = this.findGrammarsDir();
 		this.verbose = verbose;
 		this.treeCache = new TreeCache(50, verbose);
 	}
@@ -127,11 +134,11 @@ export class TreeSitterClient {
 	 * 2. Package-root walk from import.meta.url (handles on-the-fly TS compilation by pi)
 	 * 3. process.cwd() fallback
 	 */
-	private resolveWebTreeSitterAsset(asset: string): string | undefined {
+	private static async resolveWebTreeSitterAsset(asset: string): Promise<string | undefined> {
 		// Strategy 1: Node module resolution (hoisted installs, pnpm workspaces)
 		try {
 			const resolved = _require.resolve(`web-tree-sitter/${asset}`);
-			if (fs.existsSync(resolved)) return resolved;
+			if (await utils.fileExists(resolved)) return resolved;
 		} catch {
 			/* fall through */
 		}
@@ -141,17 +148,13 @@ export class TreeSitterClient {
 		// createRequire(import.meta.url) resolves from the temp dir and can't find
 		// web-tree-sitter, but the package root (where package.json lives) still has
 		// the correct node_modules layout.
-		try {
-			const candidate = resolvePackagePath(
-				import.meta.url,
-				"node_modules",
-				"web-tree-sitter",
-				asset,
-			);
-			if (fs.existsSync(candidate)) return candidate;
-		} catch {
-			/* fall through */
-		}
+		const candidate = resolvePackagePath(
+			import.meta.url,
+			"node_modules",
+			"web-tree-sitter",
+			asset,
+		);
+		if (await utils.fileExists(candidate)) return candidate;
 
 		// Strategy 3: cwd fallback
 		const cwdCandidate = path.join(
@@ -160,31 +163,26 @@ export class TreeSitterClient {
 			"web-tree-sitter",
 			asset,
 		);
-		if (fs.existsSync(cwdCandidate)) return cwdCandidate;
+		if (await utils.fileExists(cwdCandidate)) return cwdCandidate;
 
 		return undefined;
 	}
 
 	/** Find tree-sitter grammar directory */
-	private findGrammarsDir(): string {
-		const grammarsDir = this.resolveWebTreeSitterAsset("grammars");
-		if (
-			grammarsDir &&
-			fs.existsSync(path.join(grammarsDir, "tree-sitter-typescript.wasm"))
-		) {
-			return grammarsDir;
+	private static async findGrammarsDir(): Promise<string> {
+		const grammarsDir = await this.resolveWebTreeSitterAsset("grammars");
+		if (grammarsDir) {
+			if (await utils.fileExists(path.join(grammarsDir, "tree-sitter-typescript.wasm"))) {
+				return grammarsDir;
+			}
 		}
 
 		// Fallback: tree-sitter-wasms package (real installs, not npm:null)
-		try {
-			const wasmsOut = path.join(
-				path.dirname(_require.resolve("tree-sitter-wasms/package.json")),
-				"out",
-			);
-			if (fs.existsSync(wasmsOut)) return wasmsOut;
-		} catch {
-			/* fall through */
-		}
+		const wasmsOut = path.join(
+			path.dirname(_require.resolve("tree-sitter-wasms/package.json")),
+			"out",
+		);
+		if (await utils.fileExists(wasmsOut)) return wasmsOut;
 
 		const cwdWasms = path.join(
 			process.cwd(),
@@ -192,7 +190,8 @@ export class TreeSitterClient {
 			"tree-sitter-wasms",
 			"out",
 		);
-		if (fs.existsSync(cwdWasms)) return cwdWasms;
+
+		if (await utils.fileExists(cwdWasms)) return cwdWasms;
 
 		return "";
 	}
@@ -219,14 +218,15 @@ export class TreeSitterClient {
 
 				// Resolve WASM path using same multi-strategy helper (hoisted installs +
 				// on-the-fly compilation by pi).
-				const wasmPath = this.resolveWebTreeSitterAsset("tree-sitter.wasm");
+				const wasmPath = await TreeSitterClient.resolveWebTreeSitterAsset("tree-sitter.wasm");
 				if (!wasmPath) {
 					this.dbg("Could not resolve tree-sitter.wasm");
 					return false;
 				}
 				const wasmDir = path.dirname(wasmPath);
+				const exists = await utils.fileExists(wasmPath);
 				this.dbg(
-					`Looking for WASM at: ${wasmPath}, exists: ${fs.existsSync(wasmPath)}`,
+					`Looking for WASM at: ${wasmPath}, exists: ${exists}`,
 				);
 
 				await ParserClass.init({
@@ -272,11 +272,12 @@ export class TreeSitterClient {
 		}
 
 		const grammarPath = path.join(this.grammarsDir, grammarFile);
+		const exists = await utils.fileExists(grammarPath);
 		this.dbg(
-			`Grammar path: ${grammarPath}, exists: ${fs.existsSync(grammarPath)}`,
+			`Grammar path: ${grammarPath}, exists: ${exists}`,
 		);
 
-		if (!fs.existsSync(grammarPath)) {
+		if (!await utils.fileExists(grammarPath)) {
 			this.dbg(`Grammar file not found: ${grammarPath}`);
 			return null;
 		}
@@ -330,7 +331,7 @@ export class TreeSitterClient {
 		}
 
 		try {
-			const content = contentOverride ?? fs.readFileSync(filePath, "utf-8");
+			const content = contentOverride ?? await fs.readFile(filePath, "utf-8");
 			this.dbg(`File content length: ${content.length}`);
 
 			// Check cache first
@@ -416,12 +417,11 @@ export class TreeSitterClient {
 	}
 
 	/** Check if tree-sitter is available (grammars installed) */
-	isAvailable(): boolean {
-		if (fs.existsSync(this.grammarsDir)) return true;
+	async isAvailable(): Promise<boolean> {
+		if (await utils.fileExists(this.grammarsDir)) return true;
 		// Re-evaluate in case grammars were installed after process start
-		const dir = this.findGrammarsDir();
-		this.grammarsDir = dir;
-		return fs.existsSync(dir);
+		this.grammarsDir = await TreeSitterClient.findGrammarsDir();
+		return await utils.fileExists(this.grammarsDir);
 	}
 
 	/** Check if specific language is supported */
@@ -477,7 +477,7 @@ export class TreeSitterClient {
 		this.dbg(`Pattern compiled, metavars: ${compiled.metavars.join(", ")}`);
 
 		// Collect source files
-		const files = this.collectFiles(rootDir, languageId, options.fileFilter);
+		const files = await this.collectFiles(rootDir, languageId, options.fileFilter);
 		this.dbg(`Scanning ${files.length} files...`);
 
 		const matches: StructuralMatch[] = [];
@@ -1116,17 +1116,17 @@ export class TreeSitterClient {
 	}
 
 	/** Collect source files for a language */
-	private collectFiles(
+	private async collectFiles(
 		dir: string,
 		languageId: string,
 		fileFilter?: (path: string) => boolean,
-	): string[] {
+	): Promise<string[]> {
 		const files: string[] = [];
 		const extensions = this.getExtensionsForLanguage(languageId);
 
-		const scan = (d: string) => {
+		const scan = async (d: string) => {
 			try {
-				const entries = fs.readdirSync(d, { withFileTypes: true });
+				const entries = await fs.readdir(d, { withFileTypes: true });
 				for (const entry of entries) {
 					const full = path.join(d, entry.name);
 					if (entry.isDirectory()) {
@@ -1141,7 +1141,7 @@ export class TreeSitterClient {
 			} catch {}
 		};
 
-		scan(dir);
+		await scan(dir);
 		return files;
 	}
 
@@ -1172,11 +1172,11 @@ export class TreeSitterClient {
  * Fallback structural search using regex when tree-sitter unavailable
  * Less accurate but works without WASM dependencies
  */
-export function regexStructuralSearch(
+export async function regexStructuralSearch(
 	pattern: string,
 	files: string[],
 	options: { maxResults?: number } = {},
-): StructuralMatch[] {
+): Promise<StructuralMatch[]> {
 	const matches: StructuralMatch[] = [];
 	const maxResults = options.maxResults ?? 50;
 
@@ -1195,7 +1195,7 @@ export function regexStructuralSearch(
 			if (matches.length >= maxResults) break;
 
 			try {
-				const content = fs.readFileSync(file, "utf-8");
+				const content = await fs.readFile(file, "utf-8");
 				const lines = content.split("\n");
 
 				for (let i = 0; i < lines.length; i++) {

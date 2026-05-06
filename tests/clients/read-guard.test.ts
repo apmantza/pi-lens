@@ -7,7 +7,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { createReadGuard, type ReadRecord } from "../../clients/read-guard.js";
+import { createReadGuard, type ReadRecord } from "../../clients/read/guard.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 // Suppress log writes — tests care about verdicts, not log output

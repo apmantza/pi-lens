@@ -5,7 +5,7 @@
  * with the existing index.ts tool_result handler.
  */
 
-import { getDiagnosticLogger, type LogContext } from "../diagnostic-logger.js";
+import { getDiagnosticLogger, type LogContext } from "../diagnostics/logger.js";
 import type { FileKind } from "../file-kinds.js";
 import { detectFileKind } from "../file-kinds.js";
 import {
@@ -45,7 +45,7 @@ import * as nodeFs from "node:fs";
 import { formatCascadeNeighborDiagnostics } from "../cascade-format.js";
 import { logCascade } from "../cascade-logger.js";
 import type { CascadeResult } from "../cascade-types.js";
-import { getDiagnosticTracker } from "../diagnostic-tracker.js";
+import { getDiagnosticTracker } from "../diagnostics/tracker.js";
 import { getServersForFileWithConfig } from "../lsp/config.js";
 import { getLSPService } from "../lsp/index.js";
 import { isExternalOrVendorFile, normalizeMapKey } from "../path-utils.js";
@@ -58,7 +58,7 @@ import {
 	computeImpactCascade,
 	formatImpactCascade,
 } from "../review-graph/service.js";
-import { RUNTIME_CONFIG } from "../runtime-config.js";
+import { RUNTIME_CONFIG } from "../runtime/config.js";
 // Register fact providers
 import { registerProvider, runProviders } from "./fact-runner.js";
 import { fileContentProvider } from "./facts/file-content.js";

@@ -23,7 +23,7 @@ import {
 	detectProjectMetadata,
 	getAvailableCommands,
 } from "../clients/project-metadata.js";
-import { RunnerTracker } from "../clients/runner-tracker.js";
+import { RunnerTracker } from "../clients/runtime/tracker.js";
 import { safeSpawn } from "../clients/safe-spawn.js";
 import {
 	collectSourceFiles,
@@ -70,13 +70,7 @@ function resolveProjectRoot(startDir: string): string {
 }
 
 // Module-level singleton — web-tree-sitter WASM must only be initialized once per process
-let _sharedTreeSitterClient: TreeSitterClient | null = null;
-function getSharedTreeSitterClient(): TreeSitterClient {
-	if (!_sharedTreeSitterClient) {
-		_sharedTreeSitterClient = new TreeSitterClient();
-	}
-	return _sharedTreeSitterClient;
-}
+const treeSitterClient: Promise<TreeSitterClient> = TreeSitterClient.create();
 
 const EXT_TO_LANG: Record<string, string> = {
 	".ts": "typescript",
@@ -608,7 +602,7 @@ export async function handleBooboo(
 	// Uses the same queryLoader + singleton client as the per-write dispatch runner.
 	// Covers all languages: TypeScript, JavaScript, Python, Go, Rust, Ruby.
 	await tracker.run("tree-sitter patterns", async () => {
-		const client = getSharedTreeSitterClient();
+		const client = await treeSitterClient;
 		if (!client.isAvailable()) return { findings: 0, status: "skipped" };
 
 		const initialized = await client.init();

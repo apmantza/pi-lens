@@ -1,18 +1,18 @@
 import * as nodeCrypto from "node:crypto";
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
-import type { BiomeClient } from "./biome-client.js";
-import type { CacheManager } from "./cache-manager.js";
-import { createFileTime } from "./file-time.js";
-import type { ReadGuard } from "./read-guard.js";
-import { getFormatService } from "./format-service.js";
-import { isExternalOrVendorFile } from "./path-utils.js";
-import { resolveLanguageRootForFile } from "./language-profile.js";
-import { logLatency } from "./latency-logger.js";
-import type { MetricsClient } from "./metrics-client.js";
-import { runPipeline } from "./pipeline.js";
-import type { RuffClient } from "./ruff-client.js";
-import type { RuntimeCoordinator } from "./runtime-coordinator.js";
+import type { BiomeClient } from "../biome-client.js";
+import type { CacheManager } from "../cache-manager.js";
+import { createFileTime } from "../file-time.js";
+import type { ReadGuard } from "../read/guard.js";
+import { getFormatService } from "../format-service.js";
+import { isExternalOrVendorFile } from "../path-utils.js";
+import { resolveLanguageRootForFile } from "../language-profile.js";
+import { logLatency } from "../latency-logger.js";
+import type { MetricsClient } from "../metrics-client.js";
+import { runPipeline } from "../pipeline.js";
+import type { RuffClient } from "../ruff-client.js";
+import type { RuntimeCoordinator } from "./coordinator.js";
 
 interface ToolResultEvent {
 	toolName: string;
@@ -279,7 +279,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		output: string;
 		hasBlockers: boolean;
 		isError?: boolean;
-		cascadeResult?: import("./cascade-types.js").CascadeResult;
+		cascadeResult?: import("../cascade-types.js").CascadeResult;
 		changedFiles?: string[];
 	};
 	const pipelinePromise = runPipeline(

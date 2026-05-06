@@ -1,12 +1,12 @@
-import { randomBytes } from "node:crypto";
+import * as crypto from "node:crypto";
 import * as path from "node:path";
-import type { CascadeResult } from "./cascade-types.js";
-import type { FileComplexity } from "./complexity-client.js";
-import { normalizeMapKey } from "./path-utils.js";
-import type { ProjectIndex } from "./project-index.js";
-import { ReadGuard } from "./read-guard.js";
-import type { RuleScanResult } from "./rules-scanner.js";
-import { RUNTIME_CONFIG } from "./runtime-config.js";
+import type { CascadeResult } from "../cascade-types.js";
+import type { FileComplexity } from "../complexity-client.js";
+import { normalizeMapKey } from "../path-utils.js";
+import type { ProjectIndex } from "../project-index.js";
+import { ReadGuard } from "../read/guard.js";
+import type { RuleScanResult } from "../rules-scanner.js";
+import { RUNTIME_CONFIG } from "./config.js";
 
 export interface ErrorDebtBaseline {
 	testsPassed: boolean;
@@ -62,6 +62,13 @@ export class RuntimeCoordinator {
 		{ status: "warming" | "ready"; ts: number }
 	>();
 
+	static async create(): Promise<RuntimeCoordinator> {
+		return new this();
+	}
+
+	private constructor() {
+	}
+
 	resetForSession(): void {
 		this._sessionGeneration += 1;
 		this._sessionStartedAt = Date.now();
@@ -78,7 +85,7 @@ export class RuntimeCoordinator {
 		};
 		this._fixedThisTurn.clear();
 		this._reportedThisTurn.clear();
-		this._telemetrySessionId = `lens-${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`;
+		this._telemetrySessionId = `lens-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
 		this._telemetryModel = "unknown";
 		this._turnIndex = 0;
 		this._writeIndex = 0;
@@ -120,6 +127,21 @@ export class RuntimeCoordinator {
 			0,
 			160,
 		);
+	}
+
+	updateIdentityFromEvent(event: unknown): void {
+		const raw = event as {
+			provider?: string;
+			model?: string;
+			sessionId?: string;
+			session?: { id?: string };
+			id?: string;
+		};
+		this.setTelemetryIdentity({
+			provider: raw.provider,
+			model: raw.model,
+			sessionId: raw.sessionId ?? raw.session?.id ?? raw.id,
+		});
 	}
 
 	get gitGuardHasBlockers(): boolean {

@@ -13,7 +13,7 @@
  */
 
 import { getLSPService } from "../../lsp/index.js";
-import { RUNTIME_CONFIG } from "../../runtime-config.js";
+import { RUNTIME_CONFIG } from "../../runtime/config.js";
 import { PRIORITY } from "../priorities.js";
 import { resolveRunnerPath } from "../runner-context.js";
 import type {

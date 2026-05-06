@@ -11,6 +11,7 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import * as utils from "../utils.js";
 import { logLatency } from "./latency-logger.js";
 import { safeSpawn } from "./safe-spawn.js";
 import {
@@ -98,15 +99,6 @@ export interface FormatterResult {
 
 // --- Utility Functions ---
 
-async function fileExists(filePath: string): Promise<boolean> {
-	try {
-		await fs.access(filePath);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
 async function findUp(
 	targets: string[],
 	startDir: string,
@@ -118,7 +110,7 @@ async function findUp(
 	while (currentDir !== stopDir) {
 		for (const target of targets) {
 			const checkPath = path.join(currentDir, target);
-			if (await fileExists(checkPath)) {
+			if (await utils.fileExists(checkPath)) {
 				found.push(checkPath);
 			}
 		}
@@ -157,7 +149,7 @@ async function resolveGoFmtBinary(): Promise<string | null> {
 		"bin",
 		process.platform === "win32" ? "gofmt.exe" : "gofmt",
 	);
-	return (await fileExists(binary)) ? binary : null;
+	return (await utils.fileExists(binary)) ? binary : null;
 }
 
 // --- Venv / Local Binary Helpers ---
@@ -182,7 +174,7 @@ async function findInVenv(binary: string, cwd: string): Promise<string | null> {
 	while (dir !== root) {
 		for (const candidate of candidates) {
 			const full = path.join(dir, candidate);
-			if (await fileExists(full)) return full;
+			if (await utils.fileExists(full)) return full;
 		}
 		const parent = path.dirname(dir);
 		if (parent === dir) break;
@@ -206,7 +198,7 @@ async function findInVendorBin(
 	while (dir !== root) {
 		for (const name of names) {
 			const full = path.join(dir, "vendor", "bin", name);
-			if (await fileExists(full)) return full;
+			if (await utils.fileExists(full)) return full;
 		}
 		const parent = path.dirname(dir);
 		if (parent === dir) break;
@@ -234,7 +226,7 @@ async function findInNodeModules(
 				]
 			: [path.join(dir, "node_modules", ".bin", binary)];
 		for (const full of candidates) {
-			if (await fileExists(full)) return full;
+			if (await utils.fileExists(full)) return full;
 		}
 		const parent = path.dirname(dir);
 		if (parent === dir) break;
@@ -315,12 +307,7 @@ function hasExplicitFormatterConfig(
 // --- Formatter Definitions ---
 
 async function hasEditorConfig(cwd: string): Promise<boolean> {
-	try {
-		await fs.access(path.join(cwd, ".editorconfig"));
-		return true;
-	} catch {
-		return false;
-	}
+	return utils.fileExists(path.join(cwd, ".editorconfig"));
 }
 
 export const biomeFormatter: FormatterInfo = {

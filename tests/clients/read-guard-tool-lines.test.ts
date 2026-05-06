@@ -5,7 +5,7 @@ import {
 	countFileLines,
 	getTouchedLinesForGuard,
 	tryCorrectIndentationMismatch,
-} from "../../clients/read-guard-tool-lines.ts";
+} from "../../clients/read/guard-tool-lines.ts";
 import { setupTestEnvironment } from "./test-utils.js";
 
 describe("read-guard tool line helpers", () => {

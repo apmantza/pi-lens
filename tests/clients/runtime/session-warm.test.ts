@@ -5,24 +5,24 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { handleSessionStart } from "../../clients/runtime-session.js";
-import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import { handleSessionStart } from "../../../clients/runtime/session.js";
+import { createTempFile, setupTestEnvironment } from "../test-utils.js";
 
 const mockTouchFile = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
-vi.mock("../../clients/lsp/config.js", () => ({
+vi.mock("../../../clients/lsp/config.js", () => ({
 	loadLSPConfig: vi.fn(),
 	initLSPConfig: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../../clients/lsp/index.js", () => ({
+vi.mock("../../../clients/lsp/index.js", () => ({
 	getLSPService: vi.fn(() => ({
 		touchFile: mockTouchFile,
 	})),
 }));
 
-import { initLSPConfig, loadLSPConfig } from "../../clients/lsp/config.js";
-import { getLSPService } from "../../clients/lsp/index.js";
+import { initLSPConfig, loadLSPConfig } from "../../../clients/lsp/config.js";
+import { getLSPService } from "../../../clients/lsp/index.js";
 
 function setStartupMode(mode: "full" | "quick"): () => void {
 	const prev = process.env.PI_LENS_STARTUP_MODE;

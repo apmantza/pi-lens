@@ -162,7 +162,7 @@ describe("index.ts integration", () => {
 				},
 			}),
 		}));
-		vi.doMock("../clients/runtime-session.js", () => ({
+		vi.doMock("../clients/runtime/session.js", () => ({
 			handleSessionStart: handleSessionStartMock,
 		}));
 		vi.doMock("../clients/installer/index.js", () => ({
@@ -187,7 +187,7 @@ describe("index.ts integration", () => {
 		const { pi, handlers } = createMockPi();
 		registerExtension(pi as any);
 
-		const cacheManager = new CacheManager(false);
+		const cacheManager = await CacheManager.create(false);
 		cacheManager.writeCache(
 			"session-start-guidance",
 			{ content: "Use pi-lens tools when useful." },
@@ -198,7 +198,7 @@ describe("index.ts integration", () => {
 		expect(context).toBeTypeOf("function");
 
 		const userMessage = { role: "user", content: "Fix the bug" };
-		const result = await context?.({ messages: [userMessage] }, { cwd: tmpDir });
+		const result = await context?.({ messages: [userMessage] },	{ cwd: tmpDir });
 
 		expect(result).toEqual({
 			messages: [
@@ -256,7 +256,7 @@ describe("index.ts integration", () => {
 				},
 			}),
 		}));
-		vi.doMock("../clients/runtime-session.js", () => ({
+		vi.doMock("../clients/runtime/session.js", () => ({
 			handleSessionStart: async (deps: any) => {
 				deps.runtime.projectRoot = tmpDir;
 				deps.runtime.cachedExports.set("otherExport", similarTarget);
@@ -370,8 +370,11 @@ describe("index.ts integration", () => {
 		fs.mkdirSync(path.dirname(sourceFile), { recursive: true });
 		fs.writeFileSync(sourceFile, "one\ntwo\nthree\nfour\nfive\n");
 
-		vi.doMock("../clients/runtime-coordinator.js", () => ({
+		vi.doMock("../clients/runtime/coordinator.js", () => ({
 			RuntimeCoordinator: class {
+				static async create() {
+					return new this();
+				}
 				projectRoot = tmpDir;
 				turnIndex = 0;
 				complexityBaselines = new Map();
@@ -455,8 +458,11 @@ describe("index.ts integration", () => {
 		fs.mkdirSync(path.dirname(sourceFile), { recursive: true });
 		fs.writeFileSync(sourceFile, "function foo() {\n\treturn 1;\n}\n");
 
-		vi.doMock("../clients/runtime-coordinator.js", () => ({
+		vi.doMock("../clients/runtime/coordinator.js", () => ({
 			RuntimeCoordinator: class {
+				static async create() {
+					return new this();
+				}
 				projectRoot = tmpDir;
 				turnIndex = 0;
 				complexityBaselines = new Map();
@@ -553,8 +559,11 @@ describe("index.ts integration", () => {
 			"function foo() {\n\treturn 1;\n}\n\nfunction bar() {\n\treturn 2;\n}\n",
 		);
 
-		vi.doMock("../clients/runtime-coordinator.js", () => ({
+		vi.doMock("../clients/runtime/coordinator.js", () => ({
 			RuntimeCoordinator: class {
+				static async create() {
+					return new this();
+				}
 				projectRoot = tmpDir;
 				turnIndex = 0;
 				complexityBaselines = new Map();
@@ -663,8 +672,11 @@ describe("index.ts integration", () => {
 		fs.mkdirSync(path.dirname(sourceFile), { recursive: true });
 		fs.writeFileSync(sourceFile, "export const value = 1;\n");
 
-		vi.doMock("../clients/runtime-coordinator.js", () => ({
+		vi.doMock("../clients/runtime/coordinator.js", () => ({
 			RuntimeCoordinator: class {
+				static async create() {
+					return new this();
+				}
 				projectRoot = tmpDir;
 				turnIndex = 0;
 				complexityBaselines = new Map();
@@ -753,8 +765,11 @@ describe("index.ts integration", () => {
 		fs.mkdirSync(path.dirname(notesFile), { recursive: true });
 		fs.writeFileSync(notesFile, "plain text\n");
 
-		vi.doMock("../clients/runtime-coordinator.js", () => ({
+		vi.doMock("../clients/runtime/coordinator.js", () => ({
 			RuntimeCoordinator: class {
+				static async create() {
+					return new this();
+				}
 				projectRoot = tmpDir;
 				turnIndex = 0;
 				complexityBaselines = new Map();
@@ -838,8 +853,11 @@ describe("index.ts integration", () => {
 		fs.mkdirSync(path.dirname(turnStateFile), { recursive: true });
 		fs.writeFileSync(turnStateFile, '{"files":{}}\n');
 
-		vi.doMock("../clients/runtime-coordinator.js", () => ({
+		vi.doMock("../clients/runtime/coordinator.js", () => ({
 			RuntimeCoordinator: class {
+				static async create() {
+					return new this();
+				}
 				projectRoot = tmpDir;
 				turnIndex = 0;
 				complexityBaselines = new Map();
@@ -917,8 +935,11 @@ describe("index.ts integration", () => {
 	}, 15_000);
 
 	it("lens-health command reports crash, latency, diagnostics, and slop telemetry", async () => {
-		vi.doMock("../clients/runtime-coordinator.js", () => ({
+		vi.doMock("../clients/runtime/coordinator.js", () => ({
 			RuntimeCoordinator: class {
+				static async create() {
+					return new this();
+				}
 				projectRoot = tmpDir;
 				getCrashEntries() {
 					return [[path.join(tmpDir, "src", "boom.ts"), 3]];
@@ -966,7 +987,7 @@ describe("index.ts integration", () => {
 			getCascadeSessionStats: () => ({ runs: 5, diagnosticsSurfaced: 3, coldSnapshotTouches: 2 }),
 			resetDispatchBaselines: () => {},
 		}));
-		vi.doMock("../clients/diagnostic-tracker.js", async () => ({
+		vi.doMock("../clients/diagnostics/tracker.js", async () => ({
 			getDiagnosticTracker: () => ({
 				reset: () => {},
 				getStats: () => ({

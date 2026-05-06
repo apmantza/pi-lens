@@ -26,6 +26,6 @@ This document defines the user-visible inline contract for pi-lens.
 
 Verification Tests
 
-- tests/clients/runtime-tool-result.test.ts
-- tests/clients/runtime-session.test.ts
-- tests/clients/runtime-event-flow.test.ts
+- tests/clients/runtime/tool-result.test.ts
+- tests/clients/runtime/session.test.ts
+- tests/clients/runtime/event-flow.test.ts

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { handleSessionStart } from "../../clients/runtime-session.js";
-import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import { handleSessionStart } from "../../../clients/runtime/session.js";
+import { createTempFile, setupTestEnvironment } from "../test-utils.js";
 
 function setStartupMode(mode: "full" | "quick"): () => void {
 	const prev = process.env.PI_LENS_STARTUP_MODE;

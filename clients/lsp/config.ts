@@ -55,6 +55,8 @@ interface RegisteredLSPConfig {
 
 const CONFIG_PATHS = [".pi-lens/lsp.json", ".pi-lens.json", "pi-lsp.json"];
 
+const _lspConfigInitializedCwds = new Set<string>();
+
 /**
  * Load LSP configuration from file
  */
@@ -178,6 +180,13 @@ export async function initLSPConfig(cwd: string): Promise<void> {
 	} finally {
 		configInFlight.delete(normalizedCwd);
 	}
+}
+
+export async function ensureLSPConfigInitialized(cwd: string): Promise<void> {
+	const normalizedCwd = path.resolve(cwd);
+	if (_lspConfigInitializedCwds.has(normalizedCwd)) return;
+	await initLSPConfig(normalizedCwd);
+	_lspConfigInitializedCwds.add(normalizedCwd);
 }
 
 /**

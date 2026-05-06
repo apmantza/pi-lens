@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { createAstGrepReplaceTool } from "../../tools/ast-grep-replace.js";
+import { createAstGrepReplaceTool } from "../../tools/ast-grep/ast-grep-replace.js";
 
-function makeClient(overrides: Partial<Parameters<typeof createAstGrepReplaceTool>[0]> = {}) {
+async function makeClient(overrides: Partial<Awaited<Parameters<typeof createAstGrepReplaceTool>[0]>> = {}) {
 	return {
 		ensureAvailable: async () => true,
 		replace: vi.fn().mockResolvedValue({ matches: [] }),
 		formatMatches: () => "",
 		...overrides,
-	} as Parameters<typeof createAstGrepReplaceTool>[0];
+	} as Awaited<Parameters<typeof createAstGrepReplaceTool>[0]>;
 }
 
 describe("ast_grep_replace tool", () => {

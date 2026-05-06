@@ -1,13 +1,14 @@
-import * as fs from "node:fs";
+import * as nodeFs from "node:fs";
 import * as path from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
-import { CacheManager } from "../../clients/cache-manager.js";
-import { consumeTurnEndFindings } from "../../clients/runtime-context.js";
-import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
-import { handleSessionStart } from "../../clients/runtime-session.js";
-import { handleToolResult } from "../../clients/runtime-tool-result.js";
-import { handleTurnEnd } from "../../clients/runtime-turn.js";
-import { setupTestEnvironment } from "./test-utils.js";
+import { CacheManager } from "../../../clients/cache-manager.js";
+import { consumeTurnEndFindings } from "../../../clients/runtime/context.js";
+import { RuntimeCoordinator } from "../../../clients/runtime/coordinator.js";
+import { handleSessionStart } from "../../../clients/runtime/session.js";
+import { handleToolResult } from "../../../clients/runtime/tool-result.js";
+import { handleTurnEnd } from "../../../clients/runtime/turn.js";
+import { setupTestEnvironment } from "../test-utils.js";
 
 vi.mock("../../clients/pipeline.js", () => ({
 	runPipeline: vi.fn(async () => ({
@@ -22,14 +23,14 @@ vi.mock("../../clients/pipeline.js", () => ({
 describe("runtime event flow", () => {
 	it("flows session_start -> tool_result -> turn_end -> context", async () => {
 		const env = setupTestEnvironment("pi-lens-event-flow-");
-		const runtime = new RuntimeCoordinator();
-		const cacheManager = new CacheManager(false);
+		const runtime = await RuntimeCoordinator.create();
+		const cacheManager = await CacheManager.create(false);
 		const notify = vi.fn();
 
 		try {
 			const filePath = path.join(env.tmpDir, "src", "flow.ts");
-			fs.mkdirSync(path.dirname(filePath), { recursive: true });
-			fs.writeFileSync(filePath, "export const value = 1;\n");
+			nodeFs.mkdirSync(path.dirname(filePath), { recursive: true });
+			nodeFs.writeFileSync(filePath, "export const value = 1;\n");
 
 			await handleSessionStart({
 				ctxCwd: env.tmpDir,

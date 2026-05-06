@@ -6,9 +6,9 @@ import {
 	consumeSessionStartGuidance,
 	consumeTestFindings,
 	consumeTurnEndFindings,
-} from "../../clients/runtime-context.js";
-import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
-import { handleTurnEnd } from "../../clients/runtime-turn.js";
+} from "../../clients/runtime/context.js";
+import { RuntimeCoordinator } from "../../clients/runtime/coordinator.js";
+import { handleTurnEnd } from "../../clients/runtime/turn.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 // Minimal turn_end deps — no real tool clients needed for these scenarios.
@@ -37,9 +37,9 @@ function makeTurnEndDeps(
 describe("turn-end-findings-last dedup", () => {
 	it("suppresses identical findings within the same session", async () => {
 		const env = setupTestEnvironment("pi-lens-dedup-same-");
-		const runtime = new RuntimeCoordinator();
+		const runtime = await RuntimeCoordinator.create();
 		runtime.setTelemetryIdentity({ sessionId: "session-A" });
-		const cacheManager = new CacheManager(false);
+		const cacheManager = await CacheManager.create(false);
 
 		// Pre-seed last findings with matching signature + same session.
 		const content = "🔴 blocker: something broken\n";
@@ -82,9 +82,9 @@ describe("turn-end-findings-last dedup", () => {
 
 	it("does NOT suppress identical findings from a previous session", async () => {
 		const env = setupTestEnvironment("pi-lens-dedup-cross-");
-		const runtime = new RuntimeCoordinator();
+		const runtime = await RuntimeCoordinator.create();
 		runtime.setTelemetryIdentity({ sessionId: "session-B" });
-		const cacheManager = new CacheManager(false);
+		const cacheManager = await CacheManager.create(false);
 
 		const content = "🔴 blocker: something broken\n";
 		const files = ["src/foo.ts"];
@@ -128,9 +128,9 @@ vi.mock("../../clients/pipeline.js", () => ({
 describe("stale turn state eviction", () => {
 	it("evicts turn state written by a previous session", async () => {
 		const env = setupTestEnvironment("pi-lens-stale-evict-");
-		const runtime = new RuntimeCoordinator();
+		const runtime = await RuntimeCoordinator.create();
 		runtime.setTelemetryIdentity({ sessionId: "session-current" });
-		const cacheManager = new CacheManager(false);
+		const cacheManager = await CacheManager.create(false);
 
 		// Write a turn state stamped with an old session.
 		const filePath = path.join(env.tmpDir, "src/old.ts");
@@ -160,9 +160,9 @@ describe("stale turn state eviction", () => {
 
 	it("keeps turn state written by the current session", async () => {
 		const env = setupTestEnvironment("pi-lens-same-session-");
-		const runtime = new RuntimeCoordinator();
+		const runtime = await RuntimeCoordinator.create();
 		runtime.setTelemetryIdentity({ sessionId: "session-current" });
-		const cacheManager = new CacheManager(false);
+		const cacheManager = await CacheManager.create(false);
 
 		const filePath = path.join(env.tmpDir, "src/current.ts");
 		fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -191,9 +191,9 @@ describe("stale turn state eviction", () => {
 // ── sessionId stamped into turn state ─────────────────────────────────────────
 
 describe("addModifiedRange sessionId stamping", () => {
-	it("stamps session ID into turn state when provided", () => {
+	it("stamps session ID into turn state when provided", async () => {
 		const env = setupTestEnvironment("pi-lens-stamp-");
-		const cacheManager = new CacheManager(false);
+		const cacheManager = await CacheManager.create(false);
 		const filePath = path.join(env.tmpDir, "src/foo.ts");
 		fs.mkdirSync(path.dirname(filePath), { recursive: true });
 		fs.writeFileSync(filePath, "const x = 1;\n");
@@ -212,9 +212,9 @@ describe("addModifiedRange sessionId stamping", () => {
 		env.cleanup();
 	});
 
-	it("leaves sessionId undefined when not provided", () => {
+	it("leaves sessionId undefined when not provided", async () => {
 		const env = setupTestEnvironment("pi-lens-no-stamp-");
-		const cacheManager = new CacheManager(false);
+		const cacheManager = await CacheManager.create(false);
 		const filePath = path.join(env.tmpDir, "src/bar.ts");
 		fs.mkdirSync(path.dirname(filePath), { recursive: true });
 		fs.writeFileSync(filePath, "const y = 2;\n");
@@ -231,9 +231,9 @@ describe("addModifiedRange sessionId stamping", () => {
 // ── Context injection framing ─────────────────────────────────────────────────
 
 describe("context injection framing", () => {
-	it("consumeTurnEndFindings includes automated-check framing", () => {
+	it("consumeTurnEndFindings includes automated-check framing", async () => {
 		const env = setupTestEnvironment("pi-lens-ctx-frame-");
-		const cacheManager = new CacheManager(false);
+		const cacheManager = await CacheManager.create(false);
 
 		cacheManager.writeCache(
 			"turn-end-findings",
@@ -249,9 +249,9 @@ describe("context injection framing", () => {
 		env.cleanup();
 	});
 
-	it("consumeTestFindings includes automated-check framing", () => {
+	it("consumeTestFindings includes automated-check framing", async () => {
 		const env = setupTestEnvironment("pi-lens-ctx-test-");
-		const cacheManager = new CacheManager(false);
+		const cacheManager = await CacheManager.create(false);
 
 		cacheManager.writeCache(
 			"test-runner-findings",
@@ -268,9 +268,9 @@ describe("context injection framing", () => {
 		env.cleanup();
 	});
 
-	it("consumeSessionStartGuidance includes automated-context framing", () => {
+	it("consumeSessionStartGuidance includes automated-context framing", async () => {
 		const env = setupTestEnvironment("pi-lens-ctx-guidance-");
-		const cacheManager = new CacheManager(false);
+		const cacheManager = await CacheManager.create(false);
 
 		cacheManager.writeCache(
 			"session-start-guidance",

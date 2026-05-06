@@ -6,6 +6,7 @@
  */
 
 import { basename, extname } from "node:path";
+import * as language from "./language-policy.js";
 
 // --- Types ---
 
@@ -265,6 +266,12 @@ export function detectFileKind(filePath: string): FileKind | undefined {
 	// Check by extension
 	const ext = extname(filePath).toLowerCase();
 	return EXT_TO_KIND.get(ext);
+}
+
+export function isLspCapableFile(filePath: string): boolean {
+	const kind = detectFileKind(filePath);
+	if (!kind) return false;
+	return language.LANGUAGE_POLICY[kind]?.lspCapable !== false;
 }
 
 /**

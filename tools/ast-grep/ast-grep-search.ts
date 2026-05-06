@@ -4,9 +4,9 @@
  * Extracted from index.ts for maintainability.
  */
 
-import { Type } from "typebox";
-import type { AstGrepClient } from "../clients/ast-grep-client.js";
-import { LANGUAGES } from "./shared.js";
+import * as typebox from "typebox";
+import type { AstGrepClient } from "../../clients/ast-grep-client.js";
+import { LANGUAGES } from "../index.js";
 
 function looksLikeRuleYamlOrPlainText(pattern: string): boolean {
 	const text = pattern.trim();
@@ -38,7 +38,33 @@ function looksLikeRuleYamlOrPlainText(pattern: string): boolean {
 	return false;
 }
 
-export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
+export function createAstGrepSearchTool(astGrepClientPromise: Promise<AstGrepClient>): {
+	name: "ast_grep_search"; label: string; description: string; promptSnippet: string; parameters: typebox.TObject<{
+		pattern: typebox.TString;
+		lang: typebox.TString;
+		paths: typebox.TOptional<typebox.TArray<typebox.TString>>;
+		selector: typebox.TOptional<typebox.TString>;
+		context: typebox.TOptional<typebox.TNumber>;
+	}>; execute(_toolCallId: string, params: Record<string, unknown>, _signal: AbortSignal, _onUpdate: unknown, ctx: { cwd?: string; }): Promise<{
+		content: {
+			type: "text";
+			text: string;
+		}[];
+		isError: boolean;
+		details: {
+			matchCount?: undefined;
+		};
+	} | {
+		content: {
+			type: "text";
+			text: string;
+		}[];
+		details: {
+			matchCount: number;
+		};
+		isError?: undefined;
+	}>;
+} {
 	return {
 		name: "ast_grep_search" as const,
 		label: "AST Search",
@@ -58,27 +84,27 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			"Use 'selector' to extract specific nodes (e.g., just the function name). " +
 			"Use 'context' to show surrounding lines.",
 		promptSnippet: "Use ast_grep_search for AST-aware code search",
-		parameters: Type.Object({
-			pattern: Type.String({
+		parameters: typebox.Type.Object({
+			pattern: typebox.Type.String({
 				description: "AST pattern (use function/class/call context, not text)",
 			}),
-			lang: Type.String({
+			lang: typebox.Type.String({
 				enum: [...LANGUAGES] as string[],
 				description: "Target language",
 			}),
-			paths: Type.Optional(
-				Type.Array(Type.String(), {
+			paths: typebox.Type.Optional(
+				typebox.Type.Array(typebox.Type.String(), {
 					description: "Specific files/folders to search",
 				}),
 			),
-			selector: Type.Optional(
-				Type.String({
+			selector: typebox.Type.Optional(
+				typebox.Type.String({
 					description:
 						"Extract specific AST node kind (e.g., 'name', 'body', 'parameter'). Use with patterns like '$NAME($$$)' to extract just the name.",
 				}),
 			),
-			context: Type.Optional(
-				Type.Number({
+			context: typebox.Type.Optional(
+				typebox.Type.Number({
 					description: "Show N lines before/after each match for context",
 				}),
 			),
@@ -89,7 +115,26 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			_signal: AbortSignal,
 			_onUpdate: unknown,
 			ctx: { cwd?: string },
-		) {
+		): Promise<{
+			content: {
+				type: "text";
+				text: string;
+			}[];
+			isError: boolean;
+			details: {
+				matchCount?: undefined;
+			};
+		} | {
+			content: {
+				type: "text";
+				text: string;
+			}[];
+			details: {
+				matchCount: number;
+			};
+			isError?: undefined;
+		}> {
+			const astGrepClient = await astGrepClientPromise;
 			if (!(await astGrepClient.ensureAvailable())) {
 				return {
 					content: [

@@ -75,7 +75,11 @@ function getTurnStatePath(cwd: string): string {
 export class CacheManager {
 	private log: (msg: string) => void;
 
-	constructor(verbose = false) {
+	static async create(verbose = false): Promise<CacheManager> {
+		return new this(verbose);
+	}
+
+	private constructor(verbose: boolean) {
 		this.log = verbose
 			? (msg: string) => console.error(`[cache] ${msg}`)
 			: () => {};

@@ -16,8 +16,8 @@ import * as nodeFs from "node:fs";
 import * as path from "node:path";
 import type { BiomeClient } from "./biome-client.js";
 import { recordDiagnostics } from "./widget-state.js";
-import { getDiagnosticLogger } from "./diagnostic-logger.js";
-import { getDiagnosticTracker } from "./diagnostic-tracker.js";
+import { getDiagnosticLogger } from "./diagnostics/logger.js";
+import { getDiagnosticTracker } from "./diagnostics/tracker.js";
 import {
 	computeCascadeForFile,
 	dispatchLintWithResult,
@@ -40,7 +40,7 @@ import { getLSPService } from "./lsp/index.js";
 import type { MetricsClient } from "./metrics-client.js";
 import { clearGraphCache } from "./review-graph/builder.js";
 import type { RuffClient } from "./ruff-client.js";
-import { RUNTIME_CONFIG } from "./runtime-config.js";
+import { RUNTIME_CONFIG } from "./runtime/config.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { formatSecrets, scanForSecrets } from "./secrets-scanner.js";
 import {

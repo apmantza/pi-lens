@@ -8,7 +8,7 @@
  */
 
 import * as fs from "node:fs";
-import type { TreeSitterClient } from "./tree-sitter-client.js";
+import type { TreeSitterClient } from "../tree-sitter-client.js";
 
 /** Only expand reads smaller than this (lines). Larger reads don't benefit. */
 export const EXPANSION_LIMIT_LINES = 60;

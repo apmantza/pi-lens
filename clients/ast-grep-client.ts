@@ -8,9 +8,9 @@
  * Rules: ./rules/ directory
  */
 
-import { spawnSync } from "node:child_process";
-import * as fs from "node:fs";
+import * as promiseSpawn from "@npmcli/promise-spawn";
 import * as path from "node:path";
+import * as utils from "../utils.js";
 import { AstGrepParser } from "./ast-grep-parser.js";
 import { AstGrepRuleManager } from "./ast-grep-rule-manager.js";
 import type {
@@ -26,22 +26,24 @@ import { SgRunner } from "./sg-runner.js";
 
 export class AstGrepClient {
 	private available: boolean | null = null;
-	private ruleDir: string;
+	private ruleDir!: string;
 	private log: (msg: string) => void;
 	private ruleManager: AstGrepRuleManager;
 	private runner: SgRunner;
 
-	constructor(ruleDir?: string, verbose = false) {
-		const projectRuleDir = path.join(process.cwd(), "rules");
-		this.ruleDir =
-			ruleDir ||
-			(fs.existsSync(projectRuleDir)
-				? projectRuleDir
-				: resolvePackagePath(import.meta.url, "rules"));
+	static async create(ruleDir?: string, verbose = false): Promise<AstGrepClient> {
+		ruleDir ??= await (async () => {
+			const projectRuleDir = path.join(process.cwd(), "rules");
+			return await utils.fileExists(projectRuleDir) ? projectRuleDir : resolvePackagePath(import.meta.url, "rules");
+		})();
+		return new this(ruleDir, verbose);
+	}
+
+	private constructor(ruleDir: string, verbose = false) {
 		this.log = verbose
 			? (msg: string) => console.error(`[ast-grep] ${msg}`)
 			: () => {};
-		this.ruleManager = new AstGrepRuleManager(this.ruleDir, this.log);
+		this.ruleManager = new AstGrepRuleManager(ruleDir, this.log);
 		this.runner = new SgRunner(verbose);
 	}
 
@@ -276,16 +278,16 @@ message: found
 	/**
 	 * Scan a file against all rules
 	 */
-	scanFile(filePath: string): AstGrepDiagnostic[] {
+	async scanFile(filePath: string): Promise<AstGrepDiagnostic[]> {
 		if (!this.isAvailable()) return [];
 
 		const absolutePath = path.resolve(filePath);
-		if (!fs.existsSync(absolutePath)) return [];
+		if (!await utils.fileExists (absolutePath)) return [];
 
 		const configPath = path.join(this.ruleDir, ".sgconfig.yml");
 
 		try {
-			const result = spawnSync(
+			const result = await promiseSpawn.default(
 				"npx",
 				["sg", "scan", "--config", configPath, "--json", absolutePath],
 				{

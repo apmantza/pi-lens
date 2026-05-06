@@ -13,8 +13,8 @@ describe("inline contract doc", () => {
 		expect(content).toContain("Session Start Is Compact");
 		expect(content).toContain("Turn-End Findings Are Deferred and One-Shot");
 
-		expect(content).toContain("tests/clients/runtime-tool-result.test.ts");
-		expect(content).toContain("tests/clients/runtime-session.test.ts");
-		expect(content).toContain("tests/clients/runtime-event-flow.test.ts");
+		expect(content).toContain("tests/clients/runtime/tool-result.test.ts");
+		expect(content).toContain("tests/clients/runtime/session.test.ts");
+		expect(content).toContain("tests/clients/runtime/event-flow.test.ts");
 	});
 });

@@ -33,7 +33,7 @@ afterAll(() => {
 
 describe("tree-sitter concurrency rules", () => {
 	it("matches detached async call in TypeScript", async () => {
-		const client = new TreeSitterClient();
+		const client = await TreeSitterClient.create();
 		const query = await getQuery("ts-detached-async-call");
 		const filePath = writeTempFile(
 			"ts",
@@ -44,7 +44,7 @@ describe("tree-sitter concurrency rules", () => {
 	});
 
 	it("matches threaded global state write in Python", async () => {
-		const client = new TreeSitterClient();
+		const client = await TreeSitterClient.create();
 		const query = await getQuery("python-thread-global-write");
 		const filePath = writeTempFile(
 			"py",

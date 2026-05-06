@@ -4,9 +4,9 @@ import { describe, expect, it } from "vitest";
 import { CacheManager } from "../../clients/cache-manager.js";
 import type { CascadeResult } from "../../clients/cascade-types.js";
 import type { Diagnostic } from "../../clients/dispatch/types.js";
-import { consumeTurnEndFindings } from "../../clients/runtime-context.js";
-import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
-import { handleTurnEnd } from "../../clients/runtime-turn.js";
+import { consumeTurnEndFindings } from "../../clients/runtime/context.js";
+import { RuntimeCoordinator } from "../../clients/runtime/coordinator.js";
+import { handleTurnEnd } from "../../clients/runtime/turn.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 function diagnostic(filePath: string, message: string, line = 1): Diagnostic {
@@ -55,8 +55,8 @@ describe("cascade turn-end merge", () => {
 	it("deduplicates cascade diagnostics by neighbor file with last writer winning", async () => {
 		const env = setupTestEnvironment("cascade-turn-merge-");
 		try {
-			const runtime = new RuntimeCoordinator();
-			const cacheManager = new CacheManager(false);
+			const runtime = await RuntimeCoordinator.create();
+			const cacheManager = await CacheManager.create(false);
 			const primaryA = path.join(env.tmpDir, "a.ts");
 			const primaryB = path.join(env.tmpDir, "b.ts");
 			const sharedNeighbor = path.join(env.tmpDir, "shared.ts");

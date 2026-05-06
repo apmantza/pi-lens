@@ -1,10 +1,10 @@
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
-import type { CacheManager } from "./cache-manager.js";
-import type { FormatService } from "./format-service.js";
-import { logLatency } from "./latency-logger.js";
-import { resyncLspFile, runFormatPhase } from "./pipeline.js";
-import type { RuntimeCoordinator } from "./runtime-coordinator.js";
+import type { CacheManager } from "../cache-manager.js";
+import type { FormatService } from "../format-service.js";
+import { logLatency } from "../latency-logger.js";
+import { resyncLspFile, runFormatPhase } from "../pipeline.js";
+import type { RuntimeCoordinator } from "./coordinator.js";
 
 interface AgentEndDeps {
 	ctxCwd?: string;

@@ -1,41 +1,41 @@
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
-import type { AstGrepClient } from "./ast-grep-client.js";
-import type { BiomeClient } from "./biome-client.js";
-import type { CacheManager } from "./cache-manager.js";
-import type { DependencyChecker } from "./dependency-checker.js";
-import { getDiagnosticTracker } from "./diagnostic-tracker.js";
-import { clearAllSessions as clearFileTimeSessions } from "./file-time.js";
-import { getKnipIgnorePatterns } from "./file-utils.js";
-import type { GoClient } from "./go-client.js";
-import type { JscpdClient } from "./jscpd-client.js";
-import type { KnipClient } from "./knip-client.js";
-import { canRunStartupHeavyScans } from "./language-policy.js";
+import type { AstGrepClient } from "../ast-grep-client.js";
+import type { BiomeClient } from "../biome-client.js";
+import type { CacheManager } from "../cache-manager.js";
+import type { DependencyChecker } from "../dependency-checker.js";
+import { getDiagnosticTracker } from "../diagnostics/tracker.js";
+import { clearAllSessions as clearFileTimeSessions } from "../file-time.js";
+import { getKnipIgnorePatterns } from "../file-utils.js";
+import type { GoClient } from "../go-client.js";
+import type { JscpdClient } from "../jscpd-client.js";
+import type { KnipClient } from "../knip-client.js";
+import { canRunStartupHeavyScans } from "../language-policy.js";
 import {
 	detectProjectLanguageProfile,
 	getDefaultStartupTools,
-} from "./language-profile.js";
-import { runLogCleanup } from "./log-cleanup.js";
-import { setSessionLanguages } from "./widget-state.js";
-import { initLSPConfig, loadLSPConfig } from "./lsp/config.js";
-import { getLSPService } from "./lsp/index.js";
-import type { MetricsClient } from "./metrics-client.js";
+} from "../language-profile.js";
+import { runLogCleanup } from "../log-cleanup.js";
+import { setSessionLanguages } from "../widget-state.js";
+import { initLSPConfig, loadLSPConfig } from "../lsp/config.js";
+import { getLSPService } from "../lsp/index.js";
+import type { MetricsClient } from "../metrics-client.js";
 import {
 	buildProjectIndex,
 	isIndexFresh,
 	loadIndex,
 	saveIndex,
-} from "./project-index.js";
-import type { RuffClient } from "./ruff-client.js";
-import { scanProjectRules } from "./rules-scanner.js";
-import type { RuntimeCoordinator } from "./runtime-coordinator.js";
-import type { RustClient } from "./rust-client.js";
+} from "../project-index.js";
+import type { RuffClient } from "../ruff-client.js";
+import { scanProjectRules } from "../rules-scanner.js";
+import type { RuntimeCoordinator } from "./coordinator.js";
+import type { RustClient } from "../rust-client.js";
 
-import { getSourceFiles } from "./scan-utils.js";
-import { resolveStartupScanContext } from "./startup-scan.js";
-import type { TestRunnerClient } from "./test-runner-client.js";
-import type { TodoScanner } from "./todo-scanner.js";
-import type { TypeCoverageClient } from "./type-coverage-client.js";
+import { getSourceFiles } from "../scan-utils.js";
+import { resolveStartupScanContext } from "../startup-scan.js";
+import type { TestRunnerClient } from "../test-runner-client.js";
+import type { TodoScanner } from "../todo-scanner.js";
+import type { TypeCoverageClient } from "../type-coverage-client.js";
 
 interface SessionStartDeps {
 	ctxCwd?: string;

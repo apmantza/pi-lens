@@ -51,6 +51,8 @@ import typeSafetyRunner from "./type-safety.js";
 import yamllintRunner from "./yamllint.js";
 import zigCheckRunner from "./zig-check.js";
 
+export * as similarity from "./similarity.js";
+
 export function registerDefaultRunners(registry: RunnerRegistry): void {
 	// Register all runners (ordered by priority)
 	// Unified LSP runner for all languages (TypeScript, Python, Go, Rust, etc.) - priority 4

@@ -1,5 +1,5 @@
 import type { CacheManager } from "./cache-manager.js";
-import type { RuntimeCoordinator } from "./runtime-coordinator.js";
+import type { RuntimeCoordinator } from "./runtime/coordinator.js";
 
 function getShellCommand(input: unknown): string {
 	if (!input || typeof input !== "object") return "";

@@ -23,14 +23,14 @@ describe("git-guard", () => {
 		).toBe(false);
 	});
 
-	it("blocks commit when unresolved blockers exist in runtime status", () => {
+	it("blocks commit when unresolved blockers exist in runtime status", async () => {
 		const runtime = {
 			gitGuardHasBlockers: true,
 			gitGuardSummary: "🔴 blocker in src/app.ts:12",
 		};
 		const env = setupTestEnvironment("pi-lens-git-guard-");
 		try {
-			const cacheManager = new CacheManager(false);
+			const cacheManager = await CacheManager.create(false);
 			const result = evaluateGitGuard(runtime as any, cacheManager, env.tmpDir);
 			expect(result.block).toBe(true);
 			expect(result.reason).toContain("COMMIT BLOCKED");
@@ -40,11 +40,11 @@ describe("git-guard", () => {
 		}
 	});
 
-	it("blocks commit when turn-end blockers are pending in cache", () => {
+	it("blocks commit when turn-end blockers are pending in cache", async () => {
 		const runtime = { gitGuardHasBlockers: false, gitGuardSummary: "" };
 		const env = setupTestEnvironment("pi-lens-git-guard-");
 		try {
-			const cacheManager = new CacheManager(false);
+			const cacheManager = await CacheManager.create(false);
 			cacheManager.writeCache(
 				"turn-end-findings",
 				{ content: "🔴 duplicate code in modified files" },
@@ -57,11 +57,11 @@ describe("git-guard", () => {
 		}
 	});
 
-	it("allows commit when no blockers are pending", () => {
+	it("allows commit when no blockers are pending", async () => {
 		const runtime = { gitGuardHasBlockers: false, gitGuardSummary: "" };
 		const env = setupTestEnvironment("pi-lens-git-guard-");
 		try {
-			const cacheManager = new CacheManager(false);
+			const cacheManager = await CacheManager.create(false);
 			const result = evaluateGitGuard(runtime as any, cacheManager, env.tmpDir);
 			expect(result).toEqual({ block: false });
 		} finally {

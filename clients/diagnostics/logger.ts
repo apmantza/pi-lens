@@ -4,7 +4,8 @@
  * Log file: ~/.pi-lens/logs/{date}.jsonl
  */
 
-import * as fs from "node:fs";
+import * as nodeFs from "node:fs";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -67,8 +68,8 @@ export interface LogContext {
 function getLogDir(): string {
 	const home = os.homedir();
 	const logDir = path.join(home, ".pi-lens", "logs");
-	if (!fs.existsSync(logDir)) {
-		fs.mkdirSync(logDir, { recursive: true });
+	if (!nodeFs.existsSync(logDir)) {
+		nodeFs.mkdirSync(logDir, { recursive: true });
 	}
 	return logDir;
 }
@@ -98,7 +99,7 @@ export function createDiagnosticLogger(): DiagnosticLogger {
 		const toWrite = pending.splice(0, pending.length);
 		const lines = toWrite.map((e) => JSON.stringify(e)).join("\n") + "\n";
 		try {
-			await fs.promises.appendFile(getLogFile(), lines);
+			await fs.appendFile(getLogFile(), lines);
 		} catch (err) {
 			// pi-lens-ignore: missing-error-propagation — fire-and-forget log write, must not throw
 			console.error("Failed to write diagnostic log:", err);
