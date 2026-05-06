@@ -36,7 +36,7 @@ export const SOURCE_PRECEDENCE: Record<string, string[]> = {
 /**
  * All extensions that could be source or artifacts, in precedence order.
  */
-export const ALL_SCANNABLE_EXTENSIONS = [
+export const ALL_SCANNABLE_EXTENSIONS: string[] = [
 	".ts",
 	".tsx",
 	".js",

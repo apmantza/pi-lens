@@ -440,7 +440,19 @@ export function resolveLocalFirst(
 // PRE-BUILT CHECKERS FOR COMMON TOOLS
 // =============================================================================
 
-export const pyright = createAvailabilityChecker("pyright", ".exe");
-export const ruff = createAvailabilityChecker("ruff", ".exe");
-export const biome = createAvailabilityChecker("biome");
-export const sg = { isAvailable: isSgAvailable, getCommand: getSgCommand };
+export const pyright: {
+	isAvailable: (cwd?: string) => boolean;
+	getCommand: (cwd?: string) => string | null;
+} = createAvailabilityChecker("pyright", ".exe");
+export const ruff: {
+	isAvailable: (cwd?: string) => boolean;
+	getCommand: (cwd?: string) => string | null;
+} = createAvailabilityChecker("ruff", ".exe");
+export const biome: {
+	isAvailable: (cwd?: string) => boolean;
+	getCommand: (cwd?: string) => string | null;
+} = createAvailabilityChecker("biome");
+export const sg: {
+	isAvailable: typeof isSgAvailable;
+	getCommand: typeof getSgCommand;
+} = { isAvailable: isSgAvailable, getCommand: getSgCommand };

@@ -1,14 +1,26 @@
 {
 	"compilerOptions": {
-		"target": "ES2022",
-		"module": "nodenext",
-		"moduleResolution": "nodenext",
+		"rootDir": ".",
+		"outDir": "./out",
+		"target": "esnext",
+		"module": "preserve",
+		"moduleResolution": "bundler",
+		"lib": ["ESNext"],
+		"types": ["node"],
 		"strict": true,
+		"composite": true,
+		"declaration": true,
+		"declarationMap": true,
+		// "erasableSyntaxOnly": true,
 		"esModuleInterop": true,
+		"isolatedDeclarations": true,
+		"isolatedModules": true,
 		"skipLibCheck": true,
-		"lib": ["ES2022"],
-		"types": ["node"]
+		"noImplicitOverride": true,
+		"noImplicitReturns": true,
+		"noUnusedLocals": true,
+		"noUnusedParameters": true,
 	},
-	"include": ["**/*.ts"],
-	"exclude": ["node_modules", "test-lsp-files", "_trigger-test.ts", "tests"]
+	"include": ["*.ts", "**/*.ts"],
+	"exclude": ["node_modules", "dist", "out", "cases", "tests", "scripts"]
 }

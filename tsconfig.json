@@ -1,18 +1,11 @@
 {
+	"extends": "./tsconfig.build.json",
 	"compilerOptions": {
-		"target": "ES2022",
-		"module": "nodenext",
-		"moduleResolution": "nodenext",
-		"strict": true,
-		"esModuleInterop": true,
-		"skipLibCheck": true,
+		// Allow lint config to build to be able to check isolatedDeclarations
+		"noEmit": false,
 		"allowImportingTsExtensions": true,
-		"noEmit": true,
-		"noUnusedLocals": true,
-		"noUnusedParameters": true,
-		"lib": ["ES2022"],
-		"types": ["node"]
+		"rewriteRelativeImportExtensions": true,
 	},
-	"include": ["**/*.ts"],
-	"exclude": ["node_modules"]
+	"include": ["*.ts", "**/*.ts"],
+	"exclude": ["node_modules", "dist", "out", "cases"]
 }

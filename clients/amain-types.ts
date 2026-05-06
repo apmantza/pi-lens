@@ -108,9 +108,9 @@ export const TOKEN_TYPES = [
 // Constants
 // ============================================================================
 
-export const NUM_SYNTAX = SYNTAX_TYPES.length; // 57
-export const NUM_TOKEN = TOKEN_TYPES.length; // 15
-export const NUM_STATES = NUM_SYNTAX + NUM_TOKEN; // 72
+export const NUM_SYNTAX: number = SYNTAX_TYPES.length; // 57
+export const NUM_TOKEN: number = TOKEN_TYPES.length; // 15
+export const NUM_STATES: number = NUM_SYNTAX + NUM_TOKEN; // 72
 
 // ============================================================================
 // State Index Mapping

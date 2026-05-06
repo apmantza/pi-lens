@@ -579,7 +579,7 @@ export function NearestRoot(
 }
 
 /** Alias kept for backward compatibility */
-export const createRootDetector = NearestRoot;
+export const createRootDetector: typeof NearestRoot = NearestRoot;
 
 // --- Runtime Tool Helpers ---
 
@@ -1182,7 +1182,7 @@ export const CSharpServer: LSPServerInfo = {
 	},
 };
 
-export const OmniSharpServer = createInteractiveServer({
+export const OmniSharpServer: LSPServerInfo = createInteractiveServer({
 	id: "omnisharp",
 	name: "OmniSharp",
 	extensions: KIND_EXTENSIONS["csharp"],
@@ -1192,7 +1192,7 @@ export const OmniSharpServer = createInteractiveServer({
 	args: ["--languageserver"],
 });
 
-export const FSharpServer = createInteractiveServer({
+export const FSharpServer: LSPServerInfo = createInteractiveServer({
 	id: "fsharp",
 	name: "FSAutocomplete",
 	extensions: KIND_EXTENSIONS["fsharp"],
@@ -1201,7 +1201,7 @@ export const FSharpServer = createInteractiveServer({
 	command: "fsautocomplete",
 });
 
-export const JavaServer = createInteractiveServer({
+export const JavaServer: LSPServerInfo = createInteractiveServer({
 	id: "java",
 	name: "JDT Language Server",
 	extensions: KIND_EXTENSIONS["java"],
@@ -1233,7 +1233,7 @@ export const KotlinServer: LSPServerInfo = {
 	},
 };
 
-export const SwiftServer = createInteractiveServer({
+export const SwiftServer: LSPServerInfo = createInteractiveServer({
 	id: "swift",
 	name: "SourceKit-LSP",
 	extensions: KIND_EXTENSIONS["swift"],
@@ -1242,7 +1242,7 @@ export const SwiftServer = createInteractiveServer({
 	command: "sourcekit-lsp",
 });
 
-export const DartServer = createInteractiveServer({
+export const DartServer: LSPServerInfo = createInteractiveServer({
 	id: "dart",
 	name: "Dart Analysis Server",
 	extensions: KIND_EXTENSIONS["dart"],
@@ -1252,7 +1252,7 @@ export const DartServer = createInteractiveServer({
 	args: ["language-server", "--protocol=lsp"],
 });
 
-export const LuaServer = createInteractiveServer({
+export const LuaServer: LSPServerInfo = createInteractiveServer({
 	id: "lua",
 	name: "Lua Language Server",
 	extensions: KIND_EXTENSIONS["lua"],
@@ -1261,7 +1261,7 @@ export const LuaServer = createInteractiveServer({
 	command: "lua-language-server",
 });
 
-export const CppServer = createInteractiveServer({
+export const CppServer: LSPServerInfo = createInteractiveServer({
 	id: "cpp",
 	name: "clangd",
 	extensions: KIND_EXTENSIONS["cxx"],
@@ -1296,7 +1296,7 @@ export const ZigServer: LSPServerInfo = {
 	},
 };
 
-export const HaskellServer = createInteractiveServer({
+export const HaskellServer: LSPServerInfo = createInteractiveServer({
 	id: "haskell",
 	name: "Haskell Language Server",
 	extensions: KIND_EXTENSIONS["haskell"],
@@ -1306,7 +1306,7 @@ export const HaskellServer = createInteractiveServer({
 	args: ["--lsp"],
 });
 
-export const ElixirServer = createInteractiveServer({
+export const ElixirServer: LSPServerInfo = createInteractiveServer({
 	id: "elixir",
 	name: "ElixirLS",
 	extensions: KIND_EXTENSIONS["elixir"],
@@ -1315,7 +1315,7 @@ export const ElixirServer = createInteractiveServer({
 	command: "elixir-ls",
 });
 
-export const GleamServer = createInteractiveServer({
+export const GleamServer: LSPServerInfo = createInteractiveServer({
 	id: "gleam",
 	name: "Gleam LSP",
 	extensions: KIND_EXTENSIONS["gleam"],
@@ -1325,7 +1325,7 @@ export const GleamServer = createInteractiveServer({
 	args: ["lsp"],
 });
 
-export const OCamlServer = createInteractiveServer({
+export const OCamlServer: LSPServerInfo = createInteractiveServer({
 	id: "ocaml",
 	name: "ocamllsp",
 	extensions: KIND_EXTENSIONS["ocaml"],
@@ -1334,7 +1334,7 @@ export const OCamlServer = createInteractiveServer({
 	command: "ocamllsp",
 });
 
-export const ClojureServer = createInteractiveServer({
+export const ClojureServer: LSPServerInfo = createInteractiveServer({
 	id: "clojure",
 	name: "Clojure LSP",
 	extensions: KIND_EXTENSIONS["clojure"],
@@ -1363,7 +1363,7 @@ export const TerraformServer: LSPServerInfo = {
 	},
 };
 
-export const NixServer = createInteractiveServer({
+export const NixServer: LSPServerInfo = createInteractiveServer({
 	id: "nix",
 	name: "nixd",
 	extensions: KIND_EXTENSIONS["nix"],

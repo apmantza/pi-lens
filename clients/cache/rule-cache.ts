@@ -34,7 +34,7 @@ export class RuleCache {
 	private cacheFile: string;
 	private cacheDir: string;
 
-	constructor(language: string, rootDir = process.cwd()) {
+	constructor(language: string, rootDir: string = process.cwd()) {
 		this.cacheDir = path.join(getProjectDataDir(rootDir), "cache");
 		this.cacheFile = path.join(
 			this.cacheDir,

@@ -115,7 +115,7 @@ export class CacheManager {
 	readCache<T>(
 		scanner: string,
 		cwd: string,
-		maxAgeMs = DEFAULT_MAX_AGE_MS,
+		maxAgeMs: number = DEFAULT_MAX_AGE_MS,
 	): CacheEntry<T> | null {
 		const cachePath = path.join(getCacheDir(cwd), `${scanner}.json`);
 		const metaPath = path.join(getCacheDir(cwd), `${scanner}.meta.json`);
@@ -176,7 +176,7 @@ export class CacheManager {
 	isCacheFresh(
 		scanner: string,
 		cwd: string,
-		maxAgeMs = DEFAULT_MAX_AGE_MS,
+		maxAgeMs: number = DEFAULT_MAX_AGE_MS,
 	): boolean {
 		const metaPath = path.join(getCacheDir(cwd), `${scanner}.meta.json`);
 		if (!fs.existsSync(metaPath)) return false;

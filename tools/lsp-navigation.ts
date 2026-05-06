@@ -192,7 +192,51 @@ async function openFileBestEffort(
 
 export function createLspNavigationTool(
 	getFlag: (name: string) => boolean | string | undefined,
-) {
+): {
+	name: "lsp_navigation"; label: string; description: string; promptSnippet: string; parameters: Type.TObject<{
+		operation: Type.TString;
+		filePath: Type.TOptional<Type.TString>;
+		line: Type.TOptional<Type.TNumber>;
+		character: Type.TOptional<Type.TNumber>;
+		endLine: Type.TOptional<Type.TNumber>;
+		endCharacter: Type.TOptional<Type.TNumber>;
+		newName: Type.TOptional<Type.TString>;
+		query: Type.TOptional<Type.TString>;
+		callHierarchyItem: Type.TOptional<Type.TObject<{
+			name: Type.TString;
+			kind: Type.TNumber;
+			uri: Type.TString;
+			range: Type.TObject<{
+				start: Type.TObject<{
+					line: Type.TNumber;
+					character: Type.TNumber;
+				}>;
+				end: Type.TObject<{
+					line: Type.TNumber;
+					character: Type.TNumber;
+				}>;
+			}>;
+			selectionRange: Type.TObject<{
+				start: Type.TObject<{
+					line: Type.TNumber;
+					character: Type.TNumber;
+				}>;
+				end: Type.TObject<{
+					line: Type.TNumber;
+					character: Type.TNumber;
+				}>;
+			}>;
+		}>>;
+	}>; execute(_toolCallId: string, params: Record<string, unknown>, _signal: AbortSignal, _onUpdate: unknown, ctx: { cwd?: string; }): Promise<{
+		content: Array<{ type: "text"; text: string; }>;
+		isError?: boolean;
+		details?: Record<string, unknown>;
+	} & {
+		details: (Record<string, unknown> | undefined) & {
+			failureKind: string;
+		};
+	}>;
+} {
 	return {
 		name: "lsp_navigation" as const,
 		label: "LSP Navigate",
@@ -302,7 +346,15 @@ export function createLspNavigationTool(
 			_signal: AbortSignal,
 			_onUpdate: unknown,
 			ctx: { cwd?: string },
-		) {
+		): Promise<{
+			content: Array<{ type: "text"; text: string; }>;
+			isError?: boolean;
+			details?: Record<string, unknown>;
+		} & {
+			details: (Record<string, unknown> | undefined) & {
+				failureKind: string;
+			};
+		}> {
 			const startedAt = Date.now();
 			let supported: boolean | null = null;
 			let diagnosticsMode: "pull" | "push-only" | "unknown" = "unknown";

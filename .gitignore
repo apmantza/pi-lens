@@ -16,9 +16,11 @@ build/
 out/
 
 # Compiled TypeScript
+*.tsbuildinfo
 *.js
 *.js.map
 *.d.ts
+*.d.ts.map
 !scripts/download-grammars.js
 
 # Internal planning docs

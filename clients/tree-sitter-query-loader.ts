@@ -66,7 +66,7 @@ export class TreeSitterQueryLoader {
 	/**
 	 * Load all queries from the rules/tree-sitter-queries directory
 	 */
-	async loadQueries(rootDir = process.cwd()): Promise<Map<string, TreeSitterQuery[]>> {
+	async loadQueries(rootDir: string = process.cwd()): Promise<Map<string, TreeSitterQuery[]>> {
 		const resolvedRoot = path.resolve(rootDir);
 		if (this.loaded && this.loadedRoot === resolvedRoot) return this.queries;
 
@@ -487,4 +487,4 @@ export class TreeSitterQueryLoader {
 }
 
 // Singleton instance
-export const queryLoader = new TreeSitterQueryLoader();
+export const queryLoader: TreeSitterQueryLoader = new TreeSitterQueryLoader();

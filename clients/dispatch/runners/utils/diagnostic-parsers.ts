@@ -103,7 +103,7 @@ export function createLineParser(config: LineParserConfig) {
  */
 const ruffAutofix = getAutofixCapability("ruff");
 
-export const parseRuffOutput = createLineParser({
+export const parseRuffOutput: (raw: string, filePath: string) => Diagnostic[] = createLineParser({
 	tool: "ruff",
 	regex: /^(.+?):(\d+):(\d+):\s*(\w+)\s*(.+)/,
 	extractMessage: (m) => `${m[4]}: ${m[5]}`, // CODE: message
@@ -117,7 +117,7 @@ export const parseRuffOutput = createLineParser({
 /**
  * Parse Go vet output: file:line:col: message
  */
-export const parseGoVetOutput = createLineParser({
+export const parseGoVetOutput: (raw: string, filePath: string) => Diagnostic[] = createLineParser({
 	tool: "go-vet",
 	regex: /^(.+?):(\d+):(\d+):\s*(.+)/,
 	extractMessage: (m) => m[4],
@@ -128,7 +128,7 @@ export const parseGoVetOutput = createLineParser({
  * Parse Biome output: file:line:col message (category)
  * With autofix support for fix suggestions
  */
-export function createBiomeParser(_autofix: boolean = false) {
+export function createBiomeParser(_autofix: boolean = false): (raw: string, filePath: string) => Diagnostic[] {
 	const biomeAutofix = getAutofixCapability("biome");
 	return createLineParser({
 		tool: "biome",
@@ -145,7 +145,7 @@ export function createBiomeParser(_autofix: boolean = false) {
 }
 
 // Backward-compatible default biome parser
-export const parseBiomeOutput = createBiomeParser(false);
+export const parseBiomeOutput: (raw: string, filePath: string) => Diagnostic[] = createBiomeParser(false);
 
 // =============================================================================
 // GENERIC PARSER FACTORY

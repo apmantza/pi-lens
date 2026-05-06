@@ -42,7 +42,7 @@ export function createMockRunner(config: MockRunnerConfig): RunnerDefinition {
 
 // Pre-built mock runners for common scenarios
 
-export const createFailingRunner = (id: string) =>
+export const createFailingRunner = (id: string): RunnerDefinition =>
 	createMockRunner({
 		id,
 		appliesTo: ["jsts"],
@@ -62,7 +62,7 @@ export const createFailingRunner = (id: string) =>
 		},
 	});
 
-export const createWarningRunner = (id: string) =>
+export const createWarningRunner = (id: string): RunnerDefinition =>
 	createMockRunner({
 		id,
 		appliesTo: ["jsts"],
@@ -82,7 +82,7 @@ export const createWarningRunner = (id: string) =>
 		},
 	});
 
-export const createCleanRunner = (id: string) =>
+export const createCleanRunner = (id: string): RunnerDefinition =>
 	createMockRunner({
 		id,
 		appliesTo: ["jsts"],
@@ -96,7 +96,7 @@ export const createCleanRunner = (id: string) =>
 export const createConditionalRunner = (
 	id: string,
 	condition: (ctx: DispatchContext) => boolean,
-) =>
+): RunnerDefinition =>
 	createMockRunner({
 		id,
 		appliesTo: ["jsts"],

@@ -12,7 +12,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { isExcludedDirName } from "./file-utils.js";
 
-export const PROJECT_ROOT_MARKERS = [
+export const PROJECT_ROOT_MARKERS: string[] = [
 	".git",
 	"package.json",
 	"pyproject.toml",

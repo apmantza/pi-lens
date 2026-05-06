@@ -15,7 +15,7 @@ import path from "node:path";
 import { recordLsp } from "../widget-state.js";
 import { logLatency } from "../latency-logger.js";
 import { normalizeMapKey, uriToPath } from "../path-utils.js";
-import type { LSPClientInfo } from "./client.js";
+import type { LSPCallHierarchyIncomingCall, LSPCallHierarchyItem, LSPCallHierarchyOutgoingCall, LSPClientInfo, LSPCodeAction, LSPHover, LSPLocation, LSPSignatureHelp, LSPSymbol, LSPWorkspaceEdit } from "./client.js";
 import { createLSPClient } from "./client.js";
 import { getServersForFileWithConfig } from "./config.js";
 import { getLanguageId } from "./language.js";
@@ -843,7 +843,7 @@ export class LSPService {
 	/**
 	 * Navigation: go to definition
 	 */
-	async definition(filePath: string, line: number, character: number) {
+	async definition(filePath: string, line: number, character: number): Promise<LSPLocation[]> {
 		const spawned = await this.getClientForFile(
 			filePath,
 			NAV_CLIENT_WAIT_TIMEOUT_MS,
@@ -860,7 +860,7 @@ export class LSPService {
 		line: number,
 		character: number,
 		includeDeclaration = true,
-	) {
+	): Promise<LSPLocation[]> {
 		const spawned = await this.getClientForFile(
 			filePath,
 			NAV_CLIENT_WAIT_TIMEOUT_MS,
@@ -877,7 +877,7 @@ export class LSPService {
 	/**
 	 * Navigation: hover info
 	 */
-	async hover(filePath: string, line: number, character: number) {
+	async hover(filePath: string, line: number, character: number): Promise<LSPHover | null> {
 		const spawned = await this.getClientForFile(
 			filePath,
 			NAV_CLIENT_WAIT_TIMEOUT_MS,
@@ -889,7 +889,7 @@ export class LSPService {
 	/**
 	 * Navigation: signature help at cursor position
 	 */
-	async signatureHelp(filePath: string, line: number, character: number) {
+	async signatureHelp(filePath: string, line: number, character: number): Promise<LSPSignatureHelp | null> {
 		const spawned = await this.getClientForFile(
 			filePath,
 			NAV_CLIENT_WAIT_TIMEOUT_MS,
@@ -901,7 +901,7 @@ export class LSPService {
 	/**
 	 * Navigation: symbols in document
 	 */
-	async documentSymbol(filePath: string) {
+	async documentSymbol(filePath: string): Promise<LSPSymbol[]> {
 		const spawned = await this.getClientForFile(
 			filePath,
 			NAV_CLIENT_WAIT_TIMEOUT_MS,
@@ -913,7 +913,7 @@ export class LSPService {
 	/**
 	 * Navigation: workspace-wide symbol search
 	 */
-	async workspaceSymbol(query: string, filePath?: string) {
+	async workspaceSymbol(query: string, filePath?: string): Promise<LSPSymbol[]> {
 		if (filePath) {
 			const spawned = await this.getClientForFile(
 				filePath,
@@ -982,7 +982,7 @@ export class LSPService {
 		character: number,
 		endLine: number,
 		endCharacter: number,
-	) {
+	): Promise<LSPCodeAction[]> {
 		const spawned = await this.getClientForFile(
 			filePath,
 			NAV_CLIENT_WAIT_TIMEOUT_MS,
@@ -1005,7 +1005,7 @@ export class LSPService {
 		line: number,
 		character: number,
 		newName: string,
-	) {
+	): Promise<LSPWorkspaceEdit | null> {
 		const spawned = await this.getClientForFile(
 			filePath,
 			NAV_CLIENT_WAIT_TIMEOUT_MS,
@@ -1017,7 +1017,7 @@ export class LSPService {
 	/**
 	 * Navigation: go to implementation
 	 */
-	async implementation(filePath: string, line: number, character: number) {
+	async implementation(filePath: string, line: number, character: number): Promise<LSPLocation[]> {
 		const spawned = await this.getClientForFile(
 			filePath,
 			NAV_CLIENT_WAIT_TIMEOUT_MS,
@@ -1033,7 +1033,7 @@ export class LSPService {
 		filePath: string,
 		line: number,
 		character: number,
-	) {
+	): Promise<LSPCallHierarchyItem[]> {
 		const spawned = await this.getClientForFile(
 			filePath,
 			NAV_CLIENT_WAIT_TIMEOUT_MS,
@@ -1045,7 +1045,7 @@ export class LSPService {
 	/**
 	 * Navigation: find incoming calls (callers)
 	 */
-	async incomingCalls(item: import("./client.js").LSPCallHierarchyItem) {
+	async incomingCalls(item: import("./client.js").LSPCallHierarchyItem): Promise<LSPCallHierarchyIncomingCall[]> {
 		const spawned = await this.getClientForFile(
 			uriToPath(item.uri),
 			NAV_CLIENT_WAIT_TIMEOUT_MS,
@@ -1057,7 +1057,7 @@ export class LSPService {
 	/**
 	 * Navigation: find outgoing calls (callees)
 	 */
-	async outgoingCalls(item: import("./client.js").LSPCallHierarchyItem) {
+	async outgoingCalls(item: import("./client.js").LSPCallHierarchyItem): Promise<LSPCallHierarchyOutgoingCall[]> {
 		const spawned = await this.getClientForFile(
 			uriToPath(item.uri),
 			NAV_CLIENT_WAIT_TIMEOUT_MS,

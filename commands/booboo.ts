@@ -115,7 +115,7 @@ export async function handleBooboo(
 		depChecker: DependencyChecker;
 	},
 	pi: ExtensionAPI,
-) {
+): Promise<void> {
 	const requestedPath = args.trim() || ctx.cwd || process.cwd();
 	const targetPath = resolveProjectRoot(path.resolve(requestedPath));
 	const reviewRoot = targetPath;

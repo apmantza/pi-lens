@@ -60,7 +60,7 @@ interface YamlNode {
 // --- Constants ---
 
 /** Overly broad patterns that match everything (cause false positive explosions) */
-export const OVERLY_BROAD_PATTERNS = [
+export const OVERLY_BROAD_PATTERNS: string[] = [
 	"$NAME",
 	"$FIELD",
 	"$_",

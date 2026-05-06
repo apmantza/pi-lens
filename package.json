@@ -7,9 +7,16 @@
 		"type": "git",
 		"url": "git+https://github.com/apmantza/pi-lens.git"
 	},
-	"main": "index.ts",
+	"main": "./dist/index.mjs",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.mts",
+			"import": "./dist/index.mjs"
+		}
+	},
+	"types": "./dist/index.d.mts",
 	"scripts": {
-		"build": "tsc --project tsconfig.build.json",
+		"build": "tsdown",
 		"lint": "tsc --project tsconfig.json",
 		"watch": "tsc --watch",
 		"test": "vitest run",
@@ -46,14 +53,17 @@
 		"index.ts",
 		"i18n.ts",
 		"utils.ts",
+		"clients/",
+		"commands/",
 		"config/",
-		"tools/",
-		"clients/**/*.ts",
-		"commands/**/*.ts",
 		"rules/",
 		"skills/",
+		"tools/",
+		"dist/",
 		"scripts/download-grammars.js",
+		"tsconfig.build.json",
 		"tsconfig.json",
+		"tsdown.config.ts",
 		"README.md",
 		"CHANGELOG.md",
 		"banner.svg",
@@ -67,6 +77,7 @@
 		"@mariozechner/pi-tui": "^0.72.1",
 		"@npmcli/promise-spawn": "^9.0.1",
 		"minimatch": "^10.2.5",
+		"tsdown": "^0.21.10",
 		"typebox": "^1.0.0",
 		"typescript": "^6.0.3",
 		"vscode-jsonrpc": "^8.2.1"

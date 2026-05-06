@@ -45,7 +45,7 @@ export function getProjectDataDir(cwd: string): string {
  * Directories to exclude from all scans (build outputs, dependencies, caches).
  * Used consistently across all scanners to avoid noise from generated files.
  */
-export const EXCLUDED_DIRS = [
+export const EXCLUDED_DIRS: string[] = [
 	"node_modules",
 	".git",
 	"dist",
