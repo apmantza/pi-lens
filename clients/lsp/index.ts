@@ -227,12 +227,18 @@ export class LSPService {
 			0,
 		);
 		// hardCapMs is a caller-imposed ceiling (e.g. pipeline budget) that
-		// overrides the server config — prevents tool_result from blocking the
-		// TUI for the full LSP cold-start window.
+		// prevents tool_result from blocking the TUI for the full LSP cold-start
+		// window. When no server config sets a wait (serverWaitOverrideMs = 0),
+		// hardCapMs is used directly — Math.min(0, cap) = 0 would otherwise
+		// take the no-timeout branch and block indefinitely (e.g. pyright, which
+		// has no clientWaitTimeoutMs but can take 30s to initialize on cold start).
+		const serverBaseMs = Math.max(maxWaitMs ?? 0, serverWaitOverrideMs);
 		const effectiveMaxWaitMs =
 			hardCapMs !== undefined
-				? Math.min(Math.max(maxWaitMs ?? 0, serverWaitOverrideMs), hardCapMs)
-				: Math.max(maxWaitMs ?? 0, serverWaitOverrideMs);
+				? serverBaseMs > 0
+					? Math.min(serverBaseMs, hardCapMs)
+					: hardCapMs
+				: serverBaseMs;
 
 		const withBudget = async (): Promise<SpawnedServer | undefined> => {
 			if (servers.length === 0) return undefined;
