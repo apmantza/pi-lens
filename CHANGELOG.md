@@ -7,6 +7,8 @@ All notable changes to pi-lens will be documented in this file.
 ### Changed
 
 - **Package scope migration** — all `@mariozechner/*` import references updated to `@earendil-works/*` following the repo move to `earendil-works/pi-mono`. `@earendil-works/pi-tui` dependency bumped to `^0.74.0`.
+- **Startup: `lsp-config` phase is now fully fire-and-forget** — `loadLSPConfig` and `igniteWarmFiles` no longer block the interactive path, removing ~1s from session start on Windows (previously dominated by sequential ENOENT `readFile` calls walking the directory tree to find a config file).
+- **Startup: persistent tool probe cache** — `ensureTool` now checks `~/.pi-lens/probe-cache.json` before falling back to the full `verifyToolBinary` process spawn. Cache entries are validated with `fs.access` + mtime check and expire after 24 h; stale or missing entries fall through to the full probe and update the cache on success.
 
 
 

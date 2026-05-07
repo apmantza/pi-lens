@@ -618,6 +618,95 @@ const ensureInFlight = new Map<string, Promise<string | undefined>>();
 // Session-lifetime cache: once a tool path is resolved, skip the process-spawn check on subsequent calls.
 const resolvedPathCache = new Map<string, string>();
 
+// --- Persistent probe cache ---
+
+interface ProbeCacheEntry {
+	path: string;
+	mtimeMs: number;
+	cachedAt: number;
+}
+
+type ProbeCache = Record<string, ProbeCacheEntry>;
+
+const PROBE_CACHE_PATH = path.join(os.homedir(), ".pi-lens", "probe-cache.json");
+const PROBE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+let _probeCache: ProbeCache | null = null;
+let _probeCacheDirty = false;
+let _probeCacheFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function readProbeCache(): Promise<ProbeCache> {
+	if (_probeCache !== null) return _probeCache;
+	try {
+		const raw = await fs.readFile(PROBE_CACHE_PATH, "utf-8");
+		_probeCache = JSON.parse(raw) as ProbeCache;
+	} catch {
+		_probeCache = {};
+	}
+	return _probeCache;
+}
+
+function scheduleProbeFlush(): void {
+	if (_probeCacheFlushTimer !== null) return;
+	_probeCacheFlushTimer = setTimeout(() => {
+		_probeCacheFlushTimer = null;
+		if (!_probeCacheDirty || _probeCache === null) return;
+		_probeCacheDirty = false;
+		void fs
+			.writeFile(PROBE_CACHE_PATH, JSON.stringify(_probeCache, null, 2))
+			.catch(() => {});
+	}, 300);
+}
+
+async function checkProbeCache(toolId: string): Promise<string | undefined> {
+	const cache = await readProbeCache();
+	const entry = cache[toolId];
+	if (!entry) return undefined;
+
+	if (Date.now() - entry.cachedAt > PROBE_CACHE_TTL_MS) {
+		delete cache[toolId];
+		_probeCacheDirty = true;
+		scheduleProbeFlush();
+		return undefined;
+	}
+
+	try {
+		await fs.access(entry.path);
+		const stat = await fs.stat(entry.path);
+		if (stat.mtimeMs !== entry.mtimeMs) {
+			delete cache[toolId];
+			_probeCacheDirty = true;
+			scheduleProbeFlush();
+			return undefined;
+		}
+		return entry.path;
+	} catch {
+		delete cache[toolId];
+		_probeCacheDirty = true;
+		scheduleProbeFlush();
+		return undefined;
+	}
+}
+
+async function updateProbeCache(
+	toolId: string,
+	resolvedPath: string,
+): Promise<void> {
+	try {
+		const stat = await fs.stat(resolvedPath);
+		const cache = await readProbeCache();
+		cache[toolId] = {
+			path: resolvedPath,
+			mtimeMs: stat.mtimeMs,
+			cachedAt: Date.now(),
+		};
+		_probeCacheDirty = true;
+		scheduleProbeFlush();
+	} catch {
+		// best-effort
+	}
+}
+
 // --- Check Functions ---
 
 /**
@@ -1852,9 +1941,19 @@ export async function installTool(toolId: string): Promise<boolean> {
  * Ensure a tool is installed (check first, install if missing)
  */
 export async function ensureTool(toolId: string): Promise<string | undefined> {
-	// Fast path: return cached path without spawning a process.
+	// Fast path 1: in-memory session cache — no I/O.
 	const cached = resolvedPathCache.get(toolId);
 	if (cached) return cached;
+
+	// Fast path 2: persistent probe cache — fs.access + stat, no process spawn.
+	const diskCached = await checkProbeCache(toolId);
+	if (diskCached) {
+		resolvedPathCache.set(toolId, diskCached);
+		logSessionStart(
+			`auto-install ensure ${toolId}: probe cache hit → ${diskCached}`,
+		);
+		return diskCached;
+	}
 
 	// Coalesce the whole ensure operation, not just installation. Most startup
 	// duplicates race while checking already-installed tools, before installTool()
@@ -1875,6 +1974,7 @@ export async function ensureTool(toolId: string): Promise<string | undefined> {
 		const existingPath = await getToolPath(toolId);
 		if (existingPath) {
 			resolvedPathCache.set(toolId, existingPath);
+			void updateProbeCache(toolId, existingPath);
 			logSessionStart(
 				`auto-install ensure ${toolId}: already available at ${existingPath} (${Date.now() - ensureStartMs}ms)`,
 			);
@@ -1892,6 +1992,7 @@ export async function ensureTool(toolId: string): Promise<string | undefined> {
 		const result = await getToolPath(toolId);
 		if (result) {
 			resolvedPathCache.set(toolId, result);
+			void updateProbeCache(toolId, result);
 			logSessionStart(
 				`auto-install ensure ${toolId}: success at ${result} (${Date.now() - ensureStartMs}ms)`,
 			);
