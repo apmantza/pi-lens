@@ -924,6 +924,7 @@ export class TreeSitterClient {
 			case "ts_ssrf_sink": {
 				const fn = captures.FN?.text ?? "";
 				const obj = captures.OBJ?.text ?? "";
+				const urlText = captures.URL?.text ?? "";
 				const allowedFns = new Set([
 					"fetch",
 					"request",
@@ -934,6 +935,17 @@ export class TreeSitterClient {
 					"delete",
 				]);
 				if (!allowedFns.has(fn)) return false;
+				// Only flag when the URL argument looks like it could carry external
+				// input: member expressions (req.url, ctx.query.x) or identifiers
+				// whose names suggest user/external provenance. Plain generic names
+				// like `url` or `path` in internal download utilities produce too
+				// many false positives — those need data-flow analysis to resolve.
+				const looksLikeExternalInput =
+					urlText.includes(".") ||
+					/user|external|remote|input|target|webhook|callback|redirect|untrusted|arbitrary/i.test(
+						urlText,
+					);
+				if (!looksLikeExternalInput) return false;
 				if (!obj) return fn === "fetch";
 				return new Set([
 					"axios",

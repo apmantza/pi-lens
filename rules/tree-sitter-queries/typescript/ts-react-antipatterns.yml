@@ -20,13 +20,16 @@ query: |
   [
     (for_statement
       (statement_block) @BODY
-      (#match? @BODY "set[A-Z]"))
+      (#match? @BODY "set[A-Z]")
+      (#not-match? @BODY "set(Timeout|Interval|Immediate)"))
     (for_in_statement
       (statement_block) @BODY
-      (#match? @BODY "set[A-Z]"))
+      (#match? @BODY "set[A-Z]")
+      (#not-match? @BODY "set(Timeout|Interval|Immediate)"))
     (while_statement
       (statement_block) @BODY
-      (#match? @BODY "set[A-Z]"))
+      (#match? @BODY "set[A-Z]")
+      (#not-match? @BODY "set(Timeout|Interval|Immediate)"))
   ]
 
 metavars:

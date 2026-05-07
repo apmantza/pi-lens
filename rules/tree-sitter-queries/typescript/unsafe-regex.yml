@@ -36,7 +36,8 @@ query: |
     (#eq? @CTOR "RegExp")
     arguments: (arguments
       (template_string
-        (template_substitution) @INTERPOLATION) @PATTERN))
+        (template_substitution) @INTERPOLATION) @PATTERN)
+    (#not-match? @INTERPOLATION "escape|Escape|replace"))
 
 metavars:
   - CTOR

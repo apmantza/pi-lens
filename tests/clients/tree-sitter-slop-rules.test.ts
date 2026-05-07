@@ -190,6 +190,74 @@ describe("slop detection rules", () => {
 			const matches = await client.runQueryOnFile(query, filePath, "typescript");
 			expect(matches.length).toBe(0);
 		});
+
+		it("does not flag setTimeout inside a loop", async () => {
+			const client = new TreeSitterClient();
+			const query = await getQuery("ts-react-antipatterns");
+			const filePath = writeTempFile(
+				"ts",
+				`while (writing) { await new Promise(r => setTimeout(r, 10)); }`,
+			);
+			const matches = await client.runQueryOnFile(query, filePath, "typescript");
+			expect(matches.length).toBe(0);
+		});
+
+		it("does not flag setInterval inside a for loop", async () => {
+			const client = new TreeSitterClient();
+			const query = await getQuery("ts-react-antipatterns");
+			const filePath = writeTempFile(
+				"ts",
+				`for (const x of items) { setInterval(() => {}, 100); }`,
+			);
+			const matches = await client.runQueryOnFile(query, filePath, "typescript");
+			expect(matches.length).toBe(0);
+		});
+	});
+
+	describe("unsafe-regex", () => {
+		it("flags new RegExp with plain user-input interpolation", async () => {
+			const client = new TreeSitterClient();
+			const query = await getQuery("unsafe-regex");
+			const filePath = writeTempFile(
+				"ts",
+				"const r = new RegExp(`\\\\b${userInput}\\\\b`, 'gi');",
+			);
+			const matches = await client.runQueryOnFile(query, filePath, "typescript");
+			expect(matches.length).toBeGreaterThan(0);
+		});
+
+		it("does not flag new RegExp when interpolation uses escapeRegExp", async () => {
+			const client = new TreeSitterClient();
+			const query = await getQuery("unsafe-regex");
+			const filePath = writeTempFile(
+				"ts",
+				"const r = new RegExp(`^${escapeRegExp(sep)}$`);",
+			);
+			const matches = await client.runQueryOnFile(query, filePath, "typescript");
+			expect(matches.length).toBe(0);
+		});
+
+		it("does not flag new RegExp when variable is named 'escaped'", async () => {
+			const client = new TreeSitterClient();
+			const query = await getQuery("unsafe-regex");
+			const filePath = writeTempFile(
+				"ts",
+				"const r = new RegExp(`^${escaped}$`, 'i');",
+			);
+			const matches = await client.runQueryOnFile(query, filePath, "typescript");
+			expect(matches.length).toBe(0);
+		});
+
+		it("does not flag new RegExp when interpolation uses .replace() chain (glob-to-regex pattern)", async () => {
+			const client = new TreeSitterClient();
+			const query = await getQuery("unsafe-regex");
+			const filePath = writeTempFile(
+				"ts",
+				"const r = new RegExp(`^${pat.replace(/\\./g, '\\\\.').replace(/\\*/g, '.*')}$`);",
+			);
+			const matches = await client.runQueryOnFile(query, filePath, "typescript");
+			expect(matches.length).toBe(0);
+		});
 	});
 
 	describe("long-parameter-list", () => {
