@@ -63,8 +63,29 @@ Holds: `filePath`, `cwd`, `kind` (`FileKind` — ts/js/py/go/rust/css/etc.), `ru
 ## Session-start critical path
 `lsp-config` is deferred via `setImmediate` (not awaited). Tool availability probes use the probe cache before spawning binaries. Interactive path target: ~150ms on warm runs.
 
+## Tree-sitter rules
+
+Rules live in `rules/tree-sitter-queries/<language>/`. Disabled rules are in `rules/tree-sitter-queries/<language>-disabled/` — they load in tests (via `getAllQueries()`) but are excluded from the production dispatch runner (which calls `getQueriesForLanguage("typescript")`).
+
+**`inline_tier` values:**
+- `blocking` — finding blocks the agent turn (🔴 injected)
+- `warning` — advisory finding
+- `review` — low-priority suggestion
+
+**Currently blocking TypeScript rules (security):** `debugger`, `default-not-last`, `duplicate-function-arg`, `empty-switch-case`, `eval`, `infinite-loop`, `self-assignment`, `sql-injection`, `switch-case-termination`, `unsafe-regex`, `ts-command-injection` (S2076), `ts-ssrf` (S5146), `ts-xss-dom-sink` (S5696), `ts-dynamic-require` (S5335), `ts-open-redirect` (S6105), `ts-nosql-injection` (S5147).
+
+**Tree-sitter query authoring — critical constraint:**  
+`[...]` alternative groups require ALL alternatives to share the same capture names. If two groups of patterns need different captures (e.g., assignment patterns with `@PROP/@VALUE` vs call patterns with `@OBJ/@FN/@ARG`), split into two separate `[...]` blocks:
+```
+[ (assignment_expression ...) @PROP @VALUE ... ]
+[ (call_expression ...) @OBJ @FN ... ]
+```
+Mixing different capture names in one `[...]` block causes tree-sitter to silently return zero matches (no compile error). Similarly, field values cannot be alternative groups: `right: [(identifier) (call_expression)]` is invalid — expand into separate alternatives or separate blocks.
+
+**Post-filters** (`post_filter` in YAML, `applyPostFilter` in `clients/tree-sitter-client.ts`): evaluated after query matching to reject false positives. Key ones: `count_params` (long-param-list: excludes optional/defaulted params), `ts_ssrf_sink` (requires URL to look like external input), `check_secret_pattern` (variable name must match secret-sounding pattern).
+
 ## Current version / state
-v3.8.41 published. Master has scope migration + startup optimizations (unreleased). CI runs `npm ci` + tsc lint + vitest.
+v3.8.41 published. Master has scope migration + startup optimizations + blocking rule additions (unreleased). CI runs `npm ci` + tsc lint + vitest.
 
 ## Conventions
 - TypeScript ESM throughout (`"type": "module"`)
