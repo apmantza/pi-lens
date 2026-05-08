@@ -138,6 +138,15 @@ export class LSPService {
 	private readonly optionalDisabled = new Set<string>();
 	/** Consecutive failure counts for exponential backoff circuit breaker */
 	private readonly failureCounts = new Map<string, number>();
+	/**
+	 * Last non-empty diagnostic result per normalized file path.
+	 * Returned as a fallback when no live LSP clients are available so the
+	 * widget keeps showing the last known issues rather than going blank.
+	 */
+	private readonly lastKnownDiagnostics = new Map<
+		string,
+		import("./client.js").LSPDiagnostic[]
+	>();
 	private readonly recentTouches = new Map<
 		string,
 		{ fingerprint: string; touchedAt: number; clientScope: "primary" | "all" }
@@ -726,6 +735,7 @@ export class LSPService {
 		const normalizedPath = normalizeMapKey(filePath);
 		const { clients: spawned, serverCountAttempted } = await this.getClientsForFile(filePath);
 		if (spawned.length === 0) {
+			const stale = this.lastKnownDiagnostics.get(normalizedPath);
 			logLatency({
 				type: "phase",
 				phase: "lsp_diagnostics_aggregate",
@@ -734,14 +744,14 @@ export class LSPService {
 				metadata: {
 					serverCountAttempted,
 					serverCountReady: 0,
-					mergedCount: 0,
+					mergedCount: stale?.length ?? 0,
 					dedupDroppedCount: 0,
-					failureKind: "no_clients",
+					failureKind: stale?.length ? "no_clients_stale" : "no_clients",
 					health: "no_clients",
 					servers: [],
 				},
 			});
-			return [];
+			return stale ?? [];
 		}
 
 		// Per-server entries produced by client waits. Each promise resolves
@@ -866,6 +876,15 @@ export class LSPService {
 				})),
 			},
 		});
+
+		// Keep last known so the widget can show stale diagnostics if LSP dies.
+		// Live clients returning [] means genuinely no errors — clear the stale
+		// entry so the widget doesn't show resolved issues.
+		if (merged.length > 0) {
+			this.lastKnownDiagnostics.set(normalizedPath, merged);
+		} else {
+			this.lastKnownDiagnostics.delete(normalizedPath);
+		}
 
 		return merged;
 	}
