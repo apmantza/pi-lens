@@ -1339,7 +1339,7 @@ export default function (pi: ExtensionAPI) {
 			const isExistingFile =
 				typeof readGuard?.isNewFile !== "function" ||
 				!readGuard.isNewFile(filePath);
-			if (readGuard && isExistingFile) {
+			if (readGuard && isExistingFile && !isExternalOrVendor) {
 				const { touchedLines, editRanges, preflightError } =
 					getTouchedLinesForGuard(event, filePath, runtime.telemetrySessionId);
 				if (preflightError) {

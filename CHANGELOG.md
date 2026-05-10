@@ -4,6 +4,10 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Read-guard false-positive block on files outside the project root** — edits to files outside `projectRoot` (e.g. `C:/llama/*.bat`, scripts in arbitrary directories) were always blocked with `zero_read` because reads for external files are intentionally not recorded (`isExternalOrVendor` gate in the read handler), but the `checkEdit` call had no matching guard. Added `!isExternalOrVendor` to the `checkEdit` condition so external files bypass the read-guard entirely, consistent with how reads are handled.
+
 ### Changed
 
 - **Replace pyright-langserver and pylsp with jedi-language-server for Python LSP** — `PythonServer` (pyright-langserver) and `PythonPylspServer` (pylsp) removed from `LSP_SERVERS`; replaced by `PythonJediServer` which spawns `jedi-language-server`. pyright-langserver was causing 5–14 s cold-start delays on large Python projects (e.g. tinygrad) because it performs full workspace analysis on startup; jedi starts in ~200–500 ms via lazy per-file analysis. pylsp was removed because it consistently returned 0 diagnostics (no venv → jedi can't resolve imports; 1500 ms aggregate timeout hit on warm runs). Deep type checking is unaffected — the standalone `pyright` CLI runner and `mypy` runner continue to run in parallel. Added `"python-jedi"` strategy entry (`seedFirstPush: true`, `aggregateWaitMs: 1000`). Wall-clock gate for Python dispatch shifts from LSP (~5–14 s) to mypy (~3.5 s).
