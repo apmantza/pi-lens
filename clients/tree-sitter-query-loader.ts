@@ -93,7 +93,7 @@ export class TreeSitterQueryLoader {
 
 			const languageDirs = fs
 				.readdirSync(queriesDir, { withFileTypes: true })
-				.filter((d) => d.isDirectory() && !d.name.endsWith("-disabled"))
+				.filter((d) => d.isDirectory())
 				.map((d) => d.name);
 
 			for (const lang of languageDirs) {
@@ -371,7 +371,13 @@ export class TreeSitterQueryLoader {
 	 * Get queries for a specific language
 	 */
 	getQueriesForLanguage(language: string): TreeSitterQuery[] {
-		return this.queries.get(language) || [];
+		const all = this.queries.get(language) || [];
+		// Exclude queries from <language>-disabled/ directories.
+		// Disabled rules are loaded (needed by tests via getAllQueries)
+		// but excluded from production dispatch.
+		return all.filter(
+			(q) => !q.filePath.includes(`-disabled/`),
+		);
 	}
 
 	/**
