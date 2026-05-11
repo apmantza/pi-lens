@@ -9,7 +9,7 @@ import { clearAllSessions as clearFileTimeSessions } from "./file-time.js";
 import { getKnipIgnorePatterns } from "./file-utils.js";
 import type { GoClient } from "./go-client.js";
 import type { JscpdClient } from "./jscpd-client.js";
-import type { KnipClient } from "./knip-client.js";
+import type { KnipClient, KnipResult } from "./knip-client.js";
 import { canRunStartupHeavyScans } from "./language-policy.js";
 import {
 	detectProjectLanguageProfile,
@@ -258,10 +258,7 @@ function scheduleStartupScans(
 	runTask("knip", async () => {
 		if (await knipClient.ensureAvailable()) {
 			if (!runtime.isCurrentSession(sessionGeneration)) return;
-			const cached = cacheManager.readCache<ReturnType<KnipClient["analyze"]>>(
-				"knip",
-				analysisRoot,
-			);
+			const cached = cacheManager.readCache<KnipResult>("knip", analysisRoot);
 			if (cached) {
 				if (!runtime.isCurrentSession(sessionGeneration)) return;
 				dbg(
@@ -269,7 +266,7 @@ function scheduleStartupScans(
 				);
 			} else {
 				const startMs = Date.now();
-				const knipResult = knipClient.analyze(
+				const knipResult = await knipClient.analyze(
 					analysisRoot,
 					getKnipIgnorePatterns(),
 				);

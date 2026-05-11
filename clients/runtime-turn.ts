@@ -8,7 +8,7 @@ import {
 	toRunnerDisplayPath,
 } from "./dispatch/runner-context.js";
 import { getKnipIgnorePatterns } from "./file-utils.js";
-import type { KnipClient, KnipIssue } from "./knip-client.js";
+import type { KnipClient, KnipIssue, KnipResult } from "./knip-client.js";
 import { logLatency } from "./latency-logger.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
@@ -204,11 +204,8 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		dbg("turn_end: skipping knip (startup scan still in flight)");
 		knipMeta = { skipped: true };
 	} else if (await knipClient.ensureAvailable()) {
-		const knipResult = knipClient.analyze(cwd, getKnipIgnorePatterns());
-		const prevKnip = cacheManager.readCache<ReturnType<KnipClient["analyze"]>>(
-			"knip",
-			cwd,
-		);
+		const knipResult = await knipClient.analyze(cwd, getKnipIgnorePatterns());
+		const prevKnip = cacheManager.readCache<KnipResult>("knip", cwd);
 		cacheManager.writeCache("knip", knipResult, cwd);
 		knipMeta = {
 			success: knipResult.success,

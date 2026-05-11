@@ -848,7 +848,7 @@ export async function handleBooboo(
 			return { findings: 0, status: "skipped" };
 		}
 
-		const knipResult = clients.knip.analyze(
+		const knipResult = await clients.knip.analyze(
 			targetPath,
 			getKnipIgnorePatterns(),
 		);

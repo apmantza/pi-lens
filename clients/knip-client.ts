@@ -11,7 +11,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { safeSpawn, safeSpawnAsync } from "./safe-spawn.js";
+import { safeSpawnAsync } from "./safe-spawn.js";
 
 // --- Types ---
 
@@ -33,11 +33,37 @@ export interface KnipResult {
 	summary: string;
 }
 
+const EMPTY_RESULT: Omit<KnipResult, "summary"> = {
+	success: false,
+	issues: [],
+	unusedExports: [],
+	unusedFiles: [],
+	unusedDeps: [],
+	unlistedDeps: [],
+};
+
+const ANALYSIS_TIMEOUT_MS = 30_000;
+
 // --- Client ---
 
 export class KnipClient {
 	private knipAvailable: boolean | null = null;
 	private log: (msg: string) => void;
+
+	/**
+	 * De-dupe concurrent `analyze()` calls against the same project root.
+	 *
+	 * Without this guard, two back-to-back turn_end events (or a turn_end
+	 * firing while the session_start scan is still in flight) can each spawn
+	 * a fresh `npx knip` process over the same tree. Two concurrent knip
+	 * runs are CPU-bound and cause the exact pathology we're fixing: load
+	 * averages >5, TUI freezes, and zombie processes reparented to init
+	 * after pi exits mid-scan.
+	 *
+	 * Key: canonicalised project root (not the caller's cwd). Value is the
+	 * in-flight promise; completing clears the slot.
+	 */
+	private inFlight = new Map<string, Promise<KnipResult>>();
 
 	constructor(verbose = false) {
 		this.log = verbose
@@ -45,23 +71,35 @@ export class KnipClient {
 			: () => {};
 	}
 
-	private resolveProjectRoot(startDir: string): string {
+	/**
+	 * Find the nearest directory with a project/knip config marker.
+	 *
+	 * Returns `null` when no marker is found up to the filesystem root.
+	 * Callers MUST treat a null return as "no project here, skip knip" —
+	 * previously this fell back to `startDir`, which on a bare cwd like
+	 * `/home/v` caused knip to recurse through every project and balloon
+	 * memory/CPU.
+	 */
+	private resolveProjectRoot(startDir: string): string | null {
+		const markers = [
+			"package.json",
+			"knip.json",
+			"knip.ts",
+			"knip.config.js",
+			"knip.config.ts",
+		];
 		let current = path.resolve(startDir);
-		while (true) {
-			const markers = [
-				"package.json",
-				"knip.json",
-				"knip.ts",
-				"knip.config.js",
-				"knip.config.ts",
-			];
+		// Safety bound: in practice depths are ~10. This cap just prevents a
+		// pathological symlink loop from hanging the search.
+		for (let depth = 0; depth < 64; depth++) {
 			if (markers.some((m) => fs.existsSync(path.join(current, m)))) {
 				return current;
 			}
 			const parent = path.dirname(current);
-			if (parent === current) return path.resolve(startDir);
+			if (parent === current) return null;
 			current = parent;
 		}
+		return null;
 	}
 
 	/**
@@ -97,95 +135,96 @@ export class KnipClient {
 	}
 
 	/**
-	 * Check if knip CLI is available (legacy sync method)
-	 * Prefer ensureAvailable() for auto-install behavior
+	 * Run knip analysis on the project.
+	 *
+	 * Async (uses `safeSpawnAsync`) so it never blocks the event loop —
+	 * knip scans on large monorepos can take tens of seconds, and the
+	 * previous `spawnSync` implementation froze the TUI for the entire
+	 * duration.
+	 *
+	 * Re-entrancy safe: concurrent calls resolving to the same project
+	 * root share a single knip process via `inFlight`.
 	 */
-	isAvailable(): boolean {
-		if (this.knipAvailable !== null) return this.knipAvailable;
-
-		const result = safeSpawn("npx", ["knip", "--version"], {
-			timeout: 10000,
-		});
-
-		this.knipAvailable = !result.error && result.status === 0;
-		if (this.knipAvailable) {
-			this.log(`Knip available`);
-		}
-
-		return this.knipAvailable;
-	}
-
-	/**
-	 * Run knip analysis on the project
-	 */
-	analyze(cwd?: string, _ignore?: string[]): KnipResult {
-		if (!this.isAvailable()) {
+	async analyze(cwd?: string, _ignore?: string[]): Promise<KnipResult> {
+		if (!(await this.ensureAvailable())) {
 			return {
-				success: false,
-				issues: [],
-				unusedExports: [],
-				unusedFiles: [],
-				unusedDeps: [],
-				unlistedDeps: [],
+				...EMPTY_RESULT,
 				summary: "Knip not available. Install with: npm install -D knip",
 			};
 		}
 
 		const targetDir = this.resolveProjectRoot(cwd || process.cwd());
-
-		try {
-			const args = [
-				"knip",
-				"--reporter=json",
-				"--include",
-				"files,exports,types,dependencies,unlisted",
-			];
-
-			const result = safeSpawn("npx", args, {
-				timeout: 30000,
-				cwd: targetDir,
-			});
-
-			// Knip exits 0 on success (even with issues), 1 on errors
-			const output = result.stdout || "";
-			this.log(`Knip output length: ${output.length}`);
-			if (output.length < 500) {
-				this.log(`Knip output sample: ${output}`);
-			}
-			if (!output.trim()) {
-				return {
-					success: true,
-					issues: [],
-					unusedExports: [],
-					unusedFiles: [],
-					unusedDeps: [],
-					unlistedDeps: [],
-					summary: "No issues found",
-				};
-			}
-
-			return this.parseOutput(output);
-		} catch (err: any) {
-			this.log(`Analysis error: ${err.message}`);
+		if (!targetDir) {
+			// No package.json / knip config anywhere up the tree. Running knip
+			// from an arbitrary cwd (e.g. $HOME) has no defined meaning and in
+			// practice walks huge irrelevant trees — bail early.
+			this.log(
+				`No project root found from ${cwd || process.cwd()}; skipping knip`,
+			);
 			return {
-				success: false,
-				issues: [],
-				unusedExports: [],
-				unusedFiles: [],
-				unusedDeps: [],
-				unlistedDeps: [],
-				summary: `Error: ${err.message}`,
+				...EMPTY_RESULT,
+				success: true,
+				summary: "No project root found; knip skipped",
 			};
 		}
+
+		const key = path.resolve(targetDir);
+		const existing = this.inFlight.get(key);
+		if (existing) {
+			this.log(`Analysis already in flight for ${key}; sharing result`);
+			return existing;
+		}
+
+		const promise = this.runAnalyze(key).finally(() => {
+			this.inFlight.delete(key);
+		});
+		this.inFlight.set(key, promise);
+		return promise;
+	}
+
+	private async runAnalyze(targetDir: string): Promise<KnipResult> {
+		const args = [
+			"knip",
+			"--reporter=json",
+			"--include",
+			"files,exports,types,dependencies,unlisted",
+		];
+
+		const result = await safeSpawnAsync("npx", args, {
+			timeout: ANALYSIS_TIMEOUT_MS,
+			cwd: targetDir,
+		});
+
+		if (result.error) {
+			this.log(`Analysis error: ${result.error.message}`);
+			return {
+				...EMPTY_RESULT,
+				summary: `Error: ${result.error.message}`,
+			};
+		}
+
+		// Knip exits 0 on success (even with issues), 1 on errors
+		const output = result.stdout || "";
+		this.log(`Knip output length: ${output.length}`);
+		if (output.length < 500) {
+			this.log(`Knip output sample: ${output}`);
+		}
+		if (!output.trim()) {
+			return {
+				...EMPTY_RESULT,
+				success: true,
+				summary: "No issues found",
+			};
+		}
+
+		return this.parseOutput(output);
 	}
 
 	/**
 	 * Find unused exports in a specific file
 	 */
-	findUnusedExports(filePath: string): string[] {
-		const result = this.analyze(
-			this.resolveProjectRoot(path.dirname(filePath)),
-		);
+	async findUnusedExports(filePath: string): Promise<string[]> {
+		const result = await this.analyze(path.dirname(filePath));
 		const basename = path.basename(filePath);
 
 		return result.unusedExports
@@ -344,12 +383,7 @@ export class KnipClient {
 			void err;
 			this.log("Failed to parse knip JSON output");
 			return {
-				success: false,
-				issues: [],
-				unusedExports: [],
-				unusedFiles: [],
-				unusedDeps: [],
-				unlistedDeps: [],
+				...EMPTY_RESULT,
 				summary: "Failed to parse output",
 			};
 		}
