@@ -33,17 +33,36 @@ $results | ConvertTo-Json -Depth 3 -Compress
 let psCmd: string | null | undefined = undefined;
 let psAnalyzerAvailable: boolean | undefined = undefined;
 
-function spawnPs(cmd: string, args: string[]): Promise<{ stdout: string; stderr: string; status: number | null }> {
+const PS_TIMEOUT_MS = 30000;
+
+function spawnPs(cmd: string, args: string[], timeoutMs = PS_TIMEOUT_MS): Promise<{ stdout: string; stderr: string; status: number | null }> {
 	return new Promise((resolve) => {
 		const child = spawn(cmd, args, { windowsHide: true, shell: false });
 		let stdout = "";
 		let stderr = "";
+		let settled = false;
+
+		const done = (status: number | null) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			resolve({ stdout, stderr, status });
+		};
+
+		const timer = setTimeout(() => {
+			if (!settled) {
+				child.kill("SIGTERM");
+				setTimeout(() => { if (!settled) child.kill("SIGKILL"); }, 1000);
+				done(null);
+			}
+		}, timeoutMs);
+
 		child.stdout?.setEncoding("utf-8");
 		child.stderr?.setEncoding("utf-8");
 		child.stdout?.on("data", (d) => (stdout += d));
 		child.stderr?.on("data", (d) => (stderr += d));
-		child.on("close", (code) => resolve({ stdout, stderr, status: code }));
-		child.on("error", () => resolve({ stdout, stderr, status: null }));
+		child.on("close", (code) => done(code));
+		child.on("error", () => done(null));
 	});
 }
 
