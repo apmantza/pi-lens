@@ -99,17 +99,33 @@ export async function safeSpawnAsync(
 			shell: isWindows,
 		});
 
+		// On Windows, shell:true means child.pid is cmd.exe — child.kill() only
+		// kills the wrapper, leaving the actual subprocess (e.g. knip/npx) alive
+		// as an orphan. Use taskkill /F /T to kill the full process tree instead.
+		const killTree = () => {
+			if (isWindows && child.pid && child.pid > 0) {
+				const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
+				try {
+					spawn(taskkill, ["/F", "/T", "/PID", String(child.pid)], {
+						shell: false,
+						windowsHide: true,
+					});
+				} catch {
+					child.kill("SIGKILL");
+				}
+			} else {
+				child.kill("SIGTERM");
+				setTimeout(() => {
+					if (!child.killed) child.kill("SIGKILL");
+				}, 1000);
+			}
+		};
+
 		// Handle abort signal
 		const onAbort = () => {
 			if (!killed && !child.killed) {
 				killed = true;
-				child.kill("SIGTERM");
-				// Force kill after 1s if still running
-				setTimeout(() => {
-					if (!child.killed) {
-						child.kill("SIGKILL");
-					}
-				}, 1000);
+				killTree();
 			}
 		};
 		abortSignal?.addEventListener("abort", onAbort, { once: true });
@@ -125,13 +141,7 @@ export async function safeSpawnAsync(
 			timedOut = true;
 			if (!killed && !child.killed) {
 				killed = true;
-				child.kill("SIGTERM");
-				// Force kill after 1s grace period
-				setTimeout(() => {
-					if (!child.killed) {
-						child.kill("SIGKILL");
-					}
-				}, 1000);
+				killTree();
 			}
 		}, timeout);
 

@@ -10,6 +10,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Fixed
 
+- **`turn_end` hangs ~40–50s on Windows when knip times out** — `safeSpawnAsync` used `child.kill("SIGTERM/SIGKILL")` to terminate timed-out processes. On Windows with `shell: true`, `child.pid` is the `cmd.exe` wrapper; killing it orphans the actual subprocess (e.g. knip/npx node process) which then runs unsupervised until it naturally exits. Replaced with `taskkill /F /T /PID` on Windows, which kills the full process tree rooted at `cmd.exe`, matching the approach already used in `lsp/client.ts`.
+
 - **`fish` missing from `LANGUAGE_CAPABILITY_MATRIX` and `LintRunnerName`** — adding the `"fish"` FileKind required two exhaustiveness fixes: a `fish` entry in `plan.ts`'s `Record<FileKind, CapabilityMatrixEntry>` and `"fish-indent"` in the `LintRunnerName` union in `tool-policy.ts`; both caused build/type-check failures on CI.
 - **shellcheck and shfmt no longer fire on `.fish` files** — `.fish` was classified as `"shell"`, causing both runners (which use `appliesTo: ["shell"]`) to process fish scripts with `--shell bash`, producing false-positive SC1073/SC1064 parse errors. Moving `.fish` to the new `"fish"` kind fixes the routing with no special-case logic in either runner. Closes #74.
 
