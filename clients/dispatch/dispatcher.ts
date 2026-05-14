@@ -287,7 +287,7 @@ function suppressLintOverlapsWithLsp(diagnostics: Diagnostic[]): Diagnostic[] {
 	});
 }
 
-function isUnusedValueDiagnostic(d: Diagnostic): boolean {
+export function isUnusedValueDiagnostic(d: Diagnostic): boolean {
 	const raw = `${d.id ?? ""} ${d.rule ?? ""} ${d.message ?? ""}`.toLowerCase();
 	if (raw.includes("no-unused")) return true;
 	if (/\b(6133|6192|6196)\b/.test(raw)) return true;
