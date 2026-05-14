@@ -28,6 +28,8 @@ export interface LatencyEntry {
 	status?: string;
 	diagnosticCount?: number;
 	semantic?: string;
+	/** Per-diagnostic summary when a runner produces findings — aids root-cause analysis */
+	diagnostics?: Array<{ rule?: string; message: string; line?: number; semantic?: string }>;
 	/** For dispatch_complete: actual wall-clock time (groups run in parallel) */
 	wallClockMs?: number;
 	/** For dispatch_complete: sum of all individual runner durationMs */

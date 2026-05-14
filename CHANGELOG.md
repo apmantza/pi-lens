@@ -6,6 +6,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Fixed
 
+- **Runner diagnostics now captured in latency log** — each `type: "runner"` entry now includes a `diagnostics` array (rule, message truncated to 120 chars, line, semantic) when the runner produces findings. Previously only `diagnosticCount` was logged, making it impossible to trace which runner+rule produced a specific diagnostic (e.g. a false-positive blocker) without a live debugger. Relates to #78.
+
 - **`isSgAvailableAsync()` replaces sync `isSgAvailable()` in dispatch hot path** — `python-slop` runner was calling `isSgAvailable()` on every invocation, which on first call runs multiple `safeSpawn` probes (local bins, PATH, npx) blocking the event loop. Added `probeAstGrepCommandAsync` and `isSgAvailableAsync` with an in-flight deduplication guard; `python-slop` now awaits the async version. Shared module-level cache (`sgAvailable`, `sgCmd`, `sgCmdArgs`) means subsequent calls return immediately regardless of which path ran first. Sync `isSgAvailable` retained for `SgRunner.isAvailable()` legacy compat.
 
 - **`SgRunner.tempScan` is now async (`tempScanAsync`)** — the live production path `scanExports` → `runTempScan` → `tempScan` was blocking the Node event loop during background session startup scans. Added `tempScanAsync` using `safeSpawnAsync` and wired it through `AstGrepClient.runTempScanAsync` and `scanExports`/`findSimilarFunctions`. Sync `tempScan` retained for test compatibility per AGENTS.md legacy-cleanup contract.

@@ -598,6 +598,14 @@ async function runGroup(
 			status: result.status,
 			diagnosticCount: result.diagnostics.length,
 			semantic: result.semantic ?? semantic,
+			diagnostics: result.diagnostics.length > 0
+				? result.diagnostics.map((d) => ({
+						rule: d.rule,
+						message: d.message.slice(0, 120),
+						line: d.line,
+						semantic: d.semantic,
+					}))
+				: undefined,
 		});
 		recordRunner(
 			ctx.filePath,
