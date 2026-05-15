@@ -962,7 +962,21 @@ export const PythonServer: LSPServerInfo = {
 		const env = await getToolEnvironment();
 		let source: "direct" | "managed" | "package-manager" = "direct";
 
-		const localCandidates = nodeBinCandidates(root, "pyright-langserver");
+		// openFilesOnly: true — analyse only open files rather than the full workspace.
+		// Avoids the 5–14 s cold-start on large projects caused by workspace-wide
+		// analysis on startup. Deep type checking is still available via the standalone
+		// pyright CLI runner that runs in parallel.
+		const pyrightInit = (pythonPath?: string): Record<string, unknown> => ({
+			...(pythonPath ? { pythonPath } : {}),
+			openFilesOnly: true,
+		});
+
+		// Prefer pyright-langserver; basedpyright-langserver is a drop-in fork with
+		// the same --stdio protocol and additional rules (e.g. reportUnusedExpression).
+		const localCandidates = [
+			...nodeBinCandidates(root, "pyright-langserver"),
+			...nodeBinCandidates(root, "basedpyright-langserver"),
+		];
 		const direct = await resolveAndLaunch(
 			{ candidates: localCandidates, args: ["--stdio"], cwd: root, env },
 			false,
@@ -972,7 +986,7 @@ export const PythonServer: LSPServerInfo = {
 			return {
 				process: direct.process,
 				source: direct.source,
-				initialization: pythonPath ? { pythonPath } : {},
+				initialization: pyrightInit(pythonPath),
 			};
 		}
 
@@ -1004,7 +1018,7 @@ export const PythonServer: LSPServerInfo = {
 		return {
 			process: resolved.process,
 			source,
-			initialization: pythonPath ? { pythonPath } : {},
+			initialization: pyrightInit(pythonPath),
 		};
 	},
 };
@@ -1743,7 +1757,8 @@ export const CssServer: LSPServerInfo = {
 export const LSP_SERVERS: LSPServerInfo[] = [
 	TypeScriptServer,
 	DenoServer,
-	PythonJediServer,
+	PythonServer,     // pyright / basedpyright — preferred; openFilesOnly avoids cold-start
+	PythonJediServer, // fallback when neither pyright nor basedpyright is available
 	GoServer,
 	RustServer,
 	RubyServer,

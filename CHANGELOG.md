@@ -18,6 +18,10 @@ All notable changes to pi-lens will be documented in this file.
 
 - **`rust-clippy` and `go-vet` runners now use platform-aware binary resolution** — both runners were calling `"cargo"` / `"go"` as bare command names, relying on PATH. On Windows, `cargo` lives in `~/.cargo/bin/cargo.exe` and `go` in `C:\Program Files\Go\bin\go.exe` — locations not always on the shell PATH when pi-lens launches from an IDE. The runners now use `RustClient.findCargoPath()` and `GoClient.findGoPath()` respectively, which probe known install locations before falling back to PATH. Both path-finder methods are made public. `GoClient` and `RustClient` module-level singletons are shared across runner invocations so the path is resolved and cached once per session.
 
+### Changed
+
+- **Pyright / basedpyright reinstated as default Python LSP** — `PythonServer` re-added to `LSP_SERVERS` before `PythonJediServer` (jedi remains as fallback). The 5–14 s cold-start that caused the original removal is fixed by passing `openFilesOnly: true` in LSP initialization options, switching pyright to lazy per-file analysis rather than full workspace analysis on startup. `basedpyright-langserver` added as a candidate alongside `pyright-langserver` — same `--stdio` protocol, drop-in compatible. Deep type checking via standalone pyright CLI and mypy runners is unchanged. Strategy key renamed from orphaned `"pyright"` to `"python"` to match `PythonServer.id`. Closes #80.
+
 ## [3.8.44] - 2026-05-13
 
 ### Added
