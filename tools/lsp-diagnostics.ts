@@ -69,6 +69,35 @@ const SEVERITY_NAMES: Record<number, string> = {
 	4: "hint",
 };
 
+type LspHealthLike = {
+	health?: string;
+	serverCountAttempted?: number;
+	serverCountReady?: number;
+	candidateServerIds?: string[];
+	mergedCount?: number;
+};
+
+function lspUnavailableMessage(
+	filePath: string,
+	health: LspHealthLike | undefined,
+): string | undefined {
+	if (!health || !String(health.health ?? "").startsWith("no_clients")) {
+		return undefined;
+	}
+	const candidates = health.candidateServerIds?.length
+		? ` candidates=${health.candidateServerIds.join(",")}`
+		: "";
+	const reason =
+		(health.serverCountAttempted ?? 0) === 0
+			? "no LSP server configured"
+			: "no LSP client is currently ready";
+	const stale =
+		(health.mergedCount ?? 0) > 0
+			? " Showing stale last-known diagnostics below."
+			: " No diagnostics were collected.";
+	return `LSP unavailable for ${filePath}: ${reason}; ready=${health.serverCountReady ?? 0}/${health.serverCountAttempted ?? 0}.${candidates}.${stale}`;
+}
+
 function collectFiles(
 	dir: string,
 	extensions: string[],
@@ -182,6 +211,10 @@ async function runFileDiagnostics(
 	}
 
 	const rawDiags: LSPDiagnostic[] = await lspService.getDiagnostics(absPath);
+	const lspHealth = lspService.getDiagnosticsHealth?.(absPath) as
+		| LspHealthLike
+		| undefined;
+	const unavailable = lspUnavailableMessage(absPath, lspHealth);
 	const filtered = applySeverityFilter(rawDiags, severity);
 	const total = filtered.length;
 	const truncated = total > MAX_DIAGNOSTICS;
@@ -189,9 +222,10 @@ async function runFileDiagnostics(
 
 	let text: string;
 	if (total === 0) {
-		text = "No diagnostics found.";
+		text = unavailable ?? "No diagnostics found.";
 	} else {
 		const lines = limited.map(formatDiag);
+		if (unavailable) lines.unshift(unavailable, "");
 		if (truncated) {
 			lines.unshift(
 				`Found ${total} diagnostics (showing first ${MAX_DIAGNOSTICS}):`,
@@ -216,6 +250,7 @@ async function runFileDiagnostics(
 			})),
 			totalDiagnostics: total,
 			truncated,
+			lspHealth,
 		},
 	};
 }
@@ -268,6 +303,7 @@ async function runDirectoryDiagnostics(
 
 	const allDiags: FileDiag[] = [];
 	const fileErrors: string[] = [];
+	const lspHealthWarnings: string[] = [];
 
 	for (const file of filesToProcess) {
 		try {
@@ -281,6 +317,11 @@ async function runDirectoryDiagnostics(
 		}
 
 		const rawDiags: LSPDiagnostic[] = await lspService.getDiagnostics(file);
+		const health = lspService.getDiagnosticsHealth?.(file) as
+			| LspHealthLike
+			| undefined;
+		const unavailable = lspUnavailableMessage(file, health);
+		if (unavailable) lspHealthWarnings.push(unavailable);
 		for (const d of rawDiags) {
 			allDiags.push({
 				file,
@@ -304,7 +345,12 @@ async function runDirectoryDiagnostics(
 		text = [
 			`Directory: ${absPath}`,
 			`Files scanned: ${filesToProcess.length}${wasCapped ? ` (capped at ${MAX_FILES})` : ""}`,
-			"No diagnostics found.",
+			...(lspHealthWarnings.length > 0
+				? [
+						"LSP unavailable for one or more files:",
+						...lspHealthWarnings.slice(0, 10),
+					]
+				: ["No diagnostics found."]),
 		].join("\n");
 	} else {
 		const lines: string[] = [
@@ -312,6 +358,9 @@ async function runDirectoryDiagnostics(
 			`Files scanned: ${filesToProcess.length}${wasCapped ? ` (capped at ${MAX_FILES})` : ""}`,
 			`Files with errors: ${new Set(display.map((d) => d.file)).size}`,
 			`Total diagnostics: ${total}`,
+			...(lspHealthWarnings.length > 0
+				? ["", "LSP health warnings:", ...lspHealthWarnings.slice(0, 10)]
+				: []),
 			"",
 		];
 		for (const d of display) {
@@ -354,6 +403,8 @@ async function runDirectoryDiagnostics(
 			totalDiagnostics: total,
 			truncated,
 			fileErrors: fileErrors.length > 0 ? fileErrors : undefined,
+			lspHealthWarnings:
+				lspHealthWarnings.length > 0 ? lspHealthWarnings : undefined,
 		},
 	};
 }

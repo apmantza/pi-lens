@@ -1030,6 +1030,10 @@ export async function createLSPClient(options: {
 			.replace(/\s+/g, " ")
 			.trim()
 			.slice(0, 320);
+		const reinstallHint =
+			serverId === "cpp"
+				? "Install clangd (LLVM/clang-tools) and ensure clangd.exe is on PATH."
+				: `Try reinstalling: npm install -g ${serverId}-language-server.`;
 		const telemetry = [
 			`pid=${lspProcess.pid}`,
 			`exitCode=${startupState.exitCode ?? "none"}`,
@@ -1041,7 +1045,7 @@ export async function createLSPClient(options: {
 		].join(" ");
 		throw new Error(
 			`[lsp] ${serverId} failed to initialize - stream may have been destroyed. ` +
-				`The server binary may be missing or crashed immediately. Try reinstalling: npm install -g ${serverId}-language-server. ` +
+				`The server binary may be missing or crashed immediately. ${reinstallHint} ` +
 				`telemetry: ${telemetry}`,
 		);
 	}

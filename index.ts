@@ -1107,10 +1107,17 @@ export default function (pi: ExtensionAPI) {
 						clientScope: "primary",
 						maxClientWaitMs,
 					})
-					.then(() => {
+					.then((result) => {
 						if (toolName === "read") {
-							runtime.markLspReadWarmCompleted(filePath);
-							dbg(`lsp read warm completed: ${path.basename(filePath)}`);
+							if (result === undefined) {
+								runtime.clearLspReadWarmState(filePath);
+								dbg(
+									`lsp read warm unavailable: ${path.basename(filePath)} (no LSP client ready)`,
+								);
+							} else {
+								runtime.markLspReadWarmCompleted(filePath);
+								dbg(`lsp read warm completed: ${path.basename(filePath)}`);
+							}
 						}
 						if (ctx.ui) {
 							ctx.ui && updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);

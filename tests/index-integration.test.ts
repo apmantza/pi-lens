@@ -650,7 +650,7 @@ describe("index.ts integration", () => {
 	}, 15_000);
 
 	it("tool_call only warms LSP on the first read until warm state is cleared", async () => {
-		const touchFileMock = vi.fn().mockResolvedValue(undefined);
+		const touchFileMock = vi.fn().mockResolvedValue([]);
 		const shouldWarmLspOnRead = vi
 			.fn()
 			.mockReturnValueOnce(true)
