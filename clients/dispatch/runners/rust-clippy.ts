@@ -6,6 +6,7 @@
 
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { RustClient } from "../../rust-client.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { stripAnsi } from "../../sanitize.js";
 import { tryLazyInstall } from "./utils/lazy-installer.js";
@@ -17,6 +18,8 @@ import type {
 } from "../types.js";
 import { PRIORITY } from "../priorities.js";
 
+const rustClient = new RustClient();
+
 const rustClippyRunner: RunnerDefinition = {
 	id: "rust-clippy",
 	appliesTo: ["rust"],
@@ -24,22 +27,19 @@ const rustClippyRunner: RunnerDefinition = {
 	enabledByDefault: true,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		// Check if cargo is available
-		const check = await safeSpawnAsync("cargo", ["--version"], {
-			timeout: 5000,
-		});
-
-		if (check.error || check.status !== 0) {
+		// Resolve cargo path using platform-aware lookup (handles ~/.cargo/bin on Windows)
+		const cargoExe = rustClient.findCargoPath();
+		if (!cargoExe) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
-		const clippyCheck = await safeSpawnAsync("cargo", ["clippy", "--version"], {
+		const clippyCheck = await safeSpawnAsync(cargoExe, ["clippy", "--version"], {
 			timeout: 8000,
 			cwd: ctx.cwd,
 		});
 		if (clippyCheck.error || clippyCheck.status !== 0) {
 			await tryLazyInstall("rust-clippy", ctx.cwd);
-			const retry = await safeSpawnAsync("cargo", ["clippy", "--version"], {
+			const retry = await safeSpawnAsync(cargoExe, ["clippy", "--version"], {
 				timeout: 8000,
 				cwd: ctx.cwd,
 			});
@@ -56,7 +56,7 @@ const rustClippyRunner: RunnerDefinition = {
 
 		// Run cargo clippy on the package
 		const result = await safeSpawnAsync(
-			"cargo",
+			cargoExe,
 			["clippy", "--message-format=json", "-q"],
 			{
 				timeout: 60000,

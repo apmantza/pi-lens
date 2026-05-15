@@ -171,14 +171,14 @@ export class AstGrepClient {
 	/**
 	 * Run a one-off scan with a temporary rule and configuration
 	 */
-	private runTempScan(
+	private async runTempScanAsync(
 		dir: string,
 		ruleId: string,
 		ruleYaml: string,
 		timeout = 30000,
-	): AstGrepMatch[] {
+	): Promise<AstGrepMatch[]> {
 		if (!this.isAvailable()) return [];
-		return this.runner.tempScan(dir, ruleId, ruleYaml, timeout);
+		return this.runner.tempScanAsync(dir, ruleId, ruleYaml, timeout);
 	}
 
 	/**
@@ -201,7 +201,7 @@ severity: info
 message: found
 `;
 
-		const matches = this.runTempScan(dir, "find-functions", ruleYaml);
+		const matches = await this.runTempScanAsync(dir, "find-functions", ruleYaml);
 		if (matches.length === 0) return [];
 
 		return this.groupSimilarFunctions(matches);
@@ -279,7 +279,7 @@ severity: info
 message: found
 `;
 
-		const matches = this.runTempScan(dir, "find-functions", ruleYaml, 15000);
+		const matches = await this.runTempScanAsync(dir, "find-functions", ruleYaml, 15000);
 		this.log(`scanExports output length: ${matches.length}`);
 
 		for (const item of matches) {

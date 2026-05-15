@@ -297,6 +297,38 @@ export class SgRunner {
 		return { output };
 	}
 
+	// --- Shared helpers for temp-dir rule scans ---
+
+	private prepareTempScan(ruleId: string, ruleYaml: string): {
+		sessionDir: string;
+		configFile: string;
+	} {
+		const sessionDir = path.join(
+			os.tmpdir(),
+			`pi-lens-temp-${ruleId}-${Date.now()}`,
+		);
+		const rulesSubdir = path.join(sessionDir, "rules");
+		const configFile = path.join(sessionDir, ".sgconfig.yml");
+		fs.mkdirSync(rulesSubdir, { recursive: true });
+		fs.writeFileSync(configFile, `ruleDirs:\n  - ./rules\n`);
+		fs.writeFileSync(path.join(rulesSubdir, `${ruleId}.yml`), ruleYaml);
+		return { sessionDir, configFile };
+	}
+
+	private parseScanOutput(output: string): SgMatch[] {
+		if (!output.trim()) return [];
+		const items = JSON.parse(output);
+		return Array.isArray(items) ? items : [items];
+	}
+
+	private cleanupTempScan(sessionDir: string): void {
+		try {
+			fs.rmSync(sessionDir, { recursive: true, force: true });
+		} catch (err) {
+			this.log(`Cleanup failed: ${(err as Error).message}`);
+		}
+	}
+
 	/**
 	 * Run a temporary rule scan (creates temp dir with rule file)
 	 */
@@ -306,76 +338,47 @@ export class SgRunner {
 		ruleYaml: string,
 		timeout = 30000,
 	): SgMatch[] {
-		const tmpDir = os.tmpdir();
-		const ts = Date.now();
-		const sessionDir = path.join(tmpDir, `pi-lens-temp-${ruleId}-${ts}`);
-		const rulesSubdir = path.join(sessionDir, "rules");
-		const ruleFile = path.join(rulesSubdir, `${ruleId}.yml`);
-		const configFile = path.join(sessionDir, ".sgconfig.yml");
-
+		const { sessionDir, configFile } = this.prepareTempScan(ruleId, ruleYaml);
 		try {
-			fs.mkdirSync(rulesSubdir, { recursive: true });
-			fs.writeFileSync(configFile, `ruleDirs:\n  - ./rules\n`);
-			fs.writeFileSync(ruleFile, ruleYaml);
-
 			const { cmd: sgCmd, args: sgPre } = getSgCommand();
 			const result = safeSpawn(
 				sgCmd,
 				[...sgPre, "scan", "--config", configFile, "--json", dir],
 				{ timeout },
 			);
-
-			const output = result.stdout || result.stderr || "";
-			if (!output.trim()) return [];
-
-			const items = JSON.parse(output);
-			return Array.isArray(items) ? items : [items];
+			return this.parseScanOutput(result.stdout || result.stderr || "");
 		} catch {
 			return [];
 		} finally {
-			try {
-				fs.rmSync(sessionDir, { recursive: true, force: true });
-			} catch (err) {
-				this.log(`Cleanup failed: ${(err as Error).message}`);
-			}
+			this.cleanupTempScan(sessionDir);
 		}
 	}
 
-	/**
-	 * Run a rule file scan (temporary config approach) - alias for tempScan
-	 */
-	scanWithRule(ruleYaml: string, dir: string, timeout = 30000): SgMatch[] {
-		const sessionDir = path.join(os.tmpdir(), `sg-scan-${Date.now()}`);
-		const rulesSubdir = path.join(sessionDir, "rules");
-		const configFile = path.join(sessionDir, ".sgconfig.yml");
-		const ruleFile = path.join(rulesSubdir, "rule.yml");
-
+	async tempScanAsync(
+		dir: string,
+		ruleId: string,
+		ruleYaml: string,
+		timeout = 30000,
+	): Promise<SgMatch[]> {
+		const { sessionDir, configFile } = this.prepareTempScan(ruleId, ruleYaml);
 		try {
-			fs.mkdirSync(rulesSubdir, { recursive: true });
-			fs.writeFileSync(configFile, `ruleDirs:\n  - ./rules\n`);
-			fs.writeFileSync(ruleFile, ruleYaml);
-
 			const { cmd: sgCmd, args: sgPre } = getSgCommand();
-			const result = safeSpawn(
+			const result = await safeSpawnAsync(
 				sgCmd,
 				[...sgPre, "scan", "--config", configFile, "--json", dir],
 				{ timeout },
 			);
-
-			const output = result.stdout || result.stderr || "";
-			if (!output.trim()) return [];
-
-			const items = JSON.parse(output);
-			return Array.isArray(items) ? items : [items];
+			return this.parseScanOutput(result.stdout || result.stderr || "");
 		} catch {
 			return [];
 		} finally {
-			try {
-				fs.rmSync(sessionDir, { recursive: true, force: true });
-			} catch (err) {
-				this.log(`Cleanup failed: ${(err as Error).message}`);
-			}
+			this.cleanupTempScan(sessionDir);
 		}
+	}
+
+	/** Run a rule file scan — delegates to tempScan with a fixed rule id. */
+	scanWithRule(ruleYaml: string, dir: string, timeout = 30000): SgMatch[] {
+		return this.tempScan(dir, "rule", ruleYaml, timeout);
 	}
 
 	/**

@@ -382,14 +382,22 @@ function probeAstGrepCommand(cmd: string, argsPrefix: string[] = []): boolean {
 	);
 }
 
-/**
- * Check if ast-grep CLI is available.
- * Prefers the canonical ast-grep binary, and only accepts sg if its version
- * output proves it is ast-grep (Linux /usr/bin/sg is group-switch).
- */
-export function isSgAvailable(): boolean {
-	if (sgAvailable !== null) return sgAvailable;
+async function probeAstGrepCommandAsync(
+	cmd: string,
+	argsPrefix: string[] = [],
+): Promise<boolean> {
+	const check = await safeSpawnAsync(cmd, [...argsPrefix, "--version"], {
+		timeout: 5000,
+	});
+	return (
+		!check.error &&
+		check.status === 0 &&
+		isAstGrepVersionOutput(`${check.stdout}\n${check.stderr}`)
+	);
+}
 
+/** Pre-filter local node_modules/.bin candidates that actually exist on disk. */
+function buildSgLocalBins(): string[] {
 	const isWin = process.platform === "win32";
 	const hasBash = !!(
 		process.env.MSYSTEM ||
@@ -404,48 +412,91 @@ export function isSgAvailable(): boolean {
 	const binaryCandidates = ["ast-grep", "sg"].flatMap((base) =>
 		extensions.map((ext) => `${base}${ext}`),
 	);
-
-	// 1. Local node_modules/.bin — walk up from this file's dir, then cwd,
-	//    then the managed tools dir. Works regardless of install depth or layout.
 	const binRoots = [
 		...findNodeBinRoots(_thisDir),
 		...findNodeBinRoots(process.cwd()),
 		_managedToolsDir,
 	];
+	const bins: string[] = [];
 	for (const root of binRoots) {
 		for (const candidate of binaryCandidates) {
 			const localBin = path.join(root, "node_modules", ".bin", candidate);
-			if (!fs.existsSync(localBin)) continue;
-			if (probeAstGrepCommand(localBin)) {
-				sgCmd = localBin;
-				sgCmdArgs = [];
-				sgAvailable = true;
-				return true;
-			}
+			if (fs.existsSync(localBin)) bins.push(localBin);
+		}
+	}
+	return bins;
+}
+
+/**
+ * Check if ast-grep CLI is available.
+ * Prefers the canonical ast-grep binary, and only accepts sg if its version
+ * output proves it is ast-grep (Linux /usr/bin/sg is group-switch).
+ */
+export function isSgAvailable(): boolean {
+	if (sgAvailable !== null) return sgAvailable;
+
+	// 1. Local node_modules/.bin
+	for (const localBin of buildSgLocalBins()) {
+		if (probeAstGrepCommand(localBin)) {
+			sgCmd = localBin; sgCmdArgs = []; sgAvailable = true;
+			return true;
 		}
 	}
 
 	// 2. Global PATH — prefer ast-grep; reject util-linux /usr/bin/sg.
 	for (const cmd of ["ast-grep", "sg"]) {
 		if (probeAstGrepCommand(cmd)) {
-			sgCmd = cmd;
-			sgCmdArgs = [];
-			sgAvailable = true;
+			sgCmd = cmd; sgCmdArgs = []; sgAvailable = true;
 			return true;
 		}
 	}
 
-	// 3. npx --no (cache-only, no silent download). The -- separator ensures
-	// --version is passed to ast-grep instead of being consumed by npx.
+	// 3. npx --no (cache-only, no silent download).
 	if (probeAstGrepCommand("npx", ["--no", "--", "ast-grep"])) {
-		sgCmd = "npx";
-		sgCmdArgs = ["--no", "--", "ast-grep"];
-		sgAvailable = true;
+		sgCmd = "npx"; sgCmdArgs = ["--no", "--", "ast-grep"]; sgAvailable = true;
 		return true;
 	}
 
 	sgAvailable = false;
 	return false;
+}
+
+let sgAvailableInFlight: Promise<boolean> | null = null;
+
+export async function isSgAvailableAsync(): Promise<boolean> {
+	if (sgAvailable !== null) return sgAvailable;
+	if (sgAvailableInFlight) return sgAvailableInFlight;
+
+	sgAvailableInFlight = (async () => {
+		// 1. Local node_modules/.bin
+		for (const localBin of buildSgLocalBins()) {
+			if (await probeAstGrepCommandAsync(localBin)) {
+				sgCmd = localBin; sgCmdArgs = []; sgAvailable = true;
+				return true;
+			}
+		}
+
+		// 2. Global PATH
+		for (const cmd of ["ast-grep", "sg"]) {
+			if (await probeAstGrepCommandAsync(cmd)) {
+				sgCmd = cmd; sgCmdArgs = []; sgAvailable = true;
+				return true;
+			}
+		}
+
+		// 3. npx --no (cache-only, no silent download).
+		if (await probeAstGrepCommandAsync("npx", ["--no", "--", "ast-grep"])) {
+			sgCmd = "npx"; sgCmdArgs = ["--no", "--", "ast-grep"]; sgAvailable = true;
+			return true;
+		}
+
+		sgAvailable = false;
+		return false;
+	})().finally(() => {
+		sgAvailableInFlight = null;
+	});
+
+	return sgAvailableInFlight;
 }
 
 export function getSgCommand(): { cmd: string; args: string[] } {

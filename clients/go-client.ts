@@ -55,7 +55,7 @@ export class GoClient {
 	/**
 	 * Find go executable path
 	 */
-	private findGoPath(): string | null {
+	findGoPath(): string | null {
 		if (this.goPath) return this.goPath;
 
 		const paths =

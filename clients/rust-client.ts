@@ -71,7 +71,7 @@ export class RustClient {
 	/**
 	 * Find cargo executable path
 	 */
-	private findCargoPath(): string | null {
+	findCargoPath(): string | null {
 		if (this.cargoPath) return this.cargoPath;
 
 		const paths =

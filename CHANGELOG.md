@@ -4,6 +4,24 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Entity snapshot extended for Rust and Ruby** — Rust now tracks `trait_item` (critical: changing a trait breaks all implementors and should always trigger blast-radius) and `type_item` (type aliases). Ruby now tracks `singleton_method` (`def self.foo` class-level methods were silently missed). Go and Python had no critical gaps. Inspired by repomix tree-sitter query coverage.
+
+- **Entity snapshot now tracks arrow functions, interfaces, type aliases, and enums for blast-radius triggering** — `ENTITY_QUERIES` previously only detected `function_declaration`, `class_declaration`, and `method_definition`. In modern TypeScript/JavaScript codebases most "functions" are arrow functions (`const foo = () => {}`), so edits to them never triggered blast-radius analysis. Added `entity-jsts-arrow` (covers both arrow functions and function expressions), `entity-ts-interface`, `entity-ts-type`, and `entity-ts-enum` to complete the picture. Shared TS/JS queries factored into `JSTS_SHARED_ENTITY_QUERIES` and TypeScript-only structural types into `TS_STRUCTURAL_ENTITY_QUERIES` — class declaration remains the only language-specific entry (TS uses `type_identifier`, JS uses `identifier`). Blast-radius mechanism unchanged; it operates on language-agnostic `kind:name` keys. Inspired by repomix tree-sitter query coverage.
+
+- **Runner diagnostics now captured in latency log** — each `type: "runner"` entry now includes a `diagnostics` array (rule, message truncated to 120 chars, line, semantic) when the runner produces findings. Previously only `diagnosticCount` was logged, making it impossible to trace which runner+rule produced a specific diagnostic (e.g. a false-positive blocker) without a live debugger. Relates to #78.
+
+- **`isSgAvailableAsync()` replaces sync `isSgAvailable()` in dispatch hot path** — `python-slop` runner was calling `isSgAvailable()` on every invocation, which on first call runs multiple `safeSpawn` probes (local bins, PATH, npx) blocking the event loop. Added `probeAstGrepCommandAsync` and `isSgAvailableAsync` with an in-flight deduplication guard; `python-slop` now awaits the async version. Shared module-level cache (`sgAvailable`, `sgCmd`, `sgCmdArgs`) means subsequent calls return immediately regardless of which path ran first. Sync `isSgAvailable` retained for `SgRunner.isAvailable()` legacy compat.
+
+- **`SgRunner.tempScan` is now async (`tempScanAsync`)** — the live production path `scanExports` → `runTempScan` → `tempScan` was blocking the Node event loop during background session startup scans. Added `tempScanAsync` using `safeSpawnAsync` and wired it through `AstGrepClient.runTempScanAsync` and `scanExports`/`findSimilarFunctions`. Sync `tempScan` retained for test compatibility per AGENTS.md legacy-cleanup contract.
+
+- **`rust-clippy` and `go-vet` runners now use platform-aware binary resolution** — both runners were calling `"cargo"` / `"go"` as bare command names, relying on PATH. On Windows, `cargo` lives in `~/.cargo/bin/cargo.exe` and `go` in `C:\Program Files\Go\bin\go.exe` — locations not always on the shell PATH when pi-lens launches from an IDE. The runners now use `RustClient.findCargoPath()` and `GoClient.findGoPath()` respectively, which probe known install locations before falling back to PATH. Both path-finder methods are made public. `GoClient` and `RustClient` module-level singletons are shared across runner invocations so the path is resolved and cached once per session.
+
+### Changed
+
+- **Pyright / basedpyright reinstated as default Python LSP** — `PythonServer` re-added to `LSP_SERVERS` before `PythonJediServer` (jedi remains as fallback). The 5–14 s cold-start that caused the original removal is fixed by passing `openFilesOnly: true` in LSP initialization options, switching pyright to lazy per-file analysis rather than full workspace analysis on startup. `basedpyright-langserver` added as a candidate alongside `pyright-langserver` — same `--stdio` protocol, drop-in compatible. Deep type checking via standalone pyright CLI and mypy runners is unchanged. Strategy key renamed from orphaned `"pyright"` to `"python"` to match `PythonServer.id`. Closes #80.
+
 ## [3.8.44] - 2026-05-13
 
 ### Added

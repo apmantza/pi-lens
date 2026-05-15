@@ -77,6 +77,10 @@ Holds: `filePath`, language-root `cwd`, `kind` (`FileKind` — `jsts`, `python`,
 - `createAvailabilityChecker()` now exposes `isAvailableAsync()`; use it in runners. The sync `isAvailable()` remains only for legacy/test compatibility.
 - Formatter execution (`clients/formatters.ts::formatFile`) uses `safeSpawnAsync()` so timeout wrappers are meaningful.
 
+## Open design TODOs
+
+- **LSP server preference via project config** — `clients/lsp/config.ts` supports `.pi-lens/lsp.json` with `disabledServers` and custom server entries, but there is no way to express a *preference* between built-in candidates (e.g. prefer `basedpyright` over `pyright` when both are installed). `PythonServer.spawn()` currently uses first-found-wins ordering (`pyright-langserver` before `basedpyright-langserver`). A future `preferredServer` key in `LSPConfig` should let projects override this ordering; the server policy layer (`clients/lsp/server-policy.ts`) is the right place to apply the preference before candidate resolution.
+
 ## Legacy async-cleanup TODO
 - Migrate remaining `runner-helpers.ts` sync compatibility paths (`isAvailable()`, `isSgAvailable()`, `resolveLocalFirst()`) to async callers, then remove or clearly quarantine the sync APIs.
 - Add async `sg` availability/command resolution and migrate `python-slop`/other sg CLI consumers away from sync `isSgAvailable()` probes.

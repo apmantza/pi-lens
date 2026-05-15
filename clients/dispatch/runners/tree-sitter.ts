@@ -77,40 +77,63 @@ interface EntityQueryDef {
 	query: string;
 }
 
+// Queries that are identical across TypeScript and JavaScript grammars.
+const JSTS_SHARED_ENTITY_QUERIES: EntityQueryDef[] = [
+	{
+		id: "entity-jsts-function",
+		kind: "function",
+		query: "(function_declaration name: (identifier) @NAME)",
+	},
+	{
+		id: "entity-jsts-method",
+		kind: "method",
+		query: "(method_definition name: (property_identifier) @NAME)",
+	},
+	{
+		id: "entity-jsts-arrow",
+		kind: "function",
+		query:
+			"(lexical_declaration (variable_declarator name: (identifier) @NAME value: [(arrow_function) (function_expression)]))",
+	},
+];
+
+// TypeScript-only structural types — no JS equivalents in the grammar.
+const TS_STRUCTURAL_ENTITY_QUERIES: EntityQueryDef[] = [
+	{
+		id: "entity-ts-interface",
+		kind: "interface",
+		query: "(interface_declaration name: (type_identifier) @NAME)",
+	},
+	{
+		id: "entity-ts-type",
+		kind: "type",
+		query: "(type_alias_declaration name: (type_identifier) @NAME)",
+	},
+	{
+		id: "entity-ts-enum",
+		kind: "enum",
+		query: "(enum_declaration name: (identifier) @NAME)",
+	},
+];
+
 const ENTITY_QUERIES: Partial<Record<string, EntityQueryDef[]>> = {
 	typescript: [
-		{
-			id: "entity-ts-function",
-			kind: "function",
-			query: "(function_declaration name: (identifier) @NAME)",
-		},
+		// class name node differs between TS (type_identifier) and JS (identifier)
 		{
 			id: "entity-ts-class",
 			kind: "class",
 			query: "(class_declaration name: (type_identifier) @NAME)",
 		},
-		{
-			id: "entity-ts-method",
-			kind: "method",
-			query: "(method_definition name: (property_identifier) @NAME)",
-		},
+		...JSTS_SHARED_ENTITY_QUERIES,
+		...TS_STRUCTURAL_ENTITY_QUERIES,
 	],
 	javascript: [
-		{
-			id: "entity-js-function",
-			kind: "function",
-			query: "(function_declaration name: (identifier) @NAME)",
-		},
 		{
 			id: "entity-js-class",
 			kind: "class",
 			query: "(class_declaration name: (identifier) @NAME)",
 		},
-		{
-			id: "entity-js-method",
-			kind: "method",
-			query: "(method_definition name: (property_identifier) @NAME)",
-		},
+		...JSTS_SHARED_ENTITY_QUERIES,
 	],
 	python: [
 		{
@@ -157,12 +180,29 @@ const ENTITY_QUERIES: Partial<Record<string, EntityQueryDef[]>> = {
 			kind: "enum",
 			query: "(enum_item name: (type_identifier) @NAME)",
 		},
+		// trait changes break all implementors — critical for blast-radius
+		{
+			id: "entity-rs-trait",
+			kind: "trait",
+			query: "(trait_item name: (type_identifier) @NAME)",
+		},
+		{
+			id: "entity-rs-type",
+			kind: "type",
+			query: "(type_item name: (type_identifier) @NAME)",
+		},
 	],
 	ruby: [
 		{
 			id: "entity-rb-method",
 			kind: "method",
 			query: "(method name: (identifier) @NAME)",
+		},
+		// singleton methods (def self.foo) — class-level, miss changes without this
+		{
+			id: "entity-rb-singleton-method",
+			kind: "method",
+			query: "(singleton_method name: (identifier) @NAME)",
 		},
 		{
 			id: "entity-rb-class",

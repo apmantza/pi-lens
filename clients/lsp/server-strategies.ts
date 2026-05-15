@@ -41,9 +41,12 @@ export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
 			aggregateWaitMs: 3000,
 			expectSemanticSecondPush: true,
 		},
-		pyright: {
-			seedFirstPush: false,
-			pullRetryBudgetMs: 250,
+		// PythonServer (pyright / basedpyright) — openFilesOnly mode: lazy per-file
+		// analysis, startup similar to jedi. seedFirstPush: true because pyright's
+		// first publishDiagnostics after didOpen is the complete result for that file.
+		python: {
+			seedFirstPush: true,
+			pullRetryBudgetMs: 0,
 			debounceMs: 100,
 			aggregateWaitMs: 1500,
 			expectSemanticSecondPush: false,

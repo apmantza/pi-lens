@@ -21,7 +21,7 @@ import type {
 import {
 	createConfigFinder,
 	getSgCommand,
-	isSgAvailable,
+	isSgAvailableAsync,
 } from "./utils/runner-helpers.js";
 
 const findSlopConfig = createConfigFinder("python-slop-rules");
@@ -35,7 +35,7 @@ const pythonSlopRunner: RunnerDefinition = {
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		// Check if ast-grep is available
-		if (!isSgAvailable()) {
+		if (!await isSgAvailableAsync()) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
