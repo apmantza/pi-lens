@@ -1,5 +1,26 @@
-import { describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import piLens from "../index.js";
+
+const tmpDirs: string[] = [];
+let previousConfigPath: string | undefined;
+
+beforeEach(() => {
+	previousConfigPath = process.env.PI_LENS_CONFIG_PATH;
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-toggle-config-"));
+	tmpDirs.push(dir);
+	process.env.PI_LENS_CONFIG_PATH = path.join(dir, "missing-config.json");
+});
+
+afterEach(() => {
+	if (previousConfigPath === undefined) delete process.env.PI_LENS_CONFIG_PATH;
+	else process.env.PI_LENS_CONFIG_PATH = previousConfigPath;
+	for (const dir of tmpDirs.splice(0)) {
+		fs.rmSync(dir, { recursive: true, force: true });
+	}
+});
 
 type CommandHandler = (
 	args: unknown,
@@ -131,6 +152,30 @@ describe("lens-toggle command", () => {
 		);
 		expect(notify).toHaveBeenNthCalledWith(
 			2,
+			"pi-lens widget shown. Run /lens-widget-toggle to hide it.",
+			"info",
+		);
+	});
+
+	it("starts the diagnostics widget hidden from global config", async () => {
+		const configPath = process.env.PI_LENS_CONFIG_PATH;
+		expect(configPath).toBeDefined();
+		fs.writeFileSync(
+			configPath as string,
+			JSON.stringify({ widget: { visible: false } }),
+			"utf-8",
+		);
+		const { commands } = installLens();
+		const notify = vi.fn();
+		const setWidget = vi.fn();
+		const command = commands.get("lens-widget-toggle");
+
+		await command?.handler([], { ui: { notify, setWidget } });
+
+		expect(setWidget).toHaveBeenCalledWith("pi-lens", expect.any(Function), {
+			placement: "belowEditor",
+		});
+		expect(notify).toHaveBeenCalledWith(
 			"pi-lens widget shown. Run /lens-widget-toggle to hide it.",
 			"info",
 		);

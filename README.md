@@ -13,7 +13,7 @@ pi-lens focuses on real-time inline code feedback for AI agents.
 On every `write` and `edit`, pi-lens runs a fast, language-aware pipeline (checks depend on file language, project config, and installed tools):
 
 1. **Secrets scan** — blocking; aborts the write if credentials are detected
-2. **Auto-format** — deferred to `agent_end` by default; queued files are formatted once after all agent tool calls complete. Use `--immediate-format` for per-edit formatting
+2. **Auto-format** — deferred to `agent_end` by default; queued files are formatted once after all agent tool calls complete. Use `--immediate-format` or global config `format.mode: "immediate"` for per-edit formatting
 3. **Auto-fix** — safe autofixes from 6 tools (Biome `check --write`, Ruff `check --fix`, ESLint `--fix`, stylelint `--fix`, sqlfluff `fix`, RuboCop `-a`) applied before analysis
 4. **LSP file sync** — opens/updates the file in active language servers
 5. **Dispatch lint** — parallel runner groups: LSP diagnostics, tree-sitter structural rules, ast-grep security/correctness rules, fact rules, language-specific linters, experimental Semgrep security scans, similarity detection
@@ -127,12 +127,14 @@ Supported: TypeScript, TSX, JavaScript, JSX, Python, Go, Rust, Ruby.
 Covers JavaScript/TypeScript, Python, Go, Rust, Ruby, Shell, and CMake. A TypeScript AST-based fact-rule engine extracts function-level metrics and evaluates quality and security rules inline. Blocking rules surface immediately at write time; advisory rules are available via `/lens-booboo`.
 
 **Blocking (surface inline at write time):**
+
 - **cors-wildcard** — `Access-Control-Allow-Origin: *` in server-side code
 - **error-swallowing** — empty catch block (skips documented local fallbacks and fs-boundary catches)
 - **no-commented-credentials** — password/token/secret in commented-out code
 - **high-entropy-string** — string literals with suspiciously high Shannon entropy (possible hardcoded secret)
 
 **Advisory (accessible via `/lens-booboo`):**
+
 - **high-complexity** / **no-complex-conditionals** — cyclomatic complexity and deeply nested conditions
 - **high-fan-out** — function calls too many distinct functions (coordination smell)
 - **unsafe-boundary** — dangerous `any` casts at API boundaries
@@ -272,6 +274,26 @@ pi --lens-guard           # Block git commit/push when unresolved blockers exist
 pi --lens-semgrep         # Enable Semgrep dispatch when a local/configured Semgrep config exists
 pi --lens-semgrep-config p/ci  # Explicit Semgrep config for dispatch (requires --lens-semgrep)
 ```
+
+## Global Config
+
+pi-lens reads optional user preferences from `~/.pi-lens/config.json` (`%USERPROFILE%\\.pi-lens\\config.json` on Windows). Unknown keys are ignored, and missing or invalid config falls back to defaults.
+
+Hide the diagnostics widget by default and run formatting immediately after write/edit tool calls instead of at `agent_end`:
+
+```json
+{
+  "widget": {
+    "visible": false
+  },
+  "format": {
+    "enabled": true,
+    "mode": "immediate"
+  }
+}
+```
+
+`format.mode` can be `"deferred"` (default) or `"immediate"`. Set `format.enabled` to `false` to match `--no-autoformat`. `/lens-widget-toggle` still works as a session-only override.
 
 ## Environment Variables
 

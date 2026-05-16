@@ -17,6 +17,7 @@ import {
 import { TreeSitterClient } from "../../tree-sitter-client.js";
 import { logTreeSitter } from "../../tree-sitter-logger.js";
 import {
+	isDisabledQueryFilePath,
 	queryLoader,
 	type TreeSitterQuery,
 } from "../../tree-sitter-query-loader.js";
@@ -472,14 +473,16 @@ const treeSitterRunner: RunnerDefinition = {
 		if (cached) {
 			// Use cached queries
 			cacheHit = true;
-			languageQueries = cached.queries.map(
-				(q) =>
-					({
-						...q,
-						has_fix: false,
-						filePath: "",
-					}) as TreeSitterQuery,
-			);
+			languageQueries = cached.queries
+				.map(
+					(q) =>
+						({
+							...q,
+							has_fix: false,
+							filePath: q.filePath ?? "",
+						}) as TreeSitterQuery,
+				)
+				.filter((q) => !isDisabledQueryFilePath(q.filePath));
 		} else {
 			// Load from disk
 			await queryLoader.loadQueries(ctx.cwd);
@@ -506,6 +509,7 @@ const treeSitterRunner: RunnerDefinition = {
 					post_filter_params: q.post_filter_params,
 					defect_class: q.defect_class,
 					inline_tier: q.inline_tier,
+					filePath: q.filePath,
 				})),
 			);
 		}

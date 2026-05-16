@@ -2,7 +2,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { TreeSitterQueryLoader } from "../../clients/tree-sitter-query-loader.js";
+import {
+	getQueryLanguageKey,
+	isDisabledQueryFilePath,
+	TreeSitterQueryLoader,
+} from "../../clients/tree-sitter-query-loader.js";
 
 const tmpDirs: string[] = [];
 
@@ -158,5 +162,24 @@ has_fix: false
 		expect(
 			loader.getQueriesForLanguage("python").map((q) => q.id),
 		).not.toContain("disabled-example");
+	});
+
+	it("detects disabled query paths independent of path separator", () => {
+		expect(getQueryLanguageKey("typescript-disabled")).toBe("typescript");
+		expect(
+			isDisabledQueryFilePath(
+				"rules/tree-sitter-queries/typescript-disabled/ts-path-traversal.yml",
+			),
+		).toBe(true);
+		expect(
+			isDisabledQueryFilePath(
+				"rules\\tree-sitter-queries\\typescript-disabled\\ts-path-traversal.yml",
+			),
+		).toBe(true);
+		expect(
+			isDisabledQueryFilePath(
+				"rules/tree-sitter-queries/typescript/console-statement.yml",
+			),
+		).toBe(false);
 	});
 });

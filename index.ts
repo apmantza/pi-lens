@@ -30,6 +30,10 @@ import {
 } from "./clients/git-guard.js";
 import { getAllToolStatuses } from "./clients/installer/index.js";
 import { LANGUAGE_POLICY } from "./clients/language-policy.js";
+import {
+	loadPiLensGlobalConfig,
+	resolvePiLensFlag,
+} from "./clients/lens-config.js";
 import { initLSPConfig } from "./clients/lsp/config.js";
 import { getLSPService, resetLSPService } from "./clients/lsp/index.js";
 import {
@@ -391,8 +395,13 @@ export default function (pi: ExtensionAPI) {
 		default: false,
 	});
 
-	let lensEnabled = !pi.getFlag("no-lens");
-	let lensWidgetVisible = true;
+	const globalConfig = loadPiLensGlobalConfig();
+	function getLensFlag(name: string): boolean | string | undefined {
+		return resolvePiLensFlag(name, pi.getFlag(name), globalConfig);
+	}
+
+	let lensEnabled = !getLensFlag("no-lens");
+	let lensWidgetVisible = globalConfig?.widget?.visible !== false;
 	type LensWidgetTui = { requestRender: () => void };
 	type LensWidgetTheme = { fg: (color: string, s: string) => string };
 	type LensWidgetComponent = {
@@ -557,8 +566,8 @@ export default function (pi: ExtensionAPI) {
 			const localConfig = findLocalSemgrepConfig(cwd);
 			const piLensConfig = loadPiLensSemgrepConfig(cwd);
 			const resolved = resolveSemgrepConfig(cwd, {
-				enabled: Boolean(pi.getFlag("lens-semgrep")),
-				config: pi.getFlag("lens-semgrep-config"),
+				enabled: Boolean(getLensFlag("lens-semgrep")),
+				config: getLensFlag("lens-semgrep-config"),
 			});
 			const version = await safeSpawnAsync("semgrep", ["--version"], {
 				cwd,
@@ -923,7 +932,7 @@ export default function (pi: ExtensionAPI) {
 	pi.registerTool(createAstGrepSearchTool(astGrepClient) as any);
 	pi.registerTool(createAstGrepReplaceTool(astGrepClient) as any);
 	pi.registerTool(createLspDiagnosticsTool() as any);
-	pi.registerTool(createLspNavigationTool((name) => pi.getFlag(name)) as any);
+	pi.registerTool(createLspNavigationTool((name) => getLensFlag(name)) as any);
 
 	// REMOVED: ~450 lines of inline tool definitions moved to tools/
 	// See tools/ast-grep-search.ts, tools/ast-grep-replace.ts, tools/lsp-navigation.ts
@@ -970,7 +979,7 @@ export default function (pi: ExtensionAPI) {
 			} = await loadBootstrapClients();
 			await handleSessionStart({
 				ctxCwd: ctx.cwd,
-				getFlag: (name: string) => pi.getFlag(name),
+				getFlag: (name: string) => getLensFlag(name),
 				notify: (msg, level) => ctx.ui.notify(msg, level),
 				dbg,
 				log,
@@ -1009,7 +1018,7 @@ export default function (pi: ExtensionAPI) {
 		const toolName = (event as { toolName?: string }).toolName ?? "";
 		if (!lensEnabled) return;
 		if (
-			pi.getFlag("lens-guard") &&
+			getLensFlag("lens-guard") &&
 			isGitCommitOrPushAttempt(toolName, event.input)
 		) {
 			const guard = evaluateGitGuard(
@@ -1032,7 +1041,7 @@ export default function (pi: ExtensionAPI) {
 			runtime.projectRoot,
 		);
 
-		if (!pi.getFlag("no-lsp")) {
+		if (!getLensFlag("no-lsp")) {
 			try {
 				const configCwd = filePath
 					? path.dirname(filePath)
@@ -1070,18 +1079,18 @@ export default function (pi: ExtensionAPI) {
 				toolName === "edit" ||
 				toolName === "lsp_navigation" ||
 				shouldWarmReadLsp) &&
-			!pi.getFlag("no-lsp") &&
+			!getLensFlag("no-lsp") &&
 			lspAutoTouchEligible;
-		if (!lspCapableFile && !pi.getFlag("no-lsp")) {
+		if (!lspCapableFile && !getLensFlag("no-lsp")) {
 			dbg(
 				`lsp auto-touch skipped: ${path.basename(filePath)} (file kind not LSP-capable)`,
 			);
-		} else if (lspAutoTouchSkipped && !pi.getFlag("no-lsp")) {
+		} else if (lspAutoTouchSkipped && !getLensFlag("no-lsp")) {
 			dbg(
 				`lsp auto-touch skipped: ${path.basename(filePath)} (internal/support artifact)`,
 			);
 		}
-		if (toolName === "read" && !pi.getFlag("no-lsp") && !shouldWarmReadLsp) {
+		if (toolName === "read" && !getLensFlag("no-lsp") && !shouldWarmReadLsp) {
 			const readSkipReason = !lspAutoTouchEligible
 				? "file not eligible for LSP warm"
 				: "already warming or warmed recently";
@@ -1159,7 +1168,7 @@ export default function (pi: ExtensionAPI) {
 
 		if (
 			toolName === "read" &&
-			!pi.getFlag("no-lsp") &&
+			!getLensFlag("no-lsp") &&
 			!isExternalOrVendor &&
 			filePath &&
 			readInput &&
@@ -1343,7 +1352,7 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 		}
-		if (isEditOnly && filePath && !pi.getFlag("no-read-guard")) {
+		if (isEditOnly && filePath && !getLensFlag("no-read-guard")) {
 			const readGuard = runtime.readGuard;
 			const isExistingFile =
 				typeof readGuard?.isNewFile !== "function" ||
@@ -1523,7 +1532,7 @@ export default function (pi: ExtensionAPI) {
 			await loadBootstrapClients();
 		return handleToolResult({
 			event: event as any,
-			getFlag: (name: string) => pi.getFlag(name),
+			getFlag: (name: string) => getLensFlag(name),
 			dbg,
 			runtime,
 			cacheManager,
@@ -1551,7 +1560,7 @@ export default function (pi: ExtensionAPI) {
 		try {
 			await handleAgentEnd({
 				ctxCwd: ctx.cwd,
-				getFlag: (name: string) => pi.getFlag(name),
+				getFlag: (name: string) => getLensFlag(name),
 				notify: (msg, level) => ctx.ui.notify(msg, level),
 				dbg,
 				runtime,
@@ -1573,7 +1582,7 @@ export default function (pi: ExtensionAPI) {
 				await loadBootstrapClients();
 			await handleTurnEnd({
 				ctxCwd: ctx.cwd,
-				getFlag: (name: string) => pi.getFlag(name),
+				getFlag: (name: string) => getLensFlag(name),
 				dbg,
 				runtime,
 				cacheManager,

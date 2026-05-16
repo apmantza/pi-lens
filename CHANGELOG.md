@@ -6,6 +6,7 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Added
 
+- **Global user config at `~/.pi-lens/config.json`** — pi-lens now reads persistent user preferences from the same global directory used for logs/probe state. Initial settings cover `widget.visible` (hide the diagnostics widget by default; fixes #84) and `format.enabled` / `format.mode` (`"immediate"` to format after each write/edit instead of waiting for `agent_end`; fixes #61). CLI flags still override global config.
 - **10 new C blocker tree-sitter rules** — implements SonarCloud C blocker rules via AST queries:
   - `memset-sensitive-data` (S5798) — `memset` on passwords/secrets (optimized away by compilers)
   - `noreturn-returns` (S5267) — `return` inside `__attribute__((noreturn))` functions
@@ -23,7 +24,7 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Fixed
 
-- **Disabled tree-sitter rules leaked into production dispatch** — the runner used `getAllQueries()` which includes rules from `<language>-disabled/` directories (intended only for test access via `getAllQueries()`). Changed to `getQueriesForLanguage()` which properly excludes disabled rules. Fixes the `ts-path-traversal` false positives on test files that were coming from `typescript-disabled/`.
+- **Disabled tree-sitter rules leaked into production dispatch/cache** — disabled query directories are now keyed under their base language for test access but filtered from production dispatch with cross-platform path-segment checks. Rule-cache entries now preserve `filePath`, cached disabled rules are defensively filtered, and the tree-sitter rule-cache version was bumped to invalidate stale `ts-path-traversal` cache entries from `typescript-disabled/`.
 - **Knip scans bounded to real project roots** — Knip was running against arbitrary working directories (including `/tmp` or parent dirs without `package.json`), producing nonsensical unused-export reports or crashing on missing configs. `KnipClient` now validates the project root with `findProjectRoot()` before scanning, and `turn_end` Knip delta analysis bails early when the root lacks a recognizable package manifest. Prevents false-positive unused-export noise and config-not-found errors.
 - **ReDoS in C/C++ include parsing** — `review-graph/builder.ts` used a regex with `[^>]*` to parse `#include <...>` directives, which SonarCloud flagged as S5852 (polynomial backtracking on malicious input). Replaced with a linear manual parser that scans character-by-character.
 - **3 existing C rule post-filters were broken** — `case-range-multiple-values`, `goto-into-block`, and `goto-label-order` referenced post-filters (`case_range_single_value`, `goto_targets_inner_block`, `goto_jumps_backward`) that didn't exist in `applyPostFilter`, causing them to silently pass all matches. All three are now implemented. The `case-range-multiple-values` rule was moved to `c-disabled/` because the C grammar lacks `range_expression`.

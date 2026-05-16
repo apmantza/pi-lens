@@ -98,7 +98,11 @@ describe("getProjectDataDir", () => {
 			expect(fs.existsSync(path.join(cwd, ".pi-lens"))).toBe(false);
 			expect(
 				fs.existsSync(
-					path.join(getProjectDataDir(cwd), "cache", "typescript-rules-v1.json"),
+					path.join(
+						getProjectDataDir(cwd),
+						"cache",
+						"typescript-rules-v2.json",
+					),
 				),
 			).toBe(true);
 		} finally {

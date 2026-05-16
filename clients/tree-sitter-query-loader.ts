@@ -9,6 +9,23 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { resolvePackagePath } from "./package-root.js";
 
+export function isDisabledQueryDirectoryName(name: string): boolean {
+	return name.endsWith("-disabled");
+}
+
+export function getQueryLanguageKey(directoryName: string): string {
+	return isDisabledQueryDirectoryName(directoryName)
+		? directoryName.slice(0, -"-disabled".length)
+		: directoryName;
+}
+
+export function isDisabledQueryFilePath(filePath: string): boolean {
+	const normalized = filePath.replaceAll("\\", "/");
+	const parts = normalized.split("/").filter(Boolean);
+	const parent = parts.length >= 2 ? parts[parts.length - 2] : "";
+	return isDisabledQueryDirectoryName(parent);
+}
+
 export interface TreeSitterQuery {
 	id: string;
 	name: string;
@@ -98,23 +115,24 @@ export class TreeSitterQueryLoader {
 
 			for (const lang of languageDirs) {
 				const langDir = path.join(queriesDir, lang);
+				const languageKey = getQueryLanguageKey(lang);
 				const queryFiles = fs
 					.readdirSync(langDir)
 					.filter((f) => f.endsWith(".yml"));
 
-				const langQueries = this.queries.get(lang) ?? [];
+				const langQueries = this.queries.get(languageKey) ?? [];
 
 				for (const file of queryFiles) {
 					const filePath = path.join(langDir, file);
-					const query = this.parseQueryFile(filePath, lang);
+					const query = this.parseQueryFile(filePath, languageKey);
 					if (query) {
 						langQueries.push(query);
 					}
 				}
 
 				if (langQueries.length > 0) {
-					this.queries.set(lang, langQueries);
-					this.dbg(`Loaded ${langQueries.length} queries for ${lang}`);
+					this.queries.set(languageKey, langQueries);
+					this.dbg(`Loaded ${langQueries.length} queries for ${languageKey}`);
 				}
 			}
 		}
@@ -375,9 +393,7 @@ export class TreeSitterQueryLoader {
 		// Exclude queries from <language>-disabled/ directories.
 		// Disabled rules are loaded (needed by tests via getAllQueries)
 		// but excluded from production dispatch.
-		return all.filter(
-			(q) => !q.filePath.includes(`-disabled/`),
-		);
+		return all.filter((q) => !isDisabledQueryFilePath(q.filePath));
 	}
 
 	/**
