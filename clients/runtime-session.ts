@@ -575,7 +575,7 @@ export async function handleSessionStart(
 	dbg(`session_start tools: ${tools.join(", ")}`);
 
 	const agentStartupGuidance = [
-		"📌 pi-lens active — automated checks run on your edits and writes. Blocking errors will be shown inline; you must fix all errors including pre-existing ones. Prefer: lsp_navigation for definitions/references, ast_grep_search for code patterns, grep for text/TODO search.",
+		"📌 pi-lens active — automated checks run on your edits and writes. Blocking errors will be shown inline; you must fix all errors including pre-existing ones. Prefer: lsp_diagnostics for proactive file/folder/batch error checks, lsp_navigation for definitions/references/symbols, ast_grep_search for code patterns (retry once with a simpler valid AST pattern on zero matches), grep for text/TODO search.",
 	];
 
 	runtime.projectRulesScan = scanProjectRules(analysisRoot);

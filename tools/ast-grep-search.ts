@@ -42,8 +42,16 @@ function looksLikeRuleYamlOrPlainText(pattern: string): boolean {
  * Detect common mistakes in ast-grep patterns and return a hint.
  * Helps the LLM self-correct when a search returns zero matches.
  */
-function getPatternHint(pattern: string, lang: string): string | null {
+function getPatternHint(
+	pattern: string,
+	lang: string,
+	selector?: string,
+): string | null {
 	const src = pattern.trim();
+
+	if (selector) {
+		return `Hint: selector=${JSON.stringify(selector)} narrows the AST node kind searched; it does not extract fields from matches. Retry once without selector, or use a selector that is the outer node kind you want to match.`;
+	}
 
 	// --- regex misuse ---
 	if (/\\[wWdDsSbB]/.test(src)) {
@@ -87,7 +95,7 @@ function getPatternHint(pattern: string, lang: string): string | null {
 		}
 	}
 
-	return null;
+	return "Hint: No matches. Retry once with a smaller valid AST pattern scoped to the same paths (for example a call like `foo($$$ARGS)`, an import statement, or `function $NAME($$$ARGS) { $$$BODY }`). If that also fails, use grep for text search or lsp_navigation for symbol lookup.";
 }
 
 export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
@@ -107,8 +115,8 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			"  - arbitrary text without code structure\n\n" +
 			"Always prefer specific patterns with context over bare identifiers. " +
 			"Use 'paths' to scope to specific files/folders. " +
-			"Use 'selector' to extract specific nodes (e.g., just the function name). " +
-			"Use 'context' to show surrounding lines.",
+			"Avoid 'selector' unless you know the exact AST node kind; it narrows search roots and does not extract fields. " +
+			"Use 'context' to show surrounding lines. If zero matches, retry once with a simpler AST pattern before falling back to grep.",
 		promptSnippet: "Use ast_grep_search for AST-aware code search",
 		parameters: Type.Object({
 			pattern: Type.String({
@@ -126,7 +134,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			selector: Type.Optional(
 				Type.String({
 					description:
-						"Extract specific AST node kind (e.g., 'name', 'body', 'parameter'). Use with patterns like '$NAME($$$)' to extract just the name.",
+						"Advanced: restrict search to a specific AST node kind (for example 'call_expression' or 'function_declaration'). This narrows matching; it does not extract fields from matches.",
 				}),
 			),
 			context: Type.Optional(
@@ -198,7 +206,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			const output = astGrepClient.formatMatches(result.matches);
 			const hint =
 				result.matches.length === 0 && !result.error
-					? getPatternHint(pattern, lang)
+					? getPatternHint(pattern, lang, selector)
 					: undefined;
 			const finalOutput = hint ? `${output}\n\n${hint}` : output;
 			return {

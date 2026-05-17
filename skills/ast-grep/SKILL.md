@@ -12,26 +12,29 @@ Use `ast_grep_search` and `ast_grep_replace` for semantic code search/replace. a
 - Function calls, imports, class methods (structured code)
 - Safe replacements across files
 - "X inside Y" patterns (e.g., console.log inside classes)
-- **Use grep for:** partial string patterns, comments, URLs, or when ast-grep fails twice
+- **Use grep for:** partial string patterns, comments, URLs, or after one simplified ast-grep retry still returns zero matches
+- **Use LSP first for:** definitions/references/types; then scope ast-grep to files discovered by LSP when looking for structural patterns
 
 ## Golden Rules
 
 1. **Be specific** — `fetchMetrics($ARGS)` not `fetchMetrics`
 2. **Scope it** — Always specify `paths` to relevant files
-3. **Dry-run first** — Use `apply: false` before `apply: true`
-4. **Valid code only** — `function $NAME($$$) { $$$ }` not `function $NAME(`
-5. **Metavariables don't work inside strings** — `from "$PATH"` will NOT match; use grep for import path patterns
+3. **Retry once on zero matches** — simplify the pattern, keep the same `paths`, then fall back to grep if still empty
+4. **Dry-run first** — Use `apply: false` before `apply: true`
+5. **Valid code only** — `function $NAME($$$) { $$$ }` not `function $NAME(`
+6. **Avoid `selector` unless expert** — selector narrows search to an AST node kind; it does not extract metavariables
+7. **Metavariables don't work inside strings** — `from "$PATH"` will NOT match; use grep for import path patterns
 
 ## Quick Reference
 
 ### Patterns
 
-| Pattern | Matches |
-|---------|---------|
-| `fetchMetrics($ARGS)` | Function call with any args |
-| `function $NAME($$$) { $$$ }` | Function declaration |
+| Pattern                        | Matches                       |
+| ------------------------------ | ----------------------------- |
+| `fetchMetrics($ARGS)`          | Function call with any args   |
+| `function $NAME($$$) { $$$ }`  | Function declaration          |
 | `import { $NAMES } from $PATH` | Import (any path — no quotes) |
-| `const $X = $Y` | Variable declaration |
+| `const $X = $Y`                | Variable declaration          |
 
 ### Composite (inside/has)
 
@@ -45,9 +48,9 @@ inside:
 
 ### Metavariables
 
-| Use | Example | Matches |
-|-----|---------|---------|
-| Single | `console.log($MSG)` | `console.log("hi")` |
+| Use      | Example                | Matches                      |
+| -------- | ---------------------- | ---------------------------- |
+| Single   | `console.log($MSG)`    | `console.log("hi")`          |
 | Multiple | `console.log($$$ARGS)` | `console.log("hi", obj, 42)` |
 
 ## Common Gotchas
@@ -65,7 +68,7 @@ inside:
    use { runnerId } or { runnerId, $$$REST }
 ```
 
-**No matches?** Simplify and retry: `console.log($$$)` → `console` → narrow down.  
-**Fails twice?** Fall back to `grep`.
+**No matches?** Simplify and retry once: `console.log($$$ARGS)` → `$OBJ.$METHOD($$$ARGS)` or a surrounding `function $NAME($$$ARGS) { $$$BODY }`.  
+**Still no matches?** Fall back to `grep` for text, or `lsp_navigation` for symbols/references.
 
 Debug: https://ast-grep.github.io/playground.html
