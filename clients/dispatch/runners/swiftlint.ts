@@ -92,7 +92,9 @@ const swiftlintRunner: RunnerDefinition = {
 		const cwd = ctx.cwd || process.cwd();
 
 		let cmd: string | null = null;
-		if (await (swiftlint.isAvailableAsync?.(cwd) ?? swiftlint.isAvailable(cwd))) {
+		if (
+			await (swiftlint.isAvailableAsync?.(cwd) ?? swiftlint.isAvailable(cwd))
+		) {
 			cmd = swiftlint.getCommand(cwd);
 		} else {
 			cmd = await resolveToolCommandWithInstallFallback(cwd, "swiftlint");

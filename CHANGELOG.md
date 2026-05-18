@@ -26,8 +26,12 @@ All notable changes to pi-lens will be documented in this file.
 - **5 new C post-filters** — `c_memset_sensitive_arg`, `c_stdlib_name`, `c_octal_literal`, `c_noreturn_attr`, `c_label_in_switch` added to `applyPostFilter` in `tree-sitter-client.ts`.
 - **C tree-sitter tests** — `tests/clients/tree-sitter-c-rules.test.ts` with 10 passing tests.
 - **C/C++ tree-sitter runner and cascade support** — `cxx` files (`.c`, `.h`, `.cpp`, `.cc`, `.hpp`, etc.) are now fully wired through the dispatch pipeline: tree-sitter structural analysis, review-graph construction with `#include` edge extraction, blast-radius entity snapshots, and cascade neighbor propagation. `cpp-check` runner enhanced with `clang-tidy` support. `language-profile.ts` adds C/C++-specific complexity baselines.
+- **Vale prose linter runner** — new `vale` dispatch runner for Markdown files. Config-gated (requires `.vale.ini`); auto-install disabled (uses PATH). Parses `--output=JSON` into pi-lens diagnostics with severity mapping. Covers prose/style quality alongside `spellcheck` and `markdownlint`.
+- **SwiftLint runner** — new `swiftlint` dispatch runner for Swift files. Runs out of the box with built-in defaults (no config required). Auto-installs via GitHub release (macOS portable zip, Linux amd64/arm64). Uses `--reporter json` output. Swift dispatch now has LSP + SwiftLint + swiftformat.
 
 ### Changed
+
+- **README accuracy fixes** — corrected Python LSP label (pyright/basedpyright + jedi), bumped formatter count 26→27→32 (added oxfmt, fish_indent, google-java-format, cljfmt, cmake-format, psscriptanalyzer-format), fixed read-guard markdown exemption text, added `/lens-allow-edit` to key commands, bumped language coverage 35→36+ (added Fish, Svelte, Vue rows), added `tree-sitter` to C/C++ dispatch, added `detekt` to Kotlin dispatch, added formatters to Java/Clojure/CMake/PowerShell rows, added `vale` to Markdown row, added `swiftlint` to Swift row.
 
 - **`.md` read-guard exemption tightened from `allow` to `warn`** — markdown files are no longer silently exempt from the read-before-edit guard. With the new markdown-section expansion providing precise heading-level coverage, edits outside the expanded read range trigger a warning instead of passing unchecked. Plain-text (`.txt`) and log (`.log`) files remain exempt.
 
