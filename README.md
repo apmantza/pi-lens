@@ -354,7 +354,7 @@ Dispatch is diagnostics-oriented: automatic formatting and safe autofix happen i
 | F#                    | ✓   | lsp                                                                                                            | fantomas                |
 | Java                  | ✓   | lsp, javac                                                                                                     | google-java-format      |
 | Kotlin                | ✓   | lsp, ktlint, detekt                                                                                            | ktlint                  |
-| Swift                 | ✓   | lsp                                                                                                            | swiftformat             |
+| Swift                 | ✓   | lsp, swiftlint                                                                                                 | swiftformat             |
 | Dart                  | ✓   | lsp, dart-analyze                                                                                              | dart format             |
 | Lua                   | ✓   | lsp                                                                                                            | stylua                  |
 | Zig                   | ✓   | lsp, zig-check                                                                                                 | zig fmt                 |

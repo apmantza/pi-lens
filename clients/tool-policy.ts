@@ -746,6 +746,7 @@ export type LintRunnerName =
 	| "prisma-validate"
 	| "mypy"
 	| "detekt"
+	| "swiftlint"
 	| "vale";
 
 export interface LinterPolicy {
@@ -840,7 +841,8 @@ const TOOL_EXECUTION_POLICY = new Map<string, ToolExecutionPolicy>([
 	["phpstan", { gate: "config-first", autoInstall: false }],
 	["eslint", { gate: "config-first", autoInstall: false }],
 	["prettier", { gate: "smart-default", autoInstall: true }],
-	["vale", { gate: "config-first", autoInstall: true }],
+	["vale", { gate: "config-first", autoInstall: false }],
+	["swiftlint", { gate: "smart-default", autoInstall: true }],
 ]);
 
 const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
@@ -931,6 +933,14 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 			windowsExt: ".exe",
 			versionArgs: ["--version"],
 			managedToolId: "vale",
+		},
+	],
+	[
+		"swiftlint",
+		{
+			command: "swiftlint",
+			versionArgs: ["--version"],
+			managedToolId: "swiftlint",
 		},
 	],
 	[

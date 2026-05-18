@@ -185,7 +185,11 @@ const PRIMARY_DISPATCH_GROUPS: Partial<Record<FileKind, RunnerGroup>> = {
 		runnerIds: ["lsp", "ktlint"],
 		filterKinds: ["kotlin"],
 	},
-	swift: { mode: "fallback", runnerIds: ["lsp"], filterKinds: ["swift"] },
+	swift: {
+		mode: "all",
+		runnerIds: ["lsp", "swiftlint"],
+		filterKinds: ["swift"],
+	},
 	dart: {
 		mode: "all",
 		runnerIds: ["lsp", "dart-analyze"],

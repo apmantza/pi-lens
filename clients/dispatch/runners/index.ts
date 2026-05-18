@@ -43,6 +43,7 @@ import similarityRunner from "./similarity.js";
 import spellcheckRunner from "./spellcheck.js";
 import sqlfluffRunner from "./sqlfluff.js";
 import stylelintRunner from "./stylelint.js";
+import swiftlintRunner from "./swiftlint.js";
 import taploRunner from "./taplo.js";
 import tflintRunner from "./tflint.js";
 import valeRunner from "./vale.js";
@@ -84,6 +85,7 @@ export function registerDefaultRunners(registry: RunnerRegistry): void {
 	registry.register(markdownlintRunner); // Markdown lint (priority 30)
 	registry.register(mypyRunner); // Python type checking — mypy (priority 20, config-gated)
 	registry.register(stylelintRunner); // CSS/SCSS/Less lint (priority 10, config-gated)
+	registry.register(swiftlintRunner); // Swift lint — out-of-the-box defaults (priority 20)
 	registry.register(shfmtRunner); // Shell formatting check (priority 10)
 	registry.register(fishIndentRunner); // Fish script formatting check (priority 10)
 	registry.register(factRulesRunner); // FactRule pipeline — all registered rules (priority 21)

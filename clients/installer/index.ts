@@ -541,6 +541,26 @@ const TOOLS: ToolDefinition[] = [
 		},
 	},
 	{
+		id: "swiftlint",
+		name: "SwiftLint",
+		checkCommand: "swiftlint",
+		checkArgs: ["--version"],
+		installStrategy: "github",
+		binaryName: "swiftlint",
+		github: {
+			repo: "realm/SwiftLint",
+			assetMatch: (platform, arch) => {
+				if (platform === "darwin") return "portable_swiftlint.zip";
+				if (platform === "linux")
+					return arch === "arm64"
+						? "swiftlint_linux_arm64.zip"
+						: "swiftlint_linux_amd64.zip";
+				return undefined;
+			},
+			binaryInArchive: "swiftlint",
+		},
+	},
+	{
 		id: "taplo",
 		name: "taplo",
 		checkCommand: "taplo",
@@ -582,8 +602,7 @@ const TOOLS: ToolDefinition[] = [
 					return arch === "arm64"
 						? `vale_${version}_macOS_arm64.tar.gz`
 						: `vale_${version}_macOS_64-bit.tar.gz`;
-				if (platform === "win32")
-					return `vale_${version}_Windows_64-bit.zip`;
+				if (platform === "win32") return `vale_${version}_Windows_64-bit.zip`;
 				return undefined;
 			},
 			binaryInArchive: "vale",
