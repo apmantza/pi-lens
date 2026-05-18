@@ -89,9 +89,9 @@ LSP servers for: TypeScript, Deno, Python (pyright/basedpyright + jedi), Go, Rus
 
 ### Formatters
 
-pi-lens auto-detects and runs **27 formatters** based on project config:
+pi-lens auto-detects and runs **32 formatters** based on project config:
 
-biome, prettier, ruff, black, sqlfluff, gofmt, rustfmt, zig fmt, dart format, shfmt, nixfmt, mix format, ocamlformat, clang-format, ktlint, rubocop, standardrb, gleam format, terraform fmt, php-cs-fixer, csharpier, fantomas, swiftformat, stylua, ormolu, taplo, fish_indent
+biome, prettier, oxfmt, ruff, black, sqlfluff, gofmt, rustfmt, zig fmt, dart format, shfmt, nixfmt, mix format, ocamlformat, clang-format, ktlint, rubocop, standardrb, gleam format, terraform fmt, php-cs-fixer, csharpier, fantomas, swiftformat, stylua, ormolu, taplo, fish_indent, google-java-format, cljfmt, cmake-format, psscriptanalyzer-format
 
 Detection rules:
 
@@ -348,12 +348,12 @@ Dispatch is diagnostics-oriented: automatic formatting and safe autofix happen i
 | Markdown              | —   | spellcheck, markdownlint                                                                                       | prettier            |
 | Docker                | ✓   | lsp, hadolint                                                                                                  | —                   |
 | PHP                   | ✓   | lsp, php-lint, phpstan                                                                                         | php-cs-fixer        |
-| PowerShell            | ✓   | lsp, psscriptanalyzer                                                                                          | —                   |
+| PowerShell            | ✓   | lsp, psscriptanalyzer                                                                                          | psscriptanalyzer-format |
 | Prisma                | ✓   | lsp, prisma-validate                                                                                           | —                   |
 | C#                    | ✓   | lsp, dotnet-build                                                                                              | csharpier           |
 | F#                    | ✓   | lsp                                                                                                            | fantomas            |
-| Java                  | ✓   | lsp, javac                                                                                                     | —                   |
-| Kotlin                | ✓   | lsp, ktlint                                                                                                    | ktlint              |
+| Java                  | ✓   | lsp, javac                                                                                                     | google-java-format  |
+| Kotlin                | ✓   | lsp, ktlint, detekt                                                                                            | ktlint              |
 | Swift                 | ✓   | lsp                                                                                                            | swiftformat         |
 | Dart                  | ✓   | lsp, dart-analyze                                                                                              | dart format         |
 | Lua                   | ✓   | lsp                                                                                                            | stylua              |
@@ -362,8 +362,8 @@ Dispatch is diagnostics-oriented: automatic formatting and safe autofix happen i
 | Elixir                | ✓   | lsp, elixir-check, credo                                                                                       | mix format          |
 | Gleam                 | ✓   | lsp, gleam-check                                                                                               | gleam format        |
 | OCaml                 | ✓   | lsp                                                                                                            | ocamlformat         |
-| Clojure               | ✓   | lsp                                                                                                            | —                   |
+| Clojure               | ✓   | lsp                                                                                                            | cljfmt              |
 | Terraform             | ✓   | lsp, tflint                                                                                                    | terraform fmt       |
 | Nix                   | ✓   | lsp                                                                                                            | nixfmt              |
 | TOML                  | ✓   | lsp, taplo                                                                                                     | taplo               |
-| CMake                 | ✓   | lsp                                                                                                            | —                   |
+| CMake                 | ✓   | lsp                                                                                                            | cmake-format        |
