@@ -6,7 +6,7 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Fixed
 
-- **Project scans now respect `.gitignore` and generated artifacts** — centralized project ignore matching now supports rooted patterns (`/profiles/`), globbed trees (`profiles/**`), nested `.gitignore` files, and negations, and is shared by source collection, startup counting, jscpd, tree-sitter collection, review-graph workspace module scans, autofix snapshots, and write/read hook paths. pi-lens now skips gitignored files before LSP warming or dispatching the pipeline, and generated/artifact detection is centralized for common codegen dirs, protobuf/sqlc/OpenAPI outputs, minified/bundled files, declaration stubs, and generated-file headers. Also avoids source-scanning `$HOME` during session start when startup gating has already classified the cwd as `home-dir`. Refs #91.
+- **Project scans now respect `.gitignore` and generated artifacts** — centralized project ignore matching now supports rooted patterns (`/profiles/`), globbed trees (`profiles/**`), nested `.gitignore` files, and negations, and is shared by source collection, startup counting, jscpd, tree-sitter collection, review-graph workspace module scans, autofix snapshots, ast-grep temp scans, `/lens-booboo` ast-grep scan globs, and write/read hook paths. pi-lens now skips gitignored files before LSP warming or dispatching the pipeline, and generated/artifact detection is centralized for common codegen dirs, protobuf/sqlc/OpenAPI outputs, minified/bundled files, declaration stubs, and generated-file headers. Also avoids source-scanning `$HOME` during session start when startup gating has already classified the cwd as `home-dir`. Refs #91.
 
 ## [3.8.45] - 2026-05-21
 
