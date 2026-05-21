@@ -29,7 +29,10 @@ function escapeWindowsArg(arg: string): string {
 }
 
 function sgExcludeArgsForProject(rootDir: string): string[] {
-	return getProjectIgnoreGlobs(rootDir).flatMap((glob) => ["--globs", `!${glob}`]);
+	return getProjectIgnoreGlobs(rootDir).flatMap((glob) => [
+		"--globs",
+		`!${glob}`,
+	]);
 }
 
 export interface SgMatch {
@@ -304,7 +307,10 @@ export class SgRunner {
 
 	// --- Shared helpers for temp-dir rule scans ---
 
-	private prepareTempScan(ruleId: string, ruleYaml: string): {
+	private prepareTempScan(
+		ruleId: string,
+		ruleYaml: string,
+	): {
 		sessionDir: string;
 		configFile: string;
 	} {

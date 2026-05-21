@@ -136,7 +136,11 @@ describe("SgRunner", () => {
 
 				const { SgRunner } = await import("../../clients/sg-runner.js");
 				const runner = new SgRunner();
-				await runner.tempScanAsync(root, "find", "id: find\nrule: { kind: function_declaration }\n");
+				await runner.tempScanAsync(
+					root,
+					"find",
+					"id: find\nrule: { kind: function_declaration }\n",
+				);
 
 				const args = safeSpawnAsync.mock.calls[0][1] as string[];
 				expect(args).toContain("--globs");
