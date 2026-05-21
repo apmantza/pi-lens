@@ -115,8 +115,39 @@ function resolveGitIgnoreRoot(startDir: string): string {
 	}
 }
 
+function collapseSlashes(value: string): string {
+	let out = "";
+	let previousWasSlash = false;
+	for (const ch of value) {
+		if (ch === "/") {
+			if (!previousWasSlash) out += ch;
+			previousWasSlash = true;
+			continue;
+		}
+		out += ch === "\\" ? "/" : ch;
+		previousWasSlash = false;
+	}
+	return out;
+}
+
+function stripLeadingDotSlash(value: string): string {
+	return value.startsWith("./") ? value.slice(2) : value;
+}
+
+function stripTrailingSlashes(value: string): string {
+	let end = value.length;
+	while (end > 0 && value[end - 1] === "/") end -= 1;
+	return value.slice(0, end);
+}
+
+function stripLeadingSlashes(value: string): string {
+	let start = 0;
+	while (start < value.length && value[start] === "/") start += 1;
+	return value.slice(start);
+}
+
 function normalizeIgnorePath(value: string): string {
-	return value.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+/g, "/");
+	return collapseSlashes(stripLeadingDotSlash(value));
 }
 
 function stripTrailingSpaces(value: string): string {
@@ -140,9 +171,9 @@ function parseGitignoreContent(content: string): GitignorePattern[] {
 		if (!line) continue;
 
 		const directoryOnly = line.endsWith("/");
-		if (directoryOnly) line = line.replace(/\/+$/, "");
+		if (directoryOnly) line = stripTrailingSlashes(line);
 		const rooted = line.startsWith("/");
-		if (rooted) line = line.replace(/^\/+/, "");
+		if (rooted) line = stripLeadingSlashes(line);
 		if (!line) continue;
 
 		patterns.push({
@@ -171,7 +202,7 @@ function matchesGitignorePattern(
 	relativePath: string,
 	isDirectory: boolean,
 ): boolean {
-	const candidate = normalizeIgnorePath(relativePath).replace(/^\/+/, "");
+	const candidate = stripLeadingSlashes(normalizeIgnorePath(relativePath));
 	if (!candidate) return false;
 	const candidates = isDirectory ? [candidate, `${candidate}/`] : [candidate];
 	const options = { dot: true, nocase: process.platform === "win32" };
