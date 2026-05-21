@@ -9,7 +9,7 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
-import { access, appendFile, mkdir, stat } from "node:fs/promises";
+import { access, appendFile, mkdir, readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { KIND_EXTENSIONS } from "../file-kinds.js";
@@ -415,6 +415,92 @@ function nodeBinCandidates(root: string, baseName: string): string[] {
 	}
 	return [localBase, baseName];
 }
+
+const ESLINT_CONFIG_FILES = [
+	".eslintrc",
+	".eslintrc.js",
+	".eslintrc.cjs",
+	".eslintrc.json",
+	".eslintrc.yaml",
+	".eslintrc.yml",
+	"eslint.config.js",
+	"eslint.config.mjs",
+	"eslint.config.cjs",
+	"eslint.config.ts",
+];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function packageHasEslintDependency(pkg: Record<string, unknown>): boolean {
+	for (const section of [
+		"dependencies",
+		"devDependencies",
+		"peerDependencies",
+		"optionalDependencies",
+	]) {
+		const deps = pkg[section];
+		if (isRecord(deps) && Object.hasOwn(deps, "eslint")) {
+			return true;
+		}
+	}
+	return false;
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+	try {
+		await stat(filePath);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function rejectHomeRoot(root: string): string | undefined {
+	return normalizeRootKey(root) === normalizeRootKey(os.homedir())
+		? undefined
+		: root;
+}
+
+export const EslintRoot: RootFunction = async (file: string) => {
+	let currentDir = path.resolve(path.dirname(file));
+	const fsRoot = path.parse(currentDir).root;
+
+	while (true) {
+		for (const cfg of ESLINT_CONFIG_FILES) {
+			if (await pathExists(path.join(currentDir, cfg))) {
+				return rejectHomeRoot(currentDir);
+			}
+		}
+
+		const pkgPath = path.join(currentDir, "package.json");
+		if (await pathExists(pkgPath)) {
+			try {
+				const pkg = JSON.parse(await readFile(pkgPath, "utf-8")) as unknown;
+				if (
+					isRecord(pkg) &&
+					(pkg.eslintConfig !== undefined || packageHasEslintDependency(pkg))
+				) {
+					return rejectHomeRoot(currentDir);
+				}
+			} catch {
+				// Invalid package.json is not a positive ESLint signal.
+			}
+
+			// Treat package.json as a package boundary. A parent repo-level ESLint setup
+			// should not make plain nested JS packages pay the ESLint LSP startup cost.
+			return undefined;
+		}
+
+		if (currentDir === fsRoot) break;
+		const parent = path.dirname(currentDir);
+		if (parent === currentDir) break;
+		currentDir = parent;
+	}
+
+	return undefined;
+};
 
 function normalizeRootKey(root: string): string {
 	return process.platform === "win32"
@@ -1760,16 +1846,7 @@ export const ESLintServer: LSPServerInfo = {
 	name: "ESLint Language Server",
 	// Note: .ts/.tsx handled by TypeScript LSP + Biome
 	extensions: [".js", ".jsx", ".svelte", ".vue"],
-	root: IgnoreHomeRoot(
-		createRootDetector([
-			".eslintrc",
-			".eslintrc.json",
-			".eslintrc.js",
-			"eslint.config.js",
-			"eslint.config.mjs",
-			"package.json",
-		]),
-	),
+	root: EslintRoot,
 	spawn(root, options) {
 		return resolveAndLaunch(
 			{

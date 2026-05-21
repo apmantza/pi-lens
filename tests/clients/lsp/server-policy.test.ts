@@ -49,6 +49,102 @@ describe("lsp server policy", () => {
 		expect(missing).toEqual([]);
 	});
 
+	it("does not activate eslint LSP for package.json-only JS packages", async () => {
+		const { ESLintServer } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-eslint-empty-"));
+		dirs.push(tmp);
+
+		const file = path.join(tmp, "src", "index.js");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(
+			path.join(tmp, "package.json"),
+			JSON.stringify({ name: "plain" }),
+		);
+		fs.writeFileSync(file, "console.log('ok');\n");
+
+		await expect(ESLintServer.root(file)).resolves.toBeUndefined();
+	});
+
+	it("activates eslint LSP when an eslint config file exists", async () => {
+		const { ESLintServer } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-eslint-file-"));
+		dirs.push(tmp);
+
+		const file = path.join(tmp, "src", "index.js");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(
+			path.join(tmp, "package.json"),
+			JSON.stringify({ name: "configured" }),
+		);
+		fs.writeFileSync(
+			path.join(tmp, "eslint.config.js"),
+			"export default [];\n",
+		);
+		fs.writeFileSync(file, "console.log('ok');\n");
+
+		await expect(ESLintServer.root(file)).resolves.toBe(tmp);
+	});
+
+	it("activates eslint LSP when package.json declares eslint config", async () => {
+		const { ESLintServer } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-eslint-config-"),
+		);
+		dirs.push(tmp);
+
+		const file = path.join(tmp, "src", "index.js");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(
+			path.join(tmp, "package.json"),
+			JSON.stringify({ name: "configured", eslintConfig: { root: true } }),
+		);
+		fs.writeFileSync(file, "console.log('ok');\n");
+
+		await expect(ESLintServer.root(file)).resolves.toBe(tmp);
+	});
+
+	it("activates eslint LSP when nearest package depends on eslint", async () => {
+		const { ESLintServer } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-eslint-dep-"));
+		dirs.push(tmp);
+
+		const file = path.join(tmp, "src", "index.js");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(
+			path.join(tmp, "package.json"),
+			JSON.stringify({
+				name: "configured",
+				devDependencies: { eslint: "^9.0.0" },
+			}),
+		);
+		fs.writeFileSync(file, "console.log('ok');\n");
+
+		await expect(ESLintServer.root(file)).resolves.toBe(tmp);
+	});
+
+	it("does not let parent eslint config activate a nested package without eslint", async () => {
+		const { ESLintServer } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-eslint-boundary-"),
+		);
+		dirs.push(tmp);
+
+		const nested = path.join(tmp, "packages", "plain");
+		const file = path.join(nested, "src", "index.js");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(
+			path.join(tmp, "eslint.config.js"),
+			"export default [];\n",
+		);
+		fs.writeFileSync(
+			path.join(nested, "package.json"),
+			JSON.stringify({ name: "plain" }),
+		);
+		fs.writeFileSync(file, "console.log('ok');\n");
+
+		await expect(ESLintServer.root(file)).resolves.toBeUndefined();
+	});
+
 	it("prioritizes go.work root over go.mod", async () => {
 		const { PriorityRoot } = await import("../../../clients/lsp/server.js");
 		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-go-root-"));

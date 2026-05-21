@@ -365,7 +365,22 @@ describe("getFormattersForFile — policy selection", () => {
 		expect(formatters.map((f) => f.name)).toEqual(["prettier"]);
 	});
 
-	it("uses prettier as the smart default for unconfigured Markdown files", async () => {
+	it("does not force prettier on unconfigured Markdown files", async () => {
+		// Prettier's markdown defaults reflow lines and normalize emphasis markers,
+		// producing noisy diffs on doc-only writes. Users opt in via project prettier config.
+		const filePath = fileIn(tmpDir, "README.md");
+		const formatters = await getFormattersForFile(filePath, tmpDir);
+		expect(formatters).toEqual([]);
+	});
+
+	it("does not force prettier on unconfigured .mdx files", async () => {
+		const filePath = fileIn(tmpDir, "page.mdx");
+		const formatters = await getFormattersForFile(filePath, tmpDir);
+		expect(formatters).toEqual([]);
+	});
+
+	it("runs prettier on Markdown when project has explicit prettier config", async () => {
+		createTempFile(tmpDir, ".prettierrc", "{}");
 		const filePath = fileIn(tmpDir, "README.md");
 		const formatters = await getFormattersForFile(filePath, tmpDir);
 		expect(formatters.map((f) => f.name)).toEqual(["prettier"]);
