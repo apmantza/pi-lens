@@ -56,7 +56,6 @@ describe("tool-policy", () => {
 		expect(getSmartDefaultFormatterName("/tmp/file.less")).toBe("prettier");
 		expect(getSmartDefaultFormatterName("/tmp/file.html")).toBe("prettier");
 		expect(getSmartDefaultFormatterName("/tmp/file.yaml")).toBe("prettier");
-		expect(getSmartDefaultFormatterName("/tmp/file.md")).toBe("prettier");
 		expect(getSmartDefaultFormatterName("/tmp/file.kt")).toBe("ktlint");
 		expect(getSmartDefaultFormatterName("/tmp/file.swift")).toBe("swiftformat");
 		expect(getSmartDefaultFormatterName("/tmp/file.fs")).toBe("fantomas");
@@ -81,6 +80,26 @@ describe("tool-policy", () => {
 		expect(getSmartDefaultFormatterName("/tmp/file.php")).toBeUndefined();
 		expect(getSmartDefaultFormatterName("/tmp/file.lua")).toBeUndefined();
 		expect(getSmartDefaultFormatterName("/tmp/file.ml")).toBeUndefined();
+	});
+
+	it("does not auto-apply prettier to markdown without a project prettier config", () => {
+		// Prettier's markdown defaults reflow lines, normalize emphasis markers, and
+		// restyle lists. Users opt in via project `.prettierrc`; the smart-default gate
+		// still honours an explicit config, but no auto-format on empty configuration.
+		expect(getSmartDefaultFormatterName("/tmp/file.md")).toBeUndefined();
+		expect(getSmartDefaultFormatterName("/tmp/file.mdx")).toBeUndefined();
+		expect(getFormatterPolicyForFile("/tmp/file.md")).toMatchObject({
+			formatterNames: ["prettier"],
+			defaultFormatter: "prettier",
+			defaultWhenUnconfigured: false,
+			gate: "smart-default",
+		});
+		expect(getFormatterPolicyForFile("/tmp/file.mdx")).toMatchObject({
+			formatterNames: ["prettier"],
+			defaultFormatter: "prettier",
+			defaultWhenUnconfigured: false,
+			gate: "smart-default",
+		});
 	});
 
 	it("maps managed smart-default formatters to auto-installable tool ids", () => {

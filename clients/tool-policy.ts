@@ -197,7 +197,9 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 		{
 			formatterNames: ["prettier"],
 			defaultFormatter: "prettier",
-			defaultWhenUnconfigured: true,
+			// Prettier's markdown defaults reflow lines, normalize emphasis (* -> _),
+			// and restyle lists. Opt-in via project prettier config; do not run by default.
+			defaultWhenUnconfigured: false,
 			gate: "smart-default",
 		},
 	],
@@ -206,7 +208,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 		{
 			formatterNames: ["prettier"],
 			defaultFormatter: "prettier",
-			defaultWhenUnconfigured: true,
+			defaultWhenUnconfigured: false,
 			gate: "smart-default",
 		},
 	],
