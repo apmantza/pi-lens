@@ -22,6 +22,10 @@ export const RUNTIME_CONFIG = {
 		alwaysShowFirstN: 2,
 		showEveryNth: 5,
 	},
+	reviewGraph: {
+		maxFiles: 1_000,
+		maxFileBytes: 1 * 1024 * 1024,
+	},
 	turnEnd: {
 		maxLines: 20,
 		maxChars: 1000,

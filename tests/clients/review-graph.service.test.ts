@@ -196,6 +196,48 @@ describe("review graph service", () => {
 		}
 	});
 
+	it("skips full graph builds when source count exceeds the safety cap", async () => {
+		const env = setupTestEnvironment("pi-lens-review-graph-cap-");
+		const previous = process.env.PI_LENS_REVIEW_GRAPH_MAX_FILES;
+		process.env.PI_LENS_REVIEW_GRAPH_MAX_FILES = "2";
+		try {
+			const changedPath = createTempFile(
+				env.tmpDir,
+				"src/changed.ts",
+				"export function changed() { return 1; }\n",
+			);
+			for (let i = 0; i < 3; i += 1) {
+				createTempFile(
+					env.tmpDir,
+					`src/extra-${i}.ts`,
+					`export function extra${i}() { return ${i}; }\n`,
+				);
+			}
+
+			const facts = new FactStore();
+			facts.setSessionFact(
+				`session.reviewGraph.changedSymbols:${normalizeMapKey(changedPath)}`,
+				["changed"],
+			);
+			const graph = await buildOrUpdateGraph(env.tmpDir, [changedPath], facts);
+
+			expect(getLastGraphBuildInfo()).toMatchObject({
+				mode: "skipped",
+				skipReason: "too_many_files",
+				maxFileCount: 2,
+			});
+			expect(graph.nodes.size).toBe(0);
+			expect(
+				graph.changedSymbolsByFile.get(normalizeMapKey(changedPath)),
+			).toEqual(["changed"]);
+		} finally {
+			if (previous === undefined)
+				delete process.env.PI_LENS_REVIEW_GRAPH_MAX_FILES;
+			else process.env.PI_LENS_REVIEW_GRAPH_MAX_FILES = previous;
+			env.cleanup();
+		}
+	});
+
 	it("rebuilds indexes on workspace cache hit so impact cascade still works", async () => {
 		const env = setupTestEnvironment("pi-lens-review-graph-cache-");
 		try {

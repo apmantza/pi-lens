@@ -15,7 +15,8 @@ import { featureHintMetadata } from "../feature-hints.js";
 import { detectFileKind } from "../file-kinds.js";
 import { detectFileRole } from "../file-role.js";
 import { normalizeMapKey } from "../path-utils.js";
-import { getSourceFiles } from "../scan-utils.js";
+import { collectProjectSourceFiles } from "../project-scan-policy.js";
+import { RUNTIME_CONFIG } from "../runtime-config.js";
 import { TreeSitterClient } from "../tree-sitter-client.js";
 import {
 	type ExtractedSymbols,
@@ -38,10 +39,15 @@ const _workspaceGraphCache = new Map<
 	string,
 	{ signature: string; fileSignatures: Map<string, string>; graph: ReviewGraph }
 >();
-let _lastGraphBuildInfo: {
+type GraphBuildInfo = {
 	reused: boolean;
-	mode: "full" | "cached" | "incremental";
-} = {
+	mode: "full" | "cached" | "incremental" | "skipped";
+	skipReason?: string;
+	sourceFileCount?: number;
+	maxFileCount?: number;
+};
+
+let _lastGraphBuildInfo: GraphBuildInfo = {
 	reused: false,
 	mode: "full",
 };
@@ -56,10 +62,7 @@ export function clearReviewGraphWorkspaceCache(): void {
 	_lastGraphBuildInfo = { reused: false, mode: "full" };
 }
 
-export function getLastGraphBuildInfo(): {
-	reused: boolean;
-	mode: "full" | "cached" | "incremental";
-} {
+export function getLastGraphBuildInfo(): GraphBuildInfo {
 	return _lastGraphBuildInfo;
 }
 
@@ -154,12 +157,42 @@ function changedSignatureFiles(
 	return changed;
 }
 
+function getReviewGraphMaxFiles(): number {
+	const override = Number.parseInt(
+		process.env.PI_LENS_REVIEW_GRAPH_MAX_FILES ?? "",
+		10,
+	);
+	return Number.isFinite(override) && override > 0
+		? override
+		: RUNTIME_CONFIG.reviewGraph.maxFiles;
+}
+
+function getReviewGraphMaxFileBytes(): number {
+	const override = Number.parseInt(
+		process.env.PI_LENS_REVIEW_GRAPH_MAX_FILE_BYTES ?? "",
+		10,
+	);
+	return Number.isFinite(override) && override > 0
+		? override
+		: RUNTIME_CONFIG.reviewGraph.maxFileBytes;
+}
+
+function isWithinReviewGraphSizeLimit(file: string): boolean {
+	try {
+		return fs.statSync(file).size <= getReviewGraphMaxFileBytes();
+	} catch {
+		return false;
+	}
+}
+
 function getGraphSourceFiles(cwd: string): string[] {
-	return getSourceFiles(cwd)
+	return collectProjectSourceFiles(cwd)
 		.map((file) => normalizeMapKey(file))
 		.filter((file) => {
 			const kind = detectFileKind(file);
-			return !!kind && MAIN_KINDS.has(kind);
+			return (
+				!!kind && MAIN_KINDS.has(kind) && isWithinReviewGraphSizeLimit(file)
+			);
 		});
 }
 
@@ -752,6 +785,24 @@ async function _doBuildGraph(
 	const normalizedChanged = changedFiles.map((file) => normalizeMapKey(file));
 	const normalizedChangedSet = new Set(normalizedChanged);
 	const filesToBuild = getGraphSourceFiles(cwd);
+	const maxGraphFiles = getReviewGraphMaxFiles();
+	if (filesToBuild.length > maxGraphFiles) {
+		const graph = createEmptyGraph();
+		graph.version = REVIEW_GRAPH_VERSION;
+		graph.builtAt = new Date().toISOString();
+		for (const file of normalizedChanged) {
+			upsertChangedSymbols(graph, facts, file);
+		}
+		_lastGraphBuildInfo = {
+			reused: false,
+			mode: "skipped",
+			skipReason: "too_many_files",
+			sourceFileCount: filesToBuild.length,
+			maxFileCount: maxGraphFiles,
+		};
+		facts.setSessionFact("session.reviewGraph", graph);
+		return graph;
+	}
 	const fileSignatures = sourceSignatureMap(filesToBuild);
 	const signature = sourceSignatureFromMap(fileSignatures);
 

@@ -566,7 +566,12 @@ export async function computeCascadeForFile(
 			graphChangedSymbolCount: (
 				graph.changedSymbolsByFile.get(normalizedFileKey) ?? []
 			).length,
-			metadata: { graphBuildMode: graphBuildInfo.mode },
+			metadata: {
+				graphBuildMode: graphBuildInfo.mode,
+				skipReason: graphBuildInfo.skipReason,
+				sourceFileCount: graphBuildInfo.sourceFileCount,
+				maxFileCount: graphBuildInfo.maxFileCount,
+			},
 		});
 
 		impact = computeImpactCascade(graph, normalizedFile, cwd);
