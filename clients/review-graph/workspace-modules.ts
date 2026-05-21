@@ -7,7 +7,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { isExcludedDirName } from "../file-utils.js";
+import { getProjectIgnoreMatcher, isExcludedDirName } from "../file-utils.js";
 import { normalizeMapKey } from "../path-utils.js";
 
 export interface WorkspaceModule {
@@ -116,8 +116,16 @@ function expandWorkspacePattern(cwd: string, pattern: string): string[] {
 	} catch {
 		return [];
 	}
+	const ignoreMatcher = getProjectIgnoreMatcher(cwd);
 	return entries
-		.filter((entry) => entry.isDirectory() && !isExcludedDirName(entry.name))
+		.filter((entry) => {
+			const fullPath = path.join(baseDir, entry.name);
+			return (
+				entry.isDirectory() &&
+				!isExcludedDirName(entry.name) &&
+				!ignoreMatcher.isIgnored(fullPath, true)
+			);
+		})
 		.map((entry) => path.join(baseDir, entry.name))
 		.filter(
 			(root) =>
@@ -455,6 +463,7 @@ export function getModuleSourceFiles(
 ): string[] {
 	const files: string[] = [];
 	const root = normalizeMapKey(moduleRoot);
+	const ignoreMatcher = getProjectIgnoreMatcher(root);
 	const visit = (dir: string, depth: number): void => {
 		if (files.length >= maxFiles || depth > 4) return;
 		let entries: fs.Dirent[] = [];
@@ -466,14 +475,20 @@ export function getModuleSourceFiles(
 		entries.sort((a, b) => a.name.localeCompare(b.name));
 		for (const entry of entries) {
 			if (files.length >= maxFiles) break;
+			const fullPath = path.join(dir, entry.name);
 			if (entry.isDirectory()) {
-				if (!isExcludedDirName(entry.name))
-					visit(path.join(dir, entry.name), depth + 1);
+				if (
+					!isExcludedDirName(entry.name) &&
+					!ignoreMatcher.isIgnored(fullPath, true)
+				) {
+					visit(fullPath, depth + 1);
+				}
 				continue;
 			}
 			if (!entry.isFile()) continue;
+			if (ignoreMatcher.isIgnored(fullPath, false)) continue;
 			if (SOURCE_EXTS.has(path.extname(entry.name).toLowerCase())) {
-				files.push(normalizeMapKey(path.join(dir, entry.name)));
+				files.push(normalizeMapKey(fullPath));
 			}
 		}
 	};

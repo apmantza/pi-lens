@@ -20,6 +20,7 @@ import {
 	resetDispatchBaselines,
 } from "./clients/dispatch/integration.js";
 import { detectFileKind } from "./clients/file-kinds.js";
+import { isPathIgnoredByProject } from "./clients/file-utils.js";
 import {
 	getFormatService,
 	resetFormatService,
@@ -1058,6 +1059,10 @@ export default function (pi: ExtensionAPI) {
 			`tool_call fired for: ${filePath} (exists: ${nodeFs.existsSync(filePath)})`,
 		);
 		if (!nodeFs.existsSync(filePath)) return;
+		if (isPathIgnoredByProject(filePath, runtime.projectRoot, false)) {
+			dbg(`tool_call: skipping gitignored file ${filePath}`);
+			return;
+		}
 
 		const isExternalOrVendor = isExternalOrVendorFile(
 			filePath,

@@ -18,7 +18,7 @@
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
-import { isExcludedDirName } from "./file-utils.js";
+import { getProjectIgnoreMatcher, isExcludedDirName } from "./file-utils.js";
 import { resolvePackagePath } from "./package-root.js";
 
 const _require = createRequire(import.meta.url);
@@ -1431,6 +1431,8 @@ export class TreeSitterClient {
 	): string[] {
 		const files: string[] = [];
 		const extensions = this.getExtensionsForLanguage(languageId);
+		const rootDir = path.resolve(dir);
+		const ignoreMatcher = getProjectIgnoreMatcher(rootDir);
 
 		const scan = (d: string) => {
 			try {
@@ -1439,8 +1441,10 @@ export class TreeSitterClient {
 					const full = path.join(d, entry.name);
 					if (entry.isDirectory()) {
 						if (isExcludedDirName(entry.name)) continue;
+						if (ignoreMatcher.isIgnored(full, true)) continue;
 						scan(full);
 					} else if (extensions.some((ext) => entry.name.endsWith(ext))) {
+						if (ignoreMatcher.isIgnored(full, false)) continue;
 						if (!fileFilter || fileFilter(full)) {
 							files.push(full);
 						}
@@ -1449,7 +1453,7 @@ export class TreeSitterClient {
 			} catch {}
 		};
 
-		scan(dir);
+		scan(rootDir);
 		return files;
 	}
 

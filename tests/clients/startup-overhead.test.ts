@@ -11,6 +11,7 @@
  * usually means something synchronous crept onto the hot path.
  */
 
+import * as os from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { handleSessionStart } from "../../clients/runtime-session.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
@@ -119,6 +120,26 @@ describe("startup overhead — interactive path regression guard", () => {
 			expect(reported).toBeLessThan(QUICK_MODE_BUDGET_MS);
 		} finally {
 			env.cleanup();
+			restoreMode();
+		}
+	});
+
+	it("home-directory full mode does not source-scan the home tree", async () => {
+		const restoreMode = setStartupMode("full");
+		const dbgLog: string[] = [];
+
+		try {
+			await handleSessionStart(
+				makeDeps(os.homedir(), (msg) => dbgLog.push(msg)),
+			);
+
+			const reported = extractReportedMs(dbgLog);
+			expect(reported).not.toBeNull();
+			expect(reported).toBeLessThan(FULL_MODE_BUDGET_MS);
+			expect(dbgLog).toContainEqual(
+				expect.stringContaining("warmCaches=false, reason=home-dir"),
+			);
+		} finally {
 			restoreMode();
 		}
 	});

@@ -12,7 +12,12 @@ import * as fs from "node:fs";
 import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { getExcludedDirGlobs, isExcludedDirName } from "./file-utils.js";
+import {
+	getExcludedDirGlobs,
+	getProjectIgnoreGlobs,
+	getProjectIgnoreMatcher,
+	isExcludedDirName,
+} from "./file-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 
 // --- Types ---
@@ -62,6 +67,7 @@ export class JscpdClient {
 	 */
 	private hasSourceFilesRecursive(rootDir: string): boolean {
 		const stack = [rootDir];
+		const ignoreMatcher = getProjectIgnoreMatcher(rootDir);
 		let visited = 0;
 		const MAX_ENTRIES = 6000;
 
@@ -80,11 +86,15 @@ export class JscpdClient {
 				visited += 1;
 				if (entry.isSymbolicLink()) continue;
 				if (entry.isDirectory()) {
+					const fullPath = path.join(dir, entry.name);
 					if (isExcludedDirName(entry.name)) continue;
-					stack.push(path.join(dir, entry.name));
+					if (ignoreMatcher.isIgnored(fullPath, true)) continue;
+					stack.push(fullPath);
 					continue;
 				}
 				if (!entry.isFile()) continue;
+				if (ignoreMatcher.isIgnored(path.join(dir, entry.name), false))
+					continue;
 				if (/\.(ts|tsx|js|jsx|mjs|cjs)$/.test(entry.name)) {
 					if (entry.name.endsWith(".d.ts")) continue;
 					return true;
@@ -215,6 +225,7 @@ export class JscpdClient {
 		// Build ignore pattern from shared exclusions + scanner-specific patterns.
 		const baseIgnores = [
 			...getExcludedDirGlobs(),
+			...getProjectIgnoreGlobs(cwd),
 			"**/*.md",
 			"**/*.txt",
 			"**/*.json",

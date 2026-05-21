@@ -2,7 +2,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { readGitignoreDirs } from "../../clients/file-utils.js";
+import {
+	createProjectIgnoreMatcher,
+	readGitignoreDirs,
+} from "../../clients/file-utils.js";
 import { collectSourceFiles } from "../../clients/source-filter.js";
 
 let tmpDir: string;
@@ -74,6 +77,64 @@ describe("readGitignoreDirs", () => {
 	});
 });
 
+describe("createProjectIgnoreMatcher", () => {
+	it("matches rooted, glob, nested path, and negated gitignore patterns", () => {
+		fs.writeFileSync(
+			path.join(tmpDir, ".gitignore"),
+			["/profiles/", "cache/**", "src/fixtures/", "*.log", "!keep.log"].join(
+				"\n",
+			),
+		);
+		const matcher = createProjectIgnoreMatcher(tmpDir);
+
+		expect(matcher.isIgnored(path.join(tmpDir, "profiles"), true)).toBe(true);
+		expect(matcher.isIgnored(path.join(tmpDir, "profiles", "chrome.js"))).toBe(
+			true,
+		);
+		expect(
+			matcher.isIgnored(path.join(tmpDir, "nested", "profiles"), true),
+		).toBe(false);
+		expect(matcher.isIgnored(path.join(tmpDir, "cache", "data.js"))).toBe(true);
+		expect(matcher.isIgnored(path.join(tmpDir, "src", "fixtures"), true)).toBe(
+			true,
+		);
+		expect(
+			matcher.isIgnored(path.join(tmpDir, "src", "fixtures", "a.ts")),
+		).toBe(true);
+		expect(matcher.isIgnored(path.join(tmpDir, "logs", "debug.log"))).toBe(
+			true,
+		);
+		expect(matcher.isIgnored(path.join(tmpDir, "keep.log"))).toBe(false);
+	});
+
+	it("uses repository root gitignore when matcher is created from a subdirectory", () => {
+		fs.mkdirSync(path.join(tmpDir, ".git"));
+		fs.writeFileSync(path.join(tmpDir, ".gitignore"), "/profiles/\n");
+		const src = path.join(tmpDir, "src");
+		fs.mkdirSync(src);
+		const matcher = createProjectIgnoreMatcher(src);
+
+		expect(matcher.rootDir).toBe(path.resolve(tmpDir));
+		expect(matcher.isIgnored(path.join(tmpDir, "profiles", "chrome.js"))).toBe(
+			true,
+		);
+	});
+
+	it("applies nested .gitignore files relative to their directories", () => {
+		const src = path.join(tmpDir, "src");
+		fs.mkdirSync(src);
+		fs.writeFileSync(path.join(src, ".gitignore"), "profiles/\n*.snap\n");
+		const matcher = createProjectIgnoreMatcher(tmpDir);
+
+		expect(matcher.isIgnored(path.join(src, "profiles"), true)).toBe(true);
+		expect(matcher.isIgnored(path.join(src, "profiles", "chrome.js"))).toBe(
+			true,
+		);
+		expect(matcher.isIgnored(path.join(src, "actual.ts"))).toBe(false);
+		expect(matcher.isIgnored(path.join(src, "fixture.snap"))).toBe(true);
+	});
+});
+
 describe("collectSourceFiles — gitignore exclusion", () => {
 	it("excludes directories named in root .gitignore", () => {
 		fs.writeFileSync(path.join(tmpDir, ".gitignore"), "third_party/\n");
@@ -84,13 +145,44 @@ describe("collectSourceFiles — gitignore exclusion", () => {
 		// Vendored file that should be excluded
 		const thirdParty = path.join(tmpDir, "third_party");
 		fs.mkdirSync(thirdParty);
-		fs.writeFileSync(path.join(thirdParty, "upstream.ts"), "export const y = 2;\n");
+		fs.writeFileSync(
+			path.join(thirdParty, "upstream.ts"),
+			"export const y = 2;\n",
+		);
 
 		const files = collectSourceFiles(tmpDir, { extensions: [".ts"] });
 		const names = files.map((f) => path.basename(f));
 
 		expect(names).toContain("main.ts");
 		expect(names).not.toContain("upstream.ts");
+	});
+
+	it("excludes rooted and globbed profile directories from source collection", () => {
+		fs.writeFileSync(
+			path.join(tmpDir, ".gitignore"),
+			"/profiles/\nignored-profiles/**\n",
+		);
+		fs.mkdirSync(path.join(tmpDir, "src"));
+		fs.writeFileSync(
+			path.join(tmpDir, "src", "main.js"),
+			"export const ok = true;\n",
+		);
+
+		for (const dirName of ["profiles", "ignored-profiles"]) {
+			const dir = path.join(tmpDir, dirName);
+			fs.mkdirSync(dir);
+			fs.writeFileSync(
+				path.join(dir, "chrome.js"),
+				"export const profile = {};\n",
+			);
+		}
+
+		const files = collectSourceFiles(tmpDir, { extensions: [".js"] });
+		const relative = files.map((f) =>
+			path.relative(tmpDir, f).replace(/\\/g, "/"),
+		);
+
+		expect(relative).toEqual(["src/main.js"]);
 	});
 
 	it("still excludes EXCLUDED_DIRS entries even without .gitignore", () => {

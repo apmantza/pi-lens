@@ -13,13 +13,18 @@
  * - Vue/Svelte: .vue/.svelte shadows .js
  * - CoffeeScript: .coffee shadows .js
  *
- * Files without higher-precedence siblings are always kept (hand-written JS, Python,
- * Go, Rust, etc.).
+ * Files without higher-precedence siblings are kept only when they do not look
+ * generated/codegen-produced (hand-written JS, Python, Go, Rust, etc.).
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { isExcludedDirName, readGitignoreDirs } from "./file-utils.js";
+import { getProjectIgnoreMatcher, isExcludedDirName } from "./file-utils.js";
+import {
+	isDeclarationFile,
+	isGeneratedArtifactDirectoryName,
+	isGeneratedOrArtifact,
+} from "./generated-artifacts.js";
 
 /**
  * Mapping of file extension to the extensions it shadows (build artifacts).
@@ -54,6 +59,39 @@ export const ALL_SCANNABLE_EXTENSIONS = [
 	".gemspec",
 	".ru",
 ];
+
+export interface SourceCollectionOptions {
+	/** Additional directory names to exclude (merged with defaults) */
+	excludeDirs?: string[];
+	/** File extensions to consider (defaults to ALL_SCANNABLE_EXTENSIONS) */
+	extensions?: string[];
+	/** Whether to follow symlinks (default: false) */
+	followSymlinks?: boolean;
+	/** Keep generated/codegen files instead of filtering them (default: false) */
+	includeGenerated?: boolean;
+	/** Keep declaration stubs such as .d.ts (default: false) */
+	includeDeclarationFiles?: boolean;
+	/** Inspect a small header prefix for generated-code banners (default: true) */
+	inspectGeneratedHeaders?: boolean;
+}
+
+function shouldSkipGeneratedOrArtifact(
+	filePath: string,
+	options?: Pick<
+		SourceCollectionOptions,
+		"includeGenerated" | "includeDeclarationFiles" | "inspectGeneratedHeaders"
+	>,
+): boolean {
+	const includeDeclarations = options?.includeDeclarationFiles === true;
+	if (options?.includeGenerated === true) {
+		return !includeDeclarations && isDeclarationFile(filePath);
+	}
+
+	return isGeneratedOrArtifact(filePath, {
+		readContentHeader: options?.inspectGeneratedHeaders !== false,
+		includeDeclarations: !includeDeclarations,
+	});
+}
 
 /**
  * Extract the basename (filename without extension) from a path.
@@ -101,10 +139,17 @@ export function isBuildArtifact(filePath: string): boolean {
 }
 
 /**
- * Filter a list of files, removing build artifacts that have source siblings.
- * Returns de-duplicated list keeping only highest-precedence sources.
+ * Filter a list of files, removing build artifacts that have source siblings
+ * plus likely generated/codegen artifacts.
+ * Returns de-duplicated list keeping only highest-precedence source files.
  */
-export function filterSourceFiles(filePaths: string[]): string[] {
+export function filterSourceFiles(
+	filePaths: string[],
+	options?: Pick<
+		SourceCollectionOptions,
+		"includeGenerated" | "includeDeclarationFiles" | "inspectGeneratedHeaders"
+	>,
+): string[] {
 	// Track which files we're keeping and why we're skipping others
 	const keep: string[] = [];
 	const skipReasons = new Map<string, string>(); // skipped file -> kept source
@@ -114,6 +159,9 @@ export function filterSourceFiles(filePaths: string[]): string[] {
 		if (sourceSibling) {
 			// This is a build artifact, skip it
 			skipReasons.set(filePath, sourceSibling);
+		} else if (shouldSkipGeneratedOrArtifact(filePath, options)) {
+			// Generated/codegen outputs are not hand-written source.
+			skipReasons.set(filePath, "generated-or-artifact");
 		} else {
 			// No higher-precedence source, keep it
 			keep.push(filePath);
@@ -124,25 +172,20 @@ export function filterSourceFiles(filePaths: string[]): string[] {
 }
 
 /**
- * Recursively collect all source files in a directory, excluding build artifacts.
+ * Recursively collect all source files in a directory, excluding build artifacts
+ * and likely generated/codegen artifacts.
  *
  * @param dir - Directory to scan
  * @param options - Optional configuration
- * @returns Array of absolute file paths that are source files (not build artifacts)
+ * @returns Array of absolute file paths that are source files (not artifacts)
  */
 export function collectSourceFiles(
 	dir: string,
-	options?: {
-		/** Additional directory names to exclude (merged with defaults) */
-		excludeDirs?: string[];
-		/** File extensions to consider (defaults to ALL_SCANNABLE_EXTENSIONS) */
-		extensions?: string[];
-		/** Whether to follow symlinks (default: false) */
-		followSymlinks?: boolean;
-	},
+	options?: SourceCollectionOptions,
 ): string[] {
-	const gitignoreDirs = readGitignoreDirs(path.resolve(dir));
-	const extraExcludePatterns = [...(options?.excludeDirs ?? []), ...gitignoreDirs];
+	const rootDir = path.resolve(dir);
+	const ignoreMatcher = getProjectIgnoreMatcher(rootDir);
+	const extraExcludePatterns = options?.excludeDirs ?? [];
 
 	const extensions = new Set(options?.extensions || ALL_SCANNABLE_EXTENSIONS);
 
@@ -161,21 +204,30 @@ export function collectSourceFiles(
 
 			if (entry.isDirectory()) {
 				if (isExcludedDirName(entry.name, extraExcludePatterns)) continue;
+				if (ignoreMatcher.isIgnored(fullPath, true)) continue;
+				if (
+					options?.includeGenerated !== true &&
+					isGeneratedArtifactDirectoryName(entry.name)
+				) {
+					continue;
+				}
 				if (!options?.followSymlinks && entry.isSymbolicLink()) continue;
 				scan(fullPath);
 			} else if (entry.isFile()) {
+				if (ignoreMatcher.isIgnored(fullPath, false)) continue;
 				const ext = path.extname(entry.name).toLowerCase();
 				if (!extensions.has(ext)) continue;
 
-				// Skip if this is a build artifact
+				// Skip if this is a build artifact or generated/codegen output.
 				if (isBuildArtifact(fullPath)) continue;
+				if (shouldSkipGeneratedOrArtifact(fullPath, options)) continue;
 
 				files.push(fullPath);
 			}
 		}
 	}
 
-	scan(path.resolve(dir));
+	scan(rootDir);
 	return files;
 }
 

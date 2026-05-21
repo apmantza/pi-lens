@@ -505,7 +505,10 @@ export async function handleSessionStart(
 		startupScan.canWarmCaches || startupScan.reason === "too-many-source-files";
 	const analysisRoot = useScanRootForSignals ? scanRoot : cwd;
 	runtime.projectRoot = cwd;
-	const languageProfile = detectProjectLanguageProfile(analysisRoot);
+	const languageProfile = detectProjectLanguageProfile(
+		analysisRoot,
+		startupScan.canWarmCaches ? undefined : [],
+	);
 	phase("language-profile");
 	dbg(`session_start cwd: ${cwd}`);
 	dbg(

@@ -4,6 +4,7 @@ import * as path from "node:path";
 import type { BiomeClient } from "./biome-client.js";
 import type { CacheManager } from "./cache-manager.js";
 import { createFileTime } from "./file-time.js";
+import { isPathIgnoredByProject } from "./file-utils.js";
 import type { ReadGuard } from "./read-guard.js";
 import { getFormatService } from "./format-service.js";
 import { isExternalOrVendorFile } from "./path-utils.js";
@@ -211,6 +212,11 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	const toolResultStart = Date.now();
 	dbg(`tool_result: tracking turn state for ${event.toolName} on ${filePath}`);
 
+	if (isPathIgnoredByProject(filePath, workspaceRoot, false)) {
+		dbg(`tool_result: skipping gitignored file ${filePath}`);
+		return;
+	}
+
 	const cwd = resolveLanguageRootForFile(filePath, workspaceRoot);
 	dbg(`tool_result: resolved dispatch cwd ${cwd} for ${filePath}`);
 	if (event.model || event.provider || event.sessionId || event.session?.id) {
@@ -242,7 +248,13 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 				dbg(
 					`tool_result: adding range ${range.start}-${range.end} for ${filePath}`,
 				);
-				cacheManager.addModifiedRange(filePath, range, importsChanged, cwd, runtime.telemetrySessionId);
+				cacheManager.addModifiedRange(
+					filePath,
+					range,
+					importsChanged,
+					cwd,
+					runtime.telemetrySessionId,
+				);
 			}
 			dbg(
 				`tool_result: turn state after add: ${JSON.stringify(cacheManager.readTurnState(cwd))}`,

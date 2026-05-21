@@ -10,7 +10,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { isExcludedDirName } from "./file-utils.js";
+import { getProjectIgnoreMatcher, isExcludedDirName } from "./file-utils.js";
 
 export const PROJECT_ROOT_MARKERS = [
 	".git",
@@ -60,7 +60,9 @@ export function countSourceFilesWithinLimit(
 	limit: number,
 ): number {
 	let count = 0;
-	const stack = [path.resolve(dir)];
+	const rootDir = path.resolve(dir);
+	const ignoreMatcher = getProjectIgnoreMatcher(rootDir);
+	const stack = [rootDir];
 
 	while (stack.length > 0) {
 		const current = stack.pop();
@@ -74,12 +76,18 @@ export function countSourceFilesWithinLimit(
 		}
 
 		for (const entry of entries) {
+			const fullPath = path.join(current, entry.name);
 			if (entry.isDirectory()) {
 				if (isExcludedDirName(entry.name)) continue;
-				stack.push(path.join(current, entry.name));
+				if (ignoreMatcher.isIgnored(fullPath, true)) continue;
+				stack.push(fullPath);
 				continue;
 			}
-			if (entry.isFile() && SOURCE_FILE_PATTERN.test(entry.name)) {
+			if (
+				entry.isFile() &&
+				!ignoreMatcher.isIgnored(fullPath, false) &&
+				SOURCE_FILE_PATTERN.test(entry.name)
+			) {
 				count += 1;
 				if (count > limit) return count;
 			}

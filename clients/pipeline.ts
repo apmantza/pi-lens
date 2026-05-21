@@ -32,6 +32,7 @@ import type { Diagnostic, PiAgentAPI } from "./dispatch/types.js";
 import { detectFileKind, getFileKindLabel } from "./file-kinds.js";
 import {
 	detectFileChangedAfterCommand,
+	getProjectIgnoreMatcher,
 	isExcludedDirName,
 } from "./file-utils.js";
 import type { FormatService } from "./format-service.js";
@@ -63,7 +64,9 @@ type FileSnapshot = Map<string, { mtimeMs: number; size: number }>;
 
 function snapshotProjectFiles(root: string): FileSnapshot {
 	const snapshot: FileSnapshot = new Map();
-	const stack = [path.resolve(root)];
+	const projectRoot = path.resolve(root);
+	const ignoreMatcher = getProjectIgnoreMatcher(projectRoot);
+	const stack = [projectRoot];
 	while (stack.length > 0 && snapshot.size < AUTOFIX_CHANGED_FILE_SCAN_LIMIT) {
 		const dir = stack.pop()!;
 		let entries: nodeFs.Dirent[];
@@ -75,10 +78,16 @@ function snapshotProjectFiles(root: string): FileSnapshot {
 		for (const entry of entries) {
 			const fullPath = path.join(dir, entry.name);
 			if (entry.isDirectory()) {
-				if (!isExcludedDirName(entry.name)) stack.push(fullPath);
+				if (
+					!isExcludedDirName(entry.name) &&
+					!ignoreMatcher.isIgnored(fullPath, true)
+				) {
+					stack.push(fullPath);
+				}
 				continue;
 			}
 			if (!entry.isFile()) continue;
+			if (ignoreMatcher.isIgnored(fullPath, false)) continue;
 			try {
 				const stat = nodeFs.statSync(fullPath);
 				snapshot.set(path.resolve(fullPath), {
@@ -989,7 +998,9 @@ export async function runPipeline(
 		output += buildEnrichedBlockerOutput(dispatchResult.blockers, fileContent);
 		// Append fixed/coverage parts from the original output (slice off the
 		// blocker section we're replacing).
-		const rest = dispatchResult.output.slice(dispatchResult.blockerOutput.length);
+		const rest = dispatchResult.output.slice(
+			dispatchResult.blockerOutput.length,
+		);
 		if (rest) output += rest;
 	} else if (dispatchResult.output) {
 		output += `\n\n${dispatchResult.output}`;

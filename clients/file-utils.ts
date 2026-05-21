@@ -5,6 +5,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { minimatch } from "minimatch";
 import { normalizeFilePath } from "./path-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 
@@ -83,37 +84,255 @@ export const EXCLUDED_DIRS = [
 	".pytest_cache",
 	"*.dSYM",
 	// Vendored upstream source conventions — universally too large to scan
-	"vendor",   // Go modules, PHP Composer, Ruby Bundler
+	"vendor", // Go modules, PHP Composer, Ruby Bundler
 	"third_party", // Chromium/Google convention (llama.cpp, sherpa-onnx, gRPC, TF)
 	"third-party",
 	"vendors",
 ];
 
-/**
- * Read simple directory-name entries from a root .gitignore.
- * Only extracts bare names and names with a trailing slash — no wildcards,
- * no negations, no paths with internal slashes. This covers the common case
- * of large vendored trees (third_party/, vendor/, custom-build/) without
- * requiring full gitignore-spec compliance.
- */
-export function readGitignoreDirs(rootDir: string): string[] {
+export interface GitignorePattern {
+	pattern: string;
+	negated: boolean;
+	directoryOnly: boolean;
+	rooted: boolean;
+	hasSlash: boolean;
+}
+
+export interface ProjectIgnoreMatcher {
+	rootDir: string;
+	patterns: GitignorePattern[];
+	isIgnored(filePath: string, isDirectory?: boolean): boolean;
+}
+
+function resolveGitIgnoreRoot(startDir: string): string {
+	const fallback = path.resolve(startDir);
+	let current = fallback;
+	while (true) {
+		if (fs.existsSync(path.join(current, ".git"))) return current;
+		const parent = path.dirname(current);
+		if (parent === current) return fallback;
+		current = parent;
+	}
+}
+
+function normalizeIgnorePath(value: string): string {
+	return value.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+/g, "/");
+}
+
+function stripTrailingSpaces(value: string): string {
+	// Good-enough gitignore whitespace handling: unescaped trailing spaces are ignored.
+	let end = value.length;
+	while (end > 0 && value[end - 1] === " " && value[end - 2] !== "\\") end -= 1;
+	return value.slice(0, end).replace(/\\ /g, " ");
+}
+
+function parseGitignoreContent(content: string): GitignorePattern[] {
+	const patterns: GitignorePattern[] = [];
+	for (const rawLine of content.split(/\r?\n/)) {
+		let line = stripTrailingSpaces(rawLine.trimStart());
+		if (!line || line.startsWith("#")) continue;
+		let negated = false;
+		if (line.startsWith("!")) {
+			negated = true;
+			line = line.slice(1);
+		}
+		line = normalizeIgnorePath(line);
+		if (!line) continue;
+
+		const directoryOnly = line.endsWith("/");
+		if (directoryOnly) line = line.replace(/\/+$/, "");
+		const rooted = line.startsWith("/");
+		if (rooted) line = line.replace(/^\/+/, "");
+		if (!line) continue;
+
+		patterns.push({
+			pattern: line,
+			negated,
+			directoryOnly,
+			rooted,
+			hasSlash: line.includes("/"),
+		});
+	}
+	return patterns;
+}
+
+function expandGitignorePattern(pattern: GitignorePattern): string[] {
+	const body = pattern.pattern;
+	if (pattern.directoryOnly) {
+		if (pattern.rooted || pattern.hasSlash) return [body, `${body}/**`];
+		return [body, `${body}/**`, `**/${body}`, `**/${body}/**`];
+	}
+	if (pattern.rooted || pattern.hasSlash) return [body];
+	return [body, `**/${body}`];
+}
+
+function matchesGitignorePattern(
+	pattern: GitignorePattern,
+	relativePath: string,
+	isDirectory: boolean,
+): boolean {
+	const candidate = normalizeIgnorePath(relativePath).replace(/^\/+/, "");
+	if (!candidate) return false;
+	const candidates = isDirectory ? [candidate, `${candidate}/`] : [candidate];
+	const options = { dot: true, nocase: process.platform === "win32" };
+	return expandGitignorePattern(pattern).some((expanded) => {
+		if (isDirectory && expanded.endsWith("/**")) {
+			const prefix = expanded.slice(0, -3);
+			if (candidate === prefix || candidate.startsWith(`${prefix}/`))
+				return true;
+		}
+		return candidates.some((value) => minimatch(value, expanded, options));
+	});
+}
+
+export function readGitignorePatterns(rootDir: string): GitignorePattern[] {
 	const gitignorePath = path.join(rootDir, ".gitignore");
 	try {
-		const content = fs.readFileSync(gitignorePath, "utf-8");
-		const dirs: string[] = [];
-		for (const rawLine of content.split(/\r?\n/)) {
-			const line = rawLine.trim();
-			if (!line || line.startsWith("#") || line.startsWith("!")) continue;
-			if (line.includes("*") || line.includes("?") || line.includes("[")) continue;
-			const name = line.endsWith("/") ? line.slice(0, -1) : line;
-			// Must be a simple name — no path separators
-			if (!name || name.includes("/") || name.includes("\\")) continue;
-			dirs.push(name);
-		}
-		return dirs;
+		return parseGitignoreContent(fs.readFileSync(gitignorePath, "utf-8"));
 	} catch {
 		return [];
 	}
+}
+
+function ancestorDirsBetween(rootDir: string, targetDir: string): string[] {
+	const relative = path.relative(rootDir, targetDir);
+	if (relative.startsWith("..") || path.isAbsolute(relative)) return [];
+	const dirs = [rootDir];
+	if (!relative) return dirs;
+	let current = rootDir;
+	for (const segment of relative.split(path.sep).filter(Boolean)) {
+		current = path.join(current, segment);
+		dirs.push(current);
+	}
+	return dirs;
+}
+
+function buildProjectIgnoreMatcher(
+	resolvedRoot: string,
+	patterns: GitignorePattern[],
+): ProjectIgnoreMatcher {
+	const nestedCache = new Map<
+		string,
+		{ gitignoreMtimeMs: number; patterns: GitignorePattern[] }
+	>();
+	const patternsForDir = (dir: string): GitignorePattern[] => {
+		if (dir === resolvedRoot) return patterns;
+		const gitignoreMtime = gitignoreMtimeMs(dir);
+		const cached = nestedCache.get(dir);
+		if (cached?.gitignoreMtimeMs === gitignoreMtime) return cached.patterns;
+		const nextPatterns = readGitignorePatterns(dir);
+		nestedCache.set(dir, {
+			gitignoreMtimeMs: gitignoreMtime,
+			patterns: nextPatterns,
+		});
+		return nextPatterns;
+	};
+
+	return {
+		rootDir: resolvedRoot,
+		patterns,
+		isIgnored(filePath: string, isDirectory = false): boolean {
+			const resolved = path.resolve(filePath);
+			const rootRelative = path.relative(resolvedRoot, resolved);
+			if (
+				!rootRelative ||
+				rootRelative.startsWith("..") ||
+				path.isAbsolute(rootRelative)
+			) {
+				return false;
+			}
+
+			let ignored = false;
+			const patternDirs = ancestorDirsBetween(
+				resolvedRoot,
+				path.dirname(resolved),
+			);
+			for (const dir of patternDirs) {
+				const dirPatterns = patternsForDir(dir);
+				if (dirPatterns.length === 0) continue;
+				const relative = path.relative(dir, resolved);
+				const normalized = normalizeIgnorePath(relative);
+				for (const pattern of dirPatterns) {
+					if (!matchesGitignorePattern(pattern, normalized, isDirectory))
+						continue;
+					ignored = !pattern.negated;
+				}
+			}
+			return ignored;
+		},
+	};
+}
+
+export function createProjectIgnoreMatcher(
+	rootDir: string,
+	extraPatterns: string[] = [],
+): ProjectIgnoreMatcher {
+	const resolvedRoot = resolveGitIgnoreRoot(rootDir);
+	const patterns = [
+		...readGitignorePatterns(resolvedRoot),
+		...parseGitignoreContent(extraPatterns.join("\n")),
+	];
+	return buildProjectIgnoreMatcher(resolvedRoot, patterns);
+}
+
+const projectIgnoreMatcherCache = new Map<
+	string,
+	{ gitignoreMtimeMs: number; matcher: ProjectIgnoreMatcher }
+>();
+
+function gitignoreMtimeMs(rootDir: string): number {
+	try {
+		return fs.statSync(path.join(rootDir, ".gitignore")).mtimeMs;
+	} catch {
+		return -1;
+	}
+}
+
+export function getProjectIgnoreMatcher(rootDir: string): ProjectIgnoreMatcher {
+	const resolvedRoot = resolveGitIgnoreRoot(rootDir);
+	const gitignoreMtime = gitignoreMtimeMs(resolvedRoot);
+	const cached = projectIgnoreMatcherCache.get(resolvedRoot);
+	if (cached?.gitignoreMtimeMs === gitignoreMtime) return cached.matcher;
+
+	const matcher = createProjectIgnoreMatcher(resolvedRoot);
+	projectIgnoreMatcherCache.set(resolvedRoot, {
+		gitignoreMtimeMs: gitignoreMtime,
+		matcher,
+	});
+	return matcher;
+}
+
+export function isPathIgnoredByProject(
+	filePath: string,
+	rootDir: string,
+	isDirectory = false,
+): boolean {
+	return getProjectIgnoreMatcher(rootDir).isIgnored(filePath, isDirectory);
+}
+
+export function getProjectIgnoreGlobs(rootDir: string): string[] {
+	return readGitignorePatterns(rootDir)
+		.filter((pattern) => !pattern.negated)
+		.flatMap((pattern) => expandGitignorePattern(pattern));
+}
+
+/**
+ * Read simple directory-name entries from a root .gitignore.
+ *
+ * Prefer createProjectIgnoreMatcher() for path-aware gitignore matching. This
+ * helper is kept for callers/tests that only need simple directory names.
+ */
+export function readGitignoreDirs(rootDir: string): string[] {
+	return readGitignorePatterns(rootDir)
+		.filter(
+			(entry) =>
+				!entry.negated &&
+				!entry.pattern.includes("*") &&
+				!entry.pattern.includes("?") &&
+				!entry.pattern.includes("[") &&
+				!entry.pattern.includes("/"),
+		)
+		.map((entry) => entry.pattern);
 }
 
 function globToRegExp(glob: string): RegExp {
