@@ -48,7 +48,9 @@ import {
 	countFileLines,
 	getTouchedLinesForGuard,
 	tryCorrectIndentationMismatch,
+	tryCorrectIndentationMismatchFromContent,
 } from "./clients/read-guard-tool-lines.js";
+import { retargetReplacementIndentation } from "./clients/indent-retarget.js";
 import { handleAgentEnd } from "./clients/runtime-agent-end.js";
 import {
 	consumeSessionStartGuidance,
@@ -270,11 +272,15 @@ function countTextOccurrences(haystack: string, needle: string): number {
 	return count;
 }
 
-function countOldTextMatches(filePath: string, oldText: string): number {
+function countOldTextMatches(
+	filePath: string,
+	oldText: string,
+	cachedNormalizedContent?: string,
+): number {
 	try {
-		const content = normalizeOldTextForMatch(
-			nodeFs.readFileSync(filePath, "utf-8"),
-		);
+		const content =
+			cachedNormalizedContent ??
+			normalizeOldTextForMatch(nodeFs.readFileSync(filePath, "utf-8"));
 		return countTextOccurrences(content, normalizeOldTextForMatch(oldText));
 	} catch {
 		return 0;
@@ -291,46 +297,6 @@ function isIndentationOnlyChange(before: string, after: string): boolean {
 	);
 }
 
-function retargetReplacementIndentation(
-	newText: string,
-	oldText: string,
-	correctedOldText: string,
-): string | undefined {
-	const newline = newText.includes("\r\n") ? "\r\n" : "\n";
-	const oldLines = oldText.replace(/\r\n/g, "\n").split("\n");
-	const correctedLines = correctedOldText.replace(/\r\n/g, "\n").split("\n");
-	if (oldLines.length !== correctedLines.length) return undefined;
-
-	const indentMap = new Map<string, string>();
-	const ambiguousIndents = new Set<string>();
-	for (let i = 0; i < oldLines.length; i += 1) {
-		const oldIndent = oldLines[i].match(/^[\t ]*/)?.[0] ?? "";
-		const correctedIndent = correctedLines[i].match(/^[\t ]*/)?.[0] ?? "";
-		if (oldIndent === correctedIndent) continue;
-		const previous = indentMap.get(oldIndent);
-		if (previous !== undefined && previous !== correctedIndent) {
-			indentMap.delete(oldIndent);
-			ambiguousIndents.add(oldIndent);
-			continue;
-		}
-		if (!ambiguousIndents.has(oldIndent)) {
-			indentMap.set(oldIndent, correctedIndent);
-		}
-	}
-	if (indentMap.size === 0) return undefined;
-
-	let changed = false;
-	const newLines = newText.replace(/\r\n/g, "\n").split("\n");
-	const retargetedLines = newLines.map((line) => {
-		const indent = line.match(/^[\t ]*/)?.[0] ?? "";
-		const correctedIndent = indentMap.get(indent);
-		if (correctedIndent === undefined) return line;
-		changed = true;
-		return correctedIndent + line.slice(indent.length);
-	});
-
-	return changed ? retargetedLines.join(newline) : undefined;
-}
 
 function getNewContentFromToolCall(event: unknown): string | undefined {
 	if (isToolCallEventType("write", event as any)) {
@@ -1430,9 +1396,24 @@ export default function (pi: ExtensionAPI) {
 								: null,
 						)
 						.filter((entry): entry is EditIndentTarget => entry !== null);
+			// Read the file once; derive the two normalized forms needed by
+			// tryCorrectIndentationMismatchFromContent (CRLF-only) and
+			// countOldTextMatches (CRLF + trailing-whitespace trimmed).
+			let crlfContent: string | undefined;
+			let matchNormalizedContent: string | undefined;
+			try {
+				const raw = nodeFs.readFileSync(filePath, "utf-8");
+				crlfContent = raw.replace(/\r\n/g, "\n");
+				matchNormalizedContent = normalizeOldTextForMatch(raw);
+			} catch {
+				// File unreadable — corrections will be skipped gracefully below.
+			}
 			const correctedOldTexts = oldTexts
 				.map(({ label, value, newText, apply, applyNewText }) => {
-					const corrected = tryCorrectIndentationMismatch(value, filePath);
+					const corrected =
+						crlfContent !== undefined
+							? tryCorrectIndentationMismatchFromContent(value, crlfContent)
+							: tryCorrectIndentationMismatch(value, filePath);
 					return corrected === undefined
 						? undefined
 						: {
@@ -1442,8 +1423,16 @@ export default function (pi: ExtensionAPI) {
 								corrected,
 								apply,
 								applyNewText,
-								currentMatchCount: countOldTextMatches(filePath, value),
-								correctedMatchCount: countOldTextMatches(filePath, corrected),
+								currentMatchCount: countOldTextMatches(
+									filePath,
+									value,
+									matchNormalizedContent,
+								),
+								correctedMatchCount: countOldTextMatches(
+									filePath,
+									corrected,
+									matchNormalizedContent,
+								),
 								indentationOnly: isIndentationOnlyChange(value, corrected),
 							};
 				})

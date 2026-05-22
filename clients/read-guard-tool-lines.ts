@@ -198,7 +198,10 @@ function resolveOldTextEdits(
 		let occurrenceLines = findOccurrenceLines(content, needle);
 
 		if (occurrenceLines.length === 0) {
-			const corrected = tryCorrectIndentationMismatch(oldText, filePath);
+			const corrected = tryCorrectIndentationMismatchFromContent(
+				oldText,
+				rawContent.replace(/\r\n/g, "\n"),
+			);
 			if (corrected !== undefined) {
 				needle = normalizeContent(corrected);
 				occurrenceLines = findOccurrenceLines(content, needle);
@@ -353,17 +356,10 @@ function resolveOldTextEdits(
  * actual file. Returns the corrected oldText if a matching variant is found, or
  * undefined if the text already matches or no indentation conversion fixes it.
  */
-export function tryCorrectIndentationMismatch(
+export function tryCorrectIndentationMismatchFromContent(
 	oldText: string,
-	filePath: string,
+	content: string,
 ): string | undefined {
-	let content: string;
-	try {
-		content = nodeFs.readFileSync(filePath, "utf-8").replace(/\r\n/g, "\n");
-	} catch {
-		return undefined;
-	}
-
 	const normalized = oldText.replace(/\r\n/g, "\n");
 	if (content.includes(normalized)) return undefined;
 
@@ -409,6 +405,20 @@ export function tryCorrectIndentationMismatch(
 	}
 
 	return undefined;
+}
+
+export function tryCorrectIndentationMismatch(
+	oldText: string,
+	filePath: string,
+): string | undefined {
+	try {
+		return tryCorrectIndentationMismatchFromContent(
+			oldText,
+			nodeFs.readFileSync(filePath, "utf-8").replace(/\r\n/g, "\n"),
+		);
+	} catch {
+		return undefined;
+	}
 }
 
 function findIndentationInsensitiveCandidate(
