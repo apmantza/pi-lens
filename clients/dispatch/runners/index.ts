@@ -3,6 +3,7 @@
  */
 
 import type { RunnerRegistry } from "../types.js";
+import actionlintRunner from "./actionlint.js";
 import astGrepNapiRunner from "./ast-grep-napi.js";
 import biomeRunner from "./biome.js";
 import biomeCheckJsonRunner from "./biome-check.js";
@@ -79,6 +80,7 @@ export function registerDefaultRunners(registry: RunnerRegistry): void {
 	registry.register(rubocopRunner); // RuboCop lint (priority 10, ruby)
 	registry.register(spellcheckRunner); // Spellcheck for markdown/docs (priority 30)
 	registry.register(yamllintRunner); // YAML lint (priority 22)
+	registry.register(actionlintRunner); // GitHub Actions workflow linting (priority 23)
 	registry.register(sqlfluffRunner); // SQL lint (priority 24)
 	registry.register(goVetRunner); // Go analysis (priority 50)
 	registry.register(rustClippyRunner); // Rust analysis (priority 50)

@@ -144,7 +144,10 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<
 	yaml: {
 		name: "YAML Processing",
 		capabilities: ["format", "lint"],
-		writeGroups: [primary("yaml")],
+		writeGroups: [
+			primary("yaml"),
+			{ mode: "all", runnerIds: ["actionlint"], filterKinds: ["yaml"] },
+		],
 	},
 	sql: {
 		name: "SQL Processing",

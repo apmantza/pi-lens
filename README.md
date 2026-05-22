@@ -221,6 +221,7 @@ Auto-install behavior depends on gate type:
 | `@biomejs/biome`                    | JS/TS lint/format/autofix        | Yes            | Config-gated                       |
 | `prettier`                          | Formatting fallback              | Yes            | Config-gated                       |
 | `yamllint`                          | YAML linting                     | Yes            | Config-gated                       |
+| `actionlint`                        | GitHub Actions workflow linting  | Yes            | GitHub release                     |
 | `sqlfluff`                          | SQL linting/formatting           | Yes            | Config-gated                       |
 | `ruff`                              | Python lint/format/autofix       | Yes            | Language-default + flow-gated      |
 | `typescript-language-server`        | Unified LSP diagnostics          | Yes            | Language-default                   |
@@ -340,7 +341,7 @@ Dispatch is diagnostics-oriented: automatic formatting and safe autofix happen i
 | Fish                  | ✓   | lsp, fish-indent                                                                                               | fish_indent             |
 | CSS/SCSS/Less         | ✓   | lsp, stylelint                                                                                                 | biome, prettier         |
 | HTML                  | ✓   | lsp, htmlhint                                                                                                  | prettier                |
-| YAML                  | ✓   | lsp, yamllint                                                                                                  | prettier                |
+| YAML                  | ✓   | lsp, yamllint, actionlint (GitHub workflows)                                                                   | prettier                |
 | JSON                  | ✓   | lsp                                                                                                            | biome, prettier         |
 | Svelte                | ✓   | lsp                                                                                                            | —                       |
 | Vue                   | ✓   | lsp                                                                                                            | —                       |

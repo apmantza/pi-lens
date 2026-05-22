@@ -729,6 +729,7 @@ export type LintRunnerName =
 	| "sqlfluff"
 	| "rubocop"
 	| "yamllint"
+	| "actionlint"
 	| "markdownlint"
 	| "htmlhint"
 	| "hadolint"
@@ -833,6 +834,7 @@ const TOOL_EXECUTION_POLICY = new Map<string, ToolExecutionPolicy>([
 	["sqlfluff", { gate: "smart-default", autoInstall: true }],
 	["rubocop", { gate: "smart-default", autoInstall: true }],
 	["yamllint", { gate: "smart-default", autoInstall: true }],
+	["actionlint", { gate: "smart-default", autoInstall: true }],
 	["markdownlint", { gate: "smart-default", autoInstall: true }],
 	["mypy", { gate: "config-first", autoInstall: true }],
 	["taplo", { gate: "smart-default", autoInstall: true }],
@@ -917,6 +919,15 @@ const TOOL_COMMAND_SPECS = new Map<string, ToolCommandSpec>([
 			windowsExt: ".exe",
 			versionArgs: ["--version"],
 			managedToolId: "yamllint",
+		},
+	],
+	[
+		"actionlint",
+		{
+			command: "actionlint",
+			windowsExt: ".exe",
+			versionArgs: ["--version"],
+			managedToolId: "actionlint",
 		},
 	],
 	[

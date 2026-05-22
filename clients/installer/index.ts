@@ -18,6 +18,7 @@
  * - @ast-grep/cli (structural code search)
  * - knip (dead code detection)
  * - yamllint (YAML linting)
+ * - actionlint (GitHub Actions workflow linting) [GitHub release]
  * - sqlfluff (SQL linting/formatting)
  * - markdownlint-cli2 (Markdown linting)
  * - mypy (Python type checking)
@@ -517,6 +518,27 @@ const TOOLS: ToolDefinition[] = [
 				if (platform === "win32") return "ktlint.bat";
 				return undefined;
 			},
+		},
+	},
+	{
+		id: "actionlint",
+		name: "actionlint",
+		checkCommand: "actionlint",
+		checkArgs: ["--version"],
+		installStrategy: "github",
+		binaryName: "actionlint",
+		github: {
+			repo: "rhysd/actionlint",
+			assetMatch: (platform, arch) => {
+				if (platform === "linux")
+					return arch === "arm64" ? "linux_arm64.tar.gz" : "linux_amd64.tar.gz";
+				if (platform === "darwin")
+					return arch === "arm64" ? "darwin_arm64.tar.gz" : "darwin_amd64.tar.gz";
+				if (platform === "win32")
+					return arch === "arm64" ? "windows_arm64.zip" : "windows_amd64.zip";
+				return undefined;
+			},
+			binaryInArchive: "actionlint",
 		},
 	},
 	{
@@ -2221,6 +2243,7 @@ export const GITHUB_TOOLS = [
 	"rust-analyzer",
 	"golangci-lint",
 	"ktlint",
+	"actionlint",
 	"tflint",
 	"terraform-ls",
 	"zls",
