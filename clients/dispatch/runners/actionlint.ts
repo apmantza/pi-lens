@@ -25,7 +25,7 @@ type ActionlintIssue = {
 	end_column?: number;
 };
 
-function isGitHubWorkflowFile(filePath: string): boolean {
+export function isGitHubWorkflowFile(filePath: string): boolean {
 	const normalized = filePath.replace(/\\/g, "/");
 	return /(^|\/)\.github\/workflows\/[^/]+\.ya?ml$/i.test(normalized);
 }
@@ -52,7 +52,7 @@ function toDiagnostic(issue: ActionlintIssue, filePath: string): Diagnostic {
 	};
 }
 
-function parseActionlintJson(raw: string, filePath: string): Diagnostic[] {
+export function parseActionlintJson(raw: string, filePath: string): Diagnostic[] {
 	const trimmed = raw.trim();
 	if (!trimmed) return [];
 

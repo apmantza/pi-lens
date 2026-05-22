@@ -12,14 +12,18 @@ describe("dispatch integration groups", () => {
 		expect(groups[0].filterKinds).toEqual(["css"]);
 	});
 
-	it("uses centralized yaml primary group with actionlint", () => {
+	it("returns yaml primary group plus a separate actionlint group", () => {
 		const groups = getDispatchGroupsForKind("yaml", {
 			getFlag: (name: string) => name === "lens-lsp",
 		});
 
-		expect(groups).toHaveLength(1);
-		expect(groups[0].runnerIds).toEqual(["lsp", "yamllint", "actionlint"]);
+		expect(groups).toHaveLength(2);
+		expect(groups[0].runnerIds).toEqual(["lsp", "yamllint"]);
+		expect(groups[0].mode).toBe("fallback");
 		expect(groups[0].filterKinds).toEqual(["yaml"]);
+		expect(groups[1].runnerIds).toEqual(["actionlint"]);
+		expect(groups[1].mode).toBe("all");
+		expect(groups[1].filterKinds).toEqual(["yaml"]);
 	});
 
 	it("does not duplicate lsp group when plan already includes lsp", () => {
