@@ -57,6 +57,7 @@ function shouldLogEvent(event: string): boolean {
 		event === "exemption_added" ||
 		event === "oldtext_not_found" ||
 		event === "oldtext_duplicate" ||
+		event === "oldtext_indent_autopatched" ||
 		event === "touched_lines_missing"
 	);
 }

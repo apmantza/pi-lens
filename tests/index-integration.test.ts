@@ -454,7 +454,7 @@ describe("index.ts integration", () => {
 		);
 	}, 15_000);
 
-	it("tool_call returns retryable indentation mismatch before read-guard edit checks", async () => {
+	it("tool_call auto-patches safe indentation-only oldText before read-guard edit checks", async () => {
 		const checkEdit = vi.fn(() => ({ action: "allow" as const }));
 		const sourceFile = path.join(tmpDir, "src", "indent-edit.ts");
 		fs.mkdirSync(path.dirname(sourceFile), { recursive: true });
@@ -522,34 +522,28 @@ describe("index.ts integration", () => {
 		const toolCall = handlers.tool_call?.[0];
 		expect(toolCall).toBeTypeOf("function");
 
-		const result = await toolCall?.(
-			{
-				toolName: "edit",
-				input: {
-					path: sourceFile,
-					edits: [
-						{
-							oldText: "function foo() {\n    return 1;\n}",
-							newText: "function foo() {\n    return 2;\n}",
-						},
-					],
-				},
+		const event = {
+			toolName: "edit",
+			input: {
+				path: sourceFile,
+				edits: [
+					{
+						oldText: "function foo() {\n    return 1;\n}",
+						newText: "function foo() {\n    return 2;\n}",
+					},
+				],
 			},
-			{ cwd: tmpDir },
-		);
+		};
+		const result = await toolCall?.(event, { cwd: tmpDir });
 
-		expect(result).toEqual(
-			expect.objectContaining({
-				block: true,
-				reason: expect.stringContaining(
-					"RETRYABLE — Indentation mismatch detected",
-				),
-			}),
+		expect(result).toBeUndefined();
+		expect(event.input.edits[0].oldText).toBe(
+			"function foo() {\n\treturn 1;\n}",
 		);
-		expect(checkEdit).not.toHaveBeenCalled();
+		expect(checkEdit).toHaveBeenCalled();
 	}, 15_000);
 
-	it("tool_call reports all indentation-mismatched oldText entries in multi-edit calls", async () => {
+	it("tool_call auto-patches all safe indentation-only oldText entries in multi-edit calls", async () => {
 		const checkEdit = vi.fn(() => ({ action: "allow" as const }));
 		const sourceFile = path.join(tmpDir, "src", "indent-multi-edit.ts");
 		fs.mkdirSync(path.dirname(sourceFile), { recursive: true });
@@ -620,38 +614,32 @@ describe("index.ts integration", () => {
 		const toolCall = handlers.tool_call?.[0];
 		expect(toolCall).toBeTypeOf("function");
 
-		const result = await toolCall?.(
-			{
-				toolName: "edit",
-				input: {
-					path: sourceFile,
-					edits: [
-						{
-							oldText: "function foo() {\n    return 1;\n}",
-							newText: "function foo() {\n    return 10;\n}",
-						},
-						{
-							oldText: "function bar() {\n    return 2;\n}",
-							newText: "function bar() {\n    return 20;\n}",
-						},
-					],
-				},
+		const event = {
+			toolName: "edit",
+			input: {
+				path: sourceFile,
+				edits: [
+					{
+						oldText: "function foo() {\n    return 1;\n}",
+						newText: "function foo() {\n    return 10;\n}",
+					},
+					{
+						oldText: "function bar() {\n    return 2;\n}",
+						newText: "function bar() {\n    return 20;\n}",
+					},
+				],
 			},
-			{ cwd: tmpDir },
-		);
+		};
+		const result = await toolCall?.(event, { cwd: tmpDir });
 
-		expect(result).toEqual(
-			expect.objectContaining({
-				block: true,
-				reason: expect.stringContaining(
-					"RETRYABLE — Indentation mismatch detected",
-				),
-			}),
+		expect(result).toBeUndefined();
+		expect(event.input.edits[0].oldText).toBe(
+			"function foo() {\n\treturn 1;\n}",
 		);
-		const blockedResult = result as { reason?: string } | undefined;
-		expect(blockedResult?.reason).toContain("edits[0].oldText");
-		expect(blockedResult?.reason).toContain("edits[1].oldText");
-		expect(checkEdit).not.toHaveBeenCalled();
+		expect(event.input.edits[1].oldText).toBe(
+			"function bar() {\n\treturn 2;\n}",
+		);
+		expect(checkEdit).toHaveBeenCalled();
 	}, 15_000);
 
 	it("tool_call only warms LSP on the first read until warm state is cleared", async () => {
