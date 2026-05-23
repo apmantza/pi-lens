@@ -1,5 +1,9 @@
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
+import {
+	applyConservativeActionableWarningFixes,
+	type ActionableWarningsReport,
+} from "./actionable-warnings.js";
 import type { CacheManager } from "./cache-manager.js";
 import type { FormatService } from "./format-service.js";
 import { logLatency } from "./latency-logger.js";
@@ -34,7 +38,8 @@ export async function handleAgentEnd({
 	getFormatService,
 }: AgentEndDeps): Promise<AgentEndFormatSummary | undefined> {
 	const records = runtime.consumeDeferredFormatFiles();
-	if (records.length === 0) return undefined;
+	const actionableAutofixEnabled = !!getFlag("lens-actionable-warning-autofix");
+	if (records.length === 0 && !actionableAutofixEnabled) return undefined;
 
 	const startedAt = Date.now();
 	const summary: AgentEndFormatSummary = {
@@ -55,86 +60,144 @@ export async function handleAgentEnd({
 		metadata: { fileCount: records.length },
 	});
 
-	if (getFlag("no-autoformat")) {
+	const autoformatDisabled = !!getFlag("no-autoformat");
+	if (autoformatDisabled) {
 		for (const record of records) {
 			summary.skipped.push({
 				filePath: record.filePath,
 				reason: "no-autoformat",
 			});
 		}
-		return summary;
 	}
 
-	for (const record of records) {
-		const fileStart = Date.now();
-		const filePath = path.resolve(record.filePath);
-		if (!nodeFs.existsSync(filePath)) {
-			summary.skipped.push({ filePath, reason: "missing" });
-			dbg(`agent_end deferred_format skipped missing file: ${filePath}`);
-			continue;
-		}
-
-		try {
-			const result = await runFormatPhase(filePath, getFormatService, dbg);
-			summary.formatted++;
-
-			if (result.formatFailures.length > 0) {
-				summary.failed.push({ filePath, errors: result.formatFailures });
+	if (!autoformatDisabled)
+		for (const record of records) {
+			const fileStart = Date.now();
+			const filePath = path.resolve(record.filePath);
+			if (!nodeFs.existsSync(filePath)) {
+				summary.skipped.push({ filePath, reason: "missing" });
+				dbg(`agent_end deferred_format skipped missing file: ${filePath}`);
+				continue;
 			}
 
-			if (result.formatChanged) {
-				summary.changed.push(filePath);
-				if (!getFlag("no-read-guard")) {
-					runtime.readGuard.recordWritten(filePath);
+			try {
+				const result = await runFormatPhase(filePath, getFormatService, dbg);
+				summary.formatted++;
+
+				if (result.formatFailures.length > 0) {
+					summary.failed.push({ filePath, errors: result.formatFailures });
 				}
-				try {
-					const content = nodeFs.readFileSync(filePath, "utf-8");
-					const lineCount = content.split("\n").length;
-					const hasImports = /^import\s/m.test(content);
-					cacheManager.addModifiedRange(
+
+				if (result.formatChanged) {
+					summary.changed.push(filePath);
+					if (!getFlag("no-read-guard")) {
+						runtime.readGuard.recordWritten(filePath);
+					}
+					try {
+						const content = nodeFs.readFileSync(filePath, "utf-8");
+						const lineCount = content.split("\n").length;
+						const hasImports = /^import\s/m.test(content);
+						cacheManager.addModifiedRange(
+							filePath,
+							{ start: 1, end: lineCount },
+							hasImports,
+							record.cwd || ctxCwd || runtime.projectRoot,
+						);
+					} catch (err) {
+						dbg(
+							`agent_end deferred_format modified-range tracking failed for ${filePath}: ${err}`,
+						);
+					}
+				}
+
+				if (result.fileContent) {
+					await resyncLspFile(
 						filePath,
-						{ start: 1, end: lineCount },
-						hasImports,
-						record.cwd || ctxCwd || runtime.projectRoot,
+						result.fileContent,
+						true,
+						false,
+						getFlag,
+						dbg,
+						result.formatChanged,
+					);
+				}
+
+				dbg(
+					`agent_end deferred_format file ${filePath}: changed=${result.formatChanged} duration=${Date.now() - fileStart}ms`,
+				);
+				logLatency({
+					type: "phase",
+					toolName: "agent_end",
+					filePath,
+					phase: "deferred_format_file",
+					durationMs: Date.now() - fileStart,
+					metadata: {
+						changed: result.formatChanged,
+						formattersUsed: result.formattersUsed,
+						failureCount: result.formatFailures.length,
+					},
+				});
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				summary.failed.push({ filePath, errors: [message] });
+				dbg(`agent_end deferred_format failed for ${filePath}: ${message}`);
+			}
+		}
+
+	if (actionableAutofixEnabled) {
+		const actionReport = cacheManager.readCache<ActionableWarningsReport>(
+			"actionable-warnings",
+			ctxCwd ?? runtime.projectRoot,
+			10 * 60_000,
+		);
+		if (!actionReport?.data) {
+			dbg(
+				"agent_end actionable_warnings_autofix: cache missing or expired, skipping fixes",
+			);
+		} else {
+			const fixStart = Date.now();
+			const fixSummary = await applyConservativeActionableWarningFixes({
+				cwd: ctxCwd ?? runtime.projectRoot,
+				report: actionReport.data,
+				dbg,
+			});
+			for (const changedFile of fixSummary.changedFiles) {
+				if (!nodeFs.existsSync(changedFile)) continue;
+				if (!getFlag("no-read-guard"))
+					runtime.readGuard.recordWritten(changedFile);
+				try {
+					const content = nodeFs.readFileSync(changedFile, "utf-8");
+					cacheManager.addModifiedRange(
+						changedFile,
+						{ start: 1, end: content.split("\n").length },
+						/^import\s/m.test(content),
+						ctxCwd ?? runtime.projectRoot,
 					);
 				} catch (err) {
 					dbg(
-						`agent_end deferred_format modified-range tracking failed for ${filePath}: ${err}`,
+						`agent_end actionable warning changed-file tracking failed for ${changedFile}: ${err}`,
 					);
 				}
 			}
-
-			if (result.fileContent) {
-				await resyncLspFile(
-					filePath,
-					result.fileContent,
-					true,
-					false,
-					getFlag,
-					dbg,
-					result.formatChanged,
-				);
-			}
-
-			dbg(
-				`agent_end deferred_format file ${filePath}: changed=${result.formatChanged} duration=${Date.now() - fileStart}ms`,
-			);
 			logLatency({
 				type: "phase",
 				toolName: "agent_end",
-				filePath,
-				phase: "deferred_format_file",
-				durationMs: Date.now() - fileStart,
+				filePath: ctxCwd ?? runtime.projectRoot,
+				phase: "actionable_warnings_autofix",
+				durationMs: Date.now() - fixStart,
 				metadata: {
-					changed: result.formatChanged,
-					formattersUsed: result.formattersUsed,
-					failureCount: result.formatFailures.length,
+					considered: fixSummary.considered,
+					applied: fixSummary.applied,
+					changedFiles: fixSummary.changedFiles.length,
+					skipped: fixSummary.skipped.length,
 				},
 			});
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			summary.failed.push({ filePath, errors: [message] });
-			dbg(`agent_end deferred_format failed for ${filePath}: ${message}`);
+			if (fixSummary.applied > 0) {
+				notify(
+					`pi-lens applied ${fixSummary.applied} conservative LSP warning quickfix(es)`,
+					"info",
+				);
+			}
 		}
 	}
 

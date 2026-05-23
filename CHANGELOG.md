@@ -14,6 +14,9 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Fixed
 
+- **Workspace edit partial-application now surfaces a clear error** — `applyWorkspaceEdit` applies file edits and file-system operations sequentially; if one fails mid-way, previously written files are not rolled back. The error now lists every file already written before the failure so callers can diagnose the inconsistency. When no files had been written yet, the original error is re-thrown unchanged.
+- **Actionable-warnings autofix logs when its cache is absent** — `agent_end` now emits a debug message when `actionableAutofixEnabled` is true but the `actionable-warnings` cache entry is missing or expired, instead of silently skipping fixes.
+
 - **Read-guard no longer blocks edits to files the agent just created** — when a `write` tool creates a new file, pi-lens now registers a synthetic read covering the full written content, so an immediately following `edit` on the same file is not blocked by a zero-read violation. The agent authored the content, so the guard invariant holds. The pre-write `isNewFile` check gates the synthetic read to genuinely new files only.
 - **Trailing whitespace in `oldText` is auto-patched before the edit lands** — editors and formatters strip trailing whitespace on save; if the model copies content that had it, the edit tool can fail to match. pi-lens now strips trailing whitespace from each line of `oldText` (and updates `event.input` in-place) when the stripped version matches exactly one location. Runs as a first pass before indentation correction so both normalizations compose cleanly.
 - **Read snapshot hash coverage raised from 1 000 to 3 000 lines** — reads larger than the old cap produced `unavailable` snapshot status, downgrading validation to range-only. The FNV-1a hash cost for 3 000 lines is sub-millisecond; the limit remains overridable via `PI_LENS_READ_GUARD_HASH_MAX_LINES`.
