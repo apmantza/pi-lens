@@ -80,7 +80,7 @@ function normalizeMessage(message: string): string {
 }
 
 function hashText(value: string, length = 10): string {
-	return createHash("sha1").update(value).digest("hex").slice(0, length);
+	return createHash("sha256").update(value).digest("hex").slice(0, length);
 }
 
 function relativeFile(filePath: string, cwd: string): string {
