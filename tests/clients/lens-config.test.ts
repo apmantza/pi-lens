@@ -65,6 +65,12 @@ describe("global pi-lens config", () => {
 			JSON.stringify({
 				widget: { visible: false },
 				format: { enabled: true, mode: "immediate" },
+				actionableWarnings: {
+					enabled: true,
+					includeLspCodeActions: true,
+					deltaOnly: true,
+					autoFix: { enabled: false },
+				},
 				unknown: true,
 			}),
 		);
@@ -72,6 +78,12 @@ describe("global pi-lens config", () => {
 		expect(loadPiLensGlobalConfig(configPath)).toEqual({
 			widget: { visible: false },
 			format: { enabled: true, mode: "immediate" },
+			actionableWarnings: {
+				enabled: true,
+				includeLspCodeActions: true,
+				deltaOnly: true,
+				autoFix: { enabled: false },
+			},
 		});
 		expect(getGlobalWidgetDefaultVisible(configPath)).toBe(false);
 		expect(getGlobalAutoformatEnabled(configPath)).toBe(true);
@@ -95,11 +107,28 @@ describe("global pi-lens config", () => {
 	it("resolves formatting flags from global config unless CLI flags are set", () => {
 		const config = {
 			format: { enabled: true, mode: "immediate" as const },
+			actionableWarnings: {
+				enabled: true,
+				includeLspCodeActions: true,
+				autoFix: { enabled: true },
+			},
 		};
 
 		expect(resolvePiLensFlag("immediate-format", false, config)).toBe(true);
 		expect(resolvePiLensFlag("no-autoformat", false, config)).toBe(false);
 		expect(resolvePiLensFlag("no-autoformat", true, config)).toBe(true);
+		expect(resolvePiLensFlag("lens-actionable-warnings", false, config)).toBe(
+			true,
+		);
+		expect(
+			resolvePiLensFlag("lens-actionable-warning-actions", false, config),
+		).toBe(true);
+		expect(
+			resolvePiLensFlag("lens-actionable-warning-autofix", false, config),
+		).toBe(true);
+		expect(
+			resolvePiLensFlag("lens-actionable-warning-all", false, config),
+		).toBe(false);
 		expect(resolvePiLensFlag("lens-semgrep-config", "p/ci", config)).toBe(
 			"p/ci",
 		);

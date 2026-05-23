@@ -183,8 +183,15 @@ function createState(files) {
 		readGuard: {
 			events: counter(),
 			byFile: counter(),
+			byReason: counter(),
+			preflightReasons: counter(),
+			snapshotStatus: counter(),
+			snapshotEnforcement: counter(),
 			blocked: [],
 			oldTextIssues: [],
+			staleRanges: [],
+			zeroReads: [],
+			unavailableSnapshots: [],
 		},
 		treeSitter: {
 			phases: counter(),
@@ -358,19 +365,47 @@ async function analyzeReadGuard(files, state) {
 			const event = entry.event ?? "unknown";
 			state.readGuard.events.inc(event);
 			state.readGuard.byFile.inc(shortPath(entry.filePath));
+			const reasonKind = entry.metadata?.reasonKind;
+			if (reasonKind) state.readGuard.byReason.inc(reasonKind);
+			if (event === "edit_preflight_blocked") {
+				state.readGuard.preflightReasons.inc(reasonKind ?? "unknown");
+			}
+			if (event === "range_snapshot_validation") {
+				const status = entry.metadata?.status ?? "unknown";
+				state.readGuard.snapshotStatus.inc(status);
+				state.readGuard.snapshotEnforcement.inc(
+					entry.metadata?.enforced ? "enforced" : "not_enforced",
+				);
+				if (status === "mismatch") {
+					state.smellTotals.inc("read-guard-stale-ranges");
+					pushTop(
+						state.readGuard.staleRanges,
+						summarizeReadGuard(entry),
+						limit * 3,
+						byLine,
+					);
+				} else if (status === "unavailable") {
+					pushTop(
+						state.readGuard.unavailableSnapshots,
+						summarizeReadGuard(entry),
+						limit * 3,
+						byLine,
+					);
+				}
+			}
 			if (event === "edit_blocked" || event === "edit_warned") {
 				state.smellTotals.inc("read-guard-friction");
-				pushTop(
-					state.readGuard.blocked,
-					summarizeReadGuard(entry),
-					limit * 3,
-					byLine,
-				);
+				const summary = summarizeReadGuard(entry);
+				pushTop(state.readGuard.blocked, summary, limit * 3, byLine);
+				if (reasonKind === "zero_read") {
+					pushTop(state.readGuard.zeroReads, summary, limit * 3, byLine);
+				}
 			}
 			if (
 				event === "oldtext_not_found" ||
 				event === "oldtext_duplicate" ||
-				event === "touched_lines_missing"
+				event === "touched_lines_missing" ||
+				event === "edit_preflight_blocked"
 			) {
 				state.smellTotals.inc("read-guard-friction");
 				pushTop(
@@ -846,6 +881,13 @@ function buildReport(state) {
 	);
 	addSmell(
 		smells,
+		"read-guard-stale-ranges",
+		smellCount("read-guard-stale-ranges"),
+		"Covered edit ranges whose read snapshot no longer matched current content",
+		state.readGuard.staleRanges.slice(0, limit),
+	);
+	addSmell(
+		smells,
 		"tree-sitter-blocking",
 		smellCount("tree-sitter-blocking"),
 		"Tree-sitter runner produced blocking diagnostics",
@@ -889,7 +931,17 @@ function buildReport(state) {
 		},
 		readGuard: {
 			events: state.readGuard.events.toJSON(),
+			byReason: state.readGuard.byReason.toJSON(),
+			preflightReasons: state.readGuard.preflightReasons.toJSON(),
+			snapshotStatus: state.readGuard.snapshotStatus.toJSON(),
+			snapshotEnforcement: state.readGuard.snapshotEnforcement.toJSON(),
 			byFile: state.readGuard.byFile.top(limit),
+			staleRanges: state.readGuard.staleRanges.slice(0, limit),
+			zeroReads: state.readGuard.zeroReads.slice(0, limit),
+			unavailableSnapshots: state.readGuard.unavailableSnapshots.slice(
+				0,
+				limit,
+			),
 		},
 		treeSitter: {
 			phases: state.treeSitter.phases.toJSON(),
@@ -967,6 +1019,22 @@ function printReport(report) {
 	section(
 		"Read-guard events",
 		Object.entries(report.readGuard.events).map(([key, count]) => ({
+			key,
+			count,
+		})),
+		(x) => `${String(x.count).padStart(5)}  ${x.key}`,
+	);
+	section(
+		"Read-guard block reasons",
+		Object.entries(report.readGuard.byReason).map(([key, count]) => ({
+			key,
+			count,
+		})),
+		(x) => `${String(x.count).padStart(5)}  ${x.key}`,
+	);
+	section(
+		"Read-guard snapshot status",
+		Object.entries(report.readGuard.snapshotStatus).map(([key, count]) => ({
 			key,
 			count,
 		})),

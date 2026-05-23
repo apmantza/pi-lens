@@ -1,4 +1,9 @@
 import * as path from "node:path";
+import {
+	buildActionableWarningsReport,
+	formatActionableWarningsAdvisory,
+	writeActionableWarningsReport,
+} from "./actionable-warnings.js";
 import type { CacheManager } from "./cache-manager.js";
 import { logCascade } from "./cascade-logger.js";
 import { normalizeMapKey } from "./path-utils.js";
@@ -453,6 +458,53 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	// Session summaries are intentionally suppressed at turn_end to avoid
 	// distracting the agent with non-blocking telemetry.
 
+	const t4 = Date.now();
+	if (getFlag("lens-actionable-warnings")) {
+		try {
+			const modifiedRangesByFile = new Map(
+				Object.entries(turnState.files).map(([file, state]) => [
+					normalizeMapKey(resolveRunnerPath(cwd, file)),
+					state.modifiedRanges,
+				]),
+			);
+			const report = await buildActionableWarningsReport({
+				cwd,
+				sessionId: runtime.telemetrySessionId,
+				turnIndex: runtime.turnIndex,
+				files,
+				modifiedRangesByFile,
+				dispatchWarnings: runtime.peekActionableWarnings(),
+				includeLspCodeActions: !!getFlag("lens-actionable-warning-actions"),
+				deltaOnly: !getFlag("lens-actionable-warning-all"),
+				dbg,
+			});
+			writeActionableWarningsReport(cacheManager, cwd, report);
+			const advisory = formatActionableWarningsAdvisory(report);
+			if (advisory) advisoryParts.push(advisory);
+			logLatency({
+				type: "phase",
+				toolName: "turn_end",
+				filePath: cwd,
+				phase: "actionable_warnings_report",
+				durationMs: Date.now() - t4,
+				metadata: report.summary,
+			});
+		} catch (err) {
+			dbg(`turn_end: actionable warning report failed: ${err}`);
+			logLatency({
+				type: "phase",
+				toolName: "turn_end",
+				filePath: cwd,
+				phase: "actionable_warnings_report",
+				durationMs: Date.now() - t4,
+				metadata: {
+					failed: true,
+					error: err instanceof Error ? err.message : String(err),
+				},
+			});
+		}
+	}
+
 	cacheManager.incrementTurnCycle(cwd);
 
 	const labeledAdvisoryParts = advisoryParts.map(
@@ -505,6 +557,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	}
 
 	runtime.fixedThisTurn.clear();
+	runtime.clearActionableWarnings();
 	logLatency({
 		type: "tool_result",
 		toolName: "turn_end",

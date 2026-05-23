@@ -10,6 +10,10 @@ import { pathToFileURL } from "node:url";
 import { Type } from "typebox";
 import { logLatency } from "../clients/latency-logger.js";
 import type { LSPCallHierarchyItem } from "../clients/lsp/client.js";
+import {
+	applyWorkspaceEdit,
+	summarizeWorkspaceEdit,
+} from "../clients/lsp/edits.js";
 import { getLSPService } from "../clients/lsp/index.js";
 
 const VALID_OPERATIONS = [
@@ -328,7 +332,7 @@ export function createLspNavigationTool(
 			"- findSymbol: Search document symbols in a file by name/detail with optional kind/top-level/exact filters\n" +
 			"- workspaceSymbol: Search symbols across the whole project (best with filePath context)\n" +
 			"- codeAction: Find available quick fixes/refactors at a range\n" +
-			"- rename: Compute workspace edits for renaming a symbol\n" +
+			"- rename: Compute or apply workspace edits for renaming a symbol\n" +
 			"- implementation: Jump to interface implementations\n" +
 			"- prepareCallHierarchy: Get callable item at position (for incoming/outgoing)\n" +
 			"- incomingCalls: Find all functions/methods that CALL this function\n" +
@@ -376,6 +380,12 @@ export function createLspNavigationTool(
 			newName: Type.Optional(
 				Type.String({
 					description: "Required for rename operation.",
+				}),
+			),
+			apply: Type.Optional(
+				Type.Boolean({
+					description:
+						"rename only: apply the returned workspace edit to disk (default: false; preview only).",
 				}),
 			),
 			query: Type.Optional(
@@ -521,6 +531,7 @@ export function createLspNavigationTool(
 				endLine,
 				endCharacter,
 				newName,
+				apply,
 				query,
 				kinds,
 				exactMatch,
@@ -534,6 +545,7 @@ export function createLspNavigationTool(
 				endLine?: number;
 				endCharacter?: number;
 				newName?: string;
+				apply?: boolean;
 				query?: string;
 				kinds?: string[];
 				exactMatch?: boolean;
@@ -887,13 +899,36 @@ export function createLspNavigationTool(
 							lspEndLine,
 							lspEndChar,
 						);
-					case "rename":
+					case "rename": {
 						if (!newName || newName.trim().length === 0) {
 							throw new Error(
 								"__BADINPUT__ newName parameter required for rename",
 							);
 						}
-						return lspService.rename(filePath, lspLine, lspChar, newName);
+						const edit = await lspService.rename(
+							filePath,
+							lspLine,
+							lspChar,
+							newName,
+						);
+						if (!edit) return null;
+						if (!apply) {
+							return {
+								applied: false,
+								summary: summarizeWorkspaceEdit(edit, ctx.cwd || "."),
+								edit,
+							};
+						}
+						const applied = await applyWorkspaceEdit(edit, ctx.cwd || ".");
+						for (const touchedFile of applied.files) {
+							try {
+								await openFileBestEffort(lspService, touchedFile, false);
+							} catch {
+								// Best-effort LSP resync only; disk edit already succeeded.
+							}
+						}
+						return { applied: true, ...applied };
+					}
 					case "implementation":
 						return lspService.implementation(filePath, lspLine, lspChar);
 					case "prepareCallHierarchy":

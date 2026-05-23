@@ -73,6 +73,8 @@ export interface LSPCodeAction {
 	edit?: unknown;
 	command?: unknown;
 	data?: unknown;
+	isPreferred?: boolean;
+	disabled?: { reason?: string };
 }
 
 export interface LSPWorkspaceEdit {

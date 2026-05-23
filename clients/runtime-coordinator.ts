@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import * as path from "node:path";
+import type { ActionableWarningRecord } from "./actionable-warnings.js";
 import type { CascadeResult } from "./cascade-types.js";
 import type { FileComplexity } from "./complexity-client.js";
 import { normalizeMapKey } from "./path-utils.js";
@@ -56,7 +57,10 @@ export class RuntimeCoordinator {
 	private _gitGuardHasBlockers = false;
 	private _gitGuardSummary = "";
 	private _readGuard: ReadGuard | null = null;
-	private readonly _pendingDeferredFormatFiles = new Map<string, DeferredFormatRecord>();
+	private readonly _pendingDeferredFormatFiles = new Map<
+		string,
+		DeferredFormatRecord
+	>();
 	private readonly _lspReadWarmState = new Map<
 		string,
 		{ status: "warming" | "ready"; ts: number }
@@ -64,6 +68,10 @@ export class RuntimeCoordinator {
 	private readonly _pendingInlineBlockers = new Map<
 		string,
 		{ filePath: string; summary: string }
+	>();
+	private readonly _actionableWarningsThisTurn = new Map<
+		string,
+		ActionableWarningRecord
 	>();
 
 	resetForSession(): void {
@@ -92,6 +100,7 @@ export class RuntimeCoordinator {
 		this._pendingDeferredFormatFiles.clear();
 		this._lspReadWarmState.clear();
 		this._pendingInlineBlockers.clear();
+		this._actionableWarningsThisTurn.clear();
 	}
 
 	get sessionStartedAt(): number {
@@ -138,6 +147,7 @@ export class RuntimeCoordinator {
 	beginTurn(): void {
 		this._cascadeResults = [];
 		this._pendingInlineBlockers.clear();
+		this._actionableWarningsThisTurn.clear();
 		this._turnIndex += 1;
 		this._writeIndex = 0;
 		this._reportedThisTurn.clear();
@@ -273,7 +283,10 @@ export class RuntimeCoordinator {
 	}
 
 	recordInlineBlockers(filePath: string, summary: string): void {
-		this._pendingInlineBlockers.set(path.resolve(filePath), { filePath, summary });
+		this._pendingInlineBlockers.set(path.resolve(filePath), {
+			filePath,
+			summary,
+		});
 	}
 
 	clearInlineBlockers(filePath: string): void {
@@ -284,6 +297,20 @@ export class RuntimeCoordinator {
 		const entries = [...this._pendingInlineBlockers.values()];
 		this._pendingInlineBlockers.clear();
 		return entries;
+	}
+
+	recordActionableWarnings(warnings: ActionableWarningRecord[]): void {
+		for (const warning of warnings) {
+			this._actionableWarningsThisTurn.set(warning.id, warning);
+		}
+	}
+
+	peekActionableWarnings(): ActionableWarningRecord[] {
+		return [...this._actionableWarningsThisTurn.values()];
+	}
+
+	clearActionableWarnings(): void {
+		this._actionableWarningsThisTurn.clear();
 	}
 
 	get complexityBaselines(): Map<string, FileComplexity> {

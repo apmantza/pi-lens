@@ -14,6 +14,10 @@
 
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
+import {
+	recordFromDispatchDiagnostic,
+	type ActionableWarningRecord,
+} from "./actionable-warnings.js";
 import type { BiomeClient } from "./biome-client.js";
 import { recordDiagnostics } from "./widget-state.js";
 import { getDiagnosticLogger } from "./diagnostic-logger.js";
@@ -190,6 +194,8 @@ export interface PipelineResult {
 	changedFiles?: string[];
 	/** Blocking-only formatted output for turn_end re-surfacing if agent didn't fix */
 	inlineBlockerSummary?: string;
+	/** Fixable warning diagnostics introduced by this pipeline run. */
+	actionableWarnings?: ActionableWarningRecord[];
 }
 
 // --- Phase timing helpers ---
@@ -986,6 +992,9 @@ export async function runPipeline(
 	);
 	recordDiagnostics(filePath, dispatchResult.diagnostics);
 	const hasBlockers = dispatchResult.hasBlockers;
+	const actionableWarnings = dispatchResult.warnings
+		.map((diagnostic) => recordFromDispatchDiagnostic(diagnostic, cwd))
+		.filter((warning): warning is ActionableWarningRecord => Boolean(warning));
 
 	if (dispatchResult.diagnostics.length > 0) {
 		const logger = getDiagnosticLogger();
@@ -1123,5 +1132,6 @@ export async function runPipeline(
 		inlineBlockerSummary: dispatchResult.hasBlockers
 			? dispatchResult.blockerOutput.trim() || undefined
 			: undefined,
+		actionableWarnings,
 	};
 }

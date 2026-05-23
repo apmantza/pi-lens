@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocked = vi.hoisted(() => ({
@@ -26,6 +27,7 @@ describe("lsp_navigation tool", () => {
 				.mockResolvedValue([
 					{ title: "Move to new file", kind: "refactor.move.newFile" },
 				]),
+			rename: vi.fn().mockResolvedValue(null),
 			references: vi.fn().mockResolvedValue([
 				{
 					uri: "file:///tmp/sample.ts",
@@ -326,6 +328,63 @@ describe("lsp_navigation tool", () => {
 				(mocked.service as { getDiagnostics: ReturnType<typeof vi.fn> })
 					.getDiagnostics,
 			).toHaveBeenCalledWith(filePath);
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("applies rename workspace edits when apply is true", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-nav-"));
+		const filePath = path.join(tmpDir, "rename.ts");
+		fs.writeFileSync(filePath, "const oldName = 1;\nconsole.log(oldName);\n");
+		(
+			mocked.service as {
+				rename: ReturnType<typeof vi.fn>;
+			}
+		).rename = vi.fn().mockResolvedValue({
+			changes: {
+				[pathToFileURL(filePath).href]: [
+					{
+						range: {
+							start: { line: 0, character: 6 },
+							end: { line: 0, character: 13 },
+						},
+						newText: "newName",
+					},
+					{
+						range: {
+							start: { line: 1, character: 12 },
+							end: { line: 1, character: 19 },
+						},
+						newText: "newName",
+					},
+				],
+			},
+		});
+
+		try {
+			const result = await tool.execute(
+				"rename-apply",
+				{
+					operation: "rename",
+					filePath,
+					line: 1,
+					character: 8,
+					newName: "newName",
+					apply: true,
+				},
+				new AbortController().signal,
+				null,
+				{ cwd: tmpDir },
+			);
+
+			expect(result.isError).toBeUndefined();
+			expect(result.details?.resultCount).toBe(1);
+			expect(String(result.content[0]?.text)).toContain('"applied": true');
+			expect(fs.readFileSync(filePath, "utf-8")).toBe(
+				"const newName = 1;\nconsole.log(newName);\n",
+			);
 		} finally {
 			fs.rmSync(tmpDir, { recursive: true, force: true });
 		}

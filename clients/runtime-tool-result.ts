@@ -11,7 +11,7 @@ import { isExternalOrVendorFile } from "./path-utils.js";
 import { resolveLanguageRootForFile } from "./language-profile.js";
 import { logLatency } from "./latency-logger.js";
 import type { MetricsClient } from "./metrics-client.js";
-import { runPipeline } from "./pipeline.js";
+import { runPipeline, type PipelineResult } from "./pipeline.js";
 import type { RuffClient } from "./ruff-client.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 
@@ -287,14 +287,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	});
 	dbg(`tool_result fired for: ${filePath} (turn_state: ${turnStateMs}ms)`);
 
-	let result: {
-		output: string;
-		hasBlockers: boolean;
-		isError?: boolean;
-		cascadeResult?: import("./cascade-types.js").CascadeResult;
-		changedFiles?: string[];
-		inlineBlockerSummary?: string;
-	};
+	let result: PipelineResult;
 	const pipelinePromise = runPipeline(
 		{
 			filePath,
@@ -412,6 +405,10 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 
 	if (result.cascadeResult) {
 		runtime.appendCascadeResult(result.cascadeResult);
+	}
+
+	if (result.actionableWarnings?.length) {
+		runtime.recordActionableWarnings(result.actionableWarnings);
 	}
 
 	if (result.inlineBlockerSummary) {
