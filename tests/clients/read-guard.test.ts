@@ -333,6 +333,53 @@ describe("ReadGuard", () => {
 			}
 		});
 
+		it("suppresses stale mismatch when a newer re-read covers most of the edit range via context-zone boundary", () => {
+			// Scenario: agent had a large old read [1-3] that is now stale (file changed).
+			// Agent re-reads [1-2] (newer timestamp) and then edits [2-3]:
+			//   - Old read [1-3]: effective candidate, mismatch (line 2 changed)
+			//   - New re-read [1-2]: contextual candidate (line 3 in context zone), unavailable
+			// Expected: do NOT block — the re-read is newer than the mismatch.
+			const env = setupTestEnvironment("read-guard-snapshot-rereed-suppress-");
+			try {
+				const filePath = path.join(env.tmpDir, "api.ts");
+				fs.writeFileSync(filePath, "one\ntwo\nthree\n");
+				const guard = createReadGuard("test-session");
+
+				const t1 = Date.now() - 1000;
+				const t2 = Date.now();
+
+				// Old large read (stale — will mismatch after file changes)
+				guard.recordRead(
+					createReadRecord(filePath, {
+						effectiveOffset: 1,
+						effectiveLimit: 3,
+						timestamp: t1,
+					}),
+				);
+
+				// File changes (simulating a prior successful edit shifting content)
+				fs.writeFileSync(filePath, "one\nTWO\nthree\n");
+				fileTimeState.hasChanged = false;
+
+				// Agent re-reads [1-2] after the change (newer timestamp)
+				guard.recordRead(
+					createReadRecord(filePath, {
+						effectiveOffset: 1,
+						effectiveLimit: 2,
+						timestamp: t2,
+					}),
+				);
+
+				// Edit at [2-3]: line 3 is 1 beyond the re-read boundary [1-2],
+				// falls in context zone (contextLines=3), so re-read is "unavailable"
+				// for line 3 but should still suppress the old mismatch.
+				const verdict = guard.checkEdit(filePath, [2, 3]);
+				expect(verdict.action).toBe("allow");
+			} finally {
+				env.cleanup();
+			}
+		});
+
 		it("does not carry missing lines from one snapshot candidate into mismatch telemetry", () => {
 			const env = setupTestEnvironment("read-guard-snapshot-telemetry-");
 			try {

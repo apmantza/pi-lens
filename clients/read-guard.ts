@@ -706,6 +706,8 @@ export class ReadGuard {
 		let checkedCandidateCount = 0;
 		let unavailableCandidateCount = 0;
 		let hashUnavailableCandidateCount = 0;
+		let lastMismatchTimestamp = -Infinity;
+		let lastUnavailableTimestamp = -Infinity;
 		for (let i = 0; i < candidates.length; i += 1) {
 			const validation = currentLinesMatchReadSnapshot(
 				filePath,
@@ -720,6 +722,10 @@ export class ReadGuard {
 				if (status === "unavailable") {
 					missingLines = validation.missingLines;
 				}
+				lastUnavailableTimestamp = Math.max(
+					lastUnavailableTimestamp,
+					candidates[i].timestamp,
+				);
 				continue;
 			}
 			checkedCandidateCount += 1;
@@ -733,13 +739,21 @@ export class ReadGuard {
 			status = "mismatch";
 			missingLines = [];
 			mismatchedLines = validation.mismatchedLines;
+			lastMismatchTimestamp = Math.max(
+				lastMismatchTimestamp,
+				candidates[i].timestamp,
+			);
 		}
 
 		// Enforce only when no candidate that actually delivered the target range
 		// lacks hashes. Context-only/symbol-only coverage may be unavailable without
 		// weakening enforcement from another hash-checkable read of the same range.
+		// Also suppress when a re-read (unavailable only due to context-zone boundary)
+		// is more recent than the stale read that triggered the mismatch — the agent
+		// refreshed their view, and the re-read's edge lines fall within contextLines.
 		const shouldBlock =
 			status === "mismatch" &&
+			lastUnavailableTimestamp <= lastMismatchTimestamp &&
 			checkedCandidateCount > 0 &&
 			hashUnavailableCandidateCount === 0;
 
