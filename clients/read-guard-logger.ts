@@ -60,6 +60,7 @@ function shouldLogEvent(event: string): boolean {
 		event === "oldtext_indent_autopatched" ||
 		event === "oldtext_trailing_ws_autopatched" ||
 		event === "oldtext_escape_autopatched" ||
+		event === "oldtext_quote_autopatched" ||
 		event === "edit_preflight_blocked" ||
 		event === "edit_partial_apply" ||
 		event === "touched_lines_missing"

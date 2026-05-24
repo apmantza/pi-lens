@@ -10,7 +10,7 @@ export interface GuardLineResult {
 	preflightError?: string;
 	// Edits that resolved successfully when only a subset failed preflight.
 	// Caller can apply these directly and return a ⚠️ PARTIAL APPLY message.
-	partiallyApplicable?: Array<{ oldText: string; newText: string | undefined }>;
+	partiallyApplicable?: Array<{ oldText: string; newText: string | undefined; originalIndex: number }>;
 	// All edits were resolved by exact content match — range snapshot staleness
 	// is irrelevant since the content IS the edit target.
 	contentMatchValidated?: boolean;
@@ -226,7 +226,7 @@ function resolveOldTextEdits(
 	const failedEditIndexes: number[] = [];
 	const failedOldTextPreviews: string[] = [];
 	const resolvedRanges: [number, number][] = [];
-	const passedEdits: Array<{ oldText: string; newText: string | undefined }> = [];
+	const passedEdits: Array<{ oldText: string; newText: string | undefined; originalIndex: number }> = [];
 
 	for (let i = 0; i < edits.length; i++) {
 		const oldText = edits[i].oldText;
@@ -255,6 +255,29 @@ function resolveOldTextEdits(
 							editIndex,
 						},
 					});
+				}
+			}
+		}
+
+		// Pass 4: quote style normalization — try swapping " ↔ ' when the original
+		// didn't match and either swap produces exactly one occurrence.
+		if (occurrenceLines.length === 0) {
+			const swapCandidates: string[] = [];
+			if (needle.includes('"')) swapCandidates.push(needle.replace(/"/g, "'"));
+			if (needle.includes("'")) swapCandidates.push(needle.replace(/'/g, '"'));
+			for (const swapped of swapCandidates) {
+				if (swapped === needle) continue;
+				const swappedLines = findOccurrenceLines(content, swapped);
+				if (swappedLines.length === 1) {
+					needle = swapped;
+					occurrenceLines = swappedLines;
+					logReadGuardEvent({
+						event: "oldtext_quote_autopatched",
+						sessionId,
+						filePath,
+						metadata: { tool: "edit", source: "edits_without_ranges", editIndex },
+					});
+					break;
 				}
 			}
 		}
@@ -295,7 +318,7 @@ function resolveOldTextEdits(
 			const startLine = occurrenceLines[0];
 			const endLine = startLine + needle.split("\n").length - 1;
 			resolvedRanges.push([startLine, endLine]);
-			passedEdits.push({ oldText, newText: edits[i].newText });
+			passedEdits.push({ oldText, newText: edits[i].newText, originalIndex: editIndex });
 			logReadGuardEvent({
 				event: "oldtext_resolved",
 				sessionId,
@@ -362,9 +385,13 @@ function resolveOldTextEdits(
 				errorCount: errors.length,
 			},
 		});
+		const appliedNote =
+			passedEdits.length > 0
+				? `\n\n${passedEdits.map(e => `edits[${e.originalIndex}]`).join(", ")} ${passedEdits.length === 1 ? "was" : "were"} applied — do NOT re-submit ${passedEdits.length === 1 ? "it" : "them"}.`
+				: "";
 		return {
 			touchedLines: undefined,
-			preflightError: `🔄 RETRYABLE — Edit target not found\n\n${failureDetails.join("\n\n")}`,
+			preflightError: `🔄 RETRYABLE — Edit target not found\n\n${failureDetails.join("\n\n")}${appliedNote}`,
 			partiallyApplicable: passedEdits.length > 0 ? passedEdits : undefined,
 		};
 	}

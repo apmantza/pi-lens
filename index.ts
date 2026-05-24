@@ -1478,6 +1478,31 @@ export default function (pi: ExtensionAPI) {
 				}
 			}
 
+			// --- Pass 4: quote style correction ---
+			// Agents may use " where the file uses ' or vice versa. Safety gates:
+			// original must not match at all; swapped version must match exactly once.
+			if (matchNormalizedContent !== undefined) {
+				for (const entry of oldTexts) {
+					if (countOldTextMatches(filePath, entry.value, matchNormalizedContent) !== 0) continue;
+					const swapCandidates: string[] = [];
+					if (entry.value.includes('"')) swapCandidates.push(entry.value.replace(/"/g, "'"));
+					if (entry.value.includes("'")) swapCandidates.push(entry.value.replace(/'/g, '"'));
+					for (const swapped of swapCandidates) {
+						if (swapped === entry.value) continue;
+						if (countOldTextMatches(filePath, swapped, matchNormalizedContent) !== 1) continue;
+						entry.apply(swapped);
+						entry.value = swapped;
+						logReadGuardEvent({
+							event: "oldtext_quote_autopatched",
+							sessionId: runtime.telemetrySessionId,
+							filePath,
+							metadata: { tool: "edit", label: entry.label },
+						});
+						break;
+					}
+				}
+			}
+
 			const correctedOldTexts = oldTexts
 				.map(({ label, value, newText, apply, applyNewText }) => {
 					const corrected =
@@ -1577,17 +1602,18 @@ export default function (pi: ExtensionAPI) {
 								"utf-8",
 							);
 							const n = partiallyApplicable.length;
+							const appliedIndices = partiallyApplicable.map(e => `edits[${e.originalIndex}]`).join(", ");
 							logReadGuardEvent({
 								event: "edit_partial_apply",
 								sessionId: runtime.telemetrySessionId,
 								filePath,
-								metadata: { appliedCount: n },
+								metadata: { appliedCount: n, appliedIndices },
 							});
 							return {
 								block: true,
 								reason: preflightError.replace(
-									"🔴 BLOCKED — Ambiguous edit target",
-									`⚠️ PARTIAL APPLY — ${n} edit${n !== 1 ? "s" : ""} applied`,
+									"🔄 RETRYABLE — Edit target not found",
+									`⚠️ PARTIAL APPLY — ${n} edit${n !== 1 ? "s" : ""} applied (${appliedIndices})`,
 								),
 							};
 						} catch {
