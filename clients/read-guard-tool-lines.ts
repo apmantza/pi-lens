@@ -318,7 +318,7 @@ function resolveOldTextEdits(
 			const startLine = occurrenceLines[0];
 			const endLine = startLine + needle.split("\n").length - 1;
 			resolvedRanges.push([startLine, endLine]);
-			passedEdits.push({ oldText, newText: edits[i].newText, originalIndex: editIndex });
+			passedEdits.push({ oldText: needle, newText: edits[i].newText, originalIndex: editIndex });
 			logReadGuardEvent({
 				event: "oldtext_resolved",
 				sessionId,
