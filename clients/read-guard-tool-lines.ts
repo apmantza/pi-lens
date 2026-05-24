@@ -259,30 +259,7 @@ function resolveOldTextEdits(
 			}
 		}
 
-		// Pass 4: quote style normalization — try swapping " ↔ ' when the original
-		// didn't match and either swap produces exactly one occurrence.
-		if (occurrenceLines.length === 0) {
-			const swapCandidates: string[] = [];
-			if (needle.includes('"')) swapCandidates.push(needle.replace(/"/g, "'"));
-			if (needle.includes("'")) swapCandidates.push(needle.replace(/'/g, '"'));
-			for (const swapped of swapCandidates) {
-				if (swapped === needle) continue;
-				const swappedLines = findOccurrenceLines(content, swapped);
-				if (swappedLines.length === 1) {
-					needle = swapped;
-					occurrenceLines = swappedLines;
-					logReadGuardEvent({
-						event: "oldtext_quote_autopatched",
-						sessionId,
-						filePath,
-						metadata: { tool: "edit", source: "edits_without_ranges", editIndex },
-					});
-					break;
-				}
-			}
-		}
-
-		if (occurrenceLines.length === 0) {
+if (occurrenceLines.length === 0) {
 			const preview = oldText.trimStart().substring(0, 60).replace(/\n/g, "↵");
 			failureKinds.push("oldtext_not_found");
 			failedEditIndexes.push(editIndex);
