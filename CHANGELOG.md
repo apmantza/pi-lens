@@ -14,6 +14,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Fixed
 
+- **Read-guard downgrades `out_of_range` to warning when `oldText` resolved** — when the model's `oldText` was found in the current file (content-verified), an edit touching lines outside the recorded read ranges is now warned rather than blocked. Line drift from earlier edits in the same session is the most common cause; the model demonstrably knew the content it was replacing, so a hard block is a false positive. The `oldTextResolved` flag is surfaced in verdict telemetry for observability.
+
 - **Workspace edit partial-application now surfaces a clear error** — `applyWorkspaceEdit` applies file edits and file-system operations sequentially; if one fails mid-way, previously written files are not rolled back. The error now lists every file already written before the failure so callers can diagnose the inconsistency. When no files had been written yet, the original error is re-thrown unchanged.
 - **Actionable-warnings autofix logs when its cache is absent** — `agent_end` now emits a debug message when `actionableAutofixEnabled` is true but the `actionable-warnings` cache entry is missing or expired, instead of silently skipping fixes.
 

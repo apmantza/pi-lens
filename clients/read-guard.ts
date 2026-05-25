@@ -283,7 +283,7 @@ export class ReadGuard {
 		filePath: string,
 		touchedLines?: [number, number],
 		editRanges?: [number, number][],
-		options?: { skipSnapshotCheck?: boolean },
+		options?: { skipSnapshotCheck?: boolean; oldTextResolved?: boolean },
 	): ReadGuardVerdict {
 		// Check exemptions
 		if (this.exemptions.has(filePath)) {
@@ -394,6 +394,10 @@ export class ReadGuard {
 				const [editStart, editEnd] = range;
 				const lastReadEnd =
 					lastRead.effectiveOffset + lastRead.effectiveLimit - 1;
+				// If oldText was resolved (content-verified), the model demonstrably
+				// knew the content it's replacing — line drift from prior edits in
+				// the session is the likely cause. Downgrade to warn rather than block.
+				const outOfRangeMode = options?.oldTextResolved ? "warn" : effectiveMode;
 				const verdict = this.blockOrWarn(
 					"out-of-range",
 					`🔄 RETRYABLE — Edit outside read range\n\nYou read \`${filePath}\` lines ${lastRead.effectiveOffset}-${lastReadEnd}${lastRead.enclosingSymbol ? ` (${lastRead.enclosingSymbol.kind} \`${lastRead.enclosingSymbol.name}\`)` : ""}, but your edit touches lines ${editStart}-${editEnd}.\n\nRead the relevant section first, then retry the edit:\n  \`read path="${filePath}" offset=${Math.max(1, editStart - 5)} limit=${Math.min(30, editEnd - editStart + 10)}\``,
@@ -411,10 +415,11 @@ export class ReadGuard {
 								end: r.enclosingSymbol!.endLine,
 							})),
 					},
-					effectiveMode,
+					outOfRangeMode,
 				);
 				this.recordVerdict(filePath, "edit", touchedLines, verdict, {
 					reasonKind: "out_of_range",
+					oldTextResolved: options?.oldTextResolved ?? false,
 				});
 				return verdict;
 			}

@@ -1609,7 +1609,7 @@ const correctedOldTexts = oldTexts
 				});
 				const verdict =
 					typeof readGuard.checkEdit === "function"
-						? readGuard.checkEdit(filePath, touchedLines, editRanges, { skipSnapshotCheck: !!contentMatchValidated })
+						? readGuard.checkEdit(filePath, touchedLines, editRanges, { skipSnapshotCheck: !!contentMatchValidated, oldTextResolved: !!contentMatchValidated })
 						: { action: "allow" as const };
 				if (verdict.action === "block") {
 					return {

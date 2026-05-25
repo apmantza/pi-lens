@@ -503,6 +503,25 @@ describe("ReadGuard", () => {
 			expect(verdict.details?.editRange).toEqual([50, 55]);
 		});
 
+		it("warns (not blocks) out-of-range edit when oldText was resolved", () => {
+			const guard = createReadGuard("test-session");
+			guard.recordRead(
+				createReadRecord("/src/api.ts", {
+					effectiveOffset: 10,
+					effectiveLimit: 5, // lines 10-15
+				}),
+			);
+
+			// oldTextResolved: true — content was found in file, line drift is the likely cause
+			const verdict = guard.checkEdit("/src/api.ts", [50, 55], undefined, {
+				oldTextResolved: true,
+			});
+
+			expect(verdict.action).toBe("warn");
+			expect(verdict.reason).toContain("outside read range");
+			expect(verdict.details?.editRange).toEqual([50, 55]);
+		});
+
 		it("allows edit via LSP symbol expansion", () => {
 			const guard = createReadGuard("test-session");
 			guard.recordRead(
