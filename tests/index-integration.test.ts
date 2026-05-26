@@ -186,6 +186,26 @@ describe("index.ts integration", () => {
 		expect(ensureToolMock).toHaveBeenCalledWith("typescript-language-server");
 	}, 15_000);
 
+	it("session_shutdown uses fast LSP reset so teardown does not wait on graceful shutdown", async () => {
+		const resetLSPService = vi.fn();
+		vi.doMock("../clients/lsp/index.js", () => ({
+			getLSPService: () => ({
+				touchFile: vi.fn(),
+				getAliveClientCount: () => 0,
+			}),
+			resetLSPService,
+		}));
+
+		const { default: registerExtension } = await import("../index.ts");
+		const { pi, handlers } = createMockPi();
+		registerExtension(pi as any);
+
+		const shutdown = handlers.session_shutdown?.[0];
+		expect(shutdown).toBeTypeOf("function");
+		shutdown?.({ reason: "quit" }, { cwd: tmpDir });
+		expect(resetLSPService).toHaveBeenCalledWith({ fast: true });
+	}, 15_000);
+
 	it("context handler prepends injected guidance before the user prompt", async () => {
 		const { default: registerExtension } = await import("../index.ts");
 		const { pi, handlers } = createMockPi();

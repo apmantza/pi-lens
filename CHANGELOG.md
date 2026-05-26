@@ -21,6 +21,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Fixed
 
+- **Session shutdown no longer waits on graceful LSP teardown** — `/new`, `/resume`, and Ctrl+C now call `resetLSPService({ fast: true })`, which disposes clients, signals LSP processes, and unreferences kill timers/child handles instead of keeping the TUI alive while graceful shutdown or SIGTERM→SIGKILL escalation completes. This targets the common lifecycle path shared by both `/new` and process exit; deferred agent-end formatting remains parallelized for multi-file turns but is not the primary shutdown path. Relates to #103.
+
 - **TypeScript LSP no longer blocks the edit pipeline on loose Pi extension files** — dispatch LSP diagnostics now use the bounded `touchFile` document path instead of opening the file and then waiting on unbounded aggregate diagnostics, preventing cold TypeScript server startup from holding the TUI until the generic 30s runner timeout. TypeScript LSP root detection also skips loose files under `.pi/agent/extensions` unless a real JS/TS project marker exists inside that extension tree, avoiding tsserver walks through global Pi/npm dependency paths for tiny extension edits. Fixes #104.
 
 - **Read-guard downgrades `out_of_range` to warning when `oldText` resolved** — when the model's `oldText` was found in the current file (content-verified), an edit touching lines outside the recorded read ranges is now warned rather than blocked. Line drift from earlier edits in the same session is the most common cause; the model demonstrably knew the content it was replacing, so a hard block is a false positive. The `oldTextResolved` flag is surfaced in verdict telemetry for observability.

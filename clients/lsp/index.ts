@@ -15,7 +15,7 @@ import path from "node:path";
 import { recordLsp } from "../widget-state.js";
 import { logLatency } from "../latency-logger.js";
 import { normalizeMapKey, uriToPath } from "../path-utils.js";
-import type { LSPClientInfo } from "./client.js";
+import type { LSPClientInfo, LSPShutdownOptions } from "./client.js";
 import { createLSPClient } from "./client.js";
 import { getServersForFileWithConfig } from "./config.js";
 import { getLanguageId } from "./language.js";
@@ -1290,7 +1290,7 @@ export class LSPService {
 	/**
 	 * Shutdown all LSP clients
 	 */
-	async shutdown(): Promise<void> {
+	async shutdown(options: LSPShutdownOptions = {}): Promise<void> {
 		if (this.checkDestroyed()) return;
 		this.isDestroyed = true;
 		// Cancel any in-flight spawns
@@ -1298,7 +1298,7 @@ export class LSPService {
 
 		for (const [_key, client] of this.state.clients) {
 			try {
-				await client.shutdown();
+				await client.shutdown(options);
 			} catch {
 				// pi-lens-ignore: missing-error-propagation — per-client shutdown failure, must not abort remaining shutdowns
 			}
@@ -1343,9 +1343,9 @@ export function getLSPService(): LSPService {
 	return globalLSPService;
 }
 
-export function resetLSPService(): void {
+export function resetLSPService(options: LSPShutdownOptions = {}): void {
 	if (globalLSPService) {
-		globalLSPService.shutdown().catch(() => {});
+		globalLSPService.shutdown(options).catch(() => {});
 	}
 	globalLSPService = null;
 }

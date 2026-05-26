@@ -1910,7 +1910,7 @@ export default function (pi: ExtensionAPI) {
 	// so it does not fire after shutdown. resetLSPService shuts down any live clients.
 	(pi as any).on("session_shutdown", () => {
 		cancelLSPIdleReset();
-		resetLSPService();
+		resetLSPService({ fast: true });
 	});
 
 	// --- Inject turn-end findings into next agent turn ---
