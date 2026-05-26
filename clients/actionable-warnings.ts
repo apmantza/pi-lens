@@ -483,6 +483,61 @@ export interface ActionableWarningsAutofixSummary {
 	skipped: Array<{ id: string; reason: string }>;
 }
 
+export interface ActionableWarningsFreshnessResult {
+	fresh: boolean;
+	reason?: string;
+	reportProjectSeqEnd?: number;
+	currentProjectSeq: number;
+	filePath?: string;
+	reportFileSeq?: number;
+	currentFileSeq?: number;
+}
+
+export function checkActionableWarningsReportFresh(args: {
+	report: ActionableWarningsReport;
+	currentProjectSeq: number;
+	getFileSeq?: (filePath: string) => number;
+}): ActionableWarningsFreshnessResult {
+	const reportProjectSeqEnd = args.report.projectSeqEnd;
+	if (typeof reportProjectSeqEnd !== "number") {
+		return {
+			fresh: false,
+			reason: "missing_project_seq",
+			currentProjectSeq: args.currentProjectSeq,
+		};
+	}
+	if (reportProjectSeqEnd !== args.currentProjectSeq) {
+		return {
+			fresh: false,
+			reason: "project_seq_mismatch",
+			reportProjectSeqEnd,
+			currentProjectSeq: args.currentProjectSeq,
+		};
+	}
+	if (args.getFileSeq) {
+		for (const file of args.report.files) {
+			if (typeof file.fileSeq !== "number") continue;
+			const currentFileSeq = args.getFileSeq(file.filePath);
+			if (currentFileSeq !== file.fileSeq) {
+				return {
+					fresh: false,
+					reason: "file_seq_mismatch",
+					reportProjectSeqEnd,
+					currentProjectSeq: args.currentProjectSeq,
+					filePath: file.filePath,
+					reportFileSeq: file.fileSeq,
+					currentFileSeq,
+				};
+			}
+		}
+	}
+	return {
+		fresh: true,
+		reportProjectSeqEnd,
+		currentProjectSeq: args.currentProjectSeq,
+	};
+}
+
 export async function applyConservativeActionableWarningFixes(args: {
 	cwd: string;
 	report: ActionableWarningsReport;

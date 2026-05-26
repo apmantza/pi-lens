@@ -2,6 +2,7 @@ import * as nodeFs from "node:fs";
 import * as path from "node:path";
 import {
 	applyConservativeActionableWarningFixes,
+	checkActionableWarningsReportFresh,
 	type ActionableWarningsReport,
 } from "./actionable-warnings.js";
 import type { CacheManager } from "./cache-manager.js";
@@ -136,11 +137,17 @@ export async function handleAgentEnd({
 		// must stay ordered to avoid sequence number races.
 		for (const outcome of outcomes) {
 			if (outcome.kind === "skipped") {
-				summary.skipped.push({ filePath: outcome.filePath, reason: outcome.reason });
+				summary.skipped.push({
+					filePath: outcome.filePath,
+					reason: outcome.reason,
+				});
 				continue;
 			}
 			if (outcome.kind === "failed") {
-				summary.failed.push({ filePath: outcome.filePath, errors: [outcome.message] });
+				summary.failed.push({
+					filePath: outcome.filePath,
+					errors: [outcome.message],
+				});
 				continue;
 			}
 
@@ -221,55 +228,66 @@ export async function handleAgentEnd({
 				"agent_end actionable_warnings_autofix: cache missing or expired, skipping fixes",
 			);
 		} else {
-			const fixStart = Date.now();
-			const fixSummary = await applyConservativeActionableWarningFixes({
-				cwd: ctxCwd ?? runtime.projectRoot,
+			const freshness = checkActionableWarningsReportFresh({
 				report: actionReport.data,
-				dbg,
+				currentProjectSeq: runtime.projectSeq,
+				getFileSeq: (filePath) => runtime.getFileSeq(filePath),
 			});
-			for (const changedFile of fixSummary.changedFiles) {
-				if (!nodeFs.existsSync(changedFile)) continue;
-				recordProjectChange({
-					runtime,
+			if (!freshness.fresh) {
+				dbg(
+					`agent_end actionable_warnings_autofix: stale report (${freshness.reason}; reportProjectSeqEnd=${freshness.reportProjectSeqEnd ?? "missing"}; currentProjectSeq=${freshness.currentProjectSeq}${freshness.filePath ? `; file=${freshness.filePath}; reportFileSeq=${freshness.reportFileSeq}; currentFileSeq=${freshness.currentFileSeq}` : ""}), skipping fixes`,
+				);
+			} else {
+				const fixStart = Date.now();
+				const fixSummary = await applyConservativeActionableWarningFixes({
 					cwd: ctxCwd ?? runtime.projectRoot,
-					filePath: changedFile,
-					source: "autofix",
+					report: actionReport.data,
 					dbg,
 				});
-				if (!getFlag("no-read-guard"))
-					runtime.readGuard.recordWritten(changedFile);
-				try {
-					const content = nodeFs.readFileSync(changedFile, "utf-8");
-					cacheManager.addModifiedRange(
-						changedFile,
-						{ start: 1, end: content.split("\n").length },
-						/^import\s/m.test(content),
-						ctxCwd ?? runtime.projectRoot,
-					);
-				} catch (err) {
-					dbg(
-						`agent_end actionable warning changed-file tracking failed for ${changedFile}: ${err}`,
+				for (const changedFile of fixSummary.changedFiles) {
+					if (!nodeFs.existsSync(changedFile)) continue;
+					recordProjectChange({
+						runtime,
+						cwd: ctxCwd ?? runtime.projectRoot,
+						filePath: changedFile,
+						source: "autofix",
+						dbg,
+					});
+					if (!getFlag("no-read-guard"))
+						runtime.readGuard.recordWritten(changedFile);
+					try {
+						const content = nodeFs.readFileSync(changedFile, "utf-8");
+						cacheManager.addModifiedRange(
+							changedFile,
+							{ start: 1, end: content.split("\n").length },
+							/^import\s/m.test(content),
+							ctxCwd ?? runtime.projectRoot,
+						);
+					} catch (err) {
+						dbg(
+							`agent_end actionable warning changed-file tracking failed for ${changedFile}: ${err}`,
+						);
+					}
+				}
+				logLatency({
+					type: "phase",
+					toolName: "agent_end",
+					filePath: ctxCwd ?? runtime.projectRoot,
+					phase: "actionable_warnings_autofix",
+					durationMs: Date.now() - fixStart,
+					metadata: {
+						considered: fixSummary.considered,
+						applied: fixSummary.applied,
+						changedFiles: fixSummary.changedFiles.length,
+						skipped: fixSummary.skipped.length,
+					},
+				});
+				if (fixSummary.applied > 0) {
+					notify(
+						`pi-lens applied ${fixSummary.applied} conservative LSP warning quickfix(es)`,
+						"info",
 					);
 				}
-			}
-			logLatency({
-				type: "phase",
-				toolName: "agent_end",
-				filePath: ctxCwd ?? runtime.projectRoot,
-				phase: "actionable_warnings_autofix",
-				durationMs: Date.now() - fixStart,
-				metadata: {
-					considered: fixSummary.considered,
-					applied: fixSummary.applied,
-					changedFiles: fixSummary.changedFiles.length,
-					skipped: fixSummary.skipped.length,
-				},
-			});
-			if (fixSummary.applied > 0) {
-				notify(
-					`pi-lens applied ${fixSummary.applied} conservative LSP warning quickfix(es)`,
-					"info",
-				);
 			}
 		}
 	}

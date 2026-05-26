@@ -23,6 +23,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Fixed
 
+- **Actionable-warning autofix rejects stale reports** — agent-end conservative LSP quickfix application now requires the cached `.pi-lens/cache/actionable-warnings.json` report to match the current project sequence, and also verifies any recorded per-file sequence before applying edits. Stale or pre-sequence reports are skipped with a debug reason instead of applying cached quickfixes against shifted diagnostics.
+
 - **Session shutdown no longer waits on graceful LSP teardown** — `/new`, `/resume`, and Ctrl+C now call `resetLSPService({ fast: true })`, which disposes clients, signals LSP processes, and unreferences kill timers/child handles instead of keeping the TUI alive while graceful shutdown or SIGTERM→SIGKILL escalation completes. This targets the common lifecycle path shared by both `/new` and process exit; deferred agent-end formatting remains parallelized for multi-file turns but is not the primary shutdown path. Relates to #103.
 
 - **TypeScript LSP no longer blocks the edit pipeline on loose Pi extension files** — dispatch LSP diagnostics now use the bounded `touchFile` document path instead of opening the file and then waiting on unbounded aggregate diagnostics, preventing cold TypeScript server startup from holding the TUI until the generic 30s runner timeout. TypeScript LSP root detection also skips loose files under `.pi/agent/extensions` unless a real JS/TS project marker exists inside that extension tree, avoiding tsserver walks through global Pi/npm dependency paths for tiny extension edits. Fixes #104.

@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import * as path from "node:path";
+import type { ActionableWarningsReport } from "../../clients/actionable-warnings.js";
 import { readChangesSince } from "../../clients/project-changes.js";
 import { handleAgentEnd } from "../../clients/runtime-agent-end.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
@@ -107,7 +108,8 @@ describe("runtime-agent-end deferred formatting", () => {
 				dbg: () => {},
 				runtime,
 				cacheManager: {
-					addModifiedRange: (fp: string) => modifiedRanges.push(path.basename(fp)),
+					addModifiedRange: (fp: string) =>
+						modifiedRanges.push(path.basename(fp)),
 				} as any,
 				getFormatService: () => ({ recordRead: () => {}, formatFile }) as any,
 			});
@@ -126,6 +128,61 @@ describe("runtime-agent-end deferred formatting", () => {
 			} else {
 				process.env.PILENS_DATA_DIR = previousDataDir;
 			}
+			env.cleanup();
+		}
+	});
+
+	it("skips actionable warning autofix when the cached report is stale", async () => {
+		const env = setupTestEnvironment("pi-lens-agent-end-stale-aw-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.seedProjectSequence(2);
+			const report: ActionableWarningsReport = {
+				generatedAt: new Date().toISOString(),
+				scope: "turn_delta",
+				sessionId: "s1",
+				turnIndex: 1,
+				projectSeqEnd: 1,
+				deltaOnly: true,
+				includeLspCodeActions: true,
+				files: [],
+				summary: {
+					warnings: 0,
+					unsuppressed: 0,
+					suppressed: 0,
+					files: 0,
+					actions: 0,
+					autoFixEligible: 0,
+				},
+			};
+			const dbg = vi.fn();
+			const notify = vi.fn();
+
+			const summary = await handleAgentEnd({
+				ctxCwd: env.tmpDir,
+				getFlag: (name) =>
+					name === "lens-actionable-warning-autofix" || name === "no-lsp",
+				notify,
+				dbg,
+				runtime,
+				cacheManager: {
+					readCache: () => ({ data: report }),
+					addModifiedRange: vi.fn(),
+				} as any,
+				getFormatService: () =>
+					({ recordRead: () => {}, formatFile: vi.fn() }) as any,
+			});
+
+			expect(summary?.queued).toBe(0);
+			expect(dbg).toHaveBeenCalledWith(
+				expect.stringContaining("stale report (project_seq_mismatch"),
+			);
+			expect(notify).not.toHaveBeenCalledWith(
+				expect.stringContaining("conservative LSP warning quickfix"),
+				"info",
+			);
+		} finally {
 			env.cleanup();
 		}
 	});
