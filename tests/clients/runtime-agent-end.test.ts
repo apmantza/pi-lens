@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import * as path from "node:path";
 import type { ActionableWarningsReport } from "../../clients/actionable-warnings.js";
+import { CacheManager } from "../../clients/cache-manager.js";
 import { readChangesSince } from "../../clients/project-changes.js";
 import { handleAgentEnd } from "../../clients/runtime-agent-end.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
@@ -122,6 +123,70 @@ describe("runtime-agent-end deferred formatting", () => {
 			// Side effects recorded for all three files
 			expect(modifiedRanges).toHaveLength(3);
 			expect(readChangesSince(env.tmpDir, 0)).toHaveLength(3);
+		} finally {
+			if (previousDataDir === undefined) {
+				delete process.env.PILENS_DATA_DIR;
+			} else {
+				process.env.PILENS_DATA_DIR = previousDataDir;
+			}
+			env.cleanup();
+		}
+	});
+
+	it("records deferred format bookkeeping under the workspace root in monorepos", async () => {
+		const env = setupTestEnvironment("pi-lens-agent-end-monorepo-format-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const workspaceRoot = path.join(env.tmpDir, "workspace");
+			const goModuleDir = path.join(
+				workspaceRoot,
+				"platform",
+				"svc",
+				"go",
+				"daemon",
+			);
+			const filePath = createTempFile(
+				goModuleDir,
+				"main.go",
+				"package main\n\nfunc main() {}\n",
+			);
+			createTempFile(goModuleDir, "go.mod", "module daemon\n\ngo 1.22\n");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = workspaceRoot;
+			runtime.deferFormat(filePath, goModuleDir, "edit", workspaceRoot);
+			const cacheManager = new CacheManager(false);
+			const formatFile = vi.fn(async (fp: string) => {
+				fs.writeFileSync(fp, `${fs.readFileSync(fp, "utf-8")}\n`);
+				return {
+					filePath: fp,
+					formatters: [{ name: "gofmt", success: true, changed: true }],
+					anyChanged: true,
+					allSucceeded: true,
+				};
+			});
+
+			await handleAgentEnd({
+				ctxCwd: workspaceRoot,
+				getFlag: (name) => name === "no-lsp",
+				notify: vi.fn(),
+				dbg: () => {},
+				runtime,
+				cacheManager,
+				getFormatService: () => ({ recordRead: () => {}, formatFile }) as any,
+			});
+
+			expect(formatFile).toHaveBeenCalledTimes(1);
+			expect(readChangesSince(workspaceRoot, 0)).toMatchObject([
+				{ source: "format", filePath },
+			]);
+			expect(readChangesSince(goModuleDir, 0)).toEqual([]);
+			expect(Object.keys(cacheManager.readTurnState(workspaceRoot).files)).toEqual([
+				"platform/svc/go/daemon/main.go",
+			]);
+			expect(Object.keys(cacheManager.readTurnState(goModuleDir).files)).toEqual(
+				[],
+			);
 		} finally {
 			if (previousDataDir === undefined) {
 				delete process.env.PILENS_DATA_DIR;

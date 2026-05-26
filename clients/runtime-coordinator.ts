@@ -23,7 +23,10 @@ export interface CascadeSessionStats {
 
 export interface DeferredFormatRecord {
 	filePath: string;
+	/** Formatter/language cwd captured when the edit was analyzed. */
 	cwd: string;
+	/** Workspace/project cwd used for turn-state and change-log bookkeeping. */
+	turnStateCwd?: string;
 	firstTouchedAt: number;
 	lastTouchedAt: number;
 	toolNames: Set<"write" | "edit">;
@@ -401,19 +404,26 @@ export class RuntimeCoordinator {
 		return this._readGuard;
 	}
 
-	deferFormat(filePath: string, cwd: string, toolName: "write" | "edit"): void {
+	deferFormat(
+		filePath: string,
+		cwd: string,
+		toolName: "write" | "edit",
+		turnStateCwd?: string,
+	): void {
 		const key = path.resolve(filePath);
 		const now = Date.now();
 		const existing = this._pendingDeferredFormatFiles.get(key);
 		if (existing) {
 			existing.lastTouchedAt = now;
 			existing.cwd = cwd;
+			existing.turnStateCwd = turnStateCwd ?? existing.turnStateCwd;
 			existing.toolNames.add(toolName);
 			return;
 		}
 		this._pendingDeferredFormatFiles.set(key, {
 			filePath: key,
 			cwd,
+			turnStateCwd,
 			firstTouchedAt: now,
 			lastTouchedAt: now,
 			toolNames: new Set([toolName]),

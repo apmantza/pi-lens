@@ -160,9 +160,11 @@ export async function handleAgentEnd({
 
 			if (result.formatChanged) {
 				summary.changed.push(filePath);
+				const bookkeepingCwd =
+					record.turnStateCwd || ctxCwd || runtime.projectRoot || record.cwd;
 				recordProjectChange({
 					runtime,
-					cwd: record.cwd || ctxCwd || runtime.projectRoot,
+					cwd: bookkeepingCwd,
 					filePath,
 					source: "format",
 					dbg,
@@ -178,7 +180,7 @@ export async function handleAgentEnd({
 						filePath,
 						{ start: 1, end: lineCount },
 						hasImports,
-						record.cwd || ctxCwd || runtime.projectRoot,
+						bookkeepingCwd,
 					);
 				} catch (err) {
 					dbg(

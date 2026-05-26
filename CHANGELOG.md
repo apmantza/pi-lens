@@ -27,6 +27,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Fixed
 
+- **Monorepo turn-state bookkeeping uses the workspace root** — write/edit tool results now keep language-specific dispatch cwd separate from workspace-scoped turn-state/change-log cwd, so nested Go/Rust/etc. modules still generate actionable/code-quality warning reports at turn_end. Deferred-format bookkeeping also records project changes and modified ranges under the workspace root rather than the nested language root.
+
 - **Actionable-warning autofix rejects stale reports** — agent-end conservative LSP quickfix application now requires the cached `.pi-lens/cache/actionable-warnings.json` report to match the current project sequence, and also verifies any recorded per-file sequence before applying edits. Stale or pre-sequence reports are skipped with a debug reason instead of applying cached quickfixes against shifted diagnostics.
 - **Project snapshots use a consistent root for load and save** — startup snapshot refreshes from project rules, ast-grep exports, and project-index scans are now written to the same resolved snapshot root used for session-start reads, avoiding silent cache misses when the analysis root differs from the initial cwd.
 

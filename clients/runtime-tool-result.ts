@@ -269,8 +269,9 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		return;
 	}
 
-	const cwd = resolveLanguageRootForFile(filePath, workspaceRoot);
-	dbg(`tool_result: resolved dispatch cwd ${cwd} for ${filePath}`);
+	const dispatchCwd = resolveLanguageRootForFile(filePath, workspaceRoot);
+	const turnStateCwd = path.resolve(workspaceRoot);
+	dbg(`tool_result: resolved dispatch cwd ${dispatchCwd} for ${filePath} (turnState cwd ${turnStateCwd})`);
 	if (event.model || event.provider || event.sessionId || event.session?.id) {
 		runtime.setTelemetryIdentity({
 			model: event.model,
@@ -304,12 +305,12 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 					filePath,
 					range,
 					importsChanged,
-					cwd,
+					turnStateCwd,
 					runtime.telemetrySessionId,
 				);
 			}
 			dbg(
-				`tool_result: turn state after add: ${JSON.stringify(cacheManager.readTurnState(cwd))}`,
+				`tool_result: turn state after add: ${JSON.stringify(cacheManager.readTurnState(turnStateCwd))}`,
 			);
 		} else if (event.toolName === "write" && nodeFs.existsSync(filePath)) {
 			const content = nodeFs.readFileSync(filePath, "utf-8");
@@ -320,7 +321,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 				filePath,
 				{ start: 1, end: lineCount },
 				hasImports,
-				cwd,
+				turnStateCwd,
 				runtime.telemetrySessionId,
 			);
 		}
@@ -331,7 +332,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 
 	recordProjectChange({
 		runtime,
-		cwd,
+		cwd: turnStateCwd,
 		filePath,
 		source: sourceForToolName(event.toolName, event.details),
 		changedRange: singleRange(modifiedRanges),
@@ -352,7 +353,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	const pipelinePromise = runPipeline(
 		{
 			filePath,
-			cwd,
+			cwd: dispatchCwd,
 			toolName: event.toolName,
 			modifiedRanges,
 			telemetry: {
@@ -428,7 +429,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		!getFlag("immediate-format") &&
 		nodeFs.existsSync(filePath)
 	) {
-		runtime.deferFormat(filePath, cwd, event.toolName);
+		runtime.deferFormat(filePath, dispatchCwd, event.toolName, turnStateCwd);
 		dbg(`tool_result: queued deferred format for ${filePath}`);
 		logLatency({
 			type: "phase",
@@ -436,7 +437,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			filePath,
 			phase: "deferred_format_queued",
 			durationMs: 0,
-			metadata: { cwd },
+			metadata: { cwd: dispatchCwd },
 		});
 	}
 
@@ -445,7 +446,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		if (!nodeFs.existsSync(resolvedChanged)) continue;
 		recordProjectChange({
 			runtime,
-			cwd,
+			cwd: turnStateCwd,
 			filePath: resolvedChanged,
 			source: "autofix",
 			dbg,
@@ -459,7 +460,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 				resolvedChanged,
 				{ start: 1, end: lineCount },
 				hasImports,
-				cwd,
+				turnStateCwd,
 			);
 			dbg(
 				`tool_result: tracking pi-lens side-effect change for ${resolvedChanged}`,
