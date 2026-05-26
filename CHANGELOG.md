@@ -4,6 +4,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+## [3.8.46] - 2026-05-27
+
 ### Added
 
 - **actionlint runner for GitHub Actions workflows** — actionlint is now a dispatch runner for `.github/workflows/*.yml` and `.yaml` files. It runs as its own independently-gated group alongside the existing YAML pipeline (lsp + yamllint fallback), so non-workflow YAML behaviour is unchanged. Auto-installed from GitHub releases with full platform/arch coverage (linux/darwin/win32, amd64 + arm64). Diagnostics map to `blocking`/`correctness` severity with structured IDs. JSON and NDJSON output formats are both handled, with a plain-text fallback diagnostic on non-zero exit.
@@ -26,6 +28,8 @@ All notable changes to pi-lens will be documented in this file.
 - **Debounced disk-flush timers no longer keep Node alive** — probe-cache and metrics-history debounce timers now call `.unref()` like the LSP idle reset timer, so short-lived/teardown paths are not held open just to flush best-effort background history.
 
 ### Fixed
+
+- **Cascade reverse-dependency neighbors now use the in-memory index** — the cascade builder was building a reverse-dependency index from the review graph, saving it to the project snapshot, then immediately reloading it from disk to compute affected-file neighbors. The reload almost always returned `null` during active editing because the project sequence had advanced past the snapshot sequence, silently discarding the freshly computed data every time. Affected-file queries now run directly against the in-memory index built from the just-completed graph.
 
 - **Monorepo turn-state bookkeeping uses the workspace root** — write/edit tool results now keep language-specific dispatch cwd separate from workspace-scoped turn-state/change-log cwd, so nested Go/Rust/etc. modules still generate actionable/code-quality warning reports at turn_end. Deferred-format bookkeeping also records project changes and modified ranges under the workspace root rather than the nested language root.
 

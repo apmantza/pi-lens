@@ -46,6 +46,8 @@ At `session_start`, pi-lens:
 - prepends session guidance before the user's prompt so provider bridges keep the real prompt active
 - opens `warmFiles` (if configured in `.pi-lens/lsp.json`) to seed lazy-indexing language servers like clangd before the first symbol query
 
+Startup scan context and language profile are cached in the project snapshot and reused on subsequent `/new` invocations when the project has not changed, avoiding repeated full filesystem walks (~2.5 s saved on medium-to-large projects). Background startup scans are deferred past the interactive session-start path so they do not inflate visible `/new` latency.
+
 For one-shot print sessions (for example `pi --print ...`), pi-lens auto-uses a quick startup path that skips heavy bootstrap work to reduce startup latency. Override with `PI_LENS_STARTUP_MODE=full|minimal|quick`.
 
 ### Turn End
