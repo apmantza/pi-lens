@@ -118,7 +118,7 @@ describe("widget-state renderWidget", () => {
 		// red(●) — wrapped in theme color escape; assert the bullet appears
 		// before the filename and that no warning-only triangle preceded it.
 		expect(fileRow).toMatch(/●.*cors\.ts/);
-		expect(fileRow).not.toMatch(/▲.*cors\.ts/);
+		expect(fileRow).not.toMatch(/!.*cors\.ts/);
 	});
 
 	it("falls back to severity=error when semantic is absent so plain tsc errors stay red", () => {
@@ -151,7 +151,7 @@ describe("widget-state renderWidget", () => {
 
 		const lines = renderWidget(120, theme);
 		const fileRow = lines.find((l) => l.includes("advisory.ts")) ?? "";
-		expect(fileRow).toMatch(/▲.*advisory\.ts/);
+		expect(fileRow).toMatch(/!.*advisory\.ts/);
 		expect(fileRow).not.toMatch(/●.*advisory\.ts/);
 	});
 

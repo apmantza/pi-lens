@@ -180,7 +180,7 @@ export function renderWidget(
 		totalErrors > 0
 			? (totalBlocking > 0 ? red : yellow)(`●${totalErrors}E`)
 			: "";
-	const warningChunk = totalWarnings > 0 ? yellow(`▲${totalWarnings}W`) : "";
+	const warningChunk = totalWarnings > 0 ? yellow(`!${totalWarnings}W`) : "";
 	const summary = errorChunk
 		? errorChunk + (warningChunk ? " " + warningChunk : "")
 		: warningChunk
@@ -226,7 +226,7 @@ export function renderWidget(
 						.slice(0, 5 - blockers.length)
 				: [];
 		for (const d of [...blockers, ...others]) {
-			const sev = isBlocking(d) ? red("●") : yellow("▲");
+			const sev = isBlocking(d) ? red("●") : yellow("!");
 			const loc = d.line != null ? osc8(d.uri ?? "", `L${d.line}`) : "";
 			const rule = d.rule ? dim(` ${d.rule}`) : "";
 			const prefix = `   ${sev} ${loc}${rule}  `;
@@ -290,7 +290,7 @@ function formatFileRowVertical(
 		blocking > 0
 			? red("●")
 			: warnings > 0 || errors > 0
-				? yellow("▲")
+				? yellow("!")
 				: green("✓");
 	const runnerNames = [...rec.runners.entries()]
 		.filter(([, r]) => r.status !== "skipped")
@@ -394,7 +394,7 @@ function formatFileTokenHorizontal(
 
 	let dotChar: string;
 	if (blocking > 0) dotChar = red("●");
-	else if (errors > 0 || warnings > 0) dotChar = yellow("▲");
+	else if (errors > 0 || warnings > 0) dotChar = yellow("!");
 	else if (formatterChanged) dotChar = dim("✎");
 	else dotChar = dim("·");
 
