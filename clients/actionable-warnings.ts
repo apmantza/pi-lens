@@ -9,6 +9,7 @@ import { getLSPService } from "./lsp/index.js";
 import { normalizeMapKey } from "./path-utils.js";
 import { toRunnerDisplayPath } from "./dispatch/runner-context.js";
 import { logActionableWarningsEvent } from "./actionable-warnings-logger.js";
+import { getProjectDataDir } from "./file-utils.js";
 
 export interface ActionableWarningAction {
 	title: string;
@@ -142,8 +143,7 @@ function serializeAction(action: LSPCodeAction): ActionableWarningAction {
 
 function readSuppressionState(cwd: string): WarningStateFile {
 	const statePath = path.join(
-		cwd,
-		".pi-lens",
+		getProjectDataDir(cwd),
 		"cache",
 		"actionable-warning-state.json",
 	);
@@ -162,8 +162,7 @@ function updateWarningState(
 	warnings: ActionableWarningRecord[],
 ): void {
 	const statePath = path.join(
-		cwd,
-		".pi-lens",
+		getProjectDataDir(cwd),
 		"cache",
 		"actionable-warning-state.json",
 	);

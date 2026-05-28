@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { getProjectDataDir } from "./file-utils.js";
 
 export interface PiLensSemgrepConfig {
 	enabled?: boolean;
@@ -47,6 +48,10 @@ export function findLocalSemgrepConfig(startDir: string): string | undefined {
 export function findPiLensSemgrepConfigPath(
 	startDir: string,
 ): string | undefined {
+	// Check the configured data dir for the project first (respects PILENS_DATA_DIR)
+	const dataCandidate = path.join(getProjectDataDir(startDir), "semgrep.json");
+	if (fs.existsSync(dataCandidate)) return dataCandidate;
+	// Fall back to legacy walk-up search for backwards compatibility
 	for (const dir of walkUp(startDir)) {
 		const candidate = path.join(dir, ".pi-lens", "semgrep.json");
 		if (fs.existsSync(candidate)) return candidate;
@@ -55,11 +60,7 @@ export function findPiLensSemgrepConfigPath(
 }
 
 export function getPiLensSemgrepConfigPath(cwd: string): string {
-	return path.join(
-		path.resolve(cwd || process.cwd()),
-		".pi-lens",
-		"semgrep.json",
-	);
+	return path.join(getProjectDataDir(path.resolve(cwd || process.cwd())), "semgrep.json");
 }
 
 export function loadPiLensSemgrepConfig(
