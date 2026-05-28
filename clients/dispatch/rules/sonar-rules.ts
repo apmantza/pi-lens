@@ -334,13 +334,16 @@ export const corsWildcardRule: FactRule = {
 				/origin\s*:\s*["']\*["']/.test(line) ||
 				(/cors\s*\(/.test(line) && /\*/.test(line)) ||
 				// Python (FastAPI CORSMiddleware / Flask-CORS):
-				// allow_origins=["*"]  allow_origins="*"  origins="*"  origins=['*']
-				/(?:allow_origins|origins)\s*=\s*[[(]?\s*["']\*["']/.test(line) ||
+				// allow_origins="*"  origins="*"
+				/(?:allow_origins|origins)\s*=\s*["']\*["']/.test(line) ||
+				// allow_origins=["*"]  allow_origins=['*']  origins=["*"]
+				/(?:allow_origins|origins)\s*=\s*[[(]["']\*["']/.test(line) ||
 				// Go (gin-cors, chi-cors, gorilla):
 				// AllowAllOrigins: true
-				// AllowOrigins: []string{"*"}  AllowedOrigins: []string{"*"}
 				/AllowAllOrigins\s*:\s*true/.test(line) ||
-				/Allow(?:ed)?Origins\b.*\*/.test(line);
+				// AllowOrigins: []string{"*"}  AllowedOrigins: []string{"*"}
+				// Use [^*\n]{0,60} instead of .* to prevent super-linear backtracking
+				/Allow(?:ed)?Origins[^*\n]{0,60}\*/.test(line);
 
 			if (isWildcard) {
 				diagnostics.push({
