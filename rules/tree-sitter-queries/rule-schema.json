@@ -1,0 +1,136 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "pi-lens tree-sitter query rule",
+  "description": "A single tree-sitter query rule loaded by pi-lens. Place files under rules/tree-sitter-queries/<language>/.",
+  "type": "object",
+  "required": ["id", "query"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique rule identifier (kebab-case recommended). Must be unique within the language."
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable rule name. Defaults to id."
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["error", "warning", "info"],
+      "description": "Diagnostic severity. Defaults to 'warning'."
+    },
+    "category": {
+      "type": "string",
+      "description": "Broad category label, e.g. 'security', 'performance', 'correctness'. Defaults to 'general'."
+    },
+    "language": {
+      "type": "string",
+      "description": "Language override. Normally inferred from the directory name.",
+      "enum": [
+        "typescript", "javascript", "tsx",
+        "python", "go", "rust",
+        "java", "csharp", "kotlin",
+        "ruby", "cpp", "c",
+        "css", "php", "plsql", "abap", "cobol"
+      ]
+    },
+    "message": {
+      "type": "string",
+      "description": "Short diagnostic message shown inline. Defaults to 'Pattern: <id>'."
+    },
+    "description": {
+      "type": "string",
+      "description": "Extended explanation shown in the detail view. Markdown supported."
+    },
+    "query": {
+      "type": "string",
+      "description": "Tree-sitter S-expression query. Capture names should use @UPPER_SNAKE convention."
+    },
+    "metavars": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Capture names to surface as evidence. Auto-extracted from @VAR patterns in the query if omitted."
+    },
+    "predicates": {
+      "type": "array",
+      "description": "Native tree-sitter predicates (run in WASM). Faster than post-filters.",
+      "items": {
+        "type": "object",
+        "required": ["type", "var", "value"],
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": ["eq", "match", "any-of"],
+            "description": "'eq' for exact match, 'match' for regex, 'any-of' for a list of values."
+          },
+          "var": {
+            "type": "string",
+            "description": "Capture name to test, e.g. '@FUNC_NAME'."
+          },
+          "value": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "array", "items": { "type": "string" } }
+            ],
+            "description": "Value(s) to match against. Use an array for 'any-of'."
+          }
+        }
+      }
+    },
+    "post_filter": {
+      "type": "string",
+      "description": "Named post-processing filter applied after the query matches."
+    },
+    "post_filter_params": {
+      "type": "object",
+      "description": "Parameters passed to the post_filter function.",
+      "additionalProperties": { "type": "string" }
+    },
+    "inline_tier": {
+      "type": "string",
+      "enum": ["blocking", "warning", "review"],
+      "description": "Override the dispatch tier for this rule."
+    },
+    "defect_class": {
+      "type": "string",
+      "description": "Defect classification, e.g. 'injection', 'xss', 'logic', 'race'."
+    },
+    "confidence": {
+      "type": "string",
+      "enum": ["low", "medium", "high"],
+      "description": "Confidence in the signal quality of this rule."
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Free-form tags for filtering and reporting, e.g. ['security', 'owasp-top-10']."
+    },
+    "cwe": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "CWE identifiers, e.g. ['CWE-89', 'CWE-564']."
+    },
+    "owasp": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "OWASP category references."
+    },
+    "has_fix": {
+      "type": "boolean",
+      "description": "Whether a machine-applicable fix is available. Defaults to false."
+    },
+    "fix_action": {
+      "type": "string",
+      "description": "Short label for the fix suggestion shown in the UI."
+    },
+    "examples": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "bad": { "type": "string", "description": "Code that triggers this rule." },
+        "good": { "type": "string", "description": "Corrected version of the bad example." }
+      }
+    }
+  }
+}
