@@ -89,3 +89,4 @@ AGENTS.md
 .claude/settings.local.json
 autoresearch.jsonl
 coverage/
+PR_issues_Audit.md
