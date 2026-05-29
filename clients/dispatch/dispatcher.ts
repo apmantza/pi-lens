@@ -25,7 +25,7 @@ import { getPrimaryDispatchGroup } from "../language-policy.js";
 import { resolveLanguageRootForFile } from "../language-profile.js";
 import { logLatency } from "../latency-logger.js";
 import { normalizeMapKey } from "../path-utils.js";
-import { RUNTIME_CONFIG } from "../runtime-config.js";
+import { RUNTIME_CONFIG, getRunnerTimeoutFloorMs } from "../runtime-config.js";
 import { safeSpawnAsync } from "../safe-spawn.js";
 import { classifyDiagnostic } from "./diagnostic-taxonomy.js";
 import type { FactStore } from "./fact-store.js";
@@ -906,7 +906,10 @@ async function runRunner(
 	runner: RunnerDefinition,
 	defaultSemantic: OutputSemantic,
 ): Promise<RunnerResult> {
-	const timeoutMs = runner.timeoutMs ?? RUNNER_TIMEOUT_MS;
+	const timeoutMs = Math.max(
+		runner.timeoutMs ?? RUNNER_TIMEOUT_MS,
+		getRunnerTimeoutFloorMs(),
+	);
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
 		const result = await Promise.race([

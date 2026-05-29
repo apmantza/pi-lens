@@ -134,6 +134,44 @@ describe("global pi-lens config", () => {
 		);
 	});
 
+	it("parses a positive dispatch.runnerTimeoutFloorMs", () => {
+		const home = makeTempHome();
+		const configPath = writeConfig(
+			home,
+			JSON.stringify({ dispatch: { runnerTimeoutFloorMs: 180000 } }),
+		);
+
+		expect(loadPiLensGlobalConfig(configPath)).toEqual({
+			dispatch: { runnerTimeoutFloorMs: 180000 },
+		});
+	});
+
+	it("rejects a non-positive or non-finite dispatch.runnerTimeoutFloorMs", () => {
+		const home = makeTempHome();
+		const negativePath = writeConfig(
+			home,
+			JSON.stringify({ dispatch: { runnerTimeoutFloorMs: -10 } }),
+		);
+		const zeroPath = writeConfig(
+			home,
+			JSON.stringify({ dispatch: { runnerTimeoutFloorMs: 0 } }),
+		);
+		const stringPath = writeConfig(
+			home,
+			JSON.stringify({ dispatch: { runnerTimeoutFloorMs: "180000" } }),
+		);
+
+		expect(loadPiLensGlobalConfig(negativePath)).toEqual({
+			dispatch: { runnerTimeoutFloorMs: undefined },
+		});
+		expect(loadPiLensGlobalConfig(zeroPath)).toEqual({
+			dispatch: { runnerTimeoutFloorMs: undefined },
+		});
+		expect(loadPiLensGlobalConfig(stringPath)).toEqual({
+			dispatch: { runnerTimeoutFloorMs: undefined },
+		});
+	});
+
 	it("defaults the widget to visible for missing or invalid config", () => {
 		const home = makeTempHome();
 		const missingPath = getPiLensGlobalConfigPath(home);
