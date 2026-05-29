@@ -192,25 +192,45 @@ export class LSPService {
 		return `${content.length}:${content.slice(0, 48)}:${content.slice(-48)}`;
 	}
 
+	/**
+	 * Should the whole touchFile call short-circuit? Only when the caller does
+	 * NOT need diagnostics — those callers still need to wait for the LSP to
+	 * publish, even if the notify itself is a no-op.
+	 */
 	private shouldSkipTouch(
 		filePath: string,
 		content: string,
 		clientScope: "primary" | "all",
 		waitForDiagnostics: boolean,
 	): boolean {
-		if (waitForDiagnostics || TOUCH_DEBOUNCE_MS <= 0) {
-			return false;
-		}
+		if (waitForDiagnostics) return false;
+		return this.shouldSkipNotify(filePath, content, clientScope);
+	}
 
+	/**
+	 * Should the didOpen/didChange notify be skipped while keeping the
+	 * waitForDiagnostics step? True when the same content was already pushed
+	 * recently. Skipping the notify avoids the diagnostic-cache clear that
+	 * notify.open does, so the LSP doesn't restart computation it already
+	 * finished for the first push.
+	 *
+	 * Concretely: the post-write tool_result fires touchFile with
+	 * diagnosticsMode="none" first; the dispatch-lsp-runner fires it again
+	 * with diagnosticsMode="document" moments later. Without this check the
+	 * second call's notify clears in-progress diagnostics and the LSP has to
+	 * start over — observed as multi-second waits on slow TS projects.
+	 */
+	private shouldSkipNotify(
+		filePath: string,
+		content: string,
+		clientScope: "primary" | "all",
+	): boolean {
+		if (TOUCH_DEBOUNCE_MS <= 0) return false;
 		const key = `${normalizeMapKey(filePath)}:${clientScope}`;
 		const previous = this.recentTouches.get(key);
 		if (!previous) return false;
-
 		const now = Date.now();
-		if (now - previous.touchedAt > TOUCH_DEBOUNCE_MS) {
-			return false;
-		}
-
+		if (now - previous.touchedAt > TOUCH_DEBOUNCE_MS) return false;
 		return previous.fingerprint === this.fingerprintContent(content);
 	}
 
@@ -740,17 +760,25 @@ export class LSPService {
 
 		const languageId = getLanguageId(filePath) ?? "plaintext";
 		const silent = options.silent ?? false;
-		await Promise.all(
-			spawned.map((entry) =>
-				entry.client.notify.open(
-					filePath,
-					content,
-					languageId,
-					undefined,
-					silent,
+		// When the same content was already pushed to the LSP within the touch
+		// debounce window, skip the notify — pushing again clears the LSP's
+		// diagnostic cache (via notify.open) and forces it to restart work it
+		// already did. This is what makes the post-write touch + dispatch-lsp-
+		// runner touch sequence expensive on slow TS projects.
+		const notifySkipped = this.shouldSkipNotify(filePath, content, clientScope);
+		if (!notifySkipped) {
+			await Promise.all(
+				spawned.map((entry) =>
+					entry.client.notify.open(
+						filePath,
+						content,
+						languageId,
+						undefined,
+						silent,
+					),
 				),
-			),
-		);
+			);
+		}
 
 		if (diagnosticsMode !== "none") {
 			const timeoutMs =
@@ -770,7 +798,12 @@ export class LSPService {
 				)
 			: undefined;
 
-		this.markTouched(filePath, content, clientScope);
+		// Only refresh the recent-touches entry when we actually pushed. Skipping
+		// here keeps the original push timestamp intact so the debounce window
+		// expires naturally instead of being extended by every reuse.
+		if (!notifySkipped) {
+			this.markTouched(filePath, content, clientScope);
+		}
 
 		logLatency({
 			type: "phase",
@@ -784,6 +817,7 @@ export class LSPService {
 				source,
 				failureKind: "success",
 				collectedDiagnostics: collected?.length,
+				notifySkipped,
 			},
 		});
 		return collected ?? [];
