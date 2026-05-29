@@ -1,9 +1,9 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { isTestMode } from "./env-utils.js";
+import { getGlobalPiLensDir } from "./file-utils.js";
 
-const CASCADE_LOG_DIR = path.join(os.homedir(), ".pi-lens");
+const CASCADE_LOG_DIR = getGlobalPiLensDir();
 const CASCADE_LOG_FILE = path.join(CASCADE_LOG_DIR, "cascade.log");
 
 try {

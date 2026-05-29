@@ -18,6 +18,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isTestMode } from "../env-utils.js";
+import { getGlobalPiLensDir } from "../file-utils.js";
 
 export interface LSPProcess {
 	process: ChildProcess;
@@ -30,12 +31,11 @@ export interface LSPProcess {
 const isWindows = process.platform === "win32";
 const DEFAULT_STARTUP_FAILURE_WINDOW_MS = 50;
 const WINDOWS_NAV_STARTUP_FAILURE_WINDOW_MS = 500;
-const SESSIONSTART_LOG_DIR = path.join(os.homedir(), ".pi-lens");
+const SESSIONSTART_LOG_DIR = getGlobalPiLensDir();
 const SESSIONSTART_LOG = path.join(SESSIONSTART_LOG_DIR, "sessionstart.log");
-const PI_LENS_BIN_DIR = path.join(os.homedir(), ".pi-lens", "bin");
+const PI_LENS_BIN_DIR = path.join(getGlobalPiLensDir(), "bin");
 const PI_LENS_TOOLS_BIN_DIR = path.join(
-	os.homedir(),
-	".pi-lens",
+	getGlobalPiLensDir(),
 	"tools",
 	"node_modules",
 	".bin",

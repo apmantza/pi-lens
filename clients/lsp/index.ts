@@ -10,9 +10,9 @@
 
 import * as nodeFs from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { isTestMode } from "../env-utils.js";
+import { getGlobalPiLensDir } from "../file-utils.js";
 import { recordLsp } from "../widget-state.js";
 import { logLatency } from "../latency-logger.js";
 import { normalizeMapKey, uriToPath } from "../path-utils.js";
@@ -74,7 +74,7 @@ const EARLY_UNBLOCK_GRACE_MS = Math.max(
 	) || 400,
 );
 const CASCADE_DIAGNOSTICS_TTL_MS = 240_000;
-const SESSIONSTART_LOG_DIR = path.join(os.homedir(), ".pi-lens");
+const SESSIONSTART_LOG_DIR = getGlobalPiLensDir();
 const SESSIONSTART_LOG = path.join(SESSIONSTART_LOG_DIR, "sessionstart.log");
 
 function logSessionStart(msg: string): void {

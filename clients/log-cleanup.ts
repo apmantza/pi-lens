@@ -20,10 +20,10 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { getGlobalPiLensDir } from "./file-utils.js";
 
-const LOG_DIR = path.join(os.homedir(), ".pi-lens");
+const LOG_DIR = getGlobalPiLensDir();
 const LOGS_SUBDIR = path.join(LOG_DIR, "logs");
 
 export interface LogCleanupConfig {

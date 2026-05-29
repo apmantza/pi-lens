@@ -8,9 +8,9 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { getGlobalPiLensDir } from "../../../file-utils.js";
 import { ensureTool } from "../../../installer/index.js";
 import { safeSpawn, safeSpawnAsync } from "../../../safe-spawn.js";
 import {
@@ -44,7 +44,7 @@ if (typeof __dirname !== "undefined") {
 }
 
 // Managed tools directory (~/.pi-lens/tools) — where ensureTool() installs binaries
-const _managedToolsDir = path.join(os.homedir(), ".pi-lens", "tools");
+const _managedToolsDir = path.join(getGlobalPiLensDir(), "tools");
 
 // =============================================================================
 // VENV-AWARE COMMAND FINDER

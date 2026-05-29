@@ -43,6 +43,22 @@ export function getProjectDataDir(cwd: string): string {
 }
 
 /**
+ * Machine-global pi-lens directory: `~/.pi-lens/`.
+ *
+ * Used for logs (latency, cascade, read-guard, tree-sitter, actionable-warnings,
+ * sessionstart), tool binaries (`~/.pi-lens/tools/`, `~/.pi-lens/bin/`), LSP
+ * server storage, and other state that is intentionally NOT project-scoped
+ * — it spans every project pi-lens has touched.
+ *
+ * Distinct from `getProjectDataDir(cwd)`, which respects `PILENS_DATA_DIR`
+ * and produces per-project subdirectories. Callers writing project caches,
+ * snapshots, or worklogs should use `getProjectDataDir(cwd)` instead.
+ */
+export function getGlobalPiLensDir(): string {
+	return path.join(os.homedir(), ".pi-lens");
+}
+
+/**
  * Directories to exclude from all scans (build outputs, dependencies, caches).
  * Used consistently across all scanners to avoid noise from generated files.
  */

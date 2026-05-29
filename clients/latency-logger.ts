@@ -1,9 +1,9 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { isTestMode } from "./env-utils.js";
+import { getGlobalPiLensDir } from "./file-utils.js";
 
-const LATENCY_LOG_DIR = path.join(os.homedir(), ".pi-lens");
+const LATENCY_LOG_DIR = getGlobalPiLensDir();
 const LATENCY_LOG_FILE = path.join(LATENCY_LOG_DIR, "latency.log");
 
 try {

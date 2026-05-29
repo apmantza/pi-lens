@@ -1,9 +1,9 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { isTestMode } from "./env-utils.js";
+import { getGlobalPiLensDir } from "./file-utils.js";
 
-const AW_LOG_DIR = path.join(os.homedir(), ".pi-lens");
+const AW_LOG_DIR = getGlobalPiLensDir();
 const AW_LOG_FILE = path.join(AW_LOG_DIR, "actionable-warnings.log");
 const AW_LOG_BACKUP_FILE = path.join(AW_LOG_DIR, "actionable-warnings.log.1");
 const MAX_LOG_BYTES = Math.max(
