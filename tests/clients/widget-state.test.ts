@@ -155,7 +155,7 @@ describe("widget-state renderWidget", () => {
 		expect(fileRow).not.toMatch(/●.*advisory\.ts/);
 	});
 
-	it("details block lists only blocking diagnostics before non-blocking ones", () => {
+	it("details block lists only blocking diagnostics and omits non-blocking ones entirely", () => {
 		const filePath = `${process.cwd()}/mixed.ts`;
 		recordRunner(filePath, "lint", "succeeded", 3);
 		recordDiagnostics(filePath, [
@@ -178,13 +178,50 @@ describe("widget-state renderWidget", () => {
 		const lines = renderWidget(120, theme);
 		const allLines = lines.join("\n");
 		expect(allLines).toContain("blocking sonar issue");
-		// The non-blocking one is included as a tail filler (slot remaining).
-		// What matters is that the blocking diagnostic appears before the
-		// non-blocking one in the rendered output.
-		const blockIdx = allLines.indexOf("blocking sonar issue");
-		const adviceIdx = allLines.indexOf("non-blocking advisory");
-		expect(blockIdx).toBeGreaterThan(0);
-		if (adviceIdx >= 0) expect(blockIdx).toBeLessThan(adviceIdx);
+		expect(allLines).not.toContain("non-blocking advisory");
+	});
+
+	it("omits the divider and filename header in horizontal mode (packed row already names the file)", () => {
+		const filePath = `${process.cwd()}/cors.ts`;
+		recordRunner(filePath, "sonar", "succeeded", 1);
+		recordDiagnostics(filePath, [
+			{
+				severity: "warning",
+				semantic: "blocking",
+				message: "CORS wildcard origin",
+				rule: "cors-wildcard",
+				line: 5,
+			},
+		]);
+
+		const lines = renderWidget(120, theme);
+		const allLines = lines.join("\n");
+		// No horizontal divider
+		expect(allLines).not.toMatch(/─{5,}/);
+		// The filename appears in the packed file row, but NOT as a standalone
+		// dim header line above the diagnostics.
+		const standaloneFilenameHeaders = lines.filter(
+			(l) => l.trim() === l.trim() && /^\s*\[[^m]*m?cors\.ts\[/.test(l),
+		);
+		expect(standaloneFilenameHeaders.length).toBe(0);
+	});
+
+	it("keeps the divider and filename header in vertical fallback for context", () => {
+		const filePath = `${process.cwd()}/cors.ts`;
+		recordRunner(filePath, "sonar", "succeeded", 1);
+		recordDiagnostics(filePath, [
+			{
+				severity: "warning",
+				semantic: "blocking",
+				message: "CORS wildcard origin",
+				rule: "cors-wildcard",
+				line: 5,
+			},
+		]);
+
+		const lines = renderWidget(60, theme);
+		const allLines = lines.join("\n");
+		expect(allLines).toMatch(/─{5,}/);
 	});
 
 	it("shows formatter name when a formatter changed the file (vertical fallback at narrow widths)", () => {

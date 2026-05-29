@@ -210,26 +210,23 @@ export function renderWidget(
 		}
 	}
 
-	// Diagnostics — blocking-first from the most recently touched file that has them
+	// Diagnostics — blocking only, from the most recently touched file that has them.
+	// Vertical mode keeps the divider/filename context; horizontal already shows the
+	// filename on the packed row above, so we drop the extra header noise there.
 	const withBlocking = recencySorted.filter((r) =>
 		r.diagnostics.some(isBlocking),
 	);
 	if (withBlocking.length > 0) {
 		const rec = withBlocking[0];
-		lines.push(fitLine(dim("─".repeat(Math.min(w, 60))), w));
-		lines.push(fitLine(` ${dim(path.basename(rec.filePath))}`, w));
+		if (!useHorizontal) {
+			lines.push(fitLine(dim("─".repeat(Math.min(w, 60))), w));
+			lines.push(fitLine(` ${dim(path.basename(rec.filePath))}`, w));
+		}
 		const blockers = rec.diagnostics.filter(isBlocking).slice(0, 5);
-		const others =
-			blockers.length < 5
-				? rec.diagnostics
-						.filter((d) => !isBlocking(d))
-						.slice(0, 5 - blockers.length)
-				: [];
-		for (const d of [...blockers, ...others]) {
-			const sev = isBlocking(d) ? red("●") : yellow("!");
+		for (const d of blockers) {
 			const loc = d.line != null ? osc8(d.uri ?? "", `L${d.line}`) : "";
 			const rule = d.rule ? dim(` ${d.rule}`) : "";
-			const prefix = `   ${sev} ${loc}${rule}  `;
+			const prefix = `   ${red("●")} ${loc}${rule}  `;
 			const msgWidth = Math.max(1, w - visibleWidth(prefix));
 			const msg = fitLine(d.message, msgWidth, "…");
 			lines.push(fitLine(`${prefix}${msg}`, w));
