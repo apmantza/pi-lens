@@ -10,7 +10,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getProjectDataDir } from "../file-utils.js";
 
-const CACHE_VERSION = "v2";
+const CACHE_VERSION = "v3";
 
 export interface QueryCacheEntry {
 	version: string;
@@ -27,6 +27,9 @@ export interface QueryCacheEntry {
 		post_filter?: string;
 		// biome-ignore lint/suspicious/noExplicitAny: Flexible filter params
 		post_filter_params?: Record<string, any>;
+		defect_class?: string;
+		inline_tier?: "blocking" | "warning" | "review";
+		has_fix?: boolean;
 		filePath?: string;
 	}>;
 }

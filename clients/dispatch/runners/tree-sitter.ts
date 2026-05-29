@@ -478,7 +478,7 @@ const treeSitterRunner: RunnerDefinition = {
 					(q) =>
 						({
 							...q,
-							has_fix: false,
+							has_fix: q.has_fix ?? false,
 							filePath: q.filePath ?? "",
 						}) as TreeSitterQuery,
 				)
@@ -509,6 +509,7 @@ const treeSitterRunner: RunnerDefinition = {
 					post_filter_params: q.post_filter_params,
 					defect_class: q.defect_class,
 					inline_tier: q.inline_tier,
+					has_fix: q.has_fix,
 					filePath: q.filePath,
 				})),
 			);
