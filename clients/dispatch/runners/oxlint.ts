@@ -146,10 +146,15 @@ interface OxlintJsonReport {
 
 // Oxlint codes look like "eslint(no-debugger)" or "oxc(approx-constant)".
 // Strip the plugin prefix so the rule lines up with what users expect.
+// indexOf-based extraction avoids a regex hot-spot Sonar flagged for
+// potential super-linear backtracking on adversarial inputs.
 function extractOxlintRule(code: string | undefined): string {
 	if (!code) return "unknown";
-	const match = code.match(/\(([^)]+)\)/);
-	return match ? match[1] : code;
+	const open = code.indexOf("(");
+	if (open === -1) return code;
+	const close = code.indexOf(")", open + 1);
+	if (close === -1 || close === open + 1) return code;
+	return code.slice(open + 1, close);
 }
 
 function parseOxlintJson(raw: string, filePath: string): Diagnostic[] {

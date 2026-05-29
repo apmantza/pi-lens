@@ -134,6 +134,7 @@ function parseClippyOutput(raw: string, filePath: string): Diagnostic[] {
 				semantic: message.level === "error" ? "blocking" : "warning",
 				tool: "rust-clippy",
 				rule: message.code?.code,
+				defectClass: "correctness",
 			});
 		} catch {
 			// Not a JSON line, skip

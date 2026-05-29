@@ -63,6 +63,7 @@ function parseGolangciJson(raw: string, filePath: string): Diagnostic[] {
 				semantic: severity === "error" ? "blocking" : "warning",
 				tool: "golangci-lint",
 				rule: issue.FromLinter,
+				defectClass: "correctness",
 			} satisfies Diagnostic;
 		});
 	} catch {

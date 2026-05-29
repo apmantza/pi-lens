@@ -108,6 +108,7 @@ function checkSwitchExhaustiveness(
 					semantic: "warning",
 					tool: "type-safety",
 					rule: "switch-exhaustiveness",
+					defectClass: "correctness",
 					fixSuggestion: "Add 'default: break;' or use exhaustive checking",
 				});
 			}
@@ -161,6 +162,7 @@ function checkMissingReturns(content: string, filePath: string): Diagnostic[] {
 				semantic: "blocking",
 				tool: "type-safety",
 				rule: "missing-return",
+				defectClass: "correctness",
 			});
 		}
 	}
@@ -185,6 +187,7 @@ function checkAnyTypeUsage(content: string, filePath: string): Diagnostic[] {
 			semantic: "warning",
 			tool: "type-safety",
 			rule: "no-any-type",
+			defectClass: "correctness",
 		});
 	}
 
