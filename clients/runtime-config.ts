@@ -3,18 +3,8 @@
  * Keep these values in one place so behavior is consistent and easy to tune.
  */
 
+import { toPositiveFinite } from "./env-utils.js";
 import { loadPiLensGlobalConfig } from "./lens-config.js";
-
-/**
- * Coerce an arbitrary input to a non-negative finite number, or 0 otherwise.
- * Used to gate config/env inputs into Math.max — passing NaN through Math.max
- * poisons the result and produces NaN timeouts downstream, which setTimeout
- * silently treats as 0 (immediate-abort all dispatch runners).
- */
-function toPositiveFinite(value: unknown): number {
-	const num = typeof value === "number" ? value : Number(value);
-	return Number.isFinite(num) && num > 0 ? num : 0;
-}
 
 let _runnerTimeoutFloorCache: number | undefined;
 

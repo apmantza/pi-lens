@@ -12,6 +12,7 @@ import * as nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isTestMode } from "../env-utils.js";
 import { recordLsp } from "../widget-state.js";
 import { logLatency } from "../latency-logger.js";
 import { normalizeMapKey, uriToPath } from "../path-utils.js";
@@ -77,10 +78,7 @@ const SESSIONSTART_LOG_DIR = path.join(os.homedir(), ".pi-lens");
 const SESSIONSTART_LOG = path.join(SESSIONSTART_LOG_DIR, "sessionstart.log");
 
 function logSessionStart(msg: string): void {
-	if (
-		process.env.PI_LENS_TEST_MODE === "1" ||
-		(process.env.VITEST && process.env.PI_LENS_TEST_MODE !== "0")
-	) {
+	if (isTestMode()) {
 		return;
 	}
 	const line = `[${new Date().toISOString()}] ${msg}\n`;

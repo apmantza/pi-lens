@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { isTestMode } from "./env-utils.js";
 
 const AW_LOG_DIR = path.join(os.homedir(), ".pi-lens");
 const AW_LOG_FILE = path.join(AW_LOG_DIR, "actionable-warnings.log");
@@ -47,10 +48,7 @@ function rotateIfNeeded(): void {
 export function logActionableWarningsEvent(
 	entry: ActionableWarningsLogEntry,
 ): void {
-	if (
-		process.env.PI_LENS_TEST_MODE === "1" ||
-		(process.env.VITEST && process.env.PI_LENS_TEST_MODE !== "0")
-	) {
+	if (isTestMode()) {
 		return;
 	}
 	const line = `${JSON.stringify({ ts: new Date().toISOString(), ...entry })}\n`;

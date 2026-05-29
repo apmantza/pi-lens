@@ -54,6 +54,7 @@ import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { createGunzip } from "node:zlib";
+import { isTestMode } from "../env-utils.js";
 
 // Global installation directory for pi-lens tools
 const TOOLS_DIR = path.join(os.homedir(), ".pi-lens", "tools");
@@ -77,10 +78,7 @@ function debugLog(...args: unknown[]): void {
 }
 
 function logSessionStart(msg: string): void {
-	if (
-		process.env.PI_LENS_TEST_MODE === "1" ||
-		(process.env.VITEST && process.env.PI_LENS_TEST_MODE !== "0")
-	) {
+	if (isTestMode()) {
 		return;
 	}
 	const line = `[${new Date().toISOString()}] ${msg}\n`;

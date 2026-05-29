@@ -17,6 +17,7 @@ import {
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isTestMode } from "../env-utils.js";
 
 export interface LSPProcess {
 	process: ChildProcess;
@@ -41,10 +42,7 @@ const PI_LENS_TOOLS_BIN_DIR = path.join(
 );
 
 function logSessionStart(msg: string): void {
-	if (
-		process.env.PI_LENS_TEST_MODE === "1" ||
-		(process.env.VITEST && process.env.PI_LENS_TEST_MODE !== "0")
-	) {
+	if (isTestMode()) {
 		return;
 	}
 	const line = `[${new Date().toISOString()}] ${msg}\n`;

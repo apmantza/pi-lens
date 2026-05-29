@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { access, appendFile, mkdir, readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isTestMode } from "../env-utils.js";
 import { KIND_EXTENSIONS } from "../file-kinds.js";
 import { ensureTool, getToolEnvironment } from "../installer/index.js";
 import { logLatency } from "../latency-logger.js";
@@ -130,10 +131,7 @@ const SESSIONSTART_LOG = path.join(SESSIONSTART_LOG_DIR, "sessionstart.log");
 const PI_LENS_BIN_DIR = path.join(os.homedir(), ".pi-lens", "bin");
 
 function logSessionStart(message: string): void {
-	if (
-		process.env.PI_LENS_TEST_MODE === "1" ||
-		(process.env.VITEST && process.env.PI_LENS_TEST_MODE !== "0")
-	) {
+	if (isTestMode()) {
 		return;
 	}
 	const line = `[${new Date().toISOString()}] ${message}\n`;
