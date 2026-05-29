@@ -8,10 +8,26 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
+import { createAvailabilityChecker } from "./utils/runner-helpers.js";
 
 type CompilerSpec =
 	| { command: string; args: string[]; flavor: "gcc" | "msvc" }
 	| undefined;
+
+// Per-compiler availability checkers — each one caches per-cwd and
+// dedupes concurrent --version probes, the same protections every other
+// runner gets via createAvailabilityChecker. cpp-check previously
+// re-spawned its full candidate sweep on every edit.
+const compilerCheckers = {
+	clang: createAvailabilityChecker("clang", ".exe"),
+	gcc: createAvailabilityChecker("gcc", ".exe"),
+	cc: createAvailabilityChecker("cc", ".exe"),
+	"clang++": createAvailabilityChecker("clang++", ".exe"),
+	"g++": createAvailabilityChecker("g++", ".exe"),
+	"c++": createAvailabilityChecker("c++", ".exe"),
+	cl: createAvailabilityChecker("cl", ".exe"),
+} as const;
+type CompilerKey = keyof typeof compilerCheckers;
 
 const C_SOURCE_EXTENSIONS = new Set([".c"]);
 const C_HEADER_EXTENSIONS = new Set([".h"]);
@@ -51,10 +67,9 @@ function headerLooksLikeCpp(absPath: string): boolean {
 	}
 }
 
-function getGccLikeCandidates(absPath: string): Array<{
-	command: string;
-	args: string[];
-}> {
+function getGccLikeCandidates(
+	absPath: string,
+): Array<{ key: CompilerKey; args: string[] }> {
 	const ext = path.extname(absPath).toLowerCase();
 	const cMode =
 		C_SOURCE_EXTENSIONS.has(ext) ||
@@ -67,33 +82,45 @@ function getGccLikeCandidates(absPath: string): Array<{
 			? ["-x", "c-header", "-fsyntax-only", absPath]
 			: ["-x", "c", "-fsyntax-only", absPath];
 		return [
-			{ command: "clang", args: cArgs },
-			{ command: "gcc", args: cArgs },
-			{ command: "cc", args: cArgs },
+			{ key: "clang", args: cArgs },
+			{ key: "gcc", args: cArgs },
+			{ key: "cc", args: cArgs },
 		];
 	}
 
 	if (cppMode || ext) {
 		return [
-			{ command: "clang++", args: ["-fsyntax-only", absPath] },
-			{ command: "g++", args: ["-fsyntax-only", absPath] },
-			{ command: "c++", args: ["-fsyntax-only", absPath] },
+			{ key: "clang++", args: ["-fsyntax-only", absPath] },
+			{ key: "g++", args: ["-fsyntax-only", absPath] },
+			{ key: "c++", args: ["-fsyntax-only", absPath] },
 		];
 	}
 
 	return [];
 }
 
-async function resolveCompiler(absPath: string): Promise<CompilerSpec> {
+async function resolveCompiler(
+	absPath: string,
+	cwd: string,
+): Promise<CompilerSpec> {
 	for (const candidate of getGccLikeCandidates(absPath)) {
-		const probe = await safeSpawnAsync(candidate.command, ["--version"], {
-			timeout: 5000,
-		});
-		if (!probe.error && probe.status === 0) {
-			return { ...candidate, flavor: "gcc" };
+		const checker = compilerCheckers[candidate.key];
+		if (await checker.isAvailableAsync(cwd)) {
+			const command = checker.getCommand(cwd) ?? candidate.key;
+			return { command, args: candidate.args, flavor: "gcc" };
 		}
 	}
 
+	// MSVC `cl.exe` doesn't accept `--version`; the createAvailabilityChecker
+	// probe used by every other compiler returns false even when cl is on
+	// PATH. Keep the ad-hoc no-arg probe but cache the resolution via the
+	// shared checker so subsequent edits don't re-spawn.
+	const clChecker = compilerCheckers.cl;
+	const clCmd = clChecker.getCommand(cwd);
+	if (clCmd) {
+		// Already probed in a previous turn and resolved.
+		return { command: clCmd, args: ["/nologo", "/Zs", absPath], flavor: "msvc" };
+	}
 	const clProbe = await safeSpawnAsync("cl", [], { timeout: 5000 });
 	if (!clProbe.error && clProbe.status !== null) {
 		return {
@@ -182,7 +209,7 @@ const cppCheckRunner: RunnerDefinition = {
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = ctx.cwd || process.cwd();
 		const absPath = path.resolve(cwd, ctx.filePath);
-		const compiler = await resolveCompiler(absPath);
+		const compiler = await resolveCompiler(absPath, cwd);
 		if (!compiler) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}

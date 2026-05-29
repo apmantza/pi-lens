@@ -178,11 +178,10 @@ describe("java/csharp fallback runners", () => {
 				kind: "cxx",
 			} as never);
 
-			expect(safeSpawn).toHaveBeenCalledWith(
-				"clang",
-				["--version"],
-				expect.any(Object),
-			);
+			// The --version probe is now encapsulated inside
+			// createAvailabilityChecker (mocked above), so the test only
+			// asserts the actual syntax check call. clang wins over gcc/cc
+			// for .c files because it is first in the candidate order.
 			expect(safeSpawn).toHaveBeenCalledWith(
 				"clang",
 				["-x", "c", "-fsyntax-only", filePath],
