@@ -475,11 +475,6 @@ function piAgentExtensionsRootKey(file: string): string | undefined {
 	return dirKey.slice(0, index + marker.length);
 }
 
-function isSameOrUnderSlashKey(child: string, parentKey: string): boolean {
-	const childKey = normalizeSlashKey(child);
-	return childKey === parentKey || childKey.startsWith(`${parentKey}/`);
-}
-
 export const EslintRoot: RootFunction = async (file: string) => {
 	let currentDir = path.resolve(path.dirname(file));
 	const fsRoot = path.parse(currentDir).root;
@@ -991,25 +986,99 @@ const JS_TS_LSP_EXTENSIONS = KIND_EXTENSIONS["jsts"].filter(
 	(ext) => ext !== ".svelte" && ext !== ".vue",
 );
 
+// Marker set used for both the unbounded TypeScriptProjectRoot walk and the
+// extension-bounded walk below. Kept in one place so both code paths look
+// for the same project signals.
+const TS_PROJECT_MARKERS = [
+	"package-lock.json",
+	"bun.lockb",
+	"bun.lock",
+	"pnpm-lock.yaml",
+	"yarn.lock",
+	"package.json",
+] as const;
+
 const TypeScriptProjectRoot = IgnoreHomeRoot(
-	createRootDetector([
-		"package-lock.json",
-		"bun.lockb",
-		"bun.lock",
-		"pnpm-lock.yaml",
-		"yarn.lock",
-		"package.json",
-	]),
+	createRootDetector([...TS_PROJECT_MARKERS]),
 );
+
+/**
+ * Walk up from the file's directory looking for a TypeScript project marker,
+ * but stop at `extensionRootKey` so we never escape the .pi/agent/extensions
+ * boundary into a higher-up project (e.g. ~/.pi/agent/package.json which
+ * would pull every extension in the directory into one LSP workspace).
+ *
+ * Returns the nearest directory containing a marker, or undefined if none
+ * is found between the file and the extensions root inclusive.
+ */
+async function findExtensionBoundedRoot(
+	file: string,
+	extensionRootKey: string,
+): Promise<string | undefined> {
+	const startDir = path.resolve(path.dirname(file));
+	let currentDir = startDir;
+	while (true) {
+		for (const pattern of TS_PROJECT_MARKERS) {
+			try {
+				await stat(path.join(currentDir, pattern));
+				return currentDir;
+			} catch {
+				/* not found, try next marker */
+			}
+		}
+		// Stop at or beyond the extensions root — never walk into the
+		// pi-agent-wide scope.
+		const currentKey = normalizeSlashKey(currentDir);
+		if (currentKey === extensionRootKey) return undefined;
+		const parent = path.dirname(currentDir);
+		if (parent === currentDir) return undefined;
+		currentDir = parent;
+	}
+}
+
+/**
+ * Check whether the directory immediately containing the extensions folder
+ * (i.e. `.pi/agent/`) holds any TypeScript project marker. This narrowly
+ * detects the #123 scenario — pi itself installs a package.json at
+ * `~/.pi/agent/` and the user's extension has none of its own — without
+ * picking up accidental markers further up the filesystem.
+ */
+async function hasAgentLevelProjectMarker(
+	extensionRootKey: string,
+): Promise<boolean> {
+	const agentDir = path.dirname(extensionRootKey);
+	if (!agentDir || agentDir === extensionRootKey) return false;
+	for (const pattern of TS_PROJECT_MARKERS) {
+		try {
+			await stat(path.join(agentDir, pattern));
+			return true;
+		} catch {
+			/* not found, try next */
+		}
+	}
+	return false;
+}
 
 const TypeScriptRoot: RootFunction = DenoExcludeRoot(async (file) => {
 	const extensionRootKey = piAgentExtensionsRootKey(file);
-	const projectRoot = await TypeScriptProjectRoot(file);
 	if (extensionRootKey) {
-		return projectRoot && isSameOrUnderSlashKey(projectRoot, extensionRootKey)
-			? projectRoot
-			: undefined;
+		// Bounded walk so we never adopt a parent (e.g. ~/.pi/agent/) as the
+		// LSP root.
+		const bounded = await findExtensionBoundedRoot(file, extensionRootKey);
+		if (bounded) return bounded;
+		// No marker inside the extension boundary. If pi itself has a
+		// package.json at ~/.pi/agent/ (the #123 setup), the previous code
+		// returned undefined and the LSP silently failed to start. Fall
+		// back to a per-file scope so the LSP at least runs.
+		if (await hasAgentLevelProjectMarker(extensionRootKey)) {
+			return FileDirRoot(file);
+		}
+		// Truly loose extension file with no project context anywhere
+		// relevant — preserve the existing skip behavior (LSP shouldn't
+		// analyze a lone .ts file with no package.json above or below).
+		return undefined;
 	}
+	const projectRoot = await TypeScriptProjectRoot(file);
 	if (projectRoot) return projectRoot;
 	return FileDirRoot(file);
 });
