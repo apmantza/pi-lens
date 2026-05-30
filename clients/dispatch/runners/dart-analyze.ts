@@ -72,11 +72,9 @@ const dartAnalyzeRunner: RunnerDefinition = {
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = ctx.cwd || process.cwd();
 		const absPath = path.resolve(cwd, ctx.filePath);
-		const dartAvailable = await (dart.isAvailableAsync?.(cwd) ??
-			dart.isAvailable(cwd));
+		const dartAvailable = await dart.isAvailableAsync(cwd);
 		const flutterAvailable =
-			!dartAvailable &&
-			(await (flutter.isAvailableAsync?.(cwd) ?? flutter.isAvailable(cwd)));
+			!dartAvailable && (await flutter.isAvailableAsync(cwd));
 		if (!dartAvailable && !flutterAvailable) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}

@@ -79,8 +79,7 @@ const detektRunner: RunnerDefinition = {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
-		const cmd = (await (detekt.isAvailableAsync?.(cwd) ??
-			detekt.isAvailable(cwd)))
+		const cmd = (await detekt.isAvailableAsync(cwd))
 			? detekt.getCommand(cwd)
 			: null;
 		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };

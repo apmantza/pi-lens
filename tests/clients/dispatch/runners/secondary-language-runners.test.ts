@@ -14,6 +14,7 @@ vi.mock("../../../../clients/safe-spawn.js", () => ({
 vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
 	createAvailabilityChecker: (command: string) => ({
 		isAvailable: () => availabilityCheck(command),
+		isAvailableAsync: async () => availabilityCheck(command),
 		getCommand: () => command,
 	}),
 }));
