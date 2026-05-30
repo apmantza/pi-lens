@@ -28,6 +28,13 @@ import { readFileContent } from "./utils.js";
 const LSP_MAX_FILE_BYTES = RUNTIME_CONFIG.pipeline.lspMaxFileBytes;
 const LSP_MAX_FILE_LINES = RUNTIME_CONFIG.pipeline.lspMaxFileLines;
 const LSP_SPAWN_BUDGET_MS = RUNTIME_CONFIG.pipeline.lspSpawnBudgetMs;
+
+// Diagnostics-wait cap for the dispatch lsp-runner. Bounded so a slow LSP
+// (typescript-language-server on large monorepos has been observed >7 s)
+// can't dominate the per-edit pipeline budget. Diagnostics that arrive
+// after the cap still land in the client's cache and surface on the
+// next edit. Overridable via PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS.
+const LSP_DIAGNOSTICS_WAIT_MS = 2500;
 const MAX_CODE_ACTION_LOOKUPS = 6;
 const MAX_CODE_ACTION_TITLES = 3;
 
@@ -133,6 +140,7 @@ const lspRunner: RunnerDefinition = {
 				collectDiagnostics: true,
 				clientScope: "primary",
 				maxClientWaitMs: LSP_SPAWN_BUDGET_MS,
+				maxDiagnosticsWaitMs: LSP_DIAGNOSTICS_WAIT_MS,
 				source: "dispatch-lsp-runner",
 			});
 			lspDiags = touched ?? [];

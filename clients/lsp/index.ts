@@ -50,6 +50,20 @@ const TOUCH_DEBOUNCE_MS = Math.max(
 	Number.parseInt(process.env.PI_LENS_LSP_TOUCH_DEBOUNCE_MS ?? "1500", 10) ||
 		1500,
 );
+
+/**
+ * Read the `PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS` env override at call time
+ * (process.env mutations in tests stay live). Returns undefined when unset,
+ * non-numeric, or negative — callers fall back through the explicit option
+ * chain in {@link LSPService.touchFile}.
+ */
+function readEnvDiagnosticsWaitMs(): number | undefined {
+	const raw = process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS;
+	if (raw === undefined) return undefined;
+	const parsed = Number.parseInt(raw, 10);
+	if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+	return parsed;
+}
 const DIAGNOSTICS_SEMANTIC_SETTLE_THRESHOLD_MS = Math.max(
 	0,
 	Number.parseInt(
@@ -131,7 +145,20 @@ export interface LSPTouchFileOptions {
 	diagnostics?: LSPDiagnosticsMode;
 	source?: string;
 	clientScope?: LSPTouchClientScope;
+	/** Budget for waiting on the LSP client to spawn / become ready. */
 	maxClientWaitMs?: number;
+	/**
+	 * Budget for waiting on `textDocument/publishDiagnostics` after the notify
+	 * lands. The dispatch-lsp-runner sets this to a tighter value so a slow
+	 * LSP on one file doesn't dominate the per-edit pipeline budget (#117).
+	 *
+	 * Resolution order (first wins):
+	 *   1. `PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS` env var (user override)
+	 *   2. this option
+	 *   3. `maxClientWaitMs` (legacy fallback)
+	 *   4. built-in defaults (3000 ms for `full`, 1200 ms for `document`)
+	 */
+	maxDiagnosticsWaitMs?: number;
 	/** Return merged diagnostics from the clients touched by this call. */
 	collectDiagnostics?: boolean;
 	/** Skip workspace/didChangeWatchedFiles — use for cascade reads, not real fs changes */
@@ -780,9 +807,18 @@ export class LSPService {
 			);
 		}
 
+		let diagnosticsTimedOut = false;
 		if (diagnosticsMode !== "none") {
+			// Resolution: env wins so users can tune the cap without rebuilding,
+			// then the per-call option, then the legacy maxClientWaitMs reuse,
+			// then mode-defaulted floor.
+			const envWait = readEnvDiagnosticsWaitMs();
 			const timeoutMs =
-				options.maxClientWaitMs ?? (diagnosticsMode === "full" ? 3000 : 1200);
+				envWait ??
+				options.maxDiagnosticsWaitMs ??
+				options.maxClientWaitMs ??
+				(diagnosticsMode === "full" ? 3000 : 1200);
+			const waitStartedAt = Date.now();
 			await Promise.all(
 				spawned.map((entry) =>
 					entry.client
@@ -790,6 +826,25 @@ export class LSPService {
 						.catch(() => undefined),
 				),
 			);
+			const waitedMs = Date.now() - waitStartedAt;
+			// Within ~20 ms of the configured budget we treat it as a timeout;
+			// the LSP didn't beat the cap. Diagnostics that arrive late still
+			// land in the client's cache and surface on the next edit.
+			if (waitedMs + 20 >= timeoutMs) {
+				diagnosticsTimedOut = true;
+				logLatency({
+					type: "phase",
+					phase: "lsp_diagnostics_timeout",
+					filePath: normalizedPath,
+					durationMs: waitedMs,
+					metadata: {
+						source,
+						clientScope,
+						diagnosticsMode,
+						timeoutMs,
+					},
+				});
+			}
 		}
 
 		const collected = options.collectDiagnostics
@@ -818,6 +873,7 @@ export class LSPService {
 				failureKind: "success",
 				collectedDiagnostics: collected?.length,
 				notifySkipped,
+				diagnosticsTimedOut,
 			},
 		});
 		return collected ?? [];

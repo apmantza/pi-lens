@@ -191,4 +191,82 @@ describe("LSPService.touchFile collectDiagnostics", () => {
 
 		expect(client.notify.open).toHaveBeenCalledTimes(2);
 	});
+
+	it("passes maxDiagnosticsWaitMs through to client.waitForDiagnostics (#117)", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		const client = {
+			isAlive: () => true,
+			shutdown: async () => {},
+			getWorkspaceDiagnosticsSupport: () => ({
+				advertised: false,
+				mode: "push-only" as const,
+				diagnosticProviderKind: "none",
+			}),
+			getOperationSupport: () => ({}),
+			notify: { open: vi.fn().mockResolvedValue(undefined) },
+			waitForDiagnostics: vi.fn().mockResolvedValue(undefined),
+			getDiagnostics: vi.fn(() => []),
+		};
+
+		createLSPClient.mockResolvedValue(client);
+		getServersForFileWithConfig.mockReturnValue([makeServer("python")]);
+
+		// Caller passes a tight diagnostics budget — must override the
+		// default that would otherwise be derived from maxClientWaitMs.
+		await service.touchFile(FILE, "print('x')\n", {
+			clientScope: "primary",
+			diagnostics: "document",
+			collectDiagnostics: true,
+			maxClientWaitMs: 8000,
+			maxDiagnosticsWaitMs: 2500,
+			source: "dispatch-lsp-runner",
+		});
+
+		expect(client.waitForDiagnostics).toHaveBeenCalledWith(FILE, 2500);
+	});
+
+	it("PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS overrides the option chain", async () => {
+		const previous = process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS;
+		process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS = "1000";
+		try {
+			const { LSPService } = await import("../../../clients/lsp/index.js");
+			const service = new LSPService();
+			const client = {
+				isAlive: () => true,
+				shutdown: async () => {},
+				getWorkspaceDiagnosticsSupport: () => ({
+					advertised: false,
+					mode: "push-only" as const,
+					diagnosticProviderKind: "none",
+				}),
+				getOperationSupport: () => ({}),
+				notify: { open: vi.fn().mockResolvedValue(undefined) },
+				waitForDiagnostics: vi.fn().mockResolvedValue(undefined),
+				getDiagnostics: vi.fn(() => []),
+			};
+
+			createLSPClient.mockResolvedValue(client);
+			getServersForFileWithConfig.mockReturnValue([makeServer("python")]);
+
+			// Even with a higher explicit option, env wins via readEnvDiagnosticsWaitMs
+			// because the touchFile resolution checks the env before the explicit option.
+			// Verify: the env override of 1000 ms is what reaches the client.
+			await service.touchFile(FILE, "print('x')\n", {
+				clientScope: "primary",
+				diagnostics: "document",
+				collectDiagnostics: true,
+				maxClientWaitMs: 8000,
+				source: "dispatch-lsp-runner",
+			});
+
+			expect(client.waitForDiagnostics).toHaveBeenCalledWith(FILE, 1000);
+		} finally {
+			if (previous === undefined) {
+				delete process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS;
+			} else {
+				process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS = previous;
+			}
+		}
+	});
 });
