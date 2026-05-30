@@ -63,6 +63,7 @@ import { RuntimeCoordinator } from "./clients/runtime-coordinator.js";
 import { handleSessionStart } from "./clients/runtime-session.js";
 import {
 	clearLastAnalyzedStateCache,
+	flushDebouncedToolResults,
 	handleToolResult,
 } from "./clients/runtime-tool-result.js";
 import { cancelLSPIdleReset, handleTurnEnd } from "./clients/runtime-turn.js";
@@ -1864,6 +1865,10 @@ export default function (pi: ExtensionAPI) {
 	pi.on("agent_end", async (_event, ctx) => {
 		if (!lensEnabled) return;
 		try {
+			// Ensure any pipeline still queued in the debounce window finishes
+			// before agent_end runs — otherwise project change-log entries and
+			// modified ranges this turn produced may not be reflected yet.
+			await flushDebouncedToolResults();
 			await handleAgentEnd({
 				ctxCwd: ctx.cwd,
 				getFlag: (name: string) => getLensFlag(name),
@@ -1884,6 +1889,9 @@ export default function (pi: ExtensionAPI) {
 	pi.on("turn_end", async (_event: any, ctx) => {
 		if (!lensEnabled) return;
 		try {
+			// Drain any tool_result still in the debounce window so turn_end
+			// reads consistent state (cache, modified ranges, change-log).
+			await flushDebouncedToolResults();
 			const { knipClient, depChecker, testRunnerClient } =
 				await loadBootstrapClients();
 			await handleTurnEnd({
