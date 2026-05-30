@@ -9,6 +9,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { walkUpDirs } from "../../path-utils.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import {
 	getJstsLintPolicyForCwd,
@@ -28,9 +29,7 @@ import {
 
 function resolveLocalVp(cwd: string): string | null {
 	const isWin = process.platform === "win32";
-	let dir = cwd;
-	const root = path.parse(dir).root;
-	while (true) {
+	for (const dir of walkUpDirs(cwd)) {
 		const candidates = isWin
 			? [
 					path.join(dir, "node_modules", ".bin", "vp.cmd"),
@@ -40,10 +39,6 @@ function resolveLocalVp(cwd: string): string | null {
 		for (const candidate of candidates) {
 			if (fs.existsSync(candidate)) return candidate;
 		}
-		if (dir === root) break;
-		const parent = path.dirname(dir);
-		if (parent === dir) break;
-		dir = parent;
 	}
 	return null;
 }

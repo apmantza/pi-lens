@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { logLatency } from "./latency-logger.js";
+import { walkUpDirs as walkUpDirsGenerator } from "./path-utils.js";
 
 export type ToolGate = "config-first" | "smart-default" | "mixed";
 
@@ -1558,18 +1559,12 @@ const ESLINT_CONFIGS = [
 	"eslint.config.ts",
 ];
 
+// Thin array adapter over the shared generator in path-utils. The existing
+// callers in this file rely on Array.prototype methods (`some`, etc.), so
+// materializing the walk once per call is the smallest-blast-radius
+// migration. New code should prefer the generator directly.
 function walkUpDirs(cwd: string): string[] {
-	const dirs: string[] = [];
-	let dir = cwd;
-	const root = path.parse(dir).root;
-	while (true) {
-		dirs.push(dir);
-		if (dir === root) break;
-		const parent = path.dirname(dir);
-		if (parent === dir) break;
-		dir = parent;
-	}
-	return dirs;
+	return Array.from(walkUpDirsGenerator(cwd));
 }
 
 function walkUpDirsUntilPackageJson(cwd: string): string[] {
@@ -1661,9 +1656,7 @@ export function getBiomeConfigPath(cwd: string): string | undefined {
 }
 
 export function hasOxfmtConfig(cwd: string): boolean {
-	let dir = cwd;
-	const root = path.parse(dir).root;
-	while (true) {
+	for (const dir of walkUpDirsGenerator(cwd)) {
 		if (fs.existsSync(path.join(dir, "oxfmt.toml"))) return true;
 		if (fs.existsSync(path.join(dir, ".oxfmtrc.json"))) return true;
 		if (hasVitePlusConfig(dir)) return true;
@@ -1681,10 +1674,6 @@ export function hasOxfmtConfig(cwd: string): boolean {
 				if (deps["@oxc-project/oxfmt"]) return true;
 			} catch {}
 		}
-		if (dir === root) break;
-		const parent = path.dirname(dir);
-		if (parent === dir) break;
-		dir = parent;
 	}
 	return false;
 }

@@ -8,6 +8,7 @@
 import * as nodeFs from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { findNearestContaining } from "../../path-utils.js";
 import {
 	buildProjectIndex,
 	findSimilarFunctions,
@@ -430,16 +431,10 @@ function extractLocationPath(location: string): string {
 const indexCache = new Map<string, ProjectIndex>();
 
 async function findProjectRoot(filePath: string): Promise<string | null> {
-	let dir = path.dirname(filePath);
-	while (dir !== path.dirname(dir)) {
-		try {
-			await fs.access(path.join(dir, "package.json"));
-			return dir;
-		} catch {
-			dir = path.dirname(dir);
-		}
-	}
-	return null;
+	// Sync existsSync inside findNearestContaining is fine here — the walk
+	// is bounded to a few dozen directory levels at worst, and we already
+	// hold the filesystem under a per-file scan budget.
+	return findNearestContaining(path.dirname(filePath), ["package.json"]) ?? null;
 }
 
 async function loadOrBuildIndex(

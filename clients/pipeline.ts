@@ -14,6 +14,7 @@
 
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
+import { findNearestContaining } from "./path-utils.js";
 import {
 	recordFromDispatchDiagnostic,
 	type ActionableWarningRecord,
@@ -377,18 +378,9 @@ async function tryRustClippyFix(filePath: string): Promise<string[]> {
 	const check = await safeSpawnAsync("cargo", ["--version"], { timeout: 5000 });
 	if (check.error || check.status !== 0) return [];
 
-	let dir = path.dirname(path.resolve(filePath));
-	const root = path.parse(dir).root;
-	let cargoDir: string | undefined;
-	while (dir !== root) {
-		if (nodeFs.existsSync(path.join(dir, "Cargo.toml"))) {
-			cargoDir = dir;
-			break;
-		}
-		const parent = path.dirname(dir);
-		if (parent === dir) break;
-		dir = parent;
-	}
+	const cargoDir = findNearestContaining(path.dirname(path.resolve(filePath)), [
+		"Cargo.toml",
+	]);
 	if (!cargoDir) return [];
 
 	const before = snapshotProjectFiles(cargoDir);
@@ -405,18 +397,10 @@ async function tryDartFix(filePath: string): Promise<string[]> {
 	const check = await safeSpawnAsync("dart", ["--version"], { timeout: 5000 });
 	if (check.error || check.status !== 0) return [];
 
-	let dir = path.dirname(path.resolve(filePath));
-	const root = path.parse(dir).root;
-	let pubspecDir: string | undefined;
-	while (dir !== root) {
-		if (nodeFs.existsSync(path.join(dir, "pubspec.yaml"))) {
-			pubspecDir = dir;
-			break;
-		}
-		const parent = path.dirname(dir);
-		if (parent === dir) break;
-		dir = parent;
-	}
+	const pubspecDir = findNearestContaining(
+		path.dirname(path.resolve(filePath)),
+		["pubspec.yaml"],
+	);
 	if (!pubspecDir) return [];
 
 	const before = snapshotProjectFiles(pubspecDir);

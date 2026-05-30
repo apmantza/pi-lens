@@ -4,8 +4,8 @@
  * Runs `cargo clippy` for Rust files to catch common mistakes.
  */
 
-import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { findNearestContaining } from "../../path-utils.js";
 import { RustClient } from "../../rust-client.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { stripAnsi } from "../../sanitize.js";
@@ -94,18 +94,8 @@ const rustClippyRunner: RunnerDefinition = {
 };
 
 function findCargoToml(filePath: string): string | undefined {
-	let dir = dirname(filePath);
-	while (dir !== "/" && dir !== ".") {
-		const cargoPath = join(dir, "Cargo.toml");
-		if (existsSync(cargoPath)) {
-			return cargoPath;
-		}
-		const parent = dirname(dir);
-		if (parent === dir) break;
-		dir = parent;
-	}
-
-	return undefined;
+	const dir = findNearestContaining(dirname(filePath), ["Cargo.toml"]);
+	return dir ? join(dir, "Cargo.toml") : undefined;
 }
 
 interface ClippySpan {

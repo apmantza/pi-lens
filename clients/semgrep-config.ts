@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getProjectDataDir } from "./file-utils.js";
+import { walkUpDirs } from "./path-utils.js";
 
 export interface PiLensSemgrepConfig {
 	enabled?: boolean;
@@ -23,20 +24,8 @@ export const LOCAL_SEMGREP_CONFIG_NAMES = [
 	"semgrep.yaml",
 ] as const;
 
-function walkUp(startDir: string): string[] {
-	const dirs: string[] = [];
-	let current = path.resolve(startDir || process.cwd());
-	while (true) {
-		dirs.push(current);
-		const parent = path.dirname(current);
-		if (parent === current) break;
-		current = parent;
-	}
-	return dirs;
-}
-
 export function findLocalSemgrepConfig(startDir: string): string | undefined {
-	for (const dir of walkUp(startDir)) {
+	for (const dir of walkUpDirs(startDir || process.cwd())) {
 		for (const name of LOCAL_SEMGREP_CONFIG_NAMES) {
 			const candidate = path.join(dir, name);
 			if (fs.existsSync(candidate)) return candidate;
@@ -52,7 +41,7 @@ export function findPiLensSemgrepConfigPath(
 	const dataCandidate = path.join(getProjectDataDir(startDir), "semgrep.json");
 	if (fs.existsSync(dataCandidate)) return dataCandidate;
 	// Fall back to legacy walk-up search for backwards compatibility
-	for (const dir of walkUp(startDir)) {
+	for (const dir of walkUpDirs(startDir || process.cwd())) {
 		const candidate = path.join(dir, ".pi-lens", "semgrep.json");
 		if (fs.existsSync(candidate)) return candidate;
 	}
