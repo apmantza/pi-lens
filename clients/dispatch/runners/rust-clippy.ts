@@ -108,7 +108,46 @@ function findCargoToml(filePath: string): string | undefined {
 	return undefined;
 }
 
-function parseClippyOutput(raw: string, filePath: string): Diagnostic[] {
+interface ClippySpan {
+	file?: string;
+	file_name?: string;
+	line_start?: number;
+	column_start?: number;
+	suggested_replacement?: string;
+	suggestion_applicability?:
+		| "MachineApplicable"
+		| "MaybeIncorrect"
+		| "HasPlaceholders"
+		| "Unspecified";
+}
+
+interface ClippyMessage {
+	code?: { code?: string };
+	message?: string;
+	level?: string;
+	spans?: ClippySpan[];
+}
+
+/**
+ * Find a machine-applicable suggested replacement across the message's spans.
+ * Clippy emits one diagnostic per warning but can attach the auto-fix to a
+ * span other than the primary one (e.g. a fix that rewrites a use-site AND
+ * removes the now-unused import). We treat the diagnostic as fixable if any
+ * span carries a MachineApplicable suggestion — that's the applicability
+ * level clippy promises is safe for `cargo clippy --fix` to apply without
+ * human review.
+ */
+function findMachineApplicableSpan(
+	spans: ClippySpan[],
+): ClippySpan | undefined {
+	return spans.find(
+		(s) =>
+			typeof s.suggested_replacement === "string" &&
+			s.suggestion_applicability === "MachineApplicable",
+	);
+}
+
+export function parseClippyOutput(raw: string, filePath: string): Diagnostic[] {
 	const diagnostics: Diagnostic[] = [];
 	const lines = raw.split("\n").filter((l) => l.trim());
 
@@ -117,17 +156,20 @@ function parseClippyOutput(raw: string, filePath: string): Diagnostic[] {
 			const msg = JSON.parse(line);
 			if (msg.reason !== "compiler-message") continue;
 
-			const message = msg.message;
+			const message: ClippyMessage | undefined = msg.message;
 			if (!message) continue;
 
 			// Only include messages for this file or project-wide
-			const span = message.spans?.[0];
+			const spans = message.spans ?? [];
+			const span = spans[0];
 			if (!span) continue;
+
+			const fixableSpan = findMachineApplicableSpan(spans);
 
 			diagnostics.push({
 				id: `clippy-${message.code?.code || "unknown"}`,
 				message: message.message || "Clippy warning",
-				filePath: span.file || filePath,
+				filePath: span.file || span.file_name || filePath,
 				line: span.line_start || 0,
 				column: span.column_start || 0,
 				severity: message.level === "error" ? "error" : "warning",
@@ -135,6 +177,8 @@ function parseClippyOutput(raw: string, filePath: string): Diagnostic[] {
 				tool: "rust-clippy",
 				rule: message.code?.code,
 				defectClass: "correctness",
+				fixable: fixableSpan !== undefined,
+				fixSuggestion: fixableSpan?.suggested_replacement,
 			});
 		} catch {
 			// Not a JSON line, skip
