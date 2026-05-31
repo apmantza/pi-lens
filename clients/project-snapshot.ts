@@ -4,6 +4,10 @@ import { getProjectDataDir } from "./file-utils.js";
 import { normalizeMapKey } from "./path-utils.js";
 import type { ProjectLanguageProfile } from "./language-policy.js";
 import type { ProjectIndex } from "./project-index.js";
+import {
+	detectProjectConventions,
+	type ProjectConventions,
+} from "./project-conventions.js";
 import type { RuleScanResult } from "./rules-scanner.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 import type { StartupScanContext } from "./startup-scan.js";
@@ -45,6 +49,7 @@ export interface ProjectSnapshot {
 	};
 	startupScan?: StartupScanContext;
 	languageProfile?: ProjectLanguageProfile;
+	conventions?: ProjectConventions;
 }
 
 export function getProjectSnapshotPath(cwd: string): string {
@@ -96,6 +101,7 @@ function parseSnapshot(value: unknown): ProjectSnapshot | null {
 		projectIndex: snapshot.projectIndex,
 		startupScan: snapshot.startupScan,
 		languageProfile: snapshot.languageProfile,
+		conventions: snapshot.conventions,
 	};
 }
 
@@ -135,6 +141,7 @@ export function buildProjectSnapshotFromRuntime(args: {
 	runtime: RuntimeCoordinator;
 	startupScan?: StartupScanContext;
 	languageProfile?: ProjectLanguageProfile;
+	conventions?: ProjectConventions;
 }): ProjectSnapshot {
 	const runtimeWithOptionalIndex = args.runtime as RuntimeCoordinator & {
 		cachedProjectIndex?: ProjectIndex | null;
@@ -157,6 +164,7 @@ export function buildProjectSnapshotFromRuntime(args: {
 			: undefined,
 		startupScan: args.startupScan,
 		languageProfile: args.languageProfile,
+		conventions: args.conventions,
 	};
 }
 
@@ -178,15 +186,25 @@ export function saveRuntimeProjectSnapshot(args: {
 	runtime: RuntimeCoordinator;
 	startupScan?: StartupScanContext;
 	languageProfile?: ProjectLanguageProfile;
+	conventions?: ProjectConventions;
 	dbg?: (msg: string) => void;
 }): void {
 	try {
 		if (typeof args.runtime.projectSeq !== "number") return;
 		const existing = loadProjectSnapshot(args.cwd);
+		let conventions = args.conventions ?? existing?.conventions;
+		if (!conventions) {
+			try {
+				conventions = detectProjectConventions(args.cwd);
+			} catch (err) {
+				args.dbg?.(`project_snapshot: convention detection failed: ${err}`);
+			}
+		}
 		const snapshot = buildProjectSnapshotFromRuntime({
 			...args,
 			startupScan: args.startupScan ?? existing?.startupScan,
 			languageProfile: args.languageProfile ?? existing?.languageProfile,
+			conventions,
 		});
 		if (existing) {
 			snapshot.files = existing.files ?? {};
