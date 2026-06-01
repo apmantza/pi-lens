@@ -41,6 +41,7 @@ interface RuffJsonDiagnostic {
 
 export class RuffClient {
 	private ruffAvailable: boolean | null = null;
+	private ensureInFlight: Promise<boolean> | null = null;
 	private log: (msg: string) => void;
 
 	constructor(verbose = false) {
@@ -50,12 +51,26 @@ export class RuffClient {
 	}
 
 	/**
-	 * Check if ruff CLI is available, auto-install if not
+	 * Check if ruff CLI is available, auto-install if not.
+	 *
+	 * Re-entrancy safe: concurrent first-time callers share a single
+	 * `ensureInFlight` promise so probing/auto-install isn't duplicated.
+	 * Mirrors the dedupe pattern in `SgRunner` / `KnipClient` /
+	 * `DependencyChecker`.
 	 */
 	async ensureAvailable(): Promise<boolean> {
-		// Fast path: already checked
 		if (this.ruffAvailable !== null) return this.ruffAvailable;
+		if (this.ensureInFlight) return this.ensureInFlight;
 
+		this.ensureInFlight = this.doEnsureAvailable();
+		try {
+			return await this.ensureInFlight;
+		} finally {
+			this.ensureInFlight = null;
+		}
+	}
+
+	private async doEnsureAvailable(): Promise<boolean> {
 		// Check if available in PATH
 		const result = await safeSpawnAsync("ruff", ["--version"], {
 			timeout: 5000,

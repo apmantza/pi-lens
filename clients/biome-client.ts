@@ -41,6 +41,7 @@ export class BiomeClient {
 	// (lives under ~/.pi-lens/tools), so it's stored separately from the
 	// per-cwd cache and used as a final fallback before npx.
 	private autoInstalledBinaryPath: string | null = null;
+	private ensureInFlight: Promise<boolean> | null = null;
 	private log: (msg: string) => void;
 
 	constructor(verbose = false) {
@@ -144,10 +145,25 @@ export class BiomeClient {
 	/**
 	 * Ensure Biome is available, auto-installing if necessary.
 	 * Prefer this over isAvailable() for auto-install behavior.
+	 *
+	 * Re-entrancy safe: concurrent first-time callers share a single
+	 * `ensureInFlight` promise so probing/auto-install isn't duplicated.
+	 * Mirrors the dedupe pattern in `SgRunner` / `KnipClient` /
+	 * `DependencyChecker`.
 	 */
 	async ensureAvailable(): Promise<boolean> {
 		if (this.biomeAvailable !== null) return this.biomeAvailable;
+		if (this.ensureInFlight) return this.ensureInFlight;
 
+		this.ensureInFlight = this.doEnsureAvailable();
+		try {
+			return await this.ensureInFlight;
+		} finally {
+			this.ensureInFlight = null;
+		}
+	}
+
+	private async doEnsureAvailable(): Promise<boolean> {
 		// Check if already available
 		const result = await this.spawnBiomeAsync(["--version"], 10000);
 		if (!result.error && result.status === 0) {
