@@ -1,7 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { logLatency } from "./latency-logger.js";
-import { walkUpDirs as walkUpDirsGenerator } from "./path-utils.js";
+import { findNearestContaining, walkUpDirs } from "./path-utils.js";
+import type { ProjectConventions } from "./project-conventions.js";
+import { loadProjectSnapshot } from "./project-snapshot.js";
 
 export type ToolGate = "config-first" | "smart-default" | "mixed";
 
@@ -759,6 +761,15 @@ export interface LinterPolicy {
 	defaultRunner?: LintRunnerName;
 	defaultWhenUnconfigured: boolean;
 	gate: ToolGate;
+	/**
+	 * Framework IDs that were detected for this project (via the cached
+	 * `ProjectConventions` snapshot, populated by #118). Informational for
+	 * downstream consumers — future PRs will use it to gate runner-specific
+	 * rules (e.g. React-aware oxlint plugins, Next.js-specific tree-sitter
+	 * rules). The field is undefined when no snapshot is available; consumers
+	 * should treat undefined as "unknown" rather than "no frameworks".
+	 */
+	frameworkHints?: string[];
 }
 
 export interface AutofixPolicy {
@@ -1384,6 +1395,22 @@ export function getLinterPolicyForFile(
 	return undefined;
 }
 
+/**
+ * Returns the cached `ProjectConventions` for `cwd` if a project snapshot
+ * exists, otherwise `undefined`. Reads from the snapshot file rather than
+ * re-running the detector so the hot path (per-file dispatch) stays cheap.
+ *
+ * The snapshot is refreshed by `saveRuntimeProjectSnapshot` during the
+ * normal runtime lifecycle, so consumers see a value updated at session-
+ * start / project-seq bumps rather than on every read.
+ */
+export function getCachedProjectConventions(
+	cwd: string,
+): ProjectConventions | undefined {
+	const snapshot = loadProjectSnapshot(cwd);
+	return snapshot?.conventions;
+}
+
 export function getLinterPolicyForCwd(
 	filePath: string,
 	cwd: string,
@@ -1403,6 +1430,12 @@ export function getLinterPolicyForCwd(
 		hasDetektConfig: hasDetektConfig(cwd),
 	};
 	const policy = getLinterPolicyForFile(filePath, context);
+	if (policy) {
+		const conventions = getCachedProjectConventions(cwd);
+		if (conventions && conventions.frameworks.length > 0) {
+			policy.frameworkHints = conventions.frameworks.map((f) => f.id);
+		}
+	}
 	logLatency({
 		type: "phase",
 		phase: "linter_selected",
@@ -1413,6 +1446,7 @@ export function getLinterPolicyForCwd(
 			gate: policy?.gate ?? null,
 			cwd,
 			context,
+			frameworkHints: policy?.frameworkHints ?? null,
 		},
 	});
 	return policy;
@@ -1559,21 +1593,11 @@ const ESLINT_CONFIGS = [
 	"eslint.config.ts",
 ];
 
-// Thin array adapter over the shared generator in path-utils. The existing
-// callers in this file rely on Array.prototype methods (`some`, etc.), so
-// materializing the walk once per call is the smallest-blast-radius
-// migration. New code should prefer the generator directly.
-function walkUpDirs(cwd: string): string[] {
-	return Array.from(walkUpDirsGenerator(cwd));
-}
-
-function walkUpDirsUntilPackageJson(cwd: string): string[] {
-	const dirs: string[] = [];
+function* walkUpDirsUntilPackageJson(cwd: string): Generator<string> {
 	for (const dir of walkUpDirs(cwd)) {
-		dirs.push(dir);
-		if (fs.existsSync(path.join(dir, "package.json"))) break;
+		yield dir;
+		if (fs.existsSync(path.join(dir, "package.json"))) return;
 	}
-	return dirs;
 }
 
 function findNearestPackageJsonPath(cwd: string): string | undefined {
@@ -1656,7 +1680,7 @@ export function getBiomeConfigPath(cwd: string): string | undefined {
 }
 
 export function hasOxfmtConfig(cwd: string): boolean {
-	for (const dir of walkUpDirsGenerator(cwd)) {
+	for (const dir of walkUpDirs(cwd)) {
 		if (fs.existsSync(path.join(dir, "oxfmt.toml"))) return true;
 		if (fs.existsSync(path.join(dir, ".oxfmtrc.json"))) return true;
 		if (hasVitePlusConfig(dir)) return true;
@@ -1809,9 +1833,7 @@ export function hasYamllintConfig(cwd: string): boolean {
 }
 
 export function hasMarkdownlintConfig(cwd: string): boolean {
-	return walkUpDirs(cwd).some((dir) =>
-		MARKDOWNLINT_CONFIGS.some((cfg) => fs.existsSync(path.join(dir, cfg))),
-	);
+	return findNearestContaining(cwd, MARKDOWNLINT_CONFIGS) !== undefined;
 }
 
 export function hasPrettierConfig(cwd: string): boolean {
@@ -1871,62 +1893,53 @@ export function hasRuffConfig(cwd: string): boolean {
 }
 
 export function hasGolangciConfig(cwd: string): boolean {
-	return walkUpDirs(cwd).some((dir) =>
-		GOLANGCI_CONFIGS.some((cfg) => fs.existsSync(path.join(dir, cfg))),
-	);
+	return findNearestContaining(cwd, GOLANGCI_CONFIGS) !== undefined;
 }
 
 export function hasClangFormatConfig(cwd: string): boolean {
-	return walkUpDirs(cwd).some((dir) =>
-		[".clang-format", "_clang-format"].some((cfg) =>
-			fs.existsSync(path.join(dir, cfg)),
-		),
+	return (
+		findNearestContaining(cwd, [".clang-format", "_clang-format"]) !== undefined
 	);
 }
 
 export function hasPhpCsFixerConfig(cwd: string): boolean {
-	return walkUpDirs(cwd).some((dir) =>
-		[".php-cs-fixer.php", ".php-cs-fixer.dist.php"].some((cfg) =>
-			fs.existsSync(path.join(dir, cfg)),
-		),
+	return (
+		findNearestContaining(cwd, [
+			".php-cs-fixer.php",
+			".php-cs-fixer.dist.php",
+		]) !== undefined
 	);
 }
 
 export function hasStyluaConfig(cwd: string): boolean {
-	return walkUpDirs(cwd).some((dir) =>
-		["stylua.toml", ".stylua.toml"].some((cfg) =>
-			fs.existsSync(path.join(dir, cfg)),
-		),
+	return (
+		findNearestContaining(cwd, ["stylua.toml", ".stylua.toml"]) !== undefined
 	);
 }
 
 export function hasOcamlformatConfig(cwd: string): boolean {
-	return walkUpDirs(cwd).some((dir) =>
-		fs.existsSync(path.join(dir, ".ocamlformat")),
-	);
+	return findNearestContaining(cwd, [".ocamlformat"]) !== undefined;
 }
 
 export function hasGoogleJavaFormatConfig(cwd: string): boolean {
 	// google-java-format has no standard config file — gate on .editorconfig
 	// with indent_size defined (common Java project signal) or explicit opt-in marker.
-	return walkUpDirs(cwd).some(
-		(dir) =>
-			fs.existsSync(path.join(dir, ".google-java-format")) ||
-			fs.existsSync(path.join(dir, ".editorconfig")),
+	return (
+		findNearestContaining(cwd, [".google-java-format", ".editorconfig"]) !==
+		undefined
 	);
 }
 
 export function hasCljfmtConfig(cwd: string): boolean {
-	return walkUpDirs(cwd).some((dir) =>
-		[".cljfmt.edn", "cljfmt.edn", ".cljfmt"].some((cfg) =>
-			fs.existsSync(path.join(dir, cfg)),
-		),
+	return (
+		findNearestContaining(cwd, [".cljfmt.edn", "cljfmt.edn", ".cljfmt"]) !==
+		undefined
 	);
 }
 
 export function hasCmakeFormatConfig(cwd: string): boolean {
-	return walkUpDirs(cwd).some((dir) =>
-		[
+	return (
+		findNearestContaining(cwd, [
 			".cmake-format",
 			".cmake-format.yaml",
 			".cmake-format.yml",
@@ -1934,14 +1947,12 @@ export function hasCmakeFormatConfig(cwd: string): boolean {
 			".cmake-format.py",
 			"cmake-format.yaml",
 			"cmake-format.yml",
-		].some((cfg) => fs.existsSync(path.join(dir, cfg))),
+		]) !== undefined
 	);
 }
 
 export function hasPhpstanConfig(cwd: string): boolean {
-	return walkUpDirs(cwd).some((dir) =>
-		PHPSTAN_CONFIGS.some((cfg) => fs.existsSync(path.join(dir, cfg))),
-	);
+	return findNearestContaining(cwd, PHPSTAN_CONFIGS) !== undefined;
 }
 
 const DETEKT_CONFIGS = [
