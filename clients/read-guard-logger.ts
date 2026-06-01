@@ -1,8 +1,9 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { isTestMode } from "./env-utils.js";
+import { getGlobalPiLensDir } from "./file-utils.js";
 
-const READ_GUARD_LOG_DIR = path.join(os.homedir(), ".pi-lens");
+const READ_GUARD_LOG_DIR = getGlobalPiLensDir();
 const READ_GUARD_LOG_FILE = path.join(READ_GUARD_LOG_DIR, "read-guard.log");
 const READ_GUARD_LOG_BACKUP_FILE = path.join(
 	READ_GUARD_LOG_DIR,
@@ -83,11 +84,7 @@ function rotateIfNeeded(): void {
 }
 
 export function logReadGuardEvent(entry: ReadGuardLogEntry): void {
-	if (
-		process.env.PI_LENS_TEST_MODE === "1" ||
-		(process.env.VITEST && process.env.PI_LENS_TEST_MODE !== "0") ||
-		!shouldLogEvent(entry.event)
-	) {
+	if (isTestMode() || !shouldLogEvent(entry.event)) {
 		return;
 	}
 	const line = `${JSON.stringify({ ts: new Date().toISOString(), ...entry })}\n`;

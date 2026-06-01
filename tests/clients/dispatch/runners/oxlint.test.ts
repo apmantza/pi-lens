@@ -62,7 +62,18 @@ describe("oxlint runner", () => {
 			safeSpawnAsync.mockResolvedValueOnce({
 				error: null,
 				status: 1,
-				stdout: `${filePath}:1:1: Unexpected console statement (no-console)\n`,
+				stdout: JSON.stringify({
+					diagnostics: [
+						{
+							message: "Unexpected console statement",
+							code: "eslint(no-console)",
+							severity: "warning",
+							help: "Replace console.log with a logger",
+							filename: filePath,
+							labels: [{ span: { line: 1, column: 1 } }],
+						},
+					],
+				}),
 				stderr: "",
 			});
 
@@ -76,7 +87,7 @@ describe("oxlint runner", () => {
 			expect(ensureTool).toHaveBeenCalledWith("oxlint");
 			expect(safeSpawnAsync).toHaveBeenCalledWith(
 				"oxlint",
-				expect.arrayContaining(["--format", "unix", filePath]),
+				expect.arrayContaining(["--format", "json", filePath]),
 				expect.objectContaining({ timeout: 30000 }),
 			);
 			expect(result.status).toBe("failed");
@@ -85,6 +96,7 @@ describe("oxlint runner", () => {
 				tool: "oxlint",
 				rule: "no-console",
 				line: 1,
+				fixSuggestion: "Replace console.log with a logger",
 			});
 		} finally {
 			env.cleanup();
@@ -151,10 +163,82 @@ describe("oxlint runner", () => {
 			);
 			expect(safeSpawnAsync).toHaveBeenCalledWith(
 				"oxlint",
-				expect.arrayContaining(["--format", "unix", filePath]),
+				expect.arrayContaining(["--format", "json", filePath]),
 				expect.objectContaining({ timeout: 30000 }),
 			);
 			expect(result.status).toBe("succeeded");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("promotes severity=error diagnostics to blocking semantic", async () => {
+		const env = setupTestEnvironment("pi-lens-oxlint-error-promotion-");
+		try {
+			const filePath = path.join(env.tmpDir, "sample.ts");
+			fs.writeFileSync(filePath, "debugger;\n");
+
+			safeSpawnAsync.mockResolvedValueOnce({
+				error: null,
+				status: 1,
+				stdout: JSON.stringify({
+					diagnostics: [
+						{
+							message: "`debugger` statement is not allowed",
+							code: "eslint(no-debugger)",
+							severity: "error",
+							help: "Remove the debugger statement",
+							filename: filePath,
+							labels: [{ span: { line: 1, column: 1 } }],
+						},
+					],
+				}),
+				stderr: "",
+			});
+
+			const runner = (
+				await import("../../../../clients/dispatch/runners/oxlint.ts")
+			).default;
+			const result = await runner.run({ ...createCtx(filePath, env.tmpDir), hasTool: async () => false } as never);
+
+			expect(result.semantic).toBe("blocking");
+			expect(result.diagnostics[0]).toMatchObject({
+				severity: "error",
+				semantic: "blocking",
+				rule: "no-debugger",
+				fixSuggestion: "Remove the debugger statement",
+			});
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("falls back to unix-format parsing when oxlint emits non-JSON output", async () => {
+		const env = setupTestEnvironment("pi-lens-oxlint-fallback-");
+		try {
+			const filePath = path.join(env.tmpDir, "sample.ts");
+			fs.writeFileSync(filePath, "console.log('hi')\n");
+
+			safeSpawnAsync.mockResolvedValueOnce({
+				error: null,
+				status: 1,
+				stdout: `${filePath}:1:1: Unexpected console statement (no-console)\n`,
+				stderr: "",
+			});
+
+			const runner = (
+				await import("../../../../clients/dispatch/runners/oxlint.ts")
+			).default;
+			const result = await runner.run({ ...createCtx(filePath, env.tmpDir), hasTool: async () => false } as never);
+
+			expect(result.status).toBe("failed");
+			expect(result.diagnostics[0]).toMatchObject({
+				tool: "oxlint",
+				rule: "no-console",
+				line: 1,
+			});
+			// Unix fallback has no fix info — fixSuggestion is absent here.
+			expect(result.diagnostics[0].fixSuggestion).toBeUndefined();
 		} finally {
 			env.cleanup();
 		}

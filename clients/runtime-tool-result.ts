@@ -10,8 +10,14 @@ import { getFormatService } from "./format-service.js";
 import { isExternalOrVendorFile } from "./path-utils.js";
 import { resolveLanguageRootForFile } from "./language-profile.js";
 import { logLatency } from "./latency-logger.js";
+import type { LSPShutdownOptions } from "./lsp/client.js";
 import type { MetricsClient } from "./metrics-client.js";
 import { runPipeline, type PipelineResult } from "./pipeline.js";
+import {
+	appendProjectChange,
+	type ProjectChangeRange,
+	type ProjectChangeSource,
+} from "./project-changes.js";
 import type { RuffClient } from "./ruff-client.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 
@@ -35,10 +41,15 @@ interface ToolResultDeps {
 	biomeClient: BiomeClient;
 	ruffClient: RuffClient;
 	metricsClient: MetricsClient;
-	resetLSPService: () => void;
+	resetLSPService: (options?: LSPShutdownOptions) => void;
 	agentBehaviorRecord: (toolName: string, filePath?: string) => unknown[];
 	formatBehaviorWarnings: (warnings: unknown[]) => string;
 	readGuard?: ReadGuard;
+	/**
+	 * Internal: set when the debounce timer fires to skip re-scheduling.
+	 * Do not pass from external callers.
+	 */
+	_bypassDebounce?: boolean;
 }
 
 function parseDiffRanges(diff: string): { start: number; end: number }[] {
@@ -88,6 +99,120 @@ export function clearLastAnalyzedStateCache(): void {
 	lastAnalyzedStateByFile.clear();
 }
 
+// ── Coalesce sequential edits via debounce window (#115) ────────────────────
+
+type ToolResultReturn =
+	| { content: Array<{ type: string; text?: string }>; isError?: boolean }
+	| void;
+
+interface DebouncedEntry {
+	timer: NodeJS.Timeout;
+	promise: Promise<ToolResultReturn>;
+	resolve: (value: ToolResultReturn) => void;
+	reject: (err: unknown) => void;
+	latestDeps: ToolResultDeps;
+	scheduledAt: number;
+	coalescedCount: number;
+}
+
+const debouncedPipelines = new Map<string, DebouncedEntry>();
+
+const DEFAULT_DEBOUNCE_MS = 0;
+const MAX_DEBOUNCE_MS = 1000;
+
+function getDebounceMs(): number {
+	const raw = Number(process.env.PI_LENS_TOOL_RESULT_DEBOUNCE_MS);
+	if (!Number.isFinite(raw) || raw < 0) return DEFAULT_DEBOUNCE_MS;
+	// Cap at 1s so turn_end and agent_end don't block on the timer for
+	// pathologically long windows. flushDebouncedToolResults below also
+	// short-circuits at boundary events.
+	return Math.min(raw, MAX_DEBOUNCE_MS);
+}
+
+/**
+ * Drain any pending debounced tool_result pipelines immediately, awaiting their
+ * completion. Call from turn_end / agent_end before reading anything that depends
+ * on the pipeline's bookkeeping (project change log, modified ranges, etc.).
+ *
+ * Passing a filePath flushes only that entry; omitting it flushes all.
+ */
+export async function flushDebouncedToolResults(filePath?: string): Promise<void> {
+	const entries = filePath
+		? debouncedPipelines.has(filePath)
+			? [
+					[filePath, debouncedPipelines.get(filePath) as DebouncedEntry] as const,
+				]
+			: []
+		: [...debouncedPipelines.entries()];
+	for (const [key, entry] of entries) {
+		clearTimeout(entry.timer);
+		debouncedPipelines.delete(key);
+		// Re-enter the pipeline synchronously via the bypass flag so the
+		// timer body's resolve/reject still fires through the shared promise.
+		handleToolResult({ ...entry.latestDeps, _bypassDebounce: true }).then(
+			entry.resolve,
+			entry.reject,
+		);
+	}
+	if (entries.length > 0) {
+		// Allow microtasks to settle so awaiting callers see the latest state.
+		await Promise.all(entries.map(([, entry]) => entry.promise.catch(() => undefined)));
+	}
+}
+
+function scheduleDebounced(
+	filePath: string,
+	debounceMs: number,
+	deps: ToolResultDeps,
+): Promise<ToolResultReturn> {
+	const existing = debouncedPipelines.get(filePath);
+	if (existing) {
+		clearTimeout(existing.timer);
+		existing.latestDeps = deps;
+		existing.coalescedCount += 1;
+		existing.timer = setTimeout(() => {
+			debouncedPipelines.delete(filePath);
+			deps.dbg(
+				`tool_result: debounce fired after ${
+					existing.coalescedCount
+				} coalesced calls for ${filePath}`,
+			);
+			handleToolResult({ ...existing.latestDeps, _bypassDebounce: true }).then(
+				existing.resolve,
+				existing.reject,
+			);
+		}, debounceMs);
+		deps.dbg(
+			`tool_result: coalesced into pending debounce for ${filePath} (count=${existing.coalescedCount})`,
+		);
+		return existing.promise;
+	}
+
+	let resolveFn!: (value: ToolResultReturn) => void;
+	let rejectFn!: (err: unknown) => void;
+	const promise = new Promise<ToolResultReturn>((res, rej) => {
+		resolveFn = res;
+		rejectFn = rej;
+	});
+	const entry: DebouncedEntry = {
+		timer: setTimeout(() => {
+			debouncedPipelines.delete(filePath);
+			handleToolResult({ ...entry.latestDeps, _bypassDebounce: true }).then(
+				entry.resolve,
+				entry.reject,
+			);
+		}, debounceMs),
+		promise,
+		resolve: resolveFn,
+		reject: rejectFn,
+		latestDeps: deps,
+		scheduledAt: Date.now(),
+		coalescedCount: 1,
+	};
+	debouncedPipelines.set(filePath, entry);
+	return promise;
+}
+
 function getFileStateHash(filePath: string): string {
 	try {
 		const content = nodeFs.readFileSync(filePath);
@@ -95,6 +220,52 @@ function getFileStateHash(filePath: string): string {
 	} catch (err) {
 		const code = (err as { code?: string }).code ?? "unknown";
 		return `unreadable:${code}`;
+	}
+}
+
+function sourceForToolName(
+	toolName: string,
+	details?: unknown,
+): ProjectChangeSource {
+	if (
+		(details as { piLensPartialApply?: unknown } | undefined)
+			?.piLensPartialApply
+	) {
+		return "partial-apply";
+	}
+	return toolName === "write" ? "agent-write" : "agent-edit";
+}
+
+function singleRange(
+	ranges: Array<{ start: number; end: number }> | undefined,
+): ProjectChangeRange | undefined {
+	return ranges?.length === 1 ? ranges[0] : undefined;
+}
+
+function recordProjectChange(args: {
+	runtime: RuntimeCoordinator;
+	cwd: string;
+	filePath: string;
+	source: ProjectChangeSource;
+	changedRange?: ProjectChangeRange;
+	dbg: (msg: string) => void;
+}): void {
+	const bump = (args.runtime as Partial<RuntimeCoordinator>).bumpFileSeq;
+	if (!bump) return;
+	const { projectSeq, fileSeq } = bump.call(args.runtime, args.filePath);
+	try {
+		appendProjectChange(args.cwd, {
+			seq: projectSeq,
+			timestamp: new Date().toISOString(),
+			sessionId: args.runtime.telemetrySessionId,
+			turnIndex: args.runtime.turnIndex,
+			source: args.source,
+			filePath: path.resolve(args.filePath),
+			fileSeq,
+			changedRange: args.changedRange,
+		});
+	} catch (err) {
+		args.dbg(`project change log append failed for ${args.filePath}: ${err}`);
 	}
 }
 
@@ -142,6 +313,16 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			`tool_result: skipped pipeline - file outside project root or in node_modules: ${filePath}`,
 		);
 		return;
+	}
+
+	// Coalesce sequential edits to the same file into one pipeline run against
+	// the final state. Only the debounce-fired call (with _bypassDebounce=true)
+	// proceeds to the pipeline body; in-window callers share its promise.
+	if (!deps._bypassDebounce) {
+		const debounceMs = getDebounceMs();
+		if (debounceMs > 0) {
+			return scheduleDebounced(filePath, debounceMs, deps);
+		}
 	}
 
 	// Refresh the read-guard's FileTime stamp so that the model's own write
@@ -217,8 +398,9 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		return;
 	}
 
-	const cwd = resolveLanguageRootForFile(filePath, workspaceRoot);
-	dbg(`tool_result: resolved dispatch cwd ${cwd} for ${filePath}`);
+	const dispatchCwd = resolveLanguageRootForFile(filePath, workspaceRoot);
+	const turnStateCwd = path.resolve(workspaceRoot);
+	dbg(`tool_result: resolved dispatch cwd ${dispatchCwd} for ${filePath} (turnState cwd ${turnStateCwd})`);
 	if (event.model || event.provider || event.sessionId || event.session?.id) {
 		runtime.setTelemetryIdentity({
 			model: event.model,
@@ -252,12 +434,12 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 					filePath,
 					range,
 					importsChanged,
-					cwd,
+					turnStateCwd,
 					runtime.telemetrySessionId,
 				);
 			}
 			dbg(
-				`tool_result: turn state after add: ${JSON.stringify(cacheManager.readTurnState(cwd))}`,
+				`tool_result: turn state after add: ${JSON.stringify(cacheManager.readTurnState(turnStateCwd))}`,
 			);
 		} else if (event.toolName === "write" && nodeFs.existsSync(filePath)) {
 			const content = nodeFs.readFileSync(filePath, "utf-8");
@@ -268,7 +450,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 				filePath,
 				{ start: 1, end: lineCount },
 				hasImports,
-				cwd,
+				turnStateCwd,
 				runtime.telemetrySessionId,
 			);
 		}
@@ -276,6 +458,15 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		dbg(`turn state tracking error: ${err}`);
 		dbg(`turn state tracking error stack: ${(err as Error).stack}`);
 	}
+
+	recordProjectChange({
+		runtime,
+		cwd: turnStateCwd,
+		filePath,
+		source: sourceForToolName(event.toolName, event.details),
+		changedRange: singleRange(modifiedRanges),
+		dbg,
+	});
 
 	const turnStateMs = Date.now() - toolResultStart;
 	logLatency({
@@ -291,7 +482,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	const pipelinePromise = runPipeline(
 		{
 			filePath,
-			cwd,
+			cwd: dispatchCwd,
 			toolName: event.toolName,
 			modifiedRanges,
 			telemetry: {
@@ -318,7 +509,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		dbg(`runPipeline crashed: ${pipelineErr}`);
 		dbg(`runPipeline crash stack: ${(pipelineErr as Error).stack}`);
 		if (!getFlag("no-lsp")) {
-			resetLSPService();
+			resetLSPService({ fast: true });
 		}
 
 		logLatency({
@@ -367,7 +558,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		!getFlag("immediate-format") &&
 		nodeFs.existsSync(filePath)
 	) {
-		runtime.deferFormat(filePath, cwd, event.toolName);
+		runtime.deferFormat(filePath, dispatchCwd, event.toolName, turnStateCwd);
 		dbg(`tool_result: queued deferred format for ${filePath}`);
 		logLatency({
 			type: "phase",
@@ -375,14 +566,21 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			filePath,
 			phase: "deferred_format_queued",
 			durationMs: 0,
-			metadata: { cwd },
+			metadata: { cwd: dispatchCwd },
 		});
 	}
 
 	for (const changedFile of result.changedFiles ?? []) {
 		const resolvedChanged = path.resolve(changedFile);
-		if (resolvedChanged === path.resolve(filePath)) continue;
 		if (!nodeFs.existsSync(resolvedChanged)) continue;
+		recordProjectChange({
+			runtime,
+			cwd: turnStateCwd,
+			filePath: resolvedChanged,
+			source: "autofix",
+			dbg,
+		});
+		if (resolvedChanged === path.resolve(filePath)) continue;
 		try {
 			const content = nodeFs.readFileSync(resolvedChanged, "utf-8");
 			const lineCount = content.split("\n").length;
@@ -391,7 +589,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 				resolvedChanged,
 				{ start: 1, end: lineCount },
 				hasImports,
-				cwd,
+				turnStateCwd,
 			);
 			dbg(
 				`tool_result: tracking pi-lens side-effect change for ${resolvedChanged}`,
@@ -403,12 +601,15 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		}
 	}
 
-	if (result.cascadeResult) {
-		runtime.appendCascadeResult(result.cascadeResult);
+	if (result.cascadeRun) {
+		runtime.appendCascadeRun(result.cascadeRun);
 	}
 
 	if (result.actionableWarnings?.length) {
 		runtime.recordActionableWarnings(result.actionableWarnings);
+	}
+	if (result.codeQualityWarnings?.length) {
+		runtime.recordCodeQualityWarnings(result.codeQualityWarnings);
 	}
 
 	if (result.inlineBlockerSummary) {

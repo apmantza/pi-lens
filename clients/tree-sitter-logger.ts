@@ -1,8 +1,9 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { isTestMode } from "./env-utils.js";
+import { getGlobalPiLensDir } from "./file-utils.js";
 
-const TREE_SITTER_LOG_DIR = path.join(os.homedir(), ".pi-lens");
+const TREE_SITTER_LOG_DIR = getGlobalPiLensDir();
 const TREE_SITTER_LOG_FILE = path.join(TREE_SITTER_LOG_DIR, "tree-sitter.log");
 
 try {
@@ -36,10 +37,7 @@ export interface TreeSitterLogEntry {
 }
 
 export function logTreeSitter(entry: TreeSitterLogEntry): void {
-	if (
-		process.env.PI_LENS_TEST_MODE === "1" ||
-		(process.env.VITEST && process.env.PI_LENS_TEST_MODE !== "0")
-	) {
+	if (isTestMode()) {
 		return;
 	}
 	const line = `${JSON.stringify({ ts: new Date().toISOString(), ...entry })}\n`;

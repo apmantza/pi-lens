@@ -57,6 +57,7 @@ export class SgRunner {
 	private sgPath: string | null = null;
 	private sgArgsPrefix: string[] = [];
 	private available: boolean | null = null;
+	private ensureInFlight: Promise<boolean> | null = null;
 
 	constructor(verbose = false) {
 		this.log = verbose
@@ -65,12 +66,27 @@ export class SgRunner {
 	}
 
 	/**
-	 * Check if ast-grep CLI is available, auto-install if not
+	 * Check if ast-grep CLI is available, auto-install if not.
+	 *
+	 * Re-entrancy safe: concurrent first-time callers share a single
+	 * `ensureInFlight` promise so probing/auto-install isn't duplicated
+	 * across session-start tasks. Mirrors the dedupe pattern in
+	 * `KnipClient.ensureAvailable` and `DependencyChecker.ensureAvailable`.
 	 */
 	async ensureAvailable(): Promise<boolean> {
-		// Fast path: already checked
+		// Fast path: already checked.
 		if (this.available !== null) return this.available;
+		if (this.ensureInFlight) return this.ensureInFlight;
 
+		this.ensureInFlight = this.doEnsureAvailable();
+		try {
+			return await this.ensureInFlight;
+		} finally {
+			this.ensureInFlight = null;
+		}
+	}
+
+	private async doEnsureAvailable(): Promise<boolean> {
 		// Check PATH first. Prefer the canonical ast-grep binary; on Linux,
 		// /usr/bin/sg is the util-linux group-switch command and is not ast-grep.
 		const pathCommand = await this.probeCommandCandidates([

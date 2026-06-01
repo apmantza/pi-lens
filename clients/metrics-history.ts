@@ -193,6 +193,7 @@ export function captureSnapshot(
 			pendingHistory = null;
 		}
 	}, SAVE_DEBOUNCE_MS);
+	saveTimer.unref?.();
 }
 
 /**

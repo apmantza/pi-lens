@@ -87,12 +87,18 @@ describe("cascade turn-end merge", () => {
 				env.tmpDir,
 			);
 
-			runtime.appendCascadeResult(
-				cascade(primaryA, sharedNeighbor, "old error"),
-			);
-			runtime.appendCascadeResult(
-				cascade(primaryB, sharedNeighbor, "new error"),
-			);
+			runtime.appendCascadeRun({
+				filePath: primaryA,
+				result: cascade(primaryA, sharedNeighbor, "old error"),
+				neighborCount: 1,
+				diagnosticCount: 1,
+			});
+			runtime.appendCascadeRun({
+				filePath: primaryB,
+				result: cascade(primaryB, sharedNeighbor, "new error"),
+				neighborCount: 1,
+				diagnosticCount: 1,
+			});
 
 			await handleTurnEnd({
 				ctxCwd: env.tmpDir,

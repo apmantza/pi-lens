@@ -10,6 +10,7 @@ const tryLazyInstall = vi.fn(async () => true);
 const supportsLSP = vi.fn();
 const hasLSP = vi.fn();
 const openFile = vi.fn();
+const touchFile = vi.fn();
 const getDiagnostics = vi.fn();
 const codeAction = vi.fn();
 const readFileContent = vi.fn(() => "const x = 1;\n");
@@ -28,6 +29,7 @@ vi.mock("../../../../clients/lsp/index.js", () => ({
 		supportsLSP,
 		hasLSP,
 		openFile,
+		touchFile,
 		getDiagnostics,
 		codeAction,
 		getClientForFile: vi.fn(),
@@ -63,6 +65,7 @@ describe("runner status/semantic edge cases", () => {
 		supportsLSP.mockReset();
 		hasLSP.mockReset();
 		openFile.mockReset();
+		touchFile.mockReset();
 		getDiagnostics.mockReset();
 		codeAction.mockReset();
 		readFileContent.mockReset();
@@ -199,6 +202,36 @@ describe("runner status/semantic edge cases", () => {
 		}
 	});
 
+	it("lsp runner uses bounded document touch instead of unbounded aggregate diagnostics", async () => {
+		const runner = (await import("../../../../clients/dispatch/runners/lsp.js"))
+			.default;
+		const env = setupTestEnvironment("pi-lens-lsp-bounded-");
+		try {
+			const filePath = path.join(env.tmpDir, "main.ts");
+			fs.writeFileSync(filePath, "const x = 1;\n");
+
+			supportsLSP.mockReturnValue(true);
+			touchFile.mockResolvedValue([]);
+
+			const result = await runner.run(ctx(filePath, env.tmpDir) as never);
+			expect(result.status).toBe("succeeded");
+			expect(touchFile).toHaveBeenCalledWith(
+				filePath,
+				"const x = 1;\n",
+				expect.objectContaining({
+					diagnostics: "document",
+					collectDiagnostics: true,
+					clientScope: "primary",
+					maxClientWaitMs: expect.any(Number),
+					source: "dispatch-lsp-runner",
+				}),
+			);
+			expect(getDiagnostics).not.toHaveBeenCalled();
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("lsp runner returns warning semantic when server open fails", async () => {
 		const runner = (await import("../../../../clients/dispatch/runners/lsp.js"))
 			.default;
@@ -209,7 +242,7 @@ describe("runner status/semantic edge cases", () => {
 
 			supportsLSP.mockReturnValue(true);
 			hasLSP.mockResolvedValue(true);
-			openFile.mockRejectedValue(new Error("connection failed"));
+			touchFile.mockRejectedValue(new Error("connection failed"));
 			getDiagnostics.mockResolvedValue([]);
 
 			const result = await runner.run(ctx(filePath, env.tmpDir) as never);
@@ -231,7 +264,7 @@ describe("runner status/semantic edge cases", () => {
 
 			hasLSP.mockResolvedValue(true);
 			openFile.mockResolvedValue(undefined);
-			getDiagnostics.mockResolvedValue([
+			touchFile.mockResolvedValue([
 				{
 					severity: 1,
 					message: "Type 'number' is not assignable to type 'string'.",
@@ -272,7 +305,7 @@ describe("runner status/semantic edge cases", () => {
 
 			hasLSP.mockResolvedValue(true);
 			openFile.mockResolvedValue(undefined);
-			getDiagnostics.mockResolvedValue([
+			touchFile.mockResolvedValue([
 				{
 					severity: 1,
 					message: "Type 'number' is not assignable to type 'string'.",

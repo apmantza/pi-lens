@@ -45,7 +45,7 @@ import * as nodeFs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { formatCascadeNeighborDiagnostics } from "../cascade-format.js";
 import { logCascade } from "../cascade-logger.js";
-import type { CascadeResult } from "../cascade-types.js";
+import type { CascadeResult, CascadeRun, CascadeSkipReason } from "../cascade-types.js";
 import { getDiagnosticTracker } from "../diagnostic-tracker.js";
 import { getServersForFileWithConfig } from "../lsp/config.js";
 import { getLSPService } from "../lsp/index.js";
@@ -54,6 +54,11 @@ import {
 	clearReviewGraphWorkspaceCache,
 	getLastGraphBuildInfo,
 } from "../review-graph/builder.js";
+import {
+	buildReverseDependencyIndexFromGraph,
+	getAffectedFilesFromIndex,
+	writeReverseDependencyIndexToSnapshot,
+} from "../reverse-deps.js";
 import {
 	buildOrUpdateGraph,
 	computeImpactCascade,
@@ -109,7 +114,6 @@ import {
 	duplicateStringLiteralRule,
 	dynamicRegexpRule,
 	functionInLoopRule,
-	jwtWithoutVerifyRule,
 	maxSwitchCasesRule,
 } from "./rules/sonar-rules.js";
 import { unsafeBoundaryRule } from "./rules/unsafe-boundary.js";
@@ -127,7 +131,6 @@ registerRule(highFanOutRule);
 registerRule(commentedOutCodeRule);
 registerRule(duplicateStringLiteralRule);
 registerRule(functionInLoopRule);
-registerRule(jwtWithoutVerifyRule);
 registerRule(corsWildcardRule);
 registerRule(dynamicRegexpRule);
 registerRule(maxSwitchCasesRule);
@@ -158,7 +161,6 @@ const FACT_RULE_IDS = new Set([
 	"commented-out-code",
 	"duplicate-string-literal",
 	"function-in-loop",
-	"jwt-without-verify",
 	"cors-wildcard",
 	"dynamic-regexp",
 	"max-switch-cases",
@@ -503,7 +505,7 @@ export async function computeCascadeForFile(
 		turnSeq?: number;
 		writeSeq?: number;
 	} = {},
-): Promise<CascadeResult | undefined> {
+): Promise<CascadeRun> {
 	const { hasBlockers = false, dbg, turnSeq = 0, writeSeq } = options;
 
 	ensureCascadeTurnScope(turnSeq);
@@ -514,13 +516,13 @@ export async function computeCascadeForFile(
 			filePath,
 			reason: "primary_has_blockers",
 		});
-		return undefined;
+		return { filePath, result: undefined, neighborCount: 0, diagnosticCount: 0, skipReason: "blockers" as CascadeSkipReason };
 	}
 
 	const fileKind = detectFileKind(filePath);
 	if (!fileKind) {
 		logCascade({ phase: "cascade_skip", filePath, reason: "non_code_file" });
-		return undefined;
+		return { filePath, result: undefined, neighborCount: 0, diagnosticCount: 0, skipReason: "non_code" as CascadeSkipReason };
 	}
 
 	const normalizedFile = resolveRunnerPath(cwd, filePath);
@@ -547,6 +549,30 @@ export async function computeCascadeForFile(
 		const graphStart = Date.now();
 		const graph = await buildOrUpdateGraph(cwd, [normalizedFile], sessionFacts);
 		const graphMs = Date.now() - graphStart;
+		const reverseDepsIndex = buildReverseDependencyIndexFromGraph({
+			cwd,
+			graph,
+		});
+		const reverseDepsSaved = writeReverseDependencyIndexToSnapshot({
+			cwd,
+			index: reverseDepsIndex,
+			dbg,
+		});
+		logCascade({
+			phase: "reverse_deps_cache",
+			filePath,
+			durationMs: Date.now() - graphStart,
+			metadata: {
+				action: "refresh_from_review_graph",
+				savedToSnapshot: reverseDepsSaved,
+				importsFileCount: Object.keys(reverseDepsIndex.imports).length,
+				importedByFileCount: Object.keys(reverseDepsIndex.importedBy).length,
+				importEdgeCount: Object.values(reverseDepsIndex.imports).reduce(
+					(total, imports) => total + imports.length,
+					0,
+				),
+			},
+		});
 
 		// Count files represented in the graph (nodes with a filePath).
 		const graphFileCount = new Set(
@@ -575,6 +601,38 @@ export async function computeCascadeForFile(
 		});
 
 		impact = computeImpactCascade(graph, normalizedFile, cwd);
+		const reverseDepNeighbors = getAffectedFilesFromIndex(
+			reverseDepsIndex,
+			normalizedFile,
+			1,
+			MAX_FILES * 2,
+		);
+		logCascade({
+			phase: "reverse_deps_cache",
+			filePath,
+			metadata: {
+				action: "merge_neighbors",
+				depth: 1,
+				neighborCount: reverseDepNeighbors.length,
+				neighbors: reverseDepNeighbors.slice(0, 10),
+			},
+		});
+		if (reverseDepNeighbors.length > 0) {
+			impact.directImporters = [
+				...new Set([...impact.directImporters, ...reverseDepNeighbors]),
+			];
+			impact.neighborFiles = [
+				...new Set([...impact.neighborFiles, ...reverseDepNeighbors]),
+			];
+			logCascade({
+				phase: "neighbor_snapshot",
+				filePath,
+				neighborFile: "[reverse-deps-cache]",
+				diagnosticCount: reverseDepNeighbors.length,
+				autoPropagate: false,
+				metadata: { reverseDepsCache: true },
+			});
+		}
 
 		// Symbol-level blast radius via LSP references (precision upgrade over
 		// file-level import edges). Only when changed symbols are detected.
@@ -670,7 +728,7 @@ export async function computeCascadeForFile(
 			reason: "unsupported_graph_kind",
 			metadata: { fileKind },
 		});
-		return undefined;
+		return { filePath, result: undefined, neighborCount: 0, diagnosticCount: 0, skipReason: "non_code" as CascadeSkipReason };
 	}
 
 	logCascade({
@@ -984,27 +1042,30 @@ export async function computeCascadeForFile(
 			// Log when cascade ran but found nothing — distinguishes "clean" from "no signal"
 			noNeighbors: visibleNeighbors.length === 0,
 			noErrors: visibleNeighbors.length > 0 && filesWithErrors === 0,
-			neighbors: visibleNeighbors.slice(0, 10).map(n => ({
+			neighbors: visibleNeighbors.slice(0, 10).map((n) => ({
 				file: n.filePath.replace(/\\/g, "/").split("/").slice(-2).join("/"),
 				diagnostics: n.diagnostics.length,
 			})),
 		},
 	});
 
+	const diagCount = visibleNeighbors.reduce((sum, n) => sum + n.diagnostics.length, 0);
+
 	cascadeSessionStats.runs += 1;
-	cascadeSessionStats.diagnosticsSurfaced += visibleNeighbors.reduce(
-		(sum, n) => sum + n.diagnostics.length,
-		0,
-	);
+	cascadeSessionStats.diagnosticsSurfaced += diagCount;
 	cascadeSessionStats.coldSnapshotTouches += coldSnapshotPaths.length;
 
-	if (!formatted) return undefined;
+	if (!formatted) {
+		const skipReason: CascadeSkipReason =
+			visibleNeighbors.length === 0 ? "no_neighbors" : "clean";
+		return { filePath, result: undefined, neighborCount: visibleNeighbors.length, diagnosticCount: diagCount, skipReason };
+	}
 
 	getDiagnosticTracker().trackShown(
 		visibleNeighbors.flatMap((n) => n.diagnostics),
 	);
 
-	return { filePath, impact, neighbors: visibleNeighbors, formatted };
+	return { filePath, result: { filePath, impact, neighbors: visibleNeighbors, formatted }, neighborCount: visibleNeighbors.length, diagnosticCount: diagCount };
 }
 
 function diagnosticDeltaKey(

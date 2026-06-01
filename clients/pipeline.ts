@@ -14,10 +14,15 @@
 
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
+import { findNearestContaining } from "./path-utils.js";
 import {
 	recordFromDispatchDiagnostic,
 	type ActionableWarningRecord,
 } from "./actionable-warnings.js";
+import {
+	recordFromCodeQualityDiagnostic,
+	type CodeQualityWarningRecord,
+} from "./code-quality-warnings.js";
 import type { BiomeClient } from "./biome-client.js";
 import { recordDiagnostics } from "./widget-state.js";
 import { getDiagnosticLogger } from "./diagnostic-logger.js";
@@ -185,7 +190,7 @@ export interface PipelineResult {
 	 * Intentionally NOT included in output — surfaced at turn_end instead
 	 * so mid-refactor intermediate errors don't derail the agent.
 	 */
-	cascadeResult?: import("./cascade-types.js").CascadeResult;
+	cascadeRun?: import("./cascade-types.js").CascadeRun;
 	/** True if secrets found — block the agent */
 	isError: boolean;
 	/** True if file was modified by format/autofix */
@@ -196,6 +201,8 @@ export interface PipelineResult {
 	inlineBlockerSummary?: string;
 	/** Fixable warning diagnostics introduced by this pipeline run. */
 	actionableWarnings?: ActionableWarningRecord[];
+	/** Non-fixable code-quality warnings introduced/touched by this pipeline run. */
+	codeQualityWarnings?: CodeQualityWarningRecord[];
 }
 
 // --- Phase timing helpers ---
@@ -371,18 +378,9 @@ async function tryRustClippyFix(filePath: string): Promise<string[]> {
 	const check = await safeSpawnAsync("cargo", ["--version"], { timeout: 5000 });
 	if (check.error || check.status !== 0) return [];
 
-	let dir = path.dirname(path.resolve(filePath));
-	const root = path.parse(dir).root;
-	let cargoDir: string | undefined;
-	while (dir !== root) {
-		if (nodeFs.existsSync(path.join(dir, "Cargo.toml"))) {
-			cargoDir = dir;
-			break;
-		}
-		const parent = path.dirname(dir);
-		if (parent === dir) break;
-		dir = parent;
-	}
+	const cargoDir = findNearestContaining(path.dirname(path.resolve(filePath)), [
+		"Cargo.toml",
+	]);
 	if (!cargoDir) return [];
 
 	const before = snapshotProjectFiles(cargoDir);
@@ -399,18 +397,10 @@ async function tryDartFix(filePath: string): Promise<string[]> {
 	const check = await safeSpawnAsync("dart", ["--version"], { timeout: 5000 });
 	if (check.error || check.status !== 0) return [];
 
-	let dir = path.dirname(path.resolve(filePath));
-	const root = path.parse(dir).root;
-	let pubspecDir: string | undefined;
-	while (dir !== root) {
-		if (nodeFs.existsSync(path.join(dir, "pubspec.yaml"))) {
-			pubspecDir = dir;
-			break;
-		}
-		const parent = path.dirname(dir);
-		if (parent === dir) break;
-		dir = parent;
-	}
+	const pubspecDir = findNearestContaining(
+		path.dirname(path.resolve(filePath)),
+		["pubspec.yaml"],
+	);
 	if (!pubspecDir) return [];
 
 	const before = snapshotProjectFiles(pubspecDir);
@@ -995,6 +985,9 @@ export async function runPipeline(
 	const actionableWarnings = dispatchResult.warnings
 		.map((diagnostic) => recordFromDispatchDiagnostic(diagnostic, cwd))
 		.filter((warning): warning is ActionableWarningRecord => Boolean(warning));
+	const codeQualityWarnings = dispatchResult.warnings
+		.map((diagnostic) => recordFromCodeQualityDiagnostic(diagnostic, cwd))
+		.filter((warning): warning is CodeQualityWarningRecord => Boolean(warning));
 
 	if (dispatchResult.diagnostics.length > 0) {
 		const logger = getDiagnosticLogger();
@@ -1084,7 +1077,7 @@ export async function runPipeline(
 	// --- 7. Cascade diagnostics (LSP only) ---
 	// Deferred: cascade errors in OTHER files are NOT shown inline — surfaced at
 	// turn_end so mid-refactor intermediate errors don't derail the agent.
-	const cascadeResult = getFlag("no-lsp")
+	const cascadeRun = getFlag("no-lsp")
 		? undefined
 		: await computeCascadeForFile(filePath, cwd, {
 				hasBlockers,
@@ -1125,7 +1118,7 @@ export async function runPipeline(
 	return {
 		output,
 		hasBlockers,
-		cascadeResult,
+		cascadeRun,
 		isError: false,
 		fileModified,
 		changedFiles,
@@ -1133,5 +1126,6 @@ export async function runPipeline(
 			? dispatchResult.blockerOutput.trim() || undefined
 			: undefined,
 		actionableWarnings,
+		codeQualityWarnings,
 	};
 }

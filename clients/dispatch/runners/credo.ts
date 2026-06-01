@@ -8,6 +8,17 @@ import type {
 	RunnerResult,
 } from "../types.js";
 import { PRIORITY } from "../priorities.js";
+import { createCwdCachedProbe } from "./utils/runner-helpers.js";
+
+// Per-cwd cached `mix credo --version` probe (#120). Before this, the probe
+// fired on every Elixir file save in projects with mix.exs.
+const probeCredo = createCwdCachedProbe(async (cwd) => {
+	const r = await safeSpawnAsync("mix", ["credo", "--version"], {
+		timeout: 10000,
+		cwd,
+	});
+	return !r.error && r.status === 0;
+});
 
 interface CredoIssue {
 	filename: string;
@@ -61,12 +72,8 @@ const credoRunner: RunnerDefinition = {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
-		// Credo ships as a mix dependency — check it's available
-		const check = await safeSpawnAsync("mix", ["credo", "--version"], {
-			timeout: 10000,
-			cwd,
-		});
-		if (check.error || check.status !== 0) {
+		// Credo ships as a mix dependency — cached per-cwd probe (see probeCredo).
+		if (!(await probeCredo(cwd))) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 

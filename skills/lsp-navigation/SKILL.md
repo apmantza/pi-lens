@@ -5,84 +5,68 @@ description: Navigate code with IDE features and run proactive LSP diagnostics o
 
 # LSP Navigation and Diagnostics
 
-Use `lsp_navigation` as **PRIMARY** for code intelligence. Use `lsp_diagnostics` as **PRIMARY** for proactive type/error checks on files, folders, or explicit batches. Do NOT use grep/glob/ast-grep first for code intelligence or diagnostics.
+Use `lsp_navigation` as **PRIMARY** for code intelligence. Use `lsp_diagnostics` as **PRIMARY** for proactive type/error checks. Do NOT use grep/glob/ast-grep first for code intelligence.
 
-**Requires:** `--lens-lsp` flag
-
-## When to Use Diagnostics
+## Diagnostics
 
 Use `lsp_diagnostics` before builds/tests or after touching several files:
 
-| Need                        | Tool call                                                                  |
-| --------------------------- | -------------------------------------------------------------------------- |
-| Check one file              | `lsp_diagnostics({ filePath: "src/file.ts" })`                             |
-| Check a folder              | `lsp_diagnostics({ filePath: "src/", severity: "error" })`                 |
-| Check exact touched files   | `lsp_diagnostics({ filePaths: ["src/a.ts", "src/b.ts"], concurrency: 8 })` |
-| Give slow servers more time | `lsp_diagnostics({ filePaths: files, waitMs: 2000 })`                      |
-| Show warnings too           | `lsp_diagnostics({ filePaths: files, severity: "all" })`                   |
+| Need | Tool call |
+|---|---|
+| Check one file | `lsp_diagnostics({ filePath: "src/file.ts" })` |
+| Check a folder | `lsp_diagnostics({ filePath: "src/", severity: "error" })` |
+| Check exact touched files | `lsp_diagnostics({ filePaths: ["src/a.ts", "src/b.ts"], concurrency: 8 })` |
+| Slow server (Rust, Java) | `lsp_diagnostics({ filePaths: files, waitMs: 2000 })` |
+| Include warnings | `lsp_diagnostics({ filePaths: files, severity: "all" })` |
 
-Prefer explicit `filePaths` batches after multi-file edits: they are bounded-concurrency and avoid unrelated directory noise.
+Prefer explicit `filePaths` batches after multi-file edits — bounded concurrency, no unrelated directory noise.
 
-## When to Use Navigation (Code Intelligence)
+## Navigation (Code Intelligence)
 
-| Question                                | Operation                                | Parameters                                                                    |
-| --------------------------------------- | ---------------------------------------- | ----------------------------------------------------------------------------- |
-| "Where is this defined?"                | `definition`                             | filePath, line, character                                                     |
-| "Find all usages"                       | `references`                             | filePath, line, character                                                     |
-| "What type is this?"                    | `hover`                                  | filePath, line, character                                                     |
-| "Show call signature here"              | `signatureHelp`                          | filePath, line, character (at call-site args)                                 |
-| "What symbols in this file?"            | `documentSymbol`                         | filePath                                                                      |
-| "Find symbol across project"            | `workspaceSymbol`                        | query + **filePath strongly recommended**                                     |
-| "What quick fixes are available?"       | `codeAction`                             | filePath, line, character, endLine, endCharacter                              |
-| "Rename symbol safely"                  | `rename`                                 | filePath, line, character, newName                                            |
-| "Who implements this interface?"        | `implementation`                         | filePath, line, character                                                     |
-| "Who calls this function?"              | `prepareCallHierarchy` → `incomingCalls` | filePath, line, character                                                     |
-| "What does this function call?"         | `prepareCallHierarchy` → `outgoingCalls` | filePath, line, character                                                     |
-| "Show tracked LSP diagnostics snapshot" | `workspaceDiagnostics`                   | optional filePath (snapshot only; prefer `lsp_diagnostics` for active checks) |
-
-## Operational Guidance (From Field Tests)
-
-- Always pass `filePath` for `workspaceSymbol` when possible. Unscoped queries are best-effort and often empty.
-- For `references`, prefer querying from the definition site for broader cross-file coverage; usage-site queries can be partial.
-- Use `signatureHelp` only at call-site argument positions; declaration positions often return empty.
-- Treat `workspaceDiagnostics` as tracked push snapshot (`publishDiagnostics`), not protocol pull `workspace/diagnostic` coverage. Prefer `lsp_diagnostics` when you need an active file/folder/batch check.
-- For `codeAction`, separate `quickfix` from generic refactors (for example "Move to new file"). Do not treat generic refactors as error fixes.
-- `prepareCallHierarchy` is server-capability dependent; if unsupported, skip incoming/outgoing calls.
-- If TypeScript returns `No Project` on `workspaceSymbol`, retry after opening the scoped file context.
+| Question | Operation | Parameters |
+|---|---|---|
+| Where is this defined? | `definition` | filePath, line, character |
+| Find all usages | `references` | filePath, line, character |
+| What type is this? | `hover` | filePath, line, character |
+| Call signature | `signatureHelp` | filePath, line, character (at arg position) |
+| Symbols in this file | `documentSymbol` | filePath |
+| Find symbol across project | `workspaceSymbol` | query + filePath (strongly recommended) |
+| Quick fixes available | `codeAction` | filePath, line, character, endLine, endCharacter |
+| Rename symbol safely | `rename` | filePath, line, character, newName |
+| Who implements this? | `implementation` | filePath, line, character |
+| Who calls this function? | `prepareCallHierarchy` → `incomingCalls` | filePath, line, character |
+| What does this call? | `prepareCallHierarchy` → `outgoingCalls` | filePath, line, character |
 
 ## Call Hierarchy Pattern
 
-```typescript
-// Step 1: Prepare (get the callable item)
-const items = await lsp_navigation({
-  operation: "prepareCallHierarchy",
-  filePath: "src/api.ts",
-  line: 42,
-  character: 10,
-});
+```
+// Step 1
+lsp_navigation(operation="prepareCallHierarchy", filePath="src/api.ts", line=42, character=10)
+// → returns callHierarchyItem
 
-// Step 2: Get callers (who calls this function)
-const callers = await lsp_navigation({
-  operation: "incomingCalls",
-  callHierarchyItem: items[0],
-});
-
-// Step 2: Get callees (what this function calls)
-const callees = await lsp_navigation({
-  operation: "outgoingCalls",
-  callHierarchyItem: items[0],
-});
+// Step 2
+lsp_navigation(operation="incomingCalls", callHierarchyItem=<item from step 1>)
+lsp_navigation(operation="outgoingCalls", callHierarchyItem=<item from step 1>)
 ```
 
-## When NOT to Use LSP
+## Operational Notes
 
-| Task                        | Use Instead       | Why                         |
-| --------------------------- | ----------------- | --------------------------- |
-| Active type/error checks    | `lsp_diagnostics` | Diagnostics, not navigation |
-| Find patterns (console.log) | `ast_grep_search` | Pattern matching            |
-| Find text/TODOs             | `grep`            | Text search                 |
-| Find files by name          | `glob`            | File discovery              |
-| Read file content           | `read`            | Direct access               |
+- **`definition` returns nothing?** The file may not be open/indexed yet. Read it first, then retry.
+- **`workspaceSymbol` empty?** Always pass `filePath`. Unscoped queries are best-effort and frequently return nothing. If TypeScript returns "No Project", open the scoped file first.
+- **`references`** — query from the *definition site* for full cross-file coverage; usage-site queries can be partial.
+- **`signatureHelp`** — only valid at call-site argument positions; declaration positions return empty.
+- **`workspaceDiagnostics`** — tracked push snapshot only, not an active check. Use `lsp_diagnostics` when you need fresh results.
+- **`codeAction`** — distinguish `quickfix` from generic refactors ("Move to new file"). Generic refactors are not error fixes.
+- **`prepareCallHierarchy`** — server-capability dependent; if unsupported, skip incoming/outgoing calls.
+
+## When NOT to Use LSP Navigation
+
+| Task | Use Instead |
+|---|---|
+| Find patterns (`console.log`) | `ast_grep_search` |
+| Find text / TODOs | `grep` |
+| Find files by name | `glob` |
+| Read file content | `read` |
 
 ## Golden Rule
 

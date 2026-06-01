@@ -16,7 +16,33 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import { resolveToolCommand } from "./utils/runner-helpers.js";
+import {
+	createCwdCachedProbe,
+	resolveToolCommand,
+} from "./utils/runner-helpers.js";
+
+// Per-cwd cached eslint `--version` verification (#120). Before this, every
+// dispatch invocation ran a fresh `safeSpawnAsync(cmd, ["--version"])` after
+// the local cmd resolution. The probe is cached per cwd because
+// `resolveToolCommand("eslint")` is deterministic from cwd; the underlying
+// cmd identity is captured inside the probe closure.
+function makeEslintProbe(cmd: string) {
+	return createCwdCachedProbe(async (cwd) => {
+		const r = await safeSpawnAsync(cmd, ["--version"], { timeout: 5000, cwd });
+		return !r.error && r.status === 0;
+	});
+}
+const eslintProbeByCmd = new Map<
+	string,
+	ReturnType<typeof makeEslintProbe>
+>();
+function getEslintProbe(cmd: string) {
+	const existing = eslintProbeByCmd.get(cmd);
+	if (existing) return existing;
+	const created = makeEslintProbe(cmd);
+	eslintProbeByCmd.set(cmd, created);
+	return created;
+}
 
 interface EslintMessage {
 	ruleId: string | null;
@@ -91,12 +117,8 @@ const eslintRunner: RunnerDefinition = {
 
 		const cmd = resolveToolCommand(cwd, "eslint") ?? "eslint";
 
-		// Verify ESLint is actually executable
-		const versionCheck = await safeSpawnAsync(cmd, ["--version"], {
-			timeout: 5000,
-			cwd,
-		});
-		if (versionCheck.error || versionCheck.status !== 0) {
+		// Verify ESLint is actually executable (cached per cwd, see getEslintProbe).
+		if (!(await getEslintProbe(cmd)(cwd))) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 

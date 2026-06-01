@@ -219,6 +219,11 @@ export class ReadGuard {
 		string,
 		{ turnIndex: number; writeIndex: number }
 	>();
+	// Files that recordWritten() has fired on this session. Lets
+	// wasWrittenThisSession() return a deterministic answer for files the
+	// pi Write tool authored, independent of filesystem mtime granularity
+	// or clock skew (NFS, FAT32, etc.).
+	private readonly writtenThisSession = new Set<string>();
 	private readonly sessionId: string;
 	private readonly sessionStartMs: number;
 
@@ -513,6 +518,7 @@ export class ReadGuard {
 	 */
 	recordWritten(filePath: string): void {
 		this.fileTime.read(filePath);
+		this.writtenThisSession.add(filePath);
 		const creation = this.pendingCreations.get(filePath);
 		if (creation) {
 			this.pendingCreations.delete(filePath);
@@ -628,6 +634,10 @@ export class ReadGuard {
 	}
 
 	private wasWrittenThisSession(filePath: string): boolean {
+		// Authoritative path: we observed a write of this file via recordWritten.
+		// Survives mtime granularity (FAT32 ~2s), clock skew (NFS), and external
+		// tools that touch mtime backward.
+		if (this.writtenThisSession.has(filePath)) return true;
 		try {
 			return fs.statSync(filePath).mtimeMs >= this.sessionStartMs;
 		} catch {

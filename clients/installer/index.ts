@@ -54,17 +54,19 @@ import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { createGunzip } from "node:zlib";
+import { isTestMode } from "../env-utils.js";
+import { getGlobalPiLensDir } from "../file-utils.js";
 
 // Global installation directory for pi-lens tools
-const TOOLS_DIR = path.join(os.homedir(), ".pi-lens", "tools");
+const TOOLS_DIR = path.join(getGlobalPiLensDir(), "tools");
 
 // Directory for GitHub-downloaded binaries
-const GITHUB_BIN_DIR = path.join(os.homedir(), ".pi-lens", "bin");
+const GITHUB_BIN_DIR = path.join(getGlobalPiLensDir(), "bin");
 
 // Debug flag - set via PI_LENS_DEBUG=1 or --debug
 const DEBUG =
 	process.env.PI_LENS_DEBUG === "1" || process.argv.includes("--debug");
-const SESSIONSTART_LOG_DIR = path.join(os.homedir(), ".pi-lens");
+const SESSIONSTART_LOG_DIR = getGlobalPiLensDir();
 const SESSIONSTART_LOG = path.join(SESSIONSTART_LOG_DIR, "sessionstart.log");
 
 /**
@@ -77,10 +79,7 @@ function debugLog(...args: unknown[]): void {
 }
 
 function logSessionStart(msg: string): void {
-	if (
-		process.env.PI_LENS_TEST_MODE === "1" ||
-		(process.env.VITEST && process.env.PI_LENS_TEST_MODE !== "0")
-	) {
+	if (isTestMode()) {
 		return;
 	}
 	const line = `[${new Date().toISOString()}] ${msg}\n`;
@@ -533,7 +532,9 @@ const TOOLS: ToolDefinition[] = [
 				if (platform === "linux")
 					return arch === "arm64" ? "linux_arm64.tar.gz" : "linux_amd64.tar.gz";
 				if (platform === "darwin")
-					return arch === "arm64" ? "darwin_arm64.tar.gz" : "darwin_amd64.tar.gz";
+					return arch === "arm64"
+						? "darwin_arm64.tar.gz"
+						: "darwin_amd64.tar.gz";
 				if (platform === "win32")
 					return arch === "arm64" ? "windows_arm64.zip" : "windows_amd64.zip";
 				return undefined;
@@ -728,6 +729,7 @@ function scheduleProbeFlush(): void {
 			.writeFile(PROBE_CACHE_PATH, JSON.stringify(_probeCache, null, 2))
 			.catch(() => {});
 	}, 300);
+	_probeCacheFlushTimer.unref?.();
 }
 
 function isAstGrepVersionOutput(output: string): boolean {

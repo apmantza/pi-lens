@@ -25,7 +25,7 @@ import { getPrimaryDispatchGroup } from "../language-policy.js";
 import { resolveLanguageRootForFile } from "../language-profile.js";
 import { logLatency } from "../latency-logger.js";
 import { normalizeMapKey } from "../path-utils.js";
-import { RUNTIME_CONFIG } from "../runtime-config.js";
+import { RUNTIME_CONFIG, getRunnerTimeoutFloorMs } from "../runtime-config.js";
 import { safeSpawnAsync } from "../safe-spawn.js";
 import { classifyDiagnostic } from "./diagnostic-taxonomy.js";
 import type { FactStore } from "./fact-store.js";
@@ -906,20 +906,25 @@ async function runRunner(
 	runner: RunnerDefinition,
 	defaultSemantic: OutputSemantic,
 ): Promise<RunnerResult> {
+	const timeoutMs = Math.max(
+		runner.timeoutMs ?? RUNNER_TIMEOUT_MS,
+		getRunnerTimeoutFloorMs(),
+	);
+	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
 		const result = await Promise.race([
-			runner.run(ctx),
-			new Promise<never>((_, reject) =>
-				setTimeout(
+			runner.run(ctx).finally(() => clearTimeout(timer)),
+			new Promise<never>((_, reject) => {
+				timer = setTimeout(
 					() =>
 						reject(
 							new Error(
-								`Runner ${runner.id} timed out after ${RUNNER_TIMEOUT_MS}ms`,
+								`Runner ${runner.id} timed out after ${timeoutMs}ms`,
 							),
 						),
-					RUNNER_TIMEOUT_MS,
-				),
-			),
+					timeoutMs,
+				);
+			}),
 		]);
 
 		const diagnostics = result.diagnostics.map((d) => ({
@@ -933,6 +938,7 @@ async function runRunner(
 			semantic: result.semantic ?? defaultSemantic,
 		};
 	} catch (error) {
+		clearTimeout(timer);
 		ctx.log(`Runner ${runner.id} failed: ${error}`);
 		return {
 			status: "failed",

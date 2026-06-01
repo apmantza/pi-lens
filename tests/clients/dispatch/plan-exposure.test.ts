@@ -64,6 +64,26 @@ describe("dispatch plan exposure", () => {
 		);
 	});
 
+	it("go write plan has no duplicate runner ids (go-vet lives only in primary group)", () => {
+		const ids = flattenRunnerIds(TOOL_PLANS.go);
+		const counts = ids.reduce<Record<string, number>>((acc, id) => {
+			acc[id] = (acc[id] ?? 0) + 1;
+			return acc;
+		}, {});
+		expect(counts["go-vet"]).toBe(1);
+		expect(Object.values(counts).every((n) => n === 1)).toBe(true);
+	});
+
+	it("rust write plan has no duplicate runner ids (rust-clippy lives only in primary group)", () => {
+		const ids = flattenRunnerIds(TOOL_PLANS.rust);
+		const counts = ids.reduce<Record<string, number>>((acc, id) => {
+			acc[id] = (acc[id] ?? 0) + 1;
+			return acc;
+		}, {});
+		expect(counts["rust-clippy"]).toBe(1);
+		expect(Object.values(counts).every((n) => n === 1)).toBe(true);
+	});
+
 	it("maps yaml/sql to dedicated lint runners", () => {
 		const yamlIds = flattenRunnerIds(TOOL_PLANS.yaml);
 		const sqlIds = flattenRunnerIds(TOOL_PLANS.sql);

@@ -26,6 +26,7 @@ const pyrightRunner: RunnerDefinition = {
 	appliesTo: ["python"],
 	priority: PRIORITY.LSP_FALLBACK,
 	enabledByDefault: true,
+	timeoutMs: 75_000,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		// Always allow pyright CLI fallback even when LSP is enabled.

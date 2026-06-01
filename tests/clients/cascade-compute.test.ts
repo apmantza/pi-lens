@@ -108,8 +108,8 @@ describe("computeCascadeForFile", () => {
 			});
 
 			expect(touchFile).not.toHaveBeenCalled();
-			expect(result?.neighbors[0]?.diagnostics[0]?.filePath).toBe(neighbor);
-			expect(result?.formatted).toContain("neighbor.ts");
+			expect(result?.result?.neighbors[0]?.diagnostics[0]?.filePath).toBe(neighbor);
+			expect(result?.result?.formatted).toContain("neighbor.ts");
 		} finally {
 			env.cleanup();
 		}
@@ -180,13 +180,13 @@ describe("computeCascadeForFile", () => {
 
 			expect(references).toHaveBeenCalledWith(normalizedPrimary, 0, 16, false);
 			expect(
-				result?.neighbors.some(
+				result?.result?.neighbors.some(
 					(n) =>
 						n.filePath.split(path.sep).join("/") ===
 						reference.split(path.sep).join("/"),
 				),
 			).toBe(true);
-			expect(result?.formatted).toContain("consumer.ts");
+			expect(result?.result?.formatted).toContain("consumer.ts");
 		} finally {
 			env.cleanup();
 		}
@@ -225,8 +225,8 @@ describe("computeCascadeForFile", () => {
 					collectDiagnostics: true,
 				}),
 			);
-			expect(result?.neighbors[0]?.lspTouched).toBe(true);
-			expect(result?.neighbors[0]?.diagnostics[0]?.message).toBe(
+			expect(result?.result?.neighbors[0]?.lspTouched).toBe(true);
+			expect(result?.result?.neighbors[0]?.diagnostics[0]?.message).toBe(
 				"python broken",
 			);
 		} finally {
@@ -275,8 +275,8 @@ describe("computeCascadeForFile", () => {
 			});
 
 			expect(touchFile).not.toHaveBeenCalled();
-			expect(result?.neighbors.some((n) => n.reason === "fallback")).toBe(true);
-			expect(result?.formatted).toContain("fallback error");
+			expect(result?.result?.neighbors.some((n) => n.reason === "fallback")).toBe(true);
+			expect(result?.result?.formatted).toContain("fallback error");
 		} finally {
 			env.cleanup();
 		}
@@ -320,8 +320,8 @@ describe("computeCascadeForFile", () => {
 					maxClientWaitMs: 1000,
 				}),
 			);
-			expect(result?.neighbors[0]?.lspTouched).toBe(true);
-			expect(result?.neighbors[0]?.diagnostics[0]?.message).toBe(
+			expect(result?.result?.neighbors[0]?.lspTouched).toBe(true);
+			expect(result?.result?.neighbors[0]?.diagnostics[0]?.message).toBe(
 				"type error in neighbor",
 			);
 		} finally {
@@ -364,8 +364,8 @@ describe("computeCascadeForFile", () => {
 
 			// Valid snapshot — no touch should happen
 			expect(touchFile).not.toHaveBeenCalled();
-			expect(result?.neighbors[0]?.lspTouched).toBe(false);
-			expect(result?.neighbors[0]?.diagnostics[0]?.message).toBe(
+			expect(result?.result?.neighbors[0]?.lspTouched).toBe(false);
+			expect(result?.result?.neighbors[0]?.diagnostics[0]?.message).toBe(
 				"existing warning",
 			);
 		} finally {
@@ -409,8 +409,8 @@ describe("computeCascadeForFile", () => {
 				writeSeq: 1,
 			});
 
-			expect(first?.formatted).toContain("same error");
-			expect(second).toBeUndefined();
+			expect(first?.result?.formatted).toContain("same error");
+			expect(second?.result).toBeUndefined();
 		} finally {
 			env.cleanup();
 		}
@@ -466,7 +466,7 @@ describe("computeCascadeForFile", () => {
 			});
 
 			expect(touchFile).toHaveBeenCalledTimes(2);
-			expect(second?.neighbors[0]?.diagnostics[0]?.message).toBe("error2");
+			expect(second?.result?.neighbors[0]?.diagnostics[0]?.message).toBe("error2");
 		} finally {
 			env.cleanup();
 		}
@@ -487,9 +487,9 @@ describe("computeCascadeForFile", () => {
 			const { computeCascadeForFile } = await import(
 				"../../clients/dispatch/integration.js"
 			);
-			await expect(
-				computeCascadeForFile(primary, env.tmpDir, { turnSeq: 1, writeSeq: 1 }),
-			).resolves.toBeUndefined();
+			const run = await computeCascadeForFile(primary, env.tmpDir, { turnSeq: 1, writeSeq: 1 });
+			expect(run.result).toBeUndefined();
+			expect(run.skipReason).toBe("no_neighbors");
 		} finally {
 			env.cleanup();
 		}

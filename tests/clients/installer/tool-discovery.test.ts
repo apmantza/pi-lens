@@ -36,11 +36,13 @@ vi.mock("node:os", () => ({
 		setPriority: () => {},
 		getPriority: () => 0,
 	},
+	// Namespace imports (`import * as os from "node:os"`) hit these named
+	// exports, so homedir must return TEST_HOME here too.
+	homedir: () => TEST_HOME,
+	tmpdir: () => "/tmp",
+	platform: () => process.platform,
 	...Object.fromEntries(
 		[
-			"homedir",
-			"tmpdir",
-			"platform",
 			"arch",
 			"release",
 			"type",

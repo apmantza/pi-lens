@@ -77,10 +77,10 @@ describe("turn-end-findings-last dedup", () => {
 
 		// We can't easily re-produce the exact signature through handleTurnEnd
 		// without real tool results, so test the cache layer directly.
-		const last = cacheManager.readCache<{ signature: string; sessionId: string }>(
-			"turn-end-findings-last",
-			env.tmpDir,
-		);
+		const last = cacheManager.readCache<{
+			signature: string;
+			sessionId: string;
+		}>("turn-end-findings-last", env.tmpDir);
 		expect(last?.data?.sessionId).toBe("session-A");
 		expect(last?.data?.signature).toBe(signature);
 
@@ -110,10 +110,10 @@ describe("turn-end-findings-last dedup", () => {
 			env.tmpDir,
 		);
 
-		const last = cacheManager.readCache<{ signature: string; sessionId: string }>(
-			"turn-end-findings-last",
-			env.tmpDir,
-		);
+		const last = cacheManager.readCache<{
+			signature: string;
+			sessionId: string;
+		}>("turn-end-findings-last", env.tmpDir);
 
 		// Dedup condition: same signature but DIFFERENT session → must NOT suppress.
 		expect(last?.data?.signature).toBe(signature);
@@ -139,6 +139,60 @@ vi.mock("../../clients/pipeline.js", () => ({
 }));
 
 describe("stale turn state eviction", () => {
+	it("writes sequence metadata into turn-end warning reports", async () => {
+		const env = setupTestEnvironment("pi-lens-turn-seq-report-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId: "seq-session" });
+			runtime.seedProjectSequence(10);
+			runtime.beginTurn();
+			const cacheManager = new CacheManager(false);
+			const filePath = path.join(env.tmpDir, "src/quality.ts");
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(filePath, "export const x = 1;\n");
+			const { fileSeq } = runtime.bumpFileSeq(filePath);
+			cacheManager.addModifiedRange(
+				filePath,
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+				"seq-session",
+			);
+			runtime.recordCodeQualityWarnings([
+				{
+					id: "cq:test",
+					filePath,
+					displayPath: "src/quality.ts",
+					line: 1,
+					column: 1,
+					severity: "warning",
+					tool: "quality-test",
+					rule: "quality-test",
+					message: "quality advisory",
+					category: "maintainability",
+					origin: "dispatch",
+				},
+			]);
+
+			await handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, { ctxCwd: env.tmpDir }),
+			);
+
+			const report = cacheManager.readCache<{
+				projectSeqStart?: number;
+				projectSeqEnd?: number;
+				files: Array<{ filePath: string; fileSeq?: number }>;
+			}>("code-quality-warnings", env.tmpDir);
+			expect(report?.data).toMatchObject({
+				projectSeqStart: 10,
+				projectSeqEnd: 11,
+			});
+			expect(report?.data.files[0]).toMatchObject({ filePath, fileSeq });
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("evicts turn state written by a previous session", async () => {
 		const env = setupTestEnvironment("pi-lens-stale-evict-");
 		const runtime = new RuntimeCoordinator();
@@ -159,10 +213,14 @@ describe("stale turn state eviction", () => {
 		);
 
 		// Confirm it was written.
-		expect(Object.keys(cacheManager.readTurnState(env.tmpDir).files)).toHaveLength(1);
+		expect(
+			Object.keys(cacheManager.readTurnState(env.tmpDir).files),
+		).toHaveLength(1);
 
 		// handleTurnEnd should detect the session mismatch and evict.
-		await handleTurnEnd(makeTurnEndDeps(runtime, cacheManager, { ctxCwd: env.tmpDir }));
+		await handleTurnEnd(
+			makeTurnEndDeps(runtime, cacheManager, { ctxCwd: env.tmpDir }),
+		);
 
 		// After eviction + processing, turn state should be cleared.
 		const afterState = cacheManager.readTurnState(env.tmpDir);
@@ -190,7 +248,9 @@ describe("stale turn state eviction", () => {
 		);
 
 		// handleTurnEnd processes files — no eviction, just normal clear after clean turn.
-		await handleTurnEnd(makeTurnEndDeps(runtime, cacheManager, { ctxCwd: env.tmpDir }));
+		await handleTurnEnd(
+			makeTurnEndDeps(runtime, cacheManager, { ctxCwd: env.tmpDir }),
+		);
 
 		// No blockers → clearTurnState called normally (not via eviction path).
 		// Either way, state ends up cleared — the point is it wasn't evicted prematurely.
@@ -223,7 +283,8 @@ describe("knip turn-end backoff", () => {
 				{
 					...EMPTY_KNIP_RESULT,
 					success: false,
-					summary: "Error: Process timed out after 30000ms (killed with SIGTERM)",
+					summary:
+						"Error: Process timed out after 30000ms (killed with SIGTERM)",
 				},
 				env.tmpDir,
 			);
@@ -277,7 +338,12 @@ describe("addModifiedRange sessionId stamping", () => {
 		fs.mkdirSync(path.dirname(filePath), { recursive: true });
 		fs.writeFileSync(filePath, "const y = 2;\n");
 
-		cacheManager.addModifiedRange(filePath, { start: 1, end: 1 }, false, env.tmpDir);
+		cacheManager.addModifiedRange(
+			filePath,
+			{ start: 1, end: 1 },
+			false,
+			env.tmpDir,
+		);
 
 		const state = cacheManager.readTurnState(env.tmpDir);
 		expect(state.sessionId).toBeUndefined();
@@ -366,11 +432,19 @@ describe("unresolved inline blocker re-surfacing", () => {
 			"session-A",
 		);
 
-		runtime.recordInlineBlockers(filePath, "🔴 STOP — 1 issue(s) must be fixed:\n  L1: unused variable 'x'");
+		runtime.recordInlineBlockers(
+			filePath,
+			"🔴 STOP — 1 issue(s) must be fixed:\n  L1: unused variable 'x'",
+		);
 
-		await handleTurnEnd(makeTurnEndDeps(runtime, cacheManager, { ctxCwd: env.tmpDir }));
+		await handleTurnEnd(
+			makeTurnEndDeps(runtime, cacheManager, { ctxCwd: env.tmpDir }),
+		);
 
-		const injected = cacheManager.readCache<{ content: string }>("turn-end-findings", env.tmpDir);
+		const injected = cacheManager.readCache<{ content: string }>(
+			"turn-end-findings",
+			env.tmpDir,
+		);
 		expect(injected?.data?.content).toBeDefined();
 		expect(injected?.data?.content).toContain("Unresolved from this turn");
 		expect(injected?.data?.content).toContain("foo.ts");
@@ -397,12 +471,20 @@ describe("unresolved inline blocker re-surfacing", () => {
 			"session-A",
 		);
 
-		runtime.recordInlineBlockers(filePath, "🔴 STOP — 1 issue(s) must be fixed:\n  L1: unused");
+		runtime.recordInlineBlockers(
+			filePath,
+			"🔴 STOP — 1 issue(s) must be fixed:\n  L1: unused",
+		);
 		runtime.clearInlineBlockers(filePath);
 
-		await handleTurnEnd(makeTurnEndDeps(runtime, cacheManager, { ctxCwd: env.tmpDir }));
+		await handleTurnEnd(
+			makeTurnEndDeps(runtime, cacheManager, { ctxCwd: env.tmpDir }),
+		);
 
-		const injected = cacheManager.readCache<{ content: string }>("turn-end-findings", env.tmpDir);
+		const injected = cacheManager.readCache<{ content: string }>(
+			"turn-end-findings",
+			env.tmpDir,
+		);
 		expect(injected?.data?.content).toBeUndefined();
 
 		env.cleanup();

@@ -14,6 +14,7 @@ import type { DispatchContext } from "../dispatch/types.js";
 import { featureHintMetadata } from "../feature-hints.js";
 import { detectFileKind } from "../file-kinds.js";
 import { detectFileRole } from "../file-role.js";
+import { getProjectDataDir } from "../file-utils.js";
 import { normalizeMapKey } from "../path-utils.js";
 import { collectProjectSourceFiles } from "../project-scan-policy.js";
 import { RUNTIME_CONFIG } from "../runtime-config.js";
@@ -238,7 +239,7 @@ function rebuildIndexes(graph: ReviewGraph): void {
 	}
 }
 
-const GRAPH_CACHE_REL = path.join(".pi-lens", "cache", "review-graph.json");
+const GRAPH_CACHE_FILENAME = "review-graph.json";
 
 interface PersistedGraphData {
 	version: string;
@@ -254,7 +255,7 @@ function loadPersistedGraph(cwd: string): {
 	fileSignatures: Map<string, string>;
 	graph: ReviewGraph;
 } | null {
-	const cachePath = path.join(cwd, GRAPH_CACHE_REL);
+	const cachePath = path.join(getProjectDataDir(cwd), "cache", GRAPH_CACHE_FILENAME);
 	try {
 		const raw = fs.readFileSync(cachePath, "utf-8");
 		const data = JSON.parse(raw) as PersistedGraphData;
@@ -287,8 +288,8 @@ function persistGraph(
 	fileSignatures: Map<string, string>,
 	graph: ReviewGraph,
 ): void {
-	const cacheDir = path.join(cwd, ".pi-lens", "cache");
-	const cachePath = path.join(cwd, GRAPH_CACHE_REL);
+	const cacheDir = path.join(getProjectDataDir(cwd), "cache");
+	const cachePath = path.join(cacheDir, GRAPH_CACHE_FILENAME);
 	const data: PersistedGraphData = {
 		version: graph.version,
 		builtAt: graph.builtAt,

@@ -9,14 +9,16 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
+import { createAvailabilityChecker } from "./utils/runner-helpers.js";
+
+// Per-cwd cached `--version` probes (#120). Before this, each dispatch
+// invocation fired a fresh `safeSpawnAsync` per command — once per Elixir
+// file save.
+const mix = createAvailabilityChecker("mix", ".bat");
+const elixirc = createAvailabilityChecker("elixirc", ".bat");
 
 function hasMixExs(cwd: string): boolean {
 	return fs.existsSync(path.join(cwd, "mix.exs"));
-}
-
-async function isCommandAvailable(command: string): Promise<boolean> {
-	const result = await safeSpawnAsync(command, ["--version"], { timeout: 5000 });
-	return !result.error && result.status === 0;
 }
 
 function parseElixirOutput(raw: string, filePath: string): Diagnostic[] {
@@ -89,10 +91,10 @@ const elixirCheckRunner: RunnerDefinition = {
 
 		let command: string | undefined;
 		let args: string[] = [];
-		if (hasMixExs(cwd) && (await isCommandAvailable("mix"))) {
+		if (hasMixExs(cwd) && (await mix.isAvailableAsync(cwd))) {
 			command = "mix";
 			args = ["compile", "--warnings-as-errors"];
-		} else if (await isCommandAvailable("elixirc")) {
+		} else if (await elixirc.isAvailableAsync(cwd)) {
 			const outDir = path.join(getProjectDataDir(cwd), "elixir-check");
 			fs.mkdirSync(outDir, { recursive: true });
 			command = "elixirc";

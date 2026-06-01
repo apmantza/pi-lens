@@ -12,6 +12,7 @@
  */
 
 import { existsSync, realpathSync } from "node:fs";
+import * as path from "node:path";
 import { dirname, win32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -144,6 +145,46 @@ export function pathsEqual(a: string, b: string): boolean {
  * Check if `child` is under `parent` directory.
  * Separator-agnostic and case-insensitive on Windows.
  */
+/**
+ * Yield each directory from `startDir` up to (and including) the filesystem
+ * root. Terminates when `path.dirname(current) === current` so it works on
+ * Windows drive roots and POSIX `/` alike.
+ *
+ * Single source of truth for the half-dozen "walk up the directory tree
+ * looking for X" loops that have accumulated across the codebase. Callers
+ * that need an "is there a file named Y anywhere on the way up" check
+ * should use `findNearestContaining` instead.
+ */
+export function* walkUpDirs(startDir: string): Generator<string> {
+	let current = path.resolve(startDir);
+	while (true) {
+		yield current;
+		const parent = path.dirname(current);
+		if (parent === current) return;
+		current = parent;
+	}
+}
+
+/**
+ * Walk up from `startDir` and return the first directory that contains any
+ * of `candidates` on disk. Returns `undefined` if none match.
+ *
+ * @example
+ *   findNearestContaining("/repo/pkg/src", ["package.json", "tsconfig.json"]);
+ *   // → "/repo/pkg" if pkg/package.json exists, "/repo" if only /repo/package.json
+ */
+export function findNearestContaining(
+	startDir: string,
+	candidates: readonly string[],
+): string | undefined {
+	for (const dir of walkUpDirs(startDir)) {
+		for (const name of candidates) {
+			if (existsSync(path.join(dir, name))) return dir;
+		}
+	}
+	return undefined;
+}
+
 export function isUnderDir(child: string, parent: string): boolean {
 	const normChild = normalizeFilePath(child);
 	const normParent = normalizeFilePath(parent);

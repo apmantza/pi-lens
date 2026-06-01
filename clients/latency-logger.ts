@@ -1,8 +1,9 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { isTestMode } from "./env-utils.js";
+import { getGlobalPiLensDir } from "./file-utils.js";
 
-const LATENCY_LOG_DIR = path.join(os.homedir(), ".pi-lens");
+const LATENCY_LOG_DIR = getGlobalPiLensDir();
 const LATENCY_LOG_FILE = path.join(LATENCY_LOG_DIR, "latency.log");
 
 try {
@@ -40,10 +41,7 @@ export interface LatencyEntry {
 }
 
 export function logLatency(entry: LatencyEntry): void {
-	if (
-		process.env.PI_LENS_TEST_MODE === "1" ||
-		(process.env.VITEST && process.env.PI_LENS_TEST_MODE !== "0")
-	) {
+	if (isTestMode()) {
 		return;
 	}
 	const line = `${JSON.stringify({ ts: new Date().toISOString(), ...entry })}\n`;

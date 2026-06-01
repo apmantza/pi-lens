@@ -32,7 +32,16 @@ export interface BiomeDiagnostic {
 
 export class BiomeClient {
 	private biomeAvailable: boolean | null = null;
-	private localBinaryPath: string | null = null;
+	// Per-cwd cache of the resolved biome binary. Keying by cwd matters in
+	// monorepos where different sub-packages each ship their own biome
+	// installation; sharing one slot across the whole client would cause
+	// the first resolution to win and stale across other packages.
+	private localBinaryByCwd = new Map<string, string>();
+	// The binary path written by `ensureTool("biome")` — genuinely global
+	// (lives under ~/.pi-lens/tools), so it's stored separately from the
+	// per-cwd cache and used as a final fallback before npx.
+	private autoInstalledBinaryPath: string | null = null;
+	private ensureInFlight: Promise<boolean> | null = null;
 	private log: (msg: string) => void;
 
 	constructor(verbose = false) {
@@ -42,12 +51,22 @@ export class BiomeClient {
 	}
 
 	/**
-	 * Resolve the fastest available biome binary.
+	 * Resolve the fastest available biome binary for `cwd`.
 	 * Prefers local node_modules/.bin/biome (skip npx overhead ~1s).
-	 * Falls back to global biome, then npx.
+	 * Falls back to ~/.pi-lens/tools, then npx.
+	 *
+	 * In monorepos, callers should pass the project / sub-package root for the
+	 * edited file (typically `path.dirname(absolutePath)`). Omitting `cwd`
+	 * falls back to `process.cwd()`, which is wrong when pi is invoked from
+	 * a different directory than the file being edited.
 	 */
-	private getBiomeBinary(): { cmd: string; args: string[] } {
-		if (this.localBinaryPath) return { cmd: this.localBinaryPath, args: [] };
+	private getBiomeBinary(cwd?: string): { cmd: string; args: string[] } {
+		const resolveCwd = cwd ?? process.cwd();
+		const cached = this.localBinaryByCwd.get(resolveCwd);
+		if (cached) return { cmd: cached, args: [] };
+		if (this.autoInstalledBinaryPath) {
+			return { cmd: this.autoInstalledBinaryPath, args: [] };
+		}
 
 		// Walk up from cwd looking for node_modules/.bin/biome.
 		// Also check ~/.pi-lens/tools (where ensureTool("biome") auto-installs),
@@ -64,19 +83,19 @@ export class BiomeClient {
 		);
 		const candidates = isWin
 			? [
-					path.join(process.cwd(), "node_modules", ".bin", "biome.cmd"),
-					path.join(process.cwd(), "node_modules", ".bin", "biome"),
+					path.join(resolveCwd, "node_modules", ".bin", "biome.cmd"),
+					path.join(resolveCwd, "node_modules", ".bin", "biome"),
 					path.join(piLensBin, "biome.cmd"),
 					path.join(piLensBin, "biome"),
 				]
 			: [
-					path.join(process.cwd(), "node_modules", ".bin", "biome"),
-					path.join(process.cwd(), "node_modules", ".bin", "biome.cmd"),
+					path.join(resolveCwd, "node_modules", ".bin", "biome"),
+					path.join(resolveCwd, "node_modules", ".bin", "biome.cmd"),
 					path.join(piLensBin, "biome"),
 				];
 		for (const p of candidates) {
 			if (fs.existsSync(p)) {
-				this.localBinaryPath = p;
+				this.localBinaryByCwd.set(resolveCwd, p);
 				return { cmd: p, args: [] };
 			}
 		}
@@ -85,15 +104,20 @@ export class BiomeClient {
 	}
 
 	/**
-	 * Spawn biome with the fastest available binary.
+	 * Spawn biome with the fastest available binary for `cwd`.
+	 * Pass the file's project root in monorepos so the per-package binary wins.
 	 */
-	private spawnBiome(args: string[], timeout = 15000) {
-		const { cmd, args: prefix } = this.getBiomeBinary();
+	private spawnBiome(args: string[], timeout = 15000, cwd?: string) {
+		const { cmd, args: prefix } = this.getBiomeBinary(cwd);
 		return safeSpawn(cmd, [...prefix, ...args], { timeout });
 	}
 
-	private async spawnBiomeAsync(args: string[], timeout = 15000) {
-		const { cmd, args: prefix } = this.getBiomeBinary();
+	private async spawnBiomeAsync(
+		args: string[],
+		timeout = 15000,
+		cwd?: string,
+	) {
+		const { cmd, args: prefix } = this.getBiomeBinary(cwd);
 		return safeSpawnAsync(cmd, [...prefix, ...args], { timeout });
 	}
 
@@ -121,10 +145,25 @@ export class BiomeClient {
 	/**
 	 * Ensure Biome is available, auto-installing if necessary.
 	 * Prefer this over isAvailable() for auto-install behavior.
+	 *
+	 * Re-entrancy safe: concurrent first-time callers share a single
+	 * `ensureInFlight` promise so probing/auto-install isn't duplicated.
+	 * Mirrors the dedupe pattern in `SgRunner` / `KnipClient` /
+	 * `DependencyChecker`.
 	 */
 	async ensureAvailable(): Promise<boolean> {
 		if (this.biomeAvailable !== null) return this.biomeAvailable;
+		if (this.ensureInFlight) return this.ensureInFlight;
 
+		this.ensureInFlight = this.doEnsureAvailable();
+		try {
+			return await this.ensureInFlight;
+		} finally {
+			this.ensureInFlight = null;
+		}
+	}
+
+	private async doEnsureAvailable(): Promise<boolean> {
 		// Check if already available
 		const result = await this.spawnBiomeAsync(["--version"], 10000);
 		if (!result.error && result.status === 0) {
@@ -139,8 +178,9 @@ export class BiomeClient {
 
 		if (installedPath) {
 			this.log(`Biome auto-installed: ${installedPath}`);
-			// Set the installed path as local binary to avoid npx overhead
-			this.localBinaryPath = installedPath;
+			// Set the installed path as the global fallback so every cwd
+			// reaches it after its own per-package lookup misses.
+			this.autoInstalledBinaryPath = installedPath;
 			this.biomeAvailable = true;
 			return true;
 		}
@@ -179,12 +219,16 @@ export class BiomeClient {
 		if (!absolutePath) return [];
 
 		try {
-			const result = this.spawnBiome([
-				"check",
-				"--reporter=json",
-				"--max-diagnostics=50",
-				absolutePath,
-			]);
+			const result = this.spawnBiome(
+				[
+					"check",
+					"--reporter=json",
+					"--max-diagnostics=50",
+					absolutePath,
+				],
+				15000,
+				path.dirname(absolutePath),
+			);
 
 			// Biome exits 0 on success, 1 on issues found
 			const output = result.stdout || "";
@@ -218,7 +262,11 @@ export class BiomeClient {
 		const content = fs.readFileSync(absolutePath, "utf-8");
 
 		try {
-			const result = this.spawnBiome(["format", "--write", absolutePath]);
+			const result = this.spawnBiome(
+				["format", "--write", absolutePath],
+				15000,
+				path.dirname(absolutePath),
+			);
 
 			if (result.error) {
 				return { success: false, changed: false, error: result.error.message };
@@ -266,7 +314,11 @@ export class BiomeClient {
 			// lint --write applies safe lint fixes only — no formatting.
 			// Formatting is deferred to agent_end to avoid mid-turn file modifications
 			// that trigger read-guard "file modified since read" blocks.
-			const result = this.spawnBiome(["lint", "--write", absolutePath]);
+			const result = this.spawnBiome(
+				["lint", "--write", absolutePath],
+				15000,
+				path.dirname(absolutePath),
+			);
 
 			if (result.error) {
 				return {
@@ -325,11 +377,11 @@ export class BiomeClient {
 
 		try {
 			const before = await fs.promises.readFile(absolutePath, "utf-8");
-			const result = await this.spawnBiomeAsync([
-				"lint",
-				"--write",
-				absolutePath,
-			]);
+			const result = await this.spawnBiomeAsync(
+				["lint", "--write", absolutePath],
+				15000,
+				path.dirname(absolutePath),
+			);
 
 			if (result.error) {
 				return {

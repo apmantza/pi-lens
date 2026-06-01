@@ -120,6 +120,33 @@ describe("SgRunner", () => {
 			await runner.ensureAvailable();
 			expect(safeSpawnAsync).toHaveBeenCalledTimes(1);
 		});
+
+		it("dedupes concurrent first-time callers to a single probe (#113)", async () => {
+			let resolveProbe: ((value: unknown) => void) | undefined;
+			safeSpawnAsync.mockImplementationOnce(
+				() =>
+					new Promise((resolve) => {
+						resolveProbe = resolve;
+					}),
+			);
+			const { SgRunner } = await import("../../clients/sg-runner.js");
+			const runner = new SgRunner();
+			const a = runner.ensureAvailable();
+			const b = runner.ensureAvailable();
+			const c = runner.ensureAvailable();
+			expect(safeSpawnAsync).toHaveBeenCalledTimes(1);
+			resolveProbe?.({
+				status: 0,
+				error: null,
+				stdout: "ast-grep 0.42.1",
+				stderr: "",
+			});
+			const results = await Promise.all([a, b, c]);
+			expect(results).toEqual([true, true, true]);
+			// Cache is now hot — additional calls don't even reach safeSpawnAsync.
+			await runner.ensureAvailable();
+			expect(safeSpawnAsync).toHaveBeenCalledTimes(1);
+		});
 	});
 
 	describe("tempScanAsync()", () => {

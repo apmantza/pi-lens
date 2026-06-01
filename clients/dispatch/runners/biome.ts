@@ -12,7 +12,19 @@ import type {
 } from "../types.js";
 import { PRIORITY } from "../priorities.js";
 import { createBiomeParser } from "./utils/diagnostic-parsers.js";
-import { biome } from "./utils/runner-helpers.js";
+import { biome, createCwdCachedProbe } from "./utils/runner-helpers.js";
+
+// Cached per-cwd probe for the npx biome fallback. Before #120, this fired
+// a fresh `safeSpawnAsync("npx", ["biome", "--version"])` every dispatch
+// invocation when the primary `biome` PATH checker missed — once per file
+// save in any repo without a local biome binary.
+const probeNpxBiome = createCwdCachedProbe(async (cwd) => {
+	const r = await safeSpawnAsync("npx", ["biome", "--version"], {
+		timeout: 5000,
+		cwd,
+	});
+	return !r.error && r.status === 0;
+});
 
 const biomeRunner: RunnerDefinition = {
 	id: "biome-lint",
@@ -31,12 +43,8 @@ const biomeRunner: RunnerDefinition = {
 		}
 
 		if (!cmd) {
-			// Try npx as fallback
-			const npxCheck = await safeSpawnAsync("npx", ["biome", "--version"], {
-				timeout: 5000,
-				cwd,
-			});
-			if (!npxCheck.error && npxCheck.status === 0) {
+			// Try npx as fallback (cached per cwd — see probeNpxBiome above).
+			if (await probeNpxBiome(cwd)) {
 				cmd = "npx";
 				useNpx = true;
 			} else {

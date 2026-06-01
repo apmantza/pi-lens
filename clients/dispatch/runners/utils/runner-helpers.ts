@@ -8,9 +8,9 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { getGlobalPiLensDir } from "../../../file-utils.js";
 import { ensureTool } from "../../../installer/index.js";
 import { safeSpawn, safeSpawnAsync } from "../../../safe-spawn.js";
 import {
@@ -44,7 +44,7 @@ if (typeof __dirname !== "undefined") {
 }
 
 // Managed tools directory (~/.pi-lens/tools) — where ensureTool() installs binaries
-const _managedToolsDir = path.join(os.homedir(), ".pi-lens", "tools");
+const _managedToolsDir = path.join(getGlobalPiLensDir(), "tools");
 
 // =============================================================================
 // VENV-AWARE COMMAND FINDER
@@ -170,6 +170,32 @@ export function createAvailabilityChecker(
 	}
 
 	return { isAvailable, isAvailableAsync, getCommand };
+}
+
+/**
+ * Per-cwd cached availability probe for spawn signatures that don't fit
+ * `createAvailabilityChecker` — multi-arg subcommands like `npx biome
+ * --version`, `cargo clippy --version`, `mix credo --version`, or a
+ * dynamically-resolved `<cmd> --version`. Each cwd is probed at most once;
+ * concurrent first-time callers share the in-flight promise.
+ *
+ * The cache stores the boolean outcome forever (same shape as
+ * `createAvailabilityChecker`): once known unavailable for a cwd, the
+ * runner stays skipped for that cwd until the process restarts. Pass a
+ * fresh probe for retry-after-install flows.
+ */
+export function createCwdCachedProbe(
+	probe: (cwd: string) => Promise<boolean>,
+): (cwd: string) => Promise<boolean> {
+	const cacheByCwd = new Map<string, Promise<boolean>>();
+	return (cwd: string) => {
+		const key = path.resolve(cwd || process.cwd());
+		const existing = cacheByCwd.get(key);
+		if (existing) return existing;
+		const promise = probe(key).catch(() => false);
+		cacheByCwd.set(key, promise);
+		return promise;
+	};
 }
 
 export function resolveNodeToolCommand(

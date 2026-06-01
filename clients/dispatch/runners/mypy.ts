@@ -35,6 +35,7 @@ function parseMypyOutput(raw: string, filePath: string): Diagnostic[] {
 			semantic: severity === "error" ? "blocking" : "warning",
 			tool: "mypy",
 			rule,
+			defectClass: "correctness",
 		});
 	}
 	return diagnostics;

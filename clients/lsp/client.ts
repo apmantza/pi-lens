@@ -89,6 +89,15 @@ export interface LSPWorkspaceDiagnosticsSupport {
 	diagnosticProviderKind: string;
 }
 
+export interface LSPShutdownOptions {
+	/**
+	 * Fast shutdown is for process/session teardown paths where extension cleanup
+	 * must not keep the TUI or Node process alive. It sends exit/kill signals and
+	 * unreferences child handles/timers instead of waiting for graceful escalation.
+	 */
+	fast?: boolean;
+}
+
 export interface LSPOperationSupport {
 	definition: boolean;
 	references: boolean;
@@ -233,7 +242,7 @@ export interface LSPClientInfo {
 	outgoingCalls(
 		item: LSPCallHierarchyItem,
 	): Promise<LSPCallHierarchyOutgoingCall[]>;
-	shutdown(): Promise<void>;
+	shutdown(options?: LSPShutdownOptions): Promise<void>;
 }
 
 // --- Constants ---
@@ -347,29 +356,54 @@ function disposeClientConnection(state: LSPClientState): void {
 }
 
 async function killProcessTree(
-	proc: { kill(signal?: NodeJS.Signals | number): boolean },
+	proc: {
+		kill(signal?: NodeJS.Signals | number): boolean;
+		unref?: () => void;
+	},
 	pid: number,
+	options: LSPShutdownOptions = {},
 ): Promise<void> {
 	if (process.platform === "win32" && pid > 0) {
-		await new Promise<void>((resolve) => {
-			try {
-				// Absolute path avoids PATH-resolution: SystemRoot is set by Windows itself.
-				const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
-				const killer = nodeSpawn(taskkill, ["/F", "/T", "/PID", String(pid)], {
-					shell: false,
-					windowsHide: true,
-				});
+		try {
+			// Absolute path avoids PATH-resolution: SystemRoot is set by Windows itself.
+			const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
+			const killer = nodeSpawn(taskkill, ["/F", "/T", "/PID", String(pid)], {
+				shell: false,
+				windowsHide: true,
+				stdio: "ignore",
+				detached: !!options.fast,
+			});
+			if (options.fast) {
+				killer.unref();
+				proc.unref?.();
+				return;
+			}
+			await new Promise<void>((resolve) => {
 				killer.once("close", () => resolve());
 				killer.once("error", () => resolve());
-			} catch {
-				resolve();
-			}
-		});
+			});
+		} catch {
+			// ignore
+		}
 		return;
 	}
 
 	try {
 		proc.kill("SIGTERM");
+		if (options.fast) {
+			const timer = setTimeout(() => {
+				try {
+					if (!(proc as { killed?: boolean }).killed) {
+						proc.kill("SIGKILL");
+					}
+				} catch {
+					// best-effort
+				}
+			}, 1500);
+			timer.unref?.();
+			proc.unref?.();
+			return;
+		}
 		// SIGTERM → 1.5s → SIGKILL escalation.
 		// SIGTERM alone can leave zombie processes if the server hangs.
 		await new Promise<void>((resolve) => setTimeout(resolve, 1500));
@@ -786,7 +820,10 @@ export async function handleNotifyChange(
 	});
 }
 
-async function clientShutdown(state: LSPClientState): Promise<void> {
+export async function clientShutdown(
+	state: LSPClientState,
+	options: LSPShutdownOptions = {},
+): Promise<void> {
 	state.isConnected = false;
 	state.isDestroyed = true;
 	for (const timer of state.pendingDiagnostics.values()) {
@@ -796,24 +833,26 @@ async function clientShutdown(state: LSPClientState): Promise<void> {
 	state.pendingOpens.clear();
 	state.openDocuments.clear();
 	state.diagnosticEmitter.removeAllListeners();
-	try {
-		await withTimeout(
-			safeSendRequest(state.connection, "shutdown", {}),
-			SHUTDOWN_REQUEST_TIMEOUT_MS,
-		);
-	} catch {
-		/* ignore — proceed to exit/kill so shutdown cannot hang the session */
-	}
-	try {
-		await safeSendNotification(state.connection, "exit", {});
-	} catch {
-		/* ignore */
+	if (!options.fast) {
+		try {
+			await withTimeout(
+				safeSendRequest(state.connection, "shutdown", {}),
+				SHUTDOWN_REQUEST_TIMEOUT_MS,
+			);
+		} catch {
+			/* ignore — proceed to exit/kill so shutdown cannot hang the session */
+		}
+		try {
+			await safeSendNotification(state.connection, "exit", {});
+		} catch {
+			/* ignore */
+		}
 	}
 	disposeClientConnection(state);
 	const pid = state.lspProcess.pid;
 	// On Windows, killing the direct child first can orphan grandchildren before
 	// taskkill can traverse the tree. Kill the full tree first and wait briefly.
-	await killProcessTree(state.lspProcess.process, pid);
+	await killProcessTree(state.lspProcess.process, pid, options);
 }
 
 async function navRequest<T>(
@@ -1300,8 +1339,8 @@ export async function createLSPClient(options: {
 			return result ?? [];
 		},
 
-		async shutdown() {
-			return clientShutdown(state);
+		async shutdown(options?: LSPShutdownOptions) {
+			return clientShutdown(state, options);
 		},
 	};
 }

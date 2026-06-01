@@ -17,6 +17,45 @@ import {
 
 const markdownlint = createAvailabilityChecker("markdownlint-cli2", ".cmd");
 
+// markdownlint-cli2 text output does not include per-violation fixability,
+// so we keep a static allowlist of MD### rules whose --fix is deterministic.
+// Sourced from the rule pages in
+// https://github.com/DavidAnson/markdownlint/blob/main/doc/Rules.md — every
+// entry below is documented as "Fixable: yes" (or equivalent). Update when
+// markdownlint adds or changes auto-fix support.
+const MARKDOWNLINT_FIXABLE_RULES = new Set<string>([
+	"MD001",
+	"MD004",
+	"MD005",
+	"MD007",
+	"MD009",
+	"MD010",
+	"MD011",
+	"MD012",
+	"MD014",
+	"MD018",
+	"MD019",
+	"MD020",
+	"MD021",
+	"MD022",
+	"MD023",
+	"MD026",
+	"MD027",
+	"MD030",
+	"MD031",
+	"MD032",
+	"MD034",
+	"MD037",
+	"MD038",
+	"MD039",
+	"MD044",
+	"MD047",
+	"MD049",
+	"MD050",
+	"MD053",
+	"MD058",
+]);
+
 // markdownlint-cli output: path/to/file.md:10:3 MD013/line-length Line length
 function parseMarkdownlintOutput(raw: string, filePath: string): Diagnostic[] {
 	const diagnostics: Diagnostic[] = [];
@@ -27,6 +66,7 @@ function parseMarkdownlintOutput(raw: string, filePath: string): Diagnostic[] {
 		if (!match) continue;
 		const [, lineNum, col, ruleCode, message] = match;
 		const ruleName = ruleCode.split("/")[0];
+		const fixable = MARKDOWNLINT_FIXABLE_RULES.has(ruleName);
 		diagnostics.push({
 			id: `markdownlint-${lineNum}-${ruleName}`,
 			message: `[${ruleCode}] ${message}`,
@@ -37,6 +77,10 @@ function parseMarkdownlintOutput(raw: string, filePath: string): Diagnostic[] {
 			semantic: "warning",
 			tool: "markdownlint",
 			rule: ruleName,
+			fixable,
+			fixSuggestion: fixable
+				? "Run `markdownlint-cli2 --fix` to apply the deterministic auto-correction for this rule."
+				: undefined,
 		});
 	}
 	return diagnostics;

@@ -27,6 +27,18 @@ import {
 
 const golangci = createAvailabilityChecker("golangci-lint", ".exe");
 
+interface GolangciInlineReplacement {
+	StartCol?: number;
+	Length?: number;
+	NewString?: string;
+}
+
+interface GolangciReplacement {
+	NeedOnlyDelete?: boolean;
+	NewLines?: string[];
+	Inline?: GolangciInlineReplacement;
+}
+
 interface GolangciIssue {
 	FromLinter: string;
 	Text: string;
@@ -36,10 +48,34 @@ interface GolangciIssue {
 		Line: number;
 		Column: number;
 	};
+	Replacement?: GolangciReplacement | null;
 }
 
 interface GolangciOutput {
 	Issues: GolangciIssue[] | null;
+}
+
+/**
+ * Summarize a golangci-lint Replacement into a single-line fixSuggestion.
+ * Prefers the Inline rewrite (precise + short) over multi-line block
+ * replacements, and reports a delete-only fix when there's no new content.
+ * Returns undefined when there is no Replacement attached.
+ */
+function describeReplacement(
+	replacement: GolangciReplacement | null | undefined,
+): string | undefined {
+	if (!replacement) return undefined;
+	if (replacement.Inline?.NewString !== undefined) {
+		return `Replace with: ${replacement.Inline.NewString}`;
+	}
+	if (replacement.NeedOnlyDelete) return "Delete this code";
+	if (replacement.NewLines && replacement.NewLines.length > 0) {
+		const preview = replacement.NewLines[0].trim();
+		const hint =
+			replacement.NewLines.length > 1 ? ` (+${replacement.NewLines.length - 1} more lines)` : "";
+		return `Replace with: ${preview}${hint}`;
+	}
+	return "Apply golangci-lint suggested fix";
 }
 
 function parseGolangciJson(raw: string, filePath: string): Diagnostic[] {
@@ -53,6 +89,12 @@ function parseGolangciJson(raw: string, filePath: string): Diagnostic[] {
 			(issue) => path.resolve(issue.Pos.Filename) === absFile,
 		).map((issue) => {
 			const severity = issue.Severity === "error" ? "error" : "warning";
+			// golangci-lint's --out-format=json emits a Replacement object per
+			// issue when `golangci-lint run --fix` would deterministically
+			// rewrite the code. Mirror the rust-clippy structured-output path
+			// (commit 221b34d): propagate the field to fixable / fixSuggestion
+			// so the diagnostic routes through actionable-warnings.
+			const fixSuggestion = describeReplacement(issue.Replacement);
 			return {
 				id: `golangci:${issue.FromLinter}:${issue.Pos.Line}`,
 				message: `${issue.FromLinter}: ${issue.Text}`,
@@ -63,6 +105,9 @@ function parseGolangciJson(raw: string, filePath: string): Diagnostic[] {
 				semantic: severity === "error" ? "blocking" : "warning",
 				tool: "golangci-lint",
 				rule: issue.FromLinter,
+				defectClass: "correctness",
+				fixable: Boolean(issue.Replacement),
+				fixSuggestion,
 			} satisfies Diagnostic;
 		});
 	} catch {
@@ -70,11 +115,15 @@ function parseGolangciJson(raw: string, filePath: string): Diagnostic[] {
 	}
 }
 
+// Exported for the parser unit tests (#112 golangci-lint slice).
+export { parseGolangciJson };
+
 const golangciRunner: RunnerDefinition = {
 	id: "golangci-lint",
 	appliesTo: ["go"],
 	priority: PRIORITY.GENERAL_ANALYSIS,
 	enabledByDefault: true,
+	timeoutMs: 90_000,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = ctx.cwd || process.cwd();

@@ -1,0 +1,130 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "pi-lens ast-grep rule",
+  "description": "A single ast-grep rule loaded by pi-lens. Place files under rules/ast-grep-rules/rules/. Supports multiple documents per file separated by ---.",
+  "type": "object",
+  "required": ["id", "rule"],
+  "additionalProperties": false,
+  "definitions": {
+    "ruleCondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "Ast-grep pattern syntax. Avoid single bare metavariables like '$VAR' (too broad, filtered out)."
+        },
+        "kind": {
+          "type": "string",
+          "description": "AST node kind name, e.g. 'call_expression', 'import_statement'."
+        },
+        "regex": {
+          "type": "string",
+          "description": "Regular expression matched against the node's text."
+        },
+        "has": {
+          "$ref": "#/definitions/ruleCondition",
+          "description": "The node must have a descendant matching this condition."
+        },
+        "not": {
+          "$ref": "#/definitions/ruleCondition",
+          "description": "Negation — the node must NOT match this condition."
+        },
+        "any": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ruleCondition" },
+          "description": "OR — matches if any item matches. Minimum 1 item."
+        },
+        "all": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ruleCondition" },
+          "description": "AND — matches only if all items match. Minimum 1 item."
+        },
+        "inside": {
+          "$ref": "#/definitions/ruleCondition",
+          "description": "⚠️ Not supported by the NAPI runner — rules using this are silently skipped."
+        },
+        "follows": {
+          "$ref": "#/definitions/ruleCondition",
+          "description": "⚠️ Not supported by the NAPI runner — rules using this are silently skipped."
+        },
+        "precedes": {
+          "$ref": "#/definitions/ruleCondition",
+          "description": "⚠️ Not supported by the NAPI runner — rules using this are silently skipped."
+        },
+        "stopBy": {
+          "type": "string",
+          "description": "⚠️ Not supported by the NAPI runner."
+        },
+        "field": {
+          "type": "string",
+          "description": "⚠️ Not supported by the NAPI runner."
+        },
+        "nthChild": {
+          "description": "⚠️ Not supported by the NAPI runner."
+        }
+      }
+    }
+  },
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique rule identifier. A project rule with the same id as a built-in overrides the built-in."
+    },
+    "language": {
+      "type": "string",
+      "description": "Language this rule applies to.",
+      "enum": [
+        "TypeScript", "JavaScript",
+        "Python", "Go", "Rust",
+        "Java", "C", "Cpp", "CSharp",
+        "Kotlin", "Ruby", "Php"
+      ]
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["error", "warning", "info"],
+      "description": "Diagnostic severity."
+    },
+    "message": {
+      "type": "string",
+      "description": "Short diagnostic message shown inline."
+    },
+    "note": {
+      "type": "string",
+      "description": "Extended guidance shown in the detail view. Markdown supported. Supports block scalar (|)."
+    },
+    "fix": {
+      "type": "string",
+      "description": "Suggested replacement text."
+    },
+    "rule": {
+      "$ref": "#/definitions/ruleCondition",
+      "description": "The matching condition. Must contain at least one of: pattern, kind, regex, has, any, all, not."
+    },
+    "constraints": {
+      "type": "object",
+      "description": "⚠️ Not supported by the NAPI runner — rules using constraints are silently skipped. Use predicates in tree-sitter rules instead.",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "regex": { "type": "string" }
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "weight": {
+          "type": "number",
+          "description": "Priority weight for ordering results."
+        },
+        "category": {
+          "type": "string",
+          "description": "Category label for grouping."
+        }
+      }
+    }
+  }
+}

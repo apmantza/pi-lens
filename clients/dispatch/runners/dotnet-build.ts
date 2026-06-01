@@ -140,6 +140,7 @@ const dotnetBuildRunner: RunnerDefinition = {
 	appliesTo: ["csharp"],
 	priority: PRIORITY.GENERAL_ANALYSIS,
 	enabledByDefault: true,
+	timeoutMs: 90_000,
 	skipTestFiles: false,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {

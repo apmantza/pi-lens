@@ -118,6 +118,77 @@ describe("ReadGuard", () => {
 			}
 		});
 
+		it("allows zero-read edit when noteCreatedFile + recordWritten ran (full Write tool path)", () => {
+			const env = setupTestEnvironment("read-guard-write-then-edit-");
+			try {
+				const filePath = path.join(env.tmpDir, "fresh.ts");
+				const guard = createReadGuard("test-session");
+
+				// Simulate the pi Write tool's full lifecycle: pre-tool-call notes
+				// the pending creation, the tool writes the file, then tool_result
+				// fires recordWritten which injects a synthetic read.
+				guard.noteCreatedFile(filePath, 0, 0);
+				fs.writeFileSync(filePath, "export const x = 1;\n");
+				guard.recordWritten(filePath);
+
+				// Edit follows with no real Read — must be allowed.
+				const verdict = guard.checkEdit(filePath);
+				expect(verdict.action).toBe("allow");
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("allows zero-read edit via session_authored when recordWritten ran without noteCreatedFile and mtime is stale", () => {
+			// Covers FAT32 / NFS / clock-skew cases where mtime is unreliable AND
+			// path-mismatch cases where noteCreatedFile keyed a different path so
+			// injectCreationRead didn't fire. The explicit writtenThisSession set
+			// guarantees the edit is allowed regardless of mtime.
+			const env = setupTestEnvironment("read-guard-mtime-skew-");
+			try {
+				const filePath = path.join(env.tmpDir, "skewed.ts");
+				fs.writeFileSync(filePath, "export const x = 1;\n");
+				// Backdate mtime to before this session would have started.
+				const longAgo = new Date("2000-01-01T00:00:00Z");
+				fs.utimesSync(filePath, longAgo, longAgo);
+
+				const guard = createReadGuard("test-session");
+				// recordWritten only — no pending creation, no synthetic read.
+				guard.recordWritten(filePath);
+
+				const verdict = guard.checkEdit(filePath);
+				expect(verdict.action).toBe("allow");
+				expect(logReadGuardEvent).toHaveBeenCalledWith(
+					expect.objectContaining({
+						event: "edit_allowed",
+						metadata: expect.objectContaining({
+							reasonKind: "session_authored",
+						}),
+					}),
+				);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("blocks zero-read edit on a file the agent never wrote and was last touched before this session", () => {
+			const env = setupTestEnvironment("read-guard-old-file-");
+			try {
+				const filePath = path.join(env.tmpDir, "old.ts");
+				fs.writeFileSync(filePath, "export const x = 1;\n");
+				const longAgo = new Date("2000-01-01T00:00:00Z");
+				fs.utimesSync(filePath, longAgo, longAgo);
+
+				const guard = createReadGuard("test-session");
+				// No recordWritten — agent did NOT write this file in this session.
+				const verdict = guard.checkEdit(filePath);
+				expect(verdict.action).toBe("block");
+				expect(verdict.reason).toContain("Edit without read");
+			} finally {
+				env.cleanup();
+			}
+		});
+
 		it("ignores mtime staleness when read line hashes still match", () => {
 			const env = setupTestEnvironment("read-guard-hash-");
 			try {

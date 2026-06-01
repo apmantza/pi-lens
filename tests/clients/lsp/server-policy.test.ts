@@ -798,6 +798,36 @@ describe("lsp server policy", () => {
 		expect(root).toBeUndefined();
 	});
 
+	it("TypeScript server skips loose pi agent extension files without project markers", async () => {
+		const previousHome = process.env.HOME;
+		const previousUserProfile = process.env.USERPROFILE;
+		const fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-home-"));
+		dirs.push(fakeHome);
+		process.env.HOME = fakeHome;
+		process.env.USERPROFILE = fakeHome;
+		vi.resetModules();
+		try {
+			const { TypeScriptServer } = await import(
+				"../../../clients/lsp/server.js"
+			);
+			const file = path.join(
+				fakeHome,
+				".pi",
+				"agent",
+				"extensions",
+				"kitty-keyboard-toggle.ts",
+			);
+			const root = await TypeScriptServer.root(file);
+			expect(root).toBeUndefined();
+		} finally {
+			if (previousHome === undefined) delete process.env.HOME;
+			else process.env.HOME = previousHome;
+			if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+			else process.env.USERPROFILE = previousUserProfile;
+			vi.resetModules();
+		}
+	});
+
 	it("TypeScript server still claims TS files with package.json and no deno config", async () => {
 		const { TypeScriptServer } = await import("../../../clients/lsp/server.js");
 		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ts-no-deno-"));

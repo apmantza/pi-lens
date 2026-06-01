@@ -1,8 +1,9 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { isTestMode } from "./env-utils.js";
+import { getGlobalPiLensDir } from "./file-utils.js";
 
-const CASCADE_LOG_DIR = path.join(os.homedir(), ".pi-lens");
+const CASCADE_LOG_DIR = getGlobalPiLensDir();
 const CASCADE_LOG_FILE = path.join(CASCADE_LOG_DIR, "cascade.log");
 
 try {
@@ -16,6 +17,7 @@ export interface CascadeLogEntry {
 	phase:
 		| "cascade_skip" // primary has blockers, non-code file, or unsupported graph kind
 		| "graph_build" // graph built or reused
+		| "reverse_deps_cache" // reverse dependency cache refresh/load/merge
 		| "neighbors_computed" // impact cascade result ready
 		| "neighbor_touch" // single neighbor LSP active touch result
 		| "neighbor_snapshot" // neighbor read from passive snapshot (autoPropagate jsts)
@@ -62,10 +64,7 @@ export interface CascadeLogEntry {
 }
 
 export function logCascade(entry: CascadeLogEntry): void {
-	if (
-		process.env.PI_LENS_TEST_MODE === "1" ||
-		(process.env.VITEST && process.env.PI_LENS_TEST_MODE !== "0")
-	) {
+	if (isTestMode()) {
 		return;
 	}
 	const line = `${JSON.stringify({ ts: new Date().toISOString(), ...entry })}\n`;

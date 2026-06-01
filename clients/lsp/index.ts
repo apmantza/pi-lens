@@ -10,12 +10,13 @@
 
 import * as nodeFs from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { isTestMode } from "../env-utils.js";
+import { getGlobalPiLensDir } from "../file-utils.js";
 import { recordLsp } from "../widget-state.js";
 import { logLatency } from "../latency-logger.js";
 import { normalizeMapKey, uriToPath } from "../path-utils.js";
-import type { LSPClientInfo } from "./client.js";
+import type { LSPClientInfo, LSPShutdownOptions } from "./client.js";
 import { createLSPClient } from "./client.js";
 import { getServersForFileWithConfig } from "./config.js";
 import { getLanguageId } from "./language.js";
@@ -49,6 +50,20 @@ const TOUCH_DEBOUNCE_MS = Math.max(
 	Number.parseInt(process.env.PI_LENS_LSP_TOUCH_DEBOUNCE_MS ?? "1500", 10) ||
 		1500,
 );
+
+/**
+ * Read the `PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS` env override at call time
+ * (process.env mutations in tests stay live). Returns undefined when unset,
+ * non-numeric, or negative — callers fall back through the explicit option
+ * chain in {@link LSPService.touchFile}.
+ */
+function readEnvDiagnosticsWaitMs(): number | undefined {
+	const raw = process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS;
+	if (raw === undefined) return undefined;
+	const parsed = Number.parseInt(raw, 10);
+	if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+	return parsed;
+}
 const DIAGNOSTICS_SEMANTIC_SETTLE_THRESHOLD_MS = Math.max(
 	0,
 	Number.parseInt(
@@ -73,14 +88,11 @@ const EARLY_UNBLOCK_GRACE_MS = Math.max(
 	) || 400,
 );
 const CASCADE_DIAGNOSTICS_TTL_MS = 240_000;
-const SESSIONSTART_LOG_DIR = path.join(os.homedir(), ".pi-lens");
+const SESSIONSTART_LOG_DIR = getGlobalPiLensDir();
 const SESSIONSTART_LOG = path.join(SESSIONSTART_LOG_DIR, "sessionstart.log");
 
 function logSessionStart(msg: string): void {
-	if (
-		process.env.PI_LENS_TEST_MODE === "1" ||
-		(process.env.VITEST && process.env.PI_LENS_TEST_MODE !== "0")
-	) {
+	if (isTestMode()) {
 		return;
 	}
 	const line = `[${new Date().toISOString()}] ${msg}\n`;
@@ -133,7 +145,20 @@ export interface LSPTouchFileOptions {
 	diagnostics?: LSPDiagnosticsMode;
 	source?: string;
 	clientScope?: LSPTouchClientScope;
+	/** Budget for waiting on the LSP client to spawn / become ready. */
 	maxClientWaitMs?: number;
+	/**
+	 * Budget for waiting on `textDocument/publishDiagnostics` after the notify
+	 * lands. The dispatch-lsp-runner sets this to a tighter value so a slow
+	 * LSP on one file doesn't dominate the per-edit pipeline budget (#117).
+	 *
+	 * Resolution order (first wins):
+	 *   1. `PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS` env var (user override)
+	 *   2. this option
+	 *   3. `maxClientWaitMs` (legacy fallback)
+	 *   4. built-in defaults (3000 ms for `full`, 1200 ms for `document`)
+	 */
+	maxDiagnosticsWaitMs?: number;
 	/** Return merged diagnostics from the clients touched by this call. */
 	collectDiagnostics?: boolean;
 	/** Skip workspace/didChangeWatchedFiles — use for cascade reads, not real fs changes */
@@ -194,25 +219,45 @@ export class LSPService {
 		return `${content.length}:${content.slice(0, 48)}:${content.slice(-48)}`;
 	}
 
+	/**
+	 * Should the whole touchFile call short-circuit? Only when the caller does
+	 * NOT need diagnostics — those callers still need to wait for the LSP to
+	 * publish, even if the notify itself is a no-op.
+	 */
 	private shouldSkipTouch(
 		filePath: string,
 		content: string,
 		clientScope: "primary" | "all",
 		waitForDiagnostics: boolean,
 	): boolean {
-		if (waitForDiagnostics || TOUCH_DEBOUNCE_MS <= 0) {
-			return false;
-		}
+		if (waitForDiagnostics) return false;
+		return this.shouldSkipNotify(filePath, content, clientScope);
+	}
 
+	/**
+	 * Should the didOpen/didChange notify be skipped while keeping the
+	 * waitForDiagnostics step? True when the same content was already pushed
+	 * recently. Skipping the notify avoids the diagnostic-cache clear that
+	 * notify.open does, so the LSP doesn't restart computation it already
+	 * finished for the first push.
+	 *
+	 * Concretely: the post-write tool_result fires touchFile with
+	 * diagnosticsMode="none" first; the dispatch-lsp-runner fires it again
+	 * with diagnosticsMode="document" moments later. Without this check the
+	 * second call's notify clears in-progress diagnostics and the LSP has to
+	 * start over — observed as multi-second waits on slow TS projects.
+	 */
+	private shouldSkipNotify(
+		filePath: string,
+		content: string,
+		clientScope: "primary" | "all",
+	): boolean {
+		if (TOUCH_DEBOUNCE_MS <= 0) return false;
 		const key = `${normalizeMapKey(filePath)}:${clientScope}`;
 		const previous = this.recentTouches.get(key);
 		if (!previous) return false;
-
 		const now = Date.now();
-		if (now - previous.touchedAt > TOUCH_DEBOUNCE_MS) {
-			return false;
-		}
-
+		if (now - previous.touchedAt > TOUCH_DEBOUNCE_MS) return false;
 		return previous.fingerprint === this.fingerprintContent(content);
 	}
 
@@ -742,21 +787,38 @@ export class LSPService {
 
 		const languageId = getLanguageId(filePath) ?? "plaintext";
 		const silent = options.silent ?? false;
-		await Promise.all(
-			spawned.map((entry) =>
-				entry.client.notify.open(
-					filePath,
-					content,
-					languageId,
-					undefined,
-					silent,
+		// When the same content was already pushed to the LSP within the touch
+		// debounce window, skip the notify — pushing again clears the LSP's
+		// diagnostic cache (via notify.open) and forces it to restart work it
+		// already did. This is what makes the post-write touch + dispatch-lsp-
+		// runner touch sequence expensive on slow TS projects.
+		const notifySkipped = this.shouldSkipNotify(filePath, content, clientScope);
+		if (!notifySkipped) {
+			await Promise.all(
+				spawned.map((entry) =>
+					entry.client.notify.open(
+						filePath,
+						content,
+						languageId,
+						undefined,
+						silent,
+					),
 				),
-			),
-		);
+			);
+		}
 
+		let diagnosticsTimedOut = false;
 		if (diagnosticsMode !== "none") {
+			// Resolution: env wins so users can tune the cap without rebuilding,
+			// then the per-call option, then the legacy maxClientWaitMs reuse,
+			// then mode-defaulted floor.
+			const envWait = readEnvDiagnosticsWaitMs();
 			const timeoutMs =
-				options.maxClientWaitMs ?? (diagnosticsMode === "full" ? 3000 : 1200);
+				envWait ??
+				options.maxDiagnosticsWaitMs ??
+				options.maxClientWaitMs ??
+				(diagnosticsMode === "full" ? 3000 : 1200);
+			const waitStartedAt = Date.now();
 			await Promise.all(
 				spawned.map((entry) =>
 					entry.client
@@ -764,6 +826,25 @@ export class LSPService {
 						.catch(() => undefined),
 				),
 			);
+			const waitedMs = Date.now() - waitStartedAt;
+			// Within ~20 ms of the configured budget we treat it as a timeout;
+			// the LSP didn't beat the cap. Diagnostics that arrive late still
+			// land in the client's cache and surface on the next edit.
+			if (waitedMs + 20 >= timeoutMs) {
+				diagnosticsTimedOut = true;
+				logLatency({
+					type: "phase",
+					phase: "lsp_diagnostics_timeout",
+					filePath: normalizedPath,
+					durationMs: waitedMs,
+					metadata: {
+						source,
+						clientScope,
+						diagnosticsMode,
+						timeoutMs,
+					},
+				});
+			}
 		}
 
 		const collected = options.collectDiagnostics
@@ -772,7 +853,12 @@ export class LSPService {
 				)
 			: undefined;
 
-		this.markTouched(filePath, content, clientScope);
+		// Only refresh the recent-touches entry when we actually pushed. Skipping
+		// here keeps the original push timestamp intact so the debounce window
+		// expires naturally instead of being extended by every reuse.
+		if (!notifySkipped) {
+			this.markTouched(filePath, content, clientScope);
+		}
 
 		logLatency({
 			type: "phase",
@@ -786,6 +872,8 @@ export class LSPService {
 				source,
 				failureKind: "success",
 				collectedDiagnostics: collected?.length,
+				notifySkipped,
+				diagnosticsTimedOut,
 			},
 		});
 		return collected ?? [];
@@ -1290,7 +1378,7 @@ export class LSPService {
 	/**
 	 * Shutdown all LSP clients
 	 */
-	async shutdown(): Promise<void> {
+	async shutdown(options: LSPShutdownOptions = {}): Promise<void> {
 		if (this.checkDestroyed()) return;
 		this.isDestroyed = true;
 		// Cancel any in-flight spawns
@@ -1298,7 +1386,7 @@ export class LSPService {
 
 		for (const [_key, client] of this.state.clients) {
 			try {
-				await client.shutdown();
+				await client.shutdown(options);
 			} catch {
 				// pi-lens-ignore: missing-error-propagation — per-client shutdown failure, must not abort remaining shutdowns
 			}
@@ -1343,9 +1431,9 @@ export function getLSPService(): LSPService {
 	return globalLSPService;
 }
 
-export function resetLSPService(): void {
+export function resetLSPService(options: LSPShutdownOptions = {}): void {
 	if (globalLSPService) {
-		globalLSPService.shutdown().catch(() => {});
+		globalLSPService.shutdown(options).catch(() => {});
 	}
 	globalLSPService = null;
 }

@@ -8,6 +8,22 @@ pi-lens focuses on real-time inline code feedback for AI agents.
 
 ## What It Does
 
+### At Session Start
+
+At `session_start`, pi-lens:
+
+- resets runtime state and diagnostic telemetry
+- detects project root, language profile, and active tools
+- applies language-aware startup defaults for tool preinstall
+- warms caches and optional indexes (with overlap/session guardrails)
+- emits missing-tool install hints for detected languages when relevant
+- prepends session guidance before the user's prompt so provider bridges keep the real prompt active
+- opens `warmFiles` (if configured in `.pi-lens/lsp.json`) to seed lazy-indexing language servers like clangd before the first symbol query
+
+Startup scan context and language profile are cached in the project snapshot and reused on subsequent `/new` invocations when the project has not changed, avoiding repeated full filesystem walks (~2.5 s saved on medium-to-large projects). Background startup scans are deferred past the interactive session-start path so they do not inflate visible `/new` latency.
+
+For one-shot print sessions (for example `pi --print ...`), pi-lens auto-uses a quick startup path that skips heavy bootstrap work to reduce startup latency. Override with `PI_LENS_STARTUP_MODE=full|minimal|quick`.
+
 ### On Write/Edit
 
 On every `write` and `edit`, pi-lens runs a fast, language-aware pipeline (checks depend on file language, project config, and installed tools):
@@ -33,20 +49,6 @@ At `agent_end` (once per user prompt, after all agent tool calls complete):
 - **Deferred formatting** — any files queued during the turn are formatted once, synced to LSP, and tracked for read-guard coverage
 - **Conservative LSP warning autofix** — when `actionableWarnings.autoFix.enabled` is set, applies up to 5 preferred LSP quickfixes for warnings flagged in the turn's actionable warnings report. Each fix is re-validated against the live LSP server at apply time, checked for ambiguity (skipped if multiple eligible actions exist), and gated by a safety check before any write occurs. Changed files are registered with the read-guard and cache manager
 - **Summary notification** — concise status: how many files were formatted, which changed, and whether any formatter failed
-
-### Session Start
-
-At `session_start`, pi-lens:
-
-- resets runtime state and diagnostic telemetry
-- detects project root, language profile, and active tools
-- applies language-aware startup defaults for tool preinstall
-- warms caches and optional indexes (with overlap/session guardrails)
-- emits missing-tool install hints for detected languages when relevant
-- prepends session guidance before the user's prompt so provider bridges keep the real prompt active
-- opens `warmFiles` (if configured in `.pi-lens/lsp.json`) to seed lazy-indexing language servers like clangd before the first symbol query
-
-For one-shot print sessions (for example `pi --print ...`), pi-lens auto-uses a quick startup path that skips heavy bootstrap work to reduce startup latency. Override with `PI_LENS_STARTUP_MODE=full|minimal|quick`.
 
 ### Turn End
 
@@ -157,54 +159,19 @@ Supported: TypeScript, TSX, JavaScript, JSX, Python, Go, Rust, Ruby.
 
 Covers JavaScript/TypeScript, Python, Go, Rust, Ruby, Shell, and CMake. A TypeScript AST-based fact-rule engine extracts function-level metrics and evaluates quality and security rules inline. Blocking rules surface immediately at write time; advisory rules are available via `/lens-booboo`.
 
-**Blocking (surface inline at write time):**
-
-- **cors-wildcard** — `Access-Control-Allow-Origin: *` in server-side code
-- **error-swallowing** — empty catch block (skips documented local fallbacks and fs-boundary catches)
-- **no-commented-credentials** — password/token/secret in commented-out code
-- **high-entropy-string** — string literals with suspiciously high Shannon entropy (possible hardcoded secret)
-
-**Advisory (accessible via `/lens-booboo`):**
-
-- **high-complexity** / **no-complex-conditionals** — cyclomatic complexity and deeply nested conditions
-- **high-fan-out** — function calls too many distinct functions (coordination smell)
-- **unsafe-boundary** — dangerous `any` casts at API boundaries
-- **async-noise** / **async-unnecessary-wrapper** — async functions with no await; wrappers that add no value
-- **pass-through-wrappers** — trivial wrapper functions
-- **dynamic-regexp** — `new RegExp(variable)` (potential ReDoS; complements tree-sitter `unsafe-regex`)
-- **jwt-without-verify** — `jwt.sign()` without `jwt.verify()` in the same file
-- **missing-error-propagation** — catch blocks that log but don't rethrow
-- **error-obscuring** — catch blocks that wrap errors in a different type
-- **duplicate-string-literal** / **no-boolean-params** / **high-import-coupling** — code-quality signals
-
 ### Tree-sitter Rules
 
-Structural rules organized by language in `rules/tree-sitter-queries/`. Rules marked **🔴** block the agent inline at write time (only for lines in the current edit); others are advisory.
-
-**TypeScript (23 rules):**
-🔴 `eval`, `sql-injection`, `ts-command-injection`, `ts-ssrf`, `ts-xss-dom-sink`, `ts-dynamic-require`, `ts-open-redirect`, `ts-nosql-injection`, `ts-weak-hash`, `ts-hallucinated-react-import`, `unsafe-regex`, `debugger`, `default-not-last`, `duplicate-function-arg`, `empty-switch-case`, `infinite-loop`, `self-assignment`, `switch-case-termination`  
-⚠️ `console-statement`, `deep-promise-chain`, `mixed-async-styles`, `ts-insecure-random`, `ts-detached-async-call`, `ts-react-antipatterns`, `ts-weak-hash`, `variable-shadowing`
-
-**Python:** 🔴 `python-command-injection`, `python-sql-injection`, `python-insecure-deserialization`, `python-weak-hash`, `python-hallucinated-import` + 20 advisory rules
-
-**Go:** 🔴 `go-command-injection`, `go-sql-injection`, `go-shared-map-write-goroutine`, `go-weak-hash` + 13 advisory rules
-
-**Rust:** 🔴 `rust-lock-held-across-await` + 3 advisory rules (`rust-unsafe-block`, `rust-expect`, `rust-clone-in-loop`)
-
-**Ruby:** 🔴 `ruby-weak-hash` + 14 advisory rules
+Structural rules organized by language in `rules/tree-sitter-queries/<language>/`. Rules marked **🔴** block the agent inline at write time (only for lines in the current edit); others are advisory.
 
 **Suppressing a finding:** add `// pi-lens-ignore: rule-id` on the flagged line or the line above (JS/TS), or `# pi-lens-ignore: rule-id` for Python/Ruby/Shell. This suppresses that specific rule at that location only.
 
-**Project-wide disabling** is not currently supported through config — there is no `.pi-lens/disabled-rules` file. Use inline suppression for per-occurrence overrides. When editing pi-lens itself, move a rule file to the `<language>-disabled/` directory to prevent it from running.
+**Bring your own rules:** drop YAML query files into `rules/tree-sitter-queries/<language>/` in your project — pi-lens merges them with the built-ins on session start. The schema, predicates (`eq`, `match`, `any-of`), and `inline_tier` (`blocking` | `warning` | `review`) are documented in [`docs/custom-rules.md`](docs/custom-rules.md). A `rules/tree-sitter-queries/rule-schema.json` JSON Schema is bundled for editor autocomplete via `.vscode/settings.json`.
 
 ### Ast-Grep Rules
 
-**180+ rules** in `rules/ast-grep-rules/` across JS, TS, and Python:
+Pattern-based structural rules in `rules/ast-grep-rules/` across JS, TS, and Python — covers security (eval, hardcoded secrets, insecure randomness, dangerous DOM sinks), correctness (strict equality, constant conditions, duplicate keys), code smells (nested ternaries, long parameter lists, redundant state), and agent stubs (unimplemented bodies, raise NotImplementedError).
 
-- **Security** — no-eval, jwt-no-verify, no-hardcoded-secrets, no-insecure-randomness, no-inner-html, no-javascript-url, weak-rsa-key
-- **Correctness** — strict-equality, no-cond-assign, no-constant-condition, no-dupe-keys, no-nan-comparison, array-callback-return, constructor-super
-- **Style/smells** — nested-ternary, long-parameter-list, large-class, prefer-optional-chain, redundant-state, require-await
-- **Agent stubs** — no-unimplemented-stub, no-raise-not-implemented, no-ellipsis-body
+**Bring your own rules:** drop YAML rule files into `rules/ast-grep-rules/rules/<id>.yml` in your project — pi-lens merges them with the built-ins; same `id` as a built-in overrides it. The supported subset of ast-grep's rule schema (the NAPI runner does not support `inside` / `follows` / `precedes` / `stopBy` / `field` / `nthChild` / `constraints` — use a tree-sitter rule when you need relational context) is documented in [`docs/custom-rules.md`](docs/custom-rules.md), with a `rules/ast-grep-rules/rule-schema.json` JSON Schema for editor autocomplete.
 
 ### Semgrep CLI Integration (Experimental)
 
@@ -235,58 +202,6 @@ metadata:
     defect_class: injection
     confidence: high
 ```
-
-## Dependencies
-
-Auto-install behavior depends on gate type:
-
-- **Config-gated**: installs only when project config/deps indicate usage
-- **Flow/language-gated**: installs when the runtime path needs it for the current file/session flow
-- **Operational prewarm**: installs during session warm scans / turn-end analysis paths
-- **GitHub release**: platform-specific binary downloaded from GitHub releases to `~/.pi-lens/bin/`
-
-| Tool                                | Purpose                          | Auto-installed | Gate                               |
-| ----------------------------------- | -------------------------------- | -------------- | ---------------------------------- |
-| `@biomejs/biome`                    | JS/TS lint/format/autofix        | Yes            | Config-gated                       |
-| `prettier`                          | Formatting fallback              | Yes            | Config-gated                       |
-| `yamllint`                          | YAML linting                     | Yes            | Config-gated                       |
-| `actionlint`                        | GitHub Actions workflow linting  | Yes            | GitHub release                     |
-| `sqlfluff`                          | SQL linting/formatting           | Yes            | Config-gated                       |
-| `ruff`                              | Python lint/format/autofix       | Yes            | Language-default + flow-gated      |
-| `typescript-language-server`        | Unified LSP diagnostics          | Yes            | Language-default                   |
-| `typescript`                        | TypeScript compiler              | Yes            | Language-default                   |
-| `pyright`                           | Python type diagnostics fallback | Yes            | Flow/language-gated                |
-| `@ast-grep/cli` (sg)                | AST scans/search/replace         | Yes            | Operational prewarm                |
-| `knip`                              | Dead code analysis               | Yes            | Operational prewarm + config-gated |
-| `jscpd`                             | Duplicate code detection         | Yes            | Operational prewarm + config-gated |
-| `madge`                             | Circular dependency analysis     | Yes            | Turn-end analysis flow             |
-| `mypy`                              | Python type checking             | Yes            | Flow-gated                         |
-| `stylelint`                         | CSS/SCSS/Less linting            | Yes            | Config-gated                       |
-| `markdownlint-cli2`                 | Markdown linting                 | Yes            | Config-gated                       |
-| `shellcheck`                        | Shell script linting             | Yes            | GitHub release                     |
-| `shfmt`                             | Shell script formatting          | Yes            | GitHub release                     |
-| `rust-analyzer`                     | Rust LSP                         | Yes            | GitHub release                     |
-| `golangci-lint`                     | Go linting                       | Yes            | GitHub release                     |
-| `hadolint`                          | Dockerfile linting               | Yes            | GitHub release                     |
-| `ktlint`                            | Kotlin linting                   | Yes            | GitHub release                     |
-| `tflint`                            | Terraform linting                | Yes            | GitHub release                     |
-| `taplo`                             | TOML linting/formatting          | Yes            | GitHub release                     |
-| `terraform-ls`                      | Terraform LSP                    | Yes            | GitHub release                     |
-| `htmlhint`                          | HTML linting                     | Yes            | Config-gated                       |
-| `@prisma/language-server`           | Prisma LSP                       | Yes            | Flow-gated                         |
-| `dockerfile-language-server-nodejs` | Dockerfile LSP                   | Yes            | Flow-gated                         |
-| `intelephense`                      | PHP LSP                          | Yes            | Flow-gated                         |
-| `bash-language-server`              | Bash LSP                         | Yes            | Language-default                   |
-| `yaml-language-server`              | YAML LSP                         | Yes            | Language-default                   |
-| `vscode-langservers-extracted`      | JSON/ESLint/CSS/HTML LSP         | Yes            | Language-default                   |
-| `vscode-css-languageserver`         | CSS LSP                          | Yes            | Language-default                   |
-| `vscode-html-languageserver-bin`    | HTML LSP                         | Yes            | Language-default                   |
-| `svelte-language-server`            | Svelte LSP                       | Yes            | Flow-gated                         |
-| `@vue/language-server`              | Vue LSP                          | Yes            | Flow-gated                         |
-| `semgrep`                           | Experimental security dispatch   | Manual         | Local config / explicit opt-in     |
-| `psscriptanalyzer`                  | PowerShell linting               | Manual         | —                                  |
-
-Additional language servers (gopls, ruby-lsp, solargraph, etc.) are auto-detected from PATH or installed via native package managers (`go install`, `gem install`) when their language is detected.
 
 ## Run
 
@@ -408,3 +323,55 @@ Dispatch is diagnostics-oriented: automatic formatting and safe autofix happen i
 | Nix                   | ✓   | lsp                                                                                                            | nixfmt                  |
 | TOML                  | ✓   | lsp, taplo                                                                                                     | taplo                   |
 | CMake                 | ✓   | lsp                                                                                                            | cmake-format            |
+
+## Dependencies
+
+Auto-install behavior depends on gate type:
+
+- **Config-gated**: installs only when project config/deps indicate usage
+- **Flow/language-gated**: installs when the runtime path needs it for the current file/session flow
+- **Operational prewarm**: installs during session warm scans / turn-end analysis paths
+- **GitHub release**: platform-specific binary downloaded from GitHub releases to `~/.pi-lens/bin/`
+
+| Tool                                | Purpose                          | Auto-installed | Gate                               |
+| ----------------------------------- | -------------------------------- | -------------- | ---------------------------------- |
+| `@biomejs/biome`                    | JS/TS lint/format/autofix        | Yes            | Config-gated                       |
+| `prettier`                          | Formatting fallback              | Yes            | Config-gated                       |
+| `yamllint`                          | YAML linting                     | Yes            | Config-gated                       |
+| `actionlint`                        | GitHub Actions workflow linting  | Yes            | GitHub release                     |
+| `sqlfluff`                          | SQL linting/formatting           | Yes            | Config-gated                       |
+| `ruff`                              | Python lint/format/autofix       | Yes            | Language-default + flow-gated      |
+| `typescript-language-server`        | Unified LSP diagnostics          | Yes            | Language-default                   |
+| `typescript`                        | TypeScript compiler              | Yes            | Language-default                   |
+| `pyright`                           | Python type diagnostics fallback | Yes            | Flow/language-gated                |
+| `@ast-grep/cli` (sg)                | AST scans/search/replace         | Yes            | Operational prewarm                |
+| `knip`                              | Dead code analysis               | Yes            | Operational prewarm + config-gated |
+| `jscpd`                             | Duplicate code detection         | Yes            | Operational prewarm + config-gated |
+| `madge`                             | Circular dependency analysis     | Yes            | Turn-end analysis flow             |
+| `mypy`                              | Python type checking             | Yes            | Flow-gated                         |
+| `stylelint`                         | CSS/SCSS/Less linting            | Yes            | Config-gated                       |
+| `markdownlint-cli2`                 | Markdown linting                 | Yes            | Config-gated                       |
+| `shellcheck`                        | Shell script linting             | Yes            | GitHub release                     |
+| `shfmt`                             | Shell script formatting          | Yes            | GitHub release                     |
+| `rust-analyzer`                     | Rust LSP                         | Yes            | GitHub release                     |
+| `golangci-lint`                     | Go linting                       | Yes            | GitHub release                     |
+| `hadolint`                          | Dockerfile linting               | Yes            | GitHub release                     |
+| `ktlint`                            | Kotlin linting                   | Yes            | GitHub release                     |
+| `tflint`                            | Terraform linting                | Yes            | GitHub release                     |
+| `taplo`                             | TOML linting/formatting          | Yes            | GitHub release                     |
+| `terraform-ls`                      | Terraform LSP                    | Yes            | GitHub release                     |
+| `htmlhint`                          | HTML linting                     | Yes            | Config-gated                       |
+| `@prisma/language-server`           | Prisma LSP                       | Yes            | Flow-gated                         |
+| `dockerfile-language-server-nodejs` | Dockerfile LSP                   | Yes            | Flow-gated                         |
+| `intelephense`                      | PHP LSP                          | Yes            | Flow-gated                         |
+| `bash-language-server`              | Bash LSP                         | Yes            | Language-default                   |
+| `yaml-language-server`              | YAML LSP                         | Yes            | Language-default                   |
+| `vscode-langservers-extracted`      | JSON/ESLint/CSS/HTML LSP         | Yes            | Language-default                   |
+| `vscode-css-languageserver`         | CSS LSP                          | Yes            | Language-default                   |
+| `vscode-html-languageserver-bin`    | HTML LSP                         | Yes            | Language-default                   |
+| `svelte-language-server`            | Svelte LSP                       | Yes            | Flow-gated                         |
+| `@vue/language-server`              | Vue LSP                          | Yes            | Flow-gated                         |
+| `semgrep`                           | Experimental security dispatch   | Manual         | Local config / explicit opt-in     |
+| `psscriptanalyzer`                  | PowerShell linting               | Manual         | —                                  |
+
+Additional language servers (gopls, ruby-lsp, solargraph, etc.) are auto-detected from PATH or installed via native package managers (`go install`, `gem install`) when their language is detected.

@@ -228,7 +228,7 @@ export const highImportCouplingRule: FactRule = {
 
 // ---------- QR-004: no-complex-conditionals ----------
 
-const MAX_LOGICAL_OPS = 2;
+const MAX_LOGICAL_OPS = 4;
 
 function countLogicalOps(node: ts.Node): number {
 	let count = 0;

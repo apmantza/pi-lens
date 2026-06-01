@@ -4,9 +4,11 @@ import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
 	buildActionableWarningsReport,
+	checkActionableWarningsReportFresh,
 	createActionableWarningId,
 	formatActionableWarningsAdvisory,
 	recordFromDispatchDiagnostic,
+	type ActionableWarningsReport,
 } from "../../clients/actionable-warnings.js";
 import type { Diagnostic } from "../../clients/dispatch/types.js";
 
@@ -57,6 +59,55 @@ describe("actionable warnings", () => {
 		expect(left).toMatch(/^aw:[0-9a-f]{10}$/);
 	});
 
+	it("detects stale actionable warning reports by project and file sequence", () => {
+		const report: ActionableWarningsReport = {
+			generatedAt: new Date().toISOString(),
+			scope: "turn_delta",
+			sessionId: "s1",
+			turnIndex: 1,
+			projectSeqEnd: 5,
+			deltaOnly: true,
+			includeLspCodeActions: true,
+			files: [
+				{
+					filePath: path.join(os.tmpdir(), "project", "src", "a.ts"),
+					displayPath: "src/a.ts",
+					fileSeq: 2,
+					warnings: [],
+				},
+			],
+			summary: {
+				warnings: 0,
+				unsuppressed: 0,
+				suppressed: 0,
+				files: 1,
+				actions: 0,
+				autoFixEligible: 0,
+			},
+		};
+
+		expect(
+			checkActionableWarningsReportFresh({
+				report,
+				currentProjectSeq: 6,
+			}),
+		).toMatchObject({ fresh: false, reason: "project_seq_mismatch" });
+		expect(
+			checkActionableWarningsReportFresh({
+				report,
+				currentProjectSeq: 5,
+				getFileSeq: () => 3,
+			}),
+		).toMatchObject({ fresh: false, reason: "file_seq_mismatch" });
+		expect(
+			checkActionableWarningsReportFresh({
+				report,
+				currentProjectSeq: 5,
+				getFileSeq: () => 2,
+			}),
+		).toMatchObject({ fresh: true });
+	});
+
 	it("serializes dispatch fixable warnings into the turn report", async () => {
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-aw-"));
 		const filePath = path.join(cwd, "src", "a.ts");
@@ -69,6 +120,9 @@ describe("actionable warnings", () => {
 				cwd,
 				sessionId: "s1",
 				turnIndex: 2,
+				projectSeqStart: 4,
+				projectSeqEnd: 5,
+				fileSeqByPath: new Map([[filePath.replace(/\\/g, "/"), 1]]),
 				files: ["src/a.ts"],
 				modifiedRangesByFile: new Map(),
 				dispatchWarnings: record ? [record] : [],
@@ -79,6 +133,8 @@ describe("actionable warnings", () => {
 				unsuppressed: 1,
 				files: 1,
 			});
+			expect(report).toMatchObject({ projectSeqStart: 4, projectSeqEnd: 5 });
+			expect(report.files[0]?.fileSeq).toBe(1);
 			expect(report.files[0]?.warnings[0]?.fixSuggestion).toBe(
 				"remove this statement",
 			);

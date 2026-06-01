@@ -15,3 +15,22 @@ export interface CascadeResult {
 	neighbors: CascadeNeighborResult[];
 	formatted: string;
 }
+
+/** Why a cascade run produced no formatted output. */
+export type CascadeSkipReason =
+	| "blockers"    // primary file had blocking diagnostics
+	| "non_code"    // file kind not eligible for cascade
+	| "no_neighbors" // reverse-dep lookup found no importing files
+	| "clean";      // neighbors found but none had new diagnostics
+
+/**
+ * Always-present result of one computeCascadeForFile invocation.
+ * result is defined only when formatted output was produced.
+ */
+export interface CascadeRun {
+	filePath: string;
+	result: CascadeResult | undefined;
+	neighborCount: number;
+	diagnosticCount: number;
+	skipReason?: CascadeSkipReason;
+}

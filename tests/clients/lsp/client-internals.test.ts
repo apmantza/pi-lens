@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { MessageConnection } from "vscode-jsonrpc";
 import {
 	applyDynamicCapabilities,
+	clientShutdown,
 	clientWaitForDiagnostics,
 	handleNotifyChange,
 	handleNotifyOpen,
@@ -94,6 +95,31 @@ function createMockState(overrides?: Partial<LSPClientState>): LSPClientState {
 		...overrides,
 	};
 }
+
+describe("clientShutdown", () => {
+	it("skips LSP protocol handshake in fast mode", async () => {
+		const process = {
+			killed: false,
+			kill: vi.fn(() => true),
+			unref: vi.fn(),
+		};
+		const state = createMockState({
+			lspProcess: {
+				...createMockLspProcess(),
+				pid: 0,
+				process,
+			} as any,
+		});
+
+		await clientShutdown(state, { fast: true });
+
+		expect(state.connection.sendRequest).not.toHaveBeenCalled();
+		expect(state.connection.sendNotification).not.toHaveBeenCalled();
+		expect(state.connection.dispose).toHaveBeenCalledTimes(1);
+		expect(process.kill).toHaveBeenCalledWith("SIGTERM");
+		expect(process.unref).toHaveBeenCalledTimes(1);
+	});
+});
 
 describe("handleNotifyOpen", () => {
 	it("sends didOpen on first open", async () => {

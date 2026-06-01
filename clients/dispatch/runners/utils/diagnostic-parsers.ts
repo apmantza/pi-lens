@@ -6,7 +6,7 @@
  */
 
 import { getAutofixCapability } from "../../../tool-policy.js";
-import type { Diagnostic } from "../../types.js";
+import type { DefectClass, Diagnostic } from "../../types.js";
 
 export interface LineParserConfig {
 	/** Tool name for diagnostic identification */
@@ -32,6 +32,13 @@ export interface LineParserConfig {
 	fixKind?:
 		| Diagnostic["fixKind"]
 		| ((match: RegExpMatchArray) => Diagnostic["fixKind"]);
+	/**
+	 * Override the auto-classified defect class. Setting this is preferred for
+	 * tools whose typical messages don't contain the keywords classifyDefect
+	 * scans for (e.g. go-vet, mypy) — without it, diagnostics fall through to
+	 * "unknown" and dedup against LSP diagnostics may collide.
+	 */
+	defectClass?: DefectClass;
 	/** Strip ANSI escape codes before parsing (defaults to true) */
 	stripAnsi?: boolean;
 }
@@ -84,6 +91,7 @@ export function createLineParser(config: LineParserConfig) {
 				semantic: severity === "error" ? "blocking" : "warning",
 				tool: config.tool,
 				rule: config.extractRule?.(match),
+				defectClass: config.defectClass,
 				fixable,
 				autoFixAvailable,
 				fixKind,
@@ -122,6 +130,7 @@ export const parseGoVetOutput = createLineParser({
 	regex: /^(.+?):(\d+):(\d+):\s*(.+)/,
 	extractMessage: (m) => m[4],
 	generateId: (m) => `go-vet-${m[2]}`,
+	defectClass: "correctness",
 });
 
 /**

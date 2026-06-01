@@ -101,7 +101,7 @@ describe("getProjectDataDir", () => {
 					path.join(
 						getProjectDataDir(cwd),
 						"cache",
-						"typescript-rules-v2.json",
+						"typescript-rules-v3.json",
 					),
 				),
 			).toBe(true);

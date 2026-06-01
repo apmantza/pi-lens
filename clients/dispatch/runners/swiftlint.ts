@@ -41,6 +41,70 @@ interface SwiftLintViolation {
 	line?: number;
 }
 
+// SwiftLint rules whose rule class declares a `corrector` — i.e. rules that
+// `swiftlint --fix` rewrites deterministically. The JSON reporter does not
+// surface a per-violation `is_corrected` flag, so we keep a curated allowlist.
+// Source: https://realm.github.io/SwiftLint/rule-directory.html (each rule
+// page indicates whether a corrector exists). Conservative — when in doubt,
+// leave a rule off this list.
+const SWIFTLINT_FIXABLE_RULES = new Set<string>([
+	"closing_brace",
+	"colon",
+	"comma",
+	"comma_inheritance",
+	"control_statement",
+	"duplicate_imports",
+	"empty_collection_literal",
+	"empty_enum_arguments",
+	"empty_parameters",
+	"empty_parentheses_with_trailing_closure",
+	"empty_string",
+	"explicit_init",
+	"file_header",
+	"joined_default_parameter",
+	"legacy_constant",
+	"legacy_constructor",
+	"legacy_hashing",
+	"legacy_nsgeometry_functions",
+	"mark",
+	"modifier_order",
+	"no_extension_access_modifier",
+	"no_space_in_method_call",
+	"number_separator",
+	"opening_brace",
+	"operator_usage_whitespace",
+	"prefer_zero_over_explicit_init",
+	"private_over_fileprivate",
+	"protocol_property_accessors_order",
+	"redundant_discardable_let",
+	"redundant_nil_coalescing",
+	"redundant_objc_attribute",
+	"redundant_optional_initialization",
+	"redundant_string_enum_value",
+	"redundant_type_annotation",
+	"redundant_void_return",
+	"return_arrow_whitespace",
+	"self_in_property_initialization",
+	"shorthand_operator",
+	"sorted_imports",
+	"statement_position",
+	"trailing_comma",
+	"trailing_newline",
+	"trailing_semicolon",
+	"trailing_whitespace",
+	"unneeded_break_in_switch",
+	"unneeded_parentheses_in_closure_argument",
+	"unused_capture_list",
+	"vertical_parameter_alignment",
+	"vertical_whitespace",
+	"vertical_whitespace_between_cases",
+	"vertical_whitespace_closing_braces",
+	"vertical_whitespace_opening_braces",
+	"void_function_in_ternary",
+	"void_return",
+	"yoda_condition",
+]);
+
 function parseSwiftLintOutput(raw: string, filePath: string): Diagnostic[] {
 	const diagnostics: Diagnostic[] = [];
 	if (!raw.trim()) return diagnostics;
@@ -60,6 +124,7 @@ function parseSwiftLintOutput(raw: string, filePath: string): Diagnostic[] {
 			const severity =
 				severityMap[item.severity?.toLowerCase() ?? ""] ?? "warning";
 			const ruleId = item.rule_id ?? "swiftlint";
+			const fixable = SWIFTLINT_FIXABLE_RULES.has(ruleId);
 
 			diagnostics.push({
 				id: `swiftlint-${item.line}-${ruleId}`,
@@ -71,7 +136,11 @@ function parseSwiftLintOutput(raw: string, filePath: string): Diagnostic[] {
 				semantic: severity === "error" ? "blocking" : "warning",
 				tool: "swiftlint",
 				rule: ruleId,
-				fixable: false,
+				defectClass: "style",
+				fixable,
+				fixSuggestion: fixable
+					? "Run `swiftlint --fix` to apply the deterministic auto-correction for this rule."
+					: undefined,
 			});
 		}
 	} catch {
@@ -127,3 +196,4 @@ const swiftlintRunner: RunnerDefinition = {
 };
 
 export default swiftlintRunner;
+export { parseSwiftLintOutput, SWIFTLINT_FIXABLE_RULES };

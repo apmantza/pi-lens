@@ -7,6 +7,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { isTestMode } from "./env-utils.js";
 
 export interface DiagnosticEntry {
 	// When
@@ -108,10 +109,7 @@ export function createDiagnosticLogger(): DiagnosticLogger {
 
 	return {
 		log(entry: DiagnosticEntry) {
-			if (
-				process.env.PI_LENS_TEST_MODE === "1" ||
-				(process.env.VITEST && process.env.PI_LENS_TEST_MODE !== "0")
-			) {
+			if (isTestMode()) {
 				return;
 			}
 			pending.push(entry);

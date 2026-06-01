@@ -71,7 +71,6 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<
 		capabilities: ["types", "lint", "smells"],
 		writeGroups: [
 			primary("go"),
-			{ mode: "fallback", runnerIds: ["go-vet"], filterKinds: ["go"] },
 			{ mode: "fallback", runnerIds: ["golangci-lint"], filterKinds: ["go"] },
 			{ mode: "all", runnerIds: ["tree-sitter"], filterKinds: ["go"] },
 			{ mode: "all", runnerIds: ["fact-rules"], filterKinds: ["go"] },
@@ -82,7 +81,6 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<
 		capabilities: ["types", "lint", "smells"],
 		writeGroups: [
 			primary("rust"),
-			{ mode: "fallback", runnerIds: ["rust-clippy"], filterKinds: ["rust"] },
 			{ mode: "all", runnerIds: ["tree-sitter"], filterKinds: ["rust"] },
 			{ mode: "all", runnerIds: ["fact-rules"], filterKinds: ["rust"] },
 		],

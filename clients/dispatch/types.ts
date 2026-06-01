@@ -122,6 +122,8 @@ export interface RunnerDefinition {
 	enabledByDefault: boolean;
 	/** Skip this runner for test files (false positive reduction) */
 	skipTestFiles?: boolean;
+	/** Per-runner wall-clock timeout in ms; overrides dispatch.runnerTimeoutMs when set */
+	timeoutMs?: number;
 	/** Check if runner should run */
 	when?: (ctx: DispatchContext) => Promise<boolean> | boolean;
 	/** Execute the runner */

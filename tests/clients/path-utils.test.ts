@@ -2,9 +2,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+	findNearestContaining,
 	isExternalOrVendorFile,
 	pathToUri,
 	uriToPath,
+	walkUpDirs,
 } from "../../clients/path-utils.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
@@ -30,6 +32,79 @@ describe("path-utils", () => {
 			expect(back.endsWith("/src/main.ts")).toBe(true);
 		} finally {
 			cleanup();
+		}
+	});
+});
+
+describe("walkUpDirs / findNearestContaining (#122)", () => {
+	it("walkUpDirs yields every directory from startDir up to the filesystem root and stops", () => {
+		const env = setupTestEnvironment("pi-lens-walkup-");
+		try {
+			const startDir = path.join(env.tmpDir, "a", "b", "c");
+			fs.mkdirSync(startDir, { recursive: true });
+
+			const visited = [...walkUpDirs(startDir)];
+			expect(visited[0]).toBe(path.resolve(startDir));
+			// Must include the chain a/b, a, and the tmp root.
+			expect(visited).toContain(path.resolve(env.tmpDir, "a", "b"));
+			expect(visited).toContain(path.resolve(env.tmpDir, "a"));
+			expect(visited).toContain(path.resolve(env.tmpDir));
+			// Last entry must be the filesystem root (no further dirname change).
+			const last = visited[visited.length - 1];
+			expect(path.dirname(last)).toBe(last);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("findNearestContaining returns the nearest containing directory, not a higher one", () => {
+		const env = setupTestEnvironment("pi-lens-find-nearest-");
+		try {
+			const inner = path.join(env.tmpDir, "outer", "inner");
+			fs.mkdirSync(inner, { recursive: true });
+			// Put a marker at BOTH levels. Nearest wins.
+			fs.writeFileSync(path.join(env.tmpDir, "outer", "package.json"), "{}");
+			fs.writeFileSync(path.join(env.tmpDir, "outer", "inner", "package.json"), "{}");
+
+			const startDir = path.join(inner, "src");
+			fs.mkdirSync(startDir, { recursive: true });
+			const found = findNearestContaining(startDir, ["package.json"]);
+			expect(found && path.resolve(found)).toBe(path.resolve(inner));
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("findNearestContaining matches the first candidate filename that exists", () => {
+		const env = setupTestEnvironment("pi-lens-find-multi-");
+		try {
+			fs.writeFileSync(path.join(env.tmpDir, "Cargo.toml"), "[package]");
+			const startDir = path.join(env.tmpDir, "src");
+			fs.mkdirSync(startDir, { recursive: true });
+			const found = findNearestContaining(startDir, [
+				"package.json",
+				"Cargo.toml",
+				"go.mod",
+			]);
+			expect(found && path.resolve(found)).toBe(path.resolve(env.tmpDir));
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("findNearestContaining returns undefined when no candidate is found anywhere", () => {
+		const env = setupTestEnvironment("pi-lens-find-none-");
+		try {
+			const startDir = path.join(env.tmpDir, "src");
+			fs.mkdirSync(startDir, { recursive: true });
+			// No marker file anywhere under env.tmpDir, and the walk terminates
+			// at the filesystem root where the candidate also doesn't exist.
+			const found = findNearestContaining(startDir, [
+				"this-marker-name-will-not-collide-with-anything-XYZZY-pi-lens",
+			]);
+			expect(found).toBeUndefined();
+		} finally {
+			env.cleanup();
 		}
 	});
 });
