@@ -64,7 +64,7 @@
 		"@earendil-works/pi-coding-agent": "*"
 	},
 	"dependencies": {
-		"@ast-grep/napi": "^0.42.1",
+		"@ast-grep/napi": "^0.43.0",
 		"@earendil-works/pi-tui": "^0.75.3",
 		"minimatch": "^10.2.5",
 		"typebox": "^1.0.0",
