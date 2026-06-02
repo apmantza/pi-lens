@@ -9,6 +9,10 @@ import { getDiagnosticTracker } from "./diagnostic-tracker.js";
 import { clearAllSessions as clearFileTimeSessions } from "./file-time.js";
 import { getKnipIgnorePatterns } from "./file-utils.js";
 import type { GoClient } from "./go-client.js";
+import {
+	GovulncheckClient,
+	type GovulncheckResult,
+} from "./govulncheck-client.js";
 import type { JscpdClient } from "./jscpd-client.js";
 import type { KnipClient, KnipResult } from "./knip-client.js";
 import { canRunStartupHeavyScans } from "./language-policy.js";
@@ -60,6 +64,7 @@ interface SessionStartDeps {
 	ruffClient: RuffClient;
 	knipClient: KnipClient;
 	jscpdClient: JscpdClient;
+	govulncheckClient: GovulncheckClient;
 	typeCoverageClient: TypeCoverageClient;
 	depChecker: DependencyChecker;
 	testRunnerClient: TestRunnerClient;
@@ -252,8 +257,14 @@ function scheduleStartupScans(
 	languageProfile: ReturnType<typeof detectProjectLanguageProfile>,
 	dbg: SessionStartDeps["dbg"],
 ): void {
-	const { todoScanner, cacheManager, knipClient, jscpdClient, astGrepClient } =
-		deps;
+	const {
+		todoScanner,
+		cacheManager,
+		knipClient,
+		jscpdClient,
+		govulncheckClient,
+		astGrepClient,
+	} = deps;
 
 	const runTask = (name: string, task: () => Promise<void>): void => {
 		const queuedAt = Date.now();
@@ -375,6 +386,42 @@ function scheduleStartupScans(
 			if (!runtime.isCurrentSession(sessionGeneration)) return;
 			dbg("session_start jscpd: not available");
 		}
+	});
+
+	// govulncheck — Go module CVE detection (#132)
+	// Skipped silently when the project isn't a Go module or when
+	// `govulncheck` isn't installed (no auto-install in this slice).
+	runTask("govulncheck", async () => {
+		if (!GovulncheckClient.hasGoModule(analysisRoot)) {
+			dbg("session_start govulncheck: no go.mod — skipped");
+			return;
+		}
+		if (!(await govulncheckClient.ensureAvailable())) {
+			if (!runtime.isCurrentSession(sessionGeneration)) return;
+			dbg(
+				"session_start govulncheck: not installed (go install golang.org/x/vuln/cmd/govulncheck@latest)",
+			);
+			return;
+		}
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+		const cached =
+			cacheManager.readCache<GovulncheckResult>("govulncheck", analysisRoot);
+		if (cached) {
+			if (!runtime.isCurrentSession(sessionGeneration)) return;
+			dbg(
+				`session_start govulncheck: cache hit (${cached.data.findings.length} findings)`,
+			);
+			return;
+		}
+		const startMs = Date.now();
+		const result = await govulncheckClient.analyze(analysisRoot);
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+		cacheManager.writeCache("govulncheck", result, analysisRoot, {
+			scanDurationMs: Date.now() - startMs,
+		});
+		dbg(
+			`session_start govulncheck: ${result.findings.length} reachable findings (${Date.now() - startMs}ms)`,
+		);
 	});
 
 	// ast-grep — export scan for duplicate detection

@@ -21,6 +21,7 @@ import {
 	toRunnerDisplayPath,
 } from "./dispatch/runner-context.js";
 import { getKnipIgnorePatterns } from "./file-utils.js";
+import type { GovulncheckResult } from "./govulncheck-client.js";
 import type { KnipClient, KnipIssue, KnipResult } from "./knip-client.js";
 import { logLatency } from "./latency-logger.js";
 import { emitLensTurnFindings } from "./lens-events.js";
@@ -350,6 +351,32 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		durationMs: Date.now() - t2,
 		metadata: knipMeta,
 	});
+
+	// govulncheck — surface session_start-cached Go CVE findings as advisory.
+	// No per-turn re-run in this slice; the cache refreshes at next session_start.
+	const govCacheEntry = cacheManager.readCache<GovulncheckResult>(
+		"govulncheck",
+		cwd,
+	);
+	if (govCacheEntry?.data?.findings?.length) {
+		const findings = govCacheEntry.data.findings.slice(0, 5);
+		let report =
+			"🛡️ Go CVEs reachable from this code (govulncheck) — upgrade where possible:\n";
+		for (const f of findings) {
+			const callSite = f.trace.find((t) => t.filename);
+			const where = callSite?.filename
+				? `${toRunnerDisplayPath(cwd, callSite.filename)}${callSite.line ? `:${callSite.line}` : ""}`
+				: f.module ?? f.packageName ?? "(module)";
+			const fix = f.fixedVersion
+				? ` — upgrade to ${f.fixedVersion} or later`
+				: " — no fix yet, track upstream";
+			report += `  ${f.osv} (${where})${fix}\n`;
+		}
+		if (govCacheEntry.data.findings.length > findings.length) {
+			report += `  … and ${govCacheEntry.data.findings.length - findings.length} more\n`;
+		}
+		advisoryParts.push(report);
+	}
 
 	const t3 = Date.now();
 	if (await depChecker.ensureAvailable()) {
