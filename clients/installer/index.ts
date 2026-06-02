@@ -564,6 +564,30 @@ const TOOLS: ToolDefinition[] = [
 		},
 	},
 	{
+		id: "gitleaks",
+		name: "gitleaks",
+		checkCommand: "gitleaks",
+		checkArgs: ["version"],
+		installStrategy: "github",
+		binaryName: "gitleaks",
+		github: {
+			repo: "gitleaks/gitleaks",
+			// gitleaks asset naming uses `x64` not `amd64` (unlike most Go-built
+			// tools). Substring match is exact-enough — release assets are
+			// named e.g. `gitleaks_8.18.4_linux_x64.tar.gz`.
+			assetMatch: (platform, arch) => {
+				if (platform === "linux")
+					return arch === "arm64" ? "linux_arm64.tar.gz" : "linux_x64.tar.gz";
+				if (platform === "darwin")
+					return arch === "arm64" ? "darwin_arm64.tar.gz" : "darwin_x64.tar.gz";
+				if (platform === "win32")
+					return arch === "arm64" ? "windows_arm64.zip" : "windows_x64.zip";
+				return undefined;
+			},
+			binaryInArchive: "gitleaks",
+		},
+	},
+	{
 		id: "swiftlint",
 		name: "SwiftLint",
 		checkCommand: "swiftlint",
