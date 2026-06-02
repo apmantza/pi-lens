@@ -8,7 +8,15 @@ import type { DependencyChecker } from "./dependency-checker.js";
 import { getDiagnosticTracker } from "./diagnostic-tracker.js";
 import { clearAllSessions as clearFileTimeSessions } from "./file-time.js";
 import { getKnipIgnorePatterns } from "./file-utils.js";
+import {
+	GitleaksClient,
+	type GitleaksResult,
+} from "./gitleaks-client.js";
 import type { GoClient } from "./go-client.js";
+import {
+	GovulncheckClient,
+	type GovulncheckResult,
+} from "./govulncheck-client.js";
 import type { JscpdClient } from "./jscpd-client.js";
 import type { KnipClient, KnipResult } from "./knip-client.js";
 import { canRunStartupHeavyScans } from "./language-policy.js";
@@ -60,6 +68,8 @@ interface SessionStartDeps {
 	ruffClient: RuffClient;
 	knipClient: KnipClient;
 	jscpdClient: JscpdClient;
+	govulncheckClient: GovulncheckClient;
+	gitleaksClient: GitleaksClient;
 	typeCoverageClient: TypeCoverageClient;
 	depChecker: DependencyChecker;
 	testRunnerClient: TestRunnerClient;
@@ -252,8 +262,15 @@ function scheduleStartupScans(
 	languageProfile: ReturnType<typeof detectProjectLanguageProfile>,
 	dbg: SessionStartDeps["dbg"],
 ): void {
-	const { todoScanner, cacheManager, knipClient, jscpdClient, astGrepClient } =
-		deps;
+	const {
+		todoScanner,
+		cacheManager,
+		knipClient,
+		jscpdClient,
+		govulncheckClient,
+		gitleaksClient,
+		astGrepClient,
+	} = deps;
 
 	const runTask = (name: string, task: () => Promise<void>): void => {
 		const queuedAt = Date.now();
@@ -338,25 +355,113 @@ function scheduleStartupScans(
 	runTask("jscpd", async () => {
 		if (await jscpdClient.ensureAvailable()) {
 			if (!runtime.isCurrentSession(sessionGeneration)) return;
+			// Detect TS projects by tsconfig.json at the analysis root. When
+			// set, JscpdClient.scan adds **/*.js and **/*.jsx to its ignore
+			// pattern so compiled artifacts under dist/ aren't flagged as
+			// duplicates of their TypeScript sources (closes #126's latent
+			// dist/-as-duplicate bug). Cache scanner key varies by this flag
+			// so a stale cache built with the wrong setting invalidates on
+			// first read.
+			const isTsProject = nodeFs.existsSync(
+				path.join(analysisRoot, "tsconfig.json"),
+			);
+			const scannerKey = isTsProject ? "jscpd-ts" : "jscpd";
 			const cached = cacheManager.readCache<
 				Awaited<ReturnType<JscpdClient["scan"]>>
-			>("jscpd", analysisRoot);
+			>(scannerKey, analysisRoot);
 			if (cached) {
 				if (!runtime.isCurrentSession(sessionGeneration)) return;
-				dbg("session_start jscpd: cache hit");
+				dbg(`session_start jscpd: cache hit (${scannerKey})`);
 			} else {
 				const startMs = Date.now();
-				const jscpdResult = await jscpdClient.scan(analysisRoot);
+				const jscpdResult = await jscpdClient.scan(
+					analysisRoot,
+					undefined,
+					undefined,
+					isTsProject,
+				);
 				if (!runtime.isCurrentSession(sessionGeneration)) return;
-				cacheManager.writeCache("jscpd", jscpdResult, analysisRoot, {
+				cacheManager.writeCache(scannerKey, jscpdResult, analysisRoot, {
 					scanDurationMs: Date.now() - startMs,
 				});
-				dbg(`session_start jscpd scan done (${Date.now() - startMs}ms)`);
+				dbg(
+					`session_start jscpd scan done (${Date.now() - startMs}ms, isTsProject=${isTsProject})`,
+				);
 			}
 		} else {
 			if (!runtime.isCurrentSession(sessionGeneration)) return;
 			dbg("session_start jscpd: not available");
 		}
+	});
+
+	// govulncheck — Go module CVE detection (#132)
+	// Skipped silently when the project isn't a Go module or when
+	// `govulncheck` isn't installed (no auto-install in this slice).
+	runTask("govulncheck", async () => {
+		if (!GovulncheckClient.hasGoModule(analysisRoot)) {
+			dbg("session_start govulncheck: no go.mod — skipped");
+			return;
+		}
+		if (!(await govulncheckClient.ensureAvailable())) {
+			if (!runtime.isCurrentSession(sessionGeneration)) return;
+			dbg(
+				"session_start govulncheck: not installed (go install golang.org/x/vuln/cmd/govulncheck@latest)",
+			);
+			return;
+		}
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+		const cached =
+			cacheManager.readCache<GovulncheckResult>("govulncheck", analysisRoot);
+		if (cached) {
+			if (!runtime.isCurrentSession(sessionGeneration)) return;
+			dbg(
+				`session_start govulncheck: cache hit (${cached.data.findings.length} findings)`,
+			);
+			return;
+		}
+		const startMs = Date.now();
+		const result = await govulncheckClient.analyze(analysisRoot);
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+		cacheManager.writeCache("govulncheck", result, analysisRoot, {
+			scanDurationMs: Date.now() - startMs,
+		});
+		dbg(
+			`session_start govulncheck: ${result.findings.length} reachable findings (${Date.now() - startMs}ms)`,
+		);
+	});
+
+	// gitleaks — committed-secrets detection (#130)
+	// Config-gated: opts in via .gitleaks.toml / .gitleaksignore / git
+	// hook / gitleaks dep. Cross-language by design.
+	runTask("gitleaks", async () => {
+		if (!GitleaksClient.hasGitleaksSignal(analysisRoot)) {
+			dbg("session_start gitleaks: no opt-in signal — skipped");
+			return;
+		}
+		if (!(await gitleaksClient.ensureAvailable())) {
+			if (!runtime.isCurrentSession(sessionGeneration)) return;
+			dbg("session_start gitleaks: not available (install failed?)");
+			return;
+		}
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+		const cached =
+			cacheManager.readCache<GitleaksResult>("gitleaks", analysisRoot);
+		if (cached) {
+			if (!runtime.isCurrentSession(sessionGeneration)) return;
+			dbg(
+				`session_start gitleaks: cache hit (${cached.data.findings.length} findings)`,
+			);
+			return;
+		}
+		const startMs = Date.now();
+		const result = await gitleaksClient.scan(analysisRoot);
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+		cacheManager.writeCache("gitleaks", result, analysisRoot, {
+			scanDurationMs: Date.now() - startMs,
+		});
+		dbg(
+			`session_start gitleaks: ${result.findings.length} findings (${Date.now() - startMs}ms)`,
+		);
 	});
 
 	// ast-grep — export scan for duplicate detection

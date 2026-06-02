@@ -64,6 +64,15 @@ export class JscpdClient {
 	/**
 	 * Fast recursive source file presence check.
 	 * Avoids running jscpd when repo has no relevant source files.
+	 *
+	 * Originally this gate accepted only JS/TS extensions (commit 8b5d588).
+	 * That made pi-lens's jscpd integration effectively JS/TS-only even
+	 * though jscpd's tokenizer covers 15+ languages. Pure-Python /
+	 * pure-Go / pure-Rust / pure-Java / etc. repos got zero clone
+	 * detection. Closes #126: extend the gate to every language jscpd
+	 * tokenizes well. Languages with no jscpd tokenizer (Gleam, Zig,
+	 * Fish) are deliberately excluded — the gate change wouldn't help
+	 * them.
 	 */
 	private hasSourceFilesRecursive(rootDir: string): boolean {
 		const stack = [rootDir];
@@ -95,7 +104,11 @@ export class JscpdClient {
 				if (!entry.isFile()) continue;
 				if (ignoreMatcher.isIgnored(path.join(dir, entry.name), false))
 					continue;
-				if (/\.(ts|tsx|js|jsx|mjs|cjs)$/.test(entry.name)) {
+				if (
+					/\.(ts|tsx|js|jsx|mjs|cjs|py|pyi|java|go|rs|rb|php|swift|kt|kts|dart|lua|scala|c|h|cpp|cc|cxx|hpp|hxx|cs|m|mm)$/.test(
+						entry.name,
+					)
+				) {
 					if (entry.name.endsWith(".d.ts")) continue;
 					return true;
 				}
