@@ -206,7 +206,8 @@ v3.8.45 is the package version. Master includes unreleased work: read-guard auto
 
 ## Commit conventions
 - Always include the GitHub issue number in the commit subject line: `(closes #NNN)` or `(refs #NNN)`.
-- Use `closes` when the commit fully resolves the issue; `refs` when it is partial work.
+- Use `closes` only when the commit fully resolves the entire issue; use `refs` for any partial work.
+- GitHub auto-closes an issue on any commit containing `closes #NNN` regardless of trailing text — "closes #125 Phase 1" still closes #125.
 
 ## Conventions
 - TypeScript ESM throughout (`"type": "module"`)
