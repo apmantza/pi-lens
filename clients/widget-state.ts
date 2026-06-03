@@ -291,14 +291,13 @@ export function renderWidget(
 
 // ── File row layout ──────────────────────────────────────────────────────────
 
-type FileTier = "blocking" | "warning" | "pending" | "clean";
+type FileTier = "blocking" | "warning" | "clean";
 
 function classifyFileTier(rec: FileRecord): FileTier {
 	if (rec.diagnosticCounts.blocking > 0) return "blocking";
 	if (rec.diagnosticCounts.errors > 0 || rec.diagnosticCounts.warnings > 0) {
 		return "warning";
 	}
-	if (isPendingAnalysis(rec)) return "pending";
 	return "clean";
 }
 
@@ -306,8 +305,7 @@ function sortByTierThenRecency(recs: FileRecord[]): FileRecord[] {
 	const order: Record<FileTier, number> = {
 		blocking: 0,
 		warning: 1,
-		pending: 2,
-		clean: 3,
+		clean: 2,
 	};
 	return [...recs].sort((a, b) => {
 		const ta = order[classifyFileTier(a)];
@@ -335,9 +333,7 @@ function formatFileRowVertical(
 			? red("●")
 			: warnings > 0 || errors > 0
 				? yellow("!")
-				: isPendingAnalysis(rec)
-					? dim("·")
-					: green("✓");
+				: green("✓");
 	const runnerNames = [...rec.runners.entries()]
 		.filter(([, r]) => r.status !== "skipped")
 		.map(([id]) => id)
@@ -349,9 +345,7 @@ function formatFileRowVertical(
 				(warnings > 0 ? " " + yellow(`${warnings}W`) : "")
 			: warnings > 0
 				? " " + yellow(`${warnings}W`)
-				: isPendingAnalysis(rec)
-					? ""
-					: " " + dim("clean");
+				: " " + dim("clean");
 	const changedFormatters = [...rec.formatters.entries()]
 		.filter(([, f]) => f.changed)
 		.map(([name]) => name);
