@@ -78,6 +78,17 @@ kind: arrow_function
 
 ❌ Unnamed $$$ when you need the value
    foo($$$)  →  captures nothing; use foo($$$ARGS) to inspect matches
+
+❌ Multiple top-level statements — triggers "Multiple AST nodes are detected"
+   Two shapes, two fixes:
+
+   1. Sequence inside a block — wrap in braces:
+      foo(); bar();  →  { foo(); bar(); }
+
+   2. Cross-context (module-level + block-level together, e.g. an import AND a call) —
+      wrapping in {} makes the pattern invalid (imports can't live inside a block).
+      Use two searches: find files containing the import, then scope the call search
+      to those paths. Or use a YAML `inside:`/`has:` rule (see Composite section above).
 ```
 
 **No matches?** Simplify and retry once. Still nothing? Fall back to `grep` or `lsp_navigation`.
