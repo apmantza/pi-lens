@@ -1,6 +1,8 @@
+import * as path from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+	__testing,
 	clearWidgetState,
 	recordDiagnostics,
 	recordFormatter,
@@ -330,5 +332,32 @@ describe("widget-state renderWidget", () => {
 		const lines = renderWidget(70, theme);
 		const allLines = lines.join("\n");
 		expect(allLines).toMatch(/\+\d+/);
+	});
+
+	it("caps stored widget diagnostics per file while preserving warning counts", () => {
+		const filePath = path.join(process.cwd(), "warning-storm.cpp");
+		recordRunner(filePath, "lsp", "succeeded", 40);
+		recordDiagnostics(
+			filePath,
+			Array.from({ length: 40 }, (_, i) => ({
+				severity: "warning",
+				message: `warning ${i + 1}`,
+				rule: "clangd:unused",
+				line: i + 1,
+			})),
+		);
+
+		const snapshot = __testing.getWidgetStateSnapshot();
+		expect(snapshot.files).toHaveLength(1);
+		expect(snapshot.files[0]).toMatchObject({
+			filePath,
+			storedDiagnostics: 12,
+			warnings: 40,
+			errors: 0,
+			blocking: 0,
+		});
+
+		const lines = renderWidget(120, theme);
+		expect(lines.join("\n")).toContain("40W");
 	});
 });
