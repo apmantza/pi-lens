@@ -55,6 +55,13 @@ export function createAstGrepReplaceTool(astGrepClient: AstGrepClient) {
 			apply: Type.Optional(
 				Type.Boolean({ description: "Apply changes (default: false)" }),
 			),
+			strictness: Type.Optional(
+				Type.String({
+					enum: ["smart", "relaxed", "ast", "cst", "signature", "template"],
+					description:
+						"Pattern matching strictness. 'smart' (default) ignores comments and whitespace. 'relaxed' also ignores unnamed nodes like punctuation. 'ast' ignores all whitespace.",
+				}),
+			),
 		}),
 		async execute(
 			_toolCallId: string,
@@ -64,12 +71,13 @@ export function createAstGrepReplaceTool(astGrepClient: AstGrepClient) {
 			ctx: { cwd?: string },
 		) {
 			const startedAt = Date.now();
-			const { pattern, rewrite, paths, apply } = params as {
+			const { pattern, rewrite, paths, apply, strictness } = params as {
 				pattern: string;
 				rewrite: string;
 				lang: string;
 				paths?: string[];
 				apply?: boolean;
+				strictness?: string;
 			};
 			const lang = ((params as { lang: string }).lang ?? "").replace(
 				/^"|"$/g,
@@ -131,7 +139,22 @@ export function createAstGrepReplaceTool(astGrepClient: AstGrepClient) {
 				lang,
 				searchPaths,
 				applyFlag,
+				{ strictness },
 			);
+
+			if (result.stalePreview) {
+				logOutcome("error", { errorRaw: "stale_preview" });
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: "Stale preview — the pattern no longer matches any files. The file content has changed since your last apply: false preview. Re-run with apply: false to get a fresh preview before applying.",
+						},
+					],
+					isError: true,
+					details: { stalePreview: true },
+				};
+			}
 
 			if (result.error) {
 				logOutcome("error", { errorRaw: result.error });

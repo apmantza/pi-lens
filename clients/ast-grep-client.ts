@@ -71,7 +71,7 @@ export class AstGrepClient {
 		pattern: string,
 		lang: string,
 		paths: string[],
-		options?: { selector?: string; context?: number },
+		options?: { selector?: string; context?: number; strictness?: string },
 	): Promise<{
 		matches: AstGrepMatch[];
 		totalMatches: number;
@@ -84,6 +84,9 @@ export class AstGrepClient {
 		}
 		if (options?.context !== undefined) {
 			args.push("--context", String(options.context));
+		}
+		if (options?.strictness) {
+			args.push("--strictness", options.strictness);
 		}
 		args.push(...paths);
 		const result = await this.runner.exec(args);
@@ -104,14 +107,19 @@ export class AstGrepClient {
 		lang: string,
 		paths: string[],
 		apply = false,
+		options?: { strictness?: string },
 	): Promise<{
 		matches: AstGrepMatch[];
 		totalMatches: number;
 		truncated: boolean;
 		applied: boolean;
+		stalePreview?: boolean;
 		error?: string;
 	}> {
 		const baseArgs = ["run", "-p", pattern, "-r", rewrite, "--lang", lang];
+		if (options?.strictness) {
+			baseArgs.push("--strictness", options.strictness);
+		}
 
 		if (!apply) {
 			// Dry-run: --json=compact shows what would change without writing
@@ -126,6 +134,32 @@ export class AstGrepClient {
 				truncated: result.truncated,
 				applied: false,
 				error: result.error,
+			};
+		}
+
+		// Stale-preview check: re-run dry-run before writing.
+		// If the pattern no longer matches, the files changed since the preview.
+		const preCheck = await this.runner.exec([
+			...baseArgs,
+			"--json=compact",
+			...paths,
+		]);
+		if (preCheck.error) {
+			return {
+				matches: [],
+				totalMatches: 0,
+				truncated: false,
+				applied: false,
+				error: preCheck.error,
+			};
+		}
+		if (preCheck.matches.length === 0) {
+			return {
+				matches: [],
+				totalMatches: 0,
+				truncated: false,
+				applied: false,
+				stalePreview: true,
 			};
 		}
 

@@ -156,6 +156,19 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 					description: "Show N lines before/after each match for context",
 				}),
 			),
+			skip: Type.Optional(
+				Type.Number({
+					description:
+						"Match offset for pagination. Skip the first N matches and return the next page. Use when results are truncated — increment by the page size to retrieve subsequent pages.",
+				}),
+			),
+			strictness: Type.Optional(
+				Type.String({
+					enum: ["smart", "relaxed", "ast", "cst", "signature", "template"],
+					description:
+						"Pattern matching strictness. 'smart' (default) ignores comments and whitespace. 'relaxed' also ignores unnamed nodes like punctuation — useful when optional trailing commas cause misses. 'ast' ignores all whitespace. 'signature' matches only structural shape, ignoring bodies.",
+				}),
+			),
 		}),
 		async execute(
 			_toolCallId: string,
@@ -165,13 +178,16 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			ctx: { cwd?: string },
 		) {
 			const startedAt = Date.now();
-			const { pattern, paths, selector, context } = params as {
+			const { pattern, paths, selector, context, skip, strictness } = params as {
 				pattern: string;
 				lang: string;
 				paths?: string[];
 				selector?: string;
 				context?: number;
+				skip?: number;
+				strictness?: string;
 			};
+			const skipOffset = Math.max(0, Math.floor(skip ?? 0));
 			const lang = ((params as { lang: string }).lang ?? "").replace(
 				/^"|"$/g,
 				"",
@@ -245,6 +261,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			const result = await astGrepClient.search(pattern, lang, searchPaths, {
 				selector,
 				context,
+				strictness,
 			});
 
 			if (result.error) {
@@ -256,22 +273,36 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 				};
 			}
 
-			const output = astGrepClient.formatMatches(result.matches);
+			// Apply skip-based pagination over the full in-memory match list.
+			const PAGE_SIZE = 50;
+			const afterSkip = result.matches.slice(skipOffset);
+			const page = afterSkip.slice(0, PAGE_SIZE);
+			const hasMore = afterSkip.length > PAGE_SIZE || result.truncated;
+
+			const output = astGrepClient.formatMatches(page);
 			const hint =
-				result.matches.length === 0 && !result.error
+				page.length === 0 && !result.error
 					? getPatternHint(pattern, lang, selector)
 					: undefined;
-			const finalOutput = hint ? `${output}\n\n${hint}` : output;
-			logOutcome(result.matches.length === 0 ? "no_matches" : "success", {
-				matchCount: result.matches.length,
-				truncated: result.truncated,
+			const paginationNote =
+				hasMore && page.length > 0
+					? `\n\n(Showing ${page.length} of ${result.matches.length - skipOffset} remaining matches. Use skip=${skipOffset + PAGE_SIZE} for the next page.)`
+					: "";
+			const finalOutput = hint
+				? `${output}\n\n${hint}`
+				: `${output}${paginationNote}`;
+			logOutcome(page.length === 0 ? "no_matches" : "success", {
+				matchCount: page.length,
+				truncated: hasMore,
 			});
 			return {
 				content: [{ type: "text" as const, text: finalOutput }],
 				details: {
-					matchCount: result.matches.length,
-					totalMatches: result.totalMatches,
-					truncated: result.truncated,
+					matchCount: page.length,
+					totalMatches: result.matches.length,
+					truncated: hasMore,
+					hasMore,
+					skip: skipOffset,
 				},
 			};
 		},
