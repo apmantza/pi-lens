@@ -14,6 +14,7 @@ const TREE_SITTER_WASMS_VERSION = "0.1.13";
 const BASE_URL = `https://unpkg.com/tree-sitter-wasms@${TREE_SITTER_WASMS_VERSION}/out`;
 
 const GRAMMARS = [
+	// Core typed languages
 	"tree-sitter-typescript.wasm",
 	"tree-sitter-tsx.wasm",
 	"tree-sitter-javascript.wasm",
@@ -27,6 +28,20 @@ const GRAMMARS = [
 	"tree-sitter-cpp.wasm",
 	"tree-sitter-elixir.wasm",
 	"tree-sitter-ruby.wasm",
+	// Additional languages with dispatch runners, formatters, or LSP support
+	"tree-sitter-bash.wasm",
+	"tree-sitter-c_sharp.wasm",
+	"tree-sitter-css.wasm",
+	"tree-sitter-html.wasm",
+	"tree-sitter-json.wasm",
+	"tree-sitter-lua.wasm",
+	"tree-sitter-ocaml.wasm",
+	"tree-sitter-php.wasm",
+	"tree-sitter-swift.wasm",
+	"tree-sitter-toml.wasm",
+	"tree-sitter-vue.wasm",
+	"tree-sitter-yaml.wasm",
+	"tree-sitter-zig.wasm",
 ];
 
 function findGrammarsDir(): string {

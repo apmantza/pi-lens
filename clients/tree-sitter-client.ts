@@ -72,6 +72,19 @@ const LANGUAGE_TO_GRAMMAR: Record<string, string> = {
 	cpp: "tree-sitter-cpp.wasm",
 	elixir: "tree-sitter-elixir.wasm",
 	ruby: "tree-sitter-ruby.wasm",
+	bash: "tree-sitter-bash.wasm",
+	csharp: "tree-sitter-c_sharp.wasm",
+	css: "tree-sitter-css.wasm",
+	html: "tree-sitter-html.wasm",
+	json: "tree-sitter-json.wasm",
+	lua: "tree-sitter-lua.wasm",
+	ocaml: "tree-sitter-ocaml.wasm",
+	php: "tree-sitter-php.wasm",
+	swift: "tree-sitter-swift.wasm",
+	toml: "tree-sitter-toml.wasm",
+	vue: "tree-sitter-vue.wasm",
+	yaml: "tree-sitter-yaml.wasm",
+	zig: "tree-sitter-zig.wasm",
 };
 
 // --- Types ---
