@@ -949,23 +949,16 @@ describe("oxfmt formatter — detection and policy selection", () => {
 		"page.html",
 	];
 
+	// Cross-product: every supported extension × every oxfmt config file.
+	// Some extensions have defaultWhenUnconfigured:true formatters (yaml, html…),
+	// so we assert oxfmt is included rather than being the sole formatter.
 	it.each(
-		oxfmtExtensionFiles,
-	)("includes oxfmt for %s when oxfmt.toml is present", async (fileName) => {
-		createTempFile(tmpDir, "oxfmt.toml", "# oxfmt config\n");
-		const formatters = await getFormattersForFile(
-			fileIn(tmpDir, fileName),
-			tmpDir,
-		);
-		// Some extensions also have other formatters with defaultWhenUnconfigured:true
-		// (e.g. prettier for yaml/html/graphql). Assert oxfmt is included, not sole.
-		expect(formatters.map((f) => f.name)).toContain("oxfmt");
-	});
-
-	it.each(
-		oxfmtExtensionFiles,
-	)("includes oxfmt for %s when .oxfmtrc.json is present", async (fileName) => {
-		createTempFile(tmpDir, ".oxfmtrc.json", "{}\n");
+		oxfmtExtensionFiles.flatMap((f) => [
+			[f, "oxfmt.toml", "# oxfmt config\n"] as const,
+			[f, ".oxfmtrc.json", "{}\n"] as const,
+		]),
+	)("includes oxfmt for %s when %s is present", async (fileName, configFile, configContent) => {
+		createTempFile(tmpDir, configFile, configContent);
 		const formatters = await getFormattersForFile(
 			fileIn(tmpDir, fileName),
 			tmpDir,
