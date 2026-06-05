@@ -26,7 +26,9 @@ import { SgRunner } from "./sg-runner.js";
 
 function extractDebugAst(raw: string): string | undefined {
 	const lines = raw.split(/\r?\n/);
-	const start = lines.findIndex((line) => /^Debug (?:A|C)ST:/.test(line.trim()));
+	const start = lines.findIndex((line) =>
+		/^Debug (?:A|C)ST:/.test(line.trim()),
+	);
 	if (start < 0) return undefined;
 	const out: string[] = [];
 	for (const line of lines.slice(start + 1)) {
@@ -63,9 +65,7 @@ function formatDebugAst(tree: string, source: string): string {
 	return tree
 		.split(/\r?\n/)
 		.map((line) => {
-			const match = /^(\s*)(.*?) \((\d+),(\d+)\)-\((\d+),(\d+)\)$/.exec(
-				line,
-			);
+			const match = /^(\s*)([^(]*) \((\d+),(\d+)\)-\((\d+),(\d+)\)$/.exec(line);
 			if (!match) return line;
 			const [, indent = "", label = "", startLine, startCol, endLine, endCol] =
 				match;
@@ -331,7 +331,11 @@ severity: info
 message: found
 `;
 
-		const matches = await this.runTempScanAsync(dir, "find-functions", ruleYaml);
+		const matches = await this.runTempScanAsync(
+			dir,
+			"find-functions",
+			ruleYaml,
+		);
 		if (matches.length === 0) return [];
 
 		return this.groupSimilarFunctions(matches);
@@ -409,7 +413,12 @@ severity: info
 message: found
 `;
 
-		const matches = await this.runTempScanAsync(dir, "find-functions", ruleYaml, 15000);
+		const matches = await this.runTempScanAsync(
+			dir,
+			"find-functions",
+			ruleYaml,
+			15000,
+		);
 		this.log(`scanExports output length: ${matches.length}`);
 
 		for (const item of matches) {

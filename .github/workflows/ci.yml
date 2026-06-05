@@ -156,9 +156,11 @@ jobs:
           # Simulate how pi loads extensions: tsx index.ts
           # ERR_MODULE_NOT_FOUND = missing dep (e.g. 'minimatch') → fail
           # Any other error = expected in CI (no pi API available) → pass
+          # pi-coding-agent is a host-provided peer dep; its absence is expected here
           cd "$INSTALL_DIR"
           npx tsx index.ts 2>&1 | tee /tmp/tsx-output.txt || true
-          if grep -q "ERR_MODULE_NOT_FOUND\|Cannot find module" /tmp/tsx-output.txt; then
+          if grep -q "ERR_MODULE_NOT_FOUND\|Cannot find module" /tmp/tsx-output.txt \
+             && ! grep -q "pi-coding-agent" /tmp/tsx-output.txt; then
             echo "FAILED: missing module dependency detected"
             cat /tmp/tsx-output.txt
             exit 1
