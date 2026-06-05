@@ -108,7 +108,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	[
 		".json",
 		{
-			formatterNames: ["biome", "prettier", "oxfmt"],
+			formatterNames: ["biome", "prettier"],
 			defaultFormatter: "biome",
 			defaultWhenUnconfigured: false,
 			gate: "mixed",
@@ -117,7 +117,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	[
 		".jsonc",
 		{
-			formatterNames: ["biome", "prettier", "oxfmt"],
+			formatterNames: ["biome", "prettier"],
 			defaultFormatter: "biome",
 			defaultWhenUnconfigured: false,
 			gate: "mixed",
@@ -151,18 +151,9 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 		},
 	],
 	[
-		".vue",
-		{
-			formatterNames: ["prettier", "oxfmt"],
-			defaultFormatter: "prettier",
-			defaultWhenUnconfigured: false,
-			gate: "config-first",
-		},
-	],
-	[
 		".less",
 		{
-			formatterNames: ["prettier", "oxfmt"],
+			formatterNames: ["prettier"],
 			defaultFormatter: "prettier",
 			defaultWhenUnconfigured: true,
 			gate: "smart-default",
@@ -171,7 +162,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	[
 		".html",
 		{
-			formatterNames: ["prettier", "oxfmt"],
+			formatterNames: ["prettier"],
 			defaultFormatter: "prettier",
 			defaultWhenUnconfigured: true,
 			gate: "smart-default",
@@ -180,7 +171,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	[
 		".htm",
 		{
-			formatterNames: ["prettier", "oxfmt"],
+			formatterNames: ["prettier"],
 			defaultFormatter: "prettier",
 			defaultWhenUnconfigured: true,
 			gate: "smart-default",
@@ -189,7 +180,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	[
 		".yaml",
 		{
-			formatterNames: ["prettier", "oxfmt"],
+			formatterNames: ["prettier"],
 			defaultFormatter: "prettier",
 			defaultWhenUnconfigured: true,
 			gate: "smart-default",
@@ -198,7 +189,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	[
 		".yml",
 		{
-			formatterNames: ["prettier", "oxfmt"],
+			formatterNames: ["prettier"],
 			defaultFormatter: "prettier",
 			defaultWhenUnconfigured: true,
 			gate: "smart-default",
@@ -207,7 +198,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	[
 		".md",
 		{
-			formatterNames: ["prettier", "oxfmt"],
+			formatterNames: ["prettier"],
 			defaultFormatter: "prettier",
 			// Prettier's markdown defaults reflow lines, normalize emphasis (* -> _),
 			// and restyle lists. Opt-in via project prettier config; do not run by default.
@@ -218,7 +209,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	[
 		".mdx",
 		{
-			formatterNames: ["prettier", "oxfmt"],
+			formatterNames: ["prettier"],
 			defaultFormatter: "prettier",
 			defaultWhenUnconfigured: false,
 			gate: "smart-default",
@@ -227,7 +218,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	[
 		".graphql",
 		{
-			formatterNames: ["prettier", "oxfmt"],
+			formatterNames: ["prettier"],
 			defaultFormatter: "prettier",
 			defaultWhenUnconfigured: true,
 			gate: "smart-default",
@@ -236,7 +227,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	[
 		".gql",
 		{
-			formatterNames: ["prettier", "oxfmt"],
+			formatterNames: ["prettier"],
 			defaultFormatter: "prettier",
 			defaultWhenUnconfigured: true,
 			gate: "smart-default",
@@ -533,7 +524,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	[
 		".toml",
 		{
-			formatterNames: ["taplo", "oxfmt"],
+			formatterNames: ["taplo"],
 			defaultFormatter: "taplo",
 			defaultWhenUnconfigured: true,
 			gate: "smart-default",
@@ -657,6 +648,36 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 		},
 	],
 ]);
+
+// oxfmt supports these extensions — registered as a candidate formatter for each.
+// Using a post-processing pass avoids repeating the same modification across
+// many map entries (and keeps SonarCloud's duplication gate happy).
+const OXFMT_SUPPORTED_EXTENSIONS = new Set([
+	".js", ".jsx", ".mjs", ".cjs",
+	".ts", ".tsx", ".mts", ".cts",
+	".vue",
+	".css", ".scss", ".less",
+	".html", ".htm",
+	".json", ".jsonc",
+	".yaml", ".yml",
+	".md", ".mdx",
+	".graphql", ".gql",
+	".toml",
+]);
+
+// Add .vue entry (no prior formatter policy existed for this extension)
+FORMATTER_POLICY_BY_EXTENSION.set(".vue", {
+	formatterNames: ["prettier"],
+	defaultFormatter: "prettier",
+	defaultWhenUnconfigured: false,
+	gate: "config-first",
+});
+
+for (const [ext, policy] of FORMATTER_POLICY_BY_EXTENSION) {
+	if (OXFMT_SUPPORTED_EXTENSIONS.has(ext) && !policy.formatterNames.includes("oxfmt")) {
+		policy.formatterNames.push("oxfmt");
+	}
+}
 
 const AUTO_INSTALLABLE_DEFAULT_FORMATTERS = new Map<string, string>([
 	["biome", "biome"],
