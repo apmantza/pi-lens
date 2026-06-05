@@ -950,3 +950,56 @@ export function buildOrUpdateGraph(
 	_buildCache.set(cacheKey, promise);
 	return promise;
 }
+
+/**
+ * Extract symbols and refs from an already-built ReviewGraph for call graph construction.
+ * Reuses parsed data without re-running tree-sitter — symbols come from "symbol" nodes,
+ * refs come from "references" edges. Line numbers are unavailable here (not stored in graph
+ * nodes), so caller attribution falls back to file-level keys in buildCallGraph.
+ */
+export function extractSymbolsAndRefsFromGraph(
+	graph: ReviewGraph,
+): {
+	allSymbols: Map<string, import("../symbol-types.js").Symbol[]>;
+	allRefs: Map<string, import("../symbol-types.js").SymbolRef[]>;
+} {
+	const allSymbols = new Map<string, import("../symbol-types.js").Symbol[]>();
+	const allRefs = new Map<string, import("../symbol-types.js").SymbolRef[]>();
+
+	for (const node of graph.nodes.values()) {
+		if (node.kind === "symbol" && node.filePath && node.symbolName) {
+			const sym: import("../symbol-types.js").Symbol = {
+				id: `${node.filePath}:${node.symbolName}`,
+				name: node.symbolName,
+				kind: "function" as const,
+				filePath: node.filePath,
+				line: 1,
+				column: 1,
+				isExported: false,
+			};
+			const list = allSymbols.get(node.filePath) ?? [];
+			list.push(sym);
+			allSymbols.set(node.filePath, list);
+		}
+	}
+
+	for (const edge of graph.edges) {
+		if (edge.kind === "references" && edge.from.startsWith("file:")) {
+			const callerFile = edge.from.slice("file:".length);
+			const refName = edge.to.startsWith("symbol-name:")
+				? edge.to.slice("symbol-name:".length)
+				: edge.to.split(":").pop() ?? edge.to;
+			const ref: import("../symbol-types.js").SymbolRef = {
+				symbolId: `${callerFile}:${refName}`,
+				filePath: callerFile,
+				line: (edge.metadata as { line?: number } | undefined)?.line ?? 1,
+				column: (edge.metadata as { column?: number } | undefined)?.column ?? 1,
+			};
+			const list = allRefs.get(callerFile) ?? [];
+			list.push(ref);
+			allRefs.set(callerFile, list);
+		}
+	}
+
+	return { allSymbols, allRefs };
+}

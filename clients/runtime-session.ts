@@ -464,6 +464,36 @@ function scheduleStartupScans(
 		);
 	});
 
+	// call-graph — build function-level call graph from review graph data
+	runTask("call-graph", async () => {
+		const { FactStore } = await import("./dispatch/fact-store.js");
+		const { buildOrUpdateGraph, extractSymbolsAndRefsFromGraph } = await import("./review-graph/builder.js");
+		const { buildCallGraph, saveCallGraph, loadCallGraph, staleFiles, readMtimes } = await import("./call-graph.js");
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+		const startMs = Date.now();
+		// Try loading from cache first
+		const cached = loadCallGraph(snapshotRoot);
+		if (cached) {
+			const cachedFiles = [...cached.fileMtimes.keys()];
+			const stale = staleFiles(cached.fileMtimes, cachedFiles);
+			if (stale.length === 0 && cachedFiles.length > 0) {
+				runtime.callGraph = cached.graph;
+				dbg(`session_start call-graph: loaded from cache (${cached.graph.edges.length} edges, ${Date.now() - startMs}ms)`);
+				return;
+			}
+		}
+		// Build from the review graph (reuses already-parsed data, no re-parse)
+		const sessionFacts = new FactStore();
+		const graph = await buildOrUpdateGraph(analysisRoot, [], sessionFacts);
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+		const { allSymbols, allRefs } = extractSymbolsAndRefsFromGraph(graph);
+		const callGraph = buildCallGraph(allSymbols, allRefs);
+		runtime.callGraph = callGraph;
+		const mtimes = readMtimes([...allSymbols.keys()]);
+		saveCallGraph(snapshotRoot, callGraph, mtimes);
+		dbg(`session_start call-graph: built ${callGraph.edges.length} edges, ${callGraph.callers.size} callee entries (${Date.now() - startMs}ms)`);
+	});
+
 	// ast-grep — export scan for duplicate detection
 	runTask("ast-grep-exports", async () => {
 		if (await astGrepClient.ensureAvailable()) {

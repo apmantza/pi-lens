@@ -593,6 +593,31 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		}
 	}
 
+	// Call-graph impact analysis — surface WillBreak/MayBreak callers for modified symbols
+	if (runtime.callGraph && files.length > 0) {
+		try {
+			const { impact, formatImpact } = await import("./call-graph.js");
+			const impactLines: string[] = [];
+			for (const filePath of files.slice(0, 5)) {
+				// Find callee keys for this file in the call graph
+				const fileCallerKeys = [...runtime.callGraph.callers.keys()]
+					.filter((k) => k.startsWith(`${filePath}:`));
+				for (const calleeKey of fileCallerKeys.slice(0, 3)) {
+					const results = impact(runtime.callGraph, calleeKey);
+					if (results.length > 0) {
+						const summary = formatImpact(results, cwd);
+						if (summary) impactLines.push(`  ${calleeKey.split(":").pop()}: ${summary}`);
+					}
+				}
+			}
+			if (impactLines.length > 0) {
+				advisoryParts.push(`📊 Call-graph impact (changed symbols have callers):\n${impactLines.join("\n")}`);
+			}
+		} catch {
+			// Non-fatal — call graph is best-effort
+		}
+	}
+
 	const t5 = Date.now();
 	try {
 		const qualityReport = buildCodeQualityWarningsReport({

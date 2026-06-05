@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import * as path from "node:path";
 import type { ActionableWarningRecord } from "./actionable-warnings.js";
+import type { FunctionCallGraph } from "./call-graph.js";
 import type { CascadeRun } from "./cascade-types.js";
 import type { CodeQualityWarningRecord } from "./code-quality-warnings.js";
 import type { FileComplexity } from "./complexity-client.js";
@@ -66,6 +67,7 @@ export class RuntimeCoordinator {
 	private readonly _fileSeq = new Map<string, number>();
 	private _gitGuardHasBlockers = false;
 	private _gitGuardSummary = "";
+	callGraph: FunctionCallGraph | null = null;
 	private _readGuard: ReadGuard | null = null;
 	private readonly _pendingDeferredFormatFiles = new Map<
 		string,
