@@ -67,6 +67,7 @@ function createMockState(overrides?: Partial<LSPClientState>): LSPClientState {
 		documentPullDiagnosticTimestamps: new Map(),
 		pendingDiagnostics: new Map(),
 		diagnosticEmitter,
+		diagnosticsVersion: 0,
 		documentVersions: new Map(),
 		openDocuments: new Set(),
 		pendingOpens: new Set(),
@@ -276,6 +277,7 @@ describe("handleNotifyChange", () => {
 describe("clientWaitForDiagnostics", () => {
 	it("resolves immediately if diagnostics already cached", async () => {
 		const state = createMockState();
+		state.diagnosticsVersion = 1;
 		state.pushDiagnostics.set(TEST_KEY, [
 			{
 				severity: 1,
@@ -289,6 +291,43 @@ describe("clientWaitForDiagnostics", () => {
 
 		await clientWaitForDiagnostics(state, TEST_FILE, 1000);
 		// Should resolve immediately without waiting
+	});
+
+	it("does not accept cached diagnostics at or below minVersion", async () => {
+		const state = createMockState();
+		state.diagnosticsVersion = 1;
+		state.pushDiagnostics.set(TEST_KEY, [
+			{
+				severity: 1,
+				message: "stale error",
+				range: {
+					start: { line: 0, character: 0 },
+					end: { line: 0, character: 0 },
+				},
+			},
+		]);
+
+		const start = Date.now();
+		await clientWaitForDiagnostics(state, TEST_FILE, 50, { minVersion: 1 });
+		const elapsed = Date.now() - start;
+
+		expect(elapsed).toBeGreaterThanOrEqual(40);
+	});
+
+	it("resolves when diagnostics advance past minVersion", async () => {
+		const state = createMockState();
+		state.diagnosticsVersion = 1;
+
+		const waitPromise = clientWaitForDiagnostics(state, TEST_FILE, 5000, {
+			minVersion: 1,
+		});
+
+		setTimeout(() => {
+			state.diagnosticsVersion = 2;
+			state.diagnosticEmitter.emit("diagnostics", TEST_FILE);
+		}, 50);
+
+		await waitPromise;
 	});
 
 	it("resolves when diagnostics arrive via emitter", async () => {

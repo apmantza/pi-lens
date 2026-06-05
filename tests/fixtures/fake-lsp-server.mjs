@@ -61,6 +61,7 @@ function handle(raw) {
 					referencesProvider: true,
 					documentSymbolProvider: true,
 					workspaceSymbolProvider: true,
+					codeActionProvider: { resolveProvider: true },
 					diagnosticProvider: {
 						interFileDependencies: false,
 						workspaceDiagnostics: false,
@@ -184,6 +185,47 @@ function handle(raw) {
 					},
 				},
 			],
+		});
+		return;
+	}
+
+	// Code actions return lightweight actions; resolve populates the edit.
+	if (data.method === "textDocument/codeAction") {
+		send({
+			jsonrpc: "2.0",
+			id: data.id,
+			result: [
+				{
+					title: "Replace greeting",
+					kind: "quickfix",
+					data: { uri: data.params?.textDocument?.uri ?? "file:///test.ts" },
+				},
+			],
+		});
+		return;
+	}
+
+	if (data.method === "codeAction/resolve") {
+		const uri = data.params?.data?.uri ?? "file:///test.ts";
+		send({
+			jsonrpc: "2.0",
+			id: data.id,
+			result: {
+				...data.params,
+				edit: {
+					changes: {
+						[uri]: [
+							{
+								range: {
+									start: { line: 0, character: 0 },
+									end: { line: 0, character: 5 },
+								},
+								newText: "hello",
+							},
+						],
+					},
+				},
+			},
 		});
 		return;
 	}

@@ -164,7 +164,13 @@ export interface LSPClientInfo {
 		change(filePath: string, content: string): Promise<void>;
 	};
 	getDiagnostics(filePath: string): LSPDiagnostic[];
-	waitForDiagnostics(filePath: string, timeoutMs?: number): Promise<void>;
+	/** Monotonic counter bumped when fresh diagnostics are stored for this client. */
+	readonly diagnosticsVersion: number;
+	waitForDiagnostics(
+		filePath: string,
+		timeoutMs?: number,
+		options?: { minVersion?: number },
+	): Promise<void>;
 	/** Get all tracked diagnostics with timestamps (for cascade checking) */
 	getAllDiagnostics(): Map<string, { diags: LSPDiagnostic[]; ts: number }>;
 	pruneDiagnostics(
@@ -323,6 +329,7 @@ export interface LSPClientState {
 	readonly documentPullDiagnosticTimestamps: Map<string, number>;
 	readonly pendingDiagnostics: Map<string, ReturnType<typeof setTimeout>>;
 	readonly diagnosticEmitter: EventEmitter;
+	diagnosticsVersion: number;
 	readonly documentVersions: Map<string, number>;
 	readonly openDocuments: Set<string>;
 	readonly pendingOpens: Set<string>;
@@ -539,6 +546,7 @@ function setupIncomingHandlers(
 			) {
 				state.pushDiagnostics.set(normalizedPath, newDiags);
 				state.pushDiagnosticTimestamps.set(normalizedPath, Date.now());
+				state.diagnosticsVersion += 1;
 				state.diagnosticEmitter.emit("diagnostics", normalizedPath);
 				return;
 			}
@@ -550,6 +558,7 @@ function setupIncomingHandlers(
 				state.pushDiagnostics.set(normalizedPath, newDiags);
 				state.pushDiagnosticTimestamps.set(normalizedPath, Date.now());
 				state.pendingDiagnostics.delete(normalizedPath);
+				state.diagnosticsVersion += 1;
 				state.diagnosticEmitter.emit("diagnostics", normalizedPath);
 			}, strategy.debounceMs);
 
@@ -645,6 +654,7 @@ async function clientRequestPullDiagnostics(
 		const now = Date.now();
 		state.documentPullDiagnostics.set(normalizedPath, primaryItems);
 		state.documentPullDiagnosticTimestamps.set(normalizedPath, now);
+		state.diagnosticsVersion += 1;
 		let totalCount = primaryItems.length;
 
 		if (report.relatedDocuments) {
@@ -676,12 +686,16 @@ export async function clientWaitForDiagnostics(
 	state: LSPClientState,
 	filePath: string,
 	timeoutMs: number,
+	options: { minVersion?: number } = {},
 ): Promise<void> {
 	const normalizedPath = normalizeMapKey(filePath);
+	const minVersion = options.minVersion;
+	const hasFreshDiagnostics = (): boolean =>
+		minVersion === undefined || state.diagnosticsVersion > minVersion;
 
 	if (state.workspaceDiagnosticsSupport.mode === "pull") {
 		const firstPullCount = await clientRequestPullDiagnostics(state, filePath);
-		if (firstPullCount > 0) return;
+		if (firstPullCount > 0 || hasFreshDiagnostics()) return;
 
 		const strategy = getStrategy(state.serverId);
 		const retryBudgetMs =
@@ -697,16 +711,22 @@ export async function clientWaitForDiagnostics(
 			);
 			latestCount = await clientRequestPullDiagnostics(state, filePath);
 		}
-		if (latestCount > 0) return;
+		if (latestCount > 0 || hasFreshDiagnostics()) return;
 	}
 
-	if (getMergedDiagnosticsForPath(state, normalizedPath).length > 0) return;
+	if (
+		hasFreshDiagnostics() &&
+		getMergedDiagnosticsForPath(state, normalizedPath).length > 0
+	) {
+		return;
+	}
 
 	return new Promise<void>((resolve) => {
 		let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
 		const onDiagnostics = (fp: string) => {
 			if (normalizeMapKey(fp) !== normalizedPath) return;
+			if (!hasFreshDiagnostics()) return;
 			if (debounceTimer) clearTimeout(debounceTimer);
 
 			// Adaptive debounce: use time since last push to compute remaining
@@ -872,6 +892,29 @@ async function navRequest<T>(
 	}) as Promise<T | undefined>;
 }
 
+async function resolveCodeActionBestEffort(
+	state: LSPClientState,
+	action: LSPCodeAction,
+): Promise<LSPCodeAction> {
+	if (!isClientAlive(state) || action.edit) return action;
+	try {
+		const resolved = await withTimeout(
+			safeSendRequest<LSPCodeAction>(
+				state.connection,
+				"codeAction/resolve",
+				action,
+			),
+			NAV_REQUEST_TIMEOUT_MS,
+		);
+		if (!resolved || typeof resolved !== "object") return action;
+		return { ...action, ...resolved };
+	} catch {
+		// codeAction/resolve is optional. Keep the original lightweight action when
+		// the server does not support resolve or fails to populate an edit.
+		return action;
+	}
+}
+
 // --- Client Factory ---
 
 export async function createLSPClient(options: {
@@ -1008,6 +1051,7 @@ export async function createLSPClient(options: {
 		documentPullDiagnosticTimestamps: new Map(),
 		pendingDiagnostics: new Map(),
 		diagnosticEmitter,
+		diagnosticsVersion: 0,
 		documentVersions: new Map(),
 		openDocuments: new Set(),
 		pendingOpens: new Set(),
@@ -1185,11 +1229,16 @@ export async function createLSPClient(options: {
 			return state.operationSupport;
 		},
 
+		get diagnosticsVersion() {
+			return state.diagnosticsVersion;
+		},
+
 		async waitForDiagnostics(
 			filePath,
 			timeoutMs = DIAGNOSTICS_WAIT_TIMEOUT_MS,
+			options,
 		) {
-			return clientWaitForDiagnostics(state, filePath, timeoutMs);
+			return clientWaitForDiagnostics(state, filePath, timeoutMs, options);
 		},
 
 		async definition(filePath, line, character) {
@@ -1278,9 +1327,12 @@ export async function createLSPClient(options: {
 				},
 			);
 			if (!result || !Array.isArray(result)) return [];
-			return result.filter(
+			const actions = result.filter(
 				(item): item is LSPCodeAction =>
 					typeof item === "object" && item !== null && "title" in item,
+			);
+			return Promise.all(
+				actions.map((action) => resolveCodeActionBestEffort(state, action)),
 			);
 		},
 

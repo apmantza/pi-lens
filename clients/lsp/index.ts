@@ -793,6 +793,9 @@ export class LSPService {
 		// already did. This is what makes the post-write touch + dispatch-lsp-
 		// runner touch sequence expensive on slow TS projects.
 		const notifySkipped = this.shouldSkipNotify(filePath, content, clientScope);
+		const diagnosticBaselines = new Map(
+			spawned.map((entry) => [entry.client, entry.client.diagnosticsVersion]),
+		);
 		if (!notifySkipped) {
 			await Promise.all(
 				spawned.map((entry) =>
@@ -820,11 +823,16 @@ export class LSPService {
 				(diagnosticsMode === "full" ? 3000 : 1200);
 			const waitStartedAt = Date.now();
 			await Promise.all(
-				spawned.map((entry) =>
-					entry.client
-						.waitForDiagnostics(filePath, timeoutMs)
-						.catch(() => undefined),
-				),
+				spawned.map((entry) => {
+					const baseline = diagnosticBaselines.get(entry.client);
+					const wait =
+						!notifySkipped && Number.isFinite(baseline)
+							? entry.client.waitForDiagnostics(filePath, timeoutMs, {
+									minVersion: baseline,
+								})
+							: entry.client.waitForDiagnostics(filePath, timeoutMs);
+					return wait.catch(() => undefined);
+				}),
 			);
 			const waitedMs = Date.now() - waitStartedAt;
 			// Within ~20 ms of the configured budget we treat it as a timeout;

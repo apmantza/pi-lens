@@ -64,6 +64,7 @@ describe("LSP Client Integration", () => {
 		expect(support.hover).toBe(true);
 		expect(support.documentSymbol).toBe(true);
 		expect(support.workspaceSymbol).toBe(true);
+		expect(support.codeAction).toBe(true);
 		expect(support.callHierarchy).toBe(false);
 	});
 
@@ -118,6 +119,16 @@ describe("LSP Client Integration", () => {
 	it("returns workspace symbols", async () => {
 		const symbols = await client!.workspaceSymbol("greet");
 		expect(symbols.length).toBeGreaterThanOrEqual(1);
+	});
+
+	it("resolves lightweight code actions before returning them", async () => {
+		const filePath = path.join(process.cwd(), "test.ts");
+		await client!.notify.open(filePath, "greet();", "typescript");
+		const actions = await client!.codeAction(filePath, 0, 0, 0, 5);
+
+		expect(actions).toHaveLength(1);
+		expect(actions[0].title).toBe("Replace greeting");
+		expect(actions[0].edit).toBeDefined();
 	});
 
 	it("finds nested symbol via document symbol children", async () => {
