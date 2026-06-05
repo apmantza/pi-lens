@@ -31,9 +31,13 @@ export function createLensDiagnosticsTool(
 			"mode=delta (default): all warnings for the current agent turn — fixable warnings " +
 			"(actionable-warnings cache) AND code quality/style/complexity issues " +
 			"(code-quality-warnings cache). Same scope as the turn-end advisory, current turn only.\n\n" +
-			"mode=all: blocking errors and warning counts across EVERY file pi-lens has " +
-			"seen this session. Use this before declaring work done — stale blocking errors " +
-			"from earlier turns are visible here even if they dropped out of turn-end context.",
+			"mode=all: blocking errors and warning counts for every file the agent has " +
+			"EDITED this session (files that went through the dispatch pipeline). " +
+			"NOTE: unedited files with pre-existing errors do NOT appear here — this is " +
+			"not a full project scan. Use before declaring work done; stale blocking " +
+			"errors from earlier turns are visible even if they dropped from turn-end context. " +
+			"For project-wide LSP diagnostics (all files including unedited ones), use " +
+			"lsp_navigation operation=workspaceDiagnostics.",
 		promptSnippet: "Use lens_diagnostics mode=all to verify no blocking errors remain",
 		parameters: Type.Object({
 			mode: Type.Optional(

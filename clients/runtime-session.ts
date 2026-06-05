@@ -760,7 +760,7 @@ export async function handleSessionStart(
 	const agentStartupGuidance = [
 		"📌 pi-lens active — automated checks run on your edits and writes. Blocking errors will be shown inline; you must fix all errors including pre-existing ones.\n" +
 			"Key pi-lens tools:\n" +
-			"• lens_diagnostics mode=all — check ALL known diagnostic state (LSP + tree-sitter + ast-grep + linters) across every file seen this session. Use before declaring work done — stale blocking errors from earlier turns are visible here even if they dropped from turn-end context. mode=delta (default) shows all warnings for the current turn only (fixable warnings + code quality issues).\n" +
+			"• lens_diagnostics mode=all — diagnostic state for every file EDITED this session (all runners: LSP + tree-sitter + ast-grep + linters). Stale blocking errors from earlier turns appear here even if they dropped from turn-end context. mode=delta (default) shows all warnings for the current turn only. Note: does NOT cover unedited project files — for those use lsp_navigation operation=workspaceDiagnostics.\n" +
 			"• lsp_diagnostics — actively probe LSP for errors in a specific file, folder, or workspace (LSP only, triggers a fresh server check).\n" +
 			"• lsp_navigation — definitions, references, symbols, rename_file, capabilities.\n" +
 			"• ast_grep_search / ast_grep_replace — structural code patterns. Cross-context queries: use insideKind/hasKind/follows/precedes params (synthesises YAML automatically). Full DSL: use rule= param with raw YAML for all/any/not/nthChild/regex. ast_dump to discover node kinds before writing patterns.",
