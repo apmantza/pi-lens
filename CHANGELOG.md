@@ -4,7 +4,11 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+## [3.8.48] - 2026-06-05
+
 ### Added
+
+- **`ast_dump` tool — expose tree-sitter AST structure for pattern debugging (closes #156)** — new `ast_dump` tool parses a source snippet with `sg --debug-query=ast|cst` and returns an indented AST tree with 1-indexed line:col positions and source snippets per node. Named nodes only by default; `includeAnonymous: true` shows all CST nodes including punctuation. Use this when `ast_grep_search` returns zero matches and the correct node kind or field name is unknown. Invalid language returns a clear error; partial/error trees are returned as-is so syntax errors are visible.
 
 - **`lsp_navigation` `rename_file` operation — LSP-aware source file rename (closes #148)** — new `rename_file` operation sends `workspace/willRenameFiles` to all active LSP servers, collects and deduplicates returned workspace edits (primary type-checker server wins on range conflicts), renames the file on disk, sends `workspace/didRenameFiles`, then re-syncs touched files in LSP. Preview mode (`apply: false`) shows the merged workspace edits without touching disk. Overlap detection across server edit sets throws a descriptive error rather than producing corrupted output.
 

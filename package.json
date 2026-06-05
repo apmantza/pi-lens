@@ -1,6 +1,6 @@
 {
 	"name": "pi-lens",
-	"version": "3.8.47",
+	"version": "3.8.48",
 	"type": "module",
 	"description": "Real-time code feedback for pi — LSP, linters, formatters, type-checking, structural analysis & booboo",
 	"repository": {
@@ -60,9 +60,6 @@
 		"banner.svg",
 		"banner.png"
 	],
-	"peerDependencies": {
-		"@earendil-works/pi-coding-agent": "*"
-	},
 	"dependencies": {
 		"@ast-grep/napi": "^0.43.0",
 		"@earendil-works/pi-tui": "^0.78.0",
@@ -78,6 +75,7 @@
 	"devDependencies": {
 		"@ast-grep/cli": "^0.43.0",
 		"@biomejs/biome": "^2.4.10",
+		"@earendil-works/pi-coding-agent": "^0.78.1",
 		"@types/js-yaml": "^4.0.9",
 		"@types/node": "^25.6.0",
 		"@vitest/coverage-v8": "^4.1.5",
