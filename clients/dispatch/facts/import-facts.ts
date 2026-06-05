@@ -1,5 +1,5 @@
 import * as ts from "typescript";
-import { logLatency } from "../latency-logger.js";
+import { logLatency } from "../../latency-logger.js";
 import type { FactProvider } from "../fact-provider-types.js";
 
 export interface ImportEntry {
@@ -117,12 +117,24 @@ function collectReExports(sourceFile: ts.SourceFile): ReExportEntry[] {
 	return entries;
 }
 
+const EXT_TO_SCRIPT_KIND: Record<string, ts.ScriptKind> = {
+	".ts": ts.ScriptKind.TS,
+	".tsx": ts.ScriptKind.TSX,
+	".mts": ts.ScriptKind.TS,
+	".cts": ts.ScriptKind.TS,
+	".js": ts.ScriptKind.JS,
+	".jsx": ts.ScriptKind.JSX,
+	".mjs": ts.ScriptKind.JS,
+	".cjs": ts.ScriptKind.JS,
+};
+
 export const importFactProvider: FactProvider = {
 	id: "fact.file.imports",
 	provides: ["file.imports", "file.reexports"],
 	requires: ["file.content"],
 	appliesTo(ctx) {
-		return /\.tsx?$/.test(ctx.filePath);
+		const ext = ctx.filePath.slice(ctx.filePath.lastIndexOf(".")).toLowerCase();
+		return ext in EXT_TO_SCRIPT_KIND;
 	},
 	run(ctx, store) {
 		const content = store.getFileFact<string>(ctx.filePath, "file.content");
@@ -132,12 +144,15 @@ export const importFactProvider: FactProvider = {
 			return;
 		}
 
+		const ext = ctx.filePath.slice(ctx.filePath.lastIndexOf(".")).toLowerCase();
+		const scriptKind = EXT_TO_SCRIPT_KIND[ext] ?? ts.ScriptKind.JS;
+
 		const sourceFile = ts.createSourceFile(
 			ctx.filePath,
 			content,
 			ts.ScriptTarget.Latest,
 			true,
-			ts.ScriptKind.TSX,
+			scriptKind,
 		);
 
 		const moduleType = detectModuleType(sourceFile);

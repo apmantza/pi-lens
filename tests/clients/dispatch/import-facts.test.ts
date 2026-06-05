@@ -180,19 +180,35 @@ import { bar } from "./bar.js";
 });
 
 describe("importFactProvider — appliesTo", () => {
-	it("applies to .ts files", () => {
-		expect(importFactProvider.appliesTo({ filePath: "src/foo.ts" } as any)).toBe(true);
+	it.each([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"])(
+		"applies to %s files",
+		(ext) => {
+			expect(importFactProvider.appliesTo({ filePath: `src/foo${ext}` } as any)).toBe(true);
+		},
+	);
+
+	it.each([".py", ".go", ".rs", ".java", ".rb"])(
+		"does not apply to %s files",
+		(ext) => {
+			expect(importFactProvider.appliesTo({ filePath: `src/foo${ext}` } as any)).toBe(false);
+		},
+	);
+
+	it("extracts imports from .js files", () => {
+		const { imports } = runProvider("f.js", `import { foo } from "./foo.js";`);
+		expect(imports).toHaveLength(1);
+		expect(imports[0]).toMatchObject({ source: "./foo.js", moduleType: "esm" });
 	});
 
-	it("applies to .tsx files", () => {
-		expect(importFactProvider.appliesTo({ filePath: "src/App.tsx" } as any)).toBe(true);
+	it("extracts require() from .cjs files", () => {
+		const { imports } = runProvider("f.cjs", `const fs = require("node:fs");`);
+		const req = imports.find((i) => i.source === "node:fs");
+		expect(req).toMatchObject({ source: "node:fs", moduleType: "cjs" });
 	});
 
-	it("does not apply to .js files", () => {
-		expect(importFactProvider.appliesTo({ filePath: "src/foo.js" } as any)).toBe(false);
-	});
-
-	it("does not apply to .py files", () => {
-		expect(importFactProvider.appliesTo({ filePath: "src/foo.py" } as any)).toBe(false);
+	it("extracts re-exports from .mjs files", () => {
+		const { reexports } = runProvider("barrel.mjs", `export * from "./utils.js";`);
+		expect(reexports).toHaveLength(1);
+		expect(reexports[0].source).toBe("./utils.js");
 	});
 });
