@@ -202,7 +202,14 @@ Mixing different capture names in one `[...]` block causes tree-sitter to silent
 **Post-filters** (`post_filter` in YAML, `applyPostFilter` in `clients/tree-sitter-client.ts`): evaluated after query matching to reject false positives. Key ones: `count_params` (long-param-list: excludes optional/defaulted params), `ts_ssrf_sink` (requires URL to look like external input), `check_secret_pattern` (variable name must match secret-sounding pattern).
 
 ## Current version / state
-v3.8.47 is the package version. Master includes unreleased work: read-guard autopatch improvements (trailing empty lines, `out_of_range` downgrade, repeat-failure escalation), actionable/code-quality warning reports with sequence metadata, project/file sequencing plus append-only change logs, project snapshot hydration, reverse-dependency snapshot cache/query helpers, structured NDJSON telemetry for the actionable-warnings pipeline (`actionable-warnings-logger.ts`), async/fast lifecycle consistency (jscpd/Madge/formatters use `safeSpawnAsync`; LSP teardown uses fast/unref paths), expanded tree-sitter language coverage/read expansion/symbol extraction for issue #152, and ast-grep tool hardening for issue #125/#151 (strictness, skip pagination, stale-preview detection, metavariable captures). CI runs `npm ci` + tsc lint + vitest.
+v3.8.48 is the package version. Master includes unreleased work: read-guard autopatch improvements (trailing empty lines, `out_of_range` downgrade, repeat-failure escalation), actionable/code-quality warning reports with sequence metadata, project/file sequencing plus append-only change logs, project snapshot hydration, reverse-dependency snapshot cache/query helpers, structured NDJSON telemetry for the actionable-warnings pipeline (`actionable-warnings-logger.ts`), async/fast lifecycle consistency (jscpd/Madge/formatters use `safeSpawnAsync`; LSP teardown uses fast/unref paths), expanded tree-sitter language coverage/read expansion/symbol extraction for issue #152, and ast-grep tool hardening for issue #125/#151 (strictness, skip pagination, stale-preview detection, metavariable captures). CI runs `npm ci` + tsc lint + vitest.
+
+## Test requirements
+Every commit that adds or changes logic **must** include relevant tests before pushing. No exceptions:
+- New functions → unit tests covering the happy path, edge cases, and error paths.
+- New tool parameters → tool-level routing tests verifying the parameter reaches the right handler.
+- Bug fixes → a regression test that would have caught the bug.
+- Run `npm test` (or `npm run build && npm test` if `.js` artifacts may be stale) and confirm all tests pass before committing.
 
 ## Commit conventions
 - Always include the GitHub issue number in the commit subject line: `(closes #NNN)` or `(refs #NNN)`.

@@ -4,10 +4,13 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	buildCallGraph,
+	formatImpact,
+	impact,
 	loadCallGraph,
 	readMtimes,
 	saveCallGraph,
 	staleFiles,
+	type FunctionCallGraph,
 } from "../../clients/call-graph.js";
 import type { Symbol, SymbolRef } from "../../clients/symbol-types.js";
 
@@ -150,6 +153,135 @@ describe("buildCallGraph", () => {
 		const inDeg = graph.inDegree.get(calleeKey) ?? 0;
 		// Each unambiguous ref contributes weight 1.0
 		expect(inDeg).toBeGreaterThan(0);
+	});
+});
+
+// ── impact() ──────────────────────────────────────────────────────────────────
+
+function makeGraph(
+	edges: Array<{ callerKey: string; calleeKey: string; weight?: number }>,
+): FunctionCallGraph {
+	const callees = new Map<string, Set<string>>();
+	const callers = new Map<string, Set<string>>();
+	const inDegree = new Map<string, number>();
+	const resolvedEdges = edges.map((e) => ({
+		callerFile: e.callerKey.split(":")[0] ?? "",
+		callerSymbol: e.callerKey.split(":")[1],
+		callerKey: e.callerKey,
+		calleeFile: e.calleeKey.split(":")[0] ?? "",
+		calleeSymbol: e.calleeKey.split(":")[1] ?? e.calleeKey,
+		calleeKey: e.calleeKey,
+		weight: e.weight ?? 1.0,
+	}));
+
+	for (const edge of resolvedEdges) {
+		const ec = callees.get(edge.callerKey) ?? new Set();
+		ec.add(edge.calleeKey);
+		callees.set(edge.callerKey, ec);
+		const cr = callers.get(edge.calleeKey) ?? new Set();
+		cr.add(edge.callerKey);
+		callers.set(edge.calleeKey, cr);
+		inDegree.set(edge.calleeKey, (inDegree.get(edge.calleeKey) ?? 0) + edge.weight!);
+	}
+
+	return { callees, callers, inDegree, edges: resolvedEdges, unresolvedRefs: 0, totalRefs: 0, builtAt: "" };
+}
+
+describe("impact()", () => {
+	it("returns empty for a symbol with no callers", () => {
+		const g = makeGraph([{ callerKey: "a:foo", calleeKey: "b:bar" }]);
+		expect(impact(g, "a:foo")).toHaveLength(0);
+	});
+
+	it("classifies depth-1 as WillBreak", () => {
+		const g = makeGraph([{ callerKey: "a:caller", calleeKey: "b:callee" }]);
+		const results = impact(g, "b:callee");
+		expect(results).toHaveLength(1);
+		expect(results[0]).toMatchObject({ symbolKey: "a:caller", depth: 1, severity: "WillBreak" });
+	});
+
+	it("classifies depth-2 as MayBreak", () => {
+		const g = makeGraph([
+			{ callerKey: "a:A", calleeKey: "b:B" },
+			{ callerKey: "c:C", calleeKey: "a:A" },
+		]);
+		const results = impact(g, "b:B");
+		const c = results.find((r) => r.symbolKey === "c:C");
+		expect(c?.severity).toBe("MayBreak");
+		expect(c?.depth).toBe(2);
+	});
+
+	it("classifies depth-3 as Review", () => {
+		const g = makeGraph([
+			{ callerKey: "a:A", calleeKey: "b:B" },
+			{ callerKey: "c:C", calleeKey: "a:A" },
+			{ callerKey: "d:D", calleeKey: "c:C" },
+		]);
+		const results = impact(g, "b:B");
+		const d = results.find((r) => r.symbolKey === "d:D");
+		expect(d?.severity).toBe("Review");
+		expect(d?.depth).toBe(3);
+	});
+
+	it("respects maxDepth — does not traverse beyond it", () => {
+		const g = makeGraph([
+			{ callerKey: "a:A", calleeKey: "b:B" },
+			{ callerKey: "c:C", calleeKey: "a:A" },
+		]);
+		const results = impact(g, "b:B", 1);
+		expect(results.map((r) => r.symbolKey)).not.toContain("c:C");
+	});
+
+	it("does not revisit already-visited nodes (cycle safety)", () => {
+		// A → B → A (cycle)
+		const g = makeGraph([
+			{ callerKey: "a:A", calleeKey: "b:B" },
+			{ callerKey: "b:B", calleeKey: "a:A" },
+		]);
+		const results = impact(g, "b:B");
+		const keys = results.map((r) => r.symbolKey);
+		// Should not loop; each key appears at most once
+		expect(new Set(keys).size).toBe(keys.length);
+	});
+
+	it("filters low-weight edges when minWeight > edge weight", () => {
+		const g = makeGraph([{ callerKey: "a:A", calleeKey: "b:B", weight: 0.05 }]);
+		const results = impact(g, "b:B", 3, 0.1);
+		expect(results).toHaveLength(0);
+	});
+
+	it("results are sorted by depth then symbolKey", () => {
+		const g = makeGraph([
+			{ callerKey: "z:Z", calleeKey: "b:B" },
+			{ callerKey: "a:A", calleeKey: "b:B" },
+		]);
+		const results = impact(g, "b:B");
+		expect(results[0].symbolKey < results[1].symbolKey).toBe(true);
+	});
+});
+
+describe("formatImpact()", () => {
+	it("returns empty string for empty results", () => {
+		expect(formatImpact([], "/proj")).toBe("");
+	});
+
+	it("formats WillBreak callers", () => {
+		const g = makeGraph([{ callerKey: "/proj/a.ts:handleRequest", calleeKey: "/proj/b.ts:changed" }]);
+		const results = impact(g, "/proj/b.ts:changed");
+		const summary = formatImpact(results, "/proj");
+		expect(summary).toContain("WillBreak");
+		expect(summary).toContain("handleRequest");
+	});
+
+	it("mentions Review count when present", () => {
+		const g = makeGraph([
+			{ callerKey: "/proj/a.ts:A", calleeKey: "/proj/b.ts:B" },
+			{ callerKey: "/proj/c.ts:C", calleeKey: "/proj/a.ts:A" },
+			{ callerKey: "/proj/d.ts:D", calleeKey: "/proj/c.ts:C" },
+		]);
+		const results = impact(g, "/proj/b.ts:B");
+		const summary = formatImpact(results, "/proj");
+		expect(summary).toContain("Review");
 	});
 });
 

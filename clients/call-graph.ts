@@ -1,10 +1,10 @@
 /**
- * Cross-file call graph — Sections 1 & 2 of issue #154.
+ * Cross-file call graph — Sections 1, 2 & 3 of issue #154.
  *
  * Builds a bidirectional function-level call graph by resolving symbol
- * references across files. Uses the Symbol/SymbolRef data produced by
- * TreeSitterSymbolExtractor and persists the result with per-file mtime
- * tracking so incremental sessions only recompute stale entries.
+ * references across files. Provides BFS impact analysis with severity tiers.
+ * Uses the Symbol/SymbolRef data produced by TreeSitterSymbolExtractor and
+ * persists the result with per-file mtime tracking for incremental sessions.
  */
 
 import * as fs from "node:fs";
@@ -59,6 +59,118 @@ interface PersistedCallGraph {
 }
 
 const CACHE_VERSION = 3;
+
+// ── Section 3: BFS impact analysis ───────────────────────────────────────────
+
+export type ImpactSeverity = "WillBreak" | "MayBreak" | "Review";
+
+export interface ImpactResult {
+	/** The affected symbol key. */
+	symbolKey: SymbolKey;
+	/** BFS depth from the changed symbol (1 = direct caller). */
+	depth: number;
+	/** Severity tier based on depth. */
+	severity: ImpactSeverity;
+}
+
+function severityForDepth(depth: number): ImpactSeverity {
+	if (depth === 1) return "WillBreak";
+	if (depth === 2) return "MayBreak";
+	return "Review";
+}
+
+/**
+ * BFS upstream through the callers map from `startKey`.
+ *
+ * Returns all symbols that would be affected if `startKey` changes,
+ * classified by severity:
+ *   depth 1 → WillBreak (direct callers)
+ *   depth 2 → MayBreak  (callers of callers)
+ *   depth 3+ → Review   (transitive)
+ *
+ * @param maxDepth  Limit traversal depth (default 3 — Review tier cutoff).
+ * @param minWeight Only follow edges with weight ≥ this threshold (default 0.1).
+ *                  Filters out highly ambiguous name resolutions.
+ */
+export function impact(
+	graph: FunctionCallGraph,
+	startKey: SymbolKey,
+	maxDepth = 3,
+	minWeight = 0.1,
+): ImpactResult[] {
+	const results: ImpactResult[] = [];
+	const visited = new Set<SymbolKey>([startKey]);
+	const queue: Array<{ key: SymbolKey; depth: number }> = [{ key: startKey, depth: 0 }];
+
+	// Build a weight lookup from edges for filtering
+	const edgeWeightMap = new Map<string, number>();
+	for (const edge of graph.edges) {
+		const edgeKey = `${edge.calleeKey}→${edge.callerKey}`;
+		const existing = edgeWeightMap.get(edgeKey) ?? 0;
+		edgeWeightMap.set(edgeKey, Math.max(existing, edge.weight));
+	}
+
+	while (queue.length > 0) {
+		const item = queue.shift()!;
+		if (item.depth >= maxDepth) continue;
+
+		const directCallers = graph.callers.get(item.key);
+		if (!directCallers) continue;
+
+		for (const callerKey of directCallers) {
+			if (visited.has(callerKey)) continue;
+
+			// Check edge weight — skip highly ambiguous resolutions
+			const edgeKey = `${item.key}→${callerKey}`;
+			const weight = edgeWeightMap.get(edgeKey) ?? 1.0;
+			if (weight < minWeight) continue;
+
+			visited.add(callerKey);
+			const depth = item.depth + 1;
+			results.push({ symbolKey: callerKey, depth, severity: severityForDepth(depth) });
+			queue.push({ key: callerKey, depth });
+		}
+	}
+
+	// Sort by depth then symbolKey for stable output
+	return results.sort((a, b) => a.depth - b.depth || a.symbolKey.localeCompare(b.symbolKey));
+}
+
+/**
+ * Format an impact result set as a compact human-readable summary.
+ * Example: "handleToolResult (WillBreak) → handleAgentEnd (MayBreak) → 3 Review callers"
+ */
+export function formatImpact(results: ImpactResult[], projectRoot: string): string {
+	if (results.length === 0) return "";
+
+	const willBreak = results.filter((r) => r.severity === "WillBreak");
+	const mayBreak = results.filter((r) => r.severity === "MayBreak");
+	const review = results.filter((r) => r.severity === "Review");
+
+	const parts: string[] = [];
+
+	const label = (r: ImpactResult) => {
+		const name = r.symbolKey.includes(":")
+			? r.symbolKey.split(":").pop() ?? r.symbolKey
+			: r.symbolKey;
+		const file = r.symbolKey.includes(":")
+			? r.symbolKey.split(":").slice(0, -1).join(":").replace(projectRoot, "").replace(/^[/\\]/, "")
+			: "";
+		return file ? `${name} (${file})` : name;
+	};
+
+	if (willBreak.length > 0) {
+		parts.push(willBreak.slice(0, 3).map((r) => `${label(r)} ⚠ WillBreak`).join(", "));
+	}
+	if (mayBreak.length > 0) {
+		parts.push(mayBreak.slice(0, 2).map((r) => `${label(r)} MayBreak`).join(", "));
+	}
+	if (review.length > 0) {
+		parts.push(`${review.length} Review caller${review.length === 1 ? "" : "s"}`);
+	}
+
+	return parts.join(" → ");
+}
 
 // ── Stdlib / builtin noise filter ─────────────────────────────────────────────
 
