@@ -65,6 +65,13 @@ export interface SgResult {
 	error?: string;
 }
 
+export interface SgRawResult {
+	stdout: string;
+	stderr: string;
+	status: number | null;
+	error?: string;
+}
+
 /**
  * Format metavariable captures for display below a match line.
  * Single captures: $VAR=x  $NAME=foo
@@ -208,6 +215,21 @@ export class SgRunner {
 		return {
 			cmd: this.sgPath || "ast-grep",
 			argsPrefix: this.sgArgsPrefix,
+		};
+	}
+
+	async execRaw(args: string[], timeout = 30000): Promise<SgRawResult> {
+		const command = this.getSgCommand();
+		const result = await safeSpawnAsync(
+			command.cmd,
+			[...command.argsPrefix, ...args],
+			{ timeout },
+		);
+		return {
+			stdout: result.stdout,
+			stderr: result.stderr,
+			status: result.status,
+			error: result.error?.message,
 		};
 	}
 

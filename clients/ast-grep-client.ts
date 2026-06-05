@@ -9,6 +9,7 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { AstGrepParser } from "./ast-grep-parser.js";
 import { AstGrepRuleManager } from "./ast-grep-rule-manager.js";
@@ -22,6 +23,61 @@ import { resolvePackagePath } from "./package-root.js";
 import { SgRunner } from "./sg-runner.js";
 
 // --- Client ---
+
+function extractDebugAst(raw: string): string | undefined {
+	const lines = raw.split(/\r?\n/);
+	const start = lines.findIndex((line) => /^Debug (?:A|C)ST:/.test(line.trim()));
+	if (start < 0) return undefined;
+	const out: string[] = [];
+	for (const line of lines.slice(start + 1)) {
+		if (!line.trim()) break;
+		out.push(line);
+	}
+	return out.length > 0 ? out.join("\n") : undefined;
+}
+
+function lineStartOffsets(source: string): number[] {
+	const offsets = [0];
+	for (let index = 0; index < source.length; index++) {
+		if (source.charCodeAt(index) === 10) offsets.push(index + 1);
+	}
+	return offsets;
+}
+
+function snippetForRange(
+	source: string,
+	offsets: number[],
+	startLine0: number,
+	startCol0: number,
+	endLine0: number,
+	endCol0: number,
+): string {
+	const start = (offsets[startLine0] ?? 0) + startCol0;
+	const end = (offsets[endLine0] ?? source.length) + endCol0;
+	const text = source.slice(start, end).replace(/\s+/g, " ").trim();
+	return text.length > 80 ? `${text.slice(0, 77)}...` : text;
+}
+
+function formatDebugAst(tree: string, source: string): string {
+	const offsets = lineStartOffsets(source);
+	return tree
+		.split(/\r?\n/)
+		.map((line) => {
+			const match = /^(\s*)(.*?) \((\d+),(\d+)\)-\((\d+),(\d+)\)$/.exec(
+				line,
+			);
+			if (!match) return line;
+			const [, indent = "", label = "", startLine, startCol, endLine, endCol] =
+				match;
+			const sl = Number(startLine);
+			const sc = Number(startCol);
+			const el = Number(endLine);
+			const ec = Number(endCol);
+			const snippet = snippetForRange(source, offsets, sl, sc, el, ec);
+			return `${indent}${label} [${sl + 1},${sc + 1}] - [${el + 1},${ec + 1}] ${JSON.stringify(snippet)}`;
+		})
+		.join("\n");
+}
 
 export class AstGrepClient {
 	private available: boolean | null = null;
@@ -62,6 +118,46 @@ export class AstGrepClient {
 			this.log("ast-grep available");
 		}
 		return this.available;
+	}
+
+	/**
+	 * Dump the parsed tree-sitter AST for a snippet using ast-grep CLI.
+	 */
+	async dumpAst(
+		source: string,
+		lang: string,
+		options: { includeAnonymous?: boolean } = {},
+	): Promise<{ output?: string; error?: string }> {
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ast-dump-"));
+		const tmpFile = path.join(
+			tmpDir,
+			`snippet.${lang.replace(/[^a-z0-9_-]/gi, "") || "txt"}`,
+		);
+		try {
+			fs.writeFileSync(tmpFile, source, "utf-8");
+			const mode = options.includeAnonymous ? "cst" : "ast";
+			const result = await this.runner.execRaw([
+				"run",
+				"--lang",
+				lang,
+				"-p",
+				source,
+				`--debug-query=${mode}`,
+				tmpFile,
+			]);
+			const raw = result.stderr || result.stdout;
+			const tree = extractDebugAst(raw);
+			if (tree) return { output: formatDebugAst(tree, source) };
+			return {
+				error:
+					result.error ||
+					result.stderr.trim() ||
+					result.stdout.trim() ||
+					`ast-grep did not return a debug AST for language ${lang}`,
+			};
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
 	}
 
 	/**
