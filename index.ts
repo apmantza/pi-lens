@@ -84,6 +84,7 @@ import { TreeSitterClient } from "./clients/tree-sitter-client.js";
 import { handleBooboo } from "./commands/booboo.js";
 import { initI18n, t } from "./i18n.js";
 import { createAstDumpTool } from "./tools/ast-dump.js";
+import { createLensDiagnosticsTool } from "./tools/lens-diagnostics.js";
 import { createAstGrepReplaceTool } from "./tools/ast-grep-replace.js";
 import { createAstGrepSearchTool } from "./tools/ast-grep-search.js";
 import { createLspDiagnosticsTool } from "./tools/lsp-diagnostics.js";
@@ -1005,6 +1006,7 @@ export default function (pi: ExtensionAPI) {
 		createAstGrepSearchTool(astGrepClient),
 		createAstGrepReplaceTool(astGrepClient),
 		createAstDumpTool(astGrepClient),
+		createLensDiagnosticsTool(cacheManager, () => runtime.projectRoot),
 		createLspDiagnosticsTool(),
 		createLspNavigationTool((name) => getLensFlag(name)),
 	]) {

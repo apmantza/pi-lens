@@ -153,6 +153,29 @@ export function recordDiagnostics(
 	requestRender();
 }
 
+/** Summary of current diagnostic counts across all files in the widget. */
+export interface FileDiagnosticSummary {
+	filePath: string;
+	blocking: number;
+	errors: number;
+	warnings: number;
+	hasFinalSnapshot: boolean;
+}
+
+/**
+ * Return current diagnostic counts for every file pi-lens has seen this session.
+ * Used by lens_diagnostics tool (mode: "all") to expose widget state to agents.
+ */
+export function getFileDiagnosticSummaries(): FileDiagnosticSummary[] {
+	return [...files.values()].map((rec) => ({
+		filePath: rec.filePath,
+		blocking: rec.diagnosticCounts.blocking,
+		errors: rec.diagnosticCounts.errors,
+		warnings: rec.diagnosticCounts.warnings,
+		hasFinalSnapshot: rec.hasFinalDiagnosticsSnapshot,
+	}));
+}
+
 /** @internal Test-only helpers. Do not use in production code. */
 export const __testing = {
 	getWidgetStateSnapshot(): {

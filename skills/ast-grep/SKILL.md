@@ -67,6 +67,30 @@ ast_grep_replace pattern="var $X" rewrite="let $X" lang="javascript" insideKind=
 
 These synthesize a YAML rule automatically. Use `rule:` for the full DSL when you need `all`/`any`/`not`, `nthChild`, `regex`, or other advanced constraints.
 
+### Raw YAML rule (`rule:` parameter)
+
+Pass a complete ast-grep YAML rule to unlock the full DSL:
+
+```
+ast_grep_search rule="id: my-rule
+language: TypeScript
+rule:
+  pattern: console.log($MSG)
+  inside:
+    kind: function_declaration
+    stopBy: end" lang="typescript"
+```
+
+### Debugging unknown node kinds — `ast_dump`
+
+When a pattern returns zero matches and you don't know the correct node kind or field name, use `ast_dump` to inspect the AST:
+
+```
+ast_dump source="function foo() { return 1; }" lang="typescript"
+```
+
+Returns the full indented AST with node kinds and positions. Then use the correct kind in your pattern or `insideKind`.
+
 ### Composite (has/inside) in raw YAML
 
 ```yaml
@@ -112,6 +136,19 @@ kind: arrow_function
       to those paths. Or use a YAML `inside:`/`has:` rule (see Composite section above).
 ```
 
-**No matches?** Simplify and retry once. Still nothing? Fall back to `grep` or `lsp_navigation`.
+**No matches?**
+1. Try `strictness: relaxed` — ignores unnamed punctuation (trailing commas, semicolons) that `smart` mode requires
+2. Use `ast_dump` on a sample snippet to verify the correct node kind
+3. Simplify the pattern and retry once
+4. Fall back to `grep` or `lsp_navigation`
+
+**Metavar captures** appear automatically below each match line:
+```
+src/foo.ts:1:1: const x = foo(a, b)
+  $VAR=x  $$$ARGS=a,b
+```
+Named captures (`$X`, `$$$NAME`) are shown; unnamed wildcards (`$$$`) are not.
+
+**Pagination** — use `skip: N` when results are truncated (next-page hint appears in output).
 
 Debug: https://ast-grep.github.io/playground.html
