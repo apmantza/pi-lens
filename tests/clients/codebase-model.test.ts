@@ -6,7 +6,6 @@ import {
 	buildCodebaseModel,
 	loadCodebaseModel,
 	saveCodebaseModel,
-	type ModelEntry,
 } from "../../clients/codebase-model.js";
 import type { FunctionCallGraph } from "../../clients/call-graph.js";
 
