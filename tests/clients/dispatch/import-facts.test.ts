@@ -1,0 +1,198 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+	importFactProvider,
+	type ImportEntry,
+	type ReExportEntry,
+} from "../../../clients/dispatch/facts/import-facts.js";
+
+// Minimal FactStore stub for testing the provider in isolation
+function makeStore(content: string) {
+	const facts = new Map<string, unknown>();
+	facts.set("file.content", content);
+	return {
+		getFileFact: <T>(_file: string, key: string) => facts.get(key) as T | undefined,
+		setFileFact: (_file: string, key: string, value: unknown) => {
+			facts.set(key, value);
+		},
+		getAll: (key: string) => facts.get(key),
+	};
+}
+
+function runProvider(filePath: string, content: string) {
+	const store = makeStore(content);
+	importFactProvider.run({ filePath } as any, store as any);
+	return {
+		imports: store.getAll("file.imports") as ImportEntry[] ?? [],
+		reexports: store.getAll("file.reexports") as ReExportEntry[] ?? [],
+	};
+}
+
+let tmpDir: string;
+beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-import-facts-")); });
+afterEach(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
+
+describe("importFactProvider — static imports", () => {
+	it("extracts named imports with moduleType esm", () => {
+		const { imports } = runProvider("f.ts", `import { readFile, writeFile } from "node:fs";`);
+		expect(imports).toHaveLength(1);
+		expect(imports[0]).toMatchObject({
+			source: "node:fs",
+			names: ["readFile", "writeFile"],
+			moduleType: "esm",
+		});
+	});
+
+	it("extracts default import", () => {
+		const { imports } = runProvider("f.ts", `import React from "react";`);
+		expect(imports[0]).toMatchObject({ source: "react", defaultName: "React", moduleType: "esm" });
+	});
+
+	it("extracts namespace import", () => {
+		const { imports } = runProvider("f.ts", `import * as fs from "node:fs";`);
+		expect(imports[0]).toMatchObject({ source: "node:fs", namespace: "fs", moduleType: "esm" });
+	});
+
+	it("extracts side-effect-only import (no clause)", () => {
+		const { imports } = runProvider("f.ts", `import "reflect-metadata";`);
+		expect(imports[0]).toMatchObject({ source: "reflect-metadata", names: [], moduleType: "esm" });
+	});
+});
+
+describe("importFactProvider — dynamic imports", () => {
+	it("captures dynamic import() calls as isDynamic entries", () => {
+		// File also has a static import → ESM detected
+		const { imports } = runProvider("f.ts", `
+import { something } from "./base.js";
+const mod = await import("./heavy-module.js");
+`);
+		const dynamic = imports.find((i) => i.isDynamic);
+		expect(dynamic).toBeDefined();
+		expect(dynamic).toMatchObject({
+			source: "./heavy-module.js",
+			isDynamic: true,
+			moduleType: "esm",
+		});
+	});
+
+	it("dynamic import() alone yields unknown moduleType (ambiguous)", () => {
+		const { imports } = runProvider("f.ts", `
+const mod = await import("./heavy-module.js");
+`);
+		const dynamic = imports.find((i) => i.isDynamic);
+		expect(dynamic).toBeDefined();
+		expect(dynamic?.moduleType).toBe("unknown");
+	});
+
+	it("captures require() calls as cjs entries", () => {
+		const { imports } = runProvider("f.ts", `
+const fs = require("node:fs");
+const path = require("node:path");
+`);
+		const cjsImports = imports.filter((i) => i.moduleType === "cjs");
+		expect(cjsImports).toHaveLength(2);
+		expect(cjsImports.map((i) => i.source)).toContain("node:fs");
+		expect(cjsImports.map((i) => i.source)).toContain("node:path");
+	});
+
+	it("captures nested dynamic import inside a function body", () => {
+		const { imports } = runProvider("f.ts", `
+async function loadPlugin(name: string) {
+  const plugin = await import(\`./plugins/\${name}\`);
+  return plugin;
+}
+const mod = await import("./static-path.js");
+`);
+		const dynamic = imports.filter((i) => i.isDynamic);
+		// The string-literal one is captured; the template literal is not (non-string arg)
+		expect(dynamic).toHaveLength(1);
+		expect(dynamic[0].source).toBe("./static-path.js");
+	});
+});
+
+describe("importFactProvider — moduleType detection", () => {
+	it("detects pure ESM files", () => {
+		const { imports } = runProvider("f.ts", `
+import { foo } from "./foo.js";
+export const bar = 1;
+`);
+		expect(imports.every((i) => i.moduleType === "esm")).toBe(true);
+	});
+
+	it("detects pure CJS files", () => {
+		const { imports } = runProvider("f.ts", `
+const fs = require("node:fs");
+module.exports = { fs };
+`);
+		expect(imports.every((i) => i.moduleType === "cjs")).toBe(true);
+	});
+
+	it("treats mixed ESM+CJS files as esm (static imports present)", () => {
+		const { imports } = runProvider("f.ts", `
+import something from "./esm.js";
+const legacy = require("./cjs.js");
+`);
+		const esmEntry = imports.find((i) => i.source === "./esm.js");
+		expect(esmEntry?.moduleType).toBe("esm");
+	});
+});
+
+describe("importFactProvider — re-export edges", () => {
+	it("captures named re-exports", () => {
+		const { reexports } = runProvider("f.ts", `
+export { readFile, writeFile } from "node:fs";
+`);
+		expect(reexports).toHaveLength(1);
+		expect(reexports[0]).toMatchObject({
+			source: "node:fs",
+			names: ["readFile", "writeFile"],
+		});
+	});
+
+	it("captures star re-exports as empty names array", () => {
+		const { reexports } = runProvider("barrel.ts", `
+export * from "./utils.js";
+export * from "./helpers.js";
+`);
+		expect(reexports).toHaveLength(2);
+		expect(reexports.every((r) => r.names.length === 0)).toBe(true);
+		expect(reexports.map((r) => r.source)).toContain("./utils.js");
+	});
+
+	it("does not include re-exports in imports", () => {
+		const { imports, reexports } = runProvider("barrel.ts", `
+export { foo } from "./foo.js";
+import { bar } from "./bar.js";
+`);
+		expect(reexports).toHaveLength(1);
+		expect(reexports[0].source).toBe("./foo.js");
+		// The import is in imports, not re-exports
+		expect(imports.some((i) => i.source === "./bar.js")).toBe(true);
+		expect(imports.some((i) => i.source === "./foo.js")).toBe(false);
+	});
+
+	it("empty reexports for files with no re-exports", () => {
+		const { reexports } = runProvider("f.ts", `import { foo } from "./foo.js";`);
+		expect(reexports).toHaveLength(0);
+	});
+});
+
+describe("importFactProvider — appliesTo", () => {
+	it("applies to .ts files", () => {
+		expect(importFactProvider.appliesTo({ filePath: "src/foo.ts" } as any)).toBe(true);
+	});
+
+	it("applies to .tsx files", () => {
+		expect(importFactProvider.appliesTo({ filePath: "src/App.tsx" } as any)).toBe(true);
+	});
+
+	it("does not apply to .js files", () => {
+		expect(importFactProvider.appliesTo({ filePath: "src/foo.js" } as any)).toBe(false);
+	});
+
+	it("does not apply to .py files", () => {
+		expect(importFactProvider.appliesTo({ filePath: "src/foo.py" } as any)).toBe(false);
+	});
+});
