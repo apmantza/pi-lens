@@ -224,6 +224,165 @@ describe("lsp_navigation tool", () => {
 		}
 	});
 
+	it("resolves omitted character from symbol word-boundary match", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-nav-"));
+		const filePath = path.join(tmpDir, "symbol-column.ts");
+		fs.writeFileSync(filePath, "const x = myFunc();\n");
+
+		try {
+			const result = await tool.execute(
+				"symbol-column",
+				{ operation: "references", filePath, line: 1, symbol: "myFunc" },
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+
+			expect(result.isError).toBeUndefined();
+			expect(
+				(mocked.service as { references: ReturnType<typeof vi.fn> }).references,
+			).toHaveBeenCalledWith(filePath, 0, 10);
+			expect(result.details?.columnResolution).toMatchObject({
+				character: 11,
+				strategy: "word-boundary",
+			});
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("supports symbol occurrence selectors", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-nav-"));
+		const filePath = path.join(tmpDir, "symbol-occurrence.ts");
+		fs.writeFileSync(filePath, "const x = myFunc(myFunc);\n");
+
+		try {
+			await tool.execute(
+				"symbol-occurrence",
+				{ operation: "references", filePath, line: 1, symbol: "myFunc#2" },
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+
+			expect(
+				(mocked.service as { references: ReturnType<typeof vi.fn> }).references,
+			).toHaveBeenCalledWith(filePath, 0, 17);
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("uses case-insensitive symbol-column fallback", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-nav-"));
+		const filePath = path.join(tmpDir, "symbol-case.ts");
+		fs.writeFileSync(filePath, "const x = MyFunc();\n");
+
+		try {
+			const result = await tool.execute(
+				"symbol-case",
+				{ operation: "references", filePath, line: 1, symbol: "myfunc" },
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+
+			expect(
+				(mocked.service as { references: ReturnType<typeof vi.fn> }).references,
+			).toHaveBeenCalledWith(filePath, 0, 10);
+			expect(result.details?.columnResolution).toMatchObject({
+				strategy: "case-insensitive",
+			});
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("does not match symbol substrings inside longer identifiers", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-nav-"));
+		const filePath = path.join(tmpDir, "symbol-boundary.ts");
+		const source = "const x = myFuncHelper + myFunc;\n";
+		fs.writeFileSync(filePath, source);
+
+		try {
+			await tool.execute(
+				"symbol-boundary",
+				{ operation: "references", filePath, line: 1, symbol: "myFunc" },
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+
+			const expectedCharacter0 = source.indexOf("myFunc;");
+			expect(
+				(mocked.service as { references: ReturnType<typeof vi.fn> }).references,
+			).toHaveBeenCalledWith(filePath, 0, expectedCharacter0);
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("falls back to first non-whitespace when symbol is not found", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-nav-"));
+		const filePath = path.join(tmpDir, "symbol-missing.ts");
+		fs.writeFileSync(filePath, "   const x = other();\n");
+
+		try {
+			const result = await tool.execute(
+				"symbol-missing",
+				{ operation: "references", filePath, line: 1, symbol: "myFunc" },
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+
+			expect(
+				(mocked.service as { references: ReturnType<typeof vi.fn> }).references,
+			).toHaveBeenCalledWith(filePath, 0, 3);
+			expect(result.details?.columnResolution).toMatchObject({
+				character: 4,
+				strategy: "fallback",
+			});
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps explicit character precedence over symbol-column resolution", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-nav-"));
+		const filePath = path.join(tmpDir, "symbol-explicit.ts");
+		fs.writeFileSync(filePath, "const x = myFunc();\n");
+
+		try {
+			const result = await tool.execute(
+				"symbol-explicit",
+				{
+					operation: "references",
+					filePath,
+					line: 1,
+					character: 3,
+					symbol: "myFunc",
+				},
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+
+			expect(
+				(mocked.service as { references: ReturnType<typeof vi.fn> }).references,
+			).toHaveBeenCalledWith(filePath, 0, 2);
+			expect(result.details?.columnResolution).toBeUndefined();
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
 	it("adds low-count references hint for usage-side calls", async () => {
 		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
 		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-nav-"));

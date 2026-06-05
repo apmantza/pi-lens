@@ -81,6 +81,162 @@ function emptyReasonForOperation(operation: LspNavigationOperation): string {
 	return "no-results";
 }
 
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+type SymbolColumnResolution = {
+	character: number;
+	requestedSymbol?: string;
+	baseSymbol?: string;
+	requestedOccurrence?: number;
+	usedOccurrence?: number;
+	strategy: "explicit" | "word-boundary" | "case-insensitive" | "fallback";
+	debug?: string;
+};
+
+function parseSymbolSelector(symbol: string): {
+	baseSymbol: string;
+	occurrence: number;
+	debug?: string;
+} {
+	const trimmed = symbol.trim();
+	const match = /^(.*?)(?:#(-?\d+))?$/.exec(trimmed);
+	const baseSymbol = (match?.[1] ?? trimmed).trim();
+	const rawOccurrence = match?.[2];
+	if (!rawOccurrence) return { baseSymbol, occurrence: 1 };
+	const occurrence = Number.parseInt(rawOccurrence, 10);
+	if (!Number.isFinite(occurrence) || occurrence < 1) {
+		return {
+			baseSymbol,
+			occurrence: 1,
+			debug: `invalid occurrence selector #${rawOccurrence}; using #1`,
+		};
+	}
+	return { baseSymbol, occurrence };
+}
+
+function findNthMatch(
+	lineText: string,
+	regex: RegExp,
+	occurrence: number,
+): RegExpExecArray | null {
+	let seen = 0;
+	regex.lastIndex = 0;
+	let match: RegExpExecArray | null;
+	while ((match = regex.exec(lineText)) !== null) {
+		seen += 1;
+		if (seen === occurrence) return match;
+		if (match[0].length === 0) regex.lastIndex += 1;
+	}
+	return null;
+}
+
+function firstNonWhitespaceCharacter(lineText: string): number {
+	const match = /\S/.exec(lineText);
+	return (match?.index ?? 0) + 1;
+}
+
+function resolveSymbolColumn(
+	content: string,
+	line1: number,
+	character: number | undefined,
+	symbol: string | undefined,
+): SymbolColumnResolution {
+	if (typeof character === "number" && character > 0) {
+		return { character, strategy: "explicit" };
+	}
+
+	const lineText = content.split(/\r?\n/)[line1 - 1] ?? "";
+	if (!symbol || symbol.trim().length === 0) {
+		return {
+			character: 1,
+			strategy: "fallback",
+			debug: "character omitted and no symbol supplied; using column 1",
+		};
+	}
+
+	const { baseSymbol, occurrence, debug } = parseSymbolSelector(symbol);
+	if (!baseSymbol) {
+		return {
+			character: firstNonWhitespaceCharacter(lineText),
+			requestedSymbol: symbol,
+			baseSymbol,
+			requestedOccurrence: occurrence,
+			usedOccurrence: 1,
+			strategy: "fallback",
+			debug:
+				debug ?? "empty symbol selector; using first non-whitespace column",
+		};
+	}
+
+	const pattern = `\\b${escapeRegExp(baseSymbol)}\\b`;
+	const exactRegex = new RegExp(pattern, "g");
+	const exact = findNthMatch(lineText, exactRegex, occurrence);
+	if (exact) {
+		return {
+			character: exact.index + 1,
+			requestedSymbol: symbol,
+			baseSymbol,
+			requestedOccurrence: occurrence,
+			usedOccurrence: occurrence,
+			strategy: "word-boundary",
+			debug,
+		};
+	}
+
+	const firstExact = findNthMatch(lineText, exactRegex, 1);
+	if (firstExact && occurrence !== 1) {
+		return {
+			character: firstExact.index + 1,
+			requestedSymbol: symbol,
+			baseSymbol,
+			requestedOccurrence: occurrence,
+			usedOccurrence: 1,
+			strategy: "word-boundary",
+			debug: `${debug ? `${debug}; ` : ""}occurrence #${occurrence} not found; using #1`,
+		};
+	}
+
+	const insensitiveRegex = new RegExp(pattern, "gi");
+	const insensitive = findNthMatch(lineText, insensitiveRegex, occurrence);
+	if (insensitive) {
+		return {
+			character: insensitive.index + 1,
+			requestedSymbol: symbol,
+			baseSymbol,
+			requestedOccurrence: occurrence,
+			usedOccurrence: occurrence,
+			strategy: "case-insensitive",
+			debug:
+				debug ?? "exact-case symbol not found; used case-insensitive match",
+		};
+	}
+
+	const firstInsensitive = findNthMatch(lineText, insensitiveRegex, 1);
+	if (firstInsensitive && occurrence !== 1) {
+		return {
+			character: firstInsensitive.index + 1,
+			requestedSymbol: symbol,
+			baseSymbol,
+			requestedOccurrence: occurrence,
+			usedOccurrence: 1,
+			strategy: "case-insensitive",
+			debug: `${debug ? `${debug}; ` : ""}occurrence #${occurrence} not found case-insensitively; using #1`,
+		};
+	}
+
+	return {
+		character: firstNonWhitespaceCharacter(lineText),
+		requestedSymbol: symbol,
+		baseSymbol,
+		requestedOccurrence: occurrence,
+		usedOccurrence: 1,
+		strategy: "fallback",
+		debug: `${debug ? `${debug}; ` : ""}symbol not found on line; using first non-whitespace column`,
+	};
+}
+
 function tokenAtPosition(
 	content: string,
 	line1: number,
@@ -338,7 +494,7 @@ export function createLspNavigationTool(
 			"- incomingCalls: Find all functions/methods that CALL this function\n" +
 			"- outgoingCalls: Find all functions/methods CALLED by this function\n" +
 			"- workspaceDiagnostics: List all diagnostics tracked by active LSP clients\n\n" +
-			"Line and character are 1-based (as shown in editors).",
+			"Line and character are 1-based (as shown in editors). For position-based operations, prefer passing symbol when you know the line but not the exact character; character can be omitted or -1 and pi-lens will resolve the symbol column. Use symbol#N for repeated symbols on the same line (1-based occurrence).",
 		promptSnippet:
 			"Use lsp_navigation to find definitions, references, and hover info via LSP",
 		parameters: Type.Object({
@@ -362,7 +518,13 @@ export function createLspNavigationTool(
 			character: Type.Optional(
 				Type.Number({
 					description:
-						"Character offset (1-based). Required for definition/references/hover/implementation",
+						"Character offset (1-based). Optional when symbol is provided; use -1 to force symbol-column resolution.",
+				}),
+			),
+			symbol: Type.Optional(
+				Type.String({
+					description:
+						"Symbol name on the target line for automatic character resolution. Use symbol#N to select the Nth occurrence on the line.",
 				}),
 			),
 			endLine: Type.Optional(
@@ -461,6 +623,7 @@ export function createLspNavigationTool(
 			const startedAt = Date.now();
 			let supported: boolean | null = null;
 			let diagnosticsMode: "pull" | "push-only" | "unknown" = "unknown";
+			let columnResolution: SymbolColumnResolution | undefined;
 
 			const finalize = (
 				payload: {
@@ -491,6 +654,7 @@ export function createLspNavigationTool(
 						resultCount: meta.resultCount,
 						supported,
 						diagnosticsMode,
+						columnResolution,
 					},
 				});
 
@@ -528,6 +692,7 @@ export function createLspNavigationTool(
 				filePath: rawPath,
 				line,
 				character,
+				symbol,
 				endLine,
 				endCharacter,
 				newName,
@@ -542,6 +707,7 @@ export function createLspNavigationTool(
 				filePath?: string;
 				line?: number;
 				character?: number;
+				symbol?: string;
 				endLine?: number;
 				endCharacter?: number;
 				newName?: string;
@@ -801,11 +967,36 @@ export function createLspNavigationTool(
 				await openFileBestEffort(lspService, filePath);
 			}
 
-			// Convert 1-based editor coords to 0-based LSP coords
+			// Convert 1-based editor coords to 0-based LSP coords.
 			const lspLine = (line ?? 1) - 1;
-			const lspChar = (character ?? 1) - 1;
+			const needsPosition = [
+				"definition",
+				"references",
+				"hover",
+				"signatureHelp",
+				"codeAction",
+				"rename",
+				"implementation",
+				"prepareCallHierarchy",
+			].includes(operation);
+			const resolvedCharacter =
+				needsPosition && filePath
+					? resolveSymbolColumn(
+							nodeFs.existsSync(filePath)
+								? nodeFs.readFileSync(filePath, "utf-8")
+								: "",
+							line ?? 1,
+							character,
+							symbol,
+						)
+					: ({
+							character: character ?? 1,
+							strategy: "explicit",
+						} satisfies SymbolColumnResolution);
+			columnResolution = resolvedCharacter;
+			const lspChar = resolvedCharacter.character - 1;
 			const lspEndLine = (endLine ?? line ?? 1) - 1;
-			const lspEndChar = (endCharacter ?? character ?? 1) - 1;
+			const lspEndChar = (endCharacter ?? resolvedCharacter.character) - 1;
 
 			const runOperation = async (): Promise<unknown> => {
 				switch (operation) {
@@ -1105,6 +1296,10 @@ export function createLspNavigationTool(
 							? emptyReasonForOperation(operation)
 							: undefined,
 						codeActionKinds: actionStats ?? undefined,
+						columnResolution:
+							columnResolution?.strategy === "explicit"
+								? undefined
+								: columnResolution,
 						resultCount,
 					},
 				},
