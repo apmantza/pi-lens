@@ -427,7 +427,18 @@ export const oxfmtFormatter: FormatterInfo = {
 		if (found) return [found, filePath];
 		return null;
 	},
-	extensions: [".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"],
+	extensions: [
+		".js", ".jsx", ".mjs", ".cjs",
+		".ts", ".tsx", ".mts", ".cts",
+		".vue",
+		".css", ".scss", ".less",
+		".html", ".htm",
+		".json", ".jsonc",
+		".yaml", ".yml",
+		".md", ".mdx",
+		".graphql", ".gql",
+		".toml",
+	],
 	async detect(cwd: string) {
 		return (
 			hasOxfmtConfig(cwd) ||

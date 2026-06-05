@@ -649,6 +649,36 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 	],
 ]);
 
+// oxfmt supports these extensions — registered as a candidate formatter for each.
+// Using a post-processing pass avoids repeating the same modification across
+// many map entries (and keeps SonarCloud's duplication gate happy).
+const OXFMT_SUPPORTED_EXTENSIONS = new Set([
+	".js", ".jsx", ".mjs", ".cjs",
+	".ts", ".tsx", ".mts", ".cts",
+	".vue",
+	".css", ".scss", ".less",
+	".html", ".htm",
+	".json", ".jsonc",
+	".yaml", ".yml",
+	".md", ".mdx",
+	".graphql", ".gql",
+	".toml",
+]);
+
+// Add .vue entry (no prior formatter policy existed for this extension)
+FORMATTER_POLICY_BY_EXTENSION.set(".vue", {
+	formatterNames: ["prettier"],
+	defaultFormatter: "prettier",
+	defaultWhenUnconfigured: false,
+	gate: "config-first",
+});
+
+for (const [ext, policy] of FORMATTER_POLICY_BY_EXTENSION) {
+	if (OXFMT_SUPPORTED_EXTENSIONS.has(ext) && !policy.formatterNames.includes("oxfmt")) {
+		policy.formatterNames.push("oxfmt");
+	}
+}
+
 const AUTO_INSTALLABLE_DEFAULT_FORMATTERS = new Map<string, string>([
 	["biome", "biome"],
 	["ruff", "ruff"],

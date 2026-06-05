@@ -6,6 +6,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Added
 
+- Extended oxfmt formatter to CSS, SCSS, Less, HTML, JSON, YAML, Markdown, MDX, GraphQL, TOML, Vue files. Updated tool-policy entries and added unit tests.
+
 - **`ast_grep_search` / `ast_grep_replace` structural-intent parameters — `insideKind`, `hasKind`, `follows`, `precedes` (closes #125 Phase 3)** — agents can now express cross-context queries without writing YAML. `insideKind: "function_declaration"` restricts matches to nodes inside that ancestor kind (searches all ancestors via `stopBy: end`); `hasKind` restricts to nodes containing a descendant; `follows`/`precedes` restrict by sibling pattern. Parameters synthesize a YAML rule via `clients/ast-grep-yaml-synth.ts` and route through `sg scan --config`. For `ast_grep_replace`, a `fix:` field is added to the synthesized rule so `sg scan --update-all` applies the rewrite. When `rule:` (Phase 4) is also provided, it takes precedence. 22 new tests covering synthesizer output, constraint combinations, language canonicalisation, routing, and YAML content assertions.
 
 - **`ast_grep_search` raw YAML rule passthrough — `rule` parameter (closes #125 Phase 4)** — passing a complete ast-grep YAML rule bypasses `sg run -p` entirely and routes through `sg scan --config`, unlocking `all`/`any`/`not`, `nthChild`, `regex`, field constraints, and multi-pattern rules. Each path is scanned independently and results are merged. Pagination (`skip`) works the same as the pattern path.

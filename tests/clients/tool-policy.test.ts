@@ -89,13 +89,13 @@ describe("tool-policy", () => {
 		expect(getSmartDefaultFormatterName("/tmp/file.md")).toBeUndefined();
 		expect(getSmartDefaultFormatterName("/tmp/file.mdx")).toBeUndefined();
 		expect(getFormatterPolicyForFile("/tmp/file.md")).toMatchObject({
-			formatterNames: ["prettier"],
+			formatterNames: ["prettier", "oxfmt"],
 			defaultFormatter: "prettier",
 			defaultWhenUnconfigured: false,
 			gate: "smart-default",
 		});
 		expect(getFormatterPolicyForFile("/tmp/file.mdx")).toMatchObject({
-			formatterNames: ["prettier"],
+			formatterNames: ["prettier", "oxfmt"],
 			defaultFormatter: "prettier",
 			defaultWhenUnconfigured: false,
 			gate: "smart-default",
