@@ -108,6 +108,39 @@ export class AstGrepClient {
 	}
 
 	/**
+	 * Search using a raw YAML rule (Phase 4 of #125).
+	 * Routes through sg scan --config rather than sg run -p.
+	 * Each path is scanned independently; results are merged.
+	 */
+	async searchWithRule(
+		ruleYaml: string,
+		paths: string[],
+	): Promise<{
+		matches: AstGrepMatch[];
+		totalMatches: number;
+		error?: string;
+	}> {
+		const allMatches: AstGrepMatch[] = [];
+		for (const scanPath of paths) {
+			try {
+				const results = await this.runner.tempScanAsync(
+					scanPath,
+					"agent-rule",
+					ruleYaml,
+				);
+				allMatches.push(...results);
+			} catch (err) {
+				return {
+					matches: allMatches,
+					totalMatches: allMatches.length,
+					error: String(err),
+				};
+			}
+		}
+		return { matches: allMatches, totalMatches: allMatches.length };
+	}
+
+	/**
 	 * Check if ast-grep CLI is available (legacy sync method)
 	 * Prefer ensureAvailable() for auto-install behavior
 	 */

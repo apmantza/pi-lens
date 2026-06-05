@@ -58,6 +58,8 @@ export interface AstGrepMatch {
 		end: { line: number; column: number };
 	};
 	text: string;
+	lines?: string;
+	language?: string;
 	replacement?: string;
 	metaVariables?: {
 		single: Record<string, AstGrepMetaVarNode>;

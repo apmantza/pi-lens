@@ -50,6 +50,8 @@ export interface SgMatch {
 		end: { line: number; column: number };
 	};
 	text: string;
+	lines?: string;
+	language?: string;
 	replacement?: string;
 	metaVariables?: {
 		single: Record<string, SgMetaVarNode>;
@@ -510,10 +512,11 @@ export class SgRunner {
 		const lines = shown.map((m) => {
 			const loc = `${m.file}:${m.range.start.line + 1}:${m.range.start.column + 1}`;
 			const text = m.text.length > 100 ? `${m.text.slice(0, 100)}...` : m.text;
+			const langSuffix = m.language ? `  [${m.language}]` : "";
 			const base =
 				isDryRun && m.replacement
 					? `${loc}\n  - ${text}\n  + ${m.replacement}`
-					: `${loc}: ${text}`;
+					: `${loc}: ${text}${langSuffix}`;
 			const captures = formatMetaVarCaptures(m.metaVariables);
 			return captures ? `${base}\n${captures}` : base;
 		});

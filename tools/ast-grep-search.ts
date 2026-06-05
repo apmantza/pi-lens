@@ -156,6 +156,12 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 					description: "Show N lines before/after each match for context",
 				}),
 			),
+			rule: Type.Optional(
+				Type.String({
+					description:
+						"Raw ast-grep YAML rule. When provided, routes through `sg scan --config` instead of `sg run -p`, unlocking the full rule DSL: `inside`, `has`, `follows`, `precedes`, `stopBy`, constraints, and multi-pattern rules. Takes precedence over `pattern`. The YAML must include `id` and `language` fields. `selector`, `context`, and `strictness` are ignored when `rule` is set.",
+				}),
+			),
 			skip: Type.Optional(
 				Type.Number({
 					description:
@@ -178,7 +184,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			ctx: { cwd?: string },
 		) {
 			const startedAt = Date.now();
-			const { pattern, paths, selector, context, skip, strictness } = params as {
+			const { pattern, paths, selector, context, skip, strictness, rule } = params as {
 				pattern: string;
 				lang: string;
 				paths?: string[];
@@ -186,6 +192,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 				context?: number;
 				skip?: number;
 				strictness?: string;
+				rule?: string;
 			};
 			const skipOffset = Math.max(0, Math.floor(skip ?? 0));
 			const lang = ((params as { lang: string }).lang ?? "").replace(
@@ -258,6 +265,42 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			}
 
 			const searchPaths = paths?.length ? paths : [ctx.cwd || "."];
+			const PAGE_SIZE = 50;
+
+			// Phase 4: raw YAML rule passthrough — routes through sg scan --config
+			if (rule && rule.trim().length > 0) {
+				const ruleResult = await astGrepClient.searchWithRule(rule, searchPaths);
+				if (ruleResult.error) {
+					logOutcome("error", { errorRaw: ruleResult.error });
+					return {
+						content: [{ type: "text" as const, text: `Error: ${ruleResult.error}` }],
+						isError: true,
+						details: {},
+					};
+				}
+				const afterSkip = ruleResult.matches.slice(skipOffset);
+				const page = afterSkip.slice(0, PAGE_SIZE);
+				const hasMore = afterSkip.length > PAGE_SIZE;
+				const output = astGrepClient.formatMatches(page);
+				const paginationNote = hasMore && page.length > 0
+					? `\n\n(Showing ${page.length} of ${ruleResult.matches.length - skipOffset} remaining matches. Use skip=${skipOffset + PAGE_SIZE} for the next page.)`
+					: "";
+				logOutcome(page.length === 0 ? "no_matches" : "success", {
+					matchCount: page.length,
+					truncated: hasMore,
+				});
+				return {
+					content: [{ type: "text" as const, text: `${output}${paginationNote}` }],
+					details: {
+						matchCount: page.length,
+						totalMatches: ruleResult.totalMatches,
+						truncated: hasMore,
+						hasMore,
+						skip: skipOffset,
+					},
+				};
+			}
+
 			const result = await astGrepClient.search(pattern, lang, searchPaths, {
 				selector,
 				context,
@@ -274,7 +317,6 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			}
 
 			// Apply skip-based pagination over the full in-memory match list.
-			const PAGE_SIZE = 50;
 			const afterSkip = result.matches.slice(skipOffset);
 			const page = afterSkip.slice(0, PAGE_SIZE);
 			const hasMore = afterSkip.length > PAGE_SIZE || result.truncated;
