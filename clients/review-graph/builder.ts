@@ -26,7 +26,26 @@ import {
 import type { ReviewGraph, ReviewGraphEdge, ReviewGraphNode } from "./types.js";
 
 const REVIEW_GRAPH_VERSION = "v2";
-const MAIN_KINDS = new Set(["jsts", "python", "go", "rust", "ruby", "cxx"]);
+const MAIN_KINDS = new Set([
+	"jsts",
+	"python",
+	"go",
+	"rust",
+	"ruby",
+	"cxx",
+	// Languages added in #152: WASMs + symbol queries now available
+	"java",
+	"kotlin",
+	"dart",
+	"elixir",
+	"csharp",
+	"php",
+	"swift",
+	"lua",
+	"ocaml",
+	"zig",
+	"shell",
+]);
 const CHANGED_SYMBOLS_PREFIX = "session.reviewGraph.changedSymbols:";
 const treeSitterClient = new TreeSitterClient();
 const extractorCache = new Map<string, TreeSitterSymbolExtractor>();
@@ -475,20 +494,26 @@ function mapKindToTreeSitterLanguage(
 	filePath?: string,
 ): string | undefined {
 	switch (kind) {
-		case "python":
-			return "python";
-		case "go":
-			return "go";
-		case "rust":
-			return "rust";
-		case "ruby":
-			return "ruby";
+		case "python": return "python";
+		case "go": return "go";
+		case "rust": return "rust";
+		case "ruby": return "ruby";
 		case "cxx": {
 			const ext = filePath ? path.extname(filePath).toLowerCase() : "";
 			return ext === ".c" || ext === ".h" ? "c" : "cpp";
 		}
-		default:
-			return undefined;
+		case "java": return "java";
+		case "kotlin": return "kotlin";
+		case "dart": return "dart";
+		case "elixir": return "elixir";
+		case "csharp": return "csharp";
+		case "php": return "php";
+		case "swift": return "swift";
+		case "lua": return "lua";
+		case "ocaml": return "ocaml";
+		case "zig": return "zig";
+		case "shell": return "bash";
+		default: return undefined;
 	}
 }
 
