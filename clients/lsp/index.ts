@@ -16,7 +16,12 @@ import { getGlobalPiLensDir } from "../file-utils.js";
 import { recordLsp } from "../widget-state.js";
 import { logLatency } from "../latency-logger.js";
 import { normalizeMapKey, uriToPath } from "../path-utils.js";
-import type { LSPClientInfo, LSPShutdownOptions } from "./client.js";
+import type {
+	LSPClientInfo,
+	LSPOperationSupport,
+	LSPShutdownOptions,
+	LSPWorkspaceDiagnosticsSupport,
+} from "./client.js";
 import { createLSPClient } from "./client.js";
 import { getServersForFileWithConfig } from "./config.js";
 import { getLanguageId } from "./language.js";
@@ -107,6 +112,13 @@ function logSessionStart(msg: string): void {
 export interface SpawnedServer {
 	client: LSPClientInfo;
 	info: LSPServerInfo;
+}
+
+export interface LSPCapabilitySnapshot {
+	serverId: string;
+	root: string;
+	operationSupport: LSPOperationSupport;
+	workspaceDiagnosticsSupport: LSPWorkspaceDiagnosticsSupport;
 }
 
 export interface LSPDiagnosticsHealth {
@@ -1228,6 +1240,45 @@ export class LSPService {
 	 * Capability snapshot for workspace diagnostics support.
 	 * If filePath is provided, probes that server; otherwise uses first active client.
 	 */
+	async getCapabilitySnapshots(
+		filePath?: string,
+	): Promise<LSPCapabilitySnapshot[]> {
+		if (this.checkDestroyed()) return [];
+		const snapshots: LSPCapabilitySnapshot[] = [];
+
+		if (filePath) {
+			const servers = getServersForFileWithConfig(filePath);
+			for (const server of servers) {
+				const root = await server.root(filePath);
+				if (!root) continue;
+				const client = this.state.clients.get(
+					`${server.id}:${normalizeMapKey(root)}`,
+				);
+				if (!client?.isAlive()) continue;
+				snapshots.push({
+					serverId: server.id,
+					root,
+					operationSupport: client.getOperationSupport(),
+					workspaceDiagnosticsSupport: client.getWorkspaceDiagnosticsSupport(),
+				});
+			}
+			return snapshots;
+		}
+
+		for (const [key, client] of this.state.clients) {
+			if (!client.isAlive()) continue;
+			const separator = key.indexOf(":");
+			const serverId = separator >= 0 ? key.slice(0, separator) : key;
+			snapshots.push({
+				serverId,
+				root: client.root,
+				operationSupport: client.getOperationSupport(),
+				workspaceDiagnosticsSupport: client.getWorkspaceDiagnosticsSupport(),
+			});
+		}
+		return snapshots;
+	}
+
 	async getWorkspaceDiagnosticsSupport(
 		filePath?: string,
 	): Promise<import("./client.js").LSPWorkspaceDiagnosticsSupport | null> {

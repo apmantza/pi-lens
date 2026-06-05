@@ -31,6 +31,7 @@ const VALID_OPERATIONS = [
 	"incomingCalls",
 	"outgoingCalls",
 	"workspaceDiagnostics",
+	"capabilities",
 ] as const;
 
 type LspNavigationOperation = (typeof VALID_OPERATIONS)[number];
@@ -76,6 +77,7 @@ function emptyReasonForOperation(operation: LspNavigationOperation): string {
 	if (operation === "findSymbol") return "no-matching-symbols";
 	if (operation === "workspaceSymbol")
 		return "no-matching-symbols-or-server-index-unavailable";
+	if (operation === "capabilities") return "no-active-lsp-servers";
 	if (operation === "incomingCalls" || operation === "outgoingCalls")
 		return "no-call-hierarchy-results";
 	return "no-results";
@@ -450,6 +452,67 @@ function dedupeWorkspaceSymbols<T extends SymbolNode>(symbols: T[]): T[] {
 	return out;
 }
 
+type CapabilitySnapshot = {
+	serverId: string;
+	root: string;
+	operationSupport: {
+		definition: boolean;
+		references: boolean;
+		hover: boolean;
+		signatureHelp: boolean;
+		documentSymbol: boolean;
+		workspaceSymbol: boolean;
+		codeAction: boolean;
+		rename: boolean;
+		implementation: boolean;
+		callHierarchy: boolean;
+	};
+	workspaceDiagnosticsSupport: { advertised?: boolean; mode?: string };
+};
+
+function formatCapabilities(
+	snapshots: CapabilitySnapshot[],
+	filePath?: string,
+): string {
+	if (snapshots.length === 0) {
+		return filePath
+			? `No active LSP server for ${path.basename(filePath)}. Open/touch the file first or run another LSP operation to start the server.`
+			: "No active LSP servers in this session.";
+	}
+
+	const rows: Array<[string, (snapshot: CapabilitySnapshot) => boolean, string?]> = [
+		["definition", (s) => !!s.operationSupport.definition],
+		["references", (s) => !!s.operationSupport.references],
+		["hover", (s) => !!s.operationSupport.hover],
+		["rename", (s) => !!s.operationSupport.rename],
+		["codeAction", (s) => !!s.operationSupport.codeAction],
+		["workspaceSymbol", (s) => !!s.operationSupport.workspaceSymbol],
+		["implementation", (s) => !!s.operationSupport.implementation],
+		["signatureHelp", (s) => !!s.operationSupport.signatureHelp],
+		["incomingCalls", (s) => !!s.operationSupport.callHierarchy],
+		["outgoingCalls", (s) => !!s.operationSupport.callHierarchy],
+		[
+			"workspaceDiagnostics",
+			(s) => s.workspaceDiagnosticsSupport.mode === "pull",
+			"pull diagnostics",
+		],
+		["rename_file", () => false, "not implemented yet (#148)"],
+	];
+
+	const lines: string[] = [];
+	for (const snapshot of snapshots) {
+		const label = filePath
+			? `${snapshot.serverId} (${path.basename(filePath)})`
+			: `${snapshot.serverId} (${snapshot.root})`;
+		lines.push(label);
+		for (const [name, supported, note] of rows) {
+			const suffix = note ? `  (${note})` : "";
+			lines.push(`  ${name.padEnd(22)} ${supported(snapshot) ? "✓" : "✗"}${suffix}`);
+		}
+	}
+	return lines.join("\n");
+}
+
 function classifyCodeActions(actions: Array<{ kind?: string }> | undefined): {
 	quickfix: number;
 	refactor: number;
@@ -518,7 +581,8 @@ export function createLspNavigationTool(
 			"- prepareCallHierarchy: Get callable item at position (for incoming/outgoing)\n" +
 			"- incomingCalls: Find all functions/methods that CALL this function\n" +
 			"- outgoingCalls: Find all functions/methods CALLED by this function\n" +
-			"- workspaceDiagnostics: List all diagnostics tracked by active LSP clients\n\n" +
+			"- workspaceDiagnostics: List all diagnostics tracked by active LSP clients\n" +
+			"- capabilities: Show cached operation support for active LSP servers\n\n" +
 			"Line and character are 1-based (as shown in editors). For position-based operations, prefer passing symbol when you know the line but not the exact character; character can be omitted or -1 and pi-lens will resolve the symbol column. Use symbol#N for repeated symbols on the same line (1-based occurrence).",
 		promptSnippet:
 			"Use lsp_navigation to find definitions, references, and hover info via LSP",
@@ -777,6 +841,7 @@ export function createLspNavigationTool(
 			const needsFilePath =
 				operation !== "workspaceDiagnostics" &&
 				operation !== "workspaceSymbol" &&
+				operation !== "capabilities" &&
 				!isCallHierarchyTraversal;
 			if (needsFilePath && (!rawPath || rawPath.trim().length === 0)) {
 				return finalize(
@@ -814,6 +879,32 @@ export function createLspNavigationTool(
 			}
 
 			const lspService = getLSPService();
+			if (operation === "capabilities") {
+				const snapshots = await lspService.getCapabilitySnapshots(
+					rawPath ? filePath : undefined,
+				);
+				const output = formatCapabilities(
+					snapshots,
+					rawPath ? filePath : undefined,
+				);
+				return finalize(
+					{
+						content: [{ type: "text" as const, text: output }],
+						details: {
+							operation,
+							resultCount: snapshots.length,
+							servers: snapshots.map((snapshot) => snapshot.serverId),
+						},
+					},
+					{
+						operation,
+						filePath: rawPath ? filePath : "(workspace)",
+						failureKind: snapshots.length === 0 ? "empty_result" : "success",
+						resultCount: snapshots.length,
+					},
+				);
+			}
+
 			if (operation === "workspaceDiagnostics") {
 				const wsDiagSupport = await lspService.getWorkspaceDiagnosticsSupport(
 					rawPath ? filePath : undefined,

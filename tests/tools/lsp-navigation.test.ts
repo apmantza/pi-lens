@@ -22,6 +22,7 @@ describe("lsp_navigation tool", () => {
 			openFile: vi.fn().mockResolvedValue(undefined),
 			getDiagnostics: vi.fn().mockResolvedValue([]),
 			getOperationSupport: vi.fn().mockResolvedValue(null),
+			getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
 			codeAction: vi
 				.fn()
 				.mockResolvedValue([
@@ -46,6 +47,61 @@ describe("lsp_navigation tool", () => {
 				.fn()
 				.mockResolvedValue({ mode: "push-only" }),
 		};
+	});
+
+	it("reports cached LSP capabilities without requiring filePath", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+		(
+			mocked.service as { getCapabilitySnapshots: ReturnType<typeof vi.fn> }
+		).getCapabilitySnapshots = vi.fn().mockResolvedValue([
+			{
+				serverId: "typescript",
+				root: "/workspace",
+				operationSupport: {
+					definition: true,
+					references: true,
+					hover: true,
+					signatureHelp: false,
+					documentSymbol: true,
+					workspaceSymbol: true,
+					codeAction: true,
+					rename: true,
+					implementation: false,
+					callHierarchy: true,
+				},
+				workspaceDiagnosticsSupport: { mode: "pull" },
+			},
+		]);
+
+		const result = await tool.execute(
+			"capabilities",
+			{ operation: "capabilities" },
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+
+		expect(result.isError).toBeUndefined();
+		expect(String(result.content[0]?.text)).toContain("typescript (/workspace)");
+		expect(String(result.content[0]?.text)).toContain("definition             ✓");
+		expect(String(result.content[0]?.text)).toContain("signatureHelp          ✗");
+		expect(String(result.content[0]?.text)).toContain("rename_file            ✗  (not implemented yet (#148))");
+		expect(result.details?.servers).toEqual(["typescript"]);
+	});
+
+	it("reports no active server for file-scoped capabilities", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+		const result = await tool.execute(
+			"capabilities-empty",
+			{ operation: "capabilities", filePath: "missing.ts" },
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+
+		expect(result.isError).toBeUndefined();
+		expect(String(result.content[0]?.text)).toContain("No active LSP server");
+		expect(result.details?.resultCount).toBe(0);
 	});
 
 	it("allows incomingCalls without filePath when callHierarchyItem exists", async () => {
