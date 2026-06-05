@@ -33,7 +33,9 @@ export function createAstDumpTool(astGrepClient: AstGrepClient) {
 		) {
 			const source = typeof params.source === "string" ? params.source : "";
 			const lang =
-				typeof params.lang === "string" ? params.lang.replace(/^"|"$/g, "") : "";
+				typeof params.lang === "string"
+					? params.lang.replace(/^"|"$/g, "")
+					: "";
 			const includeAnonymous = params.includeAnonymous === true;
 
 			if (!source.trim()) {

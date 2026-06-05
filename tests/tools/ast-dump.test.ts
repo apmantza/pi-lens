@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { createAstDumpTool } from "../../tools/ast-dump.js";
 
-function makeClient(overrides: Partial<Parameters<typeof createAstDumpTool>[0]> = {}) {
+function makeClient(
+	overrides: Partial<Parameters<typeof createAstDumpTool>[0]> = {},
+) {
 	return {
 		ensureAvailable: async () => true,
-		dumpAst: vi.fn().mockResolvedValue({ output: "program [1,1] - [1,2] \"x\"" }),
+		dumpAst: vi.fn().mockResolvedValue({ output: 'program [1,1] - [1,2] "x"' }),
 		...overrides,
 	} as Parameters<typeof createAstDumpTool>[0];
 }
@@ -12,8 +14,9 @@ function makeClient(overrides: Partial<Parameters<typeof createAstDumpTool>[0]> 
 describe("ast_dump tool", () => {
 	it("lang uses same enum shape as ast-grep tools", () => {
 		const tool = createAstDumpTool(makeClient());
-		const langSchema = (tool.parameters as { properties: Record<string, unknown> })
-			.properties.lang as { type?: string; enum?: string[] };
+		const langSchema = (
+			tool.parameters as { properties: Record<string, unknown> }
+		).properties.lang as { type?: string; enum?: string[] };
 		expect(langSchema.type).toBe("string");
 		expect(langSchema.enum).toContain("typescript");
 		expect(langSchema.enum).toContain("python");
@@ -42,12 +45,18 @@ describe("ast_dump tool", () => {
 	});
 
 	it("passes includeAnonymous through for CST dumps", async () => {
-		const dumpAst = vi.fn().mockResolvedValue({ output: 'function [1,1] - [1,9] "function"' });
+		const dumpAst = vi
+			.fn()
+			.mockResolvedValue({ output: 'function [1,1] - [1,9] "function"' });
 		const tool = createAstDumpTool(makeClient({ dumpAst }));
 
 		await tool.execute(
 			"2",
-			{ source: "function foo() {}", lang: "typescript", includeAnonymous: true },
+			{
+				source: "function foo() {}",
+				lang: "typescript",
+				includeAnonymous: true,
+			},
 			new AbortController().signal,
 			null,
 		);
@@ -59,7 +68,9 @@ describe("ast_dump tool", () => {
 
 	it("returns CLI errors clearly", async () => {
 		const tool = createAstDumpTool(
-			makeClient({ dumpAst: vi.fn().mockResolvedValue({ error: "invalid language" }) }),
+			makeClient({
+				dumpAst: vi.fn().mockResolvedValue({ error: "invalid language" }),
+			}),
 		);
 
 		const result = await tool.execute(

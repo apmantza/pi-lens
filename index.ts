@@ -1808,7 +1808,6 @@ export default function (pi: ExtensionAPI) {
 							dupeWarnings.map((w) => "  • " + w).join("\n"),
 					};
 				}
-
 			}
 		}
 	});

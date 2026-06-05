@@ -63,7 +63,7 @@ function snippetForRange(
 function formatDebugAst(tree: string, source: string): string {
 	const offsets = lineStartOffsets(source);
 	return tree
-		.split(/\r?\n/)
+		.split(/\r\n|\n/)
 		.map((line) => {
 			const match = /^(\s*)([^(]*) \((\d+),(\d+)\)-\((\d+),(\d+)\)$/.exec(line);
 			if (!match) return line;

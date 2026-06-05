@@ -510,9 +510,10 @@ export class SgRunner {
 		const lines = shown.map((m) => {
 			const loc = `${m.file}:${m.range.start.line + 1}:${m.range.start.column + 1}`;
 			const text = m.text.length > 100 ? `${m.text.slice(0, 100)}...` : m.text;
-			const base = isDryRun && m.replacement
-				? `${loc}\n  - ${text}\n  + ${m.replacement}`
-				: `${loc}: ${text}`;
+			const base =
+				isDryRun && m.replacement
+					? `${loc}\n  - ${text}\n  + ${m.replacement}`
+					: `${loc}: ${text}`;
 			const captures = formatMetaVarCaptures(m.metaVariables);
 			return captures ? `${base}\n${captures}` : base;
 		});
