@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
 	__testing,
 	clearWidgetState,
+	getFileDiagnosticSummaries,
 	recordDiagnostics,
 	recordFormatter,
 	recordLsp,
@@ -20,6 +21,52 @@ const theme = {
 
 afterEach(() => {
 	clearWidgetState();
+});
+
+describe("getFileDiagnosticSummaries", () => {
+	it("includes the actual stored diagnostics, not just counts", () => {
+		const filePath = `${process.cwd()}/foo.ts`;
+		recordDiagnostics(filePath, [
+			{
+				severity: "error",
+				semantic: "blocking",
+				line: 12,
+				rule: "typescript:2322",
+				message: "Type 'string' is not assignable to 'number'.",
+			},
+			{
+				severity: "warning",
+				line: 30,
+				rule: "no-console",
+				tool: "eslint",
+				message: "Unexpected console statement.",
+			},
+		]);
+
+		const summaries = getFileDiagnosticSummaries();
+		const entry = summaries.find((s) => s.filePath === filePath);
+		expect(entry).toBeDefined();
+		expect(entry?.blocking).toBe(1);
+		expect(entry?.warnings).toBe(1);
+		expect(entry?.diagnostics).toHaveLength(2);
+		const messages = entry?.diagnostics.map((d) => d.message);
+		expect(messages).toContain("Type 'string' is not assignable to 'number'.");
+		expect(messages).toContain("Unexpected console statement.");
+		expect(entry?.diagnostics.find((d) => d.line === 12)?.rule).toBe(
+			"typescript:2322",
+		);
+	});
+
+	it("returns a defensive copy — mutating the result does not corrupt state", () => {
+		const filePath = `${process.cwd()}/bar.ts`;
+		recordDiagnostics(filePath, [
+			{ severity: "warning", line: 1, rule: "r", message: "m" },
+		]);
+		const first = getFileDiagnosticSummaries()[0];
+		first.diagnostics[0].message = "MUTATED";
+		const second = getFileDiagnosticSummaries()[0];
+		expect(second.diagnostics[0].message).toBe("m");
+	});
 });
 
 describe("widget-state renderWidget", () => {

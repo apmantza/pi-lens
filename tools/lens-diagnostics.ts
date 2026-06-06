@@ -13,7 +13,10 @@ import { Type } from "typebox";
 import type { CacheManager } from "../clients/cache-manager.js";
 import type { ActionableWarningsReport } from "../clients/actionable-warnings.js";
 import type { CodeQualityWarningsReport } from "../clients/code-quality-warnings.js";
-import { getFileDiagnosticSummaries } from "../clients/widget-state.js";
+import {
+	getFileDiagnosticSummaries,
+	type WidgetDiagnostic,
+} from "../clients/widget-state.js";
 
 export function createLensDiagnosticsTool(
 	cacheManager: CacheManager,
@@ -31,7 +34,8 @@ export function createLensDiagnosticsTool(
 			"mode=delta (default): all warnings for the current agent turn — fixable warnings " +
 			"(actionable-warnings cache) AND code quality/style/complexity issues " +
 			"(code-quality-warnings cache). Same scope as the turn-end advisory, current turn only.\n\n" +
-			"mode=all: blocking errors and warning counts for every file the agent has " +
+			"mode=all: blocking errors and warnings — with the actual messages (line, rule, " +
+			"text), not just counts — for every file the agent has " +
 			"EDITED this session (files that went through the dispatch pipeline). " +
 			"NOTE: unedited files with pre-existing errors do NOT appear here — this is " +
 			"not a full project scan. Use before declaring work done; stale blocking " +
@@ -133,6 +137,17 @@ function formatDeltaMode(
 
 // ── all mode ──────────────────────────────────────────────────────────────────
 
+/** A diagnostic counts as error-like when it blocks or has error severity. */
+function isErrorLike(d: WidgetDiagnostic): boolean {
+	return d.semantic === "blocking" || d.severity === "error";
+}
+
+function matchesSeverity(d: WidgetDiagnostic, severity: string): boolean {
+	if (severity === "error") return isErrorLike(d);
+	if (severity === "warning") return !isErrorLike(d);
+	return true;
+}
+
 function formatAllMode(
 	cwd: string,
 	severity: string,
@@ -174,6 +189,31 @@ function formatAllMode(
 		if (s.warnings > 0) parts.push(`${s.warnings}W`);
 		if (!s.hasFinalSnapshot) parts.push(`(pending)`);
 		lines.push(`${rel}  ${parts.join("  ")}`);
+
+		// List the actual diagnostics (not just counts) so the agent can act on
+		// them without re-running anything — same "L<line>: <message>" shape as the
+		// inline blocker output. Stored diagnostics are capped per file and ordered
+		// with blockers first.
+		const shown = (s.diagnostics ?? []).filter((d) =>
+			matchesSeverity(d, severity),
+		);
+		for (const d of shown) {
+			const marker = isErrorLike(d) ? (d.semantic === "blocking" ? "🔴 " : "") : "";
+			const label = d.rule ?? d.tool;
+			const tag = label ? ` [${label}]` : "";
+			const msg = d.message.replace(/\s+/g, " ").trim();
+			lines.push(`  ${marker}L${d.line ?? "?"}: ${msg}${tag}`);
+		}
+		const totalForFile =
+			severity === "error"
+				? s.blocking + s.errors
+				: severity === "warning"
+					? s.warnings
+					: s.blocking + s.errors + s.warnings;
+		if (totalForFile > shown.length) {
+			lines.push(`  … ${totalForFile - shown.length} more not shown (per-file display cap)`);
+		}
+
 		totalBlocking += s.blocking;
 		totalErrors += s.errors;
 		totalWarnings += s.warnings;

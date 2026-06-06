@@ -136,6 +136,24 @@ describe("lens_diagnostics mode=delta", () => {
 
 // ── all mode ──────────────────────────────────────────────────────────────────
 
+type Summary = (typeof mockSummaries)[number];
+type Diag = Summary["diagnostics"][number];
+
+function sum(
+	filePath: string,
+	counts: { blocking?: number; errors?: number; warnings?: number },
+	opts: { hasFinalSnapshot?: boolean; diagnostics?: Diag[] } = {},
+): Summary {
+	return {
+		filePath,
+		blocking: counts.blocking ?? 0,
+		errors: counts.errors ?? 0,
+		warnings: counts.warnings ?? 0,
+		hasFinalSnapshot: opts.hasFinalSnapshot ?? true,
+		diagnostics: opts.diagnostics ?? [],
+	};
+}
+
 describe("lens_diagnostics mode=all", () => {
 	it("returns no-files message when widget state is empty", async () => {
 		mockSummaries.length = 0;
@@ -145,15 +163,15 @@ describe("lens_diagnostics mode=all", () => {
 
 	it("returns clean message when all files have zero issues", async () => {
 		mockSummaries.length = 0;
-		mockSummaries.push({ filePath: "/proj/src/clean.ts", blocking: 0, errors: 0, warnings: 0, hasFinalSnapshot: true });
+		mockSummaries.push(sum("/proj/src/clean.ts", {}));
 		const result = await run(makeTool(), { mode: "all" });
 		expect(String(result.content[0].text)).toContain("✓");
 	});
 
 	it("lists files with blocking errors first", async () => {
 		mockSummaries.length = 0;
-		mockSummaries.push({ filePath: "/proj/src/warn.ts", blocking: 0, errors: 0, warnings: 2, hasFinalSnapshot: true });
-		mockSummaries.push({ filePath: "/proj/src/error.ts", blocking: 1, errors: 1, warnings: 0, hasFinalSnapshot: true });
+		mockSummaries.push(sum("/proj/src/warn.ts", { warnings: 2 }));
+		mockSummaries.push(sum("/proj/src/error.ts", { blocking: 1, errors: 1 }));
 		const result = await run(makeTool(), { mode: "all" });
 		const text = String(result.content[0].text);
 		expect(text.indexOf("error.ts")).toBeLessThan(text.indexOf("warn.ts"));
@@ -162,8 +180,8 @@ describe("lens_diagnostics mode=all", () => {
 
 	it("severity=error filters to only error/blocking files", async () => {
 		mockSummaries.length = 0;
-		mockSummaries.push({ filePath: "/proj/src/clean.ts", blocking: 0, errors: 0, warnings: 3, hasFinalSnapshot: true });
-		mockSummaries.push({ filePath: "/proj/src/broken.ts", blocking: 1, errors: 0, warnings: 0, hasFinalSnapshot: true });
+		mockSummaries.push(sum("/proj/src/clean.ts", { warnings: 3 }));
+		mockSummaries.push(sum("/proj/src/broken.ts", { blocking: 1 }));
 		const result = await run(makeTool(), { mode: "all", severity: "error" });
 		const text = String(result.content[0].text);
 		expect(text).toContain("broken.ts");
@@ -172,15 +190,15 @@ describe("lens_diagnostics mode=all", () => {
 
 	it("shows pending indicator for files without final snapshot", async () => {
 		mockSummaries.length = 0;
-		mockSummaries.push({ filePath: "/proj/src/pending.ts", blocking: 0, errors: 1, warnings: 0, hasFinalSnapshot: false });
+		mockSummaries.push(sum("/proj/src/pending.ts", { errors: 1 }, { hasFinalSnapshot: false }));
 		const result = await run(makeTool(), { mode: "all" });
 		expect(String(result.content[0].text)).toContain("pending");
 	});
 
 	it("severity=warning excludes blocking/error-only files", async () => {
 		mockSummaries.length = 0;
-		mockSummaries.push({ filePath: "/proj/a.ts", blocking: 1, errors: 0, warnings: 0, hasFinalSnapshot: true });
-		mockSummaries.push({ filePath: "/proj/b.ts", blocking: 0, errors: 0, warnings: 2, hasFinalSnapshot: true });
+		mockSummaries.push(sum("/proj/a.ts", { blocking: 1 }));
+		mockSummaries.push(sum("/proj/b.ts", { warnings: 2 }));
 		const result = await run(makeTool(), { mode: "all", severity: "warning" });
 		const text = String(result.content[0].text);
 		expect(text).toContain("b.ts");
@@ -189,7 +207,7 @@ describe("lens_diagnostics mode=all", () => {
 
 	it("severity=all shows all issue types", async () => {
 		mockSummaries.length = 0;
-		mockSummaries.push({ filePath: "/proj/a.ts", blocking: 1, errors: 0, warnings: 2, hasFinalSnapshot: true });
+		mockSummaries.push(sum("/proj/a.ts", { blocking: 1, warnings: 2 }));
 		const result = await run(makeTool(), { mode: "all", severity: "all" });
 		const text = String(result.content[0].text);
 		expect(text).toContain("a.ts");
@@ -198,9 +216,74 @@ describe("lens_diagnostics mode=all", () => {
 
 	it("summary counts total blocking/errors/warnings", async () => {
 		mockSummaries.length = 0;
-		mockSummaries.push({ filePath: "/proj/a.ts", blocking: 1, errors: 2, warnings: 3, hasFinalSnapshot: true });
-		mockSummaries.push({ filePath: "/proj/b.ts", blocking: 0, errors: 1, warnings: 1, hasFinalSnapshot: true });
+		mockSummaries.push(sum("/proj/a.ts", { blocking: 1, errors: 2, warnings: 3 }));
+		mockSummaries.push(sum("/proj/b.ts", { errors: 1, warnings: 1 }));
 		const result = await run(makeTool(), { mode: "all" });
 		expect(result.details).toMatchObject({ totalBlocking: 1, totalErrors: 3, totalWarnings: 4 });
+	});
+
+	// ── actual-message exposure (the point of the tool) ───────────────────────────
+
+	it("lists the actual diagnostic messages, not just counts", async () => {
+		mockSummaries.length = 0;
+		mockSummaries.push(
+			sum(
+				"/proj/src/foo.ts",
+				{ blocking: 1, warnings: 1 },
+				{
+					diagnostics: [
+						{ severity: "error", semantic: "blocking", message: "Type 'string' is not assignable to 'number'", line: 12, rule: "ts2322", tool: "tsc" },
+						{ severity: "warning", message: "Unexpected console statement", line: 30, rule: "no-console", tool: "eslint" },
+					],
+				},
+			),
+		);
+		const result = await run(makeTool(), { mode: "all" });
+		const text = String(result.content[0].text);
+		expect(text).toContain("Type 'string' is not assignable to 'number'");
+		expect(text).toContain("L12");
+		expect(text).toContain("ts2322");
+		expect(text).toContain("Unexpected console statement");
+		expect(text).toContain("L30");
+	});
+
+	it("notes when a file has more diagnostics than the per-file storage cap", async () => {
+		mockSummaries.length = 0;
+		mockSummaries.push(
+			sum(
+				"/proj/src/big.ts",
+				{ warnings: 20 },
+				{
+					diagnostics: [
+						{ severity: "warning", message: "w1", line: 1, rule: "r" },
+						{ severity: "warning", message: "w2", line: 2, rule: "r" },
+					],
+				},
+			),
+		);
+		const result = await run(makeTool(), { mode: "all" });
+		const text = String(result.content[0].text);
+		expect(text).toContain("w1");
+		expect(text).toMatch(/18 more not shown/);
+	});
+
+	it("severity=error hides warning messages but shows error messages", async () => {
+		mockSummaries.length = 0;
+		mockSummaries.push(
+			sum(
+				"/proj/src/mix.ts",
+				{ blocking: 1, warnings: 1 },
+				{
+					diagnostics: [
+						{ severity: "error", semantic: "blocking", message: "BOOM error here", line: 1, rule: "e" },
+						{ severity: "warning", message: "minor warning here", line: 2, rule: "w" },
+					],
+				},
+			),
+		);
+		const result = await run(makeTool(), { mode: "all", severity: "error" });
+		const text = String(result.content[0].text);
+		expect(text).toContain("BOOM error here");
+		expect(text).not.toContain("minor warning here");
 	});
 });

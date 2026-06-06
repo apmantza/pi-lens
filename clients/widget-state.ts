@@ -160,11 +160,18 @@ export interface FileDiagnosticSummary {
 	errors: number;
 	warnings: number;
 	hasFinalSnapshot: boolean;
+	/**
+	 * The actual stored diagnostics (prioritised: blockers first, capped at
+	 * MAX_STORED_DIAGNOSTICS_PER_FILE). May be fewer than blocking+errors+warnings
+	 * when a file has more diagnostics than the per-file storage cap.
+	 */
+	diagnostics: WidgetDiagnostic[];
 }
 
 /**
- * Return current diagnostic counts for every file pi-lens has seen this session.
+ * Return current diagnostics for every file pi-lens has seen this session.
  * Used by lens_diagnostics tool (mode: "all") to expose widget state to agents.
+ * Includes the actual diagnostic messages (not just counts), capped per file.
  */
 export function getFileDiagnosticSummaries(): FileDiagnosticSummary[] {
 	return [...files.values()].map((rec) => ({
@@ -173,6 +180,7 @@ export function getFileDiagnosticSummaries(): FileDiagnosticSummary[] {
 		errors: rec.diagnosticCounts.errors,
 		warnings: rec.diagnosticCounts.warnings,
 		hasFinalSnapshot: rec.hasFinalDiagnosticsSnapshot,
+		diagnostics: rec.diagnostics.map((d) => ({ ...d })),
 	}));
 }
 

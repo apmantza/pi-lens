@@ -4,6 +4,10 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **`lens_diagnostics` mode=all now shows the actual diagnostics, not just counts** — previously it printed `file.ts  3W` with no indication of *what* the warnings were. It now lists each stored diagnostic in the same `L<line>: <message> [rule]` shape as the inline blocker output (blockers first, 🔴-marked), honouring the `severity` filter, with a `… N more not shown` note when a file exceeds the per-file storage cap. `getFileDiagnosticSummaries()` now returns the underlying `WidgetDiagnostic[]` (defensively copied) alongside the counts.
+
 ### Added
 
 - **Six new structural rules covering SonarCloud BLOCKER/CRITICAL TS gaps** — pure-AST checks (no taint analysis required), each with tests run through the production runner. ast-grep: `no-sort-without-comparator` (S2871 — `.sort()`/`.toSorted()` with no compare function), `no-octal-literal` (S1314 — legacy leading-zero octals), `no-mutable-export` (S6861 — exported `let`/`var`), `switch-without-default` (S131 — `switch` with no `default` clause). tree-sitter: `no-equality-in-for-condition` (S888 — `==`/`!=` as a `for`-loop exit test), `no-jump-in-finally` (S1143 — `return`/`break`/`continue`/`throw` written directly in a `finally` block). All `warning` severity.
