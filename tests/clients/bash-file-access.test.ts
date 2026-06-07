@@ -151,6 +151,17 @@ describe("extractGrepSearchReadsFromOutput", () => {
 		).toEqual([{ file: a, startLine: 9, endLine: 9 }]);
 	});
 
+	it("recognizes combined grep flags that include line numbers", () => {
+		const a = touchLines("a.ts", 20);
+		expect(
+			extractGrepSearchReadsFromOutput(
+				`grep -Rns foo ${a}`,
+				tmp,
+				`${a}:11:foo here`,
+			),
+		).toEqual([{ file: a, startLine: 11, endLine: 11 }]);
+	});
+
 	it("ignores grep output when -n is absent", () => {
 		const a = touchLines("a.ts", 20);
 		expect(

@@ -194,6 +194,55 @@ export interface LSPTouchFileOptions {
 	silent?: boolean;
 }
 
+export interface LSPWorkspaceDiagnosticResult {
+	filePath: string;
+	diagnostics: import("./client.js").LSPDiagnostic[];
+	count: number;
+	error?: string;
+}
+
+const WORKSPACE_DIAGNOSTICS_SKIP_DIRS = new Set([
+	"node_modules",
+	".git",
+	"dist",
+	"build",
+	".next",
+	"out",
+	"target",
+	"coverage",
+	"__pycache__",
+	".venv",
+	"venv",
+]);
+
+const WORKSPACE_DIAGNOSTICS_CONCURRENCY = 8;
+
+function collectWorkspaceDiagnosticFiles(root: string): string[] {
+	const files: string[] = [];
+	function walk(current: string): void {
+		let entries: nodeFs.Dirent[];
+		try {
+			entries = nodeFs.readdirSync(current, { withFileTypes: true });
+		} catch {
+			return;
+		}
+		for (const entry of entries) {
+			if (entry.isSymbolicLink()) continue;
+			const full = path.join(current, entry.name);
+			if (entry.isDirectory()) {
+				if (!WORKSPACE_DIAGNOSTICS_SKIP_DIRS.has(entry.name)) walk(full);
+			} else if (
+				entry.isFile() &&
+				getServersForFileWithConfig(full).length > 0
+			) {
+				files.push(full);
+			}
+		}
+	}
+	walk(root);
+	return files;
+}
+
 // --- Service ---
 
 export class LSPService {
@@ -1527,6 +1576,69 @@ export class LSPService {
 		);
 		if (!spawned) return [];
 		return spawned.client.outgoingCalls(item);
+	}
+
+	/**
+	 * Actively scan every LSP-supported source file under a project root.
+	 * This is intentionally expensive and used only by explicit project-wide tools.
+	 */
+	async runWorkspaceDiagnostics(
+		cwd: string,
+	): Promise<LSPWorkspaceDiagnosticResult[]> {
+		const startedAt = Date.now();
+		const root = path.resolve(cwd);
+		const files = collectWorkspaceDiagnosticFiles(root);
+		const results: LSPWorkspaceDiagnosticResult[] = new Array(files.length);
+		let nextIndex = 0;
+		const workers = Math.min(WORKSPACE_DIAGNOSTICS_CONCURRENCY, files.length);
+		await Promise.all(
+			Array.from({ length: workers }, async () => {
+				while (true) {
+					const index = nextIndex;
+					nextIndex += 1;
+					if (index >= files.length) return;
+					const filePath = files[index];
+					try {
+						const content = nodeFs.readFileSync(filePath, "utf-8");
+						const diagnostics = await this.touchFile(filePath, content, {
+							diagnostics: "document",
+							collectDiagnostics: true,
+							clientScope: "all",
+							source: "lens_diagnostics_full",
+						});
+						results[index] = {
+							filePath,
+							diagnostics: diagnostics ?? [],
+							count: diagnostics?.length ?? 0,
+						};
+					} catch (err) {
+						results[index] = {
+							filePath,
+							diagnostics: [],
+							count: 0,
+							error: err instanceof Error ? err.message : String(err),
+						};
+					}
+				}
+			}),
+		);
+
+		logLatency({
+			type: "phase",
+			phase: "lsp_workspace_diagnostics",
+			filePath: root,
+			durationMs: Date.now() - startedAt,
+			metadata: {
+				filesChecked: files.length,
+				diagnosticCount: results.reduce(
+					(sum, result) => sum + (result?.count ?? 0),
+					0,
+				),
+				concurrency: WORKSPACE_DIAGNOSTICS_CONCURRENCY,
+			},
+		});
+
+		return results.filter(Boolean);
 	}
 
 	/**

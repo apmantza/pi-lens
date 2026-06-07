@@ -171,7 +171,9 @@ export function extractReadPathsFromCommand(
 function grepHasLineNumbers(args: string[]): boolean {
 	return args.some((arg) => {
 		const token = stripQuotes(arg);
-		return token === "--line-number" || /^-[A-Za-z]*n[A-Za-z]*$/.test(token);
+		if (token === "--line-number") return true;
+		if (!token.startsWith("-") || token.startsWith("--")) return false;
+		return token.slice(1).includes("n");
 	});
 }
 

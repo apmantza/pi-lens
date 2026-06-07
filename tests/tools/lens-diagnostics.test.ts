@@ -19,8 +19,12 @@ function makeCacheManager(data: Record<string, unknown> = {}) {
 	};
 }
 
-function makeTool(cacheData: Record<string, unknown> = {}) {
-	return createLensDiagnosticsTool(makeCacheManager(cacheData) as any, () => "/proj");
+function makeTool(cacheData: Record<string, unknown> = {}, lspService?: unknown) {
+	return createLensDiagnosticsTool(
+		makeCacheManager(cacheData) as any,
+		() => "/proj",
+		() => lspService as any,
+	);
 }
 
 async function run(tool: ReturnType<typeof makeTool>, params: Record<string, unknown> = {}) {
@@ -45,11 +49,17 @@ describe("lens_diagnostics schema", () => {
 		expect(cm.readCache).toHaveBeenCalled();
 	});
 
-	it("does not call LSP — reads from cache only", async () => {
-		// If the tool tried to probe LSP it would throw (no LSP service injected).
-		// The fact that it completes without error proves it is cache-only.
-		const result = await run(makeTool(), { mode: "all" });
+	it("mode=all does not call LSP — reads from cache only", async () => {
+		const lspService = { runWorkspaceDiagnostics: vi.fn() };
+		const result = await run(makeTool({}, lspService), { mode: "all" });
 		expect(result).toBeDefined();
+		expect(lspService.runWorkspaceDiagnostics).not.toHaveBeenCalled();
+	});
+
+	it("exposes full mode in the schema", () => {
+		const tool = makeTool();
+		const props = (tool.parameters as { properties: Record<string, any> }).properties;
+		expect(props.mode.enum).toContain("full");
 	});
 });
 
@@ -153,6 +163,112 @@ function sum(
 		diagnostics: opts.diagnostics ?? [],
 	};
 }
+
+describe("lens_diagnostics mode=full", () => {
+	it("runs workspace diagnostics and merges LSP-only files with widget state", async () => {
+		mockSummaries.length = 0;
+		mockSummaries.push(
+			sum(
+				"/proj/src/edited.ts",
+				{ warnings: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "warning",
+							message: "cached runner warning",
+							line: 3,
+							rule: "runner-rule",
+							tool: "tree-sitter",
+						},
+					],
+				},
+			),
+		);
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([
+				{
+					filePath: "/proj/src/unedited.ts",
+					diagnostics: [
+						{
+							severity: 1,
+							message: "project-wide type error",
+							range: {
+								start: { line: 9, character: 4 },
+								end: { line: 9, character: 8 },
+							},
+							source: "ts",
+							code: 2322,
+						},
+					],
+					count: 1,
+				},
+			]),
+		};
+
+		const result = await run(makeTool({}, lspService), { mode: "full" });
+		const text = String(result.content[0].text);
+		expect(lspService.runWorkspaceDiagnostics).toHaveBeenCalledWith("/proj");
+		expect(text).toContain("edited.ts");
+		expect(text).toContain("cached runner warning");
+		expect(text).toContain("unedited.ts");
+		expect(text).toContain("project-wide type error");
+		expect(text).toContain("ts:2322");
+		expect(result.details).toMatchObject({
+			mode: "full",
+			lspFilesChecked: 1,
+			totalBlocking: 1,
+			totalWarnings: 1,
+		});
+	});
+
+	it("deduplicates LSP diagnostics already present in widget state by file line and rule", async () => {
+		mockSummaries.length = 0;
+		mockSummaries.push(
+			sum(
+				"/proj/src/dup.ts",
+				{ blocking: 1, errors: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "error",
+							semantic: "blocking",
+							message: "cached dispatch message",
+							line: 10,
+							rule: "ts:2322",
+							tool: "lsp",
+						},
+					],
+				},
+			),
+		);
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([
+				{
+					filePath: "/proj/src/dup.ts",
+					diagnostics: [
+						{
+							severity: 1,
+							message: "same diagnostic from workspace scan",
+							range: {
+								start: { line: 9, character: 0 },
+								end: { line: 9, character: 1 },
+							},
+							source: "ts",
+							code: 2322,
+						},
+					],
+					count: 1,
+				},
+			]),
+		};
+
+		const result = await run(makeTool({}, lspService), { mode: "full" });
+		const text = String(result.content[0].text);
+		expect(text).toContain("cached dispatch message");
+		expect(text).not.toContain("same diagnostic from workspace scan");
+		expect(result.details).toMatchObject({ totalBlocking: 1, totalErrors: 1 });
+	});
+});
 
 describe("lens_diagnostics mode=all", () => {
 	it("returns no-files message when widget state is empty", async () => {

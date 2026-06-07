@@ -1,20 +1,24 @@
 /**
  * lens_diagnostics tool — cached project diagnostic state (issue #159).
  *
- * Two modes:
+ * Three modes:
  *   delta (default) — fixable warnings from the current agent turn, read from
  *                     the actionable-warnings and code-quality-warnings caches.
  *   all             — all known diagnostic counts across every file pi-lens has
  *                     seen this session, read from the widget state.
+ *   full            — active project-wide LSP diagnostic scan merged with all.
  */
 
 import * as path from "node:path";
 import { Type } from "typebox";
+import { getLSPService } from "../clients/lsp/index.js";
+import type { LSPDiagnostic } from "../clients/lsp/client.js";
 import type { CacheManager } from "../clients/cache-manager.js";
 import type { ActionableWarningsReport } from "../clients/actionable-warnings.js";
 import type { CodeQualityWarningsReport } from "../clients/code-quality-warnings.js";
 import {
 	getFileDiagnosticSummaries,
+	type FileDiagnosticSummary,
 	type WidgetDiagnostic,
 } from "../clients/widget-state.js";
 
@@ -23,16 +27,29 @@ import {
 // keep output bounded on a pathologically broken file.
 const MAX_DIAGNOSTICS_PER_FILE = 50;
 
+type LSPServiceLike = ReturnType<typeof getLSPService> & {
+	runWorkspaceDiagnostics?: (
+		cwd: string,
+	) => Promise<WorkspaceLspDiagnosticResult[]>;
+};
+
+type WorkspaceLspDiagnosticResult = {
+	filePath: string;
+	diagnostics: LSPDiagnostic[];
+	count?: number;
+};
+
 export function createLensDiagnosticsTool(
 	cacheManager: CacheManager,
 	getCwd: () => string,
+	getLspService: () => LSPServiceLike = getLSPService,
 ) {
 	return {
 		name: "lens_diagnostics" as const,
 		label: "Project Diagnostics",
 		description:
-			"Query pi-lens's current diagnostic state without re-running LSP or dispatch. " +
-			"Reads from cache only — zero LSP calls, instant response.\n\n" +
+			"Query pi-lens's diagnostic state. mode=delta/all are cache-only and instant; " +
+			"mode=full is an expensive active project-wide LSP scan merged with cached runner state.\n\n" +
 			"IMPORTANT: unlike lsp_diagnostics (LSP only), this tool covers ALL dispatch " +
 			"runners: LSP errors, tree-sitter structural rules, ast-grep security rules, " +
 			"biome/ruff/eslint lint findings, complexity violations, and more.\n\n" +
@@ -44,17 +61,19 @@ export function createLensDiagnosticsTool(
 			"EDITED this session (files that went through the dispatch pipeline). " +
 			"NOTE: unedited files with pre-existing errors do NOT appear here — this is " +
 			"not a full project scan. Use before declaring work done; stale blocking " +
-			"errors from earlier turns are visible even if they dropped from turn-end context. " +
-			"For project-wide LSP diagnostics (all files including unedited ones), use " +
-			"lsp_navigation operation=workspaceDiagnostics.",
-		promptSnippet: "Use lens_diagnostics mode=all to verify no blocking errors remain",
+			"errors from earlier turns are visible even if they dropped from turn-end context.\n\n" +
+			"mode=full: EXPENSIVE active scan. Runs project-wide LSP diagnostics for " +
+			"all supported files (including unedited files), then merges/deduplicates " +
+			"that with mode=all cached runner state.",
+		promptSnippet: "Use lens_diagnostics mode=all to verify no blocking errors remain; use mode=full for expensive project-wide checks",
 		parameters: Type.Object({
 			mode: Type.Optional(
 				Type.String({
-					enum: ["delta", "all"],
+					enum: ["delta", "all", "full"],
 					description:
 						"delta = current turn's fixable warnings (default). " +
-						"all = full session diagnostic counts per file.",
+						"all = session diagnostics for edited/dispatched files. " +
+						"full = expensive active project-wide LSP scan plus cached runner diagnostics.",
 				}),
 			),
 			severity: Type.Optional(
@@ -77,6 +96,9 @@ export function createLensDiagnosticsTool(
 
 			if (mode === "all") {
 				return formatAllMode(cwd, severity);
+			}
+			if (mode === "full") {
+				return formatFullMode(cwd, severity, getLspService());
 			}
 			return formatDeltaMode(cacheManager, cwd, severity);
 		},
@@ -165,11 +187,128 @@ function bySeverityThenLine(a: WidgetDiagnostic, b: WidgetDiagnostic): number {
 	return severityRank(a) - severityRank(b) || (a.line ?? 0) - (b.line ?? 0);
 }
 
+function lspSeverityName(severity: LSPDiagnostic["severity"]): string {
+	if (severity === 1) return "error";
+	if (severity === 2) return "warning";
+	if (severity === 3) return "info";
+	return "hint";
+}
+
+function lspRuleId(diagnostic: LSPDiagnostic): string {
+	const code = diagnostic.code === undefined ? undefined : String(diagnostic.code);
+	if (diagnostic.source && code) return `${diagnostic.source}:${code}`;
+	return diagnostic.source ?? code ?? "lsp";
+}
+
+function lspDiagnosticToWidget(diagnostic: LSPDiagnostic): WidgetDiagnostic {
+	const severity = lspSeverityName(diagnostic.severity);
+	const rule = lspRuleId(diagnostic);
+	return {
+		severity,
+		semantic: diagnostic.severity === 1 ? "blocking" : "warning",
+		message: diagnostic.message,
+		line: diagnostic.range.start.line + 1,
+		col: diagnostic.range.start.character + 1,
+		rule,
+		tool: "lsp",
+	};
+}
+
+function diagnosticDedupKey(filePath: string, diagnostic: WidgetDiagnostic): string {
+	const ruleId = diagnostic.rule ?? diagnostic.tool ?? "";
+	return [path.resolve(filePath), diagnostic.line ?? "?", ruleId].join(":");
+}
+
+function summarizeDiagnostics(
+	filePath: string,
+	diagnostics: WidgetDiagnostic[],
+	hasFinalSnapshot: boolean,
+): FileDiagnosticSummary {
+	let blocking = 0;
+	let errors = 0;
+	let warnings = 0;
+	for (const diagnostic of diagnostics) {
+		if (diagnostic.semantic === "blocking") blocking++;
+		if (diagnostic.severity === "error") errors++;
+		else if (diagnostic.severity === "warning") warnings++;
+	}
+	return { filePath, blocking, errors, warnings, hasFinalSnapshot, diagnostics };
+}
+
+function mergeLspWithWidgetSummaries(
+	widgetSummaries: FileDiagnosticSummary[],
+	lspResults: WorkspaceLspDiagnosticResult[],
+): FileDiagnosticSummary[] {
+	const byFile = new Map<string, FileDiagnosticSummary>();
+	const seen = new Set<string>();
+
+	for (const summary of widgetSummaries) {
+		const filePath = path.resolve(summary.filePath);
+		const diagnostics = (summary.diagnostics ?? []).map((d) => ({ ...d }));
+		byFile.set(filePath, { ...summary, filePath, diagnostics });
+		for (const diagnostic of diagnostics) {
+			seen.add(diagnosticDedupKey(filePath, diagnostic));
+		}
+	}
+
+	for (const result of lspResults) {
+		const filePath = path.resolve(result.filePath);
+		const existing = byFile.get(filePath);
+		const diagnostics = existing ? [...existing.diagnostics] : [];
+		for (const diagnostic of result.diagnostics ?? []) {
+			const widgetDiagnostic = lspDiagnosticToWidget(diagnostic);
+			const key = diagnosticDedupKey(filePath, widgetDiagnostic);
+			if (seen.has(key)) continue;
+			seen.add(key);
+			diagnostics.push(widgetDiagnostic);
+		}
+		byFile.set(
+			filePath,
+			summarizeDiagnostics(
+				filePath,
+				diagnostics,
+				existing?.hasFinalSnapshot ?? true,
+			),
+		);
+	}
+
+	return [...byFile.values()];
+}
+
+async function formatFullMode(
+	cwd: string,
+	severity: string,
+	lspService: LSPServiceLike,
+): Promise<{ content: [{ type: "text"; text: string }]; details: object }> {
+	const runWorkspaceDiagnostics = lspService.runWorkspaceDiagnostics;
+	if (typeof runWorkspaceDiagnostics !== "function") {
+		return {
+			content: [
+				{
+					type: "text" as const,
+					text: "LSP service does not support project-wide workspace diagnostics.",
+				},
+			],
+			details: { mode: "full", filesChecked: 0, lspUnavailable: true },
+		};
+	}
+	const lspResults = await runWorkspaceDiagnostics.call(lspService, cwd);
+	const summaries = mergeLspWithWidgetSummaries(
+		getFileDiagnosticSummaries(),
+		lspResults,
+	);
+	return formatAllMode(cwd, severity, summaries, {
+		mode: "full",
+		lspFilesChecked: lspResults.length,
+	});
+}
+
 function formatAllMode(
 	cwd: string,
 	severity: string,
+	summaries: FileDiagnosticSummary[] = getFileDiagnosticSummaries(),
+	detailOverrides: Record<string, unknown> = { mode: "all" },
 ): { content: [{ type: "text"; text: string }]; details: object } {
-	const summaries = getFileDiagnosticSummaries();
 
 	// Filter to files with actual issues
 	const withIssues = summaries.filter((s) => {
@@ -182,7 +321,10 @@ function formatAllMode(
 		const text = summaries.length === 0
 			? "No files diagnosed yet this session."
 			: `No ${severity === "all" ? "" : severity + " "}issues across ${summaries.length} file${summaries.length === 1 ? "" : "s"} diagnosed this session. ✓`;
-		return { content: [{ type: "text" as const, text }], details: { mode: "all", filesChecked: summaries.length } };
+		return {
+			content: [{ type: "text" as const, text }],
+			details: { ...detailOverrides, filesChecked: summaries.length },
+		};
 	}
 
 	// Sort: blocking first, then errors, then warnings
@@ -243,6 +385,12 @@ function formatAllMode(
 
 	return {
 		content: [{ type: "text" as const, text: lines.join("\n") + summary }],
-		details: { mode: "all", filesWithIssues: withIssues.length, totalBlocking, totalErrors, totalWarnings },
+		details: {
+			...detailOverrides,
+			filesWithIssues: withIssues.length,
+			totalBlocking,
+			totalErrors,
+			totalWarnings,
+		},
 	};
 }
