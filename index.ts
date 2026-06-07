@@ -19,6 +19,10 @@ import {
 	getLatencyReports,
 	resetDispatchBaselines,
 } from "./clients/dispatch/integration.js";
+import {
+	extractReadPathsFromCommand,
+	extractWrittenPathsFromCommand,
+} from "./clients/bash-file-access.js";
 import { detectFileKind } from "./clients/file-kinds.js";
 import { isPathIgnoredByProject } from "./clients/file-utils.js";
 import {
@@ -1381,6 +1385,47 @@ export default function (pi: ExtensionAPI) {
 				writeIndex: runtime.peekWriteIndex(),
 				timestamp: Date.now(),
 			});
+		}
+
+		// --- Read-Before-Edit Guard: register file access done via `bash` ---
+		// Mirrors how the Read/Write tools are tracked. Only the bash tool —
+		// grep/find tools (and their patterns) are not contiguous file access.
+		//   reads  (cat/head/tail/sed -n) → recordRead with the exact range shown
+		//   writes (>, >>, tee, sed -i, cp/mv dest, touch) → noteCreatedFile, so the
+		//          agent "owns" the file (recordWritten fires at tool_result), same
+		//          as the Write tool.
+		if (toolName === "bash" && !getLensFlag("no-read-guard")) {
+			const cmd = (event.input as Record<string, unknown>)?.command;
+			if (typeof cmd === "string" && cmd) {
+				const effectiveCwd = ctx.cwd ?? runtime.projectRoot ?? process.cwd();
+				const inScope = (fp: string) =>
+					!isPathIgnoredByProject(fp, runtime.projectRoot, false) &&
+					!isExternalOrVendorFile(fp, runtime.projectRoot);
+
+				for (const span of extractReadPathsFromCommand(cmd, effectiveCwd)) {
+					if (!inScope(span.filePath)) continue;
+					runtime.readGuard.recordRead({
+						filePath: span.filePath,
+						requestedOffset: span.offset,
+						requestedLimit: span.limit,
+						effectiveOffset: span.offset,
+						effectiveLimit: span.limit,
+						expandedByLsp: false,
+						turnIndex: runtime.turnIndex,
+						writeIndex: runtime.peekWriteIndex(),
+						timestamp: Date.now(),
+					});
+				}
+
+				for (const wp of extractWrittenPathsFromCommand(cmd, effectiveCwd)) {
+					if (!inScope(wp)) continue;
+					runtime.readGuard.noteCreatedFile(
+						wp,
+						runtime.turnIndex,
+						runtime.peekWriteIndex(),
+					);
+				}
+			}
 		}
 
 		const { complexityClient } = await loadBootstrapClients();

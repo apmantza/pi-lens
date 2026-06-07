@@ -1,6 +1,7 @@
 import * as nodeCrypto from "node:crypto";
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
+import { extractWrittenPathsFromCommand } from "./bash-file-access.js";
 import type { BiomeClient } from "./biome-client.js";
 import type { CacheManager } from "./cache-manager.js";
 import { createFileTime } from "./file-time.js";
@@ -295,6 +296,23 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			: path.resolve(workspaceRoot, rawFilePath)
 		: rawFilePath;
 	const behaviorWarnings = agentBehaviorRecord(event.toolName, filePath);
+
+	// Bash writes (redirects, tee, sed -i, cp/mv, touch) — mark the resulting
+	// files authored-by-agent, exactly like the Write tool, so a follow-up edit
+	// is not blocked. noteCreatedFile fired at tool_call; recordWritten here adds
+	// the authoritative writtenThisSession entry and injects the creation read.
+	if (
+		event.toolName === "bash" &&
+		!getFlag("no-read-guard") &&
+		typeof (event.input as { command?: unknown }).command === "string"
+	) {
+		const command = (event.input as { command: string }).command;
+		for (const wp of extractWrittenPathsFromCommand(command, workspaceRoot)) {
+			if (isExternalOrVendorFile(wp, workspaceRoot)) continue;
+			if (isPathIgnoredByProject(wp, workspaceRoot, false)) continue;
+			deps.readGuard?.recordWritten(wp);
+		}
+	}
 
 	if (event.toolName !== "write" && event.toolName !== "edit") {
 		dbg(
