@@ -27,6 +27,18 @@ export interface ProjectDiagnosticsSnapshot {
 	runners: string[];
 }
 
+export interface ProjectDiagnosticsDeltaReport {
+	version: number;
+	cwd: string;
+	generatedAt: string;
+	sessionId: string;
+	turnIndex: number;
+	projectSeqStart?: number;
+	projectSeqEnd?: number;
+	diagnostics: ProjectDiagnostic[];
+	sources: string[];
+}
+
 export interface ProjectDiagnosticsScanOptions {
 	cwd: string;
 	tier: ProjectDiagnosticsTier;

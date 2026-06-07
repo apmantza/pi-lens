@@ -3,9 +3,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+	loadProjectDiagnosticsDeltaReport,
 	loadProjectDiagnosticsSnapshot,
 	saveProjectDiagnosticsSnapshot,
+	writeProjectDiagnosticsDeltaReport,
 } from "../../clients/project-diagnostics/cache.js";
+import { knipIssuesToProjectDiagnostics } from "../../clients/project-diagnostics/runner-adapters/knip.js";
 import { scanProjectDiagnostics } from "../../clients/project-diagnostics/scanner.js";
 import type { ProjectDiagnosticsSnapshot } from "../../clients/project-diagnostics/types.js";
 
@@ -63,6 +66,57 @@ describe("project diagnostics cache", () => {
 	it("ignores stale cache versions", () => {
 		saveProjectDiagnosticsSnapshot(tmp, snapshot({ version: 0 }));
 		expect(loadProjectDiagnosticsSnapshot(tmp)).toBeUndefined();
+	});
+
+	it("persists delta reports", () => {
+		const report = {
+			version: 1,
+			cwd: tmp,
+			generatedAt: "2026-01-01T00:00:00.000Z",
+			sessionId: "session-1",
+			turnIndex: 2,
+			diagnostics: [
+				{
+					filePath: path.join(tmp, "src/a.ts"),
+					line: 3,
+					severity: "error" as const,
+					semantic: "blocking" as const,
+					tool: "knip",
+					runner: "knip",
+					rule: "knip:unlisted",
+					message: "Unlisted dependency react",
+					source: "project-scan" as const,
+				},
+			],
+			sources: ["knip"],
+		};
+		writeProjectDiagnosticsDeltaReport(tmp, report);
+		expect(loadProjectDiagnosticsDeltaReport(tmp)).toEqual(report);
+	});
+});
+
+describe("project diagnostics adapters", () => {
+	it("normalizes Knip issues into ProjectDiagnostic records", () => {
+		const [unlisted, unusedExport] = knipIssuesToProjectDiagnostics(tmp, [
+			{ type: "unlisted", name: "left-pad", file: "src/a.ts", line: 4 },
+			{ type: "export", name: "unused", file: "src/b.ts", line: 8 },
+		]);
+
+		expect(unlisted).toMatchObject({
+			filePath: path.join(tmp, "src/a.ts"),
+			severity: "error",
+			semantic: "blocking",
+			runner: "knip",
+			rule: "knip:unlisted",
+			message: "Unlisted dependency left-pad",
+		});
+		expect(unusedExport).toMatchObject({
+			filePath: path.join(tmp, "src/b.ts"),
+			severity: "warning",
+			semantic: "warning",
+			rule: "knip:export",
+			message: "Unused export unused",
+		});
 	});
 });
 

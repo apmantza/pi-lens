@@ -7,6 +7,7 @@ import {
 	consumeTestFindings,
 	consumeTurnEndFindings,
 } from "../../clients/runtime-context.js";
+import { loadProjectDiagnosticsDeltaReport } from "../../clients/project-diagnostics/cache.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleTurnEnd } from "../../clients/runtime-turn.js";
 import { setupTestEnvironment } from "./test-utils.js";
@@ -264,6 +265,68 @@ describe("stale turn state eviction", () => {
 // ── Knip timeout backoff ─────────────────────────────────────────────────────
 
 describe("knip turn-end backoff", () => {
+	it("writes normalized project diagnostics delta for new Knip issues", async () => {
+		const env = setupTestEnvironment("pi-lens-knip-delta-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId: "knip-delta-session" });
+			const cacheManager = new CacheManager(false);
+			const filePath = path.join(env.tmpDir, "src/current.ts");
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(filePath, "export const x = 1;\n");
+			cacheManager.addModifiedRange(
+				filePath,
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+			);
+
+			await handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, {
+					ctxCwd: env.tmpDir,
+					knipClient: {
+						ensureAvailable: async () => true,
+						analyze: async () => ({
+							...EMPTY_KNIP_RESULT,
+							issues: [
+								{
+									type: "unlisted",
+									name: "left-pad",
+									file: filePath,
+									line: 1,
+								},
+							],
+						}),
+					},
+				}),
+			);
+
+			const report = loadProjectDiagnosticsDeltaReport(env.tmpDir);
+			expect(report).toMatchObject({
+				sessionId: "knip-delta-session",
+				turnIndex: runtime.turnIndex,
+				sources: ["knip"],
+			});
+			expect(report?.diagnostics).toEqual([
+				expect.objectContaining({
+					filePath,
+					line: 1,
+					severity: "error",
+					semantic: "blocking",
+					runner: "knip",
+					rule: "knip:unlisted",
+					message: "Unlisted dependency left-pad",
+				}),
+			]);
+		} finally {
+			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+			else process.env.PILENS_DATA_DIR = previousDataDir;
+			env.cleanup();
+		}
+	});
+
 	it("skips knip after a recent timeout failure", async () => {
 		const env = setupTestEnvironment("pi-lens-knip-backoff-");
 		try {

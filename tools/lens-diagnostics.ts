@@ -14,10 +14,14 @@ import { Type } from "typebox";
 import { getLSPService } from "../clients/lsp/index.js";
 import type { LSPDiagnostic } from "../clients/lsp/client.js";
 import type { CacheManager } from "../clients/cache-manager.js";
-import { loadProjectDiagnosticsSnapshot } from "../clients/project-diagnostics/cache.js";
+import {
+	loadProjectDiagnosticsDeltaReport,
+	loadProjectDiagnosticsSnapshot,
+} from "../clients/project-diagnostics/cache.js";
 import { scanProjectDiagnostics } from "../clients/project-diagnostics/scanner.js";
 import type {
 	ProjectDiagnostic,
+	ProjectDiagnosticsDeltaReport,
 	ProjectDiagnosticsSnapshot,
 } from "../clients/project-diagnostics/types.js";
 import type { ActionableWarningsReport } from "../clients/actionable-warnings.js";
@@ -143,6 +147,41 @@ export function createLensDiagnosticsTool(
 
 // ── delta mode ────────────────────────────────────────────────────────────────
 
+function formatProjectDeltaDiagnostic(diagnostic: ProjectDiagnostic): string {
+	const marker =
+		diagnostic.semantic === "blocking" || diagnostic.severity === "error"
+			? "🔴"
+			: "ℹ";
+	const rule = diagnostic.rule ?? diagnostic.code ?? diagnostic.runner;
+	return `  ${marker} L${diagnostic.line ?? "?"}  ${rule}  ${diagnostic.message}`;
+}
+
+function appendProjectDiagnosticsDeltaLines(
+	lines: string[],
+	cwd: string,
+	report: ProjectDiagnosticsDeltaReport | undefined,
+	severity: string,
+): number {
+	const diagnostics = (report?.diagnostics ?? []).filter((diagnostic) =>
+		matchesSeverity(projectDiagnosticToWidget(diagnostic), severity),
+	);
+	const byFile = new Map<string, ProjectDiagnostic[]>();
+	for (const diagnostic of diagnostics) {
+		const filePath = path.resolve(diagnostic.filePath);
+		const bucket = byFile.get(filePath) ?? [];
+		bucket.push(diagnostic);
+		byFile.set(filePath, bucket);
+	}
+	for (const [filePath, fileDiagnostics] of byFile) {
+		const rel = path.relative(cwd, filePath);
+		if (!lines.includes(rel)) lines.push(rel);
+		for (const diagnostic of fileDiagnostics) {
+			lines.push(formatProjectDeltaDiagnostic(diagnostic));
+		}
+	}
+	return diagnostics.length;
+}
+
 function formatDeltaMode(
 	cacheManager: CacheManager,
 	cwd: string,
@@ -158,6 +197,7 @@ function formatDeltaMode(
 	);
 	const actionable = actionableEntry?.data;
 	const quality = qualityEntry?.data;
+	const projectDelta = loadProjectDiagnosticsDeltaReport(cwd);
 
 	const lines: string[] = [];
 
@@ -191,6 +231,13 @@ function formatDeltaMode(
 		}
 	}
 
+	const projectDeltaCount = appendProjectDiagnosticsDeltaLines(
+		lines,
+		cwd,
+		projectDelta,
+		severity,
+	);
+
 	const aw = actionable?.summary?.warnings ?? 0;
 	const cq = quality?.summary?.warnings ?? 0;
 
@@ -202,10 +249,15 @@ function formatDeltaMode(
 		};
 	}
 
-	const summary = `\nSummary (turn delta): ${aw} actionable warning${aw === 1 ? "" : "s"} · ${cq} quality issue${cq === 1 ? "" : "s"}`;
+	const summary = `\nSummary (turn delta): ${aw} actionable warning${aw === 1 ? "" : "s"} · ${cq} quality issue${cq === 1 ? "" : "s"} · ${projectDeltaCount} project diagnostic${projectDeltaCount === 1 ? "" : "s"}`;
 	return {
 		content: [{ type: "text" as const, text: lines.join("\n") + summary }],
-		details: { mode: "delta", actionableWarnings: aw, qualityIssues: cq },
+		details: {
+			mode: "delta",
+			actionableWarnings: aw,
+			qualityIssues: cq,
+			projectDiagnostics: projectDeltaCount,
+		},
 	};
 }
 
@@ -311,6 +363,7 @@ function mergeDiagnosticsWithWidgetSummaries(
 	widgetSummaries: FileDiagnosticSummary[],
 	lspResults: WorkspaceLspDiagnosticResult[],
 	projectSnapshot?: ProjectDiagnosticsSnapshot,
+	projectDelta?: ProjectDiagnosticsDeltaReport,
 ): FileDiagnosticSummary[] {
 	const byFile = new Map<string, FileDiagnosticSummary>();
 	const seen = new Set<string>();
@@ -352,6 +405,12 @@ function mergeDiagnosticsWithWidgetSummaries(
 	}
 
 	for (const diagnostic of projectSnapshot?.diagnostics ?? []) {
+		addDiagnostic(
+			path.resolve(diagnostic.filePath),
+			projectDiagnosticToWidget(diagnostic),
+		);
+	}
+	for (const diagnostic of projectDelta?.diagnostics ?? []) {
 		addDiagnostic(
 			path.resolve(diagnostic.filePath),
 			projectDiagnosticToWidget(diagnostic),
@@ -408,10 +467,12 @@ async function formatFullMode(
 		runWorkspaceDiagnostics.call(lspService, cwd),
 		getProjectDiagnosticsSnapshotForFullMode(cwd, options),
 	]);
+	const projectDelta = loadProjectDiagnosticsDeltaReport(cwd);
 	const summaries = mergeDiagnosticsWithWidgetSummaries(
 		getFileDiagnosticSummaries(),
 		lspResults,
 		projectSnapshot,
+		projectDelta,
 	);
 	return formatAllMode(cwd, severity, summaries, {
 		mode: "full",
@@ -424,6 +485,14 @@ async function formatFullMode(
 						filesScanned: projectSnapshot.filesScanned,
 						diagnostics: projectSnapshot.diagnostics.length,
 						runners: projectSnapshot.runners,
+					},
+		projectDiagnosticsDelta:
+			projectDelta === undefined
+				? undefined
+				: {
+						diagnostics: projectDelta.diagnostics.length,
+						sources: projectDelta.sources,
+						turnIndex: projectDelta.turnIndex,
 					},
 	});
 }

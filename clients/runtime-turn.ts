@@ -24,6 +24,12 @@ import { getKnipIgnorePatterns } from "./file-utils.js";
 import type { GitleaksResult } from "./gitleaks-client.js";
 import type { GovulncheckResult } from "./govulncheck-client.js";
 import type { KnipClient, KnipIssue, KnipResult } from "./knip-client.js";
+import {
+	PROJECT_DIAGNOSTICS_CACHE_VERSION,
+	writeProjectDiagnosticsDeltaReport,
+} from "./project-diagnostics/cache.js";
+import { knipIssuesToProjectDiagnostics } from "./project-diagnostics/runner-adapters/knip.js";
+import type { ProjectDiagnostic } from "./project-diagnostics/types.js";
 import { logLatency } from "./latency-logger.js";
 import { emitLensTurnFindings } from "./lens-events.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
@@ -147,6 +153,8 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	const turnEndStart = Date.now();
 	const blockerParts: string[] = [];
 	const advisoryParts: string[] = [];
+	const projectDiagnosticsDelta: ProjectDiagnostic[] = [];
+	const projectDiagnosticsSources = new Set<string>();
 
 	// Re-surface inline blockers from this turn that the agent didn't fix.
 	// These were shown inline during write/edit but the agent moved on without resolving them.
@@ -165,7 +173,9 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	//      that covers it — suppresses stale neighbor state from earlier writes.
 	const t0 = Date.now();
 	const cascadeRuns = runtime.consumeCascadeRuns();
-	const cascadeResults = cascadeRuns.flatMap((r) => (r.result ? [r.result] : []));
+	const cascadeResults = cascadeRuns.flatMap((r) =>
+		r.result ? [r.result] : [],
+	);
 	if (cascadeResults.length > 0) {
 		const seen = new Map<string, (typeof cascadeResults)[number]>();
 		for (const result of cascadeResults) {
@@ -231,9 +241,15 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			},
 		});
 	}
-	const cascadeSkipped = { blockers: 0, non_code: 0, no_neighbors: 0, clean: 0 };
+	const cascadeSkipped = {
+		blockers: 0,
+		non_code: 0,
+		no_neighbors: 0,
+		clean: 0,
+	};
 	for (const r of cascadeRuns) {
-		if (r.skipReason) cascadeSkipped[r.skipReason] = (cascadeSkipped[r.skipReason] ?? 0) + 1;
+		if (r.skipReason)
+			cascadeSkipped[r.skipReason] = (cascadeSkipped[r.skipReason] ?? 0) + 1;
 	}
 	logLatency({
 		type: "phase",
@@ -304,6 +320,12 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					return modifiedSet.has(abs);
 				});
 				knipMeta.newIssues = newIssues.length;
+				if (newIssues.length > 0) {
+					projectDiagnosticsDelta.push(
+						...knipIssuesToProjectDiagnostics(cwd, newIssues),
+					);
+					projectDiagnosticsSources.add("knip");
+				}
 
 				const blockerIssues = newIssues.filter(
 					(i) => i.type === "unlisted" || i.type === "bin",
@@ -367,7 +389,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			const callSite = f.trace.find((t) => t.filename);
 			const where = callSite?.filename
 				? `${toRunnerDisplayPath(cwd, callSite.filename)}${callSite.line ? `:${callSite.line}` : ""}`
-				: f.module ?? f.packageName ?? "(module)";
+				: (f.module ?? f.packageName ?? "(module)");
 			const fix = f.fixedVersion
 				? ` — upgrade to ${f.fixedVersion} or later`
 				: " — no fix yet, track upstream";
@@ -526,6 +548,20 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	// Session summaries are intentionally suppressed at turn_end to avoid
 	// distracting the agent with non-blocking telemetry.
 
+	if (projectDiagnosticsDelta.length > 0) {
+		writeProjectDiagnosticsDeltaReport(cwd, {
+			version: PROJECT_DIAGNOSTICS_CACHE_VERSION,
+			cwd,
+			generatedAt: new Date().toISOString(),
+			sessionId: runtime.telemetrySessionId,
+			turnIndex: runtime.turnIndex,
+			projectSeqStart: runtime.turnStartProjectSeq,
+			projectSeqEnd: runtime.projectSeq,
+			diagnostics: projectDiagnosticsDelta,
+			sources: [...projectDiagnosticsSources].sort(),
+		});
+	}
+
 	const t4 = Date.now();
 	const modifiedRangesByFile = new Map(
 		Object.entries(turnState.files).map(([file, state]) => [
@@ -600,18 +636,22 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			const impactLines: string[] = [];
 			for (const filePath of files.slice(0, 5)) {
 				// Find callee keys for this file in the call graph
-				const fileCallerKeys = [...runtime.callGraph.callers.keys()]
-					.filter((k) => k.startsWith(`${filePath}:`));
+				const fileCallerKeys = [...runtime.callGraph.callers.keys()].filter(
+					(k) => k.startsWith(`${filePath}:`),
+				);
 				for (const calleeKey of fileCallerKeys.slice(0, 3)) {
 					const results = impact(runtime.callGraph, calleeKey);
 					if (results.length > 0) {
 						const summary = formatImpact(results, cwd);
-						if (summary) impactLines.push(`  ${calleeKey.split(":").pop()}: ${summary}`);
+						if (summary)
+							impactLines.push(`  ${calleeKey.split(":").pop()}: ${summary}`);
 					}
 				}
 			}
 			if (impactLines.length > 0) {
-				advisoryParts.push(`📊 Call-graph impact (changed symbols have callers):\n${impactLines.join("\n")}`);
+				advisoryParts.push(
+					`📊 Call-graph impact (changed symbols have callers):\n${impactLines.join("\n")}`,
+				);
 			}
 		} catch {
 			// Non-fatal — call graph is best-effort

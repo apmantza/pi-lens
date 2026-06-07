@@ -4,6 +4,7 @@ import { createLensDiagnosticsTool } from "../../tools/lens-diagnostics.js";
 const projectDiagnosticsMocks = vi.hoisted(() => ({
 	scanProjectDiagnostics: vi.fn(),
 	loadProjectDiagnosticsSnapshot: vi.fn(),
+	loadProjectDiagnosticsDeltaReport: vi.fn(),
 }));
 
 vi.mock("../../clients/project-diagnostics/scanner.js", () => ({
@@ -13,6 +14,8 @@ vi.mock("../../clients/project-diagnostics/scanner.js", () => ({
 vi.mock("../../clients/project-diagnostics/cache.js", () => ({
 	loadProjectDiagnosticsSnapshot:
 		projectDiagnosticsMocks.loadProjectDiagnosticsSnapshot,
+	loadProjectDiagnosticsDeltaReport:
+		projectDiagnosticsMocks.loadProjectDiagnosticsDeltaReport,
 }));
 
 // ── Mock widget state ─────────────────────────────────────────────────────────
@@ -28,6 +31,7 @@ vi.mock("../../clients/widget-state.js", () => ({
 beforeEach(() => {
 	projectDiagnosticsMocks.scanProjectDiagnostics.mockReset();
 	projectDiagnosticsMocks.loadProjectDiagnosticsSnapshot.mockReset();
+	projectDiagnosticsMocks.loadProjectDiagnosticsDeltaReport.mockReset();
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -204,6 +208,41 @@ describe("lens_diagnostics mode=delta", () => {
 		const text = String(result.content[0].text);
 		// No actionable warnings (they're warnings, not errors)
 		expect(text).toContain("No error");
+	});
+
+	it("formats project diagnostics delta records", async () => {
+		projectDiagnosticsMocks.loadProjectDiagnosticsSnapshot.mockReturnValue(
+			undefined,
+		);
+		projectDiagnosticsMocks.loadProjectDiagnosticsDeltaReport.mockReturnValue({
+			version: 1,
+			cwd: "/proj",
+			generatedAt: "2026-01-01T00:00:00.000Z",
+			sessionId: "session-1",
+			turnIndex: 3,
+			diagnostics: [
+				{
+					filePath: "/proj/src/knip.ts",
+					line: 12,
+					severity: "error",
+					semantic: "blocking",
+					tool: "knip",
+					runner: "knip",
+					rule: "knip:unlisted",
+					message: "Unlisted dependency lodash",
+					source: "project-scan",
+				},
+			],
+			sources: ["knip"],
+		});
+
+		const result = await run(makeTool(), { mode: "delta" });
+		const text = String(result.content[0].text);
+		expect(text).toContain("knip.ts");
+		expect(text).toContain("L12");
+		expect(text).toContain("knip:unlisted");
+		expect(text).toContain("Unlisted dependency lodash");
+		expect(result.details).toMatchObject({ projectDiagnostics: 1 });
 	});
 });
 
