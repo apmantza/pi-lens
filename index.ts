@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
+import { isToolCallEventType } from "./clients/tool-event.js";
 import { AstGrepClient } from "./clients/ast-grep-client.js";
 import { loadBootstrapClients } from "./clients/bootstrap.js";
 import { CacheManager } from "./clients/cache-manager.js";

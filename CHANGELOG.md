@@ -10,7 +10,9 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Fixed
 
-- **Extension updates no longer break with `Cannot find module …` after a failed install** — the committed `package-lock.json` is removed and git-ignored. A committed lockfile that drifted from `package.json` (e.g. the exact `web-tree-sitter` pin recorded as `^0.25.10` in the lock) made `npm ci` delete `node_modules` and then hard-fail on the desync, leaving an empty `node_modules` so the extension failed to load on its first import. Extensions now install via self-healing `npm install`; exact pins in `package.json` still enforce ABI-critical versions. CI/release workflows switched from `npm ci` to `npm install` (and dropped `setup-node`'s `cache: npm`, which requires a lockfile).
+- **Extension load no longer requires the host coding-agent package in `node_modules`** — `index.ts` and `clients/read-guard-tool-lines.ts` imported a *runtime* value (`isToolCallEventType`) from `@earendil-works/pi-coding-agent`. pi installs extension deps with `npm install --omit=dev`, so that package isn't present at runtime; and pulling it in drags a huge transitive tree (LLM provider SDKs) whose deeply nested paths exceed Windows' `MAX_PATH`, breaking `git clean -fdx` on `pi update` (→ a half-deleted `node_modules` → `Cannot find module 'vscode-jsonrpc/node.js'`). The one-line discriminant is now inlined in `clients/tool-event.ts`, so every `@earendil-works/pi-coding-agent` import is type-only (erased at runtime) — matching the established pi-extension pattern (e.g. `nicobailon/pi-subagents`).
+
+- **Hardening: `package-lock.json` removed and git-ignored** — a committed lockfile that drifted from `package.json` (e.g. the exact `web-tree-sitter` pin recorded as `^0.25.10` in the lock) makes `npm ci` delete `node_modules` then hard-fail on the desync. Extensions now install via self-healing `npm install`; exact pins in `package.json` still enforce ABI-critical versions. CI/release switched from `npm ci` to `npm install` (and dropped `setup-node`'s `cache: npm`, which requires a lockfile).
 
 ### Changed
 

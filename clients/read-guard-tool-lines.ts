@@ -1,6 +1,6 @@
 import * as nodeFs from "node:fs";
-import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { logReadGuardEvent } from "./read-guard-logger.js";
+import { isToolCallEventType } from "./tool-event.js";
 
 export interface GuardLineResult {
 	touchedLines: [number, number] | undefined;
