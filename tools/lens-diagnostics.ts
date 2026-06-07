@@ -153,6 +153,18 @@ function matchesSeverity(d: WidgetDiagnostic, severity: string): boolean {
 	return true;
 }
 
+/** Most-important first: blocking → error → warning/other, then by line. */
+function severityRank(d: WidgetDiagnostic): number {
+	if (d.semantic === "blocking") return 0;
+	if (d.severity === "error") return 1;
+	if (d.severity === "warning") return 2;
+	return 3;
+}
+
+function bySeverityThenLine(a: WidgetDiagnostic, b: WidgetDiagnostic): number {
+	return severityRank(a) - severityRank(b) || (a.line ?? 0) - (b.line ?? 0);
+}
+
 function formatAllMode(
 	cwd: string,
 	severity: string,
@@ -200,9 +212,9 @@ function formatAllMode(
 		// inline blocker output. The widget state now exposes the FULL set (not the
 		// TUI's 12-cap); the tool applies its own generous per-file budget purely to
 		// avoid flooding context on a pathologically broken file.
-		const matching = (s.diagnostics ?? []).filter((d) =>
-			matchesSeverity(d, severity),
-		);
+		const matching = (s.diagnostics ?? [])
+			.filter((d) => matchesSeverity(d, severity))
+			.sort(bySeverityThenLine);
 		const shown = matching.slice(0, MAX_DIAGNOSTICS_PER_FILE);
 		for (const d of shown) {
 			const marker = isErrorLike(d) ? (d.semantic === "blocking" ? "🔴 " : "") : "";

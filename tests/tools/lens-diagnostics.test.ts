@@ -283,6 +283,25 @@ describe("lens_diagnostics mode=all", () => {
 		expect(text).toMatch(/10 more in this file \(showing 50 of 60\)/);
 	});
 
+	it("orders blocking → error → warning, so a blocker survives the budget and leads", async () => {
+		mockSummaries.length = 0;
+		// Dispatch order puts the blocker LAST, after 50 warnings.
+		const diags = [
+			...Array.from({ length: 50 }, (_, i) => ({
+				severity: "warning" as const,
+				message: `w${i}`,
+				line: i + 1,
+				rule: "r",
+			})),
+			{ severity: "error", semantic: "blocking", message: "MUSTFIX", line: 999, rule: "e" },
+		];
+		mockSummaries.push(sum("/proj/x.ts", { blocking: 1, warnings: 50 }, { diagnostics: diags }));
+		const text = String((await run(makeTool(), { mode: "all" })).content[0].text);
+		// The blocker is not truncated by the 50-budget and is listed before the warnings.
+		expect(text).toContain("MUSTFIX");
+		expect(text.indexOf("MUSTFIX")).toBeLessThan(text.indexOf("w0"));
+	});
+
 	it("severity=error hides warning messages but shows error messages", async () => {
 		mockSummaries.length = 0;
 		mockSummaries.push(
