@@ -10,7 +10,10 @@ import {
 } from "../../clients/project-diagnostics/cache.js";
 import { knipIssuesToProjectDiagnostics } from "../../clients/project-diagnostics/runner-adapters/knip.js";
 import { scanProjectDiagnostics } from "../../clients/project-diagnostics/scanner.js";
-import type { ProjectDiagnosticsSnapshot } from "../../clients/project-diagnostics/types.js";
+import type {
+	ProjectDiagnosticsDeltaReport,
+	ProjectDiagnosticsSnapshot,
+} from "../../clients/project-diagnostics/types.js";
 
 let tmp: string;
 let previousDataDir: string | undefined;
@@ -38,6 +41,21 @@ function snapshot(
 		diagnostics: [],
 		filesScanned: 0,
 		runners: ["fact-rules"],
+		...overrides,
+	};
+}
+
+function deltaReport(
+	overrides: Partial<ProjectDiagnosticsDeltaReport> = {},
+): ProjectDiagnosticsDeltaReport {
+	return {
+		version: 1,
+		cwd: tmp,
+		generatedAt: "2026-01-01T00:00:00.000Z",
+		sessionId: "session-1",
+		turnIndex: 1,
+		diagnostics: [],
+		sources: [],
 		...overrides,
 	};
 }
@@ -92,6 +110,15 @@ describe("project diagnostics cache", () => {
 		};
 		writeProjectDiagnosticsDeltaReport(tmp, report);
 		expect(loadProjectDiagnosticsDeltaReport(tmp)).toEqual(report);
+	});
+
+	it("returns undefined when no delta report has been written", () => {
+		expect(loadProjectDiagnosticsDeltaReport(tmp)).toBeUndefined();
+	});
+
+	it("ignores stale delta report versions", () => {
+		writeProjectDiagnosticsDeltaReport(tmp, deltaReport({ version: 0 }));
+		expect(loadProjectDiagnosticsDeltaReport(tmp)).toBeUndefined();
 	});
 });
 

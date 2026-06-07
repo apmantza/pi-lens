@@ -170,6 +170,8 @@ Use it first for partial apply, then LSP workspace edits/actionable autofix. It 
 
 ## Open design TODOs
 
+- **Project-diagnostics adapter backlog (#179)** — turn-end/project runners are normalized into `ProjectDiagnostic` records and surfaced via `lens_diagnostics` delta/full (#175). Only the Knip adapter (`clients/project-diagnostics/runner-adapters/knip.ts`) is done; test-runner, call-graph, Madge, jscpd, type-coverage, compiler checks (`/lens-booboo`), and production-readiness signals still emit advisory text only. Mirror the Knip adapter pattern + wire into `runtime-turn.ts` `projectDiagnosticsDelta`.
+
 - **LSP server preference via project config** — `clients/lsp/config.ts` supports `.pi-lens/lsp.json` with `disabledServers` and custom server entries, but there is no way to express a *preference* between built-in candidates (e.g. prefer `basedpyright` over `pyright` when both are installed). `PythonServer.spawn()` currently uses first-found-wins ordering (`pyright-langserver` before `basedpyright-langserver`). A future `preferredServer` key in `LSPConfig` should let projects override this ordering; the server policy layer (`clients/lsp/server-policy.ts`) is the right place to apply the preference before candidate resolution.
 
 ## Legacy async-cleanup TODO
