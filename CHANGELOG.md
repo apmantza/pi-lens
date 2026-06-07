@@ -6,6 +6,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Added
 
+- **`ast_grep_search` results register as reads so a follow-up edit isn't blocked (refs #169)** — the search→edit flow (find where something must change, then edit those lines) was blocked by the read-guard because the search didn't count as a read. `ast_grep_search` now attaches the shown match locations to its result (`details.searchReads`), and the tool_result handler registers each as a read **± 2 lines** of context via the new `clients/search-read-registration.ts`. Only the shown lines are registered — never the whole file — so editing an unseen region is still guarded. (`lsp_navigation` and bash `grep` are the remaining parts of #169.)
+
 - **Disable automatic context injection without disabling pi-lens (closes #165)** — a narrow opt-out for the prompt-cache cost of prepending automatic findings. `--no-lens-context` flag, `contextInjection.enabled: false` in `~/.pi-lens/config.json`, `PI_LENS_NO_CONTEXT_INJECTION=1` env, and a runtime `/lens-context-toggle` command. When off, the `context` hook stops prepending session-start guidance / turn-end findings / test findings, but everything else keeps running — tools, LSP, read-guard, formatting, inline tool-result feedback — and findings are still cached so `lens_diagnostics` and `/lens-health` work. Precedence: env → CLI flag → config.
 
 ### Fixed

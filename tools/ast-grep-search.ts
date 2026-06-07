@@ -6,13 +6,31 @@
 
 import { Type } from "typebox";
 import type { AstGrepClient } from "../clients/ast-grep-client.js";
+import type { AstGrepMatch } from "../clients/ast-grep-types.js";
 import {
 	classifyAstGrepError,
 	logAstGrepToolEvent,
 	type AstGrepToolOutcome,
 } from "../clients/ast-grep-tool-logger.js";
 import { hasStructuralIntent, synthesizeRule } from "../clients/ast-grep-yaml-synth.js";
+import type { SearchReadLocation } from "../clients/search-read-registration.js";
 import { LANGUAGES } from "./shared.js";
+
+/** Map matches to the 1-based line spans shown, for read-guard registration (#169). */
+function toSearchReads(matches: AstGrepMatch[]): SearchReadLocation[] {
+	const out: SearchReadLocation[] = [];
+	for (const m of matches) {
+		const start = m.range?.start?.line; // ast-grep ranges are 0-based
+		if (!m.file || typeof start !== "number") continue;
+		const end = m.range?.end?.line;
+		out.push({
+			file: m.file,
+			startLine: start + 1,
+			endLine: (typeof end === "number" ? end : start) + 1,
+		});
+	}
+	return out;
+}
 
 function lineCount(value: string): number {
 	if (!value) return 0;
@@ -342,6 +360,9 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 						truncated: hasMore,
 						hasMore,
 						skip: skipOffset,
+						// Lines shown to the agent — the read-guard registers these so a
+						// follow-up edit to a match isn't blocked (#169). 1-based.
+						searchReads: toSearchReads(page),
 					},
 				};
 			}
@@ -390,6 +411,9 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 					truncated: hasMore,
 					hasMore,
 					skip: skipOffset,
+					// Lines shown to the agent — registered as reads by the read-guard
+					// so a follow-up edit to a match isn't blocked (#169). 1-based.
+					searchReads: toSearchReads(page),
 				},
 			};
 		},

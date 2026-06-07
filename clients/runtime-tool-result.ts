@@ -3,6 +3,10 @@ import * as nodeFs from "node:fs";
 import * as path from "node:path";
 import { extractWrittenPathsFromCommand } from "./bash-file-access.js";
 import type { BiomeClient } from "./biome-client.js";
+import {
+	registerSearchReads,
+	type SearchReadLocation,
+} from "./search-read-registration.js";
 import type { CacheManager } from "./cache-manager.js";
 import { createFileTime } from "./file-time.js";
 import { isPathIgnoredByProject } from "./file-utils.js";
@@ -311,6 +315,22 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			if (isExternalOrVendorFile(wp, workspaceRoot)) continue;
 			if (isPathIgnoredByProject(wp, workspaceRoot, false)) continue;
 			deps.readGuard?.recordWritten(wp);
+		}
+	}
+
+	// Search tools reveal specific lines (file:line) the agent then edits — register
+	// those shown lines (± context) as reads so the follow-up edit isn't blocked (#169).
+	// Our tools attach the locations as `details.searchReads`; grep parsing is wired
+	// separately. Only the shown lines are registered, never the whole file.
+	if (deps.readGuard && !getFlag("no-read-guard")) {
+		const searchReads = (event.details as { searchReads?: SearchReadLocation[] })
+			?.searchReads;
+		if (Array.isArray(searchReads) && searchReads.length > 0) {
+			registerSearchReads(deps.readGuard, searchReads, {
+				projectRoot: workspaceRoot,
+				turnIndex: runtime.turnIndex,
+				writeIndex: runtime.peekWriteIndex(),
+			});
 		}
 	}
 
