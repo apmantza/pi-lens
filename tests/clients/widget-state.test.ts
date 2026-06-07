@@ -67,6 +67,32 @@ describe("getFileDiagnosticSummaries", () => {
 		const second = getFileDiagnosticSummaries()[0];
 		expect(second.diagnostics[0].message).toBe("m");
 	});
+
+	it("exposes the FULL diagnostic set, not the TUI's per-file display cap", () => {
+		const filePath = `${process.cwd()}/many.ts`;
+		// Record 30 warnings — far above MAX_STORED_DIAGNOSTICS_PER_FILE (12).
+		recordDiagnostics(
+			filePath,
+			Array.from({ length: 30 }, (_, i) => ({
+				severity: "warning" as const,
+				line: i + 1,
+				rule: "r",
+				message: `w${i}`,
+			})),
+		);
+		const entry = getFileDiagnosticSummaries().find(
+			(s) => s.filePath === filePath,
+		);
+		expect(entry?.warnings).toBe(30);
+		// The tool must see all 30, not the 12 the widget keeps for rendering.
+		expect(entry?.diagnostics).toHaveLength(30);
+
+		// ...while the TUI-facing stored list stays capped at 12 (no regression).
+		const snap = __testing
+			.getWidgetStateSnapshot()
+			.files.find((f) => f.filePath === filePath);
+		expect(snap?.storedDiagnostics).toBe(12);
+	});
 });
 
 describe("widget-state renderWidget", () => {

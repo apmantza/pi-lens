@@ -247,12 +247,12 @@ describe("lens_diagnostics mode=all", () => {
 		expect(text).toContain("L30");
 	});
 
-	it("notes when a file has more diagnostics than the per-file storage cap", async () => {
+	it("shows every provided diagnostic with no truncation note under the budget", async () => {
 		mockSummaries.length = 0;
 		mockSummaries.push(
 			sum(
-				"/proj/src/big.ts",
-				{ warnings: 20 },
+				"/proj/src/foo.ts",
+				{ warnings: 2 },
 				{
 					diagnostics: [
 						{ severity: "warning", message: "w1", line: 1, rule: "r" },
@@ -261,10 +261,26 @@ describe("lens_diagnostics mode=all", () => {
 				},
 			),
 		);
-		const result = await run(makeTool(), { mode: "all" });
-		const text = String(result.content[0].text);
+		const text = String((await run(makeTool(), { mode: "all" })).content[0].text);
 		expect(text).toContain("w1");
-		expect(text).toMatch(/18 more not shown/);
+		expect(text).toContain("w2");
+		expect(text).not.toMatch(/more in this file/);
+	});
+
+	it("applies its own per-file budget (50) and reports the accurate remainder", async () => {
+		mockSummaries.length = 0;
+		const many = Array.from({ length: 60 }, (_, i) => ({
+			severity: "warning" as const,
+			message: `w${i}`,
+			line: i + 1,
+			rule: "r",
+		}));
+		mockSummaries.push(sum("/proj/src/big.ts", { warnings: 60 }, { diagnostics: many }));
+		const text = String((await run(makeTool(), { mode: "all" })).content[0].text);
+		expect(text).toContain("w0");
+		expect(text).toContain("w49"); // 50th shown
+		expect(text).not.toContain("w50"); // 51st truncated
+		expect(text).toMatch(/10 more in this file \(showing 50 of 60\)/);
 	});
 
 	it("severity=error hides warning messages but shows error messages", async () => {

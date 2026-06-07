@@ -31,7 +31,15 @@ interface FileRecord {
 	filePath: string;
 	runners: Map<string, { status: string; count: number; durationMs?: number }>;
 	formatters: Map<string, { changed: boolean; success: boolean }>;
+	/** Capped to MAX_STORED_DIAGNOSTICS_PER_FILE — drives the TUI widget. */
 	diagnostics: WidgetDiagnostic[];
+	/**
+	 * Full, uncapped diagnostics for this file. The TUI never renders these
+	 * (it uses the capped `diagnostics` + its own row limits); they exist so
+	 * the lens_diagnostics tool can expose the complete set to the agent without
+	 * inheriting the widget's display cap.
+	 */
+	allDiagnostics: WidgetDiagnostic[];
 	diagnosticCounts: {
 		blocking: number;
 		errors: number;
@@ -147,6 +155,7 @@ export function recordDiagnostics(
 
 	rec.diagnosticCounts = { blocking, errors, warnings };
 	rec.diagnostics = capStoredDiagnostics(normalized);
+	rec.allDiagnostics = normalized;
 	rec.hasFinalDiagnosticsSnapshot = true;
 	rec.touchedAt = Date.now();
 	files.set(filePath, rec);
@@ -161,17 +170,19 @@ export interface FileDiagnosticSummary {
 	warnings: number;
 	hasFinalSnapshot: boolean;
 	/**
-	 * The actual stored diagnostics (prioritised: blockers first, capped at
-	 * MAX_STORED_DIAGNOSTICS_PER_FILE). May be fewer than blocking+errors+warnings
-	 * when a file has more diagnostics than the per-file storage cap.
+	 * The full, uncapped diagnostics for this file (not limited by the TUI's
+	 * per-file storage cap). `blocking + errors + warnings` may exceed
+	 * `diagnostics.length` because a single diagnostic can be both blocking and
+	 * an error — these are the actual records, deduplicated by the runners.
 	 */
 	diagnostics: WidgetDiagnostic[];
 }
 
 /**
  * Return current diagnostics for every file pi-lens has seen this session.
- * Used by lens_diagnostics tool (mode: "all") to expose widget state to agents.
- * Includes the actual diagnostic messages (not just counts), capped per file.
+ * Used by lens_diagnostics tool (mode: "all"). Exposes the FULL per-file
+ * diagnostic set — decoupled from the widget's display cap — so the agent sees
+ * everything, not just the 12 the TUI keeps for rendering.
  */
 export function getFileDiagnosticSummaries(): FileDiagnosticSummary[] {
 	return [...files.values()].map((rec) => ({
@@ -180,7 +191,7 @@ export function getFileDiagnosticSummaries(): FileDiagnosticSummary[] {
 		errors: rec.diagnosticCounts.errors,
 		warnings: rec.diagnosticCounts.warnings,
 		hasFinalSnapshot: rec.hasFinalDiagnosticsSnapshot,
-		diagnostics: rec.diagnostics.map((d) => ({ ...d })),
+		diagnostics: rec.allDiagnostics.map((d) => ({ ...d })),
 	}));
 }
 
@@ -511,6 +522,7 @@ function getOrCreate(filePath: string): FileRecord {
 			runners: new Map(),
 			formatters: new Map(),
 			diagnostics: [],
+			allDiagnostics: [],
 			diagnosticCounts: { blocking: 0, errors: 0, warnings: 0 },
 			hasFinalDiagnosticsSnapshot: false,
 			touchedAt: Date.now(),

@@ -20,7 +20,7 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Changed
 
-- **`lens_diagnostics` mode=all now shows the actual diagnostics, not just counts** — previously it printed `file.ts  3W` with no indication of *what* the warnings were. It now lists each stored diagnostic in the same `L<line>: <message> [rule]` shape as the inline blocker output (blockers first, 🔴-marked), honouring the `severity` filter, with a `… N more not shown` note when a file exceeds the per-file storage cap. `getFileDiagnosticSummaries()` now returns the underlying `WidgetDiagnostic[]` (defensively copied) alongside the counts.
+- **`lens_diagnostics` mode=all now shows the actual diagnostics, not just counts, and is no longer limited by the TUI's display cap** — previously it printed `file.ts  3W` with no indication of *what* the warnings were. It now lists each diagnostic in the same `L<line>: <message> [rule]` shape as the inline blocker output (blockers first, 🔴-marked), honouring the `severity` filter. The widget state keeps a separate **uncapped** per-file diagnostic list for the tool (the TUI still uses its 12-entry render cap), so `getFileDiagnosticSummaries()` exposes the **full** set instead of just the 12 the widget retained for rendering. The tool applies its own generous 50-per-file budget with an accurate `… N more in this file (showing 50 of N)` note (the old note double-counted via `blocking + errors + warnings`).
 
 ### Added
 

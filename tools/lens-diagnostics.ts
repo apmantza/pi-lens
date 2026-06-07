@@ -18,6 +18,11 @@ import {
 	type WidgetDiagnostic,
 } from "../clients/widget-state.js";
 
+// The widget state exposes the full per-file diagnostic set; this is the tool's
+// own generous display budget per file (independent of the TUI's 12 cap), to
+// keep output bounded on a pathologically broken file.
+const MAX_DIAGNOSTICS_PER_FILE = 50;
+
 export function createLensDiagnosticsTool(
 	cacheManager: CacheManager,
 	getCwd: () => string,
@@ -192,11 +197,13 @@ function formatAllMode(
 
 		// List the actual diagnostics (not just counts) so the agent can act on
 		// them without re-running anything — same "L<line>: <message>" shape as the
-		// inline blocker output. Stored diagnostics are capped per file and ordered
-		// with blockers first.
-		const shown = (s.diagnostics ?? []).filter((d) =>
+		// inline blocker output. The widget state now exposes the FULL set (not the
+		// TUI's 12-cap); the tool applies its own generous per-file budget purely to
+		// avoid flooding context on a pathologically broken file.
+		const matching = (s.diagnostics ?? []).filter((d) =>
 			matchesSeverity(d, severity),
 		);
+		const shown = matching.slice(0, MAX_DIAGNOSTICS_PER_FILE);
 		for (const d of shown) {
 			const marker = isErrorLike(d) ? (d.semantic === "blocking" ? "🔴 " : "") : "";
 			const label = d.rule ?? d.tool;
@@ -204,14 +211,10 @@ function formatAllMode(
 			const msg = d.message.replace(/\s+/g, " ").trim();
 			lines.push(`  ${marker}L${d.line ?? "?"}: ${msg}${tag}`);
 		}
-		const totalForFile =
-			severity === "error"
-				? s.blocking + s.errors
-				: severity === "warning"
-					? s.warnings
-					: s.blocking + s.errors + s.warnings;
-		if (totalForFile > shown.length) {
-			lines.push(`  … ${totalForFile - shown.length} more not shown (per-file display cap)`);
+		if (matching.length > shown.length) {
+			lines.push(
+				`  … ${matching.length - shown.length} more in this file (showing ${shown.length} of ${matching.length})`,
+			);
 		}
 
 		totalBlocking += s.blocking;
