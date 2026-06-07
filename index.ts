@@ -19,6 +19,10 @@ import {
 	getLatencyReports,
 	resetDispatchBaselines,
 } from "./clients/dispatch/integration.js";
+import {
+	extractReadPathsFromCommand,
+	extractWrittenPathsFromCommand,
+} from "./clients/bash-file-access.js";
 import { detectFileKind } from "./clients/file-kinds.js";
 import { isPathIgnoredByProject } from "./clients/file-utils.js";
 import {
@@ -200,150 +204,6 @@ function resolveToolCallFilePath(
 	if (!rawFilePath) return undefined;
 	if (path.isAbsolute(rawFilePath)) return rawFilePath;
 	return path.resolve(cwd ?? projectRoot, rawFilePath);
-}
-
-/** A contiguous range of lines a bash command showed the agent. */
-export interface ReadSpan {
-	filePath: string;
-	/** 1-based first line read. */
-	offset: number;
-	/** Number of lines read. */
-	limit: number;
-}
-
-// Source-ish extensions worth registering a read for. Anchored end-check so it
-// is linear (no catastrophic backtracking).
-const READABLE_EXT_RE =
-	/\.(?:ts|tsx|js|jsx|mjs|cjs|py|sh|rs|go|cs|java|kt|rb|php|c|cpp|cc|h|hpp|json|jsonc|yaml|yml|toml|md|txt|env|cfg|conf|ini|html|css|scss|less|xml|sql|vue|svelte)$/i;
-
-function stripQuotes(token: string): string {
-	if (token.length >= 2) {
-		const first = token[0];
-		const last = token[token.length - 1];
-		if ((first === "'" && last === "'") || (first === '"' && last === '"')) {
-			return token.slice(1, -1);
-		}
-	}
-	return token;
-}
-
-/** Parse a count flag value like `-20`, `-n20`, or the `20` following `-n`. */
-function parseCountFlag(token: string): number | undefined {
-	const digits = token.replace(/^-n?/, "").replace(/[^0-9]/g, "");
-	if (!digits) return undefined;
-	const n = Number.parseInt(digits, 10);
-	return Number.isFinite(n) && n > 0 ? n : undefined;
-}
-
-/**
- * Extract the line ranges a bash command explicitly showed the agent, so the
- * read-guard can treat those lines as read and not block a follow-up edit.
- *
- * Deliberately conservative — only file-VIEWING commands (`cat`/`head`/`tail`/
- * `sed -n A,Bp`), and only the exact lines shown:
- *   - `cat`/`bat`/`less`/`more`/`nl FILE`  → whole file
- *   - `head [-n N] FILE`                    → lines 1..N (default 10)
- *   - `tail [-n N] FILE`                    → last N lines (default 10)
- *   - `sed -n 'A,Bp' FILE`                  → lines A..B
- *
- * It does NOT register: writes (`>`, `>>`, `tee`, `sed -i`, `cp`, `mv`), `grep`
- * (scattered matches, not a contiguous view), `find` (names, no content), or
- * bare path mentions in arbitrary commands. Registering any of those would let
- * an edit through for content the agent never actually saw.
- */
-export function extractReadPathsFromCommand(
-	command: string,
-	cwd: string,
-): ReadSpan[] {
-	const spans: ReadSpan[] = [];
-	const seen = new Set<string>();
-
-	const resolveFile = (token: string): { abs: string; total: number } | null => {
-		const cleaned = stripQuotes(token);
-		if (!cleaned || cleaned.startsWith("-") || !READABLE_EXT_RE.test(cleaned)) {
-			return null;
-		}
-		const abs = path.isAbsolute(cleaned)
-			? cleaned
-			: path.resolve(cwd, cleaned);
-		try {
-			if (!nodeFs.statSync(abs).isFile()) return null;
-		} catch {
-			return null;
-		}
-		return { abs, total: countFileLines(abs) };
-	};
-
-	const addSpan = (token: string, start: number, count: number) => {
-		const file = resolveFile(token);
-		if (!file) return;
-		const offset = Math.min(Math.max(1, start), file.total);
-		const limit = Math.min(count, file.total - offset + 1);
-		if (limit < 1) return;
-		const key = `${file.abs}:${offset}:${limit}`;
-		if (seen.has(key)) return;
-		seen.add(key);
-		spans.push({ filePath: file.abs, offset, limit });
-	};
-
-	// Split on shell sequencing/pipe operators so each segment has its own verb.
-	for (const rawSegment of command.split(/&&|\|\||[;|\n]/)) {
-		const segment = rawSegment.trim();
-		if (!segment) continue;
-		const tokens = segment.split(/\s+/);
-		const verb = path.basename(tokens[0] ?? "");
-		const args = tokens.slice(1);
-
-		if (["cat", "bat", "less", "more", "nl"].includes(verb)) {
-			for (const a of args) addSpan(a, 1, Number.MAX_SAFE_INTEGER);
-		} else if (verb === "head" || verb === "tail") {
-			let count: number | undefined;
-			const files: string[] = [];
-			for (let i = 0; i < args.length; i++) {
-				const a = args[i];
-				if (a === "-n" || a === "-c") {
-					const next = args[i + 1];
-					if (next !== undefined) {
-						count = parseCountFlag(next) ?? count;
-						i++;
-					}
-				} else if (/^-n?\d+$/.test(a)) {
-					count = parseCountFlag(a) ?? count;
-				} else if (a.startsWith("-")) {
-					// other flag — ignore
-				} else {
-					files.push(a);
-				}
-			}
-			const n = count ?? 10; // GNU head/tail default
-			for (const f of files) {
-				const file = resolveFile(f);
-				if (!file) continue;
-				if (verb === "head") addSpan(f, 1, n);
-				else addSpan(f, file.total - n + 1, n); // tail: last n lines
-			}
-		} else if (verb === "sed") {
-			// Only the read-only `sed -n 'A,Bp'` form (NOT `sed -i`, which writes).
-			if (args.includes("-i")) continue;
-			let range: { start: number; end: number } | undefined;
-			for (const a of args) {
-				const m = stripQuotes(a).match(/^(\d+),(\d+)p$/);
-				if (m) {
-					range = {
-						start: Number.parseInt(m[1], 10),
-						end: Number.parseInt(m[2], 10),
-					};
-					break;
-				}
-			}
-			if (!range) continue;
-			for (const a of args) {
-				addSpan(a, range.start, range.end - range.start + 1);
-			}
-		}
-	}
-
-	return spans;
 }
 
 type ReadToolInput = {
@@ -1527,19 +1387,23 @@ export default function (pi: ExtensionAPI) {
 			});
 		}
 
-		// --- Read-Before-Edit Guard: register file views done via `bash` ---
-		// Only the bash tool — grep/find tools (and their patterns) are not
-		// contiguous file reads. extractReadPathsFromCommand handles read-only
-		// view commands (cat/head/tail/sed -n) and the exact line ranges shown.
+		// --- Read-Before-Edit Guard: register file access done via `bash` ---
+		// Mirrors how the Read/Write tools are tracked. Only the bash tool —
+		// grep/find tools (and their patterns) are not contiguous file access.
+		//   reads  (cat/head/tail/sed -n) → recordRead with the exact range shown
+		//   writes (>, >>, tee, sed -i, cp/mv dest, touch) → noteCreatedFile, so the
+		//          agent "owns" the file (recordWritten fires at tool_result), same
+		//          as the Write tool.
 		if (toolName === "bash" && !getLensFlag("no-read-guard")) {
 			const cmd = (event.input as Record<string, unknown>)?.command;
 			if (typeof cmd === "string" && cmd) {
 				const effectiveCwd = ctx.cwd ?? runtime.projectRoot ?? process.cwd();
+				const inScope = (fp: string) =>
+					!isPathIgnoredByProject(fp, runtime.projectRoot, false) &&
+					!isExternalOrVendorFile(fp, runtime.projectRoot);
+
 				for (const span of extractReadPathsFromCommand(cmd, effectiveCwd)) {
-					if (isPathIgnoredByProject(span.filePath, runtime.projectRoot, false))
-						continue;
-					if (isExternalOrVendorFile(span.filePath, runtime.projectRoot))
-						continue;
+					if (!inScope(span.filePath)) continue;
 					runtime.readGuard.recordRead({
 						filePath: span.filePath,
 						requestedOffset: span.offset,
@@ -1551,6 +1415,15 @@ export default function (pi: ExtensionAPI) {
 						writeIndex: runtime.peekWriteIndex(),
 						timestamp: Date.now(),
 					});
+				}
+
+				for (const wp of extractWrittenPathsFromCommand(cmd, effectiveCwd)) {
+					if (!inScope(wp)) continue;
+					runtime.readGuard.noteCreatedFile(
+						wp,
+						runtime.turnIndex,
+						runtime.peekWriteIndex(),
+					);
 				}
 			}
 		}
