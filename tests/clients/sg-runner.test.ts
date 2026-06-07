@@ -289,4 +289,88 @@ describe("SgRunner", () => {
 			);
 		});
 	});
+
+	describe("tempScanWithFixAsync() — apply reports the pre-apply match count", () => {
+		it("counts what was changed even though the rule no longer matches post-apply", async () => {
+			const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-sg-apply-"));
+			try {
+				const oneMatch = JSON.stringify([
+					{
+						file: path.join(root, "a.ts"),
+						range: {
+							start: { line: 0, column: 0 },
+							end: { line: 0, column: 5 },
+						},
+						text: "var x",
+					},
+				]);
+				// Real-world semantics: once --update-all rewrites the file the rule
+				// stops matching, so a json pass AFTER apply returns zero. The mock
+				// encodes that ordering dependency — the count pass must run first.
+				let applied = false;
+				const jsonAppliedState: boolean[] = [];
+				safeSpawnAsync.mockImplementation(
+					async (_cmd: string, args: string[]) => {
+						if (args.includes("--update-all")) {
+							applied = true;
+							return { status: 0, error: null, stdout: "", stderr: "" };
+						}
+						if (args.includes("--json")) {
+							jsonAppliedState.push(applied);
+							return {
+								status: 0,
+								error: null,
+								stdout: applied ? "[]" : oneMatch,
+								stderr: "",
+							};
+						}
+						return { status: 0, error: null, stdout: "", stderr: "" };
+					},
+				);
+
+				const { SgRunner } = await import("../../clients/sg-runner.js");
+				const runner = new SgRunner();
+				const result = await runner.tempScanWithFixAsync(
+					root,
+					"agent-rule",
+					"id: agent-rule\nrule: { pattern: var $X }\nfix: let $X\n",
+					true,
+				);
+
+				// The count (json) pass must run BEFORE --update-all so it still
+				// sees the match. The old code ran it after and reported zero.
+				expect(jsonAppliedState).toEqual([false]);
+				expect(result.error).toBeUndefined();
+				expect(result.matches).toHaveLength(1);
+			} finally {
+				fs.rmSync(root, { recursive: true, force: true });
+			}
+		});
+
+		it("dry-run (applyFixes=false) never writes — no --update-all", async () => {
+			const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-sg-dry-"));
+			try {
+				safeSpawnAsync.mockResolvedValue({
+					status: 0,
+					error: null,
+					stdout: "[]",
+					stderr: "",
+				});
+				const { SgRunner } = await import("../../clients/sg-runner.js");
+				const runner = new SgRunner();
+				await runner.tempScanWithFixAsync(
+					root,
+					"agent-rule",
+					"id: agent-rule\nrule: { pattern: var $X }\nfix: let $X\n",
+					false,
+				);
+				const allArgs = safeSpawnAsync.mock.calls.flatMap(
+					(c) => c[1] as string[],
+				);
+				expect(allArgs).not.toContain("--update-all");
+			} finally {
+				fs.rmSync(root, { recursive: true, force: true });
+			}
+		});
+	});
 });

@@ -605,7 +605,18 @@ export class SgRunner {
 				);
 				return { matches: this.parseScanOutput(result.stdout || result.stderr || "") };
 			}
-			// Apply: write fixes then collect what changed via a second json pass
+			// Apply: capture matches BEFORE writing — once --update-all applies
+			// the fix the rule no longer matches, so a post-apply json pass would
+			// report zero even on a successful apply. Count first, then write.
+			const jsonResult = await safeSpawnAsync(
+				sgCmd,
+				[...sgPre, "scan", "--config", configFile, "--json",
+					...sgExcludeArgsForProject(dir), dir],
+				{ timeout },
+			);
+			const matches = this.parseScanOutput(
+				jsonResult.stdout || jsonResult.stderr || "",
+			);
 			const applyResult = await safeSpawnAsync(
 				sgCmd,
 				[...sgPre, "scan", "--config", configFile, "--update-all",
@@ -615,13 +626,7 @@ export class SgRunner {
 			if (applyResult.error) {
 				return { matches: [], error: applyResult.error.message };
 			}
-			const jsonResult = await safeSpawnAsync(
-				sgCmd,
-				[...sgPre, "scan", "--config", configFile, "--json",
-					...sgExcludeArgsForProject(dir), dir],
-				{ timeout },
-			);
-			return { matches: this.parseScanOutput(jsonResult.stdout || jsonResult.stderr || "") };
+			return { matches };
 		} catch (err) {
 			return { matches: [], error: String(err) };
 		} finally {
@@ -642,7 +647,7 @@ export class SgRunner {
 			if (showModeIndicator) {
 				return isDryRun
 					? "[DRY-RUN] No matches found."
-					: "[APPLIED] No changes made (no matches found).";
+					: "[NOT APPLIED] No matches found — nothing was changed. Run ast_grep_search to confirm the pattern matches before applying.";
 			}
 			return "No matches found";
 		}

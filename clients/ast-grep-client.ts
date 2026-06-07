@@ -327,10 +327,12 @@ export class AstGrepClient {
 			};
 		}
 
-		// Apply: --update-all and --json are MUTUALLY EXCLUSIVE in sg.
-		// Run twice:
-		//   1. --update-all to actually write the files
-		//   2. --json=compact (without rewrite) to collect matches for display
+		// Apply: --update-all writes the files. We do NOT recount afterwards —
+		// the original pattern no longer matches post-rewrite, and searching for
+		// the rewrite as a pattern is unreliable (multi-line rewrites and
+		// metavariable substitutions don't round-trip into a valid search
+		// pattern, yielding a false "0 matches" even on a successful apply).
+		// preCheck above already captured exactly what matched and was rewritten.
 		const applyResult = await this.runner.exec([
 			...baseArgs,
 			"--update-all",
@@ -345,22 +347,10 @@ export class AstGrepClient {
 				error: applyResult.error,
 			};
 		}
-
-		// Search for what was changed (pattern no longer matches after rewrite,
-		// so search for the rewrite pattern to show what was applied)
-		const searchResult = await this.runner.exec([
-			"run",
-			"-p",
-			rewrite,
-			"--lang",
-			lang,
-			"--json=compact",
-			...paths,
-		]);
 		return {
-			matches: searchResult.matches,
-			totalMatches: searchResult.totalMatches,
-			truncated: searchResult.truncated,
+			matches: preCheck.matches,
+			totalMatches: preCheck.totalMatches,
+			truncated: preCheck.truncated,
 			applied: true,
 			error: undefined,
 		};
