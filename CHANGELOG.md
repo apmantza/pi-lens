@@ -6,6 +6,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Added
 
+- **Extension-wiring test harness (`createPiMock`) (refs #171)** — a dependency-free mock of the host `ExtensionAPI` (`tests/support/pi-mock.ts`) that records everything `index.ts` registers (flags/commands/tools/lifecycle hooks) and lets a test drive a hook (`emit`) or command (`runCommand`) through the *real* entry, with `makeCtx()` capturing `ui.notify`/`setStatus`/`setWidget`. First wiring tests assert the full registration contract and that `context` injection is gated by `--no-lens-context` and flipped by `/lens-context-toggle` — the glue that was previously untested and that the dist-packaging breakage showed we need. `tests/lens-toggle-command.test.ts` migrated to the harness as the template; remaining bespoke mocks migrate opportunistically.
+
 - **Startup-time logging (makes the #182 win measurable)** — pi-lens now records how long pi took to load it: `performance.now()` captured as the first statement in the extension entry (after all imports = full jiti transpile paid) gives ms from pi's process start to pi-lens load-complete. Emitted once per load as a human line in `sessionstart.log` (`pi-lens loaded: <ms>ms after process start (from dist|source)`) and a structured `latency.log` entry (`phase: "extension_loaded"`, `metadata.loadedFrom`). The `loadedFrom` tag distinguishes the precompiled `dist/` path from `source`/jiti, so the transpile-on-startup cost is now quantified rather than guessed (`clients/startup-timing.ts`).
 
 ### Fixed
