@@ -4,6 +4,10 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Startup-time logging (makes the #182 win measurable)** — pi-lens now records how long pi took to load it: `performance.now()` captured as the first statement in the extension entry (after all imports = full jiti transpile paid) gives ms from pi's process start to pi-lens load-complete. Emitted once per load as a human line in `sessionstart.log` (`pi-lens loaded: <ms>ms after process start (from dist|source)`) and a structured `latency.log` entry (`phase: "extension_loaded"`, `metadata.loadedFrom`). The `loadedFrom` tag distinguishes the precompiled `dist/` path from `source`/jiti, so the transpile-on-startup cost is now quantified rather than guessed (`clients/startup-timing.ts`).
+
 ### Fixed
 
 - **Faster startup: ship precompiled JS instead of transpiling on every launch (closes #182)** — pi-lens was distributed as TypeScript source (`main: index.ts`, `pi.extensions: ["./index.ts"]`), so pi's jiti loader transpiled ~215 `.ts` files on every cold start (including `/new`), adding ~3.5s. The package now ships a precompiled `dist/` and points `main` + `pi.extensions` at `./dist/index.js`, which pi loads directly (~1.5s). A `prepare` step (`tsconfig.dist.json` → `dist/`, transpile-only via `--noCheck`) builds it **on install — including `git:` installs, which run `npm install` not `npm pack` — and before publish**, so both install paths get the compiled output with no rebuild script. Asset resolution is unaffected: `rules/`, `config/`, `skills/`, and grammars resolve via `getPackageRoot()` (walks up to `package.json`), not module depth. Guarded by `tests/packaging.test.ts` (entry/`files` contract), an upgraded `scripts/check-extensions.mjs` (validates compiled `.js` imports resolve), and CI install-test steps that verify the tarball ships `dist/index.js` with no `.ts` source and that the compiled entry loads. The dev/test loop still uses the in-place `npm run build`.

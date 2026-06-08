@@ -93,6 +93,15 @@ import { createAstGrepReplaceTool } from "./tools/ast-grep-replace.js";
 import { createAstGrepSearchTool } from "./tools/ast-grep-search.js";
 import { createLspDiagnosticsTool } from "./tools/lsp-diagnostics.js";
 import { createLspNavigationTool } from "./tools/lsp-navigation.js";
+import { logLatency } from "./clients/latency-logger.js";
+import {
+	markPiLensLoaded,
+	PI_LENS_LOADED_FROM,
+} from "./clients/startup-timing.js";
+
+// First executable statement: every import above has been evaluated, so the
+// full load/transpile cost has been paid. Capture it now.
+const PI_LENS_LOAD_MS = markPiLensLoaded();
 
 const DEBUG_LOG_DIR = path.join(os.homedir(), ".pi-lens");
 const DEBUG_LOG = path.join(DEBUG_LOG_DIR, "sessionstart.log");
@@ -110,6 +119,20 @@ function dbg(msg: string) {
 		console.error("[pi-lens-debug] write failed:", e);
 	}
 }
+
+// Log how long pi took to load pi-lens — the jiti transpile of every module is
+// paid by now. Source mode includes transpiling ~200 .ts files; the precompiled
+// dist build does not, so the delta is the #182 startup win. One line per load.
+dbg(
+	`pi-lens loaded: ${PI_LENS_LOAD_MS}ms after process start (from ${PI_LENS_LOADED_FROM})`,
+);
+logLatency({
+	type: "phase",
+	filePath: "<pi-lens>",
+	phase: "extension_loaded",
+	durationMs: PI_LENS_LOAD_MS,
+	metadata: { loadedFrom: PI_LENS_LOADED_FROM },
+});
 
 // No-op log function (verbose console logging was removed with lens-verbose flag)
 function log(_msg: string) {
