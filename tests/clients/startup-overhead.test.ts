@@ -1,6 +1,14 @@
 /**
- * Measures pi-lens startup overhead by asserting the self-reported
+ * Guards the pi-lens **session_start hook** budget by asserting the self-reported
  * "session_start total: Xms" value that handleSessionStart() emits via dbg.
+ *
+ * Scope note: this covers the hook's synchronous work only. It does NOT capture
+ * the extension load/transpile cost — that is paid before any pi-lens code runs
+ * (pi's jiti loader), and is logged separately as "pi-lens loaded: <ms>ms ...
+ * (from dist|source)" (`clients/startup-timing.ts`). That load cost — the #182
+ * win — is guarded end-to-end by the CI install-test step ("entry loads from
+ * precompiled dist") and structurally by `tests/packaging.test.ts`. So total
+ * cold-start = load time (those guards) + session_start hook (this file).
  *
  * We assert the number pi-lens itself logs — the same figure visible in
  * production session logs — rather than raw wall-clock time of the test.

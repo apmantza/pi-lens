@@ -192,3 +192,20 @@ jobs:
             exit 1
           fi
           echo "Extension import check passed"
+
+      - name: Startup not weakened — entry loads from precompiled dist (#182)
+        shell: bash
+        run: |
+          # Loading the entry above made pi-lens self-report its load source to
+          # ~/.pi-lens/sessionstart.log ("pi-lens loaded: <ms>ms ... (from dist)").
+          # A regression to source/jiti (or a missing dist) would weaken cold
+          # start; assert the fast precompiled path is the one in effect.
+          START_LINE=$(grep "pi-lens loaded:" "$HOME/.pi-lens/sessionstart.log" 2>/dev/null | tail -1 || true)
+          echo "Startup line: ${START_LINE:-<none>}"
+          if [ -z "$START_LINE" ]; then
+            echo "ERROR: no startup line logged — extension_loaded timing missing"
+            exit 1
+          fi
+          echo "$START_LINE" | grep -q "from dist" || \
+            (echo "ERROR: extension loaded from source, not precompiled dist — startup regression (#182)" && exit 1)
+          echo "Startup loads from dist ✓"
