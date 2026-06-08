@@ -4,7 +4,9 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
-## [3.8.50] - 2026-06-07
+### Fixed
+
+- **Faster startup: ship precompiled JS instead of transpiling on every launch (closes #182)** — pi-lens was distributed as TypeScript source (`main: index.ts`, `pi.extensions: ["./index.ts"]`), so pi's jiti loader transpiled ~215 `.ts` files on every cold start (including `/new`), adding ~3.5s. The package now ships a precompiled `dist/` and points `main` + `pi.extensions` at `./dist/index.js`, which pi loads directly (~1.5s). A `prepack` step (`tsconfig.dist.json` → `dist/`) builds it at publish time, so this is transparent to users — no rebuild script needed. Asset resolution is unaffected: `rules/`, `config/`, `skills/`, and grammars resolve via `getPackageRoot()` (walks up to `package.json`), not module depth. Guarded by `tests/packaging.test.ts` (entry/`files` contract), an upgraded `scripts/check-extensions.mjs` (validates compiled `.js` imports resolve), and CI install-test steps that verify the tarball ships `dist/index.js` with no `.ts` source and that the compiled entry loads. The dev/test loop still uses the in-place `npm run build`.
 
 ### Added
 

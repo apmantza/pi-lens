@@ -15,23 +15,27 @@ const installDir = resolve(process.argv[2] ?? ".");
 const fromSource = process.argv[2] == null;
 
 function getFiles() {
+  const isSource = (f) =>
+    f.endsWith(".ts") || f.endsWith(".js") || f.endsWith(".mjs");
   if (fromSource) {
-    // Use npm pack --dry-run to get exactly the files that would be published
+    // Use npm pack --dry-run to get exactly the files that would be published.
+    // pi-lens ships compiled .js (dist/), so .js must be checked too — not just
+    // the .ts/.mjs we used to ship.
     const out = execSync("npm pack --dry-run 2>&1", { encoding: "utf8" });
     return out
       .split("\n")
       .map(l => l.match(/npm notice [\d.]+\w+\s+(.+)/)?.[1]?.trim())
-      .filter(f => f && (f.endsWith(".ts") || f.endsWith(".mjs")))
+      .filter(f => f && isSource(f))
       .map(f => join(installDir, f));
   }
-  // Installed location: walk all .ts/.mjs files
+  // Installed location: walk all .ts/.js/.mjs files
   const files = [];
   function walk(dir) {
     for (const entry of readdirSync(dir)) {
       const full = join(dir, entry);
       if (entry === "node_modules") continue;
       if (statSync(full).isDirectory()) walk(full);
-      else if (entry.endsWith(".ts") || entry.endsWith(".mjs")) files.push(full);
+      else if (isSource(entry)) files.push(full);
     }
   }
   walk(installDir);

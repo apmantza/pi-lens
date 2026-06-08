@@ -1,0 +1,17 @@
+{
+	"extends": "./tsconfig.build.json",
+	"compilerOptions": {
+		"rootDir": ".",
+		"outDir": "./dist",
+		"declaration": false,
+		"sourceMap": false
+	},
+	"include": [
+		"index.ts",
+		"i18n.ts",
+		"clients/**/*.ts",
+		"commands/**/*.ts",
+		"tools/**/*.ts"
+	],
+	"exclude": ["node_modules", "tests", "**/*.test.ts"]
+}

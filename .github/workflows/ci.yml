@@ -84,9 +84,18 @@ jobs:
         run: |
           TARBALL=$(ls pi-lens-*.tgz)
           echo "Checking tarball: $TARBALL"
-          tar -tzf "$TARBALL" | grep -E "scripts/download-grammars\.js|index\.ts|package\.json" | sort
+          tar -tzf "$TARBALL" | grep -E "scripts/download-grammars\.js|dist/index\.js|package\.json" | sort
           tar -tzf "$TARBALL" | grep "scripts/download-grammars.js" || \
             (echo "ERROR: scripts/download-grammars.js missing from tarball" && exit 1)
+          # The published entry is compiled JS (prepack builds dist/); pi loads it
+          # directly instead of jiti-transpiling source on every startup (#182).
+          tar -tzf "$TARBALL" | grep "package/dist/index.js" || \
+            (echo "ERROR: dist/index.js missing from tarball (prepack build failed?)" && exit 1)
+          # Guard against accidentally shipping TS source again (reintroduces the
+          # jiti transpile-on-startup cost).
+          if tar -tzf "$TARBALL" | grep -E "package/(index\.ts|clients/.*\.ts)"; then
+            echo "ERROR: TypeScript source leaked into the tarball" && exit 1
+          fi
 
       - name: Verify package.json entry points exist in tarball
         shell: bash
@@ -108,6 +117,21 @@ jobs:
           export PI_LENS_PKG_DIR="$TMPDIR/package"
           MAIN=$(node -p "require(process.env.PI_LENS_PKG_DIR + '/package.json').main || ''" 2>/dev/null)
           [ -n "$MAIN" ] && check_field "main" "$MAIN"
+
+          # Check pi.extensions entries — this is what pi actually loads.
+          node -e "
+            const path = require('path'); const fs = require('fs');
+            const pkgDir = process.env.PI_LENS_PKG_DIR;
+            const pkg = require(path.join(pkgDir, 'package.json'));
+            const exts = (pkg.pi && pkg.pi.extensions) || [];
+            if (exts.length === 0) { console.error('ERROR: no pi.extensions declared'); process.exit(1); }
+            for (const e of exts) {
+              if (!fs.existsSync(path.join(pkgDir, e))) {
+                console.error('ERROR: pi.extensions entry missing from tarball: ' + e); process.exit(1);
+              }
+              console.log('OK: pi.extensions -> ' + e);
+            }
+          "
 
           # Check exports map entries (string values only)
           node -e "
@@ -149,20 +173,22 @@ jobs:
           INSTALL_DIR=$(npm root -g)/pi-lens
           node scripts/check-extensions.mjs "$INSTALL_DIR"
 
-      - name: Verify extension loads via tsx (catches missing node_modules deps)
+      - name: Verify extension entry loads (catches missing node_modules deps)
         shell: bash
         run: |
           INSTALL_DIR=$(npm root -g)/pi-lens
-          # Simulate how pi loads extensions: tsx index.ts
+          cd "$INSTALL_DIR"
+          # Simulate how pi loads the extension: the compiled entry, loaded by node.
           # ERR_MODULE_NOT_FOUND = missing dep (e.g. 'minimatch') → fail
           # Any other error = expected in CI (no pi API available) → pass
           # pi-coding-agent is a host-provided peer dep; its absence is expected here
-          cd "$INSTALL_DIR"
-          npx tsx index.ts 2>&1 | tee /tmp/tsx-output.txt || true
-          if grep -q "ERR_MODULE_NOT_FOUND\|Cannot find module" /tmp/tsx-output.txt \
-             && ! grep -q "pi-coding-agent" /tmp/tsx-output.txt; then
+          ENTRY=$(node -p "require('./package.json').pi.extensions[0]")
+          echo "Loading entry: $ENTRY"
+          node "$ENTRY" 2>&1 | tee /tmp/load-output.txt || true
+          if grep -q "ERR_MODULE_NOT_FOUND\|Cannot find module" /tmp/load-output.txt \
+             && ! grep -q "pi-coding-agent" /tmp/load-output.txt; then
             echo "FAILED: missing module dependency detected"
-            cat /tmp/tsx-output.txt
+            cat /tmp/load-output.txt
             exit 1
           fi
           echo "Extension import check passed"

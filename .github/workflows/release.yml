@@ -76,6 +76,24 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --dry-run
 
+      # The dry-run above runs prepack (tsc → dist/), so the compiled entry now
+      # exists in the working tree. Load it to catch a broken/missing-dep entry
+      # before we tag and publish (#182).
+      - name: Smoke-load compiled entry
+        if: steps.meta.outputs.should_release == 'true' && steps.meta.outputs.has_npm_token == 'true'
+        shell: bash
+        run: |
+          ENTRY=$(node -p "require('./package.json').pi.extensions[0]")
+          echo "Loading entry: $ENTRY"
+          node "$ENTRY" 2>&1 | tee /tmp/load-output.txt || true
+          if grep -q "ERR_MODULE_NOT_FOUND\|Cannot find module" /tmp/load-output.txt \
+             && ! grep -q "pi-coding-agent" /tmp/load-output.txt; then
+            echo "FAILED: missing module dependency in compiled entry"
+            cat /tmp/load-output.txt
+            exit 1
+          fi
+          echo "Compiled entry loads OK"
+
   release:
     runs-on: ubuntu-latest
     needs: prepare
@@ -113,6 +131,12 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+
+      # Required: `npm publish` runs the `prepack` script (tsc → dist/), which
+      # needs node_modules (typescript + @types/node). Without this install the
+      # build, and therefore the publish, fails.
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
 
       - name: Publish to npm
         env:

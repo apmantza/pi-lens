@@ -7,9 +7,11 @@
 		"type": "git",
 		"url": "git+https://github.com/apmantza/pi-lens.git"
 	},
-	"main": "index.ts",
+	"main": "./dist/index.js",
 	"scripts": {
 		"build": "tsc --project tsconfig.build.json",
+		"build:dist": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc --project tsconfig.dist.json",
+		"prepack": "npm run build:dist",
 		"lint": "tsc --project tsconfig.json",
 		"watch": "tsc --watch",
 		"test": "vitest run",
@@ -47,17 +49,12 @@
 	"author": "Apostolos Mantzaris",
 	"license": "MIT",
 	"files": [
-		"index.ts",
-		"i18n.ts",
+		"dist/",
 		"config/",
-		"tools/",
-		"clients/**/*.ts",
-		"commands/**/*.ts",
 		"rules/",
 		"skills/",
 		"scripts/download-grammars.js",
 		"scripts/analyze-pi-lens-logs.mjs",
-		"tsconfig.json",
 		"README.md",
 		"CHANGELOG.md",
 		"banner.svg",
@@ -96,7 +93,7 @@
 	},
 	"pi": {
 		"extensions": [
-			"./index.ts"
+			"./dist/index.js"
 		],
 		"skills": [
 			"./skills"
