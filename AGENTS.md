@@ -230,6 +230,12 @@ Every commit that adds or changes logic **must** include relevant tests before p
 - Bug fixes → a regression test that would have caught the bug.
 - Run `npm test` (or `npm run build && npm test` if `.js` artifacts may be stale) and confirm all tests pass before committing.
 
+### Testing extension wiring (#171)
+For anything that goes through the `index.ts` entry — flag/command/tool/hook registration, the `context` injection toggle, `tool_call`/`tool_result` read-guard wiring, `session_start` registrations — use the shared harness in `tests/support/pi-mock.ts` instead of hand-rolling an `ExtensionAPI`/ctx mock:
+- `createPiMock(initialFlags?)` → records `flags`/`commands`/`tools`/`handlers`, backs `getFlag`, and exposes `getTool`/`getCommand`/`getHandlers`, `emit(event, payload, ctx)` to drive a hook, and `runCommand(name, args, ctx)`. Run the entry with `piLens(pi.asExtensionAPI())`.
+- `makeCtx({ cwd })` → a minimal command/handler context that captures `ui.notify`/`setStatus`/`setWidget` into `ctx.notifications` / `ctx.statusCalls` / `ctx.widgetCalls`.
+`tests/lens-toggle-command.test.ts` is the migration template; migrate other bespoke `createCtx`/`vi.mock` blocks to the harness opportunistically.
+
 ## Commit conventions
 - Always include the GitHub issue number in the commit subject line: `(closes #NNN)` or `(refs #NNN)`.
 - Use `closes` only when the commit fully resolves the entire issue; use `refs` for any partial work.

@@ -1,8 +1,13 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import piLens from "../index.js";
+import { createPiMock, makeCtx, type PiMock } from "./support/pi-mock.js";
+
+// Template for #171: a command test driven entirely through the shared
+// createPiMock() harness — no bespoke ExtensionAPI mock. Run the real entry,
+// then invoke the registered command handler and assert captured UI calls.
 
 const tmpDirs: string[] = [];
 let previousConfigPath: string | undefined;
@@ -22,139 +27,79 @@ afterEach(() => {
 	}
 });
 
-type CommandHandler = (
-	args: unknown,
-	ctx: {
-		ui: {
-			notify: ReturnType<typeof vi.fn>;
-			setWidget?: ReturnType<typeof vi.fn>;
-		};
-	},
-) => Promise<void> | void;
-
-type Harness = {
-	commands: Map<string, { description?: string; handler: CommandHandler }>;
-	flags: Map<string, { default?: unknown }>;
-};
-
-function installLens(flagValues: Record<string, unknown> = {}): Harness {
-	const commands = new Map<
-		string,
-		{ description?: string; handler: CommandHandler }
-	>();
-	const flags = new Map<string, { default?: unknown }>();
-	const handlers = new Map<string, Function[]>();
-
-	const pi = {
-		events: { emit: vi.fn() },
-		registerFlag: vi.fn((name: string, config: { default?: unknown }) => {
-			flags.set(name, config);
-		}),
-		getFlag: vi.fn((name: string) => {
-			if (Object.hasOwn(flagValues, name)) {
-				return flagValues[name];
-			}
-			return flags.get(name)?.default ?? false;
-		}),
-		registerCommand: vi.fn(
-			(
-				name: string,
-				config: { description?: string; handler: CommandHandler },
-			) => {
-				commands.set(name, config);
-			},
-		),
-		registerTool: vi.fn(),
-		on: vi.fn((event: string, handler: Function) => {
-			const list = handlers.get(event) ?? [];
-			list.push(handler);
-			handlers.set(event, list);
-		}),
-		sendUserMessage: vi.fn(),
-		ui: {
-			notify: vi.fn(),
-			setStatus: vi.fn(),
-		},
-	};
-
-	piLens(pi as any);
-	return { commands, flags };
+function installLens(flagValues: Record<string, boolean | string> = {}): PiMock {
+	const pi = createPiMock(flagValues);
+	piLens(pi.asExtensionAPI());
+	return pi;
 }
 
 describe("lens-toggle command", () => {
 	it("registers the single session-level lens toggle command", () => {
-		const { commands, flags } = installLens();
+		const pi = installLens();
 
-		expect(flags.has("no-lens")).toBe(true);
-		expect(commands.has("lens-toggle")).toBe(true);
-		expect(commands.has("lens-widget-toggle")).toBe(true);
-		expect(commands.has("lens-enable")).toBe(false);
-		expect(commands.has("lens-disable")).toBe(false);
-		expect(commands.has("lens-status")).toBe(false);
-		expect(commands.has("lens")).toBe(false);
+		expect(pi.flags.has("no-lens")).toBe(true);
+		expect(pi.getCommand("lens-toggle")).toBeDefined();
+		expect(pi.getCommand("lens-widget-toggle")).toBeDefined();
+		expect(pi.getCommand("lens-enable")).toBeUndefined();
+		expect(pi.getCommand("lens-disable")).toBeUndefined();
+		expect(pi.getCommand("lens-status")).toBeUndefined();
+		expect(pi.getCommand("lens")).toBeUndefined();
 	});
 
 	it("toggles an enabled session off and back on", async () => {
-		const { commands } = installLens();
-		const notify = vi.fn();
-		const command = commands.get("lens-toggle");
+		const pi = installLens();
+		const ctx = makeCtx();
 
-		expect(command).toBeDefined();
-		await command?.handler([], { ui: { notify } });
-		await command?.handler([], { ui: { notify } });
+		await pi.runCommand("lens-toggle", "", ctx);
+		await pi.runCommand("lens-toggle", "", ctx);
 
-		expect(notify).toHaveBeenNthCalledWith(
-			1,
-			"pi-lens disabled for this session. Run /lens-toggle again to resume.",
-			"warning",
-		);
-		expect(notify).toHaveBeenNthCalledWith(
-			2,
-			"pi-lens enabled for this session.",
-			"info",
-		);
+		expect(ctx.notifications[0]).toEqual({
+			message:
+				"pi-lens disabled for this session. Run /lens-toggle again to resume.",
+			type: "warning",
+		});
+		expect(ctx.notifications[1]).toEqual({
+			message: "pi-lens enabled for this session.",
+			type: "info",
+		});
 	});
 
 	it("re-enables a session started with --no-lens", async () => {
-		const { commands } = installLens({ "no-lens": true });
-		const notify = vi.fn();
-		const command = commands.get("lens-toggle");
+		const pi = installLens({ "no-lens": true });
+		const ctx = makeCtx();
 
-		await command?.handler([], { ui: { notify } });
+		await pi.runCommand("lens-toggle", "", ctx);
 
-		expect(notify).toHaveBeenCalledWith(
-			"pi-lens enabled for this session.",
-			"info",
-		);
+		expect(ctx.notifications).toContainEqual({
+			message: "pi-lens enabled for this session.",
+			type: "info",
+		});
 	});
 
 	it("toggles the diagnostics widget off and on", async () => {
-		const { commands } = installLens();
-		const notify = vi.fn();
-		const setWidget = vi.fn();
-		const command = commands.get("lens-widget-toggle");
+		const pi = installLens();
+		const ctx = makeCtx();
 
-		expect(command).toBeDefined();
-		await command?.handler([], { ui: { notify, setWidget } });
-		await command?.handler([], { ui: { notify, setWidget } });
+		await pi.runCommand("lens-widget-toggle", "", ctx);
+		await pi.runCommand("lens-widget-toggle", "", ctx);
 
-		expect(setWidget).toHaveBeenNthCalledWith(1, "pi-lens", undefined);
-		expect(setWidget).toHaveBeenNthCalledWith(
-			2,
-			"pi-lens",
-			expect.any(Function),
-			{ placement: "belowEditor" },
-		);
-		expect(notify).toHaveBeenNthCalledWith(
-			1,
-			"pi-lens widget hidden. Run /lens-widget-toggle to show it.",
-			"info",
-		);
-		expect(notify).toHaveBeenNthCalledWith(
-			2,
-			"pi-lens widget shown. Run /lens-widget-toggle to hide it.",
-			"info",
-		);
+		expect(ctx.widgetCalls[0]).toEqual({
+			key: "pi-lens",
+			content: undefined,
+			options: undefined,
+		});
+		expect(ctx.widgetCalls[1].key).toBe("pi-lens");
+		expect(typeof ctx.widgetCalls[1].content).toBe("function");
+		expect(ctx.widgetCalls[1].options).toEqual({ placement: "belowEditor" });
+
+		expect(ctx.notifications[0]).toEqual({
+			message: "pi-lens widget hidden. Run /lens-widget-toggle to show it.",
+			type: "info",
+		});
+		expect(ctx.notifications[1]).toEqual({
+			message: "pi-lens widget shown. Run /lens-widget-toggle to hide it.",
+			type: "info",
+		});
 	});
 
 	it("starts the diagnostics widget hidden from global config", async () => {
@@ -165,19 +110,19 @@ describe("lens-toggle command", () => {
 			JSON.stringify({ widget: { visible: false } }),
 			"utf-8",
 		);
-		const { commands } = installLens();
-		const notify = vi.fn();
-		const setWidget = vi.fn();
-		const command = commands.get("lens-widget-toggle");
+		const pi = installLens();
+		const ctx = makeCtx();
 
-		await command?.handler([], { ui: { notify, setWidget } });
+		await pi.runCommand("lens-widget-toggle", "", ctx);
 
-		expect(setWidget).toHaveBeenCalledWith("pi-lens", expect.any(Function), {
-			placement: "belowEditor",
+		expect(ctx.widgetCalls[0]).toEqual({
+			key: "pi-lens",
+			content: expect.any(Function),
+			options: { placement: "belowEditor" },
 		});
-		expect(notify).toHaveBeenCalledWith(
-			"pi-lens widget shown. Run /lens-widget-toggle to hide it.",
-			"info",
-		);
+		expect(ctx.notifications).toContainEqual({
+			message: "pi-lens widget shown. Run /lens-widget-toggle to hide it.",
+			type: "info",
+		});
 	});
 });
