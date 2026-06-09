@@ -2,6 +2,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { detectFileKind, type FileKind } from "./file-kinds.js";
 import {
+	getProjectIgnoreMatcher,
+	isExcludedDirName,
+} from "./file-utils.js";
+import {
 	LANGUAGE_POLICY,
 	type ProjectLanguageProfile,
 } from "./language-policy.js";
@@ -141,7 +145,30 @@ function nearestRoot(
 	return undefined;
 }
 
+// Process-lifetime memo keyed on projectRoot. Only populated when the
+// caller did not pass an explicit `sourceFiles` array — the explicit-array
+// case is used by the warmup pipeline to inject pre-collected files and
+// must not pollute the no-arg cache. The synchronous getSourceFiles() call
+// inside this function does the same expensive ignoreMatcher-driven walk
+// as resolveStartupScanContext, so the same memo strategy applies.
+const languageProfileCache = new Map<string, ProjectLanguageProfile>();
+
 export function detectProjectLanguageProfile(
+	projectRoot: string,
+	sourceFiles?: string[],
+): ProjectLanguageProfile {
+	if (sourceFiles === undefined) {
+		const cached = languageProfileCache.get(projectRoot);
+		if (cached) return cached;
+	}
+	const result = computeProjectLanguageProfile(projectRoot, sourceFiles);
+	if (sourceFiles === undefined) {
+		languageProfileCache.set(projectRoot, result);
+	}
+	return result;
+}
+
+function computeProjectLanguageProfile(
 	projectRoot: string,
 	sourceFiles?: string[],
 ): ProjectLanguageProfile {
@@ -255,4 +282,101 @@ export function resolveLanguageRootForFile(
 	}
 
 	return found;
+}
+
+// ---------------------------------------------------------------------------
+// Async, chunked-yield variant for the cold-start warmup pipeline. See
+// startup-scan.ts comments and runtime-session.ts handleSessionStart for the
+// rationale; this is the same idea applied to the language-profile walk.
+//
+// We collect source files in a way that mirrors the sync `getSourceFiles` /
+// `collectSourceFiles` chain but yields to the event loop every N entries.
+// The collected file list is then handed to the existing sync
+// `detectProjectLanguageProfile` (which is fast once it doesn't need to walk
+// the tree itself), and the result is stored in the shared
+// `languageProfileCache` so the subsequent sync caller skips the walk.
+// ---------------------------------------------------------------------------
+
+// Extensions accepted as project source files. Mirrors the discovery rules
+// used by scan-utils.ts but inlined here to keep this file self-contained
+// and avoid pulling in source-filter's heavier dependency graph during
+// warmup.
+const WARMUP_SOURCE_EXTS = new Set([
+	".ts",
+	".tsx",
+	".js",
+	".jsx",
+	".mjs",
+	".cjs",
+	".py",
+	".go",
+	".rs",
+	".rb",
+	".java",
+	".kt",
+	".swift",
+	".c",
+	".cc",
+	".cpp",
+	".cxx",
+	".h",
+	".hpp",
+	".cs",
+]);
+
+async function collectSourceFilesForWarmup(
+	rootDir: string,
+	yieldEvery = 100,
+): Promise<string[]> {
+	const root = path.resolve(rootDir);
+	const ignoreMatcher = getProjectIgnoreMatcher(root);
+	const stack = [root];
+	const out: string[] = [];
+	let processedSinceYield = 0;
+
+	while (stack.length > 0) {
+		const current = stack.pop();
+		if (!current) continue;
+
+		let entries: fs.Dirent[] = [];
+		try {
+			entries = fs.readdirSync(current, { withFileTypes: true });
+		} catch {
+			continue;
+		}
+
+		for (const entry of entries) {
+			const fullPath = path.join(current, entry.name);
+			if (entry.isDirectory()) {
+				if (isExcludedDirName(entry.name)) continue;
+				if (ignoreMatcher.isIgnored(fullPath, true)) continue;
+				stack.push(fullPath);
+			} else if (entry.isFile()) {
+				if (ignoreMatcher.isIgnored(fullPath, false)) continue;
+				const ext = path.extname(entry.name).toLowerCase();
+				if (!WARMUP_SOURCE_EXTS.has(ext)) continue;
+				out.push(fullPath);
+			}
+			if (++processedSinceYield % yieldEvery === 0) {
+				// See countSourceFilesWithinLimitAsync for why setImmediate.
+				await new Promise<void>((resolve) => setImmediate(resolve));
+			}
+		}
+	}
+	return out;
+}
+
+export async function detectProjectLanguageProfileAsync(
+	projectRoot: string,
+): Promise<ProjectLanguageProfile> {
+	const cached = languageProfileCache.get(projectRoot);
+	if (cached) return cached;
+	const files = await collectSourceFilesForWarmup(projectRoot);
+	// Hand the pre-collected file list to the sync detector so it skips its
+	// own (synchronous) tree walk. The detector still does the file-marker
+	// probe (`existsSync` for package.json / pyproject.toml / etc.) which
+	// is constant-time and cheap.
+	const result = detectProjectLanguageProfile(projectRoot, files);
+	languageProfileCache.set(projectRoot, result);
+	return result;
 }

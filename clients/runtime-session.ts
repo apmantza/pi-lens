@@ -247,6 +247,59 @@ async function probePrettierInstall(
 	}
 }
 
+/** A todo scanner that may expose a per-file API (newer) or only the
+ * directory walk (older / mocked). `scanFile` returns the items array directly
+ * (`TodoItem[]`); `scanDirectory` returns a `{ items }` result. */
+type TodoScannerLike = {
+	scanDirectory: (root: string) => { items: unknown[] };
+	scanFile?: (filePath: string) => unknown[];
+};
+
+/** Scan one file via the per-file API, pushing any items. Tolerates an
+ * unreadable file and a scanner without `scanFile` (no-op). */
+function scanOneTodoFile(
+	scanner: TodoScannerLike,
+	filePath: string,
+	items: unknown[],
+): void {
+	if (typeof scanner.scanFile !== "function") return;
+	try {
+		// scanFile returns TodoItem[] directly (not a { items } result).
+		const result = scanner.scanFile(filePath);
+		if (Array.isArray(result)) items.push(...result);
+	} catch {
+		// Per-file error: skip and continue (matches scanDirectory's tolerance).
+	}
+}
+
+/** Collect the TODO baseline without blocking: enumerate source files and scan
+ * them per-file, yielding to the event loop every 30 files. Falls back to the
+ * blocking `scanDirectory` if the chunked path can't run (import error or a
+ * scanner without `scanFile`). */
+async function collectTodoBaselineItems(
+	scanner: TodoScannerLike,
+	analysisRoot: string,
+	stillCurrent: () => boolean,
+): Promise<unknown[]> {
+	const items: unknown[] = [];
+	try {
+		const { getSourceFiles } = await import("./scan-utils.js");
+		const files = getSourceFiles(analysisRoot, true);
+		let processedSinceYield = 0;
+		for (const file of files) {
+			if (!stillCurrent()) return items;
+			scanOneTodoFile(scanner, file, items);
+			if (++processedSinceYield % 30 === 0) {
+				await new Promise<void>((resolve) => setImmediate(resolve));
+			}
+		}
+	} catch {
+		const todoResult = scanner.scanDirectory(analysisRoot);
+		items.push(...todoResult.items);
+	}
+	return items;
+}
+
 // Fire off heavy scans as background tasks — don't block session start.
 // Each consumer already handles the "not ready yet" case gracefully
 // (cachedExports.size > 0, cache miss paths).
@@ -269,11 +322,24 @@ function scheduleStartupScans(
 		astGrepClient,
 	} = deps;
 
+	// Some background scans are CPU-heavy and arrive on the event loop
+	// just as the user is most likely typing (right after /new). Defer
+	// those by a few seconds so the perceptible 50-100ms sync bursts they
+	// contain land during LLM streaming idle time instead. All other
+	// tasks (those not listed here) run on the next `setImmediate` tick
+	// as before. The delays are deliberately staggered (200ms apart) so
+	// two heavy tasks don't both run on the same macrotask.
+	const taskDeferMsByName: Record<string, number> = {
+		"call-graph": 5000,
+		"codebase-model": 5200,
+		"ast-grep exports": 5400,
+		"project index": 5400,
+	};
 	const runTask = (name: string, task: () => Promise<void>): void => {
 		const queuedAt = Date.now();
 		dbg(`session_start task ${name}: scheduled`);
 		runtime.markStartupScanInFlight(name, sessionGeneration);
-		setImmediate(() => {
+		const fire = (): void => {
 			const startedAt = Date.now();
 			dbg(`session_start task ${name}: start queuedMs=${startedAt - queuedAt}`);
 			void task()
@@ -292,7 +358,13 @@ function scheduleStartupScans(
 					runtime.clearStartupScanInFlight(name, sessionGeneration);
 					dbg(`session_start task ${name}: end`);
 				});
-		});
+		};
+		const delay = taskDeferMsByName[name] ?? 0;
+		if (delay > 0) {
+			setTimeout(fire, delay);
+		} else {
+			setImmediate(fire);
+		}
 	};
 
 	const canRunJsTsHeavyScans = canRunStartupHeavyScans(languageProfile, "jsts");
@@ -304,16 +376,18 @@ function scheduleStartupScans(
 
 	runTask("todo", async () => {
 		if (!runtime.isCurrentSession(sessionGeneration)) return;
-		const todoResult = todoScanner.scanDirectory(analysisRoot);
-		if (!runtime.isCurrentSession(sessionGeneration)) return;
-		dbg(
-			`session_start TODO scan: ${todoResult.items.length} items (baseline stored)`,
-		);
-		cacheManager.writeCache(
-			"todo-baseline",
-			{ items: todoResult.items },
+		// The original implementation called todoScanner.scanDirectory(), which
+		// walks the project synchronously and freezes the TUI for ~3s on a 2k-file
+		// project. collectTodoBaselineItems re-implements the walk in async chunks
+		// (per-file scan, yielding every 30 files), falling back to scanDirectory.
+		const items = await collectTodoBaselineItems(
+			todoScanner as TodoScannerLike,
 			analysisRoot,
+			() => runtime.isCurrentSession(sessionGeneration),
 		);
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+		dbg(`session_start TODO scan: ${items.length} items (baseline stored)`);
+		cacheManager.writeCache("todo-baseline", { items }, analysisRoot);
 	});
 
 	if (!canRunJsTsHeavyScans) {
@@ -598,7 +672,95 @@ export async function handleSessionStart(
 	deps: SessionStartDeps,
 ): Promise<void> {
 	const sessionStartMs = Date.now();
-	const startupMode = resolveStartupMode();
+	// Cold-start input-latency mitigation. The first `session_start` of
+	// the process — i.e. the one that fires immediately after the user
+	// launches `pi` — must return as fast as possible so the TUI input
+	// box becomes responsive. The full startup mode runs several
+	// expensive synchronous walks (resolveStartupScanContext,
+	// detectProjectLanguageProfile, scanProjectRules, scheduleStartupScans)
+	// that together can block the event loop for 3-6s on a 2k-file
+	// project, during which keystrokes are dropped or batched.
+	//
+	// Strategy:
+	//   - Force the very first invocation to "quick" mode, which exits
+	//     after a minimal runtime reset and snapshot hydration.
+	//   - 2 seconds later, schedule a background warmup that walks the
+	//     project asynchronously (yielding every 100 entries) and
+	//     populates the in-process memo caches
+	//     (startupScanContextCache + languageProfileCache).
+	//   - The user's first /new (or any subsequent session_start) sees
+	//     a cache hit on both walks and finishes the full path in <50ms.
+	//
+	// Opt-out: PI_LENS_COLD_START_QUICK=0 disables this behaviour.
+	// Override: PI_LENS_STARTUP_MODE explicitly set wins (we honour it).
+	// Tunable: PI_LENS_WARMUP_DELAY_MS adjusts the warmup delay.
+	let startupMode = resolveStartupMode();
+	const processGlobals = globalThis as unknown as {
+		__piLensFirstSessionDone?: boolean;
+		__piLensWarmupScheduled?: boolean;
+	};
+	const isFirstSessionOfProcess = !processGlobals.__piLensFirstSessionDone;
+	if (
+		isFirstSessionOfProcess &&
+		process.env.PI_LENS_COLD_START_QUICK !== "0" &&
+		!process.env.PI_LENS_STARTUP_MODE
+	) {
+		startupMode = "quick";
+	}
+	processGlobals.__piLensFirstSessionDone = true;
+
+	if (
+		startupMode === "quick" &&
+		process.env.PI_LENS_COLD_START_QUICK !== "0" &&
+		!processGlobals.__piLensWarmupScheduled
+	) {
+		processGlobals.__piLensWarmupScheduled = true;
+		const warmupDelayMs = Number(
+			process.env.PI_LENS_WARMUP_DELAY_MS ?? 2000,
+		);
+		const warmupCwd = deps.ctxCwd ?? process.cwd();
+		const warmupDbg = deps.dbg;
+		setTimeout(() => {
+			const warmupStartedAt = Date.now();
+			void (async () => {
+				try {
+					warmupDbg("warmup: starting background warmup");
+					// Dynamic imports keep the warmup pipeline off the hot
+					// startup path — these modules don't load until the timer
+					// fires, well after the TUI is interactive.
+					const startupScanModule = await import(
+						"./startup-scan.js"
+					);
+					const languageProfileModule = await import(
+						"./language-profile.js"
+					);
+					const scan =
+						await startupScanModule.resolveStartupScanContextAsync(
+							warmupCwd,
+						);
+					warmupDbg(
+						`warmup: scan-context done in ${Date.now() - warmupStartedAt}ms (canWarm=${scan.canWarmCaches})`,
+					);
+					const languageRoot = scan.projectRoot ?? warmupCwd;
+					const languageProfileStartedAt = Date.now();
+					await languageProfileModule.detectProjectLanguageProfileAsync(
+						languageRoot,
+					);
+					warmupDbg(
+						`warmup: language-profile done in ${Date.now() - languageProfileStartedAt}ms`,
+					);
+					warmupDbg(
+						`warmup: total ${Date.now() - warmupStartedAt}ms`,
+					);
+				} catch (err) {
+					warmupDbg(`warmup: error ${err}`);
+					// Allow a future session to retry the warmup.
+					processGlobals.__piLensWarmupScheduled = false;
+				}
+			})();
+		}, warmupDelayMs);
+	}
+
 	const allowBootstrapTasks = startupMode === "full";
 	const quickMode = startupMode === "quick";
 	const {

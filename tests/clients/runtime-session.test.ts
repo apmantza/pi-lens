@@ -32,6 +32,7 @@ async function runSessionStart(
 	setup?.(env.tmpDir);
 	const notify = vi.fn();
 	const scanDirectory = vi.fn(() => ({ items: [] }));
+	const scanFile = vi.fn((): unknown[] => []);
 	const ensureTool = vi.fn(async () => null);
 	const astGrepEnsure = vi.fn(async () => false);
 	const biomeEnsure = vi.fn(async () => false);
@@ -78,7 +79,7 @@ async function runSessionStart(
 					return null;
 				},
 			},
-			todoScanner: { scanDirectory },
+			todoScanner: { scanDirectory, scanFile },
 			astGrepClient: {
 				isAvailable: () => false,
 				ensureAvailable: astGrepEnsure,
@@ -122,6 +123,7 @@ async function runSessionStart(
 			env,
 			notify,
 			scanDirectory,
+			scanFile,
 			ensureTool,
 			astGrepEnsure,
 			biomeEnsure,
@@ -341,7 +343,7 @@ describe("runtime-session notifications", () => {
 	});
 
 	it("defers startup scan task bodies until after session_start returns", async () => {
-		const { env, scanDirectory } = await runSessionStart("full", (tmpDir) => {
+		const { env, scanFile } = await runSessionStart("full", (tmpDir) => {
 			createTempFile(
 				tmpDir,
 				"package.json",
@@ -351,8 +353,11 @@ describe("runtime-session notifications", () => {
 		});
 
 		try {
-			expect(scanDirectory).not.toHaveBeenCalled();
-			await vi.waitFor(() => expect(scanDirectory).toHaveBeenCalledTimes(1));
+			// The todo scan now runs per-file via scanFile (chunked/yielded) rather
+			// than a single blocking scanDirectory. It must be deferred until after
+			// session_start returns, then run.
+			expect(scanFile).not.toHaveBeenCalled();
+			await vi.waitFor(() => expect(scanFile).toHaveBeenCalled());
 		} finally {
 			env.cleanup();
 		}
