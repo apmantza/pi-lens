@@ -70,7 +70,10 @@ describe("published package entry points (dist mode, #182)", () => {
 describe("tsconfig.dist.json", () => {
 	const dist = JSON.parse(
 		fs.readFileSync(path.join(root, "tsconfig.dist.json"), "utf8"),
-	) as { compilerOptions?: { outDir?: string }; exclude?: string[] };
+	) as {
+		compilerOptions?: { outDir?: string; types?: string[] };
+		exclude?: string[];
+	};
 
 	it("emits to ./dist", () => {
 		expect(dist.compilerOptions?.outDir).toBe("./dist");
@@ -79,5 +82,12 @@ describe("tsconfig.dist.json", () => {
 	it("excludes tests from the published build", () => {
 		const ex = dist.exclude ?? [];
 		expect(ex.some((e) => e.includes("test"))).toBe(true);
+	});
+
+	it("does not require @types/node during production install-time dist builds", () => {
+		// pi installs git extensions with `npm install --omit=dev`, then npm runs
+		// `prepare`. In that environment dev-only @types/node is absent, so the
+		// dist config must not inherit the base config's `types: ["node"]` entry.
+		expect(dist.compilerOptions?.types).toEqual([]);
 	});
 });

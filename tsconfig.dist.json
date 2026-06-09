@@ -4,7 +4,8 @@
 		"rootDir": ".",
 		"outDir": "./dist",
 		"declaration": false,
-		"sourceMap": false
+		"sourceMap": false,
+		"types": []
 	},
 	"include": [
 		"index.ts",
