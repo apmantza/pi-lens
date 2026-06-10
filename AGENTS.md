@@ -40,6 +40,7 @@ Because many test imports use `.js` specifiers while the source of truth is `.ts
 ```
 npm run build && npm test
 ```
+**This is now enforced (#198):** a vitest `globalSetup` (`tests/support/check-build-freshness.ts`) fails fast — for *any* launch (`npm test`, `npx vitest run`, watch start) — if a compiled-source `.ts` under `clients/`/`commands/`/`tools/` (or root `index.ts`/`i18n.ts`) is newer than its in-place `.js` (or has none). If you see `⛔ Stale build …`, run `npm run build` and re-run. (CI's `test` job builds first, so it passes.)
 Do not hand-edit generated `.js`; regenerate it from the corresponding `.ts`. This includes `scripts/download-grammars.js`, which is the runtime/postinstall artifact generated from `scripts/download-grammars.ts` and must stay in sync for published installs.
 
 ## Data directory conventions

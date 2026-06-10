@@ -1072,3 +1072,34 @@ describe("lsp server policy", () => {
 		});
 	});
 });
+
+describe("heavy workspace servers do not fall back to per-file dirs (#201)", () => {
+	it("RustServer.root → undefined when no Cargo manifest exists", async () => {
+		const { RustServer } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-rust-nomanifest-"));
+		dirs.push(tmp);
+		const file = path.join(tmp, "src", "main.rs");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, "fn main() {}\n");
+
+		// Previously fell back to FileDirRoot (the file's dir) → one rust-analyzer
+		// per directory while scaffolding. Now no manifest ⇒ no spawn.
+		await expect(RustServer.root(file)).resolves.toBeUndefined();
+	});
+
+	it("RustServer.root → the crate root when a Cargo.toml exists", async () => {
+		const { RustServer } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-rust-manifest-"));
+		dirs.push(tmp);
+		const file = path.join(tmp, "src", "main.rs");
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(path.join(tmp, "Cargo.toml"), '[package]\nname = "x"\n');
+		fs.writeFileSync(file, "fn main() {}\n");
+
+		await expect(RustServer.root(file)).resolves.toBe(tmp);
+	});
+
+	// C# is intentionally NOT changed here (#201): its markers are matched by
+	// exact filename, so `.csproj` never matches a real `Foo.csproj` and C# still
+	// depends on the FileDirRoot fallback. See the standalone-csharp test above.
+});

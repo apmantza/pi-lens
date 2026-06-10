@@ -180,6 +180,13 @@ export interface LSPClientInfo {
 			diags: LSPDiagnostic[],
 		) => boolean,
 	): number;
+	/**
+	 * Paths of every file with tracked diagnostics. Lets callers resolve
+	 * file existence asynchronously (off the event loop) and then prune with a
+	 * synchronous, in-memory predicate — instead of a blocking `existsSync` per
+	 * file inside `pruneDiagnostics`.
+	 */
+	getTrackedDiagnosticPaths(): string[];
 	/** Capability snapshot for workspace diagnostics support */
 	getWorkspaceDiagnosticsSupport(): LSPWorkspaceDiagnosticsSupport;
 	/** Capability snapshot for navigation/edit operations */
@@ -1244,6 +1251,15 @@ export async function createLSPClient(options: {
 				});
 			}
 			return result;
+		},
+
+		getTrackedDiagnosticPaths() {
+			return [
+				...new Set([
+					...state.pushDiagnostics.keys(),
+					...state.documentPullDiagnostics.keys(),
+				]),
+			];
 		},
 
 		pruneDiagnostics(predicate) {

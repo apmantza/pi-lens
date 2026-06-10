@@ -1355,7 +1355,14 @@ export const RustServer: LSPServerInfo = {
 	id: "rust",
 	name: "rust-analyzer",
 	extensions: KIND_EXTENSIONS["rust"],
-	root: RootWithFallback(RustWorkspaceRoot()),
+	// No FileDirRoot fallback (#201): rust-analyzer is a heavy workspace server
+	// that is useless without a Cargo manifest. With the fallback, every .rs file
+	// written before a Cargo.toml exists resolved to its OWN directory as the
+	// root, and since clients dedup by `${serverId}:${root}`, each directory
+	// spawned a separate rust-analyzer (one per file/dir during scaffolding).
+	// Returning undefined here skips the spawn until a Cargo.toml gives a stable,
+	// shared crate root — then all files share one server.
+	root: RustWorkspaceRoot(),
 	async spawn(root, options) {
 		// Prefer rustup-installed rust-analyzer; fall back to GitHub-downloaded managed copy
 		const result = await resolveAndLaunch(
@@ -1482,6 +1489,12 @@ export const CSharpServer: LSPServerInfo = {
 	id: "csharp",
 	name: "csharp-ls",
 	extensions: KIND_EXTENSIONS["csharp"],
+	// NOTE (#201): this has the same per-file-dir fallback trap as rust did, but
+	// can't be fixed the same way yet — `createRootDetector` matches markers by
+	// EXACT filename (`stat(dir/.csproj)`), so `.sln`/`.csproj`/`.slnx` never
+	// match a real `Foo.csproj`/`Foo.sln`. C# root detection therefore relies
+	// entirely on the FileDirRoot fallback today; removing it would disable C#.
+	// Fixing this needs extension/glob marker support first (tracked on #201).
 	root: RootWithFallback(createRootDetector([".sln", ".csproj", ".slnx"])),
 	async spawn(root, options) {
 		const candidates = dotnetToolCandidates("csharp-ls");

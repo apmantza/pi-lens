@@ -1665,9 +1665,25 @@ export class LSPService {
 		>();
 		const now = Date.now();
 		for (const [_key, client] of this.state.clients) {
+			// Resolve existence asynchronously (was a blocking existsSync per tracked
+			// file inside the prune predicate) so this cascade-checking path doesn't
+			// hold the event loop; then prune with a synchronous, in-memory predicate.
+			const trackedPaths = client.getTrackedDiagnosticPaths();
+			const existingPaths = new Set<string>();
+			await Promise.all(
+				trackedPaths.map(async (filePath) => {
+					try {
+						await nodeFs.promises.access(filePath);
+						existingPaths.add(filePath);
+					} catch {
+						/* missing → will be pruned */
+					}
+				}),
+			);
 			client.pruneDiagnostics(
 				(filePath, ts) =>
-					!nodeFs.existsSync(filePath) || now - ts > CASCADE_DIAGNOSTICS_TTL_MS,
+					!existingPaths.has(filePath) ||
+					now - ts > CASCADE_DIAGNOSTICS_TTL_MS,
 			);
 			const clientDiags = client.getAllDiagnostics();
 			for (const [filePath, entry] of clientDiags) {

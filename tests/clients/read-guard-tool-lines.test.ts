@@ -755,6 +755,136 @@ describe("tryCorrectIndentationMismatch", () => {
 	});
 });
 
+describe("tryCorrectIndentationMismatch — mid-block blank-line drift (Tier A, #200)", () => {
+	const fileBody = [
+		"function foo() {",
+		"\tconst a = 1;",
+		"",
+		"\tconst b = 2;",
+		"\treturn a + b;",
+		"}",
+	].join("\n");
+
+	it("recovers the real span when oldText is MISSING an interior blank line", () => {
+		const env = setupTestEnvironment("pi-lens-blank-missing-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			fs.writeFileSync(filePath, `${fileBody}\n`);
+			// oldText has no blank line between the two const declarations.
+			const oldText = [
+				"\tconst a = 1;",
+				"\tconst b = 2;",
+				"\treturn a + b;",
+			].join("\n");
+			const result = tryCorrectIndentationMismatch(oldText, filePath);
+			// Corrected to the REAL file span, verbatim (interior blank included).
+			expect(result).toBe(
+				["\tconst a = 1;", "", "\tconst b = 2;", "\treturn a + b;"].join("\n"),
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("recovers the real span when oldText has an EXTRA interior blank line", () => {
+		const env = setupTestEnvironment("pi-lens-blank-extra-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			// File has no blank between the consts.
+			const body = [
+				"function foo() {",
+				"\tconst a = 1;",
+				"\tconst b = 2;",
+				"\treturn a + b;",
+				"}",
+			].join("\n");
+			fs.writeFileSync(filePath, `${body}\n`);
+			const oldText = [
+				"\tconst a = 1;",
+				"",
+				"\tconst b = 2;",
+				"\treturn a + b;",
+			].join("\n");
+			const result = tryCorrectIndentationMismatch(oldText, filePath);
+			expect(result).toBe(
+				["\tconst a = 1;", "\tconst b = 2;", "\treturn a + b;"].join("\n"),
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("also bridges blank-line + indentation drift together", () => {
+		const env = setupTestEnvironment("pi-lens-blank-indent-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			fs.writeFileSync(filePath, `${fileBody}\n`);
+			// 4-space indent + no interior blank.
+			const oldText = [
+				"    const a = 1;",
+				"    const b = 2;",
+				"    return a + b;",
+			].join("\n");
+			const result = tryCorrectIndentationMismatch(oldText, filePath);
+			expect(result).toBe(
+				["\tconst a = 1;", "", "\tconst b = 2;", "\treturn a + b;"].join("\n"),
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("does NOT patch when the blank-insensitive signature is ambiguous", () => {
+		const env = setupTestEnvironment("pi-lens-blank-ambig-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			// The 2-line signature appears twice → must refuse (safety).
+			const body = [
+				"const a = 1;",
+				"const b = 2;",
+				"doSomething();",
+				"const a = 1;",
+				"const b = 2;",
+			].join("\n");
+			fs.writeFileSync(filePath, `${body}\n`);
+			const oldText = ["const a = 1;", "", "const b = 2;"].join("\n");
+			expect(tryCorrectIndentationMismatch(oldText, filePath)).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("does NOT patch a single-line oldText (no ≥2 anchors)", () => {
+		const env = setupTestEnvironment("pi-lens-blank-single-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			fs.writeFileSync(filePath, "const a = 1;\nconst b = 2;\n");
+			expect(
+				tryCorrectIndentationMismatch("const z = 9;", filePath),
+			).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("returns undefined when oldText already matches (no needless patch)", () => {
+		const env = setupTestEnvironment("pi-lens-blank-exact-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			fs.writeFileSync(filePath, `${fileBody}\n`);
+			const oldText = [
+				"\tconst a = 1;",
+				"",
+				"\tconst b = 2;",
+				"\treturn a + b;",
+			].join("\n");
+			expect(tryCorrectIndentationMismatch(oldText, filePath)).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+});
+
 describe("stripOldTextTrailingWhitespace", () => {
 	it("strips trailing spaces from each line", () => {
 		expect(stripOldTextTrailingWhitespace("foo   \nbar  \nbaz")).toBe(
