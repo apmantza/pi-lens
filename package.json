@@ -67,7 +67,7 @@
 		"minimatch": "^10.2.5",
 		"typebox": "^1.0.0",
 		"typescript": "^6.0.3",
-		"vscode-jsonrpc": "^8.2.1"
+		"vscode-jsonrpc": "^9.0.0"
 	},
 	"peerDependencies": {
 		"@earendil-works/pi-coding-agent": "*"
