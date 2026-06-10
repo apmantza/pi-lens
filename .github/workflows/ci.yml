@@ -132,8 +132,8 @@ jobs:
           # directly instead of jiti-transpiling source on every startup (#182).
           tar -tzf "$TARBALL" | grep "package/dist/index.js" || \
             (echo "ERROR: dist/index.js missing from tarball (prepare build failed?)" && exit 1)
-          # Skills ship at the package root (skills/); pi.skills is "../skills",
-          # resolved relative to the dist entry back to the real root dir.
+          # Skills ship at the package root (skills/); pi.skills is "../../skills",
+          # resolved relative to the dist entry FILE (dist/index.js) back to root.
           tar -tzf "$TARBALL" | grep "package/skills/" || \
             (echo "ERROR: skills/ missing from tarball" && exit 1)
           # Guard against accidentally shipping TS source again (reintroduces the
