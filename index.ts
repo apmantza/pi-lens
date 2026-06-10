@@ -1105,7 +1105,14 @@ export default function (pi: ExtensionAPI) {
 		createAstGrepSearchTool(astGrepClient),
 		createAstGrepReplaceTool(astGrepClient),
 		createAstDumpTool(astGrepClient),
-		createLensDiagnosticsTool(cacheManager, () => runtime.projectRoot),
+		createLensDiagnosticsTool(
+			cacheManager,
+			() => runtime.projectRoot,
+			undefined,
+			// Flush pending per-edit dispatches before reporting so fixes made
+			// earlier this turn are reflected (not the stale pre-fix state) (#190).
+			() => flushDebouncedToolResults(),
+		),
 		createLspDiagnosticsTool(),
 		createLspNavigationTool((name) => getLensFlag(name)),
 	]) {

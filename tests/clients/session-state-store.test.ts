@@ -19,6 +19,7 @@ import {
 	importWidgetState,
 	type PersistedWidgetState,
 	recordDiagnostics,
+	reconcileStaleWidgetFiles,
 } from "../../clients/widget-state.js";
 
 let dataDir: string;
@@ -214,5 +215,53 @@ describe("dropStaleFiles — freshness reconciliation (#190/#180)", () => {
 		const result = await dropStaleFiles(widget, savedAt);
 		expect(result.sessionLanguages).toEqual(["typescript"]);
 		expect(result.files).toHaveLength(1);
+	});
+});
+
+describe("reconcileStaleWidgetFiles — live widget freshness (lens_diagnostics)", () => {
+	let liveDir: string;
+	beforeAll(() => {
+		liveDir = mkdtempSync(join(tmpdir(), "pi-lens-live-stale-"));
+	});
+	afterAll(() => rmSync(liveDir, { recursive: true, force: true }));
+	beforeEach(() => clearWidgetState());
+
+	it("drops files edited after their diagnostics were recorded, keeps unchanged ones", async () => {
+		const fixed = join(liveDir, "fixed.ts");
+		const unchanged = join(liveDir, "unchanged.ts");
+		writeFileSync(fixed, "before");
+		writeFileSync(unchanged, "stable");
+
+		recordDiagnostics(fixed, [
+			{ tool: "tsc", severity: "error", message: "boom", line: 1 },
+		]);
+		recordDiagnostics(unchanged, [
+			{ tool: "eslint", severity: "warning", message: "meh", line: 1 },
+		]);
+		expect(getFileDiagnosticSummaries()).toHaveLength(2);
+
+		// Simulate the agent fixing `fixed` AFTER it was last recorded: its mtime
+		// now postdates touchedAt. `unchanged` keeps an older mtime.
+		const recordedAt = Date.now();
+		utimesSync(unchanged, new Date(recordedAt - 60_000), new Date(recordedAt - 60_000));
+		utimesSync(fixed, new Date(recordedAt + 60_000), new Date(recordedAt + 60_000));
+
+		const dropped = await reconcileStaleWidgetFiles();
+		expect(dropped).toBe(1);
+		expect(getFileDiagnosticSummaries().map((s) => s.filePath)).toEqual([
+			unchanged,
+		]);
+	});
+
+	it("drops entries whose file was deleted", async () => {
+		const gone = join(liveDir, "gone.ts");
+		writeFileSync(gone, "x");
+		recordDiagnostics(gone, [
+			{ tool: "tsc", severity: "error", message: "x", line: 1 },
+		]);
+		rmSync(gone, { force: true });
+
+		expect(await reconcileStaleWidgetFiles()).toBe(1);
+		expect(getFileDiagnosticSummaries()).toEqual([]);
 	});
 });

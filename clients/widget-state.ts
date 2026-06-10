@@ -1,3 +1,4 @@
+import { stat } from "node:fs/promises";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -242,6 +243,40 @@ export function recordDiagnostics(
 	rec.touchedAt = Date.now();
 	files.set(filePath, rec);
 	requestRender();
+}
+
+/**
+ * Drop widget entries whose file changed on disk after pi-lens last recorded
+ * them (`mtimeMs > touchedAt` → the recorded diagnostics predate the current
+ * content → stale) or that no longer exist. Keeps `lens_diagnostics` from
+ * surfacing findings the agent already fixed (or that an external edit
+ * invalidated). Async with concurrent stats — call on read, never on the typing
+ * path. Returns how many entries were dropped (so callers can tell the agent
+ * those files changed and need a `mode=full` rescan rather than reading as
+ * clean).
+ */
+export async function reconcileStaleWidgetFiles(): Promise<number> {
+	const entries = [...files.entries()];
+	const staleKeys = await Promise.all(
+		entries.map(async ([filePath, rec]) => {
+			try {
+				const st = await stat(filePath);
+				// +1ms tolerance: a freshly-recorded file has touchedAt >= mtime.
+				return st.mtimeMs > rec.touchedAt + 1 ? filePath : undefined;
+			} catch {
+				return filePath; // deleted / unreadable → drop
+			}
+		}),
+	);
+	let dropped = 0;
+	for (const key of staleKeys) {
+		if (key !== undefined) {
+			files.delete(key);
+			dropped += 1;
+		}
+	}
+	if (dropped > 0) requestRenderFn?.();
+	return dropped;
 }
 
 /** Summary of current diagnostic counts across all files in the widget. */

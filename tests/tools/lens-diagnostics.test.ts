@@ -24,8 +24,11 @@ const mockSummaries: ReturnType<
 	typeof import("../../clients/widget-state.js")["getFileDiagnosticSummaries"]
 > = [];
 
+let mockStaleDropped = 0;
+
 vi.mock("../../clients/widget-state.js", () => ({
 	getFileDiagnosticSummaries: () => mockSummaries,
+	reconcileStaleWidgetFiles: async () => mockStaleDropped,
 }));
 
 beforeEach(() => {
@@ -33,6 +36,7 @@ beforeEach(() => {
 	projectDiagnosticsMocks.loadProjectDiagnosticsSnapshot.mockReset();
 	projectDiagnosticsMocks.loadProjectDiagnosticsDeltaReport.mockReset();
 	mockSummaries.length = 0;
+	mockStaleDropped = 0;
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -501,6 +505,30 @@ describe("lens_diagnostics mode=all", () => {
 		mockSummaries.length = 0;
 		const result = await run(makeTool(), { mode: "all" });
 		expect(String(result.content[0].text)).toContain("No files diagnosed");
+	});
+
+	it("flushes pending dispatches before reading (so just-fixed files refresh)", async () => {
+		const flush = vi.fn(async () => {});
+		const tool = createLensDiagnosticsTool(
+			makeCacheManager({}) as any,
+			() => "/proj",
+			undefined,
+			flush,
+		);
+		await tool.execute("1", { mode: "all" }, new AbortController().signal, null, {
+			cwd: "/proj",
+		});
+		expect(flush).toHaveBeenCalledOnce();
+	});
+
+	it("notes stale files dropped by reconciliation (use mode=full)", async () => {
+		mockStaleDropped = 2;
+		mockSummaries.length = 0;
+		const result = await run(makeTool(), { mode: "all" });
+		const text = String(result.content[0].text);
+		expect(text).toContain("2 changed files omitted as stale");
+		expect(text).toContain("mode=full");
+		expect(result.details).toMatchObject({ staleDropped: 2 });
 	});
 
 	it("returns clean message when all files have zero issues", async () => {
