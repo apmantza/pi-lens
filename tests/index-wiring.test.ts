@@ -45,6 +45,7 @@ const EXPECTED_TOOLS = [
 const EXPECTED_HOOKS = [
 	"resources_discover",
 	"session_start",
+	"session_before_fork",
 	"tool_call",
 	"tool_result",
 	"turn_start",

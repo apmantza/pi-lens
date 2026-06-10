@@ -11,10 +11,12 @@ import {
 	clearWidgetState,
 	exportWidgetState,
 	importWidgetState,
+	type PersistedWidgetState,
 	renderWidget,
 	setRenderCallback,
 } from "./clients/widget-state.js";
 import {
+	dropStaleFiles,
 	loadSessionState,
 	saveSessionState,
 } from "./clients/session-state-store.js";
@@ -535,6 +537,11 @@ export default function (pi: ExtensionAPI) {
 		process.env.PI_LENS_NO_CONTEXT_INJECTION !== "1" &&
 		!getLensFlag("no-lens-context");
 	let lensWidgetVisible = globalConfig?.widget?.visible !== false;
+	// #190 Phase 2: snapshot of the source session's diagnostics, captured at
+	// `session_before_fork` and adopted by the forked session at the subsequent
+	// `session_start` (reason="fork"). In-memory hand-off (same process) — avoids
+	// deriving the source id from a file path (the id lives in the file header).
+	let pendingForkSnapshot: PersistedWidgetState | undefined;
 	type LensWidgetTui = { requestRender: () => void };
 	type LensWidgetTheme = { fg: (color: string, s: string) => string };
 	type LensWidgetComponent = {
@@ -1205,24 +1212,53 @@ export default function (pi: ExtensionAPI) {
 			});
 
 			// Reason-aware widget state (#190): resume rehydrates the persisted
-			// findings; reload keeps the in-memory state; everything else (new /
-			// startup / fork — fork branching is Phase 2) starts clean.
+			// findings (reconciled against the current FS so files edited between
+			// sessions aren't shown stale); fork branches from the source session's
+			// snapshot; reload keeps in-memory state; new/startup start clean.
 			if (sessionReason === "resume" && stableSessionId) {
 				clearWidgetState();
+				pendingForkSnapshot = undefined;
 				const persisted = await loadSessionState(
 					ctx.cwd ?? process.cwd(),
 					stableSessionId,
 				);
-				if (persisted?.widget && importWidgetState(persisted.widget)) {
+				if (persisted?.widget) {
+					// #180/#190: drop files changed on disk since the snapshot so a
+					// resume never surfaces stale diagnostics; they re-scan on edit.
+					const fresh = await dropStaleFiles(
+						persisted.widget,
+						persisted.savedAt,
+					);
+					const dropped = persisted.widget.files.length - fresh.files.length;
+					importWidgetState(fresh);
 					dbg(
-						`session_start: resumed ${stableSessionId} — rehydrated ${persisted.widget.files.length} file(s)`,
+						`session_start: resumed ${stableSessionId} — rehydrated ${fresh.files.length} file(s)` +
+							(dropped > 0 ? `, dropped ${dropped} stale` : ""),
 					);
 				} else {
 					dbg(`session_start: resumed ${stableSessionId} — no persisted state`);
 				}
+			} else if (sessionReason === "fork" && pendingForkSnapshot) {
+				// Branch the forked session from the source's in-memory snapshot, then
+				// persist it under the new session id so the fork owns its own copy.
+				clearWidgetState();
+				importWidgetState(pendingForkSnapshot);
+				const forkedFileCount = pendingForkSnapshot.files.length;
+				pendingForkSnapshot = undefined;
+				if (stableSessionId) {
+					void saveSessionState(
+						ctx.cwd ?? process.cwd(),
+						stableSessionId,
+						exportWidgetState(),
+					);
+				}
+				dbg(
+					`session_start: fork — branched ${forkedFileCount} file(s) from source`,
+				);
 			} else if (sessionReason === "reload") {
 				dbg("session_start: reload — keeping widget state");
 			} else {
+				pendingForkSnapshot = undefined;
 				clearWidgetState();
 			}
 
@@ -1232,6 +1268,21 @@ export default function (pi: ExtensionAPI) {
 		} catch (sessionErr) {
 			dbg(`session_start crashed: ${sessionErr}`);
 			dbg(`session_start crash stack: ${(sessionErr as Error).stack}`);
+		}
+	});
+
+	// #190 Phase 2: capture the source session's diagnostics just before a fork,
+	// so the forked session (its `session_start` fires with reason="fork") can
+	// branch from them instead of starting empty. In-memory hand-off within the
+	// same process; cleared once adopted (or on any non-fork start).
+	(pi as any).on("session_before_fork", () => {
+		try {
+			pendingForkSnapshot = exportWidgetState();
+			dbg(
+				`session_before_fork: stashed ${pendingForkSnapshot.files.length} file(s) for the fork`,
+			);
+		} catch (forkErr) {
+			dbg(`session_before_fork crashed: ${forkErr}`);
 		}
 	});
 

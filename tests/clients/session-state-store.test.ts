@@ -3,11 +3,12 @@
  * widget-state export/import that backs resume rehydration.
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
+	dropStaleFiles,
 	loadSessionState,
 	saveSessionState,
 } from "../../clients/session-state-store.js";
@@ -16,6 +17,7 @@ import {
 	exportWidgetState,
 	getFileDiagnosticSummaries,
 	importWidgetState,
+	type PersistedWidgetState,
 	recordDiagnostics,
 } from "../../clients/widget-state.js";
 
@@ -121,6 +123,22 @@ describe("session-state-store save/load (#190)", () => {
 		expect(getFileDiagnosticSummaries()).toEqual(before);
 	});
 
+	it("fork hand-off: source snapshot branches into a new session id", async () => {
+		// Mirrors the session_before_fork → session_start(fork) flow: stash the
+		// source's in-memory snapshot, then adopt it under the forked session id.
+		seedDiagnostics();
+		const before = getFileDiagnosticSummaries();
+		const stashed = exportWidgetState(); // captured at session_before_fork
+
+		clearWidgetState(); // forked session starts empty in memory
+		importWidgetState(stashed); // branch from source
+		await saveSessionState(cwd, "forked-session", exportWidgetState());
+
+		const loaded = await loadSessionState(cwd, "forked-session");
+		expect(importWidgetState(loaded?.widget)).toBe(true);
+		expect(getFileDiagnosticSummaries()).toEqual(before);
+	});
+
 	it("isolates sessions: one id's state does not leak into another", async () => {
 		seedDiagnostics();
 		await saveSessionState(cwd, "session-A", exportWidgetState());
@@ -140,5 +158,61 @@ describe("session-state-store save/load (#190)", () => {
 		expect(b?.widget.files.map((f) => f.filePath)).toEqual([
 			"/proj/example/c.ts",
 		]);
+	});
+});
+
+describe("dropStaleFiles — freshness reconciliation (#190/#180)", () => {
+	let fsDir: string;
+	const fileEntry = (filePath: string): PersistedWidgetState["files"][number] => ({
+		filePath,
+		runners: [],
+		formatters: [],
+		diagnostics: [],
+		allDiagnostics: [],
+		diagnosticCounts: { blocking: 0, errors: 0, warnings: 0 },
+		hasFinalDiagnosticsSnapshot: true,
+		touchedAt: 0,
+	});
+
+	beforeAll(() => {
+		fsDir = mkdtempSync(join(tmpdir(), "pi-lens-stale-"));
+	});
+	afterAll(() => rmSync(fsDir, { recursive: true, force: true }));
+
+	it("keeps unchanged files, drops files modified or deleted since the snapshot", async () => {
+		const fresh = join(fsDir, "fresh.ts");
+		const modified = join(fsDir, "modified.ts");
+		const gone = join(fsDir, "gone.ts"); // never created on disk
+		writeFileSync(fresh, "a");
+		writeFileSync(modified, "b");
+
+		const savedAt = Date.now();
+		// fresh: last modified well before the snapshot → unchanged → keep
+		utimesSync(fresh, new Date(savedAt - 60_000), new Date(savedAt - 60_000));
+		// modified: touched after the snapshot → stale → drop
+		utimesSync(modified, new Date(savedAt + 60_000), new Date(savedAt + 60_000));
+
+		const widget: PersistedWidgetState = {
+			version: 1,
+			sessionLanguages: [],
+			files: [fileEntry(fresh), fileEntry(modified), fileEntry(gone)],
+		};
+
+		const result = await dropStaleFiles(widget, savedAt);
+		expect(result.files.map((f) => f.filePath)).toEqual([fresh]);
+	});
+
+	it("preserves non-file fields and returns all files when none are stale", async () => {
+		const a = join(fsDir, "a.ts");
+		writeFileSync(a, "x");
+		const savedAt = Date.now() + 60_000; // snapshot "after" the file mtime
+		const widget: PersistedWidgetState = {
+			version: 1,
+			sessionLanguages: ["typescript"],
+			files: [fileEntry(a)],
+		};
+		const result = await dropStaleFiles(widget, savedAt);
+		expect(result.sessionLanguages).toEqual(["typescript"]);
+		expect(result.files).toHaveLength(1);
 	});
 });

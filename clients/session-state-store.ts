@@ -62,6 +62,36 @@ export async function saveSessionState(
 }
 
 /**
+ * Reconcile a rehydrated snapshot with the current filesystem (#190 / #180):
+ * drop files whose on-disk mtime is newer than `savedAt` (changed since the
+ * snapshot) or that no longer exist, so a resume never shows stale diagnostics
+ * for files edited between sessions. Dropped files simply re-scan on their next
+ * edit. Existence/mtime are probed concurrently (off the event loop).
+ */
+export async function dropStaleFiles(
+	widget: PersistedWidgetState,
+	savedAt: number,
+): Promise<PersistedWidgetState> {
+	const checked = await Promise.all(
+		widget.files.map(async (file) => {
+			try {
+				const st = await fs.stat(file.filePath);
+				// mtime within a small skew of savedAt counts as unchanged.
+				return st.mtimeMs <= savedAt + 1 ? file : undefined;
+			} catch {
+				return undefined; // gone → drop
+			}
+		}),
+	);
+	return {
+		...widget,
+		files: checked.filter(
+			(f): f is PersistedWidgetState["files"][number] => f !== undefined,
+		),
+	};
+}
+
+/**
  * Load the persisted widget snapshot for `sessionId`, or undefined if none /
  * unreadable / version mismatch.
  */
