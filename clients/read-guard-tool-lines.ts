@@ -609,6 +609,17 @@ export function tryCorrectIndentationMismatchFromContent(
 		return indentationInsensitiveCandidate;
 	}
 
+	// Tier A (#200): the fixed-length matchers above can't bridge a mid-block
+	// blank-line difference; fall back to a blank-line-insensitive match that
+	// recovers the real file span (unique-match guarded).
+	const blankLineCandidate = findBlankLineInsensitiveCandidate(
+		content,
+		normalized,
+	);
+	if (blankLineCandidate !== undefined) {
+		return blankLineCandidate;
+	}
+
 	return undefined;
 }
 
@@ -658,6 +669,67 @@ function findIndentationInsensitiveCandidate(
 	}
 
 	return undefined;
+}
+
+/**
+ * Tier A of the blank-line autopatch (#200): tolerate mid-block blank-line
+ * divergence — a blank line added or removed *inside* the block — which the
+ * fixed-length window in {@link findIndentationInsensitiveCandidate} can't (any
+ * interior blank-line delta breaks its 1:1 alignment). Blank lines are
+ * semantically insignificant in every supported language, so matching the
+ * oldText's non-blank lines (indentation-insensitive) against consecutive
+ * content while skipping interior blanks on the content side is safe.
+ *
+ * Safety: matches by the non-blank "signature" but **recovers and returns the
+ * real file span** (first→last matched non-blank line, real interior blanks
+ * included) so the applied oldText is verbatim file bytes; requires the
+ * signature to match **exactly once** (returns undefined on 0 or ≥2). Anchored
+ * on ≥2 non-blank lines to avoid trivial single-line collisions.
+ */
+function findBlankLineInsensitiveCandidate(
+	content: string,
+	oldText: string,
+): string | undefined {
+	const stripIndent = (line: string) => line.replace(/^[\t ]+/, "").trimEnd();
+	const isBlank = (line: string) => stripIndent(line) === "";
+
+	const contentLines = content.split("\n");
+	const oldNonBlank = oldText
+		.split("\n")
+		.map(stripIndent)
+		.filter((line) => line !== "");
+	// Need ≥2 anchors to be meaningful and collision-resistant; single-line
+	// drift has no interior to differ and is handled by other tiers.
+	if (oldNonBlank.length < 2) return undefined;
+
+	const spans: Array<[number, number]> = [];
+	for (let start = 0; start < contentLines.length; start += 1) {
+		if (stripIndent(contentLines[start]) !== oldNonBlank[0]) continue;
+		let contentIdx = start + 1;
+		let oldIdx = 1;
+		let end = start;
+		let ok = true;
+		while (oldIdx < oldNonBlank.length) {
+			while (contentIdx < contentLines.length && isBlank(contentLines[contentIdx]))
+				contentIdx += 1;
+			if (
+				contentIdx >= contentLines.length ||
+				stripIndent(contentLines[contentIdx]) !== oldNonBlank[oldIdx]
+			) {
+				ok = false;
+				break;
+			}
+			end = contentIdx;
+			oldIdx += 1;
+			contentIdx += 1;
+		}
+		if (ok) spans.push([start, end]);
+	}
+
+	if (spans.length !== 1) return undefined;
+	const [start, end] = spans[0];
+	const candidate = contentLines.slice(start, end + 1).join("\n");
+	return candidate === oldText ? undefined : candidate;
 }
 
 export function getTouchedLinesForGuard(
