@@ -31,6 +31,30 @@ export interface SafeSpawnOptions {
 }
 
 // ============================================================================
+// AMBIENT TURN ABORT SIGNAL
+// ============================================================================
+
+/**
+ * The current turn's abort signal, published by the lifecycle handlers from
+ * pi's `ctx.signal`. Threading the signal explicitly through every
+ * dispatch → runner → spawn call site would be invasive, so instead
+ * `safeSpawnAsync` defaults to this ambient signal when a call doesn't pass its
+ * own. The effect: pressing Esc mid-turn aborts in-flight linter / formatter /
+ * type-checker child processes (process-tree kill on Windows) instead of letting
+ * them run to their timeout.
+ *
+ * Each spawn captures the signal at call time (attaching its own abort listener),
+ * so clearing this after a handler returns only affects *future* spawns — work
+ * already in flight keeps the signal it started with.
+ */
+let ambientAbortSignal: AbortSignal | undefined;
+
+/** Publish (or clear, with `undefined`) the current turn's abort signal. */
+export function setAmbientAbortSignal(signal: AbortSignal | undefined): void {
+	ambientAbortSignal = signal;
+}
+
+// ============================================================================
 // INTERNAL HELPERS
 // ============================================================================
 
@@ -65,7 +89,9 @@ export async function safeSpawnAsync(
 	options?: SafeSpawnOptions,
 ): Promise<SpawnResult> {
 	const timeout = options?.timeout ?? 30000;
-	const abortSignal = options?.signal;
+	// Fall back to the current turn's ambient signal (set from ctx.signal) so an
+	// Esc/abort mid-turn cancels dispatches that didn't thread a signal of their own.
+	const abortSignal = options?.signal ?? ambientAbortSignal;
 
 	return new Promise((resolve) => {
 		// Check for early abort

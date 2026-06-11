@@ -84,7 +84,7 @@ import {
 } from "./clients/runtime-tool-result.js";
 import { cancelLSPIdleReset, handleTurnEnd } from "./clients/runtime-turn.js";
 import { isExternalOrVendorFile } from "./clients/path-utils.js";
-import { safeSpawnAsync } from "./clients/safe-spawn.js";
+import { safeSpawnAsync, setAmbientAbortSignal } from "./clients/safe-spawn.js";
 import {
 	createStarterSemgrepConfig,
 	findLocalSemgrepConfig,
@@ -2072,27 +2072,34 @@ export default function (pi: ExtensionAPI) {
 
 	// Real-time feedback on file writes/edits
 	// biome-ignore lint/suspicious/noExplicitAny: pi.on overload mismatch for tool_result event type
-	(pi as any).on("tool_result", async (event: any) => {
+	(pi as any).on("tool_result", async (event: any, ctx: any) => {
 		if (!lensEnabled) return;
 		updateRuntimeIdentityFromEvent(event);
-		const { biomeClient, ruffClient, metricsClient, agentBehaviorClient } =
-			await loadBootstrapClients();
-		return handleToolResult({
-			event: event as any,
-			getFlag: (name: string) => getLensFlag(name),
-			dbg,
-			runtime,
-			cacheManager,
-			biomeClient,
-			ruffClient,
-			metricsClient,
-			resetLSPService,
-			readGuard: runtime.readGuard,
-			agentBehaviorRecord: (toolName, filePath) =>
-				agentBehaviorClient.recordToolCall(toolName, filePath),
-			formatBehaviorWarnings: (warnings) =>
-				agentBehaviorClient.formatWarnings(warnings as any),
-		});
+		// Publish this turn's abort signal so the dispatch's linter/type-check
+		// child processes are killed if the agent is interrupted (#197 ctx.signal).
+		setAmbientAbortSignal(ctx?.signal);
+		try {
+			const { biomeClient, ruffClient, metricsClient, agentBehaviorClient } =
+				await loadBootstrapClients();
+			return await handleToolResult({
+				event: event as any,
+				getFlag: (name: string) => getLensFlag(name),
+				dbg,
+				runtime,
+				cacheManager,
+				biomeClient,
+				ruffClient,
+				metricsClient,
+				resetLSPService,
+				readGuard: runtime.readGuard,
+				agentBehaviorRecord: (toolName, filePath) =>
+					agentBehaviorClient.recordToolCall(toolName, filePath),
+				formatBehaviorWarnings: (warnings) =>
+					agentBehaviorClient.formatWarnings(warnings as any),
+			});
+		} finally {
+			setAmbientAbortSignal(undefined);
+		}
 	});
 
 	// --- Turn end: batch jscpd/madge on collected files, then clear state ---
@@ -2104,6 +2111,8 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("agent_end", async (_event, ctx) => {
 		if (!lensEnabled) return;
+		// Esc/abort during the deferred format + flush kills in-flight children.
+		setAmbientAbortSignal((ctx as { signal?: AbortSignal })?.signal);
 		try {
 			// Ensure any pipeline still queued in the debounce window finishes
 			// before agent_end runs — otherwise project change-log entries and
@@ -2123,11 +2132,16 @@ export default function (pi: ExtensionAPI) {
 		} catch (agentEndErr) {
 			dbg(`agent_end crashed: ${agentEndErr}`);
 			dbg(`agent_end crash stack: ${(agentEndErr as Error).stack}`);
+		} finally {
+			setAmbientAbortSignal(undefined);
 		}
 	});
 
 	pi.on("turn_end", async (_event: any, ctx) => {
 		if (!lensEnabled) return;
+		// Esc/abort during the turn-end flush (knip/madge/tests + debounced
+		// dispatch) kills in-flight children instead of waiting out their timeout.
+		setAmbientAbortSignal((ctx as { signal?: AbortSignal })?.signal);
 		try {
 			// Persist a new worst event-loop block to latency.log, attributed to
 			// this turn, so freezes are queryable across sessions (#192).
@@ -2176,6 +2190,8 @@ export default function (pi: ExtensionAPI) {
 		} catch (turnEndErr) {
 			dbg(`turn_end crashed: ${turnEndErr}`);
 			dbg(`turn_end crash stack: ${(turnEndErr as Error).stack}`);
+		} finally {
+			setAmbientAbortSignal(undefined);
 		}
 	});
 
