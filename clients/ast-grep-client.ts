@@ -11,7 +11,6 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { AstGrepParser } from "./ast-grep-parser.js";
 import { AstGrepRuleManager } from "./ast-grep-rule-manager.js";
 import type {
 	AstGrepDiagnostic,
@@ -505,43 +504,6 @@ message: found
 	}
 
 	/**
-	 * Scan a file against all rules
-	 */
-	scanFile(filePath: string): AstGrepDiagnostic[] {
-		if (!this.isAvailable()) return [];
-
-		const absolutePath = path.resolve(filePath);
-		if (!fs.existsSync(absolutePath)) return [];
-
-		const configPath = path.join(this.ruleDir, ".sgconfig.yml");
-
-		try {
-			const result = this.runner.execSync([
-				"scan",
-				"--config",
-				configPath,
-				"--json",
-				absolutePath,
-			]);
-
-			// ast-grep exits 1 when it finds issues
-			const output = result.output;
-			if (!output.trim()) return [];
-
-			const parser = new AstGrepParser(
-				(id) => this.getRuleDescription(id),
-				(sev) => this.mapSeverity(sev),
-			);
-			return parser.parseOutput(output, absolutePath);
-		} catch (err) {
-			this.log(
-				`Scan error: ${err instanceof Error ? err.message : String(err)}`,
-			);
-			return [];
-		}
-	}
-
-	/**
 	 * Format diagnostics for LLM consumption
 	 */
 	formatDiagnostics(diags: AstGrepDiagnostic[]): string {
@@ -581,13 +543,5 @@ message: found
 
 	getRuleDescription(ruleId: string): RuleDescription | undefined {
 		return this.ruleManager.loadRuleDescriptions().get(ruleId);
-	}
-
-	private mapSeverity(severity: string): AstGrepDiagnostic["severity"] {
-		const lower = severity.toLowerCase();
-		if (lower === "error") return "error";
-		if (lower === "warning") return "warning";
-		if (lower === "info") return "info";
-		return "hint";
 	}
 }
