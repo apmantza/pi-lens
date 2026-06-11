@@ -28,6 +28,15 @@ export interface SafeSpawnOptions {
 	cwd?: string;
 	env?: NodeJS.ProcessEnv;
 	signal?: AbortSignal;
+	/**
+	 * Opt out of the ambient turn abort signal (which is otherwise the default).
+	 * Set this for long, side-effecting operations like tool installs that should
+	 * run to completion even if the agent turn is interrupted — matching the old
+	 * uncancellable sync `safeSpawn` they replaced (so a half-finished
+	 * `gem install` / `go install` can't be left behind by an Esc). An explicit
+	 * `signal` still takes precedence over both.
+	 */
+	ignoreAmbientSignal?: boolean;
 }
 
 // ============================================================================
@@ -90,8 +99,11 @@ export async function safeSpawnAsync(
 ): Promise<SpawnResult> {
 	const timeout = options?.timeout ?? 30000;
 	// Fall back to the current turn's ambient signal (set from ctx.signal) so an
-	// Esc/abort mid-turn cancels dispatches that didn't thread a signal of their own.
-	const abortSignal = options?.signal ?? ambientAbortSignal;
+	// Esc/abort mid-turn cancels dispatches that didn't thread a signal of their
+	// own — unless the caller opts out (installs, which must run to completion).
+	const abortSignal =
+		options?.signal ??
+		(options?.ignoreAmbientSignal ? undefined : ambientAbortSignal);
 
 	return new Promise((resolve) => {
 		// Check for early abort

@@ -62,4 +62,15 @@ describe("safeSpawnAsync ambient abort signal (#197)", () => {
 		expect(result.error?.message ?? "").not.toMatch(/aborted before start/i);
 		expect(result.status).not.toBeNull();
 	});
+
+	it("ignoreAmbientSignal opts out of an aborted ambient signal (installs run to completion)", async () => {
+		setAmbientAbortSignal(AbortSignal.abort());
+
+		const result = await safeSpawnAsync(NODE, EXIT_OK, {
+			ignoreAmbientSignal: true,
+		});
+
+		expect(result.error?.message ?? "").not.toMatch(/aborted before start/i);
+		expect(result.status).not.toBeNull();
+	});
 });
