@@ -45,6 +45,7 @@ vi.mock("../../../clients/lsp/index.js", () => ({
 }));
 
 import { dispatchForFile, getLatencyReports } from "../../../clients/dispatch/dispatcher.js";
+import { CacheManager } from "../../../clients/cache-manager.js";
 import { resetDispatchBaselines } from "../../../clients/dispatch/integration.js";
 import { getDiagnosticTracker } from "../../../clients/diagnostic-tracker.js";
 import {
@@ -304,5 +305,19 @@ describe("analyzeFile", () => {
 		await analyzeFile(tsFile, tmpDir, { record: false });
 
 		expect(getFileDiagnosticSummaries().length).toBe(0);
+	});
+
+	it("registers the file into turn-state when registerTurnState is set (#A)", async () => {
+		vi.mocked(dispatchForFile).mockResolvedValue(emptyResult);
+		await analyzeFile(tsFile, tmpDir, { registerTurnState: true });
+		const turnState = new CacheManager().readTurnState(tmpDir);
+		expect(Object.keys(turnState.files).length).toBe(1);
+	});
+
+	it("leaves turn-state untouched by default (#A)", async () => {
+		vi.mocked(dispatchForFile).mockResolvedValue(emptyResult);
+		await analyzeFile(tsFile, tmpDir);
+		const turnState = new CacheManager().readTurnState(tmpDir);
+		expect(Object.keys(turnState.files).length).toBe(0);
 	});
 });

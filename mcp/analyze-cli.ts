@@ -84,6 +84,9 @@ async function main(): Promise<void> {
 		// Fast path by default; --lsp opts into the (slow, cold) type-check.
 		flags: withLsp ? {} : { "no-lsp": true },
 		record: false,
+		// This IS the edit-detection path (PostToolUse) — mark the file so a later
+		// pilens_turn_end picks it up.
+		registerTurnState: true,
 	});
 
 	if (result.counts.diagnostics === 0) process.exit(0); // clean → no noise

@@ -279,8 +279,9 @@ const TOOLS = [
 			"knip dead-code + jscpd duplication (incremental), circular-dep checks, " +
 			"tests on affected targets, cascade to dependents, and the actionable/" +
 			"code-quality warning aggregation. Returns the turn-end advisory + test " +
-			"findings. Pass the files you edited; pairs with pilens_session_start " +
-			"(which sets the baseline turn_end compares tests/build against).",
+			"findings. `files` is OPTIONAL — pilens_analyze (and the PostToolUse hook) " +
+			"auto-register edited files into turn-state, so you can call this with no " +
+			"args after a series of edits; pass `files` to add any not analyzed.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -288,7 +289,8 @@ const TOOLS = [
 				files: {
 					type: "array",
 					items: { type: "string" },
-					description: "Files changed this turn (absolute or relative to cwd).",
+					description:
+						"Optional extra files to include (auto-registered ones are already picked up).",
 				},
 			},
 		},
@@ -408,7 +410,12 @@ async function callTool(
 		}
 
 		await ensureReady(cwd);
-		const result = await analyzeFile(file, cwd, { flags });
+		// Warm = an edit-detection path: register the file so pilens_turn_end picks
+		// it up without an explicit file list.
+		const result = await analyzeFile(file, cwd, {
+			flags,
+			registerTurnState: true,
+		});
 		return formatAnalyze(result, cwd, "warm");
 	}
 

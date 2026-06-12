@@ -14,6 +14,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { CacheManager } from "../cache-manager.js";
 import {
 	dispatchLintWithResult,
 	getLatencyReports,
@@ -112,6 +113,14 @@ export interface AnalyzeFileOptions {
 	 * Default true; harmless (and discarded) in the short-lived `fresh` worker.
 	 */
 	record?: boolean;
+	/**
+	 * Mark the file as edited-this-turn in on-disk turn-state, so a subsequent
+	 * `pilens_turn_end` (knip/jscpd/dep/tests/cascade) picks it up with no
+	 * explicit file list. Default false — only the edit-detection paths (the
+	 * warm `pilens_analyze` and the PostToolUse-hook bin) enable it, so `fresh`
+	 * benchmarking doesn't pollute the real turn-state.
+	 */
+	registerTurnState?: boolean;
 }
 
 function toMcpDiagnostic(diagnostic: Diagnostic): McpAnalyzeDiagnostic {
@@ -203,6 +212,23 @@ export async function analyzeFile(
 		recordDiagnostics(absPath, result.diagnostics);
 		if (result.diagnostics.length > 0) {
 			getDiagnosticTracker().trackShown(result.diagnostics);
+		}
+	}
+
+	if (options.registerTurnState) {
+		// Full-file range, importsChanged=true (conservative → dep/knip re-check
+		// broadly). No sessionId — leaving it unset avoids turn_end's stale-session
+		// eviction. Best-effort.
+		try {
+			const lineCount = fs.readFileSync(absPath, "utf8").split("\n").length;
+			new CacheManager().addModifiedRange(
+				absPath,
+				{ start: 1, end: lineCount },
+				true,
+				cwd,
+			);
+		} catch {
+			// unreadable — skip turn-state registration
 		}
 	}
 
