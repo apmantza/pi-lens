@@ -9,7 +9,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { safeSpawn } from "./safe-spawn.js";
+import { safeSpawnAsync } from "./safe-spawn.js";
 
 // --- Types ---
 
@@ -53,9 +53,9 @@ export class RustClient {
 	}
 
 	/**
-	 * Find cargo executable path
+	 * Find cargo executable path (async — probes PATH candidates off the event loop).
 	 */
-	findCargoPath(): string | null {
+	async findCargoPathAsync(): Promise<string | null> {
 		if (this.cargoPath) return this.cargoPath;
 
 		const paths =
@@ -69,7 +69,7 @@ export class RustClient {
 						return p;
 					}
 				} else {
-					const result = safeSpawn(p, ["--version"], {
+					const result = await safeSpawnAsync(p, ["--version"], {
 						timeout: 3000,
 					});
 					if (!result.error && result.status === 0) {
@@ -86,11 +86,11 @@ export class RustClient {
 	}
 
 	/**
-	 * Check if cargo is installed
+	 * Check if cargo is installed (cached)
 	 */
-	isAvailable(): boolean {
+	async isAvailableAsync(): Promise<boolean> {
 		if (this.cargoAvailable !== null) return this.cargoAvailable;
-		this.cargoAvailable = this.findCargoPath() !== null;
+		this.cargoAvailable = (await this.findCargoPathAsync()) !== null;
 		if (this.cargoAvailable) {
 			this.log(`Cargo found: ${this.cargoPath}`);
 		}

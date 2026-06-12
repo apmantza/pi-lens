@@ -9,7 +9,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { safeSpawn } from "./safe-spawn.js";
+import { safeSpawnAsync } from "./safe-spawn.js";
 
 // --- Types ---
 
@@ -41,7 +41,6 @@ const GO_UNIX_PATHS = [
 // --- Client ---
 
 export class GoClient {
-	private goplsAvailable: boolean | null = null;
 	private goAvailable: boolean | null = null;
 	private goPath: string | null = null;
 	private log: (msg: string) => void;
@@ -53,9 +52,9 @@ export class GoClient {
 	}
 
 	/**
-	 * Find go executable path
+	 * Find go executable path (async — probes PATH candidates off the event loop).
 	 */
-	findGoPath(): string | null {
+	async findGoPathAsync(): Promise<string | null> {
 		if (this.goPath) return this.goPath;
 
 		const paths =
@@ -71,7 +70,7 @@ export class GoClient {
 					}
 				} else {
 					// Relative (PATH) - try running it
-					const result = safeSpawn(p, ["version"], {
+					const result = await safeSpawnAsync(p, ["version"], {
 						timeout: 3000,
 					});
 					if (!result.error && result.status === 0) {
@@ -88,32 +87,15 @@ export class GoClient {
 	}
 
 	/**
-	 * Check if Go is installed
+	 * Check if Go is installed (cached)
 	 */
-	isGoAvailable(): boolean {
+	async isGoAvailableAsync(): Promise<boolean> {
 		if (this.goAvailable !== null) return this.goAvailable;
-		this.goAvailable = this.findGoPath() !== null;
+		this.goAvailable = (await this.findGoPathAsync()) !== null;
 		if (this.goAvailable) {
 			this.log(`Go found: ${this.goPath}`);
 		}
 		return this.goAvailable;
-	}
-
-	/**
-	 * Check if gopls is installed
-	 */
-	isGoplsAvailable(): boolean {
-		if (this.goplsAvailable !== null) return this.goplsAvailable;
-
-		const result = safeSpawn("gopls", ["version"], {
-			timeout: 5000,
-		});
-
-		this.goplsAvailable = !result.error && result.status === 0;
-		if (this.goplsAvailable) {
-			this.log(`gopls found: ${result.stdout?.trim()}`);
-		}
-		return this.goplsAvailable;
 	}
 
 	/**

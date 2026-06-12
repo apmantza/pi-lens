@@ -894,11 +894,11 @@ export async function handleBooboo(
 		if (!langs.has("typescript")) {
 			return { findings: 0, status: "skipped" };
 		}
-		if (!clients.typeCoverage.isAvailable()) {
+		if (!(await clients.typeCoverage.isAvailableAsync())) {
 			return { findings: 0, status: "skipped" };
 		}
 
-		const tcResult = clients.typeCoverage.scan(targetPath);
+		const tcResult = await clients.typeCoverage.scanAsync(targetPath);
 
 		if (tcResult.percentage < 100) {
 			// Filter out test file locations using centralized exclusion

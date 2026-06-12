@@ -979,8 +979,8 @@ export async function handleSessionStart(
 	const detectedRunner = testRunnerClient.detectRunner(analysisRoot);
 	phase("test-runner-detect");
 	if (detectedRunner) tools.push(`Test runner (${detectedRunner.runner})`);
-	if (goClient.isGoAvailable()) tools.push("Go (go vet)");
-	if (rustClient.isAvailable()) tools.push("Rust (cargo)");
+	if (await goClient.isGoAvailableAsync()) tools.push("Go (go vet)");
+	if (await rustClient.isAvailableAsync()) tools.push("Rust (cargo)");
 	log(`Active tools: ${tools.join(", ")}`);
 	dbg(`session_start tools: ${tools.join(", ")}`);
 
