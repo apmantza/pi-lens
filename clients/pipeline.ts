@@ -665,7 +665,6 @@ export async function resyncLspFile(
 	lspSyncCompleted: boolean,
 	getFlag: PipelineContext["getFlag"],
 	dbg: PipelineContext["dbg"],
-	formatChanged = false,
 ): Promise<void> {
 	if (getFlag("no-lsp")) return;
 	if (!needsContentRefresh && lspSyncCompleted) return;
@@ -676,19 +675,23 @@ export async function resyncLspFile(
 	try {
 		const lspService = getLSPService();
 		if (lspService.supportsLSP(filePath)) {
-			// Format-only resyncs preserve the existing diagnostics cache so
-			// waitForDiagnostics fast-paths instead of sitting the full 5s timeout
-			// waiting for TypeScript to re-confirm what it already knows.
-			if (formatChanged) {
-				await lspService.openFile(filePath, fileContent, {
-					preserveDiagnostics: true,
-					spawnBudgetMs: LSP_SPAWN_BUDGET_MS,
-				});
-			} else {
-				await lspService.openFile(filePath, fileContent, {
-					spawnBudgetMs: LSP_SPAWN_BUDGET_MS,
-				});
-			}
+			// Push the final post-format/post-fix content through touchFile (not the
+			// bare openFile) so it registers in the touch-debounce map via
+			// markTouched. The dispatch-lsp-runner's touchFile fires ~80ms later with
+			// identical content; registering this push makes its shouldSkipNotify
+			// return true, so it reuses the diagnostics THIS push triggers instead of
+			// re-clearing the cache and forcing the server to recompute from scratch —
+			// the dominant per-edit LSP latency (#203). diagnostics:"none" keeps this
+			// call non-blocking; the dispatch runner owns the diagnostics wait. We let
+			// the cache clear (no preserveDiagnostics) so the wait resolves on fresh,
+			// correctly-positioned diagnostics rather than stale pre-edit ones — the
+			// didChange triggers a server recompute regardless of cache preservation.
+			await lspService.touchFile(filePath, fileContent, {
+				diagnostics: "none",
+				source: "lsp_sync",
+				clientScope: "primary",
+				maxClientWaitMs: LSP_SPAWN_BUDGET_MS,
+			});
 		}
 	} catch (err) {
 		dbg(`LSP resync after autofix error: ${err}`);
@@ -948,15 +951,7 @@ export async function runPipeline(
 	phase.start("lsp_sync");
 	let lspSyncCompleted = false;
 	if (fileContent) {
-		await resyncLspFile(
-			filePath,
-			fileContent,
-			true,
-			false,
-			getFlag,
-			dbg,
-			formatChanged && fixedCount === 0,
-		);
+		await resyncLspFile(filePath, fileContent, true, false, getFlag, dbg);
 		lspSyncCompleted = true;
 	}
 	phase.end("lsp_sync", { completed: lspSyncCompleted, finalContent: true });

@@ -72,6 +72,7 @@ describe("Pipeline", () => {
 			supportsLSP: vi.fn().mockReturnValue(true),
 			hasLSP: vi.fn().mockResolvedValue(true),
 			openFile: vi.fn().mockResolvedValue(undefined),
+			touchFile: vi.fn().mockResolvedValue(undefined),
 			getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
 		};
 	}
@@ -366,11 +367,22 @@ describe("Pipeline", () => {
 				createMockDeps(),
 			);
 
-			expect(mockLSPService.openFile).toHaveBeenCalledWith(
+			// The post-edit sync goes through touchFile (not the bare openFile) so it
+			// registers in the touch-debounce map via markTouched — letting the
+			// dispatch-lsp-runner's touch moments later skip its redundant didChange
+			// instead of clearing the diagnostics this push triggers (#203).
+			expect(mockLSPService.touchFile).toHaveBeenCalledWith(
 				filePath,
 				"const x = 1;",
-				{ spawnBudgetMs: 5000 },
+				{
+					diagnostics: "none",
+					source: "lsp_sync",
+					clientScope: "primary",
+					maxClientWaitMs: 5000,
+				},
 			);
+			// The old openFile path (which never registered the touch) must not run.
+			expect(mockLSPService.openFile).not.toHaveBeenCalled();
 		});
 
 		it("skips LSP sync when --no-lsp flag is set", async () => {
@@ -395,6 +407,7 @@ describe("Pipeline", () => {
 				createMockDeps(),
 			);
 
+			expect(mockLSPService.touchFile).not.toHaveBeenCalled();
 			expect(mockLSPService.openFile).not.toHaveBeenCalled();
 		});
 	});
