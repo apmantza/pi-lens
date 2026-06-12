@@ -101,6 +101,10 @@ describe("pi-lens MCP server (stdio smoke)", () => {
 		expect(names).toContain("pilens_rebuild");
 		expect(names).toContain("pilens_project_scan");
 		expect(names).toContain("pilens_health");
+		expect(names).toContain("pilens_session_start");
+		expect(names).toContain("pilens_turn_end");
+		expect(names).toContain("pilens_ast_grep_search");
+		expect(names).toContain("pilens_ast_grep_replace");
 		// Each tool advertises an object input schema.
 		for (const tool of tools) {
 			expect(tool.inputSchema.type).toBe("object");
@@ -147,6 +151,20 @@ describe("pi-lens MCP server (stdio smoke)", () => {
 		// The structured JSON payload (fenced) carries the latency record.
 		expect(result.content[0].text).toContain("\"latency\"");
 	}, 60_000);
+
+	it("answers tools/call pilens_ast_grep_search with content", async () => {
+		const res = await harness.request(8, "tools/call", {
+			name: "pilens_ast_grep_search",
+			arguments: {
+				pattern: "getLSPService()",
+				lang: "ts",
+				paths: [path.join(repoRoot, "clients", "mcp")],
+			},
+		});
+		const result = res.result as { content: { type: string; text: string }[] };
+		expect(result.content[0].type).toBe("text");
+		expect(typeof result.content[0].text).toBe("string");
+	}, 45_000);
 
 	it("answers tools/call pilens_latency with a text content block", async () => {
 		const res = await harness.request(3, "tools/call", {

@@ -36,6 +36,9 @@ import { getLatencyReports } from "../clients/dispatch/integration.js";
 import { getLSPService } from "../clients/lsp/index.js";
 import { initLSPConfig } from "../clients/lsp/config.js";
 import { scanProjectDiagnostics } from "../clients/project-diagnostics/scanner.js";
+import { AstGrepClient } from "../clients/ast-grep-client.js";
+import { createAstGrepReplaceTool } from "../tools/ast-grep-replace.js";
+import { createAstGrepSearchTool } from "../tools/ast-grep-search.js";
 import { createLensDiagnosticsTool } from "../tools/lens-diagnostics.js";
 
 // Any stray stdout write corrupts the JSON-RPC stream; force it onto stderr.
@@ -140,6 +143,9 @@ const lensDiagnosticsTool = createLensDiagnosticsTool(
 	cacheManager,
 	() => DEFAULT_CWD,
 );
+const astGrepClient = new AstGrepClient();
+const astGrepSearchTool = createAstGrepSearchTool(astGrepClient);
+const astGrepReplaceTool = createAstGrepReplaceTool(astGrepClient);
 
 const TOOLS = [
 	{
@@ -267,6 +273,67 @@ const TOOLS = [
 					description: "Files changed this turn (absolute or relative to cwd).",
 				},
 			},
+		},
+	},
+	{
+		name: "pilens_ast_grep_search",
+		description:
+			"Structural (AST) code search via ast-grep — match by code structure, not " +
+			"text. Use meta-variables ($X) and AST context (e.g. 'console.log($MSG)', " +
+			"'function $NAME() { $$$ }'). Far more precise than grep for code shapes.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				pattern: {
+					type: "string",
+					description: "AST pattern (structural, with $meta-vars), not plain text.",
+				},
+				lang: { type: "string", description: "Target language (e.g. ts, tsx, py, go, rust)." },
+				paths: {
+					type: "array",
+					items: { type: "string" },
+					description: "Files/folders to search (default: whole workspace).",
+				},
+				context: { type: "number", description: "Lines of context around each match." },
+				selector: { type: "string", description: "Restrict to a specific AST node kind." },
+				rule: { type: "string", description: "Raw ast-grep YAML rule (full DSL; overrides pattern)." },
+				strictness: {
+					type: "string",
+					enum: ["smart", "relaxed", "ast", "cst", "signature", "template"],
+				},
+				cwd: { type: "string" },
+			},
+			required: ["pattern", "lang"],
+		},
+	},
+	{
+		name: "pilens_ast_grep_replace",
+		description:
+			"Structural (AST) find-and-rewrite via ast-grep, e.g. pattern='var $X' " +
+			"rewrite='let $X'. DRY-RUN by default (apply=false shows the diff); set " +
+			"apply=true to write the changes to disk.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				pattern: { type: "string", description: "AST pattern to match." },
+				rewrite: { type: "string", description: "Replacement using the pattern's meta-vars ('' to delete)." },
+				lang: { type: "string", description: "Target language." },
+				paths: {
+					type: "array",
+					items: { type: "string" },
+					description: "Files/folders to rewrite (default: whole workspace).",
+				},
+				apply: {
+					type: "boolean",
+					description: "false (default) = dry-run/diff; true = write changes to disk.",
+				},
+				strictness: {
+					type: "string",
+					enum: ["smart", "relaxed", "ast", "cst", "signature", "template"],
+				},
+				cwd: { type: "string" },
+			},
+			required: ["pattern", "rewrite", "lang"],
 		},
 	},
 ] as const;
@@ -479,6 +546,20 @@ async function callTool(
 			outcome.tests ? `\nTests:\n${outcome.tests}` : "",
 		];
 		return toolText(parts.filter(Boolean).join("\n"), outcome);
+	}
+
+	if (name === "pilens_ast_grep_search" || name === "pilens_ast_grep_replace") {
+		const cwd = typeof args.cwd === "string" ? args.cwd : DEFAULT_CWD;
+		const tool =
+			name === "pilens_ast_grep_search" ? astGrepSearchTool : astGrepReplaceTool;
+		const out = (await tool.execute(
+			"mcp",
+			args,
+			new AbortController().signal,
+			undefined,
+			{ cwd },
+		)) as { content: { type: "text"; text: string }[] };
+		return { content: out.content };
 	}
 
 	return { ...toolText(`Unknown tool: ${name}`), isError: true };
