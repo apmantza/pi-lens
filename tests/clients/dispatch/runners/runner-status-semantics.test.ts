@@ -232,6 +232,28 @@ describe("runner status/semantic edge cases", () => {
 		}
 	});
 
+	it("lsp runner returns skipped (not succeeded) when no client is ready", async () => {
+		// touchFile resolves undefined → no LSP client was ready (cold/unavailable).
+		// Reporting "succeeded, 0 diagnostics" would read as a clean result; the
+		// runner must report "skipped" so the gap is flagged instead.
+		const runner = (await import("../../../../clients/dispatch/runners/lsp.js"))
+			.default;
+		const env = setupTestEnvironment("pi-lens-lsp-cold-");
+		try {
+			const filePath = path.join(env.tmpDir, "main.ts");
+			fs.writeFileSync(filePath, "const x = 1;\n");
+
+			supportsLSP.mockReturnValue(true);
+			touchFile.mockResolvedValue(undefined);
+
+			const result = await runner.run(ctx(filePath, env.tmpDir) as never);
+			expect(result.status).toBe("skipped");
+			expect(result.diagnostics).toEqual([]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("lsp runner returns warning semantic when server open fails", async () => {
 		const runner = (await import("../../../../clients/dispatch/runners/lsp.js"))
 			.default;

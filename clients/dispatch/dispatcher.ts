@@ -432,7 +432,7 @@ function buildCoverageNotice(
 
 	return {
 		id: `coverage-unavailable:${ctx.kind}:${path.basename(ctx.filePath)}`,
-		message: `Pi-lens analysis unavailable. Tools for ${ctx.kind} not installed.`,
+		message: `Pi-lens ${ctx.kind} analysis unavailable — language tools are missing or the LSP server isn't ready yet, so this file was not fully checked (not a clean result).`,
 		filePath: ctx.filePath,
 		severity: "warning",
 		semantic: "warning",

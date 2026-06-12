@@ -122,6 +122,10 @@ const lspRunner: RunnerDefinition = {
 		// does not operate on stale LSP snapshots.
 		let lspDiags: import("../../lsp/client.js").LSPDiagnostic[] = [];
 		let serverFailed = false;
+		// touchFile resolves to `undefined` when no LSP client was ready (a cold
+		// spawn that didn't complete in the budget, or LSP unavailable for this
+		// file) — distinct from `[]`, which means the server replied with zero.
+		let lspClientReady = true;
 		let failureReason = "";
 		const content = readFileContent(ctx.filePath);
 		if (!content) {
@@ -143,7 +147,11 @@ const lspRunner: RunnerDefinition = {
 				maxDiagnosticsWaitMs: LSP_DIAGNOSTICS_WAIT_MS,
 				source: "dispatch-lsp-runner",
 			});
-			lspDiags = touched ?? [];
+			if (touched === undefined) {
+				lspClientReady = false;
+			} else {
+				lspDiags = touched;
+			}
 		} catch (err) {
 			serverFailed = true;
 			failureReason = err instanceof Error ? err.message : String(err);
@@ -176,6 +184,15 @@ const lspRunner: RunnerDefinition = {
 				],
 				semantic: "warning",
 			};
+		}
+
+		if (!lspClientReady) {
+			// No answer from the LSP — reporting "succeeded with 0 diagnostics"
+			// would read as a clean bill of health when we simply didn't get a
+			// reply. Report "skipped" so the coverage notice can flag the gap and
+			// the next edit re-checks once the server has warmed; any diagnostics
+			// published late still land in the client cache and surface then.
+			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
 		if (lspDiags.length === 0) {
