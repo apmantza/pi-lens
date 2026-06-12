@@ -30,6 +30,7 @@ import {
 	runRebuild,
 	summarizeScan,
 } from "../clients/mcp/review.js";
+import { runSessionStart, runTurnEnd } from "../clients/mcp/session.js";
 import { getDiagnosticTracker } from "../clients/diagnostic-tracker.js";
 import { getLatencyReports } from "../clients/dispatch/integration.js";
 import { getLSPService } from "../clients/lsp/index.js";
@@ -233,6 +234,41 @@ const TOOLS = [
 			"summary, and session diagnostic counts.",
 		inputSchema: { type: "object", properties: {} },
 	},
+	{
+		name: "pilens_session_start",
+		description:
+			"Run pi-lens's real session_start lifecycle: warm the dominant-language " +
+			"LSP (so subsequent pilens_analyze is LSP-complete), establish the " +
+			"error-debt baseline (tests/build pass-state) + complexity baselines, and " +
+			"kick off knip/jscpd/type-coverage/dep/secrets project scans. Returns " +
+			"project guidance + baseline; scan results land in caches (query via " +
+			"pilens_diagnostics afterwards). Run once per workspace before reviewing.",
+		inputSchema: {
+			type: "object",
+			properties: { cwd: { type: "string" } },
+		},
+	},
+	{
+		name: "pilens_turn_end",
+		description:
+			"Run pi-lens's real turn_end lifecycle over the files changed this turn: " +
+			"knip dead-code + jscpd duplication (incremental), circular-dep checks, " +
+			"tests on affected targets, cascade to dependents, and the actionable/" +
+			"code-quality warning aggregation. Returns the turn-end advisory + test " +
+			"findings. Pass the files you edited; pairs with pilens_session_start " +
+			"(which sets the baseline turn_end compares tests/build against).",
+		inputSchema: {
+			type: "object",
+			properties: {
+				cwd: { type: "string" },
+				files: {
+					type: "array",
+					items: { type: "string" },
+					description: "Files changed this turn (absolute or relative to cwd).",
+				},
+			},
+		},
+	},
 ] as const;
 
 function formatAnalyze(
@@ -412,6 +448,37 @@ async function callTool(
 						)
 						.join("\n");
 		return toolText(summary, recent);
+	}
+
+	if (name === "pilens_session_start") {
+		const cwd = typeof args.cwd === "string" ? args.cwd : DEFAULT_CWD;
+		await ensureReady(cwd);
+		const outcome = await runSessionStart(cwd);
+		const lines = [
+			`Session started for ${cwd}.`,
+			`LSP: ${outcome.aliveLspClients} alive client(s) (warming continues in background).`,
+			outcome.errorDebtBaseline
+				? `Error-debt baseline: tests ${outcome.errorDebtBaseline.testsPassed ? "pass" : "FAIL"}, build ${outcome.errorDebtBaseline.buildPassed ? "pass" : "FAIL"}.`
+				: "Error-debt baseline: computing in background.",
+			"knip/jscpd/type-coverage/dep scans run in background — query pilens_diagnostics shortly.",
+			outcome.guidance ? `\n${outcome.guidance}` : "",
+		];
+		return toolText(lines.filter(Boolean).join("\n"), outcome);
+	}
+
+	if (name === "pilens_turn_end") {
+		const cwd = typeof args.cwd === "string" ? args.cwd : DEFAULT_CWD;
+		await ensureReady(cwd);
+		const files = Array.isArray(args.files)
+			? args.files.filter((file): file is string => typeof file === "string")
+			: [];
+		const outcome = await runTurnEnd(cwd, files);
+		const parts = [
+			`Turn-end over ${outcome.filesRegistered} file(s).`,
+			outcome.turnEnd ?? "No turn-end advisory.",
+			outcome.tests ? `\nTests:\n${outcome.tests}` : "",
+		];
+		return toolText(parts.filter(Boolean).join("\n"), outcome);
 	}
 
 	return { ...toolText(`Unknown tool: ${name}`), isError: true };
