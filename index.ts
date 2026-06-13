@@ -60,6 +60,7 @@ import { logReadGuardEvent } from "./clients/read-guard-logger.js";
 import {
 	countFileLines,
 	getTouchedLinesForGuard,
+	relocateEditRange,
 	tryCorrectIndentationMismatch,
 	tryCorrectIndentationMismatchFromContent,
 } from "./clients/read-guard-tool-lines.js";
@@ -2010,7 +2011,46 @@ export default function (pi: ExtensionAPI) {
 								oldTextResolved: !!contentMatchValidated,
 							})
 						: { action: "allow" as const };
-				if (verdict.action === "block") {
+				// Content-verified range-stale relocation: the lines the agent meant
+				// to edit moved (read-time line hashes uniquely match the new spot),
+				// so re-target the positional edit to where the content now lives
+				// instead of dead-ending. Safe because the hashes prove the new span
+				// IS the intended content — the same guarantee that lets
+				// pi-hashline-readmap auto-apply. Single-range only (set by the guard).
+				if (verdict.relocation) {
+					const relocated = relocateEditRange(
+						(event as { input?: unknown }).input,
+						verdict.relocation.from,
+						verdict.relocation.to,
+					);
+					if (relocated) {
+						const [toStart, toEnd] = verdict.relocation.to;
+						runtime.readGuard?.recordRead({
+							filePath,
+							requestedOffset: toStart,
+							requestedLimit: toEnd - toStart + 1,
+							effectiveOffset: toStart,
+							effectiveLimit: toEnd - toStart + 1,
+							expandedByLsp: false,
+							turnIndex: runtime.turnIndex,
+							writeIndex: 0,
+							timestamp: Date.now(),
+						});
+						logReadGuardEvent({
+							event: "edit_range_relocated",
+							sessionId: runtime.telemetrySessionId,
+							filePath,
+							metadata: {
+								tool: "edit",
+								from: verdict.relocation.from,
+								to: verdict.relocation.to,
+							},
+						});
+						// Relocation applied — let the re-targeted edit proceed.
+					} else if (verdict.action === "block") {
+						return { block: true, reason: verdict.reason };
+					}
+				} else if (verdict.action === "block") {
 					return {
 						block: true,
 						reason: verdict.reason,

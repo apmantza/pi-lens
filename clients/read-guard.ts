@@ -60,6 +60,22 @@ export interface ReadGuardVerdict {
 			mismatchedLines: number[];
 			missingLines: number[];
 		};
+		/** Content-verified new location of a range that drifted since it was read. */
+		relocation?: {
+			from: [number, number];
+			to: [number, number];
+		};
+	};
+	/**
+	 * Set when a single-range edit's target drifted but its content is verified
+	 * (by read-time line hashes) to live uniquely at a new line range. The host
+	 * adapter may shift the edit's range to `to` and let it proceed instead of
+	 * blocking — the same content-verified auto-apply pi-hashline-readmap does.
+	 * Only present for single-range edits (multi-range stays a hint).
+	 */
+	relocation?: {
+		from: [number, number];
+		to: [number, number];
 	};
 }
 
@@ -440,9 +456,18 @@ export class ReadGuard {
 				const graceActive =
 					ignoredOwnEditStaleness &&
 					Date.now() - lastRead.timestamp < RANGE_STALE_GRACE_MS;
+				// Content-verified relocation: if the lines the agent read have
+				// merely shifted (same content, new offset), tell them exactly where
+				// so they re-target in one turn. We hint rather than silently
+				// re-apply: the host applies native range edits positionally and
+				// can't re-verify, so an unverified auto-relocation could corrupt.
+				const relocation = this.findRelocation(filePath, fileReads, range);
+				const relocationNote = relocation
+					? `\n\n📍 The content you read at lines ${relocation.from[0]}-${relocation.from[1]} now appears unchanged at lines ${relocation.to[0]}-${relocation.to[1]} — it shifted position. Re-target your edit to lines ${relocation.to[0]}-${relocation.to[1]}.`
+					: "";
 				const verdict = this.blockOrWarn(
 					"range-stale",
-					`🔄 RETRYABLE — Edit range changed since read\n\nYou are editing \`${filePath}\` lines ${editStart}-${editEnd}, but those lines no longer match the content you read earlier.\n\nRe-read the relevant section, then retry the edit using the current line range/content:\n  \`read path="${filePath}" offset=${Math.max(1, editStart - 5)} limit=${Math.min(30, editEnd - editStart + 10)}\``,
+					`🔄 RETRYABLE — Edit range changed since read\n\nYou are editing \`${filePath}\` lines ${editStart}-${editEnd}, but those lines no longer match the content you read earlier.${relocationNote}\n\nRe-read the relevant section, then retry the edit using the current line range/content:\n  \`read path="${filePath}" offset=${Math.max(1, editStart - 5)} limit=${Math.min(30, editEnd - editStart + 10)}\``,
 					{
 						editRange: range,
 						readRanges: fileReads.map((r) => ({
@@ -461,14 +486,24 @@ export class ReadGuard {
 							mismatchedLines: snapshotValidation.mismatchedLines,
 							missingLines: snapshotValidation.missingLines,
 						},
+						...(relocation ? { relocation } : {}),
 					},
 					graceActive ? "warn" : effectiveMode,
 				);
+				// Offer auto-apply only for a single-range edit: we relocated exactly
+				// one range, so shifting it is the whole edit. A multi-range edit
+				// could have other drifted spots we returned before checking, so it
+				// stays a hint.
+				if (relocation && rangesToCheck.length === 1) {
+					verdict.relocation = relocation;
+				}
 				this.recordVerdict(filePath, "edit", touchedLines, verdict, {
 					reasonKind: "range_stale",
 					range,
 					mismatchedLines: snapshotValidation.mismatchedLines.slice(0, 20),
 					graceActive,
+					relocatedTo: relocation?.to ?? null,
+					relocationAutoApplyOffered: !!verdict.relocation,
 				});
 				return verdict;
 			}
@@ -832,6 +867,70 @@ export class ReadGuard {
 			}
 		}
 		return true;
+	}
+
+	/**
+	 * Content-verified relocation. When a range the agent read has drifted, find
+	 * where the read-time line-hash sequence for [startLine,endLine] now appears
+	 * in the current file. Returns the unique new location, or undefined when:
+	 * no recorded read captured hashes for the whole range; the sequence is too
+	 * short to be collision-resistant (<2 lines); or it now matches zero or
+	 * multiple spots. Powers a *hint* only — never a silent positional re-apply.
+	 */
+	private findRelocation(
+		filePath: string,
+		reads: ReadRecord[],
+		[startLine, endLine]: [number, number],
+	): { from: [number, number]; to: [number, number] } | undefined {
+		const span = endLine - startLine + 1;
+		// A single line's hash collides too easily to relocate on confidently.
+		if (span < 2) return undefined;
+
+		// Newest read that captured hashes for the entire target range wins.
+		let wanted: string[] | undefined;
+		for (let i = reads.length - 1; i >= 0; i -= 1) {
+			const hashes = reads[i].lineHashes;
+			if (!hashes) continue;
+			const seq: string[] = [];
+			let complete = true;
+			for (let lineNo = startLine; lineNo <= endLine; lineNo += 1) {
+				const h = hashes[lineNo];
+				if (h === undefined) {
+					complete = false;
+					break;
+				}
+				seq.push(h);
+			}
+			if (complete) {
+				wanted = seq;
+				break;
+			}
+		}
+		if (!wanted) return undefined;
+
+		let lines: string[];
+		try {
+			lines = splitLines(fs.readFileSync(filePath, "utf-8"));
+		} catch {
+			return undefined;
+		}
+		const currentHashes = lines.map((line) => lineContentHash(line));
+
+		const matchStarts: number[] = [];
+		for (let i = 0; i + span <= currentHashes.length; i += 1) {
+			let ok = true;
+			for (let j = 0; j < span; j += 1) {
+				if (currentHashes[i + j] !== wanted[j]) {
+					ok = false;
+					break;
+				}
+			}
+			if (ok) matchStarts.push(i + 1); // 1-indexed
+		}
+		if (matchStarts.length !== 1) return undefined;
+		const newStart = matchStarts[0];
+		if (newStart === startLine) return undefined; // not actually relocated
+		return { from: [startLine, endLine], to: [newStart, newStart + span - 1] };
 	}
 
 	private readHashesStillMatch(read: ReadRecord, lines: string[]): boolean {
