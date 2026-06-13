@@ -8,3 +8,5 @@ rule:
   kind: ternary_expression
   has:
     kind: ternary_expression
+    # catch nesting in either branch even when parenthesized (a ? (b ? c : d) : e)
+    stopBy: end

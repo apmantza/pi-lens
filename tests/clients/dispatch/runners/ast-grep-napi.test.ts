@@ -11,7 +11,6 @@ vi.mock("../../../../clients/tool-policy.js", () => ({
 
 vi.mock("../../../../clients/dispatch/runners/yaml-rule-parser.js", () => ({
 	loadYamlRules: vi.fn().mockReturnValue([]),
-	hasUnsupportedConditions: vi.fn().mockReturnValue(false),
 	isOverlyBroadPattern: vi.fn().mockReturnValue(false),
 	isStructuredRule: vi.fn().mockReturnValue(false),
 	calculateRuleComplexity: vi.fn().mockReturnValue(1),

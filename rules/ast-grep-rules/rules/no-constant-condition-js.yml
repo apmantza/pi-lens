@@ -3,23 +3,16 @@ language: JavaScript
 message: "Unexpected constant condition"
 severity: error
 note: |
-  A constant expression (for example, a literal) as a test condition
-  might be a typo or development trigger for a specific behavior.
+  A literal `true`/`false` as an if-test or ternary condition is almost always a
+  leftover debug toggle or a typo — the branch is either dead or always taken.
+
+  BAD:  if (true) { ... }      false ? a : b
+  GOOD: if (flag) { ... }      cond ? a : b
+
+  Idiomatic infinite loops (`while (true)`) are intentionally not flagged.
 rule:
   any:
-    - kind: if_statement
-      has:
-        field: condition
-        any:
-          - kind: "true"
-          - kind: "false"
-          - kind: number
-          - kind: string
-    - kind: ternary_expression
-      has:
-        field: condition
-        any:
-          - kind: "true"
-          - kind: "false"
-          - kind: number
-          - kind: string
+    - pattern: "if (true) $$$"
+    - pattern: "if (false) $$$"
+    - pattern: "true ? $A : $B"
+    - pattern: "false ? $A : $B"
