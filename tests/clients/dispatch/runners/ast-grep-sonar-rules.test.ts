@@ -106,4 +106,20 @@ describe("ast-grep Sonar gap rules (integration via real runner)", () => {
 			).not.toContain("switch-without-default");
 		});
 	});
+
+	// Regression: tree-sitter parses BOTH `for...in` and `for...of` as
+	// `for_in_statement`, so the rule must constrain to the `in` operator or it
+	// false-positives on every (recommended) `for...of`.
+	describe("ts-in-operator-loop (for...in vs for...of)", () => {
+		it("flags a real for...in loop", async () => {
+			expect(
+				await rulesFiredOn("for (const k in obj) { use(k); }\n"),
+			).toContain("ts-in-operator-loop");
+		});
+		it("does NOT flag a for...of loop", async () => {
+			expect(
+				await rulesFiredOn("for (const v of arr) { use(v); }\n"),
+			).not.toContain("ts-in-operator-loop");
+		});
+	});
 });

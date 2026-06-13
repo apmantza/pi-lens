@@ -416,8 +416,15 @@ message: for (const key in obj) - use Object.keys/entries/values for safer itera
 metadata:
   weight: 3
   category: slop
+# tree-sitter parses BOTH `for...in` and `for...of` as `for_in_statement`, so a
+# bare `kind: for_in_statement` false-positives on every `for...of` (the
+# recommended form). Constrain the `operator` field to `in`.
 rule:
-  kind: for_in_statement
+  any:
+    - pattern: "for (const $K in $O) $B"
+    - pattern: "for (let $K in $O) $B"
+    - pattern: "for (var $K in $O) $B"
+    - pattern: "for ($K in $O) $B"
   not:
     has:
       kind: if_statement
