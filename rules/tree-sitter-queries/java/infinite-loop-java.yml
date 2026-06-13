@@ -1,6 +1,6 @@
 # Infinite Loop
 # Detects potentially infinite while(true) loops without break
-id: infinite-loop
+id: infinite-loop-java
 name: Loops Should Not Be Infinite
 severity: error
 category: reliability
