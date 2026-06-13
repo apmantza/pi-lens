@@ -41,6 +41,7 @@ import {
 	runSessionStart,
 	runTurnEnd,
 	summarizeScan,
+	symbolImpact,
 	symbolSearch,
 	type WarmAnalyzeRequest,
 } from "../clients/lens-engine.js";
@@ -371,6 +372,34 @@ const TOOLS = [
 		},
 	},
 	{
+		name: "pilens_impact",
+		description:
+			"Transitive, depth-bounded impact of a file over the review graph: what " +
+			"depends on it (callers, referencers, importers), directly and indirectly. " +
+			"Walks incoming call/reference/import edges breadth-first. Use before a " +
+			"breaking change to see the blast radius. Needs the review graph (built by " +
+			"pilens_session_start, or on first call).",
+		inputSchema: {
+			type: "object",
+			properties: {
+				file: {
+					type: "string",
+					description: "File whose dependents to find (relative to cwd or absolute).",
+				},
+				cwd: { type: "string" },
+				maxDepth: {
+					type: "number",
+					description: "Max hops to traverse (default 3).",
+				},
+				maxHits: {
+					type: "number",
+					description: "Max dependents to return (default 200).",
+				},
+			},
+			required: ["file"],
+		},
+	},
+	{
 		name: "pilens_health",
 		description:
 			"pi-lens runtime health for THIS server: alive LSP servers, last dispatch " +
@@ -597,6 +626,55 @@ async function callTool(
 				hits: result.hits,
 				lines: result.lines,
 			})),
+		});
+	}
+
+	if (name === "pilens_impact") {
+		const file = typeof args.file === "string" ? args.file : "";
+		if (!file.trim()) return toolText("Provide a `file`.");
+		const cwd = typeof args.cwd === "string" ? args.cwd : DEFAULT_CWD;
+		const maxDepth =
+			typeof args.maxDepth === "number" && Number.isFinite(args.maxDepth)
+				? Math.max(1, Math.floor(args.maxDepth))
+				: undefined;
+		const maxHits =
+			typeof args.maxHits === "number" && Number.isFinite(args.maxHits)
+				? Math.max(1, Math.floor(args.maxHits))
+				: undefined;
+		const { available, hits, truncated, maxDepthReached } = await symbolImpact(
+			file,
+			cwd,
+			{ maxDepth, maxHits },
+		);
+		const rel = (f: string) => (f ? path.relative(cwd, f) : "(unknown)");
+		if (!available) {
+			return toolText(
+				"Review graph is empty — run pilens_session_start first.",
+				{ available: false },
+			);
+		}
+		if (hits.length === 0) {
+			return toolText(`Nothing depends on ${rel(path.resolve(cwd, file))}.`, {
+				file,
+				hits: [],
+			});
+		}
+		const byDepth = hits.slice().sort((a, b) => a.depth - b.depth);
+		const lines = [
+			`${hits.length} dependent(s) of ${rel(path.resolve(cwd, file))}` +
+				`${truncated ? " (truncated)" : ""}, max depth ${maxDepthReached}:`,
+			...byDepth
+				.slice(0, 40)
+				.map(
+					(hit) =>
+						`  d${hit.depth} ${hit.relation} ← ${hit.symbol ? `${hit.symbol} ` : ""}${rel(hit.file)}`,
+				),
+		];
+		return toolText(lines.join("\n"), {
+			file,
+			truncated,
+			maxDepthReached,
+			hits: hits.map((hit) => ({ ...hit, file: rel(hit.file) })),
 		});
 	}
 
