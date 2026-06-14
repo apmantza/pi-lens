@@ -7,11 +7,23 @@
 import { Type } from "typebox";
 import type { AstGrepClient } from "../clients/ast-grep-client.js";
 import {
+	astGrepRemediationHint,
 	classifyAstGrepError,
 	logAstGrepToolEvent,
 	type AstGrepToolOutcome,
 } from "../clients/ast-grep-tool-logger.js";
 import { hasStructuralIntent, synthesizeReplaceRule } from "../clients/ast-grep-yaml-synth.js";
+
+/**
+ * Build the agent-facing error text, appending a remediation hint derived from
+ * the same classification we log. Curated spawn errors return null from the
+ * hint map (their message already carries guidance), so this only adds value
+ * for the raw-stderr categories.
+ */
+function errorTextWithHint(raw: string): string {
+	const hint = astGrepRemediationHint(classifyAstGrepError(raw));
+	return hint ? `Error: ${raw}\n\n${hint}` : `Error: ${raw}`;
+}
 import { LANGUAGES } from "./shared.js";
 
 function lineCount(value: string): number {
@@ -168,7 +180,7 @@ export function createAstGrepReplaceTool(astGrepClient: AstGrepClient) {
 				}
 				if (ruleResult.error) {
 					logOutcome("error", { errorRaw: ruleResult.error });
-					return { content: [{ type: "text" as const, text: `Error: ${ruleResult.error}` }], isError: true, details: {} };
+					return { content: [{ type: "text" as const, text: errorTextWithHint(ruleResult.error) }], isError: true, details: {} };
 				}
 				const output = astGrepClient.formatMatches(ruleResult.matches, !applyFlag, true);
 				logOutcome(ruleResult.matches.length === 0 ? "no_matches" : "success", { matchCount: ruleResult.matches.length });
@@ -201,7 +213,9 @@ export function createAstGrepReplaceTool(astGrepClient: AstGrepClient) {
 			if (result.error) {
 				logOutcome("error", { errorRaw: result.error });
 				return {
-					content: [{ type: "text" as const, text: `Error: ${result.error}` }],
+					content: [
+						{ type: "text" as const, text: errorTextWithHint(result.error) },
+					],
 					isError: true,
 					details: {},
 				};

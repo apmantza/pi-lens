@@ -8,6 +8,8 @@
  *   ~/.pi-lens/cascade*.log          JSONL impact-cascade logs
  *   ~/.pi-lens/read-guard*.log       JSONL read-guard friction logs
  *   ~/.pi-lens/tree-sitter*.log      JSONL structural runner logs
+ *   ~/.pi-lens/actionable-warnings*.log  JSONL advisory pipeline (inject/suppress)
+ *   ~/.pi-lens/ast-grep-tools*.log   JSONL MCP ast-grep search/replace telemetry
  *   ~/.pi-lens/logs/*.jsonl          JSONL diagnostic findings
  */
 
@@ -58,6 +60,8 @@ async function main() {
 		analyzeReadGuard(files.readGuard, state),
 		analyzeTreeSitter(files.treeSitter, state),
 		analyzeSessionStart(files.sessionStart, state),
+		analyzeActionableWarnings(files.actionableWarnings, state),
+		analyzeAstGrepTools(files.astGrepTools, state),
 	]);
 
 	const report = buildReport(state);
@@ -135,6 +139,8 @@ function discoverLogFiles(logRoot, archived) {
 		cascade: byPrefix("cascade"),
 		readGuard: byPrefix("read-guard"),
 		treeSitter: byPrefix("tree-sitter"),
+		actionableWarnings: byPrefix("actionable-warnings"),
+		astGrepTools: byPrefix("ast-grep-tools"),
 		diagnostics: dailyLogs,
 	};
 }
@@ -157,6 +163,8 @@ function createState(files) {
 		smellTotals: counter(),
 		latency: {
 			runnerStatus: counter(),
+			runnerFailureKinds: counter(),
+			runnerBlockingFindings: counter(),
 			runnerFailures: [],
 			slowRunners: [],
 			slowTotals: [],
@@ -211,6 +219,25 @@ function createState(files) {
 			errors: [],
 			rotations: counter(),
 		},
+		actionable: {
+			events: counter(),
+			reports: 0,
+			injected: 0,
+			injectedAdvisories: 0,
+			suppressed: 0,
+			autoFixEligible: 0,
+			lspSource: counter(),
+			fileSkipReasons: counter(),
+			errors: [],
+		},
+		astGrep: {
+			outcomes: counter(),
+			errorKinds: counter(),
+			truncated: 0,
+			calls: 0,
+			errors: [],
+			slow: [],
+		},
 	};
 }
 
@@ -227,13 +254,29 @@ async function analyzeLatency(files, state) {
 				const runner = entry.runnerId ?? "unknown";
 				state.latency.runnerStatus.inc(`${runner}:${status}`);
 				if (status === "failed" || status === "crashed") {
-					state.smellTotals.inc("runner-failures");
-					pushTop(
-						state.latency.runnerFailures,
-						summarizeLatency(entry),
-						limit * 3,
-						byDuration,
-					);
+					// Separate a genuine runner breakage from "the check ran and found
+					// blocking issues" (e.g. the LSP runner reports status:failed when a
+					// file has type errors). Prefer the logged failureKind; fall back to
+					// the heuristic that a failure carrying diagnostics is found-errors.
+					const kind =
+						entry.metadata?.failureKind ??
+						(status === "crashed"
+							? "crashed"
+							: (entry.diagnosticCount ?? 0) > 0
+								? "blocking_diagnostics"
+								: "unknown");
+					state.latency.runnerFailureKinds.inc(`${runner}:${kind}`);
+					if (kind === "blocking_diagnostics") {
+						state.latency.runnerBlockingFindings.inc(runner);
+					} else {
+						state.smellTotals.inc("runner-failures");
+						pushTop(
+							state.latency.runnerFailures,
+							summarizeLatency(entry),
+							limit * 3,
+							byDuration,
+						);
+					}
 				}
 				if (
 					(entry.durationMs ?? 0) >= thresholds.runnerSlowMs &&
@@ -545,6 +588,95 @@ async function analyzeSessionStart(files, state) {
 	}
 }
 
+async function analyzeActionableWarnings(files, state) {
+	for (const file of files) {
+		await forEachJsonLine(file, "actionable-warnings", state, (entry) => {
+			const ts = dateOf(entry.ts);
+			if (!inWindow(ts)) return;
+			state.seen.inc("actionable-warnings");
+			const event = entry.event ?? "unknown";
+			state.actionable.events.inc(event);
+			const meta = entry.metadata ?? {};
+
+			if (event === "report_complete") {
+				state.actionable.reports++;
+				const summary = meta.summary ?? {};
+				state.actionable.suppressed += Number(summary.suppressed ?? 0);
+				state.actionable.autoFixEligible += Number(summary.autoFixEligible ?? 0);
+			}
+			if (event === "advisory_injected") {
+				state.actionable.injected++;
+				state.actionable.injectedAdvisories += Number(meta.unsuppressed ?? 0);
+			}
+			if (event === "lsp_file_checked" && meta.lspSource) {
+				state.actionable.lspSource.inc(meta.lspSource);
+			}
+			if (event === "lsp_file_skipped") {
+				state.actionable.fileSkipReasons.inc(meta.reason ?? "unknown");
+			}
+			if (/error|exception|failed/i.test(event) || meta.error) {
+				state.smellTotals.inc("actionable-warning-errors");
+				pushTop(
+					state.actionable.errors,
+					{
+						ts: iso(ts),
+						event,
+						message: String(meta.error ?? meta.message ?? "").slice(0, 200),
+					},
+					limit * 3,
+					(a, b) => String(b.ts).localeCompare(String(a.ts)),
+				);
+			}
+		});
+	}
+}
+
+async function analyzeAstGrepTools(files, state) {
+	for (const file of files) {
+		await forEachJsonLine(file, "ast-grep-tools", state, (entry) => {
+			const ts = dateOf(entry.ts);
+			if (!inWindow(ts)) return;
+			state.seen.inc("ast-grep-tools");
+			state.astGrep.calls++;
+			const tool = entry.tool ?? "unknown";
+			const outcome = entry.outcome ?? "unknown";
+			state.astGrep.outcomes.inc(`${tool}:${outcome}`);
+			if (entry.truncated) state.astGrep.truncated++;
+			if (outcome === "error") {
+				state.smellTotals.inc("ast-grep-tool-errors");
+				state.astGrep.errorKinds.inc(entry.errorKind ?? "unknown");
+				pushTop(
+					state.astGrep.errors,
+					{
+						ts: entry.ts,
+						tool,
+						errorKind: entry.errorKind,
+						durationMs: entry.durationMs,
+						message: String(entry.errorRaw ?? "").replace(/\s+/g, " ").slice(0, 180),
+						pattern: String(entry.pattern ?? "").replace(/\s+/g, " ").slice(0, 80),
+					},
+					limit * 3,
+					(a, b) => String(b.ts).localeCompare(String(a.ts)),
+				);
+			}
+			if ((entry.durationMs ?? 0) >= 1000) {
+				pushTop(
+					state.astGrep.slow,
+					{
+						ts: entry.ts,
+						tool,
+						durationMs: entry.durationMs,
+						matchCount: entry.matchCount,
+						pattern: String(entry.pattern ?? "").replace(/\s+/g, " ").slice(0, 80),
+					},
+					limit * 3,
+					byDuration,
+				);
+			}
+		});
+	}
+}
+
 async function forEachJsonLine(file, bucket, state, visitor) {
 	await forEachLine(file, async (line) => {
 		if (!line.trim()) return;
@@ -655,6 +787,7 @@ function summarizeLatency(entry) {
 		project: projectOf(entry.filePath),
 		metadata: pick(entry.metadata, [
 			"failureKind",
+			"failureMessage",
 			"skipReason",
 			"completed",
 			"finalContent",
@@ -900,6 +1033,20 @@ function buildReport(state) {
 		"Tree-sitter runner failures",
 		state.treeSitter.failures.slice(0, limit),
 	);
+	addSmell(
+		smells,
+		"ast-grep-tool-errors",
+		smellCount("ast-grep-tool-errors"),
+		"MCP ast-grep search/replace calls that errored",
+		state.astGrep.errors.slice(0, limit),
+	);
+	addSmell(
+		smells,
+		"actionable-warning-errors",
+		smellCount("actionable-warning-errors"),
+		"Actionable-warnings advisory pipeline logged an error",
+		state.actionable.errors.slice(0, limit),
+	);
 
 	return {
 		window: state.window,
@@ -920,6 +1067,8 @@ function buildReport(state) {
 		},
 		latency: {
 			runnerStatus: state.latency.runnerStatus.top(limit * 2),
+			runnerFailureKinds: state.latency.runnerFailureKinds.top(limit * 2),
+			runnerBlockingFindings: state.latency.runnerBlockingFindings.toJSON(),
 			toolResults: state.latency.toolResults.toJSON(),
 			phaseCounts: state.latency.phaseCounts.top(limit),
 		},
@@ -954,6 +1103,25 @@ function buildReport(state) {
 			cwds: state.session.cwds.top(limit),
 			rotations: state.session.rotations.toJSON(),
 			errors: state.session.errors.slice(0, limit),
+		},
+		actionable: {
+			events: state.actionable.events.toJSON(),
+			reports: state.actionable.reports,
+			advisoriesInjected: state.actionable.injected,
+			advisoryWarningsInjected: state.actionable.injectedAdvisories,
+			warningsSuppressed: state.actionable.suppressed,
+			autoFixEligible: state.actionable.autoFixEligible,
+			lspSource: state.actionable.lspSource.toJSON(),
+			fileSkipReasons: state.actionable.fileSkipReasons.toJSON(),
+			errors: state.actionable.errors.slice(0, limit),
+		},
+		astGrep: {
+			calls: state.astGrep.calls,
+			outcomes: state.astGrep.outcomes.toJSON(),
+			errorKinds: state.astGrep.errorKinds.toJSON(),
+			truncated: state.astGrep.truncated,
+			errors: state.astGrep.errors.slice(0, limit),
+			slow: state.astGrep.slow.slice(0, limit),
 		},
 	};
 }
@@ -1048,6 +1216,42 @@ function printReport(report) {
 		})),
 		(x) => `${String(x.count).padStart(5)}  ${x.key}`,
 	);
+	section(
+		"Runner failure kinds (infra vs found-errors)",
+		report.latency.runnerFailureKinds,
+		(x) => `${x.count.toString().padStart(5)}  ${x.key}`,
+	);
+
+	const a = report.actionable;
+	if (a.reports || a.advisoriesInjected) {
+		console.log("\nActionable warnings");
+		console.log(
+			`  reports=${a.reports} advisoriesInjected=${a.advisoriesInjected} warningsInjected=${a.advisoryWarningsInjected} suppressed=${a.warningsSuppressed} autoFixEligible=${a.autoFixEligible}`,
+		);
+		const lspSrc = Object.entries(a.lspSource);
+		if (lspSrc.length)
+			console.log(
+				`  lspSource: ${lspSrc.map(([k, v]) => `${k}=${v}`).join(", ")}`,
+			);
+		const skips = Object.entries(a.fileSkipReasons);
+		if (skips.length)
+			console.log(
+				`  lsp skip reasons: ${skips.map(([k, v]) => `${k}=${v}`).join(", ")}`,
+			);
+	}
+
+	const ag = report.astGrep;
+	if (ag.calls) {
+		console.log("\nast-grep tools");
+		console.log(`  calls=${ag.calls} truncated=${ag.truncated}`);
+		const outcomes = Object.entries(ag.outcomes);
+		if (outcomes.length)
+			console.log(
+				`  outcomes: ${outcomes.map(([k, v]) => `${k}=${v}`).join(", ")}`,
+			);
+		if (Object.keys(ag.errorKinds).length)
+			console.log(`  error kinds: ${JSON.stringify(ag.errorKinds)}`);
+	}
 }
 
 function section(title, rows, formatter) {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	_countLinesForTest,
+	astGrepRemediationHint,
 	classifyAstGrepError,
 } from "../../clients/ast-grep-tool-logger.js";
 
@@ -64,6 +65,46 @@ describe("classifyAstGrepError", () => {
 		expect(classifyAstGrepError("MULTIPLE AST NODES are detected")).toBe(
 			"multiple_ast_nodes",
 		);
+	});
+});
+
+describe("astGrepRemediationHint", () => {
+	it("returns null for the two categories sg-runner already curates", () => {
+		// Avoid doubling up — the error text already carries multi-line guidance.
+		expect(astGrepRemediationHint("multiple_ast_nodes")).toBeNull();
+		expect(astGrepRemediationHint("cannot_parse_query")).toBeNull();
+	});
+
+	it("gives an install hint for tool_not_found", () => {
+		expect(astGrepRemediationHint("tool_not_found")).toContain("@ast-grep/cli");
+	});
+
+	it("gives a scoping hint for timeout", () => {
+		expect(astGrepRemediationHint("timeout")).toMatch(/timed out/i);
+		expect(astGrepRemediationHint("timeout")).toMatch(/paths/);
+	});
+
+	it("gives a retry hint for json_parse_failed", () => {
+		expect(astGrepRemediationHint("json_parse_failed")).toMatch(/parsed/i);
+	});
+
+	it("gives a generic single-node hint for 'other'", () => {
+		const hint = astGrepRemediationHint("other");
+		expect(hint).toMatch(/single valid AST node|ast_dump|grep/i);
+	});
+
+	it("classify → hint composes: raw stderr 'other' yields the generic hint", () => {
+		// The exact failure from the log: an empty --rewrite value.
+		const raw = "error: a value is required for '--rewrite <FIX>' but none was supplied";
+		expect(astGrepRemediationHint(classifyAstGrepError(raw))).toMatch(
+			/single valid AST node/,
+		);
+	});
+
+	it("classify → hint composes: a wrapped multiple-nodes error adds no extra hint", () => {
+		const raw =
+			"Invalid AST pattern: ...\nOriginal error: Multiple AST nodes are detected";
+		expect(astGrepRemediationHint(classifyAstGrepError(raw))).toBeNull();
 	});
 });
 

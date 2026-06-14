@@ -10,7 +10,7 @@
  */
 
 import * as path from "node:path";
-import { safeSpawn } from "./safe-spawn.js";
+import { safeSpawnAsync } from "./safe-spawn.js";
 
 // --- Types ---
 
@@ -41,9 +41,9 @@ export class TypeCoverageClient {
 			: () => {};
 	}
 
-	isAvailable(): boolean {
+	async isAvailableAsync(): Promise<boolean> {
 		if (this.available !== null) return this.available;
-		const result = safeSpawn("npx", ["type-coverage", "--version"], {
+		const result = await safeSpawnAsync("npx", ["type-coverage", "--version"], {
 			timeout: 10000,
 		});
 		this.available = !result.error && result.status === 0;
@@ -55,8 +55,8 @@ export class TypeCoverageClient {
 	 * Uses --detail to get per-identifier locations for untyped names.
 	 * Uses --strict to count `any` casts as untyped.
 	 */
-	scan(cwd: string): TypeCoverageResult {
-		if (!this.isAvailable()) {
+	async scanAsync(cwd: string): Promise<TypeCoverageResult> {
+		if (!(await this.isAvailableAsync())) {
 			return {
 				success: false,
 				percentage: 0,
@@ -67,7 +67,7 @@ export class TypeCoverageClient {
 		}
 
 		try {
-			const result = safeSpawn(
+			const result = await safeSpawnAsync(
 				"npx",
 				[
 					"type-coverage",

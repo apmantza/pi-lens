@@ -123,6 +123,34 @@ export function classifyAstGrepError(
 	return "other";
 }
 
+/**
+ * Map a classified error kind to a one-line, agent-facing remediation hint.
+ *
+ * The runner layer (sg-runner.ts) already wraps the two highest-frequency
+ * spawn errors — "Multiple AST nodes" and "Cannot parse query" — with curated
+ * multi-line guidance, so those return `null` here (don't double up). This
+ * closes the loop for the categories that otherwise reach the agent as raw
+ * stderr (`other`/`timeout`/`tool_not_found`/`json_parse_failed`): we already
+ * classify them for telemetry, so reuse that classification to help the agent
+ * self-correct on the error path the way getPatternHint() does on zero-matches.
+ */
+export function astGrepRemediationHint(kind: AstGrepErrorKind): string | null {
+	switch (kind) {
+		case "multiple_ast_nodes":
+		case "cannot_parse_query":
+			// Error text already carries curated guidance from sg-runner.ts.
+			return null;
+		case "tool_not_found":
+			return "Hint: the ast-grep CLI is missing or not on PATH — install it with `npm i -D @ast-grep/cli`.";
+		case "timeout":
+			return "Hint: the operation timed out — scope `paths` to specific files/folders, or narrow the pattern.";
+		case "json_parse_failed":
+			return "Hint: ast-grep produced output that could not be parsed — retry with a simpler pattern; the installed CLI version may be incompatible.";
+		default:
+			return "Hint: verify the pattern is a single valid AST node for this `lang` (use ast_dump to discover node kinds), or fall back to grep for plain-text search.";
+	}
+}
+
 function rotateIfNeeded(): void {
 	try {
 		if (!fs.existsSync(AG_LOG_FILE)) return;

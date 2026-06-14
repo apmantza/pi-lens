@@ -106,6 +106,30 @@ describe("buildOrUpdateGraph — Promise dedup cache", () => {
 		expect(getLastGraphBuildInfo()).toEqual({ reused: true, mode: "cached" });
 	});
 
+	it("reuses the cached graph when mtime drifts but content is unchanged (#202)", async () => {
+		const facts = new FactStore();
+		const cwd = tmpDir();
+		const file = path.join(cwd, "drift.ts");
+		fs.writeFileSync(file, "export function driftExample() {\n\treturn 1;\n}\n");
+
+		await buildOrUpdateGraph(cwd, [file], facts);
+		expect(getLastGraphBuildInfo().reused).toBe(false); // full build
+
+		// Bump mtime into the future WITHOUT changing content → size/mtime
+		// signature differs, but the content hash matches.
+		const future = new Date(Date.now() + 10_000);
+		fs.utimesSync(file, future, future);
+
+		clearGraphCache(); // drop the promise-dedup cache so the call re-executes
+		// changedFiles=[] — the caller did NOT declare drift.ts changed. Pre-#202
+		// this fell through to a full rebuild; now the content-hash confirm proves
+		// nothing changed and the cached graph is reused.
+		await buildOrUpdateGraph(cwd, [], facts);
+		const info = getLastGraphBuildInfo();
+		expect(info.reused).toBe(true);
+		expect(info.mode).toBe("cached");
+	});
+
 	it("resolves to a ReviewGraph with version and builtAt fields", async () => {
 		const facts = new FactStore();
 		const graph = await buildOrUpdateGraph(tmpDir(), [], facts);

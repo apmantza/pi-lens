@@ -1,3 +1,6 @@
+# DISABLED (#206): the `not: inside: try_statement` guard needs relational
+# matching the runner's interpreter can't execute; without it every sync fs call
+# is flagged even inside a try/catch (noise).
 id: unchecked-sync-fs-js
 language: JavaScript
 severity: warning

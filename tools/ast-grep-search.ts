@@ -8,11 +8,23 @@ import { Type } from "typebox";
 import type { AstGrepClient } from "../clients/ast-grep-client.js";
 import type { AstGrepMatch } from "../clients/ast-grep-types.js";
 import {
+	astGrepRemediationHint,
 	classifyAstGrepError,
 	logAstGrepToolEvent,
 	type AstGrepToolOutcome,
 } from "../clients/ast-grep-tool-logger.js";
 import { hasStructuralIntent, synthesizeRule } from "../clients/ast-grep-yaml-synth.js";
+
+/**
+ * Build the agent-facing error text, appending a remediation hint derived from
+ * the same classification we log. The two curated spawn errors return null from
+ * the hint map (their message already carries guidance), so this never doubles
+ * up — it only adds value for the raw-stderr categories (#ast-grep tool errors).
+ */
+function errorTextWithHint(raw: string): string {
+	const hint = astGrepRemediationHint(classifyAstGrepError(raw));
+	return hint ? `Error: ${raw}\n\n${hint}` : `Error: ${raw}`;
+}
 import type { SearchReadLocation } from "../clients/search-read-registration.js";
 import { LANGUAGES } from "./shared.js";
 
@@ -336,7 +348,9 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 				if (ruleResult.error) {
 					logOutcome("error", { errorRaw: ruleResult.error });
 					return {
-						content: [{ type: "text" as const, text: `Error: ${ruleResult.error}` }],
+						content: [
+							{ type: "text" as const, text: errorTextWithHint(ruleResult.error) },
+						],
 						isError: true,
 						details: {},
 					};
@@ -376,7 +390,9 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			if (result.error) {
 				logOutcome("error", { errorRaw: result.error });
 				return {
-					content: [{ type: "text" as const, text: `Error: ${result.error}` }],
+					content: [
+						{ type: "text" as const, text: errorTextWithHint(result.error) },
+					],
 					isError: true,
 					details: {},
 				};

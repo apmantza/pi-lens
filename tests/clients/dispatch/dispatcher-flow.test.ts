@@ -259,12 +259,12 @@ describe("Dispatch Flow", () => {
 
 			expect(result.hasBlockers).toBe(false);
 			expect(result.output).toContain(
-				"Pi-lens analysis unavailable. Tools for go not installed.",
+				"Pi-lens go analysis unavailable",
 			);
 
 			const secondResult = await dispatchForFile(ctx, groups);
 			expect(secondResult.output).not.toContain(
-				"Pi-lens analysis unavailable. Tools for go not installed.",
+				"Pi-lens go analysis unavailable",
 			);
 		}, 30000);
 
@@ -305,7 +305,7 @@ describe("Dispatch Flow", () => {
 			const result = await dispatchForFile(ctx, groups);
 
 			expect(result.output).toContain(
-				"Pi-lens analysis unavailable. Tools for go not installed.",
+				"Pi-lens go analysis unavailable",
 			);
 		});
 

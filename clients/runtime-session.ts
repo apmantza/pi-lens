@@ -185,6 +185,80 @@ async function igniteWarmFiles(
 	}
 }
 
+/**
+ * Fallback warm when a project has no explicit `warmFiles`: pre-spawn the LSP
+ * for the project's *dominant* language (highest source-file count) by opening
+ * one representative file. This eliminates the cold-spawn stall the first edit
+ * would otherwise pay (`lsp_client_wait_timeout`, observed up to 5s on
+ * TypeScript/Deno). Only a single server is warmed — launching every detected
+ * language's server at once (rust-analyzer + gopls + tsserver …) would spike CPU
+ * and the event loop at startup, working against the very latency we protect.
+ * Projects that want more pre-warming can list explicit `warmFiles` (#203).
+ */
+async function igniteDominantLanguageWarm(
+	cwd: string,
+	runtime: RuntimeCoordinator,
+	sessionGeneration: number,
+	dbg: (msg: string) => void,
+): Promise<void> {
+	try {
+		await initLSPConfig(cwd);
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+
+		const lspService = getLSPService();
+		const { collectSourceFilesAsync } = await import("./source-filter.js");
+		const { detectFileKind } = await import("./file-kinds.js");
+		// Async, event-loop-yielding walk (deferred off the interactive path).
+		// inspectGeneratedHeaders:false keeps the walk to directory reads only — no
+		// per-file content opens — so we never hold a file handle (cheaper, and it
+		// can't collide with concurrent fs teardown). Picking a representative file
+		// doesn't need generated-banner filtering.
+		const files = await collectSourceFilesAsync(cwd, {
+			inspectGeneratedHeaders: false,
+		});
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+
+		// Rank languages by source-file count. Computed here from the scan rather
+		// than reused from languageProfile.counts, which is left empty on the
+		// no-warm-caches startup path (detectProjectLanguageProfile is called with
+		// an empty file list there).
+		const counts = new Map<string, number>();
+		for (const f of files) {
+			const kind = detectFileKind(f);
+			if (kind) counts.set(kind, (counts.get(kind) ?? 0) + 1);
+		}
+		if (counts.size === 0) {
+			dbg("session_start lsp-warm: no detected languages to auto-warm");
+			return;
+		}
+		const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+
+		// Walk languages by descending count; warm the first that has both an LSP
+		// server and a representative on-disk file.
+		for (const [kind] of ranked) {
+			const sample = files.find(
+				(f) => detectFileKind(f) === kind && lspService.supportsLSP(f),
+			);
+			if (!sample) continue;
+			const content = await nodeFs.promises.readFile(sample, "utf-8");
+			if (!runtime.isCurrentSession(sessionGeneration)) return;
+			await lspService.touchFile(sample, content, {
+				diagnostics: "none",
+				source: "startup-warm-dominant",
+				clientScope: "primary",
+				maxClientWaitMs: 2000,
+			});
+			dbg(
+				`session_start lsp-warm: dominant=${kind} via ${path.basename(sample)}`,
+			);
+			return;
+		}
+		dbg("session_start lsp-warm: no dominant-language LSP file found to warm");
+	} catch (err) {
+		dbg(`session_start lsp-warm: dominant warm error: ${err}`);
+	}
+}
+
 function firePreinstallDefaults(
 	ensureTool: SessionStartDeps["ensureTool"],
 	dbg: SessionStartDeps["dbg"],
@@ -620,6 +694,43 @@ function scheduleStartupScans(
 			saveRuntimeProjectSnapshot({ cwd: snapshotRoot, runtime, dbg });
 		}
 	});
+
+	// word-index — identifier inverted index + BM25 for ranked symbol search (#162)
+	runTask("word-index", async () => {
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+		const { collectSourceFilesAsync } = await import("./source-filter.js");
+		const { buildWordIndex } = await import("./word-index.js");
+		const startMs = Date.now();
+		// Bounds keep the build off the critical path on large repos: cap the file
+		// count and skip files too large to be hand-written source (generated /
+		// bundled output the source filter didn't already exclude).
+		const MAX_FILES = 6000;
+		const MAX_BYTES = 512 * 1024;
+		const files = await collectSourceFilesAsync(analysisRoot);
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+		const docs: Array<{ path: string; content: string }> = [];
+		let processed = 0;
+		for (const file of files.slice(0, MAX_FILES)) {
+			try {
+				const stat = nodeFs.statSync(file);
+				if (stat.size <= MAX_BYTES) {
+					docs.push({ path: file, content: nodeFs.readFileSync(file, "utf-8") });
+				}
+			} catch {
+				// unreadable / vanished file — skip
+			}
+			if (++processed % 100 === 0) {
+				await new Promise<void>((resolve) => setImmediate(resolve));
+				if (!runtime.isCurrentSession(sessionGeneration)) return;
+			}
+		}
+		runtime.wordIndex = buildWordIndex(docs);
+		saveRuntimeProjectSnapshot({ cwd: snapshotRoot, runtime, dbg });
+		dbg(
+			`session_start word-index: ${runtime.wordIndex.docCount} files, ` +
+				`${runtime.wordIndex.postings.size} tokens (${Date.now() - startMs}ms)`,
+		);
+	});
 }
 
 function scheduleDeferredToolProbes(
@@ -979,8 +1090,8 @@ export async function handleSessionStart(
 	const detectedRunner = testRunnerClient.detectRunner(analysisRoot);
 	phase("test-runner-detect");
 	if (detectedRunner) tools.push(`Test runner (${detectedRunner.runner})`);
-	if (goClient.isGoAvailable()) tools.push("Go (go vet)");
-	if (rustClient.isAvailable()) tools.push("Rust (cargo)");
+	if (await goClient.isGoAvailableAsync()) tools.push("Go (go vet)");
+	if (await rustClient.isAvailableAsync()) tools.push("Rust (cargo)");
 	log(`Active tools: ${tools.join(", ")}`);
 	dbg(`session_start tools: ${tools.join(", ")}`);
 
@@ -1062,6 +1173,17 @@ export async function handleSessionStart(
 						dbg,
 					).catch((err) =>
 						dbg(`session_start lsp-warm: unhandled error: ${err}`),
+					);
+				} else {
+					// No explicit warmFiles — pre-spawn just the dominant language's
+					// LSP so the first edit doesn't pay the cold-spawn stall (#203).
+					igniteDominantLanguageWarm(
+						cwd,
+						runtime,
+						sessionGeneration,
+						dbg,
+					).catch((err) =>
+						dbg(`session_start lsp-warm: unhandled dominant error: ${err}`),
 					);
 				}
 			});

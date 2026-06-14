@@ -8,6 +8,10 @@
 		"url": "git+https://github.com/apmantza/pi-lens.git"
 	},
 	"main": "./dist/index.js",
+	"bin": {
+		"pi-lens-mcp": "./dist/mcp/server.js",
+		"pi-lens-analyze": "./dist/mcp/analyze-cli.js"
+	},
 	"scripts": {
 		"build": "tsc --project tsconfig.build.json",
 		"build:dist": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc --project tsconfig.dist.json --noCheck",
@@ -62,7 +66,7 @@
 	],
 	"dependencies": {
 		"@ast-grep/napi": "^0.43.0",
-		"@earendil-works/pi-tui": "^0.78.0",
+		"@earendil-works/pi-tui": "^0.79.1",
 		"js-yaml": "^4.1.1",
 		"minimatch": "^10.2.5",
 		"typebox": "^1.0.0",

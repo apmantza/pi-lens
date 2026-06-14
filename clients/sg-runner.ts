@@ -9,12 +9,9 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import {
-	getSgCommand,
-	isSgAvailable,
-} from "./dispatch/runners/utils/runner-helpers.js";
+import { getSgCommand } from "./dispatch/runners/utils/runner-helpers.js";
 import { getProjectIgnoreGlobs } from "./file-utils.js";
-import { safeSpawn, safeSpawnAsync } from "./safe-spawn.js";
+import { safeSpawnAsync } from "./safe-spawn.js";
 
 /**
  * Escape an argument for Windows cmd.exe shell execution.
@@ -261,17 +258,6 @@ export class SgRunner {
 		return undefined;
 	}
 
-	/**
-	 * Check if ast-grep CLI is available (legacy sync method)
-	 * Prefer ensureAvailable() for auto-install behavior
-	 */
-	isAvailable(): boolean {
-		if (this.available !== null) return this.available;
-
-		this.available = isSgAvailable();
-		return this.available;
-	}
-
 	private isAstGrepVersionOutput(output: string): boolean {
 		return /\bast[- ]grep\b/i.test(output);
 	}
@@ -461,23 +447,6 @@ export class SgRunner {
 		});
 	}
 
-	/**
-	 * Run ast-grep synchronously (for simple scans)
-	 */
-	execSync(args: string[]): { output: string; error?: string } {
-		const { cmd: sgCmd, args: sgPre } = getSgCommand();
-		const result = safeSpawn(sgCmd, [...sgPre, ...args], {
-			timeout: 30000,
-		});
-
-		if (result.error) {
-			return { output: "", error: result.error.message };
-		}
-
-		const output = result.stdout || result.stderr || "";
-		return { output };
-	}
-
 	// --- Shared helpers for temp-dir rule scans ---
 
 	private prepareTempScan(
@@ -513,39 +482,6 @@ export class SgRunner {
 		}
 	}
 
-	/**
-	 * Run a temporary rule scan (creates temp dir with rule file)
-	 */
-	tempScan(
-		dir: string,
-		ruleId: string,
-		ruleYaml: string,
-		timeout = 30000,
-	): SgMatch[] {
-		const { sessionDir, configFile } = this.prepareTempScan(ruleId, ruleYaml);
-		try {
-			const { cmd: sgCmd, args: sgPre } = getSgCommand();
-			const result = safeSpawn(
-				sgCmd,
-				[
-					...sgPre,
-					"scan",
-					"--config",
-					configFile,
-					"--json",
-					...sgExcludeArgsForProject(dir),
-					dir,
-				],
-				{ timeout },
-			);
-			return this.parseScanOutput(result.stdout || result.stderr || "");
-		} catch {
-			return [];
-		} finally {
-			this.cleanupTempScan(sessionDir);
-		}
-	}
-
 	async tempScanAsync(
 		dir: string,
 		ruleId: string,
@@ -574,11 +510,6 @@ export class SgRunner {
 		} finally {
 			this.cleanupTempScan(sessionDir);
 		}
-	}
-
-	/** Run a rule file scan — delegates to tempScan with a fixed rule id. */
-	scanWithRule(ruleYaml: string, dir: string, timeout = 30000): SgMatch[] {
-		return this.tempScan(dir, "rule", ruleYaml, timeout);
 	}
 
 	/**

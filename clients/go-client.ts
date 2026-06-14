@@ -9,7 +9,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { safeSpawn } from "./safe-spawn.js";
+import { safeSpawnAsync } from "./safe-spawn.js";
 
 // --- Types ---
 
@@ -41,7 +41,6 @@ const GO_UNIX_PATHS = [
 // --- Client ---
 
 export class GoClient {
-	private goplsAvailable: boolean | null = null;
 	private goAvailable: boolean | null = null;
 	private goPath: string | null = null;
 	private log: (msg: string) => void;
@@ -53,9 +52,9 @@ export class GoClient {
 	}
 
 	/**
-	 * Find go executable path
+	 * Find go executable path (async — probes PATH candidates off the event loop).
 	 */
-	findGoPath(): string | null {
+	async findGoPathAsync(): Promise<string | null> {
 		if (this.goPath) return this.goPath;
 
 		const paths =
@@ -71,7 +70,7 @@ export class GoClient {
 					}
 				} else {
 					// Relative (PATH) - try running it
-					const result = safeSpawn(p, ["version"], {
+					const result = await safeSpawnAsync(p, ["version"], {
 						timeout: 3000,
 					});
 					if (!result.error && result.status === 0) {
@@ -88,32 +87,15 @@ export class GoClient {
 	}
 
 	/**
-	 * Check if Go is installed
+	 * Check if Go is installed (cached)
 	 */
-	isGoAvailable(): boolean {
+	async isGoAvailableAsync(): Promise<boolean> {
 		if (this.goAvailable !== null) return this.goAvailable;
-		this.goAvailable = this.findGoPath() !== null;
+		this.goAvailable = (await this.findGoPathAsync()) !== null;
 		if (this.goAvailable) {
 			this.log(`Go found: ${this.goPath}`);
 		}
 		return this.goAvailable;
-	}
-
-	/**
-	 * Check if gopls is installed
-	 */
-	isGoplsAvailable(): boolean {
-		if (this.goplsAvailable !== null) return this.goplsAvailable;
-
-		const result = safeSpawn("gopls", ["version"], {
-			timeout: 5000,
-		});
-
-		this.goplsAvailable = !result.error && result.status === 0;
-		if (this.goplsAvailable) {
-			this.log(`gopls found: ${result.stdout?.trim()}`);
-		}
-		return this.goplsAvailable;
 	}
 
 	/**
@@ -123,120 +105,4 @@ export class GoClient {
 		return path.extname(filePath).toLowerCase() === ".go";
 	}
 
-	/**
-	 * Run go vet on a file and return diagnostics
-	 */
-	checkFile(filePath: string): GoDiagnostic[] {
-		const goExe = this.findGoPath();
-		if (!goExe) return [];
-
-		const absolutePath = path.resolve(filePath);
-		if (!fs.existsSync(absolutePath)) return [];
-
-		const dir = path.dirname(absolutePath);
-		const fileName = path.basename(absolutePath);
-
-		try {
-			// Run go vet on the specific file
-			const result = safeSpawn(goExe, ["vet", fileName], {
-				timeout: 15000,
-				cwd: dir,
-			});
-
-			const output = (result.stderr || "") + (result.stdout || "");
-			return this.parseOutput(output, absolutePath);
-		} catch (err: any) {
-			this.log(`Check error: ${err.message}`);
-			return [];
-		}
-	}
-
-	/**
-	 * Run go build to check for compilation errors
-	 */
-	buildCheck(cwd: string): GoDiagnostic[] {
-		if (!this.isGoAvailable()) return [];
-
-		try {
-			const result = safeSpawn("go", ["build", "./..."], {
-				timeout: 30000,
-				cwd,
-			});
-
-			const output = (result.stderr || "") + (result.stdout || "");
-			return this.parseOutput(output, cwd);
-		} catch (err: any) {
-			this.log(`Build check error: ${err.message}`);
-			return [];
-		}
-	}
-
-	/**
-	 * Format diagnostics for LLM consumption
-	 */
-	formatDiagnostics(diags: GoDiagnostic[], maxItems = 10): string {
-		if (diags.length === 0) return "";
-
-		const errors = diags.filter((d) => d.severity === "error");
-		const warnings = diags.filter((d) => d.severity === "warning");
-
-		let output = `[Go] ${diags.length} issue(s)`;
-		if (errors.length) output += ` — ${errors.length} error(s)`;
-		if (warnings.length) output += ` — ${warnings.length} warning(s)`;
-		output += ":\n";
-
-		for (const d of diags.slice(0, maxItems)) {
-			const loc = `L${d.line}:${d.column}`;
-			const rule = d.rule ? ` [${d.rule}]` : "";
-			output += `  [${d.severity}] ${loc} ${d.message}${rule}\n`;
-		}
-
-		if (diags.length > maxItems) {
-			output += `  ... and ${diags.length - maxItems} more\n`;
-		}
-
-		return output;
-	}
-
-	// --- Internal ---
-
-	private parseOutput(output: string, fileOrDir: string): GoDiagnostic[] {
-		if (!output.trim()) return [];
-
-		const diags: GoDiagnostic[] = [];
-		// Go vet/build output format: "file.go:line:col: message"
-		const pattern = /^(.+?):(\d+):(?:(\d+):)?\s*(?:([^:]+):\s*)?(.+)$/gm;
-		let match;
-
-		while ((match = pattern.exec(output)) !== null) {
-			const [, file, line, col, rule, message] = match;
-			const lineNum = parseInt(line, 10);
-			const colNum = col ? parseInt(col, 10) : 1;
-
-			// Filter to the specific file if a file path was provided
-			const absFile = path.isAbsolute(file)
-				? file
-				: path.resolve(path.dirname(fileOrDir), file);
-			if (path.extname(absFile) !== ".go") continue;
-
-			const isError =
-				message.includes("undefined") ||
-				message.includes("cannot") ||
-				message.includes("syntax error") ||
-				rule === "compile";
-
-			diags.push({
-				line: lineNum,
-				column: colNum - 1,
-				endLine: lineNum,
-				endColumn: colNum,
-				severity: isError ? "error" : "warning",
-				message: message.trim().slice(0, 300),
-				rule: rule?.trim(),
-				file: absFile,
-			});
-		}
-
-		return diags;
-	}
 }

@@ -162,7 +162,7 @@ const swiftlintRunner: RunnerDefinition = {
 
 		let cmd: string | null = null;
 		if (
-			await (swiftlint.isAvailableAsync?.(cwd) ?? swiftlint.isAvailable(cwd))
+			await (swiftlint.isAvailableAsync(cwd))
 		) {
 			cmd = swiftlint.getCommand(cwd);
 		} else {

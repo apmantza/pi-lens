@@ -345,6 +345,11 @@ export interface LSPClientState {
 	readonly diagnosticEmitter: EventEmitter;
 	diagnosticsVersion: number;
 	readonly documentVersions: Map<string, number>;
+	/** The LSP document version (`publishDiagnostics.version`) the cached
+	 *  diagnostics for a path were computed against. Only set when the server
+	 *  reports a version; absent entries mean "version unknown" and are treated
+	 *  as fresh so version-less servers keep working. */
+	readonly diagnosticDocVersions: Map<string, number>;
 	readonly openDocuments: Set<string>;
 	readonly pendingOpens: Set<string>;
 	/** Mutable: updated by applyDynamicCapabilities after registerCapability events */
@@ -516,6 +521,7 @@ function clearDiagnosticsForPath(
 	state.pushDiagnosticTimestamps?.delete(normalizedPath);
 	state.documentPullDiagnostics?.delete(normalizedPath);
 	state.documentPullDiagnosticTimestamps?.delete(normalizedPath);
+	state.diagnosticDocVersions?.delete(normalizedPath);
 	legacy.diagnostics?.delete(normalizedPath);
 	legacy.diagnosticTimestamps?.delete(normalizedPath);
 }
@@ -573,11 +579,20 @@ function setupIncomingHandlers(
 ): void {
 	state.connection.onNotification(
 		"textDocument/publishDiagnostics",
-		(params: { uri: string; diagnostics?: LSPDiagnostic[] }) => {
+		(params: { uri: string; diagnostics?: LSPDiagnostic[]; version?: number }) => {
 			const filePath = uriToPath(params.uri);
 			const normalizedPath = normalizeMapKey(filePath);
 			const newDiags = normalizeLspDiagnostics(params.diagnostics || []);
+			const docVersion = params.version;
 			const strategy = getStrategy(state.serverId);
+			// Record the document version these diagnostics were computed against
+			// (when the server reports it) so waitForDiagnostics can reject results
+			// that lag behind the latest didChange instead of serving them as fresh.
+			const recordDocVersion = (): void => {
+				if (docVersion !== undefined) {
+					state.diagnosticDocVersions.set(normalizedPath, docVersion);
+				}
+			};
 
 			// Seed on first push for servers whose first push is known complete.
 			// Bypasses the debounce timer entirely — resolves waiting promises immediately.
@@ -587,6 +602,7 @@ function setupIncomingHandlers(
 			) {
 				state.pushDiagnostics.set(normalizedPath, newDiags);
 				state.pushDiagnosticTimestamps.set(normalizedPath, Date.now());
+				recordDocVersion();
 				state.diagnosticsVersion += 1;
 				state.diagnosticEmitter.emit("diagnostics", normalizedPath);
 				return;
@@ -598,6 +614,7 @@ function setupIncomingHandlers(
 			const timer = setTimeout(() => {
 				state.pushDiagnostics.set(normalizedPath, newDiags);
 				state.pushDiagnosticTimestamps.set(normalizedPath, Date.now());
+				recordDocVersion();
 				state.pendingDiagnostics.delete(normalizedPath);
 				state.diagnosticsVersion += 1;
 				state.diagnosticEmitter.emit("diagnostics", normalizedPath);
@@ -734,6 +751,20 @@ export async function clientWaitForDiagnostics(
 	const hasFreshDiagnostics = (): boolean =>
 		minVersion === undefined || state.diagnosticsVersion > minVersion;
 
+	// Version coherence: a cached push is "stale" only when the server reported
+	// the document version it computed against AND that version lags the latest
+	// didChange we sent. This prevents serving diagnostics from a superseded
+	// version as fresh (e.g. once the redundant double-push is collapsed and the
+	// dispatch wait runs without a push-counter baseline — #203). Unknown version
+	// (server omits it) is treated as current so version-less servers are
+	// unaffected, and the timeout remains the backstop.
+	const isVersionStale = (): boolean => {
+		const cachedVersion = state.diagnosticDocVersions?.get(normalizedPath);
+		if (cachedVersion === undefined) return false;
+		const currentVersion = state.documentVersions?.get(normalizedPath);
+		return currentVersion !== undefined && cachedVersion < currentVersion;
+	};
+
 	if (state.workspaceDiagnosticsSupport.mode === "pull") {
 		const firstPullCount = await clientRequestPullDiagnostics(state, filePath);
 		if (firstPullCount > 0 || hasFreshDiagnostics()) return;
@@ -757,6 +788,7 @@ export async function clientWaitForDiagnostics(
 
 	if (
 		hasFreshDiagnostics() &&
+		!isVersionStale() &&
 		getMergedDiagnosticsForPath(state, normalizedPath).length > 0
 	) {
 		return;
@@ -767,7 +799,7 @@ export async function clientWaitForDiagnostics(
 
 		const onDiagnostics = (fp: string) => {
 			if (normalizeMapKey(fp) !== normalizedPath) return;
-			if (!hasFreshDiagnostics()) return;
+			if (!hasFreshDiagnostics() || isVersionStale()) return;
 			if (debounceTimer) clearTimeout(debounceTimer);
 
 			// Adaptive debounce: use time since last push to compute remaining
@@ -1104,6 +1136,7 @@ export async function createLSPClient(options: {
 		diagnosticEmitter,
 		diagnosticsVersion: 0,
 		documentVersions: new Map(),
+		diagnosticDocVersions: new Map(),
 		openDocuments: new Set(),
 		pendingOpens: new Set(),
 		// these are filled in after initialize — cast to avoid two-phase init

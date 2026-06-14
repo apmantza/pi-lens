@@ -97,7 +97,7 @@ const ktlintRunner: RunnerDefinition = {
 		}
 
 		let cmd: string | null = null;
-		if (await (ktlint.isAvailableAsync?.(cwd) ?? ktlint.isAvailable(cwd))) {
+		if (await (ktlint.isAvailableAsync(cwd))) {
 			cmd = ktlint.getCommand(cwd);
 		} else {
 			cmd = await resolveToolCommandWithInstallFallback(cwd, "ktlint");

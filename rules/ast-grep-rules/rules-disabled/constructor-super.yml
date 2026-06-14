@@ -1,7 +1,10 @@
-id: constructor-super-js
+# DISABLED (#206): needs `inside` + `not has` relational matching the runner's
+# rule interpreter can't execute; also redundant with tsc TS2377 ("Constructors
+# for derived classes must contain a 'super' call").
+id: constructor-super
 message: super() must be called in derived class constructors.
 severity: error
-language: JavaScript
+language: TypeScript
 rule:
   pattern:
     selector: method_definition

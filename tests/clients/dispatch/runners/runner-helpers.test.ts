@@ -154,16 +154,18 @@ describe("runner-helpers availability checker", () => {
 
 			const checker = createAvailabilityChecker("ruff", ".exe");
 
-			vi.mocked(safeSpawnMod.safeSpawn).mockImplementation((cmd) => {
-				const text = String(cmd);
-				if (text.includes(dirB.tmpDir)) {
-					return { stdout: "ruff 1.0.0", stderr: "", status: 0 };
-				}
-				return { stdout: "", stderr: "not found", status: 1 };
-			});
+			vi.mocked(safeSpawnMod.safeSpawnAsync).mockImplementation(
+				async (cmd) => {
+					const text = String(cmd);
+					if (text.includes(dirB.tmpDir)) {
+						return { stdout: "ruff 1.0.0", stderr: "", status: 0 };
+					}
+					return { stdout: "", stderr: "not found", status: 1 };
+				},
+			);
 
-			expect(checker.isAvailable(dirA.tmpDir)).toBe(false);
-			expect(checker.isAvailable(dirB.tmpDir)).toBe(true);
+			expect(await checker.isAvailableAsync(dirA.tmpDir)).toBe(false);
+			expect(await checker.isAvailableAsync(dirB.tmpDir)).toBe(true);
 			expect(checker.getCommand(dirA.tmpDir)).toBeNull();
 			expect(checker.getCommand(dirB.tmpDir)).toContain(dirB.tmpDir);
 		} finally {

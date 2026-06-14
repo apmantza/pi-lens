@@ -12,7 +12,8 @@
 		"i18n.ts",
 		"clients/**/*.ts",
 		"commands/**/*.ts",
-		"tools/**/*.ts"
+		"tools/**/*.ts",
+		"mcp/**/*.ts"
 	],
 	"exclude": ["node_modules", "tests", "**/*.test.ts"]
 }

@@ -223,4 +223,49 @@ describe("ast_grep_search tool", () => {
 		expect(search).toHaveBeenCalledOnce();
 		expect(String(result.content[0].text)).toContain("1 match");
 	});
+
+	describe("error-path remediation hints", () => {
+		it("appends a hint for an uncurated (raw stderr) search error", async () => {
+			const tool = createAstGrepSearchTool(
+				makeClient({
+					search: vi.fn().mockResolvedValue({
+						matches: [],
+						error: "error: a value is required for '--rewrite <FIX>'",
+					}),
+				}),
+			);
+			const result = await tool.execute(
+				"e1",
+				{ pattern: "foo($X)", lang: "typescript" },
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+			expect(result.isError).toBe(true);
+			const text = String(result.content[0].text);
+			expect(text).toContain("error: a value is required");
+			expect(text).toContain("Hint:");
+		});
+
+		it("does not double up when the error is already curated (multiple AST nodes)", async () => {
+			const curated =
+				"Invalid AST pattern: ...\nOriginal error: Multiple AST nodes are detected";
+			const tool = createAstGrepSearchTool(
+				makeClient({
+					search: vi.fn().mockResolvedValue({ matches: [], error: curated }),
+				}),
+			);
+			const result = await tool.execute(
+				"e2",
+				{ pattern: "foo($X)", lang: "typescript" },
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+			expect(result.isError).toBe(true);
+			const text = String(result.content[0].text);
+			expect(text).toContain("Multiple AST nodes are detected");
+			expect(text).not.toContain("Hint:");
+		});
+	});
 });

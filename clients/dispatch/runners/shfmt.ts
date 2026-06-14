@@ -27,7 +27,7 @@ const shfmtRunner: RunnerDefinition = {
 		const cwd = ctx.cwd || process.cwd();
 
 		let cmd: string | null = null;
-		if (await (shfmt.isAvailableAsync?.(cwd) ?? shfmt.isAvailable(cwd))) {
+		if (await (shfmt.isAvailableAsync(cwd))) {
 			cmd = shfmt.getCommand(cwd);
 		} else {
 			const installed = await ensureTool("shfmt");

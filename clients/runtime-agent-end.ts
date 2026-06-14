@@ -199,7 +199,6 @@ export async function handleAgentEnd({
 					false,
 					getFlag,
 					dbg,
-					result.formatChanged,
 				);
 			}
 

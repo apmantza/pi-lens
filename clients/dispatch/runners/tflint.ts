@@ -62,7 +62,7 @@ const tflintRunner: RunnerDefinition = {
 		const cwd = ctx.cwd || process.cwd();
 
 		let cmd: string | null = null;
-		if (await (tflint.isAvailableAsync?.(cwd) ?? tflint.isAvailable(cwd))) {
+		if (await (tflint.isAvailableAsync(cwd))) {
 			cmd = tflint.getCommand(cwd);
 		} else {
 			const managed = await ensureTool("tflint");

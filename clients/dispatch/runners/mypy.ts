@@ -57,7 +57,7 @@ const mypyRunner: RunnerDefinition = {
 		}
 
 		let cmd: string | null = null;
-		if (await (mypy.isAvailableAsync?.(cwd) ?? mypy.isAvailable(cwd))) {
+		if (await (mypy.isAvailableAsync(cwd))) {
 			cmd = mypy.getCommand(cwd);
 		} else {
 			cmd = await resolveToolCommandWithInstallFallback(cwd, "mypy");

@@ -59,7 +59,7 @@ function parsePhpstanJson(raw: string, filePath: string): Diagnostic[] {
 }
 
 async function resolvePhpstan(cwd: string): Promise<string | null> {
-	if (await (phpstan.isAvailableAsync?.(cwd) ?? phpstan.isAvailable(cwd)))
+	if (await (phpstan.isAvailableAsync(cwd)))
 		return phpstan.getCommand(cwd);
 	return resolveVendorToolCommand(cwd, "phpstan", ".bat");
 }

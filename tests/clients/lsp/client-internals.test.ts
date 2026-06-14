@@ -70,6 +70,7 @@ function createMockState(overrides?: Partial<LSPClientState>): LSPClientState {
 		diagnosticEmitter,
 		diagnosticsVersion: 0,
 		documentVersions: new Map(),
+		diagnosticDocVersions: new Map(),
 		openDocuments: new Set(),
 		pendingOpens: new Set(),
 		workspaceDiagnosticsSupport: {

@@ -432,7 +432,7 @@ function buildCoverageNotice(
 
 	return {
 		id: `coverage-unavailable:${ctx.kind}:${path.basename(ctx.filePath)}`,
-		message: `Pi-lens analysis unavailable. Tools for ${ctx.kind} not installed.`,
+		message: `Pi-lens ${ctx.kind} analysis unavailable — language tools are missing or the LSP server isn't ready yet, so this file was not fully checked (not a clean result).`,
 		filePath: ctx.filePath,
 		severity: "warning",
 		semantic: "warning",
@@ -632,6 +632,13 @@ async function runGroup(
 							line: d.line,
 							semantic: d.semantic,
 						}))
+					: undefined,
+			metadata:
+				result.status === "failed" && result.failureKind
+					? {
+							failureKind: result.failureKind,
+							failureMessage: result.failureMessage,
+						}
 					: undefined,
 		});
 		recordRunner(
@@ -939,10 +946,13 @@ async function runRunner(
 	} catch (error) {
 		clearTimeout(timer);
 		ctx.log(`Runner ${runner.id} failed: ${error}`);
+		const message = error instanceof Error ? error.message : String(error);
 		return {
 			status: "failed",
 			diagnostics: [],
 			semantic: defaultSemantic,
+			failureKind: message.includes("timed out") ? "timeout" : "exception",
+			failureMessage: message.slice(0, 200),
 		};
 	}
 }

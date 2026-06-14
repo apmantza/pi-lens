@@ -26,6 +26,13 @@ jobs:
       - name: Lockfile in sync with package.json
         run: npm run check:lockfile
 
+      # Fail on known-vulnerable PRODUCTION deps (what actually ships to users via
+      # `npm install --omit=dev`). Scoped to high/critical to avoid blocking PRs on
+      # fix-less moderate advisories; transitive moderate ones are handled by
+      # Dependabot security updates. DevDeps are excluded — they never reach users.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
       - name: TypeScript lint
         run: npm run lint
 

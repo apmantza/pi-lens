@@ -192,10 +192,8 @@ describe("LSPService.touchFile collectDiagnostics", () => {
 		expect(client.notify.open).toHaveBeenCalledTimes(2);
 	});
 
-	it("passes maxDiagnosticsWaitMs through to client.waitForDiagnostics (#117)", async () => {
-		const { LSPService } = await import("../../../clients/lsp/index.js");
-		const service = new LSPService();
-		const client = {
+	function makeBudgetClient() {
+		return {
 			isAlive: () => true,
 			shutdown: async () => {},
 			getWorkspaceDiagnosticsSupport: () => ({
@@ -208,12 +206,39 @@ describe("LSPService.touchFile collectDiagnostics", () => {
 			waitForDiagnostics: vi.fn().mockResolvedValue(undefined),
 			getDiagnostics: vi.fn(() => []),
 		};
+	}
 
+	it("an explicit maxDiagnosticsWaitMs caps the wait when tighter than the server strategy (#117)", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		const client = makeBudgetClient();
 		createLSPClient.mockResolvedValue(client);
 		getServersForFileWithConfig.mockReturnValue([makeServer("python")]);
 
-		// Caller passes a tight diagnostics budget — must override the
-		// default that would otherwise be derived from maxClientWaitMs.
+		// 800 < python strategy (1500), so the caller's tight budget binds and
+		// reaches the client unchanged.
+		await service.touchFile(FILE, "print('x')\n", {
+			clientScope: "primary",
+			diagnostics: "document",
+			collectDiagnostics: true,
+			maxClientWaitMs: 8000,
+			maxDiagnosticsWaitMs: 800,
+			source: "dispatch-lsp-runner",
+		});
+
+		expect(client.waitForDiagnostics).toHaveBeenCalledWith(FILE, 800);
+	});
+
+	it("the per-server strategy budget caps the wait below a looser caller value (#203)", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		const client = makeBudgetClient();
+		createLSPClient.mockResolvedValue(client);
+		getServersForFileWithConfig.mockReturnValue([makeServer("python")]);
+
+		// Caller cap 2500, but python's strategy aggregateWaitMs is 1500 — on the
+		// single-server hot path the tighter per-server budget wins so a fast
+		// server isn't held to a flat multi-second wait.
 		await service.touchFile(FILE, "print('x')\n", {
 			clientScope: "primary",
 			diagnostics: "document",
@@ -223,7 +248,26 @@ describe("LSPService.touchFile collectDiagnostics", () => {
 			source: "dispatch-lsp-runner",
 		});
 
-		expect(client.waitForDiagnostics).toHaveBeenCalledWith(FILE, 2500);
+		expect(client.waitForDiagnostics).toHaveBeenCalledWith(FILE, 1500);
+	});
+
+	it("uses the per-server strategy budget when no caller budget is set (#203)", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		const client = makeBudgetClient();
+		createLSPClient.mockResolvedValue(client);
+		getServersForFileWithConfig.mockReturnValue([makeServer("python")]);
+
+		// No maxDiagnosticsWaitMs/maxClientWaitMs — the python strategy (1500)
+		// applies instead of the 1200 document-mode floor.
+		await service.touchFile(FILE, "print('x')\n", {
+			clientScope: "primary",
+			diagnostics: "document",
+			collectDiagnostics: true,
+			source: "dispatch-lsp-runner",
+		});
+
+		expect(client.waitForDiagnostics).toHaveBeenCalledWith(FILE, 1500);
 	});
 
 	it("PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS overrides the option chain", async () => {

@@ -165,6 +165,30 @@ describe("Dispatch Integration", () => {
 			expect(result.warnings).toHaveLength(1);
 			expect(result.blockers).toHaveLength(0);
 		});
+
+		it("passes blockingOnly to the dispatch context (default true, override false)", async () => {
+			vi.mocked(dispatchForFile).mockResolvedValue(emptyDispatchResult);
+
+			await dispatchLintWithResult("app.ts", "/project", {
+				getFlag: () => false,
+			});
+			expect(
+				vi.mocked(dispatchForFile).mock.calls.at(-1)?.[0].blockingOnly,
+			).toBe(true);
+
+			vi.mocked(dispatchForFile).mockClear();
+			await dispatchLintWithResult(
+				"app.ts",
+				"/project",
+				{ getFlag: () => false },
+				undefined,
+				undefined,
+				{ blockingOnly: false },
+			);
+			expect(
+				vi.mocked(dispatchForFile).mock.calls.at(-1)?.[0].blockingOnly,
+			).toBe(false);
+		});
 	});
 
 	describe("shouldDispatch", () => {

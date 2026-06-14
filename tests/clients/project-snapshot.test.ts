@@ -13,6 +13,7 @@ import {
 	saveRuntimeProjectSnapshot,
 } from "../../clients/project-snapshot.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import { buildWordIndex, searchWordIndex } from "../../clients/word-index.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 
 function withProjectDataDir<T>(fn: (cwd: string) => T): T {
@@ -61,6 +62,50 @@ describe("project snapshot", () => {
 				cachedExports: [["makeThing", path.join(cwd, "src", "a.ts")]],
 			});
 			expect(isProjectSnapshotFresh(loaded, 7)).toBe(true);
+		}));
+
+	it("persists the word index and hydrates a searchable copy", () =>
+		withProjectDataDir((cwd) => {
+			const runtime = new RuntimeCoordinator();
+			runtime.seedProjectSequence(5);
+			runtime.wordIndex = buildWordIndex([
+				{
+					path: path.join(cwd, "src", "auth.ts"),
+					content: "export function authenticateUser() {}",
+				},
+			]);
+
+			saveProjectSnapshot(
+				cwd,
+				buildProjectSnapshotFromRuntime({ cwd, runtime }),
+			);
+			const loaded = loadProjectSnapshot(cwd);
+			expect(loaded?.wordIndex).toBeDefined();
+
+			// Hydrate a fresh runtime → its word index must be searchable.
+			const target = new RuntimeCoordinator();
+			hydrateRuntimeFromProjectSnapshot(target, loaded!);
+			expect(target.wordIndex).not.toBeNull();
+			const results = searchWordIndex(target.wordIndex!, "authenticate user");
+			expect(results[0]?.file).toBe(path.join(cwd, "src", "auth.ts"));
+		}));
+
+	it("preserves a previously-persisted word index when the runtime has none", () =>
+		withProjectDataDir((cwd) => {
+			const withIndex = new RuntimeCoordinator();
+			withIndex.seedProjectSequence(2);
+			withIndex.wordIndex = buildWordIndex([
+				{ path: path.join(cwd, "a.ts"), content: "function keepMe() {}" },
+			]);
+			saveRuntimeProjectSnapshot({ cwd, runtime: withIndex });
+
+			// A later save from a runtime whose word-index task hasn't finished
+			// must not clobber the persisted index.
+			const without = new RuntimeCoordinator();
+			without.seedProjectSequence(2);
+			saveRuntimeProjectSnapshot({ cwd, runtime: without });
+
+			expect(loadProjectSnapshot(cwd)?.wordIndex).toBeDefined();
 		}));
 
 	it("rejects wrong-version, stale, and future snapshots", () =>

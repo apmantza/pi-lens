@@ -92,7 +92,7 @@ const actionlintRunner: RunnerDefinition = {
 		const cwd = ctx.cwd || process.cwd();
 		let cmd: string | null = null;
 
-		if (await (actionlint.isAvailableAsync?.(cwd) ?? actionlint.isAvailable(cwd))) {
+		if (await (actionlint.isAvailableAsync(cwd))) {
 			cmd = actionlint.getCommand(cwd);
 		} else {
 			cmd = await resolveToolCommandWithInstallFallback(cwd, "actionlint");

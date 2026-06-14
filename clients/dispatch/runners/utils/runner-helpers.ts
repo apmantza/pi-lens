@@ -12,7 +12,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getGlobalPiLensDir } from "../../../file-utils.js";
 import { ensureTool } from "../../../installer/index.js";
-import { safeSpawn, safeSpawnAsync } from "../../../safe-spawn.js";
+import { safeSpawnAsync } from "../../../safe-spawn.js";
 import {
 	getToolCommandSpec,
 	shouldAutoInstallTool,
@@ -102,7 +102,6 @@ export function createAvailabilityChecker(
 	command: string,
 	windowsExt = "",
 ): {
-	isAvailable: (cwd?: string) => boolean;
 	isAvailableAsync: (cwd?: string) => Promise<boolean>;
 	getCommand: (cwd?: string) => string | null;
 } {
@@ -118,23 +117,6 @@ export function createAvailabilityChecker(
 		const created: AvailabilityCache = { available: null, command: null };
 		cacheByCwd.set(key, created);
 		return created;
-	}
-
-	function isAvailable(cwd?: string): boolean {
-		const resolvedCwd = cwd || process.cwd();
-		const cache = getCache(resolvedCwd);
-		if (cache.available !== null) return cache.available;
-
-		const cmd = findCommand(resolvedCwd);
-		const result = safeSpawn(cmd, ["--version"], {
-			timeout: 5000,
-		});
-
-		cache.available = !result.error && result.status === 0;
-		if (cache.available) {
-			cache.command = cmd;
-		}
-		return cache.available;
 	}
 
 	async function isAvailableAsync(cwd?: string): Promise<boolean> {
@@ -169,7 +151,7 @@ export function createAvailabilityChecker(
 		return cache.command;
 	}
 
-	return { isAvailable, isAvailableAsync, getCommand };
+	return { isAvailableAsync, getCommand };
 }
 
 /**
@@ -331,16 +313,13 @@ export async function resolveCommandWithInstallFallback(
 
 export async function resolveAvailableOrInstall(
 	checker: {
-		isAvailable: (cwd?: string) => boolean;
-		isAvailableAsync?: (cwd?: string) => Promise<boolean>;
+		isAvailableAsync: (cwd?: string) => Promise<boolean>;
 		getCommand: (cwd?: string) => string | null;
 	},
 	toolId: string,
 	cwd: string,
 ): Promise<string | null> {
-	const available = checker.isAvailableAsync
-		? await checker.isAvailableAsync(cwd)
-		: checker.isAvailable(cwd);
+	const available = await checker.isAvailableAsync(cwd);
 	if (available) {
 		return checker.getCommand(cwd);
 	}
@@ -399,15 +378,6 @@ function isAstGrepVersionOutput(output: string): boolean {
 	return /\bast[- ]grep\b/i.test(output);
 }
 
-function probeAstGrepCommand(cmd: string, argsPrefix: string[] = []): boolean {
-	const check = safeSpawn(cmd, [...argsPrefix, "--version"], { timeout: 5000 });
-	return (
-		!check.error &&
-		check.status === 0 &&
-		isAstGrepVersionOutput(`${check.stdout}\n${check.stderr}`)
-	);
-}
-
 async function probeAstGrepCommandAsync(
 	cmd: string,
 	argsPrefix: string[] = [],
@@ -451,40 +421,6 @@ function buildSgLocalBins(): string[] {
 		}
 	}
 	return bins;
-}
-
-/**
- * Check if ast-grep CLI is available.
- * Prefers the canonical ast-grep binary, and only accepts sg if its version
- * output proves it is ast-grep (Linux /usr/bin/sg is group-switch).
- */
-export function isSgAvailable(): boolean {
-	if (sgAvailable !== null) return sgAvailable;
-
-	// 1. Local node_modules/.bin
-	for (const localBin of buildSgLocalBins()) {
-		if (probeAstGrepCommand(localBin)) {
-			sgCmd = localBin; sgCmdArgs = []; sgAvailable = true;
-			return true;
-		}
-	}
-
-	// 2. Global PATH — prefer ast-grep; reject util-linux /usr/bin/sg.
-	for (const cmd of ["ast-grep", "sg"]) {
-		if (probeAstGrepCommand(cmd)) {
-			sgCmd = cmd; sgCmdArgs = []; sgAvailable = true;
-			return true;
-		}
-	}
-
-	// 3. npx --no (cache-only, no silent download).
-	if (probeAstGrepCommand("npx", ["--no", "--", "ast-grep"])) {
-		sgCmd = "npx"; sgCmdArgs = ["--no", "--", "ast-grep"]; sgAvailable = true;
-		return true;
-	}
-
-	sgAvailable = false;
-	return false;
 }
 
 let sgAvailableInFlight: Promise<boolean> | null = null;
@@ -542,28 +478,6 @@ export function getSgCommand(): { cmd: string; args: string[] } {
  *
  * Returns: { cmd, args } where args may include ["npx", toolName] preamble.
  */
-export function resolveLocalFirst(
-	toolName: string,
-	cwd: string,
-	windowsExt = ".cmd",
-): { cmd: string; args: string[] } {
-	const isWin = process.platform === "win32";
-	const binName = isWin ? `${toolName}${windowsExt}` : toolName;
-
-	// 1. Local node_modules/.bin (project-installed)
-	const local = path.join(cwd, "node_modules", ".bin", binName);
-	if (fs.existsSync(local)) return { cmd: local, args: [] };
-
-	// 2. Global PATH (already installed system-wide)
-	const globalCheck = safeSpawn(toolName, ["--version"], { timeout: 3000 });
-	if (!globalCheck.error && globalCheck.status === 0) {
-		return { cmd: toolName, args: [] };
-	}
-
-	// 3. npx fallback — only for already-cached packages (no silent download)
-	return { cmd: "npx", args: ["--no", toolName] };
-}
-
 export async function resolveLocalFirstAsync(
 	toolName: string,
 	cwd: string,
@@ -595,4 +509,7 @@ export async function resolveLocalFirstAsync(
 export const pyright = createAvailabilityChecker("pyright", ".exe");
 export const ruff = createAvailabilityChecker("ruff", ".exe");
 export const biome = createAvailabilityChecker("biome");
-export const sg = { isAvailable: isSgAvailable, getCommand: getSgCommand };
+export const sg = {
+	isAvailableAsync: isSgAvailableAsync,
+	getCommand: getSgCommand,
+};

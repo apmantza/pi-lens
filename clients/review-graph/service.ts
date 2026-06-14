@@ -1,5 +1,9 @@
 import type { FactStore } from "../dispatch/fact-store.js";
-import { computeImpactCascade as computeImpactCascadeImpl } from "./query.js";
+import {
+	computeImpactCascade as computeImpactCascadeImpl,
+	computeTransitiveImpact as computeTransitiveImpactImpl,
+	type TransitiveImpactResult,
+} from "./query.js";
 import { buildOrUpdateGraph as buildOrUpdateGraphImpl } from "./builder.js";
 import { formatImpactCascade as formatImpactCascadeImpl } from "./format.js";
 import { buildModuleGraph } from "./workspace-modules.js";
@@ -30,6 +34,15 @@ export function formatImpactCascade(
 	maxFiles?: number,
 ): string | undefined {
 	return formatImpactCascadeImpl(result, maxFiles);
+}
+
+/** Transitive (depth-bounded) dependents of a file — see query.computeTransitiveImpact. */
+export function computeTransitiveImpact(
+	graph: ReviewGraph,
+	seedFile: string,
+	options?: Parameters<typeof computeTransitiveImpactImpl>[2],
+): TransitiveImpactResult {
+	return computeTransitiveImpactImpl(graph, seedFile, options);
 }
 
 export function recordEntitySnapshotDiff(

@@ -21,13 +21,11 @@ import type {
 } from "../types.js";
 import {
 	calculateRuleComplexity,
-	hasUnsupportedConditions,
 	isOverlyBroadPattern,
 	isStructuredRule,
 	loadYamlRules,
 	MAX_BLOCKING_RULE_COMPLEXITY,
 	type YamlRule,
-	type YamlRuleCondition,
 } from "./yaml-rule-parser.js";
 
 // Lazy load the napi package
@@ -122,12 +120,6 @@ function normalizeRuleId(ruleId: string): string {
 	return ruleId.replace(/-js$/, "");
 }
 
-/** Maximum AST depth to traverse to prevent stack overflow on deeply nested files */
-const MAX_AST_DEPTH = 50;
-
-/** Maximum recursion depth for structured rule execution */
-const MAX_RULE_DEPTH = 5;
-
 function canHandle(filePath: string): boolean {
 	return SUPPORTED_EXTS.includes(path.extname(filePath).toLowerCase());
 }
@@ -150,217 +142,6 @@ function getLang(filePath: string, sgModule: typeof import("@ast-grep/napi")) {
 		default:
 			return undefined;
 	}
-}
-
-/**
- * Check if a single node matches a condition (without searching descendants).
- * In ast-grep semantics:
- * - pattern/kind/regex: check the node itself
- * - all: node must match ALL sub-conditions
- * - any: node must match at least ONE sub-condition
- * - not: node must NOT match the sub-condition
- * - has: node must have a DESCENDANT matching the sub-condition
- */
-function nodeMatchesCondition(
-	node: any,
-	condition: YamlRuleCondition,
-	depth = 0,
-): boolean {
-	if (depth > MAX_RULE_DEPTH) return false;
-
-	// Check kind constraint
-	if (condition.kind && node.kind() !== condition.kind) return false;
-
-	// Check pattern constraint (node itself must match)
-	if (condition.pattern) {
-		try {
-			const matches = node.findAll(condition.pattern);
-			// Check if the node itself is among the matches (same start position)
-			const nodeRange = node.range();
-			let selfMatch = false;
-			for (const m of matches) {
-				const mr = (m as any).range();
-				if (
-					mr.start.line === nodeRange.start.line &&
-					mr.start.column === nodeRange.start.column &&
-					mr.end.line === nodeRange.end.line &&
-					mr.end.column === nodeRange.end.column
-				) {
-					selfMatch = true;
-					break;
-				}
-			}
-			if (!selfMatch) return false;
-		} catch {
-			return false;
-		}
-	}
-
-	// Check regex constraint
-	if (condition.regex) {
-		try {
-			const text = node.text();
-			if (!new RegExp(condition.regex).test(text)) return false;
-		} catch {
-			return false;
-		}
-	}
-
-	// Check has (descendant must match)
-	if (condition.has) {
-		const descendants = findMatchingNodes(node, condition.has, depth + 1);
-		if (descendants.length === 0) return false;
-	}
-
-	// Check not (node must NOT match this condition)
-	if (condition.not) {
-		if (nodeMatchesCondition(node, condition.not, depth + 1)) return false;
-	}
-
-	// Check all (node must match ALL sub-conditions)
-	if (condition.all) {
-		for (const sub of condition.all) {
-			if (!nodeMatchesCondition(node, sub, depth + 1)) return false;
-		}
-	}
-
-	// Check any (node must match at least one sub-condition)
-	if (condition.any) {
-		let anyMatch = false;
-		for (const sub of condition.any) {
-			if (nodeMatchesCondition(node, sub, depth + 1)) {
-				anyMatch = true;
-				break;
-			}
-		}
-		if (!anyMatch) return false;
-	}
-
-	return true;
-}
-
-/**
- * Find all nodes in the tree that match a condition.
- * This is the "search" function - traverses the tree and checks each node.
- */
-function findMatchingNodes(
-	rootNode: any,
-	condition: YamlRuleCondition,
-	depth = 0,
-): unknown[] {
-	if (depth > MAX_RULE_DEPTH) return [];
-
-	const matches: unknown[] = [];
-
-	// Optimization: if the condition has a kind, only check nodes of that kind
-	// If it has a pattern, use findAll for initial candidates
-	let candidates: unknown[];
-
-	if (condition.pattern && !condition.all && !condition.any) {
-		// Use findAll for pattern-only conditions (fast path)
-		try {
-			candidates = rootNode.findAll(condition.pattern);
-		} catch {
-			return [];
-		}
-	} else if (condition.kind && !condition.all && !condition.any) {
-		// Use findByKind for kind-only conditions (fast path)
-		candidates = findByKind(rootNode, condition.kind, 0);
-	} else if (condition.all) {
-		// For `all`, find the narrowest sub-condition to generate candidates
-		candidates = getCandidatesForAll(rootNode, condition.all);
-	} else if (condition.any) {
-		// For `any`, union candidates from all sub-conditions
-		const seen = new Set<string>();
-		candidates = [];
-		for (const sub of condition.any) {
-			const subMatches = findMatchingNodes(rootNode, sub, depth + 1);
-			for (const m of subMatches) {
-				const r = (m as any).range();
-				const key = `${r.start.line}:${r.start.column}`;
-				if (!seen.has(key)) {
-					seen.add(key);
-					candidates.push(m);
-				}
-			}
-		}
-	} else {
-		// Fallback: traverse all nodes
-		candidates = getAllNodes(rootNode, 0);
-	}
-
-	for (const candidate of candidates) {
-		if (nodeMatchesCondition(candidate, condition, depth)) {
-			matches.push(candidate);
-		}
-	}
-
-	return matches;
-}
-
-/**
- * For an `all` condition, find the narrowest sub-condition to generate
- * initial candidates. This avoids scanning all nodes when one sub-condition
- * has a specific kind or pattern.
- */
-function getCandidatesForAll(
-	rootNode: any,
-	subs: YamlRuleCondition[],
-): unknown[] {
-	// Prefer kind-based narrowing first, then pattern-based
-	for (const sub of subs) {
-		if (sub.kind) {
-			return findByKind(rootNode, sub.kind, 0);
-		}
-	}
-	for (const sub of subs) {
-		if (sub.pattern) {
-			try {
-				return rootNode.findAll(sub.pattern);
-			} catch {
-				/* invalid pattern — fall through to scan all */
-			}
-		}
-	}
-	// No narrowing possible, scan all
-	return getAllNodes(rootNode, 0);
-}
-
-/**
- * Legacy wrapper - execute a structured rule using the new two-phase approach.
- */
-function executeStructuredRule(
-	rootNode: any,
-	condition: YamlRuleCondition,
-	_matches: unknown[] = [],
-	depth = 0,
-): unknown[] {
-	return findMatchingNodes(rootNode, condition, depth);
-}
-
-/**
- * Find all nodes of a specific kind with depth limit
- */
-function findByKind(node: any, kind: string, currentDepth: number): unknown[] {
-	if (currentDepth > MAX_AST_DEPTH) return [];
-	const results: unknown[] = [];
-	if (node.kind() === kind) results.push(node);
-	for (const child of node.children()) {
-		results.push(...findByKind(child, kind, currentDepth + 1));
-	}
-	return results;
-}
-
-/**
- * Get all nodes with depth limit to prevent stack overflow
- */
-function getAllNodes(node: any, currentDepth: number): unknown[] {
-	if (currentDepth > MAX_AST_DEPTH) return [];
-	const results = [node];
-	for (const child of node.children()) {
-		results.push(...getAllNodes(child, currentDepth + 1));
-	}
-	return results;
 }
 
 // --- Runner Definition ---
@@ -467,11 +248,6 @@ const astGrepNapiRunner: RunnerDefinition = {
 				// Skip rules already handled by tree-sitter runner (priority 14)
 				if (TREE_SITTER_OVERLAP.has(rule.id)) continue;
 
-				// Skip rules using conditions we can't execute (inside, follows,
-				// precedes, stopBy, field, nthChild, constraints). Running these
-				// with only partial condition evaluation causes false positives.
-				if (hasUnsupportedConditions(rule)) continue;
-
 				// Skip rules whose top-level pattern is overly broad ($NAME, $X, etc.)
 				// without additional structural constraints to narrow matches.
 				if (
@@ -494,22 +270,25 @@ const astGrepNapiRunner: RunnerDefinition = {
 					}
 				}
 
+				if (!rule.rule) continue;
+
 				try {
 					let matches: unknown[] = [];
 
-					if (isStructuredRule(rule) && rule.rule) {
-						matches = executeStructuredRule(rootNode, rule.rule, []);
-					} else if (rule.rule?.pattern || rule.rule?.kind) {
-						const pattern = rule.rule.pattern || rule.rule.kind;
-						if (pattern) {
-							try {
-								matches = rootNode.findAll(pattern);
-							} catch {
-								if (rule.rule.kind) {
-									matches = findByKind(rootNode, rule.rule.kind, 0);
-								}
-							}
-						}
+					// Delegate matching to napi's native engine, which handles the
+					// full ast-grep rule grammar (pattern, kind, has/inside/follows/
+					// precedes/stopBy/field/nthChild, any/all/not) plus metavariable
+					// `constraints` (#206). A faithful js-yaml parse feeds the rule
+					// object straight through. If napi rejects the rule (a malformed
+					// or invalid-kind rule), skip it — never silently match nothing
+					// through a partial interpreter.
+					const nativeConfig = rule.constraints
+						? { rule: rule.rule, constraints: rule.constraints }
+						: { rule: rule.rule };
+					try {
+						matches = rootNode.findAll(nativeConfig as never);
+					} catch {
+						matches = [];
 					}
 
 					const limitedMatches = matches.slice(0, MAX_MATCHES_PER_RULE);

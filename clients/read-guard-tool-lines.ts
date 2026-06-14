@@ -55,6 +55,59 @@ function findFirstLineOfOldText(
 	return undefined;
 }
 
+function tokenizeForSimilarity(text: string): string[] {
+	return text.toLowerCase().match(/[a-z0-9_]+/g) ?? [];
+}
+
+/** Jaccard similarity over identifier/number tokens (whitespace + punctuation insensitive). */
+function tokenSimilarity(a: string, b: string): number {
+	const ta = new Set(tokenizeForSimilarity(a));
+	const tb = new Set(tokenizeForSimilarity(b));
+	if (ta.size === 0 || tb.size === 0) return 0;
+	let intersection = 0;
+	for (const token of ta) if (tb.has(token)) intersection += 1;
+	return intersection / (ta.size + tb.size - intersection);
+}
+
+/**
+ * "Did you mean?" recovery: when an oldText line can't be found, surface the
+ * closest *current* file lines (by token similarity) so the model can rebuild
+ * its edit from verbatim text in one turn instead of re-reading blind. Scans a
+ * ±window around `nearLine` when known (the first-line locator), else the whole
+ * file. Returns the top matches above `minScore`, with their real line numbers.
+ */
+function findSimilarLines(
+	content: string,
+	target: string,
+	options: { nearLine?: number; window?: number; max?: number; minScore?: number } = {},
+): Array<{ line: number; text: string; score: number }> {
+	const { nearLine, window = 60, max = 3, minScore = 0.5 } = options;
+	const needle = target.trim();
+	if (needle.length < 4) return [];
+	const lines = content.split("\n");
+	const start = nearLine ? Math.max(0, nearLine - 1 - window) : 0;
+	const end = nearLine ? Math.min(lines.length, nearLine - 1 + window) : lines.length;
+	const scored: Array<{ line: number; text: string; score: number }> = [];
+	for (let i = start; i < end; i += 1) {
+		const text = lines[i];
+		if (text.trim() === "") continue;
+		const score = tokenSimilarity(needle, text);
+		if (score >= minScore) scored.push({ line: i + 1, text, score });
+	}
+	scored.sort((a, b) => b.score - a.score);
+	return scored.slice(0, max);
+}
+
+function formatSimilarLines(
+	suggestions: Array<{ line: number; text: string }>,
+): string {
+	const pad = (n: number) => String(n).padStart(4, " ");
+	const rows = suggestions.map(
+		({ line, text }) => `      ${pad(line)} │ ${text.trimEnd()}`,
+	);
+	return `\n\nDid you mean one of these current lines?\n${rows.join("\n")}`;
+}
+
 export function countFileLines(filePath: string): number {
 	try {
 		const content = nodeFs.readFileSync(filePath, "utf-8");
@@ -394,6 +447,21 @@ function resolveOldTextEdits(
 					}
 				}
 			}
+			// "Did you mean?" — surface the closest current lines (token
+			// similarity) so the model can rebuild oldText verbatim in one turn
+			// instead of re-reading blind. Skipped on the quote-style path, which
+			// already names the precise fix. Anchored near the first-line locator
+			// when known, else scans the whole file.
+			if (!errorMsg.includes("quote style")) {
+				const similarLines = findSimilarLines(
+					content,
+					oldText.replace(/\r\n/g, "\n").split("\n")[0],
+					{ nearLine: findFirstLineOfOldText(content, oldText) },
+				);
+				if (similarLines.length > 0) {
+					errorMsg += formatSimilarLines(similarLines);
+				}
+			}
 			errors.push(errorMsg);
 			logReadGuardEvent({
 				event: "oldtext_not_found",
@@ -620,6 +688,37 @@ export function tryCorrectIndentationMismatchFromContent(
 		return blankLineCandidate;
 	}
 
+	// Tier B: interior-whitespace drift the earlier tiers can't bridge — the
+	// indentation- and blank-line-insensitive tiers both still require each
+	// non-blank line to match character-for-character after trimming only the
+	// OUTER edges. When whitespace drifts INSIDE a line (a formatter collapsed
+	// `a  +  b` → `a + b`, re-spaced operators/args, etc.) those tiers miss.
+	// Matching on a fully-whitespace-collapsed signature catches it. Same
+	// safety contract as Tier A: unique-match guarded, ≥2 anchors, recovers the
+	// verbatim file span.
+	const whitespaceCandidate = findWhitespaceInsensitiveCandidate(
+		content,
+		normalized,
+	);
+	if (whitespaceCandidate !== undefined) {
+		return whitespaceCandidate;
+	}
+
+	// Tier C: Unicode-punctuation drift the whitespace tiers can't bridge — the
+	// model emitted smart quotes / em-dashes / NBSP where the file has straight
+	// quotes / hyphens / regular spaces (or vice versa), common when text is
+	// pasted from rendered Markdown or the model "tidies" punctuation. Folding
+	// those to their ASCII equivalents (on top of whitespace collapse) catches it.
+	// Same safety contract as Tier B: signature-matched, unique-match guarded, ≥2
+	// anchors, recovers the verbatim file span (the file's real characters).
+	const unicodeCandidate = findUnicodePunctuationInsensitiveCandidate(
+		content,
+		normalized,
+	);
+	if (unicodeCandidate !== undefined) {
+		return unicodeCandidate;
+	}
+
 	return undefined;
 }
 
@@ -730,6 +829,200 @@ function findBlankLineInsensitiveCandidate(
 	const [start, end] = spans[0];
 	const candidate = contentLines.slice(start, end + 1).join("\n");
 	return candidate === oldText ? undefined : candidate;
+}
+
+/**
+ * Tier B of the whitespace autopatch: tolerate INTERIOR whitespace divergence
+ * that {@link findBlankLineInsensitiveCandidate} (outer-trim only) and the
+ * fixed-width converters can't bridge. The signature is each non-blank line
+ * with **all** whitespace removed (`/\s+/g` → ""), so re-spacing inside a line
+ * — `a  +  b` ↔ `a + b`, `foo( x )` ↔ `foo(x)`, tab/space mixes mid-line — no
+ * longer breaks the match. This mirrors the content-hash normalization the
+ * read-guard already uses for staleness (`lineContentHash`), so a span that
+ * passes here is a span the guard considers semantically identical.
+ *
+ * Safety mirrors Tier A exactly: matches by the collapsed signature but
+ * **recovers and returns the real file span** (verbatim bytes, interior blanks
+ * included) so the applied oldText is exact; requires the signature to match
+ * **exactly once** (0 or ≥2 → undefined); anchored on ≥2 non-blank lines to
+ * resist single-line collisions (collapsing whitespace makes single-line
+ * collisions more likely, so the ≥2 floor matters more here than in Tier A).
+ */
+function findWhitespaceInsensitiveCandidate(
+	content: string,
+	oldText: string,
+): string | undefined {
+	const collapse = (line: string) => line.replace(/\s+/g, "");
+	const isBlank = (line: string) => collapse(line) === "";
+
+	const contentLines = content.split("\n");
+	const oldSignature = oldText
+		.split("\n")
+		.map(collapse)
+		.filter((line) => line !== "");
+	if (oldSignature.length < 2) return undefined;
+
+	const spans: Array<[number, number]> = [];
+	for (let start = 0; start < contentLines.length; start += 1) {
+		if (collapse(contentLines[start]) !== oldSignature[0]) continue;
+		let contentIdx = start + 1;
+		let sigIdx = 1;
+		let end = start;
+		let ok = true;
+		while (sigIdx < oldSignature.length) {
+			while (
+				contentIdx < contentLines.length &&
+				isBlank(contentLines[contentIdx])
+			)
+				contentIdx += 1;
+			if (
+				contentIdx >= contentLines.length ||
+				collapse(contentLines[contentIdx]) !== oldSignature[sigIdx]
+			) {
+				ok = false;
+				break;
+			}
+			end = contentIdx;
+			sigIdx += 1;
+			contentIdx += 1;
+		}
+		if (ok) spans.push([start, end]);
+	}
+
+	if (spans.length !== 1) return undefined;
+	const [start, end] = spans[0];
+	const candidate = contentLines.slice(start, end + 1).join("\n");
+	return candidate === oldText ? undefined : candidate;
+}
+
+/**
+ * Fold the Unicode punctuation that models and rendered text routinely swap for
+ * ASCII (and back) to a canonical ASCII form: smart single/double quotes →
+ * `'`/`"`, the dash family (hyphen, figure/en/em dash, horizontal bar, minus) →
+ * `-`, and non-breaking / typographic spaces → a regular space. Used only to
+ * build a match signature — never to rewrite file content.
+ */
+function normalizeUnicodePunctuation(text: string): string {
+	return text
+		.replace(/[‘’‚‛]/g, "'")
+		.replace(/[“”„‟]/g, '"')
+		.replace(/[‐-―−]/g, "-")
+		.replace(/[  -   　]/g, " ");
+}
+
+/**
+ * Tier C of the autopatch ladder: tolerate Unicode-punctuation divergence the
+ * whitespace tiers can't bridge (smart quotes ↔ straight, em/en-dash ↔ hyphen,
+ * NBSP ↔ space). The signature folds Unicode punctuation to ASCII and then
+ * collapses all whitespace (so it subsumes Tier B and additionally absorbs the
+ * punctuation swap). Safety mirrors Tier B exactly: matches by the folded
+ * signature but **recovers and returns the verbatim file span** (the file's real
+ * characters), requires the signature to match **exactly once**, and anchors on
+ * ≥2 non-blank lines to resist single-line collisions.
+ */
+function findUnicodePunctuationInsensitiveCandidate(
+	content: string,
+	oldText: string,
+): string | undefined {
+	const fold = (line: string) =>
+		normalizeUnicodePunctuation(line).replace(/\s+/g, "");
+	const isBlank = (line: string) => fold(line) === "";
+
+	const contentLines = content.split("\n");
+	const oldSignature = oldText
+		.split("\n")
+		.map(fold)
+		.filter((line) => line !== "");
+	if (oldSignature.length < 2) return undefined;
+
+	const spans: Array<[number, number]> = [];
+	for (let start = 0; start < contentLines.length; start += 1) {
+		if (fold(contentLines[start]) !== oldSignature[0]) continue;
+		let contentIdx = start + 1;
+		let sigIdx = 1;
+		let end = start;
+		let ok = true;
+		while (sigIdx < oldSignature.length) {
+			while (
+				contentIdx < contentLines.length &&
+				isBlank(contentLines[contentIdx])
+			)
+				contentIdx += 1;
+			if (
+				contentIdx >= contentLines.length ||
+				fold(contentLines[contentIdx]) !== oldSignature[sigIdx]
+			) {
+				ok = false;
+				break;
+			}
+			end = contentIdx;
+			sigIdx += 1;
+			contentIdx += 1;
+		}
+		if (ok) spans.push([start, end]);
+	}
+
+	if (spans.length !== 1) return undefined;
+	const [start, end] = spans[0];
+	const candidate = contentLines.slice(start, end + 1).join("\n");
+	return candidate === oldText ? undefined : candidate;
+}
+
+/**
+ * Shift a native range edit's line numbers, in place, by the relocation delta.
+ * Returns true when a range matching `from` was found and rewritten. Powers the
+ * content-verified range-stale auto-apply: the lines the agent meant to edit
+ * moved (proven by read-time line hashes uniquely matching the new location),
+ * so we re-target the positional edit to where the content now lives.
+ *
+ * Shifts by a constant line delta (`to[0] - from[0]`) applied to both the start
+ * and end lines, so inclusive/exclusive end conventions and any character
+ * offsets are preserved untouched — only the line position moves. Matches both
+ * the single `oldRange` shape and `edits[].range` entries.
+ */
+export function relocateEditRange(
+	input: unknown,
+	from: [number, number],
+	to: [number, number],
+): boolean {
+	const delta = to[0] - from[0];
+	if (delta === 0 || !input || typeof input !== "object") return false;
+	const editInput = input as {
+		oldRange?: { start?: { line?: number }; end?: { line?: number } };
+		edits?: Array<{
+			range?: { start?: { line?: number }; end?: { line?: number } };
+		}>;
+	};
+	const matchesFrom = (start?: number, end?: number) =>
+		start === from[0] && end === from[1];
+	let applied = false;
+
+	const oldRange = editInput.oldRange;
+	if (
+		oldRange?.start?.line !== undefined &&
+		oldRange.end?.line !== undefined &&
+		matchesFrom(oldRange.start.line, oldRange.end.line)
+	) {
+		oldRange.start.line += delta;
+		oldRange.end.line += delta;
+		applied = true;
+	}
+
+	if (Array.isArray(editInput.edits)) {
+		for (const edit of editInput.edits) {
+			const start = edit.range?.start?.line;
+			const end = edit.range?.end?.line ?? start;
+			if (start !== undefined && matchesFrom(start, end)) {
+				edit.range!.start!.line = start + delta;
+				if (edit.range?.end?.line !== undefined) {
+					edit.range.end.line += delta;
+				}
+				applied = true;
+			}
+		}
+	}
+
+	return applied;
 }
 
 export function getTouchedLinesForGuard(

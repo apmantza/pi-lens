@@ -5,14 +5,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const safeSpawnAsync = vi.fn();
 const safeSpawn = vi.fn();
-const isSgAvailable = vi.fn();
 const getSgCommand = vi.fn();
 const ensureTool = vi.fn();
 
 vi.mock("../../clients/safe-spawn.js", () => ({ safeSpawnAsync, safeSpawn }));
 vi.mock("../../clients/installer/index.js", () => ({ ensureTool }));
 vi.mock("../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
-	isSgAvailable,
 	getSgCommand,
 }));
 
@@ -31,32 +29,8 @@ describe("SgRunner", () => {
 			stderr: "",
 			error: undefined,
 		});
-		isSgAvailable.mockReturnValue(false);
 		getSgCommand.mockReturnValue({ cmd: "ast-grep", args: [] });
 		ensureTool.mockResolvedValue(null);
-	});
-
-	describe("isAvailable()", () => {
-		it("returns false when isSgAvailable returns false", async () => {
-			const { SgRunner } = await import("../../clients/sg-runner.js");
-			const runner = new SgRunner();
-			expect(runner.isAvailable()).toBe(false);
-		});
-
-		it("returns true when isSgAvailable returns true", async () => {
-			isSgAvailable.mockReturnValue(true);
-			const { SgRunner } = await import("../../clients/sg-runner.js");
-			const runner = new SgRunner();
-			expect(runner.isAvailable()).toBe(true);
-		});
-
-		it("caches the result on second call", async () => {
-			const { SgRunner } = await import("../../clients/sg-runner.js");
-			const runner = new SgRunner();
-			runner.isAvailable();
-			runner.isAvailable();
-			expect(isSgAvailable).toHaveBeenCalledTimes(1);
-		});
 	});
 
 	describe("ensureAvailable()", () => {
@@ -179,48 +153,7 @@ describe("SgRunner", () => {
 		});
 	});
 
-	describe("execSync()", () => {
-		it("returns output from stdout on success", async () => {
-			safeSpawn.mockReturnValue({
-				status: 0,
-				stdout: '{"file":"a.ts"}',
-				stderr: "",
-				error: undefined,
-			});
-			const { SgRunner } = await import("../../clients/sg-runner.js");
-			const runner = new SgRunner();
-			const result = runner.execSync(["run", "--pattern", "foo"]);
-			expect(result.output).toContain("a.ts");
-			expect(result.error).toBeUndefined();
-		});
-
-		it("falls back to stderr when stdout is empty", async () => {
-			safeSpawn.mockReturnValue({
-				status: 1,
-				stdout: "",
-				stderr: "command failed",
-				error: undefined,
-			});
-			const { SgRunner } = await import("../../clients/sg-runner.js");
-			const runner = new SgRunner();
-			const result = runner.execSync(["run"]);
-			expect(result.output).toBe("command failed");
-		});
-
-		it("returns error message when spawn errors", async () => {
-			safeSpawn.mockReturnValue({
-				status: null,
-				stdout: "",
-				stderr: "",
-				error: new Error("spawn failed"),
-			});
-			const { SgRunner } = await import("../../clients/sg-runner.js");
-			const runner = new SgRunner();
-			const result = runner.execSync(["run"]);
-			expect(result.error).toBe("spawn failed");
-			expect(result.output).toBe("");
-		});
-
+	describe("formatMatches()", () => {
 		it("includes [Language] suffix in formatMatches when language field is present", async () => {
 			const { SgRunner } = await import("../../clients/sg-runner.js");
 			const runner = new SgRunner();
@@ -270,23 +203,6 @@ describe("SgRunner", () => {
 			const output = runner.formatMatches(matches as any);
 			expect(output).toContain("[TypeScript]");
 			expect(output).toContain("$MSG=msg");
-		});
-
-		it("passes command args through to safeSpawn", async () => {
-			safeSpawn.mockReturnValue({
-				status: 0,
-				stdout: "",
-				stderr: "",
-				error: undefined,
-			});
-			const { SgRunner } = await import("../../clients/sg-runner.js");
-			const runner = new SgRunner();
-			runner.execSync(["scan", "--json"]);
-			expect(safeSpawn).toHaveBeenCalledWith(
-				"ast-grep",
-				expect.arrayContaining(["scan", "--json"]),
-				expect.any(Object),
-			);
 		});
 	});
 

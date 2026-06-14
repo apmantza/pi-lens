@@ -8,9 +8,24 @@ import type {
 } from "../../clients/review-graph/types.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
+type ImpactHitMock = {
+	symbol: string;
+	file: string;
+	depth: number;
+	relation: string;
+};
+
 const mocks = vi.hoisted(() => ({
 	buildOrUpdateGraph: vi.fn(),
 	computeImpactCascade: vi.fn(),
+	computeTransitiveImpact: vi.fn(
+		(): {
+			seedFile: string;
+			hits: ImpactHitMock[];
+			truncated: boolean;
+			maxDepthReached: number;
+		} => ({ seedFile: "", hits: [], truncated: false, maxDepthReached: 0 }),
+	),
 	formatImpactCascade: vi.fn(),
 	getLSPService: vi.fn(),
 }));
@@ -18,6 +33,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../../clients/review-graph/service.js", () => ({
 	buildOrUpdateGraph: mocks.buildOrUpdateGraph,
 	computeImpactCascade: mocks.computeImpactCascade,
+	computeTransitiveImpact: mocks.computeTransitiveImpact,
 	formatImpactCascade: mocks.formatImpactCascade,
 }));
 
@@ -66,6 +82,12 @@ describe("computeCascadeForFile", () => {
 		vi.resetModules();
 		mocks.buildOrUpdateGraph.mockReset().mockResolvedValue(emptyGraph());
 		mocks.computeImpactCascade.mockReset();
+		mocks.computeTransitiveImpact.mockReset().mockReturnValue({
+			seedFile: "",
+			hits: [],
+			truncated: false,
+			maxDepthReached: 0,
+		});
 		mocks.formatImpactCascade.mockReset().mockReturnValue("impact header");
 		mocks.getLSPService.mockReset();
 		const { resetDispatchBaselines } = await import(
@@ -110,6 +132,61 @@ describe("computeCascadeForFile", () => {
 			expect(touchFile).not.toHaveBeenCalled();
 			expect(result?.result?.neighbors[0]?.diagnostics[0]?.filePath).toBe(neighbor);
 			expect(result?.result?.formatted).toContain("neighbor.ts");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("includes bounded transitive (depth>1) dependents as neighbors", async () => {
+		const env = setupTestEnvironment("cascade-transitive-");
+		try {
+			const primary = path.join(env.tmpDir, "src", "primary.ts");
+			const direct = path.join(env.tmpDir, "src", "direct.ts");
+			const indirect = path.join(env.tmpDir, "src", "indirect.ts");
+			fs.mkdirSync(path.dirname(primary), { recursive: true });
+			fs.writeFileSync(primary, "export const x = 1;\n");
+			fs.writeFileSync(direct, "import { x } from './primary';\n");
+			fs.writeFileSync(indirect, "import './direct';\n");
+			// One-hop cascade sees only the direct importer…
+			mocks.computeImpactCascade.mockReturnValue(impact(primary, [direct]));
+			// …while the transitive walk also reaches the depth-2 dependent.
+			mocks.computeTransitiveImpact.mockReturnValue({
+				seedFile: primary,
+				hits: [
+					{ symbol: "", file: direct, depth: 1, relation: "imports" },
+					{ symbol: "", file: indirect, depth: 2, relation: "imports" },
+				],
+				truncated: false,
+				maxDepthReached: 2,
+			});
+			mocks.getLSPService.mockReturnValue({
+				getAllDiagnostics: vi.fn().mockResolvedValue(
+					new Map([
+						[
+							direct.split(path.sep).join("/"),
+							{ diags: [lspError("d")], ts: Date.now() },
+						],
+						[
+							indirect.split(path.sep).join("/"),
+							{ diags: [lspError("i")], ts: Date.now() },
+						],
+					]),
+				),
+				touchFile: vi.fn(),
+				getDiagnostics: vi.fn(),
+			});
+
+			const { computeCascadeForFile } = await import(
+				"../../clients/dispatch/integration.js"
+			);
+			const result = await computeCascadeForFile(primary, env.tmpDir, {
+				turnSeq: 1,
+				writeSeq: 1,
+			});
+			const neighborFiles = result?.result?.neighbors.map(
+				(n) => n.diagnostics[0]?.filePath,
+			);
+			expect(neighborFiles).toContain(indirect); // depth-2 dependent surfaced
 		} finally {
 			env.cleanup();
 		}

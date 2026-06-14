@@ -57,7 +57,7 @@ const rustClippyRunner: RunnerDefinition = {
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		// Resolve cargo path using platform-aware lookup (handles ~/.cargo/bin on Windows)
-		const cargoExe = rustClient.findCargoPath();
+		const cargoExe = await rustClient.findCargoPathAsync();
 		if (!cargoExe) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}

@@ -7,7 +7,6 @@
  * - Platform-specific handling
  */
 
-import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { access, appendFile, mkdir, readFile, stat } from "node:fs/promises";
 import os from "node:os";
@@ -17,7 +16,7 @@ import { getGlobalPiLensDir } from "../file-utils.js";
 import { KIND_EXTENSIONS } from "../file-kinds.js";
 import { ensureTool, getToolEnvironment } from "../installer/index.js";
 import { logLatency } from "../latency-logger.js";
-import { isCommandAvailableAsync } from "../safe-spawn.js";
+import { isCommandAvailableAsync, safeSpawnAsync } from "../safe-spawn.js";
 import { type LSPProcess, launchLSP } from "./launch.js";
 import { normalizeMapKey } from "./path-utils.js";
 
@@ -796,49 +795,46 @@ function isOnPath(command: string): Promise<boolean> {
 
 /**
  * Try to install gopls via `go install`. Resolves true if the install succeeded.
+ *
+ * Async (was a blocking `spawnSync`): runs on the LSP runtime-install gate, off
+ * the event loop. `ignoreAmbientSignal` keeps the install running to completion
+ * even if the agent turn is interrupted, matching the old uncancellable sync
+ * behaviour. Success semantics preserved: true iff the process exits 0.
  */
-function tryGoInstallGopls(): Promise<boolean> {
-	return new Promise((resolve) => {
-		const isWindows = process.platform === "win32";
-		const proc = spawnSync(
-			isWindows ? "go.exe" : "go",
-			["install", "golang.org/x/tools/gopls@latest"],
-			{ stdio: "ignore", shell: false },
-		);
-		resolve(proc.status === 0);
-	});
+export async function tryGoInstallGopls(): Promise<boolean> {
+	const isWindows = process.platform === "win32";
+	const result = await safeSpawnAsync(
+		isWindows ? "go.exe" : "go",
+		["install", "golang.org/x/tools/gopls@latest"],
+		{ timeout: 180000, ignoreAmbientSignal: true },
+	);
+	return !result.error && result.status === 0;
 }
 
-function tryDotnetToolInstall(tool: string): Promise<boolean> {
-	return new Promise((resolve) => {
-		mkdirSync(PI_LENS_BIN_DIR, { recursive: true });
-		const proc = spawnSync(
-			"dotnet",
-			["tool", "install", "--tool-path", PI_LENS_BIN_DIR, tool],
-			{ encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], shell: false },
-		);
-		if (proc.status === 0) {
-			resolve(true);
-			return;
-		}
+export async function tryDotnetToolInstall(tool: string): Promise<boolean> {
+	mkdirSync(PI_LENS_BIN_DIR, { recursive: true });
+	const result = await safeSpawnAsync(
+		"dotnet",
+		["tool", "install", "--tool-path", PI_LENS_BIN_DIR, tool],
+		{ timeout: 180000, ignoreAmbientSignal: true },
+	);
+	if (!result.error && result.status === 0) return true;
 
-		const stderr = proc.stderr ?? "";
-		if (stderr.includes("No NuGet sources are defined or enabled")) {
-			logSessionStart(
-				`lsp dotnet-install: NuGet sources missing — cannot install ${tool}. ` +
-					`Run: dotnet nuget add source https://api.nuget.org/v3/index.json -n nuget.org`,
-			);
-			resolve(false);
-			return;
-		}
-
-		const updateProc = spawnSync(
-			"dotnet",
-			["tool", "update", "--tool-path", PI_LENS_BIN_DIR, tool],
-			{ encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], shell: false },
+	const stderr = result.stderr ?? "";
+	if (stderr.includes("No NuGet sources are defined or enabled")) {
+		logSessionStart(
+			`lsp dotnet-install: NuGet sources missing — cannot install ${tool}. ` +
+				`Run: dotnet nuget add source https://api.nuget.org/v3/index.json -n nuget.org`,
 		);
-		resolve(updateProc.status === 0);
-	});
+		return false;
+	}
+
+	const updateResult = await safeSpawnAsync(
+		"dotnet",
+		["tool", "update", "--tool-path", PI_LENS_BIN_DIR, tool],
+		{ timeout: 180000, ignoreAmbientSignal: true },
+	);
+	return !updateResult.error && updateResult.status === 0;
 }
 
 /**
@@ -914,28 +910,27 @@ function dotnetToolCandidates(tool: string): string[] {
 /**
  * Try to install a gem to the pi-lens bin dir. Resolves true if the install succeeded.
  */
-async function tryGemInstall(gem: string): Promise<boolean> {
+export async function tryGemInstall(gem: string): Promise<boolean> {
 	const { join } = await import("node:path");
 	const { homedir } = await import("node:os");
 	const binDir = join(homedir(), ".pi-lens", "bin");
 	const { mkdir } = await import("node:fs/promises");
 	await mkdir(binDir, { recursive: true });
 
-	return new Promise((resolve) => {
-		const proc = spawnSync(
-			"gem",
-			["install", gem, "--bindir", binDir, "--no-document"],
-			{ stdio: "ignore", shell: false },
-		);
-		// Add binDir to PATH so subsequent lookups find the installed gem
-		if (proc.status === 0) {
-			const sep = process.platform === "win32" ? ";" : ":";
-			if (!process.env.PATH?.includes(binDir)) {
-				process.env.PATH = `${binDir}${sep}${process.env.PATH ?? ""}`;
-			}
+	const result = await safeSpawnAsync(
+		"gem",
+		["install", gem, "--bindir", binDir, "--no-document"],
+		{ timeout: 180000, ignoreAmbientSignal: true },
+	);
+	const ok = !result.error && result.status === 0;
+	// Add binDir to PATH so subsequent lookups find the installed gem
+	if (ok) {
+		const sep = process.platform === "win32" ? ";" : ":";
+		if (!process.env.PATH?.includes(binDir)) {
+			process.env.PATH = `${binDir}${sep}${process.env.PATH ?? ""}`;
 		}
-		resolve(proc.status === 0);
-	});
+	}
+	return ok;
 }
 
 /**

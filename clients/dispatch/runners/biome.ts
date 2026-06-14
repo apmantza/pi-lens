@@ -38,7 +38,7 @@ const biomeRunner: RunnerDefinition = {
 		let cmd: string | null = null;
 		let useNpx = false;
 
-		if (await (biome.isAvailableAsync?.(cwd) ?? biome.isAvailable(cwd))) {
+		if (await (biome.isAvailableAsync(cwd))) {
 			cmd = biome.getCommand(cwd);
 		}
 

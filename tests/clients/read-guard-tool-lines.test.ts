@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	countFileLines,
 	getTouchedLinesForGuard,
+	relocateEditRange,
 	stripOldTextTrailingWhitespace,
 	tryCorrectIndentationMismatch,
 } from "../../clients/read-guard-tool-lines.ts";
@@ -882,6 +883,286 @@ describe("tryCorrectIndentationMismatch — mid-block blank-line drift (Tier A, 
 		} finally {
 			env.cleanup();
 		}
+	});
+});
+
+describe("tryCorrectIndentationMismatch — interior whitespace drift (Tier B)", () => {
+	it("recovers the real span when oldText drops spaces around operators", () => {
+		const env = setupTestEnvironment("pi-lens-ws-operators-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			const body = [
+				"function calc() {",
+				"\tconst sum = a + b;",
+				"\tconst product = a * b;",
+				"\treturn sum + product;",
+				"}",
+			].join("\n");
+			fs.writeFileSync(filePath, `${body}\n`);
+			// oldText collapsed the interior spacing the earlier tiers can't bridge
+			// (they only trim the outer edges), and used 4-space outer indent.
+			const oldText = [
+				"    const sum = a+b;",
+				"    const product = a*b;",
+			].join("\n");
+			const result = tryCorrectIndentationMismatch(oldText, filePath);
+			expect(result).toBe(
+				["\tconst sum = a + b;", "\tconst product = a * b;"].join("\n"),
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("resolves the touched range after interior-whitespace correction", () => {
+		const env = setupTestEnvironment("pi-lens-ws-resolve-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			fs.writeFileSync(
+				filePath,
+				"const x = foo( a, b );\nconst y = bar( c, d );\n",
+			);
+			const result = getTouchedLinesForGuard(
+				{
+					toolName: "edit",
+					input: {
+						edits: [
+							{
+								oldText: "const x = foo(a, b);\nconst y = bar(c, d);",
+								newText: "const x = foo(a, b, c);\nconst y = bar(c, d);",
+							},
+						],
+					},
+				},
+				filePath,
+			);
+			expect(result.preflightError).toBeUndefined();
+			expect(result.touchedLines).toEqual([1, 2]);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("does NOT patch when the collapsed signature is ambiguous", () => {
+		const env = setupTestEnvironment("pi-lens-ws-ambig-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			const body = [
+				"const a = 1 + 2;",
+				"const b = 3 + 4;",
+				"doSomething();",
+				"const a = 1 + 2;",
+				"const b = 3 + 4;",
+			].join("\n");
+			fs.writeFileSync(filePath, `${body}\n`);
+			const oldText = ["const a = 1+2;", "const b = 3+4;"].join("\n");
+			expect(tryCorrectIndentationMismatch(oldText, filePath)).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("does NOT patch a single-line oldText (no >=2 anchors)", () => {
+		const env = setupTestEnvironment("pi-lens-ws-single-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			fs.writeFileSync(filePath, "const total = a + b + c;\n");
+			expect(
+				tryCorrectIndentationMismatch("const total = a+b+c;", filePath),
+			).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+});
+
+describe("tryCorrectIndentationMismatch — Unicode punctuation drift (Tier C)", () => {
+	// Special chars are written as \u escapes so the source stays ASCII:
+	// “/” = smart double quotes, — = em-dash,   = NBSP.
+	const FILE = [
+		'const label = "open";',
+		"const total = a - b;",
+		"const note = a + b;",
+	].join("\n");
+
+	function recover(oldText: string): string | undefined {
+		const env = setupTestEnvironment("pi-lens-unicode-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			fs.writeFileSync(filePath, `${FILE}\n`);
+			return tryCorrectIndentationMismatch(oldText, filePath);
+		} finally {
+			env.cleanup();
+		}
+	}
+
+	it("recovers the verbatim span when oldText uses smart double quotes", () => {
+		const oldText = [
+			"const label = “open”;",
+			"const total = a - b;",
+		].join("\n");
+		expect(recover(oldText)).toBe(
+			['const label = "open";', "const total = a - b;"].join("\n"),
+		);
+	});
+
+	it("recovers the verbatim span when oldText uses an em-dash for a hyphen", () => {
+		const oldText = [
+			"const total = a — b;",
+			"const note = a + b;",
+		].join("\n");
+		expect(recover(oldText)).toBe(
+			["const total = a - b;", "const note = a + b;"].join("\n"),
+		);
+	});
+
+	it("recovers the verbatim span when oldText uses a non-breaking space", () => {
+		const oldText = [
+			"const total = a - b;",
+			"const note = a + b;",
+		].join("\n");
+		expect(recover(oldText)).toBe(
+			["const total = a - b;", "const note = a + b;"].join("\n"),
+		);
+	});
+
+	it("does NOT patch a single-line oldText (no >=2 anchors)", () => {
+		expect(recover("const label = “open”;")).toBeUndefined();
+	});
+
+	it("does NOT false-match genuinely absent content", () => {
+		const oldText = ["const missing = x — y;", "return nope;"].join("\n");
+		expect(recover(oldText)).toBeUndefined();
+	});
+
+	it("does NOT patch when the folded signature is ambiguous", () => {
+		const env = setupTestEnvironment("pi-lens-unicode-ambig-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			const body = [
+				"const total = a - b;",
+				"const note = a + b;",
+				"gap();",
+				"const total = a - b;",
+				"const note = a + b;",
+			].join("\n");
+			fs.writeFileSync(filePath, `${body}\n`);
+			const oldText = [
+				"const total = a — b;",
+				"const note = a + b;",
+			].join("\n");
+			expect(tryCorrectIndentationMismatch(oldText, filePath)).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+});
+
+describe("getTouchedLinesForGuard — did-you-mean suggestions", () => {
+	it("suggests the closest current line when oldText nearly matches", () => {
+		const env = setupTestEnvironment("pi-lens-didyoumean-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			fs.writeFileSync(
+				filePath,
+				[
+					"function findModelByHint(name: string) {",
+					"\treturn registry.lookup(name);",
+					"}",
+				].join("\n"),
+			);
+			const result = getTouchedLinesForGuard(
+				{
+					toolName: "edit",
+					input: {
+						path: filePath,
+						edits: [
+							{
+								oldText: "\treturn registry.lookupExact(name);",
+								newText: "\treturn registry.lookupStrict(name);",
+							},
+						],
+					},
+				},
+				filePath,
+			);
+			const err = result.preflightError as string;
+			expect(err).toMatch(/was not found/);
+			expect(err).toMatch(/Did you mean/);
+			expect(err).toMatch(/registry\.lookup\(name\)/);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("omits suggestions when nothing in the file is close", () => {
+		const env = setupTestEnvironment("pi-lens-didyoumean-none-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			fs.writeFileSync(filePath, "const alpha = 1;\nconst beta = 2;\n");
+			const result = getTouchedLinesForGuard(
+				{
+					toolName: "edit",
+					input: {
+						path: filePath,
+						edits: [
+							{
+								oldText: "completelyUnrelated.invocation(zzz, qqq);",
+								newText: "noop",
+							},
+						],
+					},
+				},
+				filePath,
+			);
+			const err = result.preflightError as string;
+			expect(err).toMatch(/was not found/);
+			expect(err).not.toMatch(/Did you mean/);
+		} finally {
+			env.cleanup();
+		}
+	});
+});
+
+describe("relocateEditRange", () => {
+	it("shifts a matching oldRange by the relocation delta, in place", () => {
+		const input = {
+			oldRange: { start: { line: 3 }, end: { line: 4 } },
+			newText: "x",
+		};
+		expect(relocateEditRange(input, [3, 4], [6, 7])).toBe(true);
+		expect(input.oldRange).toEqual({ start: { line: 6 }, end: { line: 7 } });
+	});
+
+	it("shifts a matching edits[].range and preserves character offsets", () => {
+		const input = {
+			edits: [
+				{
+					range: {
+						start: { line: 10, character: 2 },
+						end: { line: 12, character: 0 },
+					},
+					newText: "y",
+				},
+			],
+		};
+		expect(relocateEditRange(input, [10, 12], [25, 27])).toBe(true);
+		expect(input.edits[0].range).toEqual({
+			start: { line: 25, character: 2 },
+			end: { line: 27, character: 0 },
+		});
+	});
+
+	it("returns false when no range matches `from`", () => {
+		const input = { oldRange: { start: { line: 1 }, end: { line: 2 } } };
+		expect(relocateEditRange(input, [3, 4], [6, 7])).toBe(false);
+		expect(input.oldRange).toEqual({ start: { line: 1 }, end: { line: 2 } });
+	});
+
+	it("returns false for a zero delta or a non-object input", () => {
+		const input = { oldRange: { start: { line: 3 }, end: { line: 4 } } };
+		expect(relocateEditRange(input, [3, 4], [3, 4])).toBe(false);
+		expect(relocateEditRange(undefined, [3, 4], [6, 7])).toBe(false);
 	});
 });
 

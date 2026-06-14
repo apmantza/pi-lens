@@ -62,7 +62,7 @@ const taploRunner: RunnerDefinition = {
 		}
 
 		let cmd: string | null = null;
-		if (await (taplo.isAvailableAsync?.(cwd) ?? taplo.isAvailable(cwd))) {
+		if (await (taplo.isAvailableAsync(cwd))) {
 			cmd = taplo.getCommand(cwd);
 		} else {
 			cmd = await resolveToolCommandWithInstallFallback(cwd, "taplo");

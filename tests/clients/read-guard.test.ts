@@ -293,6 +293,183 @@ describe("ReadGuard", () => {
 			}
 		});
 
+		it("hints the relocated range when read content shifted position", () => {
+			const env = setupTestEnvironment("read-guard-relocate-");
+			try {
+				const filePath = path.join(env.tmpDir, "api.ts");
+				fs.writeFileSync(
+					filePath,
+					"alpha\nbeta\ntargetOne\ntargetTwo\ngamma\n",
+				);
+				const guard = createReadGuard("test-session");
+				guard.recordRead(
+					createReadRecord(filePath, {
+						effectiveOffset: 1,
+						effectiveLimit: 5,
+					}),
+				);
+				// Insert three lines at the top — targetOne/targetTwo shift 3-4 → 6-7.
+				fs.writeFileSync(
+					filePath,
+					"x\ny\nz\nalpha\nbeta\ntargetOne\ntargetTwo\ngamma\n",
+				);
+				fileTimeState.hasChanged = false;
+
+				const verdict = guard.checkEdit(filePath, [3, 4]);
+				expect(verdict.action).toBe("block");
+				expect(verdict.reason).toContain("Edit range changed since read");
+				expect(verdict.reason).toContain("now appears unchanged at lines 6-7");
+				expect(verdict.details?.relocation).toEqual({
+					from: [3, 4],
+					to: [6, 7],
+				});
+				// Single-range edit → actionable auto-apply signal is offered.
+				expect(verdict.relocation).toEqual({ from: [3, 4], to: [6, 7] });
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("omits the relocation hint when the shifted content is ambiguous", () => {
+			const env = setupTestEnvironment("read-guard-relocate-ambig-");
+			try {
+				const filePath = path.join(env.tmpDir, "api.ts");
+				fs.writeFileSync(filePath, "alpha\ntargetA\ntargetB\nbeta\n");
+				const guard = createReadGuard("test-session");
+				guard.recordRead(
+					createReadRecord(filePath, {
+						effectiveOffset: 1,
+						effectiveLimit: 4,
+					}),
+				);
+				// Lines 2-3 are overwritten (→ range-stale) and the original
+				// targetA/targetB pair now reappears in TWO places → relocation
+				// must refuse (ambiguous, safety).
+				fs.writeFileSync(
+					filePath,
+					"alpha\nCHANGED\nLINE\nbeta\ntargetA\ntargetB\nfiller\ntargetA\ntargetB\n",
+				);
+				fileTimeState.hasChanged = false;
+
+				const verdict = guard.checkEdit(filePath, [2, 3]);
+				expect(verdict.action).toBe("block");
+				expect(verdict.reason).toContain("Edit range changed since read");
+				expect(verdict.reason).not.toContain("now appears unchanged");
+				expect(verdict.details?.relocation).toBeUndefined();
+				expect(verdict.relocation).toBeUndefined();
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("does not offer auto-apply relocation for a multi-range stale edit", () => {
+			const env = setupTestEnvironment("read-guard-relocate-multi-");
+			try {
+				const filePath = path.join(env.tmpDir, "api.ts");
+				fs.writeFileSync(
+					filePath,
+					"alpha\ntargetOne\ntargetTwo\nbeta\nkeepA\nkeepB\n",
+				);
+				const guard = createReadGuard("test-session");
+				guard.recordRead(
+					createReadRecord(filePath, {
+						effectiveOffset: 1,
+						effectiveLimit: 6,
+					}),
+				);
+				// targetOne/targetTwo shift 2-3 → 5-6; the edit is multi-range, so the
+				// stale sub-range gets a HINT but no actionable auto-apply signal.
+				fs.writeFileSync(
+					filePath,
+					"x\ny\nz\nalpha\ntargetOne\ntargetTwo\nbeta\nkeepA\nkeepB\n",
+				);
+				fileTimeState.hasChanged = false;
+
+				const verdict = guard.checkEdit(
+					filePath,
+					[2, 6],
+					[
+						[2, 3],
+						[5, 6],
+					],
+				);
+				expect(verdict.action).toBe("block");
+				expect(verdict.relocation).toBeUndefined();
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("relocates via the adaptive window when content is duplicated far away but locally unique", () => {
+			const env = setupTestEnvironment("read-guard-relocate-window-");
+			try {
+				const filePath = path.join(env.tmpDir, "api.ts");
+				fs.writeFileSync(
+					filePath,
+					"alpha\nbeta\nneedleOne\nneedleTwo\ngamma\n",
+				);
+				const guard = createReadGuard("test-session");
+				guard.recordRead(
+					createReadRecord(filePath, {
+						effectiveOffset: 1,
+						effectiveLimit: 5,
+					}),
+				);
+				// Prepend 3 lines (needles shift 3-4 → 6-7) AND add a second copy of
+				// the pair far below (line ~59-60), outside the adaptive window. The
+				// whole-file scan sees two matches; the window fallback keeps the
+				// near, locally-unique one.
+				const filler = Array.from({ length: 50 }, (_, i) => `filler${i}`).join(
+					"\n",
+				);
+				fs.writeFileSync(
+					filePath,
+					`x\ny\nz\nalpha\nbeta\nneedleOne\nneedleTwo\ngamma\n${filler}\nneedleOne\nneedleTwo\n`,
+				);
+				fileTimeState.hasChanged = false;
+
+				const verdict = guard.checkEdit(filePath, [3, 4]);
+				expect(verdict.action).toBe("block");
+				expect(verdict.relocation).toEqual({ from: [3, 4], to: [6, 7] });
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("still relocates a far-shifted edit when the content is globally unique", () => {
+			const env = setupTestEnvironment("read-guard-relocate-far-");
+			try {
+				const filePath = path.join(env.tmpDir, "api.ts");
+				fs.writeFileSync(
+					filePath,
+					"alpha\nbeta\nuniqueOne\nuniqueTwo\ngamma\n",
+				);
+				const guard = createReadGuard("test-session");
+				guard.recordRead(
+					createReadRecord(filePath, {
+						effectiveOffset: 1,
+						effectiveLimit: 5,
+					}),
+				);
+				// Prepend 60 lines — far beyond the window — but the content stays
+				// unique, so global uniqueness still relocates it (no regression).
+				const filler = Array.from({ length: 60 }, (_, i) => `pad${i}`).join(
+					"\n",
+				);
+				fs.writeFileSync(
+					filePath,
+					`${filler}\nalpha\nbeta\nuniqueOne\nuniqueTwo\ngamma\n`,
+				);
+				fileTimeState.hasChanged = false;
+
+				const verdict = guard.checkEdit(filePath, [3, 4]);
+				expect(verdict.action).toBe("block");
+				expect(verdict.relocation).toEqual({ from: [3, 4], to: [63, 64] });
+			} finally {
+				env.cleanup();
+			}
+		});
+
 		it("skips snapshot check when skipSnapshotCheck is set (content-match validated)", () => {
 			const env = setupTestEnvironment("read-guard-snapshot-skip-");
 			try {

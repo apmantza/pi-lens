@@ -21,7 +21,7 @@ const fishIndentRunner: RunnerDefinition = {
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = ctx.cwd || process.cwd();
 
-		const available = await (fishIndent.isAvailableAsync?.(cwd) ?? fishIndent.isAvailable(cwd));
+		const available = await (fishIndent.isAvailableAsync(cwd));
 		if (!available) return { status: "skipped", diagnostics: [], semantic: "none" };
 
 		const cmd = fishIndent.getCommand(cwd);

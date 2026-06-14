@@ -141,7 +141,7 @@ const sqlfluffRunner: RunnerDefinition = {
 		}
 
 		let cmd: string | null = null;
-		if (await (sqlfluff.isAvailableAsync?.(cwd) ?? sqlfluff.isAvailable(cwd))) {
+		if (await (sqlfluff.isAvailableAsync(cwd))) {
 			cmd = sqlfluff.getCommand(cwd);
 		} else {
 			cmd = await resolveToolCommandWithInstallFallback(cwd, "sqlfluff");

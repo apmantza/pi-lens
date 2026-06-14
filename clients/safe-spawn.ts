@@ -28,6 +28,39 @@ export interface SafeSpawnOptions {
 	cwd?: string;
 	env?: NodeJS.ProcessEnv;
 	signal?: AbortSignal;
+	/**
+	 * Opt out of the ambient turn abort signal (which is otherwise the default).
+	 * Set this for long, side-effecting operations like tool installs that should
+	 * run to completion even if the agent turn is interrupted — matching the old
+	 * uncancellable sync `safeSpawn` they replaced (so a half-finished
+	 * `gem install` / `go install` can't be left behind by an Esc). An explicit
+	 * `signal` still takes precedence over both.
+	 */
+	ignoreAmbientSignal?: boolean;
+}
+
+// ============================================================================
+// AMBIENT TURN ABORT SIGNAL
+// ============================================================================
+
+/**
+ * The current turn's abort signal, published by the lifecycle handlers from
+ * pi's `ctx.signal`. Threading the signal explicitly through every
+ * dispatch → runner → spawn call site would be invasive, so instead
+ * `safeSpawnAsync` defaults to this ambient signal when a call doesn't pass its
+ * own. The effect: pressing Esc mid-turn aborts in-flight linter / formatter /
+ * type-checker child processes (process-tree kill on Windows) instead of letting
+ * them run to their timeout.
+ *
+ * Each spawn captures the signal at call time (attaching its own abort listener),
+ * so clearing this after a handler returns only affects *future* spawns — work
+ * already in flight keeps the signal it started with.
+ */
+let ambientAbortSignal: AbortSignal | undefined;
+
+/** Publish (or clear, with `undefined`) the current turn's abort signal. */
+export function setAmbientAbortSignal(signal: AbortSignal | undefined): void {
+	ambientAbortSignal = signal;
 }
 
 // ============================================================================
@@ -65,7 +98,12 @@ export async function safeSpawnAsync(
 	options?: SafeSpawnOptions,
 ): Promise<SpawnResult> {
 	const timeout = options?.timeout ?? 30000;
-	const abortSignal = options?.signal;
+	// Fall back to the current turn's ambient signal (set from ctx.signal) so an
+	// Esc/abort mid-turn cancels dispatches that didn't thread a signal of their
+	// own — unless the caller opts out (installs, which must run to completion).
+	const abortSignal =
+		options?.signal ??
+		(options?.ignoreAmbientSignal ? undefined : ambientAbortSignal);
 
 	return new Promise((resolve) => {
 		// Check for early abort

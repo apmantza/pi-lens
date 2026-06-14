@@ -60,7 +60,7 @@ const yamllintRunner: RunnerDefinition = {
 		}
 
 		let cmd: string | null = null;
-		if (await (yamllint.isAvailableAsync?.(cwd) ?? yamllint.isAvailable(cwd))) {
+		if (await (yamllint.isAvailableAsync(cwd))) {
 			cmd = yamllint.getCommand(cwd);
 		} else {
 			cmd = await resolveToolCommandWithInstallFallback(cwd, "yamllint");

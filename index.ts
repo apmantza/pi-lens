@@ -1,17 +1,26 @@
 import * as nodeFs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "./clients/tool-event.js";
 import { AstGrepClient } from "./clients/ast-grep-client.js";
 import { loadBootstrapClients } from "./clients/bootstrap.js";
 import { CacheManager } from "./clients/cache-manager.js";
+import { resolvePackagePath } from "./clients/package-root.js";
 import {
 	clearWidgetState,
+	exportWidgetState,
+	importWidgetState,
+	type PersistedWidgetState,
 	renderWidget,
 	setRenderCallback,
 } from "./clients/widget-state.js";
+import {
+	dropStaleFiles,
+	loadSessionState,
+	saveSessionState,
+	sessionStartMode,
+} from "./clients/session-state-store.js";
 import { getDiagnosticTracker } from "./clients/diagnostic-tracker.js";
 import {
 	getCascadeSessionStats,
@@ -51,6 +60,7 @@ import { logReadGuardEvent } from "./clients/read-guard-logger.js";
 import {
 	countFileLines,
 	getTouchedLinesForGuard,
+	relocateEditRange,
 	tryCorrectIndentationMismatch,
 	tryCorrectIndentationMismatchFromContent,
 } from "./clients/read-guard-tool-lines.js";
@@ -75,7 +85,7 @@ import {
 } from "./clients/runtime-tool-result.js";
 import { cancelLSPIdleReset, handleTurnEnd } from "./clients/runtime-turn.js";
 import { isExternalOrVendorFile } from "./clients/path-utils.js";
-import { safeSpawnAsync } from "./clients/safe-spawn.js";
+import { safeSpawnAsync, setAmbientAbortSignal } from "./clients/safe-spawn.js";
 import {
 	createStarterSemgrepConfig,
 	findLocalSemgrepConfig,
@@ -529,6 +539,11 @@ export default function (pi: ExtensionAPI) {
 		process.env.PI_LENS_NO_CONTEXT_INJECTION !== "1" &&
 		!getLensFlag("no-lens-context");
 	let lensWidgetVisible = globalConfig?.widget?.visible !== false;
+	// #190 Phase 2: snapshot of the source session's diagnostics, captured at
+	// `session_before_fork` and adopted by the forked session at the subsequent
+	// `session_start` (reason="fork"). In-memory hand-off (same process) — avoids
+	// deriving the source id from a file path (the id lives in the file header).
+	let pendingForkSnapshot: PersistedWidgetState | undefined;
 	type LensWidgetTui = { requestRender: () => void };
 	type LensWidgetTheme = { fg: (color: string, s: string) => string };
 	type LensWidgetComponent = {
@@ -1092,7 +1107,14 @@ export default function (pi: ExtensionAPI) {
 		createAstGrepSearchTool(astGrepClient),
 		createAstGrepReplaceTool(astGrepClient),
 		createAstDumpTool(astGrepClient),
-		createLensDiagnosticsTool(cacheManager, () => runtime.projectRoot),
+		createLensDiagnosticsTool(
+			cacheManager,
+			() => runtime.projectRoot,
+			undefined,
+			// Flush pending per-edit dispatches before reporting so fixes made
+			// earlier this turn are reflected (not the stale pre-fix state) (#190).
+			() => flushDebouncedToolResults(),
+		),
 		createLspDiagnosticsTool(),
 		createLspNavigationTool((name) => getLensFlag(name)),
 	]) {
@@ -1112,9 +1134,13 @@ export default function (pi: ExtensionAPI) {
 
 	// --- Register skills with pi ---
 	pi.on("resources_discover", async (_event, _ctx) => {
-		// Get the extension directory (where this file is located)
-		const extensionDir = path.dirname(fileURLToPath(import.meta.url));
-		const skillsDir = path.join(extensionDir, "skills");
+		// Resolve skills relative to the package root (nearest package.json), not the
+		// module's own directory — under the compiled dist/ layout (#182) the module
+		// lives in dist/ but skills/ stays at the package root, so a module-relative
+		// join lands on the non-existent dist/skills/ and skills silently fail to load
+		// (#205). resolvePackagePath walks up to package.json, correct for both the
+		// source (index.ts at root) and dist (dist/index.js) layouts.
+		const skillsDir = resolvePackagePath(import.meta.url, "skills");
 
 		return {
 			skillPaths: [skillsDir],
@@ -1127,6 +1153,19 @@ export default function (pi: ExtensionAPI) {
 		try {
 			dbg("session_start fired");
 			updateRuntimeIdentityFromEvent(event);
+			// #190: pi's session lifecycle. `reason` distinguishes new/resume/fork/
+			// reload/startup; the STABLE session id comes from the session manager
+			// (the event carries none), and is what lets a resumed session rehydrate.
+			const sessionReason = (event as { reason?: string }).reason;
+			const stableSessionId = (() => {
+				try {
+					return (
+						ctx as { sessionManager?: { getSessionId?: () => string } }
+					)?.sessionManager?.getSessionId?.();
+				} catch {
+					return undefined;
+				}
+			})();
 			try {
 				await ensureLSPConfigInitialized(ctx.cwd ?? process.cwd());
 			} catch (cfgErr) {
@@ -1177,13 +1216,104 @@ export default function (pi: ExtensionAPI) {
 				resetLSPService,
 			});
 			ctx.ui && updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
-			clearWidgetState();
+
+			// Pin the stable identity + reason AFTER handleSessionStart (which ran
+			// resetForSession → a fresh random id); the stable id now wins (#190).
+			runtime.setSessionLifecycle({
+				sessionId: stableSessionId,
+				reason: sessionReason,
+			});
+
+			// Lifecycle-aware widget state (#190). The "should I rehydrate" signal is
+			// NOT the reason — it's whether a persisted snapshot exists for this
+			// STABLE session id. A `pi --session <id>` launch fires reason="startup"
+			// (not "resume" — that's only an in-process switchSession), so gating on
+			// "resume" alone missed the common resume path. So: fork branches from
+			// the in-memory stash; reload keeps state; new starts clean; everything
+			// else (resume / startup / default) rehydrates IFF a snapshot exists —
+			// a brand-new session has a fresh id with no file (→ clean), a
+			// resumed/launched one has its prior file (→ rehydrate).
+			const reasonLabel = sessionReason ?? "startup";
+			const startMode = sessionStartMode(sessionReason, !!pendingForkSnapshot);
+			if (startMode === "fork" && pendingForkSnapshot) {
+				// Branch the forked session from the source's in-memory snapshot, then
+				// persist it under the new session id so the fork owns its own copy.
+				clearWidgetState();
+				importWidgetState(pendingForkSnapshot);
+				const forkedFileCount = pendingForkSnapshot.files.length;
+				pendingForkSnapshot = undefined;
+				if (stableSessionId) {
+					void saveSessionState(
+						ctx.cwd ?? process.cwd(),
+						stableSessionId,
+						exportWidgetState(),
+					);
+				}
+				dbg(
+					`session_start: fork — branched ${forkedFileCount} file(s) from source`,
+				);
+			} else if (startMode === "keep") {
+				dbg("session_start: reload — keeping widget state");
+			} else if (startMode === "clean") {
+				pendingForkSnapshot = undefined;
+				clearWidgetState();
+				dbg("session_start: new — clean widget");
+			} else {
+				// maybe-rehydrate: covers resume AND startup (e.g. `pi --session <id>`)
+				pendingForkSnapshot = undefined;
+				clearWidgetState();
+				if (stableSessionId) {
+					const persisted = await loadSessionState(
+						ctx.cwd ?? process.cwd(),
+						stableSessionId,
+					);
+					if (persisted?.widget) {
+						// #180/#190: drop files changed on disk since the snapshot so a
+						// resume never surfaces stale diagnostics; they re-scan on edit.
+						const fresh = await dropStaleFiles(
+							persisted.widget,
+							persisted.savedAt,
+						);
+						const dropped =
+							persisted.widget.files.length - fresh.files.length;
+						importWidgetState(fresh);
+						dbg(
+							`session_start: ${reasonLabel} ${stableSessionId} — rehydrated ${fresh.files.length} file(s)` +
+								(dropped > 0 ? `, dropped ${dropped} stale` : ""),
+						);
+					} else {
+						dbg(
+							`session_start: ${reasonLabel} ${stableSessionId} — no persisted state (clean)`,
+						);
+					}
+				} else {
+					dbg(
+						`session_start: ${reasonLabel} — no stable session id (clean)`,
+					);
+				}
+			}
+
 			if (lensWidgetVisible) {
 				mountLensWidget(ctx.ui);
 			}
 		} catch (sessionErr) {
 			dbg(`session_start crashed: ${sessionErr}`);
 			dbg(`session_start crash stack: ${(sessionErr as Error).stack}`);
+		}
+	});
+
+	// #190 Phase 2: capture the source session's diagnostics just before a fork,
+	// so the forked session (its `session_start` fires with reason="fork") can
+	// branch from them instead of starting empty. In-memory hand-off within the
+	// same process; cleared once adopted (or on any non-fork start).
+	(pi as any).on("session_before_fork", () => {
+		try {
+			pendingForkSnapshot = exportWidgetState();
+			dbg(
+				`session_before_fork: stashed ${pendingForkSnapshot.files.length} file(s) for the fork`,
+			);
+		} catch (forkErr) {
+			dbg(`session_before_fork crashed: ${forkErr}`);
 		}
 	});
 
@@ -1885,7 +2015,46 @@ export default function (pi: ExtensionAPI) {
 								oldTextResolved: !!contentMatchValidated,
 							})
 						: { action: "allow" as const };
-				if (verdict.action === "block") {
+				// Content-verified range-stale relocation: the lines the agent meant
+				// to edit moved (read-time line hashes uniquely match the new spot),
+				// so re-target the positional edit to where the content now lives
+				// instead of dead-ending. Safe because the hashes prove the new span
+				// IS the intended content — the same guarantee that lets
+				// pi-hashline-readmap auto-apply. Single-range only (set by the guard).
+				if (verdict.relocation) {
+					const relocated = relocateEditRange(
+						(event as { input?: unknown }).input,
+						verdict.relocation.from,
+						verdict.relocation.to,
+					);
+					if (relocated) {
+						const [toStart, toEnd] = verdict.relocation.to;
+						runtime.readGuard?.recordRead({
+							filePath,
+							requestedOffset: toStart,
+							requestedLimit: toEnd - toStart + 1,
+							effectiveOffset: toStart,
+							effectiveLimit: toEnd - toStart + 1,
+							expandedByLsp: false,
+							turnIndex: runtime.turnIndex,
+							writeIndex: 0,
+							timestamp: Date.now(),
+						});
+						logReadGuardEvent({
+							event: "edit_range_relocated",
+							sessionId: runtime.telemetrySessionId,
+							filePath,
+							metadata: {
+								tool: "edit",
+								from: verdict.relocation.from,
+								to: verdict.relocation.to,
+							},
+						});
+						// Relocation applied — let the re-targeted edit proceed.
+					} else if (verdict.action === "block") {
+						return { block: true, reason: verdict.reason };
+					}
+				} else if (verdict.action === "block") {
 					return {
 						block: true,
 						reason: verdict.reason,
@@ -1947,27 +2116,34 @@ export default function (pi: ExtensionAPI) {
 
 	// Real-time feedback on file writes/edits
 	// biome-ignore lint/suspicious/noExplicitAny: pi.on overload mismatch for tool_result event type
-	(pi as any).on("tool_result", async (event: any) => {
+	(pi as any).on("tool_result", async (event: any, ctx: any) => {
 		if (!lensEnabled) return;
 		updateRuntimeIdentityFromEvent(event);
-		const { biomeClient, ruffClient, metricsClient, agentBehaviorClient } =
-			await loadBootstrapClients();
-		return handleToolResult({
-			event: event as any,
-			getFlag: (name: string) => getLensFlag(name),
-			dbg,
-			runtime,
-			cacheManager,
-			biomeClient,
-			ruffClient,
-			metricsClient,
-			resetLSPService,
-			readGuard: runtime.readGuard,
-			agentBehaviorRecord: (toolName, filePath) =>
-				agentBehaviorClient.recordToolCall(toolName, filePath),
-			formatBehaviorWarnings: (warnings) =>
-				agentBehaviorClient.formatWarnings(warnings as any),
-		});
+		// Publish this turn's abort signal so the dispatch's linter/type-check
+		// child processes are killed if the agent is interrupted (#197 ctx.signal).
+		setAmbientAbortSignal(ctx?.signal);
+		try {
+			const { biomeClient, ruffClient, metricsClient, agentBehaviorClient } =
+				await loadBootstrapClients();
+			return await handleToolResult({
+				event: event as any,
+				getFlag: (name: string) => getLensFlag(name),
+				dbg,
+				runtime,
+				cacheManager,
+				biomeClient,
+				ruffClient,
+				metricsClient,
+				resetLSPService,
+				readGuard: runtime.readGuard,
+				agentBehaviorRecord: (toolName, filePath) =>
+					agentBehaviorClient.recordToolCall(toolName, filePath),
+				formatBehaviorWarnings: (warnings) =>
+					agentBehaviorClient.formatWarnings(warnings as any),
+			});
+		} finally {
+			setAmbientAbortSignal(undefined);
+		}
 	});
 
 	// --- Turn end: batch jscpd/madge on collected files, then clear state ---
@@ -1979,6 +2155,8 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("agent_end", async (_event, ctx) => {
 		if (!lensEnabled) return;
+		// Esc/abort during the deferred format + flush kills in-flight children.
+		setAmbientAbortSignal((ctx as { signal?: AbortSignal })?.signal);
 		try {
 			// Ensure any pipeline still queued in the debounce window finishes
 			// before agent_end runs — otherwise project change-log entries and
@@ -1998,11 +2176,16 @@ export default function (pi: ExtensionAPI) {
 		} catch (agentEndErr) {
 			dbg(`agent_end crashed: ${agentEndErr}`);
 			dbg(`agent_end crash stack: ${(agentEndErr as Error).stack}`);
+		} finally {
+			setAmbientAbortSignal(undefined);
 		}
 	});
 
 	pi.on("turn_end", async (_event: any, ctx) => {
 		if (!lensEnabled) return;
+		// Esc/abort during the turn-end flush (knip/madge/tests + debounced
+		// dispatch) kills in-flight children instead of waiting out their timeout.
+		setAmbientAbortSignal((ctx as { signal?: AbortSignal })?.signal);
 		try {
 			// Persist a new worst event-loop block to latency.log, attributed to
 			// this turn, so freezes are queryable across sessions (#192).
@@ -2036,9 +2219,23 @@ export default function (pi: ExtensionAPI) {
 				resetFormatService,
 			});
 			ctx.ui && updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
+
+			// #190: persist this session's settled widget diagnostics so a later
+			// resume (`pi --session <id>`) can rehydrate them. Only when pi gave us
+			// a stable session id (else the file would be orphaned, never loaded).
+			// Fire-and-forget — persistence must never delay or break a turn.
+			if (runtime.hasStableSessionId) {
+				void saveSessionState(
+					ctx.cwd ?? process.cwd(),
+					runtime.telemetrySessionId,
+					exportWidgetState(),
+				);
+			}
 		} catch (turnEndErr) {
 			dbg(`turn_end crashed: ${turnEndErr}`);
 			dbg(`turn_end crash stack: ${(turnEndErr as Error).stack}`);
+		} finally {
+			setAmbientAbortSignal(undefined);
 		}
 	});
 

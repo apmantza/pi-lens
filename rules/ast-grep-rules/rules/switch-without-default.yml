@@ -14,3 +14,6 @@ rule:
   not:
     has:
       kind: switch_default
+      # switch_default lives under switch_body, not directly under the switch —
+      # search all descendants or this never matches and every switch is flagged.
+      stopBy: end

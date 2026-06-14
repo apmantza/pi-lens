@@ -1,3 +1,4 @@
+import { stat } from "node:fs/promises";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
@@ -76,6 +77,77 @@ export function clearWidgetState(): void {
 	lspServers.clear();
 	sessionLanguages = [];
 	requestRenderFn = null;
+}
+
+const WIDGET_STATE_VERSION = 1;
+
+/** Serializable snapshot of the per-file diagnostic state (#190). */
+export interface PersistedWidgetState {
+	version: number;
+	sessionLanguages: string[];
+	files: Array<{
+		filePath: string;
+		runners: Array<
+			[string, { status: string; count: number; durationMs?: number }]
+		>;
+		formatters: Array<[string, { changed: boolean; success: boolean }]>;
+		diagnostics: WidgetDiagnostic[];
+		allDiagnostics: WidgetDiagnostic[];
+		diagnosticCounts: { blocking: number; errors: number; warnings: number };
+		hasFinalDiagnosticsSnapshot: boolean;
+		touchedAt: number;
+	}>;
+}
+
+/**
+ * Snapshot the per-file widget diagnostics for persistence (#190). Excludes
+ * `lspServers` — those are process-bound (servers re-spawn fresh on the next
+ * launch), so restoring their "ready" status would be misleading.
+ */
+export function exportWidgetState(): PersistedWidgetState {
+	return {
+		version: WIDGET_STATE_VERSION,
+		sessionLanguages: [...sessionLanguages],
+		files: [...files.values()].map((rec) => ({
+			filePath: rec.filePath,
+			runners: [...rec.runners.entries()],
+			formatters: [...rec.formatters.entries()],
+			diagnostics: rec.diagnostics,
+			allDiagnostics: rec.allDiagnostics,
+			diagnosticCounts: rec.diagnosticCounts,
+			hasFinalDiagnosticsSnapshot: rec.hasFinalDiagnosticsSnapshot,
+			touchedAt: rec.touchedAt,
+		})),
+	};
+}
+
+/**
+ * Restore a {@link PersistedWidgetState} snapshot (#190 resume rehydration).
+ * Replaces the in-memory `files` map; ignores snapshots from a different
+ * version. Triggers a re-render if a callback is registered.
+ */
+export function importWidgetState(state: PersistedWidgetState | undefined): boolean {
+	if (!state || state.version !== WIDGET_STATE_VERSION) return false;
+	files.clear();
+	for (const f of state.files ?? []) {
+		files.set(f.filePath, {
+			filePath: f.filePath,
+			runners: new Map(f.runners ?? []),
+			formatters: new Map(f.formatters ?? []),
+			diagnostics: f.diagnostics ?? [],
+			allDiagnostics: f.allDiagnostics ?? [],
+			diagnosticCounts: f.diagnosticCounts ?? {
+				blocking: 0,
+				errors: 0,
+				warnings: 0,
+			},
+			hasFinalDiagnosticsSnapshot: f.hasFinalDiagnosticsSnapshot ?? false,
+			touchedAt: f.touchedAt ?? Date.now(),
+		});
+	}
+	sessionLanguages = state.sessionLanguages ?? [];
+	requestRenderFn?.();
+	return true;
 }
 
 export function setSessionLanguages(langs: string[]): void {
@@ -171,6 +243,40 @@ export function recordDiagnostics(
 	rec.touchedAt = Date.now();
 	files.set(filePath, rec);
 	requestRender();
+}
+
+/**
+ * Drop widget entries whose file changed on disk after pi-lens last recorded
+ * them (`mtimeMs > touchedAt` → the recorded diagnostics predate the current
+ * content → stale) or that no longer exist. Keeps `lens_diagnostics` from
+ * surfacing findings the agent already fixed (or that an external edit
+ * invalidated). Async with concurrent stats — call on read, never on the typing
+ * path. Returns how many entries were dropped (so callers can tell the agent
+ * those files changed and need a `mode=full` rescan rather than reading as
+ * clean).
+ */
+export async function reconcileStaleWidgetFiles(): Promise<number> {
+	const entries = [...files.entries()];
+	const staleKeys = await Promise.all(
+		entries.map(async ([filePath, rec]) => {
+			try {
+				const st = await stat(filePath);
+				// +1ms tolerance: a freshly-recorded file has touchedAt >= mtime.
+				return st.mtimeMs > rec.touchedAt + 1 ? filePath : undefined;
+			} catch {
+				return filePath; // deleted / unreadable → drop
+			}
+		}),
+	);
+	let dropped = 0;
+	for (const key of staleKeys) {
+		if (key !== undefined) {
+			files.delete(key);
+			dropped += 1;
+		}
+	}
+	if (dropped > 0) requestRenderFn?.();
+	return dropped;
 }
 
 /** Summary of current diagnostic counts across all files in the widget. */

@@ -53,7 +53,7 @@ const javacRunner: RunnerDefinition = {
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = ctx.cwd || process.cwd();
-		if (!(await (javac.isAvailableAsync?.(cwd) ?? javac.isAvailable(cwd)))) {
+		if (!(await (javac.isAvailableAsync(cwd)))) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 

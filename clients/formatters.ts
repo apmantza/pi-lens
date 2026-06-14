@@ -12,7 +12,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { logLatency } from "./latency-logger.js";
-import { safeSpawn, safeSpawnAsync } from "./safe-spawn.js";
+import { safeSpawnAsync } from "./safe-spawn.js";
 import {
 	getAutoInstallToolIdForFormatter,
 	getFormatterPolicyForFile,
@@ -39,7 +39,7 @@ import {
 
 const _lazyInstallAttempts = new Set<string>();
 
-async function tryLazyInstallFormatterTool(
+export async function tryLazyInstallFormatterTool(
 	tool: "rubocop" | "rustfmt",
 	cwd: string,
 ): Promise<boolean> {
@@ -48,9 +48,10 @@ async function tryLazyInstallFormatterTool(
 	_lazyInstallAttempts.add(attemptKey);
 
 	if (tool === "rubocop") {
-		const res = safeSpawn("gem", ["install", "rubocop", "--no-document"], {
+		const res = await safeSpawnAsync("gem", ["install", "rubocop", "--no-document"], {
 			timeout: 180000,
 			cwd,
+			ignoreAmbientSignal: true,
 		});
 		const ok = !res.error && res.status === 0;
 		if (!ok) {
@@ -61,9 +62,10 @@ async function tryLazyInstallFormatterTool(
 		return ok;
 	}
 
-	const res = safeSpawn("rustup", ["component", "add", "rustfmt"], {
+	const res = await safeSpawnAsync("rustup", ["component", "add", "rustfmt"], {
 		timeout: 180000,
 		cwd,
+		ignoreAmbientSignal: true,
 	});
 	const ok = !res.error && res.status === 0;
 	if (!ok) {
@@ -131,7 +133,7 @@ async function findUp(
 }
 
 async function which(command: string): Promise<string | null> {
-	const result = safeSpawn(
+	const result = await safeSpawnAsync(
 		process.platform === "win32" ? "where" : "which",
 		[command],
 		{ timeout: 5000 },
@@ -144,7 +146,7 @@ async function resolveGoFmtBinary(): Promise<string | null> {
 	const inPath = await which("gofmt");
 	if (inPath) return inPath;
 
-	const goCheck = safeSpawn("go", ["env", "GOROOT"], {
+	const goCheck = await safeSpawnAsync("go", ["env", "GOROOT"], {
 		timeout: 5000,
 	});
 	if (goCheck.error || goCheck.status !== 0) return null;
@@ -703,7 +705,7 @@ export const csharpierFormatter: FormatterInfo = {
 	async detect(_cwd: string) {
 		// Check dotnet is available AND csharpier tool is installed
 		if ((await which("dotnet")) === null) return false;
-		const result = safeSpawn("dotnet", ["csharpier", "--version"], {
+		const result = await safeSpawnAsync("dotnet", ["csharpier", "--version"], {
 			timeout: 5000,
 		});
 		return !result.error && result.status === 0;
@@ -818,7 +820,7 @@ export const psscriptanalyzerFormatFormatter: FormatterInfo = {
 		const pwsh = (await which("pwsh")) ?? (await which("powershell"));
 		if (!pwsh) return false;
 		// Check PSScriptAnalyzer module is available
-		const result = safeSpawn(
+		const result = await safeSpawnAsync(
 			pwsh,
 			[
 				"-NoProfile",

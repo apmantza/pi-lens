@@ -901,6 +901,23 @@ async function isCommandAvailable(
 // --- Verification Functions
 
 /**
+ * Stdio LSP servers built on `vscode-languageserver-node` (the entire
+ * `vscode-langservers-extracted` family — json/css/html/eslint, and markdown)
+ * reject a bare `--version`: `createConnection()` throws immediately because no
+ * transport flag was supplied, and the process exits non-zero. That error is
+ * positive proof the binary loaded and is a working LSP server — it just needs
+ * `--stdio` to actually run — so `--version`-based verification must treat it as
+ * success rather than a broken install (#208). A genuinely broken binary fails
+ * with a different error (SyntaxError, ERR_MODULE_NOT_FOUND, …) that does not
+ * match this pattern, so the broken-install guard is preserved.
+ */
+export function isLspTransportRequiredError(output: string): boolean {
+	return /Connection (?:input|output) stream is not set|Use arguments of createConnection/i.test(
+		output,
+	);
+}
+
+/**
  * Verify a tool binary actually works by running --version
  * This catches broken symlinks, partial installs, and corrupted binaries
  */
@@ -945,6 +962,11 @@ async function verifyToolBinary(binPath: string): Promise<boolean> {
 		proc.on("exit", (code) => {
 			if (code === 0) {
 				debugLog(`Verified: ${binPath} (version: ${stdout.trim()})`);
+				resolve(true);
+			} else if (isLspTransportRequiredError(`${stdout}\n${stderr}`)) {
+				// Valid stdio LSP server that rejects `--version` (#208) — the
+				// transport-required error proves the binary works.
+				debugLog(`Verified (stdio LSP, transport-required): ${binPath}`);
 				resolve(true);
 			} else {
 				logSessionStart(

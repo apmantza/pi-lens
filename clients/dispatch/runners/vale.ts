@@ -140,7 +140,7 @@ const valeRunner: RunnerDefinition = {
 		}
 
 		let cmd: string | null = null;
-		if (await (vale.isAvailableAsync?.(cwd) ?? vale.isAvailable(cwd))) {
+		if (await (vale.isAvailableAsync(cwd))) {
 			cmd = vale.getCommand(cwd);
 		} else {
 			cmd = await resolveToolCommandWithInstallFallback(cwd, "vale");

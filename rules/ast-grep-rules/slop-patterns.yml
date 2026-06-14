@@ -99,7 +99,7 @@ rule:
 id: ts-double-negation
 language: typescript
 severity: warning
-message: !!value to coerce boolean - use Boolean(value) or truthiness directly
+message: "!!value to coerce boolean - use Boolean(value) or truthiness directly"
 metadata:
   weight: 2
   category: slop
@@ -110,19 +110,12 @@ rule:
 id: ts-unnecessary-array-concat
 language: typescript
 severity: warning
-message: arr.concat([item]) in loop - use arr.push(item) or spread [...arr, item]
+message: "concat([item]) with a single-element array - use push(item) or spread [...arr, item]"
 metadata:
   weight: 3
   category: slop
 rule:
-  kind: for_statement
-  has:
-    kind: block
-    has:
-      kind: expression_statement
-      has:
-        kind: call_expression
-        pattern: "$ARR.concat([$ITEM])"
+  pattern: "$ARR.concat([$ITEM])"
 ---
 id: ts-defensive-null-guard
 language: typescript
@@ -177,15 +170,12 @@ rule:
 id: ts-unnecessary-array-from
 language: typescript
 severity: warning
-message: Array.from(iterable) in for-of - iterate directly
+message: "Array.from(iterable) in for-of - iterate the iterable directly"
 metadata:
   weight: 2
   category: slop
 rule:
-  kind: for_of_statement
-  has:
-    kind: call_expression
-    pattern: "Array.from($ITER)"
+  pattern: "for (const $X of Array.from($ITER)) $$$BODY"
 ---
 id: ts-redundant-filter-map
 language: typescript
@@ -352,21 +342,15 @@ rule:
 id: ts-string-split-index
 language: typescript
 severity: warning
-message: str.split('.')[1] with magic index - use destructuring or named variables
+message: "split(sep)[n] with a magic index - use destructuring or named variables"
 metadata:
   weight: 3
   category: slop
 rule:
-  kind: element_access_expression
-  all:
-  - has:
-      kind: call_expression
-      has:
-        kind: property_access_expression
-        regex: \.split$
-  - has:
-      kind: number
-      regex: ^[1-9][0-9]*$
+  any:
+  - pattern: "$S.split($SEP)[1]"
+  - pattern: "$S.split($SEP)[2]"
+  - pattern: "$S.split($SEP)[3]"
 ---
 id: ts-unnecessary-else-return
 language: typescript
@@ -378,8 +362,11 @@ metadata:
 rule:
   kind: if_statement
   all:
+  # has defaults to direct-child (neighbour): the if's own consequent block must
+  # itself contain a return statement directly — a return nested in an inner
+  # conditional doesn't count (the else wouldn't be redundant then).
   - has:
-      kind: block
+      kind: statement_block
       has:
         kind: return_statement
   - has:
@@ -388,15 +375,12 @@ rule:
 id: ts-object-hasown-check
 language: typescript
 severity: warning
-message: obj.hasOwnProperty(key) - use Object.hasOwn(obj, key) or Object.prototype.hasOwnProperty.call
+message: "obj.hasOwnProperty(key) - use Object.hasOwn(obj, key) or Object.prototype.hasOwnProperty.call"
 metadata:
   weight: 2
   category: slop
 rule:
-  kind: call_expression
-  has:
-    kind: property_access_expression
-    regex: \.hasOwnProperty$
+  pattern: "$O.hasOwnProperty($K)"
 ---
 id: ts-delete-property
 language: typescript
@@ -416,8 +400,15 @@ message: for (const key in obj) - use Object.keys/entries/values for safer itera
 metadata:
   weight: 3
   category: slop
+# tree-sitter parses BOTH `for...in` and `for...of` as `for_in_statement`, so a
+# bare `kind: for_in_statement` false-positives on every `for...of` (the
+# recommended form). Constrain the `operator` field to `in`.
 rule:
-  kind: for_in_statement
+  any:
+    - pattern: "for (const $K in $O) $B"
+    - pattern: "for (let $K in $O) $B"
+    - pattern: "for (var $K in $O) $B"
+    - pattern: "for ($K in $O) $B"
   not:
     has:
       kind: if_statement
@@ -458,7 +449,7 @@ rule:
 id: ts-nullish-coalescing-opportunity
 language: typescript
 severity: warning
-message: x !== null && x !== undefined ? x : default - use x ?? default
+message: "x !== null && x !== undefined ? x : default - use x ?? default"
 metadata:
   weight: 3
   category: slop
@@ -469,7 +460,7 @@ rule:
 id: ts-optional-chaining-default
 language: typescript
 severity: warning
-message: obj && obj.prop ? obj.prop : default - use obj?.prop ?? default
+message: "obj && obj.prop ? obj.prop : default - use obj?.prop ?? default"
 metadata:
   weight: 3
   category: slop

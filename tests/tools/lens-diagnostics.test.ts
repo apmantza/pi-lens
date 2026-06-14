@@ -24,14 +24,19 @@ const mockSummaries: ReturnType<
 	typeof import("../../clients/widget-state.js")["getFileDiagnosticSummaries"]
 > = [];
 
+let mockStaleDropped = 0;
+
 vi.mock("../../clients/widget-state.js", () => ({
 	getFileDiagnosticSummaries: () => mockSummaries,
+	reconcileStaleWidgetFiles: async () => mockStaleDropped,
 }));
 
 beforeEach(() => {
 	projectDiagnosticsMocks.scanProjectDiagnostics.mockReset();
 	projectDiagnosticsMocks.loadProjectDiagnosticsSnapshot.mockReset();
 	projectDiagnosticsMocks.loadProjectDiagnosticsDeltaReport.mockReset();
+	mockSummaries.length = 0;
+	mockStaleDropped = 0;
 });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -110,6 +115,34 @@ describe("lens_diagnostics mode=delta", () => {
 		const result = await run(makeTool());
 		expect(String(result.content[0].text)).toContain("No");
 		expect(result.details).toMatchObject({ mode: "delta" });
+		// No carried-over findings → no mode=all hint.
+		expect(String(result.content[0].text)).not.toContain("mode=all");
+	});
+
+	it("hints at mode=all when delta is empty but findings carried over (#190)", async () => {
+		// Simulate a resume: no current-turn delta, but the session-wide view has
+		// rehydrated findings.
+		mockSummaries.push({
+			filePath: "/proj/a.ts",
+			blocking: 1,
+			errors: 1,
+			warnings: 1,
+			hasFinalSnapshot: true,
+			diagnostics: [
+				{ severity: "error", message: "boom", line: 5 },
+				{ severity: "warning", message: "meh", line: 9 },
+			],
+		});
+
+		const result = await run(makeTool(), { mode: "delta" });
+		const text = String(result.content[0].text);
+		expect(text).toContain("carried over");
+		expect(text).toContain("mode=all");
+		expect(text).toContain("2 findings across 1 file");
+		expect(result.details).toMatchObject({
+			mode: "delta",
+			carriedOverFiles: 1,
+		});
 	});
 
 	it("formats actionable warnings from cache", async () => {
@@ -472,6 +505,30 @@ describe("lens_diagnostics mode=all", () => {
 		mockSummaries.length = 0;
 		const result = await run(makeTool(), { mode: "all" });
 		expect(String(result.content[0].text)).toContain("No files diagnosed");
+	});
+
+	it("flushes pending dispatches before reading (so just-fixed files refresh)", async () => {
+		const flush = vi.fn(async () => {});
+		const tool = createLensDiagnosticsTool(
+			makeCacheManager({}) as any,
+			() => "/proj",
+			undefined,
+			flush,
+		);
+		await tool.execute("1", { mode: "all" }, new AbortController().signal, null, {
+			cwd: "/proj",
+		});
+		expect(flush).toHaveBeenCalledOnce();
+	});
+
+	it("notes stale files dropped by reconciliation (use mode=full)", async () => {
+		mockStaleDropped = 2;
+		mockSummaries.length = 0;
+		const result = await run(makeTool(), { mode: "all" });
+		const text = String(result.content[0].text);
+		expect(text).toContain("2 changed files omitted as stale");
+		expect(text).toContain("mode=full");
+		expect(result.details).toMatchObject({ staleDropped: 2 });
 	});
 
 	it("returns clean message when all files have zero issues", async () => {

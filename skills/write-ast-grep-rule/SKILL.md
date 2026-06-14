@@ -44,11 +44,44 @@ rule:
     - not: { kind: await_expression }
 ```
 
-## NAPI runner limits — rules using these are silently skipped
+## Relational & constraint conditions — all supported (native napi, #206)
 
-`inside` `follows` `precedes` `stopBy` `field` `nthChild` `constraints`
+The runner matches every rule through napi's native engine (`root.findAll({rule,
+constraints})`), fed by a faithful `js-yaml` parse. The **full ast-grep grammar works** —
+nest freely; nothing is silently skipped:
 
-Use tree-sitter rules instead when you need relational context (inside function, follows import).
+```yaml
+rule:
+  kind: call_expression
+  inside:                     # ancestor must match
+    kind: function_declaration
+    stopBy: end               # ↑ search ALL ancestors (default is direct parent)
+  has:                        # descendant must match (default: DIRECT child)
+    field: arguments          # field constraints work
+  follows:                    # immediately-preceding sibling
+    pattern: const $X = $V
+constraints:                  # metavariable regex constraints work
+  X:
+    regex: "Error$"
+```
+
+⚠ **`has`/`inside` default to the immediate child/parent (`stopBy: neighbor`).** For a
+recursive descendant/ancestor search add `stopBy: end`. This is the #1 migration
+gotcha — see the `has` note below.
+
+## YAML quoting — REQUIRED (js-yaml will reject the rule otherwise)
+
+The parser is a real YAML parser, so unquoted special chars throw and the rule is
+**silently dropped**:
+
+```
+❌ message: !!value to coerce boolean    # `!!` is a YAML tag → js-yaml THROWS, rule dropped
+✅ message: "!!value to coerce boolean"
+❌ message: foo: bar baz                  # bare `:` → parsed as a nested mapping
+✅ message: "foo: bar baz"
+   Quote any scalar starting with  ! & * ? | > % @ `  or containing  : #
+   Quote keyword-like kinds:  kind: "true"   (bare `true` becomes a boolean → invalid kind)
+```
 
 ## Gotchas
 
@@ -70,12 +103,19 @@ Use tree-sitter rules instead when you need relational context (inside function,
 ## Hard-won gotchas (NAPI runner specifics — verified)
 
 ```
-⚠ The NAPI runner's `has`/`not` semantics DIFFER from the `ast-grep` CLI:
-   - NAPI runner (production): `has` searches ALL descendants (recursive).
-   - CLI (`ast-grep scan`): `has` is IMMEDIATE children only, unless `stopBy: end`.
-   So `kind: switch_statement` + `not: {has: {kind: switch_default}}` works in the
-   runner but UNDER-reports via the CLI. To reproduce in the CLI add `stopBy: end`
-   — but NEVER ship `stopBy` (the runner SKIPS rules that use it; see limits above).
+⚠ `has`/`inside` default to DIRECT child/parent — add `stopBy: end` for a recursive search.
+   This cuts BOTH ways, so think about where the target node actually lives:
+   - Target is a grandchild+ → you MUST add `stopBy: end` or the `has` never matches.
+     `switch-without-default` = `switch_statement` not has `switch_default`: the default
+     lives under `switch_body`, so without `stopBy: end` it matches nothing and every
+     switch (even ones WITH a default) is flagged. Same for `nested-ternary` catching a
+     parenthesized `a ? (b ? c : d) : e`.
+   - Target is the direct child → leave it at `neighbor` (default). Adding `stopBy: end`
+     OVER-reports: `throw_statement` has `string` + `stopBy: end` flags `throw new
+     Error("x")` (the string is nested), and `expression_statement` has `new_expression`
+     + `stopBy: end` flags `fn(new Error())` as a discarded error. Keep these direct.
+   napi's `has` never matches the node itself, so a self-referential `kind: X` has
+   `kind: X` (with `stopBy: end`) correctly flags only genuinely-nested X.
 
 ✅ Prefer `regex` on the matched node's OWN text over `has` when you only need to
    inspect the node — avoids recursive-descendant false positives:
@@ -84,15 +124,27 @@ Use tree-sitter rules instead when you need relational context (inside function,
    (NAPI evaluates `regex` with JS RegExp on node.text() — keep it LINEAR so the
    detector can't itself ReDoS.)
 
-✅ One `language: TypeScript` rule runs on .ts/.tsx/.js/.jsx in the NAPI runner
-   (no per-file language gate). A `-js` twin DOUBLE-FIRES (the dedup key includes
-   the rule id). Add a `-js` variant ONLY if you need the CLI/.sgconfig path, which
-   DOES gate strictly by language.
+✅ One `language: TypeScript` rule runs on .ts/.tsx/.js/.jsx in the runner (no per-file
+   language gate). Do NOT ship a `-js` twin: both fire on the same node (dedup is by rule
+   id, not finding) → duplicate diagnostics. Several shipped pairs (`prefer-at` +
+   `prefer-at-js`, `strict-equality` + `-js`, …) still double-report — consolidate them.
 
-✅ Node-kind facts:
+✅ Node-kind facts (tree-sitter-typescript grammar — NOT the TS compiler / Roslyn):
    - let / const  → `lexical_declaration`     (var is NOT here)
    - var          → `variable_declaration`
    - a regex literal's pattern text  → `regex_pattern`
+   - x[i] index access  → `subscript_expression`   (NOT element_access_expression)
+   - obj.prop access    → `member_expression`      (NOT property_access_expression)
+   - !x / -x / typeof x → `unary_expression`
+   - a ? b : c          → `ternary_expression`
+
+❌ Wrong-grammar kind names = silent dead rule. `element_access_expression`,
+   `property_access_expression`, `binary_operator`, etc. are TS-compiler/Roslyn names, not
+   tree-sitter's. napi REJECTS the whole rule ("invalid kind matcher") so it never runs.
+   Verify a kind exists before shipping:
+     node -e 'import("@ast-grep/napi").then(s=>{const r=s.ts.parse("x[i]").root();
+       const f=(n,k)=>{let c=n.kind()===k?1:0;for(const x of n.children())c+=f(x,k);return c};
+       console.log(f(r,"subscript_expression"))})'   # >0 means the kind is real
 
 ✅ Test through the REAL runner from the repo root — it loads the actual shipped
    rules from rules/ast-grep-rules/rules. Assert on diagnostic `rule` ids:

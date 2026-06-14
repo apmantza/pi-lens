@@ -105,7 +105,7 @@ const markdownlintRunner: RunnerDefinition = {
 		}
 
 		let cmd: string | null = null;
-		if (await (markdownlint.isAvailableAsync?.(cwd) ?? markdownlint.isAvailable(cwd))) {
+		if (await (markdownlint.isAvailableAsync(cwd))) {
 			cmd = markdownlint.getCommand(cwd);
 		} else {
 			cmd = await resolveToolCommandWithInstallFallback(cwd, "markdownlint");

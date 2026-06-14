@@ -10,8 +10,15 @@ import {
 import type { RuleScanResult } from "./rules-scanner.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 import type { StartupScanContext } from "./startup-scan.js";
+import {
+	deserializeWordIndex,
+	serializeWordIndex,
+	type SerializedWordIndex,
+} from "./word-index.js";
 
-export const PROJECT_SNAPSHOT_VERSION = 1;
+// v2: added `wordIndex` (identifier inverted index + BM25, #162). Bumping the
+// version invalidates pre-v2 snapshots so they rebuild with the new field.
+export const PROJECT_SNAPSHOT_VERSION = 2;
 
 export interface ProjectSnapshotFile {
 	path: string;
@@ -42,6 +49,7 @@ export interface ProjectSnapshot {
 	symbols: Record<string, ProjectSnapshotSymbol[]>;
 	reverseDeps: Record<string, string[]>;
 	cachedExports: Array<[name: string, filePath: string]>;
+	wordIndex?: SerializedWordIndex;
 	projectRulesScan?: RuleScanResult;
 	startupScan?: StartupScanContext;
 	languageProfile?: ProjectLanguageProfile;
@@ -93,6 +101,7 @@ function parseSnapshot(value: unknown): ProjectSnapshot | null {
 				typeof entry[0] === "string" &&
 				typeof entry[1] === "string",
 		),
+		wordIndex: snapshot.wordIndex,
 		projectRulesScan: snapshot.projectRulesScan,
 		startupScan: snapshot.startupScan,
 		languageProfile: snapshot.languageProfile,
@@ -149,6 +158,9 @@ export function buildProjectSnapshotFromRuntime(args: {
 		cachedExports: [...args.runtime.cachedExports.entries()].sort((a, b) =>
 			a[0].localeCompare(b[0]),
 		),
+		wordIndex: args.runtime.wordIndex
+			? serializeWordIndex(args.runtime.wordIndex)
+			: undefined,
 		projectRulesScan: args.runtime.projectRulesScan,
 		startupScan: args.startupScan,
 		languageProfile: args.languageProfile,
@@ -167,6 +179,7 @@ export function hydrateRuntimeFromProjectSnapshot(
 	if (snapshot.projectRulesScan) {
 		runtime.projectRulesScan = snapshot.projectRulesScan;
 	}
+	runtime.wordIndex = deserializeWordIndex(snapshot.wordIndex);
 }
 
 export function saveRuntimeProjectSnapshot(args: {
@@ -198,6 +211,12 @@ export function saveRuntimeProjectSnapshot(args: {
 			snapshot.files = existing.files ?? {};
 			snapshot.symbols = existing.symbols ?? {};
 			snapshot.reverseDeps = existing.reverseDeps ?? {};
+			// The word index is built by its own session task, which may not have
+			// finished when another task triggers a save — keep the prior index
+			// rather than clobbering it with undefined.
+			if (!snapshot.wordIndex && existing.wordIndex) {
+				snapshot.wordIndex = existing.wordIndex;
+			}
 		}
 		saveProjectSnapshot(args.cwd, snapshot);
 		args.dbg?.(

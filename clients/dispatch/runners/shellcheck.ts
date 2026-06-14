@@ -140,7 +140,7 @@ const shellcheckRunner: RunnerDefinition = {
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = ctx.cwd || process.cwd();
 		let cmd: string | null = null;
-		if (await (shellcheck.isAvailableAsync?.(cwd) ?? shellcheck.isAvailable(cwd))) {
+		if (await (shellcheck.isAvailableAsync(cwd))) {
 			cmd = shellcheck.getCommand(cwd);
 		} else {
 			const managed = await ensureTool("shellcheck");

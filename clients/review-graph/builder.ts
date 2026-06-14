@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { FactStore } from "../dispatch/fact-store.js";
@@ -57,7 +58,12 @@ const extractorCache = new Map<string, TreeSitterSymbolExtractor>();
 const _buildCache = new Map<string, Promise<ReviewGraph>>();
 const _workspaceGraphCache = new Map<
 	string,
-	{ signature: string; fileSignatures: Map<string, string>; graph: ReviewGraph }
+	{
+		signature: string;
+		fileSignatures: Map<string, string>;
+		fileHashes?: Map<string, string>;
+		graph: ReviewGraph;
+	}
 >();
 type GraphBuildInfo = {
 	reused: boolean;
@@ -187,6 +193,67 @@ function sourceSignatureFromMap(signatures: Map<string, string>): string {
 		.join("|");
 }
 
+function contentHashEntry(file: string): string {
+	try {
+		// sha256, not for security — a content fingerprint for change detection;
+		// avoids SonarCloud's weak-hash (sha1/md5) flag.
+		return createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+	} catch {
+		return "missing";
+	}
+}
+
+/**
+ * Async, chunked-yield content-hash map for a set of files. Used at full build
+ * to record per-file content hashes so a later run can tell a *content* change
+ * apart from pure mtime/size drift (formatter no-op, git checkout) — see
+ * {@link confirmContentChanged}. Reads file bytes, so it runs only on the
+ * (rare) full-build path, not the per-edit signature loop.
+ */
+async function sourceHashMapAsync(
+	files: string[],
+): Promise<Map<string, string>> {
+	const hashes = new Map<string, string>();
+	let sinceYield = 0;
+	for (const file of files) {
+		hashes.set(file, contentHashEntry(file));
+		if (++sinceYield >= STAT_YIELD_EVERY) {
+			sinceYield = 0;
+			await yieldToLoop();
+		}
+	}
+	return hashes;
+}
+
+/**
+ * #202: confirm which mtime/size-changed candidates actually changed CONTENT. A
+ * candidate whose content hash matches the prior hash is pure mtime drift —
+ * reusing its already-parsed graph nodes is safe. Returns the truly
+ * content-changed subset plus the merged hash map (prior hashes + freshly
+ * computed candidate hashes) for persisting. When prior hashes are absent (a
+ * pre-#202 cache), every candidate reports as changed, so behavior degrades
+ * exactly to the old mtime-only logic — never a false reuse.
+ */
+async function confirmContentChanged(
+	candidates: string[],
+	previousHashes: Map<string, string> | undefined,
+): Promise<{ trulyChanged: string[]; hashes: Map<string, string> }> {
+	const prior = previousHashes ?? new Map<string, string>();
+	const hashes = new Map(prior);
+	const trulyChanged: string[] = [];
+	let sinceYield = 0;
+	for (const file of candidates) {
+		const hash = contentHashEntry(file);
+		hashes.set(file, hash);
+		if (prior.get(file) !== hash) trulyChanged.push(file);
+		if (++sinceYield >= STAT_YIELD_EVERY) {
+			sinceYield = 0;
+			await yieldToLoop();
+		}
+	}
+	return { trulyChanged, hashes };
+}
+
 function changedSignatureFiles(
 	previous: Map<string, string>,
 	next: Map<string, string>,
@@ -300,6 +367,7 @@ interface PersistedGraphData {
 	builtAt: string;
 	signature: string;
 	fileSignatures?: Array<[string, string]>;
+	fileHashes?: Array<[string, string]>;
 	nodes: Array<[string, ReviewGraphNode]>;
 	edges: ReviewGraphEdge[];
 }
@@ -307,6 +375,7 @@ interface PersistedGraphData {
 function loadPersistedGraph(cwd: string): {
 	signature: string;
 	fileSignatures: Map<string, string>;
+	fileHashes: Map<string, string>;
 	graph: ReviewGraph;
 } | null {
 	const cachePath = path.join(getProjectDataDir(cwd), "cache", GRAPH_CACHE_FILENAME);
@@ -329,6 +398,7 @@ function loadPersistedGraph(cwd: string): {
 		return {
 			signature: data.signature,
 			fileSignatures: new Map(data.fileSignatures ?? []),
+			fileHashes: new Map(data.fileHashes ?? []),
 			graph,
 		};
 	} catch {
@@ -340,6 +410,7 @@ function persistGraph(
 	cwd: string,
 	signature: string,
 	fileSignatures: Map<string, string>,
+	fileHashes: Map<string, string> | undefined,
 	graph: ReviewGraph,
 ): void {
 	const cacheDir = path.join(getProjectDataDir(cwd), "cache");
@@ -349,6 +420,7 @@ function persistGraph(
 		builtAt: graph.builtAt,
 		signature,
 		fileSignatures: Array.from(fileSignatures.entries()),
+		fileHashes: fileHashes ? Array.from(fileHashes.entries()) : undefined,
 		nodes: Array.from(graph.nodes.entries()),
 		edges: graph.edges,
 	};
@@ -883,24 +955,49 @@ async function _doBuildGraph(
 	const memChanged = memCached
 		? changedSignatureFiles(memCached.fileSignatures, fileSignatures)
 		: undefined;
-	if (
-		memCached &&
-		memChanged !== undefined &&
-		memChanged.length > 0 &&
-		memChanged.every((file) => normalizedChangedSet.has(file))
-	) {
-		const graph = cloneGraph(memCached.graph);
-		await updateGraphFiles(graph, cwd, memChanged, facts);
-		const graphSnapshot = cloneGraph(graph);
-		_workspaceGraphCache.set(normalizedCwd, {
-			signature,
-			fileSignatures: new Map(fileSignatures),
-			graph: graphSnapshot,
-		});
-		persistGraph(cwd, signature, fileSignatures, graphSnapshot);
-		_lastGraphBuildInfo = { reused: true, mode: "incremental" };
-		facts.setSessionFact("session.reviewGraph", graph);
-		return graph;
+	if (memCached && memChanged !== undefined && memChanged.length > 0) {
+		// #202: a file's size/mtime can drift without its content changing
+		// (formatter no-op, re-save, git checkout). Confirm by content hash so
+		// such drift neither forces a re-parse nor kicks us out of the cheap
+		// reuse path into a full rebuild.
+		const { trulyChanged, hashes } = await confirmContentChanged(
+			memChanged,
+			memCached.fileHashes,
+		);
+		if (trulyChanged.length === 0) {
+			// Pure drift — reuse the cached graph as-is.
+			const graph = cloneGraph(memCached.graph);
+			rebuildIndexes(graph);
+			graph.changedSymbolsByFile.clear();
+			for (const file of normalizedChanged) {
+				upsertChangedSymbols(graph, facts, file);
+			}
+			_workspaceGraphCache.set(normalizedCwd, {
+				signature,
+				fileSignatures: new Map(fileSignatures),
+				fileHashes: hashes,
+				graph: cloneGraph(memCached.graph),
+			});
+			persistGraph(cwd, signature, fileSignatures, hashes, cloneGraph(graph));
+			_lastGraphBuildInfo = { reused: true, mode: "cached" };
+			facts.setSessionFact("session.reviewGraph", graph);
+			return graph;
+		}
+		if (trulyChanged.every((file) => normalizedChangedSet.has(file))) {
+			const graph = cloneGraph(memCached.graph);
+			await updateGraphFiles(graph, cwd, trulyChanged, facts);
+			const graphSnapshot = cloneGraph(graph);
+			_workspaceGraphCache.set(normalizedCwd, {
+				signature,
+				fileSignatures: new Map(fileSignatures),
+				fileHashes: hashes,
+				graph: graphSnapshot,
+			});
+			persistGraph(cwd, signature, fileSignatures, hashes, graphSnapshot);
+			_lastGraphBuildInfo = { reused: true, mode: "incremental" };
+			facts.setSessionFact("session.reviewGraph", graph);
+			return graph;
+		}
 	}
 
 	// Tier 2: disk cache (cold start — files unchanged since last persist)
@@ -915,6 +1012,7 @@ async function _doBuildGraph(
 		_workspaceGraphCache.set(normalizedCwd, {
 			signature,
 			fileSignatures: new Map(fileSignatures),
+			fileHashes: diskCached.fileHashes,
 			graph: cloneGraph(diskCached.graph),
 		});
 		_lastGraphBuildInfo = { reused: true, mode: "cached" };
@@ -925,24 +1023,48 @@ async function _doBuildGraph(
 		diskCached && diskCached.fileSignatures.size > 0
 			? changedSignatureFiles(diskCached.fileSignatures, fileSignatures)
 			: undefined;
-	if (
-		diskCached &&
-		diskChanged !== undefined &&
-		diskChanged.length > 0 &&
-		diskChanged.every((file) => normalizedChangedSet.has(file))
-	) {
-		const graph = cloneGraph(diskCached.graph);
-		await updateGraphFiles(graph, cwd, diskChanged, facts);
-		const graphSnapshot = cloneGraph(graph);
-		_workspaceGraphCache.set(normalizedCwd, {
-			signature,
-			fileSignatures: new Map(fileSignatures),
-			graph: graphSnapshot,
-		});
-		persistGraph(cwd, signature, fileSignatures, graphSnapshot);
-		_lastGraphBuildInfo = { reused: true, mode: "incremental" };
-		facts.setSessionFact("session.reviewGraph", graph);
-		return graph;
+	if (diskCached && diskChanged !== undefined && diskChanged.length > 0) {
+		// #202: same content-hash confirm as the in-memory tier. This is where
+		// it pays off most — on cold start, git/checkout mtime drift can make
+		// `diskChanged` large while content is unchanged; confirming lets us
+		// reuse the persisted graph instead of a full rebuild.
+		const { trulyChanged, hashes } = await confirmContentChanged(
+			diskChanged,
+			diskCached.fileHashes,
+		);
+		if (trulyChanged.length === 0) {
+			const graph = cloneGraph(diskCached.graph);
+			rebuildIndexes(graph);
+			graph.changedSymbolsByFile.clear();
+			for (const file of normalizedChanged) {
+				upsertChangedSymbols(graph, facts, file);
+			}
+			_workspaceGraphCache.set(normalizedCwd, {
+				signature,
+				fileSignatures: new Map(fileSignatures),
+				fileHashes: hashes,
+				graph: cloneGraph(diskCached.graph),
+			});
+			persistGraph(cwd, signature, fileSignatures, hashes, cloneGraph(graph));
+			_lastGraphBuildInfo = { reused: true, mode: "cached" };
+			facts.setSessionFact("session.reviewGraph", graph);
+			return graph;
+		}
+		if (trulyChanged.every((file) => normalizedChangedSet.has(file))) {
+			const graph = cloneGraph(diskCached.graph);
+			await updateGraphFiles(graph, cwd, trulyChanged, facts);
+			const graphSnapshot = cloneGraph(graph);
+			_workspaceGraphCache.set(normalizedCwd, {
+				signature,
+				fileSignatures: new Map(fileSignatures),
+				fileHashes: hashes,
+				graph: graphSnapshot,
+			});
+			persistGraph(cwd, signature, fileSignatures, hashes, graphSnapshot);
+			_lastGraphBuildInfo = { reused: true, mode: "incremental" };
+			facts.setSessionFact("session.reviewGraph", graph);
+			return graph;
+		}
 	}
 
 	// Tier 3: full build
@@ -957,13 +1079,18 @@ async function _doBuildGraph(
 	resolveDeferredSymbolEdges(graph);
 	graph.version = REVIEW_GRAPH_VERSION;
 	graph.builtAt = new Date().toISOString();
+	// #202: record per-file content hashes so the next run can tell a real
+	// content change apart from pure mtime/size drift. Only runs on the (rare)
+	// full-build path; the OS file cache is warm from the parse above.
+	const fileHashes = await sourceHashMapAsync(filesToBuild);
 	const graphSnapshot = cloneGraph(graph);
 	_workspaceGraphCache.set(normalizedCwd, {
 		signature,
 		fileSignatures: new Map(fileSignatures),
+		fileHashes,
 		graph: graphSnapshot,
 	});
-	persistGraph(cwd, signature, fileSignatures, graphSnapshot); // fire-and-forget
+	persistGraph(cwd, signature, fileSignatures, fileHashes, graphSnapshot); // fire-and-forget
 	_lastGraphBuildInfo = { reused: false, mode: "full" };
 	facts.setSessionFact("session.reviewGraph", graph);
 	return graph;

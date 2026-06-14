@@ -122,7 +122,7 @@ const stylelintRunner: RunnerDefinition = {
 
 		let cmd: string | null = null;
 		if (
-			await (stylelint.isAvailableAsync?.(cwd) ?? stylelint.isAvailable(cwd))
+			await (stylelint.isAvailableAsync(cwd))
 		) {
 			cmd = stylelint.getCommand(cwd);
 		} else {

@@ -18,6 +18,7 @@ vi.mock("../../clients/lsp/config.js", () => ({
 vi.mock("../../clients/lsp/index.js", () => ({
 	getLSPService: vi.fn(() => ({
 		touchFile: mockTouchFile,
+		supportsLSP: (f: string) => /\.(ts|tsx|js|jsx|py|cpp)$/.test(f),
 	})),
 }));
 
@@ -98,8 +99,8 @@ function makeDeps(
 			detectRunner: () => ({ runner: "vitest", config: null }),
 			runTestFile: () => ({ failed: 1, error: false }),
 		},
-		goClient: { isGoAvailable: () => false },
-		rustClient: { isAvailable: () => false },
+		goClient: { isGoAvailableAsync: async () => false },
+		rustClient: { isAvailableAsync: async () => false },
 		ensureTool: vi.fn(async () => null),
 		cleanStaleTsBuildInfo: () => [],
 		resetDispatchBaselines: () => {},
@@ -114,6 +115,7 @@ describe("warmFiles session start", () => {
 		vi.mocked(loadLSPConfig).mockResolvedValue({});
 		vi.mocked(getLSPService).mockReturnValue({
 			touchFile: mockTouchFile,
+			supportsLSP: (f: string) => /\.(ts|tsx|js|jsx|py|cpp)$/.test(f),
 		} as any);
 	});
 
@@ -164,13 +166,15 @@ describe("warmFiles session start", () => {
 		}
 	}, 15_000);
 
-	it("skips touchFile when warmFiles is empty", async () => {
+	it("skips touchFile when warmFiles is empty and the project has no source files", async () => {
 		const env = setupTestEnvironment("pi-lens-warm-");
 		const restoreStartupMode = setStartupMode("full");
 
 		vi.mocked(loadLSPConfig).mockResolvedValue({});
 
 		try {
+			// Empty project — no detected language, so dominant-language auto-warm
+			// has nothing to spawn.
 			await handleSessionStart(makeDeps({ ctxCwd: env.tmpDir }));
 			expect(mockTouchFile).not.toHaveBeenCalled();
 		} finally {
@@ -178,6 +182,43 @@ describe("warmFiles session start", () => {
 			restoreStartupMode();
 		}
 	});
+
+	it("auto-warms only the dominant language when warmFiles is empty (#203)", async () => {
+		const env = setupTestEnvironment("pi-lens-warm-");
+		const restoreStartupMode = setStartupMode("full");
+
+		// TypeScript dominates (3 files) over Python (1) — exactly one server
+		// should be warmed, via a representative .ts file.
+		createTempFile(env.tmpDir, "src/a.ts", "export const a = 1;");
+		createTempFile(env.tmpDir, "src/b.ts", "export const b = 2;");
+		createTempFile(env.tmpDir, "src/c.ts", "export const c = 3;");
+		createTempFile(env.tmpDir, "src/util.py", "x = 1\n");
+
+		vi.mocked(loadLSPConfig).mockResolvedValue({});
+
+		try {
+			await handleSessionStart(makeDeps({ ctxCwd: env.tmpDir }));
+
+			await vi.waitFor(() => expect(mockTouchFile).toHaveBeenCalledTimes(1), {
+				timeout: 5000,
+			});
+
+			const [filePath, , options] = mockTouchFile.mock.calls[0] as [
+				string,
+				string,
+				Record<string, unknown>,
+			];
+			expect(filePath).toMatch(/\.ts$/);
+			expect(options).toMatchObject({
+				source: "startup-warm-dominant",
+				clientScope: "primary",
+				diagnostics: "none",
+			});
+		} finally {
+			env.cleanup();
+			restoreStartupMode();
+		}
+	}, 15_000);
 
 	it("skips touchFile when no-lsp flag is set", async () => {
 		const env = setupTestEnvironment("pi-lens-warm-");

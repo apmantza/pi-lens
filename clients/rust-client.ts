@@ -9,7 +9,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { safeSpawn } from "./safe-spawn.js";
+import { safeSpawnAsync } from "./safe-spawn.js";
 
 // --- Types ---
 
@@ -22,22 +22,6 @@ export interface RustDiagnostic {
 	message: string;
 	code?: string;
 	file: string;
-}
-
-interface CargoMessage {
-	reason: "compiler-artifact" | "compiler-message" | "build-script-executed";
-	message?: {
-		level: string;
-		code?: string;
-		message: string;
-		spans?: Array<{
-			line_start: number;
-			line_end: number;
-			column_start: number;
-			column_end: number;
-			file_name: string;
-		}>;
-	};
 }
 
 // --- Common install paths ---
@@ -69,9 +53,9 @@ export class RustClient {
 	}
 
 	/**
-	 * Find cargo executable path
+	 * Find cargo executable path (async — probes PATH candidates off the event loop).
 	 */
-	findCargoPath(): string | null {
+	async findCargoPathAsync(): Promise<string | null> {
 		if (this.cargoPath) return this.cargoPath;
 
 		const paths =
@@ -85,7 +69,7 @@ export class RustClient {
 						return p;
 					}
 				} else {
-					const result = safeSpawn(p, ["--version"], {
+					const result = await safeSpawnAsync(p, ["--version"], {
 						timeout: 3000,
 					});
 					if (!result.error && result.status === 0) {
@@ -102,11 +86,11 @@ export class RustClient {
 	}
 
 	/**
-	 * Check if cargo is installed
+	 * Check if cargo is installed (cached)
 	 */
-	isAvailable(): boolean {
+	async isAvailableAsync(): Promise<boolean> {
 		if (this.cargoAvailable !== null) return this.cargoAvailable;
-		this.cargoAvailable = this.findCargoPath() !== null;
+		this.cargoAvailable = (await this.findCargoPathAsync()) !== null;
 		if (this.cargoAvailable) {
 			this.log(`Cargo found: ${this.cargoPath}`);
 		}
@@ -120,151 +104,4 @@ export class RustClient {
 		return path.extname(filePath).toLowerCase() === ".rs";
 	}
 
-	/**
-	 * Run cargo check on the project
-	 */
-	checkFile(filePath: string, cwd: string): RustDiagnostic[] {
-		const cargoExe = this.findCargoPath();
-		if (!cargoExe) return [];
-
-		const absolutePath = path.resolve(filePath);
-		if (!fs.existsSync(absolutePath)) return [];
-
-		try {
-			const result = safeSpawn(
-				cargoExe,
-				["check", "--message-format", "json"],
-				{
-					timeout: 60000,
-					cwd,
-				},
-			);
-
-			const output = result.stdout || "";
-			return this.parseJsonOutput(output, absolutePath);
-		} catch (err: any) {
-			this.log(`Check error: ${err.message}`);
-			return [];
-		}
-	}
-
-	/**
-	 * Run clippy for additional lints
-	 */
-	clippyCheck(cwd: string): RustDiagnostic[] {
-		if (!this.isAvailable()) return [];
-
-		try {
-			const result = safeSpawn(
-				"cargo",
-				["clippy", "--message-format", "json"],
-				{
-					timeout: 60000,
-					cwd,
-				},
-			);
-
-			const output = result.stdout || "";
-			return this.parseJsonOutput(output, "");
-		} catch (err: any) {
-			this.log(`Clippy error: ${err.message}`);
-			return [];
-		}
-	}
-
-	/**
-	 * Format diagnostics for LLM consumption
-	 */
-	formatDiagnostics(diags: RustDiagnostic[], maxItems = 10): string {
-		if (diags.length === 0) return "";
-
-		const errors = diags.filter((d) => d.severity === "error");
-		const warnings = diags.filter((d) => d.severity === "warning");
-
-		let output = `[Rust] ${diags.length} issue(s)`;
-		if (errors.length) output += ` — ${errors.length} error(s)`;
-		if (warnings.length) output += ` — ${warnings.length} warning(s)`;
-		output += ":\n";
-
-		for (const d of diags.slice(0, maxItems)) {
-			const loc = `L${d.line}:${d.column}`;
-			const code = d.code ? ` [${d.code}]` : "";
-			output += `  [${d.severity}] ${loc} ${d.message.slice(0, 200)}${code}\n`;
-		}
-
-		if (diags.length > maxItems) {
-			output += `  ... and ${diags.length - maxItems} more\n`;
-		}
-
-		return output;
-	}
-
-	// --- Internal ---
-
-	private parseJsonOutput(
-		output: string,
-		filterFile: string,
-	): RustDiagnostic[] {
-		if (!output.trim()) return [];
-
-		const diags: RustDiagnostic[] = [];
-		const lines = output.split(/\r?\n/).filter((l) => l.trim());
-
-		for (const line of lines) {
-			try {
-				const msg: CargoMessage = JSON.parse(line);
-
-				if (msg.reason === "compiler-message" && msg.message) {
-					const { level, message, spans, code } = msg.message;
-
-					// Only include errors and warnings
-					if (level !== "error" && level !== "warning" && level !== "note") {
-						continue;
-					}
-
-					// Get location from spans
-					if (spans && spans.length > 0) {
-						for (const span of spans) {
-							const file = span.file_name;
-
-							// Filter to specific file if provided
-							if (
-								filterFile &&
-								path.resolve(file) !== path.resolve(filterFile)
-							) {
-								continue;
-							}
-
-							diags.push({
-								line: span.line_start,
-								column: span.column_start - 1,
-								endLine: span.line_end,
-								endColumn: span.column_end - 1,
-								severity: level as RustDiagnostic["severity"],
-								message: message.slice(0, 300),
-								code,
-								file: path.resolve(file),
-							});
-						}
-					} else {
-						// No span info, add as general diagnostic
-						diags.push({
-							line: 1,
-							column: 0,
-							endLine: 1,
-							endColumn: 0,
-							severity: level as RustDiagnostic["severity"],
-							message: message.slice(0, 300),
-							code,
-							file: filterFile || "",
-						});
-					}
-				}
-			} catch (err) {
-				void err;
-			} // Skip non-JSON lines
-		}
-
-		return diags;
-	}
 }

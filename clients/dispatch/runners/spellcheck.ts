@@ -102,7 +102,7 @@ const spellcheckRunner: RunnerDefinition = {
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		// Skip if typos-cli is not installed
-		if (!(await (typos.isAvailableAsync?.(ctx.cwd || process.cwd()) ?? typos.isAvailable(ctx.cwd || process.cwd())))) {
+		if (!(await typos.isAvailableAsync(ctx.cwd || process.cwd()))) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 

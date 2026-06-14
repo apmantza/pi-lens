@@ -8,6 +8,7 @@
  * - Resource cleanup
  */
 
+import { createHash } from "node:crypto";
 import * as nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -276,6 +277,16 @@ export class LSPService {
 		string,
 		import("./client.js").LSPDiagnostic[]
 	>();
+	/**
+	 * SHA-256 of the file content that produced the matching {@link
+	 * lastKnownDiagnostics} entry, when that content is known (set by
+	 * {@link touchFile}). Lets a hot-path consumer verify a cached entry is for
+	 * the *current* bytes before trusting it as fresh — see
+	 * {@link getLastKnownDiagnostics}. Absent for entries written without content
+	 * (the service-level {@link getDiagnostics} merge), so a hash-guarded read of
+	 * those falls through to a fresh check rather than serving a stale result.
+	 */
+	private readonly lastKnownContentHash = new Map<string, string>();
 	private readonly lastDiagnosticsHealth = new Map<
 		string,
 		LSPDiagnosticsHealth
@@ -930,15 +941,28 @@ export class LSPService {
 
 		let diagnosticsTimedOut = false;
 		if (diagnosticsMode !== "none") {
-			// Resolution: env wins so users can tune the cap without rebuilding,
-			// then the per-call option, then the legacy maxClientWaitMs reuse,
-			// then mode-defaulted floor.
+			// Resolution: env wins so users can tune the cap without rebuilding.
+			// Otherwise, on the single-server hot path (primary scope), use that
+			// server's own strategy budget (server-strategies.ts) so a fast server
+			// (TypeScript ~1s) isn't held to a flat multi-second wait while a slow
+			// one (rust-analyzer 3s) gets the time it needs — bounded by any caller
+			// ceiling that exists to protect the per-edit pipeline budget (#203).
+			// The multi-server "full"/cascade path keeps the flat resolution.
 			const envWait = readEnvDiagnosticsWaitMs();
-			const timeoutMs =
-				envWait ??
-				options.maxDiagnosticsWaitMs ??
-				options.maxClientWaitMs ??
-				(diagnosticsMode === "full" ? 3000 : 1200);
+			const callerCap = options.maxDiagnosticsWaitMs ?? options.maxClientWaitMs;
+			const modeFloor = diagnosticsMode === "full" ? 3000 : 1200;
+			let timeoutMs: number;
+			if (envWait !== undefined) {
+				timeoutMs = envWait;
+			} else if (!useAllClients && spawned.length === 1) {
+				const strategyWait = getStrategy(
+					spawned[0].client.serverId,
+				).aggregateWaitMs;
+				const base = strategyWait > 0 ? strategyWait : (callerCap ?? modeFloor);
+				timeoutMs = callerCap !== undefined ? Math.min(callerCap, base) : base;
+			} else {
+				timeoutMs = callerCap ?? modeFloor;
+			}
 			const waitStartedAt = Date.now();
 			await Promise.all(
 				spawned.map((entry) => {
@@ -978,6 +1002,22 @@ export class LSPService {
 					spawned.flatMap((entry) => entry.client.getDiagnostics(filePath)),
 				)
 			: undefined;
+
+		// Prime the last-known cache WITH the hash of the content we just synced,
+		// so a hot-path consumer (actionable-warnings at turn_end) can verify the
+		// cached diagnostics are for the current bytes before reusing them instead
+		// of paying for a second open+wait. Only when we actually collected — a
+		// non-collecting touch (didChange-only) leaves the prior entry intact.
+		if (collected !== undefined) {
+			const normalizedKey = normalizeMapKey(filePath);
+			if (collected.length > 0) {
+				this.lastKnownDiagnostics.set(normalizedKey, collected);
+				this.lastKnownContentHash.set(normalizedKey, this.hashContent(content));
+			} else {
+				this.lastKnownDiagnostics.delete(normalizedKey);
+				this.lastKnownContentHash.delete(normalizedKey);
+			}
+		}
 
 		// Only refresh the recent-touches entry when we actually pushed. Skipping
 		// here keeps the original push timestamp intact so the debounce window
@@ -1021,11 +1061,26 @@ export class LSPService {
 	 * Intended for hot-path consumers (e.g. actionable-warnings at turn_end)
 	 * that already paid for a `touchFile` during dispatch and just want to
 	 * read the result without a second LSP round trip.
+	 *
+	 * Pass `expectedContentHash` (sha256 of the current file bytes) to guard
+	 * against staleness: the entry is returned only when it was primed by a
+	 * `touchFile` for the *same* content. On mismatch — or for an entry written
+	 * without content (the service-level merge) — this returns `undefined` so the
+	 * caller does a fresh check instead of serving a previous turn's diagnostics.
+	 * Omit it for display consumers (the widget) that accept last-known.
 	 */
 	getLastKnownDiagnostics(
 		filePath: string,
+		expectedContentHash?: string,
 	): import("./client.js").LSPDiagnostic[] | undefined {
-		return this.lastKnownDiagnostics.get(normalizeMapKey(filePath));
+		const normalizedKey = normalizeMapKey(filePath);
+		if (expectedContentHash !== undefined) {
+			const knownHash = this.lastKnownContentHash.get(normalizedKey);
+			if (knownHash === undefined || knownHash !== expectedContentHash) {
+				return undefined;
+			}
+		}
+		return this.lastKnownDiagnostics.get(normalizedKey);
 	}
 
 	async getDiagnostics(
@@ -1221,14 +1276,22 @@ export class LSPService {
 
 		// Keep last known so the widget can show stale diagnostics if LSP dies.
 		// Live clients returning [] means genuinely no errors — clear the stale
-		// entry so the widget doesn't show resolved issues.
+		// entry so the widget doesn't show resolved issues. This path has no
+		// content in hand, so drop any content hash: a hash-guarded read won't
+		// trust this entry as current (it falls through to a fresh check), while
+		// the unguarded widget read still gets last-known for display.
 		if (merged.length > 0) {
 			this.lastKnownDiagnostics.set(normalizedPath, merged);
 		} else {
 			this.lastKnownDiagnostics.delete(normalizedPath);
 		}
+		this.lastKnownContentHash.delete(normalizedPath);
 
 		return merged;
+	}
+
+	private hashContent(content: string): string {
+		return createHash("sha256").update(content).digest("hex");
 	}
 
 	/**

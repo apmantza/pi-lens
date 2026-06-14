@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import * as path from "node:path";
 import type { ActionableWarningRecord } from "./actionable-warnings.js";
 import type { FunctionCallGraph } from "./call-graph.js";
+import type { WordIndex } from "./word-index.js";
 import type { CascadeRun } from "./cascade-types.js";
 import type { CodeQualityWarningRecord } from "./code-quality-warnings.js";
 import type { FileComplexity } from "./complexity-client.js";
@@ -59,6 +60,8 @@ export class RuntimeCoordinator {
 		hasCustomRules: false,
 	};
 	private _telemetrySessionId = `lens-${Date.now().toString(36)}`;
+	private _lifecycleReason: string | undefined;
+	private _hasStableSessionId = false;
 	private _telemetryModel = "unknown";
 	private _turnIndex = 0;
 	private _writeIndex = 0;
@@ -68,6 +71,7 @@ export class RuntimeCoordinator {
 	private _gitGuardHasBlockers = false;
 	private _gitGuardSummary = "";
 	callGraph: FunctionCallGraph | null = null;
+	wordIndex: WordIndex | null = null;
 	private _readGuard: ReadGuard | null = null;
 	private readonly _pendingDeferredFormatFiles = new Map<
 		string,
@@ -96,6 +100,7 @@ export class RuntimeCoordinator {
 		this._complexityBaselines.clear();
 		this._pipelineCrashCounts.clear();
 		this._cachedExports.clear();
+		this.wordIndex = null;
 		this._startupScansInFlight.clear();
 		this._cascadeRuns = [];
 		this._cascadeSessionStats = {
@@ -106,6 +111,7 @@ export class RuntimeCoordinator {
 		this._fixedThisTurn.clear();
 		this._reportedThisTurn.clear();
 		this._telemetrySessionId = `lens-${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`;
+		this._hasStableSessionId = false;
 		this._telemetryModel = "unknown";
 		this._turnIndex = 0;
 		this._writeIndex = 0;
@@ -208,6 +214,33 @@ export class RuntimeCoordinator {
 
 	get telemetrySessionId(): string {
 		return this._telemetrySessionId;
+	}
+
+	/**
+	 * Pin the session identity to pi's STABLE session id and record why this
+	 * session started (#190). Called AFTER {@link resetForSession} (which assigns
+	 * a fresh random id), so the stable id — when pi provides one via
+	 * `ctx.sessionManager.getSessionId()` — wins and survives a quit→resume.
+	 */
+	setSessionLifecycle(args: {
+		sessionId?: string;
+		reason?: string;
+	}): void {
+		if (args.sessionId && args.sessionId.trim()) {
+			this._telemetrySessionId = args.sessionId.trim();
+			this._hasStableSessionId = true;
+		}
+		this._lifecycleReason = args.reason;
+	}
+
+	/** Why the current session started: new | resume | fork | reload | startup. */
+	get sessionLifecycleReason(): string | undefined {
+		return this._lifecycleReason;
+	}
+
+	/** True once a stable pi session id has been pinned (vs the random fallback). */
+	get hasStableSessionId(): boolean {
+		return this._hasStableSessionId;
 	}
 
 	get telemetryModel(): string {

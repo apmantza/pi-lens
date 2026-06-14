@@ -182,7 +182,9 @@ export function createPiMock(
  * `ui.theme`); the rest are inert stubs. `notifications` captures every
  * `ui.notify(...)` for assertions.
  */
-export function makeCtx(overrides: Partial<{ cwd: string }> = {}): MockCtx {
+export function makeCtx(
+	overrides: Partial<{ cwd: string; sessionId: string }> = {},
+): MockCtx {
 	const notifications: CapturedNotification[] = [];
 	const statusCalls: CapturedStatus[] = [];
 	const widgetCalls: CapturedWidget[] = [];
@@ -213,6 +215,11 @@ export function makeCtx(overrides: Partial<{ cwd: string }> = {}): MockCtx {
 		mode: "tui",
 		hasUI: true,
 		cwd: overrides.cwd ?? process.cwd(),
+		// Read-only session manager (#190). Tests pass `sessionId` to drive
+		// resume rehydration via `ctx.sessionManager.getSessionId()`.
+		sessionManager: {
+			getSessionId: () => overrides.sessionId,
+		},
 		model: undefined,
 		signal: undefined,
 		isIdle: () => true,

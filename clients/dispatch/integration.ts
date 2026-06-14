@@ -62,6 +62,7 @@ import {
 import {
 	buildOrUpdateGraph,
 	computeImpactCascade,
+	computeTransitiveImpact,
 	formatImpactCascade,
 } from "../review-graph/service.js";
 import { clearModuleGraphCache } from "../review-graph/workspace-modules.js";
@@ -475,6 +476,20 @@ function ensureCascadeTurnScope(turnSeq: number): void {
 const CASCADE_TTL_MS = 240_000;
 const MAX_PER_FILE = RUNTIME_CONFIG.pipeline.cascadeMaxDiagnosticsPerFile;
 const MAX_FILES = RUNTIME_CONFIG.pipeline.cascadeMaxFiles;
+
+// Bounded transitive cascade (#162): expand neighbour derivation beyond the
+// one-hop importers/callers to depth-2 dependents, so an edit's blast radius
+// reaches indirect dependents — capped so the per-edit cost stays bounded. The
+// one-hop set is always the floor (it sorts first, before depth-2). Both
+// env-tunable; set depth to 1 to restore the old one-hop-only behaviour.
+const CASCADE_TRANSITIVE_DEPTH = Math.max(
+	1,
+	Number.parseInt(process.env.PI_LENS_CASCADE_TRANSITIVE_DEPTH ?? "2", 10) || 2,
+);
+const CASCADE_NEIGHBOUR_BUDGET = Math.max(
+	MAX_FILES,
+	Number.parseInt(process.env.PI_LENS_CASCADE_NEIGHBOUR_BUDGET ?? "40", 10) || 40,
+);
 const CASCADE_GRAPH_KINDS = new Set([
 	"jsts",
 	"python",
@@ -697,7 +712,43 @@ export async function computeCascadeForFile(
 			}
 		}
 
-		// Sort by relationship strength (B6) then cap to MAX_FILES.
+		// Bounded transitive expansion: add depth>1 dependents (indirect
+		// importers/callers/referencers) so the blast radius isn't limited to one
+		// hop. The one-hop sets above remain the floor (they sort first); these
+		// fill the remaining budget. Graph BFS is in-memory + capped.
+		if (CASCADE_TRANSITIVE_DEPTH > 1) {
+			const transitive = computeTransitiveImpact(graph, normalizedFile, {
+				maxDepth: CASCADE_TRANSITIVE_DEPTH,
+				maxHits: CASCADE_NEIGHBOUR_BUDGET,
+			});
+			const added = [
+				...new Set(
+					transitive.hits
+						.map((hit) => hit.file)
+						.filter(
+							(file) => file && normalizeMapKey(file) !== normalizedFileKey,
+						),
+				),
+			].filter((file) => !impact.neighborFiles.includes(file));
+			if (added.length > 0) {
+				impact.neighborFiles = [...impact.neighborFiles, ...added];
+				logCascade({
+					phase: "neighbor_snapshot",
+					filePath,
+					neighborFile: "[transitive-impact]",
+					diagnosticCount: added.length,
+					autoPropagate: false,
+					metadata: {
+						transitive: true,
+						maxDepth: CASCADE_TRANSITIVE_DEPTH,
+						maxDepthReached: transitive.maxDepthReached,
+						truncated: transitive.truncated,
+					},
+				});
+			}
+		}
+
+		// Sort by relationship strength (B6) then cap to the neighbour budget.
 		// directImporters are most impactful, then callers, then reference edges.
 		importerSet = new Set(impact.directImporters);
 		callerSet = new Set(impact.directCallers);
@@ -720,7 +771,7 @@ export async function computeCascadeForFile(
 					importerSet.has(p) ? 0 : callerSet.has(p) ? 1 : 2;
 				return rank(a) - rank(b);
 			})
-			.slice(0, MAX_FILES);
+			.slice(0, CASCADE_NEIGHBOUR_BUDGET);
 	} else {
 		logCascade({
 			phase: "cascade_skip",
@@ -1242,13 +1293,17 @@ export async function dispatchLintWithResult(
 	pi: PiAgentAPI,
 	modifiedRanges?: ModifiedRange[],
 	logContext?: LogContext,
+	options?: { blockingOnly?: boolean },
 ): Promise<DispatchResult> {
+	// Default true preserves the per-edit fast path (errors only). Callers that
+	// want the full picture (warnings + structural smells), e.g. the MCP review
+	// facade, pass blockingOnly=false to run every runner.
 	const ctx = createDispatchContext(
 		filePath,
 		cwd,
 		pi,
 		sessionFacts,
-		true,
+		options?.blockingOnly ?? true,
 		modifiedRanges,
 	);
 	sessionFacts.clearFileFactsFor(ctx.filePath);

@@ -29,6 +29,7 @@ import type { CodeQualityWarningsReport } from "../clients/code-quality-warnings
 import {
 	getFileDiagnosticSummaries,
 	type FileDiagnosticSummary,
+	reconcileStaleWidgetFiles,
 	type WidgetDiagnostic,
 } from "../clients/widget-state.js";
 
@@ -53,6 +54,12 @@ export function createLensDiagnosticsTool(
 	cacheManager: CacheManager,
 	getCwd: () => string,
 	getLspService: () => LSPServiceLike = getLSPService,
+	// Flush any debounced per-edit dispatches before reading, so files the agent
+	// fixed earlier in the turn are re-dispatched and the widget reflects the
+	// CURRENT state — not the pre-fix diagnostics still pending in the debounce
+	// window. Injected (index wires `flushDebouncedToolResults`); optional so the
+	// tool stays decoupled and testable.
+	flushPending: () => Promise<void> = async () => {},
 ) {
 	return {
 		name: "lens_diagnostics" as const,
@@ -131,8 +138,15 @@ export function createLensDiagnosticsTool(
 					: undefined;
 			const cwd = ctx.cwd ?? getCwd();
 
+			// Reflect the agent's just-made fixes before reporting: flush pending
+			// per-edit dispatches (re-records fixed files), then drop entries whose
+			// file changed on disk afterwards / was deleted (stale, e.g. external
+			// edits). Together these stop fixed-this-session findings from lingering.
+			await flushPending();
+			const staleDropped = await reconcileStaleWidgetFiles();
+
 			if (mode === "all") {
-				return formatAllMode(cwd, severity);
+				return formatAllMode(cwd, severity, undefined, undefined, staleDropped);
 			}
 			if (mode === "full") {
 				return formatFullMode(cwd, severity, getLspService(), {
@@ -242,10 +256,23 @@ function formatDeltaMode(
 	const cq = quality?.summary?.warnings ?? 0;
 
 	if (lines.length === 0) {
-		const text = `No ${severity === "all" ? "" : severity + " "}issues in the current turn delta.`;
+		let text = `No ${severity === "all" ? "" : severity + " "}issues in the current turn delta.`;
+		// Discoverability (#190): `delta` is current-turn-scoped, so it's empty
+		// right after a resume even when prior findings were rehydrated into the
+		// session-wide view. Point the agent at `mode=all` when that's the case.
+		const carried = getFileDiagnosticSummaries().filter(
+			(f) => f.diagnostics.length > 0,
+		);
+		const carriedIssues = carried.reduce(
+			(n, f) => n + f.diagnostics.length,
+			0,
+		);
+		if (carried.length > 0) {
+			text += ` ${carriedIssues} finding${carriedIssues === 1 ? "" : "s"} across ${carried.length} file${carried.length === 1 ? "" : "s"} carried over from earlier this session — use mode=all to see them.`;
+		}
 		return {
 			content: [{ type: "text" as const, text }],
-			details: { mode: "delta", warnings: 0 },
+			details: { mode: "delta", warnings: 0, carriedOverFiles: carried.length },
 		};
 	}
 
@@ -502,7 +529,16 @@ function formatAllMode(
 	severity: string,
 	summaries: FileDiagnosticSummary[] = getFileDiagnosticSummaries(),
 	detailOverrides: Record<string, unknown> = { mode: "all" },
+	staleDropped = 0,
 ): { content: [{ type: "text"; text: string }]; details: object } {
+	// Files changed/deleted since their diagnostics were recorded have already
+	// been dropped by reconcileStaleWidgetFiles; note them so the agent knows
+	// those aren't "clean", just un-rescanned (use mode=full to refresh).
+	const staleNote =
+		staleDropped > 0
+			? ` (${staleDropped} changed file${staleDropped === 1 ? "" : "s"} omitted as stale — use mode=full to rescan)`
+			: "";
+
 	// Filter to files with actual issues
 	const withIssues = summaries.filter((s) => {
 		if (severity === "error") return s.blocking > 0 || s.errors > 0;
@@ -512,12 +548,17 @@ function formatAllMode(
 
 	if (withIssues.length === 0) {
 		const text =
-			summaries.length === 0
+			(summaries.length === 0
 				? "No files diagnosed yet this session."
-				: `No ${severity === "all" ? "" : severity + " "}issues across ${summaries.length} file${summaries.length === 1 ? "" : "s"} diagnosed this session. ✓`;
+				: `No ${severity === "all" ? "" : severity + " "}issues across ${summaries.length} file${summaries.length === 1 ? "" : "s"} diagnosed this session. ✓`) +
+			staleNote;
 		return {
 			content: [{ type: "text" as const, text }],
-			details: { ...detailOverrides, filesChecked: summaries.length },
+			details: {
+				...detailOverrides,
+				filesChecked: summaries.length,
+				staleDropped,
+			},
 		};
 	}
 
@@ -588,13 +629,16 @@ function formatAllMode(
 		.join("\n");
 
 	return {
-		content: [{ type: "text" as const, text: lines.join("\n") + summary }],
+		content: [
+			{ type: "text" as const, text: lines.join("\n") + summary + staleNote },
+		],
 		details: {
 			...detailOverrides,
 			filesWithIssues: withIssues.length,
 			totalBlocking,
 			totalErrors,
 			totalWarnings,
+			staleDropped,
 		},
 	};
 }

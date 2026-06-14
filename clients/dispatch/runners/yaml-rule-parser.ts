@@ -14,6 +14,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import yaml from "js-yaml";
 
 // --- Types ---
 
@@ -25,12 +26,13 @@ export interface YamlRuleCondition {
 	any?: YamlRuleCondition[];
 	all?: YamlRuleCondition[];
 	not?: YamlRuleCondition;
-	// Conditions parsed but NOT supported by the NAPI runner.
-	// Rules using these are skipped to prevent false positives.
+	// Relational/structural conditions — all handled natively by napi's engine.
+	// `has`/`inside` default to direct child/parent (`stopBy: neighbor`); set
+	// `stopBy: end` for a recursive descendant/ancestor search.
 	inside?: YamlRuleCondition;
 	follows?: YamlRuleCondition;
 	precedes?: YamlRuleCondition;
-	stopBy?: string;
+	stopBy?: unknown;
 	field?: string;
 	nthChild?: unknown;
 }
@@ -50,11 +52,6 @@ export interface YamlRule {
 interface CachedRules {
 	rules: YamlRule[];
 	mtime: number;
-}
-
-// Internal type for YAML parsing (allows dynamic property access)
-interface YamlNode {
-	[key: string]: unknown;
 }
 
 // --- Constants ---
@@ -101,21 +98,25 @@ export function loadYamlRulesUncached(
 	const files = fs.readdirSync(ruleDir).filter((f) => f.endsWith(".yml"));
 
 	for (const file of files) {
+		let content: string;
 		try {
-			const content = fs.readFileSync(path.join(ruleDir, file), "utf-8");
-			const documents = content.split(/^---$/m).filter((d) => d.trim());
-
-			for (const doc of documents) {
-				const rule = parseSimpleYaml(doc.trim());
-				if (rule?.id) {
-					if (severityFilter && rule.severity !== severityFilter) {
-						continue;
-					}
-					rules.push(rule);
-				}
-			}
+			content = fs.readFileSync(path.join(ruleDir, file), "utf-8");
 		} catch {
-			// Skip invalid files
+			continue; // unreadable file
+		}
+		const documents = content.split(/^---$/m).filter((d) => d.trim());
+
+		// Parse each document independently so one malformed rule (e.g. an
+		// unquoted YAML-special scalar) skips only itself, not the whole file —
+		// slop-patterns.yml packs many rules into a single file.
+		for (const doc of documents) {
+			const rule = parseSimpleYaml(doc.trim());
+			if (rule?.id) {
+				if (severityFilter && rule.severity !== severityFilter) {
+					continue;
+				}
+				rules.push(rule);
+			}
 		}
 	}
 
@@ -175,43 +176,6 @@ export function isStructuredRule(rule: YamlRule): boolean {
 	);
 }
 
-/**
- * Check if a rule or any of its nested conditions use features
- * not supported by the NAPI runner (inside, follows, precedes,
- * stopBy, field, nthChild). Rules using these must be skipped
- * to prevent false positives from incomplete condition evaluation.
- */
-export function hasUnsupportedConditions(rule: YamlRule): boolean {
-	if (rule.constraints) return true;
-	if (!rule.rule) return false;
-	return conditionHasUnsupported(rule.rule);
-}
-
-function conditionHasUnsupported(c: YamlRuleCondition): boolean {
-	if (
-		c.inside ||
-		c.follows ||
-		c.precedes ||
-		c.stopBy ||
-		c.field ||
-		c.nthChild
-	) {
-		return true;
-	}
-	if (c.has && conditionHasUnsupported(c.has)) return true;
-	if (c.not && conditionHasUnsupported(c.not)) return true;
-	if (c.any) {
-		for (const sub of c.any) {
-			if (conditionHasUnsupported(sub)) return true;
-		}
-	}
-	if (c.all) {
-		for (const sub of c.all) {
-			if (conditionHasUnsupported(sub)) return true;
-		}
-	}
-	return false;
-}
 
 export function calculateRuleComplexity(
 	condition: YamlRuleCondition | undefined,
@@ -239,179 +203,24 @@ export function calculateRuleComplexity(
 
 // --- YAML Parser ---
 
-function getIndent(line: string): number {
-	let count = 0;
-	for (const char of line) {
-		if (char === " ") count++;
-		else if (char === "\t") count += 2;
-		else break;
-	}
-	return count;
-}
-
-function stripQuotes(value: string): string {
-	let s = value;
-	while (s.startsWith('"') && s.endsWith('"') && s.length > 1)
-		s = s.slice(1, -1);
-	while (s.startsWith("'") && s.endsWith("'") && s.length > 1)
-		s = s.slice(1, -1);
-	return s;
-}
-
+/**
+ * Parse a single YAML rule document into a {@link YamlRule}.
+ *
+ * Uses `js-yaml` so the full ast-grep rule grammar — nested `any`/`all`/`has`,
+ * `field`/`inside`/`stopBy`, and metavariable `constraints` — survives intact and
+ * can be handed straight to napi's native engine. (The former hand-rolled parser
+ * flattened nested structures and dropped constraints, which is why those rules
+ * had to be skipped; see #206.) A malformed document returns `null` rather than
+ * throwing, so callers skip just that rule.
+ */
 export function parseSimpleYaml(content: string): YamlRule | null {
-	const lines = content.split("\n");
-	const rule: YamlRule = { id: "", metadata: {} };
-	const stack: Array<{ name: string; indent: number; obj: YamlNode }> = [];
-	let multilineBuffer: string[] = [];
-	let multilineKey = "";
-
-	const currentObj = (): YamlNode =>
-		stack.length === 0
-			? (rule as unknown as YamlNode)
-			: stack[stack.length - 1].obj;
-
-	const flushMultiline = () => {
-		if (!multilineKey || multilineBuffer.length === 0) return;
-		const value = multilineBuffer.join("\n");
-		const obj = currentObj();
-		if (multilineKey === "pattern") obj.pattern = value;
-		else if (multilineKey === "message")
-			(rule as unknown as YamlNode).message = value;
-		else if (multilineKey === "note")
-			(rule as unknown as YamlNode).note = value;
-		else if (multilineKey === "fix")
-			(rule as unknown as YamlNode).fix = value;
-		multilineKey = "";
-		multilineBuffer = [];
-	};
-
-	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i];
-		const trimmed = line.trim();
-		if (!trimmed || trimmed.startsWith("#") || trimmed === "---") continue;
-
-		const indent = getIndent(line);
-
-		while (stack.length > 0 && indent <= stack[stack.length - 1].indent) {
-			stack.pop();
-		}
-
-		if (line.startsWith(" ") && !trimmed.includes(":") && multilineKey) {
-			multilineBuffer.push(trimmed);
-			continue;
-		}
-
-		flushMultiline();
-
-		const colonIdx = trimmed.indexOf(":");
-		const key = colonIdx > 0 ? trimmed.substring(0, colonIdx).trim() : trimmed;
-		const value = colonIdx > 0 ? trimmed.substring(colonIdx + 1).trim() : "";
-
-		if (key === "id") {
-			rule.id = stripQuotes(value);
-		} else if (key === "language") {
-			rule.language = value;
-		} else if (key === "severity") {
-			rule.severity = value;
-		} else if (key === "message") {
-			value === "|"
-				? (multilineKey = "message")
-				: (rule.message = stripQuotes(value));
-		} else if (key === "note") {
-			value === "|" ? (multilineKey = "note") : (rule.note = stripQuotes(value));
-		} else if (key === "fix") {
-			value === "|" ? (multilineKey = "fix") : (rule.fix = stripQuotes(value));
-		} else if (key === "constraints") {
-			rule.constraints = {};
-			stack.push({
-				name: "constraints",
-				indent,
-				obj: rule.constraints as unknown as YamlNode,
-			});
-		} else if (key === "metadata") {
-			rule.metadata = {};
-			stack.push({ name: "metadata", indent, obj: rule.metadata as YamlNode });
-		} else if (key === "rule") {
-			rule.rule = {};
-			stack.push({ name: "rule", indent, obj: rule.rule as YamlNode });
-		} else if (stack.length > 0) {
-			const obj = currentObj();
-			const section = stack[stack.length - 1].name;
-
-			if (key === "weight" && section === "metadata") {
-				if (!rule.metadata) rule.metadata = {};
-				rule.metadata.weight = parseInt(value, 10) || 3;
-			} else if (key === "category" && section === "metadata") {
-				if (!rule.metadata) rule.metadata = {};
-				rule.metadata.category = stripQuotes(value);
-			} else if (key === "pattern") {
-				value === "|"
-					? (multilineKey = "pattern")
-					: (obj.pattern = stripQuotes(value));
-			} else if (key === "kind") {
-				obj.kind = value;
-			} else if (key === "regex") {
-				obj.regex = stripQuotes(value);
-			} else if (key === "inside" || key === "follows" || key === "precedes") {
-				// Mark as present for unsupported-condition detection
-				obj[key] = {} as YamlRuleCondition;
-				stack.push({ name: key, indent, obj: obj[key] as YamlNode });
-			} else if (key === "stopBy") {
-				obj.stopBy = stripQuotes(value) || "end";
-			} else if (key === "field") {
-				obj.field = stripQuotes(value);
-			} else if (key === "nthChild") {
-				obj.nthChild = value || true;
-				stack.push({ name: "nthChild", indent, obj: {} as YamlNode });
-			} else if (key === "has" || key === "not") {
-				obj[key] = {} as YamlRuleCondition;
-				stack.push({ name: key, indent, obj: obj[key] as YamlNode });
-			} else if (key === "any" || key === "all") {
-				if (!obj[key]) obj[key] = [];
-				const list = obj[key] as YamlRuleCondition[];
-
-				let j = i + 1;
-				while (j < lines.length) {
-					const nextLine = lines[j];
-					const nextTrimmed = nextLine.trim();
-					if (!nextTrimmed || nextTrimmed.startsWith("#")) {
-						j++;
-						continue;
-					}
-					const nextIndent = getIndent(nextLine);
-					if (nextIndent <= indent) break;
-
-					if (nextTrimmed.startsWith("- ")) {
-						const item: YamlRuleCondition = {};
-						list.push(item);
-						stack.push({
-							name: key,
-							indent: nextIndent,
-							obj: item as YamlNode,
-						});
-
-						const itemContent = nextTrimmed.substring(2);
-						const colonPos = itemContent.indexOf(":");
-						if (colonPos !== -1) {
-							const itemKey = itemContent.substring(0, colonPos);
-							const itemVal = itemContent.substring(colonPos + 1);
-							if (itemKey.trim() === "pattern") {
-								item.pattern = stripQuotes(itemVal.trim());
-							} else if (itemKey.trim() === "kind") {
-								item.kind = itemVal.trim();
-							} else if (itemKey.trim() === "regex") {
-								item.regex = stripQuotes(itemVal.trim());
-							}
-						} else if (itemContent) {
-							item.pattern = stripQuotes(itemContent);
-						}
-					}
-					j++;
-				}
-			}
-		}
+	let parsed: unknown;
+	try {
+		parsed = yaml.load(content);
+	} catch {
+		return null;
 	}
-
-	flushMultiline();
+	if (!parsed || typeof parsed !== "object") return null;
+	const rule = parsed as YamlRule;
 	return rule.id ? rule : null;
 }

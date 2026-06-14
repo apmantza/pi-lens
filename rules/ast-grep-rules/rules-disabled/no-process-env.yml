@@ -1,3 +1,6 @@
+# DISABLED (#206): relies on a metavariable `constraints` regex (KEY) to flag
+# only secret-named access; the runner's interpreter ignores constraints, so the
+# bare `process.env.$KEY` pattern matches every env access (noise).
 id: no-process-env
 language: TypeScript
 message: "Avoid direct process.env access for secrets — use config service"

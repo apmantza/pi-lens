@@ -17,7 +17,7 @@ vi.mock("../../../../clients/installer/index.js", () => ({
 
 vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
 	createAvailabilityChecker: (command: string) => ({
-		isAvailable: () => true,
+		isAvailableAsync: async () => true,
 		getCommand: () => command,
 	}),
 	resolveToolCommandWithInstallFallback: vi.fn(
