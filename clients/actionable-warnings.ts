@@ -357,22 +357,32 @@ export async function buildActionableWarningsReport(args: {
 				});
 				continue;
 			}
-			// Prefer the cache primed by the dispatch pipeline (touchFile already
-			// ran in this turn for every modified file). A second open + wait
-			// here costs ~1 s/file with the LSP cold and produces an identical
-			// result. Fall through to the slow path only when the cache is
-			// missing — that means dispatch didn't see this file in this turn.
+			// Reuse the cache primed by the dispatch pipeline's touchFile earlier in
+			// this turn — but only when it is verified current. A second open+wait
+			// here costs ~1 s/file with the LSP cold, so we pass the hash of the
+			// current file bytes: getLastKnownDiagnostics returns the entry only if
+			// it was primed for the SAME content, so a previous turn's diagnostics
+			// are never served as current. On any miss (no entry, content drift, or
+			// an entry written without content) we fall through to a fresh read.
 			let diags: LSPDiagnostic[] | undefined;
 			let lspSource: "cache" | "fresh" = "cache";
-			const cached = lspService.getLastKnownDiagnostics(filePath);
+			const currentContent = fs.existsSync(filePath)
+				? fs.readFileSync(filePath, "utf-8")
+				: undefined;
+			const contentHash =
+				currentContent !== undefined
+					? createHash("sha256").update(currentContent).digest("hex")
+					: undefined;
+			const cached =
+				contentHash !== undefined
+					? lspService.getLastKnownDiagnostics(filePath, contentHash)
+					: undefined;
 			if (cached !== undefined) {
 				diags = cached;
 			} else {
 				try {
-					const content = fs.existsSync(filePath)
-						? fs.readFileSync(filePath, "utf-8")
-						: undefined;
-					if (content) await lspService.openFile(filePath, content);
+					if (currentContent)
+						await lspService.openFile(filePath, currentContent);
 					diags = await lspService.getDiagnostics(filePath);
 					lspSource = "fresh";
 				} catch (err) {
