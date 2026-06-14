@@ -976,6 +976,88 @@ describe("tryCorrectIndentationMismatch — interior whitespace drift (Tier B)",
 	});
 });
 
+describe("tryCorrectIndentationMismatch — Unicode punctuation drift (Tier C)", () => {
+	// Special chars are written as \u escapes so the source stays ASCII:
+	// “/” = smart double quotes, — = em-dash,   = NBSP.
+	const FILE = [
+		'const label = "open";',
+		"const total = a - b;",
+		"const note = a + b;",
+	].join("\n");
+
+	function recover(oldText: string): string | undefined {
+		const env = setupTestEnvironment("pi-lens-unicode-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			fs.writeFileSync(filePath, `${FILE}\n`);
+			return tryCorrectIndentationMismatch(oldText, filePath);
+		} finally {
+			env.cleanup();
+		}
+	}
+
+	it("recovers the verbatim span when oldText uses smart double quotes", () => {
+		const oldText = [
+			"const label = “open”;",
+			"const total = a - b;",
+		].join("\n");
+		expect(recover(oldText)).toBe(
+			['const label = "open";', "const total = a - b;"].join("\n"),
+		);
+	});
+
+	it("recovers the verbatim span when oldText uses an em-dash for a hyphen", () => {
+		const oldText = [
+			"const total = a — b;",
+			"const note = a + b;",
+		].join("\n");
+		expect(recover(oldText)).toBe(
+			["const total = a - b;", "const note = a + b;"].join("\n"),
+		);
+	});
+
+	it("recovers the verbatim span when oldText uses a non-breaking space", () => {
+		const oldText = [
+			"const total = a - b;",
+			"const note = a + b;",
+		].join("\n");
+		expect(recover(oldText)).toBe(
+			["const total = a - b;", "const note = a + b;"].join("\n"),
+		);
+	});
+
+	it("does NOT patch a single-line oldText (no >=2 anchors)", () => {
+		expect(recover("const label = “open”;")).toBeUndefined();
+	});
+
+	it("does NOT false-match genuinely absent content", () => {
+		const oldText = ["const missing = x — y;", "return nope;"].join("\n");
+		expect(recover(oldText)).toBeUndefined();
+	});
+
+	it("does NOT patch when the folded signature is ambiguous", () => {
+		const env = setupTestEnvironment("pi-lens-unicode-ambig-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			const body = [
+				"const total = a - b;",
+				"const note = a + b;",
+				"gap();",
+				"const total = a - b;",
+				"const note = a + b;",
+			].join("\n");
+			fs.writeFileSync(filePath, `${body}\n`);
+			const oldText = [
+				"const total = a — b;",
+				"const note = a + b;",
+			].join("\n");
+			expect(tryCorrectIndentationMismatch(oldText, filePath)).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+});
+
 describe("getTouchedLinesForGuard — did-you-mean suggestions", () => {
 	it("suggests the closest current line when oldText nearly matches", () => {
 		const env = setupTestEnvironment("pi-lens-didyoumean-");

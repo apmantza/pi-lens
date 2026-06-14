@@ -704,6 +704,21 @@ export function tryCorrectIndentationMismatchFromContent(
 		return whitespaceCandidate;
 	}
 
+	// Tier C: Unicode-punctuation drift the whitespace tiers can't bridge — the
+	// model emitted smart quotes / em-dashes / NBSP where the file has straight
+	// quotes / hyphens / regular spaces (or vice versa), common when text is
+	// pasted from rendered Markdown or the model "tidies" punctuation. Folding
+	// those to their ASCII equivalents (on top of whitespace collapse) catches it.
+	// Same safety contract as Tier B: signature-matched, unique-match guarded, ≥2
+	// anchors, recovers the verbatim file span (the file's real characters).
+	const unicodeCandidate = findUnicodePunctuationInsensitiveCandidate(
+		content,
+		normalized,
+	);
+	if (unicodeCandidate !== undefined) {
+		return unicodeCandidate;
+	}
+
 	return undefined;
 }
 
@@ -863,6 +878,79 @@ function findWhitespaceInsensitiveCandidate(
 			if (
 				contentIdx >= contentLines.length ||
 				collapse(contentLines[contentIdx]) !== oldSignature[sigIdx]
+			) {
+				ok = false;
+				break;
+			}
+			end = contentIdx;
+			sigIdx += 1;
+			contentIdx += 1;
+		}
+		if (ok) spans.push([start, end]);
+	}
+
+	if (spans.length !== 1) return undefined;
+	const [start, end] = spans[0];
+	const candidate = contentLines.slice(start, end + 1).join("\n");
+	return candidate === oldText ? undefined : candidate;
+}
+
+/**
+ * Fold the Unicode punctuation that models and rendered text routinely swap for
+ * ASCII (and back) to a canonical ASCII form: smart single/double quotes →
+ * `'`/`"`, the dash family (hyphen, figure/en/em dash, horizontal bar, minus) →
+ * `-`, and non-breaking / typographic spaces → a regular space. Used only to
+ * build a match signature — never to rewrite file content.
+ */
+function normalizeUnicodePunctuation(text: string): string {
+	return text
+		.replace(/[‘’‚‛]/g, "'")
+		.replace(/[“”„‟]/g, '"')
+		.replace(/[‐-―−]/g, "-")
+		.replace(/[  -   　]/g, " ");
+}
+
+/**
+ * Tier C of the autopatch ladder: tolerate Unicode-punctuation divergence the
+ * whitespace tiers can't bridge (smart quotes ↔ straight, em/en-dash ↔ hyphen,
+ * NBSP ↔ space). The signature folds Unicode punctuation to ASCII and then
+ * collapses all whitespace (so it subsumes Tier B and additionally absorbs the
+ * punctuation swap). Safety mirrors Tier B exactly: matches by the folded
+ * signature but **recovers and returns the verbatim file span** (the file's real
+ * characters), requires the signature to match **exactly once**, and anchors on
+ * ≥2 non-blank lines to resist single-line collisions.
+ */
+function findUnicodePunctuationInsensitiveCandidate(
+	content: string,
+	oldText: string,
+): string | undefined {
+	const fold = (line: string) =>
+		normalizeUnicodePunctuation(line).replace(/\s+/g, "");
+	const isBlank = (line: string) => fold(line) === "";
+
+	const contentLines = content.split("\n");
+	const oldSignature = oldText
+		.split("\n")
+		.map(fold)
+		.filter((line) => line !== "");
+	if (oldSignature.length < 2) return undefined;
+
+	const spans: Array<[number, number]> = [];
+	for (let start = 0; start < contentLines.length; start += 1) {
+		if (fold(contentLines[start]) !== oldSignature[0]) continue;
+		let contentIdx = start + 1;
+		let sigIdx = 1;
+		let end = start;
+		let ok = true;
+		while (sigIdx < oldSignature.length) {
+			while (
+				contentIdx < contentLines.length &&
+				isBlank(contentLines[contentIdx])
+			)
+				contentIdx += 1;
+			if (
+				contentIdx >= contentLines.length ||
+				fold(contentLines[contentIdx]) !== oldSignature[sigIdx]
 			) {
 				ok = false;
 				break;
