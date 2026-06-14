@@ -12,6 +12,7 @@
 
 import * as fs from "node:fs";
 import { createFileTime, type FileTime } from "./file-time.js";
+import { normalizeFilePath } from "./path-utils.js";
 import { logReadGuardEvent } from "./read-guard-logger.js";
 
 // --- Types ---
@@ -278,6 +279,20 @@ export class ReadGuard {
 		this.fileTime = createFileTime(sessionId);
 	}
 
+	/**
+	 * Canonical Map key for a file path. Read sources arrive with mixed
+	 * separators/casing — the Read tool gives OS-native backslashes on Windows,
+	 * while LSP-expanded and search-tool reads arrive slash-normalized from URIs.
+	 * Keying the reads/edits/exemptions maps on the raw path made a read recorded
+	 * under one form invisible to an edit checked under another, producing a false
+	 * `zero_read` block despite the file having been read. `normalizeFilePath`
+	 * folds separators and Windows casing to one key, so record and lookup always
+	 * agree. Every map access in this class MUST key through here.
+	 */
+	private key(filePath: string): string {
+		return normalizeFilePath(filePath);
+	}
+
 	// --- Public API ---
 
 	/**
@@ -285,12 +300,14 @@ export class ReadGuard {
 	 * Call this from the tool_call handler after any LSP expansion.
 	 */
 	recordRead(record: ReadRecord): void {
+		const filePath = this.key(record.filePath);
 		const storedRecord: ReadRecord = {
 			...record,
+			filePath,
 			lineHashes:
 				record.lineHashes ??
 				captureLineHashes(
-					record.filePath,
+					filePath,
 					record.effectiveOffset,
 					record.effectiveLimit,
 				),
@@ -334,6 +351,10 @@ export class ReadGuard {
 		editRanges?: [number, number][],
 		options?: { skipSnapshotCheck?: boolean; oldTextResolved?: boolean },
 	): ReadGuardVerdict {
+		// Canonicalize once: every map lookup below (and every private helper this
+		// passes filePath to) must agree with how recordRead keyed the read.
+		filePath = this.key(filePath);
+
 		// Check exemptions
 		if (this.exemptions.has(filePath)) {
 			this.exemptions.delete(filePath); // One-time use
@@ -571,7 +592,7 @@ export class ReadGuard {
 		turnIndex: number,
 		writeIndex: number,
 	): void {
-		this.pendingCreations.set(filePath, { turnIndex, writeIndex });
+		this.pendingCreations.set(this.key(filePath), { turnIndex, writeIndex });
 	}
 
 	/**
@@ -580,6 +601,7 @@ export class ReadGuard {
 	 * file doesn't see "file_modified" caused by our own previous edit.
 	 */
 	recordWritten(filePath: string): void {
+		filePath = this.key(filePath);
 		this.fileTime.read(filePath);
 		this.writtenThisSession.add(filePath);
 		const creation = this.pendingCreations.get(filePath);
@@ -594,7 +616,7 @@ export class ReadGuard {
 	 * Called via /lens-allow-edit command.
 	 */
 	addExemption(filePath: string): void {
-		this.exemptions.add(filePath);
+		this.exemptions.add(this.key(filePath));
 		logReadGuardEvent({
 			event: "exemption_added",
 			sessionId: this.sessionId,
@@ -659,14 +681,14 @@ export class ReadGuard {
 	 * Get all read records for a file (for debugging).
 	 */
 	getReadHistory(filePath: string): ReadRecord[] {
-		return this.reads.get(filePath) ?? [];
+		return this.reads.get(this.key(filePath)) ?? [];
 	}
 
 	/**
 	 * Get all edit records for a file (for debugging).
 	 */
 	getEditHistory(filePath: string): EditRecord[] {
-		return this.edits.get(filePath) ?? [];
+		return this.edits.get(this.key(filePath)) ?? [];
 	}
 
 	// --- Private helpers ---
