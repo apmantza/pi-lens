@@ -170,6 +170,8 @@ const lspRunner: RunnerDefinition = {
 		if (serverFailed) {
 			return {
 				status: "failed",
+				failureKind: "server_error",
+				failureMessage: failureReason.slice(0, 200),
 				diagnostics: [
 					{
 						id: `lsp:server-error:0`,
@@ -251,6 +253,9 @@ const lspRunner: RunnerDefinition = {
 
 		return {
 			status: hasErrors ? "failed" : "succeeded",
+			// "failed" here means the file has blocking type errors — the check ran
+			// fine. Tag it so the smell analyzer doesn't read it as a runner crash.
+			failureKind: hasErrors ? "blocking_diagnostics" : undefined,
 			diagnostics,
 			semantic: resultSemantic,
 		};

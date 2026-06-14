@@ -138,6 +138,17 @@ export interface RunnerResult {
 	semantic: OutputSemantic;
 	/** Raw output string (if runner returns text instead of structured) */
 	rawOutput?: string;
+	/**
+	 * When status==="failed", a short machine-readable reason that separates a
+	 * genuine runner breakage from "the check ran and found blocking issues".
+	 * Conventional values: "timeout", "exception" (thrown/aborted), "server_error"
+	 * (LSP/tool process failed), "blocking_diagnostics" (the file has blocking
+	 * findings — not a runner fault). Consumers (e.g. the log-smell analyzer)
+	 * use this to avoid counting found-errors as crashes.
+	 */
+	failureKind?: string;
+	/** Optional short human-readable detail for the failure (truncated). */
+	failureMessage?: string;
 }
 
 // --- Dispatch Context ---

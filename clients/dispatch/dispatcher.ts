@@ -633,6 +633,13 @@ async function runGroup(
 							semantic: d.semantic,
 						}))
 					: undefined,
+			metadata:
+				result.status === "failed" && result.failureKind
+					? {
+							failureKind: result.failureKind,
+							failureMessage: result.failureMessage,
+						}
+					: undefined,
 		});
 		recordRunner(
 			ctx.filePath,
@@ -939,10 +946,13 @@ async function runRunner(
 	} catch (error) {
 		clearTimeout(timer);
 		ctx.log(`Runner ${runner.id} failed: ${error}`);
+		const message = error instanceof Error ? error.message : String(error);
 		return {
 			status: "failed",
 			diagnostics: [],
 			semantic: defaultSemantic,
+			failureKind: message.includes("timed out") ? "timeout" : "exception",
+			failureMessage: message.slice(0, 200),
 		};
 	}
 }
