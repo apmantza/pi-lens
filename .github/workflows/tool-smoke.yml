@@ -33,7 +33,7 @@ jobs:
       # sqlfluff, mypy). GitHub-release tools (shellcheck/shfmt/hadolint/taplo/
       # tflint/terraform-ls/rust-analyzer) are fetched by the harness's own
       # --install; ubuntu-latest ships rustup/cargo so rust-analyzer can load.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
