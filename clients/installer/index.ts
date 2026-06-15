@@ -118,15 +118,32 @@ interface GitHubAssetSpec {
 	extraAssets?: (platform: string, arch: string) => string[];
 }
 
+/**
+ * A tool distributed as a runnable fat JAR on a Maven repository (default Maven
+ * Central). Installed by downloading the JAR into the managed bin and writing a
+ * `java -jar` launcher next to it, so it resolves like any other managed binary.
+ * Requires a JRE at run time.
+ */
+export interface MavenJarSpec {
+	groupId: string;
+	artifactId: string;
+	version: string;
+	/** Classifier for the runnable fat jar, e.g. "with-dependencies". */
+	classifier?: string;
+	/** Maven repo base URL (default Maven Central). */
+	repoBaseUrl?: string;
+}
+
 export interface ToolDefinition {
 	id: string;
 	name: string;
 	checkCommand: string;
 	checkArgs: string[];
-	installStrategy: "npm" | "pip" | "gem" | "github";
+	installStrategy: "npm" | "pip" | "gem" | "github" | "maven";
 	packageName?: string;
 	binaryName?: string;
 	github?: GitHubAssetSpec;
+	maven?: MavenJarSpec;
 }
 
 export const TOOLS: ToolDefinition[] = [
@@ -527,6 +544,23 @@ export const TOOLS: ToolDefinition[] = [
 				return undefined;
 			},
 			extraAssets: (platform) => (platform === "win32" ? ["ktlint"] : []),
+		},
+	},
+	{
+		// ktfmt (Meta's opinionated Kotlin formatter) ships only as a Maven-Central
+		// fat JAR — no native binary, no npm package — so it uses the maven strategy
+		// (#129). Run via a `java -jar` launcher; requires a JRE.
+		id: "ktfmt",
+		name: "ktfmt",
+		checkCommand: "ktfmt",
+		checkArgs: ["--version"],
+		installStrategy: "maven",
+		binaryName: "ktfmt",
+		maven: {
+			groupId: "com.facebook",
+			artifactId: "ktfmt",
+			version: "0.63",
+			classifier: "with-dependencies",
 		},
 	},
 	{
@@ -1001,6 +1035,7 @@ export type ToolSource =
 	| "pip-user"
 	| "pi-lens-auto"
 	| "github-release"
+	| "maven-jar"
 	| "npx-fallback"
 	| "not-installed";
 
@@ -1011,7 +1046,7 @@ export interface ToolStatus {
 	source: ToolSource;
 	path?: string;
 	version?: string;
-	strategy: "npm" | "pip" | "gem" | "github";
+	strategy: ToolDefinition["installStrategy"];
 }
 
 /**
@@ -1078,12 +1113,13 @@ export async function getAllToolStatuses(): Promise<ToolStatus[]> {
 			}
 		}
 
-		// 4. Check GitHub releases (~/.pi-lens/bin/)
-		if (tool.installStrategy === "github") {
+		// 4. Check managed bin (~/.pi-lens/bin/) — github releases + maven launchers
+		if (tool.installStrategy === "github" || tool.installStrategy === "maven") {
 			const githubPath = await findGitHubToolPath(tool.binaryName || tool.id);
 			if (githubPath) {
 				status.installed = true;
-				status.source = "github-release";
+				status.source =
+					tool.installStrategy === "maven" ? "maven-jar" : "github-release";
 				status.path = githubPath;
 				statuses.push(status);
 				continue;
@@ -1187,11 +1223,11 @@ export async function getToolPath(toolId: string): Promise<string | undefined> {
 		// fall through to global checks
 	}
 
-	// For github-strategy tools, prefer managed install (~/.pi-lens/bin/) over PATH.
-	// Managed installs are known-good binaries that pi-lens downloaded as a fallback
-	// when a PATH-resolved tool was broken or missing. Checking before PATH ensures
-	// force-reinstall flows find the newly downloaded binary.
-	if (tool.installStrategy === "github") {
+	// For github/maven tools, prefer the managed install (~/.pi-lens/bin/) over
+	// PATH. Managed installs are known-good binaries/launchers pi-lens downloaded
+	// as a fallback when a PATH-resolved tool was broken or missing. Checking
+	// before PATH ensures force-reinstall flows find the newly downloaded binary.
+	if (tool.installStrategy === "github" || tool.installStrategy === "maven") {
 		const githubPath = await findGitHubToolPath(tool.binaryName || tool.id);
 		if (githubPath) return githubPath;
 	}
@@ -1747,6 +1783,79 @@ const NEEDS_POSTINSTALL = new Set([
 	"intelephense", // postinstall fetches platform binary; --ignore-scripts breaks install
 ]);
 
+const MAVEN_CENTRAL_BASE = "https://repo1.maven.org/maven2";
+
+/**
+ * Install a Maven-distributed runnable fat JAR: download it into the managed bin
+ * and write a `java -jar` launcher next to it (so it resolves like any managed
+ * binary via findGitHubToolPath). Requires a JRE — gated on `java` availability.
+ */
+async function installMavenTool(
+	tool: ToolDefinition,
+): Promise<string | undefined> {
+	const spec = tool.maven;
+	if (!spec) return undefined;
+	const binaryName = tool.binaryName ?? tool.id;
+	const isWindows = process.platform === "win32";
+
+	if (!(await isCommandAvailable("java", ["-version"]))) {
+		logSessionStart(
+			`maven-install ${tool.id}: java not found — a JAR tool can't run without a JRE`,
+		);
+		return undefined;
+	}
+
+	const base = (spec.repoBaseUrl ?? MAVEN_CENTRAL_BASE).replace(/\/+$/, "");
+	const groupPath = spec.groupId.replace(/\./g, "/");
+	const jarFile = `${spec.artifactId}-${spec.version}${
+		spec.classifier ? `-${spec.classifier}` : ""
+	}.jar`;
+	const url = `${base}/${groupPath}/${spec.artifactId}/${spec.version}/${jarFile}`;
+
+	logSessionStart(`maven-install ${tool.id}: downloading ${url}`);
+	let jarBuffer: Buffer;
+	try {
+		jarBuffer = await httpsGet(url);
+	} catch (err) {
+		logSessionStart(
+			`maven-install ${tool.id}: download failed: ${(err as Error).message}`,
+		);
+		return undefined;
+	}
+
+	try {
+		await fs.mkdir(GITHUB_BIN_DIR, { recursive: true });
+		const jarPath = path.join(GITHUB_BIN_DIR, `${tool.id}.jar`);
+		await fs.writeFile(jarPath, jarBuffer);
+
+		// Launcher so the tool resolves as a normal command in the managed bin.
+		const launcherName = isWindows ? `${binaryName}.bat` : binaryName;
+		const launcherPath = path.join(GITHUB_BIN_DIR, launcherName);
+		if (isWindows) {
+			await fs.writeFile(
+				launcherPath,
+				`@echo off\r\njava -jar "%~dp0${tool.id}.jar" %*\r\n`,
+			);
+		} else {
+			await fs.writeFile(
+				launcherPath,
+				`#!/bin/sh\nexec java -jar "$(dirname "$0")/${tool.id}.jar" "$@"\n`,
+				{ mode: 0o755 },
+			);
+		}
+		logSessionStart(
+			`maven-install ${tool.id}: installed → ${launcherPath} (${jarBuffer.length} bytes)`,
+		);
+		debugLog(`[maven] installed ${tool.name} → ${launcherPath}`);
+		return launcherPath;
+	} catch (err) {
+		logSessionStart(
+			`maven-install ${tool.id}: install failed: ${(err as Error).message}`,
+		);
+		return undefined;
+	}
+}
+
 async function installNpmTool(
 	packageName: string,
 	binaryName: string,
@@ -2131,6 +2240,16 @@ export async function installTool(toolId: string): Promise<boolean> {
 				if (!tool.github) return false;
 				const ghPath = await installGitHubTool(tool);
 				const ok = ghPath !== undefined;
+				logSessionStart(
+					`auto-install ${tool.id}: ${ok ? "success" : "failed"} (${Date.now() - startedAt}ms)`,
+				);
+				return ok;
+			}
+
+			case "maven": {
+				if (!tool.maven) return false;
+				const mavenPath = await installMavenTool(tool);
+				const ok = mavenPath !== undefined;
 				logSessionStart(
 					`auto-install ${tool.id}: ${ok ? "success" : "failed"} (${Date.now() - startedAt}ms)`,
 				);

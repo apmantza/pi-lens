@@ -17,7 +17,7 @@ vi.unmock("../../../clients/installer/index.ts");
  * list the asset-matrix test iterates) in lockstep with the registry.
  */
 
-const STRATEGIES = new Set(["npm", "pip", "gem", "github"]);
+const STRATEGIES = new Set(["npm", "pip", "gem", "github", "maven"]);
 const PLATFORMS = ["linux", "darwin", "win32"] as const;
 const ARCHES = ["x64", "arm64"] as const;
 // Platforms pi-lens never builds binaries for — assetMatch must reject these.
@@ -101,6 +101,18 @@ describe("TOOLS registry consistency", () => {
 				expect(t.github?.repo, `${t.id} repo "owner/repo"`).toMatch(/^[\w.-]+\/[\w.-]+$/);
 				expect(t.binaryName, `${t.id} binaryName`).toBeTruthy();
 				expect(t.packageName, `${t.id} github tool should not carry packageName`).toBeUndefined();
+			}
+		});
+
+		it("maven tools declare a maven spec (groupId/artifactId/version) + binaryName, no packageName/github", () => {
+			for (const t of TOOLS.filter((x) => x.installStrategy === "maven")) {
+				expect(t.maven, `${t.id} maven spec`).toBeDefined();
+				expect(t.maven?.groupId, `${t.id} groupId`).toMatch(/^[\w.-]+$/);
+				expect(t.maven?.artifactId, `${t.id} artifactId`).toMatch(/^[\w.-]+$/);
+				expect(t.maven?.version, `${t.id} pinned version`).toMatch(/^[\w.+-]+$/);
+				expect(t.binaryName, `${t.id} binaryName`).toBeTruthy();
+				expect(t.packageName, `${t.id} maven tool should not carry packageName`).toBeUndefined();
+				expect(t.github, `${t.id} maven tool should not carry a github spec`).toBeUndefined();
 			}
 		});
 	});
