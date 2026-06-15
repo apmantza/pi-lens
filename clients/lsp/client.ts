@@ -14,11 +14,13 @@ import { access } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import type { MessageConnection } from "vscode-jsonrpc";
 import { logLatency } from "../latency-logger.js";
+// vscode-jsonrpc v9 ships an `exports` map exposing the Node entry as the
+// `./node` subpath (no `.js`); the old `/node.js` file path no longer resolves.
 import {
 	createMessageConnection,
 	StreamMessageReader,
 	StreamMessageWriter,
-} from "vscode-jsonrpc/node.js";
+} from "vscode-jsonrpc/node";
 
 import type { LSPProcess } from "./launch.js";
 import { normalizeMapKey, uriToPath } from "./path-utils.js";
