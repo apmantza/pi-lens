@@ -51,7 +51,7 @@ describe("shellcheck runner", () => {
 		);
 	});
 
-	it("adds --severity warning when no .shellcheckrc exists", async () => {
+	it("adds --severity info when no .shellcheckrc exists (surfaces SC2086, #213)", async () => {
 		const env = setupTestEnvironment("pi-lens-shellcheck-");
 		try {
 			const filePath = path.join(env.tmpDir, "script.sh");
@@ -70,7 +70,10 @@ describe("shellcheck runner", () => {
 
 			const args = safeSpawn.mock.calls[0]?.[1] ?? [];
 			expect(args).toContain("--severity");
-			expect(args).toContain("warning");
+			// info (not warning) so SC2086-class info findings surface; pure `style`
+			// stays opt-in via .shellcheckrc.
+			expect(args).toContain("info");
+			expect(args).not.toContain("warning");
 		} finally {
 			env.cleanup();
 		}

@@ -730,6 +730,13 @@ export function getAutofixCapability(
 	return AUTOFIX_CAPABILITIES.get(toolId);
 }
 
+/** Tool ids declared as safe pipeline-autofix capable (for consistency guards). */
+export function listSafePipelineAutofixTools(): string[] {
+	return [...AUTOFIX_CAPABILITIES.entries()]
+		.filter(([, cap]) => cap.safePipelineAutofix)
+		.map(([id]) => id);
+}
+
 export function canToolAutoFix(toolId: string): boolean {
 	return getAutofixCapability(toolId)?.toolSupportsFix ?? false;
 }
@@ -753,7 +760,11 @@ export type AutofixToolName =
 	| "rubocop"
 	| "ktlint"
 	| "rust-clippy"
-	| "dart-analyze";
+	| "dart-analyze"
+	| "golangci-lint"
+	| "detekt"
+	| "markdownlint"
+	| "oxlint";
 
 export type LintRunnerName =
 	| JstsLintRunnerName
@@ -864,6 +875,22 @@ const AUTOFIX_CAPABILITIES = new Map<string, AutofixCapability>([
 	],
 	[
 		"dart-analyze",
+		{ toolSupportsFix: true, safePipelineAutofix: true, fixKind: "pipeline" },
+	],
+	[
+		"golangci-lint",
+		{ toolSupportsFix: true, safePipelineAutofix: true, fixKind: "pipeline" },
+	],
+	[
+		"detekt",
+		{ toolSupportsFix: true, safePipelineAutofix: true, fixKind: "pipeline" },
+	],
+	[
+		"markdownlint",
+		{ toolSupportsFix: true, safePipelineAutofix: true, fixKind: "pipeline" },
+	],
+	[
+		"oxlint",
 		{ toolSupportsFix: true, safePipelineAutofix: true, fixKind: "pipeline" },
 	],
 ]);
@@ -1174,6 +1201,9 @@ export interface AutofixPolicyContext {
 	hasSqlfluffConfig?: boolean;
 	hasRubocopConfig?: boolean;
 	hasBiomeConfig?: boolean;
+	hasGolangciConfig?: boolean;
+	hasDetektConfig?: boolean;
+	hasOxlintConfig?: boolean;
 }
 
 export function getLinterPolicyForFile(
@@ -1489,9 +1519,12 @@ export function getAutofixPolicyForFile(
 	const ext = path.extname(filePath).toLowerCase();
 
 	if ([".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"].includes(ext)) {
+		// Mirror the JS/TS lint policy's precedence: eslint (config-first) →
+		// oxlint (config-first) → biome (smart-default). oxlint is config-gated so
+		// it never conflicts with the biome default.
 		if (context.hasEslintConfig) {
 			return {
-				toolNames: ["eslint", "biome"],
+				toolNames: ["eslint", "oxlint", "biome"],
 				preferredTools: ["eslint"],
 				defaultTool: "eslint",
 				defaultWhenUnconfigured: false,
@@ -1499,8 +1532,20 @@ export function getAutofixPolicyForFile(
 				safe: true,
 			};
 		}
+		if (context.hasOxlintConfig) {
+			return {
+				toolNames: ["eslint", "oxlint", "biome"],
+				preferredTools: ["oxlint"],
+				defaultTool: "oxlint",
+				defaultWhenUnconfigured: false,
+				// Mirror the JS lint policy, which gates on eslint only (oxlint vs
+				// biome are both "smart-default" there).
+				gate: "smart-default",
+				safe: true,
+			};
+		}
 		return {
-			toolNames: ["eslint", "biome"],
+			toolNames: ["eslint", "oxlint", "biome"],
 			preferredTools: ["biome"],
 			defaultTool: "biome",
 			defaultWhenUnconfigured: true,
@@ -1568,10 +1613,49 @@ export function getAutofixPolicyForFile(
 	}
 
 	if ([".kt", ".kts"].includes(ext)) {
+		// detekt --auto-correct is config-first; with a detekt config present it
+		// wins over the ktlint smart-default (and is the autofix path on Windows,
+		// where ktlint's install is currently broken, #218).
+		if (context.hasDetektConfig) {
+			return {
+				toolNames: ["detekt", "ktlint"],
+				preferredTools: ["detekt"],
+				defaultTool: "detekt",
+				defaultWhenUnconfigured: false,
+				gate: "config-first",
+				safe: true,
+			};
+		}
 		return {
-			toolNames: ["ktlint"],
+			toolNames: ["ktlint", "detekt"],
 			preferredTools: ["ktlint"],
 			defaultTool: "ktlint",
+			defaultWhenUnconfigured: true,
+			gate: "smart-default",
+			safe: true,
+		};
+	}
+
+	if (ext === ".go") {
+		// golangci-lint run --fix is config-first: only apply when the project
+		// opted in with a .golangci.* config.
+		return {
+			toolNames: ["golangci-lint"],
+			preferredTools: context.hasGolangciConfig ? ["golangci-lint"] : [],
+			defaultTool: "golangci-lint",
+			defaultWhenUnconfigured: false,
+			gate: "config-first",
+			safe: true,
+		};
+	}
+
+	if ([".md", ".mdx"].includes(ext)) {
+		// markdownlint --fix is a smart-default (deterministic MD### fixes run with
+		// built-in rules; config optional) — matches the markdownlint lint policy.
+		return {
+			toolNames: ["markdownlint"],
+			preferredTools: ["markdownlint"],
+			defaultTool: "markdownlint",
 			defaultWhenUnconfigured: true,
 			gate: "smart-default",
 			safe: true,
@@ -1725,7 +1809,8 @@ export function hasOxfmtConfig(cwd: string): boolean {
 					...(pkg.dependencies as Record<string, unknown> | undefined),
 					...(pkg.devDependencies as Record<string, unknown> | undefined),
 				};
-				if (deps["@oxc-project/oxfmt"]) return true;
+				// Published package is `oxfmt`; the scoped name does not exist on npm.
+				if (deps["oxfmt"] || deps["@oxc-project/oxfmt"]) return true;
 			} catch {}
 		}
 	}

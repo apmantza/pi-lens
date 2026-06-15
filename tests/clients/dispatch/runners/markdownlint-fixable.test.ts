@@ -85,4 +85,43 @@ describe("markdownlint runner — fixable metadata", () => {
 			env.cleanup();
 		}
 	});
+
+	// Regression for #212: markdownlint-cli2 emits a severity token (`error`/
+	// `warning`) between the col and the rule code, and some rules carry multiple
+	// slash-separated names — both of which the old parser missed, silently
+	// returning 0 diagnostics.
+	it("parses the markdownlint-cli2 format (severity token + multi-segment rule)", async () => {
+		const env = setupTestEnvironment("pi-lens-markdownlint-cli2fmt-");
+		try {
+			const filePath = path.join(env.tmpDir, "README.md");
+			fs.writeFileSync(filePath, "#Title\n");
+
+			safeSpawnAsync.mockResolvedValueOnce({
+				error: null,
+				status: 1,
+				stdout: [
+					`${filePath}:1:1 error MD018/no-missing-space-atx No space after hash`,
+					`${filePath}:1 error MD041/first-line-heading/first-line-h1 First line should be a top-level heading`,
+					`${filePath}:2:14 warning MD009/no-trailing-spaces Trailing spaces`,
+				].join("\n"),
+				stderr: "",
+			});
+
+			const runner = (
+				await import("../../../../clients/dispatch/runners/markdownlint.ts")
+			).default;
+			const result = await runner.run(createCtx(filePath, env.tmpDir) as never);
+
+			expect(result.diagnostics.length).toBe(3);
+			expect(result.diagnostics.map((d) => d.rule).sort()).toEqual([
+				"MD009",
+				"MD018",
+				"MD041",
+			]);
+			const md041 = result.diagnostics.find((d) => d.rule === "MD041");
+			expect(md041?.line).toBe(1);
+		} finally {
+			env.cleanup();
+		}
+	});
 });

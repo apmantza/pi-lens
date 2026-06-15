@@ -103,7 +103,7 @@ const PRIMARY_DISPATCH_GROUPS: Partial<Record<FileKind, RunnerGroup>> = {
 		filterKinds: ["rust"],
 	},
 	ruby: {
-		mode: "fallback",
+		mode: "all",
 		runnerIds: ["lsp", "rubocop"],
 		filterKinds: ["ruby"],
 	},
@@ -130,12 +130,12 @@ const PRIMARY_DISPATCH_GROUPS: Partial<Record<FileKind, RunnerGroup>> = {
 		filterKinds: ["markdown"],
 	},
 	css: {
-		mode: "fallback",
+		mode: "all",
 		runnerIds: ["lsp", "stylelint"],
 		filterKinds: ["css"],
 	},
 	yaml: {
-		mode: "fallback",
+		mode: "all",
 		runnerIds: ["lsp", "yamllint"],
 		filterKinds: ["yaml"],
 	},
@@ -145,12 +145,12 @@ const PRIMARY_DISPATCH_GROUPS: Partial<Record<FileKind, RunnerGroup>> = {
 		filterKinds: ["sql"],
 	},
 	html: {
-		mode: "fallback",
+		mode: "all",
 		runnerIds: ["lsp", "htmlhint"],
 		filterKinds: ["html"],
 	},
 	docker: {
-		mode: "fallback",
+		mode: "all",
 		runnerIds: ["lsp", "hadolint"],
 		filterKinds: ["docker"],
 	},
@@ -181,7 +181,7 @@ const PRIMARY_DISPATCH_GROUPS: Partial<Record<FileKind, RunnerGroup>> = {
 		filterKinds: ["java"],
 	},
 	kotlin: {
-		mode: "fallback",
+		mode: "all",
 		runnerIds: ["lsp", "ktlint"],
 		filterKinds: ["kotlin"],
 	},
@@ -217,7 +217,7 @@ const PRIMARY_DISPATCH_GROUPS: Partial<Record<FileKind, RunnerGroup>> = {
 	},
 	nix: { mode: "fallback", runnerIds: ["lsp"], filterKinds: ["nix"] },
 	toml: {
-		mode: "fallback",
+		mode: "all",
 		runnerIds: ["lsp", "taplo"],
 		filterKinds: ["toml"],
 	},

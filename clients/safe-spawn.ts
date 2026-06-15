@@ -76,6 +76,26 @@ function cmdEscapeArg(arg: string): string {
 	return `"${arg.replace(/"/g, '""')}"`;
 }
 
+/**
+ * Build the cmd.exe command string used for Windows `shell:true` spawning.
+ *
+ * The COMMAND must be escaped the same way as the args — escaping only the args
+ * (the bug behind #214) means a tool whose resolved path contains a space (e.g.
+ * `C:\Program Files\Go\bin\go.exe`) makes cmd.exe parse `C:\Program` as the
+ * command and fail with "'C:\Program' is not recognized". `cmdEscapeArg` is a
+ * no-op for space-free commands, so this is safe for the npm/.pi-lens tool paths
+ * that already worked. The `chcp 65001` prefix forces the UTF-8 code page (so
+ * tool output isn't mangled by the system code page) and, as a side benefit,
+ * keeps the (possibly quoted) command off the front of the line, avoiding
+ * cmd.exe's `/s` outer-quote-stripping quirk.
+ */
+export function buildWindowsShellCommand(
+	command: string,
+	args: string[],
+): string {
+	return `chcp 65001 >nul 2>&1 && ${[command, ...args].map(cmdEscapeArg).join(" ")}`;
+}
+
 // ============================================================================
 // ASYNC VERSION (Recommended - Non-blocking)
 // ============================================================================
@@ -131,7 +151,7 @@ export async function safeSpawnAsync(
 		// etc.) have their bytes decoded as the system code page (CP850/CP1252/
 		// CP936/CP932), producing garbled characters in stderr error messages.
 		const spawnCmd = isWindows
-			? `chcp 65001 >nul 2>&1 && ${[command, ...args.map(cmdEscapeArg)].join(" ")}`
+			? buildWindowsShellCommand(command, args)
 			: command;
 		const spawnArgs = isWindows ? [] : args;
 		const child = spawn(spawnCmd, spawnArgs, {

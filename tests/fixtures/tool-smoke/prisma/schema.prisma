@@ -1,0 +1,11 @@
+// Tool-smoke fixture for #209 — the Prisma language server flags the `name`
+// field that is missing a type.
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id   Int @id
+  name
+}

@@ -117,9 +117,10 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<
 	},
 	shell: {
 		name: "Shell Script Linting",
-		capabilities: ["lint", "security"],
+		capabilities: ["lint", "security", "format"],
 		writeGroups: [
 			primary("shell"),
+			{ mode: "all", runnerIds: ["shfmt"], filterKinds: ["shell"] },
 			{ mode: "all", runnerIds: ["fact-rules"], filterKinds: ["shell"] },
 		],
 	},
@@ -131,7 +132,10 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<
 	markdown: {
 		name: "Markdown Processing",
 		capabilities: ["docs", "format", "lint"],
-		writeGroups: [primary("markdown")],
+		writeGroups: [
+			primary("markdown"),
+			{ mode: "all", runnerIds: ["markdownlint"], filterKinds: ["markdown"] },
+		],
 	},
 	css: {
 		name: "CSS Processing",

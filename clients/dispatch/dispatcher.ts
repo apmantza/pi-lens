@@ -348,6 +348,17 @@ function promoteDeltaUnusedToBlockers(diagnostics: Diagnostic[]): Diagnostic[] {
 
 // --- Latency Logger ---
 
+/**
+ * Optional per-runner result sink. Fires once for each runner that actually
+ * executes (immediately after its `run()` returns), with the exact
+ * `RunnerResult` — including `failureKind`/`failureMessage` that the merged
+ * `DispatchResult` discards. Runners that are filtered out, `when`-skipped, or
+ * not registered do not fire it. Lets the live tool-smoke harness (#209) assert
+ * each tool spawned and exited cleanly without duplicating dispatch's
+ * selection/gating logic.
+ */
+export type RunnerResultSink = (runnerId: string, result: RunnerResult) => void;
+
 export interface RunnerLatency {
 	runnerId: string;
 	startTime: number;
@@ -529,6 +540,7 @@ async function runGroup(
 	ctx: DispatchContext,
 	group: RunnerGroup,
 	registry: RunnerRegistryContract,
+	onRunnerResult?: RunnerResultSink,
 ): Promise<GroupResult> {
 	const diagnostics: Diagnostic[] = [];
 	const latencies: RunnerLatency[] = [];
@@ -603,6 +615,7 @@ async function runGroup(
 		}
 
 		const result = await runRunner(ctx, runner, semantic);
+		onRunnerResult?.(runnerId, result);
 		const runnerEnd = Date.now();
 		const duration = runnerEnd - runnerStart;
 
@@ -674,6 +687,7 @@ export async function dispatchForFile(
 	ctx: DispatchContext,
 	groups: RunnerGroup[],
 	registry: RunnerRegistryContract,
+	onRunnerResult?: RunnerResultSink,
 ): Promise<DispatchResult> {
 	const _overallStart = Date.now();
 	if (ctx.fileRole === "generated") {
@@ -712,7 +726,7 @@ export async function dispatchForFile(
 	// preserved (sequential first-success). Results are merged in original
 	// group order so output is deterministic.
 	const groupResults = await Promise.all(
-		groups.map((group) => runGroup(ctx, group, registry)),
+		groups.map((group) => runGroup(ctx, group, registry, onRunnerResult)),
 	);
 
 	// Count baseline warnings before filtering (for delta count display)

@@ -224,7 +224,28 @@ describe("tool-policy", () => {
 			preferredTools: ["ktlint"],
 			safe: true,
 		});
-		expect(getAutofixPolicyForFile("/tmp/file.go", {})).toBeUndefined();
+		// detekt is the config-first Kotlin alternate.
+		expect(
+			getAutofixPolicyForFile("/tmp/file.kt", { hasDetektConfig: true }),
+		).toMatchObject({ preferredTools: ["detekt"], gate: "config-first" });
+		// markdownlint is smart-default (no config needed).
+		expect(getAutofixPolicyForFile("/tmp/file.md", {})).toMatchObject({
+			preferredTools: ["markdownlint"],
+			gate: "smart-default",
+		});
+		// oxlint mirrors the JS lint precedence when configured.
+		expect(
+			getAutofixPolicyForFile("/tmp/file.ts", { hasOxlintConfig: true }),
+		).toMatchObject({ preferredTools: ["oxlint"] });
+		// Go autofix is config-first: a policy exists, but selects nothing until a
+		// .golangci.* config opts in.
+		expect(getAutofixPolicyForFile("/tmp/file.go", {})).toMatchObject({
+			preferredTools: [],
+			gate: "config-first",
+		});
+		expect(
+			getAutofixPolicyForFile("/tmp/file.go", { hasGolangciConfig: true }),
+		).toMatchObject({ preferredTools: ["golangci-lint"] });
 	});
 
 	it("exposes centralized autofix capability metadata", () => {

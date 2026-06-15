@@ -1,0 +1,4 @@
+/* Tool-smoke fixture for #209 — stylelint flags the invalid hex color. */
+a {
+  color: #zzz;
+}

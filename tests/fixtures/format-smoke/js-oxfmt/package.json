@@ -1,0 +1,6 @@
+{
+  "name": "oxfmt-smoke",
+  "devDependencies": {
+    "oxfmt": "^0.54.0"
+  }
+}

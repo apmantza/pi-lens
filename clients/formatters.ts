@@ -283,6 +283,9 @@ function hasExplicitFormatterConfig(
 			return (
 				hasOxfmtConfig(cwd) ||
 				hasVitePlusConfig(cwd) ||
+				// The published package is `oxfmt`; `@oxc-project/oxfmt` does not
+				// exist on npm. Accept both (scoped kept for forward-compat).
+				hasNearestPackageJsonDependency(cwd, "oxfmt") ||
 				hasNearestPackageJsonDependency(cwd, "@oxc-project/oxfmt")
 			);
 		case "ruff":
@@ -445,6 +448,8 @@ export const oxfmtFormatter: FormatterInfo = {
 		return (
 			hasOxfmtConfig(cwd) ||
 			hasVitePlusConfig(cwd) ||
+			// Published package is `oxfmt` (the scoped name does not exist on npm).
+			hasNearestPackageJsonDependency(cwd, "oxfmt") ||
 			hasNearestPackageJsonDependency(cwd, "@oxc-project/oxfmt")
 		);
 	},
@@ -700,10 +705,31 @@ export const phpCsFixerFormatter: FormatterInfo = {
 
 export const csharpierFormatter: FormatterInfo = {
 	name: "csharpier",
-	command: ["dotnet", "csharpier", "$FILE"],
+	// CSharpier ≥1.0 is a standalone `csharpier format <file>`; the `dotnet
+	// csharpier <file>` form was removed (a bare `dotnet csharpier` now errors
+	// "a dotnet-prefixed executable with this name could not be found"). Keep the
+	// legacy form as a fallback for CSharpier 0.x via resolveCommand.
+	command: ["csharpier", "format", "$FILE"],
 	extensions: [".cs"],
+	async resolveCommand(filePath, _cwd) {
+		if ((await which("csharpier")) !== null) {
+			return ["csharpier", "format", filePath];
+		}
+		// CSharpier 0.x: invoked through the dotnet driver.
+		if ((await which("dotnet")) !== null) {
+			const legacy = await safeSpawnAsync("dotnet", ["csharpier", "--version"], {
+				timeout: 5000,
+			});
+			if (!legacy.error && legacy.status === 0) {
+				return ["dotnet", "csharpier", filePath];
+			}
+		}
+		return null;
+	},
 	async detect(_cwd: string) {
-		// Check dotnet is available AND csharpier tool is installed
+		// CSharpier ≥1.0 standalone binary …
+		if ((await which("csharpier")) !== null) return true;
+		// … or the legacy dotnet-driver form (CSharpier 0.x).
 		if ((await which("dotnet")) === null) return false;
 		const result = await safeSpawnAsync("dotnet", ["csharpier", "--version"], {
 			timeout: 5000,

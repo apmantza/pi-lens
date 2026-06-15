@@ -1,0 +1,3 @@
+# Tool-smoke fixture for #209 — taplo flags the unterminated table header.
+[package
+name = "demo"

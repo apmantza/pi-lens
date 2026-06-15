@@ -113,6 +113,26 @@ const mockSpawn = vi.hoisted(() =>
 
 vi.mock("node:child_process", () => ({ spawn: mockSpawn }));
 
+// ── https mock ──────────────────────────────────────────────────────────
+// Keep the suite hermetic: installTool's github path does a real GitHub API
+// fetch via node:https. Without this mock the install tests depend on the
+// network and fail in restricted CI (e.g. dependabot PRs). The mock records the
+// fetch (so we can assert installTool was reached) then fails deterministically.
+const httpsGetCalls = vi.hoisted(() => [] as string[]);
+const mockHttpsGet = vi.hoisted(() => (url: unknown) => {
+	httpsGetCalls.push(String(url));
+	const req = {
+		on(event: string, handler: (err: Error) => void) {
+			if (event === "error") {
+				setImmediate(() => handler(new Error("network disabled in test")));
+			}
+			return req;
+		},
+	};
+	return req;
+});
+vi.mock("node:https", () => ({ default: { get: mockHttpsGet }, get: mockHttpsGet }));
+
 import * as path from "node:path";
 import {
 	ensureTool,
@@ -140,6 +160,7 @@ function fakeAccess(...allowed: string[]): void {
 beforeEach(() => {
 	vi.clearAllMocks();
 	spawnCalls.length = 0;
+	httpsGetCalls.length = 0;
 	resetProbeCacheStateForTesting();
 	mockFsReadFile.mockRejectedValue(new Error("ENOENT"));
 	fakeAccess(/* nothing */);
@@ -232,12 +253,15 @@ describe("ensureTool force-reinstall", () => {
 		mockFsAccess.mockResolvedValue(undefined);
 
 		spawnCalls.length = 0;
+		httpsGetCalls.length = 0;
 
 		const result = await ensureTool("rust-analyzer", {
 			forceReinstall: true,
 		});
 
 		expect(result).not.toBe("/fake/cached/rust-analyzer");
-		expect(spawnCalls.length).toBeGreaterThan(0);
-	}, 30000); // installTool makes a real GitHub-API fetch (own 5-10s timeouts) — 5s default is too tight under CI
+		// Reaching installTool means it attempted the GitHub-release fetch. (The
+		// fetch is mocked to fail, so no real network — hermetic.)
+		expect(httpsGetCalls.length).toBeGreaterThan(0);
+	});
 });

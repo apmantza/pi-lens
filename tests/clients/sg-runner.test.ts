@@ -289,4 +289,30 @@ describe("SgRunner", () => {
 			}
 		});
 	});
+
+	describe("buildBashRunArgs (Git Bash exec path — injection safety, code-scanning #12)", () => {
+		it("passes cmd + args as positional params with a constant -c script", async () => {
+			const { buildBashRunArgs } = await import("../../clients/sg-runner.js");
+			expect(
+				buildBashRunArgs("ast-grep", ["run", "-p", "console.log($MSG)"]),
+			).toEqual(["-c", '"$0" "$@"', "ast-grep", "run", "-p", "console.log($MSG)"]);
+		});
+
+		it("never interpolates the command path into the script (no env-path injection)", async () => {
+			const { buildBashRunArgs } = await import("../../clients/sg-runner.js");
+			// A hostile env-derived path stays argv[0] verbatim — not part of the
+			// `-c` string — so the shell cannot evaluate it.
+			const evil = "/tmp/$(touch pwned)/ast-grep";
+			const argv = buildBashRunArgs(evil, ["-p", "x"]);
+			expect(argv[1]).toBe('"$0" "$@"'); // script is a constant
+			expect(argv[2]).toBe(evil); // path is a discrete positional arg
+			expect(argv[1]).not.toContain("$("); // never concatenated into the script
+		});
+
+		it("keeps $-metavariable patterns as a single literal arg (not shell-expanded)", async () => {
+			const { buildBashRunArgs } = await import("../../clients/sg-runner.js");
+			const argv = buildBashRunArgs("sg", ["-p", "$A && $B || $$$REST"]);
+			expect(argv).toContain("$A && $B || $$$REST");
+		});
+	});
 });

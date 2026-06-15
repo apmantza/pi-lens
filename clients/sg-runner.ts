@@ -25,6 +25,21 @@ function escapeWindowsArg(arg: string): string {
 	return `"${arg.replace(/"/g, '""')}"`;
 }
 
+/**
+ * Build the `bash -c` argv that runs `cmd` with `allArgs` as POSITIONAL
+ * parameters. The script is the constant `"$0" "$@"`, so bash re-emits the
+ * command and every arg verbatim — no parameter expansion, no word-splitting.
+ *
+ * Two properties this guarantees, neither of which string-interpolation could:
+ *  - ast-grep `$METAVAR` patterns reach the binary literally (not shell-expanded).
+ *  - an environment-derived command path (PATH-resolved `ast-grep`/`sg`/`npx`)
+ *    cannot inject shell — it's argv[0], never part of the script string
+ *    (CodeQL js/shell-command-injection-from-environment).
+ */
+export function buildBashRunArgs(cmd: string, allArgs: string[]): string[] {
+	return ["-c", '"$0" "$@"', cmd, ...allArgs];
+}
+
 function sgExcludeArgsForProject(rootDir: string): string[] {
 	return getProjectIgnoreGlobs(rootDir).flatMap((glob) => [
 		"--globs",
@@ -326,24 +341,15 @@ export class SgRunner {
 
 			let proc;
 			if (isWindows && hasBash) {
-				// Use bash -c with properly escaped command
-				// In bash, use single quotes around arguments containing $ to prevent expansion
-				const escapedArgs = allArgs.map((arg) => {
-					// For bash, wrap $-containing args in single quotes
-					if (arg.includes("$")) {
-						return `'${arg.replace(/'/g, "'\\''")}'`;
-					}
-					// For other args with spaces/special chars, use double quotes
-					if (/[\s"]/.test(arg)) {
-						return `"${arg.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-					}
-					return arg;
-				});
-				const escapedCmd = /[\s"]/g.test(command.cmd)
-					? `"${command.cmd.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
-					: command.cmd;
-				const bashCommand = `${escapedCmd} ${escapedArgs.join(" ")}`;
-				proc = spawn("bash", ["-c", bashCommand], {
+				// Run via bash (Git Bash/MSYS2) so $-metavariables in ast-grep
+				// patterns aren't shell-expanded. Pass the command + args as
+				// POSITIONAL parameters (`"$0"`/`"$@"`) instead of interpolating
+				// them into the -c string: bash re-emits `"$@"` verbatim — no
+				// parameter expansion, no word-splitting — so patterns stay literal
+				// AND an environment-derived command path cannot inject shell
+				// (fixes CodeQL js/shell-command-injection-from-environment). This
+				// also removes the brittle hand-rolled quoting it replaced.
+				proc = spawn("bash", buildBashRunArgs(command.cmd, allArgs), {
 					stdio: ["ignore", "pipe", "pipe"],
 					windowsHide: true,
 				});

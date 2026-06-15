@@ -97,10 +97,17 @@ type AvailabilityCache = {
 /**
  * Create a cached availability checker for a command.
  * The checker will look for the command in venv first, then global.
+ *
+ * `versionArgs` defaults to `["--version"]` but some tools reject that flag and
+ * expose version under a subcommand instead (e.g. `zig version`, not
+ * `zig --version`). Passing the wrong probe makes the runner silently skip on
+ * every machine, so toolchains with a non-standard version command must override
+ * this.
  */
 export function createAvailabilityChecker(
 	command: string,
 	windowsExt = "",
+	versionArgs: string[] = ["--version"],
 ): {
 	isAvailableAsync: (cwd?: string) => Promise<boolean>;
 	getCommand: (cwd?: string) => string | null;
@@ -130,7 +137,7 @@ export function createAvailabilityChecker(
 
 		const promise = (async () => {
 			const cmd = findCommand(resolvedCwd);
-			const result = await safeSpawnAsync(cmd, ["--version"], {
+			const result = await safeSpawnAsync(cmd, versionArgs, {
 				timeout: 5000,
 			});
 

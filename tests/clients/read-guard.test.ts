@@ -13,6 +13,7 @@ import {
 	type ReadRecord,
 } from "../../clients/read-guard.js";
 import { logReadGuardEvent } from "../../clients/read-guard-logger.js";
+import { normalizeFilePath } from "../../clients/path-utils.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 const fileTimeState = vi.hoisted(() => ({ hasChanged: false }));
@@ -1004,9 +1005,11 @@ describe("ReadGuard", () => {
 
 			expect(summary.totalEdits).toBe(3);
 			expect(summary.totalBlocks).toBe(2);
-			expect(summary.byFile["/src/api.ts"].edits).toBe(1);
-			expect(summary.byFile["/src/api.ts"].blocks).toBe(0);
-			expect(summary.byFile["/src/other.ts"].blocks).toBe(1);
+			// byFile is keyed by the canonical path (read-guard normalizes all keys),
+			// so look up via the same normalization rather than the raw input string.
+			expect(summary.byFile[normalizeFilePath("/src/api.ts")].edits).toBe(1);
+			expect(summary.byFile[normalizeFilePath("/src/api.ts")].blocks).toBe(0);
+			expect(summary.byFile[normalizeFilePath("/src/other.ts")].blocks).toBe(1);
 		});
 	});
 });

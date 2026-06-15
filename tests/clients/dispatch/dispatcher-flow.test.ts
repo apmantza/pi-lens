@@ -742,6 +742,91 @@ describe("Dispatch Flow", () => {
 			expect(result.diagnostics.map((d) => d.id)).toEqual(["healthy-warning"]);
 		});
 	});
+
+	describe("Per-runner result sink (onRunnerResult)", () => {
+		it("fires once per executed runner with its exact result incl. failureKind", async () => {
+			registerRunner({
+				id: "ok",
+				appliesTo: ["jsts"],
+				priority: 10,
+				enabledByDefault: true,
+				async run() {
+					return {
+						status: "succeeded",
+						diagnostics: [
+							{
+								id: "d1",
+								message: "m",
+								filePath: "test.ts",
+								severity: "warning",
+								semantic: "warning",
+								tool: "ok",
+							},
+						],
+						semantic: "warning",
+					};
+				},
+			});
+			registerRunner({
+				id: "boom",
+				appliesTo: ["jsts"],
+				priority: 11,
+				enabledByDefault: true,
+				async run() {
+					throw new Error("kaboom");
+				},
+			});
+
+			const ctx = createMockContext("test.ts");
+			const seen: Array<{
+				id: string;
+				status: string;
+				kind: string | undefined;
+				diags: number;
+			}> = [];
+			await runDispatchForFile(
+				ctx,
+				[{ mode: "all", runnerIds: ["ok", "boom"] }],
+				registry,
+				(id, result) =>
+					seen.push({
+						id,
+						status: result.status,
+						kind: result.failureKind,
+						diags: result.diagnostics.length,
+					}),
+			);
+
+			expect(seen).toEqual([
+				{ id: "ok", status: "succeeded", kind: undefined, diags: 1 },
+				{ id: "boom", status: "failed", kind: "exception", diags: 0 },
+			]);
+		});
+
+		it("does not fire for when-skipped or unregistered runners", async () => {
+			registerRunner({
+				id: "skipme",
+				appliesTo: ["jsts"],
+				priority: 10,
+				enabledByDefault: true,
+				when: async () => false,
+				async run() {
+					return { status: "succeeded", diagnostics: [], semantic: "none" };
+				},
+			});
+
+			const ctx = createMockContext("test.ts");
+			const ids: string[] = [];
+			await runDispatchForFile(
+				ctx,
+				[{ mode: "all", runnerIds: ["skipme", "ghost"] }],
+				registry,
+				(id) => ids.push(id),
+			);
+
+			expect(ids).toEqual([]);
+		});
+	});
 });
 
 // Helper function

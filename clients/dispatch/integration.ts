@@ -27,6 +27,7 @@ import {
 	getLatencyReports,
 	type RunnerLatency,
 	RunnerRegistry,
+	type RunnerResultSink,
 } from "./dispatcher.js";
 import { FactStore } from "./fact-store.js";
 import { TOOL_PLANS } from "./plan.js";
@@ -35,6 +36,7 @@ import type {
 	ModifiedRange,
 	PiAgentAPI,
 	RunnerGroup,
+	RunnerResult,
 } from "./types.js";
 
 export type { DispatchLatencyReport, RunnerLatency };
@@ -1354,6 +1356,72 @@ export async function dispatchLintWithResult(
 	}
 
 	return result;
+}
+
+/** Per-runner outcome captured while driving the real dispatch path. */
+export interface RunnerOutcome {
+	runnerId: string;
+	result: RunnerResult;
+}
+
+/**
+ * Same real dispatch path as {@link dispatchLintWithResult} (real context, real
+ * file-kind→runner selection, real `run()` → spawn → tool), but also returns
+ * each runner's exact `RunnerResult` (status + `failureKind` + diagnostics) via
+ * the `onRunnerResult` sink. The live tool-smoke harness (#209) uses this to
+ * assert each supported tool spawned and exited cleanly without re-implementing
+ * dispatch's selection/gating. Defaults to `blockingOnly: false` so every
+ * applicable runner (not just blocking ones) executes.
+ */
+export async function dispatchLintDetailed(
+	filePath: string,
+	cwd: string,
+	pi: PiAgentAPI,
+	options?: { blockingOnly?: boolean; modifiedRanges?: ModifiedRange[] },
+): Promise<{ result: DispatchResult; runners: RunnerOutcome[] }> {
+	const empty: DispatchResult = {
+		diagnostics: [],
+		blockers: [],
+		warnings: [],
+		baselineWarningCount: 0,
+		fixed: [],
+		resolvedCount: 0,
+		output: "",
+		blockerOutput: "",
+		hasBlockers: false,
+	};
+
+	const ctx = createDispatchContext(
+		filePath,
+		cwd,
+		pi,
+		sessionFacts,
+		options?.blockingOnly ?? false,
+		options?.modifiedRanges,
+	);
+	sessionFacts.clearFileFactsFor(ctx.filePath);
+
+	const kind = ctx.kind;
+	if (!kind) return { result: empty, runners: [] };
+
+	const groups = withSemgrepGroup(kind, getDispatchGroupsForKind(kind, pi), ctx);
+	if (groups.length === 0) return { result: empty, runners: [] };
+
+	const runners: RunnerOutcome[] = [];
+	const sink: RunnerResultSink = (runnerId, result) => {
+		runners.push({ runnerId, result });
+	};
+
+	await runProviders(ctx);
+	const result = await dispatchForFile(
+		ctx,
+		groups,
+		sessionRunnerRegistry,
+		sink,
+	);
+	trackSessionSlopStats(ctx, result.diagnostics);
+
+	return { result, runners };
 }
 
 /**

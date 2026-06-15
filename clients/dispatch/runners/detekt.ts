@@ -90,7 +90,7 @@ const DETEKT_FIXABLE_RULES = new Set<string>([
 	"RedundantVisibilityModifierRule",
 ]);
 
-function findDetektConfig(cwd: string): string | undefined {
+export function findDetektConfig(cwd: string): string | undefined {
 	for (const candidate of DETEKT_CONFIG_CANDIDATES) {
 		const full = path.join(cwd, candidate);
 		if (fs.existsSync(full)) return full;

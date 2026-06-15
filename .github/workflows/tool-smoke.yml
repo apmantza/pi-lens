@@ -1,0 +1,81 @@
+name: Tool smoke (nightly)
+
+# Live tool + LSP smoke harness (#209). Unlike CI (push/PR, deterministic), this
+# installs and SPAWNS real tools/LSP servers and drives pi-lens's real dispatch
+# path against per-language fixtures — so it's slow and network-dependent, hence
+# nightly + manual only, never a per-PR gate.
+#
+# The harness exits nonzero only on genuine infra failures (timeout / exception /
+# server_error). A tool that's merely unavailable (couldn't install on the
+# runner) reports ⚠ and does NOT fail the run, so transient install/network
+# flakiness doesn't produce false alarms — the printed report still shows the ⚠
+# counts for review.
+
+on:
+  schedule:
+    - cron: '0 6 * * *' # daily 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  tool-smoke:
+    name: Live tool + LSP smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      # Python provides pip for the pip-distributed tools (ruff, yamllint,
+      # sqlfluff, mypy). GitHub-release tools (shellcheck/shfmt/hadolint/taplo/
+      # tflint/terraform-ls/rust-analyzer) are fetched by the harness's own
+      # --install; ubuntu-latest ships rustup/cargo so rust-analyzer can load.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Toolchain-gated languages. go/rust(rustup)/pwsh/.NET ship on ubuntu-latest;
+      # these set up the rest. All best-effort: a setup failure must NOT red the
+      # nightly (the harness already treats an unavailable tool as ⚠, not a
+      # failure), so each is continue-on-error.
+      - uses: actions/setup-java@v4
+        continue-on-error: true
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: ruby/setup-ruby@89f90524b88a01fe6e0b732220432cc6142926af # v1
+        continue-on-error: true
+        with:
+          ruby-version: '3.3'
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1
+        continue-on-error: true
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        continue-on-error: true
+        with:
+          php-version: '8.3'
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        continue-on-error: true
+      - uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1
+        continue-on-error: true
+        with:
+          otp-version: '27'
+          elixir-version: '1.18'
+          gleam-version: '1'
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Build dist
+        run: npm run build:dist
+
+      - name: Tool layer (install + run each tool through real dispatch)
+        run: node scripts/smoke-tools.mjs --install --verbose
+
+      - name: LSP handshake layer (install + spawn + initialize each server)
+        run: node scripts/smoke-tools.mjs --lsp --install --verbose
+
+      - name: Format layer (select + reformat through the real formatter pipeline)
+        run: node scripts/smoke-tools.mjs --format --install --verbose

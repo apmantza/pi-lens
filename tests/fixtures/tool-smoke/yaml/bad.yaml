@@ -1,0 +1,5 @@
+---
+# Tool-smoke fixture for #209 — yamllint must flag the duplicate `name` key.
+service:
+  name: demo
+  name: demo2

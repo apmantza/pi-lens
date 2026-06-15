@@ -140,6 +140,39 @@ describe("runner-helpers availability checker", () => {
 		expect(resolvedByToolId).toBeNull();
 	});
 
+	it("probes with custom versionArgs (e.g. `zig version`, not `--version`)", async () => {
+		// Regression guard for #209: zig rejects `--version` (its version
+		// subcommand is `zig version`), so the default probe made zig-check skip on
+		// every machine. The checker must forward the override to the spawn.
+		const safeSpawnMod = await import("../../../../clients/safe-spawn.js");
+		let probedArgs: string[] | undefined;
+		vi.mocked(safeSpawnMod.safeSpawnAsync).mockImplementation(
+			async (_cmd, args) => {
+				probedArgs = args as string[];
+				return { stdout: "0.16.0", stderr: "", status: 0 };
+			},
+		);
+
+		const checker = createAvailabilityChecker("zig", ".exe", ["version"]);
+		expect(await checker.isAvailableAsync(process.cwd())).toBe(true);
+		expect(probedArgs).toEqual(["version"]);
+	});
+
+	it("defaults versionArgs to --version when not overridden", async () => {
+		const safeSpawnMod = await import("../../../../clients/safe-spawn.js");
+		let probedArgs: string[] | undefined;
+		vi.mocked(safeSpawnMod.safeSpawnAsync).mockImplementation(
+			async (_cmd, args) => {
+				probedArgs = args as string[];
+				return { stdout: "1.0.0", stderr: "", status: 0 };
+			},
+		);
+
+		const checker = createAvailabilityChecker("sometool");
+		expect(await checker.isAvailableAsync(process.cwd())).toBe(true);
+		expect(probedArgs).toEqual(["--version"]);
+	});
+
 	it("caches availability per cwd (does not leak false across projects)", async () => {
 		const safeSpawnMod = await import("../../../../clients/safe-spawn.js");
 		const dirA = setupTestEnvironment("pi-lens-a-");
