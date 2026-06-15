@@ -1009,7 +1009,15 @@ async function runFormatSmoke({ langs, install, verbose }) {
 				continue;
 			}
 			if (!target.success) {
-				push("fail", `formatter failed to run: ${target.error ?? "unknown error"}`);
+				const err = target.error ?? "unknown error";
+				// A missing binary is "unavailable", not a failure (matches the rest
+				// of the harness — the runner is selected via config, but the tool
+				// isn't installed on this machine/runner).
+				if (/ENOENT|not found|not recognized|No such file/i.test(err)) {
+					push("skip", `tool not installed (${err})`);
+				} else {
+					push("fail", `formatter failed to run: ${err}`);
+				}
 			} else if (target.changed) {
 				push("pass", `${fx.formatter} reformatted the file`);
 			} else {
