@@ -1,0 +1,8 @@
+[package]
+name = "autofix-smoke"
+version = "0.0.0"
+edition = "2021"
+
+[[bin]]
+name = "autofix-smoke"
+path = "src/main.rs"

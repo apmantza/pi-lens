@@ -1,0 +1,3 @@
+linter:
+  rules:
+    - prefer_const_declarations

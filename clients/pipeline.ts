@@ -294,20 +294,27 @@ async function tryEslintFix(filePath: string, cwd: string): Promise<number> {
 	);
 	if (dry.status === 2) return 0;
 	let fixableCount = 0;
+	let anyDryRunOutput = false;
 	try {
 		const results: Array<{
 			fixableErrorCount?: number;
 			fixableWarningCount?: number;
+			output?: string;
 		}> = JSON.parse(dry.stdout);
 		fixableCount = results.reduce(
 			(sum, r) =>
 				sum + (r.fixableErrorCount ?? 0) + (r.fixableWarningCount ?? 0),
 			0,
 		);
+		// `--fix-dry-run` reports the POST-fix state: when every problem is
+		// auto-fixable, `messages`/`fixableErrorCount` are 0 and the fixed source
+		// lands in the `output` field instead. Keying on `fixableErrorCount` alone
+		// therefore misses the common "all fixable" case and never applies fixes.
+		anyDryRunOutput = results.some((r) => typeof r.output === "string");
 	} catch {
 		/* treat as zero fixable on error */
 	}
-	if (fixableCount === 0) return 0;
+	if (fixableCount === 0 && !anyDryRunOutput) return 0;
 	// Apply the fixes
 	const fix = await safeSpawnAsync(
 		cmd,
@@ -315,7 +322,7 @@ async function tryEslintFix(filePath: string, cwd: string): Promise<number> {
 		{ timeout: 30000, cwd },
 	);
 	if (fix.status === 2) return 0;
-	return fixableCount;
+	return fixableCount > 0 ? fixableCount : anyDryRunOutput ? 1 : 0;
 }
 
 async function tryStylelintFix(filePath: string, cwd: string): Promise<number> {

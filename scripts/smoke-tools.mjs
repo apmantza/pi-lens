@@ -33,6 +33,7 @@
  * Requires a built dist/ (run `npm run build:dist` first).
  */
 
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -647,6 +648,43 @@ const AUTOFIX_FIXTURES = [
 		tool: "sqlfluff",
 		tools: ["sqlfluff"],
 	},
+	{
+		// rust-clippy is smart-default for .rs; needless_return is a
+		// MachineApplicable fix `cargo clippy --fix` rewrites. Needs a cargo project.
+		lang: "rust",
+		dir: "tests/fixtures/autofix-smoke/rust",
+		file: "src/main.rs",
+		tool: "rust-clippy",
+		tools: [],
+	},
+	{
+		// dart-analyze is smart-default for .dart; `dart fix --apply` applies the
+		// prefer_const_declarations fix enabled in analysis_options.yaml.
+		lang: "dart",
+		dir: "tests/fixtures/autofix-smoke/dart",
+		file: "lib/messy.dart",
+		tool: "dart-analyze",
+		tools: [],
+	},
+	{
+		// stylelint is smart-default for .css but needs a config to run; the
+		// fixture ships .stylelintrc.json (color-hex-length:short fixes #ffffff).
+		lang: "css",
+		dir: "tests/fixtures/autofix-smoke/css",
+		file: "messy.css",
+		tool: "stylelint",
+		tools: ["stylelint"],
+	},
+	{
+		// eslint is config-first: only selected when an eslint config is present
+		// (eslint.config.js here). semi fixes the missing semicolons. eslint is
+		// not auto-installed, so it must be on PATH.
+		lang: "javascript-eslint",
+		dir: "tests/fixtures/autofix-smoke/javascript-eslint",
+		file: "messy.js",
+		tool: "eslint",
+		tools: [],
+	},
 ];
 
 // Generous cold-spawn / handshake budgets — the harness is not on the hot path,
@@ -1008,6 +1046,14 @@ async function runAutofixSmoke({ langs, install, verbose }) {
 			}
 		}
 		const workspace = copyDirToTemp(fx.dir);
+		// Some autofixers refuse to run outside a VCS (cargo clippy --fix errors
+		// "no VCS found"). In production the file lives in the user's repo, so
+		// git-init the workspace to mirror that faithfully.
+		try {
+			execFileSync("git", ["init", "-q"], { cwd: workspace, stdio: "ignore" });
+		} catch {
+			// git unavailable — VCS-gated autofixers will just skip
+		}
 		const absFile = path.join(workspace, fx.file);
 		const push = (state, detail) =>
 			rows.push({ lang: fx.lang, runner: fx.tool, state, detail, diags: 0 });
