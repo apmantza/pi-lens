@@ -557,6 +557,51 @@ const FORMAT_FIXTURES = [
 		formatter: "oxfmt",
 		tools: [],
 	},
+	// Standalone-binary formatters (no language runtime needed) — each fixture
+	// ships the config its detect() requires (stylua.toml / .cljfmt.edn /
+	// .php-cs-fixer.php / .editorconfig); ormolu needs none.
+	{
+		lang: "lua",
+		dir: "tests/fixtures/format-smoke/lua",
+		file: "messy.lua",
+		formatter: "stylua",
+		tools: [],
+	},
+	{
+		lang: "haskell",
+		dir: "tests/fixtures/format-smoke/haskell",
+		file: "Messy.hs",
+		formatter: "ormolu",
+		tools: [],
+	},
+	{
+		lang: "clojure",
+		dir: "tests/fixtures/format-smoke/clojure",
+		file: "messy.clj",
+		formatter: "cljfmt",
+		tools: [],
+	},
+	{
+		lang: "php",
+		dir: "tests/fixtures/format-smoke/php",
+		file: "messy.php",
+		formatter: "php-cs-fixer",
+		tools: [],
+	},
+	{
+		lang: "java-gjf",
+		dir: "tests/fixtures/format-smoke/java-gjf",
+		file: "Messy.java",
+		formatter: "google-java-format",
+		tools: [],
+	},
+	{
+		lang: "cpp",
+		dir: "tests/fixtures/format-smoke/cpp",
+		file: "messy.cpp",
+		formatter: "clang-format",
+		tools: [],
+	},
 ];
 
 // Generous cold-spawn / handshake budgets — the harness is not on the hot path,
