@@ -414,7 +414,7 @@ async function tryDartFix(filePath: string): Promise<string[]> {
 
 // --- Pipeline phase helpers ---
 
-async function runAutofix(
+export async function runAutofix(
 	filePath: string,
 	cwd: string,
 	getFlag: PipelineContext["getFlag"],

@@ -604,6 +604,51 @@ const FORMAT_FIXTURES = [
 	},
 ];
 
+/**
+ * Autofix fixtures (--autofix): a file with a SAFELY-autofixable lint violation.
+ * The pipeline's safe-autofix phase (`runAutofix`) must select the expected
+ * `tool` (per the autofix policy) and apply its fix (`fixedCount > 0`). This is
+ * the pipeline path that mutates files via `--fix`/`--write` — distinct from
+ * lint dispatch (lint-only) and the formatter pipeline (--format). Config-gated
+ * tools ship the config their policy needs. `tools` are installer ids to
+ * prefetch under --install.
+ */
+const AUTOFIX_FIXTURES = [
+	{
+		// ruff is a smart-default autofix for Python; F401 (unused import) is a
+		// safe fix.
+		lang: "python",
+		dir: "tests/fixtures/autofix-smoke/python",
+		file: "messy.py",
+		tool: "ruff",
+		tools: ["ruff"],
+	},
+	{
+		// biome is the smart-default JS/TS autofix (eslint only with .eslintrc).
+		lang: "javascript",
+		dir: "tests/fixtures/autofix-smoke/javascript",
+		file: "messy.js",
+		tool: "biome",
+		tools: ["biome"],
+	},
+	{
+		lang: "ruby",
+		dir: "tests/fixtures/autofix-smoke/ruby",
+		file: "messy.rb",
+		tool: "rubocop",
+		tools: ["rubocop"],
+	},
+	{
+		// sqlfluff is smart-default for .sql, but the tool needs a dialect to run,
+		// so the fixture ships a minimal .sqlfluff.
+		lang: "sql",
+		dir: "tests/fixtures/autofix-smoke/sql",
+		file: "messy.sql",
+		tool: "sqlfluff",
+		tools: ["sqlfluff"],
+	},
+];
+
 // Generous cold-spawn / handshake budgets — the harness is not on the hot path,
 // so give a cold server time to install (when --install), spawn, and initialize.
 const LSP_CLIENT_WAIT_MS = 30000;
@@ -618,15 +663,17 @@ function parseArgs(argv) {
 	let install = false;
 	let lsp = false;
 	let format = false;
+	let autofix = false;
 	for (const arg of argv) {
 		if (arg === "--step2") step2 = true;
 		else if (arg === "--verbose" || arg === "-v") verbose = true;
 		else if (arg === "--install") install = true;
 		else if (arg === "--lsp") lsp = true;
 		else if (arg === "--format") format = true;
+		else if (arg === "--autofix") autofix = true;
 		else langs.push(arg);
 	}
-	return { langs, step2, verbose, install, lsp, format };
+	return { langs, step2, verbose, install, lsp, format, autofix };
 }
 
 const TMP_PREFIX = "pi-lens-smoke-";
@@ -826,21 +873,24 @@ async function runLspHandshake({ langs, install, verbose }) {
 }
 
 /**
- * Format layer — drives the real formatter pipeline entry
- * (`getFormattersForFile` → `formatFile`, the same path `runFormatPhase` uses),
- * which the lint dispatch never touches. A pass means the expected formatter was
- * selected for the file and actually reformatted the deliberately-mangled
- * fixture (`changed === true`). Returns the failure count.
+ * Format layer — drives the REAL pipeline entry `FormatService.formatFile`
+ * (exactly what `runFormatPhase` calls: enabled gate + `fileTime` external-mod
+ * guard + `getFormattersForFile` selection + concurrent `formatFile` exec +
+ * telemetry), which the lint dispatch never touches. A pass means the expected
+ * formatter was selected for the file and actually reformatted the
+ * deliberately-mangled fixture (`changed === true`). In pi-lens the "autofix"
+ * for fixable linters IS their formatter (rubocop -a, ruff format, ktlint -F,
+ * sqlfluff fix, biome, dart …), so this also covers the safe-autofix path.
+ * Returns the failure count.
  */
 async function runFormatSmoke({ langs, install, verbose }) {
-	const fmtEntry = path.join(repoRoot, "dist", "clients", "formatters.js");
+	const fmtEntry = path.join(repoRoot, "dist", "clients", "format-service.js");
 	if (!fs.existsSync(fmtEntry)) {
 		console.error(`dist build missing: ${fmtEntry}\nRun \`npm run build:dist\` first.`);
 		process.exit(2);
 	}
-	const { getFormattersForFile, formatFile } = await import(
-		pathToFileURL(fmtEntry).href
-	);
+	const { getFormatService } = await import(pathToFileURL(fmtEntry).href);
+	const formatService = getFormatService();
 
 	let ensureTool;
 	if (install) {
@@ -871,12 +921,17 @@ async function runFormatSmoke({ langs, install, verbose }) {
 		const push = (state, detail) =>
 			rows.push({ lang: fx.lang, runner: fx.formatter, state, detail, diags: 0 });
 		try {
-			const formatters = await getFormattersForFile(absFile, workspace);
-			const names = formatters.map((f) => f.name);
+			// Mirror runFormatPhase: establish the fileTime baseline (recordRead)
+			// before formatting so the external-modification guard doesn't skip.
+			formatService.recordRead(absFile);
+			const summary = await formatService.formatFile(absFile);
+			const names = summary.formatters.map((f) => f.name);
 			if (verbose) {
-				console.error(`[${fx.lang}] formatters selected: ${names.join(", ") || "(none)"}`);
+				console.error(
+					`[${fx.lang}] formatters selected: ${names.join(", ") || "(none)"} | anyChanged=${summary.anyChanged} allSucceeded=${summary.allSucceeded}`,
+				);
 			}
-			const target = formatters.find((f) => f.name === fx.formatter);
+			const target = summary.formatters.find((f) => f.name === fx.formatter);
 			if (!target) {
 				push(
 					"skip",
@@ -886,17 +941,9 @@ async function runFormatSmoke({ langs, install, verbose }) {
 				);
 				continue;
 			}
-			const before = fs.readFileSync(absFile, "utf8");
-			const result = await formatFile(absFile, target);
-			const after = fs.readFileSync(absFile, "utf8");
-			if (verbose) {
-				console.error(
-					`[${fx.lang}] formatFile → success=${result.success} changed=${result.changed}${result.error ? ` error=${result.error}` : ""}`,
-				);
-			}
-			if (!result.success) {
-				push("fail", `formatter failed to run: ${result.error ?? "unknown error"}`);
-			} else if (result.changed && before !== after) {
+			if (!target.success) {
+				push("fail", `formatter failed to run: ${target.error ?? "unknown error"}`);
+			} else if (target.changed) {
 				push("pass", `${fx.formatter} reformatted the file`);
 			} else {
 				push("fail", "ran clean but left the mis-formatted file unchanged");
@@ -911,8 +958,98 @@ async function runFormatSmoke({ langs, install, verbose }) {
 	return report(rows, "Format (select → reformat)");
 }
 
+/**
+ * Autofix layer — drives the pipeline's safe-autofix phase (`runAutofix`, what
+ * `runPipeline` calls), which applies fixable linters in fix mode (ruff --fix,
+ * biome --write, eslint --fix, stylelint/sqlfluff/rubocop/ktlint/rust-clippy)
+ * gated by the autofix policy. Neither the lint layer (lint-only) nor --format
+ * (formatters) exercises it, yet it MUTATES files. A pass means the expected
+ * tool was policy-selected and fixed the fixture (`fixedCount > 0`). Returns the
+ * failure count.
+ */
+async function runAutofixSmoke({ langs, install, verbose }) {
+	const pipelineEntry = path.join(repoRoot, "dist", "clients", "pipeline.js");
+	const biomeEntry = path.join(repoRoot, "dist", "clients", "biome-client.js");
+	const ruffEntry = path.join(repoRoot, "dist", "clients", "ruff-client.js");
+	for (const e of [pipelineEntry, biomeEntry, ruffEntry]) {
+		if (!fs.existsSync(e)) {
+			console.error(`dist build missing: ${e}\nRun \`npm run build:dist\` first.`);
+			process.exit(2);
+		}
+	}
+	const { runAutofix } = await import(pathToFileURL(pipelineEntry).href);
+	const { BiomeClient } = await import(pathToFileURL(biomeEntry).href);
+	const { RuffClient } = await import(pathToFileURL(ruffEntry).href);
+
+	let ensureTool;
+	if (install) {
+		const installerEntry = path.join(repoRoot, "dist", "clients", "installer", "index.js");
+		({ ensureTool } = await import(pathToFileURL(installerEntry).href));
+	}
+
+	const selected = langs.length
+		? AUTOFIX_FIXTURES.filter((f) => langs.includes(f.lang))
+		: AUTOFIX_FIXTURES;
+	if (selected.length === 0) {
+		console.error(`No autofix fixtures matched: ${langs.join(", ")}`);
+		process.exit(2);
+	}
+
+	const getFlag = () => undefined;
+	const dbg = verbose ? (m) => console.error(`  ${m}`) : () => {};
+	const rows = [];
+	for (const fx of selected) {
+		if (install && ensureTool) {
+			for (const toolId of fx.tools ?? []) {
+				const resolved = await ensureTool(toolId);
+				if (verbose) {
+					console.error(`[${fx.lang}] ensureTool(${toolId}) → ${resolved ?? "UNAVAILABLE"}`);
+				}
+			}
+		}
+		const workspace = copyDirToTemp(fx.dir);
+		const absFile = path.join(workspace, fx.file);
+		const push = (state, detail) =>
+			rows.push({ lang: fx.lang, runner: fx.tool, state, detail, diags: 0 });
+		try {
+			const before = fs.readFileSync(absFile, "utf8");
+			const deps = {
+				biomeClient: new BiomeClient(),
+				ruffClient: new RuffClient(),
+				fixedThisTurn: new Set(),
+			};
+			const result = await runAutofix(absFile, workspace, getFlag, dbg, deps);
+			const after = fs.readFileSync(absFile, "utf8");
+			if (verbose) {
+				console.error(
+					`[${fx.lang}] attempted=[${result.attemptedTools.join(",")}] applied=[${result.autofixTools.join(",")}] fixedCount=${result.fixedCount}${result.skipReason ? ` skip=${result.skipReason}` : ""}`,
+				);
+			}
+			const attempted = result.attemptedTools.includes(fx.tool);
+			if (!attempted) {
+				push(
+					"skip",
+					result.attemptedTools.length
+						? `expected '${fx.tool}' not policy-selected (attempted: ${result.attemptedTools.join(",")})`
+						: `no safe-autofix tool selected${result.skipReason ? ` (${result.skipReason})` : ""}`,
+				);
+			} else if (result.fixedCount > 0 && before !== after) {
+				push("pass", `${fx.tool} applied a safe fix (${result.autofixTools.join(",")})`);
+			} else {
+				push("fail", `${fx.tool} attempted but applied no fix / file unchanged`);
+			}
+		} catch (err) {
+			push("fail", `error: ${err?.message ?? err}`);
+		} finally {
+			safeRm(workspace);
+		}
+	}
+
+	return report(rows, "Autofix (policy-select → safe --fix)");
+}
+
 async function main() {
-	const { langs, step2, verbose, install, lsp, format } = parseArgs(process.argv.slice(2));
+	const { langs, step2, verbose, install, lsp, format, autofix } = parseArgs(process.argv.slice(2));
 
 	// Clean leftovers from prior runs (their file locks are released now).
 	const swept = sweepLeftovers();
@@ -924,6 +1061,10 @@ async function main() {
 
 	if (format) {
 		process.exit((await runFormatSmoke({ langs, install, verbose })) > 0 ? 1 : 0);
+	}
+
+	if (autofix) {
+		process.exit((await runAutofixSmoke({ langs, install, verbose })) > 0 ? 1 : 0);
 	}
 
 	const distEntry = path.join(repoRoot, "dist", "clients", "dispatch", "integration.js");
