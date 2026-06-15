@@ -60,6 +60,10 @@ function parseElixirOutput(
 
 	for (let index = 0; index < lines.length; index++) {
 		const line = lines[index];
+		// Defense-in-depth: cap line length before regex matching. The input is
+		// trusted, bounded compiler output and the patterns have no exponential
+		// backtracking, but this bounds worst-case work regardless (ReDoS guard).
+		if (line.length > 2000) continue;
 
 		// Legacy one-line compile error: ** (CompileError) path:line:col: message
 		const syntax = line.match(

@@ -46,19 +46,19 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: ruby/setup-ruby@v1
+      - uses: ruby/setup-ruby@89f90524b88a01fe6e0b732220432cc6142926af # v1
         continue-on-error: true
         with:
           ruby-version: '3.3'
-      - uses: dart-lang/setup-dart@v1
+      - uses: dart-lang/setup-dart@65eb853c7ba17dde3be364c3d2858773e7144260 # v1
         continue-on-error: true
-      - uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
         continue-on-error: true
         with:
           php-version: '8.3'
-      - uses: mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         continue-on-error: true
-      - uses: erlef/setup-beam@v1
+      - uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1
         continue-on-error: true
         with:
           otp-version: '27'
