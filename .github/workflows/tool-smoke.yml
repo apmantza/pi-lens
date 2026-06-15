@@ -41,7 +41,7 @@ jobs:
       # these set up the rest. All best-effort: a setup failure must NOT red the
       # nightly (the harness already treats an unavailable tool as ⚠, not a
       # failure), so each is continue-on-error.
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         continue-on-error: true
         with:
           distribution: temurin
