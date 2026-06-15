@@ -138,6 +138,31 @@ describe("TOOLS registry consistency", () => {
 				}
 			}
 		});
+
+		// #218: a .bat/.cmd wrapper asset runs a sibling file (e.g. ktlint.bat →
+		// `java -jar %~dp0ktlint`), so the wrapper alone is useless — the tool MUST
+		// declare extraAssets to fetch the dependency alongside it.
+		it("github tools whose win32 asset is a .bat/.cmd wrapper declare extraAssets", () => {
+			for (const t of githubTools) {
+				const winAsset = ARCHES.map((a) => t.github?.assetMatch("win32", a)).find(
+					(x): x is string => typeof x === "string",
+				);
+				if (winAsset && /\.(bat|cmd)$/i.test(winAsset)) {
+					const extras = t.github?.extraAssets?.("win32", "x64") ?? [];
+					expect(
+						extras.length,
+						`${t.id}: win32 asset "${winAsset}" is a wrapper but declares no extraAssets (the wrapped file won't be installed — #218)`,
+					).toBeGreaterThan(0);
+				}
+			}
+		});
+
+		it("ktlint ships its jar alongside ktlint.bat on win32 (#218)", () => {
+			const ktlint = TOOLS.find((t) => t.id === "ktlint");
+			expect(ktlint?.github?.extraAssets?.("win32", "x64")).toContain("ktlint");
+			// …and not on Unix, where the single `ktlint` asset is self-executable.
+			expect(ktlint?.github?.extraAssets?.("linux", "x64") ?? []).toEqual([]);
+		});
 	});
 
 	// GITHUB_TOOLS is the curated list the asset-matrix value-test iterates. It
