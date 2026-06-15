@@ -109,6 +109,13 @@ interface GitHubAssetSpec {
 	 */
 	binaryInArchive?: string;
 	hashiCorpReleaseProduct?: string;
+	/**
+	 * Additional release assets (EXACT names) to download as bare files alongside
+	 * the primary binary. Needed when the primary is a wrapper that references a
+	 * sibling file — e.g. ktlint's Windows `ktlint.bat` runs `java -jar %~dp0ktlint`,
+	 * so the `ktlint` jar must land next to it (#218).
+	 */
+	extraAssets?: (platform: string, arch: string) => string[];
 }
 
 export interface ToolDefinition {
@@ -508,8 +515,10 @@ export const TOOLS: ToolDefinition[] = [
 		installStrategy: "github",
 		binaryName: "ktlint",
 		github: {
-			// ktlint ships one universal binary "ktlint" for Linux/macOS (GraalVM native)
-			// and "ktlint.bat" for Windows (requires Java). No arm64-specific asset.
+			// ktlint ships a self-executable `ktlint` (a JAR with a shell preamble)
+			// for Linux/macOS, plus a `ktlint.bat` wrapper for Windows that runs
+			// `java -jar %~dp0ktlint`. On Windows BOTH files are needed: the .bat AND
+			// the `ktlint` jar it wraps (#218). No arm64-specific asset.
 			repo: "pinterest/ktlint",
 			assetMatch: (platform, _arch) => {
 				if (platform === "linux") return "ktlint";
@@ -517,6 +526,7 @@ export const TOOLS: ToolDefinition[] = [
 				if (platform === "win32") return "ktlint.bat";
 				return undefined;
 			},
+			extraAssets: (platform) => (platform === "win32" ? ["ktlint"] : []),
 		},
 	},
 	{
@@ -1669,6 +1679,33 @@ async function installGitHubTool(
 			`github-install ${tool.id}: install failed: ${(err as Error).message}`,
 		);
 		return undefined;
+	}
+
+	// Download any sibling assets the primary wrapper depends on (e.g. ktlint's
+	// `ktlint` jar next to `ktlint.bat`, #218). Matched by EXACT name and written
+	// as bare files into the same dir; a missing one fails the install.
+	for (const extraName of spec.extraAssets?.(platform, arch) ?? []) {
+		const extraAsset = releaseJson.assets.find((a) => a.name === extraName);
+		if (!extraAsset) {
+			logSessionStart(
+				`github-install ${tool.id}: required extra asset "${extraName}" not found`,
+			);
+			return undefined;
+		}
+		try {
+			const extraBuffer = await httpsGet(extraAsset.browser_download_url);
+			await fs.writeFile(path.join(GITHUB_BIN_DIR, extraName), extraBuffer, {
+				mode: 0o755,
+			});
+			logSessionStart(
+				`github-install ${tool.id}: installed extra asset ${extraName} (${extraBuffer.length} bytes)`,
+			);
+		} catch (err) {
+			logSessionStart(
+				`github-install ${tool.id}: extra asset ${extraName} download failed: ${(err as Error).message}`,
+			);
+			return undefined;
+		}
 	}
 
 	debugLog(`[github] installed ${tool.name} → ${destPath}`);

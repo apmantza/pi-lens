@@ -160,7 +160,7 @@ function logSessionStart(message: string): void {
 // All steps are silent and gated by canInstall(). Returns undefined if no
 // binary can be found or installed.
 
-interface ResolveAndLaunchSpec {
+export interface ResolveAndLaunchSpec {
 	/** Ordered list of full paths / bare commands to try first */
 	candidates: string[];
 	/** LSP args to pass on launch */
@@ -180,7 +180,7 @@ interface ResolveAndLaunchSpec {
 	};
 }
 
-async function resolveAndLaunch(
+export async function resolveAndLaunch(
 	spec: ResolveAndLaunchSpec,
 	allowInstall: boolean | undefined,
 ): Promise<
@@ -198,6 +198,18 @@ async function resolveAndLaunch(
 			lastRuntimeFailure = err instanceof Error ? err : new Error(message);
 		}
 	};
+
+	// A candidate that fails while a LATER candidate (or managed install)
+	// succeeds is just fallback, not a failure — logging each immediately floods
+	// the logs with scary "candidate failed / npm shim failed / Run npm install"
+	// lines that read as smells even though the launch succeeded. Collect them and
+	// surface only if ALL direct candidates fail.
+	const candidateFailures: Array<{
+		index: number;
+		command: string;
+		message: string;
+		err: unknown;
+	}> = [];
 
 	// Step 1 & 2 — try all explicit candidates (includes bare command = PATH lookup)
 	for (const [index, command] of spec.candidates.entries()) {
@@ -240,24 +252,31 @@ async function resolveAndLaunch(
 			return { process: proc, source: "direct" };
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
-			logLatency({
-				type: "phase",
-				phase: "lsp_launch_candidate_failed",
-				filePath: spec.cwd,
-				durationMs: 0,
-				metadata: {
-					tool: toolLabel,
-					command,
-					index,
-					error: message,
-				},
-			});
-			logSessionStart(
-				`lsp launch candidate failed tool=${toolLabel} idx=${index} command=${command} error=${message}`,
-			);
-			trackRuntimeFailure(err);
+			// Defer logging: only a failure if no later candidate/install succeeds.
+			candidateFailures.push({ index, command, message, err });
 			// try next
 		}
+	}
+
+	// All direct candidates failed (a successful one returns above). Surface the
+	// deferred failures now so the all-failed case stays fully diagnosable.
+	for (const failure of candidateFailures) {
+		logLatency({
+			type: "phase",
+			phase: "lsp_launch_candidate_failed",
+			filePath: spec.cwd,
+			durationMs: 0,
+			metadata: {
+				tool: toolLabel,
+				command: failure.command,
+				index: failure.index,
+				error: failure.message,
+			},
+		});
+		logSessionStart(
+			`lsp launch candidate failed tool=${toolLabel} idx=${failure.index} command=${failure.command} error=${failure.message}`,
+		);
+		trackRuntimeFailure(failure.err);
 	}
 
 	if (!canInstall(allowInstall)) {

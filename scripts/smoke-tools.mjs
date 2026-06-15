@@ -1009,7 +1009,15 @@ async function runFormatSmoke({ langs, install, verbose }) {
 				continue;
 			}
 			if (!target.success) {
-				push("fail", `formatter failed to run: ${target.error ?? "unknown error"}`);
+				const err = target.error ?? "unknown error";
+				// A missing binary is "unavailable", not a failure (matches the rest
+				// of the harness — the runner is selected via config, but the tool
+				// isn't installed on this machine/runner).
+				if (/ENOENT|not found|not recognized|No such file/i.test(err)) {
+					push("skip", `tool not installed (${err})`);
+				} else {
+					push("fail", `formatter failed to run: ${err}`);
+				}
 			} else if (target.changed) {
 				push("pass", `${fx.formatter} reformatted the file`);
 			} else {
@@ -1237,7 +1245,16 @@ async function main() {
 	);
 }
 
-main().catch((err) => {
-	console.error(err);
-	process.exit(2);
-});
+// Run main() only when executed directly, not when imported (the
+// smoke-fixture-coverage guard imports the fixture arrays below).
+const invokedDirectly =
+	process.argv[1] &&
+	path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (invokedDirectly) {
+	main().catch((err) => {
+		console.error(err);
+		process.exit(2);
+	});
+}
+
+export { FIXTURES, LSP_FIXTURES, FORMAT_FIXTURES, AUTOFIX_FIXTURES };
