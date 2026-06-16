@@ -69,6 +69,10 @@ import {
 } from "../review-graph/service.js";
 import { clearModuleGraphCache } from "../review-graph/workspace-modules.js";
 import { RUNTIME_CONFIG } from "../runtime-config.js";
+import {
+	findCompiledClassesDir,
+	hasJavaBuildDescriptor,
+} from "../tool-policy.js";
 // Register fact providers
 import { registerProvider, runProviders } from "./fact-runner.js";
 import { fileContentProvider } from "./facts/file-content.js";
@@ -320,6 +324,37 @@ const SEMGREP_SUPPORTED_KINDS = new Set<FileKind>([
 	"terraform",
 	"yaml",
 ]);
+
+// SpotBugs analyzes JVM bytecode, so it applies to java + kotlin. Opt-in
+// (lens-spotbugs flag) and only when a Java build descriptor + compiled .class
+// dir exist — the runner itself mtime-caches so it doesn't re-run per keystroke. #133
+const SPOTBUGS_SUPPORTED_KINDS = new Set<FileKind>(["java", "kotlin"]);
+
+function withSpotbugsGroup(
+	kind: FileKind,
+	groups: RunnerGroup[],
+	ctx: ReturnType<typeof createDispatchContext>,
+): RunnerGroup[] {
+	if (!SPOTBUGS_SUPPORTED_KINDS.has(kind)) return groups;
+	if (!ctx.pi.getFlag("lens-spotbugs")) return groups;
+	if (
+		!hasJavaBuildDescriptor(ctx.cwd) ||
+		!findCompiledClassesDir(ctx.cwd)
+	) {
+		return groups;
+	}
+	if (groups.some((group) => group.runnerIds.includes("spotbugs")))
+		return groups;
+	return [
+		...groups,
+		{
+			mode: "all",
+			runnerIds: ["spotbugs"],
+			filterKinds: [kind],
+			semantic: "warning",
+		},
+	];
+}
 
 function withSemgrepGroup(
 	kind: FileKind,
@@ -1273,9 +1308,9 @@ export async function dispatchLint(
 	const kind = ctx.kind;
 	if (!kind) return "";
 
-	const groups = withSemgrepGroup(
+	const groups = withSpotbugsGroup(
 		kind,
-		getDispatchGroupsForKind(kind, pi),
+		withSemgrepGroup(kind, getDispatchGroupsForKind(kind, pi), ctx),
 		ctx,
 	);
 	if (groups.length === 0) return "";
@@ -1325,9 +1360,9 @@ export async function dispatchLintWithResult(
 		};
 	}
 
-	const groups = withSemgrepGroup(
+	const groups = withSpotbugsGroup(
 		kind,
-		getDispatchGroupsForKind(kind, pi),
+		withSemgrepGroup(kind, getDispatchGroupsForKind(kind, pi), ctx),
 		ctx,
 	);
 	if (groups.length === 0) {
@@ -1404,7 +1439,11 @@ export async function dispatchLintDetailed(
 	const kind = ctx.kind;
 	if (!kind) return { result: empty, runners: [] };
 
-	const groups = withSemgrepGroup(kind, getDispatchGroupsForKind(kind, pi), ctx);
+	const groups = withSpotbugsGroup(
+		kind,
+		withSemgrepGroup(kind, getDispatchGroupsForKind(kind, pi), ctx),
+		ctx,
+	);
 	if (groups.length === 0) return { result: empty, runners: [] };
 
 	const runners: RunnerOutcome[] = [];

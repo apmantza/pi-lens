@@ -923,6 +923,10 @@ const TOOL_EXECUTION_POLICY = new Map<string, ToolExecutionPolicy>([
 	// the maven-JAR strategy once elected (#129).
 	["ktfmt", { gate: "config-first", autoInstall: true }],
 	["golangci-lint", { gate: "config-first", autoInstall: true }],
+	// SpotBugs is opt-in (lens-spotbugs flag) + config-first (needs a Java build
+	// descriptor + compiled .class files), auto-installed via the archive
+	// strategy when elected (#133).
+	["spotbugs", { gate: "config-first", autoInstall: true }],
 	["phpstan", { gate: "config-first", autoInstall: false }],
 	["eslint", { gate: "config-first", autoInstall: false }],
 	["prettier", { gate: "smart-default", autoInstall: true }],
@@ -2148,6 +2152,44 @@ export function hasKtfmtConfig(cwd: string): boolean {
 		}
 	}
 	return false;
+}
+
+// SpotBugs (#133) analyzes compiled bytecode, so it needs BOTH a Java build
+// descriptor AND a compiled-classes dir. These two helpers gate the runner.
+const JAVA_BUILD_DESCRIPTORS = [
+	"pom.xml",
+	"build.gradle",
+	"build.gradle.kts",
+	"settings.gradle",
+	"settings.gradle.kts",
+];
+
+// Common compiled-output dirs: Maven (target/classes), Gradle (build/classes),
+// IntelliJ (out/production), Eclipse (bin/main).
+const COMPILED_CLASSES_DIRS = [
+	path.join("target", "classes"),
+	path.join("build", "classes"),
+	path.join("out", "production"),
+	path.join("bin", "main"),
+];
+
+export function hasJavaBuildDescriptor(cwd: string): boolean {
+	for (const dir of walkUpDirs(cwd)) {
+		if (JAVA_BUILD_DESCRIPTORS.some((d) => fs.existsSync(path.join(dir, d))))
+			return true;
+	}
+	return false;
+}
+
+/** First existing compiled-classes dir at/above cwd, or undefined. */
+export function findCompiledClassesDir(cwd: string): string | undefined {
+	for (const dir of walkUpDirs(cwd)) {
+		for (const rel of COMPILED_CLASSES_DIRS) {
+			const candidate = path.join(dir, rel);
+			if (fs.existsSync(candidate)) return candidate;
+		}
+	}
+	return undefined;
 }
 
 export function hasStandardrbConfig(cwd: string): boolean {

@@ -27,7 +27,7 @@ clients/
   review-graph/query.ts   Graph queries incl computeImpactCascade (one-hop, used by the cascade) + computeTransitiveImpact (depth-bounded BFS, used ONLY by pilens_impact)
   installer/index.ts      Auto-install + ensureTool; probe-cache.json for fast restarts. Strategies: npm/pip/gem/github + maven (fat JAR from Maven Central → java -jar launcher in ~/.pi-lens/bin, gated on a JRE; e.g. ktfmt)
   lsp/                    37 LSP server IDs, config, lifecycle
-  dispatch/               Pipeline dispatcher + 47 registered runners
+  dispatch/               Pipeline dispatcher + 48 registered runners (incl. spotbugs — flag-gated via withSpotbugsGroup, #133)
   widget-state.ts         Footer widget rendering (@earendil-works/pi-tui)
 tools/                    ast-grep-search, lsp-navigation tool handlers
 tests/                    Vitest test suite (mirrors clients/ structure)

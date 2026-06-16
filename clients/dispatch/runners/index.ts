@@ -36,6 +36,7 @@ import rubocopRunner from "./rubocop.js";
 import ruffRunner from "./ruff.js";
 import rustClippyRunner from "./rust-clippy.js";
 import semgrepRunner from "./semgrep.js";
+import spotbugsRunner from "./spotbugs.js";
 import shellcheckRunner from "./shellcheck.js";
 import fishIndentRunner from "./fish-indent.js";
 import shfmtRunner from "./shfmt.js";
@@ -67,6 +68,7 @@ export function registerDefaultRunners(registry: RunnerRegistry): void {
 	registry.register(pythonSlopRunner); // Python slop via CLI (priority 25)
 	registry.register(shellcheckRunner); // Shell script linting (priority 20)
 	registry.register(semgrepRunner); // Semgrep security/deep static analysis (config/flag-gated, priority 50)
+	registry.register(spotbugsRunner); // SpotBugs bytecode bug-patterns for Java/Kotlin (flag-gated via withSpotbugsGroup, priority 50)
 	// DISABLED: registerRunner(astGrepRunner); // Replaced by ast-grep-napi for dispatch
 	// CLI ast-grep kept for ast_grep_search/ast_grep_replace tools only
 	registry.register(eslintRunner); // ESLint (priority 12, jsts, config-gated)

@@ -21,7 +21,9 @@ import {
 	hasClangFormatConfig,
 	hasCljfmtConfig,
 	hasCmakeFormatConfig,
+	findCompiledClassesDir,
 	hasDetektConfig,
+	hasJavaBuildDescriptor,
 	hasKtfmtConfig,
 	hasEslintConfig,
 	hasGolangciConfig,
@@ -805,6 +807,43 @@ describe("tool-policy", () => {
 		try {
 			createTempFile(env.tmpDir, "build.gradle.kts", "plugins {\n}\n");
 			expect(hasKtfmtConfig(env.tmpDir)).toBe(false);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("hasJavaBuildDescriptor detects pom.xml / build.gradle{.kts} walking up (#133)", () => {
+		for (const descriptor of ["pom.xml", "build.gradle", "build.gradle.kts"]) {
+			const env = setupTestEnvironment("pi-lens-java-descriptor-");
+			try {
+				createTempFile(env.tmpDir, descriptor, "");
+				const subDir = path.join(env.tmpDir, "src", "main", "java");
+				fs.mkdirSync(subDir, { recursive: true });
+				expect(hasJavaBuildDescriptor(subDir), descriptor).toBe(true);
+			} finally {
+				env.cleanup();
+			}
+		}
+	});
+
+	it("hasJavaBuildDescriptor is false for a non-Java project (#133)", () => {
+		const env = setupTestEnvironment("pi-lens-java-none-");
+		try {
+			createTempFile(env.tmpDir, "package.json", "{}");
+			expect(hasJavaBuildDescriptor(env.tmpDir)).toBe(false);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("findCompiledClassesDir returns the compiled dir when present, else undefined (#133)", () => {
+		const env = setupTestEnvironment("pi-lens-java-classes-");
+		try {
+			// No compiled output yet → undefined (runner skips with a dbg note).
+			expect(findCompiledClassesDir(env.tmpDir)).toBeUndefined();
+			const classes = path.join(env.tmpDir, "target", "classes");
+			fs.mkdirSync(classes, { recursive: true });
+			expect(findCompiledClassesDir(env.tmpDir)).toBe(classes);
 		} finally {
 			env.cleanup();
 		}
