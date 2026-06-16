@@ -138,7 +138,7 @@ const cacheFile = path.join(getProjectDataDir(cwd), "cache", "my-file.json");
 - Otherwise, if `<cwd>/.pi-lens/` already exists → use it (legacy)
 - Default → `~/.pi-lens/projects/<project-slug>/`
 
-**Project-scoped** (must use `getProjectDataDir`): caches, snapshots, indexes, worklogs, change-log, code-quality-warnings, actionable-warning-state, review-graph, opengrep config, install-choices.
+**Project-scoped** (must use `getProjectDataDir`): caches, snapshots, indexes, worklogs, change-log, code-quality-warnings, actionable-warning-state, review-graph, install-choices.
 
 **Machine-global** (intentionally hardcoded to `~/.pi-lens/`): latency.log, cascade.log, tree-sitter.log, sessionstart.log, read-guard.log, actionable-warnings.log, tools/, bin/, intelephense/, logs/. These are shared across all projects.
 

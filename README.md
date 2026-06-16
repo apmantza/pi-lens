@@ -192,20 +192,12 @@ Pattern-based structural rules in `rules/ast-grep-rules/` across JS, TS, and Pyt
 
 pi-lens can run the [Opengrep](https://github.com/opengrep/opengrep) CLI (an open, login-free fork of Semgrep) as an optional dispatch runner for security-focused findings. Opengrep diagnostics are normalized into the same pi-lens `Diagnostic` model as LSP, tree-sitter, ast-grep, and linters: high-signal security findings can become blocking, while other findings remain warnings for `/lens-booboo`/history.
 
-Activation is intentionally gated:
+Activation is seamless and stays off until you opt in — there is no command and no persisted config to manage. Opengrep dispatch turns on when **either**:
 
-- pi-lens **auto-installs Opengrep on demand** — a single GitHub-release binary, with **no login, token, or telemetry** required.
-- A local `.opengrep.yml`/`.opengrep.yaml` (or a legacy `.semgrep.yml`/`.semgrep.yaml`, whose rule format Opengrep consumes natively) enables the runner.
-- Without a local config, Opengrep stays skipped unless explicitly configured with `--lens-opengrep --lens-opengrep-config <auto|p/pack|path>` or `/lens-opengrep enable --config <auto|p/pack|path>`.
-- Registry rule packs (`auto`, `p/<pack>`, `r/<rule>`) are fetched by Opengrep itself; no account is needed for the open rule registry.
+- **the repo carries a rule file** — `.opengrep.yml`/`.opengrep.yaml` (or a legacy `.semgrep.yml`/`.semgrep.yaml`, whose rule format Opengrep consumes natively). The rule file *is* the opt-in signal; or
+- **you pass `--lens-opengrep`** — self-sufficient: with no local rule file it defaults to `--config auto`, Opengrep's login-free Community ruleset. Override with `--lens-opengrep-config <auto|p/pack|path>` (passing a config implies `--lens-opengrep`).
 
-Commands:
-
-- `/lens-opengrep status` — show CLI availability, discovered local config, persisted pi-lens config, and effective dispatch state
-- `/lens-opengrep init` — create a starter `.opengrep.yml` with a blocking `eval(...)` rule and enable Opengrep dispatch
-- `/lens-opengrep enable [--config <auto|p/pack|path>]` — persist Opengrep dispatch activation in `.pi-lens/opengrep.json`
-- `/lens-opengrep disable` — persistently disable Opengrep dispatch for this project
-- `/lens-opengrep clear` — remove `.pi-lens/opengrep.json` and return to local-config auto-discovery
+In all cases pi-lens **auto-installs Opengrep on demand** — a single GitHub-release binary, with **no login, token, or telemetry** required. Registry rule packs (`auto`, `p/<pack>`, `r/<rule>`) are fetched by Opengrep itself; no account is needed.
 
 Local rules can opt into pi-lens blocking semantics with metadata:
 
@@ -304,7 +296,6 @@ Hide the diagnostics widget by default, run formatting immediately after write/e
 - `/lens-allow-edit <path>` — override the read-before-edit guard for a single edit
 - `/lens-tools` — tool installation status: globally installed, auto-installed, or npx fallback
 - `/lens-tdi` — Technical Debt Index (TDI) and project health trend
-- `/lens-opengrep` — manage experimental Opengrep dispatch (`status`, `init`, `enable`, `disable`, `clear`)
 
 ## Language Coverage
 

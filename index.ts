@@ -85,15 +85,7 @@ import {
 } from "./clients/runtime-tool-result.js";
 import { cancelLSPIdleReset, handleTurnEnd } from "./clients/runtime-turn.js";
 import { isExternalOrVendorFile } from "./clients/path-utils.js";
-import { safeSpawnAsync, setAmbientAbortSignal } from "./clients/safe-spawn.js";
-import {
-	createStarterOpengrepConfig,
-	findLocalOpengrepConfig,
-	loadPiLensOpengrepConfig,
-	removePiLensOpengrepConfig,
-	resolveOpengrepConfig,
-	savePiLensOpengrepConfig,
-} from "./clients/opengrep-config.js";
+import { setAmbientAbortSignal } from "./clients/safe-spawn.js";
 import { TreeSitterClient } from "./clients/tree-sitter-client.js";
 import { handleBooboo } from "./commands/booboo.js";
 import { initI18n, t } from "./i18n.js";
@@ -492,14 +484,14 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerFlag("lens-opengrep", {
 		description:
-			"Enable Opengrep dispatch when a Opengrep config is available (or with --lens-opengrep-config)",
+			"Enable Opengrep security dispatch (auto-installs; uses repo rules if present, else the login-free 'auto' ruleset)",
 		type: "boolean",
 		default: false,
 	});
 
 	pi.registerFlag("lens-opengrep-config", {
 		description:
-			"Opengrep config for dispatch: local path, auto, p/<pack>, or r/<rule>. Requires --lens-opengrep.",
+			"Override the Opengrep config: local path, auto, p/<pack>, or r/<rule> (implies --lens-opengrep).",
 		type: "string",
 		default: "",
 	});
@@ -639,110 +631,6 @@ export default function (pi: ExtensionAPI) {
 					: "pi-lens widget hidden. Run /lens-widget-toggle to show it.",
 				"info",
 			);
-		},
-	});
-
-	pi.registerCommand("lens-opengrep", {
-		description:
-			"Manage Opengrep dispatch. Usage: /lens-opengrep status | enable [--config <auto|p/pack|path>] | disable | init",
-		handler: async (args, ctx) => {
-			const parts = normalizeCommandArgs(args);
-			const action = parts[0] ?? "status";
-			const cwd = ctx.cwd ?? runtime.projectRoot;
-
-			function readConfigArg(): string | undefined {
-				const flagIndex = parts.findIndex(
-					(part) => part === "--config" || part === "-c",
-				);
-				if (flagIndex >= 0) return parts[flagIndex + 1];
-				return parts[1] && !parts[1].startsWith("-") ? parts[1] : undefined;
-			}
-
-			if (action === "enable") {
-				const config = readConfigArg();
-				const localConfig = findLocalOpengrepConfig(cwd);
-				if (!config && !localConfig) {
-					ctx.ui.notify(
-						[
-							"Opengrep dispatch not enabled yet: no local .opengrep.yml was found.",
-							"Use `/lens-opengrep init` to create a starter local config, or `/lens-opengrep enable --config auto` / `p/<pack>` to use registry rule packs.",
-							"pi-lens auto-installs Opengrep on demand (single binary, no login or token required).",
-						].join("\n"),
-						"warning",
-					);
-					return;
-				}
-
-				const savedPath = savePiLensOpengrepConfig(cwd, {
-					enabled: true,
-					...(config ? { config } : {}),
-				});
-				ctx.ui.notify(
-					`Opengrep dispatch enabled (${config ? `config: ${config}` : `local config: ${localConfig}`}). Saved ${savedPath}`,
-					"info",
-				);
-				return;
-			}
-
-			if (action === "disable") {
-				const savedPath = savePiLensOpengrepConfig(cwd, { enabled: false });
-				ctx.ui.notify(`Opengrep dispatch disabled. Saved ${savedPath}`, "info");
-				return;
-			}
-
-			if (action === "clear") {
-				const removed = removePiLensOpengrepConfig(cwd);
-				ctx.ui.notify(
-					removed
-						? "Removed .pi-lens/opengrep.json; Opengrep now auto-enables only when local .opengrep.yml exists."
-						: "No .pi-lens/opengrep.json found.",
-					"info",
-				);
-				return;
-			}
-
-			if (action === "init") {
-				const configPath = createStarterOpengrepConfig(cwd);
-				const savedPath = savePiLensOpengrepConfig(cwd, { enabled: true });
-				ctx.ui.notify(
-					`Created starter Opengrep config at ${configPath} and enabled Opengrep dispatch (${savedPath}).`,
-					"info",
-				);
-				return;
-			}
-
-			if (action !== "status") {
-				ctx.ui.notify(
-					"Usage: /lens-opengrep status | enable [--config <auto|p/pack|path>] | disable | clear | init",
-					"warning",
-				);
-				return;
-			}
-
-			const localConfig = findLocalOpengrepConfig(cwd);
-			const piLensConfig = loadPiLensOpengrepConfig(cwd);
-			const resolved = resolveOpengrepConfig(cwd, {
-				enabled: Boolean(getLensFlag("lens-opengrep")),
-				config: getLensFlag("lens-opengrep-config"),
-			});
-			const version = await safeSpawnAsync("opengrep", ["--version"], {
-				cwd,
-				timeout: 5000,
-			});
-			const lines = [
-				"🔎 OPENGREP DISPATCH",
-				`CLI: ${!version.error && version.status === 0 ? `installed (${(version.stdout || version.stderr).trim()})` : "not on PATH yet (auto-installs on first dispatch)"}`,
-				`Local config: ${localConfig ?? "none"}`,
-				`pi-lens config: ${piLensConfig ? JSON.stringify(piLensConfig) : "none"}`,
-				`Effective: ${resolved.enabled ? "enabled" : "disabled"}`,
-				`Config arg: ${resolved.configArg ?? "none"}`,
-			];
-			if (resolved.reason) lines.push(`Reason: ${resolved.reason}`);
-			lines.push(
-				"",
-				"Auto-installed on demand from GitHub releases (single binary; no login or token required).",
-			);
-			ctx.ui.notify(lines.join("\n"), resolved.enabled ? "info" : "warning");
 		},
 	});
 
