@@ -26,7 +26,7 @@ clients/
   word-index.ts           Identifier inverted index + BM25 ranking (#162) — built in the session scan, persisted in the snapshot; consumed ONLY by the pilens_symbol_search MCP tool (not yet by pi-lens internals)
   review-graph/query.ts   Graph queries incl computeImpactCascade (one-hop, used by the cascade) + computeTransitiveImpact (depth-bounded BFS, used ONLY by pilens_impact)
   installer/index.ts      Auto-install + ensureTool; probe-cache.json for fast restarts. Strategies: npm/pip/gem/github + maven (fat JAR from Maven Central → java -jar launcher in ~/.pi-lens/bin, gated on a JRE; e.g. ktfmt)
-  lsp/                    38 LSP server IDs (incl. opengrep, a cross-cutting AUXILIARY diagnostic LSP — role:"auxiliary", #111), config, lifecycle
+  lsp/                    37 LSP server IDs (incl. opengrep, a cross-cutting AUXILIARY diagnostic LSP — role:"auxiliary", #111), config, lifecycle
   dispatch/               Pipeline dispatcher + 47 registered runners (incl. spotbugs — flag-gated via withSpotbugsGroup, #133). Auxiliary LSPs (opengrep, …) are NOT runners — they attach via the lsp runner's with-auxiliary path; see clients/dispatch/auxiliary-lsp.ts
   widget-state.ts         Footer widget rendering (@earendil-works/pi-tui)
 tools/                    ast-grep-search, lsp-navigation tool handlers

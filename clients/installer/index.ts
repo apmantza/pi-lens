@@ -34,7 +34,6 @@
  * - vscode-json-languageserver: npm install -g vscode-langservers-extracted
  * - bash-language-server: npm install -g bash-language-server
  * - svelte-language-server: npm install -g svelte-language-server
- * - vscode-eslint-language-server: npm install -g vscode-langservers-extracted
  * - vscode-css-languageserver: npm install -g vscode-langservers-extracted
  * - @prisma/language-server: npm install -g @prisma/language-server
  * - dockerfile-language-server: npm install -g dockerfile-language-server-nodejs
@@ -209,6 +208,17 @@ export const TOOLS: ToolDefinition[] = [
 		binaryName: "ruff",
 	},
 	{
+		// Alternate Python LSP (fallback when pyright/the `python` server is
+		// unavailable or disabled). Used as a managedToolId by PythonJediServer.
+		id: "jedi-language-server",
+		name: "Jedi Language Server",
+		checkCommand: "jedi-language-server",
+		checkArgs: ["--version"],
+		installStrategy: "pip",
+		packageName: "jedi-language-server",
+		binaryName: "jedi-language-server",
+	},
+	{
 		id: "biome",
 		name: "Biome",
 		checkCommand: "biome",
@@ -299,15 +309,6 @@ export const TOOLS: ToolDefinition[] = [
 		installStrategy: "npm",
 		packageName: "vscode-langservers-extracted",
 		binaryName: "vscode-json-language-server",
-	},
-	{
-		id: "vscode-langservers-extracted",
-		name: "VSCode ESLint Language Server",
-		checkCommand: "vscode-eslint-language-server",
-		checkArgs: ["--version"],
-		installStrategy: "npm",
-		packageName: "vscode-langservers-extracted",
-		binaryName: "vscode-eslint-language-server",
 	},
 	{
 		id: "vscode-html-languageserver-bin",
@@ -537,6 +538,34 @@ export const TOOLS: ToolDefinition[] = [
 				return undefined;
 			},
 			// Linux/macOS: bare .gz; Windows: .zip archive containing rust-analyzer.exe
+		},
+	},
+	{
+		// Alternate JS/TS LSP (fallback when the `typescript` server is unavailable
+		// or disabled — e.g. Deno projects). Used as a managedToolId by DenoServer.
+		// Every platform ships a .zip containing the `deno` binary (the github
+		// strategy extracts it, as it does for rust-analyzer's Windows .zip).
+		id: "deno",
+		name: "Deno",
+		checkCommand: "deno",
+		checkArgs: ["--version"],
+		installStrategy: "github",
+		binaryName: "deno",
+		github: {
+			repo: "denoland/deno",
+			assetMatch: (platform, arch) => {
+				if (platform === "linux")
+					return arch === "arm64"
+						? "deno-aarch64-unknown-linux-gnu.zip"
+						: "deno-x86_64-unknown-linux-gnu.zip";
+				if (platform === "darwin")
+					return arch === "arm64"
+						? "deno-aarch64-apple-darwin.zip"
+						: "deno-x86_64-apple-darwin.zip";
+				// Windows ships only x86_64 (runs under emulation on arm64).
+				if (platform === "win32") return "deno-x86_64-pc-windows-msvc.zip";
+				return undefined;
+			},
 		},
 	},
 	{
@@ -2677,6 +2706,7 @@ export const GITHUB_TOOLS = [
 	"taplo",
 	"vale",
 	"opengrep",
+	"deno",
 ] as const;
 export type GitHubToolId = (typeof GITHUB_TOOLS)[number];
 

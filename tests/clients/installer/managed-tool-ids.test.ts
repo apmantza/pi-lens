@@ -4,6 +4,8 @@ vi.unmock("../../../clients/installer/index.ts");
 
 const MANAGED_LSP_TOOL_IDS = [
 	"pyright",
+	"jedi-language-server",
+	"deno",
 	"rust-analyzer",
 	"intelephense",
 	"bash-language-server",
@@ -14,7 +16,6 @@ const MANAGED_LSP_TOOL_IDS = [
 	"@prisma/language-server",
 	"@vue/language-server",
 	"svelte-language-server",
-	"vscode-langservers-extracted",
 	"vscode-css-languageserver",
 ] as const;
 

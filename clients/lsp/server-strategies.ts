@@ -56,11 +56,16 @@ export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
 			aggregateWaitMs: 1500,
 			expectSemanticSecondPush: false,
 		},
+		// jedi-language-server is push-only (no pull diagnostics) and its FIRST
+		// publishDiagnostics is the complete result (seedFirstPush). But that first
+		// push lands just after didOpen+~1s on cold start (Python/parso import) —
+		// measured ~1011ms — so a 1000ms aggregate budget misses it by a hair and
+		// returns zero. 3000ms gives cold-start headroom without stalling the warm path.
 		"python-jedi": {
 			seedFirstPush: true,
 			pullRetryBudgetMs: 0,
 			debounceMs: 100,
-			aggregateWaitMs: 1000,
+			aggregateWaitMs: 3000,
 			expectSemanticSecondPush: false,
 		},
 		eslint: {

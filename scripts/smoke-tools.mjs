@@ -362,6 +362,34 @@ const LSP_FIXTURES = [
 		auxiliarySourceMatch: "semgrep|opengrep",
 		gitInit: true,
 	},
+	// Alternate primary servers — a second language server for a language whose
+	// default is registered ahead of it (deno↔typescript, jedi↔pyright). They are
+	// reached only when the default is unavailable/disabled, so the harness writes
+	// a `.pi-lens/lsp.json` disabling the default into the temp workspace (the real
+	// user-facing selection mechanism) → getClientForFile falls through to the
+	// alternate. The alternate must spawn + handshake + diagnose; `expectSourceMatch`
+	// fingerprints the diagnostic `source` to prove the alternate (not the default)
+	// produced it. Both auto-install via their `tools` ids under --install.
+	{
+		lang: "deno",
+		dir: "tests/fixtures/tool-smoke/deno-alt",
+		file: "bad.ts",
+		serverHint: "deno (alternate of typescript)",
+		tools: ["deno"],
+		disableServers: ["typescript"],
+		expectServerId: "deno",
+		expectSourceMatch: "deno",
+	},
+	{
+		lang: "jedi",
+		dir: "tests/fixtures/tool-smoke/jedi-alt",
+		file: "bad.py",
+		serverHint: "jedi (alternate of pyright)",
+		tools: ["jedi-language-server"],
+		disableServers: ["python"],
+		expectServerId: "python-jedi",
+		expectSourceMatch: "compile|jedi",
+	},
 ];
 
 /**
@@ -884,6 +912,8 @@ async function runLspHandshake({ langs, install, verbose }) {
 		process.exit(2);
 	}
 	const { getLSPService } = await import(pathToFileURL(lspEntry).href);
+	const configEntry = path.join(repoRoot, "dist", "clients", "lsp", "config.js");
+	const { initLSPConfig } = await import(pathToFileURL(configEntry).href);
 
 	let ensureTool;
 	if (install) {
@@ -925,6 +955,19 @@ async function runLspHandshake({ langs, install, verbose }) {
 		const useAux = auxIds.length > 0;
 		const push = (state, detail, diags = 0) =>
 			rows.push({ lang: fx.lang, runner: fx.serverHint, state, detail, diags });
+		// Alternate-primary fixtures: disable the default server for this workspace
+		// so getClientForFile falls through to the alternate.
+		if (fx.disableServers) {
+			fs.mkdirSync(path.join(workspace, ".pi-lens"), { recursive: true });
+			fs.writeFileSync(
+				path.join(workspace, ".pi-lens", "lsp.json"),
+				JSON.stringify({ disabledServers: fx.disableServers }, null, 2),
+			);
+			await initLSPConfig(workspace);
+			if (verbose) {
+				console.error(`[${fx.lang}] disabled [${fx.disableServers.join(",")}] via .pi-lens/lsp.json → expecting ${fx.expectServerId}`);
+			}
+		}
 		try {
 			if (!lsp.supportsLSP(absFile)) {
 				push("skip", "no LSP server registered for this file");
@@ -975,6 +1018,40 @@ async function runLspHandshake({ langs, install, verbose }) {
 				console.error(
 					`[${fx.lang}] touched=${Array.isArray(touched) ? touched.length : touched} health=${JSON.stringify(lsp.getDiagnosticsHealth(absFile))}`,
 				);
+			}
+			// Alternate fixtures: the default is disabled for this workspace, so the
+			// only server that can serve is the alternate. Prove it spawned +
+			// handshook + diagnosed by fingerprinting the diagnostic `source`
+			// (deno → "deno-ts", jedi → "compile") — getDiagnosticsHealth isn't
+			// populated by touchFile, so source-match is the reliable signal.
+			if (fx.expectServerId && !threw) {
+				if (!Array.isArray(touched)) {
+					// No client became ready — the alternate isn't installed (and
+					// --install wasn't passed or its install failed). Skip, don't fail.
+					push("skip", `${fx.expectServerId} unavailable (no client ready; pass --install or install ${(fx.tools ?? []).join(",")})`);
+					continue;
+				}
+				const list = touched;
+				const sources = [...new Set(list.map((d) => d.source || "?"))];
+				const re = fx.expectSourceMatch
+					? new RegExp(fx.expectSourceMatch, "i")
+					: null;
+				const matched = re
+					? list.filter((d) => re.test(d.source || ""))
+					: list;
+				if (verbose) {
+					console.error(`[${fx.lang}] alternate sources=${JSON.stringify(sources)} matched=${matched.length}/${list.length}`);
+				}
+				push(
+					matched.length > 0 ? "pass" : "fail",
+					matched.length > 0
+						? `alternate ${fx.expectServerId} served ${matched.length} diagnostic${matched.length === 1 ? "" : "s"} (source /${fx.expectSourceMatch}/; default [${fx.disableServers.join(",")}] disabled)`
+						: list.length
+							? `${fx.expectServerId}: ${list.length} diagnostic(s) but none matched source /${fx.expectSourceMatch}/ (got: ${sources.join(",")})`
+							: `expected ${fx.expectServerId} to serve a diagnostic, got none (server missing/slow?)`,
+					list.length,
+				);
+				continue;
 			}
 			if (threw) {
 				push("fail", `handshake/server error: ${threw}`, diags);
