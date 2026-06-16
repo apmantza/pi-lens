@@ -134,16 +134,30 @@ export interface MavenJarSpec {
 	repoBaseUrl?: string;
 }
 
+export interface ArchiveSpec {
+	/** Download URL for the distribution archive (.tgz/.zip). */
+	url: string;
+	/** Archive kind — both extracted via `tar` (Windows bsdtar handles zip too). */
+	kind: "tgz" | "zip";
+	/**
+	 * Launcher path relative to the archive's top-level dir (which is stripped on
+	 * extraction), e.g. "bin/spotbugs". On win32 the installer resolves the
+	 * sibling `.bat`.
+	 */
+	launcher: string;
+}
+
 export interface ToolDefinition {
 	id: string;
 	name: string;
 	checkCommand: string;
 	checkArgs: string[];
-	installStrategy: "npm" | "pip" | "gem" | "github" | "maven";
+	installStrategy: "npm" | "pip" | "gem" | "github" | "maven" | "archive";
 	packageName?: string;
 	binaryName?: string;
 	github?: GitHubAssetSpec;
 	maven?: MavenJarSpec;
+	archive?: ArchiveSpec;
 }
 
 export const TOOLS: ToolDefinition[] = [
@@ -561,6 +575,23 @@ export const TOOLS: ToolDefinition[] = [
 			artifactId: "ktfmt",
 			version: "0.63",
 			classifier: "with-dependencies",
+		},
+	},
+	{
+		// SpotBugs (bytecode bug-pattern analyzer for Java/Kotlin/Scala/Groovy)
+		// ships as a distribution archive — a lib/ of many JARs + bin/ launchers,
+		// NOT a runnable fat JAR — so it uses the archive strategy, not maven
+		// (refs #133). Requires a JRE (gated by the runner, not the install).
+		id: "spotbugs",
+		name: "SpotBugs",
+		checkCommand: "spotbugs",
+		checkArgs: ["-version"],
+		installStrategy: "archive",
+		binaryName: "spotbugs",
+		archive: {
+			url: "https://github.com/spotbugs/spotbugs/releases/download/4.10.2/spotbugs-4.10.2.tgz",
+			kind: "tgz",
+			launcher: "bin/spotbugs",
 		},
 	},
 	{
@@ -1036,6 +1067,7 @@ export type ToolSource =
 	| "pi-lens-auto"
 	| "github-release"
 	| "maven-jar"
+	| "archive-dist"
 	| "npx-fallback"
 	| "not-installed";
 
@@ -1113,13 +1145,21 @@ export async function getAllToolStatuses(): Promise<ToolStatus[]> {
 			}
 		}
 
-		// 4. Check managed bin (~/.pi-lens/bin/) — github releases + maven launchers
-		if (tool.installStrategy === "github" || tool.installStrategy === "maven") {
+		// 4. Check managed bin (~/.pi-lens/bin/) — github releases + maven/archive launchers
+		if (
+			tool.installStrategy === "github" ||
+			tool.installStrategy === "maven" ||
+			tool.installStrategy === "archive"
+		) {
 			const githubPath = await findGitHubToolPath(tool.binaryName || tool.id);
 			if (githubPath) {
 				status.installed = true;
 				status.source =
-					tool.installStrategy === "maven" ? "maven-jar" : "github-release";
+					tool.installStrategy === "maven"
+						? "maven-jar"
+						: tool.installStrategy === "archive"
+							? "archive-dist"
+							: "github-release";
 				status.path = githubPath;
 				statuses.push(status);
 				continue;
@@ -1227,7 +1267,11 @@ export async function getToolPath(toolId: string): Promise<string | undefined> {
 	// PATH. Managed installs are known-good binaries/launchers pi-lens downloaded
 	// as a fallback when a PATH-resolved tool was broken or missing. Checking
 	// before PATH ensures force-reinstall flows find the newly downloaded binary.
-	if (tool.installStrategy === "github" || tool.installStrategy === "maven") {
+	if (
+		tool.installStrategy === "github" ||
+		tool.installStrategy === "maven" ||
+		tool.installStrategy === "archive"
+	) {
 		const githubPath = await findGitHubToolPath(tool.binaryName || tool.id);
 		if (githubPath) return githubPath;
 	}
@@ -1860,6 +1904,133 @@ async function installMavenTool(
 	}
 }
 
+/**
+ * Install a tool that ships as a distribution archive (.tgz/.zip with a lib/ of
+ * JARs + bin/ launchers — e.g. SpotBugs), not a single runnable binary or fat
+ * JAR. Downloads the archive, extracts it (top-level dir stripped) into
+ * ~/.pi-lens/tools/<id>/, then writes a thin launcher shim into the managed bin
+ * so the tool resolves like any other via findGitHubToolPath. Extraction uses
+ * `tar` (present on Windows 10+ as bsdtar, which also reads .zip).
+ */
+async function installArchiveTool(
+	tool: ToolDefinition,
+): Promise<string | undefined> {
+	const spec = tool.archive;
+	if (!spec) return undefined;
+	const binaryName = tool.binaryName ?? tool.id;
+	const isWindows = process.platform === "win32";
+
+	logSessionStart(`archive-install ${tool.id}: downloading ${spec.url}`);
+	let archiveBuffer: Buffer;
+	try {
+		archiveBuffer = await httpsGet(spec.url);
+	} catch (err) {
+		logSessionStart(
+			`archive-install ${tool.id}: download failed: ${(err as Error).message}`,
+		);
+		return undefined;
+	}
+
+	// Use basenames + cwd:TOOLS_DIR for the tar spawn so no argument contains a
+	// drive-letter colon — GNU tar (MSYS) otherwise reads `C:\…` as an rsync
+	// `host:path` ("Cannot connect to C:"). Relative paths work for both GNU tar
+	// and Windows bsdtar, so we avoid the GNU-only `--force-local` (which bsdtar
+	// rejects). fs.* calls still use the absolute paths.
+	const extractName = tool.id;
+	const archiveName = `${tool.id}.download.${spec.kind === "zip" ? "zip" : "tgz"}`;
+	const extractDir = path.join(TOOLS_DIR, extractName);
+	const tmpArchive = path.join(TOOLS_DIR, archiveName);
+	try {
+		await fs.mkdir(TOOLS_DIR, { recursive: true });
+		// Clear any prior extraction so a reinstall is clean.
+		await fs.rm(extractDir, { recursive: true, force: true });
+		await fs.mkdir(extractDir, { recursive: true });
+		await fs.writeFile(tmpArchive, archiveBuffer);
+
+		// `--strip-components=1` drops the versioned top-level dir so the launcher
+		// path is stable (bin/… not spotbugs-X.Y.Z/bin/…). bsdtar handles both
+		// .tgz and .zip with -xf.
+		const tarArgs = [
+			spec.kind === "tgz" ? "-xzf" : "-xf",
+			archiveName,
+			"-C",
+			extractName,
+			"--strip-components=1",
+		];
+		const extracted = await new Promise<{ ok: boolean; stderr: string }>(
+			(resolve) => {
+				const proc = spawn("tar", tarArgs, {
+					cwd: TOOLS_DIR,
+					stdio: ["ignore", "ignore", "pipe"],
+				});
+				let stderr = "";
+				proc.stderr?.on("data", (d) => (stderr += d));
+				const timer = setTimeout(() => {
+					proc.kill();
+					resolve({ ok: false, stderr: "extraction timed out" });
+				}, 120_000);
+				proc.on("exit", (code) => {
+					clearTimeout(timer);
+					resolve({ ok: code === 0, stderr });
+				});
+				proc.on("error", (err) =>
+					resolve({ ok: false, stderr: err.message }),
+				);
+			},
+		);
+		await fs.rm(tmpArchive, { force: true });
+		if (!extracted.ok) {
+			logSessionStart(
+				`archive-install ${tool.id}: extraction failed: ${extracted.stderr}`,
+			);
+			return undefined;
+		}
+
+		// The launcher inside the extracted tree (e.g. bin/spotbugs[.bat]).
+		const innerLauncher = path.join(
+			extractDir,
+			...spec.launcher.split("/").map((p) => p),
+		);
+		const resolvedInner = isWindows ? `${innerLauncher}.bat` : innerLauncher;
+		try {
+			await fs.access(resolvedInner);
+		} catch {
+			logSessionStart(
+				`archive-install ${tool.id}: launcher not found at ${resolvedInner} after extraction`,
+			);
+			return undefined;
+		}
+		if (!isWindows) await fs.chmod(resolvedInner, 0o755).catch(() => {});
+
+		// Thin shim in the managed bin so discovery (findGitHubToolPath) resolves
+		// it like any other managed tool. `call`/`exec` preserves the real
+		// launcher's own %~dp0/$0 so it still finds its sibling lib/.
+		await fs.mkdir(GITHUB_BIN_DIR, { recursive: true });
+		const launcherName = isWindows ? `${binaryName}.bat` : binaryName;
+		const shimPath = path.join(GITHUB_BIN_DIR, launcherName);
+		if (isWindows) {
+			await fs.writeFile(shimPath, `@echo off\r\ncall "${resolvedInner}" %*\r\n`);
+		} else {
+			await fs.writeFile(
+				shimPath,
+				`#!/bin/sh\nexec "${resolvedInner}" "$@"\n`,
+				{ mode: 0o755 },
+			);
+		}
+		logSessionStart(
+			`archive-install ${tool.id}: installed → ${shimPath} (extracted ${archiveBuffer.length} bytes)`,
+		);
+		debugLog(`[archive] installed ${tool.name} → ${shimPath}`);
+		return shimPath;
+	} catch (err) {
+		await fs.rm(tmpArchive, { force: true }).catch(() => {});
+		logSessionStart(
+			`archive-install ${tool.id}: install failed: ${(err as Error).message}`,
+		);
+		return undefined;
+	}
+}
+
 async function installNpmTool(
 	packageName: string,
 	binaryName: string,
@@ -2254,6 +2425,16 @@ export async function installTool(toolId: string): Promise<boolean> {
 				if (!tool.maven) return false;
 				const mavenPath = await installMavenTool(tool);
 				const ok = mavenPath !== undefined;
+				logSessionStart(
+					`auto-install ${tool.id}: ${ok ? "success" : "failed"} (${Date.now() - startedAt}ms)`,
+				);
+				return ok;
+			}
+
+			case "archive": {
+				if (!tool.archive) return false;
+				const archivePath = await installArchiveTool(tool);
+				const ok = archivePath !== undefined;
 				logSessionStart(
 					`auto-install ${tool.id}: ${ok ? "success" : "failed"} (${Date.now() - startedAt}ms)`,
 				);

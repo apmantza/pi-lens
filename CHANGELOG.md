@@ -4,6 +4,10 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Archive-extraction install strategy (refs #133)** — the installer gained an `archive` strategy alongside npm/pip/gem/github/maven, for JVM tools that ship as a **distribution archive** (a `lib/` of many JARs + `bin/` launchers) rather than a single runnable binary or fat JAR. It downloads the `.tgz`/`.zip`, extracts it (top-level dir stripped via `--strip-components=1`) into `~/.pi-lens/tools/<id>/`, and writes a thin launcher shim into the managed bin so the tool resolves like any other via `findGitHubToolPath`. Extraction shells out to `tar` (present on Windows 10+ as bsdtar, which also reads `.zip`); the spawn uses `cwd` + **relative** paths so no argument carries a drive-letter colon — GNU tar (MSYS) otherwise misreads `C:\…` as an rsync `host:path` (avoids the GNU-only `--force-local`, which bsdtar rejects). First consumer registered: **SpotBugs** (`spotbugs-4.10.2.tgz`) — verified end-to-end on the dev box (`ensureTool("spotbugs")` → shim → `spotbugs -version` → `4.10.2`). This is the prerequisite the SpotBugs runner (#133) needs; #133's premise that SpotBugs uses #129's maven fat-JAR path was incorrect — SpotBugs has no runnable standalone JAR on Maven Central, only the distribution archive. Guard: an `archive`-strategy install-contract case in `tool-registry-consistency.test.ts`.
+
 ## [3.8.53] - 2026-06-16
 
 ### Added

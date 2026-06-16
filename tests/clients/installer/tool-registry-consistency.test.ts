@@ -17,7 +17,7 @@ vi.unmock("../../../clients/installer/index.ts");
  * list the asset-matrix test iterates) in lockstep with the registry.
  */
 
-const STRATEGIES = new Set(["npm", "pip", "gem", "github", "maven"]);
+const STRATEGIES = new Set(["npm", "pip", "gem", "github", "maven", "archive"]);
 const PLATFORMS = ["linux", "darwin", "win32"] as const;
 const ARCHES = ["x64", "arm64"] as const;
 // Platforms pi-lens never builds binaries for — assetMatch must reject these.
@@ -113,6 +113,20 @@ describe("TOOLS registry consistency", () => {
 				expect(t.binaryName, `${t.id} binaryName`).toBeTruthy();
 				expect(t.packageName, `${t.id} maven tool should not carry packageName`).toBeUndefined();
 				expect(t.github, `${t.id} maven tool should not carry a github spec`).toBeUndefined();
+			}
+		});
+
+		it("archive tools declare an archive spec (https url + kind + launcher) + binaryName, no packageName/github/maven", () => {
+			for (const t of TOOLS.filter((x) => x.installStrategy === "archive")) {
+				expect(t.archive, `${t.id} archive spec`).toBeDefined();
+				expect(t.archive?.url, `${t.id} archive url`).toMatch(/^https:\/\//);
+				expect(["tgz", "zip"], `${t.id} archive kind`).toContain(t.archive?.kind);
+				// launcher is a relative path inside the archive — no leading slash / drive.
+				expect(t.archive?.launcher, `${t.id} launcher`).toMatch(/^[\w.-]+(\/[\w.-]+)*$/);
+				expect(t.binaryName, `${t.id} binaryName`).toBeTruthy();
+				expect(t.packageName, `${t.id} archive tool should not carry packageName`).toBeUndefined();
+				expect(t.github, `${t.id} archive tool should not carry a github spec`).toBeUndefined();
+				expect(t.maven, `${t.id} archive tool should not carry a maven spec`).toBeUndefined();
 			}
 		});
 	});
