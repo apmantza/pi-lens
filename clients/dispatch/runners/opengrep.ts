@@ -1,3 +1,5 @@
+import * as crypto from "node:crypto";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { classifyDefect } from "../diagnostic-taxonomy.js";
 import { PRIORITY } from "../priorities.js";
@@ -18,6 +20,40 @@ import {
 
 const opengrep = createAvailabilityChecker("opengrep", ".exe");
 const MAX_DIAGNOSTICS = 50;
+
+// Content+config result cache. Opengrep is expensive per invocation (~2s engine
+// cold-start floor, ~8s with the `auto` ruleset — see #111 latency notes), so
+// we skip re-scanning a file whose content and effective `--config` are
+// unchanged since the last scan (redundant re-dispatch, fork rehydrate, a
+// sibling runner re-triggering the group). A real edit changes the content hash
+// and correctly misses the cache.
+interface OpengrepCacheEntry {
+	signature: string;
+	result: RunnerResult;
+}
+const scanCache = new Map<string, OpengrepCacheEntry>();
+
+/** Test-only: clear the module-level scan cache between cases. */
+export function _resetOpengrepCacheForTests(): void {
+	scanCache.clear();
+}
+
+function fileSignature(
+	filePath: string,
+	configArg: string | undefined,
+): string | undefined {
+	try {
+		const content = fs.readFileSync(filePath);
+		return crypto
+			.createHash("sha1")
+			.update(configArg ?? "")
+			.update("\0")
+			.update(content)
+			.digest("hex");
+	} catch {
+		return undefined;
+	}
+}
 
 interface OpengrepJsonOutput {
 	results?: OpengrepResult[];
@@ -237,10 +273,20 @@ const opengrepRunner: RunnerDefinition = {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
+		// Return a cached result when this file's content + effective config are
+		// unchanged since the last scan (avoids redundant re-runs of an expensive
+		// scanner — see scanCache note).
+		const signature = fileSignature(ctx.filePath, resolved.configArg);
+		if (signature) {
+			const cached = scanCache.get(ctx.filePath);
+			if (cached && cached.signature === signature) return cached.result;
+		}
+
 		// Opengrep is auto-installable (single GitHub-release binary, no login or
 		// telemetry) — unlike Semgrep it installs on demand when elected (#111).
 		const cmd = await resolveAvailableOrInstall(opengrep, "opengrep", cwd);
 		if (!cmd) {
+			// Not installed yet — don't cache, so a later run retries after install.
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
@@ -250,24 +296,31 @@ const opengrepRunner: RunnerDefinition = {
 		if (resolved.configArg) args.push("--config", resolved.configArg);
 		args.push(ctx.filePath);
 
-		const result = await safeSpawnAsync(cmd, args, { cwd, timeout: 20000 });
-		const raw = result.stdout || "";
-		const diagnostics = parseOpengrepJson(raw, ctx);
+		const spawnResult = await safeSpawnAsync(cmd, args, { cwd, timeout: 20000 });
+		const diagnostics = parseOpengrepJson(spawnResult.stdout || "", ctx);
+
+		let result: RunnerResult;
 		if (diagnostics.length === 0) {
-			return {
-				status: result.error ? "failed" : "succeeded",
+			result = {
+				status: spawnResult.error ? "failed" : "succeeded",
 				diagnostics: [],
 				semantic: "none",
-				rawOutput: (result.stderr || "").slice(0, 500),
+				rawOutput: (spawnResult.stderr || "").slice(0, 500),
+			};
+		} else {
+			const hasBlocking = diagnostics.some((d) => d.semantic === "blocking");
+			result = {
+				status: hasBlocking ? "failed" : "succeeded",
+				diagnostics,
+				semantic: hasBlocking ? "blocking" : "warning",
 			};
 		}
 
-		const hasBlocking = diagnostics.some((d) => d.semantic === "blocking");
-		return {
-			status: hasBlocking ? "failed" : "succeeded",
-			diagnostics,
-			semantic: hasBlocking ? "blocking" : "warning",
-		};
+		// Cache only successful scans — a spawn error (e.g. timeout) should retry.
+		if (signature && !spawnResult.error) {
+			scanCache.set(ctx.filePath, { signature, result });
+		}
+		return result;
 	},
 };
 
