@@ -79,12 +79,18 @@ export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
 		// during the one-time rule-load window at startup, then the real scan after
 		// `semgrep/rulesRefreshed` — so never seed the first push. Push-only (no pull
 		// diagnostics). Warm per-file scan ~1.3s; the first touch in a session may
-		// also pay rule-load (~3.7s) — hence the generous aggregate budget.
+		// also pay rule-load (~3.5s cold). aggregateWaitMs is 3500, not 6000:
+		// on the with-auxiliary path the deadline is max(callerCap, maxStrategyWait),
+		// so a 6000 budget OVERRODE the 2500ms per-edit caller cap and let a
+		// clean-primary touch block up to 6s. 3500 covers warm and most cold; a cold
+		// scan that overruns isn't lost — late diagnostics are cached and surface on
+		// the next edit. (A per-server deadline that respects the caller ceiling is
+		// the proper fix — tracked as an enhancement.)
 		opengrep: {
 			seedFirstPush: false,
 			pullRetryBudgetMs: 0,
 			debounceMs: 250,
-			aggregateWaitMs: 6000,
+			aggregateWaitMs: 3500,
 			expectSemanticSecondPush: false,
 			// Opengrep re-scans only on a fresh didOpen — didChange is a no-op for it.
 			reopenOnResync: true,
