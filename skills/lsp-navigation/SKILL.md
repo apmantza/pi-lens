@@ -26,6 +26,8 @@ Prefer explicit `filePaths` batches after multi-file edits — bounded concurren
 | Question | Operation | Parameters |
 |---|---|---|
 | Where is this defined? | `definition` | filePath, line, character |
+| Where is this symbol's *type* defined? | `typeDefinition` | filePath, line, character |
+| Where is this declared (vs defined)? | `declaration` | filePath, line, character |
 | Find all usages | `references` | filePath, line, character |
 | What type is this? | `hover` | filePath, line, character |
 | Call signature | `signatureHelp` | filePath, line, character (at arg position) |

@@ -1360,6 +1360,30 @@ export class LSPService {
 	}
 
 	/**
+	 * Navigation: go to the type definition of the symbol at a position
+	 */
+	async typeDefinition(filePath: string, line: number, character: number) {
+		const spawned = await this.getClientForFile(
+			filePath,
+			NAV_CLIENT_WAIT_TIMEOUT_MS,
+		);
+		if (!spawned) return [];
+		return spawned.client.typeDefinition(filePath, line, character);
+	}
+
+	/**
+	 * Navigation: go to the declaration of the symbol at a position
+	 */
+	async declaration(filePath: string, line: number, character: number) {
+		const spawned = await this.getClientForFile(
+			filePath,
+			NAV_CLIENT_WAIT_TIMEOUT_MS,
+		);
+		if (!spawned) return [];
+		return spawned.client.declaration(filePath, line, character);
+	}
+
+	/**
 	 * Navigation: find all references
 	 */
 	async references(

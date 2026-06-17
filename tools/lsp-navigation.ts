@@ -19,6 +19,8 @@ import type { SearchReadLocation } from "../clients/search-read-registration.js"
 
 const VALID_OPERATIONS = [
 	"definition",
+	"typeDefinition",
+	"declaration",
 	"references",
 	"hover",
 	"signatureHelp",
@@ -53,6 +55,8 @@ function operationSupportStatus(
 ): boolean | null {
 	if (!support) return null;
 	if (operation === "definition") return support.definition;
+	if (operation === "typeDefinition") return support.typeDefinition;
+	if (operation === "declaration") return support.declaration;
 	if (operation === "references") return support.references;
 	if (operation === "hover") return support.hover;
 	if (operation === "signatureHelp") return support.signatureHelp;
@@ -563,7 +567,15 @@ function collectSearchReadsForOperation(
 	result: unknown,
 	callHierarchyItem?: LSPCallHierarchyItem,
 ): SearchReadLocation[] {
-	if (["definition", "references", "implementation"].includes(operation)) {
+	if (
+		[
+			"definition",
+			"typeDefinition",
+			"declaration",
+			"references",
+			"implementation",
+		].includes(operation)
+	) {
 		return collectLocationSearchReads(result);
 	}
 	if (operation === "workspaceSymbol") {
@@ -584,6 +596,8 @@ type CapabilitySnapshot = {
 	root: string;
 	operationSupport: {
 		definition: boolean;
+		typeDefinition: boolean;
+		declaration: boolean;
 		references: boolean;
 		hover: boolean;
 		signatureHelp: boolean;
@@ -611,6 +625,8 @@ function formatCapabilities(
 		[string, (snapshot: CapabilitySnapshot) => boolean, string?]
 	> = [
 		["definition", (s) => !!s.operationSupport.definition],
+		["typeDefinition", (s) => !!s.operationSupport.typeDefinition],
+		["declaration", (s) => !!s.operationSupport.declaration],
 		["references", (s) => !!s.operationSupport.references],
 		["hover", (s) => !!s.operationSupport.hover],
 		["rename", (s) => !!s.operationSupport.rename],
@@ -704,6 +720,8 @@ export function createLspNavigationTool(
 			"Navigate code using LSP (Language Server Protocol). LSP is enabled by default; disable with --no-lsp.\n" +
 			"Operations:\n" +
 			"- definition: Jump to where a symbol is defined\n" +
+			"- typeDefinition: Jump to the definition of a symbol's TYPE (e.g. the class/interface of a variable)\n" +
+			"- declaration: Jump to a symbol's declaration (e.g. an extern/forward decl, distinct from its definition)\n" +
 			"- references: Find all usages of a symbol\n" +
 			"- hover: Get type/doc info at a position\n" +
 			"- signatureHelp: Show callable signatures at cursor\n" +
@@ -1232,6 +1250,8 @@ export function createLspNavigationTool(
 			const lspLine = (line ?? 1) - 1;
 			const needsPosition = [
 				"definition",
+				"typeDefinition",
+				"declaration",
 				"references",
 				"hover",
 				"signatureHelp",
@@ -1263,6 +1283,10 @@ export function createLspNavigationTool(
 				switch (operation) {
 					case "definition":
 						return lspService.definition(filePath, lspLine, lspChar);
+					case "typeDefinition":
+						return lspService.typeDefinition(filePath, lspLine, lspChar);
+					case "declaration":
+						return lspService.declaration(filePath, lspLine, lspChar);
 					case "references":
 						return lspService.references(filePath, lspLine, lspChar);
 					case "hover":
@@ -1454,6 +1478,8 @@ export function createLspNavigationTool(
 					needsFilePath &&
 					[
 						"definition",
+						"typeDefinition",
+						"declaration",
 						"references",
 						"hover",
 						"signatureHelp",

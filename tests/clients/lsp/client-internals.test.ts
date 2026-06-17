@@ -80,6 +80,8 @@ function createMockState(overrides?: Partial<LSPClientState>): LSPClientState {
 		},
 		operationSupport: {
 			definition: false,
+			typeDefinition: false,
+			declaration: false,
 			references: false,
 			hover: false,
 			signatureHelp: false,
@@ -456,6 +458,8 @@ describe("applyDynamicCapabilities", () => {
 		const state = createMockState({
 			operationSupport: {
 				definition: true,
+				typeDefinition: false,
+				declaration: false,
 				references: false,
 				hover: false,
 				signatureHelp: false,

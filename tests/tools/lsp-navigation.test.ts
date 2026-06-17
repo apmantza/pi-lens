@@ -50,6 +50,16 @@ describe("lsp_navigation tool", () => {
 					},
 				},
 			]),
+			typeDefinition: vi.fn().mockResolvedValue([
+				{
+					uri: tmpFileUrl("types.ts"),
+					range: {
+						start: { line: 9, character: 0 },
+						end: { line: 9, character: 4 },
+					},
+				},
+			]),
+			declaration: vi.fn().mockResolvedValue([]),
 			workspaceSymbol: vi.fn().mockResolvedValue([]),
 			documentSymbol: vi.fn().mockResolvedValue([]),
 			incomingCalls: vi.fn().mockResolvedValue([]),
@@ -71,6 +81,8 @@ describe("lsp_navigation tool", () => {
 				root: "/workspace",
 				operationSupport: {
 					definition: true,
+					typeDefinition: true,
+					declaration: false,
 					references: true,
 					hover: true,
 					signatureHelp: false,
@@ -175,6 +187,57 @@ describe("lsp_navigation tool", () => {
 			(mocked.service as { workspaceSymbol: ReturnType<typeof vi.fn> })
 				.workspaceSymbol,
 		).toHaveBeenCalledWith("ReportProcessor", undefined);
+	});
+
+	it("resolves typeDefinition and attaches location searchReads", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+
+		const result = await tool.execute(
+			"type-definition",
+			{
+				operation: "typeDefinition",
+				filePath: path.resolve("tests/tools/lsp-navigation.test.ts"),
+				line: 1,
+				character: 1,
+			},
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+
+		expect(result.isError).toBeUndefined();
+		expect(result.details?.operation).toBe("typeDefinition");
+		expect(
+			(mocked.service as { typeDefinition: ReturnType<typeof vi.fn> })
+				.typeDefinition,
+		).toHaveBeenCalledOnce();
+		expect(result.details?.searchReads).toEqual([
+			{ file: tmpPath("types.ts"), startLine: 10, endLine: 10 },
+		]);
+	});
+
+	it("reports an empty declaration result with the no-results reason", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+
+		const result = await tool.execute(
+			"declaration-empty",
+			{
+				operation: "declaration",
+				filePath: path.resolve("tests/tools/lsp-navigation.test.ts"),
+				line: 1,
+				character: 1,
+			},
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+
+		expect(result.isError).toBeUndefined();
+		expect(result.details?.operation).toBe("declaration");
+		expect(result.details?.emptyReason).toBe("no-results");
+		expect(
+			(mocked.service as { declaration: ReturnType<typeof vi.fn> }).declaration,
+		).toHaveBeenCalled();
 	});
 
 	it("attaches searchReads for reference locations", async () => {

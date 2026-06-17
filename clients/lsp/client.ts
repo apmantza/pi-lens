@@ -114,6 +114,8 @@ export interface LSPShutdownOptions {
 
 export interface LSPOperationSupport {
 	definition: boolean;
+	typeDefinition: boolean;
+	declaration: boolean;
 	references: boolean;
 	hover: boolean;
 	signatureHelp: boolean;
@@ -207,6 +209,18 @@ export interface LSPClientInfo {
 	getOperationSupport(): LSPOperationSupport;
 	/** Go to definition — returns Location[] */
 	definition(
+		filePath: string,
+		line: number,
+		character: number,
+	): Promise<LSPLocation[]>;
+	/** Go to the type definition of the symbol at a position */
+	typeDefinition(
+		filePath: string,
+		line: number,
+		character: number,
+	): Promise<LSPLocation[]>;
+	/** Go to the declaration of the symbol at a position */
+	declaration(
 		filePath: string,
 		line: number,
 		character: number,
@@ -558,6 +572,8 @@ function clearDiagnosticsForPath(
 const DYNAMIC_OPERATION_METHOD_MAP: Record<string, keyof LSPOperationSupport> =
 	{
 		"textDocument/definition": "definition",
+		"textDocument/typeDefinition": "typeDefinition",
+		"textDocument/declaration": "declaration",
 		"textDocument/references": "references",
 		"textDocument/hover": "hover",
 		"textDocument/signatureHelp": "signatureHelp",
@@ -1391,6 +1407,32 @@ export async function createLSPClient(options: {
 			return Array.isArray(result) ? result : [result];
 		},
 
+		async typeDefinition(filePath, line, character) {
+			const result = await navRequest<LSPLocation | LSPLocation[]>(
+				state,
+				"textDocument/typeDefinition",
+				{
+					textDocument: { uri: pathToFileURL(filePath).href },
+					position: { line, character },
+				},
+			);
+			if (!result) return [];
+			return Array.isArray(result) ? result : [result];
+		},
+
+		async declaration(filePath, line, character) {
+			const result = await navRequest<LSPLocation | LSPLocation[]>(
+				state,
+				"textDocument/declaration",
+				{
+					textDocument: { uri: pathToFileURL(filePath).href },
+					position: { line, character },
+				},
+			);
+			if (!result) return [];
+			return Array.isArray(result) ? result : [result];
+		},
+
 		async references(filePath, line, character, includeDeclaration = true) {
 			const result = await navRequest<LSPLocation[]>(
 				state,
@@ -1709,6 +1751,8 @@ function detectOperationSupport(initResult: unknown): LSPOperationSupport {
 
 	return {
 		definition: hasProvider("definitionProvider"),
+		typeDefinition: hasProvider("typeDefinitionProvider"),
+		declaration: hasProvider("declarationProvider"),
 		references: hasProvider("referencesProvider"),
 		hover: hasProvider("hoverProvider"),
 		signatureHelp: hasProvider("signatureHelpProvider"),

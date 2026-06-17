@@ -462,7 +462,8 @@ const TOOLS = [
 	{
 		name: "pilens_lsp_navigation",
 		description:
-			"LSP code navigation: definition, references, hover, documentSymbol, " +
+			"LSP code navigation: definition, typeDefinition, declaration, " +
+			"references, hover, documentSymbol, " +
 			"workspaceSymbol, implementation, call hierarchy (prepareCallHierarchy/" +
 			"incomingCalls/outgoingCalls), rename, codeAction — exact + type-aware, " +
 			"~50ms. Use before changing a signature to see every caller.",
