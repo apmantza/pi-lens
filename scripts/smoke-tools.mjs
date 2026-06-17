@@ -269,6 +269,17 @@ const LSP_FIXTURES = [
 		serverHint: "pyright",
 		tools: ["pyright"],
 	},
+	// Clean (no-diagnostic) counterpart — bench-only signal for the clean-file edit
+	// path (#240). Every other fixture is intentionally broken, which masks how long
+	// a clean-file warm edit takes when the server has nothing fresh to publish.
+	{
+		lang: "typescript-clean",
+		dir: "tests/fixtures/tool-smoke/typescript-clean",
+		file: "clean.ts",
+		serverHint: "typescript-language-server (clean file)",
+		tools: ["typescript-language-server"],
+		clean: true,
+	},
 	{
 		lang: "yaml",
 		dir: "tests/fixtures/tool-smoke/yaml",

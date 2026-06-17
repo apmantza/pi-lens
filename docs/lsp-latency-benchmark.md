@@ -94,17 +94,29 @@ bumping publish arrives** (or a `seedFirstPush` server's first push). A server t
 processes an edit and finds **no new diagnostics** gives the wait nothing to trip on,
 so the touch waits the **full strategy budget / deadline**:
 
-- **Observed (with-auxiliary):** the `Promise.all` waits for the primary even when the
-  primary has no diagnostics and the auxiliary already published — a clean-primary
-  file pays the full deadline on any auxiliary touch (affects opengrep too).
-- **Likely broader (to verify):** a clean-file warm edit on a primary that doesn't
-  re-publish (no version bump) would pay its full strategy budget too.
-- **Masked by the benchmark:** every fixture here is intentionally broken, so each
-  server always has a diagnostic to early-return on — the clean-file cost never shows.
+- **With-auxiliary:** the `Promise.all` waits for the primary even when the primary
+  has no diagnostics and the auxiliary already published — a clean-primary file pays
+  the full deadline on any auxiliary touch (affects opengrep too).
+- **Primary-only — measured.** A clean TypeScript file vs the broken one, same server:
+
+  | fixture | warm/edit (run 1) | warm/edit (run 2) |
+  |---|---:|---:|
+  | typescript (broken — persistent error) | 782ms | 462ms |
+  | typescript-clean (no diagnostics) | 1796ms | 1226ms |
+
+  The clean file is ~2–3× slower: with a persistent diagnostic the server re-publishes
+  (version bump → early-return); with nothing to report it gives the wait no signal, so
+  the touch runs out its budget.
+- **Masked by the benchmark:** every *other* fixture here is intentionally broken, so
+  each server always has a diagnostic to early-return on — the clean-file cost only
+  shows via the dedicated `typescript-clean` fixture.
 
 A lifecycle fix — treat a published **document-version acknowledgment** (even with
 empty diagnostics, when the server stamps `version >= ` the `didChange` we sent) as a
 definitive early-return — would speed up clean-file edits across **every** server, not
-just the with-auxiliary path. The ast-grep probe confirmed servers echo doc versions
-reliably (`pubVersion == docVersion`), so this is feasible. Out of scope for #239;
-candidate for its own LSP-lifecycle issue.
+just the with-auxiliary path. **Crucially this must trigger on an affirmative
+version-matched publish, never on mere silence**, so a crashed/cold/stale/errored
+server is never painted "clean". The ast-grep probe confirmed servers echo doc
+versions reliably (`pubVersion == docVersion`), so this is feasible. Tracked as
+**#240** (a prerequisite for #239 Phase 2, since the universal baseline makes
+clean-file edits the common case).
