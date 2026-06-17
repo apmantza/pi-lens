@@ -465,7 +465,8 @@ const TOOLS = [
 			"LSP code navigation: definition, typeDefinition, declaration, " +
 			"references, hover, documentSymbol, " +
 			"workspaceSymbol, implementation, call hierarchy (prepareCallHierarchy/" +
-			"incomingCalls/outgoingCalls), rename, codeAction — exact + type-aware, " +
+			"incomingCalls/outgoingCalls), rename, codeAction, executeCommand " +
+			"(allowlisted, dry-run by default) — exact + type-aware, " +
 			"~50ms. Use before changing a signature to see every caller.",
 		inputSchema: schemaWithCwd(lspNavigationTool.parameters),
 	},

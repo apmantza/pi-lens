@@ -22,6 +22,7 @@ import {
 	StreamMessageWriter,
 } from "vscode-jsonrpc/node";
 
+import { applyWorkspaceEdit } from "./edits.js";
 import type { LSPProcess } from "./launch.js";
 import { normalizeMapKey, uriToPath } from "./path-utils.js";
 import { getStrategy } from "./server-strategies.js";
@@ -207,6 +208,18 @@ export interface LSPClientInfo {
 	getWorkspaceDiagnosticsSupport(): LSPWorkspaceDiagnosticsSupport;
 	/** Capability snapshot for navigation/edit operations */
 	getOperationSupport(): LSPOperationSupport;
+	/** Commands the server advertised for workspace/executeCommand (the allowlist) */
+	getAdvertisedCommands(): string[];
+	/**
+	 * Run a server command via workspace/executeCommand. Hardened: the command
+	 * MUST be in the server's advertised list or this rejects without sending.
+	 * Any resulting server-initiated workspace/applyEdit is applied during the
+	 * call (and only then).
+	 */
+	executeCommand(
+		command: string,
+		args?: unknown[],
+	): Promise<{ executed: boolean; result?: unknown; reason?: string }>;
 	/** Go to definition — returns Location[] */
 	definition(
 		filePath: string,
@@ -388,6 +401,20 @@ export interface LSPClientState {
 	staticDiagnosticsMode: "pull" | "push-only";
 	/** Live dynamic registrations from client/registerCapability: id → method */
 	readonly dynamicRegistrations: Map<string, string>;
+	/**
+	 * Commands the server advertised it can run via workspace/executeCommand
+	 * (initialize `executeCommandProvider.commands` + any dynamically registered
+	 * `registerOptions.commands`). Mutable — dynamic registration adds to it.
+	 * This is the executeCommand allowlist: only members may be executed.
+	 */
+	advertisedCommands: Set<string>;
+	/**
+	 * Gate for server-initiated `workspace/applyEdit`. Bumped only for the
+	 * duration of an explicit executeCommand call; outside that window an
+	 * unsolicited server applyEdit is refused (a server must not push edits to
+	 * disk whenever it likes — only as the direct effect of an opted-in command).
+	 */
+	serverEditsAllowed: number;
 	readonly serverId: string;
 	readonly root: string;
 	readonly lspProcess: LSPProcess;
@@ -674,11 +701,25 @@ function setupIncomingHandlers(
 	state.connection.onRequest(
 		"client/registerCapability",
 		async (params: {
-			registrations?: Array<{ id: string; method: string }>;
+			registrations?: Array<{
+				id: string;
+				method: string;
+				registerOptions?: { commands?: unknown };
+			}>;
 		}) => {
 			for (const reg of params?.registrations ?? []) {
 				if (reg.id && reg.method) {
 					state.dynamicRegistrations.set(reg.id, reg.method);
+				}
+				// executeCommand commands can arrive dynamically too — merge them
+				// into the allowlist so dynamically-registered commands are runnable.
+				if (
+					reg.method === "workspace/executeCommand" &&
+					Array.isArray(reg.registerOptions?.commands)
+				) {
+					for (const cmd of reg.registerOptions.commands) {
+						if (typeof cmd === "string") state.advertisedCommands.add(cmd);
+					}
 				}
 			}
 			applyDynamicCapabilities(state);
@@ -693,6 +734,31 @@ function setupIncomingHandlers(
 				}
 			}
 			applyDynamicCapabilities(state);
+		},
+	);
+	// Server-initiated edits (the mutation vector for executeCommand). Honored
+	// ONLY while an explicit executeCommand is in flight (serverEditsAllowed > 0);
+	// an unsolicited applyEdit outside that window is refused so a server can't
+	// push edits to disk at will. Applied through the same applyWorkspaceEdit path
+	// as every other edit.
+	state.connection.onRequest(
+		"workspace/applyEdit",
+		async (params: { edit?: { changes?: unknown; documentChanges?: unknown } }) => {
+			if (state.serverEditsAllowed <= 0 || !params?.edit) {
+				return { applied: false, failureReason: "edit not solicited" };
+			}
+			try {
+				await applyWorkspaceEdit(
+					params.edit as Parameters<typeof applyWorkspaceEdit>[0],
+					state.root,
+				);
+				return { applied: true };
+			} catch (err) {
+				return {
+					applied: false,
+					failureReason: err instanceof Error ? err.message : String(err),
+				};
+			}
 		},
 	);
 	state.connection.onRequest("workspace/configuration", async () => [
@@ -1205,6 +1271,8 @@ export async function createLSPClient(options: {
 		operationSupport: undefined as unknown as LSPOperationSupport,
 		staticDiagnosticsMode: "push-only",
 		dynamicRegistrations: new Map(),
+		advertisedCommands: new Set(),
+		serverEditsAllowed: 0,
 		serverId,
 		root,
 		lspProcess,
@@ -1282,6 +1350,9 @@ export async function createLSPClient(options: {
 	state.workspaceDiagnosticsSupport =
 		detectWorkspaceDiagnosticsSupport(initResult);
 	state.operationSupport = detectOperationSupport(initResult);
+	for (const cmd of detectExecuteCommands(initResult)) {
+		state.advertisedCommands.add(cmd);
+	}
 	state.staticDiagnosticsMode = state.workspaceDiagnosticsSupport.mode;
 
 	await safeSendNotification(connection, "initialized", {});
@@ -1380,6 +1451,35 @@ export async function createLSPClient(options: {
 
 		getOperationSupport() {
 			return state.operationSupport;
+		},
+
+		getAdvertisedCommands() {
+			return [...state.advertisedCommands];
+		},
+
+		async executeCommand(command, args) {
+			if (!isClientAlive(state)) {
+				return { executed: false, reason: "lsp client not alive" };
+			}
+			// Hardening: allowlist-by-advertisement. Only commands the server
+			// itself declared (static or dynamic) may run — no arbitrary strings.
+			if (!state.advertisedCommands.has(command)) {
+				return {
+					executed: false,
+					reason: `command "${command}" is not advertised by the ${state.serverId} server`,
+				};
+			}
+			state.serverEditsAllowed += 1;
+			try {
+				const result = await safeSendRequest<unknown>(
+					state.connection,
+					"workspace/executeCommand",
+					{ command, arguments: args ?? [] },
+				);
+				return { executed: true, result };
+			} finally {
+				state.serverEditsAllowed -= 1;
+			}
 		},
 
 		get diagnosticsVersion() {
@@ -1734,6 +1834,18 @@ function detectWorkspaceDiagnosticsSupport(
 		mode: "push-only",
 		diagnosticProviderKind: typeof diagnosticProvider,
 	};
+}
+
+function detectExecuteCommands(initResult: unknown): string[] {
+	const capabilities =
+		typeof initResult === "object" && initResult !== null
+			? (initResult as { capabilities?: Record<string, unknown> }).capabilities
+			: undefined;
+	const provider = capabilities?.executeCommandProvider;
+	if (typeof provider !== "object" || provider === null) return [];
+	const commands = (provider as { commands?: unknown }).commands;
+	if (!Array.isArray(commands)) return [];
+	return commands.filter((cmd): cmd is string => typeof cmd === "string");
 }
 
 function detectOperationSupport(initResult: unknown): LSPOperationSupport {

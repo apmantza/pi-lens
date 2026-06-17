@@ -125,6 +125,8 @@ export interface LSPCapabilitySnapshot {
 	root: string;
 	operationSupport: LSPOperationSupport;
 	workspaceDiagnosticsSupport: LSPWorkspaceDiagnosticsSupport;
+	/** Commands the server advertised for workspace/executeCommand (the allowlist) */
+	advertisedCommands: string[];
 }
 
 export interface LSPRenameFileResult {
@@ -1461,6 +1463,48 @@ export class LSPService {
 	}
 
 	/**
+	 * Commands advertised for workspace/executeCommand. If filePath is given,
+	 * the server for that file; otherwise the first active client.
+	 */
+	async getAdvertisedCommands(filePath?: string): Promise<string[]> {
+		if (filePath) {
+			const spawned = await this.getClientForFile(
+				filePath,
+				NAV_CLIENT_WAIT_TIMEOUT_MS,
+			);
+			if (!spawned) return [];
+			return spawned.client.getAdvertisedCommands();
+		}
+		const first = this.state.clients.values().next().value;
+		return first ? first.getAdvertisedCommands() : [];
+	}
+
+	/**
+	 * Run a server command via workspace/executeCommand (hardened: allowlisted by
+	 * advertisement in the client). If filePath is given, target that file's
+	 * server; otherwise the first active client.
+	 */
+	async executeCommand(
+		filePath: string | undefined,
+		command: string,
+		args?: unknown[],
+	): Promise<{ executed: boolean; result?: unknown; reason?: string }> {
+		if (filePath) {
+			const spawned = await this.getClientForFile(
+				filePath,
+				NAV_CLIENT_WAIT_TIMEOUT_MS,
+			);
+			if (!spawned) {
+				return { executed: false, reason: "no LSP server for file" };
+			}
+			return spawned.client.executeCommand(command, args);
+		}
+		const first = this.state.clients.values().next().value;
+		if (!first) return { executed: false, reason: "no active LSP server" };
+		return first.executeCommand(command, args);
+	}
+
+	/**
 	 * Capability snapshot for LSP operations.
 	 * If filePath is provided, probes that server; otherwise uses first active client.
 	 */
@@ -1506,6 +1550,7 @@ export class LSPService {
 					root,
 					operationSupport: client.getOperationSupport(),
 					workspaceDiagnosticsSupport: client.getWorkspaceDiagnosticsSupport(),
+					advertisedCommands: client.getAdvertisedCommands(),
 				});
 			}
 			return snapshots;
@@ -1520,6 +1565,7 @@ export class LSPService {
 				root: client.root,
 				operationSupport: client.getOperationSupport(),
 				workspaceDiagnosticsSupport: client.getWorkspaceDiagnosticsSupport(),
+				advertisedCommands: client.getAdvertisedCommands(),
 			});
 		}
 		return snapshots;

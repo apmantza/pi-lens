@@ -34,6 +34,7 @@ const VALID_OPERATIONS = [
 	"prepareCallHierarchy",
 	"incomingCalls",
 	"outgoingCalls",
+	"executeCommand",
 	"workspaceDiagnostics",
 	"capabilities",
 ] as const;
@@ -85,6 +86,7 @@ function emptyReasonForOperation(operation: LspNavigationOperation): string {
 	if (operation === "workspaceSymbol")
 		return "no-matching-symbols-or-server-index-unavailable";
 	if (operation === "capabilities") return "no-active-lsp-servers";
+	if (operation === "executeCommand") return "command-returned-no-result";
 	if (operation === "incomingCalls" || operation === "outgoingCalls")
 		return "no-call-hierarchy-results";
 	return "no-results";
@@ -609,6 +611,7 @@ type CapabilitySnapshot = {
 		callHierarchy: boolean;
 	};
 	workspaceDiagnosticsSupport: { advertised?: boolean; mode?: string };
+	advertisedCommands?: string[];
 };
 
 function formatCapabilities(
@@ -660,6 +663,13 @@ function formatCapabilities(
 				`  ${name.padEnd(22)} ${supported(snapshot) ? "✓" : "✗"}${suffix}`,
 			);
 		}
+		const commands = snapshot.advertisedCommands ?? [];
+		lines.push(
+			`  ${"executeCommand".padEnd(22)} ${commands.length > 0 ? "✓" : "✗"}` +
+				`  (${commands.length} advertised command(s)` +
+				(commands.length > 0 ? `: ${commands.slice(0, 20).join(", ")}` : "") +
+				")",
+		);
 	}
 	return lines.join("\n");
 }
@@ -735,6 +745,7 @@ export function createLspNavigationTool(
 			"- prepareCallHierarchy: Get callable item at position (for incoming/outgoing)\n" +
 			"- incomingCalls: Find all functions/methods that CALL this function\n" +
 			"- outgoingCalls: Find all functions/methods CALLED by this function\n" +
+			"- executeCommand: Run a server-advertised command via workspace/executeCommand. HARDENED: allowlisted to commands the server advertised; dry-run by default (reports whether advertised) — set apply:true to actually run. Pass command (+ optional commandArguments).\n" +
 			"- workspaceDiagnostics: List all diagnostics tracked by active LSP clients\n" +
 			"- capabilities: Show cached operation support for active LSP servers\n\n" +
 			"Line and character are 1-based (as shown in editors). For position-based operations, prefer passing symbol when you know the line but not the exact character; character can be omitted or -1 and pi-lens will resolve the symbol column. Use symbol#N for repeated symbols on the same line (1-based occurrence).",
@@ -795,7 +806,19 @@ export function createLspNavigationTool(
 			apply: Type.Optional(
 				Type.Boolean({
 					description:
-						"rename only: apply the returned workspace edit to disk (default: false; preview only).",
+						"rename/executeCommand: apply for real. rename defaults to preview; executeCommand defaults to a dry-run that only reports whether the command is advertised — set apply:true to actually run it.",
+				}),
+			),
+			command: Type.Optional(
+				Type.String({
+					description:
+						"executeCommand only: the server command id to run. Must be one the server advertised (see the capabilities operation).",
+				}),
+			),
+			commandArguments: Type.Optional(
+				Type.Array(Type.Unknown(), {
+					description:
+						"executeCommand only: arguments array passed to workspace/executeCommand.",
 				}),
 			),
 			query: Type.Optional(
@@ -946,6 +969,8 @@ export function createLspNavigationTool(
 				newName,
 				newFilePath,
 				apply,
+				command,
+				commandArguments,
 				query,
 				kinds,
 				exactMatch,
@@ -963,6 +988,8 @@ export function createLspNavigationTool(
 				newName?: string;
 				newFilePath?: string;
 				apply?: boolean;
+				command?: string;
+				commandArguments?: unknown[];
 				query?: string;
 				kinds?: string[];
 				exactMatch?: boolean;
@@ -1004,6 +1031,7 @@ export function createLspNavigationTool(
 			const needsFilePath =
 				operation !== "workspaceDiagnostics" &&
 				operation !== "workspaceSymbol" &&
+				operation !== "executeCommand" &&
 				operation !== "capabilities" &&
 				!isCallHierarchyTraversal;
 			if (needsFilePath && (!rawPath || rawPath.trim().length === 0)) {
@@ -1446,6 +1474,42 @@ export function createLspNavigationTool(
 						return lspService.implementation(filePath, lspLine, lspChar);
 					case "prepareCallHierarchy":
 						return lspService.prepareCallHierarchy(filePath, lspLine, lspChar);
+					case "executeCommand": {
+						if (!command || command.trim().length === 0) {
+							throw new Error(
+								"__BADINPUT__ command parameter required for executeCommand",
+							);
+						}
+						const advertised = await lspService.getAdvertisedCommands(
+							rawPath ? filePath : undefined,
+						);
+						const isAdvertised = advertised.includes(command);
+						// Dry-run by default: report advertisement status without running.
+						// Mutation only on explicit apply:true (and the client re-checks
+						// the allowlist — defense in depth).
+						if (apply !== true) {
+							return {
+								executed: false,
+								dryRun: true,
+								command,
+								advertised: isAdvertised,
+								advertisedCommands: advertised,
+								note: isAdvertised
+									? "Command is advertised. Re-run with apply:true to execute."
+									: "Command is NOT advertised by the active server; execution would be refused.",
+							};
+						}
+						if (!isAdvertised) {
+							throw new Error(
+								`__UNSUPPORTED__ command "${command}" is not advertised by the active LSP server (advertised: ${advertised.join(", ") || "none"})`,
+							);
+						}
+						return lspService.executeCommand(
+							rawPath ? filePath : undefined,
+							command,
+							commandArguments,
+						);
+					}
 					case "incomingCalls": {
 						if (!callHierarchyItem) {
 							throw new Error(

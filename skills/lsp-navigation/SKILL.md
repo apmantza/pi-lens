@@ -38,6 +38,8 @@ Prefer explicit `filePaths` batches after multi-file edits — bounded concurren
 | Who implements this? | `implementation` | filePath, line, character |
 | Who calls this function? | `prepareCallHierarchy` → `incomingCalls` | filePath, line, character |
 | What does this call? | `prepareCallHierarchy` → `outgoingCalls` | filePath, line, character |
+| What commands does the server offer? | `capabilities` | (optional filePath) — lists advertised commands |
+| Run a server command (e.g. organize imports) | `executeCommand` | command (+ commandArguments); dry-run unless `apply:true` |
 
 ## Call Hierarchy Pattern
 

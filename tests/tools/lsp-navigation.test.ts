@@ -61,6 +61,12 @@ describe("lsp_navigation tool", () => {
 			]),
 			declaration: vi.fn().mockResolvedValue([]),
 			workspaceSymbol: vi.fn().mockResolvedValue([]),
+			getAdvertisedCommands: vi
+				.fn()
+				.mockResolvedValue(["_typescript.organizeImports"]),
+			executeCommand: vi
+				.fn()
+				.mockResolvedValue({ executed: true, result: null }),
 			documentSymbol: vi.fn().mockResolvedValue([]),
 			incomingCalls: vi.fn().mockResolvedValue([]),
 			outgoingCalls: vi.fn().mockResolvedValue([]),
@@ -94,6 +100,7 @@ describe("lsp_navigation tool", () => {
 					callHierarchy: true,
 				},
 				workspaceDiagnosticsSupport: { mode: "pull" },
+				advertisedCommands: ["_typescript.organizeImports"],
 			},
 		]);
 
@@ -187,6 +194,71 @@ describe("lsp_navigation tool", () => {
 			(mocked.service as { workspaceSymbol: ReturnType<typeof vi.fn> })
 				.workspaceSymbol,
 		).toHaveBeenCalledWith("ReportProcessor", undefined);
+	});
+
+	it("executeCommand dry-runs by default and does NOT execute", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+
+		const result = await tool.execute(
+			"exec-dry",
+			{ operation: "executeCommand", command: "_typescript.organizeImports" },
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+
+		expect(result.isError).toBeUndefined();
+		const svc = mocked.service as {
+			executeCommand: ReturnType<typeof vi.fn>;
+			getAdvertisedCommands: ReturnType<typeof vi.fn>;
+		};
+		expect(svc.executeCommand).not.toHaveBeenCalled();
+		expect(svc.getAdvertisedCommands).toHaveBeenCalled();
+		expect(String(result.content[0]?.text)).toContain("apply:true");
+	});
+
+	it("executeCommand with apply:true runs an advertised command", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+
+		const result = await tool.execute(
+			"exec-apply",
+			{
+				operation: "executeCommand",
+				command: "_typescript.organizeImports",
+				commandArguments: ["file:///x.ts"],
+				apply: true,
+			},
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+
+		expect(result.isError).toBeUndefined();
+		expect(
+			(mocked.service as { executeCommand: ReturnType<typeof vi.fn> })
+				.executeCommand,
+		).toHaveBeenCalledWith(undefined, "_typescript.organizeImports", [
+			"file:///x.ts",
+		]);
+	});
+
+	it("executeCommand refuses a command the server did not advertise", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+
+		const result = await tool.execute(
+			"exec-unadvertised",
+			{ operation: "executeCommand", command: "evil.command", apply: true },
+			new AbortController().signal,
+			null,
+			{ cwd: "." },
+		);
+
+		expect(result.isError).toBe(true);
+		expect(String(result.content[0]?.text)).toContain("not advertised");
+		expect(
+			(mocked.service as { executeCommand: ReturnType<typeof vi.fn> })
+				.executeCommand,
+		).not.toHaveBeenCalled();
 	});
 
 	it("resolves typeDefinition and attaches location searchReads", async () => {

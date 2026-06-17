@@ -94,6 +94,8 @@ function createMockState(overrides?: Partial<LSPClientState>): LSPClientState {
 		},
 		staticDiagnosticsMode: "push-only",
 		dynamicRegistrations: new Map(),
+		advertisedCommands: new Set(),
+		serverEditsAllowed: 0,
 		serverId: "test-server",
 		root: "/project",
 		lspProcess: createMockLspProcess() as any,
