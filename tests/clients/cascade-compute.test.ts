@@ -78,6 +78,11 @@ function impact(filePath: string, neighbors: string[]): ImpactCascadeResult {
 }
 
 describe("computeCascadeForFile", () => {
+	// vi.resetModules() drops the whole module cache and the dynamic re-import
+	// below pays a full cold-resolve; under full-suite parallel CPU contention
+	// that setup can exceed the default 10s hook timeout (it passes comfortably
+	// in isolation). Raise the hook budget — this is setup, not an assertion, so
+	// a longer ceiling absorbs the contention without masking a product failure.
 	beforeEach(async () => {
 		vi.resetModules();
 		mocks.buildOrUpdateGraph.mockReset().mockResolvedValue(emptyGraph());
@@ -94,7 +99,7 @@ describe("computeCascadeForFile", () => {
 			"../../clients/dispatch/integration.js"
 		);
 		resetDispatchBaselines();
-	});
+	}, 30_000);
 
 	it("reads jsts neighbors from passive snapshot instead of active touching", async () => {
 		const env = setupTestEnvironment("cascade-jsts-");
