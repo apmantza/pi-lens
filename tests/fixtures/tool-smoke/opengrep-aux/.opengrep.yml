@@ -1,0 +1,11 @@
+# Local opengrep/semgrep ruleset for the auxiliary-LSP smoke fixture. Its mere
+# presence opts opengrep in (resolveOpengrepConfig discovers `.opengrep.yml`),
+# and it makes the scan HERMETIC — opengrep no longer falls back to the network
+# `auto` Community ruleset, which is unreachable/slow in CI and produced zero
+# findings there. This rule flags the `eval(userInput)` in danger.js.
+rules:
+  - id: js-eval-code-injection
+    languages: [javascript]
+    severity: ERROR
+    message: Avoid eval() on untrusted input — code injection risk.
+    pattern: eval(...)

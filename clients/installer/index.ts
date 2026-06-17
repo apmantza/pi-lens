@@ -832,6 +832,65 @@ export const TOOLS: ToolDefinition[] = [
 			binaryInArchive: "zls",
 		},
 	},
+	{
+		// clojure-lsp ships a self-contained native (GraalVM) binary per platform
+		// on GitHub releases — no JVM needed. Used as managedToolId by ClojureServer.
+		// The .zip carries the bare binary (located recursively on extract).
+		id: "clojure-lsp",
+		name: "clojure-lsp",
+		checkCommand: "clojure-lsp",
+		checkArgs: ["--version"],
+		installStrategy: "github",
+		binaryName: "clojure-lsp",
+		github: {
+			repo: "clojure-lsp/clojure-lsp",
+			assetMatch: (platform, arch) => {
+				if (platform === "linux")
+					return arch === "arm64"
+						? "native-linux-aarch64.zip"
+						: "native-linux-amd64.zip";
+				if (platform === "darwin")
+					return arch === "arm64"
+						? "native-macos-aarch64.zip"
+						: "native-macos-amd64.zip";
+				// Only an x86_64 Windows native build; runs on arm64 via emulation.
+				if (platform === "win32") return "native-windows-amd64.zip";
+				return undefined;
+			},
+			binaryInArchive: "clojure-lsp",
+		},
+	},
+	{
+		// gleam ships a single static binary per platform on GitHub releases; the
+		// LSP runs via `gleam lsp`. Used as managedToolId by GleamServer. The linux
+		// build is a FLAT musl tarball (a bare `gleam`), handled by the recursive
+		// tar-binary lookup in installGitHubTool.
+		id: "gleam",
+		name: "Gleam",
+		checkCommand: "gleam",
+		checkArgs: ["--version"],
+		installStrategy: "github",
+		binaryName: "gleam",
+		github: {
+			repo: "gleam-lang/gleam",
+			assetMatch: (platform, arch) => {
+				if (platform === "linux")
+					return arch === "arm64"
+						? "aarch64-unknown-linux-musl.tar.gz"
+						: "x86_64-unknown-linux-musl.tar.gz";
+				if (platform === "darwin")
+					return arch === "arm64"
+						? "aarch64-apple-darwin.tar.gz"
+						: "x86_64-apple-darwin.tar.gz";
+				if (platform === "win32")
+					return arch === "arm64"
+						? "aarch64-pc-windows-msvc.zip"
+						: "x86_64-pc-windows-msvc.zip";
+				return undefined;
+			},
+			binaryInArchive: "gleam",
+		},
+	},
 ];
 
 const ensureInFlight = new Map<string, Promise<string | undefined>>();
@@ -1581,32 +1640,70 @@ async function getPythonUserBaseCandidates(): Promise<string[]> {
 // --- Installation Functions
 
 /**
- * Fetch a URL, following up to `maxRedirects` redirects.
- * Returns the raw Buffer of the response body.
+ * Authorization header for the GitHub REST API, when a token is available.
+ * Unauthenticated GitHub API is 60 req/hr per IP — exhausted constantly on
+ * shared-IP CI runners, which silently fails every github-strategy install.
+ * Authenticated is 5000 req/hr. Used ONLY for the `api.github.com` metadata
+ * call, never the asset download (see installGitHubTool) — the release CDN must
+ * not receive the token.
  */
-function httpsGet(url: string, maxRedirects = 5): Promise<Buffer> {
+function githubApiAuthHeaders(): Record<string, string> {
+	const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+	return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function sameHost(a: string, b: string): boolean {
+	try {
+		return new URL(a).host === new URL(b).host;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Fetch a URL, following up to `maxRedirects` redirects.
+ * Returns the raw Buffer of the response body. Any caller-supplied headers are
+ * dropped when a redirect crosses to a different host, so an Authorization
+ * header can never leak to a redirect target (e.g. a release CDN).
+ */
+function httpsGet(
+	url: string,
+	maxRedirects = 5,
+	headers: Record<string, string> = {},
+): Promise<Buffer> {
 	return new Promise((resolve, reject) => {
 		https
-			.get(url, { headers: { "User-Agent": "pi-lens/1.0" } }, (res) => {
-				if (
-					res.statusCode &&
-					res.statusCode >= 300 &&
-					res.statusCode < 400 &&
-					res.headers.location
-				) {
-					if (maxRedirects === 0)
-						return reject(new Error("Too many redirects"));
-					return resolve(httpsGet(res.headers.location, maxRedirects - 1));
-				}
-				if (res.statusCode !== 200) {
-					res.resume();
-					return reject(new Error(`HTTP ${res.statusCode} for ${url}`));
-				}
-				const chunks: Buffer[] = [];
-				res.on("data", (chunk: Buffer) => chunks.push(chunk));
-				res.on("end", () => resolve(Buffer.concat(chunks)));
-				res.on("error", reject);
-			})
+			.get(
+				url,
+				{ headers: { "User-Agent": "pi-lens/1.0", ...headers } },
+				(res) => {
+					if (
+						res.statusCode &&
+						res.statusCode >= 300 &&
+						res.statusCode < 400 &&
+						res.headers.location
+					) {
+						if (maxRedirects === 0)
+							return reject(new Error("Too many redirects"));
+						const location = res.headers.location;
+						const nextHeaders = sameHost(url, location)
+							? headers
+							: (() => {
+									const { Authorization: _drop, ...rest } = headers;
+									return rest;
+								})();
+						return resolve(httpsGet(location, maxRedirects - 1, nextHeaders));
+					}
+					if (res.statusCode !== 200) {
+						res.resume();
+						return reject(new Error(`HTTP ${res.statusCode} for ${url}`));
+					}
+					const chunks: Buffer[] = [];
+					res.on("data", (chunk: Buffer) => chunks.push(chunk));
+					res.on("end", () => resolve(Buffer.concat(chunks)));
+					res.on("error", reject);
+				},
+			)
 			.on("error", reject);
 	});
 }
@@ -1661,6 +1758,8 @@ async function installGitHubTool(
 	try {
 		const body = await httpsGet(
 			`https://api.github.com/repos/${spec.repo}/releases/latest`,
+			5,
+			githubApiAuthHeaders(),
 		);
 		releaseJson = JSON.parse(body.toString("utf8"));
 	} catch (err) {
@@ -1734,7 +1833,7 @@ async function installGitHubTool(
 
 			const extracted = await runCommand(
 				"tar",
-				["xf", tmpArchive, "-C", tmpDir, "--strip-components=1"],
+				["xf", tmpArchive, "-C", tmpDir],
 				GITHUB_BIN_DIR,
 			);
 			await fs.rm(tmpArchive, { force: true });
@@ -1747,9 +1846,27 @@ async function installGitHubTool(
 				return undefined;
 			}
 
-			// Find the binary inside extracted dir
-			const srcBinary = path.join(tmpDir, spec.binaryInArchive ?? binaryName);
-			await fs.rename(srcBinary, destPath);
+			// Locate the binary at any depth — handles both flat tarballs (e.g.
+			// gleam ships a bare `gleam` at the archive root) and tools nested
+			// under a top-level dir (e.g. shellcheck-vX/shellcheck). Each registered
+			// tar tool has a uniquely-named binary, so a recursive match is
+			// unambiguous; this replaces the old `--strip-components=1` assumption,
+			// which silently extracted nothing from a flat tarball.
+			const tarBinaryName = spec.binaryInArchive ?? binaryName;
+			const tarSrcBinary = await findFirstFileRecursive(
+				tmpDir,
+				getArchiveBinaryCandidates(tarBinaryName, platform, assetName),
+			);
+			if (!tarSrcBinary) {
+				await fs.rm(tmpDir, { recursive: true, force: true });
+				logSessionStart(
+					`github-install ${tool.id}: binary candidates ${JSON.stringify(
+						getArchiveBinaryCandidates(tarBinaryName, platform, assetName),
+					)} not found in tar ${assetName}`,
+				);
+				return undefined;
+			}
+			await fs.rename(tarSrcBinary, destPath);
 			await fs.rm(tmpDir, { recursive: true, force: true });
 			if (!isWindows) await fs.chmod(destPath, 0o750);
 		} else if (assetName.endsWith(".zip")) {
@@ -2034,9 +2151,7 @@ async function installArchiveTool(
 					clearTimeout(timer);
 					resolve({ ok: code === 0, stderr });
 				});
-				proc.on("error", (err) =>
-					resolve({ ok: false, stderr: err.message }),
-				);
+				proc.on("error", (err) => resolve({ ok: false, stderr: err.message }));
 			},
 		);
 		await fs.rm(tmpArchive, { force: true });
@@ -2070,7 +2185,10 @@ async function installArchiveTool(
 		const launcherName = isWindows ? `${binaryName}.bat` : binaryName;
 		const shimPath = path.join(GITHUB_BIN_DIR, launcherName);
 		if (isWindows) {
-			await fs.writeFile(shimPath, `@echo off\r\ncall "${resolvedInner}" %*\r\n`);
+			await fs.writeFile(
+				shimPath,
+				`@echo off\r\ncall "${resolvedInner}" %*\r\n`,
+			);
 		} else {
 			await fs.writeFile(
 				shimPath,
@@ -2715,6 +2833,8 @@ export const GITHUB_TOOLS = [
 	"vale",
 	"opengrep",
 	"deno",
+	"clojure-lsp",
+	"gleam",
 ] as const;
 export type GitHubToolId = (typeof GITHUB_TOOLS)[number];
 

@@ -409,7 +409,10 @@ export async function resolveAndLaunch(
 	}
 
 	// Step 4 — language-native runtime install (go install, gem install, …)
-	if (spec.runtimeInstall && (await isOnPath(spec.runtimeInstall.runtimeCommand))) {
+	if (
+		spec.runtimeInstall &&
+		(await isOnPath(spec.runtimeInstall.runtimeCommand))
+	) {
 		const ok = await spec.runtimeInstall.install();
 		if (ok) {
 			const retry = spec.runtimeInstall.retryCandidates ?? spec.candidates;
@@ -1595,15 +1598,25 @@ export const ElixirServer = createInteractiveServer({
 	command: "elixir-ls",
 });
 
-export const GleamServer = createInteractiveServer({
+export const GleamServer: LSPServerInfo = {
 	id: "gleam",
 	name: "Gleam LSP",
 	extensions: KIND_EXTENSIONS["gleam"],
 	root: RootWithFallback(createRootDetector(["gleam.toml"])),
-	language: "gleam",
-	command: "gleam",
-	args: ["lsp"],
-});
+	async spawn(root, options) {
+		// Prefer a PATH `gleam` (full toolchain); fall back to the managed
+		// GitHub-release binary. `gleam lsp` is the server entrypoint either way.
+		return resolveAndLaunch(
+			{
+				candidates: ["gleam"],
+				args: ["lsp"],
+				cwd: root,
+				managedToolId: "gleam",
+			},
+			options?.allowInstall,
+		);
+	},
+};
 
 export const OCamlServer = createInteractiveServer({
 	id: "ocaml",
@@ -1614,14 +1627,25 @@ export const OCamlServer = createInteractiveServer({
 	command: "ocamllsp",
 });
 
-export const ClojureServer = createInteractiveServer({
+export const ClojureServer: LSPServerInfo = {
 	id: "clojure",
 	name: "Clojure LSP",
 	extensions: KIND_EXTENSIONS["clojure"],
 	root: createRootDetector(["deps.edn", "project.clj"]),
-	language: "clojure",
-	command: "clojure-lsp",
-});
+	async spawn(root, options) {
+		// Prefer a PATH `clojure-lsp`; fall back to the managed self-contained
+		// native (GraalVM) GitHub-release binary — no JVM needed either way.
+		return resolveAndLaunch(
+			{
+				candidates: ["clojure-lsp"],
+				args: [],
+				cwd: root,
+				managedToolId: "clojure-lsp",
+			},
+			options?.allowInstall,
+		);
+	},
+};
 
 export const TerraformServer: LSPServerInfo = {
 	id: "terraform",
@@ -1938,9 +1962,26 @@ export const CssServer: LSPServerInfo = {
 // Rules load via `initializationOptions.scan.configuration` (a local rule file
 // if the repo has one, else Opengrep's login-free `auto` set).
 const OPENGREP_KINDS = [
-	"csharp", "css", "cxx", "dart", "docker", "go", "html", "java", "json",
-	"jsts", "kotlin", "lua", "php", "python", "ruby", "rust", "shell", "swift",
-	"terraform", "yaml",
+	"csharp",
+	"css",
+	"cxx",
+	"dart",
+	"docker",
+	"go",
+	"html",
+	"java",
+	"json",
+	"jsts",
+	"kotlin",
+	"lua",
+	"php",
+	"python",
+	"ruby",
+	"rust",
+	"shell",
+	"swift",
+	"terraform",
+	"yaml",
 ] as const;
 const OPENGREP_EXTENSIONS: readonly string[] = Array.from(
 	new Set(
@@ -2004,9 +2045,28 @@ export const OpengrepServer: LSPServerInfo = {
 // the team's OWN curated rules (warm, full-engine, with codeAction fixes) — which
 // the napi subset interpreter cannot evaluate faithfully.
 const AST_GREP_KINDS = [
-	"csharp", "cxx", "css", "elixir", "go", "haskell", "html", "java", "json",
-	"jsts", "kotlin", "lua", "nix", "php", "python", "ruby", "rust", "scala",
-	"shell", "solidity", "swift", "yaml",
+	"csharp",
+	"cxx",
+	"css",
+	"elixir",
+	"go",
+	"haskell",
+	"html",
+	"java",
+	"json",
+	"jsts",
+	"kotlin",
+	"lua",
+	"nix",
+	"php",
+	"python",
+	"ruby",
+	"rust",
+	"scala",
+	"shell",
+	"solidity",
+	"swift",
+	"yaml",
 ] as const;
 const AST_GREP_EXTENSIONS: readonly string[] = Array.from(
 	new Set(

@@ -22,6 +22,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    # The installer's GitHub-release strategy hits the GitHub REST API to resolve
+    # release assets. Unauthenticated = 60 req/hr per IP, exhausted on shared-IP
+    # runners → every github-strategy tool (rust-analyzer/taplo/opengrep/…) fails
+    # to install. The auto-provided token raises this to 5000 req/hr; the installer
+    # sends it ONLY to api.github.com, never the asset CDN.
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v6
 
