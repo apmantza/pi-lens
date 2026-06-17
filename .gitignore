@@ -59,6 +59,7 @@ migrate-*.js
 !docs/TREE_SITTER_RULES.md
 !docs/WRITING_NEW_AST_GREP_RULES.md
 !docs/custom-rules.md
+!docs/lsp-latency-benchmark.md
 !skills/**/*.md
 
 # Local-only docs (not in git or npm)

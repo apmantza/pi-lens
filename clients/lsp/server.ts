@@ -1994,6 +1994,54 @@ export const OpengrepServer: LSPServerInfo = {
 	autoInstall: async () => Boolean(await ensureTool("opengrep")),
 };
 
+// ast-grep — a polyglot structural linter that speaks LSP. Like Opengrep it is a
+// cross-cutting, diagnostic-only auxiliary (never a file's primary language
+// server). Unlike Opengrep it is **sgconfig-gated**: the `ast-grep lsp` server
+// only operates in a project with an `sgconfig.y[a]ml` root, so its root detector
+// keys on that marker — no sgconfig ⇒ undefined root ⇒ it never attaches and the
+// existing napi ast-grep runner remains the path (Phase 1 of #239; the no-sgconfig
+// baseline via `--config` + shipped rules is Phase 2). When present, it surfaces
+// the team's OWN curated rules (warm, full-engine, with codeAction fixes) — which
+// the napi subset interpreter cannot evaluate faithfully.
+const AST_GREP_KINDS = [
+	"csharp", "cxx", "css", "elixir", "go", "haskell", "html", "java", "json",
+	"jsts", "kotlin", "lua", "nix", "php", "python", "ruby", "rust", "scala",
+	"shell", "solidity", "swift", "yaml",
+] as const;
+const AST_GREP_EXTENSIONS: readonly string[] = Array.from(
+	new Set(
+		AST_GREP_KINDS.flatMap(
+			(k) => (KIND_EXTENSIONS as Record<string, readonly string[]>)[k] ?? [],
+		),
+	),
+);
+
+export const AstGrepServer: LSPServerInfo = {
+	id: "ast-grep",
+	name: "ast-grep structural linter",
+	role: "auxiliary",
+	extensions: AST_GREP_EXTENSIONS,
+	// sgconfig-gated: only a project with sgconfig.y[a]ml gets the server. No
+	// fallback — absence means "don't attach" (the napi runner stays).
+	root: createRootDetector(["sgconfig.yml", "sgconfig.yaml"]),
+	availabilityKey: "ast-grep",
+	// First scan of a session compiles the project's rules.
+	initializeTimeoutMs: 15000,
+	async spawn(root, options) {
+		// `ast-grep lsp` auto-discovers sgconfig from its cwd (the sgconfig root).
+		return resolveAndLaunch(
+			{
+				candidates: ["ast-grep"],
+				args: ["lsp"],
+				cwd: root,
+				managedToolId: "ast-grep",
+			},
+			options?.allowInstall,
+		);
+	},
+	autoInstall: async () => Boolean(await ensureTool("ast-grep")),
+};
+
 export const LSP_SERVERS: LSPServerInfo[] = [
 	TypeScriptServer,
 	DenoServer,
@@ -2034,6 +2082,7 @@ export const LSP_SERVERS: LSPServerInfo[] = [
 	CssServer,
 	// Auxiliary (cross-cutting, diagnostic-only) servers go last — never primary.
 	OpengrepServer,
+	AstGrepServer,
 ];
 
 /**

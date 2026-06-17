@@ -89,6 +89,25 @@ export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
 			// Opengrep re-scans only on a fresh didOpen — didChange is a no-op for it.
 			reopenOnResync: true,
 		},
+		// ast-grep structural linter (sgconfig-gated auxiliary LSP). Push-only,
+		// compiles the project rules on the first scan of a session, and — like
+		// Opengrep — is re-synced via didClose+didOpen so edits trigger a re-scan.
+		// Conservative budget until measured against real projects (#239).
+		// ast-grep re-scans on didChange (verified: toggling the violation count
+		// 3→1→4→2 returns the correct fresh count each touch, with matching doc
+		// versions), so reopen isn't needed and didChange is the lighter path.
+		// aggregateWaitMs is deliberately low (1000, not Opengrep's 6000): on the
+		// with-auxiliary path the per-touch deadline is max(callerCap, maxStrategyWait),
+		// so a high value inflates the floor when the PRIMARY emits no diagnostics and
+		// the wait can't early-return (#239 benchmark finding).
+		"ast-grep": {
+			seedFirstPush: false,
+			pullRetryBudgetMs: 0,
+			debounceMs: 150,
+			aggregateWaitMs: 1000,
+			expectSemanticSecondPush: false,
+			reopenOnResync: false,
+		},
 	};
 
 /** Fallback for unknown servers. Conservative defaults. */

@@ -362,6 +362,19 @@ const LSP_FIXTURES = [
 		auxiliarySourceMatch: "semgrep|opengrep",
 		gitInit: true,
 	},
+	// ast-grep structural linter (auxiliary, sgconfig-gated). The fixture carries an
+	// sgconfig.yml + a rule dir, so the ast-grep LSP roots on it and scans the team's
+	// own rule (#239 Phase 1). Proves install→spawn→compile-rules→scan→publish.
+	{
+		lang: "ast-grep",
+		dir: "tests/fixtures/tool-smoke/ast-grep-aux",
+		file: "danger.js",
+		serverHint: "ast-grep (auxiliary)",
+		tools: ["ast-grep"],
+		auxiliaryServerIds: ["ast-grep"],
+		auxiliarySourceMatch: "ast[-_]?grep",
+		gitInit: true,
+	},
 	// Alternate primary servers — a second language server for a language whose
 	// default is registered ahead of it (deno↔typescript, jedi↔pyright). They are
 	// reached only when the default is unavailable/disabled, so the harness writes

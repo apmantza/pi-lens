@@ -1,0 +1,6 @@
+id: no-console-log
+language: javascript
+severity: error
+message: Avoid console.log in committed code
+rule:
+  pattern: console.log($$$ARGS)

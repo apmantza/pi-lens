@@ -19,6 +19,7 @@
 
 import type { LSPDiagnostic } from "../lsp/client.js";
 import { findLocalOpengrepConfig } from "../opengrep-config.js";
+import { findLocalSgconfig } from "../sgconfig.js";
 import { classifyDefect } from "./diagnostic-taxonomy.js";
 import type { DefectClass, OutputSemantic } from "./types.js";
 
@@ -61,6 +62,23 @@ export const AUXILIARY_LSP_PROFILES: readonly AuxiliaryLspProfile[] = [
 			blockingAllowed && d.severity === 1 ? "blocking" : "warning",
 		defectClass: (d) =>
 			classifyDefect(String(d.code ?? ""), "opengrep", d.message ?? ""),
+	},
+	{
+		serverId: "ast-grep",
+		tool: "ast-grep",
+		// ast-grep tags its LSP diagnostics `source: "ast-grep"`.
+		sourceMatch: /ast[-_]?grep/i,
+		killSwitchFlag: "no-ast-grep",
+		enabledByDefault: true,
+		// The ast-grep LSP server only attaches when the repo has an sgconfig
+		// (root-gated), so a finding here always stems from the team's own curated
+		// rules — deliberately authored, hence blocking-eligible (mirrors Opengrep's
+		// curated-config gate). The check is belt-and-suspenders for the runner.
+		allowBlocking: (cwd) => Boolean(findLocalSgconfig(cwd)),
+		semantic: (d, { blockingAllowed }) =>
+			blockingAllowed && d.severity === 1 ? "blocking" : "warning",
+		defectClass: (d) =>
+			classifyDefect(String(d.code ?? ""), "ast-grep", d.message ?? ""),
 	},
 ];
 
