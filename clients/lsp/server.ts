@@ -853,6 +853,40 @@ function dotnetToolCandidates(tool: string): string[] {
 }
 
 /**
+ * Both filename forms for a tool in a directory (`.exe` first on Windows). A
+ * managed binary may carry the extension or not depending on how the toolchain
+ * dropped it, so we try both.
+ */
+function binExeVariants(dir: string, tool: string): string[] {
+	return process.platform === "win32"
+		? [path.join(dir, `${tool}.exe`), path.join(dir, tool)]
+		: [path.join(dir, tool)];
+}
+
+/**
+ * Canonical-bin discovery (#241): a runtime-managed server can be installed yet
+ * absent from the shell PATH — the toolchain drops it in a well-known dir the
+ * user's PATH often omits (fresh installs, Windows, non-login shells). Returning
+ * the bare command FIRST keeps PATH authoritative when it resolves; the explicit
+ * dir paths are the fallback (and the post-`go install` retry target).
+ *
+ * Go: `$GOPATH/bin` (first GOPATH entry) or `~/go/bin` — where `go install` lands.
+ */
+export function goBinCandidates(tool: string): string[] {
+	const gopath =
+		process.env.GOPATH?.split(path.delimiter)[0] ||
+		path.join(os.homedir(), "go");
+	return [tool, ...binExeVariants(path.join(gopath, "bin"), tool)];
+}
+
+/** Rust: `$CARGO_HOME/bin` or `~/.cargo/bin` — cargo/rustup binaries + proxies. */
+export function cargoBinCandidates(tool: string): string[] {
+	const cargoHome =
+		process.env.CARGO_HOME || path.join(os.homedir(), ".cargo");
+	return [tool, ...binExeVariants(path.join(cargoHome, "bin"), tool)];
+}
+
+/**
  * Try to install a gem to the pi-lens bin dir. Resolves true if the install succeeded.
  */
 export async function tryGemInstall(gem: string): Promise<boolean> {
@@ -1256,7 +1290,10 @@ export const GoServer: LSPServerInfo = {
 	async spawn(root, options) {
 		const result = await resolveAndLaunch(
 			{
-				candidates: ["gopls"],
+				// Canonical-bin discovery (#241): include $GOPATH/bin so a gopls that
+				// `go install` dropped there resolves even when it isn't on PATH —
+				// which is also the retry target after the runtimeInstall below.
+				candidates: goBinCandidates("gopls"),
 				args: [],
 				cwd: root,
 				runtimeInstall: {
@@ -1314,10 +1351,13 @@ export const RustServer: LSPServerInfo = {
 	// shared crate root — then all files share one server.
 	root: RustWorkspaceRoot(),
 	async spawn(root, options) {
-		// Prefer rustup-installed rust-analyzer; fall back to GitHub-downloaded managed copy
+		// Prefer rustup-installed rust-analyzer; fall back to GitHub-downloaded
+		// managed copy. Canonical-bin discovery (#241): include ~/.cargo/bin so a
+		// cargo/rustup-managed rust-analyzer resolves before paying for a download
+		// even when ~/.cargo/bin isn't on PATH.
 		const result = await resolveAndLaunch(
 			{
-				candidates: ["rust-analyzer"],
+				candidates: cargoBinCandidates("rust-analyzer"),
 				args: [],
 				cwd: root,
 				managedToolId: "rust-analyzer",
@@ -1475,14 +1515,32 @@ export const OmniSharpServer = createInteractiveServer({
 	args: ["--languageserver"],
 });
 
-export const FSharpServer = createInteractiveServer({
+export const FSharpServer: LSPServerInfo = {
 	id: "fsharp",
 	name: "FSAutocomplete",
 	extensions: KIND_EXTENSIONS["fsharp"],
-	root: createRootDetector([".sln", ".fsproj"]),
-	language: "fsharp",
-	command: "fsautocomplete",
-});
+	root: RootWithFallback(createRootDetector([".sln", ".fsproj"])),
+	async spawn(root, options) {
+		// fsautocomplete is a `dotnet tool` (#241), exactly like csharp-ls: prefer a
+		// managed/.dotnet-tools copy, else `dotnet tool install` when the .NET SDK
+		// is on PATH. dotnetToolCandidates covers the install target so the retry
+		// resolves it.
+		const candidates = dotnetToolCandidates("fsautocomplete");
+		return resolveAndLaunch(
+			{
+				candidates,
+				args: [],
+				cwd: root,
+				runtimeInstall: {
+					runtimeCommand: "dotnet",
+					install: () => tryDotnetToolInstall("fsautocomplete"),
+					retryCandidates: candidates,
+				},
+			},
+			options?.allowInstall,
+		);
+	},
+};
 
 export const JavaServer = createInteractiveServer({
 	id: "java",
