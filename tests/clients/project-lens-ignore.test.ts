@@ -98,14 +98,46 @@ describe("createProjectIgnoreMatcher with project config", () => {
 			path.join(tmpDir, ".pi-lens.json"),
 			JSON.stringify({ ignore: ["second/**"] }),
 		);
-		resetProjectLensConfigCache();
 
 		const after = getProjectIgnoreMatcher(tmpDir);
 		expect(after.isIgnored(path.join(tmpDir, "first/x.ts"), false)).toBe(false);
 		expect(after.isIgnored(path.join(tmpDir, "second/x.ts"), false)).toBe(true);
 	});
 
-	it("project ignore patterns feed through collectSourceFiles", async () => {
+	it("invalidates when inherited parent .pi-lens.json changes above the git root", async () => {
+		const childRoot = path.join(tmpDir, "nested-repo");
+		fs.mkdirSync(path.join(childRoot, ".git"), { recursive: true });
+		fs.mkdirSync(path.join(childRoot, "first"));
+		fs.mkdirSync(path.join(childRoot, "second"));
+		fs.writeFileSync(
+			path.join(tmpDir, ".pi-lens.json"),
+			JSON.stringify({ ignore: ["first/**"] }),
+		);
+
+		const before = getProjectIgnoreMatcher(childRoot);
+		expect(before.isIgnored(path.join(childRoot, "first/x.ts"), false)).toBe(
+			true,
+		);
+		expect(before.isIgnored(path.join(childRoot, "second/x.ts"), false)).toBe(
+			false,
+		);
+
+		await new Promise((r) => setTimeout(r, 20));
+		fs.writeFileSync(
+			path.join(tmpDir, ".pi-lens.json"),
+			JSON.stringify({ ignore: ["second/**"] }),
+		);
+
+		const after = getProjectIgnoreMatcher(childRoot);
+		expect(after.isIgnored(path.join(childRoot, "first/x.ts"), false)).toBe(
+			false,
+		);
+		expect(after.isIgnored(path.join(childRoot, "second/x.ts"), false)).toBe(
+			true,
+		);
+	});
+
+	it("project ignore patterns feed through collectSourceFiles", () => {
 		// End-to-end: a path that the project config ignores must not appear in
 		// the source file listing that drives every per-edit scan.
 		fs.writeFileSync(
@@ -122,8 +154,8 @@ describe("createProjectIgnoreMatcher with project config", () => {
 		fs.mkdirSync(srcDir);
 		fs.writeFileSync(path.join(srcDir, "real.ts"), "export const y = 2;\n");
 
-		const files = await collectSourceFiles(tmpDir);
-		const rel = files.map((f) => path.relative(tmpDir, f));
+		const files = collectSourceFiles(tmpDir);
+		const rel = files.map((f) => path.relative(tmpDir, f).replace(/\\/g, "/"));
 		expect(rel).toContain("src/real.ts");
 		expect(rel).not.toContain("fixtures/noise.ts");
 	});

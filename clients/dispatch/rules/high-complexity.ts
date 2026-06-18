@@ -6,19 +6,25 @@ import type { FunctionSummary } from "../facts/function-facts.js";
 // `rules["high-complexity"].threshold` (cyclomatic complexity) and (implicitly)
 // the depth threshold via the same setter. Defaults match the historical
 // hardcoded values so behavior is unchanged for projects without a config.
-let ccThreshold = 15;
-let depthThreshold = 6;
+export const DEFAULT_HIGH_COMPLEXITY_THRESHOLD = 15;
+export const DEFAULT_HIGH_COMPLEXITY_DEPTH_THRESHOLD = 6;
+let ccThreshold = DEFAULT_HIGH_COMPLEXITY_THRESHOLD;
+let depthThreshold = DEFAULT_HIGH_COMPLEXITY_DEPTH_THRESHOLD;
+
+function isPositiveFiniteThreshold(value: number): boolean {
+	return Number.isFinite(value) && value > 0;
+}
 
 /** Override thresholds from a project's `.pi-lens.json`. Idempotent. */
 export function setHighComplexityThresholds(cc: number, depth: number): void {
-	ccThreshold = cc;
-	depthThreshold = depth;
+	if (isPositiveFiniteThreshold(cc)) ccThreshold = cc;
+	if (isPositiveFiniteThreshold(depth)) depthThreshold = depth;
 }
 
 /** Test helper: restore compile-time defaults. */
 export function resetHighComplexityThresholds(): void {
-	ccThreshold = 15;
-	depthThreshold = 6;
+	ccThreshold = DEFAULT_HIGH_COMPLEXITY_THRESHOLD;
+	depthThreshold = DEFAULT_HIGH_COMPLEXITY_DEPTH_THRESHOLD;
 }
 
 export const highComplexityRule: FactRule = {

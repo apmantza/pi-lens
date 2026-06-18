@@ -111,6 +111,22 @@ describe("highComplexityRule threshold override", () => {
 		expect(diagnostics[0].message).toMatch(/nesting depth 4/);
 	});
 
+	it("ignores invalid threshold inputs", () => {
+		setHighComplexityThresholds(5, 3);
+		setHighComplexityThresholds(Number.NaN, Number.POSITIVE_INFINITY);
+		setHighComplexityThresholds(0, -1);
+
+		const filePath = "/tmp/a.ts";
+		const facts = new FactStore();
+		facts.setFileFact(filePath, "file.functionSummaries", [
+			summaryWithCC(6, 4),
+		]);
+
+		const ctx = makeCtx(filePath, facts);
+		const diagnostics = highComplexityRule.evaluate(ctx, facts);
+		expect(diagnostics).toHaveLength(1);
+	});
+
 	it("resetHighComplexityThresholds restores defaults", () => {
 		setHighComplexityThresholds(5, 3);
 		resetHighComplexityThresholds();

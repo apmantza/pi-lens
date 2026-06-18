@@ -5,16 +5,17 @@ import type { FunctionSummary } from "../facts/function-facts.js";
 // Threshold is mutable so a project's `.pi-lens.json` can override it via
 // `rules["high-fan-out"].threshold`. Default matches the historical hardcoded
 // value so behavior is unchanged for projects without a config.
-let fanOutThreshold = 20;
+export const DEFAULT_HIGH_FAN_OUT_THRESHOLD = 20;
+let fanOutThreshold = DEFAULT_HIGH_FAN_OUT_THRESHOLD;
 
 /** Override threshold from a project's `.pi-lens.json`. Idempotent. */
 export function setHighFanOutThreshold(n: number): void {
-	fanOutThreshold = n;
+	if (Number.isFinite(n) && n > 0) fanOutThreshold = n;
 }
 
 /** Test helper: restore compile-time default. */
 export function resetHighFanOutThreshold(): void {
-	fanOutThreshold = 20;
+	fanOutThreshold = DEFAULT_HIGH_FAN_OUT_THRESHOLD;
 }
 
 export const highFanOutRule: FactRule = {

@@ -299,6 +299,7 @@ Per-rule threshold overrides. Currently honored:
 
 - Unknown top-level keys and unknown rule ids are ignored, so a forward-compat file with extra fields (e.g. an LSP `servers` block from `lsp.json`) won't break the parse.
 - A malformed JSON file is silently treated as "no config" — your diagnostics never get blocked by a syntax error in your own config.
+- Rule thresholds must be positive finite numbers; invalid, zero, or negative values are ignored.
 - The depth sub-threshold of `high-complexity` (default `6`) is intentionally not exposed; only the cyclomatic-complexity knob ships today to keep the schema tight.
 - The file is mtime-cached, so editing it takes effect on the next scan without restarting the agent.
 

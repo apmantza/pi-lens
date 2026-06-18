@@ -127,6 +127,25 @@ describe("highFanOutRule threshold override", () => {
 		expect(diagnostics).toHaveLength(0);
 	});
 
+	it("ignores invalid threshold inputs", () => {
+		setHighFanOutThreshold(5);
+		setHighFanOutThreshold(Number.NaN);
+		setHighFanOutThreshold(Number.POSITIVE_INFINITY);
+		setHighFanOutThreshold(0);
+		setHighFanOutThreshold(-1);
+
+		const filePath = "/tmp/a.ts";
+		const facts = new FactStore();
+		const callees = Array.from({ length: 6 }, (_, i) => `fn${i}`);
+		facts.setFileFact(filePath, "file.functionSummaries", [
+			summaryWithCallees(callees),
+		]);
+
+		const ctx = makeCtx(filePath, facts);
+		const diagnostics = highFanOutRule.evaluate(ctx, facts);
+		expect(diagnostics).toHaveLength(1);
+	});
+
 	it("resetHighFanOutThreshold restores the default", () => {
 		setHighFanOutThreshold(3);
 		resetHighFanOutThreshold();

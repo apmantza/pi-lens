@@ -7,7 +7,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { minimatch } from "minimatch";
 import { normalizeFilePath } from "./path-utils.js";
-import { loadPiLensProjectConfig } from "./project-lens-config.js";
+import {
+	findPiLensProjectConfig,
+	loadPiLensProjectConfig,
+} from "./project-lens-config.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 
 /**
@@ -344,6 +347,7 @@ const projectIgnoreMatcherCache = new Map<
 	string,
 	{
 		gitignoreMtimeMs: number;
+		lensConfigPath: string | undefined;
 		lensConfigMtimeMs: number;
 		matcher: ProjectIgnoreMatcher;
 	}
@@ -358,30 +362,30 @@ function gitignoreMtimeMs(rootDir: string): number {
 }
 
 /**
- * mtime of the project's `.pi-lens.json` (or `pi-lens.json`) at this root, or
- * -1 if none exists. Used as part of the matcher cache key so editing the file
- * drops the cached matcher and the new `ignore` patterns take effect on the
- * next call. Probes both basenames because either is accepted by the loader.
+ * The project config file found by the same upward walk as the loader. Cache
+ * invalidation must track the actual file found, not only a file directly under
+ * the git root: nested worktrees/submodules can legitimately inherit a
+ * `.pi-lens.json` from a parent directory.
  */
-function lensConfigMtimeMs(rootDir: string): number {
-	for (const name of [".pi-lens.json", "pi-lens.json"]) {
-		try {
-			return fs.statSync(path.join(rootDir, name)).mtimeMs;
-		} catch {
-			// try next
-		}
-	}
-	return -1;
+function lensConfigInfo(rootDir: string): {
+	path: string | undefined;
+	mtimeMs: number;
+} {
+	const info = findPiLensProjectConfig(rootDir);
+	return info
+		? { path: info.path, mtimeMs: info.mtimeMs }
+		: { path: undefined, mtimeMs: -1 };
 }
 
 export function getProjectIgnoreMatcher(rootDir: string): ProjectIgnoreMatcher {
 	const resolvedRoot = resolveGitIgnoreRoot(rootDir);
 	const gitignoreMtime = gitignoreMtimeMs(resolvedRoot);
-	const lensConfigMtime = lensConfigMtimeMs(resolvedRoot);
+	const lensConfig = lensConfigInfo(resolvedRoot);
 	const cached = projectIgnoreMatcherCache.get(resolvedRoot);
 	if (
 		cached?.gitignoreMtimeMs === gitignoreMtime &&
-		cached?.lensConfigMtimeMs === lensConfigMtime
+		cached?.lensConfigPath === lensConfig.path &&
+		cached?.lensConfigMtimeMs === lensConfig.mtimeMs
 	) {
 		return cached.matcher;
 	}
@@ -396,7 +400,8 @@ export function getProjectIgnoreMatcher(rootDir: string): ProjectIgnoreMatcher {
 	);
 	projectIgnoreMatcherCache.set(resolvedRoot, {
 		gitignoreMtimeMs: gitignoreMtime,
-		lensConfigMtimeMs: lensConfigMtime,
+		lensConfigPath: lensConfig.path,
+		lensConfigMtimeMs: lensConfig.mtimeMs,
 		matcher,
 	});
 	return matcher;

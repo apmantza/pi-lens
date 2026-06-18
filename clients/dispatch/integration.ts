@@ -108,11 +108,14 @@ import { asyncUnnecessaryWrapperRule } from "./rules/async-unnecessary-wrapper.j
 import { errorObscuringRule } from "./rules/error-obscuring.js";
 import { errorSwallowingRule } from "./rules/error-swallowing.js";
 import {
+	DEFAULT_HIGH_COMPLEXITY_DEPTH_THRESHOLD,
 	highComplexityRule,
+	resetHighComplexityThresholds,
 	setHighComplexityThresholds,
 } from "./rules/high-complexity.js";
 import {
 	highFanOutRule,
+	resetHighFanOutThreshold,
 	setHighFanOutThreshold,
 } from "./rules/high-fan-out.js";
 import { missingErrorPropagationRule } from "./rules/missing-error-propagation.js";
@@ -168,14 +171,24 @@ registerRule(noComplexConditionalsRule);
  * small. Calling repeatedly is safe and idempotent; the underlying loader is
  * mtime-cached so re-applying within a session is essentially free.
  *
- * Called once per session start via `resetDispatchBaselines(cwd)`.
+ * Called on session start via `resetDispatchBaselines(cwd)` and before each
+ * dispatch entry point so config edits are picked up on the next scan.
  */
 export function applyProjectLensConfig(cwd: string): void {
+	// Rule thresholds are process-global module state. Always reset first so
+	// removing a key from `.pi-lens.json` (or switching to a project without one)
+	// returns to the historical defaults instead of leaking a previous override.
+	resetHighComplexityThresholds();
+	resetHighFanOutThreshold();
+
 	const config = loadPiLensProjectConfig(cwd);
 
 	const complexity = config.rules["high-complexity"];
 	if (typeof complexity?.threshold === "number") {
-		setHighComplexityThresholds(complexity.threshold, 6);
+		setHighComplexityThresholds(
+			complexity.threshold,
+			DEFAULT_HIGH_COMPLEXITY_DEPTH_THRESHOLD,
+		);
 	}
 
 	const fanOut = config.rules["high-fan-out"];
@@ -1319,6 +1332,7 @@ export async function dispatchLint(
 	pi: PiAgentAPI,
 	modifiedRanges?: ModifiedRange[],
 ): Promise<string> {
+	applyProjectLensConfig(cwd);
 	// By default, only run BLOCKING rules for fast feedback on file write
 	// Uses persistent sessionBaselines so delta mode actually filters
 	// pre-existing issues after the first write.
@@ -1359,6 +1373,7 @@ export async function dispatchLintWithResult(
 	logContext?: LogContext,
 	options?: { blockingOnly?: boolean },
 ): Promise<DispatchResult> {
+	applyProjectLensConfig(cwd);
 	// Default true preserves the per-edit fast path (errors only). Callers that
 	// want the full picture (warnings + structural smells), e.g. the MCP review
 	// facade, pass blockingOnly=false to run every runner.
@@ -1441,6 +1456,7 @@ export async function dispatchLintDetailed(
 	pi: PiAgentAPI,
 	options?: { blockingOnly?: boolean; modifiedRanges?: ModifiedRange[] },
 ): Promise<{ result: DispatchResult; runners: RunnerOutcome[] }> {
+	applyProjectLensConfig(cwd);
 	const empty: DispatchResult = {
 		diagnostics: [],
 		blockers: [],

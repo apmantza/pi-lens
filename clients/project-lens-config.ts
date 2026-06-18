@@ -45,6 +45,8 @@ export interface PiLensProjectConfig {
 	raw: unknown;
 	/** Absolute path of the config file that was loaded, or undefined if none. */
 	configPath: string | undefined;
+	/** Directory containing the config file, or undefined if none was loaded. */
+	configDir: string | undefined;
 }
 
 export const EMPTY_PROJECT_CONFIG: PiLensProjectConfig = {
@@ -52,6 +54,7 @@ export const EMPTY_PROJECT_CONFIG: PiLensProjectConfig = {
 	rules: {},
 	raw: undefined,
 	configPath: undefined,
+	configDir: undefined,
 };
 
 interface CacheEntry {
@@ -67,23 +70,16 @@ const configCache = new Map<string, CacheEntry>();
  * Returns the parsed config, or an empty config if none was found.
  */
 export function loadPiLensProjectConfig(startDir: string): PiLensProjectConfig {
-	const configPath = findProjectConfig(startDir);
-	if (!configPath) return EMPTY_PROJECT_CONFIG;
+	const configInfo = findPiLensProjectConfig(startDir);
+	if (!configInfo) return EMPTY_PROJECT_CONFIG;
 
-	let stat: fs.Stats;
-	try {
-		stat = fs.statSync(configPath);
-	} catch {
-		return EMPTY_PROJECT_CONFIG;
-	}
-
-	const cached = configCache.get(configPath);
-	if (cached && cached.mtimeMs === stat.mtimeMs) {
+	const cached = configCache.get(configInfo.path);
+	if (cached && cached.mtimeMs === configInfo.mtimeMs) {
 		return cached.config;
 	}
 
-	const config = parseConfigFile(configPath);
-	configCache.set(configPath, { mtimeMs: stat.mtimeMs, config });
+	const config = parseConfigFile(configInfo.path);
+	configCache.set(configInfo.path, { mtimeMs: configInfo.mtimeMs, config });
 	return config;
 }
 
@@ -92,14 +88,24 @@ export function resetProjectLensConfigCache(): void {
 	configCache.clear();
 }
 
-function findProjectConfig(startDir: string): string | undefined {
+export interface PiLensProjectConfigFileInfo {
+	path: string;
+	dir: string;
+	mtimeMs: number;
+}
+
+export function findPiLensProjectConfig(
+	startDir: string,
+): PiLensProjectConfigFileInfo | undefined {
 	let dir = path.resolve(startDir);
 	while (true) {
 		for (const name of PROJECT_CONFIG_BASENAMES) {
 			const candidate = path.join(dir, name);
 			try {
 				const stat = fs.statSync(candidate);
-				if (stat.isFile()) return candidate;
+				if (stat.isFile()) {
+					return { path: candidate, dir, mtimeMs: stat.mtimeMs };
+				}
 			} catch {
 				// not present; keep walking
 			}
@@ -137,11 +143,15 @@ function parseConfigFile(configPath: string): PiLensProjectConfig {
 				continue;
 			}
 			const r = ruleCfg as Record<string, unknown>;
-			if (typeof r.threshold === "number" && Number.isFinite(r.threshold)) {
+			if (
+				typeof r.threshold === "number" &&
+				Number.isFinite(r.threshold) &&
+				r.threshold > 0
+			) {
 				rules[ruleId] = { threshold: r.threshold };
 			}
 		}
 	}
 
-	return { ignore, rules, raw, configPath };
+	return { ignore, rules, raw, configPath, configDir: path.dirname(configPath) };
 }

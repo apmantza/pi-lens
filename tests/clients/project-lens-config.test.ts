@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+	findPiLensProjectConfig,
 	loadPiLensProjectConfig,
 	resetProjectLensConfigCache,
 } from "../../clients/project-lens-config.js";
@@ -40,6 +41,7 @@ describe("loadPiLensProjectConfig", () => {
 		expect(cfg.ignore).toEqual(["**/__tests__/**", "fixtures/**"]);
 		expect(cfg.rules["high-complexity"]?.threshold).toBe(25);
 		expect(cfg.configPath).toBe(path.join(tmpDir, ".pi-lens.json"));
+		expect(cfg.configDir).toBe(tmpDir);
 	});
 
 	it("accepts pi-lens.json (no leading dot) as a fallback name", () => {
@@ -116,7 +118,7 @@ describe("loadPiLensProjectConfig", () => {
 		expect(cfg.ignore).toEqual(["valid/**", "also-valid/**"]);
 	});
 
-	it("rejects non-finite threshold numbers", () => {
+	it("rejects non-positive and non-finite threshold numbers", () => {
 		fs.writeFileSync(
 			path.join(tmpDir, ".pi-lens.json"),
 			JSON.stringify({
@@ -125,6 +127,8 @@ describe("loadPiLensProjectConfig", () => {
 					"high-fan-out": { threshold: Infinity },
 					"high-import-coupling": { threshold: -Infinity },
 					"commented-out-code": { threshold: "15" },
+					"zero-threshold": { threshold: 0 },
+					"negative-threshold": { threshold: -5 },
 				},
 			}),
 		);
@@ -133,21 +137,8 @@ describe("loadPiLensProjectConfig", () => {
 		expect(cfg.rules["high-fan-out"]).toBeUndefined();
 		expect(cfg.rules["high-import-coupling"]).toBeUndefined();
 		expect(cfg.rules["commented-out-code"]).toBeUndefined();
-	});
-
-	it("accepts finite thresholds including zero and negatives", () => {
-		fs.writeFileSync(
-			path.join(tmpDir, ".pi-lens.json"),
-			JSON.stringify({
-				rules: {
-					"high-complexity": { threshold: 0 },
-					"high-fan-out": { threshold: -5 },
-				},
-			}),
-		);
-		const cfg = loadPiLensProjectConfig(tmpDir);
-		expect(cfg.rules["high-complexity"]?.threshold).toBe(0);
-		expect(cfg.rules["high-fan-out"]?.threshold).toBe(-5);
+		expect(cfg.rules["zero-threshold"]).toBeUndefined();
+		expect(cfg.rules["negative-threshold"]).toBeUndefined();
 	});
 
 	it("ignores non-object rule entries and entries with no threshold", () => {
@@ -196,6 +187,15 @@ describe("loadPiLensProjectConfig", () => {
 		fs.writeFileSync(path.join(tmpDir, ".pi-lens.json"), JSON.stringify(raw));
 		const cfg = loadPiLensProjectConfig(tmpDir);
 		expect(cfg.raw).toEqual(raw);
+	});
+
+	it("findPiLensProjectConfig returns path, dir, and mtime for cache keys", () => {
+		const configPath = path.join(tmpDir, ".pi-lens.json");
+		fs.writeFileSync(configPath, JSON.stringify({ ignore: ["x/**"] }));
+		const info = findPiLensProjectConfig(path.join(tmpDir, "src"));
+		expect(info?.path).toBe(configPath);
+		expect(info?.dir).toBe(tmpDir);
+		expect(typeof info?.mtimeMs).toBe("number");
 	});
 
 	it("stops walking at the filesystem root without infinite-looping", () => {
