@@ -13,110 +13,111 @@ servers pi-lens already tolerates).
   averaged over 3 edits.
 - Source fixtures: `tests/fixtures/tool-smoke/*` (driven through the real
   `LSPService.touchFile`, same entry the dispatch path uses).
+- **Isolation (since #242):** each fixture measures **one server alone**. The
+  service + workspace config are reset between fixtures (no lingering server from a
+  previous measurement), and every *other* server matching the file is disabled —
+  so an auxiliary number is the auxiliary by itself (primaries off) and a primary
+  number is the default by itself (alternates + auxiliaries off). This removes the
+  primary↔auxiliary cross-contamination that produced the old "20557ms" artifact
+  (see the resolved-history note below).
 
-> **Coverage:** this measures the **17 servers that have a tool-smoke fixture**, not
-> all 38 registered server definitions. The other ~21 (go, ruby, java, kotlin,
-> swift, dart, lua, cpp, zig, haskell, gleam, ocaml, clojure, elixir, nix, vue,
-> svelte, omnisharp, fsharp, …) have no fixture and are skipped. To benchmark the
-> full registry, add a minimal fixture per language.
+> **Coverage:** this run measured **25 servers** (23 primary/alternate + 2
+> auxiliary) — those whose toolchain is installed on this box. **12** more
+> (csharp-ls, fsautocomplete, jdtls, kotlin-language-server, sourcekit-lsp, dart,
+> lua-language-server, clangd, haskell-language-server, elixir-ls, ocamllsp, nixd)
+> have a fixture but are toolchain-gated and reported `unavailable` here — run with
+> `--install` on a box with their runtimes to measure them (#241).
 >
-> **Every fixture is intentionally broken** (it carries a known defect so the smoke
-> harness can assert a diagnostic). That means each server always has diagnostics to
-> early-return on — see the lifecycle note below, which this masks.
+> **Most fixtures are intentionally broken** (they carry a known defect so the smoke
+> harness can assert a diagnostic). That means such a server always has a diagnostic
+> to early-return on — see the clean-file note below, which a broken fixture masks.
+> The `typescript-clean` fixture exists precisely to expose that cost.
 
-## Results (2026-06 run)
+## Results (2026-06 run, isolated)
 
 Sorted by warm/edit. `role`: primary = the file's language server; alternate =
 second server for a language (reached when the default is disabled); auxiliary =
-cross-cutting, attaches alongside the primary.
+cross-cutting, attaches alongside the primary in production but measured alone here.
 
 | lang | role | cold | warm/edit | server |
 |---|---|---:|---:|---|
-| deno | alternate | 2028ms | 377ms | deno |
-| rust | primary | 1381ms | 378ms | rust-analyzer |
-| typescript | primary | 2195ms | 420ms | typescript-language-server |
-| yaml | primary | 2701ms | 639ms | yaml-language-server |
-| dockerfile | primary | 2487ms | 684ms | docker-langserver |
-| toml | primary | 2331ms | 693ms | taplo |
-| prisma | primary | 2671ms | 700ms | @prisma/language-server |
-| python | primary | 2736ms | 724ms | pyright |
-| json | primary | 2555ms | 1172ms | vscode-json-language-server |
-| html | primary | 2950ms | 1177ms | vscode-html-language-server |
-| opengrep | auxiliary | 4233ms | 1181ms | opengrep |
-| css | primary | 2951ms | 1201ms | vscode-css-language-server |
-| php | primary | 2595ms | 1280ms | intelephense |
-| shell | primary | 3751ms | 1388ms | bash-language-server |
-| jedi | alternate | 2853ms | 1484ms | jedi-language-server |
-| terraform | primary | 3146ms | 2066ms | terraform-ls |
-| **ast-grep** | auxiliary | 3547ms | **~2000ms** (see note) | ast-grep |
+| deno | alternate | 2208ms | 481ms | deno (alternate of typescript) |
+| ruby | primary | 5443ms | 501ms | ruby-lsp |
+| typescript | primary | 2542ms | 536ms | typescript-language-server |
+| **ast-grep** | auxiliary | 2023ms | **549ms** | ast-grep |
+| go | primary | 2459ms | 781ms | gopls |
+| toml | primary | 2388ms | 783ms | taplo |
+| dockerfile | primary | 2787ms | 789ms | docker-langserver |
+| prisma | primary | 2864ms | 799ms | @prisma/language-server |
+| rust | primary | 1776ms | 808ms | rust-analyzer |
+| zig | primary | 1792ms | 845ms | zls |
+| python | primary | 3112ms | 850ms | pyright |
+| **opengrep** | auxiliary | 3028ms | **851ms** | opengrep |
+| gleam | primary | 1993ms | 902ms | gleam lsp |
+| yaml | primary | 3104ms | 944ms | yaml-language-server |
+| clojure | primary | 7354ms | 955ms | clojure-lsp |
+| css | primary | 3360ms | 1288ms | vscode-css-language-server |
+| html | primary | 3283ms | 1290ms | vscode-html-language-server |
+| typescript-clean | primary | 2350ms | 1324ms | typescript-language-server (clean file) |
+| shell | primary | 3421ms | 1338ms | bash-language-server |
+| svelte | primary | 4372ms | 1361ms | svelte-language-server |
+| php | primary | 2804ms | 1370ms | intelephense |
+| json | primary | 2941ms | 1379ms | vscode-json-language-server |
+| jedi | alternate | 2922ms | 1585ms | jedi (alternate of pyright) |
+| terraform | primary | 3221ms | 2215ms | terraform-ls |
+| vue | primary | 6513ms | 2220ms | @vue/language-server |
 
-**Primary/alternate warm:** min 377ms · avg ~960ms · max 2066ms (n=15).
-**Auxiliary warm:** opengrep ~1180ms, ast-grep ~2000ms — both within the primary range.
+**Primary/alternate warm:** min 481ms · avg 1102ms · max 2220ms (n=23).
+**Auxiliary warm:** ast-grep 549ms · opengrep 851ms — both at the **fast end** of the
+primary band.
 
 ### Gate A verdict (#239)
-**Pass.** Both auxiliaries land inside the primary band (377–2066ms). ast-grep as
-an auxiliary does not regress the hot path beyond what pi-lens already tolerates
-for primaries, so consolidating onto it (Phase 2) is justified on latency grounds.
+**Pass, decisively.** Measured in isolation, both auxiliaries are faster than the
+median primary (ast-grep 549ms, opengrep 851ms vs primary avg 1102ms). ast-grep as
+an auxiliary does not regress the hot path — consolidating onto it (Phase 2) is
+justified on latency grounds.
 
-## Note on the ast-grep "20557ms" anomaly (a measurement artifact)
+## Resolved: the with-auxiliary measurement artifact (#240 + #242)
 
-The raw full-suite bench first reported **ast-grep warm = 20557ms**. That number is
-**not ast-grep being slow** — it is a benchmark artifact, root-caused as follows:
+An earlier full-suite bench reported **ast-grep warm = 20557ms** (and ~2000–3700ms
+at lower caps). That was **never ast-grep being slow** — it was two compounding bugs,
+both now fixed:
 
-1. **ast-grep is fast and correct.** Instrumenting the publish handler showed it
-   emits one prompt `publishDiagnostics` per edit with the **correct count and a
-   matching document version** (toggling the violation count 3→1→4→2 returned the
-   right fresh count each time, `pubVersion == docVersion`). It re-scans on
-   `didChange` — no reopen needed.
-2. **The wait is gated by the PRIMARY, not the auxiliary.** On the with-auxiliary
-   path the touch waits for *all* attached servers (`Promise.all`). The benchmark
-   fixtures are clean `console.log` JS with **no TypeScript errors**, so the primary
-   (typescript) emits **zero** diagnostics and its per-server wait never
-   early-returns.
-3. **The deadline was inflated by the caller cap.** For with-auxiliary, the per-touch
-   deadline is `Math.max(callerCap, maxStrategyWait)`. The harness passed a large
-   `maxDiagnosticsWaitMs` (20s), so that big cap *became* the deadline — and with the
-   clean primary never resolving early, the touch burned it.
+1. **The benchmark co-spawned the primary.** An auxiliary fixture was touched with
+   `clientScope: "with-auxiliary"`, which spawns the file's primary language server
+   *and* the auxiliary, then waits for **all** of them (`Promise.all`). The fixtures
+   are clean JS with no TypeScript errors, so the primary (typescript, push-silent on
+   a clean file) never published and never early-returned — the touch ran to the
+   deadline even though ast-grep published in ~0.5s. **Fix:** the bench now disables
+   the primary and measures each server alone (this doc, isolation note above).
+2. **The with-auxiliary deadline was a floor, not a ceiling.** The collection used
+   `timeoutMs = max(callerCap, maxStrategyWait)` for *every* attached server, so a
+   large cap *became* the deadline and a slow auxiliary could override the per-edit
+   cap. **Fix (#242):** each server now gets its own deadline bounded by the caller
+   cap as a ceiling — `min(callerCap, strategyWait)` — so a clean/push-silent primary
+   can no longer hold the touch and an auxiliary can't blow the per-edit budget.
+   ast-grep's `aggregateWaitMs` was also raised 1000 → 1800 (its scan is ~1.3s; 1000
+   was under-budgeted, masked before only by the global floor).
 
-At a realistic cap the warm latency drops to **~2.0s** with correct fresh counts
-(`CAP=1500` → 2078ms; `CAP=4000` → 6.6s tracked the cap, confirming the
-deadline-floor mechanism). Opengrep looked fast in the same run only because its
-fixture happens to trip a TypeScript diagnostic, so its primary resolved early.
+Correctness of the early-return signal was hardened separately in **#240**: pull
+diagnostics now return a discriminated `found | clean | unavailable` outcome and a
+failed pull (dead/null/threw) is **never** read as clean — only an affirmative,
+version-matched publish (or authoritative empty pull) ends the wait early. A
+crashed/cold/stale/errored server is never painted "clean".
 
-Fix applied: ast-grep's strategy `aggregateWaitMs` was set to 1000 (not Opengrep's
-6000) so it doesn't inflate `maxStrategyWait`; `reopenOnResync: false` (didChange is
-sufficient and lighter).
+### Clean-file cost is real and irreducible for push-silent servers
+A server that processes an edit and finds **no new diagnostics** gives the wait
+nothing to trip on, so a clean file costs more than a broken one on the *same* server:
 
-### Lifecycle implication (general, not ast-grep-specific)
-The ast-grep investigation surfaced a general diagnostic-collection behavior worth
-its own issue. The collection wait early-returns only when **a fresh, version-
-bumping publish arrives** (or a `seedFirstPush` server's first push). A server that
-processes an edit and finds **no new diagnostics** gives the wait nothing to trip on,
-so the touch waits the **full strategy budget / deadline**:
+| fixture | warm/edit |
+|---|---:|
+| typescript (broken — persistent error, re-published each edit) | 536ms |
+| typescript-clean (no diagnostics) | 1324ms |
 
-- **With-auxiliary:** the `Promise.all` waits for the primary even when the primary
-  has no diagnostics and the auxiliary already published — a clean-primary file pays
-  the full deadline on any auxiliary touch (affects opengrep too).
-- **Primary-only — measured.** A clean TypeScript file vs the broken one, same server:
-
-  | fixture | warm/edit (run 1) | warm/edit (run 2) |
-  |---|---:|---:|
-  | typescript (broken — persistent error) | 782ms | 462ms |
-  | typescript-clean (no diagnostics) | 1796ms | 1226ms |
-
-  The clean file is ~2–3× slower: with a persistent diagnostic the server re-publishes
-  (version bump → early-return); with nothing to report it gives the wait no signal, so
-  the touch runs out its budget.
-- **Masked by the benchmark:** every *other* fixture here is intentionally broken, so
-  each server always has a diagnostic to early-return on — the clean-file cost only
-  shows via the dedicated `typescript-clean` fixture.
-
-A lifecycle fix — treat a published **document-version acknowledgment** (even with
-empty diagnostics, when the server stamps `version >= ` the `didChange` we sent) as a
-definitive early-return — would speed up clean-file edits across **every** server, not
-just the with-auxiliary path. **Crucially this must trigger on an affirmative
-version-matched publish, never on mere silence**, so a crashed/cold/stale/errored
-server is never painted "clean". The ast-grep probe confirmed servers echo doc
-versions reliably (`pubVersion == docVersion`), so this is feasible. Tracked as
-**#240** (a prerequisite for #239 Phase 2, since the universal baseline makes
-clean-file edits the common case).
+The clean file is ~2.5× slower: with a persistent diagnostic the server re-publishes
+(version bump → early-return); with nothing to report, a Tier-3 push-silent server
+(typescript publishes nothing on clean) gives no signal, so the touch waits its
+budget. This is **budget-bound by necessity** — silence is irreducibly ambiguous, so
+the cap is the only safe backstop. Tier-2 servers that re-publish empty-with-version
+(ast-grep, opengrep) *do* early-return on clean files, which is why both measure fast
+above even though their fixtures could be clean on a given edit.

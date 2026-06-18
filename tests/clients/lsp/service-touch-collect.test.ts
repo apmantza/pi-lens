@@ -270,6 +270,70 @@ describe("LSPService.touchFile collectDiagnostics", () => {
 		expect(client.waitForDiagnostics).toHaveBeenCalledWith(FILE, 1500);
 	});
 
+	function makeBudgetClientWithId(serverId: string) {
+		return { ...makeBudgetClient(), serverId };
+	}
+
+	it("gives each server its own caller-cap-bounded deadline on the with-auxiliary path, not a shared max (#242)", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+
+		const primaryClient = makeBudgetClientWithId("python");
+		const auxClient = makeBudgetClientWithId("ast-grep");
+		createLSPClient.mockImplementation(async (args: { serverId: string }) =>
+			args.serverId === "ast-grep" ? auxClient : primaryClient,
+		);
+		getServersForFileWithConfig.mockReturnValue([
+			makeServer("python"),
+			{ ...makeServer("ast-grep"), role: "auxiliary" as const },
+		]);
+
+		// Caller cap 2500. Old code waited max(2500, max(1500,1800))=2500 for BOTH.
+		// Now each server gets min(callerCap, ownBudget): python 1500, ast-grep 1800.
+		await service.touchFile(FILE, "print('x')\n", {
+			clientScope: "with-auxiliary",
+			auxiliaryServerIds: ["ast-grep"],
+			diagnostics: "document",
+			collectDiagnostics: true,
+			maxClientWaitMs: 8000,
+			maxDiagnosticsWaitMs: 2500,
+			source: "dispatch-lsp-runner",
+		});
+
+		expect(primaryClient.waitForDiagnostics).toHaveBeenCalledWith(FILE, 1500);
+		expect(auxClient.waitForDiagnostics).toHaveBeenCalledWith(FILE, 1800);
+	});
+
+	it("the caller cap is a ceiling on the with-auxiliary path — a tight cap binds every server (#242)", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+
+		const primaryClient = makeBudgetClientWithId("python");
+		const auxClient = makeBudgetClientWithId("ast-grep");
+		createLSPClient.mockImplementation(async (args: { serverId: string }) =>
+			args.serverId === "ast-grep" ? auxClient : primaryClient,
+		);
+		getServersForFileWithConfig.mockReturnValue([
+			makeServer("python"),
+			{ ...makeServer("ast-grep"), role: "auxiliary" as const },
+		]);
+
+		// Cap 1200 is tighter than both strategy budgets (1500, 1800), so both
+		// servers are capped to 1200 — a slow aux can no longer blow the per-edit cap.
+		await service.touchFile(FILE, "print('x')\n", {
+			clientScope: "with-auxiliary",
+			auxiliaryServerIds: ["ast-grep"],
+			diagnostics: "document",
+			collectDiagnostics: true,
+			maxClientWaitMs: 8000,
+			maxDiagnosticsWaitMs: 1200,
+			source: "dispatch-lsp-runner",
+		});
+
+		expect(primaryClient.waitForDiagnostics).toHaveBeenCalledWith(FILE, 1200);
+		expect(auxClient.waitForDiagnostics).toHaveBeenCalledWith(FILE, 1200);
+	});
+
 	it("PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS overrides the option chain", async () => {
 		const previous = process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS;
 		process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS = "1000";

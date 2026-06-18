@@ -997,39 +997,46 @@ export class LSPService {
 			const envWait = readEnvDiagnosticsWaitMs();
 			const callerCap = options.maxDiagnosticsWaitMs ?? options.maxClientWaitMs;
 			const modeFloor = diagnosticsMode === "full" ? 3000 : 1200;
-			let timeoutMs: number;
+			// Each server gets its OWN deadline, bounded by the caller cap as a
+			// CEILING (never a floor) — so a clean push-silent primary (typescript
+			// ~1s) can't hold the whole touch to a slow auxiliary's budget, and a
+			// slow aux (opengrep) can't override the per-edit cap. Resolves as soon
+			// as a server publishes; this is just its individual deadline. (#242)
+			const perServerTimeout = (serverId: string): number => {
+				const strategyWait = getStrategy(serverId).aggregateWaitMs;
+				if (callerCap !== undefined) {
+					return Math.min(callerCap, strategyWait > 0 ? strategyWait : callerCap);
+				}
+				return strategyWait > 0 ? strategyWait : modeFloor;
+			};
+			let timeoutFor: (serverId: string) => number;
 			if (envWait !== undefined) {
-				timeoutMs = envWait;
-			} else if (!useAllClients && spawned.length === 1) {
-				const strategyWait = getStrategy(
-					spawned[0].client.serverId,
-				).aggregateWaitMs;
-				const base = strategyWait > 0 ? strategyWait : (callerCap ?? modeFloor);
-				timeoutMs = callerCap !== undefined ? Math.min(callerCap, base) : base;
-			} else if (clientScope === "with-auxiliary") {
-				// Auxiliary scanners (opengrep, …) re-scan more slowly than the primary
-				// language server; honor the SLOWEST collected server's strategy budget
-				// so the cross-cutting scanner isn't cut off by the tighter primary cap.
-				// Resolves as soon as all servers publish, so fast files still finish
-				// early — this is just the deadline.
-				const maxStrategyWait = Math.max(
-					0,
-					...spawned.map((e) => getStrategy(e.client.serverId).aggregateWaitMs),
-				);
-				timeoutMs = Math.max(callerCap ?? modeFloor, maxStrategyWait);
+				// Env override is a single flat cap so users can tune without rebuilding.
+				timeoutFor = () => envWait;
+			} else if (
+				(!useAllClients && spawned.length === 1) ||
+				clientScope === "with-auxiliary"
+			) {
+				timeoutFor = perServerTimeout;
 			} else {
-				timeoutMs = callerCap ?? modeFloor;
+				timeoutFor = () => callerCap ?? modeFloor;
 			}
+			// Detection deadline = the slowest individual server's budget.
+			const timeoutMs = Math.max(
+				0,
+				...spawned.map((e) => timeoutFor(e.client.serverId)),
+			);
 			const waitStartedAt = Date.now();
 			await Promise.all(
 				spawned.map((entry) => {
+					const serverTimeout = timeoutFor(entry.client.serverId);
 					const baseline = diagnosticBaselines.get(entry.client);
 					const wait =
 						!notifySkipped && Number.isFinite(baseline)
-							? entry.client.waitForDiagnostics(filePath, timeoutMs, {
+							? entry.client.waitForDiagnostics(filePath, serverTimeout, {
 									minVersion: baseline,
 								})
-							: entry.client.waitForDiagnostics(filePath, timeoutMs);
+							: entry.client.waitForDiagnostics(filePath, serverTimeout);
 					return wait.catch(() => undefined);
 				}),
 			);

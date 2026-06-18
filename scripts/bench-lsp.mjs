@@ -9,6 +9,11 @@
  * opengrep) is acceptable as long as its warm latency is in the range of the
  * PRIMARY language servers pi-lens already tolerates.
  *
+ * Each fixture is measured in ISOLATION: the service + workspace config are
+ * reset between fixtures (no lingering previous server), and an auxiliary
+ * fixture disables the file's primary language servers so only the auxiliary
+ * spawns — its number is the auxiliary alone, not a primary+aux touch.
+ *
  *   node scripts/bench-lsp.mjs [lang ...] [--install]
  *
  * Requires `npm run build:dist`. Without --install, only already-installed
@@ -34,7 +39,8 @@ if (!fs.existsSync(distLsp)) {
 	process.exit(1);
 }
 const { getLSPService, resetLSPService } = await imp("dist/clients/lsp/index.js");
-const { initLSPConfig } = await imp("dist/clients/lsp/config.js");
+const { initLSPConfig, getServersForFileWithConfig, resetLSPConfigStateForTests } =
+	await imp("dist/clients/lsp/config.js");
 let ensureTool;
 if (install) {
 	({ ensureTool } = await imp("dist/clients/installer/index.js"));
@@ -51,7 +57,7 @@ const fixtures = langs.length
 	? LSP_FIXTURES.filter((f) => langs.includes(f.lang))
 	: LSP_FIXTURES;
 
-const lsp = getLSPService();
+let lsp = getLSPService();
 const results = [];
 
 for (const fx of fixtures) {
@@ -60,6 +66,14 @@ for (const fx of fixtures) {
 		: fx.disableServers
 			? "alternate"
 			: "primary";
+	// Isolation: tear down the previous fixture's servers + workspace config so
+	// neither a still-warm/dying server nor a stale disable bleeds into this
+	// measurement. Each fixture measures ONE server cold from a clean service.
+	await lsp.shutdown({ fast: true }).catch(() => {});
+	resetLSPService({ fast: true });
+	resetLSPConfigStateForTests?.();
+	lsp = getLSPService();
+
 	if (install && ensureTool) {
 		for (const t of fx.tools ?? []) await ensureTool(t).catch(() => undefined);
 	}
@@ -70,11 +84,35 @@ for (const fx of fixtures) {
 			execFileSync("git", ["init", "-q"], { cwd: ws, stdio: "ignore" });
 		} catch {}
 	}
-	if (fx.disableServers) {
+
+	const auxIds = fx.auxiliaryServerIds ?? [];
+	// Measure ONE server in isolation: disable every other server matching this
+	// file so neither an auxiliary (opengrep/ast-grep) nor an alternate primary
+	// can spawn alongside the server under test.
+	//   - auxiliary fixture → target = the auxiliary(ies); all primaries disabled
+	//   - alternate fixture → target = first primary NOT in fx.disableServers
+	//   - primary fixture   → target = the default (first matching) primary
+	// getServersForFileWithConfig is in registry order — the same order
+	// getClientForFile tries — so primaries[0] is the default it would select.
+	const matching = getServersForFileWithConfig(absFile);
+	let targetIds;
+	if (auxIds.length) {
+		targetIds = new Set(auxIds);
+	} else {
+		const explicitlyDisabled = new Set(fx.disableServers ?? []);
+		const primaries = matching.filter(
+			(s) => s.role !== "auxiliary" && !explicitlyDisabled.has(s.id),
+		);
+		targetIds = new Set(primaries.length ? [primaries[0].id] : []);
+	}
+	const disabledServers = matching
+		.map((s) => s.id)
+		.filter((id) => !targetIds.has(id));
+	if (disabledServers.length) {
 		fs.mkdirSync(path.join(ws, ".pi-lens"), { recursive: true });
 		fs.writeFileSync(
 			path.join(ws, ".pi-lens", "lsp.json"),
-			JSON.stringify({ disabledServers: fx.disableServers }, null, 2),
+			JSON.stringify({ disabledServers }, null, 2),
 		);
 		await initLSPConfig(ws);
 	}
@@ -83,8 +121,6 @@ for (const fx of fixtures) {
 		results.push({ lang: fx.lang, server: fx.serverHint, role, status: "no-lsp" });
 		continue;
 	}
-
-	const auxIds = fx.auxiliaryServerIds ?? [];
 	let content = fs.readFileSync(absFile, "utf8");
 	const touch = (c) =>
 		lsp.touchFile(absFile, c, {
@@ -93,12 +129,11 @@ for (const fx of fixtures) {
 			clientScope: auxIds.length ? "with-auxiliary" : "primary",
 			...(auxIds.length ? { auxiliaryServerIds: auxIds } : {}),
 			maxClientWaitMs: 40000,
-			// Production-realistic diagnostic cap. NOT 20s: on the with-auxiliary
-			// path the deadline is max(callerCap, maxStrategyWait), so a huge cap
-			// becomes the deadline whenever the PRIMARY is push-silent on a clean
-			// file (it never early-returns) — which inflated ast-grep's warm number
-			// to ~20s even though ast-grep itself publishes promptly. 3000ms covers
-			// the slowest strategy budget (rust-analyzer) and reflects dispatch.
+			// Production-realistic diagnostic cap. Each fixture spawns a SINGLE
+			// server (primaries disabled for aux fixtures), so this is that one
+			// server's per-server ceiling (#242): the wait early-returns the moment
+			// it publishes and only caps the tail. 3000ms covers the slowest strategy
+			// budget (rust-analyzer) and reflects the dispatch per-edit cap.
 			maxDiagnosticsWaitMs: 3000,
 			source: "bench",
 		});
