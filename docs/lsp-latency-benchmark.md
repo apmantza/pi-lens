@@ -21,12 +21,14 @@ servers pi-lens already tolerates).
   primary↔auxiliary cross-contamination that produced the old "20557ms" artifact
   (see the resolved-history note below).
 
-> **Coverage:** this run measured **25 servers** (23 primary/alternate + 2
-> auxiliary) — those whose toolchain is installed on this box. **12** more
-> (csharp-ls, fsautocomplete, jdtls, kotlin-language-server, sourcekit-lsp, dart,
+> **Coverage:** this run measured **26 servers** (24 primary/alternate + 2
+> auxiliary) — those whose toolchain is installed on this box. **11** more
+> (csharp-ls, jdtls, kotlin-language-server, sourcekit-lsp, dart,
 > lua-language-server, clangd, haskell-language-server, elixir-ls, ocamllsp, nixd)
 > have a fixture but are toolchain-gated and reported `unavailable` here — run with
-> `--install` on a box with their runtimes to measure them (#241).
+> `--install` on a box with their runtimes to measure them (#241). **fsautocomplete**
+> now measures (it auto-installs via `dotnet tool install`, #241) — its `dotnet`
+> runtime is present here.
 >
 > **Most fixtures are intentionally broken** (they carry a known defect so the smoke
 > harness can assert a diagnostic). That means such a server always has a diagnostic
@@ -66,10 +68,17 @@ cross-cutting, attaches alongside the primary in production but measured alone h
 | jedi | alternate | 2922ms | 1585ms | jedi (alternate of pyright) |
 | terraform | primary | 3221ms | 2215ms | terraform-ls |
 | vue | primary | 6513ms | 2220ms | @vue/language-server |
+| fsharp | primary | 3925ms | 2234ms | fsautocomplete (`dotnet tool`, #241) |
 
-**Primary/alternate warm:** min 481ms · avg 1102ms · max 2220ms (n=23).
+**Primary/alternate warm:** min 481ms · avg 1149ms · max 2234ms (n=24).
 **Auxiliary warm:** ast-grep 549ms · opengrep 851ms — both at the **fast end** of the
 primary band.
+
+> **fsautocomplete caveat:** it returned **0 diagnostics** (the fixture isn't a
+> restored .NET project, so the server surfaces nothing), so its 2234ms is the
+> *clean-file* near-budget cost — see the clean-file note below — not a real
+> per-edit-with-diagnostic latency. It is a heavy server regardless; this number is
+> an upper bound, not a typical edit.
 
 ### Gate A verdict (#239)
 **Pass, decisively.** Measured in isolation, both auxiliaries are faster than the
