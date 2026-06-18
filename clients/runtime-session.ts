@@ -74,7 +74,7 @@ interface SessionStartDeps {
 	rustClient: RustClient;
 	ensureTool: (name: string) => Promise<string | null | undefined>;
 	cleanStaleTsBuildInfo: (cwd: string) => string[];
-	resetDispatchBaselines: () => void;
+	resetDispatchBaselines: (cwd?: string) => void;
 	resetLSPService: (options?: LSPShutdownOptions) => void;
 }
 
@@ -714,7 +714,10 @@ function scheduleStartupScans(
 			try {
 				const stat = nodeFs.statSync(file);
 				if (stat.size <= MAX_BYTES) {
-					docs.push({ path: file, content: nodeFs.readFileSync(file, "utf-8") });
+					docs.push({
+						path: file,
+						content: nodeFs.readFileSync(file, "utf-8"),
+					});
 				}
 			} catch {
 				// unreadable / vanished file — skip
@@ -830,9 +833,7 @@ export async function handleSessionStart(
 		!processGlobals.__piLensWarmupScheduled
 	) {
 		processGlobals.__piLensWarmupScheduled = true;
-		const warmupDelayMs = Number(
-			process.env.PI_LENS_WARMUP_DELAY_MS ?? 2000,
-		);
+		const warmupDelayMs = Number(process.env.PI_LENS_WARMUP_DELAY_MS ?? 2000);
 		const warmupCwd = deps.ctxCwd ?? process.cwd();
 		const warmupDbg = deps.dbg;
 		setTimeout(() => {
@@ -843,16 +844,10 @@ export async function handleSessionStart(
 					// Dynamic imports keep the warmup pipeline off the hot
 					// startup path — these modules don't load until the timer
 					// fires, well after the TUI is interactive.
-					const startupScanModule = await import(
-						"./startup-scan.js"
-					);
-					const languageProfileModule = await import(
-						"./language-profile.js"
-					);
+					const startupScanModule = await import("./startup-scan.js");
+					const languageProfileModule = await import("./language-profile.js");
 					const scan =
-						await startupScanModule.resolveStartupScanContextAsync(
-							warmupCwd,
-						);
+						await startupScanModule.resolveStartupScanContextAsync(warmupCwd);
 					warmupDbg(
 						`warmup: scan-context done in ${Date.now() - warmupStartedAt}ms (canWarm=${scan.canWarmCaches})`,
 					);
@@ -864,9 +859,7 @@ export async function handleSessionStart(
 					warmupDbg(
 						`warmup: language-profile done in ${Date.now() - languageProfileStartedAt}ms`,
 					);
-					warmupDbg(
-						`warmup: total ${Date.now() - warmupStartedAt}ms`,
-					);
+					warmupDbg(`warmup: total ${Date.now() - warmupStartedAt}ms`);
 				} catch (err) {
 					warmupDbg(`warmup: error ${err}`);
 					// Allow a future session to retry the warmup.
@@ -909,7 +902,7 @@ export async function handleSessionStart(
 	getDiagnosticTracker().reset();
 	clearFileTimeSessions();
 	runtime.complexityBaselines.clear();
-	resetDispatchBaselines();
+	resetDispatchBaselines(ctxCwd);
 	runtime.resetForSession();
 
 	// Run log cleanup early in session start (non-blocking)

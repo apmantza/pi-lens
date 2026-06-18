@@ -112,7 +112,8 @@ export async function runSessionStart(
 		ensureTool: async (name: string) =>
 			(await import("../installer/index.js")).ensureTool(name),
 		cleanStaleTsBuildInfo: () => [],
-		resetDispatchBaselines,
+		resetDispatchBaselines: (cwdArg?: string) =>
+			resetDispatchBaselines(cwdArg ?? cwd),
 		resetLSPService,
 	});
 

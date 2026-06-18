@@ -46,7 +46,11 @@ import * as nodeFs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { formatCascadeNeighborDiagnostics } from "../cascade-format.js";
 import { logCascade } from "../cascade-logger.js";
-import type { CascadeResult, CascadeRun, CascadeSkipReason } from "../cascade-types.js";
+import type {
+	CascadeResult,
+	CascadeRun,
+	CascadeSkipReason,
+} from "../cascade-types.js";
 import { getDiagnosticTracker } from "../diagnostic-tracker.js";
 import { getServersForFileWithConfig } from "../lsp/config.js";
 import { getLSPService } from "../lsp/index.js";
@@ -103,8 +107,14 @@ import { asyncNoiseRule } from "./rules/async-noise.js";
 import { asyncUnnecessaryWrapperRule } from "./rules/async-unnecessary-wrapper.js";
 import { errorObscuringRule } from "./rules/error-obscuring.js";
 import { errorSwallowingRule } from "./rules/error-swallowing.js";
-import { highComplexityRule } from "./rules/high-complexity.js";
-import { highFanOutRule } from "./rules/high-fan-out.js";
+import {
+	highComplexityRule,
+	setHighComplexityThresholds,
+} from "./rules/high-complexity.js";
+import {
+	highFanOutRule,
+	setHighFanOutThreshold,
+} from "./rules/high-fan-out.js";
 import { missingErrorPropagationRule } from "./rules/missing-error-propagation.js";
 import { passThroughWrappersRule } from "./rules/pass-through-wrappers.js";
 import { placeholderCommentsRule } from "./rules/placeholder-comments.js";
@@ -123,6 +133,7 @@ import {
 	maxSwitchCasesRule,
 } from "./rules/sonar-rules.js";
 import { unsafeBoundaryRule } from "./rules/unsafe-boundary.js";
+import { loadPiLensProjectConfig } from "../project-lens-config.js";
 
 registerRule(errorObscuringRule);
 registerRule(errorSwallowingRule);
@@ -144,6 +155,34 @@ registerRule(commentedCredentialsRule);
 registerRule(noBooleanParamsRule);
 registerRule(highImportCouplingRule);
 registerRule(noComplexConditionalsRule);
+
+/**
+ * Apply a project's `.pi-lens.json` overrides to the registered rules.
+ *
+ * Currently honors:
+ *   - `rules["high-complexity"].threshold` (cyclomatic complexity)
+ *   - `rules["high-fan-out"].threshold`     (distinct-function calls)
+ *
+ * The depth-threshold sub-knob of `high-complexity` is left at its hardcoded
+ * default (6); only the CC threshold is exposed in config to keep the schema
+ * small. Calling repeatedly is safe and idempotent; the underlying loader is
+ * mtime-cached so re-applying within a session is essentially free.
+ *
+ * Called once per session start via `resetDispatchBaselines(cwd)`.
+ */
+export function applyProjectLensConfig(cwd: string): void {
+	const config = loadPiLensProjectConfig(cwd);
+
+	const complexity = config.rules["high-complexity"];
+	if (typeof complexity?.threshold === "number") {
+		setHighComplexityThresholds(complexity.threshold, 6);
+	}
+
+	const fanOut = config.rules["high-fan-out"];
+	if (typeof fanOut?.threshold === "number") {
+		setHighFanOutThreshold(fanOut.threshold);
+	}
+}
 
 const sessionFacts = new FactStore();
 const cascadeDiagnosticBaselines = new Map<
@@ -313,10 +352,7 @@ function withSpotbugsGroup(
 ): RunnerGroup[] {
 	if (!SPOTBUGS_SUPPORTED_KINDS.has(kind)) return groups;
 	if (!ctx.pi.getFlag("lens-spotbugs")) return groups;
-	if (
-		!hasJavaBuildDescriptor(ctx.cwd) ||
-		!findCompiledClassesDir(ctx.cwd)
-	) {
+	if (!hasJavaBuildDescriptor(ctx.cwd) || !findCompiledClassesDir(ctx.cwd)) {
 		return groups;
 	}
 	if (groups.some((group) => group.runnerIds.includes("spotbugs")))
@@ -331,7 +367,6 @@ function withSpotbugsGroup(
 		},
 	];
 }
-
 
 function withPrimaryPolicyGroup(
 	kind: keyof typeof TOOL_PLANS,
@@ -391,8 +426,14 @@ export function getDispatchGroupsForKind(
 /**
  * Reset baselines — call on session_start so a new session
  * starts with a clean slate.
+ *
+ * Pass `cwd` to also re-apply the project's `.pi-lens.json` rule thresholds
+ * (a no-op when the file is absent or unchanged, since the loader is
+ * mtime-cached). Optional for backward compatibility with tests that don't
+ * care about per-project thresholds.
  */
-export function resetDispatchBaselines(): void {
+export function resetDispatchBaselines(cwd?: string): void {
+	if (cwd) applyProjectLensConfig(cwd);
 	sessionFacts.clearAll();
 	resetSessionSlopScore();
 	clearCoverageNoticeState();
@@ -478,7 +519,8 @@ const CASCADE_TRANSITIVE_DEPTH = Math.max(
 );
 const CASCADE_NEIGHBOUR_BUDGET = Math.max(
 	MAX_FILES,
-	Number.parseInt(process.env.PI_LENS_CASCADE_NEIGHBOUR_BUDGET ?? "40", 10) || 40,
+	Number.parseInt(process.env.PI_LENS_CASCADE_NEIGHBOUR_BUDGET ?? "40", 10) ||
+		40,
 );
 const CASCADE_GRAPH_KINDS = new Set([
 	"jsts",
@@ -521,13 +563,25 @@ export async function computeCascadeForFile(
 			filePath,
 			reason: "primary_has_blockers",
 		});
-		return { filePath, result: undefined, neighborCount: 0, diagnosticCount: 0, skipReason: "blockers" as CascadeSkipReason };
+		return {
+			filePath,
+			result: undefined,
+			neighborCount: 0,
+			diagnosticCount: 0,
+			skipReason: "blockers" as CascadeSkipReason,
+		};
 	}
 
 	const fileKind = detectFileKind(filePath);
 	if (!fileKind) {
 		logCascade({ phase: "cascade_skip", filePath, reason: "non_code_file" });
-		return { filePath, result: undefined, neighborCount: 0, diagnosticCount: 0, skipReason: "non_code" as CascadeSkipReason };
+		return {
+			filePath,
+			result: undefined,
+			neighborCount: 0,
+			diagnosticCount: 0,
+			skipReason: "non_code" as CascadeSkipReason,
+		};
 	}
 
 	const normalizedFile = resolveRunnerPath(cwd, filePath);
@@ -769,7 +823,13 @@ export async function computeCascadeForFile(
 			reason: "unsupported_graph_kind",
 			metadata: { fileKind },
 		});
-		return { filePath, result: undefined, neighborCount: 0, diagnosticCount: 0, skipReason: "non_code" as CascadeSkipReason };
+		return {
+			filePath,
+			result: undefined,
+			neighborCount: 0,
+			diagnosticCount: 0,
+			skipReason: "non_code" as CascadeSkipReason,
+		};
 	}
 
 	logCascade({
@@ -1090,7 +1150,10 @@ export async function computeCascadeForFile(
 		},
 	});
 
-	const diagCount = visibleNeighbors.reduce((sum, n) => sum + n.diagnostics.length, 0);
+	const diagCount = visibleNeighbors.reduce(
+		(sum, n) => sum + n.diagnostics.length,
+		0,
+	);
 
 	cascadeSessionStats.runs += 1;
 	cascadeSessionStats.diagnosticsSurfaced += diagCount;
@@ -1099,14 +1162,25 @@ export async function computeCascadeForFile(
 	if (!formatted) {
 		const skipReason: CascadeSkipReason =
 			visibleNeighbors.length === 0 ? "no_neighbors" : "clean";
-		return { filePath, result: undefined, neighborCount: visibleNeighbors.length, diagnosticCount: diagCount, skipReason };
+		return {
+			filePath,
+			result: undefined,
+			neighborCount: visibleNeighbors.length,
+			diagnosticCount: diagCount,
+			skipReason,
+		};
 	}
 
 	getDiagnosticTracker().trackShown(
 		visibleNeighbors.flatMap((n) => n.diagnostics),
 	);
 
-	return { filePath, result: { filePath, impact, neighbors: visibleNeighbors, formatted }, neighborCount: visibleNeighbors.length, diagnosticCount: diagCount };
+	return {
+		filePath,
+		result: { filePath, impact, neighbors: visibleNeighbors, formatted },
+		neighborCount: visibleNeighbors.length,
+		diagnosticCount: diagCount,
+	};
 }
 
 function diagnosticDeltaKey(

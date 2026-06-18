@@ -33,8 +33,8 @@ On every `write` and `edit`, pi-lens runs a fast, language-aware pipeline (check
 3. **Auto-fix** — safe autofixes from 6 tools (Biome `check --write`, Ruff `check --fix`, ESLint `--fix`, stylelint `--fix`, sqlfluff `fix`, RuboCop `-a`) applied before analysis
 4. **Edit autopatch** — before an `edit` tool call lands, pi-lens silently corrects two classes of `oldText` mismatch: leading tab/space indentation (when the corrected text matches exactly one location) and trailing whitespace stripped by formatters. Both corrections also retarget `newText` so the replacement matches the file's whitespace style
 5. **LSP file sync** — opens/updates the file in active language servers
-5. **Dispatch lint** — parallel runner groups: LSP diagnostics (incl. the Opengrep auxiliary security scanner), tree-sitter structural rules, ast-grep security/correctness rules, fact rules, language-specific linters, similarity detection
-6. **Cascade diagnostics** — review-graph impact cascade showing which other files were affected and how diagnostics propagated
+6. **Dispatch lint** — parallel runner groups: LSP diagnostics (incl. the Opengrep auxiliary security scanner), tree-sitter structural rules, ast-grep security/correctness rules, fact rules, language-specific linters, similarity detection
+7. **Cascade diagnostics** — review-graph impact cascade showing which other files were affected and how diagnostics propagated
 
 Results are inline and actionable:
 
@@ -134,6 +134,7 @@ Configure behavior with `--no-read-guard` to disable entirely, or set mode to `w
 At `turn_end`, pi-lens writes `.pi-lens/cache/actionable-warnings.json` summarizing fixable warnings introduced by the current turn. This powers the optional conservative autofix at `agent_end`.
 
 **Report contents:**
+
 - Warnings are delta-only by default: only diagnostics in lines touched during the current turn are included. Pass `--lens-actionable-warning-all` to report all warnings regardless of location
 - Each warning carries a stable `aw:<hash>` ID derived from file, rule, and message, so suppression state persists across turns in `.pi-lens/cache/actionable-warning-state.json`
 - Sources: pipeline `fixable` diagnostics (always included) and LSP code-action warnings when `--lens-actionable-warning-actions` is set
@@ -142,6 +143,7 @@ At `turn_end`, pi-lens writes `.pi-lens/cache/actionable-warnings.json` summariz
 **Conservative autofix (`agent_end`):**
 
 When `actionableWarnings.autoFix.enabled` is set in global config (or `--lens-actionable-warning-autofix`), pi-lens applies LSP quickfixes from the report at `agent_end`. Safety gates:
+
 - Re-fetches code actions from the live LSP server at fix time (stale actions are skipped)
 - Skips any warning with zero or multiple eligible actions (ambiguity is not resolved)
 - Applies only `edit`-kind actions (no command-only or create/delete operations)
@@ -149,6 +151,7 @@ When `actionableWarnings.autoFix.enabled` is set in global config (or `--lens-ac
 - Suppressed warnings are never autofixed
 
 **Flags:**
+
 - `--lens-actionable-warnings` — enable the turn_end report
 - `--lens-actionable-warning-actions` — include LSP code-action warnings in the report
 - `--lens-actionable-warning-autofix` — apply conservative fixes at agent_end
@@ -261,6 +264,43 @@ Hide the diagnostics widget by default, run formatting immediately after write/e
 `contextInjection.enabled` (default `true`) controls whether pi-lens prepends automatic findings — session-start guidance, turn-end findings, and test findings — into the next model turn. Set it to `false` (or use `--no-lens-context` / `PI_LENS_NO_CONTEXT_INJECTION=1` / `/lens-context-toggle`) to keep tools, LSP, read-guard, and formatting running while avoiding the prompt-cache invalidation that injected messages cause in long, cache-sensitive sessions. Findings are still cached, so `lens_diagnostics` and `/lens-health` keep working.
 
 `actionableWarnings.enabled` gates the turn_end report. `includeLspCodeActions` fetches LSP code actions for each warning (requires an active language server). `deltaOnly` (default `true`) limits the report to lines touched in the current turn. `autoFix.enabled` applies conservative LSP quickfixes at `agent_end`; `autoFix.maxFixes` caps the number applied per turn (default `5`).
+
+## Project Config
+
+In addition to the user-level `~/.pi-lens/config.json` above, pi-lens reads a per-project `.pi-lens.json` (or `pi-lens.json`) at the project root. Walked upward from the cwd, so a monorepo can keep the config at the repo root and have every subdir pick it up. The schema is intentionally small — only fields pi-lens actually honors:
+
+```json
+{
+  "ignore": [
+    "**/__tests__/**",
+    "**/*.test.ts",
+    "fixtures/**",
+    "vendor/**"
+  ],
+  "rules": {
+    "high-complexity": { "threshold": 25 },
+    "high-fan-out": { "threshold": 30 }
+  }
+}
+```
+
+### `ignore`
+
+Array of gitignore-style glob patterns. Any path matching is excluded from every diagnostic scan (LSP walk, fact-rules, tree-sitter, jscpd, knip, review graph, source-filter). Useful for vendored code, generated files, or per-project noise you want to silence without editing `.gitignore` (which would also affect git itself).
+
+### `rules`
+
+Per-rule threshold overrides. Currently honored:
+
+- `high-complexity.threshold` — cyclomatic complexity (default `15`)
+- `high-fan-out.threshold` — distinct function calls (default `20`)
+
+### Schema rules
+
+- Unknown top-level keys and unknown rule ids are ignored, so a forward-compat file with extra fields (e.g. an LSP `servers` block from `lsp.json`) won't break the parse.
+- A malformed JSON file is silently treated as "no config" — your diagnostics never get blocked by a syntax error in your own config.
+- The depth sub-threshold of `high-complexity` (default `6`) is intentionally not exposed; only the cyclomatic-complexity knob ships today to keep the schema tight.
+- The file is mtime-cached, so editing it takes effect on the next scan without restarting the agent.
 
 ## Environment Variables
 
