@@ -1,10 +1,22 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { FactStore } from "../../clients/dispatch/fact-store.js";
 import {
 	_resetModuleReportConfigForTests,
 	moduleReport,
 	readSymbol,
 } from "../../clients/module-report.js";
+import {
+	buildOrUpdateGraph,
+	clearReviewGraphWorkspaceCache,
+} from "../../clients/review-graph/builder.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+
+// module_report consumes the cached review graph read-only (#256) — it never
+// builds. Production warms the cache via the edit pipeline; tests must do the
+// same before asserting graph-derived who-uses-this / imports.
+async function warmGraph(cwd: string): Promise<void> {
+	await buildOrUpdateGraph(cwd, [], new FactStore());
+}
 
 // These tests exercise the tree-sitter + review-graph tiers. Disable the live-LSP
 // tier (budget 0) so they never spawn a real language server — the bounded-LSP
@@ -26,6 +38,7 @@ afterAll(() => {
 const cleanups: Array<() => void> = [];
 afterEach(() => {
 	while (cleanups.length) cleanups.pop()?.();
+	clearReviewGraphWorkspaceCache(); // isolate the module-global graph cache
 });
 
 function makeEnv(prefix = "pi-lens-modreport-") {
@@ -149,6 +162,7 @@ describe("moduleReport — review-graph who-uses-this", () => {
 			].join("\n"),
 		);
 
+		await warmGraph(env.tmpDir);
 		const report = await moduleReport("a.ts", env.tmpDir);
 
 		expect(report.available).toBe(true);
@@ -169,6 +183,7 @@ describe("moduleReport — review-graph who-uses-this", () => {
 		);
 		createTempFile(env.tmpDir, "helper.py", "def h():\n    return 1\n");
 
+		await warmGraph(env.tmpDir);
 		const report = await moduleReport("app.py", env.tmpDir);
 
 		expect(report.available).toBe(true);
@@ -178,7 +193,7 @@ describe("moduleReport — review-graph who-uses-this", () => {
 		expect(report.summary.imports).toBeGreaterThan(0);
 	});
 
-	it("LSP disabled (budget 0) → semantic.source is none, AST who-uses-this stands", async () => {
+	it("LSP disabled (budget 0) → semantic.source is none", async () => {
 		const env = makeEnv();
 		createTempFile(
 			env.tmpDir,
@@ -188,6 +203,27 @@ describe("moduleReport — review-graph who-uses-this", () => {
 		const report = await moduleReport("a.ts", env.tmpDir);
 		expect(report.semantic.source).toBe("none");
 		expect(report.semantic.implementations).toBe(false);
+	});
+
+	it("read-only: no cached graph (cold) → outline only, no build, who-uses-this empty", async () => {
+		const env = makeEnv();
+		createTempFile(
+			env.tmpDir,
+			"a.ts",
+			"export function foo(x: number): number {\n  return x + 1;\n}\n",
+		);
+		createTempFile(
+			env.tmpDir,
+			"b.ts",
+			'import { foo } from "./a.js";\nexport const r = foo(1);\n',
+		);
+		// No warmGraph() → the cache is cold. module_report must NOT build it.
+		const report = await moduleReport("a.ts", env.tmpDir);
+		expect(report.available).toBe(true); // outline still extracts
+		const foo = report.api.find((e) => e.name === "foo");
+		expect(foo).toBeDefined();
+		expect(foo?.usedBy).toBeUndefined(); // cold graph → no who-uses-this
+		expect(report.imports.external).toHaveLength(0);
 	});
 });
 

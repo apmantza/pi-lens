@@ -31,6 +31,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { detectFileKind } from "./file-kinds.js";
+import { logLatency } from "./latency-logger.js";
 import { enrichModuleReportWithLsp } from "./module-report-lsp.js";
 import { normalizeMapKey } from "./path-utils.js";
 import type { Symbol as ExtractedSymbol } from "./symbol-types.js";
@@ -376,6 +377,7 @@ export async function moduleReport(
 	cwd: string,
 	options?: ModuleReportOptions,
 ): Promise<ModuleReport> {
+	const startedAt = Date.now();
 	const maxRefs = Math.max(1, options?.maxRefsPerSymbol ?? 10);
 	const absPath = path.resolve(cwd, file);
 	const normalizedPath = normalizeMapKey(absPath);
@@ -396,11 +398,13 @@ export async function moduleReport(
 		? await extractFileSymbols(absPath, languageId, content)
 		: [];
 
+	// READ-ONLY: consume the already-built review graph, never build one here. A
+	// synchronous full build re-runs every fact provider (TS-compiler ASTs for
+	// jsts) and two racing builds OOM'd pi (#256). Cold cache → outline-only.
 	let graph: ReviewGraph | undefined;
 	try {
-		const { buildOrUpdateGraph } = await import("./review-graph/builder.js");
-		const { FactStore } = await import("./dispatch/fact-store.js");
-		graph = await buildOrUpdateGraph(cwd, [], new FactStore());
+		const { getCachedReviewGraph } = await import("./review-graph/builder.js");
+		graph = getCachedReviewGraph(cwd);
 	} catch {
 		graph = undefined;
 	}
@@ -433,7 +437,7 @@ export async function moduleReport(
 
 	const hasGraphNode = graph?.fileNodes.has(normalizedPath) ?? false;
 
-	return {
+	const report: ModuleReport = {
 		available: entries.length > 0 || hasGraphNode,
 		staleness:
 			entries.length === 0 && !hasGraphNode ? "unavailable" : "fresh",
@@ -455,6 +459,25 @@ export async function moduleReport(
 			implementations: lsp.implementations,
 		},
 	};
+
+	// Observability (#256): record graph source (cached vs cold) + LSP tier outcome
+	// so a future OOM/latency regression is attributable per call. This path must
+	// stay read-only — "graph: cached|cold", never a build.
+	logLatency({
+		type: "phase",
+		phase: "module_report",
+		filePath: absPath,
+		durationMs: Date.now() - startedAt,
+		metadata: {
+			graph: graph ? "cached" : "cold",
+			symbols: entries.length,
+			exported: api.length,
+			lspSource: lsp.source,
+			lspSymbolsEnriched: lsp.byName.size,
+		},
+	});
+
+	return report;
 }
 
 /**
@@ -468,27 +491,48 @@ export async function readSymbol(
 	symbolName: string,
 	cwd: string,
 ): Promise<ReadSymbolResult> {
+	const startedAt = Date.now();
 	const absPath = path.resolve(cwd, file);
+	// Pure tree-sitter on one file — no graph, no LSP. Log for correlation with
+	// module_report frequency/timing (#256), one event per outcome.
+	const log = (found: boolean): void => {
+		logLatency({
+			type: "phase",
+			phase: "read_symbol",
+			filePath: absPath,
+			durationMs: Date.now() - startedAt,
+			metadata: { symbol: symbolName, found },
+		});
+	};
+
 	let content: string;
 	try {
 		content = fs.readFileSync(absPath, "utf-8");
 	} catch {
+		log(false);
 		return { found: false, path: absPath, name: symbolName };
 	}
 
 	const kind = detectFileKind(absPath);
 	const languageId = tsLangForFile(absPath, kind);
-	if (!languageId) return { found: false, path: absPath, name: symbolName };
+	if (!languageId) {
+		log(false);
+		return { found: false, path: absPath, name: symbolName };
+	}
 
 	const symbols = await extractFileSymbols(absPath, languageId, content);
 	const sym = symbols.find((candidate) => candidate.name === symbolName);
-	if (!sym) return { found: false, path: absPath, name: symbolName };
+	if (!sym) {
+		log(false);
+		return { found: false, path: absPath, name: symbolName };
+	}
 
 	const startLine = sym.line;
 	const endLine = sym.endLine ?? sym.line;
 	const lines = content.split(/\r?\n/);
 	const source = lines.slice(startLine - 1, endLine).join("\n");
 
+	log(true);
 	return {
 		found: true,
 		path: absPath,

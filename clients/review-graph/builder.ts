@@ -101,6 +101,25 @@ export function getLastGraphBuildInfo(): GraphBuildInfo {
 	return _lastGraphBuildInfo;
 }
 
+/**
+ * Read-only access to the already-built review graph for `cwd` — NEVER builds.
+ * Returns a query-ready clone of the in-memory cached graph if one exists, else
+ * undefined. For read-substitute callers (module_report, #256) that must not
+ * trigger a synchronous full rebuild on the agent's call path: a full build
+ * re-runs every fact provider (TS-compiler ASTs for jsts, tree-sitter for the
+ * rest), and two of those racing OOM'd pi. Callers degrade to outline-only when
+ * this returns undefined; the live edit pipeline keeps the cache warm so in pi it
+ * is almost always present (possibly a few edits stale, which is fine for a
+ * navigation read).
+ */
+export function getCachedReviewGraph(cwd: string): ReviewGraph | undefined {
+	const cached = _workspaceGraphCache.get(normalizeMapKey(cwd));
+	if (!cached) return undefined;
+	const graph = cloneGraph(cached.graph);
+	rebuildIndexes(graph);
+	return graph;
+}
+
 function makeCtx(
 	filePath: string,
 	cwd: string,
