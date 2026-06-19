@@ -18,6 +18,7 @@ import { detectFileRole } from "../file-role.js";
 import { getProjectDataDir } from "../file-utils.js";
 import { normalizeMapKey } from "../path-utils.js";
 import { collectProjectSourceFilesAsync } from "../project-scan-policy.js";
+import { resolveImportToFiles } from "./import-resolvers.js";
 import { RUNTIME_CONFIG } from "../runtime-config.js";
 import { TreeSitterClient } from "../tree-sitter-client.js";
 import {
@@ -677,6 +678,7 @@ async function extractTreeSitterSymbols(
 
 function addTreeSitterFile(
 	graph: ReviewGraph,
+	cwd: string,
 	filePath: string,
 	languageId: string,
 	extracted: ExtractedSymbols,
@@ -731,12 +733,31 @@ function addTreeSitterFile(
 		});
 	}
 
-	// #249: import edges for tree-sitter languages (python/go/rust/java first).
-	// Sources are kept UNRESOLVED here — external for package-ish sources, module
-	// for relative ones (`.`-prefixed). Resolving a relative source to a project
-	// file is language-specific (Python dotted modules, Rust `use` crates) and is
-	// a follow-up; until then these mirror addJsTsFile's unresolved import branch.
+	// #249: import edges for tree-sitter languages. First try to resolve the
+	// source to in-project FILE(s) (ruby/zig/bash/dart relative paths, python
+	// dotted modules, go package dirs, java source-root files — see
+	// import-resolvers.ts); on success emit real file→file edges like jsts/cxx.
+	// An unresolvable source (stdlib, third-party, namespace-only langs) falls
+	// back to an UNRESOLVED external/module node — never a fabricated file edge.
 	for (const imp of extracted.imports) {
+		const resolved = resolveImportToFiles(cwd, filePath, languageId, imp.source);
+		if (resolved.length > 0) {
+			for (const target of resolved) {
+				const toNode = ensureFileNode(
+					graph,
+					target,
+					mapKindToTreeSitterLanguage(detectFileKind(target), target) ??
+						languageId,
+				);
+				addEdge(graph, {
+					from: fileNodeId,
+					to: toNode,
+					kind: "imports",
+					metadata: { line: imp.line, source: imp.source },
+				});
+			}
+			continue;
+		}
 		const isRelative = imp.source.startsWith(".");
 		const targetId = `${isRelative ? "module" : "external"}:${imp.source}`;
 		if (!graph.nodes.has(targetId)) {
@@ -893,7 +914,7 @@ async function addFileToGraph(
 	const languageId = mapKindToTreeSitterLanguage(kind, file);
 	if (!languageId) return;
 	const extracted = await extractTreeSitterSymbols(file, languageId);
-	addTreeSitterFile(graph, file, languageId, extracted);
+	addTreeSitterFile(graph, cwd, file, languageId, extracted);
 	if (kind === "cxx") addCxxIncludeEdges(graph, cwd, file);
 }
 

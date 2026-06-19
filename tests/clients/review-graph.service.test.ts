@@ -310,4 +310,40 @@ describe("review graph service", () => {
 			env.cleanup();
 		}
 	});
+
+	it("resolves a tree-sitter language import to a real file→file edge (#249)", async () => {
+		// ruby require_relative resolves to a sibling .rb — proves the resolver is
+		// wired into addTreeSitterFile, not just the unit-tested pure function.
+		const env = setupTestEnvironment("pi-lens-review-graph-resolve-");
+		try {
+			const bPath = createTempFile(
+				env.tmpDir,
+				"lib/b.rb",
+				"def beta; 2; end\n",
+			);
+			const aPath = createTempFile(
+				env.tmpDir,
+				"lib/a.rb",
+				'require_relative "./b"\ndef alpha; beta; end\n',
+			);
+
+			const facts = new FactStore();
+			const graph = await buildOrUpdateGraph(env.tmpDir, [aPath, bPath], facts);
+
+			const aId = `file:${normalizeMapKey(aPath)}`;
+			const bId = `file:${normalizeMapKey(bPath)}`;
+			const hasResolvedEdge = graph.edges.some(
+				(e) => e.from === aId && e.to === bId && e.kind === "imports",
+			);
+			expect(hasResolvedEdge).toBe(true);
+			// And it must NOT have fallen back to an unresolved module: node.
+			expect(graph.nodes.has("module:./b")).toBe(false);
+
+			// who-imports-this works at file granularity through the resolved edge.
+			const impact = computeImpactCascade(graph, bPath);
+			expect(impact.directImporters).toContain(normalizeMapKey(aPath));
+		} finally {
+			env.cleanup();
+		}
+	});
 });
