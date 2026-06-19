@@ -1,18 +1,24 @@
 /**
- * Warm-only live-LSP enrichment for module_report (#256).
+ * On-demand, file-scoped live-LSP enrichment for module_report (#256).
  *
- * This is intentionally split out from clients/module-report.ts because LSP is
- * the risky/optional tier: it can touch heavyweight language-server state while
- * the base report must remain a predictable tree-sitter + review-graph read
- * substitute. Invariants:
- *   - NEVER cold-spawn an LSP for module_report; use an already-warm client only.
- *   - Keep one wall-clock budget (default 3000ms) for the whole enrichment tier.
- *   - Bound fan-out so a module with many exports cannot flood a language server.
+ * Split out from clients/module-report.ts because LSP is the risky/optional tier:
+ * it can touch heavyweight language-server state while the base report must stay a
+ * predictable tree-sitter + review-graph read substitute. Invariants that keep
+ * the #256 OOM impossible:
+ *   - SCOPED: only ever query `references`/`implementation` on the REQUESTED file's
+ *     own symbols. Reference *targets* are recorded as locations, never re-queried,
+ *     so the blast radius is one server + this file (a sweep amortizes to one
+ *     spawn per project root — clients are keyed by root and reused).
+ *   - BOUNDED: a worker pool caps concurrency (2) and a symbol cap (20) so a file
+ *     with many exports cannot flood the server; each probe is clipped to the
+ *     remaining wall-clock budget.
+ *   - OPT-IN: disabled by default (budget 0) until validated in a real pi session;
+ *     enable with PI_LENS_MODULE_REPORT_LSP_BUDGET_MS.
  */
 
 import type { LSPLocation } from "./lsp/client.js";
-import { uriToPath } from "./path-utils.js";
 import type { ModuleSymbolUsedBy } from "./module-report.js";
+import { uriToPath } from "./path-utils.js";
 import type { Symbol as ExtractedSymbol } from "./symbol-types.js";
 
 let _lspBudgetMs: number | undefined;
@@ -26,7 +32,7 @@ function getLspBudgetMs(): number {
 	if (_lspBudgetMs === undefined) {
 		const raw = Number(process.env.PI_LENS_MODULE_REPORT_LSP_BUDGET_MS);
 		// Default OFF (0) after the #256 OOM: the live-LSP tier is opt-in until the
-		// warm-only/bounded path is validated in a real pi session. A finite >=0
+		// bounded/file-scoped path is validated in a real pi session. A finite >=0
 		// value is honored verbatim (set 3000 to enable); anything else → 0.
 		_lspBudgetMs = Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 0;
 	}
@@ -34,13 +40,27 @@ function getLspBudgetMs(): number {
 }
 
 // Keep defaults conservative: module_report is a read substitute, not a bulk
-// references tool. The global 3000ms budget is unchanged; these caps only bound
-// concurrent/in-flight language-server work inside that budget.
+// references tool. These caps bound concurrent/in-flight language-server work
+// inside the wall-clock budget.
 const MAX_LSP_SYMBOLS = 20;
 const LSP_SYMBOL_CONCURRENCY = 2;
 
 // Kinds whose implementers are worth an LSP `implementation` probe.
 const INTERFACE_LIKE_KINDS = new Set(["interface", "class", "type"]);
+
+interface LspServiceLike {
+	references: (
+		f: string,
+		line: number,
+		character: number,
+		includeDeclaration?: boolean,
+	) => Promise<LSPLocation[]>;
+	implementation: (
+		f: string,
+		line: number,
+		character: number,
+	) => Promise<LSPLocation[]>;
+}
 
 export interface ModuleReportLspEnrichment {
 	source: "live-lsp" | "none";
@@ -102,6 +122,7 @@ function sleep(ms: number): Promise<void> {
 	});
 }
 
+/** Resolve `promise`, or `undefined` once the shared deadline passes. */
 async function withinRemaining<T>(
 	promise: Promise<T>,
 	deadlineAt: number,
@@ -115,12 +136,14 @@ async function withinRemaining<T>(
 }
 
 /**
- * Best-effort live-LSP enrichment for exported symbols. This intentionally uses
- * only an already-running client (`getWarmClientForFile`) so module_report cannot
- * cold-start tsserver/pyright/etc. If no warm client exists, the caller gets the
- * base AST/review-graph report immediately.
+ * Best-effort live-LSP enrichment for the requested file's exported symbols.
+ * On-demand: the first `references` call spawns/reuses the language server for
+ * this file's root (clients are keyed by root, so repeated calls amortize to one
+ * server). All queries target `absPath` only — never the reference targets — so
+ * the work is bounded to this one file. Returns the base report's data untouched
+ * if the tier is disabled, no server is configured, or nothing resolves in budget.
  */
-export async function enrichModuleReportWithWarmLsp(
+export async function enrichModuleReportWithLsp(
 	absPath: string,
 	lines: string[],
 	targets: ExtractedSymbol[],
@@ -129,38 +152,23 @@ export async function enrichModuleReportWithWarmLsp(
 ): Promise<ModuleReportLspEnrichment> {
 	if (targets.length === 0 || budgetMs <= 0) return NO_LSP;
 
-	let getLSPService: () => {
-		getWarmClientForFile: (f: string) => Promise<{
-			client: {
-				references: (
-					f: string,
-					line: number,
-					character: number,
-					includeDeclaration?: boolean,
-				) => Promise<LSPLocation[]>;
-				implementation: (
-					f: string,
-					line: number,
-					character: number,
-				) => Promise<LSPLocation[]>;
-			};
-		} | undefined>;
-	};
+	let getServersForFileWithConfig: (f: string) => unknown[];
+	let getLSPService: () => LspServiceLike;
 	try {
+		({ getServersForFileWithConfig } = await import("./lsp/config.js"));
 		({ getLSPService } = await import("./lsp/index.js"));
 	} catch {
 		return NO_LSP;
 	}
 
-	let warmClient: Awaited<ReturnType<ReturnType<typeof getLSPService>["getWarmClientForFile"]>>;
+	// Gate: no configured server for THIS file's language → never spawn anything.
 	try {
-		warmClient = await getLSPService().getWarmClientForFile(absPath);
+		if (getServersForFileWithConfig(absPath).length === 0) return NO_LSP;
 	} catch {
 		return NO_LSP;
 	}
-	if (!warmClient) return NO_LSP;
-	const client = warmClient.client;
 
+	const lsp = getLSPService();
 	const deadlineAt = Date.now() + budgetMs;
 	const byName = new Map<
 		string,
@@ -175,7 +183,7 @@ export async function enrichModuleReportWithWarmLsp(
 		if (Date.now() >= deadlineAt) return;
 		const { line, character } = lspPosition(sym, lines);
 		const refsPromise = withinRemaining(
-			client.references(absPath, line, character, false),
+			lsp.references(absPath, line, character, false),
 			deadlineAt,
 		).then((locs) => {
 			if (!locs || Date.now() > deadlineAt) return;
@@ -187,7 +195,7 @@ export async function enrichModuleReportWithWarmLsp(
 
 		const implPromise = INTERFACE_LIKE_KINDS.has(sym.kind)
 			? withinRemaining(
-					client.implementation(absPath, line, character),
+					lsp.implementation(absPath, line, character),
 					deadlineAt,
 				).then((locs) => {
 					if (!locs || locs.length === 0 || Date.now() > deadlineAt) return;

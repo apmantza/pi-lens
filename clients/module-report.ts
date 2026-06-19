@@ -31,7 +31,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { detectFileKind } from "./file-kinds.js";
-import { enrichModuleReportWithWarmLsp } from "./module-report-lsp.js";
+import { enrichModuleReportWithLsp } from "./module-report-lsp.js";
 import { normalizeMapKey } from "./path-utils.js";
 import type { Symbol as ExtractedSymbol } from "./symbol-types.js";
 import { TreeSitterClient } from "./tree-sitter-client.js";
@@ -409,17 +409,12 @@ export async function moduleReport(
 		toEntry(sym, absPath, normalizedPath, graph, maxRefs),
 	);
 
-	// Live-LSP enrichment of exported symbols — warm-only (never cold-spawns a
-	// language server) and bounded (concurrency + symbol caps) inside one
-	// wall-clock budget. Disabled by default until validated (#256 OOM); opt in
-	// via PI_LENS_MODULE_REPORT_LSP_BUDGET_MS.
+	// Live-LSP enrichment of exported symbols — on-demand but file-scoped (only
+	// this file's symbols are queried) and bounded (concurrency + symbol caps)
+	// inside one wall-clock budget. Disabled by default until validated (#256
+	// OOM); opt in via PI_LENS_MODULE_REPORT_LSP_BUDGET_MS.
 	const targets = extracted.filter((_sym, i) => entries[i]?.exported);
-	const lsp = await enrichModuleReportWithWarmLsp(
-		absPath,
-		lines,
-		targets,
-		maxRefs,
-	);
+	const lsp = await enrichModuleReportWithLsp(absPath, lines, targets, maxRefs);
 	for (let i = 0; i < extracted.length; i++) {
 		const entry = entries[i];
 		const data = lsp.byName.get(extracted[i].name);

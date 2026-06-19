@@ -7,63 +7,9 @@
  * that is the project's standing build-before-vitest rule.
  */
 
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const serverJs = path.join(repoRoot, "mcp", "server.js");
-
-class McpHarness {
-	private child: ChildProcessWithoutNullStreams;
-	private buffer = "";
-	private pending = new Map<number, (msg: Record<string, unknown>) => void>();
-
-	constructor() {
-		this.child = spawn(process.execPath, [serverJs, `--cwd=${repoRoot}`], {
-			stdio: ["pipe", "pipe", "pipe"],
-		});
-		this.child.stdout.setEncoding("utf8");
-		this.child.stdout.on("data", (chunk: string) => {
-			this.buffer += chunk;
-			let nl = this.buffer.indexOf("\n");
-			while (nl !== -1) {
-				const line = this.buffer.slice(0, nl).trim();
-				this.buffer = this.buffer.slice(nl + 1);
-				if (line) {
-					const msg = JSON.parse(line) as Record<string, unknown>;
-					const id = msg.id as number | undefined;
-					if (typeof id === "number" && this.pending.has(id)) {
-						this.pending.get(id)?.(msg);
-						this.pending.delete(id);
-					}
-				}
-				nl = this.buffer.indexOf("\n");
-			}
-		});
-	}
-
-	request(id: number, method: string, params?: unknown): Promise<Record<string, unknown>> {
-		return new Promise((resolve, reject) => {
-			const timer = setTimeout(() => reject(new Error(`timeout: ${method}`)), 20_000);
-			this.pending.set(id, (msg) => {
-				clearTimeout(timer);
-				resolve(msg);
-			});
-			this.child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`);
-		});
-	}
-
-	notify(method: string, params?: unknown): void {
-		this.child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`);
-	}
-
-	dispose(): void {
-		this.child.stdin.end();
-		this.child.kill();
-	}
-}
+import { McpHarness, repoRoot } from "./harness.js";
 
 // Spawns the MCP server as a real stdio subprocess; like analyze-cli, it can lose
 // a CPU-starvation race in the full parallel suite (passes in isolation). retry: 2
@@ -161,36 +107,9 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		expect(result.content[0].text).toContain("\"latency\"");
 	}, 60_000);
 
-	it("answers tools/call pilens_module_report with a navigable outline", async () => {
-		const target = path.join(repoRoot, "clients", "module-report.ts");
-		const res = await harness.request(30, "tools/call", {
-			name: "pilens_module_report",
-			arguments: { file: target },
-		});
-		const result = res.result as {
-			content: { type: string; text: string }[];
-			isError?: boolean;
-		};
-		expect(result.isError).toBeFalsy();
-		expect(result.content[0].text).toContain("module-report.ts");
-		// The fenced JSON payload carries the outline; moduleReport is an export.
-		expect(result.content[0].text).toContain("moduleReport");
-	}, 30_000);
-
-	it("answers tools/call pilens_read_symbol with the symbol body", async () => {
-		const target = path.join(repoRoot, "clients", "module-report.ts");
-		const res = await harness.request(31, "tools/call", {
-			name: "pilens_read_symbol",
-			arguments: { file: target, symbol: "readSymbol" },
-		});
-		const result = res.result as {
-			content: { type: string; text: string }[];
-			isError?: boolean;
-		};
-		expect(result.isError).toBeFalsy();
-		expect(result.content[0].text).toContain("readSymbol");
-		expect(result.content[0].text).toContain("function");
-	}, 30_000);
+	// pilens_module_report + pilens_read_symbol execute against a tiny project in
+	// module-report.smoke.test.ts — targeting the whole repo here cold-builds the
+	// review graph and blocks the server. tools/list above asserts they're wired.
 
 	it("answers tools/call pilens_ast_grep_search with content", async () => {
 		const res = await harness.request(8, "tools/call", {
