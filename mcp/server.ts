@@ -34,7 +34,9 @@ import {
 	ipcPathForCwd,
 	lspStatus,
 	type McpAnalyzeResult,
+	moduleReport,
 	projectScan,
+	readSymbol,
 	recentLatency,
 	resolveRebuildScript,
 	runRebuild,
@@ -400,6 +402,55 @@ const TOOLS = [
 		},
 	},
 	{
+		name: "pilens_module_report",
+		description:
+			"Structured, navigable overview of a source module — a token-efficient " +
+			"substitute for reading the whole file. Returns each symbol's " +
+			"name/kind/signature/line-range with ready-to-use `read` args, plus " +
+			"who-uses-this, risk flags, and ranked recommendedReads. Prefer this before " +
+			"a full read; then use pilens_read_symbol for the exact body. depth: outline " +
+			"(single-file structure, fastest, no graph) | standard (default — adds " +
+			"cross-file who-uses-this from the review graph) | deep (reserved). An " +
+			"outline shows shape, not bodies.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				file: {
+					type: "string",
+					description: "File to report on (absolute or relative to cwd).",
+				},
+				cwd: { type: "string" },
+				depth: {
+					type: "string",
+					enum: ["outline", "standard", "deep"],
+					description: "Default standard.",
+				},
+				maxRefsPerSymbol: {
+					type: "number",
+					description: "Cap who-uses-this entries per symbol (default 10).",
+				},
+			},
+			required: ["file"],
+		},
+	},
+	{
+		name: "pilens_read_symbol",
+		description:
+			"Return the verbatim source of a single named symbol " +
+			"(function/class/method/interface/type) in a file — a targeted, cheap " +
+			"alternative to reading the whole file. Pair with pilens_module_report: it " +
+			"finds the symbol, this shows its body.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				file: { type: "string", description: "File containing the symbol." },
+				symbol: { type: "string", description: "Exact symbol name to read." },
+				cwd: { type: "string" },
+			},
+			required: ["file", "symbol"],
+		},
+	},
+	{
 		name: "pilens_health",
 		description:
 			"pi-lens runtime health for THIS server: alive LSP servers, last dispatch " +
@@ -677,6 +728,63 @@ async function callTool(
 			truncated,
 			maxDepthReached,
 			hits: hits.map((hit) => ({ ...hit, file: rel(hit.file) })),
+		});
+	}
+
+	if (name === "pilens_module_report") {
+		const file = typeof args.file === "string" ? args.file : "";
+		if (!file.trim()) return { ...toolText("Provide a `file`."), isError: true };
+		const cwd = typeof args.cwd === "string" ? args.cwd : DEFAULT_CWD;
+		const depth =
+			args.depth === "outline" || args.depth === "deep"
+				? args.depth
+				: "standard";
+		const maxRefsPerSymbol =
+			typeof args.maxRefsPerSymbol === "number" &&
+			Number.isFinite(args.maxRefsPerSymbol)
+				? Math.max(1, Math.floor(args.maxRefsPerSymbol))
+				: undefined;
+		const report = await moduleReport(file, cwd, { depth, maxRefsPerSymbol });
+		if (!report.available) {
+			return {
+				...toolText(
+					`No module report for ${path.relative(cwd, path.resolve(cwd, file))} — not a symbol-bearing file, or unreadable.`,
+					report,
+				),
+				isError: true,
+			};
+		}
+		const summary =
+			`${path.relative(cwd, report.path) || report.path} [${report.staleness}] — ` +
+			`${report.summary.symbols} symbol(s), ${report.summary.exports} exported, ` +
+			`${report.api.length} in public API`;
+		return toolText(summary, report);
+	}
+
+	if (name === "pilens_read_symbol") {
+		const file = typeof args.file === "string" ? args.file : "";
+		const symbol = typeof args.symbol === "string" ? args.symbol : "";
+		if (!file.trim() || !symbol.trim()) {
+			return { ...toolText("Provide `file` and `symbol`."), isError: true };
+		}
+		const cwd = typeof args.cwd === "string" ? args.cwd : DEFAULT_CWD;
+		const result = await readSymbol(file, symbol, cwd);
+		if (!result.found) {
+			return {
+				...toolText(
+					`Symbol "${symbol}" not found in ${path.basename(file)}. Use pilens_module_report to list symbols.`,
+					{ found: false },
+				),
+				isError: true,
+			};
+		}
+		const header = `${result.kind} ${result.name}  ${path.relative(cwd, result.path)}:${result.startLine}-${result.endLine}`;
+		return toolText(`${header}\n\n${result.source ?? ""}`, {
+			name: result.name,
+			kind: result.kind,
+			startLine: result.startLine,
+			endLine: result.endLine,
+			signature: result.signature,
 		});
 	}
 

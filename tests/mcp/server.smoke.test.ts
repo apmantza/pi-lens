@@ -112,6 +112,8 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		expect(names).toContain("pilens_lsp_diagnostics");
 		expect(names).toContain("pilens_symbol_search");
 		expect(names).toContain("pilens_impact");
+		expect(names).toContain("pilens_module_report");
+		expect(names).toContain("pilens_read_symbol");
 		// Each tool advertises an object input schema.
 		for (const tool of tools) {
 			expect(tool.inputSchema.type).toBe("object");
@@ -158,6 +160,37 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		// The structured JSON payload (fenced) carries the latency record.
 		expect(result.content[0].text).toContain("\"latency\"");
 	}, 60_000);
+
+	it("answers tools/call pilens_module_report with a navigable outline", async () => {
+		const target = path.join(repoRoot, "clients", "module-report.ts");
+		const res = await harness.request(30, "tools/call", {
+			name: "pilens_module_report",
+			arguments: { file: target, depth: "outline" },
+		});
+		const result = res.result as {
+			content: { type: string; text: string }[];
+			isError?: boolean;
+		};
+		expect(result.isError).toBeFalsy();
+		expect(result.content[0].text).toContain("module-report.ts");
+		// The fenced JSON payload carries the outline; moduleReport is an export.
+		expect(result.content[0].text).toContain("moduleReport");
+	}, 30_000);
+
+	it("answers tools/call pilens_read_symbol with the symbol body", async () => {
+		const target = path.join(repoRoot, "clients", "module-report.ts");
+		const res = await harness.request(31, "tools/call", {
+			name: "pilens_read_symbol",
+			arguments: { file: target, symbol: "readSymbol" },
+		});
+		const result = res.result as {
+			content: { type: string; text: string }[];
+			isError?: boolean;
+		};
+		expect(result.isError).toBeFalsy();
+		expect(result.content[0].text).toContain("readSymbol");
+		expect(result.content[0].text).toContain("function");
+	}, 30_000);
 
 	it("answers tools/call pilens_ast_grep_search with content", async () => {
 		const res = await harness.request(8, "tools/call", {

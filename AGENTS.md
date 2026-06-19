@@ -13,7 +13,7 @@ A pi coding-agent extension that runs automated checks on every file write/edit.
 ```
 index.ts                  Extension entry point (async factory) — the pi host adapter
 mcp/                      Second host adapter: MCP server + hook bin (see "MCP mirror")
-  server.ts               Hand-rolled stdio JSON-RPC MCP server (14 tools) + warm IPC listener
+  server.ts               Hand-rolled stdio JSON-RPC MCP server (16 tools) + warm IPC listener
   worker.ts               fresh-mode child (loads freshly-built code from disk)
   analyze-cli.ts          pi-lens-analyze bin — PostToolUse hook + CLI (warm channel → cold fallback)
 clients/
@@ -51,15 +51,25 @@ a *second host adapter* alongside `index.ts`. Design rationale + progress: `mcp.
   `npm install --omit=dev` does **not** omit `optionalDependencies` (only
   `--omit=optional` does, which pi doesn't pass), so even an "optional" SDK would
   weigh every pi-lens install. ~200 LOC beats a dep for a tools-only server.
-- **14 tools:** `pilens_analyze` (per-edit; `mode: warm|fresh`), `pilens_diagnostics`,
+- **16 tools:** `pilens_analyze` (per-edit; `mode: warm|fresh`), `pilens_diagnostics`,
   `pilens_project_scan`, `pilens_latency`, `pilens_health`, `pilens_rebuild`,
   `pilens_session_start` / `pilens_turn_end` (drive the REAL lifecycle handlers —
   not re-implementations — via `clients/mcp/session.ts`), `pilens_ast_grep_search`
   / `pilens_ast_grep_replace`, `pilens_lsp_navigation` / `pilens_lsp_diagnostics`,
   `pilens_symbol_search` (ranked identifier search over the persisted word index —
   BM25 + priors + reverse-dep centrality), `pilens_impact` (transitive review-graph
-  dependents — blast radius). Wrapped pi tools emit their typebox `parameters` as
-  the MCP `inputSchema` (via `schemaWithCwd`) — no hand-restated schema to drift.
+  dependents — blast radius), `pilens_module_report` (navigable outline + signatures
+  + who-uses-this + ready-to-use `read` args — a token-efficient read substitute) /
+  `pilens_read_symbol` (one symbol's verbatim body). Wrapped pi tools emit their
+  typebox `parameters` as the MCP `inputSchema` (via `schemaWithCwd`) — no
+  hand-restated schema to drift.
+  `pilens_module_report` / `pilens_read_symbol` are **dual-surface** — also
+  registered as pi agent tools (`tools/module-report.ts`, wired in `index.ts`,
+  backed by `clients/module-report.ts` via the lens-engine seam) — and unlike the
+  MCP-only queries below, `read_symbol` already feeds a pi-lens-internal consumer:
+  in pi its returned body is recorded into the read-guard (`recordSymbolRead`) as
+  genuine edit-coverage for that symbol's range (a `module_report` outline is NOT —
+  shape, not body).
 - **MCP-only vs pi-lens-internal (a real gap to close, not a finished story).**
   `pilens_symbol_search` and `pilens_impact` are currently **agent-facing queries
   only**: the word index is built during pi-lens's own session scan (pi pays the
