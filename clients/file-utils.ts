@@ -6,6 +6,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { minimatch } from "minimatch";
+import {
+	getGlobalIgnorePatterns,
+	getPiLensGlobalConfigPath,
+} from "./lens-config.js";
 import { normalizeFilePath } from "./path-utils.js";
 import {
 	findPiLensProjectConfig,
@@ -334,9 +338,14 @@ function buildProjectIgnoreMatcher(
 export function createProjectIgnoreMatcher(
 	rootDir: string,
 	extraPatterns: string[] = [],
+	globalPatterns: string[] = [],
 ): ProjectIgnoreMatcher {
 	const resolvedRoot = resolveGitIgnoreRoot(rootDir);
+	// Precedence is gitignore order: LATER patterns override earlier ones. So
+	// global (lowest) → project .gitignore → project .pi-lens.json (highest),
+	// which lets a project `!negation` re-include a globally-ignored path (#252).
 	const patterns = [
+		...parseGitignoreContent(globalPatterns.join("\n")),
 		...readGitignorePatterns(resolvedRoot),
 		...parseGitignoreContent(extraPatterns.join("\n")),
 	];
@@ -349,9 +358,23 @@ const projectIgnoreMatcherCache = new Map<
 		gitignoreMtimeMs: number;
 		lensConfigPath: string | undefined;
 		lensConfigMtimeMs: number;
+		globalConfigMtimeMs: number;
 		matcher: ProjectIgnoreMatcher;
 	}
 >();
+
+/**
+ * mtime of the global `~/.pi-lens/config.json` (or the PI_LENS_CONFIG_PATH
+ * override). Part of the ignore-matcher cache key so editing global ignore
+ * patterns takes effect without a restart (#252). -1 when absent.
+ */
+function globalConfigMtimeMs(): number {
+	try {
+		return fs.statSync(getPiLensGlobalConfigPath()).mtimeMs;
+	} catch {
+		return -1;
+	}
+}
 
 function gitignoreMtimeMs(rootDir: string): number {
 	try {
@@ -382,27 +405,32 @@ export function getProjectIgnoreMatcher(rootDir: string): ProjectIgnoreMatcher {
 	const resolvedRoot = resolveGitIgnoreRoot(rootDir);
 	const gitignoreMtime = gitignoreMtimeMs(resolvedRoot);
 	const lensConfig = lensConfigInfo(resolvedRoot);
+	const globalMtime = globalConfigMtimeMs();
 	const cached = projectIgnoreMatcherCache.get(resolvedRoot);
 	if (
 		cached?.gitignoreMtimeMs === gitignoreMtime &&
 		cached?.lensConfigPath === lensConfig.path &&
-		cached?.lensConfigMtimeMs === lensConfig.mtimeMs
+		cached?.lensConfigMtimeMs === lensConfig.mtimeMs &&
+		cached?.globalConfigMtimeMs === globalMtime
 	) {
 		return cached.matcher;
 	}
 
-	// Load the project config fresh on cache miss. The loader is itself
-	// mtime-cached, so the cost here is one stat + one map lookup when the
-	// config hasn't changed since the last call — and a full parse when it has.
+	// Load both configs fresh on cache miss. On a cache HIT (the common case)
+	// none of this runs — the only per-call cost is the mtime stats above. The
+	// project loader is itself mtime-cached; the global loader re-parses, but
+	// only here on miss (when some tracked mtime changed).
 	const projectConfig = loadPiLensProjectConfig(resolvedRoot, lensConfig.info);
 	const matcher = createProjectIgnoreMatcher(
 		resolvedRoot,
 		projectConfig.ignore,
+		getGlobalIgnorePatterns(),
 	);
 	projectIgnoreMatcherCache.set(resolvedRoot, {
 		gitignoreMtimeMs: gitignoreMtime,
 		lensConfigPath: lensConfig.path,
 		lensConfigMtimeMs: lensConfig.mtimeMs,
+		globalConfigMtimeMs: globalMtime,
 		matcher,
 	});
 	return matcher;

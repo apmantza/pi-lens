@@ -11,6 +11,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getProjectIgnoreMatcher, isExcludedDirName } from "./file-utils.js";
+import { isAtOrAboveHomeDir } from "./path-utils.js";
 
 export const PROJECT_ROOT_MARKERS = [
 	".git",
@@ -138,11 +139,17 @@ function computeStartupScanContext(
 			scanRoot: resolvedCwd,
 			projectRoot: null,
 			canWarmCaches: false,
-			reason: resolvedCwd === homeDir ? "home-dir" : "no-project-root",
+			reason: isAtOrAboveHomeDir(resolvedCwd, homeDir)
+				? "home-dir"
+				: "no-project-root",
 		};
 	}
 
-	if (path.resolve(projectRoot) === homeDir) {
+	// A marker resolved at $HOME — OR at an ancestor of it (e.g. /home,
+	// C:\Users) — means the upward search escaped the workspace; warming caches
+	// would walk an unrelated tree (#250/#253). The old exact `=== homeDir`
+	// check missed the above-home case.
+	if (isAtOrAboveHomeDir(projectRoot, homeDir)) {
 		return {
 			cwd: resolvedCwd,
 			scanRoot: projectRoot,

@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	findNearestContaining,
+	isAtOrAboveHomeDir,
 	isExternalOrVendorFile,
 	pathToUri,
 	uriToPath,
@@ -106,6 +107,46 @@ describe("walkUpDirs / findNearestContaining (#122)", () => {
 		} finally {
 			env.cleanup();
 		}
+	});
+});
+
+describe("isAtOrAboveHomeDir (#253)", () => {
+	// Use a synthetic home so the assertions are platform-stable.
+	const home = path.resolve(path.join("tmp-home", "user"));
+
+	it("treats the home directory itself as at-or-above home", () => {
+		expect(isAtOrAboveHomeDir(home, home)).toBe(true);
+	});
+
+	it("treats an ancestor of home as at-or-above home (the #253 escape)", () => {
+		const ancestor = path.dirname(home); // …/tmp-home
+		const grandAncestor = path.dirname(ancestor);
+		expect(isAtOrAboveHomeDir(ancestor, home)).toBe(true);
+		expect(isAtOrAboveHomeDir(grandAncestor, home)).toBe(true);
+	});
+
+	it("treats the filesystem root as at-or-above home", () => {
+		const { root } = path.parse(home);
+		expect(isAtOrAboveHomeDir(root, home)).toBe(true);
+	});
+
+	it("treats a project UNDER home as not at-or-above home", () => {
+		expect(isAtOrAboveHomeDir(path.join(home, "code", "app"), home)).toBe(
+			false,
+		);
+		expect(isAtOrAboveHomeDir(path.join(home, "proj"), home)).toBe(false);
+	});
+
+	it("treats a sibling/unrelated tree as not at-or-above home", () => {
+		const sibling = path.join(path.dirname(home), "someone-else", "proj");
+		expect(isAtOrAboveHomeDir(sibling, home)).toBe(false);
+	});
+
+	it("normalizes unresolved paths before comparing", () => {
+		expect(isAtOrAboveHomeDir(path.join(home, "x", ".."), home)).toBe(true);
+		expect(isAtOrAboveHomeDir(path.join(home, "a", "..", "b"), home)).toBe(
+			false,
+		);
 	});
 });
 

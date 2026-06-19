@@ -5,6 +5,12 @@ import * as path from "node:path";
 export type PiLensFormatMode = "deferred" | "immediate";
 
 export interface PiLensGlobalConfig {
+	/**
+	 * Gitignore-style patterns excluded from pi-lens scans across ALL projects.
+	 * Merged at LOWEST precedence: a project `.gitignore` or `.pi-lens.json`
+	 * `ignore` (including `!negation`) overrides these. See #252.
+	 */
+	ignore?: string[];
 	dispatch?: {
 		/**
 		 * Minimum wall-clock budget (ms) for every dispatch runner.
@@ -97,8 +103,12 @@ export function loadPiLensGlobalConfig(
 			format?.mode === "immediate" || format?.mode === "deferred"
 				? format.mode
 				: undefined;
+		const ignore = Array.isArray(raw.ignore)
+			? raw.ignore.filter((p): p is string => typeof p === "string")
+			: undefined;
 
 		return {
+			ignore: ignore && ignore.length > 0 ? ignore : undefined,
 			dispatch: dispatch
 				? {
 						runnerTimeoutFloorMs:
@@ -158,6 +168,10 @@ export function loadPiLensGlobalConfig(
 	} catch {
 		return undefined;
 	}
+}
+
+export function getGlobalIgnorePatterns(configPath?: string): string[] {
+	return loadPiLensGlobalConfig(configPath)?.ignore ?? [];
 }
 
 export function getGlobalWidgetDefaultVisible(configPath?: string): boolean {

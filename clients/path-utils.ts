@@ -12,6 +12,7 @@
  */
 
 import { existsSync, realpathSync } from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { dirname, win32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -183,6 +184,30 @@ export function findNearestContaining(
 		}
 	}
 	return undefined;
+}
+
+/**
+ * True when `dir` is the home directory OR an ancestor of it (`/home`,
+ * `C:\Users`, the filesystem root, …). A project-root search that climbs to
+ * such a directory has escaped the user's workspace — walking down from it
+ * scans unrelated trees (the #250 runaway). Use this as the single shared
+ * ceiling on any upward project-root resolution, instead of an exact
+ * `=== os.homedir()` check (which a marker found *above* `$HOME` slips past).
+ * A normal project *under* home (e.g. `~/code/app`) is NOT at-or-above home,
+ * so it still resolves fine. Refs #253.
+ */
+export function isAtOrAboveHomeDir(
+	dir: string,
+	homeDir: string = os.homedir(),
+): boolean {
+	const resolvedDir = path.resolve(dir);
+	const resolvedHome = path.resolve(homeDir);
+	if (resolvedDir === resolvedHome) return true;
+	// `dir` is an ancestor of home ⇢ home lies inside dir ⇢ the relative path
+	// from dir to home has no leading `..` and is not absolute (cross-drive on
+	// Windows yields an absolute rel, correctly treated as "not above").
+	const rel = path.relative(resolvedDir, resolvedHome);
+	return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
 }
 
 export function isUnderDir(child: string, parent: string): boolean {

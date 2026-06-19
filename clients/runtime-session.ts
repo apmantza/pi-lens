@@ -1,5 +1,4 @@
 import * as nodeFs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import type { AstGrepClient } from "./ast-grep-client.js";
 import type { BiomeClient } from "./biome-client.js";
@@ -41,6 +40,7 @@ import { scanProjectRules } from "./rules-scanner.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 import type { RustClient } from "./rust-client.js";
 
+import { isAtOrAboveHomeDir } from "./path-utils.js";
 import {
 	findNearestProjectRoot,
 	resolveStartupScanContext,
@@ -83,7 +83,9 @@ type StartupMode = "full" | "minimal" | "quick";
 function resolveSnapshotRoot(cwd: string): string {
 	const resolvedCwd = path.resolve(cwd);
 	const nearest = findNearestProjectRoot(resolvedCwd);
-	if (!nearest || path.resolve(nearest) === path.resolve(os.homedir())) {
+	// Reject a root at — or above — $HOME (the #250/#253 escape); fall back to
+	// the cwd so the snapshot stays scoped to the actual workspace.
+	if (!nearest || isAtOrAboveHomeDir(nearest)) {
 		return resolvedCwd;
 	}
 	return nearest;
