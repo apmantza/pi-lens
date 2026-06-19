@@ -64,13 +64,6 @@ export interface ModuleSymbolEntry {
 	read: { path: string; offset: number; limit: number };
 }
 
-export interface ModuleReportDiagnostic {
-	line: number;
-	severity: string;
-	message: string;
-	rule?: string;
-}
-
 export interface RecommendedRead {
 	reason: string;
 	symbol?: string;
@@ -90,7 +83,6 @@ export interface ModuleReport {
 	imports: { external: string[]; internal: string[] };
 	api: ModuleSymbolEntry[];
 	internal: ModuleSymbolEntry[];
-	diagnostics: ModuleReportDiagnostic[];
 	recommendedReads: RecommendedRead[];
 	semantic: {
 		source: "graph-lsp" | "live-lsp" | "none";
@@ -348,7 +340,6 @@ function unavailableReport(displayPath: string): ModuleReport {
 		imports: { external: [], internal: [] },
 		api: [],
 		internal: [],
-		diagnostics: [],
 		recommendedReads: [],
 		semantic: { source: "none", references: false, implementations: false },
 	};
@@ -423,7 +414,6 @@ export async function moduleReport(
 		imports,
 		api,
 		internal,
-		diagnostics: [],
 		recommendedReads: rankRecommendedReads(entries),
 		semantic: {
 			source: "none",
