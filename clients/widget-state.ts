@@ -701,8 +701,33 @@ function osc8(uri: string, label: string): string {
 	return `\x1b]8;;${uri}\x1b\\${label}\x1b]8;;\x1b\\`;
 }
 
+// Two incompatible truncateToWidth signatures ship under the "@earendil-works/pi-tui"
+// specifier depending on which runtime resolves it:
+//   - pure-JS pi-tui:        (text, maxWidth, ellipsis: string, pad?)
+//   - native @oh-my-pi >=16: (text, maxWidth, ellipsisKind: Ellipsis enum, pad, tabWidth: i32)
+// Passing a string to the native one throws "Failed to convert napi value into enum `Ellipsis`".
+// Probe the string API once; on napi failure, switch to the native enum signature for good.
+// Ellipsis enum: Unicode=0 ("…"), Ascii=1 ("..."), Omit=2.
+const ELLIPSIS_KIND: Record<string, number> = { "…": 0, "...": 1, "": 2 };
+let truncateIsNative: boolean | null = null;
 function fitLine(s: string, maxWidth: number, ellipsis = "..."): string {
-	return truncateToWidth(s, Math.max(0, maxWidth), ellipsis);
+	const w = Math.max(0, maxWidth);
+	const fn = truncateToWidth as (...a: unknown[]) => string;
+	if (truncateIsNative === true) {
+		return fn(s, w, ELLIPSIS_KIND[ellipsis] ?? 1, false, 8);
+	}
+	if (truncateIsNative === false) {
+		return fn(s, w, ellipsis);
+	}
+	// first call: try the legacy string API; native binding rejects the string arg.
+	try {
+		const out = fn(s, w, ellipsis);
+		truncateIsNative = false;
+		return out;
+	} catch {
+		truncateIsNative = true;
+		return fn(s, w, ELLIPSIS_KIND[ellipsis] ?? 1, false, 8);
+	}
 }
 
 function dedupeByBasename(recs: FileRecord[]): FileRecord[] {
