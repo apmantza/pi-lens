@@ -721,6 +721,12 @@ export class TreeSitterSymbolExtractor {
 		// Check if exported (basic heuristic: has export keyword before it)
 		const isExported = this.isExported(defNode, content);
 		const signature = params ? this.extractSignature(params, kind) : undefined;
+		// Scope/visibility signals (additive; the review graph ignores them).
+		// `local`: nearest enclosing scope is a function body (#259).
+		// `visibility`: a TS/JS access modifier or #-private name (#258).
+		const local = this.isFunctionLocal(defNode);
+		const visibility =
+			kind === "method" ? this.detectVisibility(defNode, name) : undefined;
 
 		return {
 			id: `${filePath}:${name}`,
@@ -732,6 +738,8 @@ export class TreeSitterSymbolExtractor {
 			column: defNode.startPosition.column + 1,
 			signature,
 			isExported,
+			...(local ? { local: true } : {}),
+			...(visibility ? { visibility } : {}),
 		};
 	}
 
@@ -797,6 +805,43 @@ export class TreeSitterSymbolExtractor {
 			current = current.parent;
 		}
 		return false;
+	}
+
+	// biome-ignore lint/suspicious/noExplicitAny: Node type
+	private isFunctionLocal(node: any): boolean {
+		// A symbol is function-local when its nearest enclosing scope is a
+		// function/block body (`statement_block`) — the same boundary the export
+		// walk treats as "not a module export" (#256). Class members live in a
+		// `class_body`, module-level declarations reach the program root, so neither
+		// is local. TS/JS-shaped: other grammars don't use `statement_block`, so
+		// `local` simply stays false there (#259, scoped to where it's detectable).
+		let current = node.parent;
+		while (current) {
+			if (current.type === "statement_block") return true;
+			current = current.parent;
+		}
+		return false;
+	}
+
+	// biome-ignore lint/suspicious/noExplicitAny: Node type
+	private detectVisibility(
+		node: any,
+		nameText: string,
+	): "private" | "protected" | undefined {
+		// #-prefixed names are hard-private (works even if a grammar surfaces the
+		// name as a private_property_identifier).
+		if (nameText.startsWith("#")) return "private";
+		// TS `private`/`protected`/`public foo()` carry an `accessibility_modifier`
+		// child on the method node. The node type is TS-specific, so this is inert
+		// for grammars without it (no faked visibility — #258).
+		for (const child of node?.children ?? []) {
+			if (child?.type === "accessibility_modifier") {
+				if (child.text === "private") return "private";
+				if (child.text === "protected") return "protected";
+				return undefined; // explicit public
+			}
+		}
+		return undefined;
 	}
 
 	private extractSignature(

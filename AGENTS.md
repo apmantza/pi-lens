@@ -59,7 +59,11 @@ a *second host adapter* alongside `index.ts`. Design rationale + progress: `mcp.
   `pilens_symbol_search` (ranked identifier search over the persisted word index —
   BM25 + priors + reverse-dep centrality), `pilens_impact` (transitive review-graph
   dependents — blast radius), `pilens_module_report` (navigable outline + signatures
-  + who-uses-this + ready-to-use `read` args — a token-efficient read substitute) /
+  + who-uses-this + ready-to-use `read` args — a token-efficient read substitute;
+  the outline is module-level declarations + class members only — function-locals
+  are dropped (#259) — and the `api`/`internal` split is visibility-aware, so a
+  `private`/`protected` member of an exported class sits in `internal` with a
+  `visibility` tag, not the public `api` (#258)) /
   `pilens_read_symbol` (one symbol's verbatim body). Wrapped pi tools emit their
   typebox `parameters` as the MCP `inputSchema` (via `schemaWithCwd`) — no
   hand-restated schema to drift.

@@ -65,6 +65,9 @@ export interface ModuleSymbolEntry {
 	startLine: number;
 	endLine: number;
 	exported: boolean;
+	/** Set only for non-public members of an exported class (#258); omitted
+	 * otherwise. Explains why an otherwise-reachable member sits in `internal`. */
+	visibility?: "private" | "protected";
 	signature?: string;
 	doc?: string;
 	/** Outgoing call count (jsts graph path only). */
@@ -304,11 +307,19 @@ function toEntry(
 			).length
 		: undefined;
 
-	const exported = sym.isExported || !!node?.exported;
+	// A private/protected member of an exported class is reachable but NOT part
+	// of the public API, so it must not count as `exported` for the api/internal
+	// split, the "exported" flag, or read ranking (#258). The extractor's
+	// sym.isExported is untouched (the review graph still sees the full surface);
+	// this gating is local to the report's presentation.
+	const nonPublic =
+		sym.visibility === "private" || sym.visibility === "protected";
+	const exported = (sym.isExported || !!node?.exported) && !nonPublic;
 	const flags: string[] = [];
 	if (exported) flags.push("exported");
 	if (fanout !== undefined && fanout >= 4) flags.push("high fanout");
-	if (complexity !== undefined && complexity >= 8) flags.push("high complexity");
+	if (complexity !== undefined && complexity >= 8)
+		flags.push("high complexity");
 	if (metadata.isBoundaryWrapper) flags.push("boundary wrapper");
 
 	const usedBy = graph
@@ -321,13 +332,14 @@ function toEntry(
 		startLine,
 		endLine,
 		exported,
+		...(sym.visibility ? { visibility: sym.visibility } : {}),
 		signature: sym.signature,
 		doc: sym.doc,
 		fanout: fanout && fanout > 0 ? fanout : undefined,
 		complexity,
 		// Empty flags array would waste ~3-5 tokens per entry on a 41-symbol
-			// outline (~200 tok total). Omit when there's nothing to report.
-			...(flags.length > 0 ? { flags } : {}),
+		// outline (~200 tok total). Omit when there's nothing to report.
+		...(flags.length > 0 ? { flags } : {}),
 		usedBy: usedBy && usedBy.length > 0 ? usedBy : undefined,
 		read: readArgsFor(displayPath, startLine, endLine),
 	};
@@ -422,7 +434,12 @@ export async function moduleReport(
 		graph = undefined;
 	}
 
-	const entries = extracted.map((sym) =>
+	// Drop function-local declarations (a nested const/arrow/function) from the
+	// outline — they're implementation detail of a parent symbol, not navigable
+	// module structure (#259). Presentation-only: the review graph keeps them.
+	const outlineSymbols = extracted.filter((sym) => !sym.local);
+
+	const entries = outlineSymbols.map((sym) =>
 		toEntry(sym, absPath, normalizedPath, graph, maxRefs, cwd),
 	);
 
@@ -436,8 +453,7 @@ export async function moduleReport(
 
 	const report: ModuleReport = {
 		available: entries.length > 0 || hasGraphNode,
-		staleness:
-			entries.length === 0 && !hasGraphNode ? "unavailable" : "fresh",
+		staleness: entries.length === 0 && !hasGraphNode ? "unavailable" : "fresh",
 		path: toDisplayPath(absPath, cwd),
 		language: kind ?? undefined,
 		lineCount,

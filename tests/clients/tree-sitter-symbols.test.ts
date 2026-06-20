@@ -115,6 +115,86 @@ describe("export-scope correctness (#256) — module exports vs function locals"
 	});
 });
 
+describe("member visibility (#258) + function-local detection (#259)", () => {
+	async function extract(src: string) {
+		const env = setupTestEnvironment("pi-lens-visibility-");
+		try {
+			const fp = createTempFile(env.tmpDir, "a.ts", src);
+			const tree = await client.parseFile(fp, "typescript");
+			const extractor = new TreeSitterSymbolExtractor("typescript", client);
+			await extractor.init();
+			return extractor.extract(tree!, fp, src).symbols;
+		} finally {
+			env.cleanup();
+		}
+	}
+
+	it("tags private/protected members and leaves public members untagged (#258)", async () => {
+		const symbols = await extract(
+			[
+				"export class Service {",
+				"  pub(): void {}",
+				"  private secret(): void {}",
+				"  protected guarded(): void {}",
+				"}",
+			].join("\n"),
+		);
+		expect(symbols.find((s) => s.name === "pub")?.visibility).toBeUndefined();
+		expect(symbols.find((s) => s.name === "secret")?.visibility).toBe(
+			"private",
+		);
+		expect(symbols.find((s) => s.name === "guarded")?.visibility).toBe(
+			"protected",
+		);
+		// Visibility is membership metadata, not an export change — the members of
+		// an exported class stay isExported (the #256 contract is unchanged).
+		expect(symbols.find((s) => s.name === "secret")?.isExported).toBe(true);
+	});
+
+	it("does not tag visibility for languages without a real modifier", async () => {
+		// Python `_name` is a convention, not a modifier — must NOT be faked.
+		const env = setupTestEnvironment("pi-lens-visibility-py-");
+		try {
+			const src = "class C:\n    def _internal(self):\n        pass\n";
+			const fp = createTempFile(env.tmpDir, "a.py", src);
+			const tree = await client.parseFile(fp, "python");
+			const extractor = new TreeSitterSymbolExtractor("python", client);
+			await extractor.init();
+			const symbols = extractor.extract(tree!, fp, src).symbols;
+			expect(symbols.find((s) => s.name === "_internal")?.visibility).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("marks a nested const/arrow as function-local, not module structure (#259)", async () => {
+		const symbols = await extract(
+			[
+				"export function outer(): number {",
+				"  const inner = (n: number) => n + 1;",
+				"  return inner(1);",
+				"}",
+			].join("\n"),
+		);
+		expect(symbols.find((s) => s.name === "inner")?.local).toBe(true);
+		// The module-level function itself is not local.
+		expect(symbols.find((s) => s.name === "outer")?.local).toBeFalsy();
+	});
+
+	it("does not mark class members or top-level declarations as local (#259)", async () => {
+		const symbols = await extract(
+			[
+				"export class Service {",
+				"  run(): void {}",
+				"}",
+				"export function top(): void {}",
+			].join("\n"),
+		);
+		expect(symbols.find((s) => s.name === "run")?.local).toBeFalsy();
+		expect(symbols.find((s) => s.name === "top")?.local).toBeFalsy();
+	});
+});
+
 describe("tree-sitter symbol extraction (#251) — per supported grammar", () => {
 	for (const [lang, c] of Object.entries(CASES)) {
 		it(`extracts symbols for ${lang}`, async () => {

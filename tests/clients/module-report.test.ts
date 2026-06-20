@@ -158,7 +158,7 @@ describe("moduleReport — review-graph who-uses-this", () => {
 		expect(report.recommendedReads.some((r) => r.symbol === "foo")).toBe(true);
 	});
 
-	it("routes a function-local declaration to internal, not api (#256)", async () => {
+	it("drops a function-local declaration from the outline entirely (#259, supersedes #256 routing)", async () => {
 		const env = makeEnv();
 		const file = createTempFile(
 			env.tmpDir,
@@ -171,10 +171,11 @@ describe("moduleReport — review-graph who-uses-this", () => {
 			].join("\n"),
 		);
 		const report = await moduleReport(file, env.tmpDir);
-		// outer is the only module export; localHelper is a function-local.
+		// outer is the module export; localHelper is a function-local → it is no
+		// longer surfaced in EITHER list (it was routed to internal pre-#259).
 		expect(report.api.some((e) => e.name === "outer")).toBe(true);
 		expect(report.api.some((e) => e.name === "localHelper")).toBe(false);
-		expect(report.internal.some((e) => e.name === "localHelper")).toBe(true);
+		expect(report.internal.some((e) => e.name === "localHelper")).toBe(false);
 	});
 
 	it("Tier 3: serves who-uses-this from the persisted disk snapshot when the in-memory cache is cold (cross-process)", async () => {
@@ -260,6 +261,64 @@ describe("moduleReport — review-graph who-uses-this", () => {
 		expect(foo).toBeDefined();
 		expect(foo?.usedBy).toBeUndefined(); // cold graph → no who-uses-this
 		expect(report.imports.external).toHaveLength(0);
+	});
+});
+
+describe("moduleReport — member visibility (#258) + compact outline (#259)", () => {
+	it("routes private/protected members of an exported class to internal with a visibility tag (#258)", async () => {
+		const env = makeEnv();
+		const file = createTempFile(
+			env.tmpDir,
+			"svc.ts",
+			[
+				"export class Service {",
+				"  run(): number { return 1; }",
+				"  private secret(): number { return 2; }",
+				"  protected guarded(): number { return 3; }",
+				"}",
+			].join("\n"),
+		);
+		const report = await moduleReport(file, env.tmpDir);
+
+		// Public member stays in the api surface.
+		expect(report.api.some((e) => e.name === "run")).toBe(true);
+		// Private/protected members are reachable but not public API → internal.
+		expect(report.api.some((e) => e.name === "secret")).toBe(false);
+		expect(report.api.some((e) => e.name === "guarded")).toBe(false);
+
+		const secret = report.internal.find((e) => e.name === "secret");
+		const guarded = report.internal.find((e) => e.name === "guarded");
+		expect(secret?.visibility).toBe("private");
+		expect(guarded?.visibility).toBe("protected");
+		// Not counted as exported for the flag / summary / ranking.
+		expect(secret?.exported).toBe(false);
+		expect(secret?.flags ?? []).not.toContain("exported");
+		expect(report.summary.exports).toBe(report.api.length);
+		// Public member carries no visibility field.
+		expect(report.api.find((e) => e.name === "run")?.visibility).toBeUndefined();
+	});
+
+	it("keeps class members + module-level symbols while dropping function-locals (#259)", async () => {
+		const env = makeEnv();
+		const file = createTempFile(
+			env.tmpDir,
+			"m.ts",
+			[
+				"export class Svc {",
+				"  method(): number {",
+				"    const tmp = (x: number) => x + 1;",
+				"    return tmp(1);",
+				"  }",
+				"}",
+				"export function top(): void {}",
+			].join("\n"),
+		);
+		const report = await moduleReport(file, env.tmpDir);
+		const all = [...report.api, ...report.internal].map((e) => e.name);
+		expect(all).toContain("Svc"); // exported class
+		expect(all).toContain("method"); // class member kept
+		expect(all).toContain("top"); // module-level kept
+		expect(all).not.toContain("tmp"); // function-local dropped
 	});
 });
 

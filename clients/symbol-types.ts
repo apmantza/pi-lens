@@ -24,6 +24,21 @@ export interface Symbol {
 	column: number;
 	signature?: string; // For functions: "(a: T, b: U) => R"
 	isExported: boolean;
+	/**
+	 * Access visibility when the language exposes a REAL, detectable modifier
+	 * (TS/JS `private`/`protected`/`#`). Undefined = public or not applicable —
+	 * never faked for convention-only languages (Python `_name`, Go casing).
+	 * module-report routes private/protected members of an exported class to
+	 * `internal` rather than the public `api` (#258).
+	 */
+	visibility?: "private" | "protected";
+	/**
+	 * True when the symbol is declared inside a function/block body (a
+	 * function-local), as opposed to a module-level declaration or a class
+	 * member. module-report drops locals from its outline (#259); the review
+	 * graph keeps the full symbol set regardless, so its edges are unaffected.
+	 */
+	local?: boolean;
 	doc?: string; // JSDoc comment if available
 }
 
