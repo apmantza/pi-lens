@@ -497,6 +497,49 @@ function loadPersistedGraph(cwd: string): {
 	}
 }
 
+/**
+ * The version string of the persisted graph, read cheaply from the HEAD of the
+ * cache file (the `version` key is serialized first) — never parses the multi-MB
+ * body. Returns null when no graph is persisted.
+ */
+function getPersistedReviewGraphVersion(cwd: string): string | null {
+	const cachePath = path.join(
+		getProjectDataDir(cwd),
+		"cache",
+		GRAPH_CACHE_FILENAME,
+	);
+	let fd: number | undefined;
+	try {
+		fd = fs.openSync(cachePath, "r");
+		const buf = Buffer.alloc(200);
+		const n = fs.readSync(fd, buf, 0, 200, 0);
+		const match = buf.toString("utf-8", 0, n).match(/"version"\s*:\s*"([^"]+)"/);
+		return match ? match[1] : null;
+	} catch {
+		return null;
+	} finally {
+		if (fd !== undefined) {
+			try {
+				fs.closeSync(fd);
+			} catch {
+				/* ignore */
+			}
+		}
+	}
+}
+
+/**
+ * True when a persisted graph exists but was written under an OLDER
+ * REVIEW_GRAPH_VERSION — a schema/scope change (#260: test exclusion) means it
+ * must be rebuilt. The session bootstrap consults this to proactively rebuild
+ * once after an upgrade, so reads aren't stranded cold until the next edit.
+ * Returns false when nothing is persisted (a normal cold start builds on demand).
+ */
+export function isReviewGraphMigrationNeeded(cwd: string): boolean {
+	const version = getPersistedReviewGraphVersion(cwd);
+	return version !== null && version !== REVIEW_GRAPH_VERSION;
+}
+
 // --- Throttled, size-guarded graph persistence (circuit-breaker, #260) ---
 // The whole graph is serialized as one blob. Doing that synchronously on every
 // edit turn — `JSON.stringify` of a multi-MB graph plus number formatting for

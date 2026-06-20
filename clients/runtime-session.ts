@@ -622,9 +622,11 @@ function scheduleStartupScans(
 	// call-graph — build function-level call graph from review graph data
 	runTask("call-graph", async () => {
 		const { FactStore } = await import("./dispatch/fact-store.js");
-		const { buildOrUpdateGraph, extractSymbolsAndRefsFromGraph } = await import(
-			"./review-graph/builder.js"
-		);
+		const {
+			buildOrUpdateGraph,
+			extractSymbolsAndRefsFromGraph,
+			isReviewGraphMigrationNeeded,
+		} = await import("./review-graph/builder.js");
 		const {
 			buildCallGraph,
 			saveCallGraph,
@@ -639,7 +641,15 @@ function scheduleStartupScans(
 		if (cached) {
 			const cachedFiles = [...cached.fileMtimes.keys()];
 			const stale = staleFiles(cached.fileMtimes, cachedFiles);
-			if (stale.length === 0 && cachedFiles.length > 0) {
+			// #260: a stale REVIEW-graph version must force a rebuild even when the
+			// (separate) call-graph cache is fresh — otherwise an upgrade that
+			// invalidated the persisted graph (e.g. v2→v3 test exclusion) leaves
+			// reads cold until the next edit. The version check is cheap (file head).
+			if (
+				stale.length === 0 &&
+				cachedFiles.length > 0 &&
+				!isReviewGraphMigrationNeeded(analysisRoot)
+			) {
 				runtime.callGraph = cached.graph;
 				dbg(
 					`session_start call-graph: loaded from cache (${cached.graph.edges.length} edges, ${Date.now() - startMs}ms)`,

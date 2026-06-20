@@ -1,5 +1,8 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { FactStore } from "../../clients/dispatch/fact-store.js";
+import { getProjectDataDir } from "../../clients/file-utils.js";
 import { normalizeMapKey } from "../../clients/path-utils.js";
 import {
 	buildOrUpdateGraph,
@@ -9,8 +12,10 @@ import {
 import {
 	clearGraphCache,
 	clearReviewGraphWorkspaceCache,
+	flushReviewGraphPersistsForTests,
 	getCachedReviewGraph,
 	getLastGraphBuildInfo,
+	isReviewGraphMigrationNeeded,
 } from "../../clients/review-graph/builder.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 
@@ -129,6 +134,45 @@ describe("review graph service", () => {
 			// And it's already indexed (who-uses-this works without a rebuild).
 			expect(g1!.edgesByFrom.size).toBeGreaterThan(0);
 			expect(g1!.fileNodes.size).toBeGreaterThan(0);
+		} finally {
+			clearReviewGraphWorkspaceCache();
+			env.cleanup();
+		}
+	});
+
+	it("isReviewGraphMigrationNeeded: stale version → true, current/absent → false (#260)", async () => {
+		const env = setupTestEnvironment("pi-lens-review-graph-migrate-");
+		try {
+			// Nothing persisted → nothing to migrate (a cold start builds on demand).
+			expect(isReviewGraphMigrationNeeded(env.tmpDir)).toBe(false);
+
+			// A snapshot written under an older version → migration needed.
+			const cacheDir = path.join(getProjectDataDir(env.tmpDir), "cache");
+			fs.mkdirSync(cacheDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(cacheDir, "review-graph.json"),
+				JSON.stringify({
+					version: "v1-old",
+					builtAt: "x",
+					signature: "s",
+					nodes: [],
+					edges: [],
+				}),
+			);
+			expect(isReviewGraphMigrationNeeded(env.tmpDir)).toBe(true);
+
+			// A real build persists the CURRENT version → no longer stale.
+			createTempFile(
+				env.tmpDir,
+				"src/a.ts",
+				"export function alpha() {\n  return 1;\n}\n",
+			);
+			await buildOrUpdateGraph(env.tmpDir, [], new FactStore());
+			flushReviewGraphPersistsForTests();
+			for (let i = 0; i < 20 && isReviewGraphMigrationNeeded(env.tmpDir); i++) {
+				await new Promise((r) => setTimeout(r, 25));
+			}
+			expect(isReviewGraphMigrationNeeded(env.tmpDir)).toBe(false);
 		} finally {
 			clearReviewGraphWorkspaceCache();
 			env.cleanup();
