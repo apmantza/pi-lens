@@ -138,14 +138,10 @@ describe("lsp_navigation tool", () => {
 		expect(String(result.content[0]?.text)).toContain(
 			"typescript (/workspace)",
 		);
+		expect(String(result.content[0]?.text)).toContain("definition ✓");
+		expect(String(result.content[0]?.text)).toContain("signatureHelp ✗");
 		expect(String(result.content[0]?.text)).toContain(
-			"definition             ✓",
-		);
-		expect(String(result.content[0]?.text)).toContain(
-			"signatureHelp          ✗",
-		);
-		expect(String(result.content[0]?.text)).toContain(
-			"rename_file            ✓  (willRenameFiles/didRenameFiles helper available)",
+			"rename_file ✓ (willRenameFiles/didRenameFiles helper available)",
 		);
 		expect(result.details?.servers).toEqual(["typescript"]);
 	});
@@ -695,7 +691,7 @@ describe("lsp_navigation tool", () => {
 			expect(result.isError).toBeUndefined();
 			expect(result.details?.resultCount).toBe(1);
 			expect(String(result.content[0]?.text)).toContain("normalizeReport");
-			expect(String(result.content[0]?.text)).toContain('"kind": "method"');
+			expect(String(result.content[0]?.text)).toContain('"kind":"method"');
 		} finally {
 			fs.rmSync(tmpDir, { recursive: true, force: true });
 		}
@@ -961,7 +957,7 @@ describe("lsp_navigation tool", () => {
 			const envelope = parseToolJson(result);
 			expect(envelope.status).toBe("success");
 			expect(envelope.notes).toEqual([
-				"filePath mode requests pull diagnostics for this file and returns the aggregated result.",
+				"filePath mode requests pull diagnostics for this file and returns the aggregated result",
 			]);
 			expect(result.details?.coverage).toBe("requested-file");
 			expect(result.details?.resultCount).toBe(1);
@@ -1068,7 +1064,7 @@ describe("lsp_navigation tool", () => {
 
 			expect(result.isError).toBeUndefined();
 			expect(result.details?.resultCount).toBe(1);
-			expect(String(result.content[0]?.text)).toContain('"applied": true');
+			expect(String(result.content[0]?.text)).toContain('"applied":true');
 			expect(fs.readFileSync(filePath, "utf-8")).toBe(
 				"const newName = 1;\nconsole.log(newName);\n",
 			);

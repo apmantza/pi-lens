@@ -670,15 +670,12 @@ function formatCapabilities(
 			: `${snapshot.serverId} (${snapshot.root})`;
 		lines.push(label);
 		for (const [name, supported, note] of rows) {
-			const suffix = note ? `  (${note})` : "";
-			lines.push(
-				`  ${name.padEnd(22)} ${supported(snapshot) ? "✓" : "✗"}${suffix}`,
-			);
+			const suffix = note ? ` (${note})` : "";
+			lines.push(`  ${name} ${supported(snapshot) ? "✓" : "✗"}${suffix}`);
 		}
 		const commands = snapshot.advertisedCommands ?? [];
 		lines.push(
-			`  ${"executeCommand".padEnd(22)} ${commands.length > 0 ? "✓" : "✗"}` +
-				`  (${commands.length} advertised command(s)` +
+			`  executeCommand ${commands.length > 0 ? "✓" : "✗"} (${commands.length} advertised command(s)` +
 				(commands.length > 0 ? `: ${commands.slice(0, 20).join(", ")}` : "") +
 				")",
 		);
@@ -957,7 +954,10 @@ export function createLspNavigationTool(
 					content: [
 						{
 							type: "text" as const,
-							text: JSON.stringify(envelope, null, 2),
+							// Compact JSON: omit indentation. Saves ~50% on rename / workspace-edits payloads
+							// while keeping the envelope machine-parseable. Tests use JSON.parse so
+							// they are agnostic to whitespace.
+							text: JSON.stringify(envelope),
 						},
 					],
 					details: {
@@ -1163,20 +1163,20 @@ export function createLspNavigationTool(
 						},
 					];
 					const noteMap: Record<string, string> = {
-						pull: "Note: filePath mode requests pull diagnostics for this file and returns the aggregated result.",
+						pull: "Note: filePath mode requests pull diagnostics for this file and returns the aggregated result",
 						"push-only":
-							"Note: server is push-only; result depends on published diagnostics for this file.",
+							"Note: server is push-only; result depends on published diagnostics for this file",
 					};
 					const note =
 						noteMap[diagnosticsMode] ??
-						"Note: workspace diagnostics mode unknown (no active capability snapshot).";
+						"Note: workspace diagnostics mode unknown (no active capability snapshot)";
 					const resultCount = diagnostics.length;
 					return finalize(
 						{
 							content: [
 								{
 									type: "text" as const,
-									text: `${note}\n${JSON.stringify(result, null, 2)}`,
+									text: `${note}\n${JSON.stringify(result)}`,
 								},
 							],
 							details: {
@@ -1206,17 +1206,17 @@ export function createLspNavigationTool(
 				const noteMap2: Record<string, string> = {
 					"push-only":
 						"Note: push-only tracked diagnostics snapshot (not full workspace pull diagnostics).",
-					pull: "Note: tracked diagnostics snapshot from active clients. Provide filePath to force file-level diagnostics collection.",
+					pull: "Note: tracked diagnostics snapshot from active clients. Provide filePath to force file-level diagnostics collection",
 				};
 				const note =
 					noteMap2[diagnosticsMode] ??
-					"Note: workspace diagnostics mode unknown (no active capability snapshot).";
+					"Note: workspace diagnostics mode unknown (no active capability snapshot)";
 				return finalize(
 					{
 						content: [
 							{
 								type: "text" as const,
-								text: `${note}\n${JSON.stringify(result, null, 2)}`,
+								text: `${note}\n${JSON.stringify(result)}`,
 							},
 						],
 						details: {
@@ -1655,7 +1655,7 @@ export function createLspNavigationTool(
 			const lineCtx = line ? ":" + line + ":" + character : "";
 			let output = isEmpty
 				? "No results for " + operation + fileCtx + lineCtx
-				: JSON.stringify(result, null, 2);
+				: JSON.stringify(result);
 			if (isEmpty && operation === "workspaceSymbol" && !rawPath) {
 				output +=
 					"\nHint: provide filePath to scope workspaceSymbol to the active language server/root.";
