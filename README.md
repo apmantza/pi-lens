@@ -30,7 +30,7 @@ On every `write` and `edit`, pi-lens runs a fast, language-aware pipeline (check
 
 1. **Secrets scan** — blocking; aborts the write if credentials are detected
 2. **Auto-format** — deferred to `agent_end` by default; queued files are formatted once after all agent tool calls complete. Use `--immediate-format` or global config `format.mode: "immediate"` for per-edit formatting
-3. **Auto-fix** — safe autofixes from 6 tools (Biome `check --write`, Ruff `check --fix`, ESLint `--fix`, stylelint `--fix`, sqlfluff `fix`, RuboCop `-a`) applied before analysis
+3. **Auto-fix** — safe autofixes from 14 linters/formatters (Biome, ESLint, oxlint, Ruff, stylelint, sqlfluff, RuboCop, ktlint, ktfmt, rust-clippy, dart-analyze, golangci-lint, detekt, markdownlint) applied before analysis
 4. **Edit autopatch** — before an `edit` tool call lands, pi-lens silently corrects two classes of `oldText` mismatch: leading tab/space indentation (when the corrected text matches exactly one location) and trailing whitespace stripped by formatters. Both corrections also retarget `newText` so the replacement matches the file's whitespace style
 5. **LSP file sync** — opens/updates the file in active language servers
 6. **Dispatch lint** — parallel runner groups: LSP diagnostics (incl. the Opengrep auxiliary security scanner), tree-sitter structural rules, ast-grep security/correctness rules, fact rules, language-specific linters, similarity detection
@@ -78,7 +78,7 @@ pi install git:github.com/apmantza/pi-lens
 
 ### LSP Support
 
-pi-lens includes **38 language server definitions** (including two cross-cutting *auxiliary* scanners that attach alongside the file's language server — Opengrep for security, and ast-grep for structural rules in projects with an `sgconfig.y[a]ml` — see below). LSP is **enabled by default** (`--lsp` or no flag). Servers are auto-discovered from PATH, project `node_modules`, and managed installs. When a server is not installed, pi-lens offers an interactive install prompt.
+pi-lens includes **37 language server definitions** (including two cross-cutting *auxiliary* scanners that attach alongside the file's language server — Opengrep for security, and ast-grep for structural rules in projects with an `sgconfig.y[a]ml` — see below). LSP is **enabled by default** (`--lsp` or no flag). Servers are auto-discovered from PATH, project `node_modules`, and managed installs. When a server is not installed, pi-lens offers an interactive install prompt.
 
 **LSP Idle Management:** LSP servers shut down after 240 seconds of inactivity (no files modified) to free resources. The timer resets when you resume editing, preventing cold-start penalties during active development.
 
@@ -128,6 +128,45 @@ Coverage is tracked across multiple reads: two reads of lines 1–100 and 101–
 Override for a single edit: `/lens-allow-edit <path>`
 
 Configure behavior with `--no-read-guard` to disable entirely, or set mode to `warn` instead of `block`.
+
+### Module Report + Read Symbol (Read Substitute)
+
+For "tell me about this file" or "show me one function", prefer the
+`module_report` + `read_symbol` pair over a full `read`. Together they're
+~4× cheaper than reading the whole file (12 k → 4 k tokens on a 42-symbol
+file) and the agent gets a navigable outline plus targeted body fetches
+instead of a flat blob of source. See
+[`docs/module-report-read-symbol.md`](docs/module-report-read-symbol.md)
+for the full design and token-efficiency numbers.
+
+**`module_report(filePath, maxRefsPerSymbol?)`** — returns a structured
+outline: every symbol's name/kind/startLine/endLine/signature, exported vs
+internal split, who-uses-this (`usedBy`), fanout/complexity risk flags,
+and a `recommendedReads` top-3 ranked by usage + complexity. Each symbol
+entry includes a ready-to-use `read` argument (`{path, offset, limit}`)
+so the agent's next call sits right there. Tree-sitter extract + cached
+review-graph lookup; never builds the graph, never calls LSP on this path.
+`semantic.source` reports what backed the data (`review-graph` | `none`).
+
+**`read_symbol(filePath, symbol)`** — returns the verbatim body of one
+named symbol plus a one-line header (`<kind> <name>  <basename>:<startLine>-<endLine>`).
+Records the read against the read-guard so a follow-up edit anywhere in
+that symbol's range passes the read-before-edit check (an outline from
+`module_report` deliberately does NOT — an outline is shape, not body).
+
+**When to use which:**
+
+- **Skim an unfamiliar file** → `module_report`, then `read_symbol` on the
+  one symbol you actually need. ~−60% vs a full `read` for the common case.
+- **One giant function in a long file** → skip `module_report`; `read` a
+  line range instead (or `read_symbol` if it's named).
+- **Tiny file (≤ ~10 lines, 0 symbols)** → just `read`; `module_report`'s
+  metadata overhead exceeds the file.
+- **Looking for a textual pattern across files** → use `grep` (not `module_report`).
+- **Need exact LSP cross-file resolution** → use `lsp_navigation({operation: "definition"})`.
+
+**MCP mirror:** `pilens_module_report` and `pilens_read_symbol` in the
+pi-lens MCP server expose the same shape to Claude Code / any MCP client.
 
 ### Actionable Warnings
 
@@ -209,6 +248,44 @@ metadata:
     defect_class: injection
     confidence: high
 ```
+
+### MCP Server (Experimental)
+
+pi-lens ships an MCP (Model Context Protocol) server so Claude Code — or any MCP client — can drive the same diagnostic + read-substitute surface that the pi agent tools expose, without running pi. The server is a **second host adapter** alongside the pi extension; both call into the same `clients/lens-engine.ts` seam so a single implementation powers both surfaces.
+
+**Why a second host:** the pi extension's tools are registered via the host SDK and run on pi's event loop. Claude Code lives in a different process with no SDK access. The MCP server sits in that gap, speaking JSON-RPC over stdio (or a warm Unix socket / Windows named pipe side-channel for the Claude Code PostToolUse hook). It's the easiest way to live-test, debug, and dogfood pi-lens — including running a **review loop** where Claude commits to pi-lens and re-measures.
+
+**16 tools, grouped by lifecycle layer** (the same three layers the pi agent hooks use):
+
+| Layer | MCP tools | What they expose |
+|---|---|---|
+| **Per-edit** | `pilens_analyze`, `pilens_lsp_diagnostics`, `pilens_lsp_navigation`, `pilens_ast_grep_search`, `pilens_ast_grep_replace`, `pilens_module_report`, `pilens_read_symbol` | The fast pipeline (format → autofix → LSP diagnostics → parallel runners) plus the structured read-substitute pair. `analyze` accepts `mode: warm \| fresh` — `warm` reuses the server's in-process LSP, `fresh` forks a worker that loads freshly-built code from disk so the result reflects the latest commit. |
+| **Per-turn** | `pilens_turn_end` | Drives the **real** `handleTurnEnd` (knip incremental, jscpd delta, dep-circular, cascade, tests, actionable+code-quality warnings) — not a re-implementation. Caller-supplied edited files are auto-registered into turn-state via `addModifiedRange`. |
+| **Per-session** | `pilens_session_start` | Drives the **real** `handleSessionStart` — full jscpd/knip/type-coverage/dep/govulncheck scans + complexity baselines + LSP warm + the **error-debt baseline** (tests/build pass-state) that powers green→red regression detection. |
+| **Project / observability** | `pilens_project_scan`, `pilens_diagnostics`, `pilens_health`, `pilens_latency`, `pilens_symbol_search`, `pilens_impact` | Cheap project-wide scans, cached diagnostic state, latency telemetry, ranked identifier search (BM25 over the persisted word index), transitive review-graph blast radius. |
+| **Lifecycle / loop** | `pilens_rebuild` | Runs `npm run build:dist` so `pilens_analyze mode=fresh` reflects the latest commit. Makes the review loop self-contained: commit → `pilens_rebuild` → `pilens_analyze mode=fresh` → `pilens_latency`. |
+
+**Honest limits** (live-tested, documented in `docs/mcp.md`):
+
+- **`fresh` always cold-spawns the LSP**, so it systematically under-reports LSP diagnostics on large TS projects (`typescript-language-server` must index the whole project first). The result carries an explicit `lsp` honesty signal (`ran` / `status` / `diagnosticCount` / `durationMs`) so a cold `0` is never read as "clean" — use `warm` for LSP-complete reviews.
+- **`pilens_analyze` by default surfaces everything** (`blockingOnly=false`); the per-edit fast path in the pi extension is still blocking-first.
+- **The MCP server keeps the LSP warm across calls** within its process; `fresh` is for benchmarking a real cold spawn, not for steady-state usage.
+
+**Transport is hand-rolled JSON-RPC** over stdio — zero new dependencies. The `npm install --omit=dev` constraint means even an "optional" SDK weighs down every pi-lens install; ~200 LOC of plain JSON-RPC beats a dep for a tools-only server. A warm Unix-socket / Windows-named-pipe side-channel (`clients/mcp/ipc.ts`) lets the `pi-lens-analyze` PostToolUse hook reuse the server's warm LSP without touching the stdio transport.
+
+**Install / register in Claude Code:**
+
+```bash
+# Build the bundled dist (or `npm run build` for the in-place dev build)
+npm run build:dist
+
+# User-scope registration with auto session-start on connect
+claude mcp add --scope user pi-lens \
+  -e PI_LENS_MCP_AUTO_SESSION=1 \
+  -- node <repo>/dist/mcp/server.js
+```
+
+The full design + tier-by-tier progress (and known limits) lives in [`docs/mcp.md`](docs/mcp.md). Status: **experimental** — the foundation is solid (transport, warm LSP, lifecycle handlers wired), but the surface is still maturing. Use the pi extension for production agent work; reach for the MCP server for debugging, dogfooding, and direct Claude Code access.
 
 ## Run
 
@@ -311,24 +388,7 @@ Per-rule threshold overrides. Currently honored:
 
 ## Environment Variables
 
-- `PILENS_DATA_DIR` — redirect per-project state (scanner caches,
-  turn-state.json) to a base directory outside the project. By default
-  pi-lens writes to `~/.pi-lens/projects/<sanitized-cwd-slug>/`. The one
-  exception is a legacy `<cwd>/.pi-lens/` directory: if that already exists
-  in the project, pi-lens continues to use it. Set `PILENS_DATA_DIR` to
-  permanently override both cases and write to
-  `<PILENS_DATA_DIR>/<sanitized-cwd-slug>/` instead. Particularly useful
-  when running pi with a local model server (llama.cpp, Ollama, etc.) that
-  monitors the project directory — cache-file churn inside the workspace can
-  disrupt the model's context scoring. Tool binaries always live in
-  `~/.pi-lens/bin/` regardless.
-- `PI_LENS_STARTUP_MODE` — `full` | `minimal` | `quick`. Override the
-  auto-selected startup path. One-shot `pi --print` sessions auto-use `quick`
-  to reduce latency.
-- `PI_LENS_NO_CONTEXT_INJECTION` — set to `1` to disable automatic context
-  injection (equivalent to `--no-lens-context` / `contextInjection.enabled:
-  false`). Tools, LSP, read-guard, and formatting stay active; findings are
-  still cached for `lens_diagnostics` and `/lens-health`.
+See [`docs/environment-variables.md`](docs/environment-variables.md) for the full reference. The most common ones: `PILENS_DATA_DIR` (redirect per-project state outside the workspace), `PI_LENS_STARTUP_MODE` (`full` | `minimal` | `quick`), `PI_LENS_NO_CONTEXT_INJECTION=1` (disable the turn-end advisory without disabling diagnostics).
 
 ## Key Commands
 

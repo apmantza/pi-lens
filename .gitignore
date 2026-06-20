@@ -51,17 +51,13 @@ migrate-*.js
 !AGENTS.md
 !README.md
 !CHANGELOG.md
-!docs/LSP_CONFIG.md
-!docs/COMPLEXITY_METRICS.md
-!docs/ARCHITECTURE.md
-!docs/EXCLUSIONS.md
-!docs/AST_GREP_RULES.md
-!docs/TREE_SITTER_RULES.md
-!docs/WRITING_NEW_AST_GREP_RULES.md
 !docs/custom-rules.md
-!docs/lsp-latency-benchmark.md
 !docs/lsp-capability-matrix.md
+!docs/lsp-latency-benchmark.md
 !docs/servercapabilities.md
+!docs/mcp.md
+!docs/module-report-read-symbol.md
+!docs/environment-variables.md
 !skills/**/*.md
 
 # Local-only docs (not in git or npm)
