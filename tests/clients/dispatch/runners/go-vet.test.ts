@@ -106,4 +106,34 @@ describe("go-vet runner", () => {
 		expect(res.status).toBe("succeeded");
 		expect(res.diagnostics).toHaveLength(0);
 	});
+
+	// go emits the path in different FORMS depending on the target: a leading
+	// `./` for the module-root package, sometimes an absolute path. A raw-string
+	// match would drop the edited file's own diagnostics; resolving against cwd
+	// keeps them.
+	it("attributes a './'-prefixed module-root path to the edited file", async () => {
+		safeSpawnAsync.mockResolvedValue(
+			goResult(
+				'./main.go:7:2: fmt.Printf format %d has arg "s" of wrong type string\n',
+				1,
+			),
+		);
+		const res = await runner.default.run(makeCtx("/m/main.go", "/m"));
+		expect(res.status).toBe("failed");
+		expect(res.diagnostics).toHaveLength(1);
+		expect(res.diagnostics[0].filePath).toBe("/m/main.go");
+	});
+
+	it("attributes an absolute output path to the edited file", async () => {
+		safeSpawnAsync.mockResolvedValue(
+			goResult(
+				'/m/sub/b.go:4:5: fmt.Printf format %d has arg "s" of wrong type string\n',
+				1,
+			),
+		);
+		const res = await runner.default.run(makeCtx("/m/sub/b.go", "/m"));
+		expect(res.status).toBe("failed");
+		expect(res.diagnostics).toHaveLength(1);
+		expect(res.diagnostics[0].line).toBe(4);
+	});
 });

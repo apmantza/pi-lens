@@ -4,7 +4,7 @@
  * Runs `go vet` for Go files to catch common mistakes.
  */
 
-import { relative, sep, posix } from "node:path";
+import { relative, resolve, sep, posix } from "node:path";
 
 import { GoClient } from "../../go-client.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
@@ -43,9 +43,14 @@ const goVetRunner: RunnerDefinition = {
 		// package from there.
 		const cwd = ctx.cwd || process.cwd();
 		const fileRel = relative(cwd, ctx.filePath).split(sep).join(posix.sep);
-		const pkgPath = fileRel.includes("/")
-			? "./" + fileRel.slice(0, fileRel.lastIndexOf("/"))
-			: ".";
+		const pkgPath = fileRel.startsWith("../")
+			? // File isn't under ctx.cwd (unexpected — ctx.cwd is the go.mod root).
+				// Vet the root package as a safe fallback rather than emit `./../x`;
+				// the filename filter below still prevents mis-attribution.
+				"."
+			: fileRel.includes("/")
+				? "./" + fileRel.slice(0, fileRel.lastIndexOf("/"))
+				: ".";
 
 		const result = await safeSpawnAsync(goExe, ["vet", pkgPath], {
 			timeout: 30000,
@@ -60,13 +65,16 @@ const goVetRunner: RunnerDefinition = {
 
 		// createLineParser ignores the output filename and attributes every
 		// diagnostic to ctx.filePath, so keep only this file's lines — package
-		// vetting reports siblings as module-root-relative paths (e.g. `sub/a.go`,
-		// or a bare basename for the module-root package).
+		// vetting reports siblings too. Resolve each output path against the vet
+		// cwd before comparing, so go's path FORM (a leading `./` for the
+		// module-root package, an absolute path, `.` segments) can't cause the
+		// edited file's OWN diagnostics to be silently dropped.
+		const absTarget = resolve(ctx.filePath);
 		const relevant = raw
 			.split("\n")
 			.filter((line) => {
 				const m = line.match(/^(.+?):(\d+):(\d+):\s*(.+)/);
-				return m != null && m[1].replace(/\\/g, "/") === fileRel;
+				return m != null && resolve(cwd, m[1].trim()) === absTarget;
 			})
 			.join("\n");
 
