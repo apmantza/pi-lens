@@ -113,6 +113,19 @@ export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
 			expectSemanticSecondPush: false,
 			reopenOnResync: false,
 		},
+		// marksman (Markdown LSP, #274). Push-based; native binary so the per-file
+		// parse is fast, but its value is CROSS-file (broken intra-repo links,
+		// missing anchors/heading refs) which needs the workspace index — so the
+		// first push after didOpen can be empty before indexing completes. Don't
+		// seed it (like opengrep/rust-analyzer); a modest 1500ms aggregate covers
+		// warm edits, and any late cross-file finding surfaces on the next touch.
+		marksman: {
+			seedFirstPush: false,
+			pullRetryBudgetMs: 0,
+			debounceMs: 150,
+			aggregateWaitMs: 1500,
+			expectSemanticSecondPush: false,
+		},
 	};
 
 /** Fallback for unknown servers. Conservative defaults. */

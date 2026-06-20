@@ -16,7 +16,8 @@ describe("language-policy", () => {
 		expect(kinds).toContain("elixir");
 		expect(kinds).toContain("swift");
 		expect(kinds).toContain("zig");
-		expect(kinds).not.toContain("markdown");
+		// markdown gained a primary LSP (marksman, #274).
+		expect(kinds).toContain("markdown");
 		expect(kinds).not.toContain("sql");
 	});
 
@@ -142,5 +143,16 @@ describe("language-policy", () => {
 		const zig = getPrimaryDispatchGroup("zig", true);
 		expect(zig?.mode).toBe("all");
 		expect(zig?.runnerIds).toEqual(["lsp", "zig-check"]);
+	});
+
+	// #274: markdown's primary group now runs the LSP (marksman) ALONGSIDE the
+	// prose runners (mode "all"), and drops only the lsp when LSP is disabled.
+	it("runs the markdown LSP alongside spellcheck/vale, and drops it when lsp is off", () => {
+		const md = getPrimaryDispatchGroup("markdown", true);
+		expect(md?.mode).toBe("all");
+		expect(md?.runnerIds).toEqual(["lsp", "spellcheck", "vale"]);
+
+		const mdNoLsp = getPrimaryDispatchGroup("markdown", false);
+		expect(mdNoLsp?.runnerIds).toEqual(["spellcheck", "vale"]);
 	});
 });

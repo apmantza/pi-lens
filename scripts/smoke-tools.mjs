@@ -339,6 +339,16 @@ const LSP_FIXTURES = [
 		tools: ["terraform-ls"],
 	},
 	{
+		// #274: marksman ships a bare per-platform binary (github single-binary).
+		// The fixture's bad.md carries a broken intra-repo link so a provisioned run
+		// also exercises marksman's cross-file check, not just the handshake.
+		lang: "markdown",
+		dir: "tests/fixtures/tool-smoke/markdown",
+		file: "bad.md",
+		serverHint: "marksman",
+		tools: ["marksman"],
+	},
+	{
 		lang: "prisma",
 		dir: "tests/fixtures/tool-smoke/prisma",
 		file: "schema.prisma",

@@ -195,6 +195,36 @@ describe("GitHub release asset selection", () => {
 			expect(resolveGitHubAsset("zls", platform, arch)).toBe(expected);
 		});
 	});
+
+	// #274: marksman ships BARE (uncompressed) per-platform binaries. macOS is a
+	// universal binary (same asset for x64/arm64); Windows ships only x64.
+	describe("marksman asset patterns", () => {
+		it.each([
+			["linux", "x64", "marksman-linux-x64"],
+			["linux", "arm64", "marksman-linux-arm64"],
+			["darwin", "x64", "marksman-macos"],
+			["darwin", "arm64", "marksman-macos"],
+			["win32", "x64", "marksman.exe"],
+			["win32", "arm64", "marksman.exe"],
+		] as const)("%s/%s → %s", async (platform, arch, expected) => {
+			const { resolveGitHubAsset } = await import(
+				"../../../clients/installer/index.ts"
+			);
+			expect(resolveGitHubAsset("marksman", platform, arch)).toBe(expected);
+		});
+
+		it("installs as marksman.exe on Windows (bare binary, no archive)", async () => {
+			const { resolveGitHubInstalledBinaryName } = await import(
+				"../../../clients/installer/index.ts"
+			);
+			expect(
+				resolveGitHubInstalledBinaryName("marksman", "win32", "marksman.exe"),
+			).toBe("marksman.exe");
+			expect(
+				resolveGitHubInstalledBinaryName("marksman", "linux", "marksman-linux-x64"),
+			).toBe("marksman");
+		});
+	});
 });
 
 describe("getToolEnvironment PATH", () => {

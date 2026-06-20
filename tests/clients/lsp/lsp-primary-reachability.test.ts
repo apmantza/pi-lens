@@ -80,6 +80,11 @@ describe("LSP primary reachability", () => {
 		).toEqual([]);
 	});
 
+	it("marksman is the primary markdown server for .md and .mdx (#274)", () => {
+		expect(defaultPrimary(".md")).toBe("marksman");
+		expect(defaultPrimary(".mdx")).toBe("marksman");
+	});
+
 	it("each declared alternate is wired behind its default and is the next pick when predecessors drop out", () => {
 		for (const { id, defaultId, ext } of ALTERNATES) {
 			const chain = primaryCandidates(ext).map((s) => s.id);

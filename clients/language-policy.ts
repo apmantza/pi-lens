@@ -39,7 +39,7 @@ export const LANGUAGE_POLICY: Record<FileKind, LanguagePolicy> = {
 	fish: { lspCapable: true },
 	shell: { lspCapable: true, startup: { defaults: ["shellcheck"] } },
 	json: { lspCapable: true },
-	markdown: { lspCapable: false },
+	markdown: { lspCapable: true },
 	css: { lspCapable: true },
 	yaml: {
 		lspCapable: true,
@@ -125,8 +125,10 @@ const PRIMARY_DISPATCH_GROUPS: Partial<Record<FileKind, RunnerGroup>> = {
 	},
 	json: { mode: "fallback", runnerIds: ["lsp"], filterKinds: ["json"] },
 	markdown: {
-		mode: "fallback",
-		runnerIds: ["spellcheck", "vale"],
+		// marksman (primary LSP) adds cross-file checks the cold spellcheck/vale
+		// runners can't see; all three run so prose + structural coverage coexist.
+		mode: "all",
+		runnerIds: ["lsp", "spellcheck", "vale"],
 		filterKinds: ["markdown"],
 	},
 	css: {

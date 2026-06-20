@@ -891,6 +891,33 @@ export const TOOLS: ToolDefinition[] = [
 			binaryInArchive: "gleam",
 		},
 	},
+	{
+		// marksman ships a single BARE (uncompressed) binary per platform on GitHub
+		// releases — no archive, so it lands via the bare-binary branch of
+		// installGitHubTool (the `else` that writes the asset directly, like shfmt).
+		// Used as managedToolId by MarksmanServer; LSP entrypoint is `marksman
+		// server` (stdio). macOS ships a universal binary; Windows has only x64
+		// (runs on arm64 via emulation) — so all six platform/arch combos resolve.
+		id: "marksman",
+		name: "Marksman",
+		checkCommand: "marksman",
+		checkArgs: ["--version"],
+		installStrategy: "github",
+		binaryName: "marksman",
+		github: {
+			repo: "artempyanykh/marksman",
+			assetMatch: (platform, arch) => {
+				if (platform === "linux")
+					return arch === "arm64"
+						? "marksman-linux-arm64"
+						: "marksman-linux-x64";
+				if (platform === "darwin") return "marksman-macos";
+				if (platform === "win32") return "marksman.exe";
+				return undefined;
+			},
+			// bare binary — no binaryInArchive
+		},
+	},
 ];
 
 const ensureInFlight = new Map<string, Promise<string | undefined>>();
@@ -2835,6 +2862,7 @@ export const GITHUB_TOOLS = [
 	"deno",
 	"clojure-lsp",
 	"gleam",
+	"marksman",
 ] as const;
 export type GitHubToolId = (typeof GITHUB_TOOLS)[number];
 

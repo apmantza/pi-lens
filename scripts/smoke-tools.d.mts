@@ -14,6 +14,13 @@ export interface LspFixture {
 	file: string;
 	serverHint: string;
 	tools?: string[];
+	/** Auxiliary (diagnostic-only) servers attached alongside the primary. */
+	auxiliaryServerIds?: string[];
+	auxiliarySourceMatch?: string;
+	gitInit?: boolean;
+	clean?: boolean;
+	lombokJar?: boolean;
+	expectNoMessageMatch?: string;
 }
 export interface FormatFixture {
 	lang: string;

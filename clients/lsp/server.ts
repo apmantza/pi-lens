@@ -1667,6 +1667,29 @@ export const GleamServer: LSPServerInfo = {
 	},
 };
 
+export const MarksmanServer: LSPServerInfo = {
+	id: "marksman",
+	name: "Marksman",
+	extensions: KIND_EXTENSIONS["markdown"],
+	// Index at the workspace root so cross-file checks (broken intra-repo links,
+	// missing/renamed anchors, heading refs) see the whole tree; fall back to the
+	// file's directory when there's no project marker.
+	root: RootWithFallback(createRootDetector([".marksman.toml", ".git"])),
+	spawn(root, options) {
+		// Prefer a PATH `marksman`; fall back to the managed GitHub-release binary.
+		// `marksman server` is the stdio LSP entrypoint either way.
+		return resolveAndLaunch(
+			{
+				candidates: ["marksman"],
+				args: ["server"],
+				cwd: root,
+				managedToolId: "marksman",
+			},
+			options?.allowInstall,
+		);
+	},
+};
+
 export const OCamlServer = createInteractiveServer({
 	id: "ocaml",
 	name: "ocamllsp",
@@ -2189,6 +2212,7 @@ export const LSP_SERVERS: LSPServerInfo[] = [
 	HaskellServer,
 	ElixirServer,
 	GleamServer,
+	MarksmanServer,
 	OCamlServer,
 	ClojureServer,
 	TerraformServer,
