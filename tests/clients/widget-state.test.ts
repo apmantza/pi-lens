@@ -4,7 +4,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
 	__testing,
 	clearWidgetState,
+	getFailedLspServerIds,
 	getFileDiagnosticSummaries,
+	getSessionLanguages,
 	recordDiagnostics,
 	recordFormatter,
 	recordLsp,
@@ -21,6 +23,29 @@ const theme = {
 
 afterEach(() => {
 	clearWidgetState();
+});
+
+describe("LSP failure accessors (#170)", () => {
+	it("getFailedLspServerIds returns only failed records, deduped by serverId", () => {
+		recordLsp("ruby", "/a", "spawn_failed");
+		recordLsp("ruby", "/b", "spawn_failed"); // same server, two roots → one id
+		recordLsp("python", "/a", "spawn_success"); // ready, not failed
+		recordLsp("typescript", "/a", "spawn_start"); // spawning, not failed
+		expect(getFailedLspServerIds()).toEqual(["ruby"]);
+	});
+
+	it("a successful respawn clears the failed state for that key", () => {
+		recordLsp("python", "/a", "spawn_failed");
+		expect(getFailedLspServerIds()).toEqual(["python"]);
+		recordLsp("python", "/a", "spawn_success"); // same key flips failed → ready
+		expect(getFailedLspServerIds()).toEqual([]);
+	});
+
+	it("getSessionLanguages reflects the in-use kinds", () => {
+		expect(getSessionLanguages()).toEqual([]);
+		setSessionLanguages(["python", "ruby"]);
+		expect(getSessionLanguages()).toEqual(["python", "ruby"]);
+	});
 });
 
 describe("getFileDiagnosticSummaries", () => {

@@ -155,6 +155,27 @@ export function setSessionLanguages(langs: string[]): void {
 	requestRender();
 }
 
+/** File-kinds detected in use this session (#170 staleness scope). */
+export function getSessionLanguages(): string[] {
+	return [...sessionLanguages];
+}
+
+/**
+ * Distinct serverIds with a failed spawn record (#170). Raw — the per-language
+ * coverage check (a live sibling) and the in-use staleness filter live in
+ * `selectLspStatus`, which joins this against the alive set and session kinds.
+ */
+export function getFailedLspServerIds(): string[] {
+	const ids: string[] = [];
+	const seen = new Set<string>();
+	for (const rec of lspServers.values()) {
+		if (rec.status !== "failed" || seen.has(rec.serverId)) continue;
+		seen.add(rec.serverId);
+		ids.push(rec.serverId);
+	}
+	return ids;
+}
+
 export function recordFormatter(
 	filePath: string,
 	formatter: string,

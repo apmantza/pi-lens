@@ -10,11 +10,14 @@ import { resolvePackagePath } from "./clients/package-root.js";
 import {
 	clearWidgetState,
 	exportWidgetState,
+	getFailedLspServerIds,
+	getSessionLanguages,
 	importWidgetState,
 	type PersistedWidgetState,
 	renderWidget,
 	setRenderCallback,
 } from "./clients/widget-state.js";
+import { selectLspStatus } from "./clients/lsp-status.js";
 import {
 	dropStaleFiles,
 	loadSessionState,
@@ -416,18 +419,31 @@ export default function (pi: ExtensionAPI) {
 		},
 	) {
 		try {
-			const serverIds = getLSPService().getAliveServerIds();
-			if (serverIds.length > 0) {
-				setStatus(
-					"pi-lens-lsp",
-					theme.fg("success", `LSP Active: ${serverIds.join(", ")}`),
-				);
-			} else {
-				// Inactive is a passive state (no server running for this file, or the
-				// idle timer released them) — not a fault. Render it neutral/grey, not
-				// red. Surfacing genuine LSP *failures* in red is tracked separately.
-				setStatus("pi-lens-lsp", theme.fg("dim", "LSP Inactive"));
+			// Active and Failed coexist (#170): show the working servers in green
+			// AND any language whose servers all failed in red, side by side. A
+			// failed server is suppressed when a live sibling covers its language
+			// (alt-LSP fallback) or its kind is no longer in use this session.
+			const { activeIds, failedIds } = selectLspStatus(
+				getLSPService().getAliveServerIds(),
+				getFailedLspServerIds(),
+				getSessionLanguages(),
+			);
+			const parts: string[] = [];
+			if (activeIds.length > 0) {
+				parts.push(theme.fg("success", `LSP Active: ${activeIds.join(", ")}`));
 			}
+			if (failedIds.length > 0) {
+				parts.push(theme.fg("error", `LSP Failed: ${failedIds.join(", ")}`));
+			}
+			// Inactive is a passive state (no server running for this file, or the
+			// idle timer released them) — not a fault. Render it neutral/grey, not
+			// red, only when there is nothing else to show.
+			setStatus(
+				"pi-lens-lsp",
+				parts.length > 0
+					? parts.join(" · ")
+					: theme.fg("dim", "LSP Inactive"),
+			);
 		} catch {
 			// Theme may not be fully initialized during early session startup.
 			// Skip the status update rather than crashing the event handler.
