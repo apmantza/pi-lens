@@ -1,0 +1,271 @@
+id: file-access-before-action-cpp
+language: cpp
+severity: warning
+message: >-
+  A check is done with `access` and then the file is later used. There is no guarantee that the status of the file has
+  not changed since the call to `access` which may allow attackers to bypass permission checks.
+note: |-
+  [CWE-367]: Time-of-check Time-of-use (TOCTOU) Race Condition [REFERENCES]
+      - https://wiki.sei.cmu.edu/confluence/display/c/FIO45-C.+Avoid+TOCTOU+race+conditions+while+accessing+files
+ast-grep-essentials: true
+utils:
+  PATTERN_1_identifier:
+    kind: identifier
+    regex: ^(fopen|freopen|remove|rename|access|open|stat|lstat|unlink|mkdir|rmdir|chdir)$
+    all:
+      - precedes:
+          kind: argument_list
+          has:
+            pattern: $SRC
+      - inside:
+          kind: call_expression
+          not:
+            inside:
+              stopBy: end
+              kind: condition_clause
+          inside:
+            stopBy: end
+            kind: compound_statement
+            inside:
+              kind: if_statement
+              has:
+                kind: condition_clause
+                has:
+                  stopBy: end
+                  any:
+                    - kind: binary_expression
+                      has:
+                        stopBy: end
+                        kind: parenthesized_expression
+                        has:
+                          kind: binary_expression
+                          all:
+                            - has:
+                                kind: call_expression
+                                nthChild: 1
+                                all:
+                                  - has:
+                                      kind: identifier
+                                      regex: ^(access|faccessat|faccessat2)$
+                                      precedes:
+                                        kind: argument_list
+                                        all:
+                                          - has:
+                                              nthChild: 1
+                                              pattern: $SRC
+                                          - has:
+                                              kind: identifier
+                                              nthChild: 2
+                                              regex: ^(F_OK|R_OK|W_OK|X_OK)$
+                            - has:
+                                kind: number_literal
+                                regex: ^(0)$
+                                follows:
+                                  regex: ^==$
+                    - kind: binary_expression
+                      all:
+                        - has:
+                            nthChild: 1
+                            kind: call_expression
+                            all:
+                              - has:
+                                  nthChild: 1
+                                  kind: identifier
+                                  regex: ^(access|faccessat|faccessat2)$
+                              - has:
+                                  nthChild: 2
+                                  kind: argument_list
+                                  all:
+                                    - has:
+                                        nthChild: 1
+                                        pattern: $SRC
+                                    - has:
+                                        nthChild: 2
+                                        kind: identifier
+                                        regex: ^(F_OK|R_OK|W_OK|X_OK)$
+                        - has:
+                            nthChild: 2
+                            kind: number_literal
+                            regex: ^(0)$
+                            follows:
+                              regex: ^==$
+  PATTERN_2_qualified_identifier:
+    kind: qualified_identifier
+    any:
+      - regex: ^(folly::readFile|folly::writeFile|folly::writeFileAtomic|folly::writeFileAtomicNoThrow|folly::File)$
+      - regex: >-
+          ^(boost::)?(filesystem::file_size|filesystem::create_directory|filesystem::create_directories|filesystem::remove|filesystem::remove_all|filesystem::rename|filesystem::copy_file|filesystem::copy|filesystem::copy_directory|filesystem::resize_file|filesystem::last_write_time|filesystem::permissions|filesystem::symlink_status|filesystem::create_symlink|filesystem::create_hard_link|filesystem::read_symlink)$
+    all:
+      - precedes:
+          kind: argument_list
+          has:
+            pattern: $SRC
+      - inside:
+          kind: call_expression
+          not:
+            inside:
+              stopBy: end
+              kind: condition_clause
+          inside:
+            stopBy: end
+            kind: compound_statement
+            inside:
+              kind: if_statement
+              has:
+                kind: condition_clause
+                has:
+                  stopBy: end
+                  any:
+                    - kind: binary_expression
+                      has:
+                        stopBy: end
+                        kind: parenthesized_expression
+                        has:
+                          kind: binary_expression
+                          all:
+                            - has:
+                                kind: call_expression
+                                nthChild: 1
+                                all:
+                                  - has:
+                                      kind: identifier
+                                      regex: ^(access|faccessat|faccessat2)$
+                                      precedes:
+                                        kind: argument_list
+                                        all:
+                                          - has:
+                                              nthChild: 1
+                                              pattern: $SRC
+                                          - has:
+                                              kind: identifier
+                                              nthChild: 2
+                                              regex: ^(F_OK|R_OK|W_OK|X_OK)$
+                            - has:
+                                kind: number_literal
+                                regex: ^(0)$
+                                follows:
+                                  regex: ^==$
+                    - kind: binary_expression
+                      all:
+                        - has:
+                            nthChild: 1
+                            kind: call_expression
+                            all:
+                              - has:
+                                  nthChild: 1
+                                  kind: identifier
+                                  regex: ^(access|faccessat|faccessat2)$
+                              - has:
+                                  nthChild: 2
+                                  kind: argument_list
+                                  all:
+                                    - has:
+                                        nthChild: 1
+                                        pattern: $SRC
+                                    - has:
+                                        nthChild: 2
+                                        kind: identifier
+                                        regex: ^(F_OK|R_OK|W_OK|X_OK)$
+                        - has:
+                            nthChild: 2
+                            kind: number_literal
+                            regex: ^(0)$
+                            follows:
+                              regex: ^==$
+  identifier_and_qualified_identifier:
+    any:
+      - kind: identifier
+        regex: ^(fopen|freopen|remove|rename|access|open|stat|lstat|unlink|mkdir|rmdir|chdir)$
+      - kind: qualified_identifier
+        any:
+          - regex: ^(folly::readFile|folly::writeFile|folly::writeFileAtomic|folly::writeFileAtomicNoThrow|folly::File)$
+          - regex: >-
+              ^(boost::)?(filesystem::file_size|filesystem::create_directory|filesystem::create_directories|filesystem::remove|filesystem::remove_all|filesystem::rename|filesystem::copy_file|filesystem::copy|filesystem::copy_directory|filesystem::resize_file|filesystem::last_write_time|filesystem::permissions|filesystem::symlink_status|filesystem::create_symlink|filesystem::create_hard_link|filesystem::read_symlink)$
+  PATTERN_3_field_expression:
+    kind: field_expression
+    has:
+      nthChild: 1
+      stopBy: end
+      matches: identifier_and_qualified_identifier
+    all:
+      - precedes:
+          kind: argument_list
+          has:
+            pattern: $SRC
+      - inside:
+          kind: call_expression
+          not:
+            inside:
+              stopBy: end
+              kind: condition_clause
+          inside:
+            stopBy: end
+            kind: compound_statement
+            inside:
+              kind: if_statement
+              has:
+                kind: condition_clause
+                has:
+                  stopBy: end
+                  any:
+                    - kind: binary_expression
+                      has:
+                        stopBy: end
+                        kind: parenthesized_expression
+                        has:
+                          kind: binary_expression
+                          all:
+                            - has:
+                                kind: call_expression
+                                nthChild: 1
+                                all:
+                                  - has:
+                                      kind: identifier
+                                      regex: ^(access|faccessat|faccessat2)$
+                                      precedes:
+                                        kind: argument_list
+                                        all:
+                                          - has:
+                                              nthChild: 1
+                                              pattern: $SRC
+                                          - has:
+                                              kind: identifier
+                                              nthChild: 2
+                                              regex: ^(F_OK|R_OK|W_OK|X_OK)$
+                            - has:
+                                kind: number_literal
+                                regex: ^(0)$
+                                follows:
+                                  regex: ^==$
+                    - kind: binary_expression
+                      all:
+                        - has:
+                            nthChild: 1
+                            kind: call_expression
+                            all:
+                              - has:
+                                  nthChild: 1
+                                  kind: identifier
+                                  regex: ^(access|faccessat|faccessat2)$
+                              - has:
+                                  nthChild: 2
+                                  kind: argument_list
+                                  all:
+                                    - has:
+                                        nthChild: 1
+                                        pattern: $SRC
+                                    - has:
+                                        nthChild: 2
+                                        kind: identifier
+                                        regex: ^(F_OK|R_OK|W_OK|X_OK)$
+                        - has:
+                            nthChild: 2
+                            kind: number_literal
+                            regex: ^(0)$
+                            follows:
+                              regex: ^==$
+rule:
+  any:
+    - matches: PATTERN_1_identifier
+    - matches: PATTERN_2_qualified_identifier
+    - matches: PATTERN_3_field_expression

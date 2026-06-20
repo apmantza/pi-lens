@@ -1,0 +1,21 @@
+id: cookie-missing-httponly-java
+severity: warning
+language: java
+message: >-
+  A cookie was detected without setting the 'HttpOnly' flag. The 'HttpOnly' flag for cookies instructs the browser to
+  forbid client-side scripts from reading the cookie. Set the 'HttpOnly' flag by calling 'cookie.setHttpOnly(true);
+note: |-
+  [CWE-1004] Sensitive Cookie Without 'HttpOnly' Flag. [REFERENCES]
+      - https://owasp.org/www-community/HttpOnly
+ast-grep-essentials: true
+rule:
+  pattern: $RESPONSE.addCookie($COOKIE);
+  all:
+    - not:
+        follows:
+          stopBy: end
+          pattern: $COOKIE.setValue("");
+    - not:
+        follows:
+          stopBy: end
+          pattern: $COOKIE.setHttpOnly($$$);

@@ -1,0 +1,56 @@
+id: weak-ssl-context-java
+language: java
+severity: warning
+message: |-
+  'An insecure SSL context was detected. TLS versions 1.0, 1.1, and all
+      SSL versions are considered weak encryption and are deprecated. Use
+      SSLContext.getInstance("TLSv1.2") for the best security.'
+note: |-
+  [CWE-326] Inadequate Encryption Strength [REFERENCES]
+      - https://tools.ietf.org/html/rfc7568
+      - https://tools.ietf.org/id/draft-ietf-tls-oldversions-deprecate-02.html
+ast-grep-essentials: true
+rule:
+  kind: method_invocation
+  not:
+    has:
+      stopBy: end
+      kind: method_invocation
+  all:
+    - has:
+        kind: identifier
+        field: object
+        nthChild: 1
+        regex: ^SSLContext$
+    - has:
+        kind: identifier
+        field: name
+        nthChild: 2
+        regex: ^getInstance$
+    - has:
+        kind: argument_list
+        field: arguments
+        nthChild: 3
+        has:
+          nthChild:
+            position: 1
+            ofRule:
+              kind: string_literal
+              any:
+                - not:
+                    has:
+                      kind: string_fragment
+                - has:
+                    kind: string_fragment
+                    all:
+                      - not:
+                          regex: ^TLSv1.2$
+                      - not:
+                          regex: ^TLSv1.3$
+        not:
+          has:
+            nthChild:
+              position: 2
+              ofRule:
+                not:
+                  kind: line_comment

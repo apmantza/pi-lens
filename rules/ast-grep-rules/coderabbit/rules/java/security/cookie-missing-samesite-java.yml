@@ -1,0 +1,64 @@
+id: cookie-missing-samesite-java
+severity: warning
+language: java
+message: >-
+  The application does not appear to verify inbound requests which can lead to a Cross-site request forgery (CSRF)
+  vulnerability. If the application uses cookie-based authentication, an attacker can trick users into sending
+  authenticated HTTP requests without their knowledge from any arbitrary domain they visit. To prevent this
+  vulnerability start by identifying if the framework or library leveraged has built-in features or offers plugins for
+  CSRF protection. CSRF tokens should be unique and securely random. The `Synchronizer Token` or `Double Submit Cookie`
+  patterns with defense-in-depth mechanisms such as the `sameSite` cookie flag can help prevent CSRF. For more
+  information, see: [Cross-site request forgery
+  prevention](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Req\ uest_Forgery_Prevention_Cheat_Sheet.html).
+note: |-
+  [CWE-352] Cross-Site Request Forgery (CSRF). [REFERENCES]
+      - https://stackoverflow.com/questions/42717210/samesite-cookie-in-java-application
+ast-grep-essentials: true
+rule:
+  any:
+    - pattern: $RESP.setHeader("Set-Cookie", $T);
+      inside:
+        stopBy: end
+        kind: block
+        follows:
+          stopBy: end
+          kind: formal_parameters
+          has:
+            stopBy: end
+            kind: formal_parameter
+            all:
+              - has:
+                  stopBy: end
+                  kind: type_identifier
+                  regex: ^HttpServletResponse$
+              - has:
+                  stopBy: neighbor
+                  kind: identifier
+    - pattern: $RESP.addCookie($$$);
+      not:
+        follows:
+          stopBy: end
+          kind: expression_statement
+          pattern: $RESP.setHeader("Set-Cookie", $T);
+          inside:
+            stopBy: end
+            kind: block
+            follows:
+              stopBy: end
+              kind: formal_parameters
+              has:
+                stopBy: end
+                kind: formal_parameter
+                all:
+                  - has:
+                      stopBy: end
+                      kind: type_identifier
+                      regex: ^HttpServletResponse$
+                  - has:
+                      stopBy: neighbor
+                      kind: identifier
+    - pattern: $RESP.setHeader("Set-Cookie");
+constraints:
+  T:
+    not:
+      regex: .*SameSite=.*

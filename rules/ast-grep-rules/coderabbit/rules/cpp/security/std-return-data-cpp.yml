@@ -1,0 +1,93 @@
+id: std-return-data-cpp
+language: cpp
+severity: warning
+message: >-
+  $FUNC` returns a pointer to the memory owned by `$VAR`. This pointer is invalid after `$VAR` goes out of scope, which
+  can trigger a use after free.
+note: |-
+  [CWE-416: Use After Free. [REFERENCES]
+      - https://wiki.sei.cmu.edu/confluence/display/c/DCL30-C.+Declare+objects+with+appropriate+storage+durations
+ast-grep-essentials: true
+rule:
+  kind: return_statement
+  pattern: return $VAR.data();
+  all:
+    - inside:
+        stopBy: end
+        kind: function_definition
+        all:
+          - has:
+              nthChild: 1
+              pattern: $RETURN_TYPE
+          - has:
+              kind: pointer_declarator
+    - any:
+        - follows:
+            stopBy: end
+            all:
+              - has:
+                  nthChild: 1
+                  regex: >-
+                    ^(array<.*>|std::array<.*>|deque<.*>|std::deque<.*>|forward_list<.*>|std::forward_list<.*>|list<.*>|std::list<.*>|map<.*,
+                    .*>|std::map<.*, .*>|multimap<.*, .*>|std::multimap<.*,
+                    .*>|multiset<.*>|std::multiset<.*>|set<.*>|std::set<.*>|unordered_map<.*>|std::unordered_map<.*>|unordered_multimap<.*,
+                    .*>|std::unordered_multimap<.*,
+                    .*>|unordered_multiset<.*>|std::unordered_multiset<.*>|unordered_set<.*>|std::unordered_set<.*>|vector<.*>|std::vector<.*>)$
+              - has:
+                  stopBy: end
+                  pattern: $VAR
+              - not:
+                  inside:
+                    stopBy: end
+                    has:
+                      kind: storage_class_specifier
+              - inside:
+                  stopBy: end
+                  kind: compound_statement
+        - inside:
+            stopBy: end
+            follows:
+              stopBy: end
+              all:
+                - has:
+                    nthChild: 1
+                    regex: >-
+                      ^(array<.*>|std::array<.*>|deque<.*>|std::deque<.*>|forward_list<.*>|std::forward_list<.*>|list<.*>|std::list<.*>|map<.*,
+                      .*>|std::map<.*, .*>|multimap<.*, .*>|std::multimap<.*,
+                      .*>|multiset<.*>|std::multiset<.*>|set<.*>|std::set<.*>|unordered_map<.*>|std::unordered_map<.*>|unordered_multimap<.*,
+                      .*>|std::unordered_multimap<.*,
+                      .*>|unordered_multiset<.*>|std::unordered_multiset<.*>|unordered_set<.*>|std::unordered_set<.*>|vector<.*>|std::vector<.*>)$
+                - has:
+                    stopBy: end
+                    pattern: $VAR
+                - not:
+                    inside:
+                      stopBy: end
+                      has:
+                        kind: storage_class_specifier
+                - inside:
+                    stopBy: end
+                    kind: compound_statement
+        - inside:
+            stopBy: end
+            follows:
+              stopBy: end
+              kind: pointer_declarator
+              all:
+                - has:
+                    stopBy: end
+                    nthChild: 1
+                    regex: >-
+                      ^(array<.*>|std::array<.*>|deque<.*>|std::deque<.*>|forward_list<.*>|std::forward_list<.*>|list<.*>|std::list<.*>|map<.*,
+                      .*>|std::map<.*, .*>|multimap<.*, .*>|std::multimap<.*,
+                      .*>|multiset<.*>|std::multiset<.*>|set<.*>|std::set<.*>|unordered_map<.*>|std::unordered_map<.*>|unordered_multimap<.*,
+                      .*>|std::unordered_multimap<.*,
+                      .*>|unordered_multiset<.*>|std::unordered_multiset<.*>|unordered_set<.*>|std::unordered_set<.*>|vector<.*>|std::vector<.*>)$
+                - has:
+                    stopBy: end
+                    pattern: $VAR
+                - not:
+                    inside:
+                      stopBy: end
+                      has:
+                        kind: storage_class_specifier

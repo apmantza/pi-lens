@@ -1,0 +1,147 @@
+id: std-vector-invalidation-cpp
+language: cpp
+severity: warning
+message: >-
+  Modifying an `std::vector` while iterating over it could cause the container to reallocate, triggering memory
+  corruption.
+note: |-
+  [CWE-416: Use After Free. [REFERENCES]
+      - https://wiki.sei.cmu.edu/confluence/display/c/MEM30-C.+Do+not+access+freed+memory
+      - https://wiki.sei.cmu.edu/confluence/display/cplusplus/EXP54-CPP.+Do+not+access+an+object+outside+of+its+lifetime
+ast-grep-essentials: true
+rule:
+  kind: call_expression
+  all:
+    - any:
+        - pattern: $CONTAINER.erase($IT)
+          all:
+            - all:
+                - not:
+                    follows:
+                      stopBy: end
+                      pattern: $CONTAINER.erase($IT)
+                - not:
+                    precedes:
+                      stopBy: end
+                      pattern: $CONTAINER.erase($IT)
+            - not:
+                inside:
+                  stopBy: end
+                  kind: assignment_expression
+                  has:
+                    kind: identifier
+                    pattern: $IT
+                    nthChild: 1
+        - pattern: $CONTAINER.assign($$$)
+        - pattern: $CONTAINER.clear($$$)
+        - pattern: $CONTAINER.emplace_back($$$)
+        - pattern: $CONTAINER.insert($$$)
+        - pattern: $CONTAINER.resize($$$)
+        - pattern: $CONTAINER.push_back($$$)
+        - pattern: $CONTAINER.reserve($$$)
+        - pattern: $CONTAINER.shrink_to_fit($$$)
+        - pattern: $CONTAINER.resize($$$)
+        - pattern: $CONTAINER.pop_back($$$)
+    - not:
+        inside:
+          stopBy: end
+          kind: for_statement
+          has:
+            stopBy: end
+            any:
+              - kind: break_statement
+              - kind: continue_statement
+              - kind: return_statement
+              - kind: goto_statement
+    - inside:
+        stopBy: end
+        kind: for_statement
+        any:
+          - all:
+              - has:
+                  kind: declaration
+                  any:
+                    - pattern: std::vector<$TY>::$IT_TYPE $IT = $CONTAINER.begin()
+                    - all:
+                        - has:
+                            kind: dependent_type
+                            has:
+                              stopBy: end
+                              pattern: std::vector<$TY>::$IT_TYPE
+                        - has:
+                            stopBy: end
+                            kind: init_declarator
+                            all:
+                              - has:
+                                  pattern: $IT
+                              - has:
+                                  pattern: $CONTAINER.begin()
+              - has:
+                  kind: binary_expression
+                  any:
+                    - pattern: $IT != $CONTAINER.end()
+              - has:
+                  kind: update_expression
+                  any:
+                    - pattern: ++$IT
+                    - pattern: $IT++
+          - all:
+              - has:
+                  kind: declaration
+                  any:
+                    - pattern: std::vector<$TY>::$IT_TYPE $IT = $CONTAINER.rbegin()
+                    - has:
+                        stopBy: end
+                        pattern: std::vector<$TY>::$IT_TYPE $IT = $CONTAINER.rbegin()
+                    - all:
+                        - has:
+                            kind: dependent_type
+                            has:
+                              stopBy: end
+                              pattern: std::vector<$TY>::$IT_TYPE
+                        - has:
+                            stopBy: end
+                            kind: init_declarator
+                            all:
+                              - has:
+                                  pattern: $IT
+                              - has:
+                                  pattern: $CONTAINER.rbegin()
+              - has:
+                  kind: binary_expression
+                  any:
+                    - pattern: $IT != $CONTAINER.rend()
+              - has:
+                  kind: update_expression
+                  any:
+                    - pattern: ++$IT
+                    - pattern: $IT++
+          - all:
+              - has:
+                  kind: declaration
+                  any:
+                    - pattern: std::vector<$TY>::$IT_TYPE $IT = $CONTAINER.begin(), $IT_END = $CONTAINER.end()
+                    - pattern: std::vector<$TY>::$IT_TYPE $IT = $CONTAINER.rbegin(), $IT_END = $CONTAINER.rend()
+                    - has:
+                        stopBy: end
+                        any:
+                          - pattern: std::vector<$TY>::$IT_TYPE $IT = $CONTAINER.begin(), $IT_END = $CONTAINER.end()
+                          - pattern: std::vector<$TY>::$IT_TYPE $IT = $CONTAINER.rbegin(), $IT_END = $CONTAINER.rend()
+              - has:
+                  kind: binary_expression
+                  any:
+                    - pattern: $IT != $IT_END
+              - has:
+                  kind: update_expression
+                  any:
+                    - pattern: ++$IT
+                    - pattern: $IT++
+    - all:
+        - not:
+            has:
+              stopBy: end
+              kind: ERROR
+        - not:
+            inside:
+              stopBy: end
+              kind: ERROR

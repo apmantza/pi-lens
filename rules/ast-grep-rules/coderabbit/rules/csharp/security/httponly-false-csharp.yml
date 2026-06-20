@@ -1,0 +1,42 @@
+id: httponly-false-csharp
+language: csharp
+severity: warning
+message: |-
+  "Detected a cookie where the `HttpOnly` flag is either missing or
+      disabled. The `HttpOnly` cookie flag instructs the browser to forbid
+      client-side JavaScript to read the cookie. If JavaScript interaction is
+      required, you can ignore this finding. However, set the `HttpOnly` flag to
+      `true` in all other cases. If this wasn't intentional, it's recommended to
+      set the HttpOnly flag to true so the cookie will not be accessible through
+      client-side scripts or to use the Cookie Policy Middleware to globally set
+      the HttpOnly flag. You can then use the CookieOptions class when
+      instantiating the cookie, which inherits these settings and will require
+      future developers to have to explicitly override them on a case-by-case
+      basis if needed. This approach ensures cookies are secure by default."
+note: |-
+  [CWE-1004] Sensitive Cookie Without 'HttpOnly' Flag" [REFERENCES]
+      - https://learn.microsoft.com/en-us/aspnet/core/security/authentication/cookie?view=aspnetcore-8.0#cookie-policy-middleware
+      - https://learn.microsoft.com/en-us/dotnet/api/microsoft.aspnetcore.http.cookieoptions
+      - https://owasp.org/Top10/A05_2021-Security_Misconfiguration
+ast-grep-essentials: true
+rule:
+  kind: boolean_literal
+  pattern: $LITERAL
+  follows:
+    regex: ^=$
+    follows:
+      kind: member_access_expression
+      inside:
+        kind: assignment_expression
+      all:
+        - has:
+            kind: member_access_expression
+            nthChild: 1
+            regex: \.Cookie$
+        - has:
+            kind: identifier
+            nthChild: 2
+            regex: ^HttpOnly$
+constraints:
+  LITERAL:
+    regex: ^false$

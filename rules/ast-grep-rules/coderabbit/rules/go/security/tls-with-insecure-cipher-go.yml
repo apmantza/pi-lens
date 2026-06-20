@@ -1,0 +1,65 @@
+id: tls-with-insecure-cipher-go
+language: go
+severity: warning
+message: >-
+  Detected an insecure CipherSuite via the 'tls' module. This suite is considered weak. Use the function
+  'tls.CipherSuites()' to get a list of good cipher suites. See https://golang.org/pkg/crypto/tls/#InsecureCipherSuites
+  for why and what other cipher suites to use.
+note: >-
+  [CWE-327]: Use of a Broken or Risky Cryptographic Algorithm [OWASP A03:2017]: Sensitive Data Exposure [OWASP
+  A02:2021]: Cryptographic Failures [REFERENCES]
+       https://owasp.org/Top10/A02_2021-Cryptographic_Failures
+ast-grep-essentials: true
+utils:
+  match_tls_ciphersuite:
+    kind: composite_literal
+    all:
+      - has:
+          kind: qualified_type
+          regex: ^(tls.CipherSuite)$
+      - has:
+          kind: literal_value
+          has:
+            kind: literal_element
+            regex: >-
+              ^(TLS_RSA_WITH_RC4_128_SHA|TLS_RSA_WITH_3DES_EDE_CBC_SHA|TLS_RSA_WITH_AES_128_CBC_SHA256|TLS_ECDHE_ECDSA_WITH_RC4_128_SHA|TLS_ECDHE_RSA_WITH_RC4_128_SHA|TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA|TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256|TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256)$
+  method_tls_config:
+    kind: composite_literal
+    all:
+      - has:
+          kind: qualified_type
+          regex: ^(tls.Config)$
+      - has:
+          stopBy: end
+          kind: literal_value
+          has:
+            stopBy: end
+            kind: keyed_element
+            all:
+              - has:
+                  kind: literal_element
+                  has:
+                    kind: identifier
+                    regex: ^CipherSuites$
+              - has:
+                  kind: literal_element
+                  has:
+                    kind: composite_literal
+                    has:
+                      kind: literal_value
+                      has:
+                        kind: literal_element
+                        has:
+                          kind: selector_expression
+                          all:
+                            - has:
+                                kind: identifier
+                                regex: ^tls$
+                            - has:
+                                kind: field_identifier
+                                regex: >-
+                                  ^(TLS_RSA_WITH_RC4_128_SHA|TLS_RSA_WITH_3DES_EDE_CBC_SHA|TLS_RSA_WITH_AES_128_CBC_SHA256|TLS_ECDHE_ECDSA_WITH_RC4_128_SHA|TLS_ECDHE_RSA_WITH_RC4_128_SHA|TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA|TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256|TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256)$
+rule:
+  any:
+    - matches: match_tls_ciphersuite
+    - matches: method_tls_config

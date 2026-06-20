@@ -1,0 +1,45 @@
+id: use-of-blowfish-java
+severity: warning
+language: java
+message: >-
+  'Use of Blowfish was detected. Blowfish uses a 64-bit block size that  makes it vulnerable to birthday attacks, and is
+  therefore considered non-compliant.  Instead, use a strong, secure cipher: Cipher.getInstance("AES/CBC/PKCS7PADDING").
+  See https://owasp.org/www-community/Using_the_Java_Cryptographic_Extensions for more information.'
+note: |-
+  [CWE-327] Use of a Broken or Risky Cryptographic Algorithm. [REFERENCES]
+      - https://owasp.org/Top10/A02_2021-Cryptographic_Failures
+      - https://googleprojectzero.blogspot.com/2022/10/rc4-is-still-considered-harmful.html
+ast-grep-essentials: true
+rule:
+  kind: method_invocation
+  all:
+    - has:
+        kind: identifier
+        field: name
+        regex: ^getInstance$
+        nthChild:
+          position: 2
+          reverse: true
+    - has:
+        kind: argument_list
+        field: arguments
+        nthChild:
+          position: 1
+          reverse: true
+        has:
+          nthChild:
+            position: 1
+            ofRule:
+              not:
+                kind: line_comment
+          kind: string_literal
+          has:
+            kind: string_fragment
+            regex: ^Blowfish$
+        not:
+          has:
+            nthChild:
+              position: 2
+              ofRule:
+                not:
+                  kind: line_comment

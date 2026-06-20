@@ -1,0 +1,700 @@
+id: jwt-decode-without-verify-csharp
+severity: warning
+language: csharp
+message: >-
+  Detected the decoding of a JWT token without a verify step. JWT tokens must be verified before use, otherwise the
+  token's integrity is unknown. This means a malicious actor could forge a JWT token with any claims. Validate the token
+  before using it.
+note: |-
+  [CWE-345] Insufficient Verification of Data Authenticity. [REFERENCES]
+      - https://owasp.org/Top10/A08_2021-Software_and_Data_Integrity_Failures
+ast-grep-essentials: true
+utils:
+  IJwtDecoder_D_Decode_X_verify-false:
+    kind: invocation_expression
+    all:
+      - has:
+          nthChild: 1
+          kind: member_access_expression
+          all:
+            - has:
+                nthChild: 1
+                pattern: $INST
+            - has:
+                nthChild: 2
+                kind: identifier
+                regex: ^Decode$
+      - has:
+          nthChild: 2
+          kind: argument_list
+          has:
+            kind: argument
+            not:
+              nthChild: 1
+            all:
+              - has:
+                  nthChild: 1
+                  kind: identifier
+                  regex: ^verify$
+              - has:
+                  nthChild: 2
+                  kind: boolean_literal
+                  regex: ^false$
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: using_directive
+            any:
+              - pattern: using JWT;
+              - pattern: using JWT.Builder;
+              - pattern: using Microsoft.IdentityModel.Tokens;
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: local_declaration_statement
+            has:
+              kind: variable_declaration
+              all:
+                - has:
+                    kind: identifier
+                    regex: ^(IJwtDecoder|JwtDecoder)$
+                - has:
+                    kind: variable_declarator
+                    has:
+                      kind: identifier
+                      pattern: $INST
+  IJwtDecoder_D_Decode_false:
+    kind: invocation_expression
+    all:
+      - has:
+          nthChild: 1
+          kind: member_access_expression
+          all:
+            - has:
+                nthChild: 1
+                pattern: $INST
+            - has:
+                nthChild: 2
+                kind: identifier
+                regex: ^Decode$
+      - has:
+          nthChild: 2
+          kind: argument_list
+          has:
+            kind: argument
+            has:
+              kind: boolean_literal
+              regex: ^false$
+            any:
+              - nthChild: 2
+              - nthChild: 3
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: using_directive
+            any:
+              - pattern: using JWT;
+              - pattern: using JWT.Builder;
+              - pattern: using Microsoft.IdentityModel.Tokens;
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: local_declaration_statement
+            has:
+              kind: variable_declaration
+              all:
+                - has:
+                    kind: identifier
+                    regex: ^(IJwtDecoder|JwtDecoder)$
+                - has:
+                    kind: variable_declarator
+                    has:
+                      kind: identifier
+                      pattern: $INST
+  D_Decode_X_verify-false:
+    kind: invocation_expression
+    all:
+      - has:
+          nthChild: 1
+          kind: member_access_expression
+          all:
+            - has:
+                nthChild: 1
+                pattern: $INST
+            - has:
+                nthChild: 2
+                kind: identifier
+                regex: ^Decode$
+      - has:
+          nthChild: 2
+          kind: argument_list
+          has:
+            kind: argument
+            not:
+              nthChild: 1
+            all:
+              - has:
+                  nthChild: 1
+                  kind: identifier
+                  regex: ^verify$
+              - has:
+                  nthChild: 2
+                  kind: boolean_literal
+                  regex: ^false$
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: using_directive
+            any:
+              - pattern: using JWT;
+              - pattern: using JWT.Builder;
+              - pattern: using Microsoft.IdentityModel.Tokens;
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            any:
+              - kind: local_declaration_statement
+                has:
+                  stopBy: end
+                  kind: variable_declarator
+                  all:
+                    - has:
+                        kind: identifier
+                        pattern: $INST
+                    - has:
+                        kind: object_creation_expression
+                        has:
+                          kind: identifier
+                          regex: ^JwtDecoder$
+              - kind: expression_statement
+                all:
+                  - has:
+                      kind: assignment_expression
+                      all:
+                        - has:
+                            nthChild: 1
+                            pattern: $INST
+                        - has:
+                            kind: object_creation_expression
+                            has:
+                              kind: identifier
+                              regex: ^JwtDecoder$
+  D_Decode_false:
+    kind: invocation_expression
+    all:
+      - has:
+          nthChild: 1
+          kind: member_access_expression
+          all:
+            - has:
+                nthChild: 1
+                pattern: $INST
+            - has:
+                nthChild: 2
+                kind: identifier
+                regex: ^Decode$
+      - has:
+          nthChild: 2
+          kind: argument_list
+          has:
+            kind: argument
+            has:
+              kind: boolean_literal
+              regex: ^false$
+            any:
+              - nthChild: 2
+              - nthChild: 3
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: using_directive
+            any:
+              - pattern: using JWT;
+              - pattern: using JWT.Builder;
+              - pattern: using Microsoft.IdentityModel.Tokens;
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            any:
+              - kind: local_declaration_statement
+                has:
+                  stopBy: end
+                  kind: variable_declarator
+                  all:
+                    - has:
+                        kind: identifier
+                        pattern: $INST
+                    - has:
+                        kind: object_creation_expression
+                        has:
+                          kind: identifier
+                          regex: ^JwtDecoder$
+              - kind: expression_statement
+                all:
+                  - has:
+                      kind: assignment_expression
+                      all:
+                        - has:
+                            nthChild: 1
+                            pattern: $INST
+                        - has:
+                            kind: object_creation_expression
+                            has:
+                              kind: identifier
+                              regex: ^JwtDecoder$
+  JwtBuilder_Decode:
+    kind: invocation_expression
+    all:
+      - not:
+          precedes:
+            stopBy: end
+            has:
+              stopBy: end
+              kind: member_access_expression
+              has:
+                kind: identifier
+                regex: ^MustVerifySignature$
+              precedes:
+                kind: argument_list
+      - has:
+          nthChild: 1
+          kind: member_access_expression
+          all:
+            - has:
+                stopBy: end
+                kind: identifier
+                regex: ^JwtBuilder$
+            - not:
+                has:
+                  stopBy: end
+                  kind: invocation_expression
+                  all:
+                    - has:
+                        kind: member_access_expression
+                        nthChild: 1
+                        has:
+                          nthChild: 2
+                          kind: identifier
+                          regex: ^MustVerifySignature$
+                    - has:
+                        kind: argument_list
+                        nthChild: 2
+            - has:
+                nthChild: 2
+                kind: identifier
+                regex: ^Decode$
+      - has:
+          nthChild: 2
+          kind: argument_list
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: using_directive
+            any:
+              - pattern: using JWT;
+              - pattern: using JWT.Builder;
+              - pattern: using Microsoft.IdentityModel.Tokens;
+  B_Decode:
+    kind: invocation_expression
+    all:
+      - has:
+          nthChild: 1
+          kind: member_access_expression
+          all:
+            - has:
+                stopBy: end
+                kind: identifier
+                pattern: $INST
+            - not:
+                has:
+                  stopBy: end
+                  kind: invocation_expression
+                  all:
+                    - has:
+                        kind: member_access_expression
+                        nthChild: 1
+                        has:
+                          nthChild: 2
+                          kind: identifier
+                          regex: ^MustVerifySignature$
+                    - has:
+                        kind: argument_list
+                        nthChild: 2
+            - has:
+                nthChild: 2
+                kind: identifier
+                regex: ^Decode$
+      - has:
+          nthChild: 2
+          kind: argument_list
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: using_directive
+            any:
+              - pattern: using JWT;
+              - pattern: using JWT.Builder;
+              - pattern: using Microsoft.IdentityModel.Tokens;
+      - any:
+          - inside:
+              stopBy: end
+              follows:
+                stopBy: end
+                any:
+                  - kind: expression_statement
+                    has:
+                      kind: assignment_expression
+                      all:
+                        - has:
+                            kind: identifier
+                            nthChild: 1
+                        - has:
+                            kind: invocation_expression
+                            pattern: JwtBuilder.Create()
+                  - kind: local_declaration_statement
+                    has:
+                      stopBy: end
+                      kind: variable_declarator
+                      all:
+                        - has:
+                            nthChild: 1
+                            kind: identifier
+                            pattern: $INST
+                        - has:
+                            stopBy: end
+                            kind: invocation_expression
+                            pattern: JwtBuilder.Create()
+          - inside:
+              stopBy: end
+              follows:
+                stopBy: end
+                kind: expression_statement
+                not:
+                  precedes:
+                    stopBy: end
+                    has:
+                      stopBy: end
+                      kind: member_access_expression
+                      has:
+                        kind: identifier
+                        regex: ^MustVerifySignature$
+                      precedes:
+                        kind: argument_list
+                has:
+                  kind: assignment_expression
+                  all:
+                    - has:
+                        nthChild: 1
+                        kind: identifier
+                        pattern: $INST
+                    - has:
+                        stopBy: end
+                        kind: invocation_expression
+                        pattern: JwtBuilder.Create()
+      - not:
+          any:
+            - inside:
+                stopBy: end
+                follows:
+                  stopBy: end
+                  kind: expression_statement
+                  any:
+                    - has:
+                        stopBy: end
+                        pattern: MustVerifySignature()
+                    - has:
+                        stopBy: end
+                        kind: member_access_expression
+                        all:
+                          - has:
+                              kind: identifier
+                              pattern: $INST
+                          - has:
+                              kind: identifier
+                              regex: ^MustVerifySignature$
+                        precedes:
+                          kind: argument_list
+            - inside:
+                kind: member_access_expression
+                all:
+                  - has:
+                      stopBy: end
+                      kind: identifier
+                      regex: ^MustVerifySignature$
+                  - precedes:
+                      kind: argument_list
+  new_ValidationParameters_ValidateSignature_false:
+    kind: object_creation_expression
+    all:
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: using_directive
+            any:
+              - pattern: using JWT;
+              - pattern: using JWT.Builder;
+              - pattern: using Microsoft.IdentityModel.Tokens;
+      - has:
+          kind: identifier
+          nthChild: 1
+          regex: ^ValidationParameters$
+      - has:
+          kind: initializer_expression
+          has:
+            kind: assignment_expression
+            pattern: ValidateSignature = false
+  V_ValidateSignature_false:
+    kind: assignment_expression
+    all:
+      - has:
+          kind: member_access_expression
+          nthChild: 1
+          all:
+            - has:
+                nthChild: 1
+                kind: identifier
+                pattern: $INST
+            - has:
+                nthChild: 2
+                kind: identifier
+                regex: ^ValidateSignature$
+      - has:
+          nthChild: 2
+          kind: boolean_literal
+          regex: ^false$
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: using_directive
+            any:
+              - pattern: using JWT;
+              - pattern: using JWT.Builder;
+              - pattern: using Microsoft.IdentityModel.Tokens;
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            any:
+              - kind: local_declaration_statement
+                all:
+                  - has:
+                      stopBy: end
+                      kind: variable_declarator
+                      all:
+                        - has:
+                            kind: identifier
+                            pattern: $INST
+                        - has:
+                            kind: object_creation_expression
+                            has:
+                              kind: identifier
+                              regex: ^ValidationParameters$
+              - kind: expression_statement
+                has:
+                  kind: assignment_expression
+                  all:
+                    - has:
+                        kind: identifier
+                        pattern: $INST
+                    - has:
+                        kind: object_creation_expression
+                        has:
+                          kind: identifier
+                          regex: ^ValidationParameters$
+  new_JwtAuthenticationOptions_VerifySignature_false:
+    kind: object_creation_expression
+    all:
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: using_directive
+            any:
+              - pattern: using JWT;
+              - pattern: using JWT.Builder;
+              - pattern: using Microsoft.IdentityModel.Tokens;
+      - has:
+          kind: identifier
+          nthChild: 1
+          regex: ^JwtAuthenticationOptions$
+      - has:
+          kind: initializer_expression
+          has:
+            kind: assignment_expression
+            pattern: VerifySignature = false
+  V_VerifySignature_false:
+    kind: assignment_expression
+    all:
+      - has:
+          kind: member_access_expression
+          nthChild: 1
+          all:
+            - has:
+                nthChild: 1
+                kind: identifier
+                pattern: $INST
+            - has:
+                nthChild: 2
+                kind: identifier
+                regex: ^VerifySignature$
+      - has:
+          nthChild: 2
+          kind: boolean_literal
+          regex: ^false$
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: using_directive
+            any:
+              - pattern: using JWT;
+              - pattern: using JWT.Builder;
+              - pattern: using Microsoft.IdentityModel.Tokens;
+      - inside:
+          stopBy: end
+          any:
+            - follows:
+                stopBy: end
+                any:
+                  - kind: local_declaration_statement
+                    all:
+                      - has:
+                          stopBy: end
+                          kind: variable_declarator
+                          all:
+                            - has:
+                                kind: identifier
+                                pattern: $INST
+                            - has:
+                                kind: object_creation_expression
+                                has:
+                                  kind: identifier
+                                  regex: ^ValidationParameters$
+                  - kind: expression_statement
+                    has:
+                      kind: assignment_expression
+                      all:
+                        - has:
+                            kind: identifier
+                            pattern: $INST
+                        - has:
+                            kind: object_creation_expression
+                            has:
+                              kind: identifier
+                              regex: ^ValidationParameters$
+            - inside:
+                stopBy: end
+                kind: argument_list
+                follows:
+                  stopBy: end
+                  kind: member_access_expression
+                  has:
+                    nthChild: 2
+                    kind: identifier
+                    regex: ^AddJwt$
+  new_TokenValidationParameters_ValidateIssuerSigningKey_false:
+    kind: object_creation_expression
+    all:
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: using_directive
+            any:
+              - pattern: using JWT;
+              - pattern: using JWT.Builder;
+              - pattern: using Microsoft.IdentityModel.Tokens;
+      - has:
+          kind: identifier
+          nthChild: 1
+          regex: ^TokenValidationParameters$
+      - has:
+          kind: initializer_expression
+          has:
+            kind: assignment_expression
+            pattern: ValidateIssuerSigningKey = false
+  V_ValidateIssuerSigningKey_false:
+    kind: assignment_expression
+    all:
+      - has:
+          kind: member_access_expression
+          nthChild: 1
+          all:
+            - has:
+                nthChild: 1
+                kind: identifier
+                pattern: $INST
+            - has:
+                nthChild: 2
+                kind: identifier
+                regex: ^ValidateIssuerSigningKey$
+      - has:
+          nthChild: 2
+          kind: boolean_literal
+          regex: ^false$
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: using_directive
+            any:
+              - pattern: using JWT;
+              - pattern: using JWT.Builder;
+              - pattern: using Microsoft.IdentityModel.Tokens;
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            any:
+              - kind: local_declaration_statement
+                all:
+                  - has:
+                      stopBy: end
+                      kind: variable_declarator
+                      all:
+                        - has:
+                            kind: identifier
+                            pattern: $INST
+                        - has:
+                            kind: object_creation_expression
+                            has:
+                              kind: identifier
+                              regex: ^TokenValidationParameters$
+              - kind: expression_statement
+                has:
+                  kind: assignment_expression
+                  all:
+                    - has:
+                        kind: identifier
+                        pattern: $INST
+                    - has:
+                        kind: object_creation_expression
+                        has:
+                          kind: identifier
+                          regex: ^TokenValidationParameters$
+rule:
+  any:
+    - matches: IJwtDecoder_D_Decode_X_verify-false
+    - matches: IJwtDecoder_D_Decode_false
+    - matches: D_Decode_X_verify-false
+    - matches: D_Decode_false
+    - matches: JwtBuilder_Decode
+    - matches: B_Decode
+    - matches: new_ValidationParameters_ValidateSignature_false
+    - matches: V_ValidateSignature_false
+    - matches: new_JwtAuthenticationOptions_VerifySignature_false
+    - matches: V_VerifySignature_false
+    - matches: new_TokenValidationParameters_ValidateIssuerSigningKey_false
+    - matches: V_ValidateIssuerSigningKey_false

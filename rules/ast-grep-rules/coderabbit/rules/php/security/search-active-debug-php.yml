@@ -1,0 +1,153 @@
+id: search-active-debug-php
+language: php
+severity: warning
+message: >-
+  Debug logging is explicitly enabled. This can potentially disclose sensitive information and should never be active on
+  production systems.
+note: |-
+  [CWE-489] Active Debug Code. [REFERENCES]
+      - https://www.php.net/manual/en/function.setcookie.php
+ast-grep-essentials: true
+utils:
+  Match_pattern_one:
+    kind: function_call_expression
+    all:
+      - has:
+          pattern: $C
+      - has:
+          stopBy: end
+          kind: arguments
+          all:
+            - not:
+                has:
+                  nthChild:
+                    position: 3
+                    ofRule:
+                      not:
+                        kind: comment
+            - has:
+                stopBy: end
+                kind: argument
+                nthChild:
+                  position: 1
+                  ofRule:
+                    not:
+                      kind: comment
+                has:
+                  kind: encapsed_string
+                  has:
+                    kind: string_content
+                    pattern: $A
+            - has:
+                kind: argument
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: comment
+                has:
+                  kind: boolean
+                  pattern: $B
+  Match_pattern_two_with_integer:
+    kind: function_call_expression
+    all:
+      - has:
+          pattern: $C
+      - has:
+          stopBy: end
+          kind: arguments
+          all:
+            - not:
+                has:
+                  nthChild:
+                    position: 3
+                    ofRule:
+                      not:
+                        kind: comment
+            - has:
+                stopBy: end
+                kind: argument
+                nthChild:
+                  position: 1
+                  ofRule:
+                    not:
+                      kind: comment
+                has:
+                  kind: encapsed_string
+                  has:
+                    kind: string_content
+                    pattern: $A
+            - has:
+                kind: argument
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: comment
+                has:
+                  kind: integer
+                  pattern: $D
+  Match_pattern_three_with_string:
+    kind: function_call_expression
+    all:
+      - has:
+          pattern: $C
+      - has:
+          kind: arguments
+          all:
+            - not:
+                has:
+                  nthChild:
+                    position: 3
+                    ofRule:
+                      not:
+                        kind: comment
+            - has:
+                stopBy: end
+                kind: argument
+                nthChild:
+                  position: 1
+                  ofRule:
+                    not:
+                      kind: comment
+                has:
+                  kind: encapsed_string
+                  has:
+                    kind: string_content
+                    pattern: $A
+            - has:
+                stopBy: end
+                kind: argument
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: comment
+                has:
+                  stopBy: end
+                  kind: encapsed_string
+                  has:
+                    stopBy: neighbor
+                    regex: ^[Oo][Nn]$
+rule:
+  any:
+    - matches: Match_pattern_one
+    - matches: Match_pattern_two_with_integer
+    - matches: Match_pattern_three_with_string
+  not:
+    all:
+      - has:
+          stopBy: end
+          kind: ERROR
+      - inside:
+          stopBy: end
+          kind: ERROR
+constraints:
+  C:
+    regex: ^(define|ini_set)$
+  A:
+    regex: ^(WP_DEBUG|display_errors)$
+  B:
+    regex: ^([tT][Rr][Uu][Ee])$
+  D:
+    regex: ^1$

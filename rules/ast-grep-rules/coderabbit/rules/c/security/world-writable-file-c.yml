@@ -1,0 +1,317 @@
+id: world-writable-file-c
+language: c
+severity: warning
+message: >-
+  This call makes a world-writable file which allows any user on a machine to write to the file. This may allow
+  attackers to influence the behaviour of this process by writing to the file.
+note: |-
+  [CWE-732]: Incorrect Permission Assignment for Critical Resource [REFERENCES]
+      - https://wiki.sei.cmu.edu/confluence/display/c/FIO06-C.+Create+files+with+appropriate+access+permissions
+ast-grep-essentials: true
+utils:
+  follows_umask:
+    follows:
+      stopBy: end
+      kind: expression_statement
+      has:
+        kind: call_expression
+        nthChild: 1
+        all:
+          - has:
+              nthChild: 1
+              kind: identifier
+              field: function
+              regex: ^umask$
+          - has:
+              nthChild: 2
+              kind: argument_list
+              field: arguments
+  AND_2_EQUALS_2___S_IXXXX:
+    any:
+      - kind: number_literal
+        regex: ^-?([2367]|[0-9]*(0[2367]|1[014589]|2[2367]|3[014589]|4[2367]|5[014589]|6[2367]|7[014589]|8[2367]|9[014589]))$
+      - all:
+          - any:
+              - kind: binary_expression
+              - kind: identifier
+          - regex: (\s*S_I[A-Z]{4}\s*\|)*S_I[A-Z]{4}
+          - regex: .*\bS_IWOTH\b.*
+rule:
+  any:
+    - any:
+        - matches: AND_2_EQUALS_2___S_IXXXX
+        - kind: identifier
+          pattern: $MODE
+          inside:
+            stopBy: end
+            follows:
+              stopBy: end
+              any:
+                - kind: declaration
+                  all:
+                    - has:
+                        kind: init_declarator
+                        all:
+                          - has:
+                              kind: identifier
+                              field: declarator
+                              pattern: $MODE
+                          - has:
+                              nthChild: 2
+                              matches: AND_2_EQUALS_2___S_IXXXX
+                - kind: expression_statement
+                  any:
+                    - has:
+                        kind: assignment_expression
+                        all:
+                          - has:
+                              nthChild: 1
+                              kind: identifier
+                              pattern: $MODE
+                          - has:
+                              nthChild: 2
+                              matches: AND_2_EQUALS_2___S_IXXXX
+                    - has:
+                        kind: comma_expression
+                        has:
+                          kind: assignment_expression
+                          all:
+                            - has:
+                                nthChild: 1
+                                kind: identifier
+                                pattern: $MODE
+                            - has:
+                                nthChild: 2
+                                matches: AND_2_EQUALS_2___S_IXXXX
+      nthChild:
+        position: 2
+        ofRule:
+          not:
+            kind: comment
+      inside:
+        kind: argument_list
+        nthChild: 2
+        not:
+          has:
+            nthChild:
+              position: 3
+              ofRule:
+                not:
+                  kind: comment
+        follows:
+          kind: identifier
+          regex: ^(chmod|fchmod|creat)$
+        inside:
+          kind: call_expression
+          not:
+            any:
+              - matches: follows_umask
+              - inside:
+                  stopBy: end
+                  matches: follows_umask
+    - any:
+        - matches: AND_2_EQUALS_2___S_IXXXX
+        - kind: identifier
+          pattern: $MODE
+          inside:
+            stopBy: end
+            follows:
+              stopBy: end
+              any:
+                - kind: declaration
+                  all:
+                    - has:
+                        kind: init_declarator
+                        all:
+                          - has:
+                              kind: identifier
+                              field: declarator
+                              pattern: $MODE
+                          - has:
+                              nthChild: 2
+                              matches: AND_2_EQUALS_2___S_IXXXX
+                - kind: expression_statement
+                  any:
+                    - has:
+                        kind: assignment_expression
+                        all:
+                          - has:
+                              nthChild: 1
+                              kind: identifier
+                              pattern: $MODE
+                          - has:
+                              nthChild: 2
+                              matches: AND_2_EQUALS_2___S_IXXXX
+                    - has:
+                        kind: comma_expression
+                        has:
+                          kind: assignment_expression
+                          all:
+                            - has:
+                                nthChild: 1
+                                kind: identifier
+                                pattern: $MODE
+                            - has:
+                                nthChild: 2
+                                matches: AND_2_EQUALS_2___S_IXXXX
+      nthChild:
+        position: 3
+        ofRule:
+          not:
+            kind: comment
+      inside:
+        kind: argument_list
+        nthChild: 2
+        follows:
+          kind: identifier
+          regex: ^(fchmodat)$
+        inside:
+          kind: call_expression
+          not:
+            any:
+              - matches: follows_umask
+              - inside:
+                  stopBy: end
+                  matches: follows_umask
+    - any:
+        - matches: AND_2_EQUALS_2___S_IXXXX
+        - kind: identifier
+          pattern: $MODE
+          inside:
+            stopBy: end
+            follows:
+              stopBy: end
+              any:
+                - kind: declaration
+                  all:
+                    - has:
+                        kind: init_declarator
+                        all:
+                          - has:
+                              kind: identifier
+                              field: declarator
+                              pattern: $MODE
+                          - has:
+                              nthChild: 2
+                              matches: AND_2_EQUALS_2___S_IXXXX
+                - kind: expression_statement
+                  any:
+                    - has:
+                        kind: assignment_expression
+                        all:
+                          - has:
+                              nthChild: 1
+                              kind: identifier
+                              pattern: $MODE
+                          - has:
+                              nthChild: 2
+                              matches: AND_2_EQUALS_2___S_IXXXX
+                    - has:
+                        kind: comma_expression
+                        has:
+                          kind: assignment_expression
+                          all:
+                            - has:
+                                nthChild: 1
+                                kind: identifier
+                                pattern: $MODE
+                            - has:
+                                nthChild: 2
+                                matches: AND_2_EQUALS_2___S_IXXXX
+      nthChild:
+        position: 3
+        ofRule:
+          not:
+            kind: comment
+      inside:
+        kind: argument_list
+        nthChild: 2
+        not:
+          has:
+            nthChild:
+              position: 4
+              ofRule:
+                not:
+                  kind: comment
+        follows:
+          kind: identifier
+          regex: ^(open)$
+        inside:
+          kind: call_expression
+          not:
+            any:
+              - matches: follows_umask
+              - inside:
+                  stopBy: end
+                  matches: follows_umask
+    - any:
+        - matches: AND_2_EQUALS_2___S_IXXXX
+        - kind: identifier
+          pattern: $MODE
+          inside:
+            stopBy: end
+            follows:
+              stopBy: end
+              any:
+                - kind: declaration
+                  all:
+                    - has:
+                        kind: init_declarator
+                        all:
+                          - has:
+                              kind: identifier
+                              field: declarator
+                              pattern: $MODE
+                          - has:
+                              nthChild: 2
+                              matches: AND_2_EQUALS_2___S_IXXXX
+                - kind: expression_statement
+                  any:
+                    - has:
+                        kind: assignment_expression
+                        all:
+                          - has:
+                              nthChild: 1
+                              kind: identifier
+                              pattern: $MODE
+                          - has:
+                              nthChild: 2
+                              matches: AND_2_EQUALS_2___S_IXXXX
+                    - has:
+                        kind: comma_expression
+                        has:
+                          kind: assignment_expression
+                          all:
+                            - has:
+                                nthChild: 1
+                                kind: identifier
+                                pattern: $MODE
+                            - has:
+                                nthChild: 2
+                                matches: AND_2_EQUALS_2___S_IXXXX
+      nthChild:
+        position: 4
+        ofRule:
+          not:
+            kind: comment
+      inside:
+        kind: argument_list
+        nthChild: 2
+        not:
+          has:
+            nthChild:
+              position: 5
+              ofRule:
+                not:
+                  kind: comment
+        follows:
+          kind: identifier
+          regex: ^(openat)$
+        inside:
+          kind: call_expression
+          not:
+            any:
+              - matches: follows_umask
+              - inside:
+                  stopBy: end
+                  matches: follows_umask

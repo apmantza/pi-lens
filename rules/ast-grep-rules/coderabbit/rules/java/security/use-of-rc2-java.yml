@@ -1,0 +1,84 @@
+id: use-of-rc2-java
+language: java
+severity: warning
+message: >-
+  Use of RC2 was detected. RC2 is vulnerable to related-key attacks, and is therefore considered non-compliant. Instead,
+  use a strong, secure.
+note: |-
+  [CWE-327] Use of a Broken or Risky Cryptographic Algorithm. [REFERENCES]
+      - https://owasp.org/Top10/A02_2021-Cryptographic_Failures
+      - https://googleprojectzero.blogspot.com/2022/10/rc4-is-still-considered-harmful.html
+ast-grep-essentials: true
+utils:
+  CIPHER_getInstance_RC2:
+    kind: method_invocation
+    all:
+      - has:
+          stopBy: neighbor
+          kind: identifier
+          nthchild: 1
+      - has:
+          stopBy: neighbor
+          kind: identifier
+          nthchild: 2
+          regex: ^getInstance$
+      - has:
+          stopBy: neighbor
+          kind: argument_list
+          all:
+            - has:
+                stopBy: end
+                kind: string_fragment
+                regex: ^RC2$
+            - not:
+                has:
+                  stopBy: end
+                  kind: array_access
+  CIPHER_getInstance_RC2__with_instance:
+    kind: method_invocation
+    all:
+      - has:
+          stopBy: neighbor
+          kind: identifier
+          nthchild: 1
+      - has:
+          stopBy: neighbor
+          kind: identifier
+          nthchild: 2
+          regex: ^getInstance$
+      - has:
+          stopBy: neighbor
+          kind: argument_list
+          has:
+            stopBy: end
+            kind: identifier
+            pattern: $RC2
+            not:
+              inside:
+                stopBy: end
+                kind: array_access
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: local_variable_declaration
+            has:
+              stopBy: end
+              kind: variable_declarator
+              all:
+                - has:
+                    stopBy: neighbor
+                    kind: identifier
+                    pattern: $RC2
+                - has:
+                    stopBy: neighbor
+                    kind: string_literal
+                    has:
+                      stopBy: neighbor
+                      kind: string_fragment
+                      regex: ^RC2$
+rule:
+  kind: method_invocation
+  any:
+    - matches: CIPHER_getInstance_RC2
+    - matches: CIPHER_getInstance_RC2__with_instance

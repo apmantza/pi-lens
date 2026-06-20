@@ -40,19 +40,29 @@ describe("auxiliary profile source routing", () => {
 });
 
 describe("opengrep semantic policy", () => {
-	const opengrep = AUXILIARY_LSP_PROFILES.find((p) => p.serverId === "opengrep");
+	const opengrep = AUXILIARY_LSP_PROFILES.find(
+		(p) => p.serverId === "opengrep",
+	);
 
 	it("blocks ERROR only where blocking is allowed (curated repo rules)", () => {
 		expect(opengrep).toBeDefined();
 		// blocking allowed (repo has its own rules): ERROR → blocking, else warning.
-		expect(opengrep?.semantic(diag({ severity: 1 }), { blockingAllowed: true })).toBe("blocking");
-		expect(opengrep?.semantic(diag({ severity: 2 }), { blockingAllowed: true })).toBe("warning");
+		expect(
+			opengrep?.semantic(diag({ severity: 1 }), { blockingAllowed: true }),
+		).toBe("blocking");
+		expect(
+			opengrep?.semantic(diag({ severity: 2 }), { blockingAllowed: true }),
+		).toBe("warning");
 	});
 
 	it("never blocks the auto Community set (no local rules) — advisory only", () => {
 		// blocking NOT allowed (auto): even ERROR stays a warning (surfaced in lens_diagnostics).
-		expect(opengrep?.semantic(diag({ severity: 1 }), { blockingAllowed: false })).toBe("warning");
-		expect(opengrep?.semantic(diag({ severity: 2 }), { blockingAllowed: false })).toBe("warning");
+		expect(
+			opengrep?.semantic(diag({ severity: 1 }), { blockingAllowed: false }),
+		).toBe("warning");
+		expect(
+			opengrep?.semantic(diag({ severity: 2 }), { blockingAllowed: false }),
+		).toBe("warning");
 	});
 
 	it("derives a defect class from the rule", () => {
@@ -60,5 +70,20 @@ describe("opengrep semantic policy", () => {
 			diag({ code: "javascript.lang.security.audit.eval", message: "eval" }),
 		);
 		expect(typeof dc === "string" || dc === undefined).toBe(true);
+	});
+});
+
+describe("ast-grep semantic policy", () => {
+	const astGrep = AUXILIARY_LSP_PROFILES.find((p) => p.serverId === "ast-grep");
+
+	it("uses ast-grep severity for the shipped baseline as well as project sgconfig", () => {
+		expect(astGrep).toBeDefined();
+		expect(astGrep?.allowBlocking?.("/repo")).toBe(true);
+		expect(
+			astGrep?.semantic(diag({ severity: 1 }), { blockingAllowed: true }),
+		).toBe("blocking");
+		expect(
+			astGrep?.semantic(diag({ severity: 2 }), { blockingAllowed: true }),
+		).toBe("warning");
 	});
 });

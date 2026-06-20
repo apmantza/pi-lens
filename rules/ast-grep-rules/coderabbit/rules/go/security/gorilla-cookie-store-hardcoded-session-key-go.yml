@@ -1,0 +1,90 @@
+id: gorilla-cookie-store-hardcoded-session-key-go
+language: go
+severity: warning
+message: >-
+  A secret is hard-coded in the application. Secrets stored in source code, such as credentials, identifiers, and other
+  types of sensitive data, can be leaked and used by internal or external malicious actors. It is recommended to rotate
+  the secret and retrieve them from a secure secret vault or Hardware Security Module (HSM), alternatively environment
+  variables can be used if allowed by your company policy.
+note: |-
+  [CWE-798] Use of Hard-coded Credentials. [REFERENCES]
+      - https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures
+ast-grep-essentials: true
+utils:
+  MATCH_PATTERN_ONE:
+    kind: call_expression
+    all:
+      - has:
+          stopBy: neighbor
+          kind: selector_expression
+          all:
+            - has:
+                stopBy: neighbor
+                kind: identifier
+                regex: ^sessions$
+            - has:
+                stopBy: neighbor
+                kind: field_identifier
+                regex: ^NewCookieStore$
+      - has:
+          stopBy: neighbor
+          kind: argument_list
+          any:
+            - all:
+                - has:
+                    stopBy: neighbor
+                    kind: type_conversion_expression
+                    all:
+                      - has:
+                          stopBy: neighbor
+                          kind: slice_type
+                          has:
+                            stopBy: neighbor
+                            kind: type_identifier
+                            regex: ^byte$
+                      - not:
+                          has:
+                            stopBy: neighbor
+                            kind: call_expression
+                      - has:
+                          stopBy: neighbor
+                          kind: interpreted_string_literal
+            - has:
+                nthChild:
+                  position: 1
+                  ofRule:
+                    not:
+                      kind: comment
+                kind: interpreted_string_literal
+      - any:
+          - follows:
+              stopBy: end
+              kind: import_declaration
+              has:
+                stopBy: end
+                kind: import_spec
+                has:
+                  stopBy: neighbor
+                  regex: ^"github.com/gorilla/sessions"$
+          - inside:
+              stopBy: end
+              follows:
+                stopBy: end
+                kind: import_declaration
+                has:
+                  stopBy: end
+                  kind: import_spec
+                  has:
+                    stopBy: neighbor
+                    regex: ^"github.com/gorilla/sessions"$
+rule:
+  kind: call_expression
+  matches: MATCH_PATTERN_ONE
+  not:
+    all:
+      - has:
+          stopBy: end
+          kind: ERROR
+      - inside:
+          stopBy: end
+          kind: ERROR

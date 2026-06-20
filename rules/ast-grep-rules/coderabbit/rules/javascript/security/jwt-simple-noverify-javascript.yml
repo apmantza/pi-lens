@@ -1,0 +1,43 @@
+id: jwt-simple-noverify-javascript
+language: JavaScript
+severity: warning
+message: |-
+  "Detected the decoding of a JWT token without a verify step. JWT tokens
+      must be verified before use, otherwise the token's integrity is unknown.
+      This means a malicious actor could forge a JWT token with any claims. Set
+      'verify' to `true` before using the token."
+note: >-
+  [CWE-287] Improper Authentication [CWE-345] Insufficient Verification of Data Authenticity [CWE-347] Improper
+  Verification of Cryptographic Signature [REFERENCES]
+      - https://www.npmjs.com/package/jwt-simple
+      - https://cwe.mitre.org/data/definitions/287
+      - https://cwe.mitre.org/data/definitions/345
+      - https://cwe.mitre.org/data/definitions/347
+ast-grep-essentials: true
+rule:
+  kind: call_expression
+  any:
+    - pattern: $JWT.decode($TOKEN, $SECRET, true $$$)
+    - pattern: $JWT.decode($TOKEN, $SECRET, "$$$" $$$)
+    - pattern: $JWT.decode($TOKEN, $SECRET, '$$$' $$$)
+    - pattern: $JWT.decode($TOKEN, $SECRET, `$$$` $$$)
+  inside:
+    stopBy: end
+    follows:
+      stopBy: end
+      any:
+        - kind: lexical_declaration
+          all:
+            - has:
+                stopBy: end
+                kind: identifier
+                pattern: $JWT
+            - has:
+                stopBy: end
+                kind: call_expression
+                pattern: require('jwt-simple')
+        - kind: expression_statement
+          has:
+            stopBy: end
+            kind: assignment_expression
+            pattern: $JWT = require('jwt-simple')

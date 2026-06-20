@@ -1,0 +1,136 @@
+id: jwt-tokenvalidationparameters-no-expiry-validation-csharp
+severity: warning
+language: csharp
+message: >-
+  The TokenValidationParameters.$LIFETIME is set to $FALSE, this means the JWT tokens lifetime is not validated. This
+  can lead to an JWT token being used after it has expired, which has security implications. It is recommended to
+  validate the JWT lifetime to ensure only valid tokens are used.
+note: |-
+  [CWE-613] Insufficient Session Expiration. [REFERENCES]
+      - https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures/
+      - https://cwe.mitre.org/data/definitions/613.html
+      - https://docs.microsoft.com/en-us/dotnet/api/microsoft.identitymodel.tokens.tokenvalidationparameters?view=azure-dotnet
+ast-grep-essentials: true
+utils:
+  MATCH_PATTERN_ONE:
+    kind: boolean_literal
+    inside:
+      all:
+        - has:
+            stopBy: neighbor
+            regex: ^(RequireExpirationTime|ValidateLifetime).*
+            any:
+              - kind: identifier
+              - kind: member_access_expression
+        - has:
+            stopBy: neighbor
+            regex: ^=$
+        - has:
+            stopBy: neighbor
+            kind: boolean_literal
+            regex: ^false$
+        - inside:
+            stopBy: end
+            kind: object_creation_expression
+            has:
+              stopBy: neighbor
+              kind: identifier
+              regex: ^TokenValidationParameters$
+  MATCH_PATTERN_TWO:
+    kind: boolean_literal
+    inside:
+      all:
+        - has:
+            stopBy: neighbor
+            kind: member_access_expression
+            all:
+              - has:
+                  stopBy: end
+                  kind: identifier
+                  pattern: $T
+              - has:
+                  stopBy: neighbor
+                  kind: identifier
+                  regex: ^(RequireExpirationTime|ValidateLifetime).*
+        - has:
+            stopBy: neighbor
+            regex: ^=$
+        - has:
+            stopBy: neighbor
+            kind: boolean_literal
+            regex: ^false$
+        - inside:
+            stopBy: end
+            kind: global_statement
+            follows:
+              stopBy: end
+              kind: global_statement
+              has:
+                stopBy: end
+                kind: variable_declaration
+                all:
+                  - has:
+                      stopBy: neighbor
+                      kind: identifier
+                      regex: ^TokenValidationParameters$
+                  - has:
+                      stopBy: neighbor
+                      kind: variable_declarator
+                      has:
+                        stopBy: neighbor
+                        kind: identifier
+                        pattern: $T
+  MATCH_PATTERN_THREE:
+    kind: boolean_literal
+    inside:
+      all:
+        - has:
+            stopBy: neighbor
+            kind: member_access_expression
+            all:
+              - has:
+                  stopBy: end
+                  kind: identifier
+                  pattern: $S
+              - has:
+                  stopBy: neighbor
+                  kind: identifier
+                  regex: ^(RequireExpirationTime|ValidateLifetime).*
+        - has:
+            stopBy: neighbor
+            regex: ^=$
+        - has:
+            stopBy: neighbor
+            kind: boolean_literal
+            regex: ^false$
+        - inside:
+            kind: expression_statement
+            stopBy: end
+            follows:
+              stopBy: end
+              kind: local_declaration_statement
+              has:
+                stopBy: end
+                kind: variable_declaration
+                all:
+                  - has:
+                      stopBy: end
+                      kind: identifier
+                      regex: ^TokenValidationParameters$
+                  - has:
+                      stopBy: neighbor
+                      kind: variable_declarator
+                      has:
+                        stopBy: neighbor
+                        kind: identifier
+                        pattern: $S
+rule:
+  kind: boolean_literal
+  any:
+    - matches: MATCH_PATTERN_ONE
+    - matches: MATCH_PATTERN_TWO
+    - matches: MATCH_PATTERN_THREE
+  not:
+    has:
+      kind: ERROR
+      stopBy: end

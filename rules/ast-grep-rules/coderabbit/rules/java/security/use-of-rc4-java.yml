@@ -1,0 +1,38 @@
+id: use-of-rc4-java
+language: java
+severity: warning
+message: |-
+  'Use of RC4 was detected. RC4 is vulnerable to several attacks,
+      including stream cipher attacks and bit flipping attacks. Instead, use a
+      strong, secure cipher: Cipher.getInstance("AES/CBC/PKCS7PADDING"). See
+      https://owasp.org/www-community/Using_the_Java_Cryptographic_Extensions
+      for more information.'
+note: |-
+  [CWE-327] Use of a Broken or Risky Cryptographic Algorithm [REFERENCES]
+      - https://owasp.org/Top10/A02_2021-Cryptographic_Failures
+      - https://googleprojectzero.blogspot.com/2022/10/rc4-is-still-considered-harmful.html
+ast-grep-essentials: true
+rule:
+  pattern: $CIPHER.getInstance($ARGUMENT)
+constraints:
+  ARGUMENT:
+    any:
+      - has:
+          stopBy: end
+          kind: string_literal
+          has:
+            kind: string_fragment
+            regex: ^RC4$
+      - kind: string_literal
+        has:
+          kind: string_fragment
+          regex: ^RC4$
+    all:
+      - not:
+          has:
+            nthChild: 2
+      - not:
+          has:
+            stopBy: end
+            any:
+              - kind: array_access

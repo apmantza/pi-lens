@@ -1,0 +1,641 @@
+id: openssl-cbc-static-iv-php
+language: php
+severity: warning
+message: Static IV used with AES in CBC mode. Static IVs enable chosen-plaintext attacks against encrypted data.
+note: |-
+  [CWE-329] Generation of Predictable IV with CBC Mode. [REFERENCES]
+      - https://csrc.nist.gov/publications/detail/sp/800-38a/final
+ast-grep-essentials: true
+utils:
+  Match_pattern_directly_with_prefix_openssl_encryptpart2:
+    kind: function_call_expression
+    all:
+      - has:
+          kind: name
+          regex: ^(openssl_decrypt|openssl_encrypt)$
+      - has:
+          stopBy: end
+          kind: arguments
+          all:
+            - has:
+                stopBy: end
+                kind: argument
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: comment
+                has:
+                  stopBy: end
+                  kind: encapsed_string
+                  regex: .*-CBC
+            - has:
+                stopBy: end
+                kind: argument
+                nthChild:
+                  position: 5
+                  ofRule:
+                    not:
+                      kind: comment
+                has:
+                  stopBy: end
+                  kind: encapsed_string
+      - any:
+          - follows:
+              stopBy: end
+              kind: expression_statement
+              has:
+                stopBy: end
+                kind: assignment_expression
+                all:
+                  - has:
+                      stopBy: end
+                      kind: variable_name
+                      pattern: $T
+                  - has:
+                      stopBy: end
+                      kind: encapsed_string
+          - inside:
+              stopBy: end
+              follows:
+                stopBy: end
+                kind: expression_statement
+                has:
+                  stopBy: end
+                  kind: assignment_expression
+                  all:
+                    - has:
+                        stopBy: end
+                        kind: variable_name
+                        pattern: $T
+                    - has:
+                        stopBy: end
+                        kind: encapsed_string
+      - not:
+          inside:
+            stopBy: end
+            kind: conditional_expression
+  Match_pattern_with_prefix_openssl_encrypt:
+    kind: function_call_expression
+    all:
+      - not:
+          inside:
+            stopBy: end
+            kind: conditional_expression
+      - has:
+          kind: name
+          regex: ^(openssl_decrypt|openssl_encrypt)$
+      - has:
+          stopBy: end
+          kind: arguments
+          all:
+            - has:
+                stopBy: end
+                kind: argument
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: comment
+                has:
+                  stopBy: end
+                  kind: variable_name
+                  pattern: $R
+            - has:
+                stopBy: end
+                kind: argument
+                nthChild:
+                  position: 5
+                  ofRule:
+                    not:
+                      kind: comment
+                has:
+                  stopBy: end
+                  kind: variable_name
+                  pattern: $T
+      - any:
+          - inside:
+              stopBy: end
+              follows:
+                stopBy: end
+                kind: expression_statement
+                has:
+                  stopBy: end
+                  kind: assignment_expression
+                  all:
+                    - has:
+                        stopBy: end
+                        kind: variable_name
+                        pattern: $T
+                    - has:
+                        stopBy: end
+                        kind: encapsed_string
+          - follows:
+              stopBy: end
+              kind: expression_statement
+              has:
+                stopBy: end
+                kind: assignment_expression
+                all:
+                  - has:
+                      stopBy: end
+                      kind: variable_name
+                      pattern: $T
+                  - has:
+                      stopBy: end
+                      kind: encapsed_string
+      - any:
+          - follows:
+              stopBy: end
+              kind: expression_statement
+              has:
+                stopBy: end
+                kind: assignment_expression
+                all:
+                  - has:
+                      stopBy: end
+                      kind: variable_name
+                      pattern: $R
+                  - has:
+                      stopBy: end
+                      kind: encapsed_string
+                      regex: .*-CBC
+          - inside:
+              stopBy: end
+              follows:
+                stopBy: end
+                kind: expression_statement
+                has:
+                  stopBy: end
+                  kind: assignment_expression
+                  all:
+                    - has:
+                        stopBy: end
+                        kind: variable_name
+                        pattern: $R
+                    - has:
+                        stopBy: end
+                        kind: encapsed_string
+                        regex: .*-CBC
+  Match_pattern_with_prefix_openssl_decrypt:
+    kind: function_call_expression
+    all:
+      - not:
+          inside:
+            stopBy: end
+            kind: conditional_expression
+      - has:
+          kind: name
+          regex: ^(openssl_decrypt|openssl_encrypt)$
+      - has:
+          stopBy: end
+          kind: arguments
+          all:
+            - has:
+                stopBy: end
+                kind: argument
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: comment
+                has:
+                  stopBy: end
+                  kind: variable_name
+                  pattern: $R
+            - has:
+                stopBy: end
+                kind: argument
+                nthChild:
+                  position: 5
+                  ofRule:
+                    not:
+                      kind: comment
+                has:
+                  stopBy: end
+                  kind: variable_name
+                  pattern: $T
+      - any:
+          - follows:
+              stopBy: end
+              kind: expression_statement
+              has:
+                stopBy: end
+                kind: assignment_expression
+                all:
+                  - has:
+                      stopBy: end
+                      kind: variable_name
+                      pattern: $T
+                  - has:
+                      stopBy: end
+                      kind: encapsed_string
+          - inside:
+              stopBy: end
+              follows:
+                stopBy: end
+                kind: expression_statement
+                has:
+                  stopBy: end
+                  kind: assignment_expression
+                  all:
+                    - has:
+                        stopBy: end
+                        kind: variable_name
+                        pattern: $T
+                    - has:
+                        stopBy: end
+                        kind: encapsed_string
+      - any:
+          - follows:
+              stopBy: end
+              kind: expression_statement
+              has:
+                stopBy: end
+                kind: assignment_expression
+                all:
+                  - has:
+                      stopBy: end
+                      kind: variable_name
+                      pattern: $R
+                  - has:
+                      stopBy: end
+                      kind: encapsed_string
+                      regex: .*-CBC
+          - inside:
+              stopBy: end
+              follows:
+                stopBy: end
+                kind: expression_statement
+                has:
+                  stopBy: end
+                  kind: assignment_expression
+                  all:
+                    - has:
+                        stopBy: end
+                        kind: variable_name
+                        pattern: $R
+                    - has:
+                        stopBy: end
+                        kind: encapsed_string
+                        regex: .*-CBC
+  Match_pattern_directly_with_prefix_openssl_encrypt:
+    kind: function_call_expression
+    all:
+      - not:
+          inside:
+            stopBy: end
+            kind: conditional_expression
+      - has:
+          kind: name
+          regex: ^(openssl_decrypt|openssl_encrypt)$
+      - has:
+          stopBy: end
+          kind: arguments
+          all:
+            - has:
+                stopBy: end
+                kind: argument
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: comment
+                has:
+                  stopBy: end
+                  kind: encapsed_string
+                  regex: .*-CBC
+            - has:
+                stopBy: end
+                kind: argument
+                nthChild:
+                  position: 5
+                  ofRule:
+                    not:
+                      kind: comment
+                has:
+                  stopBy: end
+                  kind: variable_name
+                  pattern: $T
+      - any:
+          - follows:
+              stopBy: end
+              kind: expression_statement
+              has:
+                stopBy: end
+                kind: assignment_expression
+                all:
+                  - has:
+                      stopBy: end
+                      kind: variable_name
+                      pattern: $T
+                  - has:
+                      stopBy: end
+                      kind: encapsed_string
+          - inside:
+              stopBy: end
+              follows:
+                stopBy: end
+                kind: expression_statement
+                has:
+                  stopBy: end
+                  kind: assignment_expression
+                  all:
+                    - has:
+                        stopBy: end
+                        kind: variable_name
+                        pattern: $T
+                    - has:
+                        stopBy: end
+                        kind: encapsed_string
+  Match_pattern_directly_with_prefix_openssl_encrypt_return_statement:
+    kind: function_call_expression
+    all:
+      - not:
+          inside:
+            stopBy: end
+            kind: conditional_expression
+      - has:
+          kind: name
+          regex: ^(openssl_decrypt|openssl_encrypt)$
+      - has:
+          stopBy: end
+          kind: arguments
+          all:
+            - has:
+                stopBy: end
+                kind: argument
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: comment
+                has:
+                  stopBy: end
+                  kind: encapsed_string
+                  regex: .*-CBC
+            - has:
+                stopBy: end
+                kind: argument
+                nthChild:
+                  position: 5
+                  ofRule:
+                    not:
+                      kind: comment
+                has:
+                  stopBy: end
+                  kind: variable_name
+                  pattern: $T
+      - any:
+          - inside:
+              stopBy: end
+              follows:
+                stopBy: end
+                kind: expression_statement
+                has:
+                  stopBy: end
+                  kind: assignment_expression
+                  all:
+                    - has:
+                        stopBy: end
+                        kind: variable_name
+                        pattern: $T
+                    - has:
+                        stopBy: end
+                        kind: encapsed_string
+          - follows:
+              stopBy: end
+              kind: expression_statement
+              has:
+                stopBy: end
+                kind: assignment_expression
+                all:
+                  - has:
+                      stopBy: end
+                      kind: variable_name
+                      pattern: $T
+                  - has:
+                      stopBy: end
+                      kind: encapsed_string
+  Match_pattern_directly_with_prefix_openssl_encrypt_return_st_3fdf7ddef0ee:
+    kind: function_call_expression
+    all:
+      - not:
+          inside:
+            stopBy: end
+            kind: conditional_expression
+      - has:
+          kind: name
+          regex: ^(openssl_decrypt|openssl_encrypt)$
+      - has:
+          stopBy: end
+          kind: arguments
+          all:
+            - has:
+                stopBy: end
+                kind: argument
+                nthChild:
+                  position: 2
+                  pattern: $CBC
+                  ofRule:
+                    not:
+                      kind: comment
+            - has:
+                stopBy: end
+                kind: argument
+                nthChild:
+                  position: 5
+                  ofRule:
+                    not:
+                      kind: comment
+                has:
+                  stopBy: end
+                  kind: variable_name
+                  pattern: $T
+      - any:
+          - inside:
+              stopBy: end
+              follows:
+                stopBy: end
+                kind: expression_statement
+                has:
+                  stopBy: end
+                  kind: assignment_expression
+                  all:
+                    - has:
+                        stopBy: end
+                        kind: variable_name
+                        pattern: $T
+                    - has:
+                        stopBy: end
+                        kind: encapsed_string
+          - follows:
+              stopBy: end
+              kind: expression_statement
+              has:
+                stopBy: end
+                kind: assignment_expression
+                all:
+                  - has:
+                      stopBy: end
+                      kind: variable_name
+                      pattern: $T
+                  - has:
+                      stopBy: end
+                      kind: encapsed_string
+      - any:
+          - follows:
+              stopBy: end
+              kind: expression_statement
+              has:
+                stopBy: end
+                kind: assignment_expression
+                all:
+                  - has:
+                      stopBy: end
+                      kind: variable_name
+                      pattern: $CBC
+                  - has:
+                      stopBy: end
+                      kind: encapsed_string
+                      regex: ^.*-CBC
+          - inside:
+              stopBy: end
+              follows:
+                stopBy: end
+                kind: expression_statement
+                has:
+                  stopBy: end
+                  kind: assignment_expression
+                  all:
+                    - has:
+                        stopBy: end
+                        kind: variable_name
+                        pattern: $CBC
+                    - has:
+                        stopBy: end
+                        kind: encapsed_string
+                        regex: ^.*-CBC
+  Match_pattern_with_prefix_openssl_encrypt_PART2:
+    kind: function_call_expression
+    all:
+      - not:
+          inside:
+            stopBy: end
+            kind: conditional_expression
+      - has:
+          kind: name
+          regex: ^(openssl_decrypt|openssl_encrypt)$
+      - has:
+          stopBy: end
+          kind: arguments
+          all:
+            - has:
+                stopBy: end
+                kind: argument
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: comment
+                has:
+                  stopBy: end
+                  kind: variable_name
+                  pattern: $R
+            - has:
+                stopBy: end
+                kind: argument
+                nthChild:
+                  position: 5
+                  ofRule:
+                    not:
+                      kind: comment
+                has:
+                  stopBy: end
+                  kind: encapsed_string
+      - any:
+          - inside:
+              stopBy: end
+              follows:
+                stopBy: end
+                kind: expression_statement
+                has:
+                  stopBy: end
+                  kind: assignment_expression
+                  all:
+                    - has:
+                        stopBy: end
+                        kind: variable_name
+                        pattern: $T
+                    - has:
+                        stopBy: end
+                        kind: encapsed_string
+          - follows:
+              stopBy: end
+              kind: expression_statement
+              has:
+                stopBy: end
+                kind: assignment_expression
+                all:
+                  - has:
+                      stopBy: end
+                      kind: variable_name
+                      pattern: $T
+                  - has:
+                      stopBy: end
+                      kind: encapsed_string
+      - any:
+          - follows:
+              stopBy: end
+              kind: expression_statement
+              has:
+                stopBy: end
+                kind: assignment_expression
+                all:
+                  - has:
+                      stopBy: end
+                      kind: variable_name
+                      pattern: $R
+                  - has:
+                      stopBy: end
+                      kind: encapsed_string
+                      regex: .*-CBC
+          - inside:
+              stopBy: end
+              follows:
+                stopBy: end
+                kind: expression_statement
+                has:
+                  stopBy: end
+                  kind: assignment_expression
+                  all:
+                    - has:
+                        stopBy: end
+                        kind: variable_name
+                        pattern: $R
+                    - has:
+                        stopBy: end
+                        kind: encapsed_string
+                        regex: .*-CBC
+rule:
+  any:
+    - kind: function_call_expression
+      any:
+        - matches: Match_pattern_with_prefix_openssl_encrypt
+        - matches: Match_pattern_with_prefix_openssl_encrypt_PART2
+        - matches: Match_pattern_directly_with_prefix_openssl_encrypt
+        - matches: Match_pattern_directly_with_prefix_openssl_encryptpart2
+    - kind: return_statement
+      any:
+        - matches: Match_pattern_with_prefix_openssl_decrypt
+        - matches: Match_pattern_directly_with_prefix_openssl_encrypt_return_statement
+        - matches: Match_pattern_directly_with_prefix_openssl_encrypt_return_st_3fdf7ddef0ee
+  all:
+    - not:
+        has:
+          stopBy: end
+          kind: ERROR
+    - not:
+        inside:
+          stopBy: end
+          kind: ERROR

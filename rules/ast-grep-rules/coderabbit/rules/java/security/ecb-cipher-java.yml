@@ -1,0 +1,47 @@
+id: ecb-cipher-java
+severity: warning
+language: java
+message: >-
+  Cipher in ECB mode is detected. ECB mode produces the same output for the same input each time which allows an
+  attacker to intercept and replay the data. Further, ECB mode does not provide any integrity checking. See
+  https://find-sec-bugs.github.io/bugs.htm#CIPHER_INTEGRITY.
+note: |-
+  [CWE-327] Use of a Broken or Risky Cryptographic Algorithm. [REFERENCES]
+      - https://owasp.org/Top10/A02_2021-Cryptographic_Failures
+ast-grep-essentials: true
+rule:
+  kind: local_variable_declaration
+  all:
+    - has:
+        kind: type_identifier
+        regex: ^Cipher$
+    - has:
+        kind: variable_declarator
+        all:
+          - has:
+              kind: identifier
+          - has:
+              kind: method_invocation
+              all:
+                - has:
+                    kind: identifier
+                    regex: ^getInstance$
+                - has:
+                    kind: argument_list
+                    has:
+                      pattern: $MODE
+                      nthChild:
+                        position: 1
+                        ofRule:
+                          not:
+                            kind: line_comment
+                    not:
+                      has:
+                        nthChild:
+                          position: 2
+                          ofRule:
+                            not:
+                              kind: line_comment
+constraints:
+  MODE:
+    regex: .*ECB.*

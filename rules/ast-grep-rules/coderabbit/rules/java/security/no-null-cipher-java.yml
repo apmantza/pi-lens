@@ -1,0 +1,38 @@
+id: no-null-cipher-java
+severity: warning
+language: java
+message: >-
+  NullCipher was detected. This will not encrypt anything; the cipher text will be the same as the plain text. Use a
+  valid, secure cipher: Cipher.getInstance("AES/CBC/PKCS7PADDING"). See
+  https://owasp.org/www-community/Using_the_Java_Cryptographic_Extensions for more information.
+note: |-
+  [CWE-327] Use of a Broken or Risky Cryptographic Algorithm. [REFERENCES]
+      - https://owasp.org/Top10/A02_2021-Cryptographic_Failures
+ast-grep-essentials: true
+rule:
+  any:
+    - kind: local_variable_declaration
+      not:
+        any:
+          - has:
+              stopBy: end
+              kind: local_variable_declaration
+    - kind: expression_statement
+      not:
+        has:
+          stopBy: end
+          kind: local_variable_declaration
+    - kind: field_declaration
+  has:
+    stopBy: end
+    any:
+      - pattern: new NullCipher($$$)
+      - pattern: new javax.crypto.NullCipher($$$)
+  not:
+    all:
+      - inside:
+          stopBy: end
+          kind: ERROR
+      - has:
+          stopBy: end
+          kind: ERROR

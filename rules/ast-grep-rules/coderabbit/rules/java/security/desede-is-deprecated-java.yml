@@ -1,0 +1,92 @@
+id: desede-is-deprecated-java
+language: java
+severity: warning
+message: Triple DES (3DES or DESede) is considered deprecated. AES is the recommended cipher. Upgrade to use AES.
+note: >-
+  [CWE-326]: Inadequate Encryption Strength [OWASP A03:2017]: Sensitive Data Exposure [OWASP A02:2021]: Cryptographic
+  Failures [REFERENCES]
+      - https://find-sec-bugs.github.io/bugs.htm#TDES_USAGE
+      - https://csrc.nist.gov/News/2017/Update-to-Current-Use-and-Deprecation-of-TDEA
+ast-grep-essentials: true
+utils:
+  match_method_invocation:
+    kind: method_invocation
+    all:
+      - has:
+          stopBy: end
+          kind: identifier
+          nthChild: 1
+      - has:
+          kind: identifier
+          regex: ^getInstance$
+          nthChild: 2
+    has:
+      stopBy: end
+      kind: argument_list
+      has:
+        stopBy: end
+        kind: string_literal
+        regex: DESede
+  match_key_generator:
+    kind: method_invocation
+    all:
+      - has:
+          stopBy: end
+          kind: field_access
+          field: object
+          has:
+            kind: identifier
+            field: field
+            regex: ^KeyGenerator$
+      - has:
+          stopBy: end
+          kind: identifier
+          field: name
+          regex: ^getInstance$
+      - has:
+          kind: argument_list
+          has:
+            kind: string_literal
+            has:
+              kind: string_fragment
+              regex: ^DES$
+  matches_method_invocation_with_identifier:
+    kind: method_invocation
+    all:
+      - has:
+          kind: identifier
+          field: name
+          regex: ^getInstance$
+          nthChild: 2
+      - has:
+          kind: argument_list
+          has:
+            kind: identifier
+            pattern: $I
+    inside:
+      stopBy: end
+      follows:
+        stopBy: end
+        any:
+          - kind: local_variable_declaration
+          - kind: field_declaration
+        all:
+          - has:
+              kind: type_identifier
+              field: type
+          - has:
+              kind: variable_declarator
+              all:
+                - has:
+                    kind: identifier
+                    field: name
+                    pattern: $I
+                - has:
+                    kind: string_literal
+                    has:
+                      kind: string_fragment
+rule:
+  any:
+    - matches: match_method_invocation
+    - matches: match_key_generator
+    - matches: matches_method_invocation_with_identifier

@@ -1,0 +1,38 @@
+id: insecure-binaryformatter-deserialization-csharp
+severity: warning
+language: csharp
+message: >-
+  The BinaryFormatter type is dangerous and is not recommended for data processing. Applications should stop using
+  BinaryFormatter as soon as possible, even if they believe the data they're processing to be trustworthy.
+  BinaryFormatter is insecure and can't be made secure.
+note: |-
+  [CWE-502] Deserialization of Untrusted Data. [REFERENCES]
+      - https://docs.microsoft.com/en-us/dotnet/standard/serialization/binaryformatter-security-guide
+ast-grep-essentials: true
+utils:
+  MATCH_PATTERN_BinaryFormatter:
+    pattern: new BinaryFormatter()
+    any:
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: using_directive
+            pattern: using System.Runtime.Serialization.Formatters.Binary;
+      - inside:
+          kind: global_statement
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: using_directive
+            pattern: using System.Runtime.Serialization.Formatters.Binary
+    not:
+      inside:
+        kind: object_creation_expression
+        stopBy: end
+        not:
+          inside:
+            kind: variable_declarator
+            stopBy: end
+rule:
+  matches: MATCH_PATTERN_BinaryFormatter

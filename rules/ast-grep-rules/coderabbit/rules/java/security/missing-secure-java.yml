@@ -1,0 +1,584 @@
+id: missing-secure-java
+language: java
+severity: warning
+message: >-
+  Detected a cookie where the `Secure` flag is either missing or disabled. The `Secure` cookie flag instructs the
+  browser to forbid sending the cookie over an insecure HTTP request. Set the `Secure` flag to `true` so the cookie will
+  only be sent over HTTPS.
+note: >-
+  [CWE-614]: Sensitive Cookie in HTTPS Session Without 'Secure' Attribute [OWASP A05:2021]: Security Misconfiguration
+  [REFERENCES]
+      - https://owasp.org/Top10/A05_2021-Security_Misconfiguration
+ast-grep-essentials: true
+utils:
+  commons_not_rule_parts:
+    all:
+      - not:
+          inside:
+            any:
+              - kind: method_invocation
+              - kind: field_access
+      - not:
+          has:
+            stopBy: end
+            kind: method_invocation
+            all:
+              - has:
+                  nthChild:
+                    position: 2
+                    reverse: true
+                  kind: identifier
+                  field: name
+                  regex: ^(secure)$
+              - has:
+                  nthChild:
+                    position: 1
+                    reverse: true
+                  kind: argument_list
+      - not:
+          has:
+            nthChild:
+              position: 2
+              reverse: true
+            kind: identifier
+            field: name
+            regex: ^(secure)$
+            precedes:
+              kind: argument_list
+  cookie_of_pattern_for_c_equals_Cookie_of:
+    nthChild: 1
+    kind: identifier
+    any:
+      - regex: ^(io.micronaut.http.cookie.Cookie)$
+      - regex: ^(Cookie)$
+        inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: import_declaration
+            has:
+              nthChild: 1
+              kind: scoped_identifier
+              regex: ^(io.micronaut.http.cookie.Cookie)$
+    precedes:
+      kind: identifier
+      regex: ^(of)$
+      precedes:
+        kind: argument_list
+rule:
+  any:
+    - kind: method_invocation
+      all:
+        - has:
+            nthChild: 1
+            kind: identifier
+            field: object
+            regex: ^(Cookie)$
+        - has:
+            nthChild: 2
+            kind: identifier
+            field: name
+            regex: ^(of)$
+        - has:
+            nthChild: 3
+            kind: argument_list
+        - not:
+            any:
+              - inside:
+                  stopBy: end
+                  kind: method_invocation
+                  any:
+                    - has:
+                        kind: identifier
+                        field: name
+                        regex: ^(secure)$
+                    - inside:
+                        any:
+                          - kind: variable_declarator
+                          - kind: assignment_expression
+              - inside:
+                  stopBy: end
+                  any:
+                    - kind: variable_declarator
+                    - kind: assignment_expression
+      inside:
+        stopBy: end
+        follows:
+          stopBy: end
+          kind: import_declaration
+          has:
+            kind: scoped_identifier
+            nthChild: 1
+            regex: ^(io.micronaut.http.cookie.Cookie)$
+    - kind: method_invocation
+      all:
+        - has:
+            nthChild: 1
+            kind: field_access
+            field: object
+            regex: ^(io.micronaut.http.cookie.Cookie)$
+        - has:
+            nthChild: 2
+            kind: identifier
+            field: name
+            regex: ^(of)$
+        - has:
+            nthChild: 3
+            kind: argument_list
+        - not:
+            any:
+              - inside:
+                  stopBy: end
+                  any:
+                    - kind: method_invocation
+                    - kind: field_access
+                  regex: ^(io.micronaut.http.cookie.Cookie.of())
+                  has:
+                    kind: identifier
+                    field: name
+                    regex: ^(secure)$
+              - inside:
+                  stopBy: end
+                  any:
+                    - kind: method_invocation
+                    - kind: field_access
+                  regex: ^(io.micronaut.http.cookie.Cookie.of())
+                  inside:
+                    any:
+                      - kind: variable_declarator
+                      - kind: assignment_expression
+              - inside:
+                  any:
+                    - kind: variable_declarator
+                    - kind: assignment_expression
+    - any:
+        - kind: object_creation_expression
+          not:
+            inside:
+              any:
+                - kind: field_access
+                - kind: method_invocation
+          all:
+            - has:
+                kind: type_identifier
+                nthChild: 1
+                regex: ^(Cookie)$
+            - has:
+                kind: argument_list
+                nthChild: 2
+            - not:
+                inside:
+                  any:
+                    - kind: assignment_expression
+                    - kind: variable_declarator
+        - any:
+            - kind: method_invocation
+            - kind: field_access
+          regex: ^(new)
+          all:
+            - matches: commons_not_rule_parts
+            - has:
+                stopBy: end
+                kind: object_creation_expression
+                all:
+                  - has:
+                      kind: type_identifier
+                      nthChild: 1
+                      regex: ^(Cookie)$
+                  - has:
+                      kind: argument_list
+                      nthChild: 2
+      inside:
+        stopBy: end
+        follows:
+          stopBy: end
+          kind: import_declaration
+          has:
+            nthChild: 1
+            kind: scoped_identifier
+            regex: ^(io.micronaut.http.cookie.Cookie)$
+    - any:
+        - kind: object_creation_expression
+          not:
+            inside:
+              any:
+                - kind: field_access
+                - kind: method_invocation
+          all:
+            - has:
+                kind: scoped_type_identifier
+                nthChild: 1
+                regex: ^(io.micronaut.http.cookie.Cookie)$
+            - has:
+                kind: argument_list
+                nthChild: 2
+            - not:
+                inside:
+                  any:
+                    - kind: assignment_expression
+                    - kind: variable_declarator
+        - any:
+            - kind: method_invocation
+            - kind: field_access
+          all:
+            - matches: commons_not_rule_parts
+            - has:
+                stopBy: end
+                kind: object_creation_expression
+                all:
+                  - has:
+                      kind: scoped_type_identifier
+                      nthChild: 1
+                      regex: ^(io.micronaut.http.cookie.Cookie)$
+                  - has:
+                      kind: argument_list
+                      nthChild: 2
+    - any:
+        - kind: object_creation_expression
+          not:
+            inside:
+              any:
+                - kind: field_access
+                - kind: method_invocation
+          all:
+            - has:
+                kind: type_identifier
+                nthChild: 1
+                regex: ^(SimpleCookie)$
+            - has:
+                kind: argument_list
+                nthChild: 2
+            - not:
+                inside:
+                  any:
+                    - kind: assignment_expression
+                    - kind: variable_declarator
+        - any:
+            - kind: method_invocation
+            - kind: field_access
+          regex: ^(new)
+          all:
+            - matches: commons_not_rule_parts
+            - has:
+                stopBy: end
+                kind: object_creation_expression
+                all:
+                  - has:
+                      kind: type_identifier
+                      nthChild: 1
+                      regex: ^(SimpleCookie)$
+                  - has:
+                      kind: argument_list
+                      nthChild: 2
+      inside:
+        stopBy: end
+        follows:
+          stopBy: end
+          kind: import_declaration
+          has:
+            nthChild: 1
+            kind: scoped_identifier
+            regex: ^(io.micronaut.http.simple.cookies.SimpleCookie)$
+    - any:
+        - kind: object_creation_expression
+          not:
+            inside:
+              any:
+                - kind: field_access
+                - kind: method_invocation
+          all:
+            - has:
+                kind: scoped_type_identifier
+                nthChild: 1
+                regex: ^(io.micronaut.http.simple.cookies.SimpleCookie)$
+            - has:
+                kind: argument_list
+                nthChild: 2
+            - not:
+                inside:
+                  any:
+                    - kind: assignment_expression
+                    - kind: variable_declarator
+        - any:
+            - kind: method_invocation
+            - kind: field_access
+          all:
+            - matches: commons_not_rule_parts
+            - has:
+                stopBy: end
+                kind: object_creation_expression
+                all:
+                  - has:
+                      kind: scoped_type_identifier
+                      nthChild: 1
+                      regex: ^(io.micronaut.http.simple.cookies.SimpleCookie)$
+                  - has:
+                      kind: argument_list
+                      nthChild: 2
+    - any:
+        - kind: object_creation_expression
+          not:
+            inside:
+              any:
+                - kind: field_access
+                - kind: method_invocation
+          all:
+            - has:
+                kind: type_identifier
+                nthChild: 1
+                regex: ^(NettyCookie)$
+            - has:
+                kind: argument_list
+                nthChild: 2
+            - not:
+                inside:
+                  any:
+                    - kind: assignment_expression
+                    - kind: variable_declarator
+        - any:
+            - kind: method_invocation
+            - kind: field_access
+          regex: ^(new)
+          all:
+            - matches: commons_not_rule_parts
+            - has:
+                stopBy: end
+                kind: object_creation_expression
+                all:
+                  - has:
+                      kind: type_identifier
+                      nthChild: 1
+                      regex: ^(NettyCookie)$
+                  - has:
+                      kind: argument_list
+                      nthChild: 2
+      inside:
+        stopBy: end
+        follows:
+          stopBy: end
+          kind: import_declaration
+          has:
+            nthChild: 1
+            kind: scoped_identifier
+            regex: ^(io.micronaut.http.netty.cookies.NettyCookie)$
+    - any:
+        - kind: object_creation_expression
+          not:
+            inside:
+              any:
+                - kind: field_access
+                - kind: method_invocation
+          all:
+            - has:
+                kind: scoped_type_identifier
+                nthChild: 1
+                regex: ^(io.micronaut.http.netty.cookies.NettyCookie)$
+            - has:
+                kind: argument_list
+                nthChild: 2
+            - not:
+                inside:
+                  any:
+                    - kind: assignment_expression
+                    - kind: variable_declarator
+        - any:
+            - kind: method_invocation
+            - kind: field_access
+          all:
+            - matches: commons_not_rule_parts
+            - has:
+                stopBy: end
+                kind: object_creation_expression
+                all:
+                  - has:
+                      kind: scoped_type_identifier
+                      nthChild: 1
+                      regex: ^(io.micronaut.http.netty.cookies.NettyCookie)$
+                  - has:
+                      kind: argument_list
+                      nthChild: 2
+    - kind: identifier
+      pattern: $C
+      nthChild: 1
+      inside:
+        kind: variable_declarator
+        nthChild: 2
+        has:
+          kind: object_creation_expression
+          all:
+            - has:
+                nthChild: 1
+                any:
+                  - kind: type_identifier
+                  - kind: scoped_type_identifier
+            - has:
+                nthChild: 2
+                kind: argument_list
+        inside:
+          kind: local_variable_declaration
+          has:
+            nthChild: 1
+            any:
+              - kind: scoped_type_identifier
+                regex: >-
+                  ^(io.micronaut.http.cookie.Cookie|io.micronaut.http.netty.cookies.NettyCookie|io.micronaut.http.simple.cookies.SimpleCookie)$
+          not:
+            precedes:
+              stopBy: end
+              has:
+                stopBy: end
+                kind: method_invocation
+                pattern: $C.secure($$$)
+    - kind: identifier
+      pattern: $C
+      nthChild: 1
+      inside:
+        kind: variable_declarator
+        nthChild: 2
+        has:
+          kind: object_creation_expression
+          all:
+            - has:
+                nthChild: 1
+                any:
+                  - kind: type_identifier
+                  - kind: scoped_type_identifier
+            - has:
+                nthChild: 2
+                kind: argument_list
+        inside:
+          kind: local_variable_declaration
+          any:
+            - all:
+                - has:
+                    nthChild: 1
+                    any:
+                      - kind: type_identifier
+                        regex: ^(Cookie)$
+                - inside:
+                    stopBy: end
+                    follows:
+                      stopBy: end
+                      kind: import_declaration
+                      has:
+                        nthChild: 1
+                        kind: scoped_identifier
+                        regex: ^(io.micronaut.http.cookie.Cookie)$
+            - all:
+                - has:
+                    nthChild: 1
+                    any:
+                      - kind: type_identifier
+                        regex: ^(SimpleCookie)$
+                - inside:
+                    stopBy: end
+                    follows:
+                      stopBy: end
+                      kind: import_declaration
+                      has:
+                        nthChild: 1
+                        kind: scoped_identifier
+                        regex: ^(io.micronaut.http.simple.cookies.SimpleCookie)$
+            - all:
+                - has:
+                    nthChild: 1
+                    any:
+                      - kind: type_identifier
+                        regex: ^(NettyCookie)$
+                - inside:
+                    stopBy: end
+                    follows:
+                      stopBy: end
+                      kind: import_declaration
+                      has:
+                        nthChild: 1
+                        kind: scoped_identifier
+                        regex: ^(io.micronaut.http.netty.cookies.NettyCookie)$
+          not:
+            precedes:
+              stopBy: end
+              has:
+                stopBy: end
+                kind: method_invocation
+                pattern: $C.secure($$$)
+    - kind: identifier
+      pattern: $C
+      nthChild: 1
+      inside:
+        any:
+          - kind: assignment_expression
+          - kind: variable_declarator
+        has:
+          nthChild: 2
+          any:
+            - any:
+                - kind: field_access
+                - kind: method_invocation
+              not:
+                has:
+                  stopBy: end
+                  kind: identifier
+                  regex: ^(secure|getCookies)$
+                  precedes:
+                    kind: argument_list
+              has:
+                stopBy: end
+                kind: method_invocation
+                all:
+                  - has:
+                      nthChild: 1
+                      any:
+                        - kind: field_access
+                          regex: ^(io.micronaut.http.cookie.Cookie)$
+                        - kind: identifier
+                          regex: ^(Cookie)$
+                          inside:
+                            stopBy: end
+                            follows:
+                              stopBy: end
+                              kind: import_declaration
+                              has:
+                                nthChild: 1
+                                kind: scoped_identifier
+                                regex: ^(io.micronaut.http.cookie.Cookie)$
+                  - has:
+                      nthChild: 2
+                      kind: identifier
+                      regex: ^(of)$
+                  - has:
+                      nthChild: 3
+                      kind: argument_list
+            - kind: method_invocation
+              all:
+                - has:
+                    nthChild: 1
+                    any:
+                      - kind: field_access
+                        regex: ^(io.micronaut.http.cookie.Cookie)$
+                      - kind: identifier
+                        regex: ^(Cookie)$
+                        inside:
+                          stopBy: end
+                          follows:
+                            stopBy: end
+                            kind: import_declaration
+                            has:
+                              nthChild: 1
+                              kind: scoped_identifier
+                              regex: ^(io.micronaut.http.cookie.Cookie)$
+                - has:
+                    nthChild: 2
+                    kind: identifier
+                    regex: ^(of)$
+                - has:
+                    nthChild: 3
+                    kind: argument_list
+      not:
+        inside:
+          stopBy: end
+          precedes:
+            stopBy: end
+            has:
+              stopBy: end
+              kind: method_invocation
+              pattern: $C.secure($$$)

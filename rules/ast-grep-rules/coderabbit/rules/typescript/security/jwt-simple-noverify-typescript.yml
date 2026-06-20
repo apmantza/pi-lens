@@ -1,0 +1,112 @@
+id: jwt-simple-noverify-typescript
+language: TypeScript
+severity: warning
+message: |-
+  "Detected the decoding of a JWT token without a verify step. JWT tokens
+      must be verified before use, otherwise the token's integrity is unknown.
+      This means a malicious actor could forge a JWT token with any claims. Set
+      'verify' to `true` before using the token."
+note: >-
+  [CWE-287] Improper Authentication [CWE-345] Insufficient Verification of Data Authenticity [CWE-347] Improper
+  Verification of Cryptographic Signature [REFERENCES]
+      - https://www.npmjs.com/package/jwt-simple
+      - https://cwe.mitre.org/data/definitions/287
+      - https://cwe.mitre.org/data/definitions/345
+      - https://cwe.mitre.org/data/definitions/347
+ast-grep-essentials: true
+rule:
+  pattern: $JWT.decode($TOKEN, $SECRET, $NOVERIFY $$$)
+  inside:
+    stopBy: end
+    follows:
+      stopBy: end
+      any:
+        - any:
+            - kind: lexical_declaration
+            - kind: variable_declaration
+          all:
+            - has:
+                kind: variable_declarator
+                all:
+                  - has:
+                      kind: identifier
+                      pattern: $JWT
+                      nthChild: 1
+                  - has:
+                      kind: call_expression
+                      nthChild: 2
+                      all:
+                        - has:
+                            nthChild: 1
+                            kind: identifier
+                            regex: ^require$
+                        - has:
+                            nthChild: 2
+                            kind: arguments
+                            has:
+                              stopBy: end
+                              kind: string
+                              nthChild: 1
+                              has:
+                                kind: string_fragment
+                                regex: ^jwt-simple$
+                            all:
+                              - not:
+                                  has:
+                                    nthChild: 2
+                              - not:
+                                  has:
+                                    stopBy: end
+                                    any:
+                                      - kind: object
+                                      - kind: array
+                                      - kind: pair
+        - kind: expression_statement
+          has:
+            kind: assignment_expression
+            all:
+              - has:
+                  kind: identifier
+                  pattern: $JWT
+                  nthChild: 1
+              - has:
+                  kind: call_expression
+                  nthChild: 2
+                  all:
+                    - has:
+                        nthChild: 1
+                        kind: identifier
+                        regex: ^require$
+                    - has:
+                        nthChild: 2
+                        kind: arguments
+                        has:
+                          stopBy: end
+                          kind: string
+                          has:
+                            kind: string_fragment
+                            regex: ^jwt-simple$
+constraints:
+  NOVERIFY:
+    all:
+      - any:
+          - any:
+              - regex: ^true$
+              - kind: string
+              - kind: template_string
+          - has:
+              stopBy: end
+              any:
+                - regex: ^true$
+                - kind: string
+                - kind: template_string
+              not:
+                any:
+                  - kind: property_identifier
+                  - kind: shorthand_property_identifier
+                  - any:
+                      - kind: string
+                      - kind: template_string
+                    nthChild: 1
+                inside:
+                  kind: pair

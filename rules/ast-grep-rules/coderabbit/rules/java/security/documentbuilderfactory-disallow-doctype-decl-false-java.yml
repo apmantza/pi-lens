@@ -1,0 +1,45 @@
+id: documentbuilderfactory-disallow-doctype-decl-false-java
+language: java
+severity: warning
+message: |-
+  DOCTYPE declarations are enabled for $DBFACTORY. Without prohibiting
+    external entity declarations, this is vulnerable to XML external entity
+    attacks. Disable this by setting the feature
+    "http://apache.org/xml/features/disallow-doctype-decl" to true.
+    Alternatively, allow DOCTYPE declarations and only prohibit external
+    entities declarations. This can be done by setting the features
+    "http://xml.org/sax/features/external-general-entities" and
+    "http://xml.org/sax/features/external-parameter-entities" to false.
+note: >-
+  [CWE-611]: mproper Restriction of XML External Entity Reference [OWASP A04:2017]: XML External Entities (XXE) [OWASP
+  A05:2021 - Security Misconfiguration] [REFERENCES]
+       https://blog.sonarsource.com/secure-xml-processor
+       https://xerces.apache.org/xerces2-j/features.html
+ast-grep-essentials: true
+utils:
+  match_expression_statement:
+    kind: expression_statement
+    has:
+      stopBy: end
+      kind: method_invocation
+      all:
+        - has:
+            stopBy: end
+            kind: identifier
+        - has:
+            stopBy: end
+            kind: identifier
+            regex: ^setFeature$
+      has:
+        kind: argument_list
+        all:
+          - has:
+              stopBy: end
+              kind: string_literal
+              regex: http://apache.org/xml/features/disallow-doctype-decl
+          - has:
+              stopBy: end
+              regex: ^false$
+rule:
+  any:
+    - matches: match_expression_statement

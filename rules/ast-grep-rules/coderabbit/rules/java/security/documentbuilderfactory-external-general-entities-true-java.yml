@@ -1,0 +1,279 @@
+id: documentbuilderfactory-external-general-entities-true-java
+language: java
+severity: warning
+message: >-
+  External entities are allowed for $DBFACTORY. This is vulnerable to XML external entity attacks. Disable this by
+  setting the feature "http://xml.org/sax/features/external-general-entities" to false.
+note: |-
+  [CWE-798]: Use of Hard-coded Credentials [OWASP A07:2021]: Identification and Authentication Failures [REFERENCES]
+       https://blog.sonarsource.com/secure-xml-processor
+ast-grep-essentials: true
+utils:
+  match_expression_statement:
+    kind: method_invocation
+    all:
+      - has:
+          stopBy: neighbor
+          kind: identifier
+      - has:
+          stopBy: neighbor
+          kind: identifier
+          regex: ^setFeature$
+          nthChild: 2
+      - has:
+          stopBy: end
+          kind: argument_list
+          all:
+            - has:
+                stopBy: neighbor
+                kind: string_literal
+                regex: ^"http://xml.org/sax/features/external-general-entities"$
+                nthChild:
+                  position: 1
+                  ofRule:
+                    not:
+                      kind: line_comment
+            - has:
+                stopBy: neighbor
+                regex: ^true$
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: line_comment
+  match_expression_statement_Boolean_Instance:
+    kind: expression_statement
+    has:
+      stopBy: end
+      kind: method_invocation
+      all:
+        - has:
+            stopBy: neighbor
+            kind: identifier
+        - has:
+            stopBy: neighbor
+            kind: identifier
+            regex: ^setFeature$
+            nthChild: 2
+      has:
+        stopBy: end
+        kind: argument_list
+        field: arguments
+        all:
+          - has:
+              stopBy: neighbor
+              kind: string_literal
+              regex: ^"http://xml.org/sax/features/external-general-entities"$
+              nthChild:
+                position: 1
+                ofRule:
+                  not:
+                    kind: line_comment
+          - has:
+              stopBy: neighbor
+              pattern: $TRUE
+              nthChild:
+                position: 2
+                ofRule:
+                  not:
+                    kind: line_comment
+      any:
+        - inside:
+            stopBy: end
+            follows:
+              stopBy: end
+              kind: local_variable_declaration
+              has:
+                kind: variable_declarator
+                all:
+                  - has:
+                      kind: identifier
+                      pattern: $TRUE
+                      nthChild: 1
+                  - has:
+                      regex: ^true$
+        - follows:
+            stopBy: end
+            kind: local_variable_declaration
+            has:
+              kind: variable_declarator
+              all:
+                - has:
+                    kind: identifier
+                    pattern: $TRUE
+                    nthChild: 1
+                - has:
+                    regex: ^true$
+  match_expression_statement_Link_Instance:
+    kind: expression_statement
+    has:
+      stopBy: end
+      kind: method_invocation
+      all:
+        - has:
+            stopBy: neighbor
+            kind: identifier
+            nthChild: 1
+        - has:
+            stopBy: neighbor
+            kind: identifier
+            regex: ^setFeature$
+            nthChild: 2
+      has:
+        stopBy: end
+        kind: argument_list
+        field: arguments
+        all:
+          - has:
+              stopBy: neighbor
+              pattern: $URL
+              nthChild:
+                position: 1
+                ofRule:
+                  not:
+                    kind: line_comment
+          - has:
+              stopBy: neighbor
+              regex: ^true$
+              nthChild:
+                position: 2
+                ofRule:
+                  not:
+                    kind: line_comment
+      any:
+        - inside:
+            stopBy: end
+            follows:
+              stopBy: end
+              kind: local_variable_declaration
+              has:
+                kind: variable_declarator
+                all:
+                  - has:
+                      kind: identifier
+                      pattern: $URL
+                      nthChild: 1
+                  - has:
+                      kind: string_literal
+                      regex: ^"http://xml.org/sax/features/external-general-entities"$
+        - follows:
+            stopBy: end
+            kind: local_variable_declaration
+            has:
+              kind: variable_declarator
+              all:
+                - has:
+                    kind: identifier
+                    pattern: $URL
+                    nthChild: 1
+                - has:
+                    kind: string_literal
+                    regex: ^"http://xml.org/sax/features/external-general-entities"$
+  match_expression_statement_with_both_instance:
+    kind: expression_statement
+    has:
+      stopBy: end
+      kind: method_invocation
+      all:
+        - has:
+            stopBy: neighbor
+            kind: identifier
+        - has:
+            stopBy: neighbor
+            kind: identifier
+            regex: ^setFeature$
+            nthChild: 2
+        - has:
+            kind: argument_list
+            all:
+              - not:
+                  has:
+                    nthChild:
+                      position: 3
+                      ofRule:
+                        not:
+                          kind: line_comment
+              - has:
+                  kind: identifier
+                  pattern: $URL
+                  nthChild:
+                    position: 1
+                    ofRule:
+                      not:
+                        kind: line_comment
+              - has:
+                  kind: identifier
+                  pattern: $TRUE
+                  nthChild:
+                    position: 2
+                    ofRule:
+                      not:
+                        kind: line_comment
+        - any:
+            - follows:
+                stopBy: end
+                kind: local_variable_declaration
+                has:
+                  kind: variable_declarator
+                  all:
+                    - has:
+                        kind: identifier
+                        pattern: $TRUE
+                        nthChild: 1
+                    - has:
+                        regex: ^true$
+            - inside:
+                stopBy: end
+                follows:
+                  stopBy: end
+                  kind: local_variable_declaration
+                  has:
+                    kind: variable_declarator
+                    all:
+                      - has:
+                          kind: identifier
+                          pattern: $TRUE
+                          nthChild: 1
+                      - has:
+                          regex: ^true$
+        - any:
+            - follows:
+                stopBy: end
+                kind: local_variable_declaration
+                has:
+                  kind: variable_declarator
+                  all:
+                    - has:
+                        kind: identifier
+                        pattern: $URL
+                        nthChild: 1
+                    - has:
+                        regex: ^"http://xml.org/sax/features/external-general-entities"$
+            - inside:
+                stopBy: end
+                follows:
+                  stopBy: end
+                  kind: local_variable_declaration
+                  has:
+                    kind: variable_declarator
+                    all:
+                      - has:
+                          kind: identifier
+                          pattern: $URL
+                          nthChild: 1
+                      - has:
+                          regex: ^"http://xml.org/sax/features/external-general-entities"$
+rule:
+  any:
+    - matches: match_expression_statement
+    - matches: match_expression_statement_Boolean_Instance
+    - matches: match_expression_statement_Link_Instance
+    - matches: match_expression_statement_with_both_instance
+  not:
+    all:
+      - has:
+          stopBy: end
+          kind: ERROR
+      - inside:
+          stopBy: end
+          kind: ERROR

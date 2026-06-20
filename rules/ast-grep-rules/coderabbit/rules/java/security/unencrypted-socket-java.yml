@@ -1,0 +1,20 @@
+id: unencrypted-socket-java
+language: java
+severity: info
+message: |-
+  "Detected use of a Java socket that is not encrypted. As a result, the
+      traffic could be read by an attacker intercepting the network traffic. Use
+      an SSLSocket created by 'SSLSocketFactory' or 'SSLServerSocketFactory'
+      instead."
+note: |-
+  [CWE-319] Cleartext Transmission of Sensitive Information [REFERENCES]
+      - https://owasp.org/Top10/A02_2021-Cryptographic_Failures
+ast-grep-essentials: true
+rule:
+  any:
+    - pattern: new ServerSocket($$$)
+    - pattern: new Socket($$$)
+  not:
+    has:
+      stopBy: end
+      kind: ERROR

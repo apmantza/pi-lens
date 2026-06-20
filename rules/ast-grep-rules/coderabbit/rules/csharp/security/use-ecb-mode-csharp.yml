@@ -1,0 +1,177 @@
+id: use-ecb-mode-csharp
+language: csharp
+severity: warning
+message: >-
+  "Usage of the insecure ECB mode detected. You should use an authenticated encryption mode instead, which is
+  implemented by the classes AesGcm or ChaCha20Poly1305."
+note: |-
+  [CWE-327] Use of a Broken or Risky Cryptographic Algorithm [REFERENCES]
+      - https://learn.microsoft.com/en-gb/dotnet/api/system.security.cryptography.chacha20poly1305?view=net-6.0
+      - https://learn.microsoft.com/en-gb/dotnet/api/system.security.cryptography.aesgcm?view=net-6.0
+      - https://learn.microsoft.com/en-gb/dotnet/api/system.security.cryptography.ciphermode?view=net-6.0
+      - https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html#cipher-modes
+ast-grep-essentials: true
+utils:
+  use_of_instance:
+    any:
+      - matches: declaration_of_instance
+      - has:
+          matches: declaration_of_instance
+  declaration_of_instance:
+    any:
+      - kind: local_declaration_statement
+      - kind: field_declaration
+    has:
+      nthChild: 1
+      kind: variable_declaration
+      all:
+        - has:
+            nthChild: 1
+            kind: identifier
+            field: type
+            regex: ^(SymmetricAlgorithm|Aes|Rijndael|DES|TripleDES|RC2)$
+        - has:
+            nthChild: 2
+            kind: variable_declarator
+            has:
+              nthChild: 1
+              kind: identifier
+              field: name
+              pattern: $INST
+rule:
+  any:
+    - all:
+        - any:
+            - kind: invocation_expression
+              all:
+                - has:
+                    nthChild: 1
+                    kind: member_access_expression
+                    all:
+                      - has:
+                          nthChild: 1
+                          kind: identifier
+                          field: expression
+                          pattern: $INST
+                      - has:
+                          nthChild: 2
+                          kind: identifier
+                          field: name
+                          regex: ^(DecryptEcb|EncryptEcb)$
+                - has:
+                    nthChild: 2
+                    kind: argument_list
+            - kind: expression_statement
+              has:
+                kind: assignment_expression
+                nthChild: 1
+                all:
+                  - has:
+                      nthChild: 1
+                      kind: member_access_expression
+                      all:
+                        - has:
+                            nthChild: 1
+                            kind: identifier
+                            field: expression
+                            pattern: $INST
+                        - has:
+                            nthChild: 2
+                            kind: identifier
+                            field: name
+                            regex: ^(Mode)$
+                  - has:
+                      nthChild: 2
+                      kind: member_access_expression
+                      all:
+                        - has:
+                            nthChild: 1
+                            kind: identifier
+                            field: expression
+                            regex: ^(CipherMode)$
+                        - has:
+                            nthChild: 2
+                            kind: identifier
+                            field: name
+                            regex: ^(ECB)$
+      any:
+        - inside:
+            stopBy: end
+            follows:
+              stopBy: end
+              matches: use_of_instance
+        - follows:
+            stopBy: end
+            matches: use_of_instance
+        - inside:
+            stopBy: end
+            kind: block
+            follows:
+              kind: parameter_list
+              has:
+                kind: parameter
+                all:
+                  - has:
+                      nthChild: 1
+                      kind: identifier
+                      field: type
+                      regex: ^(SymmetricAlgorithm|Aes|Rijndael|DES|TripleDES|RC2)$
+                  - has:
+                      nthChild: 2
+                      kind: identifier
+                      field: name
+                      pattern: $INST
+    - all:
+        - any:
+            - kind: invocation_expression
+              all:
+                - has:
+                    nthChild: 1
+                    kind: member_access_expression
+                    all:
+                      - has:
+                          nthChild: 1
+                          kind: identifier
+                          field: expression
+                          regex: ^(SymmetricAlgorithm|Aes|Rijndael|DES|TripleDES|RC2)$
+                      - has:
+                          nthChild: 2
+                          kind: identifier
+                          field: name
+                          regex: ^(DecryptEcb|EncryptEcb)$
+                - has:
+                    nthChild: 2
+                    kind: argument_list
+            - kind: expression_statement
+              has:
+                kind: assignment_expression
+                nthChild: 1
+                all:
+                  - has:
+                      nthChild: 1
+                      kind: member_access_expression
+                      all:
+                        - has:
+                            nthChild: 1
+                            kind: identifier
+                            field: expression
+                            regex: ^(SymmetricAlgorithm|Aes|Rijndael|DES|TripleDES|RC2)$
+                        - has:
+                            nthChild: 2
+                            kind: identifier
+                            field: name
+                            regex: ^(Mode)$
+                  - has:
+                      nthChild: 2
+                      kind: member_access_expression
+                      all:
+                        - has:
+                            nthChild: 1
+                            kind: identifier
+                            field: expression
+                            regex: ^(CipherMode)$
+                        - has:
+                            nthChild: 2
+                            kind: identifier
+                            field: name
+                            regex: ^(ECB)$

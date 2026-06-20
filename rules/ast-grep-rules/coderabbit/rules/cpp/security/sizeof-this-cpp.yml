@@ -1,0 +1,41 @@
+id: sizeof-this-cpp
+language: cpp
+severity: warning
+message: >-
+  Do not use `sizeof(this)` to get the number of bytes of the object in memory. It returns the size of the pointer, not
+  the size of the object.
+note: |-
+  [CWE-467]: Use of sizeof() on a Pointer Type [REFERENCES]
+      - https://wiki.sei.cmu.edu/confluence/display/c/ARR01-C.+Do+not+apply+the+sizeof+operator+to+a+pointer+when+taking+the+size+of+an+array
+ast-grep-essentials: true
+utils:
+  match_sizeof_this:
+    kind: sizeof_expression
+    has:
+      kind: parenthesized_expression
+      has:
+        kind: this
+        regex: ^this$
+    inside:
+      stopBy: end
+      kind: return_statement
+      inside:
+        kind: compound_statement
+        follows:
+          kind: function_declarator
+          inside:
+            kind: function_definition
+rule:
+  kind: sizeof_expression
+  all:
+    - has:
+        stopBy: end
+        kind: this
+    - not:
+        has:
+          stopBy: end
+          any:
+            - nthChild: 2
+            - kind: pointer_expression
+            - kind: ERROR
+            - kind: sizeof_expression

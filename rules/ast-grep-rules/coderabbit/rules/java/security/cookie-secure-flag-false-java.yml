@@ -1,0 +1,13 @@
+id: cookie-secure-flag-false-java
+language: java
+severity: warning
+message: >-
+  A cookie was detected without setting the 'secure' flag. The 'secure' flag for cookies prevents the client from
+  transmitting the cookie over insecure channels such as HTTP. Set the 'secure' flag by calling
+  '$COOKIE.setSecure(true);'.
+note: |-
+  [CWE-614] Sensitive Cookie in HTTPS Session Without 'Secure' Attribute. [REFERENCES]
+      - https://owasp.org/www-community/controls/SecureCookieAttribute
+ast-grep-essentials: true
+rule:
+  pattern: $COOKIE.setSecure(false);

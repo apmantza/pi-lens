@@ -1,0 +1,253 @@
+id: use-of-weak-rsa-key-go
+language: go
+severity: warning
+message: RSA keys should be at least 2048 bits.
+note: |-
+  [CWE-326] Inadequate Encryption Strength. [REFERENCES]
+      - https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html#algorithms
+ast-grep-essentials: true
+utils:
+  statement_match_pattern_int_literal:
+    kind: int_literal
+    pattern: $BITS
+    inside:
+      stopBy: neighbor
+      kind: argument_list
+      inside:
+        stopBy: neighbor
+        kind: call_expression
+        all:
+          - has:
+              stopBy: neighbor
+              kind: selector_expression
+              regex: ^rsa.GenerateKey$|^rsa.GenerateMultiPrimeKey$
+          - has:
+              stopBy: neighbor
+              kind: argument_list
+              has:
+                stopBy: neighbor
+                pattern: $BITS
+                not:
+                  precedes:
+                    stopBy: end
+                    pattern: $SET
+    all:
+      - not:
+          has:
+            stopBy: end
+            kind: ERROR
+      - not:
+          precedes:
+            stopBy: end
+            pattern: $BITS
+      - not:
+          inside:
+            stopBy: neighbor
+            kind: argument_list
+            follows:
+              stopBy: neighbor
+              kind: selector_expression
+              regex: ^.rsa.GenerateKey$
+            inside:
+              stopBy: end
+              kind: call_expression
+              inside:
+                stopBy: end
+                kind: call_expression
+                has:
+                  stopBy: neighbor
+                  kind: selector_expression
+                  regex: .*rsa.GenerateKey
+                  precedes:
+                    stopBy: neighbor
+                    kind: argument_list
+                    has:
+                      stopBy: end
+                      pattern: $BITS
+      - not:
+          inside:
+            stopBy: end
+            kind: binary_expression
+      - not:
+          inside:
+            stopBy: end
+            kind: unary_expression
+  statement_match_pattern_unary_expression:
+    kind: unary_expression
+    pattern: $BITS
+    inside:
+      stopBy: neighbor
+      kind: argument_list
+      inside:
+        stopBy: neighbor
+        kind: call_expression
+        all:
+          - has:
+              stopBy: neighbor
+              kind: selector_expression
+              regex: ^rsa.GenerateKey$|^rsa.GenerateMultiPrimeKey$
+          - has:
+              stopBy: neighbor
+              kind: argument_list
+              has:
+                stopBy: neighbor
+                pattern: $BITS
+                not:
+                  precedes:
+                    stopBy: end
+                    pattern: $SET
+    all:
+      - not:
+          has:
+            stopBy: end
+            kind: ERROR
+      - not:
+          precedes:
+            stopBy: end
+            pattern: $BITS
+      - not:
+          inside:
+            stopBy: neighbor
+            kind: argument_list
+            follows:
+              stopBy: neighbor
+              kind: selector_expression
+              regex: .rsa.GenerateKey
+            inside:
+              stopBy: end
+              kind: call_expression
+              inside:
+                stopBy: end
+                kind: call_expression
+                has:
+                  stopBy: end
+                  kind: selector_expression
+                  regex: .*rsa.GenerateKey
+                  precedes:
+                    stopBy: end
+                    kind: argument_list
+                    has:
+                      stopBy: end
+                      pattern: $BITS
+      - not:
+          inside:
+            stopBy: end
+            kind: binary_expression
+  statement_match_pattern_float_literal:
+    kind: float_literal
+    pattern: $BITS
+    inside:
+      stopBy: neighbor
+      kind: argument_list
+      inside:
+        stopBy: neighbor
+        kind: call_expression
+        all:
+          - has:
+              stopBy: neighbor
+              kind: selector_expression
+              regex: ^rsa.GenerateKey$|^rsa.GenerateMultiPrimeKey$
+          - has:
+              stopBy: neighbor
+              kind: argument_list
+              has:
+                stopBy: neighbor
+                pattern: $BITS
+                not:
+                  precedes:
+                    stopBy: end
+                    pattern: $SET
+    all:
+      - not:
+          has:
+            stopBy: end
+            kind: ERROR
+      - not:
+          precedes:
+            stopBy: end
+            pattern: $BITS
+      - not:
+          inside:
+            stopBy: end
+            kind: call_expression
+            inside:
+              stopBy: end
+              kind: call_expression
+              has:
+                stopBy: end
+                kind: selector_expression
+                regex: ^rsa.GenerateKey|rsa.GenerateMultiPrimeKey$
+    not:
+      inside:
+        stopBy: end
+        any:
+          - kind: binary_expression
+          - kind: unary_expression
+  statement_match_pattern_binary_expression:
+    kind: binary_expression
+    pattern: $BITS
+    inside:
+      stopBy: neighbor
+      kind: argument_list
+      inside:
+        stopBy: neighbor
+        kind: call_expression
+        all:
+          - has:
+              stopBy: neighbor
+              kind: selector_expression
+              regex: ^rsa.GenerateKey$|^rsa.GenerateMultiPrimeKey$
+          - has:
+              stopBy: neighbor
+              kind: argument_list
+              has:
+                stopBy: neighbor
+                pattern: $BITS
+                not:
+                  precedes:
+                    stopBy: end
+                    pattern: $SET
+    all:
+      - not:
+          has:
+            stopBy: end
+            kind: ERROR
+      - not:
+          precedes:
+            stopBy: end
+            pattern: $BITS
+      - not:
+          inside:
+            stopBy: end
+            kind: call_expression
+            inside:
+              stopBy: end
+              kind: call_expression
+              has:
+                stopBy: end
+                kind: selector_expression
+                regex: ^rsa.GenerateKey|rsa.GenerateMultiPrimeKey$
+    not:
+      inside:
+        stopBy: end
+        kind: unary_expression
+rule:
+  any:
+    - kind: int_literal
+      matches: statement_match_pattern_int_literal
+    - kind: float_literal
+      matches: statement_match_pattern_float_literal
+    - kind: unary_expression
+      matches: statement_match_pattern_unary_expression
+    - kind: binary_expression
+      matches: statement_match_pattern_binary_expression
+  not:
+    has:
+      stopBy: end
+      kind: ERROR
+constraints:
+  BITS:
+    any:
+      - regex: >-
+          ^([+-]?(0|[1-9][0-9]?|[1-9][0-9]{2}|1[0-9]{3}|20[0-3][0-9]|204[0-7])(\.[0-9]+)?|([+-]?(0|[1-9][0-9]?|[1-9][0-9]{2}|1[0-9]{3}|20[0-3][0-9]|204[0-7])(\.[0-9]+)?\/[1-9][0-9]*)|[+-]?(\.[0-9]+)|([+-]?\.[0-9]+\/[1-9][0-9]*))$
+      - regex: ^-\d+(\.\d+)?(/(\d+(\.\d+)?))?$

@@ -1,0 +1,60 @@
+id: grpc-client-insecure-connection-go
+language: go
+severity: warning
+message: >-
+  Found an insecure gRPC connection using 'grpc.WithInsecure()'. This creates a connection without encryption to a gRPC
+  server. A malicious attacker could tamper with the gRPC message, which could compromise the machine. Instead,
+  establish a secure connection with an SSL certificate using the 'grpc.WithTransportCredentials()' function. You can
+  create a create credentials using a 'tls.Config{}' struct with 'credentials.NewTLS()'. The final fix looks like this:
+  'grpc.WithTransportCredentials(credentials.NewTLS(<config>))'.
+note: |-
+  [CWE-300] Channel Accessible by Non-Endpoint. [REFERENCES]
+      - https://blog.gopheracademy.com/advent-2019/go-grps-and-tls/#connection-without-encryption
+ast-grep-essentials: true
+rule:
+  kind: call_expression
+  all:
+    - has:
+        kind: selector_expression
+        all:
+          - has:
+              kind: identifier
+              pattern: $GRPC
+              nthChild: 1
+          - has:
+              kind: field_identifier
+              nthChild: 2
+              regex: ^Dial$
+    - has:
+        kind: argument_list
+        all:
+          - has:
+              nthChild:
+                position: 1
+                ofRule:
+                  not:
+                    kind: comment
+          - has:
+              kind: call_expression
+              all:
+                - has:
+                    kind: selector_expression
+                    all:
+                      - has:
+                          kind: identifier
+                          pattern: $GRPC
+                          nthChild: 1
+                      - has:
+                          kind: field_identifier
+                          nthChild: 2
+                          regex: ^WithInsecure$
+                - has:
+                    kind: argument_list
+    - not:
+        all:
+          - has:
+              stopBy: end
+              kind: ERROR
+          - has:
+              stopBy: end
+              kind: ERROR

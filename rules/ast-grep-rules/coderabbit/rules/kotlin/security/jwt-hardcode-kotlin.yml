@@ -1,0 +1,567 @@
+id: jwt-hardcode-kotlin
+language: kotlin
+severity: warning
+message: >-
+  A secret is hard-coded in the application. Secrets stored in source code, such as credentials, identifiers, and other
+  types of sensitive data, can be leaked and used by internal or external malicious actors. It is recommended to rotate
+  the secret and retrieve them from a secure secret vault or Hardware Security Module (HSM), alternatively environment
+  variables can be used if allowed by your company policy.
+note: |-
+  [CWE-798]: Use of Hard-coded Credentials [OWASP A03:2021]: Identification and Authentication Failures [REFERENCES]
+      - https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures
+ast-grep-essentials: true
+utils:
+  match_Algorithm_HMAC256_follow_imports:
+    kind: call_expression
+    all:
+      - has:
+          kind: navigation_expression
+          all:
+            - has:
+                kind: simple_identifier
+                regex: ^Algorithm$
+            - has:
+                kind: navigation_suffix
+                has:
+                  kind: simple_identifier
+                  regex: ^HMAC256$
+      - has:
+          kind: call_suffix
+          has:
+            kind: value_arguments
+            not:
+              has:
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: line_comment
+            has:
+              kind: value_argument
+              has:
+                kind: string_literal
+                not:
+                  regex: "\"\""
+    inside:
+      stopBy: end
+      follows:
+        stopBy: end
+        any:
+          - kind: import_list
+            has:
+              kind: import_header
+              any:
+                - pattern: import com.auth0.jwt.algorithms.*
+                - pattern: import com.auth0.jwt.algorithms.Algorithm
+  match_HMAC256:
+    kind: call_expression
+    all:
+      - has:
+          kind: simple_identifier
+          regex: ^HMAC256$
+      - has:
+          kind: call_suffix
+          has:
+            kind: value_arguments
+            not:
+              has:
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: line_comment
+            has:
+              kind: value_argument
+              has:
+                kind: string_literal
+                not:
+                  regex: "\"\""
+    inside:
+      stopBy: end
+      follows:
+        stopBy: end
+        any:
+          - kind: import_list
+            has:
+              kind: import_header
+              any:
+                - pattern: import com.auth0.jwt.algorithms.Algorithm.*
+                - pattern: import com.auth0.jwt.algorithms.Algorithm.HMAC256
+  match_Algorithm_HMAC384:
+    kind: call_expression
+    all:
+      - has:
+          kind: navigation_expression
+          all:
+            - has:
+                kind: simple_identifier
+                regex: ^Algorithm$
+            - has:
+                kind: navigation_suffix
+                has:
+                  kind: simple_identifier
+                  regex: ^HMAC384$
+      - has:
+          kind: call_suffix
+          has:
+            kind: value_arguments
+            not:
+              has:
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: line_comment
+            has:
+              kind: value_argument
+              has:
+                kind: string_literal
+                not:
+                  regex: "\"\""
+    inside:
+      stopBy: end
+      follows:
+        stopBy: end
+        any:
+          - kind: import_list
+            has:
+              kind: import_header
+              any:
+                - pattern: import com.auth0.jwt.algorithms.*
+                - pattern: import com.auth0.jwt.algorithms.Algorithm
+  match_HMAC384:
+    kind: call_expression
+    all:
+      - has:
+          kind: simple_identifier
+          regex: ^HMAC384$
+      - has:
+          kind: call_suffix
+          has:
+            kind: value_arguments
+            not:
+              has:
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: line_comment
+            has:
+              kind: value_argument
+              has:
+                kind: string_literal
+                not:
+                  regex: "\"\""
+    inside:
+      stopBy: end
+      follows:
+        stopBy: end
+        any:
+          - kind: import_list
+            has:
+              kind: import_header
+              any:
+                - pattern: import com.auth0.jwt.algorithms.Algorithm.*
+                - pattern: import com.auth0.jwt.algorithms.Algorithm.HMAC384
+  match_algorithm_HMAC512:
+    kind: call_expression
+    all:
+      - has:
+          kind: navigation_expression
+          all:
+            - has:
+                kind: simple_identifier
+                regex: ^Algorithm$
+            - has:
+                kind: navigation_suffix
+                has:
+                  kind: simple_identifier
+                  regex: ^HMAC512$
+      - has:
+          kind: call_suffix
+          has:
+            kind: value_arguments
+            not:
+              has:
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: line_comment
+            has:
+              kind: value_argument
+              has:
+                kind: string_literal
+                not:
+                  regex: "\"\""
+    inside:
+      stopBy: end
+      follows:
+        stopBy: end
+        any:
+          - kind: import_list
+            has:
+              kind: import_header
+              any:
+                - pattern: import com.auth0.jwt.algorithms.*
+                - pattern: import com.auth0.jwt.algorithms.Algorithm
+  match_HMAC512:
+    kind: call_expression
+    all:
+      - has:
+          kind: simple_identifier
+          regex: ^HMAC512$
+      - has:
+          kind: call_suffix
+          has:
+            kind: value_arguments
+            not:
+              has:
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: line_comment
+            has:
+              kind: value_argument
+              has:
+                kind: string_literal
+                not:
+                  regex: "\"\""
+    inside:
+      stopBy: end
+      follows:
+        stopBy: end
+        any:
+          - kind: import_list
+            has:
+              kind: import_header
+              any:
+                - pattern: import com.auth0.jwt.algorithms.Algorithm.*
+                - pattern: import com.auth0.jwt.algorithms.Algorithm.HMAC512
+  match_Algorithm_HMAC256_follow_imports_with_identifier:
+    kind: call_expression
+    all:
+      - has:
+          kind: navigation_expression
+          all:
+            - has:
+                kind: simple_identifier
+                regex: ^Algorithm$
+            - has:
+                kind: navigation_suffix
+                has:
+                  kind: simple_identifier
+                  regex: ^HMAC256$
+      - has:
+          kind: call_suffix
+          has:
+            kind: value_arguments
+            not:
+              has:
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: line_comment
+            has:
+              kind: value_argument
+              has:
+                kind: simple_identifier
+                pattern: $A
+    inside:
+      stopBy: end
+      follows:
+        stopBy: end
+        kind: property_declaration
+        all:
+          - has:
+              kind: variable_declaration
+              has:
+                kind: simple_identifier
+                pattern: $A
+          - has:
+              kind: string_literal
+              not:
+                regex: "\"\""
+        inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            any:
+              - kind: import_list
+                has:
+                  kind: import_header
+                  any:
+                    - pattern: import com.auth0.jwt.algorithms.*
+                    - pattern: import com.auth0.jwt.algorithms.Algorithm
+  match_HMAC256_with_identifier:
+    kind: call_expression
+    all:
+      - has:
+          kind: simple_identifier
+          regex: ^HMAC256$
+      - has:
+          kind: call_suffix
+          has:
+            kind: value_arguments
+            not:
+              has:
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: line_comment
+            has:
+              kind: value_argument
+              has:
+                kind: simple_identifier
+                pattern: $B
+    inside:
+      stopBy: end
+      follows:
+        stopBy: end
+        kind: property_declaration
+        all:
+          - has:
+              kind: variable_declaration
+              has:
+                kind: simple_identifier
+                pattern: $B
+          - has:
+              kind: string_literal
+              not:
+                regex: "\"\""
+        inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            any:
+              - kind: import_list
+                has:
+                  kind: import_header
+                  any:
+                    - pattern: import com.auth0.jwt.algorithms.Algorithm.*
+                    - pattern: import com.auth0.jwt.algorithms.Algorithm.HMAC256
+  match_Algorithm_HMAC384_with_identifier:
+    kind: call_expression
+    all:
+      - has:
+          kind: navigation_expression
+          all:
+            - has:
+                kind: simple_identifier
+                regex: ^Algorithm$
+            - has:
+                kind: navigation_suffix
+                has:
+                  kind: simple_identifier
+                  regex: ^HMAC384$
+      - has:
+          kind: call_suffix
+          has:
+            kind: value_arguments
+            not:
+              has:
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: line_comment
+            has:
+              kind: value_argument
+              has:
+                kind: simple_identifier
+                pattern: $C
+    inside:
+      stopBy: end
+      follows:
+        stopBy: end
+        kind: property_declaration
+        all:
+          - has:
+              kind: variable_declaration
+              has:
+                kind: simple_identifier
+                pattern: $C
+          - has:
+              kind: string_literal
+              not:
+                regex: "\"\""
+        inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            any:
+              - kind: import_list
+                has:
+                  kind: import_header
+                  any:
+                    - pattern: import com.auth0.jwt.algorithms.*
+                    - pattern: import com.auth0.jwt.algorithms.Algorithm
+  match_HMAC384_with_identifier:
+    kind: call_expression
+    all:
+      - has:
+          kind: simple_identifier
+          regex: ^HMAC384$
+      - has:
+          kind: call_suffix
+          has:
+            kind: value_arguments
+            not:
+              has:
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: line_comment
+            has:
+              kind: value_argument
+              has:
+                kind: simple_identifier
+                pattern: $D
+    inside:
+      stopBy: end
+      follows:
+        stopBy: end
+        kind: property_declaration
+        all:
+          - has:
+              kind: variable_declaration
+              has:
+                kind: simple_identifier
+                pattern: $D
+          - has:
+              kind: string_literal
+              not:
+                regex: "\"\""
+        inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            any:
+              - kind: import_list
+                has:
+                  kind: import_header
+                  any:
+                    - pattern: import com.auth0.jwt.algorithms.Algorithm.*
+                    - pattern: import com.auth0.jwt.algorithms.Algorithm.HMAC384
+  match_algorithm_HMAC512_with_identifier:
+    kind: call_expression
+    all:
+      - has:
+          kind: navigation_expression
+          all:
+            - has:
+                kind: simple_identifier
+                regex: ^Algorithm$
+            - has:
+                kind: navigation_suffix
+                has:
+                  kind: simple_identifier
+                  regex: ^HMAC512$
+      - has:
+          kind: call_suffix
+          has:
+            kind: value_arguments
+            not:
+              has:
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: line_comment
+            has:
+              kind: value_argument
+              has:
+                kind: simple_identifier
+                pattern: $E
+    inside:
+      stopBy: end
+      follows:
+        stopBy: end
+        kind: property_declaration
+        all:
+          - has:
+              kind: variable_declaration
+              has:
+                kind: simple_identifier
+                pattern: $E
+          - has:
+              kind: string_literal
+              not:
+                regex: "\"\""
+        inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            any:
+              - kind: import_list
+                has:
+                  kind: import_header
+                  any:
+                    - pattern: import com.auth0.jwt.algorithms.*
+                    - pattern: import com.auth0.jwt.algorithms.Algorithm
+  match_HMAC512_with_identifier:
+    kind: call_expression
+    all:
+      - has:
+          kind: simple_identifier
+          regex: ^HMAC512$
+      - has:
+          kind: call_suffix
+          has:
+            kind: value_arguments
+            not:
+              has:
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: line_comment
+            has:
+              kind: value_argument
+              has:
+                kind: simple_identifier
+                pattern: $F
+    inside:
+      stopBy: end
+      follows:
+        stopBy: end
+        kind: property_declaration
+        all:
+          - has:
+              kind: variable_declaration
+              has:
+                kind: simple_identifier
+                pattern: $F
+          - has:
+              kind: string_literal
+              not:
+                regex: "\"\""
+        inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            any:
+              - kind: import_list
+                has:
+                  kind: import_header
+                  any:
+                    - pattern: import com.auth0.jwt.algorithms.Algorithm.*
+                    - pattern: import com.auth0.jwt.algorithms.Algorithm.HMAC512
+rule:
+  any:
+    - matches: match_Algorithm_HMAC256_follow_imports
+    - matches: match_HMAC256
+    - matches: match_Algorithm_HMAC384
+    - matches: match_HMAC384
+    - matches: match_algorithm_HMAC512
+    - matches: match_HMAC512
+    - matches: match_Algorithm_HMAC256_follow_imports_with_identifier
+    - matches: match_HMAC256_with_identifier
+    - matches: match_Algorithm_HMAC384_with_identifier
+    - matches: match_HMAC384_with_identifier
+    - matches: match_algorithm_HMAC512_with_identifier
+    - matches: match_HMAC512_with_identifier

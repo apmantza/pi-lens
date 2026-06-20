@@ -1,0 +1,91 @@
+id: debug-enabled-python
+severity: warning
+language: python
+message: >-
+  Detected Flask app with debug=True. Do not deploy to production with this flag enabled as it will leak sensitive
+  information. Instead, consider using Flask configuration variables or setting 'debug' using system environment
+  variables.
+note: |-
+  [CWE-489] Active Debug Code. [REFERENCES]
+      - https://labs.detectify.com/2015/10/02/how-patreon-got-hacked-publicly-exposed-werkzeug-debugger/
+ast-grep-essentials: true
+utils:
+  MATCH_PATTERN_debug_True:
+    kind: call
+    all:
+      - has:
+          stopBy: neighbor
+          kind: attribute
+          all:
+            - has:
+                stopBy: neighbor
+                kind: identifier
+                regex: ^app$
+            - has:
+                stopBy: neighbor
+                kind: identifier
+                regex: ^run$
+      - has:
+          stopBy: neighbor
+          kind: argument_list
+          has:
+            stopBy: neighbor
+            kind: keyword_argument
+            regex: ^debug=True$
+      - any:
+          - inside:
+              stopBy: end
+              kind: if_statement
+              follows:
+                stopBy: end
+                kind: import_from_statement
+                has:
+                  stopBy: end
+                  kind: dotted_name
+                  has:
+                    stopBy: neighbor
+                    kind: identifier
+                    regex: ^Flask$
+          - inside:
+              stopBy: end
+              kind: function_definition
+              follows:
+                stopBy: end
+                kind: import_from_statement
+                has:
+                  stopBy: end
+                  kind: dotted_name
+                  has:
+                    stopBy: neighbor
+                    kind: identifier
+                    regex: ^Flask$
+          - inside:
+              stopBy: end
+              kind: expression_statement
+              follows:
+                stopBy: end
+                kind: import_from_statement
+                has:
+                  stopBy: end
+                  kind: dotted_name
+                  has:
+                    stopBy: neighbor
+                    kind: identifier
+                    regex: ^Flask$
+          - inside:
+              stopBy: end
+              kind: decorated_definition
+              follows:
+                stopBy: end
+                kind: import_from_statement
+                has:
+                  stopBy: end
+                  kind: dotted_name
+                  has:
+                    stopBy: neighbor
+                    kind: identifier
+                    regex: ^Flask$
+rule:
+  kind: call
+  any:
+    - matches: MATCH_PATTERN_debug_True

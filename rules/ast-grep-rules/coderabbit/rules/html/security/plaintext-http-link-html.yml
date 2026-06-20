@@ -1,0 +1,76 @@
+id: plaintext-http-link-html
+language: html
+severity: warning
+message: "\"This link points to a plaintext HTTP URL. Prefer an encrypted HTTPS URL if possible.\""
+note: |-
+  [CWE-319] Authentication Bypass by Primary Weakness [REFERENCES]
+      -  https://cwe.mitre.org/data/definitions/319.html
+ast-grep-essentials: true
+rule:
+  not:
+    has:
+      stopBy: end
+      kind: ERROR
+  any:
+    - kind: element
+      not:
+        has:
+          kind: erroneous_end_tag
+      has:
+        nthChild: 1
+        kind: start_tag
+        all:
+          - has:
+              nthChild: 1
+              kind: tag_name
+              regex: ^a$
+          - has:
+              kind: attribute
+              not:
+                has:
+                  stopBy: end
+                  kind: ERROR
+              all:
+                - has:
+                    stopBy: end
+                    kind: attribute_name
+                    regex: ^href$
+                - has:
+                    stopBy: end
+                    kind: attribute_value
+                    regex: ^([Hh][Tt][Tt][Pp]://)
+    - kind: start_tag
+      all:
+        - any:
+            - all:
+                - has:
+                    nthChild: 1
+                    kind: tag_name
+                    regex: ^a$
+                - inside:
+                    kind: element
+                    has:
+                      kind: erroneous_end_tag
+            - all:
+                - inside:
+                    kind: element
+                    has:
+                      kind: erroneous_end_tag
+                      has:
+                        kind: erroneous_end_tag_name
+                        regex: ^a$
+        - has:
+            kind: attribute
+            not:
+              has:
+                stopBy: end
+                kind: ERROR
+            all:
+              - has:
+                  stopBy: end
+                  kind: attribute_name
+                  regex: ^href$
+              - has:
+                  stopBy: end
+                  kind: attribute_value
+                  regex: ^([Hh][Tt][Tt][Pp]://)

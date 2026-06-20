@@ -1,0 +1,121 @@
+id: sizeof-this-c
+language: c
+severity: warning
+message: >-
+  Do not use `sizeof(this)` to get the number of bytes of the object in memory. It returns the size of the pointer, not
+  the size of the object.
+note: |-
+  [CWE-467]: Use of sizeof() on a Pointer Type [REFERENCES]
+      - https://wiki.sei.cmu.edu/confluence/display/c/ARR01-C.+Do+not+apply+the+sizeof+operator+to+a+pointer+when+taking+the+size+of+an+array
+ast-grep-essentials: true
+rule:
+  not:
+    has:
+      stopBy: end
+      any:
+        - kind: ERROR
+        - kind: pointer_expression
+        - kind: sizeof_expression
+        - kind: expression_statement
+  any:
+    - kind: macro_type_specifier
+      all:
+        - has:
+            stopBy: end
+            kind: identifier
+            nthChild: 1
+            regex: ^sizeof$
+        - has:
+            stopBy: end
+            kind: type_descriptor
+            nthChild: 2
+            not:
+              has:
+                nthChild: 2
+            has:
+              kind: type_identifier
+              pattern: $THIS
+        - not:
+            has:
+              kind: function_declarator
+              nthChild: 1
+    - kind: function_declarator
+      all:
+        - has:
+            stopBy: end
+            kind: field_identifier
+            regex: ^sizeof$
+            nthChild: 1
+        - has:
+            stopBy: end
+            kind: parameter_list
+            nthChild: 2
+            not:
+              has:
+                nthChild: 2
+            has:
+              kind: parameter_declaration
+              pattern: $THIS
+        - not:
+            has:
+              kind: function_declarator
+              nthChild: 1
+    - kind: parameter_declaration
+      all:
+        - has:
+            kind: type_identifier
+            nthChild: 1
+            regex: ^sizeof$
+        - any:
+            - has:
+                kind: abstract_function_declarator
+                has:
+                  kind: parameter_list
+                  not:
+                    has:
+                      nthChild: 2
+                  has:
+                    kind: parameter_declaration
+                    pattern: $THIS
+            - has:
+                kind: abstract_parenthesized_declarator
+                not:
+                  has:
+                    stopBy: end
+                    nthChild: 2
+                has:
+                  stopBy: end
+                  kind: parameter_list
+                  has:
+                    kind: parameter_declaration
+                    pattern: $THIS
+    - kind: sizeof_expression
+      not:
+        has:
+          any:
+            - nthChild: 2
+            - kind: parameter_declaration
+      has:
+        stopBy: end
+        kind: identifier
+        pattern: $THIS
+    - kind: type_descriptor
+      all:
+        - has:
+            kind: type_identifier
+            regex: ^sizeof$
+        - has:
+            stopBy: end
+            kind: abstract_function_declarator
+            has:
+              kind: parameter_list
+              not:
+                has:
+                  stopBy: end
+                  nthChild: 2
+              has:
+                kind: parameter_declaration
+                pattern: $THIS
+constraints:
+  THIS:
+    regex: ^this$

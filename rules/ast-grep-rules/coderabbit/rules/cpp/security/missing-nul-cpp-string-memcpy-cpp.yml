@@ -1,0 +1,393 @@
+id: missing-nul-cpp-string-memcpy-copy-cpp
+language: cpp
+severity: warning
+message: >-
+  The number of bytes copied from `$STR` does not include the NUL terminator. This can lead to an out-of-bounds read and
+  information disclosure. One extra byte should be added to the length to ensure that the NUL terminator is copied.
+note: |-
+  [CWE-125]: Out-of-bounds Read [REFERENCES]
+      - https://wiki.sei.cmu.edu/confluence/display/c/STR31-C.+Guarantee+that+storage+for+strings+has+sufficient+space+for+character+data+and+the+null+terminator
+ast-grep-essentials: true
+rule:
+  any:
+    - kind: qualified_identifier
+    - kind: identifier
+  pattern: $MEMFUNC
+  regex: ^(memcpy|wmemcpy|memmove|wmemmove|std::memcpy|std::wmemcpy|std::memmove|std::wmemmove)$
+  inside:
+    stopBy: end
+    any:
+      - kind: call_expression
+        all:
+          - has:
+              any:
+                - kind: qualified_identifier
+                - kind: identifier
+              nthChild: 1
+              pattern: $MEMFUNC
+          - has:
+              kind: argument_list
+              nthChild: 2
+              all:
+                - has:
+                    pattern: $DEST
+                    nthChild:
+                      position: 1
+                      ofRule:
+                        not:
+                          kind: comment
+                - has:
+                    pattern: $STR.c_str()
+                    nthChild:
+                      position: 2
+                      ofRule:
+                        not:
+                          kind: comment
+                - has:
+                    pattern: strlen($STR.c_str())
+                    nthChild:
+                      position: 3
+                      ofRule:
+                        not:
+                          kind: comment
+                - not:
+                    has:
+                      nthChild:
+                        position: 4
+                        ofRule:
+                          not:
+                            kind: comment
+        any:
+          - inside:
+              stopBy: end
+              follows:
+                stopBy: end
+                any:
+                  - pattern: $TYPE $DEST[$DIM] = $$$;
+                  - pattern: $TYPE $DEST[$DIM];
+                  - pattern: $TYPE *$DEST = $$$;
+          - follows:
+              stopBy: end
+              any:
+                - pattern: $TYPE $DEST[$DIM] = $$$;
+                - pattern: $TYPE $DEST[$DIM];
+                - pattern: $TYPE *$DEST = $$$;
+      - kind: call_expression
+        all:
+          - has:
+              any:
+                - kind: qualified_identifier
+                - kind: identifier
+              nthChild: 1
+              pattern: $MEMFUNC
+          - has:
+              kind: argument_list
+              nthChild: 2
+              all:
+                - has:
+                    pattern: $DEST
+                    nthChild:
+                      position: 1
+                      ofRule:
+                        not:
+                          kind: comment
+                - has:
+                    pattern: $STR.c_str()
+                    nthChild:
+                      position: 2
+                      ofRule:
+                        not:
+                          kind: comment
+                - has:
+                    pattern: $STR.size()
+                    nthChild:
+                      position: 3
+                      ofRule:
+                        not:
+                          kind: comment
+                - not:
+                    has:
+                      nthChild:
+                        position: 4
+                        ofRule:
+                          not:
+                            kind: comment
+        any:
+          - inside:
+              stopBy: end
+              follows:
+                stopBy: end
+                any:
+                  - pattern: $TYPE $DEST[$DIM] = $$$;
+                  - pattern: $TYPE $DEST[$DIM];
+                  - pattern: $TYPE *$DEST = $$$;
+          - follows:
+              stopBy: end
+              any:
+                - pattern: $TYPE $DEST[$DIM] = $$$;
+                - pattern: $TYPE $DEST[$DIM];
+                - pattern: $TYPE *$DEST = $$$;
+      - kind: call_expression
+        all:
+          - has:
+              pattern: $MEMFUNC
+              any:
+                - kind: qualified_identifier
+                - kind: identifier
+              nthChild: 1
+          - has:
+              kind: argument_list
+              nthChild: 2
+              all:
+                - has:
+                    pattern: $DEST
+                    nthChild:
+                      position: 1
+                      ofRule:
+                        not:
+                          kind: comment
+                - has:
+                    pattern: $STR.c_str()
+                    nthChild:
+                      position: 2
+                      ofRule:
+                        not:
+                          kind: comment
+                - has:
+                    pattern: $STR.length()
+                    nthChild:
+                      position: 3
+                      ofRule:
+                        not:
+                          kind: comment
+                - not:
+                    has:
+                      nthChild:
+                        position: 4
+                        ofRule:
+                          not:
+                            kind: comment
+        any:
+          - inside:
+              stopBy: end
+              follows:
+                stopBy: end
+                any:
+                  - pattern: $TYPE $DEST[$DIM] = $$$;
+                  - pattern: $TYPE $DEST[$DIM];
+                  - pattern: $TYPE *$DEST = $$$;
+          - follows:
+              stopBy: end
+              any:
+                - pattern: $TYPE $DEST[$DIM] = $$$;
+                - pattern: $TYPE $DEST[$DIM];
+                - pattern: $TYPE *$DEST = $$$;
+      - kind: call_expression
+        all:
+          - has:
+              nthChild: 1
+              any:
+                - kind: qualified_identifier
+                - kind: identifier
+              pattern: $MEMFUNC
+          - has:
+              nthChild: 2
+              kind: argument_list
+              all:
+                - has:
+                    pattern: $DEST
+                    nthChild:
+                      position: 1
+                      ofRule:
+                        not:
+                          kind: comment
+                - has:
+                    pattern: $STR.c_str()
+                    nthChild:
+                      position: 2
+                      ofRule:
+                        not:
+                          kind: comment
+                - has:
+                    pattern: $LEN
+                    nthChild:
+                      position: 3
+                      ofRule:
+                        not:
+                          kind: comment
+                - not:
+                    has:
+                      nthChild:
+                        position: 4
+                        ofRule:
+                          not:
+                            kind: comment
+          - all:
+              - any:
+                  - follows:
+                      stopBy: end
+                      any:
+                        - pattern: $LEN = strlen($STR.c_str());
+                        - pattern: $SET $LEN = strlen($STR.c_str());
+                  - inside:
+                      stopBy: end
+                      follows:
+                        stopBy: end
+                        any:
+                          - pattern: $LEN = strlen($STR.c_str());
+                          - pattern: $SET $LEN = strlen($STR.c_str());
+                  - inside:
+                      stopBy: end
+                      follows:
+                        stopBy: end
+                        kind: declaration
+                        has:
+                          kind: init_declarator
+                          all:
+                            - has:
+                                kind: identifier
+                                pattern: $LEN
+                            - has:
+                                kind: call_expression
+                                pattern: from.size()
+          - any:
+              - inside:
+                  stopBy: end
+                  follows:
+                    stopBy: end
+                    any:
+                      - pattern: $TYPE $DEST[$DIM] = $$$;
+                      - pattern: $TYPE $DEST[$DIM];
+                      - pattern: $TYPE *$DEST = $$$;
+              - follows:
+                  stopBy: end
+                  any:
+                    - pattern: $TYPE $DEST[$DIM] = $$$;
+                    - pattern: $TYPE $DEST[$DIM];
+                    - pattern: $TYPE *$DEST = $$$;
+      - kind: call_expression
+        all:
+          - has:
+              any:
+                - kind: qualified_identifier
+                - kind: identifier
+              nthChild: 1
+              pattern: $MEMFUNC
+          - has:
+              kind: argument_list
+              all:
+                - has:
+                    pattern: $DEST
+                    nthChild:
+                      position: 1
+                      ofRule:
+                        not:
+                          kind: comment
+                - has:
+                    pattern: $STR.c_str()
+                    nthChild:
+                      position: 2
+                      ofRule:
+                        not:
+                          kind: comment
+                - has:
+                    pattern: $LEN
+                    nthChild:
+                      position: 3
+                      ofRule:
+                        not:
+                          kind: comment
+                - not:
+                    has:
+                      nthChild:
+                        position: 4
+                        ofRule:
+                          not:
+                            kind: comment
+        follows:
+          stopBy: end
+          any:
+            - pattern: $LEN = $STR.size();
+            - pattern: $SET $LEN = $STR.size();
+        any:
+          - inside:
+              stopBy: end
+              follows:
+                stopBy: end
+                any:
+                  - pattern: $TYPE $DEST[$DIM] = $$$;
+                  - pattern: $TYPE $DEST[$DIM];
+                  - pattern: $TYPE *$DEST = $$$;
+          - follows:
+              stopBy: end
+              any:
+                - pattern: $TYPE $DEST[$DIM] = $$$;
+                - pattern: $TYPE $DEST[$DIM];
+                - pattern: $TYPE *$DEST = $$$;
+      - kind: call_expression
+        all:
+          - has:
+              any:
+                - kind: qualified_identifier
+                - kind: identifier
+              nthChild: 1
+              pattern: $MEMFUNC
+          - has:
+              kind: argument_list
+              all:
+                - has:
+                    pattern: $DEST
+                    nthChild:
+                      position: 1
+                      ofRule:
+                        not:
+                          kind: comment
+                - has:
+                    pattern: $STR.c_str()
+                    nthChild:
+                      position: 2
+                      ofRule:
+                        not:
+                          kind: comment
+                - has:
+                    pattern: $LEN
+                    nthChild:
+                      position: 3
+                      ofRule:
+                        not:
+                          kind: comment
+                - not:
+                    has:
+                      nthChild:
+                        position: 4
+                        ofRule:
+                          not:
+                            kind: comment
+          - any:
+              - inside:
+                  stopBy: end
+                  follows:
+                    stopBy: end
+                    any:
+                      - pattern: $LEN = $STR.length();
+                      - pattern: $SET $LEN = $STR.length();
+              - follows:
+                  stopBy: end
+                  any:
+                    - pattern: $LEN = $STR.length();
+                    - pattern: $SET $LEN = $STR.length();
+        any:
+          - inside:
+              stopBy: end
+              follows:
+                stopBy: end
+                any:
+                  - pattern: $TYPE $DEST[$DIM] = $$$;
+                  - pattern: $TYPE $DEST[$DIM];
+                  - pattern: $TYPE *$DEST = $$$;
+          - follows:
+              stopBy: end
+              any:
+                - pattern: $TYPE $DEST[$DIM] = $$$;
+                - pattern: $TYPE $DEST[$DIM];
+                - pattern: $TYPE *$DEST = $$$;

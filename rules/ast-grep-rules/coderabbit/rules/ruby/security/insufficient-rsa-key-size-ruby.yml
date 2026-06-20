@@ -1,0 +1,84 @@
+id: insufficient-rsa-key-size-ruby
+language: ruby
+severity: warning
+message: The RSA key size $SIZE is insufficent by NIST standards. It is recommended to use a key length of 2048 or higher.
+note: |-
+  [CWE-326] Inadequate Encryption Strength. [REFERENCES]
+      - https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-57Pt3r1.pdf
+ast-grep-essentials: true
+utils:
+  OpenSSL_PKey_RSA_generate_SIZE:
+    kind: call
+    all:
+      - has:
+          stopBy: neighbor
+          kind: scope_resolution
+          regex: ^OpenSSL::PKey::RSA$
+      - has:
+          stopBy: neighbor
+          regex: ^.$
+      - has:
+          stopBy: neighbor
+          kind: identifier
+          regex: ^(new|generate)$
+      - has:
+          stopBy: neighbor
+          kind: argument_list
+          has:
+            pattern: $KEYS
+            any:
+              - regex: >-
+                  ^(-?(0|[1-9][0-9]?|[1-9][0-9]{2}|1[0-9]{3}|20[0-3][0-9]|204[0-7])(\.[0-9]+)?|0|-[1-9][0-9]*|-[1-9][0-9]{2,}|-1[0-9]{3}|-20[0-3][0-9]|-204[0-7])$
+              - regex: ^-\d+(\.\d+)?(/(\d+(\.\d+)?))?$
+            nthChild:
+              position: 1
+              ofRule:
+                not:
+                  kind: comment
+  OpenSSL_PKey_RSA_new_ASSIGN:
+    kind: call
+    all:
+      - has:
+          stopBy: neighbor
+          kind: scope_resolution
+          regex: ^OpenSSL::PKey::RSA$
+      - has:
+          stopBy: neighbor
+          regex: ^.$
+      - has:
+          stopBy: neighbor
+          kind: identifier
+          regex: ^(new|generate)$
+      - has:
+          stopBy: neighbor
+          kind: argument_list
+          has:
+            stopBy: neighbor
+            pattern: $BIT
+            nthChild:
+              position: 1
+              ofRule:
+                not:
+                  kind: comment
+      - any:
+          - inside:
+              stopBy: end
+              follows:
+                stopBy: end
+                kind: assignment
+                pattern: $BIT = $KEY
+          - follows:
+              stopBy: end
+              kind: assignment
+              pattern: $BIT = $KEY
+rule:
+  kind: call
+  any:
+    - matches: OpenSSL_PKey_RSA_generate_SIZE
+    - matches: OpenSSL_PKey_RSA_new_ASSIGN
+constraints:
+  KEY:
+    any:
+      - regex: >-
+          ^(-?(0|[1-9][0-9]?|[1-9][0-9]{2}|1[0-9]{3}|20[0-3][0-9]|204[0-7])(\.[0-9]+)?|0|-[1-9][0-9]*|-[1-9][0-9]{2,}|-1[0-9]{3}|-20[0-3][0-9]|-204[0-7])$
+      - regex: ^-\d+(\.\d+)?(/(\d+(\.\d+)?))?$

@@ -1,0 +1,21 @@
+id: reqwest-accept-invalid-rust
+language: rust
+severity: warning
+message: Dangerously accepting invalid TLS
+note: |-
+  [CWE-295]: Improper Certificate [REFERENCES]
+      - https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html#method.danger_accept_invalid_hostnames
+      - https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html#method.danger_accept_invalid_certs
+ast-grep-essentials: true
+utils:
+  match_call_expression:
+    kind: call_expression
+    any:
+      - pattern: $CLIENT.danger_accept_invalid_hostnames(true)
+      - pattern: $CLIENT.danger_accept_invalid_certs(true)
+rule:
+  any:
+    - matches: match_call_expression
+constraints:
+  CLIENT:
+    regex: ^reqwest::Client::builder\(\)

@@ -19,7 +19,6 @@
 
 import type { LSPDiagnostic } from "../lsp/client.js";
 import { findLocalOpengrepConfig } from "../opengrep-config.js";
-import { findLocalSgconfig } from "../sgconfig.js";
 import { classifyDefect } from "./diagnostic-taxonomy.js";
 import type { DefectClass, OutputSemantic } from "./types.js";
 
@@ -39,7 +38,10 @@ export interface AuxiliaryLspProfile {
 	allowBlocking?: (cwd: string) => boolean;
 	/** Severity (+ whether blocking is allowed here) → semantic. Most auxiliaries
 	 *  are advisory; only high-signal ones block. */
-	semantic: (d: LSPDiagnostic, ctx: { blockingAllowed: boolean }) => OutputSemantic;
+	semantic: (
+		d: LSPDiagnostic,
+		ctx: { blockingAllowed: boolean },
+	) => OutputSemantic;
 	defectClass?: (d: LSPDiagnostic) => DefectClass | undefined;
 }
 
@@ -70,11 +72,11 @@ export const AUXILIARY_LSP_PROFILES: readonly AuxiliaryLspProfile[] = [
 		sourceMatch: /ast[-_]?grep/i,
 		killSwitchFlag: "no-ast-grep",
 		enabledByDefault: true,
-		// The ast-grep LSP server only attaches when the repo has an sgconfig
-		// (root-gated), so a finding here always stems from the team's own curated
-		// rules — deliberately authored, hence blocking-eligible (mirrors Opengrep's
-		// curated-config gate). The check is belt-and-suspenders for the runner.
-		allowBlocking: (cwd) => Boolean(findLocalSgconfig(cwd)),
+		// The ast-grep LSP runs either the repo's own sgconfig (when present) or
+		// pi-lens's shipped baseline sgconfig. In both cases the rule severity is
+		// deliberate, so preserve ast-grep's severity semantics: ERROR can block,
+		// WARNING/INFO stay advisory.
+		allowBlocking: () => true,
 		semantic: (d, { blockingAllowed }) =>
 			blockingAllowed && d.severity === 1 ? "blocking" : "warning",
 		defectClass: (d) =>
@@ -87,11 +89,12 @@ export type GetFlag = (flag: string) => boolean | string | undefined;
 /** The auxiliary server ids enabled for this turn (the lsp runner passes these
  *  to `touchFile` since it — not the LSP service — owns flag access). */
 export function enabledAuxiliaryLspServerIds(getFlag: GetFlag): string[] {
-	return AUXILIARY_LSP_PROFILES.filter(
-		(p) =>
-			p.enabledByDefault &&
-			!(p.killSwitchFlag && getFlag(p.killSwitchFlag) === true),
-	).map((p) => p.serverId);
+	return AUXILIARY_LSP_PROFILES.flatMap((p) =>
+		p.enabledByDefault &&
+		!(p.killSwitchFlag && getFlag(p.killSwitchFlag) === true)
+			? [p.serverId]
+			: [],
+	);
 }
 
 /** Find the profile whose server emitted a diagnostic with this `source`. */

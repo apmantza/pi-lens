@@ -26,20 +26,29 @@ export function findLocalSgconfig(startDir: string): string | undefined {
 	return undefined;
 }
 
-/** The shipped ast-grep rules dir (dev cwd first, then the installed package). */
-function findShippedRulesDir(): string | undefined {
+/** The shipped ast-grep rule dirs (dev cwd first, then the installed package). */
+function findShippedRuleDirs(): string[] {
 	const candidates = [
 		path.join(process.cwd(), "rules", "ast-grep-rules", "rules"),
+		path.join(process.cwd(), "rules", "ast-grep-rules", "coderabbit", "rules"),
 		resolvePackagePath(import.meta.url, "rules", "ast-grep-rules", "rules"),
+		resolvePackagePath(
+			import.meta.url,
+			"rules",
+			"ast-grep-rules",
+			"coderabbit",
+			"rules",
+		),
 	];
-	return candidates.find((d) => fs.existsSync(d));
+	return Array.from(new Set(candidates.filter((d) => fs.existsSync(d))));
 }
 
 let cachedBaselinePath: string | undefined;
 
 /**
- * Synthesize (once) an sgconfig that points ast-grep at pi-lens's SHIPPED rules,
- * for the no-project-sgconfig baseline (#239 Phase 2): the ast-grep LSP attaches
+ * Synthesize (once) an sgconfig that points ast-grep at pi-lens's SHIPPED rules
+ * (the native pi-lens rule dir plus vendored CodeRabbit essentials), for the
+ * no-project-sgconfig baseline (#239 Phase 2): the ast-grep LSP attaches
  * everywhere and is launched with `lsp --config <this>` so it scans the shipped
  * ruleset just as the napi runner did. `ruleDirs` is absolute (this file lives in
  * a temp dir, not the package) and forward-slashed (ast-grep accepts `/` on
@@ -50,13 +59,15 @@ export function resolveBaselineSgconfig(): string | undefined {
 	if (cachedBaselinePath && fs.existsSync(cachedBaselinePath)) {
 		return cachedBaselinePath;
 	}
-	const rulesDir = findShippedRulesDir();
-	if (!rulesDir) return undefined;
+	const ruleDirs = findShippedRuleDirs();
+	if (ruleDirs.length === 0) return undefined;
 	const dir = path.join(os.tmpdir(), "pi-lens-ast-grep");
 	fs.mkdirSync(dir, { recursive: true });
 	const file = path.join(dir, "baseline.sgconfig.yml");
-	const ruleDirForYaml = rulesDir.split(path.sep).join("/");
-	fs.writeFileSync(file, `ruleDirs:\n  - "${ruleDirForYaml}"\n`);
+	const ruleDirsForYaml = ruleDirs
+		.map((ruleDir) => `  - "${ruleDir.split(path.sep).join("/")}"`)
+		.join("\n");
+	fs.writeFileSync(file, `ruleDirs:\n${ruleDirsForYaml}\n`);
 	cachedBaselinePath = file;
 	return file;
 }

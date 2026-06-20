@@ -1,0 +1,258 @@
+id: libxml2-audit-parser-c
+language: c
+severity: warning
+message: >-
+  The libxml2 library is used to parse XML. When auditing such code, make sure that either the document being parsed is
+  trusted or that the parsing options are safe to consume untrusted documents. In such case make sure DTD or XInclude
+  documents cannot be loaded and there is no network access.
+note: |-
+  [CWE-611] Improper Restriction of XML External Entity Reference. [REFERENCES]
+      - https://owasp.org/Top10/A05_2021-Security_Misconfiguration
+ast-grep-essentials: true
+utils:
+  Pattern_having_three_child:
+    kind: call_expression
+    all:
+      - has:
+          kind: identifier
+          regex: ^(xmlReadFile)$
+      - has:
+          kind: argument_list
+          all:
+            - has:
+                nthChild:
+                  position: 1
+                  ofRule:
+                    not:
+                      kind: comment
+            - has:
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: comment
+            - has:
+                nthChild:
+                  position: 3
+                  ofRule:
+                    not:
+                      kind: comment
+            - not:
+                has:
+                  nthChild:
+                    position: 4
+                    ofRule:
+                      not:
+                        kind: comment
+  Pattern_having_five_child:
+    kind: call_expression
+    all:
+      - has:
+          kind: identifier
+          regex: ^(xmlParseInNodeContext|xmlReadMemory|xmlCtxtReadDoc|xmlCtxtReadFd)$
+      - has:
+          kind: argument_list
+          all:
+            - has:
+                nthChild:
+                  position: 1
+                  ofRule:
+                    not:
+                      kind: comment
+            - has:
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: comment
+            - has:
+                nthChild:
+                  position: 3
+                  ofRule:
+                    not:
+                      kind: comment
+            - has:
+                nthChild:
+                  position: 4
+                  ofRule:
+                    not:
+                      kind: comment
+            - has:
+                nthChild:
+                  position: 5
+                  ofRule:
+                    not:
+                      kind: comment
+            - not:
+                has:
+                  nthChild:
+                    position: 6
+                    ofRule:
+                      not:
+                        kind: comment
+  Pattern_having_four_child:
+    kind: call_expression
+    all:
+      - has:
+          kind: identifier
+          regex: ^(xmlReadDoc|xmlReadFd|xmlCtxtReadFile)$
+      - has:
+          kind: argument_list
+          all:
+            - has:
+                nthChild:
+                  position: 1
+                  ofRule:
+                    not:
+                      kind: comment
+            - has:
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: comment
+            - has:
+                nthChild:
+                  position: 3
+                  ofRule:
+                    not:
+                      kind: comment
+            - has:
+                nthChild:
+                  position: 4
+                  ofRule:
+                    not:
+                      kind: comment
+            - not:
+                has:
+                  nthChild:
+                    position: 5
+                    ofRule:
+                      not:
+                        kind: comment
+  Pattern_having_six_child:
+    kind: call_expression
+    all:
+      - has:
+          kind: identifier
+          regex: ^(xmlReadIO|xmlCtxtReadMemory)$
+      - has:
+          kind: argument_list
+          all:
+            - has:
+                nthChild:
+                  position: 1
+                  ofRule:
+                    not:
+                      kind: comment
+            - has:
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: comment
+            - has:
+                nthChild:
+                  position: 3
+                  ofRule:
+                    not:
+                      kind: comment
+            - has:
+                nthChild:
+                  position: 4
+                  ofRule:
+                    not:
+                      kind: comment
+            - has:
+                nthChild:
+                  position: 5
+                  ofRule:
+                    not:
+                      kind: comment
+            - has:
+                nthChild:
+                  position: 6
+                  ofRule:
+                    not:
+                      kind: comment
+            - not:
+                has:
+                  nthChild:
+                    position: 7
+                    ofRule:
+                      not:
+                        kind: comment
+  Pattern_having_seven_child:
+    kind: call_expression
+    all:
+      - has:
+          kind: identifier
+          regex: ^(xmlCtxtReadIO)$
+      - has:
+          kind: argument_list
+          all:
+            - has:
+                nthChild:
+                  position: 1
+                  ofRule:
+                    not:
+                      kind: comment
+            - has:
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: comment
+            - has:
+                nthChild:
+                  position: 3
+                  ofRule:
+                    not:
+                      kind: comment
+            - has:
+                nthChild:
+                  position: 4
+                  ofRule:
+                    not:
+                      kind: comment
+            - has:
+                nthChild:
+                  position: 5
+                  ofRule:
+                    not:
+                      kind: comment
+            - has:
+                nthChild:
+                  position: 6
+                  ofRule:
+                    not:
+                      kind: comment
+            - has:
+                nthChild:
+                  position: 7
+                  ofRule:
+                    not:
+                      kind: comment
+            - not:
+                has:
+                  nthChild:
+                    position: 8
+                    ofRule:
+                      not:
+                        kind: comment
+rule:
+  kind: call_expression
+  any:
+    - matches: Pattern_having_five_child
+    - matches: Pattern_having_four_child
+    - matches: Pattern_having_six_child
+    - matches: Pattern_having_seven_child
+    - matches: Pattern_having_three_child
+  not:
+    all:
+      - has:
+          stopBy: end
+          kind: ERROR
+      - inside:
+          stopBy: end
+          kind: ERROR

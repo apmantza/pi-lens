@@ -1,0 +1,18 @@
+id: fix-format-security-error-cpp
+language: cpp
+severity: warning
+message: >-
+  The Format String exploit occurs when the submitted data of an input string is evaluated as a command by the
+  application.
+ast-grep-essentials: true
+rule:
+  pattern: $PRINTF($S, $VAR)
+constraints:
+  PRINTF:
+    regex: ^sprintf|fprintf$
+  VAR:
+    not:
+      any:
+        - kind: string_literal
+        - kind: concatenated_string
+fix: $PRINTF($S, "%s", $VAR)

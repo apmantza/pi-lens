@@ -1,0 +1,577 @@
+id: node-rsa-weak-key-javascript
+language: javascript
+severity: warning
+message: Use of RSA-$BITS, which is considered weak. Based on NIST standards, RSA keys should be at least 2048 bits.
+note: |-
+  [CWE-326] Inadequate Encryption Strength. [REFERENCES]
+      - https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html#algorithms
+ast-grep-essentials: true
+utils:
+  MATCH_BITS_DIRECTLY_NODE_FORGE:
+    kind: number
+    pattern: $R
+    inside:
+      stopBy: end
+      kind: lexical_declaration
+      all:
+        - has:
+            stopBy: end
+            kind: variable_declarator
+            has:
+              stopBy: end
+              kind: call_expression
+              all:
+                - has:
+                    stopBy: end
+                    kind: member_expression
+                    has:
+                      stopBy: end
+                      kind: member_expression
+                      all:
+                        - has:
+                            stopBy: end
+                            kind: identifier
+                            pattern: $A
+                        - has:
+                            stopBy: end
+                            kind: property_identifier
+                            regex: ^rsa$
+                - has:
+                    stopBy: end
+                    kind: arguments
+                    has:
+                      stopBy: end
+                      kind: number
+                      pattern: $R
+        - any:
+            - follows:
+                stopBy: end
+                kind: lexical_declaration
+                has:
+                  stopBy: end
+                  kind: variable_declarator
+                  all:
+                    - has:
+                        stopBy: end
+                        kind: identifier
+                        pattern: $A
+                    - has:
+                        stopBy: end
+                        kind: member_expression
+                        all:
+                          - has:
+                              stopBy: end
+                              kind: identifier
+                          - has:
+                              stopBy: neighbor
+                              kind: property_identifier
+                              regex: ^pki$
+        - any:
+            - follows:
+                stopBy: end
+                kind: lexical_declaration
+                has:
+                  stopBy: end
+                  kind: variable_declarator
+                  all:
+                    - has:
+                        stopBy: end
+                        kind: identifier
+                    - has:
+                        stopBy: end
+                        kind: call_expression
+                        all:
+                          - has:
+                              stopBy: neighbor
+                              kind: identifier
+                              regex: ^require$
+                          - has:
+                              stopBy: neighbor
+                              kind: arguments
+                              has:
+                                stopBy: neighbor
+                                kind: string
+                                has:
+                                  stopBy: neighbor
+                                  kind: string_fragment
+                                  regex: ^node-forge$
+            - follows:
+                stopBy: end
+                kind: import_statement
+                all:
+                  - has:
+                      stopBy: neighbor
+                      kind: import_clause
+                      has:
+                        stopBy: end
+                        kind: namespace_import
+                        has:
+                          stopBy: neighbor
+                          kind: identifier
+                  - has:
+                      stopBy: end
+                      kind: string
+                      has:
+                        stopBy: neighbor
+                        kind: string_fragment
+                        regex: ^node-forge$
+            - follows:
+                stopBy: end
+                kind: import_statement
+                all:
+                  - has:
+                      stopBy: neighbor
+                      kind: import_clause
+                  - has:
+                      stopBy: neighbor
+                      kind: string
+                      has:
+                        stopBy: neighbor
+                        kind: string_fragment
+                        regex: ^node-forge$
+  MATCH_BITS_DIRECTLY_NODE_RSA:
+    kind: number
+    pattern: $R
+    inside:
+      stopBy: end
+      kind: lexical_declaration
+      all:
+        - has:
+            stopBy: end
+            kind: variable_declarator
+            has:
+              stopBy: end
+              kind: new_expression
+              all:
+                - has:
+                    stopBy: neighbor
+                    kind: identifier
+                - has:
+                    stopBy: neighbor
+                    kind: arguments
+                    has:
+                      stopBy: neighbor
+                      kind: object
+                      has:
+                        stopBy: neighbor
+                        kind: pair
+                        all:
+                          - has:
+                              stopBy: neighbor
+                              kind: property_identifier
+                          - has:
+                              stopBy: end
+                              kind: number
+        - any:
+            - follows:
+                stopBy: end
+                kind: lexical_declaration
+                has:
+                  stopBy: end
+                  kind: variable_declarator
+                  all:
+                    - has:
+                        stopBy: end
+                        kind: identifier
+                    - has:
+                        stopBy: end
+                        kind: call_expression
+                        all:
+                          - has:
+                              stopBy: neighbor
+                              kind: identifier
+                              regex: ^require$
+                          - has:
+                              stopBy: neighbor
+                              kind: arguments
+                              has:
+                                stopBy: neighbor
+                                kind: string
+                                has:
+                                  stopBy: neighbor
+                                  kind: string_fragment
+                                  regex: ^node-rsa$
+            - follows:
+                stopBy: end
+                kind: import_statement
+                all:
+                  - has:
+                      stopBy: neighbor
+                      kind: import_clause
+                      has:
+                        stopBy: end
+                        kind: namespace_import
+                        has:
+                          stopBy: neighbor
+                          kind: identifier
+                  - has:
+                      stopBy: end
+                      kind: string
+                      has:
+                        stopBy: neighbor
+                        kind: string_fragment
+                        regex: ^node-rsa$
+            - follows:
+                stopBy: end
+                kind: import_statement
+                all:
+                  - has:
+                      stopBy: neighbor
+                      kind: import_clause
+                  - has:
+                      stopBy: neighbor
+                      kind: string
+                      has:
+                        stopBy: neighbor
+                        kind: string_fragment
+                        regex: ^node-rsa$
+  MATCH_BITS_WITHIN_FUNCTION_WITH_NODE_FORGE:
+    kind: number
+    pattern: $R
+    inside:
+      stopBy: end
+      kind: variable_declaration
+      all:
+        - has:
+            stopBy: end
+            kind: variable_declarator
+            has:
+              stopBy: end
+              kind: call_expression
+              all:
+                - has:
+                    stopBy: end
+                    kind: member_expression
+                - has:
+                    stopBy: end
+                    kind: arguments
+                    has:
+                      stopBy: end
+                      kind: object
+                      has:
+                        stopBy: end
+                        kind: pair
+                        all:
+                          - has:
+                              stopBy: end
+                              kind: property_identifier
+                          - has:
+                              stopBy: end
+                              kind: number
+                              pattern: $R
+        - any:
+            - follows:
+                stopBy: end
+                kind: lexical_declaration
+                has:
+                  stopBy: end
+                  kind: variable_declarator
+                  all:
+                    - has:
+                        stopBy: end
+                        kind: identifier
+                    - has:
+                        stopBy: end
+                        kind: call_expression
+                        all:
+                          - has:
+                              stopBy: neighbor
+                              kind: identifier
+                              regex: ^require$
+                          - has:
+                              stopBy: neighbor
+                              kind: arguments
+                              has:
+                                stopBy: neighbor
+                                kind: string
+                                has:
+                                  stopBy: neighbor
+                                  kind: string_fragment
+                                  regex: ^node-forge$
+            - follows:
+                stopBy: end
+                kind: import_statement
+                all:
+                  - has:
+                      stopBy: neighbor
+                      kind: import_clause
+                      has:
+                        stopBy: end
+                        kind: namespace_import
+                        has:
+                          stopBy: neighbor
+                          kind: identifier
+                  - has:
+                      stopBy: end
+                      kind: string
+                      has:
+                        stopBy: neighbor
+                        kind: string_fragment
+                        regex: ^node-forge$
+            - follows:
+                stopBy: end
+                kind: import_statement
+                all:
+                  - has:
+                      stopBy: neighbor
+                      kind: import_clause
+                  - has:
+                      stopBy: neighbor
+                      kind: string
+                      has:
+                        stopBy: neighbor
+                        kind: string_fragment
+                        regex: ^node-forge$
+  MATCH_BITS_WITHIN_FUNCTION_WITH_CRYPTO_AND_PROMISIFY:
+    kind: number
+    pattern: $R
+    inside:
+      stopBy: end
+      kind: lexical_declaration
+      all:
+        - has:
+            stopBy: end
+            kind: call_expression
+            all:
+              - has:
+                  stopBy: end
+                  kind: call_expression
+                  all:
+                    - has:
+                        stopBy: end
+                        kind: member_expression
+                        has:
+                          stopBy: end
+                          kind: property_identifier
+                          regex: ^promisify$
+                    - has:
+                        stopBy: end
+                        kind: arguments
+                        has:
+                          stopBy: end
+                          kind: member_expression
+                          all:
+                            - has:
+                                stopBy: end
+                                kind: identifier
+                                pattern: $E
+                            - has:
+                                stopBy: end
+                                kind: property_identifier
+              - has:
+                  stopBy: end
+                  kind: arguments
+                  all:
+                    - has:
+                        stopBy: end
+                        kind: string
+                        has:
+                          stopBy: neighbor
+                          kind: string_fragment
+                          regex: ^rsa$
+                    - has:
+                        stopBy: end
+                        kind: object
+                        has:
+                          stopBy: neighbor
+                          kind: pair
+                          all:
+                            - has:
+                                stopBy: end
+                                kind: property_identifier
+                                regex: ^modulusLength$
+                            - has:
+                                stopBy: end
+                                kind: number
+        - any:
+            - follows:
+                stopBy: end
+                kind: lexical_declaration
+                has:
+                  stopBy: end
+                  kind: variable_declarator
+                  all:
+                    - has:
+                        stopBy: end
+                        kind: identifier
+                        pattern: $E
+                    - has:
+                        stopBy: end
+                        kind: call_expression
+                        all:
+                          - has:
+                              stopBy: neighbor
+                              kind: identifier
+                              regex: ^require$
+                          - has:
+                              stopBy: neighbor
+                              kind: arguments
+                              has:
+                                stopBy: neighbor
+                                kind: string
+                                has:
+                                  stopBy: neighbor
+                                  kind: string_fragment
+                                  regex: ^crypto$
+            - follows:
+                stopBy: end
+                kind: import_statement
+                all:
+                  - has:
+                      stopBy: neighbor
+                      kind: import_clause
+                      has:
+                        stopBy: end
+                        kind: namespace_import
+                        has:
+                          stopBy: neighbor
+                          kind: identifier
+                          pattern: $E
+                  - has:
+                      stopBy: end
+                      kind: string
+                      has:
+                        stopBy: neighbor
+                        kind: string_fragment
+                        regex: ^crypto$
+            - follows:
+                stopBy: end
+                kind: import_statement
+                all:
+                  - has:
+                      stopBy: neighbor
+                      kind: import_clause
+                  - has:
+                      stopBy: neighbor
+                      kind: string
+                      has:
+                        stopBy: neighbor
+                        kind: string_fragment
+                        regex: ^crypto$
+  MATCH_BITS_WITHIN_FUNCTION_WITH_CRYPTO:
+    kind: number
+    pattern: $R
+    inside:
+      stopBy: end
+      kind: lexical_declaration
+      all:
+        - has:
+            stopBy: end
+            kind: variable_declarator
+            has:
+              stopBy: end
+              kind: call_expression
+              all:
+                - has:
+                    stopBy: end
+                    kind: member_expression
+                    all:
+                      - has:
+                          stopBy: end
+                          kind: identifier
+                          pattern: $S
+                      - has:
+                          stopBy: end
+                          kind: property_identifier
+                - has:
+                    stopBy: end
+                    kind: arguments
+                    all:
+                      - has:
+                          stopBy: end
+                          kind: string
+                          has:
+                            stopBy: end
+                            kind: string_fragment
+                            regex: ^rsa$
+                      - has:
+                          stopBy: end
+                          kind: object
+                          has:
+                            stopBy: end
+                            kind: pair
+                            all:
+                              - has:
+                                  stopBy: end
+                                  kind: property_identifier
+                                  regex: ^modulusLength$
+                              - has:
+                                  stopBy: end
+                                  kind: number
+                                  pattern: $R
+        - any:
+            - follows:
+                stopBy: end
+                kind: lexical_declaration
+                has:
+                  stopBy: end
+                  kind: variable_declarator
+                  all:
+                    - has:
+                        stopBy: end
+                        kind: identifier
+                        pattern: $S
+                    - has:
+                        stopBy: end
+                        kind: call_expression
+                        all:
+                          - has:
+                              stopBy: neighbor
+                              kind: identifier
+                              regex: ^require$
+                          - has:
+                              stopBy: neighbor
+                              kind: arguments
+                              has:
+                                stopBy: neighbor
+                                kind: string
+                                has:
+                                  stopBy: neighbor
+                                  kind: string_fragment
+                                  regex: ^crypto$
+            - follows:
+                stopBy: end
+                kind: import_statement
+                all:
+                  - has:
+                      stopBy: neighbor
+                      kind: import_clause
+                      has:
+                        stopBy: end
+                        kind: namespace_import
+                        has:
+                          stopBy: neighbor
+                          kind: identifier
+                          pattern: $S
+                  - has:
+                      stopBy: end
+                      kind: string
+                      has:
+                        stopBy: neighbor
+                        kind: string_fragment
+                        regex: ^crypto$
+            - follows:
+                stopBy: end
+                kind: import_statement
+                all:
+                  - has:
+                      stopBy: neighbor
+                      kind: import_clause
+                  - has:
+                      stopBy: neighbor
+                      kind: string
+                      has:
+                        stopBy: neighbor
+                        kind: string_fragment
+                        regex: ^crypto$
+rule:
+  kind: number
+  any:
+    - matches: MATCH_BITS_DIRECTLY_NODE_FORGE
+    - matches: MATCH_BITS_DIRECTLY_NODE_RSA
+    - matches: MATCH_BITS_WITHIN_FUNCTION_WITH_NODE_FORGE
+    - matches: MATCH_BITS_WITHIN_FUNCTION_WITH_CRYPTO_AND_PROMISIFY
+    - matches: MATCH_BITS_WITHIN_FUNCTION_WITH_CRYPTO
+constraints:
+  R:
+    regex: ^(-?(0|[1-9][0-9]{0,2}|1[0-9]{3}|20[0-3][0-9]|204[0-7])(\.[0-9]+)?)$

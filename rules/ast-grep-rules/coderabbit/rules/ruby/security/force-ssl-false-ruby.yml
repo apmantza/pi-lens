@@ -1,0 +1,23 @@
+id: force-ssl-false-ruby
+language: ruby
+severity: warning
+message: >-
+  Checks for configuration setting of force_ssl to false. Force_ssl forces usage of HTTPS, which could lead to network
+  interception of unencrypted application traffic. To fix, set config.force_ssl = true.
+note: |-
+  [CWE-311] Missing Encryption of Sensitive Data. [REFERENCES]
+      - https://github.com/presidentbeef/brakeman/blob/main/lib/brakeman/checks/check_force_ssl.rb
+ast-grep-essentials: true
+utils:
+  config_force_ssl_FAL:
+    kind: assignment
+    all:
+      - has:
+          kind: call
+          pattern: config.force_ssl
+      - has:
+          regex: ^\s*false$
+rule:
+  kind: assignment
+  any:
+    - matches: config_force_ssl_FAL

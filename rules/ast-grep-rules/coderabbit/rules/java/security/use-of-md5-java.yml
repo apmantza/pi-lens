@@ -1,0 +1,104 @@
+id: use-of-md5-java
+severity: warning
+language: java
+message: >-
+  Detected MD5 hash algorithm which is considered insecure. MD5 is not collision resistant and is therefore not suitable
+  as a cryptographic signature. Use HMAC instead.
+note: |-
+  [CWE-328] Use of Weak Hash. [REFERENCES]
+      - https://owasp.org/Top10/A02_2021-Cryptographic_Failures
+ast-grep-essentials: true
+rule:
+  any:
+    - kind: string_literal
+    - kind: character_literal
+  pattern: $ALGO
+  nthChild:
+    position: 1
+    ofRule:
+      not:
+        kind: line_comment
+  inside:
+    stopBy: end
+    any:
+      - kind: method_invocation
+        all:
+          - has:
+              kind: identifier
+              regex: ^MessageDigest$
+              nthChild: 1
+          - has:
+              kind: identifier
+              regex: ^getInstance$
+              nthChild: 2
+          - has:
+              kind: argument_list
+              nthChild: 3
+              all:
+                - has:
+                    pattern: $ALGO
+                    not:
+                      precedes:
+                        stopBy: end
+                        pattern: $ALGO
+                    nthChild:
+                      position: 1
+                      ofRule:
+                        not:
+                          kind: line_comment
+          - inside:
+              stopBy: end
+              follows:
+                stopBy: end
+                kind: import_declaration
+                pattern: import java.security.MessageDigest;
+          - inside:
+              stopBy: end
+              any:
+                - kind: expression_statement
+                - kind: variable_declarator
+      - kind: method_invocation
+        all:
+          - has:
+              kind: field_access
+              regex: ^java.security.MessageDigest$
+              nthChild: 1
+          - has:
+              kind: identifier
+              regex: ^getInstance$
+              nthChild: 2
+          - has:
+              kind: argument_list
+              nthChild: 3
+              all:
+                - has:
+                    pattern: $ALGO
+                    nthChild:
+                      position: 1
+                      ofRule:
+                        not:
+                          kind: line_comment
+          - inside:
+              stopBy: end
+              follows:
+                stopBy: end
+                kind: import_declaration
+                pattern: import java.security.MessageDigest;
+          - inside:
+              stopBy: end
+              any:
+                - kind: expression_statement
+                - kind: variable_declarator
+  not:
+    has:
+      stopBy: end
+      kind: ERROR
+constraints:
+  ALGO:
+    any:
+      - kind: character_literal
+        regex: ^'MD5
+      - kind: string_literal
+        has:
+          kind: string_fragment
+          regex: ^MD5

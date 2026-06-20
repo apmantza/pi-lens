@@ -1,0 +1,57 @@
+id: dont-call-system-c
+language: c
+severity: warning
+message: >-
+  Don't call `system`. It's a high-level wrapper that allows for stacking multiple commands. Always prefer a more
+  restrictive API such as calling `execve` from the `exec` family.
+note: |-
+  [CWE-78] Improper Neutralization of Special Elements used in an OS
+          Command ('OS Command Injection').
+  [REFERENCES]
+      - https://owasp.org/Top10/A03_2021-Injection
+ast-grep-essentials: true
+utils:
+  PATTERN_SYSTEM_INSIDE_IF_STATEMENT:
+    kind: call_expression
+    all:
+      - has:
+          stopBy: neighbor
+          kind: identifier
+          regex: ^system$
+      - has:
+          stopBy: neighbor
+          kind: argument_list
+      - inside:
+          stopBy: end
+          kind: parenthesized_expression
+          inside:
+            kind: if_statement
+  PATTERN_SYSTEM:
+    any:
+      - kind: expression_statement
+      - kind: return_statement
+      - kind: field_declaration
+    has:
+      stopBy: neighbor
+      kind: call_expression
+      all:
+        - has:
+            stopBy: neighbor
+            kind: identifier
+            regex: ^system$
+        - has:
+            stopBy: neighbor
+            kind: argument_list
+rule:
+  any:
+    - matches: PATTERN_SYSTEM_INSIDE_IF_STATEMENT
+    - matches: PATTERN_SYSTEM
+  not:
+    all:
+      - has:
+          stopBy: end
+          kind: ERROR
+      - inside:
+          has:
+            stopBy: end
+            kind: ERROR

@@ -1,0 +1,331 @@
+id: file-stat-before-action-c
+language: c
+severity: warning
+message: >-
+  A check is done with `stat` and then the file is used. There is no guarantee that the status of the file has not
+  changed since the call to `stat` which may allow attackers to bypass permission checks.
+note: |-
+  [CWE-367]: Time-of-check Time-of-use (TOCTOU) Race Condition [REFERENCES]
+      - https://wiki.sei.cmu.edu/confluence/display/c/FIO45-C.+Avoid+TOCTOU+race+conditions+while+accessing+files
+ast-grep-essentials: true
+utils:
+  PATTERN_1_identifier_nth1:
+    kind: identifier
+    regex: ^(fopen|freopen|remove|rename|access|open|stat|lstat|unlink|mkdir|rmdir|chdir)$
+    all:
+      - not:
+          inside:
+            stopBy: end
+            kind: parenthesized_expression
+            nthChild: 1
+            inside:
+              kind: if_statement
+      - precedes:
+          kind: argument_list
+          has:
+            pattern: $SRC
+      - inside:
+          kind: call_expression
+          not:
+            inside:
+              kind: field_expression
+          inside:
+            stopBy: end
+            kind: compound_statement
+            inside:
+              kind: if_statement
+              has:
+                kind: parenthesized_expression
+                has:
+                  stopBy: end
+                  any:
+                    - kind: binary_expression
+                      has:
+                        stopBy: end
+                        kind: parenthesized_expression
+                        has:
+                          kind: binary_expression
+                          all:
+                            - has:
+                                kind: call_expression
+                                nthChild: 1
+                                all:
+                                  - has:
+                                      kind: identifier
+                                      regex: ^(stat|_stat|lstat|_lstat)$
+                                      precedes:
+                                        kind: argument_list
+                                        all:
+                                          - has:
+                                              nthChild: 1
+                                              pattern: $SRC
+                            - has:
+                                kind: number_literal
+                                regex: ^(0)$
+                    - kind: binary_expression
+                      all:
+                        - has:
+                            nthChild: 1
+                            kind: call_expression
+                            all:
+                              - has:
+                                  nthChild: 1
+                                  kind: identifier
+                                  regex: ^(stat|_stat|lstat|_lstat)$
+                              - has:
+                                  nthChild: 2
+                                  kind: argument_list
+                                  all:
+                                    - has:
+                                        nthChild: 1
+                                        pattern: $SRC
+                        - has:
+                            nthChild: 2
+                            kind: number_literal
+                            regex: ^(0)$
+                            follows:
+                              regex: ^==$
+  PATTERN_1_identifier_nth2:
+    kind: identifier
+    regex: ^(fopen|freopen|remove|rename|access|open|stat|lstat|unlink|mkdir|rmdir|chdir)$
+    all:
+      - not:
+          inside:
+            stopBy: end
+            kind: parenthesized_expression
+            nthChild: 1
+            inside:
+              kind: if_statement
+      - precedes:
+          kind: argument_list
+          has:
+            pattern: $SRC
+      - inside:
+          kind: call_expression
+          not:
+            inside:
+              kind: field_expression
+          inside:
+            stopBy: end
+            kind: compound_statement
+            inside:
+              kind: if_statement
+              has:
+                kind: parenthesized_expression
+                has:
+                  stopBy: end
+                  any:
+                    - kind: binary_expression
+                      has:
+                        stopBy: end
+                        kind: parenthesized_expression
+                        has:
+                          kind: binary_expression
+                          all:
+                            - has:
+                                kind: call_expression
+                                nthChild: 1
+                                all:
+                                  - has:
+                                      kind: identifier
+                                      regex: ^(fstatat|_fstatat)$
+                                      precedes:
+                                        kind: argument_list
+                                        all:
+                                          - has:
+                                              nthChild: 3
+                                              pattern: $SRC
+                            - has:
+                                kind: number_literal
+                                regex: ^(0)$
+                                follows:
+                                  regex: ^==$
+                    - kind: binary_expression
+                      all:
+                        - has:
+                            nthChild: 1
+                            kind: call_expression
+                            all:
+                              - has:
+                                  nthChild: 1
+                                  kind: identifier
+                                  regex: ^(fstatat|_fstatat)$
+                              - has:
+                                  nthChild: 2
+                                  kind: argument_list
+                                  all:
+                                    - has:
+                                        nthChild: 2
+                                        pattern: $SRC
+                        - has:
+                            nthChild: 2
+                            kind: number_literal
+                            regex: ^(0)$
+                            follows:
+                              regex: ^==$
+  identifier:
+    any:
+      - kind: identifier
+        regex: ^(fopen|freopen|remove|rename|access|open|stat|lstat|unlink|mkdir|rmdir|chdir)$
+  PATTERN_3_field_expression_identifier_nth1:
+    kind: field_expression
+    has:
+      nthChild: 1
+      stopBy: end
+      matches: identifier
+    all:
+      - not:
+          inside:
+            stopBy: end
+            kind: parenthesized_expression
+            nthChild: 1
+            inside:
+              kind: if_statement
+      - precedes:
+          kind: argument_list
+          has:
+            pattern: $SRC
+      - inside:
+          kind: call_expression
+          inside:
+            stopBy: end
+            kind: compound_statement
+            inside:
+              kind: if_statement
+              has:
+                kind: parenthesized_expression
+                has:
+                  stopBy: end
+                  any:
+                    - kind: binary_expression
+                      has:
+                        stopBy: end
+                        kind: parenthesized_expression
+                        has:
+                          kind: binary_expression
+                          all:
+                            - has:
+                                kind: call_expression
+                                nthChild: 1
+                                all:
+                                  - has:
+                                      kind: identifier
+                                      regex: ^(stat|_stat|lstat|_lstat)$
+                                      precedes:
+                                        kind: argument_list
+                                        all:
+                                          - has:
+                                              nthChild: 1
+                                              pattern: $SRC
+                            - has:
+                                kind: number_literal
+                                regex: ^(0)$
+                                follows:
+                                  regex: ^==$
+                    - kind: binary_expression
+                      all:
+                        - has:
+                            nthChild: 1
+                            kind: call_expression
+                            all:
+                              - has:
+                                  nthChild: 1
+                                  kind: identifier
+                                  regex: ^(stat|_stat|lstat|_lstat)$
+                              - has:
+                                  nthChild: 2
+                                  kind: argument_list
+                                  all:
+                                    - has:
+                                        nthChild: 1
+                                        pattern: $SRC
+                        - has:
+                            nthChild: 2
+                            kind: number_literal
+                            regex: ^(0)$
+                            follows:
+                              regex: ^==$
+  PATTERN_3_field_expression_identifier_nth2:
+    kind: field_expression
+    has:
+      nthChild: 1
+      stopBy: end
+      matches: identifier
+    all:
+      - not:
+          inside:
+            stopBy: end
+            kind: parenthesized_expression
+            nthChild: 1
+            inside:
+              kind: if_statement
+      - precedes:
+          kind: argument_list
+          has:
+            pattern: $SRC
+      - inside:
+          kind: call_expression
+          inside:
+            stopBy: end
+            kind: compound_statement
+            inside:
+              kind: if_statement
+              has:
+                kind: parenthesized_expression
+                has:
+                  stopBy: end
+                  any:
+                    - kind: binary_expression
+                      has:
+                        stopBy: end
+                        kind: parenthesized_expression
+                        has:
+                          kind: binary_expression
+                          all:
+                            - has:
+                                kind: call_expression
+                                nthChild: 1
+                                all:
+                                  - has:
+                                      kind: identifier
+                                      regex: ^(fstatat|_fstatat)$
+                                      precedes:
+                                        kind: argument_list
+                                        all:
+                                          - has:
+                                              nthChild: 2
+                                              pattern: $SRC
+                            - has:
+                                kind: number_literal
+                                regex: ^(0)$
+                                follows:
+                                  regex: ^==$
+                    - kind: binary_expression
+                      all:
+                        - has:
+                            nthChild: 1
+                            kind: call_expression
+                            all:
+                              - has:
+                                  nthChild: 1
+                                  kind: identifier
+                                  regex: ^(fstatat|_fstatat)$
+                              - has:
+                                  nthChild: 2
+                                  kind: argument_list
+                                  all:
+                                    - has:
+                                        nthChild: 2
+                                        pattern: $SRC
+                        - has:
+                            nthChild: 2
+                            kind: number_literal
+                            regex: ^(0)$
+                            follows:
+                              regex: ^==$
+rule:
+  any:
+    - matches: PATTERN_1_identifier_nth1
+    - matches: PATTERN_1_identifier_nth2
+    - matches: PATTERN_3_field_expression_identifier_nth1
+    - matches: PATTERN_3_field_expression_identifier_nth2

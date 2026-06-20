@@ -1,0 +1,15 @@
+id: des-is-deprecated-java
+severity: warning
+language: java
+message: >-
+  DES is considered deprecated. AES is the recommended cipher. Upgrade to use AES. See
+  https://www.nist.gov/news-events/news/2005/06/nist-withdraws-outdated-data-encryption-standard for more information.
+note: |-
+  [CWE-326] Inadequate Encryption Strength. [REFERENCES]
+      - https://www.nist.gov/news-events/news/2005/06/nist-withdraws-outdated-data-encryption-standard
+ast-grep-essentials: true
+rule:
+  pattern: $CIPHER.getInstance($SAS)
+constraints:
+  SAS:
+    regex: ^".*/DES/.*"|"DES"|"DES/.*"$

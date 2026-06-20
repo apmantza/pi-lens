@@ -1,0 +1,51 @@
+id: cookie-missing-secure-flag-java
+language: java
+severity: warning
+message: >-
+  A cookie was detected without setting the 'secure' flag. The 'secure' flag for cookies prevents the client from
+  transmitting the cookie over insecure channels such as HTTP. Set the 'secure' flag by calling
+  '$COOKIE.setSecure(true);'.
+note: |-
+  [CWE-614] Sensitive Cookie in HTTPS Session Without 'Secure' Attribute. [REFERENCES]
+      - https://owasp.org/www-community/controls/SecureCookieAttribute
+ast-grep-essentials: true
+utils:
+  MATCH_RESPONSE_COOKIE_STATEMENT:
+    kind: expression_statement
+    all:
+      - has:
+          stopBy: neighbor
+          kind: method_invocation
+          all:
+            - has:
+                stopBy: neighbor
+                kind: identifier
+                regex: response
+            - has:
+                stopBy: neighbor
+                kind: identifier
+                regex: addCookie
+            - has:
+                stopBy: neighbor
+                kind: argument_list
+                has:
+                  stopBy: neighbor
+                  kind: identifier
+      - not:
+          follows:
+            stopBy: end
+            kind: expression_statement
+            all:
+              - has:
+                  stopBy: end
+                  kind: identifier
+              - has:
+                  stopBy: end
+                  kind: identifier
+                  regex: setSecure|setValue
+              - has:
+                  stopBy: end
+                  kind: argument_list
+rule:
+  kind: expression_statement
+  matches: MATCH_RESPONSE_COOKIE_STATEMENT

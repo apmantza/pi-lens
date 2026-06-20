@@ -1,0 +1,109 @@
+id: jwt-scala-hardcode-scala
+language: scala
+severity: warning
+message: >-
+  Hardcoded JWT secret or private key is used. This is a Insufficiently Protected Credentials weakness:
+  https://cwe.mitre.org/data/definitions/522.html Consider using an appropriate security mechanism to protect the
+  credentials (e.g. keeping secrets in environment variables).
+note: |-
+  [CWE-522] Insufficiently Protected Credentials. [REFERENCES]
+      - https://jwt-scala.github.io/jwt-scala/
+ast-grep-essentials: true
+utils:
+  PATTERN:
+    kind: call_expression
+    all:
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: import_declaration
+            regex: ^import pdi.jwt.*
+      - has:
+          kind: field_expression
+          all:
+            - has:
+                kind: identifier
+                nthChild: 1
+                regex: ^(Jwt|JwtArgonaut|JwtCirce|JwtJson4s|JwtJson|JwtUpickle)$
+            - has:
+                kind: identifier
+                nthChild: 2
+                regex: ^(encode|decode|decodeRawAll|decodeRaw|decodeAll|validate|isValid|decodeJson|decodeJsonAll)$
+      - has:
+          kind: arguments
+          has:
+            kind: string
+            not:
+              regex: ^""$
+            nthChild:
+              position: 2
+              ofRule:
+                not:
+                  kind: comment
+  PATTERN_with_Instance:
+    kind: call_expression
+    all:
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: import_declaration
+            regex: ^import pdi.jwt.*
+      - has:
+          kind: field_expression
+          all:
+            - has:
+                kind: identifier
+                nthChild: 1
+                regex: ^(Jwt|JwtArgonaut|JwtCirce|JwtJson4s|JwtJson|JwtUpickle)$
+            - has:
+                kind: identifier
+                nthChild: 2
+                regex: ^(encode|decode|decodeRawAll|decodeRaw|decodeAll|validate|isValid|decodeJson|decodeJsonAll)$
+      - has:
+          kind: arguments
+          any:
+            - has:
+                kind: field_expression
+                all:
+                  - has:
+                      nthChild: 1
+                      regex: ^this$
+                  - has:
+                      nthChild: 2
+                      kind: identifier
+                      pattern: $STRG
+            - has:
+                kind: identifier
+                pattern: $STRG
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: comment
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: val_definition
+            all:
+              - has:
+                  kind: identifier
+                  field: pattern
+                  pattern: $STRG
+              - has:
+                  kind: string
+                  field: value
+                  not:
+                    regex: ^""$
+              - inside:
+                  stopBy: end
+                  any:
+                    - kind: object_definition
+                    - kind: class_definition
+rule:
+  kind: call_expression
+  any:
+    - matches: PATTERN
+    - matches: PATTERN_with_Instance

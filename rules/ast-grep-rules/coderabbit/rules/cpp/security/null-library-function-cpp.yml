@@ -1,0 +1,254 @@
+id: null-library-function-cpp
+language: cpp
+severity: warning
+message: The `$SOURCE` function returns NULL on error and this line dereferences the return value without checking for NULL.
+note: |-
+  [CWE-476] NULL Pointer Dereference. [REFERENCES]
+      - https://wiki.sei.cmu.edu/confluence/display/c/EXP34-C.+Do+not+dereference+null+pointers
+ast-grep-essentials: true
+rule:
+  all:
+    - not:
+        has:
+          stopBy: end
+          kind: ERROR
+    - any:
+        - kind: subscript_expression
+          all:
+            - has:
+                stopBy: end
+                kind: call_expression
+                all:
+                  - has:
+                      stopBy: end
+                      kind: identifier
+                      pattern: $SOURCE
+                      regex: >-
+                        ^fgets|::fgets|std::fgets|fopen|::fopen|std::fopen|getenv|::getenv|std::getenv|getgrent|::getgrent|std::getgrent|getgrgid|::getgrgid|std::getgrgid|getgrnam|::getgrnam|std::getgrnam|getlogin|::getlogin|std::getlogin|getpwent|::getpwent|std::getpwent|getpwnam|::getpwnam|std::getpwnam|getpwuid|::getpwuid|std::getpwuid|getpwuuid|::getpwuuid|std::getpwuuid|gets|::gets|std::gets|inet_ntop|::inet_ntop|std::inet_ntop|realpath|::realpath|std::realpath|tempnam|::tempnam|std::tempnam|tmpfile|::tmpfile|std::tmpfile|tmpnam|::tmpnam|std::tmpnam|memchr|::memchr|std::memchr|strcasestr_l|::strcasestr_l|std::strcasestr_l|strcasestr|::strcasestr|std::strcasestr|strchr|::strchr|std::strchr|strnstr|::strnstr|std::strnstr|strpbrk|::strpbrk|std::strpbrk|strrchr|::strrchr|std::strrchr|strstr|::strstr|std::strstr|strtok_r|::strtok_r|std::strtok_r|strtok|::strtok|std::strtok$
+                  - has:
+                      stopBy: neighbor
+                      kind: argument_list
+            - has:
+                stopBy: end
+                any:
+                  - kind: number_literal
+                  - kind: identifier
+        - kind: call_expression
+          all:
+            - has:
+                stopBy: neighbor
+                kind: identifier
+                pattern: $SINK
+                regex: >-
+                  ^atof|::atof|std::atof|atoi|::atoi|std::atoi|atol_l|::atol_l|std::atol_l|atol|::atol|std::atol|atoll_l|::atoll_l|std::atoll_l|atoll|::atoll|std::atoll|getc|::getc|std::getc|fprintf|::fprintf|std::fprintf|fgetpos|::fgetpos|std::fgetpos|fseek|::fseek|std::fseek|fseeko|::fseeko|std::fseeko|fsetpos|::fsetpos|std::fsetpos|ftell|::ftell|std::ftell|ftello|::ftello|std::ftello|rewind|::rewind|std::rewind|strlen|::strlen|std::strlen|strtoimax|::strtoimax|std::strtoimax|strtod|::strtod|std::strtod|strtol|::strtol|std::strtol|strtoul|::strtoul|std::strtoul|strtoll|::strtoll|std::strtoll|strtoq|::strtoq|std::strtoq$
+            - has:
+                stopBy: neighbor
+                kind: argument_list
+                has:
+                  stopBy: neighbor
+                  kind: call_expression
+                  nthChild: 1
+                  all:
+                    - has:
+                        stopBy: neighbor
+                        kind: identifier
+                        pattern: $SOURCE
+                        regex: >-
+                          ^fgets|::fgets|std::fgets|fopen|::fopen|std::fopen|getenv|::getenv|std::getenv|getgrent|::getgrent|std::getgrent|getgrgid|::getgrgid|std::getgrgid|getgrnam|::getgrnam|std::getgrnam|getlogin|::getlogin|std::getlogin|getpwent|::getpwent|std::getpwent|getpwnam|::getpwnam|std::getpwnam|getpwuid|::getpwuid|std::getpwuid|getpwuuid|::getpwuuid|std::getpwuuid|gets|::gets|std::gets|inet_ntop|::inet_ntop|std::inet_ntop|realpath|::realpath|std::realpath|tempnam|::tempnam|std::tempnam|tmpfile|::tmpfile|std::tmpfile|tmpnam|::tmpnam|std::tmpnam|memchr|::memchr|std::memchr|strcasestr_l|::strcasestr_l|std::strcasestr_l|strcasestr|::strcasestr|std::strcasestr|strchr|::strchr|std::strchr|strnstr|::strnstr|std::strnstr|strpbrk|::strpbrk|std::strpbrk|strrchr|::strrchr|std::strrchr|strstr|::strstr|std::strstr|strtok_r|::strtok_r|std::strtok_r|strtok|::strtok|std::strtok$
+                    - has:
+                        stopBy: neighbor
+                        kind: argument_list
+        - kind: call_expression
+          all:
+            - has:
+                stopBy: neighbor
+                kind: identifier
+                pattern: $SINK
+                regex: >-
+                  ^atof|::atof|std::atof|atoi|::atoi|std::atoi|atol_l|::atol_l|std::atol_l|atol|::atol|std::atol|atoll_l|::atoll_l|std::atoll_l|atoll|::atoll|std::atoll|getc|::getc|std::getc|fprintf|::fprintf|std::fprintf|fgetpos|::fgetpos|std::fgetpos|fseek|::fseek|std::fseek|fseeko|::fseeko|std::fseeko|fsetpos|::fsetpos|std::fsetpos|ftell|::ftell|std::ftell|ftello|::ftello|std::ftello|rewind|::rewind|std::rewind|strlen|::strlen|std::strlen|strtoimax|::strtoimax|std::strtoimax|strtod|::strtod|std::strtod|strtol|::strtol|std::strtol|strtoul|::strtoul|std::strtoul|strtoll|::strtoll|std::strtoll|strtoq|::strtoq|std::strtoq$
+            - has:
+                stopBy: neighbor
+                kind: argument_list
+                has:
+                  stopBy: neighbor
+                  kind: assignment_expression
+                  nthChild: 1
+                  all:
+                    - has:
+                        stopBy: neighbor
+                        kind: identifier
+                        pattern: $VAR
+                    - has:
+                        stopBy: neighbor
+                        kind: call_expression
+                        all:
+                          - has:
+                              stopBy: neighbor
+                              kind: identifier
+                              pattern: $SOURCE
+                              regex: >-
+                                ^fgets|::fgets|std::fgets|fopen|::fopen|std::fopen|getenv|::getenv|std::getenv|getgrent|::getgrent|std::getgrent|getgrgid|::getgrgid|std::getgrgid|getgrnam|::getgrnam|std::getgrnam|getlogin|::getlogin|std::getlogin|getpwent|::getpwent|std::getpwent|getpwnam|::getpwnam|std::getpwnam|getpwuid|::getpwuid|std::getpwuid|getpwuuid|::getpwuuid|std::getpwuuid|gets|::gets|std::gets|inet_ntop|::inet_ntop|std::inet_ntop|realpath|::realpath|std::realpath|tempnam|::tempnam|std::tempnam|tmpfile|::tmpfile|std::tmpfile|tmpnam|::tmpnam|std::tmpnam|memchr|::memchr|std::memchr|strcasestr_l|::strcasestr_l|std::strcasestr_l|strcasestr|::strcasestr|std::strcasestr|strchr|::strchr|std::strchr|strnstr|::strnstr|std::strnstr|strpbrk|::strpbrk|std::strpbrk|strrchr|::strrchr|std::strrchr|strstr|::strstr|std::strstr|strtok_r|::strtok_r|std::strtok_r|strtok|::strtok|std::strtok$
+        - kind: call_expression
+          all:
+            - has:
+                stopBy: neighbor
+                kind: identifier
+                pattern: $SINK
+            - has:
+                stopBy: neighbor
+                kind: argument_list
+                has:
+                  stopBy: neighbor
+                  kind: call_expression
+                  nthChild: 2
+                  all:
+                    - has:
+                        stopBy: neighbor
+                        kind: identifier
+                        pattern: $SOURCE
+                        regex: >-
+                          ^fgets|::fgets|std::fgets|fopen|::fopen|std::fopen|getenv|::getenv|std::getenv|getgrent|::getgrent|std::getgrent|getgrgid|::getgrgid|std::getgrgid|getgrnam|::getgrnam|std::getgrnam|getlogin|::getlogin|std::getlogin|getpwent|::getpwent|std::getpwent|getpwnam|::getpwnam|std::getpwnam|getpwuid|::getpwuid|std::getpwuid|getpwuuid|::getpwuuid|std::getpwuuid|gets|::gets|std::gets|inet_ntop|::inet_ntop|std::inet_ntop|realpath|::realpath|std::realpath|tempnam|::tempnam|std::tempnam|tmpfile|::tmpfile|std::tmpfile|tmpnam|::tmpnam|std::tmpnam|memchr|::memchr|std::memchr|strcasestr_l|::strcasestr_l|std::strcasestr_l|strcasestr|::strcasestr|std::strcasestr|strchr|::strchr|std::strchr|strnstr|::strnstr|std::strnstr|strpbrk|::strpbrk|std::strpbrk|strrchr|::strrchr|std::strrchr|strstr|::strstr|std::strstr|strtok_r|::strtok_r|std::strtok_r|strtok|::strtok|std::strtok$
+                    - has:
+                        stopBy: neighbor
+                        kind: argument_list
+            - not:
+                inside:
+                  stopBy: end
+                  kind: call_expression
+                  has:
+                    stopBy: neighbor
+                    kind: identifier
+                    pattern: $SINK
+            - not:
+                has:
+                  stopBy: end
+                  kind: call_expression
+                  all:
+                    - has:
+                        stopBy: neighbor
+                        kind: identifier
+                        pattern: $SOURCE
+                    - has:
+                        stopBy: neighbor
+                        kind: argument_list
+                        has:
+                          stopBy: end
+                          kind: call_expression
+                          has:
+                            stopBy: neighbor
+                            kind: identifier
+                            pattern: $SOURCE
+        - kind: call_expression
+          all:
+            - has:
+                stopBy: neighbor
+                kind: identifier
+                pattern: $SINK
+                regex: >-
+                  ^bcopy|::bcopy|std::bcopy|memccpy|::memccpy|std::memccpy|memcpy|::memcpy|std::memcpy|memmove|::memmove|std::memmove|stpncpy|::stpncpy|std::stpncpy|strcat|::strcat|std::strcat|strcpy|::strcpy|std::strcpy|strcpy|::strcpy|std::strcpy|strlcat|::strlcat|std::strlcat|strlcpy|::strlcpy|std::strlcpy|strncat|::strncat|std::strncat|strpcpy|::strpcpy|std::strpcpy|wcpcpy|::wcpcpy|std::wcpcpy|wcpncpy|::wcpncpy|std::wcpncpy$
+            - has:
+                stopBy: neighbor
+                kind: argument_list
+                has:
+                  stopBy: neighbor
+                  kind: assignment_expression
+                  pattern: $VAR = $SOURCE($$$)
+                  all:
+                    - has:
+                        stopBy: neighbor
+                        kind: identifier
+                        pattern: $VAR
+                    - has:
+                        stopBy: neighbor
+                        kind: call_expression
+                        all:
+                          - has:
+                              stopBy: neighbor
+                              kind: identifier
+                              pattern: $SOURCE
+                              regex: >-
+                                ^fgets|::fgets|std::fgets|fopen|::fopen|std::fopen|getenv|::getenv|std::getenv|getgrent|::getgrent|std::getgrent|getgrgid|::getgrgid|std::getgrgid|getgrnam|::getgrnam|std::getgrnam|getlogin|::getlogin|std::getlogin|getpwent|::getpwent|std::getpwent|getpwnam|::getpwnam|std::getpwnam|getpwuid|::getpwuid|std::getpwuid|getpwuuid|::getpwuuid|std::getpwuuid|gets|::gets|std::gets|inet_ntop|::inet_ntop|std::inet_ntop|realpath|::realpath|std::realpath|tempnam|::tempnam|std::tempnam|tmpfile|::tmpfile|std::tmpfile|tmpnam|::tmpnam|std::tmpnam|memchr|::memchr|std::memchr|strcasestr_l|::strcasestr_l|std::strcasestr_l|strcasestr|::strcasestr|std::strcasestr|strchr|::strchr|std::strchr|strnstr|::strnstr|std::strnstr|strpbrk|::strpbrk|std::strpbrk|strrchr|::strrchr|std::strrchr|strstr|::strstr|std::strstr|strtok_r|::strtok_r|std::strtok_r|strtok|::strtok|std::strtok$
+        - kind: call_expression
+          all:
+            - has:
+                stopBy: neighbor
+                kind: identifier
+                pattern: $SINK
+                regex: ^fwrite|::fwrite|std::fwrite$
+            - has:
+                stopBy: neighbor
+                kind: argument_list
+                has:
+                  stopBy: end
+                  kind: call_expression
+                  all:
+                    - has:
+                        stopBy: end
+                        kind: identifier
+                        pattern: $SOURCE
+                        regex: >-
+                          ^fgets|::fgets|std::fgets|fopen|::fopen|std::fopen|getenv|::getenv|std::getenv|getgrent|::getgrent|std::getgrent|getgrgid|::getgrgid|std::getgrgid|getgrnam|::getgrnam|std::getgrnam|getlogin|::getlogin|std::getlogin|getpwent|::getpwent|std::getpwent|getpwnam|::getpwnam|std::getpwnam|getpwuid|::getpwuid|std::getpwuid|getpwuuid|::getpwuuid|std::getpwuuid|gets|::gets|std::gets|inet_ntop|::inet_ntop|std::inet_ntop|realpath|::realpath|std::realpath|tempnam|::tempnam|std::tempnam|tmpfile|::tmpfile|std::tmpfile|tmpnam|::tmpnam|std::tmpnam|memchr|::memchr|std::memchr|strcasestr_l|::strcasestr_l|std::strcasestr_l|strcasestr|::strcasestr|std::strcasestr|strchr|::strchr|std::strchr|strnstr|::strnstr|std::strnstr|strpbrk|::strpbrk|std::strpbrk|strrchr|::strrchr|std::strrchr|strstr|::strstr|std::strstr|strtok_r|::strtok_r|std::strtok_r|strtok|::strtok|std::strtok$
+                    - has:
+                        stopBy: neighbor
+                        kind: argument_list
+        - kind: call_expression
+          any:
+            - pattern: $SINK($$$, $VAR = $SOURCE($$$))
+            - pattern: $SINK($VAR = $SOURCE($$$))
+          all:
+            - has:
+                stopBy: neighbor
+                kind: identifier
+                pattern: $SINK
+                regex: ^fwrite|::fwrite|std::fwrite$
+            - has:
+                stopBy: neighbor
+                kind: argument_list
+                has:
+                  stopBy: end
+                  kind: assignment_expression
+                  pattern: $VAR = $SOURCE($$$)
+                  all:
+                    - has:
+                        stopBy: neighbor
+                        kind: identifier
+                    - has:
+                        stopBy: neighbor
+                        kind: call_expression
+                        all:
+                          - has:
+                              stopBy: neighbor
+                              kind: identifier
+                              pattern: $SOURCE
+                              regex: >-
+                                ^fgets|::fgets|std::fgets|fopen|::fopen|std::fopen|getenv|::getenv|std::getenv|getgrent|::getgrent|std::getgrent|getgrgid|::getgrgid|std::getgrgid|getgrnam|::getgrnam|std::getgrnam|getlogin|::getlogin|std::getlogin|getpwent|::getpwent|std::getpwent|getpwnam|::getpwnam|std::getpwnam|getpwuid|::getpwuid|std::getpwuid|getpwuuid|::getpwuuid|std::getpwuuid|gets|::gets|std::gets|inet_ntop|::inet_ntop|std::inet_ntop|realpath|::realpath|std::realpath|tempnam|::tempnam|std::tempnam|tmpfile|::tmpfile|std::tmpfile|tmpnam|::tmpnam|std::tmpnam|memchr|::memchr|std::memchr|strcasestr_l|::strcasestr_l|std::strcasestr_l|strcasestr|::strcasestr|std::strcasestr|strchr|::strchr|std::strchr|strnstr|::strnstr|std::strnstr|strpbrk|::strpbrk|std::strpbrk|strrchr|::strrchr|std::strrchr|strstr|::strstr|std::strstr|strtok_r|::strtok_r|std::strtok_r|strtok|::strtok|std::strtok$
+                          - has:
+                              stopBy: neighbor
+                              kind: argument_list
+        - kind: pointer_expression
+          has:
+            stopBy: neighbor
+            kind: call_expression
+            all:
+              - has:
+                  stopBy: end
+                  kind: identifier
+                  pattern: $SOURCE
+                  regex: >-
+                    ^fgets|::fgets|std::fgets|fopen|::fopen|std::fopen|getenv|::getenv|std::getenv|getgrent|::getgrent|std::getgrent|getgrgid|::getgrgid|std::getgrgid|getgrnam|::getgrnam|std::getgrnam|getlogin|::getlogin|std::getlogin|getpwent|::getpwent|std::getpwent|getpwnam|::getpwnam|std::getpwnam|getpwuid|::getpwuid|std::getpwuid|getpwuuid|::getpwuuid|std::getpwuuid|gets|::gets|std::gets|inet_ntop|::inet_ntop|std::inet_ntop|realpath|::realpath|std::realpath|tempnam|::tempnam|std::tempnam|tmpfile|::tmpfile|std::tmpfile|tmpnam|::tmpnam|std::tmpnam|memchr|::memchr|std::memchr|strcasestr_l|::strcasestr_l|std::strcasestr_l|strcasestr|::strcasestr|std::strcasestr|strchr|::strchr|std::strchr|strnstr|::strnstr|std::strnstr|strpbrk|::strpbrk|std::strpbrk|strrchr|::strrchr|std::strrchr|strstr|::strstr|std::strstr|strtok_r|::strtok_r|std::strtok_r|strtok|::strtok|std::strtok$
+              - has:
+                  stopBy: neighbor
+                  kind: argument_list
+              - not:
+                  inside:
+                    stopBy: end
+                    any:
+                      - kind: subscript_expression
+              - not:
+                  has:
+                    stopBy: end
+                    any:
+                      - kind: assignment_expression
+              - inside:
+                  stopBy: end
+                  kind: return_statement

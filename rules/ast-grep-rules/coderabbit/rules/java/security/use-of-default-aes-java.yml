@@ -1,0 +1,318 @@
+id: use-of-default-aes-java
+severity: warning
+language: java
+message: |-
+  "Use of AES with no settings detected. By default, java.crypto.Cipher
+   uses ECB mode. ECB doesn't  provide message confidentiality and is not
+   semantically secure so should not be used. Instead, use a strong, secure
+   cipher: java.crypto.Cipher.getInstance(\"AES/CBC/PKCS7PADDING\"). See
+   https://owasp.org/www-community/Using_the_Java_Cryptographic_Extensions
+   for more information."
+note: |-
+  [CWE-327] Use of a Broken or Risky Cryptographic Algorithm. [REFERENCES]
+      - https://owasp.org/Top10/A02_2021-Cryptographic_Failures
+      - https://googleprojectzero.blogspot.com/2022/10/rc4-is-still-considered-harmful.html
+ast-grep-essentials: true
+rule:
+  any:
+    - kind: method_invocation
+      all:
+        - has:
+            kind: field_access
+            nthChild: 1
+            regex: ^javax.crypto.Cipher$
+        - has:
+            kind: identifier
+            nthChild: 2
+            regex: ^getInstance$
+        - has:
+            kind: argument_list
+            nthChild: 3
+            has:
+              pattern: $AES
+              nthChild:
+                position: 1
+                ofRule:
+                  not:
+                    kind: line_comment
+            not:
+              has:
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: line_comment
+      inside:
+        stopBy: end
+        follows:
+          stopBy: end
+          kind: import_declaration
+          any:
+            - pattern: import javax.*;
+            - pattern: import javax;
+            - kind: import_declaration
+              has:
+                stopBy: neighbor
+                kind: scoped_identifier
+                has:
+                  stopBy: end
+                  kind: identifier
+                  nthChild: 1
+                  regex: ^javax$
+    - kind: method_invocation
+      all:
+        - has:
+            kind: field_access
+            nthChild: 1
+            regex: ^crypto.Cipher$
+        - has:
+            kind: identifier
+            nthChild: 2
+            regex: ^getInstance$
+        - has:
+            kind: argument_list
+            has:
+              pattern: $AES
+              nthChild:
+                position: 1
+                ofRule:
+                  not:
+                    kind: line_comment
+            not:
+              has:
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: line_comment
+      inside:
+        stopBy: end
+        follows:
+          stopBy: end
+          kind: import_declaration
+          any:
+            - kind: import_declaration
+              has:
+                stopBy: neighbor
+                kind: scoped_identifier
+                has:
+                  stopBy: end
+                  kind: identifier
+                  nthChild: 1
+                  regex: ^javax$
+            - pattern: import javax.crypto;
+            - pattern: import javax.*;
+            - kind: import_declaration
+              has:
+                stopBy: neighbor
+                kind: scoped_identifier
+                has:
+                  stopBy: end
+                  kind: identifier
+                  nthChild: 1
+                  regex: ^javax$
+    - kind: method_invocation
+      all:
+        - has:
+            kind: identifier
+            nthChild: 1
+            regex: ^Cipher$
+        - has:
+            kind: identifier
+            nthChild: 2
+            regex: ^getInstance$
+        - has:
+            kind: argument_list
+            has:
+              pattern: $AES
+              nthChild:
+                position: 1
+                ofRule:
+                  not:
+                    kind: line_comment
+            not:
+              has:
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: line_comment
+        - inside:
+            stopBy: end
+            follows:
+              stopBy: end
+              kind: import_declaration
+              any:
+                - pattern: import javax.crypto.*;
+                - pattern: import javax.crypto.Cipher;
+                - kind: import_declaration
+                  has:
+                    stopBy: neighbor
+                    kind: scoped_identifier
+                    has:
+                      stopBy: end
+                      kind: identifier
+                      nthChild: 1
+                      regex: ^javax.crypto.*$
+    - kind: method_invocation
+      all:
+        - has:
+            kind: identifier
+            nthChild: 1
+            pattern: $INST
+        - has:
+            kind: identifier
+            nthChild: 2
+            regex: ^getInstance$
+        - has:
+            kind: argument_list
+            has:
+              pattern: $AES
+              nthChild:
+                position: 1
+                ofRule:
+                  not:
+                    kind: line_comment
+            not:
+              has:
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: line_comment
+        - inside:
+            stopBy: end
+            follows:
+              stopBy: end
+              any:
+                - kind: field_declaration
+                - kind: local_variable_declaration
+              all:
+                - has:
+                    kind: scoped_type_identifier
+                    regex: ^javax.crypto.Cipher$
+                - has:
+                    kind: variable_declarator
+                    has:
+                      kind: identifier
+                      pattern: $INST
+        - inside:
+            stopBy: end
+            follows:
+              stopBy: end
+              kind: import_declaration
+              any:
+                - pattern: import javax.crypto.Cipher;
+                - pattern: import javax;
+    - kind: method_invocation
+      all:
+        - has:
+            kind: identifier
+            nthChild: 1
+            pattern: $INST
+        - has:
+            kind: identifier
+            nthChild: 2
+            regex: ^getInstance$
+        - has:
+            kind: argument_list
+            has:
+              pattern: $AES
+              nthChild:
+                position: 1
+                ofRule:
+                  not:
+                    kind: line_comment
+            not:
+              has:
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: line_comment
+        - inside:
+            stopBy: end
+            follows:
+              stopBy: end
+              any:
+                - kind: field_declaration
+                - kind: local_variable_declaration
+              all:
+                - has:
+                    kind: scoped_type_identifier
+                    regex: ^crypto.Cipher$
+                - has:
+                    kind: variable_declarator
+                    has:
+                      kind: identifier
+                      pattern: $INST
+        - inside:
+            stopBy: end
+            follows:
+              stopBy: end
+              kind: import_declaration
+              any:
+                - pattern: import javax.*;
+                - pattern: import javax.crypto;
+                - pattern: import javax.crypto.Cipher;
+    - kind: method_invocation
+      all:
+        - has:
+            kind: identifier
+            nthChild: 1
+            pattern: $INST
+        - has:
+            kind: identifier
+            nthChild: 2
+            regex: ^getInstance$
+        - has:
+            kind: argument_list
+            has:
+              pattern: $AES
+              nthChild:
+                position: 1
+                ofRule:
+                  not:
+                    kind: line_comment
+            not:
+              has:
+                nthChild:
+                  position: 2
+                  ofRule:
+                    not:
+                      kind: line_comment
+        - inside:
+            stopBy: end
+            follows:
+              stopBy: end
+              any:
+                - kind: field_declaration
+                - kind: local_variable_declaration
+              all:
+                - has:
+                    kind: type_identifier
+                    regex: ^Cipher$
+                - has:
+                    kind: variable_declarator
+                    has:
+                      kind: identifier
+                      pattern: $INST
+        - inside:
+            stopBy: end
+            follows:
+              stopBy: end
+              kind: import_declaration
+              any:
+                - pattern: import javax.crypto.Cipher;
+                - pattern: import javax.crypto.*;
+  not:
+    has:
+      stopBy: end
+      kind: ERROR
+constraints:
+  AES:
+    kind: string_literal
+    all:
+      - has:
+          kind: string_fragment
+          regex: ^\s*(AES)\s*$

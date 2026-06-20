@@ -1,0 +1,462 @@
+id: desede-is-deprecated-kotlin
+language: kotlin
+severity: warning
+message: Triple DES (3DES or DESede) is considered deprecated. AES is the recommended cipher. Upgrade to use AES.
+note: >-
+  [CWE-326]: Inadequate Encryption Strength [OWASP A03:2017]: Sensitive Data Exposure [OWASP A02:2021]: Cryptographic
+  Failures [REFERENCES]
+      - https://find-sec-bugs.github.io/bugs.htm#TDES_USAGE
+      - https://csrc.nist.gov/News/2017/Update-to-Current-Use-and-Deprecation-of-TDEA
+ast-grep-essentials: true
+utils:
+  match_call_expression:
+    kind: call_expression
+    all:
+      - has:
+          kind: navigation_expression
+          all:
+            - has:
+                stopBy: neighbor
+                kind: simple_identifier
+                pattern: $KEYGEN
+            - has:
+                stopBy: end
+                kind: navigation_suffix
+                has:
+                  stopBy: end
+                  kind: simple_identifier
+                  regex: ^getInstance$
+      - has:
+          stopBy: end
+          kind: call_suffix
+          has:
+            kind: value_arguments
+            has:
+              kind: value_argument
+              has:
+                stopBy: end
+                kind: string_literal
+                regex: ^"DES"$
+    inside:
+      stopBy: end
+      kind: navigation_expression
+      inside:
+        stopBy: end
+        kind: call_expression
+        inside:
+          stopBy: end
+          kind: property_declaration
+          inside:
+            stopBy: end
+            kind: class_declaration
+            follows:
+              stopBy: end
+              kind: import_list
+              has:
+                kind: import_header
+                has:
+                  kind: identifier
+                  all:
+                    - has:
+                        kind: simple_identifier
+                    - has:
+                        kind: simple_identifier
+                    - has:
+                        kind: simple_identifier
+                        pattern: $KEYGEN
+                        nthChild: 3
+  match_call_expression_follows_property_declaration:
+    kind: call_expression
+    all:
+      - has:
+          kind: navigation_expression
+          all:
+            - has:
+                stopBy: neighbor
+                kind: simple_identifier
+                pattern: $KEYGEN
+            - has:
+                kind: navigation_suffix
+                has:
+                  stopBy: end
+                  kind: simple_identifier
+                  regex: ^getInstance$
+      - has:
+          kind: call_suffix
+          has:
+            kind: value_arguments
+            has:
+              kind: value_argument
+              has:
+                kind: string_literal
+                regex: ^"DES"$
+    inside:
+      stopBy: end
+      kind: property_declaration
+      inside:
+        stopBy: end
+        kind: class_declaration
+        follows:
+          stopBy: end
+          kind: import_list
+          has:
+            kind: import_header
+            has:
+              kind: identifier
+              all:
+                - has:
+                    kind: simple_identifier
+                - has:
+                    kind: simple_identifier
+                - has:
+                    kind: simple_identifier
+                    pattern: $KEYGEN
+                    nthChild: 3
+  match_call_expression_with_pkcs5:
+    kind: call_expression
+    all:
+      - has:
+          kind: navigation_expression
+          all:
+            - has:
+                stopBy: end
+                kind: simple_identifier
+            - has:
+                kind: navigation_suffix
+                has:
+                  stopBy: end
+                  kind: simple_identifier
+                  regex: ^getInstance$
+      - has:
+          kind: call_suffix
+          has:
+            kind: value_arguments
+            has:
+              kind: value_argument
+              has:
+                kind: string_literal
+    inside:
+      stopBy: end
+      kind: property_declaration
+      inside:
+        stopBy: end
+        kind: function_body
+        inside:
+          stopBy: end
+          kind: function_declaration
+          inside:
+            kind: class_body
+    follows:
+      stopBy: end
+      kind: import_list
+      has:
+        kind: import_header
+        has:
+          kind: identifier
+          all:
+            - has:
+                kind: simple_identifier
+            - has:
+                kind: simple_identifier
+            - has:
+                kind: simple_identifier
+                pattern: $KEYGEN
+                nthChild: 3
+  match_call_expression_with_navigation_expression:
+    kind: call_expression
+    all:
+      - has:
+          kind: navigation_expression
+          all:
+            - has:
+                kind: navigation_expression
+                all:
+                  - has:
+                      kind: simple_identifier
+                  - has:
+                      kind: navigation_suffix
+                      has:
+                        kind: simple_identifier
+                        pattern: $KEYGEN
+            - has:
+                kind: navigation_suffix
+                has:
+                  kind: simple_identifier
+                  regex: ^getInstance$
+      - has:
+          kind: call_suffix
+          has:
+            kind: value_arguments
+            has:
+              kind: value_argument
+              has:
+                kind: string_literal
+                regex: ^"DES"$
+    inside:
+      stopBy: end
+      kind: property_declaration
+      inside:
+        stopBy: end
+        kind: class_declaration
+        follows:
+          stopBy: end
+          kind: import_list
+          has:
+            kind: import_header
+            has:
+              kind: identifier
+              all:
+                - has:
+                    kind: simple_identifier
+                - has:
+                    kind: simple_identifier
+                - has:
+                    kind: simple_identifier
+                    pattern: $KEYGEN
+                    nthChild: 3
+  match_call_expression_with_navigation_expression_without_follow:
+    kind: call_expression
+    all:
+      - has:
+          kind: navigation_expression
+          all:
+            - has:
+                kind: navigation_expression
+                all:
+                  - has:
+                      stopBy: end
+                      kind: simple_identifier
+                  - has:
+                      kind: navigation_suffix
+                      has:
+                        kind: simple_identifier
+                        regex: ^KeyGenerator$
+            - has:
+                kind: navigation_suffix
+                has:
+                  kind: simple_identifier
+                  regex: ^getInstance$
+      - has:
+          kind: call_suffix
+          has:
+            kind: value_arguments
+            has:
+              kind: value_argument
+              has:
+                kind: string_literal
+                regex: ^"DES"$
+  match_call_expression_with_paranthesis:
+    kind: call_expression
+    all:
+      - has:
+          kind: navigation_expression
+          all:
+            - has:
+                kind: simple_identifier
+                pattern: $KEYGEN
+            - has:
+                kind: navigation_suffix
+                has:
+                  kind: simple_identifier
+                  regex: ^getInstance$
+      - has:
+          kind: call_suffix
+          has:
+            kind: value_arguments
+            has:
+              kind: value_argument
+              has:
+                kind: parenthesized_expression
+                has:
+                  kind: string_literal
+                  regex: ^"DES"$
+    inside:
+      stopBy: end
+      kind: property_declaration
+      inside:
+        stopBy: end
+        kind: class_declaration
+        follows:
+          stopBy: end
+          kind: import_list
+          has:
+            kind: import_header
+            has:
+              kind: identifier
+              all:
+                - has:
+                    kind: simple_identifier
+                - has:
+                    kind: simple_identifier
+                - has:
+                    kind: simple_identifier
+                    pattern: $KEYGEN
+                    nthChild: 3
+  match_call_expression_with_ecb:
+    kind: call_expression
+    all:
+      - has:
+          kind: navigation_expression
+          all:
+            - has:
+                stopBy: end
+                kind: simple_identifier
+            - has:
+                kind: navigation_suffix
+                has:
+                  kind: simple_identifier
+                  regex: ^getInstance$
+      - has:
+          kind: call_suffix
+          has:
+            kind: value_arguments
+            has:
+              kind: value_argument
+              has:
+                kind: string_literal
+                regex: DESede
+  match_key_generator_object_inside_follows:
+    kind: call_expression
+    all:
+      - has:
+          kind: navigation_expression
+          all:
+            - has:
+                stopBy: neighbor
+                kind: simple_identifier
+                pattern: $KEYGEN
+            - has:
+                stopBy: end
+                kind: navigation_suffix
+                has:
+                  stopBy: end
+                  kind: simple_identifier
+                  regex: ^getInstance$
+      - has:
+          stopBy: end
+          kind: call_suffix
+          has:
+            kind: value_arguments
+            has:
+              kind: value_argument
+              has:
+                stopBy: end
+                kind: string_literal
+                regex: ^"DES"$
+    inside:
+      stopBy: end
+      kind: property_declaration
+      inside:
+        stopBy: end
+        kind: object_declaration
+        follows:
+          stopBy: end
+          kind: import_list
+          has:
+            kind: import_header
+            has:
+              kind: identifier
+              all:
+                - has:
+                    kind: simple_identifier
+                - has:
+                    kind: simple_identifier
+                    pattern: $KEYGEN
+  match_key_generator_property_declaration_inside_follows:
+    kind: call_expression
+    all:
+      - has:
+          kind: navigation_expression
+          all:
+            - has:
+                stopBy: neighbor
+                kind: simple_identifier
+                pattern: $KEYGEN
+            - has:
+                stopBy: end
+                kind: navigation_suffix
+                has:
+                  stopBy: end
+                  kind: simple_identifier
+                  regex: ^getInstance$
+      - has:
+          kind: call_suffix
+          has:
+            kind: value_arguments
+            has:
+              kind: value_argument
+              has:
+                kind: string_literal
+                regex: ^"DES"$
+    inside:
+      stopBy: end
+      kind: property_declaration
+      follows:
+        stopBy: end
+        kind: import_list
+        has:
+          kind: import_header
+          has:
+            kind: identifier
+            all:
+              - has:
+                  kind: simple_identifier
+              - has:
+                  kind: simple_identifier
+                  pattern: $KEYGEN
+  match_key_generator_class_declaration_inside_follows:
+    kind: call_expression
+    all:
+      - has:
+          kind: navigation_expression
+          all:
+            - has:
+                stopBy: neighbor
+                kind: simple_identifier
+                pattern: $KEYGEN
+            - has:
+                stopBy: end
+                kind: navigation_suffix
+                has:
+                  stopBy: end
+                  kind: simple_identifier
+                  regex: ^getInstance$
+      - has:
+          stopBy: end
+          kind: call_suffix
+          has:
+            kind: value_arguments
+            has:
+              kind: value_argument
+              has:
+                stopBy: end
+                kind: string_literal
+                regex: ^"DES"$
+    inside:
+      stopBy: end
+      kind: class_declaration
+      follows:
+        stopBy: end
+        kind: import_list
+        has:
+          kind: import_header
+          has:
+            kind: identifier
+            all:
+              - has:
+                  kind: simple_identifier
+              - has:
+                  kind: simple_identifier
+                  pattern: $KEYGEN
+rule:
+  any:
+    - matches: match_call_expression
+    - matches: match_call_expression_follows_property_declaration
+    - matches: match_call_expression_with_pkcs5
+    - matches: match_call_expression_with_navigation_expression
+    - matches: match_call_expression_with_navigation_expression_without_follow
+    - matches: match_call_expression_with_paranthesis
+    - matches: match_call_expression_with_ecb
+    - matches: match_key_generator_object_inside_follows
+    - matches: match_key_generator_property_declaration_inside_follows
+    - matches: match_key_generator_class_declaration_inside_follows

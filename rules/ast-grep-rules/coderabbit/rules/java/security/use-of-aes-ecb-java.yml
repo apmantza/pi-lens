@@ -1,0 +1,68 @@
+id: use-of-aes-ecb-java
+language: java
+severity: warning
+message: >-
+  Use of AES with ECB mode detected. ECB doesn't provide message confidentiality and  is not semantically secure so
+  should not be used. Instead, use a strong, secure cipher: Cipher.getInstance(\"AES/CBC/PKCS7PADDING\"). See
+  https://owasp.org/www-community/Using_the_Java_Cryptographic_Extensions for more information.
+note: >-
+  [CWE-327]: Use of a Broken or Risky Cryptographic Algorithm [OWASP A03:2017]: Sensitive Data Exposure [OWASP
+  A02:2021]: Cryptographic Failures [REFERENCES]
+      - https://owasp.org/Top10/A02_2021-Cryptographic_Failures
+      - https://googleprojectzero.blogspot.com/2022/10/rc4-is-still-considered-harmful.html
+ast-grep-essentials: true
+utils:
+  match_method_invocation:
+    kind: method_invocation
+    all:
+      - has:
+          kind: identifier
+          field: name
+          regex: ^getInstance$
+          nthChild: 2
+      - has:
+          kind: argument_list
+          has:
+            kind: string_literal
+            has:
+              kind: string_fragment
+              regex: AES/ECB
+  matches_method_invocation_with_identifier:
+    kind: method_invocation
+    all:
+      - has:
+          kind: identifier
+          field: name
+          regex: ^getInstance$
+          nthChild: 2
+      - has:
+          kind: argument_list
+          has:
+            kind: identifier
+            pattern: $I
+    inside:
+      stopBy: end
+      follows:
+        stopBy: end
+        any:
+          - kind: local_variable_declaration
+          - kind: field_declaration
+        all:
+          - has:
+              kind: type_identifier
+              field: type
+          - has:
+              kind: variable_declarator
+              all:
+                - has:
+                    kind: identifier
+                    field: name
+                    pattern: $I
+                - has:
+                    kind: string_literal
+                    has:
+                      kind: string_fragment
+rule:
+  any:
+    - matches: match_method_invocation
+    - matches: matches_method_invocation_with_identifier

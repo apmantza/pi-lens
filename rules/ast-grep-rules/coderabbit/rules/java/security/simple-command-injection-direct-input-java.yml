@@ -1,0 +1,55 @@
+id: simple-command-injection-direct-input-java
+language: java
+severity: warning
+message: |-
+  "Untrusted input might be injected into a command executed by the
+      application, which can lead to a command injection vulnerability. An
+      attacker can execute arbitrary commands, potentially gaining complete
+      control of the system. To prevent this vulnerability, avoid executing OS
+      commands with user input. If this is unavoidable, validate and sanitize
+      the input, and use safe methods for executing the commands. For more
+      information, see: [Java command injection
+      prevention](https://semgrep.dev/docs/cheat-sheets/java-command-injection/\
+      )"
+note: |-
+  [CWE-78] Improper Neutralization of Special Elements used in an OS [REFERENCES]
+      - https://docs.oracle.com/javase/8/docs/api/java/lang/Runtime.html
+      - https://owasp.org/Top10/A03_2021-Injection
+ast-grep-essentials: true
+rule:
+  kind: method_invocation
+  pattern: Runtime.getRuntime().exec($SOURCE)
+  inside:
+    kind: method_declaration
+    stopBy: end
+    has:
+      stopBy: end
+      kind: formal_parameter
+      has:
+        kind: modifiers
+        any:
+          - has:
+              kind: marker_annotation
+              has:
+                kind: identifier
+                pattern: $REQ
+          - has:
+              kind: annotation
+              all:
+                - has:
+                    kind: identifier
+                    pattern: $REQ
+                - has:
+                    kind: annotation_argument_list
+        precedes:
+          kind: type_identifier
+          pattern: $TYPE
+          precedes:
+            kind: identifier
+            pattern: $SOURCE
+constraints:
+  REQ:
+    regex: ^(RequestBody|PathVariable|RequestParam|RequestHeader|CookieValue|ModelAttribute)
+  TYPE:
+    regex: >-
+      ^[^I].*|^I[^n].*|^In[^t].*|^Int[^e].*|^Inte[^g].*|^Integ[^e].*|^Inge[^r].*|^L[^o].*|^Lo[^n].*|^Lon[^g].*|^F[^l].*|^Fl[^o].*|^Flo[^a].*|^Floa[^t].*|^D[^o].*|^Do[^u].*|^Dou[^b].*|^Doub[^l].*|^Doubl[^e].*|^C[^h].*|^Ch[^a].*|^Cha[^r].*|^B[^o].*|^Bo[^o].*|^Boo[^l].*|^Bool[^e].*|^Boole[^a].*|^Boolea[^n].*|^i[^n].*|^in[^t].*|^l[^o].*|^lo[^n].*|^lon[^g].*|^f[^l].*|^fl[^o].*|^flo[^a].*|^floa[^t].*|^d[^o].*|^do[^u].*|^dou[^b].*|^doub[^l].*|^doubl[^e].*|^c[^h].*|^ch[^a].*|^cha[^r].*|^b[^o].*|^bo[^o].*|^boo[^l].*|^bool[^e].*|^boole[^a].*|^boolea[^n].*

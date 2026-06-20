@@ -1,0 +1,40 @@
+id: small-key-size-c
+language: c
+severity: warning
+message: $KEY_FUNCTION` is using a key size of only $KEY_BITS bits. This is less than the recommended key size of 2048 bits.
+note: >-
+  [CWE-326]: Inadequate Encryption Strength [OWASP A02:2021]: Cryptographic Failures [OWASP A03:2017]: Sensitive Data
+  Exposure [REFERENCES]
+       https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-131Ar2.pdf
+       https://owasp.org/Top10/A02_2021-Cryptographic_Failures
+ast-grep-essentials: true
+rule:
+  kind: call_expression
+  all:
+    - has:
+        stopBy: end
+        kind: identifier
+        regex: >-
+          ^(DH_generate_parameters_ex|DSA_generate_parameters_ex|EVP_PKEY_CTX_set_dh_paramgen_prime_len|EVP_PKEY_CTX_set_dsa_paramgen_bits|EVP_PKEY_CTX_set_rsa_keygen_bits|RSA_generate_key_ex|RSA_generate_key_fips)$
+    - not:
+        has:
+          stopBy: end
+          kind: field_identifier
+          regex: >-
+            ^(DH_generate_parameters_ex|DSA_generate_parameters_ex|EVP_PKEY_CTX_set_dh_paramgen_prime_len|EVP_PKEY_CTX_set_dsa_paramgen_bits|EVP_PKEY_CTX_set_rsa_keygen_bits|RSA_generate_key_ex|RSA_generate_key_fips)$
+    - has:
+        stopBy: neighbor
+        kind: argument_list
+        has:
+          stopBy: neighbor
+          any:
+            - kind: number_literal
+            - kind: binary_expression
+            - kind: unary_expression
+          nthChild: 2
+          regex: >-
+            ^([+-]*\(*[+-]*((0|[1-9][0-9]{0,2}|1[0-9]{3}|20[0-3][0-9]|204[0-7])(\.[0-9]+)?|((0|[1-9][0-9]{0,2}|1[0-9]{3}|20[0-3][0-9]|204[0-7])(\.[0-9]+)?\/[1-9][0-9]*)|(\.[0-9]+)|(\.[0-9]+\/[1-9][0-9]*))\)*)$
+    - not:
+        has:
+          stopBy: end
+          kind: ERROR

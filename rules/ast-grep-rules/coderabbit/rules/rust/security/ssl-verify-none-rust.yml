@@ -1,0 +1,100 @@
+id: ssl-verify-none-rust
+language: rust
+severity: warning
+message: SSL verification disabled, this allows for MitM attacks
+note: |-
+  [CWE-295]: Improper Certificate Validation [REFERENCES]
+    - https://docs.rs/openssl/latest/openssl/ssl/struct.SslContextBuilder.html#method.set_verify
+ast-grep-essentials: true
+rule:
+  kind: call_expression
+  any:
+    - pattern: $BUILDER.set_verify(openssl::ssl::SSL_VERIFY_NONE)
+      inside:
+        stopBy: end
+        follows:
+          stopBy: end
+          kind: use_declaration
+          any:
+            - pattern: use openssl;
+            - pattern: use openssl::ssl;
+            - pattern: use openssl::ssl::SSL_VERIFY_NONE;
+            - all:
+                - has:
+                    stopBy: end
+                    kind: use_list
+                    has:
+                      stopBy: end
+                      kind: identifier
+                      regex: ^SSL_VERIFY_NONE$
+                - has:
+                    stopBy: end
+                    kind: scoped_identifier
+                    regex: ^openssl::ssl$
+    - pattern: $BUILDER.set_verify(ssl::SSL_VERIFY_NONE)
+      inside:
+        stopBy: end
+        follows:
+          stopBy: end
+          kind: use_declaration
+          any:
+            - pattern: use openssl::ssl;
+            - pattern: use openssl::ssl::SSL_VERIFY_NONE;
+            - all:
+                - has:
+                    stopBy: end
+                    kind: use_list
+                    has:
+                      stopBy: end
+                      kind: identifier
+                      regex: ^SSL_VERIFY_NONE$
+                - has:
+                    stopBy: end
+                    kind: scoped_identifier
+                    regex: ^openssl::ssl$
+    - pattern: $BUILDER.set_verify(SSL_VERIFY_NONE)
+      inside:
+        stopBy: end
+        follows:
+          stopBy: end
+          kind: use_declaration
+          any:
+            - pattern: use openssl;
+            - pattern: use openssl::ssl;
+            - pattern: use openssl::ssl::SSL_VERIFY_NONE;
+            - all:
+                - has:
+                    stopBy: end
+                    kind: use_list
+                    has:
+                      stopBy: end
+                      kind: identifier
+                      regex: ^SSL_VERIFY_NONE$
+                - has:
+                    stopBy: end
+                    kind: scoped_identifier
+                    regex: ^openssl::ssl$
+    - pattern: $BUILDER.set_verify($ALIAS)
+      inside:
+        stopBy: end
+        follows:
+          stopBy: end
+          kind: use_declaration
+          any:
+            - pattern: use openssl::ssl::SSL_VERIFY_NONE as $ALIAS;
+            - has:
+                stopBy: end
+                kind: use_list
+                has:
+                  stopBy: end
+                  kind: use_as_clause
+                  all:
+                    - has:
+                        kind: identifier
+                        field: path
+                        pattern: SSL_VERIFY_NONE
+                    - has:
+                        kind: identifier
+                        field: alias
+                        pattern: $ALIAS
+    - pattern: $BUILDER.set_verify(openssl::ssl::SSL_VERIFY_NONE)

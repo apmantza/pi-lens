@@ -1,0 +1,69 @@
+id: avoid_app_run_with_bad_host-python
+language: python
+severity: warning
+message: Running flask app with host 0.0.0.0 could expose the server publicly.
+note: |-
+  [CWE-668]: Exposure of Resource to Wrong Sphere [OWASP A01:2021]: Broken Access Control [REFERENCES]
+       https://owasp.org/Top10/A01_2021-Broken_Access_Control
+ast-grep-essentials: true
+utils:
+  MATCH_PATTERN_app_run:
+    kind: call
+    all:
+      - has:
+          stopBy: neighbor
+          kind: attribute
+          all:
+            - has:
+                stopBy: neighbor
+                kind: identifier
+                regex: ^app$
+            - has:
+                stopBy: neighbor
+                kind: identifier
+                regex: ^run$
+      - has:
+          stopBy: neighbor
+          kind: argument_list
+          has:
+            stopBy: neighbor
+            kind: string
+            regex: ^"0.0.0.0"$
+  MATCH_PATTERN_app_run_HOST:
+    kind: call
+    all:
+      - has:
+          stopBy: neighbor
+          kind: attribute
+          all:
+            - has:
+                stopBy: neighbor
+                kind: identifier
+                regex: ^app$
+            - has:
+                stopBy: neighbor
+                kind: identifier
+                regex: ^run$
+      - has:
+          stopBy: neighbor
+          kind: argument_list
+          has:
+            stopBy: neighbor
+            kind: keyword_argument
+            all:
+              - has:
+                  stopBy: neighbor
+                  kind: identifier
+                  regex: ^host$
+              - has:
+                  stopBy: neighbor
+                  kind: string
+                  regex: ^"0.0.0.0"$
+              - has:
+                  stopBy: neighbor
+                  regex: ^=$
+rule:
+  kind: call
+  any:
+    - matches: MATCH_PATTERN_app_run
+    - matches: MATCH_PATTERN_app_run_HOST

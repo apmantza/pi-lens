@@ -1,0 +1,71 @@
+id: avoid-mktemp-python
+language: python
+severity: warning
+message: >-
+  The function `mktemp` is deprecated. When using this function, it is possible for an attacker to modify the created
+  file before the filename is returned. Use `NamedTemporaryFile()` instead and pass it the `delete=False` parameter.
+note: |-
+  [CWE-377]: Insecure Temporary File [OWASP A01:2021]: Broken Access Control [REFERENCES]
+       https://docs.python.org/3/library/tempfile.html#tempfile.mktemp
+       https://owasp.org/Top10/A01_2021-Broken_Access_Control
+ast-grep-essentials: true
+utils:
+  match_call:
+    kind: call
+    all:
+      - has:
+          stopBy: end
+          kind: attribute
+          field: function
+          all:
+            - has:
+                stopBy: end
+                kind: identifier
+                field: object
+                regex: ^tempfile$
+            - has:
+                stopBy: end
+                kind: identifier
+                field: attribute
+                regex: ^mktemp$
+      - has:
+          stopBy: end
+          kind: argument_list
+          field: arguments
+  match_second_call:
+    kind: call
+    all:
+      - has:
+          stopBy: end
+          kind: identifier
+          field: function
+          regex: ^mktemp$
+      - has:
+          stopBy: end
+          kind: argument_list
+          field: arguments
+    inside:
+      stopBy: end
+      kind: expression_statement
+      follows:
+        stopBy: end
+        kind: import_from_statement
+        all:
+          - has:
+              kind: dotted_name
+              field: module_name
+              has:
+                kind: identifier
+                regex: ^tempfile$
+          - has:
+              stopBy: end
+              kind: dotted_name
+              field: name
+              has:
+                stopBy: end
+                kind: identifier
+                regex: ^mktemp$
+rule:
+  any:
+    - matches: match_call
+    - matches: match_second_call

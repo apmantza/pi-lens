@@ -1,0 +1,165 @@
+id: use-of-sha1-java
+severity: warning
+language: java
+message: >-
+  Detected SHA1 hash algorithm which is considered insecure. SHA1 is not collision resistant and is therefore not
+  suitable as a cryptographic signature. Instead, use PBKDF2 for password hashing or SHA256 or SHA512 for other hash
+  function applications.
+note: |-
+  [CWE-328] Use of Weak Hash. [REFERENCES]
+      - https://owasp.org/Top10/A02_2021-Cryptographic_Failures
+ast-grep-essentials: true
+utils:
+  java_security_MessageDigest_getInstance_SHA-1:
+    kind: method_invocation
+    all:
+      - has:
+          kind: field_access
+          regex: ^java.security.MessageDigest$
+      - has:
+          kind: identifier
+          regex: ^getInstance$
+      - has:
+          kind: argument_list
+          has:
+            kind: string_literal
+            nthChild:
+              position: 1
+              ofRule:
+                not:
+                  kind: line_comment
+            has:
+              kind: string_fragment
+              any:
+                - regex: ^SHA-1
+                - regex: ^SHA1
+  MessageDigest_getInstance_SHA-1:
+    kind: method_invocation
+    all:
+      - has:
+          kind: identifier
+          regex: ^MessageDigest$
+          nthChild: 1
+      - has:
+          kind: identifier
+          regex: ^getInstance$
+          nthChild: 2
+      - has:
+          kind: argument_list
+          has:
+            kind: string_literal
+            nthChild:
+              position: 1
+              ofRule:
+                not:
+                  kind: line_comment
+            has:
+              kind: string_fragment
+              any:
+                - regex: ^SHA-1
+                - regex: ^SHA1
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: import_declaration
+            pattern: import java.security.MessageDigest
+  MessageDigest_getInstance_SHA-1__with_Instance:
+    kind: method_invocation
+    all:
+      - has:
+          kind: identifier
+          regex: ^MessageDigest$
+          nthChild: 1
+      - has:
+          kind: identifier
+          regex: ^getInstance$
+          nthChild: 2
+      - has:
+          kind: argument_list
+          has:
+            kind: identifier
+            pattern: $SHA
+            nthChild:
+              position: 1
+              ofRule:
+                not:
+                  kind: line_comment
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: import_declaration
+            pattern: import java.security.MessageDigest
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: local_variable_declaration
+            has:
+              kind: variable_declarator
+              all:
+                - has:
+                    kind: identifier
+                    pattern: $SHA
+                - has:
+                    kind: string_literal
+                    has:
+                      kind: string_fragment
+                      any:
+                        - regex: ^SHA-1
+                        - regex: ^SHA1
+  java_security_MessageDigest_getInstance_SHA-1__with_Instance:
+    kind: method_invocation
+    all:
+      - has:
+          kind: field_access
+          regex: ^java.security.MessageDigest$
+      - has:
+          kind: identifier
+          regex: ^getInstance$
+      - has:
+          kind: argument_list
+          has:
+            kind: identifier
+            pattern: $SHA
+            nthChild:
+              position: 1
+              ofRule:
+                not:
+                  kind: line_comment
+      - inside:
+          stopBy: end
+          follows:
+            stopBy: end
+            kind: local_variable_declaration
+            has:
+              kind: variable_declarator
+              all:
+                - has:
+                    kind: identifier
+                    pattern: $SHA
+                - has:
+                    kind: string_literal
+                    has:
+                      kind: string_fragment
+                      any:
+                        - regex: ^SHA-1
+                        - regex: ^SHA1
+rule:
+  kind: method_invocation
+  any:
+    - matches: java_security_MessageDigest_getInstance_SHA-1
+    - pattern: $DU.getSha1Digest().digest($$$)
+    - matches: MessageDigest_getInstance_SHA-1
+    - matches: MessageDigest_getInstance_SHA-1__with_Instance
+    - matches: java_security_MessageDigest_getInstance_SHA-1__with_Instance
+  all:
+    - not:
+        inside:
+          stopBy: end
+          kind: ERROR
+    - not:
+        has:
+          stopBy: end
+          kind: ERROR
