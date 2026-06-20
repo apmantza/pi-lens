@@ -93,6 +93,7 @@ function createMockState(overrides?: Partial<LSPClientState>): LSPClientState {
 			callHierarchy: false,
 		},
 		staticDiagnosticsMode: "push-only",
+		positionEncoding: "utf-16",
 		dynamicRegistrations: new Map(),
 		advertisedCommands: new Set(),
 		serverEditsAllowed: 0,

@@ -10,7 +10,7 @@
 
 import { spawn as nodeSpawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import type { MessageConnection } from "vscode-jsonrpc";
 import { logLatency } from "../latency-logger.js";
@@ -25,6 +25,13 @@ import {
 import { applyWorkspaceEdit } from "./edits.js";
 import type { LSPProcess } from "./launch.js";
 import { normalizeMapKey, uriToPath } from "./path-utils.js";
+import {
+	ADVERTISED_POSITION_ENCODINGS,
+	convertCharacterOffset,
+	lineTextAt,
+	negotiatePositionEncoding,
+	type PositionEncoding,
+} from "./position-encoding.js";
 import { getStrategy } from "./server-strategies.js";
 
 // Opt-in publishDiagnostics trace (PILENS_PUB_DEBUG=1) — read once, negligible
@@ -409,6 +416,10 @@ export interface LSPClientState {
 	/** Top-level keys of the raw ServerCapabilities from initialize (sorted) —
 	 *  captured once; the full advertised surface for diagnostics/documentation. */
 	rawCapabilityKeys?: string[];
+	/** Position encoding the server negotiated at initialize (#269). UTF-16 unless
+	 *  the server advertised otherwise; drives character-offset translation on
+	 *  outgoing navigation requests. */
+	positionEncoding: PositionEncoding;
 	/** Baseline mode from static initResult — used to revert on unregister */
 	staticDiagnosticsMode: "pull" | "push-only";
 	/** Live dynamic registrations from client/registerCapability: id → method */
@@ -1127,6 +1138,36 @@ export async function clientShutdown(
 	await killProcessTree(state.lspProcess.process, pid, options);
 }
 
+/**
+ * Translate a caller-supplied (UTF-16) `(line, character)` into the position the
+ * server expects under its negotiated encoding (#269). UTF-16 is the identity —
+ * the common case pays nothing (no I/O). For UTF-8/UTF-32 we read the target
+ * line from disk (pi edits files on disk before navigating, so disk == the
+ * server's content) and re-measure the character offset; a read failure falls
+ * back to the raw offset rather than dropping the request.
+ */
+async function toWirePosition(
+	state: LSPClientState,
+	filePath: string,
+	line: number,
+	character: number,
+): Promise<{ line: number; character: number }> {
+	if (state.positionEncoding === "utf-16") return { line, character };
+	try {
+		const content = await readFile(filePath, "utf8");
+		return {
+			line,
+			character: convertCharacterOffset(
+				state.positionEncoding,
+				lineTextAt(content, line),
+				character,
+			),
+		};
+	} catch {
+		return { line, character };
+	}
+}
+
 async function navRequest<T>(
 	state: LSPClientState,
 	method: string,
@@ -1313,6 +1354,7 @@ export async function createLSPClient(options: {
 			undefined as unknown as LSPWorkspaceDiagnosticsSupport,
 		operationSupport: undefined as unknown as LSPOperationSupport,
 		staticDiagnosticsMode: "push-only",
+		positionEncoding: "utf-16",
 		dynamicRegistrations: new Map(),
 		advertisedCommands: new Set(),
 		serverEditsAllowed: 0,
@@ -1335,6 +1377,7 @@ export async function createLSPClient(options: {
 					{ name: "workspace", uri: pathToFileURL(root).href },
 				],
 				capabilities: {
+					general: { positionEncodings: ADVERTISED_POSITION_ENCODINGS },
 					window: { workDoneProgress: true },
 					workspace: {
 						workspaceFolders: true,
@@ -1393,6 +1436,9 @@ export async function createLSPClient(options: {
 	state.workspaceDiagnosticsSupport =
 		detectWorkspaceDiagnosticsSupport(initResult);
 	state.operationSupport = detectOperationSupport(initResult);
+	state.positionEncoding = negotiatePositionEncoding(
+		(initResult as { capabilities?: unknown })?.capabilities,
+	);
 	state.rawCapabilityKeys = Object.keys(
 		(initResult as { capabilities?: Record<string, unknown> })?.capabilities ??
 			{},
@@ -1551,7 +1597,7 @@ export async function createLSPClient(options: {
 				"textDocument/definition",
 				{
 					textDocument: { uri: pathToFileURL(filePath).href },
-					position: { line, character },
+					position: await toWirePosition(state, filePath, line, character),
 				},
 			);
 			if (!result) return [];
@@ -1564,7 +1610,7 @@ export async function createLSPClient(options: {
 				"textDocument/typeDefinition",
 				{
 					textDocument: { uri: pathToFileURL(filePath).href },
-					position: { line, character },
+					position: await toWirePosition(state, filePath, line, character),
 				},
 			);
 			if (!result) return [];
@@ -1577,7 +1623,7 @@ export async function createLSPClient(options: {
 				"textDocument/declaration",
 				{
 					textDocument: { uri: pathToFileURL(filePath).href },
-					position: { line, character },
+					position: await toWirePosition(state, filePath, line, character),
 				},
 			);
 			if (!result) return [];
@@ -1590,7 +1636,7 @@ export async function createLSPClient(options: {
 				"textDocument/references",
 				{
 					textDocument: { uri: pathToFileURL(filePath).href },
-					position: { line, character },
+					position: await toWirePosition(state, filePath, line, character),
 					context: { includeDeclaration },
 				},
 			);
@@ -1600,7 +1646,7 @@ export async function createLSPClient(options: {
 		async hover(filePath, line, character) {
 			const result = await navRequest<LSPHover>(state, "textDocument/hover", {
 				textDocument: { uri: pathToFileURL(filePath).href },
-				position: { line, character },
+				position: await toWirePosition(state, filePath, line, character),
 			});
 			return result ?? null;
 		},
@@ -1611,7 +1657,7 @@ export async function createLSPClient(options: {
 				"textDocument/signatureHelp",
 				{
 					textDocument: { uri: pathToFileURL(filePath).href },
-					position: { line, character },
+					position: await toWirePosition(state, filePath, line, character),
 				},
 			);
 			return result ?? null;
@@ -1645,8 +1691,8 @@ export async function createLSPClient(options: {
 				{
 					textDocument: { uri },
 					range: {
-						start: { line, character },
-						end: { line: endLine, character: endCharacter },
+						start: await toWirePosition(state, filePath, line, character),
+						end: await toWirePosition(state, filePath, endLine, endCharacter),
 					},
 					context: {
 						diagnostics: getMergedDiagnosticsForPath(
@@ -1672,7 +1718,7 @@ export async function createLSPClient(options: {
 				"textDocument/rename",
 				{
 					textDocument: { uri: pathToFileURL(filePath).href },
-					position: { line, character },
+					position: await toWirePosition(state, filePath, line, character),
 					newName,
 				},
 			);
@@ -1713,7 +1759,7 @@ export async function createLSPClient(options: {
 				"textDocument/implementation",
 				{
 					textDocument: { uri: pathToFileURL(filePath).href },
-					position: { line, character },
+					position: await toWirePosition(state, filePath, line, character),
 				},
 			);
 			if (!result) return [];
@@ -1725,7 +1771,7 @@ export async function createLSPClient(options: {
 				LSPCallHierarchyItem | LSPCallHierarchyItem[]
 			>(state, "textDocument/prepareCallHierarchy", {
 				textDocument: { uri: pathToFileURL(filePath).href },
-				position: { line, character },
+				position: await toWirePosition(state, filePath, line, character),
 			});
 			if (!result) return [];
 			return Array.isArray(result) ? result : [result];
