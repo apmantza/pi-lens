@@ -26,6 +26,7 @@ import { findLocalSgconfig, resolveBaselineSgconfig } from "../sgconfig.js";
 import { isCommandAvailableAsync, safeSpawnAsync } from "../safe-spawn.js";
 import { type LSPProcess, launchLSP } from "./launch.js";
 import { createLombokJdtlsArgs } from "./lombok.js";
+import { resolveJavaRuntimeEnv } from "./jvm-runtime.js";
 import { normalizeMapKey } from "./path-utils.js";
 
 // --- Types ---
@@ -691,6 +692,13 @@ interface InteractiveServerSpec {
 	initialization?:
 		| InitializationConfig
 		| ((root: string) => InitializationConfig);
+	/**
+	 * Language-runtime dependency to resolve before launch (#241). The server's
+	 * binary is itself run by this runtime (jdtls → java); when the runtime isn't
+	 * on PATH, a discovered install is injected into the spawn env instead of
+	 * silently failing. Currently only "java" (jdtls).
+	 */
+	runtime?: "java";
 }
 
 function createInteractiveServer(spec: InteractiveServerSpec): LSPServerInfo {
@@ -716,8 +724,16 @@ function createInteractiveServer(spec: InteractiveServerSpec): LSPServerInfo {
 			) {
 				return undefined;
 			}
+			// #241: the server binary is run by a language runtime (jdtls → java).
+			// When that runtime isn't on PATH, inject a discovered install's env so
+			// it launches instead of silently failing with no_clients.
+			const runtimeEnv =
+				spec.runtime === "java" ? await resolveJavaRuntimeEnv() : undefined;
 			try {
-				const proc = await launchLSP(command, args, { cwd: root });
+				const proc = await launchLSP(command, args, {
+					cwd: root,
+					...(runtimeEnv ? { env: runtimeEnv } : {}),
+				});
 				const initialization =
 					typeof spec.initialization === "function"
 						? spec.initialization(root)
@@ -1777,6 +1793,7 @@ export const JavaServer = createInteractiveServer({
 	language: "java",
 	command: () => process.env.JDTLS_PATH || "jdtls",
 	args: (root) => createLombokJdtlsArgs(root),
+	runtime: "java",
 });
 
 export const KotlinServer: LSPServerInfo = {
