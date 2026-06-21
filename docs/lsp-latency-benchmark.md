@@ -21,21 +21,22 @@ servers pi-lens already tolerates).
   primary↔auxiliary cross-contamination that produced the old "20557ms" artifact
   (see the resolved-history note below).
 
-> **Coverage:** this run measured **26 servers** (24 primary/alternate + 2
-> auxiliary) — those whose toolchain is installed on this box. **11** more
-> (csharp-ls, jdtls, kotlin-language-server, sourcekit-lsp, dart,
-> lua-language-server, clangd, haskell-language-server, elixir-ls, ocamllsp, nixd)
-> have a fixture but are toolchain-gated and reported `unavailable` here — run with
-> `--install` on a box with their runtimes to measure them (#241). **fsautocomplete**
-> now measures (it auto-installs via `dotnet tool install`, #241) — its `dotnet`
-> runtime is present here.
+> **Coverage:** this run measured **31 servers** (27 primary/alternate + 4
+> auxiliary) — those whose toolchain is installed on this box. **Newly measuring
+> since the previous run:** **clangd** (cpp) and **zizmor** (auxiliary) now
+> auto-install via the archive/github strategies (#241/#272), **PowerShell Editor
+> Services** via its pwsh-bootstrapped bundle (#278), and **marksman** (markdown,
+> #274). **11** fixtures remain toolchain-gated and reported `unavailable` here
+> (csharp-ls, jdtls [java + java-lombok], kotlin-language-server, sourcekit-lsp,
+> dart, lua-language-server, haskell-language-server, elixir-ls, ocamllsp, nixd) —
+> run with `--install` on a box with their runtimes to measure them (#241).
 >
 > **Most fixtures are intentionally broken** (they carry a known defect so the smoke
 > harness can assert a diagnostic). That means such a server always has a diagnostic
 > to early-return on — see the clean-file note below, which a broken fixture masks.
 > The `typescript-clean` fixture exists precisely to expose that cost.
 
-## Results (2026-06 run, isolated)
+## Results (2026-06-21 run, isolated)
 
 Sorted by warm/edit. `role`: primary = the file's language server; alternate =
 second server for a language (reached when the default is disabled); auxiliary =
@@ -43,48 +44,84 @@ cross-cutting, attaches alongside the primary in production but measured alone h
 
 | lang | role | cold | warm/edit | server |
 |---|---|---:|---:|---|
-| deno | alternate | 2208ms | 481ms | deno (alternate of typescript) |
-| ruby | primary | 5443ms | 501ms | ruby-lsp |
-| typescript | primary | 2542ms | 536ms | typescript-language-server |
-| **ast-grep** | auxiliary | 2023ms | **549ms** | ast-grep |
-| go | primary | 2459ms | 781ms | gopls |
-| toml | primary | 2388ms | 783ms | taplo |
-| dockerfile | primary | 2787ms | 789ms | docker-langserver |
-| prisma | primary | 2864ms | 799ms | @prisma/language-server |
-| rust | primary | 1776ms | 808ms | rust-analyzer |
-| zig | primary | 1792ms | 845ms | zls |
-| python | primary | 3112ms | 850ms | pyright |
-| **opengrep** | auxiliary | 3028ms | **851ms** | opengrep |
-| gleam | primary | 1993ms | 902ms | gleam lsp |
-| yaml | primary | 3104ms | 944ms | yaml-language-server |
-| clojure | primary | 7354ms | 955ms | clojure-lsp |
-| css | primary | 3360ms | 1288ms | vscode-css-language-server |
-| html | primary | 3283ms | 1290ms | vscode-html-language-server |
-| typescript-clean | primary | 2350ms | 1324ms | typescript-language-server (clean file) |
-| shell | primary | 3421ms | 1338ms | bash-language-server |
-| svelte | primary | 4372ms | 1361ms | svelte-language-server |
-| php | primary | 2804ms | 1370ms | intelephense |
-| json | primary | 2941ms | 1379ms | vscode-json-language-server |
-| jedi | alternate | 2922ms | 1585ms | jedi (alternate of pyright) |
-| terraform | primary | 3221ms | 2215ms | terraform-ls |
-| vue | primary | 6513ms | 2220ms | @vue/language-server |
-| fsharp | primary | 3925ms | 2234ms | fsautocomplete (`dotnet tool`, #241) |
+| ruby | primary | 5608ms | 159ms | ruby-lsp |
+| deno | alternate | 1521ms | 165ms | deno (alternate of typescript) |
+| **ast-grep-baseline** | auxiliary | 1906ms | **394ms** | ast-grep (no-sgconfig baseline) |
+| **ast-grep** | auxiliary | 1614ms | **399ms** | ast-grep |
+| dockerfile | primary | 1715ms | 470ms | docker-langserver |
+| toml | primary | 1622ms | 471ms | taplo |
+| go | primary | 1777ms | 473ms | gopls |
+| prisma | primary | 1935ms | 473ms | @prisma/language-server |
+| zig | primary | 1237ms | 496ms | zls |
+| yaml | primary | 1908ms | 506ms | yaml-language-server |
+| python | primary | 2025ms | 520ms | pyright |
+| rust | primary | 1015ms | 576ms | rust-analyzer |
+| gleam | primary | 1219ms | 585ms | gleam lsp |
+| typescript | primary | 1811ms | 605ms | typescript-language-server |
+| **cpp** | primary | 983ms | 607ms | clangd (#241) |
+| clojure | primary | 5496ms | 624ms | clojure-lsp |
+| **opengrep** | auxiliary | 2156ms | **651ms** | opengrep |
+| css | primary | 2204ms | 967ms | vscode-css-language-server |
+| json | primary | 2014ms | 972ms | vscode-json-language-server |
+| html | primary | 2234ms | 981ms | vscode-html-language-server |
+| shell | primary | 2327ms | 1012ms | bash-language-server |
+| svelte | primary | 3311ms | 1028ms | svelte-language-server |
+| typescript-clean | primary | 1827ms | 1043ms | typescript-language-server (clean file) |
+| php | primary | 1703ms | 1167ms | intelephense |
+| jedi | alternate | 2477ms | 1278ms | jedi (alternate of pyright) |
+| **powershell** | primary | 5053ms | 1401ms | PowerShell Editor Services (#278) |
+| markdown | primary | 2979ms | 1725ms | marksman (#274) |
+| terraform | primary | 2331ms | 1729ms | terraform-ls |
+| fsharp | primary | 2958ms | 1730ms | fsautocomplete (`dotnet tool`, #241) |
+| vue | primary | 5545ms | 1731ms | @vue/language-server |
+| **zizmor** | auxiliary | 962ms | **2158ms†** | zizmor (#272) |
 
-**Primary/alternate warm:** min 481ms · avg 1149ms · max 2234ms (n=24).
-**Auxiliary warm:** ast-grep 549ms · opengrep 851ms — both at the **fast end** of the
-primary band.
+**Primary/alternate warm:** min 159ms · avg 870ms · max 1731ms (n=27).
+**Auxiliary warm:** ast-grep 399ms · ast-grep-baseline 394ms · opengrep 651ms —
+all at the **fast end** of the primary band. **zizmor 2158ms†** is a bench
+artifact, not its real per-edit cost — see the caveat below; its true warm/edit is
+**~680ms**, also fast-end.
+
+> **† zizmor caveat (the bench number is a no-signal artifact).** The harness's
+> warm edit appends `\n// bench edit N\n`, but `//` is **not** a YAML comment
+> (`#` is) — so each warm touch hands zizmor an *unparseable workflow*. zizmor
+> collects no auditable input and publishes nothing, so the touch has no diagnostic
+> to early-return on and runs to its `aggregateWaitMs` budget (the same class of
+> "no-signal, budget-bound" cost as a clean file — see below). Re-measured with a
+> *valid* edit (appending a `#` comment so the workflow stays parseable + still
+> flagged), zizmor early-returns on the version-matched republish:
+>
+> | edit kind | cold | warm/edit | diags |
+> |---|---:|---:|---:|
+> | bench `//` (unparseable) | 962ms | 2158ms | 1 cold, 0 warm |
+> | valid `#` (parseable, flagged) | 2376ms | **682ms** | 1 every touch |
+>
+> So zizmor's real per-edit latency sits with opengrep (~650ms), not at 2158ms.
 
 > **fsautocomplete caveat:** it returned **0 diagnostics** (the fixture isn't a
-> restored .NET project, so the server surfaces nothing), so its 2234ms is the
+> restored .NET project, so the server surfaces nothing), so its 1730ms is the
 > *clean-file* near-budget cost — see the clean-file note below — not a real
 > per-edit-with-diagnostic latency. It is a heavy server regardless; this number is
 > an upper bound, not a typical edit.
 
-### Gate A verdict (#239)
-**Pass, decisively.** Measured in isolation, both auxiliaries are faster than the
-median primary (ast-grep 549ms, opengrep 851ms vs primary avg 1102ms). ast-grep as
-an auxiliary does not regress the hot path — consolidating onto it (Phase 2) is
-justified on latency grounds.
+### Auxiliary verdict (#239 Gate A, re-confirmed #272)
+**Pass, decisively.** Measured in isolation, every auxiliary's real warm latency is
+at or below the median primary (ast-grep 399ms, opengrep 651ms, zizmor ~682ms vs
+primary avg 870ms). None regresses the hot path.
+
+### Shared with-auxiliary floor on YAML (#272 re-measure)
+Editing a workflow YAML now attaches **three** auxiliaries alongside the yaml
+primary — opengrep, ast-grep, **and zizmor** (all include YAML in their kind set).
+The concern (#272) was that each new auxiliary joins the same `with-auxiliary`
+`Promise.all` and could extend the per-edit floor. It does **not**, because of the
+#242 fix: each attached server gets its **own** deadline bounded by the caller cap
+as a ceiling (`min(callerCap, aggregateWaitMs)`), and they run concurrently — so
+the touch waits for the *slowest single* aux, not their sum. opengrep
+(`min(2500, 3500) = 2500`) already sets that ceiling; zizmor
+(`min(2500, 2000) = 2000`) sits under it and never extends the floor. On a normal
+(parseable) edit all three early-return well inside the cap (~400–680ms). zizmor's
+`aggregateWaitMs` is intentionally left at 2000ms for online-mode (GitHub-API)
+headroom; a late online finding is cached and surfaces on the next edit.
 
 ## Resolved: the with-auxiliary measurement artifact (#240 + #242)
 
@@ -120,10 +157,10 @@ nothing to trip on, so a clean file costs more than a broken one on the *same* s
 
 | fixture | warm/edit |
 |---|---:|
-| typescript (broken — persistent error, re-published each edit) | 536ms |
-| typescript-clean (no diagnostics) | 1324ms |
+| typescript (broken — persistent error, re-published each edit) | 605ms |
+| typescript-clean (no diagnostics) | 1043ms |
 
-The clean file is ~2.5× slower: with a persistent diagnostic the server re-publishes
+The clean file is ~1.7× slower: with a persistent diagnostic the server re-publishes
 (version bump → early-return); with nothing to report, a Tier-3 push-silent server
 (typescript publishes nothing on clean) gives no signal, so the touch waits its
 budget. This is **budget-bound by necessity** — silence is irreducibly ambiguous, so
