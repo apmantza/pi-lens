@@ -2132,7 +2132,16 @@ export default function (pi: ExtensionAPI) {
 				knipClient,
 				depChecker,
 				testRunnerClient,
-				resetLSPService,
+				// The LSP idle reset (240s of no turns) releases the warm servers
+				// from a detached timer, with no pi event in flight — so nothing
+				// would repaint the footer and it would keep showing a stale
+				// "LSP Active". Wrap the reset to refresh the status right after it
+				// fires; resetLSPService nulls the singleton synchronously, so the
+				// repaint sees zero alive servers and renders "LSP Inactive" (#281).
+				resetLSPService: () => {
+					resetLSPService();
+					ctx.ui && updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
+				},
 				resetFormatService,
 			});
 			ctx.ui && updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);

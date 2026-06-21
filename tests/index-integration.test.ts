@@ -218,6 +218,69 @@ describe("index.ts integration", () => {
 		});
 	}, INTEGRATION_TIMEOUT_MS);
 
+	it("idle LSP reset repaints the footer to Inactive (detached 240s timer)", async () => {
+		// The idle reset releases the warm servers from a detached timer with no pi
+		// event in flight; without the wrapped reset the footer would keep showing a
+		// stale "LSP Active" until the next turn. Assert the timer firing repaints it.
+		let aliveIds: string[] = ["typescript"];
+		const resetLSPService = vi.fn(() => {
+			aliveIds = [];
+		});
+		vi.doMock("../clients/lsp/index.js", () => ({
+			getLSPService: () => ({
+				touchFile: vi.fn(),
+				getAliveClientCount: () => aliveIds.length,
+				getAliveServerIds: () => aliveIds,
+			}),
+			resetLSPService,
+		}));
+		vi.doMock("../clients/bootstrap.js", () => ({
+			loadBootstrapClients: async () => ({
+				knipClient: { isAvailable: () => false },
+				depChecker: { isAvailable: () => false },
+				testRunnerClient: { detectRunner: () => null },
+			}),
+		}));
+
+		const { default: registerExtension } = await import("../index.ts");
+		const { pi, handlers } = createMockPi({ "no-lsp": false });
+		registerExtension(pi as any);
+
+		const turnEnd = handlers.turn_end?.[0];
+		expect(turnEnd).toBeTypeOf("function");
+
+		const statusUpdates: Array<[string, string | undefined]> = [];
+		const ctx = {
+			cwd: tmpDir,
+			ui: {
+				notify: vi.fn(),
+				setStatus: (id: string, text: string | undefined) =>
+					statusUpdates.push([id, text]),
+				// identity theme so the asserted strings are the raw labels
+				theme: { fg: (_c: string, s: string) => s },
+			},
+		};
+		const lspStatuses = () =>
+			statusUpdates.filter(([id]) => id === "pi-lens-lsp").map(([, t]) => t);
+
+		vi.useFakeTimers();
+		try {
+			// turn_end with no modified files → schedules the 240s idle reset and
+			// repaints the footer to the live state ("Active"), without resetting yet.
+			await turnEnd?.({}, ctx);
+			expect(lspStatuses().at(-1)).toBe("LSP Active: typescript");
+			expect(resetLSPService).not.toHaveBeenCalled();
+
+			// 240s of total idle (no further turns) → the detached timer fires the
+			// wrapped reset, which releases the servers AND repaints to "Inactive".
+			await vi.advanceTimersByTimeAsync(240_000);
+			expect(resetLSPService).toHaveBeenCalledTimes(1);
+			expect(lspStatuses().at(-1)).toBe("LSP Inactive");
+		} finally {
+			vi.useRealTimers();
+		}
+	}, INTEGRATION_TIMEOUT_MS);
+
 	it("context handler prepends injected guidance before the user prompt", async () => {
 		const { default: registerExtension } = await import("../index.ts");
 		const { pi, handlers } = createMockPi();
