@@ -306,11 +306,25 @@ describe("lens_diagnostics mode=delta", () => {
 					files: [
 						{
 							filePath: ignored,
-							warnings: [{ line: 1, rule: "ignored-a", tool: "t", message: "ignored actionable" }],
+							warnings: [
+								{
+									line: 1,
+									rule: "ignored-a",
+									tool: "t",
+									message: "ignored actionable",
+								},
+							],
 						},
 						{
 							filePath: kept,
-							warnings: [{ line: 2, rule: "kept-a", tool: "t", message: "kept actionable" }],
+							warnings: [
+								{
+									line: 2,
+									rule: "kept-a",
+									tool: "t",
+									message: "kept actionable",
+								},
+							],
 						},
 					],
 					summary: { warnings: 2 },
@@ -319,33 +333,42 @@ describe("lens_diagnostics mode=delta", () => {
 					files: [
 						{
 							filePath: ignored,
-							warnings: [{ line: 3, rule: "ignored-q", tool: "t", message: "ignored quality" }],
+							warnings: [
+								{
+									line: 3,
+									rule: "ignored-q",
+									tool: "t",
+									message: "ignored quality",
+								},
+							],
 						},
 					],
 					summary: { warnings: 1 },
 				},
 			});
-			projectDiagnosticsMocks.loadProjectDiagnosticsDeltaReport.mockReturnValue({
-				version: 1,
-				cwd,
-				generatedAt: "2026-01-01T00:00:00.000Z",
-				sessionId: "session-1",
-				turnIndex: 3,
-				diagnostics: [
-					{
-						filePath: ignored,
-						line: 4,
-						severity: "warning",
-						semantic: "warning",
-						tool: "fact-rules",
-						runner: "fact-rules",
-						rule: "ignored-project",
-						message: "ignored project delta",
-						source: "project-scan",
-					},
-				],
-				sources: ["fact-rules"],
-			});
+			projectDiagnosticsMocks.loadProjectDiagnosticsDeltaReport.mockReturnValue(
+				{
+					version: 1,
+					cwd,
+					generatedAt: "2026-01-01T00:00:00.000Z",
+					sessionId: "session-1",
+					turnIndex: 3,
+					diagnostics: [
+						{
+							filePath: ignored,
+							line: 4,
+							severity: "warning",
+							semantic: "warning",
+							tool: "fact-rules",
+							runner: "fact-rules",
+							rule: "ignored-project",
+							message: "ignored project delta",
+							source: "project-scan",
+						},
+					],
+					sources: ["fact-rules"],
+				},
+			);
 
 			const result = await run(tool, { mode: "delta" }, cwd);
 			const text = String(result.content[0].text);
@@ -588,8 +611,25 @@ describe("lens_diagnostics mode=full", () => {
 			const ignoredLsp = path.join(cwd, "pi-session-2026.html");
 			const ignoredProject = path.join(cwd, "ignored", "project.ts");
 			mockSummaries.push(
-				sum(keep, { warnings: 1 }, { diagnostics: [{ severity: "warning", message: "keep", line: 1 }] }),
-				sum(ignoredWidget, { blocking: 1, errors: 1 }, { diagnostics: [{ severity: "error", semantic: "blocking", message: "old history", line: 2 }] }),
+				sum(
+					keep,
+					{ warnings: 1 },
+					{ diagnostics: [{ severity: "warning", message: "keep", line: 1 }] },
+				),
+				sum(
+					ignoredWidget,
+					{ blocking: 1, errors: 1 },
+					{
+						diagnostics: [
+							{
+								severity: "error",
+								semantic: "blocking",
+								message: "old history",
+								line: 2,
+							},
+						],
+					},
+				),
 			);
 			const lspService = {
 				runWorkspaceDiagnostics: vi.fn().mockResolvedValue([
@@ -599,7 +639,10 @@ describe("lens_diagnostics mode=full", () => {
 							{
 								severity: 1,
 								message: "ignored html parse error",
-								range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+								range: {
+									start: { line: 0, character: 0 },
+									end: { line: 0, character: 1 },
+								},
 								source: "html",
 							},
 						],
@@ -657,9 +700,15 @@ describe("lens_diagnostics mode=all", () => {
 			undefined,
 			flush,
 		);
-		await tool.execute("1", { mode: "all" }, new AbortController().signal, null, {
-			cwd: "/proj",
-		});
+		await tool.execute(
+			"1",
+			{ mode: "all" },
+			new AbortController().signal,
+			null,
+			{
+				cwd: "/proj",
+			},
+		);
 		expect(flush).toHaveBeenCalledOnce();
 	});
 
@@ -683,24 +732,32 @@ describe("lens_diagnostics mode=all", () => {
 	it("filters ignored widget summaries in all mode (#279)", async () =>
 		withIgnoredFixture(async (cwd) => {
 			mockSummaries.push(
-				sum(path.join(cwd, "src", "keep.ts"), { warnings: 1 }, {
-					diagnostics: [
-						{ severity: "warning", message: "keep warning", line: 1 },
-					],
-				}),
-				sum(path.join(cwd, ".history", "old.ts"), {
-					blocking: 1,
-					errors: 1,
-				}, {
-					diagnostics: [
-						{
-							severity: "error",
-							semantic: "blocking",
-							message: "ignored history blocker",
-							line: 2,
-						},
-					],
-				}),
+				sum(
+					path.join(cwd, "src", "keep.ts"),
+					{ warnings: 1 },
+					{
+						diagnostics: [
+							{ severity: "warning", message: "keep warning", line: 1 },
+						],
+					},
+				),
+				sum(
+					path.join(cwd, ".history", "old.ts"),
+					{
+						blocking: 1,
+						errors: 1,
+					},
+					{
+						diagnostics: [
+							{
+								severity: "error",
+								semantic: "blocking",
+								message: "ignored history blocker",
+								line: 2,
+							},
+						],
+					},
+				),
 			);
 
 			const result = await run(makeTool(), { mode: "all" }, cwd);

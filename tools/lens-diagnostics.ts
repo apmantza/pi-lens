@@ -277,10 +277,7 @@ function formatDeltaMode(
 		const carried = getFileDiagnosticSummaries().filter(
 			(f) => includeFile(f.filePath) && f.diagnostics.length > 0,
 		);
-		const carriedIssues = carried.reduce(
-			(n, f) => n + f.diagnostics.length,
-			0,
-		);
+		const carriedIssues = carried.reduce((n, f) => n + f.diagnostics.length, 0);
 		if (carried.length > 0) {
 			text += ` ${carriedIssues} finding${carriedIssues === 1 ? "" : "s"} across ${carried.length} file${carried.length === 1 ? "" : "s"} carried over from earlier this session — use mode=all to see them.`;
 		}
@@ -307,7 +304,8 @@ function formatDeltaMode(
 function createCurrentIgnoreFilter(cwd: string): (filePath: string) => boolean {
 	try {
 		const matcher = getProjectIgnoreMatcher(cwd);
-		return (filePath: string) => !matcher.isIgnored(path.resolve(filePath), false);
+		return (filePath: string) =>
+			!matcher.isIgnored(path.resolve(filePath), false);
 	} catch {
 		// Diagnostics should remain available even if an ignore config/root probe is
 		// temporarily unreadable. Walkers already treat config load failures as
