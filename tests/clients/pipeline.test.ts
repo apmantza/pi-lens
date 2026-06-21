@@ -38,18 +38,6 @@ vi.mock("../../clients/lsp/index.js", () => ({
 
 import { getLSPService } from "../../clients/lsp/index.js";
 
-// Mock secrets scanner to control blocking behavior
-vi.mock("../../clients/secrets-scanner.js", async (importOriginal) => {
-	const mod =
-		await importOriginal<typeof import("../../clients/secrets-scanner.js")>();
-	return {
-		...mod,
-		scanForSecrets: vi.fn(mod.scanForSecrets),
-	};
-});
-
-import { scanForSecrets } from "../../clients/secrets-scanner.js";
-
 describe("Pipeline", () => {
 	let tmpDir: string;
 	let mockLSPService: ReturnType<typeof createMockLSPService>;
@@ -60,7 +48,6 @@ describe("Pipeline", () => {
 		mockLSPService = createMockLSPService();
 		vi.mocked(getLSPService).mockReturnValue(mockLSPService as any);
 		vi.mocked(dispatchLintWithResult).mockReset();
-		vi.mocked(scanForSecrets).mockReset();
 		const { resetFormatService } = await import(
 			"../../clients/format-service.js"
 		);
@@ -125,79 +112,9 @@ describe("Pipeline", () => {
 		};
 	}
 
-	describe("Secrets scan (blocking)", () => {
-		it("blocks the pipeline when secrets are found", async () => {
-			const filePath = createTempFile(
-				tmpDir,
-				"config.ts",
-				"const apiKey = 'sk-live-123'",
-			);
-			vi.mocked(scanForSecrets).mockReturnValue([
-				{ line: 1, message: "API key detected" },
-			]);
-
-			const result = await runPipeline(
-				createMockContext(filePath),
-				createMockDeps(),
-			);
-
-			expect(result.isError).toBe(true);
-			expect(result.hasBlockers).toBe(true);
-			expect(result.output).toContain("API key detected");
-			expect(result.fileModified).toBe(false);
-		});
-
-		it("continues pipeline when no secrets found", async () => {
-			const filePath = createTempFile(tmpDir, "app.ts", "console.log('hello')");
-			vi.mocked(scanForSecrets).mockReturnValue([]);
-			vi.mocked(dispatchLintWithResult).mockResolvedValue({
-				diagnostics: [],
-				blockers: [],
-				warnings: [],
-				baselineWarningCount: 0,
-				fixed: [],
-				resolvedCount: 0,
-				output: "",
-				blockerOutput: "",
-				hasBlockers: false,
-			});
-
-			const result = await runPipeline(
-				createMockContext(filePath),
-				createMockDeps(),
-			);
-
-			expect(result.isError).toBe(false);
-		}, 15_000);
-
-		it("skips secrets scan when file content is undefined (deleted file)", async () => {
-			const filePath = path.join(tmpDir, "deleted.ts");
-			vi.mocked(dispatchLintWithResult).mockResolvedValue({
-				diagnostics: [],
-				blockers: [],
-				warnings: [],
-				baselineWarningCount: 0,
-				fixed: [],
-				resolvedCount: 0,
-				output: "",
-				blockerOutput: "",
-				hasBlockers: false,
-			});
-
-			const result = await runPipeline(
-				createMockContext(filePath),
-				createMockDeps(),
-			);
-
-			expect(result.isError).toBe(false);
-			expect(scanForSecrets).not.toHaveBeenCalled();
-		});
-	});
-
 	describe("Format phase", () => {
 		it("defers format by default", async () => {
 			const filePath = createTempFile(tmpDir, "unformatted.ts", "const x=1");
-			vi.mocked(scanForSecrets).mockReturnValue([]);
 			vi.mocked(dispatchLintWithResult).mockResolvedValue({
 				diagnostics: [],
 				blockers: [],
@@ -225,7 +142,6 @@ describe("Pipeline", () => {
 
 		it("marks file as modified when immediate format changes content", async () => {
 			const filePath = createTempFile(tmpDir, "unformatted.ts", "const x=1");
-			vi.mocked(scanForSecrets).mockReturnValue([]);
 			vi.mocked(dispatchLintWithResult).mockResolvedValue({
 				diagnostics: [],
 				blockers: [],
@@ -277,7 +193,6 @@ describe("Pipeline", () => {
 				"format-fails.ts",
 				"const x = 1;",
 			);
-			vi.mocked(scanForSecrets).mockReturnValue([]);
 			vi.mocked(dispatchLintWithResult).mockResolvedValue({
 				diagnostics: [],
 				blockers: [],
@@ -319,7 +234,6 @@ describe("Pipeline", () => {
 
 		it("skips format when --no-autoformat flag is set", async () => {
 			const filePath = createTempFile(tmpDir, "app.ts", "const x = 1;");
-			vi.mocked(scanForSecrets).mockReturnValue([]);
 			vi.mocked(dispatchLintWithResult).mockResolvedValue({
 				diagnostics: [],
 				blockers: [],
@@ -346,7 +260,6 @@ describe("Pipeline", () => {
 	describe("LSP sync", () => {
 		it("syncs file with LSP when not deferred", async () => {
 			const filePath = createTempFile(tmpDir, "app.ts", "const x = 1;");
-			vi.mocked(scanForSecrets).mockReturnValue([]);
 			vi.mocked(dispatchLintWithResult).mockResolvedValue({
 				diagnostics: [],
 				blockers: [],
@@ -387,7 +300,6 @@ describe("Pipeline", () => {
 
 		it("skips LSP sync when --no-lsp flag is set", async () => {
 			const filePath = createTempFile(tmpDir, "app.ts", "const x = 1;");
-			vi.mocked(scanForSecrets).mockReturnValue([]);
 			vi.mocked(dispatchLintWithResult).mockResolvedValue({
 				diagnostics: [],
 				blockers: [],
@@ -415,7 +327,6 @@ describe("Pipeline", () => {
 	describe("Dispatch lint", () => {
 		it("sets hasBlockers when dispatch returns blockers", async () => {
 			const filePath = createTempFile(tmpDir, "app.ts", "const x = 1;");
-			vi.mocked(scanForSecrets).mockReturnValue([]);
 			vi.mocked(dispatchLintWithResult).mockResolvedValue({
 				diagnostics: [
 					{
@@ -459,7 +370,6 @@ describe("Pipeline", () => {
 
 		it("includes autofix count in output when fixes applied", async () => {
 			const filePath = createTempFile(tmpDir, "app.ts", "const x=1");
-			vi.mocked(scanForSecrets).mockReturnValue([]);
 			vi.mocked(dispatchLintWithResult).mockResolvedValue({
 				diagnostics: [],
 				blockers: [],
@@ -495,7 +405,6 @@ describe("Pipeline", () => {
 	describe("Test runner", () => {
 		it("skips tests when --no-tests flag is set", async () => {
 			const filePath = createTempFile(tmpDir, "app.ts", "const x = 1;");
-			vi.mocked(scanForSecrets).mockReturnValue([]);
 			vi.mocked(dispatchLintWithResult).mockResolvedValue({
 				diagnostics: [],
 				blockers: [],
@@ -522,7 +431,6 @@ describe("Pipeline", () => {
 	describe("All-clear output", () => {
 		it("returns clean checkmark when no issues", async () => {
 			const filePath = createTempFile(tmpDir, "app.ts", "const x = 1;");
-			vi.mocked(scanForSecrets).mockReturnValue([]);
 			vi.mocked(dispatchLintWithResult).mockResolvedValue({
 				diagnostics: [],
 				blockers: [],

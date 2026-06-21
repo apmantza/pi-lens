@@ -4,6 +4,10 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+### Removed
+
+- **Built-in regex secrets scanner (`clients/secrets-scanner.ts`)** — the hand-rolled, always-on content scanner that regex-matched a handful of secret shapes (Stripe/OpenAI `sk-*`, GitHub tokens, AWS `AKIA*`, Slack `xox*`, private keys, generic api-key/password) on the edit/write path and blocked the pipeline. It's now redundant: the bundled CodeRabbit ast-grep ruleset ships dozens of language-specific `*-hardcoded-secret-*` rules and gitleaks covers repo-level entropy/history scanning, so three overlapping paths produced duplicate, noisy blocks. Removed the scanner, its dedicated pipeline stage + import, and its tests; the `"secrets"` defect class and taxonomy hints remain (now served by the ast-grep rules and gitleaks). Trivy is slated as the consolidated secret/vuln/IaC scanner in a later slice.
+
 ## [3.8.60] - 2026-06-21
 
 ### Added

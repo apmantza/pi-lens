@@ -56,7 +56,6 @@ import { clearGraphCache } from "./review-graph/builder.js";
 import type { RuffClient } from "./ruff-client.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
-import { formatSecrets, scanForSecrets } from "./secrets-scanner.js";
 import {
 	getAutofixPolicyForFile,
 	getPreferredAutofixTools,
@@ -988,60 +987,7 @@ export async function runPipeline(
 	}
 	phase.end("read_file");
 
-	// --- 2. Secrets scan (blocking — early exit) ---
-	if (fileContent) {
-		const secretFindings = scanForSecrets(fileContent, filePath);
-		if (secretFindings.length > 0) {
-			const durationMs = Date.now() - pipelineStart;
-			logLatency({
-				type: "tool_result",
-				toolName,
-				filePath,
-				durationMs,
-				result: "blocked_secrets",
-				metadata: { secretsFound: secretFindings.length },
-			});
-			const secretDiagnostics: Diagnostic[] = secretFindings.map((finding) => ({
-				id: `secrets:${finding.line}`,
-				message: finding.message,
-				filePath,
-				line: finding.line,
-				column: 1,
-				severity: "error",
-				semantic: "blocking",
-				tool: "secrets-scanner",
-				rule: "secrets",
-				defectClass: "secrets",
-			}));
-			emitLensAnalysisComplete({
-				cwd,
-				filePath,
-				toolName,
-				model: ctx.telemetry?.model ?? "unknown",
-				sessionId: ctx.telemetry?.sessionId ?? "unknown",
-				turnIndex: ctx.telemetry?.turnIndex ?? 0,
-				writeIndex: ctx.telemetry?.writeIndex ?? 0,
-				diagnostics: secretDiagnostics,
-				blockers: secretDiagnostics,
-				warnings: [],
-				fixed: [],
-				resolvedCount: 0,
-				hasBlockers: true,
-				fileModified: false,
-				changedFiles: [],
-				durationMs,
-			});
-			return {
-				output: `\n\n${formatSecrets(secretFindings, filePath)}`,
-				hasBlockers: true,
-				isError: true,
-				fileModified: false,
-				changedFiles: [],
-			};
-		}
-	}
-
-	// --- 3. Auto-format ---
+	// --- 2. Auto-format ---
 	phase.start("format");
 	let formatChanged = false;
 	let formattersUsed: string[] = [];
@@ -1067,7 +1013,7 @@ export async function runPipeline(
 		deferred: formatDeferred,
 	});
 
-	// --- 4. Auto-fix ---
+	// --- 3. Auto-fix ---
 	phase.start("autofix");
 	const {
 		fixedCount,
@@ -1094,7 +1040,7 @@ export async function runPipeline(
 		skipReason: autofixSkipReason,
 	});
 
-	// --- 5. LSP file sync ---
+	// --- 4. LSP file sync ---
 	// Sync once with final post-format/post-fix content so dispatch and cascade
 	// diagnostics do not observe stale pre-format text.
 	phase.start("lsp_sync");
@@ -1105,7 +1051,7 @@ export async function runPipeline(
 	}
 	phase.end("lsp_sync", { completed: lspSyncCompleted, finalContent: true });
 
-	// --- 6. Dispatch lint ---
+	// --- 5. Dispatch lint ---
 	phase.start("dispatch_lint");
 	dbg(`dispatch: running lint tools for ${filePath}`);
 
@@ -1216,7 +1162,7 @@ export async function runPipeline(
 		diagnosticCount: dispatchResult.diagnostics.length,
 	});
 
-	// --- 7. Cascade diagnostics (LSP only) ---
+	// --- 6. Cascade diagnostics (LSP only) ---
 	// Deferred: cascade errors in OTHER files are NOT shown inline — surfaced at
 	// turn_end so mid-refactor intermediate errors don't derail the agent.
 	const cascadeRun = getFlag("no-lsp")
