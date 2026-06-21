@@ -751,6 +751,36 @@ export const TOOLS: ToolDefinition[] = [
 		},
 	},
 	{
+		// zizmor: GitHub Actions workflow security scanner that speaks LSP (#272).
+		// cargo-dist release archives, one per target triple, each holding a single
+		// `zizmor` binary (extracted via the recursive binary find). Online audits
+		// (known-vulnerable-actions, unpinned-uses, …) need a GitHub token — the LSP
+		// spawn forwards one via resolveZizmorGitHubToken (clients/zizmor-config.ts).
+		id: "zizmor",
+		name: "zizmor",
+		checkCommand: "zizmor",
+		checkArgs: ["--version"],
+		installStrategy: "github",
+		binaryName: "zizmor",
+		github: {
+			repo: "zizmorcore/zizmor",
+			assetMatch: (platform, arch) => {
+				if (platform === "linux")
+					return arch === "arm64"
+						? "aarch64-unknown-linux-gnu.tar.gz"
+						: "x86_64-unknown-linux-gnu.tar.gz";
+				if (platform === "darwin")
+					return arch === "arm64"
+						? "aarch64-apple-darwin.tar.gz"
+						: "x86_64-apple-darwin.tar.gz";
+				// One x86 Windows build; arm64 Windows runs it under emulation.
+				if (platform === "win32") return "x86_64-pc-windows-msvc.zip";
+				return undefined;
+			},
+			binaryInArchive: "zizmor",
+		},
+	},
+	{
 		id: "tflint",
 		name: "tflint",
 		checkCommand: "tflint",
@@ -3024,6 +3054,7 @@ export const GITHUB_TOOLS = [
 	"golangci-lint",
 	"ktlint",
 	"actionlint",
+	"zizmor",
 	"tflint",
 	"terraform-ls",
 	"zls",

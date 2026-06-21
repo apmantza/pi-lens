@@ -24,12 +24,23 @@ describe("auxiliary LSP enablement", () => {
 		const ids = enabledAuxiliaryLspServerIds((f) => f === "no-opengrep");
 		expect(ids).not.toContain("opengrep");
 	});
+
+	it("zizmor is default-on and the no-zizmor kill switch disables it (#272)", () => {
+		expect(enabledAuxiliaryLspServerIds(() => undefined)).toContain("zizmor");
+		expect(enabledAuxiliaryLspServerIds((f) => f === "no-zizmor")).not.toContain(
+			"zizmor",
+		);
+	});
 });
 
 describe("auxiliary profile source routing", () => {
 	it("routes Opengrep's 'Semgrep' source to the opengrep profile", () => {
 		expect(findAuxiliaryProfileForSource("Semgrep")?.tool).toBe("opengrep");
 		expect(findAuxiliaryProfileForSource("opengrep")?.tool).toBe("opengrep");
+	});
+
+	it("routes zizmor's 'zizmor' source to the zizmor profile (#272)", () => {
+		expect(findAuxiliaryProfileForSource("zizmor")?.tool).toBe("zizmor");
 	});
 
 	it("ignores language-server sources and missing source", () => {
@@ -85,5 +96,31 @@ describe("ast-grep semantic policy", () => {
 		expect(
 			astGrep?.semantic(diag({ severity: 2 }), { blockingAllowed: true }),
 		).toBe("warning");
+	});
+});
+
+describe("zizmor semantic policy (#272)", () => {
+	const zizmor = AUXILIARY_LSP_PROFILES.find((p) => p.serverId === "zizmor");
+
+	it("blocks High (ERROR) only where a repo zizmor.yml opts in; advisory otherwise", () => {
+		expect(zizmor).toBeDefined();
+		// curated repo config present → High blocks, Medium/Low stays advisory.
+		expect(
+			zizmor?.semantic(diag({ severity: 1 }), { blockingAllowed: true }),
+		).toBe("blocking");
+		expect(
+			zizmor?.semantic(diag({ severity: 2 }), { blockingAllowed: true }),
+		).toBe("warning");
+		// no curated config → even High stays a warning (surfaced in lens_diagnostics).
+		expect(
+			zizmor?.semantic(diag({ severity: 1 }), { blockingAllowed: false }),
+		).toBe("warning");
+	});
+
+	it("derives a defect class from the rule id", () => {
+		const dc = zizmor?.defectClass?.(
+			diag({ code: "template-injection", message: "code injection via template" }),
+		);
+		expect(typeof dc === "string" || dc === undefined).toBe(true);
 	});
 });

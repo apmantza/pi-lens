@@ -561,6 +561,20 @@ const LSP_FIXTURES = [
 		auxiliarySourceMatch: "ast[-_]?grep",
 		gitInit: true,
 	},
+	// zizmor GitHub Actions security scanner (auxiliary, #272). The fixture is a
+	// workflow that interpolates an attacker-controllable issue title into a `run:`
+	// step — zizmor's offline `template-injection` audit (no token needed) flags it.
+	// Proves install→spawn→scan→publish on the with-auxiliary path.
+	{
+		lang: "zizmor",
+		dir: "tests/fixtures/tool-smoke/zizmor-aux",
+		file: ".github/workflows/ci.yml",
+		serverHint: "zizmor (auxiliary)",
+		tools: ["zizmor"],
+		auxiliaryServerIds: ["zizmor"],
+		auxiliarySourceMatch: "zizmor",
+		gitInit: true,
+	},
 	// ast-grep no-sgconfig BASELINE (#239 Phase 2). NO sgconfig in the fixture, so
 	// the server must attach everywhere and launch with `lsp --config <shipped
 	// baseline>` to run pi-lens's bundled ruleset (`arr.sort()` → the shipped

@@ -113,6 +113,22 @@ export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
 			expectSemanticSecondPush: false,
 			reopenOnResync: false,
 		},
+		// zizmor (GitHub Actions security scanner, auxiliary LSP #272). Push-only
+		// (no pull diagnostics). Its audit set is compiled-in — there's no rule-load
+		// window like Opengrep — so the FIRST publishDiagnostics after didOpen IS the
+		// complete result: seedFirstPush. It re-scans on didChange (FULL sync), so no
+		// reopen-on-resync. A native single-workflow audit is sub-second offline;
+		// online mode may add a GitHub-API round-trip, so 2000ms gives headroom
+		// (bounded by the per-edit caller cap as a ceiling, #242), and any late online
+		// finding is cached and surfaces on the next edit.
+		zizmor: {
+			seedFirstPush: true,
+			pullRetryBudgetMs: 0,
+			debounceMs: 150,
+			aggregateWaitMs: 2000,
+			expectSemanticSecondPush: false,
+			reopenOnResync: false,
+		},
 		// marksman (Markdown LSP, #274). Push-based; native binary so the per-file
 		// parse is fast, but its value is CROSS-file (broken intra-repo links,
 		// missing anchors/heading refs) which needs the workspace index — so the

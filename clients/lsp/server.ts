@@ -20,6 +20,7 @@ import {
 	getToolPath,
 } from "../installer/index.js";
 import { resolveOpengrepConfig } from "../opengrep-config.js";
+import { resolveZizmorGitHubToken } from "../zizmor-config.js";
 import { logLatency } from "../latency-logger.js";
 import { findLocalSgconfig, resolveBaselineSgconfig } from "../sgconfig.js";
 import { isCommandAvailableAsync, safeSpawnAsync } from "../safe-spawn.js";
@@ -2436,6 +2437,45 @@ export const AstGrepServer: LSPServerInfo = {
 	autoInstall: async () => Boolean(await ensureTool("ast-grep")),
 };
 
+// zizmor — a GitHub Actions workflow-security scanner that speaks LSP (#272).
+// Like Opengrep/ast-grep it is a cross-cutting, diagnostic-only auxiliary: it
+// attaches to YAML and only ever emits findings for actual workflow/action
+// files (`.github/workflows/*`, `action.yml`, `dependabot.yaml`) — other YAML
+// is a quiet no-op. Its audit set ("regular" persona) is compiled-in and runs
+// with NO config; a repo `zizmor.yml` only tunes/ignores rules (the blocking
+// opt-in, see the auxiliary profile). Online audits (known-vulnerable-actions,
+// unpinned-uses, …) need a GitHub token — resolveZizmorGitHubToken forwards one
+// (env, else `gh auth token`); without it zizmor runs its offline audit subset.
+const ZIZMOR_EXTENSIONS: readonly string[] = KIND_EXTENSIONS["yaml"];
+
+export const ZizmorServer: LSPServerInfo = {
+	id: "zizmor",
+	name: "zizmor Actions Security Scanner",
+	role: "auxiliary",
+	extensions: ZIZMOR_EXTENSIONS,
+	// Stable per-repo root so ONE warm server serves the whole project (like
+	// Opengrep) — config + workflow discovery is repo-relative.
+	root: RootWithFallback(NearestRoot([".git"]), async () => process.cwd()),
+	availabilityKey: "zizmor",
+	async spawn(root, options) {
+		// Forward a token so the online audits run; absent one, zizmor self-selects
+		// offline mode (the env vars + `gh auth token` are resolved once and merged
+		// over process.env by launchLSP).
+		const ghToken = await resolveZizmorGitHubToken();
+		return resolveAndLaunch(
+			{
+				candidates: ["zizmor"],
+				args: ["--lsp"],
+				cwd: root,
+				managedToolId: "zizmor",
+				...(ghToken ? { env: { GH_TOKEN: ghToken } } : {}),
+			},
+			options?.allowInstall,
+		);
+	},
+	autoInstall: async () => Boolean(await ensureTool("zizmor")),
+};
+
 export const LSP_SERVERS: LSPServerInfo[] = [
 	TypeScriptServer,
 	DenoServer,
@@ -2478,6 +2518,7 @@ export const LSP_SERVERS: LSPServerInfo[] = [
 	// Auxiliary (cross-cutting, diagnostic-only) servers go last — never primary.
 	OpengrepServer,
 	AstGrepServer,
+	ZizmorServer,
 ];
 
 /**

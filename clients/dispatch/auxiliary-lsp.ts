@@ -19,6 +19,7 @@
 
 import type { LSPDiagnostic } from "../lsp/client.js";
 import { findLocalOpengrepConfig } from "../opengrep-config.js";
+import { findLocalZizmorConfig } from "../zizmor-config.js";
 import { classifyDefect } from "./diagnostic-taxonomy.js";
 import type { DefectClass, OutputSemantic } from "./types.js";
 
@@ -81,6 +82,24 @@ export const AUXILIARY_LSP_PROFILES: readonly AuxiliaryLspProfile[] = [
 			blockingAllowed && d.severity === 1 ? "blocking" : "warning",
 		defectClass: (d) =>
 			classifyDefect(String(d.code ?? ""), "ast-grep", d.message ?? ""),
+	},
+	{
+		serverId: "zizmor",
+		tool: "zizmor",
+		// zizmor tags its LSP diagnostics `source: "zizmor"`.
+		sourceMatch: /zizmor/i,
+		killSwitchFlag: "no-zizmor",
+		enabledByDefault: true,
+		// zizmor's default ("regular") persona is a curated, low-false-positive
+		// audit set, but as an always-on advisory we only let it BLOCK when the repo
+		// opts in with its own `zizmor.yml` (the author's deliberate severities /
+		// ignores). Advisory otherwise — findings still surface via lens_diagnostics.
+		// zizmor maps High→ERROR(1), Medium/Low→WARNING(2), Informational→INFO(3).
+		allowBlocking: (cwd) => Boolean(findLocalZizmorConfig(cwd)),
+		semantic: (d, { blockingAllowed }) =>
+			blockingAllowed && d.severity === 1 ? "blocking" : "warning",
+		defectClass: (d) =>
+			classifyDefect(String(d.code ?? ""), "zizmor", d.message ?? ""),
 	},
 ];
 

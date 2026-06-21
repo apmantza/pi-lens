@@ -1,0 +1,17 @@
+name: ci
+# Smoke fixture for the zizmor auxiliary LSP (#272). The `run:` below interpolates
+# an attacker-controllable issue title straight into the shell — zizmor's
+# `template-injection` audit (offline, no token needed) flags it. Used by the
+# opt-in live tool-smoke (scripts/smoke-tools.mjs) to prove install→spawn→scan→publish.
+on:
+  issues:
+    types: [opened]
+
+permissions: {}
+
+jobs:
+  echo-title:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print the issue title
+        run: echo "${{ github.event.issue.title }}"
