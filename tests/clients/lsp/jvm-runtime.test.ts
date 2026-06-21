@@ -19,6 +19,7 @@ import { isCommandAvailableAsync } from "../../../clients/safe-spawn.js";
 
 describe("jvm-runtime — JDK discovery (#241)", () => {
 	const dirs: string[] = [];
+	let savedJavaHome: string | undefined;
 
 	function tmpDir(): string {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-jdk-"));
@@ -37,9 +38,17 @@ describe("jvm-runtime — JDK discovery (#241)", () => {
 	beforeEach(() => {
 		_resetJvmRuntimeCacheForTests();
 		vi.mocked(isCommandAvailableAsync).mockReset();
+		// Passing `undefined` for the javaHome arg re-activates its
+		// `= process.env.JAVA_HOME` default, so a CI runner with JAVA_HOME set
+		// (GitHub's Ubuntu image has one) would leak its real JDK into the scan.
+		// Clear it so these tests see only the explicit `roots` they pass.
+		savedJavaHome = process.env.JAVA_HOME;
+		delete process.env.JAVA_HOME;
 	});
 
 	afterEach(() => {
+		if (savedJavaHome === undefined) delete process.env.JAVA_HOME;
+		else process.env.JAVA_HOME = savedJavaHome;
 		for (const dir of dirs.splice(0)) {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
