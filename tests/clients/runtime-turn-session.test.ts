@@ -9,6 +9,7 @@ import {
 } from "../../clients/runtime-context.js";
 import { loadProjectDiagnosticsDeltaReport } from "../../clients/project-diagnostics/cache.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import { SESSION_START_GUIDANCE } from "../../clients/runtime-session.js";
 import { handleTurnEnd } from "../../clients/runtime-turn.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
@@ -471,6 +472,33 @@ describe("context injection framing", () => {
 		expect(result!.messages[0].content).toContain("📌 pi-lens active");
 
 		env.cleanup();
+	});
+
+	it("SESSION_START_GUIDANCE advertises the read-substitute tools and only registered pi tools", () => {
+		const text = SESSION_START_GUIDANCE.join("\n");
+
+		// The #245 gap this guards: module_report + read_symbol were registered as
+		// pi tools but never surfaced in the session-start orientation, so the agent
+		// never reached for them. Keep them (and the other key tools) advertised.
+		for (const tool of [
+			"lens_diagnostics",
+			"module_report",
+			"read_symbol",
+			"lsp_navigation",
+			"lsp_diagnostics",
+			"ast_grep_search",
+			"ast_grep_replace",
+		]) {
+			expect(text).toContain(tool);
+		}
+
+		// Never advertise a tool that isn't a registered pi tool — symbol_search is
+		// MCP-only (no tools/ entry), so naming it here would point the agent at a
+		// phantom tool. This guards against re-introducing that mismatch.
+		expect(text).not.toContain("symbol_search");
+
+		// Stay lean: the orientation is a nudge, not re-documentation of every arg.
+		expect(text.length).toBeLessThan(700);
 	});
 });
 

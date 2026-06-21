@@ -798,6 +798,22 @@ function scheduleDeferredToolProbes(
 	})();
 }
 
+/**
+ * Session-start orientation prepended as a context message (gated by the
+ * context-injection toggle). Deliberately lean: it names the high-value tools
+ * and the one non-obvious behaviour (mode=all resurfaces stale blocking errors)
+ * — per-tool argument detail lives in each tool's own registered description, so
+ * re-documenting it here would just pay the tokens twice every session.
+ */
+export const SESSION_START_GUIDANCE: string[] = [
+	"📌 pi-lens active — automated checks run on every edit/write; blocking errors (including pre-existing) show inline and must be fixed.\n" +
+		"Key tools (see each tool's own description for args):\n" +
+		"• lens_diagnostics — session-wide diagnostic state; mode=all resurfaces stale blocking errors that dropped from turn context.\n" +
+		"• module_report + read_symbol — navigable file outline + single-symbol body; cheaper than reading a whole file before editing.\n" +
+		"• lsp_navigation / lsp_diagnostics — definitions/references/rename; probe LSP for errors in a file/folder/workspace.\n" +
+		"• ast_grep_search / ast_grep_replace — structural code patterns (ast_dump to discover node kinds).",
+];
+
 export async function handleSessionStart(
 	deps: SessionStartDeps,
 ): Promise<void> {
@@ -1112,14 +1128,7 @@ export async function handleSessionStart(
 	log(`Active tools: ${tools.join(", ")}`);
 	dbg(`session_start tools: ${tools.join(", ")}`);
 
-	const agentStartupGuidance = [
-		"📌 pi-lens active — automated checks run on your edits and writes. Blocking errors will be shown inline; you must fix all errors including pre-existing ones.\n" +
-			"Key pi-lens tools:\n" +
-			"• lens_diagnostics mode=all — diagnostic state for every file EDITED this session (all runners: LSP + tree-sitter + ast-grep + linters). Stale blocking errors from earlier turns appear here even if they dropped from turn-end context. mode=delta (default) shows all warnings for the current turn only. mode=full is expensive: actively scans project-wide LSP diagnostics for unedited files too, then merges with cached runner state; add refreshRunners=cheap to refresh project-wide tree-sitter/fact-rule diagnostics.\n" +
-			"• lsp_diagnostics — actively probe LSP for errors in a specific file, folder, or workspace (LSP only, triggers a fresh server check).\n" +
-			"• lsp_navigation — definitions, references, symbols, rename_file, capabilities.\n" +
-			"• ast_grep_search / ast_grep_replace — structural code patterns. Cross-context queries: use insideKind/hasKind/follows/precedes params (synthesises YAML automatically). Full DSL: use rule= param with raw YAML for all/any/not/nthChild/regex. ast_dump to discover node kinds before writing patterns.",
-	];
+	const agentStartupGuidance = SESSION_START_GUIDANCE;
 
 	runtime.projectRulesScan = scanProjectRules(analysisRoot);
 	saveRuntimeProjectSnapshot({
