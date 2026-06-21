@@ -1,0 +1,15 @@
+id: redundant-usestate-type
+language: Tsx
+severity: info
+message: "`useState<TYPE>(...)` where TYPE is a primitive redundant — TS can infer it from the initial value"
+note: |
+  `useState<number>(0)`, `useState<string>('')`, `useState<boolean>(false)` are
+  all redundant — TS can infer the state type from the initial value. Drop
+  the explicit type argument.
+rule:
+  any:
+    - pattern: useState<$T>($A)
+constraints:
+  T:
+    regex: "^(number|string|boolean)$"
+fix: useState($A)

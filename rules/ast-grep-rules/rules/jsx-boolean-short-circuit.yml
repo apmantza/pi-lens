@@ -18,3 +18,4 @@ rule:
             - has:
                 field: property
                 regex: "^length$"
+fix: "{$COND ? $JSX : null}"

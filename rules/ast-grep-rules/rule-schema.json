@@ -42,26 +42,26 @@
         },
         "inside": {
           "$ref": "#/definitions/ruleCondition",
-          "description": "⚠️ Not supported by the NAPI runner — rules using this are silently skipped."
+          "description": "Ancestor must match. Combined with `stopBy: end` it searches ALL ancestors (default `stopBy: neighbor` = direct parent)."
         },
         "follows": {
           "$ref": "#/definitions/ruleCondition",
-          "description": "⚠️ Not supported by the NAPI runner — rules using this are silently skipped."
+          "description": "Immediately-preceding sibling must match."
         },
         "precedes": {
           "$ref": "#/definitions/ruleCondition",
-          "description": "⚠️ Not supported by the NAPI runner — rules using this are silently skipped."
+          "description": "Immediately-following sibling must match."
         },
         "stopBy": {
           "type": "string",
-          "description": "⚠️ Not supported by the NAPI runner."
+          "description": "How `inside`/`has`/`follows`/`precedes` walk the tree. `neighbor` (default) = direct parent/child/sibling; `end` = walk all the way to the root / leaves."
         },
         "field": {
           "type": "string",
-          "description": "⚠️ Not supported by the NAPI runner."
+          "description": "Field name constraint — e.g. `field: name` on an `import_specifier` matches the import's local binding."
         },
         "nthChild": {
-          "description": "⚠️ Not supported by the NAPI runner."
+          "description": "Match only the Nth child of its parent. Used to disambiguate repeated siblings (e.g. the first vs second argument in a call)."
         }
       }
     }
@@ -104,7 +104,7 @@
     },
     "constraints": {
       "type": "object",
-      "description": "⚠️ Not supported by the NAPI runner — rules using constraints are silently skipped. Use predicates in tree-sitter rules instead.",
+      "description": "Metavariable regex constraints — `KEY: { regex: \"...\" }` narrows what `$KEY` will match. Supported by the napi engine (and the ast-grep CLI/LSP).",
       "additionalProperties": {
         "type": "object",
         "properties": {

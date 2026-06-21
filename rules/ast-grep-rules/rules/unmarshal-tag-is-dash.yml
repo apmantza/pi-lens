@@ -1,0 +1,20 @@
+id: unmarshal-tag-is-dash
+language: Go
+severity: error
+message: Struct field can be decoded with the `-` key because the JSON tag starts with a `-` but is followed by a comma.
+note: |
+  Per encoding/json, a JSON tag of `-` omits the field from marshaling AND
+  unmarshaling. But a tag of `-,…` (dash followed by a comma) does NOT — the
+  field is then matched by the literal key `-`. An attacker that controls
+  the input JSON can set any field tagged `-,<opts>` by passing `{"-": …}`,
+  even though the developer intended to exclude the field from deserialization.
+
+  Use plain `json:"-"` (no comma) to fully exclude the field, or rename the
+  field to avoid the literal `-` key.
+rule:
+  pattern: "`$TAG`"
+  inside:
+    kind: field_declaration
+constraints:
+  TAG:
+    regex: json:"-,.*

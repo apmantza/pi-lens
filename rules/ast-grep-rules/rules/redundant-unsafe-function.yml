@@ -1,0 +1,21 @@
+id: redundant-unsafe-function
+language: Rust
+severity: error
+message: Unsafe function without unsafe block inside
+note: |
+  A function marked `unsafe` advertises that the body contains operations the
+  compiler cannot verify as safe. If the body has no `unsafe` block, either
+  the marker is unnecessary (the function performs no unsafe operations and
+  the `unsafe` keyword should be removed) or it is misplaced (an unsafe
+  operation lives outside an `unsafe { … }` block and should be wrapped).
+  Either case warrants review.
+rule:
+  all:
+    - kind: function_item
+    - has:
+        kind: function_modifiers
+        regex: "^unsafe"
+    - not:
+        has:
+          kind: unsafe_block
+          stopBy: end

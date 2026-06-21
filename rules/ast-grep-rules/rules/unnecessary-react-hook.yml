@@ -1,0 +1,27 @@
+id: unnecessary-react-hook
+language: Tsx
+severity: warning
+message: Function with a `use*` name does not call any other React hook — rename to a plain function
+note: |
+  React's rules-of-hooks treat any function starting with `use` as a hook
+  (React DevTools tracks it, lint rules enforce the hook rules, etc). If the
+  function never calls another hook, the `use` prefix is misleading. Rename
+  to a plain verb (`fetchX` rather than `useX`, etc).
+utils:
+  hook_call:
+    has:
+      kind: call_expression
+      regex: ^use
+      stopBy: end
+rule:
+  any:
+    - pattern: function $FUNC($$$) { $$$ }
+    - pattern: let $FUNC = ($$$) => $$$
+    - pattern: const $FUNC = ($$$) => $$$
+  has:
+    pattern: $BODY
+    kind: statement_block
+    stopBy: end
+constraints:
+  FUNC: { regex: "^use" }
+  BODY: { not: { matches: hook_call } }

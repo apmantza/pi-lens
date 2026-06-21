@@ -1,0 +1,19 @@
+id: avoid-duplicate-export
+language: Rust
+severity: warning
+message: Same item re-exported twice under different paths (e.g. `pub mod foo; pub use foo::Foo;` exposes `Foo` AND `foo::Foo`)
+note: |
+  Re-exporting a module item under a shorter name AND keeping the longer
+  module path inflates the public API surface and confuses IDE auto-complete
+  (a single name resolves to two different paths). Pick one canonical path
+  and remove the other.
+rule:
+  all:
+    - pattern: pub use $B::$C;
+    - inside:
+        kind: source_file
+        has:
+          pattern: pub mod $A;
+    - has:
+        pattern: $A
+        stopBy: end

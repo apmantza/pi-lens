@@ -26,6 +26,7 @@
 		"check:lockfile": "node scripts/check-lockfile-sync.mjs",
 		"audit:tree-sitter": "node scripts/audit-tree-sitter-rules.mjs",
 		"audit:rule-catalog": "node scripts/validate-rule-catalog.mjs",
+		"audit:playground": "node scripts/playground-verify-rule.mjs",
 		"logs:smells": "node scripts/analyze-pi-lens-logs.mjs",
 		"download-grammars": "node scripts/download-grammars.js",
 		"harness:poc": "node scripts/run-harness.mjs cases/ts/pipeline-dispatch-poc --pi-bin \"C:\\Users\\R3LiC\\AppData\\Roaming\\npm\\pi.cmd\"",

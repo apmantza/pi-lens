@@ -20,7 +20,12 @@ import yaml from "js-yaml";
 
 export interface YamlRuleCondition {
 	kind?: string;
-	pattern?: string;
+	// `pattern` accepts both a string shorthand (`foo($A)`) and the rich form
+	// (`{context, selector}`), which is the canonical ast-grep way to match a
+	// specific node kind inside a syntactic context. The napi engine and the
+	// CLI both accept the object form, but it must be guarded in any helper
+	// that calls string methods on `pattern`.
+	pattern?: string | YamlRichPattern;
 	regex?: string;
 	has?: YamlRuleCondition;
 	any?: YamlRuleCondition[];
@@ -52,6 +57,14 @@ export interface YamlRule {
 interface CachedRules {
 	rules: YamlRule[];
 	mtime: number;
+}
+
+// Rich pattern form: match a specific AST kind from a contextual snippet.
+// https://ast-grep.github.io/reference/rule.html#pattern-object
+export interface YamlRichPattern {
+	context?: string;
+	selector?: string;
+	strictness?: string;
 }
 
 // --- Constants ---
@@ -149,8 +162,13 @@ export function getCachedRules(
 	return rules;
 }
 
-export function isOverlyBroadPattern(pattern: string | undefined): boolean {
+export function isOverlyBroadPattern(
+	pattern: string | YamlRichPattern | undefined,
+): boolean {
+	// The rich pattern form ({context, selector, ...}) is structured and never a
+	// single-metavar trap; only string patterns can be overly-broad literals.
 	if (!pattern) return false;
+	if (typeof pattern !== "string") return false;
 	if (OVERLY_BROAD_PATTERNS.includes(pattern.trim())) return true;
 	return /^\$[A-Z_]+$/i.test(pattern.trim());
 }
@@ -167,7 +185,15 @@ export function isValidCondition(
 
 export function isStructuredRule(rule: YamlRule): boolean {
 	if (!rule.rule) return false;
+	// The rich pattern form ({context, selector, …}) is itself a structured
+	// match — it specifies a context snippet plus the AST node to pick out.
+	// Without recognizing it as structure, an otherwise-rich rule with only
+	// `pattern: {context, selector}` and no other combinators would be wrongly
+	// classified as "unstructured single-metavar" and dropped by the runner.
+	const hasRichPattern =
+		typeof rule.rule.pattern === "object" && rule.rule.pattern !== null;
 	return !!(
+		hasRichPattern ||
 		rule.rule.has ||
 		rule.rule.any ||
 		rule.rule.all ||
@@ -175,7 +201,6 @@ export function isStructuredRule(rule: YamlRule): boolean {
 		rule.rule.regex
 	);
 }
-
 
 export function calculateRuleComplexity(
 	condition: YamlRuleCondition | undefined,

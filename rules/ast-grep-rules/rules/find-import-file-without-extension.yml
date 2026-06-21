@@ -1,0 +1,22 @@
+id: find-import-file-without-extension
+language: TypeScript
+severity: warning
+message: ESM import / dynamic import of a relative path without a file extension
+note: |
+  The ESM spec does not perform automatic file-extension resolution. A
+  static or dynamic `import()` of a relative path that lacks a file
+  extension will fail at runtime under bare ESM. Add the extension (or rely
+  on the bundler-specific resolver if your project uses one).
+rule:
+  regex: "/[^.]+[^/]$"
+  kind: string_fragment
+  any:
+    - inside:
+        stopBy: end
+        kind: import_statement
+    - inside:
+        stopBy: end
+        kind: call_expression
+        has:
+          field: function
+          regex: "^import$"

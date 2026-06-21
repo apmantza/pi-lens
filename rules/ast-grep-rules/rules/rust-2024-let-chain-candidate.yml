@@ -1,0 +1,56 @@
+id: rust-2024-let-chain-candidate
+language: Rust
+severity: info
+message: nested if conditions can be collapsed into a Rust 2024 let-chain
+note: |
+  Rust 2024 introduced `if let` chains (RFC 2497), so an `if let { if … }` pair
+  can be expressed as a single `if let … && …` chain. This hint flags the
+  outer `if` when there is no `else`, the inner `if` is the sole statement in
+  the outer block, and either side is an `if let`.
+utils:
+  sole-child:
+    all:
+      - nthChild: 1
+      - nthChild:
+          position: 1
+          reverse: true
+
+  if-no-else:
+    kind: if_expression
+    not:
+      has:
+        field: alternative
+        kind: else_clause
+
+  if-let-no-else:
+    matches: if-no-else
+    has:
+      field: condition
+      kind: let_condition
+
+  sole-inner-if-stmt:
+    kind: expression_statement
+    matches: sole-child
+    has:
+      matches: if-no-else
+
+  sole-inner-if-let-stmt:
+    kind: expression_statement
+    matches: sole-child
+    has:
+      matches: if-let-no-else
+
+rule:
+  matches: if-no-else
+  has:
+    field: consequence
+    kind: block
+    has:
+      matches: sole-inner-if-stmt
+  any:
+    - matches: if-let-no-else
+    - has:
+        field: consequence
+        kind: block
+        has:
+          matches: sole-inner-if-let-stmt

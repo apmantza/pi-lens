@@ -69,6 +69,7 @@ See [`rules/tree-sitter-queries/rule-schema.json`](../rules/tree-sitter-queries/
 | `examples` | — | `{bad?, good?}` | Code strings shown in docs |
 
 **Predicate shape:**
+
 ```yaml
 predicates:
   - type: eq          # or: match, any-of
@@ -136,7 +137,7 @@ See [`rules/ast-grep-rules/rule-schema.json`](../rules/ast-grep-rules/rule-schem
 | `fix` | — | string | Suggested replacement |
 | `metadata.weight` | — | number | Priority weight |
 | `metadata.category` | — | string | |
-| `constraints` | — | Record\<string, {regex}\> | ⚠️ **Not supported by the NAPI runner** — rules using `constraints` are silently skipped |
+| `constraints` | — | Record\<string, {regex}\> | Metavariable regex — `KEY: { regex: "..." }` narrows what `$KEY` will match. Supported by the napi engine + the ast-grep CLI/LSP. |
 
 Valid `language` values: `TypeScript` `JavaScript` `Python` `Go` `Rust` `Java` `C` `Cpp` `CSharp` `Kotlin` `Ruby` `Php`
 (Note: PascalCase, unlike tree-sitter directory names which are lowercase.)
@@ -145,16 +146,21 @@ Valid `language` values: `TypeScript` `JavaScript` `Python` `Go` `Rust` `Java` `
 
 | Field | Notes |
 |---|---|
-| `pattern` | Ast-grep pattern syntax; avoid single-metavariable patterns like `$VAR` (too broad) |
+| `pattern` | Ast-grep pattern syntax. Accepts BOTH a string shorthand (`foo($A)`) AND the rich object form (`{context, selector}`) — the rich form matches a specific AST kind inside a syntactic context snippet. Avoid single-metavariable string patterns like `$VAR` (too broad). |
 | `kind` | AST node kind name |
 | `regex` | Regex match against node text |
-| `has` | Nested condition — node must have a descendant matching |
+| `has` | Nested condition — node must have a descendant matching (default = direct child) |
 | `any` | Array — node matches if any item matches (OR) |
-| `all` | Array — node matches if all items match (AND) |
+| `all` | Array — node matches only if all items match (AND) |
 | `not` | Negation condition |
+| `inside` | Ancestor must match (default = direct parent; pair with `stopBy: end` to walk all ancestors) |
+| `follows` | Immediately-preceding sibling must match |
+| `precedes` | Immediately-following sibling must match |
+| `stopBy` | `neighbor` (default — direct parent/child/sibling) or `end` (walk to root/leaves) |
+| `field` | Field name constraint (e.g. `field: name` on an import specifier) |
+| `nthChild` | Match only the Nth child of its parent |
 
-**Unsupported by the NAPI runner** (rules using these are silently skipped to avoid false positives):
-`inside` `follows` `precedes` `stopBy` `field` `nthChild` `constraints`
+All of these are supported by the in-process napi runner (#206) and the ast-grep CLI / LSP — the runner delegates matching to napi's native engine (`root.findAll({rule})`), the same Rust core the CLI and LSP use.
 
 ### Example
 

@@ -30,6 +30,16 @@ const TRACKED_AST_GREP_IDS = new Set([
 	"missed-concurrency-js",
 	"no-await-in-loop",
 	"no-await-in-loop-js",
+	"unmarshal-tag-is-dash",
+	"redundant-unsafe-function",
+	"avoid-duplicate-export",
+	"rust-2024-let-chain-candidate",
+	"no-console-except-error",
+	"no-console-except-error-js",
+	"missing-component-decorator",
+	"unnecessary-react-hook",
+	"redundant-usestate-type",
+	"find-import-file-without-extension",
 ]);
 
 function walkYaml(dir, acc = []) {
@@ -48,7 +58,7 @@ function walkYaml(dir, acc = []) {
 function readYamlScalar(text, key) {
 	const match = text.match(new RegExp(`^${key}:\\s*(.+)$`, "m"));
 	if (!match) return undefined;
-	return match[1].trim().replace(/^['\"]|['\"]$/g, "");
+	return match[1].trim().replace(/^['"]|['"]$/g, "");
 }
 
 function collectTreeSitterSecurityConcurrency() {
@@ -60,7 +70,8 @@ function collectTreeSitterSecurityConcurrency() {
 		const category = readYamlScalar(text, "category");
 		if (!id || !category) continue;
 		if (category !== "security" && category !== "concurrency") continue;
-		const language = readYamlScalar(text, "language") ?? path.basename(path.dirname(file));
+		const language =
+			readYamlScalar(text, "language") ?? path.basename(path.dirname(file));
 		rules.push({
 			id,
 			category,
@@ -126,7 +137,9 @@ function validateCatalog(catalog) {
 			);
 		}
 		if (entry.confidence && !validConfidence.has(entry.confidence)) {
-			errors.push(`entries[${index}] has invalid confidence '${entry.confidence}'`);
+			errors.push(
+				`entries[${index}] has invalid confidence '${entry.confidence}'`,
+			);
 		}
 		if (entry.status && !validStatus.has(entry.status)) {
 			errors.push(`entries[${index}] has invalid status '${entry.status}'`);

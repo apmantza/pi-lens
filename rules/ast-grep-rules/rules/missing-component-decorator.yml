@@ -1,0 +1,21 @@
+id: missing-component-decorator
+language: TypeScript
+severity: warning
+message: "Angular lifecycle method (ngOnInit/ngOnDestroy) on a class without an @Component() decorator"
+note: |
+  ngOnInit/ngOnDestroy only have an effect when the host class is decorated
+  with @Component(). A class with the lifecycle method but no decorator is
+  almost always a copy-paste bug or refactor leftover.
+rule:
+  pattern:
+    context: "class Hi { $METHOD() { $$$ } }"
+    selector: method_definition
+  inside:
+    pattern: "class $KLASS $$$ { $$$ }"
+    stopBy: end
+    not:
+      has:
+        pattern: "@Component($$$)"
+constraints:
+  METHOD:
+    regex: ngOnInit|ngOnDestroy
