@@ -1,3 +1,4 @@
+import type { EditToolInput } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import {
 	detectLineEnding,
@@ -5,9 +6,15 @@ import {
 	restoreLineEndings,
 } from "./host-edit-normalize.js";
 
+// A single edit element of the host edit tool ({ oldText, newText }). Pinned to
+// the SDK's EditToolInput so a host schema rename (e.g. oldText -> old_text) is a
+// compile error here rather than a silent runtime mismatch (#257 / refs #2).
+type HostEdit = EditToolInput["edits"][number];
+
 export interface PartiallyApplicableEdit {
-	oldText: string;
-	newText: string | undefined;
+	oldText: HostEdit["oldText"];
+	// Widened vs the host: pi-lens models a pure deletion as an absent newText.
+	newText: HostEdit["newText"] | undefined;
 	originalIndex: number;
 }
 
