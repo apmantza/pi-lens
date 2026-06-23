@@ -8,21 +8,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Type } from "typebox";
+import { isExcludedDirName } from "../clients/file-utils.js";
 import { getLSPService } from "../clients/lsp/index.js";
 import type { LSPDiagnostic } from "../clients/lsp/client.js";
-
-const SKIP_DIRS = new Set([
-	"node_modules",
-	".git",
-	"dist",
-	"build",
-	".next",
-	"out",
-	"target",
-	"__pycache__",
-	".venv",
-	"venv",
-]);
 
 const LANG_EXTENSIONS: Record<string, string[]> = {
 	".ts": [".ts", ".tsx", ".mts", ".cts"],
@@ -174,7 +162,7 @@ function collectFiles(
 			if (entry.isSymbolicLink()) continue;
 			const full = path.join(current, entry.name);
 			if (entry.isDirectory()) {
-				if (!SKIP_DIRS.has(entry.name)) walk(full);
+				if (!isExcludedDirName(entry.name)) walk(full);
 			} else if (entry.isFile() && extensions.includes(path.extname(full))) {
 				files.push(full);
 			}

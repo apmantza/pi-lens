@@ -53,6 +53,39 @@ describe("LSP workspace-diagnostics exclusion (#243)", () => {
 		expect(rel.some((f) => f.startsWith("dist/"))).toBe(false);
 	});
 
+	it("excludes agent runtime and vendored source dirs via the canonical list", async () => {
+		write("src/real.ts");
+		for (const dir of [
+			".claude/worktrees/session",
+			".codex",
+			".pi/agent",
+			".agents",
+			".worktrees/branch",
+			".pi-lens/cache",
+			"vendor/lib",
+			"third_party/lib",
+			"third-party/lib",
+		]) {
+			write(`${dir}/ignored.ts`);
+		}
+
+		const rel = relUnix(await __collectWorkspaceDiagnosticFilesForTest(tmpDir));
+		expect(rel).toContain("src/real.ts");
+		for (const prefix of [
+			".claude/",
+			".codex/",
+			".pi/",
+			".agents/",
+			".worktrees/",
+			".pi-lens/",
+			"vendor/",
+			"third_party/",
+			"third-party/",
+		]) {
+			expect(rel.some((f) => f.startsWith(prefix))).toBe(false);
+		}
+	});
+
 	it("honors .pi-lens.json ignore patterns (the #243 fix)", async () => {
 		fs.writeFileSync(
 			path.join(tmpDir, ".pi-lens.json"),

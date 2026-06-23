@@ -68,6 +68,57 @@ describe("lsp_diagnostics tool", () => {
 		}
 	});
 
+	it("skips canonical excluded dirs during directory scans", async () => {
+		const tool = createLspDiagnosticsTool();
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-diag-"));
+		const write = (rel: string, body = "const value = 1;\n") => {
+			const full = path.join(tmpDir, rel);
+			fs.mkdirSync(path.dirname(full), { recursive: true });
+			fs.writeFileSync(full, body);
+		};
+
+		write("src/good.ts");
+		for (const dir of [
+			".claude/worktrees/session",
+			".codex",
+			".pi/agent",
+			".agents",
+			".worktrees/branch",
+			".pi-lens/cache",
+			"vendor/lib",
+			"third_party/lib",
+			"third-party/lib",
+		]) {
+			write(`${dir}/bad.ts`, "const value: number = 'oops';\n");
+		}
+
+		try {
+			const result = (await tool.execute(
+				"diag-dir",
+				{ path: tmpDir, severity: "all", concurrency: 2 },
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			)) as any;
+
+			expect(result.isError).toBeUndefined();
+			expect(result.details?.mode).toBe("directory");
+			expect(result.details?.filesScanned).toBe(1);
+			expect(result.details?.totalDiagnostics).toBe(0);
+			expect(String(result.content[0]?.text)).toContain("Files scanned: 1");
+
+			const openFile = (mocked.service as {
+				openFile: ReturnType<typeof vi.fn>;
+			}).openFile;
+			const opened = openFile.mock.calls.map(([filePath]) =>
+				path.relative(tmpDir, String(filePath)).replace(/\\/g, "/"),
+			);
+			expect(opened).toEqual(["src/good.ts"]);
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
 	it("requires either path or paths", async () => {
 		const tool = createLspDiagnosticsTool();
 		const result = (await tool.execute(
