@@ -55,6 +55,7 @@ import { getDiagnosticTracker } from "../diagnostic-tracker.js";
 import { getServersForFileWithConfig } from "../lsp/config.js";
 import { getLSPService } from "../lsp/index.js";
 import { isExternalOrVendorFile, normalizeMapKey } from "../path-utils.js";
+import { getProjectIgnoreMatcher } from "../file-utils.js";
 import {
 	clearReviewGraphWorkspaceCache,
 	getLastGraphBuildInfo,
@@ -523,6 +524,24 @@ const CASCADE_GRAPH_KINDS = new Set([
  * like Java/Kotlin/C#), fall back to the passive LSP snapshot from getAllDiagnostics
  * to preserve cascade coverage.
  */
+/**
+ * Whether a cascade neighbour is suppressed by the project's ignore config
+ * (`.pi-lens.json` / `.gitignore` / global `~/.pi-lens/config.json`), via the
+ * same `getProjectIgnoreMatcher` every other scan surface uses. Cascade surfaces
+ * collateral diagnostics in OTHER files an edit touched; a file the user ignores
+ * (e.g. a `*.test.ts` glob in `.pi-lens.json`) must not be re-surfaced here just
+ * because it imports the edited file — project walk and lens_diagnostics already
+ * filter it, and cascade was the last surface that didn't (#297). Fail-open: a
+ * config-probe error never drops a neighbour, matching the walkers' behaviour.
+ */
+function isIgnoredCascadeNeighbor(filePath: string, cwd: string): boolean {
+	try {
+		return getProjectIgnoreMatcher(cwd).isIgnored(filePath, false);
+	} catch {
+		return false;
+	}
+}
+
 export async function computeCascadeForFile(
 	filePath: string,
 	cwd: string,
@@ -788,6 +807,9 @@ export async function computeCascadeForFile(
 		sortedNeighbors = [...impact.neighborFiles]
 			.filter((n) => nodeFs.existsSync(n))
 			.filter((n) => !isExternalOrVendorFile(n, cwd))
+			// Honour the project's ignore config: a user-ignored neighbour (e.g.
+			// `**/*.test.ts`) must not surface as collateral cascade noise (#297).
+			.filter((n) => !isIgnoredCascadeNeighbor(n, cwd))
 			// B10: exclude files already edited as primary this turn — their own pipeline
 			// run is the authoritative diagnostic source; showing them as neighbors is noise.
 			.filter((n) => !primaryFilesThisTurn.has(normalizeMapKey(n)))
@@ -1215,6 +1237,7 @@ function appendFallbackNeighbors(
 		if (diagKey === normalizedFileKey || seen.has(diagKey)) continue;
 		if (primaryFilesThisTurn.has(diagKey)) continue;
 		if (isExternalOrVendorFile(diagPath, cwd)) continue;
+		if (isIgnoredCascadeNeighbor(diagPath, cwd)) continue;
 		if (!nodeFs.existsSync(diagPath)) continue;
 		if (now - ts > CASCADE_TTL_MS) continue;
 		const errors = convertLspDiagnostics(

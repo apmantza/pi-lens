@@ -554,6 +554,114 @@ describe("computeCascadeForFile", () => {
 		}
 	});
 
+	it("suppresses an ignored neighbour from cascade snapshot output (#297)", async () => {
+		const env = setupTestEnvironment("cascade-ignore-snapshot-");
+		try {
+			// Anchor the ignore matcher at tmpDir (a .git marker stops
+			// resolveGitIgnoreRoot's upward walk) and ignore test files there.
+			fs.mkdirSync(path.join(env.tmpDir, ".git"), { recursive: true });
+			fs.writeFileSync(
+				path.join(env.tmpDir, ".pi-lens.json"),
+				JSON.stringify({ ignore: ["**/*.test.ts"] }),
+			);
+			const primary = path.join(env.tmpDir, "src", "reader.ts");
+			const ignoredNeighbor = path.join(env.tmpDir, "src", "reader.test.ts");
+			fs.mkdirSync(path.dirname(primary), { recursive: true });
+			fs.writeFileSync(primary, "export const countTotal = 1;\n");
+			fs.writeFileSync(
+				ignoredNeighbor,
+				"import { countTotal } from './reader';\n",
+			);
+			// The test file is a direct importer (a cascade neighbour) AND carries an
+			// LSP error in the passive snapshot — the exact #297 false-positive shape.
+			mocks.computeImpactCascade.mockReturnValue(
+				impact(primary, [ignoredNeighbor]),
+			);
+			mocks.getLSPService.mockReturnValue({
+				getAllDiagnostics: vi
+					.fn()
+					.mockResolvedValue(
+						new Map([
+							[
+								ignoredNeighbor.split(path.sep).join("/"),
+								{ diags: [lspError("countTotal not found")], ts: Date.now() },
+							],
+						]),
+					),
+				touchFile: vi.fn(),
+				getDiagnostics: vi.fn(),
+			});
+
+			const { computeCascadeForFile } = await import(
+				"../../clients/dispatch/integration.js"
+			);
+			const result = await computeCascadeForFile(primary, env.tmpDir, {
+				turnSeq: 1,
+				writeSeq: 1,
+			});
+
+			// The ignored test file must not surface as a cascade neighbour.
+			expect(result?.result).toBeUndefined();
+			expect(result?.skipReason).toBe("no_neighbors");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("suppresses an ignored neighbour from cascade fallback output (#297)", async () => {
+		const env = setupTestEnvironment("cascade-ignore-fallback-");
+		try {
+			fs.mkdirSync(path.join(env.tmpDir, ".git"), { recursive: true });
+			fs.writeFileSync(
+				path.join(env.tmpDir, ".pi-lens.json"),
+				JSON.stringify({ ignore: ["**/*.test.ts"] }),
+			);
+			// No-LSP neighbour keeps producedLspData false → fallback path runs and
+			// scans every open file in allDiags, including the ignored test file.
+			const primary = path.join(env.tmpDir, "main.ts");
+			const noLspNeighbor = path.join(env.tmpDir, "neighbor.foo");
+			const ignoredOpen = path.join(env.tmpDir, "src", "main.test.ts");
+			fs.mkdirSync(path.dirname(ignoredOpen), { recursive: true });
+			fs.writeFileSync(primary, "export const x = 1;\n");
+			fs.writeFileSync(noLspNeighbor, "neighbor\n");
+			fs.writeFileSync(ignoredOpen, "const x = 1;\n");
+			mocks.computeImpactCascade.mockReturnValue(
+				impact(primary, [noLspNeighbor]),
+			);
+			mocks.getLSPService.mockReturnValue({
+				getAllDiagnostics: vi
+					.fn()
+					.mockResolvedValue(
+						new Map([
+							[
+								ignoredOpen.split(path.sep).join("/"),
+								{ diags: [lspError("ignored fallback error")], ts: Date.now() },
+							],
+						]),
+					),
+				touchFile: vi.fn(),
+				getDiagnostics: vi.fn(),
+			});
+
+			const { computeCascadeForFile } = await import(
+				"../../clients/dispatch/integration.js"
+			);
+			const result = await computeCascadeForFile(primary, env.tmpDir, {
+				turnSeq: 1,
+				writeSeq: 1,
+			});
+
+			expect(result?.result?.formatted ?? "").not.toContain(
+				"ignored fallback error",
+			);
+			expect(
+				result?.result?.neighbors.some((n) => n.reason === "fallback"),
+			).not.toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("returns undefined for empty/clean cascade output", async () => {
 		const env = setupTestEnvironment("cascade-empty-");
 		try {
