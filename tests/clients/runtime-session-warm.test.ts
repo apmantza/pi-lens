@@ -4,6 +4,7 @@
  * lazy translation-unit indexing.
  */
 
+import * as os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleSessionStart } from "../../clients/runtime-session.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
@@ -187,8 +188,9 @@ describe("warmFiles session start", () => {
 		const env = setupTestEnvironment("pi-lens-warm-");
 		const restoreStartupMode = setStartupMode("full");
 
-		// TypeScript dominates (3 files) over Python (1) — exactly one server
-		// should be warmed, via a representative .ts file.
+		// TypeScript dominates (3 files) over Python (1) in a real project root —
+		// exactly one server should be warmed, via a representative .ts file.
+		createTempFile(env.tmpDir, "package.json", JSON.stringify({ type: "module" }));
 		createTempFile(env.tmpDir, "src/a.ts", "export const a = 1;");
 		createTempFile(env.tmpDir, "src/b.ts", "export const b = 2;");
 		createTempFile(env.tmpDir, "src/c.ts", "export const c = 3;");
@@ -219,6 +221,32 @@ describe("warmFiles session start", () => {
 			restoreStartupMode();
 		}
 	}, 15_000);
+
+	it("skips dominant-language auto-warm on home/no-project roots (#296)", async () => {
+		const restoreStartupMode = setStartupMode("full");
+		const dbgLog: string[] = [];
+
+		vi.mocked(loadLSPConfig).mockResolvedValue({});
+
+		try {
+			await handleSessionStart(
+				makeDeps({ ctxCwd: os.homedir(), dbg: (msg) => dbgLog.push(msg) }),
+			);
+
+			await vi.waitFor(
+				() =>
+					expect(dbgLog).toContainEqual(
+						expect.stringContaining(
+							"session_start lsp-warm: skipping dominant-language auto-warm (home-dir)",
+						),
+					),
+				{ timeout: 5000 },
+			);
+			expect(mockTouchFile).not.toHaveBeenCalled();
+		} finally {
+			restoreStartupMode();
+		}
+	});
 
 	it("skips touchFile when no-lsp flag is set", async () => {
 		const env = setupTestEnvironment("pi-lens-warm-");

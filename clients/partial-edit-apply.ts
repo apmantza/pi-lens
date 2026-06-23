@@ -1,8 +1,20 @@
+import type { EditToolInput } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
+import {
+	detectLineEnding,
+	normalizeToLF,
+	restoreLineEndings,
+} from "./host-edit-normalize.js";
+
+// A single edit element of the host edit tool ({ oldText, newText }). Pinned to
+// the SDK's EditToolInput so a host schema rename (e.g. oldText -> old_text) is a
+// compile error here rather than a silent runtime mismatch (#257 / refs #2).
+type HostEdit = EditToolInput["edits"][number];
 
 export interface PartiallyApplicableEdit {
-	oldText: string;
-	newText: string | undefined;
+	oldText: HostEdit["oldText"];
+	// Widened vs the host: pi-lens models a pure deletion as an absent newText.
+	newText: HostEdit["newText"] | undefined;
 	originalIndex: number;
 }
 
@@ -10,10 +22,6 @@ export interface PartialEditApplyResult {
 	appliedCount: number;
 	appliedIndices: string;
 	postEditOutput?: string;
-}
-
-function normalizeLf(value: string): string {
-	return value.replace(/\r\n/g, "\n");
 }
 
 function replaceOnce(
@@ -45,13 +53,17 @@ export async function applyPartiallyApplicableEdits(args: {
 	afterWrite?: () => Promise<string | undefined>;
 }): Promise<PartialEditApplyResult> {
 	const raw = fs.readFileSync(args.filePath, "utf-8");
-	const useCrlf = raw.includes("\r\n");
-	let content = normalizeLf(raw);
+	// Detect + restore line endings the way the host edit tool does:
+	// first-occurrence-wins detection (not "any CRLF present") and lone-CR -> LF
+	// normalization, so this self-apply path can't diverge from how the host
+	// would have written the same edits (#257).
+	const ending = detectLineEnding(raw);
+	let content = normalizeToLF(raw);
 	const applied: number[] = [];
 
 	for (const edit of args.edits) {
-		const oldText = normalizeLf(edit.oldText);
-		const newText = normalizeLf(edit.newText ?? "");
+		const oldText = normalizeToLF(edit.oldText);
+		const newText = normalizeToLF(edit.newText ?? "");
 		const replaced = replaceOnce(content, oldText, newText);
 		if (!replaced.changed) continue;
 		content = replaced.content;
@@ -61,7 +73,7 @@ export async function applyPartiallyApplicableEdits(args: {
 	if (applied.length > 0) {
 		fs.writeFileSync(
 			args.filePath,
-			useCrlf ? content.replace(/\n/g, "\r\n") : content,
+			restoreLineEndings(content, ending),
 			"utf-8",
 		);
 	}

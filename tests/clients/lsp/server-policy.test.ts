@@ -156,10 +156,10 @@ describe("lsp server policy", () => {
 		expect(root).toBe(path.dirname(file));
 	});
 
-	it("falls back to file directory for standalone csharp files", async () => {
+	it("skips standalone csharp files without a project marker (#201)", async () => {
 		const { CSharpServer } = await import("../../../clients/lsp/server.js");
 		const tmp = fs.mkdtempSync(
-			path.join(os.tmpdir(), "pi-lens-csharp-fallback-root-"),
+			path.join(os.tmpdir(), "pi-lens-csharp-no-root-"),
 		);
 		dirs.push(tmp);
 
@@ -167,7 +167,103 @@ describe("lsp server policy", () => {
 		fs.writeFileSync(file, 'Console.WriteLine("ok");\n');
 
 		const root = await CSharpServer.root(file);
-		expect(root).toBe(path.dirname(file));
+		expect(root).toBeUndefined();
+	});
+
+	it("resolves csharp roots from real .csproj/.sln filenames (#201)", async () => {
+		const { CSharpServer, OmniSharpServer } = await import(
+			"../../../clients/lsp/server.js"
+		);
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-csharp-root-"));
+		dirs.push(tmp);
+
+		const project = path.join(tmp, "src", "App");
+		const file = path.join(project, "Program.cs");
+		fs.mkdirSync(project, { recursive: true });
+		fs.writeFileSync(path.join(project, "App.csproj"), "<Project />\n");
+		fs.writeFileSync(file, 'Console.WriteLine("ok");\n');
+
+		await expect(CSharpServer.root(file)).resolves.toBe(project);
+		await expect(OmniSharpServer.root(file)).resolves.toBe(project);
+
+		const solutionRoot = path.join(tmp, "solution");
+		const solutionProject = path.join(solutionRoot, "Nested");
+		const solutionFile = path.join(solutionProject, "Program.cs");
+		fs.mkdirSync(solutionProject, { recursive: true });
+		fs.writeFileSync(path.join(solutionRoot, "Workspace.sln"), "\n");
+		fs.writeFileSync(solutionFile, 'Console.WriteLine("ok");\n');
+		await expect(CSharpServer.root(solutionFile)).resolves.toBe(solutionRoot);
+
+		const slnxRoot = path.join(tmp, "slnx");
+		const slnxProject = path.join(slnxRoot, "Nested");
+		const slnxFile = path.join(slnxProject, "Program.cs");
+		fs.mkdirSync(slnxProject, { recursive: true });
+		fs.writeFileSync(path.join(slnxRoot, "Workspace.slnx"), "\n");
+		fs.writeFileSync(slnxFile, 'Console.WriteLine("ok");\n');
+		await expect(CSharpServer.root(slnxFile)).resolves.toBe(slnxRoot);
+		await expect(OmniSharpServer.root(slnxFile)).resolves.toBe(slnxRoot);
+	});
+
+	it("does not treat a directory named like a project marker as a root (#201)", async () => {
+		const { CSharpServer } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-csharp-dirmarker-"));
+		dirs.push(tmp);
+
+		const project = path.join(tmp, "App");
+		const file = path.join(project, "Program.cs");
+		fs.mkdirSync(project, { recursive: true });
+		// A *directory* whose name matches `*.csproj` must not count as a marker.
+		fs.mkdirSync(path.join(project, "Fake.csproj"));
+		fs.writeFileSync(file, 'Console.WriteLine("ok");\n');
+
+		await expect(CSharpServer.root(file)).resolves.toBeUndefined();
+	});
+
+	it("matches csharp project markers case-insensitively on win32 (#201)", async () => {
+		const { CSharpServer } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-csharp-nocase-"));
+		dirs.push(tmp);
+
+		const project = path.join(tmp, "App");
+		const file = path.join(project, "Program.cs");
+		fs.mkdirSync(project, { recursive: true });
+		// Uppercase extension: the marker glob is `*.csproj` (lowercase).
+		fs.writeFileSync(path.join(project, "App.CSPROJ"), "<Project />\n");
+		fs.writeFileSync(file, 'Console.WriteLine("ok");\n');
+
+		const root = await CSharpServer.root(file);
+		if (process.platform === "win32") {
+			expect(root).toBe(project); // nocase match
+		} else {
+			expect(root).toBeUndefined(); // case-sensitive FS → no match
+		}
+	});
+
+	it("resolves fsharp roots from real .fsproj filenames (#201)", async () => {
+		const { FSharpServer } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-fsharp-root-"));
+		dirs.push(tmp);
+
+		const project = path.join(tmp, "src", "App");
+		const file = path.join(project, "Program.fs");
+		fs.mkdirSync(project, { recursive: true });
+		fs.writeFileSync(path.join(project, "App.fsproj"), "<Project />\n");
+		fs.writeFileSync(file, 'printfn "ok"\n');
+
+		await expect(FSharpServer.root(file)).resolves.toBe(project);
+	});
+
+	it("skips standalone fsharp files without a project marker (#201)", async () => {
+		const { FSharpServer } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-fsharp-no-root-"),
+		);
+		dirs.push(tmp);
+
+		const file = path.join(tmp, "Program.fs");
+		fs.writeFileSync(file, 'printfn "ok"\n');
+
+		await expect(FSharpServer.root(file)).resolves.toBeUndefined();
 	});
 
 	it("tries pi-lens managed csharp candidates before legacy global dotnet tools", async () => {
@@ -980,7 +1076,9 @@ describe("lsp server policy", () => {
 describe("heavy workspace servers do not fall back to per-file dirs (#201)", () => {
 	it("RustServer.root → undefined when no Cargo manifest exists", async () => {
 		const { RustServer } = await import("../../../clients/lsp/server.js");
-		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-rust-nomanifest-"));
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-rust-nomanifest-"),
+		);
 		dirs.push(tmp);
 		const file = path.join(tmp, "src", "main.rs");
 		fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -993,7 +1091,9 @@ describe("heavy workspace servers do not fall back to per-file dirs (#201)", () 
 
 	it("RustServer.root → the crate root when a Cargo.toml exists", async () => {
 		const { RustServer } = await import("../../../clients/lsp/server.js");
-		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-rust-manifest-"));
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-rust-manifest-"),
+		);
 		dirs.push(tmp);
 		const file = path.join(tmp, "src", "main.rs");
 		fs.mkdirSync(path.dirname(file), { recursive: true });

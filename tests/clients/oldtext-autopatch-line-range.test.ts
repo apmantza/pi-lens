@@ -49,6 +49,21 @@ describe("findUniqueMatchLineRange (#118 autopatch → synthetic-read bridge)", 
 		expect(findUniqueMatchLineRange(normalized, "")).toBeUndefined();
 	});
 
+	it("resolves a smart-quoted needle against straight-quoted content (#257)", () => {
+		// Bridge now normalizes in the host fuzzy-match space, so a needle with
+		// smart quotes still locates the straight-quoted line the host would edit.
+		const quoteFile = normalizeOldTextForMatch(
+			"const msg = 'hello';\nconst other = 1;\n",
+		);
+		const lsquo = String.fromCharCode(0x2018);
+		const rsquo = String.fromCharCode(0x2019);
+		const range = findUniqueMatchLineRange(
+			quoteFile,
+			`const msg = ${lsquo}hello${rsquo};`,
+		);
+		expect(range).toEqual({ startLine: 1, endLine: 1 });
+	});
+
 	it("tolerates CRLF in the needle by normalizing both sides", () => {
 		const range = findUniqueMatchLineRange(
 			normalized,

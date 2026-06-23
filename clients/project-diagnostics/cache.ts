@@ -66,3 +66,46 @@ export function writeProjectDiagnosticsDeltaReport(
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
 	fs.writeFileSync(filePath, JSON.stringify(report, null, 2));
 }
+
+/**
+ * Drop diagnostics whose underlying file changed on disk after the snapshot was
+ * taken (`mtimeMs > scannedAt`) or no longer exists. The persisted snapshot is a
+ * cross-session cache served by `lens_diagnostics mode=full refreshRunners=cached`;
+ * without this it replays diagnostics the agent has since fixed or for files that
+ * were deleted (#298 — "the cache needs to be cleaned before running diagnostics
+ * because it became stale"). This mirrors `reconcileStaleWidgetFiles` for the
+ * in-memory widget, applied at the consumer so `loadProjectDiagnosticsSnapshot`
+ * stays a pure reader. Synchronous (a `statSync` per *distinct* file, memoised),
+ * since the cached full-mode path is already off the typing hot loop.
+ *
+ * Fail-safe on an unparseable `scannedAt`: return the snapshot untouched rather
+ * than risk dropping live findings on a clock/format anomaly.
+ */
+export function reconcileProjectDiagnosticsSnapshot(
+	snapshot: ProjectDiagnosticsSnapshot,
+): { snapshot: ProjectDiagnosticsSnapshot; staleDropped: number } {
+	const scannedAtMs = Date.parse(snapshot.scannedAt);
+	if (!Number.isFinite(scannedAtMs)) return { snapshot, staleDropped: 0 };
+
+	const staleByFile = new Map<string, boolean>();
+	const isStale = (filePath: string): boolean => {
+		const cached = staleByFile.get(filePath);
+		if (cached !== undefined) return cached;
+		let stale: boolean;
+		try {
+			// +1ms tolerance: a file scanned at scannedAt has mtime <= scannedAt.
+			stale = fs.statSync(filePath).mtimeMs > scannedAtMs + 1;
+		} catch {
+			stale = true; // deleted / unreadable → drop
+		}
+		staleByFile.set(filePath, stale);
+		return stale;
+	};
+
+	const kept = snapshot.diagnostics.filter((d) => !isStale(d.filePath));
+	if (kept.length === snapshot.diagnostics.length) {
+		return { snapshot, staleDropped: 0 };
+	}
+	const staleDropped = [...staleByFile.values()].filter(Boolean).length;
+	return { snapshot: { ...snapshot, diagnostics: kept }, staleDropped };
+}

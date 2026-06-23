@@ -72,6 +72,7 @@ import {
 	findUniqueMatchLineRange,
 } from "./clients/oldtext-autopatch.js";
 import { applyPartiallyApplicableEdits } from "./clients/partial-edit-apply.js";
+import { normalizeForGuardMatch } from "./clients/host-edit-normalize.js";
 import { retargetReplacementIndentation } from "./clients/indent-retarget.js";
 import { handleAgentEnd } from "./clients/runtime-agent-end.js";
 import {
@@ -306,12 +307,11 @@ function shouldSkipLspAutoTouch(
 	return false;
 }
 
+// Kept in lockstep with the gate's normalizeContent + oldtext-autopatch's
+// normalizeOldTextForMatch: the host edit tool's full fuzzy-match space, so the
+// autopatch passes count/locate oldText exactly where the host applies it (#257).
 function normalizeOldTextForMatch(text: string): string {
-	return text
-		.replace(/\r\n/g, "\n")
-		.split("\n")
-		.map((line) => line.trimEnd())
-		.join("\n");
+	return normalizeForGuardMatch(text);
 }
 
 function countTextOccurrences(haystack: string, needle: string): number {
@@ -1625,8 +1625,8 @@ export default function (pi: ExtensionAPI) {
 						)
 						.filter((entry): entry is EditIndentTarget => entry !== null);
 			// Read the file once; derive the two normalized forms needed by
-			// tryCorrectIndentationMismatchFromContent (CRLF-only) and
-			// countOldTextMatches (CRLF + trailing-whitespace trimmed).
+			// tryCorrectIndentationMismatchFromContent (CRLF->LF only) and
+			// countOldTextMatches / the autopatch bridge (host fuzzy-match space).
 			let crlfContent: string | undefined;
 			let matchNormalizedContent: string | undefined;
 			try {

@@ -9,7 +9,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resolveStartupScanContext } from "../../clients/startup-scan.js";
+import {
+	resolveStartupScanContext,
+	resolveStartupScanContextAsync,
+} from "../../clients/startup-scan.js";
 
 let tmpDir: string;
 
@@ -58,5 +61,91 @@ describe("resolveStartupScanContext home ceiling (#253)", () => {
 		const ctx = resolveStartupScanContext(proj, { homeDir: home });
 		expect(ctx.canWarmCaches).toBe(true);
 		expect(ctx.projectRoot).toBe(path.resolve(proj));
+	});
+});
+
+describe("resolveStartupScanContextAsync home ceiling (#296)", () => {
+	it("refuses to warm when the nearest marker is ABOVE the home dir", async () => {
+		const ancestor = path.join(tmpDir, "async-ancestor");
+		const home = path.join(ancestor, "home");
+		const cwd = path.join(home, "empty-folder");
+		fs.mkdirSync(cwd, { recursive: true });
+		fs.mkdirSync(path.join(ancestor, ".git"), { recursive: true });
+
+		const ctx = await resolveStartupScanContextAsync(cwd, { homeDir: home });
+		expect(ctx.canWarmCaches).toBe(false);
+		expect(ctx.reason).toBe("home-dir");
+		expect(ctx.projectRoot).toBe(path.resolve(ancestor));
+	});
+
+	it("refuses to warm when the marker is AT the home dir", async () => {
+		const home = path.join(tmpDir, "async-marker-home");
+		const cwd = path.join(home, "empty-folder");
+		fs.mkdirSync(cwd, { recursive: true });
+		fs.mkdirSync(path.join(home, ".git"), { recursive: true });
+
+		const ctx = await resolveStartupScanContextAsync(cwd, { homeDir: home });
+		expect(ctx.canWarmCaches).toBe(false);
+		expect(ctx.reason).toBe("home-dir");
+		expect(ctx.projectRoot).toBe(path.resolve(home));
+	});
+
+	it("refuses to warm when the cwd itself is ABOVE the home dir", async () => {
+		const ancestor = path.join(tmpDir, "async-cwd-ancestor");
+		const home = path.join(ancestor, "home");
+		fs.mkdirSync(home, { recursive: true });
+		fs.mkdirSync(path.join(ancestor, ".git"), { recursive: true });
+
+		const ctx = await resolveStartupScanContextAsync(ancestor, {
+			homeDir: home,
+		});
+		expect(ctx.canWarmCaches).toBe(false);
+		expect(ctx.reason).toBe("home-dir");
+		expect(ctx.projectRoot).toBe(path.resolve(ancestor));
+		expect(ctx.sourceFileCount).toBeUndefined();
+	});
+
+	it("returns home-dir for an above-home cwd even with no project marker", async () => {
+		const ancestor = path.join(tmpDir, "async-no-marker-ancestor");
+		const home = path.join(ancestor, "home");
+		fs.mkdirSync(home, { recursive: true });
+
+		const ctx = await resolveStartupScanContextAsync(ancestor, {
+			homeDir: home,
+		});
+		expect(ctx.canWarmCaches).toBe(false);
+		expect(ctx.reason).toBe("home-dir");
+		expect(ctx.sourceFileCount).toBeUndefined();
+	});
+
+	it("returns too-many-source-files for a normal project over the limit", async () => {
+		const home = path.join(tmpDir, "async-large-home");
+		const proj = path.join(home, "code", "large-app");
+		fs.mkdirSync(proj, { recursive: true });
+		fs.mkdirSync(path.join(proj, ".git"), { recursive: true });
+		fs.writeFileSync(path.join(proj, "a.ts"), "export const a = 1;\n");
+		fs.writeFileSync(path.join(proj, "b.ts"), "export const b = 1;\n");
+
+		const ctx = await resolveStartupScanContextAsync(proj, {
+			homeDir: home,
+			maxSourceFiles: 1,
+		});
+		expect(ctx.canWarmCaches).toBe(false);
+		expect(ctx.reason).toBe("too-many-source-files");
+		expect(ctx.projectRoot).toBe(path.resolve(proj));
+		expect(ctx.sourceFileCount).toBe(2);
+	});
+
+	it("still warms a normal project UNDER home", async () => {
+		const home = path.join(tmpDir, "async-home");
+		const proj = path.join(home, "code", "app");
+		fs.mkdirSync(proj, { recursive: true });
+		fs.mkdirSync(path.join(proj, ".git"), { recursive: true });
+		fs.writeFileSync(path.join(proj, "index.ts"), "export const x = 1;\n");
+
+		const ctx = await resolveStartupScanContextAsync(proj, { homeDir: home });
+		expect(ctx.canWarmCaches).toBe(true);
+		expect(ctx.projectRoot).toBe(path.resolve(proj));
+		expect(ctx.sourceFileCount).toBe(1);
 	});
 });

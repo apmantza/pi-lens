@@ -276,9 +276,11 @@ export async function resolveStartupScanContextAsync(
 			scanRoot: resolvedCwd,
 			projectRoot: null,
 			canWarmCaches: false,
-			reason: resolvedCwd === homeDir ? "home-dir" : "no-project-root",
+			reason: isAtOrAboveHomeDir(resolvedCwd, homeDir)
+				? "home-dir"
+				: "no-project-root",
 		};
-	} else if (path.resolve(projectRoot) === homeDir) {
+	} else if (isAtOrAboveHomeDir(projectRoot, homeDir)) {
 		result = {
 			cwd: resolvedCwd,
 			scanRoot: projectRoot,
