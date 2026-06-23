@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { access, appendFile, mkdir, readdir, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { minimatch } from "minimatch";
 import { isTestMode } from "../env-utils.js";
 import { getGlobalPiLensDir } from "../file-utils.js";
 import { KIND_EXTENSIONS } from "../file-kinds.js";
@@ -787,36 +788,6 @@ export function WorkspacePriorityRoot(
 		PriorityRoot(markerGroups, excludePatterns, process.cwd())(file);
 }
 
-function matchesGlobSegment(pattern: string, value: string): boolean {
-	let patternIndex = 0;
-	let valueIndex = 0;
-	let starIndex = -1;
-	let valueIndexAfterStar = 0;
-
-	while (valueIndex < value.length) {
-		const patternChar = pattern[patternIndex];
-		if (patternChar === value[valueIndex]) {
-			patternIndex++;
-			valueIndex++;
-			continue;
-		}
-		if (patternChar === "*") {
-			starIndex = patternIndex++;
-			valueIndexAfterStar = valueIndex;
-			continue;
-		}
-		if (starIndex !== -1) {
-			patternIndex = starIndex + 1;
-			valueIndex = ++valueIndexAfterStar;
-			continue;
-		}
-		return false;
-	}
-
-	while (pattern[patternIndex] === "*") patternIndex++;
-	return patternIndex === pattern.length;
-}
-
 function isPermissionFsError(err: unknown): boolean {
 	const code = (err as { code?: unknown })?.code;
 	return code === "EACCES" || code === "EPERM";
@@ -847,8 +818,16 @@ async function markerExists(dir: string, pattern: string): Promise<boolean> {
 		: dir;
 	try {
 		const entries = await readdir(targetDir, { withFileTypes: true });
-		return entries.some((entry) =>
-			matchesGlobSegment(basenamePattern, entry.name),
+		// Match files/symlinks only — a directory named like the marker (e.g. a
+		// `Foo.csproj/` dir) is not a project file. Case-insensitive on win32 to
+		// match the filesystem (and the project ignore matcher), via minimatch.
+		return entries.some(
+			(entry) =>
+				(entry.isFile() || entry.isSymbolicLink()) &&
+				minimatch(entry.name, basenamePattern, {
+					dot: true,
+					nocase: process.platform === "win32",
+				}),
 		);
 	} catch (err) {
 		if (isPermissionFsError(err)) {

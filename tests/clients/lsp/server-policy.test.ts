@@ -204,6 +204,41 @@ describe("lsp server policy", () => {
 		await expect(OmniSharpServer.root(slnxFile)).resolves.toBe(slnxRoot);
 	});
 
+	it("does not treat a directory named like a project marker as a root (#201)", async () => {
+		const { CSharpServer } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-csharp-dirmarker-"));
+		dirs.push(tmp);
+
+		const project = path.join(tmp, "App");
+		const file = path.join(project, "Program.cs");
+		fs.mkdirSync(project, { recursive: true });
+		// A *directory* whose name matches `*.csproj` must not count as a marker.
+		fs.mkdirSync(path.join(project, "Fake.csproj"));
+		fs.writeFileSync(file, 'Console.WriteLine("ok");\n');
+
+		await expect(CSharpServer.root(file)).resolves.toBeUndefined();
+	});
+
+	it("matches csharp project markers case-insensitively on win32 (#201)", async () => {
+		const { CSharpServer } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-csharp-nocase-"));
+		dirs.push(tmp);
+
+		const project = path.join(tmp, "App");
+		const file = path.join(project, "Program.cs");
+		fs.mkdirSync(project, { recursive: true });
+		// Uppercase extension: the marker glob is `*.csproj` (lowercase).
+		fs.writeFileSync(path.join(project, "App.CSPROJ"), "<Project />\n");
+		fs.writeFileSync(file, 'Console.WriteLine("ok");\n');
+
+		const root = await CSharpServer.root(file);
+		if (process.platform === "win32") {
+			expect(root).toBe(project); // nocase match
+		} else {
+			expect(root).toBeUndefined(); // case-sensitive FS → no match
+		}
+	});
+
 	it("resolves fsharp roots from real .fsproj filenames (#201)", async () => {
 		const { FSharpServer } = await import("../../../clients/lsp/server.js");
 		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-fsharp-root-"));
