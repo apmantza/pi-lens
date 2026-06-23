@@ -169,7 +169,7 @@ export async function scanProjectDiagnostics(
 ): Promise<ProjectDiagnosticsSnapshot> {
 	const cwd = path.resolve(options.cwd);
 	const maxFiles = Math.max(1, options.maxFiles ?? DEFAULT_MAX_FILES);
-	const files = (await collectSourceFilesAsync(cwd)).slice(0, maxFiles);
+	const files = await collectSourceFilesAsync(cwd, { maxFiles });
 	const diagnostics = [
 		...(await scanTreeSitter(cwd, files)),
 		...(await scanFactRules(cwd, files)),

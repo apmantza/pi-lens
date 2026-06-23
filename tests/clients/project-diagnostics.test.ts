@@ -148,6 +148,22 @@ describe("project diagnostics adapters", () => {
 });
 
 describe("scanProjectDiagnostics", () => {
+	it("caps source collection before scanning", async () => {
+		const srcDir = path.join(tmp, "src-cap");
+		fs.mkdirSync(srcDir, { recursive: true });
+		fs.writeFileSync(path.join(srcDir, "a.ts"), "export const a = 1;\n");
+		fs.writeFileSync(path.join(srcDir, "b.ts"), "export const b = 1;\n");
+		fs.writeFileSync(path.join(srcDir, "c.ts"), "export const c = 1;\n");
+
+		const result = await scanProjectDiagnostics({
+			cwd: tmp,
+			tier: "cheap",
+			maxFiles: 2,
+		});
+
+		expect(result.filesScanned).toBe(2);
+	});
+
 	it("runs cheap project scanners and writes a normalized snapshot", async () => {
 		const srcDir = path.join(tmp, "src");
 		fs.mkdirSync(srcDir, { recursive: true });
