@@ -1,4 +1,10 @@
+import type { EditToolInput } from "@earendil-works/pi-coding-agent";
 import * as nodeFs from "node:fs";
+import {
+	hostWouldApplyOldText,
+	normalizeForGuardMatch,
+} from "./host-edit-normalize.js";
+import type { PartiallyApplicableEdit } from "./partial-edit-apply.js";
 import { logReadGuardEvent } from "./read-guard-logger.js";
 import { isToolCallEventType } from "./tool-event.js";
 
@@ -10,11 +16,8 @@ export interface GuardLineResult {
 	preflightError?: string;
 	// Edits that resolved successfully when only a subset failed preflight.
 	// Caller can apply these directly and return a ⚠️ PARTIAL APPLY message.
-	partiallyApplicable?: Array<{
-		oldText: string;
-		newText: string | undefined;
-		originalIndex: number;
-	}>;
+	// Shares the host-pinned edit shape with applyPartiallyApplicableEdits.
+	partiallyApplicable?: PartiallyApplicableEdit[];
 	// All edits were resolved by exact content match — range snapshot staleness
 	// is irrelevant since the content IS the edit target.
 	contentMatchValidated?: boolean;
@@ -118,12 +121,11 @@ export function countFileLines(filePath: string): number {
 	}
 }
 
+// Match the host edit tool's fuzzy-match space (NFKC + smart quotes/dashes/
+// spaces + BOM + lone-CR), so the guard resolves oldText -> range exactly where
+// the host would apply it instead of false-blocking valid edits (#257).
 function normalizeContent(text: string): string {
-	return text
-		.replace(/\r\n/g, "\n")
-		.split("\n")
-		.map((line) => line.trimEnd())
-		.join("\n");
+	return normalizeForGuardMatch(text);
 }
 
 function lineNumberAt(content: string, index: number): number {
@@ -463,6 +465,11 @@ function resolveOldTextEdits(
 				}
 			}
 			errors.push(errorMsg);
+			// Counterfactual: would the host's edit tool have applied this oldText
+			// anyway? hostWouldApply=true => this block is a false-block (pi-lens
+			// friction the host wouldn't have); false => a genuine miss. This is the
+			// measurement that tells us whether the guard earns its keep (#257).
+			const hostMatch = hostWouldApplyOldText(rawContent, oldText);
 			logReadGuardEvent({
 				event: "oldtext_not_found",
 				sessionId,
@@ -473,6 +480,9 @@ function resolveOldTextEdits(
 					editIndex,
 					oldTextPreview: preview,
 					repeatFailureCount: failCount,
+					hostWouldApply: hostMatch.wouldApply,
+					hostOccurrences: hostMatch.occurrences,
+					hostUsedFuzzyMatch: hostMatch.usedFuzzyMatch,
 				},
 			});
 		} else if (occurrenceLines.length === 1) {
@@ -1031,13 +1041,21 @@ export function getTouchedLinesForGuard(
 	sessionId?: string,
 ): GuardLineResult {
 	if (isToolCallEventType("edit", event as any)) {
-		const editInput = (event as { input?: unknown }).input as {
+		// The host standard-edit fields (path, edits[].oldText/newText) are pinned
+		// to the SDK's EditToolInput, so a host edit-schema change is a compile
+		// error instead of silently falling through to `unknown_edit_schema`. The
+		// remaining keys are pi-lens's own extensions for native-ranged + hashline
+		// edit tools; oldText/newText are probed as optional because range-only
+		// edits omit them (refs #3).
+		const editInput = (event as { input?: unknown }).input as Partial<
+			Pick<EditToolInput, "path">
+		> & {
 			oldRange?: { start: { line: number }; end: { line: number } };
-			edits?: Array<{
-				range?: { start?: { line: number }; end?: { line: number } };
-				oldText?: string;
-				newText?: string;
-			}>;
+			edits?: Array<
+				Partial<EditToolInput["edits"][number]> & {
+					range?: { start?: { line: number }; end?: { line: number } };
+				}
+			>;
 			operations?: unknown[];
 			ops?: unknown[];
 			set_line?: unknown;

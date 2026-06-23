@@ -23,6 +23,52 @@ describe("knip-client", () => {
 		}
 	});
 
+	it("does not resolve package markers at or above home", () => {
+		const tmpRoot = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-knip-home-ceiling-"),
+		);
+		try {
+			const ancestor = path.join(tmpRoot, "ancestor");
+			const home = path.join(ancestor, "home");
+			const nested = path.join(home, "empty-folder");
+			fs.mkdirSync(nested, { recursive: true });
+			fs.writeFileSync(path.join(ancestor, "package.json"), '{"name":"parent"}');
+
+			const client = new KnipClient(false) as unknown as {
+				resolveProjectRoot: (
+					startDir: string,
+					homeDir?: string,
+				) => string | null;
+			};
+
+			expect(client.resolveProjectRoot(nested, home)).toBeNull();
+		} finally {
+			fs.rmSync(tmpRoot, { recursive: true, force: true });
+		}
+	});
+
+	it("does not resolve a package marker at the home dir itself", () => {
+		const tmpRoot = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-knip-home-marker-"),
+		);
+		try {
+			const home = path.join(tmpRoot, "home");
+			fs.mkdirSync(home, { recursive: true });
+			fs.writeFileSync(path.join(home, "package.json"), '{"name":"home"}');
+
+			const client = new KnipClient(false) as unknown as {
+				resolveProjectRoot: (
+					startDir: string,
+					homeDir?: string,
+				) => string | null;
+			};
+
+			expect(client.resolveProjectRoot(home, home)).toBeNull();
+		} finally {
+			fs.rmSync(tmpRoot, { recursive: true, force: true });
+		}
+	});
+
 	it("does not walk past a VCS boundary to a parent package.json", () => {
 		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-knip-boundary-");
 		try {

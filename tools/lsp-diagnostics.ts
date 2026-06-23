@@ -8,21 +8,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Type } from "typebox";
+import {
+	getProjectIgnoreMatcher,
+	isExcludedDirName,
+} from "../clients/file-utils.js";
 import { getLSPService } from "../clients/lsp/index.js";
 import type { LSPDiagnostic } from "../clients/lsp/client.js";
-
-const SKIP_DIRS = new Set([
-	"node_modules",
-	".git",
-	"dist",
-	"build",
-	".next",
-	"out",
-	"target",
-	"__pycache__",
-	".venv",
-	"venv",
-]);
 
 const LANG_EXTENSIONS: Record<string, string[]> = {
 	".ts": [".ts", ".tsx", ".mts", ".cts"],
@@ -155,10 +146,29 @@ async function mapWithConcurrency<T, R>(
 	return results;
 }
 
+/**
+ * Project-ignore predicate rooted at `root`, fail-open. Lets a directory scan
+ * honor the user's `.pi-lens.json` / `.gitignore` patterns — not just the
+ * canonical dir-name list — so `lsp_diagnostics` stays consistent with the
+ * workspace-diagnostics walk and every other scan surface (#243/#297/#298). A
+ * config-probe error never blocks a scan (matches the walkers' behaviour).
+ */
+function projectIgnorePredicate(
+	root: string,
+): (fullPath: string, isDir: boolean) => boolean {
+	try {
+		const matcher = getProjectIgnoreMatcher(root);
+		return (fullPath, isDir) => matcher.isIgnored(fullPath, isDir);
+	} catch {
+		return () => false;
+	}
+}
+
 function collectFiles(
 	dir: string,
 	extensions: string[],
 	maxFiles: number,
+	isIgnored: (fullPath: string, isDir: boolean) => boolean = () => false,
 ): string[] {
 	const files: string[] = [];
 	function walk(current: string): void {
@@ -174,8 +184,9 @@ function collectFiles(
 			if (entry.isSymbolicLink()) continue;
 			const full = path.join(current, entry.name);
 			if (entry.isDirectory()) {
-				if (!SKIP_DIRS.has(entry.name)) walk(full);
+				if (!isExcludedDirName(entry.name) && !isIgnored(full, true)) walk(full);
 			} else if (entry.isFile() && extensions.includes(path.extname(full))) {
+				if (isIgnored(full, false)) continue;
 				files.push(full);
 			}
 		}
@@ -561,8 +572,9 @@ async function runDirectoryDiagnostics(
 	let extension: string | undefined;
 	let collectedFiles: string[] = [];
 
+	const isIgnored = projectIgnorePredicate(absPath);
 	for (const [ext, exts] of Object.entries(LANG_EXTENSIONS)) {
-		collectedFiles = collectFiles(absPath, exts, MAX_FILES + 1);
+		collectedFiles = collectFiles(absPath, exts, MAX_FILES + 1, isIgnored);
 		if (collectedFiles.length > 0) {
 			extension = ext;
 			break;

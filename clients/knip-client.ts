@@ -12,6 +12,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { isAtOrAboveHomeDir } from "./path-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 
 // --- Types ---
@@ -82,7 +83,10 @@ export class KnipClient {
 	 * `/home/v` caused knip to recurse through every project and balloon
 	 * memory/CPU.
 	 */
-	private resolveProjectRoot(startDir: string): string | null {
+	private resolveProjectRoot(
+		startDir: string,
+		homeDirOverride?: string,
+	): string | null {
 		const markers = [
 			"package.json",
 			"knip.json",
@@ -91,12 +95,19 @@ export class KnipClient {
 			"knip.config.ts",
 		];
 		const boundaries = [".git", ".hg", ".svn"];
-		const homeDir = path.resolve(os.homedir());
-		const initialDir = path.resolve(startDir);
-		let current = initialDir;
+		const homeDir = path.resolve(homeDirOverride ?? os.homedir());
+		let current = path.resolve(startDir);
 		// Safety bound: in practice depths are ~10. This cap just prevents a
 		// pathological symlink loop from hanging the search.
 		for (let depth = 0; depth < 64; depth++) {
+			// Never treat a package/knip config at $HOME — or above it, such as
+			// /home/package.json from a shared parent — as the project for startup
+			// analysis. That escapes the workspace and can make knip scan the whole
+			// home tree from an empty folder (#296/#250).
+			if (isAtOrAboveHomeDir(current, homeDir)) {
+				return null;
+			}
+
 			if (markers.some((m) => fs.existsSync(path.join(current, m)))) {
 				return current;
 			}
@@ -106,13 +117,6 @@ export class KnipClient {
 			// root; walking past their .git boundary can accidentally pick up
 			// ~/package.json and make knip scan the entire home directory.
 			if (boundaries.some((m) => fs.existsSync(path.join(current, m)))) {
-				return null;
-			}
-
-			// Likewise, never treat the user's home-level package.json as the project
-			// for a nested cwd. It is almost always tool/config noise, and scanning
-			// HOME is both slow and crash-prone.
-			if (current === homeDir && initialDir !== homeDir) {
 				return null;
 			}
 

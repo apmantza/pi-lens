@@ -23,6 +23,10 @@ let tmpDir: string;
 
 beforeEach(() => {
 	tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-wsdiag-exclude-"));
+	// Anchor the ignore matcher's git-root resolution AT tmpDir so the walk is
+	// deterministic regardless of whether the OS tmpdir happens to sit under a
+	// stray `.git` ancestor (the `TMPDIR=/var/tmp` gotcha from PR #299).
+	fs.mkdirSync(path.join(tmpDir, ".git"));
 	resetProjectLensConfigCache();
 });
 
@@ -51,6 +55,39 @@ describe("LSP workspace-diagnostics exclusion (#243)", () => {
 		expect(rel).toContain("src/real.ts");
 		expect(rel.some((f) => f.includes("node_modules/"))).toBe(false);
 		expect(rel.some((f) => f.startsWith("dist/"))).toBe(false);
+	});
+
+	it("excludes agent runtime and vendored source dirs via the canonical list", async () => {
+		write("src/real.ts");
+		for (const dir of [
+			".claude/worktrees/session",
+			".codex",
+			".pi/agent",
+			".agents",
+			".worktrees/branch",
+			".pi-lens/cache",
+			"vendor/lib",
+			"third_party/lib",
+			"third-party/lib",
+		]) {
+			write(`${dir}/ignored.ts`);
+		}
+
+		const rel = relUnix(await __collectWorkspaceDiagnosticFilesForTest(tmpDir));
+		expect(rel).toContain("src/real.ts");
+		for (const prefix of [
+			".claude/",
+			".codex/",
+			".pi/",
+			".agents/",
+			".worktrees/",
+			".pi-lens/",
+			"vendor/",
+			"third_party/",
+			"third-party/",
+		]) {
+			expect(rel.some((f) => f.startsWith(prefix))).toBe(false);
+		}
 	});
 
 	it("honors .pi-lens.json ignore patterns (the #243 fix)", async () => {

@@ -1,3 +1,5 @@
+import { normalizeForGuardMatch } from "./host-edit-normalize.js";
+
 export interface TrailingWhitespacePatch {
 	oldText: string;
 	newText?: string;
@@ -12,15 +14,15 @@ export interface TrailingWhitespaceStripResult {
 }
 
 /**
- * Normalize text the same way the read-guard's match-counter does: CRLF →
- * LF, then trim trailing whitespace on each line. Used as the canonical
- * form for comparing oldText against file content.
+ * Normalize text the same way the read-guard's match-counter does — now the
+ * host edit tool's full fuzzy-match space (BOM + lone-CR -> LF, NFKC, smart
+ * quotes/dashes/spaces, trailing-ws trim). Used as the canonical form for
+ * comparing oldText against file content so the autopatch bridge resolves the
+ * same span the host would apply (#257). Kept in lockstep with the gate's
+ * `normalizeContent` and index.ts's `normalizeOldTextForMatch`.
  */
 export function normalizeOldTextForMatch(text: string): string {
-	return normalizeLf(text)
-		.split("\n")
-		.map((line) => line.trimEnd())
-		.join("\n");
+	return normalizeForGuardMatch(text);
 }
 
 /**

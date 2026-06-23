@@ -20,6 +20,11 @@ vi.mock("../../clients/project-diagnostics/cache.js", () => ({
 		projectDiagnosticsMocks.loadProjectDiagnosticsSnapshot,
 	loadProjectDiagnosticsDeltaReport:
 		projectDiagnosticsMocks.loadProjectDiagnosticsDeltaReport,
+	// Identity passthrough — these tests exercise ignore-filtering, not on-disk
+	// staleness (covered in project-diagnostics.test.ts).
+	reconcileProjectDiagnosticsSnapshot: (
+		snapshot: import("../../clients/project-diagnostics/types.js").ProjectDiagnosticsSnapshot,
+	) => ({ snapshot, staleDropped: 0 }),
 }));
 
 // ── Mock widget state ─────────────────────────────────────────────────────────

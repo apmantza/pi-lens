@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	loadProjectDiagnosticsDeltaReport,
 	loadProjectDiagnosticsSnapshot,
+	reconcileProjectDiagnosticsSnapshot,
 	saveProjectDiagnosticsSnapshot,
 	writeProjectDiagnosticsDeltaReport,
 } from "../../clients/project-diagnostics/cache.js";
@@ -122,6 +123,81 @@ describe("project diagnostics cache", () => {
 	});
 });
 
+describe("reconcileProjectDiagnosticsSnapshot (#298 staleness)", () => {
+	function diag(filePath: string) {
+		return {
+			filePath,
+			line: 1,
+			severity: "error" as const,
+			semantic: "blocking" as const,
+			tool: "typescript",
+			runner: "lsp",
+			code: "2307",
+			message: "Cannot find module './reader.ts'",
+			source: "project-scan" as const,
+		};
+	}
+
+	it("drops a diagnostic for a file edited after the scan", () => {
+		const f = path.join(tmp, "reader.ts");
+		fs.writeFileSync(f, "export const countTotal = 1;\n");
+		const snap = snapshot({
+			scannedAt: "2026-01-01T00:00:00.000Z",
+			diagnostics: [diag(f)],
+			filesScanned: 1,
+		});
+		// Edit the file now (mtime >> scannedAt) — the recorded error is stale.
+		fs.writeFileSync(f, "export const countTotal = 2;\nexport const x = 3;\n");
+		const { snapshot: reconciled, staleDropped } =
+			reconcileProjectDiagnosticsSnapshot(snap);
+		expect(reconciled.diagnostics).toHaveLength(0);
+		expect(staleDropped).toBe(1);
+	});
+
+	it("drops a diagnostic for a deleted file", () => {
+		const f = path.join(tmp, "gone.ts");
+		const snap = snapshot({
+			scannedAt: new Date().toISOString(),
+			diagnostics: [diag(f)],
+			filesScanned: 1,
+		});
+		// File never existed on disk (or was deleted after the scan).
+		const { snapshot: reconciled, staleDropped } =
+			reconcileProjectDiagnosticsSnapshot(snap);
+		expect(reconciled.diagnostics).toHaveLength(0);
+		expect(staleDropped).toBe(1);
+	});
+
+	it("keeps a diagnostic for an unchanged file (and returns the same object)", () => {
+		const f = path.join(tmp, "stable.ts");
+		fs.writeFileSync(f, "export const a = 1;\n");
+		// Scan AFTER writing the file, so mtime <= scannedAt → not stale.
+		const snap = snapshot({
+			scannedAt: new Date(Date.now() + 1000).toISOString(),
+			diagnostics: [diag(f)],
+			filesScanned: 1,
+		});
+		const { snapshot: reconciled, staleDropped } =
+			reconcileProjectDiagnosticsSnapshot(snap);
+		expect(reconciled.diagnostics).toHaveLength(1);
+		expect(staleDropped).toBe(0);
+		expect(reconciled).toBe(snap); // no-op returns the original reference
+	});
+
+	it("is fail-safe on an unparseable scannedAt (keeps everything)", () => {
+		const f = path.join(tmp, "missing.ts");
+		const snap = snapshot({
+			scannedAt: "not-a-date",
+			diagnostics: [diag(f)],
+			filesScanned: 1,
+		});
+		const { snapshot: reconciled, staleDropped } =
+			reconcileProjectDiagnosticsSnapshot(snap);
+		expect(reconciled.diagnostics).toHaveLength(1);
+		expect(staleDropped).toBe(0);
+	});
+});
+
 describe("project diagnostics adapters", () => {
 	it("normalizes Knip issues into ProjectDiagnostic records", () => {
 		const [unlisted, unusedExport] = knipIssuesToProjectDiagnostics(tmp, [
@@ -148,6 +224,22 @@ describe("project diagnostics adapters", () => {
 });
 
 describe("scanProjectDiagnostics", () => {
+	it("caps source collection before scanning", async () => {
+		const srcDir = path.join(tmp, "src-cap");
+		fs.mkdirSync(srcDir, { recursive: true });
+		fs.writeFileSync(path.join(srcDir, "a.ts"), "export const a = 1;\n");
+		fs.writeFileSync(path.join(srcDir, "b.ts"), "export const b = 1;\n");
+		fs.writeFileSync(path.join(srcDir, "c.ts"), "export const c = 1;\n");
+
+		const result = await scanProjectDiagnostics({
+			cwd: tmp,
+			tier: "cheap",
+			maxFiles: 2,
+		});
+
+		expect(result.filesScanned).toBe(2);
+	});
+
 	it("runs cheap project scanners and writes a normalized snapshot", async () => {
 		const srcDir = path.join(tmp, "src");
 		fs.mkdirSync(srcDir, { recursive: true });
