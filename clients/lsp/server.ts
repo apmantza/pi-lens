@@ -8,9 +8,10 @@
  */
 
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
-import { access, appendFile, mkdir, stat } from "node:fs/promises";
+import { access, appendFile, mkdir, readdir, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { minimatch } from "minimatch";
 import { isTestMode } from "../env-utils.js";
 import { getGlobalPiLensDir } from "../file-utils.js";
 import { KIND_EXTENSIONS } from "../file-kinds.js";
@@ -578,8 +579,7 @@ async function resolveAndLaunchTreeBinary(
 	}
 
 	const suffix = process.platform === "win32" ? ".exe" : "";
-	const binPath =
-		path.join(bundleDir, ...spec.binRelPath.split("/")) + suffix;
+	const binPath = path.join(bundleDir, ...spec.binRelPath.split("/")) + suffix;
 	try {
 		const proc = await launchLSP(binPath, spec.args, {
 			cwd: spec.cwd,
@@ -788,6 +788,57 @@ export function WorkspacePriorityRoot(
 		PriorityRoot(markerGroups, excludePatterns, process.cwd())(file);
 }
 
+function isPermissionFsError(err: unknown): boolean {
+	const code = (err as { code?: unknown })?.code;
+	return code === "EACCES" || code === "EPERM";
+}
+
+async function markerExists(dir: string, pattern: string): Promise<boolean> {
+	if (!pattern.includes("*")) {
+		try {
+			await stat(path.join(dir, pattern));
+			return true;
+		} catch (err) {
+			if (isPermissionFsError(err)) {
+				logSessionStart(
+					`lsp root marker skipped: permission error stat ${path.join(dir, pattern)}`,
+				);
+			}
+			return false;
+		}
+	}
+
+	const normalized = pattern.replace(/\\/g, "/");
+	const slash = normalized.lastIndexOf("/");
+	const parentPattern = slash >= 0 ? normalized.slice(0, slash) : "";
+	const basenamePattern = slash >= 0 ? normalized.slice(slash + 1) : normalized;
+	if (!basenamePattern) return false;
+	const targetDir = parentPattern
+		? path.join(dir, ...parentPattern.split("/").filter(Boolean))
+		: dir;
+	try {
+		const entries = await readdir(targetDir, { withFileTypes: true });
+		// Match files/symlinks only — a directory named like the marker (e.g. a
+		// `Foo.csproj/` dir) is not a project file. Case-insensitive on win32 to
+		// match the filesystem (and the project ignore matcher), via minimatch.
+		return entries.some(
+			(entry) =>
+				(entry.isFile() || entry.isSymbolicLink()) &&
+				minimatch(entry.name, basenamePattern, {
+					dot: true,
+					nocase: process.platform === "win32",
+				}),
+		);
+	} catch (err) {
+		if (isPermissionFsError(err)) {
+			logSessionStart(
+				`lsp root marker skipped: permission error read ${targetDir}`,
+			);
+		}
+		return false;
+	}
+}
+
 // --- Root Detection Helpers ---
 
 // --- Interactive Install Helper ---
@@ -847,12 +898,9 @@ export function NearestRoot(
 				if (excludePatterns) {
 					let excluded = false;
 					for (const pattern of excludePatterns) {
-						try {
-							await stat(path.join(currentDir, pattern));
+						if (await markerExists(currentDir, pattern)) {
 							excluded = true;
 							break;
-						} catch {
-							/* not found */
 						}
 					}
 					if (excluded) {
@@ -861,14 +909,10 @@ export function NearestRoot(
 					}
 				}
 
-				// Check include patterns
+				// Check include patterns. Exact marker names stay cheap (`stat`), while
+				// glob markers like `*.csproj` match real project filenames (#201).
 				for (const pattern of includePatterns) {
-					try {
-						await stat(path.join(currentDir, pattern));
-						return currentDir;
-					} catch {
-						/* not found */
-					}
+					if (await markerExists(currentDir, pattern)) return currentDir;
 				}
 
 				if (currentDir === stop || currentDir === fsRoot) {
@@ -1720,13 +1764,10 @@ export const CSharpServer: LSPServerInfo = {
 	id: "csharp",
 	name: "csharp-ls",
 	extensions: KIND_EXTENSIONS["csharp"],
-	// NOTE (#201): this has the same per-file-dir fallback trap as rust did, but
-	// can't be fixed the same way yet — `createRootDetector` matches markers by
-	// EXACT filename (`stat(dir/.csproj)`), so `.sln`/`.csproj`/`.slnx` never
-	// match a real `Foo.csproj`/`Foo.sln`. C# root detection therefore relies
-	// entirely on the FileDirRoot fallback today; removing it would disable C#.
-	// Fixing this needs extension/glob marker support first (tracked on #201).
-	root: RootWithFallback(createRootDetector([".sln", ".csproj", ".slnx"])),
+	// No FileDirRoot fallback (#201): csharp-ls is a workspace server and should
+	// not spawn once per source directory before a .sln/.csproj exists. Glob root
+	// markers match real project filenames such as `App.csproj` / `App.sln`.
+	root: createRootDetector(["*.sln", "*.csproj", "*.slnx"]),
 	async spawn(root, options) {
 		const candidates = dotnetToolCandidates("csharp-ls");
 
@@ -1750,7 +1791,7 @@ export const OmniSharpServer = createInteractiveServer({
 	id: "omnisharp",
 	name: "OmniSharp",
 	extensions: KIND_EXTENSIONS["csharp"],
-	root: createRootDetector([".sln", ".csproj", ".slnx"]),
+	root: createRootDetector(["*.sln", "*.csproj", "*.slnx"]),
 	language: "csharp",
 	command: "OmniSharp",
 	args: ["--languageserver"],
@@ -1760,7 +1801,7 @@ export const FSharpServer: LSPServerInfo = {
 	id: "fsharp",
 	name: "FSAutocomplete",
 	extensions: KIND_EXTENSIONS["fsharp"],
-	root: RootWithFallback(createRootDetector([".sln", ".fsproj"])),
+	root: createRootDetector(["*.sln", "*.fsproj"]),
 	async spawn(root, options) {
 		// fsautocomplete is a `dotnet tool` (#241), exactly like csharp-ls: prefer a
 		// managed/.dotnet-tools copy, else `dotnet tool install` when the .NET SDK

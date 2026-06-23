@@ -18,6 +18,7 @@ import type { CacheManager } from "../clients/cache-manager.js";
 import {
 	loadProjectDiagnosticsDeltaReport,
 	loadProjectDiagnosticsSnapshot,
+	reconcileProjectDiagnosticsSnapshot,
 } from "../clients/project-diagnostics/cache.js";
 import { scanProjectDiagnostics } from "../clients/project-diagnostics/scanner.js";
 import type {
@@ -513,7 +514,13 @@ async function getProjectDiagnosticsSnapshotForFullMode(
 		});
 	}
 	if (shouldUseCachedProjectDiagnostics(options.refreshRunners)) {
-		return loadProjectDiagnosticsSnapshot(cwd);
+		// The cached snapshot is a cross-session cache; drop diagnostics for files
+		// edited/deleted since the scan so a stale entry isn't replayed (#298). A
+		// fresh scan (above) is current by construction and needs no reconcile.
+		const cached = loadProjectDiagnosticsSnapshot(cwd);
+		return cached
+			? reconcileProjectDiagnosticsSnapshot(cached).snapshot
+			: undefined;
 	}
 	return undefined;
 }

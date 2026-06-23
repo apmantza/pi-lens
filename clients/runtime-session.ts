@@ -1200,16 +1200,23 @@ export async function handleSessionStart(
 					).catch((err) =>
 						dbg(`session_start lsp-warm: unhandled error: ${err}`),
 					);
-				} else {
+				} else if (startupScan.canWarmCaches) {
 					// No explicit warmFiles — pre-spawn just the dominant language's
 					// LSP so the first edit doesn't pay the cold-spawn stall (#203).
+					// Only do the auto-discovery warm on guarded real project roots; on
+					// home/no-project/too-large roots this source walk can become the same
+					// delayed background tree scan that the startup-scan guard prevents.
 					igniteDominantLanguageWarm(
-						cwd,
+						analysisRoot,
 						runtime,
 						sessionGeneration,
 						dbg,
 					).catch((err) =>
 						dbg(`session_start lsp-warm: unhandled dominant error: ${err}`),
+					);
+				} else {
+					dbg(
+						`session_start lsp-warm: skipping dominant-language auto-warm (${startupScan.reason ?? "unknown"})`,
 					);
 				}
 			});

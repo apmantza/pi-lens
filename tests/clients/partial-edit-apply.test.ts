@@ -84,4 +84,35 @@ describe("applyPartiallyApplicableEdits", () => {
 			env.cleanup();
 		}
 	});
+
+	it("uses host first-occurrence-wins ending detection on mixed files (#257)", async () => {
+		const env = setupTestEnvironment("partial-apply-mixed-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			// First newline is LF, a later one is CRLF. The old `includes("\r\n")`
+			// rule would rewrite the whole file as CRLF; the host's detectLineEnding
+			// resolves LF, so untouched lines keep their LF endings.
+			fs.writeFileSync(
+				filePath,
+				"const a = 1;\nconst b = 2;\r\nconst c = 3;\n",
+			);
+
+			await applyPartiallyApplicableEdits({
+				filePath,
+				edits: [
+					{
+						oldText: "const c = 3;",
+						newText: "const c = 30;",
+						originalIndex: 0,
+					},
+				],
+			});
+
+			expect(fs.readFileSync(filePath, "utf-8")).toBe(
+				"const a = 1;\nconst b = 2;\nconst c = 30;\n",
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
 });
