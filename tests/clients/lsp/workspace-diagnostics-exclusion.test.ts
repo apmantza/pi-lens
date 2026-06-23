@@ -23,6 +23,10 @@ let tmpDir: string;
 
 beforeEach(() => {
 	tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-wsdiag-exclude-"));
+	// Anchor the ignore matcher's git-root resolution AT tmpDir so the walk is
+	// deterministic regardless of whether the OS tmpdir happens to sit under a
+	// stray `.git` ancestor (the `TMPDIR=/var/tmp` gotcha from PR #299).
+	fs.mkdirSync(path.join(tmpDir, ".git"));
 	resetProjectLensConfigCache();
 });
 
