@@ -1,0 +1,21 @@
+id: no-raise-not-implemented
+valid:
+  - |
+    def f():
+        raise ValueError("oops")
+  - |
+    def f():
+        raise CustomError("oops")
+  - |
+    def f():
+        return 1
+invalid:
+  - |
+    def f():
+        raise NotImplementedError
+  - |
+    def f():
+        raise NotImplementedError("TODO")
+  - |
+    def f():
+        raise NotImplementedError()

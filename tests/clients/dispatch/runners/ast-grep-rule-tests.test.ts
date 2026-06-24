@@ -80,14 +80,22 @@ d("shipped ast-grep rules have fixture-style valid/invalid tests", () => {
 			return { id, language };
 		})
 		.filter((r): r is RuleEntry => Boolean(r));
-	// TS-family = explicit TypeScript/TSX (any case) OR unspecified language
-	// (the rule schema says unspecified defaults to TypeScript). Excludes JS,
-	// Python, Rust, Go — those need their own fixture batches in a follow-up.
-	const isTsFamily = (r: RuleEntry) => {
+	// All language families get fixture coverage (TS, TSX, JS, Python, Rust, Go).
+	// The rule schema says unspecified language defaults to TypeScript; the
+	// remaining families are spelled out explicitly.
+	const ALL_LANGUAGES = new Set([
+		"typescript",
+		"tsx",
+		"javascript",
+		"python",
+		"rust",
+		"go",
+	]);
+	const isCoveredLanguage = (r: RuleEntry) => {
 		const l = (r.language || "TypeScript").toLowerCase();
-		return l === "typescript" || l === "tsx";
+		return ALL_LANGUAGES.has(l);
 	};
-	const tsRuleIds = new Set(rules.filter(isTsFamily).map((r) => r.id));
+	const coveredRuleIds = new Set(rules.filter(isCoveredLanguage).map((r) => r.id));
 	const ruleIds = new Set(rules.map((r) => r.id));
 
 	it("every test file's `id:` matches a real rule in rules/", () => {
@@ -108,22 +116,23 @@ d("shipped ast-grep rules have fixture-style valid/invalid tests", () => {
 		expect(orphans, orphans.join("\n")).toEqual([]);
 	});
 
-	it("every TS-family rule has a corresponding -test.yml fixture", () => {
-		// Contract: every TypeScript-language rule ships a fixture file
-		// exercising its `valid:`/`invalid:` cases. JS/TSX/Python/Rust/Go
-		// fixtures are deliberately out of scope here — they belong in
-		// follow-up batches (each gets its own language-specific
-		// contract). A missing fixture for a TS rule means the rule's
-		// behavioural contract is untested, which is exactly what this
-		// guard is meant to catch.
+	it("every rule (TS/TSX/JS/Python/Rust/Go) has a corresponding -test.yml fixture", () => {
+		// Contract: every shipped rule (across all supported language families)
+		// ships a fixture file exercising its `valid:`/`invalid:` cases. A
+		// missing fixture for a rule means the rule's behavioural contract is
+		// untested, which is exactly what this guard is meant to catch.
+		// Language-tagged family constraint: rules without a language
+		// declaration default to TypeScript; rules with a language we
+		// don't support yet (e.g. Java/Ruby/...) are skipped — adding
+		// them to the contract is a follow-up when their parser is wired in.
 		const missing: string[] = [];
-		for (const id of tsRuleIds) {
+		for (const id of coveredRuleIds) {
 			const file = path.join(TEST_DIR, `${id}-test.yml`);
 			if (!fs.existsSync(file)) missing.push(id);
 		}
 		expect(
 			missing,
-			`${missing.length} TS-family rule(s) missing fixture tests:\n${missing.join("\n")}`,
+			`${missing.length} rule(s) missing fixture tests:\n${missing.join("\n")}`,
 		).toEqual([]);
 	});
 
@@ -156,26 +165,29 @@ d("shipped ast-grep rules have fixture-style valid/invalid tests", () => {
 			(m) => m[1],
 		);
 		// CLI-vs-napi JSX framework gap: `ast-grep test` 0.42.0's pattern
-		// matcher doesn't emit jsx_element/jsx_attribute/etc. kinds, so
-		// TSX rules that depend on them can't be exercised by the CLI
-		// test framework. The napi engine (production dispatch path)
-		// fires them correctly; `ast-grep-rule-validity.test.ts` accepts
-		// the rule YAML; and napi findAll on synthetic TSX fixtures
-		// matches. The remaining failures are therefore *not* rule bugs
-		// — they're CLI tooling gaps. Filter them out so the wrapper
-		// reports only real rule regressions.
+		// matcher doesn't emit jsx_element/jsx_attribute/etc. kinds AT
+		// ALL — so any rule with JSX patterns (TSX OR JS-in-TSX
+		// files like React `.jsx`/`.tsx`/`.js`) can't be exercised by
+		// the CLI test framework. The napi engine (production
+		// dispatch path) fires them correctly; `ast-grep-rule-validity.test.ts`
+		// accepts the rule YAML; and napi findAll on synthetic JSX
+		// fixtures matches. The remaining failures are therefore *not*
+		// rule bugs — they're CLI tooling gaps. Filter them out so the
+		// wrapper reports only real rule regressions.
 		const cliFrameworkGap = new Set(
 			Array.from(ruleIds).filter((id) => {
 				const ruleFile = path.join(RULES_DIR, `${id}.yml`);
 				if (!fs.existsSync(ruleFile)) return false;
 				const text = fs.readFileSync(ruleFile, "utf8");
 				const lang = text.match(/^language:\s*(.+?)\s*$/m)?.[1]?.toLowerCase();
-				// Only TSX/tsx language, AND the rule has a rule.body
-				// that mentions jsx_* kinds (heuristic via grep on the
-				// file text). JSX rules that don't use JSX kinds work
-				// fine in the CLI.
-				if (lang !== "tsx") return false;
-				return /jsx_/.test(text);
+				// Catch TSX/tsx language rules, AND JS rules that have
+				// JSX-shaped patterns (`<a $$$>$$$</a>` style) since
+				// they hit the same CLI matcher gap. We detect JSX usage
+				// heuristically via `jsx_` kinds OR a `<`/tag-shaped
+				// pattern in the rule body.
+				if (lang === "tsx") return true;
+				if (lang !== "javascript") return false;
+				return /jsx_/.test(text) || /<[A-Za-z][A-Za-z0-9]*\s+\$/.test(text);
 			}),
 		);
 		const realFailures = failingRules.filter(

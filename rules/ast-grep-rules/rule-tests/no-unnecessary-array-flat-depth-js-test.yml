@@ -1,0 +1,8 @@
+id: no-unnecessary-array-flat-depth-js
+valid:
+  - 'arr.flat()'
+  - 'arr.flat(Infinity)'
+  - 'arr.flat(2)'
+invalid:
+  - 'arr.flat(1)'
+  - 'arr.flat( 1 )'

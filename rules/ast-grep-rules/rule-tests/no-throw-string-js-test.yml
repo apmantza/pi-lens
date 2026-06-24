@@ -1,0 +1,10 @@
+id: no-throw-string-js
+valid:
+  - 'throw new Error("x")'
+  - 'throw err'
+  - 'throw "msg with " + varName'
+  - 'throw `template`'
+invalid:
+  - 'throw "oops"'
+  - 'throw "literal"'
+  - 'throw "another"'

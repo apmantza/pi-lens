@@ -1,0 +1,8 @@
+id: prefer-array-find-js
+valid:
+  - 'const x = arr.find(fn)'
+  - 'const x = arr.filter(fn)'
+  - 'const x = arr[0]'
+invalid:
+  - 'const x = arr.filter(fn)[0]'
+  - 'const x = arr.filter(fn).shift()'

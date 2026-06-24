@@ -1,0 +1,8 @@
+id: no-useless-promise-resolve-reject-js
+valid:
+  - 'Promise.resolve(value)'
+  - 'Promise.reject(err)'
+  - 'return value'
+invalid:
+  - 'Promise.resolve(await foo())'
+  - 'Promise.reject(await bar())'

@@ -1,0 +1,10 @@
+id: consistent-existence-index-check-js
+valid:
+  - 'arr.includes(x)'
+  - 'arr.indexOf(x) > 0'
+  - 'arr.indexOf(x)'
+invalid:
+  - 'arr.indexOf(x) !== -1'
+  - 'arr.indexOf(x) === -1'
+  - 'arr.indexOf(x) >= 0'
+  - 'arr.indexOf(x) < 0'

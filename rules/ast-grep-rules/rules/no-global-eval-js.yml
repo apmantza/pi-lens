@@ -2,12 +2,17 @@ id: no-global-eval-js
 language: JavaScript
 message: "Avoid dynamic code execution (eval/Function/string timers)"
 severity: error
+note: |
+  The original rule's `Function($$$ARGS)` pattern only matched bare
+  `Function(...)` calls — not `new Function(...)` (the more common
+  modern usage). Added a `new Function($$$ARGS)` variant.
 metadata:
   category: security
 rule:
   any:
     - pattern: eval($CODE)
     - pattern: Function($$$ARGS)
+    - pattern: new Function($$$ARGS)
     - pattern: setTimeout('$CODE', $$$REST)
     - pattern: setTimeout("$CODE", $$$REST)
     - pattern: setInterval('$CODE', $$$REST)

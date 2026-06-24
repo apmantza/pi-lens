@@ -1,0 +1,12 @@
+id: no-open-redirect-js
+valid:
+  - 'const url = "/safe"'
+invalid:
+  - 'window.location = "/login"'
+  - 'res.redirect("/dashboard")'
+  - 'window.location = req.query.next'
+  - 'window.location.href = req.query.next'
+  - 'location.href = userInput'
+  - 'res.redirect(userInput)'
+  - 'response.redirect(userInput)'
+  - 'window.open(req.query.url, "_blank")'

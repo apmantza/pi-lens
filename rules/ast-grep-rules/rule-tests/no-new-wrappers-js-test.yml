@@ -1,0 +1,9 @@
+id: no-new-wrappers-js
+valid:
+  - 'const s = "hi"'
+  - 'const n = 0'
+  - 'const b = true'
+invalid:
+  - 'const s = new String("hi")'
+  - 'const n = new Number(0)'
+  - 'const b = new Boolean(true)'

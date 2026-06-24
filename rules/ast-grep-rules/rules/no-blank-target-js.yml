@@ -2,11 +2,19 @@ id: no-blank-target-js
 language: JavaScript
 message: "Links with target=\"_blank\" must include rel to prevent opener leaks"
 severity: warning
+note: |
+  The original rule's pattern was `<a $$$PROPS>$$$CHILD</a>` with two
+  named multi-metavars (`$$$PROPS` for attributes, `$$$CHILD` for
+  children). ast-grep 0.42.0's pattern matcher has trouble with two
+  named multi-metavars in the same JSX pattern — the named `$$$CHILD`
+  fails to match the JSX children. Switched to anonymous `$$$` (which
+  the matcher handles fine) for the children. Functionally equivalent
+  since we don't reference `$$$CHILD` elsewhere in the rule.
 metadata:
   category: security
 rule:
   all:
-    - pattern: <a $$$PROPS>$$$CHILD</a>
+    - pattern: <a $$$PROPS>$$$</a>
     - has:
         pattern: target="_blank"
     - not:

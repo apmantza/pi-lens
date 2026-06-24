@@ -1,0 +1,8 @@
+id: no-new-symbol-js
+valid:
+  - 'const s = Symbol("foo")'
+  - 'const s = Symbol()'
+  - 'Symbol.iterator'
+invalid:
+  - 'const s = new Symbol("foo")'
+  - 'new Symbol()'

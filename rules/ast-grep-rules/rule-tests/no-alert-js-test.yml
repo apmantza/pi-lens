@@ -1,0 +1,7 @@
+id: no-alert-js
+valid:
+  - 'console.log("hello")'
+  - 'window.alert("hi")'
+invalid:
+  - 'alert("hello")'
+  - 'alert(1, 2, 3)'

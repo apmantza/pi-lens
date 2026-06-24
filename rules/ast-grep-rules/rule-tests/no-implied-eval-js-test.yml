@@ -1,0 +1,12 @@
+id: no-implied-eval-js
+valid:
+  - "setTimeout(() => doThing(), 100)"
+  - "setTimeout(fn, 100)"
+  - "setInterval(fn, 1000)"
+  - 'setTimeout("doThing()")'
+  - "setTimeout('doThing()')"
+invalid:
+  - 'setTimeout("doThing()", 100)'
+  - "setTimeout('doThing()', 100)"
+  - 'setInterval("doThing()", 1000)'
+  - "setInterval('doThing()', 1000)"

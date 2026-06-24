@@ -1,0 +1,17 @@
+id: no-global-eval-js
+valid:
+  - 'setTimeout(() => doThing(), 100)'
+  - 'setTimeout(fn, 100)'
+  - 'setInterval(fn, 1000)'
+  - 'Math.random()'
+  - 'JSON.parse("{}")'
+invalid:
+  - 'eval("x = 1")'
+  - 'eval(userInput)'
+  - 'eval("x = " + userInput)'
+  - 'Function("return 1")'
+  - 'Function("return " + userInput)'
+  - 'new Function("return 1")'
+  - 'new Function("return " + userInput)'
+  - 'setTimeout("doThing()", 100)'
+  - 'setInterval("doThing()", 1000)'

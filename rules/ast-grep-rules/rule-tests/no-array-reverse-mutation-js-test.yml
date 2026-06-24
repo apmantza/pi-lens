@@ -1,0 +1,9 @@
+id: no-array-reverse-mutation-js
+valid:
+  - 'const b = a.toReversed()'
+invalid:
+  - 'a.reverse()'
+  - 'arr.reverse()'
+  - 'const b = [...a].reverse()'
+  - 'const b = a.slice().reverse()'
+  - 'arr.slice().reverse()'

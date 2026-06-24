@@ -1,0 +1,9 @@
+id: prefer-number-properties-js
+valid:
+  - 'Number.isNaN(x)'
+  - 'Number.isFinite(x)'
+  - 'isNaN'
+invalid:
+  - 'isNaN(x)'
+  - 'isFinite(x)'
+  - 'isNaN(foo(bar))'

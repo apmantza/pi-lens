@@ -1,0 +1,8 @@
+id: no-await-expression-member-js
+valid:
+  - 'const x = await foo.bar'
+  - 'const x = (await import("./m.js")).default'
+  - 'const x = foo.bar'
+invalid:
+  - 'const x = (await foo).bar'
+  - 'const x = (await getThing()).value'

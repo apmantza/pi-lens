@@ -1,0 +1,25 @@
+id: redundant-unsafe-function
+valid:
+  - |
+    unsafe fn f() -> *const i32 {
+        unsafe {
+            let ptr = 0x1234 as *const i32;
+            ptr
+        }
+    }
+  - |
+    fn f() -> i32 { 42 }
+invalid:
+  - |
+    unsafe fn f() {
+        let x = 1;
+    }
+  - |
+    unsafe fn redundant_unsafe() {
+        println!("no unsafe block");
+    }
+  - |
+    unsafe fn proper_unsafe() -> *const i32 {
+        let ptr = 0x1234 as *const i32;
+        ptr
+    }

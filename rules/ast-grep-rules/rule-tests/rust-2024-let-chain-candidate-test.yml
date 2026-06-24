@@ -1,0 +1,27 @@
+id: rust-2024-let-chain-candidate
+valid:
+  - |
+    fn f(x: i32) {
+        if x > 0 { foo(); }
+    }
+  - |
+    fn f(x: i32) {
+        if x > 0 { foo(); } else { bar(); }
+    }
+  - |
+    fn f(opt: Option<i32>) {
+        if let Some(y) = opt { foo(); bar(); }
+    }
+invalid:
+  - |
+    fn f(opt: Option<i32>) {
+        if let Some(y) = opt {
+            if y > 0 { foo(); }
+        }
+    }
+  - |
+    fn f(x: i32, opt: Option<i32>) {
+        if x > 0 {
+            if let Some(y) = opt { foo(); }
+        }
+    }

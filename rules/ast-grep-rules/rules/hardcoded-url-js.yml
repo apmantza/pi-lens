@@ -1,12 +1,17 @@
 id: hardcoded-url-js
-language: JavaScript
+language: TypeScript
 message: "Hardcoded URL — use config or environment variable"
 severity: warning
 note: |
   URLs should come from configuration, not hardcoded in source.
   Use environment variables or a config file.
+  The original `$X = $URL` pattern only matched at the lexical-declaration
+  level for some shapes; using a regex on `variable_declarator` (the
+  inner `name = value` node) catches all const/let/var URL assignments
+  regardless of the surrounding keyword.
 rule:
-  all:
-    - pattern: $X = $URL
-    - has:
-        regex: "^https?://"
+  any:
+    - kind: variable_declarator
+      regex: '"https?://'
+    - kind: assignment_expression
+      regex: '"https?://'

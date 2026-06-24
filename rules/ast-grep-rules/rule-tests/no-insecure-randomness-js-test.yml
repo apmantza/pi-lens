@@ -1,0 +1,13 @@
+id: no-insecure-randomness-js
+valid:
+  - 'crypto.getRandomValues(buf)'
+  - 'Math.random()'
+  - 'const x = Math.random()'
+  - 'genToken(Math.random())'
+  - 'createKey(Math.random())'
+invalid:
+  - 'const token = Math.random()'
+  - 'const secret = Math.random()'
+  - 'const key = Math.random()'
+  - 'const nonce = Math.random()'
+  - 'const salt = Math.random()'

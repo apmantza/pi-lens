@@ -1,0 +1,13 @@
+id: unchecked-throwing-call-js
+valid:
+  - |
+    try { JSON.parse(raw) } catch (e) {}
+  - |
+    try { new URL(s) } catch (e) {}
+  - |
+    try { execSync(cmd) } catch (e) {}
+invalid:
+  - 'JSON.parse(raw)'
+  - 'new URL(s)'
+  - 'execSync(cmd)'
+  - 'execSync(cmd, opts)'

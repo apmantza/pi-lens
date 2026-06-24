@@ -1,0 +1,9 @@
+id: jwt-no-verify-js
+valid:
+  - 'jwt.verify(token, secret)'
+  - 'jwt.decode(token)'
+  - 'jwt.decode(token, { complete: true })'
+invalid:
+  - 'jwt.decode(token, { noVerify: true })'
+  - 'jwt.verify(token, { ignoreExpiration: true })'
+  - 'jwt.verify(token, { ignoreNotBefore: true })'

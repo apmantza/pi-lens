@@ -1,0 +1,10 @@
+id: prefer-math-min-max-js
+valid:
+  - 'Math.max(a, b)'
+  - 'Math.min(a, b)'
+  - 'a > b ? c : d'
+invalid:
+  - 'a > b ? a : b'
+  - 'a >= b ? a : b'
+  - 'a < b ? a : b'
+  - 'a <= b ? a : b'

@@ -1,0 +1,9 @@
+id: no-discarded-error-js
+valid:
+  - 'throw new Error("x")'
+  - 'const e = new Error("x")'
+  - 'throw new TypeError("x")'
+invalid:
+  - 'new Error("x")'
+  - 'new TypeError("x")'
+  - 'new RangeError("x")'

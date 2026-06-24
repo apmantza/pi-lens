@@ -1,0 +1,10 @@
+id: no-single-promise-in-promise-methods-js
+valid:
+  - 'await p'
+  - 'Promise.all([p1, p2])'
+  - 'await Promise.all([p1, p2])'
+invalid:
+  - 'Promise.all([p])'
+  - 'Promise.allSettled([p])'
+  - 'Promise.race([p])'
+  - 'Promise.any([p])'
