@@ -1,0 +1,16 @@
+id: switch-without-default
+valid:
+  - |
+    switch (x) {
+      case 1: break;
+      default: break;
+    }
+  - |
+    switch (x) { case 1: break; default: break; }
+invalid:
+  - |
+    switch (x) {
+      case 1: break;
+    }
+  - |
+    switch (x) { case 1: break; }

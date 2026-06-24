@@ -1,0 +1,11 @@
+id: prefer-keyboard-event-key
+valid:
+  - 'e.key'
+  - 'e.target'
+  - 'e.value'
+invalid:
+  - 'e.keyCode'
+  - 'evt.keyCode'
+  - 'e.which'
+  - 'event.which'
+  - 'e.keyCode.toString()'

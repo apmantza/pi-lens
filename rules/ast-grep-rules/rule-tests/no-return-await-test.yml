@@ -1,0 +1,12 @@
+id: no-return-await
+valid:
+  - 'return foo()'
+  - 'return p'
+  - |
+    try { return await foo() } catch (e) {}
+invalid:
+  - 'return await foo()'
+  - |
+    async function f() { return await foo() }
+  - |
+    function g() { return await bar() }

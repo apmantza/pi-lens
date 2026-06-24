@@ -1,0 +1,10 @@
+id: no-mutable-export
+valid:
+  - 'export const x = 1'
+  - 'export function f() {}'
+  - 'export class C {}'
+invalid:
+  - 'export let x = 1'
+  - 'export var x = 1'
+  - |
+    export let count = 0

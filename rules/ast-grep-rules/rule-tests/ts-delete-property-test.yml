@@ -1,0 +1,8 @@
+id: ts-delete-property
+valid:
+  - 'obj.prop = undefined'
+  - 'delete obj["prop"]'
+  - 'const { x, ...rest } = obj'
+invalid:
+  - 'delete obj.prop'
+  - 'delete foo.bar'

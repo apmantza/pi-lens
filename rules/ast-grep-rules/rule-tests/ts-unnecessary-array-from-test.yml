@@ -1,0 +1,8 @@
+id: ts-unnecessary-array-from
+valid:
+  - 'for (const x of iter) {}'
+  - 'Array.from(iter)'
+invalid:
+  - 'for (const x of Array.from(set)) {}'
+  - 'for (const x of Array.from(set)) { use(x) }'
+  - 'for (const x of Array.from(map.keys())) { foo(x) }'

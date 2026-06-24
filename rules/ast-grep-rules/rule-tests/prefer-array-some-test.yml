@@ -1,0 +1,9 @@
+id: prefer-array-some
+valid:
+  - 'arr.some(fn)'
+  - 'arr.filter(fn).length === 0'
+  - 'arr.filter(fn).length > 5'
+invalid:
+  - 'arr.filter(fn).length > 0'
+  - 'arr.filter(fn).length !== 0'
+  - 'arr.filter(fn).length >= 1'

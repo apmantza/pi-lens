@@ -1,0 +1,8 @@
+id: ts-array-every-some
+valid:
+  - 'arr.every(Boolean)'
+  - 'arr.map(fn)'
+  - 'arr.map(fn).every(predicate)'
+invalid:
+  - 'arr.map(fn).every(Boolean)'
+  - 'arr.map(x => x.prop).every(Boolean)'

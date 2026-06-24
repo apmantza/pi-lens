@@ -1,0 +1,8 @@
+id: ts-object-hasown-check
+valid:
+  - 'Object.hasOwn(obj, key)'
+  - 'Object.prototype.hasOwnProperty.call(obj, key)'
+  - 'obj.hasOwnProperty'  # accessing the method, not calling
+invalid:
+  - 'obj.hasOwnProperty(key)'
+  - 'foo.hasOwnProperty(bar)'

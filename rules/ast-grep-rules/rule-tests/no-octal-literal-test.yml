@@ -1,0 +1,8 @@
+id: no-octal-literal
+valid:
+  - 'const n = 123'
+  - 'const n = 0o123'
+  - 'const n = 0'
+invalid:
+  - 'const n = 0123'
+  - 'const n = 077'

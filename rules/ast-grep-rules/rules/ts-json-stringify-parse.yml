@@ -1,10 +1,17 @@
 id: ts-json-stringify-parse
 language: typescript
 severity: warning
-message: JSON.parse(JSON.stringify(x)) is noisy; use structuredClone or copy properly
+message: >-
+  JSON.parse(JSON.stringify(x)) is noisy; use structuredClone or copy
+  properly
 metadata:
   weight: 3
   category: slop
 rule:
   kind: call_expression
-  pattern: "JSON.parse(JSON.stringify($X))"
+  # Both forms: no-options (`JSON.parse(JSON.stringify(x))`) and with
+  # optional replacer/space args (`JSON.parse(JSON.stringify(x, r, 2))`).
+  # The `, $$$REST` tail matches the optional replacer + space args.
+  any:
+    - pattern: "JSON.parse(JSON.stringify($X))"
+    - pattern: "JSON.parse(JSON.stringify($X, $$$REST))"

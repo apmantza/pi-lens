@@ -1,0 +1,9 @@
+id: ts-void-zero
+valid:
+  - 'undefined'
+  - 'void x'
+  - 'void 1'
+invalid:
+  - 'void 0'
+  - 'const x = void 0'
+  - 'return void 0'

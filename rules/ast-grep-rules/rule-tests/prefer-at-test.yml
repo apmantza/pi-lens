@@ -1,0 +1,8 @@
+id: prefer-at
+valid:
+  - 'arr.at(-1)'
+  - 'arr[0]'
+  - 'arr[arr.length - 2]'
+invalid:
+  - 'arr[arr.length - 1]'
+  - 'str[str.length - 1]'

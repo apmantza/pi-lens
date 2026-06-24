@@ -1,0 +1,8 @@
+id: ts-unnecessary-array-concat
+valid:
+  - 'arr.push(item)'
+  - 'arr.concat([1, 2, 3])'
+  - 'arr.concat([item, other])'
+invalid:
+  - 'arr.concat([item])'
+  - 'arr.concat(["x"])'

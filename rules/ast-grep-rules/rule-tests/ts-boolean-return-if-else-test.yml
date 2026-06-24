@@ -1,0 +1,13 @@
+id: ts-boolean-return-if-else
+valid:
+  - |
+    function f() { return cond; }
+  - |
+    function f() { if (cond) { doA(); return true; } return false; }
+  - |
+    function f() { if (cond) return true; }
+invalid:
+  - |
+    function f() { if (cond) { return true; } else { return false; } }
+  - |
+    function f() { if (cond) { return false; } else { return true; } }

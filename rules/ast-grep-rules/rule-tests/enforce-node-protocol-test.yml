@@ -1,0 +1,8 @@
+id: enforce-node-protocol
+valid:
+  - 'import { readFile } from "node:fs"'
+  - 'import { join } from "node:path"'
+invalid:
+  - 'import { readFile } from "fs"'
+  - 'import { join } from "path"'
+  - 'import * as http from "http"'

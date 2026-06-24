@@ -1,0 +1,9 @@
+id: strict-inequality
+valid:
+  - 'a !== b'
+  - 'a === b'
+  - 'a < b'
+invalid:
+  - 'a != b'
+  - 'a != "x"'
+  - '0 != x'

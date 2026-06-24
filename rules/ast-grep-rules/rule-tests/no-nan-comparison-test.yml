@@ -1,0 +1,11 @@
+id: no-nan-comparison
+valid:
+  - 'Number.isNaN(x)'
+  - 'isNaN(x)'
+  - 'x === 1'
+invalid:
+  - 'x === NaN'
+  - 'NaN === x'
+  - 'x !== NaN'
+  - 'x == NaN'
+  - 'NaN != x'
