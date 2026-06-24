@@ -1,3 +1,14 @@
+# DISABLED (no issue): rule fires on every Python class with both
+# a `def` method and a `self.X =` assignment, because ast-grep
+# patterns can't compare two metavariables for case-insensitive
+# equality (the `method name` vs `attribute name` case-insensitive
+# match that SonarCloud S1845 requires). On PostHog the rule fires
+# 2,554 times — almost every class triggers it. A proper fix
+# would require either (a) cross-node name comparison outside of
+# ast-grep's pattern matcher, or (b) a Python-specific type-aware
+# analyzer (mypy/pyright). Keeping the rule and fixture in
+# rules-disabled/ so the design intent is documented and a future
+# implementation can pick it up.
 id: no-method-field-name-collision
 language: Python
 message: "Methods and field names should not differ only by capitalization"
