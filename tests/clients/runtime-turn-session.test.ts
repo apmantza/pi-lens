@@ -686,3 +686,58 @@ describe("turn_end unified secret surfacing", () => {
 		}
 	});
 });
+
+// ── License-risk advisory (#131 Mode 4) ───────────────────────────────────────
+
+describe("turn_end license-risk surfacing", () => {
+	it("surfaces cached trivy license findings as an advisory", async () => {
+		const env = setupTestEnvironment("pi-lens-license-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId: "lic-session" });
+			const cacheManager = new CacheManager(false);
+
+			const file = path.join(env.tmpDir, "src/a.ts");
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			fs.writeFileSync(file, "export const x = 1;\n");
+			cacheManager.addModifiedRange(
+				file,
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+				"lic-session",
+			);
+
+			cacheManager.writeCache(
+				"trivy",
+				{
+					success: true,
+					scannedAt: "",
+					findings: [],
+					secrets: [],
+					licenses: [
+						{
+							license: "GPL-3.0",
+							pkgName: "leftpad",
+							severity: "HIGH",
+							category: "restricted",
+						},
+					],
+				},
+				env.tmpDir,
+			);
+
+			await handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, { ctxCwd: env.tmpDir }),
+			);
+
+			const content =
+				consumeTurnEndFindings(cacheManager, env.tmpDir)?.messages?.[0]
+					?.content ?? "";
+			expect(content).toContain("Dependency license risk");
+			expect(content).toContain("leftpad — GPL-3.0 (HIGH, restricted)");
+		} finally {
+			env.cleanup();
+		}
+	});
+});
