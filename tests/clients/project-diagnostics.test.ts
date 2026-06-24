@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	loadProjectDiagnosticsDeltaReport,
 	loadProjectDiagnosticsSnapshot,
+	PROJECT_DIAGNOSTICS_CACHE_VERSION,
 	reconcileProjectDiagnosticsSnapshot,
 	saveProjectDiagnosticsSnapshot,
 	writeProjectDiagnosticsDeltaReport,
@@ -35,7 +36,7 @@ function snapshot(
 	overrides: Partial<ProjectDiagnosticsSnapshot> = {},
 ): ProjectDiagnosticsSnapshot {
 	return {
-		version: 1,
+		version: PROJECT_DIAGNOSTICS_CACHE_VERSION,
 		cwd: tmp,
 		tier: "cheap",
 		scannedAt: "2026-01-01T00:00:00.000Z",
@@ -50,7 +51,7 @@ function deltaReport(
 	overrides: Partial<ProjectDiagnosticsDeltaReport> = {},
 ): ProjectDiagnosticsDeltaReport {
 	return {
-		version: 1,
+		version: PROJECT_DIAGNOSTICS_CACHE_VERSION,
 		cwd: tmp,
 		generatedAt: "2026-01-01T00:00:00.000Z",
 		sessionId: "session-1",
@@ -89,7 +90,7 @@ describe("project diagnostics cache", () => {
 
 	it("persists delta reports", () => {
 		const report = {
-			version: 1,
+			version: PROJECT_DIAGNOSTICS_CACHE_VERSION,
 			cwd: tmp,
 			generatedAt: "2026-01-01T00:00:00.000Z",
 			sessionId: "session-1",
@@ -275,5 +276,55 @@ describe("scanProjectDiagnostics", () => {
 		expect(loadProjectDiagnosticsSnapshot(tmp)?.diagnostics.length).toBe(
 			result.diagnostics.length,
 		);
+	});
+
+	it("runs ast-grep-napi project-wide without the ast-grep binary (#308)", async () => {
+		const srcDir = path.join(tmp, "src");
+		fs.mkdirSync(srcDir, { recursive: true });
+		// `alert($$$ARGS)` is the shipped `no-alert` rule — a clean, suppression-free
+		// match that exercises the bundled napi engine (no binary involved).
+		fs.writeFileSync(
+			path.join(srcDir, "ui.ts"),
+			'export function notify() { alert("hi"); }\n',
+		);
+
+		const result = await scanProjectDiagnostics({
+			cwd: tmp,
+			tier: "cheap",
+			maxFiles: 10,
+		});
+
+		expect(result.runners).toContain("ast-grep-napi");
+		expect(result.diagnostics).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					filePath: path.join(srcDir, "ui.ts"),
+					runner: "ast-grep-napi",
+					tool: "ast-grep-napi",
+					rule: "no-alert",
+					source: "project-scan",
+				}),
+			]),
+		);
+	});
+
+	it("excludes ignored/excluded files from the ast-grep scan (#308)", async () => {
+		// node_modules is a canonical excluded dir — its violations must not surface.
+		const vendored = path.join(tmp, "node_modules", "pkg");
+		fs.mkdirSync(vendored, { recursive: true });
+		fs.writeFileSync(
+			path.join(vendored, "index.ts"),
+			'export function n() { alert("vendored"); }\n',
+		);
+
+		const result = await scanProjectDiagnostics({
+			cwd: tmp,
+			tier: "cheap",
+			maxFiles: 50,
+		});
+
+		expect(
+			result.diagnostics.filter((d) => d.filePath.includes("node_modules")),
+		).toHaveLength(0);
 	});
 });

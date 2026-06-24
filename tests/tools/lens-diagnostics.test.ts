@@ -477,7 +477,7 @@ describe("lens_diagnostics mode=full", () => {
 			tier: "cheap",
 			scannedAt: "2026-01-01T00:00:00.000Z",
 			filesScanned: 2,
-			runners: ["tree-sitter", "fact-rules"],
+			runners: ["tree-sitter", "fact-rules", "ast-grep-napi"],
 			diagnostics: [
 				{
 					filePath: "/proj/src/project.ts",

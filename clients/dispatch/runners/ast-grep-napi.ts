@@ -33,7 +33,9 @@ import {
 let sg: typeof import("@ast-grep/napi") | undefined;
 let sgLoadAttempted = false;
 
-async function loadSg(): Promise<typeof import("@ast-grep/napi") | undefined> {
+export async function loadSg(): Promise<
+	typeof import("@ast-grep/napi") | undefined
+> {
 	if (sg) return sg;
 	if (sgLoadAttempted) return undefined; // Don't retry if already failed
 	sgLoadAttempted = true;
@@ -121,11 +123,14 @@ function normalizeRuleId(ruleId: string): string {
 	return ruleId.replace(/-js$/, "");
 }
 
-function canHandle(filePath: string): boolean {
+export function canHandle(filePath: string): boolean {
 	return SUPPORTED_EXTS.includes(path.extname(filePath).toLowerCase());
 }
 
-function getLang(filePath: string, sgModule: typeof import("@ast-grep/napi")) {
+export function getLang(
+	filePath: string,
+	sgModule: typeof import("@ast-grep/napi"),
+) {
 	const ext = path.extname(filePath).toLowerCase();
 	switch (ext) {
 		case ".ts":
@@ -143,6 +148,165 @@ function getLang(filePath: string, sgModule: typeof import("@ast-grep/napi")) {
 		default:
 			return undefined;
 	}
+}
+
+/** Per-edit defaults — tuned to keep inline output bounded on a broken file. */
+export interface AstGrepEvaluateOptions {
+	/** Drop non-error rules and complexity-bounded blocking rules (per-edit blocking pass). */
+	blockingOnly?: boolean;
+	/** Cap matches kept per rule (default {@link MAX_MATCHES_PER_RULE}). */
+	maxMatchesPerRule?: number;
+	/** Cap total diagnostics per file (default {@link MAX_TOTAL_DIAGNOSTICS}). */
+	maxTotalDiagnostics?: number;
+}
+
+/**
+ * Run the shipped ast-grep YAML ruleset against a parsed file via napi's native
+ * engine, applying the same suppression policy (linter/tree-sitter overlap,
+ * overly-broad-pattern guard) as the per-edit runner. Extracted so the
+ * project-wide scanner can reuse the identical engine + rules WITHOUT the
+ * ast-grep binary — closing the no-binary gap (#308) — while the per-edit runner
+ * keeps its tight budgets. Callers pass the already-parsed `rootNode` so they
+ * control parsing/size gating.
+ */
+export function evaluateAstGrepRules(
+	filePath: string,
+	rootNode: { findAll(config: never): unknown[] },
+	cwd: string,
+	kind: string | undefined,
+	options: AstGrepEvaluateOptions = {},
+): Diagnostic[] {
+	const maxMatchesPerRule = options.maxMatchesPerRule ?? MAX_MATCHES_PER_RULE;
+	const maxTotalDiagnostics =
+		options.maxTotalDiagnostics ?? MAX_TOTAL_DIAGNOSTICS;
+	const blockingOnly = options.blockingOnly === true;
+
+	const diagnostics: Diagnostic[] = [];
+	const seenRuleIds = new Set<string>();
+	const suppressLinterOverlap = kind === "jsts" && hasEslintConfig(cwd);
+
+	const ruleDirs = [
+		path.join(process.cwd(), "rules", "ast-grep-rules", "rules"),
+		path.join(process.cwd(), "rules", "ast-grep-rules"),
+		resolvePackagePath(import.meta.url, "rules", "ast-grep-rules", "rules"),
+		resolvePackagePath(import.meta.url, "rules", "ast-grep-rules"),
+	];
+
+	for (const ruleDir of ruleDirs) {
+		let rules: YamlRule[];
+		try {
+			rules = loadYamlRules(ruleDir, blockingOnly ? "error" : undefined);
+		} catch {
+			continue;
+		}
+
+		for (const rule of rules) {
+			// If the same rule id is loaded from multiple directories
+			// (workspace + bundled), prefer the first one to avoid duplicates.
+			if (seenRuleIds.has(rule.id)) continue;
+			seenRuleIds.add(rule.id);
+
+			if (
+				suppressLinterOverlap &&
+				LINTER_OVERLAP.has(normalizeRuleId(rule.id)) &&
+				!NON_SUPPRESSIBLE.has(normalizeRuleId(rule.id))
+			) {
+				continue;
+			}
+
+			// Skip rules already handled by tree-sitter runner (priority 14)
+			if (TREE_SITTER_OVERLAP.has(rule.id)) continue;
+
+			// Skip rules whose top-level pattern is overly broad ($NAME, $X, etc.)
+			// without additional structural constraints to narrow matches.
+			if (
+				rule.rule &&
+				isOverlyBroadPattern(rule.rule.pattern) &&
+				!isStructuredRule(rule)
+			) {
+				continue;
+			}
+
+			const lang = rule.language?.toLowerCase();
+			if (lang && lang !== "typescript" && lang !== "javascript") {
+				continue;
+			}
+
+			if (blockingOnly && rule.rule) {
+				const complexity = calculateRuleComplexity(rule.rule);
+				if (complexity > MAX_BLOCKING_RULE_COMPLEXITY) {
+					continue;
+				}
+			}
+
+			if (!rule.rule) continue;
+
+			try {
+				let matches: unknown[] = [];
+
+				// Delegate matching to napi's native engine, which handles the
+				// full ast-grep rule grammar (pattern, kind, has/inside/follows/
+				// precedes/stopBy/field/nthChild, any/all/not) plus metavariable
+				// `constraints` (#206). A faithful js-yaml parse feeds the rule
+				// object straight through. If napi rejects the rule (a malformed
+				// or invalid-kind rule), skip it — never silently match nothing
+				// through a partial interpreter.
+				const nativeConfig = rule.constraints
+					? { rule: rule.rule, constraints: rule.constraints }
+					: { rule: rule.rule };
+				try {
+					matches = rootNode.findAll(nativeConfig as never);
+				} catch {
+					matches = [];
+				}
+
+				const limitedMatches = matches.slice(0, maxMatchesPerRule);
+
+				for (const match of limitedMatches) {
+					if (diagnostics.length >= maxTotalDiagnostics) break;
+
+					const node = match as {
+						range(): { start: { line: number; column: number } };
+					};
+					const range = node.range();
+					const severity = rule.severity === "error" ? "error" : "warning";
+					const semantic = severity === "error" ? "blocking" : "warning";
+					const defectClass = classifyDefect(
+						rule.id,
+						"ast-grep-napi",
+						rule.message || rule.id,
+					);
+					const ruleFix = explicitRuleFixSuggestion(rule);
+
+					diagnostics.push({
+						id: `ast-grep-napi-${range.start.line}-${rule.id}`,
+						message: `[${rule.metadata?.category || "slop"}] ${rule.message || rule.id}`,
+						filePath,
+						line: range.start.line + 1,
+						column: range.start.column + 1,
+						severity,
+						semantic,
+						tool: "ast-grep-napi",
+						rule: rule.id,
+						defectClass,
+						fixable: !!ruleFix,
+						autoFixAvailable: false,
+						fixKind: ruleFix ? "suggestion" : undefined,
+						fixSuggestion:
+							semantic === "blocking"
+								? (ruleFix ?? defaultFixSuggestion(defectClass, rule.id))
+								: ruleFix,
+					});
+				}
+
+				if (diagnostics.length >= maxTotalDiagnostics) break;
+			} catch {
+				// Rule failed, skip
+			}
+		}
+	}
+
+	return diagnostics;
 }
 
 // --- Runner Definition ---
@@ -224,131 +388,13 @@ const astGrepNapiRunner: RunnerDefinition = {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
-		const diagnostics: Diagnostic[] = [];
-		const seenRuleIds = new Set<string>();
-		const suppressLinterOverlap =
-			ctx.kind === "jsts" && hasEslintConfig(ctx.cwd);
-
-		const ruleDirs = [
-			path.join(process.cwd(), "rules", "ast-grep-rules", "rules"),
-			path.join(process.cwd(), "rules", "ast-grep-rules"),
-			resolvePackagePath(import.meta.url, "rules", "ast-grep-rules", "rules"),
-			resolvePackagePath(import.meta.url, "rules", "ast-grep-rules"),
-		];
-
-		for (const ruleDir of ruleDirs) {
-			let rules: YamlRule[];
-			try {
-				rules = loadYamlRules(ruleDir, ctx.blockingOnly ? "error" : undefined);
-			} catch {
-				continue;
-			}
-
-			for (const rule of rules) {
-				// If the same rule id is loaded from multiple directories
-				// (workspace + bundled), prefer the first one to avoid duplicates.
-				if (seenRuleIds.has(rule.id)) continue;
-				seenRuleIds.add(rule.id);
-
-				if (
-					suppressLinterOverlap &&
-					LINTER_OVERLAP.has(normalizeRuleId(rule.id)) &&
-					!NON_SUPPRESSIBLE.has(normalizeRuleId(rule.id))
-				) {
-					continue;
-				}
-
-				// Skip rules already handled by tree-sitter runner (priority 14)
-				if (TREE_SITTER_OVERLAP.has(rule.id)) continue;
-
-				// Skip rules whose top-level pattern is overly broad ($NAME, $X, etc.)
-				// without additional structural constraints to narrow matches.
-				if (
-					rule.rule &&
-					isOverlyBroadPattern(rule.rule.pattern) &&
-					!isStructuredRule(rule)
-				) {
-					continue;
-				}
-
-				const lang = rule.language?.toLowerCase();
-				if (lang && lang !== "typescript" && lang !== "javascript") {
-					continue;
-				}
-
-				if (ctx.blockingOnly && rule.rule) {
-					const complexity = calculateRuleComplexity(rule.rule);
-					if (complexity > MAX_BLOCKING_RULE_COMPLEXITY) {
-						continue;
-					}
-				}
-
-				if (!rule.rule) continue;
-
-				try {
-					let matches: unknown[] = [];
-
-					// Delegate matching to napi's native engine, which handles the
-					// full ast-grep rule grammar (pattern, kind, has/inside/follows/
-					// precedes/stopBy/field/nthChild, any/all/not) plus metavariable
-					// `constraints` (#206). A faithful js-yaml parse feeds the rule
-					// object straight through. If napi rejects the rule (a malformed
-					// or invalid-kind rule), skip it — never silently match nothing
-					// through a partial interpreter.
-					const nativeConfig = rule.constraints
-						? { rule: rule.rule, constraints: rule.constraints }
-						: { rule: rule.rule };
-					try {
-						matches = rootNode.findAll(nativeConfig as never);
-					} catch {
-						matches = [];
-					}
-
-					const limitedMatches = matches.slice(0, MAX_MATCHES_PER_RULE);
-
-					for (const match of limitedMatches) {
-						if (diagnostics.length >= MAX_TOTAL_DIAGNOSTICS) break;
-
-						const node = match as {
-							range(): { start: { line: number; column: number } };
-						};
-						const range = node.range();
-						const severity = rule.severity === "error" ? "error" : "warning";
-						const semantic = severity === "error" ? "blocking" : "warning";
-						const defectClass = classifyDefect(
-							rule.id,
-							"ast-grep-napi",
-							rule.message || rule.id,
-						);
-						const ruleFix = explicitRuleFixSuggestion(rule);
-
-						diagnostics.push({
-							id: `ast-grep-napi-${range.start.line}-${rule.id}`,
-							message: `[${rule.metadata?.category || "slop"}] ${rule.message || rule.id}`,
-							filePath: ctx.filePath,
-							line: range.start.line + 1,
-							column: range.start.column + 1,
-							severity,
-							semantic,
-							tool: "ast-grep-napi",
-							rule: rule.id,
-							defectClass,
-							fixable: !!ruleFix,
-							autoFixAvailable: false,
-							fixKind: ruleFix ? "suggestion" : undefined,
-							fixSuggestion:
-								semantic === "blocking"
-									? (ruleFix ?? defaultFixSuggestion(defectClass, rule.id))
-									: ruleFix,
-						});
-					}
-
-					if (diagnostics.length >= MAX_TOTAL_DIAGNOSTICS) break;
-				} catch {
-					// Rule failed, skip
-				}
-			}
-		}
+		const diagnostics = evaluateAstGrepRules(
+			ctx.filePath,
+			rootNode,
+			ctx.cwd,
+			ctx.kind,
+			{ blockingOnly: ctx.blockingOnly },
+		);
 
 		const hasBlocking = diagnostics.some((d) => d.semantic === "blocking");
 		let semantic: "blocking" | "warning" | "none" = "none";
