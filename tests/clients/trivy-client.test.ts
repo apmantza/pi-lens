@@ -5,8 +5,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resetProjectLensConfigCache } from "../../clients/project-lens-config.js";
 import {
 	hasAnyDependencyManifest,
+	isTrivyEnabled,
 	parseTrivyReport,
 	resolveSeverityFloor,
+	shouldScanTrivy,
 } from "../../clients/trivy-client.js";
 
 let tmp: string;
@@ -41,6 +43,42 @@ describe("hasAnyDependencyManifest", () => {
 	it("does not trip on a docs-only project", () => {
 		fs.writeFileSync(path.join(tmp, "README.md"), "# hi");
 		expect(hasAnyDependencyManifest(tmp)).toBe(false);
+	});
+});
+
+// ── Explicit opt-in gate ─────────────────────────────────────────────────────
+
+describe("isTrivyEnabled / shouldScanTrivy (#131 opt-in)", () => {
+	function writeConfig(trivy: unknown) {
+		fs.writeFileSync(
+			path.join(tmp, ".pi-lens.json"),
+			JSON.stringify({ trivy }),
+		);
+		resetProjectLensConfigCache();
+	}
+
+	it("is OFF by default (no config) even with a manifest", () => {
+		fs.writeFileSync(path.join(tmp, "package.json"), "{}");
+		expect(isTrivyEnabled(tmp)).toBe(false);
+		expect(shouldScanTrivy(tmp)).toBe(false);
+	});
+
+	it("opts in only when trivy.enabled === true", () => {
+		writeConfig({ enabled: true });
+		expect(isTrivyEnabled(tmp)).toBe(true);
+		// enabled but no manifest → still nothing to scan
+		expect(shouldScanTrivy(tmp)).toBe(false);
+		fs.writeFileSync(path.join(tmp, "requirements.txt"), "django==2.0.0\n");
+		expect(shouldScanTrivy(tmp)).toBe(true);
+	});
+
+	it("treats truthy-but-not-true values as not opted in", () => {
+		fs.writeFileSync(path.join(tmp, "package.json"), "{}");
+		for (const v of [{ enabled: "true" }, { enabled: 1 }, {}]) {
+			writeConfig(v);
+			expect(isTrivyEnabled(tmp)).toBe(false);
+			expect(shouldScanTrivy(tmp)).toBe(false);
+		}
 	});
 });
 

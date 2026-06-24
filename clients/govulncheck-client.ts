@@ -21,6 +21,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { safeSpawnAsync } from "./safe-spawn.js";
+import { SecurityScanClient } from "./security-scan-client.js";
 
 // --- Types ---
 
@@ -92,17 +93,9 @@ interface RawOsvRecord {
 
 // --- Client ---
 
-export class GovulncheckClient {
-	private available: boolean | null = null;
-	private ensureInFlight: Promise<boolean> | null = null;
-	private inFlight = new Map<string, Promise<GovulncheckResult>>();
-	private binaryPath: string | null = null;
-	private log: (msg: string) => void;
-
+export class GovulncheckClient extends SecurityScanClient<GovulncheckResult> {
 	constructor(verbose = false) {
-		this.log = verbose
-			? (msg: string) => console.error(`[govulncheck] ${msg}`)
-			: () => {};
+		super("govulncheck", verbose);
 	}
 
 	/**
@@ -117,30 +110,13 @@ export class GovulncheckClient {
 	}
 
 	/**
-	 * Check if `govulncheck` is on PATH. No auto-install in this slice —
-	 * users must `go install golang.org/x/vuln/cmd/govulncheck@latest`
-	 * themselves until the installer's `go-install` strategy is added.
-	 *
-	 * Concurrent first-time callers share the same probe promise.
+	 * Resolve `govulncheck`: PATH probe, then auto-install via `go install`
+	 * (not the GitHub-release installer the other security clients use — the
+	 * toolchain is present by definition when there's a go.mod).
 	 */
-	async ensureAvailable(): Promise<boolean> {
-		if (this.available !== null) return this.available;
-		if (this.ensureInFlight) return this.ensureInFlight;
-		this.ensureInFlight = this.doEnsureAvailable();
-		try {
-			return await this.ensureInFlight;
-		} finally {
-			this.ensureInFlight = null;
-		}
-	}
-
-	private async doEnsureAvailable(): Promise<boolean> {
+	protected async doEnsureAvailable(): Promise<boolean> {
 		// PATH probe first.
-		const probe = await safeSpawnAsync("govulncheck", ["-version"], {
-			timeout: 5000,
-		});
-		if (!probe.error && probe.status === 0) {
-			this.log(`govulncheck found: ${probe.stdout.trim().split("\n")[0]}`);
+		if (await this.probeVersion(["-version"])) {
 			this.available = true;
 			return true;
 		}
@@ -245,17 +221,7 @@ export class GovulncheckClient {
 			};
 		}
 
-		const key = targetDir;
-		const existing = this.inFlight.get(key);
-		if (existing) {
-			this.log(`Scan already in flight for ${targetDir}; sharing result`);
-			return existing;
-		}
-		const promise = this.runScan(targetDir).finally(() => {
-			this.inFlight.delete(key);
-		});
-		this.inFlight.set(key, promise);
-		return promise;
+		return this.dedupeScan(targetDir, () => this.runScan(targetDir));
 	}
 
 	private async runScan(cwd: string): Promise<GovulncheckResult> {

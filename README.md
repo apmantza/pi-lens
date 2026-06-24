@@ -28,13 +28,14 @@ For one-shot print sessions (for example `pi --print ...`), pi-lens auto-uses a 
 
 On every `write` and `edit`, pi-lens runs a fast, language-aware pipeline (checks depend on file language, project config, and installed tools):
 
-1. **Secrets scan** — blocking; aborts the write if credentials are detected
-2. **Auto-format** — deferred to `agent_end` by default; queued files are formatted once after all agent tool calls complete. Use `--immediate-format` or global config `format.mode: "immediate"` for per-edit formatting
-3. **Auto-fix** — safe autofixes from 14 linters/formatters (Biome, ESLint, oxlint, Ruff, stylelint, sqlfluff, RuboCop, ktlint, ktfmt, rust-clippy, dart-analyze, golangci-lint, detekt, markdownlint) applied before analysis
-4. **Edit autopatch** — before an `edit` tool call lands, pi-lens silently corrects two classes of `oldText` mismatch: leading tab/space indentation (when the corrected text matches exactly one location) and trailing whitespace stripped by formatters. Both corrections also retarget `newText` so the replacement matches the file's whitespace style
-5. **LSP file sync** — opens/updates the file in active language servers
-6. **Dispatch lint** — parallel runner groups: LSP diagnostics (incl. the Opengrep auxiliary security scanner), tree-sitter structural rules, ast-grep security/correctness rules, fact rules, language-specific linters, similarity detection
-7. **Cascade diagnostics** — review-graph impact cascade showing which other files were affected and how diagnostics propagated
+1. **Auto-format** — deferred to `agent_end` by default; queued files are formatted once after all agent tool calls complete. Use `--immediate-format` or global config `format.mode: "immediate"` for per-edit formatting
+2. **Auto-fix** — safe autofixes from 14 linters/formatters (Biome, ESLint, oxlint, Ruff, stylelint, sqlfluff, RuboCop, ktlint, ktfmt, rust-clippy, dart-analyze, golangci-lint, detekt, markdownlint) applied before analysis
+3. **Edit autopatch** — before an `edit` tool call lands, pi-lens silently corrects two classes of `oldText` mismatch: leading tab/space indentation (when the corrected text matches exactly one location) and trailing whitespace stripped by formatters. Both corrections also retarget `newText` so the replacement matches the file's whitespace style
+4. **LSP file sync** — opens/updates the file in active language servers
+5. **Dispatch lint** — parallel runner groups: LSP diagnostics (incl. the Opengrep auxiliary security scanner), tree-sitter structural rules, ast-grep security/correctness rules (incl. hardcoded-secret detection), fact rules, language-specific linters, similarity detection
+6. **Cascade diagnostics** — review-graph impact cascade showing which other files were affected and how diagnostics propagated
+
+> Committed-secret and dependency-CVE scanning run as background **session scans** (gitleaks, govulncheck, trivy) rather than on every write — see [Dependency &amp; secret session scans](#dependency--secret-session-scans).
 
 Results are inline and actionable:
 
@@ -249,6 +250,28 @@ metadata:
     semantic: blocking
     defect_class: injection
     confidence: high
+```
+
+### Dependency &amp; secret session scans
+
+Three external scanners run **once per session in the background** (not on every write — their inputs change at most daily and the scans are whole-tree). Each is **opt-in and auto-installed only when its gate trips**; results surface at turn end, with the highest-severity findings treated as blockers and the rest as advisory.
+
+| Scanner | Finds | Opt-in gate | Auto-install |
+|---|---|---|---|
+| **gitleaks** | Committed secrets (API keys, tokens, certs) — regex + entropy, language-agnostic | `.gitleaks.toml` / `.gitleaksignore`, a `gitleaks` dep, or a pre-commit hook referencing it | GitHub release |
+| **govulncheck** | Go module CVEs **reachable** from the build graph (call-graph filtered) | a `go.mod` at the analysis root | `go install` (needs the Go toolchain) |
+| **trivy** | Dependency CVEs across every ecosystem (npm, PyPI, Maven/Gradle, Go, Cargo, Composer, RubyGems, NuGet, …) | **`trivy.enabled: true` in `.pi-lens.json`** *and* a dependency manifest at the root | GitHub release |
+
+Trivy requires an **explicit** opt-in (rather than just a manifest being present) because its first run pulls a 30–200 MB vulnerability database. Enable it per-project — or globally via a `~/.pi-lens.json` — and optionally widen severity:
+
+```jsonc
+// .pi-lens.json
+{
+  "trivy": {
+    "enabled": true,
+    "minSeverity": "MEDIUM" // default "HIGH"; HIGH/CRITICAL are always surfaced
+  }
+}
 ```
 
 ### MCP Server (Experimental)
@@ -500,6 +523,9 @@ Auto-install behavior depends on gate type:
 | `svelte-language-server`            | Svelte LSP                       | Yes            | Flow-gated                         |
 | `@vue/language-server`              | Vue LSP                          | Yes            | Flow-gated                         |
 | `opengrep`                          | Experimental security dispatch   | Auto-install   | Local config / explicit opt-in     |
+| `gitleaks`                          | Committed-secret session scan    | Auto-install   | Opt-in (config / hook / dep)       |
+| `govulncheck`                       | Go reachable-CVE session scan    | `go install`   | Auto (`go.mod` present)            |
+| `trivy`                             | Dependency-CVE session scan      | Auto-install   | Explicit opt-in (`trivy.enabled`)  |
 | `psscriptanalyzer`                  | PowerShell linting               | Manual         | —                                  |
 
 Additional language servers (gopls, ruby-lsp, solargraph, etc.) are auto-detected from PATH or installed via native package managers (`go install`, `gem install`) when their language is detected.

@@ -623,12 +623,13 @@ function scheduleStartupScans(
 	});
 
 	// trivy — dependency CVE detection (#131, Phase 1)
-	// Config-gated: opts in via presence of any dependency manifest. The first
-	// run downloads Trivy's vuln DB (~30-200 MB); harmless here since this whole
-	// task runs in the background session_start wrapper.
+	// Explicit opt-in: `trivy.enabled: true` in .pi-lens.json AND a dependency
+	// manifest present. The first run downloads Trivy's vuln DB (~30-200 MB);
+	// harmless here since this whole task runs in the background session_start
+	// wrapper.
 	runTask("trivy", async () => {
-		if (!TrivyClient.hasAnyDependencyManifest(analysisRoot)) {
-			dbg("session_start trivy: no dependency manifest — skipped");
+		if (!TrivyClient.shouldScan(analysisRoot)) {
+			dbg("session_start trivy: not enabled / no dependency manifest — skipped");
 			return;
 		}
 		if (!(await trivyClient.ensureAvailable())) {

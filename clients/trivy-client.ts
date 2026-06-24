@@ -14,9 +14,13 @@
  *     re-running per keystroke is wasteful. Re-scan is driven by the cache layer
  *     (keyed on lockfile mtimes by the caller).
  *
- * Detection gate (config-first per #131): presence of ANY dependency manifest
- * at the analysis root. Trivy ships sensible defaults (bundled vuln DB), so the
- * gate is about consent + cost, not missing config.
+ * Detection gate (explicit opt-in per #131): the project must opt in via
+ * `trivy.enabled: true` in `.pi-lens.json` AND declare a scannable dependency
+ * surface (any manifest at the analysis root). The opt-in is required because a
+ * first scan auto-installs the binary and pulls a 30-200 MB vuln DB — too heavy
+ * to enable for every project that merely has a `package.json`. Set
+ * `trivy.minSeverity` to widen what surfaces (default HIGH; never hides
+ * HIGH/CRITICAL).
  *
  * When the gate trips, the client auto-installs trivy from GitHub releases
  * (installer entry registered in clients/installer/index.ts) and runs
@@ -37,6 +41,7 @@ import * as path from "node:path";
 import { mkdtempSync } from "node:fs";
 import { loadPiLensProjectConfig } from "./project-lens-config.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
+import { SecurityScanClient } from "./security-scan-client.js";
 
 // --- Types ---
 
@@ -136,6 +141,33 @@ export function hasAnyDependencyManifest(cwd: string): boolean {
 	return false;
 }
 
+/**
+ * Explicit opt-in: trivy runs only when the project sets `trivy.enabled: true`
+ * in `.pi-lens.json` (the loader walks up, so a `~/.pi-lens.json` enables it
+ * globally). Required because the first scan auto-installs the binary and pulls
+ * a 30-200 MB vuln DB — too costly to enable implicitly. Default OFF.
+ *
+ * Exported for tests and gate-before-construct callers.
+ */
+export function isTrivyEnabled(cwd: string): boolean {
+	try {
+		const config = loadPiLensProjectConfig(cwd);
+		const trivy = (config.raw as { trivy?: { enabled?: unknown } } | undefined)
+			?.trivy;
+		return trivy?.enabled === true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Full session-scan gate: explicit opt-in AND a scannable dependency surface.
+ * Both must hold before we auto-install trivy / pull its DB.
+ */
+export function shouldScanTrivy(cwd: string): boolean {
+	return isTrivyEnabled(cwd) && hasAnyDependencyManifest(cwd);
+}
+
 // --- Severity floor ---
 
 const SEVERITY_RANK: Record<string, number> = {
@@ -171,68 +203,33 @@ export function resolveSeverityFloor(cwd: string): TrivySeverity[] {
 
 // --- Client ---
 
-export class TrivyClient {
-	private available: boolean | null = null;
-	private ensureInFlight: Promise<boolean> | null = null;
-	private inFlight = new Map<string, Promise<TrivyResult>>();
-	private binaryPath: string | null = null;
-	private log: (msg: string) => void;
-
+export class TrivyClient extends SecurityScanClient<TrivyResult> {
 	constructor(verbose = false) {
-		this.log = verbose
-			? (msg: string) => console.error(`[trivy] ${msg}`)
-			: () => {};
+		super("trivy", verbose);
 	}
 
-	/** Static gate so callers can skip before constructing. */
+	/** Static gates so callers can skip before constructing. */
 	static hasAnyDependencyManifest(cwd: string): boolean {
 		return hasAnyDependencyManifest(cwd);
 	}
 
-	/**
-	 * Check if trivy is available, auto-installing via the GitHub-release path
-	 * (registered in `clients/installer/index.ts`) when missing. Concurrent
-	 * first-time callers share the same probe promise.
-	 */
-	async ensureAvailable(): Promise<boolean> {
-		if (this.available !== null) return this.available;
-		if (this.ensureInFlight) return this.ensureInFlight;
-		this.ensureInFlight = this.doEnsureAvailable();
-		try {
-			return await this.ensureInFlight;
-		} finally {
-			this.ensureInFlight = null;
-		}
+	/** Full opt-in gate (config opt-in AND a dependency manifest). */
+	static shouldScan(cwd: string): boolean {
+		return shouldScanTrivy(cwd);
 	}
 
-	private async doEnsureAvailable(): Promise<boolean> {
-		const probe = await safeSpawnAsync("trivy", ["--version"], {
-			timeout: 5000,
-		});
-		if (!probe.error && probe.status === 0) {
-			this.log(`trivy found: ${probe.stdout.trim().split("\n")[0]}`);
-			this.available = true;
-			return true;
-		}
-
-		this.log("trivy not found, attempting auto-install");
-		const { ensureTool } = await import("./installer/index.js");
-		const installed = await ensureTool("trivy");
-		if (!installed) {
-			this.log("trivy auto-install failed");
-			this.available = false;
-			return false;
-		}
-		this.binaryPath = installed;
-		this.available = true;
-		this.log(`trivy auto-installed at ${installed}`);
-		return true;
+	/**
+	 * Auto-install via the GitHub-release path (registered in
+	 * `clients/installer/index.ts`) when trivy isn't already on PATH.
+	 */
+	protected doEnsureAvailable(): Promise<boolean> {
+		return this.ensureViaInstaller(["--version"]);
 	}
 
 	/**
 	 * Scan a directory tree for dependency CVEs.
 	 *
-	 * Skips early when no dependency manifest is present. When trivy is
+	 * Skips early when the opt-in gate isn't satisfied. When trivy is
 	 * unavailable, returns an empty (but successful) result rather than failing
 	 * the session_start task. Re-entrancy safe: concurrent calls against the
 	 * same root share a single process.
@@ -241,12 +238,14 @@ export class TrivyClient {
 		const targetDir = path.resolve(cwd);
 		const scannedAt = new Date().toISOString();
 
-		if (!hasAnyDependencyManifest(targetDir)) {
+		if (!shouldScanTrivy(targetDir)) {
 			return {
 				...EMPTY_RESULT,
 				success: true,
 				scannedAt,
-				summary: "no dependency manifest at analysis root",
+				summary: hasAnyDependencyManifest(targetDir)
+					? "trivy not enabled (set trivy.enabled in .pi-lens.json)"
+					: "no dependency manifest at analysis root",
 			};
 		}
 
@@ -254,16 +253,7 @@ export class TrivyClient {
 			return { ...EMPTY_RESULT, scannedAt, summary: "trivy not installed" };
 		}
 
-		const existing = this.inFlight.get(targetDir);
-		if (existing) {
-			this.log(`Scan already in flight for ${targetDir}; sharing result`);
-			return existing;
-		}
-		const promise = this.runScan(targetDir).finally(() => {
-			this.inFlight.delete(targetDir);
-		});
-		this.inFlight.set(targetDir, promise);
-		return promise;
+		return this.dedupeScan(targetDir, () => this.runScan(targetDir));
 	}
 
 	private async runScan(cwd: string): Promise<TrivyResult> {
