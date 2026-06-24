@@ -317,6 +317,32 @@ function suppressLintOverlapsWithLsp(diagnostics: Diagnostic[]): Diagnostic[] {
 	});
 }
 
+/**
+ * Dockerfile overlap dedup (#131 Mode 2): hadolint and `trivy config` both flag
+ * a few of the same Dockerfile issues (e.g. `:latest`, running as root) with
+ * different rule ids, which the rule-keyed `dedupeOverlappingDiagnostics` can't
+ * collapse. Keep hadolint authoritative on the lines it covers and drop the
+ * trivy-config finding there — trivy still contributes the security checks
+ * hadolint lacks (on other lines), and all Kubernetes findings (no hadolint
+ * diagnostics exist for YAML, so none are suppressed). Exported for unit tests.
+ */
+export function suppressTrivyConfigDockerOverlap(
+	diagnostics: Diagnostic[],
+): Diagnostic[] {
+	const hadolintLines = new Set<string>();
+	for (const d of diagnostics) {
+		if (d.tool === "hadolint") {
+			hadolintLines.add(`${d.filePath}:${d.line ?? 1}`);
+		}
+	}
+	if (hadolintLines.size === 0) return diagnostics;
+	return diagnostics.filter(
+		(d) =>
+			d.tool !== "trivy-config" ||
+			!hadolintLines.has(`${d.filePath}:${d.line ?? 1}`),
+	);
+}
+
 function isUnusedValueDiagnostic(d: Diagnostic): boolean {
 	const raw = `${d.id ?? ""} ${d.rule ?? ""} ${d.message ?? ""}`.toLowerCase();
 	if (raw.includes("no-unused")) return true;
@@ -759,7 +785,9 @@ export async function dispatchForFile(
 	// Apply delta mode ONCE across the full diagnostic set.
 	// This avoids partial-baseline corruption when processing multiple groups.
 	const dedupedDiagnostics = dedupeOverlappingDiagnostics(allDiagnostics);
-	const overlapSuppressed = suppressLintOverlapsWithLsp(dedupedDiagnostics);
+	const dockerOverlapSuppressed =
+		suppressTrivyConfigDockerOverlap(dedupedDiagnostics);
+	const overlapSuppressed = suppressLintOverlapsWithLsp(dockerOverlapSuppressed);
 	const fileContent =
 		ctx.facts.getFileFact<string>(ctx.filePath, "file.content") ?? "";
 	const inlineSuppressed = applyInlineSuppressions(

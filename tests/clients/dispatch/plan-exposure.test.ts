@@ -94,7 +94,11 @@ describe("dispatch plan exposure", () => {
 
 	it("routes html/docker/powershell/php/prisma through aligned primary plans", () => {
 		expect(flattenRunnerIds(TOOL_PLANS.html)).toEqual(["lsp", "htmlhint"]);
-		expect(flattenRunnerIds(TOOL_PLANS.docker)).toEqual(["lsp", "hadolint"]);
+		expect(flattenRunnerIds(TOOL_PLANS.docker)).toEqual([
+			"lsp",
+			"hadolint",
+			"trivy-config",
+		]);
 		expect(flattenRunnerIds(TOOL_PLANS.powershell)).toEqual([
 			"lsp",
 			"psscriptanalyzer",

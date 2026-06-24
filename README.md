@@ -276,6 +276,8 @@ Trivy requires an **explicit** opt-in (rather than just a manifest being present
 }
 ```
 
+**IaC misconfiguration (per-edit, not a session scan).** When `trivy.enabled` is set, pi-lens also runs `trivy config` as an on-write dispatch runner (alongside hadolint/tflint) over **Dockerfiles** and **Kubernetes manifests** (YAML with an `apiVersion:` + `kind:` signature) — Trivy's security-policy engine (runs-as-root, no `HEALTHCHECK`, `privileged: true`, missing resource limits, …), a different class from hadolint's lint. On Dockerfiles, trivy-config findings that hadolint already reports at the same line are suppressed, so it only adds the security checks hadolint lacks. Terraform/Helm/Compose/CloudFormation are tracked as follow-ups.
+
 ### MCP Server (Experimental)
 
 pi-lens ships an MCP (Model Context Protocol) server so Claude Code — or any MCP client — can drive the same diagnostic + read-substitute surface that the pi agent tools expose, without running pi. The server is a **second host adapter** alongside the pi extension; both call into the same `clients/lens-engine.ts` seam so a single implementation powers both surfaces.

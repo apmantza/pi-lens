@@ -26,6 +26,7 @@ const TOOL_PROFILE_MAP: Record<string, ToolProfile> = {
 	"rust-clippy": { dedupPriority: 95, lintLike: true },
 	shellcheck: { dedupPriority: 95, lintLike: true },
 	opengrep: { dedupPriority: 105, lintLike: false },
+	"trivy-config": { dedupPriority: 105, lintLike: false },
 };
 
 export function getToolProfile(
