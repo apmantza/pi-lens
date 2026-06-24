@@ -355,7 +355,26 @@ export class TreeSitterQueryLoader {
 			if (trimmed.startsWith("#") && key !== "query") continue;
 
 			// This is part of the multiline value
-			valueLines.push(line.slice(startIndent));
+			valueLines.push(line);
+		}
+
+		// Strip the common minimum indent (relative to startIndent).
+		// YAML's `|` block scalar preserves content with consistent
+		// indentation; we want to remove the leading whitespace that
+		// was used for YAML formatting.
+		// biome-ignore lint/suspicious/noExplicitAny: line iteration
+		const nonEmpty = valueLines.filter((l: string) => l.trim().length > 0);
+		if (nonEmpty.length > 0) {
+			const minExtraIndent = Math.min(
+				...nonEmpty.map((l: string) => {
+					const m = l.match(/^(\s*)/);
+					return (m?.[1].length ?? 0) - startIndent;
+				}),
+			);
+			for (let i = 0; i < valueLines.length; i++) {
+				if (valueLines[i].trim().length === 0) continue; // leave blank lines alone
+				valueLines[i] = valueLines[i].slice(startIndent + Math.max(0, minExtraIndent));
+			}
 		}
 
 		// Clean up - remove trailing empty lines

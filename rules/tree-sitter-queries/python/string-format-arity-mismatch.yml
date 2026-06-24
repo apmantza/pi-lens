@@ -1,0 +1,52 @@
+# String Formatting Argument Count Mismatch
+# Detects %-formatting calls with wrong argument counts
+id: string-format-arity-mismatch
+name: String Format Argument Count Mismatch
+severity: error
+category: reliability
+defect_class: correctness
+inline_tier: blocking
+language: python
+
+message: "String format has wrong number of arguments — RuntimeError at format time"
+
+description: |
+  `%`-style formatting throws TypeError if the number of arguments
+  doesn't match the format spec. Static detection catches most cases:
+  - `"%s" % (1, 2)` — too few / too many args
+  - `"%s %s" % (1,)` — too few
+  - `"%(a)s" % {"b": 1}` — missing key
+
+  ✅ FIX: Match format string placeholders to argument count,
+     or use f-strings.
+
+query: |
+  (binary_operator
+    left: (string) @FORMAT
+    operator: "%"
+    right: [(tuple) (dictionary)] @ARGS)
+
+metavars:
+  - FORMAT
+  - ARGS
+
+post_filter: format_arity_mismatch
+
+has_fix: false
+
+tags:
+  - reliability
+  - python-specific
+  - format-string
+  - runtime-error
+
+examples:
+  bad: |
+    "%s" % (1, 2)         # TypeError: not all arguments converted
+    "%s %s" % (1,)        # TypeError: not enough arguments
+    "%(a)s" % {"b": 1}    # KeyError: 'a'
+  
+  good: |
+    "%s" % 1              # OK
+    "%s %s" % (1, 2)      # OK
+    "%(a)s" % {"a": 1}    # OK
