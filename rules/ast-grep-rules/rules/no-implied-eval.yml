@@ -5,9 +5,12 @@ severity: error
 note: |
   Passing strings to setTimeout() or setInterval() is equivalent to eval()
   and can execute arbitrary code. Pass a function reference instead.
+  The `, $$$REST` suffix matches the optional delay/args tail of
+  setTimeout/setInterval — without it the pattern only catches the
+  rare 1-argument form.
 rule:
   any:
-    - pattern: setTimeout("$STRING")
-    - pattern: setTimeout('$STRING')
-    - pattern: setInterval("$STRING")
-    - pattern: setInterval('$STRING')
+    - pattern: setTimeout("$STRING", $$$REST)
+    - pattern: setTimeout('$STRING', $$$REST)
+    - pattern: setInterval("$STRING", $$$REST)
+    - pattern: setInterval('$STRING', $$$REST)

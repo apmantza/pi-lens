@@ -1,0 +1,11 @@
+id: no-instanceof-builtins
+valid:
+  - 'typeof x === "string"'
+  - 'typeof x === "number"'
+  - 'x instanceof MyClass'
+invalid:
+  - 'x instanceof String'
+  - 'x instanceof Number'
+  - 'x instanceof Boolean'
+  - 'x instanceof Symbol'
+  - 'x instanceof BigInt'

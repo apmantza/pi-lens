@@ -1,10 +1,25 @@
 id: ts-manual-array-contains
 language: typescript
 severity: warning
-message: arr.indexOf(x) !== -1 - use arr.includes(x)
+message: arr.indexOf(x) comparison - use arr.includes(x) for existence check
 metadata:
   weight: 2
   category: slop
 rule:
-  kind: binary_expression
-  pattern: "$ARR.indexOf($X) !== -1"
+  # Existence-only forms: `indexOf(x) !== -1` is the classic
+  # "does the array contain x" check, which `.includes(x)` expresses
+  # more directly. The `=== -1` / `== -1` inverted forms are kept
+  # (negative existence) since they also map cleanly to
+  # `!arr.includes(x)`.
+  #
+  # Intentionally NOT flagged: `arr.indexOf(x) >= 0` and `< 0` —
+  # these are valid positional queries ("first non-negative index")
+  # and don't have a direct `.includes()` equivalent. Also `> -1`
+  # (a synonym for `>= 0` in this context) and `<= -1` (synonym
+  # for `=== -1`). The original rule flagged them but they were
+  # false positives.
+  any:
+    - pattern: "$ARR.indexOf($X) !== -1"
+    - pattern: "$ARR.indexOf($X) != -1"
+    - pattern: "$ARR.indexOf($X) === -1"
+    - pattern: "$ARR.indexOf($X) == -1"

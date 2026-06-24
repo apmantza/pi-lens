@@ -1,0 +1,7 @@
+id: no-await-in-promise-all
+valid:
+  - 'Promise.all([p1, p2, p3])'
+  - 'Promise.all([p1()])'
+invalid:
+  - 'Promise.all([await p1, p2])'
+  - 'Promise.all([await fetch(url)])'

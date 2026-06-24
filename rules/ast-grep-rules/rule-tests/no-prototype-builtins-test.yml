@@ -1,0 +1,9 @@
+id: no-prototype-builtins
+valid:
+  - 'Object.prototype.hasOwnProperty.call(obj, key)'
+  - 'Object.hasOwn(obj, key)'
+  - 'Object.prototype.isPrototypeOf.call(obj, other)'
+invalid:
+  - 'obj.hasOwnProperty(key)'
+  - 'obj.isPrototypeOf(other)'
+  - 'obj.propertyIsEnumerable(key)'

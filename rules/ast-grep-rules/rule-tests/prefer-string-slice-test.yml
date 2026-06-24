@@ -1,0 +1,9 @@
+id: prefer-string-slice
+valid:
+  - 'str.slice(0, 5)'
+  - 'str.slice(-3)'
+  - 'str.substring'
+invalid:
+  - 'str.substring(0, 5)'
+  - 'str.substr(0, 5)'
+  - 'str.substr(2)'

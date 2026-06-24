@@ -1,0 +1,8 @@
+id: ts-slice-copy
+valid:
+  - 'const b = arr.slice(0, 5)'
+  - 'const b = arr.slice(1)'
+  - 'const b = [...arr]'
+invalid:
+  - 'const b = arr.slice()'
+  - 'arr.slice()'

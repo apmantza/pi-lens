@@ -1,0 +1,10 @@
+id: no-non-null-assertion
+valid:
+  - 'const x = foo'
+  - 'const x = foo?.bar'
+  - 'const x: number = foo()'
+invalid:
+  - 'const x = foo!'
+  - 'foo!.bar()'
+  - 'const x = (foo!)!.bar'
+  - 'foo!!'

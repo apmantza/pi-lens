@@ -1,0 +1,8 @@
+id: no-string-ref
+valid:
+  - "<div ref={ref}>x</div>"
+  - "<div ref={myRef}>x</div>"
+  - "<div>plain</div>"
+invalid:
+  - '<div ref="myRef">x</div>'
+  - '<span ref="other">x</span>'

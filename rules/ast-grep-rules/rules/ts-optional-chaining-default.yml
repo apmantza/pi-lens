@@ -6,5 +6,16 @@ metadata:
   weight: 3
   category: slop
 rule:
-  kind: ternary_expression
-  pattern: "$OBJ && $OBJ.$PROP ? $OBJ.$PROP : $DEFAULT"
+  # Three equivalent null-guard forms: the explicit `&&` chain,
+  # the loose `obj != null ? ... : ...` (loose-equality catches
+  # both null and undefined), and the strict `obj !== null &&
+  # obj !== undefined` form. All collapse to the idiomatic
+  # `obj?.prop ?? default`.
+  any:
+    - kind: ternary_expression
+      pattern: "$OBJ && $OBJ.$PROP ? $OBJ.$PROP : $DEFAULT"
+    - kind: ternary_expression
+      pattern: "$OBJ != null ? $OBJ.$PROP : $DEFAULT"
+    - kind: ternary_expression
+      pattern: >-
+        $OBJ !== null && $OBJ !== undefined ? $OBJ.$PROP : $DEFAULT

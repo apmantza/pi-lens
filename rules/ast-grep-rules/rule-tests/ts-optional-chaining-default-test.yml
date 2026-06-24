@@ -1,0 +1,8 @@
+id: ts-optional-chaining-default
+valid:
+  - 'const r = obj?.prop ?? d'
+  - 'const r = a ? b : c'
+  - 'const r = obj ? obj.prop : d'
+invalid:
+  - 'const r = obj && obj.prop ? obj.prop : d'
+  - 'const r = obj != null ? obj.prop : d'

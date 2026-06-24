@@ -6,5 +6,15 @@ metadata:
   weight: 3
   category: slop
 rule:
-  kind: ternary_expression
-  pattern: "$X !== null && $X !== undefined ? $X : $DEFAULT"
+  # Three equivalent forms: strict (`!== null && !== undefined`),
+  # loose (`!= null` covers both — `x == null` is true only for
+  # null AND undefined in JS), and the ternary without an explicit
+  # null check (rare but equivalent when $X is non-nullable in
+  # context). All collapse to the idiomatic `x ?? default`.
+  any:
+    - kind: ternary_expression
+      pattern: "$X !== null && $X !== undefined ? $X : $DEFAULT"
+    - kind: ternary_expression
+      pattern: "$X != null ? $X : $DEFAULT"
+    - kind: ternary_expression
+      pattern: "$X != null && $X != undefined ? $X : $DEFAULT"

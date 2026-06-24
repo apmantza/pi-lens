@@ -1,0 +1,13 @@
+id: ts-unnecessary-else-return
+valid:
+  - |
+    if (cond) { return a; }
+  - |
+    if (cond) { doA(); }
+invalid:
+  - |
+    if (cond) { return a; } else { doB(); }
+  - |
+    if (cond) { return true; } else { return false; }
+  - |
+    if (cond) { return a; } else { doB(); return b; }
