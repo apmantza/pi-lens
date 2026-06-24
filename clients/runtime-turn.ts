@@ -23,6 +23,7 @@ import {
 import { getKnipIgnorePatterns } from "./file-utils.js";
 import type { GitleaksResult } from "./gitleaks-client.js";
 import type { GovulncheckResult } from "./govulncheck-client.js";
+import type { TrivyResult } from "./trivy-client.js";
 import type { KnipClient, KnipIssue, KnipResult } from "./knip-client.js";
 import {
 	PROJECT_DIAGNOSTICS_CACHE_VERSION,
@@ -420,6 +421,46 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			report += `  … and ${gitleaksCacheEntry.data.findings.length - findings.length} more\n`;
 		}
 		blockerParts.push(report);
+	}
+
+	// trivy — surface session_start-cached dependency CVEs (#131, Phase 1).
+	// CRITICAL is a blocker (a known-exploitable CVE in a shipped dep is real
+	// production risk); HIGH/MEDIUM/LOW are advisory. The agent gets the upgrade
+	// target as a hint and decides — we never auto-edit lockfiles.
+	const trivyCacheEntry = cacheManager.readCache<TrivyResult>("trivy", cwd);
+	if (trivyCacheEntry?.data?.findings?.length) {
+		const all = trivyCacheEntry.data.findings;
+		const critical = all.filter((f) => f.severity === "CRITICAL");
+		const advisory = all.filter((f) => f.severity !== "CRITICAL");
+		const fmt = (f: TrivyResult["findings"][number]): string => {
+			const pkg = f.installedVersion
+				? `${f.pkgName}@${f.installedVersion}`
+				: f.pkgName;
+			const fix = f.fixedVersion
+				? ` — upgrade to ${f.fixedVersion} or later`
+				: " — no fix yet, track upstream";
+			return `  ${f.vulnerabilityId} (${pkg})${fix}\n`;
+		};
+		if (critical.length) {
+			const shown = critical.slice(0, 5);
+			let report =
+				"🔴 STOP — CRITICAL dependency CVEs (trivy). Upgrade before shipping:\n";
+			for (const f of shown) report += fmt(f);
+			if (critical.length > shown.length) {
+				report += `  … and ${critical.length - shown.length} more\n`;
+			}
+			blockerParts.push(report);
+		}
+		if (advisory.length) {
+			const shown = advisory.slice(0, 5);
+			let report =
+				"🛡️ Dependency CVEs (trivy) — upgrade where possible:\n";
+			for (const f of shown) report += fmt(f);
+			if (advisory.length > shown.length) {
+				report += `  … and ${advisory.length - shown.length} more\n`;
+			}
+			advisoryParts.push(report);
+		}
 	}
 
 	const t3 = Date.now();

@@ -12,6 +12,7 @@ import type { RuffClient } from "./ruff-client.js";
 import type { RustClient } from "./rust-client.js";
 import type { TestRunnerClient } from "./test-runner-client.js";
 import type { TodoScanner } from "./todo-scanner.js";
+import type { TrivyClient } from "./trivy-client.js";
 import type { TypeCoverageClient } from "./type-coverage-client.js";
 
 export interface BootstrapClients {
@@ -28,6 +29,7 @@ export interface BootstrapClients {
 	goClient: GoClient;
 	govulncheckClient: GovulncheckClient;
 	gitleaksClient: GitleaksClient;
+	trivyClient: TrivyClient;
 	rustClient: RustClient;
 	agentBehaviorClient: AgentBehaviorClient;
 }
@@ -50,6 +52,7 @@ export function loadBootstrapClients(): Promise<BootstrapClients> {
 			goMod,
 			govulncheckMod,
 			gitleaksMod,
+			trivyMod,
 			rustMod,
 			agentBehaviorMod,
 		] = await Promise.all([
@@ -66,6 +69,7 @@ export function loadBootstrapClients(): Promise<BootstrapClients> {
 			import("./go-client.js"),
 			import("./govulncheck-client.js"),
 			import("./gitleaks-client.js"),
+			import("./trivy-client.js"),
 			import("./rust-client.js"),
 			import("./agent-behavior-client.js"),
 		]);
@@ -84,6 +88,7 @@ export function loadBootstrapClients(): Promise<BootstrapClients> {
 			goClient: new goMod.GoClient(),
 			govulncheckClient: new govulncheckMod.GovulncheckClient(),
 			gitleaksClient: new gitleaksMod.GitleaksClient(),
+			trivyClient: new trivyMod.TrivyClient(),
 			rustClient: new rustMod.RustClient(),
 			agentBehaviorClient: new agentBehaviorMod.AgentBehaviorClient(),
 		};

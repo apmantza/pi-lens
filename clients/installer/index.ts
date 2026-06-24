@@ -826,6 +826,32 @@ export const TOOLS: ToolDefinition[] = [
 		},
 	},
 	{
+		id: "trivy",
+		name: "Trivy",
+		checkCommand: "trivy",
+		checkArgs: ["--version"],
+		installStrategy: "github",
+		binaryName: "trivy",
+		github: {
+			repo: "aquasecurity/trivy",
+			// Trivy asset naming is `trivy_<ver>_<OS>-<bits>.{tar.gz,zip}` with a
+			// capitalized OS and `64bit`/`ARM64` arch tokens — e.g.
+			// `trivy_0.71.2_Linux-64bit.tar.gz`, `trivy_0.71.2_macOS-ARM64.tar.gz`.
+			// No windows-arm64 asset exists, so (like swiftlint) trivy is absent from
+			// GITHUB_TOOLS and covered by the weaker "at least one platform" guard.
+			assetMatch: (platform, arch) => {
+				if (platform === "linux")
+					return arch === "arm64" ? "Linux-ARM64.tar.gz" : "Linux-64bit.tar.gz";
+				if (platform === "darwin")
+					return arch === "arm64" ? "macOS-ARM64.tar.gz" : "macOS-64bit.tar.gz";
+				if (platform === "win32")
+					return arch === "arm64" ? undefined : "windows-64bit.zip";
+				return undefined;
+			},
+			binaryInArchive: "trivy",
+		},
+	},
+	{
 		id: "swiftlint",
 		name: "SwiftLint",
 		checkCommand: "swiftlint",
