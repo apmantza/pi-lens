@@ -9,45 +9,103 @@ note: |
   file descriptors and blocking worker threads. Always pass
   `timeout=` (or set a default at the session level).
 
-  Matches common request functions from `requests`, `httpx`, and
-  `aiohttp` whose call doesn't include a `timeout=` keyword
-  argument.
+  Earlier version used `pattern: requests.$METHOD($$$ARGS)` which
+  matched any attribute call on `requests` — including constructor
+  calls like `requests.Timeout("msg")`, `requests.RequestException("msg")`,
+  and `requests.HTTPError("msg")`. These are exception constructors,
+  not HTTP requests, and shouldn't fire (~150 false positives on
+  PostHog).
 
-  Three layers:
-  1. **Pattern** matches `requests.$METHOD($$$ARGS)` — any HTTP
-     method call (captures the whole call as the match target).
-  2. **Not has keyword_argument** with regex `^timeout\s*=` —
-     excludes calls where `timeout=` is present anywhere in the
-     argument list.
+  The fixed rule enumerates the actual HTTP request methods
+  (`get`, `post`, `put`, `delete`, `patch`, `head`, `request`)
+  as separate patterns. Same approach for `httpx` and `aiohttp`.
 
-  The `not has keyword_argument` works because ast-grep matches
-  the `keyword_argument` AST node directly, and its text
-  includes the leading `timeout=`. The regex anchors at `^` so
-  it doesn't match unrelated identifiers like `request_timeout`.
-
-  This is a conservative implementation — it doesn't catch
-  session-level timeouts set elsewhere. Full coverage needs
-  cross-file session analysis.
+  Conservative implementation — doesn't catch session-level
+  timeouts set elsewhere. Full coverage needs cross-file session
+  analysis.
 metadata:
   sonar: S3500
 rule:
   any:
     - all:
-        - pattern: "requests.$METHOD($$$ARGS)"
+        - pattern: "requests.get($$$ARGS)"
         - not:
             has:
               kind: keyword_argument
               regex: '^timeout\s*='
               stopBy: end
     - all:
-        - pattern: "httpx.$METHOD($$$ARGS)"
+        - pattern: "requests.post($$$ARGS)"
         - not:
             has:
               kind: keyword_argument
               regex: '^timeout\s*='
               stopBy: end
     - all:
-        - pattern: "aiohttp.$METHOD($$$ARGS)"
+        - pattern: "requests.put($$$ARGS)"
+        - not:
+            has:
+              kind: keyword_argument
+              regex: '^timeout\s*='
+              stopBy: end
+    - all:
+        - pattern: "requests.delete($$$ARGS)"
+        - not:
+            has:
+              kind: keyword_argument
+              regex: '^timeout\s*='
+              stopBy: end
+    - all:
+        - pattern: "requests.patch($$$ARGS)"
+        - not:
+            has:
+              kind: keyword_argument
+              regex: '^timeout\s*='
+              stopBy: end
+    - all:
+        - pattern: "requests.head($$$ARGS)"
+        - not:
+            has:
+              kind: keyword_argument
+              regex: '^timeout\s*='
+              stopBy: end
+    - all:
+        - pattern: "requests.request($$$ARGS)"
+        - not:
+            has:
+              kind: keyword_argument
+              regex: '^timeout\s*='
+              stopBy: end
+    - all:
+        - pattern: "httpx.get($$$ARGS)"
+        - not:
+            has:
+              kind: keyword_argument
+              regex: '^timeout\s*='
+              stopBy: end
+    - all:
+        - pattern: "httpx.post($$$ARGS)"
+        - not:
+            has:
+              kind: keyword_argument
+              regex: '^timeout\s*='
+              stopBy: end
+    - all:
+        - pattern: "httpx.request($$$ARGS)"
+        - not:
+            has:
+              kind: keyword_argument
+              regex: '^timeout\s*='
+              stopBy: end
+    - all:
+        - pattern: "aiohttp.ClientSession().get($$$ARGS)"
+        - not:
+            has:
+              kind: keyword_argument
+              regex: '^timeout\s*='
+              stopBy: end
+    - all:
+        - pattern: "aiohttp.ClientSession().post($$$ARGS)"
         - not:
             has:
               kind: keyword_argument
