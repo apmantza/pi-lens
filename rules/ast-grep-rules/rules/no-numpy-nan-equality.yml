@@ -1,0 +1,31 @@
+id: no-numpy-nan-equality
+language: Python
+message: "Equality checks should not be made against numpy.nan"
+severity: error
+note: |
+  Port of SonarCloud python:S6725.
+
+  `numpy.nan` is never equal to anything (including itself), per
+  IEEE 754. Comparing with `==` is always False; use `numpy.isnan(x)`
+  instead.
+
+  The rule matches any comparison operator where one side is `numpy.nan`,
+  `np.nan`, or `float('nan')`. Strict-equality, inequality, identity,
+  and `in`/`not in` all suffer the same problem.
+metadata:
+  sonar: S6725
+rule:
+  any:
+    - pattern: "$X == numpy.nan"
+    - pattern: "$X != numpy.nan"
+    - pattern: "numpy.nan == $X"
+    - pattern: "numpy.nan != $X"
+    - pattern: "$X == np.nan"
+    - pattern: "$X != np.nan"
+    - pattern: "np.nan == $X"
+    - pattern: "np.nan != $X"
+    - pattern: "$X is np.nan"
+    - pattern: "$X is not np.nan"
+    - pattern: "$X == float('nan')"
+    - pattern: "$X != float('nan')"
+    - pattern: "$X is float('nan')"

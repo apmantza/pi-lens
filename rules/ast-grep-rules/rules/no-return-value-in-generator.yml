@@ -1,0 +1,31 @@
+id: no-return-value-in-generator
+language: Python
+message: "'return' with a value should not be used in a generator function"
+severity: error
+note: |
+  Port of SonarCloud python:S2712.
+
+  A generator function should only use bare `return` (to stop iteration).
+  Returning a value from a generator is meaningless — the value is
+  silently discarded because generators wrap their return value in a
+  StopIteration exception. Use `yield` instead, or split the function.
+
+  The rule matches a `function_definition` that contains BOTH a
+  `yield` node AND a `return_statement` with a value (`return\s+\S`).
+  The `stopBy: end` on each `has:` is required — without it, `has`
+  only checks immediate children (the function body is wrapped in a
+  `block` node, not directly in `function_definition`).
+
+  Bare `return` (no value) is allowed and intentionally not flagged.
+metadata:
+  sonar: S2712
+rule:
+  all:
+    - kind: function_definition
+    - has:
+        kind: yield
+        stopBy: end
+    - has:
+        kind: return_statement
+        regex: 'return\s+\S'
+        stopBy: end

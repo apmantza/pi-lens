@@ -1,0 +1,18 @@
+id: only-strings-in-dunder-all
+valid:
+  - |
+    __all__ = ["foo", "bar", "baz"]
+  - |
+    __all__ = (
+        "Foo",
+        "Bar",
+    )
+  - |
+    __all__ = []  # empty is fine
+invalid:
+  - |
+    __all__ = [foo, "bar"]
+  - |
+    __all__ = ["foo", bar]
+  - |
+    __all__ = [helper()]

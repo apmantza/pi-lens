@@ -1,0 +1,31 @@
+id: no-yield-return-outside-function
+language: Python
+message: "'yield' and 'return' should not be used outside functions"
+severity: error
+note: |
+  Port of SonarCloud python:S2711.
+
+  `yield` and `return` are only valid inside function bodies. Using
+  them at module level is a SyntaxError. (Python's parser catches
+  most of these before AST, but they can slip through dynamic
+  construction, `exec()`, or earlier parser bugs.)
+
+  The rule matches `yield` or `return $X` at module level (not inside
+  any `function_definition`). Implemented as a positive match with
+  `not: inside: function_definition, stopBy: end`.
+metadata:
+  sonar: S2711
+rule:
+  any:
+    - all:
+        - kind: yield
+        - not:
+            inside:
+              kind: function_definition
+              stopBy: end
+    - all:
+        - pattern: return $VALUE
+        - not:
+            inside:
+              kind: function_definition
+              stopBy: end

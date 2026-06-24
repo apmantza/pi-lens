@@ -1,0 +1,13 @@
+id: no-html-autoescape-off
+valid:
+  - "env = Environment(autoescape=True)"
+  - "env = jinja2.Environment(autoescape=True)"
+  - "env = Environment()"
+  - "env = Environment(autoescape=select_autoescape())"
+invalid:
+  - "env = Environment(autoescape=False)"
+  - |
+    env = jinja2.Environment(
+        loader=loader,
+        autoescape=False,
+    )

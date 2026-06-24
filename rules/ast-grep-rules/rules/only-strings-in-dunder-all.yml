@@ -1,0 +1,32 @@
+id: only-strings-in-dunder-all
+language: Python
+message: "Only strings should be listed in __all__"
+severity: error
+note: |
+  Port of SonarCloud python:S2823 (BLOCKER BUG).
+
+  `__all__` is consumed by `from module import *` to determine
+  which names get exported. If a non-string is listed, importing
+  will silently fail or behave unexpectedly.
+
+  The rule matches any `list` node that contains an `identifier`
+  child (variable reference, not a string literal). The list
+  must be the right-hand side of `__all__ = ...` — but that
+  filtering happens at the parent pattern level.
+
+  Implementation note: `has: kind: identifier` would also match
+  the LHS `__all__` itself if we matched the whole assignment;
+  by matching the `list` node directly we scope the identifier
+  check to list items only.
+metadata:
+  sonar: S2823
+rule:
+  all:
+    - pattern: "__all__ = $LIST"
+    - has:
+        kind: list
+        has:
+          any:
+            - kind: identifier
+            - kind: call
+        stopBy: end

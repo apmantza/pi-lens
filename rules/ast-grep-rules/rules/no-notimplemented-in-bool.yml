@@ -1,0 +1,21 @@
+id: no-notimplemented-in-bool
+language: Python
+message: "NotImplemented should not be used in boolean contexts"
+severity: error
+note: |
+  Port of SonarCloud python:S7931.
+
+  `NotImplemented` is a singleton used by Python's binary operator
+  protocol. It must NEVER appear in boolean contexts (e.g.
+  `if NotImplemented:`, `assert NotImplemented`, `bool(NotImplemented)`,
+  `not NotImplemented`) — it should always be `return NotImplemented`
+  from an overloaded method. The boolean conversion is meaningless and
+  almost always a bug.
+metadata:
+  sonar: S7931
+rule:
+  any:
+    - pattern: "if NotImplemented: $$$BODY"
+    - pattern: "assert NotImplemented"
+    - pattern: "bool(NotImplemented)"
+    - pattern: "not NotImplemented"

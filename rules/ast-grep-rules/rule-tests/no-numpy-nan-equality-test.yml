@@ -1,0 +1,22 @@
+id: no-numpy-nan-equality
+valid:
+  - |
+    import numpy as np
+    if np.isnan(x):
+        pass
+  - 'math.isnan(x)'
+  - 'x is None'
+  - 'x == 1'
+invalid:
+  - 'x == numpy.nan'
+  - 'x != numpy.nan'
+  - 'numpy.nan == x'
+  - "x == float('nan')"
+  - |
+    import numpy as np
+    if x is np.nan:
+        pass
+  - |
+    import numpy as np
+    if x == np.nan:
+        pass

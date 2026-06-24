@@ -1,0 +1,28 @@
+id: no-raise-stopiteration-in-generator
+language: Python
+message: "StopIteration should not be raised inside generators"
+severity: error
+note: |
+  Port of SonarCloud python:S8493.
+
+  PEP 479 made `raise StopIteration` inside a generator a
+  RuntimeError (the iterator protocol changed). In Python 3.7+,
+  raising StopIteration inside a generator will be converted to a
+  RuntimeError. Use `return` instead.
+
+  The rule matches a `function_definition` that contains BOTH a
+  `yield` and a `raise StopIteration` (or `raise StopIteration()`).
+  Bare `raise` outside a generator is allowed.
+metadata:
+  sonar: S8493
+rule:
+  all:
+    - kind: function_definition
+    - has:
+        kind: yield
+        stopBy: end
+    - has:
+        any:
+          - pattern: raise StopIteration
+          - pattern: raise StopIteration($$$)
+        stopBy: end
