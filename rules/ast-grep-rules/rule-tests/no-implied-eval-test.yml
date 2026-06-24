@@ -1,8 +1,8 @@
 id: no-implied-eval
 valid:
-  - 'setTimeout(() => doThing(), 100)'
-  - 'setTimeout(fn, 100)'
-  - 'setInterval(fn, 1000)'
+  - "setTimeout(() => doThing(), 100)"
+  - "setTimeout(fn, 100)"
+  - "setInterval(fn, 1000)"
   - 'setTimeout("doThing()")'
   - "setTimeout('doThing()')"
 invalid:

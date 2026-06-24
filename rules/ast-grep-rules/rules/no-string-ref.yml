@@ -1,15 +1,22 @@
 id: no-string-ref
 language: TSX
-message: "String refs are deprecated — use useRef callback or forwardRef instead"
+message: >-
+  String refs are deprecated — use useRef callback or forwardRef instead
 severity: warning
 note: |
   String refs (ref="myRef") are deprecated in React and may be removed
   in future versions. Use useRef with a callback or forwardRef.
+  The original used `has: { field: attribute, regex: "^ref$" }` (with
+  a nested `has: { field: value, kind: string }`). `has: { field: ... }`
+  is a no-op on the field name (the `attribute`/`value` field
+  constraints don't actually narrow the child search). The fix uses
+  a direct regex on the `jsx_attribute` text (the attribute
+  serialises as `name="value"`, so `^ref="` matches the entire
+  attribute form) plus a `has: kind: string` child check (which
+  DOES work — it filters to attribute whose value is a string literal
+  vs an expression like `ref={myRef}`).
 rule:
   kind: jsx_attribute
+  regex: '^ref="'
   has:
-    field: attribute
-    regex: "^ref$"
-    has:
-      field: value
-      kind: string
+    kind: string
