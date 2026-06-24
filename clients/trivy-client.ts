@@ -59,11 +59,26 @@ export interface TrivyFinding {
 	target?: string;
 }
 
+/** Subset of Trivy's `Results[].Licenses[]` fields (#131 Mode 4). */
+export interface TrivyLicenseFinding {
+	/** License identifier, e.g. "GPL-3.0", "AGPL-3.0". */
+	license: string;
+	/** Package the license applies to (or the file, for license-file findings). */
+	pkgName: string;
+	severity: TrivySeverity;
+	/** Trivy's classification, e.g. "restricted", "reciprocal", "forbidden". */
+	category?: string;
+	/** Where it was found — the result Target or the license file path. */
+	filePath?: string;
+}
+
 export interface TrivyResult {
 	success: boolean;
 	findings: TrivyFinding[];
 	/** Hardcoded-secret findings from the same `trivy fs` pass (#131 Mode 3). */
 	secrets: TrivySecretFinding[];
+	/** Dependency license-risk findings from the same pass (#131 Mode 4). */
+	licenses: TrivyLicenseFinding[];
 	scannedAt: string;
 	summary?: string;
 }
@@ -79,6 +94,7 @@ const EMPTY_RESULT: Omit<TrivyResult, "scannedAt"> = {
 	success: false,
 	findings: [],
 	secrets: [],
+	licenses: [],
 };
 
 // Generous: the FIRST run downloads the vuln DB (~30-200 MB). This runs in the
@@ -267,15 +283,16 @@ export class TrivyClient extends SecurityScanClient<TrivyResult> {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "pi-lens-trivy-"));
 		const reportPath = path.join(outDir, "trivy-report.json");
 		try {
-			// One filesystem walk covers both scanners. `--severity` filters the
-			// vuln results; secret findings are severity-independent (trivy always
-			// emits them) and collapsed downstream against gitleaks / ast-grep.
+			// One filesystem walk covers all three scanners. `--severity` filters
+			// both the vuln and the license results; secret findings are
+			// severity-independent (trivy always emits them) and collapsed
+			// downstream against gitleaks / ast-grep.
 			const result = await safeSpawnAsync(
 				bin,
 				[
 					"fs",
 					"--scanners",
-					"vuln,secret",
+					"vuln,secret,license",
 					"--severity",
 					severities.join(","),
 					"--format",
@@ -311,7 +328,8 @@ export class TrivyClient extends SecurityScanClient<TrivyResult> {
 			const raw = fs.readFileSync(reportPath, "utf-8");
 			const findings = parseTrivyReport(raw);
 			const secrets = parseTrivySecrets(raw);
-			return { success: true, findings, secrets, scannedAt };
+			const licenses = parseTrivyLicenses(raw);
+			return { success: true, findings, secrets, licenses, scannedAt };
 		} catch (err) {
 			return {
 				...EMPTY_RESULT,
@@ -434,4 +452,55 @@ export function parseTrivySecrets(raw: string): TrivySecretFinding[] {
 		}
 	}
 	return secrets;
+}
+
+/**
+ * Map Trivy's `Results[].Licenses[]` rows to normalized license-risk findings
+ * (#131 Mode 4). Each row carries `Name` (the license id, e.g. "GPL-3.0"),
+ * `PkgName`, `Severity`, `Category` (trivy's classification: restricted /
+ * reciprocal / forbidden / …), and a `FilePath` for license-file findings.
+ * `Severity` is already filtered by the scan's `--severity` floor. Same
+ * defensive contract as the sibling parsers. Exported for unit tests.
+ */
+export function parseTrivyLicenses(raw: string): TrivyLicenseFinding[] {
+	if (!raw.trim()) return [];
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch {
+		return [];
+	}
+	const results = (parsed as { Results?: unknown })?.Results;
+	if (!Array.isArray(results)) return [];
+
+	const licenses: TrivyLicenseFinding[] = [];
+	for (const resultEntry of results) {
+		if (!resultEntry || typeof resultEntry !== "object") continue;
+		const r = resultEntry as Record<string, unknown>;
+		const target = typeof r.Target === "string" ? r.Target : undefined;
+		const rows = r.Licenses;
+		if (!Array.isArray(rows)) continue;
+		for (const row of rows) {
+			if (!row || typeof row !== "object") continue;
+			const l = row as Record<string, unknown>;
+			const license = typeof l.Name === "string" ? l.Name : undefined;
+			if (!license) continue;
+			const filePath =
+				typeof l.FilePath === "string" && l.FilePath ? l.FilePath : target;
+			// Package licenses carry PkgName; license-file findings fall back to
+			// the file they were found in.
+			const pkgName =
+				typeof l.PkgName === "string" && l.PkgName
+					? l.PkgName
+					: (filePath ?? "unknown");
+			licenses.push({
+				license,
+				pkgName,
+				severity: normalizeSeverity(l.Severity),
+				category: typeof l.Category === "string" ? l.Category : undefined,
+				filePath,
+			});
+		}
+	}
+	return licenses;
 }

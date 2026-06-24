@@ -6,6 +6,7 @@ import { resetProjectLensConfigCache } from "../../clients/project-lens-config.j
 import {
 	hasAnyDependencyManifest,
 	isTrivyEnabled,
+	parseTrivyLicenses,
 	parseTrivyReport,
 	parseTrivySecrets,
 	resolveSeverityFloor,
@@ -284,5 +285,75 @@ describe("parseTrivySecrets", () => {
 			pkgName: "log4j",
 			severity: "UNKNOWN",
 		});
+	});
+});
+
+// ── License parser (#131 Mode 4) ─────────────────────────────────────────────
+
+describe("parseTrivyLicenses", () => {
+	it("maps Results[].Licenses[] to normalized license findings", () => {
+		const report = JSON.stringify({
+			Results: [
+				{
+					Target: "node_modules/leftpad/package.json",
+					Class: "license",
+					Licenses: [
+						{
+							Severity: "HIGH",
+							Category: "restricted",
+							PkgName: "leftpad",
+							Name: "GPL-3.0",
+							FilePath: "",
+						},
+					],
+				},
+				// CVE result with no Licenses[] — skipped.
+				{ Target: "go.sum", Vulnerabilities: [{ VulnerabilityID: "CVE-1" }] },
+			],
+		});
+		const licenses = parseTrivyLicenses(report);
+		expect(licenses).toHaveLength(1);
+		expect(licenses[0]).toEqual({
+			license: "GPL-3.0",
+			pkgName: "leftpad",
+			severity: "HIGH",
+			category: "restricted",
+			filePath: "node_modules/leftpad/package.json",
+		});
+	});
+
+	it("falls back to FilePath as pkgName for license-file findings", () => {
+		const report = JSON.stringify({
+			Results: [
+				{
+					Target: "LICENSE",
+					Class: "license-file",
+					Licenses: [
+						{ Severity: "MEDIUM", Name: "AGPL-3.0", FilePath: "vendor/LICENSE" },
+					],
+				},
+			],
+		});
+		const [lic] = parseTrivyLicenses(report);
+		expect(lic).toMatchObject({
+			license: "AGPL-3.0",
+			pkgName: "vendor/LICENSE",
+			filePath: "vendor/LICENSE",
+			severity: "MEDIUM",
+		});
+	});
+
+	it("skips rows without a license Name and is defensive on junk", () => {
+		const report = JSON.stringify({
+			Results: [
+				{ Target: "a", Licenses: [{ Severity: "HIGH" }, { Name: "MIT" }] },
+			],
+		});
+		const licenses = parseTrivyLicenses(report);
+		expect(licenses).toHaveLength(1);
+		expect(licenses[0].license).toBe("MIT");
+		expect(parseTrivyLicenses("")).toEqual([]);
+		expect(parseTrivyLicenses("not json")).toEqual([]);
+		expect(parseTrivyLicenses("{}")).toEqual([]);
 	});
 });

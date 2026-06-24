@@ -495,6 +495,24 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		}
 	}
 
+	// trivy — dependency license risk (#131 Mode 4). Advisory only: a copyleft /
+	// restricted license in a proprietary tree is a compliance signal, not a
+	// build break. Surfaced from the same cached `trivy fs` pass.
+	const licenses = trivyCacheEntry?.data?.licenses ?? [];
+	if (licenses.length) {
+		const shown = licenses.slice(0, 5);
+		let report =
+			"📜 Dependency license risk (trivy) — review for compliance:\n";
+		for (const l of shown) {
+			const cat = l.category ? `, ${l.category}` : "";
+			report += `  ${l.pkgName} — ${l.license} (${l.severity}${cat})\n`;
+		}
+		if (licenses.length > shown.length) {
+			report += `  … and ${licenses.length - shown.length} more\n`;
+		}
+		advisoryParts.push(report);
+	}
+
 	const t3 = Date.now();
 	if (await depChecker.ensureAvailable()) {
 		const madgeFiles = cacheManager.getFilesForMadge(cwd);
