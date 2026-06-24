@@ -1,0 +1,9 @@
+id: no-aws-s3-public-access
+valid:
+  - "s3.create_bucket(Bucket='my-bucket', ACL='private')"
+  - "s3.put_bucket_acl(Bucket='my-bucket', ACL='private')"
+  - "s3.put_object_acl(Bucket='my-bucket', Key='x', ACL='private')"
+invalid:
+  - "s3.create_bucket(Bucket='my-bucket', ACL='public-read')"
+  - "s3.put_bucket_acl(Bucket='my-bucket', ACL='public-read-write')"
+  - "s3.put_object_acl(Bucket='my-bucket', Key='x', GrantRead='uri=...')"

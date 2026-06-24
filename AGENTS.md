@@ -380,23 +380,39 @@ The rich pattern form (`{context, selector}`) — needed for `missing-component-
 
 The TS catalog port above targets ~50 ast-grep-catalog examples. For **Python**, the more productive target is the SonarCloud rule set (95 BLOCKER rules for Python as of 2026-06). The port priority is **purely-syntactic BUG/CODE_SMELL/VULNERABILITY rules** that don't need type info — the ones we can express cleanly as ast-grep patterns. Skip anything requiring control-flow analysis (e.g. `S935` function return-type verification), type inference (`S5607` operator-type compatibility), or framework-specific deep knowledge (`S8490` enum + dataclass interaction).
 
-**Shipped so far (11 rules):**
+**Shipped so far (37 rules):**
 
-| Rule | SonarCloud ID | Why it ports cleanly |
-|---|---|---|
-| `no-init-return` | S2734 | Pure syntactic — `return $VALUE` inside `def __init__` |
-| `no-return-value-in-generator` | S2712 | `function_definition` + has: yield + has: return_statement with value |
-| `no-yield-return-outside-function` | S2711 | `yield`/`return $X` not inside any `function_definition` |
-| `no-raise-stopiteration-in-generator` | S8493 | `raise StopIteration` inside a generator |
-| `no-assert-tuple` | S5905 | `assert_statement` with `tuple` child |
-| `no-notimplemented-in-bool` | S7931 | `if NotImplemented:`, `assert NotImplemented`, etc. |
-| `no-numpy-nan-equality` | S6725 | Pattern match `==`/`!=`/`is` against `numpy.nan` / `np.nan` / `float('nan')` |
-| `only-strings-in-dunder-all` | S2823 | `__all__ = [...]` containing identifier/call children |
-| `no-html-autoescape-off` | S5439 | `Environment(autoescape=False)` call pattern |
-| `no-jwt-hardcoded-secret` | S6781 | `jwt.encode(..., literal_secret)` — regex on string literal |
-| `no-hardcoded-password` | S6437 | call with `password=`/`passwd=`/`secret=` keyword + string literal |
+**Batch 1 (commit `560ccce`, 11 rules):** `no-init-return` (S2734), `no-return-value-in-generator` (S2712), `no-yield-return-outside-function` (S2711), `no-raise-stopiteration-in-generator` (S8493), `no-assert-tuple` (S5905), `no-notimplemented-in-bool` (S7931), `no-numpy-nan-equality` (S6725), `only-strings-in-dunder-all` (S2823), `no-html-autoescape-off` (S5439), `no-jwt-hardcoded-secret` (S6781, **removed in batch 3**), `no-hardcoded-password` (S6437).
 
-Each rule has a `metadata.sonar: Sxxxx` annotation linking it to the upstream rule for traceability. Two key gotchas hit during porting:
+**Batch 2 (commit `88590a3`, 15 rules):** `no-comparison-to-true-false` (S2159), `no-flask-secret-key-literal` (S6779), `no-duplicate-kwarg` (S5549), `no-aws-access-key-literal` (S7625), `no-boolean-in-except` (S5714), `no-except-non-exception` (S5708), `no-xxe-vulnerable-xml-parser` (S2755), `no-http-headers-bracket-access` (S8371), `no-flask-sendfile-without-mimetype` (S8385), `no-requests-without-timeout` (S3500), `no-uvicorn-non-import-string` (S8397), `no-secret-in-env-var-name` (S6418), `no-jinja2-autoescape-off` (S5247), `no-singledispatch-on-method` (S8505), `no-testclient-text-without-content` (S8405), `no-fastapi-router-prefix-outside-init` (S8413, **removed as too noisy**), `no-flask-preprocess-request-ignored` (S8375), `no-method-field-name-collision` (S1845).
+
+**Batch 3 (uncommitted, 10 rules):** `no-server-bind-wildcard` (S8392), `no-db-string-literal-password` (S2115), `no-identity-operator-on-literals` (S3403), `no-template-string-concat` (S7943), `no-mutable-contextvar-default` (S8508), `no-dunder-exit-wrong-arity` (S2733), `no-aws-apigateway-no-auth` (S6333), `no-aws-s3-public-access` (S6265), `no-only-defined-names-in-dunder-all` (S5807), `no-yield-from-non-iterable` (S3862).
+
+**Net shipped: 37 SonarCloud Python BLOCKER ports (out of 70 BLOCKER + 2 syntax-only rules).**
+
+Two key gotchas hit during porting:
+- `inside: { kind: function_definition, has: { ... }, stopBy: end }` is the canonical pattern for matching a function body — the `block` intermediate node means `inside` needs `stopBy: end` to reach the function_definition parent.
+- `has: { kind: identifier, stopBy: end }` matches identifiers ANYWHERE in the descendant tree, not just direct children. For inside-a-list scans, wrap the list check (`has: kind: list, has: kind: identifier`) so the identifier check scopes to list items only.
+
+**Removed rules (replaced by CodeRabbit coverage or too noisy):**
+- `no-jwt-hardcoded-secret` (S6781) — removed in batch 3 because CodeRabbit's `jwt-python-hardcoded-secret-python.yml` covers it more comprehensively (handles variable-first patterns).
+- `no-fastapi-router-prefix-outside-init` (S8413) — flagged every `.include_router()` call as too noisy.
+- `no-router-include-before-parent` (S8401) — same noise issue.
+- `no-flask-204-with-body` (S8400) — couldn't pattern-match multi-line decorated functions in ast-grep.
+- `no-fastapi-file-body-in-upload` (S8389) — same multi-line pattern issue.
+- `no-static-method-without-decorator` (S5719) — Python decorator AST is sibling-of-function, hard to scope.
+- `no-invalid-open-mode` (S5828) — open mode character set is hard to express without proper mode validation.
+
+**Skipped (require type info or framework-specific deep knowledge):**
+- S3494 (slots cross-reference), S935/S930 (return-type/arity), S5607 (operator-type compatibility), S8490 (enum + dataclass interaction)
+- S5632 (raise derives-from-BaseException), S5756 (calls to non-callable), S5642 (`in`/`not in` operand types)
+- S5953/S3827 (forward-reference detection), S2275 (format-string mismatch), S1845 (covered but limited)
+- S2190 (infinite recursion), S1451 (license headers), S3516 (return invariance)
+- S2876 (`__iter__` returns iterator), S8414 (CORSMiddleware ordering), S8401 (router ordering)
+- S6333/S6265/S6270/S6302 (other AWS-specific), S5722/S5724 (special-method arity)
+- S8494 (slots attribute cross-ref), S2275 (format-string runtime errors)
+
+Two key gotchas hit during porting:
 - `inside: { kind: function_definition, has: { ... }, stopBy: end }` is the canonical pattern for matching a function body — the `block` intermediate node means `inside` needs `stopBy: end` to reach the function_definition parent.
 - `has: { kind: identifier, stopBy: end }` matches identifiers ANYWHERE in the descendant tree, not just direct children. For inside-a-list scans, wrap the list check (`has: kind: list, has: kind: identifier`) so the identifier check scopes to list items only.
 

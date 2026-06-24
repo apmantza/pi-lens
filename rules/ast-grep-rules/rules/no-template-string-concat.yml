@@ -1,0 +1,21 @@
+id: no-template-string-concat
+language: Python
+message: "Template strings and str should not be concatenated directly"
+severity: error
+note: |
+  Port of SonarCloud python:S7943 (BLOCKER BUG).
+
+  `Template("hello $name") + " world"` doesn't interpolate the
+  variable — it produces a concatenated string with the literal
+  `$name` still in it. Use `Template("hello $name").substitute(name="world")`
+  or `string.Template("...").safe_substitute(...)`.
+
+  Matches `Template(...) + "string"` and `"string" + Template(...)`.
+
+  Style: pattern matching.
+metadata:
+  sonar: S7943
+rule:
+  any:
+    - pattern: "Template($$$ARGS) + $STR"
+    - pattern: "$STR + Template($$$ARGS)"

@@ -1,0 +1,33 @@
+id: no-yield-from-non-iterable
+language: Python
+message: "Iterable unpacking, for-in loops and yield from should use an Iterable object"
+severity: warning
+note: |
+  Port of SonarCloud python:S3862 (BLOCKER BUG).
+
+  `yield from x` and `for y in x` (where x is a generator or
+  list) should use `typing.Iterable` or `collections.abc.Iterable`
+  annotations. Using a concrete type like `list` or `dict`
+  limits reusability.
+
+  Style: this is a very conservative partial port — full S3862
+  detection requires type inference. The rule flags
+  `yield from $EXPR` (without Iterable annotation context) as
+  a checkpoint for manual review.
+
+  In practice, `yield from` accepts any iterable, and the
+  signature annotation is the main thing the rule cares about.
+  We don't catch the annotation absence — that requires
+  tracking the surrounding function signature.
+metadata:
+  sonar: S3862
+rule:
+  pattern: "yield from $ITER"
+  not:
+    inside:
+      kind: function_definition
+      has:
+        kind: type
+        regex: 'Iterable'
+        stopBy: end
+      stopBy: end

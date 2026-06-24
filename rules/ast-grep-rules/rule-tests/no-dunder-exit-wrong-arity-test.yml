@@ -1,0 +1,27 @@
+id: no-dunder-exit-wrong-arity
+valid:
+  - |
+    class Ctx:
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+  - |
+    class AsyncCtx:
+        async def __aexit__(self, exc_type, exc_val, exc_tb):
+            pass
+invalid:
+  - |
+    class Ctx:
+        def __exit__(self):
+            pass
+  - |
+    class Ctx:
+        def __exit__(self, exc_type):
+            pass
+  - |
+    class Ctx:
+        def __exit__(self, exc_type, exc_val):
+            pass
+  - |
+    class Ctx:
+        def __exit__(self, exc_type, exc_val, exc_tb, extra):
+            pass

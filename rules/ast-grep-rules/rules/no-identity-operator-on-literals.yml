@@ -1,0 +1,54 @@
+id: no-identity-operator-on-literals
+language: Python
+message: "Identity operators should not be used with literal values"
+severity: error
+note: |
+  Port of SonarCloud python:S3403 (BLOCKER BUG).
+
+  `1 is "1"` is always False (different types). Even when both
+  sides are the same literal, `is` checks identity (memory
+  address), not equality. Use `==` for value comparison.
+
+  Matches any `comparison_operator` (i.e. `is` / `is not`) that
+  has a literal-kind operand (`string`, `integer`, `float`,
+  `list`, `dictionary`, `tuple`, `true`, `false`, `none`).
+  SonarCloud's stricter version only flags cross-type cases;
+  this rule flags any literal on either side.
+
+  Style: kind match on comparison_operator (the AST node for
+  both `==` and `is`), regex anchors the operator to `is\s`,
+  any-of has: traverses all possible literal kinds.
+
+  Note on YAML: `kind: true`/`kind: false` need to be quoted as
+  `"true"`/`"false"` because YAML 1.1 parses bare `true`/`false`
+  as booleans, not strings. The same applies to `none`.
+metadata:
+  sonar: S3403
+rule:
+  kind: comparison_operator
+  regex: 'is\b'
+  any:
+    - has:
+        kind: string
+        stopBy: end
+    - has:
+        kind: integer
+        stopBy: end
+    - has:
+        kind: float
+        stopBy: end
+    - has:
+        kind: list
+        stopBy: end
+    - has:
+        kind: dictionary
+        stopBy: end
+    - has:
+        kind: tuple
+        stopBy: end
+    - has:
+        kind: "true"
+        stopBy: end
+    - has:
+        kind: "false"
+        stopBy: end

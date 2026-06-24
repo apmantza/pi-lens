@@ -1,0 +1,11 @@
+id: no-yield-from-non-iterable
+valid:
+  - |
+    from collections.abc import Iterable
+
+    def gen() -> Iterable[int]:
+        yield from range(10)
+invalid:
+  - |
+    def gen():
+        yield from range(10)  # no Iterable annotation

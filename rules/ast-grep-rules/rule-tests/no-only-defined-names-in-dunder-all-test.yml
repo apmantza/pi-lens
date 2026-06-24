@@ -1,0 +1,17 @@
+id: no-only-defined-names-in-dunder-all
+valid:
+  - |
+    def foo():
+        pass
+    __all__ = ["foo"]  # string literals - safe
+  - |
+    class Bar:
+        pass
+    __all__ = ()  # empty tuple
+  - |
+    __all__ = []  # empty list
+invalid:
+  - |
+    def foo():
+        pass
+    __all__ = [foo]  # identifier in list (could be undefined)
