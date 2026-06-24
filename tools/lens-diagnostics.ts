@@ -402,11 +402,22 @@ function projectDiagnosticToWidget(
 	};
 }
 
+// The ast-grep LSP keys its diagnostics `rule = "ast-grep:<id>"` (source:code,
+// lsp-diagnostics.ts), while the napi runner — per-edit AND the project scan
+// (#308) — emits the bare `<id>`. Both run the same shipped ruleset, so the same
+// violation must collapse to one finding in mode=full's merge regardless of which
+// engine produced it. Strip the `ast-grep:` source prefix and the `-js` language
+// suffix (the napi runner already treats `<id>` / `<id>-js` as one rule) so the
+// LSP sweep and the napi scan don't double-report the same line.
+function normalizeRuleForDedup(ruleId: string): string {
+	return ruleId.replace(/^ast-grep:/, "").replace(/-js$/, "");
+}
+
 function diagnosticDedupKey(
 	filePath: string,
 	diagnostic: WidgetDiagnostic,
 ): string {
-	const ruleId = diagnostic.rule ?? diagnostic.tool ?? "";
+	const ruleId = normalizeRuleForDedup(diagnostic.rule ?? diagnostic.tool ?? "");
 	return [path.resolve(filePath), diagnostic.line ?? "?", ruleId].join(":");
 }
 

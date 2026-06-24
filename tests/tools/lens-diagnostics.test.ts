@@ -609,6 +609,61 @@ describe("lens_diagnostics mode=full", () => {
 		expect(result.details).toMatchObject({ totalBlocking: 1, totalErrors: 1 });
 	});
 
+	it("dedups the napi project scan against ast-grep LSP findings despite the source prefix (#308)", async () => {
+		// The ast-grep LSP keys its findings `ast-grep:<id>`; the napi scan (#308)
+		// uses the bare `<id>`. Same violation, same line — must collapse to ONE in
+		// mode=full, not double-report once the binary is present.
+		mockSummaries.length = 0;
+		mockSummaries.push(
+			sum(
+				"/proj/src/ui.ts",
+				{ warnings: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "warning",
+							message: "Avoid alert()",
+							line: 5,
+							rule: "ast-grep:no-alert",
+							tool: "ast-grep",
+						},
+					],
+				},
+			),
+		);
+		projectDiagnosticsMocks.loadProjectDiagnosticsSnapshot.mockReturnValue({
+			// cache.js is mocked in this file, so the version constant isn't in scope;
+			// the tool path doesn't validate it (loader is mocked, reconcile is identity).
+			version: 2,
+			cwd: "/proj",
+			tier: "cheap",
+			scannedAt: "2026-01-01T00:00:00.000Z",
+			filesScanned: 1,
+			runners: ["tree-sitter", "fact-rules", "ast-grep-napi"],
+			diagnostics: [
+				{
+					filePath: "/proj/src/ui.ts",
+					line: 5,
+					severity: "warning",
+					semantic: "warning",
+					tool: "ast-grep-napi",
+					runner: "ast-grep-napi",
+					rule: "no-alert",
+					message: "Avoid alert()",
+					source: "project-scan",
+				},
+			],
+		});
+		const lspService = { runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]) };
+
+		const result = await run(makeTool({}, lspService), {
+			mode: "full",
+			refreshRunners: "cached",
+		});
+		// One warning, not two — the napi scan finding deduped against the LSP one.
+		expect(result.details).toMatchObject({ totalWarnings: 1 });
+	});
+
 	it("filters ignored cached/widget/project diagnostics when merging full mode (#279)", async () =>
 		withIgnoredFixture(async (cwd) => {
 			const keep = path.join(cwd, "src", "keep.ts");
