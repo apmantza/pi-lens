@@ -1,8 +1,15 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { createDispatchContext } from "../dispatch/dispatcher.js";
 import { evaluateRules } from "../dispatch/fact-rule-runner.js";
 import { runProviders } from "../dispatch/fact-runner.js";
 import { FactStore } from "../dispatch/fact-store.js";
+import {
+	canHandle as astGrepCanHandle,
+	evaluateAstGrepRules,
+	getLang as astGrepGetLang,
+	loadSg,
+} from "../dispatch/runners/ast-grep-napi.js";
 import type { Diagnostic } from "../dispatch/types.js";
 import { isTestFile } from "../file-utils.js";
 import { collectSourceFilesAsync } from "../source-filter.js";
@@ -21,6 +28,13 @@ import type {
 import "../dispatch/integration.js";
 
 const DEFAULT_MAX_FILES = 500;
+// Skip files this large: matches the per-edit ast-grep runner's guard so a single
+// generated megafile can't dominate a project scan.
+const AST_GREP_MAX_FILE_BYTES = 1024 * 1024;
+// Project-audit budgets — looser than the per-edit runner's 10/50 (which exist to
+// keep inline output bounded), since a project scan is an explicit, expensive call.
+const AST_GREP_SCAN_MAX_MATCHES_PER_RULE = 25;
+const AST_GREP_SCAN_MAX_DIAGNOSTICS_PER_FILE = 100;
 const FACT_RULE_EXTENSIONS = new Set([
 	".ts",
 	".tsx",
@@ -164,6 +178,66 @@ async function scanTreeSitter(
 	return diagnostics;
 }
 
+/**
+ * Project-wide ast-grep pass via the bundled napi engine — no `ast-grep` binary
+ * required (#308). In `lens_diagnostics mode=full` the ast-grep LSP already
+ * covers the project WHEN its binary is present; this closes the no-binary gap
+ * using the same Rust core + shipped ruleset. Findings dedup against the LSP's
+ * (`filePath:line:rule`) in the full-mode merge, so running both never
+ * double-reports. Iterates the SAME `files` list as the other scanners, so it
+ * inherits identical exclusion/ignore/cap behavior automatically.
+ */
+async function scanAstGrepNapi(
+	cwd: string,
+	files: string[],
+): Promise<ProjectDiagnostic[]> {
+	const sgModule = await loadSg();
+	if (!sgModule) return [];
+
+	const diagnostics: ProjectDiagnostic[] = [];
+	for (const filePath of files) {
+		if (isTestFile(filePath) || !astGrepCanHandle(filePath)) continue;
+
+		let stats: fs.Stats;
+		try {
+			stats = fs.statSync(filePath);
+		} catch {
+			continue;
+		}
+		if (stats.size > AST_GREP_MAX_FILE_BYTES) continue;
+
+		const lang = astGrepGetLang(filePath, sgModule);
+		if (!lang) continue;
+
+		let content: string;
+		try {
+			content = fs.readFileSync(filePath, "utf-8");
+		} catch {
+			continue;
+		}
+
+		try {
+			const rootNode = lang.parse(content).root();
+			const fileDiagnostics = evaluateAstGrepRules(
+				filePath,
+				rootNode,
+				cwd,
+				"jsts",
+				{
+					maxMatchesPerRule: AST_GREP_SCAN_MAX_MATCHES_PER_RULE,
+					maxTotalDiagnostics: AST_GREP_SCAN_MAX_DIAGNOSTICS_PER_FILE,
+				},
+			);
+			for (const diagnostic of fileDiagnostics) {
+				diagnostics.push(fromDispatchDiagnostic(diagnostic, "ast-grep-napi"));
+			}
+		} catch {
+			// Project scans are best-effort; one unparsable file must not abort the tool.
+		}
+	}
+	return diagnostics;
+}
+
 export async function scanProjectDiagnostics(
 	options: ProjectDiagnosticsScanOptions,
 ): Promise<ProjectDiagnosticsSnapshot> {
@@ -173,6 +247,7 @@ export async function scanProjectDiagnostics(
 	const diagnostics = [
 		...(await scanTreeSitter(cwd, files)),
 		...(await scanFactRules(cwd, files)),
+		...(await scanAstGrepNapi(cwd, files)),
 	];
 	const snapshot: ProjectDiagnosticsSnapshot = {
 		version: PROJECT_DIAGNOSTICS_CACHE_VERSION,
@@ -181,7 +256,7 @@ export async function scanProjectDiagnostics(
 		scannedAt: new Date().toISOString(),
 		diagnostics,
 		filesScanned: files.length,
-		runners: ["tree-sitter", "fact-rules"],
+		runners: ["tree-sitter", "fact-rules", "ast-grep-napi"],
 	};
 	saveProjectDiagnosticsSnapshot(cwd, snapshot);
 	return snapshot;

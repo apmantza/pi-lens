@@ -6,7 +6,9 @@ import type {
 	ProjectDiagnosticsSnapshot,
 } from "./types.js";
 
-export const PROJECT_DIAGNOSTICS_CACHE_VERSION = 1;
+// v2: cheap-tier scan now also runs ast-grep-napi (#308); invalidate older
+// snapshots so a pre-ast-grep cache isn't served as complete via refreshRunners=cached.
+export const PROJECT_DIAGNOSTICS_CACHE_VERSION = 2;
 const SNAPSHOT_CACHE_FILE = "project-diagnostics.json";
 const DELTA_CACHE_FILE = "project-diagnostics-delta.json";
 
