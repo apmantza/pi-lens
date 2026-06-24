@@ -1,0 +1,8 @@
+id: no-nested-links
+valid:
+  - '<a href="/x">link</a>'
+  - '<a href="/x"><span>nested</span></a>'
+invalid:
+  - '<a href="/x">outer <a href="/y">inner</a></a>'
+  - '<a><a>double</a></a>'
+  - '<div><a href="/x">link</a></div>'

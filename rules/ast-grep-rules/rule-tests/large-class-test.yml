@@ -1,0 +1,15 @@
+id: large-class
+valid:
+  - 'class A {}'
+  - 'class A { x = 1 }'
+invalid:
+  - 'class A { foo() {} }'
+  - 'class A { foo() {} bar() {} }'
+  - |
+    class A {
+      foo() {} bar() {} baz() {} qux() {} quux() {} one() {} two() {}
+      three() {} four() {} five() {} six() {} seven() {} eight() {}
+      nine() {} ten() {} eleven() {} twelve() {} thirteen() {}
+      fourteen() {} fifteen() {} sixteen() {} seventeen() {}
+      eighteen() {} nineteen() {} twenty() {} twentyOne() {}
+    }

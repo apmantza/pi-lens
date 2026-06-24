@@ -1,0 +1,14 @@
+id: ts-defensive-null-guard
+valid:
+  - |
+    function f(x) { if (x === null) return null; }
+  - |
+    function f(x) {
+      if (x === null) return null;
+      if (x === undefined) return null;
+    }
+invalid:
+  - |
+    function f(x) { if (x === null || x === undefined) { return null; } }
+  - |
+    function f(x) { if (x == null) { return null; } }

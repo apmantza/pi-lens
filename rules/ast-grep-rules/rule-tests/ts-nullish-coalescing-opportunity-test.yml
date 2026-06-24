@@ -1,0 +1,8 @@
+id: ts-nullish-coalescing-opportunity
+valid:
+  - 'const r = a ?? d'
+  - 'const r = a ? a : d'
+  - 'const r = (a !== undefined) ? a : d'
+invalid:
+  - 'const r = a !== null && a !== undefined ? a : d'
+  - 'const r = a != null ? a : d'

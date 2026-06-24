@@ -2,3 +2,12 @@
 # Bundled rules for pi-local extension
 ruleDirs:
   - ./rules
+# Fixture-style behavioural tests (the YAML form described in
+# https://ast-grep.github.io/guide/test-rule.html). One <id>-test.yml per
+# rule in `rule-tests/`. Run via `ast-grep test --skip-snapshot-tests` (the
+# vitest wrapper in tests/clients/dispatch/runners/ast-grep-rule-tests.test.ts
+# shells out to it and asserts the exit code; snapshots are skipped because
+# the snapshot machinery asserts byte-exact message/span output, which is
+# overkill for "does this rule fire / not-fire" coverage).
+testConfigs:
+  - testDir: ./rule-tests

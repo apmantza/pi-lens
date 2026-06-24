@@ -1,0 +1,9 @@
+id: ts-double-negation
+valid:
+  - 'Boolean(x)'
+  - '!x'
+  - 'x ? a : b'
+invalid:
+  - '!!x'
+  - '!!foo'
+  - 'const y = !!x'

@@ -4,8 +4,17 @@ message: "Explicit 'any' type — use proper typing"
 severity: hint
 note: |
   'any' defeats TypeScript's purpose. Use unknown, specific types, or generics.
+  The original rule used a `kind: type_annotation, has: kind: predefined_type`
+  nested structure which the ast-grep engine does NOT walk correctly —
+  `has` matches direct children but tree-sitter-typescript's `any` is
+  emitted as a `predefined_type` child of `type_annotation`, and the
+  original `has` chain was effectively no-op. The structural
+  `kind: predefined_type + regex: ^any(\[\])?$` matches the leaf
+  directly and catches the `any` token in any container (type
+  annotation, return type, generic argument, `as any`, etc.).
 rule:
-  kind: type_annotation
-  has:
-    kind: predefined_type
-    pattern: any
+  any:
+    - kind: predefined_type
+      regex: '^any(\[\s*\])?$'
+    - pattern: "$X as any"
+    - pattern: "$X as any[]"

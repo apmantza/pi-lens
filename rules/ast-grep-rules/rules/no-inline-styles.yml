@@ -5,14 +5,21 @@ severity: hint
 note: |
   Inline styles make components harder to maintain and override.
   Use CSS modules, styled-components, or Tailwind CSS.
+  The original used `has: { field: attribute, regex: "^style$" }`
+  twice (one for the attribute name, one for the value). Like
+  `no-string-ref`, the `field:` constraint inside `has:` is a
+  no-op in ast-grep 0.42.0 (the field name doesn't actually narrow
+  the child search). The fix uses a direct regex on the
+  `jsx_attribute` text (matches the entire `style={...}` form)
+  plus `has: kind: jsx_expression` (the value being a `{}` expr)
+  plus `has: kind: object` (the expression being an object literal,
+  not a single value).
 rule:
   all:
     - kind: jsx_attribute
+      regex: '^style=\{'
     - has:
-        field: attribute
-        regex: "^style$"
-    - has:
-        field: value
         kind: jsx_expression
-        has:
-          kind: object
+    - has:
+        stopBy: end
+        kind: object

@@ -1,0 +1,9 @@
+id: require-await
+valid:
+  - 'async function f() { return await x }'
+  - 'function f() { return 1 }'
+  - 'async function f() { await x; return y }'
+invalid:
+  - 'async function f() { return 1 }'
+  - 'async function f() { return x }'
+  - 'async function f() { console.log("hi") }'

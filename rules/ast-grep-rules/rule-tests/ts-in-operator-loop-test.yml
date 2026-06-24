@@ -1,0 +1,13 @@
+id: ts-in-operator-loop
+valid:
+  - |
+    for (const k of Object.keys(obj)) {}
+  - |
+    for (const [k, v] of Object.entries(obj)) {}
+invalid:
+  - |
+    for (const k in obj) {}
+  - |
+    for (let k in obj) { use(k); }
+  - |
+    for (const k in obj) { if (obj.hasOwnProperty(k)) {} }

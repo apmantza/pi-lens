@@ -5,7 +5,11 @@ severity: error
 note: |
   javascript: URLs in href or src attributes can execute arbitrary JavaScript.
   This is a security risk, especially with user-controlled content.
+  The `^"javascript` regex matches the OPENING quote of the string literal
+  (ast-grep exposes the literal including its quotes as the node's text,
+  so an unanchored `javascript:` would also match the substring inside
+  `console.log("javascript: ...")` — the leading `"` is what makes it
+  specific to string-literal values).
 rule:
-  all:
-    - kind: string
-    - regex: "^javascript:"
+  kind: string
+  regex: '^"javascript:'

@@ -1,0 +1,9 @@
+id: prefer-string-trim-start-end
+valid:
+  - 'str.trimStart()'
+  - 'str.trimEnd()'
+  - 'str.trim()'
+invalid:
+  - 'str.trimLeft()'
+  - 'str.trimRight()'
+  - 's.trimLeft()'

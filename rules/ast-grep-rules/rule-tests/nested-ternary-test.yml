@@ -1,0 +1,8 @@
+id: nested-ternary
+valid:
+  - 'const x = a ? b : c'
+  - 'const x = (a > b) ? foo(a) : bar(b)'
+invalid:
+  - 'const x = a ? b ? c : d : e'
+  - 'const x = a ? b : c ? d : e'
+  - 'const x = a ? b : (c ? d : e)'

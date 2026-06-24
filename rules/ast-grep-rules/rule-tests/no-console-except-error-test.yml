@@ -1,0 +1,13 @@
+id: no-console-except-error
+valid:
+  - |
+    try {} catch (e) { console.error(e) }
+  - 'logger.info("hi")'
+  - 'logger.error("oops")'
+invalid:
+  - 'console.log("hi")'
+  - 'console.debug("x")'
+  - 'console.warn("y")'
+  - 'console.error("oops")'
+  - |
+    function f() { console.log("debug") }

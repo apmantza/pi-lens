@@ -5,10 +5,23 @@ severity: error
 note: |
   Bypassing JWT verification allows attackers to forge tokens.
   - For 'jwt-simple': avoid { noVerify: true }.
-  - For 'jsonwebtoken': avoid { ignoreExpiration: true } or using .decode() for untrusted tokens.
-  Grade 3.8 — high risk, critical security issue.
+  - For 'jsonwebtoken': avoid { ignoreExpiration: true } or
+    .decode() for untrusted tokens. Grade 3.8 — high risk,
+    critical security issue.
+  The trailing `, $$$` in the .verify patterns matches any
+  other options in the same object (the dangerous key isn't
+  always the first one). The `$$$BEFORE, $KEY: true, $$$AFTER`
+  shape handles the case where the dangerous flag is sandwiched
+  between other options.
 rule:
   any:
     - pattern: "jwt.decode($$$, { noVerify: true })"
+    - pattern: "jwt.decode($$$, { noVerify: true, $$$ })"
+    - pattern: "jwt.verify($$$, { ignoreExpiration: true })"
     - pattern: "jwt.verify($$$, { ignoreExpiration: true, $$$ })"
+    - pattern: >-
+        jwt.verify($$$, { $$$BEFORE, ignoreExpiration: true, $$$AFTER })
+    - pattern: "jwt.verify($$$, { ignoreNotBefore: true })"
     - pattern: "jwt.verify($$$, { ignoreNotBefore: true, $$$ })"
+    - pattern: >-
+        jwt.verify($$$, { $$$BEFORE, ignoreNotBefore: true, $$$AFTER })

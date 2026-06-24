@@ -1,25 +1,3 @@
-# DISABLED: nthChild is unsupported - need to rewrite without it
-# id: ts-parseint-no-radix
-# language: typescript
-# severity: warning
-# message: parseInt(x) without radix - use parseInt(x, 10)
-# metadata:
-#   weight: 2
-#   category: slop
-# rule:
-#   kind: call_expression
-#   all:
-#   - has:
-#       kind: identifier
-#       regex: ^parseInt$
-#   - has:
-#       kind: arguments
-#       not:
-#         has:
-#           nthChild:
-#             position: 2
-# ---
-# Rewritten rule using pattern matching instead of nthChild:
 id: ts-parseint-no-radix
 language: typescript
 severity: warning
@@ -28,6 +6,13 @@ metadata:
   weight: 2
   category: slop
 rule:
-  pattern: "parseInt($X)"
-  not:
-    pattern: "parseInt($X, $RADIX)"
+  # Two patterns: bare parseInt and the `Number.` alias. The `not` clause
+  # excludes the 2-arg form (radix present). The `, $$$REST` tail is
+  # intentionally absent — the 2-arg check is what defines "with radix".
+  any:
+    - pattern: "parseInt($X)"
+      not:
+        pattern: "parseInt($X, $$$REST)"
+    - pattern: "Number.parseInt($X)"
+      not:
+        pattern: "Number.parseInt($X, $$$REST)"

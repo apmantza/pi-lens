@@ -1,21 +1,20 @@
 id: no-relative-cross-package-import
 message: >-
   Avoid relative imports across package boundaries (../../).
-  Use absolute imports (@app/..., @components/...) for better agent reasoning
-  about code provenance and safer refactors.
+  Use absolute imports (@app/..., @components/...) for better agent
+  reasoning about code provenance and safer refactors.
 severity: info
 language: typescript
 rule:
+  # The original used 4 `import $X from '../../../$PATH'`-style patterns,
+  # but ast-grep 0.42.0's pattern matcher doesn't bind the path segment
+  # through the `from "..."` quote boundary (the `string` node between
+  # `from` and the path was opaque to the pattern). The new rule uses
+  # `kind: import_statement` + regex on the whole import line, which
+  # matches regardless of the import shape (named / default / namespace
+  # / side-effect / `import type`).
   any:
-    - pattern: import { $$$ } from '../../../$$$'
-    - pattern: import '$$$/../../../$$$'
-    - pattern: import * as $N from '../../../$$$'
-    - pattern: import $N from '../../../$$$'
-note: |
-  Relative imports with 3+ levels (../../../) indicate cross-package imports.
-
-  Before:
-    import { helper } from '../../../utils/helper';
-
-  After:
-    import { helper } from '@/utils/helper';
+    - kind: import_statement
+      regex: 'from "(\.\./){3}'
+    - kind: import_statement
+      regex: '\.\./\.\./\.\./'

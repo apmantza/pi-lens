@@ -1,0 +1,9 @@
+id: prefer-string-starts-ends-with
+valid:
+  - 'str.startsWith(x)'
+  - 'str.endsWith(x)'
+  - 'str.indexOf(x) === 1'
+invalid:
+  - 'str.indexOf(x) === 0'
+  - 'str.indexOf(x) == 0'
+  - 'str.indexOf("foo") === 0'

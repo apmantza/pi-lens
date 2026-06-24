@@ -1,0 +1,9 @@
+id: no-compare-neg-zero
+valid:
+  - 'if (x === 0) {}'
+  - 'if (x === -1) {}'
+  - 'if (Object.is(x, -0)) {}'
+invalid:
+  - 'if (x === -0) {}'
+  - 'if (x == -0) {}'
+  - 'if (x > -0) {}'

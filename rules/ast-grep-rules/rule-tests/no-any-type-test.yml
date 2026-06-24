@@ -1,0 +1,9 @@
+id: no-any-type
+valid:
+  - 'const x: string = "hi"'
+  - 'const x: unknown = foo()'
+  - 'const x: number = 1'
+invalid:
+  - 'const x: any = foo()'
+  - 'function f(x: any) {}'
+  - 'const x: any[] = []'

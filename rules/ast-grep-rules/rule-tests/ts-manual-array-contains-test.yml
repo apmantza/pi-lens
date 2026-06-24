@@ -1,0 +1,13 @@
+id: ts-manual-array-contains
+valid:
+  - "arr.includes(x)"
+  - "arr.indexOf(x) > 0"
+  - "arr.indexOf(x) === 1"
+  - "arr.indexOf(x) >= 0"
+  - "arr.indexOf(x) < 0"
+  - "arr.indexOf(x) > -1"
+invalid:
+  - "arr.indexOf(x) !== -1"
+  - "arr.indexOf(x) != -1"
+  - "arr.indexOf(x) === -1"
+  - "arr.indexOf(x) == -1"

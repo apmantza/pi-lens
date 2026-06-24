@@ -1,0 +1,9 @@
+id: prefer-optional-chain
+valid:
+  - 'foo?.bar'
+  - 'a && b && c'
+invalid:
+  - 'foo && foo.bar'
+  - 'foo !== null && foo !== undefined && foo.bar'
+  - 'foo != null && foo.bar'
+  - 'foo && foo.bar && foo.bar.baz'

@@ -1,0 +1,8 @@
+id: long-parameter-list
+valid:
+  - 'function f(a, b, c, d) {}'
+  - 'function f(a, b = 1, c = 2, d = 3) {}'
+  - 'function f(...args) {}'
+invalid:
+  - 'function f(a, b, c, d, e) {}'
+  - 'function f(a, b, c, d, e, f) {}'

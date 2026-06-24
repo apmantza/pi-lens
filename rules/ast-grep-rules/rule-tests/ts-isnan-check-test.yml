@@ -1,0 +1,9 @@
+id: ts-isnan-check
+valid:
+  - 'Number.isNaN(x)'
+  - 'x === y'
+  - 'x !== y'
+invalid:
+  - 'x !== x'
+  - 'foo !== foo'
+  - 'x !== x && y'
