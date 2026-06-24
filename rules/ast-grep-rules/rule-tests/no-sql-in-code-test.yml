@@ -1,7 +1,7 @@
 id: no-sql-in-code
 valid:
-  - 'db.find({ id })'
-  - 'db.findOne({ where: { id } })'
+  - "db.find({ id })"
+  - "db.findOne({ where: { id } })"
   - 'sql.unsafe("non-sql")'
 invalid:
   - 'db.query("SELECT * FROM users")'
