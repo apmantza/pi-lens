@@ -138,7 +138,7 @@ const PRIMARY_DISPATCH_GROUPS: Partial<Record<FileKind, RunnerGroup>> = {
 	},
 	yaml: {
 		mode: "all",
-		runnerIds: ["lsp", "yamllint"],
+		runnerIds: ["lsp", "yamllint", "trivy-config"],
 		filterKinds: ["yaml"],
 	},
 	sql: {
@@ -153,7 +153,7 @@ const PRIMARY_DISPATCH_GROUPS: Partial<Record<FileKind, RunnerGroup>> = {
 	},
 	docker: {
 		mode: "all",
-		runnerIds: ["lsp", "hadolint"],
+		runnerIds: ["lsp", "hadolint", "trivy-config"],
 		filterKinds: ["docker"],
 	},
 	php: {

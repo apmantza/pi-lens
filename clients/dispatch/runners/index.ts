@@ -45,6 +45,7 @@ import stylelintRunner from "./stylelint.js";
 import swiftlintRunner from "./swiftlint.js";
 import taploRunner from "./taplo.js";
 import tflintRunner from "./tflint.js";
+import trivyConfigRunner from "./trivy-config.js";
 import valeRunner from "./vale.js";
 // Import tree-sitter runner
 import treeSitterRunner from "./tree-sitter.js";
@@ -95,6 +96,7 @@ export function registerDefaultRunners(registry: RunnerRegistry): void {
 	registry.register(ktlintRunner); // Kotlin linting via ktlint (priority 10)
 	registry.register(detektRunner); // Kotlin static analysis via detekt (priority 20, config-gated)
 	registry.register(tflintRunner); // Terraform linting via tflint (priority 20)
+	registry.register(trivyConfigRunner); // IaC misconfig (Dockerfile/k8s) via trivy config (priority 20, trivy.enabled-gated)
 	registry.register(taploRunner); // TOML linting/validation via taplo (priority 10)
 	registry.register(dartAnalyzeRunner); // Dart analysis via dart analyze (priority 20)
 	registry.register(javacRunner); // Java compile diagnostics via javac (priority 20)

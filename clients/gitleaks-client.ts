@@ -29,6 +29,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { mkdtempSync } from "node:fs";
 import { safeSpawnAsync } from "./safe-spawn.js";
+import { SecurityScanClient } from "./security-scan-client.js";
 
 // --- Types ---
 
@@ -125,17 +126,9 @@ export function hasGitleaksSignal(cwd: string): boolean {
 
 // --- Client ---
 
-export class GitleaksClient {
-	private available: boolean | null = null;
-	private ensureInFlight: Promise<boolean> | null = null;
-	private inFlight = new Map<string, Promise<GitleaksResult>>();
-	private binaryPath: string | null = null;
-	private log: (msg: string) => void;
-
+export class GitleaksClient extends SecurityScanClient<GitleaksResult> {
 	constructor(verbose = false) {
-		this.log = verbose
-			? (msg: string) => console.error(`[gitleaks] ${msg}`)
-			: () => {};
+		super("gitleaks", verbose);
 	}
 
 	/**
@@ -147,48 +140,12 @@ export class GitleaksClient {
 	}
 
 	/**
-	 * Check if gitleaks is available, auto-installing via the GitHub-release
-	 * path (registered in `clients/installer/index.ts`) when missing.
-	 *
-	 * Concurrent first-time callers share the same probe promise.
+	 * Auto-install via the GitHub-release path (registered in
+	 * `clients/installer/index.ts`) when gitleaks isn't already on PATH.
+	 * gitleaks uses `version` (no leading dashes) as its CLI verb.
 	 */
-	async ensureAvailable(): Promise<boolean> {
-		if (this.available !== null) return this.available;
-		if (this.ensureInFlight) return this.ensureInFlight;
-		this.ensureInFlight = this.doEnsureAvailable();
-		try {
-			return await this.ensureInFlight;
-		} finally {
-			this.ensureInFlight = null;
-		}
-	}
-
-	private async doEnsureAvailable(): Promise<boolean> {
-		// PATH probe first. gitleaks uses `version` (no leading dashes) as
-		// its CLI verb — quirky but stable.
-		const probe = await safeSpawnAsync("gitleaks", ["version"], {
-			timeout: 5000,
-		});
-		if (!probe.error && probe.status === 0) {
-			this.log(`gitleaks found: ${probe.stdout.trim().split("\n")[0]}`);
-			this.available = true;
-			return true;
-		}
-
-		// Auto-install via the pi-lens installer's gitleaks entry.
-		this.log("gitleaks not found, attempting auto-install");
-		const { ensureTool } = await import("./installer/index.js");
-		const installed = await ensureTool("gitleaks");
-		if (!installed) {
-			this.log("gitleaks auto-install failed");
-			this.available = false;
-			return false;
-		}
-
-		this.binaryPath = installed;
-		this.available = true;
-		this.log(`gitleaks auto-installed at ${installed}`);
-		return true;
+	protected doEnsureAvailable(): Promise<boolean> {
+		return this.ensureViaInstaller(["version"]);
 	}
 
 	/**
@@ -223,17 +180,7 @@ export class GitleaksClient {
 			};
 		}
 
-		const key = targetDir;
-		const existing = this.inFlight.get(key);
-		if (existing) {
-			this.log(`Scan already in flight for ${targetDir}; sharing result`);
-			return existing;
-		}
-		const promise = this.runScan(targetDir).finally(() => {
-			this.inFlight.delete(key);
-		});
-		this.inFlight.set(key, promise);
-		return promise;
+		return this.dedupeScan(targetDir, () => this.runScan(targetDir));
 	}
 
 	private async runScan(cwd: string): Promise<GitleaksResult> {

@@ -599,3 +599,90 @@ describe("unresolved inline blocker re-surfacing", () => {
 		expect(entries).toHaveLength(0);
 	});
 });
+
+// ── Unified secret surfacing (#131 Mode 3) ────────────────────────────────────
+
+describe("turn_end unified secret surfacing", () => {
+	it("collapses the SAME secret from gitleaks + trivy + ast-grep into ONE blocker", async () => {
+		const env = setupTestEnvironment("pi-lens-secret-collapse-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId: "sec-session" });
+			const cacheManager = new CacheManager(false);
+
+			const secretFile = path.join(env.tmpDir, "src/config.ts");
+			fs.mkdirSync(path.dirname(secretFile), { recursive: true });
+			fs.writeFileSync(secretFile, "const k = 'AKIA...';\n");
+			cacheManager.addModifiedRange(
+				secretFile,
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+				"sec-session",
+			);
+
+			// Three independent sources flag the SAME line with DIFFERENT rule ids.
+			cacheManager.writeCache(
+				"gitleaks",
+				{
+					success: true,
+					scannedAt: "",
+					findings: [
+						{
+							ruleId: "aws-access-token",
+							file: secretFile,
+							startLine: 42,
+							description: "AWS key",
+						},
+					],
+				},
+				env.tmpDir,
+			);
+			cacheManager.writeCache(
+				"trivy",
+				{
+					success: true,
+					scannedAt: "",
+					findings: [],
+					secrets: [
+						{ ruleId: "aws-access-key-id", file: secretFile, line: 42 },
+					],
+				},
+				env.tmpDir,
+			);
+			runtime.recordActionableWarnings([
+				{
+					id: "ag:1",
+					filePath: secretFile,
+					displayPath: "src/config.ts",
+					line: 42,
+					severity: "warning",
+					tool: "ast-grep",
+					rule: "no-hardcoded-secret-js",
+					message: "hardcoded secret",
+					actions: [],
+					suppressed: false,
+					origin: "dispatch",
+				},
+			]);
+
+			await handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, { ctxCwd: env.tmpDir }),
+			);
+
+			const result = consumeTurnEndFindings(cacheManager, env.tmpDir);
+			const content = result?.messages?.[0]?.content ?? "";
+
+			// The location is surfaced exactly ONCE, not three times.
+			expect(content.split("src/config.ts:42").length - 1).toBe(1);
+			// Combined provenance from all three scanners is shown.
+			expect(content).toContain("gitleaks + trivy + ast-grep");
+			// gitleaks (highest priority) owns the displayed rule.
+			expect(content).toContain("aws-access-token");
+			// Exactly one secrets blocker header.
+			expect(content.split("hardcoded secrets detected").length - 1).toBe(1);
+		} finally {
+			env.cleanup();
+		}
+	});
+});

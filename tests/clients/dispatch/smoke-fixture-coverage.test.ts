@@ -42,6 +42,10 @@ const EXEMPT = new Map<string, string>([
 	// Config-gated checkers with no fixture yet.
 	["mypy", "config-gated type-checker; no fixture yet"],
 	["phpstan", "config-gated; no fixture yet"],
+	[
+		"trivy-config",
+		"IaC misconfig; trivy.enabled-gated (off by default), needs trivy + opt-in fixture",
+	],
 	// No live fixture yet — the remaining-linters backlog.
 	["actionlint", "no fixture yet"],
 	["vale", "no fixture yet"],

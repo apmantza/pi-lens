@@ -18,7 +18,7 @@ describe("dispatch integration groups", () => {
 		});
 
 		expect(groups).toHaveLength(2);
-		expect(groups[0].runnerIds).toEqual(["lsp", "yamllint"]);
+		expect(groups[0].runnerIds).toEqual(["lsp", "yamllint", "trivy-config"]);
 		// mode:"all" — yamllint (smart-default) runs alongside the LSP rather than
 		// being suppressed when the LSP succeeds (#209 fallback→all fix).
 		expect(groups[0].mode).toBe("all");
