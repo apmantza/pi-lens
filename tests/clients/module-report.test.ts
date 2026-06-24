@@ -265,7 +265,7 @@ describe("moduleReport — review-graph who-uses-this", () => {
 });
 
 describe("moduleReport — member visibility (#258) + compact outline (#259)", () => {
-	it("routes private/protected members of an exported class to internal with a visibility tag (#258)", async () => {
+	it("nests members under their class with visibility tags; private/protected stay non-exported (#258, #301)", async () => {
 		const env = makeEnv();
 		const file = createTempFile(
 			env.tmpDir,
@@ -280,22 +280,30 @@ describe("moduleReport — member visibility (#258) + compact outline (#259)", (
 		);
 		const report = await moduleReport(file, env.tmpDir);
 
-		// Public member stays in the api surface.
-		expect(report.api.some((e) => e.name === "run")).toBe(true);
-		// Private/protected members are reachable but not public API → internal.
-		expect(report.api.some((e) => e.name === "secret")).toBe(false);
-		expect(report.api.some((e) => e.name === "guarded")).toBe(false);
+		// The exported class is the top-level public entry; members nest under it
+		// rather than appearing as top-level siblings (#301).
+		const service = report.api.find((e) => e.name === "Service");
+		expect(service).toBeDefined();
+		const members = service?.members ?? [];
+		const run = members.find((e) => e.name === "run");
+		const secret = members.find((e) => e.name === "secret");
+		const guarded = members.find((e) => e.name === "guarded");
 
-		const secret = report.internal.find((e) => e.name === "secret");
-		const guarded = report.internal.find((e) => e.name === "guarded");
+		// No member is hoisted to the top-level api/internal lists.
+		expect(report.api.some((e) => e.name === "run")).toBe(false);
+		expect(report.internal.some((e) => e.name === "secret")).toBe(false);
+		expect(report.internal.some((e) => e.name === "guarded")).toBe(false);
+
+		// Public member: exported, no visibility tag.
+		expect(run?.exported).toBe(true);
+		expect(run?.visibility).toBeUndefined();
+		// Private/protected members: visibility-tagged, NOT exported (#258 preserved).
 		expect(secret?.visibility).toBe("private");
 		expect(guarded?.visibility).toBe("protected");
-		// Not counted as exported for the flag / summary / ranking.
 		expect(secret?.exported).toBe(false);
 		expect(secret?.flags ?? []).not.toContain("exported");
+		// summary.exports tracks the top-level public surface.
 		expect(report.summary.exports).toBe(report.api.length);
-		// Public member carries no visibility field.
-		expect(report.api.find((e) => e.name === "run")?.visibility).toBeUndefined();
 	});
 
 	it("keeps class members + module-level symbols while dropping function-locals (#259)", async () => {
@@ -314,13 +322,113 @@ describe("moduleReport — member visibility (#258) + compact outline (#259)", (
 			].join("\n"),
 		);
 		const report = await moduleReport(file, env.tmpDir);
-		const all = [...report.api, ...report.internal].map((e) => e.name);
+		const all = allNames(report);
 		expect(all).toContain("Svc"); // exported class
-		expect(all).toContain("method"); // class member kept
+		expect(all).toContain("method"); // class member kept (now nested under Svc)
 		expect(all).toContain("top"); // module-level kept
 		expect(all).not.toContain("tmp"); // function-local dropped
+		// `method` is nested under its class, not a top-level sibling (#301).
+		const svc = report.api.find((e) => e.name === "Svc");
+		expect(svc?.members?.some((e) => e.name === "method")).toBe(true);
+		expect([...report.api, ...report.internal].some((e) => e.name === "method")).toBe(
+			false,
+		);
+	});
+
+	it("nests class members under the container and keeps them off the top level (#301)", async () => {
+		const env = makeEnv();
+		const file = createTempFile(
+			env.tmpDir,
+			"parser.ts",
+			[
+				"export class Parser {",
+				"  parse(): number { return 1; }",
+				"  recover(): number { return 2; }",
+				"}",
+				"export function standalone(): void {}",
+			].join("\n"),
+		);
+		const report = await moduleReport(file, env.tmpDir);
+
+		const parser = report.api.find((e) => e.name === "Parser");
+		expect(parser).toBeDefined();
+		const memberNames = (parser?.members ?? []).map((e) => e.name);
+		expect(memberNames).toContain("parse");
+		expect(memberNames).toContain("recover");
+
+		// Members stay navigable: each carries its own read args.
+		const parse = parser?.members?.find((e) => e.name === "parse");
+		expect(parse?.read.offset).toBe(parse?.startLine);
+
+		// Members are not duplicated at the top level.
+		expect(report.api.some((e) => e.name === "parse")).toBe(false);
+		expect(report.internal.some((e) => e.name === "parse")).toBe(false);
+		// A sibling top-level function is unaffected.
+		expect(report.api.some((e) => e.name === "standalone")).toBe(true);
+
+		// Members are ordered by source position.
+		const lines = (parser?.members ?? []).map((e) => e.startLine);
+		expect(lines).toEqual([...lines].sort((a, b) => a - b));
+	});
+
+	it("surfaces imports on a COLD cache from the extractor, classified by shape (#301)", async () => {
+		const env = makeEnv();
+		createTempFile(
+			env.tmpDir,
+			"c.ts",
+			[
+				'import { z } from "zod";',
+				'import { local } from "./local.js";',
+				'import path from "node:path";',
+				"export const v = z;",
+			].join("\n"),
+		);
+		// No warmGraph() → cold cache. Imports must still come through the extractor
+		// floor rather than the empty list module_report used to return (#301).
+		const report = await moduleReport("c.ts", env.tmpDir);
+		expect(report.semantic.source).toBe("none"); // genuinely cold
+		expect(report.imports.external).toContain("zod");
+		expect(report.imports.external).toContain("node:path");
+		expect(report.imports.internal).toContain("./local.js");
+		expect(report.summary.imports).toBeGreaterThan(0);
+	});
+
+	it("cold imports are language-uniform: resolves an internal import to a real file (python) (#301)", async () => {
+		const env = makeEnv();
+		createTempFile(
+			env.tmpDir,
+			"app.py",
+			"from .helper import h\nimport os\n\ndef go():\n    return h()\n",
+		);
+		createTempFile(env.tmpDir, "helper.py", "def h():\n    return 1\n");
+		// No warmGraph() → cold. The cold path reuses the SAME per-language resolver
+		// the warm graph uses, so internal imports resolve to actual project files
+		// uniformly across languages — not just TS (#301).
+		const report = await moduleReport("app.py", env.tmpDir);
+		expect(report.semantic.source).toBe("none"); // genuinely cold
+		expect(report.imports.external).toContain("os"); // stdlib stays external
+		// `.helper` resolves to helper.py via resolveImportToFiles (python resolver).
+		expect(report.imports.internal.some((p) => p.endsWith("helper.py"))).toBe(true);
 	});
 });
+
+// Flatten every symbol name in a report, descending into nested members (#301).
+function allNames(report: {
+	api: Array<{ name: string; members?: unknown[] }>;
+	internal: Array<{ name: string; members?: unknown[] }>;
+}): string[] {
+	const out: string[] = [];
+	const walk = (entries: Array<{ name: string; members?: unknown[] }>): void => {
+		for (const entry of entries) {
+			out.push(entry.name);
+			if (entry.members)
+				walk(entry.members as Array<{ name: string; members?: unknown[] }>);
+		}
+	};
+	walk(report.api);
+	walk(report.internal);
+	return out;
+}
 
 describe("readSymbol — verbatim body for guard-satisfying reads", () => {
 	it("returns the exact source lines of a named symbol", async () => {

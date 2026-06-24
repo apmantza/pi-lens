@@ -25,6 +25,16 @@ interface ImportCase {
 }
 
 const CASES: Record<string, ImportCase> = {
+	typescript: {
+		file: "a.ts",
+		src: 'import { z } from "zod";\nimport def from "node:path";\nimport * as ns from "node:fs";\nexport { foo } from "./re.js";\nconst c = require("cjs");\n',
+		expect: ["zod", "node:path", "node:fs", "./re.js", "cjs"],
+	},
+	tsx: {
+		file: "a.tsx",
+		src: 'import { z } from "zod";\nexport { foo } from "./re.js";\n',
+		expect: ["zod", "./re.js"],
+	},
 	python: {
 		file: "a.py",
 		src: "import os\nfrom os.path import join\n",

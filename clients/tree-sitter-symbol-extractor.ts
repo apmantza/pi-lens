@@ -473,7 +473,24 @@ SYMBOL_QUERIES.tsx = SYMBOL_QUERIES.typescript;
 // grammar loads into the shared WASM Module (#255), so neither its symbols nor a
 // lua import query work in the real review-graph client. The validated lua query
 // is recorded on #255 and lands once the parse corruption is fixed.
+// TS/JS imports go through the same `source: (string (string_fragment))` for all
+// three forms (named/default/namespace); re-exports carry the same `source`;
+// CommonJS require() is a call_expression matched by callee name. Shared verbatim
+// by the `typescript` and `tsx` grammars (tsx is a superset — identical nodes).
+// Note: the review-graph builder resolves TS imports via the TS compiler, so this
+// query is what powers the module_report COLD-cache import floor specifically.
+const TS_IMPORT_QUERY = `
+      (import_statement source: (string (string_fragment) @importSource))
+      (export_statement source: (string (string_fragment) @importSource))
+      (call_expression
+        function: (identifier) @_req
+        arguments: (arguments (string (string_fragment) @importSource))
+        (#eq? @_req "require"))
+    `;
+
 const IMPORT_QUERIES: Record<string, string> = {
+	typescript: TS_IMPORT_QUERY,
+	tsx: TS_IMPORT_QUERY,
 	python: `
       (import_statement name: (dotted_name) @importSource)
       (import_statement name: (aliased_import name: (dotted_name) @importSource))

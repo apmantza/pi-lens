@@ -36,7 +36,12 @@ import { logLatency } from "./latency-logger.js";
 import { normalizeMapKey } from "./path-utils.js";
 import type { Symbol as ExtractedSymbol } from "./symbol-types.js";
 import { TreeSitterClient } from "./tree-sitter-client.js";
-import { TreeSitterSymbolExtractor } from "./tree-sitter-symbol-extractor.js";
+import {
+	type ExtractedSymbols,
+	type ImportRef,
+	TreeSitterSymbolExtractor,
+} from "./tree-sitter-symbol-extractor.js";
+import { resolveImportToFiles } from "./review-graph/import-resolvers.js";
 import type { ReviewGraph, ReviewGraphEdgeKind } from "./review-graph/types.js";
 
 // NOTE: live-LSP enrichment is NO LONGER called on this read path (#256). Firing
@@ -77,6 +82,11 @@ export interface ModuleSymbolEntry {
 	/** Empty when the symbol has no risk flags; omitted from the wire entirely. */
 	flags?: string[];
 	usedBy?: ModuleSymbolUsedBy[];
+	/** Members nested under a container symbol (class/interface) by line-range
+	 * containment (#301). Each member is a full entry — own read args, visibility,
+	 * who-uses-this — so nesting stays navigable, not just a name list. Omitted for
+	 * leaf symbols and empty containers. */
+	members?: ModuleSymbolEntry[];
 	/** Pre-computed read arguments — the agent's next call sits right here. */
 	read: { path: string; offset: number; limit: number };
 }
@@ -180,22 +190,110 @@ async function getExtractor(
 	return result;
 }
 
-async function extractFileSymbols(
+const EMPTY_EXTRACTION: ExtractedSymbols = { symbols: [], refs: [], imports: [] };
+
+async function extractFile(
 	absPath: string,
 	languageId: string,
 	content: string,
-): Promise<ExtractedSymbol[]> {
+): Promise<ExtractedSymbols> {
 	try {
 		const initialized = await tsClient.init();
-		if (!initialized) return [];
+		if (!initialized) return EMPTY_EXTRACTION;
 		const tree = await tsClient.parseFile(absPath, languageId);
-		if (!tree) return [];
+		if (!tree) return EMPTY_EXTRACTION;
 		const extractor = await getExtractor(languageId);
-		if (!extractor) return [];
-		return extractor.extract(tree, absPath, content).symbols;
+		if (!extractor) return EMPTY_EXTRACTION;
+		return extractor.extract(tree, absPath, content);
 	} catch {
-		return [];
+		return EMPTY_EXTRACTION;
 	}
+}
+
+// Cold-path import split (#301) — language-uniform, NOT TS-only. The warm review
+// graph resolves internal specifiers to real files; on a cold cache we reuse the
+// SAME per-language resolver it uses (resolveImportToFiles: python/go/java/ruby/
+// zig/bash/dart), so a source that resolves to in-project file(s) is `internal`,
+// shown as the cwd-relative path exactly as collectImports does warm. For sources
+// the resolver doesn't model (jsts relatives, rust crate::/super::/self::, and the
+// namespace languages) we fall back to a shape heuristic: a clearly-relative or
+// intra-crate specifier is internal (kept as the raw specifier — we don't resolve
+// these to files here), everything else external. A populated, mostly-resolved
+// floor beats the empty list module_report returned cold.
+function resolveColdImports(
+	cwd: string,
+	filePath: string,
+	languageId: string,
+	imports: ImportRef[],
+): { external: string[]; internal: string[] } {
+	const external = new Set<string>();
+	const internal = new Set<string>();
+	for (const { source } of imports) {
+		if (!source) continue;
+		const resolved = resolveImportToFiles(cwd, filePath, languageId, source);
+		if (resolved.length > 0) {
+			for (const file of resolved) internal.add(toDisplayPath(file, cwd));
+			continue;
+		}
+		const isInternal =
+			source.startsWith(".") ||
+			source.startsWith("/") ||
+			source.startsWith("crate::") ||
+			source.startsWith("super::") ||
+			source.startsWith("self::");
+		(isInternal ? internal : external).add(source);
+	}
+	return {
+		external: [...external].sort((a, b) => a.localeCompare(b)),
+		internal: [...internal].sort((a, b) => a.localeCompare(b)),
+	};
+}
+
+// Container kinds that hold members in the outline. Other languages' constructs
+// (structs, enums, objects) map onto these via the extractor's SymbolKind.
+const CONTAINER_KINDS = new Set(["class", "interface"]);
+
+// Nest member entries under the tightest container (class/interface) whose line
+// range strictly encloses them (#301), mirroring ast-grep's outline. Returns the
+// top-level entries; nested members are removed from the top level and attached to
+// their parent's `members` (sorted by position). Containers may themselves nest
+// (an inner class under an outer one) — references are shared, so a single pass
+// over the flat list assembles the whole tree.
+function nestEntries(entries: ModuleSymbolEntry[]): ModuleSymbolEntry[] {
+	const containers = entries.filter((e) => CONTAINER_KINDS.has(e.kind));
+	if (containers.length === 0) return entries;
+
+	const parentOf = new Map<ModuleSymbolEntry, ModuleSymbolEntry>();
+	for (const entry of entries) {
+		let best: ModuleSymbolEntry | undefined;
+		let bestSpan = Number.POSITIVE_INFINITY;
+		for (const container of containers) {
+			if (container === entry) continue;
+			const encloses =
+				container.startLine <= entry.startLine &&
+				container.endLine >= entry.endLine &&
+				(container.startLine < entry.startLine ||
+					container.endLine > entry.endLine);
+			if (!encloses) continue;
+			const span = container.endLine - container.startLine;
+			if (span < bestSpan) {
+				bestSpan = span;
+				best = container;
+			}
+		}
+		if (best) parentOf.set(entry, best);
+	}
+
+	const topLevel: ModuleSymbolEntry[] = [];
+	for (const entry of entries) {
+		const parent = parentOf.get(entry);
+		if (parent) (parent.members ??= []).push(entry);
+		else topLevel.push(entry);
+	}
+	for (const container of containers) {
+		container.members?.sort((a, b) => a.startLine - b.startLine);
+	}
+	return topLevel;
 }
 
 function readArgsFor(
@@ -420,8 +518,8 @@ export async function moduleReport(
 	const lineCount = content.split(/\r?\n/).length;
 
 	const extracted = languageId
-		? await extractFileSymbols(absPath, languageId, content)
-		: [];
+		? await extractFile(absPath, languageId, content)
+		: EMPTY_EXTRACTION;
 
 	// READ-ONLY: consume the already-built review graph, never build one here. A
 	// synchronous full build re-runs every fact provider (TS-compiler ASTs for
@@ -437,17 +535,29 @@ export async function moduleReport(
 	// Drop function-local declarations (a nested const/arrow/function) from the
 	// outline — they're implementation detail of a parent symbol, not navigable
 	// module structure (#259). Presentation-only: the review graph keeps them.
-	const outlineSymbols = extracted.filter((sym) => !sym.local);
+	const outlineSymbols = extracted.symbols.filter((sym) => !sym.local);
 
 	const entries = outlineSymbols.map((sym) =>
 		toEntry(sym, absPath, normalizedPath, graph, maxRefs, cwd),
 	);
 
-	const api = entries.filter((entry) => entry.exported);
-	const internal = entries.filter((entry) => !entry.exported);
-	const imports = graph
+	// Nest class/interface members under their container (#301); the api/internal
+	// split now applies to the TOP-LEVEL entries only. recommendedReads still ranks
+	// over the FLAT `entries` list below, so a hot nested method can still surface.
+	const topLevel = nestEntries(entries);
+	const api = topLevel.filter((entry) => entry.exported);
+	const internal = topLevel.filter((entry) => !entry.exported);
+
+	// Imports: the warm review graph resolves internal specifiers to real file
+	// paths, so it wins whenever it has any; otherwise fall back to the extractor's
+	// raw specifiers so a COLD cache still surfaces imports rather than [] (#301).
+	const graphImports = graph
 		? collectImports(graph, normalizedPath, cwd)
 		: { external: [], internal: [] };
+	const imports =
+		graphImports.external.length + graphImports.internal.length > 0
+			? graphImports
+			: resolveColdImports(cwd, absPath, languageId ?? "", extracted.imports);
 
 	const hasGraphNode = graph?.fileNodes.has(normalizedPath) ?? false;
 
@@ -534,7 +644,7 @@ export async function readSymbol(
 		return { found: false, path: absPath, name: symbolName };
 	}
 
-	const symbols = await extractFileSymbols(absPath, languageId, content);
+	const { symbols } = await extractFile(absPath, languageId, content);
 	const sym = symbols.find((candidate) => candidate.name === symbolName);
 	if (!sym) {
 		log(false);
