@@ -7,6 +7,7 @@ import {
 	hasAnyDependencyManifest,
 	isTrivyEnabled,
 	parseTrivyReport,
+	parseTrivySecrets,
 	resolveSeverityFloor,
 	shouldScanTrivy,
 } from "../../clients/trivy-client.js";
@@ -188,6 +189,75 @@ describe("parseTrivyReport", () => {
 		expect(parseTrivyReport("")).toEqual([]);
 		expect(parseTrivyReport("not json")).toEqual([]);
 		expect(parseTrivyReport("{}")).toEqual([]);
+	});
+
+	it("ignores Secrets[] rows (CVE parser only)", () => {
+		const report = JSON.stringify({
+			Results: [
+				{ Target: "src/config.ts", Secrets: [{ RuleID: "aws", StartLine: 1 }] },
+			],
+		});
+		expect(parseTrivyReport(report)).toEqual([]);
+	});
+});
+
+// ── Secret parser (#131 Mode 3) ──────────────────────────────────────────────
+
+describe("parseTrivySecrets", () => {
+	it("maps Results[].Secrets[] to normalized secret findings", () => {
+		const report = JSON.stringify({
+			Results: [
+				{
+					Target: "src/config.ts",
+					Class: "secret",
+					Secrets: [
+						{
+							RuleID: "aws-access-key-id",
+							Category: "AWS",
+							Severity: "CRITICAL",
+							Title: "AWS Access Key ID",
+							StartLine: 42,
+							EndLine: 42,
+							Match: "AKIA…",
+						},
+					],
+				},
+				// CVE result with no Secrets[] — skipped.
+				{
+					Target: "package-lock.json",
+					Vulnerabilities: [{ VulnerabilityID: "CVE-1", PkgName: "x" }],
+				},
+			],
+		});
+		const secrets = parseTrivySecrets(report);
+		expect(secrets).toHaveLength(1);
+		expect(secrets[0]).toEqual({
+			ruleId: "aws-access-key-id",
+			file: "src/config.ts",
+			line: 42,
+			title: "AWS Access Key ID",
+		});
+	});
+
+	it("skips rows missing RuleID or StartLine, and is defensive on junk", () => {
+		const report = JSON.stringify({
+			Results: [
+				{
+					Target: "a.ts",
+					Secrets: [
+						{ Category: "no-rule", StartLine: 1 },
+						{ RuleID: "no-line" },
+						{ RuleID: "ok", StartLine: 7 },
+					],
+				},
+			],
+		});
+		expect(parseTrivySecrets(report)).toEqual([
+			{ ruleId: "ok", file: "a.ts", line: 7, title: undefined },
+		]);
+		expect(parseTrivySecrets("")).toEqual([]);
+		expect(parseTrivySecrets("not json")).toEqual([]);
+		expect(parseTrivySecrets("{}")).toEqual([]);
 	});
 
 	it("skips entries missing the required id/pkg fields", () => {

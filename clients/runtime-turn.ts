@@ -24,6 +24,14 @@ import { getKnipIgnorePatterns } from "./file-utils.js";
 import type { GitleaksResult } from "./gitleaks-client.js";
 import type { GovulncheckResult } from "./govulncheck-client.js";
 import type { TrivyResult } from "./trivy-client.js";
+import {
+	dedupeSecretFindings,
+	fromAstGrepWarnings,
+	fromGitleaks,
+	fromTrivySecrets,
+	isSecretWarning,
+	secretLocationKey,
+} from "./secret-findings.js";
 import type { KnipClient, KnipIssue, KnipResult } from "./knip-client.js";
 import {
 	PROJECT_DIAGNOSTICS_CACHE_VERSION,
@@ -402,23 +410,48 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		advisoryParts.push(report);
 	}
 
-	// gitleaks — surface session_start-cached committed-secret findings.
-	// Treated as a BLOCKER (not advisory) because committed credentials
-	// are real production risk and need rotation before merge.
-	const gitleaksCacheEntry = cacheManager.readCache<GitleaksResult>(
+	const trivyCacheEntry = cacheManager.readCache<TrivyResult>("trivy", cwd);
+
+	// Secrets — UNIFIED surfacing (#131 Mode 3). gitleaks, trivy secret, and the
+	// ast-grep hardcoded-secret rules can each flag the SAME line with different
+	// rule ids, which the rule-keyed diagnostic dedup can't collapse. Collapse by
+	// location so a committed/hardcoded secret is reported ONCE (with combined
+	// provenance) — a blocker, since credentials need rotation before merge.
+	const gitleaksData = cacheManager.readCache<GitleaksResult>(
 		"gitleaks",
 		cwd,
+	)?.data;
+	const astSecretWarnings = runtime
+		.peekActionableWarnings()
+		.filter(isSecretWarning);
+	const sessionSecrets = dedupeSecretFindings([
+		...fromGitleaks(gitleaksData?.findings ?? []),
+		...fromTrivySecrets(trivyCacheEntry?.data?.secrets ?? []),
+	]);
+	// Locations already surfaced as session-scan secret blockers — used to enrich
+	// provenance where ast-grep agrees and to suppress the duplicate ast-grep copy
+	// from the actionable-warnings advisory below.
+	const secretBlockedLocations = new Set(
+		sessionSecrets.map((f) => secretLocationKey(f.file, f.line)),
 	);
-	if (gitleaksCacheEntry?.data?.findings?.length) {
-		const findings = gitleaksCacheEntry.data.findings.slice(0, 5);
+	if (sessionSecrets.length) {
+		// Fold in ast-grep provenance ONLY where it coincides with a session
+		// secret — don't promote ast-grep-only findings out of their advisory tier.
+		const enriched = dedupeSecretFindings([
+			...sessionSecrets,
+			...fromAstGrepWarnings(astSecretWarnings).filter((a) =>
+				secretBlockedLocations.has(secretLocationKey(a.file, a.line)),
+			),
+		]);
+		const shown = enriched.slice(0, 5);
 		let report =
-			"🔴 STOP — committed secrets detected (gitleaks). Rotate the credentials and remove from source:\n";
-		for (const f of findings) {
-			const where = `${toRunnerDisplayPath(cwd, f.file)}:${f.startLine}`;
-			report += `  ${where} — ${f.ruleId}${f.description ? `: ${f.description}` : ""}\n`;
+			"🔴 STOP — hardcoded secrets detected. Rotate the credentials and remove them from source:\n";
+		for (const f of shown) {
+			const where = `${toRunnerDisplayPath(cwd, f.file)}:${f.line}`;
+			report += `  ${where} — ${f.rule} [${f.sources.join(" + ")}]${f.description ? `: ${f.description}` : ""}\n`;
 		}
-		if (gitleaksCacheEntry.data.findings.length > findings.length) {
-			report += `  … and ${gitleaksCacheEntry.data.findings.length - findings.length} more\n`;
+		if (enriched.length > shown.length) {
+			report += `  … and ${enriched.length - shown.length} more\n`;
 		}
 		blockerParts.push(report);
 	}
@@ -427,7 +460,6 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	// CRITICAL is a blocker (a known-exploitable CVE in a shipped dep is real
 	// production risk); HIGH/MEDIUM/LOW are advisory. The agent gets the upgrade
 	// target as a hint and decides — we never auto-edit lockfiles.
-	const trivyCacheEntry = cacheManager.readCache<TrivyResult>("trivy", cwd);
 	if (trivyCacheEntry?.data?.findings?.length) {
 		const all = trivyCacheEntry.data.findings;
 		const critical = all.filter((f) => f.severity === "CRITICAL");
@@ -628,7 +660,21 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				turnIndex: runtime.turnIndex,
 				files,
 				modifiedRangesByFile,
-				dispatchWarnings: runtime.peekActionableWarnings(),
+				// Suppress the ast-grep secret advisory at any location already
+				// surfaced in the unified secrets blocker above (#131 Mode 3) — the
+				// secret is reported once, not twice.
+				dispatchWarnings: runtime
+					.peekActionableWarnings()
+					.filter(
+						(w) =>
+							!(
+								isSecretWarning(w) &&
+								typeof w.line === "number" &&
+								secretBlockedLocations.has(
+									secretLocationKey(w.filePath, w.line),
+								)
+							),
+					),
 				includeLspCodeActions: !!getFlag("lens-actionable-warning-actions"),
 				projectSeqStart: runtime.turnStartProjectSeq,
 				projectSeqEnd: runtime.projectSeq,

@@ -42,6 +42,7 @@ import { mkdtempSync } from "node:fs";
 import { loadPiLensProjectConfig } from "./project-lens-config.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { SecurityScanClient } from "./security-scan-client.js";
+import type { TrivySecretFinding } from "./secret-findings.js";
 
 // --- Types ---
 
@@ -61,6 +62,8 @@ export interface TrivyFinding {
 export interface TrivyResult {
 	success: boolean;
 	findings: TrivyFinding[];
+	/** Hardcoded-secret findings from the same `trivy fs` pass (#131 Mode 3). */
+	secrets: TrivySecretFinding[];
 	scannedAt: string;
 	summary?: string;
 }
@@ -75,6 +78,7 @@ export type TrivySeverity =
 const EMPTY_RESULT: Omit<TrivyResult, "scannedAt"> = {
 	success: false,
 	findings: [],
+	secrets: [],
 };
 
 // Generous: the FIRST run downloads the vuln DB (~30-200 MB). This runs in the
@@ -263,12 +267,15 @@ export class TrivyClient extends SecurityScanClient<TrivyResult> {
 		const outDir = mkdtempSync(path.join(os.tmpdir(), "pi-lens-trivy-"));
 		const reportPath = path.join(outDir, "trivy-report.json");
 		try {
+			// One filesystem walk covers both scanners. `--severity` filters the
+			// vuln results; secret findings are severity-independent (trivy always
+			// emits them) and collapsed downstream against gitleaks / ast-grep.
 			const result = await safeSpawnAsync(
 				bin,
 				[
 					"fs",
 					"--scanners",
-					"vuln",
+					"vuln,secret",
 					"--severity",
 					severities.join(","),
 					"--format",
@@ -301,8 +308,10 @@ export class TrivyClient extends SecurityScanClient<TrivyResult> {
 				};
 			}
 
-			const findings = parseTrivyReport(fs.readFileSync(reportPath, "utf-8"));
-			return { success: true, findings, scannedAt };
+			const raw = fs.readFileSync(reportPath, "utf-8");
+			const findings = parseTrivyReport(raw);
+			const secrets = parseTrivySecrets(raw);
+			return { success: true, findings, secrets, scannedAt };
 		} catch (err) {
 			return {
 				...EMPTY_RESULT,
@@ -382,4 +391,47 @@ export function parseTrivyReport(raw: string): TrivyFinding[] {
 		}
 	}
 	return findings;
+}
+
+/**
+ * Map Trivy's `Results[].Secrets[]` rows to normalized secret findings. The
+ * file is the result's `Target`; each secret carries a `RuleID`, `StartLine`,
+ * and `Title`. Same defensive contract as `parseTrivyReport` — malformed input
+ * returns `[]`. These are collapsed against gitleaks / ast-grep downstream
+ * (`clients/secret-findings.ts`) so the same secret surfaces once. Exported for
+ * unit tests.
+ */
+export function parseTrivySecrets(raw: string): TrivySecretFinding[] {
+	if (!raw.trim()) return [];
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch {
+		return [];
+	}
+	const results = (parsed as { Results?: unknown })?.Results;
+	if (!Array.isArray(results)) return [];
+
+	const secrets: TrivySecretFinding[] = [];
+	for (const resultEntry of results) {
+		if (!resultEntry || typeof resultEntry !== "object") continue;
+		const r = resultEntry as Record<string, unknown>;
+		const target = typeof r.Target === "string" ? r.Target : undefined;
+		const rows = r.Secrets;
+		if (!target || !Array.isArray(rows)) continue;
+		for (const row of rows) {
+			if (!row || typeof row !== "object") continue;
+			const s = row as Record<string, unknown>;
+			const ruleId = typeof s.RuleID === "string" ? s.RuleID : undefined;
+			const line = typeof s.StartLine === "number" ? s.StartLine : undefined;
+			if (!ruleId || line == null) continue;
+			secrets.push({
+				ruleId,
+				file: target,
+				line,
+				title: typeof s.Title === "string" ? s.Title : undefined,
+			});
+		}
+	}
+	return secrets;
 }

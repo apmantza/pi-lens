@@ -260,7 +260,9 @@ Three external scanners run **once per session in the background** (not on every
 |---|---|---|---|
 | **gitleaks** | Committed secrets (API keys, tokens, certs) — regex + entropy, language-agnostic | `.gitleaks.toml` / `.gitleaksignore`, a `gitleaks` dep, or a pre-commit hook referencing it | GitHub release |
 | **govulncheck** | Go module CVEs **reachable** from the build graph (call-graph filtered) | a `go.mod` at the analysis root | `go install` (needs the Go toolchain) |
-| **trivy** | Dependency CVEs across every ecosystem (npm, PyPI, Maven/Gradle, Go, Cargo, Composer, RubyGems, NuGet, …) | **`trivy.enabled: true` in `.pi-lens.json`** *and* a dependency manifest at the root | GitHub release |
+| **trivy** | Dependency CVEs across every ecosystem (npm, PyPI, Maven/Gradle, Go, Cargo, Composer, RubyGems, NuGet, …) **plus hardcoded secrets** (same `trivy fs` pass) | **`trivy.enabled: true` in `.pi-lens.json`** *and* a dependency manifest at the root | GitHub release |
+
+Secret findings from **gitleaks, trivy, and the ast-grep `*-hardcoded-secret-*` rules** are collapsed **by location** before surfacing: the same credential flagged by several scanners (with different rule ids) is reported **once** with combined provenance (`[gitleaks + trivy + ast-grep]`), not two or three times — the duplicate advisory copy is suppressed. This is the dedup contract that lets multiple secret scanners coexist without the triple-report noise.
 
 Trivy requires an **explicit** opt-in (rather than just a manifest being present) because its first run pulls a 30–200 MB vulnerability database. Enable it per-project — or globally via a `~/.pi-lens.json` — and optionally widen severity:
 
