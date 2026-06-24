@@ -1,0 +1,26 @@
+id: no-duplicate-kwarg
+language: Python
+message: "Function arguments should be passed only once"
+severity: error
+note: |
+  Port of SonarCloud python:S5549.
+
+  Passing the same argument name twice (e.g. `f(x=1, x=2)`) is a
+  SyntaxError in Python 3.6+. Mostly redundant with the compiler
+  but useful in dynamic code construction (`exec()`, `eval()`,
+  `ast.parse()`).
+
+  The rule uses ast-grep's pattern matching: `$F($X=$$$A, $X=$$$B)`
+  matches any call where the same metavariable `$X` appears as a
+  keyword argument name twice. The metavariable repetition forces
+  the matched names to be identical.
+
+  Note: This rule only catches the same-keyword-twice case. Full
+  S5549 detection requires scope-aware name resolution (e.g. the
+  case `f(x, x=2)` where positional + keyword both bind to x).
+metadata:
+  sonar: S5549
+rule:
+  any:
+    - pattern: "$F($X=$$$A, $X=$$$B)"
+    - pattern: "$F($$$A, $X=$V, $$$B, $X=$W)"

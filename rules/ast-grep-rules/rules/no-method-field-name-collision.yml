@@ -1,0 +1,31 @@
+id: no-method-field-name-collision
+language: Python
+message: "Methods and field names should not differ only by capitalization"
+severity: warning
+note: |
+  Port of SonarCloud python:S1845.
+
+  A class with both `def get_X(self)` and `self.x = ...` is
+  confusing — two attributes that differ only in capitalization
+  may collide on case-insensitive lookups or confuse readers.
+
+  This rule uses ast-grep **patterns** to detect a class that
+  contains BOTH a method definition (`def $F(self, ...)`) and
+  a field assignment (`self.$X = ...`). The `(?i)` regex on
+  the class text is necessary because ast-grep's pattern
+  matcher doesn't support case-insensitive metavariable
+  matching out of the box.
+
+  This is an approximate check — full S1845 detection requires
+  tracking all definitions and assignments to check for exact
+  name overlap (case-insensitively). The rule flags any class
+  with both patterns for manual review.
+metadata:
+  sonar: S1845
+rule:
+  all:
+    - kind: class_definition
+    - regex: '(?i)def\s+\w+\(self'
+    - has:
+        pattern: "self.$FIELD = $VALUE"
+        stopBy: end

@@ -1,0 +1,23 @@
+id: no-method-field-name-collision
+valid:
+  - |
+    class Foo:
+        def get_x(self):
+            return self._x
+  - |
+    class Foo:
+        x = 0  # class variable, not method
+  - |
+    def external_function():
+        pass
+  - |
+    class Foo:
+        def get_x(self):
+            return self.x  # same case, no collision
+invalid:
+  - |
+    class Foo:
+        def get_X(self):
+            pass
+        def __init__(self):
+            self.x = 1  # x vs get_X - different case

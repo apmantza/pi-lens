@@ -1,0 +1,29 @@
+id: no-except-non-exception
+language: Python
+message: "Caught Exceptions must derive from BaseException"
+severity: error
+note: |
+  Port of SonarCloud python:S5708.
+
+  `except 1:` and `except "string":` are SyntaxErrors in Python 3,
+  but they can slip through `exec()`/`eval()`/dynamic code paths.
+  More importantly, catching non-BaseException values is a strong
+  signal of a bug.
+
+  Matches an `except_clause` whose direct children contain a
+  literal `integer` or `string` (a non-identifier expression).
+  Tuples of exception types are OK because the tuple contains
+  identifiers, not literals — but `except (ValueError, 1):` is
+  a SyntaxError too (mixing identifiers with literals in a
+  tuple of exception types). The rule covers both cases.
+metadata:
+  sonar: S5708
+rule:
+  all:
+    - kind: except_clause
+    - has:
+        any:
+          - kind: integer
+          - kind: string
+          - kind: float
+        stopBy: end

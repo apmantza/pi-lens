@@ -1,0 +1,13 @@
+id: no-comparison-to-true-false
+valid:
+  - "if x:"
+  - "if not x:"
+  - "x = True"
+  - "x == 1"
+  - "x == y"
+invalid:
+  - "if x == True:"
+  - "if True == x:"
+  - "if x == False:"
+  - "if x != True:"
+  - "if False != x:"

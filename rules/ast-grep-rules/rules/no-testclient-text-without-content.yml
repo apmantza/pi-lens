@@ -1,0 +1,39 @@
+id: no-testclient-text-without-content
+language: Python
+message: "TestClient requests should use content= for bytes/text"
+severity: warning
+note: |
+  Port of SonarCloud python:S8405.
+
+  FastAPI/Starlette TestClient's `data=` parameter only accepts
+  form data (multipart). For raw bytes or text bodies, use
+  `content=` instead. Using `data=` with strings causes
+  surprising multipart serialization.
+
+  Three layered constraints:
+  1. **Pattern** matches `client.post($URL, $$$REST)` — any post
+     call (captures the whole call as the match target).
+  2. **Has keyword_argument** with regex `^data\s*=\s*["b]` —
+     a `data=` kwarg whose value is a string literal or bytes
+     literal. The regex anchors at the start because the
+     `keyword_argument` node's text includes the leading `data=`.
+     The `["b]` covers `"..."` and `b"..."` forms. Form data
+     dicts (`data={"field": "value"}`) don't match the regex
+     because of the `{` after `=`.
+  3. **Not has keyword_argument** with regex `^content\s*=` —
+     excludes calls where `content=` is also present
+     (content= takes precedence).
+metadata:
+  sonar: S8405
+rule:
+  all:
+    - pattern: "client.post($URL, $$$REST)"
+    - has:
+        kind: keyword_argument
+        regex: '^data\s*=\s*["b]'
+        stopBy: end
+    - not:
+        has:
+          kind: keyword_argument
+          regex: '^content\s*='
+          stopBy: end

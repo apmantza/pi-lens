@@ -1,0 +1,55 @@
+id: no-requests-without-timeout
+language: Python
+message: "HTTP requests should specify a timeout"
+severity: error
+note: |
+  Port of SonarCloud python:S3500 (BLOCKER VULNERABILITY).
+
+  HTTP requests without a timeout can hang indefinitely, leaking
+  file descriptors and blocking worker threads. Always pass
+  `timeout=` (or set a default at the session level).
+
+  Matches common request functions from `requests`, `httpx`, and
+  `aiohttp` whose call doesn't include a `timeout=` keyword
+  argument.
+
+  Three layers:
+  1. **Pattern** matches `requests.$METHOD($$$ARGS)` — any HTTP
+     method call (captures the whole call as the match target).
+  2. **Not has keyword_argument** with regex `^timeout\s*=` —
+     excludes calls where `timeout=` is present anywhere in the
+     argument list.
+
+  The `not has keyword_argument` works because ast-grep matches
+  the `keyword_argument` AST node directly, and its text
+  includes the leading `timeout=`. The regex anchors at `^` so
+  it doesn't match unrelated identifiers like `request_timeout`.
+
+  This is a conservative implementation — it doesn't catch
+  session-level timeouts set elsewhere. Full coverage needs
+  cross-file session analysis.
+metadata:
+  sonar: S3500
+rule:
+  any:
+    - all:
+        - pattern: "requests.$METHOD($$$ARGS)"
+        - not:
+            has:
+              kind: keyword_argument
+              regex: '^timeout\s*='
+              stopBy: end
+    - all:
+        - pattern: "httpx.$METHOD($$$ARGS)"
+        - not:
+            has:
+              kind: keyword_argument
+              regex: '^timeout\s*='
+              stopBy: end
+    - all:
+        - pattern: "aiohttp.$METHOD($$$ARGS)"
+        - not:
+            has:
+              kind: keyword_argument
+              regex: '^timeout\s*='
+              stopBy: end

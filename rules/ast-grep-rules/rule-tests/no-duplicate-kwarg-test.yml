@@ -1,0 +1,8 @@
+id: no-duplicate-kwarg
+valid:
+  - "f(x=1, y=2)"
+  - "f(1, 2)"
+  - "connect(host='db.example.com', port=5432)"
+invalid:
+  - "f(x=1, x=2)"
+  - "connect(host='a', host='b')"

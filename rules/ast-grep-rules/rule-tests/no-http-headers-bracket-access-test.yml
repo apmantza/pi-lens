@@ -1,0 +1,7 @@
+id: no-http-headers-bracket-access
+valid:
+  - "auth = request.headers.get('Authorization')"
+  - "auth = request.headers.get('Authorization', '')"
+invalid:
+  - 'auth = request.headers["Authorization"]'
+  - 'auth = response.headers["X-Request-Id"]'

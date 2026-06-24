@@ -1,0 +1,19 @@
+id: no-xxe-vulnerable-xml-parser
+valid:
+  - |
+    import defusedxml.ElementTree as ET
+    tree = ET.parse("file.xml")
+  - |
+    import xml.etree.ElementTree as ET
+    parser = ET.XMLParser(resolve_entities=False)
+    tree = ET.parse("file.xml", parser=parser)
+invalid:
+  - |
+    import xml.etree.ElementTree
+    tree = xml.etree.ElementTree.parse("untrusted.xml")
+  - |
+    import lxml.etree
+    tree = lxml.etree.parse("untrusted.xml")
+  - |
+    parser = lxml.etree.XMLParser()
+    tree = lxml.etree.parse("file.xml")

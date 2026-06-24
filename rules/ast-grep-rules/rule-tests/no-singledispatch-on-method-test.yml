@@ -1,0 +1,25 @@
+id: no-singledispatch-on-method
+valid:
+  - |
+    from functools import singledispatch
+
+    @singledispatch
+    def process(value):
+        return value
+  - |
+    from functools import singledispatchmethod
+
+    class Foo:
+        @singledispatchmethod
+        @classmethod
+        def process(cls, value):
+            return value
+invalid:
+  - |
+    from functools import singledispatch
+
+    class Foo:
+        @singledispatch
+        @classmethod
+        def process(cls, value):
+            return value

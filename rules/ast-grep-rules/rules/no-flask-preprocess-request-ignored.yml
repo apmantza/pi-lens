@@ -1,0 +1,26 @@
+id: no-flask-preprocess-request-ignored
+language: Python
+message: "Flask preprocess_request() return values should be handled"
+severity: warning
+note: |
+  Port of SonarCloud python:S8375.
+
+  Flask's `preprocess_request()` returns a response value when
+  the request was handled before reaching the view function
+  (e.g. a `before_request` hook returned a non-None value).
+  Callers that ignore this return value will proceed to
+  dispatch the view function as well — calling the handler
+  twice or producing confusing logs.
+
+  Matches `preprocess_request()` calls without assigning the
+  result. Conservative: only flags bare expressions
+  (`preprocess_request()` as a statement, not
+  `response = preprocess_request()`).
+metadata:
+  sonar: S8375
+rule:
+  pattern: preprocess_request($$$ARGS)
+  not:
+    inside:
+      kind: assignment
+      stopBy: end

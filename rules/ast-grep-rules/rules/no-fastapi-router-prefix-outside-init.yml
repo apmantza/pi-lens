@@ -1,0 +1,25 @@
+id: no-fastapi-router-prefix-outside-init
+language: Python
+message: "Router prefixes should be defined during APIRouter initialization"
+severity: warning
+note: |
+  Port of SonarCloud python:S8413.
+
+  Setting a router's `prefix` after creation (e.g. `router.prefix = "/api"`)
+  is fragile — the FastAPI internals expect `prefix` to be set at
+  initialization time. Pass `prefix=` to `APIRouter(...)` instead.
+
+  Matches any `assignment` to a `prefix` attribute where the LHS
+  is `<router>.prefix` (an attribute assignment).
+metadata:
+  sonar: S8413
+rule:
+  all:
+    - kind: assignment
+    - has:
+        kind: attribute
+        regex: 'prefix$'
+        stopBy: end
+    - has:
+        kind: string
+        stopBy: end

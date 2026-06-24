@@ -1,0 +1,27 @@
+id: no-singledispatch-on-method
+language: Python
+message: "@singledispatch should not be confused with @singledispatchmethod"
+severity: warning
+note: |
+  Port of SonarCloud python:S8505.
+
+  `@functools.singledispatch` decorates functions and dispatches
+  on the first argument's type. `@singledispatchmethod` is the
+  equivalent for class methods (decorated with `@classmethod`).
+
+  Using `@singledispatch` on a `@classmethod` won't dispatch
+  correctly — the first arg becomes the class, not an instance.
+  Conversely, using `@singledispatchmethod` on a regular method
+  needs the `@classmethod` decorator below it.
+
+  Matches `class_definition` blocks where `@singledispatch` and
+  `@classmethod` both appear together (in either order). The
+  regex approach is necessary because Python's `decorator` AST
+  nodes are siblings of `function_definition`, not children.
+metadata:
+  sonar: S8505
+rule:
+  kind: class_definition
+  any:
+    - regex: '@singledispatch\s*\n\s*@classmethod'
+    - regex: '@classmethod\s*\n\s*@singledispatch'

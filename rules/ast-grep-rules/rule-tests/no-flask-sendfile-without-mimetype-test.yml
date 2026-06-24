@@ -1,0 +1,8 @@
+id: no-flask-sendfile-without-mimetype
+valid:
+  - 'return send_file("file.pdf", mimetype="application/pdf")'
+  - 'return send_file("file.bin", download_name="report.bin")'
+  - 'return send_file("file.bin", as_attachment=True, mimetype="application/octet-stream")'
+invalid:
+  - 'return send_file("file.pdf")'
+  - 'return send_file("file.bin", as_attachment=True)'
