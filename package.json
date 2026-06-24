@@ -68,7 +68,7 @@
 	"dependencies": {
 		"@ast-grep/cli": "^0.44.0",
 		"@ast-grep/napi": "^0.44.0",
-		"@earendil-works/pi-tui": "^0.79.9",
+		"@earendil-works/pi-tui": "^0.80.2",
 		"js-yaml": "^4.1.1",
 		"minimatch": "^10.2.5",
 		"typebox": "^1.0.0",
