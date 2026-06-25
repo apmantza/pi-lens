@@ -11,6 +11,7 @@ import type { MetricsClient } from "./metrics-client.js";
 import type { RuffClient } from "./ruff-client.js";
 import type { RustClient } from "./rust-client.js";
 import type { TestRunnerClient } from "./test-runner-client.js";
+import type { DeadCodeClient } from "./dead-code-client.js";
 import type { TodoScanner } from "./todo-scanner.js";
 import type { TrivyClient } from "./trivy-client.js";
 import type { TypeCoverageClient } from "./type-coverage-client.js";
@@ -32,6 +33,7 @@ export interface BootstrapClients {
 	trivyClient: TrivyClient;
 	rustClient: RustClient;
 	agentBehaviorClient: AgentBehaviorClient;
+	deadCodeClients: DeadCodeClient[];
 }
 
 let bootstrapPromise: Promise<BootstrapClients> | null = null;
@@ -55,6 +57,7 @@ export function loadBootstrapClients(): Promise<BootstrapClients> {
 			trivyMod,
 			rustMod,
 			agentBehaviorMod,
+			deadCodeMod,
 		] = await Promise.all([
 			import("./ruff-client.js"),
 			import("./biome-client.js"),
@@ -72,6 +75,7 @@ export function loadBootstrapClients(): Promise<BootstrapClients> {
 			import("./trivy-client.js"),
 			import("./rust-client.js"),
 			import("./agent-behavior-client.js"),
+			import("./dead-code-client.js"),
 		]);
 
 		return {
@@ -91,6 +95,7 @@ export function loadBootstrapClients(): Promise<BootstrapClients> {
 			trivyClient: new trivyMod.TrivyClient(),
 			rustClient: new rustMod.RustClient(),
 			agentBehaviorClient: new agentBehaviorMod.AgentBehaviorClient(),
+			deadCodeClients: deadCodeMod.getDeadCodeClients(),
 		};
 	})();
 

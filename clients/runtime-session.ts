@@ -3,6 +3,12 @@ import * as path from "node:path";
 import type { AstGrepClient } from "./ast-grep-client.js";
 import type { BiomeClient } from "./biome-client.js";
 import type { CacheManager } from "./cache-manager.js";
+import type {
+	DeadCodeClient,
+	DeadCodeResult,
+} from "./dead-code-client.js";
+import { deadCodeIssueCount } from "./dead-code-client.js";
+import { logDeadCodeScan } from "./dead-code-logger.js";
 import type { DependencyChecker } from "./dependency-checker.js";
 import { getDiagnosticTracker } from "./diagnostic-tracker.js";
 import { clearAllSessions as clearFileTimeSessions } from "./file-time.js";
@@ -66,6 +72,7 @@ interface SessionStartDeps {
 	ruffClient: RuffClient;
 	knipClient: KnipClient;
 	jscpdClient: JscpdClient;
+	deadCodeClients: DeadCodeClient[];
 	govulncheckClient: GovulncheckClient;
 	gitleaksClient: GitleaksClient;
 	trivyClient: TrivyClient;
@@ -399,6 +406,7 @@ function scheduleStartupScans(
 		cacheManager,
 		knipClient,
 		jscpdClient,
+		deadCodeClients,
 		govulncheckClient,
 		gitleaksClient,
 		trivyClient,
@@ -451,7 +459,7 @@ function scheduleStartupScans(
 	};
 
 	const canRunJsTsHeavyScans = canRunStartupHeavyScans(languageProfile, "jsts");
-	const scanNames = ["todo"];
+	const scanNames = ["todo", "dead-code"];
 	if (canRunJsTsHeavyScans) {
 		scanNames.push("knip", "jscpd", "ast-grep exports", "project index");
 	}
@@ -546,6 +554,49 @@ function scheduleStartupScans(
 			if (!runtime.isCurrentSession(sessionGeneration)) return;
 			dbg("session_start jscpd: not available");
 		}
+	});
+
+	// dead-code — cross-file dead-code for non-JS/TS languages (#127). Each
+	// client self-gates via detect() (a cheap fs marker probe), so only a
+	// matching-language project incurs the whole-tree scan cost. Knip remains
+	// the JS/TS path (above); these run alongside it for polyglot repos.
+	runTask("dead-code", async () => {
+		const applicable = deadCodeClients.filter((c) => c.detect(analysisRoot));
+		if (applicable.length === 0) return;
+		await Promise.all(
+			applicable.map(async (client) => {
+				if (!runtime.isCurrentSession(sessionGeneration)) return;
+				const cacheKey = `dead-code-${client.id}`;
+				const cached = cacheManager.readCache<DeadCodeResult>(
+					cacheKey,
+					analysisRoot,
+				);
+				if (cached) {
+					dbg(`session_start dead-code(${client.id}): cache hit`);
+					return;
+				}
+				const startMs = Date.now();
+				const result = await client.analyze(analysisRoot);
+				if (!runtime.isCurrentSession(sessionGeneration)) return;
+				cacheManager.writeCache(cacheKey, result, analysisRoot, {
+					scanDurationMs: Date.now() - startMs,
+				});
+				logDeadCodeScan({
+					language: client.language,
+					success: result.success,
+					cached: false,
+					unusedExports: result.unusedExports.length,
+					unusedFiles: result.unusedFiles.length,
+					unusedDeps: result.unusedDeps.length,
+					unlistedDeps: result.unlistedDeps.length,
+					durationMs: result.durationMs ?? Date.now() - startMs,
+					...(!result.success && { reason: result.summary }),
+				});
+				dbg(
+					`session_start dead-code(${client.id}) done (${Date.now() - startMs}ms, ${deadCodeIssueCount(result)} issues)`,
+				);
+			}),
+		);
 	});
 
 	// govulncheck — Go module CVE detection (#132)

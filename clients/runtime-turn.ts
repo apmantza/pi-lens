@@ -33,6 +33,11 @@ import {
 	secretLocationKey,
 } from "./secret-findings.js";
 import type { KnipClient, KnipIssue, KnipResult } from "./knip-client.js";
+import type {
+	DeadCodeClient,
+	DeadCodeResult,
+} from "./dead-code-client.js";
+import { formatDeadCodeAdvisory } from "./dead-code-client.js";
 import {
 	PROJECT_DIAGNOSTICS_CACHE_VERSION,
 	writeProjectDiagnosticsDeltaReport,
@@ -52,6 +57,7 @@ interface TurnEndDeps {
 	runtime: RuntimeCoordinator;
 	cacheManager: CacheManager;
 	knipClient: KnipClient;
+	deadCodeClients: DeadCodeClient[];
 	depChecker: DependencyChecker;
 	testRunnerClient: TestRunnerClient;
 	resetLSPService: () => void;
@@ -107,6 +113,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		runtime,
 		cacheManager,
 		knipClient,
+		deadCodeClients,
 		depChecker,
 		testRunnerClient,
 		resetLSPService,
@@ -802,6 +809,26 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				error: err instanceof Error ? err.message : String(err),
 			},
 		});
+	}
+
+	// Cross-file dead-code (#127): surface the cached session_start scan as an
+	// advisory (project-wide unused symbols are slow to compute, so we read the
+	// cache rather than re-scanning every turn — the analogue of knip's cache
+	// for non-JS/TS languages). Merged across languages for polyglot repos.
+	try {
+		const deadCodeResults: DeadCodeResult[] = [];
+		for (const client of deadCodeClients) {
+			if (!client.detect(cwd)) continue;
+			const cached = cacheManager.readCache<DeadCodeResult>(
+				`dead-code-${client.id}`,
+				cwd,
+			);
+			if (cached?.data) deadCodeResults.push(cached.data);
+		}
+		const advisory = formatDeadCodeAdvisory(deadCodeResults);
+		if (advisory) advisoryParts.push(advisory);
+	} catch (err) {
+		dbg(`turn_end: dead-code advisory failed: ${err}`);
 	}
 
 	cacheManager.incrementTurnCycle(cwd);

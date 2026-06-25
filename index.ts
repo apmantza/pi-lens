@@ -1104,6 +1104,7 @@ export default function (pi: ExtensionAPI) {
 				testRunnerClient,
 				goClient,
 				rustClient,
+				deadCodeClients,
 			} = await loadBootstrapClients();
 			await handleSessionStart({
 				ctxCwd: ctx.cwd,
@@ -1120,6 +1121,7 @@ export default function (pi: ExtensionAPI) {
 				ruffClient,
 				knipClient,
 				jscpdClient,
+				deadCodeClients,
 				govulncheckClient,
 				gitleaksClient,
 				trivyClient,
@@ -2123,7 +2125,7 @@ export default function (pi: ExtensionAPI) {
 			// Drain any tool_result still in the debounce window so turn_end
 			// reads consistent state (cache, modified ranges, change-log).
 			await flushDebouncedToolResults();
-			const { knipClient, depChecker, testRunnerClient } =
+			const { knipClient, deadCodeClients, depChecker, testRunnerClient } =
 				await loadBootstrapClients();
 			await handleTurnEnd({
 				ctxCwd: ctx.cwd,
@@ -2132,6 +2134,7 @@ export default function (pi: ExtensionAPI) {
 				runtime,
 				cacheManager,
 				knipClient,
+				deadCodeClients,
 				depChecker,
 				testRunnerClient,
 				// The LSP idle reset (240s of no turns) releases the warm servers
