@@ -165,9 +165,11 @@ export interface SymbolImpactResult {
 
 /**
  * Transitive, depth-bounded impact of a file ("what depends on this") over the
- * review graph's call/reference/import edges (#162). Builds/loads the review
- * graph (3-tier cached, so cheap after the first build) and walks incoming
- * edges. Read-only.
+ * review graph's call/reference/import edges (#162). READ-ONLY (#260): consumes
+ * the already-cached review graph and walks incoming edges — never builds one
+ * (cold cache → available:false). The `module_report` blast-radius section (#304)
+ * is the agent-facing surface for this; this engine helper is kept as a reusable
+ * read-only seam.
  */
 export async function symbolImpact(
 	file: string,

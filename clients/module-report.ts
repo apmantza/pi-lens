@@ -52,6 +52,13 @@ import {
 export interface ModuleReportOptions {
 	/** Cap on who-uses-this entries per symbol. */
 	maxRefsPerSymbol?: number;
+	/** Include the cross-file blast-radius section (#304): the transitive
+	 * dependents of this module, aggregated to ranked file `read` args. Read-only
+	 * over the CACHED graph — omitted entirely on a cold cache (never builds). */
+	blastRadius?: boolean;
+	/** Max hops for the blast-radius walk (default 3). Only meaningful with
+	 * `blastRadius`. */
+	blastRadiusDepth?: number;
 }
 
 export interface ModuleSymbolUsedBy {
@@ -99,6 +106,32 @@ export interface RecommendedRead {
 	limit: number;
 }
 
+/** One file in the blast radius (#304): a transitive dependent of this module,
+ * aggregated from its (possibly several) dependent symbols. */
+export interface BlastRadiusFile {
+	/** cwd-relative display path of the dependent file. */
+	file: string;
+	/** How many dependent symbols/edges in this file reach the module. */
+	dependents: number;
+	/** Closest hop at which this file depends on the module (1 = direct). */
+	minDepth: number;
+	/** Distinct edge kinds by which it depends (calls/references/imports). */
+	relations: ReviewGraphEdgeKind[];
+	/** Ready-to-use read args for the whole dependent file (verify the change). */
+	read: { path: string; offset: number; limit: number };
+}
+
+/** Cross-file blast radius (#304): "if you change this module, read/verify these
+ * files". Present only when requested AND the cached graph is warm. */
+export interface BlastRadius {
+	/** True when the impact walk hit its node cap (the list is a prefix). */
+	truncated: boolean;
+	/** Deepest hop reached (transitivity actually observed). */
+	maxDepth: number;
+	/** Dependent files, ranked closest-and-most-depended-on first. */
+	files: BlastRadiusFile[];
+}
+
 export interface ModuleReport {
 	/** False when the file is unreadable or has no symbols and no graph node. */
 	available: boolean;
@@ -111,6 +144,9 @@ export interface ModuleReport {
 	api: ModuleSymbolEntry[];
 	internal: ModuleSymbolEntry[];
 	recommendedReads: RecommendedRead[];
+	/** Cross-file blast radius (#304) — present only when requested via
+	 * `blastRadius` and the cached graph is warm; omitted otherwise. */
+	blastRadius?: BlastRadius;
 	semantic: {
 		/** Provenance of who-uses-this: AST review graph, future graph-LSP edges
 		 * (#236), or none (cold cache). */
@@ -492,6 +528,90 @@ function rankRecommendedReads(
 		});
 }
 
+// Cap the blast-radius list so a high-fanout module doesn't blow the token
+// budget; the ranking puts the closest/most-depended-on files first. The read
+// limit is the dependent file's own line count when the graph knows it, else a
+// modest default — these are "go verify" pointers, not full dumps.
+const BLAST_RADIUS_FILE_CAP = 12;
+const BLAST_RADIUS_DEFAULT_READ_LIMIT = 400;
+
+function blastReadArgs(
+	graph: ReviewGraph,
+	normalizedFile: string,
+): { path: string; offset: number; limit: number } {
+	const fileNodeId = graph.fileNodes.get(normalizedFile);
+	const lineCount = fileNodeId
+		? graph.nodes.get(fileNodeId)?.metadata?.lineCount
+		: undefined;
+	const limit =
+		typeof lineCount === "number" && lineCount > 0
+			? lineCount
+			: BLAST_RADIUS_DEFAULT_READ_LIMIT;
+	// Machine field keeps the absolute (slash-normalized) path so the host's Read
+	// resolves it unambiguously — same convention as ModuleSymbolEntry.read.
+	return { path: normalizedFile, offset: 1, limit };
+}
+
+// Cross-file blast radius (#304): the transitive dependents of this module,
+// aggregated from symbol-level impact hits to ranked FILE reads — "if you change
+// this module, read/verify these files". Read-only over the CACHED graph the
+// caller already loaded (never builds; the caller gates on a warm graph), so it
+// shares module_report's #256 no-build contract. Returns undefined when nothing
+// depends on the module (no section to show).
+async function computeBlastRadius(
+	graph: ReviewGraph,
+	normalizedPath: string,
+	projectRoot: string,
+	maxDepth: number,
+): Promise<BlastRadius | undefined> {
+	const { computeTransitiveImpact } = await import("./review-graph/query.js");
+	const result = computeTransitiveImpact(graph, normalizedPath, { maxDepth });
+	const byFile = new Map<
+		string,
+		{
+			dependents: number;
+			minDepth: number;
+			relations: Set<ReviewGraphEdgeKind>;
+		}
+	>();
+	for (const hit of result.hits) {
+		if (!hit.file) continue;
+		const key = normalizeMapKey(hit.file);
+		if (key === normalizedPath) continue; // never list the module itself
+		const cur = byFile.get(key) ?? {
+			dependents: 0,
+			minDepth: Number.POSITIVE_INFINITY,
+			relations: new Set<ReviewGraphEdgeKind>(),
+		};
+		cur.dependents += 1;
+		cur.minDepth = Math.min(cur.minDepth, hit.depth);
+		cur.relations.add(hit.relation);
+		byFile.set(key, cur);
+	}
+	if (byFile.size === 0) return undefined;
+	const files: BlastRadiusFile[] = [...byFile.entries()]
+		.map(([key, v]) => ({
+			file: toDisplayPath(key, projectRoot),
+			dependents: v.dependents,
+			minDepth: v.minDepth,
+			relations: [...v.relations].sort((a, b) => a.localeCompare(b)),
+			read: blastReadArgs(graph, key),
+		}))
+		// Closest hop first, then most-depended-on, then stable by path.
+		.sort(
+			(a, b) =>
+				a.minDepth - b.minDepth ||
+				b.dependents - a.dependents ||
+				a.file.localeCompare(b.file),
+		)
+		.slice(0, BLAST_RADIUS_FILE_CAP);
+	return {
+		truncated: result.truncated,
+		maxDepth: result.maxDepthReached,
+		files,
+	};
+}
+
 function unavailableReport(displayPath: string): ModuleReport {
 	return {
 		available: false,
@@ -578,6 +698,20 @@ export async function moduleReport(
 
 	const hasGraphNode = graph?.fileNodes.has(normalizedPath) ?? false;
 
+	// Cross-file blast radius (#304): opt-in, read-only over the CACHED graph. Only
+	// computed when requested AND the file is in a warm graph — a cold cache omits
+	// the section entirely (never builds, same #256 contract as the rest of this
+	// path). Aggregated to file reads; undefined when nothing depends on the module.
+	const blastRadius =
+		options?.blastRadius && graph && hasGraphNode
+			? await computeBlastRadius(
+					graph,
+					normalizedPath,
+					cwd,
+					Math.max(1, options.blastRadiusDepth ?? 3),
+				)
+			: undefined;
+
 	const report: ModuleReport = {
 		available: entries.length > 0 || hasGraphNode,
 		staleness: entries.length === 0 && !hasGraphNode ? "unavailable" : "fresh",
@@ -593,6 +727,7 @@ export async function moduleReport(
 		api,
 		internal,
 		recommendedReads: rankRecommendedReads(entries),
+		...(blastRadius ? { blastRadius } : {}),
 		semantic: {
 			// Provenance of who-uses-this / references. The AST review graph is the
 			// only source on this read path; "graph-lsp" is reserved for #236 (LSP
