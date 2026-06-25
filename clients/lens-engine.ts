@@ -23,8 +23,6 @@ import { initLSPConfig } from "./lsp/config.js";
 import { getLSPService } from "./lsp/index.js";
 import { scanProjectDiagnostics } from "./project-diagnostics/scanner.js";
 import type { ProjectDiagnosticsSnapshot } from "./project-diagnostics/types.js";
-import type { ImpactHit } from "./review-graph/query.js";
-import type { ReviewGraphEdgeKind } from "./review-graph/types.js";
 import * as path from "node:path";
 import { normalizeMapKey } from "./path-utils.js";
 import { loadProjectSnapshot } from "./project-snapshot.js";
@@ -154,54 +152,7 @@ export function symbolSearch(
 	};
 }
 
-export interface SymbolImpactResult {
-	/** False when the review graph is empty (no session scan has run). */
-	available: boolean;
-	seedFile: string;
-	hits: ImpactHit[];
-	truncated: boolean;
-	maxDepthReached: number;
-}
-
-/**
- * Transitive, depth-bounded impact of a file ("what depends on this") over the
- * review graph's call/reference/import edges (#162). READ-ONLY (#260): consumes
- * the already-cached review graph and walks incoming edges — never builds one
- * (cold cache → available:false). The `module_report` blast-radius section (#304)
- * is the agent-facing surface for this; this engine helper is kept as a reusable
- * read-only seam.
- */
-export async function symbolImpact(
-	file: string,
-	cwd: string,
-	options?: {
-		maxDepth?: number;
-		relations?: ReviewGraphEdgeKind[];
-		maxHits?: number;
-	},
-): Promise<SymbolImpactResult> {
-	// READ-ONLY (#260): consume the already-built review graph, never build one.
-	// buildOrUpdateGraph(cwd, [], freshFactStore) defeats the incremental path
-	// (empty changedFiles → Tier-3 full rebuild on any drift) and races the edit
-	// pipeline's build under a separate _buildCache key — an OOM vector. Cold
-	// cache → available:false until a scan/edit warms it (same contract as
-	// module_report, #256).
-	const { getCachedReviewGraph } = await import("./review-graph/builder.js");
-	const { computeTransitiveImpact } = await import("./review-graph/query.js");
-	const graph = getCachedReviewGraph(cwd);
-	if (!graph) {
-		return {
-			available: false,
-			seedFile: path.resolve(cwd, file),
-			hits: [],
-			truncated: false,
-			maxDepthReached: 0,
-		};
-	}
-	const result = computeTransitiveImpact(
-		graph,
-		path.resolve(cwd, file),
-		options,
-	);
-	return { available: graph.nodes.size > 0, ...result };
-}
+// symbolImpact was removed (#304 follow-up): the transitive blast radius is now
+// served by module_report's `blastRadius` option (clients/module-report.ts), which
+// calls computeTransitiveImpact (review-graph/query.ts) directly over the cached
+// graph. No engine wrapper is needed.

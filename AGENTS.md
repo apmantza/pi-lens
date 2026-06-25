@@ -24,7 +24,7 @@ clients/
   project-changes.ts      Append-only project/file sequence change log
   reverse-deps.ts         Snapshot-backed reverse dependency index/query helpers
   word-index.ts           Identifier inverted index + BM25 ranking (#162) — built in the session scan, persisted in the snapshot; consumed ONLY by the pilens_symbol_search MCP tool (not yet by pi-lens internals)
-  review-graph/query.ts   Graph queries incl computeImpactCascade (one-hop, used by the cascade) + computeTransitiveImpact (depth-bounded BFS, used by module_report's blastRadius section #304 + the symbolImpact engine seam)
+  review-graph/query.ts   Graph queries incl computeImpactCascade (one-hop, used by the cascade) + computeTransitiveImpact (depth-bounded BFS, used by module_report's blastRadius section #304)
   installer/index.ts      Auto-install + ensureTool; probe-cache.json for fast restarts. Strategies: npm/pip/gem/github + maven (fat JAR → java -jar launcher) + archive (tree). github API is token-authed (api.github.com only, Authorization dropped on cross-host redirect — unauth=60/hr silently fails CI installs); tar extract is recursive-find (handles FLAT tarballs like gleam, not --strip-components). GITHUB_TOOLS kept in sync with the registry by tool-registry-consistency.test.ts
   lsp/                    38 LSP server IDs (incl. opengrep + ast-grep + zizmor, cross-cutting AUXILIARY diagnostic LSPs — role:"auxiliary", #111/#239/#272), config, lifecycle. clojure-lsp + gleam now auto-install via github (native binary / flat tarball). zizmor (GitHub Actions security, `zizmor --lsp`) attaches to YAML; advisory unless the repo ships zizmor.yml; online audits need a token (env or `gh auth token`) via clients/zizmor-config.ts
   dispatch/               Pipeline dispatcher + 47 registered runners (incl. spotbugs — flag-gated via withSpotbugsGroup, #133). Auxiliary LSPs (opengrep, ast-grep, zizmor, …) are NOT runners — they attach via the lsp runner's with-auxiliary path; see clients/dispatch/auxiliary-lsp.ts
@@ -82,8 +82,8 @@ a *second host adapter* alongside `index.ts`. Design rationale + progress: `mcp.
 - **MCP-only vs pi-lens-internal (a real gap to close, not a finished story).**
   `pilens_symbol_search` is currently an **agent-facing query only**: the word index
   is built during pi-lens's own session scan (pi pays the cost) but nothing in
-  pi-lens consumes it. Likewise `module_report`'s blast-radius (#304) and the
-  `symbolImpact` engine seam use *transitive* BFS (`computeTransitiveImpact`) while
+  pi-lens consumes it. Likewise `module_report`'s blast-radius (#304) uses
+  *transitive* BFS (`computeTransitiveImpact`) while
   the in-pi **cascade still derives neighbors one-hop** (`computeImpactCascade` in
   `dispatch/integration.ts`). The higher-value move is to feed the transitive impact
   (bounded depth/budget) into cascade neighbor derivation — ideally paired with the
