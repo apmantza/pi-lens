@@ -1,3 +1,17 @@
+# DISABLED (#PR-319 FP cleanup): too noisy in script files
+# 
+# Original rule detected print() statements in Python, which is mostly a code-quality
+# lint (print is fine in scripts, debug code, etc., but should be logger.info() in
+# production code).
+#
+# PostHog validation showed 82% of fires (696/844) were in scripts/, commands/, and
+# migrations/ directories where print() is the right tool. The rule doesn't respect
+# # noqa: T201 suppressions (would require preprocessor pass on the source).
+#
+# Most legitimate production-code print() usage in pi-lens codebases is found by
+# ruff T201 already — this rule duplicates that with worse signal-to-noise.
+# Re-enable if a robust noqa-aware filter is added.
+
 id: python-print-statement
 name: Print Statement in Production
 severity: warning

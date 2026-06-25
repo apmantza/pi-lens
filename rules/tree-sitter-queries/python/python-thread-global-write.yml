@@ -29,6 +29,12 @@ metavars:
   - FN
   - ARGS
 
+# Post-filter: also check the captured values match the predicates.
+# This is a workaround for web-tree-sitter not auto-applying #eq?/#match?
+# predicates on the structural pattern of a query with predicates (see
+# evaluatePredicates in clients/tree-sitter-client.ts).
+post_filter: eq_mod_fn
+
 cwe:
   - CWE-362
 owasp:

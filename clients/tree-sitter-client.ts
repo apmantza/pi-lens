@@ -939,10 +939,55 @@ export class TreeSitterClient {
 			case "bare_except_only": {
 				const clauseNode = captures.CLAUSE;
 				if (!clauseNode) return true;
-				// biome-ignore lint/suspicious/noExplicitAny: Check for identifier
-				return !clauseNode.children.some(
-					(c: any) => c.isNamed && c.type === "identifier",
-				);
+				// A typed `except` clause has a named child for the exception
+				// spec — one of: identifier (e.g. `except ValueError`),
+				// tuple (e.g. `except (E, F)`), or as_pattern (e.g. `except E as e`).
+				// Bare `except:` has NO named children (just the `except` keyword,
+				// the `:` colon, and the body block).
+				// biome-ignore lint/suspicious/noExplicitAny: AST iteration
+				const hasExceptionSpec = clauseNode.children.some((c: any) => {
+					if (!c.isNamed) return false;
+					return (
+						c.type === "identifier" ||
+						c.type === "tuple" ||
+						c.type === "as_pattern" ||
+						c.type === "parenthesized_expression"
+					);
+				});
+				// Fire ONLY when bare (no exception spec)
+				return !hasExceptionSpec;
+			}
+			case "eq_mod_fn": {
+				// Workaround for web-tree-sitter not auto-applying #eq? predicates
+				// on the structural pattern of a query that has predicates. The
+				// query captures @MOD, @FN but the predicates aren't enforced
+				// (see evaluatePredicates in clients/tree-sitter-client.ts).
+				// This filter re-applies the #eq? checks at post_filter time.
+				const mod = captures.MOD?.text ?? "";
+				const fn = captures.FN?.text ?? "";
+				return mod === "threading" && fn === "Thread";
+			}
+			case "regex_first_arg_identifier": {
+				// Workaround for web-tree-sitter not auto-applying #eq?/#match?
+				// predicates on the structural pattern (see evaluatePredicates).
+				// This post_filter re-applies both predicate checks AND
+				// the first-argument check:
+				// 1. MOD must be "re"  (would-be #eq? @MOD "re")
+				// 2. FUNC must match the regex method pattern (#match? @FUNC ...)
+				// 3. First arg must be an identifier (dynamic pattern)
+				//    String literals (r"...", "...") are safe static patterns.
+				const mod = captures.MOD?.text ?? "";
+				if (mod !== "re") return false;
+				const func = captures.FUNC?.text ?? "";
+				if (!/^(compile|match|search|fullmatch|findall|finditer|sub|subn|split)$/.test(func)) {
+					return false;
+				}
+				const argsNode = captures.ARGS;
+				if (!argsNode) return false;
+				// biome-ignore lint/suspicious/noExplicitAny: AST iteration
+				const firstNamed = (argsNode.children ?? []).find((c: any) => c.isNamed);
+				if (!firstNamed) return false;
+				return firstNamed.type === "identifier";
 			}
 			case "open_mode_invalid": {
 				const modeNode = captures.MODE;
@@ -1171,7 +1216,14 @@ export class TreeSitterClient {
 				);
 			}
 			case "check_secret_pattern": {
-				const varName = (captures.VARNAME?.text ?? "").toLowerCase();
+				const varName = (captures.VARNAME?.text ?? "");
+				const varNameLower = varName.toLowerCase();
+				// Skip UPPER_CASE constants — they're module-level constants
+				// (e.g. `GITHUB_TYPE_FOR_PERSONAL_API_KEY = "..."`), not secrets.
+				// A constant has no lowercase letters in its name.
+				if (varName === varName.toUpperCase() && /[A-Z]/.test(varName)) {
+					return false;
+				}
 				return [
 					/api[_-]?key/,
 					/api[_-]?secret/,
@@ -1186,7 +1238,7 @@ export class TreeSitterClient {
 					/aws[_-]?secret/,
 					/github[_-]?token/,
 					/client[_-]?secret/,
-				].some((p) => p.test(varName));
+				].some((p) => p.test(varNameLower));
 			}
 			case "returns_error": {
 				const first = Object.values(captures)[0];
