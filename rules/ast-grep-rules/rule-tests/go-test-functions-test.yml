@@ -1,0 +1,9 @@
+id: go-test-functions
+valid:
+  - "package main"
+  - "func helper(x int) int { return x * 2 }"
+  - "func BenchmarkAbs(b *testing.B) {}"
+  - "func ExampleAbs() {}"
+invalid:
+  - "func TestAbs(t *testing.T) { got := Abs(-1); if got != 1 { t.Errorf(...) } }"
+  - "func TestCalculateTotal(t *testing.T) {}"

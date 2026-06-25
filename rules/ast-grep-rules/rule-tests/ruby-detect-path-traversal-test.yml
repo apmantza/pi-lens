@@ -1,0 +1,9 @@
+id: ruby-detect-path-traversal
+valid:
+  - "File.open('safe.txt', 'r')"
+  - "File.read('/var/lib/data.json')"
+invalid:
+  - "Rails.root.join('uploads', 'safe.png')"
+  - "Rails.root.join('data', user_input, 'file.txt')"
+  - "File.join('/var/www', params[:path])"
+  - "send_file params[:file]"

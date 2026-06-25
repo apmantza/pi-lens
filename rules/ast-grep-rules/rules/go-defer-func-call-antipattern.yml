@@ -1,0 +1,34 @@
+# Go Defer Function Call Antipattern
+# Detects defer statements that call functions with args evaluated immediately
+# instead of when the defer executes (a common Go testing pitfall).
+# Catalog port: go/defer-func-call-antipattern
+id: go-defer-func-call-antipattern
+language: go
+severity: warning
+message: "defer with function-call args — arguments are evaluated immediately, not at defer time"
+note: |
+  In Go, defer schedules a call to run when the function returns, but the
+  ARGUMENTS to the deferred function are evaluated immediately. This is
+  particularly problematic with assertion libraries:
+  `defer require.NoError(t, failpoint.Disable(...))` evaluates the Disable
+  call immediately, not at defer time — making the test ineffective.
+  Pattern matches defer statements where a function call appears as an
+  argument to the deferred function.
+rule:
+  pattern:
+    selector: defer_statement
+    context: 'defer $FN(t, failpoint.$METHOD($$$ARGS))'
+fix: ""
+tags:
+  - go
+  - testing
+  - defer
+  - antipattern
+examples:
+  bad: |
+    defer require.NoError(t, failpoint.Enable("..."))
+    defer require.NoError(t, failpoint.Disable("..."))
+  good: |
+    // Move Enable/Disable out of defer args
+    failpoint.Enable("...")
+    defer require.NoError(t, failpoint.Disable("..."))

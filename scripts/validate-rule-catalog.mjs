@@ -47,6 +47,9 @@ const TRACKED_AST_GREP_IDS = new Set([
 	"find-func-declaration-with-prefix",
 	"defer-func-call-antipattern",
 	"no-console-except-catch",
+	"go-test-functions",
+	"go-defer-func-call-antipattern",
+	"ruby-detect-path-traversal",
 ]);
 
 function walkYaml(dir, acc = []) {

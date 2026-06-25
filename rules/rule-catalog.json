@@ -1588,6 +1588,39 @@
       "severity_default": "error",
       "confidence": "medium",
       "status": "experimental"
+    },
+    {
+      "rule_id": "go-test-functions",
+      "engine": "ast-grep",
+      "language": "go",
+      "family": "testing",
+      "scope": "file",
+      "canonical_concept": "go-test-function-declaration",
+      "severity_default": "warning",
+      "confidence": "high",
+      "status": "active"
+    },
+    {
+      "rule_id": "go-defer-func-call-antipattern",
+      "engine": "ast-grep",
+      "language": "go",
+      "family": "reliability",
+      "scope": "file",
+      "canonical_concept": "go-defer-arg-evaluation",
+      "severity_default": "warning",
+      "confidence": "high",
+      "status": "active"
+    },
+    {
+      "rule_id": "ruby-detect-path-traversal",
+      "engine": "ast-grep",
+      "language": "ruby",
+      "family": "security",
+      "scope": "file",
+      "canonical_concept": "path-traversal-sink",
+      "severity_default": "warning",
+      "confidence": "medium",
+      "status": "experimental"
     }
   ]
 }
