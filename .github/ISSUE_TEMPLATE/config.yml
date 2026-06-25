@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: pi-lens documentation
+    url: https://github.com/apmantza/pi-lens/tree/master/docs
+    about: Read the docs before opening an issue

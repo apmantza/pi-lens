@@ -75,6 +75,10 @@ Or from git:
 pi install git:github.com/apmantza/pi-lens
 ```
 
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the development workflow, how to add runners, LSP servers, formatters, and rules, and the issue/PR templates.
+
 ## Features
 
 ### LSP Support
@@ -140,13 +144,17 @@ instead of a flat blob of source. See
 [`docs/module-report-read-symbol.md`](docs/module-report-read-symbol.md)
 for the full design and token-efficiency numbers.
 
-**`module_report(filePath, maxRefsPerSymbol?)`** — returns a structured
-outline: every symbol's name/kind/startLine/endLine/signature, exported vs
-internal split, who-uses-this (`usedBy`), fanout/complexity risk flags,
-and a `recommendedReads` top-3 ranked by usage + complexity. Each symbol
-entry includes a ready-to-use `read` argument (`{path, offset, limit}`)
-so the agent's next call sits right there. Tree-sitter extract + cached
-review-graph lookup; never builds the graph, never calls LSP on this path.
+**`module_report(filePath, maxRefsPerSymbol?, blastRadius?, blastRadiusDepth?)`** —
+returns a structured outline: every symbol's name/kind/startLine/endLine/signature,
+exported vs internal split (with class/interface members nested under their
+container), who-uses-this (`usedBy`), fanout/complexity risk flags, and a
+`recommendedReads` top-3 ranked by usage + complexity. Each symbol entry includes
+a ready-to-use `read` argument (`{path, offset, limit}`) so the agent's next call
+sits right there. Pass `blastRadius: true` to also get the cross-file **blast
+radius** — transitive dependents aggregated to ranked file `read` args ("if you
+change this, verify these files"); read-only over the cached graph, omitted when
+cold (this replaced the standalone `pilens_impact` tool). Tree-sitter extract +
+cached review-graph lookup; never builds the graph, never calls LSP on this path.
 `semantic.source` reports what backed the data (`review-graph` | `none`).
 
 **`read_symbol(filePath, symbol)`** — returns the verbatim body of one
@@ -260,7 +268,7 @@ Three external scanners run **once per session in the background** (not on every
 |---|---|---|---|
 | **gitleaks** | Committed secrets (API keys, tokens, certs) — regex + entropy, language-agnostic | `.gitleaks.toml` / `.gitleaksignore`, a `gitleaks` dep, or a pre-commit hook referencing it | GitHub release |
 | **govulncheck** | Go module CVEs **reachable** from the build graph (call-graph filtered) | a `go.mod` at the analysis root | `go install` (needs the Go toolchain) |
-| **trivy** | Dependency CVEs across every ecosystem (npm, PyPI, Maven/Gradle, Go, Cargo, Composer, RubyGems, NuGet, …) **plus hardcoded secrets** (same `trivy fs` pass) | **`trivy.enabled: true` in `.pi-lens.json`** *and* a dependency manifest at the root | GitHub release |
+| **trivy** | Dependency CVEs across every ecosystem (npm, PyPI, Maven/Gradle, Go, Cargo, Composer, RubyGems, NuGet, …), **hardcoded secrets**, and **dependency license risk** (copyleft/restricted licenses) — all from one `trivy fs` pass | **`trivy.enabled: true` in `.pi-lens.json`** *and* a dependency manifest at the root | GitHub release |
 
 Secret findings from **gitleaks, trivy, and the ast-grep `*-hardcoded-secret-*` rules** are collapsed **by location** before surfacing: the same credential flagged by several scanners (with different rule ids) is reported **once** with combined provenance (`[gitleaks + trivy + ast-grep]`), not two or three times — the duplicate advisory copy is suppressed. This is the dedup contract that lets multiple secret scanners coexist without the triple-report noise.
 
@@ -291,7 +299,7 @@ pi-lens ships an MCP (Model Context Protocol) server so Claude Code — or any M
 | **Per-edit** | `pilens_analyze`, `pilens_lsp_diagnostics`, `pilens_lsp_navigation`, `pilens_ast_grep_search`, `pilens_ast_grep_replace`, `pilens_module_report`, `pilens_read_symbol` | The fast pipeline (format → autofix → LSP diagnostics → parallel runners) plus the structured read-substitute pair. `analyze` accepts `mode: warm \| fresh` — `warm` reuses the server's in-process LSP, `fresh` forks a worker that loads freshly-built code from disk so the result reflects the latest commit. |
 | **Per-turn** | `pilens_turn_end` | Drives the **real** `handleTurnEnd` (knip incremental, jscpd delta, dep-circular, cascade, tests, actionable+code-quality warnings) — not a re-implementation. Caller-supplied edited files are auto-registered into turn-state via `addModifiedRange`. |
 | **Per-session** | `pilens_session_start` | Drives the **real** `handleSessionStart` — full jscpd/knip/type-coverage/dep/govulncheck scans + complexity baselines + LSP warm + the **error-debt baseline** (tests/build pass-state) that powers green→red regression detection. |
-| **Project / observability** | `pilens_project_scan`, `pilens_diagnostics`, `pilens_health`, `pilens_latency`, `pilens_symbol_search`, `pilens_impact` | Cheap project-wide scans, cached diagnostic state, latency telemetry, ranked identifier search (BM25 over the persisted word index), transitive review-graph blast radius. |
+| **Project / observability** | `pilens_project_scan`, `pilens_diagnostics`, `pilens_health`, `pilens_latency`, `pilens_symbol_search` | Cheap project-wide scans, cached diagnostic state, latency telemetry, ranked identifier search (BM25 over the persisted word index). Cross-file blast radius now lives in `pilens_module_report`'s `blastRadius` option. |
 | **Lifecycle / loop** | `pilens_rebuild` | Runs `npm run build:dist` so `pilens_analyze mode=fresh` reflects the latest commit. Makes the review loop self-contained: commit → `pilens_rebuild` → `pilens_analyze mode=fresh` → `pilens_latency`. |
 
 **Honest limits** (live-tested, documented in `docs/mcp.md`):

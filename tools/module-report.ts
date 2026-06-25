@@ -27,6 +27,7 @@ export function createModuleReportTool(getProjectRoot: () => string) {
 		description:
 			"Structured, navigable overview of a source module — a token-efficient substitute for reading the whole file. Returns each symbol's name/kind/signature/line-range with ready-to-use `read` arguments, plus who-uses-this, risk flags, and ranked recommendedReads. Prefer this before a full read; then use read_symbol (or read) for the exact body you need.\n" +
 			"Single mode: tree-sitter outline + review-graph who-uses-this + bounded live-LSP enrichment (exact references/implementations for exported symbols, time-boxed; degrades to graph-only when no LSP server is available). `semantic.source` reports whether LSP data was used.\n" +
+			"Pass `blastRadius: true` to also get the cross-file blast radius — the transitive dependents of this module aggregated to ranked file `read` args (\"if you change this, verify these files\"). Read-only over the cached graph; omitted on a cold cache. Supersedes the standalone impact query.\n" +
 			"Returns JSON. An outline shows shape, not bodies — it does NOT count as having read a symbol's body for editing; use read_symbol for that.",
 		promptSnippet:
 			"Navigable file outline — a cheap substitute for reading a whole file",
@@ -39,10 +40,27 @@ export function createModuleReportTool(getProjectRoot: () => string) {
 					description: "Cap on who-uses-this entries per symbol (default 10).",
 				}),
 			),
+			blastRadius: Type.Optional(
+				Type.Boolean({
+					description:
+						"Include the cross-file blast-radius section: transitive dependents aggregated to ranked file reads. Read-only over the cached graph (omitted when cold).",
+				}),
+			),
+			blastRadiusDepth: Type.Optional(
+				Type.Number({
+					description:
+						"Max hops for the blast-radius walk (default 3). Only used with blastRadius.",
+				}),
+			),
 		}),
 		async execute(
 			_toolCallId: string,
-			params: { path: string; maxRefsPerSymbol?: number },
+			params: {
+				path: string;
+				maxRefsPerSymbol?: number;
+				blastRadius?: boolean;
+				blastRadiusDepth?: number;
+			},
 			_signal: AbortSignal | undefined,
 			_onUpdate: unknown,
 			ctx: { cwd?: string },
@@ -53,6 +71,8 @@ export function createModuleReportTool(getProjectRoot: () => string) {
 			const cwd = getProjectRoot() || ctx.cwd || ".";
 			const report = await moduleReport(absFile, cwd, {
 				maxRefsPerSymbol: params.maxRefsPerSymbol,
+				blastRadius: params.blastRadius,
+				blastRadiusDepth: params.blastRadiusDepth,
 			});
 			return {
 				content: [

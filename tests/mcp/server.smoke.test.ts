@@ -57,7 +57,9 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		expect(names).toContain("pilens_lsp_navigation");
 		expect(names).toContain("pilens_lsp_diagnostics");
 		expect(names).toContain("pilens_symbol_search");
-		expect(names).toContain("pilens_impact");
+		// pilens_impact was removed (#304) — its blast radius folded into
+		// pilens_module_report's `blastRadius` option.
+		expect(names).not.toContain("pilens_impact");
 		expect(names).toContain("pilens_module_report");
 		expect(names).toContain("pilens_read_symbol");
 		// Each tool advertises an object input schema.

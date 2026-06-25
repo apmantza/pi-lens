@@ -1,0 +1,36 @@
+id: no-flag-argument
+language: TypeScript
+severity: warning
+message: Flag argument — a boolean parameter the function branches on. Split into two functions.
+note: |
+  A boolean parameter the function switches its behaviour on (`if (flag) … else …`)
+  means the function does two things, and callers read `f(x, true)` with no clue
+  what `true` selects (Fowler, "Flag Argument"). Prefer two named functions, or an
+  options object / enum, over a boolean switch.
+
+  Scope (to keep false positives low) — fires ONLY when BOTH hold:
+    1. a parameter has a boolean DEFAULT (`= true` / `= false`), and
+    2. the body branches on THAT SAME parameter (`if (flag)` / `if (!flag)`).
+  So an unused boolean default, or a boolean config flag that is merely forwarded
+  (not branched on locally), is NOT flagged.
+rule:
+  all:
+    - any:
+        - kind: function_declaration
+        - kind: method_definition
+        - kind: arrow_function
+        - kind: function_expression
+    - has:
+        stopBy: end
+        kind: required_parameter
+        all:
+          - has: { field: pattern, pattern: $FLAG }
+          - has:
+              any:
+                - { kind: "true" }
+                - { kind: "false" }
+    - has:
+        stopBy: end
+        any:
+          - pattern: if ($FLAG) $$$X
+          - pattern: if (!$FLAG) $$$X

@@ -131,7 +131,7 @@ function ensureIndexed(graph: ReviewGraph): void {
 
 /**
  * READ-ONLY accessor. Returns the cached graph as a SHARED, already-indexed
- * object — callers (module_report, symbolImpact) must not mutate it. No clone,
+ * object — callers (module_report's outline + blast radius) must not mutate it. No clone,
  * no per-call reindex.
  */
 export function getCachedReviewGraph(cwd: string): ReviewGraph | undefined {

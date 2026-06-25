@@ -13,7 +13,7 @@ A pi coding-agent extension that runs automated checks on every file write/edit.
 ```
 index.ts                  Extension entry point (async factory) — the pi host adapter
 mcp/                      Second host adapter: MCP server + hook bin (see "MCP mirror")
-  server.ts               Hand-rolled stdio JSON-RPC MCP server (16 tools) + warm IPC listener
+  server.ts               Hand-rolled stdio JSON-RPC MCP server (15 tools) + warm IPC listener
   worker.ts               fresh-mode child (loads freshly-built code from disk)
   analyze-cli.ts          pi-lens-analyze bin — PostToolUse hook + CLI (warm channel → cold fallback)
 clients/
@@ -24,7 +24,7 @@ clients/
   project-changes.ts      Append-only project/file sequence change log
   reverse-deps.ts         Snapshot-backed reverse dependency index/query helpers
   word-index.ts           Identifier inverted index + BM25 ranking (#162) — built in the session scan, persisted in the snapshot; consumed ONLY by the pilens_symbol_search MCP tool (not yet by pi-lens internals)
-  review-graph/query.ts   Graph queries incl computeImpactCascade (one-hop, used by the cascade) + computeTransitiveImpact (depth-bounded BFS, used ONLY by pilens_impact)
+  review-graph/query.ts   Graph queries incl computeImpactCascade (one-hop, used by the cascade) + computeTransitiveImpact (depth-bounded BFS, used by module_report's blastRadius section #304)
   installer/index.ts      Auto-install + ensureTool; probe-cache.json for fast restarts. Strategies: npm/pip/gem/github + maven (fat JAR → java -jar launcher) + archive (tree). github API is token-authed (api.github.com only, Authorization dropped on cross-host redirect — unauth=60/hr silently fails CI installs); tar extract is recursive-find (handles FLAT tarballs like gleam, not --strip-components). GITHUB_TOOLS kept in sync with the registry by tool-registry-consistency.test.ts
   lsp/                    38 LSP server IDs (incl. opengrep + ast-grep + zizmor, cross-cutting AUXILIARY diagnostic LSPs — role:"auxiliary", #111/#239/#272), config, lifecycle. clojure-lsp + gleam now auto-install via github (native binary / flat tarball). zizmor (GitHub Actions security, `zizmor --lsp`) attaches to YAML; advisory unless the repo ships zizmor.yml; online audits need a token (env or `gh auth token`) via clients/zizmor-config.ts
   dispatch/               Pipeline dispatcher + 47 registered runners (incl. spotbugs — flag-gated via withSpotbugsGroup, #133). Auxiliary LSPs (opengrep, ast-grep, zizmor, …) are NOT runners — they attach via the lsp runner's with-auxiliary path; see clients/dispatch/auxiliary-lsp.ts
@@ -51,19 +51,24 @@ a *second host adapter* alongside `index.ts`. Design rationale + progress: `mcp.
   `npm install --omit=dev` does **not** omit `optionalDependencies` (only
   `--omit=optional` does, which pi doesn't pass), so even an "optional" SDK would
   weigh every pi-lens install. ~200 LOC beats a dep for a tools-only server.
-- **16 tools:** `pilens_analyze` (per-edit; `mode: warm|fresh`), `pilens_diagnostics`,
+- **15 tools:** `pilens_analyze` (per-edit; `mode: warm|fresh`), `pilens_diagnostics`,
   `pilens_project_scan`, `pilens_latency`, `pilens_health`, `pilens_rebuild`,
   `pilens_session_start` / `pilens_turn_end` (drive the REAL lifecycle handlers —
   not re-implementations — via `clients/mcp/session.ts`), `pilens_ast_grep_search`
   / `pilens_ast_grep_replace`, `pilens_lsp_navigation` / `pilens_lsp_diagnostics`,
   `pilens_symbol_search` (ranked identifier search over the persisted word index —
-  BM25 + priors + reverse-dep centrality), `pilens_impact` (transitive review-graph
-  dependents — blast radius), `pilens_module_report` (navigable outline + signatures
-  + who-uses-this + ready-to-use `read` args — a token-efficient read substitute;
+  BM25 + priors + reverse-dep centrality), `pilens_module_report` (navigable outline + signatures
   the outline is module-level declarations + class members only — function-locals
-  are dropped (#259) — and the `api`/`internal` split is visibility-aware, so a
-  `private`/`protected` member of an exported class sits in `internal` with a
-  `visibility` tag, not the public `api` (#258)) /
+  are dropped (#259). Class/interface members nest under their container by
+  line-range containment (`members[]`, #301); the `api`/`internal` split is over
+  TOP-LEVEL entries only, and a `private`/`protected` member is tagged with a
+  `visibility` field inside its container's members, not promoted to the public
+  `api` (#258). `imports` populate language-uniformly even on a cold cache —
+  resolved to in-project files via the warm graph's resolver, else bucketed
+  internal/external by shape (#301). Pass `blastRadius: true` for the cross-file
+  **blast radius** (#304): transitive dependents aggregated to ranked file `read`
+  args — read-only over the *cached* graph (omitted when cold), the single
+  successor to the removed `pilens_impact` tool) /
   `pilens_read_symbol` (one symbol's verbatim body). Wrapped pi tools emit their
   typebox `parameters` as the MCP `inputSchema` (via `schemaWithCwd`) — no
   hand-restated schema to drift.
@@ -75,16 +80,16 @@ a *second host adapter* alongside `index.ts`. Design rationale + progress: `mcp.
   genuine edit-coverage for that symbol's range (a `module_report` outline is NOT —
   shape, not body).
 - **MCP-only vs pi-lens-internal (a real gap to close, not a finished story).**
-  `pilens_symbol_search` and `pilens_impact` are currently **agent-facing queries
-  only**: the word index is built during pi-lens's own session scan (pi pays the
-  cost) but nothing in pi-lens consumes it, and `pilens_impact` uses *transitive*
-  BFS (`computeTransitiveImpact`) while the in-pi **cascade still derives neighbors
-  one-hop** (`computeImpactCascade` in `dispatch/integration.ts`). The higher-value
-  move is to feed the transitive impact (bounded depth/budget) into cascade neighbor
-  derivation — ideally paired with the #202 structural-hash short-circuit so the
-  expansion is *pruned* when a changed file's exported interface is unchanged. When
-  adding a capability via the engine, ask whether pi-lens itself should use it, not
-  just the mirror.
+  `pilens_symbol_search` is currently an **agent-facing query only**: the word index
+  is built during pi-lens's own session scan (pi pays the cost) but nothing in
+  pi-lens consumes it. Likewise `module_report`'s blast-radius (#304) uses
+  *transitive* BFS (`computeTransitiveImpact`) while
+  the in-pi **cascade still derives neighbors one-hop** (`computeImpactCascade` in
+  `dispatch/integration.ts`). The higher-value move is to feed the transitive impact
+  (bounded depth/budget) into cascade neighbor derivation — ideally paired with the
+  #202 structural-hash short-circuit so the expansion is *pruned* when a changed
+  file's exported interface is unchanged. When adding a capability via the engine,
+  ask whether pi-lens itself should use it, not just the mirror.
 - **warm vs fresh review loop.** The server is long-lived (warm LSP, cached code);
   `fresh` forks a worker that loads freshly-built code from disk → reflects the
   latest commit. `pilens_rebuild` closes it: commit → rebuild → `mode=fresh`.
@@ -116,6 +121,12 @@ a *second host adapter* alongside `index.ts`. Design rationale + progress: `mcp.
 
 ## Package scope
 All pi packages are `@earendil-works/*` (migrated from `@mariozechner/*` in 0.74.0). Peer dep: `@earendil-works/pi-coding-agent`. Runtime dep: `@earendil-works/pi-tui`.
+
+## Git & PR workflow
+- **Always open PRs with base `master`** (`gh pr create --base master`). **Never stack a PR on another feature branch.** If issue B builds on still-unmerged issue A, you may branch B off A's branch *locally* to develop, but the PR's base must still be `master` (wait for A to merge + rebase B, or accept the noisier diff) — never `--base feat/<A>`.
+  - Why: PRs squash-merge. A PR based on a feature branch gets merged *into that branch*, not master; if the base was already squashed to master, those commits land on a dead branch and never reach master. This happened (#321/#302 → reland #322).
+  - Verify a merge actually hit master before moving on: `git show origin/master:<file> | grep <new-symbol>` — not just the PR's "merged" badge.
+- Lint gate is `tsc` (`npm run lint`); the repo has **no biome config or CI biome gate**, so biome's default formatting is *not* enforced — don't repo-wide reformat. Run the full suite (`npm test`) before pushing; `npm run build` first if stale JS may shadow source edits.
 
 ## Commands
 ```
@@ -184,7 +195,7 @@ Warms the LSP for the file and records read-guard lines. For write/edit tools, r
 Tracks modified file ranges per turn for turn_end targeting, bumps project/file sequence state for observed writes/edits, and appends project changes to `change-log.jsonl`. For write/edit events, runs the dispatch pipeline: format → autofix → LSP diagnostics sync → parallel async runner dispatch → dedup/merge → findings stored on `RuntimeCoordinator`. Pipeline crash recovery fast-resets LSP with `resetLSPService({ fast: true })`. **IaC misconfig** (#131 Mode 2) is a per-edit dispatch runner here, not a session scan: `clients/dispatch/runners/trivy-config.ts` runs `trivy config` over Dockerfiles + Kubernetes manifests (YAML gated by an `apiVersion:`+`kind:` heuristic), `trivy.enabled`-gated, wired into the `docker`/`yaml` `PRIMARY_DISPATCH_GROUPS`; `suppressTrivyConfigDockerOverlap` (dispatcher) drops trivy-config findings hadolint already reports at the same Dockerfile line so it only adds the security checks hadolint lacks (k8s has no hadolint overlap). Terraform/Helm/Compose/CFN deferred.
 
 **`turn_end`** → `handleTurnEnd` (`clients/runtime-turn.ts`)
-Merges unresolved inline blockers and cascade findings, writes latest-turn actionable/code-quality warning reports with sequence metadata, runs Knip delta analysis when the startup scan is not in flight, runs Madge circular-dependency checks for files whose imports changed, and fires related/failed tests asynchronously for the next context injection. Reads the session-scan caches and surfaces them. **Secrets** (`gitleaks` + `trivy secret` + the ast-grep `*-hardcoded-secret-*` rules) are collapsed **by location** via `clients/secret-findings.ts` (`dedupeSecretFindings`) into a single 🔴 blocker with combined provenance (`[gitleaks + trivy + ast-grep]`) — the rule-keyed diagnostic dedup can't merge them since each source uses a different rule id; the duplicate ast-grep advisory copy is suppressed from the actionable-warnings report at the blocked locations (#131 Mode 3). Trivy **CRITICAL** CVEs are 🔴 blockers ("upgrade before shipping"); `govulncheck`/Trivy non-critical CVEs are advisories (FixedVersion as an upgrade hint — never auto-edits lockfiles). Deduplicates findings against previous turn state and injects blockers (🔴) and advisories into the agent's context.
+Merges unresolved inline blockers and cascade findings, writes latest-turn actionable/code-quality warning reports with sequence metadata, runs Knip delta analysis when the startup scan is not in flight, runs Madge circular-dependency checks for files whose imports changed, and fires related/failed tests asynchronously for the next context injection. Reads the session-scan caches and surfaces them. **Secrets** (`gitleaks` + `trivy secret` + the ast-grep `*-hardcoded-secret-*` rules) are collapsed **by location** via `clients/secret-findings.ts` (`dedupeSecretFindings`) into a single 🔴 blocker with combined provenance (`[gitleaks + trivy + ast-grep]`) — the rule-keyed diagnostic dedup can't merge them since each source uses a different rule id; the duplicate ast-grep advisory copy is suppressed from the actionable-warnings report at the blocked locations (#131 Mode 3). Trivy **CRITICAL** CVEs are 🔴 blockers ("upgrade before shipping"); `govulncheck`/Trivy non-critical CVEs are advisories (FixedVersion as an upgrade hint — never auto-edits lockfiles). Trivy **license risk** (copyleft/restricted licenses, #131 Mode 4) is a 📜 advisory from the same `trivy fs --scanners vuln,secret,license` pass. Deduplicates findings against previous turn state and injects blockers (🔴) and advisories into the agent's context.
 
 ## Key abstractions
 
@@ -349,6 +360,8 @@ When changing a serialized cache that feeds this pipeline (e.g. `clients/cache/r
 ## ast-grep rules
 
 Rules live in `rules/ast-grep-rules/rules/*.yml` (plus the multi-rule `rules/ast-grep-rules/slop-patterns.yml`); disabled rules sit in `rules/ast-grep-rules/rules-disabled/` (sibling dir — not loaded). Run by `clients/dispatch/runners/ast-grep-napi.ts`.
+
+**The runner does NOT language-gate ts/js rules.** `ast-grep-napi.ts` skips only rules whose `language:` is *neither* TypeScript nor JavaScript (`lang !== "typescript" && lang !== "javascript"`), then parses each file with its OWN grammar (`.ts`→ts, `.js`→js) and runs every remaining rule. Consequence for `-js` twins (#305): a twin is **redundant + duplicates** for a grammar-AGNOSTIC body (patterns / shared kinds like `member_expression`, `call_expression` — one `language: TypeScript` rule already covers `.js`), but a twin is **REQUIRED + non-duplicating** for a grammar-DIVERGENT body (kinds that differ between the tree-sitter ts/js grammars). Canonical divergence: a default parameter is `required_parameter` in the TS grammar but `assignment_pattern` in the JS grammar, so `no-flag-argument` (#305) ships both twins (each gives 0 matches on the other grammar's files). Note the CLI≠runner trap: `ast-grep scan`/`test` gate by the rule's `language:`, so a TS rule shows 0 on a `.js` file in the CLI even though the runner runs it — decide twin-vs-single by the grammar, not CLI output. Full authoring guidance: the `write-ast-grep-rule` skill.
 
 **Cross-validation against the upstream playground:** `scripts/playground-verify-rule.mjs` is a headless-CDP tool that loads a rule into the official [ast-grep playground](https://ast-grep.github.io/playground.html) and reports the match count the playground's own engine produces. This is a *second opinion* against the local CLI test — useful for catching pattern-level drift between the version of `ast-grep` pinned in `package.json` and the version the upstream binary ships. The playground uses a fixed source, so this is a pattern-level smoke test, not a source-level one. See `docs/astplayground.md` for the architecture, limitations, and CLI surface.
 

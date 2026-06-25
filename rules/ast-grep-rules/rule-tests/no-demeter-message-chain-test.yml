@@ -1,0 +1,16 @@
+id: no-demeter-message-chain
+valid:
+  # promise chain — `then` is not an accessor
+  - "fetch(url).then(r => r.json()).then(d => use(d));"
+  # fluent collection ops — map/filter/value are not accessors
+  - "const r = _(arr).map(f).filter(g).value();"
+  # query/DSL builder — select/from/where are not accessors
+  - 'const q = db.select("*").from("t").where("x");'
+  # only 2 deep
+  - "const v = obj.getA().doB();"
+  # single accessor
+  - "const got = single.getThing();"
+invalid:
+  - "const city = order.getCustomer().getAddress().getCity();"
+  - "const v = a.getB().getC().doD();"
+  - "const ok = session.getUser().isActive().valueOf();"
