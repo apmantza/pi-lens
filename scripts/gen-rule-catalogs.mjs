@@ -54,13 +54,15 @@ function loadRule(path) {
   }
 }
 
-// Collapse a YAML block scalar to a single, table-safe markdown cell.
+// Collapse a YAML block scalar to a single, table-safe markdown cell. Escape
+// the backslash FIRST, then the pipe, so a literal `\` in the input (e.g. a
+// Windows path like `src\win\async.c`) can't combine with the pipe-escape.
 function cell(text, max = 140) {
   let s = String(text ?? "")
     .replace(/\s+/g, " ")
     .trim();
   if (s.length > max) s = s.slice(0, max - 1).trimEnd() + "…";
-  return s.replace(/\|/g, "\\|");
+  return s.replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
 }
 
 function titleCase(lang) {
