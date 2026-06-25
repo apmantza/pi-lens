@@ -11,14 +11,28 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { launchLSP, stopLSP } from "../../../clients/lsp/launch.js";
 
-describe("LSP Launch", () => {
-	it("throws when binary is not found", async () => {
-		await expect(
-			launchLSP("definitely-not-a-real-binary-12345", ["--stdio"]),
-		).rejects.toThrow();
-	});
+// Every test here spawns a real OS process (launchLSP uses `shell: true` on
+// Windows → cmd.exe). In isolation the whole file runs in <4s, but under the
+// FULL parallel suite the OS starves these spawns and a single one can brush
+// past vitest's 5000ms default per-test timeout (observed: 5021ms on the
+// missing-binary probe whose own startup window is just 50ms — i.e. pure load
+// starvation, not a hang). A generous explicit timeout removes that
+// load-sensitivity without affecting passing runs (the timeout only fires if
+// exceeded).
+const SPAWN_TEST_TIMEOUT_MS = 20_000;
 
-	it("spawns a real Node.js process and returns LSPProcess handle", async () => {
+describe("LSP Launch", () => {
+	it(
+		"throws when binary is not found",
+		{ timeout: SPAWN_TEST_TIMEOUT_MS },
+		async () => {
+			await expect(
+				launchLSP("definitely-not-a-real-binary-12345", ["--stdio"]),
+			).rejects.toThrow();
+		},
+	);
+
+	it("spawns a real Node.js process and returns LSPProcess handle", { timeout: SPAWN_TEST_TIMEOUT_MS }, async () => {
 		// Write a temp script that keeps running (avoids shell escaping issues)
 		const scriptPath = path.join(os.tmpdir(), `pi-lens-test-${Date.now()}.js`);
 		fs.writeFileSync(scriptPath, "setInterval(() => {}, 60000);");
@@ -36,7 +50,7 @@ describe("LSP Launch", () => {
 		fs.unlinkSync(scriptPath);
 	});
 
-	it("detects immediate exit of a bad binary", async () => {
+	it("detects immediate exit of a bad binary", { timeout: SPAWN_TEST_TIMEOUT_MS }, async () => {
 		const scriptPath = path.join(os.tmpdir(), `pi-lens-test-${Date.now()}.js`);
 		fs.writeFileSync(scriptPath, "process.exit(1);");
 
@@ -49,7 +63,7 @@ describe("LSP Launch", () => {
 		fs.unlinkSync(scriptPath);
 	});
 
-	it("stopLSP kills the process", async () => {
+	it("stopLSP kills the process", { timeout: SPAWN_TEST_TIMEOUT_MS }, async () => {
 		const scriptPath = path.join(os.tmpdir(), `pi-lens-test-${Date.now()}.js`);
 		fs.writeFileSync(scriptPath, "setInterval(() => {}, 60000);");
 
@@ -66,7 +80,7 @@ describe("LSP Launch", () => {
 		fs.unlinkSync(scriptPath);
 	});
 
-	it("stopLSP returns when the process already exited", async () => {
+	it("stopLSP returns when the process already exited", { timeout: SPAWN_TEST_TIMEOUT_MS }, async () => {
 		const scriptPath = path.join(os.tmpdir(), `pi-lens-test-${Date.now()}.js`);
 		fs.writeFileSync(scriptPath, "setTimeout(() => process.exit(0), 250);");
 
