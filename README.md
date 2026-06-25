@@ -75,6 +75,10 @@ Or from git:
 pi install git:github.com/apmantza/pi-lens
 ```
 
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the development workflow, how to add runners, LSP servers, formatters, and rules, and the issue/PR templates.
+
 ## Features
 
 ### LSP Support

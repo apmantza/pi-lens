@@ -1,0 +1,59 @@
+name: Enhancement
+description: Improve, harden, refactor, or optimize an existing capability
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Propose an improvement to something that already exists.
+        For a brand-new capability, use the Feature Proposal template.
+
+        Read [CONTRIBUTING.md](../CONTRIBUTING.md) for the test and
+        performance expectations.
+  - type: textarea
+    id: what
+    attributes:
+      label: What should be improved?
+      description: |
+        Which existing runner, LSP server, rule, command, or pipeline
+        behavior is the target?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why?
+      description: |
+        What is the current pain point? Include numbers or logs if
+        this is a performance issue.
+    validations:
+      required: true
+  - type: textarea
+    id: how
+    attributes:
+      label: Proposed approach (optional)
+      description: |
+        Brief technical plan and files you expect to change.
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of pi-lens is most relevant?
+      options:
+        - area:lsp
+        - area:dispatch
+        - area:installer
+        - area:diagnostics
+        - area:read-guard
+        - area:project-intelligence
+        - area:perf
+        - area:observability
+        - area:session
+        - area:config
+        - area:security
+        - area:tests
+        - unknown
+    validations:
+      required: false
