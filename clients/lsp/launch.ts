@@ -883,6 +883,17 @@ export async function stopLSP(handle: LSPProcess): Promise<void> {
 
 		const killWindowsTree = (): boolean => {
 			if (!isWindows || handle.pid <= 0) return false;
+			// If our child has already exited, its PID is dead and the OS may have
+			// RECYCLED it to an unrelated process. `taskkill /F /T` on a recycled PID
+			// force-kills that process AND its whole tree — in the test suite this
+			// occasionally nuked a vitest worker fork ("Worker exited unexpectedly",
+			// no fatal dump, e.g. via the "stopLSP after the process already exited"
+			// path); in production it could kill an unrelated user process. Never
+			// tree-kill a PID we no longer own — fall back to handle.process.kill(),
+			// which on Windows signals via the retained process HANDLE (not the raw
+			// PID), so it's a safe no-op on an already-exited child.
+			if (handle.process.exitCode !== null || handle.process.signalCode !== null)
+				return false;
 			try {
 				// Absolute path avoids PATH-resolution substitution on Windows.
 				const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;

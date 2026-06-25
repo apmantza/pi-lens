@@ -517,10 +517,25 @@ export async function killProcessTree(
 	proc: {
 		kill(signal?: NodeJS.Signals | number): boolean;
 		unref?: () => void;
+		exitCode?: number | null;
+		signalCode?: NodeJS.Signals | null;
 	},
 	pid: number,
 	options: LSPShutdownOptions = {},
 ): Promise<void> {
+	// If our child has already exited, its PID is dead and the OS may have
+	// RECYCLED it. The Windows `taskkill /F /T` below force-kills the PID's whole
+	// tree, so on a recycled PID it would kill an unrelated process (in the test
+	// suite this occasionally nuked a vitest worker fork → "Worker exited
+	// unexpectedly" with no fatal dump). There is nothing left for us to kill, and
+	// the handle-based proc.kill() below is moot, so return early.
+	if (
+		(proc.exitCode != null || proc.signalCode != null) &&
+		!options.processExiting
+	) {
+		proc.unref?.();
+		return;
+	}
 	if (process.platform === "win32" && pid > 0) {
 		// Host process is exiting (loop already closing): never spawn a child here —
 		// the spawn's uv_async_send on the closing loop-wakeup handle hard-aborts
