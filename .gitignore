@@ -57,6 +57,8 @@ migrate-*.js
 !SECURITY.md
 !docs/audit1.md
 !docs/agent-tools.md
+!docs/ast-grep_rules_catalog.md
+!docs/tree-sitter_rules_catalog.md
 !docs/custom-rules.md
 !docs/dependencies.md
 !docs/env_variables.md
