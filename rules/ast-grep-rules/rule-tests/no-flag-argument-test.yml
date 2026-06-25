@@ -1,0 +1,37 @@
+id: no-flag-argument
+valid:
+  # boolean default but never branched on (merely forwarded / unused)
+  - |
+    function render(node, verbose = false) {
+      return compactPrint(node, verbose);
+    }
+  # branches, but on a non-flag (property), not a boolean-default param
+  - |
+    function render(node, opts) {
+      if (opts.pretty) { return prettyPrint(node); }
+      return compactPrint(node);
+    }
+  # boolean default, but the branch is on a DIFFERENT variable
+  - |
+    function render(node, debug = true) {
+      if (somethingElse) { return 1; }
+      return 2;
+    }
+invalid:
+  - |
+    function render(node, pretty = false) {
+      if (pretty) { return prettyPrint(node); }
+      return compactPrint(node);
+    }
+  - |
+    class C {
+      draw(shape, filled = false) {
+        if (filled) return this.fill(shape);
+        return this.stroke(shape);
+      }
+    }
+  - |
+    const handle = (req, deferred = false) => {
+      if (!deferred) return now(req);
+      return defer(req);
+    };
