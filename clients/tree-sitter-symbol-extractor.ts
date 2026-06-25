@@ -460,8 +460,11 @@ SYMBOL_QUERIES.tsx = SYMBOL_QUERIES.typescript;
 // Per-language import-source extraction (#249). Optional and independent of
 // SYMBOL_QUERIES: a language without an entry simply yields no imports (its
 // symbols still extract). Each query captures the import source text as
-// @importSource. jsts/cxx are intentionally absent — their imports are extracted
-// by the review-graph builder's dedicated paths (importFactProvider / #include).
+// @importSource. cxx is intentionally absent — its #include edges are extracted
+// by the review-graph builder's dedicated path. typescript/tsx ARE present (#301)
+// so the COLD module_report path (which runs this extractor directly) sees TS/JS
+// imports; the WARM review graph still sources jsts imports from the TS compiler
+// (importFactProvider) and never reaches this query, so there's no double-count.
 //
 // Call/builtin-based languages (ruby/zig/elixir/bash) express imports as
 // ordinary function/macro calls, so their queries use a `#match?` predicate to
@@ -474,6 +477,18 @@ SYMBOL_QUERIES.tsx = SYMBOL_QUERIES.typescript;
 // lua import query work in the real review-graph client. The validated lua query
 // is recorded on #255 and lands once the parse corruption is fixed.
 const IMPORT_QUERIES: Record<string, string> = {
+	// ESM import + re-export source strings; `source:` is a (string) on both the
+	// typescript and tsx grammars (validated). parseImportMatch strips the quotes.
+	// CJS `require(...)` is intentionally out of scope — the cold path's dominant
+	// case is ESM, and the warm graph already covers require via the TS compiler.
+	typescript: `
+      (import_statement source: (string) @importSource)
+      (export_statement source: (string) @importSource)
+    `,
+	tsx: `
+      (import_statement source: (string) @importSource)
+      (export_statement source: (string) @importSource)
+    `,
 	python: `
       (import_statement name: (dotted_name) @importSource)
       (import_statement name: (aliased_import name: (dotted_name) @importSource))
@@ -573,8 +588,18 @@ export class TreeSitterSymbolExtractor {
 			// and vice versa; the extractor degrades partially, not to nothing.
 			const queries = SYMBOL_QUERIES[this.languageId];
 			if (queries) {
-				this.defQuery = this.compileQuery(Query, language, queries.defs, "defs");
-				this.refQuery = this.compileQuery(Query, language, queries.refs, "refs");
+				this.defQuery = this.compileQuery(
+					Query,
+					language,
+					queries.defs,
+					"defs",
+				);
+				this.refQuery = this.compileQuery(
+					Query,
+					language,
+					queries.refs,
+					"refs",
+				);
 			}
 			const importQuerySrc = IMPORT_QUERIES[this.languageId];
 			if (importQuerySrc) {

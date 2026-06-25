@@ -34,10 +34,14 @@ import * as path from "node:path";
 import { detectFileKind } from "./file-kinds.js";
 import { logLatency } from "./latency-logger.js";
 import { normalizeMapKey } from "./path-utils.js";
+import { resolveImportToFiles } from "./review-graph/import-resolvers.js";
+import type { ReviewGraph, ReviewGraphEdgeKind } from "./review-graph/types.js";
 import type { Symbol as ExtractedSymbol } from "./symbol-types.js";
 import { TreeSitterClient } from "./tree-sitter-client.js";
-import { TreeSitterSymbolExtractor } from "./tree-sitter-symbol-extractor.js";
-import type { ReviewGraph, ReviewGraphEdgeKind } from "./review-graph/types.js";
+import {
+	type ImportRef,
+	TreeSitterSymbolExtractor,
+} from "./tree-sitter-symbol-extractor.js";
 
 // NOTE: live-LSP enrichment is NO LONGER called on this read path (#256). Firing
 // LSP per read — speculatively, on the agent's fan-out path — repeatedly OOM'd
@@ -77,6 +81,12 @@ export interface ModuleSymbolEntry {
 	/** Empty when the symbol has no risk flags; omitted from the wire entirely. */
 	flags?: string[];
 	usedBy?: ModuleSymbolUsedBy[];
+	/** Members nested under their container by line-range containment (#301) —
+	 * a class/interface's methods/fields, an outer class's inner classes. Each
+	 * member is a full entry (read-args, visibility, who-uses-this); omitted when
+	 * the symbol has none. The api/internal split is over TOP-LEVEL entries only;
+	 * members ride along inside their container. */
+	members?: ModuleSymbolEntry[];
 	/** Pre-computed read arguments — the agent's next call sits right here. */
 	read: { path: string; offset: number; limit: number };
 }
@@ -180,21 +190,22 @@ async function getExtractor(
 	return result;
 }
 
-async function extractFileSymbols(
+async function extractFile(
 	absPath: string,
 	languageId: string,
 	content: string,
-): Promise<ExtractedSymbol[]> {
+): Promise<{ symbols: ExtractedSymbol[]; imports: ImportRef[] }> {
 	try {
 		const initialized = await tsClient.init();
-		if (!initialized) return [];
+		if (!initialized) return { symbols: [], imports: [] };
 		const tree = await tsClient.parseFile(absPath, languageId);
-		if (!tree) return [];
+		if (!tree) return { symbols: [], imports: [] };
 		const extractor = await getExtractor(languageId);
-		if (!extractor) return [];
-		return extractor.extract(tree, absPath, content).symbols;
+		if (!extractor) return { symbols: [], imports: [] };
+		const result = extractor.extract(tree, absPath, content);
+		return { symbols: result.symbols, imports: result.imports };
 	} catch {
-		return [];
+		return { symbols: [], imports: [] };
 	}
 }
 
@@ -283,6 +294,63 @@ function collectImports(
 	};
 }
 
+// An import source string "looks internal" when its shape names a same-project
+// target the per-language resolver couldn't pin to a file (a not-yet-created
+// file, or a language we don't resolve to disk). Relative paths and Rust's
+// crate-relative prefixes are unambiguously in-project; everything else
+// (bare specifiers, absolute package paths) is treated as external. This is the
+// floor under `resolveImportToFiles` — it never fabricates a file path, only a
+// best-effort internal/external bucket.
+function looksInternal(source: string): boolean {
+	// A leading "." is relative across every language we extract (JS ./ ../,
+	// Python . .foo ..pkg, Ruby/Dart/bash relative paths) and never begins a bare
+	// or scoped package specifier (react, @scope/pkg, java.util.List, fmt). Rust's
+	// crate-relative prefixes are likewise unambiguously in-project.
+	return (
+		source.startsWith(".") ||
+		source.startsWith("crate::") ||
+		source.startsWith("super::") ||
+		source.startsWith("self::")
+	);
+}
+
+// Cold-cache imports (#301): the warm review graph is the source of truth for
+// imports, but on a cold cache it's absent and `collectImports` returns empty
+// even though the tree-sitter extractor already parsed the import sources. Rebuild
+// the same {external, internal} shape language-uniformly from those sources:
+// resolve each to real in-project files via the warm graph's own resolver
+// (`resolveImportToFiles`) when the language supports it, else fall back to the
+// shape heuristic. Internal entries are cwd-relative display paths (resolved) or
+// the raw source (heuristic), mirroring `collectImports`.
+function coldImports(
+	imports: ImportRef[],
+	languageId: string,
+	absPath: string,
+	projectRoot: string,
+): { external: string[]; internal: string[] } {
+	const external = new Set<string>();
+	const internal = new Set<string>();
+	for (const imp of imports) {
+		const files = resolveImportToFiles(
+			projectRoot,
+			absPath,
+			languageId,
+			imp.source,
+		);
+		if (files.length > 0) {
+			for (const f of files) internal.add(toDisplayPath(f, projectRoot));
+		} else if (looksInternal(imp.source)) {
+			internal.add(imp.source);
+		} else {
+			external.add(imp.source);
+		}
+	}
+	return {
+		external: [...external].sort((a, b) => a.localeCompare(b)),
+		internal: [...internal].sort((a, b) => a.localeCompare(b)),
+	};
+}
+
 function toEntry(
 	sym: ExtractedSymbol,
 	displayPath: string,
@@ -343,6 +411,46 @@ function toEntry(
 		usedBy: usedBy && usedBy.length > 0 ? usedBy : undefined,
 		read: readArgsFor(displayPath, startLine, endLine),
 	};
+}
+
+// Nest members under their container by line-range containment (#301), mirroring
+// ast-grep's outline: a class/interface's methods sit in its `members[]`, not at
+// the top level. Each entry attaches to its NEAREST (smallest) strictly-enclosing
+// entry, so arbitrary depth (a method in an inner class in an outer class) nests
+// correctly. Mutates the entries (sets `members`) and returns the TOP-LEVEL ones
+// (no container) for the api/internal split. The flat list stays usable for
+// ranking so hot nested methods still surface in recommendedReads.
+function nestEntries(entries: ModuleSymbolEntry[]): ModuleSymbolEntry[] {
+	const span = (e: ModuleSymbolEntry) => e.endLine - e.startLine;
+	const containerOf = new Map<
+		ModuleSymbolEntry,
+		ModuleSymbolEntry | undefined
+	>();
+	for (const e of entries) {
+		let best: ModuleSymbolEntry | undefined;
+		for (const c of entries) {
+			if (c === e) continue;
+			// Strict containment: c wraps e AND is strictly larger, so equal-range
+			// pairs (a mis-extracted class+ctor on the same lines) never mutually nest.
+			const contains =
+				c.startLine <= e.startLine &&
+				c.endLine >= e.endLine &&
+				span(c) > span(e);
+			if (!contains) continue;
+			if (!best || span(c) < span(best)) best = c;
+		}
+		containerOf.set(e, best);
+	}
+	for (const e of entries) {
+		const parent = containerOf.get(e);
+		if (!parent) continue;
+		if (!parent.members) parent.members = [];
+		parent.members.push(e);
+	}
+	for (const e of entries) {
+		if (e.members) e.members.sort((a, b) => a.startLine - b.startLine);
+	}
+	return entries.filter((e) => !containerOf.get(e));
 }
 
 function rankRecommendedReads(
@@ -419,9 +527,9 @@ export async function moduleReport(
 	const languageId = tsLangForFile(absPath, kind);
 	const lineCount = content.split(/\r?\n/).length;
 
-	const extracted = languageId
-		? await extractFileSymbols(absPath, languageId, content)
-		: [];
+	const { symbols: extracted, imports: extractedImports } = languageId
+		? await extractFile(absPath, languageId, content)
+		: { symbols: [], imports: [] };
 
 	// READ-ONLY: consume the already-built review graph, never build one here. A
 	// synchronous full build re-runs every fact provider (TS-compiler ASTs for
@@ -439,15 +547,27 @@ export async function moduleReport(
 	// module structure (#259). Presentation-only: the review graph keeps them.
 	const outlineSymbols = extracted.filter((sym) => !sym.local);
 
+	// Flat entries first — ranking and cold-import resolution both read the full
+	// list. `entries` is mutated by nestEntries (members attached); `topLevel` is
+	// the api/internal split surface.
 	const entries = outlineSymbols.map((sym) =>
 		toEntry(sym, absPath, normalizedPath, graph, maxRefs, cwd),
 	);
+	const topLevel = nestEntries(entries);
 
-	const api = entries.filter((entry) => entry.exported);
-	const internal = entries.filter((entry) => !entry.exported);
-	const imports = graph
+	const api = topLevel.filter((entry) => entry.exported);
+	const internal = topLevel.filter((entry) => !entry.exported);
+
+	// Imports: the warm review graph is source-of-truth; on a cold cache (or a
+	// graph without this file's node) fall back to the language-uniform tree-sitter
+	// resolution (#301) so a cold report no longer shows zero imports.
+	const warmImports = graph
 		? collectImports(graph, normalizedPath, cwd)
 		: { external: [], internal: [] };
+	const imports =
+		warmImports.external.length + warmImports.internal.length > 0 || !languageId
+			? warmImports
+			: coldImports(extractedImports, languageId, absPath, cwd);
 
 	const hasGraphNode = graph?.fileNodes.has(normalizedPath) ?? false;
 
@@ -534,7 +654,7 @@ export async function readSymbol(
 		return { found: false, path: absPath, name: symbolName };
 	}
 
-	const symbols = await extractFileSymbols(absPath, languageId, content);
+	const { symbols } = await extractFile(absPath, languageId, content);
 	const sym = symbols.find((candidate) => candidate.name === symbolName);
 	if (!sym) {
 		log(false);

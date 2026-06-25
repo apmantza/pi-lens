@@ -61,9 +61,13 @@ a *second host adapter* alongside `index.ts`. Design rationale + progress: `mcp.
   dependents — blast radius), `pilens_module_report` (navigable outline + signatures
   + who-uses-this + ready-to-use `read` args — a token-efficient read substitute;
   the outline is module-level declarations + class members only — function-locals
-  are dropped (#259) — and the `api`/`internal` split is visibility-aware, so a
-  `private`/`protected` member of an exported class sits in `internal` with a
-  `visibility` tag, not the public `api` (#258)) /
+  are dropped (#259). Class/interface members nest under their container by
+  line-range containment (`members[]`, #301); the `api`/`internal` split is over
+  TOP-LEVEL entries only, and a `private`/`protected` member is tagged with a
+  `visibility` field inside its container's members, not promoted to the public
+  `api` (#258). `imports` populate language-uniformly even on a cold cache —
+  resolved to in-project files via the warm graph's resolver, else bucketed
+  internal/external by shape (#301)) /
   `pilens_read_symbol` (one symbol's verbatim body). Wrapped pi tools emit their
   typebox `parameters` as the MCP `inputSchema` (via `schemaWithCwd`) — no
   hand-restated schema to drift.

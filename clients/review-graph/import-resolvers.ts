@@ -88,6 +88,33 @@ function resolveDart(cwd: string, filePath: string, source: string): string[] {
 	return resolveRelative(cwd, filePath, source, [".dart"]);
 }
 
+// --- JS/TS -------------------------------------------------------------------
+
+/**
+ * Resolve a relative ESM import (`./x`, `../y`) to an in-project file, trying the
+ * ts/tsx/js/jsx extensions and the `index.*` directory form. Mirrors the warm
+ * graph's `localImportToFile` (builder.ts) — duplicated rather than imported to
+ * avoid a builder→resolvers cycle. Bare specifiers (`react`, `@scope/pkg`) are
+ * package deps → external, so they return []. Used only on the COLD module_report
+ * path: the warm jsts builder resolves imports via the TS compiler and never
+ * reaches this resolver.
+ */
+function resolveJsTs(cwd: string, filePath: string, source: string): string[] {
+	if (!source.startsWith(".")) return [];
+	const base = path.resolve(path.dirname(filePath), source);
+	return firstExistingFile(cwd, [
+		base,
+		`${base}.ts`,
+		`${base}.tsx`,
+		`${base}.js`,
+		`${base}.jsx`,
+		path.join(base, "index.ts"),
+		path.join(base, "index.tsx"),
+		path.join(base, "index.js"),
+		path.join(base, "index.jsx"),
+	]);
+}
+
 // --- Python -----------------------------------------------------------------
 
 /** Candidate source roots for an absolute dotted import. */
@@ -106,7 +133,11 @@ function pythonRoots(cwd: string, fileDir: string): string[] {
 	return [...roots].filter((r) => isDir(r));
 }
 
-function resolvePython(cwd: string, filePath: string, source: string): string[] {
+function resolvePython(
+	cwd: string,
+	filePath: string,
+	source: string,
+): string[] {
 	const fileDir = path.dirname(path.resolve(filePath));
 	if (source.startsWith(".")) {
 		// Relative import: leading dots = how far up, remainder = dotted subpath.
@@ -199,7 +230,9 @@ function resolveJava(cwd: string, filePath: string, source: string): string[] {
 	const parts = source.split(".");
 	for (const root of javaSourceRoots(cwd, filePath)) {
 		// import a.b.Foo  → a/b/Foo.java
-		const asFile = firstExistingFile(cwd, [`${path.join(root, ...parts)}.java`]);
+		const asFile = firstExistingFile(cwd, [
+			`${path.join(root, ...parts)}.java`,
+		]);
 		if (asFile.length) return asFile;
 		// import a.b.*  (captured as a.b) → every .java in the package dir
 		const asPkg = sourceFilesIn(cwd, path.join(root, ...parts), ".java");
@@ -227,6 +260,11 @@ export function resolveImportToFiles(
 	source: string,
 ): string[] {
 	switch (languageId) {
+		case "typescript":
+		case "tsx":
+		case "javascript":
+		case "jsts":
+			return resolveJsTs(cwd, filePath, source);
 		case "ruby":
 			return resolveRelative(cwd, filePath, source, [".rb"]);
 		case "zig":
