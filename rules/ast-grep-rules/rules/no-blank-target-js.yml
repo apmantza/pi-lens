@@ -3,20 +3,23 @@ language: JavaScript
 message: "Links with target=\"_blank\" must include rel to prevent opener leaks"
 severity: warning
 note: |
-  The original rule's pattern was `<a $$$PROPS>$$$CHILD</a>` with two
-  named multi-metavars (`$$$PROPS` for attributes, `$$$CHILD` for
-  children). ast-grep 0.42.0's pattern matcher has trouble with two
-  named multi-metavars in the same JSX pattern — the named `$$$CHILD`
-  fails to match the JSX children. Switched to anonymous `$$$` (which
-  the matcher handles fine) for the children. Functionally equivalent
-  since we don't reference `$$$CHILD` elsewhere in the rule.
+  The original rule's pattern was `<a $$$PROPS>$$$</a> + has: target="_blank"`
+  and `not: has: rel=$REL`. ast-grep's CLI pattern matcher cannot
+  tokenize text content inside JSX (the JSX grammar conflicts with
+  TypeScript's string/identifier tokenization, so the inline patterns
+  don't match), and `has: kind: jsx_attribute + regex` does not bind
+  to JSX attributes. Workaround: regex on the `jsx_element` text
+  directly — this matches the same shape (target="_blank" present,
+  rel= absent) without depending on JSX-internal pattern matching.
+
+  This rule still fires correctly through the napi engine used by
+  `clients/dispatch/runners/ast-grep-napi.ts` in production.
 metadata:
   category: security
 rule:
   all:
-    - pattern: <a $$$PROPS>$$$</a>
-    - has:
-        pattern: target="_blank"
+    - kind: jsx_element
+      regex: '<a[^>]*target="_blank"[^>]*>'
     - not:
-        has:
-          pattern: rel=$REL
+        kind: jsx_element
+        regex: '<a[^>]*rel='

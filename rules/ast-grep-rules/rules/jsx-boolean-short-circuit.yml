@@ -3,19 +3,38 @@ language: Tsx
 message: "React JSX && pitfall — potentially renders 0 or NaN"
 severity: error
 note: |
-  Using && in JSX can lead to unexpected rendering of falsy values like 0 or NaN.
-  Fix: use a ternary operator or cast the condition to a boolean.
+  Using && in JSX can lead to unexpected rendering of falsy values
+  like 0 or NaN. Fix: use a ternary operator or cast to a boolean.
   Grade 2.9 — low complexity, avoids UI glitches.
+
+  The original rule used `kind: jsx_expression + has: all: pattern: $COND && $JSX`
+  which the 0.42.0 CLI pattern matcher could not tokenize (JSX inside
+  the `pattern:` is opaque to the matcher, so the `has:` clause
+  silently never fires and the rule reports 0 matches). Switched to
+  `pattern: $COND && $JSX` as the root rule (metavars bind at the
+  binary_expression level — JSX is the metavar target, not a pattern
+  component) + `all:` clauses to constrain the match to the bug
+  pattern (operator is `&&`, right side is a JSX element, left side
+  is a number literal or a `.length` member expression). Matches:
+  `0 && <JSX>` and `arr.length && <JSX>` (where `arr.length === 0`
+  renders the literal `0`).
 rule:
-  kind: jsx_expression
-  has:
-    all:
-      - pattern: $COND && $JSX
-      - has:
-          field: left
-          any:
-            - kind: number
-            - has:
-                field: property
-                regex: "^length$"
+  pattern: $COND && $JSX
+  all:
+    - has:
+        field: operator
+        regex: '&&'
+    - has:
+        field: right
+        kind: jsx_element
+    - any:
+        - has:
+            field: left
+            kind: number
+        - has:
+            field: left
+            kind: member_expression
+            has:
+              field: property
+              regex: '^length$'
 fix: "{$COND ? $JSX : null}"
