@@ -54,9 +54,9 @@ LSP, formatter, and rule checklists, and issue/PR conventions.
 Security issues should be reported privately; see [`SECURITY.md`](SECURITY.md).
 pi-lens is released under the [MIT License](LICENSE).
 
-## Contributors ✨
+## Contributors
 
-Thanks goes to these wonderful people. Contribution emojis follow the All Contributors emoji key: <https://allcontributors.org/docs/en/emoji-key>.
+Thanks goes to these wonderful people:
 
 <!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
 <!-- prettier-ignore-start -->
