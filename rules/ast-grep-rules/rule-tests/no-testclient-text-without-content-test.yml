@@ -1,0 +1,10 @@
+id: no-testclient-text-without-content
+valid:
+  - 'r = client.get("/users/1")'
+  - 'r = client.post("/text", content="hello world")'
+  - 'r = client.post("/text", content=b"raw bytes")'
+  - 'r = client.post("/form", data={"field": "value"})'  # form data is fine
+  - 'r = client.post("/upload", files={"file": b"data"})'  # multipart file
+invalid:
+  - 'r = client.post("/text", data="plain string body")'
+  - 'r = client.post("/text", data=b"raw bytes")'

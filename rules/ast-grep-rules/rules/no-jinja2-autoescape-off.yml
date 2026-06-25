@@ -1,0 +1,24 @@
+id: no-jinja2-autoescape-off
+language: Python
+message: "Jinja2 Environment should not disable autoescape"
+severity: error
+note: |
+  Port of SonarCloud python:S5247.
+
+  Disabling autoescape in Jinja2 templates opens XSS
+  vulnerabilities. Use `|safe` on individual values if you really
+  need raw HTML.
+
+  Matches `Environment(autoescape=False)` (single-line) and the
+  multiline form `Environment($$$A, autoescape=False, $$$B)` which
+  catches the common `Environment(\n  loader=...,\n  autoescape=False,\n)`
+  shape. We need two patterns because the multi-arg pattern only
+  matches when there ARE additional arguments.
+metadata:
+  sonar: S5247
+rule:
+  any:
+    - pattern: "Environment(autoescape=False)"
+    - pattern: "Environment($$$A, autoescape=False, $$$B)"
+    - pattern: "jinja2.Environment(autoescape=False)"
+    - pattern: "jinja2.Environment($$$A, autoescape=False, $$$B)"

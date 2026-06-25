@@ -1,0 +1,11 @@
+id: no-comparison-to-none
+valid:
+  - 'if x is None:'
+  - 'if x is not None:'
+  - 'if x == 0:'
+  - 'if x is None or y == 1:'
+invalid:
+  - 'if x == None:'
+  - 'if x != None:'
+  - 'if None == x:'
+  - 'if x == None or y == 1:'

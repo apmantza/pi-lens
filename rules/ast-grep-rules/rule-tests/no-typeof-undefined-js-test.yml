@@ -1,0 +1,11 @@
+id: no-typeof-undefined-js
+valid:
+  - 'x === undefined'
+  - 'x !== undefined'
+  - 'typeof __dirname !== "undefined"'
+  - 'typeof __filename === "undefined"'
+invalid:
+  - 'typeof x === "undefined"'
+  - 'typeof x !== "undefined"'
+  - 'typeof y == "undefined"'
+  - 'typeof y != "undefined"'

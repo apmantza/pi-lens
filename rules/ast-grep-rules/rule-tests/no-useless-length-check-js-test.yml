@@ -1,0 +1,9 @@
+id: no-useless-length-check-js
+valid:
+  - 'arr.some(fn)'
+  - 'arr.length > 0'
+  - 'arr.filter(fn).length === 0'
+invalid:
+  - 'arr.filter(fn).length !== 0'
+  - 'arr.filter(fn).length > 0'
+  - 'arr.filter(fn).length != 0'

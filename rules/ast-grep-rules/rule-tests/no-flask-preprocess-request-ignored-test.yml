@@ -1,0 +1,16 @@
+id: no-flask-preprocess-request-ignored
+valid:
+  - |
+    @app.before_request
+    def before():
+        response = preprocess_request()
+        if response:
+            return response
+  - |
+    response = preprocess_request()
+    return response
+invalid:
+  - |
+    @app.before_request
+    def before():
+        preprocess_request()  # return value discarded

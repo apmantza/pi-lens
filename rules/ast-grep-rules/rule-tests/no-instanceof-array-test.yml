@@ -1,0 +1,8 @@
+id: no-instanceof-array
+valid:
+  - 'Array.isArray(x)'
+  - 'x instanceof Object'
+  - 'x instanceof MyClass'
+invalid:
+  - 'x instanceof Array'
+  - 'arr instanceof Array'

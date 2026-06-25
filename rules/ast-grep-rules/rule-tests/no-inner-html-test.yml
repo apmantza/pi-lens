@@ -1,0 +1,8 @@
+id: no-inner-html
+valid:
+  - 'el.textContent = "x"'
+  - 'el.insertAdjacentText("beforeend", "x")'
+invalid:
+  - 'el.innerHTML = "x"'
+  - 'el.outerHTML = "x"'
+  - 'el.insertAdjacentHTML("beforeend", "x")'

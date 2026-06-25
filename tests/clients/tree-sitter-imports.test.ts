@@ -25,6 +25,31 @@ interface ImportCase {
 }
 
 const CASES: Record<string, ImportCase> = {
+	// TS/JS imports go through the TS compiler in the WARM review graph; these
+	// IMPORT_QUERIES entries (#301) feed the COLD module_report path. ESM import +
+	// re-export sources extract; CJS require is intentionally out of scope.
+	typescript: {
+		file: "a.ts",
+		src: 'import { a } from "./local";\nimport express from "express";\nexport { b } from "./reexport";\n',
+		expect: ["./local", "express", "./reexport"],
+	},
+	tsx: {
+		file: "a.tsx",
+		src: 'import { a } from "./local";\nimport React from "react";\n',
+		expect: ["./local", "react"],
+	},
+	// C/C++ #include (#302) — local "foo.h" (quotes stripped) + system <stdio.h>
+	// (angle brackets kept so the bucketer can tell local from system).
+	c: {
+		file: "a.c",
+		src: '#include "foo.h"\n#include <stdio.h>\nint main(void) { return 0; }\n',
+		expect: ["foo.h", "<stdio.h>"],
+	},
+	cpp: {
+		file: "a.cpp",
+		src: '#include "bar.hpp"\n#include <vector>\nint main() { return 0; }\n',
+		expect: ["bar.hpp", "<vector>"],
+	},
 	python: {
 		file: "a.py",
 		src: "import os\nfrom os.path import join\n",
@@ -51,7 +76,11 @@ const CASES: Record<string, ImportCase> = {
 		src: "using System;\nusing System.Collections.Generic;\n",
 		expect: ["System", "System.Collections.Generic"],
 	},
-	swift: { file: "A.swift", src: "import Foundation\n", expect: ["Foundation"] },
+	swift: {
+		file: "A.swift",
+		src: "import Foundation\n",
+		expect: ["Foundation"],
+	},
 	php: { file: "a.php", src: "<?php\nuse App;\n", expect: ["App"] },
 	ocaml: { file: "a.ml", src: "open Core\n", expect: ["Core"] },
 	dart: { file: "a.dart", src: 'import "dart:io";\n', expect: ["dart:io"] },

@@ -1,0 +1,25 @@
+id: no-html-autoescape-off
+language: Python
+message: "HTML autoescape mechanism should not be globally disabled"
+severity: error
+note: |
+  Port of SonarCloud python:S5439 (BLOCKER VULNERABILITY).
+
+  Disabling autoescape in Jinja2/Django/Mako templates opens XSS
+  vulnerabilities by allowing raw HTML in template variables.
+  Use `|safe` filter on individual variables if you really need
+  raw HTML, but never disable autoescape globally.
+
+  The rule matches:
+  - `Environment(autoescape=False)` (Jinja2)
+  - `Environment(autoescape=False, ...)` (Jinja2 with kwargs)
+  - `{% autoescape false %}` (Jinja2 template tag)
+  - Django settings `autoescape=False` (too rare to be valuable
+    in ast-grep; left to full type-checked detection)
+metadata:
+  sonar: S5439
+rule:
+  any:
+    - pattern: "Environment(autoescape=False)"
+    - pattern: "Environment($$$ARGS, autoescape=False)"
+    - pattern: "jinja2.Environment($$$ARGS, autoescape=False)"

@@ -1,0 +1,23 @@
+id: unmarshal-tag-is-dash
+valid:
+  - |
+    type T struct {
+        A string `json:"id"`
+    }
+  - |
+    type T struct {
+        B string `json:"-"`
+    }
+  - |
+    type T struct {
+        C string `json:"name,omitempty"`
+    }
+invalid:
+  - |
+    type T struct {
+        B string `json:"-,omitempty"`
+    }
+  - |
+    type T struct {
+        C string `json:"-,"`
+    }

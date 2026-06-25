@@ -1,0 +1,20 @@
+id: no-notimplemented-in-bool
+valid:
+  - |
+    def __eq__(self, other):
+        return NotImplemented
+  - |
+    if x is None:
+        pass
+  - |
+    assert x is None
+  - 'bool(value)'
+invalid:
+  - |
+    if NotImplemented:
+        do_thing()
+  - 'assert NotImplemented'
+  - 'bool(NotImplemented)'
+  - |
+    if not NotImplemented:
+        pass

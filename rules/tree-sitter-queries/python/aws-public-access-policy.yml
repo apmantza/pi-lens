@@ -1,0 +1,68 @@
+# AWS Public Access Policies
+# Detects boto3 policy dicts (or strings) that grant public access
+id: aws-public-access-policy
+name: AWS Public Access Policy
+severity: error
+category: security
+defect_class: permissions
+inline_tier: blocking
+language: python
+
+message: "AWS policy grants public access — security-sensitive"
+
+description: |
+  AWS resource-based policies and IAM policies that grant access
+  to `*` or anonymous principals are security-sensitive. They
+  make resources publicly accessible from the internet.
+
+  Matches:
+  - Python dict literals containing `"Principal": "*"` patterns
+  - String literals containing public-access patterns (catches
+    JSON-encoded policies loaded from files)
+
+  This is a SonarCloud BLOCKER VULNERABILITY (S6270, S6302, S6304).
+  CodeRabbit doesn't have a generic AWS policy rule (verified —
+  no AWS Python rules in coderabbit/rules/python/).
+
+  ✅ FIX: Scope down `Principal`/`Action`/`Resource` to specific
+     values instead of `*`.
+
+query: |
+  [(dictionary) (string)] @POLICY
+
+metavars:
+  - POLICY
+
+post_filter: aws_policy_public
+
+has_fix: false
+
+tags:
+  - security
+  - aws
+  - iam
+  - public-access
+  - cwe-732
+
+examples:
+  bad: |
+    policy = {
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Effect": "Allow",
+            "Principal": "*",        # BAD - anyone can access
+            "Action": "s3:*",
+            "Resource": "arn:aws:s3:::my-bucket/*",
+        }],
+    }
+  
+  good: |
+    policy = {
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Effect": "Allow",
+            "Principal": {"AWS": "arn:aws:iam::123456789012:root"},
+            "Action": "s3:GetObject",
+            "Resource": "arn:aws:s3:::my-bucket/*",
+        }],
+    }

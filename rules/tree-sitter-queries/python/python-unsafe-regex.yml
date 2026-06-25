@@ -1,3 +1,6 @@
+# Unsafe Dynamic Regex
+# Detects re.X() calls where the pattern argument is a variable (not a string literal).
+# Static regexes (r"...", "...") are safe.
 id: python-unsafe-regex
 name: Unsafe Dynamic Regex
 severity: warning
@@ -6,19 +9,19 @@ defect_class: injection
 inline_tier: blocking
 language: python
 
-message: "re.{{FUNC}}() with variable pattern — ReDoS risk if pattern is user-controlled"
+message: "re.{{FUNC}}() with dynamic pattern — ReDoS risk if pattern is user-controlled"
 
 description: |
   Building regex patterns from variables can cause ReDoS (Regular Expression
   Denial of Service) if the pattern contains user input. A crafted input can
   cause catastrophic backtracking.
-  
+
   ✅ FIX:
     # If pattern must be dynamic, validate/escape it first
     import re
     safe_pattern = re.escape(user_input)
     re.search(safe_pattern, text)
-    
+
     # Or use string methods instead
     text.find(user_input)
 
@@ -27,34 +30,32 @@ query: |
     function: (attribute
       object: (identifier) @MOD
       attribute: (identifier) @FUNC)
-    arguments: (argument_list
-      (identifier) @PATTERN)
-    (#eq? @MOD "re")
-    (#match? @FUNC "^(compile|match|search|fullmatch|findall|finditer|sub|subn|split)$"))
+    arguments: (argument_list) @ARGS)
+  (#eq? @MOD "re")
+  (#match? @FUNC "^(compile|match|search|fullmatch|findall|finditer|sub|subn|split)$")
 
 metavars:
   - MOD
   - FUNC
-  - PATTERN
+  - ARGS
+
+# Post-filter: fire ONLY when the first argument is an identifier (dynamic pattern),
+# not a string literal (static pattern, which is safe).
+post_filter: regex_first_arg_identifier
 
 has_fix: false
 
 tags:
   - security
   - regex
-  - redos
+  - ReDoS
+  - python-specific
 
 examples:
   bad: |
-    pattern = request.args.get('filter')
-    re.search(pattern, content)    # ReDoS if malicious pattern
-    re.compile(user_pattern)       # can hang the server
+    pattern = req.GET["q"]   # attacker-controlled
+    re.search(pattern, text)  # BAD - dynamic pattern
   
   good: |
-    import re
-    safe = re.escape(user_input)   # escape special chars
-    re.search(safe, content)
-    
-    # Or use string methods for simple cases
-    if user_input in content:
-        ...
+    re.search(r"static_pattern", text)        # OK - literal pattern
+    re.search(re.escape(user_input), text)    # OK - escaped

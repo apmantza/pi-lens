@@ -1,0 +1,19 @@
+id: no-yield-return-outside-function
+valid:
+  - |
+    def f():
+        yield 1
+        return 1
+  - |
+    def f():
+        return
+  - |
+    x = 1
+  - |
+    if True:
+        pass
+invalid:
+  - |
+    yield 1
+  - |
+    return 42

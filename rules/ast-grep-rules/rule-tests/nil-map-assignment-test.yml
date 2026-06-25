@@ -1,0 +1,50 @@
+id: nil-map-assignment
+valid:
+  - |
+    // Properly initialized with make()
+    m := make(map[string]int)
+    m["key"] = 1
+  - |
+    // Map literal — initialized
+    m := map[string]int{"a": 1}
+    m["b"] = 2
+  - |
+    // Function parameter — caller passes initialized map
+    func f(m map[string]int) {
+      m["x"] = 1
+    }
+  - |
+    // Struct field of named type
+    type Cache struct{ data map[string]int }
+    func (c *Cache) Put() { c.data["k"] = 1 }  // field map, no need to init
+  - |
+    // Inline init — Go initializes the map before any access
+    var m map[string]int = make(map[string]int)
+    m["k"] = 1
+  - |
+    // Multi-assign from function returning (map, error) — gorilla/mux pattern
+    var headers map[string]string
+    headers, r.err = mapFromPairsToString("k", "v")
+    _ = headers
+invalid:
+  - |
+    // Writing to uninitialized nil map — runtime panic
+    var m map[string]int
+    m["key"] = 1
+  - |
+    // Multi-type nil map
+    var cache map[int]string
+    cache[42] = "answer"
+  - |
+    // Nested uninitialized map
+    var m map[string]map[int]bool
+    m["x"][1] = true
+  - |
+    // gorilla/mux old_test.go:69 — declared, never initialized,
+    // then written. Would panic if the test executed the write.
+    func TestRoute(t *testing.T) {
+      var headers map[string]string
+      var resultVars map[bool]map[string]string
+      _ = headers
+      resultVars[true] = nil  // panics on nil map
+    }

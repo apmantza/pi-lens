@@ -1,0 +1,47 @@
+id: no-except-non-exception
+language: Python
+message: "Caught Exceptions must derive from BaseException"
+severity: error
+note: |
+  Port of SonarCloud python:S5708.
+
+  `except 1:` and `except "string":` are SyntaxErrors in Python 3,
+  but they can slip through `exec()`/`eval()`/dynamic code paths.
+  More importantly, catching non-BaseException values is a strong
+  signal of a bug.
+
+  Matches an `except_clause` whose direct children contain a
+  literal `integer`/`string`/`float` (a non-identifier expression).
+  The any: branches cover four shapes:
+  1. Bare `except $LITERAL:` — literal is a direct child
+  2. Tuple form `except ($EXPR1, $EXPR2):` — literal is inside the
+     tuple's direct children (we use a nested has: without stopBy:
+     end to look at tuple children specifically, NOT all
+     descendants)
+
+  Earlier versions used `stopBy: end` on the literal check, which
+  walked into the except clause's body and fired on string
+  literals inside `raise SomeError("message")` — a massive
+  false-positive rate (~5000 hits on PostHog). The current shape
+  uses direct-child matching (default stopBy: neighbor) to scope
+  to the exception type expressions only.
+metadata:
+  sonar: S5708
+rule:
+  kind: except_clause
+  any:
+    - has:
+        kind: integer
+    - has:
+        kind: string
+    - has:
+        kind: float
+    - has:
+        kind: tuple
+        any:
+          - has:
+              kind: integer
+          - has:
+              kind: string
+          - has:
+              kind: float

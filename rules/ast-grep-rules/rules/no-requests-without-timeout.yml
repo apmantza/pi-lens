@@ -1,0 +1,113 @@
+id: no-requests-without-timeout
+language: Python
+message: "HTTP requests should specify a timeout"
+severity: error
+note: |
+  Port of SonarCloud python:S3500 (BLOCKER VULNERABILITY).
+
+  HTTP requests without a timeout can hang indefinitely, leaking
+  file descriptors and blocking worker threads. Always pass
+  `timeout=` (or set a default at the session level).
+
+  Earlier version used `pattern: requests.$METHOD($$$ARGS)` which
+  matched any attribute call on `requests` — including constructor
+  calls like `requests.Timeout("msg")`, `requests.RequestException("msg")`,
+  and `requests.HTTPError("msg")`. These are exception constructors,
+  not HTTP requests, and shouldn't fire (~150 false positives on
+  PostHog).
+
+  The fixed rule enumerates the actual HTTP request methods
+  (`get`, `post`, `put`, `delete`, `patch`, `head`, `request`)
+  as separate patterns. Same approach for `httpx` and `aiohttp`.
+
+  Conservative implementation — doesn't catch session-level
+  timeouts set elsewhere. Full coverage needs cross-file session
+  analysis.
+metadata:
+  sonar: S3500
+rule:
+  any:
+    - all:
+        - pattern: "requests.get($$$ARGS)"
+        - not:
+            has:
+              kind: keyword_argument
+              regex: '^timeout\s*='
+              stopBy: end
+    - all:
+        - pattern: "requests.post($$$ARGS)"
+        - not:
+            has:
+              kind: keyword_argument
+              regex: '^timeout\s*='
+              stopBy: end
+    - all:
+        - pattern: "requests.put($$$ARGS)"
+        - not:
+            has:
+              kind: keyword_argument
+              regex: '^timeout\s*='
+              stopBy: end
+    - all:
+        - pattern: "requests.delete($$$ARGS)"
+        - not:
+            has:
+              kind: keyword_argument
+              regex: '^timeout\s*='
+              stopBy: end
+    - all:
+        - pattern: "requests.patch($$$ARGS)"
+        - not:
+            has:
+              kind: keyword_argument
+              regex: '^timeout\s*='
+              stopBy: end
+    - all:
+        - pattern: "requests.head($$$ARGS)"
+        - not:
+            has:
+              kind: keyword_argument
+              regex: '^timeout\s*='
+              stopBy: end
+    - all:
+        - pattern: "requests.request($$$ARGS)"
+        - not:
+            has:
+              kind: keyword_argument
+              regex: '^timeout\s*='
+              stopBy: end
+    - all:
+        - pattern: "httpx.get($$$ARGS)"
+        - not:
+            has:
+              kind: keyword_argument
+              regex: '^timeout\s*='
+              stopBy: end
+    - all:
+        - pattern: "httpx.post($$$ARGS)"
+        - not:
+            has:
+              kind: keyword_argument
+              regex: '^timeout\s*='
+              stopBy: end
+    - all:
+        - pattern: "httpx.request($$$ARGS)"
+        - not:
+            has:
+              kind: keyword_argument
+              regex: '^timeout\s*='
+              stopBy: end
+    - all:
+        - pattern: "aiohttp.ClientSession().get($$$ARGS)"
+        - not:
+            has:
+              kind: keyword_argument
+              regex: '^timeout\s*='
+              stopBy: end
+    - all:
+        - pattern: "aiohttp.ClientSession().post($$$ARGS)"
+        - not:
+            has:
+              kind: keyword_argument
+              regex: '^timeout\s*='
+              stopBy: end

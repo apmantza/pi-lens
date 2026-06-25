@@ -1,0 +1,8 @@
+id: no-as-any
+valid:
+  - 'const x = foo as string'
+  - 'const x = foo as unknown'
+  - 'const x = foo as number'
+invalid:
+  - 'const x = foo as any'
+  - 'foo.bar() as any'

@@ -1,0 +1,8 @@
+id: no-aws-access-key-literal
+valid:
+  - "key = os.environ['AWS_ACCESS_KEY_ID']"
+  - 'token = "AKIASHORT"  # too short to be a real key'
+  - 'aws_access_key_id = None'
+invalid:
+  - 'aws_access_key_id = "AKIAIOSFODNN7EXAMPLE"'
+  - 'boto3.Session(aws_access_key_id="AKIA1234567890ABCDEF")'

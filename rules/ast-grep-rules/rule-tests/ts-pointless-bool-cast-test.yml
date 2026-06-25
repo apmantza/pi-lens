@@ -1,0 +1,13 @@
+id: ts-pointless-bool-cast
+valid:
+  - |
+    if (cond) {}
+  - |
+    if (cond) { doThing() }
+  - |
+    if (!!x) {}
+invalid:
+  - |
+    if (Boolean(cond)) { doThing() }
+  - |
+    if (Boolean(x)) {}

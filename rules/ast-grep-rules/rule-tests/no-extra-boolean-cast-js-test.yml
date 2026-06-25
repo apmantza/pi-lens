@@ -1,0 +1,9 @@
+id: no-extra-boolean-cast-js
+valid:
+  - 'if (x) {}'
+  - 'const y = !!x'
+  - 'const y = x ? a : b'
+invalid:
+  - 'if (!!x) {}'
+  - 'while (!!x) {}'
+  - 'const y = !!x ? a : b'

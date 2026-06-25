@@ -1,0 +1,36 @@
+id: no-only-defined-names-in-dunder-all
+language: Python
+message: "Only defined names should be listed in __all__"
+severity: warning
+note: |
+  Port of SonarCloud python:S5807 (BLOCKER BUG).
+
+  `from module import *` silently fails for any name in
+  `__all__` that isn't defined in the module. Listing
+  undefined names in `__all__` causes confusing import errors
+  at the consumer site.
+
+  This is a conservative static check — full S5807 detection
+  requires tracking all `def`/`class`/`import` statements in
+  the same module and verifying the names exist. We do a
+  basic version: flag `__all__ = [...]` where the list
+  contains identifier children (variable references, not
+  string literals). The consumer must verify each name is
+  actually defined.
+
+  Style: kind match on `assignment`, two has: constraints
+  (LHS identifier matches `__all__`, RHS list contains an
+  identifier).
+metadata:
+  sonar: S5807
+rule:
+  all:
+    - kind: assignment
+    - has:
+        kind: list
+        has:
+          kind: identifier
+        stopBy: end
+    - has:
+        kind: identifier
+        regex: '^__all__$'

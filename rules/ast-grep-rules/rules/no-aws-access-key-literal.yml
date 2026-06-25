@@ -1,0 +1,30 @@
+id: no-aws-access-key-literal
+language: python
+message: "AWS access keys should not be hardcoded — use IAM roles, environment variables, or AWS Secrets Manager"
+severity: error
+note: |-
+  [CWE-798]: Use of Hard-coded Credentials [A07:2021]: Identification
+  and Authentication Failures. Port of SonarCloud python:S7625
+  (BLOCKER VULNERABILITY).
+
+  AWS access keys have prefix `AKIA` (long-term IAM user keys) or
+  `ASIA` (temporary STS credentials). Hardcoding them in source
+  control leaks them to anyone with read access.
+
+  No CodeRabbit rule covers AWS access key detection in Python
+  (verified — no AWS-related Python files in `coderabbit/rules/python/`).
+  This rule fills the gap.
+
+  Style notes:
+  - Match `kind: string` (a string LITERAL — not identifier/variable).
+  - The regex `^"(AKIA|ASIA)[A-Z0-9]{16}"$` includes the leading
+    `"` because the literal text of the `string` node includes
+    the opening quote.
+  - The total length check (4 prefix + 16 chars = 20) matches the
+    AWS access key canonical format.
+ast-grep-essentials: true
+metadata:
+  sonar: S7625
+rule:
+  kind: string
+  regex: '^"(AKIA|ASIA)[A-Z0-9]{16}"$'

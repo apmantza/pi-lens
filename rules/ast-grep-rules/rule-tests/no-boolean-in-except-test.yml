@@ -1,0 +1,28 @@
+id: no-boolean-in-except
+valid:
+  - |
+    try:
+        x()
+    except (ValueError, KeyError):
+        pass
+  - |
+    try:
+        x()
+    except ValueError as e:
+        pass
+  - |
+    try:
+        x()
+    except:
+        pass
+invalid:
+  - |
+    try:
+        x()
+    except (ValueError or KeyError):
+        pass
+  - |
+    try:
+        x()
+    except ValueError and KeyError:
+        pass

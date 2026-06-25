@@ -1,0 +1,68 @@
+name: Feature Proposal
+description: Propose a new capability or a net-new contribution
+labels: ["feature"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Propose something new. For improvements to existing behavior,
+        use the Enhancement template instead.
+
+        Read [CONTRIBUTING.md](../CONTRIBUTING.md) for the wiring
+        checklists for runners, LSP servers, formatters, and rules.
+  - type: textarea
+    id: what
+    attributes:
+      label: What do you want to add or change?
+      description: |
+        Be specific about the new tool, rule, command, or config
+        surface you are proposing.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why?
+      description: |
+        What problem does this solve? Who benefits and how often?
+    validations:
+      required: true
+  - type: textarea
+    id: how
+    attributes:
+      label: How? (optional)
+      description: |
+        Brief technical approach, files you expect to touch, and
+        any new dependencies or install strategies.
+    validations:
+      required: false
+  - type: checkboxes
+    id: willing
+    attributes:
+      label: Contribution intent
+      options:
+        - label: I plan to implement this myself
+          required: false
+        - label: I am looking for feedback before implementing
+          required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of pi-lens is most relevant?
+      options:
+        - area:lsp
+        - area:dispatch
+        - area:installer
+        - area:diagnostics
+        - area:read-guard
+        - area:project-intelligence
+        - area:perf
+        - area:observability
+        - area:session
+        - area:config
+        - area:security
+        - area:tests
+        - unknown
+    validations:
+      required: false

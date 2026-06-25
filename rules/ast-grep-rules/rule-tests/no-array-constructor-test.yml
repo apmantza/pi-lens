@@ -1,0 +1,9 @@
+id: no-array-constructor
+valid:
+  - 'const a = [1, 2, 3]'
+  - 'const a = []'
+  - 'Array.from(iterable)'
+invalid:
+  - 'const a = new Array()'
+  - 'const a = new Array(5)'
+  - 'const a = new Array(1, 2, 3)'

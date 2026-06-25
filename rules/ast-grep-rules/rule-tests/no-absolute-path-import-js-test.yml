@@ -1,0 +1,8 @@
+id: no-absolute-path-import-js
+valid:
+  - 'import { x } from "./local"'
+  - 'import { y } from "@app/utils"'
+  - 'import { z } from "package"'
+invalid:
+  - 'import { x } from "/abs/local"'
+  - 'import { y } from "/utils/helper"'

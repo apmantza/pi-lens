@@ -1,0 +1,8 @@
+id: go-defer-func-call-antipattern
+valid:
+  - "defer cleanup()"
+  - "defer file.Close()"
+  - "defer fmt.Println(\"done\")"
+invalid:
+  - "defer require.NoError(t, failpoint.Enable(\"path\"))"
+  - "defer require.NoError(t, failpoint.Disable(\"path\"))"

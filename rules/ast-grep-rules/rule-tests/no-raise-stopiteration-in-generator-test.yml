@@ -1,0 +1,22 @@
+id: no-raise-stopiteration-in-generator
+valid:
+  - |
+    def gen():
+        yield 1
+        return
+  - |
+    def gen():
+        yield 1
+        raise ValueError("done")
+  - |
+    def regular():
+        raise StopIteration()
+invalid:
+  - |
+    def gen():
+        yield 1
+        raise StopIteration
+  - |
+    def gen():
+        yield 1
+        raise StopIteration()

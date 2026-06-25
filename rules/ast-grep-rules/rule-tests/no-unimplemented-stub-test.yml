@@ -1,0 +1,10 @@
+id: no-unimplemented-stub
+valid:
+  - 'throw new Error("nope")'
+  - 'throw new TypeError("x")'
+  - 'throw err'
+invalid:
+  - 'throw new Error("Not implemented")'
+  - 'throw new Error("TODO")'
+  - 'throw new Error("Unimplemented")'
+  - 'throw new Error("not implemented")'

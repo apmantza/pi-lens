@@ -5,9 +5,27 @@ severity: error
 note: |
   Bare 'except' clauses catch all exceptions including KeyboardInterrupt
   and SystemExit. Always specify the exception types you want to handle.
+  The original rule used `not: has: kind: identifier, stopBy: end`.
+  `stopBy: end` walks ALL descendants of the except_clause — including
+  identifiers inside the body (function calls like `foo()`). The rule
+  then incorrectly excluded ANY except clause whose body had any
+  identifier, making it fire only for empty bodies or `pass`/`raise`
+  (where there are no function-call identifiers).
+
+  The fixed rule checks the except_clause's direct children for ANY of
+  the three exception-spec shapes (bare identifier `except E`, tuple
+  `except (E, F)`, or `as` pattern `except E as e`). The original missed
+  the tuple and `as_pattern` forms — a tuple like `(ValueError, KeyError)`
+  has no direct `identifier` child (the identifiers are inside the
+  tuple), and `except Exception as e` has `e` as an identifier child
+  even though the type is specified.
 rule:
   kind: except_clause
   not:
-    has:
-      kind: identifier
-      stopBy: end
+    any:
+      - has:
+          kind: identifier
+      - has:
+          kind: tuple
+      - has:
+          kind: as_pattern

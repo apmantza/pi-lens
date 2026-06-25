@@ -1,0 +1,22 @@
+id: no-return-value-in-generator
+valid:
+  - |
+    def gen():
+        yield 1
+        yield 2
+  - |
+    def gen():
+        yield 1
+        return  # bare return is OK
+  - |
+    def regular():
+        return 42
+invalid:
+  - |
+    def gen():
+        yield 1
+        return 42
+  - |
+    def gen():
+        yield from iter([1, 2])
+        return result

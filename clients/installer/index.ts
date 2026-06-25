@@ -186,6 +186,25 @@ export interface ToolDefinition {
 	archive?: ArchiveSpec;
 }
 
+/**
+ * Build a GitHub-release `assetMatch` from a small per-platform table, replacing
+ * the copy-pasted `if (platform === "linux") return arch === "arm64" ? … : …`
+ * ladder that several release entries repeat verbatim. Each platform maps to its
+ * `x64` (default) and optional `arm64` asset substring; a missing platform or
+ * arch ⇒ unsupported (`undefined`), exactly as the hand-written ladders behaved.
+ */
+function archAssetMatch(table: {
+	linux?: { x64?: string; arm64?: string };
+	darwin?: { x64?: string; arm64?: string };
+	win32?: { x64?: string; arm64?: string };
+}): (platform: string, arch: string) => string | undefined {
+	return (platform, arch) => {
+		const entry = table[platform as "linux" | "darwin" | "win32"];
+		if (!entry) return undefined;
+		return arch === "arm64" ? entry.arm64 : entry.x64;
+	};
+}
+
 export const TOOLS: ToolDefinition[] = [
 	// Core LSP servers
 	{
@@ -813,16 +832,35 @@ export const TOOLS: ToolDefinition[] = [
 			// gitleaks asset naming uses `x64` not `amd64` (unlike most Go-built
 			// tools). Substring match is exact-enough — release assets are
 			// named e.g. `gitleaks_8.18.4_linux_x64.tar.gz`.
-			assetMatch: (platform, arch) => {
-				if (platform === "linux")
-					return arch === "arm64" ? "linux_arm64.tar.gz" : "linux_x64.tar.gz";
-				if (platform === "darwin")
-					return arch === "arm64" ? "darwin_arm64.tar.gz" : "darwin_x64.tar.gz";
-				if (platform === "win32")
-					return arch === "arm64" ? "windows_arm64.zip" : "windows_x64.zip";
-				return undefined;
-			},
+			assetMatch: archAssetMatch({
+				linux: { x64: "linux_x64.tar.gz", arm64: "linux_arm64.tar.gz" },
+				darwin: { x64: "darwin_x64.tar.gz", arm64: "darwin_arm64.tar.gz" },
+				win32: { x64: "windows_x64.zip", arm64: "windows_arm64.zip" },
+			}),
 			binaryInArchive: "gitleaks",
+		},
+	},
+	{
+		id: "trivy",
+		name: "Trivy",
+		checkCommand: "trivy",
+		checkArgs: ["--version"],
+		installStrategy: "github",
+		binaryName: "trivy",
+		github: {
+			repo: "aquasecurity/trivy",
+			// Trivy asset naming is `trivy_<ver>_<OS>-<bits>.{tar.gz,zip}` with a
+			// capitalized OS and `64bit`/`ARM64` arch tokens — e.g.
+			// `trivy_0.71.2_Linux-64bit.tar.gz`, `trivy_0.71.2_macOS-ARM64.tar.gz`.
+			// No windows-arm64 asset exists (win32.arm64 omitted), so (like
+			// swiftlint) trivy is absent from GITHUB_TOOLS and covered by the
+			// weaker "at least one platform" guard.
+			assetMatch: archAssetMatch({
+				linux: { x64: "Linux-64bit.tar.gz", arm64: "Linux-ARM64.tar.gz" },
+				darwin: { x64: "macOS-64bit.tar.gz", arm64: "macOS-ARM64.tar.gz" },
+				win32: { x64: "windows-64bit.zip" },
+			}),
+			binaryInArchive: "trivy",
 		},
 	},
 	{

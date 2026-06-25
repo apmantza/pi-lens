@@ -1,0 +1,9 @@
+id: no-mutable-contextvar-default
+valid:
+  - "def f(x=None): pass"
+  - "def f(x=42): pass"
+  - "def f(x=DEFAULT_TIMEOUT): pass"
+invalid:
+  - "def f(x=contextvars.ContextVar()): pass"
+  - "def f(x=dict.fromkeys(['a', 'b'])): pass"
+  - "def f(name='x', x=contextvars.ContextVar()): pass"

@@ -4,6 +4,10 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Contributor guide + issue/PR templates** — added `CONTRIBUTING.md` with step-by-step wiring checklists for new dispatch runners, language servers (primary and auxiliary), formatters, ast-grep rules, and tree-sitter rules; added GitHub issue templates for bug reports, feature proposals, and enhancements; added a pull request template. Also added `docs/audit1.md` documenting the centralization gaps and stale docs found during the write-up.
+
 ### Changed
 
 - **Tool schemas aligned with the pi SDK house style** — compared pi-lens's registered tools against pi's built-ins (`read`/`write`/`edit`/`grep`/`find`/`ls`) and closed two consistency gaps. (1) **`promptSnippet` phrasing**: ours restated the tool name ("Use module_report to…"), which the SDK renders as `- module_report: Use module_report to…` (the name doubled); rewrote the six non-`lens_diagnostics` snippets to bare imperatives matching the built-ins (e.g. "Navigable file outline — a cheap substitute for reading a whole file"). (2) **Input param `filePath` → `path`** (and `filePaths` → `paths`): every pi built-in file tool uses `path`, so `module_report`, `read_symbol`, `lsp_navigation`, and `lsp_diagnostics` now take `path`/`paths` — schema keys, impl, and the user-facing error/hint strings, leaving result-object `filePath` output fields and internal LSP-service args untouched. **Note for hardcoded callers**: agents read the tool schema each session and adapt automatically, but any script/hook that invokes these tools with `filePath:` must switch to `path:`.

@@ -1,0 +1,8 @@
+id: no-accumulating-spread-js
+valid:
+  - 'arr.reduce((acc, item) => { acc.push(item); return acc }, [])'
+  - 'arr.flatMap(item => [item])'
+invalid:
+  - 'arr.reduce((acc, item) => [...acc, item], [])'
+  - 'arr.reduce((acc, item) => [...acc, ...item], [])'
+  - 'arr.reduce(function (acc, item) { return [...acc, item] }, [])'

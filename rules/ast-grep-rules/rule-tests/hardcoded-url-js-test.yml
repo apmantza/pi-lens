@@ -1,0 +1,7 @@
+id: hardcoded-url-js
+valid:
+  - 'const url = process.env.API_URL'
+  - 'const x = "hello"'
+invalid:
+  - 'const url = "https://api.example.com"'
+  - 'const endpoint = "http://localhost:3000"'

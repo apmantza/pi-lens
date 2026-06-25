@@ -1,0 +1,14 @@
+id: no-identity-operator-on-literals
+valid:
+  - "if x is None:"
+  - "if x is not None:"
+  - "if x is y:"  # both are variables
+  - "if obj is SingletonClass.instance:"  # pattern
+invalid:
+  - "if 1 is '1':"
+  - "if x is 'literal':"
+  - "if 'foo' is x:"
+  - "if x is not 42:"
+  - "if x is True:"
+  - "if x is not False:"
+  - "if x is []:"  # list literal

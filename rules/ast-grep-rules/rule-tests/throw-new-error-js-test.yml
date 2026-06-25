@@ -1,0 +1,10 @@
+id: throw-new-error-js
+valid:
+  - 'throw new Error("x")'
+  - 'throw new TypeError("x")'
+  - 'throw err'
+invalid:
+  - 'throw Error("x")'
+  - 'throw TypeError("x")'
+  - 'throw RangeError("x")'
+  - 'throw SyntaxError("x")'

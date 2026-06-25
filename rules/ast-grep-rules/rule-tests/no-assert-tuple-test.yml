@@ -1,0 +1,13 @@
+id: no-assert-tuple
+valid:
+  - 'assert True'
+  - 'assert x == 1'
+  - 'assert x, "message"'
+  - 'assert (x == 1), "message"'  # explicit grouping, not a tuple
+invalid:
+  - 'assert (1, 2)'
+  - 'assert (x, y)'
+  - 'assert (1, 2, 3), "message"'
+  - |
+    def f():
+        assert (a, b)

@@ -1,0 +1,8 @@
+id: prefer-dom-node-append
+valid:
+  - 'el.append(child)'
+  - 'el.append(child, other)'
+  - 'el.append("text")'
+invalid:
+  - 'el.appendChild(child)'
+  - 'parent.appendChild(child)'

@@ -1,0 +1,25 @@
+id: no-dunder-exit-wrong-arity
+language: Python
+message: "__exit__ should accept type, value, and traceback arguments"
+severity: error
+note: |
+  Port of SonarCloud python:S2733 (BLOCKER BUG).
+
+  `__exit__` is a context manager protocol method. It must
+  accept exactly three positional arguments: `exc_type`,
+  `exc_val`, `exc_tb` (in addition to `self`). A signature
+  with fewer or more args breaks the protocol and the
+  `with` statement will raise TypeError at runtime.
+
+  Matches `def __exit__(self):` (no extra args) and
+  `def __exit__(self, ...):` with the wrong number of args.
+
+  Style: pattern matching for the function definition.
+metadata:
+  sonar: S2733
+rule:
+  any:
+    - pattern: "def __exit__($SELF): $$$BODY"
+    - pattern: "def __exit__($SELF, $A): $$$BODY"
+    - pattern: "def __exit__($SELF, $A, $B): $$$BODY"
+    - pattern: "def __exit__($SELF, $A, $B, $C, $D): $$$BODY"

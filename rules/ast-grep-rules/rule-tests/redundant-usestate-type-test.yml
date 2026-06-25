@@ -1,0 +1,10 @@
+id: redundant-usestate-type
+valid:
+  - "const [n, setN] = useState(0)"
+  - "const [s, setS] = useState('')"
+  - "const [items, setItems] = useState<Item[]>([])"
+  - "const [value, setValue] = useState(42)"
+invalid:
+  - "const [n, setN] = useState<number>(0)"
+  - "const [s, setS] = useState<string>('')"
+  - "const [b, setB] = useState<boolean>(false)"

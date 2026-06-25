@@ -1,0 +1,9 @@
+id: weak-rsa-key-js
+valid:
+  - "crypto.generateKeyPairSync('rsa', { modulusLength: 2048 })"
+  - "crypto.generateKeyPairSync('rsa', { modulusLength: 4096 })"
+  - "crypto.generateKeyPairSync('rsa', { modulusLength: 8192 })"
+invalid:
+  - "crypto.generateKeyPairSync('rsa', { modulusLength: 512 })"
+  - "crypto.generateKeyPairSync('rsa', { modulusLength: 1024 })"
+  - "crypto.generateKeyPairSync('rsa', { modulusLength: 1536 })"

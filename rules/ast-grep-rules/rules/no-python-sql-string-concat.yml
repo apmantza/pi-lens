@@ -1,0 +1,37 @@
+# Python SQL String Concatenation
+# Detects SQL injection via string concatenation in execute().
+# autoaudit PY013 (CWE-89). Python counterpart of `no-sql-in-code` (TS).
+id: no-python-sql-string-concat
+language: Python
+severity: error
+message: "SQL query built via string concat — use parameterized queries"
+note: |
+  Building SQL via string concatenation enables SQL injection if any
+  component is user-controlled.
+  Matches: .execute() / .executemany() / .raw() / .mogrify() where the
+  first argument is a binary_operator (string + identifier/expression).
+  f-strings are NOT caught by this rule — tree-sitter parses f-strings
+  as a single string node (not a binary_operator +), so the AST-level
+  pattern misses them. The tree-sitter python-sql-injection rule catches
+  a broader set with post_filter logic.
+rule:
+  any:
+    - pattern: cursor.execute($QUERY + $REST)
+    - pattern: cursor.executemany($QUERY + $REST)
+    - pattern: cursor.raw($QUERY + $REST)
+    - pattern: cursor.mogrify($QUERY + $REST)
+    - pattern: db.execute($QUERY + $REST)
+    - pattern: conn.execute($QUERY + $REST)
+    - pattern: connection.execute($QUERY + $REST)
+    - pattern: self.cursor.execute($QUERY + $REST)
+has_fix: false
+tags:
+  - python
+  - security
+  - sql-injection
+  - cwe-89
+examples:
+  bad: |
+    cursor.execute("SELECT * FROM users WHERE id = " + user_id)
+  good: |
+    cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))

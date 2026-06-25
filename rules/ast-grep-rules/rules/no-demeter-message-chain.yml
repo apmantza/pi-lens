@@ -1,0 +1,25 @@
+id: no-demeter-message-chain
+language: TypeScript
+severity: warning
+message: Message chain (Law of Demeter) — navigating 3+ deep through accessors couples the caller to the whole path.
+note: |
+  `a.getB().getC().doD()` walks a chain of intermediate objects, coupling the
+  caller to the entire navigation path (Fowler, "Message Chains" / Law of Demeter).
+  Ask the first object to do the work, or expose the endpoint directly.
+
+  What this DOES flag: a chain of 3+ calls whose first two calls are accessors
+  (`get*` / `is*` / `has*`) — the canonical getter-navigation smell.
+
+  What this deliberately does NOT flag (the "what not to flag" guard, by
+  construction — none of these use accessor-named methods):
+    - promise chains: `fetch(u).then(...).then(...)`
+    - fluent collection ops: `_(arr).map(f).filter(g).value()`
+    - query/DSL builders: `db.select(...).from(...).where(...)`
+    - `this`-returning builders: `b.withX(...).withY(...).build()`
+  Precision over recall: a non-getter Demeter violation won't fire, but the
+  high-signal getter-navigation form does, without flooding on fluent APIs.
+rule:
+  pattern: $OBJ.$M1($$$A).$M2($$$B).$M3($$$C)
+constraints:
+  M1: { regex: "^(get|is|has)[A-Z_]" }
+  M2: { regex: "^(get|is|has)[A-Z_]" }

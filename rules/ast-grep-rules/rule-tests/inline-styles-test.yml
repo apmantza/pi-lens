@@ -1,0 +1,8 @@
+id: inline-styles
+valid:
+  - '<div className="x">x</div>'
+  - '<div className="container" id="main">x</div>'
+invalid:
+  - '<div style={{}}>x</div>'
+  - '<div style={{ color: "red" }}>x</div>'
+  - '<button style={{ padding: 4 }}>x</button>'

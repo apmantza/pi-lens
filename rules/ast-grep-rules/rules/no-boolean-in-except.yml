@@ -1,0 +1,23 @@
+id: no-boolean-in-except
+language: Python
+message: "Boolean expressions should not be used in except statements"
+severity: error
+note: |
+  Port of SonarCloud python:S5714.
+
+  `except (ValueError or KeyError)` doesn't catch either — Python
+  evaluates the boolean first, and `or` returns the first truthy
+  operand (or the last operand if all falsy). Almost always the
+  developer meant `except (ValueError, KeyError):` (a tuple of
+  exception types).
+
+  Matches an `except_clause` whose direct children contain a
+  `boolean_operator` (and/or) node.
+metadata:
+  sonar: S5714
+rule:
+  all:
+    - kind: except_clause
+    - has:
+        kind: boolean_operator
+        stopBy: end

@@ -1,0 +1,29 @@
+id: no-aws-apigateway-no-auth
+language: Python
+message: "AWS API Gateway should require authentication"
+severity: error
+note: |
+  Port of SonarCloud python:S6333 (BLOCKER VULNERABILITY).
+
+  `apigateway.create_rest_api()` and `apigateway.create_api()`
+  without explicit `auth=` configuration may default to no
+  authentication, exposing the API publicly.
+
+  Matches `boto3.client('apigateway').create_rest_api(...)`
+  and `apigateway.create_api(...)` calls.
+
+  Style: regex on the call node's text. The rule is
+  conservative — only flags the top-level create call. Full
+  S6335 detection would audit the resulting API's auth
+  settings post-creation.
+
+  No CodeRabbit rule covers AWS API Gateway auth detection
+  (verified — no AWS-related Python files in
+  `coderabbit/rules/python/`).
+metadata:
+  sonar: S6333
+rule:
+  kind: call
+  regex: '\.create_rest_api\(|\.create_api\('
+  not:
+    regex: 'auth\s*='

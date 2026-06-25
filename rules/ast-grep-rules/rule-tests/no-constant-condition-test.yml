@@ -1,0 +1,10 @@
+id: no-constant-condition
+valid:
+  - 'if (flag) {}'
+  - 'const x = cond ? a : b'
+  - 'while (true) {}'
+invalid:
+  - 'if (true) {}'
+  - 'if (false) {}'
+  - 'const x = true ? a : b'
+  - 'const x = false ? a : b'

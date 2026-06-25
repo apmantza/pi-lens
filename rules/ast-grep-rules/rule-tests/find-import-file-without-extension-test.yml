@@ -1,0 +1,8 @@
+id: find-import-file-without-extension
+valid:
+  - 'import { x } from "./localmod.js"'
+  - 'import { y } from "package"'
+  - 'import("./dynamic.js")'
+invalid:
+  - 'import { x } from "./localmod"'
+  - 'import("./dynamic1")'

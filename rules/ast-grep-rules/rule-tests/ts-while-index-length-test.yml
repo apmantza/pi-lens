@@ -1,0 +1,8 @@
+id: ts-while-index-length
+valid:
+  - 'while (cond) { doThing() }'
+  - 'for (let i = 0; i < n; i++) { use(i) }'
+  - 'for (const x of arr) { use(x) }'
+invalid:
+  - 'while (i < arr.length) { use(i); i++ }'
+  - 'let i = 0; while (i < items.length) { process(items[i]); i++ }'

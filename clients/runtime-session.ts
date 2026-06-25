@@ -8,6 +8,7 @@ import { getDiagnosticTracker } from "./diagnostic-tracker.js";
 import { clearAllSessions as clearFileTimeSessions } from "./file-time.js";
 import { getKnipIgnorePatterns } from "./file-utils.js";
 import { GitleaksClient, type GitleaksResult } from "./gitleaks-client.js";
+import { TrivyClient, type TrivyResult } from "./trivy-client.js";
 import type { GoClient } from "./go-client.js";
 import {
 	GovulncheckClient,
@@ -67,6 +68,7 @@ interface SessionStartDeps {
 	jscpdClient: JscpdClient;
 	govulncheckClient: GovulncheckClient;
 	gitleaksClient: GitleaksClient;
+	trivyClient: TrivyClient;
 	typeCoverageClient: TypeCoverageClient;
 	depChecker: DependencyChecker;
 	testRunnerClient: TestRunnerClient;
@@ -399,6 +401,7 @@ function scheduleStartupScans(
 		jscpdClient,
 		govulncheckClient,
 		gitleaksClient,
+		trivyClient,
 		astGrepClient,
 	} = deps;
 
@@ -616,6 +619,41 @@ function scheduleStartupScans(
 		});
 		dbg(
 			`session_start gitleaks: ${result.findings.length} findings (${Date.now() - startMs}ms)`,
+		);
+	});
+
+	// trivy — dependency CVE detection (#131, Phase 1)
+	// Explicit opt-in: `trivy.enabled: true` in .pi-lens.json AND a dependency
+	// manifest present. The first run downloads Trivy's vuln DB (~30-200 MB);
+	// harmless here since this whole task runs in the background session_start
+	// wrapper.
+	runTask("trivy", async () => {
+		if (!TrivyClient.shouldScan(analysisRoot)) {
+			dbg("session_start trivy: not enabled / no dependency manifest — skipped");
+			return;
+		}
+		if (!(await trivyClient.ensureAvailable())) {
+			if (!runtime.isCurrentSession(sessionGeneration)) return;
+			dbg("session_start trivy: not available (install failed?)");
+			return;
+		}
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+		const cached = cacheManager.readCache<TrivyResult>("trivy", analysisRoot);
+		if (cached) {
+			if (!runtime.isCurrentSession(sessionGeneration)) return;
+			dbg(
+				`session_start trivy: cache hit (${cached.data.findings.length} findings)`,
+			);
+			return;
+		}
+		const startMs = Date.now();
+		const result = await trivyClient.scan(analysisRoot);
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+		cacheManager.writeCache("trivy", result, analysisRoot, {
+			scanDurationMs: Date.now() - startMs,
+		});
+		dbg(
+			`session_start trivy: ${result.findings.length} CVE findings (${Date.now() - startMs}ms)`,
 		);
 	});
 

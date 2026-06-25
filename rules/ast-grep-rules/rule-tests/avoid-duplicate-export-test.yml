@@ -1,0 +1,14 @@
+id: avoid-duplicate-export
+valid:
+  - "pub use foo::Bar;"
+  - "pub mod foo;"
+  - |
+    pub mod foo;
+    pub use other::Bar;
+invalid:
+  - |
+    pub mod foo;
+    pub use foo::Bar;
+  - |
+    pub mod foo;
+    pub use foo::Baz;

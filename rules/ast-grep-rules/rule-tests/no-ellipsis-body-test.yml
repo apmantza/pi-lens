@@ -1,0 +1,20 @@
+id: no-ellipsis-body
+valid:
+  - |
+    def f():
+        return 1
+  - |
+    def f(x):
+        return x + 1
+  - |
+    def f():
+        x = 1
+        return x
+invalid:
+  - |
+    def f():
+        ...
+  - |
+    @decorator
+    def f():
+        ...

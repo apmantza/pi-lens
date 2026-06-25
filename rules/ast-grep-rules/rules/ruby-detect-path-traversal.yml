@@ -1,0 +1,33 @@
+# Ruby Path Traversal
+# Detects Rails.root.join, File.join, and send_file calls with variable args
+# that could be exploited for path traversal (CWE-22).
+# Catalog port: ruby/detect-path-traversal
+id: ruby-detect-path-traversal
+language: ruby
+severity: warning
+message: "Potential path traversal sink — verify path arguments are sanitized"
+note: |
+  `Rails.root.join`, `File.join`, and `send_file` are vulnerable when path
+  arguments include untrusted input. An attacker can inject `../` sequences
+  to escape the intended directory.
+  Matches the catalog pattern exactly (any call to these functions).
+  The catalog severity is "hint"; pi-lens uses "warning" to surface for review.
+rule:
+  any:
+    - pattern: Rails.root.join($$$ARGS)
+    - pattern: File.join($$$ARGS)
+    - pattern: send_file $VAR
+fix: ""
+tags:
+  - ruby
+  - security
+  - path-traversal
+  - cwe-22
+  - rails
+examples:
+  bad: |
+    Rails.root.join('uploads', params[:filename])
+    send_file params[:file]
+  good: |
+    Rails.root.join('uploads', 'safe.png')
+    send_file 'public/index.html'

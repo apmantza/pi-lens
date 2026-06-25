@@ -1,0 +1,9 @@
+id: no-dupe-keys-js
+valid:
+  - 'const o = { a: 1, b: 2 }'
+  - 'const o = { a: 1, b() {} }'
+invalid:
+  - 'const o = { a: 1, a: 2 }'
+  - 'const o = { "a": 1, a: 2 }'
+  - 'const o = { a: 1, a() {} }'
+  - 'const o = { a() {}, a: 1 }'

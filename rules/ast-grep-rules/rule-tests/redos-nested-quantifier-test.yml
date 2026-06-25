@@ -1,0 +1,14 @@
+id: redos-nested-quantifier
+valid:
+  - "const r = /a+b/"
+  - "const r = /[a-z]+/"
+  - "const r = /a{2,3}/"
+  - "const r = /a+b{2,3}/"
+invalid:
+  - "const r = /(a+)+/"
+  - "const r = /([a-z]+)*/"
+  - "const r = /(a*)*/"
+  - >-
+    const r = /(\d+){2,}/
+  - >-
+    const r = /(\d+)+/

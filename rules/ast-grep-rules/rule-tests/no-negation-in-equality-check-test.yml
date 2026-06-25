@@ -1,0 +1,10 @@
+id: no-negation-in-equality-check
+valid:
+  - 'a !== b'
+  - '!(a === b)'
+  - 'a === b'
+invalid:
+  - '!a === b'
+  - '!a !== b'
+  - '!a == b'
+  - '!a != b'

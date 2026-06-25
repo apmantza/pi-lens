@@ -1,0 +1,9 @@
+id: no-cond-assign-js
+valid:
+  - "if (x === 1) {}"
+  - "x = 1"
+  - "if (x + 1 === 2) {}"
+invalid:
+  - "if (x = 1) {}"
+  - "do {} while (x = next())"
+  - "while (x = next()) {}"

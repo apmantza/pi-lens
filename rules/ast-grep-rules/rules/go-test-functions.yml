@@ -1,0 +1,32 @@
+# Go Test Functions
+# Detects Go test function declarations (Test*) using ast-grep-native YAML rule.
+# Catalog port: go/find-func-declaration-with-prefix
+id: go-test-functions
+language: go
+severity: warning
+message: "Go test function detected — verify it follows the project's test naming convention"
+note: |
+  Matches `func TestX(t *testing.T)` style declarations. Useful for auditing
+  test naming conventions (Test* prefix required by `go test`).
+  The pattern can't be expressed as `Test$_` because metavar patterns
+  don't allow prefix matching — use the YAML rule with regex on the
+  name field instead.
+rule:
+  kind: function_declaration
+  has:
+    field: name
+    regex: "^Test.*"
+fix: ""
+tags:
+  - go
+  - testing
+  - naming-convention
+examples:
+  bad: |
+    func testAbs(t *testing.T) {  // lowercase - go test won't pick up
+        ...
+    }
+  good: |
+    func TestAbs(t *testing.T) {
+        ...
+    }

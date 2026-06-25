@@ -1,0 +1,8 @@
+id: no-fastapi-router-prefix-outside-init
+valid:
+  - "router = APIRouter(prefix='/api')"
+  - "router = APIRouter(prefix='/api', tags=['users'])"
+  - "router.prefix  # reading is fine"
+invalid:
+  - "router.prefix = '/api'"
+  - "users_router.prefix = '/users'"

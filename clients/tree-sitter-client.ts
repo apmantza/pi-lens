@@ -838,6 +838,57 @@ export class TreeSitterClient {
 		postFilterParams: any,
 		captures: Record<string, TreeSitterNode>,
 	): boolean {
+		/**
+		 * Extract the list of declared slot names from a class_definition's
+		 * `__slots__` assignment. Returns:
+		 *   - `null` if the class has no `__slots__` declaration
+		 *   - an array of slot names (strings) otherwise
+		 *
+		 * Handles both common shapes:
+		 *   - string tuple/list: `__slots__ = ("a", "b")` or `['a', 'b']`
+		 *   - single string:     `__slots__ = "a"` (Python's quirky single-slot form)
+		 *   - parent inheritance: returns null (we don't follow MRO)
+		 */
+		function extractSlots(classNode: any): string[] | null {
+			const classText = classNode.text ?? "";
+			if (!classText.includes("__slots__")) return null;
+			// biome-ignore lint/suspicious/noExplicitAny: AST iteration
+			const body = classNode.children?.find((c: any) => c.type === "block");
+			if (!body) return null;
+			const slots: string[] = [];
+			// biome-ignore lint/suspicious/noExplicitAny: AST iteration
+			for (const stmt of body.children ?? []) {
+				if (stmt.type !== "expression_statement") continue;
+				// biome-ignore lint/suspicious/noExplicitAny: AST traversal
+				const assignment = stmt.children?.find((c: any) => c.type === "assignment");
+				if (!assignment) continue;
+				// biome-ignore lint/suspicious/noExplicitAny: LHS check
+				// LHS text may include a leading whitespace token from the AST
+				// (tree-sitter separates the space before the LHS identifier).
+				const lhsText = (assignment.children?.[0]?.text ?? "").trim();
+				if (lhsText !== "__slots__") continue;
+				// biome-ignore lint/suspicious/noExplicitAny: RHS extraction
+				// children layout: [LHS identifier, `=` operator, RHS expression]
+				const rhs = assignment.children?.[2];
+				if (!rhs) continue;
+				if (rhs.type === "string") {
+					// __slots__ = "a" — single string form (Python quirk)
+					const s = (rhs.text ?? "").replace(/^["']|["']$/g, "");
+					if (s) slots.push(s);
+				} else if (rhs.type === "tuple" || rhs.type === "list") {
+					// biome-ignore lint/suspicious/noExplicitAny: list element extraction
+					for (const el of rhs.children ?? []) {
+						if (!el.isNamed) continue; // skip "," punctuation
+						if (el.type === "string") {
+							slots.push((el.text ?? "").replace(/^["']|["']$/g, ""));
+						}
+					}
+				}
+				break; // first __slots__ wins
+			}
+			return slots;
+		}
+
 		switch (postFilter) {
 			case "is_generator_with_valued_return": {
 				const returnNode = captures.RETURN;
@@ -888,10 +939,104 @@ export class TreeSitterClient {
 			case "bare_except_only": {
 				const clauseNode = captures.CLAUSE;
 				if (!clauseNode) return true;
-				// biome-ignore lint/suspicious/noExplicitAny: Check for identifier
-				return !clauseNode.children.some(
-					(c: any) => c.isNamed && c.type === "identifier",
-				);
+				// A typed `except` clause has a named child for the exception
+				// spec — one of: identifier (e.g. `except ValueError`),
+				// tuple (e.g. `except (E, F)`), or as_pattern (e.g. `except E as e`).
+				// Bare `except:` has NO named children (just the `except` keyword,
+				// the `:` colon, and the body block).
+				// biome-ignore lint/suspicious/noExplicitAny: AST iteration
+				const hasExceptionSpec = clauseNode.children.some((c: any) => {
+					if (!c.isNamed) return false;
+					return (
+						c.type === "identifier" ||
+						c.type === "tuple" ||
+						c.type === "as_pattern" ||
+						c.type === "parenthesized_expression"
+					);
+				});
+				// Fire ONLY when bare (no exception spec)
+				return !hasExceptionSpec;
+			}
+			case "eq_mod_fn": {
+				// Workaround for web-tree-sitter not auto-applying #eq? predicates
+				// on the structural pattern of a query that has predicates. The
+				// query captures @MOD, @FN but the predicates aren't enforced
+				// (see evaluatePredicates in clients/tree-sitter-client.ts).
+				// This filter re-applies the #eq? checks at post_filter time.
+				const mod = captures.MOD?.text ?? "";
+				const fn = captures.FN?.text ?? "";
+				return mod === "threading" && fn === "Thread";
+			}
+			case "regex_first_arg_identifier": {
+				// Workaround for web-tree-sitter not auto-applying #eq?/#match?
+				// predicates on the structural pattern (see evaluatePredicates).
+				// This post_filter re-applies both predicate checks AND
+				// the first-argument check:
+				// 1. MOD must be "re"  (would-be #eq? @MOD "re")
+				// 2. FUNC must match the regex method pattern (#match? @FUNC ...)
+				// 3. First arg must be an identifier (dynamic pattern)
+				//    String literals (r"...", "...") are safe static patterns.
+				const mod = captures.MOD?.text ?? "";
+				if (mod !== "re") return false;
+				const func = captures.FUNC?.text ?? "";
+				if (!/^(compile|match|search|fullmatch|findall|finditer|sub|subn|split)$/.test(func)) {
+					return false;
+				}
+				const argsNode = captures.ARGS;
+				if (!argsNode) return false;
+				// biome-ignore lint/suspicious/noExplicitAny: AST iteration
+				const firstNamed = (argsNode.children ?? []).find((c: any) => c.isNamed);
+				if (!firstNamed) return false;
+				return firstNamed.type === "identifier";
+			}
+			case "open_mode_invalid": {
+				const modeNode = captures.MODE;
+				if (!modeNode) return false;
+				// Python's open() mode accepts: r, w, a, x (basic), b/t/+ (suffix).
+				// Strip surrounding quotes from the string literal text.
+				const text = modeNode.text ?? "";
+				const stripped = text.replace(/^["']|["']$/g, "");
+				// Skip empty mode (defaults to 'r')
+				if (stripped.length === 0) return false;
+				// Skip single-char modes (r/w/a/x — always valid)
+				if (stripped.length === 1) return false;
+				// Must contain only valid characters
+				if (!/^[rwxabt+]+$/.test(stripped)) return true;
+				// Multi-char must be exactly: basic + optional (b|t) + optional +
+				// Examples valid: "rb", "rb+", "r+", "ab", "rt"
+				// Examples invalid: "rwb", "rrr", "rw", "rbb" (no + between r and w is invalid)
+				// The "rw" case (basic mode followed by another basic mode without +) is invalid
+				// Allow: [basic][bt]?[+]
+				const validShape = /^[rwax][bt]?\+?$/;
+				if (!validShape.test(stripped)) return true;
+				return false;
+			}
+			case "status_204_with_value_return": {
+				const funcNode = captures.FUNC;
+				const valNode = captures.VAL;
+				if (!funcNode || !valNode) return false;
+				// Only fire if status_code=204
+				if (Number(valNode.text ?? 0) !== 204) return false;
+				// Walk the function subtree looking for return_statement nodes.
+				// Manual BFS because web-tree-sitter doesn't expose
+				// descendantsOfType directly.
+				// biome-ignore lint/suspicious/noExplicitAny: tree-sitter node iteration
+				const queue: any[] = [funcNode];
+				while (queue.length > 0) {
+					const node = queue.shift();
+					if (node.type === "return_statement") {
+						// Has a value child (not just the `return` keyword)
+						// biome-ignore lint/suspicious/noExplicitAny: child check
+						const hasValue = node.children.some(
+							(c: any) =>
+								c.isNamed && c.type !== "comment",
+						);
+						if (hasValue) return true;
+					}
+					// biome-ignore lint/suspicious/noExplicitAny: child queue
+					if (node.children) queue.push(...node.children);
+				}
+				return false;
 			}
 			case "has_mixed_async": {
 				const bodyNode = captures.BODY;
@@ -900,6 +1045,137 @@ export class TreeSitterClient {
 				return (
 					bodyText.includes("await") && /\.\s*(then|catch)\s*\(/.test(bodyText)
 				);
+			}
+			case "format_arity_mismatch": {
+				const formatNode = captures.FORMAT;
+				const argsNode = captures.ARGS;
+				if (!formatNode || !argsNode) return false;
+				// Strip quotes from format string
+				const fmtText = (formatNode.text ?? "").replace(/^["']|["']$/g, "");
+				// Don't strip a leading "%" — the format string's contents are
+				// intact after stripping only the surrounding quotes. The original
+				// code stripped the first "%" thinking it was the operator, but
+				// the operator is a separate binary_operator node, not part of
+				// the string literal's text.
+				const fmt = fmtText;
+				// Count placeholders: %s, %d, %f, %(name)s, %i, etc.
+				// The simple %s/%d style: each %X counts as 1
+				// The %(name)s style: counts as 1 with name
+				// The %% escape: doesn't count
+				let placeholderCount = 0;
+				let namedKeys: string[] = [];
+				// biome-ignore lint/suspicious/noExplicitAny: regex match
+				const positionalRegex = /%(?:\([^)]+\))?[#0\- +]*\d*(?:\.\d+)?[hlL]?[diouxXeEfFgGcrs%]/g;
+				// biome-ignore lint/suspicious/noExplicitAny: regex match
+				const positionalMatches = fmt.match(positionalRegex) ?? [];
+				for (const m of positionalMatches) {
+					if (m === "%%") continue;
+					placeholderCount++;
+					// biome-ignore lint/suspicious/noExplicitAny: capture group
+					const namedMatch = m.match(/^%\(([^)]+)\)/);
+					if (namedMatch) namedKeys.push(namedMatch[1]);
+				}
+				// If format uses named placeholders, RHS should be a dict
+				if (namedKeys.length > 0) {
+					// Check if dict contains all named keys
+					if (argsNode.type === "dictionary") {
+						// biome-ignore lint/suspicious/noExplicitAny: AST iteration
+						const dictKeys: string[] = [];
+						for (const child of argsNode.children ?? []) {
+							// biome-ignore lint/suspicious/noExplicitAny: child check
+							if (child.type === "pair" && child.children?.[0]) {
+								// biome-ignore lint/suspicious/noExplicitAny: child text
+								// Strip quotes — child is a string literal node,
+								// text includes the surrounding "...".
+								dictKeys.push(
+									(child.children[0].text ?? "").replace(/^["']|["']$/g, ""),
+								);
+							}
+						}
+						const missing = namedKeys.filter((k) => !dictKeys.includes(k));
+						return missing.length > 0;
+					}
+					// Format uses named but RHS isn't a dict — definitely wrong
+					return true;
+				}
+				// Positional: count tuple args
+				if (argsNode.type === "tuple") {
+					const argCount = (argsNode.children ?? []).filter((c: any) => c.isNamed).length;
+					if (argCount !== placeholderCount) return true;
+				}
+				return false;
+			}
+			case "aws_policy_public": {
+				const policyNode = captures.POLICY;
+				if (!policyNode) return false;
+				const text = policyNode.text ?? "";
+				// Match patterns indicating public access
+				const patterns = [
+					/"Principal"\s*:\s*"\*"/,  // direct wildcard
+					/"Principal"\s*:\s*\{\s*"AWS"\s*:\s*"\*"\s*\}/,  // AWS wildcard
+					/"Effect"\s*:\s*"Allow"[\s\S]*?"Action"\s*:\s*"\*"[\s\S]*?"Resource"\s*:\s*"\*"/,  // full admin
+					/"Principal"\s*:\s*"\*"/,
+				];
+				return patterns.some((p) => p.test(text));
+			}
+			case "slots_attribute_mismatch": {
+				const selfNode = captures.SELF;
+				const attrNode = captures.ATTR;
+				const methodNode = captures.METHOD;
+				if (!selfNode || !attrNode || !methodNode) return false;
+				// Only consider self.X = (not other.X)
+				if (selfNode.text !== "self") return false;
+				const attrName = attrNode.text ?? "";
+				// Find parent class_definition
+				// biome-ignore lint/suspicious/noExplicitAny: AST navigation
+				let parent = methodNode.parent;
+				while (parent && parent.type !== "class_definition") {
+					parent = parent.parent;
+				}
+				if (!parent) return false;
+				// Parse the class's __slots__ list and check if attrName is in it.
+				// Fires ONLY when self.X = ... assigns to an attribute NOT in __slots__
+				// (a real S8494 violation — the assignment will raise AttributeError).
+				const slots = extractSlots(parent);
+				// null = no __slots__ declared in this class. [] = __slots__ declared
+				// but we couldn't parse it (treat as null to avoid FPs on inner-class
+				// parent walks where the parent text mentions __slots__ but the
+				// direct children don't contain the assignment).
+				if (slots === null || slots.length === 0) return false;
+				return !slots.includes(attrName);
+			}
+			case "special_method_arity": {
+				const nameNode = captures.NAME;
+				const paramsNode = captures.PARAMS;
+				if (!nameNode || !paramsNode) return false;
+				const name = nameNode.text ?? "";
+				// Expected arities: {method_name: expected_arg_count}
+				// (excluding `self`/`cls` which is always 1)
+				const expected: Record<string, number> = {
+					__del__: 0,
+					__repr__: 0,
+					__str__: 0,
+					__hash__: 0,
+					__bool__: 0,
+					__len__: 0,
+					__eq__: 1,
+					__lt__: 1,
+					__le__: 1,
+					__gt__: 1,
+					__ge__: 1,
+					__ne__: 1,
+				};
+				const expectedCount = expected[name];
+				if (expectedCount === undefined) return false; // not in our list
+				// Count required params (excluding defaults)
+				// biome-ignore lint/suspicious/noExplicitAny: AST iteration
+				const paramCount = (paramsNode.children ?? []).filter((c: any) => {
+					if (c.type !== "identifier" && c.type !== "typed_parameter") return false;
+					if (c.text.includes("=")) return false;
+					return true;
+				}).length;
+				// Expected total = expectedCount + 1 (for self/cls)
+				return paramCount !== expectedCount + 1;
 			}
 			case "no_super_call": {
 				const bodyNode = captures.BODY;
@@ -940,7 +1216,14 @@ export class TreeSitterClient {
 				);
 			}
 			case "check_secret_pattern": {
-				const varName = (captures.VARNAME?.text ?? "").toLowerCase();
+				const varName = (captures.VARNAME?.text ?? "");
+				const varNameLower = varName.toLowerCase();
+				// Skip UPPER_CASE constants — they're module-level constants
+				// (e.g. `GITHUB_TYPE_FOR_PERSONAL_API_KEY = "..."`), not secrets.
+				// A constant has no lowercase letters in its name.
+				if (varName === varName.toUpperCase() && /[A-Z]/.test(varName)) {
+					return false;
+				}
 				return [
 					/api[_-]?key/,
 					/api[_-]?secret/,
@@ -955,7 +1238,7 @@ export class TreeSitterClient {
 					/aws[_-]?secret/,
 					/github[_-]?token/,
 					/client[_-]?secret/,
-				].some((p) => p.test(varName));
+				].some((p) => p.test(varNameLower));
 			}
 			case "returns_error": {
 				const first = Object.values(captures)[0];

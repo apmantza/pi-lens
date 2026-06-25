@@ -1,0 +1,10 @@
+id: no-uvicorn-non-import-string
+valid:
+  - "uvicorn.run(app, host='0.0.0.0', port=8000)"
+  - "uvicorn.run('myapp:app', host='0.0.0.0', port=8000)"
+  - "uvicorn.run('myapp:app', reload=True)"
+  - "uvicorn.run('myapp:app', workers=4)"
+invalid:
+  - "uvicorn.run(app, reload=True)"
+  - "uvicorn.run(app, workers=4)"
+  - "uvicorn.run(app, debug=True, host='0.0.0.0')"

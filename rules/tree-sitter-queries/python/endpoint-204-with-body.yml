@@ -1,0 +1,62 @@
+# Invalid 204 Status Code Response Body
+# Detects endpoints decorated with status_code=204 that return a non-bare value
+# (204 No Content must have an empty response body)
+id: endpoint-204-with-body
+name: Endpoint Returning 204 with Body
+severity: warning
+category: reliability
+defect_class: convention
+inline_tier: blocking
+language: python
+
+message: "Endpoint with status_code=204 should not return a value"
+
+description: |
+  HTTP 204 No Content must have an empty response body. Returning
+  a value (even None) in a 204 endpoint can confuse clients and
+  proxies.
+
+  Detection: matches a decorator that contains a call with a
+  `status_code=204` keyword argument. The post_filter checks the
+  decorated function body contains a `return $VALUE` statement with
+  a value (not bare `return`).
+
+  ✅ FIX: Use bare `return` or remove the status_code=204
+
+query: |
+  (decorated_definition
+    (decorator
+      (call
+        arguments: (argument_list
+          (keyword_argument
+            name: (identifier) @NAME
+            value: (integer) @VAL))))
+    (function_definition) @FUNC) @DEC
+
+metavars:
+  - NAME
+  - VAL
+  - FUNC
+  - DEC
+
+post_filter: status_204_with_value_return
+
+has_fix: false
+
+tags:
+  - reliability
+  - http
+  - fastapi
+  - flask
+
+examples:
+  bad: |
+    @app.delete("/x", status_code=204)
+    def delete():
+        return {"deleted": True}  # BAD - 204 must have empty body
+  
+  good: |
+    @app.delete("/x", status_code=204)
+    def delete():
+        db.delete(x)
+        return  # OK - bare return

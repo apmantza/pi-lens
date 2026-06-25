@@ -1,0 +1,73 @@
+# Slotted Class Attribute Assignment
+# Detects `self.X = ...` inside a class with `__slots__` when X is NOT in the slots list.
+id: slots-assignment-mismatch
+name: Slotted Class Attribute Assignment
+severity: warning
+category: reliability
+defect_class: convention
+inline_tier: blocking
+language: python
+
+message: "Attribute '{{name}}' assigned in class with __slots__ but not declared"
+
+description: |
+  Python `__slots__` declares a fixed set of allowed attributes for
+  instances of a class. Assigning to an attribute NOT in the slots
+  list will raise `AttributeError` at runtime (unless the parent
+  class has `__dict__`, in which case it's allowed but defeats the
+  purpose of __slots__).
+
+  Matches: a `self.X = ...` assignment inside any method of a class
+  whose body contains `__slots__ = ...`. Post-filter:
+  1. Parse the `__slots__` assignment (single string, tuple, or list)
+  2. If the assigned attribute X is in the slots list → suppress
+  3. Otherwise → fire
+
+  Caveat: If the parent class has its own `__dict__` (e.g. generated
+  ANTLR `ParserRuleContext` classes), the child's `__slots__` is
+  effectively a no-op for the purpose of preventing attribute
+  creation. SonarCloud S8494 still flags these as a code-smell
+  (misleading intent), but no runtime error will occur.
+
+  ✅ FIX: Add the attribute to `__slots__`, or remove `__slots__`.
+
+query: |
+  (function_definition
+    body: (block
+      (expression_statement
+        (assignment
+          left: (attribute
+            object: (identifier) @SELF
+            attribute: (identifier) @ATTR)
+          right: (_) @VAL)))) @METHOD
+
+metavars:
+  - SELF
+  - ATTR
+  - VAL
+  - METHOD
+
+post_filter: slots_attribute_mismatch
+
+has_fix: false
+
+tags:
+  - reliability
+  - python-specific
+  - slots
+  - attribute-assignment
+
+examples:
+  bad: |
+    class Foo:
+        __slots__ = ("x",)
+        def __init__(self):
+            self.x = 1       # OK - in slots
+            self.y = 2       # BAD - raises AttributeError
+  
+  good: |
+    class Foo:
+        __slots__ = ("x", "y")
+        def __init__(self):
+            self.x = 1
+            self.y = 2

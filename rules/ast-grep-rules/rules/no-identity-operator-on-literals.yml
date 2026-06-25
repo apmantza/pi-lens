@@ -1,0 +1,69 @@
+id: no-identity-operator-on-literals
+language: Python
+message: "Identity operators should not be used with literal values"
+severity: error
+note: |
+  Port of SonarCloud python:S3403 (BLOCKER BUG).
+
+  `1 is "1"` is always False (different types). Even when both
+  sides are the same literal, `is` checks identity (memory
+  address), not equality. Use `==` for value comparison.
+
+  Each `any:` branch combines the `is`/`is not` regex with a
+  literal-kind check. This ensures we ONLY flag literal-vs-X
+  comparisons (not `x == "literal"` which is the correct form).
+
+  Two regex variants cover `is True/False` (where `True`/`False`
+  parse as identifiers, not a `true`/`false` AST kind). Two more
+  cover `is not True/False`. The remaining variants use
+  `has: kind: <literal>` as direct children of the
+  comparison_operator.
+
+  Direct children only — no `stopBy: end` — so string subscripts
+  like `summary["verified"] is True` don't fire (the string is
+  nested, not a direct operand).
+
+  Excluded from the rule: `x is None` (the correct idiom).
+  `kind: none` is deliberately absent.
+metadata:
+  sonar: S3403
+rule:
+  any:
+    - kind: comparison_operator
+      regex: 'is\s+(True|False|true|false)\b'
+    - kind: comparison_operator
+      regex: '\b(True|False|true|false)\s+is\b'
+    - kind: comparison_operator
+      regex: 'is\s+not\s+(True|False|true|false)\b'
+    - kind: comparison_operator
+      regex: '\b(True|False|true|false)\s+is\s+not\b'
+    - all:
+        - kind: comparison_operator
+          regex: '\bis\b'
+        - has:
+            kind: string
+    - all:
+        - kind: comparison_operator
+          regex: '\bis\b'
+        - has:
+            kind: integer
+    - all:
+        - kind: comparison_operator
+          regex: '\bis\b'
+        - has:
+            kind: float
+    - all:
+        - kind: comparison_operator
+          regex: '\bis\b'
+        - has:
+            kind: list
+    - all:
+        - kind: comparison_operator
+          regex: '\bis\b'
+        - has:
+            kind: dictionary
+    - all:
+        - kind: comparison_operator
+          regex: '\bis\b'
+        - has:
+            kind: tuple

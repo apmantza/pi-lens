@@ -1,0 +1,25 @@
+id: no-comparison-to-true-false
+language: Python
+message: "Unnecessary equality checks should not be made against True/False"
+severity: warning
+note: |
+  Port of SonarCloud python:S2159.
+
+  `if x == True` is equivalent to `if x`, `if x == False` is equivalent
+  to `if not x`. The explicit comparison is verbose and considered
+  un-Pythonic (PEP 8 E712).
+
+  Matches `==`/`!=` comparisons where one side is the literal `True`
+  or `False`.
+metadata:
+  sonar: S2159
+rule:
+  any:
+    - pattern: "$X == True"
+    - pattern: "True == $X"
+    - pattern: "$X != True"
+    - pattern: "True != $X"
+    - pattern: "$X == False"
+    - pattern: "False == $X"
+    - pattern: "$X != False"
+    - pattern: "False != $X"

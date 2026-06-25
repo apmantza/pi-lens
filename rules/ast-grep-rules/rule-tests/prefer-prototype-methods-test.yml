@@ -1,0 +1,8 @@
+id: prefer-prototype-methods
+valid:
+  - 'Object.hasOwn(obj, key)'
+  - 'Object.prototype.hasOwnProperty.call(obj, key)'
+  - 'obj.hasOwnProperty'
+invalid:
+  - 'obj.hasOwnProperty(key)'
+  - 'foo.hasOwnProperty("a", "b")'

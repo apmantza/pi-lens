@@ -1,0 +1,10 @@
+id: no-requests-without-timeout
+valid:
+  - 'requests.get("https://api.example.com", timeout=5)'
+  - 'requests.get("https://api.example.com", timeout=(3, 10))'
+  - 'httpx.get(url, timeout=10)'
+invalid:
+  - 'requests.get("https://api.example.com")'
+  - 'requests.post("https://api.example.com", json=data)'
+  - 'httpx.post(url, json=payload)'
+  - 'requests.get(url)'

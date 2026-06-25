@@ -1,0 +1,23 @@
+id: no-except-non-exception
+valid:
+  - |
+    try:
+        pass
+    except ValueError:
+        pass
+  - |
+    try:
+        pass
+    except (ValueError, KeyError):
+        pass
+invalid:
+  - |
+    try:
+        pass
+    except 1:
+        pass
+  - |
+    try:
+        pass
+    except "string":
+        pass

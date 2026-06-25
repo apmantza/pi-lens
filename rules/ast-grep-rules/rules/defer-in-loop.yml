@@ -1,0 +1,10 @@
+id: defer-in-loop
+language: go
+message: "defer is used inside a loop. This defers execution until after the entire function, not each iteration."
+severity: warning
+
+rule:
+  pattern: |
+    for $$_ {
+      defer $$_
+    }

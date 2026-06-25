@@ -1,0 +1,12 @@
+id: no-aws-apigateway-no-auth
+valid:
+  - |
+    api = client.create_rest_api(name='my-api', auth='AWS_IAM')
+  - |
+    api = client.create_api(name='my-api', auth='AWS_IAM')
+  - "result = some_other_function()"
+invalid:
+  - |
+    api = client.create_rest_api(name='my-api')
+  - |
+    api = client.create_api(name='my-api')

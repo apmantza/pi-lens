@@ -1,0 +1,46 @@
+id: no-uvicorn-non-import-string
+language: Python
+message: "uvicorn.run should pass an import string when reload/debug/workers is set"
+severity: error
+note: |
+  Port of SonarCloud python:S8397 (BLOCKER CODE_SMELL).
+
+  When `uvicorn.run()` is called with `reload=True`, `debug=True`,
+  or `workers > 1`, the first argument MUST be a string like
+  `"module:app"` rather than the app object directly. uvicorn uses
+  the import string to spawn worker subprocesses; passing the app
+  object directly works in single-process mode but fails when
+  forking.
+
+  **Implementation note:** this rule was tried with pattern matching
+  but the `all: [pattern: ..., not: pattern: ...]` shape didn't
+  fire reliably on the CLI matcher. The regex-based form below
+  matches the call's text directly:
+
+  - Positive: `kind: call + regex: '^uvicorn\.run\([^)]*<flag>\s*=\s*True'`
+    (or `workers\s*=\s*[2-9]\d*` for the workers case).
+  - Negative: `not: regex: "^uvicorn\.run\(['\"]...:...['\"]"` excludes
+    the import-string form.
+
+  The pattern-based approach is preferred in most rules but fails
+  here because ast-grep's pattern matcher can't easily check that
+  the FIRST positional argument is a string literal (the parser
+  preserves the source ordering, so `$APP` and `"$MODULE:$APP"`
+  look the same to the matcher — both are `string`-kind
+  expressions).
+metadata:
+  sonar: S8397
+rule:
+  any:
+    - kind: call
+      regex: "^uvicorn\\.run\\([^)]*reload\\s*=\\s*True"
+      not:
+        regex: "^uvicorn\\.run\\([\"'][^\"']+:[^\"']+[\"']"
+    - kind: call
+      regex: "^uvicorn\\.run\\([^)]*debug\\s*=\\s*True"
+      not:
+        regex: "^uvicorn\\.run\\([\"'][^\"']+:[^\"']+[\"']"
+    - kind: call
+      regex: "^uvicorn\\.run\\([^)]*workers\\s*=\\s*[2-9]"
+      not:
+        regex: "^uvicorn\\.run\\([\"'][^\"']+:[^\"']+[\"']"

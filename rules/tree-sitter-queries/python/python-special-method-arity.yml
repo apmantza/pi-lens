@@ -1,0 +1,67 @@
+# Special Method Arity Violation
+# Detects __init__, __eq__, __hash__, etc. with wrong parameter counts
+id: python-special-method-arity
+name: Special Method Wrong Arity
+severity: error
+category: reliability
+defect_class: correctness
+inline_tier: blocking
+language: python
+
+message: "Special method {{NAME}} has wrong arity — Python protocol expects {{EXPECTED}}"
+
+description: |
+  Python's data model expects specific arities for dunder methods:
+  - `__init__(self, ...)` — variable args (after self)
+  - `__new__(cls, ...)` — variable args (after cls)
+  - `__del__(self)` — exactly self
+  - `__repr__(self)` — exactly self
+  - `__str__(self)` — exactly self
+  - `__hash__(self)` — exactly self
+  - `__bool__(self)` — exactly self
+  - `__len__(self)` — exactly self
+  - `__eq__(self, other)` — exactly self + other
+  - `__lt__`, `__le__`, `__gt__`, `__ge__`, `__ne__` — self + other
+
+  The rule uses `count_params` post_filter with min_params to
+  flag missing parameters. The post_filter is run only against
+  function names matching the special-method pattern.
+
+  Note: SonarCloud S5722 in full also checks `__add__`,
+  `__mul__`, etc. — full list is 30+ methods. This rule covers
+  the most common ones.
+
+  ✅ FIX: Add the required parameters
+
+query: |
+  (function_definition
+    name: (identifier) @NAME
+    parameters: (parameters) @PARAMS)
+  (#match? @NAME "^__(init|new|del|repr|str|hash|bool|len|eq|lt|le|gt|ge|ne)__$")
+
+metavars:
+  - NAME
+  - PARAMS
+
+post_filter: special_method_arity
+
+has_fix: false
+
+tags:
+  - reliability
+  - python-specific
+  - data-model
+  - dunder
+
+examples:
+  bad: |
+    class Foo:
+        def __eq__(self): pass  # BAD - missing 'other'
+        def __hash__(self, x): pass  # BAD - extra arg
+        def __repr__(self, x): pass  # BAD - extra arg
+  
+  good: |
+    class Foo:
+        def __eq__(self, other): return self.x == other.x
+        def __hash__(self): return hash(self.x)
+        def __repr__(self): return f"Foo({self.x})"

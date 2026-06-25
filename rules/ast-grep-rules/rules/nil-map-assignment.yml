@@ -1,0 +1,43 @@
+id: nil-map-assignment
+language: go
+message: >-
+  Uninitialized map declared with 'var' - cannot assign values without
+  calling make()
+severity: warning
+note: |
+  Ported from RealHarshThakur/ast-grep-go (NOASSERTION license), with
+  one improvement over the upstream rule:
+
+  **Multi-assign suppression** (NEW in pi-lens):
+  `var m map[K]V; m, err = f()` is safe when `f()` returns
+  `(map[K]V, error)`. The rule's `not: precedes:` looks for a
+  single-line multi-assignment statement immediately after the `var`
+  declaration. This catches the gorilla/mux route.go:314,340 false
+  positives (the upstream rule fired on these — confirmed by
+  field-testing the ported rule on a real clone).
+
+  The metavar-leak fix in ast-grep 0.44.0 (#2676) makes the
+  `precedes: pattern: $M, $$$ = $$$` form work; on 0.42.0 the
+  fallback uses a regex (see git history).
+
+  KNOWN REMAINING LIMITATIONS (cannot be expressed in ast-grep without
+  interprocedural data-flow analysis):
+
+  - **Single-line assign-then-write**: `var m map[K]V; m = f(); m[k]=v`
+    is safe but not detected. Requires binding the outer `$M` to a
+    name and then data-flowing through `f()`'s return value.
+
+  - **Assign-via-pointer-in-call**: `var res map[K]V; find(&res); res[k]`
+    is safe but not detected. Requires interprocedural analysis that
+    ast-grep cannot express; use `staticcheck` for this.
+rule:
+  all:
+    - pattern: var $M map[$_]$_
+    - not:
+        pattern: var $M map[$_]$_ = $$$
+    - not:
+        precedes:
+          stopBy: end
+          any:
+            - pattern: '$M, $$$ := $$$'
+            - pattern: '$M, $$$ = $$$'

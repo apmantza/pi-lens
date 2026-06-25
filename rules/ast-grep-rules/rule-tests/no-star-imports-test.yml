@@ -1,0 +1,9 @@
+id: no-star-imports
+valid:
+  - 'from os import path, getcwd'
+  - 'import os'
+  - 'from os import path as p'
+invalid:
+  - 'from os import *'
+  - 'from . import *'
+  - 'from .submodule import *'

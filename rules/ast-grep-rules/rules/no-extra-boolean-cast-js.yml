@@ -1,25 +1,30 @@
 id: no-extra-boolean-cast-js
-language: JavaScript
-message: "Unnecessary double negation '!!' — the value is already coerced in this context"
+language: TypeScript
+message: >-
+  Unnecessary double negation '!!' — the value is already coerced in
+  this context
 severity: warning
 note: |
-  Double negation (!!) is unnecessary in boolean contexts like if statements,
-  ternary conditions, and logical operators where coercion already occurs.
+  Double negation (!!) is unnecessary in boolean contexts like if
+  statements, ternary conditions, and logical operators where coercion
+  already occurs.
+  The original rule's `has: { field: operator, regex: "^!$" }` was a
+  no-op: the `!` is a TOKEN, not a node child, so `has:` (which walks
+  node children) never matched. The new rule uses the `!!$X` pattern
+  directly (the AST-grep parser recognizes the `!!` prefix as a
+  unary-double pattern) and constrains to boolean contexts via
+  `inside stopBy: end`.
 rule:
-  all:
-    - kind: unary_expression
-      has:
-        field: operator
-        regex: "^!$"
-        has:
-          kind: unary_expression
-          has:
-            field: operator
-            regex: "^!$"
-    - any:
-        - inside:
-            kind: if_statement
-        - inside:
-            kind: while_statement
-        - inside:
-            kind: ternary_expression
+  any:
+    - pattern: "!!$X"
+      inside:
+        stopBy: end
+        kind: if_statement
+    - pattern: "!!$X"
+      inside:
+        stopBy: end
+        kind: while_statement
+    - pattern: "!!$X"
+      inside:
+        stopBy: end
+        kind: ternary_expression

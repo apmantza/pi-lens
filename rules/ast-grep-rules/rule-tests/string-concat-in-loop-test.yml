@@ -1,0 +1,20 @@
+id: string-concat-in-loop
+valid:
+  - |
+    var sb strings.Builder
+    for _, x := range items {
+        sb.WriteString(strconv.Itoa(x))
+    }
+    s := sb.String()
+  - |
+    s := "fixed value"
+invalid:
+  - |
+    var s string
+    for _, x := range items {
+        s += strconv.Itoa(x)
+    }
+  - |
+    for _, x := range items {
+        s += strconv.Itoa(x)
+    }

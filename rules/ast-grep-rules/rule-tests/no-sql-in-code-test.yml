@@ -1,0 +1,10 @@
+id: no-sql-in-code
+valid:
+  - "db.find({ id })"
+  - "db.findOne({ where: { id } })"
+  - 'sql.unsafe("non-sql")'
+invalid:
+  - 'db.query("SELECT * FROM users")'
+  - 'db.query("INSERT INTO x VALUES (1)")'
+  - 'db.query("UPDATE users SET x = 1")'
+  - 'db.query("SELECT * FROM users WHERE id = ?", [id])'

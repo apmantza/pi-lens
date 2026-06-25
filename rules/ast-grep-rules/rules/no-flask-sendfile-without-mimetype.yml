@@ -1,0 +1,42 @@
+id: no-flask-sendfile-without-mimetype
+language: Python
+message: "Flask send_file should specify mimetype or download_name"
+severity: warning
+note: |
+  Port of SonarCloud python:S8385.
+
+  Flask's `send_file` without `mimetype` or `download_name`
+  relies on filename guessing, which is unreliable and can lead
+  to wrong Content-Type or Content-Disposition headers. Specify
+  one of these explicitly.
+
+  Three layered constraints:
+  1. **Pattern** matches `send_file($$$ARGS)` — any call
+     including the bare `send_file("file")` form.
+  2. **Not has keyword_argument** with regex `^mimetype\s*=` —
+     excludes calls where `mimetype=` is present.
+  3. **Not has keyword_argument** with regex `^download_name\s*=` —
+     excludes calls where `download_name=` is present.
+
+  Uses `keyword_argument` AST node (not the call text) because
+  the node's text includes the leading identifier name (so the
+  regex anchors on `^`); a regex on the whole call would also
+  match identifier names like `mimetype_fn`.
+
+  We need TWO `not has` clauses because ast-grep only allows one
+  `not` per rule level (you can't `not: any:` to combine).
+metadata:
+  sonar: S8385
+rule:
+  all:
+    - pattern: "send_file($$$ARGS)"
+    - not:
+        has:
+          kind: keyword_argument
+          regex: '^mimetype\s*='
+          stopBy: end
+    - not:
+        has:
+          kind: keyword_argument
+          regex: '^download_name\s*='
+          stopBy: end

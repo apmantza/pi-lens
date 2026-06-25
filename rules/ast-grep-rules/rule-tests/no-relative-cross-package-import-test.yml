@@ -1,0 +1,9 @@
+id: no-relative-cross-package-import
+valid:
+  - 'import { x } from "./local"'
+  - 'import { x } from "../local"'
+  - 'import { x } from "../../local"'
+invalid:
+  - 'import { x } from "../../../local"'
+  - 'import { helper } from "../../../utils/helper"'
+  - "import '../../../styles.css'"

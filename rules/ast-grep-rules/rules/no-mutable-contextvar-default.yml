@@ -1,0 +1,38 @@
+id: no-mutable-contextvar-default
+language: Python
+message: "Mutable default ContextVar() or dict.fromkeys() should not be used"
+severity: error
+note: |
+  Port of SonarCloud python:S8508 (BLOCKER BUG).
+
+  `def f(x=contextvars.ContextVar())` creates a new ContextVar
+  on each function call. The default value is a freshly-
+  constructed object, but unlike lists/dicts (which are
+  explicitly mutable), this is a subtle bug because the
+  ContextVar object is created at function definition time
+  but used as a per-call default.
+
+  Similarly `def f(x=dict.fromkeys(['a']))` — the dict is
+  created at definition time but used as a default. This is
+  the same pitfall as `def f(x=[])` (mutable default).
+
+  Style: kind match on `function_definition`, has: kind
+  `default_parameter` with regex matching the constructor
+  call. Pattern matching on the function signature doesn't
+  work because function params aren't `keyword_argument` AST
+  nodes — they're `default_parameter` nodes. Two `any:`
+  variants cover the two distinct constructor calls.
+metadata:
+  sonar: S8508
+rule:
+  any:
+    - kind: function_definition
+      has:
+        kind: default_parameter
+        regex: 'contextvars\.ContextVar'
+        stopBy: end
+    - kind: function_definition
+      has:
+        kind: default_parameter
+        regex: 'dict\.fromkeys'
+        stopBy: end

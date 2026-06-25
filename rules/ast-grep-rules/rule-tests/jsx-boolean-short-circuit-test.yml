@@ -1,0 +1,8 @@
+id: jsx-boolean-short-circuit
+valid:
+  - "const x = cond ? <span>show</span> : null"
+  - "const x = items.length ? <span>show</span> : null"
+  - "const x = cond && doSomething()"
+invalid:
+  - "const x = items.length && <span>show</span>"
+  - "const x = 0 && <span>show</span>"

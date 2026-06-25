@@ -1,0 +1,15 @@
+id: gorm-find-without-where
+valid:
+  - |
+    db.Where("active = ?", true).Find(&users)
+  - |
+    db.Limit(100).Find(&users)
+  - |
+    db.Find(&users, "active = ?", true)
+invalid:
+  - |
+    var users []User
+    db.Find(&users)
+  - |
+    var all []Item
+    db.Find(&all)

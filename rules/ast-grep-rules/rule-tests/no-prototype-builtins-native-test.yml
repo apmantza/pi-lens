@@ -1,0 +1,9 @@
+id: no-prototype-builtins-native
+valid:
+  - 'Object.hasOwn(obj, key)'
+  - 'Object.hasOwn(foo, bar)'
+  - 'obj.foo(bar)'
+invalid:
+  - 'obj.hasOwnProperty(key)'
+  - 'foo.hasOwnProperty(bar)'
+  - 'obj.hasOwnProperty("a")'

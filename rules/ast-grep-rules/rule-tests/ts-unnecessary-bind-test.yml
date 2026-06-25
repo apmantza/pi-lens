@@ -1,0 +1,9 @@
+id: ts-unnecessary-bind
+valid:
+  - 'fn()'
+  - 'fn.call(this, args)'
+  - 'const bound = fn.bind(other)'
+invalid:
+  - 'fn.bind(this)'
+  - 'foo.bind(this)'
+  - 'this.method.bind(this)'

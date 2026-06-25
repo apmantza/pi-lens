@@ -1,0 +1,31 @@
+id: string-concat-in-loop
+language: go
+message: "String concatenation in loops is inefficient; use strings.Builder instead"
+severity: warning
+
+rule:
+  any:
+    - pattern:
+        for $_ := range $_ {
+          $VAR = $VAR + $$_
+        }
+    - pattern:
+        for $_ := range $_ {
+          $VAR += $$_
+        }
+    - pattern:
+        for $_ = range $_ {
+          $VAR = $VAR + $$_
+        }
+    - pattern:
+        for $_ = range $_ {
+          $VAR += $$_
+        }
+    - pattern:
+        for $_ := $_ ; $_ ; $_ {
+          $VAR = $VAR + $$_
+        }
+    - pattern:
+        for $_ := $_ ; $_ ; $_ {
+          $VAR += $$_
+        }

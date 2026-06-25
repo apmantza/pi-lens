@@ -5,8 +5,13 @@ severity: error
 note: |
   None is a singleton in Python. Always use 'is None' or 'is not None'
   for identity comparison rather than == which uses __eq__.
+  The original rule only had `$X == None` / `$X != None` patterns,
+  which miss the reversed form `None == $X` (the Python parser
+  preserves operand order). Added the reversed patterns.
 rule:
   kind: comparison_operator
   any:
     - pattern: $X == None
+    - pattern: None == $X
     - pattern: $X != None
+    - pattern: None != $X

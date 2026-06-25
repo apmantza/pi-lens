@@ -1,0 +1,58 @@
+# Invalid Open Mode
+# Detects calls to open() with invalid mode strings
+id: open-invalid-mode
+name: Invalid Open Mode
+severity: error
+category: reliability
+defect_class: correctness
+inline_tier: blocking
+language: python
+
+message: "open() called with invalid mode '{{MODE}}'"
+
+description: |
+  Python's open() builtin accepts mode from a limited set:
+  r, w, a, x (basic modes), optionally combined with b/t/+ suffix.
+  Invalid mode strings raise ValueError at runtime.
+
+  Detection: matches strings of length ≥ 2 where the string contains
+  a character NOT in {r, w, a, x, b, t, +}. This catches typos like
+  "rwb", "rrr", "qq", and outright garbage like "xyz".
+
+  The known limitation: this regex doesn't catch semantically-invalid
+  combinations that use only valid chars (e.g. "rw" — should be "r+").
+  Full validation requires an enum lookup.
+
+  ✅ FIX: Use a valid mode string like 'r', 'w', 'rb', 'r+'
+
+query: |
+  (call
+    function: (identifier) @FUNC
+    arguments: (argument_list
+      (_)
+      (string) @MODE)
+    (#eq? @FUNC "open"))
+
+metavars:
+  - FUNC
+  - MODE
+
+post_filter: open_mode_invalid
+
+has_fix: false
+
+tags:
+  - reliability
+  - python-specific
+  - builtin
+
+examples:
+  bad: |
+    f = open("file.txt", "rwb")  # ValueError: invalid mode (contains b but invalid combo)
+    f = open("file.txt", "rrr")  # ValueError: invalid mode (duplicate)
+    f = open("file.txt", "qq")   # ValueError: invalid mode (bad chars)
+  
+  good: |
+    f = open("file.txt", "r")    # OK
+    f = open("file.txt", "rb+")  # OK
+    f = open("file.txt", "w")    # OK

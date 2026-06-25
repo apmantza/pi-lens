@@ -1,0 +1,42 @@
+# DISABLED (no issue): rule fires on every Python class with both
+# a `def` method and a `self.X =` assignment, because ast-grep
+# patterns can't compare two metavariables for case-insensitive
+# equality (the `method name` vs `attribute name` case-insensitive
+# match that SonarCloud S1845 requires). On PostHog the rule fires
+# 2,554 times — almost every class triggers it. A proper fix
+# would require either (a) cross-node name comparison outside of
+# ast-grep's pattern matcher, or (b) a Python-specific type-aware
+# analyzer (mypy/pyright). Keeping the rule and fixture in
+# rules-disabled/ so the design intent is documented and a future
+# implementation can pick it up.
+id: no-method-field-name-collision
+language: Python
+message: "Methods and field names should not differ only by capitalization"
+severity: warning
+note: |
+  Port of SonarCloud python:S1845.
+
+  A class with both `def get_X(self)` and `self.x = ...` is
+  confusing — two attributes that differ only in capitalization
+  may collide on case-insensitive lookups or confuse readers.
+
+  This rule uses ast-grep **patterns** to detect a class that
+  contains BOTH a method definition (`def $F(self, ...)`) and
+  a field assignment (`self.$X = ...`). The `(?i)` regex on
+  the class text is necessary because ast-grep's pattern
+  matcher doesn't support case-insensitive metavariable
+  matching out of the box.
+
+  This is an approximate check — full S1845 detection requires
+  tracking all definitions and assignments to check for exact
+  name overlap (case-insensitively). The rule flags any class
+  with both patterns for manual review.
+metadata:
+  sonar: S1845
+rule:
+  all:
+    - kind: class_definition
+    - regex: '(?i)def\s+\w+\(self'
+    - has:
+        pattern: "self.$FIELD = $VALUE"
+        stopBy: end

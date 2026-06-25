@@ -1011,6 +1011,33 @@ const AUTOFIX_FIXTURES = [
 const LSP_CLIENT_WAIT_MS = 30000;
 const LSP_DIAGNOSTICS_WAIT_MS = 8000;
 
+// Auxiliary scanners (opengrep, ast-grep, zizmor) compile their rules on the
+// FIRST scan of a session and may cache a late result that — by design —
+// "surfaces on the next edit" (see the opengrep strategy in
+// clients/lsp/server-strategies.ts: a cold scan that overruns aggregateWaitMs
+// isn't lost, it lands on the next touch). The smoke does a single touch, so a
+// cold rule-load that overran the deadline left this layer asserting 0
+// diagnostics and reddening the nightly (a flake, not a real break). We instead
+// touch up to AUX_TOUCH_ATTEMPTS times: the first touch warms the rule-load, and
+// each later touch re-syncs the auxiliary (reopenOnResync → didClose+didOpen) so
+// the now-warm scan re-runs and its diagnostic comes back. We stop early the
+// moment the expected finding appears. The per-server aggregateWaitMs still
+// bounds each attempt; this only adds attempts, it doesn't lengthen a passing one.
+const AUX_TOUCH_ATTEMPTS = 3;
+// Settle between retries so each re-touch actually re-opens the document. The LSP
+// service skips the didOpen (shouldSkipNotify) when an identical-content touch
+// lands within PI_LENS_LSP_TOUCH_DEBOUNCE_MS (default 1500ms) of the prior one;
+// without re-opening, the auxiliary never re-scans and the retry just re-reads the
+// same empty result. We can't disable the debounce from here — TOUCH_DEBOUNCE_MS
+// is captured when clients/lsp is imported, which (ESM hoisting) runs before this
+// module's body — so instead we wait just past the active debounce window. Read
+// the same env + default the LSP uses, then add a margin, so this stays correct if
+// the default changes.
+const AUX_RETRY_SETTLE_MS =
+	(Number.parseInt(process.env.PI_LENS_LSP_TOUCH_DEBOUNCE_MS ?? "1500", 10) ||
+		1500) + 250;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const INFRA_FAILURES = new Set(["timeout", "exception", "server_error"]);
 
 function parseArgs(argv) {
@@ -1296,25 +1323,58 @@ async function runLspHandshake({ langs, install, verbose }) {
 			const content = fs.readFileSync(absFile, "utf8");
 			let touched;
 			let threw;
-			try {
-				touched = await lsp.touchFile(absFile, content, {
-					diagnostics: "document",
-					collectDiagnostics: true,
-					clientScope: useAux ? "with-auxiliary" : "primary",
-					...(useAux ? { auxiliaryServerIds: auxIds } : {}),
-					maxClientWaitMs: LSP_CLIENT_WAIT_MS,
-					maxDiagnosticsWaitMs: LSP_DIAGNOSTICS_WAIT_MS,
-					source: "smoke-lsp",
-				});
-			} catch (err) {
-				threw = err?.message ?? String(err);
+			// Auxiliary fixtures get up to AUX_TOUCH_ATTEMPTS touches: the first warms
+			// the cold rule-load, later ones re-scan and pick up a finding that the
+			// first (overrun) scan only cached. Stop the moment the expected source
+			// appears. Non-aux fixtures resolve on the primary's first push, so one
+			// touch suffices.
+			const auxRe =
+				useAux && fx.auxiliarySourceMatch
+					? new RegExp(fx.auxiliarySourceMatch, "i")
+					: null;
+			// Don't burn retries on a tool that never installed — a zero result there
+			// is "unavailable" (⚠), classified below, not a flake worth re-touching.
+			// (Mirrors the `auxUnavailable` check in the assertion: known-unavailable
+			// only when every declared tool is missing.)
+			const auxToolList = fx.tools ?? [];
+			const auxToolUnavailable =
+				auxToolList.length > 0 &&
+				auxToolList.every((t) => unavailableTools.has(t));
+			const maxAttempts = auxRe && !auxToolUnavailable ? AUX_TOUCH_ATTEMPTS : 1;
+			for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+				try {
+					touched = await lsp.touchFile(absFile, content, {
+						diagnostics: "document",
+						collectDiagnostics: true,
+						clientScope: useAux ? "with-auxiliary" : "primary",
+						...(useAux ? { auxiliaryServerIds: auxIds } : {}),
+						maxClientWaitMs: LSP_CLIENT_WAIT_MS,
+						maxDiagnosticsWaitMs: LSP_DIAGNOSTICS_WAIT_MS,
+						source: "smoke-lsp",
+					});
+				} catch (err) {
+					threw = err?.message ?? String(err);
+					break;
+				}
+				if (!auxRe) break;
+				const hit = (Array.isArray(touched) ? touched : []).some((d) =>
+					auxRe.test(d.source || ""),
+				);
+				if (hit || attempt === maxAttempts) break;
+				if (verbose) {
+					console.error(
+						`[${fx.lang}] aux=${auxIds.join(",")} attempt ${attempt}/${maxAttempts} no ${fx.auxiliarySourceMatch} finding yet — re-touching after ${AUX_RETRY_SETTLE_MS}ms`,
+					);
+				}
+				// Wait past the touch-notify debounce so the next touch re-opens the
+				// document and forces a fresh auxiliary scan (not a deduped no-op).
+				await sleep(AUX_RETRY_SETTLE_MS);
 			}
 			// Auxiliary fixtures assert the cross-cutting server actually produced a
 			// finding (proves install→spawn→scan→publish), matched by LSP `source`.
-			if (useAux && fx.auxiliarySourceMatch && !threw) {
-				const re = new RegExp(fx.auxiliarySourceMatch, "i");
+			if (auxRe && !threw) {
 				const list = Array.isArray(touched) ? touched : [];
-				const auxDiags = list.filter((d) => re.test(d.source || ""));
+				const auxDiags = list.filter((d) => auxRe.test(d.source || ""));
 				if (verbose) {
 					console.error(
 						`[${fx.lang}] aux=${auxIds.join(",")} matched=${auxDiags.length}/${list.length} sources=${JSON.stringify([...new Set(list.map((d) => d.source))])}`,

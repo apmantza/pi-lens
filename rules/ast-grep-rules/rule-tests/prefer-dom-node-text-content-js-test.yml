@@ -1,0 +1,9 @@
+id: prefer-dom-node-text-content-js
+valid:
+  - 'el.textContent'
+  - 'el.innerHTML'
+  - 'el.outerHTML'
+invalid:
+  - 'el.innerText'
+  - 'el.innerText = "x"'
+  - 'const x = el.innerText'

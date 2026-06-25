@@ -1,13 +1,24 @@
 id: no-sql-in-code-js
-language: JavaScript
+language: TypeScript
 message: "Raw SQL string in code — use query builder or ORM"
 severity: error
 note: |
   Raw SQL strings are error-prone and hard to maintain.
   Use a query builder (knex, drizzle) or ORM (prisma, typeorm).
+  The `, $$$REST` suffix matches the optional parameters/options
+  argument common to ORM `query()`/`execute()` signatures. Without
+  it, only the 1-arg form (no params) matches.
+  The `has stopBy: end` on the string/regex probe is required
+  because the SQL literal lives 2 levels below the call_expression
+  (inside `arguments`); the default `has` neighbor doesn't drill
+  that deep.
 rule:
   all:
-    - pattern: $DB.query($SQL)
+    - any:
+        - pattern: $DB.query($SQL)
+        - pattern: $DB.query($SQL, $$$REST)
     - has:
-        kind: string
-        regex: "(?i)(SELECT|INSERT|UPDATE|DELETE|CREATE TABLE|DROP TABLE|ALTER TABLE)"
+        stopBy: end
+        regex: >-
+          (?i)(SELECT|INSERT|UPDATE|DELETE|CREATE TABLE|DROP TABLE|ALTER
+          TABLE)

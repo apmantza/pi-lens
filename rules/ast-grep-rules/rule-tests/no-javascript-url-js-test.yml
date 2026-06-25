@@ -1,0 +1,9 @@
+id: no-javascript-url-js
+valid:
+  - 'a.href = "https://x"'
+  - 'a.href = "https://example.com"'
+  - 'a.href = "/"'
+invalid:
+  - 'a.href = "javascript:alert(1)"'
+  - 'a.href = "javascript:void(0)"'
+  - 'const u = "javascript:alert(1)"'

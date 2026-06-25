@@ -1,0 +1,8 @@
+id: no-sort-without-comparator
+valid:
+  - 'arr.sort((a, b) => a - b)'
+  - 'arr.toSorted((a, b) => a.localeCompare(b))'
+  - 'arr.sort(comparator)'
+invalid:
+  - 'arr.sort()'
+  - 'arr.toSorted()'

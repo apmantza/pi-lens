@@ -1,0 +1,28 @@
+id: no-server-bind-wildcard
+language: Python
+message: "Web servers should not bind to all network interfaces"
+severity: error
+note: |
+  Port of SonarCloud python:S8392 (BLOCKER VULNERABILITY).
+
+  Binding a web server to `0.0.0.0` (or `::`) exposes it on every
+  network interface, including public ones. Production servers
+  should bind to a specific interface or use a reverse proxy.
+
+  Matches any `call` node whose text contains `host=` followed
+  by `0.0.0.0` (within a few characters). Note: `0.0.0.0` in
+  `app.run()` (Flask dev server) is also flagged — for
+  development, prefer `127.0.0.1`.
+
+  Style: regex on the call node's text. The pattern doesn't
+  anchor at start (the call has the function name first, e.g.
+  `app.run(`); the regex matches anywhere in the call text.
+
+  The regex uses `.{0,5}` between `host` and `0.0.0.0` to
+  accept either `host='0.0.0.0'` (single quote) or
+  `host="0.0.0.0"` (double quote) with whitespace.
+metadata:
+  sonar: S8392
+rule:
+  kind: call
+  regex: 'host.{0,5}0\.0\.0\.0'

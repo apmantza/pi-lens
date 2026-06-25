@@ -1,0 +1,8 @@
+id: unnecessary-react-hook
+valid:
+  - "function useRealHook() { useEffect(() => {}) }"
+  - "function useFetch() { const x = useState(0); return x }"
+  - "function fetchData() { return 1 }"
+invalid:
+  - 'function useIAmNotHookActually(args) { console.log("hi") }'
+  - "function usePlain() { return 42 }"

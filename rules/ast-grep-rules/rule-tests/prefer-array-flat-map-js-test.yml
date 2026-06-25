@@ -1,0 +1,8 @@
+id: prefer-array-flat-map-js
+valid:
+  - 'arr.flatMap(fn)'
+  - 'arr.map(fn)'
+  - 'arr.flat()'
+invalid:
+  - 'arr.map(fn).flat()'
+  - 'arr.map(x => [x, x]).flat()'

@@ -1,0 +1,28 @@
+id: no-aws-s3-public-access
+language: Python
+message: "S3 buckets should not grant access to all users or authenticated users"
+severity: error
+note: |
+  Port of SonarCloud python:S6265 (BLOCKER VULNERABILITY).
+
+  S3 buckets with `ACL='public-read'`, `ACL='public-read-write'`,
+  or `GrantRead`/`GrantWrite` to `'AllUsers'` or
+  `'AuthenticatedUsers'` are publicly accessible.
+
+  Matches S3 client calls that grant public access via ACL or
+  Grants. Conservative — only flags the most obvious patterns.
+
+  No CodeRabbit rule covers this (verified — no AWS Python
+  rules in `coderabbit/rules/python/`).
+
+  Style: regex on the call node's text. The patterns with
+  `$CLIENT.method(...)` work because the `$CLIENT` metavariable
+  binds to any expression (`s3`, `client`, `boto3.client(...)`).
+metadata:
+  sonar: S6265
+rule:
+  kind: call
+  any:
+    - regex: '\.create_bucket\([^)]*ACL\s*=\s*[\x22\x27]public-(read|read-write)'
+    - regex: '\.put_bucket_acl\([^)]*ACL\s*=\s*[\x22\x27]public-(read|read-write)'
+    - regex: '\.put_object_acl\([^)]*(GrantRead|GrantWrite)'

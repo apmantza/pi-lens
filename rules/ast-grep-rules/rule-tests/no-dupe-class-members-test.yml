@@ -1,0 +1,11 @@
+id: no-dupe-class-members
+valid:
+  - |
+    class A { foo() {} bar() {} }
+  - |
+    class A { get x() {} set x(v) {} }
+invalid:
+  - |
+    class A { foo() {} foo() {} }
+  - |
+    class A { foo = 1; foo = 2; }

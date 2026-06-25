@@ -1,0 +1,8 @@
+id: no-blank-target-js
+valid:
+  - '<a href="/x">link</a>'
+  - '<a href="/x" target="_blank" rel="noopener">link</a>'
+  - '<a href="/x" target="_blank" rel="noopener noreferrer">link</a>'
+  - '<a href="/x" target="_self">link</a>'
+invalid:
+  - '<a href="/x" target="_blank">link</a>'

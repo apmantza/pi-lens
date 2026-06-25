@@ -1,0 +1,32 @@
+id: no-xxe-vulnerable-xml-parser
+language: Python
+message: "XML parsers should not be vulnerable to XXE attacks"
+severity: error
+note: |
+  Port of SonarCloud python:S2755 (BLOCKER VULNERABILITY).
+
+  The default `xml.etree.ElementTree`, `xml.dom.minidom`,
+  `xml.sax`, and `lxml.etree` libraries are vulnerable to XML
+  External Entity (XXE) attacks if external entities aren't
+  disabled. Use `defusedxml` instead, or explicitly disable
+  entity resolution via a parser config.
+
+  Matches common XML parser entry points. Use fully-qualified
+  names (`xml.etree.ElementTree.parse`, `lxml.etree.parse`) so
+  that the rule doesn't flag aliases like `ET.parse(...)` — the
+  developer is responsible for verifying the alias target.
+
+  A complete S2755 implementation would also catch unsafe parser
+  instances and aliased imports; this rule catches the most
+  common direct-call case.
+metadata:
+  sonar: S2755
+rule:
+  any:
+    - pattern: "xml.etree.ElementTree.parse($$$ARGS)"
+    - pattern: "xml.etree.ElementTree.fromstring($$$ARGS)"
+    - pattern: "xml.dom.minidom.parse($$$ARGS)"
+    - pattern: "xml.sax.parse($$$ARGS)"
+    - pattern: "lxml.etree.parse($$$ARGS)"
+    - pattern: "lxml.etree.fromstring($$$ARGS)"
+    - pattern: "lxml.etree.XMLParser($$$ARGS)"

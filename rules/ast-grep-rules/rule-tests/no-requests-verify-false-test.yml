@@ -1,0 +1,11 @@
+id: no-requests-verify-false
+valid:
+  - "r = requests.get('https://api.example.com')"
+  - "r = requests.post(url, json=data)"
+  - "r = requests.get(url, verify='/path/to/ca-bundle.pem')"
+  - "r = requests.get(url, verify=True)"
+  - "r = requests.get(url, timeout=5)"
+invalid:
+  - "r = requests.get('https://api.example.com', verify=False)"
+  - "r = requests.post(url, json=data, verify=False)"
+  - "r = requests.delete(url, verify=False)"

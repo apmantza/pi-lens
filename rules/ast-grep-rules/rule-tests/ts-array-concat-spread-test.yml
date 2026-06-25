@@ -1,0 +1,9 @@
+id: ts-array-concat-spread
+valid:
+  - "arr.push(...items)"
+  - "const c = [...arr, ...items]"
+  - "arr.concat(other)"
+  - "arr.concat([1, 2, 3])"
+invalid:
+  - "arr.concat([...items])"
+  - "arr.concat([...{a: 1}])"

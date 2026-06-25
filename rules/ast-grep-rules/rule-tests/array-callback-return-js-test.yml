@@ -1,0 +1,10 @@
+id: array-callback-return-js
+valid:
+  - "arr.map(x => { return x + 1 })"
+  - "arr.map(x => x + 1)"
+  - "arr.forEach(x => console.log(x))"
+  - "arr.reduce((acc, x) => { return acc + x })"
+invalid:
+  - "arr.map(x => { x + 1 })"
+  - "arr.filter(function (x) { console.log(x) })"
+  - "Array.from(set, x => { x + 1 })"

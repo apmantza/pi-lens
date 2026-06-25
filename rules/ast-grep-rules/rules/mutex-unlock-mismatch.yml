@@ -1,0 +1,14 @@
+id: mutex-unlock-mismatch
+language: go
+message: "Lock called but no corresponding defer Unlock; ensure Lock/Unlock are paired"
+severity: warning
+
+rule:
+  pattern: $MU.Lock()
+  inside:
+    kind: function_declaration
+    stopBy: end
+    not:
+      has:
+        regex: "defer.*Unlock"
+        stopBy: end

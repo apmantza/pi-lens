@@ -1,0 +1,7 @@
+id: no-unnecessary-state-initializer
+valid:
+  - "const [x, setX] = useState()"
+  - "const [x, setX] = useState(0)"
+  - "const [x, setX] = useState(null)"
+invalid:
+  - "const [x, setX] = useState(undefined)"

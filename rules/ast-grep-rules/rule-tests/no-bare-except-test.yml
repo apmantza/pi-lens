@@ -1,0 +1,28 @@
+id: no-bare-except
+valid:
+  - |
+    try:
+        doThing()
+    except ValueError:
+        handle()
+  - |
+    try:
+        doThing()
+    except (ValueError, KeyError):
+        handle()
+  - |
+    try:
+        doThing()
+    except Exception as e:
+        handle(e)
+invalid:
+  - |
+    try:
+        doThing()
+    except:
+        handle()
+  - |
+    try:
+        doThing()
+    except:
+        pass

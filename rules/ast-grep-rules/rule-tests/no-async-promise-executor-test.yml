@@ -1,0 +1,8 @@
+id: no-async-promise-executor
+valid:
+  - 'new Promise(function(resolve, reject) { resolve(1) })'
+  - 'new Promise((resolve, reject) => { resolve(1) })'
+  - 'new Promise(function(resolve) { setTimeout(resolve, 100) })'
+invalid:
+  - 'new Promise(async function(resolve, reject) { resolve(1) })'
+  - 'new Promise(async (resolve, reject) => { resolve(1) })'

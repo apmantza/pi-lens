@@ -1,0 +1,74 @@
+name: Bug Report
+description: Report something that's broken in pi-lens
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Before opening, please check the
+        [Contributing guide](../CONTRIBUTING.md) and [AGENTS.md](../AGENTS.md).
+
+        Keep this short and concrete. If it doesn't fit on one screen,
+        it's probably too long.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: |
+        Be specific. Include error messages, unexpected output,
+        or incorrect behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: |
+        Minimal file path, tool invocation, or command sequence
+        that triggers the bug.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen instead?
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: pi-lens version
+      description: e.g. 3.8.60, or the commit SHA if running from source.
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: |
+        Optional. Paste snippets from `~/.pi-lens/*.log` if you're
+        running pi-lens locally.
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of pi-lens is most relevant?
+      options:
+        - area:lsp
+        - area:dispatch
+        - area:installer
+        - area:diagnostics
+        - area:read-guard
+        - area:project-intelligence
+        - area:perf
+        - area:observability
+        - area:session
+        - area:config
+        - area:security
+        - area:tests
+        - unknown
+    validations:
+      required: false

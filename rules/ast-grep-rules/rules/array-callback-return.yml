@@ -5,9 +5,9 @@ language: TypeScript
 rule:
   all:
     - any:
-      - kind: function_declaration
-      - kind: arrow_function
-      - kind: function_expression
+        - kind: function_declaration
+        - kind: arrow_function
+        - kind: function_expression
     - pattern: $FUNC
     - not:
         has:
@@ -18,16 +18,23 @@ rule:
           - pattern: $$$ => $R
           - not:
               pattern: $$$ => { $$$ }
+    # The original used `Array.from($, $FUNC)` with an anonymous `$`
+    # metavariable for the first arg — ast-grep 0.42.0's `inside`
+    # matcher treats `$` (anonymous) and `$FUNC` (named) inconsistently
+    # in `any:` pattern lists, so the rule never matched. Renaming
+    # the first metavar to `$SET` makes the rule bind.
     - inside:
         stopBy: end
         any:
-          - pattern: Array.from($, $FUNC)
-          - pattern: $A.$METHOD($FUNC)
+          - pattern: Array.from($SET, $FUNC)
+          - pattern: "$A.$METHOD($FUNC)"
 constraints:
   METHOD:
-    regex: ^(every|filter|find|findIndex|findLast|findLastIndex|flatMap|map|reduce|reduceRight|some|sort)$
-
+    regex: >-
+      ^(every|filter|find|findIndex|findLast|findLastIndex|flatMap|map|
+      reduce|reduceRight|some|sort)$
 note: |
   Array has several methods for filtering, mapping, and folding.
-  If we forget to write return statement in a callback of those, it’s probably a mistake.
-  If you don’t want to use a return or don’t need the returned results, consider using .forEach instead.
+  If we forget to write return statement in a callback of those,
+  it's probably a mistake. If you don't want to use a return or
+  don't need the returned results, consider using .forEach instead.

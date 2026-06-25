@@ -1,0 +1,14 @@
+id: no-template-string-concat
+valid:
+  - |
+    from string import Template
+    t = Template("Hello $name")
+    msg = t.substitute(name="World")
+  - "msg = 'Hello ' + name + ' World'"
+invalid:
+  - |
+    from string import Template
+    msg = Template("Hello $name") + " World"
+  - |
+    from string import Template
+    msg = "Hello" + Template(" $name")

@@ -6,10 +6,23 @@ note: |
   RSA keys smaller than 2048 bits are considered insecure and can be cracked.
   Ensure all generated or used RSA keys have a size of at least 2048.
   Grade 3.9 — high risk, improved security.
+  The original patterns required a trailing `, $$$` (other options
+  after modulusLength), so the no-options shape slipped through.
+  The rule now matches BOTH `{ modulusLength: N }` (no other options)
+  AND `{ modulusLength: N, ...other }`.
 rule:
   any:
-    - pattern: "crypto.generateKeyPairSync('rsa', { modulusLength: $LEN, $$$ })"
-    - pattern: "crypto.generateKeyPair('rsa', { modulusLength: $LEN, $$$ }, $$$)"
+    - any:
+        - pattern: "crypto.generateKeyPairSync('rsa', { modulusLength: $LEN })"
+        # trailing comma+rest is a YAML line-wrap concern only; the
+        # quoted-string pattern reads as a single token to ast-grep
+        - pattern: >-
+            crypto.generateKeyPairSync('rsa', { modulusLength: $LEN, $$$ })
+    - any:
+        - pattern: >-
+            crypto.generateKeyPair('rsa', { modulusLength: $LEN }, $$$)
+        - pattern: >-
+            crypto.generateKeyPair('rsa', { modulusLength: $LEN, $$$ }, $$$)
 constraints:
   LEN:
     regex: "^(512|1024|1536)$"

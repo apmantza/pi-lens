@@ -3,9 +3,15 @@ language: Python
 message: "Mutable default argument detected — use None and initialize inside function"
 severity: error
 note: |
-  Mutable defaults (lists, dicts) are shared across all calls to the function.
+  Mutable defaults (lists, dicts, sets) are shared across all calls to the function.
   Use None as default and create a new instance inside the function body.
+  The original rule used `kind: list` for the `has:` child, which only
+  matched list literals `[]` — not dicts `{}` or sets `{...}`. Expanded
+  to cover all three mutable container kinds.
 rule:
   kind: default_parameter
   has:
-    kind: list
+    any:
+      - kind: list
+      - kind: dictionary
+      - kind: set

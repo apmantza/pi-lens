@@ -1,0 +1,24 @@
+# Marshal Deserialization
+# Detects marshal.load/loads — RCE when reading untrusted data (CWE-502).
+# Currently uncovered: python-insecure-deserialization matches only pickle/yaml.
+id: no-marshal-load
+language: Python
+severity: error
+message: "marshal.load() — deserializing arbitrary Python bytecode, RCE risk"
+note: |
+  `marshal.load/loads()` reconstructs arbitrary Python objects from binary data.
+  Unlike pickle, it can deserialize compiled code objects — making it the
+  most dangerous deserializer in the standard library.
+rule:
+  pattern: marshal.$FN($$$ARGS)
+has_fix: false
+tags:
+  - python
+  - security
+  - deserialization
+  - cwe-502
+examples:
+  bad: |
+    obj = marshal.loads(request.body)
+  good: |
+    obj = json.loads(request.body)

@@ -1,0 +1,9 @@
+id: ts-string-split-index
+valid:
+  - 'const x = s.split(sep)'
+  - 'const [a, b] = s.split(sep)'
+  - 'const x = s.split(sep)[0]'
+invalid:
+  - 'const x = s.split(sep)[1]'
+  - 'const x = s.split(sep)[2]'
+  - 'const x = s.split(sep)[3]'
