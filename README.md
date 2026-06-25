@@ -61,11 +61,9 @@ Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/d
 <!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
 <!-- prettier-ignore-start -->
 <!-- markdownlint-disable -->
-
 <table>
-  <tbody>
-    
-    <tr>
+<tbody>
+<tr>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/wastedC"><img src="https://avatars.githubusercontent.com/u/917574?v=4" width="100px;" alt=""/><br /><sub><b>wastedC</b></sub></a><br /><a href="#code-wastedC" title="Code">💻</a> <a href="#ideas-wastedC" title="Ideas & Planning">🤔</a> <a href="#maintenance-wastedC" title="Maintenance">🚧</a> <a href="#review-wastedC" title="Reviewed Pull Requests">👀</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/apmantza"><img src="https://avatars.githubusercontent.com/u/247365598?v=4" width="100px;" alt=""/><br /><sub><b>Apostolos Mantzaris</b></sub></a><br /><a href="#code-apmantza" title="Code">💻</a> <a href="#doc-apmantza" title="Documentation">📖</a> <a href="#ideas-apmantza" title="Ideas & Planning">🤔</a> <a href="#maintenance-apmantza" title="Maintenance">🚧</a> <a href="#review-apmantza" title="Reviewed Pull Requests">👀</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/apps/dependabot"><img src="https://avatars.githubusercontent.com/in/29110?v=4" width="100px;" alt=""/><br /><sub><b>Dependabot</b></sub></a><br /><a href="#maintenance-dependabot[bot]" title="Maintenance">🚧</a></td>
@@ -145,11 +143,8 @@ Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/d
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/stark-bit"><img src="https://avatars.githubusercontent.com/u/44064758?v=4" width="100px;" alt=""/><br /><sub><b>Rei Starks</b></sub></a><br /><a href="#bug-stark-bit" title="Bug reports">🐛</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/robertoecf"><img src="https://avatars.githubusercontent.com/u/54923863?v=4" width="100px;" alt=""/><br /><sub><b>Roberto Freitas</b></sub></a><br /><a href="#bug-robertoecf" title="Bug reports">🐛</a></td>
     </tr>
-
-  </tbody>
-
+</tbody>
 </table>
-
 
 
 <!-- markdownlint-restore -->

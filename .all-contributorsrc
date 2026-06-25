@@ -11,8 +11,8 @@
   "contributorsSortAlphabetically": false,
   "badgeTemplate": "[![All Contributors](https://img.shields.io/github/all-contributors/apmantza/pi-lens?color=ee8449&style=flat-square)](#contributors-)",
   "contributorTemplate": "<a href=\"<%= contributor.profile %>\"><img src=\"<%= contributor.avatar_url %>\" width=\"<%= options.imageSize %>px;\" alt=\"\"/><br /><sub><b><%= contributor.name %></b></sub></a><br /><%= contributions %>",
-  "rowTemplate": "<tr>\n  <%= bodyContent %>\n</tr>",
-  "wrapperTemplate": "\n<table>\n  <tbody>\n    <%= bodyContent %>\n  </tbody>\n<%= tableFooterContent %>\n</table>\n\n",
+  "rowTemplate": "<tr>\n<%= bodyContent %>\n</tr>",
+  "wrapperTemplate": "<table>\n<tbody>\n<%= bodyContent.trim() %>\n</tbody>\n</table>\n",
   "types": {
     "bug": {
       "symbol": "🐛",
