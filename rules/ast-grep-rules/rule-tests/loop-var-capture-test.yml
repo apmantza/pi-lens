@@ -1,0 +1,25 @@
+id: loop-var-capture
+valid:
+  - |
+    for i := range items {
+        go func(index int) {
+            fmt.Println(index)
+        }(i)
+    }
+  - |
+    for i := range items {
+        fmt.Println(i)
+    }
+invalid:
+  - |
+    for i := range items {
+        go func() {
+            fmt.Println(i)
+        }()
+    }
+  - |
+    for _, val := range data {
+        go func() {
+            fmt.Println(val)
+        }()
+    }

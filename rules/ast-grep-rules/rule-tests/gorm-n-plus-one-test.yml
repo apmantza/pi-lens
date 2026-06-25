@@ -1,0 +1,20 @@
+id: gorm-n-plus-one
+valid:
+  - |
+    var users []User
+    db.Where("id IN ?", userIDs).Find(&users)
+  - |
+    for _, u := range users {
+        fmt.Println(u.Name)
+    }
+invalid:
+  - |
+    for _, id := range userIDs {
+        var u User
+        db.First(&u, id)
+    }
+  - |
+    for _, name := range names {
+        var user User
+        db.Where("name = ?", name).First(&user)
+    }

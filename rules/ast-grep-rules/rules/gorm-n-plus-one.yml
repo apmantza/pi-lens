@@ -1,0 +1,16 @@
+id: gorm-n-plus-one
+language: go
+message: "N+1 query detected. GORM DB call inside loop causes performance issues. Batch queries with WHERE IN instead."
+severity: warning
+
+rule:
+  kind: call_expression
+  has:
+    kind: selector_expression
+    has:
+      kind: field_identifier
+      regex: ^(Find|First|Last|Take|Where|Create|Save|Update|Updates|Delete|Pluck|Count|Scan|Raw|Exec|Preload|Joins|Association)$
+    stopBy: end
+  inside:
+    kind: for_statement
+    stopBy: end

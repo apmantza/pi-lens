@@ -1,0 +1,41 @@
+# DISABLED (#PR-319): gorm-unbounded-preload too imprecise for ast-grep
+#
+# Original rule from RealHarshThakur/ast-grep-go attempted to detect
+# unbounded GORM Preload calls. The pattern is "any call_expression
+# containing a Preload that's NOT containing a func_literal" — but
+# func_literal is GORM's idiomatic scoping callback, not the only way
+# to scope a query.
+#
+# The rule fires on `db.Preload("X").Where(...).Find(&users)` even
+# though `.Where(...)` is the proper scoping — only the func_literal
+# form is excluded. Real production code uses `.Where()` far more often
+# than scoping callbacks.
+#
+# Net result: rule fires on most production GORM code that uses Preload,
+# which is the OPPOSITE of the intent.
+
+id: gorm-unbounded-preload
+language: go
+severity: warning
+message: "Unbounded GORM Preload detected. Consider adding a limit using Preload with a scoping function."
+note: |
+  Disabled: too imprecise — fires on `db.Preload().Where().Find()`
+  even though `.Where()` scopes the query.
+rule:
+  kind: call_expression
+  has:
+    kind: selector_expression
+    has:
+      kind: field_identifier
+      regex: ^Preload$
+    stopBy: end
+  not:
+    has:
+      kind: func_literal
+      stopBy: end
+has_fix: false
+tags:
+  - go
+  - orm
+  - gorm
+  - performance

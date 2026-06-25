@@ -1,0 +1,26 @@
+id: gorm-find-without-where
+language: go
+message: "Unchecked .Find() without WHERE clause may load the entire table"
+severity: warning
+note: "Add a Where() clause, pass inline conditions to Find(), or use Limit() to prevent loading all records"
+
+rule:
+  kind: call_expression
+  all:
+    - has:
+        kind: selector_expression
+        has:
+          kind: field_identifier
+          regex: "^Find$"
+    - has:
+        kind: argument_list
+        regex: "^\\(&\\w+\\)$"
+    - not:
+        has:
+          kind: call_expression
+          stopBy: end
+          has:
+            kind: selector_expression
+            has:
+              kind: field_identifier
+              regex: "^(Where|Limit)$"

@@ -1,0 +1,20 @@
+id: defer-in-loop
+valid:
+  - |
+    defer file.Close()
+  - |
+    for _, f := range files {
+        func() {
+            defer f.Close()
+            process(f)
+        }()
+    }
+invalid:
+  - |
+    for _, file := range files {
+        defer file.Close()
+    }
+  - |
+    for i := 0; i < 10; i++ {
+        defer cleanup(i)
+    }

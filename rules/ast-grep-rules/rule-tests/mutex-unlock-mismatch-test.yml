@@ -1,0 +1,29 @@
+id: mutex-unlock-mismatch
+valid:
+  - |
+    func work() {
+        var mu sync.Mutex
+        mu.Lock()
+        defer mu.Unlock()
+    }
+  - |
+    func good() {
+        var mu sync.Mutex
+        mu.Lock()
+        defer mu.Unlock()
+        doStuff()
+    }
+invalid:
+  - |
+    func bad() {
+        var mu sync.Mutex
+        if true {
+            mu.Lock()
+        }
+    }
+  - |
+    func bad2() {
+        var mu sync.Mutex
+        mu.Lock()
+        doSomething()
+    }

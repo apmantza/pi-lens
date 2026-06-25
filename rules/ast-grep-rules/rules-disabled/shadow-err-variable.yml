@@ -1,0 +1,38 @@
+# DISABLED (#PR-319): shadow-err-variable rule is too imprecise
+#
+# Original rule from RealHarshThakur/ast-grep-go attempted to detect Go
+# `err := ...` variable shadowing inside if/for/switch blocks. The
+# implementation relies on Go 1.22+'s loop-scope semantics that ast-grep
+# 0.42.0 can't detect statically.
+#
+# The fallback pattern (matching `err := $_` inside if/for/switch) is
+# too narrow: Go's common multi-assignment idiom `val, err := tryRecover()`
+# isn't a `err := $_` statement — it's a tuple destructuring with `err`
+# on the LHS. The rule's "inside: kind: if_statement" only matches
+# top-level if blocks, not nested blocks.
+#
+# Net result: rule fires on nothing useful (test fixtures don't produce
+# matches). Either needs a tree-sitter-based implementation (which can
+# track scope) or should stay disabled.
+
+id: shadow-err-variable
+language: go
+severity: warning
+message: "Error variable 'err' shadowed in inner scope; original error reference is lost"
+note: |
+  Limited utility: matches `err := $_` statements inside if/for/switch
+  blocks. Multi-assignment (`val, err := x()`) is not detected because
+  the LHS is a tuple, not just `err`.
+rule:
+  pattern: err := $_
+  inside:
+    any:
+      - kind: if_statement
+      - kind: for_statement
+      - kind: expression_switch_statement
+    stopBy: end
+has_fix: false
+tags:
+  - go
+  - error-handling
+  - limited

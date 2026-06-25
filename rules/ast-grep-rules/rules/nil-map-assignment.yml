@@ -1,0 +1,11 @@
+id: nil-map-assignment
+language: go
+message: "Uninitialized map declared with 'var' - cannot assign values without calling make()"
+severity: warning
+
+rule:
+  pattern: var $M map[$_]$_
+  not:
+    # This would match if there's an initialization, but var declarations can't have initializers inline
+    # So this rule always fires for simple var map declarations
+    pattern: var $M map[$_]$_ = $_

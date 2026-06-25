@@ -1621,6 +1621,105 @@
       "severity_default": "warning",
       "confidence": "medium",
       "status": "experimental"
+    },
+    {
+      "rule_id": "loop-var-capture",
+      "engine": "ast-grep",
+      "language": "go",
+      "family": "concurrency",
+      "scope": "file",
+      "canonical_concept": "go-loop-var-capture",
+      "severity_default": "warning",
+      "confidence": "high",
+      "status": "active"
+    },
+    {
+      "rule_id": "defer-in-loop",
+      "engine": "ast-grep",
+      "language": "go",
+      "family": "reliability",
+      "scope": "file",
+      "canonical_concept": "go-defer-in-loop",
+      "severity_default": "warning",
+      "confidence": "high",
+      "status": "active"
+    },
+    {
+      "rule_id": "nil-map-assignment",
+      "engine": "ast-grep",
+      "language": "go",
+      "family": "reliability",
+      "scope": "file",
+      "canonical_concept": "go-nil-map-assignment",
+      "severity_default": "warning",
+      "confidence": "high",
+      "status": "active"
+    },
+    {
+      "rule_id": "string-concat-in-loop",
+      "engine": "ast-grep",
+      "language": "go",
+      "family": "performance",
+      "scope": "file",
+      "canonical_concept": "go-string-concat-in-loop",
+      "severity_default": "warning",
+      "confidence": "medium",
+      "status": "experimental"
+    },
+    {
+      "rule_id": "mutex-unlock-mismatch",
+      "engine": "ast-grep",
+      "language": "go",
+      "family": "concurrency",
+      "scope": "file",
+      "canonical_concept": "go-mutex-unlock-mismatch",
+      "severity_default": "warning",
+      "confidence": "medium",
+      "status": "experimental"
+    },
+    {
+      "rule_id": "unlock-in-loop",
+      "engine": "ast-grep",
+      "language": "go",
+      "family": "concurrency",
+      "scope": "file",
+      "canonical_concept": "go-unlock-in-loop",
+      "severity_default": "warning",
+      "confidence": "high",
+      "status": "active"
+    },
+    {
+      "rule_id": "waitgroup-done-scope",
+      "engine": "ast-grep",
+      "language": "go",
+      "family": "concurrency",
+      "scope": "file",
+      "canonical_concept": "go-waitgroup-done-scope",
+      "severity_default": "warning",
+      "confidence": "high",
+      "status": "active"
+    },
+    {
+      "rule_id": "gorm-find-without-where",
+      "engine": "ast-grep",
+      "language": "go",
+      "family": "reliability",
+      "scope": "file",
+      "canonical_concept": "go-gorm-find-without-where",
+      "severity_default": "warning",
+      "confidence": "medium",
+      "status": "experimental"
+    },
+    {
+      "rule_id": "gorm-n-plus-one",
+      "engine": "ast-grep",
+      "language": "go",
+      "family": "performance",
+      "scope": "file",
+      "canonical_concept": "go-gorm-n-plus-one",
+      "severity_default": "warning",
+      "confidence": "medium",
+      "status": "experimental"
     }
   ]
 }

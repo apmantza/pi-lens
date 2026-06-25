@@ -1,0 +1,20 @@
+id: waitgroup-done-scope
+valid:
+  - |
+    wg.Add(1)
+    go func() {
+        defer wg.Done()
+        doWork()
+    }()
+  - |
+    wg.Wait()
+invalid:
+  - |
+    wg.Add(1)
+    wg.Done()
+  - |
+    func bad() {
+        wg.Add(1)
+        doWork()
+        wg.Done()
+    }

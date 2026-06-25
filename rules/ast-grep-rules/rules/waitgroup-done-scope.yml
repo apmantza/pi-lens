@@ -1,0 +1,11 @@
+id: waitgroup-done-scope
+language: go
+message: "WaitGroup.Done() called outside goroutine; must be in same goroutine that called Add()"
+severity: warning
+
+rule:
+  pattern: $WG.Done()
+  not:
+    inside:
+      kind: go_statement
+      stopBy: end

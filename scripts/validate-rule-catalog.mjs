@@ -50,6 +50,15 @@ const TRACKED_AST_GREP_IDS = new Set([
 	"go-test-functions",
 	"go-defer-func-call-antipattern",
 	"ruby-detect-path-traversal",
+	"loop-var-capture",
+	"defer-in-loop",
+	"nil-map-assignment",
+	"string-concat-in-loop",
+	"mutex-unlock-mismatch",
+	"unlock-in-loop",
+	"waitgroup-done-scope",
+	"gorm-find-without-where",
+	"gorm-n-plus-one",
 ]);
 
 function walkYaml(dir, acc = []) {

@@ -1,0 +1,15 @@
+id: nil-map-assignment
+valid:
+  - |
+    m := make(map[string]int)
+    m["key"] = 1
+  - |
+    m := map[string]int{}
+    m["key"] = 1
+invalid:
+  - |
+    var m map[string]int
+    m["key"] = 1
+  - |
+    var counters map[string]int
+    counters["requests"] = 1

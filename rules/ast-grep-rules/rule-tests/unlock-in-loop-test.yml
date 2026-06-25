@@ -1,0 +1,19 @@
+id: unlock-in-loop
+valid:
+  - |
+    func good() {
+        mu.Lock()
+        defer mu.Unlock()
+        for _, item := range items {
+            process(item)
+        }
+    }
+invalid:
+  - |
+    func bad() {
+        for _, item := range items {
+            mu.Lock()
+            process(item)
+            mu.Unlock()
+        }
+    }

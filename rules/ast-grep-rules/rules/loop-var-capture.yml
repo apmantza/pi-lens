@@ -1,0 +1,42 @@
+id: loop-var-capture
+language: go
+message: "Loop variable captured by goroutine; pass it as an argument or shadow it."
+severity: warning
+rule:
+  any:
+    # Single-value range loop: for i := range xs
+    - pattern: |
+        for $I := range $XS {
+          go func() { $$_ }()
+        }
+    # Single-value with preceding statements
+    - pattern: |
+        for $I := range $XS {
+          $$_
+          go func() { $$_ }()
+        }
+    # Single-value with preceding and following statements
+    - pattern: |
+        for $I := range $XS {
+          $$_
+          go func() { $$_ }()
+          $$_
+        }
+    # Key-value range loop: for k, v := range xs
+    - pattern: |
+        for $K, $V := range $XS {
+          go func() { $$_ }()
+        }
+    # Key-value with preceding statements
+    - pattern: |
+        for $K, $V := range $XS {
+          $$_
+          go func() { $$_ }()
+        }
+    # Key-value with preceding and following statements
+    - pattern: |
+        for $K, $V := range $XS {
+          $$_
+          go func() { $$_ }()
+          $$_
+        }

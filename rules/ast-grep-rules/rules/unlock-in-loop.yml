@@ -1,0 +1,22 @@
+id: unlock-in-loop
+language: go
+message: "Calling Unlock inside loop without deferring; Lock/Unlock pairing may be broken"
+severity: warning
+
+rule:
+  any:
+    - pattern: |
+        for $$_ {
+          $_.Unlock()
+        }
+    - pattern: |
+        for $$_ {
+          $$_
+          $_.Unlock()
+        }
+    - pattern: |
+        for $$_ {
+          $$_
+          $$_
+          $_.Unlock()
+        }
