@@ -20,11 +20,69 @@ export interface CircularDep {
 	path: string[]; // The cycle path
 }
 
+/**
+ * Build madge's argv for a circular-dependency scan.
+ *
+ * Two correctness levers beyond the bare `--circular`:
+ *   - `mjs,cjs` extensions: without them madge ignores explicit ESM/CJS files,
+ *     dropping their edges from the graph.
+ *   - `--ts-config <tsconfig.json>`: madge can only resolve TypeScript `paths`
+ *     aliases (`@/foo`, `~/bar`) when pointed at the tsconfig. Without it those
+ *     imports are silently unresolved, so cycles that route through an alias are
+ *     MISSED (false negatives). Passed only when a tsconfig actually exists, so
+ *     non-TS / alias-free projects are unaffected.
+ */
+export function buildMadgeArgs(target: string, projectRoot: string): string[] {
+	const args = ["--circular", "--extensions", "ts,tsx,js,jsx,mjs,cjs"];
+	const tsConfig = path.join(projectRoot, "tsconfig.json");
+	if (fs.existsSync(tsConfig)) {
+		args.push("--ts-config", tsConfig);
+	}
+	// --warning surfaces files madge couldn't resolve into the graph (to stderr;
+	// stdout JSON is unaffected). Without it those skips are SILENT — and a
+	// skipped *local* file could hide a real cycle. We log them (see
+	// parseMadgeSkips) instead of discarding stderr.
+	args.push("--warning", "--json", target);
+	return args;
+}
+
+/**
+ * Parse madge's `--warning` stderr for skipped (unresolvable) files. External
+ * package specifiers (bare names / subpaths like `web-tree-sitter`,
+ * `vitest/config`) are expected — madge doesn't traverse node_modules. We flag
+ * only **local** skips (relative/absolute paths), which are the ones that could
+ * silently drop an internal edge and hide a cycle.
+ *
+ * @returns total skip count and the subset that look local.
+ */
+export function parseMadgeSkips(stderr: string): {
+	total: number;
+	local: string[];
+} {
+	const lines = (stderr || "").split(/\r?\n/);
+	const headerIdx = lines.findIndex((l) => /Skipped\s+\d+\s+file/i.test(l));
+	if (headerIdx === -1) return { total: 0, local: [] };
+	const total =
+		Number.parseInt(lines[headerIdx].match(/Skipped\s+(\d+)/i)?.[1] ?? "0", 10) ||
+		0;
+	const specifiers = lines
+		.slice(headerIdx + 1)
+		.map((l) => l.trim())
+		.filter(Boolean);
+	const local = specifiers.filter(
+		(s) => s.startsWith(".") || s.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(s),
+	);
+	return { total, local };
+}
+
 export interface DepCheckResult {
 	hasCircular: boolean;
 	circular: CircularDep[];
 	checked: boolean;
 	cacheHit: boolean;
+	/** Count of LOCAL files madge skipped (couldn't resolve) — a potential
+	 * silent cycle-miss. Undefined when not checked. */
+	localSkips?: number;
 }
 
 // --- Graph Cache ---
@@ -270,14 +328,7 @@ export class DependencyChecker {
 		try {
 			const result = await safeSpawnAsync(
 				"npx",
-				[
-					"madge",
-					"--circular",
-					"--extensions",
-					"ts,tsx,js,jsx",
-					"--json",
-					normalized,
-				],
+				["madge", ...buildMadgeArgs(normalized, projectRoot)],
 				{
 					timeout: 15000,
 					cwd: projectRoot,
@@ -318,6 +369,13 @@ export class DependencyChecker {
 			this.lastCircular = circular;
 			this.circularFiles = circularFiles;
 
+			const skips = parseMadgeSkips(result.stderr || "");
+			if (skips.local.length > 0) {
+				this.log(
+					`madge skipped ${skips.local.length} local file(s) (possible silent cycle-miss): ${skips.local.slice(0, 5).join(", ")}`,
+				);
+			}
+
 			return {
 				hasCircular: circular.length > 0,
 				circular: circular.filter(
@@ -325,6 +383,7 @@ export class DependencyChecker {
 				),
 				checked: true,
 				cacheHit: false,
+				localSkips: skips.local.length,
 			};
 		} catch (err: any) {
 			this.log(`Check error: ${err.message}`);
@@ -393,14 +452,7 @@ export class DependencyChecker {
 		try {
 			const result = await safeSpawnAsync(
 				"npx",
-				[
-					"madge",
-					"--circular",
-					"--extensions",
-					"ts,tsx,js,jsx",
-					"--json",
-					projectRoot,
-				],
+				["madge", ...buildMadgeArgs(projectRoot, projectRoot)],
 				{
 					timeout: 30000,
 					cwd: projectRoot,

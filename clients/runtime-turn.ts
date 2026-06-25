@@ -364,14 +364,21 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					blockerParts.push(report);
 				}
 
-				// Newly-unused exports in modified files: symbol was clean before this turn
-				// (not in prevKnip issues) but is now flagged — likely a caller was removed or
-				// an interface changed. Advisory only — the agent may be mid-task.
-				const unusedExportIssues = newIssues.filter((i) => i.type === "export");
-				if (unusedExportIssues.length > 0) {
+				// Turn-end injects only this turn's HIGH-CONFIDENCE, ATTRIBUTABLE
+				// delta: symbols in files the agent just edited that became unused
+				// (weren't flagged in the previous scan) — low-volume and actionable
+				// now. The FULL project-wide dead-code picture is deliberately NOT
+				// injected per turn (hundreds of mostly-pre-existing findings would
+				// drown the blockers and burn context every turn); it's available
+				// on demand via lens_diagnostics. The delta also feeds the session-slop
+				// record (`projectDiagnosticsDelta`) above.
+				const unusedExportDelta = newIssues.filter(
+					(i) => i.type === "export" || i.type === "enumMember",
+				);
+				if (unusedExportDelta.length > 0) {
 					let report =
-						"⚠️ Newly unused exports in modified files — check if callers need updating (Knip):\n";
-					for (const issue of unusedExportIssues.slice(0, 5)) {
+						"⚠️ Newly unused exports in files you edited — check if callers need updating (Knip):\n";
+					for (const issue of unusedExportDelta.slice(0, 5)) {
 						const display = issue.file
 							? toRunnerDisplayPath(cwd, issue.file)
 							: "(unknown)";
@@ -530,6 +537,13 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			for (const file of madgeFiles) {
 				const absPath = path.resolve(cwd, file);
 				const depResult = await depChecker.checkFile(absPath, cwd);
+				if (depResult.localSkips && depResult.localSkips > 0) {
+					// Not silent: a skipped LOCAL import means madge couldn't resolve
+					// it into the graph, so a cycle through it would be missed.
+					dbg(
+						`turn_end: madge skipped ${depResult.localSkips} local file(s) resolving ${file} — possible silent cycle-miss`,
+					);
+				}
 				if (depResult.hasCircular && depResult.circular.length > 0) {
 					const circularDeps = depResult.circular
 						.flatMap((d) => d.path)

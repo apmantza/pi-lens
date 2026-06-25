@@ -298,4 +298,33 @@ describe("knip-client", () => {
 		expect(result.unlistedDeps).toHaveLength(1);
 		expect(result.unlistedDeps[0].name).toBe("@acme/pkg");
 	});
+
+	it("routes enumMembers into unusedExports (grouped format)", () => {
+		// NOTE: knip 6.x has no `classMembers` issue type (requesting it makes knip
+		// exit 2), so the only member-level type we include/parse is enumMembers.
+		const client = new KnipClient(false) as unknown as {
+			parseOutput: (output: string) => {
+				success: boolean;
+				unusedExports: Array<{ type: string; name: string }>;
+			};
+		};
+
+		const result = client.parseOutput(
+			JSON.stringify({
+				issues: [
+					{
+						file: "src/widget.ts",
+						exports: [{ name: "OldHelper" }],
+						enumMembers: [{ name: "Color.Mauve" }],
+					},
+				],
+			}),
+		);
+
+		expect(result.success).toBe(true);
+		const byName = new Map(result.unusedExports.map((e) => [e.name, e.type]));
+		expect(byName.get("OldHelper")).toBe("export");
+		expect(byName.get("Color.Mauve")).toBe("enumMember");
+		expect(result.unusedExports).toHaveLength(2);
+	});
 });
