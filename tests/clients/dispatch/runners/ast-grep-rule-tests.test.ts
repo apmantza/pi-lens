@@ -69,17 +69,37 @@ d("shipped ast-grep rules have fixture-style valid/invalid tests", () => {
 		id: string;
 		language: string | undefined; // undefined ⇒ default to TypeScript (per rule schema)
 	}
-	const rules = fs
-		.readdirSync(RULES_DIR)
-		.filter((f) => f.endsWith(".yml"))
-		.map((f): RuleEntry | undefined => {
-			const text = fs.readFileSync(path.join(RULES_DIR, f), "utf8");
-			const id = text.match(/^id:\s*(.+?)\s*$/m)?.[1];
-			if (!id) return undefined;
-			const language = text.match(/^language:\s*(.+?)\s*$/m)?.[1];
-			return { id, language };
-		})
-		.filter((r): r is RuleEntry => Boolean(r));
+	const rules = (() => {
+		// Recursively walk `rules/` for .yml files. ast-grep itself
+		// walks subdirectories (e.g. the vendored `coderabbit/rules/`
+		// dir is one example, and per-language subdirs like
+		// `rules/python/` are an option for grouping by family).
+		// A non-recursive readdirSync would miss any subdir-shipped
+		// rule's fixture and falsely report "rule not in rules/" as
+		// an orphan. Single source of truth for "what rules does
+		// this project ship".
+		const walk = (dir: string): string[] => {
+			const out: string[] = [];
+			for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+				const full = path.join(dir, entry.name);
+				if (entry.isDirectory()) {
+					out.push(...walk(full));
+				} else if (entry.isFile() && entry.name.endsWith(".yml")) {
+					out.push(full);
+				}
+			}
+			return out;
+		};
+		return walk(RULES_DIR)
+			.map((file): RuleEntry | undefined => {
+				const text = fs.readFileSync(file, "utf8");
+				const id = text.match(/^id:\s*(.+?)\s*$/m)?.[1];
+				if (!id) return undefined;
+				const language = text.match(/^language:\s*(.+?)\s*$/m)?.[1];
+				return { id, language };
+			})
+			.filter((r): r is RuleEntry => Boolean(r));
+	})();
 	// All language families get fixture coverage (TS, TSX, JS, Python, Rust, Go).
 	// The rule schema says unspecified language defaults to TypeScript; the
 	// remaining families are spelled out explicitly.
@@ -164,20 +184,35 @@ d("shipped ast-grep rules have fixture-style valid/invalid tests", () => {
 		const failingRules = Array.from(stdout.matchAll(/^FAIL\s+(\S+)\s/gm)).map(
 			(m) => m[1],
 		);
-		// CLI-vs-napi JSX framework gap: `ast-grep test` 0.42.0's pattern
-		// matcher doesn't emit jsx_element/jsx_attribute/etc. kinds AT
-		// ALL — so any rule with JSX patterns (TSX OR JS-in-TSX
-		// files like React `.jsx`/`.tsx`/`.js`) can't be exercised by
-		// the CLI test framework. The napi engine (production
-		// dispatch path) fires them correctly; `ast-grep-rule-validity.test.ts`
-		// accepts the rule YAML; and napi findAll on synthetic JSX
-		// fixtures matches. The remaining failures are therefore *not*
-		// rule bugs — they're CLI tooling gaps. Filter them out so the
-		// wrapper reports only real rule regressions.
+		// Build a ruleId -> filePath map for O(1) lookup, then
+		// detect rules that are CLI-framework-broken. We used to
+		// detect a JSX kind-matching gap (ast-grep 0.42.0's CLI
+		// pattern matcher didn't emit jsx_* kinds). That was fixed
+		// in 0.44.0 (the rule count moved from 242/2 to 246/0 once
+		// we upgraded and the test runner picked up 0.44.0), so
+		// the gap set is currently empty for the rules we ship.
+		// Kept the detection logic + comment here as a guard in
+		// case a future ast-grep release regresses JSX matching or
+		// another language family hits the same CLI gap.
+		const ruleFileById = new Map<string, string>();
+		(() => {
+			const walk = (dir: string) => {
+				for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+					const full = path.join(dir, entry.name);
+					if (entry.isDirectory()) walk(full);
+					else if (entry.isFile() && entry.name.endsWith(".yml")) {
+						const text = fs.readFileSync(full, "utf8");
+						const id = text.match(/^id:\s*(.+?)\s*$/m)?.[1];
+						if (id) ruleFileById.set(id, full);
+					}
+				}
+			};
+			walk(RULES_DIR);
+		})();
 		const cliFrameworkGap = new Set(
 			Array.from(ruleIds).filter((id) => {
-				const ruleFile = path.join(RULES_DIR, `${id}.yml`);
-				if (!fs.existsSync(ruleFile)) return false;
+				const ruleFile = ruleFileById.get(id);
+				if (!ruleFile) return false;
 				const text = fs.readFileSync(ruleFile, "utf8");
 				const lang = text.match(/^language:\s*(.+?)\s*$/m)?.[1]?.toLowerCase();
 				// Catch TSX/tsx language rules, AND JS rules that have
