@@ -1,0 +1,10 @@
+id: no-compile-call
+valid:
+  - "tree = ast.parse(static_source)"
+  - "import ast; ast.literal_eval(data)"
+invalid:
+  - "code = compile(user_input, '<user>', 'exec')"
+  - "obj = compile(request.body, '<user>', 'exec')"
+  - "code = compile(data + suffix, '<user>', 'exec')"
+  - "code = compile(get_source(), '<user>', 'exec')"
+  - "code = compile('print(1)', '<static>', 'exec')"

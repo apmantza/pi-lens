@@ -1,0 +1,29 @@
+# Dynamic compile() call
+# Detects compile() called with a non-string-literal first arg.
+# autoaudit PY003 (CWE-78).
+id: no-compile-call
+language: Python
+severity: error
+message: "compile() called with dynamic input — arbitrary code execution risk"
+note: |
+  `compile(source, ...)` with non-literal source compiles arbitrary code
+  that may be executed later. If `source` is user-controlled, this is
+  a code injection vulnerability.
+  Pattern: matches any compile(...) call. The fixture validates whether
+  the source is a static string vs dynamic — for the lint, we warn on
+  every compile() (safe static compiles are rare and easy to refactor
+  to a module-level constant).
+rule:
+  pattern: compile($$$ARGS)
+has_fix: false
+tags:
+  - python
+  - security
+  - code-injection
+  - cwe-78
+examples:
+  bad: |
+    code = compile(user_input, "<user>", "exec")
+    exec(code)
+  good: |
+    tree = ast.parse(static_source)

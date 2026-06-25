@@ -40,6 +40,13 @@ const TRACKED_AST_GREP_IDS = new Set([
 	"unnecessary-react-hook",
 	"redundant-usestate-type",
 	"find-import-file-without-extension",
+	"no-compile-call",
+	"no-marshal-load",
+	"no-requests-verify-false",
+	"no-python-sql-string-concat",
+	"find-func-declaration-with-prefix",
+	"defer-func-call-antipattern",
+	"no-console-except-catch",
 ]);
 
 function walkYaml(dir, acc = []) {

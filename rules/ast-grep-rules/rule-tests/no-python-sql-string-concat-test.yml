@@ -1,0 +1,10 @@
+id: no-python-sql-string-concat
+valid:
+  - 'cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))'
+  - 'cursor.execute("SELECT * FROM users")'
+  - 'cursor.execute(query, params)'
+  - 'cursor.execute("SELECT * FROM users WHERE id = :id", {"id": user_id})'
+  - 'cursor.execute(f"DELETE FROM sessions WHERE token = {token}")'
+invalid:
+  - 'cursor.execute("SELECT * FROM users WHERE id = " + user_id)'
+  - "cursor.execute('SELECT * FROM users WHERE id = ' + user_id)"

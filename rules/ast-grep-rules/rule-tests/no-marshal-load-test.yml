@@ -1,0 +1,10 @@
+id: no-marshal-load
+valid:
+  - "obj = json.loads(data)"
+  - "obj = pickle.loads(data)"
+  - "import json; json.loads(request.body)"
+invalid:
+  - "obj = marshal.loads(data)"
+  - "obj = marshal.load(f)"
+  - "data = marshal.dumps(obj)"
+  - "bytes_ = marshal.dumps(obj)"
