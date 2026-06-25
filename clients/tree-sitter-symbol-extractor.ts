@@ -460,11 +460,11 @@ SYMBOL_QUERIES.tsx = SYMBOL_QUERIES.typescript;
 // Per-language import-source extraction (#249). Optional and independent of
 // SYMBOL_QUERIES: a language without an entry simply yields no imports (its
 // symbols still extract). Each query captures the import source text as
-// @importSource. cxx is intentionally absent — its #include edges are extracted
-// by the review-graph builder's dedicated path. typescript/tsx ARE present (#301)
-// so the COLD module_report path (which runs this extractor directly) sees TS/JS
-// imports; the WARM review graph still sources jsts imports from the TS compiler
-// (importFactProvider) and never reaches this query, so there's no double-count.
+// @importSource. typescript/tsx (#301) and c/cpp (#302) ARE present so the COLD
+// module_report path (which runs this extractor directly) sees their imports; the
+// WARM review graph still sources jsts imports from the TS compiler
+// (importFactProvider) and cxx #include edges from its own line-regex path, and
+// neither reaches this query, so there's no double-count.
 //
 // Call/builtin-based languages (ruby/zig/elixir/bash) express imports as
 // ordinary function/macro calls, so their queries use a `#match?` predicate to
@@ -488,6 +488,18 @@ const IMPORT_QUERIES: Record<string, string> = {
 	tsx: `
       (import_statement source: (string) @importSource)
       (export_statement source: (string) @importSource)
+    `,
+	// #include "foo.h" (string_literal) and #include <stdio.h> (system_lib_string)
+	// on both the c and cpp grammars (validated). parseImportMatch strips the quotes
+	// from the local form; the system form keeps its <> so the resolver/bucketer can
+	// tell a system header from a local include.
+	c: `
+      (preproc_include path: (string_literal) @importSource)
+      (preproc_include path: (system_lib_string) @importSource)
+    `,
+	cpp: `
+      (preproc_include path: (string_literal) @importSource)
+      (preproc_include path: (system_lib_string) @importSource)
     `,
 	python: `
       (import_statement name: (dotted_name) @importSource)

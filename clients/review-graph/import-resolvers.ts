@@ -115,6 +115,27 @@ function resolveJsTs(cwd: string, filePath: string, source: string): string[] {
 	]);
 }
 
+// --- C / C++ -----------------------------------------------------------------
+
+/**
+ * Resolve a C/C++ `#include` to an in-project header (#302). A system header
+ * (`<stdio.h>`, captured with its angle brackets) is a toolchain/library dep →
+ * external, so it returns []. A quoted local include (`#include "foo.h"` →
+ * `foo.h` after quote-strip) resolves against the same candidate roots the warm
+ * graph's `resolveCxxInclude` uses (the including file's dir, then cwd / include /
+ * src), so cold and warm agree on which file a local include points to.
+ */
+function resolveCxx(cwd: string, filePath: string, source: string): string[] {
+	if (source.startsWith("<")) return [];
+	const dir = path.dirname(path.resolve(filePath));
+	return firstExistingFile(cwd, [
+		path.resolve(dir, source),
+		path.resolve(cwd, source),
+		path.resolve(cwd, "include", source),
+		path.resolve(cwd, "src", source),
+	]);
+}
+
 // --- Python -----------------------------------------------------------------
 
 /** Candidate source roots for an absolute dotted import. */
@@ -265,6 +286,9 @@ export function resolveImportToFiles(
 		case "javascript":
 		case "jsts":
 			return resolveJsTs(cwd, filePath, source);
+		case "c":
+		case "cpp":
+			return resolveCxx(cwd, filePath, source);
 		case "ruby":
 			return resolveRelative(cwd, filePath, source, [".rb"]);
 		case "zig":

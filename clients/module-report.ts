@@ -301,7 +301,14 @@ function collectImports(
 // (bare specifiers, absolute package paths) is treated as external. This is the
 // floor under `resolveImportToFiles` — it never fabricates a file path, only a
 // best-effort internal/external bucket.
-function looksInternal(source: string): boolean {
+function looksInternal(source: string, languageId: string): boolean {
+	// C/C++ (#302): a #include is local-vs-system by syntax, not by a leading dot.
+	// A system header keeps its angle brackets (<stdio.h>) → external; a quoted
+	// local include arrives bare (foo.h, quotes already stripped) → internal, even
+	// when the header file isn't on disk.
+	if (languageId === "c" || languageId === "cpp") {
+		return !source.startsWith("<");
+	}
 	// A leading "." is relative across every language we extract (JS ./ ../,
 	// Python . .foo ..pkg, Ruby/Dart/bash relative paths) and never begins a bare
 	// or scoped package specifier (react, @scope/pkg, java.util.List, fmt). Rust's
@@ -339,7 +346,7 @@ function coldImports(
 		);
 		if (files.length > 0) {
 			for (const f of files) internal.add(toDisplayPath(f, projectRoot));
-		} else if (looksInternal(imp.source)) {
+		} else if (looksInternal(imp.source, languageId)) {
 			internal.add(imp.source);
 		} else {
 			external.add(imp.source);

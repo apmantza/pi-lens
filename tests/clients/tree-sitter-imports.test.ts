@@ -38,6 +38,18 @@ const CASES: Record<string, ImportCase> = {
 		src: 'import { a } from "./local";\nimport React from "react";\n',
 		expect: ["./local", "react"],
 	},
+	// C/C++ #include (#302) — local "foo.h" (quotes stripped) + system <stdio.h>
+	// (angle brackets kept so the bucketer can tell local from system).
+	c: {
+		file: "a.c",
+		src: '#include "foo.h"\n#include <stdio.h>\nint main(void) { return 0; }\n',
+		expect: ["foo.h", "<stdio.h>"],
+	},
+	cpp: {
+		file: "a.cpp",
+		src: '#include "bar.hpp"\n#include <vector>\nint main() { return 0; }\n',
+		expect: ["bar.hpp", "<vector>"],
+	},
 	python: {
 		file: "a.py",
 		src: "import os\nfrom os.path import join\n",
