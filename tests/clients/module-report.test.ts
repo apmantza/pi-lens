@@ -325,6 +325,30 @@ describe("moduleReport — cold-cache imports (#301)", () => {
 		expect(report.imports.external).toContain("os");
 	});
 
+	it("C/C++: resolves a local #include, buckets a system header external (#302)", async () => {
+		const env = makeEnv();
+		createTempFile(env.tmpDir, "foo.h", "int foo(void);\n");
+		const file = createTempFile(
+			env.tmpDir,
+			"main.c",
+			[
+				'#include "foo.h"',
+				"#include <stdio.h>",
+				'#include "missing.h"',
+				"int main(void) { return foo(); }",
+			].join("\n"),
+		);
+		const report = await moduleReport(file, env.tmpDir);
+		expect(report.language).toBe("cxx");
+		expect(report.semantic.source).toBe("none"); // cold path
+		// Local include resolves to the real header.
+		expect(report.imports.internal).toContain("foo.h");
+		// An unresolved local include stays internal by C convention (quoted form).
+		expect(report.imports.internal).toContain("missing.h");
+		// System header keeps its <> and is external.
+		expect(report.imports.external).toContain("<stdio.h>");
+	});
+
 	it("warm graph wins: cold extraction does not override a populated graph", async () => {
 		const env = makeEnv();
 		createTempFile(env.tmpDir, "dep.ts", "export const x = 1;\n");
