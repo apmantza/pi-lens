@@ -18,7 +18,14 @@ import { safeSpawnAsync } from "./safe-spawn.js";
 // --- Types ---
 
 export interface KnipIssue {
-	type: "export" | "file" | "dependency" | "devDependency" | "unlisted" | "bin";
+	type:
+		| "export"
+		| "file"
+		| "dependency"
+		| "devDependency"
+		| "unlisted"
+		| "bin"
+		| "enumMember";
 	name: string;
 	file?: string;
 	line?: number;
@@ -221,7 +228,11 @@ export class KnipClient {
 		const args = [
 			"--reporter=json",
 			"--include",
-			"files,exports,types,dependencies,unlisted",
+			// enumMembers surfaces unused enum members — finer-grained than
+			// file-level exports. (knip 6.x has NO `classMembers` issue type; passing
+			// it makes knip exit 2 with zero output, silently disabling the scan —
+			// verified against knip 6.20. Valid member-level type here is enumMembers.)
+			"files,exports,types,dependencies,unlisted,enumMembers",
 		];
 
 		const result = await safeSpawnAsync("knip", args, {
@@ -283,52 +294,12 @@ export class KnipClient {
 	}
 
 	/**
-	 * Format results for LLM consumption
+	 * Format results for LLM consumption. Delegates to the pure
+	 * `formatKnipResult` so callers (e.g. turn-end) can format without a live
+	 * client instance.
 	 */
 	formatResult(result: KnipResult, maxItems = 20): string {
-		if (!result.success) return `[Knip] ${result.summary}`;
-		if (result.issues.length === 0) return "";
-
-		let output = `[Knip] ${result.issues.length} issue(s)`;
-		if (result.unusedExports.length)
-			output += ` — ${result.unusedExports.length} unused export(s)`;
-		if (result.unusedFiles.length)
-			output += ` — ${result.unusedFiles.length} unused file(s)`;
-		if (result.unusedDeps.length)
-			output += ` — ${result.unusedDeps.length} unused dep(s)`;
-		if (result.unlistedDeps.length)
-			output += ` — ${result.unlistedDeps.length} unlisted dep(s)`;
-		output += ":\n";
-
-		// Show unused exports first (most useful for refactoring)
-		if (result.unusedExports.length > 0) {
-			output += "\n  Unused exports:\n";
-			for (const issue of result.unusedExports.slice(0, maxItems)) {
-				const loc = issue.file ? ` (${path.basename(issue.file)})` : "";
-				output += `    - ${issue.name}${loc}\n`;
-			}
-			if (result.unusedExports.length > maxItems) {
-				output += `    ... and ${result.unusedExports.length - maxItems} more\n`;
-			}
-		}
-
-		// Show unused files
-		if (result.unusedFiles.length > 0) {
-			output += "\n  Unused files:\n";
-			for (const issue of result.unusedFiles.slice(0, 10)) {
-				output += `    - ${issue.name}\n`;
-			}
-		}
-
-		// Show unused deps (might be worth removing)
-		if (result.unusedDeps.length > 0) {
-			output += "\n  Unused dependencies:\n";
-			for (const issue of result.unusedDeps) {
-				output += `    - ${issue.package || issue.name}\n`;
-			}
-		}
-
-		return output;
+		return formatKnipResult(result, maxItems);
 	}
 
 	// --- Internal ---
@@ -344,7 +315,9 @@ export class KnipClient {
 
 			const addIssue = (issue: KnipIssue) => {
 				issues.push(issue);
-				if (issue.type === "export") unusedExports.push(issue);
+				if (issue.type === "export" || issue.type === "enumMember") {
+					unusedExports.push(issue);
+				}
 				if (issue.type === "file") unusedFiles.push(issue);
 				if (issue.type === "dependency" || issue.type === "devDependency") {
 					unusedDeps.push(issue);
@@ -378,6 +351,7 @@ export class KnipClient {
 
 				push(entry.exports ?? [], "export", unusedExports);
 				push(entry.types ?? [], "export", unusedExports);
+				push(entry.enumMembers ?? [], "enumMember", unusedExports);
 				push(entry.files ?? [], "file", unusedFiles);
 				push(entry.dependencies ?? [], "dependency", unusedDeps);
 				push(entry.devDependencies ?? [], "devDependency", unusedDeps);
@@ -438,4 +412,58 @@ export class KnipClient {
 			};
 		}
 	}
+}
+
+/**
+ * Format a KnipResult for the agent (the FULL dead-code picture: all unused
+ * exports/members, files, and deps — not a delta). Pure: no client instance or
+ * `this`, so turn-end can surface findings without depending on the injected
+ * client exposing the method. Returns "" when there is nothing to report.
+ * Unlisted deps are intentionally omitted here — they're surfaced as a
+ * delta-gated blocker (newly broken imports), not as cleanup advice.
+ */
+export function formatKnipResult(result: KnipResult, maxItems = 20): string {
+	if (!result.success) return `[Knip] ${result.summary}`;
+	if (result.issues.length === 0) return "";
+
+	let output = `[Knip] ${result.issues.length} issue(s)`;
+	if (result.unusedExports.length)
+		output += ` — ${result.unusedExports.length} unused export(s)`;
+	if (result.unusedFiles.length)
+		output += ` — ${result.unusedFiles.length} unused file(s)`;
+	if (result.unusedDeps.length)
+		output += ` — ${result.unusedDeps.length} unused dep(s)`;
+	if (result.unlistedDeps.length)
+		output += ` — ${result.unlistedDeps.length} unlisted dep(s)`;
+	output += ":\n";
+
+	// Show unused exports first (most useful for refactoring)
+	if (result.unusedExports.length > 0) {
+		output += "\n  Unused exports:\n";
+		for (const issue of result.unusedExports.slice(0, maxItems)) {
+			const loc = issue.file ? ` (${path.basename(issue.file)})` : "";
+			output += `    - ${issue.name}${loc}\n`;
+		}
+		if (result.unusedExports.length > maxItems) {
+			output += `    ... and ${result.unusedExports.length - maxItems} more\n`;
+		}
+	}
+
+	// Show unused files
+	if (result.unusedFiles.length > 0) {
+		output += "\n  Unused files:\n";
+		for (const issue of result.unusedFiles.slice(0, 10)) {
+			output += `    - ${issue.name}\n`;
+		}
+	}
+
+	// Show unused deps (might be worth removing)
+	if (result.unusedDeps.length > 0) {
+		output += "\n  Unused dependencies:\n";
+		for (const issue of result.unusedDeps) {
+			output += `    - ${issue.package || issue.name}\n`;
+		}
+	}
+
+	return output;
 }

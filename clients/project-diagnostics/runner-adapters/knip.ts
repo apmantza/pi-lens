@@ -19,6 +19,9 @@ function knipIssueMessage(issue: KnipIssue): string {
 	if (issue.type === "export") {
 		return `Unused export ${issue.name}`;
 	}
+	if (issue.type === "enumMember") {
+		return `Unused enum member ${issue.name}`;
+	}
 	if (issue.type === "file") {
 		return `Unused file ${issue.name}`;
 	}
