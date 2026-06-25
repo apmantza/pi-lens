@@ -124,10 +124,31 @@ The parser is a real YAML parser, so unquoted special chars throw and the rule i
    (NAPI evaluates `regex` with JS RegExp on node.text() — keep it LINEAR so the
    detector can't itself ReDoS.)
 
-✅ One `language: TypeScript` rule runs on .ts/.tsx/.js/.jsx in the runner (no per-file
-   language gate). Do NOT ship a `-js` twin: both fire on the same node (dedup is by rule
-   id, not finding) → duplicate diagnostics. Several shipped pairs (`prefer-at` +
-   `prefer-at-js`, `strict-equality` + `-js`, …) still double-report — consolidate them.
+⚠ `-js` twins: ship ONE rule for a grammar-AGNOSTIC body, TWO for a grammar-DIVERGENT one.
+   The runner (`ast-grep-napi.ts`) runs EVERY ts/js rule on every jsts file — it only
+   language-gates NON-ts/js rules (`lang !== "typescript" && lang !== "javascript"`). So
+   whether a twin duplicates depends on whether its BODY matches the same nodes:
+   - **Grammar-agnostic body** (patterns / common kinds that parse identically in the
+     tree-sitter `typescript` and `javascript` grammars — `member_expression`,
+     `call_expression`, `lexical_declaration`, ternary, etc.): one `language: TypeScript`
+     rule already covers .js in the runner. A `-js` twin DUPLICATES (both fire on the same
+     node; dedup is by rule id, not finding). Shipped offenders: `prefer-at` + `prefer-at-js`,
+     `strict-equality` + `-js` — consolidate.
+   - **Grammar-divergent body** (node kinds that DIFFER between the two grammars): a single
+     rule MISSES the other grammar's form, so you NEED both twins — and they do NOT
+     duplicate, because each rule's kinds only exist in its own grammar. Example
+     (`no-flag-argument`, #305): a default parameter is `required_parameter` in the TS
+     grammar but `assignment_pattern` in the JS grammar; the TS rule gives 0 matches on
+     .js and the JS rule gives 0 on .ts. Other TS-only nodes: `optional_parameter`, type
+     annotations, `type_alias_declaration`, `enum_declaration`, `as`/satisfies expressions.
+   - **Decide:** does the rule name a node KIND that's specific to one grammar? Twin.
+     Pure pattern / shared kinds? Single rule.
+   - **Verify no dup before shipping a twin:** copy the twin, set its `language:` to the
+     base's, run `ast-grep scan` on a base-grammar file — `>0` matches = it duplicates
+     (drop the twin); `0` = grammar-divergent and safe (keep both).
+   - **CLI ≠ runner trap:** `ast-grep scan`/`test` GATE by the rule's `language:` (a TS rule
+     scans only .ts), so a TS rule shows 0 on a .js file in the CLI — but the RUNNER runs
+     it. Don't conclude "need a twin" from CLI gating; reason about the grammar instead.
 
 ✅ Node-kind facts (tree-sitter-typescript grammar — NOT the TS compiler / Roslyn):
    - let / const  → `lexical_declaration`     (var is NOT here)
@@ -155,4 +176,53 @@ The parser is a real YAML parser, so unquoted special chars throw and the rule i
      ast-grep scan -r <rule>.yml clients tools
    Real safe variants bite (e.g. ReDoS: (ba+)+ is safe — a mandatory prefix makes
    the partition unique; flag only a single quantified atom inside the group).
+```
+
+## Matching things a pattern can't express (#305)
+
+```
+❌ A parameter default is NOT a `$X = false` pattern. `pattern: $FLAG = false` parses as
+   an `assignment_expression` (statement context) and never matches a function parameter.
+   Match the PARAM NODE + its child literal instead, capturing the name for reuse:
+     # TS grammar
+     - kind: required_parameter
+       all:
+         - has: { field: pattern, pattern: $FLAG }
+         - has: { any: [ { kind: "true" }, { kind: "false" } ] }
+     # JS grammar (assignment_pattern, with fields left/right)
+     - kind: assignment_pattern
+       all:
+         - has: { field: left, pattern: $FLAG }
+         - has: { field: right, any: [ { kind: "true" }, { kind: "false" } ] }
+
+✅ Metavar consistency works ACROSS sibling clauses of an `all` — a metavar bound in one
+   `has` must match the SAME text everywhere it reappears. Use it to CORRELATE nodes, which
+   is what makes a structural rule precise:
+     all:
+       - has: { stopBy: end, kind: required_parameter, has: { field: pattern, pattern: $FLAG } }
+       - has: { stopBy: end, any: [ { pattern: "if ($FLAG) $$$" }, { pattern: "if (!$FLAG) $$$" } ] }
+   This fires ONLY when the function branches on the SAME param it declared boolean — a
+   boolean default that's never branched on, or a branch on a different var, won't match.
+
+❌ Two `has:` keys in one mapping silently OVERWRITE (YAML: last key wins). For multiple
+   descendant constraints use `all:` with a LIST of `has` entries, never repeated `has:`.
+
+✅ Prefer a high-precision structural guard over an unbounded denylist. Message-chain
+   (Demeter) floods on fluent/promise/builder chains; rather than denylist every fluent
+   method name, REQUIRE the chain's first calls to be accessors (`get*`/`is*`/`has*`) via
+   `constraints` regex — promise/fluent/builder methods aren't accessor-named, so they're
+   excluded by construction. Precision over recall.
+
+## Validating a candidate rule against the REAL engine (not the warm MCP cache)
+
+```
+# inspect how a PATTERN parses → find the node kind you actually need
+ast-grep run -p 'x = false' --lang ts --debug-query=cst file.ts
+# match by kind (──kind and ──pattern are mutually exclusive in `run`)
+ast-grep run --kind required_parameter --lang ts file.ts
+# run ONE rule from an sgconfig against a sample
+ast-grep scan -c <sgconfig.yml> --filter '^<id>$' sample.ts
+# run the fixture harness for one rule
+ast-grep test -c rules/ast-grep-rules/.sgconfig.yml --skip-snapshot-tests --filter '<id>'
+```
 ```
