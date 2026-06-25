@@ -31,6 +31,13 @@ describe("auxiliary LSP enablement", () => {
 			"zizmor",
 		);
 	});
+
+	it("typos is default-on and the no-typos kill switch disables it (#283)", () => {
+		expect(enabledAuxiliaryLspServerIds(() => undefined)).toContain("typos");
+		expect(enabledAuxiliaryLspServerIds((f) => f === "no-typos")).not.toContain(
+			"typos",
+		);
+	});
 });
 
 describe("auxiliary profile source routing", () => {
@@ -41,6 +48,10 @@ describe("auxiliary profile source routing", () => {
 
 	it("routes zizmor's 'zizmor' source to the zizmor profile (#272)", () => {
 		expect(findAuxiliaryProfileForSource("zizmor")?.tool).toBe("zizmor");
+	});
+
+	it("routes typos-lsp's 'typos' source to the typos profile (#283)", () => {
+		expect(findAuxiliaryProfileForSource("typos")?.tool).toBe("typos");
 	});
 
 	it("ignores language-server sources and missing source", () => {
@@ -122,5 +133,34 @@ describe("zizmor semantic policy (#272)", () => {
 			diag({ code: "template-injection", message: "code injection via template" }),
 		);
 		expect(typeof dc === "string" || dc === undefined).toBe(true);
+	});
+});
+
+describe("typos semantic policy (#283)", () => {
+	const typos = AUXILIARY_LSP_PROFILES.find((p) => p.serverId === "typos");
+
+	it("is advisory by default; blocks only ERROR where a repo typos.toml opts in", () => {
+		expect(typos).toBeDefined();
+		// no repo typos config → even an ERROR-severity finding stays advisory
+		// (typos-lsp's own default severity is WARNING anyway).
+		expect(
+			typos?.semantic(diag({ severity: 1 }), { blockingAllowed: false }),
+		).toBe("warning");
+		expect(
+			typos?.semantic(diag({ severity: 2 }), { blockingAllowed: false }),
+		).toBe("warning");
+		// repo opts in with a typos.toml AND raised severity to Error → blocks.
+		expect(
+			typos?.semantic(diag({ severity: 1 }), { blockingAllowed: true }),
+		).toBe("blocking");
+		expect(
+			typos?.semantic(diag({ severity: 2 }), { blockingAllowed: true }),
+		).toBe("warning");
+	});
+
+	it("classifies a misspelling as a style (docs/quality) defect — not security", () => {
+		expect(typos?.defectClass?.(diag({ message: "`recieve` should be `receive`" }))).toBe(
+			"style",
+		);
 	});
 });

@@ -575,6 +575,21 @@ const LSP_FIXTURES = [
 		auxiliarySourceMatch: "zizmor",
 		gitInit: true,
 	},
+	// typos source-code spell checker (auxiliary, #283). The fixture is a markdown
+	// doc with several known misspellings — typos' compiled-in dictionary flags
+	// them with NO config (allow-list based). A markdown fixture deliberately
+	// exercises the option-B prose coverage (the novel scope vs the code-only
+	// auxiliaries). Proves install→spawn→scan→publish on the with-auxiliary path.
+	{
+		lang: "typos",
+		dir: "tests/fixtures/tool-smoke/typos-aux",
+		file: "notes.md",
+		serverHint: "typos (auxiliary)",
+		tools: ["typos-lsp"],
+		auxiliaryServerIds: ["typos"],
+		auxiliarySourceMatch: "typos",
+		gitInit: true,
+	},
 	// ast-grep no-sgconfig BASELINE (#239 Phase 2). NO sgconfig in the fixture, so
 	// the server must attach everywhere and launch with `lsp --config <shipped
 	// baseline>` to run pi-lens's bundled ruleset (`arr.sort()` → the shipped

@@ -129,6 +129,21 @@ export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
 			expectSemanticSecondPush: false,
 			reopenOnResync: false,
 		},
+		// typos (source-code spell checker, auxiliary LSP #283). Push-only (no pull
+		// diagnostics). Its dictionary is compiled in — there's NO rule-load window
+		// like Opengrep — so the FIRST publishDiagnostics after didOpen IS the
+		// complete result: seedFirstPush. It re-scans on didChange (FULL sync), so no
+		// reopen-on-resync. A native single-file spell scan is sub-100ms, so the seed
+		// arrives near-instantly; aggregateWaitMs is a generous ceiling (bounded by
+		// the per-edit caller cap, #242) that the early seed resolves well under.
+		typos: {
+			seedFirstPush: true,
+			pullRetryBudgetMs: 0,
+			debounceMs: 150,
+			aggregateWaitMs: 1500,
+			expectSemanticSecondPush: false,
+			reopenOnResync: false,
+		},
 		// marksman (Markdown LSP, #274). Push-based; native binary so the per-file
 		// parse is fast, but its value is CROSS-file (broken intra-repo links,
 		// missing anchors/heading refs) which needs the workspace index — so the

@@ -2534,6 +2534,43 @@ export const ZizmorServer: LSPServerInfo = {
 	autoInstall: async () => Boolean(await ensureTool("zizmor")),
 };
 
+// typos — a source-code spell checker that speaks LSP (#283). Cross-cutting,
+// diagnostic-only auxiliary like Opengrep/ast-grep/zizmor: it attaches to many
+// code kinds AND markdown/docs (option B — a spell checker that skips prose
+// misses its highest-value target; typos is ALLOW-LIST based, so it only flags
+// known misspellings with a known correction, keeping the false-positive rate on
+// technical vocab low). Its built-in dictionary is compiled in — NO config needed
+// to run; a repo `typos.toml`/`_typos.toml`/`.typos.toml` only tunes the
+// dictionary/severity (and is the blocking opt-in, see the auxiliary profile).
+// `typos-lsp` takes NO subcommand/flag — it wires stdin/stdout straight into the
+// LSP server. Default severity is WARNING, so findings are advisory by default.
+const TYPOS_EXTENSIONS: readonly string[] = Array.from(
+	new Set([...OPENGREP_EXTENSIONS, ...KIND_EXTENSIONS["markdown"]]),
+);
+
+export const TyposServer: LSPServerInfo = {
+	id: "typos",
+	name: "typos Spell Checker",
+	role: "auxiliary",
+	extensions: TYPOS_EXTENSIONS,
+	// Stable per-repo root so ONE warm server serves the whole project (like the
+	// other auxiliaries) — typos.toml discovery is repo-relative.
+	root: RootWithFallback(NearestRoot([".git"]), async () => process.cwd()),
+	availabilityKey: "typos-lsp",
+	async spawn(root, options) {
+		return resolveAndLaunch(
+			{
+				candidates: ["typos-lsp"],
+				args: [],
+				cwd: root,
+				managedToolId: "typos-lsp",
+			},
+			options?.allowInstall,
+		);
+	},
+	autoInstall: async () => Boolean(await ensureTool("typos-lsp")),
+};
+
 export const LSP_SERVERS: LSPServerInfo[] = [
 	TypeScriptServer,
 	DenoServer,
@@ -2577,6 +2614,7 @@ export const LSP_SERVERS: LSPServerInfo[] = [
 	OpengrepServer,
 	AstGrepServer,
 	ZizmorServer,
+	TyposServer,
 ];
 
 /**

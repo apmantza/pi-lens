@@ -800,6 +800,40 @@ export const TOOLS: ToolDefinition[] = [
 		},
 	},
 	{
+		// typos-lsp: source-code spell checker that speaks LSP (#283). cargo-dist
+		// release archives, one per target triple, each holding a single `typos-lsp`
+		// binary (extracted via the recursive binary find). NO token / network — the
+		// dictionary is compiled in. The binary takes no `--version` (it ignores args
+		// and serves the LSP on stdin/stdout); the PATH probe ignores checkArgs and
+		// verifyToolBinary runs with stdin:ignore so the server gets EOF and exits.
+		id: "typos-lsp",
+		name: "typos-lsp",
+		checkCommand: "typos-lsp",
+		checkArgs: ["--version"],
+		installStrategy: "github",
+		binaryName: "typos-lsp",
+		github: {
+			repo: "tekumara/typos-lsp",
+			assetMatch: (platform, arch) => {
+				if (platform === "linux")
+					return arch === "arm64"
+						? "aarch64-unknown-linux-gnu.tar.gz"
+						: "x86_64-unknown-linux-gnu.tar.gz";
+				if (platform === "darwin")
+					return arch === "arm64"
+						? "aarch64-apple-darwin.tar.gz"
+						: "x86_64-apple-darwin.tar.gz";
+				if (platform === "win32")
+					// Native win-arm64 build (one better than zizmor, which emulates).
+					return arch === "arm64"
+						? "aarch64-pc-windows-msvc.zip"
+						: "x86_64-pc-windows-msvc.zip";
+				return undefined;
+			},
+			binaryInArchive: "typos-lsp",
+		},
+	},
+	{
 		id: "tflint",
 		name: "tflint",
 		checkCommand: "tflint",
@@ -3093,6 +3127,7 @@ export const GITHUB_TOOLS = [
 	"ktlint",
 	"actionlint",
 	"zizmor",
+	"typos-lsp",
 	"tflint",
 	"terraform-ls",
 	"zls",

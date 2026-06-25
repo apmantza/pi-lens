@@ -6,6 +6,9 @@ AGENTS.md is the durable context handed to every agent that works on pi-lens. **
 - **Capture decisions & patterns.** When a commit establishes a non-obvious decision, gotcha, convention, or architectural pattern the next agent would otherwise relearn the hard way, add it here with the *why* and *how-to-apply* (recent examples: the dist/packaging + `pi.skills` resolution gotcha, the event-loop/hot-path discipline, the build-vs-lint gate).
 - **Keep it high-signal.** Prune what's no longer true; prefer concise, load-bearing notes over exhaustive prose.
 
+## Contributing
+For human contributors and issue/PR authors, see `CONTRIBUTING.md` at the repo root. It covers the development workflow, how to add runners, LSP servers, formatters, and rules, and the issue/PR templates. This `AGENTS.md` is the durable agent context; `CONTRIBUTING.md` is the public contributor guide.
+
 ## What it is
 A pi coding-agent extension that runs automated checks on every file write/edit. Dispatches async parallel runners (LSP, biome, ruff, ast-grep, tree-sitter, type coverage, jscpd, knip, Madge, and language-specific linters/build checks) and injects findings as context injections at turn-end and session-start.
 
@@ -26,8 +29,8 @@ clients/
   word-index.ts           Identifier inverted index + BM25 ranking (#162) — built in the session scan, persisted in the snapshot; consumed ONLY by the pilens_symbol_search MCP tool (not yet by pi-lens internals)
   review-graph/query.ts   Graph queries incl computeImpactCascade (one-hop, used by the cascade) + computeTransitiveImpact (depth-bounded BFS, used by module_report's blastRadius section #304)
   installer/index.ts      Auto-install + ensureTool; probe-cache.json for fast restarts. Strategies: npm/pip/gem/github + maven (fat JAR → java -jar launcher) + archive (tree). github API is token-authed (api.github.com only, Authorization dropped on cross-host redirect — unauth=60/hr silently fails CI installs); tar extract is recursive-find (handles FLAT tarballs like gleam, not --strip-components). GITHUB_TOOLS kept in sync with the registry by tool-registry-consistency.test.ts
-  lsp/                    38 LSP server IDs (incl. opengrep + ast-grep + zizmor, cross-cutting AUXILIARY diagnostic LSPs — role:"auxiliary", #111/#239/#272), config, lifecycle. clojure-lsp + gleam now auto-install via github (native binary / flat tarball). zizmor (GitHub Actions security, `zizmor --lsp`) attaches to YAML; advisory unless the repo ships zizmor.yml; online audits need a token (env or `gh auth token`) via clients/zizmor-config.ts
-  dispatch/               Pipeline dispatcher + 47 registered runners (incl. spotbugs — flag-gated via withSpotbugsGroup, #133). Auxiliary LSPs (opengrep, ast-grep, zizmor, …) are NOT runners — they attach via the lsp runner's with-auxiliary path; see clients/dispatch/auxiliary-lsp.ts
+  lsp/                    39 LSP server IDs (incl. opengrep + ast-grep + zizmor + typos, cross-cutting AUXILIARY diagnostic LSPs — role:"auxiliary", #111/#239/#272/#283), config, lifecycle. clojure-lsp + gleam now auto-install via github (native binary / flat tarball). zizmor (GitHub Actions security, `zizmor --lsp`) attaches to YAML; advisory unless the repo ships zizmor.yml; online audits need a token (env or `gh auth token`) via clients/zizmor-config.ts. typos (source-code spell checker, `typos-lsp`, native win-arm64 build) attaches to the code-aux set PLUS markdown (#283 option B); allow-list dictionary (only KNOWN misspellings) so low-FP; advisory (default WARNING) unless the repo ships typos.toml via clients/typos-config.ts
+  dispatch/               Pipeline dispatcher + 47 registered runners (incl. spotbugs — flag-gated via withSpotbugsGroup, #133). Auxiliary LSPs (opengrep, ast-grep, zizmor, typos, …) are NOT runners — they attach via the lsp runner's with-auxiliary path; see clients/dispatch/auxiliary-lsp.ts
   widget-state.ts         Footer widget rendering (@earendil-works/pi-tui)
 tools/                    ast-grep-search, lsp-navigation tool handlers
 tests/                    Vitest test suite (mirrors clients/ structure)

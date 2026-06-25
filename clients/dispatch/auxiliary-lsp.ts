@@ -19,6 +19,7 @@
 
 import type { LSPDiagnostic } from "../lsp/client.js";
 import { findLocalOpengrepConfig } from "../opengrep-config.js";
+import { findLocalTyposConfig } from "../typos-config.js";
 import { findLocalZizmorConfig } from "../zizmor-config.js";
 import { classifyDefect } from "./diagnostic-taxonomy.js";
 import type { DefectClass, OutputSemantic } from "./types.js";
@@ -100,6 +101,27 @@ export const AUXILIARY_LSP_PROFILES: readonly AuxiliaryLspProfile[] = [
 			blockingAllowed && d.severity === 1 ? "blocking" : "warning",
 		defectClass: (d) =>
 			classifyDefect(String(d.code ?? ""), "zizmor", d.message ?? ""),
+	},
+	{
+		serverId: "typos",
+		tool: "typos",
+		// typos-lsp tags its LSP diagnostics `source: "typos"`.
+		sourceMatch: /typos/i,
+		killSwitchFlag: "no-typos",
+		enabledByDefault: true,
+		// typos is allow-list based (only KNOWN misspellings with a known
+		// correction), but as an always-on advisory we only let it BLOCK when the
+		// repo opts in with its own `typos.toml`/`_typos.toml`/`.typos.toml` (the
+		// team's curated dictionary + chosen severity). Advisory otherwise —
+		// findings still surface via lens_diagnostics. Note typos-lsp's default
+		// severity is WARNING, so even with a config it stays advisory unless the
+		// repo raises `diagnostic-severity` to Error.
+		allowBlocking: (cwd) => Boolean(findLocalTyposConfig(cwd)),
+		semantic: (d, { blockingAllowed }) =>
+			blockingAllowed && d.severity === 1 ? "blocking" : "warning",
+		// A misspelling is a documentation/quality defect — not security or
+		// correctness. "style" is the closest taxonomy class.
+		defectClass: () => "style",
 	},
 ];
 
