@@ -280,6 +280,17 @@ pi installs git extensions with **`npm install --omit=dev`** (and omits peers). 
 - **`package-lock.json` IS committed and must stay in sync** with `package.json`. `npm run check:lockfile` (CI) fails on drift; after any dep change run `npm install` and commit the lock. CI/release use `npm install` (not `npm ci`) so a desync self-heals instead of wiping `node_modules`.
 - The CI **install-test** (production tarball install + `tsx` load on 3 OSes) is the guard that catches misplaced runtime deps — keep it green.
 
+## Release notes: CHANGELOG.md is the single source of truth
+
+The GitHub release body is derived from the curated `CHANGELOG.md` section for that version — **not** an auto-generated PR-title list. `release.yml` runs `scripts/changelog-extract.mjs "$VERSION" --summary` (a **condensed** view: bold entry titles grouped by Added/Changed/Fixed — the full prose stays in `CHANGELOG.md`) and posts it via `gh release create --notes-file`, so a release reads as a scannable summary of what changed. The `prepare` job's "Verify changelog entry exists" step fails CI if the `## [VERSION]` heading is missing, so a release can never ship empty notes.
+
+- **Keep `## [Unreleased]` current as you merge.** Add a bold-lead-in, em-dash entry under `### Added` / `### Changed` / `### Fixed` with the issue/PR ref — don't let it fall behind (it had drifted ~20 PRs before this was wired). `npm run changelog:check` asserts `[Unreleased]` has entries.
+- **At version-bump time, run `npm run changelog:release`** (`scripts/changelog-release.mjs`): it promotes `## [Unreleased]` → `## [X.Y.Z] - <date>` and opens a fresh empty `[Unreleased]`. Version defaults to `package.json`, date to today.
+- **Parsing/summary logic** lives once in `scripts/lib/changelog.mjs` (`extractSection` matches the bracket label, ignores the ` - <date>` suffix, takes the FIRST of a duplicated label; `summarizeSection` condenses to grouped titles). Guarded by `tests/scripts/changelog.test.ts`, which also asserts every `v3.*` tag has a non-empty section.
+- **Retroactive fix:** `npm run release:backfill-notes` (`scripts/backfill-github-releases.mjs`) sets every existing GitHub release body from its CHANGELOG section (summary by default; `--full` for the whole prose). Dry-run by default; `--apply` to write; skips (never blanks) releases with no section. All 35 v3.8.x releases were backfilled this way.
+
+**Rule catalogs.** `docs/ast-grep_rules_catalog.md` + `docs/tree-sitter_rules_catalog.md` list every bundled rule **per language** and are **generated** — edit the rule files, not the docs, then `npm run docs:rule-catalogs` (`scripts/gen-rule-catalogs.mjs`). A `--check` run (in `tests/scripts/rule-catalogs.test.ts`) fails if they drift. ast-grep covers pi-lens-authored (`rules/ast-grep-rules/rules/`) + vendored CodeRabbit (`coderabbit/rules/`); tree-sitter covers `rules/tree-sitter-queries/<language>/`.
+
 ## Build & packaging: precompiled dist + resource resolution (hard-won — #182)
 
 pi-lens ships **precompiled JS**, not TypeScript source, so pi doesn't jiti-transpile ~200 files on every cold start (~3.5s → ~1.5s; the load cost is logged as `pi-lens loaded: <ms>ms … (from dist|source)` in `sessionstart.log` + `extension_loaded` in `latency.log`).
