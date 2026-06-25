@@ -18,7 +18,7 @@ pi-lens gives AI coding agents fast, language-aware feedback while they write/ed
 - Safe formatting/autofix where tools are configured or confidently detected
 - ast-grep and tree-sitter structural rules for correctness/security smells
 - Agent-facing tools for LSP navigation/diagnostics, AST search/replace,
-  diagnostics state, and project intelligence (`module_report`, `read_symbol`)
+  diagnostics state, and project intelligence
 - Review-graph intelligence for supported languages via bundled tree-sitter WASMs
 - Read-guard and edit-autopatch support to reduce bad edits
 - Background security/dependency scans for opted-in projects
