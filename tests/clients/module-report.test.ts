@@ -389,6 +389,83 @@ describe("moduleReport — member nesting (#301)", () => {
 	});
 });
 
+describe("moduleReport — cross-file blast radius (#304)", () => {
+	// dep ← mid ← top, function-wrapped so the review graph captures call edges.
+	function makeChain(env: { tmpDir: string }) {
+		createTempFile(
+			env.tmpDir,
+			"dep.ts",
+			"export function foo(x: number): number {\n  return x + 1;\n}\n",
+		);
+		createTempFile(
+			env.tmpDir,
+			"mid.ts",
+			'import { foo } from "./dep.js";\nexport function bar(): number {\n  return foo(1);\n}\n',
+		);
+		createTempFile(
+			env.tmpDir,
+			"top.ts",
+			'import { bar } from "./mid.js";\nexport function baz(): number {\n  return bar();\n}\n',
+		);
+	}
+
+	it("is omitted unless requested", async () => {
+		const env = makeEnv();
+		makeChain(env);
+		await warmGraph(env.tmpDir);
+		const report = await moduleReport("dep.ts", env.tmpDir);
+		expect(report.blastRadius).toBeUndefined();
+	});
+
+	it("warm + requested: lists transitive dependents as ranked file reads", async () => {
+		const env = makeEnv();
+		makeChain(env);
+		await warmGraph(env.tmpDir);
+		const report = await moduleReport("dep.ts", env.tmpDir, {
+			blastRadius: true,
+		});
+		expect(report.blastRadius).toBeDefined();
+		const files = report.blastRadius?.files ?? [];
+		const names = files.map((f) => f.file);
+		// Direct dependent (mid) at depth 1; transitive dependent (top) deeper.
+		expect(names).toContain("mid.ts");
+		const mid = files.find((f) => f.file === "mid.ts");
+		expect(mid?.minDepth).toBe(1);
+		expect(mid?.dependents).toBeGreaterThanOrEqual(1);
+		expect(mid?.relations.length).toBeGreaterThanOrEqual(1);
+		// Ranked closest-first: the first entry is the shallowest.
+		expect(files[0]?.minDepth).toBeLessThanOrEqual(
+			files[files.length - 1]?.minDepth ?? 99,
+		);
+		// read args point at the dependent file (absolute machine path), offset 1.
+		expect(mid?.read.offset).toBe(1);
+		expect(path.isAbsolute(mid?.read.path ?? "")).toBe(true);
+		// The module itself never appears in its own blast radius.
+		expect(names).not.toContain("dep.ts");
+	});
+
+	it("cold cache + requested: section omitted, no build (read-only #256)", async () => {
+		const env = makeEnv();
+		makeChain(env);
+		// No warmGraph() → cold. Requesting blast radius must NOT build a graph.
+		const report = await moduleReport("dep.ts", env.tmpDir, {
+			blastRadius: true,
+		});
+		expect(report.semantic.source).toBe("none"); // proves cold
+		expect(report.blastRadius).toBeUndefined();
+	});
+
+	it("warm but nothing depends on the file: section omitted", async () => {
+		const env = makeEnv();
+		createTempFile(env.tmpDir, "lonely.ts", "export const solo = 1;\n");
+		await warmGraph(env.tmpDir);
+		const report = await moduleReport("lonely.ts", env.tmpDir, {
+			blastRadius: true,
+		});
+		expect(report.blastRadius).toBeUndefined();
+	});
+});
+
 describe("moduleReport — member visibility (#258) + compact outline (#259)", () => {
 	it("routes private/protected members of an exported class to internal with a visibility tag (#258)", async () => {
 		const env = makeEnv();
