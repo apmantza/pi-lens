@@ -146,10 +146,13 @@ jobs:
               echo "$(npm prefix -g)/bin" >> "$GITHUB_PATH"
               echo "NPMCMD=npm" >> "$GITHUB_ENV" ;;
             pnpm-global)
-              # pnpm/action-setup already exports PNPM_HOME (a valid global bin
-              # dir) and puts it on PATH; use it rather than forcing our own.
+              # pnpm refuses `add -g` unless the global bin dir is ON PATH *now*
+              # (GITHUB_PATH only affects later steps), so export it here too.
+              export PNPM_HOME="$HOME/.pnpm-global"; mkdir -p "$PNPM_HOME"
+              export PATH="$PNPM_HOME:$PATH"
+              pnpm config set global-bin-dir "$PNPM_HOME"
               pnpm add -g "$PKG" || echo "::notice::pnpm add -g exit $? (blocked scripts?)"
-              echo "${PNPM_HOME:?PNPM_HOME unset}" >> "$GITHUB_PATH"
+              echo "$PNPM_HOME" >> "$GITHUB_PATH"
               echo "NPMCMD=pnpm" >> "$GITHUB_ENV" ;;
             bun-global)
               bun add -g "$PKG" || echo "::notice::bun blocked scripts (expected)"
