@@ -1,0 +1,99 @@
+name: install-smoke
+
+# Cross-platform / cross-package-manager install smoke for the extension.
+#
+# Reproduces the conditions behind #285 (pnpm symlink store) and #335 (nested
+# npm) on real Linux + macOS runners, across npm / pnpm / bun. It packs the
+# CURRENT repo (not the published npm version), installs it the way a user
+# would under each package manager, then runs scripts/install-selftest.mjs
+# UNDER BUN — because pi's runtime is a `bun build --compile` binary, so bun's
+# resolver is what actually decides whether pi-lens loads. The selftest needs
+# no model or credentials: it force-imports the documented failure-point
+# modules (file-utils -> minimatch, complexity-client -> typescript, bootstrap)
+# and resolves the bare deps directly.
+#
+# Resolution failures are hard failures (the #285/#335 class). The build-script
+# assets (ast-grep CLI binary, tree-sitter grammars) that pnpm/bun skip by
+# default are reported as warnings via --allow-soft, so this job tracks that
+# gap without flaking the matrix red on a known, separate issue.
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # nightly 06:00 UTC
+  workflow_dispatch: {}
+  push:
+    branches: [master]
+    paths:
+      - "package.json"
+      - "package-lock.json"
+      - "scripts/install-selftest.mjs"
+      - ".github/workflows/install-smoke.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: ${{ matrix.os }} · ${{ matrix.pm }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        pm: [npm, pnpm, bun]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup pnpm
+        if: matrix.pm == 'pnpm'
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build + pack the current repo
+        shell: bash
+        run: |
+          set -euxo pipefail
+          npm ci
+          # prepare script builds dist; pack emits a tarball of the real files[] set
+          TARBALL="$(npm pack --silent)"
+          echo "TARBALL=$PWD/$TARBALL" >> "$GITHUB_ENV"
+
+      - name: Install via ${{ matrix.pm }} into a clean project
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/proj" && cd "$RUNNER_TEMP/proj"
+          npm init -y >/dev/null
+          # pnpm/bun exit non-zero when they BLOCK lifecycle scripts (the very
+          # build-scripts gap we measure); that's expected, so don't let it fail
+          # the step — the selftest below is the real gate.
+          case "${{ matrix.pm }}" in
+            npm)  npm  install "$TARBALL" ;;
+            pnpm) pnpm add     "$TARBALL" || echo "::notice::pnpm exit $? (blocked build scripts — expected)" ;;
+            bun)  bun  add     "$TARBALL" || echo "::notice::bun exit $? (blocked build scripts — expected)" ;;
+          esac
+          # Record the installed layout for debugging (hoisted vs symlink store)
+          echo "--- node_modules/pi-lens ---"
+          ls -la node_modules/pi-lens >/dev/null 2>&1 && \
+            { readlink node_modules/pi-lens || echo "(real dir)"; } || \
+            find . -maxdepth 4 -name pi-lens -type d | head
+
+      - name: Selftest under bun (pi's runtime resolver)
+        shell: bash
+        run: |
+          set -uxo pipefail
+          cd "$RUNNER_TEMP/proj"
+          SELFTEST="$(node -e 'console.log(require.resolve("pi-lens/scripts/install-selftest.mjs"))')"
+          echo "running: bun $SELFTEST"
+          bun "$SELFTEST" --allow-soft
