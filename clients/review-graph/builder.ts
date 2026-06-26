@@ -3,14 +3,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { FactStore } from "../dispatch/fact-store.js";
 import { fileContentProvider } from "../dispatch/facts/file-content.js";
-import {
-	type FunctionSummary,
-	functionFactProvider,
-} from "../dispatch/facts/function-facts.js";
-import {
-	type ImportEntry,
-	importFactProvider,
-} from "../dispatch/facts/import-facts.js";
+import type { FunctionSummary } from "../dispatch/facts/function-facts.js";
+import type { ImportEntry } from "../dispatch/facts/import-facts.js";
 import type { DispatchContext } from "../dispatch/types.js";
 import { featureHintMetadata } from "../feature-hints.js";
 import { detectFileKind, KIND_EXTENSIONS } from "../file-kinds.js";
@@ -769,8 +763,25 @@ async function ensureTsFacts(
 ): Promise<void> {
 	const ctx = makeCtx(filePath, cwd, facts);
 	await fileContentProvider.run(ctx, facts);
-	importFactProvider.run(ctx, facts);
-	functionFactProvider.run(ctx, facts);
+	// import/function facts are TypeScript-compiler-backed; load them lazily so
+	// `typescript` stays out of the eager entry graph (#285/#335). If it can't be
+	// resolved, the review graph builds without TS structural facts rather than
+	// failing — the dispatch path emits the full diagnostic fingerprint.
+	try {
+		const [{ importFactProvider }, { functionFactProvider }] =
+			await Promise.all([
+				import("../dispatch/facts/import-facts.js"),
+				import("../dispatch/facts/function-facts.js"),
+			]);
+		importFactProvider.run(ctx, facts);
+		functionFactProvider.run(ctx, facts);
+	} catch (err) {
+		console.error(
+			`[pi-lens] review-graph TypeScript facts disabled (degraded mode): ${
+				(err as Error)?.message ?? String(err)
+			}`,
+		);
+	}
 }
 
 function addJsTsFile(

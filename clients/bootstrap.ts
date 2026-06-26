@@ -213,8 +213,3 @@ export function loadBootstrapClients(): Promise<BootstrapClients> {
 
 	return bootstrapPromise;
 }
-
-/** Test-only: drop the memoized bundle so a fresh load can be exercised. */
-export function _resetBootstrapForTests(): void {
-	bootstrapPromise = null;
-}

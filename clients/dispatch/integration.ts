@@ -86,21 +86,11 @@ import { convertLspDiagnostics } from "./utils/lsp-diagnostics.js";
 
 registerProvider(fileContentProvider);
 
-import { tryCatchFactProvider } from "./facts/try-catch-facts.js";
-
-registerProvider(tryCatchFactProvider);
-
-import { functionFactProvider } from "./facts/function-facts.js";
-
-registerProvider(functionFactProvider);
-
-import { commentFactProvider } from "./facts/comment-facts.js";
-
-registerProvider(commentFactProvider);
-
-import { importFactProvider } from "./facts/import-facts.js";
-
-registerProvider(importFactProvider);
+// The TypeScript-compiler-backed fact providers (try-catch / function / comment
+// / import) are registered lazily by ensureTypeScriptDispatchUnits() in
+// fact-runner, the first time a dispatch runs — keeping `typescript` out of the
+// eager entry graph so an unresolved-dep failure degrades instead of crashing
+// the extension at load (#285/#335).
 
 // Register fact rules
 import { registerRule } from "./fact-rule-runner.js";
@@ -113,20 +103,6 @@ import { highFanOutRule } from "./rules/high-fan-out.js";
 import { missingErrorPropagationRule } from "./rules/missing-error-propagation.js";
 import { passThroughWrappersRule } from "./rules/pass-through-wrappers.js";
 import { placeholderCommentsRule } from "./rules/placeholder-comments.js";
-import {
-	highImportCouplingRule,
-	noBooleanParamsRule,
-	noComplexConditionalsRule,
-} from "./rules/quality-rules.js";
-import {
-	commentedCredentialsRule,
-	commentedOutCodeRule,
-	corsWildcardRule,
-	duplicateStringLiteralRule,
-	dynamicRegexpRule,
-	functionInLoopRule,
-	maxSwitchCasesRule,
-} from "./rules/sonar-rules.js";
 import { unsafeBoundaryRule } from "./rules/unsafe-boundary.js";
 import {
 	loadPiLensProjectConfig,
@@ -143,16 +119,8 @@ registerRule(unsafeBoundaryRule);
 registerRule(asyncUnnecessaryWrapperRule);
 registerRule(missingErrorPropagationRule);
 registerRule(highFanOutRule);
-registerRule(commentedOutCodeRule);
-registerRule(duplicateStringLiteralRule);
-registerRule(functionInLoopRule);
-registerRule(corsWildcardRule);
-registerRule(dynamicRegexpRule);
-registerRule(maxSwitchCasesRule);
-registerRule(commentedCredentialsRule);
-registerRule(noBooleanParamsRule);
-registerRule(highImportCouplingRule);
-registerRule(noComplexConditionalsRule);
+// quality-rules + sonar-rules (TypeScript-compiler-backed) are registered lazily
+// by ensureTypeScriptDispatchUnits() in fact-runner — see the note above.
 
 /**
  * Load a project's `.pi-lens.json` config.
