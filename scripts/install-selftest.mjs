@@ -70,12 +70,10 @@ await probeImport("clients/complexity-client.js (→ typescript)", "dist/clients
 await probeImport("clients/bootstrap.js (→ all analyzers)", "dist/clients/bootstrap.js");
 
 // --- 2. Direct bare-specifier resolution -----------------------------------
-// typebox + @earendil-works/pi-tui are intentionally NOT probed: they are
-// pi-bundled CORE packages (peerDependencies), resolved by the host at runtime —
-// not pi-lens's own deps, so a standalone install legitimately lacks them.
 for (const spec of [
 	"typescript",
 	"minimatch",
+	"typebox",
 	"js-yaml",
 	"vscode-jsonrpc",
 	"web-tree-sitter",

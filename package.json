@@ -76,24 +76,18 @@
 	"dependencies": {
 		"@ast-grep/cli": "^0.44.0",
 		"@ast-grep/napi": "^0.44.0",
+		"@earendil-works/pi-tui": "^0.80.2",
 		"js-yaml": "^4.1.1",
 		"minimatch": "^10.2.5",
+		"typebox": "^1.0.0",
 		"typescript": "^6.0.3",
 		"vscode-jsonrpc": "^9.0.0"
 	},
 	"peerDependencies": {
-		"@earendil-works/pi-coding-agent": "*",
-		"@earendil-works/pi-tui": "*",
-		"typebox": "*"
+		"@earendil-works/pi-coding-agent": "*"
 	},
 	"peerDependenciesMeta": {
 		"@earendil-works/pi-coding-agent": {
-			"optional": true
-		},
-		"@earendil-works/pi-tui": {
-			"optional": true
-		},
-		"typebox": {
 			"optional": true
 		}
 	},
@@ -104,11 +98,9 @@
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.10",
 		"@earendil-works/pi-coding-agent": "^0.80.2",
-		"@earendil-works/pi-tui": "^0.80.2",
 		"@types/js-yaml": "^4.0.9",
 		"@types/node": "^26.0.0",
 		"@vitest/coverage-v8": "^4.1.5",
-		"typebox": "^1.0.0",
 		"typescript-language-server": "^5.1.3",
 		"vitest": "^4.1.1"
 	},

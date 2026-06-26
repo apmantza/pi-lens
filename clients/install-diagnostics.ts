@@ -19,12 +19,10 @@ const require = createRequire(import.meta.url);
 const ISSUES_URL = "https://github.com/apmantza/pi-lens/issues";
 
 /** Runtime third-party deps whose resolution is the documented failure surface. */
-// typebox + @earendil-works/pi-tui are pi-bundled core packages
-// (peerDependencies, host-provided at runtime) — not pi-lens's own deps, so
-// they're not part of pi-lens's resolution surface and aren't probed here.
 const CRITICAL_DEPS = [
 	"typescript",
 	"minimatch",
+	"typebox",
 	"js-yaml",
 	"vscode-jsonrpc",
 	"web-tree-sitter",
