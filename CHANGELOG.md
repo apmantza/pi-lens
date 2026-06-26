@@ -15,6 +15,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Fixed
 
+- **LSP idle reset no longer touches stale pi contexts after session replacement (#338)** — the detached 240s idle timer now captures any footer repaint callback while the `turn_end` event context is still active, skips resets from superseded session generations, and swallows timer-only cleanup errors so `ctx.newSession()` / `ctx.fork()` / `ctx.switchSession()` / `ctx.reload()` cannot crash later when the old `ctx.ui` getter becomes stale.
+
 ## [3.8.61] - 2026-06-25
 
 ### Added

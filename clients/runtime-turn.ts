@@ -33,10 +33,7 @@ import {
 	secretLocationKey,
 } from "./secret-findings.js";
 import type { KnipClient, KnipIssue, KnipResult } from "./knip-client.js";
-import type {
-	DeadCodeClient,
-	DeadCodeResult,
-} from "./dead-code-client.js";
+import type { DeadCodeClient, DeadCodeResult } from "./dead-code-client.js";
 import { formatDeadCodeAdvisory } from "./dead-code-client.js";
 import {
 	PROJECT_DIAGNOSTICS_CACHE_VERSION,
@@ -67,14 +64,54 @@ interface TurnEndDeps {
 // LSP idle reset scheduling — prevents thrashing by delaying shutdown
 let lspIdleResetTimeout: ReturnType<typeof setTimeout> | null = null;
 
-function scheduleLSPIdleReset(resetFn: () => void, delayMs: number): void {
+function emitIdleResetReporterWarning(reportErr: unknown): void {
+	try {
+		process.emitWarning(
+			`pi-lens LSP idle reset error reporter failed: ${reportErr}`,
+			{ code: "PI_LENS_LSP_IDLE_RESET_REPORTER_FAILED" },
+		);
+	} catch {
+		// Preserve the detached-timer invariant: this path must never crash.
+		void reportErr;
+	}
+}
+
+function reportIdleResetError(
+	onError: ((err: unknown) => void) | undefined,
+	err: unknown,
+): void {
+	try {
+		onError?.(err);
+	} catch (reportErr) {
+		emitIdleResetReporterWarning(reportErr);
+	}
+}
+
+function scheduleLSPIdleReset(
+	resetFn: () => void,
+	delayMs: number,
+	options: {
+		isCurrentSession?: () => boolean;
+		onError?: (err: unknown) => void;
+	} = {},
+): void {
 	// Clear any pending reset to avoid multiple timers
 	if (lspIdleResetTimeout) {
 		clearTimeout(lspIdleResetTimeout);
 	}
 	lspIdleResetTimeout = setTimeout(() => {
-		resetFn();
 		lspIdleResetTimeout = null;
+		try {
+			if (options.isCurrentSession && !options.isCurrentSession()) {
+				return;
+			}
+			resetFn();
+		} catch (err) {
+			// Detached timers run outside a pi event boundary. They must never crash
+			// the extension process (for example if a host UI object was invalidated
+			// by session replacement before the timer fired).
+			reportIdleResetError(options.onError, err);
+		}
 	}, delayMs);
 	// unref so this timer does not prevent the process from exiting naturally
 	// (critical for subagent / --mode json -p usage where the process should
@@ -141,7 +178,11 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	if (files.length === 0) {
 		dbg("turn_end: no modified files, scheduling LSP idle reset (240s)");
 		if (!getFlag("no-lsp")) {
-			scheduleLSPIdleReset(resetLSPService, 240_000);
+			const sessionGeneration = runtime.sessionGeneration;
+			scheduleLSPIdleReset(resetLSPService, 240_000, {
+				isCurrentSession: () => runtime.isCurrentSession(sessionGeneration),
+				onError: (err) => dbg(`lsp idle reset failed: ${err}`),
+			});
 		}
 		resetFormatService();
 		return;
@@ -149,8 +190,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 
 	// Cancel any pending idle reset since we're actively working
 	if (lspIdleResetTimeout) {
-		clearTimeout(lspIdleResetTimeout);
-		lspIdleResetTimeout = null;
+		cancelLSPIdleReset();
 		dbg("turn_end: cancelled pending LSP idle reset (active editing)");
 	}
 
@@ -499,8 +539,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		}
 		if (advisory.length) {
 			const shown = advisory.slice(0, 5);
-			let report =
-				"🛡️ Dependency CVEs (trivy) — upgrade where possible:\n";
+			let report = "🛡️ Dependency CVEs (trivy) — upgrade where possible:\n";
 			for (const f of shown) report += fmt(f);
 			if (advisory.length > shown.length) {
 				report += `  … and ${advisory.length - shown.length} more\n`;

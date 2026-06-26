@@ -10,7 +10,10 @@ import {
 import { loadProjectDiagnosticsDeltaReport } from "../../clients/project-diagnostics/cache.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { SESSION_START_GUIDANCE } from "../../clients/runtime-session.js";
-import { handleTurnEnd } from "../../clients/runtime-turn.js";
+import {
+	cancelLSPIdleReset,
+	handleTurnEnd,
+} from "../../clients/runtime-turn.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 const EMPTY_KNIP_RESULT = {
@@ -46,6 +49,110 @@ function makeTurnEndDeps(
 		...overrides,
 	} as any;
 }
+
+// ── LSP idle reset ─────────────────────────────────────────────────────────────
+
+describe("LSP idle reset", () => {
+	it("skips a pending idle reset after the session generation changes", async () => {
+		const env = setupTestEnvironment("pi-lens-idle-generation-");
+		const runtime = new RuntimeCoordinator();
+		const cacheManager = new CacheManager(false);
+		const resetLSPService = vi.fn();
+
+		vi.useFakeTimers();
+		try {
+			await handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, {
+					ctxCwd: env.tmpDir,
+					resetLSPService,
+				}),
+			);
+
+			runtime.resetForSession();
+			await vi.advanceTimersByTimeAsync(240_000);
+
+			expect(resetLSPService).not.toHaveBeenCalled();
+		} finally {
+			cancelLSPIdleReset();
+			vi.useRealTimers();
+			env.cleanup();
+		}
+	});
+
+	it("logs and swallows errors from a detached idle reset", async () => {
+		const env = setupTestEnvironment("pi-lens-idle-error-");
+		const runtime = new RuntimeCoordinator();
+		const cacheManager = new CacheManager(false);
+		const dbg = vi.fn();
+		const resetError = new Error("stale ctx");
+		const resetLSPService = vi.fn(() => {
+			throw resetError;
+		});
+
+		vi.useFakeTimers();
+		try {
+			await handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, {
+					ctxCwd: env.tmpDir,
+					dbg,
+					resetLSPService,
+				}),
+			);
+
+			await vi.advanceTimersByTimeAsync(240_000);
+
+			expect(resetLSPService).toHaveBeenCalledTimes(1);
+			expect(dbg).toHaveBeenCalledWith(`lsp idle reset failed: ${resetError}`);
+		} finally {
+			cancelLSPIdleReset();
+			vi.useRealTimers();
+			env.cleanup();
+		}
+	});
+
+	it("falls back to process warnings when idle reset logging fails", async () => {
+		const env = setupTestEnvironment("pi-lens-idle-error-reporter-");
+		const runtime = new RuntimeCoordinator();
+		const cacheManager = new CacheManager(false);
+		const resetError = new Error("stale ctx");
+		const logError = new Error("logger unavailable");
+		const dbg = vi.fn((msg: string) => {
+			if (msg.startsWith("lsp idle reset failed")) {
+				throw logError;
+			}
+		});
+		const resetLSPService = vi.fn(() => {
+			throw resetError;
+		});
+		const emitWarning = vi
+			.spyOn(process, "emitWarning")
+			.mockImplementation(() => undefined as never);
+
+		vi.useFakeTimers();
+		try {
+			await handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, {
+					ctxCwd: env.tmpDir,
+					dbg,
+					resetLSPService,
+				}),
+			);
+
+			await vi.advanceTimersByTimeAsync(240_000);
+
+			expect(resetLSPService).toHaveBeenCalledTimes(1);
+			expect(emitWarning).toHaveBeenCalledWith(
+				`pi-lens LSP idle reset error reporter failed: ${logError}`,
+				{ code: "PI_LENS_LSP_IDLE_RESET_REPORTER_FAILED" },
+			);
+		} finally {
+			cancelLSPIdleReset();
+			vi.useRealTimers();
+			emitWarning.mockRestore();
+			env.cleanup();
+		}
+	});
+});
 
 // ── Dedup suppression ──────────────────────────────────────────────────────────
 

@@ -409,14 +409,16 @@ export default function (pi: ExtensionAPI) {
 	const astGrepClient = new AstGrepClient();
 	const cacheManager = new CacheManager();
 
+	type LspStatusTheme = {
+		fg: (
+			color: "accent" | "success" | "error" | "warning" | "dim",
+			text: string,
+		) => string;
+	};
+
 	function updateLspStatus(
 		setStatus: (id: string, text: string | undefined) => void,
-		theme: {
-			fg: (
-				color: "accent" | "success" | "error" | "warning" | "dim",
-				text: string,
-			) => string;
-		},
+		theme: LspStatusTheme,
 	) {
 		try {
 			// Active and Failed coexist (#170): show the working servers in green
@@ -440,14 +442,43 @@ export default function (pi: ExtensionAPI) {
 			// red, only when there is nothing else to show.
 			setStatus(
 				"pi-lens-lsp",
-				parts.length > 0
-					? parts.join(" · ")
-					: theme.fg("dim", "LSP Inactive"),
+				parts.length > 0 ? parts.join(" · ") : theme.fg("dim", "LSP Inactive"),
 			);
-		} catch {
+		} catch (err) {
 			// Theme may not be fully initialized during early session startup.
 			// Skip the status update rather than crashing the event handler.
+			dbg(`lsp status update skipped: ${err}`);
 		}
+	}
+
+	function captureLspStatusRepaint(ctx: unknown): (() => void) | undefined {
+		let ui:
+			| {
+					setStatus?: (id: string, text: string | undefined) => void;
+					theme?: LspStatusTheme;
+			  }
+			| undefined;
+		try {
+			ui = (
+				ctx as {
+					ui?: {
+						setStatus?: (id: string, text: string | undefined) => void;
+						theme?: LspStatusTheme;
+					};
+				}
+			).ui;
+		} catch (err) {
+			// Accessing ctx.ui is guarded by pi and can throw after session
+			// replacement. Capture during an active event when possible; detached
+			// timers must not touch the ctx getter later (#338).
+			dbg(`lsp status repaint capture skipped: ${err}`);
+			return undefined;
+		}
+		if (!ui || typeof ui.setStatus !== "function" || !ui.theme) {
+			return undefined;
+		}
+		const { setStatus, theme } = ui;
+		return () => updateLspStatus(setStatus, theme);
 	}
 
 	// --- Flags ---
@@ -1195,8 +1226,7 @@ export default function (pi: ExtensionAPI) {
 							persisted.widget,
 							persisted.savedAt,
 						);
-						const dropped =
-							persisted.widget.files.length - fresh.files.length;
+						const dropped = persisted.widget.files.length - fresh.files.length;
 						importWidgetState(fresh);
 						dbg(
 							`session_start: ${reasonLabel} ${stableSessionId} — rehydrated ${fresh.files.length} file(s)` +
@@ -1208,9 +1238,7 @@ export default function (pi: ExtensionAPI) {
 						);
 					}
 				} else {
-					dbg(
-						`session_start: ${reasonLabel} — no stable session id (clean)`,
-					);
+					dbg(`session_start: ${reasonLabel} — no stable session id (clean)`);
 				}
 			}
 
@@ -2108,6 +2136,7 @@ export default function (pi: ExtensionAPI) {
 		// dispatch) kills in-flight children instead of waiting out their timeout.
 		setAmbientAbortSignal((ctx as { signal?: AbortSignal })?.signal);
 		try {
+			const repaintLspStatus = captureLspStatusRepaint(ctx);
 			// Persist a new worst event-loop block to latency.log, attributed to
 			// this turn, so freezes are queryable across sessions (#192).
 			const loopMaxMs = getEventLoopStats()?.maxMs ?? 0;
@@ -2143,13 +2172,18 @@ export default function (pi: ExtensionAPI) {
 				// "LSP Active". Wrap the reset to refresh the status right after it
 				// fires; resetLSPService nulls the singleton synchronously, so the
 				// repaint sees zero alive servers and renders "LSP Inactive" (#281).
+				// Capture the repaint callback during the active event — detached timers
+				// must not touch ctx.ui after session replacement/reload (#338).
 				resetLSPService: () => {
-					resetLSPService();
-					ctx.ui && updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
+					try {
+						resetLSPService();
+					} finally {
+						repaintLspStatus?.();
+					}
 				},
 				resetFormatService,
 			});
-			ctx.ui && updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
+			repaintLspStatus?.();
 
 			// #190: persist this session's settled widget diagnostics so a later
 			// resume (`pi --session <id>`) can rehydrate them. Only when pi gave us
