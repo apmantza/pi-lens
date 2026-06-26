@@ -65,14 +65,13 @@ function probeResolve(spec) {
 
 // --- 1. The documented failure-point modules (eager bare imports) ----------
 await probeImport("dist/index.js (entry)", "dist/index.js");
-await probeImport("clients/file-utils.js (→ minimatch)", "dist/clients/file-utils.js");
+await probeImport("clients/file-utils.js (core util)", "dist/clients/file-utils.js");
 await probeImport("clients/complexity-client.js (→ typescript)", "dist/clients/complexity-client.js");
 await probeImport("clients/bootstrap.js (→ all analyzers)", "dist/clients/bootstrap.js");
 
 // --- 2. Direct bare-specifier resolution -----------------------------------
 for (const spec of [
 	"typescript",
-	"minimatch",
 	"typebox",
 	"js-yaml",
 	"vscode-jsonrpc",
