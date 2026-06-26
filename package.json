@@ -67,6 +67,7 @@
 		"scripts/download-grammars.js",
 		"scripts/analyze-pi-lens-logs.mjs",
 		"scripts/install-selftest.mjs",
+		"scripts/rpc-load-check.mjs",
 		"README.md",
 		"CHANGELOG.md",
 		"banner.svg",
