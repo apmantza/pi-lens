@@ -10,7 +10,7 @@
  * SN-007  no-commented-credentials   — password/token/secret in comments (TS/JS/Python/Go/Ruby)
  */
 
-import * as ts from "typescript";
+import { ts } from "../../deps/typescript.js";
 import type { FactRule } from "../fact-provider-types.js";
 import type { Diagnostic } from "../types.js";
 

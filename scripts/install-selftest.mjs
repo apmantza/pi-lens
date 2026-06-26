@@ -25,6 +25,7 @@
  * to warnings, so a pure *resolution* regression is still a hard failure.
  */
 
+import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import * as path from "node:path";
@@ -81,19 +82,49 @@ for (const spec of [
 	probeResolve(spec);
 }
 
-// --- 3. Build-script-provided assets (pnpm/bun skip postinstall) ------------
-// ast-grep CLI binary
+// --- 3. Spawned-binary tools (the universal net) ----------------------------
+// For every tool that ships its binary in a per-platform npm package
+// (platformPackage: ast-grep, biome, …), if it's actually a dependency of this
+// install, resolve the native binary and RUN it. Reuses the installer's own
+// resolver + TOOLS registry, so any future platform-CLI tool is covered with no
+// change here. This is the exact class that pnpm/bun break (skipped postinstall /
+// symlink store) — the binary exists but the launcher can't reach it.
 try {
-	const cliPkg = require.resolve("@ast-grep/cli/package.json");
-	const binDir = path.join(path.dirname(cliPkg));
-	const hasBin =
-		fs.existsSync(path.join(binDir, "ast-grep")) ||
-		fs.existsSync(path.join(binDir, "ast-grep.exe")) ||
-		fs.existsSync(path.join(binDir, "sg")) ||
-		fs.existsSync(path.join(binDir, "sg.exe"));
-	record("@ast-grep/cli binary", "asset", hasBin, hasBin ? "" : "binary missing (postinstall skipped?)");
+	const installerUrl = `file://${path
+		.resolve(pkgRoot, "dist/clients/installer/index.js")
+		.replace(/\\/g, "/")}`;
+	const { TOOLS, resolvePlatformPackageBinary } = await import(installerUrl);
+	for (const tool of TOOLS.filter((t) => t.platformPackage)) {
+		const label = `tool ${tool.id} binary`;
+		// Only probe tools whose main package is installed in THIS layout.
+		try {
+			require.resolve(`${tool.packageName}/package.json`);
+		} catch {
+			record(label, "tool", true, "not a dep of this install — skipped");
+			continue;
+		}
+		const bin = resolvePlatformPackageBinary(tool);
+		if (!bin) {
+			record(
+				label,
+				"tool",
+				false,
+				`platform binary not resolved (${process.platform}-${process.arch})`,
+			);
+			continue;
+		}
+		try {
+			execFileSync(bin, tool.checkArgs ?? ["--version"], {
+				stdio: "ignore",
+				timeout: 15000,
+			});
+			record(label, "tool", true, bin);
+		} catch (err) {
+			record(label, "tool", false, `${bin} failed to run: ${err?.message || err}`);
+		}
+	}
 } catch (err) {
-	record("@ast-grep/cli binary", "asset", false, String(err?.message || err));
+	record("spawned-tool probe", "tool", false, `installer load failed: ${err?.message || err}`);
 }
 
 // tree-sitter grammars — download-grammars.js postinstall writes them into
@@ -127,7 +158,7 @@ const pad = Math.max(...results.map((r) => r.name.length));
 let hardFail = 0;
 let softFail = 0;
 for (const r of results) {
-	const soft = r.kind === "asset" && allowSoft;
+	const soft = (r.kind === "asset" || r.kind === "tool") && allowSoft;
 	const status = r.ok ? "PASS" : soft ? "WARN" : "FAIL";
 	if (!r.ok) soft ? softFail++ : hardFail++;
 	console.log(

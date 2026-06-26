@@ -1,4 +1,4 @@
-import * as ts from "typescript";
+import { ts } from "../../deps/typescript.js";
 import type { FactProvider } from "../fact-provider-types.js";
 
 export interface TryCatchSummary {

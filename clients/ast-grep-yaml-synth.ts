@@ -14,7 +14,7 @@
  * evaluates all of them as an implicit AND.
  */
 
-import { dump } from "js-yaml";
+import { dump } from "./deps/js-yaml.js";
 
 export interface StructuralIntent {
 	pattern: string;

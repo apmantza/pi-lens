@@ -10,7 +10,7 @@
  */
 
 import * as path from "node:path";
-import { Type } from "typebox";
+import { Type } from "../clients/deps/typebox.js";
 import { getProjectIgnoreMatcher } from "../clients/file-utils.js";
 import { getLSPService } from "../clients/lsp/index.js";
 import type { LSPDiagnostic } from "../clients/lsp/client.js";

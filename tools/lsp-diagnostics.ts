@@ -7,7 +7,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Type } from "typebox";
+import { Type } from "../clients/deps/typebox.js";
 import {
 	getProjectIgnoreMatcher,
 	isExcludedDirName,

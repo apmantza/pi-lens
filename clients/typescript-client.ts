@@ -7,7 +7,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as ts from "typescript";
+import { ts } from "./deps/typescript.js";
 import type {
 	CompletionItem,
 	Diagnostic,
@@ -309,7 +309,7 @@ export class TypeScriptClient {
 	): {
 		normalized: string;
 		position: number;
-		ls: import("typescript").LanguageService;
+		ls: ts.LanguageService;
 	} | null {
 		const normalized = this.normalizePath(filePath);
 		this.ensureFile(filePath);
@@ -425,7 +425,7 @@ export class TypeScriptClient {
 	 */
 	private resolveTree(
 		filePath: string,
-	): { normalized: string; tree: import("typescript").NavigationTree } | null {
+	): { normalized: string; tree: ts.NavigationTree } | null {
 		const normalized = this.normalizePath(filePath);
 		this.ensureFile(filePath);
 		if (!this.languageService) return null;

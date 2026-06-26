@@ -11,7 +11,7 @@
  */
 
 import * as path from "node:path";
-import { Type } from "typebox";
+import { Type } from "../clients/deps/typebox.js";
 import { moduleReport, readSymbol } from "../clients/module-report.js";
 
 function resolveFile(filePath: string, cwd: string | undefined): string {

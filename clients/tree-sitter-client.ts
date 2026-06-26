@@ -18,7 +18,9 @@
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
+import { loadWebTreeSitter } from "./deps/web-tree-sitter.js";
 import { getProjectIgnoreMatcher, isExcludedDirName } from "./file-utils.js";
+import { downloadGrammar, LANGUAGE_TO_GRAMMAR } from "./grammar-source.js";
 import { resolvePackagePath } from "./package-root.js";
 
 const _require = createRequire(import.meta.url);
@@ -61,37 +63,6 @@ interface TreeSitterParserInstance {
 	parse: (content: string) => TreeSitterTree;
 }
 
-// --- WASM Grammar Mapping ---
-
-const LANGUAGE_TO_GRAMMAR: Record<string, string> = {
-	typescript: "tree-sitter-typescript.wasm",
-	tsx: "tree-sitter-tsx.wasm",
-	javascript: "tree-sitter-javascript.wasm",
-	python: "tree-sitter-python.wasm",
-	rust: "tree-sitter-rust.wasm",
-	go: "tree-sitter-go.wasm",
-	java: "tree-sitter-java.wasm",
-	kotlin: "tree-sitter-kotlin.wasm",
-	dart: "tree-sitter-dart.wasm",
-	c: "tree-sitter-c.wasm",
-	cpp: "tree-sitter-cpp.wasm",
-	elixir: "tree-sitter-elixir.wasm",
-	ruby: "tree-sitter-ruby.wasm",
-	bash: "tree-sitter-bash.wasm",
-	csharp: "tree-sitter-c_sharp.wasm",
-	css: "tree-sitter-css.wasm",
-	html: "tree-sitter-html.wasm",
-	json: "tree-sitter-json.wasm",
-	lua: "tree-sitter-lua.wasm",
-	ocaml: "tree-sitter-ocaml.wasm",
-	php: "tree-sitter-php.wasm",
-	swift: "tree-sitter-swift.wasm",
-	toml: "tree-sitter-toml.wasm",
-	vue: "tree-sitter-vue.wasm",
-	yaml: "tree-sitter-yaml.wasm",
-	zig: "tree-sitter-zig.wasm",
-};
-
 // --- Types ---
 
 export interface StructuralMatch {
@@ -120,6 +91,8 @@ export class TreeSitterClient {
 	private treeCache: TreeCache;
 	private navigator = new TreeSitterNavigator();
 	private grammarsDir: string;
+	/** In-flight/settled lazy grammar fetches, keyed by wasm filename. */
+	private grammarEnsurePromises = new Map<string, Promise<boolean>>();
 	// biome-ignore lint/suspicious/noExplicitAny: Optional dependency loaded dynamically
 	private ParserClass: any = null;
 	// biome-ignore lint/suspicious/noExplicitAny: Language loader from module
@@ -218,6 +191,67 @@ export class TreeSitterClient {
 		return "";
 	}
 
+	/**
+	 * The directory where grammars SHOULD live (web-tree-sitter/grammars),
+	 * whether or not it exists yet — so we can create + populate it when the
+	 * postinstall download was skipped (pnpm/bun). Returns undefined if
+	 * web-tree-sitter itself can't be located.
+	 */
+	private grammarsWriteDir(): string | undefined {
+		try {
+			let dir = path.dirname(_require.resolve("web-tree-sitter"));
+			while (
+				path.basename(dir) !== "web-tree-sitter" &&
+				dir !== path.dirname(dir)
+			) {
+				dir = path.dirname(dir);
+			}
+			if (path.basename(dir) === "web-tree-sitter") {
+				return path.join(dir, "grammars");
+			}
+		} catch {
+			/* fall through */
+		}
+		return undefined;
+	}
+
+	/**
+	 * Ensure a single grammar wasm is on disk, fetching it at runtime if the
+	 * postinstall didn't (pnpm/bun skip lifecycle scripts — the documented
+	 * build-scripts gap). Idempotent and de-duplicated per file. Best-effort:
+	 * a failed fetch (e.g. offline) degrades to "grammar unavailable", never
+	 * throws.
+	 */
+	private async ensureGrammar(grammarFile: string): Promise<boolean> {
+		if (this.grammarsDir && fs.existsSync(path.join(this.grammarsDir, grammarFile))) {
+			return true;
+		}
+		const inflight = this.grammarEnsurePromises.get(grammarFile);
+		if (inflight) return inflight;
+
+		const task = (async (): Promise<boolean> => {
+			const dir =
+				this.grammarsDir && fs.existsSync(this.grammarsDir)
+					? this.grammarsDir
+					: this.grammarsWriteDir();
+			if (!dir) return false;
+			// Reuse the shared single-file downloader (same CDN/source as the
+			// postinstall) — see clients/grammar-source.ts.
+			const ok = await downloadGrammar(dir, grammarFile);
+			if (ok) {
+				if (!this.grammarsDir) this.grammarsDir = dir;
+				console.error(
+					`[pi-lens] fetched missing tree-sitter grammar ${grammarFile} at runtime (install scripts were skipped by the package manager)`,
+				);
+			} else {
+				this.dbg(`grammar fetch failed for ${grammarFile}`);
+			}
+			return ok;
+		})();
+		this.grammarEnsurePromises.set(grammarFile, task);
+		return task;
+	}
+
 	/** Initialize tree-sitter WASM runtime */
 	async init(): Promise<boolean> {
 		if (this.initialized) return true;
@@ -225,9 +259,10 @@ export class TreeSitterClient {
 
 		this.initPromise = (async () => {
 			try {
-				const mod = await import("web-tree-sitter");
-				// biome-ignore lint/suspicious/noExplicitAny: Dynamic import of optional dependency
-				const ParserClass = mod.Parser || mod.default || mod;
+				const mod = await loadWebTreeSitter();
+				// biome-ignore lint/suspicious/noExplicitAny: web-tree-sitter module shape varies (Parser direct / default-wrapped)
+				const anyMod = mod as any;
+				const ParserClass = anyMod.Parser || anyMod.default || anyMod;
 				if (!ParserClass || typeof ParserClass.init !== "function") {
 					this.dbg("Parser class not found or missing init method");
 					return false;
@@ -292,12 +327,21 @@ export class TreeSitterClient {
 			return null;
 		}
 
-		const grammarPath = path.join(this.grammarsDir, grammarFile);
+		let grammarPath = this.grammarsDir
+			? path.join(this.grammarsDir, grammarFile)
+			: "";
+		// Lazily fetch the grammar if the postinstall download was skipped
+		// (pnpm/bun). Only the language actually being parsed is fetched.
+		if (!grammarPath || !fs.existsSync(grammarPath)) {
+			if (await this.ensureGrammar(grammarFile)) {
+				grammarPath = path.join(this.grammarsDir, grammarFile);
+			}
+		}
 		this.dbg(
-			`Grammar path: ${grammarPath}, exists: ${fs.existsSync(grammarPath)}`,
+			`Grammar path: ${grammarPath}, exists: ${grammarPath && fs.existsSync(grammarPath)}`,
 		);
 
-		if (!fs.existsSync(grammarPath)) {
+		if (!grammarPath || !fs.existsSync(grammarPath)) {
 			this.dbg(`Grammar file not found: ${grammarPath}`);
 			return null;
 		}
@@ -729,7 +773,7 @@ export class TreeSitterClient {
 
 		try {
 			// biome-ignore lint/suspicious/noExplicitAny: Query constructor
-			const Query = (await import("web-tree-sitter")).Query;
+			const Query = (await loadWebTreeSitter()).Query;
 			// biome-ignore lint/suspicious/noExplicitAny: Language type compatibility
 			const query = new Query(language as any, queryStr);
 			this.dbg(`Query compiled with ${query.patternCount} patterns`);
@@ -772,7 +816,7 @@ export class TreeSitterClient {
 
 		try {
 			// biome-ignore lint/suspicious/noExplicitAny: Query constructor from web-tree-sitter
-			const Query = (await import("web-tree-sitter")).Query;
+			const Query = (await loadWebTreeSitter()).Query;
 			// biome-ignore lint/suspicious/noExplicitAny: Language type compatibility
 			const query = new Query(language as any, queryStr);
 			const result = { query, metavars, postFilter, postFilterParams };

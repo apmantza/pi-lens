@@ -5,7 +5,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { minimatch } from "minimatch";
+import { minimatch } from "./deps/minimatch.js";
 import {
 	getGlobalIgnorePatterns,
 	getPiLensGlobalConfigPath,

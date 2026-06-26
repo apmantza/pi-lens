@@ -38,64 +38,176 @@ export interface BootstrapClients {
 
 let bootstrapPromise: Promise<BootstrapClients> | null = null;
 
+/**
+ * A stand-in for an analysis client whose module failed to load (an unresolved
+ * runtime dependency under a package-manager layout the resolver can't traverse
+ * — #285/#335). Every method call no-ops to `undefined`, which every analyzer
+ * consumer already treats as "nothing to report", so a single failed analyzer
+ * degrades to silence instead of taking down the whole extension. This keeps the
+ * fail-soft in ONE seam (the bootstrap) so consumers never special-case it —
+ * the same single-seam principle as the clients/deps/* accessors.
+ */
+export function degradedClient<T extends object>(): T {
+	return new Proxy({} as T, {
+		get(_target, prop) {
+			// Not thenable (so `await stub` / Promise.resolve(stub) won't treat it
+			// as a promise), not iterable, no surprising coercion.
+			if (typeof prop === "symbol" || prop === "then") return undefined;
+			return () => undefined;
+		},
+	});
+}
+
+/**
+ * One or more client modules failed to load — almost always an unresolved
+ * runtime dependency under a package-manager layout the runtime's resolver can't
+ * traverse (#285/#335). Name each disabled analyzer, then emit ONE paste-able
+ * environment fingerprint so a reporter can tell us exactly what failed and
+ * where. Best-effort: never let the diagnostic itself mask the failure.
+ */
+async function logBootstrapFailures(
+	failures: { name: string; err: unknown }[],
+): Promise<void> {
+	for (const { name, err } of failures) {
+		console.error(
+			`[pi-lens] analyzer "${name}" disabled (degraded mode): ${
+				(err as Error)?.message ?? String(err)
+			}`,
+		);
+	}
+	try {
+		const { collectInstallDiagnostics, formatInstallDiagnostics } = await import(
+			"./install-diagnostics.js"
+		);
+		console.error(
+			formatInstallDiagnostics(collectInstallDiagnostics(), failures[0]?.err),
+		);
+	} catch {
+		// the per-analyzer lines above already named the failures
+	}
+}
+
 export function loadBootstrapClients(): Promise<BootstrapClients> {
 	bootstrapPromise ??= (async () => {
+		const failures: { name: string; err: unknown }[] = [];
+		// Load + construct one client in isolation; on failure record it and
+		// substitute a degraded no-op stub so the others still load — single-seam
+		// fail-soft, consumers never special-case it.
+		async function load<T extends object>(
+			name: string,
+			make: () => Promise<T>,
+		): Promise<T> {
+			try {
+				return await make();
+			} catch (err) {
+				failures.push({ name, err });
+				return degradedClient<T>();
+			}
+		}
+		// Lists degrade to empty (a stub Proxy isn't iterable), e.g. dead-code.
+		async function loadList<T>(
+			name: string,
+			make: () => Promise<T[]>,
+		): Promise<T[]> {
+			try {
+				return await make();
+			} catch (err) {
+				failures.push({ name, err });
+				return [];
+			}
+		}
+
 		const [
-			ruffMod,
-			biomeMod,
-			knipMod,
-			todoMod,
-			jscpdMod,
-			typeCoverageMod,
-			depCheckerMod,
-			testRunnerMod,
-			metricsMod,
-			complexityMod,
-			goMod,
-			govulncheckMod,
-			gitleaksMod,
-			trivyMod,
-			rustMod,
-			agentBehaviorMod,
-			deadCodeMod,
+			ruffClient,
+			biomeClient,
+			knipClient,
+			todoScanner,
+			jscpdClient,
+			typeCoverageClient,
+			depChecker,
+			testRunnerClient,
+			metricsClient,
+			complexityClient,
+			goClient,
+			govulncheckClient,
+			gitleaksClient,
+			trivyClient,
+			rustClient,
+			agentBehaviorClient,
+			deadCodeClients,
 		] = await Promise.all([
-			import("./ruff-client.js"),
-			import("./biome-client.js"),
-			import("./knip-client.js"),
-			import("./todo-scanner.js"),
-			import("./jscpd-client.js"),
-			import("./type-coverage-client.js"),
-			import("./dependency-checker.js"),
-			import("./test-runner-client.js"),
-			import("./metrics-client.js"),
-			import("./complexity-client.js"),
-			import("./go-client.js"),
-			import("./govulncheck-client.js"),
-			import("./gitleaks-client.js"),
-			import("./trivy-client.js"),
-			import("./rust-client.js"),
-			import("./agent-behavior-client.js"),
-			import("./dead-code-client.js"),
+			load("ruff", async () => new (await import("./ruff-client.js")).RuffClient()),
+			load("biome", async () => new (await import("./biome-client.js")).BiomeClient()),
+			load("knip", async () => new (await import("./knip-client.js")).KnipClient()),
+			load("todo", async () => new (await import("./todo-scanner.js")).TodoScanner()),
+			load("jscpd", async () => new (await import("./jscpd-client.js")).JscpdClient()),
+			load(
+				"type-coverage",
+				async () =>
+					new (await import("./type-coverage-client.js")).TypeCoverageClient(),
+			),
+			load(
+				"dependency-checker",
+				async () =>
+					new (await import("./dependency-checker.js")).DependencyChecker(),
+			),
+			load(
+				"test-runner",
+				async () =>
+					new (await import("./test-runner-client.js")).TestRunnerClient(),
+			),
+			load(
+				"metrics",
+				async () => new (await import("./metrics-client.js")).MetricsClient(),
+			),
+			load(
+				"complexity",
+				async () =>
+					new (await import("./complexity-client.js")).ComplexityClient(),
+			),
+			load("go", async () => new (await import("./go-client.js")).GoClient()),
+			load(
+				"govulncheck",
+				async () =>
+					new (await import("./govulncheck-client.js")).GovulncheckClient(),
+			),
+			load(
+				"gitleaks",
+				async () => new (await import("./gitleaks-client.js")).GitleaksClient(),
+			),
+			load("trivy", async () => new (await import("./trivy-client.js")).TrivyClient()),
+			load("rust", async () => new (await import("./rust-client.js")).RustClient()),
+			load(
+				"agent-behavior",
+				async () =>
+					new (await import("./agent-behavior-client.js")).AgentBehaviorClient(),
+			),
+			loadList(
+				"dead-code",
+				async () => (await import("./dead-code-client.js")).getDeadCodeClients(),
+			),
 		]);
 
+		if (failures.length > 0) await logBootstrapFailures(failures);
+
 		return {
-			ruffClient: new ruffMod.RuffClient(),
-			biomeClient: new biomeMod.BiomeClient(),
-			knipClient: new knipMod.KnipClient(),
-			todoScanner: new todoMod.TodoScanner(),
-			jscpdClient: new jscpdMod.JscpdClient(),
-			typeCoverageClient: new typeCoverageMod.TypeCoverageClient(),
-			depChecker: new depCheckerMod.DependencyChecker(),
-			testRunnerClient: new testRunnerMod.TestRunnerClient(),
-			metricsClient: new metricsMod.MetricsClient(),
-			complexityClient: new complexityMod.ComplexityClient(),
-			goClient: new goMod.GoClient(),
-			govulncheckClient: new govulncheckMod.GovulncheckClient(),
-			gitleaksClient: new gitleaksMod.GitleaksClient(),
-			trivyClient: new trivyMod.TrivyClient(),
-			rustClient: new rustMod.RustClient(),
-			agentBehaviorClient: new agentBehaviorMod.AgentBehaviorClient(),
-			deadCodeClients: deadCodeMod.getDeadCodeClients(),
+			ruffClient,
+			biomeClient,
+			knipClient,
+			todoScanner,
+			jscpdClient,
+			typeCoverageClient,
+			depChecker,
+			testRunnerClient,
+			metricsClient,
+			complexityClient,
+			goClient,
+			govulncheckClient,
+			gitleaksClient,
+			trivyClient,
+			rustClient,
+			agentBehaviorClient,
+			deadCodeClients,
 		};
 	})();
 
