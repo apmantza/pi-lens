@@ -17,15 +17,32 @@ import { monitorEventLoopDelay, type IntervalHistogram } from "node:perf_hooks";
 const NS_PER_MS = 1e6;
 
 let histogram: IntervalHistogram | undefined;
+let monitorUnavailable = false;
 
 /**
  * Start the monitor (idempotent). Call once, as early as possible, so startup
  * blocks are captured. Cheap — the sampling is native; nothing runs per event.
+ *
+ * Purely observational: if the runtime doesn't implement
+ * `perf_hooks.monitorEventLoopDelay` (e.g. Bun < 1.3, which throws
+ * `ERR_NOT_IMPLEMENTED` on the call), we degrade to "no stats" rather than let
+ * the throw abort extension load. `getEventLoopStats()` already tolerates an
+ * absent histogram, so every caller keeps working without telemetry.
  */
 export function startEventLoopMonitor(resolutionMs = 20): void {
-	if (histogram) return;
-	histogram = monitorEventLoopDelay({ resolution: resolutionMs });
-	histogram.enable();
+	if (histogram || monitorUnavailable) return;
+	try {
+		const h = monitorEventLoopDelay({ resolution: resolutionMs });
+		h.enable();
+		histogram = h;
+	} catch (err) {
+		monitorUnavailable = true;
+		console.error(
+			`[pi-lens] event-loop occupancy telemetry disabled (runtime lacks monitorEventLoopDelay): ${
+				(err as Error)?.message ?? String(err)
+			}`,
+		);
+	}
 }
 
 export interface EventLoopStats {
@@ -75,4 +92,5 @@ export function shouldLogWorstBlock(
 export function _stopEventLoopMonitorForTest(): void {
 	histogram?.disable();
 	histogram = undefined;
+	monitorUnavailable = false;
 }

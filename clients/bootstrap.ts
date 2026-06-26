@@ -38,6 +38,30 @@ export interface BootstrapClients {
 
 let bootstrapPromise: Promise<BootstrapClients> | null = null;
 
+/**
+ * A client module failed to import — almost always an unresolved runtime
+ * dependency under a package-manager layout the runtime's resolver can't
+ * traverse (#285/#335). Emit a paste-able environment fingerprint so a reporter
+ * can tell us exactly what failed and where, then let the error propagate (pi
+ * still surfaces the extension error as before). Best-effort: never let the
+ * diagnostic itself mask the original failure.
+ */
+async function logBootstrapFailure(err: unknown): Promise<void> {
+	try {
+		const { collectInstallDiagnostics, formatInstallDiagnostics } = await import(
+			"./install-diagnostics.js"
+		);
+		console.error(formatInstallDiagnostics(collectInstallDiagnostics(), err));
+	} catch {
+		// fall back to at least naming the failure
+		console.error(
+			`[pi-lens] failed to load analysis clients: ${
+				(err as Error)?.message ?? String(err)
+			}`,
+		);
+	}
+}
+
 export function loadBootstrapClients(): Promise<BootstrapClients> {
 	bootstrapPromise ??= (async () => {
 		const [
@@ -76,7 +100,10 @@ export function loadBootstrapClients(): Promise<BootstrapClients> {
 			import("./rust-client.js"),
 			import("./agent-behavior-client.js"),
 			import("./dead-code-client.js"),
-		]);
+		]).catch(async (err) => {
+			await logBootstrapFailure(err);
+			throw err;
+		});
 
 		return {
 			ruffClient: new ruffMod.RuffClient(),
