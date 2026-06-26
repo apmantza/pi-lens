@@ -97,3 +97,95 @@ jobs:
           SELFTEST="$(node -e 'console.log(require.resolve("pi-lens/scripts/install-selftest.mjs"))')"
           echo "running: bun $SELFTEST"
           bun "$SELFTEST" --allow-soft
+
+  # End-to-end: install pi ITSELF (the host) + pi-lens via each package manager,
+  # then actually run pi under both runtimes and assert pi-lens loads. pi is a
+  # Node app, but a `bun --bun` invocation puts it on the Bun runtime — the only
+  # way to exercise Bun's resolver against pi-lens's deps (the #285/#335 surface,
+  # since `ResolveMessage` is a Bun-specific error). Credit-free: a dummy key
+  # makes pi load extensions then stop at the auth wall; pi prints
+  # `Failed to load extension … ResolveMessage` BEFORE that wall if resolution
+  # fails (verified), so the check is deterministic without a model.
+  pi-load:
+    name: pi-load · ${{ matrix.os }} · ${{ matrix.pm }} · ${{ matrix.runtime }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        pm: [npm, pnpm, bun]
+        runtime: [node, bun]
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Setup Node
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "22"
+
+      - name: Setup pnpm
+        if: matrix.pm == 'pnpm'
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: latest
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - name: Build + pack the current repo
+        shell: bash
+        run: |
+          set -euxo pipefail
+          npm ci
+          TARBALL="$(npm pack --silent)"
+          echo "TARBALL=$PWD/$TARBALL" >> "$GITHUB_ENV"
+
+      - name: Install pi + pi-lens via ${{ matrix.pm }}
+        shell: bash
+        run: |
+          set -uxo pipefail
+          PKG="@earendil-works/pi-coding-agent"
+          mkdir -p "$RUNNER_TEMP/proj" && cd "$RUNNER_TEMP/proj"
+          npm init -y >/dev/null
+          # Install the host (pi) AND the extension (pi-lens tarball) under the
+          # SAME manager, so both pi's and pi-lens's deps take that PM's layout.
+          # pnpm/bun return non-zero when they block lifecycle scripts (expected).
+          case "${{ matrix.pm }}" in
+            npm)  npm  install "$PKG" "$TARBALL" ;;
+            pnpm) pnpm add     "$PKG" "$TARBALL" || echo "::notice::pnpm blocked scripts (expected)" ;;
+            bun)  bun  add     "$PKG" "$TARBALL" || echo "::notice::bun blocked scripts (expected)" ;;
+          esac
+
+      - name: Run pi (${{ matrix.runtime }}) and assert pi-lens loads
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: sk-ant-dummy-ci-no-credits-needed
+        run: |
+          set -uo pipefail
+          cd "$RUNNER_TEMP/proj"
+          ENTRY="$(node -e 'console.log(require.resolve("pi-lens/dist/index.js"))')"
+          PIBIN="$(readlink -f node_modules/.bin/pi)"
+          echo "entry=$ENTRY"; echo "cli=$PIBIN"; echo "runtime=${{ matrix.runtime }}"
+          case "${{ matrix.runtime }}" in
+            node) RUN=( node "$PIBIN" ) ;;
+            bun)  RUN=( bun --bun "$PIBIN" ) ;;
+          esac
+          set +e
+          OUT="$( "${RUN[@]}" -ne -e "$ENTRY" -p "hi" --no-session \
+                    --provider anthropic --model claude-sonnet-4-6 2>&1 )"
+          RC=$?
+          set -e
+          echo "--- pi output (rc=$RC) ---"; printf '%s\n' "$OUT" | head -30
+          if printf '%s' "$OUT" | grep -qiE "Failed to load extension|ResolveMessage|Cannot find (module|package)"; then
+            echo "::error::pi-lens FAILED to load under ${{ matrix.pm }}/${{ matrix.runtime }} on ${{ matrix.os }}"
+            exit 1
+          fi
+          if printf '%s' "$OUT" | grep -qiE "401|authentication_error|invalid x-api-key|No API key"; then
+            echo "PASS: pi-lens entry loaded (reached auth wall) under ${{ matrix.pm }}/${{ matrix.runtime }}"
+          else
+            echo "::error::inconclusive — no load error but auth wall not detected (possible early exit)"
+            printf '%s\n' "$OUT" | tail -12
+            exit 1
+          fi
