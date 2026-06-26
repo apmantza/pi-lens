@@ -11,8 +11,9 @@ import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { access, appendFile, mkdir, readdir, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { minimatch } from "../deps/minimatch.js";
 import { isTestMode } from "../env-utils.js";
-import { getGlobalPiLensDir, matchGlob } from "../file-utils.js";
+import { getGlobalPiLensDir } from "../file-utils.js";
 import { KIND_EXTENSIONS } from "../file-kinds.js";
 import {
 	ensureTool,
@@ -819,11 +820,11 @@ async function markerExists(dir: string, pattern: string): Promise<boolean> {
 		const entries = await readdir(targetDir, { withFileTypes: true });
 		// Match files/symlinks only — a directory named like the marker (e.g. a
 		// `Foo.csproj/` dir) is not a project file. Case-insensitive on win32 to
-		// match the filesystem (and the project ignore matcher), via matchGlob.
+		// match the filesystem (and the project ignore matcher), via minimatch.
 		return entries.some(
 			(entry) =>
 				(entry.isFile() || entry.isSymbolicLink()) &&
-				matchGlob(entry.name, basenamePattern, {
+				minimatch(entry.name, basenamePattern, {
 					dot: true,
 					nocase: process.platform === "win32",
 				}),

@@ -5,29 +5,11 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { minimatch } from "./deps/minimatch.js";
 import {
 	getGlobalIgnorePatterns,
 	getPiLensGlobalConfigPath,
 } from "./lens-config.js";
-
-/**
- * Glob match for gitignore/exclusion patterns. Backed by node's built-in
- * `path.matchesGlob` (node ≥22.5, always available — pi requires ≥22.19) instead
- * of a `minimatch` dependency: one fewer third-party import to resolve under
- * pnpm/bun (#285/#335). `path.matchesGlob` already matches dotfiles (equivalent
- * to minimatch's `dot:true` — verified identical across pi-lens's pattern set),
- * so the only option we handle is case-insensitivity (win32).
- */
-export function matchGlob(
-	value: string,
-	pattern: string,
-	opts: { dot?: boolean; nocase?: boolean } = {},
-): boolean {
-	if (opts.nocase) {
-		return path.matchesGlob(value.toLowerCase(), pattern.toLowerCase());
-	}
-	return path.matchesGlob(value, pattern);
-}
 import { normalizeFilePath } from "./path-utils.js";
 import {
 	findPiLensProjectConfig,
@@ -254,7 +236,7 @@ function matchesGitignorePattern(
 			if (candidate === prefix || candidate.startsWith(`${prefix}/`))
 				return true;
 		}
-		return candidates.some((value) => matchGlob(value, expanded, options));
+		return candidates.some((value) => minimatch(value, expanded, options));
 	});
 }
 

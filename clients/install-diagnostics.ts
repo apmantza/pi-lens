@@ -21,6 +21,7 @@ const ISSUES_URL = "https://github.com/apmantza/pi-lens/issues";
 /** Runtime third-party deps whose resolution is the documented failure surface. */
 const CRITICAL_DEPS = [
 	"typescript",
+	"minimatch",
 	"typebox",
 	"js-yaml",
 	"vscode-jsonrpc",
