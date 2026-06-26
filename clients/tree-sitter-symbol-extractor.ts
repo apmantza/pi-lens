@@ -4,6 +4,7 @@
  */
 
 import * as path from "node:path";
+import { loadWebTreeSitter } from "./deps/web-tree-sitter.js";
 import type { Symbol, SymbolKind, SymbolRef } from "./symbol-types.js";
 import type { TreeSitterClient } from "./tree-sitter-client.js";
 
@@ -592,7 +593,7 @@ export class TreeSitterSymbolExtractor {
 			const language = this.client.getLanguage(this.languageId);
 			if (!language) return false;
 
-			const { Query } = await import("web-tree-sitter");
+			const { Query } = await loadWebTreeSitter();
 			// Compile each query INDEPENDENTLY: a single malformed query — e.g. a
 			// grammar update that breaks the symbol `defs` pattern (a cross-language
 			// smoke test caught exactly this for kotlin) — must not disable the

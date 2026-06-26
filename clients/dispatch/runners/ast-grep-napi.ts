@@ -9,6 +9,11 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import {
+	type AstGrepNapi,
+	loadAstGrepNapi,
+	type SgRoot,
+} from "../../deps/ast-grep-napi.js";
 import { resolvePackagePath } from "../../package-root.js";
 import { hasEslintConfig } from "../../tool-policy.js";
 import { enabledAuxiliaryLspServerIds } from "../auxiliary-lsp.js";
@@ -30,17 +35,17 @@ import {
 } from "./yaml-rule-parser.js";
 
 // Lazy load the napi package
-let sg: typeof import("@ast-grep/napi") | undefined;
+let sg: AstGrepNapi | undefined;
 let sgLoadAttempted = false;
 
 export async function loadSg(): Promise<
-	typeof import("@ast-grep/napi") | undefined
+	AstGrepNapi | undefined
 > {
 	if (sg) return sg;
 	if (sgLoadAttempted) return undefined; // Don't retry if already failed
 	sgLoadAttempted = true;
 	try {
-		sg = await import("@ast-grep/napi");
+		sg = await loadAstGrepNapi();
 		return sg;
 	} catch {
 		return undefined;
@@ -129,7 +134,7 @@ export function canHandle(filePath: string): boolean {
 
 export function getLang(
 	filePath: string,
-	sgModule: typeof import("@ast-grep/napi"),
+	sgModule: AstGrepNapi,
 ) {
 	const ext = path.extname(filePath).toLowerCase();
 	switch (ext) {
@@ -374,7 +379,7 @@ const astGrepNapiRunner: RunnerDefinition = {
 			}
 		}
 
-		let root: import("@ast-grep/napi").SgRoot;
+		let root: SgRoot;
 		try {
 			root = lang.parse(content);
 		} catch {

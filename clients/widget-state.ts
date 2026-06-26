@@ -1,7 +1,7 @@
 import { stat } from "node:fs/promises";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "./deps/pi-tui.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 

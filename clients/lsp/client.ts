@@ -12,7 +12,7 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { access, readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
-import type { MessageConnection } from "vscode-jsonrpc";
+import type { MessageConnection } from "../deps/vscode-jsonrpc.js";
 import { logLatency } from "../latency-logger.js";
 // vscode-jsonrpc v9 ships an `exports` map exposing the Node entry as the
 // `./node` subpath (no `.js`); the old `/node.js` file path no longer resolves.
@@ -20,7 +20,7 @@ import {
 	createMessageConnection,
 	StreamMessageReader,
 	StreamMessageWriter,
-} from "vscode-jsonrpc/node";
+} from "../deps/vscode-jsonrpc.js";
 
 import { applyWorkspaceEdit } from "./edits.js";
 import type { LSPProcess } from "./launch.js";

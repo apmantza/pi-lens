@@ -14,7 +14,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import yaml from "js-yaml";
+import yaml from "../../deps/js-yaml.js";
 
 // --- Types ---
 

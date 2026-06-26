@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { access, appendFile, mkdir, readdir, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { minimatch } from "minimatch";
+import { minimatch } from "../deps/minimatch.js";
 import { isTestMode } from "../env-utils.js";
 import { getGlobalPiLensDir } from "../file-utils.js";
 import { KIND_EXTENSIONS } from "../file-kinds.js";

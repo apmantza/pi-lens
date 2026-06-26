@@ -18,6 +18,7 @@
 import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as path from "node:path";
+import { loadWebTreeSitter } from "./deps/web-tree-sitter.js";
 import { getProjectIgnoreMatcher, isExcludedDirName } from "./file-utils.js";
 import { downloadGrammar, LANGUAGE_TO_GRAMMAR } from "./grammar-source.js";
 import { resolvePackagePath } from "./package-root.js";
@@ -258,9 +259,10 @@ export class TreeSitterClient {
 
 		this.initPromise = (async () => {
 			try {
-				const mod = await import("web-tree-sitter");
-				// biome-ignore lint/suspicious/noExplicitAny: Dynamic import of optional dependency
-				const ParserClass = mod.Parser || mod.default || mod;
+				const mod = await loadWebTreeSitter();
+				// biome-ignore lint/suspicious/noExplicitAny: web-tree-sitter module shape varies (Parser direct / default-wrapped)
+				const anyMod = mod as any;
+				const ParserClass = anyMod.Parser || anyMod.default || anyMod;
 				if (!ParserClass || typeof ParserClass.init !== "function") {
 					this.dbg("Parser class not found or missing init method");
 					return false;
@@ -771,7 +773,7 @@ export class TreeSitterClient {
 
 		try {
 			// biome-ignore lint/suspicious/noExplicitAny: Query constructor
-			const Query = (await import("web-tree-sitter")).Query;
+			const Query = (await loadWebTreeSitter()).Query;
 			// biome-ignore lint/suspicious/noExplicitAny: Language type compatibility
 			const query = new Query(language as any, queryStr);
 			this.dbg(`Query compiled with ${query.patternCount} patterns`);
@@ -814,7 +816,7 @@ export class TreeSitterClient {
 
 		try {
 			// biome-ignore lint/suspicious/noExplicitAny: Query constructor from web-tree-sitter
-			const Query = (await import("web-tree-sitter")).Query;
+			const Query = (await loadWebTreeSitter()).Query;
 			// biome-ignore lint/suspicious/noExplicitAny: Language type compatibility
 			const query = new Query(language as any, queryStr);
 			const result = { query, metavars, postFilter, postFilterParams };

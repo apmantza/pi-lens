@@ -17,7 +17,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as ts from "typescript";
+import { ts } from "./deps/typescript.js";
 import { isFileKind } from "./file-kinds.js";
 
 // --- Types ---

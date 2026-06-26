@@ -8,7 +8,7 @@
  * QR-005  high-entropy-string     — string literals with suspiciously high Shannon entropy
  */
 
-import * as ts from "typescript";
+import { ts } from "../../deps/typescript.js";
 import type { FactRule } from "../fact-provider-types.js";
 import type { Diagnostic } from "../types.js";
 import type { ImportEntry } from "../facts/import-facts.js";

@@ -1,4 +1,4 @@
-import { Type } from "typebox";
+import { Type } from "../clients/deps/typebox.js";
 import type { AstGrepClient } from "../clients/ast-grep-client.js";
 import { LANGUAGES } from "./shared.js";
 

@@ -7,7 +7,7 @@
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { Type } from "typebox";
+import { Type } from "../clients/deps/typebox.js";
 import { logLatency } from "../clients/latency-logger.js";
 import type { LSPCallHierarchyItem } from "../clients/lsp/client.js";
 import {
