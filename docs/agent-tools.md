@@ -38,7 +38,10 @@ share).
 - **`module_report`** — Navigable outline of a file: every symbol's name/kind/
   startLine/endLine/signature, exported vs internal split, class/interface
   member nesting, who-uses-this, fanout/complexity risk flags, and a
-  `recommendedReads` top-3 ranked by usage + complexity. Also emits a
+  `recommendedReads` top-3 ranked by usage + complexity. Each entry carries a
+  `decorators[]` array — the declaration's decorators/attributes/annotations
+  (`@app.get("/x")`, `#[tokio::main]`, `@Override`) — so the agent reads a
+  symbol's role (route/test/fixture/entrypoint) without opening the body. Also emits a
   `callbacks[]` section for high-signal inline executables (event handlers,
   timers, promise callbacks, object/dict function props, assigned closures) with
   stable synthetic handles, flags, and `read` args. The optional `focus` string

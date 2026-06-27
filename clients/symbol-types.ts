@@ -40,6 +40,13 @@ export interface Symbol {
 	 */
 	local?: boolean;
 	doc?: string; // JSDoc comment if available
+	/**
+	 * Decorators / attributes / annotations attached to the declaration, in source
+	 * order (e.g. `@app.get("/x")`, `#[tokio::main]`, `@Override`). Tells an agent
+	 * a symbol's ROLE (route/test/fixture/entrypoint) without reading its body.
+	 * Language-uniform over the tree-sitter declaration node; omitted when none.
+	 */
+	decorators?: string[];
 }
 
 export interface SymbolRef {

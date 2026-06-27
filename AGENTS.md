@@ -66,7 +66,14 @@ a *second host adapter* alongside `index.ts`. Design rationale + progress: `mcp.
   line-range containment (`members[]`, #301); the `api`/`internal` split is over
   TOP-LEVEL entries only, and a `private`/`protected` member is tagged with a
   `visibility` field inside its container's members, not promoted to the public
-  `api` (#258). `imports` populate language-uniformly even on a cold cache —
+  `api` (#258). Each entry also carries `decorators[]` — the declaration's
+  decorators/attributes/annotations in source order (`@app.get("/x")`,
+  `#[tokio::main]`, `@Override`), so an agent reads a symbol's ROLE (route/test/
+  fixture/entrypoint) without reading its body. Extracted structurally from the
+  declaration node in `tree-sitter-symbol-extractor.ts` (preceding-sibling /
+  own-child / `modifiers`-nested shapes), so it spans Python/Rust/TS/Java/Kotlin/
+  C# and covers nested method members; languages without those node kinds yield
+  none. `imports` populate language-uniformly even on a cold cache —
   resolved to in-project files via the warm graph's resolver, else bucketed
   internal/external by shape (#301). `callbacks[]` surfaces high-signal inline
   executable nodes — callbacks/closures/lambdas/function literals (event

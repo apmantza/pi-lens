@@ -765,6 +765,7 @@ export class TreeSitterSymbolExtractor {
 		const local = this.isFunctionLocal(defNode);
 		const visibility =
 			kind === "method" ? this.detectVisibility(defNode, name) : undefined;
+		const decorators = this.extractDecorators(defNode);
 
 		return {
 			id: `${filePath}:${name}`,
@@ -778,7 +779,63 @@ export class TreeSitterSymbolExtractor {
 			isExported,
 			...(local ? { local: true } : {}),
 			...(visibility ? { visibility } : {}),
+			...(decorators.length > 0 ? { decorators } : {}),
 		};
+	}
+
+	// Decorator/attribute/annotation node kinds across grammars. Python/TS/JS use
+	// `decorator`; Rust `attribute_item`; Java/Kotlin/C# `marker_annotation` /
+	// `annotation` (often nested inside a `modifiers` container).
+	private static readonly DECORATOR_NODE_KINDS = new Set([
+		"decorator",
+		"attribute_item",
+		"marker_annotation",
+		"annotation",
+	]);
+	// Containers that hold annotations as children (Java/Kotlin `modifiers`).
+	private static readonly MODIFIERS_CONTAINER_KINDS = new Set(["modifiers"]);
+
+	/**
+	 * Decorators/attributes/annotations attached to a declaration node, in source
+	 * order. Structural (tree-sitter), not text heuristics, so it handles the three
+	 * placement shapes seen across grammars:
+	 *   - preceding siblings: Python (`decorated_definition` children), Rust
+	 *     (`attribute_item`), TS methods (`decorator`);
+	 *   - own children: TS class decorators;
+	 *   - nested in a `modifiers` container: Java/Kotlin/C# annotations.
+	 * Languages without these node kinds simply yield none.
+	 */
+	// biome-ignore lint/suspicious/noExplicitAny: web-tree-sitter node
+	private extractDecorators(node: any): string[] {
+		const isDeco = (n: any) =>
+			!!n && TreeSitterSymbolExtractor.DECORATOR_NODE_KINDS.has(n.type);
+		const text = (n: any): string => {
+			const first = String(n?.text ?? "").split(/\r?\n/, 1)[0]?.trim() ?? "";
+			return first.length > 120 ? `${first.slice(0, 117)}…` : first;
+		};
+		const out: string[] = [];
+
+		// (1) Contiguous decorator siblings immediately before the declaration.
+		// Children are in source order, so collect decorators and reset on any
+		// other NAMED sibling — leaving only the block directly above `node`.
+		for (const sib of node.parent?.children ?? []) {
+			if (sib.startIndex >= node.startIndex) break; // preceding only
+			if (isDeco(sib)) out.push(text(sib));
+			else if (sib.isNamed) out.length = 0;
+		}
+
+		// (2) Own leading children: TS class decorators, or annotations nested in a
+		// `modifiers` container (Java/Kotlin).
+		for (const child of node.children ?? []) {
+			if (isDeco(child)) out.push(text(child));
+			else if (TreeSitterSymbolExtractor.MODIFIERS_CONTAINER_KINDS.has(child?.type)) {
+				for (const gc of child.children ?? []) {
+					if (isDeco(gc)) out.push(text(gc));
+				}
+			}
+		}
+
+		return [...new Set(out.filter(Boolean))].slice(0, 8);
 	}
 
 	// biome-ignore lint/suspicious/noExplicitAny: Match type

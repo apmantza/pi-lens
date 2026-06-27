@@ -319,6 +319,62 @@ describe("moduleReport — outline + structure", () => {
 		expect(task?.flags).toContain("move");
 	});
 
+	it("surfaces decorators/attributes/annotations on symbols across grammars", async () => {
+		const env = makeEnv();
+		const flatten = (
+			entries: Array<{
+				name: string;
+				decorators?: string[];
+				members?: unknown[];
+			}>,
+		): Array<{ name: string; decorators?: string[] }> =>
+			entries.flatMap((e) => [
+				e,
+				...flatten(
+					(e.members ?? []) as Array<{ name: string; decorators?: string[] }>,
+				),
+			]);
+		const find = async (file: string, name: string) => {
+			const r = await moduleReport(file, env.tmpDir);
+			return flatten([...r.api, ...r.internal]).find((s) => s.name === name);
+		};
+
+		// Python: multiple decorators as preceding siblings of a decorated_definition.
+		const py = createTempFile(
+			env.tmpDir,
+			"dec.py",
+			'@app.get("/x")\n@auth\ndef handler():\n    return 1\n',
+		);
+		expect((await find(py, "handler"))?.decorators).toEqual([
+			'@app.get("/x")',
+			"@auth",
+		]);
+
+		// Rust: attribute_item as a preceding sibling.
+		const rs = createTempFile(
+			env.tmpDir,
+			"dec.rs",
+			"#[tokio::main]\nasync fn main() { run(); }\n",
+		);
+		expect((await find(rs, "main"))?.decorators).toEqual(["#[tokio::main]"]);
+
+		// TypeScript: decorator as an own child of the class declaration.
+		const ts = createTempFile(
+			env.tmpDir,
+			"dec.ts",
+			"@Injectable()\nexport class Svc {\n  foo() {}\n}\n",
+		);
+		expect((await find(ts, "Svc"))?.decorators).toEqual(["@Injectable()"]);
+
+		// Java: annotation nested in a `modifiers` container on a nested METHOD member.
+		const java = createTempFile(
+			env.tmpDir,
+			"Dec.java",
+			"public class C {\n  @Override\n  public void run() {}\n}\n",
+		);
+		expect((await find(java, "run"))?.decorators).toEqual(["@Override"]);
+	});
+
 	it("read_enclosing resolves a Go goroutine body by line", async () => {
 		const env = makeEnv();
 		const go = createTempFile(

@@ -85,6 +85,10 @@ export interface ModuleSymbolEntry {
 	visibility?: "private" | "protected";
 	signature?: string;
 	doc?: string;
+	/** Decorators/attributes/annotations on the declaration, in source order
+	 * (`@app.get("/x")`, `#[tokio::main]`, `@Override`) — the symbol's role without
+	 * reading its body. Omitted when none. */
+	decorators?: string[];
 	/** Outgoing call count (jsts graph path only). */
 	fanout?: number;
 	/** McCabe complexity (jsts graph path only). */
@@ -579,6 +583,7 @@ function toEntry(
 		endLine,
 		exported,
 		...(sym.visibility ? { visibility: sym.visibility } : {}),
+		...(sym.decorators?.length ? { decorators: sym.decorators } : {}),
 		signature: sym.signature,
 		doc: sym.doc,
 		fanout: fanout && fanout > 0 ? fanout : undefined,
