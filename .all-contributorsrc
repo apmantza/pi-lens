@@ -473,6 +473,27 @@
       "avatar_url": "https://avatars.githubusercontent.com/u/54923863?v=4",
       "profile": "https://github.com/robertoecf",
       "contributions": ["bug"]
+    },
+    {
+      "login": "tmttodd",
+      "name": "tmttodd",
+      "avatar_url": "https://avatars.githubusercontent.com/u/160077416?v=4",
+      "profile": "https://github.com/tmttodd",
+      "contributions": ["bug"]
+    },
+    {
+      "login": "smaharnav",
+      "name": "smaharnav",
+      "avatar_url": "https://avatars.githubusercontent.com/u/263328627?v=4",
+      "profile": "https://github.com/smaharnav",
+      "contributions": ["bug"]
+    },
+    {
+      "login": "MzaGuille",
+      "name": "Mza.Guille",
+      "avatar_url": "https://avatars.githubusercontent.com/u/151482698?v=4",
+      "profile": "https://github.com/MzaGuille",
+      "contributions": ["bug"]
     }
   ]
 }
