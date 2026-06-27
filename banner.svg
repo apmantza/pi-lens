@@ -64,7 +64,7 @@
     <!-- ANALYZE -->
     <rect x="56" y="176" width="7" height="7" rx="1.5" fill="url(#accent)"/>
     <text x="72" y="183" font-size="13.5" font-weight="700" fill="#58a6ff" letter-spacing="2">ANALYZE</text>
-    <text x="56" y="200" font-size="11" font-weight="400" fill="#6e7681" letter-spacing="0.2">inline feedback, every edit</text>
+    <text x="56" y="200" font-size="11" font-weight="400" fill="#6e7681" letter-spacing="0.2">inline feedback, every write/edit</text>
     <text x="56" y="225" font-size="14.5" font-weight="400" fill="#c9d1d9">LSP diagnostics</text>
     <text x="56" y="248" font-size="14.5" font-weight="400" fill="#c9d1d9">Linters &amp; type-checks</text>
     <text x="56" y="271" font-size="14.5" font-weight="400" fill="#c9d1d9">ast-grep &#183; tree-sitter</text>
