@@ -122,6 +122,9 @@ describe("read-guard tool line helpers", () => {
 		expect(result.touchedLines).toBeUndefined();
 		expect(result.preflightError).toMatch(/Unsupported hashline edit target/);
 		expect(result.preflightError).toMatch(/malformed/);
+		// #328: every blocking verdict ends with a concrete next-action line.
+		expect(result.preflightError).toMatch(/Re-read `\/src\/file\.ts`/);
+		expect(result.preflightError).toMatch(/retry/i);
 	});
 
 	it("returns preflightError for inverted hashline ranges", () => {

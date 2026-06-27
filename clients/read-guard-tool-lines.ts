@@ -221,9 +221,13 @@ function resolveHashlineEditInput(
 				},
 			});
 		}
+		// Every blocking verdict ends with a single concrete next-action line so
+		// the agent recovers in one turn (#328 — uniform recovery-hint discipline).
+		const target = filePath ? `\`${filePath}\`` : "the file";
+		const retryHint = `Re-read ${target} to get current #line anchors, then retry using set_line / replace_lines with those anchors — or use a native ranged edit.`;
 		return {
 			touchedLines: undefined,
-			preflightError: `🔴 BLOCKED — Unsupported hashline edit target\n\n${errors.join("\n")}`,
+			preflightError: `🔴 BLOCKED — Unsupported hashline edit target\n\n${errors.join("\n")}\n\n${retryHint}`,
 		};
 	}
 	if (ranges.length === 0) return undefined;
