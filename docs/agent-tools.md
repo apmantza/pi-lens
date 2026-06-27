@@ -49,7 +49,8 @@ share).
   (`tuned`/`generic`) reports whether language-specific callback rules applied —
   the callback *node kinds* are language-uniform, but the semantics are
   per-language (JS/TS-tuned by default, plus Go goroutine/defer, Python
-  scheduler/future lambda, and Rust spawn/move-closure slices); named
+  scheduler/future lambda, Rust spawn/move-closure, Swift weak/strong-self
+  capture, and C++ by-reference-capture slices); named
   symbols span all tree-sitter `SYMBOL_QUERIES` languages. Pass `blastRadius: true`
   for cross-file transitive dependents (read-only over the cached graph).
 - **`read_symbol`** — One symbol's verbatim source body, by name or by a

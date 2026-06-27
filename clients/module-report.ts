@@ -864,6 +864,8 @@ const INLINE_EXECUTABLE_NODE_KINDS = new Set([
 	"func_literal",
 	// Rust
 	"closure_expression",
+	// Swift / Kotlin (trailing/lambda closures)
+	"lambda_literal",
 	// Other grammars use one of these for lambdas/anonymous functions.
 	"lambda_expression",
 	"anonymous_function",
@@ -978,6 +980,21 @@ function ancestorOfType(
 		if (types.has(current.type)) return current;
 		current = current.parent;
 		hops += 1;
+	}
+	return undefined;
+}
+
+/** Find the first descendant of `type` within `maxDepth` levels (shallow). */
+function descendantOfType(
+	node: ModuleReportNode,
+	type: string,
+	maxDepth = 2,
+): ModuleReportNode | undefined {
+	if (maxDepth < 0) return undefined;
+	for (const child of node.children ?? []) {
+		if (child.type === type) return child;
+		const found = descendantOfType(child, type, maxDepth - 1);
+		if (found) return found;
 	}
 	return undefined;
 }
@@ -1120,6 +1137,73 @@ const rustCallbackRules: CallbackLanguageRules = {
 	},
 };
 
+// Swift: the canonical Swift lifecycle bug is a closure that captures `self`
+// strongly across an async boundary (retain cycle). The capture list is fully
+// structural — `capture_list → capture_list_item → ownership_modifier`
+// (weak/unowned) — so weak-vs-strong self capture is detectable with zero
+// guessing. A strong self capture is the high-signal one we surface.
+const swiftCallbackRules: CallbackLanguageRules = {
+	classify(ctx) {
+		const base = classifyGenericCallback(ctx);
+		const node = ctx.node;
+		const captureList = descendantOfType(node, "capture_list", 2);
+		let weakSelf = false;
+		if (captureList) {
+			for (const item of captureList.children ?? []) {
+				if (item.type !== "capture_list_item") continue;
+				const own = item.children?.find((c) => c.type === "ownership_modifier");
+				if (own && /\bself\b/.test(item.text)) weakSelf = true;
+			}
+		}
+		const refsSelf = /\bself\b/.test(node.text);
+		let flags = base.flags;
+		let include = base.include;
+		if (weakSelf) {
+			flags = withFlag(flags, "weak self");
+			include = true;
+		} else if (refsSelf) {
+			flags = withFlag(flags, "captures self");
+			include = true;
+		}
+		return { ...base, ...(flags ? { flags } : {}), include };
+	},
+};
+
+// C++: a lambda with a by-reference default capture (`[&]`) can dangle once the
+// enclosing scope returns — the classic async/thread bug. Capture mode is
+// structural (`lambda_capture_specifier → lambda_default_capture`). Also flag
+// std::thread / std::async launches.
+const cppCallbackRules: CallbackLanguageRules = {
+	classify(ctx) {
+		const base = classifyGenericCallback(ctx);
+		const capture = descendantOfType(ctx.node, "lambda_capture_specifier", 2);
+		let flags = base.flags;
+		let byRef = false;
+		if (capture) {
+			const def = capture.children?.find(
+				(c) => c.type === "lambda_default_capture",
+			);
+			if (def?.text.includes("&")) {
+				flags = withFlag(flags, "captures by reference");
+				byRef = true;
+			}
+		}
+		const callName = ctx.callName ?? "";
+		if (/(?:^|::)(?:thread|async)$/.test(callName)) {
+			return {
+				kind: "task",
+				flags: withFlag(flags, "spawned"),
+				include: true,
+			};
+		}
+		return {
+			...base,
+			...(flags ? { flags } : {}),
+			include: base.include || byRef,
+		};
+	},
+};
+
 const CALLBACK_RULES: Record<string, CallbackLanguageRules> = {
 	typescript: jstsCallbackRules,
 	tsx: jstsCallbackRules,
@@ -1127,6 +1211,8 @@ const CALLBACK_RULES: Record<string, CallbackLanguageRules> = {
 	go: goCallbackRules,
 	python: pythonCallbackRules,
 	rust: rustCallbackRules,
+	swift: swiftCallbackRules,
+	cpp: cppCallbackRules,
 };
 
 function callbackRulesFor(

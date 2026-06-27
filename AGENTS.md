@@ -84,9 +84,10 @@ a *second host adapter* alongside `index.ts`. Design rationale + progress: `mcp.
   WASMs, but the *callback semantics* (role/kind, risk flags, include-or-drop) are
   per-language: `CALLBACK_RULES` in `clients/module-report.ts` is keyed by language
   (like `SYMBOL_QUERIES`), with JS/TS-tuned rules as the default plus `go`
-  (goroutine/defer), `python` (scheduler/future lambdas), and `rust`
-  (spawn/`move` closures) slices; other languages fall back to the generic
-  JS/TS-shaped heuristics. The report's `callbackSupport: "tuned" | "generic"` says which path
+  (goroutine/defer), `python` (scheduler/future lambdas), `rust` (spawn/`move`
+  closures), `swift` (strong-vs-`weak self` capture), and `cpp` (`[&]`
+  by-reference capture + thread launches) slices; other languages fall back to
+  the generic JS/TS-shaped heuristics. The report's `callbackSupport: "tuned" | "generic"` says which path
   ran so callers don't over-trust the list for untuned languages. Add a language
   by adding a `CALLBACK_RULES` entry + a guarded fixture test (the SYMBOL_QUERIES
   per-grammar precedent — extraction breaks silently against real grammars). Pass `blastRadius: true` for the cross-file **blast radius** (#304):
