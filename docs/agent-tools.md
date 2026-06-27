@@ -19,24 +19,42 @@ share).
   triple.
 - **`ast_grep_search`** — AST-aware structural search across ~40 languages via
   the `sg` CLI. Supports metavariables (`$VAR`, `$$$ARGS`), `strictness`
-  modes (`smart`, `relaxed`, `ast`, `cst`, `signature`, `template`), and
-  pagination via `skip`.
+  modes (`smart`, `relaxed`, `ast`, `cst`, `signature`, `template`), structural
+  constraints (`insideKind`, `hasKind`, `follows`, `precedes`), raw YAML `rule`
+  passthrough, and pagination via `skip`. `pattern` is optional when a `rule` is
+  given. Results include `details.matchLocations[]` — each hit carries a ready
+  `readSlice` (`path`/`offset`/`limit`) for a bounded context read; zero-match
+  results include a `suggestedDump` hint pointing at `ast_grep_dump`.
 - **`ast_grep_replace`** — AST-aware structural replace. Re-validates the pattern
   against the current file before writing and reports a clear error if the
   file changed since the preview.
-- **`ast_dump`** — Dumps the raw tree-sitter AST for a source snippet. Use this
-  when an `ast_grep_search` or `ast_grep_replace` pattern returns zero matches
-  and the correct node kind or field name is unknown.
+- **`ast_grep_dump`** — Dumps the raw tree-sitter AST for a source snippet. Use
+  this when an `ast_grep_search` or `ast_grep_replace` pattern returns zero
+  matches and the correct node kind or field name is unknown. `includeAnonymous`
+  shows punctuation/CST nodes. (`ast_dump` remains as a compatibility alias.)
 
 ## Project intelligence
 
 - **`module_report`** — Navigable outline of a file: every symbol's name/kind/
   startLine/endLine/signature, exported vs internal split, class/interface
   member nesting, who-uses-this, fanout/complexity risk flags, and a
-  `recommendedReads` top-3 ranked by usage + complexity. Pass `blastRadius: true`
+  `recommendedReads` top-3 ranked by usage + complexity. Also emits a
+  `callbacks[]` section for high-signal inline executables (event handlers,
+  timers, promise callbacks, object/dict function props, assigned closures) with
+  stable synthetic handles, flags, and `read` args. The optional `focus` string
+  re-ranks `recommendedReads` without expanding scope. `callbackSupport`
+  (`tuned`/`generic`) reports whether language-specific callback rules applied —
+  the callback *node kinds* are language-uniform, but the semantics are
+  per-language (JS/TS-tuned by default, plus a Go goroutine/defer slice); named
+  symbols span all tree-sitter `SYMBOL_QUERIES` languages. Pass `blastRadius: true`
   for cross-file transitive dependents (read-only over the cached graph).
-- **`read_symbol`** — One symbol's verbatim source body. Returned body is
-  recorded as genuine read-guard coverage for that symbol's line range.
+- **`read_symbol`** — One symbol's verbatim source body, by name or by a
+  `module_report` callback handle. Returned body is recorded as genuine
+  read-guard coverage for that symbol/callback's line range.
+- **`read_enclosing`** — Maps a `path` + `line` (from `ast_grep_search`,
+  diagnostics, or LSP locations) to the verbatim body of the smallest enclosing
+  symbol or callback. Tree-sitter only — no LSP or graph build. Optional `kinds`
+  filter and `maxLines` cap; records read-guard coverage for the returned range.
 
 ## Session
 
