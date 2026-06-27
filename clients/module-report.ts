@@ -870,14 +870,19 @@ const ARGUMENT_CONTAINER_NODE_KINDS = new Set([
 	"argument_list_expression",
 ]);
 
+// Call-node kinds across grammars: JS/TS/Rust use `call_expression`; Python and
+// Ruby use a bare `call`. Accepting both lets the per-language callback rules see
+// the enclosing call name (e.g. `loop.call_later`) regardless of grammar.
+const CALL_NODE_KINDS = new Set(["call_expression", "call"]);
+
 function callNameForCallback(node: ModuleReportNode): string | undefined {
 	const parent = node.parent;
 	const call = ARGUMENT_CONTAINER_NODE_KINDS.has(parent?.type ?? "")
 		? parent?.parent
-		: parent?.type === "call_expression"
+		: CALL_NODE_KINDS.has(parent?.type ?? "")
 			? parent
 			: undefined;
-	if (call?.type !== "call_expression") return undefined;
+	if (!call || !CALL_NODE_KINDS.has(call.type)) return undefined;
 	const callee = call.children.find(
 		(child) => !ARGUMENT_CONTAINER_NODE_KINDS.has(child.type),
 	);
@@ -1050,11 +1055,73 @@ const goCallbackRules: CallbackLanguageRules = {
 	},
 };
 
+/** Append a flag without duplicating it; tolerates an undefined start list. */
+function withFlag(flags: string[] | undefined, flag: string): string[] {
+	const next = flags ? [...flags] : [];
+	if (!next.includes(flag)) next.push(flag);
+	return next;
+}
+
+// Python: lambdas handed to schedulers/futures are the lifecycle-sensitive
+// inline executables the generic rules drop (a bare-arg lambda lands as
+// "callback"). Classify by the enclosing call name — now visible via the `call`
+// node kind. Python has no `async` lambdas, so no async boundary to add here.
+const pythonCallbackRules: CallbackLanguageRules = {
+	classify(ctx) {
+		const base = classifyGenericCallback(ctx);
+		const callName = ctx.callName ?? "";
+		if (
+			/(?:^|\.)(?:call_later|call_soon|call_at)$/.test(callName) ||
+			/(?:^|\.)Timer$/.test(callName)
+		) {
+			return {
+				kind: "timer_callback",
+				flags: withFlag(base.flags, "detached timer"),
+				include: true,
+			};
+		}
+		if (/\.add_done_callback$/.test(callName)) {
+			return {
+				kind: "future_callback",
+				flags: withFlag(base.flags, "future completion"),
+				include: true,
+			};
+		}
+		return base;
+	},
+};
+
+// Rust: closures handed to thread/task spawns, and `move` closures (capture by
+// value — the classic detached-state shape), are high-signal. `move` is
+// structurally certain: the closure text begins with `move` / `async move`.
+const rustCallbackRules: CallbackLanguageRules = {
+	classify(ctx) {
+		const base = classifyGenericCallback(ctx);
+		const isMove = /^\s*(?:async\s+)?move\b/.test(ctx.node.text);
+		const flags = isMove ? withFlag(base.flags, "move") : base.flags;
+		const callName = ctx.callName ?? "";
+		if (/(?:^|::|\.)spawn$/.test(callName)) {
+			return {
+				kind: "task",
+				flags: withFlag(flags, "spawned"),
+				include: true,
+			};
+		}
+		return {
+			...base,
+			...(flags ? { flags } : {}),
+			include: base.include || isMove,
+		};
+	},
+};
+
 const CALLBACK_RULES: Record<string, CallbackLanguageRules> = {
 	typescript: jstsCallbackRules,
 	tsx: jstsCallbackRules,
 	javascript: jstsCallbackRules,
 	go: goCallbackRules,
+	python: pythonCallbackRules,
+	rust: rustCallbackRules,
 };
 
 function callbackRulesFor(

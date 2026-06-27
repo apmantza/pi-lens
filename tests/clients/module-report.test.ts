@@ -255,18 +255,68 @@ describe("moduleReport — outline + structure", () => {
 			"support.go",
 			"package main\nfunc run() {}\n",
 		);
-		const py = createTempFile(
-			env.tmpDir,
-			"support.py",
-			"def run():\n    pass\n",
-		);
+		const py = createTempFile(env.tmpDir, "support.py", "def run():\n    pass\n");
+		const rs = createTempFile(env.tmpDir, "support.rs", "fn run() {}\n");
+		const rb = createTempFile(env.tmpDir, "support.rb", "def run\nend\n");
 
-		// Go has a tuned rule set (goroutine/defer); Python falls back to the
-		// generic JS/TS-shaped heuristics, so the report must say so.
+		// Go/Python/Rust have tuned rule sets; Ruby falls back to the generic
+		// JS/TS-shaped heuristics, so the report must say so.
 		expect((await moduleReport(go, env.tmpDir)).callbackSupport).toBe("tuned");
-		expect((await moduleReport(py, env.tmpDir)).callbackSupport).toBe(
+		expect((await moduleReport(py, env.tmpDir)).callbackSupport).toBe("tuned");
+		expect((await moduleReport(rs, env.tmpDir)).callbackSupport).toBe("tuned");
+		expect((await moduleReport(rb, env.tmpDir)).callbackSupport).toBe(
 			"generic",
 		);
+	});
+
+	it("surfaces Python scheduler/future lambdas via language-tuned rules", async () => {
+		const env = makeEnv();
+		const py = createTempFile(
+			env.tmpDir,
+			"lifecycle.py",
+			[
+				"def schedule(loop, fut, ctx):",
+				"    loop.call_later(5, lambda: ctx.ui.refresh())",
+				"    fut.add_done_callback(lambda r: ctx.done(r))",
+			].join("\n"),
+		);
+
+		const report = await moduleReport(py, env.tmpDir);
+
+		// A bare-arg lambda used to be DROPPED by the generic rules; the Python
+		// rule set classifies scheduler/future lambdas as lifecycle callbacks.
+		const timer = report.callbacks.find((cb) => cb.kind === "timer_callback");
+		expect(timer).toBeDefined();
+		expect(timer?.rawKind).toBe("lambda");
+		expect(timer?.flags).toContain("detached timer");
+		expect(timer?.flags).toContain("captures ctx.ui");
+
+		const future = report.callbacks.find((cb) => cb.kind === "future_callback");
+		expect(future).toBeDefined();
+		expect(future?.flags).toContain("future completion");
+	});
+
+	it("surfaces Rust spawned and move closures via language-tuned rules", async () => {
+		const env = makeEnv();
+		const rs = createTempFile(
+			env.tmpDir,
+			"lifecycle.rs",
+			[
+				"fn run() {",
+				"    std::thread::spawn(move || {",
+				"        handle();",
+				"    });",
+				"}",
+			].join("\n"),
+		);
+
+		const report = await moduleReport(rs, env.tmpDir);
+
+		const task = report.callbacks.find((cb) => cb.kind === "task");
+		expect(task).toBeDefined();
+		expect(task?.rawKind).toBe("closure_expression");
+		expect(task?.flags).toContain("spawned");
+		expect(task?.flags).toContain("move");
 	});
 
 	it("read_enclosing resolves a Go goroutine body by line", async () => {
