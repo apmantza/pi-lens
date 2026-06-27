@@ -35,10 +35,14 @@ const EXPECTED_COMMANDS = [
 const EXPECTED_TOOLS = [
 	"ast_grep_search",
 	"ast_grep_replace",
+	"ast_grep_dump",
 	"ast_dump",
 	"lens_diagnostics",
 	"lsp_diagnostics",
 	"lsp_navigation",
+	"module_report",
+	"read_symbol",
+	"read_enclosing",
 ];
 const EXPECTED_HOOKS = [
 	"resources_discover",

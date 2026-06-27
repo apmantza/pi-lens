@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { createAstDumpTool } from "../../tools/ast-dump.js";
+import {
+	createAstDumpTool,
+	createAstGrepDumpTool,
+} from "../../tools/ast-dump.js";
 
 function makeClient(
 	overrides: Partial<Parameters<typeof createAstDumpTool>[0]> = {},
@@ -12,6 +15,11 @@ function makeClient(
 }
 
 describe("ast_dump tool", () => {
+	it("registers ast_grep_dump as the preferred name and ast_dump as an alias", () => {
+		expect(createAstGrepDumpTool(makeClient()).name).toBe("ast_grep_dump");
+		expect(createAstDumpTool(makeClient()).name).toBe("ast_dump");
+	});
+
 	it("lang uses same enum shape as ast-grep tools", () => {
 		const tool = createAstDumpTool(makeClient());
 		const langSchema = (
@@ -20,6 +28,22 @@ describe("ast_dump tool", () => {
 		expect(langSchema.type).toBe("string");
 		expect(langSchema.enum).toContain("typescript");
 		expect(langSchema.enum).toContain("python");
+	});
+
+	it("returns a clear error for empty source input", async () => {
+		const dumpAst = vi.fn();
+		const tool = createAstDumpTool(makeClient({ dumpAst }));
+
+		const result = await tool.execute(
+			"empty",
+			{ source: "   ", lang: "typescript" },
+			new AbortController().signal,
+			null,
+		);
+
+		expect(result.isError).toBe(true);
+		expect(String(result.content[0]?.text)).toContain("source is required");
+		expect(dumpAst).not.toHaveBeenCalled();
 	});
 
 	it("dumps named AST nodes by default", async () => {
@@ -82,5 +106,64 @@ describe("ast_dump tool", () => {
 
 		expect(result.isError).toBe(true);
 		expect(String(result.content[0]?.text)).toContain("invalid language");
+	});
+
+	it("returns a tool error when the dump client throws", async () => {
+		const tool = createAstDumpTool(
+			makeClient({ dumpAst: vi.fn().mockRejectedValue(new Error("boom")) }),
+		);
+
+		const result = await tool.execute(
+			"4",
+			{ source: "x", lang: "typescript" },
+			new AbortController().signal,
+			null,
+		);
+
+		expect(result.isError).toBe(true);
+		expect(String(result.content[0]?.text)).toContain("boom");
+	});
+
+	it("returns a tool error when aborted before dump", async () => {
+		const dumpAst = vi.fn();
+		const controller = new AbortController();
+		controller.abort();
+		const tool = createAstDumpTool(makeClient({ dumpAst }));
+
+		const result = await tool.execute(
+			"5",
+			{ source: "x", lang: "typescript" },
+			controller.signal,
+			null,
+		);
+
+		expect(result.isError).toBe(true);
+		expect(String(result.content[0]?.text)).toContain("aborted");
+		expect(dumpAst).not.toHaveBeenCalled();
+	});
+
+	it("returns a tool error when aborted after availability check", async () => {
+		const dumpAst = vi.fn();
+		const controller = new AbortController();
+		const tool = createAstDumpTool(
+			makeClient({
+				dumpAst,
+				ensureAvailable: vi.fn().mockImplementation(async () => {
+					controller.abort();
+					return true;
+				}),
+			}),
+		);
+
+		const result = await tool.execute(
+			"6",
+			{ source: "x", lang: "typescript" },
+			controller.signal,
+			null,
+		);
+
+		expect(result.isError).toBe(true);
+		expect(String(result.content[0]?.text)).toContain("aborted");
+		expect(dumpAst).not.toHaveBeenCalled();
 	});
 });

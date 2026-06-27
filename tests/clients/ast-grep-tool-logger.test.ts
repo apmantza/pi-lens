@@ -37,7 +37,9 @@ describe("classifyAstGrepError", () => {
 				"ast-grep CLI not found. Install: npm i -D @ast-grep/cli",
 			),
 		).toBe("tool_not_found");
-		expect(classifyAstGrepError("spawn ast-grep ENOENT")).toBe("tool_not_found");
+		expect(classifyAstGrepError("spawn ast-grep ENOENT")).toBe(
+			"tool_not_found",
+		);
 	});
 
 	it("maps timeout-shaped messages to timeout", () => {
@@ -90,12 +92,13 @@ describe("astGrepRemediationHint", () => {
 
 	it("gives a generic single-node hint for 'other'", () => {
 		const hint = astGrepRemediationHint("other");
-		expect(hint).toMatch(/single valid AST node|ast_dump|grep/i);
+		expect(hint).toMatch(/single valid AST node|ast_grep_dump|grep/i);
 	});
 
 	it("classify → hint composes: raw stderr 'other' yields the generic hint", () => {
 		// The exact failure from the log: an empty --rewrite value.
-		const raw = "error: a value is required for '--rewrite <FIX>' but none was supplied";
+		const raw =
+			"error: a value is required for '--rewrite <FIX>' but none was supplied";
 		expect(astGrepRemediationHint(classifyAstGrepError(raw))).toMatch(
 			/single valid AST node/,
 		);

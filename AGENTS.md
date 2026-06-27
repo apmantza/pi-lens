@@ -68,20 +68,37 @@ a *second host adapter* alongside `index.ts`. Design rationale + progress: `mcp.
   `visibility` field inside its container's members, not promoted to the public
   `api` (#258). `imports` populate language-uniformly even on a cold cache —
   resolved to in-project files via the warm graph's resolver, else bucketed
-  internal/external by shape (#301). Pass `blastRadius: true` for the cross-file
-  **blast radius** (#304): transitive dependents aggregated to ranked file `read`
-  args — read-only over the *cached* graph (omitted when cold), the single
-  successor to the removed `pilens_impact` tool) /
-  `pilens_read_symbol` (one symbol's verbatim body). Wrapped pi tools emit their
+  internal/external by shape (#301). `callbacks[]` surfaces high-signal inline
+  executable nodes — callbacks/closures/lambdas/function literals (event
+  handlers, timers, promise callbacks, object/dict function deps, assigned
+  closures, especially lifecycle-sensitive `ctx` captures) — with stable
+  synthetic handles and `read` args; `pilens_read_symbol` accepts those handles
+  too. The inline-executable *node kinds* are language-uniform over the tree-sitter
+  WASMs, but the *callback semantics* (role/kind, risk flags, include-or-drop) are
+  per-language: `CALLBACK_RULES` in `clients/module-report.ts` is keyed by language
+  (like `SYMBOL_QUERIES`), with JS/TS-tuned rules as the default and a `go` slice
+  (goroutine/defer); other languages fall back to the generic JS/TS-shaped
+  heuristics. The report's `callbackSupport: "tuned" | "generic"` says which path
+  ran so callers don't over-trust the list for untuned languages. Add a language
+  by adding a `CALLBACK_RULES` entry + a guarded fixture test (the SYMBOL_QUERIES
+  per-grammar precedent — extraction breaks silently against real grammars). Pass `blastRadius: true` for the cross-file **blast radius** (#304):
+  transitive dependents aggregated to ranked file `read` args — read-only over
+  the *cached* graph (omitted when cold), the single successor to the removed
+  `pilens_impact` tool) /
+  `pilens_read_symbol` (one symbol/callback handle's verbatim body). `read_enclosing`
+  is the pi agent search/diagnostic → exact-body bridge: given a file+line it
+  returns the smallest enclosing symbol/callback body and records read-guard
+  coverage; MCP parity is intentionally deferred until the pi tool surface settles.
+  Wrapped pi tools emit their
   typebox `parameters` as the MCP `inputSchema` (via `schemaWithCwd`) — no
   hand-restated schema to drift.
   `pilens_module_report` / `pilens_read_symbol` are **dual-surface** — also
   registered as pi agent tools (`tools/module-report.ts`, wired in `index.ts`,
   backed by `clients/module-report.ts` via the lens-engine seam) — and unlike the
-  MCP-only queries below, `read_symbol` already feeds a pi-lens-internal consumer:
-  in pi its returned body is recorded into the read-guard (`recordSymbolRead`) as
-  genuine edit-coverage for that symbol's range (a `module_report` outline is NOT —
-  shape, not body).
+  MCP-only queries below, `read_symbol` and `read_enclosing` already feed a
+  pi-lens-internal consumer: in pi their returned bodies are recorded into the
+  read-guard (`recordSymbolRead`) as genuine edit-coverage for that
+  symbol/callback range (a `module_report` outline is NOT — shape, not body).
 - **MCP-only vs pi-lens-internal (a real gap to close, not a finished story).**
   `pilens_symbol_search` is currently an **agent-facing query only**: the word index
   is built during pi-lens's own session scan (pi pays the cost) but nothing in
@@ -268,7 +285,7 @@ The guard tracks more than the Read/Write/Edit tools. All of these register so a
 
 - **bash file VIEWS** (`clients/bash-file-access.ts` → `extractReadPathsFromCommand`): `cat`/`less`/`more`/`bat`/`nl` (full file), `head -N`/`tail -N` (the shown N lines), `sed -n 'A,Bp'` (lines A–B). Registered at tool_call via `recordRead` with the **exact line range** (the guard enforces ranges). `ls`/`find` are NOT views (name-only, reveal no editable content) — never registered, and registering them would falsely mark a file "read". `grep` is not a contiguous view but IS registered via the search path below.
 - **bash WRITES** (`extractWrittenPathsFromCommand`): `>`/`>>`/`N>`, `tee`, `sed -i`, `cp`/`mv` dest, `touch`. The agent authored the file, so — exactly like the Write tool — `noteCreatedFile` at tool_call + `recordWritten` at tool_result.
-- **search tools** (`clients/search-read-registration.ts` → `registerSearchReads`, ±2-line context margin): a tool exposes the lines it revealed via `details.searchReads: {file, startLine(1-based), endLine}[]`; `handleToolResult` consumes that for **any** tool and registers reads of only those lines (never the whole file). Populated by `ast_grep_search` (#169, done) and bash `grep -n`/`egrep`/`fgrep` (output parsed via `extractGrepSearchReadsFromOutput`). **Still remaining:** the pi built-in `grep`/`glob` tool and `lsp_navigation` (both reveal an editable span — wire them for parity; `ls`/`glob`/`find` stay excluded as name-only). New producers only need to populate `details.searchReads` — no hook change.
+- **search tools** (`clients/search-read-registration.ts` → `registerSearchReads`, ±2-line context margin): a tool exposes the lines it revealed via `details.searchReads: {file, startLine(1-based), endLine}[]`; `handleToolResult` consumes that for **any** tool and registers reads of only those lines (never the whole file). Populated by `ast_grep_search` (#169, done) and bash `grep -n`/`egrep`/`fgrep` (output parsed via `extractGrepSearchReadsFromOutput`). `ast_grep_search` also returns `details.matchLocations[]` with ready `readSlice` handles; keep those handles in sync with any formatter changes. **Still remaining:** the pi built-in `grep`/`glob` tool and `lsp_navigation` (both reveal an editable span — wire them for parity; `ls`/`glob`/`find` stay excluded as name-only). New producers only need to populate `details.searchReads` — no hook change.
 
 **PATH-KEY INVARIANT (hard-won — #210):** `ReadGuard` keys its `reads`/`edits`/`exemptions`/`pendingCreations`/`writtenThisSession` maps through `normalizeFilePath` (private `key()`), never the raw path. Read sources arrive with mixed separators/casing — the Read tool gives OS-native backslashes on Windows; search/LSP reads arrive slash-normalized from URIs — and `resolveToolCallFilePath` returns absolute paths verbatim. Keying on the raw string made a read recorded under one form invisible to an edit checked under another → false `zero_read` block despite the file having been read. **Any new map access MUST key through `key()`, and any new read-guard test MUST exercise cross-separator paths** (record one form, check the other) — same-form-on-both-sides is exactly what let #210 ship. Guarded by `tests/clients/read-guard-path-normalization.test.ts`.
 
@@ -520,5 +537,6 @@ Every issue should carry **one TYPE label + at least one `area:` label**.
 - Fire-and-forget background work uses `void expr` or `setImmediate`
 - `logSessionStart()` is a no-op in test mode (`VITEST` env var)
 - LSP tool: use `goToDefinition` / `findReferences` before grepping for symbols
+- ast-grep debug tool: prefer `ast_grep_dump`; `ast_dump` remains a compatibility alias.
 - `clients/runtime-config.ts` is "pure constants" by intent. Resolutions that read disk or env (e.g. `getRunnerTimeoutFloorMs`) must be **lazy memoized getters** with a `_resetForTests` hook, not module-level reads, so importing the file has no I/O side effect and tests can override inputs deterministically.
 - Numeric inputs from env vars or JSON config that flow into `Math.max` / `Math.min` must be coerced through a `Number.isFinite(n) && n > 0` guard. `Number(undefined) === NaN`, and a single NaN argument makes `Math.max` return NaN, which `setTimeout` silently treats as 0.

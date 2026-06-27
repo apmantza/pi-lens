@@ -2,12 +2,17 @@ import { Type } from "../clients/deps/typebox.js";
 import type { AstGrepClient } from "../clients/ast-grep-client.js";
 import { LANGUAGES } from "./shared.js";
 
-export function createAstDumpTool(astGrepClient: AstGrepClient) {
+function createAstDumpToolWithName(
+	astGrepClient: AstGrepClient,
+	name: "ast_dump" | "ast_grep_dump",
+) {
+	const preferred = name === "ast_grep_dump";
 	return {
-		name: "ast_dump" as const,
-		label: "AST Dump",
-		description:
-			"Dump the tree-sitter AST for a source snippet using ast-grep CLI. Use this when ast_grep_search returns zero matches and you need to discover exact node kinds, field names, or nesting. Named nodes only by default; includeAnonymous=true shows punctuation/CST nodes too.",
+		name,
+		label: preferred ? "AST-Grep Dump" : "AST Dump",
+		description: preferred
+			? "Dump the tree-sitter AST for a source snippet using ast-grep CLI. Preferred name for this ast-grep debug tool; ast_dump remains as a compatibility alias. Use when ast_grep_search returns zero matches and you need exact node kinds, field names, or nesting. Named nodes only by default; includeAnonymous=true shows punctuation/CST nodes too."
+			: "Compatibility alias for ast_grep_dump. Dump the tree-sitter AST for a source snippet using ast-grep CLI. Use when ast_grep_search returns zero matches and you need exact node kinds, field names, or nesting. Named nodes only by default; includeAnonymous=true shows punctuation/CST nodes too.",
 		promptSnippet: "Inspect AST node kinds before writing ast-grep patterns",
 		parameters: Type.Object({
 			source: Type.String({
@@ -37,42 +42,81 @@ export function createAstDumpTool(astGrepClient: AstGrepClient) {
 					: "";
 			const includeAnonymous = params.includeAnonymous === true;
 
-			if (!source.trim()) {
+			try {
+				if (!source.trim()) {
+					return {
+						content: [{ type: "text" as const, text: "source is required" }],
+						isError: true,
+						details: { lang, includeAnonymous },
+					};
+				}
+
+				if (_signal.aborted) {
+					return {
+						content: [
+							{ type: "text" as const, text: "Error: operation aborted" },
+						],
+						isError: true,
+						details: { lang, includeAnonymous },
+					};
+				}
+
+				if (!(await astGrepClient.ensureAvailable())) {
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: "ast-grep CLI not found. Install: npm i -D @ast-grep/cli",
+							},
+						],
+						isError: true,
+						details: { lang, includeAnonymous },
+					};
+				}
+
+				if (_signal.aborted) {
+					return {
+						content: [
+							{ type: "text" as const, text: "Error: operation aborted" },
+						],
+						isError: true,
+						details: { lang, includeAnonymous },
+					};
+				}
+
+				const result = await astGrepClient.dumpAst(source, lang, {
+					includeAnonymous,
+				});
+				if (result.error) {
+					return {
+						content: [
+							{ type: "text" as const, text: `Error: ${result.error}` },
+						],
+						isError: true,
+						details: { lang, includeAnonymous },
+					};
+				}
+
 				return {
-					content: [{ type: "text" as const, text: "source is required" }],
+					content: [{ type: "text" as const, text: result.output ?? "" }],
+					details: { lang, includeAnonymous },
+				};
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				return {
+					content: [{ type: "text" as const, text: `Error: ${message}` }],
 					isError: true,
 					details: { lang, includeAnonymous },
 				};
 			}
-
-			if (!(await astGrepClient.ensureAvailable())) {
-				return {
-					content: [
-						{
-							type: "text" as const,
-							text: "ast-grep CLI not found. Install: npm i -D @ast-grep/cli",
-						},
-					],
-					isError: true,
-					details: { lang, includeAnonymous },
-				};
-			}
-
-			const result = await astGrepClient.dumpAst(source, lang, {
-				includeAnonymous,
-			});
-			if (result.error) {
-				return {
-					content: [{ type: "text" as const, text: `Error: ${result.error}` }],
-					isError: true,
-					details: { lang, includeAnonymous },
-				};
-			}
-
-			return {
-				content: [{ type: "text" as const, text: result.output ?? "" }],
-				details: { lang, includeAnonymous },
-			};
 		},
 	};
+}
+
+export function createAstGrepDumpTool(astGrepClient: AstGrepClient) {
+	return createAstDumpToolWithName(astGrepClient, "ast_grep_dump");
+}
+
+export function createAstDumpTool(astGrepClient: AstGrepClient) {
+	return createAstDumpToolWithName(astGrepClient, "ast_dump");
 }

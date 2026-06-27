@@ -25,6 +25,10 @@ export interface StructuralIntent {
 	precedes?: string;
 }
 
+const MAX_SYNTHESIZED_PATTERN_CHARS = 4_000;
+const MAX_NODE_KIND_CHARS = 80;
+const NODE_KIND_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
 /**
  * Returns true when at least one structural-intent field is present.
  */
@@ -51,9 +55,7 @@ export function synthesizeReplaceRule(intent: StructuralIntent & { rewrite: stri
  * @throws if pattern is empty
  */
 export function synthesizeRule(intent: StructuralIntent): string {
-	if (!intent.pattern.trim()) {
-		throw new Error("pattern is required for YAML synthesis");
-	}
+	assertSafePattern(intent.pattern, "pattern");
 
 	// Canonical language name for the YAML header (ast-grep is case-sensitive here).
 	const language = canonicalLanguage(intent.lang);
@@ -63,15 +65,17 @@ export function synthesizeRule(intent: StructuralIntent): string {
 	};
 
 	if (intent.insideKind) {
-		rule.inside = { kind: intent.insideKind, stopBy: "end" };
+		rule.inside = { kind: assertSafeNodeKind(intent.insideKind, "insideKind"), stopBy: "end" };
 	}
 	if (intent.hasKind) {
-		rule.has = { kind: intent.hasKind };
+		rule.has = { kind: assertSafeNodeKind(intent.hasKind, "hasKind") };
 	}
 	if (intent.follows) {
+		assertSafePattern(intent.follows, "follows");
 		rule.follows = { pattern: intent.follows };
 	}
 	if (intent.precedes) {
+		assertSafePattern(intent.precedes, "precedes");
 		rule.precedes = { pattern: intent.precedes };
 	}
 
@@ -82,6 +86,31 @@ export function synthesizeRule(intent: StructuralIntent): string {
 	};
 
 	return dump(doc, { lineWidth: -1 });
+}
+
+function assertSafePattern(value: string, field: string): void {
+	if (!value.trim()) {
+		throw new Error(`${field} is required for YAML synthesis`);
+	}
+	if (value.length > MAX_SYNTHESIZED_PATTERN_CHARS) {
+		throw new Error(`${field} is too long for YAML synthesis`);
+	}
+	if (value.includes("\0")) {
+		throw new Error(`${field} contains a NUL byte`);
+	}
+}
+
+function assertSafeNodeKind(value: string, field: string): string {
+	const kind = value.trim();
+	if (kind.length === 0) {
+		throw new Error(`${field} is required for YAML synthesis`);
+	}
+	if (kind.length > MAX_NODE_KIND_CHARS || !NODE_KIND_RE.test(kind)) {
+		throw new Error(
+			`${field} must be a single AST node kind like function_declaration`,
+		);
+	}
+	return kind;
 }
 
 /**

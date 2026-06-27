@@ -1,7 +1,11 @@
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { FactStore } from "../../clients/dispatch/fact-store.js";
-import { moduleReport, readSymbol } from "../../clients/module-report.js";
+import {
+	moduleReport,
+	readEnclosing,
+	readSymbol,
+} from "../../clients/module-report.js";
 import {
 	buildOrUpdateGraph,
 	clearReviewGraphWorkspaceCache,
@@ -108,6 +112,212 @@ describe("moduleReport — outline + structure", () => {
 
 		expect(report.available).toBe(true);
 		expect(report.api.some((e) => e.name === "Widget")).toBe(true);
+	});
+
+	it("surfaces important anonymous callbacks with read handles and risk flags", async () => {
+		const env = makeEnv();
+		const file = createTempFile(
+			env.tmpDir,
+			"callbacks.ts",
+			[
+				"export async function run(ctx: any) {",
+				"  await handleTurnEnd({",
+				"    resetLSPService: () => {",
+				"      ctx.ui.setStatus('x');",
+				"    },",
+				"  });",
+				"}",
+				'pi.on("turn_end", async (_event, ctx) => {',
+				"  ctx.ui.notify('x');",
+				"});",
+				"setTimeout(() => {",
+				"  resetFn();",
+				"}, 240_000);",
+			].join("\n"),
+		);
+
+		const report = await moduleReport(file, env.tmpDir);
+
+		const reset = report.callbacks.find(
+			(callback) => callback.name === "run.resetLSPService@3",
+		);
+		expect(reset).toMatchObject({
+			kind: "object_property_callback",
+			startLine: 3,
+			endLine: 5,
+			read: { path: file, offset: 3, limit: 3 },
+		});
+		expect(reset?.flags).toContain("captures ctx.ui");
+
+		const event = report.callbacks.find((callback) =>
+			callback.name.startsWith('pi.on("turn_end")@'),
+		);
+		expect(event?.kind).toBe("event_handler");
+		expect(event?.flags).toEqual(
+			expect.arrayContaining(["async", "captures ctx.ui", "lifecycle"]),
+		);
+
+		const timer = report.callbacks.find((callback) =>
+			callback.name.startsWith("setTimeout@"),
+		);
+		expect(timer?.kind).toBe("timer_callback");
+		expect(timer?.flags).toContain("detached timer");
+	});
+
+	it("extracts inline executable handles across non-TypeScript grammars", async () => {
+		const env = makeEnv();
+		const py = createTempFile(
+			env.tmpDir,
+			"callbacks.py",
+			'def run(ctx):\n    callbacks = {"reset": lambda: ctx.ui.set_status("x")}\n',
+		);
+		const go = createTempFile(
+			env.tmpDir,
+			"callbacks.go",
+			'package main\nfunc run() {\n  cb := func() { println("x") }\n  cb()\n}\n',
+		);
+		const rust = createTempFile(
+			env.tmpDir,
+			"callbacks.rs",
+			'fn run() {\n    let cb = || { println!("x"); };\n}\n',
+		);
+
+		const pyReport = await moduleReport(py, env.tmpDir);
+		expect(pyReport.callbacks).toContainEqual(
+			expect.objectContaining({
+				name: 'run."reset"@2',
+				kind: "object_property_callback",
+				rawKind: "lambda",
+			}),
+		);
+		expect(pyReport.callbacks[0]?.flags).toContain("captures ctx.ui");
+
+		const goReport = await moduleReport(go, env.tmpDir);
+		expect(goReport.callbacks).toContainEqual(
+			expect.objectContaining({
+				name: "run.cb@3",
+				kind: "assigned_callback",
+				rawKind: "func_literal",
+			}),
+		);
+
+		const rustReport = await moduleReport(rust, env.tmpDir);
+		expect(rustReport.callbacks).toContainEqual(
+			expect.objectContaining({
+				name: "run.cb@2",
+				kind: "assigned_callback",
+				rawKind: "closure_expression",
+			}),
+		);
+	});
+
+	it("surfaces Go goroutine and deferred closures via language-tuned rules", async () => {
+		const env = makeEnv();
+		const go = createTempFile(
+			env.tmpDir,
+			"lifecycle.go",
+			[
+				"package main",
+				"",
+				"func run() {",
+				"	go func() {",
+				'		println("async work")',
+				"	}()",
+				"	defer func() {",
+				'		println("cleanup")',
+				"	}()",
+				"}",
+			].join("\n"),
+		);
+
+		const report = await moduleReport(go, env.tmpDir);
+
+		// A bare goroutine closure used to be DROPPED by the generic rules
+		// (classified as a no-name "callback"); the Go rule set now surfaces it.
+		const goroutine = report.callbacks.find((cb) => cb.kind === "goroutine");
+		expect(goroutine).toBeDefined();
+		expect(goroutine?.name).toMatch(/^run\.goroutine@\d+$/);
+		expect(goroutine?.rawKind).toBe("func_literal");
+		expect(goroutine?.flags).toContain("goroutine");
+
+		const deferred = report.callbacks.find(
+			(cb) => cb.kind === "deferred_callback",
+		);
+		expect(deferred).toBeDefined();
+		expect(deferred?.name).toMatch(/^run\.defer@\d+$/);
+		expect(deferred?.flags).toContain("deferred");
+	});
+
+	it("reports callbackSupport honestly per language (tuned vs generic)", async () => {
+		const env = makeEnv();
+		const go = createTempFile(
+			env.tmpDir,
+			"support.go",
+			"package main\nfunc run() {}\n",
+		);
+		const py = createTempFile(
+			env.tmpDir,
+			"support.py",
+			"def run():\n    pass\n",
+		);
+
+		// Go has a tuned rule set (goroutine/defer); Python falls back to the
+		// generic JS/TS-shaped heuristics, so the report must say so.
+		expect((await moduleReport(go, env.tmpDir)).callbackSupport).toBe("tuned");
+		expect((await moduleReport(py, env.tmpDir)).callbackSupport).toBe(
+			"generic",
+		);
+	});
+
+	it("read_enclosing resolves a Go goroutine body by line", async () => {
+		const env = makeEnv();
+		const go = createTempFile(
+			env.tmpDir,
+			"enclosing.go",
+			[
+				"package main",
+				"",
+				"func run() {",
+				"	go func() {",
+				'		println("inside goroutine")',
+				"	}()",
+				"}",
+			].join("\n"),
+		);
+
+		// Line 5 is inside the goroutine closure body.
+		const result = await readEnclosing(go, 5, env.tmpDir);
+		expect(result.found).toBe(true);
+		expect(result.kind).toBe("goroutine");
+		expect(result.source).toContain("inside goroutine");
+	});
+
+	it("uses focus only to rank existing recommended reads", async () => {
+		const env = makeEnv();
+		const file = createTempFile(
+			env.tmpDir,
+			"callbacks.ts",
+			[
+				"export function run(ctx: any) {",
+				"  return {",
+				"    resetLSPService: () => {",
+				"      ctx.ui.setStatus('x');",
+				"    },",
+				"  };",
+				"}",
+			].join("\n"),
+		);
+
+		const report = await moduleReport(file, env.tmpDir, {
+			focus: "stale ctx idle reset",
+		});
+
+		expect(report.recommendedReads[0]).toMatchObject({
+			symbol: "run.resetLSPService@3",
+			offset: 3,
+			limit: 3,
+		});
+		expect(report.recommendedReads[0]?.reason).toContain("matches focus");
 	});
 
 	it("returns available:false for a non-symbol-bearing file (json)", async () => {
@@ -538,6 +748,67 @@ describe("moduleReport — member visibility (#258) + compact outline (#259)", (
 	});
 });
 
+describe("readEnclosing — search/diagnostic line to exact body", () => {
+	it("returns the smallest callback enclosing a line", async () => {
+		const env = makeEnv();
+		const file = createTempFile(
+			env.tmpDir,
+			"callbacks.ts",
+			[
+				"export function run(ctx: any) {",
+				"  return {",
+				"    resetLSPService: () => {",
+				"      ctx.ui.setStatus('x');",
+				"    },",
+				"  };",
+				"}",
+			].join("\n"),
+		);
+
+		const result = await readEnclosing(file, 4, env.tmpDir);
+
+		expect(result.found).toBe(true);
+		expect(result.name).toBe("run.resetLSPService@3");
+		expect(result.kind).toBe("object_property_callback");
+		expect(result.startLine).toBe(3);
+		expect(result.endLine).toBe(5);
+		expect(result.source).toContain("ctx.ui.setStatus");
+		expect(result.source).not.toContain("return {");
+	});
+
+	it("falls back to a named symbol when no callback encloses the line", async () => {
+		const env = makeEnv();
+		const file = createTempFile(
+			env.tmpDir,
+			"sample.py",
+			"def outer():\n    value = 1\n    return value\n",
+		);
+
+		const result = await readEnclosing(file, 2, env.tmpDir);
+
+		expect(result.found).toBe(true);
+		expect(result.name).toBe("outer");
+		expect(result.kind).toBe("function");
+		expect(result.source).toContain("return value");
+	});
+
+	it("honors maxLines without returning oversized source", async () => {
+		const env = makeEnv();
+		const file = createTempFile(
+			env.tmpDir,
+			"sample.ts",
+			"export function big() {\n  const a = 1;\n  const b = 2;\n  return a + b;\n}\n",
+		);
+
+		const result = await readEnclosing(file, 3, env.tmpDir, { maxLines: 2 });
+
+		expect(result.found).toBe(false);
+		expect(result.name).toBe("big");
+		expect(result.error).toContain("above maxLines 2");
+		expect(result.source).toBeUndefined();
+	});
+});
+
 describe("readSymbol — verbatim body for guard-satisfying reads", () => {
 	it("returns the exact source lines of a named symbol", async () => {
 		const env = makeEnv();
@@ -563,6 +834,38 @@ describe("readSymbol — verbatim body for guard-satisfying reads", () => {
 		expect(result.source).toContain("return doubled;");
 		// Must not leak lines outside the symbol body.
 		expect(result.source).not.toContain("const noise");
+	});
+
+	it("returns the exact source lines of a module_report callback handle", async () => {
+		const env = makeEnv();
+		const file = createTempFile(
+			env.tmpDir,
+			"callbacks.ts",
+			[
+				"export async function run(ctx: any) {",
+				"  await handleTurnEnd({",
+				"    resetLSPService: () => {",
+				"      ctx.ui.setStatus('x');",
+				"    },",
+				"  });",
+				"}",
+			].join("\n"),
+		);
+		const report = await moduleReport(file, env.tmpDir);
+		const handle = report.callbacks.find(
+			(callback) => callback.name === "run.resetLSPService@3",
+		)?.name;
+		expect(handle).toBeDefined();
+
+		const result = await readSymbol(file, handle!, env.tmpDir);
+
+		expect(result.found).toBe(true);
+		expect(result.kind).toBe("object_property_callback");
+		expect(result.startLine).toBe(3);
+		expect(result.endLine).toBe(5);
+		expect(result.source).toContain("resetLSPService");
+		expect(result.source).toContain("ctx.ui.setStatus");
+		expect(result.source).not.toContain("handleTurnEnd");
 	});
 
 	it("reports not-found for an unknown symbol", async () => {

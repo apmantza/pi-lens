@@ -3,10 +3,7 @@ import * as path from "node:path";
 import type { AstGrepClient } from "./ast-grep-client.js";
 import type { BiomeClient } from "./biome-client.js";
 import type { CacheManager } from "./cache-manager.js";
-import type {
-	DeadCodeClient,
-	DeadCodeResult,
-} from "./dead-code-client.js";
+import type { DeadCodeClient, DeadCodeResult } from "./dead-code-client.js";
 import { deadCodeIssueCount } from "./dead-code-client.js";
 import { logDeadCodeScan } from "./dead-code-logger.js";
 import type { DependencyChecker } from "./dependency-checker.js";
@@ -565,7 +562,7 @@ function scheduleStartupScans(
 		if (applicable.length === 0) return;
 		await Promise.all(
 			applicable.map(async (client) => {
-				if (!runtime.isCurrentSession(sessionGeneration)) return;
+				if (!runtime.isCurrentSession(sessionGeneration)) return undefined;
 				const cacheKey = `dead-code-${client.id}`;
 				const cached = cacheManager.readCache<DeadCodeResult>(
 					cacheKey,
@@ -573,11 +570,11 @@ function scheduleStartupScans(
 				);
 				if (cached) {
 					dbg(`session_start dead-code(${client.id}): cache hit`);
-					return;
+					return undefined;
 				}
 				const startMs = Date.now();
 				const result = await client.analyze(analysisRoot);
-				if (!runtime.isCurrentSession(sessionGeneration)) return;
+				if (!runtime.isCurrentSession(sessionGeneration)) return undefined;
 				cacheManager.writeCache(cacheKey, result, analysisRoot, {
 					scanDurationMs: Date.now() - startMs,
 				});
@@ -680,7 +677,9 @@ function scheduleStartupScans(
 	// wrapper.
 	runTask("trivy", async () => {
 		if (!TrivyClient.shouldScan(analysisRoot)) {
-			dbg("session_start trivy: not enabled / no dependency manifest — skipped");
+			dbg(
+				"session_start trivy: not enabled / no dependency manifest — skipped",
+			);
 			return;
 		}
 		if (!(await trivyClient.ensureAvailable())) {
@@ -898,9 +897,9 @@ export const SESSION_START_GUIDANCE: string[] = [
 	"📌 pi-lens active — automated checks run on every edit/write; blocking errors (including pre-existing) show inline and must be fixed.\n" +
 		"Key tools (see each tool's own description for args):\n" +
 		"• lens_diagnostics — session-wide diagnostic state; mode=all resurfaces stale blocking errors that dropped from turn context.\n" +
-		"• module_report + read_symbol — navigable file outline + single-symbol body; cheaper than reading a whole file before editing.\n" +
+		"• module_report + read_symbol/read_enclosing — navigable outline/callback handles + exact body reads; cheaper than reading a whole file before editing.\n" +
 		"• lsp_navigation / lsp_diagnostics — definitions/references/rename; probe LSP for errors in a file/folder/workspace.\n" +
-		"• ast_grep_search / ast_grep_replace — structural code patterns (ast_dump to discover node kinds).",
+		"• ast_grep_search / ast_grep_replace — structural code patterns (ast_grep_dump to discover node kinds).",
 ];
 
 export async function handleSessionStart(

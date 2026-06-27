@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	createModuleReportTool,
+	createReadEnclosingTool,
 	createReadSymbolTool,
 } from "../../tools/module-report.js";
 import { createTempFile, setupTestEnvironment } from "../clients/test-utils.js";
@@ -33,9 +34,7 @@ describe("module_report tool", () => {
 			expect(result.isError).toBe(false);
 			const report = JSON.parse(String(result.content[0]?.text));
 			expect(report.available).toBe(true);
-			const add = report.api.find(
-				(e: { name: string }) => e.name === "add",
-			) as
+			const add = report.api.find((e: { name: string }) => e.name === "add") as
 				| { name: string; startLine: number; endLine: number; read: unknown }
 				| undefined;
 			expect(add).toBeTruthy();
@@ -44,6 +43,31 @@ describe("module_report tool", () => {
 				offset: add?.startLine,
 				limit: (add?.endLine ?? 0) - (add?.startLine ?? 0) + 1,
 			});
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("includes callback count in details", async () => {
+		const env = setupTestEnvironment("pi-lens-modreport-tool-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"callbacks.ts",
+				"export function run(ctx: any) {\n  return { resetLSPService: () => ctx.ui.setStatus('x') };\n}\n",
+			);
+			const tool = createModuleReportTool(() => env.tmpDir);
+			const result = await tool.execute(
+				"callbacks",
+				{ path: "callbacks.ts", focus: "reset ctx" },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			expect(result.details.callbacks).toBeGreaterThan(0);
+			const report = JSON.parse(String(result.content[0]?.text));
+			expect(report.callbacks[0].name).toContain("resetLSPService");
+			expect(report.recommendedReads[0].symbol).toContain("resetLSPService");
 		} finally {
 			env.cleanup();
 		}
@@ -62,6 +86,88 @@ describe("module_report tool", () => {
 				{ cwd: env.tmpDir },
 			);
 			expect(result.isError).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+});
+
+describe("read_enclosing tool", () => {
+	it("returns the enclosing callback body and records read coverage", async () => {
+		const env = setupTestEnvironment("pi-lens-readenc-tool-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"callbacks.ts",
+				[
+					"export function run(ctx: any) {",
+					"  return {",
+					"    resetLSPService: () => {",
+					"      ctx.ui.setStatus('x');",
+					"    },",
+					"  };",
+					"}",
+				].join("\n"),
+			);
+			const recorded: Recorded[] = [];
+			const tool = createReadEnclosingTool(
+				() => env.tmpDir,
+				(filePath, symbol) => recorded.push({ filePath, symbol }),
+			);
+
+			const result = await tool.execute(
+				"read-enclosing",
+				{ path: "callbacks.ts", line: 4 },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+
+			expect(result.isError).toBeUndefined();
+			expect(String(result.content[0]?.text)).toContain("ctx.ui.setStatus");
+			expect(recorded).toHaveLength(1);
+			expect(recorded[0].symbol).toMatchObject({
+				name: "run.resetLSPService@3",
+				kind: "object_property_callback",
+				startLine: 3,
+				endLine: 5,
+			});
+			expect(result.details).toMatchObject({ readRecorded: true });
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("returns a helpful error for oversized enclosing ranges", async () => {
+		const env = setupTestEnvironment("pi-lens-readenc-tool-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"sample.ts",
+				"export function big() {\n  const a = 1;\n  const b = 2;\n  return a + b;\n}\n",
+			);
+			const tool = createReadEnclosingTool(
+				() => env.tmpDir,
+				() => undefined,
+			);
+
+			const result = await tool.execute(
+				"read-enclosing",
+				{ path: "sample.ts", line: 3, maxLines: 2 },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+
+			expect(result.isError).toBe(true);
+			expect(String(result.content[0]?.text)).toContain("above maxLines 2");
+			expect(result.details).toMatchObject({
+				found: false,
+				name: "big",
+				kind: "function",
+				startLine: 1,
+				endLine: 5,
+			});
 		} finally {
 			env.cleanup();
 		}
@@ -98,6 +204,79 @@ describe("read_symbol tool", () => {
 			expect(recorded[0].symbol.name).toBe("target");
 			expect(recorded[0].symbol.startLine).toBe(2);
 			expect(recorded[0].symbol.endLine).toBe(4);
+			expect(result.details).toMatchObject({ readRecorded: true });
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("still returns the body when read-guard recording throws", async () => {
+		const env = setupTestEnvironment("pi-lens-readsym-tool-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"sample.ts",
+				"export function target(): number {\n  return 1;\n}\n",
+			);
+			const tool = createReadSymbolTool(
+				() => env.tmpDir,
+				() => {
+					throw new Error("record failed");
+				},
+			);
+			const result = await tool.execute(
+				"1",
+				{ path: "sample.ts", symbol: "target" },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			expect(result.isError).toBeUndefined();
+			expect(String(result.content[0]?.text)).toContain("return 1");
+			expect(result.details).toMatchObject({ readRecorded: false });
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("reads callback handles and records them as read-guard coverage", async () => {
+		const env = setupTestEnvironment("pi-lens-readsym-tool-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"callbacks.ts",
+				[
+					"export function run(ctx: any) {",
+					"  return {",
+					"    resetLSPService: () => {",
+					"      ctx.ui.setStatus('x');",
+					"    },",
+					"  };",
+					"}",
+				].join("\n"),
+			);
+			const recorded: Recorded[] = [];
+			const tool = createReadSymbolTool(
+				() => env.tmpDir,
+				(filePath, symbol) => recorded.push({ filePath, symbol }),
+			);
+			const result = await tool.execute(
+				"callback",
+				{ path: "callbacks.ts", symbol: "run.resetLSPService@3" },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			expect(result.isError).toBeUndefined();
+			expect(String(result.content[0]?.text)).toContain("ctx.ui.setStatus");
+			expect(recorded).toHaveLength(1);
+			expect(recorded[0].symbol).toMatchObject({
+				name: "run.resetLSPService@3",
+				kind: "object_property_callback",
+				startLine: 3,
+				endLine: 5,
+			});
+			expect(result.details).toMatchObject({ readRecorded: true });
 		} finally {
 			env.cleanup();
 		}

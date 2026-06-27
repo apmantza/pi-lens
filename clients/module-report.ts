@@ -16,7 +16,9 @@
  * graph and never calls an LSP server on this path (both repeatedly OOM'd pi when
  * an agent fanned out reports). Every call:
  *   1. tree-sitter extract of THE one file (always; cold-safe structure).
- *   2. read the already-built review graph (in-memory, else the persisted disk
+ *   2. language-agnostic inline executable extraction over the same tree-sitter
+ *      AST (callbacks/closures/lambdas/function literals; no second parse).
+ *   3. read the already-built review graph (in-memory, else the persisted disk
  *      snapshot) for who-uses-this / flags / imports — never a build. Cold cache
  *      → outline only.
  * `semantic.source` reflects who-uses-this provenance: "review-graph" when the
@@ -52,6 +54,8 @@ import {
 export interface ModuleReportOptions {
 	/** Cap on who-uses-this entries per symbol. */
 	maxRefsPerSymbol?: number;
+	/** Optional task hint used only to rank recommendedReads; never expands scope or triggers scans. */
+	focus?: string;
 	/** Include the cross-file blast-radius section (#304): the transitive
 	 * dependents of this module, aggregated to ranked file `read` args. Read-only
 	 * over the CACHED graph — omitted entirely on a cold cache (never builds). */
@@ -100,10 +104,26 @@ export interface ModuleSymbolEntry {
 
 export interface RecommendedRead {
 	reason: string;
+	/** Named symbol or synthetic callback handle. */
 	symbol?: string;
 	path: string;
 	offset: number;
 	limit: number;
+}
+
+export interface ModuleCallbackEntry {
+	/** Stable synthetic handle usable with read_symbol. */
+	name: string;
+	/** Normalized role for an inline callback/closure/lambda. */
+	kind: string;
+	/** Raw tree-sitter node kind for debugging. */
+	rawKind: string;
+	startLine: number;
+	endLine: number;
+	signature?: string;
+	parentChain?: string[];
+	flags?: string[];
+	read: { path: string; offset: number; limit: number };
 }
 
 /** One file in the blast radius (#304): a transitive dependent of this module,
@@ -137,12 +157,26 @@ export interface ModuleReport {
 	available: boolean;
 	staleness: "fresh" | "unavailable";
 	path: string;
+	/** Present when the report degraded because parsing/extraction failed. */
+	error?: string;
+	/** Non-fatal degradation notes for approximate sections. */
+	warnings?: string[];
 	language?: string;
 	lineCount?: number;
 	summary: { imports: number; exports: number; symbols: number };
 	imports: { external: string[]; internal: string[] };
 	api: ModuleSymbolEntry[];
 	internal: ModuleSymbolEntry[];
+	/** Important anonymous callbacks/closures that normal symbol outlines miss. */
+	callbacks: ModuleCallbackEntry[];
+	/**
+	 * Honesty signal for the callbacks section. `tuned` = language-specific
+	 * callback rules applied (e.g. Go goroutines/defer); `generic` = the default
+	 * JS/TS-shaped heuristics were used (named/assigned/captured callbacks only —
+	 * no language-specific role detection). Lets callers avoid over-trusting the
+	 * callbacks list for languages without a tuned rule set.
+	 */
+	callbackSupport?: "tuned" | "generic";
 	recommendedReads: RecommendedRead[];
 	/** Cross-file blast radius (#304) — present only when requested via
 	 * `blastRadius` and the cached graph is warm; omitted otherwise. */
@@ -160,12 +194,39 @@ export interface ReadSymbolResult {
 	found: boolean;
 	path: string;
 	name: string;
+	/** Present when extraction failed rather than the symbol being absent. */
+	error?: string;
+	/** Non-fatal degradation notes from symbol/callback extraction. */
+	warnings?: string[];
 	kind?: string;
 	startLine?: number;
 	endLine?: number;
 	signature?: string;
 	/** The verbatim body lines — recording this read satisfies the read-guard. */
 	source?: string;
+}
+
+export interface ReadEnclosingResult {
+	found: boolean;
+	path: string;
+	line: number;
+	name?: string;
+	kind?: string;
+	startLine?: number;
+	endLine?: number;
+	signature?: string;
+	parentChain?: string[];
+	error?: string;
+	warnings?: string[];
+	/** The verbatim enclosing body lines — recording this read satisfies the read-guard. */
+	source?: string;
+}
+
+export interface ReadEnclosingOptions {
+	/** Optional semantic kind filter, e.g. function, method, callback, class. */
+	kinds?: string[];
+	/** Optional maximum body size to return. Oversized matches return metadata + error. */
+	maxLines?: number;
 }
 
 // kind -> tree-sitter languageId. The languageId keys BOTH the grammar map
@@ -212,36 +273,92 @@ function tsLangForFile(
 // Shared parser + per-language extractor cache. The TreeSitterClient memoizes
 // its own grammar init; extractors are cheap once their queries are compiled.
 const tsClient = new TreeSitterClient();
-const extractorCache = new Map<string, TreeSitterSymbolExtractor | null>();
+const extractorCache = new Map<
+	string,
+	Promise<TreeSitterSymbolExtractor | null>
+>();
 
 async function getExtractor(
 	languageId: string,
 ): Promise<TreeSitterSymbolExtractor | null> {
-	const cached = extractorCache.get(languageId);
-	if (cached !== undefined) return cached;
-	const extractor = new TreeSitterSymbolExtractor(languageId, tsClient);
-	const ok = await extractor.init();
-	const result = ok ? extractor : null;
-	extractorCache.set(languageId, result);
-	return result;
+	let cached = extractorCache.get(languageId);
+	if (!cached) {
+		cached = (async () => {
+			const extractor = new TreeSitterSymbolExtractor(languageId, tsClient);
+			const ok = await extractor.init();
+			return ok ? extractor : null;
+		})().catch((err) => {
+			extractorCache.delete(languageId);
+			throw err;
+		});
+		extractorCache.set(languageId, cached);
+	}
+	return cached;
+}
+
+type ModuleReportNode = {
+	type: string;
+	text: string;
+	children: ModuleReportNode[];
+	parent?: ModuleReportNode | null;
+	startPosition: { row: number; column: number };
+	endPosition: { row: number; column: number };
+};
+
+function diagnosticMessage(err: unknown): string {
+	return err instanceof Error ? err.message : String(err);
 }
 
 async function extractFile(
 	absPath: string,
 	languageId: string,
 	content: string,
-): Promise<{ symbols: ExtractedSymbol[]; imports: ImportRef[] }> {
+): Promise<{
+	symbols: ExtractedSymbol[];
+	imports: ImportRef[];
+	root?: ModuleReportNode;
+	error?: string;
+	warnings?: string[];
+}> {
 	try {
 		const initialized = await tsClient.init();
-		if (!initialized) return { symbols: [], imports: [] };
+		if (!initialized) {
+			return {
+				symbols: [],
+				imports: [],
+				error: "tree-sitter runtime failed to initialize",
+			};
+		}
 		const tree = await tsClient.parseFile(absPath, languageId);
-		if (!tree) return { symbols: [], imports: [] };
+		if (!tree) {
+			return {
+				symbols: [],
+				imports: [],
+				error: `tree-sitter failed to parse as ${languageId}`,
+			};
+		}
 		const extractor = await getExtractor(languageId);
-		if (!extractor) return { symbols: [], imports: [] };
+		const root = tree.rootNode as unknown as ModuleReportNode;
+		if (!extractor) {
+			return {
+				symbols: [],
+				imports: [],
+				root,
+				warnings: [`Symbol extractor not available for ${languageId}`],
+			};
+		}
 		const result = extractor.extract(tree, absPath, content);
-		return { symbols: result.symbols, imports: result.imports };
-	} catch {
-		return { symbols: [], imports: [] };
+		return { symbols: result.symbols, imports: result.imports, root };
+	} catch (err) {
+		const message = diagnosticMessage(err);
+		logLatency({
+			type: "phase",
+			phase: "module_report_extract_error",
+			filePath: absPath,
+			durationMs: 0,
+			metadata: { error: message },
+		});
+		return { symbols: [], imports: [], error: message };
 	}
 }
 
@@ -370,16 +487,33 @@ function coldImports(
 	languageId: string,
 	absPath: string,
 	projectRoot: string,
-): { external: string[]; internal: string[] } {
+): { external: string[]; internal: string[]; warnings: string[] } {
 	const external = new Set<string>();
 	const internal = new Set<string>();
+	const warnings: string[] = [];
 	for (const imp of imports) {
-		const files = resolveImportToFiles(
-			projectRoot,
-			absPath,
-			languageId,
-			imp.source,
-		);
+		let files: string[] = [];
+		try {
+			files = resolveImportToFiles(
+				projectRoot,
+				absPath,
+				languageId,
+				imp.source,
+			);
+		} catch (err) {
+			const message = diagnosticMessage(err);
+			warnings.push(`Failed to resolve import "${imp.source}": ${message}`);
+			logLatency({
+				type: "phase",
+				phase: "module_report_import_resolve_error",
+				filePath: absPath,
+				durationMs: 0,
+				metadata: {
+					import: imp.source,
+					error: message,
+				},
+			});
+		}
 		if (files.length > 0) {
 			for (const f of files) internal.add(toDisplayPath(f, projectRoot));
 		} else if (looksInternal(imp.source, languageId)) {
@@ -391,6 +525,7 @@ function coldImports(
 	return {
 		external: [...external].sort((a, b) => a.localeCompare(b)),
 		internal: [...internal].sort((a, b) => a.localeCompare(b)),
+		warnings,
 	};
 }
 
@@ -496,25 +631,80 @@ function nestEntries(entries: ModuleSymbolEntry[]): ModuleSymbolEntry[] {
 	return entries.filter((e) => !containerOf.get(e));
 }
 
+function normalizeFocus(focus: string | undefined): string[] {
+	return (focus ?? "")
+		.toLowerCase()
+		.split(/[^a-z0-9_.]+/)
+		.map((part) => part.trim())
+		.filter((part) => part.length >= 3)
+		.slice(0, 8);
+}
+
+function focusScore(text: string, terms: string[]): number {
+	if (terms.length === 0) return 0;
+	const haystack = text.toLowerCase();
+	return terms.reduce(
+		(score, term) => score + (haystack.includes(term) ? 6 : 0),
+		0,
+	);
+}
+
 function rankRecommendedReads(
 	entries: ModuleSymbolEntry[],
-	limit = 3,
+	callbacks: ModuleCallbackEntry[] = [],
+	limit = 5,
+	focus?: string,
 ): RecommendedRead[] {
-	const scored = entries.map((entry) => {
+	const focusTerms = normalizeFocus(focus);
+	const scoredSymbols = entries.map((entry) => {
 		const refs = entry.usedBy?.length ?? 0;
+		const focus = focusScore(
+			[
+				entry.name,
+				entry.kind,
+				entry.signature ?? "",
+				entry.flags?.join(" ") ?? "",
+			].join(" "),
+			focusTerms,
+		);
 		const score =
 			refs * 2 +
 			(entry.complexity ?? 0) +
 			(entry.exported ? 2 : 0) +
-			(entry.flags?.includes("high complexity") ? 3 : 0);
-		return { entry, score, refs };
+			(entry.flags?.includes("high complexity") ? 3 : 0) +
+			focus;
+		return { kind: "symbol" as const, entry, score, refs, focus };
 	});
+	const scoredCallbacks = callbacks.map((callback) => {
+		const flags = callback.flags ?? [];
+		const focus = focusScore(
+			[
+				callback.name,
+				callback.kind,
+				callback.signature ?? "",
+				flags.join(" "),
+			].join(" "),
+			focusTerms,
+		);
+		const score =
+			(flags.includes("captures ctx.ui") ? 8 : 0) +
+			(flags.includes("captures ctx") ? 5 : 0) +
+			(flags.includes("detached timer") ? 4 : 0) +
+			(flags.includes("lifecycle") ? 3 : 0) +
+			(callback.kind === "object_property_callback" ? 2 : 0) +
+			(callback.kind === "assigned_callback" ? 1 : 0) +
+			focus;
+		return { kind: "callback" as const, callback, score, focus };
+	});
+	const scored = [...scoredSymbols, ...scoredCallbacks].filter(
+		(item) => item.score > 0,
+	);
 	scored.sort((a, b) => b.score - a.score);
-	return scored
-		.filter(({ score }) => score > 0)
-		.slice(0, limit)
-		.map(({ entry, refs }) => {
+	return scored.slice(0, limit).map((item) => {
+		if (item.kind === "symbol") {
+			const { entry, refs } = item;
 			const reasons: string[] = [];
+			if (item.focus > 0) reasons.push("matches focus");
 			if (entry.exported) reasons.push("exported");
 			if (refs > 0) reasons.push(`used by ${refs}`);
 			if (entry.complexity !== undefined && entry.complexity >= 8) {
@@ -525,7 +715,22 @@ function rankRecommendedReads(
 				symbol: entry.name,
 				...entry.read,
 			};
-		});
+		}
+		const reasons: string[] = [];
+		if (item.focus > 0) reasons.push("matches focus");
+		if (item.callback.flags?.length) reasons.push(...item.callback.flags);
+		if (item.callback.kind === "object_property_callback") {
+			reasons.push("callback property");
+		}
+		if (item.callback.kind === "assigned_callback") {
+			reasons.push("assigned callback");
+		}
+		return {
+			reason: reasons.join(", ") || item.callback.kind,
+			symbol: item.callback.name,
+			...item.callback.read,
+		};
+	});
 }
 
 // Cap the blast-radius list so a high-fanout module doesn't blow the token
@@ -612,15 +817,345 @@ async function computeBlastRadius(
 	};
 }
 
-function unavailableReport(displayPath: string): ModuleReport {
+function nodeLine(node: ModuleReportNode): number {
+	return node.startPosition.row + 1;
+}
+
+function nodeEndLine(node: ModuleReportNode): number {
+	return node.endPosition.row + 1;
+}
+
+function firstLine(text: string): string {
+	return text.split(/\r?\n/, 1)[0]?.trim() ?? "";
+}
+
+type CallbackOwner = Pick<ModuleSymbolEntry, "name" | "startLine" | "endLine">;
+
+function findNearestSymbolName(
+	entries: CallbackOwner[],
+	startLine: number,
+	endLine: number,
+): string | undefined {
+	let best: CallbackOwner | undefined;
+	for (const entry of entries) {
+		if (entry.startLine > startLine || entry.endLine < endLine) continue;
+		if (
+			!best ||
+			entry.endLine - entry.startLine < best.endLine - best.startLine
+		) {
+			best = entry;
+		}
+	}
+	return best?.name;
+}
+
+const INLINE_EXECUTABLE_NODE_KINDS = new Set([
+	// JavaScript / TypeScript
+	"arrow_function",
+	"function_expression",
+	// Python
+	"lambda",
+	// Go
+	"func_literal",
+	// Rust
+	"closure_expression",
+	// Other grammars use one of these for lambdas/anonymous functions.
+	"lambda_expression",
+	"anonymous_function",
+]);
+
+const ARGUMENT_CONTAINER_NODE_KINDS = new Set([
+	"arguments",
+	"argument_list",
+	"argument_list_expression",
+]);
+
+function callNameForCallback(node: ModuleReportNode): string | undefined {
+	const parent = node.parent;
+	const call = ARGUMENT_CONTAINER_NODE_KINDS.has(parent?.type ?? "")
+		? parent?.parent
+		: parent?.type === "call_expression"
+			? parent
+			: undefined;
+	if (call?.type !== "call_expression") return undefined;
+	const callee = call.children.find(
+		(child) => !ARGUMENT_CONTAINER_NODE_KINDS.has(child.type),
+	);
+	return callee?.text;
+}
+
+function eventNameForCallback(node: ModuleReportNode): string | undefined {
+	const args = node.parent;
+	if (args?.type !== "arguments") return undefined;
+	const first = args.children.find(
+		(child) => child.type === "string" && nodeLine(child) <= nodeLine(node),
+	);
+	return first?.text;
+}
+
+function propertyNameForCallback(node: ModuleReportNode): string | undefined {
+	const parent = node.parent;
+	if (parent?.type !== "pair" && parent?.type !== "key_value_pair") {
+		return undefined;
+	}
+	const key = parent.children.find((child) => child !== node);
+	return key?.text;
+}
+
+function assignedNameForCallback(node: ModuleReportNode): string | undefined {
+	const parent = node.parent;
+	if (!parent) return undefined;
+	if (
+		parent.type === "let_declaration" ||
+		parent.type === "variable_declarator"
+	) {
+		return parent.children.find((child) => child.type === "identifier")?.text;
+	}
+	if (parent.type === "expression_list") {
+		const declaration = parent.parent;
+		if (declaration?.type !== "short_var_declaration") return undefined;
+		const nameList = declaration.children.find((child) => child !== parent);
+		return nameList?.children.find((child) => child.type === "identifier")
+			?.text;
+	}
+	if (parent.type === "assignment") {
+		return parent.children.find((child) => child.type === "identifier")?.text;
+	}
+	return undefined;
+}
+
+// ── Callback classification: per-language rule sets ──────────────────────────
+// The inline-executable NODE KINDS are language-uniform (above), but the
+// SEMANTICS — what role a callback plays, what risk flags it carries, whether
+// it is high-signal enough to surface — are language-specific. Each language
+// group supplies a rule set; languages without one fall back to the generic
+// (JS/TS-tuned) rules. This mirrors how SYMBOL_QUERIES / IMPORT_QUERIES are
+// keyed per language, and is the seam for adding more languages incrementally
+// (one guarded vertical slice at a time).
+
+type CallbackContext = {
+	node: ModuleReportNode;
+	callName: string | undefined;
+	eventName: string | undefined;
+	propertyName: string | undefined;
+	assignedName: string | undefined;
+};
+
+type CallbackClassification = {
+	kind: string;
+	flags?: string[];
+	include: boolean;
+	/** Optional name base; when absent, extractCallbacks builds one generically. */
+	nameBase?: string;
+};
+
+type CallbackLanguageRules = {
+	classify(
+		ctx: CallbackContext,
+		owner: string | undefined,
+	): CallbackClassification;
+};
+
+/** Walk up to `maxHops` ancestors looking for a node of one of `types`. */
+function ancestorOfType(
+	node: ModuleReportNode,
+	types: Set<string>,
+	maxHops = 6,
+): ModuleReportNode | undefined {
+	let current = node.parent;
+	let hops = 0;
+	while (current && hops < maxHops) {
+		if (types.has(current.type)) return current;
+		current = current.parent;
+		hops += 1;
+	}
+	return undefined;
+}
+
+/**
+ * Generic, JS/TS-tuned classification — the historical behavior, now the
+ * default rule set for any language without a tuned entry. Kept byte-for-byte
+ * equivalent to the previous callbackKind/callbackFlags/shouldIncludeCallback
+ * so the refactor is behavior-preserving for every currently-supported language.
+ */
+function classifyGenericCallback(ctx: CallbackContext): CallbackClassification {
+	const { node, callName, propertyName, assignedName } = ctx;
+	let kind: string;
+	if (
+		callName === "setTimeout" ||
+		callName === "setInterval" ||
+		callName === "setImmediate"
+	) {
+		kind = "timer_callback";
+	} else if (callName === "pi.on" || callName?.endsWith(".on")) {
+		kind = "event_handler";
+	} else if (
+		callName?.endsWith(".then") ||
+		callName?.endsWith(".catch") ||
+		callName?.endsWith(".finally")
+	) {
+		kind = "promise_callback";
+	} else if (propertyName) {
+		kind = "object_property_callback";
+	} else if (assignedName) {
+		kind = "assigned_callback";
+	} else {
+		kind = "callback";
+	}
+	const flags: string[] = [];
+	if (node.text.trimStart().startsWith("async")) flags.push("async");
+	if (/\bctx\s*\.\s*ui\b/.test(node.text)) flags.push("captures ctx.ui");
+	else if (/\bctx\b/.test(node.text)) flags.push("captures ctx");
+	if (kind === "timer_callback") flags.push("detached timer");
+	if (kind === "event_handler") flags.push("lifecycle");
+	const include =
+		kind !== "callback" ||
+		!!propertyName ||
+		!!assignedName ||
+		flags.some((flag) => flag.startsWith("captures "));
+	return { kind, ...(flags.length > 0 ? { flags } : {}), include };
+}
+
+const jstsCallbackRules: CallbackLanguageRules = {
+	classify: (ctx) => classifyGenericCallback(ctx),
+};
+
+// Go: goroutines (`go func() {…}()`) and deferred closures (`defer func() {…}()`)
+// are the high-signal lifecycle constructs the generic rules DROP (they land as
+// a bare "callback"). Detect them structurally via the enclosing go_statement /
+// defer_statement — unambiguous node kinds, no call-name heuristics. Anything
+// else (assigned closures etc.) delegates to the generic rules unchanged.
+const GO_GOROUTINE_KINDS = new Set(["go_statement"]);
+const GO_DEFER_KINDS = new Set(["defer_statement"]);
+
+const goCallbackRules: CallbackLanguageRules = {
+	classify(ctx, owner) {
+		if (ancestorOfType(ctx.node, GO_GOROUTINE_KINDS, 3)) {
+			return {
+				kind: "goroutine",
+				flags: ["goroutine"],
+				include: true,
+				nameBase: owner ? `${owner}.goroutine` : "goroutine",
+			};
+		}
+		if (ancestorOfType(ctx.node, GO_DEFER_KINDS, 3)) {
+			return {
+				kind: "deferred_callback",
+				flags: ["deferred"],
+				include: true,
+				nameBase: owner ? `${owner}.defer` : "defer",
+			};
+		}
+		return classifyGenericCallback(ctx);
+	},
+};
+
+const CALLBACK_RULES: Record<string, CallbackLanguageRules> = {
+	typescript: jstsCallbackRules,
+	tsx: jstsCallbackRules,
+	javascript: jstsCallbackRules,
+	go: goCallbackRules,
+};
+
+function callbackRulesFor(
+	languageId: string | undefined,
+): CallbackLanguageRules {
+	return (languageId ? CALLBACK_RULES[languageId] : undefined) ?? jstsCallbackRules;
+}
+
+/**
+ * Whether a language has a TUNED callback rule set (explicit CALLBACK_RULES
+ * entry) vs. falling back to the generic JS/TS-shaped heuristics. Drives the
+ * report's `callbackSupport` honesty signal.
+ */
+function callbackSupportFor(
+	languageId: string | undefined,
+): "tuned" | "generic" {
+	return languageId && CALLBACK_RULES[languageId] ? "tuned" : "generic";
+}
+
+function extractCallbacks(
+	root: ModuleReportNode | undefined,
+	entries: CallbackOwner[],
+	filePath: string,
+	languageId: string | undefined,
+	warnings?: string[],
+): ModuleCallbackEntry[] {
+	if (!root) return [];
+	const rules = callbackRulesFor(languageId);
+	const callbacks: ModuleCallbackEntry[] = [];
+	const maxDepth = 1000;
+	let depthTruncated = false;
+	const visit = (node: ModuleReportNode, depth = 0): void => {
+		if (depth > maxDepth) {
+			depthTruncated = true;
+			return;
+		}
+		if (INLINE_EXECUTABLE_NODE_KINDS.has(node.type)) {
+			const startLine = nodeLine(node);
+			const endLine = nodeEndLine(node);
+			const callName = callNameForCallback(node);
+			const eventName = eventNameForCallback(node);
+			const propertyName = propertyNameForCallback(node);
+			const assignedName = assignedNameForCallback(node);
+			const owner = findNearestSymbolName(entries, startLine, endLine);
+			const cls = rules.classify(
+				{ node, callName, eventName, propertyName, assignedName },
+				owner,
+			);
+			if (cls.include) {
+				const base =
+					cls.nameBase ??
+					(propertyName
+						? owner
+							? `${owner}.${propertyName}`
+							: propertyName
+						: assignedName
+							? owner
+								? `${owner}.${assignedName}`
+								: assignedName
+							: eventName && callName
+								? `${callName}(${eventName})`
+								: (callName ?? "callback"));
+				callbacks.push({
+					name: `${base}@${startLine}`,
+					kind: cls.kind,
+					rawKind: node.type,
+					startLine,
+					endLine,
+					signature: firstLine(node.text),
+					...(owner ? { parentChain: [owner] } : {}),
+					...(cls.flags ? { flags: cls.flags } : {}),
+					read: readArgsFor(filePath, startLine, endLine),
+				});
+			}
+		}
+		for (const child of node.children ?? []) visit(child, depth + 1);
+	};
+	visit(root);
+	if (depthTruncated) {
+		warnings?.push(`Callback extraction stopped at AST depth ${maxDepth}`);
+	}
+	const callbackCap = 25;
+	if (callbacks.length > callbackCap) {
+		warnings?.push(
+			`Callback list truncated to ${callbackCap} of ${callbacks.length} entries`,
+		);
+	}
+	return callbacks.slice(0, callbackCap);
+}
+
+function unavailableReport(displayPath: string, error?: string): ModuleReport {
 	return {
 		available: false,
 		staleness: "unavailable",
 		path: displayPath,
+		...(error ? { error } : {}),
 		summary: { imports: 0, exports: 0, symbols: 0 },
 		imports: { external: [], internal: [] },
 		api: [],
 		internal: [],
+		callbacks: [],
 		recommendedReads: [],
 		semantic: { source: "none", references: false, implementations: false },
 	};
@@ -629,9 +1164,10 @@ function unavailableReport(displayPath: string): ModuleReport {
 /**
  * Build a structured report for a single module. Read-only, single mode (#256):
  * tree-sitter extract + 3-tier-cached review graph (who-uses-this, imports,
- * complexity/fanout) + bounded live-LSP enrichment of exported symbols. Each tier
- * degrades independently, so a cold graph or absent LSP server never aborts the
- * report — it just narrows what's populated.
+ * complexity/fanout) + callback extraction. This path never calls LSP; LSP-derived
+ * relationships must be written into the cached graph ahead of time (#236) and are
+ * then read here as graph data. Each tier degrades independently, so a cold graph
+ * never aborts the report — it just narrows what's populated.
  */
 export async function moduleReport(
 	file: string,
@@ -654,9 +1190,24 @@ export async function moduleReport(
 	const languageId = tsLangForFile(absPath, kind);
 	const lineCount = content.split(/\r?\n/).length;
 
-	const { symbols: extracted, imports: extractedImports } = languageId
+	const {
+		symbols: extracted,
+		imports: extractedImports,
+		root,
+		error: extractionError,
+		warnings: extractionWarnings,
+	} = languageId
 		? await extractFile(absPath, languageId, content)
-		: { symbols: [], imports: [] };
+		: {
+				symbols: [],
+				imports: [],
+				root: undefined,
+				error: undefined,
+				warnings: undefined,
+			};
+	if (extractionError) {
+		return unavailableReport(toDisplayPath(absPath, cwd), extractionError);
+	}
 
 	// READ-ONLY: consume the already-built review graph, never build one here. A
 	// synchronous full build re-runs every fact provider (TS-compiler ASTs for
@@ -684,6 +1235,21 @@ export async function moduleReport(
 
 	const api = topLevel.filter((entry) => entry.exported);
 	const internal = topLevel.filter((entry) => !entry.exported);
+	let callbacks: ModuleCallbackEntry[] = [];
+	const warnings: string[] = [...(extractionWarnings ?? [])];
+	try {
+		callbacks = extractCallbacks(root, entries, absPath, languageId, warnings);
+	} catch (err) {
+		const message = diagnosticMessage(err);
+		warnings.push(`Failed to extract callbacks: ${message}`);
+		logLatency({
+			type: "phase",
+			phase: "module_report_callback_extract_error",
+			filePath: absPath,
+			durationMs: 0,
+			metadata: { error: message },
+		});
+	}
 
 	// Imports: the warm review graph is source-of-truth; on a cold cache (or a
 	// graph without this file's node) fall back to the language-uniform tree-sitter
@@ -691,10 +1257,18 @@ export async function moduleReport(
 	const warmImports = graph
 		? collectImports(graph, normalizedPath, cwd)
 		: { external: [], internal: [] };
-	const imports =
+	const coldImportResult =
 		warmImports.external.length + warmImports.internal.length > 0 || !languageId
-			? warmImports
+			? undefined
 			: coldImports(extractedImports, languageId, absPath, cwd);
+	if (coldImportResult?.warnings.length)
+		warnings.push(...coldImportResult.warnings);
+	const imports = coldImportResult
+		? {
+				external: coldImportResult.external,
+				internal: coldImportResult.internal,
+			}
+		: warmImports;
 
 	const hasGraphNode = graph?.fileNodes.has(normalizedPath) ?? false;
 
@@ -724,9 +1298,17 @@ export async function moduleReport(
 			symbols: entries.length,
 		},
 		imports,
+		...(warnings.length > 0 ? { warnings } : {}),
 		api,
 		internal,
-		recommendedReads: rankRecommendedReads(entries),
+		callbacks,
+		callbackSupport: callbackSupportFor(languageId),
+		recommendedReads: rankRecommendedReads(
+			entries,
+			callbacks,
+			5,
+			options?.focus,
+		),
 		...(blastRadius ? { blastRadius } : {}),
 		semantic: {
 			// Provenance of who-uses-this / references. The AST review graph is the
@@ -796,27 +1378,321 @@ export async function readSymbol(
 		return { found: false, path: absPath, name: symbolName };
 	}
 
-	const { symbols } = await extractFile(absPath, languageId, content);
-	const sym = symbols.find((candidate) => candidate.name === symbolName);
-	if (!sym) {
+	const {
+		symbols,
+		root,
+		error: extractionError,
+		warnings: extractionWarnings,
+	} = await extractFile(absPath, languageId, content);
+	if (extractionError) {
 		log(false);
-		return { found: false, path: absPath, name: symbolName };
+		return {
+			found: false,
+			path: absPath,
+			name: symbolName,
+			error: extractionError,
+		};
+	}
+	const sym = symbols.find((candidate) => candidate.name === symbolName);
+	const lines = content.split(/\r?\n/);
+	if (sym) {
+		const startLine = sym.line;
+		const endLine = sym.endLine ?? sym.line;
+		const source = lines.slice(startLine - 1, endLine).join("\n");
+
+		log(true);
+		return {
+			found: true,
+			path: absPath,
+			name: sym.name,
+			kind: sym.kind,
+			startLine,
+			endLine,
+			signature: sym.signature,
+			source,
+		};
 	}
 
-	const startLine = sym.line;
-	const endLine = sym.endLine ?? sym.line;
-	const lines = content.split(/\r?\n/);
-	const source = lines.slice(startLine - 1, endLine).join("\n");
-
+	const owners = symbols
+		.filter((candidate) => !candidate.local)
+		.map((candidate) => ({
+			name: candidate.name,
+			startLine: candidate.line,
+			endLine: candidate.endLine ?? candidate.line,
+		}));
+	let callback: ModuleCallbackEntry | undefined;
+	const callbackWarnings = [...(extractionWarnings ?? [])];
+	try {
+		callback = extractCallbacks(
+			root,
+			owners,
+			absPath,
+			languageId,
+			callbackWarnings,
+		).find(
+			(candidate) => candidate.name === symbolName,
+		);
+	} catch (err) {
+		const message = `Callback extraction failed: ${diagnosticMessage(err)}`;
+		logLatency({
+			type: "phase",
+			phase: "read_symbol_callback_extract_error",
+			filePath: absPath,
+			durationMs: Date.now() - startedAt,
+			metadata: { symbol: symbolName, error: message },
+		});
+		log(false);
+		return { found: false, path: absPath, name: symbolName, error: message };
+	}
+	if (!callback) {
+		log(false);
+		return {
+			found: false,
+			path: absPath,
+			name: symbolName,
+			...(callbackWarnings.length > 0 ? { warnings: callbackWarnings } : {}),
+		};
+	}
+	const source = lines
+		.slice(callback.startLine - 1, callback.endLine)
+		.join("\n");
 	log(true);
 	return {
 		found: true,
 		path: absPath,
-		name: sym.name,
-		kind: sym.kind,
-		startLine,
-		endLine,
-		signature: sym.signature,
+		name: callback.name,
+		kind: callback.kind,
+		startLine: callback.startLine,
+		endLine: callback.endLine,
+		signature: callback.signature,
+		source,
+	};
+}
+
+type EnclosingCandidate = {
+	name: string;
+	kind: string;
+	startLine: number;
+	endLine: number;
+	signature?: string;
+	parentChain?: string[];
+	priority: number;
+};
+
+function symbolMatchesKind(kind: string, filters: Set<string>): boolean {
+	if (filters.size === 0) return true;
+	const normalized = kind.toLowerCase();
+	if (filters.has(normalized)) return true;
+	if (filters.has("function") && normalized.includes("function")) return true;
+	if (filters.has("method") && normalized.includes("method")) return true;
+	if (
+		filters.has("type") &&
+		["class", "interface", "struct", "enum", "trait", "type"].includes(
+			normalized,
+		)
+	) {
+		return true;
+	}
+	return false;
+}
+
+function callbackMatchesKind(kind: string, filters: Set<string>): boolean {
+	if (filters.size === 0) return true;
+	const normalized = kind.toLowerCase();
+	return (
+		filters.has(normalized) ||
+		filters.has("callback") ||
+		filters.has("closure") ||
+		filters.has("lambda") ||
+		(normalized.includes("callback") && filters.has("function"))
+	);
+}
+
+function symbolParentChain(
+	symbol: ExtractedSymbol,
+	symbols: ExtractedSymbol[],
+): string[] | undefined {
+	const chain = symbols
+		.filter((candidate) => {
+			if (candidate === symbol) return false;
+			const start = candidate.line;
+			const end = candidate.endLine ?? candidate.line;
+			const symEnd = symbol.endLine ?? symbol.line;
+			return (
+				start <= symbol.line &&
+				end >= symEnd &&
+				end - start > symEnd - symbol.line
+			);
+		})
+		.sort(
+			(a, b) =>
+				a.line - b.line ||
+				(b.endLine ?? b.line) - b.line - ((a.endLine ?? a.line) - a.line),
+		)
+		.map((candidate) => candidate.name);
+	return chain.length > 0 ? chain : undefined;
+}
+
+/**
+ * Read the smallest useful symbol/callback enclosing a source line. This is the
+ * search/diagnostic → exact-body bridge: single-file tree-sitter only, no graph,
+ * no LSP, and the returned range is concrete read-guard coverage.
+ */
+export async function readEnclosing(
+	file: string,
+	line: number,
+	cwd: string,
+	options?: ReadEnclosingOptions,
+): Promise<ReadEnclosingResult> {
+	const startedAt = Date.now();
+	const absPath = path.resolve(cwd, file);
+	const targetLine = Math.max(1, Math.floor(line));
+	const log = (found: boolean): void => {
+		logLatency({
+			type: "phase",
+			phase: "read_enclosing",
+			filePath: absPath,
+			durationMs: Date.now() - startedAt,
+			metadata: { line: targetLine, found },
+		});
+	};
+
+	let content: string;
+	try {
+		content = fs.readFileSync(absPath, "utf-8");
+	} catch {
+		log(false);
+		return { found: false, path: absPath, line: targetLine };
+	}
+
+	const kind = detectFileKind(absPath);
+	const languageId = tsLangForFile(absPath, kind);
+	if (!languageId) {
+		log(false);
+		return { found: false, path: absPath, line: targetLine };
+	}
+
+	const {
+		symbols,
+		root,
+		error: extractionError,
+		warnings: extractionWarnings,
+	} = await extractFile(absPath, languageId, content);
+	if (extractionError) {
+		log(false);
+		return {
+			found: false,
+			path: absPath,
+			line: targetLine,
+			error: extractionError,
+		};
+	}
+
+	const filters = new Set(
+		(options?.kinds ?? []).map((value) => value.toLowerCase()),
+	);
+	const owners = symbols
+		.filter((candidate) => !candidate.local)
+		.map((candidate) => ({
+			name: candidate.name,
+			startLine: candidate.line,
+			endLine: candidate.endLine ?? candidate.line,
+		}));
+	const warnings = [...(extractionWarnings ?? [])];
+	let callbacks: ModuleCallbackEntry[] = [];
+	try {
+		callbacks = extractCallbacks(root, owners, absPath, languageId, warnings);
+	} catch (err) {
+		const message = `Callback extraction failed: ${diagnosticMessage(err)}`;
+		warnings.push(message);
+		logLatency({
+			type: "phase",
+			phase: "read_enclosing_callback_extract_error",
+			filePath: absPath,
+			durationMs: Date.now() - startedAt,
+			metadata: { line: targetLine, error: message },
+		});
+	}
+
+	const candidates: EnclosingCandidate[] = [];
+	for (const sym of symbols.filter((candidate) => !candidate.local)) {
+		const startLine = sym.line;
+		const endLine = sym.endLine ?? sym.line;
+		if (targetLine < startLine || targetLine > endLine) continue;
+		if (!symbolMatchesKind(sym.kind, filters)) continue;
+		candidates.push({
+			name: sym.name,
+			kind: sym.kind,
+			startLine,
+			endLine,
+			signature: sym.signature,
+			parentChain: symbolParentChain(sym, symbols),
+			priority: 1,
+		});
+	}
+	for (const callback of callbacks) {
+		if (targetLine < callback.startLine || targetLine > callback.endLine)
+			continue;
+		if (!callbackMatchesKind(callback.kind, filters)) continue;
+		candidates.push({
+			name: callback.name,
+			kind: callback.kind,
+			startLine: callback.startLine,
+			endLine: callback.endLine,
+			signature: callback.signature,
+			parentChain: callback.parentChain,
+			priority: 0,
+		});
+	}
+
+	candidates.sort((a, b) => {
+		const span = a.endLine - a.startLine - (b.endLine - b.startLine);
+		return span || a.priority - b.priority || a.startLine - b.startLine;
+	});
+	const selected = candidates[0];
+	if (!selected) {
+		log(false);
+		return {
+			found: false,
+			path: absPath,
+			line: targetLine,
+			...(warnings.length > 0 ? { warnings } : {}),
+		};
+	}
+
+	const lines = content.split(/\r?\n/);
+	const limit = selected.endLine - selected.startLine + 1;
+	if (options?.maxLines && limit > options.maxLines) {
+		log(false);
+		return {
+			found: false,
+			path: absPath,
+			line: targetLine,
+			name: selected.name,
+			kind: selected.kind,
+			startLine: selected.startLine,
+			endLine: selected.endLine,
+			signature: selected.signature,
+			parentChain: selected.parentChain,
+			error: `Enclosing ${selected.kind} spans ${limit} lines, above maxLines ${options.maxLines}`,
+			...(warnings.length > 0 ? { warnings } : {}),
+		};
+	}
+	const source = lines
+		.slice(selected.startLine - 1, selected.endLine)
+		.join("\n");
+	log(true);
+	return {
+		found: true,
+		path: absPath,
+		line: targetLine,
+		name: selected.name,
+		kind: selected.kind,
+		startLine: selected.startLine,
+		endLine: selected.endLine,
+		signature: selected.signature,
+		parentChain: selected.parentChain,
+		...(warnings.length > 0 ? { warnings } : {}),
 		source,
 	};
 }

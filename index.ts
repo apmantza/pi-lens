@@ -93,7 +93,7 @@ import { setAmbientAbortSignal } from "./clients/safe-spawn.js";
 import { TreeSitterClient } from "./clients/tree-sitter-client.js";
 import { handleBooboo } from "./commands/booboo.js";
 import { initI18n, t } from "./i18n.js";
-import { createAstDumpTool } from "./tools/ast-dump.js";
+import { createAstDumpTool, createAstGrepDumpTool } from "./tools/ast-dump.js";
 import { createLensDiagnosticsTool } from "./tools/lens-diagnostics.js";
 import { createAstGrepReplaceTool } from "./tools/ast-grep-replace.js";
 import { createAstGrepSearchTool } from "./tools/ast-grep-search.js";
@@ -101,6 +101,7 @@ import { createLspDiagnosticsTool } from "./tools/lsp-diagnostics.js";
 import { createLspNavigationTool } from "./tools/lsp-navigation.js";
 import {
 	createModuleReportTool,
+	createReadEnclosingTool,
 	createReadSymbolTool,
 } from "./tools/module-report.js";
 import { logLatency } from "./clients/latency-logger.js";
@@ -1041,6 +1042,7 @@ export default function (pi: ExtensionAPI) {
 	for (const tool of [
 		createAstGrepSearchTool(astGrepClient),
 		createAstGrepReplaceTool(astGrepClient),
+		createAstGrepDumpTool(astGrepClient),
 		createAstDumpTool(astGrepClient),
 		createLensDiagnosticsTool(
 			cacheManager,
@@ -1057,6 +1059,16 @@ export default function (pi: ExtensionAPI) {
 			() => runtime.projectRoot,
 			// Read-substitute tie-in (#245): a returned symbol body is a genuine read
 			// of that range, so record it as read-guard coverage for the symbol.
+			(filePath, symbol) =>
+				runtime.readGuard.recordSymbolRead(
+					filePath,
+					symbol,
+					runtime.turnIndex,
+					runtime.peekWriteIndex(),
+				),
+		),
+		createReadEnclosingTool(
+			() => runtime.projectRoot,
 			(filePath, symbol) =>
 				runtime.readGuard.recordSymbolRead(
 					filePath,

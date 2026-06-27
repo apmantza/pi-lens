@@ -595,6 +595,7 @@ describe("context injection framing", () => {
 			"lsp_diagnostics",
 			"ast_grep_search",
 			"ast_grep_replace",
+			"ast_grep_dump",
 		]) {
 			expect(text).toContain(tool);
 		}

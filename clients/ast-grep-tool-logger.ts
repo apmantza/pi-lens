@@ -147,7 +147,7 @@ export function astGrepRemediationHint(kind: AstGrepErrorKind): string | null {
 		case "json_parse_failed":
 			return "Hint: ast-grep produced output that could not be parsed — retry with a simpler pattern; the installed CLI version may be incompatible.";
 		default:
-			return "Hint: verify the pattern is a single valid AST node for this `lang` (use ast_dump to discover node kinds), or fall back to grep for plain-text search.";
+			return "Hint: verify the pattern is a single valid AST node for this `lang` (use ast_grep_dump to discover node kinds), or fall back to grep for plain-text search.";
 	}
 }
 

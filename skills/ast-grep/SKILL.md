@@ -81,15 +81,15 @@ rule:
     stopBy: end" lang="typescript"
 ```
 
-### Debugging unknown node kinds — `ast_dump`
+### Debugging unknown node kinds — `ast_grep_dump`
 
-When a pattern returns zero matches and you don't know the correct node kind or field name, use `ast_dump` to inspect the AST:
+When a pattern returns zero matches and you don't know the correct node kind or field name, use `ast_grep_dump` to inspect a SMALL representative snippet:
 
 ```
-ast_dump source="function foo() { return 1; }" lang="typescript"
+ast_grep_dump source="function foo() { return 1; }" lang="typescript"
 ```
 
-Returns the full indented AST with node kinds and positions. Then use the correct kind in your pattern or `insideKind`.
+Returns the full indented AST with node kinds and positions. Then use the correct kind in your pattern or `insideKind`. `ast_dump` remains a compatibility alias, but prefer `ast_grep_dump` in new instructions.
 
 ### Composite (has/inside) in raw YAML
 
@@ -102,6 +102,7 @@ inside:
 ```
 
 Use `kind:` directly when you want to match a node type without a pattern:
+
 ```yaml
 # any arrow function
 kind: arrow_function
@@ -137,18 +138,37 @@ kind: arrow_function
 ```
 
 **No matches?**
+
 1. Try `strictness: relaxed` — ignores unnamed punctuation (trailing commas, semicolons) that `smart` mode requires
-2. Use `ast_dump` on a sample snippet to verify the correct node kind
+2. Use `ast_grep_dump` on a sample snippet to verify the correct node kind
 3. Simplify the pattern and retry once
 4. Fall back to `grep` or `lsp_navigation`
 
+## Agent task recipes
+
+Use these as starting points, then scope `paths` tightly.
+
+| Task | Pattern / params |
+|---|---|
+| Find pi lifecycle handlers | `pattern: pi.on($EVENT, $HANDLER)` |
+| Find timers | `pattern: setTimeout($CALLBACK, $$$REST)` or `setInterval($CALLBACK, $$$REST)` |
+| Find immediate/deferred work | `pattern: setImmediate($CALLBACK)` |
+| Find promise callbacks | `pattern: $PROMISE.then($CALLBACK)` / `.catch($CALLBACK)` / `.finally($CALLBACK)` |
+| Find object-literal function dependency by name | `pattern: { resetLSPService: $FN, $$$REST }` |
+| Find fire-and-forget async calls | `pattern: void $CALL` |
+| Find empty catches | `pattern: try { $$$BODY } catch ($ERR) { }` |
+
+For lifecycle bugs, search first, then use the returned `details.matchLocations[].readSlice` handle for bounded context.
+
 **Metavar captures** appear automatically below each match line:
+
 ```
 src/foo.ts:1:1: const x = foo(a, b)
   $VAR=x  $$$ARGS=a,b
 ```
+
 Named captures (`$X`, `$$$NAME`) are shown; unnamed wildcards (`$$$`) are not.
 
 **Pagination** — use `skip: N` when results are truncated (next-page hint appears in output).
 
-Debug: https://ast-grep.github.io/playground.html
+Debug: <https://ast-grep.github.io/playground.html>
