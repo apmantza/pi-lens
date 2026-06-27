@@ -452,7 +452,10 @@ describe("lens_diagnostics mode=full", () => {
 
 		const result = await run(makeTool({}, lspService), { mode: "full" });
 		const text = String(result.content[0].text);
-		expect(lspService.runWorkspaceDiagnostics).toHaveBeenCalledWith("/proj");
+		expect(lspService.runWorkspaceDiagnostics).toHaveBeenCalledWith(
+			"/proj",
+			expect.objectContaining({ signal: expect.anything() }),
+		);
 		expect(text).toContain("edited.ts");
 		expect(text).toContain("cached runner warning");
 		expect(text).toContain("unedited.ts");
@@ -464,6 +467,41 @@ describe("lens_diagnostics mode=full", () => {
 			totalBlocking: 1,
 			totalWarnings: 1,
 		});
+	});
+
+	it("forwards maxLspFiles to the LSP workspace sweep as maxFiles (#341)", async () => {
+		mockSummaries.length = 0;
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
+		};
+		await run(makeTool({}, lspService), { mode: "full", maxLspFiles: 200 });
+		expect(lspService.runWorkspaceDiagnostics).toHaveBeenCalledWith(
+			"/proj",
+			expect.objectContaining({ maxFiles: 200 }),
+		);
+	});
+
+	it("threads the abort signal to the LSP sweep and flags partial results (#341)", async () => {
+		mockSummaries.length = 0;
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
+		};
+		const controller = new AbortController();
+		controller.abort();
+		const tool = makeTool({}, lspService);
+		const result = await tool.execute(
+			"1",
+			{ mode: "full", maxLspFiles: 50 },
+			controller.signal,
+			null,
+			{ cwd: "/proj" },
+		);
+		const passed = lspService.runWorkspaceDiagnostics.mock.calls[0][1];
+		expect(passed.signal).toBe(controller.signal);
+		expect(passed.signal.aborted).toBe(true);
+		const text = String(result.content[0].text);
+		expect(text).toContain("Scan cancelled before completion");
+		expect(result.details).toMatchObject({ mode: "full", partial: true });
 	});
 
 	it("refreshRunners=cheap scans cheap project runners and merges their cached snapshot", async () => {
@@ -501,11 +539,11 @@ describe("lens_diagnostics mode=full", () => {
 		});
 		const text = String(result.content[0].text);
 		expect(projectDiagnosticsMocks.scanProjectDiagnostics).toHaveBeenCalledWith(
-			{
+			expect.objectContaining({
 				cwd: "/proj",
 				tier: "cheap",
 				maxFiles: 2,
-			},
+			}),
 		);
 		expect(text).toContain("project.ts");
 		expect(text).toContain("project runner warning");

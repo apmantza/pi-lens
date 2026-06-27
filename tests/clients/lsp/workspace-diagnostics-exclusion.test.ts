@@ -127,3 +127,19 @@ describe("LSP workspace-diagnostics cap (#250)", () => {
 		expect(capped.length).toBe(5);
 	});
 });
+
+describe("LSP workspace-diagnostics cancellation (#341)", () => {
+	it("bails the walk immediately when the signal is already aborted", async () => {
+		for (let i = 0; i < 30; i++) write(`src/f${i}.ts`);
+
+		const controller = new AbortController();
+		controller.abort();
+		const files = await __collectWorkspaceDiagnosticFilesForTest(
+			tmpDir,
+			undefined,
+			controller.signal,
+		);
+		// An already-aborted signal short-circuits the walk before it descends.
+		expect(files).toEqual([]);
+	});
+});

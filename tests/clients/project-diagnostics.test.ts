@@ -241,6 +241,30 @@ describe("scanProjectDiagnostics", () => {
 		expect(result.filesScanned).toBe(2);
 	});
 
+	it("returns a partial snapshot without persisting it when aborted (#341)", async () => {
+		const srcDir = path.join(tmp, "src-abort");
+		fs.mkdirSync(srcDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(srcDir, "ui.ts"),
+			'export function notify() { alert("hi"); }\n',
+		);
+
+		const controller = new AbortController();
+		controller.abort();
+		const result = await scanProjectDiagnostics({
+			cwd: tmp,
+			tier: "cheap",
+			maxFiles: 10,
+			signal: controller.signal,
+		});
+
+		// All phases were skipped (no runners ran) and the partial snapshot was
+		// NOT written to the cross-session cache.
+		expect(result.runners).toEqual([]);
+		expect(result.diagnostics).toEqual([]);
+		expect(loadProjectDiagnosticsSnapshot(tmp)).toBeUndefined();
+	});
+
 	it("runs cheap project scanners and writes a normalized snapshot", async () => {
 		const srcDir = path.join(tmp, "src");
 		fs.mkdirSync(srcDir, { recursive: true });

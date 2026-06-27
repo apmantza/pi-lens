@@ -43,6 +43,7 @@ const MAX_DIAGNOSTICS_PER_FILE = 50;
 type LSPServiceLike = ReturnType<typeof getLSPService> & {
 	runWorkspaceDiagnostics?: (
 		cwd: string,
+		options?: { maxFiles?: number; signal?: AbortSignal },
 	) => Promise<WorkspaceLspDiagnosticResult[]>;
 };
 
@@ -112,7 +113,13 @@ export function createLensDiagnosticsTool(
 			maxProjectFiles: Type.Optional(
 				Type.Number({
 					description:
-						"mode=full refreshRunners=cheap/all only: cap project files scanned by cheap runners.",
+						"mode=full refreshRunners=cheap/all only: cap project files scanned by the cheap project runners (tree-sitter + fact-rules + ast-grep). Does NOT bound the LSP sweep — use maxLspFiles for that.",
+				}),
+			),
+			maxLspFiles: Type.Optional(
+				Type.Number({
+					description:
+						"mode=full only: cap the number of files routed through the language server for the project-wide LSP sweep. On large projects (e.g. a Next.js app with thousands of source files) the uncapped sweep can take many minutes; set this to bound it. Default is generous (env PI_LENS_LSP_WORKSPACE_MAX_FILES, else 5000).",
 				}),
 			),
 			severity: Type.Optional(
@@ -125,19 +132,19 @@ export function createLensDiagnosticsTool(
 		async execute(
 			_toolCallId: string,
 			params: Record<string, unknown>,
-			_signal: AbortSignal,
+			signal: AbortSignal,
 			_onUpdate: unknown,
 			ctx: { cwd?: string },
 		) {
 			const mode = (params.mode as string | undefined) ?? "delta";
 			const severity = (params.severity as string | undefined) ?? "all";
 			const refreshRunners = params.refreshRunners;
-			const maxProjectFiles =
-				typeof params.maxProjectFiles === "number" &&
-				Number.isFinite(params.maxProjectFiles) &&
-				params.maxProjectFiles > 0
-					? Math.floor(params.maxProjectFiles)
+			const parsePositiveInt = (value: unknown): number | undefined =>
+				typeof value === "number" && Number.isFinite(value) && value > 0
+					? Math.floor(value)
 					: undefined;
+			const maxProjectFiles = parsePositiveInt(params.maxProjectFiles);
+			const maxLspFiles = parsePositiveInt(params.maxLspFiles);
 			const cwd = ctx.cwd ?? getCwd();
 
 			// Reflect the agent's just-made fixes before reporting: flush pending
@@ -154,6 +161,8 @@ export function createLensDiagnosticsTool(
 				return formatFullMode(cwd, severity, getLspService(), {
 					refreshRunners,
 					maxProjectFiles,
+					maxLspFiles,
+					signal,
 				});
 			}
 			return formatDeltaMode(cacheManager, cwd, severity);
@@ -515,13 +524,18 @@ function shouldRefreshProjectDiagnostics(value: unknown): boolean {
 
 async function getProjectDiagnosticsSnapshotForFullMode(
 	cwd: string,
-	options: { refreshRunners?: unknown; maxProjectFiles?: number },
+	options: {
+		refreshRunners?: unknown;
+		maxProjectFiles?: number;
+		signal?: AbortSignal;
+	},
 ): Promise<ProjectDiagnosticsSnapshot | undefined> {
 	if (shouldRefreshProjectDiagnostics(options.refreshRunners)) {
 		return scanProjectDiagnostics({
 			cwd,
 			tier: "cheap",
 			maxFiles: options.maxProjectFiles,
+			signal: options.signal,
 		});
 	}
 	if (shouldUseCachedProjectDiagnostics(options.refreshRunners)) {
@@ -540,7 +554,12 @@ async function formatFullMode(
 	cwd: string,
 	severity: string,
 	lspService: LSPServiceLike,
-	options: { refreshRunners?: unknown; maxProjectFiles?: number } = {},
+	options: {
+		refreshRunners?: unknown;
+		maxProjectFiles?: number;
+		maxLspFiles?: number;
+		signal?: AbortSignal;
+	} = {},
 ): Promise<{ content: [{ type: "text"; text: string }]; details: object }> {
 	const runWorkspaceDiagnostics = lspService.runWorkspaceDiagnostics;
 	if (typeof runWorkspaceDiagnostics !== "function") {
@@ -554,11 +573,16 @@ async function formatFullMode(
 			details: { mode: "full", filesChecked: 0, lspUnavailable: true },
 		};
 	}
+	const { signal } = options;
 	const includeFile = createCurrentIgnoreFilter(cwd);
 	const [rawLspResults, rawProjectSnapshot] = await Promise.all([
-		runWorkspaceDiagnostics.call(lspService, cwd),
+		runWorkspaceDiagnostics.call(lspService, cwd, {
+			maxFiles: options.maxLspFiles,
+			signal,
+		}),
 		getProjectDiagnosticsSnapshotForFullMode(cwd, options),
 	]);
+	const aborted = signal?.aborted ?? false;
 	const lspResults = rawLspResults.filter((result) =>
 		includeFile(result.filePath),
 	);
@@ -578,9 +602,10 @@ async function formatFullMode(
 		projectSnapshot,
 		projectDelta,
 	);
-	return formatAllMode(cwd, severity, summaries, {
+	const result = formatAllMode(cwd, severity, summaries, {
 		mode: "full",
 		lspFilesChecked: rawLspResults.length,
+		partial: aborted,
 		projectDiagnostics:
 			projectSnapshot === undefined
 				? undefined
@@ -599,6 +624,20 @@ async function formatFullMode(
 						turnIndex: projectDelta.turnIndex,
 					},
 	});
+	// Cancelled mid-scan: the results above are whatever completed before the
+	// abort. Tell the agent so it doesn't read a partial sweep as "clean" (#341).
+	if (aborted) {
+		const note =
+			"\n\n⚠ Scan cancelled before completion — results are partial. " +
+			"Re-run with a smaller maxLspFiles to finish within budget.";
+		return {
+			content: [
+				{ type: "text" as const, text: result.content[0].text + note },
+			],
+			details: result.details,
+		};
+	}
+	return result;
 }
 
 function formatAllMode(

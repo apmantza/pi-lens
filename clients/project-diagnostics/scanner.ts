@@ -242,13 +242,26 @@ export async function scanProjectDiagnostics(
 	options: ProjectDiagnosticsScanOptions,
 ): Promise<ProjectDiagnosticsSnapshot> {
 	const cwd = path.resolve(options.cwd);
+	const { signal } = options;
 	const maxFiles = Math.max(1, options.maxFiles ?? DEFAULT_MAX_FILES);
 	const files = await collectSourceFilesAsync(cwd, { maxFiles });
-	const diagnostics = [
-		...(await scanTreeSitter(cwd, files)),
-		...(await scanFactRules(cwd, files)),
-		...(await scanAstGrepNapi(cwd, files)),
-	];
+	// Check cancellation at each phase boundary so a full-mode scan stops
+	// promptly when the agent/user aborts (#341). The per-phase runners are
+	// already file-capped, so phase granularity is enough to bound the work.
+	const runners: string[] = [];
+	const diagnostics: ProjectDiagnostic[] = [];
+	if (!signal?.aborted) {
+		diagnostics.push(...(await scanTreeSitter(cwd, files)));
+		runners.push("tree-sitter");
+	}
+	if (!signal?.aborted) {
+		diagnostics.push(...(await scanFactRules(cwd, files)));
+		runners.push("fact-rules");
+	}
+	if (!signal?.aborted) {
+		diagnostics.push(...(await scanAstGrepNapi(cwd, files)));
+		runners.push("ast-grep-napi");
+	}
 	const snapshot: ProjectDiagnosticsSnapshot = {
 		version: PROJECT_DIAGNOSTICS_CACHE_VERSION,
 		cwd,
@@ -256,8 +269,11 @@ export async function scanProjectDiagnostics(
 		scannedAt: new Date().toISOString(),
 		diagnostics,
 		filesScanned: files.length,
-		runners: ["tree-sitter", "fact-rules", "ast-grep-napi"],
+		runners,
 	};
+	// A cancelled scan yields a partial snapshot; don't persist it as the
+	// authoritative cross-session cache — only a complete run is cacheable.
+	if (signal?.aborted) return snapshot;
 	saveProjectDiagnosticsSnapshot(cwd, snapshot);
 	return snapshot;
 }
