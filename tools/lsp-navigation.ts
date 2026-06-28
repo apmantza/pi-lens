@@ -10,6 +10,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { Type } from "../clients/deps/typebox.js";
 import { logLatency } from "../clients/latency-logger.js";
 import type { LSPCallHierarchyItem } from "../clients/lsp/client.js";
+import { compactRenderResult } from "./render-compact.js";
 import {
 	applyWorkspaceEdit,
 	summarizeWorkspaceEdit,
@@ -759,6 +760,24 @@ export function createLspNavigationTool(
 			"- capabilities: Show cached operation support for active LSP servers\n\n" +
 			"Line and character are 1-based (as shown in editors). For position-based operations, prefer passing symbol when you know the line but not the exact character; character can be omitted or -1 and pi-lens will resolve the symbol column. Use symbol#N for repeated symbols on the same line (1-based occurrence).",
 		promptSnippet: "Find definitions, references, and hover info via LSP",
+		renderResult: compactRenderResult<{
+			operation?: string;
+			resultCount?: number;
+			supported?: boolean;
+			emptyReason?: string;
+		}>(({ details, args, isError, text }) => {
+			const op =
+				details?.operation ??
+				(typeof args.operation === "string" ? args.operation : "lsp");
+			if (isError || details?.supported === false) {
+				return `lsp_navigation ${op} — ${details?.emptyReason ?? text.split("\n")[0] ?? "unavailable"}`;
+			}
+			const n = details?.resultCount ?? 0;
+			if (n === 0) {
+				return `lsp_navigation ${op} — ${details?.emptyReason ?? "no results"}`;
+			}
+			return `lsp_navigation ${op} — ${n} result${n === 1 ? "" : "s"}`;
+		}),
 		parameters: Type.Object({
 			operation: Type.String({
 				description:

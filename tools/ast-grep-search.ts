@@ -18,6 +18,7 @@ import {
 	synthesizeRule,
 } from "../clients/ast-grep-yaml-synth.js";
 import type { SearchReadLocation } from "../clients/search-read-registration.js";
+import { compactRenderResult } from "./render-compact.js";
 import { LANGUAGES } from "./shared.js";
 
 /**
@@ -254,6 +255,31 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			"Avoid 'selector' unless you know the exact AST node kind; it narrows search roots and does not extract fields. " +
 			"Use 'context' to show surrounding lines. If zero matches, retry once with a simpler AST pattern, then use ast_grep_dump on a small representative snippet before falling back to grep.",
 		promptSnippet: "AST-aware structural code search",
+		renderResult: compactRenderResult<{
+			matchCount?: number;
+			totalMatches?: number;
+			truncated?: boolean;
+			valid?: boolean;
+			validateOnly?: boolean;
+			mode?: string;
+			applied?: boolean;
+		}>(({ details, isError, text }) => {
+			if (details?.validateOnly) {
+				const mode = details.mode ?? "pattern";
+				return details.valid
+					? `ast_grep_search — valid ${mode}`
+					: `ast_grep_search — invalid ${mode}`;
+			}
+			if (isError) {
+				return `ast_grep_search — ${text.split("\n")[0] ?? "error"}`;
+			}
+			const count = details?.matchCount ?? 0;
+			const total = details?.totalMatches;
+			const ofTotal =
+				typeof total === "number" && total > count ? ` of ${total}` : "";
+			const applied = details?.applied ? " (applied)" : "";
+			return `ast_grep_search — ${count}${ofTotal} match${count === 1 && !ofTotal ? "" : "es"}${applied}`;
+		}),
 		parameters: Type.Object({
 			pattern: Type.Optional(
 				Type.String({

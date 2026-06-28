@@ -18,6 +18,7 @@ import {
 	readEnclosing,
 	readSymbol,
 } from "../clients/module-report.js";
+import { baseName, compactRenderResult } from "./render-compact.js";
 
 function resolveFile(filePath: string, cwd: string | undefined): string {
 	return path.isAbsolute(filePath)
@@ -40,6 +41,26 @@ export function createModuleReportTool(getProjectRoot: () => string) {
 			"Returns JSON. An outline shows shape, not bodies — it does NOT count as having read a symbol's body for editing; use read_symbol for that.",
 		promptSnippet:
 			"Navigable file outline — a cheap substitute for reading a whole file",
+		renderResult: compactRenderResult<{
+			available?: boolean;
+			staleness?: string;
+			symbols?: number;
+			exports?: number;
+			callbacks?: number;
+			view?: string;
+		}>(({ details, args, isError }) => {
+			const base = baseName(args.path) || "module";
+			if (isError || details?.available === false) {
+				return `module_report ${base} — unavailable`;
+			}
+			const parts = [
+				`${details?.symbols ?? 0} symbols`,
+				`${details?.exports ?? 0} exports`,
+			];
+			if (details?.callbacks) parts.push(`${details.callbacks} callbacks`);
+			const view = details?.view && details.view !== "default" ? ` [${details.view}]` : "";
+			return `module_report ${base}  ${parts.join(" · ")}${view}`;
+		}),
 		parameters: Type.Object({
 			path: Type.String({
 				description: "Absolute or workspace-relative path to the source file.",
@@ -194,6 +215,27 @@ export function createReadSymbolTool(
 		description:
 			"Return the verbatim source of a single named symbol or module_report callback handle in a file — a targeted, cheap alternative to reading the whole file. Pair with module_report: module_report finds the symbol/callback handle, read_symbol shows its body. Unlike an outline, this delivers the actual lines, so it counts as having read that symbol for the read-before-edit guard.",
 		promptSnippet: "Read one symbol's body instead of the whole file",
+		renderResult: compactRenderResult<{
+			found?: boolean;
+			name?: string;
+			kind?: string;
+			startLine?: number;
+			endLine?: number;
+		}>(({ details, args, isError, lineCount }) => {
+			const base = baseName(args.path);
+			if (isError || details?.found === false) {
+				const sym = typeof args.symbol === "string" ? args.symbol : "?";
+				return `read_symbol "${sym}" ${base} — not found`;
+			}
+			const range =
+				details?.startLine && details?.endLine
+					? `:${details.startLine}-${details.endLine} (${details.endLine - details.startLine + 1} lines)`
+					: ` (${lineCount} lines)`;
+			return `read_symbol ${details?.kind ?? ""} ${details?.name ?? ""}  ${base}${range}`.replace(
+				/\s+/g,
+				" ",
+			);
+		}),
 		parameters: Type.Object({
 			path: Type.String({
 				description: "Absolute or workspace-relative path to the source file.",
@@ -287,6 +329,28 @@ export function createReadEnclosingTool(
 		description:
 			"Return the verbatim source for the smallest useful symbol/callback enclosing a line in a file. Use after ast_grep_search, diagnostics, or LSP locations when you need exact body text without reading the whole file. Uses tree-sitter only — no LSP or graph build — and records read-guard coverage for the returned range.",
 		promptSnippet: "Read the enclosing symbol or callback body for a line",
+		renderResult: compactRenderResult<{
+			found?: boolean;
+			name?: string;
+			kind?: string;
+			line?: number;
+			startLine?: number;
+			endLine?: number;
+		}>(({ details, args, isError }) => {
+			const base = baseName(args.path);
+			if (isError || details?.found === false) {
+				const ln = typeof args.line === "number" ? args.line : "?";
+				return `read_enclosing ${base}:${ln} — no enclosing symbol`;
+			}
+			const range =
+				details?.startLine && details?.endLine
+					? `:${details.startLine}-${details.endLine}`
+					: "";
+			return `read_enclosing ${details?.kind ?? ""} ${details?.name ?? ""}  ${base}${range}`.replace(
+				/\s+/g,
+				" ",
+			);
+		}),
 		parameters: Type.Object({
 			path: Type.String({
 				description: "Absolute or workspace-relative path to the source file.",

@@ -13,6 +13,7 @@ import {
 	type AstGrepToolOutcome,
 } from "../clients/ast-grep-tool-logger.js";
 import { hasStructuralIntent, synthesizeReplaceRule } from "../clients/ast-grep-yaml-synth.js";
+import { compactRenderResult } from "./render-compact.js";
 
 /**
  * Build the agent-facing error text, appending a remediation hint derived from
@@ -51,6 +52,21 @@ export function createAstGrepReplaceTool(astGrepClient: AstGrepClient) {
 			"  - Incomplete code fragments\n\n" +
 			"Always use 'paths' to scope to specific files/folders. Dry-run first to preview changes.",
 		promptSnippet: "AST-aware structural find-and-replace",
+		renderResult: compactRenderResult<{
+			matchCount?: number;
+			applied?: boolean;
+			stalePreview?: boolean;
+		}>(({ details, isError, text }) => {
+			if (details?.stalePreview) {
+				return `ast_grep_replace — stale preview, re-run with apply:false`;
+			}
+			if (isError) {
+				return `ast_grep_replace — ${text.split("\n")[0] ?? "error"}`;
+			}
+			const n = details?.matchCount ?? 0;
+			const state = details?.applied ? "applied" : "preview";
+			return `ast_grep_replace — ${n} match${n === 1 ? "" : "es"}, ${state}`;
+		}),
 		parameters: Type.Object({
 			pattern: Type.String({
 				description: "AST pattern to match (be specific with context)",
