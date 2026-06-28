@@ -871,4 +871,93 @@ describe("ast_grep_search tool", () => {
 			expect(text).not.toContain("Hint:");
 		});
 	});
+
+	describe("maxMatches + groupByFile (refs #345)", () => {
+		function matchAt(file: string, line: number, column = 0) {
+			return {
+				file,
+				range: { start: { line, column }, end: { line, column: column + 3 } },
+				text: "x",
+				lines: "x",
+			};
+		}
+
+		it("caps returned matches at maxMatches and pages by it", async () => {
+			const matches = Array.from({ length: 5 }, (_, i) => matchAt("a.ts", i));
+			const tool = createAstGrepSearchTool(
+				makeClient({ search: vi.fn().mockResolvedValue({ matches }) }),
+			);
+			const result = await tool.execute(
+				"m1",
+				{ pattern: "foo($X)", lang: "typescript", maxMatches: 2 },
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+			expect(result.details).toMatchObject({ matchCount: 2, hasMore: true });
+			// pagination step follows maxMatches, not the default 50
+			expect(String(result.content[0].text)).toContain("skip=2");
+		});
+
+		it("clamps maxMatches below 1 up to 1", async () => {
+			const matches = Array.from({ length: 3 }, (_, i) => matchAt("a.ts", i));
+			const tool = createAstGrepSearchTool(
+				makeClient({ search: vi.fn().mockResolvedValue({ matches }) }),
+			);
+			const result = await tool.execute(
+				"m2",
+				{ pattern: "foo($X)", lang: "typescript", maxMatches: 0 },
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+			expect(result.details).toMatchObject({ matchCount: 1, hasMore: true });
+		});
+
+		it("groupByFile renders one line per file with 1-based locations, not bodies", async () => {
+			const matches = [
+				matchAt("src/a.ts", 0, 4),
+				matchAt("src/a.ts", 9, 2),
+				matchAt("src/b.ts", 4, 0),
+			];
+			const formatMatches = vi.fn(() => "FULL-BODY-OUTPUT");
+			const tool = createAstGrepSearchTool(
+				makeClient({
+					search: vi.fn().mockResolvedValue({ matches }),
+					formatMatches,
+				}),
+			);
+			const result = await tool.execute(
+				"g1",
+				{ pattern: "foo($X)", lang: "typescript", groupByFile: true },
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+			const text = String(result.content[0].text);
+			expect(text).toContain("2 files, 3 matches:");
+			expect(text).toContain("src/a.ts (2): L1:5, L10:3");
+			expect(text).toContain("src/b.ts (1): L5:1");
+			expect(text).not.toContain("FULL-BODY-OUTPUT");
+			expect(formatMatches).not.toHaveBeenCalled();
+			expect(result.details).toMatchObject({ groupByFile: true });
+		});
+
+		it("reports groupByFile=false in details when not requested", async () => {
+			const tool = createAstGrepSearchTool(
+				makeClient({
+					search: vi.fn().mockResolvedValue({ matches: [matchAt("a.ts", 0)] }),
+					formatMatches: () => "body",
+				}),
+			);
+			const result = await tool.execute(
+				"g2",
+				{ pattern: "foo($X)", lang: "typescript" },
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+			expect(result.details).toMatchObject({ groupByFile: false });
+		});
+	});
 });

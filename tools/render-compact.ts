@@ -48,11 +48,15 @@ export type CompactSummarizer<D = unknown> = (
  * `error` and `output` defer to the active theme so red/normal stay legible. */
 export type CompactStyle = "brand" | "error" | "output";
 
-// pi-lens brand colour: a clear blue, theme-independent so the summary lines read
-// as ours regardless of which pi theme is active. Truecolor foreground only —
-// resets just the foreground (\x1b[39m) so the theme background still composites.
-const PI_LENS_BLUE = "\x1b[38;2;96;165;250m";
-const RESET_FG = "\x1b[39m";
+// pi-lens brand chip: white bold text on a blue background, theme-independent so
+// the summary lines read as ours regardless of which pi theme is active. The
+// text is space-padded so the blue block has breathing room. We reset background
+// (\x1b[49m), foreground (\x1b[39m), and bold (\x1b[22m) at the end so the rest of
+// the row composites with the active theme.
+const PI_LENS_BLUE_BG = "\x1b[48;2;37;99;235m"; // blue background
+const PI_LENS_WHITE_FG = "\x1b[97m"; // bright white foreground
+const BOLD = "\x1b[1m";
+const RESET_CHIP = "\x1b[22m\x1b[39m\x1b[49m";
 
 /** Join all text content blocks into the full model-facing string. */
 export function fullTextOf(result: CompactResultLike): string {
@@ -107,7 +111,9 @@ export function paintCompact(
 	text: string,
 	theme: Theme,
 ): string {
-	if (style === "brand") return `${PI_LENS_BLUE}${text}${RESET_FG}`;
+	if (style === "brand") {
+		return `${PI_LENS_BLUE_BG}${PI_LENS_WHITE_FG}${BOLD} ${text} ${RESET_CHIP}`;
+	}
 	const color: ThemeColor = style === "error" ? "error" : "toolOutput";
 	return theme.fg(color, text);
 }

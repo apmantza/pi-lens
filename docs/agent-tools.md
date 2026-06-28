@@ -22,7 +22,11 @@ share).
   modes (`smart`, `relaxed`, `ast`, `cst`, `signature`, `template`), structural
   constraints (`insideKind`, `hasKind`, `follows`, `precedes`), raw YAML `rule`
   passthrough, `validateOnly` for compile/shape checks without scanning project
-  files, and pagination via `skip`. `pattern` is optional when a `rule` is given.
+  files, and pagination via `skip` / `maxMatches` (per-call cap, default 50,
+  max 200; also sets the pagination step). `groupByFile: true` renders a compact
+  one-line-per-file distribution (`L<line>:<col>` locations) instead of each
+  match body — for high-volume searches. `pattern` is optional when a `rule` is
+  given.
   Results include `details.matchLocations[]` — each hit carries a ready
   `readSlice` (`path`/`offset`/`limit`) for a bounded context read; zero-match
   results include a `suggestedDump` hint pointing at `ast_grep_dump`.
