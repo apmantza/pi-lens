@@ -57,7 +57,7 @@ export interface ModuleReportOptions {
 	/** Optional task hint used only to rank recommendedReads; never expands scope or triggers scans. */
 	focus?: string;
 	/** Payload tier. summary keeps top-level read handles/recommendations only. */
-	view?: "summary" | "default" | "deep";
+	view?: "summary" | "default";
 	/** Include the cross-file blast-radius section (#304): the transitive
 	 * dependents of this module, aggregated to ranked file `read` args. Read-only
 	 * over the CACHED graph — omitted entirely on a cold cache (never builds). */
@@ -1647,6 +1647,13 @@ export async function moduleReport(
 
 	const view = options?.view ?? "default";
 	const summaryView = view === "summary";
+	let importsProvenance: NonNullable<ModuleReport["provenance"]>["imports"] = "none";
+	if (coldImportResult) {
+		importsProvenance = "syntax";
+	} else if (graph) {
+		importsProvenance = "cached-review-graph";
+	}
+	const blastRadiusProvenance = blastRadius ? "cached-review-graph" : "none";
 	const report: ModuleReport = {
 		available: entries.length > 0 || hasGraphNode,
 		staleness: entries.length === 0 && !hasGraphNode ? "unavailable" : "fresh",
@@ -1674,15 +1681,11 @@ export async function moduleReport(
 		...(blastRadius && !summaryView ? { blastRadius } : {}),
 		provenance: {
 			symbols: languageId ? "syntax" : "none",
-			imports: coldImportResult
-				? "syntax"
-				: graph
-					? "cached-review-graph"
-					: "none",
+			imports: importsProvenance,
 			usedBy: hasGraphNode ? "cached-review-graph" : "none",
 			callbacks: languageId && !summaryView ? "heuristic-tree-sitter" : "none",
 			...(options?.blastRadius
-				? { blastRadius: blastRadius ? "cached-review-graph" : "none" }
+				? { blastRadius: blastRadiusProvenance }
 				: {}),
 		},
 		semantic: {

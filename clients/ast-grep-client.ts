@@ -59,6 +59,52 @@ function snippetForRange(
 	return text.length > 80 ? `${text.slice(0, 77)}...` : text;
 }
 
+const MAX_VALIDATE_PATTERN_CHARS = 20_000;
+const MAX_VALIDATE_RULE_CHARS = 200_000;
+
+const VALIDATION_SNIPPETS: Record<string, { ext: string; source: string }> = {
+	bash: { ext: "sh", source: "echo pi_lens_validate\n" },
+	c: { ext: "c", source: "int main(void) { return 0; }\n" },
+	cpp: { ext: "cpp", source: "int main() { return 0; }\n" },
+	csharp: { ext: "cs", source: "class C { static void Main() {} }\n" },
+	css: { ext: "css", source: ".pi-lens { color: black; }\n" },
+	go: { ext: "go", source: "package main\nfunc main() {}\n" },
+	html: { ext: "html", source: "<main>pi-lens</main>\n" },
+	java: { ext: "java", source: "class Main { void run() {} }\n" },
+	javascript: { ext: "js", source: "const piLensValidate = 1;\n" },
+	json: { ext: "json", source: "{\"piLensValidate\":true}\n" },
+	kotlin: { ext: "kt", source: "fun main() {}\n" },
+	lua: { ext: "lua", source: "local pi_lens_validate = 1\n" },
+	php: { ext: "php", source: "<?php $piLensValidate = 1;\n" },
+	python: { ext: "py", source: "pi_lens_validate = 1\n" },
+	ruby: { ext: "rb", source: "pi_lens_validate = 1\n" },
+	rust: { ext: "rs", source: "fn main() {}\n" },
+	tsx: { ext: "tsx", source: "export function App() { return <div />; }\n" },
+	typescript: { ext: "ts", source: "const piLensValidate = 1;\n" },
+	yaml: { ext: "yaml", source: "piLensValidate: true\n" },
+};
+
+function validationSnippetFor(language: string): { ext: string; source: string } {
+	const key = language.toLowerCase().replace(/^"|"$/g, "");
+	return VALIDATION_SNIPPETS[key] ?? { ext: key.replace(/[^a-z0-9_-]/gi, "") || "txt", source: "pi_lens_validate\n" };
+}
+
+function validateInputShape(
+	value: string,
+	maxChars: number,
+	label: string,
+): string | undefined {
+	if (value.includes("\0")) return `${label} contains NUL bytes`;
+	if (value.length > maxChars) {
+		return `${label} is too large (${value.length} chars, max ${maxChars})`;
+	}
+	return undefined;
+}
+
+function stderrHasError(stderr: string): boolean {
+	return stderr.split(/\r?\n/).some((line) => /^\s*(error|Error):/.test(line));
+}
+
 function formatDebugAst(tree: string, source: string): string {
 	const offsets = lineStartOffsets(source);
 	return tree
@@ -263,15 +309,20 @@ export class AstGrepClient {
 		lang: string,
 		options?: { selector?: string; strictness?: string },
 	): Promise<{ valid: boolean; warning?: string; error?: string }> {
+		const shapeError = validateInputShape(
+			pattern,
+			MAX_VALIDATE_PATTERN_CHARS,
+			"pattern",
+		);
+		if (shapeError) return { valid: false, error: shapeError };
+
+		const snippet = validationSnippetFor(lang);
 		const tmpDir = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-sg-validate-"),
 		);
-		const tmpFile = path.join(
-			tmpDir,
-			`snippet.${lang.replace(/[^a-z0-9_-]/gi, "") || "txt"}`,
-		);
+		const tmpFile = path.join(tmpDir, `snippet.${snippet.ext}`);
 		try {
-			fs.writeFileSync(tmpFile, "let __pi_lens_validate__ = 1;\n", "utf-8");
+			fs.writeFileSync(tmpFile, snippet.source, "utf-8");
 			const args = ["run", "-p", pattern, "--lang", lang, "--json=compact"];
 			if (options?.selector) args.push("--selector", options.selector);
 			if (options?.strictness) args.push("--strictness", options.strictness);
@@ -280,26 +331,38 @@ export class AstGrepClient {
 			const stderr = result.stderr.trim();
 			const stdout = result.stdout.trim();
 			if (result.error) return { valid: false, error: result.error };
-			if (/error|invalid|failed/i.test(stderr) && !/Warning:/i.test(stderr)) {
-				return { valid: false, error: stderr };
-			}
+			if (stderrHasError(stderr)) return { valid: false, error: stderr };
+			const warning = stderr || stdout || undefined;
 			return {
 				valid: true,
-				...(stderr ? { warning: stderr } : stdout ? { warning: stdout } : {}),
+				...(warning ? { warning } : {}),
 			};
 		} finally {
-			fs.rmSync(tmpDir, { recursive: true, force: true });
+			try {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			} catch {
+				// Best-effort cleanup; never mask the validation result.
+			}
 		}
 	}
 
 	async validateRule(
 		ruleYaml: string,
 	): Promise<{ valid: boolean; error?: string }> {
+		const shapeError = validateInputShape(
+			ruleYaml,
+			MAX_VALIDATE_RULE_CHARS,
+			"rule",
+		);
+		if (shapeError) return { valid: false, error: shapeError };
+
+		const language = /^\s*language:\s*([^\s#]+)/im.exec(ruleYaml)?.[1] ?? "typescript";
+		const snippet = validationSnippetFor(language);
 		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-sg-rule-"));
 		try {
 			fs.writeFileSync(
-				path.join(tmpDir, "snippet.ts"),
-				"let x = 1;\n",
+				path.join(tmpDir, `snippet.${snippet.ext}`),
+				snippet.source,
 				"utf-8",
 			);
 			await this.runner.tempScanAsync(tmpDir, "agent-rule", ruleYaml, 10000);
@@ -307,7 +370,11 @@ export class AstGrepClient {
 		} catch (err) {
 			return { valid: false, error: String(err) };
 		} finally {
-			fs.rmSync(tmpDir, { recursive: true, force: true });
+			try {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			} catch {
+				// Best-effort cleanup; never mask the validation result.
+			}
 		}
 	}
 

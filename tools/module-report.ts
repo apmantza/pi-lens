@@ -78,7 +78,7 @@ export function createModuleReportTool(getProjectRoot: () => string) {
 			),
 			view: Type.Optional(
 				Type.String({
-					enum: ["summary", "default", "deep"],
+					enum: ["summary", "default"],
 					description:
 						"Payload tier. summary returns top-level read handles/recommendedReads and section provenance with heavy callback/usedBy/blast-radius payloads omitted.",
 				}),
@@ -102,7 +102,7 @@ export function createModuleReportTool(getProjectRoot: () => string) {
 				path: string;
 				maxRefsPerSymbol?: number;
 				focus?: string;
-				view?: "summary" | "default" | "deep";
+				view?: "summary" | "default";
 				blastRadius?: boolean;
 				blastRadiusDepth?: number;
 			},
