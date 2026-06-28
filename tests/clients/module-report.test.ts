@@ -73,6 +73,38 @@ describe("moduleReport — outline + structure", () => {
 		expect(report.api.some((e) => e.name === "helper")).toBe(false);
 	});
 
+	it("supports a payload-reducing summary view with section provenance", async () => {
+		const env = makeEnv();
+		const file = createTempFile(
+			env.tmpDir,
+			"summary.ts",
+			[
+				"export function add(a: number, b: number): number {",
+				"  return a + b;",
+				"}",
+				"function helper() {",
+				"  return add(1, 2);",
+				"}",
+			].join("\n"),
+		);
+
+		const report = await moduleReport(file, env.tmpDir, { view: "summary" });
+
+		expect(report.view).toBe("summary");
+		expect(report.api[0]).toMatchObject({
+			name: "add",
+			kind: "function",
+			read: { path: file, offset: 1, limit: 3 },
+		});
+		expect(report.api[0].usedBy).toBeUndefined();
+		expect(report.callbacks).toEqual([]);
+		expect(report.provenance).toMatchObject({
+			symbols: "syntax",
+			callbacks: "none",
+		});
+		expect(report.recommendedReads.length).toBeGreaterThan(0);
+	});
+
 	it("extracts a Python outline (language-uniform, not TS-only)", async () => {
 		const env = makeEnv();
 		const file = createTempFile(

@@ -56,6 +56,8 @@ export interface ModuleReportOptions {
 	maxRefsPerSymbol?: number;
 	/** Optional task hint used only to rank recommendedReads; never expands scope or triggers scans. */
 	focus?: string;
+	/** Payload tier. summary keeps top-level read handles/recommendations only. */
+	view?: "summary" | "default" | "deep";
 	/** Include the cross-file blast-radius section (#304): the transitive
 	 * dependents of this module, aggregated to ranked file `read` args. Read-only
 	 * over the CACHED graph — omitted entirely on a cold cache (never builds). */
@@ -167,6 +169,7 @@ export interface ModuleReport {
 	warnings?: string[];
 	language?: string;
 	lineCount?: number;
+	view?: "summary";
 	summary: { imports: number; exports: number; symbols: number };
 	imports: { external: string[]; internal: string[] };
 	api: ModuleSymbolEntry[];
@@ -185,6 +188,13 @@ export interface ModuleReport {
 	/** Cross-file blast radius (#304) — present only when requested via
 	 * `blastRadius` and the cached graph is warm; omitted otherwise. */
 	blastRadius?: BlastRadius;
+	provenance?: {
+		symbols: "syntax" | "none";
+		imports: "cached-review-graph" | "syntax" | "none";
+		usedBy: "cached-review-graph" | "none";
+		callbacks: "heuristic-tree-sitter" | "none";
+		blastRadius?: "cached-review-graph" | "none";
+	};
 	semantic: {
 		/** Provenance of who-uses-this: AST review graph, future graph-LSP edges
 		 * (#236), or none (cold cache). */
@@ -660,6 +670,34 @@ function nestEntries(entries: ModuleSymbolEntry[]): ModuleSymbolEntry[] {
 		if (e.members) e.members.sort((a, b) => a.startLine - b.startLine);
 	}
 	return entries.filter((e) => !containerOf.get(e));
+}
+
+function summarizeEntries(entries: ModuleSymbolEntry[]): ModuleSymbolEntry[] {
+	return entries.map((entry) => ({
+		name: entry.name,
+		kind: entry.kind,
+		startLine: entry.startLine,
+		endLine: entry.endLine,
+		exported: entry.exported,
+		...(entry.visibility ? { visibility: entry.visibility } : {}),
+		...(entry.signature ? { signature: entry.signature } : {}),
+		...(entry.flags ? { flags: entry.flags } : {}),
+		read: entry.read,
+		...(entry.members
+			? {
+					members: entry.members.map((member) => ({
+						name: member.name,
+						kind: member.kind,
+						startLine: member.startLine,
+						endLine: member.endLine,
+						exported: member.exported,
+						...(member.visibility ? { visibility: member.visibility } : {}),
+						...(member.signature ? { signature: member.signature } : {}),
+						read: member.read,
+					})),
+				}
+			: {}),
+	}));
 }
 
 function normalizeFocus(focus: string | undefined): string[] {
@@ -1607,6 +1645,8 @@ export async function moduleReport(
 				)
 			: undefined;
 
+	const view = options?.view ?? "default";
+	const summaryView = view === "summary";
 	const report: ModuleReport = {
 		available: entries.length > 0 || hasGraphNode,
 		staleness: entries.length === 0 && !hasGraphNode ? "unavailable" : "fresh",
@@ -1620,9 +1660,9 @@ export async function moduleReport(
 		},
 		imports,
 		...(warnings.length > 0 ? { warnings } : {}),
-		api,
-		internal,
-		callbacks,
+		api: summaryView ? summarizeEntries(api) : api,
+		internal: summaryView ? summarizeEntries(internal) : internal,
+		callbacks: summaryView ? [] : callbacks,
 		callbackSupport: callbackSupportFor(languageId),
 		recommendedReads: rankRecommendedReads(
 			entries,
@@ -1630,7 +1670,21 @@ export async function moduleReport(
 			5,
 			options?.focus,
 		),
-		...(blastRadius ? { blastRadius } : {}),
+		...(summaryView ? { view: "summary" } : {}),
+		...(blastRadius && !summaryView ? { blastRadius } : {}),
+		provenance: {
+			symbols: languageId ? "syntax" : "none",
+			imports: coldImportResult
+				? "syntax"
+				: graph
+					? "cached-review-graph"
+					: "none",
+			usedBy: hasGraphNode ? "cached-review-graph" : "none",
+			callbacks: languageId && !summaryView ? "heuristic-tree-sitter" : "none",
+			...(options?.blastRadius
+				? { blastRadius: blastRadius ? "cached-review-graph" : "none" }
+				: {}),
+		},
 		semantic: {
 			// Provenance of who-uses-this / references. The AST review graph is the
 			// only source on this read path; "graph-lsp" is reserved for #236 (LSP

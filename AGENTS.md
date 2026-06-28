@@ -96,7 +96,13 @@ a *second host adapter* alongside `index.ts`. Design rationale + progress: `mcp.
   already loaded). The report's `callbackSupport: "tuned" | "generic"` says which path
   ran so callers don't over-trust the list for untuned languages. Add a language
   by adding a `CALLBACK_RULES` entry + a guarded fixture test (the SYMBOL_QUERIES
-  per-grammar precedent — extraction breaks silently against real grammars). Pass `blastRadius: true` for the cross-file **blast radius** (#304):
+  per-grammar precedent — extraction breaks silently against real grammars).
+  `view:"summary"` is the payload-reducing orientation mode: top-level API/
+  internal read handles + `recommendedReads`, with heavy callbacks/usedBy/
+  blast-radius payloads omitted; reports also carry section-level `provenance`
+  (`syntax`, `cached-review-graph`, `heuristic-tree-sitter`, `none`) so agents
+  can tell facts from cache/heuristic sections without per-flag JSON bloat. Pass
+  `blastRadius: true` for the cross-file **blast radius** (#304):
   transitive dependents aggregated to ranked file `read` args — read-only over
   the *cached* graph (omitted when cold), the single successor to the removed
   `pilens_impact` tool) /

@@ -55,6 +55,13 @@ export function createModuleReportTool(getProjectRoot: () => string) {
 						"Optional task hint used only to rank recommendedReads (does not expand scope or trigger scans).",
 				}),
 			),
+			view: Type.Optional(
+				Type.String({
+					enum: ["summary", "default", "deep"],
+					description:
+						"Payload tier. summary returns top-level read handles/recommendedReads and section provenance with heavy callback/usedBy/blast-radius payloads omitted.",
+				}),
+			),
 			blastRadius: Type.Optional(
 				Type.Boolean({
 					description:
@@ -74,6 +81,7 @@ export function createModuleReportTool(getProjectRoot: () => string) {
 				path: string;
 				maxRefsPerSymbol?: number;
 				focus?: string;
+				view?: "summary" | "default" | "deep";
 				blastRadius?: boolean;
 				blastRadiusDepth?: number;
 			},
@@ -90,6 +98,7 @@ export function createModuleReportTool(getProjectRoot: () => string) {
 				report = await moduleReport(absFile, cwd, {
 					maxRefsPerSymbol: params.maxRefsPerSymbol,
 					focus: params.focus,
+					view: params.view,
 					blastRadius: params.blastRadius,
 					blastRadiusDepth: params.blastRadiusDepth,
 				});
@@ -120,6 +129,7 @@ export function createModuleReportTool(getProjectRoot: () => string) {
 					exports: report.summary.exports,
 					callbacks: report.callbacks.length,
 					callbackSupport: report.callbackSupport,
+					view: report.view ?? "default",
 				},
 			};
 		},

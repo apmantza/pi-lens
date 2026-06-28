@@ -324,6 +324,12 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 						"Pattern matching strictness. 'smart' (default) ignores comments and whitespace. 'relaxed' also ignores unnamed nodes like punctuation — useful when optional trailing commas cause misses. 'ast' ignores all whitespace. 'signature' matches only structural shape, ignoring bodies.",
 				}),
 			),
+			validateOnly: Type.Optional(
+				Type.Boolean({
+					description:
+						"Validate/compile the pattern or rule without scanning project files. Helps distinguish a bad pattern/rule from a real no-match result.",
+				}),
+			),
 		}),
 		async execute(
 			_toolCallId: string,
@@ -344,6 +350,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 				hasKind,
 				follows,
 				precedes,
+				validateOnly,
 			} = params as {
 				pattern?: string;
 				lang?: string;
@@ -357,6 +364,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 				hasKind?: string;
 				follows?: string;
 				precedes?: string;
+				validateOnly?: boolean;
 			};
 			const pattern = typeof params.pattern === "string" ? params.pattern : "";
 			const rawLang = typeof params.lang === "string" ? params.lang : "";
@@ -532,6 +540,45 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 							details: {},
 						};
 					}
+				}
+
+				if (validateOnly) {
+					const validation = effectiveRule?.trim()
+						? await astGrepClient.validateRule(effectiveRule)
+						: await astGrepClient.validatePattern(pattern, lang, {
+								selector,
+								strictness,
+							});
+					if (!validation.valid) {
+						logOutcome("error", { errorRaw: validation.error });
+						return {
+							content: [
+								{
+									type: "text" as const,
+									text: `Invalid ast-grep ${effectiveRule ? "rule" : "pattern"}: ${validation.error ?? "unknown error"}`,
+								},
+							],
+							isError: true,
+							details: { valid: false, validateOnly: true },
+						};
+					}
+					logOutcome("success", { matchCount: 0 });
+					const warning =
+						"warning" in validation ? validation.warning : undefined;
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: `Valid ast-grep ${effectiveRule ? "rule" : "pattern"}.${warning ? ` Warning: ${warning}` : ""}`,
+							},
+						],
+						details: {
+							valid: true,
+							validateOnly: true,
+							mode: effectiveRule ? "rule" : "pattern",
+							...(warning ? { warning } : {}),
+						},
+					};
 				}
 
 				// Phase 4: raw YAML rule passthrough — routes through sg scan --config

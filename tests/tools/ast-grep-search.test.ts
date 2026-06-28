@@ -12,6 +12,8 @@ function makeClient(
 		ensureAvailable: async () => true,
 		search: vi.fn().mockResolvedValue({ matches: [] }),
 		searchWithRule: vi.fn().mockResolvedValue({ matches: [], totalMatches: 0 }),
+		validatePattern: vi.fn().mockResolvedValue({ valid: true }),
+		validateRule: vi.fn().mockResolvedValue({ valid: true }),
 		formatMatches: () => "",
 		...overrides,
 	} as Parameters<typeof createAstGrepSearchTool>[0];
@@ -195,6 +197,100 @@ describe("ast_grep_search tool", () => {
 				"Error synthesizing rule",
 			);
 			expect(searchWithRule).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("validateOnly", () => {
+		it("validates a pattern without scanning project paths", async () => {
+			const validatePattern = vi.fn().mockResolvedValue({ valid: true });
+			const search = vi.fn();
+			const searchWithRule = vi.fn();
+			const tool = createAstGrepSearchTool(
+				makeClient({ validatePattern, search, searchWithRule }),
+			);
+
+			const result = await tool.execute(
+				"validate-pattern",
+				{
+					pattern: "console.log($MSG)",
+					lang: "typescript",
+					validateOnly: true,
+					strictness: "relaxed",
+				},
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+
+			expect(result.isError).toBeUndefined();
+			expect(String(result.content[0].text)).toContain(
+				"Valid ast-grep pattern",
+			);
+			expect(result.details).toMatchObject({
+				valid: true,
+				validateOnly: true,
+				mode: "pattern",
+			});
+			expect(validatePattern).toHaveBeenCalledWith(
+				"console.log($MSG)",
+				"typescript",
+				expect.objectContaining({ strictness: "relaxed" }),
+			);
+			expect(search).not.toHaveBeenCalled();
+			expect(searchWithRule).not.toHaveBeenCalled();
+		});
+
+		it("validates a raw rule without scanning requested paths", async () => {
+			const validateRule = vi.fn().mockResolvedValue({ valid: true });
+			const searchWithRule = vi.fn();
+			const tool = createAstGrepSearchTool(
+				makeClient({ validateRule, searchWithRule }),
+			);
+			const rule =
+				"id: r\nlanguage: TypeScript\nrule:\n  kind: call_expression";
+
+			const result = await tool.execute(
+				"validate-rule",
+				{ lang: "typescript", rule, validateOnly: true, paths: ["src"] },
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+
+			expect(result.isError).toBeUndefined();
+			expect(result.details).toMatchObject({ mode: "rule", valid: true });
+			expect(validateRule).toHaveBeenCalledWith(rule);
+			expect(searchWithRule).not.toHaveBeenCalled();
+		});
+
+		it("reports invalid validation results as tool errors", async () => {
+			const validatePattern = vi
+				.fn()
+				.mockResolvedValue({ valid: false, error: "bad pattern" });
+			const search = vi.fn();
+			const tool = createAstGrepSearchTool(
+				makeClient({ validatePattern, search }),
+			);
+
+			const result = await tool.execute(
+				"validate-bad",
+				{
+					pattern: "console.log($MSG)",
+					lang: "typescript",
+					validateOnly: true,
+				},
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+
+			expect(result.isError).toBe(true);
+			expect(String(result.content[0].text)).toContain("bad pattern");
+			expect(result.details).toMatchObject({
+				valid: false,
+				validateOnly: true,
+			});
+			expect(search).not.toHaveBeenCalled();
 		});
 	});
 

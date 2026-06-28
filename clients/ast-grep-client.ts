@@ -64,7 +64,8 @@ function formatDebugAst(tree: string, source: string): string {
 	return tree
 		.split(/\r\n|\n/)
 		.map((line) => {
-			const match = /^([ \t]*)([^ \t(][^(]*)? \((\d+),(\d+)\)-\((\d+),(\d+)\)$/.exec(line);
+			const match =
+				/^([ \t]*)([^ \t(][^(]*)? \((\d+),(\d+)\)-\((\d+),(\d+)\)$/.exec(line);
 			if (!match) return line;
 			const [, indent = "", label = "", startLine, startCol, endLine, endCol] =
 				match;
@@ -147,20 +148,41 @@ export class AstGrepClient {
 		for (const scanPath of paths) {
 			if (apply) {
 				// Stale-preview check: dry-run first
-				const preCheck = await this.runner.tempScanAsync(scanPath, "agent-rule", ruleYaml);
+				const preCheck = await this.runner.tempScanAsync(
+					scanPath,
+					"agent-rule",
+					ruleYaml,
+				);
 				if (preCheck.length === 0) {
-					return { matches: [], totalMatches: 0, applied: false, stalePreview: true };
+					return {
+						matches: [],
+						totalMatches: 0,
+						applied: false,
+						stalePreview: true,
+					};
 				}
 			}
 			const result = await this.runner.tempScanWithFixAsync(
-				scanPath, "agent-rule", ruleYaml, apply,
+				scanPath,
+				"agent-rule",
+				ruleYaml,
+				apply,
 			);
 			if (result.error) {
-				return { matches: allMatches, totalMatches: allMatches.length, applied: false, error: result.error };
+				return {
+					matches: allMatches,
+					totalMatches: allMatches.length,
+					applied: false,
+					error: result.error,
+				};
 			}
 			allMatches.push(...result.matches);
 		}
-		return { matches: allMatches, totalMatches: allMatches.length, applied: apply };
+		return {
+			matches: allMatches,
+			totalMatches: allMatches.length,
+			applied: apply,
+		};
 	}
 
 	/**
@@ -231,6 +253,59 @@ export class AstGrepClient {
 					result.stdout.trim() ||
 					`ast-grep did not return a debug AST for language ${lang}`,
 			};
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	}
+
+	async validatePattern(
+		pattern: string,
+		lang: string,
+		options?: { selector?: string; strictness?: string },
+	): Promise<{ valid: boolean; warning?: string; error?: string }> {
+		const tmpDir = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-sg-validate-"),
+		);
+		const tmpFile = path.join(
+			tmpDir,
+			`snippet.${lang.replace(/[^a-z0-9_-]/gi, "") || "txt"}`,
+		);
+		try {
+			fs.writeFileSync(tmpFile, "let __pi_lens_validate__ = 1;\n", "utf-8");
+			const args = ["run", "-p", pattern, "--lang", lang, "--json=compact"];
+			if (options?.selector) args.push("--selector", options.selector);
+			if (options?.strictness) args.push("--strictness", options.strictness);
+			args.push(tmpFile);
+			const result = await this.runner.execRaw(args);
+			const stderr = result.stderr.trim();
+			const stdout = result.stdout.trim();
+			if (result.error) return { valid: false, error: result.error };
+			if (/error|invalid|failed/i.test(stderr) && !/Warning:/i.test(stderr)) {
+				return { valid: false, error: stderr };
+			}
+			return {
+				valid: true,
+				...(stderr ? { warning: stderr } : stdout ? { warning: stdout } : {}),
+			};
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	}
+
+	async validateRule(
+		ruleYaml: string,
+	): Promise<{ valid: boolean; error?: string }> {
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-sg-rule-"));
+		try {
+			fs.writeFileSync(
+				path.join(tmpDir, "snippet.ts"),
+				"let x = 1;\n",
+				"utf-8",
+			);
+			await this.runner.tempScanAsync(tmpDir, "agent-rule", ruleYaml, 10000);
+			return { valid: true };
+		} catch (err) {
+			return { valid: false, error: String(err) };
 		} finally {
 			fs.rmSync(tmpDir, { recursive: true, force: true });
 		}
