@@ -210,6 +210,16 @@ export interface ReadSymbolResult {
 	source?: string;
 }
 
+export interface ReadEnclosingOutlineItem {
+	name: string;
+	kind: string;
+	startLine: number;
+	endLine: number;
+	signature?: string;
+	parentChain?: string[];
+	read: { path: string; offset: number; limit: number };
+}
+
 export interface ReadEnclosingResult {
 	found: boolean;
 	path: string;
@@ -218,8 +228,17 @@ export interface ReadEnclosingResult {
 	kind?: string;
 	startLine?: number;
 	endLine?: number;
+	enclosingStartLine?: number;
+	enclosingEndLine?: number;
 	signature?: string;
 	parentChain?: string[];
+	partial?: boolean;
+	selection?: {
+		strategy: "range-containment" | "oversize-slice" | "oversize-outline";
+		source: "tree-sitter";
+		confidence: "high" | "medium";
+	};
+	outline?: ReadEnclosingOutlineItem[];
 	error?: string;
 	warnings?: string[];
 	/** The verbatim enclosing body lines — recording this read satisfies the read-guard. */
@@ -229,8 +248,12 @@ export interface ReadEnclosingResult {
 export interface ReadEnclosingOptions {
 	/** Optional semantic kind filter, e.g. function, method, callback, class. */
 	kinds?: string[];
-	/** Optional maximum body size to return. Oversized matches return metadata + error. */
+	/** Optional maximum body size to return. Oversized matches obey onOversize. */
 	maxLines?: number;
+	/** Oversize behavior: error (default), bounded slice, or nested outline. */
+	onOversize?: "error" | "slice" | "outline";
+	/** Maximum lines for onOversize=slice; defaults to maxLines, then 80. */
+	aroundLine?: number;
 }
 
 // kind -> tree-sitter languageId. The languageId keys BOTH the grammar map
@@ -1232,7 +1255,8 @@ const kotlinCallbackRules: CallbackLanguageRules = {
 		const base = classifyGenericCallback(ctx);
 		const call = ancestorOfType(ctx.node, new Set(["call_expression"]), 4);
 		const callee = call?.children?.find(
-			(c) => c.type === "navigation_expression" || c.type === "simple_identifier",
+			(c) =>
+				c.type === "navigation_expression" || c.type === "simple_identifier",
 		);
 		const name = lastCalleeSegment(callee?.text);
 		if (KOTLIN_COROUTINE_BUILDERS.has(name)) {
@@ -1315,8 +1339,7 @@ const csharpCallbackRules: CallbackLanguageRules = {
 		const inv = ancestorOfType(ctx.node, new Set(["invocation_expression"]), 4);
 		if (inv) {
 			const callee = inv.children?.find(
-				(c) =>
-					c.type === "member_access_expression" || c.type === "identifier",
+				(c) => c.type === "member_access_expression" || c.type === "identifier",
 			);
 			const name = lastCalleeSegment(callee?.text);
 			if (/^(?:Run|StartNew|Start)$/.test(name)) {
@@ -1356,7 +1379,9 @@ const CALLBACK_RULES: Record<string, CallbackLanguageRules> = {
 function callbackRulesFor(
 	languageId: string | undefined,
 ): CallbackLanguageRules {
-	return (languageId ? CALLBACK_RULES[languageId] : undefined) ?? jstsCallbackRules;
+	return (
+		(languageId ? CALLBACK_RULES[languageId] : undefined) ?? jstsCallbackRules
+	);
 }
 
 /**
@@ -1725,9 +1750,7 @@ export async function readSymbol(
 			absPath,
 			languageId,
 			callbackWarnings,
-		).find(
-			(candidate) => candidate.name === symbolName,
-		);
+		).find((candidate) => candidate.name === symbolName);
 	} catch (err) {
 		const message = `Callback extraction failed: ${diagnosticMessage(err)}`;
 		logLatency({
@@ -1827,6 +1850,72 @@ function symbolParentChain(
 		)
 		.map((candidate) => candidate.name);
 	return chain.length > 0 ? chain : undefined;
+}
+
+function clampSliceRange(
+	targetLine: number,
+	startLine: number,
+	endLine: number,
+	limit: number,
+): { startLine: number; endLine: number } {
+	const boundedLimit = Math.max(1, Math.min(endLine - startLine + 1, limit));
+	let sliceStart = targetLine - Math.floor(boundedLimit / 2);
+	sliceStart = Math.max(
+		startLine,
+		Math.min(sliceStart, endLine - boundedLimit + 1),
+	);
+	return { startLine: sliceStart, endLine: sliceStart + boundedLimit - 1 };
+}
+
+function enclosingOutline(
+	selected: EnclosingCandidate,
+	symbols: ExtractedSymbol[],
+	callbacks: ModuleCallbackEntry[],
+	filters: Set<string>,
+	filePath: string,
+): ReadEnclosingOutlineItem[] {
+	const items: ReadEnclosingOutlineItem[] = [];
+	for (const sym of symbols) {
+		const startLine = sym.line;
+		const endLine = sym.endLine ?? sym.line;
+		if (startLine === selected.startLine && endLine === selected.endLine)
+			continue;
+		if (startLine < selected.startLine || endLine > selected.endLine) continue;
+		if (!symbolMatchesKind(sym.kind, filters)) continue;
+		items.push({
+			name: sym.name,
+			kind: sym.kind,
+			startLine,
+			endLine,
+			signature: sym.signature,
+			parentChain: symbolParentChain(sym, symbols),
+			read: readArgsFor(filePath, startLine, endLine),
+		});
+	}
+	for (const callback of callbacks) {
+		if (
+			callback.startLine < selected.startLine ||
+			callback.endLine > selected.endLine
+		)
+			continue;
+		if (!callbackMatchesKind(callback.kind, filters)) continue;
+		items.push({
+			name: callback.name,
+			kind: callback.kind,
+			startLine: callback.startLine,
+			endLine: callback.endLine,
+			signature: callback.signature,
+			parentChain: callback.parentChain,
+			read: callback.read,
+		});
+	}
+	return items
+		.sort(
+			(a, b) =>
+				a.startLine - b.startLine ||
+				a.endLine - a.startLine - (b.endLine - b.startLine),
+		)
+		.slice(0, 25);
 }
 
 /**
@@ -1959,9 +2048,8 @@ export async function readEnclosing(
 	const lines = content.split(/\r?\n/);
 	const limit = selected.endLine - selected.startLine + 1;
 	if (options?.maxLines && limit > options.maxLines) {
-		log(false);
-		return {
-			found: false,
+		const oversize = options.onOversize ?? "error";
+		const base = {
 			path: absPath,
 			line: targetLine,
 			name: selected.name,
@@ -1970,8 +2058,62 @@ export async function readEnclosing(
 			endLine: selected.endLine,
 			signature: selected.signature,
 			parentChain: selected.parentChain,
-			error: `Enclosing ${selected.kind} spans ${limit} lines, above maxLines ${options.maxLines}`,
+			enclosingStartLine: selected.startLine,
+			enclosingEndLine: selected.endLine,
 			...(warnings.length > 0 ? { warnings } : {}),
+		};
+		if (oversize === "slice") {
+			const sliceLimit = Math.max(
+				1,
+				Math.floor(options.aroundLine ?? options.maxLines ?? 80),
+			);
+			const slice = clampSliceRange(
+				targetLine,
+				selected.startLine,
+				selected.endLine,
+				sliceLimit,
+			);
+			const source = lines.slice(slice.startLine - 1, slice.endLine).join("\n");
+			log(true);
+			return {
+				...base,
+				found: true,
+				startLine: slice.startLine,
+				endLine: slice.endLine,
+				partial: true,
+				selection: {
+					strategy: "oversize-slice",
+					source: "tree-sitter",
+					confidence: "medium",
+				},
+				source,
+			};
+		}
+		if (oversize === "outline") {
+			log(false);
+			return {
+				...base,
+				found: false,
+				selection: {
+					strategy: "oversize-outline",
+					source: "tree-sitter",
+					confidence: "medium",
+				},
+				outline: enclosingOutline(
+					selected,
+					symbols,
+					callbacks,
+					filters,
+					absPath,
+				),
+				error: `Enclosing ${selected.kind} spans ${limit} lines, above maxLines ${options.maxLines}`,
+			};
+		}
+		log(false);
+		return {
+			...base,
+			found: false,
+			error: `Enclosing ${selected.kind} spans ${limit} lines, above maxLines ${options.maxLines}`,
 		};
 	}
 	const source = lines
@@ -1986,8 +2128,15 @@ export async function readEnclosing(
 		kind: selected.kind,
 		startLine: selected.startLine,
 		endLine: selected.endLine,
+		enclosingStartLine: selected.startLine,
+		enclosingEndLine: selected.endLine,
 		signature: selected.signature,
 		parentChain: selected.parentChain,
+		selection: {
+			strategy: "range-containment",
+			source: "tree-sitter",
+			confidence: "high",
+		},
 		...(warnings.length > 0 ? { warnings } : {}),
 		source,
 	};

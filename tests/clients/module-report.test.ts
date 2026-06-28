@@ -255,7 +255,11 @@ describe("moduleReport — outline + structure", () => {
 			"support.go",
 			"package main\nfunc run() {}\n",
 		);
-		const py = createTempFile(env.tmpDir, "support.py", "def run():\n    pass\n");
+		const py = createTempFile(
+			env.tmpDir,
+			"support.py",
+			"def run():\n    pass\n",
+		);
 		const rs = createTempFile(env.tmpDir, "support.rs", "fn run() {}\n");
 		const rb = createTempFile(env.tmpDir, "support.rb", "def run\nend\n");
 
@@ -977,6 +981,67 @@ describe("readEnclosing — search/diagnostic line to exact body", () => {
 		expect(result.found).toBe(false);
 		expect(result.name).toBe("big");
 		expect(result.error).toContain("above maxLines 2");
+		expect(result.source).toBeUndefined();
+	});
+
+	it("can return a bounded slice when the enclosing body is oversized", async () => {
+		const env = makeEnv();
+		const file = createTempFile(
+			env.tmpDir,
+			"big-slice.ts",
+			[
+				"export function big() {",
+				"  const a = 1;",
+				"  const b = 2;",
+				"  const c = 3;",
+				"  return a + b + c;",
+				"}",
+			].join("\n"),
+		);
+
+		const result = await readEnclosing(file, 4, env.tmpDir, {
+			maxLines: 2,
+			onOversize: "slice",
+			aroundLine: 3,
+		});
+
+		expect(result.found).toBe(true);
+		expect(result.partial).toBe(true);
+		expect(result.name).toBe("big");
+		expect(result.startLine).toBe(3);
+		expect(result.endLine).toBe(5);
+		expect(result.enclosingStartLine).toBe(1);
+		expect(result.enclosingEndLine).toBe(6);
+		expect(result.selection?.strategy).toBe("oversize-slice");
+		expect(result.source).toContain("const c = 3");
+		expect(result.source).not.toContain("export function big");
+	});
+
+	it("can return a nested outline when the enclosing body is oversized", async () => {
+		const env = makeEnv();
+		const file = createTempFile(
+			env.tmpDir,
+			"big-outline.ts",
+			[
+				"export function big() {",
+				"  function nested() {",
+				"    return 1;",
+				"  }",
+				"  return nested();",
+				"}",
+			].join("\n"),
+		);
+
+		const result = await readEnclosing(file, 5, env.tmpDir, {
+			maxLines: 2,
+			onOversize: "outline",
+		});
+
+		expect(result.found).toBe(false);
+		expect(result.name).toBe("big");
+		expect(result.selection?.strategy).toBe("oversize-outline");
+		expect(result.outline?.map((item) => item.name)).toContain("nested");
+		expect(result.outline?.[0]?.read).toMatchObject({ offset: 2, limit: 3 });
 		expect(result.source).toBeUndefined();
 	});
 });

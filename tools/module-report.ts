@@ -293,7 +293,20 @@ export function createReadEnclosingTool(
 			maxLines: Type.Optional(
 				Type.Number({
 					description:
-						"Optional maximum body size to return. Oversized matches return metadata plus an error instead of source.",
+						"Optional maximum body size to return. Oversized matches obey onOversize.",
+				}),
+			),
+			onOversize: Type.Optional(
+				Type.String({
+					enum: ["error", "slice", "outline"],
+					description:
+						"Behavior when the enclosing body exceeds maxLines. error (default) returns metadata only; slice returns a bounded partial read around line; outline returns nested symbols/callbacks with read handles.",
+				}),
+			),
+			aroundLine: Type.Optional(
+				Type.Number({
+					description:
+						"Maximum lines for onOversize=slice; defaults to maxLines, then 80.",
 				}),
 			),
 		}),
@@ -304,6 +317,8 @@ export function createReadEnclosingTool(
 				line: number;
 				kinds?: string[];
 				maxLines?: number;
+				onOversize?: "error" | "slice" | "outline";
+				aroundLine?: number;
 			},
 			_signal: AbortSignal | undefined,
 			_onUpdate: unknown,
@@ -316,6 +331,8 @@ export function createReadEnclosingTool(
 				result = await readEnclosing(absFile, params.line, cwd, {
 					kinds: params.kinds,
 					maxLines: params.maxLines,
+					onOversize: params.onOversize,
+					aroundLine: params.aroundLine,
 				});
 			} catch (err) {
 				return {
@@ -333,8 +350,11 @@ export function createReadEnclosingTool(
 				const warningSuffix = result.warnings?.length
 					? ` Warnings: ${result.warnings.join("; ")}`
 					: "";
+				const outlineSuffix = result.outline?.length
+					? `\n\nNested outline:\n${JSON.stringify(result.outline)}`
+					: "";
 				const text = result.error
-					? `Could not read enclosing range in ${path.basename(absFile)}:${result.line}: ${result.error}${warningSuffix}`
+					? `Could not read enclosing range in ${path.basename(absFile)}:${result.line}: ${result.error}${warningSuffix}${outlineSuffix}`
 					: `No enclosing symbol/callback found in ${path.basename(absFile)}:${result.line}.${warningSuffix}`;
 				return {
 					content: [{ type: "text" as const, text }],
@@ -346,6 +366,14 @@ export function createReadEnclosingTool(
 						...(result.kind ? { kind: result.kind } : {}),
 						...(result.startLine ? { startLine: result.startLine } : {}),
 						...(result.endLine ? { endLine: result.endLine } : {}),
+						...(result.enclosingStartLine
+							? { enclosingStartLine: result.enclosingStartLine }
+							: {}),
+						...(result.enclosingEndLine
+							? { enclosingEndLine: result.enclosingEndLine }
+							: {}),
+						...(result.selection ? { selection: result.selection } : {}),
+						...(result.outline ? { outline: result.outline } : {}),
 						...(result.error ? { error: result.error } : {}),
 						...(result.warnings ? { warnings: result.warnings } : {}),
 					},
@@ -356,7 +384,10 @@ export function createReadEnclosingTool(
 				result,
 				"read_enclosing_guard_error",
 			);
-			const header = `${result.kind} ${result.name}  ${path.basename(result.path)}:${result.startLine}-${result.endLine}`;
+			const range = result.partial
+				? `${result.startLine}-${result.endLine} (partial of ${result.enclosingStartLine}-${result.enclosingEndLine})`
+				: `${result.startLine}-${result.endLine}`;
+			const header = `${result.kind} ${result.name}  ${path.basename(result.path)}:${range}`;
 			const guardWarning = readRecorded
 				? ""
 				: "\n\nWarning: read coverage recording failed; the returned body may not satisfy the edit guard.";
@@ -374,7 +405,11 @@ export function createReadEnclosingTool(
 					line: result.line,
 					startLine: result.startLine,
 					endLine: result.endLine,
+					enclosingStartLine: result.enclosingStartLine,
+					enclosingEndLine: result.enclosingEndLine,
 					parentChain: result.parentChain,
+					partial: result.partial,
+					selection: result.selection,
 					readRecorded,
 					...(result.warnings ? { warnings: result.warnings } : {}),
 				},

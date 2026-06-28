@@ -103,7 +103,11 @@ a *second host adapter* alongside `index.ts`. Design rationale + progress: `mcp.
   `pilens_read_symbol` (one symbol/callback handle's verbatim body). `read_enclosing`
   is the pi agent search/diagnostic → exact-body bridge: given a file+line it
   returns the smallest enclosing symbol/callback body and records read-guard
-  coverage; MCP parity is intentionally deferred until the pi tool surface settles.
+  coverage; if `maxLines` would reject an oversized range, `onOversize:"slice"`
+  returns bounded partial read coverage around the target line while
+  `onOversize:"outline"` returns nested symbol/callback read handles without
+  claiming coverage. MCP parity is intentionally deferred until the pi tool
+  surface settles.
   Wrapped pi tools emit their
   typebox `parameters` as the MCP `inputSchema` (via `schemaWithCwd`) — no
   hand-restated schema to drift.

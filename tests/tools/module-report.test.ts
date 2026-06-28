@@ -172,6 +172,58 @@ describe("read_enclosing tool", () => {
 			env.cleanup();
 		}
 	});
+
+	it("returns and records a partial slice for oversized enclosing ranges", async () => {
+		const env = setupTestEnvironment("pi-lens-readenc-tool-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"sample.ts",
+				"export function big() {\n  const a = 1;\n  const b = 2;\n  const c = 3;\n  return a + b + c;\n}\n",
+			);
+			const recorded: Recorded[] = [];
+			const tool = createReadEnclosingTool(
+				() => env.tmpDir,
+				(filePath, symbol) => recorded.push({ filePath, symbol }),
+			);
+
+			const result = await tool.execute(
+				"read-enclosing",
+				{
+					path: "sample.ts",
+					line: 4,
+					maxLines: 2,
+					onOversize: "slice",
+					aroundLine: 3,
+				},
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+
+			expect(result.isError).toBeUndefined();
+			expect(String(result.content[0]?.text)).toContain("partial of 1-6");
+			expect(String(result.content[0]?.text)).not.toContain(
+				"export function big",
+			);
+			expect(result.details).toMatchObject({
+				found: true,
+				partial: true,
+				startLine: 3,
+				endLine: 5,
+				enclosingStartLine: 1,
+				enclosingEndLine: 6,
+				readRecorded: true,
+			});
+			expect(recorded[0].symbol).toMatchObject({
+				name: "big",
+				startLine: 3,
+				endLine: 5,
+			});
+		} finally {
+			env.cleanup();
+		}
+	});
 });
 
 describe("read_symbol tool", () => {
