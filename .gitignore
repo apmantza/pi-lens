@@ -66,6 +66,7 @@ migrate-*.js
 !docs/globalconfig.md
 !docs/language-coverage.md
 !docs/tools.md
+!docs/tools_improvement2.md
 !docs/usage.md
 !docs/lsp-capability-matrix.md
 !docs/lsp-latency-benchmark.md
