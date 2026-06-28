@@ -36,6 +36,21 @@ describe("module_report — callback slices (Kotlin/C#)", () => {
 		expect(coroutine?.flags).toContain("coroutine");
 	});
 
+	it("flags Kotlin suspend functions as async", async () => {
+		const env = makeEnv();
+		const kt = createTempFile(
+			env.tmpDir,
+			"suspend.kt",
+			"suspend fun load() {}\nfun plain() {}\n",
+		);
+		const report = await moduleReport(kt, env.tmpDir);
+		const entries = [...report.api, ...report.internal];
+		expect(entries.find((s) => s.name === "load")?.flags).toContain("async");
+		expect(entries.find((s) => s.name === "plain")?.flags ?? []).not.toContain(
+			"async",
+		);
+	});
+
 	it("flags C# Task.Run and event += handlers", async () => {
 		const env = makeEnv();
 		const cs = createTempFile(

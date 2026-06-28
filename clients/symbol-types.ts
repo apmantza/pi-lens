@@ -47,6 +47,14 @@ export interface Symbol {
 	 * Language-uniform over the tree-sitter declaration node; omitted when none.
 	 */
 	decorators?: string[];
+	/**
+	 * True when the declaration is an async/suspend function or method — a
+	 * concurrency boundary where await points and lifecycle bugs live. Detected
+	 * structurally (an `async` keyword node, or `async`/`suspend` in a modifiers
+	 * container); conservative, so it's false-negative-safe for grammars that
+	 * spell it differently. Omitted when false.
+	 */
+	isAsync?: boolean;
 }
 
 export interface SymbolRef {

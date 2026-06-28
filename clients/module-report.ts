@@ -569,6 +569,7 @@ function toEntry(
 	const exported = (sym.isExported || !!node?.exported) && !nonPublic;
 	const flags: string[] = [];
 	if (exported) flags.push("exported");
+	if (sym.isAsync) flags.push("async");
 	if (fanout !== undefined && fanout >= 4) flags.push("high fanout");
 	if (complexity !== undefined && complexity >= 8)
 		flags.push("high complexity");

@@ -403,6 +403,44 @@ describe("moduleReport — outline + structure", () => {
 		expect((await find(java, "run"))?.decorators).toEqual(["@Override"]);
 	});
 
+	it("flags async functions/methods on symbol entries", async () => {
+		const env = makeEnv();
+		const flatten = (
+			entries: Array<{ name: string; flags?: string[]; members?: unknown[] }>,
+		): Array<{ name: string; flags?: string[] }> =>
+			entries.flatMap((e) => [
+				e,
+				...flatten(
+					(e.members ?? []) as Array<{ name: string; flags?: string[] }>,
+				),
+			]);
+		const isAsync = async (file: string, name: string) => {
+			const r = await moduleReport(file, env.tmpDir);
+			return flatten([...r.api, ...r.internal])
+				.find((s) => s.name === name)
+				?.flags?.includes("async");
+		};
+
+		const py = createTempFile(
+			env.tmpDir,
+			"async.py",
+			"async def fetch():\n    pass\n\n\ndef plain():\n    pass\n",
+		);
+		expect(await isAsync(py, "fetch")).toBe(true);
+		expect(await isAsync(py, "plain")).toBeFalsy();
+
+		const ts = createTempFile(
+			env.tmpDir,
+			"async.ts",
+			"export async function go() {}\nexport class C {\n  async m() {}\n}\n",
+		);
+		expect(await isAsync(ts, "go")).toBe(true);
+		expect(await isAsync(ts, "m")).toBe(true); // nested async method
+
+		const rs = createTempFile(env.tmpDir, "async.rs", "async fn go() {}\n");
+		expect(await isAsync(rs, "go")).toBe(true);
+	});
+
 	it("read_enclosing resolves a Go goroutine body by line", async () => {
 		const env = makeEnv();
 		const go = createTempFile(

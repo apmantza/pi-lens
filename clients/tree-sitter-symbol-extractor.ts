@@ -766,6 +766,8 @@ export class TreeSitterSymbolExtractor {
 		const visibility =
 			kind === "method" ? this.detectVisibility(defNode, name) : undefined;
 		const decorators = this.extractDecorators(defNode);
+		const isAsync =
+			(kind === "function" || kind === "method") && this.isAsyncDecl(defNode);
 
 		return {
 			id: `${filePath}:${name}`,
@@ -780,7 +782,34 @@ export class TreeSitterSymbolExtractor {
 			...(local ? { local: true } : {}),
 			...(visibility ? { visibility } : {}),
 			...(decorators.length > 0 ? { decorators } : {}),
+			...(isAsync ? { isAsync: true } : {}),
 		};
+	}
+
+	/**
+	 * Structural async/suspend detection: an `async` keyword node (Python/JS/TS
+	 * have it as a direct child of the declaration) or `async`/`suspend` inside a
+	 * `*modifiers*` container (Rust `function_modifiers`, Kotlin/Java/C#
+	 * `modifiers`). Conservative — a grammar that spells it differently just
+	 * yields false (no false positives).
+	 */
+	// biome-ignore lint/suspicious/noExplicitAny: web-tree-sitter node
+	private isAsyncDecl(node: any): boolean {
+		const isAsyncTok = (n: any): boolean =>
+			!!n &&
+			(n.type === "async" ||
+				n.type === "suspend" ||
+				(/modifier/.test(String(n.type)) &&
+					/^(?:async|suspend)$/.test(String(n.text ?? "").trim())));
+		for (const child of node.children ?? []) {
+			if (isAsyncTok(child)) return true;
+			if (/modifiers/.test(String(child?.type))) {
+				for (const gc of child.children ?? []) {
+					if (isAsyncTok(gc)) return true;
+				}
+			}
+		}
+		return false;
 	}
 
 	// Decorator/attribute/annotation node kinds across grammars. Python/TS/JS use
