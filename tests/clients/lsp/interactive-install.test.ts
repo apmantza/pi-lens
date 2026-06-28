@@ -14,6 +14,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+	_parseStaticInstallCommandForTest,
 	getInstallCommand,
 	getInstallStrategy,
 	supportsInteractiveInstall,
@@ -128,6 +129,26 @@ describe("install strategy", () => {
 // ---------------------------------------------------------------------------
 
 describe("install commands are descriptive", () => {
+	it("parses shell-strategy commands as argv without a shell", () => {
+		expect(
+			_parseStaticInstallCommandForTest(
+				"go install golang.org/x/tools/gopls@latest",
+			),
+		).toEqual(["go", ["install", "golang.org/x/tools/gopls@latest"]]);
+		expect(
+			_parseStaticInstallCommandForTest("nix profile install nixpkgs#nixd"),
+		).toEqual(["nix", ["profile", "install", "nixpkgs#nixd"]]);
+	});
+
+	it("rejects commands that need shell interpretation", () => {
+		expect(
+			_parseStaticInstallCommandForTest(
+				"curl https://example.test/install.sh | sh",
+			),
+		).toBeUndefined();
+		expect(_parseStaticInstallCommandForTest("echo $(whoami)")).toBeUndefined();
+	});
+
 	it("shell-strategy commands are runnable (not URLs or comments)", () => {
 		const shellLangs = ["go", "rust", "ruby", "csharp", "fsharp", "gleam"];
 		for (const lang of shellLangs) {

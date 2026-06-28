@@ -10,10 +10,10 @@
  * - Only prompts for "common" languages (Go, Rust, YAML, JSON, Bash)
  */
 
-import { spawn } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { getProjectDataDir } from "../file-utils.js";
+import { safeSpawnAsync } from "../safe-spawn.js";
 
 function canUseInteractivePrompt(): boolean {
 	return process.stdin.isTTY === true && process.stdout.isTTY === true;
@@ -21,12 +21,11 @@ function canUseInteractivePrompt(): boolean {
 
 async function isToolOnPath(toolId: string): Promise<boolean> {
 	const locator = process.platform === "win32" ? "where" : "which";
-
-	return new Promise((resolve) => {
-		const proc = spawn(locator, [toolId], { stdio: "ignore", shell: false });
-		proc.on("close", (code) => resolve(code === 0));
-		proc.on("error", () => resolve(false));
+	const result = await safeSpawnAsync(locator, [toolId], {
+		timeout: 5000,
+		ignoreAmbientSignal: true,
 	});
+	return result.status === 0;
 }
 
 /**
@@ -306,9 +305,21 @@ function isAutoInstallEnabled(): boolean {
  * Attempt to install a tool using the configured strategy.
  *
  * - "npm":    npm install -g <packageName>
- * - "shell":  run installCommand verbatim via shell (gem, dotnet, brew, etc.)
+ * - "shell":  run the static installCommand as argv (gem, dotnet, brew, etc.)
  * - "manual": can't auto-install — print the command and return false
  */
+export function _parseStaticInstallCommandForTest(
+	command: string,
+): [string, string[]] | undefined {
+	const trimmed = command.trim();
+	// Shell-strategy commands in COMMON_LANGUAGES are deliberately simple static
+	// argv-style commands. Refuse metacharacters instead of routing through
+	// sh/powershell, so this installer path never executes shell text.
+	if (!trimmed || /[;&|<>$`\\\r\n]/.test(trimmed)) return undefined;
+	const [cmd, ...args] = trimmed.split(/\s+/);
+	return cmd ? [cmd, args] : undefined;
+}
+
 async function installTool(config: LanguageConfig): Promise<boolean> {
 	const { installCommand, packageName, installStrategy } = config;
 
@@ -316,28 +327,18 @@ async function installTool(config: LanguageConfig): Promise<boolean> {
 		return false;
 	}
 
-	const [cmd, ...args] =
+	const invocation: [string, string[]] | undefined =
 		installStrategy === "npm" && packageName
-			? ["npm", "install", "-g", packageName]
-			: process.platform === "win32"
-				? ["powershell", "-NoProfile", "-Command", installCommand]
-				: ["sh", "-c", installCommand];
+			? ["npm", ["install", "-g", packageName]]
+			: _parseStaticInstallCommandForTest(installCommand);
+	if (!invocation) return false;
 
-	return new Promise((resolve) => {
-		const proc = spawn(cmd, args, { stdio: "inherit", shell: false });
-
-		proc.on("close", (code) => {
-			if (code === 0) {
-				resolve(true);
-			} else {
-				resolve(false);
-			}
-		});
-
-		proc.on("error", () => {
-			resolve(false);
-		});
+	const [cmd, args] = invocation;
+	const result = await safeSpawnAsync(cmd, args, {
+		timeout: 180000,
+		ignoreAmbientSignal: true,
 	});
+	return result.status === 0;
 }
 
 /**
