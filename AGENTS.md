@@ -553,5 +553,6 @@ Every issue should carry **one TYPE label + at least one `area:` label**.
 - `logSessionStart()` is a no-op in test mode (`VITEST` env var)
 - LSP tool: use `goToDefinition` / `findReferences` before grepping for symbols
 - ast-grep debug tool: prefer `ast_grep_dump`; `ast_dump` remains a compatibility alias.
+- `ast_grep_outline` (#311, `tools/ast-grep-outline.ts` → `AstGrepClient.outline` → `ast-grep outline --json=compact`) is a SYNTAX-ONLY structure tool (no index/LSP); `module_report` stays the pi-lens-aware default. pi tool only — not mirrored to MCP (parity deferred, like `read_enclosing`).
 - `clients/runtime-config.ts` is "pure constants" by intent. Resolutions that read disk or env (e.g. `getRunnerTimeoutFloorMs`) must be **lazy memoized getters** with a `_resetForTests` hook, not module-level reads, so importing the file has no I/O side effect and tests can override inputs deterministically.
 - Numeric inputs from env vars or JSON config that flow into `Math.max` / `Math.min` must be coerced through a `Number.isFinite(n) && n > 0` guard. `Number(undefined) === NaN`, and a single NaN argument makes `Math.max` return NaN, which `setTimeout` silently treats as 0.

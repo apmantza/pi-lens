@@ -35,6 +35,7 @@ const EXPECTED_COMMANDS = [
 const EXPECTED_TOOLS = [
 	"ast_grep_search",
 	"ast_grep_replace",
+	"ast_grep_outline",
 	"ast_grep_dump",
 	"ast_dump",
 	"lens_diagnostics",

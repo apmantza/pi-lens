@@ -32,6 +32,13 @@ share).
   this when an `ast_grep_search` or `ast_grep_replace` pattern returns zero
   matches and the correct node kind or field name is unknown. `includeAnonymous`
   shows punctuation/CST nodes. (`ast_dump` remains as a compatibility alias.)
+- **`ast_grep_outline`** — Syntax-only code structure (symbols, imports, exports,
+  members) for files or directories via `ast-grep outline`. Fast, local, no
+  index/LSP/cross-file semantics. Supports `items`/`view`/`type`/`match`/
+  `pubMembers`/`globs`; returns per-file `items[]` (nested `members[]`) with
+  ready `read` args. Prefer `module_report` for pi-lens-aware navigation; reach
+  for this when the syntax tree's own view is enough or pi-lens's extractor is
+  weak for a language.
 
 ## Project intelligence
 

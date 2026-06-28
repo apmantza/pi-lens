@@ -97,6 +97,7 @@ import { createAstDumpTool, createAstGrepDumpTool } from "./tools/ast-dump.js";
 import { createLensDiagnosticsTool } from "./tools/lens-diagnostics.js";
 import { createAstGrepReplaceTool } from "./tools/ast-grep-replace.js";
 import { createAstGrepSearchTool } from "./tools/ast-grep-search.js";
+import { createAstGrepOutlineTool } from "./tools/ast-grep-outline.js";
 import { createLspDiagnosticsTool } from "./tools/lsp-diagnostics.js";
 import { createLspNavigationTool } from "./tools/lsp-navigation.js";
 import {
@@ -1042,6 +1043,7 @@ export default function (pi: ExtensionAPI) {
 	for (const tool of [
 		createAstGrepSearchTool(astGrepClient),
 		createAstGrepReplaceTool(astGrepClient),
+		createAstGrepOutlineTool(astGrepClient),
 		createAstGrepDumpTool(astGrepClient),
 		createAstDumpTool(astGrepClient),
 		createLensDiagnosticsTool(

@@ -78,6 +78,29 @@ function formatDebugAst(tree: string, source: string): string {
 		.join("\n");
 }
 
+/** One symbol/import/export/member in `ast-grep outline` JSON (lines 0-based). */
+export interface AstGrepOutlineItem {
+	role: string;
+	symbolType: string;
+	name: string;
+	range: {
+		start: { line: number; column: number };
+		end: { line: number; column: number };
+	};
+	signature: string;
+	astKind: string;
+	isImport?: boolean;
+	isExported?: boolean;
+	isPublic?: boolean;
+	members?: AstGrepOutlineItem[];
+}
+
+export interface AstGrepOutlineFile {
+	path: string;
+	language: string;
+	items: AstGrepOutlineItem[];
+}
+
 export class AstGrepClient {
 	private ruleDir: string;
 	private log: (msg: string) => void;
@@ -210,6 +233,56 @@ export class AstGrepClient {
 			};
 		} finally {
 			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	}
+
+	/**
+	 * Syntax-only code outline via `ast-grep outline` (#311) — symbols, imports,
+	 * exports, and members for file or directory input. Raw, fast, no index/LSP;
+	 * complements module_report (which adds the cached graph's who-uses-this,
+	 * complexity, and blast radius). Returns parsed JSON; args go through
+	 * `execRaw` (execFile-style, no shell), so no interpolation risk.
+	 */
+	async outline(
+		paths: string[],
+		options: {
+			lang?: string;
+			items?: string;
+			view?: string;
+			types?: string[];
+			match?: string;
+			pubMembers?: boolean;
+			globs?: string[];
+		} = {},
+	): Promise<{ output?: AstGrepOutlineFile[]; error?: string }> {
+		if (paths.length === 0) return { error: "no paths provided" };
+		const args = ["outline", "--json=compact", "--color", "never"];
+		if (options.lang) args.push("--lang", options.lang);
+		if (options.items) args.push("--items", options.items);
+		if (options.view) args.push("--view", options.view);
+		if (options.types?.length) args.push("--type", options.types.join(","));
+		if (options.match) args.push("--match", options.match);
+		if (options.pubMembers) args.push("--pub-members");
+		for (const glob of options.globs ?? []) args.push("--globs", glob);
+		args.push(...paths);
+		const result = await this.runner.execRaw(args);
+		const raw = (result.stdout ?? "").trim();
+		if (!raw) {
+			return {
+				error:
+					result.error ||
+					result.stderr?.trim() ||
+					"ast-grep outline returned no output",
+			};
+		}
+		try {
+			return { output: JSON.parse(raw) as AstGrepOutlineFile[] };
+		} catch (err) {
+			return {
+				error: `failed to parse ast-grep outline JSON: ${
+					err instanceof Error ? err.message : String(err)
+				}`,
+			};
 		}
 	}
 
