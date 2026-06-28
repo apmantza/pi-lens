@@ -48,6 +48,31 @@ describe("module_report tool", () => {
 		}
 	});
 
+	it("passes through summary view", async () => {
+		const env = setupTestEnvironment("pi-lens-modreport-tool-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"sample.ts",
+				"export function add(a: number, b: number): number {\n  return a + b;\n}\n",
+			);
+			const tool = createModuleReportTool(() => env.tmpDir);
+			const result = await tool.execute(
+				"summary",
+				{ path: "sample.ts", view: "summary" },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			const report = JSON.parse(String(result.content[0]?.text));
+			expect(report.view).toBe("summary");
+			expect(report.provenance.symbols).toBe("syntax");
+			expect(result.details.view).toBe("summary");
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("includes callback count in details", async () => {
 		const env = setupTestEnvironment("pi-lens-modreport-tool-");
 		try {

@@ -5,6 +5,7 @@ import type {
 	AstGrepOutlineItem,
 } from "../clients/ast-grep-client.js";
 import { Type } from "../clients/deps/typebox.js";
+import { compactRenderResult } from "./render-compact.js";
 import { LANGUAGES } from "./shared.js";
 
 // Cap the wire payload so an outline over a large directory can't flood context.
@@ -60,6 +61,19 @@ export function createAstGrepOutlineTool(astGrepClient: AstGrepClient) {
 			"of a symbol's body (use read_symbol/read_enclosing for that).",
 		promptSnippet:
 			"Syntax-only code outline via ast-grep (no index/LSP); module_report is the richer default",
+		renderResult: compactRenderResult<{
+			files?: number;
+			items?: number;
+			truncatedFiles?: boolean;
+		}>(({ details, isError, text }) => {
+			if (isError) {
+				return `ast_grep_outline — ${text.split("\n")[0] ?? "error"}`;
+			}
+			const files = details?.files ?? 0;
+			const items = details?.items ?? 0;
+			const trunc = details?.truncatedFiles ? " (truncated)" : "";
+			return `ast_grep_outline — ${items} symbols across ${files} file${files === 1 ? "" : "s"}${trunc}`;
+		}),
 		parameters: Type.Object({
 			paths: Type.Array(Type.String(), {
 				minItems: 1,

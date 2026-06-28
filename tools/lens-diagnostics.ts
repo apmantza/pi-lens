@@ -11,6 +11,7 @@
 
 import * as path from "node:path";
 import { Type } from "../clients/deps/typebox.js";
+import { compactRenderResult } from "./render-compact.js";
 import { getProjectIgnoreMatcher } from "../clients/file-utils.js";
 import { getLSPService } from "../clients/lsp/index.js";
 import type { LSPDiagnostic } from "../clients/lsp/client.js";
@@ -88,6 +89,38 @@ export function createLensDiagnosticsTool(
 			"also scans cheap project runners (tree-sitter + fact-rules) and caches them.",
 		promptSnippet:
 			"Use lens_diagnostics mode=all to verify no blocking errors remain; use mode=full for expensive project-wide checks",
+		renderResult: compactRenderResult<{
+			mode?: string;
+			actionableWarnings?: number;
+			qualityIssues?: number;
+			projectDiagnostics?: number;
+			filesWithIssues?: number;
+			filesChecked?: number;
+			totalBlocking?: number;
+			totalErrors?: number;
+			totalWarnings?: number;
+		}>(({ details, args, isError, text }) => {
+			const mode =
+				details?.mode ?? (typeof args.mode === "string" ? args.mode : "delta");
+			if (isError) {
+				return `lens_diagnostics ${mode} — ${text.split("\n")[0] ?? "error"}`;
+			}
+			if (mode === "delta") {
+				const aw = details?.actionableWarnings ?? 0;
+				const cq = details?.qualityIssues ?? 0;
+				const pd = details?.projectDiagnostics ?? 0;
+				if (aw + cq + pd === 0) return `lens_diagnostics delta — clean`;
+				return `lens_diagnostics delta — ${aw} actionable · ${cq} quality · ${pd} project`;
+			}
+			const b = details?.totalBlocking ?? 0;
+			const e = details?.totalErrors ?? 0;
+			const w = details?.totalWarnings ?? 0;
+			const files = details?.filesWithIssues ?? details?.filesChecked ?? 0;
+			if (b + e + w === 0) {
+				return `lens_diagnostics ${mode} — clean (${files} files)`;
+			}
+			return `lens_diagnostics ${mode} — ${b} blocking · ${e} errors · ${w} warnings (${files} files)`;
+		}),
 		parameters: Type.Object({
 			mode: Type.Optional(
 				Type.String({

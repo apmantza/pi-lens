@@ -18,6 +18,7 @@ import {
 	synthesizeRule,
 } from "../clients/ast-grep-yaml-synth.js";
 import type { SearchReadLocation } from "../clients/search-read-registration.js";
+import { compactRenderResult } from "./render-compact.js";
 import { LANGUAGES } from "./shared.js";
 
 /**
@@ -57,6 +58,44 @@ function toSearchReads(matches: AstGrepMatch[]): SearchReadLocation[] {
 		});
 	}
 	return out;
+}
+
+// Default and ceiling for matches returned per call. `maxMatches` lets a caller
+// trade volume for completeness within these bounds (the default preserves the
+// historical page size).
+const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 200;
+
+/**
+ * Compact, file-grouped rendering for high-volume searches (refs #345). Instead
+ * of each match's full body, emit one line per file with its 1-based
+ * `L<line>:<col>` locations — a distribution view that drills in via the read
+ * slices already surfaced in `details.matchLocations`/`searchReads`.
+ */
+function formatGroupedByFile(matches: AstGrepMatch[]): string {
+	const byFile = new Map<string, AstGrepMatch[]>();
+	for (const m of matches) {
+		if (!m.file) continue;
+		const list = byFile.get(m.file);
+		if (list) list.push(m);
+		else byFile.set(m.file, [m]);
+	}
+	const total = matches.length;
+	const fileCount = byFile.size;
+	const lines = [
+		`${fileCount} file${fileCount === 1 ? "" : "s"}, ${total} match${total === 1 ? "" : "es"}:`,
+	];
+	for (const [file, group] of byFile) {
+		const locs = group
+			.map((m) => {
+				const line = (m.range?.start?.line ?? 0) + 1;
+				const col = (m.range?.start?.column ?? 0) + 1;
+				return `L${line}:${col}`;
+			})
+			.join(", ");
+		lines.push(`${file} (${group.length}): ${locs}`);
+	}
+	return lines.join("\n");
 }
 
 type MatchLocation = {
@@ -254,6 +293,31 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			"Avoid 'selector' unless you know the exact AST node kind; it narrows search roots and does not extract fields. " +
 			"Use 'context' to show surrounding lines. If zero matches, retry once with a simpler AST pattern, then use ast_grep_dump on a small representative snippet before falling back to grep.",
 		promptSnippet: "AST-aware structural code search",
+		renderResult: compactRenderResult<{
+			matchCount?: number;
+			totalMatches?: number;
+			truncated?: boolean;
+			valid?: boolean;
+			validateOnly?: boolean;
+			mode?: string;
+			applied?: boolean;
+		}>(({ details, isError, text }) => {
+			if (details?.validateOnly) {
+				const mode = details.mode ?? "pattern";
+				return details.valid
+					? `ast_grep_search — valid ${mode}`
+					: `ast_grep_search — invalid ${mode}`;
+			}
+			if (isError) {
+				return `ast_grep_search — ${text.split("\n")[0] ?? "error"}`;
+			}
+			const count = details?.matchCount ?? 0;
+			const total = details?.totalMatches;
+			const ofTotal =
+				typeof total === "number" && total > count ? ` of ${total}` : "";
+			const applied = details?.applied ? " (applied)" : "";
+			return `ast_grep_search — ${count}${ofTotal} match${count === 1 && !ofTotal ? "" : "es"}${applied}`;
+		}),
 		parameters: Type.Object({
 			pattern: Type.Optional(
 				Type.String({
@@ -317,11 +381,28 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 						"Match offset for pagination. Skip the first N matches and return the next page. Use when results are truncated — increment by the page size to retrieve subsequent pages.",
 				}),
 			),
+			maxMatches: Type.Optional(
+				Type.Number({
+					description: `Cap on matches returned per call (default ${DEFAULT_PAGE_SIZE}, max ${MAX_PAGE_SIZE}). Lower it to keep a broad search compact; raise it to page less. Also sets the pagination step for skip.`,
+				}),
+			),
+			groupByFile: Type.Optional(
+				Type.Boolean({
+					description:
+						"Render results grouped by file (one line per file with L<line>:<col> locations) instead of each match's body. Compact distribution view for high-volume searches; match read-slices remain in details.matchLocations.",
+				}),
+			),
 			strictness: Type.Optional(
 				Type.String({
 					enum: ["smart", "relaxed", "ast", "cst", "signature", "template"],
 					description:
 						"Pattern matching strictness. 'smart' (default) ignores comments and whitespace. 'relaxed' also ignores unnamed nodes like punctuation — useful when optional trailing commas cause misses. 'ast' ignores all whitespace. 'signature' matches only structural shape, ignoring bodies.",
+				}),
+			),
+			validateOnly: Type.Optional(
+				Type.Boolean({
+					description:
+						"Validate/compile the pattern or rule without scanning project files. Helps distinguish a bad pattern/rule from a real no-match result.",
 				}),
 			),
 		}),
@@ -338,12 +419,15 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 				selector,
 				context,
 				skip,
+				maxMatches,
+				groupByFile,
 				strictness,
 				rule,
 				insideKind,
 				hasKind,
 				follows,
 				precedes,
+				validateOnly,
 			} = params as {
 				pattern?: string;
 				lang?: string;
@@ -351,12 +435,15 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 				selector?: string;
 				context?: number;
 				skip?: number;
+				maxMatches?: number;
+				groupByFile?: boolean;
 				strictness?: string;
 				rule?: string;
 				insideKind?: string;
 				hasKind?: string;
 				follows?: string;
 				precedes?: string;
+				validateOnly?: boolean;
 			};
 			const pattern = typeof params.pattern === "string" ? params.pattern : "";
 			const rawLang = typeof params.lang === "string" ? params.lang : "";
@@ -502,7 +589,15 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 				}
 
 				const searchPaths = paths?.length ? paths : [ctx.cwd || "."];
-				const PAGE_SIZE = 50;
+				const PAGE_SIZE = Math.max(
+					1,
+					Math.min(
+						MAX_PAGE_SIZE,
+						Number.isFinite(maxMatches as number)
+							? Math.floor(maxMatches as number)
+							: DEFAULT_PAGE_SIZE,
+					),
+				);
 
 				// Phase 3: synthesize YAML from structural-intent params
 				let effectiveRule = hasRawRule ? rawRule : undefined;
@@ -534,6 +629,45 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 					}
 				}
 
+				if (validateOnly) {
+					const validation = effectiveRule?.trim()
+						? await astGrepClient.validateRule(effectiveRule)
+						: await astGrepClient.validatePattern(pattern, lang, {
+								selector,
+								strictness,
+							});
+					if (!validation.valid) {
+						logOutcome("error", { errorRaw: validation.error });
+						return {
+							content: [
+								{
+									type: "text" as const,
+									text: `Invalid ast-grep ${effectiveRule ? "rule" : "pattern"}: ${validation.error ?? "unknown error"}`,
+								},
+							],
+							isError: true,
+							details: { valid: false, validateOnly: true },
+						};
+					}
+					logOutcome("success", { matchCount: 0 });
+					const warning =
+						"warning" in validation ? validation.warning : undefined;
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: `Valid ast-grep ${effectiveRule ? "rule" : "pattern"}.${warning ? ` Warning: ${warning}` : ""}`,
+							},
+						],
+						details: {
+							valid: true,
+							validateOnly: true,
+							mode: effectiveRule ? "rule" : "pattern",
+							...(warning ? { warning } : {}),
+						},
+					};
+				}
+
 				// Phase 4: raw YAML rule passthrough — routes through sg scan --config
 				if (effectiveRule && effectiveRule.trim().length > 0) {
 					if (_signal.aborted) return abortError();
@@ -558,7 +692,9 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 					const afterSkip = ruleResult.matches.slice(skipOffset);
 					const page = afterSkip.slice(0, PAGE_SIZE);
 					const hasMore = afterSkip.length > PAGE_SIZE;
-					const output = astGrepClient.formatMatches(page);
+					const output = groupByFile
+						? formatGroupedByFile(page)
+						: astGrepClient.formatMatches(page);
 					const paginationNote =
 						hasMore && page.length > 0
 							? `\n\n(Showing ${page.length} of ${ruleResult.matches.length - skipOffset} remaining matches. Use skip=${skipOffset + PAGE_SIZE} for the next page.)`
@@ -578,6 +714,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 							truncated: hasMore,
 							hasMore,
 							skip: skipOffset,
+							groupByFile: groupByFile === true,
 							// Lines shown to the agent — the read-guard registers these so a
 							// follow-up edit to a match isn't blocked (#169). 1-based.
 							searchReads: toSearchReads(page),
@@ -613,7 +750,9 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 				const page = afterSkip.slice(0, PAGE_SIZE);
 				const hasMore = afterSkip.length > PAGE_SIZE || result.truncated;
 
-				const output = astGrepClient.formatMatches(page);
+				const output = groupByFile
+					? formatGroupedByFile(page)
+					: astGrepClient.formatMatches(page);
 				const hint =
 					page.length === 0 && !result.error
 						? getPatternHint(pattern, lang, selector)
@@ -638,6 +777,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 						truncated: hasMore,
 						hasMore,
 						skip: skipOffset,
+						groupByFile: groupByFile === true,
 						// Lines shown to the agent — registered as reads by the read-guard
 						// so a follow-up edit to a match isn't blocked (#169). 1-based.
 						searchReads: toSearchReads(page),

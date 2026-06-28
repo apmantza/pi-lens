@@ -21,8 +21,13 @@ share).
   the `sg` CLI. Supports metavariables (`$VAR`, `$$$ARGS`), `strictness`
   modes (`smart`, `relaxed`, `ast`, `cst`, `signature`, `template`), structural
   constraints (`insideKind`, `hasKind`, `follows`, `precedes`), raw YAML `rule`
-  passthrough, and pagination via `skip`. `pattern` is optional when a `rule` is
-  given. Results include `details.matchLocations[]` — each hit carries a ready
+  passthrough, `validateOnly` for compile/shape checks without scanning project
+  files, and pagination via `skip` / `maxMatches` (per-call cap, default 50,
+  max 200; also sets the pagination step). `groupByFile: true` renders a compact
+  one-line-per-file distribution (`L<line>:<col>` locations) instead of each
+  match body — for high-volume searches. `pattern` is optional when a `rule` is
+  given.
+  Results include `details.matchLocations[]` — each hit carries a ready
   `readSlice` (`path`/`offset`/`limit`) for a bounded context read; zero-match
   results include a `suggestedDump` hint pointing at `ast_grep_dump`.
 - **`ast_grep_replace`** — AST-aware structural replace. Re-validates the pattern
@@ -59,8 +64,12 @@ share).
   scheduler/future lambda, Rust spawn/move-closure, Swift weak/strong-self
   capture, C++ by-reference-capture, Kotlin coroutine-builder, Java
   thread/executor/listener, and C# Task.Run/event-`+=` slices); named
-  symbols span all tree-sitter `SYMBOL_QUERIES` languages. Pass `blastRadius: true`
-  for cross-file transitive dependents (read-only over the cached graph).
+  symbols span all tree-sitter `SYMBOL_QUERIES` languages. Pass `view: "summary"`
+  for a smaller orientation payload (top-level read handles + recommendations,
+  heavy callback/usedBy/blast-radius payloads omitted). Reports section-level
+  `provenance` for syntax, cached-graph, and heuristic sections. Pass
+  `blastRadius: true` for cross-file transitive dependents (read-only over the
+  cached graph).
 - **`read_symbol`** — One symbol's verbatim source body, by name or by a
   `module_report` callback handle. Returned body is recorded as genuine
   read-guard coverage for that symbol/callback's line range.

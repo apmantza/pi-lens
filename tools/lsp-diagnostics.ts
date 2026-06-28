@@ -14,6 +14,7 @@ import {
 } from "../clients/file-utils.js";
 import { getLSPService } from "../clients/lsp/index.js";
 import type { LSPDiagnostic } from "../clients/lsp/client.js";
+import { baseName, compactRenderResult } from "./render-compact.js";
 
 const LANG_EXTENSIONS: Record<string, string[]> = {
 	".ts": [".ts", ".tsx", ".mts", ".cts"],
@@ -205,6 +206,31 @@ export function createLspDiagnosticsTool() {
 			"Works on directories by auto-detecting file extensions and scanning all matching files.",
 		promptSnippet:
 			"Get LSP diagnostics for a file or directory (use before builds)",
+		renderResult: compactRenderResult<{
+			mode?: string;
+			filePath?: string;
+			diagnostics?: unknown[];
+			totalDiagnostics?: number;
+			filesChecked?: number;
+			filesScanned?: number;
+		}>(({ details, args, isError, text }) => {
+			if (isError) {
+				return `lsp_diagnostics — ${text.split("\n")[0] ?? "error"}`;
+			}
+			const count =
+				details?.totalDiagnostics ?? details?.diagnostics?.length ?? 0;
+			const target =
+				baseName(details?.filePath ?? args.path) || "workspace";
+			const files = details?.filesChecked ?? details?.filesScanned;
+			const scope =
+				typeof files === "number" && files > 1
+					? ` across ${files} files`
+					: target
+						? ` ${target}`
+						: "";
+			const noun = count === 1 ? "diagnostic" : "diagnostics";
+			return `lsp_diagnostics${scope} — ${count} ${noun}`;
+		}),
 		parameters: Type.Object({
 			path: Type.Optional(
 				Type.String({
