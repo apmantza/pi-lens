@@ -305,6 +305,8 @@ type ModuleReportNode = {
 	text: string;
 	children: ModuleReportNode[];
 	parent?: ModuleReportNode | null;
+	/** Named (vs anonymous punctuation/keyword) node — web-tree-sitter field. */
+	isNamed?: boolean;
 	startPosition: { row: number; column: number };
 	endPosition: { row: number; column: number };
 };
@@ -1204,6 +1206,138 @@ const cppCallbackRules: CallbackLanguageRules = {
 	},
 };
 
+/** Trailing identifier of a (possibly dotted) callee, e.g. `scope.launch` → `launch`. */
+function lastCalleeSegment(text: string | undefined): string {
+	const m = String(text ?? "")
+		.trim()
+		.match(/([A-Za-z_$][\w$]*)\s*$/);
+	return m ? m[1] : "";
+}
+
+// Kotlin: coroutine builders (`launch`/`async`/`withContext`/`runBlocking`/…)
+// are the dominant lifecycle/leak source. The trailing lambda sits under
+// `call_expression → call_suffix → annotated_lambda`, so resolve the builder
+// name from the enclosing call's callee.
+const KOTLIN_COROUTINE_BUILDERS = new Set([
+	"launch",
+	"async",
+	"withContext",
+	"runBlocking",
+	"coroutineScope",
+	"supervisorScope",
+]);
+const kotlinCallbackRules: CallbackLanguageRules = {
+	classify(ctx) {
+		const base = classifyGenericCallback(ctx);
+		const call = ancestorOfType(ctx.node, new Set(["call_expression"]), 4);
+		const callee = call?.children?.find(
+			(c) => c.type === "navigation_expression" || c.type === "simple_identifier",
+		);
+		const name = lastCalleeSegment(callee?.text);
+		if (KOTLIN_COROUTINE_BUILDERS.has(name)) {
+			return {
+				kind: "coroutine",
+				flags: withFlag(base.flags, "coroutine"),
+				include: true,
+				nameBase: name,
+			};
+		}
+		return base;
+	},
+};
+
+// Java: lambdas handed to `new Thread(...)`, executor `submit`/`execute`/
+// `schedule`, or UI/event listeners. Resolve the constructor type or the
+// method name from the enclosing invocation.
+const JAVA_TASK_METHODS =
+	/^(?:submit|execute|schedule|scheduleAtFixedRate|scheduleWithFixedDelay|invokeLater|invokeAndWait)$/;
+const JAVA_LISTENER_METHODS =
+	/^(?:add\w*Listener|set\w*Listener|subscribe|addCallback|then\w*)$/;
+const javaCallbackRules: CallbackLanguageRules = {
+	classify(ctx) {
+		const base = classifyGenericCallback(ctx);
+		const obj = ancestorOfType(
+			ctx.node,
+			new Set(["object_creation_expression"]),
+			3,
+		);
+		const created = obj?.children?.find((c) => c.type === "type_identifier");
+		if (created && /Thread$/.test(created.text)) {
+			return {
+				kind: "task",
+				flags: withFlag(base.flags, "thread"),
+				include: true,
+				nameBase: `new ${created.text}`,
+			};
+		}
+		const inv = ancestorOfType(ctx.node, new Set(["method_invocation"]), 3);
+		if (inv) {
+			const named = (inv.children ?? []).filter((c) => c.isNamed);
+			const argIdx = named.findIndex((c) => c.type === "argument_list");
+			const nameNode = argIdx > 0 ? named[argIdx - 1] : undefined;
+			const name = nameNode?.type === "identifier" ? nameNode.text : "";
+			if (JAVA_TASK_METHODS.test(name)) {
+				return {
+					kind: "task",
+					flags: withFlag(base.flags, "submitted"),
+					include: true,
+					nameBase: name,
+				};
+			}
+			if (JAVA_LISTENER_METHODS.test(name)) {
+				return {
+					kind: "event_handler",
+					flags: withFlag(base.flags, "listener"),
+					include: true,
+					nameBase: name,
+				};
+			}
+		}
+		return base;
+	},
+};
+
+// C#: event subscriptions (`x.Click += (s,e) => …`), `Task.Run`/`StartNew`
+// launches, and `async` lambdas. The event case is a lambda whose parent is a
+// `+=` assignment.
+const csharpCallbackRules: CallbackLanguageRules = {
+	classify(ctx) {
+		const base = classifyGenericCallback(ctx);
+		const parent = ctx.node.parent;
+		if (parent?.type === "assignment_expression" && /\+=/.test(parent.text)) {
+			return {
+				kind: "event_handler",
+				flags: withFlag(base.flags, "event +="),
+				include: true,
+			};
+		}
+		const inv = ancestorOfType(ctx.node, new Set(["invocation_expression"]), 4);
+		if (inv) {
+			const callee = inv.children?.find(
+				(c) =>
+					c.type === "member_access_expression" || c.type === "identifier",
+			);
+			const name = lastCalleeSegment(callee?.text);
+			if (/^(?:Run|StartNew|Start)$/.test(name)) {
+				return {
+					kind: "task",
+					flags: withFlag(base.flags, "task"),
+					include: true,
+					nameBase: name,
+				};
+			}
+		}
+		if (/^\s*async\b/.test(ctx.node.text)) {
+			return {
+				...base,
+				flags: withFlag(base.flags, "async"),
+				include: true,
+			};
+		}
+		return base;
+	},
+};
+
 const CALLBACK_RULES: Record<string, CallbackLanguageRules> = {
 	typescript: jstsCallbackRules,
 	tsx: jstsCallbackRules,
@@ -1213,6 +1347,9 @@ const CALLBACK_RULES: Record<string, CallbackLanguageRules> = {
 	rust: rustCallbackRules,
 	swift: swiftCallbackRules,
 	cpp: cppCallbackRules,
+	kotlin: kotlinCallbackRules,
+	java: javaCallbackRules,
+	csharp: csharpCallbackRules,
 };
 
 function callbackRulesFor(

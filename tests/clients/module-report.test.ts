@@ -319,6 +319,34 @@ describe("moduleReport — outline + structure", () => {
 		expect(task?.flags).toContain("move");
 	});
 
+	it("flags Java thread/executor submits and listeners", async () => {
+		// Java rides this file (its grammar is already loaded for the decorators
+		// test); Kotlin/C# are heavy and live in their own file (#255).
+		const env = makeEnv();
+		const java = createTempFile(
+			env.tmpDir,
+			"Lifecycle.java",
+			[
+				"class C {",
+				"  void run() {",
+				"    exec.submit(() -> work());",
+				"    new Thread(() -> go()).start();",
+				"    btn.addActionListener(e -> click());",
+				"  }",
+				"}",
+			].join("\n"),
+		);
+
+		const report = await moduleReport(java, env.tmpDir);
+		expect(report.callbackSupport).toBe("tuned");
+		const kinds = report.callbacks.map((c) => c.kind);
+		expect(kinds).toContain("task"); // submit + new Thread
+		expect(
+			report.callbacks.find((c) => c.flags?.includes("thread")),
+		).toBeDefined();
+		expect(kinds).toContain("event_handler"); // addActionListener
+	});
+
 	it("surfaces decorators/attributes/annotations on symbols across grammars", async () => {
 		const env = makeEnv();
 		const flatten = (

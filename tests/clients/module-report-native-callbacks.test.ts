@@ -1,10 +1,11 @@
 // Swift + C++ callback rule slices, in their OWN file on purpose.
 //
-// The Swift and C++ tree-sitter grammars are heavy, and loading many grammars
-// into a single worker tips web-tree-sitter over (the #255 multi-grammar
-// instability — `module_report.test.ts` already loads 6). Keeping these two in a
-// dedicated file means the worker that runs them loads only the swift/cpp
-// grammars, well under the tipping point.
+// The Swift and C++ tree-sitter grammars are HEAVY. Loading several heavy
+// grammars into one worker exhausts V8 zone memory (the #255 multi-grammar
+// wall — a hard `Fatal process out of memory: Zone`, not an old-space limit).
+// Light grammars tolerate 6+ per file; heavy ones do not, so each heavy-grammar
+// language group gets its own small file (Kotlin/C# in a sibling file, Java
+// rides `module_report.test.ts` where its grammar is already loaded).
 
 import { afterEach, describe, expect, it } from "vitest";
 import { moduleReport } from "../../clients/module-report.js";

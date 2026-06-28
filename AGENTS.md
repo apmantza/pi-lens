@@ -85,9 +85,15 @@ a *second host adapter* alongside `index.ts`. Design rationale + progress: `mcp.
   per-language: `CALLBACK_RULES` in `clients/module-report.ts` is keyed by language
   (like `SYMBOL_QUERIES`), with JS/TS-tuned rules as the default plus `go`
   (goroutine/defer), `python` (scheduler/future lambdas), `rust` (spawn/`move`
-  closures), `swift` (strong-vs-`weak self` capture), and `cpp` (`[&]`
-  by-reference capture + thread launches) slices; other languages fall back to
-  the generic JS/TS-shaped heuristics. The report's `callbackSupport: "tuned" | "generic"` says which path
+  closures), `swift` (strong-vs-`weak self` capture), `cpp` (`[&]` by-reference
+  capture + thread launches), `kotlin` (coroutine builders), `java`
+  (`new Thread`/executor submit/listeners), and `csharp` (`Task.Run` + event
+  `+=`) slices; other languages fall back to the generic JS/TS-shaped heuristics.
+  Tests for the HEAVY grammars (swift/cpp/kotlin/csharp) live in dedicated small
+  test files — co-loading several heavy tree-sitter grammars in one vitest worker
+  exhausts V8 zone memory (the #255 wall, a hard `Fatal process out of memory:
+  Zone`), so each heavy group is isolated (java rides the main file, its grammar
+  already loaded). The report's `callbackSupport: "tuned" | "generic"` says which path
   ran so callers don't over-trust the list for untuned languages. Add a language
   by adding a `CALLBACK_RULES` entry + a guarded fixture test (the SYMBOL_QUERIES
   per-grammar precedent — extraction breaks silently against real grammars). Pass `blastRadius: true` for the cross-file **blast radius** (#304):
