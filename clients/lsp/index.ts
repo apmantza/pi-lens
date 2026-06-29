@@ -769,6 +769,20 @@ export class LSPService {
 					`lsp spawn ${server.id}: unavailable (${Date.now() - startedAt}ms)`,
 				);
 				recordLsp(server.id, root, "spawn_failed", Date.now() - startedAt);
+
+				// When installs are disabled, an unavailable binary is an expected
+				// policy outcome, not proof the server/root is broken. Cool down briefly
+				// to avoid hot-looping PATH probes, but do not count toward permanent
+				// disablement: a user may install or expose the binary on PATH during the
+				// same session and should not need a full LSP reset.
+				if (!allowInstall) {
+					logSessionStart(
+						`lsp spawn ${server.id}: unavailable with install disabled; temporary cooldown only`,
+					);
+					this.state.broken.set(key, Date.now() + BROKEN_BASE_COOLDOWN_MS);
+					return undefined;
+				}
+
 				const uCount = (this.failureCounts.get(key) ?? 0) + 1;
 				this.failureCounts.set(key, uCount);
 				const uCooldown = Math.min(

@@ -1028,32 +1028,34 @@ async function findTsserverPath(
 			/* not found */
 		}
 	}
-	if (canInstall(allowInstall)) {
-		const tscPath = await ensureTool("typescript");
-		if (tscPath) {
-			for (const p of [
-				path.join(
-					path.dirname(tscPath),
-					"..",
-					"typescript",
-					"lib",
-					"tsserver.js",
-				),
-				path.join(
-					path.dirname(tscPath),
-					"..",
-					"..",
-					"typescript",
-					"lib",
-					"tsserver.js",
-				),
-			]) {
-				try {
-					await fs.access(p);
-					return p;
-				} catch {
-					/* not found */
-				}
+	// Discover the typescript install (PATH / npm-global) even when install is
+	// disabled; only the download is gated by allowInstall.
+	const tscPath = await ensureTool("typescript", {
+		allowInstall: canInstall(allowInstall),
+	});
+	if (tscPath) {
+		for (const p of [
+			path.join(
+				path.dirname(tscPath),
+				"..",
+				"typescript",
+				"lib",
+				"tsserver.js",
+			),
+			path.join(
+				path.dirname(tscPath),
+				"..",
+				"..",
+				"typescript",
+				"lib",
+				"tsserver.js",
+			),
+		]) {
+			try {
+				await fs.access(p);
+				return p;
+			} catch {
+				/* not found */
 			}
 		}
 	}
@@ -1313,12 +1315,15 @@ export const TypeScriptServer: LSPServerInfo = {
 			}
 		}
 
-		// Fall back to auto-installed version
+		// Fall back to a discovered or managed install. ensureTool() runs PATH /
+		// npm-global discovery even when install is disabled (only the download is
+		// gated by canInstall), so a globally-installed typescript-language-server
+		// resolves even without a per-project node_modules/.bin entry.
 		if (!lspPath) {
-			if (canInstall(options?.allowInstall)) {
-				lspPath = await ensureTool("typescript-language-server");
-				source = "managed";
-			}
+			lspPath = await ensureTool("typescript-language-server", {
+				allowInstall: canInstall(options?.allowInstall),
+			});
+			if (lspPath) source = "managed";
 			if (!lspPath) {
 				return undefined;
 			}
@@ -1429,11 +1434,11 @@ export const PythonServer: LSPServerInfo = {
 			};
 		}
 
-		if (!canInstall(options?.allowInstall)) {
-			return undefined;
-		}
-
-		const pyrightPath = await ensureTool("pyright");
+		// Discover a globally-installed pyright even when install is disabled;
+		// only the download is gated by canInstall.
+		const pyrightPath = await ensureTool("pyright", {
+			allowInstall: canInstall(options?.allowInstall),
+		});
 		if (!pyrightPath) return undefined;
 		source = "managed";
 

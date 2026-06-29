@@ -119,12 +119,20 @@ vi.mock("node:child_process", () => ({ spawn: mockSpawn }));
 // network and fail in restricted CI (e.g. dependabot PRs). The mock records the
 // fetch (so we can assert installTool was reached) then fails deterministically.
 const httpsGetCalls = vi.hoisted(() => [] as string[]);
+const httpsBlocker = vi.hoisted(() => ({
+	enabled: false,
+	errorHandler: undefined as ((err: Error) => void) | undefined,
+}));
 const mockHttpsGet = vi.hoisted(() => (url: unknown) => {
 	httpsGetCalls.push(String(url));
 	const req = {
 		on(event: string, handler: (err: Error) => void) {
 			if (event === "error") {
-				setImmediate(() => handler(new Error("network disabled in test")));
+				if (httpsBlocker.enabled) {
+					httpsBlocker.errorHandler = handler;
+				} else {
+					setImmediate(() => handler(new Error("network disabled in test")));
+				}
 			}
 			return req;
 		},
@@ -157,10 +165,31 @@ function fakeAccess(...allowed: string[]): void {
 	});
 }
 
+async function withEmptyPath<T>(fn: () => Promise<T>): Promise<T> {
+	const savedPath = process.env.PATH;
+	const savedPathUpper = process.env.Path;
+	const savedPathLower = process.env.path;
+	process.env.PATH = "";
+	delete process.env.Path;
+	delete process.env.path;
+	try {
+		return await fn();
+	} finally {
+		if (savedPath === undefined) delete process.env.PATH;
+		else process.env.PATH = savedPath;
+		if (savedPathUpper === undefined) delete process.env.Path;
+		else process.env.Path = savedPathUpper;
+		if (savedPathLower === undefined) delete process.env.path;
+		else process.env.path = savedPathLower;
+	}
+}
+
 beforeEach(() => {
 	vi.clearAllMocks();
 	spawnCalls.length = 0;
 	httpsGetCalls.length = 0;
+	httpsBlocker.enabled = false;
+	httpsBlocker.errorHandler = undefined;
 	resetProbeCacheStateForTesting();
 	mockFsReadFile.mockRejectedValue(new Error("ENOENT"));
 	fakeAccess(/* nothing */);
@@ -214,6 +243,75 @@ describe("getToolPath ordering", () => {
 // ═════════════════════════════════════════════════════════════════════════
 // ensureTool force-reinstall
 // ═════════════════════════════════════════════════════════════════════════
+
+describe("ensureTool allowInstall policy", () => {
+	it("returns a discovered binary without attempting install when allowInstall is false", async () => {
+		const managed = ghPath("rust-analyzer");
+		fakeAccess(managed);
+
+		const result = await ensureTool("rust-analyzer", { allowInstall: false });
+
+		expect(result).toBe(managed);
+		expect(httpsGetCalls).toHaveLength(0);
+	});
+
+	it("returns undefined without attempting install when allowInstall is false and discovery misses", async () => {
+		await withEmptyPath(async () => {
+			const result = await ensureTool("rust-analyzer", { allowInstall: false });
+
+			expect(result).toBeUndefined();
+			expect(httpsGetCalls).toHaveLength(0);
+		});
+	});
+
+	it("does not install when forceReinstall conflicts with allowInstall:false", async () => {
+		const managed = ghPath("rust-analyzer");
+		fakeAccess(managed);
+
+		const result = await ensureTool("rust-analyzer", {
+			forceReinstall: true,
+			allowInstall: false,
+		});
+
+		expect(result).toBe(managed);
+		expect(httpsGetCalls).toHaveLength(0);
+	});
+
+	it("returns undefined without install when forceReinstall and allowInstall:false miss discovery", async () => {
+		await withEmptyPath(async () => {
+			const result = await ensureTool("rust-analyzer", {
+				forceReinstall: true,
+				allowInstall: false,
+			});
+
+			expect(result).toBeUndefined();
+			expect(httpsGetCalls).toHaveLength(0);
+		});
+	});
+
+	it("keeps discovery-only calls separate from an in-flight install", async () => {
+		await withEmptyPath(async () => {
+			httpsBlocker.enabled = true;
+			try {
+				const installAllowed = ensureTool("rust-analyzer");
+				await new Promise((resolve) => setImmediate(resolve));
+				expect(httpsGetCalls.length).toBeGreaterThan(0);
+
+				const discoveryOnly = await ensureTool("rust-analyzer", {
+					allowInstall: false,
+				});
+				expect(discoveryOnly).toBeUndefined();
+
+				httpsBlocker.enabled = false;
+				httpsBlocker.errorHandler?.(new Error("network disabled in test"));
+				expect(await installAllowed).toBeUndefined();
+			} finally {
+				httpsBlocker.enabled = false;
+				httpsBlocker.errorHandler = undefined;
+			}
+		});
+	});
+});
 
 describe("ensureTool force-reinstall", () => {
 	it("does not return the stale cached path after forceReinstall", async () => {

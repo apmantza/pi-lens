@@ -535,7 +535,12 @@ describe("lsp server policy", () => {
 
 		const spawned = await TypeScriptServer.spawn(tmp, { allowInstall: false });
 		expect(spawned).toBeUndefined();
-		expect(ensureTool).not.toHaveBeenCalled();
+		// Discovery is decoupled from install: ensureTool still runs (to probe an
+		// existing PATH/npm-global binary) but is told NOT to install. The mock
+		// returns undefined (nothing discovered), so spawn yields undefined.
+		expect(ensureTool).toHaveBeenCalledWith("typescript-language-server", {
+			allowInstall: false,
+		});
 	});
 
 	it("skips package-manager fallback when lsp install is disabled", async () => {
@@ -660,7 +665,7 @@ describe("lsp server policy", () => {
 		const spawned = await PythonServer.spawn(tmp, { allowInstall: true });
 
 		expect(spawned).toBeDefined();
-		expect(ensureTool).toHaveBeenCalledWith("pyright");
+		expect(ensureTool).toHaveBeenCalledWith("pyright", { allowInstall: true });
 		expect(
 			launchLSP.mock.calls.some(
 				([command]) =>
