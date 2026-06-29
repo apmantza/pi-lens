@@ -41,6 +41,100 @@ import {
 // keep output bounded on a pathologically broken file.
 const MAX_DIAGNOSTICS_PER_FILE = 50;
 
+
+const DEFAULT_FLUSH_TIMEOUT_MS = 3_000;
+
+type FlushPending = (signal?: AbortSignal) => Promise<void>;
+
+type FlushPendingResult =
+	| { timedOut: false; error?: unknown }
+	| { timedOut: true; message: string };
+
+function getFlushTimeoutMs(): number {
+	const raw = Number(process.env.PI_LENS_DIAGNOSTICS_FLUSH_TIMEOUT_MS);
+	if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_FLUSH_TIMEOUT_MS;
+	return Math.floor(raw);
+}
+
+async function flushPendingWithTimeout(
+	flushPending: FlushPending,
+	signal?: AbortSignal,
+): Promise<FlushPendingResult> {
+	const timeoutMs = getFlushTimeoutMs();
+	const controller = new AbortController();
+	let timeout: NodeJS.Timeout | undefined;
+	let abortListener: (() => void) | undefined;
+
+	try {
+		const pending = flushPending(controller.signal);
+		const timeoutPromise = new Promise<FlushPendingResult>((resolve) => {
+			timeout = setTimeout(() => {
+				controller.abort(
+					new Error(`pending diagnostics flush timed out after ${timeoutMs}ms`),
+				);
+				resolve({
+					timedOut: true,
+					message: `pending diagnostics flush timed out after ${timeoutMs}ms`,
+				});
+			}, timeoutMs);
+		});
+		const abortPromise = signal
+			? new Promise<FlushPendingResult>((resolve) => {
+					abortListener = () => {
+						controller.abort(signal.reason);
+						resolve({
+							timedOut: true,
+							message: "pending diagnostics flush aborted",
+						});
+					};
+					if (signal.aborted) abortListener();
+					else signal.addEventListener("abort", abortListener, { once: true });
+				})
+			: undefined;
+
+		await Promise.race(
+			abortPromise ? [pending, timeoutPromise, abortPromise] : [pending, timeoutPromise],
+		);
+		if (controller.signal.aborted) {
+			return {
+				timedOut: true,
+				message:
+					(controller.signal.reason as Error | undefined)?.message ??
+					"pending diagnostics flush aborted",
+			};
+		}
+		return { timedOut: false };
+	} catch (error) {
+		if (controller.signal.aborted) {
+			return {
+				timedOut: true,
+				message:
+					(controller.signal.reason as Error | undefined)?.message ?? String(error),
+			};
+		}
+		return { timedOut: false, error };
+	} finally {
+		if (timeout) clearTimeout(timeout);
+		if (signal && abortListener) signal.removeEventListener("abort", abortListener);
+	}
+}
+
+function appendFlushWarning<
+	T extends { content: Array<{ type: "text"; text: string }>; details?: object },
+>(result: T, flushResult: FlushPendingResult): T {
+	if (!flushResult.timedOut) return result;
+	const warning = `⚠️ ${flushResult.message}; diagnostics may reflect the last completed pi-lens analysis.`;
+	return {
+		...result,
+		content: [...result.content, { type: "text", text: warning }],
+		details: {
+			...(result.details ?? {}),
+			flushTimedOut: true,
+			flushTimeoutMessage: flushResult.message,
+		},
+	};
+}
+
 type LSPServiceLike = ReturnType<typeof getLSPService> & {
 	runWorkspaceDiagnostics?: (
 		cwd: string,
@@ -63,7 +157,7 @@ export function createLensDiagnosticsTool(
 	// CURRENT state — not the pre-fix diagnostics still pending in the debounce
 	// window. Injected (index wires `flushDebouncedToolResults`); optional so the
 	// tool stays decoupled and testable.
-	flushPending: () => Promise<void> = async () => {},
+	flushPending: FlushPending = async () => {},
 ) {
 	return {
 		name: "lens_diagnostics" as const,
@@ -184,21 +278,30 @@ export function createLensDiagnosticsTool(
 			// per-edit dispatches (re-records fixed files), then drop entries whose
 			// file changed on disk afterwards / was deleted (stale, e.g. external
 			// edits). Together these stop fixed-this-session findings from lingering.
-			await flushPending();
+			const flushResult = await flushPendingWithTimeout(flushPending, signal);
 			const staleDropped = await reconcileStaleWidgetFiles();
 
 			if (mode === "all") {
-				return formatAllMode(cwd, severity, undefined, undefined, staleDropped);
+				return appendFlushWarning(
+					formatAllMode(cwd, severity, undefined, undefined, staleDropped),
+					flushResult,
+				);
 			}
 			if (mode === "full") {
-				return formatFullMode(cwd, severity, getLspService(), {
-					refreshRunners,
-					maxProjectFiles,
-					maxLspFiles,
-					signal,
-				});
+				return appendFlushWarning(
+					await formatFullMode(cwd, severity, getLspService(), {
+						refreshRunners,
+						maxProjectFiles,
+						maxLspFiles,
+						signal,
+					}),
+					flushResult,
+				);
 			}
-			return formatDeltaMode(cacheManager, cwd, severity);
+			return appendFlushWarning(
+				formatDeltaMode(cacheManager, cwd, severity),
+				flushResult,
+			);
 		},
 	};
 }

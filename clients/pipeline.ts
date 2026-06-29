@@ -76,6 +76,47 @@ const LSP_MAX_FILE_LINES = RUNTIME_CONFIG.pipeline.lspMaxFileLines;
 const LSP_SPAWN_BUDGET_MS = RUNTIME_CONFIG.pipeline.lspSpawnBudgetMs;
 const AUTOFIX_CHANGED_FILE_SCAN_LIMIT = 5000;
 
+
+class PipelineAbortedError extends Error {
+	constructor(message = "pi-lens pipeline aborted") {
+		super(message);
+		this.name = "PipelineAbortedError";
+	}
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+	if (signal?.aborted) {
+		const reason = signal.reason;
+		throw reason instanceof Error
+			? reason
+			: new PipelineAbortedError(String(reason ?? "pi-lens pipeline aborted"));
+	}
+}
+
+async function abortablePhase<T>(
+	name: string,
+	promise: Promise<T>,
+	signal: AbortSignal | undefined,
+): Promise<T> {
+	throwIfAborted(signal);
+	if (!signal) return promise;
+	let abortListener: (() => void) | undefined;
+	const abortPromise = new Promise<never>((_, reject) => {
+		abortListener = () =>
+			reject(
+				signal.reason instanceof Error
+					? signal.reason
+					: new PipelineAbortedError(`${name} aborted`),
+			);
+		signal.addEventListener("abort", abortListener, { once: true });
+	});
+	try {
+		return await Promise.race([promise, abortPromise]);
+	} finally {
+		if (abortListener) signal.removeEventListener("abort", abortListener);
+	}
+}
+
 type FileSnapshot = Map<string, { mtimeMs: number; size: number }>;
 
 function snapshotProjectFiles(root: string): FileSnapshot {
@@ -176,6 +217,8 @@ export interface PipelineContext {
 	getFlag: (name: string) => boolean | string | undefined;
 	/** Debug logger */
 	dbg: (msg: string) => void;
+	/** Optional cancellation signal for bounded diagnostic flushes. */
+	signal?: AbortSignal;
 }
 
 export interface PipelineDeps {
@@ -989,6 +1032,7 @@ export async function runPipeline(
 
 	// --- 2. Auto-format ---
 	phase.start("format");
+	throwIfAborted(ctx.signal);
 	let formatChanged = false;
 	let formattersUsed: string[] = [];
 	let formatFailures: string[] = [];
@@ -998,7 +1042,7 @@ export async function runPipeline(
 	const formatDeferred =
 		!autoformatDisabled && !immediateFormat && !!fileContent;
 	if (!autoformatDisabled && immediateFormat && fileContent) {
-		const formatResult = await runFormatPhase(filePath, getFormatService, dbg);
+		const formatResult = await abortablePhase("format", runFormatPhase(filePath, getFormatService, dbg), ctx.signal);
 		formatChanged = formatResult.formatChanged;
 		formattersUsed = formatResult.formattersUsed;
 		formatFailures = formatResult.formatFailures;
@@ -1015,6 +1059,7 @@ export async function runPipeline(
 
 	// --- 3. Auto-fix ---
 	phase.start("autofix");
+	throwIfAborted(ctx.signal);
 	const {
 		fixedCount,
 		autofixTools,
@@ -1022,7 +1067,7 @@ export async function runPipeline(
 		changedFiles: autofixChangedFiles,
 		needsContentRefresh: fixRefresh,
 		skipReason: autofixSkipReason,
-	} = await runAutofix(filePath, cwd, getFlag, dbg, deps);
+	} = await abortablePhase("autofix", runAutofix(filePath, cwd, getFlag, dbg, deps), ctx.signal);
 	for (const changedFile of autofixChangedFiles) {
 		piChangedFiles.add(path.resolve(changedFile));
 	}
@@ -1044,31 +1089,37 @@ export async function runPipeline(
 	// Sync once with final post-format/post-fix content so dispatch and cascade
 	// diagnostics do not observe stale pre-format text.
 	phase.start("lsp_sync");
+	throwIfAborted(ctx.signal);
 	let lspSyncCompleted = false;
 	if (fileContent) {
-		await resyncLspFile(filePath, fileContent, true, false, getFlag, dbg);
+		await abortablePhase("lsp_sync", resyncLspFile(filePath, fileContent, true, false, getFlag, dbg), ctx.signal);
 		lspSyncCompleted = true;
 	}
 	phase.end("lsp_sync", { completed: lspSyncCompleted, finalContent: true });
 
 	// --- 5. Dispatch lint ---
 	phase.start("dispatch_lint");
+	throwIfAborted(ctx.signal);
 	dbg(`dispatch: running lint tools for ${filePath}`);
 
 	const piApi: PiAgentAPI = {
 		getFlag: getFlag as (flag: string) => boolean | string | undefined,
 	};
-	const dispatchResult = await dispatchLintWithResult(
-		filePath,
-		cwd,
-		piApi,
-		ctx.modifiedRanges,
-		{
-			model: ctx.telemetry?.model ?? "unknown",
-			sessionId: ctx.telemetry?.sessionId ?? "unknown",
-			turnIndex: ctx.telemetry?.turnIndex ?? 0,
-			writeIndex: ctx.telemetry?.writeIndex ?? 0,
-		},
+	const dispatchResult = await abortablePhase(
+		"dispatch_lint",
+		dispatchLintWithResult(
+			filePath,
+			cwd,
+			piApi,
+			ctx.modifiedRanges,
+			{
+				model: ctx.telemetry?.model ?? "unknown",
+				sessionId: ctx.telemetry?.sessionId ?? "unknown",
+				turnIndex: ctx.telemetry?.turnIndex ?? 0,
+				writeIndex: ctx.telemetry?.writeIndex ?? 0,
+			},
+		),
+		ctx.signal,
 	);
 	recordDiagnostics(filePath, dispatchResult.diagnostics);
 	const hasBlockers = dispatchResult.hasBlockers;
@@ -1167,12 +1218,16 @@ export async function runPipeline(
 	// turn_end so mid-refactor intermediate errors don't derail the agent.
 	const cascadeRun = getFlag("no-lsp")
 		? undefined
-		: await computeCascadeForFile(filePath, cwd, {
-				hasBlockers,
-				dbg,
-				turnSeq: ctx.telemetry?.turnIndex,
-				writeSeq: ctx.telemetry?.writeIndex,
-			});
+		: await abortablePhase(
+				"cascade",
+				computeCascadeForFile(filePath, cwd, {
+					hasBlockers,
+					dbg,
+					turnSeq: ctx.telemetry?.turnIndex,
+					writeSeq: ctx.telemetry?.writeIndex,
+				}),
+				ctx.signal,
+			);
 
 	// --- Final timing + all-clear ---
 	const elapsed = Date.now() - pipelineStart;

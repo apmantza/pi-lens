@@ -64,11 +64,13 @@ function makeCacheManager(data: Record<string, unknown> = {}) {
 function makeTool(
 	cacheData: Record<string, unknown> = {},
 	lspService?: unknown,
+	flushPending?: (signal?: AbortSignal) => Promise<void>,
 ) {
 	return createLensDiagnosticsTool(
 		makeCacheManager(cacheData) as any,
 		() => "/proj",
 		() => lspService as any,
+		flushPending,
 	);
 }
 
@@ -167,6 +169,22 @@ describe("lens_diagnostics mode=delta", () => {
 			mode: "delta",
 			carriedOverFiles: 1,
 		});
+	});
+
+
+	it("times out a stuck pending flush and returns cached diagnostics", async () => {
+		vi.stubEnv("PI_LENS_DIAGNOSTICS_FLUSH_TIMEOUT_MS", "10");
+		const tool = makeTool({}, undefined, async () => new Promise(() => {}));
+		const result = await run(tool, { mode: "delta" });
+
+		expect(result.content.map((part) => part.text).join("\n")).toContain(
+			"pending diagnostics flush timed out",
+		);
+		expect(result.details).toMatchObject({
+			mode: "delta",
+			flushTimedOut: true,
+		});
+		vi.unstubAllEnvs();
 	});
 
 	it("formats actionable warnings from cache", async () => {
