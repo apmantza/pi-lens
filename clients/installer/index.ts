@@ -1291,6 +1291,8 @@ export async function updateProbeCache(
 export function resetProbeCacheStateForTesting(): void {
 	_probeCache = null;
 	_probeCacheDirty = false;
+	resolvedPathCache.clear();
+	ensureInFlight.clear();
 	if (_probeCacheFlushTimer !== null) {
 		clearTimeout(_probeCacheFlushTimer);
 		_probeCacheFlushTimer = null;
@@ -3046,10 +3048,20 @@ export async function installTool(toolId: string): Promise<boolean> {
  */
 export async function ensureTool(
 	toolId: string,
-	opts?: { forceReinstall?: boolean },
+	opts?: { forceReinstall?: boolean; allowInstall?: boolean },
 ): Promise<string | undefined> {
+	const cacheResolvedPath = (result: string | undefined): string | undefined => {
+		if (result) {
+			resolvedPathCache.set(toolId, result);
+			void updateProbeCache(toolId, result);
+		}
+		return result;
+	};
+
 	// forceReinstall: nuke caches, download from managed source, skip PATH entirely.
 	// Used when a PATH-resolved tool proves broken at launch (e.g. broken symlink).
+	// allowInstall:false wins over forceReinstall: caches are still cleared, but
+	// the function falls back to discovery-only and never downloads.
 	if (opts?.forceReinstall) {
 		const ensureStartMs = Date.now();
 		logSessionStart(
@@ -3069,6 +3081,13 @@ export async function ensureTool(
 			// best-effort
 		}
 
+		if (opts.allowInstall === false) {
+			logSessionStart(
+				`auto-install ensure ${toolId}: force reinstall blocked — install disabled, discovery only (${Date.now() - ensureStartMs}ms)`,
+			);
+			return cacheResolvedPath(await getToolPath(toolId));
+		}
+
 		// Force download
 		const installed = await installTool(toolId);
 		if (!installed) {
@@ -3079,10 +3098,8 @@ export async function ensureTool(
 		}
 
 		// Find the newly installed binary (github-local check now comes before PATH)
-		const result = await getToolPath(toolId);
+		const result = cacheResolvedPath(await getToolPath(toolId));
 		if (result) {
-			resolvedPathCache.set(toolId, result);
-			void updateProbeCache(toolId, result);
 			logSessionStart(
 				`auto-install ensure ${toolId}: force reinstall success at ${result} (${Date.now() - ensureStartMs}ms)`,
 			);
@@ -3106,11 +3123,15 @@ export async function ensureTool(
 
 	// Coalesce the whole ensure operation, not just installation. Most startup
 	// duplicates race while checking already-installed tools, before installTool()
-	// would ever run.
-	const inFlight = ensureInFlight.get(toolId);
+	// would ever run. The key includes the install policy so a discovery-only
+	// caller cannot accidentally inherit an install-allowed caller's download (or
+	// vice versa).
+	const inFlightKey =
+		opts?.allowInstall === false ? `${toolId}:discovery-only` : toolId;
+	const inFlight = ensureInFlight.get(inFlightKey);
 	if (inFlight) {
 		logSessionStart(
-			`auto-install ensure ${toolId}: waiting for in-flight ensure`,
+			`auto-install ensure ${toolId}: waiting for in-flight ensure (${inFlightKey})`,
 		);
 		return inFlight;
 	}
@@ -3128,6 +3149,17 @@ export async function ensureTool(
 				`auto-install ensure ${toolId}: already available at ${existingPath} (${Date.now() - ensureStartMs}ms)`,
 			);
 			return existingPath;
+		}
+
+		// Discovery and install are SEPARATE concerns. getToolPath() above already
+		// probed PATH / npm-global / managed bin — offline-safe, no download. When the
+		// caller forbids installs (allowInstall:false, e.g. PI_LENS_DISABLE_LSP_INSTALL=1)
+		// we must still return a discovered binary and only skip the actual install.
+		if (opts?.allowInstall === false) {
+			logSessionStart(
+				`auto-install ensure ${toolId}: install disabled — discovery only, not found (${Date.now() - ensureStartMs}ms)`,
+			);
+			return undefined;
 		}
 
 		const installed = await installTool(toolId);
@@ -3153,11 +3185,11 @@ export async function ensureTool(
 		return result;
 	})();
 
-	ensureInFlight.set(toolId, ensurePromise);
+	ensureInFlight.set(inFlightKey, ensurePromise);
 	try {
 		return await ensurePromise;
 	} finally {
-		ensureInFlight.delete(toolId);
+		ensureInFlight.delete(inFlightKey);
 	}
 }
 
