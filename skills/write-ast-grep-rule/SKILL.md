@@ -124,31 +124,33 @@ The parser is a real YAML parser, so unquoted special chars throw and the rule i
    (NAPI evaluates `regex` with JS RegExp on node.text() — keep it LINEAR so the
    detector can't itself ReDoS.)
 
-⚠ `-js` twins: ship ONE rule for a grammar-AGNOSTIC body, TWO for a grammar-DIVERGENT one.
-   The runner (`ast-grep-napi.ts`) runs EVERY ts/js rule on every jsts file — it only
-   language-gates NON-ts/js rules (`lang !== "typescript" && lang !== "javascript"`). So
-   whether a twin duplicates depends on whether its BODY matches the same nodes:
-   - **Grammar-agnostic body** (patterns / common kinds that parse identically in the
-     tree-sitter `typescript` and `javascript` grammars — `member_expression`,
-     `call_expression`, `lexical_declaration`, ternary, etc.): one `language: TypeScript`
-     rule already covers .js in the runner. A `-js` twin DUPLICATES (both fire on the same
-     node; dedup is by rule id, not finding). Shipped offenders: `prefer-at` + `prefer-at-js`,
-     `strict-equality` + `-js` — consolidate.
-   - **Grammar-divergent body** (node kinds that DIFFER between the two grammars): a single
-     rule MISSES the other grammar's form, so you NEED both twins — and they do NOT
-     duplicate, because each rule's kinds only exist in its own grammar. Example
-     (`no-flag-argument`, #305): a default parameter is `required_parameter` in the TS
-     grammar but `assignment_pattern` in the JS grammar; the TS rule gives 0 matches on
-     .js and the JS rule gives 0 on .ts. Other TS-only nodes: `optional_parameter`, type
-     annotations, `type_alias_declaration`, `enum_declaration`, `as`/satisfies expressions.
-   - **Decide:** does the rule name a node KIND that's specific to one grammar? Twin.
-     Pure pattern / shared kinds? Single rule.
-   - **Verify no dup before shipping a twin:** copy the twin, set its `language:` to the
-     base's, run `ast-grep scan` on a base-grammar file — `>0` matches = it duplicates
-     (drop the twin); `0` = grammar-divergent and safe (keep both).
-   - **CLI ≠ runner trap:** `ast-grep scan`/`test` GATE by the rule's `language:` (a TS rule
-     scans only .ts), so a TS rule shows 0 on a .js file in the CLI — but the RUNNER runs
-     it. Don't conclude "need a twin" from CLI gating; reason about the grammar instead.
+⚠ String-literal regexes match SOURCE text, not the runtime string value.
+   Inspect the exact node text before writing constraints:
+     ast-grep run --kind string --lang ts sample.ts --json=compact
+   Example: source `"\\|"` is node text `"\\\\|"` in JSON; to match a
+   source-level escaped backslash (`\\`) followed by a non-backslash, the rule
+   regex needs FOUR regex backslashes, preferably in a YAML block scalar:
+     regex: >-
+       ^["'`]\\\\[^\\A-Za-z0-9$]
+   This is how `incomplete-string-escaping` catches both `"\\|"` and
+   `'\\"'`. Avoid shell here-doc probes for this class — shell/JSON escaping
+   can silently eat a backslash and make the rule look broken.
+
+⚠ `-js` twins: remember there are TWO execution surfaces.
+   - ast-grep CLI/LSP language-gates by `language:`. A `language: TypeScript`
+     rule is not enough for standalone `.js` coverage, so shipped user-facing
+     TS/JS rules that should fire under the ast-grep LSP usually need a `-js`
+     twin with `language: JavaScript` plus its own fixture.
+   - the in-process NAPI fallback (`ast-grep-napi.ts`) parses the target file's
+     own grammar and currently runs both TS and JS rules on every jsts file. A
+     grammar-agnostic twin can therefore duplicate in fallback mode.
+   - **Decide explicitly:** if the rule must cover `.js` through the ast-grep
+     CLI/LSP baseline, ship the twin and test both. If a rule is NAPI-only or
+     fallback duplication is unacceptable, fix runner dedup/normalization before
+     relying on a single TypeScript rule for JS coverage.
+   - **Grammar-divergent bodies** still need separate variants regardless:
+     e.g. `no-flag-argument` uses `required_parameter` in TS and
+     `assignment_pattern` in JS.
 
 ✅ Node-kind facts (tree-sitter-typescript grammar — NOT the TS compiler / Roslyn):
    - let / const  → `lexical_declaration`     (var is NOT here)
@@ -216,13 +218,21 @@ The parser is a real YAML parser, so unquoted special chars throw and the rule i
 ## Validating a candidate rule against the REAL engine (not the warm MCP cache)
 
 ```
+
 # inspect how a PATTERN parses → find the node kind you actually need
+
 ast-grep run -p 'x = false' --lang ts --debug-query=cst file.ts
+
 # match by kind (──kind and ──pattern are mutually exclusive in `run`)
+
 ast-grep run --kind required_parameter --lang ts file.ts
+
 # run ONE rule from an sgconfig against a sample
+
 ast-grep scan -c <sgconfig.yml> --filter '^<id>$' sample.ts
+
 # run the fixture harness for one rule
+
 ast-grep test -c rules/ast-grep-rules/.sgconfig.yml --skip-snapshot-tests --filter '<id>'
-```
+
 ```
