@@ -358,7 +358,7 @@ function trySpawn(
 			cwd,
 			env,
 			stdio: ["pipe", "pipe", "pipe"],
-			detached: false,
+			detached: !isWindows,
 			windowsHide: true,
 			shell: true,
 		});
@@ -368,7 +368,7 @@ function trySpawn(
 			cwd,
 			env,
 			stdio: ["pipe", "pipe", "pipe"],
-			detached: false,
+			detached: !isWindows,
 			windowsHide: isWindows,
 		});
 	}

@@ -11,6 +11,40 @@ describe("lsp launch", () => {
 		vi.clearAllMocks();
 	});
 
+	it.runIf(process.platform !== "win32")(
+		"spawns LSP servers in their own process group on POSIX",
+		async () => {
+			const spawnMock = vi.fn(() => {
+				class MockStream extends EventEmitter {}
+				class MockChildProcess extends EventEmitter {
+					stdin = new MockStream();
+					stdout = new MockStream();
+					stderr = new MockStream();
+					pid = 2468;
+					exitCode: number | null = null;
+					killed = false;
+				}
+				return new MockChildProcess();
+			});
+
+			vi.doMock("node:child_process", () => ({
+				execSync: vi.fn(() => ""),
+				spawn: spawnMock,
+			}));
+
+			const { launchLSP } = await import("../../../clients/lsp/launch.js");
+			await launchLSP("vscode-html-language-server", ["--stdio"], {
+				cwd: "/tmp/project",
+			});
+
+			expect(spawnMock).toHaveBeenCalledWith(
+				"vscode-html-language-server",
+				["--stdio"],
+				expect.objectContaining({ detached: true }),
+			);
+		},
+	);
+
 	it.runIf(process.platform === "win32")(
 		"treats delayed shell-backed startup failure as launch failure",
 		async () => {

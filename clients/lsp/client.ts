@@ -575,16 +575,33 @@ export async function killProcessTree(
 		return;
 	}
 
+	const killPosixProcessGroup = (signal: NodeJS.Signals): boolean => {
+		if (pid <= 0) return false;
+		try {
+			process.kill(-pid, signal);
+			return true;
+		} catch {
+			return false;
+		}
+	};
+	const killDirectChild = (signal: NodeJS.Signals): void => {
+		try {
+			proc.kill(signal);
+		} catch {
+			// best-effort
+		}
+	};
+
 	try {
-		proc.kill("SIGTERM");
+		if (!killPosixProcessGroup("SIGTERM")) {
+			killDirectChild("SIGTERM");
+		}
 		if (options.fast) {
 			const timer = setTimeout(() => {
-				try {
-					if (!(proc as { killed?: boolean }).killed) {
-						proc.kill("SIGKILL");
+				if (!(proc as { killed?: boolean }).killed) {
+					if (!killPosixProcessGroup("SIGKILL")) {
+						killDirectChild("SIGKILL");
 					}
-				} catch {
-					// best-effort
 				}
 			}, 1500);
 			timer.unref?.();
@@ -594,12 +611,10 @@ export async function killProcessTree(
 		// SIGTERM → 1.5s → SIGKILL escalation.
 		// SIGTERM alone can leave zombie processes if the server hangs.
 		await new Promise<void>((resolve) => setTimeout(resolve, 1500));
-		try {
-			if (!(proc as { killed?: boolean }).killed) {
-				proc.kill("SIGKILL");
+		if (!(proc as { killed?: boolean }).killed) {
+			if (!killPosixProcessGroup("SIGKILL")) {
+				killDirectChild("SIGKILL");
 			}
-		} catch {
-			// best-effort
 		}
 	} catch {
 		// ignore
