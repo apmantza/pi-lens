@@ -12,6 +12,7 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { access, readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import { withTimeout } from "../deadline-utils.js";
 import type { MessageConnection } from "../deps/vscode-jsonrpc.js";
 import { logLatency } from "../latency-logger.js";
 // vscode-jsonrpc v9 ships an `exports` map exposing the Node entry as the
@@ -2070,29 +2071,6 @@ function isStreamError(err: unknown): boolean {
 
 // Using shared path utilities from path-utils.ts
 
-async function withTimeout<T>(
-	promise: Promise<T>,
-	timeoutMs: number,
-): Promise<T> {
-	let timeout: ReturnType<typeof setTimeout> | undefined;
-	// Suppress unhandled rejection if `promise` rejects AFTER the timeout
-	// wins the race — Promise.race settles on the first result but the
-	// losing promises still run, and any later rejection would be uncaught.
-	promise.catch(() => {});
-	try {
-		return await Promise.race([
-			promise,
-			new Promise<T>((_, reject) => {
-				timeout = setTimeout(
-					() => reject(new Error(`Timeout after ${timeoutMs}ms`)),
-					timeoutMs,
-				);
-			}),
-		]);
-	} finally {
-		if (timeout) clearTimeout(timeout);
-	}
-}
 
 function positiveIntFromEnv(name: string, fallback: number): number {
 	const raw = process.env[name];

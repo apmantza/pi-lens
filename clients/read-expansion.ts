@@ -8,6 +8,7 @@
  */
 
 import * as fs from "node:fs";
+import { withBudget } from "./deadline-utils.js";
 import type { TreeSitterClient } from "./tree-sitter-client.js";
 
 /** Only expand reads smaller than this (lines). Larger reads don't benefit. */
@@ -205,21 +206,6 @@ function buildAncestryChain(node: any, types: string[]): AncestorSymbol[] {
 	return chain.reverse(); // outermost first
 }
 
-function withBudget<T>(
-	promise: Promise<T>,
-	budgetMs: number,
-): Promise<T | undefined> {
-	if (budgetMs <= 0) return Promise.resolve(undefined);
-	let t: ReturnType<typeof setTimeout> | undefined;
-	return Promise.race([
-		promise,
-		new Promise<undefined>((resolve) => {
-			t = setTimeout(() => resolve(undefined), budgetMs);
-		}),
-	]).finally(() => {
-		if (t) clearTimeout(t);
-	});
-}
 
 function tryExpandMarkdownSection(
 	content: string,

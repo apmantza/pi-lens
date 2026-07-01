@@ -17,6 +17,7 @@
  *     enable with PI_LENS_MODULE_REPORT_LSP_BUDGET_MS.
  */
 
+import { withinRemaining } from "./deadline-utils.js";
 import type { LSPLocation } from "./lsp/client.js";
 import type { ModuleSymbolUsedBy } from "./module-report.js";
 import { uriToPath } from "./path-utils.js";
@@ -119,13 +120,6 @@ function lspLocationsToUsedBy(
 	return out;
 }
 
-function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => {
-		const timer = setTimeout(resolve, Math.max(0, ms));
-		timer.unref?.();
-	});
-}
-
 async function runWithExclusiveLspSweep<T>(work: () => Promise<T>): Promise<T> {
 	const previous = lspEnrichmentTail.catch(() => undefined);
 	let release!: () => void;
@@ -143,18 +137,6 @@ async function runWithExclusiveLspSweep<T>(work: () => Promise<T>): Promise<T> {
 	}
 }
 
-/** Resolve `promise`, or `undefined` once the shared deadline passes. */
-async function withinRemaining<T>(
-	promise: Promise<T>,
-	deadlineAt: number,
-): Promise<T | undefined> {
-	const remaining = deadlineAt - Date.now();
-	if (remaining <= 0) return undefined;
-	return Promise.race([
-		promise.catch(() => undefined),
-		sleep(remaining).then(() => undefined),
-	]);
-}
 
 /**
  * Best-effort live-LSP enrichment for the requested file's exported symbols.
