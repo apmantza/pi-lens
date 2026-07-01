@@ -96,17 +96,21 @@ const spawnCalls = vi.hoisted(
 const mockSpawn = vi.hoisted(() =>
 	vi.fn((cmd: string, args: string[], _opts?: unknown) => {
 		spawnCalls.push({ cmd, args });
-		let exitCb: (code: number) => void = () => {};
+		const handlers: Record<string, (code?: number) => void> = {};
 		const proc = {
 			on: vi.fn((event: string, cb: unknown) => {
-				if (event === "exit") exitCb = cb as (code: number) => void;
+				handlers[event] = cb as (code?: number) => void;
 				return proc;
 			}),
 			stdout: null as { on: ReturnType<typeof vi.fn> } | null,
 			stderr: null as { on: ReturnType<typeof vi.fn> } | null,
 			kill: vi.fn(),
 		};
-		setImmediate(() => exitCb(0));
+		// Raw-spawn consumers listen on `exit`; safeSpawnAsync listens on `close`.
+		setImmediate(() => {
+			handlers.exit?.(0);
+			handlers.close?.(0);
+		});
 		return proc;
 	}),
 );

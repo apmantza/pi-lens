@@ -573,13 +573,15 @@ async function callTool(
 
 	if (name === "pilens_rebuild") {
 		const outcome = await runRebuild(REPO_ROOT, REBUILD_SCRIPT);
+		const runCmd = `${outcome.packageManager} run ${outcome.script}`;
 		const headline = outcome.ok
-			? `✓ rebuild succeeded (npm run ${outcome.script}, ${outcome.durationMs}ms). Fresh analyses now reflect the latest build.`
-			: `✗ rebuild FAILED (npm run ${outcome.script}, ${outcome.durationMs}ms).`;
+			? `✓ rebuild succeeded (${runCmd}, ${outcome.durationMs}ms). Fresh analyses now reflect the latest build.`
+			: `✗ rebuild FAILED (${runCmd}, ${outcome.durationMs}ms).`;
 		return {
 			...toolText(outcome.ok ? headline : `${headline}\n\n${outcome.output}`, {
 				ok: outcome.ok,
 				script: outcome.script,
+				packageManager: outcome.packageManager,
 				durationMs: outcome.durationMs,
 				repoRoot: REPO_ROOT,
 			}),

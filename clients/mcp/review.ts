@@ -8,6 +8,12 @@
  */
 
 import { spawn } from "node:child_process";
+import {
+	type NodePackageManager,
+	pmBinary,
+	resolveNodePackageManager,
+	runScriptArgs,
+} from "../package-manager.js";
 import { safeSpawnAsync } from "../safe-spawn.js";
 import type { AnalyzeFileOptions, McpAnalyzeResult } from "./analyze.js";
 
@@ -93,14 +99,16 @@ export function analyzeFileFresh(
 export interface RebuildOutcome {
 	ok: boolean;
 	script: string;
+	/** Package manager used to run the script (e.g. for the caller's headline). */
+	packageManager: NodePackageManager;
 	durationMs: number;
 	output: string;
 }
 
 /**
- * Run `npm run <script>` in the pi-lens repo. Uses `safeSpawnAsync` (Windows
- * `.cmd`/shell-aware) since the command is plain `npm`. `ignoreAmbientSignal` —
- * a rebuild must run to completion.
+ * Run `<pm> run <script>` in the pi-lens repo, where `<pm>` is resolved from the
+ * repo's lockfile / installed managers. Uses `safeSpawnAsync` (Windows
+ * `.cmd`/shell-aware). `ignoreAmbientSignal` — a rebuild must run to completion.
  */
 export async function runRebuild(
 	repoRoot: string,
@@ -108,15 +116,21 @@ export async function runRebuild(
 	timeoutMs = 300_000,
 ): Promise<RebuildOutcome> {
 	const start = Date.now();
-	const res = await safeSpawnAsync("npm", ["run", script], {
-		cwd: repoRoot,
-		timeout: timeoutMs,
-		ignoreAmbientSignal: true,
-	});
+	const packageManager = await resolveNodePackageManager(repoRoot);
+	const res = await safeSpawnAsync(
+		pmBinary(packageManager),
+		runScriptArgs(script),
+		{
+			cwd: repoRoot,
+			timeout: timeoutMs,
+			ignoreAmbientSignal: true,
+		},
+	);
 	const output = `${res.stdout}\n${res.stderr}`.trim();
 	return {
 		ok: !res.error && res.status === 0,
 		script,
+		packageManager,
 		durationMs: Date.now() - start,
 		output: output.slice(-2000),
 	};

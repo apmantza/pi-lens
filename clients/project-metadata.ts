@@ -12,6 +12,11 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import {
+	detectNodePackageManager,
+	formatRunScript,
+	type NodePackageManager,
+} from "./package-manager.js";
 
 // --- Types ---
 
@@ -262,25 +267,6 @@ function detectNodeProject(targetPath: string): ProjectMetadata | null {
 	}
 
 	return metadata;
-}
-
-/**
- * Detect Node.js package manager from lockfiles
- */
-function detectNodePackageManager(targetPath: string): PackageManager | undefined {
-	if (fs.existsSync(path.join(targetPath, "bun.lockb")) || fs.existsSync(path.join(targetPath, "bun.lock"))) {
-		return "bun";
-	}
-	if (fs.existsSync(path.join(targetPath, "pnpm-lock.yaml"))) {
-		return "pnpm";
-	}
-	if (fs.existsSync(path.join(targetPath, "yarn.lock"))) {
-		return "yarn";
-	}
-	if (fs.existsSync(path.join(targetPath, "package-lock.json"))) {
-		return "npm";
-	}
-	return undefined;
 }
 
 /**
@@ -757,13 +743,10 @@ export function getAvailableCommands(metadata: ProjectMetadata): Array<{action: 
 				name.toLowerCase().includes(priority)
 			);
 			if (matching) {
-				const runCmd = metadata.packageManager === "bun" ? "bun run" :
-				               metadata.packageManager === "pnpm" ? "pnpm" :
-				               metadata.packageManager === "yarn" ? "yarn" :
-				               "npm run";
+				const pm = (metadata.packageManager ?? "npm") as NodePackageManager;
 				commands.push({
 					action: priority,
-					command: `${runCmd} ${matching[0]}`,
+					command: formatRunScript(pm, matching[0]),
 				});
 			}
 		}

@@ -58,6 +58,12 @@ const _installerRequire = createRequire(import.meta.url);
 import { createGunzip } from "node:zlib";
 import { isTestMode } from "../env-utils.js";
 import { getGlobalPiLensDir } from "../file-utils.js";
+import {
+	allAvailableGlobalBinDirs,
+	installArgs,
+	pmBinary,
+	resolveNodePackageManager,
+} from "../package-manager.js";
 
 // Global installation directory for pi-lens tools
 const TOOLS_DIR = path.join(getGlobalPiLensDir(), "tools");
@@ -1879,21 +1885,10 @@ async function getNpmGlobalBinCandidates(): Promise<string[]> {
 		add(path.join(os.homedir(), ".npm-global", "bin"));
 	}
 
-	const pm = process.platform === "win32" ? "npm.cmd" : "npm";
-	const prefix = await new Promise<string>((resolve) => {
-		const proc = spawn(pm, ["config", "get", "prefix"], {
-			stdio: ["ignore", "pipe", "pipe"],
-			shell: process.platform === "win32",
-		});
-
-		let stdout = "";
-		proc.stdout?.on("data", (data: Buffer | string) => (stdout += data));
-		proc.on("exit", (code) => resolve(code === 0 ? stdout.trim() : ""));
-		proc.on("error", () => resolve(""));
-	});
-
-	if (prefix) {
-		add(process.platform === "win32" ? prefix : path.join(prefix, "bin"));
+	// Global bin dirs for every installed manager (npm/pnpm/yarn/bun) — a tool
+	// may have been installed globally via any of them.
+	for (const dir of await allAvailableGlobalBinDirs()) {
+		add(dir);
 	}
 
 	return dirs;
@@ -2640,25 +2635,23 @@ async function installNpmTool(
 			);
 		}
 
-		// Install via npm or bun (use .cmd on Windows)
+		// Resolve the package manager for the tools dir and build install args.
 		const isWindows = process.platform === "win32";
-		let pm = isWindows ? "npm.cmd" : "npm";
-		if (process.env.BUN_INSTALL) {
-			pm = isWindows ? "bun.exe" : "bun";
-		}
+		const pm = await resolveNodePackageManager(TOOLS_DIR);
+		const pmCommand = pmBinary(pm);
 		// Use --ignore-scripts unless the package explicitly needs postinstall
 		// (e.g. biome downloads a platform-specific native binary via postinstall).
 		const needsScripts = NEEDS_POSTINSTALL.has(packageName);
-		const baseInstallArgs = needsScripts
-			? ["install", packageName]
-			: ["install", "--ignore-scripts", packageName];
+		const baseInstallArgs = installArgs(pm, packageName, {
+			ignoreScripts: !needsScripts,
+		});
 
 		const INSTALL_TIMEOUT_MS = 120_000;
 		const runInstallAttempt = async (
 			args: string[],
 		): Promise<{ ok: boolean; stderr: string }> =>
 			new Promise((resolve) => {
-				const proc = spawn(pm, args, {
+				const proc = spawn(pmCommand, args, {
 					cwd: TOOLS_DIR,
 					stdio: ["ignore", "pipe", "pipe"],
 					shell: isWindows, // Required for .cmd files on Windows
@@ -2687,17 +2680,18 @@ async function installNpmTool(
 
 		let outcome = await runInstallAttempt(baseInstallArgs);
 
-		const isNpm = pm === "npm" || pm === "npm.cmd";
+		// --legacy-peer-deps is npm-only; retry just npm's ERESOLVE failures.
 		const erResolve =
 			outcome.ok === false &&
 			/npm\s+error\s+ERESOLVE|\bERESOLVE\b|could not resolve/i.test(
 				outcome.stderr,
 			);
 
-		if (isNpm && erResolve) {
-			const retryArgs = needsScripts
-				? ["install", "--legacy-peer-deps", packageName]
-				: ["install", "--ignore-scripts", "--legacy-peer-deps", packageName];
+		if (pm === "npm" && erResolve) {
+			const retryArgs = installArgs(pm, packageName, {
+				ignoreScripts: !needsScripts,
+				legacyPeerDeps: true,
+			});
 			logSessionStart(
 				`auto-install npm ${packageName}: retry with --legacy-peer-deps after ERESOLVE`,
 			);

@@ -10,7 +10,6 @@
 import {
 	type ChildProcess,
 	execFileSync,
-	execSync,
 	spawn as nodeSpawn,
 	type SpawnOptions,
 } from "node:child_process";
@@ -19,6 +18,11 @@ import os from "node:os";
 import path from "node:path";
 import { isTestMode } from "../env-utils.js";
 import { getGlobalPiLensDir } from "../file-utils.js";
+import {
+	allAvailableGlobalBinDirs,
+	execArgs,
+	resolveNodePackageManager,
+} from "../package-manager.js";
 
 export interface LSPProcess {
 	process: ChildProcess;
@@ -204,30 +208,29 @@ function buildAugmentedPath(basePath?: string): string {
 }
 
 /**
- * Find binary in npm global directory
- * Works around PATH caching issue after npm install -g
+ * Find a globally-installed binary across every installed package manager's
+ * global bin dir (npm/pnpm/yarn/bun). Works around PATH caching right after an
+ * `install -g` and covers tools installed via any manager.
  */
-function _findBinaryInNpmGlobal(command: string): string | undefined {
+async function _findBinaryInGlobalBin(
+	command: string,
+): Promise<string | undefined> {
 	try {
-		// Get npm global prefix
-		const prefix = execSync("npm prefix -g", { encoding: "utf-8" }).trim();
+		for (const binDir of await allAvailableGlobalBinDirs()) {
+			// On Windows, binaries are directly in the dir (with .cmd/.exe shims);
+			// on Unix they're the bare command name.
+			const candidates = isWindows
+				? [
+						path.join(binDir, `${command}.cmd`),
+						path.join(binDir, `${command}.exe`),
+						path.join(binDir, command),
+					]
+				: [path.join(binDir, command)];
 
-		// On Windows, binaries are directly in the prefix dir
-		// On Unix, they're in prefix/bin
-		const binDir = isWindows ? prefix : path.join(prefix, "bin");
-
-		// Check for Windows variants
-		const candidates = isWindows
-			? [
-					path.join(binDir, `${command}.cmd`),
-					path.join(binDir, `${command}.exe`),
-					path.join(binDir, command),
-				]
-			: [path.join(binDir, command)];
-
-		for (const candidate of candidates) {
-			if (fs.existsSync(candidate)) {
-				return candidate;
+			for (const candidate of candidates) {
+				if (fs.existsSync(candidate)) {
+					return candidate;
+				}
 			}
 		}
 		return undefined;
@@ -558,10 +561,10 @@ export async function launchLSP(
 		!command.includes(path.sep) &&
 		!command.includes("/")
 	) {
-		const npmGlobalPath = _findBinaryInNpmGlobal(command);
-		if (npmGlobalPath) {
-			spawnCommand = npmGlobalPath;
-			// Recompute needsShell for npm global path
+		const globalBinPath = await _findBinaryInGlobalBin(command);
+		if (globalBinPath) {
+			spawnCommand = globalBinPath;
+			// Recompute needsShell for the resolved global path
 			needsShell = computeNeedsShell(spawnCommand);
 		}
 	}
@@ -610,11 +613,11 @@ export async function launchLSP(
 			!command.includes(path.sep) &&
 			!command.includes("/")
 		) {
-			const npmGlobalPath = _findBinaryInNpmGlobal(command);
-			if (npmGlobalPath && npmGlobalPath !== spawnCommand) {
-				// Recompute needsShell for npm global path
-				const needsShellGlobal = computeNeedsShell(npmGlobalPath);
-				proc = trySpawn(npmGlobalPath, args, cwd, env, needsShellGlobal);
+			const globalBinPath = await _findBinaryInGlobalBin(command);
+			if (globalBinPath && globalBinPath !== spawnCommand) {
+				// Recompute needsShell for the resolved global path
+				const needsShellGlobal = computeNeedsShell(globalBinPath);
+				proc = trySpawn(globalBinPath, args, cwd, env, needsShellGlobal);
 			} else {
 				throw err;
 			}
@@ -732,31 +735,32 @@ export async function launchLSP(
 }
 
 /**
- * Spawn via package manager (npx/bun)
+ * Spawn an LSP server via a package runner (`npx --no`, `bun x`, `pnpm dlx`,
+ * `yarn dlx`), resolving the manager from the target dir.
  */
 export async function launchViaPackageManager(
 	packageName: string,
 	args: string[] = [],
 	options: SpawnOptions = {},
 ): Promise<LSPProcess> {
-	// Prefer bun if available, fall back to npx (use .cmd on Windows)
 	const isWin = process.platform === "win32";
+	const cwd = String(options.cwd ?? process.cwd());
+	const pm = await resolveNodePackageManager(cwd);
 
-	if (process.env.BUN_INSTALL) {
-		return launchLSP(
-			isWin ? "bun.exe" : "bun",
-			["x", packageName, ...args],
-			options,
-		);
+	// Non-npm managers run their binary directly; launchLSP resolves the
+	// platform executable (.cmd/.exe) and handles shell quoting.
+	if (pm !== "npm") {
+		const { command, args: runnerArgs } = execArgs(pm, packageName, args);
+		return launchLSP(command, runnerArgs, options);
 	}
 
-	// shell:true justified: npx on Windows is npx.cmd — requires shell to execute.
+	// npm → npx. On Windows npx is npx.cmd, which needs a shell; probe for an
+	// immediate spawn failure so a missing package surfaces a clear error.
 	if (isWin) {
 		const argsStr = args.map((a) => (a.includes(" ") ? `"${a}"` : a)).join(" ");
 		// --no prevents silent download of uncached packages
 		const shellCommand = `npx --no ${packageName}${argsStr ? ` ${argsStr}` : ""}`;
 
-		const cwd = String(options.cwd ?? process.cwd());
 		const mergedEnv = { ...process.env, ...options.env };
 		const augmentedPath = buildAugmentedPath(resolvePathValue(mergedEnv));
 		const env: NodeJS.ProcessEnv = {
