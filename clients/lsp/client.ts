@@ -1287,7 +1287,9 @@ function navStaleDropEnabled(): boolean {
 	return process.env.PI_LENS_LSP_NAV_STALE_DROP !== "0";
 }
 
-async function navRequest<T>(
+// Exported for the timeout regression tests (#365). `timeoutMs` overrides the
+// per-request ceiling so a test can bound a hung server quickly.
+export async function navRequest<T>(
 	state: LSPClientState,
 	method: string,
 	params: Record<string, unknown>,
@@ -1295,6 +1297,7 @@ async function navRequest<T>(
 	// (an edit landed) between send and response. Omit for non-single-file
 	// requests (workspaceSymbol, call-hierarchy follow-ups) that have no version.
 	staleCheckPath?: string,
+	timeoutMs: number = NAV_REQUEST_TIMEOUT_MS,
 ): Promise<T | null | undefined> {
 	if (!isClientAlive(state)) return null;
 	const normalizedPath =
@@ -1305,7 +1308,7 @@ async function navRequest<T>(
 			: undefined;
 	const result = (await withTimeout(
 		safeSendRequest<T>(state.connection, method, params),
-		NAV_REQUEST_TIMEOUT_MS,
+		timeoutMs,
 	).catch((err: unknown) => {
 		if (err instanceof Error && err.message.startsWith("Timeout after")) {
 			return undefined;
@@ -1828,19 +1831,23 @@ export async function createLSPClient(options: {
 
 		async workspaceSymbol(query) {
 			if (!isClientAlive(state)) return [];
-			const result = await safeSendRequest<LSPSymbol[]>(
-				connection,
-				"workspace/symbol",
-				{ query },
-			);
+			// Route through navRequest for the shared withTimeout ceiling — a hung
+			// server would otherwise await forever (safeSendRequest only settles on
+			// a reply or a destroyed stream). No staleCheckPath: not single-file.
+			const result = await navRequest<LSPSymbol[]>(state, "workspace/symbol", {
+				query,
+			});
 			return result ?? [];
 		},
 
 		async codeAction(filePath, line, character, endLine, endCharacter) {
 			if (!isClientAlive(state)) return [];
 			const uri = pathToFileURL(filePath).href;
-			const result = await safeSendRequest<unknown[]>(
-				connection,
+			// navRequest adds the shared withTimeout ceiling + single-file
+			// stale-drop (matches documentSymbol); a hung server no longer awaits
+			// forever, and code actions computed against superseded content drop.
+			const result = await navRequest<unknown[]>(
+				state,
 				"textDocument/codeAction",
 				{
 					textDocument: { uri },
@@ -1855,6 +1862,7 @@ export async function createLSPClient(options: {
 						),
 					},
 				},
+				filePath,
 			);
 			if (!result || !Array.isArray(result)) return [];
 			const actions = result.filter(
