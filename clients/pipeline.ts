@@ -82,12 +82,22 @@ type FileSnapshot = Map<string, { mtimeMs: number; size: number }>;
 // `stack`. Extracted from the walk loop to keep each function's cognitive
 // complexity low. Excluded/ignored dirs are not descended; ignored/vanished
 // files are skipped.
-function snapshotDirInto(
+// Files stat'd between event-loop yields. The walk stays on the tool_result
+// hot path; yielding every N keeps its longest synchronous stretch well under
+// the <50ms hook-burst budget even at the AUTOFIX_CHANGED_FILE_SCAN_LIMIT cap.
+const SNAPSHOT_YIELD_EVERY = 500;
+
+// Scan one directory's entries into `snapshot`, pushing walkable subdirs onto
+// `stack`. Yields to the event loop every SNAPSHOT_YIELD_EVERY files (shared
+// `counter`) so a single huge directory can't hold the loop. Excluded/ignored
+// dirs are not descended; ignored/vanished files are skipped.
+async function snapshotDirInto(
 	dir: string,
 	ignoreMatcher: ReturnType<typeof getProjectIgnoreMatcher>,
 	stack: string[],
 	snapshot: FileSnapshot,
-): void {
+	counter: { n: number },
+): Promise<void> {
 	let entries: nodeFs.Dirent[];
 	try {
 		entries = nodeFs.readdirSync(dir, { withFileTypes: true });
@@ -116,26 +126,32 @@ function snapshotDirInto(
 		} catch {
 			// ignore vanished files
 		}
+		if (++counter.n % SNAPSHOT_YIELD_EVERY === 0) {
+			await new Promise<void>((resolve) => setImmediate(resolve));
+		}
 	}
 }
 
-// Exported for the event-loop occupancy guard (#361): this is a synchronous
-// O(files) walk on the tool_result autofix path, bounded only by
-// AUTOFIX_CHANGED_FILE_SCAN_LIMIT. The perf guard asserts its sync block stays
-// bounded at scale (and that dir excludes keep the walk from exploding).
-export function snapshotProjectFiles(root: string): FileSnapshot {
+// Exported for the event-loop occupancy guard (#361/#368): an O(files) walk on
+// the tool_result autofix path, bounded by AUTOFIX_CHANGED_FILE_SCAN_LIMIT and
+// chunk-yielding every SNAPSHOT_YIELD_EVERY files so it never blocks the TUI.
+export async function snapshotProjectFiles(root: string): Promise<FileSnapshot> {
 	const snapshot: FileSnapshot = new Map();
 	const projectRoot = path.resolve(root);
 	const ignoreMatcher = getProjectIgnoreMatcher(projectRoot);
 	const stack = [projectRoot];
+	const counter = { n: 0 };
 	while (stack.length > 0 && snapshot.size < AUTOFIX_CHANGED_FILE_SCAN_LIMIT) {
-		snapshotDirInto(stack.pop()!, ignoreMatcher, stack, snapshot);
+		await snapshotDirInto(stack.pop()!, ignoreMatcher, stack, snapshot, counter);
 	}
 	return snapshot;
 }
 
-function diffProjectSnapshot(root: string, before: FileSnapshot): string[] {
-	const after = snapshotProjectFiles(root);
+async function diffProjectSnapshot(
+	root: string,
+	before: FileSnapshot,
+): Promise<string[]> {
+	const after = await snapshotProjectFiles(root);
 	const changed = new Set<string>();
 	for (const [filePath, next] of after) {
 		const prev = before.get(filePath);
@@ -477,7 +493,7 @@ async function tryRustClippyFix(filePath: string): Promise<string[]> {
 	]);
 	if (!cargoDir) return [];
 
-	const before = snapshotProjectFiles(cargoDir);
+	const before = await snapshotProjectFiles(cargoDir);
 	const result = await safeSpawnAsync(
 		"cargo",
 		["clippy", "--fix", "--allow-dirty", "--allow-staged", "-q"],
@@ -497,7 +513,7 @@ async function tryDartFix(filePath: string): Promise<string[]> {
 	);
 	if (!pubspecDir) return [];
 
-	const before = snapshotProjectFiles(pubspecDir);
+	const before = await snapshotProjectFiles(pubspecDir);
 	const result = await safeSpawnAsync("dart", ["fix", "--apply"], {
 		timeout: 30000,
 		cwd: pubspecDir,
