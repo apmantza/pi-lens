@@ -1,0 +1,19 @@
+id: incomplete-string-escaping-js
+language: JavaScript
+message: "Regex replace escapes with a backslash before escaping backslashes"
+severity: warning
+note: |
+  Escaping a delimiter with a backslash is incomplete if existing backslashes
+  are not escaped first. Escape `\\` before escaping the target character, e.g.
+  `s.replace(/\\/g, "\\\\").replace(/\|/g, "\\|")`.
+rule:
+  pattern: $S.replace($RE, $REPL)
+constraints:
+  RE:
+    kind: regex
+  REPL:
+    regex: >-
+      ^["'`]\\\\[^\\A-Za-z0-9$]
+  S:
+    not:
+      kind: call_expression

@@ -1,0 +1,21 @@
+id: incomplete-string-escaping-js
+valid:
+  - |
+    const escaped = s.replace(/\\/g, "\\\\");
+  - |
+    const escaped = s.replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
+  - |
+    const html = s.replace(/&/g, "&amp;");
+  - |
+    const literal = s.replace("|", "\\|");
+  - |
+    const printable = s.replace(/\n/g, "\\n").replace(/\t/g, "\\t");
+  - |
+    const escaped = s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+invalid:
+  - |
+    const markdown = s.replace(/\|/g, "\\|");
+  - |
+    const quoted = s.replace(/"/g, '\\"');
+  - |
+    const templated = s.replace(/'/g, `\\'`);
