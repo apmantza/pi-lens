@@ -35,6 +35,7 @@ Closes #(issue)
 - [ ] `npm run build:dist` succeeds if I changed code under `clients/`, `commands/`, `tools/`, or `index.ts`
 - [ ] `package-lock.json` is in sync with `package.json` (run `npm install` after dep changes)
 - [ ] `AGENTS.md` is updated if this PR changes behavior, commands, conventions, or invariants documented there
+- [ ] `CHANGELOG.md` has a `## [Unreleased]` entry **in this PR** for any user-facing change (Added/Changed/Fixed) — internal-only test/refactor PRs may skip it
 - [ ] Commit subject includes the issue number: `(closes #NNN)` or `(refs #NNN)`
 
 ## What changed and why
