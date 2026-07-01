@@ -1052,7 +1052,7 @@ export default function (pi: ExtensionAPI) {
 			undefined,
 			// Flush pending per-edit dispatches before reporting so fixes made
 			// earlier this turn are reflected (not the stale pre-fix state) (#190).
-			() => flushDebouncedToolResults(),
+			(signal) => flushDebouncedToolResults(signal),
 		),
 		createLspDiagnosticsTool(),
 		createLspNavigationTool((name) => getLensFlag(name)),

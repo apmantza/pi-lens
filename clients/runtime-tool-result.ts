@@ -58,6 +58,8 @@ interface ToolResultDeps {
 	 * Do not pass from external callers.
 	 */
 	_bypassDebounce?: boolean;
+	/** Internal: abort signal supplied by diagnostics flush timeout. */
+	_abortSignal?: AbortSignal;
 }
 
 function parseDiffRanges(diff: string): { start: number; end: number }[] {
@@ -146,8 +148,13 @@ function getDebounceMs(): number {
  * Passing a filePath flushes only that entry; omitting it flushes all.
  */
 export async function flushDebouncedToolResults(
-	filePath?: string,
+	filePathOrSignal?: string | AbortSignal,
+	maybeSignal?: AbortSignal,
 ): Promise<void> {
+	const filePath =
+		typeof filePathOrSignal === "string" ? filePathOrSignal : undefined;
+	const signal =
+		typeof filePathOrSignal === "string" ? maybeSignal : filePathOrSignal;
 	const entries = filePath
 		? debouncedPipelines.has(filePath)
 			? [
@@ -163,10 +170,11 @@ export async function flushDebouncedToolResults(
 		debouncedPipelines.delete(key);
 		// Re-enter the pipeline synchronously via the bypass flag so the
 		// timer body's resolve/reject still fires through the shared promise.
-		handleToolResult({ ...entry.latestDeps, _bypassDebounce: true }).then(
-			entry.resolve,
-			entry.reject,
-		);
+		handleToolResult({
+			...entry.latestDeps,
+			_bypassDebounce: true,
+			_abortSignal: signal,
+		}).then(entry.resolve, entry.reject);
 	}
 	if (entries.length > 0) {
 		// Allow microtasks to settle so awaiting callers see the latest state.
@@ -574,6 +582,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			},
 			getFlag,
 			dbg,
+			signal: deps._abortSignal,
 		},
 		{
 			biomeClient,
