@@ -530,6 +530,25 @@ describe("clientWaitForDiagnostics — pull mode (#240)", () => {
 		await clientWaitForDiagnostics(state, TEST_FILE, 120);
 		expect(Date.now() - start).toBeGreaterThanOrEqual(100);
 	});
+
+	it("bounds a hung pull request instead of hanging forever", async () => {
+		const state = pullState();
+		// A pull-mode server that accepts textDocument/diagnostic but NEVER
+		// replies (stream stays alive). safeSendRequest only settles on a reply or
+		// a destroyed stream, so pre-fix this await never resolves and hangs the
+		// whole diagnostics wait (→ pipeline → flush → lens_diagnostics). The
+		// per-request withTimeout must bound it: time out → unavailable → fall
+		// through to the push backstop and resolve within the caller's budget.
+		state.connection.sendRequest = vi.fn(() => new Promise<never>(() => {}));
+
+		const start = Date.now();
+		await clientWaitForDiagnostics(state, TEST_FILE, 120);
+		const elapsed = Date.now() - start;
+		// Went through the timeout→backstop path (not a false early clean)...
+		expect(elapsed).toBeGreaterThanOrEqual(100);
+		// ...and did NOT hang on the never-resolving request.
+		expect(elapsed).toBeLessThan(2000);
+	});
 });
 
 describe("applyDynamicCapabilities", () => {

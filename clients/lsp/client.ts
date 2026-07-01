@@ -388,6 +388,16 @@ const PULL_DIAGNOSTICS_RETRY_INTERVAL_MS = positiveIntFromEnv(
 	"PI_LENS_LSP_PULL_RETRY_INTERVAL_MS",
 	250,
 );
+// Per-request ceiling for pull diagnostics (textDocument/diagnostic), mirroring
+// NAV_REQUEST_TIMEOUT_MS. safeSendRequest only settles on a reply or a *destroyed*
+// stream, so a pull-mode server that is alive but hung (accepts the request, never
+// replies) would await forever — hanging clientWaitForDiagnostics and, upstream,
+// the diagnostics flush. On timeout the request is treated as `unavailable`, which
+// (per #240) is NOT read as clean and falls through to the bounded push backstop.
+const PULL_REQUEST_TIMEOUT_MS = positiveIntFromEnv(
+	"PI_LENS_LSP_PULL_REQUEST_TIMEOUT_MS",
+	10_000,
+);
 const SHUTDOWN_REQUEST_TIMEOUT_MS = positiveIntFromEnv(
 	"PI_LENS_LSP_SHUTDOWN_TIMEOUT_MS",
 	1000,
@@ -575,16 +585,33 @@ export async function killProcessTree(
 		return;
 	}
 
+	const killPosixProcessGroup = (signal: NodeJS.Signals): boolean => {
+		if (pid <= 0) return false;
+		try {
+			process.kill(-pid, signal);
+			return true;
+		} catch {
+			return false;
+		}
+	};
+	const killDirectChild = (signal: NodeJS.Signals): void => {
+		try {
+			proc.kill(signal);
+		} catch {
+			// best-effort
+		}
+	};
+
 	try {
-		proc.kill("SIGTERM");
+		if (!killPosixProcessGroup("SIGTERM")) {
+			killDirectChild("SIGTERM");
+		}
 		if (options.fast) {
 			const timer = setTimeout(() => {
-				try {
-					if (!(proc as { killed?: boolean }).killed) {
-						proc.kill("SIGKILL");
+				if (!(proc as { killed?: boolean }).killed) {
+					if (!killPosixProcessGroup("SIGKILL")) {
+						killDirectChild("SIGKILL");
 					}
-				} catch {
-					// best-effort
 				}
 			}, 1500);
 			timer.unref?.();
@@ -594,12 +621,10 @@ export async function killProcessTree(
 		// SIGTERM → 1.5s → SIGKILL escalation.
 		// SIGTERM alone can leave zombie processes if the server hangs.
 		await new Promise<void>((resolve) => setTimeout(resolve, 1500));
-		try {
-			if (!(proc as { killed?: boolean }).killed) {
-				proc.kill("SIGKILL");
+		if (!(proc as { killed?: boolean }).killed) {
+			if (!killPosixProcessGroup("SIGKILL")) {
+				killDirectChild("SIGKILL");
 			}
-		} catch {
-			// best-effort
 		}
 	} catch {
 		// ignore
@@ -914,15 +939,24 @@ type PullDiagnosticsOutcome =
 async function clientRequestPullDiagnostics(
 	state: LSPClientState,
 	filePath: string,
+	budgetMs: number = PULL_REQUEST_TIMEOUT_MS,
 ): Promise<PullDiagnosticsOutcome> {
 	if (!isClientAlive(state)) return { status: "unavailable" };
 	const uri = pathToFileURL(filePath).href;
 	try {
-		const report = await safeSendRequest<{
-			kind?: string;
-			items?: LSPDiagnostic[];
-			relatedDocuments?: Record<string, { items?: LSPDiagnostic[] }>;
-		}>(state.connection, "textDocument/diagnostic", { textDocument: { uri } });
+		// withTimeout is the backstop against a hung pull-mode server: without it
+		// this await never settles unless the stream is destroyed. Bounded by the
+		// smaller of the absolute ceiling and the caller's remaining wait budget.
+		// On timeout the caught error yields `unavailable` below (never a false
+		// `clean`), so it falls through to the push-wait/timeout backstop.
+		const report = await withTimeout(
+			safeSendRequest<{
+				kind?: string;
+				items?: LSPDiagnostic[];
+				relatedDocuments?: Record<string, { items?: LSPDiagnostic[] }>;
+			}>(state.connection, "textDocument/diagnostic", { textDocument: { uri } }),
+			Math.max(1, Math.min(PULL_REQUEST_TIMEOUT_MS, budgetMs)),
+		);
 
 		if (!report) return { status: "unavailable" };
 
@@ -995,7 +1029,7 @@ export async function clientWaitForDiagnostics(
 		// `hasFreshDiagnostics()`, which is unconditionally true when there is no
 		// version baseline (`minVersion === undefined`), so a failed pull returned
 		// 0 and was read as a fresh clean.
-		let outcome = await clientRequestPullDiagnostics(state, filePath);
+		let outcome = await clientRequestPullDiagnostics(state, filePath, timeoutMs);
 		if (outcome.status === "found") return;
 		let sawClean = outcome.status === "clean";
 
@@ -1013,7 +1047,11 @@ export async function clientWaitForDiagnostics(
 			await new Promise((resolve) =>
 				setTimeout(resolve, PULL_DIAGNOSTICS_RETRY_INTERVAL_MS),
 			);
-			outcome = await clientRequestPullDiagnostics(state, filePath);
+			outcome = await clientRequestPullDiagnostics(
+				state,
+				filePath,
+				Math.max(0, retryBudgetMs - (Date.now() - startedAt)),
+			);
 			if (outcome.status === "clean") sawClean = true;
 		}
 		if (outcome.status === "found" || sawClean) return;
