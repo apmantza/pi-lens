@@ -6,7 +6,6 @@
  * workspaces) don't produce ENOENT crashes. See issue #20.
  */
 
-import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -91,32 +90,20 @@ describe("tree-sitter-client wasm resolution", () => {
 		expect(client.isAvailable()).toBe(true);
 	});
 
-	it("re-evaluates grammarsDir when isAvailable is called after initial miss", async () => {
-		// This is the regression that produced 108 "client_unavailable" log
-		// lines: grammarsDir was cached as "" in the constructor and never
-		// re-checked. We simulate an initial miss by making fs.existsSync
-		// return false for the first batch of calls, then true afterwards.
-		let existsCallCount = 0;
-		const realExistsSync = fs.existsSync;
-
-		vi.doMock("node:fs", () => ({
-			...fs,
-			existsSync: (p: string) => {
-				existsCallCount++;
-				// First ~6 calls (constructor probing paths): pretend missing
-				if (existsCallCount <= 6) return false;
-				// Subsequent calls (isAvailable re-evaluation): real fs
-				return realExistsSync(p);
-			},
-		}));
-
+	it("re-evaluates when grammarsDir was initially unresolved (no cached-empty)", async () => {
+		// The regression that produced 108 "client_unavailable" log lines:
+		// grammarsDir was cached as "" in the constructor and never re-checked.
+		// Force that state, then assert isAvailable recovers against the real fs
+		// (bundled grammars/ and/or web-tree-sitter/grammars are present) rather
+		// than staying stuck on the empty cache.
 		const { TreeSitterClient } = await import(
 			"../../clients/tree-sitter-client.js"
 		);
-		const client = new TreeSitterClient();
+		// biome-ignore lint/suspicious/noExplicitAny: poke privates for the regression
+		const client = new TreeSitterClient() as any;
+		client.grammarsDir = "";
+		client._bundledGrammarsDir = undefined;
 
-		// Constructor cached a missing path
-		// isAvailable should re-evaluate and find the real path
 		expect(client.isAvailable()).toBe(true);
 	});
 });

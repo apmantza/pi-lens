@@ -159,6 +159,51 @@ export class TreeSitterClient {
 		return undefined;
 	}
 
+	/**
+	 * The `grammars/` dir bundled inside the pi-lens package (the core grammars
+	 * shipped in the tarball, so common languages parse offline on every package
+	 * manager). Resolved from the package root; cached. Absent in a source
+	 * checkout where `prepare` hasn't populated it.
+	 */
+	private _bundledGrammarsDir?: string;
+	private bundledGrammarsDir(): string | undefined {
+		// Cache only a positive hit; keep re-checking until it exists (prepare may
+		// not have populated it yet at first probe).
+		if (this._bundledGrammarsDir) return this._bundledGrammarsDir;
+		try {
+			const dir = resolvePackagePath(import.meta.url, "grammars");
+			if (fs.existsSync(dir)) this._bundledGrammarsDir = dir;
+			return this._bundledGrammarsDir;
+		} catch {
+			return undefined;
+		}
+	}
+
+	/**
+	 * All directories that may hold grammar wasms, in precedence order: the
+	 * bundled core dir, the resolved `this.grammarsDir`, and the web-tree-sitter
+	 * grammars dir (the lazy-fetch write target). Deduped.
+	 */
+	private grammarSourceDirs(): string[] {
+		const dirs: string[] = [];
+		const push = (d: string | undefined): void => {
+			if (d && !dirs.includes(d)) dirs.push(d);
+		};
+		push(this.bundledGrammarsDir());
+		push(this.grammarsDir || undefined);
+		push(this.resolveWebTreeSitterAsset("grammars"));
+		return dirs;
+	}
+
+	/** Absolute path to `grammarFile` across all source dirs, else undefined. */
+	private resolveGrammarFile(grammarFile: string): string | undefined {
+		for (const dir of this.grammarSourceDirs()) {
+			const candidate = path.join(dir, grammarFile);
+			if (fs.existsSync(candidate)) return candidate;
+		}
+		return undefined;
+	}
+
 	/** Find tree-sitter grammar directory */
 	private findGrammarsDir(): string {
 		const grammarsDir = this.resolveWebTreeSitterAsset("grammars");
@@ -169,7 +214,8 @@ export class TreeSitterClient {
 			return grammarsDir;
 		}
 
-		// Fallback: tree-sitter-wasms package (real installs, not npm:null)
+		// Fallback: a real `tree-sitter-wasms` package, if the user installed one
+		// (it is not a pi-lens dependency — grammars ship bundled / lazy-fetched).
 		try {
 			const wasmsOut = path.join(
 				path.dirname(_require.resolve("tree-sitter-wasms/package.json")),
@@ -223,7 +269,7 @@ export class TreeSitterClient {
 	 * throws.
 	 */
 	private async ensureGrammar(grammarFile: string): Promise<boolean> {
-		if (this.grammarsDir && fs.existsSync(path.join(this.grammarsDir, grammarFile))) {
+		if (this.resolveGrammarFile(grammarFile)) {
 			return true;
 		}
 		const inflight = this.grammarEnsurePromises.get(grammarFile);
@@ -244,7 +290,16 @@ export class TreeSitterClient {
 					`[pi-lens] fetched missing tree-sitter grammar ${grammarFile} at runtime (install scripts were skipped by the package manager)`,
 				);
 			} else {
-				this.dbg(`grammar fetch failed for ${grammarFile}`);
+				// Surface the degradation once per grammar (the promise cache dedupes)
+				// instead of failing silently — otherwise pnpm/bun users offline get
+				// no signal that a language's tree-sitter features are unavailable.
+				console.error(
+					`[pi-lens] tree-sitter grammar '${grammarFile}' is unavailable — ` +
+						`symbol search, module reports and structural rules for this language will be degraded. ` +
+						`The package manager skipped install scripts and the runtime download failed (offline or CDN unreachable). ` +
+						`Fix: reinstall with a manager that runs postinstall, allow its build scripts ` +
+						`(pnpm approve-builds / bun trustedDependencies), or restore network access.`,
+				);
 			}
 			return ok;
 		})();
@@ -327,14 +382,14 @@ export class TreeSitterClient {
 			return null;
 		}
 
-		let grammarPath = this.grammarsDir
-			? path.join(this.grammarsDir, grammarFile)
-			: "";
-		// Lazily fetch the grammar if the postinstall download was skipped
-		// (pnpm/bun). Only the language actually being parsed is fetched.
-		if (!grammarPath || !fs.existsSync(grammarPath)) {
+		// Look across the bundled core `grammars/` dir and the postinstall/lazy
+		// dir. Lazily fetch only if the grammar is in neither (pnpm/bun skip
+		// postinstall; the long-tail grammars aren't bundled). Only the language
+		// actually being parsed is fetched.
+		let grammarPath = this.resolveGrammarFile(grammarFile);
+		if (!grammarPath) {
 			if (await this.ensureGrammar(grammarFile)) {
-				grammarPath = path.join(this.grammarsDir, grammarFile);
+				grammarPath = this.resolveGrammarFile(grammarFile);
 			}
 		}
 		this.dbg(
@@ -480,13 +535,16 @@ export class TreeSitterClient {
 		return injections;
 	}
 
-	/** Check if tree-sitter is available (grammars installed) */
+	/** Check if tree-sitter is available (a core grammar resolves somewhere). */
 	isAvailable(): boolean {
-		if (fs.existsSync(this.grammarsDir)) return true;
-		// Re-evaluate in case grammars were installed after process start
+		// Available if the core TS grammar resolves in ANY source dir — the bundled
+		// `grammars/` counts even when web-tree-sitter/grammars is empty (no
+		// postinstall on pnpm/bun, or a fresh CI checkout).
+		if (this.resolveGrammarFile("tree-sitter-typescript.wasm")) return true;
+		// Re-evaluate the legacy dir in case grammars were installed after start.
 		const dir = this.findGrammarsDir();
 		this.grammarsDir = dir;
-		return fs.existsSync(dir);
+		return !!dir && fs.existsSync(dir);
 	}
 
 	/** Check if specific language is supported */

@@ -10,6 +10,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Changed
 
+- **Tree-sitter grammars: bundle a core set + fix cross-manager install** — grammars were fetched only by the `postinstall` script, which **npm** runs but **pnpm/bun block by default** (and **yarn** couldn't install at all — see below), so non-npm users depended entirely on a runtime CDN fetch and got *no* tree-sitter offline. Now the 12 core grammars (ts, tsx, js, python, go, rust, json, yaml, bash, html, css, java) are **downloaded at `prepare` time and shipped in the tarball** (`grammars/`, in `files[]`; ~+1 MB to the `.tgz` since wasm gzips well, +9 MB unpacked), so the common languages parse **offline on every package manager**. The long-tail grammars still lazy-fetch on first use, and a failed fetch now emits a **visible, actionable warning** instead of a silent debug line. Also removed the `tree-sitter-wasms: "npm:null@^0.11.0"` optional-dependency sentinel — npm/pnpm/bun skipped it as a failing optional but **yarn classic hard-errored** on it, so `yarn add pi-lens` failed outright; it's now installable under yarn.
+
 ### Fixed
 
 ## [3.8.63] - 2026-07-01

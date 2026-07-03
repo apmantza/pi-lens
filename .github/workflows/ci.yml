@@ -241,16 +241,18 @@ jobs:
           TARBALL=$(ls pi-lens-*.tgz)
           npm install -g "$TARBALL"
 
-      - name: Verify grammars were downloaded
+      - name: Verify bundled core grammars shipped in the tarball
         shell: bash
         run: |
+          # Core grammars ship bundled in pi-lens/grammars (via prepare + files[]);
+          # the tail lazy-fetches at runtime. There is no postinstall now.
           GLOBAL_MODULES=$(npm root -g)
-          GRAMMARS_DIR="$GLOBAL_MODULES/pi-lens/node_modules/web-tree-sitter/grammars"
-          echo "Checking grammars at: $GRAMMARS_DIR"
+          GRAMMARS_DIR="$GLOBAL_MODULES/pi-lens/grammars"
+          echo "Checking bundled core grammars at: $GRAMMARS_DIR"
           ls "$GRAMMARS_DIR"
           test -f "$GRAMMARS_DIR/tree-sitter-typescript.wasm" || \
-            (echo "ERROR: tree-sitter-typescript.wasm not downloaded" && exit 1)
-          echo "All grammar checks passed"
+            (echo "ERROR: bundled tree-sitter-typescript.wasm missing from tarball" && exit 1)
+          echo "Bundled core grammar checks passed"
 
       - name: Load each extension entry point (catches missing files)
         shell: bash

@@ -40,6 +40,25 @@ const GRAMMARS = [
     "tree-sitter-yaml.wasm",
     "tree-sitter-zig.wasm",
 ];
+// The core set bundled into the tarball (via `prepare` → `grammars/`, shipped in
+// `files[]`) so the common languages parse offline on every package manager. The
+// long tail stays lazy-fetched at runtime. ~8.6MB uncompressed; ts/tsx dominate.
+// Keep in sync with what the runtime treats as "core" only implicitly — the
+// runtime just uses whatever files are present in the bundled dir.
+const CORE = [
+    "tree-sitter-typescript.wasm",
+    "tree-sitter-tsx.wasm",
+    "tree-sitter-javascript.wasm",
+    "tree-sitter-python.wasm",
+    "tree-sitter-go.wasm",
+    "tree-sitter-rust.wasm",
+    "tree-sitter-json.wasm",
+    "tree-sitter-yaml.wasm",
+    "tree-sitter-bash.wasm",
+    "tree-sitter-html.wasm",
+    "tree-sitter-css.wasm",
+    "tree-sitter-java.wasm",
+];
 function findGrammarsDir() {
     const scriptDir = dirname(fileURLToPath(import.meta.url));
     const pkgRoot = dirname(scriptDir);
@@ -60,13 +79,29 @@ async function downloadGrammar(destDir, filename) {
     writeFileSync(dest, Buffer.from(buf));
     console.log(`  ok    ${filename}`);
 }
+function parseArgs(argv) {
+    const out = { core: false };
+    for (let i = 0; i < argv.length; i++) {
+        if (argv[i] === "--core")
+            out.core = true;
+        else if (argv[i] === "--dest")
+            out.dest = argv[++i];
+    }
+    return out;
+}
 async function main() {
-    const grammarsDir = findGrammarsDir();
+    const args = parseArgs(process.argv.slice(2));
+    // `--dest` is relative to cwd (used by `prepare` to bundle into `./grammars/`);
+    // default is the installed web-tree-sitter/grammars dir (postinstall).
+    const grammarsDir = args.dest
+        ? join(process.cwd(), args.dest)
+        : findGrammarsDir();
+    const list = args.core ? CORE : GRAMMARS;
     if (!existsSync(grammarsDir)) {
         mkdirSync(grammarsDir, { recursive: true });
     }
-    console.log(`Downloading tree-sitter grammars → ${grammarsDir}`);
-    const results = await Promise.allSettled(GRAMMARS.map((g) => downloadGrammar(grammarsDir, g)));
+    console.log(`Downloading ${args.core ? "core" : "all"} tree-sitter grammars (${list.length}) → ${grammarsDir}`);
+    const results = await Promise.allSettled(list.map((g) => downloadGrammar(grammarsDir, g)));
     const failed = results.filter((r) => r.status === "rejected");
     if (failed.length > 0) {
         for (const f of failed) {

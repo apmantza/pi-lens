@@ -192,7 +192,9 @@ Because many test imports use `.js` specifiers while the source of truth is `.ts
 npm run build && npm test
 ```
 **This is now enforced (#198):** a vitest `globalSetup` (`tests/support/check-build-freshness.ts`) fails fast — for *any* launch (`npm test`, `npx vitest run`, watch start) — if a compiled-source `.ts` under `clients/`/`commands/`/`tools/` (or root `index.ts`/`i18n.ts`) is newer than its in-place `.js` (or has none). If you see `⛔ Stale build …`, run `npm run build` and re-run. (CI's `test` job builds first, so it passes.)
-Do not hand-edit generated `.js`; regenerate it from the corresponding `.ts`. This includes `scripts/download-grammars.js`, which is the runtime/postinstall artifact generated from `scripts/download-grammars.ts` and must stay in sync for published installs.
+Do not hand-edit generated `.js`; regenerate it from the corresponding `.ts`. This includes `scripts/download-grammars.js`, generated from `scripts/download-grammars.ts` and must stay in sync for published installs.
+
+**Tree-sitter grammar distribution (uniform across package managers).** The 12 **core** grammars (`CORE` in `download-grammars.ts`: ts/tsx/js/python/go/rust/json/yaml/bash/html/css/java) are downloaded at `prepare` time into `grammars/` (gitignored, in `files[]`) and **ship in the tarball** — so common languages parse offline on npm/pnpm/yarn/bun. The **long tail** is **lazy-fetched at runtime on first parse of that language** (`ensureGrammar` → unpkg CDN), on every manager (there is intentionally **no `postinstall`** — it was npm-only and pnpm/bun blocked it). Runtime resolution (`tree-sitter-client.ts` `resolveGrammarFile`) checks the bundled `grammars/` dir first (via `resolvePackagePath`, package-root-relative), then the legacy `web-tree-sitter/grammars` write dir; a failed lazy fetch emits a visible degradation warning (offline). To resize the bundle, edit `CORE` — bigger = larger tarball (wasm gzips ~8× in the `.tgz`, so the download delta is small; on-disk is not).
 
 ## Data directory conventions
 

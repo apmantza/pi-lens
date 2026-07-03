@@ -44,7 +44,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        pm: [npm, pnpm, bun]
+        pm: [npm, pnpm, bun, yarn]
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
@@ -63,6 +63,11 @@ jobs:
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: latest
+
+      - name: Setup yarn (classic — hoists to node_modules like npm)
+        if: matrix.pm == 'yarn'
+        shell: bash
+        run: npm i -g yarn@1
 
       - name: Build + pack the current repo
         shell: bash
@@ -86,6 +91,7 @@ jobs:
             npm)  npm  install "$TARBALL" ;;
             pnpm) pnpm add     "$TARBALL" || echo "::notice::pnpm exit $? (blocked build scripts — expected)" ;;
             bun)  bun  add     "$TARBALL" || echo "::notice::bun exit $? (blocked build scripts — expected)" ;;
+            yarn) yarn add     "$TARBALL" || echo "::notice::yarn exit $? (build scripts / peer warnings — expected)" ;;
           esac
           # Record the installed layout for debugging (hoisted vs symlink store)
           echo "--- node_modules/pi-lens ---"

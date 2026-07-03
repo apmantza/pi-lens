@@ -78,9 +78,18 @@ describe("published package entry points (dist mode, #182)", () => {
 		}
 	});
 
-	it("retains the postinstall grammar download (shipped as .js)", () => {
-		expect(pkg.scripts?.postinstall ?? "").toContain("download-grammars");
+	it("bundles core grammars via prepare and ships them in the tarball", () => {
+		// Core grammars are downloaded at `prepare` time into grammars/ (shipped in
+		// files[]); the tail lazy-fetches at runtime. There is intentionally NO
+		// postinstall (it was npm-only and pnpm/bun blocked it) — see the grammar
+		// distribution note in AGENTS.md.
+		expect(pkg.scripts?.prepare ?? "").toContain("download-grammars");
+		expect(pkg.files ?? []).toContain("grammars/");
 		expect(pkg.files ?? []).toContain("scripts/download-grammars.js");
+		expect(
+			pkg.scripts?.postinstall,
+			"postinstall was removed — grammars ship bundled + lazy-fetch",
+		).toBeUndefined();
 	});
 });
 
