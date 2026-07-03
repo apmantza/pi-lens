@@ -74,8 +74,12 @@ jobs:
         run: |
           set -euxo pipefail
           npm ci
-          # prepare script builds dist; pack emits a tarball of the real files[] set
-          TARBALL="$(npm pack --silent)"
+          # prepare script builds dist; pack emits a tarball of the real files[] set.
+          # `npm pack --silent` prints ONLY the tarball name to stdout — but the
+          # `prepare` script (download-grammars) must keep stdout clean for that to
+          # hold. `tail -1` is defense-in-depth against any future prepare-time
+          # stdout chatter leaking into the captured filename (was #376's break).
+          TARBALL="$(npm pack --silent | tail -1)"
           echo "TARBALL=$PWD/$TARBALL" >> "$GITHUB_ENV"
 
       - name: Install via ${{ matrix.pm }} into a clean project

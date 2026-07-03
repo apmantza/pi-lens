@@ -74,7 +74,9 @@ function findGrammarsDir(): string {
 async function downloadGrammar(destDir: string, filename: string): Promise<void> {
 	const dest = join(destDir, filename);
 	if (existsSync(dest)) {
-		console.log(`  skip  ${filename} (already exists)`);
+		// Progress goes to stderr — stdout must stay clean so `npm pack --silent`
+		// (which runs this via `prepare`) captures only the tarball name.
+		console.error(`  skip  ${filename} (already exists)`);
 		return;
 	}
 	const url = `${BASE_URL}/${filename}`;
@@ -82,7 +84,7 @@ async function downloadGrammar(destDir: string, filename: string): Promise<void>
 	if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
 	const buf = await res.arrayBuffer();
 	writeFileSync(dest, Buffer.from(buf));
-	console.log(`  ok    ${filename}`);
+	console.error(`  ok    ${filename}`);
 }
 
 function parseArgs(argv: string[]): { core: boolean; dest?: string } {
@@ -107,7 +109,7 @@ async function main(): Promise<void> {
 		mkdirSync(grammarsDir, { recursive: true });
 	}
 
-	console.log(
+	console.error(
 		`Downloading ${args.core ? "core" : "all"} tree-sitter grammars (${list.length}) → ${grammarsDir}`,
 	);
 
@@ -122,7 +124,7 @@ async function main(): Promise<void> {
 		}
 		console.warn(`${failed.length} grammar(s) failed — tree-sitter analysis may be unavailable.`);
 	} else {
-		console.log("All grammars downloaded successfully.");
+		console.error("All grammars downloaded successfully.");
 	}
 }
 
