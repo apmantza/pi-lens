@@ -1,5 +1,12 @@
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import type { FactProvider } from "../fact-provider-types.js";
+
+function isPathWithinProject(filePath: string, projectRoot: string): boolean {
+  const resolved = path.resolve(filePath);
+  const resolvedRoot = path.resolve(projectRoot);
+  return resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep);
+}
 
 export const fileContentProvider: FactProvider = {
   id: "fact.file.content",
@@ -11,7 +18,11 @@ export const fileContentProvider: FactProvider = {
   async run(ctx, store) {
     let content: string | null;
     try {
-      content = await fs.readFile(ctx.filePath, "utf-8");
+      if (!isPathWithinProject(ctx.filePath, ctx.projectRoot)) {
+        content = null;
+      } else {
+        content = await fs.readFile(ctx.filePath, "utf-8");
+      }
     } catch {
       content = null;
     }
