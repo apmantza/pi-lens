@@ -6,7 +6,6 @@
  * workspaces) don't produce ENOENT crashes. See issue #20.
  */
 
-import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
