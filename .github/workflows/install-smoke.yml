@@ -20,15 +20,20 @@ name: install-smoke
 # conditions end to end. Resolution failures are hard failures; the build-script
 # assets pnpm/bun skip (ast-grep CLI, tree-sitter grammars) are soft-warned.
 #
-# - mise-repro: the #285 combo — pi under a mise-managed node + pnpm as
-#            npmCommand — swept over OS (ubuntu/macos) × pi-install topology
-#            (mise-node + npm-global pi, or mise's own npm backend). mise layers a
-#            node install + shim/realpath step on top of pnpm's isolated store, the
-#            axis the pi-load matrix never exercises. NON-BLOCKING (continue-on-
-#            error): our first ubuntu/mise-node run was GREEN without reproducing,
-#            so a green cell is NOT proof of coverage — it stays an investigation
-#            matrix (it prints the exact `typescript`-from-dist resolution that
-#            fails) rather than a gate. Flip to a hard failure once #285 is fixed.
+# - mise-repro: mise install coverage (+ a #285 probe) — pi under a mise-managed
+#            node + pnpm as npmCommand, swept over OS (ubuntu/macos) × pi-install
+#            topology (mise-node + npm-global pi, or mise's own npm backend). This
+#            is the mise axis the pi-load matrix never exercises (mise layers a node
+#            install + shim/realpath step on top of pnpm's isolated store), so it
+#            has standalone value as a regression guard that mise installs load.
+#            It ALSO probes #285: it prints pi-lens's `typescript`-from-dist
+#            resolution. As of the sweep, all 4 cells are GREEN — pi-lens installs
+#            into the pnpm symlink store and typescript@6.0.3 resolves fine, so
+#            #285 is NOT reproduced by OS / mise-topology / the symlink store per
+#            se; the trigger is pnpm store STATE (node-linker mode, pnpm version,
+#            or a pre-existing global store), which CI can't easily vary. Kept
+#            NON-BLOCKING (continue-on-error): mise.run curl + the npm backend are
+#            external-dep-heavy, and a green cell is not proof of #285 coverage.
 
 on:
   schedule:
@@ -217,19 +222,24 @@ jobs:
           git add -A && git commit -qm init
           node "$GITHUB_WORKSPACE/scripts/rpc-load-check.mjs" "$(command -v pi)"
 
-  # Reproduces #285 across OS × pi-install-topology: pi under mise + pnpm as
-  # npmCommand → module-resolution crash ("Cannot find package 'typescript' from
-  # …/pi-lens/dist/clients/…") behind symlinks. mise layers a node install + shim
-  # realpath step on top of pnpm's isolated store — the axis pi-load never covers.
-  #   - os:     macOS matters specifically — $HOME/tmp live under symlinked paths
-  #             (/var -> /private/var) that Node realpath-resolves, a plausible
+  # mise install coverage (+ a #285 probe): pi under mise + pnpm as npmCommand,
+  # across OS × pi-install-topology. mise layers a node install + shim/realpath step
+  # on top of pnpm's isolated store — the axis pi-load never covers — so this stands
+  # on its own as a regression guard that mise installs load pi-lens.
+  #   - os:     ubuntu + macos. macOS $HOME/tmp live under symlinked paths
+  #             (/var -> /private/var) that Node realpath-resolves — a candidate
   #             trigger for a "behind symlinks" bug that Linux's flat tmp misses.
   #   - pi_via: both readings of "pi installed using mise" — node-from-mise + a
   #             plain npm-global pi, and mise's own npm backend (pi behind a mise
   #             tool-shim).
-  # NON-BLOCKING investigation matrix — a green cell does NOT prove coverage (our
-  # first ubuntu/mise-node run was green without reproducing), so this must not gate
-  # merges. Flip continue-on-error off once #285 is understood/fixed.
+  # The #285 angle: each cell prints pi-lens's `typescript`-from-dist resolution. As
+  # of the sweep all 4 cells are GREEN — pi-lens installs into the pnpm symlink store
+  # (…/.pnpm/pi-lens@x/node_modules/pi-lens) and typescript@6.0.3 resolves — so #285
+  # is NOT triggered by OS / mise-topology / the symlink store itself. The remaining
+  # suspect is pnpm store STATE (node-linker mode, pnpm version, pre-existing global
+  # store), which CI can't easily vary. Kept NON-BLOCKING (continue-on-error): the
+  # mise.run curl + npm backend are external-dep-heavy, and a green cell is not proof
+  # of #285 coverage.
   mise-repro:
     name: mise repro (#285) · ${{ matrix.os }} · ${{ matrix.pi_via }}
     runs-on: ${{ matrix.os }}
