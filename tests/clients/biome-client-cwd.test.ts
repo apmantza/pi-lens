@@ -39,7 +39,7 @@ function setupMonorepo(): {
 }
 
 describe("BiomeClient — per-cwd binary resolution (#121)", () => {
-	it("resolves the sub-package's biome when cwd points there, not process.cwd()'s", () => {
+	it("resolves the sub-package's biome when cwd points there, not process.cwd()'s", async () => {
 		const { workspaceRoot, subPackageRoot, subBiomeBin } = setupMonorepo();
 		// Anchor process.cwd() at the workspace root, which has NO biome.
 		const previousCwd = process.cwd();
@@ -48,20 +48,20 @@ describe("BiomeClient — per-cwd binary resolution (#121)", () => {
 			const client = new BiomeClient();
 			// Without cwd → resolves against the workspace root, which has no
 			// local biome in node_modules. It may still find an auto-installed
-			// binary in ~/.pi-lens/tools, so the only invariant we can assert
-			// is that it is NOT the sub-package's binary.
-			const noCwd = (
+			// binary in ~/.pi-lens/tools or a manager's global bin, so the only
+			// invariant we can assert is that it is NOT the sub-package's binary.
+			const noCwd = await (
 				client as unknown as {
-					getBiomeBinary(cwd?: string): { cmd: string };
+					getBiomeBinary(cwd?: string): Promise<{ cmd: string }>;
 				}
 			).getBiomeBinary();
 			expect(noCwd.cmd).not.toBe(subBiomeBin);
 
 			// With cwd pointing at the sub-package → finds the local binary
 			// before any pi-lens-global fallback.
-			const withCwd = (
+			const withCwd = await (
 				client as unknown as {
-					getBiomeBinary(cwd?: string): { cmd: string };
+					getBiomeBinary(cwd?: string): Promise<{ cmd: string }>;
 				}
 			).getBiomeBinary(subPackageRoot);
 			expect(withCwd.cmd).toBe(subBiomeBin);
@@ -72,7 +72,7 @@ describe("BiomeClient — per-cwd binary resolution (#121)", () => {
 		}
 	});
 
-	it("caches the resolved binary per cwd so two sub-packages do not collide", () => {
+	it("caches the resolved binary per cwd so two sub-packages do not collide", async () => {
 		const workspaceRoot = fs.mkdtempSync(
 			path.join(os.tmpdir(), "pi-lens-biome-twopkg-"),
 		);
@@ -94,22 +94,22 @@ describe("BiomeClient — per-cwd binary resolution (#121)", () => {
 		}
 
 		const client = new BiomeClient();
-		const resolveA = (
+		const resolveA = await (
 			client as unknown as {
-				getBiomeBinary(cwd?: string): { cmd: string };
+				getBiomeBinary(cwd?: string): Promise<{ cmd: string }>;
 			}
 		).getBiomeBinary(pkgA);
-		const resolveB = (
+		const resolveB = await (
 			client as unknown as {
-				getBiomeBinary(cwd?: string): { cmd: string };
+				getBiomeBinary(cwd?: string): Promise<{ cmd: string }>;
 			}
 		).getBiomeBinary(pkgB);
 		expect(resolveA.cmd).toBe(aBin);
 		expect(resolveB.cmd).toBe(bBin);
 		// Re-resolving against pkgA still returns pkgA's binary, not bBin.
-		const resolveAgain = (
+		const resolveAgain = await (
 			client as unknown as {
-				getBiomeBinary(cwd?: string): { cmd: string };
+				getBiomeBinary(cwd?: string): Promise<{ cmd: string }>;
 			}
 		).getBiomeBinary(pkgA);
 		expect(resolveAgain.cmd).toBe(aBin);

@@ -4,6 +4,7 @@
  * Requires: @biomejs/biome (npm install -D @biomejs/biome)
  */
 
+import { findNodeToolBinary } from "../../package-manager.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import type {
 	DispatchContext,
@@ -43,8 +44,13 @@ const biomeRunner: RunnerDefinition = {
 		}
 
 		if (!cmd) {
-			// Try npx as fallback (cached per cwd — see probeNpxBiome above).
-			if (await probeNpxBiome(cwd)) {
+			// Any package manager's global bin dir (npm/pnpm/yarn/bun) before npx —
+			// catches `pnpm add -g @biomejs/biome` installs that PATH misses (#375).
+			const globalBin = await findNodeToolBinary("biome", cwd);
+			if (globalBin) {
+				cmd = globalBin;
+			} else if (await probeNpxBiome(cwd)) {
+				// Try npx as fallback (cached per cwd — see probeNpxBiome above).
 				cmd = "npx";
 				useNpx = true;
 			} else {

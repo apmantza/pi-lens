@@ -483,6 +483,16 @@ export async function isSgAvailableAsync(): Promise<boolean> {
 			}
 		}
 
+		// 2b. Any package manager's global bin dir (npm/pnpm/yarn/bun) — catches
+		// `pnpm add -g @ast-grep/cli` installs whose bin dir is off PATH (#375).
+		for (const name of ["ast-grep", "sg"]) {
+			const globalBin = await findGlobalBinary(name);
+			if (globalBin && (await probeAstGrepCommandAsync(globalBin))) {
+				sgCmd = globalBin; sgCmdArgs = []; sgAvailable = true;
+				return true;
+			}
+		}
+
 		// 3. npx --no (cache-only, no silent download).
 		if (await probeAstGrepCommandAsync("npx", ["--no", "--", "ast-grep"])) {
 			sgCmd = "npx"; sgCmdArgs = ["--no", "--", "ast-grep"]; sgAvailable = true;

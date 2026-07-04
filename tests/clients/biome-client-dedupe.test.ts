@@ -26,6 +26,9 @@ describe("BiomeClient.ensureAvailable() — in-flight dedupe (#120)", () => {
 		const a = client.ensureAvailable();
 		const b = client.ensureAvailable();
 		const c = client.ensureAvailable();
+		// Binary resolution now awaits a global-bin lookup (#375) before the probe
+		// spawns, so flush microtasks; the dedupe still means exactly ONE probe.
+		await new Promise((r) => setTimeout(r, 0));
 		expect(safeSpawnAsync).toHaveBeenCalledTimes(1);
 		resolveProbe?.({
 			status: 0,

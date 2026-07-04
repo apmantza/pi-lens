@@ -11,6 +11,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { findNodeToolBinary } from "./package-manager.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 
 // --- Types ---
@@ -117,6 +118,19 @@ export class DependencyChecker {
 		this.log = verbose
 			? (msg: string) => console.error(`[deps] ${msg}`)
 			: () => {};
+	}
+
+	/**
+	 * Resolve how to invoke madge for `cwd`: a local/global-installed binary
+	 * (npm/pnpm/yarn/bun) if found, else `npx madge` (#375). `prefix` is prepended
+	 * to the madge args (empty for a resolved binary, `["madge"]` for the npx
+	 * fallback).
+	 */
+	private async resolveMadge(
+		cwd: string,
+	): Promise<{ cmd: string; prefix: string[] }> {
+		const bin = await findNodeToolBinary("madge", cwd);
+		return bin ? { cmd: bin, prefix: [] } : { cmd: "npx", prefix: ["madge"] };
 	}
 
 	/**
@@ -326,9 +340,10 @@ export class DependencyChecker {
 
 		// Run madge on the specific file (fast)
 		try {
+			const { cmd, prefix } = await this.resolveMadge(projectRoot);
 			const result = await safeSpawnAsync(
-				"npx",
-				["madge", ...buildMadgeArgs(normalized, projectRoot)],
+				cmd,
+				[...prefix, ...buildMadgeArgs(normalized, projectRoot)],
 				{
 					timeout: 15000,
 					cwd: projectRoot,
@@ -450,9 +465,10 @@ export class DependencyChecker {
 		projectRoot: string,
 	): Promise<{ circular: CircularDep[]; count: number }> {
 		try {
+			const { cmd, prefix } = await this.resolveMadge(projectRoot);
 			const result = await safeSpawnAsync(
-				"npx",
-				["madge", ...buildMadgeArgs(projectRoot, projectRoot)],
+				cmd,
+				[...prefix, ...buildMadgeArgs(projectRoot, projectRoot)],
 				{
 					timeout: 30000,
 					cwd: projectRoot,

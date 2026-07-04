@@ -10,6 +10,7 @@
  */
 
 import * as path from "node:path";
+import { findNodeToolBinary } from "./package-manager.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 
 // --- Types ---
@@ -41,10 +42,23 @@ export class TypeCoverageClient {
 			: () => {};
 	}
 
-	async isAvailableAsync(): Promise<boolean> {
+	/**
+	 * Resolve how to invoke type-coverage for `cwd`: a local/global-installed
+	 * binary (npm/pnpm/yarn/bun) if found, else `npx type-coverage` (#375).
+	 */
+	private async resolveCommand(
+		cwd: string,
+	): Promise<{ cmd: string; args: string[] }> {
+		const bin = await findNodeToolBinary("type-coverage", cwd);
+		return bin ? { cmd: bin, args: [] } : { cmd: "npx", args: ["type-coverage"] };
+	}
+
+	async isAvailableAsync(cwd: string = process.cwd()): Promise<boolean> {
 		if (this.available !== null) return this.available;
-		const result = await safeSpawnAsync("npx", ["type-coverage", "--version"], {
+		const { cmd, args } = await this.resolveCommand(cwd);
+		const result = await safeSpawnAsync(cmd, [...args, "--version"], {
 			timeout: 10000,
+			cwd,
 		});
 		this.available = !result.error && result.status === 0;
 		return this.available;
@@ -56,7 +70,7 @@ export class TypeCoverageClient {
 	 * Uses --strict to count `any` casts as untyped.
 	 */
 	async scanAsync(cwd: string): Promise<TypeCoverageResult> {
-		if (!(await this.isAvailableAsync())) {
+		if (!(await this.isAvailableAsync(cwd))) {
 			return {
 				success: false,
 				percentage: 0,
@@ -67,10 +81,11 @@ export class TypeCoverageClient {
 		}
 
 		try {
+			const { cmd, args } = await this.resolveCommand(cwd);
 			const result = await safeSpawnAsync(
-				"npx",
+				cmd,
 				[
-					"type-coverage",
+					...args,
 					"--detail",
 					"--strict",
 					"--ignore-files",
