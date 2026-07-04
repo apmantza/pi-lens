@@ -6,6 +6,14 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Added
 
+### Changed
+
+### Fixed
+
+## [3.8.64] - 2026-07-04
+
+### Added
+
 - **Opt-in `workspace/diagnostic` pull for the full scan — one request per server instead of N file opens (#387 Item 2)** — where a language server advertises `workspace/diagnostic` (e.g. TypeScript), `lens_diagnostics mode=full` can now issue a single project-wide pull per server instead of opening every file, detected via a new `workspaceDiagnostics` capability flag (distinct from per-document pull) and a `requestWorkspaceDiagnostics` client method. Gated behind `PI_LENS_LSP_WORKSPACE_PULL=1` (default off) and used per server-group only when the server advertises it and no file in the group has an auxiliary scanner; **any** miss (unsupported / dead / timeout / auxiliary present) falls back to the per-server-serial per-file path from #387 Item 1. Off by default because a **cold** server can answer a workspace pull with an empty/partial report that would read as a false "all clean", and the pull covers only the primary server — so it stays opt-in pending real-server validation before becoming the default. Completes the capability side of #387 (Item 1 shipped in #388).
 - **Progress bar for the long full-mode diagnostic scans (`lens_diagnostics mode=full`, `lsp_diagnostics` batch/directory)** — these scans can run for seconds to minutes and were previously opaque until they returned. They now stream a throttled progress bar (`Scanning… [████░░░░░░] 45/123 (37%)`) to the tool's `onUpdate` callback — at most ~4×/s plus a guaranteed final tick — so the agent/user sees movement. The data already existed (the sweep's per-file completion count); this just surfaces it. Shared `tools/scan-progress.ts` (`renderScanProgress` + `makeProgressReporter`); `runWorkspaceDiagnostics` and `mapWithConcurrency` gained an optional `onProgress(completed, total)`.
 
