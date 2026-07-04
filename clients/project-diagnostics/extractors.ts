@@ -11,14 +11,20 @@
  */
 
 import type { CacheManager } from "../cache-manager.js";
+import type { DeadCodeResult } from "../dead-code-client.js";
 import type { CircularDep } from "../dependency-checker.js";
 import type { GitleaksResult } from "../gitleaks-client.js";
+import type { GovulncheckResult } from "../govulncheck-client.js";
 import type { JscpdResult } from "../jscpd-client.js";
 import type { KnipIssue } from "../knip-client.js";
+import type { TrivyResult } from "../trivy-client.js";
+import { deadCodeResultToProjectDiagnostics } from "./runner-adapters/dead-code.js";
 import { gitleaksResultToProjectDiagnostics } from "./runner-adapters/gitleaks.js";
+import { govulncheckResultToProjectDiagnostics } from "./runner-adapters/govulncheck.js";
 import { jscpdResultToProjectDiagnostics } from "./runner-adapters/jscpd.js";
 import { knipIssuesToProjectDiagnostics } from "./runner-adapters/knip.js";
 import { circularDepsToProjectDiagnostics } from "./runner-adapters/madge.js";
+import { trivyResultToProjectDiagnostics } from "./runner-adapters/trivy.js";
 import type { ProjectDiagnostic } from "./types.js";
 
 interface ProjectDiagnosticExtractor<T> {
@@ -57,6 +63,25 @@ const EXTRACTORS: ProjectDiagnosticExtractor<any>[] = [
 		cacheKeys: ["gitleaks"],
 		adapt: (cwd, r: GitleaksResult) =>
 			gitleaksResultToProjectDiagnostics(cwd, r),
+	},
+	{
+		id: "govulncheck",
+		cacheKeys: ["govulncheck"],
+		adapt: (cwd, r: GovulncheckResult) =>
+			govulncheckResultToProjectDiagnostics(cwd, r),
+	},
+	{
+		id: "trivy",
+		cacheKeys: ["trivy"],
+		adapt: (cwd, r: TrivyResult) => trivyResultToProjectDiagnostics(cwd, r),
+	},
+	{
+		// Per-language cache (`dead-code-<id>`). Only Python (vulture) exists today;
+		// add a key here as each new dead-code language lands.
+		id: "dead-code",
+		cacheKeys: ["dead-code-python"],
+		adapt: (cwd, r: DeadCodeResult) =>
+			deadCodeResultToProjectDiagnostics(cwd, r),
 	},
 ];
 

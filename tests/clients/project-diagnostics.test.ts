@@ -14,6 +14,9 @@ import { knipIssuesToProjectDiagnostics } from "../../clients/project-diagnostic
 import { jscpdResultToProjectDiagnostics } from "../../clients/project-diagnostics/runner-adapters/jscpd.js";
 import { circularDepsToProjectDiagnostics } from "../../clients/project-diagnostics/runner-adapters/madge.js";
 import { gitleaksResultToProjectDiagnostics } from "../../clients/project-diagnostics/runner-adapters/gitleaks.js";
+import { govulncheckResultToProjectDiagnostics } from "../../clients/project-diagnostics/runner-adapters/govulncheck.js";
+import { trivyResultToProjectDiagnostics } from "../../clients/project-diagnostics/runner-adapters/trivy.js";
+import { deadCodeResultToProjectDiagnostics } from "../../clients/project-diagnostics/runner-adapters/dead-code.js";
 import { extractCachedProjectDiagnostics } from "../../clients/project-diagnostics/extractors.js";
 import { scanProjectDiagnostics } from "../../clients/project-diagnostics/scanner.js";
 import type {
@@ -327,6 +330,90 @@ describe("project diagnostics adapters", () => {
 			message: "Potential secret: AWS Access Key",
 		});
 	});
+
+	it("anchors a govulncheck finding at the first traced source frame", () => {
+		const [diag] = govulncheckResultToProjectDiagnostics(tmp, {
+			success: true,
+			scannedAt: "",
+			findings: [
+				{
+					osv: "GO-2024-1",
+					packageName: "golang.org/x/net",
+					fixedVersion: "0.23.0",
+					summary: "HTTP/2 flood",
+					trace: [
+						{ filename: "internal/server.go", line: 88 },
+						{ filename: "vendor/x/net/http2.go", line: 10 },
+					],
+				},
+			],
+		});
+		expect(diag).toMatchObject({
+			filePath: path.join(tmp, "internal/server.go"),
+			line: 88,
+			severity: "warning",
+			runner: "govulncheck",
+			rule: "govulncheck:GO-2024-1",
+			message: "Vulnerability GO-2024-1: HTTP/2 flood (fixed in 0.23.0)",
+		});
+	});
+
+	it("anchors a trivy CVE at its manifest target (no line)", () => {
+		const [diag] = trivyResultToProjectDiagnostics(tmp, {
+			success: true,
+			scannedAt: "",
+			secrets: [],
+			licenses: [],
+			findings: [
+				{
+					vulnerabilityId: "CVE-2024-9",
+					pkgName: "lodash",
+					installedVersion: "4.17.20",
+					fixedVersion: "4.17.21",
+					severity: "HIGH",
+					target: "package-lock.json",
+				},
+			],
+		});
+		expect(diag).toMatchObject({
+			filePath: path.join(tmp, "package-lock.json"),
+			severity: "warning",
+			runner: "trivy",
+			rule: "trivy:CVE-2024-9",
+			message: "HIGH vulnerability CVE-2024-9 in lodash@4.17.20 (fixed in 4.17.21)",
+		});
+		expect(diag.line).toBeUndefined();
+	});
+
+	it("flattens dead-code buckets; unlisted deps are blocking", () => {
+		const diags = deadCodeResultToProjectDiagnostics(tmp, {
+			success: true,
+			language: "python",
+			summary: "",
+			unusedExports: [
+				{ category: "export", kind: "function", name: "foo", file: "a.py", line: 4 },
+			],
+			unusedFiles: [],
+			unusedDeps: [],
+			unlistedDeps: [
+				{ category: "unlisted", kind: "import", name: "requests", file: "b.py", line: 1 },
+			],
+		});
+		expect(diags).toHaveLength(2);
+		expect(diags[0]).toMatchObject({
+			filePath: path.join(tmp, "a.py"),
+			line: 4,
+			semantic: "warning",
+			runner: "dead-code-python",
+			rule: "dead-code:export",
+			message: "Unused function foo",
+		});
+		expect(diags[1]).toMatchObject({
+			semantic: "blocking",
+			rule: "dead-code:unlisted",
+			message: "Unlisted dependency requests",
+		});
+	});
 });
 
 describe("extractCachedProjectDiagnostics (registry)", () => {
@@ -354,13 +441,45 @@ describe("extractCachedProjectDiagnostics (registry)", () => {
 				findings: [{ ruleId: "x", file: "c.ts", startLine: 3 }],
 			},
 			madge: { circular: [{ file: "d.ts", path: ["d.ts", "e.ts"] }], count: 1 },
+			govulncheck: {
+				success: true,
+				scannedAt: "",
+				findings: [{ osv: "GO-1", trace: [{ filename: "m.go", line: 2 }] }],
+			},
+			trivy: {
+				success: true,
+				scannedAt: "",
+				secrets: [],
+				licenses: [],
+				findings: [
+					{ vulnerabilityId: "CVE-1", pkgName: "p", severity: "LOW", target: "go.sum" },
+				],
+			},
+			"dead-code-python": {
+				success: true,
+				language: "python",
+				summary: "",
+				unusedExports: [
+					{ category: "export", kind: "func", name: "x", file: "z.py", line: 9 },
+				],
+				unusedFiles: [],
+				unusedDeps: [],
+				unlistedDeps: [],
+			},
 		});
 
 		const { diagnostics, runners } = extractCachedProjectDiagnostics(cm, tmp);
 
-		// jscpd (2, both ends) + gitleaks (1) + madge (2, per file) = 5
-		expect(diagnostics).toHaveLength(5);
-		expect(runners.sort()).toEqual(["gitleaks", "jscpd", "madge"]);
+		// jscpd 2 + gitleaks 1 + madge 2 + govulncheck 1 + trivy 1 + dead-code 1 = 8
+		expect(diagnostics).toHaveLength(8);
+		expect(runners.sort()).toEqual([
+			"dead-code",
+			"gitleaks",
+			"govulncheck",
+			"jscpd",
+			"madge",
+			"trivy",
+		]);
 	});
 
 	it("prefers jscpd-ts over jscpd, and skips analyzers with no cache", () => {
