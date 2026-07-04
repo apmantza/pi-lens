@@ -18,11 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { isTestMode } from "../env-utils.js";
 import { getGlobalPiLensDir } from "../file-utils.js";
-import {
-	allAvailableGlobalBinDirs,
-	execArgs,
-	resolveNodePackageManager,
-} from "../package-manager.js";
+import { allAvailableGlobalBinDirs } from "../package-manager.js";
 
 export interface LSPProcess {
 	process: ChildProcess;
@@ -732,107 +728,6 @@ export async function launchLSP(
 		stderr: proc.stderr,
 		pid: proc.pid ?? 0,
 	};
-}
-
-/**
- * Spawn an LSP server via a package runner (`npx --no`, `bun x`, `pnpm dlx`,
- * `yarn dlx`), resolving the manager from the target dir.
- */
-export async function launchViaPackageManager(
-	packageName: string,
-	args: string[] = [],
-	options: SpawnOptions = {},
-): Promise<LSPProcess> {
-	const isWin = process.platform === "win32";
-	const cwd = String(options.cwd ?? process.cwd());
-	const pm = await resolveNodePackageManager(cwd);
-
-	// Non-npm managers run their binary directly; launchLSP resolves the
-	// platform executable (.cmd/.exe) and handles shell quoting.
-	if (pm !== "npm") {
-		const { command, args: runnerArgs } = execArgs(pm, packageName, args);
-		return launchLSP(command, runnerArgs, options);
-	}
-
-	// npm → npx. On Windows npx is npx.cmd, which needs a shell; probe for an
-	// immediate spawn failure so a missing package surfaces a clear error.
-	if (isWin) {
-		const argsStr = args.map((a) => (a.includes(" ") ? `"${a}"` : a)).join(" ");
-		// --no prevents silent download of uncached packages
-		const shellCommand = `npx --no ${packageName}${argsStr ? ` ${argsStr}` : ""}`;
-
-		const mergedEnv = { ...process.env, ...options.env };
-		const augmentedPath = buildAugmentedPath(resolvePathValue(mergedEnv));
-		const env: NodeJS.ProcessEnv = {
-			...mergedEnv,
-			PATH: augmentedPath,
-			...(isWindows ? { Path: augmentedPath } : {}),
-		};
-
-		const proc = nodeSpawn(shellCommand, [], {
-			cwd,
-			env,
-			stdio: ["pipe", "pipe", "pipe"],
-			detached: false,
-			windowsHide: true,
-			shell: true,
-		});
-
-		if (!proc.stdin || !proc.stdout || !proc.stderr) {
-			throw new Error(`Failed to spawn package manager for: ${packageName}`);
-		}
-
-		// Check for immediate spawn failure on Windows
-		await new Promise<void>((resolve, reject) => {
-			let settled = false;
-
-			proc.on("error", (err: Error & { code?: string }) => {
-				if (!settled && (err.code === "ENOENT" || err.code === "EINVAL")) {
-					settled = true;
-					reject(
-						new Error(
-							`Package manager not found for: ${packageName}. ` +
-								`Install Node.js or check your PATH.`,
-						),
-					);
-				}
-			});
-
-			proc.on("exit", (code: number | null) => {
-				if (!settled && code !== null) {
-					settled = true;
-					reject(
-						new Error(
-							`Package manager exited immediately for: ${packageName} (code: ${code})`,
-						),
-					);
-				}
-			});
-
-			setTimeout(() => {
-				if (!settled) {
-					settled = true;
-					resolve();
-				}
-			}, 50);
-		});
-
-		// Attach permanent error handler
-		_attachErrorHandler(proc, packageName);
-		unrefLspProcessHandles(proc);
-
-		return {
-			process: proc,
-			stdin: proc.stdin,
-			stdout: proc.stdout,
-			stderr: proc.stderr,
-			pid: proc.pid ?? 0,
-		};
-	}
-
-	// --no prevents silent download of uncached packages; user must have
-	// already installed the LSP server via the interactive-install flow.
-	return launchLSP("npx", ["--no", packageName, ...args], options);
 }
 
 /**

@@ -170,6 +170,16 @@ function createState(files) {
 			slowTotals: [],
 			toolResults: counter(),
 			phaseCounts: counter(),
+			phaseTimeouts: counter(),
+			workspace: {
+				started: 0,
+				completed: 0,
+				aborted: 0,
+				timedOutSweeps: 0,
+				timedOutFilesTotal: 0,
+				sweeps: [],
+				progress: [],
+			},
 		},
 		diagnostics: {
 			bySeverity: counter(),
@@ -293,6 +303,7 @@ async function analyzeLatency(files, state) {
 			} else if (entry.type === "phase") {
 				const phase = entry.phase ?? "unknown";
 				state.latency.phaseCounts.inc(phase);
+				if (/_timeout$/.test(phase)) state.latency.phaseTimeouts.inc(phase);
 				if (
 					phase === "total" &&
 					(entry.durationMs ?? 0) >= thresholds.totalSlowMs
@@ -304,6 +315,33 @@ async function analyzeLatency(files, state) {
 						limit * 3,
 						byDuration,
 					);
+				} else if (phase === "lsp_workspace_diagnostics_start") {
+					state.latency.workspace.started += 1;
+				} else if (phase === "lsp_workspace_diagnostics_progress") {
+					// Keep the heartbeats so an incomplete sweep can show how far it
+					// got (completed X/Y) before it went silent — the hang forensics.
+					pushTop(
+						state.latency.workspace.progress,
+						summarizeWorkspaceSweep(entry),
+						limit * 3,
+						byDuration,
+					);
+				} else if (phase === "lsp_workspace_diagnostics") {
+					const ws = state.latency.workspace;
+					ws.completed += 1;
+					if (entry.metadata?.aborted) ws.aborted += 1;
+					const timedOut = Number(entry.metadata?.timedOutFiles ?? 0);
+					if (timedOut > 0) {
+						ws.timedOutSweeps += 1;
+						ws.timedOutFilesTotal += timedOut;
+						state.smellTotals.inc("lsp-workspace-file-timeouts");
+						pushTop(
+							ws.sweeps,
+							summarizeWorkspaceSweep(entry),
+							limit * 3,
+							byDuration,
+						);
+					}
 				}
 			} else if (entry.type === "tool_result") {
 				state.latency.toolResults.inc(entry.result ?? "unknown");
@@ -539,9 +577,12 @@ async function analyzeSessionStart(files, state) {
 				);
 			}
 
-			const task = /session_start task ([^:]+): success \((\d+)ms\)/.exec(
-				message,
-			);
+			// Runtime logs "success runMs=<n> queuedMs=<n>"; older logs used
+			// "success (<n>ms)". Match both so a format drift can't silently zero
+			// this smell again (it did: the `(<n>ms)` regex matched 0 of ~2k rows).
+			const task =
+				/session_start task ([^:]+): success runMs=(\d+)/.exec(message) ??
+				/session_start task ([^:]+): success \((\d+)ms\)/.exec(message);
 			if (task && Number(task[2]) >= thresholds.backgroundSlowMs) {
 				state.smellTotals.inc("slow-background-tasks");
 				pushTop(
@@ -798,6 +839,24 @@ function summarizeLatency(entry) {
 	};
 }
 
+function summarizeWorkspaceSweep(entry) {
+	const md = entry.metadata ?? {};
+	const bits = [];
+	if (md.completed != null)
+		bits.push(`completed ${md.completed}/${md.total ?? md.fileCount ?? "?"}`);
+	else if (md.filesChecked != null) bits.push(`checked ${md.filesChecked}`);
+	if (md.timedOutFiles) bits.push(`timedOutFiles=${md.timedOutFiles}`);
+	if (md.aborted) bits.push("aborted");
+	if (md.perFileMs) bits.push(`perFileMs=${md.perFileMs}`);
+	return {
+		ts: entry.ts,
+		durationMs: entry.durationMs,
+		project: projectOf(entry.filePath),
+		filePath: shortPath(entry.filePath),
+		message: bits.join(", "),
+	};
+}
+
 function summarizeDiagnostic(entry) {
 	return {
 		ts: entry.timestamp ?? entry.ts,
@@ -1047,6 +1106,22 @@ function buildReport(state) {
 		"Actionable-warnings advisory pipeline logged an error",
 		state.actionable.errors.slice(0, limit),
 	);
+	const ws = state.latency.workspace;
+	const incompleteSweeps = Math.max(0, ws.started - ws.completed);
+	addSmell(
+		smells,
+		"lsp-workspace-diagnostics-incomplete",
+		incompleteSweeps,
+		"Full LSP workspace sweeps that logged a start but never a completion (hang/kill signature — the 8h-hang class #383 hardened)",
+		ws.progress.slice(0, limit),
+	);
+	addSmell(
+		smells,
+		"lsp-workspace-file-timeouts",
+		smellCount("lsp-workspace-file-timeouts"),
+		`Full LSP sweeps where files hit the per-file budget (${ws.timedOutFilesTotal} files across ${ws.timedOutSweeps} sweeps)`,
+		ws.sweeps.slice(0, limit),
+	);
 
 	return {
 		window: state.window,
@@ -1071,6 +1146,15 @@ function buildReport(state) {
 			runnerBlockingFindings: state.latency.runnerBlockingFindings.toJSON(),
 			toolResults: state.latency.toolResults.toJSON(),
 			phaseCounts: state.latency.phaseCounts.top(limit),
+			phaseTimeouts: state.latency.phaseTimeouts.toJSON(),
+			workspaceDiagnostics: {
+				started: ws.started,
+				completed: ws.completed,
+				incomplete: incompleteSweeps,
+				aborted: ws.aborted,
+				timedOutSweeps: ws.timedOutSweeps,
+				timedOutFilesTotal: ws.timedOutFilesTotal,
+			},
 		},
 		cascade: {
 			phases: state.cascade.phases.toJSON(),
@@ -1251,6 +1335,20 @@ function printReport(report) {
 			);
 		if (Object.keys(ag.errorKinds).length)
 			console.log(`  error kinds: ${JSON.stringify(ag.errorKinds)}`);
+	}
+
+	const ws = report.latency.workspaceDiagnostics;
+	if (ws && (ws.started || ws.completed)) {
+		console.log("\nLSP workspace sweeps (lens_diagnostics full)");
+		console.log(
+			`  started=${ws.started} completed=${ws.completed} incomplete=${ws.incomplete} aborted=${ws.aborted} fileTimeouts=${ws.timedOutFilesTotal} (in ${ws.timedOutSweeps} sweeps)`,
+		);
+	}
+	const timeouts = Object.entries(report.latency.phaseTimeouts ?? {});
+	if (timeouts.length) {
+		console.log("\nPhase timeouts");
+		for (const [k, v] of timeouts)
+			console.log(`  ${String(v).padStart(5)}  ${k}`);
 	}
 }
 

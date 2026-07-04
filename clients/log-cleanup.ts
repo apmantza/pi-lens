@@ -6,9 +6,11 @@
  *   PI_LENS_MAX_LOG_SIZE_MB    - Max size before rotation (default: 10)
  *
  * Scope:
- *   - ~/.pi-lens/*.log (latency.log, sessionstart.log, tree-sitter.log)
+ *   - ~/.pi-lens/*.log (all 8 global logs — see MANAGED_LOG_FILES: latency,
+ *     sessionstart, tree-sitter, cascade, read-guard, actionable-warnings,
+ *     ast-grep-tools, dead-code)
  *   - ~/.pi-lens/logs/*.jsonl (daily diagnostic logs)
- *   - ~/.pi-lens/*.log.* (rotated backups)
+ *   - ~/.pi-lens/<name>.<timestamp>.log (rotated backups, and legacy .log.<ts>)
  *
  * Excluded (intentionally NOT cleaned - project-scoped or persistent):
  *   - <project-data>/worklog.jsonl                - Agent fixable diagnostics
@@ -27,6 +29,32 @@ import { getGlobalPiLensDir } from "./file-utils.js";
 
 const LOG_DIR = getGlobalPiLensDir();
 const LOGS_SUBDIR = path.join(LOG_DIR, "logs");
+
+/**
+ * Every global `.log` pi-lens writes under ~/.pi-lens. Kept as one list so
+ * rotation and the storage summary can't drift out of sync — that drift is
+ * exactly what left actionable-warnings/ast-grep-tools/dead-code unrotated and
+ * growing unbounded. New global log file? Add it here.
+ */
+export const MANAGED_LOG_FILES = [
+	"latency.log",
+	"sessionstart.log",
+	"tree-sitter.log",
+	"cascade.log",
+	"read-guard.log",
+	"actionable-warnings.log",
+	"ast-grep-tools.log",
+	"dead-code.log",
+];
+
+/**
+ * Matches a rotated backup, never an active log. Rotation writes
+ * `name.<ISO-timestamp>.log` (timestamp before the extension); an older shape
+ * was `name.log.<timestamp>`. Match both so every backup — whichever version
+ * produced it — is reaped by the retention sweep. The active `name.log` has no
+ * timestamp segment and no trailing suffix after `.log`, so it never matches.
+ */
+export const ROTATED_BACKUP_RE = /(\.\d{4}-\d{2}-\d{2}T.*\.log|\.log\..+)$/;
 
 export interface LogCleanupConfig {
 	retentionDays: number;
@@ -162,18 +190,20 @@ export function runLogCleanup(dbg?: (msg: string) => void): {
 	);
 	results.cleaned += dailyLogs.deleted.length;
 
-	// Cleanup old rotated log backups (*.log.*)
-	const rotatedLogs = cleanupOldLogs(LOG_DIR, /\.log\./, config.retentionDays);
+	// Cleanup old rotated log backups. This sweep runs unconditionally on every
+	// session start, so correcting the pattern self-heals any pre-existing
+	// backlog on the next launch — no separate migration needed. (The prior
+	// `/\.log\./` only matched the legacy `name.log.<ts>` shape, never the
+	// current `name.<ts>.log`, so backups accumulated indefinitely.)
+	const rotatedLogs = cleanupOldLogs(
+		LOG_DIR,
+		ROTATED_BACKUP_RE,
+		config.retentionDays,
+	);
 	results.cleaned += rotatedLogs.deleted.length;
 
 	// Check main logs for rotation
-	const mainLogs = [
-		path.join(LOG_DIR, "latency.log"),
-		path.join(LOG_DIR, "sessionstart.log"),
-		path.join(LOG_DIR, "tree-sitter.log"),
-		path.join(LOG_DIR, "cascade.log"),
-		path.join(LOG_DIR, "read-guard.log"),
-	];
+	const mainLogs = MANAGED_LOG_FILES.map((name) => path.join(LOG_DIR, name));
 
 	for (const logFile of mainLogs) {
 		const rotation = rotateLogIfNeeded(logFile, config.maxSizeMB);
@@ -225,8 +255,7 @@ export function getLogStorageSummary(): {
 	let totalMB = 0;
 
 	// Main logs
-	const mainLogs = ["latency.log", "sessionstart.log", "tree-sitter.log"];
-	for (const name of mainLogs) {
+	for (const name of MANAGED_LOG_FILES) {
 		const filePath = path.join(LOG_DIR, name);
 		if (fs.existsSync(filePath)) {
 			const sizeMB = getFileSizeMB(filePath);

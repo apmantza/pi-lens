@@ -2085,6 +2085,23 @@ export default function (pi: ExtensionAPI) {
 		// Publish this turn's abort signal so the dispatch's linter/type-check
 		// child processes are killed if the agent is interrupted (#197 ctx.signal).
 		setAmbientAbortSignal(ctx?.signal);
+		// Earliest possible marker for the edit pipeline: the first instrumented
+		// phase is `read_file` deep inside runPipeline, so a stall before that (or
+		// upstream, before pi-lens even received the event) leaves NO trace — that
+		// is exactly why a wedged-LSP edit hang was invisible in latency.log. This
+		// row means "pi-lens received this edit"; if it is present but nothing
+		// follows, the stall is in the pipeline; if it is absent, it is upstream.
+		const rtToolName = (event as { toolName?: string })?.toolName;
+		if (rtToolName === "edit" || rtToolName === "write") {
+			logLatency({
+				type: "phase",
+				phase: "tool_result_received",
+				filePath:
+					(event as { input?: { path?: string } })?.input?.path ?? "<unknown>",
+				durationMs: 0,
+				metadata: { toolName: rtToolName },
+			});
+		}
 		try {
 			const { biomeClient, ruffClient, metricsClient, agentBehaviorClient } =
 				await loadBootstrapClients();

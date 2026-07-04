@@ -11,6 +11,30 @@
  * `withinRemaining` never cleared its timer.
  */
 
+/**
+ * Combine multiple abort signals into one that aborts when ANY of them does.
+ * Returns the single signal unchanged when only one is live, and `undefined`
+ * when none are — so callers can pass it straight through. Used so a tool honors
+ * both its tool-call `signal` positional and the turn-wired `ctx.signal` (Escape),
+ * and to fold in a wall-clock ceiling via `AbortSignal.timeout`.
+ */
+export function combineAbortSignals(
+	...signals: (AbortSignal | undefined)[]
+): AbortSignal | undefined {
+	const live = signals.filter((s): s is AbortSignal => s !== undefined);
+	if (live.length <= 1) return live[0];
+	if (typeof AbortSignal.any === "function") return AbortSignal.any(live);
+	const controller = new AbortController();
+	for (const s of live) {
+		if (s.aborted) {
+			controller.abort((s as AbortSignal & { reason?: unknown }).reason);
+			break;
+		}
+		s.addEventListener("abort", () => controller.abort(s.reason), { once: true });
+	}
+	return controller.signal;
+}
+
 export interface DeadlineOptions {
 	/** Duration budget in ms. Provide this OR `deadlineAt`. */
 	ms?: number;

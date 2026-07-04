@@ -9,7 +9,6 @@ process.env.PI_LENS_TEST_MODE = "1";
 const ensureTool = vi.fn();
 const getToolEnvironment = vi.fn(async () => ({}));
 const launchLSP = vi.fn();
-const launchViaPackageManager = vi.fn();
 
 vi.mock("../../../clients/installer/index.js", () => ({
 	ensureTool,
@@ -18,7 +17,6 @@ vi.mock("../../../clients/installer/index.js", () => ({
 
 vi.mock("../../../clients/lsp/launch.js", () => ({
 	launchLSP,
-	launchViaPackageManager,
 }));
 
 // Suppress sync disk I/O from logLatency — prevents timeout under full-suite load
@@ -36,7 +34,6 @@ afterEach(() => {
 	delete process.env.PI_LENS_DISABLE_LSP_INSTALL;
 	ensureTool.mockReset();
 	launchLSP.mockReset();
-	launchViaPackageManager.mockReset();
 	vi.resetModules();
 });
 
@@ -554,7 +551,6 @@ describe("lsp server policy", () => {
 
 		const spawned = await SvelteServer.spawn(tmp);
 		expect(spawned?.process).toBeUndefined();
-		expect(launchViaPackageManager).not.toHaveBeenCalled();
 	});
 
 	it("skips package-manager fallback when install is disallowed for file", async () => {
@@ -569,7 +565,6 @@ describe("lsp server policy", () => {
 
 		const spawned = await SvelteServer.spawn(tmp, { allowInstall: false });
 		expect(spawned?.process).toBeUndefined();
-		expect(launchViaPackageManager).not.toHaveBeenCalled();
 	});
 
 	it("keeps custom LSP config scoped per workspace", async () => {

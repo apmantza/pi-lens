@@ -334,6 +334,51 @@ describe("LSPService.touchFile collectDiagnostics", () => {
 		expect(auxClient.waitForDiagnostics).toHaveBeenCalledWith(FILE, 1200);
 	});
 
+	it("does not hang when notify.open backpressures — bounded by PI_LENS_LSP_NOTIFY_BUDGET_MS", async () => {
+		const prev = process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS;
+		process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS = "50";
+		try {
+			const { LSPService } = await import("../../../clients/lsp/index.js");
+			const service = new LSPService();
+			const client = {
+				isAlive: () => true,
+				shutdown: async () => {},
+				getWorkspaceDiagnosticsSupport: () => ({
+					advertised: false,
+					mode: "push-only" as const,
+					diagnosticProviderKind: "none",
+				}),
+				getOperationSupport: () => ({}),
+				// notify.open never resolves = a server whose stdin backpressures
+				// (wedged/CPU-bound). Unbounded, this parked the dispatch LSP runner
+				// until its 30s dispatcher timeout. It must now bail at the budget.
+				notify: { open: vi.fn(() => new Promise(() => {})) },
+				waitForDiagnostics: vi.fn().mockResolvedValue(undefined),
+				getDiagnostics: vi.fn(() => []),
+			};
+			createLSPClient.mockResolvedValue(client);
+			getServersForFileWithConfig.mockReturnValue([makeServer("python")]);
+
+			const started = Date.now();
+			const result = await service.touchFile(FILE, "print('x')\n", {
+				clientScope: "primary",
+				diagnostics: "document",
+				collectDiagnostics: true,
+				maxClientWaitMs: 25,
+				maxDiagnosticsWaitMs: 50,
+				source: "dispatch-lsp-runner",
+			});
+			const elapsed = Date.now() - started;
+
+			expect(client.notify.open).toHaveBeenCalled();
+			expect(elapsed).toBeLessThan(2000); // returned, did not hang on the write
+			expect(result).toEqual([]); // no fresh diagnostics, but no hang
+		} finally {
+			if (prev === undefined) delete process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS;
+			else process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS = prev;
+		}
+	});
+
 	it("PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS overrides the option chain", async () => {
 		const previous = process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS;
 		process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS = "1000";

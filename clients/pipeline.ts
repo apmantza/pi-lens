@@ -55,7 +55,8 @@ import type { MetricsClient } from "./metrics-client.js";
 import { clearGraphCache } from "./review-graph/builder.js";
 import type { RuffClient } from "./ruff-client.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
-import { safeSpawnAsync } from "./safe-spawn.js";
+import { getAmbientAbortSignal, safeSpawnAsync } from "./safe-spawn.js";
+import { combineAbortSignals } from "./deadline-utils.js";
 import {
 	getAutofixPolicyForFile,
 	getPreferredAutofixTools,
@@ -75,6 +76,19 @@ const LSP_MAX_FILE_BYTES = RUNTIME_CONFIG.pipeline.lspMaxFileBytes;
 const LSP_MAX_FILE_LINES = RUNTIME_CONFIG.pipeline.lspMaxFileLines;
 const LSP_SPAWN_BUDGET_MS = RUNTIME_CONFIG.pipeline.lspSpawnBudgetMs;
 const AUTOFIX_CHANGED_FILE_SCAN_LIMIT = 5000;
+
+/**
+ * Hard ceiling for the pre-dispatch LSP sync (`resyncLspFile`). The sync sends a
+ * didChange/didOpen; that write can backpressure indefinitely when the language
+ * server's stdin isn't being drained (a wedged/CPU-bound server), which would
+ * hang the whole edit with no per-call bound — client acquisition is capped, but
+ * the notify write is not. So the sync is abandoned after this budget (the edit
+ * proceeds; the dispatch LSP runner, which has its own 30s cap, still tries).
+ */
+function lspSyncBudgetMs(): number {
+	const raw = Number(process.env.PI_LENS_LSP_SYNC_BUDGET_MS);
+	return Number.isFinite(raw) && raw > 0 ? raw : 3000;
+}
 
 type FileSnapshot = Map<string, { mtimeMs: number; size: number }>;
 
@@ -866,12 +880,52 @@ export async function resyncLspFile(
 			// the cache clear (no preserveDiagnostics) so the wait resolves on fresh,
 			// correctly-positioned diagnostics rather than stale pre-edit ones — the
 			// didChange triggers a server recompute regardless of cache preservation.
-			await lspService.touchFile(filePath, fileContent, {
-				diagnostics: "none",
-				source: "lsp_sync",
-				clientScope: "primary",
-				maxClientWaitMs: LSP_SPAWN_BUDGET_MS,
+			//
+			// The touch is client-wait-capped, but its didChange/didOpen *write* can
+			// backpressure forever on a wedged server (stdin not drained), which would
+			// hang the whole edit with no bound and — until this — no log. Race it
+			// against a hard budget + the turn's abort signal (Escape): whichever wins,
+			// the edit proceeds. A wedged server no longer parks the pipeline.
+			const budgetMs = lspSyncBudgetMs();
+			const abort = getAmbientAbortSignal();
+			if (abort?.aborted) return;
+			const bail = combineAbortSignals(abort, AbortSignal.timeout(budgetMs));
+			const startedAt = Date.now();
+			const touch = lspService
+				.touchFile(filePath, fileContent, {
+					diagnostics: "none",
+					source: "lsp_sync",
+					clientScope: "primary",
+					maxClientWaitMs: LSP_SPAWN_BUDGET_MS,
+				})
+				.then(() => "done" as const)
+				.catch((err) => {
+					dbg(`LSP resync after autofix error: ${err}`);
+					return "done" as const;
+				});
+			const bailed = new Promise<"bailed">((resolve) => {
+				if (!bail || bail.aborted) return resolve("bailed");
+				bail.addEventListener("abort", () => resolve("bailed"), { once: true });
 			});
+			const outcome = await Promise.race([touch, bailed]);
+			if (outcome === "bailed") {
+				// Abandon the still-pending write; the edit continues. Log it so this
+				// stall — previously an invisible hang — is queryable in latency.log.
+				logLatency({
+					type: "phase",
+					phase: "lsp_sync_abandoned",
+					filePath,
+					durationMs: Date.now() - startedAt,
+					metadata: {
+						source: "lsp_sync",
+						reason: abort?.aborted ? "aborted" : "timeout",
+						budgetMs,
+					},
+				});
+				dbg(
+					`LSP resync ${abort?.aborted ? "aborted (Escape)" : `timed out after ${budgetMs}ms`}; server slow/wedged for ${filePath}`,
+				);
+			}
 		}
 	} catch (err) {
 		dbg(`LSP resync after autofix error: ${err}`);

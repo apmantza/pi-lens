@@ -145,15 +145,17 @@ lines.push("");
 lines.push("## Diagnostic mode + navigation/edit operations");
 lines.push("");
 lines.push(
-	`Legend: ✓ advertised, · not. ${OPS.map(([k, a]) => `**${a}**=${k}`).join(", ")}; **cmds** = executeCommand allowlist size.`,
+	`Legend: ✓ advertised, · not. **mode** = document diagnostics (\`pull\` = \`textDocument/diagnostic\`, else push-only); **ws-pull** = advertises \`workspace/diagnostic\` (one project-wide pull — the #387 Item 2 fast path). ${OPS.map(([k, a]) => `**${a}**=${k}`).join(", ")}; **cmds** = executeCommand allowlist size.`,
 );
 lines.push("");
-lines.push(`| server | mode | ${OPS.map(([, a]) => a).join(" | ")} | cmds |`);
-lines.push(`|---|---|${OPS.map(() => "---").join("|")}|---|`);
+lines.push(
+	`| server | mode | ws-pull | ${OPS.map(([, a]) => a).join(" | ")} | cmds |`,
+);
+lines.push(`|---|---|---|${OPS.map(() => "---").join("|")}|---|`);
 for (const s of rows) {
 	const ops = OPS.map(([k]) => yn(s.operationSupport?.[k])).join(" | ");
 	lines.push(
-		`| ${s.serverId} | ${s.workspaceDiagnosticsSupport?.mode ?? "?"} | ${ops} | ${s.advertisedCommands?.length ?? 0} |`,
+		`| ${s.serverId} | ${s.workspaceDiagnosticsSupport?.mode ?? "?"} | ${yn(s.workspaceDiagnosticsSupport?.workspaceDiagnostics)} | ${ops} | ${s.advertisedCommands?.length ?? 0} |`,
 	);
 }
 lines.push("");

@@ -6,11 +6,13 @@
  */
 
 import { EventEmitter } from "node:events";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import type { MessageConnection } from "vscode-jsonrpc";
 import {
 	applyDynamicCapabilities,
 	CLIENT_CAPABILITIES,
+	clientRequestWorkspaceDiagnostics,
 	clientShutdown,
 	clientWaitForDiagnostics,
 	handleNotifyChange,
@@ -116,6 +118,7 @@ function createMockState(overrides?: Partial<LSPClientState>): LSPClientState {
 		workspaceDiagnosticsSupport: {
 			advertised: false,
 			mode: "push-only",
+			workspaceDiagnostics: false,
 			diagnosticProviderKind: "none",
 		},
 		operationSupport: {
@@ -484,6 +487,7 @@ describe("clientWaitForDiagnostics — pull mode (#240)", () => {
 			workspaceDiagnosticsSupport: {
 				advertised: true,
 				mode: "pull",
+				workspaceDiagnostics: false,
 				diagnosticProviderKind: "object",
 			},
 		});
@@ -695,6 +699,7 @@ describe("applyDynamicCapabilities", () => {
 			workspaceDiagnosticsSupport: {
 				advertised: true,
 				mode: "pull",
+				workspaceDiagnostics: false,
 				diagnosticProviderKind: "object",
 			},
 		});
@@ -750,5 +755,86 @@ describe("applyDynamicCapabilities", () => {
 
 		expect(() => applyDynamicCapabilities(state)).not.toThrow();
 		expect(state.workspaceDiagnosticsSupport.mode).toBe("push-only");
+	});
+});
+
+describe("clientRequestWorkspaceDiagnostics — real report parsing", () => {
+	function reportItem(absPath: string, kind: string, diags: unknown[] = []) {
+		return { uri: pathToFileURL(absPath).href, version: 1, kind, items: diags };
+	}
+	function diag(message: string) {
+		return {
+			severity: 1,
+			message,
+			range: {
+				start: { line: 0, character: 0 },
+				end: { line: 0, character: 3 },
+			},
+		};
+	}
+
+	it("parses a WorkspaceDiagnosticReport into per-file diagnostics", async () => {
+		const state = createMockState({
+			workspaceDiagnosticsSupport: {
+				advertised: true,
+				mode: "pull",
+				workspaceDiagnostics: true,
+				diagnosticProviderKind: "object",
+			},
+		});
+		vi.mocked(state.connection.sendRequest).mockResolvedValue({
+			items: [
+				reportItem("/project/a.ts", "full", [diag("boom"), diag("bang")]),
+				reportItem("/project/b.ts", "full", []),
+				// "unchanged" carries no items — must be skipped, not returned empty.
+				reportItem("/project/c.ts", "unchanged"),
+			],
+		});
+
+		const out = await clientRequestWorkspaceDiagnostics(state, 1000);
+
+		expect(state.connection.sendRequest).toHaveBeenCalledWith(
+			"workspace/diagnostic",
+			{ previousResultIds: [] },
+		);
+		expect(out).toBeDefined();
+		const byName = (name: string) =>
+			out?.find((r) => r.filePath.split("\\").join("/").endsWith(name));
+		expect(byName("a.ts")?.diagnostics).toHaveLength(2);
+		expect(byName("b.ts")?.diagnostics).toHaveLength(0);
+		expect(byName("c.ts")).toBeUndefined(); // unchanged → skipped
+	});
+
+	it("returns undefined without sending when the server doesn't advertise workspace pull", async () => {
+		const state = createMockState(); // workspaceDiagnostics: false by default
+		const out = await clientRequestWorkspaceDiagnostics(state, 1000);
+		expect(out).toBeUndefined();
+		expect(state.connection.sendRequest).not.toHaveBeenCalled();
+	});
+
+	it("returns undefined on a malformed report (no items array)", async () => {
+		const state = createMockState({
+			workspaceDiagnosticsSupport: {
+				advertised: true,
+				mode: "pull",
+				workspaceDiagnostics: true,
+				diagnosticProviderKind: "object",
+			},
+		});
+		vi.mocked(state.connection.sendRequest).mockResolvedValue({ nope: true });
+		expect(await clientRequestWorkspaceDiagnostics(state, 1000)).toBeUndefined();
+	});
+
+	it("returns undefined when the request throws or yields nothing (dead/timeout)", async () => {
+		const state = createMockState({
+			workspaceDiagnosticsSupport: {
+				advertised: true,
+				mode: "pull",
+				workspaceDiagnostics: true,
+				diagnosticProviderKind: "object",
+			},
+		});
+		vi.mocked(state.connection.sendRequest).mockRejectedValue(new Error("dead"));
+		expect(await clientRequestWorkspaceDiagnostics(state, 1000)).toBeUndefined();
 	});
 });

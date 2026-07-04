@@ -1,19 +1,50 @@
 #!/usr/bin/env node
 /**
- * Downloads tree-sitter WASM grammar files into node_modules/web-tree-sitter/grammars/.
- * Run automatically via postinstall. Skips gracefully if grammars already exist.
+ * Downloads tree-sitter WASM grammars, each verified against the committed
+ * provenance manifest (`scripts/grammars.lock.json`: package, version, per-grammar
+ * sha256) and stamped with a `<grammar>.wasm.json` sidecar. On a version bump or a
+ * hash mismatch the stale file is re-downloaded instead of skipped — closing the
+ * old skip-if-exists hole where an ABI-mismatched grammar could silently persist
+ * against the pinned `web-tree-sitter` (#177).
  *
- * Source: tree-sitter-wasms package on unpkg (mirrors npm registry artifacts).
+ * Modes:
+ *   node download-grammars.js                          # all grammars → web-tree-sitter/grammars
+ *   node download-grammars.js --core --dest grammars   # core set → ./grammars (used by `prepare`)
+ *   node download-grammars.js --write-manifest         # regenerate grammars.lock.json from the CDN
+ *
+ * Source: tree-sitter-wasms on unpkg (mirrors the npm registry artifacts).
+ *
+ * Progress goes to stderr — stdout must stay clean so `npm pack --silent` (which
+ * runs this via `prepare`) captures only the tarball name (#376/#380).
  */
 
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
+// The pinned tree-sitter-wasms release. Bump this, run `--write-manifest`, and
+// commit the regenerated grammars.lock.json to move to a new grammar set.
 const TREE_SITTER_WASMS_VERSION = "0.1.13";
-const BASE_URL = `https://unpkg.com/tree-sitter-wasms@${TREE_SITTER_WASMS_VERSION}/out`;
+const PACKAGE = "tree-sitter-wasms";
 
-const GRAMMARS = [
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const MANIFEST_PATH = join(SCRIPT_DIR, "grammars.lock.json");
+
+export interface GrammarManifest {
+	package: string;
+	version: string;
+	/** filename → "sha256:<hex>" */
+	grammars: Record<string, string>;
+}
+
+export interface GrammarSidecar {
+	npmPackage: string;
+	version: string;
+	sha256: string;
+}
+
+export const GRAMMARS: string[] = [
 	// Core typed languages
 	"tree-sitter-typescript.wasm",
 	"tree-sitter-tsx.wasm",
@@ -47,9 +78,7 @@ const GRAMMARS = [
 // The core set bundled into the tarball (via `prepare` → `grammars/`, shipped in
 // `files[]`) so the common languages parse offline on every package manager. The
 // long tail stays lazy-fetched at runtime. ~8.6MB uncompressed; ts/tsx dominate.
-// Keep in sync with what the runtime treats as "core" only implicitly — the
-// runtime just uses whatever files are present in the bundled dir.
-const CORE: string[] = [
+export const CORE: string[] = [
 	"tree-sitter-typescript.wasm",
 	"tree-sitter-tsx.wasm",
 	"tree-sitter-javascript.wasm",
@@ -64,40 +93,145 @@ const CORE: string[] = [
 	"tree-sitter-java.wasm",
 ];
 
+/** `sha256:<hex>` digest of a buffer, matching the manifest/sidecar format. */
+export function sha256(buf: Buffer | Uint8Array): string {
+	return `sha256:${createHash("sha256").update(buf).digest("hex")}`;
+}
+
+/** Read the committed provenance manifest (`scripts/grammars.lock.json`). */
+export function loadManifest(): GrammarManifest {
+	return JSON.parse(readFileSync(MANIFEST_PATH, "utf-8")) as GrammarManifest;
+}
+
+/** Sidecar path for a grammar wasm file: `<grammar>.wasm.json`. */
+export function sidecarPathFor(wasmPath: string): string {
+	return `${wasmPath}.json`;
+}
+
+/**
+ * Whether `filename` must be (re)downloaded into `destDir`: true if the grammar
+ * or its sidecar is missing, the sidecar's version differs from the manifest, or
+ * the sidecar's recorded hash differs from the expected one. Pure and cheap (it
+ * trusts the sidecar's recorded hash — the CI provenance guard re-hashes the
+ * bytes for the full integrity check).
+ */
+export function needsDownload(
+	destDir: string,
+	filename: string,
+	manifest: GrammarManifest,
+): boolean {
+	const wasm = join(destDir, filename);
+	const sidecar = sidecarPathFor(wasm);
+	if (!existsSync(wasm) || !existsSync(sidecar)) return true;
+	let meta: GrammarSidecar;
+	try {
+		meta = JSON.parse(readFileSync(sidecar, "utf-8")) as GrammarSidecar;
+	} catch {
+		return true;
+	}
+	if (meta.version !== manifest.version) return true;
+	const expected = manifest.grammars[filename];
+	if (expected && meta.sha256 !== expected) return true;
+	return false;
+}
+
 function findGrammarsDir(): string {
-	const scriptDir = dirname(fileURLToPath(import.meta.url));
-	const pkgRoot = dirname(scriptDir);
-	// Prefer local node_modules next to this package
+	const pkgRoot = dirname(SCRIPT_DIR);
+	// Prefer local node_modules next to this package.
 	return join(pkgRoot, "node_modules", "web-tree-sitter", "grammars");
 }
 
-async function downloadGrammar(destDir: string, filename: string): Promise<void> {
-	const dest = join(destDir, filename);
-	if (existsSync(dest)) {
-		console.log(`  skip  ${filename} (already exists)`);
-		return;
-	}
-	const url = `${BASE_URL}/${filename}`;
-	const res = await fetch(url);
-	if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${url}`);
-	const buf = await res.arrayBuffer();
-	writeFileSync(dest, Buffer.from(buf));
-	console.log(`  ok    ${filename}`);
+function baseUrl(version: string): string {
+	return `https://unpkg.com/${PACKAGE}@${version}/out`;
 }
 
-function parseArgs(argv: string[]): { core: boolean; dest?: string } {
-	const out: { core: boolean; dest?: string } = { core: false };
+async function fetchGrammar(version: string, filename: string): Promise<Buffer> {
+	const res = await fetch(`${baseUrl(version)}/${filename}`);
+	if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${filename}`);
+	return Buffer.from(await res.arrayBuffer());
+}
+
+/**
+ * Download `filename` into `destDir` (if it isn't already verified), checking its
+ * bytes against the manifest and writing a provenance sidecar. Throws on an
+ * integrity mismatch — a grammar whose bytes don't match the pinned manifest is
+ * never written (guards CDN corruption / tampering / ABI drift).
+ */
+async function downloadGrammar(
+	destDir: string,
+	filename: string,
+	manifest: GrammarManifest,
+): Promise<void> {
+	if (!needsDownload(destDir, filename, manifest)) {
+		console.error(`  skip  ${filename} (verified)`);
+		return;
+	}
+	const buf = await fetchGrammar(manifest.version, filename);
+	const actual = sha256(buf);
+	const expected = manifest.grammars[filename];
+	if (expected && actual !== expected) {
+		throw new Error(
+			`integrity mismatch for ${filename}: expected ${expected}, got ${actual}`,
+		);
+	}
+	const wasm = join(destDir, filename);
+	writeFileSync(wasm, buf);
+	const sidecar: GrammarSidecar = {
+		npmPackage: manifest.package,
+		version: manifest.version,
+		sha256: actual,
+	};
+	writeFileSync(sidecarPathFor(wasm), `${JSON.stringify(sidecar, null, 2)}\n`);
+	console.error(`  ok    ${filename}`);
+}
+
+function parseArgs(argv: string[]): {
+	core: boolean;
+	dest?: string;
+	writeManifest: boolean;
+} {
+	const out = {
+		core: false,
+		dest: undefined as string | undefined,
+		writeManifest: false,
+	};
 	for (let i = 0; i < argv.length; i++) {
 		if (argv[i] === "--core") out.core = true;
+		else if (argv[i] === "--write-manifest") out.writeManifest = true;
 		else if (argv[i] === "--dest") out.dest = argv[++i];
 	}
 	return out;
 }
 
+/** Regenerate grammars.lock.json by fetching every grammar and hashing it. */
+async function regenerateManifest(): Promise<void> {
+	console.error(`Regenerating manifest from ${PACKAGE}@${TREE_SITTER_WASMS_VERSION} …`);
+	const grammars: Record<string, string> = {};
+	for (const g of GRAMMARS) {
+		grammars[g] = sha256(await fetchGrammar(TREE_SITTER_WASMS_VERSION, g));
+		console.error(`  hashed ${g}`);
+	}
+	const sorted = Object.fromEntries(
+		Object.keys(grammars)
+			.sort()
+			.map((k) => [k, grammars[k]]),
+	);
+	const manifest: GrammarManifest = {
+		package: PACKAGE,
+		version: TREE_SITTER_WASMS_VERSION,
+		grammars: sorted,
+	};
+	writeFileSync(MANIFEST_PATH, `${JSON.stringify(manifest, null, 2)}\n`);
+	console.error(`Wrote ${MANIFEST_PATH} (${GRAMMARS.length} grammars).`);
+}
+
 async function main(): Promise<void> {
 	const args = parseArgs(process.argv.slice(2));
+	if (args.writeManifest) return regenerateManifest();
+
+	const manifest = loadManifest();
 	// `--dest` is relative to cwd (used by `prepare` to bundle into `./grammars/`);
-	// default is the installed web-tree-sitter/grammars dir (postinstall).
+	// default is the installed web-tree-sitter/grammars dir.
 	const grammarsDir = args.dest
 		? join(process.cwd(), args.dest)
 		: findGrammarsDir();
@@ -107,12 +241,12 @@ async function main(): Promise<void> {
 		mkdirSync(grammarsDir, { recursive: true });
 	}
 
-	console.log(
+	console.error(
 		`Downloading ${args.core ? "core" : "all"} tree-sitter grammars (${list.length}) → ${grammarsDir}`,
 	);
 
 	const results = await Promise.allSettled(
-		list.map((g) => downloadGrammar(grammarsDir, g)),
+		list.map((g) => downloadGrammar(grammarsDir, g, manifest)),
 	);
 
 	const failed = results.filter((r) => r.status === "rejected");
@@ -120,14 +254,20 @@ async function main(): Promise<void> {
 		for (const f of failed) {
 			console.warn("  warn ", (f as PromiseRejectedResult).reason?.message);
 		}
-		console.warn(`${failed.length} grammar(s) failed — tree-sitter analysis may be unavailable.`);
+		console.warn(
+			`${failed.length} grammar(s) failed — tree-sitter analysis may be unavailable.`,
+		);
 	} else {
-		console.log("All grammars downloaded successfully.");
+		console.error("All grammars downloaded successfully.");
 	}
 }
 
-main().catch((err) => {
-	// Never fail the install — tree-sitter is optional
-	console.warn("Warning: grammar download failed:", err.message);
-	process.exit(0);
-});
+// Only run when invoked directly (not when imported by the provenance check or
+// tests) — the import guard keeps the exported helpers side-effect-free.
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+	main().catch((err) => {
+		// Never fail the install — tree-sitter is optional.
+		console.warn("Warning: grammar download failed:", err.message);
+		process.exit(0);
+	});
+}

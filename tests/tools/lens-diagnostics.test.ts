@@ -497,7 +497,8 @@ describe("lens_diagnostics mode=full", () => {
 			{ cwd: "/proj" },
 		);
 		const passed = lspService.runWorkspaceDiagnostics.mock.calls[0][1];
-		expect(passed.signal).toBe(controller.signal);
+		// The sweep receives a COMBINED signal now (tool-call + ctx + wall-clock
+		// ceiling), so assert its aborted state, not object identity.
 		expect(passed.signal.aborted).toBe(true);
 		const text = String(result.content[0].text);
 		expect(text).toContain("Scan cancelled before completion");
@@ -1068,5 +1069,64 @@ describe("lens_diagnostics mode=all", () => {
 		const text = String(result.content[0].text);
 		expect(text).toContain("BOOM error here");
 		expect(text).not.toContain("minor warning here");
+	});
+});
+
+// ── cancellation via ctx.signal (Escape / turn abort) ──────────────────────────
+describe("lens_diagnostics honors the turn abort (ctx.signal)", () => {
+	it("aborts a mode=full scan when ctx.signal (Escape) fires, even if the positional signal is live", async () => {
+		mockSummaries.length = 0;
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
+		};
+		// Positional tool-call signal is live (not aborted); the TURN signal is the
+		// one Escape fires. Before the fix the tool only read the positional signal,
+		// so Escape did nothing.
+		const liveCall = new AbortController();
+		const turn = new AbortController();
+		turn.abort();
+		const tool = makeTool({}, lspService);
+		const result = await tool.execute(
+			"1",
+			{ mode: "full", maxLspFiles: 50 },
+			liveCall.signal,
+			null,
+			{ cwd: "/proj", signal: turn.signal },
+		);
+		const passed = lspService.runWorkspaceDiagnostics.mock.calls[0][1];
+		expect(passed.signal.aborted).toBe(true);
+		expect(String(result.content[0].text)).toContain(
+			"Scan cancelled before completion",
+		);
+		expect(result.details).toMatchObject({ mode: "full", partial: true });
+	});
+});
+
+
+describe("lens_diagnostics wall-clock ceiling (never-hang guarantee)", () => {
+	it("stops mode=full and marks timedOut when the wall-clock budget is exceeded", async () => {
+		vi.resetModules();
+		process.env.PI_LENS_LENS_DIAGNOSTICS_FULL_TIMEOUT_MS = "1";
+		const { createLensDiagnosticsTool: freshCreate } = await import(
+			"../../tools/lens-diagnostics.js"
+		);
+		const lspService = {
+			// Outlast the 1ms ceiling so it fires before the sweep returns.
+			runWorkspaceDiagnostics: vi.fn(async () => {
+				await new Promise((r) => setTimeout(r, 30));
+				return [];
+			}),
+		};
+		const tool = freshCreate(
+			makeCacheManager({}) as any,
+			() => "/proj",
+			() => lspService as any,
+		);
+		const result = await tool.execute("1", { mode: "full" }, undefined, null, {
+			cwd: "/proj",
+		});
+		expect(String(result.content[0].text)).toContain("time budget");
+		expect(result.details).toMatchObject({ mode: "full", timedOut: true });
+		delete process.env.PI_LENS_LENS_DIAGNOSTICS_FULL_TIMEOUT_MS;
 	});
 });

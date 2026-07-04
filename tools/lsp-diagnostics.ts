@@ -13,8 +13,10 @@ import {
 	isExcludedDirName,
 } from "../clients/file-utils.js";
 import { getLSPService } from "../clients/lsp/index.js";
+import { combineAbortSignals } from "../clients/deadline-utils.js";
 import type { LSPDiagnostic } from "../clients/lsp/client.js";
 import { baseName, compactRenderResult } from "./render-compact.js";
+import { makeProgressReporter } from "./scan-progress.js";
 
 const LANG_EXTENSIONS: Record<string, string[]> = {
 	".ts": [".ts", ".tsx", ".mts", ".cts"],
@@ -75,6 +77,8 @@ type LspHealthLike = {
 type BatchOptions = {
 	concurrency: number;
 	waitMs?: number;
+	signal?: AbortSignal;
+	onProgress?: (completed: number, total: number) => void;
 };
 
 type FileDiag = {
@@ -130,17 +134,25 @@ async function mapWithConcurrency<T, R>(
 	items: T[],
 	concurrency: number,
 	mapper: (item: T, index: number) => Promise<R>,
+	signal?: AbortSignal,
+	onProgress?: (completed: number, total: number) => void,
 ): Promise<R[]> {
 	const results: R[] = [];
 	let nextIndex = 0;
+	let completed = 0;
 	const workers = Math.min(Math.max(1, concurrency), items.length);
 	await Promise.all(
 		Array.from({ length: workers }, async () => {
 			while (true) {
+				// Honor cancellation (Escape / turn abort): stop pulling new items
+				// rather than grind the whole batch. Completed entries are returned.
+				if (signal?.aborted) return;
 				const index = nextIndex;
 				nextIndex += 1;
 				if (index >= items.length) return;
 				results[index] = await mapper(items[index]!, index);
+				completed += 1;
+				onProgress?.(completed, items.length);
 			}
 		}),
 	);
@@ -268,10 +280,16 @@ export function createLspDiagnosticsTool() {
 		async execute(
 			_toolCallId: string,
 			params: Record<string, unknown>,
-			_signal: AbortSignal,
-			_onUpdate: unknown,
-			ctx: { cwd?: string },
+			_signal: AbortSignal | undefined,
+			onUpdate: unknown,
+			ctx: { cwd?: string; signal?: AbortSignal },
 		) {
+			// Escape aborts the turn via ctx.signal; honor both it and the tool-call
+			// signal so a batch/directory scan cancels rather than grinding on.
+			const signal = combineAbortSignals(_signal, ctx.signal);
+			// Stream a throttled progress bar for batch/directory scans (opaque for
+			// seconds-to-minutes otherwise).
+			const onProgress = makeProgressReporter(onUpdate, "Scanning LSP diagnostics");
 			const typedParams = params as {
 				path?: string;
 				paths?: string[];
@@ -319,6 +337,8 @@ export function createLspDiagnosticsTool() {
 				return runBatchFileDiagnostics(absPaths, severity, lspService, {
 					concurrency,
 					waitMs,
+					signal,
+					onProgress,
 				});
 			}
 
@@ -356,6 +376,8 @@ export function createLspDiagnosticsTool() {
 				return runDirectoryDiagnostics(absPath, severity, lspService, {
 					concurrency,
 					waitMs,
+					signal,
+					onProgress,
 				});
 			}
 			return runFileDiagnostics(absPath, severity, lspService, waitMs);
@@ -526,6 +548,8 @@ async function runBatchFileDiagnostics(
 		options.concurrency,
 		(file) =>
 			collectFileDiagnosticResult(file, severity, lspService, options.waitMs),
+		options.signal,
+		options.onProgress,
 	);
 	const fileErrors = results.flatMap((result) =>
 		result.error ? [result.error] : [],
@@ -631,6 +655,8 @@ async function runDirectoryDiagnostics(
 		options.concurrency,
 		(file) =>
 			collectFileDiagnosticResult(file, severity, lspService, options.waitMs),
+		options.signal,
+		options.onProgress,
 	);
 	const fileErrors = results.flatMap((result) =>
 		result.error ? [result.error] : [],

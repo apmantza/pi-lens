@@ -19,6 +19,7 @@ import {
 } from "../clients/ast-grep-yaml-synth.js";
 import type { SearchReadLocation } from "../clients/search-read-registration.js";
 import { compactRenderResult } from "./render-compact.js";
+import { combineAbortSignals } from "../clients/deadline-utils.js";
 import { LANGUAGES } from "./shared.js";
 
 /**
@@ -409,10 +410,13 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 		async execute(
 			_toolCallId: string,
 			params: Record<string, unknown>,
-			_signal: AbortSignal,
+			_signal: AbortSignal | undefined,
 			_onUpdate: unknown,
-			ctx: { cwd?: string },
+			ctx: { cwd?: string; signal?: AbortSignal },
 		) {
+			// Escape aborts the turn via ctx.signal; the positional signal is the
+			// tool-call one. Honor both so a broad search cancels on Escape.
+			const abortSignal = combineAbortSignals(_signal, ctx.signal);
 			const startedAt = Date.now();
 			const {
 				paths,
@@ -552,7 +556,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 					};
 				}
 
-				if (_signal.aborted) return abortError();
+				if (abortSignal?.aborted) return abortError();
 
 				if (!(await astGrepClient.ensureAvailable())) {
 					logOutcome("error", {
@@ -569,7 +573,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 						details: {},
 					};
 				}
-				if (_signal.aborted) return abortError();
+				if (abortSignal?.aborted) return abortError();
 
 				if (!hasRawRule && looksLikeRuleYamlOrPlainText(pattern)) {
 					logOutcome("error", {
@@ -670,12 +674,12 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 
 				// Phase 4: raw YAML rule passthrough — routes through sg scan --config
 				if (effectiveRule && effectiveRule.trim().length > 0) {
-					if (_signal.aborted) return abortError();
+					if (abortSignal?.aborted) return abortError();
 					const ruleResult = await astGrepClient.searchWithRule(
 						effectiveRule,
 						searchPaths,
 					);
-					if (_signal.aborted) return abortError();
+					if (abortSignal?.aborted) return abortError();
 					if (ruleResult.error) {
 						logOutcome("error", { errorRaw: ruleResult.error });
 						return {
@@ -726,13 +730,13 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 					};
 				}
 
-				if (_signal.aborted) return abortError();
+				if (abortSignal?.aborted) return abortError();
 				const result = await astGrepClient.search(pattern, lang, searchPaths, {
 					selector,
 					context,
 					strictness,
 				});
-				if (_signal.aborted) return abortError();
+				if (abortSignal?.aborted) return abortError();
 
 				if (result.error) {
 					logOutcome("error", { errorRaw: result.error });

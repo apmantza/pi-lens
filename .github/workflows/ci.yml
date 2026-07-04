@@ -28,6 +28,13 @@ jobs:
       - name: Lockfile in sync with package.json
         run: npm run check:lockfile
 
+      # `npm install` above ran `prepare` → downloaded the core grammars into
+      # grammars/ with provenance sidecars. Verify their bytes/versions match the
+      # committed manifest so a stale or tampered/ABI-mismatched wasm can't slip in
+      # against the pinned web-tree-sitter (#177).
+      - name: Grammar provenance in sync with manifest
+        run: npm run check:grammars
+
       # Fail on known-vulnerable PRODUCTION deps (what actually ships to users via
       # `npm install --omit=dev`). Scoped to high/critical to avoid blocking PRs on
       # fix-less moderate advisories; transitive moderate ones are handled by

@@ -63,6 +63,16 @@ export function setAmbientAbortSignal(signal: AbortSignal | undefined): void {
 	ambientAbortSignal = signal;
 }
 
+/**
+ * The current turn's abort signal, for in-process awaits that aren't child
+ * spawns (e.g. an LSP JSON-RPC write that can backpressure on a wedged server).
+ * Child spawns read the ambient signal internally; this getter lets the
+ * interactive pipeline honor Escape on non-spawn LSP calls too.
+ */
+export function getAmbientAbortSignal(): AbortSignal | undefined {
+	return ambientAbortSignal;
+}
+
 // ============================================================================
 // INTERNAL HELPERS
 // ============================================================================

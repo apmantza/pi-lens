@@ -9,6 +9,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 import {
+	combineAbortSignals,
 	withBudget,
 	withDeadline,
 	withinRemaining,
@@ -136,5 +137,32 @@ describe("named adapters preserve their exact semantics", () => {
 		await expect(withinRemaining(slow("v", 1000), Date.now() + 10)).resolves.toBeUndefined();
 		await expect(withinRemaining(slowReject("boom", 5), Date.now() + 1000)).resolves.toBeUndefined();
 		await expect(withinRemaining(slow("v", 50), Date.now() - 1)).resolves.toBeUndefined();
+	});
+});
+
+describe("combineAbortSignals", () => {
+	it("returns the single live signal unchanged", () => {
+		const c = new AbortController();
+		expect(combineAbortSignals(undefined, c.signal)).toBe(c.signal);
+	});
+
+	it("returns undefined when no signal is live", () => {
+		expect(combineAbortSignals(undefined, undefined)).toBeUndefined();
+	});
+
+	it("aborts when EITHER source aborts", () => {
+		const a = new AbortController();
+		const b = new AbortController();
+		const combined = combineAbortSignals(a.signal, b.signal);
+		expect(combined?.aborted).toBe(false);
+		b.abort();
+		expect(combined?.aborted).toBe(true);
+	});
+
+	it("is already aborted when a source was pre-aborted", () => {
+		const a = new AbortController();
+		a.abort();
+		const b = new AbortController();
+		expect(combineAbortSignals(a.signal, b.signal)?.aborted).toBe(true);
 	});
 });
