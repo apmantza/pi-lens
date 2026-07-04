@@ -90,6 +90,49 @@ describe("analyze-pi-lens-logs.mjs", () => {
 				durationMs: 80,
 				diagnosticCount: 0,
 			},
+			// Full LSP workspace sweeps (lens_diagnostics full): /proj/a completed
+			// but hit the per-file budget on 4 files; /proj/b logged a start (and a
+			// heartbeat) but never a completion — the hang/kill signature #383 added
+			// this logging to catch.
+			{
+				type: "phase",
+				ts: NOW,
+				phase: "lsp_workspace_diagnostics_start",
+				filePath: "/proj/a",
+				durationMs: 0,
+				metadata: { fileCount: 40, perFileMs: 15000 },
+			},
+			{
+				type: "phase",
+				ts: NOW,
+				phase: "lsp_workspace_diagnostics",
+				filePath: "/proj/a",
+				durationMs: 52000,
+				metadata: { filesChecked: 40, diagnosticCount: 3, timedOutFiles: 4 },
+			},
+			{
+				type: "phase",
+				ts: NOW,
+				phase: "lsp_workspace_diagnostics_start",
+				filePath: "/proj/b",
+				durationMs: 0,
+				metadata: { fileCount: 120, perFileMs: 15000 },
+			},
+			{
+				type: "phase",
+				ts: NOW,
+				phase: "lsp_workspace_diagnostics_progress",
+				filePath: "/proj/b",
+				durationMs: 10000,
+				metadata: { completed: 18, total: 120, timedOutFiles: 2, aborted: false },
+			},
+			{
+				type: "phase",
+				ts: NOW,
+				phase: "lsp_diagnostics_timeout",
+				filePath: "/proj/b/x.ts",
+				durationMs: 3000,
+			},
 		]
 			.map((e) => JSON.stringify(e))
 			.join("\n");
@@ -183,6 +226,28 @@ describe("analyze-pi-lens-logs.mjs", () => {
 		expect(report.actionable.autoFixEligible).toBe(1);
 		expect(report.actionable.lspSource).toEqual({ fresh: 1 });
 		expect(report.actionable.fileSkipReasons).toEqual({ no_lsp_support: 1 });
+	});
+
+	it("surfaces incomplete + timed-out full LSP workspace sweeps", () => {
+		const wd = report.latency.workspaceDiagnostics;
+		expect(wd.started).toBe(2);
+		expect(wd.completed).toBe(1);
+		expect(wd.incomplete).toBe(1);
+		expect(wd.timedOutSweeps).toBe(1);
+		expect(wd.timedOutFilesTotal).toBe(4);
+		expect(report.latency.phaseTimeouts.lsp_diagnostics_timeout).toBe(1);
+
+		const incomplete = report.smells.find(
+			(s: any) => s.id === "lsp-workspace-diagnostics-incomplete",
+		);
+		expect(incomplete?.count).toBe(1);
+		// the retained heartbeat shows how far the hung sweep got before silence
+		expect(incomplete.examples[0].message).toContain("completed 18/120");
+
+		const timeouts = report.smells.find(
+			(s: any) => s.id === "lsp-workspace-file-timeouts",
+		);
+		expect(timeouts?.count).toBe(1);
 	});
 
 	it("surfaces ast-grep tool errors as a smell", () => {
