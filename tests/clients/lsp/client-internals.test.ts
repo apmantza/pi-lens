@@ -690,6 +690,90 @@ describe("navRequest — $/cancelRequest on abort (#238 Item 1)", () => {
 	});
 });
 
+describe("navRequest — ContentModified retry (#238 Item 2)", () => {
+	const modified = (): Error => {
+		const err = new Error("content modified") as Error & { code: number };
+		err.code = -32801;
+		return err;
+	};
+
+	it("retries once on ContentModified and returns the retried result", async () => {
+		const state = createMockState();
+		let calls = 0;
+		state.connection.sendRequest = vi.fn(async () => {
+			calls += 1;
+			if (calls === 1) throw modified();
+			return [{ name: "fresh" }];
+		}) as unknown as typeof state.connection.sendRequest;
+
+		const result = await navRequest(
+			state,
+			"textDocument/definition",
+			{},
+			undefined,
+			500,
+		);
+
+		expect(result).toEqual([{ name: "fresh" }]);
+		expect(state.connection.sendRequest).toHaveBeenCalledTimes(2);
+	});
+
+	it("returns empty (not a throw) when ContentModified persists after the retry", async () => {
+		const state = createMockState();
+		state.connection.sendRequest = vi.fn(async () => {
+			throw modified();
+		}) as unknown as typeof state.connection.sendRequest;
+
+		const result = await navRequest(
+			state,
+			"textDocument/definition",
+			{},
+			undefined,
+			500,
+		);
+
+		expect(result).toBeUndefined();
+		// One retry only — not an unbounded loop.
+		expect(state.connection.sendRequest).toHaveBeenCalledTimes(2);
+	});
+
+	it("does not retry a permanent RequestFailed (-32803)", async () => {
+		const state = createMockState();
+		state.connection.sendRequest = vi.fn(async () => {
+			const err = new Error("request failed") as Error & { code: number };
+			err.code = -32803;
+			throw err;
+		}) as unknown as typeof state.connection.sendRequest;
+
+		await expect(
+			navRequest(state, "textDocument/definition", {}, undefined, 500),
+		).rejects.toThrow();
+		expect(state.connection.sendRequest).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not retry when the signal aborts between attempts", async () => {
+		const state = createMockState();
+		const controller = new AbortController();
+		state.connection.sendRequest = vi.fn(async () => {
+			controller.abort(); // turn abandoned exactly as the first attempt fails
+			throw modified();
+		}) as unknown as typeof state.connection.sendRequest;
+
+		const result = await navRequest(
+			state,
+			"textDocument/definition",
+			{},
+			undefined,
+			500,
+			controller.signal,
+		);
+
+		expect(result).toBeUndefined();
+		// Aborted → no second attempt.
+		expect(state.connection.sendRequest).toHaveBeenCalledTimes(1);
+	});
+});
+
 describe("runServerCommand — executeCommand timeout backstop (#365)", () => {
 	const advertised = (): LSPClientState => {
 		const state = createMockState();

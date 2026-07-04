@@ -15,6 +15,7 @@ All notable changes to pi-lens will be documented in this file.
 ### Fixed
 
 - **`lsp_diagnostics` now stops opening files in the language server once the turn is abandoned** (#343) — the batch and directory scans thread the tool-call + turn (`ctx.signal`) abort signal into their concurrency fan-out, so an Escape/abort mid-scan stops scheduling new files (each in-flight file stays bounded by `waitMs`) and returns partial results, instead of grinding the whole capped batch into the server after the agent has moved on.
+- **LSP nav requests retry once on `ContentModified` instead of returning empty** (#238 Item 2) — when a file changes under an in-flight `definition`/`references`/`hover`/etc. request the server rejects with `ContentModified` (-32801); `safeSendRequest` now does a single safe retry against the fresh state (correctness-under-edit is the hot path), returning empty only if it still can't answer. `RequestCancelled`/`ServerCancelled` are surfaced as "no result" (no retry) and `RequestFailed` (-32803) is treated as permanent — the JSON-RPC error code is now discriminated rather than blanket-rethrown.
 
 ## [3.8.65] - 2026-07-04
 

@@ -2116,23 +2116,42 @@ async function safeSendRequest<T>(
 		signal.addEventListener("abort", onAbort, { once: true });
 	}
 
-	try {
-		// Only pass a token when cancellation is wired, so the call shape is
-		// unchanged for the (many) requests without a signal.
-		return (await (tokenSource
+	// Only pass a token when cancellation is wired, so the call shape is unchanged
+	// for the (many) requests without a signal.
+	const send = () =>
+		tokenSource
 			? connection.sendRequest(
 					method as never,
 					params as never,
 					tokenSource.token as never,
 				)
-			: connection.sendRequest(method as never, params as never))) as T;
-	} catch (err) {
-		if (isStreamError(err) || isCancellationError(err)) {
-			// Stream destroyed, or we cancelled the request on abort — either way
-			// there is no result to return.
-			return undefined;
+			: connection.sendRequest(method as never, params as never);
+
+	try {
+		// One safe retry on ContentModified (-32801): the document changed under
+		// us, so the server discarded the request. A single retry beats returning
+		// empty — correctness-under-edit is pi-lens's whole hot path (#238 Item 2).
+		const MAX_ATTEMPTS = 2;
+		for (let attempt = 1; ; attempt++) {
+			try {
+				return (await send()) as T;
+			} catch (err) {
+				if (isStreamError(err) || isCancellationError(err)) {
+					// Stream destroyed, or we cancelled the request on abort — either
+					// way there is no result to return.
+					return undefined;
+				}
+				if (isContentModifiedError(err)) {
+					// Retry once (unless we've since been aborted); if it's still
+					// ContentModified after that, return empty rather than throwing a
+					// code callers don't understand. RequestFailed (-32803) and other
+					// codes are permanent and fall through to the rethrow below.
+					if (attempt < MAX_ATTEMPTS && !signal?.aborted) continue;
+					return undefined;
+				}
+				throw err;
+			}
 		}
-		throw err;
 	} finally {
 		if (signal && onAbort) signal.removeEventListener("abort", onAbort);
 		tokenSource?.dispose();
@@ -2146,6 +2165,13 @@ async function safeSendRequest<T>(
 function isCancellationError(err: unknown): boolean {
 	const code = (err as { code?: unknown } | null)?.code;
 	return code === -32800 || code === -32802;
+}
+
+// `ContentModified` (-32801): the document changed while the request was in
+// flight, so the server couldn't answer against a consistent state. Retryable —
+// the only LSP error code worth a second attempt on the edit hot path (#238).
+function isContentModifiedError(err: unknown): boolean {
+	return (err as { code?: unknown } | null)?.code === -32801;
 }
 
 // Helper to detect stream destruction / connection disposal errors.
