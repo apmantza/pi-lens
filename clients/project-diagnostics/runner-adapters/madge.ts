@@ -48,7 +48,7 @@ export function circularDepsToProjectDiagnostics(
 	for (const dep of circular) {
 		const key = cycleMembers(dep)
 			.map((f) => resolveCyclePath(cwd, f))
-			.sort()
+			.sort((a, b) => a.localeCompare(b))
 			.join("|");
 		if (seen.has(key)) continue;
 		seen.add(key);
