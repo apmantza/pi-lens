@@ -408,6 +408,7 @@ function scheduleStartupScans(
 		gitleaksClient,
 		trivyClient,
 		astGrepClient,
+		depChecker,
 	} = deps;
 
 	// Some background scans are CPU-heavy and arrive on the event loop
@@ -667,6 +668,37 @@ function scheduleStartupScans(
 		});
 		dbg(
 			`session_start gitleaks: ${result.findings.length} findings (${Date.now() - startMs}ms)`,
+		);
+	});
+
+	// madge — whole-project circular-dependency detection. Session-start + cached
+	// (uniform with knip/jscpd/gitleaks) so lens_diagnostics mode=full reads it
+	// from the `madge` cache via the extractor registry — never a fresh scan.
+	runTask("madge", async () => {
+		if (!(await depChecker.ensureAvailable())) {
+			if (!runtime.isCurrentSession(sessionGeneration)) return;
+			dbg("session_start madge: not available");
+			return;
+		}
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+		const cached = cacheManager.readCache<{ circular: unknown[] }>(
+			"madge",
+			analysisRoot,
+		);
+		if (cached) {
+			dbg(
+				`session_start madge: cache hit (${cached.data.circular.length} cycles)`,
+			);
+			return;
+		}
+		const startMs = Date.now();
+		const result = await depChecker.scanProject(analysisRoot);
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+		cacheManager.writeCache("madge", result, analysisRoot, {
+			scanDurationMs: Date.now() - startMs,
+		});
+		dbg(
+			`session_start madge: ${result.circular.length} circular dependency chain(s) (${Date.now() - startMs}ms)`,
 		);
 	});
 

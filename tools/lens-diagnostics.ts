@@ -20,8 +20,10 @@ import type { CacheManager } from "../clients/cache-manager.js";
 import {
 	loadProjectDiagnosticsDeltaReport,
 	loadProjectDiagnosticsSnapshot,
+	PROJECT_DIAGNOSTICS_CACHE_VERSION,
 	reconcileProjectDiagnosticsSnapshot,
 } from "../clients/project-diagnostics/cache.js";
+import { extractCachedProjectDiagnostics } from "../clients/project-diagnostics/extractors.js";
 import { scanProjectDiagnostics } from "../clients/project-diagnostics/scanner.js";
 import type {
 	ProjectDiagnostic,
@@ -102,8 +104,11 @@ export function createLensDiagnosticsTool(
 			"errors from earlier turns are visible even if they dropped from turn-end context.\n\n" +
 			"mode=full: EXPENSIVE active scan. Runs project-wide LSP diagnostics for " +
 			"all supported files (including unedited files), then merges/deduplicates " +
-			"that with mode=all cached runner state. Optional refreshRunners=cheap " +
-			"also scans cheap project runners (tree-sitter + fact-rules) and caches them.",
+			"that with mode=all cached runner state. Optional refreshRunners=cheap/all/cached " +
+			"folds in project-wide runner findings: the in-process scanners (tree-sitter + " +
+			"fact-rules + ast-grep) plus the CACHED heavyweight analyzers jscpd (copy-paste) " +
+			"and madge (circular deps) — read from the session-start/turn-end caches, never " +
+			"re-launched here.",
 		promptSnippet:
 			"Use lens_diagnostics mode=all to verify no blocking errors remain; use mode=full for expensive project-wide checks",
 		renderResult: compactRenderResult<{
@@ -164,7 +169,7 @@ export function createLensDiagnosticsTool(
 					],
 					{
 						description:
-							"mode=full only: false/none = LSP + widget state only. cached = include cached project-runner snapshot. cheap = refresh tree-sitter + fact-rules first. all currently aliases cheap and is reserved for future heavyweight runners.",
+							"mode=full only: false/none = LSP + widget state only. cached = include cached project-runner snapshot + cached jscpd/madge findings. cheap = refresh the in-process runners (tree-sitter + fact-rules + ast-grep) first, plus cached jscpd/madge. all = same as cheap (jscpd/madge are always read from cache, never re-launched here).",
 					},
 				),
 			),
@@ -230,7 +235,7 @@ export function createLensDiagnosticsTool(
 				// Stream a throttled progress bar: the full scan is opaque for minutes
 				// otherwise.
 				const onProgress = makeProgressReporter(onUpdate);
-				return formatFullMode(cwd, severity, getLspService(), {
+				return formatFullMode(cwd, severity, getLspService(), cacheManager, {
 					refreshRunners,
 					maxProjectFiles,
 					maxLspFiles,
@@ -596,6 +601,43 @@ function shouldRefreshProjectDiagnostics(value: unknown): boolean {
 	return value === "cheap" || value === "all";
 }
 
+/** True when full mode should include project-runner state at all (any non-none refreshRunners). */
+function shouldIncludeProjectRunners(value: unknown): boolean {
+	return shouldRefreshProjectDiagnostics(value) || value === "cached";
+}
+
+/**
+ * Merge cache-derived diagnostics from the analyzer extractors (jscpd, madge,
+ * gitleaks, knip …) into the scanned project snapshot: append to the existing
+ * one (recording the runners), or synthesize a minimal snapshot when there was
+ * no in-process scan. Returns the snapshot unchanged when there is nothing extra.
+ */
+function foldExtraDiagnosticsIntoSnapshot(
+	snapshot: ProjectDiagnosticsSnapshot | undefined,
+	extra: ProjectDiagnostic[],
+	runners: string[],
+	cwd: string,
+): ProjectDiagnosticsSnapshot | undefined {
+	if (extra.length === 0) return snapshot;
+	if (snapshot) {
+		const merged = new Set([...snapshot.runners, ...runners]);
+		return {
+			...snapshot,
+			diagnostics: [...snapshot.diagnostics, ...extra],
+			runners: [...merged],
+		};
+	}
+	return {
+		version: PROJECT_DIAGNOSTICS_CACHE_VERSION,
+		cwd,
+		tier: "all",
+		scannedAt: new Date().toISOString(),
+		diagnostics: extra,
+		filesScanned: 0,
+		runners,
+	};
+}
+
 async function getProjectDiagnosticsSnapshotForFullMode(
 	cwd: string,
 	options: {
@@ -628,6 +670,7 @@ async function formatFullMode(
 	cwd: string,
 	severity: string,
 	lspService: LSPServiceLike,
+	cacheManager: CacheManager,
 	options: {
 		refreshRunners?: unknown;
 		maxProjectFiles?: number;
@@ -663,9 +706,22 @@ async function formatFullMode(
 	const lspResults = rawLspResults.filter((result) =>
 		includeFile(result.filePath),
 	);
-	const projectSnapshot = filterProjectDiagnosticsSnapshot(
+	const scannedSnapshot = filterProjectDiagnosticsSnapshot(
 		rawProjectSnapshot,
 		includeFile,
+	);
+	// Fold in the cached heavyweight-analyzer findings (jscpd, madge, gitleaks,
+	// knip …) via the extractor registry — cache-only reads, never a fresh scan,
+	// so mode=full can't relaunch or contend with the background runs. Only when
+	// the caller opted into project-runner state.
+	const extracted = shouldIncludeProjectRunners(options.refreshRunners)
+		? extractCachedProjectDiagnostics(cacheManager, cwd)
+		: { diagnostics: [], runners: [] };
+	const projectSnapshot = foldExtraDiagnosticsIntoSnapshot(
+		scannedSnapshot,
+		extracted.diagnostics.filter((d) => includeFile(d.filePath)),
+		extracted.runners,
+		cwd,
 	);
 	const projectDelta = filterProjectDiagnosticsDeltaReport(
 		loadProjectDiagnosticsDeltaReport(cwd),
