@@ -234,6 +234,14 @@ function notifyWriteBudgetMs(): number {
 	return Number.isFinite(raw) && raw > 0 ? raw : 2000;
 }
 
+// Budget for one project-wide `workspace/diagnostic` pull (#387 Item 2). Larger
+// than a per-file wait — it's a single request but scans the whole program —
+// yet bounded so a hung server still falls back to the per-file path.
+function workspacePullBudgetMs(): number {
+	const raw = Number(process.env.PI_LENS_LSP_WORKSPACE_PULL_MS);
+	return Number.isFinite(raw) && raw > 0 ? raw : 30_000;
+}
+
 // Hard cap on the workspace-diagnostics walk. Even though this is an explicit,
 // user-invoked project-wide tool, the walk must be bounded so a misrooted run
 // (e.g. cwd that resolves to $HOME) can't enumerate an entire home tree (#250).
@@ -1903,14 +1911,32 @@ export class LSPService {
 		// in-flight touch each) and parallelize ACROSS servers — real parallelism
 		// where it exists (a mixed TS+Python repo runs both), no flooding where it
 		// doesn't. Capped so a many-language monorepo can't spawn unbounded groups.
-		const byServer = new Map<string, string[]>();
+		const byServer = new Map<
+			string,
+			{ files: string[]; multiServer: boolean }
+		>();
 		for (const filePath of files) {
-			const primary = getServersForFileWithConfig(filePath)[0]?.id ?? "none";
-			const list = byServer.get(primary);
-			if (list) list.push(filePath);
-			else byServer.set(primary, [filePath]);
+			const servers = getServersForFileWithConfig(filePath);
+			const primary = servers[0]?.id ?? "none";
+			const group = byServer.get(primary);
+			if (group) {
+				group.files.push(filePath);
+				if (servers.length > 1) group.multiServer = true;
+			} else {
+				byServer.set(primary, {
+					files: [filePath],
+					multiServer: servers.length > 1,
+				});
+			}
 		}
 		const groups = [...byServer.values()];
+		// Opt-in project-wide pull: one `workspace/diagnostic` per server instead of
+		// N per-file opens (#387 Item 2). Gated off by default — a cold server can
+		// answer with an empty/partial report that reads as a false "all clean", and
+		// the pull covers only the primary server (files with auxiliary scanners
+		// would lose those). Enabled per group only when the server advertises it and
+		// no file in the group has an auxiliary; any miss falls back to per-file.
+		const workspacePullEnabled = process.env.PI_LENS_LSP_WORKSPACE_PULL === "1";
 
 		// Start marker: without this a hang leaves no trace that the sweep even
 		// began (the completion log below never fires). Per-file `lsp_touch_file`
@@ -1994,7 +2020,18 @@ export class LSPService {
 					const gi = nextGroup;
 					nextGroup += 1;
 					if (gi >= groups.length) return;
-					for (const filePath of groups[gi]) {
+					const group = groups[gi];
+					// Fast path: one project-wide pull for the whole group (opt-in).
+					if (workspacePullEnabled && !group.multiServer) {
+						const pulled = await this.tryWorkspacePull(group.files, perFileMs);
+						if (pulled) {
+							for (const result of pulled) results.push(result);
+							completed += group.files.length;
+							options.onProgress?.(completed, files.length);
+							continue;
+						}
+					}
+					for (const filePath of group.files) {
 						// Honor cancellation between files (#341); already-collected
 						// results are returned as a partial.
 						if (signal?.aborted) return;
@@ -2024,6 +2061,43 @@ export class LSPService {
 		});
 
 		return results.filter(Boolean);
+	}
+
+	/**
+	 * #387 Item 2: one `workspace/diagnostic` pull covering a whole server group,
+	 * instead of N per-file opens. Returns per-file results (files absent from the
+	 * report are reported clean), or `undefined` when the server doesn't advertise
+	 * workspace pull / the pull fails — the caller then falls back to per-file.
+	 */
+	private async tryWorkspacePull(
+		groupFiles: string[],
+		perFileMs: number,
+	): Promise<LSPWorkspaceDiagnosticResult[] | undefined> {
+		try {
+			const first = groupFiles[0];
+			if (!first) return undefined;
+			const spawned = await this.getClientForFile(first, perFileMs);
+			if (!spawned) return undefined;
+			if (
+				!spawned.client.getWorkspaceDiagnosticsSupport().workspaceDiagnostics
+			) {
+				return undefined;
+			}
+			const report = await spawned.client.requestWorkspaceDiagnostics(
+				Math.max(perFileMs, workspacePullBudgetMs()),
+			);
+			if (!report) return undefined;
+			const byPath = new Map<string, import("./client.js").LSPDiagnostic[]>();
+			for (const entry of report) {
+				byPath.set(normalizeMapKey(entry.filePath), entry.diagnostics);
+			}
+			return groupFiles.map((filePath) => {
+				const diagnostics = byPath.get(normalizeMapKey(filePath)) ?? [];
+				return { filePath, diagnostics, count: diagnostics.length };
+			});
+		} catch {
+			return undefined;
+		}
 	}
 
 	/**

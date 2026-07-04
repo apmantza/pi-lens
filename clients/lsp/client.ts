@@ -104,6 +104,12 @@ export interface LSPWorkspaceEdit {
 export interface LSPWorkspaceDiagnosticsSupport {
 	advertised: boolean;
 	mode: "pull" | "push-only";
+	/**
+	 * The server advertises `workspace/diagnostic` (a single project-wide pull),
+	 * distinct from `mode: "pull"` which only reflects per-document
+	 * `textDocument/diagnostic` support.
+	 */
+	workspaceDiagnostics: boolean;
 	diagnosticProviderKind: string;
 }
 
@@ -221,6 +227,13 @@ export interface LSPClientInfo {
 	getTrackedDiagnosticPaths(): string[];
 	/** Capability snapshot for workspace diagnostics support */
 	getWorkspaceDiagnosticsSupport(): LSPWorkspaceDiagnosticsSupport;
+	/**
+	 * Issue one project-wide `workspace/diagnostic` pull. Resolves per-file
+	 * reports, or `undefined` when unsupported/dead/timed-out/malformed.
+	 */
+	requestWorkspaceDiagnostics(
+		budgetMs: number,
+	): Promise<Array<{ filePath: string; diagnostics: LSPDiagnostic[] }> | undefined>;
 	/** Capability snapshot for navigation/edit operations */
 	getOperationSupport(): LSPOperationSupport;
 	/** Commands the server advertised for workspace/executeCommand (the allowlist) */
@@ -750,6 +763,7 @@ export function applyDynamicCapabilities(state: LSPClientState): void {
 		state.workspaceDiagnosticsSupport = {
 			advertised: true,
 			mode: "pull",
+			workspaceDiagnostics: registeredMethods.has("workspace/diagnostic"),
 			diagnosticProviderKind: "dynamic",
 		};
 	} else if (
@@ -760,6 +774,7 @@ export function applyDynamicCapabilities(state: LSPClientState): void {
 		state.workspaceDiagnosticsSupport = {
 			advertised: false,
 			mode: "push-only",
+			workspaceDiagnostics: false,
 			diagnosticProviderKind: "none",
 		};
 	}
@@ -1002,6 +1017,47 @@ async function clientRequestPullDiagnostics(
 			: { status: "clean" };
 	} catch {
 		return { status: "unavailable" };
+	}
+}
+
+/**
+ * One project-wide `workspace/diagnostic` pull — a single request that returns
+ * diagnostics for every document the server knows, instead of opening N files.
+ * Returns per-file reports, or `undefined` on unsupported/dead/timeout/malformed
+ * (caller falls back to the per-file path). `unchanged`-kind items carry no
+ * diagnostics and are skipped, so a file absent from the result is "clean".
+ */
+export async function clientRequestWorkspaceDiagnostics(
+	state: LSPClientState,
+	budgetMs: number,
+): Promise<Array<{ filePath: string; diagnostics: LSPDiagnostic[] }> | undefined> {
+	if (!isClientAlive(state)) return undefined;
+	if (!state.workspaceDiagnosticsSupport.workspaceDiagnostics) return undefined;
+	try {
+		const report = await withTimeout(
+			safeSendRequest<{
+				items?: Array<{
+					uri?: string;
+					kind?: string;
+					items?: LSPDiagnostic[];
+				}>;
+			}>(state.connection, "workspace/diagnostic", { previousResultIds: [] }),
+			Math.max(1, budgetMs),
+		);
+		if (!report || !Array.isArray(report.items)) return undefined;
+		const out: Array<{ filePath: string; diagnostics: LSPDiagnostic[] }> = [];
+		for (const item of report.items) {
+			// Only "full" reports carry items; "unchanged" means "same as last pull"
+			// (none, since previousResultIds is empty on this one-shot request).
+			if (!item?.uri || item.kind !== "full") continue;
+			out.push({
+				filePath: uriToPath(item.uri),
+				diagnostics: normalizeLspDiagnostics(item.items ?? []),
+			});
+		}
+		return out;
+	} catch {
+		return undefined;
 	}
 }
 
@@ -1749,6 +1805,10 @@ export async function createLSPClient(options: {
 			return state.workspaceDiagnosticsSupport;
 		},
 
+		requestWorkspaceDiagnostics(budgetMs: number) {
+			return clientRequestWorkspaceDiagnostics(state, budgetMs);
+		},
+
 		getOperationSupport() {
 			return state.operationSupport;
 		},
@@ -2092,6 +2152,7 @@ function detectWorkspaceDiagnosticsSupport(
 		return {
 			advertised: false,
 			mode: "push-only",
+			workspaceDiagnostics: false,
 			diagnosticProviderKind: "none",
 		};
 	}
@@ -2100,6 +2161,8 @@ function detectWorkspaceDiagnosticsSupport(
 		return {
 			advertised: diagnosticProvider,
 			mode: diagnosticProvider ? "pull" : "push-only",
+			// The boolean form of diagnosticProvider only signals document pull.
+			workspaceDiagnostics: false,
 			diagnosticProviderKind: "boolean",
 		};
 	}
@@ -2108,6 +2171,9 @@ function detectWorkspaceDiagnosticsSupport(
 		return {
 			advertised: true,
 			mode: "pull",
+			workspaceDiagnostics:
+				(diagnosticProvider as { workspaceDiagnostics?: unknown })
+					.workspaceDiagnostics === true,
 			diagnosticProviderKind: "object",
 		};
 	}
@@ -2115,6 +2181,7 @@ function detectWorkspaceDiagnosticsSupport(
 	return {
 		advertised: false,
 		mode: "push-only",
+		workspaceDiagnostics: false,
 		diagnosticProviderKind: typeof diagnosticProvider,
 	};
 }

@@ -116,6 +116,7 @@ function createMockState(overrides?: Partial<LSPClientState>): LSPClientState {
 		workspaceDiagnosticsSupport: {
 			advertised: false,
 			mode: "push-only",
+			workspaceDiagnostics: false,
 			diagnosticProviderKind: "none",
 		},
 		operationSupport: {
@@ -484,6 +485,7 @@ describe("clientWaitForDiagnostics — pull mode (#240)", () => {
 			workspaceDiagnosticsSupport: {
 				advertised: true,
 				mode: "pull",
+				workspaceDiagnostics: false,
 				diagnosticProviderKind: "object",
 			},
 		});
@@ -695,6 +697,7 @@ describe("applyDynamicCapabilities", () => {
 			workspaceDiagnosticsSupport: {
 				advertised: true,
 				mode: "pull",
+				workspaceDiagnostics: false,
 				diagnosticProviderKind: "object",
 			},
 		});
