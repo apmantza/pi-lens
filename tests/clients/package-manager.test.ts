@@ -24,6 +24,7 @@ import {
 	allAvailableGlobalBinDirs,
 	detectNodePackageManager,
 	execArgs,
+	findGlobalBinary,
 	formatRunScript,
 	globalInstallArgs,
 	installArgs,
@@ -271,5 +272,56 @@ describe("allAvailableGlobalBinDirs", () => {
 		onlyAvailable();
 		expect(await allAvailableGlobalBinDirs()).toEqual([]);
 		expect(safeSpawnAsync).not.toHaveBeenCalled();
+	});
+});
+
+describe("findGlobalBinary", () => {
+	/**
+	 * Point npm's global prefix at a temp dir. npm's bin dir is `<prefix>/bin` on
+	 * Unix but the prefix itself on Windows — mirror `globalBinDirsFor` so the
+	 * file lands where `findGlobalBinary` actually looks.
+	 */
+	function npmGlobalPrefix(): { prefix: string; binDir: string } {
+		const prefix = tmpDir();
+		const binDir =
+			process.platform === "win32" ? prefix : path.join(prefix, "bin");
+		fs.mkdirSync(binDir, { recursive: true });
+		onlyAvailable("npm");
+		vi.mocked(safeSpawnAsync).mockResolvedValue({
+			stdout: `${prefix}\n`,
+			stderr: "",
+			status: 0,
+		});
+		return { prefix, binDir };
+	}
+
+	it("finds a bare binary in a manager's global bin dir (Unix)", async () => {
+		setPlatform("linux");
+		const { binDir } = npmGlobalPrefix();
+		fs.writeFileSync(path.join(binDir, "prisma"), "#!/bin/sh\n");
+		expect(await findGlobalBinary("prisma")).toBe(
+			path.resolve(path.join(binDir, "prisma")),
+		);
+	});
+
+	it("prefers the .cmd shim on Windows", async () => {
+		setPlatform("win32");
+		const { binDir } = npmGlobalPrefix();
+		fs.writeFileSync(path.join(binDir, "prisma.cmd"), "@echo off\n");
+		fs.writeFileSync(path.join(binDir, "prisma"), "#!/bin/sh\n");
+		expect(await findGlobalBinary("prisma")).toBe(
+			path.resolve(path.join(binDir, "prisma.cmd")),
+		);
+	});
+
+	it("returns undefined when the binary is absent", async () => {
+		setPlatform("linux");
+		npmGlobalPrefix();
+		expect(await findGlobalBinary("does-not-exist")).toBeUndefined();
+	});
+
+	it("returns undefined when no manager is installed", async () => {
+		onlyAvailable();
+		expect(await findGlobalBinary("prisma")).toBeUndefined();
 	});
 });

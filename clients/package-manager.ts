@@ -265,3 +265,35 @@ export async function allAvailableGlobalBinDirs(): Promise<string[]> {
 	}
 	return dirs;
 }
+
+/**
+ * Locate a globally-installed tool binary across every installed manager's
+ * global bin dir (npm/pnpm/yarn/bun) by direct file lookup — no spawn, no PATH
+ * reliance. Returns the full path, or `undefined` if not found.
+ *
+ * This is the manager-agnostic replacement for a bare `<tool> --version` PATH
+ * probe: it finds tools installed via `pnpm add -g` / `bun add -g` (whose bin
+ * dirs are often not on PATH) and survives the PATH-cache staleness that follows
+ * an `install -g`. On Windows it checks the `.cmd` shim, then `.exe`, then the
+ * bare name; on Unix just the bare name.
+ */
+export async function findGlobalBinary(
+	command: string,
+	windowsExt = ".cmd",
+): Promise<string | undefined> {
+	const candidates = onWindows()
+		? [`${command}${windowsExt}`, `${command}.exe`, command]
+		: [command];
+	try {
+		for (const binDir of await allAvailableGlobalBinDirs()) {
+			for (const name of candidates) {
+				const full = path.join(binDir, name);
+				if (fs.existsSync(full)) return full;
+			}
+		}
+	} catch {
+		// Manager probes can fail (missing binary, spawn error) — treat as "not
+		// found" so callers fall through to their next resolution step.
+	}
+	return undefined;
+}
