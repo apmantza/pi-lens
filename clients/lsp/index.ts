@@ -222,6 +222,18 @@ export interface LSPWorkspaceDiagnosticResult {
 
 const WORKSPACE_DIAGNOSTICS_CONCURRENCY = 8;
 
+// The notify write (didOpen/didChange) is normally instant, but it awaits a
+// JSON-RPC send that BACKPRESSURES when the server's stdin isn't being drained
+// (a wedged/CPU-bound server, e.g. TypeScript mid-recheck). Unbounded, that
+// write parks every touchFile caller: the pre-dispatch sync, the dispatch LSP
+// runner (which then rides to its 30s dispatcher timeout — the observed ~31s
+// edits), and the workspace sweep. Bounding it here degrades a wedged server to
+// "no fresh diagnostics" instead of hanging the edit, for ALL callers.
+function notifyWriteBudgetMs(): number {
+	const raw = Number(process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS);
+	return Number.isFinite(raw) && raw > 0 ? raw : 2000;
+}
+
 // Hard cap on the workspace-diagnostics walk. Even though this is an explicit,
 // user-invoked project-wide tool, the walk must be bounded so a misrooted run
 // (e.g. cwd that resolves to $HOME) can't enumerate an entire home tree (#250).
@@ -1008,18 +1020,35 @@ export class LSPService {
 		const diagnosticBaselines = new Map(
 			spawned.map((entry) => [entry.client, entry.client.diagnosticsVersion]),
 		);
+		let notifyWriteTimedOut = false;
 		if (!notifySkipped) {
-			await Promise.all(
-				spawned.map((entry) =>
-					entry.client.notify.open(
-						filePath,
-						content,
-						languageId,
-						undefined,
-						silent,
+			// Bounded so a backpressured write can't hang the caller (see
+			// notifyWriteBudgetMs). On timeout we proceed: the diagnostics wait below
+			// is separately bounded and simply returns no fresh diagnostics.
+			const wrote = await withDeadline(
+				Promise.all(
+					spawned.map((entry) =>
+						entry.client.notify.open(
+							filePath,
+							content,
+							languageId,
+							undefined,
+							silent,
+						),
 					),
 				),
+				{ ms: notifyWriteBudgetMs(), onTimeout: "undefined", onReject: "undefined" },
 			);
+			if (wrote === undefined) {
+				notifyWriteTimedOut = true;
+				logLatency({
+					type: "phase",
+					phase: "lsp_notify_timeout",
+					filePath: normalizedPath,
+					durationMs: Date.now() - startedAt,
+					metadata: { source, clientScope, serverCount: spawned.length },
+				});
+			}
 		}
 
 		let diagnosticsTimedOut = false;
@@ -1140,6 +1169,7 @@ export class LSPService {
 				failureKind: "success",
 				collectedDiagnostics: collected?.length,
 				notifySkipped,
+				notifyWriteTimedOut,
 				diagnosticsTimedOut,
 			},
 		});
@@ -1855,11 +1885,29 @@ export class LSPService {
 			const raw = Number(process.env.PI_LENS_LSP_WORKSPACE_PER_FILE_MS);
 			return Number.isFinite(raw) && raw > 0 ? raw : 15_000;
 		})();
-		const results: LSPWorkspaceDiagnosticResult[] = new Array(files.length);
-		let nextIndex = 0;
+		const results: LSPWorkspaceDiagnosticResult[] = [];
 		let completed = 0;
 		let timedOutFiles = 0;
 		let lastHeartbeat = Date.now();
+
+		// Group files by their primary language server (#387). tsserver — and most
+		// servers — is single-threaded per project: N concurrent touches to ONE
+		// server don't parallelize, they queue. That inflates the working set (each
+		// didOpen can force a project recheck) and cascades per-file-budget timeouts
+		// by queue position (observed: 51/123 files "timed out" purely from being
+		// behind others in an 8-wide flat pool). So serialize WITHIN a server (one
+		// in-flight touch each) and parallelize ACROSS servers — real parallelism
+		// where it exists (a mixed TS+Python repo runs both), no flooding where it
+		// doesn't. Capped so a many-language monorepo can't spawn unbounded groups.
+		const byServer = new Map<string, string[]>();
+		for (const filePath of files) {
+			const primary = getServersForFileWithConfig(filePath)[0]?.id ?? "none";
+			const list = byServer.get(primary);
+			if (list) list.push(filePath);
+			else byServer.set(primary, [filePath]);
+		}
+		const groups = [...byServer.values()];
+
 		// Start marker: without this a hang leaves no trace that the sweep even
 		// began (the completion log below never fires). Per-file `lsp_touch_file`
 		// phases + these heartbeats let a hang be bracketed to a file/time.
@@ -1868,65 +1916,82 @@ export class LSPService {
 			phase: "lsp_workspace_diagnostics_start",
 			filePath: root,
 			durationMs: 0,
-			metadata: { fileCount: files.length, maxFiles, perFileMs },
+			metadata: {
+				fileCount: files.length,
+				maxFiles,
+				perFileMs,
+				serverGroups: byServer.size,
+			},
 		});
-		const workers = Math.min(WORKSPACE_DIAGNOSTICS_CONCURRENCY, files.length);
+
+		const processFile = async (filePath: string): Promise<void> => {
+			try {
+				const content = await nodeFs.promises.readFile(filePath, "utf-8");
+				// onTimeout:"undefined" so a hung file yields no diagnostics and the
+				// worker moves on; a real touchFile rejection still propagates to the
+				// catch below and is recorded as an error.
+				const diagnostics = await withDeadline(
+					this.touchFile(filePath, content, {
+						diagnostics: "document",
+						collectDiagnostics: true,
+						clientScope: "all",
+						source: "lens_diagnostics_full",
+					}),
+					{ ms: perFileMs, onTimeout: "undefined" },
+				);
+				if (diagnostics === undefined) timedOutFiles += 1;
+				results.push({
+					filePath,
+					diagnostics: diagnostics ?? [],
+					count: diagnostics?.length ?? 0,
+				});
+			} catch (err) {
+				results.push({
+					filePath,
+					diagnostics: [],
+					count: 0,
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
+			completed += 1;
+			// Time-based heartbeat (every ~10s): a hang shows the last heartbeat
+			// then silence, so latency.log pinpoints how far it got.
+			if (Date.now() - lastHeartbeat >= 10_000) {
+				lastHeartbeat = Date.now();
+				logLatency({
+					type: "phase",
+					phase: "lsp_workspace_diagnostics_progress",
+					filePath: root,
+					durationMs: Date.now() - startedAt,
+					metadata: {
+						completed,
+						total: files.length,
+						timedOutFiles,
+						aborted: signal?.aborted ?? false,
+					},
+				});
+			}
+		};
+
+		// One worker per server group (serial within a server), up to the
+		// concurrency cap across distinct servers.
+		let nextGroup = 0;
+		const groupWorkers = Math.min(
+			WORKSPACE_DIAGNOSTICS_CONCURRENCY,
+			groups.length,
+		);
 		await Promise.all(
-			Array.from({ length: workers }, async () => {
+			Array.from({ length: groupWorkers }, async () => {
 				while (true) {
-					// Honor cancellation: a long sweep must stop when the agent/user
-					// aborts the turn rather than chew through the remaining files
-					// (#341). Already-collected results are returned as a partial.
 					if (signal?.aborted) return;
-					const index = nextIndex;
-					nextIndex += 1;
-					if (index >= files.length) return;
-					const filePath = files[index];
-					try {
-						const content = await nodeFs.promises.readFile(filePath, "utf-8");
-						// onTimeout:"undefined" so a hung file yields no diagnostics and the
-						// worker moves on; a real touchFile rejection still propagates to the
-						// catch below and is recorded as an error.
-						const diagnostics = await withDeadline(
-							this.touchFile(filePath, content, {
-								diagnostics: "document",
-								collectDiagnostics: true,
-								clientScope: "all",
-								source: "lens_diagnostics_full",
-							}),
-							{ ms: perFileMs, onTimeout: "undefined" },
-						);
-						if (diagnostics === undefined) timedOutFiles += 1;
-						results[index] = {
-							filePath,
-							diagnostics: diagnostics ?? [],
-							count: diagnostics?.length ?? 0,
-						};
-					} catch (err) {
-						results[index] = {
-							filePath,
-							diagnostics: [],
-							count: 0,
-							error: err instanceof Error ? err.message : String(err),
-						};
-					}
-					completed += 1;
-					// Time-based heartbeat (every ~10s): a hang shows the last heartbeat
-					// then silence, so latency.log pinpoints how far it got.
-					if (Date.now() - lastHeartbeat >= 10_000) {
-						lastHeartbeat = Date.now();
-						logLatency({
-							type: "phase",
-							phase: "lsp_workspace_diagnostics_progress",
-							filePath: root,
-							durationMs: Date.now() - startedAt,
-							metadata: {
-								completed,
-								total: files.length,
-								timedOutFiles,
-								aborted: signal?.aborted ?? false,
-							},
-						});
+					const gi = nextGroup;
+					nextGroup += 1;
+					if (gi >= groups.length) return;
+					for (const filePath of groups[gi]) {
+						// Honor cancellation between files (#341); already-collected
+						// results are returned as a partial.
+						if (signal?.aborted) return;
+						await processFile(filePath);
 					}
 				}
 			}),
@@ -1943,7 +2008,8 @@ export class LSPService {
 					(sum, result) => sum + (result?.count ?? 0),
 					0,
 				),
-				concurrency: WORKSPACE_DIAGNOSTICS_CONCURRENCY,
+				serverGroups: byServer.size,
+				concurrency: groupWorkers,
 				maxFiles,
 				timedOutFiles,
 				aborted: signal?.aborted ?? false,
