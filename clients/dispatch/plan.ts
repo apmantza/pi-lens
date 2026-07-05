@@ -14,7 +14,6 @@ interface CapabilityMatrixEntry {
 	name: string;
 	capabilities: CapabilityDimension[];
 	writeGroups: RunnerGroup[];
-	fullOnlyGroups?: RunnerGroup[];
 }
 
 function primary(kind: FileKind): RunnerGroup {
@@ -43,13 +42,6 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<
 				filterKinds: ["jsts"],
 			},
 		],
-		fullOnlyGroups: [
-			{
-				mode: "fallback",
-				runnerIds: ["biome-lint"],
-				filterKinds: ["jsts"],
-			},
-		],
 	},
 	python: {
 		name: "Python Linting",
@@ -60,9 +52,6 @@ export const LANGUAGE_CAPABILITY_MATRIX: Record<
 			{ mode: "fallback", runnerIds: ["mypy"], filterKinds: ["python"] },
 			{ mode: "all", runnerIds: ["tree-sitter"], filterKinds: ["python"] },
 			{ mode: "all", runnerIds: ["fact-rules"], filterKinds: ["python"] },
-		],
-		fullOnlyGroups: [
-			{ mode: "fallback", runnerIds: ["python-slop"], filterKinds: ["python"] },
 		],
 	},
 	go: {
@@ -272,44 +261,6 @@ function toWritePlan(entry: CapabilityMatrixEntry): ToolPlan {
 	};
 }
 
-function toFullPlan(kind: FileKind, entry: CapabilityMatrixEntry): ToolPlan {
-	if (kind === "jsts") {
-		const primaryGroup = primary("jsts");
-		return {
-			name: "JavaScript/TypeScript Full Lint",
-			groups: [
-				primaryGroup,
-				{ mode: "all", runnerIds: ["tree-sitter"], filterKinds: ["jsts"] },
-				{ mode: "all", runnerIds: ["ast-grep-napi"], filterKinds: ["jsts"] },
-				...(entry.fullOnlyGroups ?? []),
-				{
-					mode: "fallback",
-					runnerIds: ["eslint", "oxlint", "biome-check-json"],
-					filterKinds: ["jsts"],
-				},
-			],
-		};
-	}
-
-	if (kind === "python") {
-		const primaryGroup = primary("python");
-		return {
-			name: "Python Full Lint",
-			groups: [
-				primaryGroup,
-				{ mode: "fallback", runnerIds: ["ruff-lint"], filterKinds: ["python"] },
-				{ mode: "all", runnerIds: ["tree-sitter"], filterKinds: ["python"] },
-				...(entry.fullOnlyGroups ?? []),
-			],
-		};
-	}
-
-	return {
-		name: entry.name,
-		groups: [...entry.writeGroups, ...(entry.fullOnlyGroups ?? [])],
-	};
-}
-
 export const TOOL_PLANS: Record<string, ToolPlan> = Object.fromEntries(
 	Object.entries(LANGUAGE_CAPABILITY_MATRIX).map(([kind, entry]) => [
 		kind,
@@ -324,10 +275,3 @@ export function getToolPlan(kind: FileKind): ToolPlan | undefined {
 export function getAllToolPlans(): Record<string, ToolPlan> {
 	return TOOL_PLANS;
 }
-
-export const FULL_LINT_PLANS: Record<string, ToolPlan> = Object.fromEntries(
-	Object.entries(LANGUAGE_CAPABILITY_MATRIX).map(([kind, entry]) => [
-		kind,
-		toFullPlan(kind as FileKind, entry),
-	]),
-) as Record<string, ToolPlan>;

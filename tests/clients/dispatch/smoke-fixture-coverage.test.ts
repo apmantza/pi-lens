@@ -25,11 +25,9 @@ const EXEMPT = new Map<string, string>([
 	["tree-sitter", "structural; runs on every dispatch"],
 	["fact-rules", "structural; runs on every dispatch"],
 	["ast-grep-napi", "structural; covered by ast-grep-napi unit tests"],
-	["python-slop", "structural slop rules; not a spawn-a-tool runner"],
 	["spotbugs", "dynamic group (withSpotbugsGroup); opt-in, JVM bytecode + flag-gated"],
 	// Per-language ALTERNATES whose primary IS covered for that language.
 	["eslint", "JS alt; oxlint covered in lint, eslint covered in --autofix"],
-	["biome-lint", "JS alt; biome covered in --format/--autofix"],
 	["biome-check-json", "JSON biome alt"],
 	["credo", "Elixir alt; elixir-check covered"],
 	["detekt", "Kotlin alt to ktlint; wired+consistency-tested, live CI-deferred"],

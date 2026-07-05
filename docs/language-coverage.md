@@ -9,7 +9,7 @@ Dispatch is diagnostics-oriented: automatic formatting and safe autofix happen i
 | Language              | LSP | Dispatch Runners                                                                                               | Formatter               |
 | --------------------- | --- | -------------------------------------------------------------------------------------------------------------- | ----------------------- |
 | JavaScript/TypeScript | ✓   | lsp, ts-lsp, biome-check-json, tree-sitter, ast-grep-napi, type-safety, similarity, fact-rules, eslint, oxlint | biome, prettier         |
-| Python                | ✓   | lsp, pyright, ruff-lint, tree-sitter, python-slop                                                              | ruff, black             |
+| Python                | ✓   | lsp, pyright, ruff-lint, tree-sitter                                                                           | ruff, black             |
 | Go                    | ✓   | lsp, go-vet, golangci-lint, tree-sitter                                                                        | gofmt                   |
 | Rust                  | ✓   | lsp, rust-clippy, tree-sitter                                                                                  | rustfmt                 |
 | Ruby                  | ✓   | lsp, rubocop, tree-sitter                                                                                      | rubocop, standardrb     |
