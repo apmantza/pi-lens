@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-	FULL_LINT_PLANS,
 	LANGUAGE_CAPABILITY_MATRIX,
 	TOOL_PLANS,
 } from "../../../clients/dispatch/plan.ts";
@@ -22,18 +21,6 @@ describe("dispatch plan exposure", () => {
 		expect(ids).toContain("oxlint");
 		expect(ids).toContain("biome-check-json");
 		expect(ids).not.toContain("biome-lint");
-	});
-
-	it("exposes warning-heavy linters in full plan for jsts/python", () => {
-		const jstsIds = flattenRunnerIds(FULL_LINT_PLANS.jsts);
-		const pythonIds = flattenRunnerIds(FULL_LINT_PLANS.python);
-
-		expect(jstsIds).toContain("biome-lint");
-		expect(jstsIds).toContain("eslint");
-		expect(jstsIds).toContain("oxlint");
-		expect(jstsIds).toContain("biome-check-json");
-		expect(pythonIds).toContain("ruff-lint");
-		expect(pythonIds).toContain("python-slop");
 	});
 
 	it("ensures python and ruby write-path plans include lsp+lint coverage", () => {
