@@ -68,6 +68,12 @@ jobs:
           npx --yes tree-sitter-cli@0.25.6 build --wasm \
             --output "$GITHUB_WORKSPACE/tree-sitter-swift-built.wasm" swift-src
           ls -la "$GITHUB_WORKSPACE/tree-sitter-swift-built.wasm"
+      - name: Upload the built Swift wasm (to vendor the from-source fix, #423)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tree-sitter-swift-built-wasm
+          path: tree-sitter-swift-built.wasm
+          if-no-files-found: error
       - name: Run the freshly-built Swift wasm through the guard
         run: |
           cp "$GITHUB_WORKSPACE/tree-sitter-swift-built.wasm" grammars/tree-sitter-swift.wasm
