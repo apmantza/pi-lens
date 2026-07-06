@@ -1550,7 +1550,7 @@ export default function (pi: ExtensionAPI) {
 			complexityClient.isSupportedFile(filePath) &&
 			!runtime.complexityBaselines.has(filePath)
 		) {
-			const baseline = complexityClient.analyzeFile(filePath);
+			const baseline = await complexityClient.analyzeFile(filePath);
 			if (baseline) {
 				runtime.complexityBaselines.set(filePath, baseline);
 				const { captureSnapshot } = await import(

@@ -4,6 +4,10 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Complexity metrics are now language-agnostic and tree-sitter-based** (#402) — `ComplexityClient` no longer uses the `typescript` compiler; it computes cyclomatic + cognitive complexity, nesting depth, function metrics, LOC/comments, code entropy, and AI-slop indicators over the shared tree-sitter client via a per-language node table. Beyond JS/TS it now also analyzes **Python, Go, and Rust** (adding a language is one table entry). Halstead volume is dropped (its maintainability-index term is replaced with the Halstead-free variant `171 − 0.23·CC − 16.2·ln(LOC)` + comment bonus); the dead `formatMetrics`/`checkThresholds` methods are removed. These are silent session-summary baselines, so the metric surface is unchanged aside from the dropped `halsteadVolume` field. `analyzeFile` is now async (grammar parse). Only the sonar/quality **rules** still import `typescript` — the last #402 Phase-2 step before the dependency is dropped.
+
 ### Fixed
 
 - **Tree-sitter no longer leaks WASM heap memory across a session** (#417) — web-tree-sitter `Tree` objects live in the WASM heap, which JS GC does **not** reclaim (0.25 has no auto-free); the tree cache dropped evicted/invalidated/overwritten trees with `Map.delete()` and never called `tree.delete()`, so every removed tree leaked. The cache bounded entry count (50) but not the heap, so it grew unbounded over a long editing session. `TreeCache` now frees the WASM tree on every removal path — eviction, same-file re-parse (same-key overwrite), on-disk change/deletion invalidations, `invalidate()`, and `clear()` — via a guarded `freeTree()` (best-effort; tolerates a dead/aborted runtime). The retained-for-incremental path (content changed, tree kept) is deliberately not freed. Safe because every consumer uses a parsed tree transiently (parse → extract → discard) and eviction only ever targets the oldest entry, never a just-parsed tree still in use.

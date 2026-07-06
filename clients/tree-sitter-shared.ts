@@ -90,3 +90,41 @@ const EXT_TO_LANG: Record<string, string> = {
 export function resolveTreeSitterLanguage(filePath: string): string | undefined {
 	return EXT_TO_LANG[path.extname(filePath).toLowerCase()];
 }
+
+// --- Generic node-walk utilities (shared by the fact extractors and the
+//     complexity client — anything that consumes a parsed tree) ---
+
+// biome-ignore lint/suspicious/noExplicitAny: web-tree-sitter node (see tree-sitter-client.ts)
+export type TsNode = any;
+
+/**
+ * Parse `content` for `filePath` via the shared client and return the root node,
+ * or null when the grammar is unavailable / parse fails / wasm aborted. init()
+ * lazily loads the grammar (memoized) and must run before parseFile.
+ */
+export async function parseTreeSitterRoot(
+	filePath: string,
+	content: string,
+): Promise<TsNode | null> {
+	const languageId = resolveTreeSitterLanguage(filePath);
+	const client = getSharedTreeSitterClient();
+	if (!languageId || !client || !(await client.init())) return null;
+	const tree = await client.parseFile(filePath, languageId, content);
+	return tree ? tree.rootNode : null;
+}
+
+export function childrenOfType(node: TsNode, type: string): TsNode[] {
+	return (node.children ?? []).filter((c: TsNode) => c && c.type === type);
+}
+
+export function firstChildOfType(node: TsNode, type: string): TsNode | undefined {
+	return (node.children ?? []).find((c: TsNode) => c && c.type === type);
+}
+
+/** Depth-first walk, calling `visit` on every node (pre-order = source order). */
+export function walk(node: TsNode, visit: (n: TsNode) => void): void {
+	visit(node);
+	for (const child of node.children ?? []) {
+		if (child) walk(child, visit);
+	}
+}
