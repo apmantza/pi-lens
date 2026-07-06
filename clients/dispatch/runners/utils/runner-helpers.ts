@@ -368,41 +368,6 @@ export async function resolveAvailableOrInstall(
 }
 
 // =============================================================================
-// CONFIG FILE FINDER FACTORY
-// =============================================================================
-
-/**
- * Create a config file finder for rule directories.
- * Common pattern used by slop runners and similar tools.
- */
-export function createConfigFinder(
-	ruleDirName: string,
-): (cwd: string) => string | undefined {
-	return (cwd: string): string | undefined => {
-		// Check for local config first
-		const localPath = path.join(cwd, "rules", ruleDirName, ".sgconfig.yml");
-		if (fs.existsSync(localPath)) {
-			return localPath;
-		}
-
-		// Fall back to extension rules
-		const extensionPaths = [
-			`rules/${ruleDirName}/.sgconfig.yml`,
-			`../rules/${ruleDirName}/.sgconfig.yml`,
-		];
-
-		for (const candidate of extensionPaths) {
-			const fullPath = path.resolve(cwd, candidate);
-			if (fs.existsSync(fullPath)) {
-				return fullPath;
-			}
-		}
-
-		return undefined;
-	};
-}
-
-// =============================================================================
 // SHARED AST-GREP AVAILABILITY
 // =============================================================================
 
