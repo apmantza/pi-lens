@@ -4,6 +4,10 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **Unified tree-sitter parsing on a single shared client** (refs #402) — the dispatch tree-sitter runner, project scanner, `module-report`, and review-graph each held their **own** `TreeSitterClient`, so a file written on the hot path was parsed multiple times with no shared tree cache, and each subsystem re-loaded grammars independently. They now share one process-wide client via `clients/tree-sitter-shared.ts` (`getSharedTreeSitterClient` + a single `resolveTreeSitterLanguage` ext→grammar map), so a file parsed by one subsystem is served from the shared tree cache for the others (one parse per write). This also fixes a latent gap: web-tree-sitter's WASM runtime is module-level (one per process), so an Emscripten `abort()` corrupts it for **everyone** — previously only the runner tracked the poison flag while the scanner/module-report/review-graph kept calling the dead runtime; `markTreeSitterWasmAborted()` now makes every consumer skip. Foundation for porting the syntactic TS-AST consumers (fact providers, complexity, rules) off the `typescript` dependency onto tree-sitter.
+
 ### Removed
 
 - **Removed the deprecated built-in TypeScript type-checker fallback** (#402, Phase 1) — the `ts-lsp` dispatch runner and its `TypeScriptClient` (`typescript-client.ts`) are deleted, along with the dead `TypeScriptService` (`ts-service.ts`, which had no consumers). TS type-checking is now **LSP-only** (tsserver via the unified `lsp` runner, which is default-on and was already the primary path — `ts-lsp` merely deferred to it). **Behaviour change:** running with `--no-lsp` no longer provides TS *type* diagnostics; the write-path linters (eslint/oxlint/biome) and structural analysis (tree-sitter, ast-grep, fact-rules) are unaffected. This removes the only `ts.createProgram`/`createLanguageService`/`TypeChecker` usage in the codebase — the first step toward dropping the heavyweight `typescript` dependency entirely (remaining usage is purely syntactic AST parsing, portable to tree-sitter).

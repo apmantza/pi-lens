@@ -13,7 +13,7 @@ import {
 import type { Diagnostic } from "../dispatch/types.js";
 import { isTestFile } from "../file-utils.js";
 import { collectSourceFilesAsync } from "../source-filter.js";
-import { TreeSitterClient } from "../tree-sitter-client.js";
+import { getSharedTreeSitterClient } from "../tree-sitter-shared.js";
 import { TreeSitterQueryLoader } from "../tree-sitter-query-loader.js";
 import {
 	PROJECT_DIAGNOSTICS_CACHE_VERSION,
@@ -58,11 +58,6 @@ const TREE_SITTER_EXT_TO_LANG: Record<string, string> = {
 	".rb": "ruby",
 };
 
-let sharedTreeSitterClient: TreeSitterClient | undefined;
-function getTreeSitterClient(): TreeSitterClient {
-	sharedTreeSitterClient ??= new TreeSitterClient();
-	return sharedTreeSitterClient;
-}
 
 function normalizeSeverity(
 	severity: string | undefined,
@@ -132,8 +127,8 @@ async function scanTreeSitter(
 	cwd: string,
 	files: string[],
 ): Promise<ProjectDiagnostic[]> {
-	const client = getTreeSitterClient();
-	if (!client.isAvailable()) return [];
+	const client = getSharedTreeSitterClient();
+	if (!client || !client.isAvailable()) return [];
 	if (!(await client.init())) return [];
 
 	const loader = new TreeSitterQueryLoader();

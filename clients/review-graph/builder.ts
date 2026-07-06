@@ -15,7 +15,7 @@ import { normalizeMapKey } from "../path-utils.js";
 import { collectProjectSourceFilesAsync } from "../project-scan-policy.js";
 import { resolveImportToFiles } from "./import-resolvers.js";
 import { RUNTIME_CONFIG } from "../runtime-config.js";
-import { TreeSitterClient } from "../tree-sitter-client.js";
+import { getSharedTreeSitterClient } from "../tree-sitter-shared.js";
 import {
 	type ExtractedSymbols,
 	TreeSitterSymbolExtractor,
@@ -56,7 +56,6 @@ const MAIN_KIND_EXTENSIONS: string[] = Array.from(MAIN_KINDS).flatMap(
 	(kind) => KIND_EXTENSIONS[kind as keyof typeof KIND_EXTENSIONS] ?? [],
 );
 const CHANGED_SYMBOLS_PREFIX = "session.reviewGraph.changedSymbols:";
-const treeSitterClient = new TreeSitterClient();
 const extractorCache = new Map<string, TreeSitterSymbolExtractor>();
 
 // Per-invocation Promise cache: deduplicates concurrent buildOrUpdateGraph calls
@@ -918,7 +917,9 @@ async function getExtractor(
 	languageId: string,
 ): Promise<TreeSitterSymbolExtractor | null> {
 	if (extractorCache.has(languageId)) return extractorCache.get(languageId)!;
-	const extractor = new TreeSitterSymbolExtractor(languageId, treeSitterClient);
+	const client = getSharedTreeSitterClient();
+	if (!client) return null;
+	const extractor = new TreeSitterSymbolExtractor(languageId, client);
 	const ok = await extractor.init();
 	if (!ok) return null;
 	extractorCache.set(languageId, extractor);
@@ -930,6 +931,8 @@ async function extractTreeSitterSymbols(
 	languageId: string,
 ): Promise<ExtractedSymbols> {
 	const empty: ExtractedSymbols = { symbols: [], refs: [], imports: [] };
+	const treeSitterClient = getSharedTreeSitterClient();
+	if (!treeSitterClient) return empty;
 	const initialized = await treeSitterClient.init();
 	if (!initialized) return empty;
 	const tree = await treeSitterClient.parseFile(filePath, languageId);

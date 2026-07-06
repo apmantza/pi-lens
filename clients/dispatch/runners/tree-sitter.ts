@@ -14,7 +14,13 @@ import {
 	computeImpactCascade,
 	recordEntitySnapshotDiff,
 } from "../../review-graph/service.js";
-import { TreeSitterClient } from "../../tree-sitter-client.js";
+import type { TreeSitterClient } from "../../tree-sitter-client.js";
+import {
+	getSharedTreeSitterClient,
+	isTreeSitterWasmAborted,
+	markTreeSitterWasmAborted,
+	resolveTreeSitterLanguage,
+} from "../../tree-sitter-shared.js";
 import { logTreeSitter } from "../../tree-sitter-logger.js";
 import {
 	isDisabledQueryFilePath,
@@ -30,15 +36,6 @@ import type {
 	RunnerResult,
 } from "../types.js";
 
-// Module-level singleton: web-tree-sitter WASM must only be initialized once per process.
-// Creating a new TreeSitterClient() on every write resets TRANSFER_BUFFER (a module-level
-// WASM pointer) — concurrent writes race on _ts_init() and corrupt shared WASM state → crash.
-let _sharedClient: TreeSitterClient | null = null;
-// Once the wasm runtime aborts, the entire module-level wasm heap is corrupted — no
-// recovery is possible within this process. Flag it and skip all further tree-sitter work
-// rather than re-invoking the dead runtime (which prints "Aborted()" on every call and
-// leaks memory on each retry).
-let _wasmAborted = false;
 const blastCooldownByFile = new Map<string, number>();
 const BLAST_COOLDOWN_MS = 5_000;
 
@@ -337,14 +334,6 @@ function isLineInModifiedRanges(
 	return ranges.some((r) => line >= r.start && line <= r.end);
 }
 
-function getSharedClient(): TreeSitterClient | null {
-	if (_wasmAborted) return null;
-	if (!_sharedClient) {
-		_sharedClient = new TreeSitterClient();
-	}
-	return _sharedClient;
-}
-
 /**
  * Calculate total lines changed in modified ranges.
  * Used to skip expensive entity extraction for trivial changes.
@@ -359,47 +348,6 @@ function getTotalLinesChanged(
 /** Threshold: skip entity extraction for changes under 5 lines */
 const ENTITY_EXTRACTION_LINE_THRESHOLD = 5;
 
-function resolveTreeSitterLanguage(filePath: string): string | undefined {
-	const ext = path.extname(filePath).toLowerCase();
-	const EXT_TO_LANG: Record<string, string> = {
-		".ts": "typescript",
-		".mts": "typescript",
-		".cts": "typescript",
-		".tsx": "tsx",
-		".js": "javascript",
-		".mjs": "javascript",
-		".cjs": "javascript",
-		".jsx": "javascript",
-		".py": "python",
-		".go": "go",
-		".rs": "rust",
-		".rb": "ruby",
-		".c": "c",
-		".h": "c",
-		".cc": "cpp",
-		".cpp": "cpp",
-		".cxx": "cpp",
-		".c++": "cpp",
-		".hh": "cpp",
-		".hpp": "cpp",
-		".hxx": "cpp",
-		".inl": "cpp",
-		".ipp": "cpp",
-		".tpp": "cpp",
-		".txx": "cpp",
-		".cu": "cpp",
-		".hip": "cpp",
-		".cs": "csharp",
-		".php": "php",
-		".phtml": "php",
-		".php3": "php",
-		".php4": "php",
-		".php5": "php",
-		".css": "css",
-	};
-	return EXT_TO_LANG[ext];
-}
-
 const treeSitterRunner: RunnerDefinition = {
 	id: "tree-sitter",
 	appliesTo: ["jsts", "python", "go", "rust", "ruby", "cxx", "csharp", "php", "css"],
@@ -409,13 +357,13 @@ const treeSitterRunner: RunnerDefinition = {
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		// Use singleton client — WASM must never be re-initialized after first call
-		const client = getSharedClient();
+		const client = getSharedTreeSitterClient();
 		logTreeSitter({ phase: "runner_start", filePath: ctx.filePath });
 		if (!client || !client.isAvailable()) {
 			logTreeSitter({
 				phase: "runner_skip",
 				filePath: ctx.filePath,
-				reason: _wasmAborted ? "wasm_aborted" : "client_unavailable",
+				reason: isTreeSitterWasmAborted() ? "wasm_aborted" : "client_unavailable",
 				status: "skipped",
 			});
 			return { status: "skipped", diagnostics: [], semantic: "none" };
@@ -652,8 +600,7 @@ const treeSitterRunner: RunnerDefinition = {
 						// Emscripten abort() corrupts the entire module-level wasm heap.
 						// Poison the singleton so no further queries attempt to use the dead runtime.
 						if (msg.includes("Aborted") || msg.includes("abort()")) {
-							_wasmAborted = true;
-							_sharedClient = null;
+							markTreeSitterWasmAborted();
 							logTreeSitter({
 								phase: "query_error",
 								filePath,
