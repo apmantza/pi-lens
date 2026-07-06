@@ -14,6 +14,10 @@
  */
 
 import { beforeAll, describe, expect, it } from "vitest";
+import {
+	grammarBlockReason,
+	LANGUAGE_TO_GRAMMAR,
+} from "../../clients/grammar-source.js";
 import { TreeSitterClient } from "../../clients/tree-sitter-client.js";
 import { TreeSitterSymbolExtractor } from "../../clients/tree-sitter-symbol-extractor.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
@@ -118,7 +122,10 @@ beforeAll(async () => {
 
 describe("tree-sitter import extraction (#249) — per supported grammar", () => {
 	for (const [lang, c] of Object.entries(CASES)) {
-		it(`extracts imports for ${lang}`, async () => {
+		// Skip grammars blocked on this runtime (e.g. swift on Node >= 24, #432) —
+		// they are intentionally never loaded, so extraction can't run.
+		const blocked = Boolean(grammarBlockReason(LANGUAGE_TO_GRAMMAR[lang]));
+		it.skipIf(blocked)(`extracts imports for ${lang}`, async () => {
 			const env = setupTestEnvironment(`pi-lens-imp-${lang}-`);
 			try {
 				const fp = createTempFile(env.tmpDir, c.file, c.src);
