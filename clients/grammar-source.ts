@@ -54,29 +54,84 @@ export const GRAMMAR_FILES: string[] = [
 	...new Set(Object.values(LANGUAGE_TO_GRAMMAR)),
 ];
 
+/** The runtime signals a grammar block predicate may key off. */
+export interface GrammarRuntime {
+	/** Node major version (0 if unparseable). */
+	nodeMajor: number;
+	/** True on a V8-backed runtime (Node); false under bun (JavaScriptCore). */
+	isV8: boolean;
+	platform: NodeJS.Platform;
+}
+
+interface GrammarBlock {
+	/** Is this grammar unsafe to LOAD on the given runtime? */
+	blocked: (rt: GrammarRuntime) => boolean;
+	/** Human-readable reason, surfaced in logs + the grammar-health guard. */
+	reason: string;
+}
+
 /**
- * Grammars we vendor (build from source + commit, shipped via files[]) and must
- * NEVER lazy-fetch from the CDN — the prebuilt wasm crashes the runtime, so a
- * fetch of the CDN copy would reintroduce the crash. If the committed bytes are
- * somehow absent, degrade to "grammar unavailable" instead of fetching.
- * Mirrors `vendored` in scripts/grammars.lock.json (VENDORED in download-grammars).
- * tree-sitter-swift @ tree-sitter-wasms 0.1.13 fatally crashes Node 24 (#423).
+ * Grammars that FATALLY crash the host runtime on specific engines/versions and
+ * therefore must NOT be loaded there. The crash is an uncatchable process abort
+ * (V8 Turboshaft WASM OOM — `Fatal process out of memory: Zone`), so it cannot be
+ * degraded in-process with try/catch; the only safe option is to skip the load
+ * entirely and degrade the feature (no structural symbols for that language).
+ *
+ * Membership is GUARD-DRIVEN, not hand-maintained: the grammar-health nightly
+ * (`scripts/check-grammar-load.mjs`) is what proves a grammar crashes and thus
+ * belongs here, and what proves a future build is safe enough to remove it.
+ *
+ * tree-sitter-swift crashes on Node >= 24 across all OSes under memory pressure
+ * (#423/#432); building from source (an earlier vendoring attempt, #426) does not
+ * reliably dodge it. bun (JavaScriptCore) and Node 20/22 are unaffected, so the
+ * block is gated on V8 + Node major.
  */
-export const VENDORED_GRAMMARS: ReadonlySet<string> = new Set([
-	"tree-sitter-swift.wasm",
-]);
+export const BLOCKED_GRAMMARS: Record<string, GrammarBlock> = {
+	"tree-sitter-swift.wasm": {
+		blocked: ({ isV8, nodeMajor }) => isV8 && nodeMajor >= 24,
+		reason:
+			"tree-sitter-swift crashes the runtime on Node >= 24 (V8 Turboshaft WASM OOM, #423/#432); skipped so the process degrades gracefully instead of aborting.",
+	},
+};
+
+/** Runtime signals for the currently-running process. */
+export function currentGrammarRuntime(): GrammarRuntime {
+	const m = /^v?(\d+)/.exec(process.versions?.node ?? "");
+	return {
+		nodeMajor: m ? Number(m[1]) : 0,
+		isV8: !process.versions.bun && Boolean(process.versions.v8),
+		platform: process.platform,
+	};
+}
+
+/**
+ * The block reason if `filename` must NOT be loaded on `rt` (default: the running
+ * process), else null. Callers skip the load and degrade to "grammar unavailable".
+ */
+export function grammarBlockReason(
+	filename: string,
+	rt: GrammarRuntime = currentGrammarRuntime(),
+): string | null {
+	// Diagnostic escape hatch (grammar-health probe only): force-load a blocked
+	// grammar to test whether a fresh build / newer runtime survives — the signal
+	// that a block can be LIFTED. Never set in normal operation: it disables the
+	// crash protection and can abort the process.
+	if (process.env.PILENS_UNSAFE_FORCE_GRAMMAR_LOAD === "1") return null;
+	const block = BLOCKED_GRAMMARS[filename];
+	return block?.blocked(rt) ? block.reason : null;
+}
 
 /**
  * Fetch one grammar wasm into `destDir` (atomic via a temp file). Returns true
  * on success. Never throws — a failed fetch (offline, 4xx) degrades to "grammar
- * unavailable" so callers can decide how to handle it. VENDORED grammars are
- * never fetched (their crashing CDN copy must not overwrite the committed one).
+ * unavailable" so callers can decide how to handle it. A grammar that crashes the
+ * runtime is protected at LOAD time (BLOCKED_GRAMMARS / grammarBlockReason), not
+ * by refusing to download it.
  */
 export async function downloadGrammar(
 	destDir: string,
 	filename: string,
 ): Promise<boolean> {
-	if (VENDORED_GRAMMARS.has(filename)) return false;
 	try {
 		fs.mkdirSync(destDir, { recursive: true });
 		const res = await fetch(`${GRAMMAR_CDN_BASE}/${filename}`);

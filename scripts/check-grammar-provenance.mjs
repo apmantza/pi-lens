@@ -23,7 +23,6 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import {
 	CORE,
-	expectedVersion,
 	loadManifest,
 	sha256,
 	sidecarPathFor,
@@ -66,10 +65,9 @@ for (const filename of wasmFiles) {
 		problems.push(`${filename}: unreadable sidecar — ${err.message}`);
 		continue;
 	}
-	const wantVersion = expectedVersion(filename, manifest);
-	if (meta.version !== wantVersion) {
+	if (meta.version !== manifest.version) {
 		problems.push(
-			`${filename}: sidecar version "${meta.version}" != expected "${wantVersion}" (stale grammar)`,
+			`${filename}: sidecar version "${meta.version}" != manifest "${manifest.version}" (stale grammar)`,
 		);
 	}
 	if (meta.sha256 !== expected) {

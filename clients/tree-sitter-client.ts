@@ -20,7 +20,11 @@ import { createRequire } from "node:module";
 import * as path from "node:path";
 import { loadWebTreeSitter } from "./deps/web-tree-sitter.js";
 import { getProjectIgnoreMatcher, isExcludedDirName } from "./file-utils.js";
-import { downloadGrammar, LANGUAGE_TO_GRAMMAR } from "./grammar-source.js";
+import {
+	downloadGrammar,
+	grammarBlockReason,
+	LANGUAGE_TO_GRAMMAR,
+} from "./grammar-source.js";
 import { resolvePackagePath } from "./package-root.js";
 
 const _require = createRequire(import.meta.url);
@@ -379,6 +383,15 @@ export class TreeSitterClient {
 		const grammarFile = LANGUAGE_TO_GRAMMAR[languageId];
 		if (!grammarFile) {
 			this.dbg(`No grammar file for ${languageId}`);
+			return null;
+		}
+
+		// A grammar that fatally crashes this runtime (uncatchable V8 abort) must
+		// never be loaded — skip it and degrade to "unavailable" (#423/#432). The
+		// grammar-health nightly is what decides membership of BLOCKED_GRAMMARS.
+		const blockReason = grammarBlockReason(grammarFile);
+		if (blockReason) {
+			this.dbg(`Grammar ${grammarFile} blocked on this runtime — ${blockReason}`);
 			return null;
 		}
 
