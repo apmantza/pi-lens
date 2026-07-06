@@ -1,14 +1,14 @@
 import { readFileSync } from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
-	downloadGrammar,
+	BLOCKED_GRAMMARS,
 	GRAMMAR_FILES,
+	grammarBlockReason,
+	type GrammarRuntime,
 	LANGUAGE_TO_GRAMMAR,
 	TREE_SITTER_WASMS_VERSION,
-	VENDORED_GRAMMARS,
 } from "../../clients/grammar-source.js";
 
 // The postinstall pre-fetch (scripts/download-grammars.js) runs before the TS
@@ -47,16 +47,49 @@ describe("grammar-source ↔ download-grammars stay in sync", () => {
 	});
 });
 
-describe("VENDORED grammars are never lazy-fetched (#423)", () => {
-	it("lists the crashing prebuilt swift grammar", () => {
-		expect(VENDORED_GRAMMARS.has("tree-sitter-swift.wasm")).toBe(true);
+describe("BLOCKED_GRAMMARS runtime guard (#432)", () => {
+	const rt = (over: Partial<GrammarRuntime> = {}): GrammarRuntime => ({
+		nodeMajor: 24,
+		isV8: true,
+		platform: "linux",
+		...over,
 	});
 
-	it("downloadGrammar refuses a vendored grammar without fetching the CDN copy", async () => {
-		const fetchSpy = vi.spyOn(globalThis, "fetch");
-		const ok = await downloadGrammar(os.tmpdir(), "tree-sitter-swift.wasm");
-		expect(ok).toBe(false); // degrade — never overwrite the committed wasm
-		expect(fetchSpy).not.toHaveBeenCalled();
-		fetchSpy.mockRestore();
+	afterEach(() => {
+		delete process.env.PILENS_UNSAFE_FORCE_GRAMMAR_LOAD;
+	});
+
+	it("blocks swift on V8 + Node >= 24 (all platforms)", () => {
+		for (const platform of ["linux", "darwin", "win32"] as const) {
+			expect(
+				grammarBlockReason("tree-sitter-swift.wasm", rt({ platform })),
+			).toMatch(/crashes the runtime/);
+		}
+	});
+
+	it("does NOT block swift on Node <= 22", () => {
+		expect(
+			grammarBlockReason("tree-sitter-swift.wasm", rt({ nodeMajor: 22 })),
+		).toBeNull();
+	});
+
+	it("does NOT block swift under bun / non-V8 (JavaScriptCore)", () => {
+		expect(
+			grammarBlockReason("tree-sitter-swift.wasm", rt({ isV8: false })),
+		).toBeNull();
+	});
+
+	it("does not block a normal grammar", () => {
+		expect(grammarBlockReason("tree-sitter-typescript.wasm", rt())).toBeNull();
+	});
+
+	it("PILENS_UNSAFE_FORCE_GRAMMAR_LOAD bypasses the block (probe hatch)", () => {
+		expect(grammarBlockReason("tree-sitter-swift.wasm", rt())).not.toBeNull();
+		process.env.PILENS_UNSAFE_FORCE_GRAMMAR_LOAD = "1";
+		expect(grammarBlockReason("tree-sitter-swift.wasm", rt())).toBeNull();
+	});
+
+	it("swift is the only currently-blocked grammar", () => {
+		expect(Object.keys(BLOCKED_GRAMMARS)).toEqual(["tree-sitter-swift.wasm"]);
 	});
 });

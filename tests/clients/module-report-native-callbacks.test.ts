@@ -8,8 +8,13 @@
 // rides `module_report.test.ts` where its grammar is already loaded).
 
 import { afterEach, describe, expect, it } from "vitest";
+import { grammarBlockReason } from "../../clients/grammar-source.js";
 import { moduleReport } from "../../clients/module-report.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+
+// Swift is blocked from loading on Node >= 24 (crashes the runtime, #432), so the
+// Swift slice can't parse there — skip it on affected runtimes (C++ still runs).
+const swiftBlocked = Boolean(grammarBlockReason("tree-sitter-swift.wasm"));
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -23,7 +28,7 @@ function makeEnv() {
 }
 
 describe("module_report — native-grammar callback slices (Swift/C++)", () => {
-	it("flags Swift strong vs weak self capture in closures", async () => {
+	it.skipIf(swiftBlocked)("flags Swift strong vs weak self capture in closures", async () => {
 		const env = makeEnv();
 		const sw = createTempFile(
 			env.tmpDir,
