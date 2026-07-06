@@ -55,14 +55,28 @@ export const GRAMMAR_FILES: string[] = [
 ];
 
 /**
+ * Grammars we vendor (build from source + commit, shipped via files[]) and must
+ * NEVER lazy-fetch from the CDN — the prebuilt wasm crashes the runtime, so a
+ * fetch of the CDN copy would reintroduce the crash. If the committed bytes are
+ * somehow absent, degrade to "grammar unavailable" instead of fetching.
+ * Mirrors `vendored` in scripts/grammars.lock.json (VENDORED in download-grammars).
+ * tree-sitter-swift @ tree-sitter-wasms 0.1.13 fatally crashes Node 24 (#423).
+ */
+export const VENDORED_GRAMMARS: ReadonlySet<string> = new Set([
+	"tree-sitter-swift.wasm",
+]);
+
+/**
  * Fetch one grammar wasm into `destDir` (atomic via a temp file). Returns true
  * on success. Never throws — a failed fetch (offline, 4xx) degrades to "grammar
- * unavailable" so callers can decide how to handle it.
+ * unavailable" so callers can decide how to handle it. VENDORED grammars are
+ * never fetched (their crashing CDN copy must not overwrite the committed one).
  */
 export async function downloadGrammar(
 	destDir: string,
 	filename: string,
 ): Promise<boolean> {
+	if (VENDORED_GRAMMARS.has(filename)) return false;
 	try {
 		fs.mkdirSync(destDir, { recursive: true });
 		const res = await fetch(`${GRAMMAR_CDN_BASE}/${filename}`);

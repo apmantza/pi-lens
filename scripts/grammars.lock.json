@@ -21,12 +21,20 @@
     "tree-sitter-python.wasm": "sha256:9056d0fb0c337810d019fae350e8167786119da98f0f282aceae7ab89ee8253b",
     "tree-sitter-ruby.wasm": "sha256:93a5022855314cdb45458c7bb026a24a0ebc3a5ff6439e542e881f14dfa13a39",
     "tree-sitter-rust.wasm": "sha256:4409921a70d0aa5bec7d1d7ce809a557a8ee1cf6ace901e3ac6a76e62cfea903",
-    "tree-sitter-swift.wasm": "sha256:41c4fdb2249a3aa6d87eed0d383081ff09725c2248b4977043a43825980ffcc7",
+    "tree-sitter-swift.wasm": "sha256:3df761e7f8e7065ba0d535895495b9aee19001e23fd44060269fc71f31e09dfb",
     "tree-sitter-toml.wasm": "sha256:7849ac8ce9d10a4684ca189ea8ad3654c20c38acb2d674a014a164398cbd37a2",
     "tree-sitter-tsx.wasm": "sha256:6aa3b2c70e76f5d48eafef1093e9c4de383e13f2fdde2f4e9b98a378f6a8f1b6",
     "tree-sitter-typescript.wasm": "sha256:8515404dceed38e1ed86aa34b09fcf3379fff1b4ff9dd3967bcd6d1eb5ac3d8f",
     "tree-sitter-vue.wasm": "sha256:6244521bb3fb60f34ce5f677f2af81facb2c38691193985ca5fa85e1b6f29250",
     "tree-sitter-yaml.wasm": "sha256:5dea7cfff83d41d8f87fb8e434e1a5b292c0d670bfcdc42cb2af420ef490dde5",
     "tree-sitter-zig.wasm": "sha256:59cc4531aa661e2de4c5bc04e4045b6bdd5d2bfa75045cbda5f673102d140eef"
+  },
+  "vendored": {
+    "tree-sitter-swift.wasm": {
+      "npmPackage": "tree-sitter-swift",
+      "version": "0.7.1",
+      "builtWith": "tree-sitter-cli@0.25.6",
+      "reason": "prebuilt tree-sitter-wasms@0.1.13 swift.wasm fatally crashes Node 24 (#423); built from source + committed instead of downloaded"
+    }
   }
 }

@@ -31,17 +31,28 @@ const PACKAGE = "tree-sitter-wasms";
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const MANIFEST_PATH = join(SCRIPT_DIR, "grammars.lock.json");
 
+export interface VendoredSource {
+	npmPackage: string;
+	version: string;
+	builtWith?: string;
+	reason?: string;
+}
+
 export interface GrammarManifest {
 	package: string;
 	version: string;
 	/** filename → "sha256:<hex>" */
 	grammars: Record<string, string>;
+	/** Per-grammar provenance override for VENDORED grammars (built from source,
+	 *  committed — not from `package@version`). filename → source metadata. */
+	vendored?: Record<string, VendoredSource>;
 }
 
 export interface GrammarSidecar {
 	npmPackage: string;
 	version: string;
 	sha256: string;
+	builtWith?: string;
 }
 
 export const GRAMMARS: string[] = [
@@ -93,6 +104,42 @@ export const CORE: string[] = [
 	"tree-sitter-java.wasm",
 ];
 
+// Grammars we build from source and commit (shipped as bytes via files[], NOT
+// downloaded) because the prebuilt CDN wasm crashes/is-incompatible with the pinned
+// web-tree-sitter. tree-sitter-swift @ tree-sitter-wasms 0.1.13 fatally crashes
+// Node 24 (#423); the from-source build survives (verified by the grammar-load
+// guard). Their provenance lives under `vendored` in grammars.lock.json.
+export const VENDORED: Record<string, VendoredSource> = {
+	"tree-sitter-swift.wasm": {
+		npmPackage: "tree-sitter-swift",
+		version: "0.7.1",
+		builtWith: "tree-sitter-cli@0.25.6",
+		reason:
+			"prebuilt tree-sitter-wasms@0.1.13 swift.wasm fatally crashes Node 24 (#423)",
+	},
+};
+
+export function isVendored(filename: string): boolean {
+	return filename in VENDORED;
+}
+
+/** The provenance version a grammar's sidecar must record — the per-grammar
+ *  vendored version if vendored, else the global tree-sitter-wasms version. */
+export function expectedVersion(
+	filename: string,
+	manifest: GrammarManifest,
+): string {
+	return manifest.vendored?.[filename]?.version ?? manifest.version;
+}
+
+/** The npmPackage a grammar's sidecar must record (vendored override or global). */
+export function expectedPackage(
+	filename: string,
+	manifest: GrammarManifest,
+): string {
+	return manifest.vendored?.[filename]?.npmPackage ?? manifest.package;
+}
+
 /** `sha256:<hex>` digest of a buffer, matching the manifest/sidecar format. */
 export function sha256(buf: Buffer | Uint8Array): string {
 	return `sha256:${createHash("sha256").update(buf).digest("hex")}`;
@@ -129,7 +176,7 @@ export function needsDownload(
 	} catch {
 		return true;
 	}
-	if (meta.version !== manifest.version) return true;
+	if (meta.version !== expectedVersion(filename, manifest)) return true;
 	const expected = manifest.grammars[filename];
 	if (expected && meta.sha256 !== expected) return true;
 	return false;
@@ -203,11 +250,25 @@ function parseArgs(argv: string[]): {
 	return out;
 }
 
-/** Regenerate grammars.lock.json by fetching every grammar and hashing it. */
+/** Regenerate grammars.lock.json by fetching every grammar and hashing it.
+ *  VENDORED grammars aren't on the CDN — hash their committed bytes instead, and
+ *  re-emit the `vendored` provenance section from VENDORED. */
 async function regenerateManifest(): Promise<void> {
 	console.error(`Regenerating manifest from ${PACKAGE}@${TREE_SITTER_WASMS_VERSION} …`);
+	const committedGrammarsDir = join(dirname(SCRIPT_DIR), "grammars");
 	const grammars: Record<string, string> = {};
 	for (const g of GRAMMARS) {
+		if (isVendored(g)) {
+			const committed = join(committedGrammarsDir, g);
+			if (!existsSync(committed)) {
+				throw new Error(
+					`vendored grammar ${g} not found at ${committed} — build + commit it before regenerating the manifest`,
+				);
+			}
+			grammars[g] = sha256(readFileSync(committed));
+			console.error(`  vendored ${g} (hashed committed bytes)`);
+			continue;
+		}
 		grammars[g] = sha256(await fetchGrammar(TREE_SITTER_WASMS_VERSION, g));
 		console.error(`  hashed ${g}`);
 	}
@@ -220,6 +281,7 @@ async function regenerateManifest(): Promise<void> {
 		package: PACKAGE,
 		version: TREE_SITTER_WASMS_VERSION,
 		grammars: sorted,
+		vendored: VENDORED,
 	};
 	writeFileSync(MANIFEST_PATH, `${JSON.stringify(manifest, null, 2)}\n`);
 	console.error(`Wrote ${MANIFEST_PATH} (${GRAMMARS.length} grammars).`);
@@ -235,7 +297,9 @@ async function main(): Promise<void> {
 	const grammarsDir = args.dest
 		? join(process.cwd(), args.dest)
 		: findGrammarsDir();
-	const list = args.core ? CORE : GRAMMARS;
+	// VENDORED grammars are committed bytes, not on the CDN — never download them
+	// (a fetch would pull the crashing prebuilt wasm over the good vendored one).
+	const list = (args.core ? CORE : GRAMMARS).filter((g) => !isVendored(g));
 
 	if (!existsSync(grammarsDir)) {
 		mkdirSync(grammarsDir, { recursive: true });

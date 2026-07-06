@@ -1,0 +1,7 @@
+{
+  "npmPackage": "tree-sitter-swift",
+  "version": "0.7.1",
+  "sha256": "sha256:3df761e7f8e7065ba0d535895495b9aee19001e23fd44060269fc71f31e09dfb",
+  "builtWith": "tree-sitter-cli@0.25.6",
+  "note": "Built from source (emscripten) because the prebuilt tree-sitter-wasms@0.1.13 swift.wasm fatally crashes Node 24 — pi-lens #423."
+}

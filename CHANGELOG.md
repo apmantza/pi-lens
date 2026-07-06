@@ -4,6 +4,10 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Swift files no longer crash `pi` on Node 24** (#423) — the prebuilt `tree-sitter-swift.wasm` (from `tree-sitter-wasms@0.1.13`) triggers a **fatal, uncatchable V8 crash** (`Fatal process out of memory: Zone`, in the background Turboshaft-WASM optimizer) the first time a `.swift` file is analyzed on **Node 24, every OS** — taking down the whole agent. pi-lens now **vendors a from-source-built Swift grammar** (`tree-sitter-swift@0.7.1` compiled with `tree-sitter-cli@0.25.6` + emscripten), which loads + parses cleanly, and ships it as committed bytes instead of downloading the crashing prebuilt one. Introduces a general **`VENDORED` grammar mechanism** (build-from-source grammars are excluded from CDN download, provenance-verified with a per-grammar version override, and never lazy-fetched), a **`npm run check:grammar-load`** guard that loads each grammar in an isolated child process, and a **nightly cross-OS grammar-health workflow** (which also rebuilds Swift from source) to catch any future crashing/incompatible grammar before it reaches a user.
+
 ### Changed
 
 - **Complexity metrics are now language-agnostic and tree-sitter-based** (#402) — `ComplexityClient` no longer uses the `typescript` compiler; it computes cyclomatic + cognitive complexity, nesting depth, function metrics, LOC/comments, code entropy, and AI-slop indicators over the shared tree-sitter client via a per-language node table. Beyond JS/TS it now also analyzes **Python, Go, and Rust** (adding a language is one table entry). Halstead volume is dropped (its maintainability-index term is replaced with the Halstead-free variant `171 − 0.23·CC − 16.2·ln(LOC)` + comment bonus); the dead `formatMetrics`/`checkThresholds` methods are removed. These are silent session-summary baselines, so the metric surface is unchanged aside from the dropped `halsteadVolume` field. `analyzeFile` is now async (grammar parse). Only the sonar/quality **rules** still import `typescript` — the last #402 Phase-2 step before the dependency is dropped.
