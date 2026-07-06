@@ -4,6 +4,10 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Tree-sitter no longer leaks WASM heap memory across a session** (#417) — web-tree-sitter `Tree` objects live in the WASM heap, which JS GC does **not** reclaim (0.25 has no auto-free); the tree cache dropped evicted/invalidated/overwritten trees with `Map.delete()` and never called `tree.delete()`, so every removed tree leaked. The cache bounded entry count (50) but not the heap, so it grew unbounded over a long editing session. `TreeCache` now frees the WASM tree on every removal path — eviction, same-file re-parse (same-key overwrite), on-disk change/deletion invalidations, `invalidate()`, and `clear()` — via a guarded `freeTree()` (best-effort; tolerates a dead/aborted runtime). The retained-for-incremental path (content changed, tree kept) is deliberately not freed. Safe because every consumer uses a parsed tree transiently (parse → extract → discard) and eviction only ever targets the oldest entry, never a just-parsed tree still in use.
+
 ### Changed
 
 - **Unified tree-sitter parsing on a single shared client** (refs #402) — the dispatch tree-sitter runner, project scanner, `module-report`, and review-graph each held their **own** `TreeSitterClient`, so a file written on the hot path was parsed multiple times with no shared tree cache, and each subsystem re-loaded grammars independently. They now share one process-wide client via `clients/tree-sitter-shared.ts` (`getSharedTreeSitterClient` + a single `resolveTreeSitterLanguage` ext→grammar map), so a file parsed by one subsystem is served from the shared tree cache for the others (one parse per write). This also fixes a latent gap: web-tree-sitter's WASM runtime is module-level (one per process), so an Emscripten `abort()` corrupts it for **everyone** — previously only the runner tracked the poison flag while the scanner/module-report/review-graph kept calling the dead runtime; `markTreeSitterWasmAborted()` now makes every consumer skip. Foundation for porting the syntactic TS-AST consumers (fact providers, complexity, rules) off the `typescript` dependency onto tree-sitter.
