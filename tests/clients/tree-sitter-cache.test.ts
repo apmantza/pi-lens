@@ -120,6 +120,42 @@ describe("TreeCache frees WASM trees on removal (#417)", () => {
 		expect(a.delete).toHaveBeenCalledTimes(1);
 	});
 
+	it("frees the superseded tree after an incremental update", async () => {
+		const cache = new TreeCache(10);
+		// incrementalUpdate only engages for large files (>100 lines) with a diff.
+		const oldContent = Array.from(
+			{ length: 120 },
+			(_, i) => `const a${i} = ${i};`,
+		).join("\n");
+		const newContent = `${oldContent}\nconst extra = 1;`;
+
+		const oldTree = { edit: vi.fn(), delete: vi.fn() };
+		const newTree = { delete: vi.fn() };
+		const parser = { parse: vi.fn(() => newTree) };
+
+		cache.set("big.ts", oldContent, "typescript", oldTree);
+
+		const result = await cache.incrementalUpdate(
+			"big.ts",
+			oldContent,
+			newContent,
+			"typescript",
+			parser,
+		);
+
+		// Reparse used the edited old tree, then the old tree is freed as it's
+		// replaced in the cache; the new tree is cached (not freed).
+		expect(result).toBe(newTree);
+		expect(oldTree.edit).toHaveBeenCalledTimes(1);
+		expect(parser.parse).toHaveBeenCalledWith(newContent, oldTree);
+		expect(oldTree.delete).toHaveBeenCalledTimes(1);
+		expect(newTree.delete).not.toHaveBeenCalled();
+
+		// The new tree is now the cached entry — clearing frees exactly it.
+		cache.clear();
+		expect(newTree.delete).toHaveBeenCalledTimes(1);
+	});
+
 	it("survives a tree whose delete() throws (dead/aborted runtime)", () => {
 		const cache = new TreeCache(1);
 		const boom = { delete: vi.fn(() => { throw new Error("Aborted()"); }) };

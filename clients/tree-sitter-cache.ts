@@ -87,12 +87,8 @@ export class TreeCache {
 			return null;
 		}
 
-		// Verify language matches
-		if (cached.languageId !== languageId) {
-			this.debug(`Language mismatch for ${filePath}`);
-			this.removeEntry(key);
-			return null;
-		}
+		// (No language-mismatch check needed: the cache key is prefixed with
+		// languageId, so a key hit already implies the language matches.)
 
 		// Check content hash
 		const contentHash = this.hashContent(content);
