@@ -9,17 +9,13 @@
  * runner id that no longer exists (a silent no-op).
  *
  * Source of truth: the registry (`registerDefaultRunners`) vs the static plans.
- * Reachability is the union of the per-write plans (`TOOL_PLANS`) AND the
- * full-lint plans (`FULL_LINT_PLANS`) — they are NOT supersets of each other
- * (`toFullPlan` rebuilds jsts/python and drops e.g. mypy/fact-rules from the
- * full set, while they remain in the write set), so a runner reachable in
- * either counts. Runners reached only by a dynamic, non-static path are listed
- * in DYNAMIC_OR_EXEMPT with the reason.
+ * Reachability is the per-write plans (`TOOL_PLANS`). Runners reached only by a
+ * dynamic, non-static path are listed in DYNAMIC_OR_EXEMPT with the reason.
  */
 
 import { describe, expect, it } from "vitest";
 import { RunnerRegistry } from "../../../clients/dispatch/dispatcher.js";
-import { FULL_LINT_PLANS, TOOL_PLANS } from "../../../clients/dispatch/plan.js";
+import { TOOL_PLANS } from "../../../clients/dispatch/plan.js";
 import { registerDefaultRunners } from "../../../clients/dispatch/runners/index.js";
 
 // Runners reachable by a path the static plans don't capture.
@@ -37,11 +33,9 @@ function registeredRunnerIds(): string[] {
 
 function plannedRunnerIds(): Set<string> {
 	const ids = new Set<string>();
-	for (const plans of [TOOL_PLANS, FULL_LINT_PLANS]) {
-		for (const plan of Object.values(plans)) {
-			for (const group of plan.groups) {
-				for (const id of group.runnerIds) ids.add(id);
-			}
+	for (const plan of Object.values(TOOL_PLANS)) {
+		for (const group of plan.groups) {
+			for (const id of group.runnerIds) ids.add(id);
 		}
 	}
 	return ids;

@@ -265,3 +265,79 @@ export async function allAvailableGlobalBinDirs(): Promise<string[]> {
 	}
 	return dirs;
 }
+
+/**
+ * Locate a globally-installed tool binary across every installed manager's
+ * global bin dir (npm/pnpm/yarn/bun) by direct file lookup — no spawn, no PATH
+ * reliance. Returns the full path, or `undefined` if not found.
+ *
+ * This is the manager-agnostic replacement for a bare `<tool> --version` PATH
+ * probe: it finds tools installed via `pnpm add -g` / `bun add -g` (whose bin
+ * dirs are often not on PATH) and survives the PATH-cache staleness that follows
+ * an `install -g`. On Windows it checks the `.cmd` shim, then `.exe`, then the
+ * bare name; on Unix just the bare name.
+ */
+export async function findGlobalBinary(
+	command: string,
+	windowsExt = ".cmd",
+): Promise<string | undefined> {
+	const candidates = onWindows()
+		? [`${command}${windowsExt}`, `${command}.exe`, command]
+		: [command];
+	try {
+		for (const binDir of await allAvailableGlobalBinDirs()) {
+			for (const name of candidates) {
+				const full = path.join(binDir, name);
+				if (fs.existsSync(full)) return full;
+			}
+		}
+	} catch {
+		// Manager probes can fail (missing binary, spawn error) — treat as "not
+		// found" so callers fall through to their next resolution step.
+	}
+	return undefined;
+}
+
+/** Local `node_modules/.bin/<tool>` walking up from `startDir` to the fs root. */
+function findLocalBinUpwards(
+	tool: string,
+	startDir: string,
+	windowsExt: string,
+): string | undefined {
+	const names = onWindows() ? [`${tool}${windowsExt}`, tool] : [tool];
+	let dir = path.resolve(startDir);
+	const root = path.parse(dir).root;
+	while (true) {
+		for (const name of names) {
+			const full = path.join(dir, "node_modules", ".bin", name);
+			if (fs.existsSync(full)) return full;
+		}
+		if (dir === root) break;
+		const parent = path.dirname(dir);
+		if (parent === dir) break;
+		dir = parent;
+	}
+	return undefined;
+}
+
+/**
+ * Locate a Node CLI tool's binary, preferring a local `node_modules/.bin`
+ * (walking up from `cwd`) then any installed package manager's global bin dir
+ * (npm/pnpm/yarn/bun). Returns the absolute path, or `undefined` so the caller
+ * can fall back to its own `npx` invocation.
+ *
+ * This is the shared "widen the global-bin lookup" step from #375: the client
+ * resolvers that previously jumped straight from a local check to `npx <tool>`
+ * now find tools installed via `pnpm add -g` / `bun add -g` (off PATH) too,
+ * without changing their npx fallback semantics.
+ */
+export async function findNodeToolBinary(
+	tool: string,
+	cwd: string,
+	windowsExt = ".cmd",
+): Promise<string | undefined> {
+	return (
+		findLocalBinUpwards(tool, cwd, windowsExt) ??
+		(await findGlobalBinary(tool, windowsExt))
+	);
+}

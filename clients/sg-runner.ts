@@ -11,6 +11,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getSgCommand } from "./dispatch/runners/utils/runner-helpers.js";
 import { getProjectIgnoreGlobs } from "./file-utils.js";
+import { findGlobalBinary } from "./package-manager.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 
 /**
@@ -163,6 +164,21 @@ export class SgRunner {
 			this.available = true;
 			this.log(`ast-grep found on PATH: ${pathCommand.cmd}`);
 			return true;
+		}
+
+		// Step 1b: any package manager's global bin dir (npm/pnpm/yarn/bun).
+		// Catches a `pnpm add -g @ast-grep/cli` shim whose bin dir is off PATH (so
+		// Step 1 misses) and which is a global — not a local node_modules platform
+		// package — so Step 2 misses it too (#375).
+		for (const name of ["ast-grep", "sg"]) {
+			const globalBin = await findGlobalBinary(name);
+			if (globalBin && (await this.probeCommand(globalBin, []))) {
+				this.sgPath = globalBin;
+				this.sgArgsPrefix = [];
+				this.available = true;
+				this.log(`ast-grep found in global bin: ${globalBin}`);
+				return true;
+			}
 		}
 
 		// Step 2: platform-specific npm package binaries.

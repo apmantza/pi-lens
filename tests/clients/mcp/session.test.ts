@@ -23,7 +23,6 @@ const stubClients = vi.hoisted(() => {
 		"knipClient",
 		"todoScanner",
 		"jscpdClient",
-		"typeCoverageClient",
 		"depChecker",
 		"testRunnerClient",
 		"metricsClient",

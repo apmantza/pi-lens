@@ -584,15 +584,12 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					);
 				}
 				if (depResult.hasCircular && depResult.circular.length > 0) {
-					const circularDeps = depResult.circular
-						.flatMap((d) => d.path)
-						.filter((p: string) => !absPath.endsWith(path.basename(p)));
-					const uniqueDeps = [...new Set(circularDeps)];
-					if (uniqueDeps.length > 0) {
-						dbg(
-							`turn_end: circular dependency note for ${file} (suppressed in blockers-only mode)`,
-						);
-					}
+					// Whole-project circular deps are surfaced in lens_diagnostics via the
+					// session-start `madge` cache + extractor; this per-file turn-end pass
+					// only logs (blockers-only mode suppresses circular-dep notes).
+					dbg(
+						`turn_end: circular dependency note for ${file} (suppressed in blockers-only mode)`,
+					);
 				}
 			}
 		}

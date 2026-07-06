@@ -18,7 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { isTestMode } from "../env-utils.js";
 import { getGlobalPiLensDir } from "../file-utils.js";
-import { allAvailableGlobalBinDirs } from "../package-manager.js";
+import { findGlobalBinary } from "../package-manager.js";
 
 export interface LSPProcess {
 	process: ChildProcess;
@@ -201,38 +201,6 @@ function buildAugmentedPath(basePath?: string): string {
 	if (toAppend.length === 0) return basePath ?? "";
 	if (!basePath) return toAppend.join(path.delimiter);
 	return `${basePath}${path.delimiter}${toAppend.join(path.delimiter)}`;
-}
-
-/**
- * Find a globally-installed binary across every installed package manager's
- * global bin dir (npm/pnpm/yarn/bun). Works around PATH caching right after an
- * `install -g` and covers tools installed via any manager.
- */
-async function _findBinaryInGlobalBin(
-	command: string,
-): Promise<string | undefined> {
-	try {
-		for (const binDir of await allAvailableGlobalBinDirs()) {
-			// On Windows, binaries are directly in the dir (with .cmd/.exe shims);
-			// on Unix they're the bare command name.
-			const candidates = isWindows
-				? [
-						path.join(binDir, `${command}.cmd`),
-						path.join(binDir, `${command}.exe`),
-						path.join(binDir, command),
-					]
-				: [path.join(binDir, command)];
-
-			for (const candidate of candidates) {
-				if (fs.existsSync(candidate)) {
-					return candidate;
-				}
-			}
-		}
-		return undefined;
-	} catch {
-		return undefined;
-	}
 }
 
 /**
@@ -557,7 +525,7 @@ export async function launchLSP(
 		!command.includes(path.sep) &&
 		!command.includes("/")
 	) {
-		const globalBinPath = await _findBinaryInGlobalBin(command);
+		const globalBinPath = await findGlobalBinary(command);
 		if (globalBinPath) {
 			spawnCommand = globalBinPath;
 			// Recompute needsShell for the resolved global path
@@ -609,7 +577,7 @@ export async function launchLSP(
 			!command.includes(path.sep) &&
 			!command.includes("/")
 		) {
-			const globalBinPath = await _findBinaryInGlobalBin(command);
+			const globalBinPath = await findGlobalBinary(command);
 			if (globalBinPath && globalBinPath !== spawnCommand) {
 				// Recompute needsShell for the resolved global path
 				const needsShellGlobal = computeNeedsShell(globalBinPath);

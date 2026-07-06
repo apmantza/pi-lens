@@ -12,6 +12,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { logLatency } from "./latency-logger.js";
+import { findGlobalBinary } from "./package-manager.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import {
 	getAutoInstallToolIdForFormatter,
@@ -341,6 +342,11 @@ export const biomeFormatter: FormatterInfo = {
 		const local = await findInNodeModules("biome", cwd);
 		if (local)
 			return [local, "format", "--write", ...editorConfigFlag, filePath];
+		// Any package manager's global bin dir (npm/pnpm/yarn/bun) before we
+		// auto-install — catches a `pnpm add -g @biomejs/biome` PATH misses (#375).
+		const global = await findGlobalBinary("biome");
+		if (global)
+			return [global, "format", "--write", ...editorConfigFlag, filePath];
 		const toolId = getAutoInstallToolIdForFormatter("biome");
 		if (!toolId) return null;
 		const { ensureTool } = await import("./installer/index.js");
@@ -382,6 +388,9 @@ export const prettierFormatter: FormatterInfo = {
 	async resolveCommand(filePath, cwd) {
 		const local = await findInNodeModules("prettier", cwd);
 		if (local) return [local, "--write", filePath];
+		// Global bin of any manager (npm/pnpm/yarn/bun) before auto-install (#375).
+		const global = await findGlobalBinary("prettier");
+		if (global) return [global, "--write", filePath];
 		return resolveManagedSmartDefaultCommand("prettier", filePath, ["--write"]);
 	},
 	extensions: [

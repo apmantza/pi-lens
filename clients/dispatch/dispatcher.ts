@@ -289,7 +289,7 @@ function suppressLintOverlapsWithLsp(diagnostics: Diagnostic[]): Diagnostic[] {
 	};
 
 	for (const d of diagnostics) {
-		if (d.tool !== "lsp" && d.tool !== "ts-lsp") continue;
+		if (d.tool !== "lsp") continue;
 		const line = d.line ?? 1;
 		const defectClass = d.defectClass ?? classifyDiagnostic(d);
 		lspBySpanClass.add(`${d.filePath}:${line}:${defectClass}`);
@@ -299,7 +299,7 @@ function suppressLintOverlapsWithLsp(diagnostics: Diagnostic[]): Diagnostic[] {
 	if (lspByLine.size === 0) return diagnostics;
 
 	return diagnostics.filter((d) => {
-		if (d.tool === "lsp" || d.tool === "ts-lsp") return true;
+		if (d.tool === "lsp") return true;
 		if (!isLintTool(d.tool)) return true;
 		if (d.semantic === "blocking" || d.severity === "error") return true;
 
@@ -841,7 +841,7 @@ export async function dispatchForFile(
 	const coverageNotice = buildCoverageNotice(ctx, runnerLatencies);
 
 	// Format output — only blocking issues shown inline
-	// Warnings tracked but not shown (noise) — surfaced via /lens-booboo
+	// Warnings tracked but not shown (noise) — surfaced via lens_diagnostics
 	const blockerOutput = formatDiagnostics(inlineBlockers, "blocking");
 	let output = blockerOutput;
 	output += formatDiagnostics(inlineFixed, "fixed");

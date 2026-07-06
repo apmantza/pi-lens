@@ -11,7 +11,6 @@ const DEFAULT_TOOL_PROFILE: ToolProfile = {
 const TOOL_PROFILE_MAP: Record<string, ToolProfile> = {
 	"tree-sitter:silent-error": { dedupPriority: 200, lintLike: false },
 	lsp: { dedupPriority: 120, lintLike: false },
-	"ts-lsp": { dedupPriority: 120, lintLike: false },
 	eslint: { dedupPriority: 110, lintLike: true },
 	biome: { dedupPriority: 100, lintLike: true },
 	"biome-check-json": { dedupPriority: 100, lintLike: true },

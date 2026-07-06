@@ -8,7 +8,7 @@
  * - Rust (rust-analyzer)
  * - Ruby, PHP, C#, Java, Kotlin, Swift, Dart, etc.
  *
- * Replaces language-specific runners (ts-lsp, pyright) with a single
+ * Replaces language-specific runners (pyright, etc.) with a single
  * unified runner that delegates to the LSP service.
  */
 

@@ -21,7 +21,7 @@ function makeCtx(filePath: string, facts: FactStore): DispatchContext {
 }
 
 describe("asyncNoiseRule", () => {
-  it("flags async function with no await", () => {
+  it("flags async function with no await", async () => {
     const filePath = "/tmp/noise.ts";
     const content = `
 async function noisy(v: number) {
@@ -33,14 +33,14 @@ async function noisy(v: number) {
     const facts = new FactStore();
     const ctx = makeCtx(filePath, facts);
     facts.setFileFact(filePath, "file.content", content);
-    functionFactProvider.run(ctx, facts);
+    await functionFactProvider.run(ctx, facts);
 
     const diagnostics = asyncNoiseRule.evaluate(ctx, facts);
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0].rule).toBe("async-noise");
   });
 
-  it("does not flag async function with await", () => {
+  it("does not flag async function with await", async () => {
     const filePath = "/tmp/awaited.ts";
     const content = `
 async function good(v: Promise<number>) {
@@ -51,13 +51,13 @@ async function good(v: Promise<number>) {
     const facts = new FactStore();
     const ctx = makeCtx(filePath, facts);
     facts.setFileFact(filePath, "file.content", content);
-    functionFactProvider.run(ctx, facts);
+    await functionFactProvider.run(ctx, facts);
 
     const diagnostics = asyncNoiseRule.evaluate(ctx, facts);
     expect(diagnostics).toHaveLength(0);
   });
 
-  it("does not flag pass-through wrappers", () => {
+  it("does not flag pass-through wrappers", async () => {
     const filePath = "/tmp/wrapper.ts";
     const content = `
 async function wrapper(v: number) {
@@ -68,7 +68,7 @@ async function wrapper(v: number) {
     const facts = new FactStore();
     const ctx = makeCtx(filePath, facts);
     facts.setFileFact(filePath, "file.content", content);
-    functionFactProvider.run(ctx, facts);
+    await functionFactProvider.run(ctx, facts);
 
     const diagnostics = asyncNoiseRule.evaluate(ctx, facts);
     expect(diagnostics).toHaveLength(0);

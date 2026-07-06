@@ -18,10 +18,12 @@ import { logLatency } from "../latency-logger.js";
 // vscode-jsonrpc v9 ships an `exports` map exposing the Node entry as the
 // `./node` subpath (no `.js`); the old `/node.js` file path no longer resolves.
 import {
+	CancellationTokenSource,
 	createMessageConnection,
 	StreamMessageReader,
 	StreamMessageWriter,
 } from "../deps/vscode-jsonrpc.js";
+import { getAmbientAbortSignal } from "../safe-spawn.js";
 
 import { applyWorkspaceEdit } from "./edits.js";
 import type { LSPProcess } from "./launch.js";
@@ -1364,6 +1366,11 @@ export async function navRequest<T>(
 	// requests (workspaceSymbol, call-hierarchy follow-ups) that have no version.
 	staleCheckPath?: string,
 	timeoutMs: number = NAV_REQUEST_TIMEOUT_MS,
+	// Cancels the in-flight request (LSP `$/cancelRequest`) when the turn is
+	// abandoned. Defaults to the ambient abort signal set around dispatch/tool
+	// handling, so callers get cancellation for free without a signature change
+	// (#238 Item 1). Pass explicitly in tests.
+	signal: AbortSignal | undefined = getAmbientAbortSignal(),
 ): Promise<T | null | undefined> {
 	if (!isClientAlive(state)) return null;
 	const normalizedPath =
@@ -1373,7 +1380,7 @@ export async function navRequest<T>(
 			? state.documentVersions.get(normalizedPath)
 			: undefined;
 	const result = (await withTimeout(
-		safeSendRequest<T>(state.connection, method, params),
+		safeSendRequest<T>(state.connection, method, params, signal),
 		timeoutMs,
 	).catch((err: unknown) => {
 		if (err instanceof Error && err.message.startsWith("Timeout after")) {
@@ -2092,19 +2099,79 @@ async function safeSendRequest<T>(
 	connection: MessageConnection,
 	method: string,
 	params: unknown,
+	// When provided, aborting the signal cancels the in-flight request via
+	// vscode-jsonrpc's CancellationToken → an LSP `$/cancelRequest` notification,
+	// so a server stops computing a result the agent has already abandoned (#238
+	// Item 1). The rejection that follows is swallowed (treated as `undefined`).
+	signal?: AbortSignal,
 ): Promise<T | undefined> {
-	try {
-		return (await connection.sendRequest(
-			method as never,
-			params as never,
-		)) as T;
-	} catch (err) {
-		if (isStreamError(err)) {
-			// Silently ignore - stream was destroyed
-			return undefined;
-		}
-		throw err;
+	// Already abandoned before we even sent — don't bother the server.
+	if (signal?.aborted) return undefined;
+
+	let tokenSource: InstanceType<typeof CancellationTokenSource> | undefined;
+	let onAbort: (() => void) | undefined;
+	if (signal) {
+		tokenSource = new CancellationTokenSource();
+		onAbort = () => tokenSource?.cancel();
+		signal.addEventListener("abort", onAbort, { once: true });
 	}
+
+	// Only pass a token when cancellation is wired, so the call shape is unchanged
+	// for the (many) requests without a signal.
+	const send = () =>
+		tokenSource
+			? connection.sendRequest(
+					method as never,
+					params as never,
+					tokenSource.token as never,
+				)
+			: connection.sendRequest(method as never, params as never);
+
+	try {
+		// One safe retry on ContentModified (-32801): the document changed under
+		// us, so the server discarded the request. A single retry beats returning
+		// empty — correctness-under-edit is pi-lens's whole hot path (#238 Item 2).
+		const MAX_ATTEMPTS = 2;
+		for (let attempt = 1; ; attempt++) {
+			try {
+				return (await send()) as T;
+			} catch (err) {
+				if (isStreamError(err) || isCancellationError(err)) {
+					// Stream destroyed, or we cancelled the request on abort — either
+					// way there is no result to return.
+					return undefined;
+				}
+				if (isContentModifiedError(err)) {
+					// Retry once (unless we've since been aborted); if it's still
+					// ContentModified after that, return empty rather than throwing a
+					// code callers don't understand. RequestFailed (-32803) and other
+					// codes are permanent and fall through to the rethrow below.
+					if (attempt < MAX_ATTEMPTS && !signal?.aborted) continue;
+					return undefined;
+				}
+				throw err;
+			}
+		}
+	} finally {
+		if (signal && onAbort) signal.removeEventListener("abort", onAbort);
+		tokenSource?.dispose();
+	}
+}
+
+// vscode-jsonrpc rejects a token-cancelled request with a `ResponseError` whose
+// code is `RequestCancelled` (-32800) or `ServerCancelled` (-32802). Treat both
+// as "no result" rather than a failure. (isStreamError also matches the
+// "cancelled" message text; this adds the structured error-code path.)
+function isCancellationError(err: unknown): boolean {
+	const code = (err as { code?: unknown } | null)?.code;
+	return code === -32800 || code === -32802;
+}
+
+// `ContentModified` (-32801): the document changed while the request was in
+// flight, so the server couldn't answer against a consistent state. Retryable —
+// the only LSP error code worth a second attempt on the edit hot path (#238).
+function isContentModifiedError(err: unknown): boolean {
+	return (err as { code?: unknown } | null)?.code === -32801;
 }
 
 // Helper to detect stream destruction / connection disposal errors.

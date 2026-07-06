@@ -95,8 +95,7 @@ A runner is a tool that runs on a file write/edit and produces `Diagnostic`s. Ex
 2. **Register it** in `clients/dispatch/runners/index.ts`.
 
 3. **Add it to the right plan** in `clients/dispatch/plan.ts` (`LANGUAGE_CAPABILITY_MATRIX`).
-   - `writeGroups` run on every write/edit.
-   - `fullOnlyGroups` run only on `/lens-booboo` full-lint.
+   - `writeGroups` run on every write/edit — this is the only plan surface today.
    - Keep the primary group in `clients/language-policy.ts` in sync for coverage notices.
 
 4. **Add tests** in `tests/clients/dispatch/runners/<id>.test.ts`.

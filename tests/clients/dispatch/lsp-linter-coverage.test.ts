@@ -11,7 +11,7 @@
  * `prisma` already pair the LSP with their linter via `mode:"all"`; this test
  * enforces that consistency for every smart-default linter.
  *
- * Type-checker/compiler pairs (jsts lsp+ts-lsp, python lsp+pyright, etc.) are
+ * Type-checker/compiler pairs (python lsp+pyright, cxx lsp+cpp-check, etc.) are
  * intentionally fallback — running two type-checkers is redundant — and contain
  * no smart-default linter, so they are not flagged.
  */

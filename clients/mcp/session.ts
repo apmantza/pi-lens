@@ -106,7 +106,6 @@ export async function runSessionStart(
 		govulncheckClient: ctx.clients.govulncheckClient,
 		gitleaksClient: ctx.clients.gitleaksClient,
 		trivyClient: ctx.clients.trivyClient,
-		typeCoverageClient: ctx.clients.typeCoverageClient,
 		depChecker: ctx.clients.depChecker,
 		testRunnerClient: ctx.clients.testRunnerClient,
 		goClient: ctx.clients.goClient,

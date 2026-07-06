@@ -16,7 +16,7 @@ import { getLSPService } from "../clients/lsp/index.js";
 import { combineAbortSignals } from "../clients/deadline-utils.js";
 import type { LSPDiagnostic } from "../clients/lsp/client.js";
 import { baseName, compactRenderResult } from "./render-compact.js";
-import { makeProgressReporter } from "./scan-progress.js";
+import { makeProgressReporter, scanningSummaryLine } from "./scan-progress.js";
 
 const LANG_EXTENSIONS: Record<string, string[]> = {
 	".ts": [".ts", ".tsx", ".mts", ".cts"],
@@ -220,12 +220,18 @@ export function createLspDiagnosticsTool() {
 			"Get LSP diagnostics for a file or directory (use before builds)",
 		renderResult: compactRenderResult<{
 			mode?: string;
+			phase?: string;
+			completed?: number;
+			total?: number;
 			filePath?: string;
 			diagnostics?: unknown[];
 			totalDiagnostics?: number;
 			filesChecked?: number;
 			filesScanned?: number;
 		}>(({ details, args, isError, text }) => {
+			// Streaming progress partials render the live bar (see scanningSummaryLine).
+			const scanning = scanningSummaryLine(details, text);
+			if (scanning) return scanning;
 			if (isError) {
 				return `lsp_diagnostics — ${text.split("\n")[0] ?? "error"}`;
 			}

@@ -14,7 +14,6 @@ import type { TestRunnerClient } from "./test-runner-client.js";
 import type { DeadCodeClient } from "./dead-code-client.js";
 import type { TodoScanner } from "./todo-scanner.js";
 import type { TrivyClient } from "./trivy-client.js";
-import type { TypeCoverageClient } from "./type-coverage-client.js";
 
 export interface BootstrapClients {
 	ruffClient: RuffClient;
@@ -22,7 +21,6 @@ export interface BootstrapClients {
 	knipClient: KnipClient;
 	todoScanner: TodoScanner;
 	jscpdClient: JscpdClient;
-	typeCoverageClient: TypeCoverageClient;
 	depChecker: DependencyChecker;
 	testRunnerClient: TestRunnerClient;
 	metricsClient: MetricsClient;
@@ -123,7 +121,6 @@ export function loadBootstrapClients(): Promise<BootstrapClients> {
 			knipClient,
 			todoScanner,
 			jscpdClient,
-			typeCoverageClient,
 			depChecker,
 			testRunnerClient,
 			metricsClient,
@@ -141,11 +138,6 @@ export function loadBootstrapClients(): Promise<BootstrapClients> {
 			load("knip", async () => new (await import("./knip-client.js")).KnipClient()),
 			load("todo", async () => new (await import("./todo-scanner.js")).TodoScanner()),
 			load("jscpd", async () => new (await import("./jscpd-client.js")).JscpdClient()),
-			load(
-				"type-coverage",
-				async () =>
-					new (await import("./type-coverage-client.js")).TypeCoverageClient(),
-			),
 			load(
 				"dependency-checker",
 				async () =>
@@ -196,7 +188,6 @@ export function loadBootstrapClients(): Promise<BootstrapClients> {
 			knipClient,
 			todoScanner,
 			jscpdClient,
-			typeCoverageClient,
 			depChecker,
 			testRunnerClient,
 			metricsClient,

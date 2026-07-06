@@ -77,30 +77,38 @@ import {
 	findCompiledClassesDir,
 	hasJavaBuildDescriptor,
 } from "../tool-policy.js";
-// Register fact providers
+// Register fact providers. All register eagerly here (the dispatch entry) — the
+// tree-sitter-backed providers included, since the parsing stack loads
+// `web-tree-sitter` lazily inside client.init(), not at module import, so it
+// stays out of the eager graph and degrades there rather than crashing at load.
 import { registerProvider, runProviders } from "./fact-runner.js";
+import { commentFactProvider } from "./facts/comment-facts.js";
 import { fileContentProvider } from "./facts/file-content.js";
+import { functionFactProvider } from "./facts/function-facts.js";
+import { importFactProvider } from "./facts/import-facts.js";
+import { tryCatchFactProvider } from "./facts/try-catch-facts.js";
 import { resolveRunnerPath, toRunnerDisplayPath } from "./runner-context.js";
 import { registerDefaultRunners } from "./runners/index.js";
 import { convertLspDiagnostics } from "./utils/lsp-diagnostics.js";
 
 registerProvider(fileContentProvider);
-
-// The TypeScript-compiler-backed fact providers (try-catch / function / comment
-// / import) are registered lazily by ensureTypeScriptDispatchUnits() in
-// fact-runner, the first time a dispatch runs — keeping `typescript` out of the
-// eager entry graph so an unresolved-dep failure degrades instead of crashing
-// the extension at load (#285/#335).
+registerProvider(tryCatchFactProvider);
+registerProvider(functionFactProvider);
+registerProvider(commentFactProvider);
+registerProvider(importFactProvider);
 
 // Register fact rules
 import { registerRule } from "./fact-rule-runner.js";
 import { asyncNoiseRule } from "./rules/async-noise.js";
 import { asyncUnnecessaryWrapperRule } from "./rules/async-unnecessary-wrapper.js";
+import { corsWildcardRule } from "./rules/cors-wildcard.js";
 import { errorObscuringRule } from "./rules/error-obscuring.js";
 import { errorSwallowingRule } from "./rules/error-swallowing.js";
 import { highComplexityRule } from "./rules/high-complexity.js";
 import { highFanOutRule } from "./rules/high-fan-out.js";
+import { highImportCouplingRule } from "./rules/high-import-coupling.js";
 import { missingErrorPropagationRule } from "./rules/missing-error-propagation.js";
+import { commentedCredentialsRule } from "./rules/no-commented-credentials.js";
 import { passThroughWrappersRule } from "./rules/pass-through-wrappers.js";
 import { placeholderCommentsRule } from "./rules/placeholder-comments.js";
 import { unsafeBoundaryRule } from "./rules/unsafe-boundary.js";
@@ -119,8 +127,9 @@ registerRule(unsafeBoundaryRule);
 registerRule(asyncUnnecessaryWrapperRule);
 registerRule(missingErrorPropagationRule);
 registerRule(highFanOutRule);
-// quality-rules + sonar-rules (TypeScript-compiler-backed) are registered lazily
-// by ensureTypeScriptDispatchUnits() in fact-runner — see the note above.
+registerRule(highImportCouplingRule);
+registerRule(corsWildcardRule);
+registerRule(commentedCredentialsRule);
 
 /**
  * Load a project's `.pi-lens.json` config.
@@ -329,7 +338,7 @@ function withPrimaryPolicyGroup(
 		: groups
 				.map((group) => {
 					const runnerIds = group.runnerIds.filter(
-						(id) => id !== "lsp" && id !== "ts-lsp",
+						(id) => id !== "lsp",
 					);
 					if (runnerIds.length === 0) return null;
 					return {

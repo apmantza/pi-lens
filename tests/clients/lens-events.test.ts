@@ -60,7 +60,7 @@ describe("lens inter-extension events", () => {
 			column: 1,
 			severity: "error",
 			semantic: "blocking",
-			tool: "ts-lsp",
+			tool: "lsp",
 		};
 
 		emit.mockClear();
@@ -83,7 +83,7 @@ describe("lens inter-extension events", () => {
 			2,
 			LENS_EVENT_NAMES.findings,
 			expect.objectContaining({
-				blockers: [expect.objectContaining({ tool: "ts-lsp" })],
+				blockers: [expect.objectContaining({ tool: "lsp" })],
 			}),
 		);
 	});

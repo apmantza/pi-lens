@@ -87,6 +87,7 @@ share).
 
 - **`lens_health`** — Runtime health, latency telemetry, and current LSP
   status.
-- **`lens_project_scan`** — Cheap project-wide scans (knip, jscpd, type coverage).
-- **`lens_booboo`** (slash command, not a tool) — Full quality report for the
-  current project state.
+- **`lens_project_scan`** — Cheap project-wide scans (knip, jscpd, duplicates).
+- **`lens_diagnostics mode=full`** — full project-wide review: LSP + the cached
+  heavyweight analyzers (jscpd, madge, gitleaks, govulncheck, trivy, dead-code)
+  folded in via `refreshRunners`.

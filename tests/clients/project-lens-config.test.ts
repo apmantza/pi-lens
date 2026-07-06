@@ -130,7 +130,7 @@ describe("loadPiLensProjectConfig", () => {
 					"high-complexity": { threshold: NaN },
 					"high-fan-out": { threshold: Infinity },
 					"high-import-coupling": { threshold: -Infinity },
-					"commented-out-code": { threshold: "15" },
+					"cors-wildcard": { threshold: "15" },
 					"zero-threshold": { threshold: 0 },
 					"negative-threshold": { threshold: -5 },
 				},
@@ -143,7 +143,7 @@ describe("loadPiLensProjectConfig", () => {
 		expect(cfg.rules["high-complexity"]).toBeUndefined();
 		expect(cfg.rules["high-fan-out"]).toBeUndefined();
 		expect(cfg.rules["high-import-coupling"]).toBeUndefined();
-		expect(cfg.rules["commented-out-code"]).toBeUndefined();
+		expect(cfg.rules["cors-wildcard"]).toBeUndefined();
 		expect(cfg.rules["zero-threshold"]).toBeUndefined();
 		expect(cfg.rules["negative-threshold"]).toBeUndefined();
 	});
@@ -160,7 +160,7 @@ describe("loadPiLensProjectConfig", () => {
 					// so we skip it (forward-compat: future rule keys may have
 					// sub-keys we don't know about yet, and we don't want to
 					// claim support we can't deliver).
-					"commented-out-code": { unrelated: true },
+					"cors-wildcard": { unrelated: true },
 				},
 			}),
 		);
@@ -168,7 +168,7 @@ describe("loadPiLensProjectConfig", () => {
 		expect(cfg.rules["high-complexity"]).toBeUndefined();
 		expect(cfg.rules["high-fan-out"]).toBeUndefined();
 		expect(cfg.rules["good-rule"]).toBeUndefined();
-		expect(cfg.rules["commented-out-code"]).toBeUndefined();
+		expect(cfg.rules["cors-wildcard"]).toBeUndefined();
 	});
 
 	it("preserves rule entries that have a finite threshold alongside other keys", () => {

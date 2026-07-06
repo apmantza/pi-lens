@@ -91,7 +91,6 @@ function makeDeps(ctxCwd: string, dbg: (msg: string) => void = () => {}) {
 			isAvailable: () => false,
 			ensureAvailable: async () => false,
 		},
-		typeCoverageClient: { isAvailable: () => false },
 		depChecker: {
 			isAvailable: () => false,
 			ensureAvailable: async () => false,

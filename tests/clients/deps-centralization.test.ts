@@ -10,7 +10,6 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..")
 // bundling seam (the #285/#335 work). Add new third-party deps here + an accessor.
 const CENTRALIZED = [
 	"minimatch",
-	"typescript",
 	"js-yaml",
 	"typebox",
 	"vscode-jsonrpc",

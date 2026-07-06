@@ -1,7 +1,4 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
 	importFactProvider,
 	type ImportEntry,
@@ -21,22 +18,19 @@ function makeStore(content: string) {
 	};
 }
 
-function runProvider(filePath: string, content: string) {
+// The provider parses via the shared tree-sitter client, so run() is async now.
+async function runProvider(filePath: string, content: string) {
 	const store = makeStore(content);
-	importFactProvider.run({ filePath } as any, store as any);
+	await importFactProvider.run({ filePath } as any, store as any);
 	return {
-		imports: store.getAll("file.imports") as ImportEntry[] ?? [],
-		reexports: store.getAll("file.reexports") as ReExportEntry[] ?? [],
+		imports: (store.getAll("file.imports") as ImportEntry[]) ?? [],
+		reexports: (store.getAll("file.reexports") as ReExportEntry[]) ?? [],
 	};
 }
 
-let tmpDir: string;
-beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-import-facts-")); });
-afterEach(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
-
 describe("importFactProvider — static imports", () => {
-	it("extracts named imports with moduleType esm", () => {
-		const { imports } = runProvider("f.ts", `import { readFile, writeFile } from "node:fs";`);
+	it("extracts named imports with moduleType esm", async () => {
+		const { imports } = await runProvider("f.ts", `import { readFile, writeFile } from "node:fs";`);
 		expect(imports).toHaveLength(1);
 		expect(imports[0]).toMatchObject({
 			source: "node:fs",
@@ -45,26 +39,56 @@ describe("importFactProvider — static imports", () => {
 		});
 	});
 
-	it("extracts default import", () => {
-		const { imports } = runProvider("f.ts", `import React from "react";`);
+	it("extracts default import", async () => {
+		const { imports } = await runProvider("f.ts", `import React from "react";`);
 		expect(imports[0]).toMatchObject({ source: "react", defaultName: "React", moduleType: "esm" });
 	});
 
-	it("extracts namespace import", () => {
-		const { imports } = runProvider("f.ts", `import * as fs from "node:fs";`);
+	it("extracts namespace import", async () => {
+		const { imports } = await runProvider("f.ts", `import * as fs from "node:fs";`);
 		expect(imports[0]).toMatchObject({ source: "node:fs", namespace: "fs", moduleType: "esm" });
 	});
 
-	it("extracts side-effect-only import (no clause)", () => {
-		const { imports } = runProvider("f.ts", `import "reflect-metadata";`);
+	it("extracts side-effect-only import (no clause)", async () => {
+		const { imports } = await runProvider("f.ts", `import "reflect-metadata";`);
 		expect(imports[0]).toMatchObject({ source: "reflect-metadata", names: [], moduleType: "esm" });
+	});
+
+	it("uses the local binding for aliased named imports", async () => {
+		const { imports } = await runProvider("f.ts", `import { readFile as rf } from "node:fs";`);
+		expect(imports[0]).toMatchObject({ source: "node:fs", names: ["rf"] });
+	});
+
+	it("extracts a combined default + named import", async () => {
+		const { imports } = await runProvider("f.ts", `import React, { useState } from "react";`);
+		expect(imports[0]).toMatchObject({
+			source: "react",
+			defaultName: "React",
+			names: ["useState"],
+		});
+	});
+
+	// Grammar smoke: .tsx routes to the tsx grammar (not typescript). Guards against
+	// the tsx grammar failing to parse/extract (the class of regression that would
+	// otherwise silently yield empty imports — cf. the init() gap during the port).
+	it("extracts imports from .tsx files (tsx grammar + JSX body)", async () => {
+		const { imports } = await runProvider(
+			"c.tsx",
+			`import { useState } from "react";\nexport const C = () => <div className="x" />;\n`,
+		);
+		expect(imports).toHaveLength(1);
+		expect(imports[0]).toMatchObject({
+			source: "react",
+			names: ["useState"],
+			moduleType: "esm",
+		});
 	});
 });
 
 describe("importFactProvider — dynamic imports", () => {
-	it("captures dynamic import() calls as isDynamic entries", () => {
+	it("captures dynamic import() calls as isDynamic entries", async () => {
 		// File also has a static import → ESM detected
-		const { imports } = runProvider("f.ts", `
+		const { imports } = await runProvider("f.ts", `
 import { something } from "./base.js";
 const mod = await import("./heavy-module.js");
 `);
@@ -77,8 +101,8 @@ const mod = await import("./heavy-module.js");
 		});
 	});
 
-	it("dynamic import() alone yields unknown moduleType (ambiguous)", () => {
-		const { imports } = runProvider("f.ts", `
+	it("dynamic import() alone yields unknown moduleType (ambiguous)", async () => {
+		const { imports } = await runProvider("f.ts", `
 const mod = await import("./heavy-module.js");
 `);
 		const dynamic = imports.find((i) => i.isDynamic);
@@ -86,8 +110,8 @@ const mod = await import("./heavy-module.js");
 		expect(dynamic?.moduleType).toBe("unknown");
 	});
 
-	it("captures require() calls as cjs entries", () => {
-		const { imports } = runProvider("f.ts", `
+	it("captures require() calls as cjs entries", async () => {
+		const { imports } = await runProvider("f.ts", `
 const fs = require("node:fs");
 const path = require("node:path");
 `);
@@ -97,8 +121,8 @@ const path = require("node:path");
 		expect(cjsImports.map((i) => i.source)).toContain("node:path");
 	});
 
-	it("captures nested dynamic import inside a function body", () => {
-		const { imports } = runProvider("f.ts", `
+	it("captures nested dynamic import inside a function body", async () => {
+		const { imports } = await runProvider("f.ts", `
 async function loadPlugin(name: string) {
   const plugin = await import(\`./plugins/\${name}\`);
   return plugin;
@@ -113,24 +137,24 @@ const mod = await import("./static-path.js");
 });
 
 describe("importFactProvider — moduleType detection", () => {
-	it("detects pure ESM files", () => {
-		const { imports } = runProvider("f.ts", `
+	it("detects pure ESM files", async () => {
+		const { imports } = await runProvider("f.ts", `
 import { foo } from "./foo.js";
 export const bar = 1;
 `);
 		expect(imports.every((i) => i.moduleType === "esm")).toBe(true);
 	});
 
-	it("detects pure CJS files", () => {
-		const { imports } = runProvider("f.ts", `
+	it("detects pure CJS files", async () => {
+		const { imports } = await runProvider("f.ts", `
 const fs = require("node:fs");
 module.exports = { fs };
 `);
 		expect(imports.every((i) => i.moduleType === "cjs")).toBe(true);
 	});
 
-	it("treats mixed ESM+CJS files as esm (static imports present)", () => {
-		const { imports } = runProvider("f.ts", `
+	it("treats mixed ESM+CJS files as esm (static imports present)", async () => {
+		const { imports } = await runProvider("f.ts", `
 import something from "./esm.js";
 const legacy = require("./cjs.js");
 `);
@@ -140,8 +164,8 @@ const legacy = require("./cjs.js");
 });
 
 describe("importFactProvider — re-export edges", () => {
-	it("captures named re-exports", () => {
-		const { reexports } = runProvider("f.ts", `
+	it("captures named re-exports", async () => {
+		const { reexports } = await runProvider("f.ts", `
 export { readFile, writeFile } from "node:fs";
 `);
 		expect(reexports).toHaveLength(1);
@@ -151,8 +175,8 @@ export { readFile, writeFile } from "node:fs";
 		});
 	});
 
-	it("captures star re-exports as empty names array", () => {
-		const { reexports } = runProvider("barrel.ts", `
+	it("captures star re-exports as empty names array", async () => {
+		const { reexports } = await runProvider("barrel.ts", `
 export * from "./utils.js";
 export * from "./helpers.js";
 `);
@@ -161,8 +185,8 @@ export * from "./helpers.js";
 		expect(reexports.map((r) => r.source)).toContain("./utils.js");
 	});
 
-	it("does not include re-exports in imports", () => {
-		const { imports, reexports } = runProvider("barrel.ts", `
+	it("does not include re-exports in imports", async () => {
+		const { imports, reexports } = await runProvider("barrel.ts", `
 export { foo } from "./foo.js";
 import { bar } from "./bar.js";
 `);
@@ -173,8 +197,13 @@ import { bar } from "./bar.js";
 		expect(imports.some((i) => i.source === "./foo.js")).toBe(false);
 	});
 
-	it("empty reexports for files with no re-exports", () => {
-		const { reexports } = runProvider("f.ts", `import { foo } from "./foo.js";`);
+	it("does not treat a plain `export const` as a re-export", async () => {
+		const { reexports } = await runProvider("f.ts", `export const value = 1;\n`);
+		expect(reexports).toHaveLength(0);
+	});
+
+	it("empty reexports for files with no re-exports", async () => {
+		const { reexports } = await runProvider("f.ts", `import { foo } from "./foo.js";`);
 		expect(reexports).toHaveLength(0);
 	});
 });
@@ -194,20 +223,20 @@ describe("importFactProvider — appliesTo", () => {
 		},
 	);
 
-	it("extracts imports from .js files", () => {
-		const { imports } = runProvider("f.js", `import { foo } from "./foo.js";`);
+	it("extracts imports from .js files", async () => {
+		const { imports } = await runProvider("f.js", `import { foo } from "./foo.js";`);
 		expect(imports).toHaveLength(1);
 		expect(imports[0]).toMatchObject({ source: "./foo.js", moduleType: "esm" });
 	});
 
-	it("extracts require() from .cjs files", () => {
-		const { imports } = runProvider("f.cjs", `const fs = require("node:fs");`);
+	it("extracts require() from .cjs files", async () => {
+		const { imports } = await runProvider("f.cjs", `const fs = require("node:fs");`);
 		const req = imports.find((i) => i.source === "node:fs");
 		expect(req).toMatchObject({ source: "node:fs", moduleType: "cjs" });
 	});
 
-	it("extracts re-exports from .mjs files", () => {
-		const { reexports } = runProvider("barrel.mjs", `export * from "./utils.js";`);
+	it("extracts re-exports from .mjs files", async () => {
+		const { reexports } = await runProvider("barrel.mjs", `export * from "./utils.js";`);
 		expect(reexports).toHaveLength(1);
 		expect(reexports[0].source).toBe("./utils.js");
 	});

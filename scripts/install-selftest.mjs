@@ -5,11 +5,13 @@
  *
  * WHY THIS EXISTS
  * Issues #285 (pnpm symlink store) and #335 (nested npm install) reported
- * `ResolveMessage: Cannot find package 'typescript' from .../complexity-client.js`
- * — pi-lens failing to load because a third-party dep was unreachable under a
- * non-default package-manager layout. Those did not reproduce on current
- * bun/pi, but the failure class is real and silent in normal dev (a flat
- * `node_modules` always resolves). This probe makes it loud and CI-catchable.
+ * `ResolveMessage: Cannot find package '<dep>' from ...` — pi-lens failing to
+ * load because a third-party RUNTIME dep was unreachable under a non-default
+ * package-manager layout. (The original report named `typescript`; it's since a
+ * devDependency — #402 — so the probe now covers the remaining runtime deps.)
+ * Those did not reproduce on current bun/pi, but the failure class is real and
+ * silent in normal dev (a flat `node_modules` always resolves). This probe makes
+ * it loud and CI-catchable.
  *
  * WHAT IT DOES
  * Force-imports the modules whose TOP-LEVEL bare imports are the documented
@@ -66,12 +68,11 @@ function probeResolve(spec) {
 // --- 1. The documented failure-point modules (eager bare imports) ----------
 await probeImport("dist/index.js (entry)", "dist/index.js");
 await probeImport("clients/file-utils.js (→ minimatch)", "dist/clients/file-utils.js");
-await probeImport("clients/complexity-client.js (→ typescript)", "dist/clients/complexity-client.js");
+await probeImport("clients/complexity-client.js (→ tree-sitter)", "dist/clients/complexity-client.js");
 await probeImport("clients/bootstrap.js (→ all analyzers)", "dist/clients/bootstrap.js");
 
 // --- 2. Direct bare-specifier resolution -----------------------------------
 for (const spec of [
-	"typescript",
 	"minimatch",
 	"typebox",
 	"js-yaml",

@@ -21,7 +21,7 @@ function makeCtx(filePath: string, facts: FactStore): DispatchContext {
 }
 
 describe("placeholderCommentsRule", () => {
-  it("flags placeholder AI-style comments", () => {
+  it("flags placeholder AI-style comments", async () => {
     const filePath = "/tmp/comments.ts";
     const content = `
 // add more validation here
@@ -30,14 +30,14 @@ const x = 1;
     const facts = new FactStore();
     const ctx = makeCtx(filePath, facts);
     facts.setFileFact(filePath, "file.content", content);
-    commentFactProvider.run(ctx, facts);
+    await commentFactProvider.run(ctx, facts);
 
     const diagnostics = placeholderCommentsRule.evaluate(ctx, facts);
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0].rule).toBe("placeholder-comments");
   });
 
-  it("does not flag ordinary TODO or descriptive comments", () => {
+  it("does not flag ordinary TODO or descriptive comments", async () => {
     const filePath = "/tmp/comments-ok.ts";
     const content = `
 // TODO: fix later
@@ -47,7 +47,7 @@ const y = 2;
     const facts = new FactStore();
     const ctx = makeCtx(filePath, facts);
     facts.setFileFact(filePath, "file.content", content);
-    commentFactProvider.run(ctx, facts);
+    await commentFactProvider.run(ctx, facts);
 
     const diagnostics = placeholderCommentsRule.evaluate(ctx, facts);
     expect(diagnostics).toHaveLength(0);

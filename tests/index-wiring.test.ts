@@ -26,7 +26,6 @@ const EXPECTED_COMMANDS = [
 	"lens-toggle",
 	"lens-context-toggle",
 	"lens-widget-toggle",
-	"lens-booboo",
 	"lens-tdi",
 	"lens-health",
 	"lens-tools",

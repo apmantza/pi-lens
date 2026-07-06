@@ -36,6 +36,6 @@ export function evaluateGitGuard(
 		: "";
 	return {
 		block: true,
-		reason: `🔴 COMMIT BLOCKED (--lens-guard): unresolved blockers must be fixed before commit/push.${details}\nRun /lens-booboo for full details, then commit again.`,
+		reason: `🔴 COMMIT BLOCKED (--lens-guard): unresolved blockers must be fixed before commit/push.${details}\nRun lens_diagnostics mode=all for full details, then commit again.`,
 	};
 }

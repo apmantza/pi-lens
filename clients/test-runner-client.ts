@@ -12,6 +12,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { findGlobalBinary } from "./package-manager.js";
 import { safeSpawn, safeSpawnAsync } from "./safe-spawn.js";
 
 // --- Types ---
@@ -464,7 +465,7 @@ export class TestRunnerClient {
 		}
 
 		try {
-			const { command, args } = this.resolveExec(
+			const { command, args } = await this.resolveExec(
 				runner,
 				config,
 				absoluteTestFile,
@@ -960,21 +961,27 @@ export class TestRunnerClient {
 	 * When a local binary is used, args()[0] (the runner name that npx needs)
 	 * is dropped since it becomes the command itself.
 	 */
-	private resolveExec(
+	private async resolveExec(
 		runner: string,
 		config: RunnerConfig,
 		testFile: string,
 		cwd: string,
-	): { command: string; args: string[] } {
+	): Promise<{ command: string; args: string[] }> {
 		const binName = config.binName ?? runner;
 		const suffix = process.platform === "win32" ? ".cmd" : "";
 		const localBin = path.join(cwd, "node_modules", ".bin", binName + suffix);
 
+		// A resolved binary (local, or any manager's global bin) becomes the command
+		// itself, so the leading runner-name arg (e.g. "vitest") that npx needs is
+		// dropped from args().
 		if (fs.existsSync(localBin)) {
-			// Local binary found — drop the leading runner-name arg (e.g. "vitest")
-			// that is only needed when going through npx.
-			const allArgs = config.args(testFile, cwd);
-			return { command: localBin, args: allArgs.slice(1) };
+			return { command: localBin, args: config.args(testFile, cwd).slice(1) };
+		}
+
+		// Any package manager's global bin dir (npm/pnpm/yarn/bun) before npx (#375).
+		const globalBin = await findGlobalBinary(binName);
+		if (globalBin) {
+			return { command: globalBin, args: config.args(testFile, cwd).slice(1) };
 		}
 
 		return { command: config.command, args: config.args(testFile, cwd) };

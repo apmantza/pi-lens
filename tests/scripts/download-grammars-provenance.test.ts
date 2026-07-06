@@ -11,7 +11,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+	expectedVersion,
 	type GrammarManifest,
+	isVendored,
 	needsDownload,
 	sha256,
 	sidecarPathFor,
@@ -86,5 +88,47 @@ describe("needsDownload (#177 re-download-on-drift)", () => {
 		fs.writeFileSync(path.join(dir, FILE), "wasm-bytes");
 		fs.writeFileSync(sidecarPathFor(path.join(dir, FILE)), "{ not json");
 		expect(needsDownload(dir, FILE, manifest)).toBe(true);
+	});
+});
+
+describe("VENDORED grammars (#423 — built-from-source, per-grammar provenance)", () => {
+	const VFILE = "tree-sitter-swift.wasm";
+	const vendoredManifest: GrammarManifest = {
+		package: "tree-sitter-wasms",
+		version: "0.1.13",
+		grammars: { [VFILE]: HASH },
+		vendored: { [VFILE]: { npmPackage: "tree-sitter-swift", version: "0.7.1" } },
+	};
+	function writeVendoredSidecar(dir: string, version: string, hash: string): void {
+		fs.writeFileSync(
+			sidecarPathFor(path.join(dir, VFILE)),
+			JSON.stringify({ npmPackage: "tree-sitter-swift", version, sha256: hash }),
+		);
+	}
+
+	it("isVendored flags the vendored swift grammar, not others", () => {
+		expect(isVendored(VFILE)).toBe(true);
+		expect(isVendored("tree-sitter-python.wasm")).toBe(false);
+	});
+
+	it("expectedVersion uses the per-grammar vendored version, not the global", () => {
+		expect(expectedVersion(VFILE, vendoredManifest)).toBe("0.7.1");
+		expect(expectedVersion("tree-sitter-python.wasm", vendoredManifest)).toBe(
+			"0.1.13",
+		);
+	});
+
+	it("needsDownload=false when a vendored sidecar matches its own (0.7.1) version", () => {
+		const dir = tmpDir();
+		fs.writeFileSync(path.join(dir, VFILE), "wasm-bytes");
+		writeVendoredSidecar(dir, "0.7.1", HASH);
+		expect(needsDownload(dir, VFILE, vendoredManifest)).toBe(false);
+	});
+
+	it("needsDownload=true when a vendored sidecar records the global version (drift)", () => {
+		const dir = tmpDir();
+		fs.writeFileSync(path.join(dir, VFILE), "wasm-bytes");
+		writeVendoredSidecar(dir, "0.1.13", HASH);
+		expect(needsDownload(dir, VFILE, vendoredManifest)).toBe(true);
 	});
 });

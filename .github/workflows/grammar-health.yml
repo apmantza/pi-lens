@@ -1,0 +1,80 @@
+name: Grammar health (nightly)
+
+# A bad tree-sitter grammar WASM can crash the whole host runtime instead of
+# failing gracefully (e.g. tree-sitter-swift @ tree-sitter-wasms 0.1.13 triggers a
+# fatal V8 Turboshaft-WASM crash on Node 24 — #423). Such a crash can't be caught
+# in-process and is Node/platform/arch-specific, so this nightly:
+#   1. loads + exercises EVERY grammar in an isolated child process on each OS, so
+#      a crasher is caught here — across platforms — before it reaches a user; and
+#   2. builds the Swift grammar from source with a current tree-sitter-cli and runs
+#      the freshly-built wasm through the same guard, to see whether a rebuilt wasm
+#      dodges the crash (the durable fix — building rather than shipping the bad
+#      prebuilt wasm).
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # 06:00 UTC nightly
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  # 1. Run the guard against the currently-shipped/downloaded grammars on every OS.
+  guard:
+    name: Grammar-load guard (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24" # the version where #423 reproduces
+      - name: Install dependencies (downloads core grammars via prepare)
+        run: npm install --no-audit --no-fund
+      - name: Build
+        run: npm run build
+      - name: Load + exercise every grammar in an isolated child process
+        run: node scripts/check-grammar-load.mjs
+
+  # 2. Build the Swift grammar wasm from source and test whether it still crashes.
+  #    ubuntu has Docker, which `tree-sitter build --wasm` uses for emscripten.
+  build-and-test-swift:
+    name: Build + guard a fresh Swift wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "24"
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Build
+        run: npm run build
+      - name: Build tree-sitter-swift.wasm from source
+        run: |
+          set -e
+          npm pack tree-sitter-swift@0.7.1
+          mkdir -p swift-src && tar xzf tree-sitter-swift-*.tgz -C swift-src --strip-components=1
+          # tree-sitter build --wasm compiles the grammar's C sources to wasm via
+          # emscripten (Docker on Linux). Pin the CLI to the web-tree-sitter 0.25 ABI.
+          npx --yes tree-sitter-cli@0.25.6 build --wasm \
+            --output "$GITHUB_WORKSPACE/tree-sitter-swift-built.wasm" swift-src
+          ls -la "$GITHUB_WORKSPACE/tree-sitter-swift-built.wasm"
+      - name: Upload the built Swift wasm (to vendor the from-source fix, #423)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tree-sitter-swift-built-wasm
+          path: tree-sitter-swift-built.wasm
+          if-no-files-found: error
+      - name: Run the freshly-built Swift wasm through the guard
+        run: |
+          cp "$GITHUB_WORKSPACE/tree-sitter-swift-built.wasm" grammars/tree-sitter-swift.wasm
+          node scripts/check-grammar-load.mjs swift

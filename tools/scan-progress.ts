@@ -11,6 +11,26 @@ export type ToolUpdate = (update: {
 	details?: unknown;
 }) => void;
 
+/**
+ * For a tool's `compactRenderResult` summarizer: when the result is a streaming
+ * progress partial (`details.phase === "scanning"`, emitted via `onUpdate` during
+ * a full scan), return the bar to display — the joined content `text` (which
+ * already holds `renderScanProgress` output), or a counts fallback. Returns
+ * `null` for a normal (non-progress) result so the caller falls through to its
+ * usual summary. Without this, the details-driven summarizer renders "0
+ * diagnostics" mid-scan and the bar never shows.
+ */
+export function scanningSummaryLine(
+	details: unknown,
+	text: string,
+): string | null {
+	const d = details as
+		| { phase?: string; completed?: number; total?: number }
+		| undefined;
+	if (d?.phase !== "scanning") return null;
+	return text || `Scanning… ${d.completed ?? 0}/${d.total ?? 0}`;
+}
+
 /** A ≤20-char ASCII bar + counts, e.g. `Scanning… [████░░░░░░] 45/123 (37%)`. */
 export function renderScanProgress(
 	completed: number,

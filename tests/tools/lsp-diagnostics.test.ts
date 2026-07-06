@@ -69,6 +69,66 @@ describe("lsp_diagnostics tool", () => {
 		}
 	});
 
+	it("short-circuits the batch fan-out when the signal is already aborted (#343)", async () => {
+		const tool = createLspDiagnosticsTool();
+		const controller = new AbortController();
+		controller.abort();
+
+		const result = (await tool.execute(
+			"diag-batch-aborted",
+			{
+				paths: ["/proj/a.ts", "/proj/b.ts", "/proj/c.ts"],
+				severity: "all",
+				concurrency: 2,
+			},
+			controller.signal,
+			null,
+			{ cwd: "." },
+		)) as any;
+
+		// No file was opened in the language server — the worker loop saw the
+		// aborted signal and returned before scheduling any file.
+		expect(
+			(mocked.service as { openFile: ReturnType<typeof vi.fn> }).openFile,
+		).not.toHaveBeenCalled();
+		// Still returns a (partial) batch result, not a throw.
+		expect(result.isError).toBeUndefined();
+		expect(result.details?.mode).toBe("batch");
+		expect(result.details?.filesChecked).toBe(0);
+		expect(result.details?.totalDiagnostics).toBe(0);
+	});
+
+	it("short-circuits the directory fan-out when the signal is already aborted (#343)", async () => {
+		const tool = createLspDiagnosticsTool();
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-diag-"));
+		fs.writeFileSync(path.join(tmpDir, "a.ts"), "const value = 1;\n");
+		fs.writeFileSync(path.join(tmpDir, "b.ts"), "const value = 2;\n");
+		const controller = new AbortController();
+		controller.abort();
+
+		try {
+			const result = (await tool.execute(
+				"diag-dir-aborted",
+				{ path: tmpDir, severity: "all", concurrency: 2 },
+				controller.signal,
+				null,
+				{ cwd: "." },
+			)) as any;
+
+			// Files were collected by the walk (filesScanned reflects that), but the
+			// abort-aware fan-out opened NONE of them in the language server — the
+			// #343 invariant: no in-flight files after the turn is abandoned.
+			expect(
+				(mocked.service as { openFile: ReturnType<typeof vi.fn> }).openFile,
+			).not.toHaveBeenCalled();
+			expect(result.isError).toBeUndefined();
+			expect(result.details?.mode).toBe("directory");
+			expect(result.details?.totalDiagnostics).toBe(0);
+		} finally {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
 	it("skips canonical excluded dirs during directory scans", async () => {
 		const tool = createLspDiagnosticsTool();
 		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-diag-"));

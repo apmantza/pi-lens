@@ -117,7 +117,6 @@ async function runSessionStart(
 				isAvailable: () => false,
 				ensureAvailable: jscpdEnsure,
 			},
-			typeCoverageClient: { isAvailable: () => false },
 			depChecker: {
 				isAvailable: () => false,
 				ensureAvailable: depEnsure,
@@ -206,7 +205,6 @@ describe("runtime-session notifications", () => {
 				ruffClient: {},
 				knipClient: {},
 				jscpdClient: {},
-				typeCoverageClient: {},
 				depChecker: {},
 				testRunnerClient: {},
 				goClient: {},
@@ -278,7 +276,6 @@ describe("runtime-session notifications", () => {
 				ruffClient: {},
 				knipClient: {},
 				jscpdClient: {},
-				typeCoverageClient: {},
 				depChecker: {},
 				testRunnerClient: {},
 				goClient: {},

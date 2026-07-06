@@ -31,6 +31,33 @@ export class TreeCache {
 	}
 
 	/**
+	 * Free a tree-sitter Tree's WASM-heap allocation.
+	 *
+	 * web-tree-sitter Trees live in the WASM heap; JS GC reclaims only the wrapper,
+	 * so the underlying memory leaks unless `tree.delete()` is called explicitly
+	 * (no FinalizationRegistry auto-free in 0.25). Guarded — a tree may already be
+	 * deleted, or `delete()` may throw on a corrupt/aborted runtime. Safe because
+	 * every consumer uses a returned tree transiently (parse → extract → discard
+	 * within one call); the eviction target is always the OLDEST entry, never the
+	 * just-parsed tree still in a caller's hand (#417).
+	 */
+	// biome-ignore lint/suspicious/noExplicitAny: web-tree-sitter Tree
+	private freeTree(tree: any): void {
+		try {
+			if (tree && typeof tree.delete === "function") tree.delete();
+		} catch {
+			// best-effort — a dead wasm runtime or double-delete must not throw
+		}
+	}
+
+	/** Remove a cache entry AND free its WASM tree. */
+	private removeEntry(key: string): void {
+		const cached = this.cache.get(key);
+		if (cached) this.freeTree(cached.tree);
+		this.cache.delete(key);
+	}
+
+	/**
 	 * Generate hash for file content
 	 */
 	private hashContent(content: string): string {
@@ -60,12 +87,8 @@ export class TreeCache {
 			return null;
 		}
 
-		// Verify language matches
-		if (cached.languageId !== languageId) {
-			this.debug(`Language mismatch for ${filePath}`);
-			this.cache.delete(key);
-			return null;
-		}
+		// (No language-mismatch check needed: the cache key is prefixed with
+		// languageId, so a key hit already implies the language matches.)
 
 		// Check content hash
 		const contentHash = this.hashContent(content);
@@ -82,12 +105,12 @@ export class TreeCache {
 			const stats = fs.statSync(filePath);
 			if (stats.mtimeMs !== cached.lastModified) {
 				this.debug(`File modified on disk: ${filePath}`);
-				this.cache.delete(key);
+				this.removeEntry(key);
 				return null;
 			}
 		} catch {
 			// File might be deleted, invalidate cache
-			this.cache.delete(key);
+			this.removeEntry(key);
 			return null;
 		}
 
@@ -99,16 +122,21 @@ export class TreeCache {
 	 * Store parsed tree in cache
 	 */
 	set(filePath: string, content: string, languageId: string, tree: any): void {
-		// Evict oldest entries if cache is full
-		if (this.cache.size >= this.maxSize) {
+		const key = this.getCacheKey(filePath, languageId);
+
+		// Free the tree we're about to replace at this key (re-parse of the same
+		// file) so it doesn't leak its WASM heap.
+		if (this.cache.has(key)) {
+			this.removeEntry(key);
+		} else if (this.cache.size >= this.maxSize) {
+			// Evict + free the oldest entry when the cache is full.
 			const firstKey = this.cache.keys().next().value;
 			if (firstKey) {
-				this.cache.delete(firstKey);
+				this.removeEntry(firstKey);
 				this.debug(`Evicted: ${firstKey}`);
 			}
 		}
 
-		const key = this.getCacheKey(filePath, languageId);
 		let mtime = 0;
 		try {
 			mtime = fs.statSync(filePath).mtimeMs;
@@ -270,12 +298,13 @@ export class TreeCache {
 	invalidate(filePath: string, languageId?: string): void {
 		if (languageId) {
 			const key = this.getCacheKey(filePath, languageId);
-			this.cache.delete(key);
+			this.removeEntry(key);
 			this.debug(`Invalidated: ${key}`);
 		} else {
 			// Invalidate all entries for this file
-			for (const [key, _value] of this.cache.entries()) {
+			for (const [key, value] of this.cache.entries()) {
 				if (key.includes(filePath)) {
+					this.freeTree(value.tree);
 					this.cache.delete(key);
 					this.debug(`Invalidated: ${key}`);
 				}
@@ -287,6 +316,9 @@ export class TreeCache {
 	 * Clear entire cache
 	 */
 	clear(): void {
+		for (const entry of this.cache.values()) {
+			this.freeTree(entry.tree);
+		}
 		this.cache.clear();
 		this.debug("Cache cleared");
 	}

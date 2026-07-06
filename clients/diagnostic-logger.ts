@@ -14,7 +14,7 @@ export interface DiagnosticEntry {
 	timestamp: string;
 
 	// What was caught
-	tool: "biome" | "eslint" | "ts-lsp" | "ruff" | "ast-grep" | "tree-sitter";
+	tool: "biome" | "eslint" | "lsp" | "ruff" | "ast-grep" | "tree-sitter";
 	ruleId: string;
 	severity: "error" | "warning" | "info";
 	language: string;

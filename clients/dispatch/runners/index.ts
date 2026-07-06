@@ -5,7 +5,6 @@
 import type { RunnerRegistry } from "../types.js";
 import actionlintRunner from "./actionlint.js";
 import astGrepNapiRunner from "./ast-grep-napi.js";
-import biomeRunner from "./biome.js";
 import biomeCheckJsonRunner from "./biome-check.js";
 import cppCheckRunner from "./cpp-check.js";
 import credoRunner from "./credo.js";
@@ -31,7 +30,6 @@ import phpstanRunner from "./phpstan.js";
 import prismaValidateRunner from "./prisma-validate.js";
 import psScriptAnalyzerRunner from "./psscriptanalyzer.js";
 import pyrightRunner from "./pyright.js";
-import pythonSlopRunner from "./python-slop.js";
 import rubocopRunner from "./rubocop.js";
 import ruffRunner from "./ruff.js";
 import rustClippyRunner from "./rust-clippy.js";
@@ -49,7 +47,6 @@ import trivyConfigRunner from "./trivy-config.js";
 import valeRunner from "./vale.js";
 // Import tree-sitter runner
 import treeSitterRunner from "./tree-sitter.js";
-import tsLspRunner from "./ts-lsp.js";
 import yamllintRunner from "./yamllint.js";
 import zigCheckRunner from "./zig-check.js";
 
@@ -57,15 +54,13 @@ export function registerDefaultRunners(registry: RunnerRegistry): void {
 	// Register all runners (ordered by priority)
 	// Unified LSP runner for all languages (TypeScript, Python, Go, Rust, etc.) - priority 4
 	registry.register(lspRunner); // Unified LSP type-checking for all languages (priority 4)
-	registry.register(tsLspRunner); // TypeScript type-checking (priority 5) - fallback when --lens-lsp disabled
 	registry.register(pyrightRunner); // Python type-checking (priority 5) - fallback when --lens-lsp disabled
 	registry.register(biomeCheckJsonRunner); // Biome check with JSON output for diagnostic capture (priority 9)
-	// DISABLED in post-write dispatch - ast-grep-napi can crash. Enabled via /lens-booboo plan only.
+	// DISABLED in post-write dispatch - ast-grep-napi can crash. Runs in the
+	// project-wide pass via lens_diagnostics mode=full (refreshRunners) instead.
 	registry.register(astGrepNapiRunner); // TS/JS structural analysis via NAPI (priority 15, post-write disabled)
-	registry.register(biomeRunner); // Biome formatting/linting (priority 10)
 	registry.register(treeSitterRunner); // Tree-sitter structural analysis (priority 14)
 	registry.register(ruffRunner); // Python linting (priority 10)
-	registry.register(pythonSlopRunner); // Python slop via CLI (priority 25)
 	registry.register(shellcheckRunner); // Shell script linting (priority 20)
 	registry.register(spotbugsRunner); // SpotBugs bytecode bug-patterns for Java/Kotlin (flag-gated via withSpotbugsGroup, priority 50)
 	// DISABLED: registerRunner(astGrepRunner); // Replaced by ast-grep-napi for dispatch

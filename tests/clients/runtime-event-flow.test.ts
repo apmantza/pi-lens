@@ -73,7 +73,6 @@ describe("runtime event flow", () => {
 					isAvailable: () => false,
 					ensureAvailable: async () => false,
 				},
-				typeCoverageClient: { isAvailable: () => false },
 				depChecker: {
 					isAvailable: () => false,
 					ensureAvailable: async () => false,

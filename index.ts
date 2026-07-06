@@ -91,7 +91,6 @@ import { cancelLSPIdleReset, handleTurnEnd } from "./clients/runtime-turn.js";
 import { isExternalOrVendorFile } from "./clients/path-utils.js";
 import { setAmbientAbortSignal } from "./clients/safe-spawn.js";
 import { TreeSitterClient } from "./clients/tree-sitter-client.js";
-import { handleBooboo } from "./commands/booboo.js";
 import { initI18n, t } from "./i18n.js";
 import { createAstDumpTool, createAstGrepDumpTool } from "./tools/ast-dump.js";
 import { createLensDiagnosticsTool } from "./tools/lens-diagnostics.js";
@@ -494,7 +493,7 @@ export default function (pi: ExtensionAPI) {
 
 	pi.registerFlag("no-lsp", {
 		description:
-			"Disable unified LSP diagnostics and use language-specific fallbacks (for example ts-lsp, pyright)",
+			"Disable unified LSP diagnostics and use language-specific fallbacks (for example pyright)",
 		type: "boolean",
 		default: false,
 	});
@@ -683,37 +682,6 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
-	pi.registerCommand("lens-booboo", {
-		description:
-			"Full codebase review: design smells, complexity, AI slop detection, TODOs, dead code, duplicates, type coverage. Results saved to .pi-lens/reviews/. Usage: /lens-booboo [path]",
-		handler: async (args, ctx) => {
-			const {
-				complexityClient,
-				todoScanner,
-				knipClient,
-				jscpdClient,
-				typeCoverageClient,
-				depChecker,
-			} = await loadBootstrapClients();
-			return handleBooboo(
-				args,
-				ctx,
-				{
-					astGrep: astGrepClient,
-					complexity: complexityClient,
-					todo: todoScanner,
-					knip: knipClient,
-					jscpd: jscpdClient,
-					typeCoverage: typeCoverageClient,
-					depChecker,
-				},
-				pi,
-			);
-		},
-	});
-
-	// DISABLED: lens-booboo-fix command - disabled per user request
-
 	pi.registerCommand("lens-tdi", {
 		description:
 			"Show Technical Debt Index (TDI) and project health trend. Usage: /lens-tdi",
@@ -724,7 +692,7 @@ export default function (pi: ExtensionAPI) {
 			const history = loadHistory();
 			const tdi = computeTDI(history);
 
-			let summary = "🔴 High debt - run /lens-booboo-refactor";
+			let summary = "🔴 High debt - run lens_diagnostics mode=full for details";
 			if (tdi.score <= 30) {
 				summary = "✅ Codebase is healthy!";
 			} else if (tdi.score <= 60) {
@@ -1144,7 +1112,6 @@ export default function (pi: ExtensionAPI) {
 				govulncheckClient,
 				gitleaksClient,
 				trivyClient,
-				typeCoverageClient,
 				depChecker,
 				testRunnerClient,
 				goClient,
@@ -1170,7 +1137,6 @@ export default function (pi: ExtensionAPI) {
 				govulncheckClient,
 				gitleaksClient,
 				trivyClient,
-				typeCoverageClient,
 				depChecker,
 				testRunnerClient,
 				goClient,
@@ -1584,7 +1550,7 @@ export default function (pi: ExtensionAPI) {
 			complexityClient.isSupportedFile(filePath) &&
 			!runtime.complexityBaselines.has(filePath)
 		) {
-			const baseline = complexityClient.analyzeFile(filePath);
+			const baseline = await complexityClient.analyzeFile(filePath);
 			if (baseline) {
 				runtime.complexityBaselines.set(filePath, baseline);
 				const { captureSnapshot } = await import(

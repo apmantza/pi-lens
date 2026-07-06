@@ -88,7 +88,7 @@ export const LANGUAGE_POLICY: Record<FileKind, LanguagePolicy> = {
 const PRIMARY_DISPATCH_GROUPS: Partial<Record<FileKind, RunnerGroup>> = {
 	jsts: {
 		mode: "fallback",
-		runnerIds: ["lsp", "ts-lsp"],
+		runnerIds: ["lsp"],
 		filterKinds: ["jsts"],
 	},
 	python: {
@@ -240,7 +240,7 @@ export function getPrimaryDispatchGroup(
 
 	const ids = lspEnabled
 		? [...base.runnerIds]
-		: base.runnerIds.filter((id) => id !== "lsp" && id !== "ts-lsp");
+		: base.runnerIds.filter((id) => id !== "lsp");
 	if (ids.length === 0) return undefined;
 
 	return {

@@ -1,6 +1,12 @@
-import { ts } from "../../deps/typescript.js";
 import { logLatency } from "../../latency-logger.js";
 import type { FactProvider } from "../fact-provider-types.js";
+import {
+	childrenOfType,
+	firstChildOfType,
+	parseFactTree,
+	type TsNode,
+	walk,
+} from "./tree-sitter-facts.js";
 
 export interface ImportEntry {
 	/** Module specifier, e.g. "node:fs", "./utils.js", "react" */
@@ -25,108 +31,83 @@ export interface ReExportEntry {
 	names: string[];
 }
 
-function detectModuleType(
-	sourceFile: ts.SourceFile,
-): "esm" | "cjs" | "unknown" {
-	let hasEsm = false;
-	let hasCjs = false;
+// JS/TS extensions this provider handles (→ tree-sitter typescript/tsx/javascript
+// grammars via resolveTreeSitterLanguage). Ported off the `typescript` compiler API
+// onto tree-sitter (#402) — the parse is served from the shared, cached client.
+const JSTS_EXTS = new Set([
+	".ts",
+	".tsx",
+	".mts",
+	".cts",
+	".js",
+	".jsx",
+	".mjs",
+	".cjs",
+]);
 
-	function visit(node: ts.Node): void {
-		if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
-			hasEsm = true;
-		} else if (
-			ts.isCallExpression(node) &&
-			ts.isIdentifier(node.expression) &&
-			node.expression.text === "require" &&
-			node.arguments.length === 1 &&
-			ts.isStringLiteral(node.arguments[0])
-		) {
-			hasCjs = true;
-		} else if (
-			ts.isPropertyAccessExpression(node) &&
-			ts.isIdentifier(node.expression) &&
-			node.expression.text === "module" &&
-			node.name.text === "exports"
-		) {
-			hasCjs = true;
-		}
-		ts.forEachChild(node, visit);
-	}
-	ts.forEachChild(sourceFile, visit);
-
-	if (hasEsm && !hasCjs) return "esm";
-	if (hasCjs && !hasEsm) return "cjs";
-	if (hasEsm || hasCjs) return "esm"; // mixed — treat as ESM (static imports present)
-	return "unknown";
+function stripQuotes(raw: string): string {
+	return raw.replace(/^["'`]+|["'`]+$/g, "");
 }
 
-function collectDynamicImports(
-	sourceFile: ts.SourceFile,
+/** Parse a top-level `import_statement` node into an ImportEntry. */
+function parseStaticImport(
+	node: TsNode,
 	moduleType: "esm" | "cjs" | "unknown",
-): ImportEntry[] {
-	const entries: ImportEntry[] = [];
+): ImportEntry | null {
+	const sourceNode = firstChildOfType(node, "string");
+	if (!sourceNode) return null;
+	const source = stripQuotes(sourceNode.text);
 
-	function visit(node: ts.Node): void {
-		// import('specifier') — dynamic ESM import
-		if (
-			ts.isCallExpression(node) &&
-			node.expression.kind === ts.SyntaxKind.ImportKeyword &&
-			node.arguments.length === 1 &&
-			ts.isStringLiteral(node.arguments[0])
-		) {
-			entries.push({
-				source: node.arguments[0].text,
-				names: [],
-				isDynamic: true,
-				moduleType,
-			});
-		}
-		// require('specifier') — CJS import
-		else if (
-			ts.isCallExpression(node) &&
-			ts.isIdentifier(node.expression) &&
-			node.expression.text === "require" &&
-			node.arguments.length === 1 &&
-			ts.isStringLiteral(node.arguments[0])
-		) {
-			entries.push({
-				source: node.arguments[0].text,
-				names: [],
-				moduleType: "cjs",
-			});
-		}
-		ts.forEachChild(node, visit);
+	const clause = firstChildOfType(node, "import_clause");
+	if (!clause) {
+		// `import "reflect-metadata";` — side-effect only, no bindings.
+		return { source, names: [], moduleType };
 	}
-	ts.forEachChild(sourceFile, visit);
-	return entries;
-}
 
-function collectReExports(sourceFile: ts.SourceFile): ReExportEntry[] {
-	const entries: ReExportEntry[] = [];
-	for (const stmt of sourceFile.statements) {
-		if (!ts.isExportDeclaration(stmt) || !stmt.moduleSpecifier) continue;
-		const source = (stmt.moduleSpecifier as ts.StringLiteral).text;
-		if (!stmt.exportClause) {
-			// export * from '...'
-			entries.push({ source, names: [] });
-		} else if (ts.isNamedExports(stmt.exportClause)) {
-			const names = stmt.exportClause.elements.map((e) => e.name.text);
-			entries.push({ source, names });
+	const entry: ImportEntry = { source, names: [], moduleType };
+	for (const child of clause.children ?? []) {
+		if (!child) continue;
+		if (child.type === "identifier") {
+			// `import React from ...` — default binding is a bare identifier.
+			entry.defaultName = child.text;
+		} else if (child.type === "namespace_import") {
+			// `import * as fs from ...`
+			const id = firstChildOfType(child, "identifier");
+			if (id) entry.namespace = id.text;
+		} else if (child.type === "named_imports") {
+			// `import { a, b as c } from ...` — the local binding is the alias when
+			// present (last identifier of the specifier), else the imported name.
+			for (const spec of childrenOfType(child, "import_specifier")) {
+				const ids = childrenOfType(spec, "identifier");
+				const local = ids.length ? ids[ids.length - 1].text : undefined;
+				if (local) entry.names.push(local);
+			}
 		}
 	}
-	return entries;
+	return entry;
 }
 
-const EXT_TO_SCRIPT_KIND: Record<string, ts.ScriptKind> = {
-	".ts": ts.ScriptKind.TS,
-	".tsx": ts.ScriptKind.TSX,
-	".mts": ts.ScriptKind.TS,
-	".cts": ts.ScriptKind.TS,
-	".js": ts.ScriptKind.JS,
-	".jsx": ts.ScriptKind.JSX,
-	".mjs": ts.ScriptKind.JS,
-	".cjs": ts.ScriptKind.JS,
-};
+/** Parse a top-level `export_statement` into a ReExportEntry, or null if it isn't a
+ *  re-export (a plain `export const x` has no `from` source). */
+function parseReExport(node: TsNode): ReExportEntry | null {
+	const sourceNode = firstChildOfType(node, "string");
+	if (!sourceNode) return null; // not `export ... from '...'`
+	const source = stripQuotes(sourceNode.text);
+
+	const clause = firstChildOfType(node, "export_clause");
+	if (!clause) {
+		// `export * from '...'`
+		return { source, names: [] };
+	}
+	const names: string[] = [];
+	for (const spec of childrenOfType(clause, "export_specifier")) {
+		const ids = childrenOfType(spec, "identifier");
+		// Exported name is the alias when present (`a as b` → b), else the name.
+		const name = ids.length ? ids[ids.length - 1].text : undefined;
+		if (name) names.push(name);
+	}
+	return { source, names };
+}
 
 export const importFactProvider: FactProvider = {
 	id: "fact.file.imports",
@@ -134,73 +115,116 @@ export const importFactProvider: FactProvider = {
 	requires: ["file.content"],
 	appliesTo(ctx) {
 		const ext = ctx.filePath.slice(ctx.filePath.lastIndexOf(".")).toLowerCase();
-		return ext in EXT_TO_SCRIPT_KIND;
+		return JSTS_EXTS.has(ext);
 	},
-	run(ctx, store) {
+	async run(ctx, store) {
 		const content = store.getFileFact<string>(ctx.filePath, "file.content");
-		if (!content) {
+		const setEmpty = () => {
 			store.setFileFact(ctx.filePath, "file.imports", []);
 			store.setFileFact(ctx.filePath, "file.reexports", []);
+		};
+		if (!content) {
+			setEmpty();
 			return;
 		}
 
-		const ext = ctx.filePath.slice(ctx.filePath.lastIndexOf(".")).toLowerCase();
-		const scriptKind = EXT_TO_SCRIPT_KIND[ext] ?? ts.ScriptKind.JS;
-
-		const sourceFile = ts.createSourceFile(
-			ctx.filePath,
-			content,
-			ts.ScriptTarget.Latest,
-			true,
-			scriptKind,
-		);
-
-		const moduleType = detectModuleType(sourceFile);
-		const imports: ImportEntry[] = [];
-
-		// Static import declarations
-		for (const stmt of sourceFile.statements) {
-			if (!ts.isImportDeclaration(stmt)) continue;
-			const source = (stmt.moduleSpecifier as ts.StringLiteral).text;
-			const clause = stmt.importClause;
-
-			if (!clause) {
-				imports.push({ source, names: [], moduleType });
-				continue;
-			}
-
-			const entry: ImportEntry = { source, names: [], moduleType };
-
-			if (clause.name) {
-				entry.defaultName = clause.name.text;
-			}
-
-			if (clause.namedBindings) {
-				if (ts.isNamespaceImport(clause.namedBindings)) {
-					entry.namespace = clause.namedBindings.name.text;
-				} else {
-					entry.names = clause.namedBindings.elements.map((e) => e.name.text);
-				}
-			}
-
-			imports.push(entry);
+		// Grammar unavailable / parse failed / wasm aborted — degrade to empty
+		// (there is no typescript-compiler fallback by design, #402).
+		const root = await parseFactTree(ctx.filePath, content);
+		if (!root) {
+			setEmpty();
+			return;
 		}
 
-		// Dynamic imports and require() calls
-		const dynamic = collectDynamicImports(sourceFile, moduleType);
-		imports.push(...dynamic);
+		// --- module-type detection + static import/re-export node collection ---
+		let hasEsm = false;
+		let hasCjs = false;
+		const importNodes: TsNode[] = [];
+		const reExportNodes: TsNode[] = [];
 
+		for (const child of root.children ?? []) {
+			if (!child) continue;
+			if (child.type === "import_statement") {
+				hasEsm = true;
+				importNodes.push(child);
+			} else if (child.type === "export_statement") {
+				const isReExport = Boolean(firstChildOfType(child, "string"));
+				// `export { x }` / `export * from` / `export { x } from` are ESM
+				// declarations (like TS's isExportDeclaration); `export const x` /
+				// `export default` (a wrapped declaration) is NOT counted here.
+				if (isReExport || firstChildOfType(child, "export_clause")) {
+					hasEsm = true;
+				}
+				if (isReExport) reExportNodes.push(child);
+			}
+		}
+
+		// --- dynamic import() / require() / module.exports (anywhere in the tree) ---
+		const dynamicRaw: Array<{ source: string; kind: "import" | "require" }> = [];
+		walk(root, (node) => {
+			if (node.type === "call_expression") {
+				const callee = node.children?.[0];
+				const args = firstChildOfType(node, "arguments");
+				const strArg = args ? firstChildOfType(args, "string") : undefined;
+				if (!strArg) return; // non-string arg (e.g. template literal) — skip
+				const source = stripQuotes(strArg.text);
+				if (callee?.type === "import") {
+					dynamicRaw.push({ source, kind: "import" });
+				} else if (callee?.type === "identifier" && callee.text === "require") {
+					dynamicRaw.push({ source, kind: "require" });
+					hasCjs = true;
+				}
+			} else if (node.type === "member_expression") {
+				// module.exports = ...
+				const obj = node.children?.[0];
+				if (obj?.type === "identifier" && obj.text === "module") {
+					const prop = firstChildOfType(node, "property_identifier");
+					if (prop?.text === "exports") hasCjs = true;
+				}
+			}
+		});
+
+		const moduleType: "esm" | "cjs" | "unknown" =
+			hasEsm && !hasCjs
+				? "esm"
+				: hasCjs && !hasEsm
+					? "cjs"
+					: hasEsm || hasCjs
+						? "esm" // mixed — static imports present, treat as ESM
+						: "unknown";
+
+		// --- build entries ---
+		const imports: ImportEntry[] = [];
+		for (const node of importNodes) {
+			const entry = parseStaticImport(node, moduleType);
+			if (entry) imports.push(entry);
+		}
+		let dynamicCount = 0;
+		for (const d of dynamicRaw) {
+			if (d.kind === "import") {
+				imports.push({
+					source: d.source,
+					names: [],
+					isDynamic: true,
+					moduleType,
+				});
+			} else {
+				imports.push({ source: d.source, names: [], moduleType: "cjs" });
+			}
+			dynamicCount++;
+		}
 		store.setFileFact(ctx.filePath, "file.imports", imports);
 
-		// Re-export edges (used by call graph for barrel-file traversal)
-		const reexports = collectReExports(sourceFile);
+		const reexports: ReExportEntry[] = [];
+		for (const node of reExportNodes) {
+			const r = parseReExport(node);
+			if (r) reexports.push(r);
+		}
 		store.setFileFact(ctx.filePath, "file.reexports", reexports);
 
 		// Telemetry: log when a file has dynamic imports or re-exports so we can
 		// measure coverage and validate the implementation across real projects.
-		const dynamicCount = dynamic.length;
-		const reexportCount = reexports.length;
-		if (dynamicCount > 0 || reexportCount > 0) {
+		if (dynamicCount > 0 || reexports.length > 0) {
 			logLatency({
 				type: "call_graph_facts" as any,
 				filePath: ctx.filePath,
@@ -209,7 +233,7 @@ export const importFactProvider: FactProvider = {
 					moduleType,
 					staticImports: imports.length - dynamicCount,
 					dynamicImports: dynamicCount,
-					reexports: reexportCount,
+					reexports: reexports.length,
 					starReexports: reexports.filter((r) => r.names.length === 0).length,
 				},
 			});

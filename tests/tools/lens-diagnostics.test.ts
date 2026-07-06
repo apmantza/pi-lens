@@ -16,6 +16,7 @@ vi.mock("../../clients/project-diagnostics/scanner.js", () => ({
 }));
 
 vi.mock("../../clients/project-diagnostics/cache.js", () => ({
+	PROJECT_DIAGNOSTICS_CACHE_VERSION: 2,
 	loadProjectDiagnosticsSnapshot:
 		projectDiagnosticsMocks.loadProjectDiagnosticsSnapshot,
 	loadProjectDiagnosticsDeltaReport:
@@ -598,6 +599,75 @@ describe("lens_diagnostics mode=full", () => {
 		).toHaveBeenCalledWith("/proj");
 		expect(text).toContain("cached project blocker");
 		expect(result.details).toMatchObject({ totalBlocking: 1 });
+	});
+
+	it("folds the CACHED jscpd snapshot into full mode without launching a scan (#adapters)", async () => {
+		mockSummaries.length = 0;
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
+		};
+		// No scanned snapshot — jscpd must synthesize one from its cache.
+		projectDiagnosticsMocks.loadProjectDiagnosticsSnapshot.mockReturnValue(
+			undefined,
+		);
+		const jscpdResult = {
+			success: true,
+			duplicatedLines: 18,
+			totalLines: 100,
+			percentage: 18,
+			clones: [
+				{
+					fileA: "src/a.ts",
+					startA: 42,
+					fileB: "src/b.ts",
+					startB: 80,
+					lines: 18,
+					tokens: 120,
+				},
+			],
+		};
+
+		const result = await run(makeTool({ "jscpd-ts": jscpdResult }, lspService), {
+			mode: "full",
+			refreshRunners: "cached",
+		});
+
+		const text = String(result.content[0].text);
+		// Both ends of the clone surface, and no fresh scan was launched.
+		expect(text).toContain("Duplicate code (18 lines)");
+		expect(
+			projectDiagnosticsMocks.scanProjectDiagnostics,
+		).not.toHaveBeenCalled();
+	});
+
+	it("does not read jscpd cache when refreshRunners is not set (LSP-only full mode)", async () => {
+		mockSummaries.length = 0;
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
+		};
+		const cm = makeCacheManager({
+			"jscpd-ts": {
+				success: true,
+				duplicatedLines: 1,
+				totalLines: 1,
+				percentage: 1,
+				clones: [
+					{ fileA: "src/a.ts", startA: 1, fileB: "src/b.ts", startB: 2, lines: 5, tokens: 9 },
+				],
+			},
+		});
+		const tool = createLensDiagnosticsTool(
+			cm as any,
+			() => "/proj",
+			() => lspService as any,
+		);
+
+		const result = await tool.execute("1", { mode: "full" }, new AbortController().signal, null, {
+			cwd: "/proj",
+		});
+
+		expect(String(result.content[0].text)).not.toContain("Duplicate code");
+		expect(cm.readCache).not.toHaveBeenCalledWith("jscpd-ts", "/proj");
 	});
 
 	it("deduplicates LSP diagnostics already present in widget state by file line and rule", async () => {

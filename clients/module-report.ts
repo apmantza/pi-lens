@@ -39,7 +39,7 @@ import { normalizeMapKey } from "./path-utils.js";
 import { resolveImportToFiles } from "./review-graph/import-resolvers.js";
 import type { ReviewGraph, ReviewGraphEdgeKind } from "./review-graph/types.js";
 import type { Symbol as ExtractedSymbol } from "./symbol-types.js";
-import { TreeSitterClient } from "./tree-sitter-client.js";
+import { getSharedTreeSitterClient } from "./tree-sitter-shared.js";
 import {
 	type ImportRef,
 	TreeSitterSymbolExtractor,
@@ -307,9 +307,9 @@ function tsLangForFile(
 	return kind ? KIND_TO_TS_LANG[kind] : undefined;
 }
 
-// Shared parser + per-language extractor cache. The TreeSitterClient memoizes
-// its own grammar init; extractors are cheap once their queries are compiled.
-const tsClient = new TreeSitterClient();
+// Per-language extractor cache — extractors are cheap once their queries are
+// compiled. The shared TreeSitterClient (which memoizes grammar init) is obtained
+// per call from the process-wide singleton.
 const extractorCache = new Map<
 	string,
 	Promise<TreeSitterSymbolExtractor | null>
@@ -321,7 +321,9 @@ async function getExtractor(
 	let cached = extractorCache.get(languageId);
 	if (!cached) {
 		cached = (async () => {
-			const extractor = new TreeSitterSymbolExtractor(languageId, tsClient);
+			const client = getSharedTreeSitterClient();
+			if (!client) return null;
+			const extractor = new TreeSitterSymbolExtractor(languageId, client);
 			const ok = await extractor.init();
 			return ok ? extractor : null;
 		})().catch((err) => {
@@ -360,6 +362,14 @@ async function extractFile(
 	warnings?: string[];
 }> {
 	try {
+		const tsClient = getSharedTreeSitterClient();
+		if (!tsClient) {
+			return {
+				symbols: [],
+				imports: [],
+				error: "tree-sitter runtime unavailable (wasm aborted)",
+			};
+		}
 		const initialized = await tsClient.init();
 		if (!initialized) {
 			return {

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	makeProgressReporter,
 	renderScanProgress,
+	scanningSummaryLine,
 } from "../../tools/scan-progress.js";
 
 describe("renderScanProgress", () => {
@@ -22,6 +23,25 @@ describe("renderScanProgress", () => {
 				"Scanning LSP diagnostics…",
 			),
 		).toBe(true);
+	});
+});
+
+describe("scanningSummaryLine", () => {
+	it("returns the joined content text (the bar) for a scanning partial", () => {
+		const bar = "Scanning project diagnostics… [██░░] 5/10 (50%)";
+		expect(scanningSummaryLine({ phase: "scanning" }, bar)).toBe(bar);
+	});
+
+	it("falls back to counts when the content text is empty", () => {
+		expect(
+			scanningSummaryLine({ phase: "scanning", completed: 3, total: 8 }, ""),
+		).toBe("Scanning… 3/8");
+	});
+
+	it("returns null for a normal (non-progress) result so the caller falls through", () => {
+		expect(scanningSummaryLine({ mode: "full", filesChecked: 40 }, "x")).toBeNull();
+		expect(scanningSummaryLine(undefined, "x")).toBeNull();
+		expect(scanningSummaryLine({ phase: "done" }, "x")).toBeNull();
 	});
 });
 

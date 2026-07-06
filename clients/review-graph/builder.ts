@@ -15,7 +15,7 @@ import { normalizeMapKey } from "../path-utils.js";
 import { collectProjectSourceFilesAsync } from "../project-scan-policy.js";
 import { resolveImportToFiles } from "./import-resolvers.js";
 import { RUNTIME_CONFIG } from "../runtime-config.js";
-import { TreeSitterClient } from "../tree-sitter-client.js";
+import { getSharedTreeSitterClient } from "../tree-sitter-shared.js";
 import {
 	type ExtractedSymbols,
 	TreeSitterSymbolExtractor,
@@ -56,7 +56,6 @@ const MAIN_KIND_EXTENSIONS: string[] = Array.from(MAIN_KINDS).flatMap(
 	(kind) => KIND_EXTENSIONS[kind as keyof typeof KIND_EXTENSIONS] ?? [],
 );
 const CHANGED_SYMBOLS_PREFIX = "session.reviewGraph.changedSymbols:";
-const treeSitterClient = new TreeSitterClient();
 const extractorCache = new Map<string, TreeSitterSymbolExtractor>();
 
 // Per-invocation Promise cache: deduplicates concurrent buildOrUpdateGraph calls
@@ -756,28 +755,32 @@ function upsertChangedSymbols(
 	}
 }
 
-async function ensureTsFacts(
+async function ensureReviewGraphFacts(
 	filePath: string,
 	cwd: string,
 	facts: FactStore,
 ): Promise<void> {
 	const ctx = makeCtx(filePath, cwd, facts);
 	await fileContentProvider.run(ctx, facts);
-	// import/function facts are TypeScript-compiler-backed; load them lazily so
-	// `typescript` stays out of the eager entry graph (#285/#335). If it can't be
-	// resolved, the review graph builds without TS structural facts rather than
-	// failing — the dispatch path emits the full diagnostic fingerprint.
+	// The import/function fact providers parse via the shared tree-sitter client
+	// (#419/#402 — no `typescript` compiler). Loaded on demand + run here so
+	// file.imports / file.reexports / file.functionSummaries are populated before
+	// the graph reads them; if the parse stack is unavailable the graph builds
+	// without structural facts rather than failing (the shared client loads
+	// web-tree-sitter lazily, so that degrade otherwise lives at client.init()).
 	try {
 		const [{ importFactProvider }, { functionFactProvider }] =
 			await Promise.all([
 				import("../dispatch/facts/import-facts.js"),
 				import("../dispatch/facts/function-facts.js"),
 			]);
-		importFactProvider.run(ctx, facts);
-		functionFactProvider.run(ctx, facts);
+		// Both providers are async (tree-sitter parse) — await so the facts are
+		// populated before the graph reads them.
+		await importFactProvider.run(ctx, facts);
+		await functionFactProvider.run(ctx, facts);
 	} catch (err) {
 		console.error(
-			`[pi-lens] review-graph TypeScript facts disabled (degraded mode): ${
+			`[pi-lens] review-graph structural facts disabled (degraded mode): ${
 				(err as Error)?.message ?? String(err)
 			}`,
 		);
@@ -918,7 +921,9 @@ async function getExtractor(
 	languageId: string,
 ): Promise<TreeSitterSymbolExtractor | null> {
 	if (extractorCache.has(languageId)) return extractorCache.get(languageId)!;
-	const extractor = new TreeSitterSymbolExtractor(languageId, treeSitterClient);
+	const client = getSharedTreeSitterClient();
+	if (!client) return null;
+	const extractor = new TreeSitterSymbolExtractor(languageId, client);
 	const ok = await extractor.init();
 	if (!ok) return null;
 	extractorCache.set(languageId, extractor);
@@ -930,6 +935,8 @@ async function extractTreeSitterSymbols(
 	languageId: string,
 ): Promise<ExtractedSymbols> {
 	const empty: ExtractedSymbols = { symbols: [], refs: [], imports: [] };
+	const treeSitterClient = getSharedTreeSitterClient();
+	if (!treeSitterClient) return empty;
 	const initialized = await treeSitterClient.init();
 	if (!initialized) return empty;
 	const tree = await treeSitterClient.parseFile(filePath, languageId);
@@ -1174,7 +1181,7 @@ async function addFileToGraph(
 	// the incremental/cascade path (a changed *.test.ts) never adds them either.
 	if (detectFileRole(file) === "test") return;
 	if (kind === "jsts") {
-		await ensureTsFacts(file, cwd, facts);
+		await ensureReviewGraphFacts(file, cwd, facts);
 		addJsTsFile(graph, cwd, file, facts);
 		return;
 	}
