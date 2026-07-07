@@ -6,6 +6,14 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Added
 
+### Changed
+
+### Fixed
+
+## [3.8.66] - 2026-07-07
+
+### Added
+
 - **`lens_diagnostics mode=full` now surfaces the heavyweight project analyzers via an extractor registry** — previously only knip crossed from the heavyweight analyzers into the diagnostic surface; the rest reached the agent only via next-turn context injection. New `project-diagnostics/extractors.ts` registry maps each analyzer's **cached** result to per-file `ProjectDiagnostic`s through pure `runner-adapters/*` functions (mirroring `knip.ts`): **jscpd** copy-paste (a clone → a diagnostic on **both** ends, each naming the other span), **madge** circular deps (a cycle → one on **each** participating file), **gitleaks** secrets (→ **blocking**), **govulncheck** reachable Go CVEs (anchored at the first traced source frame), **trivy** dependency CVEs (anchored at the manifest), and **dead-code** (vulture/Python — unused symbols; unlisted deps → **blocking**). **Cache-only, never re-launched:** `mode=full` reads each analyzer's session-start cache and folds the results in — it never spawns a scan, so it can't relaunch or contend with the background runs (which share a global abort signal). Adding a new analyzer is now one adapter + one registry row. Included when `refreshRunners` is `cached`/`cheap`/`all`.
 - **madge now runs whole-project at session-start and caches its result** — bringing it in line with knip/jscpd/gitleaks/govulncheck (it was the lone analyzer running per-edited-file at turn-end and discarding its output). `lens_diagnostics mode=full` reads the new `madge` cache via the extractor registry, giving whole-project circular-dependency coverage.
 
