@@ -574,6 +574,15 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			},
 			getFlag,
 			dbg,
+			// #451: hand the deferred cascade live sequence accessors so the
+			// review-graph builder can skip its per-build O(project) sweep when
+			// only pi-observed edits happened. projectSeq is a function because the
+			// cascade runs after this returns (#450) — read current, not captured.
+			seqState: {
+				projectSeq: () => runtime.projectSeq,
+				getFilesChangedSince: (seq: number) =>
+					runtime.getFilesChangedSince(seq),
+			},
 		},
 		{
 			biomeClient,

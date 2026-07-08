@@ -72,6 +72,11 @@ export class RuntimeCoordinator {
 	private _projectSeq = 0;
 	private _turnStartProjectSeq = 0;
 	private readonly _fileSeq = new Map<string, number>();
+	// File key → the projectSeq value at that file's most recent bump (#451). Lets
+	// the review-graph builder ask "which files changed since I last built?" and
+	// skip its per-build O(project) walk+stat sweep when only pi-observed edits
+	// occurred. Keyed identically to _fileSeq (normalizeMapKey + path.resolve).
+	private readonly _fileLastProjectSeq = new Map<string, number>();
 	private _gitGuardHasBlockers = false;
 	private _gitGuardSummary = "";
 	callGraph: FunctionCallGraph | null = null;
@@ -123,6 +128,7 @@ export class RuntimeCoordinator {
 		this._projectSeq = 0;
 		this._turnStartProjectSeq = 0;
 		this._fileSeq.clear();
+		this._fileLastProjectSeq.clear();
 		this._gitGuardHasBlockers = false;
 		this._gitGuardSummary = "";
 		this._readGuard = null;
@@ -276,6 +282,10 @@ export class RuntimeCoordinator {
 		this._projectSeq = Math.max(0, Math.floor(projectSeq));
 		this._turnStartProjectSeq = this._projectSeq;
 		this._fileSeq.clear();
+		// Seeded per-file counters carry no projectSeq provenance, so start the
+		// changed-since map empty; the graph fast path simply won't fire until an
+		// in-process bump records a seq-stamped change (safe: falls back to sweep).
+		this._fileLastProjectSeq.clear();
 		for (const [filePath, seq] of fileSeqByPath ?? []) {
 			this._fileSeq.set(
 				normalizeMapKey(path.resolve(filePath)),
@@ -289,7 +299,23 @@ export class RuntimeCoordinator {
 		this._projectSeq += 1;
 		const fileSeq = (this._fileSeq.get(key) ?? 0) + 1;
 		this._fileSeq.set(key, fileSeq);
+		this._fileLastProjectSeq.set(key, this._projectSeq);
 		return { projectSeq: this._projectSeq, fileSeq };
+	}
+
+	/**
+	 * Files whose most recent bump happened AFTER `seq` — i.e. every file the
+	 * review graph would need to re-ingest to catch up from a build taken at
+	 * projectSeq `seq` (#451). Returns NORMALIZED keys (normalizeMapKey +
+	 * path.resolve), the same form the builder's fileSignatures map uses, so the
+	 * caller can compare without re-normalizing.
+	 */
+	getFilesChangedSince(seq: number): string[] {
+		const changed: string[] = [];
+		for (const [key, lastSeq] of this._fileLastProjectSeq) {
+			if (lastSeq > seq) changed.push(key);
+		}
+		return changed;
 	}
 
 	getFileSeq(filePath: string): number {

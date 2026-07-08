@@ -11,6 +11,7 @@ All notable changes to pi-lens will be documented in this file.
 - perf: cascade diagnostics now run concurrently after each edit instead of blocking the write pipeline (~26% median per-edit latency reduction); settled at turn_end with a bounded wait (#450)
 - perf: write-path micro batch — ESLint autofix runs a single `--fix` spawn (was dry-run + fix, double cold-start), LSP quick-fix lookups for blocking diagnostics run in parallel, and the lsp runner reuses its already-read file content for nosemgrep suppression (#453)
 - perf/refactor: the eight NDJSON debug loggers (latency, cascade, read-guard, tree-sitter, dead-code, actionable-warnings, ast-grep-tool, diagnostic) now share one buffered async writer (clients/ndjson-logger.ts) — no more synchronous appendFileSync on the per-edit hot path; best-effort sync flush at process exit (#454)
+- perf: the review-graph freshness check now uses RuntimeCoordinator sequence state to skip the per-build O(project) walk+stat sweep when only pi-observed edits occurred (seq fast path; periodic full re-verify every 20 builds/5 min catches external changes; PI_LENS_GRAPH_SEQ_FASTPATH=0 disables) (#451)
 
 ### Fixed
 

@@ -222,6 +222,18 @@ export interface PipelineContext {
 	getFlag: (name: string) => boolean | string | undefined;
 	/** Debug logger */
 	dbg: (msg: string) => void;
+	/**
+	 * RuntimeCoordinator sequence state, threaded to the deferred cascade so the
+	 * review-graph builder can skip its per-build O(project) walk+stat sweep when
+	 * only pi-observed edits occurred since the last build (#451). `projectSeq` is
+	 * a function (not a captured number) because the cascade runs AFTER this
+	 * pipeline returns (#450) — it must read the CURRENT seq at build time.
+	 * Absent ⇒ builder behaves exactly as before (full sweep).
+	 */
+	seqState?: {
+		projectSeq: () => number;
+		getFilesChangedSince: (seq: number) => string[];
+	};
 }
 
 export interface PipelineDeps {
@@ -1229,6 +1241,7 @@ export async function runPipeline(
 				dbg,
 				turnSeq: ctx.telemetry?.turnIndex,
 				writeSeq: ctx.telemetry?.writeIndex,
+				seqState: ctx.seqState,
 			}).catch(
 				(err): import("./cascade-types.js").CascadeRun => {
 					dbg(`cascade compute failed for ${filePath}: ${err}`);

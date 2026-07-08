@@ -70,15 +70,60 @@ const _workspaceGraphCache = new Map<
 		fileSignatures: Map<string, string>;
 		fileHashes?: Map<string, string>;
 		graph: ReviewGraph;
+		/**
+		 * The RuntimeCoordinator projectSeq at the time this entry was built (#451).
+		 * Only set on entries built in-process with a seqHint present. An entry
+		 * hydrated from the disk snapshot has none ⇒ no seq fast path for it until a
+		 * seq-hinted build records one.
+		 */
+		builtAtProjectSeq?: number;
+		/** Wall-clock of the last full walk+stat verify — bounds staleness vs external edits (#451). */
+		lastFullVerifyMs?: number;
+		/** Count of consecutive seq fast-path builds since the last full verify (#451). */
+		fastPathSinceVerify?: number;
 	}
 >();
+
+/**
+ * RuntimeCoordinator sequence hint (#451). Threaded from the deferred cascade so
+ * the builder can ask "which files changed since I last built?" and skip its
+ * per-build O(project) walk+stat sweep. Optional end-to-end: absent ⇒ today's
+ * behavior exactly.
+ */
+export interface GraphSeqHint {
+	projectSeq: () => number;
+	getFilesChangedSince: (seq: number) => string[];
+}
+
+/** Beyond this many seq-changed files, incremental re-extract nears sweep cost — just sweep (#451). */
+const SEQ_FASTPATH_MAX_CHANGES = 32;
+/** Force a full walk+stat re-verify at least this often in wall time (external-edit safety valve, #451). */
+const SEQ_FASTPATH_REVERIFY_MS = 5 * 60_000;
+/** ...and at least every Nth fast-path build per workspace. */
+const SEQ_FASTPATH_REVERIFY_EVERY = 20;
+
+type SeqFastpathFallback =
+	| "no-seq"
+	| "too-many-changes"
+	| "new-file"
+	| "verify-due"
+	| "removed-file"
+	| "stat-error";
+
 type GraphBuildInfo = {
 	reused: boolean;
-	mode: "full" | "cached" | "incremental" | "skipped";
+	mode: "full" | "cached" | "incremental" | "skipped" | "seq-fastpath";
 	skipReason?: string;
 	sourceFileCount?: number;
 	maxFileCount?: number;
+	/** When the seq fast path was attempted but fell back to the sweep (#451). */
+	seqFastpathFallback?: SeqFastpathFallback;
 };
+
+function seqFastpathEnabled(): boolean {
+	const raw = process.env.PI_LENS_GRAPH_SEQ_FASTPATH;
+	return raw !== "0" && raw !== "false";
+}
 
 let _lastGraphBuildInfo: GraphBuildInfo = {
 	reused: false,
@@ -1267,6 +1312,29 @@ interface IncrementalCtx {
 	fileSignatures: Map<string, string>;
 	signature: string;
 	facts: FactStore;
+	/** #451: seq to stamp onto the freshly-built entry (undefined ⇒ no fast path later). */
+	seqAtBuildStart?: number;
+}
+
+/**
+ * #451: the freshness-provenance fields written onto a workspace cache entry by
+ * any path that has just done (or reused a still-valid result of) the full
+ * walk+stat sweep. Records the projectSeq CAPTURED AT BUILD START — not read at
+ * stamp time — so a bump that interleaves during this build's awaits has
+ * seq > stamp and is re-ingested by the next diff (a miss would be a silently
+ * stale graph; a redundant re-extract is harmless). Also resets the
+ * periodic-reverify clock/counter — this build IS the verify.
+ */
+function verifiedCacheFields(seqAtBuildStart: number | undefined): {
+	builtAtProjectSeq?: number;
+	lastFullVerifyMs: number;
+	fastPathSinceVerify: number;
+} {
+	return {
+		builtAtProjectSeq: seqAtBuildStart,
+		lastFullVerifyMs: Date.now(),
+		fastPathSinceVerify: 0,
+	};
 }
 
 /**
@@ -1320,6 +1388,7 @@ async function tryIncrementalFromCache(
 			fileSignatures: new Map(ctx.fileSignatures),
 			fileHashes: hashes,
 			graph: cloneGraph(cached.graph),
+			...verifiedCacheFields(ctx.seqAtBuildStart),
 		});
 		// #260: pure drift leaves the graph unchanged — don't rewrite the disk blob.
 		_lastGraphBuildInfo = { reused: true, mode: "cached" };
@@ -1342,6 +1411,7 @@ async function tryIncrementalFromCache(
 		fileSignatures: new Map(ctx.fileSignatures),
 		fileHashes: hashes,
 		graph: graphSnapshot,
+		...verifiedCacheFields(ctx.seqAtBuildStart),
 	});
 	persistGraph(
 		ctx.cwd,
@@ -1355,14 +1425,178 @@ async function tryIncrementalFromCache(
 	return graph;
 }
 
+function hasGraphKindExtension(file: string): boolean {
+	const kind = detectFileKind(file);
+	return !!kind && MAIN_KINDS.has(kind) && detectFileRole(file) !== "test";
+}
+
+type SeqFastpathResult =
+	| { graph: ReviewGraph }
+	| { fallback: SeqFastpathFallback };
+
+/**
+ * #451: satisfy a build WITHOUT the O(project) walk+stat sweep, using the
+ * RuntimeCoordinator's seq state to enumerate exactly which files changed since
+ * this workspace graph was last built. On success sets `_lastGraphBuildInfo` and
+ * returns `{ graph }`; on any doubt returns `{ fallback }` WITHOUT touching
+ * `_lastGraphBuildInfo` (the caller's full sweep sets the mode and stamps the
+ * fallback reason). Correctness bar is HIGH: any doubt ⇒ fall back.
+ */
+async function trySeqFastpath(
+	cwd: string,
+	normalizedCwd: string,
+	normalizedChanged: string[],
+	facts: FactStore,
+	seqHint: GraphSeqHint,
+	seqAtBuildStart: number,
+): Promise<SeqFastpathResult> {
+	const cached = _workspaceGraphCache.get(normalizedCwd);
+	// Condition 2: need an in-process entry that recorded a build seq.
+	if (!cached || cached.builtAtProjectSeq === undefined) {
+		return { fallback: "no-seq" };
+	}
+
+	// Condition 5: periodic full re-verify safety valve (external edits — IDE, git
+	// checkout — never bump projectSeq). Age OR count triggers a sweep.
+	const now = Date.now();
+	const ageMs =
+		cached.lastFullVerifyMs === undefined
+			? Number.POSITIVE_INFINITY
+			: now - cached.lastFullVerifyMs;
+	const sinceVerify = cached.fastPathSinceVerify ?? 0;
+	if (ageMs > SEQ_FASTPATH_REVERIFY_MS || sinceVerify >= SEQ_FASTPATH_REVERIFY_EVERY) {
+		return { fallback: "verify-due" };
+	}
+
+	// Condition 3: bounded change set. changed ∪ changedFiles(param), normalized.
+	const changedSet = new Set(seqHint.getFilesChangedSince(cached.builtAtProjectSeq));
+	for (const file of normalizedChanged) changedSet.add(file);
+	const changed = [...changedSet];
+	if (changed.length > SEQ_FASTPATH_MAX_CHANGES) {
+		return { fallback: "too-many-changes" };
+	}
+
+	// Condition 4 + removal check. A file already known to the graph is safe. A
+	// file NOT in fileSignatures must exist on disk with a graph-kind extension
+	// (a genuine new file — updateGraphFiles' remove-then-add handles the add). A
+	// changed file that no longer exists on disk is a DELETION: incremental has no
+	// node-removal here, so fall back to the sweep (simple + correct).
+	const filesToUpdate: string[] = [];
+	for (const file of changed) {
+		const known = cached.fileSignatures.has(file);
+		let existsOnDisk = false;
+		try {
+			existsOnDisk = fs.statSync(file).isFile();
+		} catch {
+			existsOnDisk = false;
+		}
+		if (!existsOnDisk) {
+			// Known-but-now-missing = deletion; unknown-and-missing = irrelevant
+			// (e.g. a non-source path). Either way, be safe: known deletions need the
+			// sweep; unknown missing files we can just ignore.
+			if (known) {
+				return { fallback: "removed-file" };
+			}
+			continue;
+		}
+		if (!known) {
+			// New file: only ingest if it's a graph-relevant kind; a changed
+			// non-source sibling (config, doc) is simply not graph material.
+			if (!hasGraphKindExtension(file)) continue;
+		}
+		filesToUpdate.push(file);
+	}
+
+	if (filesToUpdate.length === 0) {
+		// Nothing graph-relevant actually changed. Reuse the cached graph as-is,
+		// refresh changed-symbol annotations, bump the fast-path counter.
+		const graph = cloneGraph(cached.graph);
+		rebuildIndexes(graph);
+		graph.changedSymbolsByFile.clear();
+		for (const file of normalizedChanged) {
+			upsertChangedSymbols(graph, facts, file);
+		}
+		// Stamp the seq captured at BUILD START — a bump that raced in during this
+		// build has seq > stamp and is re-diffed next build, never missed.
+		cached.builtAtProjectSeq = seqAtBuildStart;
+		cached.fastPathSinceVerify = sinceVerify + 1;
+		_lastGraphBuildInfo = { reused: true, mode: "seq-fastpath" };
+		facts.setSessionFact("session.reviewGraph", graph);
+		return { graph };
+	}
+
+	// Incremental re-extract over exactly the changed files. Reuses the SAME
+	// machinery as the signature-diff incremental path (updateGraphFiles), so
+	// there's no second incremental implementation.
+	const graph = cloneGraph(cached.graph);
+	try {
+		await updateGraphFiles(graph, cwd, filesToUpdate, facts);
+	} catch {
+		return { fallback: "stat-error" };
+	}
+
+	// Update fileSignatures/fileHashes for ONLY the touched files (stat/hash just
+	// those — the whole point of the fast path). Recompute the aggregate signature
+	// the same way the incremental branch does (sourceSignatureFromMap).
+	const nextSignatures = new Map(cached.fileSignatures);
+	const nextHashes = new Map(cached.fileHashes ?? new Map<string, string>());
+	for (const file of filesToUpdate) {
+		nextSignatures.set(file, sourceSignatureEntry(file));
+		nextHashes.set(file, contentHashEntry(file));
+	}
+	const nextSignature = sourceSignatureFromMap(nextSignatures);
+
+	const graphSnapshot = cloneGraph(graph);
+	_workspaceGraphCache.set(normalizedCwd, {
+		signature: nextSignature,
+		fileSignatures: nextSignatures,
+		fileHashes: nextHashes,
+		graph: graphSnapshot,
+		// Build-start seq, not stamp-time: see verifiedCacheFields — a bump that
+		// interleaved during updateGraphFiles' awaits must be re-diffed next build.
+		builtAtProjectSeq: seqAtBuildStart,
+		lastFullVerifyMs: cached.lastFullVerifyMs,
+		fastPathSinceVerify: sinceVerify + 1,
+	});
+	persistGraph(cwd, nextSignature, nextSignatures, nextHashes, graphSnapshot);
+	_lastGraphBuildInfo = { reused: true, mode: "seq-fastpath" };
+	facts.setSessionFact("session.reviewGraph", graph);
+	return { graph };
+}
+
 async function _doBuildGraph(
 	cwd: string,
 	changedFiles: string[],
 	facts: FactStore,
+	seqHint?: GraphSeqHint,
 ): Promise<ReviewGraph> {
 	const normalizedCwd = normalizeMapKey(cwd);
 	const normalizedChanged = changedFiles.map((file) => normalizeMapKey(file));
 	const normalizedChangedSet = new Set(normalizedChanged);
+	// #451: capture the seq BEFORE any await — every builtAtProjectSeq stamp in
+	// this build uses this value, so a bump that interleaves mid-build has
+	// seq > stamp and is re-diffed next build (redundant re-extract, never a miss).
+	const seqAtBuildStart = seqHint?.projectSeq();
+
+	// #451: seq fast path — skip the O(project) walk+stat sweep when the
+	// RuntimeCoordinator can tell us exactly which files changed. Any doubt inside
+	// falls through to the full sweep below (which refreshes the verify clock). The
+	// fallback reason is stamped onto whichever build-info the sweep records, so
+	// cascade.log can watch the fast-path hit/miss rate.
+	let seqFastpathFallback: SeqFastpathFallback | undefined;
+	if (seqHint && seqAtBuildStart !== undefined && seqFastpathEnabled()) {
+		const fast = await trySeqFastpath(
+			cwd,
+			normalizedCwd,
+			normalizedChanged,
+			facts,
+			seqHint,
+			seqAtBuildStart,
+		);
+		if ("graph" in fast) return fast.graph;
+		seqFastpathFallback = fast.fallback;
+	}
+
 	const filesToBuild = await getGraphSourceFiles(cwd);
 	const maxGraphFiles = getReviewGraphMaxFiles();
 	if (filesToBuild.length > maxGraphFiles) {
@@ -1378,6 +1612,7 @@ async function _doBuildGraph(
 			skipReason: "too_many_files",
 			sourceFileCount: filesToBuild.length,
 			maxFileCount: maxGraphFiles,
+			seqFastpathFallback,
 		};
 		facts.setSessionFact("session.reviewGraph", graph);
 		return graph;
@@ -1394,7 +1629,11 @@ async function _doBuildGraph(
 		for (const file of normalizedChanged) {
 			upsertChangedSymbols(graph, facts, file);
 		}
-		_lastGraphBuildInfo = { reused: true, mode: "cached" };
+		// #451: a signature-matching hit means the walk+stat just confirmed nothing
+		// changed — a legitimate full verify. Refresh the clock/counter and seq so a
+		// later fast path diffs from here and the periodic re-verify resets.
+		Object.assign(memCached, verifiedCacheFields(seqAtBuildStart));
+		_lastGraphBuildInfo = { reused: true, mode: "cached", seqFastpathFallback };
 		facts.setSessionFact("session.reviewGraph", graph);
 		return graph;
 	}
@@ -1406,8 +1645,12 @@ async function _doBuildGraph(
 			fileSignatures,
 			signature,
 			facts,
+			seqAtBuildStart,
 		});
-		if (incremental) return incremental;
+		if (incremental) {
+			_lastGraphBuildInfo.seqFastpathFallback = seqFastpathFallback;
+			return incremental;
+		}
 	}
 
 	// Tier 2: disk cache (cold start — files unchanged since last persist)
@@ -1424,8 +1667,9 @@ async function _doBuildGraph(
 			fileSignatures: new Map(fileSignatures),
 			fileHashes: diskCached.fileHashes,
 			graph: cloneGraph(diskCached.graph),
+			...verifiedCacheFields(seqAtBuildStart),
 		});
-		_lastGraphBuildInfo = { reused: true, mode: "cached" };
+		_lastGraphBuildInfo = { reused: true, mode: "cached", seqFastpathFallback };
 		facts.setSessionFact("session.reviewGraph", graph);
 		return graph;
 	}
@@ -1448,9 +1692,13 @@ async function _doBuildGraph(
 				fileSignatures,
 				signature,
 				facts,
+				seqAtBuildStart,
 			},
 		);
-		if (incremental) return incremental;
+		if (incremental) {
+			_lastGraphBuildInfo.seqFastpathFallback = seqFastpathFallback;
+			return incremental;
+		}
 	}
 
 	// Tier 3: full build
@@ -1475,9 +1723,10 @@ async function _doBuildGraph(
 		fileSignatures: new Map(fileSignatures),
 		fileHashes,
 		graph: graphSnapshot,
+		...verifiedCacheFields(seqAtBuildStart),
 	});
 	persistGraph(cwd, signature, fileSignatures, fileHashes, graphSnapshot); // fire-and-forget
-	_lastGraphBuildInfo = { reused: false, mode: "full" };
+	_lastGraphBuildInfo = { reused: false, mode: "full", seqFastpathFallback };
 	facts.setSessionFact("session.reviewGraph", graph);
 	return graph;
 }
@@ -1486,12 +1735,13 @@ export function buildOrUpdateGraph(
 	cwd: string,
 	changedFiles: string[],
 	facts: FactStore,
+	seqHint?: GraphSeqHint,
 ): Promise<ReviewGraph> {
 	const cacheKey = `${cwd}|${[...changedFiles].sort((a, b) => a.localeCompare(b)).join(",")}`;
 	const cached = _buildCache.get(cacheKey);
 	if (cached) return cached;
 
-	const promise = _doBuildGraph(cwd, changedFiles, facts).catch((err) => {
+	const promise = _doBuildGraph(cwd, changedFiles, facts, seqHint).catch((err) => {
 		_buildCache.delete(cacheKey);
 		throw err as Error;
 	});

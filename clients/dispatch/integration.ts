@@ -528,9 +528,18 @@ export async function computeCascadeForFile(
 		/** Turn/write sequence from RuntimeCoordinator — scopes cascade caches (A5/B10) */
 		turnSeq?: number;
 		writeSeq?: number;
+		/**
+		 * RuntimeCoordinator sequence state (#451). When present, the graph build
+		 * below can take the seq fast path and skip the O(project) walk+stat sweep.
+		 * `projectSeq` is read at build time (deferred cascade, #450).
+		 */
+		seqState?: {
+			projectSeq: () => number;
+			getFilesChangedSince: (seq: number) => string[];
+		};
 	} = {},
 ): Promise<CascadeRun> {
-	const { hasBlockers = false, dbg, turnSeq = 0, writeSeq } = options;
+	const { hasBlockers = false, dbg, turnSeq = 0, writeSeq, seqState } = options;
 
 	ensureCascadeTurnScope(turnSeq);
 
@@ -583,7 +592,12 @@ export async function computeCascadeForFile(
 
 	if (CASCADE_GRAPH_KINDS.has(fileKind)) {
 		const graphStart = Date.now();
-		const graph = await buildOrUpdateGraph(cwd, [normalizedFile], sessionFacts);
+		const graph = await buildOrUpdateGraph(
+			cwd,
+			[normalizedFile],
+			sessionFacts,
+			seqState,
+		);
 		const graphMs = Date.now() - graphStart;
 		const reverseDepsIndex = buildReverseDependencyIndexFromGraph({
 			cwd,
@@ -633,6 +647,9 @@ export async function computeCascadeForFile(
 				skipReason: graphBuildInfo.skipReason,
 				sourceFileCount: graphBuildInfo.sourceFileCount,
 				maxFileCount: graphBuildInfo.maxFileCount,
+				// #451: when the seq fast path fell back (or was skipped), why — so
+				// cascade.log surfaces the fast-path hit/miss rate.
+				seqFastpathFallback: graphBuildInfo.seqFastpathFallback,
 			},
 		});
 

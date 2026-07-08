@@ -4,7 +4,10 @@ import {
 	computeTransitiveImpact as computeTransitiveImpactImpl,
 	type TransitiveImpactResult,
 } from "./query.js";
-import { buildOrUpdateGraph as buildOrUpdateGraphImpl } from "./builder.js";
+import {
+	buildOrUpdateGraph as buildOrUpdateGraphImpl,
+	type GraphSeqHint,
+} from "./builder.js";
 import { formatImpactCascade as formatImpactCascadeImpl } from "./format.js";
 import { buildModuleGraph } from "./workspace-modules.js";
 import type { ImpactCascadeResult, ReviewGraph } from "./types.js";
@@ -16,8 +19,9 @@ export async function buildOrUpdateGraph(
 	cwd: string,
 	changedFiles: string[],
 	facts: FactStore,
+	seqHint?: GraphSeqHint,
 ): Promise<ReviewGraph> {
-	return buildOrUpdateGraphImpl(cwd, changedFiles, facts);
+	return buildOrUpdateGraphImpl(cwd, changedFiles, facts, seqHint);
 }
 
 export function computeImpactCascade(
