@@ -8,6 +8,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Changed
 
+- perf: cascade diagnostics now run concurrently after each edit instead of blocking the write pipeline (~26% median per-edit latency reduction); settled at turn_end with a bounded wait (#450)
+
 ### Fixed
 
 - **`no-init-return` no longer flags factory functions** (#439) — the ast-grep rule matched `return` inside any `function_definition` whose *body text* regex-contained `def __init__`, so a factory that returns a class with an `__init__` (and its sibling methods' returns) tripped it. It now matches a `function_definition` whose **name field** is `__init__` (`has: field: name`), so only real `__init__` returns are flagged. Regression fixtures added (factory + sibling-method cases).
