@@ -18,11 +18,14 @@ jobs:
       # yamllint disable-line rule:line-length
       - uses: actions/first-interaction@1c4688942c71f71d4f5502a26ea67c331730fa4d # v3.1.0
         with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          issue-message: >
+          # v3 renamed the inputs from hyphenated to underscored (#405 bumped
+          # first-interaction 1→3). The old names fail with "Input required and
+          # not supplied: issue_message".
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          issue_message: >
             Thanks for opening your first issue! Please check
             [`CONTRIBUTING.md`](../../blob/master/CONTRIBUTING.md) for issue
             templates and guidelines. A maintainer will triage this soon.
-          pr-message: >
+          pr_message: >
             Thanks for your first pull request! A maintainer will review it
             soon. Please make sure CI passes and the PR template is filled out.
