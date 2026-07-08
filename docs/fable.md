@@ -30,9 +30,24 @@ edit 6.4s, of which ~1.67s / 26% was the awaited cascade):
   same-root warm attach over the existing IPC seam; protocol multiplexing
   explicitly rejected). Strategic, not started.
 
+Second wave (same day, evening):
+
+- **#460/#390 → PR #463 MERGED** — per-server clean-signal probe (phase-aware
+  4-way: 2 / 2\* / 3 / unknown) + the LSP-docs nightly commit-back that #390
+  showed was missing (merge-don't-regress guard, auto-PR on
+  `bot/lsp-docs-refresh`). Measured: typescript's clean silence is
+  diagnostic-set-dependent (re-publishes while dirty, silent once clean —
+  the production budget-wait case confirmed); opengrep/yaml are 2\*
+  (version-less publish still resolves the wait — NOT #458 targets).
+- **Filed:** #458 (learned clean-signal deadlines — the ~1–1.5s median win on
+  clean TS edits; build AFTER dogfooding + first nightly matrix), #459
+  (skip reverse-deps rebuild+write when the graph didn't change — quick),
+  #462 re-scoped (slow-FS mode via latency probe, not mount-regex).
+
 Dogfooding follow-up: after a few days, re-run the latency analysis to
 confirm the p50 edit dropped from ~5.8s toward ~4.3s and check the two new
-observability signals above.
+observability signals above; also check the first `bot/lsp-docs-refresh`
+nightly PR behaves (populates ci columns, no row regressions).
 
 Everything below is the original assessment; items 1, 2, and the smaller
 observations (config-finder family, errorDebtBaseline, legacy-client
