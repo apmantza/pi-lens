@@ -27,6 +27,26 @@ const TREE_SITTER_WASMS_VERSION = "0.1.13";
 const PACKAGE = "tree-sitter-wasms";
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const MANIFEST_PATH = join(SCRIPT_DIR, "grammars.lock.json");
+export const SOURCE_OVERRIDES = {
+    "tree-sitter-lua.wasm": {
+        package: "@tree-sitter-grammars/tree-sitter-lua",
+        version: "0.4.1",
+        url: "https://unpkg.com/@tree-sitter-grammars/tree-sitter-lua@0.4.1/tree-sitter-lua.wasm",
+    },
+    "tree-sitter-yaml.wasm": {
+        package: "@tree-sitter-grammars/tree-sitter-yaml",
+        version: "0.7.1",
+        url: "https://unpkg.com/@tree-sitter-grammars/tree-sitter-yaml@0.7.1/tree-sitter-yaml.wasm",
+    },
+};
+/** The package a grammar's sidecar records (override or the global aggregator). */
+export function expectedPackage(filename, manifest) {
+    return manifest.overrides?.[filename]?.package ?? SOURCE_OVERRIDES[filename]?.package ?? manifest.package;
+}
+/** The version a grammar's sidecar records (override or the global aggregator). */
+export function expectedVersion(filename, manifest) {
+    return manifest.overrides?.[filename]?.version ?? SOURCE_OVERRIDES[filename]?.version ?? manifest.version;
+}
 export const GRAMMARS = [
     // Core typed languages
     "tree-sitter-typescript.wasm",
@@ -74,31 +94,6 @@ export const CORE = [
     "tree-sitter-css.wasm",
     "tree-sitter-java.wasm",
 ];
-// Grammars we build from source and commit (shipped as bytes via files[], NOT
-// downloaded) because the prebuilt CDN wasm crashes/is-incompatible with the pinned
-// web-tree-sitter. tree-sitter-swift @ tree-sitter-wasms 0.1.13 fatally crashes
-// Node 24 (#423); the from-source build survives (verified by the grammar-load
-// guard). Their provenance lives under `vendored` in grammars.lock.json.
-export const VENDORED = {
-    "tree-sitter-swift.wasm": {
-        npmPackage: "tree-sitter-swift",
-        version: "0.7.1",
-        builtWith: "tree-sitter-cli@0.25.6",
-        reason: "prebuilt tree-sitter-wasms@0.1.13 swift.wasm fatally crashes Node 24 (#423)",
-    },
-};
-export function isVendored(filename) {
-    return filename in VENDORED;
-}
-/** The provenance version a grammar's sidecar must record — the per-grammar
- *  vendored version if vendored, else the global tree-sitter-wasms version. */
-export function expectedVersion(filename, manifest) {
-    return manifest.vendored?.[filename]?.version ?? manifest.version;
-}
-/** The npmPackage a grammar's sidecar must record (vendored override or global). */
-export function expectedPackage(filename, manifest) {
-    return manifest.vendored?.[filename]?.npmPackage ?? manifest.package;
-}
 /** `sha256:<hex>` digest of a buffer, matching the manifest/sidecar format. */
 export function sha256(buf) {
     return `sha256:${createHash("sha256").update(buf).digest("hex")}`;
@@ -145,8 +140,12 @@ function findGrammarsDir() {
 function baseUrl(version) {
     return `https://unpkg.com/${PACKAGE}@${version}/out`;
 }
+/** Fetch URL for a grammar: its source override if any, else the aggregator. */
+function grammarUrl(version, filename) {
+    return SOURCE_OVERRIDES[filename]?.url ?? `${baseUrl(version)}/${filename}`;
+}
 async function fetchGrammar(version, filename) {
-    const res = await fetch(`${baseUrl(version)}/${filename}`);
+    const res = await fetch(grammarUrl(version, filename));
     if (!res.ok)
         throw new Error(`HTTP ${res.status} fetching ${filename}`);
     return Buffer.from(await res.arrayBuffer());
@@ -171,8 +170,8 @@ async function downloadGrammar(destDir, filename, manifest) {
     const wasm = join(destDir, filename);
     writeFileSync(wasm, buf);
     const sidecar = {
-        npmPackage: manifest.package,
-        version: manifest.version,
+        npmPackage: expectedPackage(filename, manifest),
+        version: expectedVersion(filename, manifest),
         sha256: actual,
     };
     writeFileSync(sidecarPathFor(wasm), `${JSON.stringify(sidecar, null, 2)}\n`);
@@ -194,23 +193,11 @@ function parseArgs(argv) {
     }
     return out;
 }
-/** Regenerate grammars.lock.json by fetching every grammar and hashing it.
- *  VENDORED grammars aren't on the CDN — hash their committed bytes instead, and
- *  re-emit the `vendored` provenance section from VENDORED. */
+/** Regenerate grammars.lock.json by fetching every grammar and hashing it. */
 async function regenerateManifest() {
     console.error(`Regenerating manifest from ${PACKAGE}@${TREE_SITTER_WASMS_VERSION} …`);
-    const committedGrammarsDir = join(dirname(SCRIPT_DIR), "grammars");
     const grammars = {};
     for (const g of GRAMMARS) {
-        if (isVendored(g)) {
-            const committed = join(committedGrammarsDir, g);
-            if (!existsSync(committed)) {
-                throw new Error(`vendored grammar ${g} not found at ${committed} — build + commit it before regenerating the manifest`);
-            }
-            grammars[g] = sha256(readFileSync(committed));
-            console.error(`  vendored ${g} (hashed committed bytes)`);
-            continue;
-        }
         grammars[g] = sha256(await fetchGrammar(TREE_SITTER_WASMS_VERSION, g));
         console.error(`  hashed ${g}`);
     }
@@ -221,7 +208,7 @@ async function regenerateManifest() {
         package: PACKAGE,
         version: TREE_SITTER_WASMS_VERSION,
         grammars: sorted,
-        vendored: VENDORED,
+        ...(Object.keys(SOURCE_OVERRIDES).length ? { overrides: SOURCE_OVERRIDES } : {}),
     };
     writeFileSync(MANIFEST_PATH, `${JSON.stringify(manifest, null, 2)}\n`);
     console.error(`Wrote ${MANIFEST_PATH} (${GRAMMARS.length} grammars).`);
@@ -236,9 +223,7 @@ async function main() {
     const grammarsDir = args.dest
         ? join(process.cwd(), args.dest)
         : findGrammarsDir();
-    // VENDORED grammars are committed bytes, not on the CDN — never download them
-    // (a fetch would pull the crashing prebuilt wasm over the good vendored one).
-    const list = (args.core ? CORE : GRAMMARS).filter((g) => !isVendored(g));
+    const list = args.core ? CORE : GRAMMARS;
     if (!existsSync(grammarsDir)) {
         mkdirSync(grammarsDir, { recursive: true });
     }

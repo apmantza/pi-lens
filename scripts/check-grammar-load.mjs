@@ -60,7 +60,9 @@ async function main() {
 		return;
 	}
 
-	const { LANGUAGE_TO_GRAMMAR } = await import("../clients/grammar-source.js");
+	const { LANGUAGE_TO_GRAMMAR, grammarBlockReason } = await import(
+		"../clients/grammar-source.js"
+	);
 	const languages = Object.keys(LANGUAGE_TO_GRAMMAR).sort();
 
 	console.error(
@@ -69,7 +71,18 @@ async function main() {
 
 	const crashed = [];
 	const unavailable = [];
+	const blocked = [];
 	for (const lang of languages) {
+		// Grammars the runtime intentionally refuses to load on this runtime
+		// (BLOCKED_GRAMMARS) are skipped here too — the runtime never loads them,
+		// so exercising them would just reproduce the crash we already handle. A
+		// crash from a NON-blocked grammar still fails this guard (hard gate).
+		const blockReason = grammarBlockReason(LANGUAGE_TO_GRAMMAR[lang]);
+		if (blockReason) {
+			blocked.push(lang);
+			console.error(`  block  ${lang} (${blockReason})`);
+			continue;
+		}
 		const r = spawnSync(process.execPath, [HERE, lang], {
 			timeout: 120_000,
 			encoding: "utf8",
@@ -97,6 +110,7 @@ async function main() {
 	console.error("\n[grammar-load-check] summary:");
 	console.error(`  crashed:     ${crashed.map((c) => c.lang).join(", ") || "none"}`);
 	console.error(`  unavailable: ${unavailable.join(", ") || "none"}`);
+	console.error(`  blocked:     ${blocked.join(", ") || "none"}`);
 	if (crashed.length > 0) {
 		console.error(
 			`\n✗ ${crashed.length} grammar(s) crash the runtime on this platform — they must be blocklisted (BLOCKED_GRAMMARS).`,

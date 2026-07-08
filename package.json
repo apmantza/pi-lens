@@ -1,6 +1,6 @@
 {
 	"name": "pi-lens",
-	"version": "3.8.65",
+	"version": "3.8.66",
 	"type": "module",
 	"description": "Real-time code feedback for pi — LSP, linters, formatters, type-checking, structural analysis & booboo",
 	"repository": {
@@ -14,7 +14,7 @@
 	},
 	"scripts": {
 		"build": "tsc --project tsconfig.build.json",
-		"build:dist": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && tsc --project tsconfig.dist.json --noCheck",
+		"build:dist": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && npx --yes -p typescript@6 tsc --project tsconfig.dist.json --noCheck",
 		"prepare": "npm run build:dist && node scripts/download-grammars.js --core --dest grammars",
 		"lint": "tsc --project tsconfig.json",
 		"watch": "tsc --watch",

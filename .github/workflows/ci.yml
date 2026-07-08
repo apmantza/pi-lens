@@ -89,8 +89,21 @@ jobs:
         with:
           node-version: '22'
 
-      # --omit=dev omits @types/node (a devDep); typescript is a runtime dep so
-      # tsc is present. This is the exact environment pi builds dist in.
+      # #437: typescript is a devDependency (#402), so --omit=dev omits it. pi builds
+      # the GitHub install from source under --omit=dev, so `build:dist` must resolve
+      # tsc WITHOUT a local typescript. GitHub runners ship typescript GLOBALLY, which
+      # would let a bare `tsc` leak off PATH and hide the regression — so remove it
+      # first, forcing build:dist to resolve tsc itself (npx -p typescript). If this
+      # step ever fails, the from-source --omit=dev build is broken for real users.
+      - name: Remove global typescript (kill the PATH leak that hid #437)
+        run: |
+          npm rm -g typescript 2>/dev/null || true
+          if command -v tsc >/dev/null 2>&1; then
+            echo "note: a tsc still on PATH at $(command -v tsc) — build must not depend on it"
+          else
+            echo "no global tsc — clean"
+          fi
+
       - name: Install without devDeps (--omit=dev)
         run: npm install --omit=dev --no-audit --no-fund
 
@@ -111,6 +124,30 @@ jobs:
             exit 1
           fi
           echo "Production --omit=dev build + load OK"
+
+      # The faithful reproduction of `pi install git:github.com/apmantza/pi-lens`
+      # (#437): pi CLONES the repo and runs `npm install --omit=dev` in a PRISTINE
+      # tree (no pre-existing node_modules / dev artifacts), which runs the WHOLE
+      # `prepare` — build:dist (npx-resolved tsc, since typescript is a devDep and
+      # global tsc was removed above) AND the grammar download. This catches the
+      # from-source install class end-to-end, the way a real user hits it.
+      - name: Simulate `pi install git:…` (clean clone + --omit=dev)
+        run: |
+          set -e
+          rm -rf "$RUNNER_TEMP/gh-install"
+          git clone --quiet . "$RUNNER_TEMP/gh-install"
+          cd "$RUNNER_TEMP/gh-install"
+          npm install --omit=dev --no-audit --no-fund
+          test -f dist/index.js || \
+            (echo "ERROR: dist/index.js not built from a clean clone under --omit=dev" && exit 1)
+          node dist/index.js 2>&1 | tee /tmp/gh-load.txt || true
+          if grep -q "ERR_MODULE_NOT_FOUND\|Cannot find module" /tmp/gh-load.txt \
+             && ! grep -q "pi-coding-agent" /tmp/gh-load.txt; then
+            echo "FAILED: missing runtime module from a clean GitHub-style install"
+            cat /tmp/gh-load.txt
+            exit 1
+          fi
+          echo "GitHub-style install (clean clone + --omit=dev) OK"
 
   install-test:
     name: Install test (${{ matrix.os }})

@@ -393,19 +393,22 @@ const SYMBOL_QUERIES: Record<string, { defs: string; refs: string }> = {
     `,
 	},
 	lua: {
-		// #251: this grammar names function defs function_definition_statement /
-		// local_function_definition_statement (name as a direct child), and calls
-		// `call (variable (identifier))` — the old function_declaration /
-		// local_function / function_call node names don't exist (zero symbols).
+		// #255: pulled from @tree-sitter-grammars/tree-sitter-lua (the aggregator's
+		// build corrupts once a 2nd grammar loads). That grammar names function defs
+		// `function_declaration` — the name is either a direct (identifier) (global /
+		// `local function`) or a (dot_index_expression) for `function M.run`. Calls
+		// are `function_call` with an (identifier) or (dot_index_expression) callee.
 		defs: `
-      (function_definition_statement
+      (function_declaration
         (identifier) @funcName) @funcDef
 
-      (local_function_definition_statement
-        (identifier) @funcName) @funcDef
+      (function_declaration
+        (dot_index_expression) @funcName) @funcDef
     `,
 		refs: `
-      (call (variable (identifier) @callIdent)) @callRef
+      (function_call (identifier) @callIdent) @callRef
+
+      (function_call (dot_index_expression) @callIdent) @callRef
     `,
 	},
 	ocaml: {
@@ -473,10 +476,6 @@ SYMBOL_QUERIES.tsx = SYMBOL_QUERIES.typescript;
 // `Query.matches()` DOES apply these predicates (probed on the shipped grammars):
 // an unpredicated ruby `require` query over-matches `puts`/`foo`, the predicated
 // one returns only the require args.
-// lua is intentionally absent: its grammar parses to ERROR trees once a 2nd
-// grammar loads into the shared WASM Module (#255), so neither its symbols nor a
-// lua import query work in the real review-graph client. The validated lua query
-// is recorded on #255 and lands once the parse corruption is fixed.
 const IMPORT_QUERIES: Record<string, string> = {
 	// ESM import + re-export source strings; `source:` is a (string) on both the
 	// typescript and tsx grammars (validated). parseImportMatch strips the quotes.
@@ -520,6 +519,14 @@ const IMPORT_QUERIES: Record<string, string> = {
 	php: `(namespace_use_clause (name) @importSource)`,
 	ocaml: `(open_module (module_path) @importSource)`,
 	dart: `(import_specification (configurable_uri (uri (string_literal) @importSource)))`,
+	// local x = require("mod.a") — a plain function call, not a statement. The
+	// pulled @tree-sitter-grammars grammar (#255) names it function_call.
+	lua: `
+      (function_call
+        (identifier) @_m
+        (arguments (string) @importSource)
+        (#match? @_m "^require$"))
+    `,
 	// require "x" / require_relative "x" — covers both via the "^require" prefix.
 	ruby: `
       (call
