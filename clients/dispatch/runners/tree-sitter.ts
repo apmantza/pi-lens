@@ -8,6 +8,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { RuleCache } from "../../cache/rule-cache.js";
+import { isTestFile } from "../../file-utils.js";
 import { resolvePackagePath } from "../../package-root.js";
 import {
 	buildOrUpdateGraph,
@@ -487,9 +488,15 @@ const treeSitterRunner: RunnerDefinition = {
 		// Run all queries regardless of blockingOnly — warning-tier results are logged
 		// for diagnostic history but filtered from agent output by the dispatcher.
 		// Only skip "review" tier queries on write (too noisy / expensive).
-		const effectiveQueries = ctx.blockingOnly
-			? languageQueries.filter((q) => q.inline_tier !== "review")
-			: languageQueries;
+		// Per-rule test-file carve-out (#440): rules that are noise in tests (e.g.
+		// python-assert-production — `assert` is the idiomatic test assertion) opt
+		// out via `skip_test_files` while the runner otherwise runs on test files.
+		const fileIsTest = isTestFile(filePath);
+		const effectiveQueries = (
+			ctx.blockingOnly
+				? languageQueries.filter((q) => q.inline_tier !== "review")
+				: languageQueries
+		).filter((q) => !(fileIsTest && q.skip_test_files));
 
 		logTreeSitter({
 			phase: "queries_loaded",

@@ -5,6 +5,10 @@ category: correctness
 defect_class: correctness
 inline_tier: warning
 language: python
+# `assert` is the idiomatic test assertion — firing there is pure noise and
+# trains users to ignore the rule, so skip test files (#440). Production asserts
+# (the -O strip risk) still get flagged.
+skip_test_files: true
 
 message: "assert statement stripped by Python -O flag — use explicit checks with exceptions in production code"
 

@@ -239,10 +239,12 @@ export interface PipelineResult {
 	hasBlockers: boolean;
 	/**
 	 * Cascade diagnostics (errors in OTHER files caused by this edit).
-	 * Intentionally NOT included in output — surfaced at turn_end instead
-	 * so mid-refactor intermediate errors don't derail the agent.
+	 * Runs concurrently AFTER the edit returns — the pipeline no longer awaits it,
+	 * so it is off the write hot path. Intentionally NOT included in output;
+	 * settled (bounded) and surfaced at turn_end so mid-refactor intermediate
+	 * errors don't derail the agent. Never rejects (see the `.catch` below).
 	 */
-	cascadeRun?: import("./cascade-types.js").CascadeRun;
+	cascadePromise?: Promise<import("./cascade-types.js").CascadeRun>;
 	/** True if secrets found — block the agent */
 	isError: boolean;
 	/** True if file was modified by format/autofix */
@@ -1249,16 +1251,30 @@ export async function runPipeline(
 	});
 
 	// --- 6. Cascade diagnostics (LSP only) ---
-	// Deferred: cascade errors in OTHER files are NOT shown inline — surfaced at
-	// turn_end so mid-refactor intermediate errors don't derail the agent.
-	const cascadeRun = getFlag("no-lsp")
+	// Kicked off UNAWAITED so the graph rebuild + neighbor LSP pulls run
+	// concurrently after the edit returns rather than blocking it (#450). The
+	// result is never shown inline — settled (bounded) and surfaced at turn_end.
+	// The stored promise must never reject: an unhandled rejection is fatal, so a
+	// failing compute resolves to an "error" skip-run instead.
+	const cascadePromise = getFlag("no-lsp")
 		? undefined
-		: await computeCascadeForFile(filePath, cwd, {
+		: computeCascadeForFile(filePath, cwd, {
 				hasBlockers,
 				dbg,
 				turnSeq: ctx.telemetry?.turnIndex,
 				writeSeq: ctx.telemetry?.writeIndex,
-			});
+			}).catch(
+				(err): import("./cascade-types.js").CascadeRun => {
+					dbg(`cascade compute failed for ${filePath}: ${err}`);
+					return {
+						filePath,
+						result: undefined,
+						neighborCount: 0,
+						diagnosticCount: 0,
+						skipReason: "error",
+					};
+				},
+			);
 
 	// --- Final timing + all-clear ---
 	const elapsed = Date.now() - pipelineStart;
@@ -1292,7 +1308,7 @@ export async function runPipeline(
 	return {
 		output,
 		hasBlockers,
-		cascadeRun,
+		cascadePromise,
 		isError: false,
 		fileModified,
 		changedFiles,

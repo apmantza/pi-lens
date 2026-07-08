@@ -54,6 +54,14 @@ export interface TreeSitterQuery {
 	confidence?: "low" | "medium" | "high";
 	defect_class?: string;
 	inline_tier?: "blocking" | "warning" | "review";
+	/**
+	 * Skip this rule on test files (isTestFile). For advisories that are noise in
+	 * tests — e.g. `python-assert-production`: `assert` is the idiomatic test
+	 * assertion, so firing there just trains users to ignore the rule (#440).
+	 * The tree-sitter runner otherwise runs on test files (structural issues
+	 * matter there), so this is a deliberate per-rule carve-out.
+	 */
+	skip_test_files?: boolean;
 	has_fix: boolean;
 	fix_action?: string;
 	examples?: {
@@ -186,6 +194,7 @@ export class TreeSitterQueryLoader {
 				inline_tier: parsed.inline_tier
 					? (String(parsed.inline_tier) as "blocking" | "warning" | "review")
 					: undefined,
+				skip_test_files: parsed.skip_test_files === true,
 				// Parse predicates if present
 				predicates: Array.isArray(parsed.predicates)
 					? parsed.predicates.map((p: any) => ({

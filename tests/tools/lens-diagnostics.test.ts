@@ -470,6 +470,62 @@ describe("lens_diagnostics mode=full", () => {
 		});
 	});
 
+	it("honors inline `# pi-lens-ignore` like mode=all (#442)", async () => {
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-diag-suppress-"));
+		resetProjectLensConfigCache();
+		try {
+			const file = path.join(cwd, "app.py");
+			fs.writeFileSync(
+				file,
+				"value = eval(userInput)  # pi-lens-ignore: no-eval\n",
+			);
+			mockSummaries.length = 0;
+			mockSummaries.push(
+				sum(
+					file,
+					{ blocking: 1 },
+					{
+						diagnostics: [
+							{
+								severity: "error",
+								semantic: "blocking",
+								message: "eval of untrusted input",
+								line: 1,
+								rule: "no-eval",
+								tool: "ast-grep",
+							},
+						],
+					},
+				),
+			);
+			const lspService = {
+				runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
+			};
+			const tool = createLensDiagnosticsTool(
+				makeCacheManager({}) as any,
+				() => cwd,
+				() => lspService as any,
+			);
+			const result = await tool.execute(
+				"1",
+				{ mode: "full" },
+				new AbortController().signal,
+				null,
+				{ cwd },
+			);
+			const text = String(result.content[0].text);
+			// The suppressed finding must NOT appear and must NOT count as blocking
+			// (a fully-suppressed run reports clean, so totalBlocking is 0/absent).
+			expect(text).not.toContain("eval of untrusted input");
+			expect(
+				(result.details as { totalBlocking?: number }).totalBlocking ?? 0,
+			).toBe(0);
+		} finally {
+			fs.rmSync(cwd, { recursive: true, force: true });
+			resetProjectLensConfigCache();
+		}
+	});
+
 	it("forwards maxLspFiles to the LSP workspace sweep as maxFiles (#341)", async () => {
 		mockSummaries.length = 0;
 		const lspService = {

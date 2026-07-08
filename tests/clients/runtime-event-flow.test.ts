@@ -25,7 +25,7 @@ vi.mock("../../clients/pipeline.js", () => ({
 		hasBlockers: false,
 		isError: false,
 		fileModified: false,
-		cascadeRun: undefined,
+		cascadePromise: undefined,
 	})),
 }));
 

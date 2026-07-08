@@ -9,8 +9,10 @@
  *   full            — active project-wide LSP diagnostic scan merged with all.
  */
 
+import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { Type } from "../clients/deps/typebox.js";
+import { applyInlineSuppressions } from "../clients/dispatch/inline-suppressions.js";
 import { compactRenderResult } from "./render-compact.js";
 import { combineAbortSignals } from "../clients/deadline-utils.js";
 import { getProjectIgnoreMatcher } from "../clients/file-utils.js";
@@ -593,6 +595,38 @@ function mergeDiagnosticsWithWidgetSummaries(
 	return [...byFile.values()];
 }
 
+/**
+ * Apply inline `pi-lens-ignore` suppression to the merged mode=full summaries so
+ * the project-wide sweep honors the same comments as the per-edit path (#442) —
+ * without it, a site cleanly suppressed in mode=all reappears as blocking here.
+ * Reads each flagged file once (bounded to files that actually have diagnostics);
+ * a read failure is fail-safe (keep the diagnostics rather than hide a finding on
+ * an I/O error). Re-summarizes so the blocking/error/warning counts reflect the
+ * suppression.
+ */
+async function applyInlineSuppressionsToSummaries(
+	summaries: FileDiagnosticSummary[],
+): Promise<FileDiagnosticSummary[]> {
+	return Promise.all(
+		summaries.map(async (summary) => {
+			if (!summary.diagnostics.length) return summary;
+			let content: string;
+			try {
+				content = await fs.readFile(summary.filePath, "utf8");
+			} catch {
+				return summary; // never hide a finding on a read error
+			}
+			const kept = applyInlineSuppressions(summary.diagnostics, content);
+			if (kept.length === summary.diagnostics.length) return summary;
+			return summarizeDiagnostics(
+				summary.filePath,
+				kept,
+				summary.hasFinalSnapshot,
+			);
+		}),
+	);
+}
+
 function shouldUseCachedProjectDiagnostics(value: unknown): boolean {
 	return value === "cached";
 }
@@ -727,13 +761,15 @@ async function formatFullMode(
 		loadProjectDiagnosticsDeltaReport(cwd),
 		includeFile,
 	);
-	const summaries = mergeDiagnosticsWithWidgetSummaries(
-		getFileDiagnosticSummaries().filter((summary) =>
-			includeFile(summary.filePath),
+	const summaries = await applyInlineSuppressionsToSummaries(
+		mergeDiagnosticsWithWidgetSummaries(
+			getFileDiagnosticSummaries().filter((summary) =>
+				includeFile(summary.filePath),
+			),
+			lspResults,
+			projectSnapshot,
+			projectDelta,
 		),
-		lspResults,
-		projectSnapshot,
-		projectDelta,
 	);
 	const result = formatAllMode(cwd, severity, summaries, {
 		mode: "full",

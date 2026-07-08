@@ -13,6 +13,7 @@ import {
 	writeCodeQualityWarningsReport,
 } from "./code-quality-warnings.js";
 import type { CacheManager } from "./cache-manager.js";
+import type { CascadeSkipReason } from "./cascade-types.js";
 import { logCascade } from "./cascade-logger.js";
 import { normalizeMapKey } from "./path-utils.js";
 import type { DependencyChecker } from "./dependency-checker.js";
@@ -126,6 +127,13 @@ export function cancelLSPIdleReset(): void {
 	}
 }
 
+// Bounded wait for the turn's deferred cascade computes (#450) to settle before
+// they are merged below. A late compute is carried over to the next turn_end.
+function cascadeSettleWaitMs(): number {
+	const raw = Number(process.env.PI_LENS_CASCADE_SETTLE_WAIT_MS);
+	return Number.isFinite(raw) && raw >= 0 ? raw : 5000;
+}
+
 function capTurnEndMessage(content: string): string {
 	const maxLines = RUNTIME_CONFIG.turnEnd.maxLines;
 	const maxChars = RUNTIME_CONFIG.turnEnd.maxChars;
@@ -222,6 +230,23 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		);
 	}
 
+	// Drain the deferred cascade computes kicked off this turn (#450). They ran
+	// concurrently off the write hot path; wait a bounded time for them here so
+	// their runs are available to the merge below. A compute still in flight at
+	// the cap is carried over to the next turn_end (never dropped).
+	const cascadeSettleStart = Date.now();
+	const { settled, timedOut } = await runtime.settleCascadeRuns(
+		cascadeSettleWaitMs(),
+	);
+	logLatency({
+		type: "phase",
+		toolName: "turn_end",
+		filePath: cwd,
+		phase: "cascade_settle_wait",
+		durationMs: Date.now() - cascadeSettleStart,
+		metadata: { settled, timedOut },
+	});
+
 	// Merge accumulated cascade results from all pipeline runs this turn.
 	// Two-pass dedup:
 	//   1. Primary-level: dedup by primary file (last writer wins).
@@ -297,11 +322,12 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			},
 		});
 	}
-	const cascadeSkipped = {
+	const cascadeSkipped: Record<CascadeSkipReason, number> = {
 		blockers: 0,
 		non_code: 0,
 		no_neighbors: 0,
 		clean: 0,
+		error: 0,
 	};
 	for (const r of cascadeRuns) {
 		if (r.skipReason)

@@ -45,6 +45,49 @@ export interface AuxiliaryLspProfile {
 		ctx: { blockingAllowed: boolean },
 	) => OutputSemantic;
 	defectClass?: (d: LSPDiagnostic) => DefectClass | undefined;
+	/** Per-diagnostic suppression via the tool's NATIVE inline comment (e.g.
+	 *  semgrep's `# nosemgrep`, #441). Given the file content; return true to drop
+	 *  the finding. Distinct from pi-lens's own `# pi-lens-ignore` — this honors the
+	 *  suppression syntax the tool's own users already know. */
+	isSuppressed?: (d: LSPDiagnostic, content: string) => boolean;
+}
+
+/**
+ * Semgrep/opengrep `# nosemgrep` / `# nosemgrep: <rule-id>[,<rule-id>]` inline
+ * suppression (#441). A bare `# nosemgrep` drops every finding on its line; the
+ * `: <ids>` form drops only the listed rule ids. `d.code` is the semgrep rule id.
+ * Also accepts the `//` comment form.
+ *
+ * Matches Semgrep placement: honored on the finding's OWN line (inline or not),
+ * and on the line ABOVE only when that line is a STANDALONE comment (no code before
+ * it) — so `a()  # nosemgrep` suppresses a finding on `a()` but not the next line.
+ */
+const NOSEMGREP_RE = /(?:#|\/\/)\s*nosemgrep(?::\s*(.+))?/i;
+const NOSEMGREP_STANDALONE_RE = /^\s*(?:#|\/\/)\s*nosemgrep(?::\s*(.+))?\s*$/i;
+export function isNosemgrepSuppressed(
+	d: LSPDiagnostic,
+	content: string,
+): boolean {
+	const startLine = d.range?.start?.line; // 0-based
+	if (startLine == null) return false;
+	const lines = content.split("\n");
+	const ruleId = String(d.code ?? "");
+	const checkLine = (text: string | undefined, standaloneOnly: boolean): boolean => {
+		if (!text) return false;
+		const m = (standaloneOnly ? NOSEMGREP_STANDALONE_RE : NOSEMGREP_RE).exec(text);
+		if (!m) return false;
+		if (m[1] === undefined) return true; // bare nosemgrep → suppress the line
+		return m[1]
+			.split(",")
+			.map((s) => s.trim())
+			.filter(Boolean)
+			.includes(ruleId);
+	};
+	// The finding's own line (inline OK), then the line above (standalone comment only).
+	return (
+		checkLine(lines[startLine], false) ||
+		checkLine(lines[startLine - 1], true)
+	);
 }
 
 export const AUXILIARY_LSP_PROFILES: readonly AuxiliaryLspProfile[] = [
@@ -66,6 +109,8 @@ export const AUXILIARY_LSP_PROFILES: readonly AuxiliaryLspProfile[] = [
 			blockingAllowed && d.severity === 1 ? "blocking" : "warning",
 		defectClass: (d) =>
 			classifyDefect(String(d.code ?? ""), "opengrep", d.message ?? ""),
+		// Honor the canonical Semgrep suppression the user already knows (#441).
+		isSuppressed: isNosemgrepSuppressed,
 	},
 	{
 		serverId: "ast-grep",

@@ -260,9 +260,29 @@ const lspRunner: RunnerDefinition = {
 		// their tool id + semantic policy — language-server diagnostics keep "lsp".
 		// blockingAllowed is per-workspace (e.g. curated repo rules), computed once.
 		const blockingAllowedByProfile = new Map<unknown, boolean>();
+		// Diagnostics dropped by the tool's NATIVE inline suppression (e.g. opengrep
+		// `# nosemgrep`, #441). Read the file content lazily — only once, and only if
+		// some auxiliary profile can suppress.
+		const suppressedIndices = new Set<number>();
+		let auxFileContent: string | undefined;
+		let auxFileContentRead = false;
+		const getAuxFileContent = (): string | undefined => {
+			if (!auxFileContentRead) {
+				auxFileContent = readFileContent(diagnosticPath);
+				auxFileContentRead = true;
+			}
+			return auxFileContent;
+		};
 		for (let i = 0; i < diagnostics.length; i++) {
 			const profile = findAuxiliaryProfileForSource(validLspDiags[i]?.source);
 			if (!profile) continue;
+			if (profile.isSuppressed) {
+				const content = getAuxFileContent();
+				if (content && profile.isSuppressed(validLspDiags[i], content)) {
+					suppressedIndices.add(i);
+					continue;
+				}
+			}
 			let blockingAllowed = blockingAllowedByProfile.get(profile);
 			if (blockingAllowed === undefined) {
 				blockingAllowed = profile.allowBlocking?.(ctx.cwd) ?? false;
@@ -277,11 +297,14 @@ const lspRunner: RunnerDefinition = {
 			const defectClass = profile.defectClass?.(validLspDiags[i]);
 			if (defectClass) d.defectClass = defectClass;
 		}
+		const keptDiagnostics = suppressedIndices.size
+			? diagnostics.filter((_, i) => !suppressedIndices.has(i))
+			: diagnostics;
 
-		const hasErrors = diagnostics.some((d) => d.semantic === "blocking");
+		const hasErrors = keptDiagnostics.some((d) => d.semantic === "blocking");
 		const resultSemantic = hasErrors
 			? "blocking"
-			: diagnostics.length > 0
+			: keptDiagnostics.length > 0
 				? "warning"
 				: "none";
 
@@ -290,7 +313,7 @@ const lspRunner: RunnerDefinition = {
 			// "failed" here means the file has blocking type errors — the check ran
 			// fine. Tag it so the smell analyzer doesn't read it as a runner crash.
 			failureKind: hasErrors ? "blocking_diagnostics" : undefined,
-			diagnostics,
+			diagnostics: keptDiagnostics,
 			semantic: resultSemantic,
 		};
 	},

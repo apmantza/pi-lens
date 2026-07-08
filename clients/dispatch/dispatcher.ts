@@ -30,6 +30,7 @@ import { RUNTIME_CONFIG, getRunnerTimeoutFloorMs } from "../runtime-config.js";
 import { safeSpawnAsync } from "../safe-spawn.js";
 import { classifyDiagnostic } from "./diagnostic-taxonomy.js";
 import type { FactStore } from "./fact-store.js";
+import { applyInlineSuppressions } from "./inline-suppressions.js";
 import { getToolPlan } from "./plan.js";
 import { resolveRunnerPath } from "./runner-context.js";
 import { getToolProfile } from "./tool-profile.js";
@@ -241,45 +242,6 @@ function dedupeOverlappingDiagnostics(diagnostics: Diagnostic[]): Diagnostic[] {
 	return [...byKey.values()];
 }
 
-/**
- * Apply inline suppression comments.
- * Syntax: `// pi-lens-ignore: rule-id` (JS/TS) or `# pi-lens-ignore: rule-id` (Python/Ruby/etc.)
- * Place on the same line as the diagnostic or the line immediately above it.
- */
-function applyInlineSuppressions(
-	diagnostics: Diagnostic[],
-	content: string,
-): Diagnostic[] {
-	if (!content || !diagnostics.length) return diagnostics;
-
-	// Build a set of (line, ruleId) pairs that are suppressed.
-	// Line numbers are 1-based to match diagnostic line numbers.
-	const suppressed = new Set<string>();
-	const lines = content.split("\n");
-	const SUPPRESS_RE = /(?:\/\/|#)\s*pi-lens-ignore:\s*(.+)/;
-	for (let i = 0; i < lines.length; i++) {
-		const m = SUPPRESS_RE.exec(lines[i]);
-		if (!m) continue;
-		const rules = m[1]
-			.split(",")
-			.map((r) => r.trim())
-			.filter(Boolean);
-		const suppressedLine = i + 1; // same line (1-based)
-		const nextLine = i + 2; // next line (1-based)
-		for (const ruleId of rules) {
-			suppressed.add(`${suppressedLine}:${ruleId}`);
-			suppressed.add(`${nextLine}:${ruleId}`);
-		}
-	}
-
-	if (suppressed.size === 0) return diagnostics;
-
-	return diagnostics.filter((d) => {
-		const ruleId = d.rule ?? d.id ?? "";
-		const line = d.line ?? 1;
-		return !suppressed.has(`${line}:${ruleId}`);
-	});
-}
 
 function suppressLintOverlapsWithLsp(diagnostics: Diagnostic[]): Diagnostic[] {
 	const lspBySpanClass = new Set<string>();
