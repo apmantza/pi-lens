@@ -13,6 +13,7 @@ const createLSPClient = vi.fn();
 
 vi.mock("../../../clients/lsp/config.js", () => ({
 	getServersForFileWithConfig,
+	getServerInitOverride: vi.fn().mockReturnValue(undefined),
 }));
 
 vi.mock("../../../clients/lsp/client.js", () => ({

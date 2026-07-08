@@ -6,6 +6,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Added
 
+- **`serverOverrides` — per-server `initializationOptions` in project config** (#434) — `.pi-lens/lsp.json` (or `.pi-lens.json` / `pi-lsp.json`) accepts a `serverOverrides` key mapping a built-in server `id` (`"rust"`, `"nix"`, …) to an `initializationOptions` object that is deep-merged onto the server's built-in defaults at spawn time (user wins on conflicts; arrays replaced, not merged). Brings pi-lens diagnostics in line with a user's editor LSP setup (e.g. rust-analyzer `check.command: "clippy"`, nixd options expressions) without forking. Contributed by @vkarasen.
+
 ### Changed
 
 - perf: cascade diagnostics now run concurrently after each edit instead of blocking the write pipeline (~26% median per-edit latency reduction); settled at turn_end with a bounded wait (#450)

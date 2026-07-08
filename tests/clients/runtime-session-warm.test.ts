@@ -14,6 +14,7 @@ const mockTouchFile = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock("../../clients/lsp/config.js", () => ({
 	loadLSPConfig: vi.fn(),
 	initLSPConfig: vi.fn().mockResolvedValue(undefined),
+	getServerInitOverride: vi.fn().mockReturnValue(undefined),
 }));
 
 vi.mock("../../clients/lsp/index.js", () => ({

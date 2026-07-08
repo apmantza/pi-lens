@@ -29,7 +29,7 @@ import type {
 	LSPWorkspaceDiagnosticsSupport,
 } from "./client.js";
 import { createLSPClient } from "./client.js";
-import { getServersForFileWithConfig } from "./config.js";
+import { getServersForFileWithConfig, getServerInitOverride } from "./config.js";
 import { getLanguageId } from "./language.js";
 import type { LSPServerInfo } from "./server.js";
 import {
@@ -43,6 +43,53 @@ import {
 	mergeWorkspaceTextEditsByPriority,
 	summarizeWorkspaceEdit,
 } from "./edits.js";
+
+// --- Init override helpers ---
+
+/**
+ * Recursively merges `override` onto `base`. Override wins on leaf conflicts
+ * at every nesting level; arrays and non-plain-object values are replaced, not
+ * merged (consistent with standard LSP settings merge semantics).
+ */
+function deepMergeObjects(
+	base: Record<string, unknown>,
+	override: Record<string, unknown>,
+): Record<string, unknown> {
+	const result: Record<string, unknown> = { ...base };
+	for (const [key, val] of Object.entries(override)) {
+		if (
+			val !== null &&
+			typeof val === "object" &&
+			!Array.isArray(val) &&
+			result[key] !== null &&
+			typeof result[key] === "object" &&
+			!Array.isArray(result[key])
+		) {
+			result[key] = deepMergeObjects(
+				result[key] as Record<string, unknown>,
+				val as Record<string, unknown>,
+			);
+		} else {
+			result[key] = val;
+		}
+	}
+	return result;
+}
+
+/**
+ * Merges user-supplied initializationOptions onto a server's built-in defaults.
+ * - If neither side is defined → undefined (no options sent).
+ * - If only one side is defined → that side is returned directly.
+ * - Both defined → deep merge, user wins on conflicts.
+ */
+export function mergeInitializationOptions(
+	base: Record<string, unknown> | undefined,
+	override: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+	if (!override) return base;
+	if (!base) return override;
+	return deepMergeObjects(base, override);
+}
 
 // --- Types ---
 
@@ -820,11 +867,17 @@ export class LSPService {
 				return undefined;
 			}
 
+			const override = getServerInitOverride(server.id, filePath);
+			const mergedInit = mergeInitializationOptions(
+				spawned.initialization,
+				override?.initializationOptions,
+			);
+
 			const client = await createLSPClient({
 				serverId: server.id,
 				process: spawned.process,
 				root,
-				initialization: spawned.initialization,
+				initialization: mergedInit,
 				initializeTimeoutMs: server.initializeTimeoutMs,
 			});
 			const wsDiag =

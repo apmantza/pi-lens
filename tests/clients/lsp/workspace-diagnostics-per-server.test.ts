@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const getServersForFileWithConfig = vi.fn();
 const createLSPClient = vi.fn();
-vi.mock("../../../clients/lsp/config.js", () => ({ getServersForFileWithConfig }));
+vi.mock("../../../clients/lsp/config.js", () => ({ getServersForFileWithConfig, getServerInitOverride: vi.fn().mockReturnValue(undefined) }));
 vi.mock("../../../clients/lsp/client.js", () => ({ createLSPClient }));
 
 function makeServer(id: string, ext: string) {
