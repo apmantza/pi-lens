@@ -11,7 +11,7 @@ import { detectFileKind, KIND_EXTENSIONS } from "../file-kinds.js";
 import { detectFileRole } from "../file-role.js";
 import { getProjectDataDir } from "../file-utils.js";
 import { logLatency } from "../latency-logger.js";
-import { normalizeMapKey } from "../path-utils.js";
+import { normalizeFilePath, normalizeMapKey } from "../path-utils.js";
 import { collectProjectSourceFilesAsync } from "../project-scan-policy.js";
 import { resolveImportToFiles } from "./import-resolvers.js";
 import { RUNTIME_CONFIG } from "../runtime-config.js";
@@ -20,6 +20,7 @@ import {
 	type ExtractedSymbols,
 	TreeSitterSymbolExtractor,
 } from "../tree-sitter-symbol-extractor.js";
+import { resolveGitIdentity } from "./git-identity.js";
 import type { ReviewGraph, ReviewGraphEdge, ReviewGraphNode } from "./types.js";
 
 // v3 (#260): test files are no longer indexed. Bumping the version makes
@@ -160,6 +161,37 @@ export function clearReviewGraphWorkspaceCache(): void {
 	_lastGraphBuildInfo = { reused: false, mode: "full", graphChanged: true };
 }
 
+// #300 Edge 2: the review-graph's cross-worktree isolation is INCIDENTAL to
+// the cwd-derived data-dir slug (getProjectDataDir) — it holds only because
+// every process is launched with its own worktree as cwd. If a host ever
+// passes the main repo root as cwd while editing worktree files by absolute
+// path, that assumption silently breaks. This doesn't hard-fail (the issue
+// is explicit: log-once observability is enough) — it just makes the
+// assumption visible. The Set records every cwd whose check has RUN (not just
+// mismatches), so resolveGitIdentity's fs reads happen once per cwd per
+// process — zero per-build cost after the first, mismatch or not.
+const _cwdWorktreeCheckedCwds = new Set<string>();
+
+export function _resetCwdWorktreeMismatchLogForTests(): void {
+	_cwdWorktreeCheckedCwds.clear();
+}
+
+function logCwdWorktreeMismatchOnce(cwd: string): void {
+	const key = normalizeMapKey(cwd);
+	if (_cwdWorktreeCheckedCwds.has(key)) return;
+	_cwdWorktreeCheckedCwds.add(key);
+	const identity = resolveGitIdentity(cwd);
+	if (!identity) return; // not a git repo — nothing to compare against
+	if (identity.worktreeRoot === normalizeFilePath(path.resolve(cwd))) return;
+	logLatency({
+		type: "phase",
+		phase: "review_graph_cwd_worktree_mismatch",
+		filePath: cwd,
+		durationMs: 0,
+		metadata: { cwd, worktreeRoot: identity.worktreeRoot },
+	});
+}
+
 export function getLastGraphBuildInfo(): GraphBuildInfo {
 	return _lastGraphBuildInfo;
 }
@@ -205,7 +237,9 @@ export function getCachedReviewGraph(cwd: string): ReviewGraph | undefined {
 	// "graph: cold" symptom). Possibly a few edits stale, which is fine for a
 	// navigation read. Warm the in-memory cache so repeat reads in this process
 	// skip the disk read. loadPersistedGraph already rebuilt the indexes.
-	const disk = loadPersistedGraph(cwd);
+	// #300: this read is BLIND — nothing downstream content-verifies it, so a
+	// stamped snapshot from a different HEAD/worktree must be dropped here.
+	const disk = loadPersistedGraph(cwd, { verifyGitStamp: true });
 	if (!disk) return undefined;
 	_workspaceGraphCache.set(key, {
 		signature: disk.signature,
@@ -538,9 +572,17 @@ interface PersistedGraphData {
 	fileHashes?: Array<[string, string]>;
 	nodes: Array<[string, ReviewGraphNode]>;
 	edges: ReviewGraphEdge[];
+	// #300: git identity captured at persist time (fs-resolved, no `git` spawn —
+	// see git-identity.ts). Optional so an older snapshot without a stamp still
+	// loads exactly as before — only a PRESENT stamp that MISMATCHES the current
+	// repo drops the snapshot. Absent for non-git cwds (no check possible).
+	gitStamp?: { headCommit: string; worktreeRoot: string };
 }
 
-function loadPersistedGraph(cwd: string): {
+function loadPersistedGraph(
+	cwd: string,
+	opts?: { verifyGitStamp?: boolean },
+): {
 	signature: string;
 	fileSignatures: Map<string, string>;
 	fileHashes: Map<string, string>;
@@ -551,6 +593,27 @@ function loadPersistedGraph(cwd: string): {
 		const raw = fs.readFileSync(cachePath, "utf-8");
 		const data = JSON.parse(raw) as PersistedGraphData;
 		if (data.version !== REVIEW_GRAPH_VERSION) return null;
+		if (opts?.verifyGitStamp && data.gitStamp) {
+			// #300: a stamped snapshot must match the CURRENT repo identity. This
+			// closes the "worktree removed + re-added at the same path for a
+			// different branch" edge — the data-dir slug is reused, but the stamp
+			// mismatch forces a cold rebuild instead of serving the old branch's
+			// graph. Opt-in per call site: only the BLIND read path
+			// (getCachedReviewGraph) verifies — the build path's tier-2 load is
+			// already content-verified downstream (signature + #202 hash confirm),
+			// and dropping there on every HEAD move would nuke the cold cache
+			// after each commit. Any resolution failure (non-git, unreadable HEAD)
+			// yields undefined from resolveGitIdentity — treated as "can't
+			// verify," not a mismatch, so it does NOT drop the snapshot.
+			const current = resolveGitIdentity(cwd);
+			if (
+				current &&
+				(current.headCommit !== data.gitStamp.headCommit ||
+					current.worktreeRoot !== data.gitStamp.worktreeRoot)
+			) {
+				return null;
+			}
+		}
 		const graph: ReviewGraph = {
 			version: data.version,
 			builtAt: data.builtAt,
@@ -742,6 +805,11 @@ function persistGraph(
 	}
 	const cacheDir = path.join(getProjectDataDir(cwd), "cache");
 	const cachePath = path.join(cacheDir, GRAPH_CACHE_FILENAME);
+	// #300: resolve the git stamp fresh at persist time (HEAD changes on
+	// commit/checkout, so it isn't cached like the gitdir location — but these
+	// are plain fs reads, cheap even called per-persist). undefined for
+	// non-git cwds, which serializes as `gitStamp: undefined` → omitted key.
+	const gitStamp = resolveGitIdentity(cwd);
 	// Build the serializable shape now (cheap array views over the snapshot the
 	// caller already cloned), but defer the expensive stringify+write to the
 	// debounced flush so a burst of edits collapses to a single write.
@@ -753,6 +821,7 @@ function persistGraph(
 		fileHashes: fileHashes ? Array.from(fileHashes.entries()) : undefined,
 		nodes: Array.from(graph.nodes.entries()),
 		edges: graph.edges,
+		gitStamp,
 	};
 	const key = normalizeMapKey(cwd);
 	_pendingPersist.set(key, { cacheDir, cachePath, data, elementCount });
@@ -1614,6 +1683,7 @@ async function _doBuildGraph(
 	const normalizedCwd = normalizeMapKey(cwd);
 	const normalizedChanged = changedFiles.map((file) => normalizeMapKey(file));
 	const normalizedChangedSet = new Set(normalizedChanged);
+	logCwdWorktreeMismatchOnce(cwd);
 	// #451: capture the seq BEFORE any await — every builtAtProjectSeq stamp in
 	// this build uses this value, so a bump that interleaves mid-build has
 	// seq > stamp and is re-diffed next build (redundant re-extract, never a miss).
@@ -1707,7 +1777,11 @@ async function _doBuildGraph(
 		}
 	}
 
-	// Tier 2: disk cache (cold start — files unchanged since last persist)
+	// Tier 2: disk cache (cold start — files unchanged since last persist).
+	// #300: deliberately does NOT verify the git stamp — the signature match /
+	// #202 content-hash confirm below already content-verify the load, and
+	// dropping on every HEAD move would force a full whole-repo rebuild after
+	// each plain `git commit` (HEAD moves, files unchanged).
 	const diskCached = loadPersistedGraph(cwd);
 	if (diskCached?.signature === signature) {
 		const graph = cloneGraph(diskCached.graph);
