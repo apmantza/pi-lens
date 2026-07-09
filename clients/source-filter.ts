@@ -25,6 +25,7 @@ import {
 	isGeneratedArtifactDirectoryName,
 	isGeneratedOrArtifact,
 } from "./generated-artifacts.js";
+import { isSlowFs, SLOW_FS_REDUCED_MAX_FILES } from "./slow-fs.js";
 
 /**
  * Mapping of file extension to the extensions it shadows (build artifacts).
@@ -198,16 +199,28 @@ interface ResolvedCollectionConfig {
 function resolveCollectionConfig(
 	rootDir: string,
 	options?: SourceCollectionOptions,
+	config?: { clampForSlowFsSyncWalk?: boolean },
 ): ResolvedCollectionConfig {
 	const rawMax = options?.maxFiles;
+	const requestedMax =
+		typeof rawMax === "number" && Number.isFinite(rawMax) && rawMax > 0
+			? Math.floor(rawMax)
+			: Number.POSITIVE_INFINITY;
+	// Slow-FS mode (#462): the sync collector can't yield to the event loop, so
+	// on a measured-slow filesystem (9p/drvfs/NFS) clamp its walk to a much
+	// smaller cap regardless of what the caller asked for. The async twin
+	// (`collectSourceFilesAsync`) yields every N entries and keeps its normal
+	// cap — callers that can go async should prefer it instead of relying on
+	// this clamp.
+	const maxFiles =
+		config?.clampForSlowFsSyncWalk === true && isSlowFs(rootDir)
+			? Math.min(requestedMax, SLOW_FS_REDUCED_MAX_FILES)
+			: requestedMax;
 	return {
 		ignoreMatcher: getProjectIgnoreMatcher(rootDir),
 		extraExcludePatterns: options?.excludeDirs ?? [],
 		extensions: new Set(options?.extensions || ALL_SCANNABLE_EXTENSIONS),
-		maxFiles:
-			typeof rawMax === "number" && Number.isFinite(rawMax) && rawMax > 0
-				? Math.floor(rawMax)
-				: Number.POSITIVE_INFINITY,
+		maxFiles,
 		options,
 	};
 }
@@ -254,7 +267,9 @@ export function collectSourceFiles(
 	options?: SourceCollectionOptions,
 ): string[] {
 	const rootDir = path.resolve(dir);
-	const cfg = resolveCollectionConfig(rootDir, options);
+	const cfg = resolveCollectionConfig(rootDir, options, {
+		clampForSlowFsSyncWalk: true,
+	});
 	const files: string[] = [];
 
 	function scan(currentDir: string) {

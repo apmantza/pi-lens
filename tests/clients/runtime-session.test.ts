@@ -6,6 +6,7 @@ import {
 } from "../../clients/project-snapshot.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleSessionStart } from "../../clients/runtime-session.js";
+import { _resetSlowFsForTests } from "../../clients/slow-fs.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 
 // Stub the LSP service so the no-warmFiles dominant-language auto-warm (#203)
@@ -372,6 +373,47 @@ describe("runtime-session notifications", () => {
 			await vi.waitFor(() => expect(scanFile).toHaveBeenCalled());
 		} finally {
 			env.cleanup();
+		}
+	});
+
+	it("slow-FS mode skips heavyweight CLI scans but keeps the later in-process scans (#462)", async () => {
+		process.env.PI_LENS_FORCE_SLOW_FS = "1";
+		_resetSlowFsForTests();
+		try {
+			const { env, notify, scanFile, astGrepEnsure, knipAnalyze, jscpdEnsure } =
+				await runSessionStart("full", (tmpDir) => {
+					createTempFile(
+						tmpDir,
+						"package.json",
+						JSON.stringify({ type: "module" }),
+					);
+					createTempFile(tmpDir, "src/index.ts", "export const value = 1;\n");
+				});
+
+			try {
+				// ast-grep-exports is scheduled AFTER the seven skipped scans in
+				// scheduleStartupScans — it must still run in slow-FS mode (the
+				// original guard was an early `return` that wrongly killed it and
+				// call-graph/codebase-model/word-index along with knip/jscpd/etc).
+				await vi.waitFor(() => expect(astGrepEnsure).toHaveBeenCalledTimes(1));
+				// todo (before the guard) also stays on.
+				await vi.waitFor(() => expect(scanFile).toHaveBeenCalled());
+
+				// The external-CLI scans are skipped…
+				expect(knipAnalyze).not.toHaveBeenCalled();
+				expect(jscpdEnsure).not.toHaveBeenCalled();
+				// …with a visible degradation notice, never silently.
+				expect(
+					notify.mock.calls.some(([msg]) =>
+						String(msg).includes("PI_LENS_ALLOW_SLOW_FS_SCAN=1"),
+					),
+				).toBe(true);
+			} finally {
+				env.cleanup();
+			}
+		} finally {
+			delete process.env.PI_LENS_FORCE_SLOW_FS;
+			_resetSlowFsForTests();
 		}
 	});
 

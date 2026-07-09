@@ -6,6 +6,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Added
 
+- **Slow-filesystem mode** (#462) — WSL 9p mounts (`/mnt/c/...`) measure ~1.3ms/`stat` vs ~17µs native (75x), so an unbounded synchronous tree walk (e.g. a 5,000-file project) could cost ~6.5s of stat time alone and freeze the TUI. `clients/slow-fs.ts` adds a cheap session-start probe (median of up to 15 `fs.statSync` calls under the project root) that classifies the workspace by measurement, not path shape, so it also catches drvfs/NFS/SMB rather than 9p-only. In slow-FS mode the sync `collectSourceFiles` walker clamps to a reduced 500-file cap (the async twin is unaffected), and the knip/jscpd/madge/dead-code/govulncheck/gitleaks/trivy background scans are skipped at session start with a visible notice instead of silently returning stale/empty results. Escape hatches: `PI_LENS_ALLOW_SLOW_FS_SCAN=1` disables slow-FS mode entirely; `PI_LENS_FORCE_SLOW_FS=1` forces it on for testing or when the probe under-fires; `PI_LENS_SLOW_FS_THRESHOLD_US` overrides the 500µs default. The verdict is logged to the latency log as a `slow_fs_probe` phase for dogfooding.
+
 ### Changed
 
 ### Fixed

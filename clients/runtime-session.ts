@@ -24,6 +24,7 @@ import {
 	detectProjectLanguageProfile,
 	getDefaultStartupTools,
 } from "./language-profile.js";
+import { logLatency } from "./latency-logger.js";
 import { runLogCleanup } from "./log-cleanup.js";
 import { setSessionLanguages } from "./widget-state.js";
 import { initLSPConfig, loadLSPConfig } from "./lsp/config.js";
@@ -45,6 +46,11 @@ import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 import type { RustClient } from "./rust-client.js";
 
 import { isAtOrAboveHomeDir } from "./path-utils.js";
+import {
+	getSlowFsVerdict,
+	isSlowFs,
+	slowFsDegradationNotice,
+} from "./slow-fs.js";
 import {
 	findNearestProjectRoot,
 	resolveStartupScanContext,
@@ -484,8 +490,36 @@ function scheduleStartupScans(
 		return;
 	}
 
+	// #462: knip/jscpd/madge/dead-code/govulncheck/gitleaks/trivy each spawn an
+	// external CLI that walks the whole project tree on its own — a walk we
+	// don't control or get to route to an async collector. On a measured-slow
+	// filesystem that walk reproduces the exact multi-second freeze this
+	// feature exists to prevent, so skip exactly those seven with a visible
+	// reason instead of leaving the agent to read an empty/stale cache as
+	// "clean". The other scans in this function (todo above; call-graph/
+	// codebase-model/ast-grep-exports/word-index below) walk via
+	// `collectSourceFilesAsync` or build from cached review-graph data, so
+	// they stay on.
+	const skipHeavyweightScans = isSlowFs(analysisRoot);
+	const runHeavyweightTask = (
+		name: string,
+		task: () => Promise<void>,
+	): void => {
+		if (skipHeavyweightScans) return;
+		runTask(name, task);
+	};
+	if (skipHeavyweightScans) {
+		dbg(
+			"session_start: skipping knip/jscpd/madge/dead-code/govulncheck/gitleaks/trivy (slow-fs)",
+		);
+		deps.notify(
+			`⏭️ Skipped background code-quality scans (knip/jscpd/madge/dead-code/govulncheck/gitleaks/trivy): ${slowFsDegradationNotice()}`,
+			"info",
+		);
+	}
+
 	// Knip — dead code / unused exports
-	runTask("knip", async () => {
+	runHeavyweightTask("knip", async () => {
 		if (!runtime.isCurrentSession(sessionGeneration)) return;
 		const cached = cacheManager.readCache<KnipResult>("knip", analysisRoot);
 		if (cached) {
@@ -510,7 +544,7 @@ function scheduleStartupScans(
 	});
 
 	// jscpd — duplicate code detection
-	runTask("jscpd", async () => {
+	runHeavyweightTask("jscpd", async () => {
 		if (await jscpdClient.ensureAvailable()) {
 			if (!runtime.isCurrentSession(sessionGeneration)) return;
 			// Detect TS projects by tsconfig.json at the analysis root. When
@@ -556,7 +590,7 @@ function scheduleStartupScans(
 	// client self-gates via detect() (a cheap fs marker probe), so only a
 	// matching-language project incurs the whole-tree scan cost. Knip remains
 	// the JS/TS path (above); these run alongside it for polyglot repos.
-	runTask("dead-code", async () => {
+	runHeavyweightTask("dead-code", async () => {
 		const applicable = deadCodeClients.filter((c) => c.detect(analysisRoot));
 		if (applicable.length === 0) return;
 		await Promise.all(
@@ -598,7 +632,7 @@ function scheduleStartupScans(
 	// govulncheck — Go module CVE detection (#132)
 	// Skipped silently when the project isn't a Go module or when
 	// `govulncheck` isn't installed (no auto-install in this slice).
-	runTask("govulncheck", async () => {
+	runHeavyweightTask("govulncheck", async () => {
 		if (!GovulncheckClient.hasGoModule(analysisRoot)) {
 			dbg("session_start govulncheck: no go.mod — skipped");
 			return;
@@ -636,7 +670,7 @@ function scheduleStartupScans(
 	// gitleaks — committed-secrets detection (#130)
 	// Config-gated: opts in via .gitleaks.toml / .gitleaksignore / git
 	// hook / gitleaks dep. Cross-language by design.
-	runTask("gitleaks", async () => {
+	runHeavyweightTask("gitleaks", async () => {
 		if (!GitleaksClient.hasGitleaksSignal(analysisRoot)) {
 			dbg("session_start gitleaks: no opt-in signal — skipped");
 			return;
@@ -672,7 +706,7 @@ function scheduleStartupScans(
 	// madge — whole-project circular-dependency detection. Session-start + cached
 	// (uniform with knip/jscpd/gitleaks) so lens_diagnostics mode=full reads it
 	// from the `madge` cache via the extractor registry — never a fresh scan.
-	runTask("madge", async () => {
+	runHeavyweightTask("madge", async () => {
 		if (!(await depChecker.ensureAvailable())) {
 			if (!runtime.isCurrentSession(sessionGeneration)) return;
 			dbg("session_start madge: not available");
@@ -705,7 +739,7 @@ function scheduleStartupScans(
 	// manifest present. The first run downloads Trivy's vuln DB (~30-200 MB);
 	// harmless here since this whole task runs in the background session_start
 	// wrapper.
-	runTask("trivy", async () => {
+	runHeavyweightTask("trivy", async () => {
 		if (!TrivyClient.shouldScan(analysisRoot)) {
 			dbg(
 				"session_start trivy: not enabled / no dependency manifest — skipped",
@@ -1193,6 +1227,34 @@ export async function handleSessionStart(
 	dbg(`session_start workspace cwd available: ${hasWorkspaceCwd}`);
 	if (useScanRootForSignals && analysisRoot !== cwd) {
 		dbg(`session_start: monorepo analysis root override -> ${analysisRoot}`);
+	}
+
+	// Slow-FS probe (#462): classify the workspace filesystem by measurement
+	// (median fs.statSync cost) before any tree walk runs. WSL 9p mounts cost
+	// ~1.3ms/stat vs ~17µs native — a 75x slowdown that turns a 5,000-file sync
+	// walk into a multi-second TUI freeze. Logged to the latency log so
+	// dogfooding can see the verdict; a visible notice fires when engaged so a
+	// degraded scan is never mistaken for a silently-empty one.
+	const slowFsVerdict = getSlowFsVerdict(analysisRoot);
+	logLatency({
+		type: "phase",
+		phase: "slow_fs_probe",
+		filePath: analysisRoot,
+		durationMs: 0,
+		metadata: {
+			slow: slowFsVerdict.slow,
+			medianStatMicros: slowFsVerdict.medianStatMicros,
+			samples: slowFsVerdict.samples,
+		},
+	});
+	dbg(
+		`session_start slow-fs probe: slow=${slowFsVerdict.slow} medianStatMicros=${slowFsVerdict.medianStatMicros.toFixed(1)} samples=${slowFsVerdict.samples}`,
+	);
+	if (slowFsVerdict.slow) {
+		notify(
+			`🐢 Slow filesystem detected (median ${slowFsVerdict.medianStatMicros.toFixed(0)}µs/stat) — reduced-scan mode engaged (set PI_LENS_ALLOW_SLOW_FS_SCAN=1 to override).`,
+			"warning",
+		);
 	}
 
 	const lensLspEnabled = !getFlag("no-lsp");
