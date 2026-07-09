@@ -1,6 +1,9 @@
 /**
  * Centralized accessor for `typebox`. See ./typescript.ts for the rationale.
  * (typebox is a pi-bundled core package, so it resolves from the host at
- * runtime — but it's still routed through here for a uniform dep surface.)
+ * runtime -- but it's still routed through here for a uniform dep surface.)
+ *
+ * Re-export named bindings, not `export *`: with the package kept external, a
+ * wildcard re-export leaves the namespace undefined at runtime under the bundle.
  */
-export * from "typebox";
+export { Type } from "typebox";

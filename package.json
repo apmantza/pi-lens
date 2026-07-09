@@ -14,7 +14,8 @@
 	},
 	"scripts": {
 		"build": "tsc --project tsconfig.build.json",
-		"build:dist": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && npx --yes -p typescript@6 tsc --project tsconfig.dist.json --noCheck",
+		"build:dist": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\" && npx --yes -p typescript@6 tsc --project tsconfig.dist.json --noCheck && npm run bundle:dist",
+		"bundle:dist": "node scripts/bundle-dist.mjs",
 		"prepare": "npm run build:dist && node scripts/download-grammars.js --core --dest grammars",
 		"lint": "tsc --project tsconfig.json",
 		"watch": "tsc --watch",
