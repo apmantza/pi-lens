@@ -165,16 +165,19 @@ describe("getSlowFsVerdict — memoization", () => {
 		expect(getSlowFsVerdict(dir).slow).toBe(false);
 	});
 
-	it("shares one cache entry across '/' and '\\\\' forms of the same path (path-key invariant)", () => {
+	it("shares one cache entry across separator forms of the same path (path-key invariant)", () => {
 		const dir = makeTempDir(10);
-		const forwardForm = dir.replace(/\\/g, "/");
-		const backslashForm = dir.replace(/\//g, "\\");
-
-		const firstVerdict = getSlowFsVerdict(forwardForm);
-		const secondVerdict = getSlowFsVerdict(backslashForm);
-		// Both forms resolve to the same normalized key, so the second call must
-		// return the exact memoized object from the first — not a fresh probe.
-		expect(secondVerdict).toBe(firstVerdict);
+		const firstVerdict = getSlowFsVerdict(dir);
+		// The same path re-queried must return the exact memoized object, not a
+		// fresh probe.
+		expect(getSlowFsVerdict(dir)).toBe(firstVerdict);
+		// The '/'↔'\' alias only exists where backslash is a path separator; on
+		// POSIX a backslash is a literal filename character, so the swapped form
+		// is a genuinely different path and must NOT share the cache entry.
+		if (process.platform === "win32") {
+			expect(getSlowFsVerdict(dir.replace(/\\/g, "/"))).toBe(firstVerdict);
+			expect(getSlowFsVerdict(dir.replace(/\//g, "\\"))).toBe(firstVerdict);
+		}
 	});
 
 	it("the force/allow env switches are read live and are NOT subject to the memo (by design — they're kill switches, not tunables)", () => {
