@@ -1925,6 +1925,16 @@ export class LSPService {
 			maxFiles?: number;
 			signal?: AbortSignal;
 			onProgress?: (completed: number, total: number) => void;
+			/**
+			 * Explicit file list (#461): skip the project walk entirely and route
+			 * exactly these files through the sweep. Used by lens_diagnostics'
+			 * `paths` scope restrictor so a wrapper (e.g. "git-staged files only")
+			 * gets the full mode=full treatment without paying for a whole-project
+			 * walk. Caller is responsible for resolving/deduping/filtering these
+			 * (lens-diagnostics.ts already applies the ignore matcher the same way
+			 * the walk does before calling in).
+			 */
+			files?: string[];
 		} = {},
 	): Promise<LSPWorkspaceDiagnosticResult[]> {
 		const startedAt = Date.now();
@@ -1940,7 +1950,9 @@ export class LSPService {
 			options.maxFiles > 0
 				? Math.floor(options.maxFiles)
 				: getMaxWorkspaceDiagnosticFiles();
-		const files = await collectWorkspaceDiagnosticFiles(root, maxFiles, signal);
+		const files = options.files
+			? options.files.slice(0, maxFiles)
+			: await collectWorkspaceDiagnosticFiles(root, maxFiles, signal);
 		// Per-file wall-clock: a language server that hangs during spawn/initialize
 		// would otherwise park a worker on `touchFile` FOREVER (the per-edit
 		// diagnostic wait is bounded, but client acquisition here is not) — the root

@@ -49,4 +49,10 @@ export interface ProjectDiagnosticsScanOptions {
 	 * interrupted run can't poison the cross-session cache.
 	 */
 	signal?: AbortSignal;
+	/**
+	 * Explicit file list (#461): scan exactly these files instead of walking the
+	 * project. Used by lens_diagnostics' `paths` scope restrictor. Caller has
+	 * already resolved/deduped/filtered these against the ignore matcher.
+	 */
+	files?: string[];
 }

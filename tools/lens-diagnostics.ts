@@ -10,12 +10,14 @@
  */
 
 import { promises as fs } from "node:fs";
+import * as fsSync from "node:fs";
 import * as path from "node:path";
 import { Type } from "../clients/deps/typebox.js";
 import { applyInlineSuppressions } from "../clients/dispatch/inline-suppressions.js";
 import { compactRenderResult } from "./render-compact.js";
 import { combineAbortSignals } from "../clients/deadline-utils.js";
 import { getProjectIgnoreMatcher } from "../clients/file-utils.js";
+import { normalizeFilePath } from "../clients/path-utils.js";
 import { getLSPService } from "../clients/lsp/index.js";
 import type { LSPDiagnostic } from "../clients/lsp/client.js";
 import type { CacheManager } from "../clients/cache-manager.js";
@@ -47,6 +49,13 @@ import { makeProgressReporter, scanningSummaryLine } from "./scan-progress.js";
 // keep output bounded on a pathologically broken file.
 const MAX_DIAGNOSTICS_PER_FILE = 50;
 
+// `paths` (#461) is a wrapper-facing scope restrictor (e.g. "git-staged files
+// only"), not a bulk-listing mechanism — a wrapper that hits this needs to
+// narrow, not paginate. Erroring (rather than silently truncating) means a
+// caller can never believe it checked files it didn't (issue's stated
+// invariant).
+const MAX_PATHS_ENTRIES = 200;
+
 type LSPServiceLike = ReturnType<typeof getLSPService> & {
 	runWorkspaceDiagnostics?: (
 		cwd: string,
@@ -54,6 +63,7 @@ type LSPServiceLike = ReturnType<typeof getLSPService> & {
 			maxFiles?: number;
 			signal?: AbortSignal;
 			onProgress?: (completed: number, total: number) => void;
+			files?: string[];
 		},
 	) => Promise<WorkspaceLspDiagnosticResult[]>;
 };
@@ -193,6 +203,30 @@ export function createLensDiagnosticsTool(
 					description: "Filter by severity (default: all).",
 				}),
 			),
+			paths: Type.Optional(
+				Type.Array(Type.String(), {
+					maxItems: MAX_PATHS_ENTRIES,
+					description:
+						`Restrict any mode to an explicit file/directory list (max ${MAX_PATHS_ENTRIES} entries; ` +
+						"more errors instead of silently truncating). Entries may be relative " +
+						"(resolved against cwd) or absolute, and a directory entry matches all " +
+						"files under it (e.g. \"src/\"). mode=delta/all are a pure post-filter " +
+						"of cached/session state — they can only show findings for files pi-lens " +
+						"has already dispatched, so an unseen file shows nothing (use mode=full " +
+						"for an active scan). mode=full actively scans exactly these paths (LSP " +
+						"sweep + cheap in-process runners); cached heavyweight analyzers " +
+						"(jscpd/madge/gitleaks/knip) and the project snapshot are still post-filtered " +
+						"cache reads, never relaunched. Explicitly-listed files are NOT filtered " +
+						"through the project ignore matcher (matching lsp_diagnostics' paths " +
+						"semantics) — naming a file is assumed to mean it regardless of " +
+						".gitignore/.pi-lens.json; a directory entry's expansion still honors " +
+						"ignore (and when the list mixes directories and files, mode=full scans " +
+						"via the ignore-filtered walk, so an ignore-excluded file entry is only " +
+						"guaranteed an active scan in a files-only list). Nonexistent entries " +
+						"are skipped (mode=full notes them; useful for git-staged-file wrappers " +
+						"where a deleted-but-staged path can appear).",
+				}),
+			),
 		}),
 		async execute(
 			_toolCallId: string,
@@ -212,6 +246,22 @@ export function createLensDiagnosticsTool(
 			const maxLspFiles = parsePositiveInt(params.maxLspFiles);
 			const cwd = ctx.cwd ?? getCwd();
 
+			let pathsScope: PathsScope | undefined;
+			try {
+				pathsScope = resolvePathsScope(cwd, params.paths);
+			} catch (err) {
+				return {
+					content: [
+						{
+							type: "text" as const,
+							text: err instanceof Error ? err.message : String(err),
+						},
+					],
+					isError: true,
+					details: { mode, pathsError: true },
+				};
+			}
+
 			// Escape aborts the agent *turn*, which fires ctx.signal (the turn-wired
 			// abort); the positional signal is the tool-call signal. A registered
 			// extension tool only reliably sees the turn abort via ctx.signal, so honor
@@ -226,7 +276,14 @@ export function createLensDiagnosticsTool(
 			const staleDropped = await reconcileStaleWidgetFiles();
 
 			if (mode === "all") {
-				return formatAllMode(cwd, severity, undefined, undefined, staleDropped);
+				return formatAllMode(
+					cwd,
+					severity,
+					undefined,
+					undefined,
+					staleDropped,
+					pathsScope,
+				);
 			}
 			if (mode === "full") {
 				// Fold a hard wall-clock ceiling into the abort signal so the scan
@@ -244,9 +301,10 @@ export function createLensDiagnosticsTool(
 					signal: fullSignal,
 					wallClockMs: FULL_SCAN_WALL_CLOCK_MS,
 					onProgress,
+					pathsScope,
 				});
 			}
-			return formatDeltaMode(cacheManager, cwd, severity);
+			return formatDeltaMode(cacheManager, cwd, severity, pathsScope);
 		},
 	};
 }
@@ -295,6 +353,7 @@ function formatDeltaMode(
 	cacheManager: CacheManager,
 	cwd: string,
 	severity: string,
+	pathsScope?: PathsScope,
 ): { content: [{ type: "text"; text: string }]; details: object } {
 	const actionableEntry = cacheManager.readCache<ActionableWarningsReport>(
 		"actionable-warnings",
@@ -307,7 +366,9 @@ function formatDeltaMode(
 	const actionable = actionableEntry?.data;
 	const quality = qualityEntry?.data;
 	const projectDelta = loadProjectDiagnosticsDeltaReport(cwd);
-	const includeFile = createCurrentIgnoreFilter(cwd);
+	const ignoreFile = createCurrentIgnoreFilter(cwd);
+	const includeFile = (filePath: string) =>
+		ignoreFile(filePath) && (!pathsScope || pathsScope.includeFile(filePath));
 	const actionableFiles = (actionable?.files ?? []).filter((file) =>
 		includeFile(file.filePath),
 	);
@@ -372,6 +433,7 @@ function formatDeltaMode(
 		if (carried.length > 0) {
 			text += ` ${carriedIssues} finding${carriedIssues === 1 ? "" : "s"} across ${carried.length} file${carried.length === 1 ? "" : "s"} carried over from earlier this session — use mode=all to see them.`;
 		}
+		text += pathsScopeCacheOnlyNote(pathsScope);
 		return {
 			content: [{ type: "text" as const, text }],
 			details: { mode: "delta", warnings: 0, carriedOverFiles: carried.length },
@@ -403,6 +465,133 @@ function createCurrentIgnoreFilter(cwd: string): (filePath: string) => boolean {
 		// non-fatal; match that behavior for cached diagnostic presentation.
 		return () => true;
 	}
+}
+
+// ── paths scope restrictor (#461) ─────────────────────────────────────────────
+//
+// `paths` narrows any mode to an explicit file/directory list — a wrapper tool
+// (e.g. "check exactly the git-staged files") passes whatever a `git diff
+// --name-only` gave it. Entries may be files or directories (directories match
+// as prefixes — cheap via the same predicate, and "run on src/" is a natural
+// wrapper call); relative entries resolve against cwd. Deliberately NOT run
+// through the project ignore matcher for explicitly-listed files, matching
+// `lsp_diagnostics`' `paths` param, which also takes explicit entries as-is
+// (only its directory/auto-walk mode applies the ignore matcher) — an agent
+// that names a file by hand is assumed to mean it regardless of `.gitignore`.
+
+interface PathsScope {
+	/** True when the file (or a directory prefix of it) was requested. */
+	includeFile: (filePath: string) => boolean;
+	/** Absolute paths of requested entries that don't exist on disk. */
+	missing: string[];
+	/**
+	 * Resolved, on-disk-existing absolute FILE paths (directory entries are
+	 * expanded lazily via `includeFile`'s prefix match, never eagerly listed).
+	 * This is what mode=full feeds to the active LSP sweep / cheap scanner as an
+	 * explicit file list — a nonexistent entry has nothing to scan.
+	 */
+	existingEntries: string[];
+	/**
+	 * True when any entry was a directory. mode=full then falls back to the
+	 * normal project walk (narrowed by includeFile) — passing only
+	 * `existingEntries` would silently skip every file under the requested
+	 * directories, an under-scan the caller has no way to detect.
+	 */
+	hasDirectoryEntries: boolean;
+}
+
+/**
+ * Resolves the `paths` param into a scope predicate. Returns `undefined` when
+ * `paths` was not provided (callers fall back to no restriction). Throws a
+ * plain `Error` when the cap is exceeded — the caller turns that into a
+ * clear tool error rather than silently truncating (a wrapper must not
+ * believe it checked files it didn't).
+ */
+function resolvePathsScope(
+	cwd: string,
+	rawPaths: unknown,
+): PathsScope | undefined {
+	if (!Array.isArray(rawPaths) || rawPaths.length === 0) return undefined;
+	if (rawPaths.length > MAX_PATHS_ENTRIES) {
+		throw new Error(
+			`paths has ${rawPaths.length} entries, over the ${MAX_PATHS_ENTRIES} cap. ` +
+				"Narrow the list or omit paths to scan without a restriction.",
+		);
+	}
+	const entries = rawPaths
+		.filter(
+			(entry): entry is string =>
+				typeof entry === "string" && entry.trim().length > 0,
+		)
+		.map((entry) =>
+			path.resolve(path.isAbsolute(entry) ? entry : path.resolve(cwd, entry)),
+		);
+
+	const missing: string[] = [];
+	const fileEntries: string[] = [];
+	const existingEntries: string[] = [];
+	const dirEntries: string[] = [];
+	for (const entry of entries) {
+		let stat: fsSync.Stats;
+		try {
+			stat = fsSync.statSync(entry);
+		} catch {
+			// Nonexistent on disk right now — still treated as a file-key match
+			// candidate for the delta/all cache filter (not just dropped): the
+			// wrapper use case passes git output, where a deleted-but-staged path
+			// legitimately has no on-disk file yet may still have cached findings
+			// from before deletion. Excluded from `existingEntries` (nothing to
+			// actively scan) and recorded in `missing` for mode=full's skipped-note.
+			missing.push(entry);
+			fileEntries.push(entry);
+			continue;
+		}
+		if (stat.isDirectory()) {
+			dirEntries.push(entry);
+		} else {
+			fileEntries.push(entry);
+			existingEntries.push(entry);
+		}
+	}
+
+	const fileKeys = new Set(fileEntries.map((f) => normalizeFilePath(f)));
+	const dirPrefixes = dirEntries.map((d) => normalizeFilePath(d));
+
+	const includeFile = (filePath: string): boolean => {
+		const key = normalizeFilePath(path.resolve(filePath));
+		if (fileKeys.has(key)) return true;
+		return dirPrefixes.some(
+			(prefix) => key === prefix || key.startsWith(`${prefix}/`),
+		);
+	};
+
+	return {
+		includeFile,
+		missing,
+		existingEntries,
+		hasDirectoryEntries: dirEntries.length > 0,
+	};
+}
+
+/** Short, honest note for delta/all when `paths` filtered everything out — these modes are cache-only, so an unseen file legitimately shows nothing. */
+function pathsScopeCacheOnlyNote(scope: PathsScope | undefined): string {
+	if (!scope) return "";
+	return (
+		"\n\nNote: paths restricts this to cached findings for files pi-lens has " +
+		"already dispatched this session — mode=delta/all can't see files it " +
+		"hasn't touched. Use mode=full to actively scan exactly these paths."
+	);
+}
+
+/** Short note listing paths entries that don't exist on disk (mode=full only — the wrapper use case passes git output, where a deleted-but-staged file WILL appear). */
+function pathsScopeMissingNote(scope: PathsScope | undefined): string {
+	if (!scope || scope.missing.length === 0) return "";
+	const shown = scope.missing.slice(0, 10).map((p) => path.basename(p));
+	const more =
+		scope.missing.length > shown.length
+			? ` (+${scope.missing.length - shown.length} more)`
+			: "";
+	return `\n\n⚠ Skipped ${scope.missing.length} path(s) not found on disk: ${shown.join(", ")}${more}`;
 }
 
 function filterProjectDiagnosticsSnapshot(
@@ -678,6 +867,7 @@ async function getProjectDiagnosticsSnapshotForFullMode(
 		refreshRunners?: unknown;
 		maxProjectFiles?: number;
 		signal?: AbortSignal;
+		files?: string[];
 	},
 ): Promise<ProjectDiagnosticsSnapshot | undefined> {
 	if (shouldRefreshProjectDiagnostics(options.refreshRunners)) {
@@ -686,6 +876,7 @@ async function getProjectDiagnosticsSnapshotForFullMode(
 			tier: "cheap",
 			maxFiles: options.maxProjectFiles,
 			signal: options.signal,
+			files: options.files,
 		});
 	}
 	if (shouldUseCachedProjectDiagnostics(options.refreshRunners)) {
@@ -712,6 +903,7 @@ async function formatFullMode(
 		signal?: AbortSignal;
 		wallClockMs?: number;
 		onProgress?: (completed: number, total: number) => void;
+		pathsScope?: PathsScope;
 	} = {},
 ): Promise<{ content: [{ type: "text"; text: string }]; details: object }> {
 	const runWorkspaceDiagnostics = lspService.runWorkspaceDiagnostics;
@@ -726,15 +918,35 @@ async function formatFullMode(
 			details: { mode: "full", filesChecked: 0, lspUnavailable: true },
 		};
 	}
-	const { signal } = options;
-	const includeFile = createCurrentIgnoreFilter(cwd);
+	const { signal, pathsScope } = options;
+	const ignoreFile = createCurrentIgnoreFilter(cwd);
+	const includeFile = (filePath: string) =>
+		ignoreFile(filePath) && (!pathsScope || pathsScope.includeFile(filePath));
+	// `paths` (#461): route the active scans at exactly the requested files
+	// instead of walking the whole project. Three cases:
+	// - files only → pass them as the explicit list (skips the walk). An EMPTY
+	//   list (every requested file was missing) still passes through — both
+	//   seams treat [] as "scan nothing", where undefined would trigger a full
+	//   project walk that includeFile then filters to nothing (expensive no-op).
+	// - any directory entry → fall back to the walk, narrowed by includeFile.
+	//   Passing only the file entries would silently skip everything under the
+	//   requested directories — an under-scan the caller can't detect.
+	// - no paths → undefined, today's full walk.
+	const explicitFiles =
+		pathsScope && !pathsScope.hasDirectoryEntries
+			? pathsScope.existingEntries
+			: undefined;
 	const [rawLspResults, rawProjectSnapshot] = await Promise.all([
 		runWorkspaceDiagnostics.call(lspService, cwd, {
 			maxFiles: options.maxLspFiles,
 			signal,
 			onProgress: options.onProgress,
+			files: explicitFiles,
 		}),
-		getProjectDiagnosticsSnapshotForFullMode(cwd, options),
+		getProjectDiagnosticsSnapshotForFullMode(cwd, {
+			...options,
+			files: explicitFiles,
+		}),
 	]);
 	const aborted = signal?.aborted ?? false;
 	const lspResults = rawLspResults.filter((result) =>
@@ -793,6 +1005,7 @@ async function formatFullMode(
 						turnIndex: projectDelta.turnIndex,
 					},
 	});
+	const missingNote = pathsScopeMissingNote(pathsScope);
 	// Stopped mid-scan: the results above are whatever completed before the abort.
 	// Tell the agent so it doesn't read a partial sweep as "clean" (#341). The
 	// abort is either a user/turn cancel (Escape) or the wall-clock ceiling firing
@@ -808,8 +1021,18 @@ async function formatFullMode(
 			: "\n\n⚠ Scan cancelled before completion — results are partial. " +
 				"Re-run with a smaller maxLspFiles to finish within budget.";
 		return {
-			content: [{ type: "text" as const, text: result.content[0].text + note }],
+			content: [
+				{ type: "text" as const, text: result.content[0].text + note + missingNote },
+			],
 			details: { ...result.details, timedOut },
+		};
+	}
+	if (missingNote) {
+		return {
+			content: [
+				{ type: "text" as const, text: result.content[0].text + missingNote },
+			],
+			details: result.details,
 		};
 	}
 	return result;
@@ -821,6 +1044,7 @@ function formatAllMode(
 	summaries: FileDiagnosticSummary[] = getFileDiagnosticSummaries(),
 	detailOverrides: Record<string, unknown> = { mode: "all" },
 	staleDropped = 0,
+	pathsScope?: PathsScope,
 ): { content: [{ type: "text"; text: string }]; details: object } {
 	// Files changed/deleted since their diagnostics were recorded have already
 	// been dropped by reconcileStaleWidgetFiles; note them so the agent knows
@@ -830,7 +1054,9 @@ function formatAllMode(
 			? ` (${staleDropped} changed file${staleDropped === 1 ? "" : "s"} omitted as stale — use mode=full to rescan)`
 			: "";
 
-	const includeFile = createCurrentIgnoreFilter(cwd);
+	const ignoreFile = createCurrentIgnoreFilter(cwd);
+	const includeFile = (filePath: string) =>
+		ignoreFile(filePath) && (!pathsScope || pathsScope.includeFile(filePath));
 	const visibleSummaries = summaries.filter((s) => includeFile(s.filePath));
 
 	// Filter to files with actual issues
@@ -840,12 +1066,19 @@ function formatAllMode(
 		return s.blocking > 0 || s.errors > 0 || s.warnings > 0;
 	});
 
+	// mode=full already actively scanned exactly the requested paths, so a zero
+	// result there IS a legitimate clean read — the cache-only note only applies
+	// to delta/all, which is why this is gated on detailOverrides.mode !== "full".
+	const isFullMode = (detailOverrides as { mode?: string }).mode === "full";
+	const pathsNote = isFullMode ? "" : pathsScopeCacheOnlyNote(pathsScope);
+
 	if (withIssues.length === 0) {
 		const text =
 			(visibleSummaries.length === 0
 				? "No files diagnosed yet this session."
 				: `No ${severity === "all" ? "" : severity + " "}issues across ${visibleSummaries.length} file${visibleSummaries.length === 1 ? "" : "s"} diagnosed this session. ✓`) +
-			staleNote;
+			staleNote +
+			pathsNote;
 		return {
 			content: [{ type: "text" as const, text }],
 			details: {

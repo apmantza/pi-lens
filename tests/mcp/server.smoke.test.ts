@@ -66,6 +66,14 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		for (const tool of tools) {
 			expect(tool.inputSchema.type).toBe("object");
 		}
+		// pilens_diagnostics mirrors lens_diagnostics' typebox schema verbatim
+		// (schemaWithCwd); `paths` (#461) must be present on the MCP side too, not
+		// just the pi tool — this is the one guard that would catch schema drift
+		// between the two if the mirror ever stopped being a direct passthrough.
+		const diagnosticsTool = tools.find((t) => t.name === "pilens_diagnostics") as
+			| { inputSchema: { properties?: Record<string, unknown> } }
+			| undefined;
+		expect(diagnosticsTool?.inputSchema.properties).toHaveProperty("paths");
 	}, 25_000);
 
 	it("answers tools/call pilens_health with LSP + dispatch state", async () => {

@@ -239,7 +239,9 @@ export async function scanProjectDiagnostics(
 	const cwd = path.resolve(options.cwd);
 	const { signal } = options;
 	const maxFiles = Math.max(1, options.maxFiles ?? DEFAULT_MAX_FILES);
-	const files = await collectSourceFilesAsync(cwd, { maxFiles });
+	const files = options.files
+		? options.files.slice(0, maxFiles)
+		: await collectSourceFilesAsync(cwd, { maxFiles });
 	// Check cancellation at each phase boundary so a full-mode scan stops
 	// promptly when the agent/user aborts (#341). The per-phase runners are
 	// already file-capped, so phase granularity is enough to bound the work.
@@ -268,7 +270,11 @@ export async function scanProjectDiagnostics(
 	};
 	// A cancelled scan yields a partial snapshot; don't persist it as the
 	// authoritative cross-session cache — only a complete run is cacheable.
-	if (signal?.aborted) return snapshot;
+	// Likewise, an explicit `files` scan (#461) only covers a caller-chosen
+	// subset (e.g. git-staged files), not the whole project — persisting it
+	// would poison the cross-session cache with a partial view that a later
+	// unscoped `refreshRunners=cached` read would wrongly trust as complete.
+	if (signal?.aborted || options.files) return snapshot;
 	saveProjectDiagnosticsSnapshot(cwd, snapshot);
 	return snapshot;
 }

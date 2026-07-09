@@ -1198,6 +1198,343 @@ describe("lens_diagnostics mode=all", () => {
 	});
 });
 
+// ── paths scope restrictor (#461) ───────────────────────────────────────────────
+
+describe("lens_diagnostics paths", () => {
+	it("exposes paths in the schema", () => {
+		const tool = makeTool();
+		const props = (tool.parameters as { properties: Record<string, unknown> })
+			.properties;
+		expect(props.paths).toBeDefined();
+	});
+
+	it("mode=all: paths filter shows only listed files, excluding unrelated cached findings", async () => {
+		mockSummaries.length = 0;
+		mockSummaries.push(sum("/proj/src/keep.ts", { warnings: 1 }));
+		mockSummaries.push(sum("/proj/src/other.ts", { blocking: 1 }));
+		const result = await run(makeTool(), {
+			mode: "all",
+			paths: ["/proj/src/keep.ts"],
+		});
+		const text = String(result.content[0].text);
+		expect(text).toContain("keep.ts");
+		expect(text).not.toContain("other.ts");
+	});
+
+	it("mode=delta: paths filter shows only listed files' findings", async () => {
+		const tool = makeTool({
+			"actionable-warnings": {
+				files: [
+					{
+						filePath: "/proj/src/keep.ts",
+						warnings: [
+							{ line: 1, rule: "r1", tool: "t", message: "keep this" },
+						],
+					},
+					{
+						filePath: "/proj/src/other.ts",
+						warnings: [
+							{ line: 1, rule: "r2", tool: "t", message: "exclude this" },
+						],
+					},
+				],
+				summary: { warnings: 2 },
+			},
+		});
+		const result = await run(tool, {
+			mode: "delta",
+			paths: ["/proj/src/keep.ts"],
+		});
+		const text = String(result.content[0].text);
+		expect(text).toContain("keep this");
+		expect(text).not.toContain("exclude this");
+	});
+
+	it("mode=all with paths hitting no cached files includes the cached-only/use-mode=full note", async () => {
+		mockSummaries.length = 0;
+		mockSummaries.push(sum("/proj/src/unrelated.ts", { warnings: 1 }));
+		const result = await run(makeTool(), {
+			mode: "all",
+			paths: ["/proj/src/never-dispatched.ts"],
+		});
+		const text = String(result.content[0].text);
+		expect(text).toContain("mode=full");
+		expect(text).toContain("cached findings");
+	});
+
+	it("mode=delta with paths hitting no cached files includes the cached-only/use-mode=full note", async () => {
+		const result = await run(makeTool(), {
+			mode: "delta",
+			paths: ["/proj/src/never-dispatched.ts"],
+		});
+		const text = String(result.content[0].text);
+		expect(text).toContain("mode=full");
+	});
+
+	it("mode=full: LSP sweep and cheap scanner receive exactly the listed (existing) files", async () => {
+		mockSummaries.length = 0;
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-diag-paths-"));
+		try {
+			const fileA = path.join(cwd, "a.ts");
+			const fileB = path.join(cwd, "b.ts");
+			fs.writeFileSync(fileA, "export const a = 1;\n");
+			fs.writeFileSync(fileB, "export const b = 2;\n");
+			const lspService = {
+				runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
+			};
+			projectDiagnosticsMocks.scanProjectDiagnostics.mockResolvedValue({
+				version: 1,
+				cwd,
+				tier: "cheap",
+				scannedAt: "2026-01-01T00:00:00.000Z",
+				filesScanned: 2,
+				runners: ["tree-sitter", "fact-rules", "ast-grep-napi"],
+				diagnostics: [],
+			});
+			const tool = createLensDiagnosticsTool(
+				makeCacheManager({}) as any,
+				() => cwd,
+				() => lspService as any,
+			);
+			await tool.execute(
+				"1",
+				{ mode: "full", refreshRunners: "cheap", paths: [fileA, fileB] },
+				new AbortController().signal,
+				null,
+				{ cwd },
+			);
+			expect(lspService.runWorkspaceDiagnostics).toHaveBeenCalledWith(
+				cwd,
+				expect.objectContaining({ files: [fileA, fileB] }),
+			);
+			expect(
+				projectDiagnosticsMocks.scanProjectDiagnostics,
+			).toHaveBeenCalledWith(
+				expect.objectContaining({ files: [fileA, fileB] }),
+			);
+		} finally {
+			fs.rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("mode=full: a mixed dir+file list falls back to the walk (no silent under-scan of the directory)", async () => {
+		mockSummaries.length = 0;
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-diag-mixed-"));
+		try {
+			const dir = path.join(cwd, "src");
+			fs.mkdirSync(dir);
+			const inDir = path.join(dir, "in-dir.ts");
+			const fileA = path.join(cwd, "a.ts");
+			fs.writeFileSync(inDir, "export const d = 1;\n");
+			fs.writeFileSync(fileA, "export const a = 1;\n");
+			const lspService = {
+				runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
+			};
+			const tool = createLensDiagnosticsTool(
+				makeCacheManager({}) as any,
+				() => cwd,
+				() => lspService as any,
+			);
+			await tool.execute(
+				"1",
+				{ mode: "full", paths: [dir, fileA] },
+				new AbortController().signal,
+				null,
+				{ cwd },
+			);
+			// Passing only [fileA] as the explicit list would skip everything under
+			// src/ while claiming a full-mode result for the whole scope — the walk
+			// (files: undefined) is the correct fallback, narrowed by includeFile.
+			const passed = lspService.runWorkspaceDiagnostics.mock.calls[0][1];
+			expect(passed.files).toBeUndefined();
+		} finally {
+			fs.rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("mode=full: an all-missing paths list scans nothing instead of walking the whole project", async () => {
+		mockSummaries.length = 0;
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-diag-missing-"));
+		try {
+			const lspService = {
+				runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
+			};
+			const tool = createLensDiagnosticsTool(
+				makeCacheManager({}) as any,
+				() => cwd,
+				() => lspService as any,
+			);
+			const result = await tool.execute(
+				"1",
+				{ mode: "full", paths: [path.join(cwd, "deleted.ts")] },
+				new AbortController().signal,
+				null,
+				{ cwd },
+			);
+			// files: [] means "scan nothing" at both seams; undefined would trigger
+			// a full project walk that includeFile then filters to nothing.
+			const passed = lspService.runWorkspaceDiagnostics.mock.calls[0][1];
+			expect(passed.files).toEqual([]);
+			expect(String(result.content[0].text)).toContain("deleted.ts");
+		} finally {
+			fs.rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("mode=full: cached extractor findings outside paths are filtered out", async () => {
+		mockSummaries.length = 0;
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-diag-paths2-"));
+		try {
+			const kept = path.join(cwd, "keep.ts");
+			fs.writeFileSync(kept, "export const x = 1;\n");
+			const lspService = {
+				runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
+			};
+			projectDiagnosticsMocks.loadProjectDiagnosticsSnapshot.mockReturnValue({
+				version: 1,
+				cwd,
+				tier: "cheap",
+				scannedAt: "2026-01-01T00:00:00.000Z",
+				filesScanned: 2,
+				runners: ["fact-rules"],
+				diagnostics: [
+					{
+						filePath: kept,
+						line: 1,
+						severity: "warning",
+						semantic: "warning",
+						tool: "fact-rules",
+						runner: "fact-rules",
+						rule: "kept-rule",
+						message: "kept finding",
+						source: "project-scan",
+					},
+					{
+						filePath: path.join(cwd, "excluded.ts"),
+						line: 1,
+						severity: "warning",
+						semantic: "warning",
+						tool: "fact-rules",
+						runner: "fact-rules",
+						rule: "excluded-rule",
+						message: "excluded finding",
+						source: "project-scan",
+					},
+				],
+			});
+			const tool = createLensDiagnosticsTool(
+				makeCacheManager({}) as any,
+				() => cwd,
+				() => lspService as any,
+			);
+			const result = await tool.execute(
+				"1",
+				{ mode: "full", refreshRunners: "cached", paths: [kept] },
+				new AbortController().signal,
+				null,
+				{ cwd },
+			);
+			const text = String(result.content[0].text);
+			expect(text).toContain("kept finding");
+			expect(text).not.toContain("excluded finding");
+		} finally {
+			fs.rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("normalizes relative and absolute path entries to the same result", async () => {
+		mockSummaries.length = 0;
+		mockSummaries.push(sum("/proj/src/keep.ts", { warnings: 1 }));
+		const relResult = await run(makeTool(), {
+			mode: "all",
+			paths: ["src/keep.ts"],
+		});
+		const absResult = await run(makeTool(), {
+			mode: "all",
+			paths: ["/proj/src/keep.ts"],
+		});
+		expect(String(relResult.content[0].text)).toContain("keep.ts");
+		expect(String(absResult.content[0].text)).toContain("keep.ts");
+		expect(relResult.details).toMatchObject(
+			absResult.details as Record<string, unknown>,
+		);
+	});
+
+	it("cross-form path separators normalize to the same result (Windows path-key discipline)", async () => {
+		mockSummaries.length = 0;
+		mockSummaries.push(sum("/proj/src/keep.ts", { warnings: 1 }));
+		const forwardResult = await run(makeTool(), {
+			mode: "all",
+			paths: ["/proj/src/keep.ts"],
+		});
+		const backslashResult = await run(makeTool(), {
+			mode: "all",
+			paths: ["/proj\\src\\keep.ts"],
+		});
+		expect(String(forwardResult.content[0].text)).toContain("keep.ts");
+		expect(String(backslashResult.content[0].text)).toContain("keep.ts");
+	});
+
+	it("a directory entry matches files beneath it", async () => {
+		mockSummaries.length = 0;
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-diag-dir-"));
+		try {
+			const subdir = path.join(cwd, "src");
+			fs.mkdirSync(subdir);
+			const inside = path.join(subdir, "keep.ts");
+			const outside = path.join(cwd, "outside.ts");
+			mockSummaries.push(sum(inside, { warnings: 1 }));
+			mockSummaries.push(sum(outside, { blocking: 1 }));
+			const result = await run(makeTool(), { mode: "all", paths: [subdir] }, cwd);
+			const text = String(result.content[0].text);
+			expect(text).toContain("keep.ts");
+			expect(text).not.toContain("outside.ts");
+		} finally {
+			fs.rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+
+	it("errors clearly when paths exceeds the 200-entry cap", async () => {
+		const many = Array.from({ length: 201 }, (_, i) => `/proj/src/f${i}.ts`);
+		const result = (await run(makeTool(), { mode: "all", paths: many })) as {
+			content: [{ type: "text"; text: string }];
+			isError?: boolean;
+		};
+		expect(result.isError).toBe(true);
+		const text = String(result.content[0].text);
+		expect(text).toContain("200");
+	});
+
+	it("mode=full: a nonexistent path produces the skipped-note without throwing", async () => {
+		mockSummaries.length = 0;
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-diag-missing-"));
+		try {
+			const missing = path.join(cwd, "deleted-but-staged.ts");
+			const lspService = {
+				runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
+			};
+			const tool = createLensDiagnosticsTool(
+				makeCacheManager({}) as any,
+				() => cwd,
+				() => lspService as any,
+			);
+			const result = await tool.execute(
+				"1",
+				{ mode: "full", paths: [missing] },
+				new AbortController().signal,
+				null,
+				{ cwd },
+			);
+			const text = String(result.content[0].text);
+			expect(text).toContain("Skipped");
+			expect(text).toContain("not found");
+			expect(text).toContain("deleted-but-staged.ts");
+		} finally {
+			fs.rmSync(cwd, { recursive: true, force: true });
+		}
+	});
+});
+
 // ── cancellation via ctx.signal (Escape / turn abort) ──────────────────────────
 describe("lens_diagnostics honors the turn abort (ctx.signal)", () => {
 	it("aborts a mode=full scan when ctx.signal (Escape) fires, even if the positional signal is live", async () => {
