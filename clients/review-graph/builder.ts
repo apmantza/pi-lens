@@ -751,10 +751,27 @@ function writePending(key: string): void {
 			);
 			return;
 		}
-		fs.writeFile(pending.cachePath, json, "utf-8", (writeErr) => {
+		// Write-to-temp + rename so the snapshot lands atomically: a reader
+		// (another process's blind load, or the tier-2 disk load in tests) must
+		// never see a created-but-partially-written file — that parses as
+		// corrupt and silently forces a full rebuild. rename() replaces the
+		// destination atomically on both POSIX and Windows (libuv uses
+		// MOVEFILE_REPLACE_EXISTING).
+		const tmpPath = `${pending.cachePath}.tmp-${process.pid}`;
+		fs.writeFile(tmpPath, json, "utf-8", (writeErr) => {
 			if (writeErr) {
 				console.error("[review-graph] cache write failed:", writeErr.message);
+				return;
 			}
+			fs.rename(tmpPath, pending.cachePath, (renameErr) => {
+				if (renameErr) {
+					console.error(
+						"[review-graph] cache rename failed:",
+						renameErr.message,
+					);
+					fs.rm(tmpPath, { force: true }, () => {});
+				}
+			});
 		});
 	});
 }
@@ -770,11 +787,11 @@ function ensurePersistExitHook(): void {
 		for (const [, pending] of _pendingPersist) {
 			try {
 				fs.mkdirSync(pending.cacheDir, { recursive: true });
-				fs.writeFileSync(
-					pending.cachePath,
-					JSON.stringify(pending.data),
-					"utf-8",
-				);
+				// Same atomic tmp+rename as writePending: even at teardown a crash
+				// mid-write must not leave a truncated snapshot for the next start.
+				const tmpPath = `${pending.cachePath}.tmp-${process.pid}`;
+				fs.writeFileSync(tmpPath, JSON.stringify(pending.data), "utf-8");
+				fs.renameSync(tmpPath, pending.cachePath);
 			} catch {
 				// Teardown is best-effort; a missed persist just re-confirms next start.
 			}

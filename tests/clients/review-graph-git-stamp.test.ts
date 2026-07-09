@@ -49,7 +49,8 @@ function setHead(root: string, headSha: string, branch = "main"): void {
 
 // writePending's actual disk write is async (fs.mkdir/fs.writeFile callbacks)
 // even after flushReviewGraphPersistsForTests() fires it — poll briefly for
-// the file to land instead of assuming synchronous completion.
+// the file to land instead of assuming synchronous completion. The write is
+// tmp+rename, so once the file exists its content is complete.
 async function waitForFile(filePath: string, timeoutMs = 2000): Promise<void> {
 	const start = Date.now();
 	while (!fs.existsSync(filePath)) {
@@ -177,6 +178,32 @@ describe("review-graph snapshot git stamp (#300)", () => {
 		clearReviewGraphWorkspaceCache();
 		await buildOrUpdateGraph(cwd, [], new FactStore());
 		expect(getLastGraphBuildInfo().mode).toBe("cached");
+	});
+
+	it("persist lands atomically: parseable on first existence, no tmp residue", async () => {
+		const cwd = tmpDir();
+		process.env.PILENS_DATA_DIR = path.join(cwd, "data");
+		makeFakeRepo(cwd, "a".repeat(40));
+
+		await buildOrUpdateGraph(cwd, [], new FactStore());
+		flushReviewGraphPersistsForTests();
+
+		const cachePath = path.join(
+			getProjectDataDir(cwd),
+			"cache",
+			"review-graph.json",
+		);
+		// The write is tmp+rename, so existence implies complete content — the
+		// pre-fix direct fs.writeFile could be observed created-but-partial by a
+		// concurrent reader (the CI flake behind the "expected 'cached' to be
+		// 'full'" failure: tier-2 load read truncated JSON and fell open to a
+		// full rebuild).
+		await waitForFile(cachePath);
+		expect(() => JSON.parse(fs.readFileSync(cachePath, "utf-8"))).not.toThrow();
+		const residue = fs
+			.readdirSync(path.dirname(cachePath))
+			.filter((name) => name.includes(".tmp-"));
+		expect(residue).toEqual([]);
 	});
 
 	it("non-git temp dir: persists and reloads with no stamp, no errors", async () => {
