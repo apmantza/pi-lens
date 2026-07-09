@@ -494,12 +494,21 @@ function scheduleStartupScans(
 	// external CLI that walks the whole project tree on its own — a walk we
 	// don't control or get to route to an async collector. On a measured-slow
 	// filesystem that walk reproduces the exact multi-second freeze this
-	// feature exists to prevent, so skip them outright with a visible reason
-	// instead of leaving the agent to read an empty/stale cache as "clean".
-	// TODO/call-graph/codebase-model/ast-grep-exports/word-index above and
-	// below this point already route through `collectSourceFilesAsync` and stay
-	// on regardless.
-	if (isSlowFs(analysisRoot)) {
+	// feature exists to prevent, so skip exactly those seven with a visible
+	// reason instead of leaving the agent to read an empty/stale cache as
+	// "clean". The other scans in this function (todo above; call-graph/
+	// codebase-model/ast-grep-exports/word-index below) walk via
+	// `collectSourceFilesAsync` or build from cached review-graph data, so
+	// they stay on.
+	const skipHeavyweightScans = isSlowFs(analysisRoot);
+	const runHeavyweightTask = (
+		name: string,
+		task: () => Promise<void>,
+	): void => {
+		if (skipHeavyweightScans) return;
+		runTask(name, task);
+	};
+	if (skipHeavyweightScans) {
 		dbg(
 			"session_start: skipping knip/jscpd/madge/dead-code/govulncheck/gitleaks/trivy (slow-fs)",
 		);
@@ -507,11 +516,10 @@ function scheduleStartupScans(
 			`⏭️ Skipped background code-quality scans (knip/jscpd/madge/dead-code/govulncheck/gitleaks/trivy): ${slowFsDegradationNotice()}`,
 			"info",
 		);
-		return;
 	}
 
 	// Knip — dead code / unused exports
-	runTask("knip", async () => {
+	runHeavyweightTask("knip", async () => {
 		if (!runtime.isCurrentSession(sessionGeneration)) return;
 		const cached = cacheManager.readCache<KnipResult>("knip", analysisRoot);
 		if (cached) {
@@ -536,7 +544,7 @@ function scheduleStartupScans(
 	});
 
 	// jscpd — duplicate code detection
-	runTask("jscpd", async () => {
+	runHeavyweightTask("jscpd", async () => {
 		if (await jscpdClient.ensureAvailable()) {
 			if (!runtime.isCurrentSession(sessionGeneration)) return;
 			// Detect TS projects by tsconfig.json at the analysis root. When
@@ -582,7 +590,7 @@ function scheduleStartupScans(
 	// client self-gates via detect() (a cheap fs marker probe), so only a
 	// matching-language project incurs the whole-tree scan cost. Knip remains
 	// the JS/TS path (above); these run alongside it for polyglot repos.
-	runTask("dead-code", async () => {
+	runHeavyweightTask("dead-code", async () => {
 		const applicable = deadCodeClients.filter((c) => c.detect(analysisRoot));
 		if (applicable.length === 0) return;
 		await Promise.all(
@@ -624,7 +632,7 @@ function scheduleStartupScans(
 	// govulncheck — Go module CVE detection (#132)
 	// Skipped silently when the project isn't a Go module or when
 	// `govulncheck` isn't installed (no auto-install in this slice).
-	runTask("govulncheck", async () => {
+	runHeavyweightTask("govulncheck", async () => {
 		if (!GovulncheckClient.hasGoModule(analysisRoot)) {
 			dbg("session_start govulncheck: no go.mod — skipped");
 			return;
@@ -662,7 +670,7 @@ function scheduleStartupScans(
 	// gitleaks — committed-secrets detection (#130)
 	// Config-gated: opts in via .gitleaks.toml / .gitleaksignore / git
 	// hook / gitleaks dep. Cross-language by design.
-	runTask("gitleaks", async () => {
+	runHeavyweightTask("gitleaks", async () => {
 		if (!GitleaksClient.hasGitleaksSignal(analysisRoot)) {
 			dbg("session_start gitleaks: no opt-in signal — skipped");
 			return;
@@ -698,7 +706,7 @@ function scheduleStartupScans(
 	// madge — whole-project circular-dependency detection. Session-start + cached
 	// (uniform with knip/jscpd/gitleaks) so lens_diagnostics mode=full reads it
 	// from the `madge` cache via the extractor registry — never a fresh scan.
-	runTask("madge", async () => {
+	runHeavyweightTask("madge", async () => {
 		if (!(await depChecker.ensureAvailable())) {
 			if (!runtime.isCurrentSession(sessionGeneration)) return;
 			dbg("session_start madge: not available");
@@ -731,7 +739,7 @@ function scheduleStartupScans(
 	// manifest present. The first run downloads Trivy's vuln DB (~30-200 MB);
 	// harmless here since this whole task runs in the background session_start
 	// wrapper.
-	runTask("trivy", async () => {
+	runHeavyweightTask("trivy", async () => {
 		if (!TrivyClient.shouldScan(analysisRoot)) {
 			dbg(
 				"session_start trivy: not enabled / no dependency manifest — skipped",
