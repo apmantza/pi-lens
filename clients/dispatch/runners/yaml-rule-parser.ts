@@ -6,12 +6,13 @@
  * (has/any/all/not/regex).
  *
  * Features:
- * - Caching with mtime-based invalidation
+ * - Mtime caching for bundled rules; content/path caching for project rules
  * - Severity filtering (error-only for blocking mode)
  * - Complexity scoring for performance optimization
  * - Overly broad pattern detection
  */
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import yaml from "../../deps/js-yaml.js";
@@ -59,6 +60,11 @@ interface CachedRules {
 	mtime: number;
 }
 
+interface ContentCachedRules {
+	rules: YamlRule[];
+	signature: string;
+}
+
 // Rich pattern form: match a specific AST kind from a contextual snippet.
 // https://ast-grep.github.io/reference/rule.html#pattern-object
 export interface YamlRichPattern {
@@ -86,12 +92,16 @@ export const MAX_BLOCKING_RULE_COMPLEXITY = 8;
 
 const rulesCache = new Map<string, CachedRules>();
 const blockingRulesCache = new Map<string, CachedRules>();
+const contentRulesCache = new Map<string, ContentCachedRules>();
+const contentBlockingRulesCache = new Map<string, ContentCachedRules>();
 
 // --- Public API ---
 
 export function clearRulesCache(): void {
 	rulesCache.clear();
 	blockingRulesCache.clear();
+	contentRulesCache.clear();
+	contentBlockingRulesCache.clear();
 }
 
 export function loadYamlRules(
@@ -101,38 +111,83 @@ export function loadYamlRules(
 	return getCachedRules(ruleDir, severityFilter);
 }
 
+function findYamlRuleFiles(ruleDir: string): string[] {
+	let entries: fs.Dirent[];
+	try {
+		entries = fs
+			.readdirSync(ruleDir, { withFileTypes: true })
+			.sort((a, b) => a.name.localeCompare(b.name));
+	} catch {
+		return [];
+	}
+	const files: string[] = [];
+	for (const entry of entries) {
+		const full = path.join(ruleDir, entry.name);
+		if (entry.isDirectory()) {
+			files.push(...findYamlRuleFiles(full));
+		} else if (entry.isFile() && /\.ya?ml$/i.test(entry.name)) {
+			files.push(full);
+		}
+	}
+	return files;
+}
+
+function loadYamlRuleFiles(
+	files: string[],
+	severityFilter?: "error",
+): YamlRule[] {
+	const rules: YamlRule[] = [];
+	for (const file of files) {
+		let content: string;
+		try {
+			content = fs.readFileSync(file, "utf-8");
+		} catch {
+			continue;
+		}
+		const documents = content.split(/^---\s*$/m).filter((doc) => doc.trim());
+		for (const document of documents) {
+			const rule = parseSimpleYaml(document.trim());
+			if (!rule?.id) continue;
+			if (severityFilter && rule.severity !== severityFilter) continue;
+			rules.push(rule);
+		}
+	}
+	return rules;
+}
+
 export function loadYamlRulesUncached(
 	ruleDir: string,
 	severityFilter?: "error",
 ): YamlRule[] {
-	const rules: YamlRule[] = [];
-	if (!fs.existsSync(ruleDir)) return rules;
+	return loadYamlRuleFiles(findYamlRuleFiles(ruleDir), severityFilter);
+}
 
-	const files = fs.readdirSync(ruleDir).filter((f) => f.endsWith(".yml"));
-
+/** Content/path-aware cache used for mutable project-owned rule trees. */
+export function loadYamlRulesFresh(
+	ruleDir: string,
+	severityFilter?: "error",
+): YamlRule[] {
+	const files = findYamlRuleFiles(ruleDir);
+	const hash = createHash("sha256");
 	for (const file of files) {
-		let content: string;
+		hash.update(path.relative(ruleDir, file));
+		hash.update("\0");
 		try {
-			content = fs.readFileSync(path.join(ruleDir, file), "utf-8");
+			hash.update(fs.readFileSync(file));
 		} catch {
-			continue; // unreadable file
+			hash.update("missing");
 		}
-		const documents = content.split(/^---$/m).filter((d) => d.trim());
-
-		// Parse each document independently so one malformed rule (e.g. an
-		// unquoted YAML-special scalar) skips only itself, not the whole file —
-		// slop-patterns.yml packs many rules into a single file.
-		for (const doc of documents) {
-			const rule = parseSimpleYaml(doc.trim());
-			if (rule?.id) {
-				if (severityFilter && rule.severity !== severityFilter) {
-					continue;
-				}
-				rules.push(rule);
-			}
-		}
+		hash.update("\0");
 	}
-
+	const signature = hash.digest("hex");
+	const cache =
+		severityFilter === "error"
+			? contentBlockingRulesCache
+			: contentRulesCache;
+	const cached = cache.get(ruleDir);
+	if (cached?.signature === signature) return cached.rules;
+	const rules = loadYamlRuleFiles(files, severityFilter);
+	cache.set(ruleDir, { rules, signature });
 	return rules;
 }
 

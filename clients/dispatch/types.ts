@@ -156,6 +156,8 @@ export interface RunnerResult {
 
 export interface DispatchContext {
 	readonly filePath: string;
+	/** Workspace/project root before language-specific root resolution. */
+	readonly projectRoot?: string;
 	readonly cwd: string;
 	readonly kind: FileKind | undefined;
 	readonly fileRole: FileRole;

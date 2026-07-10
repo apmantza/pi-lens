@@ -20,7 +20,7 @@ your-project/
         my-rule.yml        ← ast-grep rule, overrides built-in with same id
 ```
 
-Both loaders cache by directory mtime, so edits take effect within one tool call.
+Project ast-grep rules are fingerprinted by relative path and contents, so in-place edits, renames, additions, and removals take effect within one tool call even when mtimes are preserved. Tree-sitter rules retain their directory-mtime cache.
 
 ---
 
@@ -121,10 +121,10 @@ examples:
 ### Drop path
 
 ```
-<project-root>/rules/ast-grep-rules/rules/<rule-id>.yml
+<project-root>/rules/ast-grep-rules/rules/<language-or-group>/<rule-id>.yml
 ```
 
-If a project rule has the same `id` as a built-in, the **project rule wins** (first-match-wins by id during deduplication).
+Rule discovery is recursive and accepts `.yml` or `.yaml`. The shared raw-LSP/NAPI precedence is project primary rules, project secondary CodeRabbit rules, bundled native rules, then bundled CodeRabbit rules. A higher-precedence rule shadows a lower-precedence rule with the same `id`; duplicate IDs within one source layer are blocking configuration errors rather than silently selecting one definition.
 
 ### YAML schema
 

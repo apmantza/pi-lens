@@ -59,13 +59,13 @@ describe("ast-grep baseline sgconfig", () => {
 		expect(fs.statSync(mergedDir).isDirectory()).toBe(true);
 	});
 
-	it("uses a per-PROCESS filename embedding the pid (#472: the path doubles as the reaper's unique marker)", () => {
+	it("uses a per-process, per-workspace filename (#472 marker plus multi-root isolation)", () => {
 		_resetBaselineSgconfigForTests();
 		const configPath = resolveBaselineSgconfig();
 		expect(configPath).toBeDefined();
 		if (!configPath) throw new Error("expected baseline sgconfig");
-		expect(path.basename(configPath)).toBe(
-			`baseline-${process.pid}.sgconfig.yml`,
+		expect(path.basename(configPath)).toMatch(
+			new RegExp(`^baseline-${process.pid}-[a-f0-9]{12}\\.sgconfig\\.yml$`),
 		);
 	});
 

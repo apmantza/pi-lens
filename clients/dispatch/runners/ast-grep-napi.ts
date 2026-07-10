@@ -14,7 +14,10 @@ import {
 	loadAstGrepNapi,
 	type SgRoot,
 } from "../../deps/ast-grep-napi.js";
-import { shippedRuleDirsInPrecedenceOrder } from "../../sgconfig.js";
+import {
+	type AstGrepRuleSource,
+	getAstGrepRuleSources,
+} from "../../sgconfig.js";
 import { hasEslintConfig } from "../../tool-policy.js";
 import { enabledAuxiliaryLspServerIds } from "../auxiliary-lsp.js";
 import { classifyDefect } from "../diagnostic-taxonomy.js";
@@ -30,6 +33,7 @@ import {
 	isOverlyBroadPattern,
 	isStructuredRule,
 	loadYamlRules,
+	loadYamlRulesFresh,
 	MAX_BLOCKING_RULE_COMPLEXITY,
 	type YamlRule,
 } from "./yaml-rule-parser.js";
@@ -163,6 +167,50 @@ export interface AstGrepEvaluateOptions {
 	maxMatchesPerRule?: number;
 	/** Cap total diagnostics per file (default {@link MAX_TOTAL_DIAGNOSTICS}). */
 	maxTotalDiagnostics?: number;
+	/** Workspace root that owns project-local rules; defaults to `cwd`. */
+	projectRoot?: string;
+}
+
+function duplicateRuleIds(rules: YamlRule[]): string[] {
+	const counts = new Map<string, number>();
+	for (const rule of rules) {
+		counts.set(rule.id, (counts.get(rule.id) ?? 0) + 1);
+	}
+	return Array.from(counts)
+		.filter(([, count]) => count > 1)
+		.map(([id]) => id)
+		.sort((a, b) => a.localeCompare(b));
+}
+
+function appendDuplicateRuleDiagnostics(
+	diagnostics: Diagnostic[],
+	seenRuleIds: Set<string>,
+	duplicateIds: string[],
+	source: AstGrepRuleSource,
+	filePath: string,
+	maxTotalDiagnostics: number,
+): boolean {
+	const sourceLabel = `${source.origin} ${source.tier} rules`;
+	for (const ruleId of duplicateIds) {
+		diagnostics.push({
+			id: `ast-grep-napi-config-duplicate-${source.origin}-${source.tier}-${ruleId}`,
+			message: `Duplicate ast-grep rule id "${ruleId}" in ${sourceLabel}`,
+			filePath,
+			line: 1,
+			column: 1,
+			severity: "error",
+			semantic: "blocking",
+			tool: "ast-grep-napi",
+			rule: ruleId,
+			defectClass: "correctness",
+			fixable: false,
+			autoFixAvailable: false,
+			fixSuggestion: `Give every rule in ${sourceLabel} a unique id`,
+		});
+		seenRuleIds.add(ruleId);
+		if (diagnostics.length >= maxTotalDiagnostics) return true;
+	}
+	return false;
 }
 
 /**
@@ -190,25 +238,43 @@ export function evaluateAstGrepRules(
 	const seenRuleIds = new Set<string>();
 	const suppressLinterOverlap = kind === "jsts" && hasEslintConfig(cwd);
 
-	// #497: shared with the generated raw sgconfig (clients/sgconfig.ts) so the
-	// NAPI runner and the ast-grep LSP's generated config always agree on
-	// precedence order — project (cwd) dirs first, then the bundled package
-	// dirs — and therefore always pick the SAME winner for a same-id rule.
-	const ruleDirs = shippedRuleDirsInPrecedenceOrder();
+	// Shared with the raw sgconfig materializer so both surfaces walk the same
+	// workspace-rooted sources in the same precedence order.
+	const ruleSources = getAstGrepRuleSources(options.projectRoot ?? cwd);
 
-	for (const ruleDir of ruleDirs) {
+	for (const source of ruleSources) {
 		let rules: YamlRule[];
 		try {
-			rules = loadYamlRules(ruleDir, blockingOnly ? "error" : undefined);
+			// Project rules are mutable during a session, so their cache fingerprints
+			// relative paths and contents. Bundled catalogs are immutable per install.
+			const loader =
+				source.origin === "project" ? loadYamlRulesFresh : loadYamlRules;
+			rules = loader(source.dir);
 		} catch {
 			continue;
 		}
 
+		const duplicates = duplicateRuleIds(rules);
+		if (
+			appendDuplicateRuleDiagnostics(
+				diagnostics,
+				seenRuleIds,
+				duplicates,
+				source,
+				filePath,
+				maxTotalDiagnostics,
+			)
+		) {
+			return diagnostics;
+		}
+		const duplicateSet = new Set(duplicates);
+
 		for (const rule of rules) {
-			// If the same rule id is loaded from multiple directories
-			// (workspace + bundled), prefer the first one to avoid duplicates.
+			if (duplicateSet.has(rule.id)) continue;
+			// Cross-layer collisions keep the first (higher-precedence) source.
 			if (seenRuleIds.has(rule.id)) continue;
 			seenRuleIds.add(rule.id);
+			if (blockingOnly && rule.severity !== "error") continue;
 
 			if (
 				suppressLinterOverlap &&
@@ -397,7 +463,10 @@ const astGrepNapiRunner: RunnerDefinition = {
 			rootNode,
 			ctx.cwd,
 			ctx.kind,
-			{ blockingOnly: ctx.blockingOnly },
+			{
+				blockingOnly: ctx.blockingOnly,
+				projectRoot: ctx.projectRoot,
+			},
 		);
 
 		const hasBlocking = diagnostics.some((d) => d.semantic === "blocking");

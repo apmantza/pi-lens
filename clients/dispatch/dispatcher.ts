@@ -149,6 +149,7 @@ export function createDispatchContext(
 	modifiedRanges?: import("./types.js").ModifiedRange[],
 ): DispatchContext {
 	const absoluteFilePath = resolveRunnerPath(cwd, filePath);
+	const normalizedProjectRoot = normalizeMapKey(path.resolve(cwd));
 	const normalizedCwd = normalizeMapKey(
 		resolveLanguageRootForFile(absoluteFilePath, cwd),
 	);
@@ -162,6 +163,7 @@ export function createDispatchContext(
 
 	return {
 		filePath: normalizedFilePath,
+		projectRoot: normalizedProjectRoot,
 		cwd: normalizedCwd,
 		kind,
 		fileRole,

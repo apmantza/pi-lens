@@ -2505,7 +2505,7 @@ export const AstGrepServer: LSPServerInfo = {
 		const projectSgconfig = findLocalSgconfig(root);
 		let args = ["lsp"];
 		if (!projectSgconfig) {
-			const baseline = resolveBaselineSgconfig();
+			const baseline = resolveBaselineSgconfig(root);
 			if (baseline) args = ["lsp", "--config", baseline];
 		}
 		// #472: prefer the platform-native exe directly (one less orphanable
