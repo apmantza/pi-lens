@@ -55,6 +55,72 @@ export interface OrphanReapDecision {
 }
 
 /**
+ * Markers claimed by any LIVE instance's children. A marker search kills by
+ * command-line match, so a marker that a live session also uses must never
+ * be searched — killing it would take down the live session's server.
+ * Markers are per-process-unique by construction (sgconfig.ts embeds the
+ * pid), so this is defense in depth against non-unique markers ever
+ * reappearing (#472: the original shared baseline.sgconfig.yml would have
+ * made the fallback kill every live ast-grep on the machine).
+ */
+function collectLiveMarkers(
+	registry: InstanceEntry[],
+	isPidAlive: (pid: number) => boolean,
+): Set<string> {
+	const liveMarkers = new Set<string>();
+	for (const instance of registry) {
+		if (!isPidAlive(instance.pid)) continue;
+		for (const child of instance.lspChildren) {
+			if (child.marker) liveMarkers.add(child.marker);
+		}
+	}
+	return liveMarkers;
+}
+
+/**
+ * Classify one dead-parent instance's children into kills / marker-searches,
+ * appending onto the shared `out` accumulator. Extracted from
+ * `decideOrphanReaping` to keep cognitive complexity in check — no behavior
+ * change, just the per-instance inner loop pulled out.
+ */
+function classifyDeadInstanceChildren(
+	instance: InstanceEntry,
+	isPidAlive: (pid: number) => boolean,
+	matchProcess:
+		| ((pid: number, expected: { command: string; marker?: string }) => boolean)
+		| undefined,
+	liveMarkers: Set<string>,
+	out: { childrenToKill: ChildToKill[]; markerSearches: MarkerSearch[] },
+): void {
+	for (const child of instance.lspChildren) {
+		const childAlive = isPidAlive(child.pid);
+		if (childAlive) {
+			const identityOk = matchProcess
+				? matchProcess(child.pid, {
+						command: child.command,
+						marker: child.marker,
+					})
+				: true;
+			if (identityOk) {
+				out.childrenToKill.push({
+					pid: child.pid,
+					serverId: child.serverId,
+					command: child.command,
+				});
+				continue;
+			}
+		}
+		// Child pid is dead, or alive-but-identity-mismatched (recycled pid) —
+		// if we have a marker, surface it so the caller can find a live
+		// process (e.g. the native exe grandchild) by command-line match.
+		// Never surface a marker a live instance also claims (see above).
+		if (child.marker && !liveMarkers.has(child.marker)) {
+			out.markerSearches.push({ marker: child.marker, serverId: child.serverId });
+		}
+	}
+}
+
+/**
  * Pure decision function: given the registry state and injectable liveness /
  * identity predicates, decide what to kill. Performs zero I/O.
  *
@@ -78,53 +144,17 @@ export function decideOrphanReaping(
 	const childrenToKill: ChildToKill[] = [];
 	const markerSearches: MarkerSearch[] = [];
 
-	// Markers claimed by any LIVE instance's children. A marker search kills by
-	// command-line match, so a marker that a live session also uses must never
-	// be searched — killing it would take down the live session's server.
-	// Markers are per-process-unique by construction (sgconfig.ts embeds the
-	// pid), so this is defense in depth against non-unique markers ever
-	// reappearing (#472: the original shared baseline.sgconfig.yml would have
-	// made the fallback kill every live ast-grep on the machine).
-	const liveMarkers = new Set<string>();
-	for (const instance of registry) {
-		if (!isPidAlive(instance.pid)) continue;
-		for (const child of instance.lspChildren) {
-			if (child.marker) liveMarkers.add(child.marker);
-		}
-	}
+	const liveMarkers = collectLiveMarkers(registry, isPidAlive);
 
 	for (const instance of registry) {
 		if (isPidAlive(instance.pid)) {
 			continue; // parent still alive — leave its children alone entirely
 		}
 		deadInstances.push(instance);
-
-		for (const child of instance.lspChildren) {
-			const childAlive = isPidAlive(child.pid);
-			if (childAlive) {
-				const identityOk = matchProcess
-					? matchProcess(child.pid, {
-							command: child.command,
-							marker: child.marker,
-						})
-					: true;
-				if (identityOk) {
-					childrenToKill.push({
-						pid: child.pid,
-						serverId: child.serverId,
-						command: child.command,
-					});
-					continue;
-				}
-			}
-			// Child pid is dead, or alive-but-identity-mismatched (recycled pid) —
-			// if we have a marker, surface it so the caller can find a live
-			// process (e.g. the native exe grandchild) by command-line match.
-			// Never surface a marker a live instance also claims (see above).
-			if (child.marker && !liveMarkers.has(child.marker)) {
-				markerSearches.push({ marker: child.marker, serverId: child.serverId });
-			}
-		}
+		classifyDeadInstanceChildren(instance, isPidAlive, matchProcess, liveMarkers, {
+			childrenToKill,
+			markerSearches,
+		});
 	}
 
 	return { deadInstances, childrenToKill, markerSearches };
@@ -149,14 +179,24 @@ function realIsPidAlive(pid: number): boolean {
 }
 
 function windowsExe(name: string): string {
-	return `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\${name}`;
+	return path.join(process.env.SystemRoot ?? String.raw`C:\Windows`, "System32", name);
+}
+
+/** Resolve an absolute path to `ps` (S4036: never spawn via bare PATH lookup).
+ *  Prefers `/bin/ps` (present on virtually every POSIX system), falls back to
+ *  `/usr/bin/ps`, and defaults back to `/bin/ps` if neither probe succeeds
+ *  (spawn will then fail closed rather than silently resolving via PATH). */
+function posixPsPath(): string {
+	if (fs.existsSync("/bin/ps")) return "/bin/ps";
+	if (fs.existsSync("/usr/bin/ps")) return "/usr/bin/ps";
+	return "/bin/ps";
 }
 
 /** Escape a value for embedding in a WQL LIKE clause: WQL uses `'` as the
  *  string delimiter (doubled to escape) and `%`/`_` as wildcards — the marker
  *  is an opaque path string, so escape all three before interpolating. */
 function escapeWqlLikeValue(value: string): string {
-	return value.replace(/'/g, "''").replace(/[%_]/g, (ch) => `[${ch}]`);
+	return value.replaceAll("'", "''").replaceAll(/[%_]/g, (ch) => `[${ch}]`);
 }
 
 /** Search running processes whose command line contains `marker` (Windows,
@@ -243,7 +283,7 @@ async function queryCommandLines(pids: number[]): Promise<Map<number, string>> {
 	return new Promise((resolve) => {
 		try {
 			const child = nodeSpawn(
-				"ps",
+				posixPsPath(),
 				["-p", valid.join(","), "-o", "pid=,args="],
 				{ shell: false, stdio: ["ignore", "pipe", "ignore"] },
 			);
@@ -254,8 +294,19 @@ async function queryCommandLines(pids: number[]): Promise<Map<number, string>> {
 			child.once("error", () => resolve(map));
 			child.once("close", () => {
 				for (const line of out.split(/\r?\n/)) {
-					const m = line.match(/^\s*(\d+)\s+(.*)$/);
-					if (m) map.set(Number(m[1]), m[2]);
+					// Linear parse (S8786/S6594: avoid regex backtracking on
+					// attacker-lengthenable ps output) — trim leading whitespace,
+					// then split on the first whitespace run: "  1234 args here".
+					const trimmed = line.trimStart();
+					if (!trimmed) continue;
+					let i = 0;
+					while (i < trimmed.length && trimmed[i] >= "0" && trimmed[i] <= "9") i++;
+					if (i === 0) continue;
+					const pidStr = trimmed.slice(0, i);
+					let j = i;
+					while (j < trimmed.length && (trimmed[j] === " " || trimmed[j] === "\t")) j++;
+					const pid = Number(pidStr);
+					if (Number.isFinite(pid) && pid > 0) map.set(pid, trimmed.slice(j));
 				}
 				resolve(map);
 			});
