@@ -370,7 +370,7 @@ describe("agent-nudge — inline context nudge for out-of-view mutations (#485)"
 			expect(result?.messages[0].content).not.toContain("another pi-lens instance");
 		});
 
-		it("a mixed batch (local + cross-process) produces ONE message using the cross-process framing", () => {
+		it("a mixed batch (local + cross-process) produces ONE message that never assigns local files to another instance", () => {
 			const guard = createReadGuard("s1");
 			guard.recordRead(createReadRecord("/repo/src/a.ts"));
 			const bus = makeBus();
@@ -383,8 +383,32 @@ describe("agent-nudge — inline context nudge for out-of-view mutations (#485)"
 			const result = consumeAgentNudge();
 			expect(result?.messages).toHaveLength(1);
 			expect(result?.messages[0].content).toContain("2 file(s)");
+			// Mixed framing: local base wording + exact cross-process count. The
+			// whole-batch "were autofixed by another pi-lens instance" clause must
+			// NOT be used here — that would misattribute the local file too.
 			expect(result?.messages[0].content).toContain(
-				"by another pi-lens instance (e.g. a subagent's)",
+				"after your last turn (1 of them by another pi-lens instance)",
+			);
+			expect(result?.messages[0].content).not.toContain(
+				"autofixed by another pi-lens instance",
+			);
+		});
+
+		it("mixed-batch attribution counts the cross-process portion exactly (2 of 3)", () => {
+			const guard = createReadGuard("s1");
+			guard.recordRead(createReadRecord("/repo/src/a.ts"));
+			const bus = makeBus();
+			wireAgentNudgeSubscriber({ events: bus, getReadGuard: () => guard });
+			bus.emit(touchedPayload({ paths: ["/repo/src/a.ts"] }));
+			recordCrossProcessTouches([
+				{ path: "/repo/src/child1.ts", reason: "autofix" },
+				{ path: "/repo/src/child2.ts", reason: "autofix" },
+			]);
+
+			const result = consumeAgentNudge();
+			expect(result?.messages[0].content).toContain("3 file(s)");
+			expect(result?.messages[0].content).toContain(
+				"after your last turn (2 of them by another pi-lens instance)",
 			);
 		});
 

@@ -225,20 +225,30 @@ describe("recent-touches (#492 cross-process touched-files record)", () => {
 			expect(seen).toEqual([]);
 		});
 
-		it("cross-form paths: entry recorded with backslashes is still matched against an existsSync probe", async () => {
+		it("cross-form paths: an alternate-but-genuine alias of the same file still passes the existsSync probe", async () => {
 			const { readCrossProcessTouchesForSessionStart } = await import(
 				"../../clients/recent-touches.js"
 			);
-			// __filename is the real absolute path to this test file; record it in
-			// backslash form (as a Windows Read-tool-originated path would arrive)
-			// to prove the consumer's existsSync probe still resolves it.
-			const backslashForm = __filename.replace(/\//g, "\\");
+			// __filename is the real absolute path to this test file. Record it in
+			// an alternate form that is a GENUINE alias of the same file ON THIS
+			// PLATFORM (the #491 postmortem rule: cross-form tests must only use
+			// forms that actually alias on the platform they run on):
+			//   - win32: backslash-separated (as a Windows Read-tool-originated
+			//     path would arrive) — a true alias only where drive-letter paths
+			//     exist; a backslashed POSIX path is NOT the same file on Linux,
+			//     which is exactly the trap that turned CI red.
+			//   - POSIX: redundant separators + a `.` segment (`/dir//./file`) —
+			//     the kernel resolves these to the same inode.
+			const aliasForm =
+				process.platform === "win32"
+					? __filename.replace(/\//g, "\\")
+					: `${path.dirname(__filename)}//./${path.basename(__filename)}`;
 			fs.writeFileSync(
 				recordFilePath(),
 				JSON.stringify({
 					entries: [
 						{
-							path: backslashForm,
+							path: aliasForm,
 							reason: "format",
 							ts: Date.now(),
 							pid: 999999,
@@ -320,13 +330,18 @@ describe("recent-touches (#492 cross-process touched-files record)", () => {
 			const { readCrossProcessTouchesForTurnStart } = await import(
 				"../../clients/recent-touches.js"
 			);
+			// Real files on disk — the turn_start reader applies the shared
+			// existence filter, so fabricated paths would be (correctly) dropped.
+			const firstFile = path.join(dir, "first.ts");
+			const secondFile = path.join(dir, "second.ts");
+			fs.writeFileSync(firstFile, "// first", "utf-8");
+			fs.writeFileSync(secondFile, "// second", "utf-8");
+
 			const t0 = Date.now();
 			fs.writeFileSync(
 				recordFilePath(),
 				JSON.stringify({
-					entries: [
-						{ path: "/fake/project/first.ts", reason: "autofix", ts: t0, pid: 777 },
-					],
+					entries: [{ path: firstFile, reason: "autofix", ts: t0, pid: 777 }],
 				}),
 				"utf-8",
 			);
@@ -344,13 +359,8 @@ describe("recent-touches (#492 cross-process touched-files record)", () => {
 				recordFilePath(),
 				JSON.stringify({
 					entries: [
-						{ path: "/fake/project/first.ts", reason: "autofix", ts: t0, pid: 777 },
-						{
-							path: "/fake/project/second.ts",
-							reason: "format",
-							ts: Date.now(),
-							pid: 777,
-						},
+						{ path: firstFile, reason: "autofix", ts: t0, pid: 777 },
+						{ path: secondFile, reason: "format", ts: Date.now(), pid: 777 },
 					],
 				}),
 				"utf-8",
@@ -361,6 +371,61 @@ describe("recent-touches (#492 cross-process touched-files record)", () => {
 			});
 			expect(second).toHaveLength(1);
 			expect(second[0].path).toContain("second.ts");
+		});
+
+		it("regression (#492 review): first turn_start of a fresh process drops stale and deleted-file entries, surfaces only the fresh existing one", async () => {
+			const {
+				readCrossProcessTouchesForTurnStart,
+				_resetRecentTouchesForTests,
+			} = await import("../../clients/recent-touches.js");
+			// Model a brand-new process: unset mtime watermark, cursor 0 — the
+			// exact state where the original implementation surfaced EVERY foreign
+			// entry in the record, however old, existing or not.
+			_resetRecentTouchesForTests();
+
+			const freshFile = path.join(dir, "fresh.ts");
+			fs.writeFileSync(freshFile, "// fresh", "utf-8");
+			const now = Date.now();
+			fs.writeFileSync(
+				recordFilePath(),
+				JSON.stringify({
+					entries: [
+						{
+							// Days old — the ring buffer caps count, not age; without a
+							// freshness filter this would nudge about an ancient touch.
+							path: freshFile,
+							reason: "autofix",
+							ts: now - 3 * 24 * 60 * 60 * 1000,
+							pid: 777,
+						},
+						{
+							// Fresh, but the file no longer exists on disk.
+							path: path.join(dir, "deleted-since.ts"),
+							reason: "format",
+							ts: now - 1000,
+							pid: 777,
+						},
+						{
+							// Fresh AND existing — the only one that should surface.
+							path: freshFile,
+							reason: "format",
+							ts: now - 2000,
+							pid: 777,
+						},
+					],
+				}),
+				"utf-8",
+			);
+
+			const seen = await readCrossProcessTouchesForTurnStart({
+				cwd: FAKE_CWD,
+				selfPid: process.pid,
+				now,
+			});
+			expect(seen).toHaveLength(1);
+			expect(seen[0].path).toBe(freshFile);
+			expect(seen[0].reason).toBe("format");
+			expect(seen[0].ts).toBe(now - 2000);
 		});
 
 		it("excludes entries from this process's own pid (self-exclusion)", async () => {

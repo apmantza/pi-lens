@@ -160,6 +160,33 @@ export async function appendRecentTouches(
 	await writeRecentTouchesAsync(args.cwd, { entries: capped });
 }
 
+// --- Shared foreign-entry filter (both consumers) ---
+
+/**
+ * The baseline relevance filter EVERY consumer applies: not our own pid,
+ * within the freshness window, and the file still exists on disk. Shared so
+ * the turn_start reader can never drift from the session_start reader again
+ * — the original turn_start implementation only filtered pid + cursor, which
+ * meant a fresh process's FIRST turn_start (unset mtime watermark, cursor 0)
+ * would surface every entry in the record, including days-old touches of
+ * since-deleted files (the ring buffer caps count, not age — nothing ever
+ * expires entries in place).
+ */
+function passesForeignEntryFilter(
+	entry: RecentTouchEntry,
+	selfPid: number,
+	now: number,
+	freshnessMs: number,
+): boolean {
+	if (entry.pid === selfPid) return false;
+	if (now - entry.ts > freshnessMs) return false;
+	try {
+		return fs.existsSync(entry.path);
+	} catch {
+		return false;
+	}
+}
+
 // --- Consumer: child at session_start ---
 
 export interface ReadCrossProcessTouchesForSessionStartArgs {
@@ -195,15 +222,9 @@ export async function readCrossProcessTouchesForSessionStart(
 		const now = args.now ?? Date.now();
 		const freshnessMs = args.freshnessMs ?? RECENT_TOUCHES_FRESHNESS_MS;
 		const file = await readRecentTouchesAsync(args.cwd);
-		return file.entries.filter((e) => {
-			if (e.pid === selfPid) return false;
-			if (now - e.ts > freshnessMs) return false;
-			try {
-				return fs.existsSync(e.path);
-			} catch {
-				return false;
-			}
-		});
+		return file.entries.filter((e) =>
+			passesForeignEntryFilter(e, selfPid, now, freshnessMs),
+		);
 	} catch {
 		return [];
 	}
@@ -220,15 +241,24 @@ const _lastConsumedCursor = new Map<string, number>();
 export interface ReadCrossProcessTouchesForTurnStartArgs {
 	cwd: string;
 	selfPid?: number;
+	/** Defaults to `Date.now()` — overridable for tests. */
+	now?: number;
+	/** Defaults to `RECENT_TOUCHES_FRESHNESS_MS` — overridable for tests. */
+	freshnessMs?: number;
 }
 
 /**
  * Parent-at-turn_start consumer. Hot path: ONE `fs.stat` per call; when the
  * mtime matches the last-seen mtime, returns `[]` immediately — no read, no
- * JSON parse. On a changed mtime, reads the file, filters to `pid !== self`
- * and `ts` newer than this cwd's last-consumed cursor (dedupes identical
- * path+ts across repeated reads — a touch already surfaced once must never
- * come back), then advances both the mtime watermark and the cursor.
+ * JSON parse. On a changed mtime, reads the file and applies TWO filters:
+ *   1. the shared foreign-entry filter (`pid !== self`, within the
+ *      freshness window, file still exists) — the same baseline the
+ *      session_start reader applies, so a fresh process's first turn_start
+ *      can never nudge about days-old touches of since-deleted files;
+ *   2. `ts` newer than this cwd's last-consumed cursor (dedupes identical
+ *      path+ts across repeated reads — a touch already surfaced once must
+ *      never come back), then advances both the mtime watermark and the
+ *      cursor.
  *
  * Wrapped so ENOENT/EACCES/parse errors NEVER throw into turn_start — a
  * missing record file (no cross-process activity yet) is the common case
@@ -252,11 +282,14 @@ export async function readCrossProcessTouchesForTurnStart(
 		_lastSeenMtimeMs = mtimeMs;
 
 		const selfPid = args.selfPid ?? process.pid;
+		const now = args.now ?? Date.now();
+		const freshnessMs = args.freshnessMs ?? RECENT_TOUCHES_FRESHNESS_MS;
 		const file = await readRecentTouchesAsync(args.cwd);
 		const cursorKey = normalizeFilePath(args.cwd);
 		const cursor = _lastConsumedCursor.get(cursorKey) ?? 0;
 		const fresh = file.entries.filter(
-			(e) => e.pid !== selfPid && e.ts > cursor,
+			(e) =>
+				e.ts > cursor && passesForeignEntryFilter(e, selfPid, now, freshnessMs),
 		);
 		if (file.entries.length > 0) {
 			const maxTs = Math.max(...file.entries.map((e) => e.ts));

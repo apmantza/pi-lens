@@ -2249,16 +2249,18 @@ export default function (pi: ExtensionAPI) {
 		void readCrossProcessTouchesForTurnStart({ cwd })
 			.then((entries) => {
 				if (entries.length === 0) return;
-				// Relevance filter (#492 point 6): a parent's own read-guard history
-				// is the FIRST signal (most entries will already be files it read/
-				// edited this session, same as the #485 local filter) — but unlike
-				// the local filter, an entry the parent has NEVER seen still passes
-				// through here (recency + existence were already applied upstream
-				// in recent-touches.ts). A parent about to `git commit` needs
+				// Relevance filter (#492 point 6): readCrossProcessTouchesForTurnStart
+				// already applied the shared baseline filter (foreign pid, 15-minute
+				// freshness window, file still exists) plus the consumed-cursor
+				// dedup — same baseline as the session_start reader. A parent's own
+				// read-guard history is the FIRST signal for most entries (files it
+				// read/edited this session, same as the #485 local filter) — but
+				// unlike the local filter, an entry the parent has NEVER seen still
+				// passes through here: a parent about to `git commit` needs
 				// attribution for cross-process drift even in files it hasn't
-				// opened yet this session, so there is deliberately no drop path
-				// for "unseen" cross-process entries — every entry that reaches
-				// this point is relevant by construction.
+				// opened yet this session, so there is deliberately no read-guard
+				// drop path — every entry that reaches this point is relevant by
+				// construction.
 				recordCrossProcessTouches(
 					entries.map((e) => ({ path: e.path, reason: e.reason })),
 				);
