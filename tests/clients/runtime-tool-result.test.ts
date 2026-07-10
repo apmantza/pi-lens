@@ -838,3 +838,140 @@ describe("runtime-tool-result inline behavior warnings", () => {
 		}
 	});
 });
+
+describe("#484 turn-summary collection gate", () => {
+	beforeEach(async () => {
+		const pipeline = await import("../../clients/pipeline.js");
+		vi.mocked(pipeline.runPipeline).mockReset();
+	});
+
+	it("does not record diagnostics/autofix/format on the turn-summary collector when lens-turn-summary is off (default)", async () => {
+		const { runPipeline } = await import("../../clients/pipeline.js");
+		vi.mocked(runPipeline).mockResolvedValue({
+			output: "✓ no blockers",
+			hasBlockers: false,
+			isError: false,
+			fileModified: true,
+			diagnostics: [
+				{
+					id: "d1",
+					message: "unused var",
+					filePath: "/repo/src/app.ts",
+					line: 4,
+					severity: "warning",
+					semantic: "warning",
+					tool: "eslint",
+					rule: "no-unused-vars",
+				},
+			],
+			formattersUsed: ["prettier"],
+			fixedCount: 1,
+			autofixTools: ["ruff:1"],
+		});
+
+		const env = setupTestEnvironment("pi-lens-turn-summary-off-");
+		try {
+			const filePath = path.join(env.tmpDir, "src", "app.ts");
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(filePath, "export const x = 1;\n");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.beginTurn();
+
+			await handleToolResult({
+				event: {
+					toolName: "edit",
+					input: { path: filePath },
+					details: { diff: "+  1 export const x = 1;" },
+					content: [{ type: "text", text: "base" }],
+				},
+				// lens-turn-summary is never true here — default off
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: new CacheManager(false),
+				biomeClient: {},
+				ruffClient: {},
+				testRunnerClient: {},
+				metricsClient: {},
+				resetLSPService: () => {},
+				agentBehaviorRecord: () => [],
+				formatBehaviorWarnings: () => "",
+			} as any);
+
+			expect(runtime.turnSummary.isEmpty()).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("records diagnostics, autofix, and format events on the turn-summary collector when lens-turn-summary is on", async () => {
+		const { runPipeline } = await import("../../clients/pipeline.js");
+		vi.mocked(runPipeline).mockResolvedValue({
+			output: "✓ no blockers",
+			hasBlockers: false,
+			isError: false,
+			fileModified: true,
+			diagnostics: [
+				{
+					id: "d1",
+					message: "unused var",
+					filePath: "/repo/src/app.ts",
+					line: 4,
+					severity: "warning",
+					semantic: "warning",
+					tool: "eslint",
+					rule: "no-unused-vars",
+				},
+			],
+			formattersUsed: ["prettier"],
+			fixedCount: 1,
+			autofixTools: ["ruff:1"],
+		});
+
+		const env = setupTestEnvironment("pi-lens-turn-summary-on-");
+		try {
+			const filePath = path.join(env.tmpDir, "src", "app.ts");
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(filePath, "export const x = 1;\n");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.beginTurn();
+
+			await handleToolResult({
+				event: {
+					toolName: "edit",
+					input: { path: filePath },
+					details: { diff: "+  1 export const x = 1;" },
+					content: [{ type: "text", text: "base" }],
+				},
+				getFlag: (name: string) => name === "lens-turn-summary",
+				dbg: () => {},
+				runtime,
+				cacheManager: new CacheManager(false),
+				biomeClient: {},
+				ruffClient: {},
+				testRunnerClient: {},
+				metricsClient: {},
+				resetLSPService: () => {},
+				agentBehaviorRecord: () => [],
+				formatBehaviorWarnings: () => "",
+			} as any);
+
+			expect(runtime.turnSummary.isEmpty()).toBe(false);
+			const details = runtime.turnSummary.consume(1);
+			expect(details.counts).toEqual({
+				diagnostics: 1,
+				autofixes: 1,
+				formats: 1,
+				byTool: {
+					diagnostic: { eslint: 1 },
+					autofix: { ruff: 1 },
+					format: { prettier: 1 },
+				},
+			});
+		} finally {
+			env.cleanup();
+		}
+	});
+});

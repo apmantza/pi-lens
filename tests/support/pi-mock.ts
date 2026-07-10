@@ -60,6 +60,14 @@ export interface MockCtx extends ExtensionCommandContext {
 	widgetCalls: CapturedWidget[];
 }
 
+/** A `pi.sendMessage(...)` call captured for assertions (#484). */
+export interface CapturedMessage {
+	customType: string;
+	content: unknown;
+	display: boolean;
+	details: unknown;
+}
+
 export interface PiMock {
 	// ── recordings ───────────────────────────────────────────────────────────
 	readonly flags: Map<string, RecordedFlag>;
@@ -67,6 +75,8 @@ export interface PiMock {
 	readonly tools: Map<string, unknown>;
 	readonly handlers: Map<string, Hook[]>;
 	readonly flagValues: Map<string, boolean | string>;
+	readonly messageRenderers: Map<string, unknown>;
+	readonly sentMessages: CapturedMessage[];
 
 	// ── ExtensionAPI surface that index.ts uses ──────────────────────────────
 	registerFlag(name: string, options: RecordedFlag): void;
@@ -74,6 +84,15 @@ export interface PiMock {
 	registerTool(tool: { name: string } & Record<string, unknown>): void;
 	on(event: string, handler: Hook): void;
 	getFlag(name: string): boolean | string | undefined;
+	/** #484: registered message renderers, keyed by customType. */
+	registerMessageRenderer(customType: string, renderer: unknown): void;
+	/** #484: captures every `pi.sendMessage(...)` call into `sentMessages`. */
+	sendMessage(message: {
+		customType: string;
+		content: unknown;
+		display: boolean;
+		details?: unknown;
+	}): void;
 
 	// ── test helpers ─────────────────────────────────────────────────────────
 	/** Pre-set a flag value (read back via getFlag); call before `extension(pi)`. */
@@ -101,6 +120,8 @@ export function createPiMock(
 	const flagValues = new Map<string, boolean | string>(
 		Object.entries(initialFlags),
 	);
+	const messageRenderers = new Map<string, unknown>();
+	const sentMessages: CapturedMessage[] = [];
 
 	const mock: PiMock = {
 		flags,
@@ -108,6 +129,8 @@ export function createPiMock(
 		tools,
 		handlers,
 		flagValues,
+		messageRenderers,
+		sentMessages,
 
 		registerFlag(name, options) {
 			flags.set(name, options);
@@ -134,6 +157,17 @@ export function createPiMock(
 		},
 		getFlag(name) {
 			return flagValues.get(name);
+		},
+		registerMessageRenderer(customType, renderer) {
+			messageRenderers.set(customType, renderer);
+		},
+		sendMessage(message) {
+			sentMessages.push({
+				customType: message.customType,
+				content: message.content,
+				display: message.display,
+				details: message.details,
+			});
 		},
 
 		setFlag(name, value) {

@@ -52,6 +52,15 @@ export interface PiLensGlobalConfig {
 		 */
 		enabled?: boolean;
 	};
+	turnSummary?: {
+		/**
+		 * Opt-in, transcript-persistent per-turn summary of diagnostics found,
+		 * autofixes applied, and autoformats applied (#484). Defaults false —
+		 * absence of this key means off. One collapsed/expandable entry per turn,
+		 * only emitted when the turn's collection is non-empty.
+		 */
+		enabled?: boolean;
+	};
 }
 
 export function getPiLensGlobalConfigPath(homeDir = os.homedir()): string {
@@ -98,6 +107,11 @@ export function loadPiLensGlobalConfig(
 		const contextInjection =
 			contextInjectionRaw && typeof contextInjectionRaw === "object"
 				? (contextInjectionRaw as Record<string, unknown>)
+				: undefined;
+		const turnSummaryRaw = raw.turnSummary;
+		const turnSummary =
+			turnSummaryRaw && typeof turnSummaryRaw === "object"
+				? (turnSummaryRaw as Record<string, unknown>)
 				: undefined;
 		const formatMode =
 			format?.mode === "immediate" || format?.mode === "deferred"
@@ -164,6 +178,14 @@ export function loadPiLensGlobalConfig(
 								: undefined,
 					}
 				: undefined,
+			turnSummary: turnSummary
+				? {
+						enabled:
+							typeof turnSummary.enabled === "boolean"
+								? turnSummary.enabled
+								: undefined,
+					}
+				: undefined,
 		};
 	} catch {
 		return undefined;
@@ -192,6 +214,10 @@ export function getGlobalContextInjectionEnabled(configPath?: string): boolean {
 	);
 }
 
+export function getGlobalTurnSummaryEnabled(configPath?: string): boolean {
+	return loadPiLensGlobalConfig(configPath)?.turnSummary?.enabled === true;
+}
+
 export function resolvePiLensFlag(
 	name: string,
 	value: boolean | string | undefined,
@@ -218,6 +244,9 @@ export function resolvePiLensFlag(
 	}
 	if (name === "no-lens-context") {
 		return config?.contextInjection?.enabled === false;
+	}
+	if (name === "lens-turn-summary") {
+		return config?.turnSummary?.enabled === true;
 	}
 	return value;
 }

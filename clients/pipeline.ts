@@ -270,6 +270,18 @@ export interface PipelineResult {
 	actionableWarnings?: ActionableWarningRecord[];
 	/** Non-fixable code-quality warnings introduced/touched by this pipeline run. */
 	codeQualityWarnings?: CodeQualityWarningRecord[];
+	/**
+	 * Raw dispatch diagnostics surfaced this run (blockers + warnings + fixed),
+	 * for #484 turn-summary collection. Same list `recordDiagnostics`/the
+	 * diagnostic logger already consume — not a new collection path.
+	 */
+	diagnostics?: Diagnostic[];
+	/** Immediate-mode formatters that actually changed this file this run. */
+	formattersUsed?: string[];
+	/** Count of autofix violations resolved this run (dispatch --fix runners). */
+	fixedCount?: number;
+	/** `tool:count` labels for autofix tools that ran this run. */
+	autofixTools?: string[];
 }
 
 // --- Phase timing helpers ---
@@ -1313,5 +1325,9 @@ export async function runPipeline(
 			: undefined,
 		actionableWarnings,
 		codeQualityWarnings,
+		diagnostics: dispatchResult.diagnostics,
+		formattersUsed,
+		fixedCount,
+		autofixTools,
 	};
 }

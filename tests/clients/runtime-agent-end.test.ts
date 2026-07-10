@@ -354,4 +354,146 @@ describe("runtime-agent-end deferred formatting", () => {
 			env.cleanup();
 		}
 	});
+
+	describe("#484 turn-summary collection gate", () => {
+		it("does not record deferred-format events on the turn-summary collector when lens-turn-summary is off (default)", async () => {
+			const env = setupTestEnvironment("pi-lens-agent-end-summary-off-");
+			const previousDataDir = process.env.PILENS_DATA_DIR;
+			process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+			try {
+				const filePath = createTempFile(env.tmpDir, "src/app.ts", "const x=1");
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				runtime.deferFormat(filePath, env.tmpDir, "edit", env.tmpDir);
+
+				const formatFile = vi.fn(async (fp: string) => {
+					fs.writeFileSync(fp, "const x = 1;\n");
+					return {
+						filePath: fp,
+						formatters: [{ name: "biome", success: true, changed: true }],
+						anyChanged: true,
+						allSucceeded: true,
+					};
+				});
+
+				await handleAgentEnd({
+					ctxCwd: env.tmpDir,
+					// lens-turn-summary NOT among the true-returning flags — default off
+					getFlag: (name) => name === "no-lsp",
+					notify: vi.fn(),
+					dbg: () => {},
+					runtime,
+					cacheManager: { addModifiedRange: () => {} } as any,
+					getFormatService: () =>
+						({ recordRead: () => {}, formatFile }) as any,
+				});
+
+				expect(runtime.turnSummary.isEmpty()).toBe(true);
+			} finally {
+				if (previousDataDir === undefined) {
+					delete process.env.PILENS_DATA_DIR;
+				} else {
+					process.env.PILENS_DATA_DIR = previousDataDir;
+				}
+				env.cleanup();
+			}
+		});
+
+		it("records a format event on the turn-summary collector when lens-turn-summary is on", async () => {
+			const env = setupTestEnvironment("pi-lens-agent-end-summary-on-");
+			const previousDataDir = process.env.PILENS_DATA_DIR;
+			process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+			try {
+				const filePath = createTempFile(env.tmpDir, "src/app.ts", "const x=1");
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				runtime.deferFormat(filePath, env.tmpDir, "edit", env.tmpDir);
+
+				const formatFile = vi.fn(async (fp: string) => {
+					fs.writeFileSync(fp, "const x = 1;\n");
+					return {
+						filePath: fp,
+						formatters: [{ name: "biome", success: true, changed: true }],
+						anyChanged: true,
+						allSucceeded: true,
+					};
+				});
+
+				await handleAgentEnd({
+					ctxCwd: env.tmpDir,
+					getFlag: (name) =>
+						name === "no-lsp" || name === "lens-turn-summary",
+					notify: vi.fn(),
+					dbg: () => {},
+					runtime,
+					cacheManager: { addModifiedRange: () => {} } as any,
+					getFormatService: () =>
+						({ recordRead: () => {}, formatFile }) as any,
+				});
+
+				expect(runtime.turnSummary.isEmpty()).toBe(false);
+				const details = runtime.turnSummary.consume(1);
+				expect(details.files).toHaveLength(1);
+				expect(details.files[0].events).toEqual([
+					{ kind: "format", tool: "biome" },
+				]);
+			} finally {
+				if (previousDataDir === undefined) {
+					delete process.env.PILENS_DATA_DIR;
+				} else {
+					process.env.PILENS_DATA_DIR = previousDataDir;
+				}
+				env.cleanup();
+			}
+		});
+
+		it("suppresses the info-level deferred-format success toast when lens-turn-summary is on, but keeps the failure toast", async () => {
+			const env = setupTestEnvironment("pi-lens-agent-end-summary-toast-");
+			const previousDataDir = process.env.PILENS_DATA_DIR;
+			process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+			try {
+				const filePath = createTempFile(env.tmpDir, "src/app.ts", "const x=1");
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				runtime.deferFormat(filePath, env.tmpDir, "edit", env.tmpDir);
+
+				const formatFile = vi.fn(async (fp: string) => {
+					fs.writeFileSync(fp, "const x = 1;\n");
+					return {
+						filePath: fp,
+						formatters: [{ name: "biome", success: true, changed: true }],
+						anyChanged: true,
+						allSucceeded: true,
+					};
+				});
+				const notify = vi.fn();
+
+				await handleAgentEnd({
+					ctxCwd: env.tmpDir,
+					getFlag: (name) =>
+						name === "no-lsp" || name === "lens-turn-summary",
+					notify,
+					dbg: () => {},
+					runtime,
+					cacheManager: { addModifiedRange: () => {} } as any,
+					getFormatService: () =>
+						({ recordRead: () => {}, formatFile }) as any,
+				});
+
+				// The success info toast is redundant once the transcript entry is
+				// opted in — must not fire.
+				expect(notify).not.toHaveBeenCalledWith(
+					expect.stringContaining("deferred format applied to"),
+					"info",
+				);
+			} finally {
+				if (previousDataDir === undefined) {
+					delete process.env.PILENS_DATA_DIR;
+				} else {
+					process.env.PILENS_DATA_DIR = previousDataDir;
+				}
+				env.cleanup();
+			}
+		});
+	});
 });

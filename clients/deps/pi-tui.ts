@@ -6,3 +6,4 @@
  * wildcard re-export leaves the namespace undefined at runtime under the bundle.
  */
 export { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+export type { Component } from "@earendil-works/pi-tui";

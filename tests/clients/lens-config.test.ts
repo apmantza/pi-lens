@@ -6,6 +6,7 @@ import {
 	getGlobalAutoformatEnabled,
 	getGlobalContextInjectionEnabled,
 	getGlobalImmediateFormatDefault,
+	getGlobalTurnSummaryEnabled,
 	getGlobalWidgetDefaultVisible,
 	getPiLensGlobalConfigPath,
 	loadPiLensGlobalConfig,
@@ -176,6 +177,45 @@ describe("global pi-lens config", () => {
 		expect(
 			getGlobalContextInjectionEnabled(path.join(home, "nope.json")),
 		).toBe(true);
+	});
+
+	it("defaults turnSummary to disabled (opt-in, #484)", () => {
+		const home = makeTempHome();
+		expect(getGlobalTurnSummaryEnabled(path.join(home, "nope.json"))).toBe(
+			false,
+		);
+		const configPath = writeConfig(home, JSON.stringify({ widget: {} }));
+		expect(getGlobalTurnSummaryEnabled(configPath)).toBe(false);
+		expect(resolvePiLensFlag("lens-turn-summary", false, {})).toBe(false);
+	});
+
+	it("parses turnSummary.enabled=true and resolves the lens-turn-summary flag", () => {
+		const home = makeTempHome();
+		const configPath = writeConfig(
+			home,
+			JSON.stringify({ turnSummary: { enabled: true } }),
+		);
+		expect(loadPiLensGlobalConfig(configPath)).toEqual({
+			turnSummary: { enabled: true },
+		});
+		expect(getGlobalTurnSummaryEnabled(configPath)).toBe(true);
+		expect(
+			resolvePiLensFlag("lens-turn-summary", false, {
+				turnSummary: { enabled: true },
+			}),
+		).toBe(true);
+		// explicit CLI flag wins regardless of config
+		expect(
+			resolvePiLensFlag("lens-turn-summary", true, {
+				turnSummary: { enabled: false },
+			}),
+		).toBe(true);
+		// config false (or absent) → flag resolves falsy
+		expect(
+			resolvePiLensFlag("lens-turn-summary", false, {
+				turnSummary: { enabled: false },
+			}),
+		).toBe(false);
 	});
 
 	it("parses a positive dispatch.runnerTimeoutFloorMs", () => {
