@@ -67,6 +67,7 @@ export {
 	readSymbol,
 	type ReadSymbolResult,
 	type RecommendedRead,
+	renderCompactModuleReport,
 } from "./module-report.js";
 
 // --- Query wrappers (own the remaining internal reach-ins) -------------------

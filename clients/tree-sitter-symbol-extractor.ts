@@ -775,6 +775,7 @@ export class TreeSitterSymbolExtractor {
 		const decorators = this.extractDecorators(defNode);
 		const isAsync =
 			(kind === "function" || kind === "method") && this.isAsyncDecl(defNode);
+		const doc = this.extractDocComment(defNode);
 
 		return {
 			id: `${filePath}:${name}`,
@@ -790,7 +791,121 @@ export class TreeSitterSymbolExtractor {
 			...(visibility ? { visibility } : {}),
 			...(decorators.length > 0 ? { decorators } : {}),
 			...(isAsync ? { isAsync: true } : {}),
+			...(doc ? { doc } : {}),
 		};
+	}
+
+	// Comment node kinds across grammars that use tree-sitter's conventional
+	// name. Line/block comments (`//`, `/* */`, `/** */`, `#`) all parse to a
+	// single "comment" node type in every grammar checked (JS/TS, Python, Go,
+	// Rust, Java, Kotlin, C#, C/C++, Ruby, PHP, Swift, Lua) — no per-grammar
+	// query needed, unlike decorators/annotations which vary by node shape.
+	private static readonly COMMENT_NODE_KIND = "comment";
+
+	/**
+	 * First sentence/line of the doc comment immediately preceding a declaration,
+	 * whitespace-collapsed and capped ~120 chars — the highest-signal token for an
+	 * agent deciding which symbol to read (#512). Structural, not per-language:
+	 * walks contiguous preceding-sibling `comment` nodes (same traversal shape as
+	 * `extractDecorators`), stopping at the nearest non-comment/non-decorator named
+	 * sibling, and takes the LAST contiguous comment block (the one directly above
+	 * the declaration — an earlier unrelated comment separated by blank lines still
+	 * parses as a preceding sibling, but a real gap makes it not "attached").
+	 * JSDoc/TSDoc block comments strip the leading/trailing block markers and
+	 * per-line `*` gutters; plain `//`/`#` line comments strip the marker only.
+	 * Returns undefined when no comment is directly attached.
+	 */
+	// biome-ignore lint/suspicious/noExplicitAny: web-tree-sitter node
+	private extractDocComment(declNode: any): string | undefined {
+		const isComment = (n: any): boolean =>
+			!!n && n.type === TreeSitterSymbolExtractor.COMMENT_NODE_KIND;
+		const isDeco = (n: any) =>
+			!!n && TreeSitterSymbolExtractor.DECORATOR_NODE_KINDS.has(n.type);
+		// web-tree-sitter materializes a NEW node object on every `.children`/
+		// `.parent` access (no stable identity), so siblings must be located by
+		// START POSITION, never by reference (`===`) — same reasoning as
+		// `startIndex` comparisons in `extractDecorators`.
+		const samePos = (a: any, b: any) =>
+			a?.startPosition?.row === b?.startPosition?.row &&
+			a?.startPosition?.column === b?.startPosition?.column;
+		const sameStartRow = (a: any, b: any) =>
+			a?.startPosition?.row === b?.startPosition?.row;
+
+		// `export function foo() {}` wraps the declaration in an `export_statement`
+		// (JS/TS) / `export_declaration` node that starts on the SAME LINE as the
+		// declaration (earlier column — the `export` keyword) — the doc comment
+		// sits before the wrapper, not before the inner declaration. Walk up
+		// through same-line wrappers (mirrors `hasExportModifier`'s upward walk
+		// for the same shape) so the comment search anchors on the outermost node
+		// that actually starts the line.
+		let node = declNode;
+		for (let hops = 0; hops < 4; hops++) {
+			const parent = node.parent;
+			if (!parent || !sameStartRow(parent, node)) break;
+			node = parent;
+		}
+
+		const siblings: any[] = node.parent?.children ?? [];
+		const idx = siblings.findIndex((s) => samePos(s, node));
+		if (idx <= 0) return undefined;
+
+		// Walk backwards from the declaration, skipping decorators/annotations
+		// (Python/TS often have `@decorator` between the doc comment and the def),
+		// collecting a contiguous run of comment nodes with no other named node
+		// (and no blank-line gap) in between. `boundaryRow` is the start row of
+		// the closest already-accepted neighbor (the declaration itself, or the
+		// decorator block above it) — a candidate comment separated from THAT
+		// row by a blank line is rejected even when it's the only candidate.
+		let cursor = idx - 1;
+		while (cursor >= 0 && isDeco(siblings[cursor])) cursor--;
+		let boundaryRow: number | undefined = node.startPosition?.row;
+		let end = -1; // inclusive end index of the accepted comment run
+		let start = -1; // inclusive start index of the accepted comment run
+		while (cursor >= 0 && isComment(siblings[cursor])) {
+			const candidate = siblings[cursor];
+			const gapRows =
+				boundaryRow !== undefined && typeof candidate.endPosition?.row === "number"
+					? boundaryRow - candidate.endPosition.row
+					: 0;
+			if (gapRows > 1) break; // separated by a blank line — not attached
+			if (end < 0) end = cursor;
+			start = cursor;
+			boundaryRow = candidate.startPosition?.row;
+			cursor--;
+		}
+		if (start < 0 || end < 0) return undefined;
+
+		const raw = siblings
+			.slice(start, end + 1)
+			.map((n) => String(n.text ?? ""))
+			.join("\n");
+		return this.summarizeDocComment(raw);
+	}
+
+	private static readonly DOC_MAX_CHARS = 120;
+
+	/** Strip comment markers, take the first sentence (or first line if no
+	 * sentence terminator), collapse whitespace, cap at ~120 chars. */
+	private summarizeDocComment(raw: string): string | undefined {
+		const cleaned = raw
+			.replace(/^\s*\/\*\*?/, "")
+			.replace(/\*\/\s*$/, "")
+			.split(/\r?\n/)
+			.map((line) => line.replace(/^\s*(\*|\/\/\/?|#)\s?/, "").trimEnd())
+			.filter((line) => line.trim().length > 0)
+			.join(" ")
+			.trim();
+		if (!cleaned) return undefined;
+
+		// First sentence: up to the first `. ` / `! ` / `? ` followed by a capital
+		// or end-of-string, else the whole cleaned text.
+		const sentenceMatch = cleaned.match(/^.*?[.!?](?:\s|$)/);
+		let first = (sentenceMatch ? sentenceMatch[0] : cleaned).trim();
+		first = first.replace(/\s+/g, " ");
+		if (first.length > TreeSitterSymbolExtractor.DOC_MAX_CHARS) {
+			first = `${first.slice(0, TreeSitterSymbolExtractor.DOC_MAX_CHARS - 1).trimEnd()}…`;
+		}
+		return first || undefined;
 	}
 
 	/**

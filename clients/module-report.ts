@@ -56,8 +56,12 @@ export interface ModuleReportOptions {
 	maxRefsPerSymbol?: number;
 	/** Optional task hint used only to rank recommendedReads; never expands scope or triggers scans. */
 	focus?: string;
-	/** Payload tier. summary keeps top-level read handles/recommendations only. */
-	view?: "summary" | "default";
+	/** Payload tier. `summary` keeps top-level read handles/recommendations only.
+	 * `compact` computes the same full data as `default` (so the JSON shape and
+	 * `ModuleReport` type are unaffected) but signals the caller to render it as
+	 * the line-oriented text view (`renderCompactModuleReport`) instead of JSON —
+	 * see tools/module-report.ts. */
+	view?: "summary" | "default" | "compact";
 	/** Include the cross-file blast-radius section (#304): the transitive
 	 * dependents of this module, aggregated to ranked file `read` args. Read-only
 	 * over the CACHED graph — omitted entirely on a cold cache (never builds). */
@@ -95,26 +99,32 @@ export interface ModuleSymbolEntry {
 	fanout?: number;
 	/** McCabe complexity (jsts graph path only). */
 	complexity?: number;
-	/** Empty when the symbol has no risk flags; omitted from the wire entirely. */
+	/** Non-derivable risk/lifecycle signals (e.g. "async", "high fanout", "high
+	 * complexity", "boundary wrapper"). "exported" is NOT repeated here — it
+	 * already rides the `exported` boolean field above (#512). Empty flags omit
+	 * the key entirely from the wire. */
 	flags?: string[];
 	usedBy?: ModuleSymbolUsedBy[];
 	/** Members nested under their container by line-range containment (#301) —
 	 * a class/interface's methods/fields, an outer class's inner classes. Each
-	 * member is a full entry (read-args, visibility, who-uses-this); omitted when
+	 * member is a full entry (visibility, who-uses-this); omitted when
 	 * the symbol has none. The api/internal split is over TOP-LEVEL entries only;
 	 * members ride along inside their container. */
 	members?: ModuleSymbolEntry[];
-	/** Pre-computed read arguments — the agent's next call sits right here. */
-	read: { path: string; offset: number; limit: number };
+	// NOTE (#512): no `read` block here. offset/limit are pure derivations of
+	// startLine/endLine (offset = startLine, limit = endLine - startLine + 1) and
+	// the path is the report's own `path` field — repeating all three per symbol
+	// cost real tokens with zero new information. To read a symbol: call
+	// `read`/`read_symbol` with offset=startLine, limit=endLine-startLine+1 on
+	// THIS report's path.
 }
 
 export interface RecommendedRead {
 	reason: string;
 	/** Named symbol or synthetic callback handle. */
 	symbol?: string;
-	path: string;
-	offset: number;
-	limit: number;
+	startLine: number;
+	endLine: number;
 }
 
 export interface ModuleCallbackEntry {
@@ -129,7 +139,9 @@ export interface ModuleCallbackEntry {
 	signature?: string;
 	parentChain?: string[];
 	flags?: string[];
-	read: { path: string; offset: number; limit: number };
+	// NOTE (#512): no `read` block — same derivation as ModuleSymbolEntry
+	// (offset = startLine, limit = endLine - startLine + 1, path = report's own
+	// `path`). Use readArgsFor(...)-equivalent math to build a read call.
 }
 
 /** One file in the blast radius (#304): a transitive dependent of this module,
@@ -169,7 +181,7 @@ export interface ModuleReport {
 	warnings?: string[];
 	language?: string;
 	lineCount?: number;
-	view?: "summary";
+	view?: "summary" | "compact";
 	summary: { imports: number; exports: number; symbols: number };
 	imports: { external: string[]; internal: string[] };
 	api: ModuleSymbolEntry[];
@@ -580,7 +592,6 @@ function coldImports(
 
 function toEntry(
 	sym: ExtractedSymbol,
-	displayPath: string,
 	normalizedPath: string,
 	graph: ReviewGraph | undefined,
 	maxRefs: number,
@@ -604,14 +615,15 @@ function toEntry(
 
 	// A private/protected member of an exported class is reachable but NOT part
 	// of the public API, so it must not count as `exported` for the api/internal
-	// split, the "exported" flag, or read ranking (#258). The extractor's
-	// sym.isExported is untouched (the review graph still sees the full surface);
-	// this gating is local to the report's presentation.
+	// split or read ranking (#258). The extractor's sym.isExported is untouched
+	// (the review graph still sees the full surface); this gating is local to
+	// the report's presentation.
 	const nonPublic =
 		sym.visibility === "private" || sym.visibility === "protected";
 	const exported = (sym.isExported || !!node?.exported) && !nonPublic;
+	// `flags` carries only non-derivable signals — "exported" is NOT pushed here
+	// since it duplicates the `exported` boolean field below (#512).
 	const flags: string[] = [];
-	if (exported) flags.push("exported");
 	if (sym.isAsync) flags.push("async");
 	if (fanout !== undefined && fanout >= 4) flags.push("high fanout");
 	if (complexity !== undefined && complexity >= 8)
@@ -638,7 +650,6 @@ function toEntry(
 		// outline (~200 tok total). Omit when there's nothing to report.
 		...(flags.length > 0 ? { flags } : {}),
 		usedBy: usedBy && usedBy.length > 0 ? usedBy : undefined,
-		read: readArgsFor(displayPath, startLine, endLine),
 	};
 }
 
@@ -691,8 +702,8 @@ function summarizeEntries(entries: ModuleSymbolEntry[]): ModuleSymbolEntry[] {
 		exported: entry.exported,
 		...(entry.visibility ? { visibility: entry.visibility } : {}),
 		...(entry.signature ? { signature: entry.signature } : {}),
+		...(entry.doc ? { doc: entry.doc } : {}),
 		...(entry.flags ? { flags: entry.flags } : {}),
-		read: entry.read,
 		...(entry.members
 			? {
 					members: entry.members.map((member) => ({
@@ -703,7 +714,7 @@ function summarizeEntries(entries: ModuleSymbolEntry[]): ModuleSymbolEntry[] {
 						exported: member.exported,
 						...(member.visibility ? { visibility: member.visibility } : {}),
 						...(member.signature ? { signature: member.signature } : {}),
-						read: member.read,
+						...(member.doc ? { doc: member.doc } : {}),
 					})),
 				}
 			: {}),
@@ -792,7 +803,8 @@ function rankRecommendedReads(
 			return {
 				reason: reasons.join(", ") || "public surface",
 				symbol: entry.name,
-				...entry.read,
+				startLine: entry.startLine,
+				endLine: entry.endLine,
 			};
 		}
 		const reasons: string[] = [];
@@ -807,7 +819,8 @@ function rankRecommendedReads(
 		return {
 			reason: reasons.join(", ") || item.callback.kind,
 			symbol: item.callback.name,
-			...item.callback.read,
+			startLine: item.callback.startLine,
+			endLine: item.callback.endLine,
 		};
 	});
 }
@@ -1446,7 +1459,6 @@ function callbackSupportFor(
 function extractCallbacks(
 	root: ModuleReportNode | undefined,
 	entries: CallbackOwner[],
-	filePath: string,
 	languageId: string | undefined,
 	warnings?: string[],
 ): ModuleCallbackEntry[] {
@@ -1495,7 +1507,6 @@ function extractCallbacks(
 					signature: firstLine(node.text),
 					...(owner ? { parentChain: [owner] } : {}),
 					...(cls.flags ? { flags: cls.flags } : {}),
-					read: readArgsFor(filePath, startLine, endLine),
 				});
 			}
 		}
@@ -1598,7 +1609,7 @@ export async function moduleReport(
 	// list. `entries` is mutated by nestEntries (members attached); `topLevel` is
 	// the api/internal split surface.
 	const entries = outlineSymbols.map((sym) =>
-		toEntry(sym, absPath, normalizedPath, graph, maxRefs, cwd),
+		toEntry(sym, normalizedPath, graph, maxRefs, cwd),
 	);
 	const topLevel = nestEntries(entries);
 
@@ -1607,7 +1618,7 @@ export async function moduleReport(
 	let callbacks: ModuleCallbackEntry[] = [];
 	const warnings: string[] = [...(extractionWarnings ?? [])];
 	try {
-		callbacks = extractCallbacks(root, entries, absPath, languageId, warnings);
+		callbacks = extractCallbacks(root, entries, languageId, warnings);
 	} catch (err) {
 		const message = diagnosticMessage(err);
 		warnings.push(`Failed to extract callbacks: ${message}`);
@@ -1672,6 +1683,11 @@ export async function moduleReport(
 
 	const view = options?.view ?? "default";
 	const summaryView = view === "summary";
+	// "compact" computes the same full data as "default" — it's a rendering
+	// instruction for the caller (renderCompactModuleReport), not a data tier —
+	// so it only needs to echo back on the report; it never gates section content
+	// the way summaryView does.
+	const compactView = view === "compact";
 	let importsProvenance: NonNullable<ModuleReport["provenance"]>["imports"] = "none";
 	if (coldImportResult) {
 		importsProvenance = "syntax";
@@ -1703,6 +1719,7 @@ export async function moduleReport(
 			options?.focus,
 		),
 		...(summaryView ? { view: "summary" } : {}),
+		...(compactView ? { view: "compact" } : {}),
 		...(blastRadius && !summaryView ? { blastRadius } : {}),
 		provenance: {
 			symbols: languageId ? "syntax" : "none",
@@ -1739,6 +1756,157 @@ export async function moduleReport(
 	});
 
 	return report;
+}
+
+// --- Compact (line-oriented text) rendering (#512 slice 4) ------------------
+//
+// An opt-in `view: "compact"` alternative to the JSON report: one line per
+// symbol/callback instead of a repeated-keys JSON object, at roughly a quarter
+// of the token cost for the same information. Purely a rendering step over the
+// already-built ModuleReport — it changes no data, only presentation, so a
+// caller that wants JSON just skips this function. Default view stays JSON
+// (this is opt-in for dogfooding, not a default flip).
+
+function padRange(startLine: number, endLine: number, width: number): string {
+	return `${startLine}-${endLine}`.padEnd(width);
+}
+
+const KIND_ABBREV: Record<string, string> = {
+	function: "fn",
+	method: "fn",
+	class: "class",
+	interface: "iface",
+	type: "type",
+	variable: "var",
+	property: "prop",
+};
+
+function compactKind(kind: string): string {
+	return KIND_ABBREV[kind] ?? kind;
+}
+
+function compactUsedBySuffix(usedBy: ModuleSymbolUsedBy[] | undefined): string {
+	if (!usedBy || usedBy.length === 0) return "";
+	const counts = new Map<string, number>();
+	for (const u of usedBy) counts.set(u.file, (counts.get(u.file) ?? 0) + 1);
+	const parts = [...counts.entries()].map(([file, n]) =>
+		n > 1 ? `${file}×${n}` : file,
+	);
+	return `  used-by: ${parts.join(", ")}`;
+}
+
+function compactEntryLine(entry: ModuleSymbolEntry, width: number): string {
+	const range = padRange(entry.startLine, entry.endLine, width);
+	const kind = compactKind(entry.kind).padEnd(6);
+	const sig = entry.signature ? `${entry.name}${entry.signature}` : entry.name;
+	const flagsSuffix =
+		entry.flags && entry.flags.length > 0 ? `  [${entry.flags.join(", ")}]` : "";
+	const docSuffix = entry.doc ? `  — ${entry.doc}` : "";
+	const usedBySuffix = compactUsedBySuffix(entry.usedBy);
+	return `  ${range}${kind}${sig}${flagsSuffix}${usedBySuffix}${docSuffix}`;
+}
+
+function compactMemberLines(
+	entry: ModuleSymbolEntry,
+	width: number,
+	indent: string,
+): string[] {
+	if (!entry.members || entry.members.length === 0) return [];
+	return entry.members.map((m) => `${indent}${compactEntryLine(m, width).slice(2)}`);
+}
+
+function compactCallbackLine(callback: ModuleCallbackEntry, width: number): string {
+	const range = padRange(callback.startLine, callback.endLine, width);
+	const kind = callback.kind.padEnd(20);
+	const flagsSuffix =
+		callback.flags && callback.flags.length > 0
+			? `  [${callback.flags.join(", ")}]`
+			: "";
+	const ownerSuffix = callback.parentChain?.length
+		? `  (in ${callback.parentChain.join(".")})`
+		: "";
+	return `  ${range}${kind}${callback.name}${flagsSuffix}${ownerSuffix}`;
+}
+
+/**
+ * Render a ModuleReport as the line-oriented compact text view (#512 slice 4):
+ * one line per symbol/member/callback instead of a JSON object per entry.
+ * Example:
+ * ```
+ * clients/agent-nudge.ts jsts 266L — 8 symbols, 5 exported | imports: bus-publish, latency-logger
+ * API:
+ *   77-81    fn  _resetAgentNudgeForTests()  — Test-only: clear accumulator state.
+ * INTERNAL:
+ *   95-104   fn  isValidPayload(data: unknown)
+ * CALLBACKS:
+ *   164-172  event_handler  events.on@164  [lifecycle]  (in wireAgentNudgeSubscriber)
+ * ```
+ * Purely presentational over an already-built report — call `moduleReport`
+ * first (with `view: "compact"` or any other view) and pass its result here.
+ */
+export function renderCompactModuleReport(report: ModuleReport): string {
+	if (!report.available) {
+		return `${report.path} — unavailable${report.error ? `: ${report.error}` : ""}`;
+	}
+	const allEntries = [...report.api, ...report.internal];
+	const allRanges = allEntries.flatMap((e) => [
+		e,
+		...(e.members ?? []),
+	]);
+	const width =
+		Math.max(
+			5,
+			...allRanges.map((e) => `${e.startLine}-${e.endLine}`.length),
+			...report.callbacks.map((c) => `${c.startLine}-${c.endLine}`.length),
+		) + 2;
+
+	const importsList = [...report.imports.internal, ...report.imports.external];
+	const importsSuffix =
+		importsList.length > 0
+			? ` | imports: ${importsList
+					.slice(0, 6)
+					.map((i) => baseNameNoExt(i))
+					.join(", ")}${importsList.length > 6 ? ", …" : ""}`
+			: "";
+	const lines: string[] = [
+		`${report.path} ${report.language ?? "?"} ${report.lineCount ?? "?"}L — ` +
+			`${report.summary.symbols} symbols, ${report.summary.exports} exported${importsSuffix}`,
+	];
+
+	if (report.api.length > 0) {
+		lines.push("API:");
+		for (const entry of report.api) {
+			lines.push(compactEntryLine(entry, width));
+			lines.push(...compactMemberLines(entry, width, "    "));
+		}
+	}
+	if (report.internal.length > 0) {
+		lines.push("INTERNAL:");
+		for (const entry of report.internal) {
+			lines.push(compactEntryLine(entry, width));
+			lines.push(...compactMemberLines(entry, width, "    "));
+		}
+	}
+	if (report.callbacks.length > 0) {
+		lines.push("CALLBACKS:");
+		for (const callback of report.callbacks) {
+			lines.push(compactCallbackLine(callback, width));
+		}
+	}
+	if (report.recommendedReads.length > 0) {
+		lines.push("RECOMMENDED:");
+		for (const r of report.recommendedReads) {
+			lines.push(
+				`  ${padRange(r.startLine, r.endLine, width)}${r.symbol ?? ""}  — ${r.reason}`,
+			);
+		}
+	}
+	return lines.join("\n");
+}
+
+function baseNameNoExt(p: string): string {
+	const base = p.split(/[\\/]/).pop() ?? p;
+	return base.replace(/\.[^./\\]+$/, "");
 }
 
 /**
@@ -1829,7 +1997,6 @@ export async function readSymbol(
 		callback = extractCallbacks(
 			root,
 			owners,
-			absPath,
 			languageId,
 			callbackWarnings,
 		).find((candidate) => candidate.name === symbolName);
@@ -1988,7 +2155,7 @@ function enclosingOutline(
 			endLine: callback.endLine,
 			signature: callback.signature,
 			parentChain: callback.parentChain,
-			read: callback.read,
+			read: readArgsFor(filePath, callback.startLine, callback.endLine),
 		});
 	}
 	return items
@@ -2068,7 +2235,7 @@ export async function readEnclosing(
 	const warnings = [...(extractionWarnings ?? [])];
 	let callbacks: ModuleCallbackEntry[] = [];
 	try {
-		callbacks = extractCallbacks(root, owners, absPath, languageId, warnings);
+		callbacks = extractCallbacks(root, owners, languageId, warnings);
 	} catch (err) {
 		const message = `Callback extraction failed: ${diagnosticMessage(err)}`;
 		warnings.push(message);

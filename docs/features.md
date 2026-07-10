@@ -63,17 +63,24 @@ instead of a flat blob of source. See
 [`module-report-read-symbol.md`](module-report-read-symbol.md)
 for the full design and token-efficiency numbers.
 
-**`module_report(filePath, maxRefsPerSymbol?, blastRadius?, blastRadiusDepth?)`** —
-returns a structured outline: every symbol's name/kind/startLine/endLine/signature,
+**`module_report(filePath, maxRefsPerSymbol?, focus?, view?, blastRadius?, blastRadiusDepth?)`** —
+returns a structured outline: every symbol's name/kind/startLine/endLine/signature
+(plus a first-line `doc` summary when a doc comment is attached — #512),
 exported vs internal split (with class/interface members nested under their
 container), who-uses-this (`usedBy`), fanout/complexity risk flags, and a
-`recommendedReads` top-3 ranked by usage + complexity. Each symbol entry includes
-a ready-to-use `read` argument (`{path, offset, limit}`) so the agent's next call
-sits right there. Pass `blastRadius: true` to also get the cross-file **blast
-radius** — transitive dependents aggregated to ranked file `read` args ("if you
-change this, verify these files"); read-only over the cached graph, omitted when
-cold (this replaced the standalone `pilens_impact` tool). Tree-sitter extract +
-cached review-graph lookup; never builds the graph, never calls LSP on this path.
+`recommendedReads` top-3 ranked by usage + complexity. No per-symbol `read`
+block (#512) — `offset`/`limit` are pure derivations of `startLine`/`endLine`
+on the report's own `path`, so build a read call as
+`{path: report.path, offset: startLine, limit: endLine - startLine + 1}`.
+Cross-file entries (`blastRadius.files[].read`, `usedBy[].file`) keep their own
+path since they point at a different file. Pass `blastRadius: true` to also get
+the cross-file **blast radius** — transitive dependents aggregated to ranked
+file `read` args ("if you change this, verify these files"); read-only over
+the cached graph, omitted when cold (this replaced the standalone
+`pilens_impact` tool). `view: "compact"` returns a line-oriented text
+rendering (one line per symbol/callback, roughly a quarter of the JSON cost)
+instead of JSON — same data, opt-in. Tree-sitter extract + cached review-graph
+lookup; never builds the graph, never calls LSP on this path.
 `semantic.source` reports what backed the data (`review-graph` | `none`).
 
 **`read_symbol(filePath, symbol)`** — returns the verbatim body of one

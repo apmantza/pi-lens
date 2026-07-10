@@ -99,16 +99,30 @@ a *second host adapter* alongside `index.ts`. Design rationale + progress: `mcp.
   ran so callers don't over-trust the list for untuned languages. Add a language
   by adding a `CALLBACK_RULES` entry + a guarded fixture test (the SYMBOL_QUERIES
   per-grammar precedent — extraction breaks silently against real grammars).
+  Symbol entries carry a first-line `doc` summary (whitespace-collapsed,
+  ~120 chars) extracted from an attached doc comment via structural
+  preceding-sibling `comment`-node traversal — the same tree-sitter pass, no
+  second parse (#512); JS/TS is the primary target, Python/other languages
+  sharing that node shape get it for free. No per-symbol `read` block (#512) —
+  `offset`/`limit` are pure derivations of `startLine`/`endLine` on the
+  report's own `path`; cross-file entries (`blastRadius.files[].read`,
+  `usedBy[].file`) keep their own path. `exported` is a boolean only — not
+  also repeated in `flags`, which carries non-derivable signals only.
   `view:"summary"` is the payload-reducing orientation mode: top-level API/
-  internal read handles + `recommendedReads`, with heavy callbacks/usedBy/
-  blast-radius payloads omitted; reports also carry section-level `provenance`
+  internal entries + `recommendedReads`, with heavy callbacks/usedBy/
+  blast-radius payloads omitted; `view:"compact"` (#512) renders the full
+  report as line-oriented TEXT (one line per symbol/callback) instead of
+  JSON — same data, roughly a quarter of the token cost, opt-in (default
+  stays JSON). Reports also carry section-level `provenance`
   (`syntax`, `cached-review-graph`, `heuristic-tree-sitter`, `none`) so agents
   can tell facts from cache/heuristic sections without per-flag JSON bloat. Pass
   `blastRadius: true` for the cross-file **blast radius** (#304):
   transitive dependents aggregated to ranked file `read` args — read-only over
   the *cached* graph (omitted when cold), the single successor to the removed
   `pilens_impact` tool) /
-  `pilens_read_symbol` (one symbol/callback handle's verbatim body). `read_enclosing`
+  `pilens_read_symbol` (one symbol/callback handle's verbatim body; its MCP
+  response no longer restates name/kind/startLine/endLine in a trailing JSON
+  block after the header line already carries them — #512). `read_enclosing`
   is the pi agent search/diagnostic → exact-body bridge: given a file+line it
   returns the smallest enclosing symbol/callback body and records read-guard
   coverage; if `maxLines` would reject an oversized range, `onOversize:"slice"`

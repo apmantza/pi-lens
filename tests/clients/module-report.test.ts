@@ -5,6 +5,7 @@ import {
 	moduleReport,
 	readEnclosing,
 	readSymbol,
+	renderCompactModuleReport,
 } from "../../clients/module-report.js";
 import {
 	buildOrUpdateGraph,
@@ -60,13 +61,10 @@ describe("moduleReport — outline + structure", () => {
 		expect(add?.kind).toBe("function");
 		expect(add?.signature).toContain("a: number");
 		// endLine must exceed startLine for a multi-line function (the Symbol.endLine
-		// enabler) and drive the pre-computed read args.
+		// enabler). No per-symbol `read` block (#512) — offset/limit are pure
+		// derivations of startLine/endLine on the report's own `path`.
 		expect(add!.endLine).toBeGreaterThan(add!.startLine);
-		expect(add!.read).toEqual({
-			path: file,
-			offset: add!.startLine,
-			limit: add!.endLine - add!.startLine + 1,
-		});
+		expect((add as { read?: unknown }).read).toBeUndefined();
 
 		// Non-exported symbol is routed to `internal`, not `api`.
 		expect(report.internal.some((e) => e.name === "helper")).toBe(true);
@@ -94,7 +92,8 @@ describe("moduleReport — outline + structure", () => {
 		expect(report.api[0]).toMatchObject({
 			name: "add",
 			kind: "function",
-			read: { path: file, offset: 1, limit: 3 },
+			startLine: 1,
+			endLine: 3,
 		});
 		expect(report.api[0].usedBy).toBeUndefined();
 		expect(report.callbacks).toEqual([]);
@@ -177,8 +176,8 @@ describe("moduleReport — outline + structure", () => {
 			kind: "object_property_callback",
 			startLine: 3,
 			endLine: 5,
-			read: { path: file, offset: 3, limit: 3 },
 		});
+		expect((reset as { read?: unknown } | undefined)?.read).toBeUndefined();
 		expect(reset?.flags).toContain("captures ctx.ui");
 
 		const event = report.callbacks.find((callback) =>
@@ -522,8 +521,8 @@ describe("moduleReport — outline + structure", () => {
 
 		expect(report.recommendedReads[0]).toMatchObject({
 			symbol: "run.resetLSPService@3",
-			offset: 3,
-			limit: 3,
+			startLine: 3,
+			endLine: 5,
 		});
 		expect(report.recommendedReads[0]?.reason).toContain("matches focus");
 	});
@@ -542,6 +541,154 @@ describe("moduleReport — outline + structure", () => {
 		const report = await moduleReport("nope.ts", env.tmpDir);
 		expect(report.available).toBe(false);
 		expect(report.staleness).toBe("unavailable");
+	});
+});
+
+describe("moduleReport — doc-comment first line (#512)", () => {
+	it("extracts a JSDoc block comment's first sentence for an exported function", async () => {
+		const env = makeEnv();
+		const file = createTempFile(
+			env.tmpDir,
+			"doc.ts",
+			[
+				"/** Test-only: clear accumulator state between test files/cases. */",
+				"export function reset(): void {",
+				"  return;",
+				"}",
+			].join("\n"),
+		);
+		const report = await moduleReport(file, env.tmpDir);
+		const reset = report.api.find((e) => e.name === "reset");
+		expect(reset?.doc).toBe(
+			"Test-only: clear accumulator state between test files/cases.",
+		);
+	});
+
+	it("extracts a line-comment doc for a non-exported function", async () => {
+		const env = makeEnv();
+		const file = createTempFile(
+			env.tmpDir,
+			"doc2.ts",
+			["// Simple line comment doc.", "function bar(): void {", "  return;", "}"].join(
+				"\n",
+			),
+		);
+		const report = await moduleReport(file, env.tmpDir);
+		const bar = report.internal.find((e) => e.name === "bar");
+		expect(bar?.doc).toBe("Simple line comment doc.");
+	});
+
+	it("takes only the first sentence and caps at ~120 chars", async () => {
+		const env = makeEnv();
+		const longSentence = "A".repeat(150);
+		const file = createTempFile(
+			env.tmpDir,
+			"doc3.ts",
+			[
+				`/** ${longSentence}. Second sentence should be dropped. */`,
+				"export function longDoc(): void {}",
+			].join("\n"),
+		);
+		const report = await moduleReport(file, env.tmpDir);
+		const entry = report.api.find((e) => e.name === "longDoc");
+		expect(entry?.doc).toBeDefined();
+		expect(entry?.doc?.length).toBeLessThanOrEqual(120);
+		expect(entry?.doc).not.toContain("Second sentence");
+	});
+
+	it("omits `doc` when no comment is directly attached (blank-line gap)", async () => {
+		const env = makeEnv();
+		const file = createTempFile(
+			env.tmpDir,
+			"doc4.ts",
+			[
+				"// An unrelated earlier comment.",
+				"",
+				"export function noDoc(): void {}",
+			].join("\n"),
+		);
+		const report = await moduleReport(file, env.tmpDir);
+		const entry = report.api.find((e) => e.name === "noDoc");
+		expect(entry?.doc).toBeUndefined();
+	});
+
+	it("extracts doc comments language-uniformly for Python", async () => {
+		const env = makeEnv();
+		const file = createTempFile(
+			env.tmpDir,
+			"doc.py",
+			["# Greets a person by name.", "def greet(name):", "    return f'hi {name}'"].join(
+				"\n",
+			),
+		);
+		const report = await moduleReport(file, env.tmpDir);
+		const greet = [...report.api, ...report.internal].find((e) => e.name === "greet");
+		expect(greet?.doc).toBe("Greets a person by name.");
+	});
+});
+
+describe("moduleReport — compact view rendering (#512)", () => {
+	it("renders a line-oriented text view with symbols, imports header, and doc suffix", async () => {
+		const env = makeEnv();
+		const file = createTempFile(
+			env.tmpDir,
+			"compact.ts",
+			[
+				"/** Adds two numbers. */",
+				"export function add(a: number, b: number): number {",
+				"  return a + b;",
+				"}",
+				"function helper() {",
+				"  return add(1, 2);",
+				"}",
+			].join("\n"),
+		);
+		const report = await moduleReport(file, env.tmpDir, { view: "compact" });
+		expect(report.view).toBe("compact");
+		// "compact" computes full data, unlike "summary" — usedBy/callbacks are
+		// still present; it's a rendering instruction, not a data tier.
+		expect(report.api.length).toBeGreaterThan(0);
+
+		const rendered = renderCompactModuleReport(report);
+		expect(rendered).toContain("API:");
+		expect(rendered).toContain("INTERNAL:");
+		expect(rendered).toContain("add");
+		expect(rendered).toContain("Adds two numbers.");
+		expect(rendered).toContain("2-4"); // add's line range shows up somewhere
+	});
+
+	it("is meaningfully smaller than the default JSON view for the same file", async () => {
+		const env = makeEnv();
+		const file = createTempFile(
+			env.tmpDir,
+			"compact2.ts",
+			[
+				"/** Does the thing. */",
+				"export function foo(): void {",
+				"  return;",
+				"}",
+				"export function bar(): void {",
+				"  return;",
+				"}",
+				"function baz(): void {",
+				"  return;",
+				"}",
+			].join("\n"),
+		);
+		const report = await moduleReport(file, env.tmpDir);
+		const jsonBytes = Buffer.byteLength(JSON.stringify(report), "utf8");
+		const compactBytes = Buffer.byteLength(
+			renderCompactModuleReport(report),
+			"utf8",
+		);
+		expect(compactBytes).toBeLessThan(jsonBytes);
+	});
+
+	it("renders an unavailable report without throwing", async () => {
+		const env = makeEnv();
+		const report = await moduleReport("nope.ts", env.tmpDir);
+		const rendered = renderCompactModuleReport(report);
+		expect(rendered).toContain("unavailable");
 	});
 });
 

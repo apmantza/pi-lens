@@ -54,20 +54,47 @@ Each `ModuleSymbolEntry`:
   "startLine": 77, "endLine": 89,
   "exported": true,
   "signature": "( limit = 5, fileFilter?: string, )",
+  "doc": "Recent dispatch latency reports, newest first.",
   "fanout": 7, "complexity": 2,
-  "flags": ["exported", "high fanout"],
+  "flags": ["high fanout"],
   "usedBy": [
     { "file": "mcp/server.ts", "symbol": "callTool", "line": 551, "relation": "calls" }
-  ],
-  "read": { "path": "clients/lens-engine.ts", "offset": 77, "limit": 13 }
+  ]
 }
 ```
 
-`read` is a **ready-to-use `read` tool call** — the agent can paste it into
-the next invocation without re-deriving path/offset/limit. `recommendedReads`
-pre-ranks the top three by `(usedBy × 2) + complexity + (exported ? 2 : 0)
+No per-symbol `read` block (#512) — `offset`/`limit` are pure derivations of
+`startLine`/`endLine` (`offset = startLine`, `limit = endLine - startLine + 1`)
+and the path is the report's own top-level `path` field; repeating all three
+per symbol cost real tokens for zero new information. **To read a symbol:**
+call `read`/`read_symbol` with `offset=startLine, limit=endLine-startLine+1`
+on THIS report's `path`. Cross-file sections keep their own path — `usedBy[].file`
+(the caller's file) and `blastRadius.files[].read` (the dependent file) — since
+those legitimately point elsewhere. `exported` stays a boolean only; it is NOT
+also repeated inside `flags` — `flags` carries non-derivable signals only
+(`async`, `high fanout`, `high complexity`, `boundary wrapper`). `doc` is the
+first sentence (or line) of an attached doc comment, whitespace-collapsed and
+capped ~120 chars — the highest-value token for deciding which symbol to read;
+omitted when no comment is directly attached. `recommendedReads` pre-ranks the
+top three by `(usedBy × 2) + complexity + (exported ? 2 : 0)
 + (high-complexity ? 3 : 0)` so the agent doesn't have to scan the whole
-outline to decide where to look next.
+outline to decide where to look next; each entry carries `{reason, symbol,
+startLine, endLine}` (no path — always the same file as the report).
+
+`view: "compact"` renders the same data as a line-oriented TEXT view instead
+of JSON — one line per symbol/callback, roughly a quarter of the token cost:
+
+```text
+clients/agent-nudge.ts jsts 266L — 8 symbols, 5 exported | imports: bus-publish, latency-logger
+API:
+  77-81    fn  _resetAgentNudgeForTests()  — Test-only: clear accumulator state.
+INTERNAL:
+  95-104   fn  isValidPayload(data: unknown)
+CALLBACKS:
+  164-172  event_handler  events.on@164  [lifecycle]  (in wireAgentNudgeSubscriber)
+```
+
+Default view stays JSON; `compact` is opt-in.
 
 ### `read_symbol(filePath, symbol)`
 
@@ -151,6 +178,14 @@ The pair's per-file ratio depends on file shape:
 for the common case. `read_symbol` (whole file is one giant symbol) is
 a wash — use `read` with a line range instead.
 
+**#512 slimming (2026-07-11):** on `clients/agent-nudge.ts` (266 lines, 8
+symbols), the default JSON view dropped from measuring ~1,900 tokens
+(per-symbol `read` blocks + `flags: ["exported", ...]` duplicating the
+`exported` boolean + `recommendedReads` repeating `{path, offset, limit}`)
+to a schema with no repeated `read`/path noise; `view: "compact"` renders the
+same report as text at roughly half the byte size of the JSON view for that
+file.
+
 ## When *not* to use these
 
 - **Looking for a textual pattern across files** — use `grep` (tool in pi). `module_report` is per-file shape, not cross-file content.
@@ -162,12 +197,18 @@ a wash — use `read` with a line range instead.
 
 Both tools are also exposed via the pi-lens MCP server:
 
-- `pilens_module_report({file, cwd?, maxRefsPerSymbol?})`
+- `pilens_module_report({file, cwd?, maxRefsPerSymbol?, focus?, view?, blastRadius?, blastRadiusDepth?})`
 - `pilens_read_symbol({file, symbol, cwd?})`
 
-The MCP wrappers return the same JSON shape plus a one-line human summary,
-so an agent in Claude Code (or any MCP client) gets the same navigable
-flow without needing to install the pi extension.
+The MCP wrappers return the same JSON shape plus a one-line human summary, so
+an agent in Claude Code (or any MCP client) gets the same navigable flow
+without needing to install the pi extension. Both surfaces are compact
+(unindented) JSON by default (#512) — the payload is parsed by an agent, not
+read formatted; `view: "compact"` on `pilens_module_report` returns the
+line-oriented text rendering instead. `pilens_read_symbol`'s response no
+longer restates its own header line in a trailing JSON block — the header
+line already carries name/kind/path/range, so only `signature` (genuinely
+new) is folded into it.
 
 ## See also
 

@@ -15,10 +15,10 @@ type Recorded = {
 };
 
 describe("module_report tool", () => {
-	it("returns a navigable JSON report with per-symbol read args (outline)", async () => {
+	it("returns a navigable JSON report with derivable (not per-symbol) read args (outline)", async () => {
 		const env = setupTestEnvironment("pi-lens-modreport-tool-");
 		try {
-			const file = createTempFile(
+			createTempFile(
 				env.tmpDir,
 				"sample.ts",
 				"export function add(a: number, b: number): number {\n  return a + b;\n}\n",
@@ -35,14 +35,14 @@ describe("module_report tool", () => {
 			const report = JSON.parse(String(result.content[0]?.text));
 			expect(report.available).toBe(true);
 			const add = report.api.find((e: { name: string }) => e.name === "add") as
-				| { name: string; startLine: number; endLine: number; read: unknown }
+				| { name: string; startLine: number; endLine: number; read?: unknown }
 				| undefined;
 			expect(add).toBeTruthy();
-			expect(add?.read).toEqual({
-				path: file,
-				offset: add?.startLine,
-				limit: (add?.endLine ?? 0) - (add?.startLine ?? 0) + 1,
-			});
+			// No per-symbol `read` block (#512) — offset/limit are pure derivations
+			// of startLine/endLine on the report's own `path`.
+			expect(add?.read).toBeUndefined();
+			expect(add?.startLine).toBeGreaterThan(0);
+			expect(add?.endLine).toBeGreaterThanOrEqual(add?.startLine ?? 0);
 		} finally {
 			env.cleanup();
 		}

@@ -38,6 +38,7 @@ import {
 	projectScan,
 	readSymbol,
 	recentLatency,
+	renderCompactModuleReport,
 	resolveRebuildScript,
 	runRebuild,
 	runSessionStart,
@@ -226,12 +227,21 @@ function sendError(id: JsonRpcId, code: number, message: string): void {
 	send({ jsonrpc: "2.0", id, error: { code, message } });
 }
 
-/** A tool result: human-readable text first, full JSON appended for the agent. */
-function toolText(summary: string, structured?: unknown): { content: { type: "text"; text: string }[] } {
+/**
+ * A tool result: human-readable text first, full JSON appended for the agent.
+ * `compact` omits indentation (#512) — for token-efficient tools like
+ * module_report the ~30% saved on the wire is worth losing pretty-printing
+ * for a payload the agent parses, not reads formatted.
+ */
+function toolText(
+	summary: string,
+	structured?: unknown,
+	compact = false,
+): { content: { type: "text"; text: string }[] } {
 	const text =
 		structured === undefined
 			? summary
-			: `${summary}\n\n\`\`\`json\n${JSON.stringify(structured, null, 2)}\n\`\`\``;
+			: `${summary}\n\n\`\`\`json\n${JSON.stringify(structured, compact ? undefined : null, compact ? undefined : 2)}\n\`\`\``;
 	return { content: [{ type: "text" as const, text }] };
 }
 
@@ -377,16 +387,19 @@ const TOOLS = [
 		description:
 			"Structured, navigable overview of a source module — a token-efficient " +
 			"substitute for reading the whole file. Returns each symbol's " +
-			"name/kind/signature/line-range with ready-to-use `read` args, plus " +
-			"who-uses-this, risk flags, and ranked recommendedReads. Prefer this before " +
-			"a full read; then use pilens_read_symbol for the exact body. Single mode: " +
-			"tree-sitter outline + review-graph who-uses-this + bounded live-LSP " +
-			"enrichment (exact references/implementations for exported symbols, " +
-			"time-boxed, degrades to graph-only when no LSP server is available). " +
-			"`semantic.source` reports whether LSP data was used. Pass " +
-			"`blastRadius: true` for the cross-file blast radius (transitive dependents " +
-			"as ranked file reads, read-only over the cached graph). An outline shows " +
-			"shape, not bodies.",
+			"name/kind/signature/line-range (plus a first-line `doc` summary when a " +
+			"doc comment is attached), plus who-uses-this, risk flags, and ranked " +
+			"recommendedReads. To read a symbol's body: call pilens_read_symbol (or " +
+			"read) with offset=startLine, limit=endLine-startLine+1 on THIS report's " +
+			"`file` — those aren't repeated per symbol. Prefer this before a full " +
+			"read; then use pilens_read_symbol for the exact body. Single mode: " +
+			"tree-sitter outline + review-graph who-uses-this + inline executable " +
+			"extraction; degrades to outline-only when no cached graph is available " +
+			"(this path never calls LSP). `semantic.source` reports whether graph " +
+			"data was used. Pass `blastRadius: true` for the cross-file blast radius " +
+			"(transitive dependents as ranked file reads, read-only over the cached " +
+			'graph). `view: "compact"` returns a line-oriented text rendering ' +
+			"(cheapest option) instead of JSON. An outline shows shape, not bodies.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -398,6 +411,17 @@ const TOOLS = [
 				maxRefsPerSymbol: {
 					type: "number",
 					description: "Cap who-uses-this entries per symbol (default 10).",
+				},
+				focus: {
+					type: "string",
+					description:
+						"Optional task hint used only to rank recommendedReads (does not expand scope or trigger scans).",
+				},
+				view: {
+					type: "string",
+					enum: ["summary", "default", "compact"],
+					description:
+						"Payload tier. summary returns top-level entries/recommendedReads with heavy callback/usedBy/blast-radius payloads omitted. compact (cheapest) returns a line-oriented TEXT rendering of the full report instead of JSON.",
 				},
 				blastRadius: {
 					type: "boolean",
@@ -680,16 +704,22 @@ async function callTool(
 			Number.isFinite(args.blastRadiusDepth)
 				? Math.max(1, Math.floor(args.blastRadiusDepth))
 				: undefined;
+		const view =
+			args.view === "summary" || args.view === "compact" ? args.view : undefined;
+		const focus = typeof args.focus === "string" ? args.focus : undefined;
 		const report = await moduleReport(file, cwd, {
 			maxRefsPerSymbol,
 			blastRadius,
 			blastRadiusDepth,
+			view,
+			focus,
 		});
 		if (!report.available) {
 			return {
 				...toolText(
 					`No module report for ${path.relative(cwd, path.resolve(cwd, file))} — not a symbol-bearing file, or unreadable.`,
 					report,
+					true,
 				),
 				isError: true,
 			};
@@ -698,7 +728,12 @@ async function callTool(
 			`${path.relative(cwd, report.path) || report.path} [${report.staleness}] — ` +
 			`${report.summary.symbols} symbol(s), ${report.summary.exports} exported, ` +
 			`${report.api.length} in public API`;
-		return toolText(summary, report);
+		if (view === "compact") {
+			return { content: [{ type: "text" as const, text: renderCompactModuleReport(report) }] };
+		}
+		// Compact (unindented) JSON — matches the pi tool's mirror (#512); an
+		// agent parses this payload, it doesn't read it formatted.
+		return toolText(summary, report, true);
 	}
 
 	if (name === "pilens_read_symbol") {
@@ -718,14 +753,12 @@ async function callTool(
 				isError: true,
 			};
 		}
-		const header = `${result.kind} ${result.name}  ${path.relative(cwd, result.path)}:${result.startLine}-${result.endLine}`;
-		return toolText(`${header}\n\n${result.source ?? ""}`, {
-			name: result.name,
-			kind: result.kind,
-			startLine: result.startLine,
-			endLine: result.endLine,
-			signature: result.signature,
-		});
+		// Header line already states kind/name/path/range; a trailing JSON block
+		// restating those same fields is redundant on the wire (#512) — only
+		// `signature` was ever new, so fold it into the header text instead.
+		const sigSuffix = result.signature ? `  ${result.signature}` : "";
+		const header = `${result.kind} ${result.name}${sigSuffix}  ${path.relative(cwd, result.path)}:${result.startLine}-${result.endLine}`;
+		return { content: [{ type: "text" as const, text: `${header}\n\n${result.source ?? ""}` }] };
 	}
 
 	if (name === "pilens_health") {
