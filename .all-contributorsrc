@@ -333,6 +333,16 @@
       ]
     },
     {
+      "login": "anasalsbey-glitch",
+      "name": "anasalsbey-glitch",
+      "avatar_url": "https://avatars.githubusercontent.com/u/283609702?v=4",
+      "profile": "https://github.com/anasalsbey-glitch",
+      "contributions": [
+        "code",
+        "bug"
+      ]
+    },
+    {
       "login": "carolitascl",
       "name": "Carolina",
       "avatar_url": "https://avatars.githubusercontent.com/u/26188349?v=4",
@@ -713,10 +723,37 @@
       ]
     },
     {
-      "login": "anasalsbey-glitch",
-      "name": "anasalsbey-glitch",
-      "avatar_url": "https://avatars.githubusercontent.com/u/283609702?v=4",
-      "profile": "https://github.com/anasalsbey-glitch",
+      "login": "ArthurHeymans",
+      "name": "Arthur Heymans",
+      "avatar_url": "https://avatars.githubusercontent.com/u/15137817?v=4",
+      "profile": "https://github.com/ArthurHeymans",
+      "contributions": [
+        "ideas"
+      ]
+    },
+    {
+      "login": "Blue-B",
+      "name": "Blue-B",
+      "avatar_url": "https://avatars.githubusercontent.com/u/55532956?v=4",
+      "profile": "https://github.com/Blue-B",
+      "contributions": [
+        "bug"
+      ]
+    },
+    {
+      "login": "bisko",
+      "name": "Biser Perchinkov",
+      "avatar_url": "https://avatars.githubusercontent.com/u/184938?v=4",
+      "profile": "https://github.com/bisko",
+      "contributions": [
+        "bug"
+      ]
+    },
+    {
+      "login": "xificurC",
+      "name": "Peter Nagy",
+      "avatar_url": "https://avatars.githubusercontent.com/u/4800719?v=4",
+      "profile": "https://github.com/xificurC",
       "contributions": [
         "bug"
       ]
