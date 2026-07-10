@@ -225,6 +225,44 @@ describe("GitHub release asset selection", () => {
 			).toBe("marksman");
 		});
 	});
+
+	describe("Expert asset patterns", () => {
+		it.each([
+			["linux", "x64", "expert_linux_amd64"],
+			["linux", "arm64", "expert_linux_arm64"],
+			["darwin", "x64", "expert_darwin_amd64"],
+			["darwin", "arm64", "expert_darwin_arm64"],
+			["win32", "x64", "expert_windows_amd64.exe"],
+			["win32", "arm64", "expert_windows_amd64.exe"],
+		] as const)("%s/%s → %s", async (platform, arch, expected) => {
+			const { resolveGitHubAsset } = await import(
+				"../../../clients/installer/index.ts"
+			);
+			expect(resolveGitHubAsset("expert", platform, arch)).toBe(expected);
+		});
+
+		it("installs as expert.exe on Windows (bare binary, no archive)", async () => {
+			const { resolveGitHubInstalledBinaryName } = await import(
+				"../../../clients/installer/index.ts"
+			);
+			expect(
+				resolveGitHubInstalledBinaryName("expert", "win32", "expert_windows_amd64.exe"),
+			).toBe("expert.exe");
+			expect(
+				resolveGitHubInstalledBinaryName("expert", "linux", "expert_linux_amd64"),
+			).toBe("expert");
+		});
+
+		it("does not select an incompatible release binary", async () => {
+			const { resolveGitHubAsset } = await import(
+				"../../../clients/installer/index.ts"
+			);
+			expect(resolveGitHubAsset("expert", "linux", "ppc64"))
+				.toBeUndefined();
+			expect(resolveGitHubAsset("expert", "win32", "ia32"))
+				.toBeUndefined();
+		});
+	});
 });
 
 describe("getToolEnvironment PATH", () => {

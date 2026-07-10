@@ -491,6 +491,17 @@ const LSP_FIXTURES = [
 		tools: ["elixir-ls"],
 	},
 	{
+		// Expert is an alternate Elixir primary. Disabling ElixirLS makes this
+		// fixture exercise Expert's managed GitHub binary through initialize.
+		lang: "expert",
+		dir: "tests/fixtures/tool-smoke/elixir",
+		file: "bad.ex",
+		serverHint: "Expert (alternate of ElixirLS)",
+		tools: ["expert"],
+		disableServers: ["elixir"],
+		expectServerId: "expert",
+	},
+	{
 		lang: "gleam",
 		dir: "tests/fixtures/tool-smoke/gleam",
 		file: "src/smoke.gleam",
@@ -1428,11 +1439,9 @@ async function runLspHandshake({ langs, install, verbose }) {
 					`[${fx.lang}] touched=${Array.isArray(touched) ? touched.length : touched} health=${JSON.stringify(lsp.getDiagnosticsHealth(absFile))}`,
 				);
 			}
-			// Alternate fixtures: the default is disabled for this workspace, so the
-			// only server that can serve is the alternate. Prove it spawned +
-			// handshook + diagnosed by fingerprinting the diagnostic `source`
-			// (deno → "deno-ts", jedi → "compile") — getDiagnosticsHealth isn't
-			// populated by touchFile, so source-match is the reliable signal.
+			// Alternate fixtures disable the default server in the workspace. Verify the
+			// actual warm client first, then optionally fingerprint its diagnostics when
+			// a server reliably reports a distinctive source.
 			if (fx.expectServerId && !threw) {
 				if (!Array.isArray(touched)) {
 					// No client became ready — the alternate isn't installed (and
@@ -1443,25 +1452,35 @@ async function runLspHandshake({ langs, install, verbose }) {
 					);
 					continue;
 				}
-				const list = touched;
-				const sources = [...new Set(list.map((d) => d.source || "?"))];
-				const re = fx.expectSourceMatch
-					? new RegExp(fx.expectSourceMatch, "i")
-					: null;
-				const matched = re ? list.filter((d) => re.test(d.source || "")) : list;
+				const active = await lsp.getWarmClientForFile(absFile);
+				if (active?.info.id !== fx.expectServerId) {
+					push(
+						"fail",
+						`expected alternate ${fx.expectServerId}, got ${active?.info.id ?? "no warm client"}`,
+						touched.length,
+					);
+					continue;
+				}
+				if (!fx.expectSourceMatch) {
+					push("pass", `alternate ${fx.expectServerId} handshook`, touched.length);
+					continue;
+				}
+				const sources = [...new Set(touched.map((d) => d.source || "?"))];
+				const re = new RegExp(fx.expectSourceMatch, "i");
+				const matched = touched.filter((d) => re.test(d.source || ""));
 				if (verbose) {
 					console.error(
-						`[${fx.lang}] alternate sources=${JSON.stringify(sources)} matched=${matched.length}/${list.length}`,
+						`[${fx.lang}] alternate sources=${JSON.stringify(sources)} matched=${matched.length}/${touched.length}`,
 					);
 				}
 				push(
 					matched.length > 0 ? "pass" : "fail",
 					matched.length > 0
 						? `alternate ${fx.expectServerId} served ${matched.length} diagnostic${matched.length === 1 ? "" : "s"} (source /${fx.expectSourceMatch}/; default [${fx.disableServers.join(",")}] disabled)`
-						: list.length
-							? `${fx.expectServerId}: ${list.length} diagnostic(s) but none matched source /${fx.expectSourceMatch}/ (got: ${sources.join(",")})`
+						: touched.length
+							? `${fx.expectServerId}: ${touched.length} diagnostic(s) but none matched source /${fx.expectSourceMatch}/ (got: ${sources.join(",")})`
 							: `expected ${fx.expectServerId} to serve a diagnostic, got none (server missing/slow?)`,
-					list.length,
+					touched.length,
 				);
 				continue;
 			}

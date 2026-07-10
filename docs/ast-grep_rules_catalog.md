@@ -133,7 +133,7 @@ See [`docs/custom-rules.md`](custom-rules.md) to add your own. Rule sources: `ru
 | `use-of-sha1-java` | warning | CodeRabbit | Detected SHA1 hash algorithm which is considered insecure. SHA1 is not collision resistant and is therefore not suitable as a cryptographic… |
 | `weak-ssl-context-java` | warning | CodeRabbit | 'An insecure SSL context was detected. TLS versions 1.0, 1.1, and all SSL versions are considered weak encryption and are deprecated. Use S… |
 
-### JavaScript (68)
+### JavaScript (69)
 
 | Rule | Severity | Source | Description |
 |---|---|---|---|
@@ -142,6 +142,7 @@ See [`docs/custom-rules.md`](custom-rules.md) to add your own. Rule sources: `ru
 | `enforce-node-protocol-js` | warning | pi-lens | Use node: prefix for Node.js built-in module imports |
 | `express-jwt-hardcoded-secret-javascript` | warning | CodeRabbit | A hard-coded credential was detected. It is not recommended to store credentials in source-code, as this risks secrets being leaked and use… |
 | `express-session-hardcoded-secret-javascript` | warning | CodeRabbit | A hard-coded credential was detected. It is not recommended to store credentials in source-code, as this risks secrets being leaked and use… |
+| `hardcoded-url-js` | warning | pi-lens | Hardcoded URL — use config or environment variable |
 | `incomplete-string-escaping-js` | warning | pi-lens | Regex replace escapes with a backslash before escaping backslashes |
 | `jwt-simple-noverify-javascript` | warning | CodeRabbit | "Detected the decoding of a JWT token without a verify step. JWT tokens must be verified before use, otherwise the token's integrity is unk… |
 | `nested-ternary-js` | warning | pi-lens | Nested ternary expressions are hard to read — use if/else or switch |
@@ -393,7 +394,7 @@ See [`docs/custom-rules.md`](custom-rules.md) to add your own. Rule sources: `ru
 | `redundant-usestate-type` | info | pi-lens | `useState<TYPE>(...)` where TYPE is a primitive redundant — TS can infer it from the initial value |
 | `unnecessary-react-hook` | warning | pi-lens | Function with a `use*` name does not call any other React hook — rename to a plain function |
 
-### TypeScript (125)
+### TypeScript (124)
 
 | Rule | Severity | Source | Description |
 |---|---|---|---|
@@ -405,7 +406,6 @@ See [`docs/custom-rules.md`](custom-rules.md) to add your own. Rule sources: `ru
 | `express-session-hardcoded-secret-typescript` | warning | CodeRabbit | A hard-coded credential was detected. It is not recommended to store credentials in source-code, as this risks secrets being leaked and use… |
 | `find-import-file-without-extension` | warning | pi-lens | ESM import / dynamic import of a relative path without a file extension |
 | `hardcoded-url` | warning | pi-lens | Hardcoded URL — use config or environment variable |
-| `hardcoded-url-js` | warning | pi-lens | Hardcoded URL — use config or environment variable |
 | `incomplete-string-escaping` | warning | pi-lens | Regex replace escapes with a backslash before escaping backslashes |
 | `jwt-no-verify` | error | pi-lens | Unsafe JWT operation — verification is bypassed |
 | `jwt-no-verify-js` | error | pi-lens | Unsafe JWT operation — verification is bypassed |

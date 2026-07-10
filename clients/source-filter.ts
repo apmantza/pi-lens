@@ -25,7 +25,62 @@ import {
 	isGeneratedArtifactDirectoryName,
 	isGeneratedOrArtifact,
 } from "./generated-artifacts.js";
+import { normalizeEphemeralMapKey } from "./path-utils.js";
 import { isSlowFs, SLOW_FS_REDUCED_MAX_FILES } from "./slow-fs.js";
+
+/**
+ * Per-walk memo of sibling-existence probe results (refs #191, item 1).
+ *
+ * `findSourceSibling` / `isBuildArtifact` probe for a "higher precedence"
+ * source sibling (e.g. does `foo.ts` exist next to `foo.js`?) via
+ * `fs.existsSync`. Enumerating a directory with many files of the same
+ * basename family (e.g. `foo.js`, `foo.test.js`, `foo.spec.js` all probing for
+ * `foo.ts`) or many files that all fail the same probe re-issues identical
+ * `existsSync` calls.
+ *
+ * This cache is intentionally scoped to a single walk (created at the start of
+ * one `collectSourceFiles`/`collectSourceFilesAsync` call and discarded when
+ * it returns). A walk is a point-in-time filesystem snapshot, so caching
+ * within it needs no invalidation by construction — there is no persistent,
+ * module-global cache here, and none should be added: siblings can change
+ * between walks, and a stale persistent cache risks silently misclassifying a
+ * file (lost detection), which is exactly why issue #191 deferred a
+ * persistent version. Callers that don't pass a cache get exactly today's
+ * behavior (fail-safe default of "probe every time").
+ *
+ * Keyed via {@link normalizeEphemeralMapKey} — the cheap, syntactic-only
+ * sibling of `normalizeMapKey` (no `realpathSync`) — so lookups are
+ * separator/case-consistent on Windows without paying a filesystem round
+ * trip just to compute the key. Using the full `normalizeMapKey` here would
+ * be actively counterproductive: for a candidate sibling path that does not
+ * exist (the common case), it resolves the nearest existing ancestor via its
+ * own `existsSync` walk, which measured ~11x slower than the single
+ * `existsSync` probe this cache exists to avoid (refs #191). This cache's
+ * keys are produced by this process's own `path.join` calls within a single
+ * walk, so the cheap fold is safe here — see `normalizeEphemeralMapKey`'s
+ * docstring for when it is NOT safe to reuse elsewhere.
+ */
+export type ArtifactProbeCache = Map<string, boolean>;
+
+/**
+ * Create a fresh, empty per-walk probe cache. Callers that enumerate many
+ * files (a single `collectSourceFiles`/`collectSourceFilesAsync` invocation)
+ * should create one of these at the start of the walk and pass it through;
+ * it must not be reused across separate walks.
+ */
+export function createArtifactProbeCache(): ArtifactProbeCache {
+	return new Map();
+}
+
+function probeExists(filePath: string, cache?: ArtifactProbeCache): boolean {
+	if (!cache) return fs.existsSync(filePath);
+	const key = normalizeEphemeralMapKey(filePath);
+	const cached = cache.get(key);
+	if (cached !== undefined) return cached;
+	const result = fs.existsSync(filePath);
+	cache.set(key, result);
+	return result;
+}
 
 /**
  * Mapping of file extension to the extensions it shadows (build artifacts).
@@ -121,7 +176,10 @@ function getDir(filePath: string): string {
  * Check if a file has a higher-precedence source sibling.
  * Returns the shadowing source file path if found, null otherwise.
  */
-export function findSourceSibling(filePath: string): string | null {
+export function findSourceSibling(
+	filePath: string,
+	probeCache?: ArtifactProbeCache,
+): string | null {
 	const ext = path.extname(filePath).toLowerCase();
 	const dir = getDir(filePath);
 	const base = getBasename(filePath);
@@ -131,7 +189,7 @@ export function findSourceSibling(filePath: string): string | null {
 		if (shadowedExts.includes(ext)) {
 			// This file could be shadowed by a source file with sourceExt
 			const siblingPath = path.join(dir, base + sourceExt);
-			if (fs.existsSync(siblingPath)) {
+			if (probeExists(siblingPath, probeCache)) {
 				return siblingPath;
 			}
 		}
@@ -142,9 +200,15 @@ export function findSourceSibling(filePath: string): string | null {
 
 /**
  * Check if a file is a build artifact (has a source sibling).
+ *
+ * @param probeCache - Optional per-walk memo (see {@link ArtifactProbeCache}).
+ * Omit for the original, uncached behavior.
  */
-export function isBuildArtifact(filePath: string): boolean {
-	return findSourceSibling(filePath) !== null;
+export function isBuildArtifact(
+	filePath: string,
+	probeCache?: ArtifactProbeCache,
+): boolean {
+	return findSourceSibling(filePath, probeCache) !== null;
 }
 
 /**
@@ -162,9 +226,13 @@ export function filterSourceFiles(
 	// Track which files we're keeping and why we're skipping others
 	const keep: string[] = [];
 	const skipReasons = new Map<string, string>(); // skipped file -> kept source
+	// This is itself one enumeration over `filePaths`, so a per-call memo is
+	// safe by the same point-in-time-snapshot reasoning as the directory
+	// walkers below (refs #191).
+	const probeCache = createArtifactProbeCache();
 
 	for (const filePath of filePaths) {
-		const sourceSibling = findSourceSibling(filePath);
+		const sourceSibling = findSourceSibling(filePath, probeCache);
 		if (sourceSibling) {
 			// This is a build artifact, skip it
 			skipReasons.set(filePath, sourceSibling);
@@ -236,6 +304,7 @@ function classifyEntry(
 	entry: fs.Dirent,
 	fullPath: string,
 	cfg: ResolvedCollectionConfig,
+	probeCache?: ArtifactProbeCache,
 ): { recurseInto?: string; keepFile?: string } {
 	const { ignoreMatcher, extraExcludePatterns, extensions, options } = cfg;
 	if (entry.isDirectory()) {
@@ -255,7 +324,7 @@ function classifyEntry(
 		const ext = path.extname(entry.name).toLowerCase();
 		if (!extensions.has(ext)) return {};
 		// Skip if this is a build artifact or generated/codegen output.
-		if (isBuildArtifact(fullPath)) return {};
+		if (isBuildArtifact(fullPath, probeCache)) return {};
 		if (shouldSkipGeneratedOrArtifact(fullPath, options)) return {};
 		return { keepFile: fullPath };
 	}
@@ -271,6 +340,9 @@ export function collectSourceFiles(
 		clampForSlowFsSyncWalk: true,
 	});
 	const files: string[] = [];
+	// Per-walk sibling-probe memo (refs #191, item 1). Created here, discarded
+	// on return — never persisted across calls.
+	const probeCache = createArtifactProbeCache();
 
 	function scan(currentDir: string) {
 		if (files.length >= cfg.maxFiles) return; // hard cap (#250)
@@ -284,7 +356,12 @@ export function collectSourceFiles(
 		for (const entry of entries) {
 			if (files.length >= cfg.maxFiles) return;
 			const fullPath = path.join(currentDir, entry.name);
-			const { recurseInto, keepFile } = classifyEntry(entry, fullPath, cfg);
+			const { recurseInto, keepFile } = classifyEntry(
+				entry,
+				fullPath,
+				cfg,
+				probeCache,
+			);
 			if (recurseInto) scan(recurseInto);
 			else if (keepFile) files.push(keepFile);
 		}
@@ -322,6 +399,10 @@ export async function collectSourceFilesAsync(
 	// Depth-first stack mirrors the recursion order of the sync collector.
 	const stack: string[] = [rootDir];
 	let processedSinceYield = 0;
+	// Per-walk sibling-probe memo (refs #191, item 1). A single async walk is
+	// still one point-in-time snapshot despite yielding between chunks, so
+	// caching across the whole call remains invalidation-free.
+	const probeCache = createArtifactProbeCache();
 
 	while (stack.length > 0) {
 		const currentDir = stack.pop();
@@ -339,7 +420,12 @@ export async function collectSourceFilesAsync(
 		const subDirs: string[] = [];
 		for (const entry of entries) {
 			const fullPath = path.join(currentDir, entry.name);
-			const { recurseInto, keepFile } = classifyEntry(entry, fullPath, cfg);
+			const { recurseInto, keepFile } = classifyEntry(
+				entry,
+				fullPath,
+				cfg,
+				probeCache,
+			);
 			if (recurseInto) subDirs.push(recurseInto);
 			else if (keepFile) {
 				files.push(keepFile);

@@ -4,16 +4,18 @@ severity: hint
 message: "Use === undefined instead of typeof x === 'undefined'"
 note: |
   In modern JS, undefined cannot be reassigned. typeof check is unnecessary.
-  Exception: typeof __dirname checks for ESM/CJS detection are intentional.
+  Exception: __dirname/__filename (ESM/CJS detection) and known runtime-global
+  existence probes (window, document, navigator, self, location, localStorage,
+  sessionStorage) are intentional — direct access to an absent global throws
+  a ReferenceError, so `typeof` is the only safe way to test for it (e.g. SSR
+  code guarding browser-only globals).
 rule:
   any:
     - pattern: "typeof $X === \"undefined\""
     - pattern: "typeof $X !== \"undefined\""
     - pattern: "typeof $X == \"undefined\""
     - pattern: "typeof $X != \"undefined\""
-  not:
-    any:
-      - pattern: "typeof __dirname !== \"undefined\""
-      - pattern: "typeof __dirname === \"undefined\""
-      - pattern: "typeof __filename !== \"undefined\""
-      - pattern: "typeof __filename === \"undefined\""
+constraints:
+  X:
+    not:
+      regex: '^(__dirname|__filename|window|document|navigator|self|location|localStorage|sessionStorage)$'

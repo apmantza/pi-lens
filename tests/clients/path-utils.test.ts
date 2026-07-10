@@ -5,6 +5,7 @@ import {
 	findNearestContaining,
 	isAtOrAboveHomeDir,
 	isExternalOrVendorFile,
+	normalizeEphemeralMapKey,
 	pathToUri,
 	uriToPath,
 	walkUpDirs,
@@ -34,6 +35,34 @@ describe("path-utils", () => {
 		} finally {
 			cleanup();
 		}
+	});
+});
+
+describe("normalizeEphemeralMapKey (refs #191)", () => {
+	it("folds backslash and forward-slash forms to the same key", () => {
+		const forward = "C:/Users/foo/src/plan.js";
+		const back = "C:\\Users\\foo\\src\\plan.js";
+
+		expect(normalizeEphemeralMapKey(forward)).toBe(
+			normalizeEphemeralMapKey(back),
+		);
+	});
+
+	it("does not touch the filesystem (never throws for a nonexistent path, no realpath resolution)", () => {
+		const nonExistent = "C:\\definitely\\not\\a\\real\\path\\file.ts";
+		expect(() => normalizeEphemeralMapKey(nonExistent)).not.toThrow();
+		// Purely syntactic: slash-folded (+ lowercased on win32), not
+		// realpath-resolved, so it must not depend on the path existing.
+		expect(normalizeEphemeralMapKey(nonExistent)).toContain(
+			"/definitely/not/a/real/path/file.ts",
+		);
+	});
+
+	it("is case-insensitive on win32 semantics (matches this suite's Windows CI target)", () => {
+		if (process.platform !== "win32") return;
+		expect(normalizeEphemeralMapKey("C:\\Foo\\BAR.TS")).toBe(
+			normalizeEphemeralMapKey("c:\\foo\\bar.ts"),
+		);
 	});
 });
 

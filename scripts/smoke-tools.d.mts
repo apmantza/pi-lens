@@ -21,6 +21,9 @@ export interface LspFixture {
 	clean?: boolean;
 	lombokJar?: boolean;
 	expectNoMessageMatch?: string;
+	disableServers?: string[];
+	expectServerId?: string;
+	expectSourceMatch?: string;
 }
 export interface FormatFixture {
 	lang: string;

@@ -37,6 +37,7 @@ const ALTERNATES = [
 	{ id: "deno", defaultId: "typescript", ext: ".ts" },
 	{ id: "python-jedi", defaultId: "python", ext: ".py" },
 	{ id: "omnisharp", defaultId: "csharp", ext: ".cs" },
+	{ id: "expert", defaultId: "elixir", ext: ".ex" },
 ] as const;
 
 const NON_AUX = LSP_SERVERS.filter((s) => s.role !== "auxiliary");

@@ -135,6 +135,32 @@ export function normalizeMapKey(filePath: string): string {
 }
 
 /**
+ * Cheap, syntactic-only Map key normalization: slash-fold + (on Windows)
+ * lowercase. No `realpathSync` / filesystem I/O.
+ *
+ * `normalizeMapKey` (via `normalizeFilePath`) calls `realpathSync.native()` to
+ * get canonical on-disk casing — correct for maps that key long-lived state
+ * shared across call sites (e.g. LSP/read-guard caches), but expensive when
+ * the *point* of the cache is to avoid filesystem calls in the first place:
+ * for a candidate path that does NOT exist (the common case for sibling-probe
+ * memos), `normalizeFilePath` walks up the directory tree doing its own
+ * `existsSync` calls to resolve the nearest existing ancestor — measured at
+ * ~11x slower than the single `existsSync` probe such a cache is trying to
+ * save (refs #191).
+ *
+ * Safe to use ONLY for ephemeral, single-process, single-walk caches whose
+ * keys are produced by this process's own `path.join`/`path.resolve` calls
+ * within the same run (so separators and casing are already consistent
+ * modulo simple slash direction) — never for state shared across processes,
+ * persisted, or compared against externally-supplied paths where symlink /
+ * real-casing resolution actually matters.
+ */
+export function normalizeEphemeralMapKey(filePath: string): string {
+	const slashed = filePath.replace(/\\/g, "/");
+	return process.platform === "win32" ? slashed.toLowerCase() : slashed;
+}
+
+/**
  * Compare two file paths for equality, handling Windows case-insensitivity
  * and mixed separators (backslash vs forward slash).
  */

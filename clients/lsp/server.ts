@@ -1959,6 +1959,26 @@ export const ElixirServer = createInteractiveServer({
 	command: "elixir-ls",
 });
 
+export const ElixirExpertServer: LSPServerInfo = {
+	id: "expert",
+	name: "Expert",
+	extensions: KIND_EXTENSIONS["elixir"],
+	root: RootWithFallback(createRootDetector(["mix.exs"])),
+	availabilityKey: "expert",
+	async spawn(root, options) {
+		return resolveAndLaunch(
+			{
+				candidates: ["expert"],
+				args: ["--stdio"],
+				cwd: root,
+				managedToolId: "expert",
+			},
+			options?.allowInstall,
+		);
+	},
+	autoInstall: async () => Boolean(await ensureTool("expert")),
+};
+
 export const GleamServer: LSPServerInfo = {
 	id: "gleam",
 	name: "Gleam LSP",
@@ -2605,6 +2625,7 @@ export const LSP_SERVERS: LSPServerInfo[] = [
 	ZigServer,
 	HaskellServer,
 	ElixirServer,
+	ElixirExpertServer,
 	GleamServer,
 	MarksmanServer,
 	OCamlServer,

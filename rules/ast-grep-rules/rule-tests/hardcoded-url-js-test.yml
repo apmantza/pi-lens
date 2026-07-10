@@ -5,3 +5,4 @@ valid:
 invalid:
   - 'const url = "https://api.example.com"'
   - 'const endpoint = "http://localhost:3000"'
+  - 'const render = () => <a href="http://localhost:3000">Open</a>;'

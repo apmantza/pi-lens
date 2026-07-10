@@ -31,6 +31,7 @@ const EXEMPT_PRIMARY = new Map<string, string>([
 	["deno", "alt of typescript; the .ts handshake covers the default"],
 	["python-jedi", "alt of python; the .py handshake covers the default"],
 	["omnisharp", "alt of csharp; the .cs handshake covers the default"],
+	["expert", "alt of ElixirLS; the .ex handshake covers the default"],
 ]);
 
 // Faithful to getClientForFile's candidate stage: resolve each fixture file to

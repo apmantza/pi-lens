@@ -1151,6 +1151,34 @@ export const TOOLS: ToolDefinition[] = [
 			// bare binary — no binaryInArchive
 		},
 	},
+	{
+		// Expert ships a bare native binary per platform on GitHub releases. Its
+		// `--stdio` flag is required to start the LSP transport. Windows arm64 uses
+		// the x64 binary through Windows' built-in x64 emulation.
+		id: "expert",
+		name: "Expert",
+		checkCommand: "expert",
+		checkArgs: ["--version"],
+		installStrategy: "github",
+		binaryName: "expert",
+		github: {
+			repo: "expert-lsp/expert",
+			assetMatch: (platform, arch) => {
+				if (arch !== "x64" && arch !== "arm64") return undefined;
+				if (platform === "linux")
+					return arch === "arm64"
+						? "expert_linux_arm64"
+						: "expert_linux_amd64";
+				if (platform === "darwin")
+					return arch === "arm64"
+						? "expert_darwin_arm64"
+						: "expert_darwin_amd64";
+				if (platform === "win32") return "expert_windows_amd64.exe";
+				return undefined;
+			},
+			// bare binary — no binaryInArchive
+		},
+	},
 ];
 
 const ensureInFlight = new Map<string, Promise<string | undefined>>();
@@ -3273,6 +3301,7 @@ export const GITHUB_TOOLS = [
 	"clojure-lsp",
 	"gleam",
 	"marksman",
+	"expert",
 ] as const;
 export type GitHubToolId = (typeof GITHUB_TOOLS)[number];
 

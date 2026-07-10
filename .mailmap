@@ -1,7 +1,0 @@
-# Canonicalize the maintainer's identities: commits exist under both the
-# gmail address (bound to the legacy wastedC GitHub account) and the work
-# address. One person, one shortlog entry. GitHub's contributor graph does
-# NOT read this file — it maps email→account; the account-side fix is moving
-# the emails to the apmantza GitHub account.
-Apostolos Mantzaris <ap.mantza@gmail.com> <mantzaris.ap@nbg.gr>
-Apostolos Mantzaris <ap.mantza@gmail.com> Apostolos Mantzaris <ap.mantza@gmail.com>

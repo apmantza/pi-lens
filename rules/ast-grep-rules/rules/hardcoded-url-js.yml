@@ -1,5 +1,5 @@
 id: hardcoded-url-js
-language: TypeScript
+language: JavaScript
 message: "Hardcoded URL — use config or environment variable"
 severity: warning
 note: |
