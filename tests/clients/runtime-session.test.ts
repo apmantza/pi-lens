@@ -7,17 +7,19 @@ import {
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleSessionStart } from "../../clients/runtime-session.js";
 import { _resetSlowFsForTests } from "../../clients/slow-fs.js";
+import { _resetSubagentModeForTests } from "../../clients/subagent-mode.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 
 // Stub the LSP service so the no-warmFiles dominant-language auto-warm (#203)
 // can't spawn a real language server against the throwaway temp dirs (which the
 // afterEach cleanup would then race). supportsLSP:false short-circuits the warm
 // before it opens any file.
+const mockTouchFile = vi.fn(async () => undefined);
 vi.mock("../../clients/lsp/index.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../clients/lsp/index.js")>()),
 	getLSPService: vi.fn(() => ({
 		supportsLSP: () => false,
-		touchFile: vi.fn(async () => undefined),
+		touchFile: mockTouchFile,
 	})),
 }));
 
@@ -58,7 +60,9 @@ async function runSessionStart(
 	const jscpdEnsure = vi.fn(async () => false);
 	const depEnsure = vi.fn(async () => false);
 	const resetLSPService = vi.fn();
+	const dbg = vi.fn();
 	const restoreStartupMode = setStartupMode(mode);
+	mockTouchFile.mockClear();
 
 	try {
 		await handleSessionStart({
@@ -69,7 +73,7 @@ async function runSessionStart(
 				return false;
 			},
 			notify,
-			dbg: () => {},
+			dbg,
 			log: () => {},
 			runtime: {
 				sessionGeneration: 1,
@@ -148,6 +152,7 @@ async function runSessionStart(
 			jscpdEnsure,
 			depEnsure,
 			resetLSPService,
+			dbg,
 		};
 	} catch (error) {
 		env.cleanup();
@@ -414,6 +419,97 @@ describe("runtime-session notifications", () => {
 		} finally {
 			delete process.env.PI_LENS_FORCE_SLOW_FS;
 			_resetSlowFsForTests();
+		}
+	});
+
+	it("subagent light mode skips heavyweight CLI scans but keeps the later in-process scans (#449)", async () => {
+		process.env.PI_SUBAGENT_CHILD = "1";
+		_resetSubagentModeForTests();
+		try {
+			const {
+				env,
+				notify,
+				scanFile,
+				astGrepEnsure,
+				knipAnalyze,
+				jscpdEnsure,
+				dbg,
+			} = await runSessionStart("full", (tmpDir) => {
+				createTempFile(
+					tmpDir,
+					"package.json",
+					JSON.stringify({ type: "module" }),
+				);
+				createTempFile(tmpDir, "src/index.ts", "export const value = 1;\n");
+			});
+
+			try {
+				// In-process scans (ast-grep-exports, todo) stay on — same contract
+				// as the slow-FS gate above.
+				await vi.waitFor(() => expect(astGrepEnsure).toHaveBeenCalledTimes(1));
+				await vi.waitFor(() => expect(scanFile).toHaveBeenCalled());
+
+				// The external-CLI scans are skipped…
+				expect(knipAnalyze).not.toHaveBeenCalled();
+				expect(jscpdEnsure).not.toHaveBeenCalled();
+				// …with a visible degradation notice, never silently.
+				expect(
+					notify.mock.calls.some(([msg]) =>
+						String(msg).includes("PI_LENS_SUBAGENT_FULL=1"),
+					),
+				).toBe(true);
+				// The LSP pre-warm is also skipped in light mode — the dbg log line
+				// is the only cheaply observable signal here (the LSP service mock's
+				// supportsLSP:false already makes touchFile call-count useless as a
+				// discriminator between "skipped" and "ran but found no LSP-backed
+				// file to warm").
+				expect(
+					dbg.mock.calls.some(([msg]) =>
+						String(msg).includes("skipping pre-warm (subagent session)"),
+					),
+				).toBe(true);
+				expect(mockTouchFile).not.toHaveBeenCalled();
+			} finally {
+				env.cleanup();
+			}
+		} finally {
+			delete process.env.PI_SUBAGENT_CHILD;
+			_resetSubagentModeForTests();
+		}
+	});
+
+	it("PI_LENS_SUBAGENT_FULL=1 restores full behavior inside a subagent session (#449)", async () => {
+		process.env.PI_SUBAGENT_CHILD = "1";
+		process.env.PI_LENS_SUBAGENT_FULL = "1";
+		_resetSubagentModeForTests();
+		try {
+			const { env, notify, knipAnalyze, jscpdEnsure } = await runSessionStart(
+				"full",
+				(tmpDir) => {
+					createTempFile(
+						tmpDir,
+						"package.json",
+						JSON.stringify({ type: "module" }),
+					);
+					createTempFile(tmpDir, "src/index.ts", "export const value = 1;\n");
+				},
+			);
+
+			try {
+				await vi.waitFor(() => expect(knipAnalyze).toHaveBeenCalledTimes(1));
+				expect(jscpdEnsure).toHaveBeenCalledTimes(1);
+				expect(
+					notify.mock.calls.some(([msg]) =>
+						String(msg).includes("PI_LENS_SUBAGENT_FULL=1"),
+					),
+				).toBe(false);
+			} finally {
+				env.cleanup();
+			}
+		} finally {
+			delete process.env.PI_SUBAGENT_CHILD;
+			delete process.env.PI_LENS_SUBAGENT_FULL;
+			_resetSubagentModeForTests();
 		}
 	});
 

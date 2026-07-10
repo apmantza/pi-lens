@@ -52,6 +52,11 @@ import {
 	slowFsDegradationNotice,
 } from "./slow-fs.js";
 import {
+	getSubagentIdentity,
+	isSubagentSession,
+	subagentLightModeNotice,
+} from "./subagent-mode.js";
+import {
 	findNearestProjectRoot,
 	resolveStartupScanContext,
 	type StartupScanContext,
@@ -500,7 +505,15 @@ function scheduleStartupScans(
 	// codebase-model/ast-grep-exports/word-index below) walk via
 	// `collectSourceFilesAsync` or build from cached review-graph data, so
 	// they stay on.
-	const skipHeavyweightScans = isSlowFs(analysisRoot);
+	//
+	// #449 slice 0: the same gate also fires inside a nicobailon/pi-subagents
+	// child `pi` process (`PI_SUBAGENT_CHILD=1`) — a fan-out of N subagents in
+	// the same cwd otherwise pays N full heavyweight-scan fleets for
+	// short-lived task agents that rarely consult them. In-process scans stay
+	// on for the same reason as slow-FS: the subagent may still use symbol
+	// search / word-index.
+	const isSubagent = isSubagentSession();
+	const skipHeavyweightScans = isSlowFs(analysisRoot) || isSubagent;
 	const runHeavyweightTask = (
 		name: string,
 		task: () => Promise<void>,
@@ -510,10 +523,14 @@ function scheduleStartupScans(
 	};
 	if (skipHeavyweightScans) {
 		dbg(
-			"session_start: skipping knip/jscpd/madge/dead-code/govulncheck/gitleaks/trivy (slow-fs)",
+			`session_start: skipping knip/jscpd/madge/dead-code/govulncheck/gitleaks/trivy (${
+				isSubagent ? "subagent" : "slow-fs"
+			})`,
 		);
 		deps.notify(
-			`⏭️ Skipped background code-quality scans (knip/jscpd/madge/dead-code/govulncheck/gitleaks/trivy): ${slowFsDegradationNotice()}`,
+			`⏭️ Skipped background code-quality scans (knip/jscpd/madge/dead-code/govulncheck/gitleaks/trivy): ${
+				isSubagent ? subagentLightModeNotice() : slowFsDegradationNotice()
+			}`,
 			"info",
 		);
 	}
@@ -1257,6 +1274,27 @@ export async function handleSessionStart(
 		);
 	}
 
+	// Subagent light mode (#449 slice 0): detected once per session, alongside
+	// the slow-FS probe above. Logged to the latency log so dogfooding can see
+	// how often subagent fan-outs engage it and what identity they carry.
+	const subagentSession = isSubagentSession();
+	if (subagentSession) {
+		const identity = getSubagentIdentity();
+		logLatency({
+			type: "phase",
+			phase: "subagent_light_mode",
+			filePath: analysisRoot,
+			durationMs: 0,
+			metadata: {
+				runId: identity?.runId,
+				agentName: identity?.agentName,
+			},
+		});
+		dbg(
+			`session_start subagent light mode: engaged (runId=${identity?.runId ?? "unknown"} agentName=${identity?.agentName ?? "unknown"})`,
+		);
+	}
+
 	const lensLspEnabled = !getFlag("no-lsp");
 	const startupDefaults = getDefaultStartupTools(languageProfile).filter(
 		(tool) => {
@@ -1362,7 +1400,16 @@ export async function handleSessionStart(
 	// (several ENOENT readFile calls up the directory tree) never runs on the
 	// interactive path. setImmediate guarantees handleSessionStart has already
 	// resolved before loadLSPConfig is even called.
-	if (!getFlag("no-lsp") && allowBootstrapTasks) {
+	//
+	// #449 slice 0: skip both the explicit warmFiles warm and the
+	// dominant-language auto-warm inside a subagent session — a fan-out of N
+	// subagents otherwise pays N full LSP pre-warms in the same cwd. Per-edit
+	// LSP dispatch is untouched (see `pipeline.ts`), so a subagent that
+	// actually edits code still gets diagnostics; it just spawns the server
+	// lazily on first edit instead of eagerly at session start.
+	if (subagentSession) {
+		dbg("session_start lsp-warm: skipping pre-warm (subagent session)");
+	} else if (!getFlag("no-lsp") && allowBootstrapTasks) {
 		setImmediate(() => {
 			void loadLSPConfig(cwd).then((lspConfig) => {
 				const warmFiles = lspConfig.warmFiles ?? [];
