@@ -14,7 +14,7 @@ import {
 	loadAstGrepNapi,
 	type SgRoot,
 } from "../../deps/ast-grep-napi.js";
-import { resolvePackagePath } from "../../package-root.js";
+import { shippedRuleDirsInPrecedenceOrder } from "../../sgconfig.js";
 import { hasEslintConfig } from "../../tool-policy.js";
 import { enabledAuxiliaryLspServerIds } from "../auxiliary-lsp.js";
 import { classifyDefect } from "../diagnostic-taxonomy.js";
@@ -190,12 +190,11 @@ export function evaluateAstGrepRules(
 	const seenRuleIds = new Set<string>();
 	const suppressLinterOverlap = kind === "jsts" && hasEslintConfig(cwd);
 
-	const ruleDirs = [
-		path.join(process.cwd(), "rules", "ast-grep-rules", "rules"),
-		path.join(process.cwd(), "rules", "ast-grep-rules"),
-		resolvePackagePath(import.meta.url, "rules", "ast-grep-rules", "rules"),
-		resolvePackagePath(import.meta.url, "rules", "ast-grep-rules"),
-	];
+	// #497: shared with the generated raw sgconfig (clients/sgconfig.ts) so the
+	// NAPI runner and the ast-grep LSP's generated config always agree on
+	// precedence order — project (cwd) dirs first, then the bundled package
+	// dirs — and therefore always pick the SAME winner for a same-id rule.
+	const ruleDirs = shippedRuleDirsInPrecedenceOrder();
 
 	for (const ruleDir of ruleDirs) {
 		let rules: YamlRule[];
