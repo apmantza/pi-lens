@@ -99,6 +99,10 @@ import {
 	handleToolResult,
 } from "./clients/runtime-tool-result.js";
 import { cancelLSPIdleReset, handleTurnEnd } from "./clients/runtime-turn.js";
+import {
+	registerBuiltinQuietWindowTasks,
+	runQuietWindow,
+} from "./clients/quiet-window.js";
 import { isExternalOrVendorFile } from "./clients/path-utils.js";
 import { setAmbientAbortSignal } from "./clients/safe-spawn.js";
 import { TreeSitterClient } from "./clients/tree-sitter-client.js";
@@ -2250,6 +2254,39 @@ export default function (pi: ExtensionAPI) {
 			setAmbientAbortSignal(undefined);
 		}
 	});
+
+	// --- Quiet window (#483): pi 0.80.6 agent_settled — fires once the whole
+	// agent run (incl. any retry/continue loop) is fully idle, on both normal
+	// completion and aborts (SDK finally-block). Additive to turn_end, not a
+	// replacement: turn_end still settles cascade work under its own tight cap
+	// so the next turn sees fresh state; this is a second, more generous
+	// attempt for anything still carried over, plus other deferrable work.
+	//
+	// Registration is safe on older pi hosts with no `agent_settled` event:
+	// the SDK's `pi.on` pushes onto a plain Map keyed by the event string with
+	// no validation, so an unknown event name is simply never looked up on
+	// emit — this handler would just never fire. try/catch below is
+	// defensive belt-and-braces, not load-bearing.
+	//
+	// The SDK awaits each handler in sequence before `_runAgentPrompt`
+	// returns, so this handler must NOT await the task chain itself — that
+	// would hold up the host returning control (e.g. blocking the user from
+	// starting a new turn). Kick it off unawaited and return immediately.
+	registerBuiltinQuietWindowTasks(() => runtime);
+	try {
+		(pi as any).on("agent_settled", (_event: unknown, ctx: { cwd?: string }) => {
+			if (!lensEnabled) return;
+			void runQuietWindow({
+				runtime,
+				dbg,
+				cwd: ctx?.cwd,
+			}).catch((err) => {
+				dbg(`quiet_window crashed: ${err}`);
+			});
+		});
+	} catch (registerErr) {
+		dbg(`agent_settled registration failed (older pi host?): ${registerErr}`);
+	}
 
 	// --- Session shutdown: release all handles so subagent processes exit cleanly ---
 	// The LSP idle-reset timer (240s) is unref'd but we cancel it explicitly here
