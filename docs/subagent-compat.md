@@ -88,23 +88,21 @@ Assertions:
    `scripts/lib/process-scan.mjs`). This is the #472 orphan class #474
    fixed.
 4. **`concurrent_session_bind` (#473) — NOT asserted, documented TODO.**
-   `clients/session-lifecycle.ts`'s `decideSessionStart()` classifier is
-   fully implemented and unit-tested (`tests/clients/session-lifecycle.test.ts`
-   on the #473 branch), but **as of this writing it has zero call sites in
-   `index.ts`** — grep `decideSessionStart` across the repo and the only
-   hits are the module itself and its tests, on master *and* on the still-open
-   #473 PR branch (`fix/473-concurrent-session-guard`). There is therefore no
-   `concurrent_session_bind` phase anywhere to observe yet: the classifier
-   exists but nothing calls it from the real `pi.on("session_start", ...)`
-   handler. Reproducing tintinweb's in-process model for real (mirroring
-   `agent-runner.ts`'s `createAgentSession()` + `DefaultResourceLoader` +
-   `bindExtensions()` sequence) needs a full session construction that in
-   turn needs model/provider config — not cheaply stubbable without a real
-   model key, and the issue explicitly asks not to ship something flaky here.
-   **Revisit once the #473 wiring PR merges** (i.e. once `decideSessionStart`
-   actually gets called from `index.ts`'s `session_start` handler) — at that
-   point a Layer B assertion analogous to 1-3 can be added once a
-   `concurrent_session_bind`-style phase log exists to check for.
+   The guard is fully wired on master (PR #477): `index.ts`'s `session_start`
+   handler calls `decideSessionStart()` and logs a `concurrent_session_bind`
+   latency phase for a concurrent-secondary bind — so the phase exists to
+   observe. The blocker is DRIVING it keylessly: reproducing tintinweb's
+   in-process model for real (mirroring `agent-runner.ts`'s
+   `createAgentSession()` + `DefaultResourceLoader` + `bindExtensions()`
+   sequence) requires full session construction, which in turn needs
+   model/provider config — not cheaply stubbable without a real model key,
+   and #476 explicitly asks not to ship something flaky here. The unit +
+   behavioral coverage in `tests/clients/session-lifecycle.test.ts` guards
+   the classifier and the no-reset contract in-repo; what Layer B cannot yet
+   add is the end-to-end SDK-driven variant. **Revisit if the pi SDK grows a
+   model-free session constructor or stub provider** — at that point add a
+   Layer B assertion analogous to 1-3 checking the `concurrent_session_bind`
+   phase and the absence of a second LSP fleet teardown.
 
 ## What to do when the nightly alerts
 

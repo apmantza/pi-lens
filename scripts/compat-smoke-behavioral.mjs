@@ -33,16 +33,15 @@
  *      surviving LSP-server child processes that were not already running
  *      before the smoke started (#472 orphan class, #474's fix).
  *   4. concurrent_session_bind (#473's in-process guard) — NOT asserted.
- *      `clients/session-lifecycle.ts`'s `decideSessionStart` classifier is
- *      fully implemented and unit-tested, but as of this writing it is NOT
- *      wired into any `pi.on("session_start", ...)` handler on master (nor
- *      on the open #473 PR branch) — grep `decideSessionStart` across
- *      `index.ts` and you'll find zero call sites. There is therefore no
- *      `concurrent_session_bind` phase to observe yet, and reproducing
- *      tintinweb's in-process bindExtensions() model needs a full
- *      `createAgentSession` + model config that can't cheaply be stubbed
- *      here. Documented as a TODO in docs/subagent-compat.md; revisit once
- *      the wiring PR lands.
+ *      The guard IS fully wired on master (PR #477: `decideSessionStart` is
+ *      called from `index.ts`'s `session_start` handler), so the phase
+ *      exists — but OBSERVING it requires reproducing tintinweb's in-process
+ *      model for real (a second `createAgentSession()` + `bindExtensions()`
+ *      in the same process), and session construction needs model/provider
+ *      config that can't cheaply be stubbed without a real key. #476
+ *      explicitly asks not to ship something flaky here. Documented as a
+ *      TODO in docs/subagent-compat.md; revisit if the SDK grows a
+ *      model-free session constructor or a stub provider.
  *
  * Usage: node scripts/compat-smoke-behavioral.mjs [--keep] [--tarball <path>]
  *   --keep            don't delete the scratch project/install dirs
