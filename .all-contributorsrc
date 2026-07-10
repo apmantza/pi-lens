@@ -324,6 +324,15 @@
       ]
     },
     {
+      "login": "jsmestad",
+      "name": "Justin Smestad",
+      "avatar_url": "https://avatars.githubusercontent.com/u/16150?v=4",
+      "profile": "https://github.com/jsmestad",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
       "login": "carolitascl",
       "name": "Carolina",
       "avatar_url": "https://avatars.githubusercontent.com/u/26188349?v=4",
@@ -699,6 +708,15 @@
       "name": "Jason Rimmer",
       "avatar_url": "https://avatars.githubusercontent.com/u/629?v=4",
       "profile": "http://jasonrimmer.com/",
+      "contributions": [
+        "bug"
+      ]
+    },
+    {
+      "login": "anasalsbey-glitch",
+      "name": "anasalsbey-glitch",
+      "avatar_url": "https://avatars.githubusercontent.com/u/283609702?v=4",
+      "profile": "https://github.com/anasalsbey-glitch",
       "contributions": [
         "bug"
       ]
