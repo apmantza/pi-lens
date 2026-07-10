@@ -1,0 +1,121 @@
+name: Subagent-extension compat smoke (nightly)
+
+# pi-lens's subagent-compatibility features (#473 concurrent-session guard,
+# #474 instance registry + orphan reaper, #475 subagent light mode) were all
+# built on reverse-engineered facts about two third-party pi extensions
+# (nicobailon/pi-subagents, @tintinweb/pi-subagents) and the pi SDK itself —
+# nobody has promised us these stay true across their releases. This nightly
+# makes that compatibility empirical (#476):
+#
+#   Layer A (compat-contracts.mjs): npm-installs the real third-party
+#     packages + the pi SDK and mechanically re-verifies each pinned contract
+#     with a RESILIENT pattern match against the installed code. No `pi`
+#     process, no LLM — this is the layer that always runs.
+#
+#   Layer B (compat-smoke-behavioral.mjs): installs the packed pi-lens
+#     tarball into a real `pi` (same "pi-load" mechanism as
+#     install-smoke.yml) and drives `pi --mode rpc` so session_start fires
+#     and pi-lens loads — no LLM turn, so no model API key is needed.
+#     Asserts through pi-lens's own latency-log observability that subagent
+#     light mode engages/overrides correctly and that no LSP-server process
+#     survives a clean pi exit (the #472 orphan class).
+#
+# See docs/subagent-compat.md for the full pinned-contract list, the three
+# env levers, what each layer asserts, and what to do when this alerts.
+#
+# Failure mode: ALERT, never red. Third-party drift is not our bug to fix
+# in CI — continue-on-error on both layers, then a final step opens/refreshes
+# a single tracking issue (never duplicates) so a maintainer investigates on
+# their own schedule, matching the low-noise pattern tool-smoke.yml's
+# LSP-docs-refresh PR already established (#390). The workflow itself only
+# reds on a genuine infra failure (e.g. `npm pack`/install of OUR OWN
+# package failing) — both scripts exit 2 (not 1) for infra errors so that
+# distinction is visible in the logs even though the step is non-blocking.
+
+on:
+  schedule:
+    - cron: "0 10 * * *" # nightly 10:00 UTC (offset from tool-smoke/grammar-health's ~06:00-09:2x band)
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  compat-smoke:
+    name: Subagent compat smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write # create-or-update the single drift-alert issue
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Build (in-place, for the lib unit tests) + dist (for Layer B's install)
+        run: |
+          npm run build
+          npm run build:dist
+
+      # Layer B needs a real `pi` on PATH — same install as install-smoke.yml's
+      # pi-load job (npm-global, --ignore-scripts: pi's own postinstall hooks
+      # aren't needed for a headless RPC-mode smoke).
+      - name: Install pi
+        run: |
+          set -uxo pipefail
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+          echo "$(npm prefix -g)/bin" >> "$GITHUB_PATH"
+
+      - name: Layer A — pinned-contract verification (no pi, no LLM)
+        id: layer_a
+        continue-on-error: true
+        run: node scripts/compat-contracts.mjs
+
+      - name: Layer B — real-pi behavioral smoke (no LLM turns)
+        id: layer_b
+        continue-on-error: true
+        env:
+          ANTHROPIC_API_KEY: sk-ant-dummy-ci-no-credits-needed
+        run: node scripts/compat-smoke-behavioral.mjs
+
+      # Low-noise alert: only fires when a layer failed for a REAL reason
+      # (exit 1 = contract/assertion drift), not an infra error (exit 2) —
+      # an infra failure means this run couldn't test anything meaningful,
+      # so alerting on it would be noise, not signal. Searches for the
+      # existing open alert issue by title before creating a new one so
+      # repeated nightly failures refresh one issue instead of piling up.
+      - name: Alert on contract drift (create-or-update tracking issue)
+        if: steps.layer_a.outcome == 'failure' || steps.layer_b.outcome == 'failure'
+        run: |
+          set -uo pipefail
+          TITLE="compat-smoke: third-party contract drift detected"
+          BODY_FILE="$RUNNER_TEMP/compat-smoke-alert-body.md"
+          {
+            echo "The nightly [subagent-extension compat smoke](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) detected a drift in one of the pinned third-party contracts pi-lens's subagent-compatibility features (#473/#474/#475) depend on."
+            echo ""
+            echo "- Layer A (pinned-contract verification): **${{ steps.layer_a.outcome }}**"
+            echo "- Layer B (real-pi behavioral smoke): **${{ steps.layer_b.outcome }}**"
+            echo ""
+            echo "See the [run log](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) for which specific check(s) failed, and \`docs/subagent-compat.md\` for what each check verifies and which file:contract it maps back to."
+            echo ""
+            echo "_This issue is auto-refreshed by the nightly compat-smoke workflow — do not close it manually while the underlying check is still failing; closing it only suppresses the body refresh, the next failing run will reopen a duplicate search miss. Once the drift is resolved (either upstream reverts, or pi-lens is updated to match), close it._"
+          } > "$BODY_FILE"
+
+          EXISTING_ISSUE="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$TITLE\"" --json number,title --jq ".[] | select(.title == \"$TITLE\") | .number" | head -1)"
+          if [ -n "$EXISTING_ISSUE" ]; then
+            echo "updating existing issue #$EXISTING_ISSUE"
+            gh issue edit "$EXISTING_ISSUE" --repo "$GITHUB_REPOSITORY" --body-file "$BODY_FILE"
+            gh issue comment "$EXISTING_ISSUE" --repo "$GITHUB_REPOSITORY" --body "Still failing as of this run: Layer A=${{ steps.layer_a.outcome }}, Layer B=${{ steps.layer_b.outcome }}."
+          else
+            echo "creating new alert issue"
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file "$BODY_FILE" --label "area:session,area:lsp,area:tests"
+          fi

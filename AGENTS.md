@@ -285,6 +285,28 @@ Holds: `filePath`, language-root `cwd`, `kind` (`FileKind` — `jsts`, `python`,
 ## Session-start critical path
 `lsp-config` is deferred via `setImmediate` (not awaited). Startup background task bodies are deferred via `setImmediate` so sync scans cannot inflate the interactive path; logs report both queued and run time. The first-session quick-mode warmup uses the **async** startup-scan path, which must enforce the same home-ceiling guard as the sync path (`isAtOrAboveHomeDir` for cwd/projectRoot) before language-profile warming — otherwise an empty folder under a home/ancestor marker can kick off a background home-tree walk and cause typing lag (#296). The LSP dominant-language auto-warm has the same invariant: only run it when `startupScan.canWarmCaches` is true and use the guarded `analysisRoot`, not raw `cwd`. Tool availability probes use the probe cache before spawning binaries. Interactive path target: ~150ms on warm runs.
 
+## Subagent-extension compatibility (#476)
+
+pi-lens degrades gracefully — by construction — when it runs alongside the
+two popular subagent extensions (nicobailon/pi-subagents,
+`@tintinweb/pi-subagents`): subagent light mode (#475) skips heavyweight
+scans in a spawned child, the instance registry + orphan reaper (#474)
+cleans up LSP processes left behind by a dead parent, and the
+concurrent-session guard (#473, `clients/session-lifecycle.ts`) stops an
+in-process subagent bind from tearing down the parent's live LSP fleet. All
+three were built on reverse-engineered facts about those extensions and the
+pi SDK — nobody has promised us these stay true across releases. `docs/
+subagent-compat.md` records the exact pinned contracts (file + version last
+verified) and is checked nightly by `.github/workflows/compat-smoke.yml`
+(`scripts/compat-contracts.mjs` — pattern-match the installed third-party
+source; `scripts/compat-smoke-behavioral.mjs` — drive a real `pi --mode rpc`
+and assert through the latency log, no LLM turn needed). A nightly failure
+opens/refreshes a single tracking issue — never reds the workflow itself.
+Three env levers govern the behavior: `PI_LENS_SUBAGENT_FULL=1` (force full,
+non-light behavior in a detected subagent child), `PI_LENS_CONCURRENT_SESSION_GUARD=0`
+(disable the #473 guard — every session_start classifies sequential), and
+`PI_LENS_INSTANCE_REGISTRY=0` (disable the #474 registry/reaper).
+
 ## Runner process model
 - **Use `safeSpawnAsync()` for all subprocess work** in hook/dispatch/install paths. The sync `safeSpawn()` is deprecated, blocks the Node event loop, and is now reachable only from the cached `TestRunnerClient.detectRunner` `which pytest` probe. Don't add new sync `safeSpawn` callers.
 - **The hot per-edit path is the dispatch runners** (`clients/dispatch/runners/*`), not the legacy per-tool client classes (`biome-client`, `ruff-client`, `rust-client`, `ast-grep-client`, …). Those classes historically carried a *parallel sync surface* (`checkFile`/`fixFile`/`isAvailable`/`findCargoPath`/…) that the async runners superseded; #197 found almost all of it **dead** and deleted ~1600 lines. **Lesson: when you find a sync client method, grep its real callers before "converting" it — the answer is usually "delete," and the live path already has an `*Async` twin** (`fixFileAsync`, `ensureAvailable`, `runTestFileAsync`, `tempScanAsync`, `findGoPathAsync`).
