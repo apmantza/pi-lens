@@ -187,15 +187,29 @@ function snapshotRuleSource(source: AstGrepRuleSource): RuleSourceSnapshot {
 	}
 
 	const hash = createHash("sha256");
-	const files = findYamlFiles(source.dir).map((file) => {
+	const files: RuleSourceSnapshot["files"] = [];
+	for (const file of findYamlFiles(source.dir)) {
 		const relativePath = path.relative(source.dir, file);
-		const content = fs.readFileSync(file, "utf8");
 		hash.update(relativePath);
 		hash.update("\0");
+		// Guarded read (mirrors loadYamlRuleFiles in yaml-rule-parser.ts): a rule
+		// file deleted/renamed between the directory walk and this read (editor
+		// churn mid-session) must degrade to "skip this file", not throw —
+		// resolveBaselineSgconfig sits on the ast-grep LSP spawn path. The
+		// "missing" sentinel still perturbs the digest so the cache re-resolves
+		// once the file is readable again.
+		let content: string;
+		try {
+			content = fs.readFileSync(file, "utf8");
+		} catch {
+			hash.update("missing");
+			hash.update("\0");
+			continue;
+		}
 		hash.update(content);
 		hash.update("\0");
-		return { file, relativePath, documents: parseRuleDocuments(content) };
-	});
+		files.push({ file, relativePath, documents: parseRuleDocuments(content) });
+	}
 	const snapshot = { ...source, files, digest: hash.digest("hex") };
 	if (source.origin === "bundled") bundledSnapshots.set(cacheKey, snapshot);
 	return snapshot;

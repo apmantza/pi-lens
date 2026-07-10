@@ -170,7 +170,21 @@ afterEach(() => {
 	_resetBaselineSgconfigForTests();
 	clearRulesCache();
 	for (const root of tempRoots.splice(0)) {
-		fs.rmSync(root, { recursive: true, force: true });
+		// Windows: the raw ast-grep LSP child spawned by the cliIt case can still
+		// hold a handle on the temp dir when teardown runs, making rmSync throw
+		// EPERM (teardown-only — the test's assertions have already passed).
+		// Retry briefly, then swallow: a leaked tmp dir is harmless, a red run
+		// from teardown is not.
+		try {
+			fs.rmSync(root, {
+				recursive: true,
+				force: true,
+				maxRetries: 5,
+				retryDelay: 100,
+			});
+		} catch {
+			// leave the tmp dir for the OS temp cleaner
+		}
 	}
 });
 
@@ -454,6 +468,29 @@ describe("project rule precedence follow-ups", () => {
 				expect.objectContaining({
 					rule: "no-typeof-undefined-js",
 					message: "[slop] project JavaScript winner",
+				}),
+			]),
+		);
+	});
+
+	it("loads the bundled CodeRabbit catalog recursively — a nested CWE rule fires via NAPI", () => {
+		// Pins the recursive-discovery behavior this PR introduces: all bundled
+		// CodeRabbit rules live under language subdirectories, so on master's
+		// top-level-only discovery the ENTIRE vendored CWE catalog silently
+		// loaded zero rules in both the NAPI and raw-LSP paths. Nothing else in
+		// the suite asserts a CodeRabbit rule actually fires, so without this
+		// test a regression back to non-recursive discovery would be invisible.
+		const root = makeProject();
+		const diagnostics = napiDiagnostics(
+			root,
+			path.join(root, "app.config.ts"),
+			"$sceProvider.enabled(false);\n",
+			"typescript",
+		);
+		expect(diagnostics).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					rule: "detect-angular-sce-disabled-typescript",
 				}),
 			]),
 		);
