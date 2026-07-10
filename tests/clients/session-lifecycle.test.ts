@@ -195,6 +195,51 @@ describe("noteSessionShutdown", () => {
 		registerPrimarySession(weirdThrowCtx(), "session-a");
 		expect(noteSessionShutdown(activeCtx(), "session-b")).toBe("primary");
 	});
+
+	// D1 regression: a single ordinary session whose getSessionId() is
+	// unavailable registers with sessionId=undefined; at its OWN shutdown its
+	// ctx is still active (pi invalidates on replacement, not shutdown). It
+	// must classify primary — else teardown is skipped on EVERY clean exit
+	// and the LSP fleet leaks (#472 orphan class).
+	it("primary's own shutdown with BOTH ids undefined and its own still-active ctx -> primary (ctx identity)", () => {
+		const ownCtx = activeCtx();
+		registerPrimarySession(ownCtx, undefined);
+		expect(noteSessionShutdown(ownCtx, undefined)).toBe("primary");
+	});
+
+	it("primary's own shutdown with BOTH ids undefined and a per-emit FRESH ctx -> primary (unknown-id guard)", () => {
+		// pi's ExtensionRunner.emit() builds a fresh ctx object per emit, so
+		// the shutdown ctx normally differs from the registered one — the
+		// unknown-id guard is the load-bearing fix for D1.
+		registerPrimarySession(activeCtx(), undefined);
+		expect(noteSessionShutdown(activeCtx(), undefined)).toBe("primary");
+	});
+
+	it("ctx identity beats an id mismatch (id read glitch) -> primary", () => {
+		const ownCtx = activeCtx();
+		registerPrimarySession(ownCtx, "session-a");
+		expect(noteSessionShutdown(ownCtx, "session-b")).toBe("primary");
+	});
+
+	it("shutdown session id unknown while primary's id is known -> primary (never secondary on uncertainty)", () => {
+		registerPrimarySession(activeCtx(), "session-a");
+		expect(noteSessionShutdown(activeCtx(), undefined)).toBe("primary");
+	});
+
+	it("primary's id unknown while the shutdown id is known -> primary (never secondary on uncertainty)", () => {
+		registerPrimarySession(activeCtx(), undefined);
+		expect(noteSessionShutdown(activeCtx(), "session-b")).toBe("primary");
+	});
+
+	// Accepted fail-safe trade: a REAL secondary with unknown ids classifies
+	// primary — its teardown runs and hurts the parent, same as pre-#473
+	// behavior (a conservative miss). Uncertainty must never classify
+	// secondary, because the false-secondary direction skips the primary's
+	// own teardown on every clean exit.
+	it("both ids undefined + DIFFERENT ctx + primary probes active -> primary (conservative miss, by design)", () => {
+		registerPrimarySession(activeCtx(), undefined);
+		expect(noteSessionShutdown(activeCtx(), undefined)).toBe("primary");
+	});
 });
 
 describe("decideSessionStart (orchestration helper used by index.ts)", () => {
@@ -234,6 +279,17 @@ describe("decideSessionStart (orchestration helper used by index.ts)", () => {
 		const decision = decideSessionStart(activeCtx(), "session-a");
 		expect(decision.classification).toBe("sequential-replacement");
 		expect(decision.runFullSessionStart).toBe(true);
+	});
+
+	it("SAME ctx object re-announcing itself (even with a different/unknown id) -> sequential-replacement, never concurrent", () => {
+		const ownCtx = activeCtx();
+		decideSessionStart(ownCtx, "session-a");
+		const withDifferentId = decideSessionStart(ownCtx, "session-b");
+		expect(withDifferentId.classification).toBe("sequential-replacement");
+		expect(withDifferentId.runFullSessionStart).toBe(true);
+		const withUnknownId = decideSessionStart(ownCtx, undefined);
+		expect(withUnknownId.classification).toBe("sequential-replacement");
+		expect(withUnknownId.runFullSessionStart).toBe(true);
 	});
 
 	it("prior ctx confirmed stale -> sequential-replacement, runs full session start", () => {

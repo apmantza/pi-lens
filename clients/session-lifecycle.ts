@@ -163,25 +163,47 @@ export type SessionShutdownClassification = "primary" | "secondary";
 /**
  * Classifies a `session_shutdown` firing the same fail-safe way as
  * `classifySessionStart`: it is `secondary` ONLY when a DIFFERENT primary is
- * registered and that primary's ctx still probes active (positive evidence
- * the shutting-down session is a live sibling, not the real parent exiting).
- * Any inconclusive signal — no primary registered, same session id, or the
- * primary's ctx probe returns `undefined`/`false` — classifies as `primary`
- * so today's full-teardown behavior is preserved.
+ * registered (positively identified — ctx identity differs AND session ids
+ * are both known and differ) and that primary's ctx still probes active
+ * (positive evidence the shutting-down session is a live sibling, not the
+ * real parent exiting). Any inconclusive signal — no primary registered,
+ * same ctx object, same session id, EITHER session id unknown, or the
+ * primary's ctx probe returning `undefined`/`false` — classifies as
+ * `primary` so today's full-teardown behavior is preserved.
+ *
+ * The id-unknown guard matters: without it, a single ordinary session whose
+ * `sessionManager.getSessionId()` is unavailable (SDK drift) would register
+ * with `sessionId === undefined`, then at its OWN shutdown the same-id check
+ * couldn't fire, the probe of its own (still-live — pi invalidates on
+ * replacement, not shutdown) ctx would return true, and its teardown would
+ * be skipped on EVERY clean exit — leaking the LSP fleet (the #472 orphan
+ * class). Trade-off accepted: a REAL secondary that also has unknown ids
+ * now classifies `primary` (conservative miss — its teardown runs and hurts
+ * the parent, same as pre-#473 behavior), because uncertainty must never
+ * classify `secondary`.
  */
 export function noteSessionShutdown(
-	// The shutting-down session's OWN ctx is not needed: classification only
-	// needs to know whether a DIFFERENT registered primary is still active,
-	// which is probed via the module's `activeCtx`, not this parameter. Kept
-	// in the signature (spec: `noteSessionShutdown(ctx, sessionId)`) for a
-	// stable call-site shape and in case a future refinement needs it.
-	_ctx: unknown,
+	// Load-bearing: ctx OBJECT IDENTITY is the definitive discriminator when
+	// available — if the shutting-down handler's ctx IS the registered
+	// primary's ctx, this is the primary regardless of session-id reads.
+	// (Note: pi's ExtensionRunner.emit() builds a FRESH ctx object per emit,
+	// so identity match is not expected with today's SDK — this check is
+	// defense-in-depth for SDK versions/paths that reuse a ctx.)
+	ctx: unknown,
 	sessionId: string | undefined,
 ): SessionShutdownClassification {
+	if (ctx !== undefined && ctx === activeCtx) {
+		return "primary";
+	}
 	if (activeCtx === undefined && activeSessionId === undefined) {
 		return "primary";
 	}
 	if (sessionId !== undefined && sessionId === activeSessionId) {
+		return "primary";
+	}
+	// Uncertainty guard: if EITHER side's session id is unknown we cannot
+	// positively establish "different session", so never classify secondary.
+	if (sessionId === undefined || activeSessionId === undefined) {
 		return "primary";
 	}
 	const primaryStillActive = probeCtxActive(activeCtx);
@@ -247,8 +269,15 @@ export function decideSessionStart(
 ): SessionStartGuardDecision {
 	const hasPrior = activeCtx !== undefined || activeSessionId !== undefined;
 	const priorCtxActive = hasPrior ? probeCtxActive(activeCtx) : undefined;
+	// ctx OBJECT IDENTITY: if the SDK ever hands the SAME ctx object to a
+	// repeated session_start, that is by definition the same session
+	// re-announcing itself — sequential, never concurrent. (Not expected with
+	// today's SDK — ExtensionRunner.emit() builds a fresh ctx per emit — but
+	// identity is the one signal that can't false-positive, so honor it.)
+	const sameCtx = hasPrior && ctx !== undefined && ctx === activeCtx;
 	const sameSessionId =
-		hasPrior && sessionId !== undefined && sessionId === activeSessionId;
+		sameCtx ||
+		(hasPrior && sessionId !== undefined && sessionId === activeSessionId);
 
 	const classification = classifySessionStartGuarded({
 		hasPrior,
