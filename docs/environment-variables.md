@@ -50,6 +50,17 @@ active; findings are still cached for `lens_diagnostics` and
 `/lens-health`. Useful when prompt-cache invalidation from injected
 messages is hurting throughput in long, cache-sensitive sessions.
 
+## Bus events
+
+### `PI_LENS_BUS_PUBLISH`
+
+Set to `0` to disable publishing the `pilens:files:touched` event on pi's
+shared `pi.events` bus (see `docs/features.md` — "Bus Events" — for the full
+payload contract). Enabled by default. Publishing is fire-and-forget and
+never affects the write path's own success or latency, so this switch exists
+purely to opt out of the broadcast, e.g. if another extension's bus listener
+misbehaves.
+
 ## Related
 
 - `~/.pi-lens/config.json` schema — `## Global Config` in [README.md](../README.md#global-config)

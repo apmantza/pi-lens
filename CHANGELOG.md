@@ -6,6 +6,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Added
 
+- **`pilens:files:touched` bus event** (#482) — pi-lens's first `pi.events` broadcast surface. Every autonomous file write pi-lens makes outside the agent's own tool calls — dispatch autofix (biome/ruff/eslint/stylelint/sqlfluff/rubocop/ktlint/rust-clippy/dart-fix/golangci-lint/detekt/ktfmt/markdownlint/oxlint) and formatter runs (immediate or deferred-at-`agent_end`), plus the conservative actionable-warnings LSP autofix — now emits a versioned `{ v: 1, source: "pi-lens", reason: "autofix" | "format", paths, cwd }` payload via `clients/bus-publish.ts`'s `publishFilesTouched`, one event per logical write batch. Fire-and-forget (never affects write-path success/latency) and null-safe when unwired (unit tests, the MCP server's no-pi-host path). Deliberately excludes agent-authored edits (partial-edit-apply preflight, ast-grep/lsp-navigation tool calls) — the host already knows about those. Kill switch `PI_LENS_BUS_PUBLISH=0`. See `docs/features.md` ("Bus Events") for the full contract; refs #478.
+
 ### Changed
 
 ### Fixed

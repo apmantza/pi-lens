@@ -124,6 +124,31 @@ When `actionableWarnings.autoFix.enabled` is set in global config (or `--lens-ac
 - `--lens-actionable-warning-autofix` — apply conservative fixes at agent_end
 - `--lens-actionable-warning-all` — report all warnings, not just delta
 
+### Bus Events — `pilens:files:touched` (#482)
+
+pi-lens writes files **outside the agent's own tool calls**: dispatch autofix (biome/ruff/eslint/stylelint/sqlfluff/rubocop/ktlint/rust-clippy/dart-fix/golangci-lint/detekt/ktfmt/markdownlint/oxlint --fix) and formatter runs (immediate or deferred-at-`agent_end`) both mutate files after the fact, and the conservative actionable-warnings autofix above applies LSP quickfixes the same way. Other extensions in the same session that track file mutations are otherwise blind to those writes.
+
+pi-lens broadcasts them on pi's shared in-process event bus (`pi.events`, exposed to every extension via the `ExtensionAPI`) as a single named event:
+
+```
+event:   pilens:files:touched
+payload: {
+  v: 1,
+  source: "pi-lens",
+  reason: "autofix" | "format",
+  paths: string[],   // absolute, normalized (forward slashes, canonical casing)
+  cwd: string,       // absolute, normalized
+}
+```
+
+One event per logical write batch (not per file) — e.g. a single eslint `--fix` invocation that touches one file emits one event with `paths: [thatFile]`; a deferred-format pass across several queued files emits one event listing all of them.
+
+**Versioning policy: additive-only.** New optional fields may be added under `v: 1`. A breaking change to an existing field's meaning bumps `v`. Consumers should ignore unknown fields.
+
+**Non-goals:** pi-lens does not (yet) consume anyone's bus events, and does not emit for edits the agent makes itself through its own tool calls — the host already knows about those. This is a broadcast-only surface; see `#478` for the planned `pilens:rpc:*` request/response query API that will reuse the same versioning discipline.
+
+**Kill switch:** `PI_LENS_BUS_PUBLISH=0` disables publishing entirely (see `docs/environment-variables.md`). Publishing is fire-and-forget — a disabled/unavailable/throwing bus never affects the write path's own success or latency.
+
 ### Opportunistic Read Expansion
 
 When the agent reads a small slice of a file (≤ 60 lines), pi-lens transparently expands the read to the full enclosing symbol (function, method, or class) using the tree-sitter AST. The agent receives the full symbol as context, and the read guard records symbol-level coverage so edits anywhere within that symbol pass without requiring the agent to have read every line individually. Expansion runs within a 200 ms budget and falls back silently on unsupported file types or parse failures.

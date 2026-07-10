@@ -457,6 +457,10 @@ Patterns by tool capability:
 
 When changing a serialized cache that feeds this pipeline (e.g. `clients/cache/rule-cache.ts`), bump `CACHE_VERSION` so old entries invalidate. The tree-sitter rule cache previously stripped `has_fix` on roundtrip, silently demoting every tree-sitter rule with auto-fix to non-fixable on any cache hit (commit `24af518`).
 
+## Bus events — `pilens:files:touched` (#482)
+
+pi-lens's first `pi.events` broadcast surface: `clients/bus-publish.ts` exports `publishFilesTouched({ reason: "autofix" | "format", paths, cwd, origin? })`, fire-and-forget over `pi.events.emit` (wired once at extension factory time in `index.ts` via `wireBusEmitter`; null-safe when unwired, e.g. unit tests and the MCP server path with no pi host). Payload is frozen-additive (`{ v: 1, source: "pi-lens", reason, paths, cwd }`; bump `v` on a breaking change), one event per logical write batch. Wired at every seam where pi-lens writes project source autonomously: `runPipeline`'s immediate-format and autofix phases, `handleAgentEnd`'s deferred-format loop, and the actionable-warnings conservative LSP autofix — NOT at seams where pi-lens replays the agent's own edit content (partial-edit-apply preflight, ast-grep/lsp-navigation agent tool calls with `apply:true`) since the host already knows about agent-authored writes. `origin: "bus"` is a structural loop guard for a future bus-consuming feature (pi-lens consumes nothing today). Kill switch `PI_LENS_BUS_PUBLISH=0`. Full contract: `docs/features.md` ("Bus Events"); env var: `docs/environment-variables.md`. Refs `#478` (planned `pilens:rpc:*` query surface, same versioning discipline).
+
 ## ast-grep rules
 
 Rules live in `rules/ast-grep-rules/rules/*.yml` (plus the multi-rule `rules/ast-grep-rules/slop-patterns.yml`); disabled rules sit in `rules/ast-grep-rules/rules-disabled/` (sibling dir — not loaded). Run by `clients/dispatch/runners/ast-grep-napi.ts`.

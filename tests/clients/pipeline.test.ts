@@ -10,7 +10,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BiomeClient } from "../../clients/biome-client.js";
 import { getFormatService } from "../../clients/format-service.js";
 import { MetricsClient } from "../../clients/metrics-client.js";
@@ -22,6 +22,10 @@ import {
 import type { RuffClient } from "../../clients/ruff-client.js";
 import { TestRunnerClient } from "../../clients/test-runner-client.js";
 import { createTempFile, setupTestEnvironment } from "../clients/test-utils.js";
+import {
+	_resetForTests as resetBusPublish,
+	wireBusEmitter,
+} from "../../clients/bus-publish.js";
 
 // Mock the dispatch integration to avoid side effects
 vi.mock("../../clients/dispatch/integration.js", () => ({
@@ -254,6 +258,135 @@ describe("Pipeline", () => {
 			);
 
 			expect(result.fileModified).toBe(false);
+		});
+	});
+
+	describe("Bus publish (#482 pilens:files:touched)", () => {
+		afterEach(() => {
+			resetBusPublish();
+		});
+
+		it("publishes reason:\"format\" with the fixed file's path when immediate format changes content", async () => {
+			const filePath = createTempFile(tmpDir, "unformatted.ts", "const x=1");
+			vi.mocked(dispatchLintWithResult).mockResolvedValue({
+				diagnostics: [],
+				blockers: [],
+				warnings: [],
+				baselineWarningCount: 0,
+				fixed: [],
+				resolvedCount: 0,
+				output: "",
+				blockerOutput: "",
+				hasBlockers: false,
+			});
+
+			const emit = vi.fn();
+			wireBusEmitter(emit);
+
+			const formatService = getFormatService("test", true);
+			const originalFormatFile = formatService.formatFile.bind(formatService);
+			const deps = createMockDeps({ getFormatService: () => formatService });
+			formatService.formatFile = async (fp: string) => {
+				const result = await originalFormatFile(fp);
+				if (fp === filePath || path.resolve(fp) === path.resolve(filePath)) {
+					fs.writeFileSync(filePath, "const x = 1;\n");
+					return {
+						filePath: fp,
+						formatters: [{ name: "biome", success: true, changed: true }],
+						anyChanged: true,
+						allSucceeded: true,
+					};
+				}
+				return result;
+			};
+
+			await runPipeline(
+				createMockContext(filePath, {
+					getFlag: (name) => name === "immediate-format",
+				}),
+				deps,
+			);
+
+			expect(emit).toHaveBeenCalledWith(
+				"pilens:files:touched",
+				expect.objectContaining({
+					v: 1,
+					source: "pi-lens",
+					reason: "format",
+					paths: [path.resolve(filePath).replace(/\\/g, "/")],
+					cwd: tmpDir.replace(/\\/g, "/"),
+				}),
+			);
+		});
+
+		it("publishes reason:\"autofix\" with the fixed file's path when an autofix tool changes content", async () => {
+			const filePath = createTempFile(tmpDir, "messy.ts", "const x=1");
+			vi.mocked(dispatchLintWithResult).mockResolvedValue({
+				diagnostics: [],
+				blockers: [],
+				warnings: [],
+				baselineWarningCount: 0,
+				fixed: [],
+				resolvedCount: 0,
+				output: "",
+				blockerOutput: "",
+				hasBlockers: false,
+			});
+
+			const emit = vi.fn();
+			wireBusEmitter(emit);
+
+			const mockBiome = {
+				isSupportedFile: () => true,
+				ensureAvailable: async () => true,
+				fixFileAsync: async () => {
+					fs.writeFileSync(filePath, "const x = 1;\n");
+					return { success: true, changed: true, fixed: 1 };
+				},
+			} as unknown as BiomeClient;
+
+			await runPipeline(
+				createMockContext(filePath, { getFlag: () => false }),
+				createMockDeps({ biomeClient: mockBiome }),
+			);
+
+			const filesTouchedCall = emit.mock.calls.find(
+				(call) => call[0] === "pilens:files:touched",
+			);
+			expect(filesTouchedCall).toBeDefined();
+			expect(filesTouchedCall?.[1]).toMatchObject({
+				v: 1,
+				source: "pi-lens",
+				reason: "autofix",
+				paths: [path.resolve(filePath).replace(/\\/g, "/")],
+			});
+		});
+
+		it("does not publish when nothing changes", async () => {
+			const filePath = createTempFile(tmpDir, "clean.ts", "const x = 1;\n");
+			vi.mocked(dispatchLintWithResult).mockResolvedValue({
+				diagnostics: [],
+				blockers: [],
+				warnings: [],
+				baselineWarningCount: 0,
+				fixed: [],
+				resolvedCount: 0,
+				output: "",
+				blockerOutput: "",
+				hasBlockers: false,
+			});
+
+			const emit = vi.fn();
+			wireBusEmitter(emit);
+
+			await runPipeline(
+				createMockContext(filePath, {
+					getFlag: (name) => name === "no-autofix",
+				}),
+				createMockDeps(),
+			);
+
+			expect(emit).not.toHaveBeenCalled();
 		});
 	});
 

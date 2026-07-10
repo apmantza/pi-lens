@@ -50,6 +50,7 @@ import {
 import type { FormatService } from "./format-service.js";
 import { logLatency } from "./latency-logger.js";
 import { emitLensAnalysisComplete } from "./lens-events.js";
+import { publishFilesTouched } from "./bus-publish.js";
 import { getLSPService } from "./lsp/index.js";
 import type { MetricsClient } from "./metrics-client.js";
 import { clearGraphCache } from "./review-graph/builder.js";
@@ -1069,7 +1070,15 @@ export async function runPipeline(
 		formattersUsed = formatResult.formattersUsed;
 		formatFailures = formatResult.formatFailures;
 		fileContent = formatResult.fileContent;
-		if (formatChanged) piChangedFiles.add(path.resolve(filePath));
+		if (formatChanged) {
+			piChangedFiles.add(path.resolve(filePath));
+			publishFilesTouched({
+				reason: "format",
+				paths: [path.resolve(filePath)],
+				cwd,
+				dbg,
+			});
+		}
 	} else if (formatDeferred) {
 		dbg(`autoformat: deferred until agent_end for ${filePath}`);
 	}
@@ -1091,6 +1100,14 @@ export async function runPipeline(
 	} = await runAutofix(filePath, cwd, getFlag, dbg, deps);
 	for (const changedFile of autofixChangedFiles) {
 		piChangedFiles.add(path.resolve(changedFile));
+	}
+	if (autofixChangedFiles.length > 0) {
+		publishFilesTouched({
+			reason: "autofix",
+			paths: autofixChangedFiles.map((f) => path.resolve(f)),
+			cwd,
+			dbg,
+		});
 	}
 	if (fixRefresh) {
 		try {
