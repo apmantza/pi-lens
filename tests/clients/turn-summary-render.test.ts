@@ -92,6 +92,80 @@ describe("renderTurnSummaryMessage (#484)", () => {
 		expect(joined).toContain("format:prettier");
 	});
 
+	// #513: pi-tui hard-crashes the host on any rendered line wider than the
+	// terminal ("Rendered line N exceeds terminal width"). The width contract
+	// is the whole point of Component.render(width) — these tests measure with
+	// the REAL visibleWidth, because the mock-based tests above are exactly
+	// what let the crash ship.
+	it("collapsed line is truncated to the render width (#513)", async () => {
+		const { visibleWidth } = await import("../../clients/deps/pi-tui.js");
+		const collector = new TurnSummaryCollector();
+		// Enough distinct tools to push the one-liner well past 40 columns —
+		// mirrors the live crash (133 cols vs a 120-wide terminal).
+		for (const tool of [
+			"ast-grep",
+			"tree-sitter",
+			"high-complexity",
+			"lsp",
+			"missing-error-propagation",
+		]) {
+			collector.recordDiagnostic("/repo/a.ts", { tool });
+		}
+		collector.recordFormat("/repo/a.ts", { tool: "biome" });
+		const details = collector.consume(1, () => "a.ts");
+
+		const component = renderTurnSummaryMessage(
+			makeMessage(details) as never,
+			{ expanded: false },
+			makeFakeTheme(),
+		);
+		const lines = component?.render(40) ?? [];
+		expect(lines).toHaveLength(1);
+		expect(visibleWidth(lines[0])).toBeLessThanOrEqual(40);
+	});
+
+	it("every expanded line is truncated to the render width (#513)", async () => {
+		const { visibleWidth } = await import("../../clients/deps/pi-tui.js");
+		const collector = new TurnSummaryCollector();
+		collector.recordDiagnostic(
+			"/repo/deeply/nested/path/that/goes/on/forever/component.ts",
+			{
+				tool: "eslint",
+				ruleId: "no-really-long-rule-name-with-many-segments",
+				severity: "warning",
+				line: 1234,
+				description:
+					"a very long human-readable description that certainly exceeds any narrow terminal width on its own",
+			},
+		);
+		const details = collector.consume(1);
+
+		const component = renderTurnSummaryMessage(
+			makeMessage(details) as never,
+			{ expanded: true },
+			makeFakeTheme(),
+		);
+		const lines = component?.render(40) ?? [];
+		expect(lines.length).toBeGreaterThan(0);
+		for (const line of lines) {
+			expect(visibleWidth(line)).toBeLessThanOrEqual(40);
+		}
+	});
+
+	it("non-positive render width passes lines through instead of emitting empties (#513)", () => {
+		const collector = new TurnSummaryCollector();
+		collector.recordFormat("/repo/a.ts", { tool: "prettier" });
+		const details = collector.consume(1, () => "a.ts");
+		const component = renderTurnSummaryMessage(
+			makeMessage(details) as never,
+			{ expanded: false },
+			makeFakeTheme(),
+		);
+		const lines = component?.render(0) ?? [];
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toContain("pi-lens");
+	});
+
 	it("component.invalidate() is a callable no-op", () => {
 		const collector = new TurnSummaryCollector();
 		collector.recordFormat("/repo/a.ts", { tool: "prettier" });

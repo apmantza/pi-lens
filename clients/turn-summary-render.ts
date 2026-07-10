@@ -16,6 +16,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "./deps/pi-tui.js";
+import { fitLines } from "./tui-fit.js";
 import {
 	formatTurnSummaryLine,
 	type TurnSummaryDetails,
@@ -80,18 +81,21 @@ export function renderTurnSummaryMessage(
 	const details = message.details;
 	if (!details) return undefined;
 
+	// pi-tui HARD-CRASHES the host on any rendered line wider than the
+	// terminal, so every line must be fitted to the width the TUI hands us
+	// (#513 — an untruncated collapsed one-liner took down a live session).
 	if (!options.expanded) {
 		const line = formatTurnSummaryLine(details);
 		const text = theme.fg("accent", line);
 		return {
-			render: () => [text],
+			render: (width: number) => fitLines([text], width),
 			invalidate: () => {},
 		};
 	}
 
 	const lines = buildExpandedLines(details, theme);
 	return {
-		render: () => lines,
+		render: (width: number) => fitLines(lines, width),
 		invalidate: () => {},
 	};
 }
