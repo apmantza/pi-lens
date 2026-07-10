@@ -52,6 +52,7 @@ import {
 	resolvePiLensFlag,
 } from "./clients/lens-config.js";
 import { initLensEvents } from "./clients/lens-events.js";
+import { wireBusEmitter } from "./clients/bus-publish.js";
 import { initLSPConfig } from "./clients/lsp/config.js";
 import { getLSPService, resetLSPService } from "./clients/lsp/index.js";
 import { sweepOrphans } from "./clients/instance-reaper.js";
@@ -417,6 +418,7 @@ function cleanStaleTsBuildInfo(cwd: string): string[] {
 export default function (pi: ExtensionAPI) {
 	initI18n(pi);
 	initLensEvents(pi);
+	wireBusEmitter(pi.events?.emit?.bind(pi.events));
 	const astGrepClient = new AstGrepClient();
 	const cacheManager = new CacheManager();
 

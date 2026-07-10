@@ -7,6 +7,10 @@ import { readChangesSince } from "../../clients/project-changes.js";
 import { handleAgentEnd } from "../../clients/runtime-agent-end.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import {
+	_resetForTests as resetBusPublish,
+	wireBusEmitter,
+} from "../../clients/bus-publish.js";
 
 describe("runtime-agent-end deferred formatting", () => {
 	it("formats each queued file once, clears the queue, and records a format change", async () => {
@@ -294,6 +298,59 @@ describe("runtime-agent-end deferred formatting", () => {
 			expect(summary?.skipped).toEqual([{ filePath, reason: "no-autoformat" }]);
 			expect(runtime.pendingDeferredFormatCount).toBe(0);
 		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("publishes pilens:files:touched reason:\"format\" for deferred-format changed files (#482)", async () => {
+		const env = setupTestEnvironment("pi-lens-agent-end-bus-format-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const filePath = createTempFile(env.tmpDir, "src/app.ts", "const x=1");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.deferFormat(filePath, env.tmpDir, "edit", env.tmpDir);
+
+			const formatFile = vi.fn(async (fp: string) => {
+				fs.writeFileSync(fp, "const x = 1;\n");
+				return {
+					filePath: fp,
+					formatters: [{ name: "biome", success: true, changed: true }],
+					anyChanged: true,
+					allSucceeded: true,
+				};
+			});
+
+			const emit = vi.fn();
+			wireBusEmitter(emit);
+
+			await handleAgentEnd({
+				ctxCwd: env.tmpDir,
+				getFlag: (name) => name === "no-lsp",
+				notify: vi.fn(),
+				dbg: () => {},
+				runtime,
+				cacheManager: { addModifiedRange: () => {} } as any,
+				getFormatService: () => ({ recordRead: () => {}, formatFile }) as any,
+			});
+
+			expect(emit).toHaveBeenCalledWith(
+				"pilens:files:touched",
+				expect.objectContaining({
+					v: 1,
+					source: "pi-lens",
+					reason: "format",
+					paths: [filePath.replace(/\\/g, "/")],
+				}),
+			);
+		} finally {
+			resetBusPublish();
+			if (previousDataDir === undefined) {
+				delete process.env.PILENS_DATA_DIR;
+			} else {
+				process.env.PILENS_DATA_DIR = previousDataDir;
+			}
 			env.cleanup();
 		}
 	});

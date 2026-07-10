@@ -9,6 +9,7 @@ import type { CacheManager } from "./cache-manager.js";
 import type { FormatService } from "./format-service.js";
 import { logLatency } from "./latency-logger.js";
 import { resyncLspFile, runFormatPhase } from "./pipeline.js";
+import { publishFilesTouched } from "./bus-publish.js";
 import {
 	appendProjectChange,
 	type ProjectChangeSource,
@@ -218,6 +219,15 @@ export async function handleAgentEnd({
 				},
 			});
 		}
+
+		if (summary.changed.length > 0) {
+			publishFilesTouched({
+				reason: "format",
+				paths: summary.changed,
+				cwd: ctxCwd ?? runtime.projectRoot,
+				dbg,
+			});
+		}
 	}
 
 	if (actionableAutofixEnabled) {
@@ -271,6 +281,14 @@ export async function handleAgentEnd({
 							`agent_end actionable warning changed-file tracking failed for ${changedFile}: ${err}`,
 						);
 					}
+				}
+				if (fixSummary.changedFiles.length > 0) {
+					publishFilesTouched({
+						reason: "autofix",
+						paths: fixSummary.changedFiles,
+						cwd: ctxCwd ?? runtime.projectRoot,
+						dbg,
+					});
 				}
 				logLatency({
 					type: "phase",
