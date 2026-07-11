@@ -12,6 +12,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Fixed
 
+- **Test runner now resolves mirrored test-tree layouts** (#547) — `TestRunnerClient.findTestFile` only checked same-directory, `dir/__tests__/`, and flat top-level `tests/<basename>` locations, missing the common "mirrored subdirectory" layout (`tests/<same-relative-subdir>/<basename>.test.ts`) used by this repo itself (`clients/knip-client.ts` → `tests/clients/knip-client.test.ts`). As a result, pi-lens's own `turn_end` test-runner integration could only resolve its own tests via the slower/brittle import-scan fallback. `findTestFile` now also checks `tests/<relative-subdir>/` and `__tests__/<relative-subdir>/` for TS/JS exact-match candidates, and the equivalent mirrored directory for the Python glob search (`test_*.py` / `*_test.py`), before falling back to import scanning. Additive — existing same-dir, `__tests__/`, and flat-`tests/` candidates are unchanged and still checked first.
+
 ## [3.8.69] - 2026-07-11
 
 ### Fixed

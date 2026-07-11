@@ -312,6 +312,22 @@ export class TestRunnerClient {
 	}
 
 	/**
+	 * Path of `dir` relative to `cwd`, using forward slashes, or null if `dir`
+	 * is not inside `cwd` (e.g. resolves to `..` or an absolute path).
+	 * Used to compute a mirrored test-tree subdirectory (e.g. `clients` for
+	 * `clients/knip-client.ts`, so `tests/clients/knip-client.test.ts` is
+	 * checked alongside the flat `tests/knip-client.test.ts` candidate).
+	 */
+	private relativeSourceDir(sourceFilePath: string, cwd: string): string | null {
+		const dir = path.dirname(sourceFilePath);
+		const relDir = path.relative(cwd, path.resolve(cwd, dir));
+		if (!relDir || relDir === "." || relDir.startsWith("..") || path.isAbsolute(relDir)) {
+			return null;
+		}
+		return relDir;
+	}
+
+	/**
 	 * Find test file for a given source file
 	 * Returns the test file path if it exists, null otherwise
 	 */
@@ -331,6 +347,13 @@ export class TestRunnerClient {
 			: this.detectRunner(cwd, sourceFilePath);
 		if (!detected) return null;
 
+		// Relative subdirectory of the source file, used to check a mirrored
+		// test-tree layout (tests/<same-subdir>/<basename><testExt>), on top of
+		// the flat tests/<basename><testExt> layout already checked below.
+		// Null when the source file sits at the project root (dir === ".") or
+		// falls outside cwd — in that case there is no subdir to mirror.
+		const relDir = this.relativeSourceDir(sourceFilePath, cwd);
+
 		// Check each potential test file location
 		for (let i = 0; i < patterns.testExts.length; i++) {
 			const testExt = patterns.testExts[i];
@@ -339,27 +362,34 @@ export class TestRunnerClient {
 			// Handle glob patterns (pytest style: test_*.py)
 			if (testExt.includes("*")) {
 				const pattern = testExt.replace(/\*/g, basename);
-				const searchDir = testDir === "." ? dir : path.join(cwd, testDir);
+				const searchDirs =
+					testDir === "."
+						? [dir]
+						: relDir
+							? [path.join(cwd, testDir, relDir), path.join(cwd, testDir)]
+							: [path.join(cwd, testDir)];
 
-				let files;
-				try {
-					files = fs.readdirSync(searchDir);
-				} catch (err) {
-					void err;
-					continue;
-				}
+				for (const searchDir of searchDirs) {
+					let files;
+					try {
+						files = fs.readdirSync(searchDir);
+					} catch (err) {
+						void err;
+						continue;
+					}
 
-				const match = files.find(
-					(f) =>
-						f === pattern ||
-						(f.startsWith("test_") &&
-							f.endsWith(".py") &&
-							f.includes(basename)),
-				);
-				if (match) {
-					const testPath = path.join(searchDir, match);
-					this.log(`Found test file: ${testPath}`);
-					return { testFile: testPath, runner: detected.runner };
+					const match = files.find(
+						(f) =>
+							f === pattern ||
+							(f.startsWith("test_") &&
+								f.endsWith(".py") &&
+								f.includes(basename)),
+					);
+					if (match) {
+						const testPath = path.join(searchDir, match);
+						this.log(`Found test file: ${testPath}`);
+						return { testFile: testPath, runner: detected.runner };
+					}
 				}
 			} else {
 				// Exact pattern match (jest/vitest style)
@@ -367,6 +397,12 @@ export class TestRunnerClient {
 				const searchPaths = [
 					path.join(dir, testFilename), // same directory
 					path.join(dir, "__tests__", testFilename), // __tests__ subdirectory
+					...(relDir
+						? [
+								path.join(cwd, "tests", relDir, testFilename), // mirrored tests/<subdir>/
+								path.join(cwd, "__tests__", relDir, testFilename), // mirrored __tests__/<subdir>/
+							]
+						: []),
 					path.join(cwd, "tests", testFilename), // top-level tests/
 					path.join(cwd, "__tests__", testFilename), // top-level __tests__/
 				];

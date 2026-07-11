@@ -109,4 +109,124 @@ describe("test-runner-client", () => {
 		const detected = client.detectRunner(tmpDir, path.join(tmpDir, "index.ts"));
 		expect(detected).toBeNull();
 	});
+
+	describe("findTestFile — mirrored test-tree layout (#547)", () => {
+		it("finds a TS test mirrored under tests/<subdir>/, matching this repo's own layout", () => {
+			const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
+			cleanups.push(cleanup);
+
+			fs.writeFileSync(path.join(tmpDir, "vitest.config.ts"), "export default {}\n");
+			const srcDir = path.join(tmpDir, "clients");
+			fs.mkdirSync(srcDir, { recursive: true });
+			const src = path.join(srcDir, "knip-client.ts");
+			fs.writeFileSync(src, "export const x = 1;\n");
+
+			const testDir = path.join(tmpDir, "tests", "clients");
+			fs.mkdirSync(testDir, { recursive: true });
+			const testFile = path.join(testDir, "knip-client.test.ts");
+			fs.writeFileSync(testFile, "// test\n");
+
+			const client = new TestRunnerClient(false);
+			const found = client.findTestFile(src, tmpDir);
+			expect(found?.testFile).toBe(testFile);
+		});
+
+		it("finds a mirrored test under __tests__/<subdir>/", () => {
+			const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
+			cleanups.push(cleanup);
+
+			fs.writeFileSync(path.join(tmpDir, "vitest.config.ts"), "export default {}\n");
+			const srcDir = path.join(tmpDir, "lib", "utils");
+			fs.mkdirSync(srcDir, { recursive: true });
+			const src = path.join(srcDir, "format.ts");
+			fs.writeFileSync(src, "export const x = 1;\n");
+
+			const testDir = path.join(tmpDir, "__tests__", "lib", "utils");
+			fs.mkdirSync(testDir, { recursive: true });
+			const testFile = path.join(testDir, "format.test.ts");
+			fs.writeFileSync(testFile, "// test\n");
+
+			const client = new TestRunnerClient(false);
+			const found = client.findTestFile(src, tmpDir);
+			expect(found?.testFile).toBe(testFile);
+		});
+
+		it("finds a Python test mirrored under tests/<subdir>/ (test_*.py)", () => {
+			const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
+			cleanups.push(cleanup);
+
+			fs.writeFileSync(path.join(tmpDir, "pytest.ini"), "[pytest]\n");
+			const srcDir = path.join(tmpDir, "pkg", "sub");
+			fs.mkdirSync(srcDir, { recursive: true });
+			const src = path.join(srcDir, "foo.py");
+			fs.writeFileSync(src, "x = 1\n");
+
+			const testDir = path.join(tmpDir, "tests", "pkg", "sub");
+			fs.mkdirSync(testDir, { recursive: true });
+			const testFile = path.join(testDir, "test_foo.py");
+			fs.writeFileSync(testFile, "def test_x(): pass\n");
+
+			const client = new TestRunnerClient(false);
+			const found = client.findTestFile(src, tmpDir);
+			expect(found?.testFile).toBe(testFile);
+		});
+
+		it("still finds a colocated test file (no regression)", () => {
+			const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
+			cleanups.push(cleanup);
+
+			fs.writeFileSync(path.join(tmpDir, "vitest.config.ts"), "export default {}\n");
+			const srcDir = path.join(tmpDir, "clients");
+			fs.mkdirSync(srcDir, { recursive: true });
+			const src = path.join(srcDir, "widget.ts");
+			fs.writeFileSync(src, "export const x = 1;\n");
+			const testFile = path.join(srcDir, "widget.test.ts");
+			fs.writeFileSync(testFile, "// test\n");
+
+			const client = new TestRunnerClient(false);
+			const found = client.findTestFile(src, tmpDir);
+			expect(found?.testFile).toBe(testFile);
+		});
+
+		it("still finds a flat top-level tests/ test file (no regression)", () => {
+			const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
+			cleanups.push(cleanup);
+
+			fs.writeFileSync(path.join(tmpDir, "vitest.config.ts"), "export default {}\n");
+			const srcDir = path.join(tmpDir, "clients");
+			fs.mkdirSync(srcDir, { recursive: true });
+			const src = path.join(srcDir, "gadget.ts");
+			fs.writeFileSync(src, "export const x = 1;\n");
+
+			const testDir = path.join(tmpDir, "tests");
+			fs.mkdirSync(testDir, { recursive: true });
+			const testFile = path.join(testDir, "gadget.test.ts");
+			fs.writeFileSync(testFile, "// test\n");
+
+			const client = new TestRunnerClient(false);
+			const found = client.findTestFile(src, tmpDir);
+			expect(found?.testFile).toBe(testFile);
+		});
+
+		it("prefers same-directory test over mirrored tests/ when both exist", () => {
+			const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
+			cleanups.push(cleanup);
+
+			fs.writeFileSync(path.join(tmpDir, "vitest.config.ts"), "export default {}\n");
+			const srcDir = path.join(tmpDir, "clients");
+			fs.mkdirSync(srcDir, { recursive: true });
+			const src = path.join(srcDir, "dual.ts");
+			fs.writeFileSync(src, "export const x = 1;\n");
+			const colocated = path.join(srcDir, "dual.test.ts");
+			fs.writeFileSync(colocated, "// colocated\n");
+
+			const mirroredDir = path.join(tmpDir, "tests", "clients");
+			fs.mkdirSync(mirroredDir, { recursive: true });
+			fs.writeFileSync(path.join(mirroredDir, "dual.test.ts"), "// mirrored\n");
+
+			const client = new TestRunnerClient(false);
+			const found = client.findTestFile(src, tmpDir);
+			expect(found?.testFile).toBe(colocated);
+		});
+	});
 });
