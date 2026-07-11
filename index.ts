@@ -53,6 +53,7 @@ import {
 } from "./clients/lens-config.js";
 import { initLensEvents } from "./clients/lens-events.js";
 import { wireBusEmitter } from "./clients/bus-publish.js";
+import { wireDiagnosticsBusEmitter } from "./clients/diagnostics-publish.js";
 import {
 	consumeAgentNudge,
 	recordCrossProcessTouches,
@@ -454,6 +455,7 @@ export default function (pi: ExtensionAPI) {
 	initI18n(pi);
 	initLensEvents(pi);
 	wireBusEmitter(pi.events?.emit?.bind(pi.events));
+	wireDiagnosticsBusEmitter(pi.events?.emit?.bind(pi.events));
 	// #485: read-only bus subscriber — never publishes, so the #482 loop guard
 	// (ingest -> write -> publish) has no write side to trip here.
 	wireAgentNudgeSubscriber({

@@ -26,6 +26,10 @@ import {
 	_resetForTests as resetBusPublish,
 	wireBusEmitter,
 } from "../../clients/bus-publish.js";
+import {
+	_resetDiagnosticsPublishForTests as resetDiagnosticsPublish,
+	wireDiagnosticsBusEmitter,
+} from "../../clients/diagnostics-publish.js";
 
 // Mock the dispatch integration to avoid side effects
 vi.mock("../../clients/dispatch/integration.js", () => ({
@@ -387,6 +391,229 @@ describe("Pipeline", () => {
 			);
 
 			expect(emit).not.toHaveBeenCalled();
+		});
+
+		it("includes fix-provenance entries on the format publish", async () => {
+			const filePath = createTempFile(tmpDir, "unformatted2.ts", "const x=1");
+			vi.mocked(dispatchLintWithResult).mockResolvedValue({
+				diagnostics: [],
+				blockers: [],
+				warnings: [],
+				baselineWarningCount: 0,
+				fixed: [],
+				resolvedCount: 0,
+				output: "",
+				blockerOutput: "",
+				hasBlockers: false,
+			});
+
+			const emit = vi.fn();
+			wireBusEmitter(emit);
+
+			const formatService = getFormatService("test", true);
+			const originalFormatFile = formatService.formatFile.bind(formatService);
+			const deps = createMockDeps({ getFormatService: () => formatService });
+			formatService.formatFile = async (fp: string) => {
+				const result = await originalFormatFile(fp);
+				if (fp === filePath || path.resolve(fp) === path.resolve(filePath)) {
+					fs.writeFileSync(filePath, "const x = 1;\n");
+					return {
+						filePath: fp,
+						formatters: [{ name: "biome", success: true, changed: true }],
+						anyChanged: true,
+						allSucceeded: true,
+					};
+				}
+				return result;
+			};
+
+			await runPipeline(
+				createMockContext(filePath, {
+					getFlag: (name) => name === "immediate-format",
+				}),
+				deps,
+			);
+
+			const call = emit.mock.calls.find((c) => c[0] === "pilens:files:touched");
+			expect(call?.[1]).toMatchObject({
+				fixes: [
+					{
+						path: path.resolve(filePath).replace(/\\/g, "/"),
+						tool: "biome",
+						kind: "format",
+					},
+				],
+			});
+		});
+	});
+
+	describe("Bus publish (#502 pilens:diagnostics)", () => {
+		afterEach(() => {
+			resetDiagnosticsPublish();
+		});
+
+		it("publishes the file's diagnostics after dispatch completes", async () => {
+			const filePath = createTempFile(tmpDir, "diag.ts", "const x = 1;\n");
+			vi.mocked(dispatchLintWithResult).mockResolvedValue({
+				diagnostics: [
+					{
+						id: "d1",
+						message: "unused var",
+						filePath,
+						line: 1,
+						column: 1,
+						severity: "warning",
+						semantic: "warning",
+						tool: "eslint",
+						rule: "no-unused-vars",
+						fixable: true,
+					},
+				],
+				blockers: [],
+				warnings: [],
+				baselineWarningCount: 0,
+				fixed: [],
+				resolvedCount: 0,
+				output: "",
+				blockerOutput: "",
+				hasBlockers: false,
+			});
+
+			const emit = vi.fn();
+			wireDiagnosticsBusEmitter(emit);
+
+			await runPipeline(
+				createMockContext(filePath, { getFlag: () => false }),
+				createMockDeps(),
+			);
+
+			expect(emit).toHaveBeenCalledWith(
+				"pilens:diagnostics",
+				expect.objectContaining({
+					v: 1,
+					source: "pi-lens",
+					files: [
+						expect.objectContaining({
+							path: path.resolve(filePath).replace(/\\/g, "/"),
+							diagnostics: [
+								expect.objectContaining({
+									ruleId: "no-unused-vars",
+									severity: "warning",
+									tool: "eslint",
+									fixable: true,
+								}),
+							],
+						}),
+					],
+				}),
+			);
+		});
+
+		it("does not publish when there are no diagnostics and the file was never dirty", async () => {
+			const filePath = createTempFile(tmpDir, "clean-diag.ts", "const x = 1;\n");
+			vi.mocked(dispatchLintWithResult).mockResolvedValue({
+				diagnostics: [],
+				blockers: [],
+				warnings: [],
+				baselineWarningCount: 0,
+				fixed: [],
+				resolvedCount: 0,
+				output: "",
+				blockerOutput: "",
+				hasBlockers: false,
+			});
+
+			const emit = vi.fn();
+			wireDiagnosticsBusEmitter(emit);
+
+			await runPipeline(
+				createMockContext(filePath, { getFlag: () => false }),
+				createMockDeps(),
+			);
+
+			expect(emit).not.toHaveBeenCalled();
+		});
+
+		it("emits an explicit clean [] event when a previously-dirty file's diagnostics clear on a later write", async () => {
+			const filePath = createTempFile(tmpDir, "flip.ts", "const x = 1;\n");
+
+			vi.mocked(dispatchLintWithResult).mockResolvedValueOnce({
+				diagnostics: [
+					{
+						id: "d1",
+						message: "unused var",
+						filePath,
+						line: 1,
+						column: 1,
+						severity: "warning",
+						semantic: "warning",
+						tool: "eslint",
+						rule: "no-unused-vars",
+					},
+				],
+				blockers: [],
+				warnings: [],
+				baselineWarningCount: 0,
+				fixed: [],
+				resolvedCount: 0,
+				output: "",
+				blockerOutput: "",
+				hasBlockers: false,
+			});
+
+			const emit = vi.fn();
+			wireDiagnosticsBusEmitter(emit);
+
+			await runPipeline(
+				createMockContext(filePath, { getFlag: () => false }),
+				createMockDeps(),
+			);
+			expect(emit).toHaveBeenCalledTimes(1);
+
+			vi.mocked(dispatchLintWithResult).mockResolvedValueOnce({
+				diagnostics: [],
+				blockers: [],
+				warnings: [],
+				baselineWarningCount: 0,
+				fixed: [],
+				resolvedCount: 0,
+				output: "",
+				blockerOutput: "",
+				hasBlockers: false,
+			});
+
+			await runPipeline(
+				createMockContext(filePath, { getFlag: () => false }),
+				createMockDeps(),
+			);
+
+			expect(emit).toHaveBeenCalledTimes(2);
+			expect(emit.mock.calls[1][1]).toMatchObject({
+				files: [
+					expect.objectContaining({
+						path: path.resolve(filePath).replace(/\\/g, "/"),
+						diagnostics: [],
+					}),
+				],
+			});
+
+			// a THIRD still-clean run does not re-emit (no new transition).
+			vi.mocked(dispatchLintWithResult).mockResolvedValueOnce({
+				diagnostics: [],
+				blockers: [],
+				warnings: [],
+				baselineWarningCount: 0,
+				fixed: [],
+				resolvedCount: 0,
+				output: "",
+				blockerOutput: "",
+				hasBlockers: false,
+			});
+			await runPipeline(
+				createMockContext(filePath, { getFlag: () => false }),
+				createMockDeps(),
+			);
+			expect(emit).toHaveBeenCalledTimes(2);
 		});
 	});
 

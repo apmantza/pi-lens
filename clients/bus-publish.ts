@@ -25,12 +25,37 @@ export const BUS_FILES_TOUCHED_VERSION = 1;
 
 export type FilesTouchedReason = "autofix" | "format";
 
+/**
+ * Fix-provenance entry (#502, additive field). Lets a consumer distinguish a
+ * pi-lens-mechanical hunk (autofix/format) from an agent edit when rendering
+ * a diff — the slopchop/diff-review use case from #502. Additive-only: old
+ * consumers that don't know this field ignore it (frozen-additive discipline,
+ * same as every other field on this payload).
+ */
+export interface FixProvenanceEntry {
+	/** Absolute, normalized path (same normalization as `paths`). */
+	path: string;
+	/** Tool that made the fix (e.g. "prettier", "ruff", "lsp-quickfix"). */
+	tool: string;
+	/** Rule/category id, when applicable. */
+	ruleId?: string;
+	kind: "autofix" | "format";
+}
+
 export interface FilesTouchedPayload {
 	v: typeof BUS_FILES_TOUCHED_VERSION;
 	source: "pi-lens";
 	reason: FilesTouchedReason;
 	paths: string[];
 	cwd: string;
+	/**
+	 * #502: optional fix-provenance breakdown for this batch. Best-effort
+	 * attribution — some producers (e.g. multi-tool autofix runs) can only
+	 * attribute at the tool level across the whole changed-file set, not
+	 * confirm which specific file each tool changed; see call sites in
+	 * clients/pipeline.ts / clients/runtime-agent-end.ts for per-site notes.
+	 */
+	fixes?: FixProvenanceEntry[];
 }
 
 type BusEmitFn = (channel: string, data: unknown) => void;
@@ -85,6 +110,8 @@ export interface PublishFilesTouchedArgs {
 	origin?: "bus";
 	/** Stable session id, for the #492 cross-process record's `sessionId` field. */
 	sessionId?: string;
+	/** #502: optional fix-provenance breakdown for this batch (paths pre-normalization; normalized alongside `paths` below). */
+	fixes?: FixProvenanceEntry[];
 	dbg?: (msg: string) => void;
 }
 
@@ -129,6 +156,12 @@ export function publishFilesTouched(args: PublishFilesTouchedArgs): void {
 			paths: args.paths.map((p) => normalizeFilePath(p)),
 			cwd: normalizeFilePath(args.cwd),
 		};
+		if (args.fixes && args.fixes.length > 0) {
+			payload.fixes = args.fixes.map((f) => ({
+				...f,
+				path: normalizeFilePath(f.path),
+			}));
+		}
 		busEmit(BUS_FILES_TOUCHED_EVENT, payload);
 	} catch (err) {
 		if (!hasLoggedFailure) {

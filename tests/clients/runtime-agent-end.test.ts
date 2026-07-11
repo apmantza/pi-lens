@@ -12,6 +12,23 @@ import {
 	wireBusEmitter,
 } from "../../clients/bus-publish.js";
 
+// Only the "stale report" test below enables lens-actionable-warning-autofix,
+// and it returns before reaching applyConservativeActionableWarningFixes (the
+// staleness check short-circuits first) — safe to mock this at module scope
+// for the dedicated #502 fix-provenance test further down without affecting
+// any other test in this file.
+const applyConservativeActionableWarningFixesMock = vi.fn();
+vi.mock("../../clients/actionable-warnings.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../../clients/actionable-warnings.js")>();
+	return {
+		...actual,
+		applyConservativeActionableWarningFixes: (
+			...args: Parameters<typeof actual.applyConservativeActionableWarningFixes>
+		) => applyConservativeActionableWarningFixesMock(...args),
+	};
+});
+
 describe("runtime-agent-end deferred formatting", () => {
 	it("formats each queued file once, clears the queue, and records a format change", async () => {
 		const env = setupTestEnvironment("pi-lens-agent-end-format-");
@@ -351,6 +368,128 @@ describe("runtime-agent-end deferred formatting", () => {
 			} else {
 				process.env.PILENS_DATA_DIR = previousDataDir;
 			}
+			env.cleanup();
+		}
+	});
+
+	it("includes fix-provenance entries (kind:\"format\") for deferred-format changed files (#502)", async () => {
+		const env = setupTestEnvironment("pi-lens-agent-end-bus-fixes-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const filePath = createTempFile(env.tmpDir, "src/app.ts", "const x=1");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.deferFormat(filePath, env.tmpDir, "edit", env.tmpDir);
+
+			const formatFile = vi.fn(async (fp: string) => {
+				fs.writeFileSync(fp, "const x = 1;\n");
+				return {
+					filePath: fp,
+					formatters: [{ name: "prettier", success: true, changed: true }],
+					anyChanged: true,
+					allSucceeded: true,
+				};
+			});
+
+			const emit = vi.fn();
+			wireBusEmitter(emit);
+
+			await handleAgentEnd({
+				ctxCwd: env.tmpDir,
+				getFlag: (name) => name === "no-lsp",
+				notify: vi.fn(),
+				dbg: () => {},
+				runtime,
+				cacheManager: { addModifiedRange: () => {} } as any,
+				getFormatService: () => ({ recordRead: () => {}, formatFile }) as any,
+			});
+
+			const call = emit.mock.calls.find((c) => c[0] === "pilens:files:touched");
+			expect(call?.[1]).toMatchObject({
+				fixes: [
+					{
+						path: filePath.replace(/\\/g, "/"),
+						tool: "prettier",
+						kind: "format",
+					},
+				],
+			});
+		} finally {
+			resetBusPublish();
+			if (previousDataDir === undefined) {
+				delete process.env.PILENS_DATA_DIR;
+			} else {
+				process.env.PILENS_DATA_DIR = previousDataDir;
+			}
+			env.cleanup();
+		}
+	});
+
+	it("includes fix-provenance entries (tool:\"lsp-quickfix\", kind:\"autofix\") for actionable-warning autofix changed files (#502)", async () => {
+		const env = setupTestEnvironment("pi-lens-agent-end-aw-fixes-");
+		try {
+			const filePath = createTempFile(env.tmpDir, "src/app.ts", "const x = 1;\n");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.seedProjectSequence(1);
+			const report: ActionableWarningsReport = {
+				generatedAt: new Date().toISOString(),
+				scope: "turn_delta",
+				sessionId: "s1",
+				turnIndex: 1,
+				projectSeqEnd: 1,
+				deltaOnly: true,
+				includeLspCodeActions: true,
+				files: [],
+				summary: {
+					warnings: 0,
+					unsuppressed: 0,
+					suppressed: 0,
+					files: 0,
+					actions: 0,
+					autoFixEligible: 0,
+				},
+			};
+			applyConservativeActionableWarningFixesMock.mockResolvedValueOnce({
+				considered: 1,
+				applied: 1,
+				changedFiles: [filePath],
+				skipped: [],
+			});
+
+			const emit = vi.fn();
+			wireBusEmitter(emit);
+
+			await handleAgentEnd({
+				ctxCwd: env.tmpDir,
+				getFlag: (name) =>
+					name === "lens-actionable-warning-autofix" || name === "no-lsp",
+				notify: vi.fn(),
+				dbg: vi.fn(),
+				runtime,
+				cacheManager: {
+					readCache: () => ({ data: report }),
+					addModifiedRange: vi.fn(),
+				} as any,
+				getFormatService: () =>
+					({ recordRead: () => {}, formatFile: vi.fn() }) as any,
+			});
+
+			const call = emit.mock.calls.find((c) => c[0] === "pilens:files:touched");
+			expect(call?.[1]).toMatchObject({
+				reason: "autofix",
+				fixes: [
+					{
+						path: filePath.replace(/\\/g, "/"),
+						tool: "lsp-quickfix",
+						kind: "autofix",
+					},
+				],
+			});
+		} finally {
+			resetBusPublish();
+			applyConservativeActionableWarningFixesMock.mockReset();
 			env.cleanup();
 		}
 	});
