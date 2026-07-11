@@ -184,6 +184,13 @@ export interface LSPCapabilitySnapshot {
 	advertisedCommands: string[];
 	/** Top-level keys of the raw ServerCapabilities advertised at initialize. */
 	rawCapabilityKeys: string[];
+	/** See `LSPServerInfo.spawn`'s `launchVariant` (server.ts) — which concrete
+	 *  binary/protocol variant this server instance is actually running (e.g.
+	 *  classic typescript-language-server vs TS7's native `tsc --lsp --stdio`,
+	 *  both under server id "typescript"). Undefined = single-variant server or
+	 *  an older client that predates this marker; consumers (the #458 cascade
+	 *  tier classifier) must treat that as classic/default behavior. */
+	launchVariant?: "classic" | "native-ts7";
 }
 
 export interface LSPRenameFileResult {
@@ -879,6 +886,7 @@ export class LSPService {
 				root,
 				initialization: mergedInit,
 				initializeTimeoutMs: server.initializeTimeoutMs,
+				launchVariant: spawned.launchVariant,
 			});
 			const wsDiag =
 				typeof client.getWorkspaceDiagnosticsSupport === "function"
@@ -1689,6 +1697,7 @@ export class LSPService {
 					workspaceDiagnosticsSupport: client.getWorkspaceDiagnosticsSupport(),
 					advertisedCommands: client.getAdvertisedCommands(),
 					rawCapabilityKeys: client.getRawCapabilityKeys?.() ?? [],
+					launchVariant: client.getLaunchVariant?.(),
 				});
 			}
 			return snapshots;
@@ -1705,6 +1714,7 @@ export class LSPService {
 				workspaceDiagnosticsSupport: client.getWorkspaceDiagnosticsSupport(),
 				advertisedCommands: client.getAdvertisedCommands(),
 				rawCapabilityKeys: client.getRawCapabilityKeys?.() ?? [],
+				launchVariant: client.getLaunchVariant?.(),
 			});
 		}
 		return snapshots;

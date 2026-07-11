@@ -271,6 +271,11 @@ export interface LSPClientInfo {
 	/** Top-level keys of the raw ServerCapabilities advertised at initialize —
 	 *  the full advertised surface (incl. providers pi-lens does not parse). */
 	getRawCapabilityKeys(): string[];
+	/** See `LSPServerInfo.spawn`'s `launchVariant` (server.ts) — which concrete
+	 *  binary/protocol variant this client instance is actually running.
+	 *  Undefined = single-variant server or not yet reported (fail-safe:
+	 *  consumers must treat that as classic/default behavior). */
+	getLaunchVariant(): "classic" | "native-ts7" | undefined;
 	/**
 	 * Run a server command via workspace/executeCommand. Hardened: the command
 	 * MUST be in the server's advertised list or this rejects without sending.
@@ -550,6 +555,9 @@ export interface LSPClientState {
 	 */
 	serverEditsAllowed: number;
 	readonly serverId: string;
+	/** See `LSPServerInfo.spawn`'s `launchVariant` (server.ts). Undefined =
+	 *  single-variant server or not yet reported. */
+	readonly launchVariant?: "classic" | "native-ts7";
 	readonly root: string;
 	readonly lspProcess: LSPProcess;
 	/**
@@ -1537,6 +1545,11 @@ export async function createLSPClient(options: {
 	root: string;
 	initialization?: Record<string, unknown>;
 	initializeTimeoutMs?: number;
+	/** See `LSPServerInfo.spawn`'s `launchVariant` (server.ts) — which concrete
+	 *  binary/protocol variant was launched for this server id. Undefined =
+	 *  single-variant server or not yet reported; consumers must treat that as
+	 *  the classic/default behavior (fail-safe). */
+	launchVariant?: "classic" | "native-ts7";
 }): Promise<LSPClientInfo> {
 	installCrashGuard();
 
@@ -1546,6 +1559,7 @@ export async function createLSPClient(options: {
 		root,
 		initialization,
 		initializeTimeoutMs = INITIALIZE_TIMEOUT_MS,
+		launchVariant,
 	} = options;
 
 	// #449/#472: register this LSP child in the cross-process instance registry
@@ -1696,6 +1710,7 @@ export async function createLSPClient(options: {
 		advertisedCommands: new Set(),
 		serverEditsAllowed: 0,
 		serverId,
+		launchVariant,
 		root,
 		lspProcess,
 		// two-phase: the flush closure needs `state` (below)
@@ -1901,6 +1916,10 @@ export async function createLSPClient(options: {
 
 		getRawCapabilityKeys() {
 			return state.rawCapabilityKeys ?? [];
+		},
+
+		getLaunchVariant() {
+			return state.launchVariant;
 		},
 
 		async executeCommand(command, args) {

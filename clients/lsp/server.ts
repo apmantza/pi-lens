@@ -8,13 +8,21 @@
  */
 
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
-import { access, appendFile, mkdir, readdir, stat } from "node:fs/promises";
+import {
+	access,
+	appendFile,
+	mkdir,
+	readFile,
+	readdir,
+	stat,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { minimatch } from "../deps/minimatch.js";
 import { isTestMode } from "../env-utils.js";
 import { getGlobalPiLensDir } from "../file-utils.js";
 import { KIND_EXTENSIONS } from "../file-kinds.js";
+import { isAtOrAboveHomeDir } from "../path-utils.js";
 import {
 	ensureTool,
 	getToolEnvironment,
@@ -78,6 +86,19 @@ export interface LSPServerInfo {
 				process: LSPProcess;
 				initialization?: Record<string, unknown>;
 				source?: "direct" | "managed" | "package-manager" | "interactive";
+				/**
+				 * Which concrete binary/protocol variant was launched for this server
+				 * id, when a single `LSPServerInfo.id` can mean more than one actual
+				 * server (e.g. "typescript" = classic typescript-language-server OR
+				 * TS7's native `tsc --lsp --stdio`). Per-server behavioral knowledge
+				 * keyed by server id (`server-strategies.ts`'s `silentOnClean` etc.)
+				 * is only proven for the variant it was measured against — this lets
+				 * such knowledge-consumers (the #458 cascade tier classifier) tell
+				 * the variants apart. Undefined = single-variant server, or a
+				 * variant-carrying server that hasn't been updated to report one yet;
+				 * treat as the classic/default behavior (fail-safe).
+				 */
+				launchVariant?: "classic" | "native-ts7";
 		  }
 		| undefined
 	>;
@@ -1063,6 +1084,93 @@ async function findTsserverPath(
 	return undefined;
 }
 
+interface NativeTypeScriptLsp {
+	command: string;
+	version: string;
+}
+
+/**
+ * TypeScript 7+ ships the native typescript-go language server through the
+ * workspace-local `tsc --lsp --stdio` entrypoint and no longer includes
+ * `lib/tsserver.js`. Resolve the nearest TypeScript package using normal
+ * node_modules ancestor semantics so a monorepo package can use its hoisted
+ * compiler, while never falling through to a PATH/global `tsc`.
+ */
+async function findNativeTypeScriptLsp(
+	root: string,
+): Promise<NativeTypeScriptLsp | undefined> {
+	let currentDir = path.resolve(root);
+
+	while (!isAtOrAboveHomeDir(currentDir)) {
+		const typescriptDir = path.join(currentDir, "node_modules", "typescript");
+		const packageJsonPath = path.join(typescriptDir, "package.json");
+
+		let packageJsonText: string;
+		try {
+			packageJsonText = await readFile(packageJsonPath, "utf8");
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+				return undefined;
+			}
+			// A `node_modules/typescript/` directory that exists but has no
+			// `package.json` is a malformed/partial install at THIS level, not an
+			// absent one — stop here (fall back to classic) rather than walking up
+			// to an ancestor, or a broken nearest install would let an unrelated
+			// ancestor TS 7 binary silently shadow it (Copilot review, PR #526).
+			try {
+				const dirStat = await stat(typescriptDir);
+				if (dirStat.isDirectory()) return undefined;
+			} catch {
+				/* typescript dir itself doesn't exist here — keep walking up */
+			}
+			const parent = path.dirname(currentDir);
+			if (parent === currentDir) return undefined;
+			currentDir = parent;
+			continue;
+		}
+
+		let version: string;
+		try {
+			const parsed: unknown = JSON.parse(packageJsonText);
+			if (
+				typeof parsed !== "object" ||
+				parsed === null ||
+				!("version" in parsed) ||
+				typeof parsed.version !== "string"
+			) {
+				return undefined;
+			}
+			version = parsed.version;
+		} catch {
+			return undefined;
+		}
+
+		// The nearest installed package shadows any ancestor TypeScript package,
+		// matching Node/package-manager resolution. Never skip a local TS <=6 or
+		// malformed install just to select an unrelated ancestor TS 7 binary.
+		const majorText = version.split(".", 1)[0] ?? "";
+		const major = /^\d+$/.test(majorText) ? Number(majorText) : Number.NaN;
+		if (!Number.isFinite(major) || major < 7) return undefined;
+
+		const localTsc = path.join(currentDir, "node_modules", ".bin", "tsc");
+		const candidates =
+			process.platform === "win32"
+				? [`${localTsc}.cmd`, `${localTsc}.exe`, localTsc]
+				: [localTsc];
+
+		for (const command of candidates) {
+			try {
+				await access(command);
+				return { command, version };
+			} catch {
+				/* not found */
+			}
+		}
+		return undefined;
+	}
+	return undefined;
+}
+
 function dotnetToolCandidates(tool: string): string[] {
 	const home = os.homedir();
 	return [
@@ -1287,9 +1395,23 @@ export const TypeScriptServer: LSPServerInfo = {
 	root: TypeScriptRoot,
 	async spawn(root, options) {
 		const fs = await import("node:fs/promises");
+		const nativeLsp = await findNativeTypeScriptLsp(root);
+		if (nativeLsp) {
+			const env = await getToolEnvironment();
+			logSessionStart(
+				`lsp typescript-native: version=${nativeLsp.version} command=${nativeLsp.command}`,
+			);
+			const proc = await launchLSP(nativeLsp.command, ["--lsp", "--stdio"], {
+				cwd: root,
+				env,
+			});
+			return { process: proc, source: "direct", launchVariant: "native-ts7" };
+		}
+
 		let source: "direct" | "managed" = "direct";
 
-		// Find typescript-language-server - prefer local project version
+		// TypeScript <=6 uses typescript-language-server + tsserver.js. Prefer a
+		// project-local wrapper, then fall back to discovered/managed tooling.
 		let lspPath: string | undefined;
 		const localLsp = path.join(
 			root,
@@ -1364,6 +1486,7 @@ export const TypeScriptServer: LSPServerInfo = {
 			initialization: tsserverPath
 				? { tsserver: { path: tsserverPath } }
 				: undefined,
+			launchVariant: "classic",
 		};
 	},
 };

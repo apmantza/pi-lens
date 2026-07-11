@@ -61,6 +61,64 @@ describe("classifyCascadeWaitTier", () => {
 		expect(tier).toBe("tier3-silent");
 	});
 
+	// #524/#529: "typescript" can now be either the classic
+	// typescript-language-server or TS7's native `tsc --lsp --stdio` (PR #526).
+	// silentOnClean was only ever measured against the classic server, so the
+	// classifier must key off the snapshot's launchVariant, not just server id.
+	it("classifies a classic-variant typescript snapshot with silentOnClean as tier3-silent (pinned, unchanged)", () => {
+		getServersForFileWithConfig.mockReturnValue([server("typescript")]);
+		const snapshots = [
+			{
+				serverId: "typescript",
+				root: "C:/repo",
+				operationSupport: {} as any,
+				workspaceDiagnosticsSupport: { mode: "push-only" as const },
+				advertisedCommands: [],
+				rawCapabilityKeys: [],
+				launchVariant: "classic" as const,
+			},
+		];
+		expect(
+			mod.classifyCascadeWaitTier({} as any, FILE, snapshots as any),
+		).toBe("tier3-silent");
+	});
+
+	it("classifies a native-ts7 typescript snapshot as waits, even though the strategy has silentOnClean (unverified clean-signal, fail-safe)", () => {
+		getServersForFileWithConfig.mockReturnValue([server("typescript")]);
+		const snapshots = [
+			{
+				serverId: "typescript",
+				root: "C:/repo",
+				operationSupport: {} as any,
+				workspaceDiagnosticsSupport: { mode: "push-only" as const },
+				advertisedCommands: [],
+				rawCapabilityKeys: [],
+				launchVariant: "native-ts7" as const,
+			},
+		];
+		expect(
+			mod.classifyCascadeWaitTier({} as any, FILE, snapshots as any),
+		).toBe("waits");
+	});
+
+	it("classifies a typescript snapshot with NO launchVariant marker (older snapshot) as tier3-silent — unchanged today-behavior", () => {
+		getServersForFileWithConfig.mockReturnValue([server("typescript")]);
+		const snapshots = [
+			{
+				serverId: "typescript",
+				root: "C:/repo",
+				operationSupport: {} as any,
+				workspaceDiagnosticsSupport: { mode: "push-only" as const },
+				advertisedCommands: [],
+				rawCapabilityKeys: [],
+				// no launchVariant field at all
+			},
+		];
+		expect(
+			mod.classifyCascadeWaitTier({} as any, FILE, snapshots as any),
+		).toBe("tier3-silent");
+	});
+
 	it("classifies a pull-mode server as waits (tier 1/2, always affirmative)", () => {
 		getServersForFileWithConfig.mockReturnValue([server("rust-analyzer")]);
 		const snapshots = [

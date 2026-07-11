@@ -103,6 +103,14 @@ export interface DiagnosticStrategy {
 	 * this for `2*`/publishes-unversioned servers (opengrep, yaml, taplo, …):
 	 * they DO resolve the wait early at runtime, just without a proven version,
 	 * so shortening their in-lane wait would be a behavior change, not a no-op.
+	 *
+	 * #524/#529: this table is keyed by server ID, but "typescript" can now
+	 * launch as either the classic typescript-language-server (what this flag
+	 * was measured against) or TS7's native `tsc --lsp --stdio` (PR #526), a
+	 * different Go-native binary with unverified clean-signal behavior. This
+	 * flag applies to the CLASSIC server only; `cascade-tier.ts`'s classifier
+	 * checks the live snapshot's `launchVariant` and does not apply it to a
+	 * native-ts7 instance (falls back to the fail-safe full-wait path instead).
 	 */
 	silentOnClean?: boolean;
 }
@@ -119,6 +127,11 @@ export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
 			// clean→clean edit (docs/lsp-capability-matrix.md, probed 2026-07-08).
 			// It's the lone core-set tier-3 server, which is exactly why the
 			// cascade lane's in-lane wait is worth skipping for it specifically.
+			// Applies to the CLASSIC server only (#524/#529) — TS7's native
+			// `tsc --lsp --stdio` variant shares this "typescript" server id but
+			// has unverified clean-signal behavior; cascade-tier.ts's classifier
+			// checks the live snapshot's launchVariant and never applies this
+			// flag to a native-ts7 instance.
 			silentOnClean: true,
 		},
 		"rust-analyzer": {
