@@ -82,6 +82,17 @@ const SOURCE_TO_TEST_PATTERNS: Array<{
 	{ ext: ".rs", testExts: [".rs"], dirs: ["tests", "tests", "src", "."] }, // Rust: tests/ or #[test] in src
 ];
 
+// Bound for walking up parent directories to find a hoisted node_modules
+// (monorepo workspaces) — deep enough for realistic nesting
+// (repo/packages/scope/pkg-name), never unbounded to the filesystem root.
+const MAX_NODE_MODULES_WALK_UP = 5;
+
+// Bound for recursive descent into a Python test directory when the exact
+// same-relative-subdir mirror doesn't match (e.g. tests/unit/ grouping by
+// test type rather than mirroring source layout) — capped depth, never an
+// unbounded walk of the whole tests tree.
+const MAX_PYTEST_RECURSE_DEPTH = 3;
+
 // --- Runner Detection ---
 
 const RUNNERS: Record<string, RunnerConfig> = {
@@ -255,17 +266,22 @@ export class TestRunnerClient {
 			// package.json parse error or file not found
 		}
 
-		// Priority 3: Check node_modules for installed packages
-		const nodeModulesPath = path.join(cwd, "node_modules");
-		if (fs.existsSync(nodeModulesPath)) {
-			if (fs.existsSync(path.join(nodeModulesPath, "vitest"))) {
-				this.log("Detected vitest in node_modules");
-				return { runner: "vitest", config: RUNNERS.vitest };
-			}
-			if (fs.existsSync(path.join(nodeModulesPath, "jest"))) {
-				this.log("Detected jest in node_modules");
-				return { runner: "jest", config: RUNNERS.jest };
-			}
+		// Priority 3: Check node_modules for installed packages, including a
+		// hoisted monorepo layout where cwd is a workspace package (e.g.
+		// packages/foo) but the runner only lives in node_modules at the
+		// workspace root (npm/yarn/pnpm workspace hoisting). Walk up a
+		// bounded number of parent directories looking for a node_modules
+		// containing the package — never an unbounded walk to the
+		// filesystem root.
+		const hoistedVitest = this.findHoistedNodeModulesPackage(cwd, "vitest");
+		if (hoistedVitest) {
+			this.log(`Detected vitest in node_modules (${hoistedVitest})`);
+			return { runner: "vitest", config: RUNNERS.vitest };
+		}
+		const hoistedJest = this.findHoistedNodeModulesPackage(cwd, "jest");
+		if (hoistedJest) {
+			this.log(`Detected jest in node_modules (${hoistedJest})`);
+			return { runner: "jest", config: RUNNERS.jest };
 		}
 
 		for (const name of ["go", "cargo", "dotnet", "gradle", "maven"]) {
@@ -306,6 +322,88 @@ export class TestRunnerClient {
 			}
 		} catch (err) {
 			void err;
+		}
+
+		return null;
+	}
+
+	/**
+	 * Walk up from `cwd` through parent directories looking for a
+	 * `node_modules/<packageName>` — handles monorepo workspace hoisting
+	 * (npm/yarn/pnpm), where a workspace package's own `node_modules` may
+	 * not exist at all, with dependencies hoisted to the workspace root
+	 * several directories up. Bounded by `MAX_NODE_MODULES_WALK_UP` levels
+	 * and stops at the filesystem root — never an unbounded walk.
+	 * Returns the `node_modules` directory where the package was found, or
+	 * null if not found within the bound.
+	 */
+	private findHoistedNodeModulesPackage(
+		cwd: string,
+		packageName: string,
+	): string | null {
+		let dir = path.resolve(cwd);
+		for (let level = 0; level <= MAX_NODE_MODULES_WALK_UP; level++) {
+			const nodeModulesPath = path.join(dir, "node_modules");
+			if (fs.existsSync(path.join(nodeModulesPath, packageName))) {
+				return nodeModulesPath;
+			}
+			const parent = path.dirname(dir);
+			if (parent === dir) break; // reached filesystem root
+			dir = parent;
+		}
+		return null;
+	}
+
+	/**
+	 * Depth-bounded breadth-first search under `rootDir` for a pytest-style
+	 * test file matching `pattern` (exact, e.g. `test_foo.py`) or the
+	 * looser `test_*<basename>*.py` convention. Used as a last-resort
+	 * fallback when a Python test suite groups tests by kind
+	 * (`tests/unit/`, `tests/integration/`) instead of mirroring the
+	 * source directory layout, so the exact-mirror candidates in
+	 * `findTestFile` don't match. Bounded by `maxDepth` levels below
+	 * `rootDir` and skips hidden directories and `__pycache__` — never an
+	 * unbounded walk of the whole tests tree.
+	 */
+	private findPytestMatchRecursive(
+		rootDir: string,
+		pattern: string,
+		basename: string,
+		maxDepth: number,
+	): string | null {
+		const queue: Array<{ dir: string; depth: number }> = [
+			{ dir: rootDir, depth: 0 },
+		];
+
+		while (queue.length > 0) {
+			const next = queue.shift();
+			if (!next) break;
+			const { dir, depth } = next;
+
+			let entries: import("node:fs").Dirent[];
+			try {
+				entries = fs.readdirSync(dir, { withFileTypes: true });
+			} catch {
+				continue;
+			}
+
+			for (const entry of entries) {
+				const fullPath = path.join(dir, entry.name);
+				if (entry.isFile()) {
+					if (
+						entry.name === pattern ||
+						(entry.name.startsWith("test_") &&
+							entry.name.endsWith(".py") &&
+							entry.name.includes(basename))
+					) {
+						return fullPath;
+					}
+				} else if (entry.isDirectory() && depth < maxDepth) {
+					if (entry.name === "__pycache__" || entry.name.startsWith("."))
+						continue;
+					queue.push({ dir: fullPath, depth: depth + 1 });
+				}
+			}
 		}
 
 		return null;
@@ -389,6 +487,26 @@ export class TestRunnerClient {
 						const testPath = path.join(searchDir, match);
 						this.log(`Found test file: ${testPath}`);
 						return { testFile: testPath, runner: detected.runner };
+					}
+				}
+
+				// None of the exact-mirror candidates matched. Python test
+				// suites commonly group tests by kind (tests/unit/,
+				// tests/integration/) rather than mirroring the source tree,
+				// so do a depth-bounded recursive search under the test
+				// root as a last resort before falling back to import
+				// scanning — bounded so a large repo can't turn this into
+				// an unbounded directory walk.
+				if (testDir !== ".") {
+					const recursiveMatch = this.findPytestMatchRecursive(
+						path.join(cwd, testDir),
+						pattern,
+						basename,
+						MAX_PYTEST_RECURSE_DEPTH,
+					);
+					if (recursiveMatch) {
+						this.log(`Found test file (recursive): ${recursiveMatch}`);
+						return { testFile: recursiveMatch, runner: detected.runner };
 					}
 				}
 			} else {

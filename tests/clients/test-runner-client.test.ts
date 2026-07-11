@@ -229,4 +229,143 @@ describe("test-runner-client", () => {
 			expect(found?.testFile).toBe(colocated);
 		});
 	});
+
+	describe("detectRunner — hoisted monorepo node_modules", () => {
+		it("finds vitest hoisted to the workspace root from a nested package cwd", () => {
+			const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
+			cleanups.push(cleanup);
+
+			// Simulate npm/yarn/pnpm workspace hoisting: vitest only lives in
+			// node_modules at the workspace root, not in the package's own
+			// node_modules (which may not even exist).
+			fs.mkdirSync(path.join(tmpDir, "node_modules", "vitest"), {
+				recursive: true,
+			});
+			const pkgDir = path.join(tmpDir, "packages", "foo");
+			fs.mkdirSync(pkgDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(pkgDir, "package.json"),
+				JSON.stringify({ name: "foo", version: "1.0.0" }),
+			);
+
+			const client = new TestRunnerClient(false);
+			const detected = client.detectRunner(pkgDir);
+			expect(detected?.runner).toBe("vitest");
+		});
+
+		it("finds jest hoisted two levels up (scoped package nesting)", () => {
+			const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
+			cleanups.push(cleanup);
+
+			fs.mkdirSync(path.join(tmpDir, "node_modules", "jest"), {
+				recursive: true,
+			});
+			const pkgDir = path.join(tmpDir, "packages", "@scope", "bar");
+			fs.mkdirSync(pkgDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(pkgDir, "package.json"),
+				JSON.stringify({ name: "@scope/bar", version: "1.0.0" }),
+			);
+
+			const client = new TestRunnerClient(false);
+			const detected = client.detectRunner(pkgDir);
+			expect(detected?.runner).toBe("jest");
+		});
+
+		it("does not walk up past the bounded depth", () => {
+			const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
+			cleanups.push(cleanup);
+
+			fs.mkdirSync(path.join(tmpDir, "node_modules", "vitest"), {
+				recursive: true,
+			});
+			// Nest the cwd deeper than MAX_NODE_MODULES_WALK_UP (5) so the
+			// hoisted node_modules at tmpDir is out of range.
+			const deepDir = path.join(tmpDir, "a", "b", "c", "d", "e", "f", "g");
+			fs.mkdirSync(deepDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(deepDir, "package.json"),
+				JSON.stringify({ name: "deep", version: "1.0.0" }),
+			);
+
+			const client = new TestRunnerClient(false);
+			const detected = client.detectRunner(deepDir);
+			expect(detected).toBeNull();
+		});
+	});
+
+	describe("findTestFile — bounded recursive Python test discovery", () => {
+		it("finds a test file grouped by kind (tests/unit/) rather than mirrored", () => {
+			const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
+			cleanups.push(cleanup);
+
+			fs.writeFileSync(path.join(tmpDir, "pytest.ini"), "[pytest]\n");
+			const srcDir = path.join(tmpDir, "pkg");
+			fs.mkdirSync(srcDir, { recursive: true });
+			const src = path.join(srcDir, "foo.py");
+			fs.writeFileSync(src, "x = 1\n");
+
+			// Grouped-by-kind layout: tests/unit/test_foo.py, not the mirrored
+			// tests/pkg/test_foo.py the exact-match candidates would look for.
+			const testDir = path.join(tmpDir, "tests", "unit");
+			fs.mkdirSync(testDir, { recursive: true });
+			const testFile = path.join(testDir, "test_foo.py");
+			fs.writeFileSync(testFile, "def test_x(): pass\n");
+
+			const client = new TestRunnerClient(false);
+			const found = client.findTestFile(src, tmpDir);
+			expect(found?.testFile).toBe(testFile);
+		});
+
+		it("does not recurse past the bounded depth", () => {
+			const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
+			cleanups.push(cleanup);
+
+			fs.writeFileSync(path.join(tmpDir, "pytest.ini"), "[pytest]\n");
+			const srcDir = path.join(tmpDir, "pkg");
+			fs.mkdirSync(srcDir, { recursive: true });
+			const src = path.join(srcDir, "foo.py");
+			fs.writeFileSync(src, "x = 1\n");
+
+			// Nest the test file deeper than MAX_PYTEST_RECURSE_DEPTH (3)
+			// below tests/, so the bounded recursive search must not find it.
+			const testDir = path.join(tmpDir, "tests", "a", "b", "c", "d");
+			fs.mkdirSync(testDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(testDir, "test_foo.py"),
+				"def test_x(): pass\n",
+			);
+
+			const client = new TestRunnerClient(false);
+			const found = client.findTestFile(src, tmpDir);
+			expect(found).toBeNull();
+		});
+
+		it("still prefers the mirrored subdir match over the recursive fallback", () => {
+			const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
+			cleanups.push(cleanup);
+
+			fs.writeFileSync(path.join(tmpDir, "pytest.ini"), "[pytest]\n");
+			const srcDir = path.join(tmpDir, "pkg");
+			fs.mkdirSync(srcDir, { recursive: true });
+			const src = path.join(srcDir, "foo.py");
+			fs.writeFileSync(src, "x = 1\n");
+
+			const mirroredDir = path.join(tmpDir, "tests", "pkg");
+			fs.mkdirSync(mirroredDir, { recursive: true });
+			const mirroredTest = path.join(mirroredDir, "test_foo.py");
+			fs.writeFileSync(mirroredTest, "def test_mirrored(): pass\n");
+
+			const groupedDir = path.join(tmpDir, "tests", "unit");
+			fs.mkdirSync(groupedDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(groupedDir, "test_foo.py"),
+				"def test_grouped(): pass\n",
+			);
+
+			const client = new TestRunnerClient(false);
+			const found = client.findTestFile(src, tmpDir);
+			expect(found?.testFile).toBe(mirroredTest);
+		});
+	});
 });
