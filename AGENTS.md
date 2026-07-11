@@ -210,6 +210,13 @@ a *second host adapter* alongside `index.ts`. Design rationale + progress: `mcp.
   when the server boots (a Claude `SessionStart` hook can't warm the server's
   in-process LSP — separate process). Register: `claude mcp add --scope user
   pi-lens -e PI_LENS_MCP_AUTO_SESSION=1 -- node <repo>/dist/mcp/server.js`.
+  State is tracked (`{ attempted, succeeded, firedAt, error }`, `mcp/server.ts`)
+  and surfaced via `pilens_health`'s `autoSession` field (`null` when the env
+  var isn't set — distinguishes "off" from "attempted and failed"). Self-heals
+  (#544): the first `tools/call` on a connection re-triggers
+  `maybeAutoSessionStart()` if it never fired, is still in flight, or
+  previously failed, so a stale/reconnected server doesn't stay cold for the
+  whole connection.
 - **The bin target is `dist/`.** After changing MCP/engine/runner code, run
   `npm run build:dist` so the user-scoped server (`dist/mcp/server.js`) picks it up
   on the next Claude session. (`bin`: `pi-lens-mcp`, `pi-lens-analyze`.)

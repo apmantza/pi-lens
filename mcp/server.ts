@@ -165,16 +165,64 @@ async function ensureReady(cwd: string): Promise<void> {
 // Gated by PI_LENS_MCP_AUTO_SESSION=1 because the full session_start runs project
 // scans (knip/jscpd/dep) — opt-in so it doesn't fire in every repo. Fire-and-
 // forget; the warm/baseline/scan work continues in the background.
-let autoSessionFired = false;
+//
+// #544: this state used to be a bare boolean logged only to stderr (which
+// Claude Code never surfaces), so a stale/reconnected server silently stayed
+// cold with no way to tell short of `claude --debug` log spelunking. Now it's
+// tracked so `pilens_health` can report it, and `tools/call` self-heals by
+// re-triggering (see the `handleRequest` "tools/call" case) if the connection
+// never got a successful run — the exact stale-process/thrown-before-complete
+// scenario that motivated this.
+interface AutoSessionState {
+	attempted: boolean;
+	succeeded: boolean;
+	firedAt: string | null;
+	error: string | null;
+}
+let autoSessionState: AutoSessionState = {
+	attempted: false,
+	succeeded: false,
+	firedAt: null,
+	error: null,
+};
+// Non-null while a run is in flight — guards both the `initialize` call site
+// and the `tools/call` self-heal fallback against double-firing/races.
+let autoSessionInFlight: Promise<void> | null = null;
+
 function maybeAutoSessionStart(): void {
-	if (autoSessionFired || process.env.PI_LENS_MCP_AUTO_SESSION !== "1") return;
-	autoSessionFired = true;
-	void ensureReady(DEFAULT_CWD)
+	if (process.env.PI_LENS_MCP_AUTO_SESSION !== "1") return;
+	// Already running, or already completed successfully — nothing to do. A
+	// prior *failed* attempt is retried (this is the self-heal path).
+	if (autoSessionInFlight || autoSessionState.succeeded) return;
+	autoSessionState = {
+		attempted: true,
+		succeeded: false,
+		firedAt: new Date().toISOString(),
+		error: null,
+	};
+	autoSessionInFlight = ensureReady(DEFAULT_CWD)
 		.then(() => runSessionStart(DEFAULT_CWD))
-		.then(() => console.error("[pi-lens-mcp] auto session_start complete"))
-		.catch((err) =>
-			console.error(`[pi-lens-mcp] auto session_start failed: ${err}`),
-		);
+		.then(() => {
+			autoSessionState = { ...autoSessionState, succeeded: true };
+			console.error("[pi-lens-mcp] auto session_start complete");
+		})
+		.catch((err) => {
+			autoSessionState = { ...autoSessionState, error: String(err) };
+			console.error(`[pi-lens-mcp] auto session_start failed: ${err}`);
+		})
+		.finally(() => {
+			autoSessionInFlight = null;
+		});
+}
+
+/**
+ * `pilens_health`-facing view of auto-session state. Returns `null` when
+ * `PI_LENS_MCP_AUTO_SESSION` isn't set at all, so "the feature is off" is
+ * distinguishable from "attempted and failed".
+ */
+function getAutoSessionStatus(): AutoSessionState | null {
+	if (process.env.PI_LENS_MCP_AUTO_SESSION !== "1") return null;
+	return { ...autoSessionState };
 }
 
 // --- Warm side-channel (server side) ----------------------------------------
@@ -1041,6 +1089,7 @@ async function callTool(
 		const { aliveClients, servers } = lspStatus();
 		const last = recentLatency(1)[0];
 		const stats = diagnosticStats();
+		const autoSession = getAutoSessionStatus();
 		const lines = [
 			`LSP: ${aliveClients} alive client(s)`,
 			...servers.map(
@@ -1051,6 +1100,9 @@ async function callTool(
 				? `Last dispatch: ${path.basename(last.filePath)} — ${last.totalDurationMs}ms, ${last.totalDiagnostics} diagnostic(s)`
 				: "Last dispatch: none yet",
 			`Diagnostics this session: ${stats.totalShown} shown · ${stats.totalAutoFixed} auto-fixed · ${stats.totalUnresolved} unresolved`,
+			autoSession
+				? `Auto session_start: ${autoSession.succeeded ? "succeeded" : autoSession.error ? "FAILED" : autoSession.attempted ? "in progress" : "not yet attempted"}${autoSession.firedAt ? ` (fired ${autoSession.firedAt})` : ""}${autoSession.error ? ` — ${autoSession.error}` : ""}`
+				: "Auto session_start: disabled (PI_LENS_MCP_AUTO_SESSION not set)",
 		];
 		return toolText(lines.join("\n"), {
 			aliveClients,
@@ -1067,6 +1119,7 @@ async function callTool(
 				autoFixed: stats.totalAutoFixed,
 				unresolved: stats.totalUnresolved,
 			},
+			autoSession,
 		});
 	}
 
@@ -1280,6 +1333,13 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
 				sendError(id ?? null, -32602, "tools/call requires a string 'name'");
 				return;
 			}
+			// #544 self-heal: if auto-session was supposed to fire on `initialize`
+			// (PI_LENS_MCP_AUTO_SESSION=1) but never completed successfully — never
+			// attempted, still in flight, or threw — nudge it here too. Cheap no-op
+			// once it has actually succeeded (see the in-flight/succeeded guard
+			// inside maybeAutoSessionStart), so this does NOT re-run session_start
+			// on every tool call, only until the connection's first success.
+			maybeAutoSessionStart();
 			try {
 				let result = await callTool(name, args);
 				// #535: pilens_analyze already self-routes (fresh-fork) when stale —

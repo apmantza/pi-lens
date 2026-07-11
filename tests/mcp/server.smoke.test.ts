@@ -81,9 +81,23 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 			name: "pilens_health",
 			arguments: {},
 		});
-		const result = res.result as { content: { type: string; text: string }[] };
+		const result = res.result as {
+			content: { type: string; text: string }[];
+		};
 		expect(result.content[0].type).toBe("text");
 		expect(result.content[0].text).toContain("LSP:");
+		// #544: this harness never sets PI_LENS_MCP_AUTO_SESSION, so the health
+		// response must report the feature as off (`null`), distinguishable from
+		// "attempted and failed" — not merely omit the field.
+		expect(result.content[0].text).toContain(
+			"Auto session_start: disabled (PI_LENS_MCP_AUTO_SESSION not set)",
+		);
+		const jsonMatch = result.content[0].text.match(/```json\n([\s\S]*)\n```/);
+		expect(jsonMatch).toBeTruthy();
+		const payload = JSON.parse(jsonMatch?.[1] ?? "{}") as {
+			autoSession: unknown;
+		};
+		expect(payload.autoSession).toBeNull();
 	}, 25_000);
 
 	it("answers tools/call pilens_diagnostics (lens_diagnostics, delta mode)", async () => {

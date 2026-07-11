@@ -6,6 +6,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Added
 
+- **MCP auto session_start is now visible and self-healing** (#544) — `PI_LENS_MCP_AUTO_SESSION=1`'s self-triggered `session_start` on `initialize` previously only logged to stderr (`console.error`), which Claude Code never surfaces, and had no retry if it never fired or threw before completing — a real incident left a long-lived MCP connection cold for its whole lifetime with no way to tell short of `claude --debug` log spelunking. `mcp/server.ts` now tracks `{ attempted, succeeded, firedAt, error }` state through `maybeAutoSessionStart()` instead of a bare fired boolean, and `pilens_health` surfaces it as an `autoSession` field (`null` when `PI_LENS_MCP_AUTO_SESSION` isn't set at all, distinguishing "feature off" from "attempted and failed"). Self-heal: the first `tools/call` on a connection now also invokes `maybeAutoSessionStart()`, which re-triggers `runSessionStart` if it never attempted, is still in flight, or previously failed — guarded so it's a no-op once a run has already succeeded (never re-runs session_start on every tool call).
+
 ### Changed
 
 ### Fixed
