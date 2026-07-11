@@ -168,6 +168,74 @@ describe("bus-publish — pilens:files:touched (#482)", () => {
 		expect(dbg).toHaveBeenCalledTimes(1);
 	});
 
+	describe("#502: fix-provenance additive fields", () => {
+		it("omits fixes when not provided (old-shape payload unaffected)", () => {
+			const emit = vi.fn();
+			wireBusEmitter(emit);
+
+			publishFilesTouched({ reason: "format", paths: ["/repo/a.ts"], cwd: "/repo" });
+
+			const payload = emit.mock.calls[0][1] as Record<string, unknown>;
+			expect(payload.fixes).toBeUndefined();
+		});
+
+		it("includes fixes when provided, normalizing each entry's path", () => {
+			const emit = vi.fn();
+			wireBusEmitter(emit);
+
+			publishFilesTouched({
+				reason: "format",
+				paths: ["C:\\repo\\a.ts"],
+				cwd: "C:\\repo",
+				fixes: [{ path: "C:\\repo\\a.ts", tool: "prettier", kind: "format" }],
+			});
+
+			const payload = emit.mock.calls[0][1] as {
+				fixes: Array<{ path: string; tool: string; kind: string }>;
+			};
+			expect(payload.fixes).toHaveLength(1);
+			expect(payload.fixes[0].tool).toBe("prettier");
+			expect(payload.fixes[0].kind).toBe("format");
+			expect(payload.fixes[0].path).not.toContain("\\");
+		});
+
+		it("omits fixes when an empty array is passed", () => {
+			const emit = vi.fn();
+			wireBusEmitter(emit);
+
+			publishFilesTouched({
+				reason: "autofix",
+				paths: ["/repo/a.ts"],
+				cwd: "/repo",
+				fixes: [],
+			});
+
+			const payload = emit.mock.calls[0][1] as Record<string, unknown>;
+			expect(payload.fixes).toBeUndefined();
+		});
+
+		it("supports multiple fix entries per path (multi-tool autofix batch)", () => {
+			const emit = vi.fn();
+			wireBusEmitter(emit);
+
+			publishFilesTouched({
+				reason: "autofix",
+				paths: ["/repo/a.ts"],
+				cwd: "/repo",
+				fixes: [
+					{ path: "/repo/a.ts", tool: "ruff", kind: "autofix" },
+					{ path: "/repo/a.ts", tool: "biome", kind: "autofix" },
+				],
+			});
+
+			const payload = emit.mock.calls[0][1] as {
+				fixes: Array<{ path: string; tool: string; kind: string }>;
+			};
+			expect(payload.fixes).toHaveLength(2);
+			expect(payload.fixes.map((f) => f.tool)).toEqual(["ruff", "biome"]);
+		});
+	});
+
 	describe("#492: recent-touches producer seam", () => {
 		it("appends to the cross-process record at the same call, even with no busEmit wired", () => {
 			// No wireBusEmitter call — mirrors a bare/MCP host with no pi.events.

@@ -156,6 +156,68 @@ One event per logical write batch (not per file) — e.g. a single eslint `--fix
 
 **Kill switch:** `PI_LENS_BUS_PUBLISH=0` disables publishing entirely (see `docs/environment-variables.md`). Publishing is fire-and-forget — a disabled/unavailable/throwing bus never affects the write path's own success or latency.
 
+**Fix provenance (#502):** `FilesTouchedPayload` gained an additive, optional `fixes` field so a diff/review consumer can distinguish a pi-lens-mechanical hunk from an agent edit:
+
+```
+fixes?: Array<{
+  path: string,             // absolute, normalized
+  tool: string,              // e.g. "prettier", "ruff", "biome", "lsp-quickfix"
+  ruleId?: string,
+  kind: "autofix" | "format",
+}>
+```
+
+Old consumers that don't know this field ignore it (still frozen-additive, still `v: 1`). Attribution is best-effort at some call sites: a single autofix batch can run several tools across several changed files without the underlying runners reporting a per-file breakdown, so in that case every tool that fired in the batch is attributed to every file the batch changed (documented per call site in `clients/pipeline.ts`). The `reason: "autofix" | "format"` field on the payload continues to work standalone for consumers that only need the coarse signal.
+
+### Bus Events — `pilens:diagnostics` (#502)
+
+Extends the #482 producer family from "which files changed" to "what pi-lens knows about them" — the second `pi.events` broadcast surface, so terminal-native diff/review extensions (e.g. interactive diff review, split/unified diff rendering) can render pi-lens's findings as inline annotations in their own views instead of pi-lens owning a review UI.
+
+```
+event:   pilens:diagnostics
+payload: {
+  v: 1,
+  source: "pi-lens",
+  cwd: string,                    // absolute, normalized
+  seq: number,                    // monotonic per-emission counter (process-lifetime, not persisted)
+  ts: number,                     // emission wall-clock time, ms since epoch
+  files: [{
+    path: string,                 // absolute, normalized
+    diagnostics: [{
+      ruleId?: string,
+      severity: "error" | "warning" | "info" | "hint",
+      line?: number,
+      col?: number,
+      message: string,
+      tool: string,
+      fixable?: boolean,
+    }],
+    truncated?: boolean,          // set when this file's diagnostics exceeded the per-event cap
+  }],
+}
+```
+
+**Emission seam.** One event per write batch, emitted immediately after `recordDiagnostics` (`clients/widget-state.ts`) commits the batch's final per-file diagnostic set — i.e. after auto-format, autofix, and dispatch have all run for that write (see the phase order in `clients/pipeline.ts`). This guarantees the event reflects the LATEST post-batch state, never an intermediate runner result.
+
+**CONSUMER CONTRACT — staleness/replace semantics (load-bearing, follow LSP `publishDiagnostics` conventions):**
+
+1. **Full-replace per file, never a delta.** Every event carries the COMPLETE current diagnostic set for each file it mentions. An event mentioning path P replaces everything a consumer previously held for P — never merge/append across events for the same path.
+2. **Empty array = explicitly clean.** When a file's diagnostics clear, pi-lens emits `{path, diagnostics: []}` for it exactly once, on the transition. Silence never means clean (the same #240 doctrine, applied on the producer side here) — a consumer that stops hearing about a path has learned nothing about its current state.
+3. **Monotonic `seq` + `ts` per emission.** Out-of-order receipt (including a future disk-tail consumer à la #492) resolves deterministically: higher `seq` always wins, lower is discarded.
+4. **`pilens:files:touched` (#482) is an invalidation hint, not new data.** Between an edit landing (a files:touched event) and the next diagnostics batch for that path, a consumer's previously-held diagnostics for that path are PROVISIONAL — the file changed on disk but hasn't been re-analyzed yet. Consumers that want to avoid rendering stale annotations across that window should treat a files:touched path as "diagnostics pending" until the next `pilens:diagnostics` event mentions it.
+
+Late-joiners are a non-problem in-process — extensions activate at `session_start`, before any turn emits — so v1 is push-only (no request/replay).
+
+**Caps:** at most 12 diagnostics per file per event (`MAX_DIAGNOSTICS_PER_FILE_EVENT` in `clients/diagnostics-publish.ts`, aligned with the widget's own per-file storage cap), errors prioritized over other severities when capping; a capped file entry sets `truncated: true`. File contents are never included inline.
+
+**Kill switch:** `PI_LENS_BUS_PUBLISH=0` (same family as #482 — no new env var).
+
+**Versioning policy: additive-only**, same discipline as #482.
+
+**Before/after content:** intentionally omitted from v1 (the size/complexity tradeoff the original issue sketch flagged) — a consumer that needs pre-format text for diff rendering is a follow-up, not part of this event.
+
+**Shared schema with #478 (bound, not merged).** The `PilensDiagnosticsPayload` type (`clients/diagnostics-publish.ts`) is defined once and reused verbatim by #478's future `pilens:rpc:diagnostics` pull response — push (this event) and pull (#478) are two deliveries of the same shape over the same lens-engine seam. #478 stays separately gated on #449 registry dogfooding.
+
 ### Opportunistic Read Expansion
 
 When the agent reads a small slice of a file (≤ 60 lines), pi-lens transparently expands the read to the full enclosing symbol (function, method, or class) using the tree-sitter AST. The agent receives the full symbol as context, and the read guard records symbol-level coverage so edits anywhere within that symbol pass without requiring the agent to have read every line individually. Expansion runs within a 200 ms budget and falls back silently on unsupported file types or parse failures.
