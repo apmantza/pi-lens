@@ -12,6 +12,8 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { minimatch } from "./deps/minimatch.js";
+import { detectFileRole } from "./file-role.js";
 import { findGlobalBinary } from "./package-manager.js";
 import { safeSpawn, safeSpawnAsync } from "./safe-spawn.js";
 
@@ -81,6 +83,17 @@ const SOURCE_TO_TEST_PATTERNS: Array<{
 	{ ext: ".go", testExts: ["_test.go"], dirs: [".", ".", ".", "."] }, // Go tests are co-located
 	{ ext: ".rs", testExts: [".rs"], dirs: ["tests", "tests", "src", "."] }, // Rust: tests/ or #[test] in src
 ];
+
+// Bound for walking up parent directories to find a hoisted node_modules
+// (monorepo workspaces) — deep enough for realistic nesting
+// (repo/packages/scope/pkg-name), never unbounded to the filesystem root.
+const MAX_NODE_MODULES_WALK_UP = 5;
+
+// Bound for recursive descent into a Python test directory when the exact
+// same-relative-subdir mirror doesn't match (e.g. tests/unit/ grouping by
+// test type rather than mirroring source layout) — capped depth, never an
+// unbounded walk of the whole tests tree.
+const MAX_PYTEST_RECURSE_DEPTH = 3;
 
 // --- Runner Detection ---
 
@@ -177,6 +190,16 @@ export class TestRunnerClient {
 	private log: (msg: string) => void;
 	private availableRunners: Map<string, boolean> = new Map();
 	private failedTestsByRunner: Map<string, Set<string>> = new Map();
+	// Best-effort vitest config `test.include`/`test.exclude` globs, scraped as
+	// plain text (never executed) and cached per cwd so the config file is
+	// only read/parsed once, not on every edit. `null` means "no config found
+	// or it couldn't be parsed in the simple shape we look for" — callers
+	// treat that as "no additional signal" and fall back to naming-convention
+	// detection only.
+	private vitestTestGlobsCache: Map<
+		string,
+		{ include?: string[]; exclude?: string[] } | null
+	> = new Map();
 
 	constructor(verbose = false) {
 		this.log = verbose
@@ -255,17 +278,22 @@ export class TestRunnerClient {
 			// package.json parse error or file not found
 		}
 
-		// Priority 3: Check node_modules for installed packages
-		const nodeModulesPath = path.join(cwd, "node_modules");
-		if (fs.existsSync(nodeModulesPath)) {
-			if (fs.existsSync(path.join(nodeModulesPath, "vitest"))) {
-				this.log("Detected vitest in node_modules");
-				return { runner: "vitest", config: RUNNERS.vitest };
-			}
-			if (fs.existsSync(path.join(nodeModulesPath, "jest"))) {
-				this.log("Detected jest in node_modules");
-				return { runner: "jest", config: RUNNERS.jest };
-			}
+		// Priority 3: Check node_modules for installed packages, including a
+		// hoisted monorepo layout where cwd is a workspace package (e.g.
+		// packages/foo) but the runner only lives in node_modules at the
+		// workspace root (npm/yarn/pnpm workspace hoisting). Walk up a
+		// bounded number of parent directories looking for a node_modules
+		// containing the package — never an unbounded walk to the
+		// filesystem root.
+		const hoistedVitest = this.findHoistedNodeModulesPackage(cwd, "vitest");
+		if (hoistedVitest) {
+			this.log(`Detected vitest in node_modules (${hoistedVitest})`);
+			return { runner: "vitest", config: RUNNERS.vitest };
+		}
+		const hoistedJest = this.findHoistedNodeModulesPackage(cwd, "jest");
+		if (hoistedJest) {
+			this.log(`Detected jest in node_modules (${hoistedJest})`);
+			return { runner: "jest", config: RUNNERS.jest };
 		}
 
 		for (const name of ["go", "cargo", "dotnet", "gradle", "maven"]) {
@@ -312,6 +340,239 @@ export class TestRunnerClient {
 	}
 
 	/**
+	 * Walk up from `cwd` through parent directories looking for a
+	 * `node_modules/<packageName>` — handles monorepo workspace hoisting
+	 * (npm/yarn/pnpm), where a workspace package's own `node_modules` may
+	 * not exist at all, with dependencies hoisted to the workspace root
+	 * several directories up. Bounded by `MAX_NODE_MODULES_WALK_UP` levels
+	 * and stops at the filesystem root — never an unbounded walk.
+	 * Returns the `node_modules` directory where the package was found, or
+	 * null if not found within the bound.
+	 */
+	private findHoistedNodeModulesPackage(
+		cwd: string,
+		packageName: string,
+	): string | null {
+		let dir = path.resolve(cwd);
+		for (let level = 0; level <= MAX_NODE_MODULES_WALK_UP; level++) {
+			const nodeModulesPath = path.join(dir, "node_modules");
+			if (fs.existsSync(path.join(nodeModulesPath, packageName))) {
+				return nodeModulesPath;
+			}
+			const parent = path.dirname(dir);
+			if (parent === dir) break; // reached filesystem root
+			dir = parent;
+		}
+		return null;
+	}
+
+	/**
+	 * Depth-bounded breadth-first search under `rootDir` for a pytest-style
+	 * test file matching `pattern` (exact, e.g. `test_foo.py`) or the
+	 * looser `test_*<basename>*.py` convention. Used as a last-resort
+	 * fallback when a Python test suite groups tests by kind
+	 * (`tests/unit/`, `tests/integration/`) instead of mirroring the
+	 * source directory layout, so the exact-mirror candidates in
+	 * `findTestFile` don't match. Bounded by `maxDepth` levels below
+	 * `rootDir` and skips hidden directories and `__pycache__` — never an
+	 * unbounded walk of the whole tests tree.
+	 */
+	private findPytestMatchRecursive(
+		rootDir: string,
+		pattern: string,
+		basename: string,
+		maxDepth: number,
+	): string | null {
+		const queue: Array<{ dir: string; depth: number }> = [
+			{ dir: rootDir, depth: 0 },
+		];
+
+		while (queue.length > 0) {
+			const next = queue.shift();
+			if (!next) break;
+			const { dir, depth } = next;
+
+			let entries: import("node:fs").Dirent[];
+			try {
+				entries = fs.readdirSync(dir, { withFileTypes: true });
+			} catch {
+				continue;
+			}
+
+			for (const entry of entries) {
+				const fullPath = path.join(dir, entry.name);
+				if (entry.isFile()) {
+					if (
+						entry.name === pattern ||
+						(entry.name.startsWith("test_") &&
+							entry.name.endsWith(".py") &&
+							entry.name.includes(basename))
+					) {
+						return fullPath;
+					}
+				} else if (entry.isDirectory() && depth < maxDepth) {
+					if (entry.name === "__pycache__" || entry.name.startsWith("."))
+						continue;
+					queue.push({ dir: fullPath, depth: depth + 1 });
+				}
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Path of `dir` relative to `cwd`, using forward slashes, or null if `dir`
+	 * is not inside `cwd` (e.g. resolves to `..` or an absolute path).
+	 * Used to compute a mirrored test-tree subdirectory (e.g. `clients` for
+	 * `clients/knip-client.ts`, so `tests/clients/knip-client.test.ts` is
+	 * checked alongside the flat `tests/knip-client.test.ts` candidate).
+	 */
+	private relativeSourceDir(sourceFilePath: string, cwd: string): string | null {
+		const dir = path.dirname(sourceFilePath);
+		const relDir = path.relative(cwd, path.resolve(cwd, dir));
+		if (!relDir || relDir === "." || relDir.startsWith("..") || path.isAbsolute(relDir)) {
+			return null;
+		}
+		return relDir;
+	}
+
+	/**
+	 * Best-effort, text-only scrape of a vitest config's `test.include` /
+	 * `test.exclude` arrays. This deliberately does NOT execute the config
+	 * file (that would mean loading arbitrary ESM/TS via Vite's config
+	 * loader — too heavy for a per-edit hot path). It just looks for a
+	 * simple `include: [ ... ]` / `exclude: [ ... ]` shape with string
+	 * literals inside and pulls those out with a regex.
+	 *
+	 * Returns `null` (never throws) when there's no vitest config file, it
+	 * can't be read, or the include/exclude shape isn't a plain array of
+	 * string literals (e.g. it's built from a function call, spread, or
+	 * template expression) — anything more dynamic than that is out of
+	 * scope for this heuristic.
+	 *
+	 * Cached per `cwd` so the file is only read/parsed once per project,
+	 * not on every edit.
+	 */
+	parseVitestTestGlobs(
+		cwd: string,
+	): { include?: string[]; exclude?: string[] } | null {
+		if (this.vitestTestGlobsCache.has(cwd)) {
+			return this.vitestTestGlobsCache.get(cwd) ?? null;
+		}
+
+		// .mts isn't in RUNNERS.vitest.configFiles (that list drives runner
+		// *detection* priority) but is a legal vitest config extension, so it's
+		// included here for the scrape even though detectRunner doesn't check it.
+		const candidates = [...RUNNERS.vitest.configFiles, "vitest.config.mts"];
+
+		let content: string | null = null;
+		for (const cf of candidates) {
+			try {
+				content = fs.readFileSync(path.join(cwd, cf), "utf-8");
+				break;
+			} catch {
+				continue;
+			}
+		}
+
+		let result: { include?: string[]; exclude?: string[] } | null = null;
+		if (content !== null) {
+			const include = this.extractGlobArrayLiteral(content, "include");
+			const exclude = this.extractGlobArrayLiteral(content, "exclude");
+			if (include || exclude) {
+				result = {};
+				if (include) result.include = include;
+				if (exclude) result.exclude = exclude;
+			}
+		}
+
+		this.vitestTestGlobsCache.set(cwd, result);
+		return result;
+	}
+
+	/**
+	 * Extract `<key>: [ 'a', "b", `c` ]` as a plain string array from raw
+	 * config text. Returns undefined if the key isn't present, or if the
+	 * array body contains anything besides string literals and commas/
+	 * whitespace (a function call, spread, variable reference, etc.) —
+	 * that's a sign the value is dynamic and this best-effort scrape can't
+	 * safely interpret it.
+	 */
+	private extractGlobArrayLiteral(
+		content: string,
+		key: string,
+	): string[] | undefined {
+		const arrayMatch = content.match(
+			new RegExp(`\\b${key}\\s*:\\s*\\[([^\\]]*)\\]`),
+		);
+		if (!arrayMatch) return undefined;
+
+		const body = arrayMatch[1];
+		const literalPattern = /'([^'\\]*)'|"([^"\\]*)"|`([^`\\]*)`/g;
+		const literals: string[] = [];
+		let lastEnd = 0;
+		let match: RegExpExecArray | null;
+		while ((match = literalPattern.exec(body)) !== null) {
+			const between = body.slice(lastEnd, match.index).trim();
+			// Only whitespace/commas may appear between literals — anything
+			// else (identifiers, parens, spreads) means the array isn't a
+			// plain list of string literals.
+			if (between !== "" && !/^,$/.test(between)) return undefined;
+			literals.push(match[1] ?? match[2] ?? match[3] ?? "");
+			lastEnd = literalPattern.lastIndex;
+		}
+		const trailing = body.slice(lastEnd).trim();
+		if (trailing !== "" && trailing !== ",") return undefined;
+
+		return literals.length > 0 ? literals : undefined;
+	}
+
+	/**
+	 * Whether `sourceFilePath` is itself a test file (as opposed to a source
+	 * file whose *related* test file needs to be discovered).
+	 *
+	 * Primary signal: `detectFileRole` (naming convention: `.test.`/`.spec.`
+	 * basenames, `test_`/`spec_` prefixes, `__tests__/`/`tests/`/`spec/`
+	 * directories — shared with the rest of the codebase, not a second
+	 * parallel detector).
+	 *
+	 * Secondary signal (vitest only): the project's own `test.include` /
+	 * `test.exclude` globs, best-effort scraped by `parseVitestTestGlobs`.
+	 * This can correct the naming-convention answer in both directions —
+	 * an `exclude` glob can rule out a path that looks like a test by name,
+	 * and an `include` glob can catch a project that puts tests somewhere
+	 * unconventional. When no config is found or it can't be parsed, this
+	 * is a no-op and behavior is unchanged.
+	 */
+	private isTestFile(
+		sourceFilePath: string,
+		cwd: string,
+		runner: string,
+	): boolean {
+		let result = detectFileRole(sourceFilePath) === "test";
+
+		if (runner === "vitest") {
+			const globs = this.parseVitestTestGlobs(cwd);
+			if (globs) {
+				const rel = path
+					.relative(cwd, path.resolve(cwd, sourceFilePath))
+					.replace(/\\/g, "/");
+				const matches = (globs_: string[] | undefined) =>
+					!!globs_?.some((g) => minimatch(rel, g, { dot: true }));
+
+				if (matches(globs.exclude)) {
+					result = false;
+				} else if (!result && matches(globs.include)) {
+					result = true;
+				}
+			}
+		}
+
+		return result;
+	}
+
+	/**
 	 * Find test file for a given source file
 	 * Returns the test file path if it exists, null otherwise
 	 */
@@ -331,6 +592,13 @@ export class TestRunnerClient {
 			: this.detectRunner(cwd, sourceFilePath);
 		if (!detected) return null;
 
+		// Relative subdirectory of the source file, used to check a mirrored
+		// test-tree layout (tests/<same-subdir>/<basename><testExt>), on top of
+		// the flat tests/<basename><testExt> layout already checked below.
+		// Null when the source file sits at the project root (dir === ".") or
+		// falls outside cwd — in that case there is no subdir to mirror.
+		const relDir = this.relativeSourceDir(sourceFilePath, cwd);
+
 		// Check each potential test file location
 		for (let i = 0; i < patterns.testExts.length; i++) {
 			const testExt = patterns.testExts[i];
@@ -339,27 +607,54 @@ export class TestRunnerClient {
 			// Handle glob patterns (pytest style: test_*.py)
 			if (testExt.includes("*")) {
 				const pattern = testExt.replace(/\*/g, basename);
-				const searchDir = testDir === "." ? dir : path.join(cwd, testDir);
+				const searchDirs =
+					testDir === "."
+						? [dir]
+						: relDir
+							? [path.join(cwd, testDir, relDir), path.join(cwd, testDir)]
+							: [path.join(cwd, testDir)];
 
-				let files;
-				try {
-					files = fs.readdirSync(searchDir);
-				} catch (err) {
-					void err;
-					continue;
+				for (const searchDir of searchDirs) {
+					let files;
+					try {
+						files = fs.readdirSync(searchDir);
+					} catch (err) {
+						void err;
+						continue;
+					}
+
+					const match = files.find(
+						(f) =>
+							f === pattern ||
+							(f.startsWith("test_") &&
+								f.endsWith(".py") &&
+								f.includes(basename)),
+					);
+					if (match) {
+						const testPath = path.join(searchDir, match);
+						this.log(`Found test file: ${testPath}`);
+						return { testFile: testPath, runner: detected.runner };
+					}
 				}
 
-				const match = files.find(
-					(f) =>
-						f === pattern ||
-						(f.startsWith("test_") &&
-							f.endsWith(".py") &&
-							f.includes(basename)),
-				);
-				if (match) {
-					const testPath = path.join(searchDir, match);
-					this.log(`Found test file: ${testPath}`);
-					return { testFile: testPath, runner: detected.runner };
+				// None of the exact-mirror candidates matched. Python test
+				// suites commonly group tests by kind (tests/unit/,
+				// tests/integration/) rather than mirroring the source tree,
+				// so do a depth-bounded recursive search under the test
+				// root as a last resort before falling back to import
+				// scanning — bounded so a large repo can't turn this into
+				// an unbounded directory walk.
+				if (testDir !== ".") {
+					const recursiveMatch = this.findPytestMatchRecursive(
+						path.join(cwd, testDir),
+						pattern,
+						basename,
+						MAX_PYTEST_RECURSE_DEPTH,
+					);
+					if (recursiveMatch) {
+						this.log(`Found test file (recursive): ${recursiveMatch}`);
+						return { testFile: recursiveMatch, runner: detected.runner };
+					}
 				}
 			} else {
 				// Exact pattern match (jest/vitest style)
@@ -367,6 +662,12 @@ export class TestRunnerClient {
 				const searchPaths = [
 					path.join(dir, testFilename), // same directory
 					path.join(dir, "__tests__", testFilename), // __tests__ subdirectory
+					...(relDir
+						? [
+								path.join(cwd, "tests", relDir, testFilename), // mirrored tests/<subdir>/
+								path.join(cwd, "__tests__", relDir, testFilename), // mirrored __tests__/<subdir>/
+							]
+						: []),
 					path.join(cwd, "tests", testFilename), // top-level tests/
 					path.join(cwd, "__tests__", testFilename), // top-level __tests__/
 				];
@@ -403,14 +704,22 @@ export class TestRunnerClient {
 		testFile: string;
 		runner: string;
 		config: RunnerConfig;
-		strategy: "failed-first" | "related";
+		strategy: "failed-first" | "related" | "self";
 	} | null {
 		const detected = this.detectRunner(cwd, sourceFilePath);
 		if (!detected) return null;
 
 		const key = this.failedKey(cwd, detected.runner);
 		const failedSet = this.failedTestsByRunner.get(key);
-		const related = this.findTestFile(sourceFilePath, cwd, detected.runner);
+
+		// If the edited file is itself a test file, there's no "related test"
+		// to discover — running findTestFile on it would strip its own
+		// extension and search for nonsense like foo.test.test.ts. Skip
+		// discovery entirely and treat the file as its own target.
+		const selfIsTest = this.isTestFile(sourceFilePath, cwd, detected.runner);
+		const related = selfIsTest
+			? null
+			: this.findTestFile(sourceFilePath, cwd, detected.runner);
 
 		if (failedSet && failedSet.size > 0) {
 			if (related) {
@@ -425,11 +734,32 @@ export class TestRunnerClient {
 				}
 			}
 
+			if (selfIsTest) {
+				const selfAbs = path.resolve(sourceFilePath);
+				if (failedSet.has(selfAbs)) {
+					return {
+						testFile: selfAbs,
+						runner: detected.runner,
+						config: detected.config,
+						strategy: "failed-first",
+					};
+				}
+			}
+
 			return {
 				testFile: [...failedSet][0],
 				runner: detected.runner,
 				config: detected.config,
 				strategy: "failed-first",
+			};
+		}
+
+		if (selfIsTest) {
+			return {
+				testFile: path.resolve(sourceFilePath),
+				runner: detected.runner,
+				config: detected.config,
+				strategy: "self",
 			};
 		}
 
