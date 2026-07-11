@@ -26,6 +26,13 @@ import { fileURLToPath } from "node:url";
 import { AstGrepClient } from "../clients/ast-grep-client.js";
 import { CacheManager } from "../clients/cache-manager.js";
 import {
+	computeBuildStamp,
+	STALE_SERVED_BY_FRESH,
+	STALE_WARN_ONLY,
+	StalenessGate,
+	stalenessCheckEnabled,
+} from "./build-staleness.js";
+import {
 	analyzeFile,
 	analyzeFileFresh,
 	createMcpHost,
@@ -83,6 +90,40 @@ const SERVER_FILE = fileURLToPath(import.meta.url);
 const SERVER_DIR = path.dirname(SERVER_FILE);
 const WORKER_PATH = path.join(SERVER_DIR, "worker.js");
 const REBUILD_SCRIPT = resolveRebuildScript(SERVER_FILE);
+
+// --- Warm build-staleness guard (#535) ---------------------------------------
+//
+// Captured ONCE at process start: this server's OWN entry file's mtime. A
+// rebuild (`npm run build:dist`) or a `git merge`/checkout that lands new
+// code changes SERVER_FILE's mtime on disk, but this already-running process
+// keeps the old code loaded in memory — the exact "stale-warm-server" trap
+// #535 documents (a post-#517 rebuild still answering with the pre-#517
+// schema). `computeBuildStamp` returns undefined when SERVER_FILE can't be
+// stat'd (e.g. an unusual packaging layout); the gate then degrades to
+// "never stale" rather than false-flagging every call.
+//
+// `PI_LENS_MCP_STALENESS_STAT_PATH` (test-only override): points the stamp at
+// a different file than SERVER_FILE. Exists so a staleness smoke test can
+// simulate a rebuild by bumping ONE isolated file's mtime, instead of mutating
+// the real `mcp/server.js` on disk — a shared file every OTHER concurrently-
+// spawned server process in the same test run also stats against, which would
+// otherwise make the staleness smoke test flip unrelated tests' expectations
+// under parallel vitest execution.
+const STALENESS_STAT_PATH =
+	process.env.PI_LENS_MCP_STALENESS_STAT_PATH ?? SERVER_FILE;
+const BUILD_STAMP = computeBuildStamp(STALENESS_STAT_PATH);
+const STALENESS_GATE = new StalenessGate(BUILD_STAMP);
+
+/**
+ * True when the warm server's loaded code is older than what's on disk right
+ * now. Mtime-gated (at most one `fs.stat` per second, like the #492
+ * cross-process reader) so a burst of tool calls costs one stat, not one per
+ * call. Disabled entirely by `PI_LENS_WARM_STALENESS_CHECK=0` (escape hatch).
+ */
+function isWarmBuildStale(): boolean {
+	if (!stalenessCheckEnabled()) return false;
+	return STALENESS_GATE.isStale();
+}
 
 function findRepoRoot(start: string): string {
 	let dir = start;
@@ -164,6 +205,21 @@ function startIpcServer(): void {
 			const line = buffer.slice(0, newline);
 			void (async () => {
 				try {
+					// #535: the PostToolUse hook bin (mcp/analyze-cli.ts) already treats
+					// ANY error response as "no usable warm server" and falls back to
+					// its own cold, load-fresh-from-disk analysis path — so on a stale
+					// warm build, replying with an error IS the fresh-fork behavior for
+					// this channel, for free. No separate fresh-fork plumbing needed
+					// here: the client-side fallback already loads current code.
+					if (isWarmBuildStale()) {
+						console.error(
+							"[pi-lens-mcp] warm analyze: build stale, replying error so the hook falls back cold",
+						);
+						socket.end(
+							`${JSON.stringify({ error: "warm build stale — falling back to cold analysis" })}\n`,
+						);
+						return;
+					}
 					const req = JSON.parse(line) as WarmAnalyzeRequest;
 					console.error(`[pi-lens-mcp] warm analyze: ${req.file}`);
 					// Warm = full LSP + an edit-detection path (register turn-state) +
@@ -647,6 +703,7 @@ function formatAnalyze(
 	result: McpAnalyzeResult,
 	cwd: string,
 	mode: "warm" | "fresh",
+	servedBy?: string,
 ): { content: { type: "text"; text: string }[] } {
 	// Surface the LSP outcome so a cold/indexing server's "0" is never silently
 	// read as "clean" — a known limit on large projects (warm mode / re-run once
@@ -660,8 +717,9 @@ function formatAnalyze(
 		`${result.counts.diagnostics} total` +
 		(result.latency ? ` · ${result.latency.totalDurationMs}ms` : "") +
 		lspNote +
-		(result.counts.fixed > 0 ? ` · ${result.counts.fixed} auto-fixed` : "");
-	return toolText(summary, result);
+		(result.counts.fixed > 0 ? ` · ${result.counts.fixed} auto-fixed` : "") +
+		(servedBy ? `\n\nservedBy: ${servedBy}` : "");
+	return toolText(summary, servedBy ? { ...result, servedBy } : result);
 }
 
 async function callTool(
@@ -674,11 +732,21 @@ async function callTool(
 			return { ...toolText("pilens_analyze requires a 'file' string."), isError: true };
 		}
 		const cwd = typeof args.cwd === "string" ? args.cwd : DEFAULT_CWD;
-		const mode = args.mode === "fresh" ? "fresh" : "warm";
+		const requestedMode = args.mode === "fresh" ? "fresh" : "warm";
 		const flags =
 			args.flags && typeof args.flags === "object"
 				? (args.flags as Record<string, boolean | string | undefined>)
 				: undefined;
+
+		// #535: analyze is fresh-routable — it's a stateless per-file dispatch
+		// with no dependency on warm-process-only state (unlike module_report's
+		// review graph or the warm LSP fleet). So a stale warm build force-routes
+		// to fresh even when the caller asked for warm: analyze's whole value is
+		// its diagnostics being CORRECT, and warm-only side effects (turn-state
+		// registration, graph update) are worth losing for one call rather than
+		// silently answering with old dispatch logic.
+		const forcedFresh = requestedMode === "warm" && isWarmBuildStale();
+		const mode = requestedMode === "fresh" || forcedFresh ? "fresh" : "warm";
 
 		if (mode === "fresh") {
 			// Honest review loop: a forked worker loads the freshly-built code, so
@@ -691,7 +759,12 @@ async function callTool(
 					isError: true,
 				};
 			}
-			return formatAnalyze(outcome.result, cwd, "fresh");
+			return formatAnalyze(
+				outcome.result,
+				cwd,
+				"fresh",
+				forcedFresh ? STALE_SERVED_BY_FRESH : undefined,
+			);
 		}
 
 		await ensureReady(cwd);
@@ -1093,6 +1166,83 @@ async function callTool(
 	return { ...toolText(`Unknown tool: ${name}`), isError: true };
 }
 
+// --- Warm build-staleness — per-tool warn-only set (#535) --------------------
+//
+// `pilens_analyze` is handled specially above (force-routes to the existing
+// `fresh` worker fork — it's a stateless per-file dispatch with no dependency
+// on warm-process-only state). Every OTHER tool below either:
+//   - depends on state that only exists inside THIS long-lived process (the
+//     in-memory review graph built by warm `pilens_analyze` calls, the warm
+//     LSP client fleet, the latency/diagnostic counters, the CacheManager) —
+//     a fresh fork would start with none of that and answer differently, not
+//     "more correctly"; or
+//   - is cheap/rare enough (rebuild, session_start) that building bespoke
+//     fresh-fork plumbing isn't worth it yet.
+// So the honest move for all of them is #535's "honest degrade": warn, don't
+// silently serve, and don't pretend a fresh fork would help.
+//
+//   pilens_module_report, pilens_symbol_search — warm review-graph / word-index
+//     cache is in-memory only; a fresh fork has an EMPTY graph, which is a
+//     worse answer than a stale-but-populated one with a warning attached.
+//   pilens_project_scan                        — CacheManager instance is warm-
+//     process state; scan results are cache-derived.
+//   pilens_health, pilens_latency              — these tools report ON the warm
+//     process itself (alive LSP clients, this session's latency log) — the
+//     question "is this call's ANSWER stale" doesn't quite apply, but the code
+//     answering it might still be a stale build, so still worth a note.
+//   pilens_session_start, pilens_turn_end      — mutate warm LSP/graph state;
+//     must run in-process, can't be forked fresh.
+//   pilens_ast_grep_search, pilens_ast_grep_replace,
+//   pilens_lsp_navigation, pilens_lsp_diagnostics — depend on the warm LSP
+//     fleet / ast-grep client instances; no fresh-fork machinery exists for
+//     them today (only pilens_analyze's worker.ts loads a fresh dispatch
+//     graph) and the LSP fleet specifically CANNOT be recreated cheaply per
+//     call, so warn is the only honest option.
+//   pilens_read_symbol, pilens_read_enclosing  — stateless file reads, but no
+//     existing fresh-fork path either; warn rather than silently answer with
+//     however this stale build's tree-sitter/read-symbol logic behaves.
+//
+// `pilens_rebuild` is deliberately excluded: it doesn't answer with analysis
+// at all (it shells out to `npm run build`/`build:dist`), and it's the very
+// mechanism that CAUSES staleness — noting "stale" on the tool that fixes
+// staleness would be confusing, not honest.
+const WARN_ONLY_STALE_TOOLS = new Set([
+	"pilens_module_report",
+	"pilens_symbol_search",
+	"pilens_project_scan",
+	"pilens_health",
+	"pilens_latency",
+	"pilens_session_start",
+	"pilens_turn_end",
+	"pilens_ast_grep_search",
+	"pilens_ast_grep_replace",
+	"pilens_lsp_navigation",
+	"pilens_lsp_diagnostics",
+	"pilens_read_symbol",
+	"pilens_read_enclosing",
+]);
+
+/**
+ * Appends the warm-code-stale advisory to a tool result's text (and a
+ * `warmCodeStale: true` marker line) without disturbing its JSON payload
+ * shape — callers already parse the fenced JSON block by locating braces
+ * (see module_report/symbol_search callers), so appending plain text after it
+ * is safe.
+ */
+function withStaleWarning<T extends { content: { type: "text"; text: string }[] }>(
+	result: T,
+): T {
+	if (result.content.length === 0) return result;
+	const last = result.content[result.content.length - 1];
+	return {
+		...result,
+		content: [
+			...result.content.slice(0, -1),
+			{ ...last, text: `${last.text}\n\nwarmCodeStale: true\n${STALE_WARN_ONLY}` },
+		],
+	};
+}
+
 // --- Method dispatch ---------------------------------------------------------
 
 async function handleRequest(request: JsonRpcRequest): Promise<void> {
@@ -1131,7 +1281,18 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
 				return;
 			}
 			try {
-				const result = await callTool(name, args);
+				let result = await callTool(name, args);
+				// #535: pilens_analyze already self-routes (fresh-fork) when stale —
+				// see the forcedFresh branch inside callTool. Every other tool that
+				// depends on warm-only process state gets an honest-degrade warning
+				// instead, so the warm boundary never silently serves old code.
+				if (
+					WARN_ONLY_STALE_TOOLS.has(name) &&
+					!result.isError &&
+					isWarmBuildStale()
+				) {
+					result = withStaleWarning(result);
+				}
 				sendResult(id ?? null, result);
 			} catch (err) {
 				// Surface as a tool error (isError), not a transport error, so the

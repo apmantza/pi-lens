@@ -174,6 +174,31 @@ a *second host adapter* alongside `index.ts`. Design rationale + progress: `mcp.
   **`fresh` always cold-spawns the LSP, so it under-reports LSP on large projects
   within any per-call budget** — surfaced honestly via the `lsp` signal, never a
   silent "clean" 0. warm + an indexed server is the LSP-complete path.
+- **Warm-build staleness guard (#535).** The warm server lives for weeks, so it
+  can silently keep serving OLD code after a `npm run build:dist`/merge changes
+  `dist/mcp/server.js` on disk — dogfooding caught this live (a post-#517
+  rebuild still answered with the pre-#517 `module_report` schema). Fix: at
+  startup, `mcp/build-staleness.ts`'s `computeBuildStamp` stat's the server's
+  OWN entry file (`SERVER_FILE`, resolved via `import.meta.url` — never a
+  hardcoded repo path, since the server may run from an installed package) and
+  stores its mtime. Every `tools/call` and the IPC side-channel handler
+  re-check via `StalenessGate.isStale()` — one `fs.stat`, cached at most once
+  per second so a burst of calls costs a single stat (same shape as the #492
+  cross-process reader). On mismatch: `pilens_analyze` (stateless per-file,
+  no warm-only dependency) force-routes to the EXISTING `mode=fresh` worker
+  fork and tags the result `servedBy: "fresh (warm code stale — restart the
+  Claude session to re-warm)"`. Every other tool depends on warm-process-only
+  state it can't get from a fresh fork (the in-memory review graph —
+  `module_report`/`symbol_search`; the warm LSP fleet —
+  `lsp_navigation`/`lsp_diagnostics`; the CacheManager/latency log — the rest),
+  so those get an honest-degrade `warmCodeStale: true` warning appended
+  instead of routing (`WARN_ONLY_STALE_TOOLS`/`withStaleWarning` in
+  `mcp/server.ts`) — a stale-but-populated graph beats a fresh fork's EMPTY
+  one. The IPC side-channel (PostToolUse hook's warm-first path) replies with
+  an error on stale instead of running analysis — the hook bin
+  (`mcp/analyze-cli.ts`) already treats any IPC error as "fall back to cold,
+  load-fresh-from-disk" analysis, so no separate fresh-fork plumbing was
+  needed there. Kill switch: `PI_LENS_WARM_STALENESS_CHECK=0`.
 - **Push half = the `pi-lens-analyze` bin** wired as a Claude Code `PostToolUse`
   (Edit|Write) hook. MCP is pull; the hook is the only way to auto-fire on edit.
   It tries the **warm IPC side-channel first** (`clients/mcp/ipc.ts`: Unix socket /
