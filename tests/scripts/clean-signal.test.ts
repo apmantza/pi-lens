@@ -16,7 +16,11 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { classifyCleanBehavior } from "../../scripts/lib/clean-signal.mjs";
+import {
+  checkCleanSignalDrift,
+  classifyCleanBehavior,
+  findCleanSignalDrift,
+} from "../../scripts/lib/clean-signal.mjs";
 import {
   mergeRows,
   mergeSrc,
@@ -98,6 +102,90 @@ describe("classifyCleanBehavior (phase-aware 4-way)", () => {
       classifyCleanBehavior(undefined as unknown as Record<string, never>)
         .behavior,
     ).toBe("unknown");
+  });
+});
+
+describe("checkCleanSignalDrift (#529)", () => {
+  it("flags marked-not-silent when the marker says silent but the probe observed a publish", () => {
+    // The stale-marker direction: server-strategies.ts is too pessimistic.
+    const d = checkCleanSignalDrift(
+      { lang: "typescript", behavior: "publishes-unversioned" },
+      true,
+    );
+    expect(d.kind).toBe("marked-not-silent");
+    expect(d.detail).toContain("typescript");
+    expect(d.detail).toContain("publishes-unversioned");
+  });
+
+  it("flags silent-not-marked when the probe observed silence but no marker is set", () => {
+    // The pre-#458 tsserver situation: cascade burns a full wait it could skip.
+    const d = checkCleanSignalDrift({ lang: "python", behavior: "silent" }, undefined);
+    expect(d.kind).toBe("silent-not-marked");
+    expect(d.detail).toContain("python");
+  });
+
+  it("is consistent when a silent observation matches a true marker", () => {
+    const d = checkCleanSignalDrift({ lang: "typescript", behavior: "silent" }, true);
+    expect(d.kind).toBe("consistent");
+  });
+
+  it("is consistent when a non-silent observation matches an absent/false marker", () => {
+    const d = checkCleanSignalDrift(
+      { lang: "yaml", behavior: "publishes-unversioned" },
+      undefined,
+    );
+    expect(d.kind).toBe("consistent");
+  });
+
+  it("never treats 'unknown' as drift evidence in either direction (#240 doctrine)", () => {
+    // A server marked silentOnClean:true whose probe came back unknown (slow/absent
+    // this run) must NOT be reported as "marker says silent, observed not-silent" —
+    // unknown means we didn't see it publish at all, not that it's not silent.
+    const markedButUnknown = checkCleanSignalDrift(
+      { lang: "typescript", behavior: "unknown" },
+      true,
+    );
+    expect(markedButUnknown.kind).toBe("not-comparable");
+
+    const unmarkedAndUnknown = checkCleanSignalDrift(
+      { lang: "some-new-server", behavior: "unknown" },
+      undefined,
+    );
+    expect(unmarkedAndUnknown.kind).toBe("not-comparable");
+  });
+
+  it("tolerates a falsy marker value explicitly set to false (same as undefined)", () => {
+    const d = checkCleanSignalDrift({ lang: "rust-analyzer", behavior: "silent" }, false);
+    expect(d.kind).toBe("silent-not-marked");
+  });
+});
+
+describe("findCleanSignalDrift (#529)", () => {
+  it("returns only the drifting rows, dropping consistent and not-comparable ones", () => {
+    const rows = [
+      { lang: "typescript", behavior: "publishes-unversioned" }, // marked-not-silent
+      { lang: "python", behavior: "silent" }, // silent-not-marked
+      { lang: "yaml", behavior: "publishes-unversioned" }, // consistent
+      { lang: "rust-analyzer", behavior: "unknown" }, // not-comparable
+    ];
+    const markers: Record<string, boolean | undefined> = {
+      typescript: true,
+      python: undefined,
+      yaml: undefined,
+      "rust-analyzer": undefined,
+    };
+    const warnings = findCleanSignalDrift(rows, (lang) => markers[lang]);
+    expect(warnings).toHaveLength(2);
+    expect(warnings.map((w) => w.lang).sort()).toEqual(["python", "typescript"]);
+    expect(warnings.every((w) => w.kind !== "consistent" && w.kind !== "not-comparable")).toBe(
+      true,
+    );
+  });
+
+  it("returns an empty array when everything is consistent", () => {
+    const rows = [{ lang: "yaml", behavior: "publishes-unversioned" }];
+    const warnings = findCleanSignalDrift(rows, () => undefined);
+    expect(warnings).toHaveLength(0);
   });
 });
 

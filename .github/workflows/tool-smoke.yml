@@ -103,7 +103,12 @@ jobs:
       # Tier 3 (version-less/silent — the budget-wait case, #458). Merges into the
       # same matrix's clean-behavior column (same dev/ci src + merge-guard as
       # characterize). Best-effort: always exits 0, per-server hard timeouts.
-      - name: LSP clean-signal probe (Tier 2 vs 3 among push servers)
+      # #529: also compares each observed clean-behavior against server-strategies
+      # .ts's hand-set `silentOnClean` marker and logs any mismatch to this step's
+      # output + a "## silentOnClean drift" footnote in the matrix doc — telemetry
+      # only, NEVER a build/CI gate (this step's own continue-on-error covers the
+      # probe already; the drift check can't fail the job either way).
+      - name: LSP clean-signal probe (Tier 2 vs 3 among push servers) + silentOnClean drift check
         continue-on-error: true
         run: node scripts/probe-clean-signal.mjs --install
 
@@ -135,14 +140,14 @@ jobs:
           body: |
             Automated refresh of the LSP capability docs from the nightly tool-smoke run.
 
-            - `docs/lsp-capability-matrix.md` — `mode` (characterize-lsp) + `clean-behavior` (probe-clean-signal, Tier 2 vs 3) columns (#460)
+            - `docs/lsp-capability-matrix.md` — `mode` (characterize-lsp) + `clean-behavior` (probe-clean-signal, Tier 2 vs 3) columns (#460) + a `## silentOnClean drift` footnote (#529, telemetry only — never a gate)
             - `docs/servercapabilities.md` — advertised capability inventory incl. ws-pull (#389)
 
             Rows are **merged**, never blind-overwritten: a server this ubuntu host
             couldn't spawn keeps its prior (dev-box) classification, so the nightly
             can't regress a richer run (#390).
 
-            Refs #460, #390.
+            Refs #460, #390, #529.
           delete-branch: false
 
       - name: Format layer (select + reformat through formatter pipeline)

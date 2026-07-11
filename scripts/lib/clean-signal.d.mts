@@ -17,3 +17,28 @@ export function classifyCleanBehavior(obs: CleanSignalObservations): {
   tierLabel: "2" | "2*" | "3" | "";
   reason: string;
 };
+
+export interface DriftInput {
+  lang: string;
+  behavior: string;
+}
+
+export interface DriftResult {
+  lang: string;
+  kind:
+    | "silent-not-marked"
+    | "marked-not-silent"
+    | "consistent"
+    | "not-comparable";
+  detail: string;
+}
+
+export function checkCleanSignalDrift(
+  row: DriftInput,
+  silentOnClean: boolean | undefined,
+): DriftResult;
+
+export function findCleanSignalDrift(
+  rows: DriftInput[],
+  lookupSilentOnClean: (lang: string) => boolean | undefined,
+): DriftResult[];

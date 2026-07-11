@@ -16,6 +16,17 @@ regress a richer one (#390). The nightly **tool-smoke** workflow runs both (plus
 (`bot/lsp-docs-refresh`, "docs(nightly): refresh LSP capability docs") with the
 regenerated docs — so this file self-populates from CI without manual copy-paste.
 
+`probe-clean-signal.mjs` also runs a **drift check** (#529): it compares each
+probed server's observed `clean-behavior` against the hand-set `silentOnClean`
+marker in `clients/lsp/server-strategies.ts` and writes any mismatch to the
+`## silentOnClean drift` section below. This is telemetry only — never a CI
+gate — because the probe is a timing-based negative observation; a mismatch
+just tells a human the marker may need updating. `unknown` observations are
+never compared in either direction (a slow/absent server isn't evidence of
+anything). The native TS7 launch variant (`typescript7`/`typescript7-clean`,
+#524/#526) is deliberately excluded from comparison against classic's marker —
+they share a server id but not a verified clean-signal behavior.
+
 ## The strategies
 
 | Tier | Signal | Affirmative clean? | Example |
@@ -135,3 +146,12 @@ The `clean-behavior` split (4-way: 2 publishes-versioned / 2\* publishes-unversi
 manual one-off. Locally confirmed: ast-grep + ast-grep-baseline → 2, yaml + opengrep →
 2\*, typescript → 3 on its clean fixture (2\* on the dirty fixture — see Key findings);
 the rest fill in as the nightly reaches them.
+
+## silentOnClean drift (nightly-generated)
+
+Telemetry only — never a CI gate. Compares each probed server's observed
+`clean-behavior` against `clients/lsp/server-strategies.ts`'s `silentOnClean`
+marker; a mismatch means the marker may need a human update (#529). `unknown`
+observations are never compared (a slow/absent server is not evidence either way).
+
+_None observed as of the last probe run._

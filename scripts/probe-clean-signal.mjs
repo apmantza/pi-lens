@@ -45,7 +45,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { classifyCleanBehavior } from "./lib/clean-signal.mjs";
+import { checkCleanSignalDrift, classifyCleanBehavior } from "./lib/clean-signal.mjs";
 import { mergeRows, mergeSrc, parseTable, replaceTable } from "./lib/md-matrix.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -64,8 +64,42 @@ process.env.PILENS_PUB_DEBUG = "1";
 const { LSP_FIXTURES } = await imp("scripts/smoke-tools.mjs");
 const { getLSPService, resetLSPService } = await imp("dist/clients/lsp/index.js");
 const { initLSPConfig } = await imp("dist/clients/lsp/config.js");
+const { SERVER_DIAGNOSTIC_STRATEGIES } = await imp("dist/clients/lsp/server-strategies.js");
 let ensureTool;
 if (install) ({ ensureTool } = await imp("dist/clients/installer/index.js"));
+
+// #529 drift check: server-strategies.ts keys its table by SERVER ID, which
+// usually equals the fixture's `lang`, but a few fixtures use a different key
+// (a language alias fixture, e.g. `jedi` → the "python-jedi" strategy entry).
+// Explicit map for the known deviations; anything absent here falls back to
+// identity (fixture lang === strategy key), which covers the core set
+// (typescript, python, ast-grep, opengrep, yaml, …) without upkeep.
+const LANG_TO_STRATEGY_KEY = {
+	jedi: "python-jedi",
+	// typescript7[-clean] shares the "typescript" server id with classic (#524) —
+	// but silentOnClean is documented as CLASSIC-only (server-strategies.ts), so
+	// the native variant must NOT be compared against the same marker: comparing
+	// it would either falsely flag drift (if TS7 behaves differently, which is
+	// the whole reason #524 excluded it) or falsely validate it (if it happens to
+	// match). Route it to a key that's never in the table, which classifies as
+	// "no marker" via lookup — see the isNativeTs7 handling below instead, which
+	// skips the comparison entirely rather than reporting misleading drift.
+};
+
+// typescript7[-clean] shares the "typescript" server-strategy key with classic
+// (#524) but silentOnClean is documented CLASSIC-only — the native `tsc --lsp
+// --stdio` binary's clean-signal behavior is unverified and must not be
+// compared against classic's marker in either direction (a mismatch would be
+// misleading, not a real drift; a match would be coincidence, not validation).
+// These langs are filtered OUT of the drift-check input entirely (not routed
+// through the marker lookup as "unmarked" — that would still risk a
+// silent-not-marked false positive if the native variant also probes silent).
+const NATIVE_VARIANT_LANGS = new Set(["typescript7", "typescript7-clean"]);
+
+function lookupSilentOnClean(lang) {
+	const key = LANG_TO_STRATEGY_KEY[lang] ?? lang;
+	return SERVER_DIAGNOSTIC_STRATEGIES[key]?.silentOnClean;
+}
 
 // Budgets (reuse the original probe's generosity — this is off the hot path).
 const CLIENT_WAIT_MS = 30000; // cold spawn + initialize
@@ -267,6 +301,30 @@ const t2v = rows.filter((r) => r.behavior === "publishes-versioned").length;
 const t2u = rows.filter((r) => r.behavior === "publishes-unversioned").length;
 const t3 = rows.filter((r) => r.behavior === "silent").length;
 const unk = rows.filter((r) => r.behavior === "unknown").length;
+
+// ---- #529 drift check ------------------------------------------------------
+// Compare each measured server's observed behavior against server-strategies
+// .ts's `silentOnClean` marker. Telemetry only — NEVER a CI gate (this script
+// always exit(0)s regardless); a mismatch is logged to stdout and written as a
+// matrix footnote so a human decides whether to flip the marker. `unknown`
+// rows are never fed in (checkCleanSignalDrift already guards this).
+//
+// Resolved to the same `targetLang` the matrix merge uses (clean fixture wins
+// over its dirty sibling for the same base lang — resolveTargetLangRows is
+// shared with updateMatrix below) so the console report and the footnote never
+// disagree, and so typescript's clean-fixture verdict (the authoritative
+// clean→clean observation) is what's compared, not the dirty fixture's
+// diagnostic-neutral-edit approximation.
+const driftWarnings = resolveTargetLangRows(rows)
+	.filter((r) => !NATIVE_VARIANT_LANGS.has(r.lang))
+	.map((r) => checkCleanSignalDrift(r, lookupSilentOnClean(r.lang)))
+	.filter((d) => d.kind === "silent-not-marked" || d.kind === "marked-not-silent");
+if (driftWarnings.length) {
+	console.log(`\n  Drift vs server-strategies.ts silentOnClean marker (${driftWarnings.length} — telemetry only, never a CI gate):`);
+	for (const d of driftWarnings) console.log(`    [${d.kind}] ${d.detail}`);
+} else {
+	console.log("\n  Drift vs server-strategies.ts silentOnClean marker: none.");
+}
 console.log(`\n  Tier 2  (publishes-versioned — affirmative + currency-proven):        ${t2v}`);
 console.log(`  Tier 2* (publishes-unversioned — early-returns, currency correlated): ${t2u}`);
 console.log(`  Tier 3  (silent on clean — budget-wait, the #458 target set):         ${t3}`);
@@ -289,6 +347,28 @@ console.error = realErr;
 try { await resetLSPService?.({ fast: true }); } catch {}
 process.exit(0);
 
+// Resolve a `clean: true` fixture (e.g. typescript-clean) onto its base lang's
+// row (typescript), winning over the dirty fixture's diagnostic-neutral-edit
+// approximation for the same base lang — the ONE resolution rule shared by the
+// console drift report and the matrix merge, so they never disagree. Only rows
+// with a comparable classification are kept (mirrors `measurable` below).
+function resolveTargetLangRows(measuredRows) {
+	const measurable = measuredRows.filter(
+		(r) =>
+			r.behavior === "publishes-versioned" ||
+			r.behavior === "publishes-unversioned" ||
+			r.behavior === "silent",
+	);
+	const byTargetLang = new Map();
+	for (const r of measurable) {
+		const targetLang = r.cleanFixture ? r.lang.replace(/-clean$/, "") : r.lang;
+		const prev = byTargetLang.get(targetLang);
+		if (prev && prev.cleanFixture && !r.cleanFixture) continue; // clean fixture wins
+		byTargetLang.set(targetLang, { ...r, lang: targetLang, targetLang });
+	}
+	return [...byTargetLang.values()];
+}
+
 function updateMatrix(measuredRows) {
 	const docPath = path.join(repoRoot, "docs", "lsp-capability-matrix.md");
 	if (!fs.existsSync(docPath)) {
@@ -302,35 +382,19 @@ function updateMatrix(measuredRows) {
 		console.error("matrix update skipped: capability table not found in doc");
 		return;
 	}
-	// Only classifications we're confident in are authoritative:
-	// publishes-versioned (2), publishes-unversioned (2*), and silent (3).
-	// `unknown` and `n/a (pull)`/`no-lsp` are NOT written — don't clobber a
-	// prior dev-measured value with a CI non-result.
-	const measurable = measuredRows.filter(
-		(r) =>
-			r.behavior === "publishes-versioned" ||
-			r.behavior === "publishes-unversioned" ||
-			r.behavior === "silent",
-	);
-	// Key on `lang` (the matrix's first column + the fixture's stable id) — the
-	// hand-written `server` column doesn't always equal a fixture's serverHint
-	// (e.g. "ast-grep (aux)" vs "ast-grep (auxiliary)"). A `clean: true` fixture
-	// (typescript-clean) writes to its BASE lang's row (typescript) and WINS over
-	// the dirty fixture's approximation: a genuinely clean file is the
-	// authoritative clean→clean, and typescript measurably re-publishes while
-	// dirty but goes silent once clean — the clean-file behavior is the one #458
-	// (and the production budget-wait) cares about.
+	// Only classifications we're confident in are authoritative — resolveTargetLangRows
+	// already filters to publishes-versioned/publishes-unversioned/silent and applies
+	// the clean-fixture-wins rule (a `clean: true` fixture like typescript-clean writes
+	// to its BASE lang's row (typescript): a genuinely clean file is the authoritative
+	// clean→clean observation, and typescript measurably re-publishes while dirty but
+	// goes silent once clean — the clean-file behavior is the one #458 (and the
+	// production budget-wait) cares about). `unknown`/`n/a (pull)`/`no-lsp` are NOT
+	// written — don't clobber a prior dev-measured value with a CI non-result.
 	const keyIdx = tbl.header.indexOf("lang");
 	const srcIdx = tbl.header.indexOf("src");
 	const existingByLang = new Map(tbl.rows.map((c) => [c[keyIdx], c]));
-	const byTargetLang = new Map();
-	for (const r of measurable) {
-		const targetLang = r.cleanFixture ? r.lang.replace(/-clean$/, "") : r.lang;
-		const prev = byTargetLang.get(targetLang);
-		if (prev && prev.cleanFixture && !r.cleanFixture) continue; // clean fixture wins
-		byTargetLang.set(targetLang, { ...r, targetLang });
-	}
-	const measured = [...byTargetLang.values()].map((r) => {
+	const targetLangRows = resolveTargetLangRows(measuredRows);
+	const measured = targetLangRows.map((r) => {
 		const prior = existingByLang.get(r.targetLang);
 		return {
 			lang: r.targetLang,
@@ -347,8 +411,19 @@ function updateMatrix(measuredRows) {
 		["clean-behavior", "tier", "src"],
 		{ updateOnly: true },
 	);
-	const out = replaceTable(text, marker, tbl.header, tbl.sep, merged);
-	if (out && out !== text) {
+	let out = replaceTable(text, marker, tbl.header, tbl.sep, merged);
+	if (!out) out = text;
+
+	// #529 drift footnote: same targetLangRows the table merge above just used
+	// (clean fixture wins), so the footnote and the row it's about agree.
+	// NEVER a CI gate — this only rewrites a footnote section in the doc.
+	const footnoteWarnings = targetLangRows
+		.filter((r) => !NATIVE_VARIANT_LANGS.has(r.lang))
+		.map((r) => checkCleanSignalDrift(r, lookupSilentOnClean(r.lang)))
+		.filter((d) => d.kind === "silent-not-marked" || d.kind === "marked-not-silent");
+	out = writeDriftFootnote(out, footnoteWarnings);
+
+	if (out !== text) {
 		fs.writeFileSync(docPath, out);
 		console.error(
 			`Updated docs/lsp-capability-matrix.md clean-behavior column (${measured.length} servers classified, ${tbl.rows.length} rows preserved).`,
@@ -356,4 +431,44 @@ function updateMatrix(measuredRows) {
 	} else {
 		console.error("matrix clean-behavior column: no changes.");
 	}
+}
+
+// Replace the `## silentOnClean drift (nightly-generated)` section (own the
+// span between that heading and the next `## `/EOF), so re-runs update rather
+// than append. Telemetry only, per #529 — the section header says so.
+function writeDriftFootnote(text, warnings) {
+	const heading = "## silentOnClean drift (nightly-generated)";
+	const lines = text.split("\n");
+	const bodyLines = warnings.length
+		? warnings.map((d) => `- **[${d.kind}]** ${d.detail}`)
+		: ["_None observed as of the last probe run._"];
+	const section = [
+		heading,
+		"",
+		"Telemetry only — never a CI gate. Compares each probed server's observed",
+		"`clean-behavior` against `clients/lsp/server-strategies.ts`'s `silentOnClean`",
+		"marker; a mismatch means the marker may need a human update (#529). `unknown`",
+		"observations are never compared (a slow/absent server is not evidence either way).",
+		"",
+		...bodyLines,
+		"",
+	];
+	const headingIdx = lines.findIndex((l) => l.trim() === heading);
+	if (headingIdx < 0) {
+		// Trim any trailing blank lines already at EOF so we don't double them up.
+		let trimmed = lines;
+		while (trimmed.length && trimmed[trimmed.length - 1] === "") {
+			trimmed = trimmed.slice(0, -1);
+		}
+		return [...trimmed, "", "", ...section].join("\n");
+	}
+	let end = lines.length;
+	for (let i = headingIdx + 1; i < lines.length; i++) {
+		if (/^##\s/.test(lines[i])) {
+			end = i;
+			break;
+		}
+	}
+	lines.splice(headingIdx, end - headingIdx, ...section);
+	return lines.join("\n");
 }
