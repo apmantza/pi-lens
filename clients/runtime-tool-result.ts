@@ -28,6 +28,7 @@ import {
 } from "./project-changes.js";
 import type { RuffClient } from "./ruff-client.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
+import { scheduleWordIndexPersist } from "./word-index.js";
 
 interface ToolResultEvent {
 	toolName: string;
@@ -582,6 +583,17 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 				projectSeq: () => runtime.projectSeq,
 				getFilesChangedSince: (seq: number) =>
 					runtime.getFilesChangedSince(seq),
+			},
+			// #348 phase 2: live reference so the deferred cascade can update the
+			// warm word index in place at the same seam as the graph rebuild.
+			// `runtime.wordIndex` is read fresh (not captured) via this closure-free
+			// property access being re-evaluated at object-literal construction
+			// time here — that's fine because runPipeline reads `ctx.wordIndex`
+			// synchronously into computeCascadeForFile's options before returning
+			// (the deferred part is the cascade's OWN execution, not this handoff).
+			wordIndex: runtime.wordIndex,
+			onWordIndexUpdated: (index) => {
+				scheduleWordIndexPersist(dispatchCwd, index, dbg);
 			},
 		},
 		{

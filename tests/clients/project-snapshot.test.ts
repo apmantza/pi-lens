@@ -108,6 +108,33 @@ describe("project snapshot", () => {
 			expect(loadProjectSnapshot(cwd)?.wordIndex).toBeDefined();
 		}));
 
+	it("does NOT launder a stale word index into looking fresh across a seq bump (#348 seq-laundering guard)", () =>
+		withProjectDataDir((cwd) => {
+			// Persist a word index at seq=2.
+			const withIndex = new RuntimeCoordinator();
+			withIndex.seedProjectSequence(2);
+			withIndex.wordIndex = buildWordIndex([
+				{ path: path.join(cwd, "a.ts"), content: "function staleOnly() {}" },
+			]);
+			saveRuntimeProjectSnapshot({ cwd, runtime: withIndex });
+			expect(loadProjectSnapshot(cwd)?.seq).toBe(2);
+			expect(loadProjectSnapshot(cwd)?.wordIndex).toBeDefined();
+
+			// A later save at a NEW seq (project moved on), from a runtime whose
+			// word-index task hasn't (re)built yet. Without the guard, this save
+			// would re-stamp the seq=2 index as seq=3 — making a stale index look
+			// fresh to isProjectSnapshotFresh's seq check, even though it predates
+			// the seq bump and its rebuild hasn't happened. The guard (existing.seq
+			// === snapshot.seq) must instead DROP the stale index here.
+			const without = new RuntimeCoordinator();
+			without.seedProjectSequence(3);
+			saveRuntimeProjectSnapshot({ cwd, runtime: without });
+
+			const laundered = loadProjectSnapshot(cwd);
+			expect(laundered?.seq).toBe(3);
+			expect(laundered?.wordIndex).toBeUndefined();
+		}));
+
 	it("rejects wrong-version, stale, and future snapshots", () =>
 		withProjectDataDir((cwd) => {
 			const badPath = getProjectSnapshotPath(cwd);

@@ -43,6 +43,7 @@ export type { DispatchLatencyReport, RunnerLatency };
 export { clearLatencyReports, formatLatencyReport, getLatencyReports };
 
 import * as nodeFs from "node:fs";
+import * as nodePath from "node:path";
 import { fileURLToPath } from "node:url";
 import { formatCascadeNeighborDiagnostics } from "../cascade-format.js";
 import { logCascade } from "../cascade-logger.js";
@@ -83,6 +84,12 @@ import {
 	findCompiledClassesDir,
 	hasJavaBuildDescriptor,
 } from "../tool-policy.js";
+import {
+	removeWordIndexDocument,
+	updateWordIndexDocument,
+	WORD_INDEX_MAX_BYTES,
+	type WordIndex,
+} from "../word-index.js";
 // Register fact providers. All register eagerly here (the dispatch entry) — the
 // tree-sitter-backed providers included, since the parsing stack loads
 // `web-tree-sitter` lazily inside client.init(), not at module import, so it
@@ -551,6 +558,70 @@ function isIgnoredCascadeNeighbor(filePath: string, cwd: string): boolean {
 	}
 }
 
+/**
+ * #348 phase 2 per-edit seam: update the warm in-memory word index for one
+ * file, mirroring the review graph's per-edit rebuild at the same call site.
+ *
+ * Rules (each a documented, deliberate simplicity choice, not an oversight):
+ *  - `wordIndex` null (no index loaded yet) ⇒ no-op. Cold-session handoff is
+ *    OWNED by phase 1's lifecycle/background build, never invented here — an
+ *    edit arriving before that build finishes just doesn't update anything;
+ *    the eventual full build already reflects every file on disk, incl. this
+ *    edit, so nothing is lost, only delayed.
+ *  - `wordIndex.forward` undefined (pre-phase-2 index shape, e.g. a snapshot
+ *    persisted before this feature or one still using the old serialized
+ *    shape) ⇒ no-op. `updateWordIndexDocument` already refuses to mutate a
+ *    forward-index-less index (see its doc comment) — this is the same rule
+ *    surfaced one layer up so the caller isn't left guessing why nothing
+ *    happened. The NEXT full rebuild (session-start lifecycle) installs a
+ *    forward-index-bearing index that later edits CAN update incrementally.
+ *  - `content` undefined (pipeline couldn't read the file — deleted, or a
+ *    transient race) ⇒ no-op. Deletions aren't plumbed at this seam (this
+ *    call site only ever sees the edited file's post-write content, never a
+ *    delete event) — a removed file ages out at the next full rebuild, same
+ *    scope boundary the review graph accepts for deletes.
+ *  - File over the shared `WORD_INDEX_MAX_BYTES` cap ⇒ removed/absent from
+ *    the index (never partially indexed) — same cap phase 1's build path
+ *    enforces via `collectWordIndexDocs`.
+ *  - On a successful update, `onUpdated` fires so the caller can schedule a
+ *    debounced persist (never a synchronous write per edit — same #260
+ *    discipline as the graph).
+ *
+ * Race safety against a build-in-progress: this function body is entirely
+ * synchronous (no `await` anywhere in it) and is called synchronously at
+ * `computeCascadeForFile`'s entry, before its own `await buildOrUpdateGraph`.
+ * Node is single-threaded, so two overlapping cascades (#450's unawaited
+ * concurrency) can never interleave mid-mutation here — each call runs to
+ * completion in one turn. The only cross-build hazard is a full session-start
+ * rebuild REPLACING `runtime.wordIndex` with a new object between the caller
+ * reading `runtime.wordIndex` (in runtime-tool-result.ts, also synchronous)
+ * and this function receiving it — in that case this call simply mutates
+ * whichever index object it was handed (old or new), and the other one is
+ * abandoned/superseded, never corrupted. No queue, no lock: the simplest rule
+ * that is still provably correct.
+ */
+function updateWordIndexForCascade(args: {
+	wordIndex?: WordIndex | null;
+	filePath: string;
+	content?: string;
+	onUpdated?: (index: WordIndex) => void;
+	dbg?: (msg: string) => void;
+}): void {
+	const { wordIndex, filePath, content, onUpdated, dbg } = args;
+	if (!wordIndex || !wordIndex.forward) return;
+	if (content === undefined) return;
+
+	const byteLength = Buffer.byteLength(content, "utf-8");
+	if (byteLength > WORD_INDEX_MAX_BYTES) {
+		removeWordIndexDocument(wordIndex, filePath);
+		dbg?.(`word-index per-edit: dropped ${filePath} (over size cap)`);
+	} else {
+		updateWordIndexDocument(wordIndex, { path: filePath, content });
+		dbg?.(`word-index per-edit: updated ${filePath}`);
+	}
+	onUpdated?.(wordIndex);
+}
+
 export async function computeCascadeForFile(
 	filePath: string,
 	cwd: string,
@@ -569,9 +640,39 @@ export async function computeCascadeForFile(
 			projectSeq: () => number;
 			getFilesChangedSince: (seq: number) => string[];
 		};
+		/**
+		 * Post-format/post-fix file content, already read by the pipeline before
+		 * this deferred cascade runs (#348 phase 2). Reused here to update the
+		 * warm in-memory word index at the SAME seam as the graph rebuild below —
+		 * no extra I/O path, just one file's tokenization. `undefined` when the
+		 * pipeline couldn't read the file (deleted, race) — the word-index update
+		 * is skipped in that case.
+		 */
+		fileContent?: string;
+		/**
+		 * Live reference to `runtime.wordIndex` (#348 phase 2). `null` means no
+		 * index is loaded in memory yet — the per-edit path is then a documented
+		 * no-op (cold handoff): phase 1's lifecycle/background build owns "cold",
+		 * never this seam. A non-null index with no `forward` map (pre-phase-2 /
+		 * deserialized from an old snapshot) is also a no-op — the caller's next
+		 * full rebuild installs a forward-index-bearing index that later edits
+		 * CAN update incrementally.
+		 */
+		wordIndex?: WordIndex | null;
+		/** Debounced-persist hook for the updated word index (#348 phase 2). */
+		onWordIndexUpdated?: (index: WordIndex) => void;
 	} = {},
 ): Promise<CascadeRun> {
-	const { hasBlockers = false, dbg, turnSeq = 0, writeSeq, seqState } = options;
+	const {
+		hasBlockers = false,
+		dbg,
+		turnSeq = 0,
+		writeSeq,
+		seqState,
+		fileContent,
+		wordIndex,
+		onWordIndexUpdated,
+	} = options;
 
 	ensureCascadeTurnScope(turnSeq);
 
@@ -608,6 +709,31 @@ export async function computeCascadeForFile(
 	// B10: record this file as a primary edit so later cascade calls in the same
 	// turn won't show it as a neighbor.
 	primaryFilesThisTurn.add(normalizedFileKey);
+
+	// #348 phase 2: warm per-edit word-index maintenance, review-graph style —
+	// update at the SAME seam as the graph rebuild below, using content the
+	// pipeline already read (no extra I/O). See computeCascadeForFile's
+	// `wordIndex`/`fileContent` doc comments for the cold/no-forward-index
+	// no-op rules.
+	//
+	// Deliberately keyed by `path.resolve(filePath)`, NOT `normalizedFile`
+	// (which is `normalizeMapKey`'d — realpath-canonicalized + lowercased on
+	// Windows). The word index's OWN keys come from `collectWordIndexDocs` →
+	// `collectSourceFilesAsync`'s file walk, which yields plain
+	// `path.resolve()`-joined paths (native separators, on-disk casing as
+	// reported by the walk, no realpath call). Keying this update with the
+	// cascade's normalized key would silently create a SECOND, orphaned entry
+	// next to the walker's original-cased entry instead of replacing it —
+	// exactly the kind of divergence the equivalence-property test is meant to
+	// catch, so the key shape here must match the build path's, not the
+	// cascade/graph's own (different) normalization scheme.
+	updateWordIndexForCascade({
+		wordIndex,
+		filePath: nodePath.resolve(filePath),
+		content: fileContent,
+		onUpdated: onWordIndexUpdated,
+		dbg,
+	});
 
 	let impact: ReturnType<typeof computeImpactCascade> = {
 		filePath: normalizedFile,

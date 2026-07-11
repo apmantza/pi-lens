@@ -61,6 +61,7 @@ import type { MetricsClient } from "./metrics-client.js";
 import { clearGraphCache } from "./review-graph/builder.js";
 import type { RuffClient } from "./ruff-client.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
+import type { WordIndex } from "./word-index.js";
 import { getAmbientAbortSignal, safeSpawnAsync } from "./safe-spawn.js";
 import { combineAbortSignals } from "./deadline-utils.js";
 import {
@@ -240,6 +241,16 @@ export interface PipelineContext {
 		projectSeq: () => number;
 		getFilesChangedSince: (seq: number) => string[];
 	};
+	/**
+	 * Live reference to `runtime.wordIndex` (#348 phase 2), threaded to the
+	 * deferred cascade so it can update the warm in-memory word index at the
+	 * same seam as the graph rebuild. `null`/absent ⇒ documented no-op (see
+	 * `updateWordIndexForCascade` in dispatch/integration.ts) — never a
+	 * synchronous build here.
+	 */
+	wordIndex?: WordIndex | null;
+	/** Debounced-persist hook fired after a successful per-edit update. */
+	onWordIndexUpdated?: (index: WordIndex) => void;
 }
 
 export interface PipelineDeps {
@@ -1331,6 +1342,9 @@ export async function runPipeline(
 				turnSeq: ctx.telemetry?.turnIndex,
 				writeSeq: ctx.telemetry?.writeIndex,
 				seqState: ctx.seqState,
+				fileContent,
+				wordIndex: ctx.wordIndex,
+				onWordIndexUpdated: ctx.onWordIndexUpdated,
 			}).catch(
 				(err): import("./cascade-types.js").CascadeRun => {
 					dbg(`cascade compute failed for ${filePath}: ${err}`);

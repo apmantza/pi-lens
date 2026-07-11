@@ -10,6 +10,12 @@ import * as path from "node:path";
 // and call `flushReviewGraphPersistsForTests()`.
 process.env.PI_LENS_GRAPH_PERSIST_DEBOUNCE_MS = "0";
 
+// Same rationale, word index (#348 phase 2): per-edit updates schedule a
+// debounced persist through the shared project-snapshot file. Default to a
+// synchronous write in tests; tests exercising the throttle itself override
+// this in their own body and call `flushWordIndexPersistsForTests()`.
+process.env.PI_LENS_WORD_INDEX_PERSIST_DEBOUNCE_MS = "0";
+
 // Hermeticity: never let the developer's PERSONAL ~/.pi-lens/config.json leak
 // into test behavior. Seen live 2026-07-11: opting into `turnSummary.enabled`
 // on this machine flipped the #484 "default off-by-default" integration test
