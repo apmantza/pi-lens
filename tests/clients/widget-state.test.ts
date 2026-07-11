@@ -5,6 +5,7 @@ import {
 	__testing,
 	clearWidgetState,
 	getFailedLspServerIds,
+	getFileDiagnostics,
 	getFileDiagnosticSummaries,
 	getSessionLanguages,
 	recordDiagnostics,
@@ -45,6 +46,33 @@ describe("LSP failure accessors (#170)", () => {
 		expect(getSessionLanguages()).toEqual([]);
 		setSessionLanguages(["python", "ruby"]);
 		expect(getSessionLanguages()).toEqual(["python", "ruby"]);
+	});
+});
+
+describe("getFileDiagnostics (#502 single-file accessor)", () => {
+	it("returns undefined for a file never recorded", () => {
+		expect(getFileDiagnostics(`${process.cwd()}/never-seen.ts`)).toBeUndefined();
+	});
+
+	it("returns the full uncapped set for a recorded file", () => {
+		const filePath = `${process.cwd()}/single.ts`;
+		recordDiagnostics(filePath, [
+			{ severity: "error", rule: "typescript:2322", message: "bad", tool: "tsserver" },
+			{ severity: "warning", rule: "no-console", message: "noisy", tool: "eslint" },
+		]);
+
+		const result = getFileDiagnostics(filePath);
+		expect(result).toHaveLength(2);
+		expect(result?.[0].severity).toBe("error");
+	});
+
+	it("returns an explicit empty array when the file was recorded clean", () => {
+		const filePath = `${process.cwd()}/clean.ts`;
+		recordDiagnostics(filePath, [{ severity: "error", message: "bad", tool: "eslint" }]);
+		recordDiagnostics(filePath, []); // transitions to clean
+
+		const result = getFileDiagnostics(filePath);
+		expect(result).toEqual([]);
 	});
 });
 

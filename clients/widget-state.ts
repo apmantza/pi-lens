@@ -334,6 +334,28 @@ export function getFileDiagnosticSummaries(): FileDiagnosticSummary[] {
 	}));
 }
 
+/**
+ * Return the current FULL (uncapped) diagnostic set for a single file, as
+ * last recorded by {@link recordDiagnostics} — the same `allDiagnostics`
+ * store `getFileDiagnosticSummaries` exposes per-file, without paying for a
+ * whole-session snapshot. Used by the #502 `pilens:diagnostics` bus producer
+ * (`clients/bus-publish.ts`), which reads this immediately after
+ * `recordDiagnostics` writes it so the emitted event reflects the write
+ * batch's FINAL diagnostic state (post-format, post-autofix, post-dispatch —
+ * see pipeline.ts call order). Returns `undefined` when the file has never
+ * been recorded (caller must not confuse "never seen" with "seen and clean";
+ * an explicit `[]` from `recordDiagnostics` is a real empty array here).
+ *
+ * NOTE: `filePath` must be the exact string used to record the file — the
+ * `files` map key is NOT normalized (pre-existing; see `getOrCreate`), so
+ * callers should pass through the same value they gave `recordDiagnostics`.
+ */
+export function getFileDiagnostics(filePath: string): WidgetDiagnostic[] | undefined {
+	const rec = files.get(filePath);
+	if (!rec) return undefined;
+	return rec.allDiagnostics.map((d) => ({ ...d }));
+}
+
 /** @internal Test-only helpers. Do not use in production code. */
 export const __testing = {
 	getWidgetStateSnapshot(): {

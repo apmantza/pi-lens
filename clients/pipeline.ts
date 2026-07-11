@@ -51,6 +51,11 @@ import type { FormatService } from "./format-service.js";
 import { logLatency } from "./latency-logger.js";
 import { emitLensAnalysisComplete } from "./lens-events.js";
 import { publishFilesTouched } from "./bus-publish.js";
+import {
+	publishDiagnostics,
+	wasPreviouslyReportedDirty,
+	type PilensDiagnosticEntry,
+} from "./diagnostics-publish.js";
 import { getLSPService } from "./lsp/index.js";
 import type { MetricsClient } from "./metrics-client.js";
 import { clearGraphCache } from "./review-graph/builder.js";
@@ -925,6 +930,20 @@ export async function resyncLspFile(
 	}
 }
 
+/** Maps a dispatch `Diagnostic` (clients/dispatch/types.ts) to the #502 bus payload shape. */
+function toPilensDiagnosticEntry(d: Diagnostic): PilensDiagnosticEntry {
+	const entry: PilensDiagnosticEntry = {
+		severity: d.severity,
+		message: d.message,
+		tool: d.tool,
+	};
+	if (d.rule !== undefined) entry.ruleId = d.rule;
+	if (d.line !== undefined) entry.line = d.line;
+	if (d.column !== undefined) entry.col = d.column;
+	if (d.fixable !== undefined) entry.fixable = d.fixable;
+	return entry;
+}
+
 type DispatchResult = Awaited<ReturnType<typeof dispatchLintWithResult>>;
 function buildAllClearOutput(
 	_dispatchResult: DispatchResult,
@@ -1083,12 +1102,18 @@ export async function runPipeline(
 		formatFailures = formatResult.formatFailures;
 		fileContent = formatResult.fileContent;
 		if (formatChanged) {
-			piChangedFiles.add(path.resolve(filePath));
+			const absPath = path.resolve(filePath);
+			piChangedFiles.add(absPath);
 			publishFilesTouched({
 				reason: "format",
-				paths: [path.resolve(filePath)],
+				paths: [absPath],
 				cwd,
 				dbg,
+				fixes: formattersUsed.map((tool) => ({
+					path: absPath,
+					tool,
+					kind: "format",
+				})),
 			});
 		}
 	} else if (formatDeferred) {
@@ -1114,11 +1139,22 @@ export async function runPipeline(
 		piChangedFiles.add(path.resolve(changedFile));
 	}
 	if (autofixChangedFiles.length > 0) {
+		// autofixTools entries are "tool:count" (e.g. "ruff:3"); runAutofix runs
+		// against ONE target filePath per call, so every tool that fired in this
+		// batch applies to every file the batch changed — best-effort attribution
+		// (not per-file precision) since the underlying tool runners don't report
+		// per-changed-file breakdown. Good enough for the "was this hunk
+		// mechanical" use case the fix-provenance field exists for.
+		const absChangedFiles = autofixChangedFiles.map((f) => path.resolve(f));
+		const toolNames = autofixTools.map((t) => t.split(":")[0]);
 		publishFilesTouched({
 			reason: "autofix",
-			paths: autofixChangedFiles.map((f) => path.resolve(f)),
+			paths: absChangedFiles,
 			cwd,
 			dbg,
+			fixes: absChangedFiles.flatMap((p) =>
+				toolNames.map((tool) => ({ path: p, tool, kind: "autofix" as const })),
+			),
 		});
 	}
 	if (fixRefresh) {
@@ -1166,6 +1202,30 @@ export async function runPipeline(
 		},
 	);
 	recordDiagnostics(filePath, dispatchResult.diagnostics);
+	// #502: emit the write batch's FINAL diagnostic state immediately after
+	// recordDiagnostics commits it — this call site runs after format,
+	// autofix, and dispatch have all completed for this batch (see the phase
+	// order above), so dispatchResult.diagnostics IS the latest post-batch
+	// picture, not an intermediate runner result. Full-replace semantics: we
+	// always pass the complete current set for this file, including an
+	// explicit `[]` on the transition from a previously-reported-dirty state
+	// to clean (see clients/diagnostics-publish.ts for the contract).
+	{
+		const absPath = path.resolve(filePath);
+		const wasDirty = wasPreviouslyReportedDirty(absPath);
+		if (dispatchResult.diagnostics.length > 0 || wasDirty) {
+			publishDiagnostics({
+				cwd,
+				files: [
+					{
+						path: absPath,
+						diagnostics: dispatchResult.diagnostics.map(toPilensDiagnosticEntry),
+					},
+				],
+				dbg,
+			});
+		}
+	}
 	const hasBlockers = dispatchResult.hasBlockers;
 	const actionableWarnings = dispatchResult.warnings
 		.map((diagnostic) => recordFromDispatchDiagnostic(diagnostic, cwd))
