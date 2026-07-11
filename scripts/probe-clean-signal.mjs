@@ -68,33 +68,31 @@ const { SERVER_DIAGNOSTIC_STRATEGIES } = await imp("dist/clients/lsp/server-stra
 let ensureTool;
 if (install) ({ ensureTool } = await imp("dist/clients/installer/index.js"));
 
-// #529 drift check: server-strategies.ts keys its table by SERVER ID, which
-// usually equals the fixture's `lang`, but a few fixtures use a different key
-// (a language alias fixture, e.g. `jedi` → the "python-jedi" strategy entry).
-// Explicit map for the known deviations; anything absent here falls back to
-// identity (fixture lang === strategy key), which covers the core set
-// (typescript, python, ast-grep, opengrep, yaml, …) without upkeep.
+// #529/#541 drift check: server-strategies.ts keys its table by SERVER ID,
+// which usually equals the fixture's `lang`, but a few fixtures use a
+// different key (a language alias fixture, e.g. `jedi` → the "python-jedi"
+// strategy entry, or the native-ts7 fixtures which share classic's
+// "typescript" strategy key). Explicit map for the known deviations; anything
+// absent here falls back to identity (fixture lang === strategy key), which
+// covers the core set (typescript, python, ast-grep, opengrep, yaml, …)
+// without upkeep.
+//
+// #524/#529/#541: typescript7[-clean] shares the "typescript" server id with
+// classic. PR #526 originally excluded the native variant from this
+// comparison entirely because silentOnClean was documented CLASSIC-only and
+// its clean-signal behavior was unverified. The #529/#540 clean-signal probe
+// has since measured native-ts7 directly (2026-07-11): silent on clean, same
+// as classic. server-strategies.ts's `silentOnClean` marker now covers BOTH
+// variants (#541), so the native rows are routed to the SAME "typescript" key
+// and compared like any other row. This is now the intended regression watch:
+// if a future TS7 build starts publishing on the clean fixture, the mismatch
+// against the shared marker surfaces as a `marked-not-silent` drift warning —
+// the safety net that replaces the old fail-safe full-wait exclusion.
 const LANG_TO_STRATEGY_KEY = {
 	jedi: "python-jedi",
-	// typescript7[-clean] shares the "typescript" server id with classic (#524) —
-	// but silentOnClean is documented as CLASSIC-only (server-strategies.ts), so
-	// the native variant must NOT be compared against the same marker: comparing
-	// it would either falsely flag drift (if TS7 behaves differently, which is
-	// the whole reason #524 excluded it) or falsely validate it (if it happens to
-	// match). Route it to a key that's never in the table, which classifies as
-	// "no marker" via lookup — see the isNativeTs7 handling below instead, which
-	// skips the comparison entirely rather than reporting misleading drift.
+	typescript7: "typescript",
+	"typescript7-clean": "typescript",
 };
-
-// typescript7[-clean] shares the "typescript" server-strategy key with classic
-// (#524) but silentOnClean is documented CLASSIC-only — the native `tsc --lsp
-// --stdio` binary's clean-signal behavior is unverified and must not be
-// compared against classic's marker in either direction (a mismatch would be
-// misleading, not a real drift; a match would be coincidence, not validation).
-// These langs are filtered OUT of the drift-check input entirely (not routed
-// through the marker lookup as "unmarked" — that would still risk a
-// silent-not-marked false positive if the native variant also probes silent).
-const NATIVE_VARIANT_LANGS = new Set(["typescript7", "typescript7-clean"]);
 
 function lookupSilentOnClean(lang) {
 	const key = LANG_TO_STRATEGY_KEY[lang] ?? lang;
@@ -302,7 +300,7 @@ const t2u = rows.filter((r) => r.behavior === "publishes-unversioned").length;
 const t3 = rows.filter((r) => r.behavior === "silent").length;
 const unk = rows.filter((r) => r.behavior === "unknown").length;
 
-// ---- #529 drift check ------------------------------------------------------
+// ---- #529/#541 drift check --------------------------------------------------
 // Compare each measured server's observed behavior against server-strategies
 // .ts's `silentOnClean` marker. Telemetry only — NEVER a CI gate (this script
 // always exit(0)s regardless); a mismatch is logged to stdout and written as a
@@ -315,8 +313,13 @@ const unk = rows.filter((r) => r.behavior === "unknown").length;
 // disagree, and so typescript's clean-fixture verdict (the authoritative
 // clean→clean observation) is what's compared, not the dirty fixture's
 // diagnostic-neutral-edit approximation.
+//
+// #541: the native-ts7 rows (typescript7/typescript7-clean) are no longer
+// filtered out here — `lookupSilentOnClean` routes them to the shared
+// "typescript" strategy key (both variants are now measured silent), so a
+// future TS7 build that starts publishing on clean will surface as a real
+// `marked-not-silent` drift warning instead of being silently skipped.
 const driftWarnings = resolveTargetLangRows(rows)
-	.filter((r) => !NATIVE_VARIANT_LANGS.has(r.lang))
 	.map((r) => checkCleanSignalDrift(r, lookupSilentOnClean(r.lang)))
 	.filter((d) => d.kind === "silent-not-marked" || d.kind === "marked-not-silent");
 if (driftWarnings.length) {
@@ -414,11 +417,11 @@ function updateMatrix(measuredRows) {
 	let out = replaceTable(text, marker, tbl.header, tbl.sep, merged);
 	if (!out) out = text;
 
-	// #529 drift footnote: same targetLangRows the table merge above just used
-	// (clean fixture wins), so the footnote and the row it's about agree.
+	// #529/#541 drift footnote: same targetLangRows the table merge above just
+	// used (clean fixture wins), so the footnote and the row it's about agree.
 	// NEVER a CI gate — this only rewrites a footnote section in the doc.
+	// #541: native-ts7 rows are compared too (see the drift-check comment above).
 	const footnoteWarnings = targetLangRows
-		.filter((r) => !NATIVE_VARIANT_LANGS.has(r.lang))
 		.map((r) => checkCleanSignalDrift(r, lookupSilentOnClean(r.lang)))
 		.filter((d) => d.kind === "silent-not-marked" || d.kind === "marked-not-silent");
 	out = writeDriftFootnote(out, footnoteWarnings);

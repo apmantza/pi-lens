@@ -61,10 +61,11 @@ describe("classifyCascadeWaitTier", () => {
 		expect(tier).toBe("tier3-silent");
 	});
 
-	// #524/#529: "typescript" can now be either the classic
+	// #524/#529/#541: "typescript" can be either the classic
 	// typescript-language-server or TS7's native `tsc --lsp --stdio` (PR #526).
-	// silentOnClean was only ever measured against the classic server, so the
-	// classifier must key off the snapshot's launchVariant, not just server id.
+	// Both are now probe-measured silentOnClean (#541), so the `launchVariant`
+	// field is accepted on the snapshot but no longer changes the verdict —
+	// pinned unchanged to guard against a future regression on the classic path.
 	it("classifies a classic-variant typescript snapshot with silentOnClean as tier3-silent (pinned, unchanged)", () => {
 		getServersForFileWithConfig.mockReturnValue([server("typescript")]);
 		const snapshots = [
@@ -83,7 +84,11 @@ describe("classifyCascadeWaitTier", () => {
 		).toBe("tier3-silent");
 	});
 
-	it("classifies a native-ts7 typescript snapshot as waits, even though the strategy has silentOnClean (unverified clean-signal, fail-safe)", () => {
+	// #541: the #529/#540 clean-signal probe measured native-ts7 silent on
+	// clean transitions too (2026-07-11) — the same verdict as classic. The
+	// classifier no longer branches on `launchVariant`, so a native-ts7
+	// snapshot now gets tier3-silent exactly like classic.
+	it("classifies a native-ts7 typescript snapshot as tier3-silent — probe-measured silent, same as classic (#541)", () => {
 		getServersForFileWithConfig.mockReturnValue([server("typescript")]);
 		const snapshots = [
 			{
@@ -98,7 +103,7 @@ describe("classifyCascadeWaitTier", () => {
 		];
 		expect(
 			mod.classifyCascadeWaitTier({} as any, FILE, snapshots as any),
-		).toBe("waits");
+		).toBe("tier3-silent");
 	});
 
 	it("classifies a typescript snapshot with NO launchVariant marker (older snapshot) as tier3-silent — unchanged today-behavior", () => {

@@ -158,6 +158,31 @@ describe("checkCleanSignalDrift (#529)", () => {
     const d = checkCleanSignalDrift({ lang: "rust-analyzer", behavior: "silent" }, false);
     expect(d.kind).toBe("silent-not-marked");
   });
+
+  // #541: probe-clean-signal.mjs used to exclude typescript7/typescript7-clean
+  // from this comparison entirely (PR #526's fail-safe — silentOnClean was
+  // documented CLASSIC-only). The #529/#540 probe has since measured native-ts7
+  // silent too, so the marker now covers both variants and the script routes
+  // typescript7[-clean] to the shared "typescript" strategy key instead of
+  // skipping the row. These cases exercise that lifted comparison directly
+  // against the pure checker (the routing itself lives in the script's
+  // lookupSilentOnClean, out of unit-test scope — see the file header).
+  it("is consistent when native-ts7 is observed silent and routed to the shared typescript marker (#541, the expected steady state)", () => {
+    const d = checkCleanSignalDrift({ lang: "typescript7", behavior: "silent" }, true);
+    expect(d.kind).toBe("consistent");
+  });
+
+  it("flags marked-not-silent when a FUTURE native-ts7 build starts publishing on clean (#541 regression watch)", () => {
+    // The safety net this change exists for: if a future TS7 build diverges
+    // from classic's silent behavior, the shared marker now catches it instead
+    // of the row being silently skipped.
+    const d = checkCleanSignalDrift(
+      { lang: "typescript7-clean", behavior: "publishes-unversioned" },
+      true,
+    );
+    expect(d.kind).toBe("marked-not-silent");
+    expect(d.detail).toContain("typescript7-clean");
+  });
 });
 
 describe("findCleanSignalDrift (#529)", () => {
@@ -186,6 +211,26 @@ describe("findCleanSignalDrift (#529)", () => {
     const rows = [{ lang: "yaml", behavior: "publishes-unversioned" }];
     const warnings = findCleanSignalDrift(rows, () => undefined);
     expect(warnings).toHaveLength(0);
+  });
+
+  // #541: with the typescript7 exclusion lifted, a native-ts7 row now
+  // participates in the drift scan like any other row — routed (by the
+  // caller's lookup, mirroring probe-clean-signal.mjs's LANG_TO_STRATEGY_KEY)
+  // to the shared "typescript" marker.
+  it("includes a native-ts7 row routed to the shared typescript marker, flagging drift if it diverges (#541)", () => {
+    const rows = [
+      { lang: "typescript", behavior: "silent" }, // consistent
+      { lang: "typescript7-clean", behavior: "publishes-versioned" }, // marked-not-silent
+    ];
+    const strategyKeyFor = (lang: string) =>
+      lang === "typescript7-clean" || lang === "typescript7"
+        ? "typescript"
+        : lang;
+    const markers: Record<string, boolean | undefined> = { typescript: true };
+    const warnings = findCleanSignalDrift(rows, (lang) => markers[strategyKeyFor(lang)]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].lang).toBe("typescript7-clean");
+    expect(warnings[0].kind).toBe("marked-not-silent");
   });
 });
 
