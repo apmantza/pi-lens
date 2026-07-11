@@ -1,5 +1,5 @@
 ---
-name: ast-grep
+name: pi-lens-ast-grep
 description: Use when searching or replacing code patterns - use ast-grep instead of text search for semantic accuracy
 ---
 

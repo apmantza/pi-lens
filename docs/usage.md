@@ -87,13 +87,13 @@ pi --no-opengrep         # Disable the Opengrep security scanner (default-on aux
 Tree-sitter rules live under `rules/tree-sitter-queries/<language>/` and are
 query-based. Use them when you need precise tree relationships or post-filters.
 See [`docs/custom-rules.md`](../docs/custom-rules.md) and the
-`write-tree-sitter-rule` skill.
+`pi-lens-write-tree-sitter-rule` skill.
 
 ### ast-grep rules
 
 ast-grep rules live under `rules/ast-grep-rules/rules/`. Every shipped rule must
 have a fixture in `rules/ast-grep-rules/rule-tests/`. Use the
-`write-ast-grep-rule` skill for schema and runner gotchas.
+`pi-lens-write-ast-grep-rule` skill for schema and runner gotchas.
 
 The shipped baseline combines native pi-lens rules with vendored CodeRabbit
 security rules under `rules/ast-grep-rules/coderabbit/rules/`.

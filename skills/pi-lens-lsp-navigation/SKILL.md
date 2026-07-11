@@ -1,5 +1,5 @@
 ---
-name: lsp-navigation
+name: pi-lens-lsp-navigation
 description: Navigate code with IDE features and run proactive LSP diagnostics on files/folders/batches. Use as PRIMARY for code intelligence and type/error checks.
 ---
 

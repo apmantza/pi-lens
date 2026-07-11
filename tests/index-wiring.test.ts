@@ -94,7 +94,34 @@ describe("index.ts extension wiring", () => {
 			expect(fs.existsSync(skillsDir), `skills dir exists: ${skillsDir}`).toBe(
 				true,
 			);
-			expect(fs.existsSync(path.join(skillsDir, "ast-grep"))).toBe(true);
+			// #519: all bundled skills are namespaced with a `pi-lens-` prefix so
+			// they don't collide with independently installed user skills that
+			// share a generic name (discovery is by frontmatter `name`, and a
+			// collision causes one copy to be silently skipped).
+			const NAMESPACED_SKILLS = [
+				"pi-lens-ast-grep",
+				"pi-lens-lsp-navigation",
+				"pi-lens-write-ast-grep-rule",
+				"pi-lens-write-tree-sitter-rule",
+			];
+			const GENERIC_SKILL_NAMES = [
+				"ast-grep",
+				"lsp-navigation",
+				"write-ast-grep-rule",
+				"write-tree-sitter-rule",
+			];
+			for (const name of NAMESPACED_SKILLS) {
+				expect(
+					fs.existsSync(path.join(skillsDir, name)),
+					`namespaced skill dir exists: ${name}`,
+				).toBe(true);
+			}
+			for (const name of GENERIC_SKILL_NAMES) {
+				expect(
+					fs.existsSync(path.join(skillsDir, name)),
+					`generic skill dir must not exist (regression guard against rename-back): ${name}`,
+				).toBe(false);
+			}
 		});
 	});
 

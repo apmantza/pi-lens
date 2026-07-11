@@ -1,5 +1,5 @@
 ---
-name: write-ast-grep-rule
+name: pi-lens-write-ast-grep-rule
 description: Use when writing a new pi-lens ast-grep rule YAML file — covers schema, drop path, gotchas, and NAPI runner constraints
 ---
 

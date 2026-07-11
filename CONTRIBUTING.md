@@ -173,7 +173,7 @@ Formatters live in `clients/formatters.ts`.
 
 Ast-grep rules live in `rules/ast-grep-rules/rules/` (and vendored CodeRabbit rules in `rules/ast-grep-rules/coderabbit/rules/`).
 
-1. Write a YAML rule file. See `docs/custom-rules.md` and the `write-ast-grep-rule` skill (`skills/write-ast-grep-rule/SKILL.md`).
+1. Write a YAML rule file. See `docs/custom-rules.md` and the `pi-lens-write-ast-grep-rule` skill (`skills/pi-lens-write-ast-grep-rule/SKILL.md`).
 2. Every shipped rule must have a corresponding `<id>-test.yml` fixture in `rules/ast-grep-rules/rule-tests/`.
 3. Add the rule to `rules/ast-grep-rules/.sgconfig.yml` if it's not picked up automatically by `ruleDirs`.
 4. Run `npx ast-grep test -c rules/ast-grep-rules/.sgconfig.yml --skip-snapshot-tests` locally.
@@ -193,7 +193,7 @@ When adding a rule directory, update **both** paths until this is unified.
 
 Tree-sitter rules live in `rules/tree-sitter-queries/<language>/`.
 
-1. Write a YAML query file. See `docs/custom-rules.md` and the `write-tree-sitter-rule` skill (`skills/write-tree-sitter-rule/SKILL.md`).
+1. Write a YAML query file. See `docs/custom-rules.md` and the `pi-lens-write-tree-sitter-rule` skill (`skills/pi-lens-write-tree-sitter-rule/SKILL.md`).
 2. Place it under the correct language directory (e.g. `rules/tree-sitter-queries/typescript/`).
 3. Disabled rules go in `rules/tree-sitter-queries/<language>-disabled/`.
 4. Add a test in `tests/clients/tree-sitter-*.test.ts`.

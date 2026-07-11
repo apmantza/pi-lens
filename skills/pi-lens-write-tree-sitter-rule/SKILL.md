@@ -1,5 +1,5 @@
 ---
-name: write-tree-sitter-rule
+name: pi-lens-write-tree-sitter-rule
 description: Use when writing a new pi-lens tree-sitter query rule YAML file — covers schema, S-expression syntax, capture names, predicates, and gotchas
 ---
 
