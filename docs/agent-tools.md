@@ -50,6 +50,16 @@ parity (`pilens_read_enclosing`) as of #536, closing #522 item 1.
 
 ## Project intelligence
 
+- **`symbol_search`** — Ranked identifier search over the persisted word index
+  (BM25 + priors demoting tests/vendor/docs, optional graph-centrality boost).
+  Answers "which files are most relevant to `<query>`" by identifier — the
+  first step of the discovery funnel: `symbol_search` finds candidates,
+  `module_report` explains one, `read_symbol` reads its body. Complements
+  `grep` (raw substrings) and `lsp_navigation` (exact references). Returns
+  `available: false` with a retry hint when the index isn't built yet — it
+  self-builds in the background and never blocks the call. See
+  [docs/word-index.md](word-index.md) for how the index is built and kept
+  warm.
 - **`module_report`** — Navigable outline of a file: every symbol's name/kind/
   startLine/endLine/signature, exported vs internal split, class/interface
   member nesting, who-uses-this, fanout/complexity risk flags, and a
