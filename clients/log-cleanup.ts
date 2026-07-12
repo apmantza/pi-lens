@@ -6,9 +6,7 @@
  *   PI_LENS_MAX_LOG_SIZE_MB    - Max size before rotation (default: 10)
  *
  * Scope:
- *   - ~/.pi-lens/*.log (all 8 global logs — see MANAGED_LOG_FILES: latency,
- *     sessionstart, tree-sitter, cascade, read-guard, actionable-warnings,
- *     ast-grep-tools, dead-code)
+ *   - ~/.pi-lens/*.log (every global log — see getManagedLogFiles())
  *   - ~/.pi-lens/logs/*.jsonl (daily diagnostic logs)
  *   - ~/.pi-lens/<name>.<timestamp>.log (rotated backups, and legacy .log.<ts>)
  *
@@ -26,26 +24,73 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getGlobalPiLensDir } from "./file-utils.js";
+import { getRegisteredLogFiles } from "./ndjson-logger.js";
 
 const LOG_DIR = getGlobalPiLensDir();
 const LOGS_SUBDIR = path.join(LOG_DIR, "logs");
 
 /**
- * Every global `.log` pi-lens writes under ~/.pi-lens. Kept as one list so
- * rotation and the storage summary can't drift out of sync — that drift is
- * exactly what left actionable-warnings/ast-grep-tools/dead-code unrotated and
- * growing unbounded. New global log file? Add it here.
+ * Logs that write via some mechanism OTHER than the shared
+ * `createNdjsonLogger` (clients/ndjson-logger.ts), so they can't self-register
+ * into its file registry. Keep this list as small as possible — anything that
+ * can reasonably move onto the shared writer should, so there's only one
+ * place left to remember by hand.
+ *
+ *   - sessionstart.log — written by a handful of modules (installer/index.ts,
+ *     lsp/index.ts, lsp/launch.ts, lsp/server.ts, index.ts) via a bespoke
+ *     `fs.appendFile`, predating ndjson-logger.
  */
-export const MANAGED_LOG_FILES = [
-	"latency.log",
-	"sessionstart.log",
-	"tree-sitter.log",
-	"cascade.log",
-	"read-guard.log",
-	"actionable-warnings.log",
-	"ast-grep-tools.log",
-	"dead-code.log",
-];
+const UNMANAGED_STRAGGLER_LOG_FILES = ["sessionstart.log"];
+
+/**
+ * Every global `.log` pi-lens writes under ~/.pi-lens, resolved dynamically so
+ * rotation and the storage summary can't drift out of sync with what's
+ * actually written — that drift is exactly what left
+ * actionable-warnings/ast-grep-tools/dead-code, and later bus-events.log,
+ * unrotated and growing unbounded.
+ *
+ * Three sources are unioned:
+ *   1. `getRegisteredLogFiles()` — every static-path `createNdjsonLogger`
+ *      instance self-registers at construction (module load) time. A brand
+ *      new `*-logger.ts` module built on the shared writer is picked up with
+ *      zero action here, as long as it's imported before this runs (true for
+ *      the whole current codebase — every logger module is statically
+ *      imported from index.ts's transitive graph before session start).
+ *   2. A direct `~/.pi-lens/*.log` directory read, excluding rotated-backup
+ *      names — a defensive backstop in case some future logger module is only
+ *      *dynamically* imported and hasn't registered yet when this runs. Once
+ *      a file has content on disk, this catches it regardless of import
+ *      timing; an unregistered file that doesn't exist yet has nothing to
+ *      clean up anyway.
+ *   3. `UNMANAGED_STRAGGLER_LOG_FILES` — the handful of logs that don't go
+ *      through `createNdjsonLogger` at all and so can never self-register.
+ *
+ * `dir` is overridable for tests; production callers use the default
+ * (real `~/.pi-lens`).
+ */
+export function getManagedLogFiles(dir: string = LOG_DIR): string[] {
+	const names = new Set<string>(UNMANAGED_STRAGGLER_LOG_FILES);
+
+	for (const absPath of getRegisteredLogFiles()) {
+		if (path.dirname(absPath) === dir) {
+			names.add(path.basename(absPath));
+		}
+	}
+
+	try {
+		if (fs.existsSync(dir)) {
+			for (const entry of fs.readdirSync(dir)) {
+				if (entry.endsWith(".log") && !ROTATED_BACKUP_RE.test(entry)) {
+					names.add(entry);
+				}
+			}
+		}
+	} catch {
+		// best-effort backstop — registry + straggler list still apply
+	}
+
+	return [...names].sort();
+}
 
 /**
  * Matches a rotated backup, never an active log. Rotation writes
@@ -203,7 +248,7 @@ export function runLogCleanup(dbg?: (msg: string) => void): {
 	results.cleaned += rotatedLogs.deleted.length;
 
 	// Check main logs for rotation
-	const mainLogs = MANAGED_LOG_FILES.map((name) => path.join(LOG_DIR, name));
+	const mainLogs = getManagedLogFiles().map((name) => path.join(LOG_DIR, name));
 
 	for (const logFile of mainLogs) {
 		const rotation = rotateLogIfNeeded(logFile, config.maxSizeMB);
@@ -255,7 +300,7 @@ export function getLogStorageSummary(): {
 	let totalMB = 0;
 
 	// Main logs
-	for (const name of MANAGED_LOG_FILES) {
+	for (const name of getManagedLogFiles()) {
 		const filePath = path.join(LOG_DIR, name);
 		if (fs.existsSync(filePath)) {
 			const sizeMB = getFileSizeMB(filePath);
