@@ -242,6 +242,33 @@ export function buildCodeQualityWarningsReport(args: {
 	};
 }
 
+/**
+ * #557 audit (same race class as #555's LSP client fix and #560's
+ * `widget-state.ts` `recordDiagnostics` fix): pi-lens deliberately allows
+ * concurrent pipeline runs for the SAME file across DIFFERENT same-turn
+ * edits (dedupe key is `filePath + contentHash`, not just `filePath` — see
+ * `clients/runtime-tool-result.ts`), so a per-key cache fed directly from
+ * those concurrent pipeline runs needs an ordering guard (`WriteOrderingGuard`
+ * from `clients/write-ordering-guard.ts`) or an older edit's slower pipeline
+ * can silently overwrite a newer edit's fresher write.
+ *
+ * This call site is NOT exposed to that race. Unlike `widget-state.ts`'s
+ * `recordDiagnostics` (called directly from `clients/pipeline.ts`, once per
+ * pipeline run — i.e. potentially several times per turn, out of completion
+ * order), `writeCodeQualityWarningsReport` has exactly one caller:
+ * `handleTurnEnd` in `clients/runtime-turn.ts`, which per-edit pipeline runs
+ * never call directly — they only feed `runtime.recordCodeQualityWarnings`
+ * (an accumulating, order-independent Map). `handleTurnEnd` itself reads that
+ * accumulator once via `runtime.peekCodeQualityWarnings()` and writes the
+ * aggregate report exactly once per turn-end invocation — the same single
+ * sequential turn-end-only shape already confirmed safe for
+ * `writeActionableWarningsReport` in `clients/actionable-warnings.ts`, right
+ * next to this call site in `handleTurnEnd`. No second writer, so no
+ * ordering token to guard against — see
+ * `tests/clients/code-quality-warnings.test.ts`'s
+ * "single sequential caller" test, which pins this invariant so a future
+ * change that adds a second call site has a better chance of being caught.
+ */
 export function writeCodeQualityWarningsReport(
 	cacheManager: CacheManager,
 	cwd: string,

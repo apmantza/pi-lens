@@ -1274,3 +1274,94 @@ describe("getTouchedLinesForGuard — post-strip oldText resolution", () => {
 		}
 	});
 });
+
+// #505 (bundled item 2): Unicode confusable-hyphen normalization before content
+// comparison. Note this comparison-tier folding is *already* delivered by the
+// host-alignment normalization from #257 — `normalizeForGuardMatch`
+// (clients/host-edit-normalize.ts) folds HOST_UNICODE_DASHES (U+2010, U+2011,
+// U+2012, U+2013, U+2014, U+2015, U+2212 -> ASCII '-') and is exactly the
+// `normalizeContent` used by `resolveOldTextEdits`'s primary match (before any
+// of the Tier A/B/C autopatch fallbacks even run). These tests pin that
+// behavior under the #505 framing so a future regression is caught here, not
+// just incidentally by the #257 host-sync tests.
+describe("getTouchedLinesForGuard — confusable Unicode hyphen normalization (#505)", () => {
+	// The six codepoints named in #505, written as \u escapes so the source
+	// stays ASCII-scannable: HYPHEN, NON-BREAKING HYPHEN, FIGURE DASH, EN DASH,
+	// EM DASH, MINUS SIGN.
+	const CONFUSABLE_HYPHENS: Array<[string, string]> = [
+		["‐", "HYPHEN (U+2010)"],
+		["‑", "NON-BREAKING HYPHEN (U+2011)"],
+		["‒", "FIGURE DASH (U+2012)"],
+		["–", "EN DASH (U+2013)"],
+		["—", "EM DASH (U+2014)"],
+		["−", "MINUS SIGN (U+2212)"],
+	];
+
+	function matchOldTextAgainstFile(
+		fileContent: string,
+		oldText: string,
+		newText: string,
+	): ReturnType<typeof getTouchedLinesForGuard> {
+		const env = setupTestEnvironment("rg-confusable-hyphen-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			fs.writeFileSync(filePath, fileContent);
+			const event = {
+				toolName: "edit",
+				input: {
+					path: filePath,
+					edits: [{ oldText, newText }],
+				},
+			};
+			return getTouchedLinesForGuard(event, filePath);
+		} finally {
+			env.cleanup();
+		}
+	}
+
+	for (const [hyphen, label] of CONFUSABLE_HYPHENS) {
+		it(`matches when the file has ${label} but oldText uses an ASCII hyphen`, () => {
+			const result = matchOldTextAgainstFile(
+				`const total = a${hyphen}b;\n`,
+				"const total = a-b;",
+				"const total = a - b;",
+			);
+			expect(result.preflightError).toBeUndefined();
+			expect(result.touchedLines).toEqual([1, 1]);
+			expect(result.contentMatchValidated).toBe(true);
+		});
+
+		it(`matches when oldText uses ${label} but the file has an ASCII hyphen`, () => {
+			const result = matchOldTextAgainstFile(
+				"const total = a-b;\n",
+				`const total = a${hyphen}b;`,
+				"const total = a - b;",
+			);
+			expect(result.preflightError).toBeUndefined();
+			expect(result.touchedLines).toEqual([1, 1]);
+			expect(result.contentMatchValidated).toBe(true);
+		});
+	}
+
+	it("still blocks a genuine content mismatch unrelated to hyphens", () => {
+		const result = matchOldTextAgainstFile(
+			"const total = a-b;\n",
+			"const total = totally-different-expression;",
+			"const total = a - b;",
+		);
+		expect(result.preflightError).toMatch(/RETRYABLE|RE-READ REQUIRED/);
+		expect(result.touchedLines).toBeUndefined();
+	});
+
+	it("does not let a hyphen-only difference mask an otherwise-different line", () => {
+		// Same confusable dash as the file, but the rest of the line differs —
+		// normalization must not widen the match beyond the dash family.
+		const result = matchOldTextAgainstFile(
+			"const total = a–b;\n",
+			"const other = a–b;",
+			"const other = a - b;",
+		);
+		expect(result.preflightError).toMatch(/RETRYABLE|RE-READ REQUIRED/);
+		expect(result.touchedLines).toBeUndefined();
+	});
+});
