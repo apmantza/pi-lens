@@ -30,6 +30,18 @@
  * WHICH rules run (a local `.opengrep.yml`/`.semgrep.yml` rule file if
  * present, else the `auto` registry ruleset), not whether it runs at all.
  *
+ * `// nosemgrep` / `# nosemgrep` suppression: unlike opengrep's LSP mode
+ * (which does NOT honor it natively — that gap is exactly why
+ * `isNosemgrepSuppressed`/`applyAuxiliarySuppressions` exist in
+ * `clients/dispatch/auxiliary-lsp.ts`, #441/#586/#587), the CLI `scan --json`
+ * path DOES suppress `nosemgrep`-annotated findings itself, before they ever
+ * reach `--json` output — verified empirically against the real installed
+ * opengrep 1.25.0 binary (see the captured raw JSON in
+ * `tests/clients/opengrep-client.test.ts`: an annotated line's finding is
+ * absent from `results` while an identical unannotated twin still appears).
+ * So `opengrepResultToProjectDiagnostics` deliberately applies NO suppression
+ * filtering of its own — doing so would be redundant at best.
+ *
  * Refs: #584, #111 (opengrep adoption), #387 (workspace-sweep serialization)
  */
 
