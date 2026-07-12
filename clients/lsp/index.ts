@@ -19,6 +19,7 @@ import {
 	isExcludedDirName,
 } from "../file-utils.js";
 import { recordLsp } from "../widget-state.js";
+import { applyAuxiliarySuppressions } from "../dispatch/auxiliary-lsp.js";
 import { logLatency } from "../latency-logger.js";
 import { withDeadline } from "../deadline-utils.js";
 import { normalizeMapKey, uriToPath } from "../path-utils.js";
@@ -2136,10 +2137,19 @@ export class LSPService {
 						?.inconclusive === true;
 				const timedOut = diagnostics === undefined || inconclusive;
 				if (timedOut) timedOutFiles += 1;
+				// #586: honor each auxiliary profile's native inline-suppression
+				// comment (e.g. opengrep's `// nosemgrep`, #441) — computed from the
+				// raw `diagnostics` (before this drops its non-enumerable
+				// `.inconclusive` flag, already read above) so a `lens_diagnostics
+				// mode=full` sweep suppresses the same findings the per-edit dispatch
+				// runner does, instead of only the latter honoring it.
+				const filteredDiagnostics = diagnostics
+					? applyAuxiliarySuppressions(diagnostics, content)
+					: diagnostics;
 				results.push({
 					filePath,
-					diagnostics: diagnostics ?? [],
-					count: diagnostics?.length ?? 0,
+					diagnostics: filteredDiagnostics ?? [],
+					count: filteredDiagnostics?.length ?? 0,
 					timedOut,
 				});
 			} catch (err) {

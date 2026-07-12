@@ -687,4 +687,111 @@ describe("lsp_diagnostics tool", () => {
 			}
 		});
 	});
+
+	// #586: a `// nosemgrep` comment must suppress an opengrep finding the same
+	// way it already does in the per-edit dispatch runner — previously this
+	// standalone diagnostics-query path ignored the tool's native inline
+	// suppression entirely.
+	describe("#586 auxiliary inline-suppression (nosemgrep)", () => {
+		const RULE = "generic.secrets.security.detected-github-token";
+
+		function semgrepDiag(line0Based: number) {
+			return {
+				severity: 1,
+				message: "GitHub token detected",
+				range: {
+					start: { line: line0Based, character: 0 },
+					end: { line: line0Based, character: 10 },
+				},
+				source: "Semgrep",
+				code: RULE,
+			};
+		}
+
+		it("single file: a `// nosemgrep` comment on the finding's line drops it from lsp_diagnostics", async () => {
+			(mocked.service as any).getDiagnostics = vi
+				.fn()
+				.mockResolvedValue([semgrepDiag(0)]);
+			const tool = createLspDiagnosticsTool();
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-nosemgrep-"),
+			);
+			const target = path.join(tmpDir, "secret.ts");
+			fs.writeFileSync(target, "const token = 'x';  // nosemgrep\n");
+
+			try {
+				const result = (await tool.execute(
+					"diag-nosemgrep-file",
+					{ path: target, severity: "all" },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				)) as any;
+
+				expect(result.isError).toBeUndefined();
+				expect(result.details?.totalDiagnostics).toBe(0);
+				expect(String(result.content[0]?.text)).toBe("No diagnostics found.");
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
+
+		it("single file: the same finding WITHOUT a nosemgrep comment still surfaces", async () => {
+			(mocked.service as any).getDiagnostics = vi
+				.fn()
+				.mockResolvedValue([semgrepDiag(0)]);
+			const tool = createLspDiagnosticsTool();
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-nosemgrep-control-"),
+			);
+			const target = path.join(tmpDir, "secret.ts");
+			fs.writeFileSync(target, "const token = 'x';\n");
+
+			try {
+				const result = (await tool.execute(
+					"diag-nosemgrep-control",
+					{ path: target, severity: "all" },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				)) as any;
+
+				expect(result.isError).toBeUndefined();
+				expect(result.details?.totalDiagnostics).toBe(1);
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
+
+		it("batch mode: nosemgrep-suppressed file drops its finding while an unsuppressed file keeps its own", async () => {
+			(mocked.service as any).getDiagnostics = vi
+				.fn()
+				.mockImplementation(async () => {
+					return [semgrepDiag(0)];
+				});
+			const tool = createLspDiagnosticsTool();
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-nosemgrep-batch-"),
+			);
+			const suppressed = path.join(tmpDir, "suppressed.ts");
+			const unsuppressed = path.join(tmpDir, "unsuppressed.ts");
+			fs.writeFileSync(suppressed, "const token = 'x';  // nosemgrep\n");
+			fs.writeFileSync(unsuppressed, "const token = 'x';\n");
+
+			try {
+				const result = (await tool.execute(
+					"diag-nosemgrep-batch",
+					{ paths: [suppressed, unsuppressed], severity: "all", concurrency: 2 },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				)) as any;
+
+				expect(result.isError).toBeUndefined();
+				expect(result.details?.totalDiagnostics).toBe(1);
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
+	});
 });

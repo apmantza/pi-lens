@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { LSPDiagnostic } from "../../../clients/lsp/client.js";
 import {
 	AUXILIARY_LSP_PROFILES,
+	applyAuxiliarySuppressions,
 	enabledAuxiliaryLspServerIds,
 	findAuxiliaryProfileForSource,
+	isAuxiliaryDiagnosticSuppressed,
 } from "../../../clients/dispatch/auxiliary-lsp.js";
 
 const diag = (over: Partial<LSPDiagnostic>): LSPDiagnostic =>
@@ -162,5 +164,77 @@ describe("typos semantic policy (#283)", () => {
 		expect(typos?.defectClass?.(diag({ message: "`recieve` should be `receive`" }))).toBe(
 			"style",
 		);
+	});
+});
+
+// #586: the single, generic lookup+apply helper every call site (per-edit
+// dispatch runner, `tools/lsp-diagnostics.ts`, `runWorkspaceDiagnostics`)
+// should use instead of re-deriving "find the profile by source, then check
+// isSuppressed" independently.
+describe("isAuxiliaryDiagnosticSuppressed / applyAuxiliarySuppressions (#586)", () => {
+	const RULE = "python.lang.security.audit.subprocess-shell-true.subprocess-shell-true";
+
+	it("drops an opengrep (Semgrep-sourced) diagnostic suppressed by `// nosemgrep`", () => {
+		const content = "subprocess.run('ls', shell=True)  // nosemgrep\n";
+		const d = diag({
+			source: "Semgrep",
+			code: RULE,
+			range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+		});
+		expect(isAuxiliaryDiagnosticSuppressed(d, content)).toBe(true);
+		expect(applyAuxiliarySuppressions([d], content)).toEqual([]);
+	});
+
+	it("keeps the same diagnostic when there is no nosemgrep comment", () => {
+		const content = "subprocess.run('ls', shell=True)\n";
+		const d = diag({
+			source: "Semgrep",
+			code: RULE,
+			range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+		});
+		expect(isAuxiliaryDiagnosticSuppressed(d, content)).toBe(false);
+		expect(applyAuxiliarySuppressions([d], content)).toEqual([d]);
+	});
+
+	it("is a no-op for profiles with no isSuppressed callback (e.g. ast-grep, zizmor, typos)", () => {
+		const content = "anything\n";
+		const astGrepDiag = diag({
+			source: "ast-grep",
+			range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+		});
+		expect(isAuxiliaryDiagnosticSuppressed(astGrepDiag, content)).toBe(false);
+		expect(applyAuxiliarySuppressions([astGrepDiag], content)).toEqual([
+			astGrepDiag,
+		]);
+	});
+
+	it("is a no-op for diagnostics with no matching auxiliary profile (plain language-server findings)", () => {
+		const content = "anything\n";
+		const tsDiag = diag({
+			source: "typescript",
+			range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+		});
+		expect(isAuxiliaryDiagnosticSuppressed(tsDiag, content)).toBe(false);
+		expect(applyAuxiliarySuppressions([tsDiag], content)).toEqual([tsDiag]);
+	});
+
+	it("filters a mixed list, keeping unsuppressed and dropping suppressed diagnostics", () => {
+		const content = [
+			"subprocess.run('a', shell=True)  // nosemgrep",
+			"subprocess.run('b', shell=True)",
+		].join("\n");
+		const suppressed = diag({
+			source: "Semgrep",
+			code: RULE,
+			range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+		});
+		const kept = diag({
+			source: "Semgrep",
+			code: RULE,
+			range: { start: { line: 1, character: 0 }, end: { line: 1, character: 1 } },
+		});
+		expect(applyAuxiliarySuppressions([suppressed, kept], content)).toEqual([
+			kept,
+		]);
 	});
 });
