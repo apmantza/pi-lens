@@ -11,6 +11,25 @@ const projectDiagnosticsMocks = vi.hoisted(() => ({
 	loadProjectDiagnosticsDeltaReport: vi.fn(),
 }));
 
+// #585: mode=full now fetches the heavyweight analyzers (knip/jscpd/madge/
+// gitleaks/govulncheck/trivy/dead-code) FRESH via `fetchFreshProjectDiagnostics`
+// instead of reading `cacheManager` directly — mock that seam (and the
+// `loadBootstrapClients()` singleton it's handed) so these tests never
+// construct real analyzer clients / spawn real external tools. Defaults to
+// "nothing extra" so tests that don't care about this path are unaffected;
+// individual tests below override the resolved value to exercise it.
+const freshFetchMocks = vi.hoisted(() => ({
+	fetchFreshProjectDiagnostics: vi.fn(),
+}));
+
+vi.mock("../../clients/project-diagnostics/fresh-fetch.js", () => ({
+	fetchFreshProjectDiagnostics: freshFetchMocks.fetchFreshProjectDiagnostics,
+}));
+
+vi.mock("../../clients/bootstrap.js", () => ({
+	loadBootstrapClients: vi.fn().mockResolvedValue({}),
+}));
+
 vi.mock("../../clients/project-diagnostics/scanner.js", () => ({
 	scanProjectDiagnostics: projectDiagnosticsMocks.scanProjectDiagnostics,
 }));
@@ -49,6 +68,13 @@ beforeEach(() => {
 	projectDiagnosticsMocks.scanProjectDiagnostics.mockReset();
 	projectDiagnosticsMocks.loadProjectDiagnosticsSnapshot.mockReset();
 	projectDiagnosticsMocks.loadProjectDiagnosticsDeltaReport.mockReset();
+	freshFetchMocks.fetchFreshProjectDiagnostics.mockReset();
+	freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+		diagnostics: [],
+		runners: [],
+		cold: [],
+		timings: {},
+	});
 	mockSummaries.length = 0;
 	mockStaleDropped = 0;
 	reconcileScanDiagnosticsMock.mockReset();
@@ -751,40 +777,43 @@ describe("lens_diagnostics mode=full", () => {
 		expect(result.details).toMatchObject({ totalBlocking: 1 });
 	});
 
-	it("folds the CACHED jscpd snapshot into full mode without launching a scan (#adapters)", async () => {
+	it("folds fresh-fetched jscpd findings into full mode (#585)", async () => {
 		mockSummaries.length = 0;
 		const lspService = {
 			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
 		};
-		// No scanned snapshot — jscpd must synthesize one from its cache.
+		// No scanned snapshot — jscpd must synthesize one from its own findings.
 		projectDiagnosticsMocks.loadProjectDiagnosticsSnapshot.mockReturnValue(
 			undefined,
 		);
-		const jscpdResult = {
-			success: true,
-			duplicatedLines: 18,
-			totalLines: 100,
-			percentage: 18,
-			clones: [
+		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+			diagnostics: [
 				{
-					fileA: "src/a.ts",
-					startA: 42,
-					fileB: "src/b.ts",
-					startB: 80,
-					lines: 18,
-					tokens: 120,
+					filePath: "/proj/src/a.ts",
+					line: 42,
+					severity: "warning",
+					semantic: "warning",
+					tool: "jscpd",
+					runner: "jscpd",
+					rule: "duplicate-code",
+					message: "Duplicate code (18 lines)",
+					source: "project-scan",
 				},
 			],
-		};
+			runners: ["jscpd"],
+			cold: [],
+			timings: { jscpd: 42 },
+		});
 
-		const result = await run(makeTool({ "jscpd-ts": jscpdResult }, lspService), {
+		const result = await run(makeTool({}, lspService), {
 			mode: "full",
 			refreshRunners: "cached",
 		});
 
 		const text = String(result.content[0].text);
-		// Both ends of the clone surface, and no fresh scan was launched.
 		expect(text).toContain("Duplicate code (18 lines)");
+		expect(text).toContain("fetched fresh this call");
+		expect(text).toContain("jscpd (42ms)");
 		expect(
 			projectDiagnosticsMocks.scanProjectDiagnostics,
 		).not.toHaveBeenCalled();
@@ -823,7 +852,7 @@ describe("lens_diagnostics mode=full", () => {
 	// #533: a cache-only extractor with NO cache entry yet must render as cold,
 	// never as a clean "no issues found" — that would misrepresent an analyzer
 	// that has simply never run this session as having confirmed no findings.
-	it("mode=full refreshRunners=cached: a fully cold extractor registry says COLD, not clean", async () => {
+	it("mode=full refreshRunners=cached: analyzers the fresh-fetch reports cold say COLD, not clean", async () => {
 		mockSummaries.length = 0;
 		const lspService = {
 			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
@@ -831,8 +860,15 @@ describe("lens_diagnostics mode=full", () => {
 		projectDiagnosticsMocks.loadProjectDiagnosticsSnapshot.mockReturnValue(
 			undefined,
 		);
+		// Every analyzer gated out this run (no go.mod, no gitleaks signal, …) —
+		// fetchFreshProjectDiagnostics reports them all cold.
+		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+			diagnostics: [],
+			runners: [],
+			cold: ["knip", "jscpd", "madge", "gitleaks"],
+			timings: {},
+		});
 
-		// Empty cache manager: every extractor (knip/jscpd/madge/gitleaks/…) misses.
 		const result = await run(makeTool({}, lspService), {
 			mode: "full",
 			refreshRunners: "cached",
@@ -840,7 +876,6 @@ describe("lens_diagnostics mode=full", () => {
 
 		const text = String(result.content[0].text);
 		expect(text).toContain("cold");
-		expect(text).toContain("not yet scanned this session");
 		expect(text).toContain("knip");
 		expect(text).toContain("jscpd");
 		expect(text).toContain("madge");
@@ -850,7 +885,7 @@ describe("lens_diagnostics mode=full", () => {
 		);
 	});
 
-	it("mode=full refreshRunners=cached: an extractor WITH a cache entry is not listed as cold", async () => {
+	it("mode=full refreshRunners=cached: an analyzer the fresh-fetch actually ran is not listed as cold", async () => {
 		mockSummaries.length = 0;
 		const lspService = {
 			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
@@ -858,15 +893,16 @@ describe("lens_diagnostics mode=full", () => {
 		projectDiagnosticsMocks.loadProjectDiagnosticsSnapshot.mockReturnValue(
 			undefined,
 		);
-		const jscpdResult = {
-			success: true,
-			duplicatedLines: 0,
-			totalLines: 100,
-			percentage: 0,
-			clones: [],
-		};
+		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+			diagnostics: [],
+			runners: [],
+			// jscpd ran fresh and found nothing (success, empty) — that's a
+			// confirmed clean, not cold. knip stayed cold (e.g. no project marker).
+			cold: ["knip"],
+			timings: { jscpd: 5 },
+		});
 
-		const result = await run(makeTool({ "jscpd-ts": jscpdResult }, lspService), {
+		const result = await run(makeTool({}, lspService), {
 			mode: "full",
 			refreshRunners: "cached",
 		});
@@ -874,7 +910,6 @@ describe("lens_diagnostics mode=full", () => {
 		expect(
 			(result.details as { coldRunners?: string[] }).coldRunners,
 		).not.toContain("jscpd");
-		// Other extractors that truly have no cache entry are still reported cold.
 		expect(
 			(result.details as { coldRunners?: string[] }).coldRunners,
 		).toContain("knip");
@@ -889,6 +924,27 @@ describe("lens_diagnostics mode=full", () => {
 		expect(String(result.content[0].text)).not.toContain("cold");
 		expect((result.details as { coldRunners?: string[] }).coldRunners).toEqual(
 			[],
+		);
+		// #585: without refreshRunners opting in, the (expensive) fresh-fetch of
+		// the heavyweight analyzers must not run at all.
+		expect(
+			freshFetchMocks.fetchFreshProjectDiagnostics,
+		).not.toHaveBeenCalled();
+	});
+
+	it("mode=full refreshRunners=cached triggers the analyzer fresh-fetch for the resolved cwd (#585)", async () => {
+		mockSummaries.length = 0;
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
+		};
+		await run(makeTool({}, lspService), {
+			mode: "full",
+			refreshRunners: "cached",
+		});
+		expect(freshFetchMocks.fetchFreshProjectDiagnostics).toHaveBeenCalledWith(
+			expect.anything(),
+			"/proj",
+			expect.anything(),
 		);
 	});
 
