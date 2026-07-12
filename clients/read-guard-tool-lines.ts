@@ -124,6 +124,16 @@ export function countFileLines(filePath: string): number {
 // Match the host edit tool's fuzzy-match space (NFKC + smart quotes/dashes/
 // spaces + BOM + lone-CR), so the guard resolves oldText -> range exactly where
 // the host would apply it instead of false-blocking valid edits (#257).
+//
+// This is also where #505's "confusable-hyphen normalization" bundled item
+// lives: normalizeForGuardMatch folds HOST_UNICODE_DASHES (U+2010, U+2011,
+// U+2012, U+2013, U+2014, U+2015, U+2212 -> ASCII '-') before either side of
+// the comparison below, so it runs on the PRIMARY match here, before any of
+// the Tier A/B/C fallbacks in tryCorrectIndentationMismatchFromContent are
+// even reached. Comparison-only, same as every tier below it — the bytes
+// actually written on a successful edit are always the caller's original
+// oldText/newText (see resolveOldTextEdits / applyPartiallyApplicableEdits),
+// never this normalized form.
 function normalizeContent(text: string): string {
 	return normalizeForGuardMatch(text);
 }
