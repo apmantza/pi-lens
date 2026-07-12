@@ -59,6 +59,7 @@
  * fields may be added under `v: 1`; a breaking change to an existing field's
  * meaning must bump `v`.
  */
+import { logBusEvent } from "./bus-events-logger.js";
 import { normalizeFilePath } from "./path-utils.js";
 import { isBusPublishEnabled } from "./bus-publish.js";
 
@@ -111,6 +112,8 @@ type BusEmitFn = (channel: string, data: unknown) => void;
 
 let busEmit: BusEmitFn | undefined;
 let hasLoggedFailure = false;
+let hasLoggedUnwired = false;
+let hasLoggedDisabled = false;
 let seqCounter = 0;
 
 /** Paths this producer has reported with at least one non-empty diagnostics array, so we know when to fire the one-time clean-transition event. */
@@ -129,6 +132,8 @@ export function wireDiagnosticsBusEmitter(emitFn: BusEmitFn | undefined): void {
 export function _resetDiagnosticsPublishForTests(): void {
 	busEmit = undefined;
 	hasLoggedFailure = false;
+	hasLoggedUnwired = false;
+	hasLoggedDisabled = false;
 	seqCounter = 0;
 	reportedDirtyPaths.clear();
 }
@@ -194,8 +199,28 @@ function capDiagnostics(diagnostics: PilensDiagnosticEntry[]): {
 export function publishDiagnostics(args: PublishDiagnosticsArgs): void {
 	if (args.origin === "bus") return;
 	if (args.files.length === 0) return;
-	if (!isBusPublishEnabled()) return;
-	if (!busEmit) return;
+	if (!isBusPublishEnabled()) {
+		if (!hasLoggedDisabled) {
+			hasLoggedDisabled = true;
+			logBusEvent({
+				event: BUS_DIAGNOSTICS_EVENT,
+				outcome: "skipped_disabled",
+				cwd: normalizeFilePath(args.cwd),
+			});
+		}
+		return;
+	}
+	if (!busEmit) {
+		if (!hasLoggedUnwired) {
+			hasLoggedUnwired = true;
+			logBusEvent({
+				event: BUS_DIAGNOSTICS_EVENT,
+				outcome: "skipped_unwired",
+				cwd: normalizeFilePath(args.cwd),
+			});
+		}
+		return;
+	}
 
 	try {
 		const fileEntries: PilensDiagnosticsFileEntry[] = args.files.map((f) => {
@@ -224,7 +249,20 @@ export function publishDiagnostics(args: PublishDiagnosticsArgs): void {
 			files: fileEntries,
 		};
 		busEmit(BUS_DIAGNOSTICS_EVENT, payload);
+		logBusEvent({
+			event: BUS_DIAGNOSTICS_EVENT,
+			outcome: "emitted",
+			cwd: payload.cwd,
+			fileCount: payload.files.length,
+			seq: payload.seq,
+		});
 	} catch (err) {
+		logBusEvent({
+			event: BUS_DIAGNOSTICS_EVENT,
+			outcome: "emit_failed",
+			cwd: normalizeFilePath(args.cwd),
+			error: String(err),
+		});
 		if (!hasLoggedFailure) {
 			hasLoggedFailure = true;
 			args.dbg?.(

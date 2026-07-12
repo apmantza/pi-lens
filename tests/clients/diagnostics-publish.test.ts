@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const logBusEvent = vi.fn();
+vi.mock("../../clients/bus-events-logger.js", () => ({
+	logBusEvent: (...args: unknown[]) => logBusEvent(...args),
+}));
+
 import { _resetForTests as _resetBusPublishForTests } from "../../clients/bus-publish.js";
 import {
 	_resetDiagnosticsPublishForTests,
@@ -28,6 +33,7 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 	beforeEach(() => {
 		_resetDiagnosticsPublishForTests();
 		_resetBusPublishForTests();
+		logBusEvent.mockClear();
 	});
 
 	afterEach(() => {
@@ -263,5 +269,75 @@ describe("diagnostics-publish — pilens:diagnostics (#502)", () => {
 		expect(emit).toHaveBeenCalledTimes(1);
 		const payload = emit.mock.calls[0][1] as PilensDiagnosticsPayload;
 		expect(payload.files).toHaveLength(2);
+	});
+
+	describe("bus-events.log (persistent trace)", () => {
+		it("logs 'emitted' with fileCount and seq on a successful emit", () => {
+			const emit = vi.fn();
+			wireDiagnosticsBusEmitter(emit);
+
+			publishDiagnostics({
+				cwd: "/repo",
+				files: [{ path: "/repo/a.ts", diagnostics: [diag()] }],
+			});
+
+			expect(logBusEvent).toHaveBeenCalledWith(
+				expect.objectContaining({
+					event: BUS_DIAGNOSTICS_EVENT,
+					outcome: "emitted",
+					fileCount: 1,
+					seq: 1,
+				}),
+			);
+		});
+
+		it("logs 'skipped_unwired' once when busEmit was never wired", () => {
+			publishDiagnostics({ cwd: "/repo", files: [{ path: "/repo/a.ts", diagnostics: [diag()] }] });
+			publishDiagnostics({ cwd: "/repo", files: [{ path: "/repo/b.ts", diagnostics: [diag()] }] });
+
+			const unwiredCalls = logBusEvent.mock.calls.filter(
+				(c) => (c[0] as { outcome: string }).outcome === "skipped_unwired",
+			);
+			expect(unwiredCalls).toHaveLength(1);
+		});
+
+		it("logs 'skipped_disabled' once when the kill switch is off", () => {
+			process.env.PI_LENS_BUS_PUBLISH = "0";
+			_resetBusPublishForTests();
+			_resetDiagnosticsPublishForTests();
+			logBusEvent.mockClear();
+			const emit = vi.fn();
+			wireDiagnosticsBusEmitter(emit);
+
+			publishDiagnostics({ cwd: "/repo", files: [{ path: "/repo/a.ts", diagnostics: [diag()] }] });
+			publishDiagnostics({ cwd: "/repo", files: [{ path: "/repo/b.ts", diagnostics: [diag()] }] });
+
+			const disabledCalls = logBusEvent.mock.calls.filter(
+				(c) => (c[0] as { outcome: string }).outcome === "skipped_disabled",
+			);
+			expect(disabledCalls).toHaveLength(1);
+		});
+
+		it("logs 'emit_failed' with the error message when emit throws", () => {
+			const emit = vi.fn(() => {
+				throw new Error("bus explosion");
+			});
+			wireDiagnosticsBusEmitter(emit);
+
+			publishDiagnostics({ cwd: "/repo", files: [{ path: "/repo/a.ts", diagnostics: [diag()] }] });
+
+			expect(logBusEvent).toHaveBeenCalledWith(
+				expect.objectContaining({
+					event: BUS_DIAGNOSTICS_EVENT,
+					outcome: "emit_failed",
+					error: expect.stringContaining("bus explosion"),
+				}),
+			);
+		});
+
+		it("does not log anything for an empty files batch", () => {
+			publishDiagnostics({ cwd: "/repo", files: [] });
+			expect(logBusEvent).not.toHaveBeenCalled();
+		});
 	});
 });

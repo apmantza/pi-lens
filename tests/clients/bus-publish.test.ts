@@ -5,6 +5,11 @@ vi.mock("../../clients/recent-touches.js", () => ({
 	appendRecentTouches: (...args: unknown[]) => appendRecentTouches(...args),
 }));
 
+const logBusEvent = vi.fn();
+vi.mock("../../clients/bus-events-logger.js", () => ({
+	logBusEvent: (...args: unknown[]) => logBusEvent(...args),
+}));
+
 import {
 	_resetForTests,
 	BUS_FILES_TOUCHED_EVENT,
@@ -21,6 +26,7 @@ describe("bus-publish — pilens:files:touched (#482)", () => {
 		_resetForTests();
 		appendRecentTouches.mockClear();
 		appendRecentTouches.mockResolvedValue(undefined);
+		logBusEvent.mockClear();
 	});
 
 	afterEach(() => {
@@ -315,6 +321,76 @@ describe("bus-publish — pilens:files:touched (#482)", () => {
 			expect(dbg).toHaveBeenCalledWith(
 				expect.stringContaining("recent-touches append failed"),
 			);
+		});
+	});
+
+	describe("bus-events.log (persistent trace)", () => {
+		it("logs 'emitted' with a file count on a successful emit", () => {
+			const emit = vi.fn();
+			wireBusEmitter(emit);
+
+			publishFilesTouched({
+				reason: "autofix",
+				paths: ["/repo/a.ts", "/repo/b.ts"],
+				cwd: "/repo",
+			});
+
+			expect(logBusEvent).toHaveBeenCalledWith(
+				expect.objectContaining({
+					event: BUS_FILES_TOUCHED_EVENT,
+					outcome: "emitted",
+					reason: "autofix",
+					fileCount: 2,
+				}),
+			);
+		});
+
+		it("logs 'skipped_unwired' once when busEmit was never wired", () => {
+			publishFilesTouched({ reason: "autofix", paths: ["/repo/a.ts"], cwd: "/repo" });
+			publishFilesTouched({ reason: "autofix", paths: ["/repo/b.ts"], cwd: "/repo" });
+
+			const unwiredCalls = logBusEvent.mock.calls.filter(
+				(c) => (c[0] as { outcome: string }).outcome === "skipped_unwired",
+			);
+			expect(unwiredCalls).toHaveLength(1);
+		});
+
+		it("logs 'skipped_disabled' once when the kill switch is off", () => {
+			process.env.PI_LENS_BUS_PUBLISH = "0";
+			_resetForTests();
+			logBusEvent.mockClear();
+			const emit = vi.fn();
+			wireBusEmitter(emit);
+
+			publishFilesTouched({ reason: "autofix", paths: ["/repo/a.ts"], cwd: "/repo" });
+			publishFilesTouched({ reason: "autofix", paths: ["/repo/b.ts"], cwd: "/repo" });
+
+			const disabledCalls = logBusEvent.mock.calls.filter(
+				(c) => (c[0] as { outcome: string }).outcome === "skipped_disabled",
+			);
+			expect(disabledCalls).toHaveLength(1);
+		});
+
+		it("logs 'emit_failed' with the error message when emit throws", () => {
+			const emit = vi.fn(() => {
+				throw new Error("bus explosion");
+			});
+			wireBusEmitter(emit);
+
+			publishFilesTouched({ reason: "autofix", paths: ["/repo/a.ts"], cwd: "/repo" });
+
+			expect(logBusEvent).toHaveBeenCalledWith(
+				expect.objectContaining({
+					event: BUS_FILES_TOUCHED_EVENT,
+					outcome: "emit_failed",
+					error: expect.stringContaining("bus explosion"),
+				}),
+			);
+		});
+
+		it("does not log anything for an empty paths batch", () => {
+			publishFilesTouched({ reason: "autofix", paths: [], cwd: "/repo" });
+			expect(logBusEvent).not.toHaveBeenCalled();
 		});
 	});
 });
