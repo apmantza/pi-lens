@@ -731,6 +731,9 @@ For anything that goes through the `index.ts` entry — flag/command/tool/hook r
 - `makeCtx({ cwd })` → a minimal command/handler context that captures `ui.notify`/`setStatus`/`setWidget` into `ctx.notifications` / `ctx.statusCalls` / `ctx.widgetCalls`.
 `tests/lens-toggle-command.test.ts` is the migration template; migrate other bespoke `createCtx`/`vi.mock` blocks to the harness opportunistically.
 
+### Testing dispatch runners (#187)
+Separate from the above — `tests/clients/dispatch/runners/*.test.ts` (and some `dispatch/rules/*`) build a `DispatchContext` (`clients/dispatch/types.ts`), not an `ExtensionAPI` mock. Use the shared `makeRunnerCtx(filePath, cwd, overrides?)` from `tests/support/runner-ctx.ts` instead of a local `createCtx(filePath, cwd)`: it fills in the real `DispatchContext` fields (`kind: "jsts"`, `fileRole: "source"`, `autofix: false`, `deltaMode: true`, a fresh `FactStore`, `hasTool` resolving `true`, no-op `log`) and lets a test override just what it needs (e.g. `{ kind: "python" }`, `{ autofix: true }`, a custom `hasTool`). `ruff.test.ts`, `oxlint.test.ts`, and `biome-check-runner.test.ts` are the migration template; the remaining ~23 `dispatch/runners`/`dispatch/rules` files with a bespoke `createCtx` are tracked in #187 for opportunistic follow-on migration.
+
 ## Commit conventions
 - Always include the GitHub issue number in the commit subject line: `(closes #NNN)` or `(refs #NNN)`.
 - Use `closes` only when the commit fully resolves the entire issue; use `refs` for any partial work.
