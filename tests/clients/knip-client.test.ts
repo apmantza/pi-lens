@@ -2,10 +2,58 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { getProjectDataDir } from "../../clients/file-utils.js";
 import { KnipClient } from "../../clients/knip-client.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
+vi.mock("../../clients/safe-spawn.js", () => ({
+	safeSpawnAsync: vi.fn(async () => ({
+		error: null,
+		status: 0,
+		stdout: "",
+		stderr: "",
+	})),
+}));
+
 describe("knip-client", () => {
+	it("runAnalyze() passes --cache and a --cache-location under getProjectDataDir", async () => {
+		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-knip-cache-");
+		try {
+			fs.writeFileSync(path.join(tmpDir, "package.json"), '{"name":"demo"}');
+
+			const safeSpawnMod = await import("../../clients/safe-spawn.js");
+			vi.mocked(safeSpawnMod.safeSpawnAsync).mockClear();
+
+			const client = new KnipClient(false) as unknown as {
+				runAnalyze: (d: string) => Promise<unknown>;
+			};
+
+			await client.runAnalyze(tmpDir);
+
+			expect(safeSpawnMod.safeSpawnAsync).toHaveBeenCalled();
+			const [, args] = vi.mocked(safeSpawnMod.safeSpawnAsync).mock.calls[0] ?? [];
+			expect(args).toContain("--cache");
+
+			const cacheLocationIndex = (args as string[]).indexOf("--cache-location");
+			expect(cacheLocationIndex).toBeGreaterThan(-1);
+
+			const expectedCacheLocation = path.join(
+				getProjectDataDir(tmpDir),
+				"cache",
+				"knip",
+			);
+			expect((args as string[])[cacheLocationIndex + 1]).toBe(
+				expectedCacheLocation,
+			);
+
+			// Pre-created eagerly (knip's own auto-mkdir for --cache-location is
+			// unreliable on Windows — see comment in runAnalyze()).
+			expect(fs.existsSync(expectedCacheLocation)).toBe(true);
+		} finally {
+			cleanup();
+		}
+	});
+
 	it("resolves project root from nested directory", () => {
 		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-knip-");
 		try {

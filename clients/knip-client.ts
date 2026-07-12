@@ -12,6 +12,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { getProjectDataDir } from "./file-utils.js";
 import { isAtOrAboveHomeDir } from "./path-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 
@@ -225,6 +226,30 @@ export class KnipClient {
 	}
 
 	private async runAnalyze(targetDir: string): Promise<KnipResult> {
+		// Cache dir is routed through pi-lens's project-data-dir convention (NOT
+		// knip's own default `./node_modules/.cache/knip`) so it lives alongside
+		// every other project cache (see cache-manager.ts, call-graph.ts) and is
+		// covered by the existing `.pi-lens/` gitignore entry.
+		//
+		// Caveat (per knip's docs): a cached run does NOT pick up newly-added
+		// `.gitignore` files automatically — the cache must be deleted to detect
+		// them. Not auto-handled here; this is a documented tradeoff, not a bug.
+		const cacheLocation = path.join(getProjectDataDir(targetDir), "cache", "knip");
+
+		// knip (verified against 6.26.0) silently fails to persist the cache when
+		// `--cache-location` points at a directory that doesn't exist yet: its
+		// internal auto-mkdir throws ENOENT (swallowed internally, debug-logged
+		// only) on Windows, so the very first run — and every run after, since the
+		// dir never gets created — degrades to an uncached scan with no error
+		// surfaced. Pre-creating the dir avoids that path entirely; matches the
+		// mkdirSync-before-spawn convention call-graph.ts already uses for its
+		// cache file's parent dir.
+		try {
+			fs.mkdirSync(cacheLocation, { recursive: true });
+		} catch (err) {
+			this.log(`Failed to pre-create knip cache dir ${cacheLocation}: ${err}`);
+		}
+
 		const args = [
 			"--reporter=json",
 			"--include",
@@ -233,6 +258,9 @@ export class KnipClient {
 			// it makes knip exit 2 with zero output, silently disabling the scan —
 			// verified against knip 6.20. Valid member-level type here is enumMembers.)
 			"files,exports,types,dependencies,unlisted,enumMembers",
+			"--cache",
+			"--cache-location",
+			cacheLocation,
 		];
 
 		const result = await safeSpawnAsync("knip", args, {
