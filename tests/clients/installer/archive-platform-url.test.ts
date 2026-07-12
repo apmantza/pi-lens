@@ -63,4 +63,35 @@ describe("resolveArchiveUrl (#241 platform-matched archives)", () => {
 			expect(resolveArchiveUrl(clangd!.archive!, "freebsd", "x64")).toBeUndefined();
 		});
 	});
+
+	describe("lua-language-server tool def (#564)", () => {
+		const lua = TOOLS.find((t) => t.id === "lua-language-server");
+
+		it("is a registered archive tree-bundle", () => {
+			expect(lua?.installStrategy).toBe("archive");
+			expect(lua?.archive?.launcher).toBeUndefined();
+			expect(lua?.archive?.treeMarker).toBe("bin");
+			// Unlike clangd, LuaLS releases have no wrapping version dir.
+			expect(lua?.archive?.stripComponents).toBe(0);
+		});
+
+		it.each([
+			["linux", "x64", /lua-language-server-[\d.]+-linux-x64\.tar\.gz$/],
+			["linux", "arm64", /lua-language-server-[\d.]+-linux-arm64\.tar\.gz$/],
+			["darwin", "x64", /lua-language-server-[\d.]+-darwin-x64\.tar\.gz$/],
+			["darwin", "arm64", /lua-language-server-[\d.]+-darwin-arm64\.tar\.gz$/],
+			["win32", "x64", /lua-language-server-[\d.]+-win32-x64\.zip$/],
+		])("resolves %s/%s to the matching asset", (platform, arch, pattern) => {
+			const url = resolveArchiveUrl(lua!.archive!, platform, arch);
+			expect(url).toMatch(
+				/^https:\/\/github\.com\/LuaLS\/lua-language-server\/releases\//,
+			);
+			expect(url).toMatch(pattern);
+		});
+
+		it("has no official win32/arm64 build or support for unknown platforms", () => {
+			expect(resolveArchiveUrl(lua!.archive!, "win32", "arm64")).toBeUndefined();
+			expect(resolveArchiveUrl(lua!.archive!, "freebsd", "x64")).toBeUndefined();
+		});
+	});
 });

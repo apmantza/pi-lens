@@ -798,6 +798,48 @@ export const TOOLS: ToolDefinition[] = [
 		},
 	},
 	{
+		// lua-language-server (#564, split from #241) — same self-contained native
+		// TREE BUNDLE shape as clangd: bin/lua-language-server[.exe] + bundled
+		// locale/meta files, no external runtime. UNLIKE clangd, the release
+		// archive has NO wrapping version dir (verified by inspecting the actual
+		// 3.18.2 linux-x64 .tar.gz and win32-x64 .zip contents: `bin/`, `LICENSE`,
+		// `locale/`, … sit at archive root) — so stripComponents:0, not 1.
+		// LuaServer launches `<bundle>/bin/lua-language-server` directly.
+		// checkCommand documents the binary but is unused for resolution (tree
+		// bundles resolve only via the extract dir + treeMarker). Platform-matched
+		// url: LuaLS publishes darwin/linux x64+arm64 and win32 x64 (no win32/arm64
+		// build as of 3.18.2 → undefined, graceful unavailable); asset naming
+		// verified against the live GitHub release listing, not guessed.
+		id: "lua-language-server",
+		name: "lua-language-server",
+		checkCommand: "lua-language-server",
+		checkArgs: ["--version"],
+		installStrategy: "archive",
+		binaryName: "lua-language-server",
+		archive: {
+			url: (platform, arch) => {
+				const version = "3.18.2";
+				const base = `https://github.com/LuaLS/lua-language-server/releases/download/${version}`;
+				if (platform === "linux")
+					return arch === "arm64"
+						? `${base}/lua-language-server-${version}-linux-arm64.tar.gz`
+						: `${base}/lua-language-server-${version}-linux-x64.tar.gz`;
+				if (platform === "darwin")
+					return arch === "arm64"
+						? `${base}/lua-language-server-${version}-darwin-arm64.tar.gz`
+						: `${base}/lua-language-server-${version}-darwin-x64.tar.gz`;
+				if (platform === "win32")
+					return arch === "arm64"
+						? undefined
+						: `${base}/lua-language-server-${version}-win32-x64.zip`;
+				return undefined;
+			},
+			kind: "zip",
+			stripComponents: 0,
+			treeMarker: "bin",
+		},
+	},
+	{
 		id: "actionlint",
 		name: "actionlint",
 		checkCommand: "actionlint",

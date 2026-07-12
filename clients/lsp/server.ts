@@ -2005,16 +2005,69 @@ export const DartServer = createInteractiveServer({
 	args: ["language-server", "--protocol=lsp"],
 });
 
-export const LuaServer = createInteractiveServer({
+/**
+ * Build an {@link LSPServerInfo} for a language server that ships as a
+ * self-contained native TREE BUNDLE (single archive, `bin/<binary>` inside,
+ * no external runtime — clangd #241, lua-language-server #564, and the
+ * kotlin-language-server/elixir-ls follow-on #565). Extracted once both
+ * `CppServer` and `LuaServer` turned out to be a near-verbatim structural
+ * copy of each other (same `resolveAndLaunchTreeBinary` call shape) —
+ * flagged by SonarCloud's new-code duplication gate on PR #567 — so a third
+ * and fourth server of this shape (#565) can call this instead of
+ * copy-pasting a `spawn` again. Each server's own "why archive-tree, why
+ * stripComponents differs, etc." explanation stays as a comment at its own
+ * call site below, since that reasoning is genuinely per-server.
+ */
+function createTreeBinaryServer(spec: {
+	id: string;
+	name: string;
+	extensions: readonly string[];
+	root: RootFunction;
+	/** PATH candidate + managed bundle tool id, e.g. "clangd", "lua-language-server". */
+	binaryName: string;
+	/** Path to the executable inside the extracted bundle, e.g. "bin/clangd". */
+	binRelPath: string;
+	args?: string[];
+}): LSPServerInfo {
+	return {
+		id: spec.id,
+		name: spec.name,
+		extensions: spec.extensions,
+		root: spec.root,
+		spawn(root, options) {
+			return resolveAndLaunchTreeBinary(
+				{
+					candidates: [spec.binaryName],
+					bundleToolId: spec.binaryName,
+					binRelPath: spec.binRelPath,
+					cwd: root,
+					args: spec.args ?? [],
+				},
+				options?.allowInstall,
+			);
+		},
+	};
+}
+
+// lua-language-server ships the same self-contained native TREE BUNDLE shape
+// as clangd (#241/#564): bin/lua-language-server + bundled locale/meta files,
+// no external runtime. Prefer a system install on PATH; else auto-install the
+// managed bundle and launch bin/lua-language-server within it. Graceful skip
+// when neither is available (→ coverage notice).
+export const LuaServer: LSPServerInfo = createTreeBinaryServer({
 	id: "lua",
 	name: "Lua Language Server",
 	extensions: KIND_EXTENSIONS["lua"],
 	root: createRootDetector([".luarc.json", ".luacheckrc"]),
-	language: "lua",
-	command: "lua-language-server",
+	binaryName: "lua-language-server",
+	binRelPath: "bin/lua-language-server",
 });
 
-export const CppServer: LSPServerInfo = {
+// clangd ships a self-contained native tree bundle (bin/clangd + bundled
+// libclang headers). Prefer a system clangd on PATH; else auto-install the
+// managed bundle (#241) and launch bin/clangd within it. Graceful skip when
+// neither is available (→ coverage notice); cpp-check stays the fallback.
+export const CppServer: LSPServerInfo = createTreeBinaryServer({
 	id: "cpp",
 	name: "clangd",
 	extensions: KIND_EXTENSIONS["cxx"],
@@ -2026,23 +2079,10 @@ export const CppServer: LSPServerInfo = {
 			"Makefile",
 		]),
 	),
-	spawn(root, options) {
-		// clangd ships a self-contained native tree bundle (bin/clangd + bundled
-		// libclang headers). Prefer a system clangd on PATH; else auto-install the
-		// managed bundle (#241) and launch bin/clangd within it. Graceful skip when
-		// neither is available (→ coverage notice); cpp-check stays the fallback.
-		return resolveAndLaunchTreeBinary(
-			{
-				candidates: ["clangd"],
-				bundleToolId: "clangd",
-				binRelPath: "bin/clangd",
-				cwd: root,
-				args: ["--background-index"],
-			},
-			options?.allowInstall,
-		);
-	},
-};
+	binaryName: "clangd",
+	binRelPath: "bin/clangd",
+	args: ["--background-index"],
+});
 
 export const ZigServer: LSPServerInfo = {
 	id: "zig",
