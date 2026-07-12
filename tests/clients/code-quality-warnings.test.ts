@@ -146,4 +146,43 @@ describe("code quality warnings", () => {
 			env.cleanup();
 		}
 	});
+
+	// #557 audit: writeCodeQualityWarningsReport is safe from the #555/#560
+	// stale-write race precisely because it has exactly one caller
+	// (handleTurnEnd in clients/runtime-turn.ts), invoked once per turn-end —
+	// not once per (potentially concurrent) pipeline run like widget-state.ts's
+	// recordDiagnostics was. Pin that single-caller shape here so a future
+	// change that adds a second call site (e.g. wiring the write directly into
+	// a per-edit pipeline path) trips this test and forces re-examination of
+	// whether a WriteOrderingGuard is now needed, rather than silently
+	// reintroducing the race.
+	it("has exactly one call site for writeCodeQualityWarningsReport (single sequential turn-end caller invariant)", () => {
+		const repoRoot = path.resolve(__dirname, "..", "..");
+		const searchRoots = ["clients", "tools", "index.ts"];
+		const callSites: string[] = [];
+
+		function scan(target: string): void {
+			const abs = path.join(repoRoot, target);
+			const stat = fs.statSync(abs);
+			if (stat.isDirectory()) {
+				for (const entry of fs.readdirSync(abs)) {
+					if (entry === "node_modules" || entry === "dist") continue;
+					scan(path.join(target, entry));
+				}
+				return;
+			}
+			if (!abs.endsWith(".ts")) return;
+			const content = fs.readFileSync(abs, "utf8");
+			if (content.includes("writeCodeQualityWarningsReport(")) {
+				callSites.push(target.replace(/\\/g, "/"));
+			}
+		}
+		for (const root of searchRoots) scan(root);
+
+		// One occurrence is the export/definition in code-quality-warnings.ts
+		// itself, and exactly one is the call site in runtime-turn.ts.
+		expect(callSites.sort()).toEqual(
+			["clients/code-quality-warnings.ts", "clients/runtime-turn.ts"].sort(),
+		);
+	});
 });
