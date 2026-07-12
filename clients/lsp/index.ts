@@ -1161,7 +1161,23 @@ export class LSPService {
 			// (TypeScript ~1s) isn't held to a flat multi-second wait while a slow
 			// one (rust-analyzer 3s) gets the time it needs — bounded by any caller
 			// ceiling that exists to protect the per-edit pipeline budget (#203).
-			// The multi-server "full"/cascade path keeps the flat resolution.
+			// #573: clientScope "all" (lsp_diagnostics, lens_diagnostics_full) now
+			// gets the same per-server treatment as "with-auxiliary" — each spawned
+			// server (primary + any auxiliaries) is bounded by ITS OWN strategy
+			// budget instead of one flat number shared by every server. This was
+			// never a deliberate "all means wait for the group ceiling" semantic:
+			// #203 introduced perServerTimeout only for the single-server primary
+			// path and left "full"/"all" on the pre-existing flat resolution
+			// ("full/cascade path unchanged"); #242 later added "with-auxiliary"
+			// without revisiting "all". The one property "all" genuinely needs —
+			// the touch's overall detection deadline is the SLOWEST spawned
+			// server's budget, not the fastest — is unaffected: `timeoutMs` below
+			// is always `Math.max(...spawned.map(timeoutFor))` regardless of which
+			// timeoutFor is selected, so a slow auxiliary still gets to run to its
+			// own budget before the touch is logged as timed out. What changes is
+			// only that a fast server's *individual* `waitForDiagnostics` call
+			// (further below) now resolves/times out against its own budget
+			// instead of blocking to the flat multi-server number.
 			const envWait = readEnvDiagnosticsWaitMs();
 			const callerCap = options.maxDiagnosticsWaitMs ?? options.maxClientWaitMs;
 			const modeFloor = diagnosticsMode === "full" ? 3000 : 1200;
@@ -1183,10 +1199,14 @@ export class LSPService {
 				timeoutFor = () => envWait;
 			} else if (
 				(!useAllClients && spawned.length === 1) ||
-				clientScope === "with-auxiliary"
+				clientScope === "with-auxiliary" ||
+				clientScope === "all"
 			) {
 				timeoutFor = perServerTimeout;
 			} else {
+				// Fail-safe for any future clientScope this branch hasn't been
+				// taught about yet — keep the old flat resolution rather than
+				// silently mis-budgeting an unrecognized scope.
 				timeoutFor = () => callerCap ?? modeFloor;
 			}
 			// Detection deadline = the slowest individual server's budget.
