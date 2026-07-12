@@ -17,6 +17,7 @@
  * callback is invoked at most once on first failure so a wired caller can log
  * it without spamming.
  */
+import { logBusEvent } from "./bus-events-logger.js";
 import { normalizeFilePath } from "./path-utils.js";
 import { appendRecentTouches } from "./recent-touches.js";
 
@@ -62,6 +63,12 @@ type BusEmitFn = (channel: string, data: unknown) => void;
 
 let busEmit: BusEmitFn | undefined;
 let hasLoggedFailure = false;
+// Log-once-per-process guards for the two structural-no-op outcomes below
+// (see bus-events-logger.ts's module doc for why these aren't logged on
+// every call — both are static, session-lifetime facts, not transient
+// per-event failures).
+let hasLoggedUnwired = false;
+let hasLoggedDisabled = false;
 
 /**
  * Wire the emit function from pi's `pi.events` bus. Called once at extension
@@ -78,6 +85,8 @@ export function wireBusEmitter(emitFn: BusEmitFn | undefined): void {
 export function _resetForTests(): void {
 	busEmit = undefined;
 	hasLoggedFailure = false;
+	hasLoggedUnwired = false;
+	hasLoggedDisabled = false;
 	_envCache = undefined;
 }
 
@@ -135,7 +144,18 @@ export interface PublishFilesTouchedArgs {
 export function publishFilesTouched(args: PublishFilesTouchedArgs): void {
 	if (args.origin === "bus") return;
 	if (args.paths.length === 0) return;
-	if (!isBusPublishEnabled()) return;
+	if (!isBusPublishEnabled()) {
+		if (!hasLoggedDisabled) {
+			hasLoggedDisabled = true;
+			logBusEvent({
+				event: BUS_FILES_TOUCHED_EVENT,
+				outcome: "skipped_disabled",
+				cwd: normalizeFilePath(args.cwd),
+				reason: args.reason,
+			});
+		}
+		return;
+	}
 
 	void appendRecentTouches({
 		cwd: args.cwd,
@@ -146,7 +166,18 @@ export function publishFilesTouched(args: PublishFilesTouchedArgs): void {
 		args.dbg?.(`bus-publish: recent-touches append failed: ${err}`);
 	});
 
-	if (!busEmit) return;
+	if (!busEmit) {
+		if (!hasLoggedUnwired) {
+			hasLoggedUnwired = true;
+			logBusEvent({
+				event: BUS_FILES_TOUCHED_EVENT,
+				outcome: "skipped_unwired",
+				cwd: normalizeFilePath(args.cwd),
+				reason: args.reason,
+			});
+		}
+		return;
+	}
 
 	try {
 		const payload: FilesTouchedPayload = {
@@ -163,7 +194,21 @@ export function publishFilesTouched(args: PublishFilesTouchedArgs): void {
 			}));
 		}
 		busEmit(BUS_FILES_TOUCHED_EVENT, payload);
+		logBusEvent({
+			event: BUS_FILES_TOUCHED_EVENT,
+			outcome: "emitted",
+			cwd: payload.cwd,
+			reason: args.reason,
+			fileCount: payload.paths.length,
+		});
 	} catch (err) {
+		logBusEvent({
+			event: BUS_FILES_TOUCHED_EVENT,
+			outcome: "emit_failed",
+			cwd: normalizeFilePath(args.cwd),
+			reason: args.reason,
+			error: String(err),
+		});
 		if (!hasLoggedFailure) {
 			hasLoggedFailure = true;
 			args.dbg?.(
