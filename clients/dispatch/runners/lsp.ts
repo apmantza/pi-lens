@@ -26,6 +26,7 @@ import { convertLspDiagnostics } from "../utils/lsp-diagnostics.js";
 import {
 	enabledAuxiliaryLspServerIds,
 	findAuxiliaryProfileForSource,
+	isAuxiliaryDiagnosticSuppressed,
 } from "../auxiliary-lsp.js";
 import { readFileContent } from "./utils.js";
 
@@ -287,11 +288,9 @@ const lspRunner: RunnerDefinition = {
 		for (let i = 0; i < diagnostics.length; i++) {
 			const profile = findAuxiliaryProfileForSource(validLspDiags[i]?.source);
 			if (!profile) continue;
-			if (profile.isSuppressed) {
-				if (profile.isSuppressed(validLspDiags[i], content)) {
-					suppressedIndices.add(i);
-					continue;
-				}
+			if (isAuxiliaryDiagnosticSuppressed(validLspDiags[i], content)) {
+				suppressedIndices.add(i);
+				continue;
 			}
 			let blockingAllowed = blockingAllowedByProfile.get(profile);
 			if (blockingAllowed === undefined) {

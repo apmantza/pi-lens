@@ -14,6 +14,7 @@ import {
 } from "../clients/file-utils.js";
 import { getLSPService } from "../clients/lsp/index.js";
 import { combineAbortSignals } from "../clients/deadline-utils.js";
+import { applyAuxiliarySuppressions } from "../clients/dispatch/auxiliary-lsp.js";
 import type { LSPDiagnostic } from "../clients/lsp/client.js";
 import { classifyCascadeWaitTier } from "../clients/lsp/cascade-tier.js";
 import { convertLspDiagnostics } from "../clients/dispatch/utils/lsp-diagnostics.js";
@@ -475,8 +476,9 @@ async function collectDiagnosticsForFile(
 	waitMs?: number,
 ): Promise<DiagnosticsCollectionResult> {
 	let timedOut = false;
+	let content: string | undefined;
 	try {
-		const content = fs.readFileSync(absPath, "utf-8");
+		content = fs.readFileSync(absPath, "utf-8");
 		const serviceWithTouch = lspService as NonNullable<
 			ReturnType<typeof getLSPService>
 		> & {
@@ -519,7 +521,16 @@ async function collectDiagnosticsForFile(
 		absPath,
 		waitMs !== undefined ? "document" : "full",
 	);
-	return { diagnostics, timedOut };
+	// #586: honor each auxiliary profile's native inline-suppression comment
+	// (e.g. opengrep's `// nosemgrep`, #441) the same way the per-edit dispatch
+	// runner does — previously this standalone query path ignored it entirely.
+	// `content` is only unset if the read itself failed above; fail-open (no
+	// filtering) rather than lose diagnostics over an unrelated read error.
+	const filtered =
+		content !== undefined
+			? applyAuxiliarySuppressions(diagnostics, content)
+			: diagnostics;
+	return { diagnostics: filtered, timedOut };
 }
 
 function diagnosticsToFileDiags(
