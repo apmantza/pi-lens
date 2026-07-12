@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { TestRunnerClient } from "../../clients/test-runner-client.js";
-import { setupTestEnvironment } from "./test-utils.js";
+import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 
 const cleanups: Array<() => void> = [];
 
@@ -546,5 +546,180 @@ describe("test-runner-client", () => {
 			expect(target?.strategy).toBe("self");
 			expect(target?.testFile).toBe(path.resolve(src));
 		});
+	});
+
+	// --- PHPUnit ---
+
+	it("detects phpunit via phpunit.xml.dist", () => {
+		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
+		cleanups.push(cleanup);
+
+		fs.writeFileSync(path.join(tmpDir, "phpunit.xml.dist"), "<phpunit></phpunit>\n");
+
+		const client = new TestRunnerClient(false);
+		const detected = client.detectRunner(tmpDir);
+		expect(detected?.runner).toBe("phpunit");
+	});
+
+	it("detects phpunit via composer.json require-dev", () => {
+		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
+		cleanups.push(cleanup);
+
+		fs.writeFileSync(
+			path.join(tmpDir, "composer.json"),
+			JSON.stringify({
+				name: "acme/demo",
+				"require-dev": { "phpunit/phpunit": "^10.0" },
+			}),
+		);
+
+		const client = new TestRunnerClient(false);
+		const detected = client.detectRunner(tmpDir);
+		expect(detected?.runner).toBe("phpunit");
+	});
+
+	it("does not infer phpunit from composer.json without a phpunit dependency", () => {
+		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
+		cleanups.push(cleanup);
+
+		fs.writeFileSync(
+			path.join(tmpDir, "composer.json"),
+			JSON.stringify({ name: "acme/demo", "require-dev": {} }),
+		);
+
+		const client = new TestRunnerClient(false);
+		const detected = client.detectRunner(tmpDir);
+		expect(detected?.runner).not.toBe("phpunit");
+	});
+
+	it("finds the mirrored PHPUnit test file (src/Foo/Bar.php -> tests/Foo/BarTest.php)", () => {
+		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
+		cleanups.push(cleanup);
+
+		fs.writeFileSync(path.join(tmpDir, "phpunit.xml"), "<phpunit></phpunit>\n");
+		const src = createTempFile(tmpDir, "src/Foo/Bar.php", "<?php\nclass Bar {}\n");
+		const testFile = createTempFile(
+			tmpDir,
+			"tests/Foo/BarTest.php",
+			"<?php\nclass BarTest {}\n",
+		);
+
+		const client = new TestRunnerClient(false);
+		const found = client.findTestFile(src, tmpDir);
+		expect(found?.runner).toBe("phpunit");
+		expect(found?.testFile).toBe(testFile);
+	});
+
+	it("parses a passing PHPUnit OK summary", () => {
+		const client = new TestRunnerClient(false) as any;
+		const result = client.parsePhpunitOutput(
+			"...\n\nOK (12 tests, 34 assertions)\n",
+			"",
+			0,
+			"/tmp/BarTest.php",
+			"phpunit",
+		);
+
+		expect(result.passed).toBe(12);
+		expect(result.failed).toBe(0);
+		expect(result.skipped).toBe(0);
+	});
+
+	it("parses a failing PHPUnit summary with individual failures", () => {
+		const client = new TestRunnerClient(false) as any;
+		const output = [
+			"FAILURES!",
+			"",
+			"1) Foo\\BarTest::testSomething",
+			"Failed asserting that false is true.",
+			"",
+			"Tests: 12, Assertions: 34, Errors: 1, Failures: 2, Skipped: 1.",
+		].join("\n");
+		const result = client.parsePhpunitOutput(
+			output,
+			"",
+			1,
+			"/tmp/BarTest.php",
+			"phpunit",
+		);
+
+		expect(result.passed).toBe(8);
+		expect(result.failed).toBe(3);
+		expect(result.skipped).toBe(1);
+		expect(result.failures[0].name).toBe("Foo\\BarTest::testSomething");
+	});
+
+	// --- mix test (ExUnit) ---
+
+	it("detects mix via mix.exs", () => {
+		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
+		cleanups.push(cleanup);
+
+		fs.writeFileSync(path.join(tmpDir, "mix.exs"), "defmodule Demo.MixProject do\nend\n");
+
+		const client = new TestRunnerClient(false);
+		const detected = client.detectRunner(tmpDir);
+		expect(detected?.runner).toBe("mix");
+	});
+
+	it("finds the mirrored ExUnit test file (lib/accounts/user.ex -> test/accounts/user_test.exs)", () => {
+		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
+		cleanups.push(cleanup);
+
+		fs.writeFileSync(path.join(tmpDir, "mix.exs"), "defmodule Demo.MixProject do\nend\n");
+		const src = createTempFile(
+			tmpDir,
+			"lib/accounts/user.ex",
+			"defmodule Demo.Accounts.User do\nend\n",
+		);
+		const testFile = createTempFile(
+			tmpDir,
+			"test/accounts/user_test.exs",
+			"defmodule Demo.Accounts.UserTest do\nend\n",
+		);
+
+		const client = new TestRunnerClient(false);
+		const found = client.findTestFile(src, tmpDir);
+		expect(found?.runner).toBe("mix");
+		expect(found?.testFile).toBe(testFile);
+	});
+
+	it("parses a passing mix test summary", () => {
+		const client = new TestRunnerClient(false) as any;
+		const result = client.parseMixTestOutput(
+			"..\n\nFinished in 0.05 seconds\n2 tests, 0 failures\n",
+			"",
+			0,
+			"/tmp/user_test.exs",
+			"mix",
+		);
+
+		expect(result.passed).toBe(2);
+		expect(result.failed).toBe(0);
+		expect(result.duration).toBeCloseTo(50, 0);
+	});
+
+	it("parses a failing mix test summary with individual failures", () => {
+		const client = new TestRunnerClient(false) as any;
+		const output = [
+			"  1) test creates a user (Demo.Accounts.UserTest)",
+			"     test/accounts/user_test.exs:5",
+			"     Assertion with == failed",
+			"",
+			"Finished in 0.08 seconds",
+			"3 tests, 1 failure",
+		].join("\n");
+		const result = client.parseMixTestOutput(
+			output,
+			"",
+			1,
+			"/tmp/user_test.exs",
+			"mix",
+		);
+
+		expect(result.passed).toBe(2);
+		expect(result.failed).toBe(1);
+		expect(result.failures[0].name).toBe("test creates a user");
+		expect(result.failures[0].location).toBe("Demo.Accounts.UserTest");
 	});
 });

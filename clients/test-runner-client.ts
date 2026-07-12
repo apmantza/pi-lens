@@ -4,7 +4,8 @@
  * Detects test files and runs them on write/edit to provide
  * immediate test feedback to the AI agent.
  *
- * Supports: vitest, jest, pytest (extensible to more)
+ * Supports: vitest, jest, pytest, go, cargo, dotnet, gradle, maven, rspec,
+ * minitest, phpunit, mix (extensible to more)
  *
  * Design: File-level targeted testing — only runs tests for the
  * specific file being edited, not the entire suite.
@@ -82,6 +83,14 @@ const SOURCE_TO_TEST_PATTERNS: Array<{
 	},
 	{ ext: ".go", testExts: ["_test.go"], dirs: [".", ".", ".", "."] }, // Go tests are co-located
 	{ ext: ".rs", testExts: [".rs"], dirs: ["tests", "tests", "src", "."] }, // Rust: tests/ or #[test] in src
+	// PHPUnit convention: tests/ mirrors src/ with ClassNameTest.php naming
+	// (e.g. src/Foo/Bar.php -> tests/Foo/BarTest.php). Basename is already the
+	// class name (PHP files are named after their class), so no case transform
+	// is needed — the mirrored-directory search below handles the tests/ root.
+	{ ext: ".php", testExts: ["Test.php"], dirs: ["tests"] },
+	// ExUnit convention: test/ mirrors lib/ with a _test.exs suffix on the same
+	// basename (e.g. lib/accounts/user.ex -> test/accounts/user_test.exs).
+	{ ext: ".ex", testExts: ["_test.exs"], dirs: ["test"] },
 ];
 
 // Bound for walking up parent directories to find a hoisted node_modules
@@ -182,6 +191,22 @@ const RUNNERS: Record<string, RunnerConfig> = {
 		args: (testFile, _cwd) => ["-Itest", testFile],
 		parseJson: false,
 	},
+	phpunit: {
+		// phpunit.xml(.dist) is the strong signal; composer.json is checked for
+		// a require-dev dependency on phpunit/phpunit (see the special case in
+		// detectRunner's Priority-1 loop, mirroring the pytest/pyproject.toml
+		// handling above).
+		configFiles: ["phpunit.xml", "phpunit.xml.dist", "composer.json"],
+		command: "phpunit",
+		args: (testFile, _cwd) => [testFile],
+		parseJson: false, // PHPUnit's default CLI output is text-based
+	},
+	mix: {
+		configFiles: ["mix.exs"],
+		command: "mix",
+		args: (testFile, _cwd) => ["test", testFile],
+		parseJson: false, // mix test's default output is text-based
+	},
 };
 
 // --- Client ---
@@ -235,6 +260,20 @@ export class TestRunnerClient {
 					try {
 						const pyproject = fs.readFileSync(pyprojectPath, "utf-8");
 						return pyproject.includes("[tool.pytest.ini_options]");
+					} catch {
+						return false;
+					}
+				}
+				if (name === "phpunit" && cf === "composer.json") {
+					const composerPath = path.join(cwd, cf);
+					if (!fs.existsSync(composerPath)) return false;
+					try {
+						const composer = JSON.parse(fs.readFileSync(composerPath, "utf-8"));
+						const allDeps = {
+							...composer.require,
+							...composer["require-dev"],
+						};
+						return Boolean(allDeps["phpunit/phpunit"]);
 					} catch {
 						return false;
 					}
@@ -670,6 +709,13 @@ export class TestRunnerClient {
 						: []),
 					path.join(cwd, "tests", testFilename), // top-level tests/
 					path.join(cwd, "__tests__", testFilename), // top-level __tests__/
+					// PHP/Elixir-style source-root mirroring (e.g. src/Foo/Bar.php ->
+					// tests/Foo/BarTest.php, lib/accounts/user.ex ->
+					// test/accounts/user_test.exs): strips a conventional source-root
+					// segment and mirrors under this pattern's OWN configured test
+					// root (testDir), not the hardcoded "tests"/"__tests__" above —
+					// ExUnit's root is "test" (singular), which those don't cover.
+					...this.sourceRootMirroredCandidates(dir, cwd, testDir, testFilename),
 				];
 
 				for (const testPath of searchPaths) {
@@ -848,6 +894,24 @@ export class TestRunnerClient {
 						result.status ?? 0,
 						absoluteTestFile,
 						cwd,
+						runner,
+					);
+					break;
+				case "phpunit":
+					parsed = this.parsePhpunitOutput(
+						stdout,
+						stderr,
+						result.status ?? 0,
+						absoluteTestFile,
+						runner,
+					);
+					break;
+				case "mix":
+					parsed = this.parseMixTestOutput(
+						stdout,
+						stderr,
+						result.status ?? 0,
+						absoluteTestFile,
 						runner,
 					);
 					break;
@@ -1063,6 +1127,126 @@ export class TestRunnerClient {
 		};
 	}
 
+	// --- PHPUnit Parser (text-based, default CLI output) ---
+
+	private parsePhpunitOutput(
+		stdout: string,
+		stderr: string,
+		exitCode: number,
+		testFile: string,
+		runner: string,
+	): TestResult {
+		const output = `${stdout}\n${stderr}`;
+		let passed = 0;
+		let failed = 0;
+		let skipped = 0;
+
+		// Success (or success-with-incomplete/skipped): "OK (12 tests, 34 assertions)"
+		const okMatch = output.match(/OK\s*\((\d+)\s+tests?,\s*\d+\s+assertions?\)/i);
+		if (okMatch) {
+			passed = Number.parseInt(okMatch[1], 10);
+		} else {
+			// Failure summary: "Tests: 12, Assertions: 34, Errors: 1, Failures: 2, Skipped: 1."
+			const testsMatch = output.match(/Tests:\s*(\d+)/i);
+			const failuresMatch = output.match(/Failures:\s*(\d+)/i);
+			const errorsMatch = output.match(/Errors:\s*(\d+)/i);
+			const skippedMatch = output.match(/Skipped:\s*(\d+)/i);
+
+			const total = testsMatch ? Number.parseInt(testsMatch[1], 10) : 0;
+			const failures = failuresMatch ? Number.parseInt(failuresMatch[1], 10) : 0;
+			const errors = errorsMatch ? Number.parseInt(errorsMatch[1], 10) : 0;
+			skipped = skippedMatch ? Number.parseInt(skippedMatch[1], 10) : 0;
+			failed = failures + errors;
+			passed = Math.max(0, total - failed - skipped);
+		}
+
+		// Individual failures: "1) Foo\BarTest::testSomething"
+		const failures: TestFailure[] = [];
+		const failureRegex = /^\d+\)\s+(\S+)/gm;
+		let match;
+		while ((match = failureRegex.exec(output)) !== null) {
+			failures.push({ name: match[1], message: match[1] });
+		}
+
+		return {
+			file: testFile,
+			sourceFile: "",
+			runner,
+			passed,
+			failed,
+			skipped,
+			failures,
+			duration: 0,
+			error:
+				exitCode !== 0 && passed === 0 && failed === 0
+					? "PHPUnit runner error"
+					: undefined,
+		};
+	}
+
+	// --- mix test Parser (ExUnit, text-based, default CLI output) ---
+
+	private parseMixTestOutput(
+		stdout: string,
+		stderr: string,
+		exitCode: number,
+		testFile: string,
+		runner: string,
+	): TestResult {
+		const output = `${stdout}\n${stderr}`;
+		let passed = 0;
+		let failed = 0;
+		let skipped = 0;
+		let duration = 0;
+
+		// Summary: "3 tests, 1 failure" (optionally ", N excluded" / ", N skipped")
+		const summaryMatch = output.match(
+			/(\d+)\s+tests?,\s*(\d+)\s+failures?(?:,\s*(\d+)\s+excluded)?(?:,\s*(\d+)\s+skipped)?/i,
+		);
+		if (summaryMatch) {
+			const total = Number.parseInt(summaryMatch[1], 10);
+			failed = Number.parseInt(summaryMatch[2], 10);
+			const excluded = summaryMatch[3] ? Number.parseInt(summaryMatch[3], 10) : 0;
+			const skippedCount = summaryMatch[4]
+				? Number.parseInt(summaryMatch[4], 10)
+				: 0;
+			skipped = excluded + skippedCount;
+			passed = Math.max(0, total - failed - skipped);
+		}
+
+		const durationMatch = output.match(/Finished in\s+([\d.]+)\s+seconds?/i);
+		if (durationMatch) {
+			duration = Number.parseFloat(durationMatch[1]) * 1000;
+		}
+
+		// Individual failures: "  1) test some behavior (MyModuleTest)"
+		const failures: TestFailure[] = [];
+		const failureRegex = /^\s*\d+\)\s+(.+?)\s*\(([^)]+)\)\s*$/gm;
+		let match;
+		while ((match = failureRegex.exec(output)) !== null) {
+			failures.push({
+				name: match[1].trim(),
+				message: match[1].trim(),
+				location: match[2].trim(),
+			});
+		}
+
+		return {
+			file: testFile,
+			sourceFile: "",
+			runner,
+			passed,
+			failed,
+			skipped,
+			failures,
+			duration,
+			error:
+				exitCode !== 0 && passed === 0 && failed === 0
+					? "mix test runner error"
+					: undefined,
+		};
+	}
+
 	// --- Generic text parser for non-JSON runners ---
 
 	private parseGenericRunnerOutput(
@@ -1230,6 +1414,42 @@ export class TestRunnerClient {
 	// --- Helpers ---
 
 	/**
+	 * Additional mirrored-directory candidate for source trees whose test
+	 * tree mirrors the source tree under a *different*, conventional
+	 * source-root segment rather than the source file's full relative
+	 * directory — e.g. PHPUnit's `src/Foo/Bar.php` -> `tests/Foo/BarTest.php`
+	 * (strips `src`) or ExUnit's `lib/accounts/user.ex` ->
+	 * `test/accounts/user_test.exs` (strips `lib`).
+	 *
+	 * Unlike the `relDir`-based candidates above (which mirror under the
+	 * hardcoded "tests"/"__tests__" roots), this uses `testDir` — the
+	 * pattern's own configured test root from `SOURCE_TO_TEST_PATTERNS`
+	 * (e.g. "tests" for PHP, "test" for Elixir) — since ExUnit's root is
+	 * singular and wouldn't otherwise be checked.
+	 *
+	 * Returns an empty array when the source directory doesn't start with a
+	 * known source-root segment (src/lib/app) followed by at least one more
+	 * path segment — i.e. this is a no-op for languages/layouts that don't
+	 * use this convention.
+	 */
+	private sourceRootMirroredCandidates(
+		dir: string,
+		cwd: string,
+		testDir: string,
+		testFilename: string,
+	): string[] {
+		const knownSourceRoots = new Set(["src", "lib", "app"]);
+		const relDir = path.relative(cwd, dir);
+		const segments = relDir.split(path.sep).filter(Boolean);
+		if (segments.length > 1 && knownSourceRoots.has(segments[0])) {
+			return [
+				path.join(cwd, testDir, ...segments.slice(1), testFilename),
+			];
+		}
+		return [];
+	}
+
+	/**
 	 * Fallback discovery: scan known test directories for a file that imports
 	 * the source module. Catches cases where the test file name doesn't match
 	 * the source basename (e.g. cline.test.ts testing cline-auth.ts).
@@ -1297,6 +1517,18 @@ export class TestRunnerClient {
 		testFile: string,
 		cwd: string,
 	): Promise<{ command: string; args: string[] }> {
+		// PHPUnit has no npx-style automatic local-binary resolution — Composer's
+		// standard local-install location is vendor/bin/phpunit, so check that
+		// explicitly before falling back to a global `phpunit` on PATH.
+		if (runner === "phpunit") {
+			const suffix = process.platform === "win32" ? ".bat" : "";
+			const vendorBin = path.join(cwd, "vendor", "bin", `phpunit${suffix}`);
+			if (fs.existsSync(vendorBin)) {
+				return { command: vendorBin, args: config.args(testFile, cwd) };
+			}
+			return { command: "phpunit", args: config.args(testFile, cwd) };
+		}
+
 		const binName = config.binName ?? runner;
 		const suffix = process.platform === "win32" ? ".cmd" : "";
 		const localBin = path.join(cwd, "node_modules", ".bin", binName + suffix);
