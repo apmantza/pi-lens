@@ -31,6 +31,7 @@ const stubClients = vi.hoisted(() => {
 		"govulncheckClient",
 		"gitleaksClient",
 		"trivyClient",
+		"opengrepClient",
 		"rustClient",
 		"agentBehaviorClient",
 	];

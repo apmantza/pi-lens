@@ -248,6 +248,16 @@ export interface LSPTouchFileOptions {
 	 * enabled (it owns flag access); the service just spawns + collects them.
 	 */
 	auxiliaryServerIds?: readonly string[];
+	/**
+	 * For clientScope "all": server ids to skip even though they match the
+	 * file's extension. Used by `runWorkspaceDiagnostics` (#584) to keep
+	 * opengrep off the per-file bulk-sweep touch loop — its findings now come
+	 * from a dedicated CLI project-diagnostics extractor (`opengrep-client.ts`)
+	 * that runs once per project instead of once per file, so re-touching it
+	 * here would be redundant AND (per #584/#387) the slow auxiliary that
+	 * dominates the per-file wait during a full workspace sweep.
+	 */
+	excludeServerIds?: ReadonlySet<string>;
 	/** Budget for waiting on the LSP client to spawn / become ready. */
 	maxClientWaitMs?: number;
 	/**
@@ -290,6 +300,22 @@ export interface LSPWorkspaceDiagnosticResult {
 }
 
 const WORKSPACE_DIAGNOSTICS_CONCURRENCY = 8;
+
+// #584: opengrep has no `workspace/diagnostic` pull support (push-only,
+// docs/servercapabilities.md) and `reopenOnResync: true` (server-strategies.ts)
+// means every per-file LSP touch already forces a full re-scan anyway — there's
+// no incremental win from routing it through the sweep's per-file loop. On a
+// full workspace sweep it instead dominates the per-file wait (its own
+// wait-tier budget is the slowest of any spawned server) and serializes with
+// everything else in its server group (#387). Its findings for a BULK/
+// full-workspace scan come from `opengrep-client.ts` — a dedicated CLI
+// extractor that scans the whole tree once and is read via
+// `project-diagnostics/extractors.ts`, same architecture as knip/jscpd/
+// gitleaks. The per-edit real-time LSP path (clientScope "primary"/
+// "with-auxiliary") is untouched by this — opengrep still attaches there.
+const WORKSPACE_SWEEP_EXCLUDED_SERVER_IDS: ReadonlySet<string> = new Set([
+	"opengrep",
+]);
 
 // The notify write (didOpen/didChange) is normally instant, but it awaits a
 // JSON-RPC send that BACKPRESSURES when the server's stdin isn't being drained
@@ -651,8 +677,13 @@ export class LSPService {
 	 */
 	async getClientsForFile(
 		filePath: string,
+		excludeServerIds?: ReadonlySet<string>,
 	): Promise<{ clients: SpawnedServer[]; serverCountAttempted: number }> {
-		const servers = getServersForFileWithConfig(filePath);
+		const allServers = getServersForFileWithConfig(filePath);
+		const servers =
+			excludeServerIds && excludeServerIds.size > 0
+				? allServers.filter((s) => !excludeServerIds.has(s.id))
+				: allServers;
 		if (servers.length === 0) return { clients: [], serverCountAttempted: 0 };
 
 		// Count servers with a valid root as "attempted" — extension-only matches
@@ -1039,7 +1070,10 @@ export class LSPService {
 		let spawned: SpawnedServer[];
 		let serverCountAttempted: number;
 		if (useAllClients) {
-			const result = await this.getClientsForFile(filePath);
+			const result = await this.getClientsForFile(
+				filePath,
+				options.excludeServerIds,
+			);
 			spawned = result.clients;
 			serverCountAttempted = result.serverCountAttempted;
 		} else if (clientScope === "with-auxiliary") {
@@ -2123,6 +2157,11 @@ export class LSPService {
 						collectDiagnostics: true,
 						clientScope: "all",
 						source: "lens_diagnostics_full",
+						// #584: opengrep's findings for a full sweep come from the
+						// `opengrep-client.ts` CLI extractor (one project-wide scan,
+						// cached, read via extractors.ts) instead — see the
+						// `excludeServerIds` doc on `LSPTouchFileOptions`.
+						excludeServerIds: WORKSPACE_SWEEP_EXCLUDED_SERVER_IDS,
 					}),
 					{ ms: perFileMs, onTimeout: "undefined" },
 				);
