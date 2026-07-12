@@ -609,12 +609,26 @@ const TOOLS = [
 			"Return the verbatim source of a single named symbol " +
 			"(function/class/method/interface/type) in a file — a targeted, cheap " +
 			"alternative to reading the whole file. Pair with pilens_module_report: it " +
-			"finds the symbol, this shows its body.",
+			"finds the symbol, this shows its body. Includes an attached doc comment " +
+			"when one exists. Accepts a dotted `Class.method` name to resolve a " +
+			"member, falling back to a plain lookup when the qualifier doesn't " +
+			"resolve. A miss embeds the ~3 nearest symbol names in the file. When " +
+			"multiple same-file symbols share a name, the first is returned with an " +
+			"ambiguity note; pass `kind` to pick a specific one.",
 		inputSchema: {
 			type: "object",
 			properties: {
 				file: { type: "string", description: "File containing the symbol." },
-				symbol: { type: "string", description: "Exact symbol name to read." },
+				symbol: {
+					type: "string",
+					description:
+						"Exact symbol name to read, or a dotted `Class.method` to disambiguate a member.",
+				},
+				kind: {
+					type: "string",
+					description:
+						"Optional kind filter (e.g. function, interface, class) to disambiguate when multiple same-file symbols share the requested name.",
+				},
 				cwd: { type: "string" },
 			},
 			required: ["file", "symbol"],
@@ -1013,12 +1027,19 @@ async function callTool(
 			return { ...toolText("Provide `file` and `symbol`."), isError: true };
 		}
 		const cwd = typeof args.cwd === "string" ? args.cwd : DEFAULT_CWD;
-		const result = await readSymbol(file, symbol, cwd);
+		const kind = typeof args.kind === "string" ? args.kind : undefined;
+		const result = await readSymbol(file, symbol, cwd, { kind });
 		if (!result.found) {
+			const suggestionSuffix = result.suggestions?.length
+				? ` Did you mean: ${result.suggestions.join(", ")}?`
+				: " Use pilens_module_report to list symbols.";
 			return {
 				...toolText(
-					`Symbol "${symbol}" not found in ${path.basename(file)}. Use pilens_module_report to list symbols.`,
-					{ found: false },
+					`Symbol "${symbol}" not found in ${path.basename(file)}.${suggestionSuffix}`,
+					{
+						found: false,
+						...(result.suggestions ? { suggestions: result.suggestions } : {}),
+					},
 				),
 				isError: true,
 			};
@@ -1027,7 +1048,10 @@ async function callTool(
 		// restating those same fields is redundant on the wire (#512) — only
 		// `signature` was ever new, so fold it into the header text instead.
 		const sigSuffix = result.signature ? `  ${result.signature}` : "";
-		const header = `${result.kind} ${result.name}${sigSuffix}  ${path.relative(cwd, result.path)}:${result.startLine}-${result.endLine}`;
+		const ambiguityNote = result.ambiguous
+			? ` (${result.ambiguous.count} matches — returned the ${result.kind}; pass \`kind\` to disambiguate: ${result.ambiguous.kinds.join(", ")})`
+			: "";
+		const header = `${result.kind} ${result.name}${ambiguityNote}${sigSuffix}  ${path.relative(cwd, result.path)}:${result.startLine}-${result.endLine}`;
 		return { content: [{ type: "text" as const, text: `${header}\n\n${result.source ?? ""}` }] };
 	}
 

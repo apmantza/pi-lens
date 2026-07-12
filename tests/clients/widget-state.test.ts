@@ -550,3 +550,106 @@ describe("widget-state renderWidget", () => {
 		expect(new Set(nonEmptyFrames).size).toBeLessThanOrEqual(3);
 	});
 });
+
+describe("recordDiagnostics — superseded write guard (same race class as #555)", () => {
+	it("drops a late write whose writeIndex lags the already-recorded writeIndex, without poisoning the cache", () => {
+		const filePath = `${process.cwd()}/race.ts`;
+
+		// A newer, faster edit's pipeline finishes first.
+		recordDiagnostics(
+			filePath,
+			[{ severity: "warning", message: "current diagnostic", rule: "Y" }],
+			2,
+		);
+
+		// An older, slower edit's pipeline finishes late — must be dropped.
+		recordDiagnostics(
+			filePath,
+			[{ severity: "error", message: "stale diagnostic from edit #1", rule: "X" }],
+			1,
+		);
+
+		const result = getFileDiagnostics(filePath);
+		expect(result).toHaveLength(1);
+		expect(result?.[0]?.message).toBe("current diagnostic");
+
+		const entry = getFileDiagnosticSummaries().find(
+			(s) => s.filePath === filePath,
+		);
+		// The dropped write must not corrupt counts either — still reflects the
+		// winning (writeIndex 2) write, not a mix of both.
+		expect(entry?.warnings).toBe(1);
+		expect(entry?.errors).toBe(0);
+	});
+
+	it("records a write whose writeIndex matches or advances the last-recorded one (no false-positive drops)", () => {
+		const filePath = `${process.cwd()}/advance.ts`;
+
+		recordDiagnostics(
+			filePath,
+			[{ severity: "warning", message: "first", rule: "Y" }],
+			1,
+		);
+		recordDiagnostics(
+			filePath,
+			[{ severity: "error", message: "second", rule: "X" }],
+			2,
+		);
+
+		const result = getFileDiagnostics(filePath);
+		expect(result).toHaveLength(1);
+		expect(result?.[0]?.message).toBe("second");
+	});
+
+	it("always records the first write for a path regardless of its writeIndex (nothing to compare against yet)", () => {
+		const filePath = `${process.cwd()}/first-write.ts`;
+
+		recordDiagnostics(
+			filePath,
+			[{ severity: "error", message: "only diagnostic", rule: "X" }],
+			99,
+		);
+
+		const result = getFileDiagnostics(filePath);
+		expect(result).toHaveLength(1);
+		expect(result?.[0]?.message).toBe("only diagnostic");
+	});
+
+	it("always records writes with no writeIndex (mirrors version-less-server tradeoff; e.g. the mcp/analyze.ts on-demand call site)", () => {
+		const filePath = `${process.cwd()}/no-token.ts`;
+
+		recordDiagnostics(
+			filePath,
+			[{ severity: "warning", message: "current", rule: "Y" }],
+			5,
+		);
+		// A write with no ordering token at all must never be treated as stale.
+		recordDiagnostics(filePath, [
+			{ severity: "error", message: "untokened write", rule: "X" },
+		]);
+
+		const result = getFileDiagnostics(filePath);
+		expect(result).toHaveLength(1);
+		expect(result?.[0]?.message).toBe("untokened write");
+	});
+
+	it("clearWidgetState resets tracked writeIndex ordering so a later low index is not treated as stale", () => {
+		const filePath = `${process.cwd()}/reset.ts`;
+
+		recordDiagnostics(
+			filePath,
+			[{ severity: "error", message: "before clear", rule: "X" }],
+			10,
+		);
+		clearWidgetState();
+		recordDiagnostics(
+			filePath,
+			[{ severity: "warning", message: "after clear", rule: "Y" }],
+			1,
+		);
+
+		const result = getFileDiagnostics(filePath);
+		expect(result).toHaveLength(1);
+		expect(result?.[0]?.message).toBe("after clear");
+	});
+});

@@ -101,6 +101,42 @@ describe("ReadGuard.recordSymbolRead (#245 tie-in)", () => {
 		}
 	});
 
+	it("covers an edit to the attached doc comment when the recorded range includes it (#523)", () => {
+		// readSymbol (#523 item 1) extends the recorded range to the doc comment's
+		// start line when one is attached — this test drives the guard directly
+		// with that extended range (comment lines 1-3, declaration lines 4-6) to
+		// prove editing ONLY the comment is not a zero_read / out-of-range block.
+		const env = setupTestEnvironment("pi-lens-guard-symbolread-doc-");
+		const file = createTempFile(
+			env.tmpDir,
+			"sample.ts",
+			[
+				"/**", // 1
+				" * Whether agent nudges are enabled for this session.", // 2
+				" */", // 3
+				"export function isAgentNudgeEnabled(): boolean {", // 4
+				"  return true;", // 5
+				"}", // 6
+			].join("\n") + "\n",
+		);
+		const past = new Date(Date.now() - 3_600_000);
+		fs.utimesSync(file, past, past);
+		try {
+			const guard = createReadGuard("s-doc-comment");
+			guard.recordSymbolRead(
+				file,
+				{ name: "isAgentNudgeEnabled", kind: "function", startLine: 1, endLine: 6 },
+				0,
+				0,
+			);
+			// Edit touches ONLY the comment line (2), not the declaration.
+			const verdict = guard.checkEdit(file, [2, 2]);
+			expect(verdict.action).toBe("allow");
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("records line hashes so a drifted in-symbol edit is snapshot-blocked", () => {
 		const { env, file, symbol } = setup();
 		try {

@@ -32,21 +32,26 @@
  * NOT tier-3 — the caller keeps today's full in-lane wait. Fail-safe is
  * always "wait like before".
  *
- * #524/#529/#541: a server id can now be backed by more than one actual
+ * #524/#529/#541/#558: a server id can now be backed by more than one actual
  * binary — "typescript" is classic typescript-language-server OR TS7's
- * native `tsc --lsp --stdio` (PR #526). PR #526 initially routed the
+ * native `tsc --lsp --stdio` (PR #526). PR #526 originally routed the
  * native-ts7 variant through the fail-safe "waits" path because
- * `silentOnClean` had only been measured against the classic server. The
- * #529/#540 clean-signal probe (`scripts/probe-clean-signal.mjs`) has since
- * measured native-ts7 directly (2026-07-11, `typescript7-clean` fixture,
- * repeated local runs): silent on clean transitions, same as classic. Per
- * the maintainer's decision (2026-07-11, prefer fast cascade waits),
- * `silentOnClean` now applies to BOTH variants — the snapshot's
- * `launchVariant` marker is no longer consulted here. The safety net for a
- * future TS7 build that starts publishing on clean is the nightly
- * clean-signal drift check (#529/#540/#541), which now compares native rows
- * against this marker too and emits a `marked-not-silent` warning if they
- * diverge.
+ * `silentOnClean` had only been measured against the classic server; #541
+ * (2026-07-11) briefly lifted that exclusion after a clean-signal probe run
+ * appeared to show native-ts7 silent too. A follow-up dual-environment
+ * re-measurement (2026-07-12, nightly CI on Linux AND a live local run on
+ * Windows dev, same `typescript@7.0.2` both times) found native-ts7 now
+ * publishes 2 version-less diagnostic sets on the clean transition
+ * (`cleanPubs=2(v:0)`) — it is NOT silent. Classic is unaffected and
+ * confirmed still silent (`cleanPubs=0(v:0)`) in the same run. This is
+ * therefore an EVIDENCE-BASED revert, not the original unverified caution:
+ * native-ts7's clean-signal behavior IS known, and it is "publishes, not
+ * silent". The snapshot's `launchVariant` marker again routes a native-ts7
+ * snapshot through "waits" while the shared `silentOnClean` flag stays
+ * `true` for classic. `scripts/probe-clean-signal.mjs`'s drift check no
+ * longer compares native-ts7 rows against the shared marker (it now expects
+ * `false` for them explicitly) — see that file's header for the regression
+ * watch this sets up for a future TS7 build that becomes silent again.
  */
 
 import { logCascade } from "../cascade-logger.js";
@@ -105,12 +110,19 @@ export function classifyCascadeWaitTier(
 	const strategy = getStrategy(primary.id);
 	if (strategy.silentOnClean !== true) return "waits"; // 2*/unknown push-only
 
-	// #524/#529/#541: `silentOnClean` on a server-id-keyed strategy used to be
-	// proven only against the classic variant; the native-ts7 `tsc --lsp
-	// --stdio` binary is now probe-measured silent too (#529/#540, 2026-07-11),
-	// so it inherits the same verdict as classic — no `launchVariant` branch
-	// needed here anymore. The nightly clean-signal drift check is the
-	// regression watch if a future TS7 build changes this.
+	// #524/#529/#541/#558: `silentOnClean` on a server-id-keyed strategy is
+	// only proven against the variant it was actually measured against.
+	// "typescript" today means either classic typescript-language-server
+	// (confirmed silent-on-clean, 2026-07-12 dual-environment re-measurement)
+	// or TS7's native `tsc --lsp --stdio` (the SAME re-measurement found it
+	// publishes 2 version-less diagnostic sets on clean — NOT silent, a
+	// drift from the earlier #541 measurement). A native-ts7 snapshot must
+	// NOT inherit the classic verdict: fall through to "waits", the same
+	// ambiguous/fail-safe path an unmarked or non-push-only server already
+	// takes. `launchVariant === "classic"` or absent (older snapshots that
+	// predate the marker) keeps today's tier-3 behavior exactly.
+	if (snapshot.launchVariant === "native-ts7") return "waits";
+
 	return "tier3-silent";
 }
 

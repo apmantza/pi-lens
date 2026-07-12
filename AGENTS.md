@@ -132,7 +132,21 @@ a *second host adapter* alongside `index.ts`. Design rationale + progress: `mcp.
   `pilens_impact` tool) /
   `pilens_read_symbol` (one symbol/callback handle's verbatim body; its MCP
   response no longer restates name/kind/startLine/endLine in a trailing JSON
-  block after the header line already carries them — #512). `read_enclosing`
+  block after the header line already carries them — #512). #523
+  (self-healing misses, both surfaces): the returned range (and the
+  read-guard coverage recorded for it) extends to an attached doc comment,
+  not just the declaration line, reusing #517's `extractDocCommentInfo`
+  attachment computation; a dotted `Class.method` name resolves a specific
+  member (line-range containment within the named parent, falling back to a
+  plain lookup when the qualifier doesn't resolve); a miss embeds the ~3
+  nearest symbol/callback names by Levenshtein similarity (threshold 0.45)
+  instead of just pointing back at `module_report` — a dedicated small
+  edit-distance function, NOT the read-guard's `findSimilarLines` (that's
+  Jaccard over tokenized line content, wrong shape for a single identifier
+  typo); an optional `kind` param disambiguates same-file name collisions
+  (overloads, a type+value pair), surfaced via `ambiguous: { count, kinds }`
+  when omitted rather than silently returning the first match unlabeled.
+  `read_enclosing`
   is the pi agent search/diagnostic → exact-body bridge: given a file+line it
   returns the smallest enclosing symbol/callback body and records read-guard
   coverage; if `maxLines` would reject an oversized range, `onOversize:"slice"`

@@ -104,16 +104,23 @@ export interface DiagnosticStrategy {
 	 * they DO resolve the wait early at runtime, just without a proven version,
 	 * so shortening their in-lane wait would be a behavior change, not a no-op.
 	 *
-	 * #524/#529/#541: this table is keyed by server ID, but "typescript" can
-	 * launch as either the classic typescript-language-server or TS7's native
-	 * `tsc --lsp --stdio` (PR #526), a different Go-native binary. PR #526
-	 * initially scoped this flag to the classic server only (native-ts7's
-	 * clean-signal behavior was unverified at the time). Both variants are now
-	 * measured: classic manually (2026-07-08) and native-ts7 via the
-	 * #529/#540 clean-signal probe (2026-07-11, `typescript7-clean` fixture,
-	 * repeated local runs) — both silent on clean. `cascade-tier.ts`'s
-	 * classifier applies this flag to both variants; the nightly clean-signal
-	 * drift check is the regression watch if a future TS7 build diverges.
+	 * #524/#529/#541/#558: this table is keyed by server ID, but "typescript"
+	 * can now launch as either the classic typescript-language-server (what
+	 * this flag was measured against) or TS7's native `tsc --lsp --stdio`
+	 * (PR #526), a different Go-native binary. PR #526 originally scoped this
+	 * flag to the classic server only; #541 (2026-07-11) briefly lifted that
+	 * scoping after a probe run appeared to show native-ts7 silent too. A
+	 * 2026-07-12 dual-environment re-measurement (nightly CI on Linux + a
+	 * live local run on Windows dev, same `typescript@7.0.2` both times)
+	 * found native-ts7 now publishes 2 version-less diagnostic sets on the
+	 * clean transition — it is NOT silent, a drift from the #541
+	 * measurement. Classic was re-confirmed silent in the same run,
+	 * unaffected. This flag is therefore effectively CLASSIC-ONLY again:
+	 * `cascade-tier.ts`'s classifier checks the live snapshot's
+	 * `launchVariant` and does not apply it to a native-ts7 instance (falls
+	 * back to the fail-safe full-wait path instead). The value here stays
+	 * `true` unchanged — only the runtime scoping in cascade-tier.ts and the
+	 * probe-clean-signal.mjs drift-check expectation change.
 	 */
 	silentOnClean?: boolean;
 }
@@ -127,14 +134,16 @@ export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
 			aggregateWaitMs: 1000,
 			expectSemanticSecondPush: false,
 			// Tier 3 (#458): typescript-language-server publishes nothing on a
-			// clean→clean edit (docs/lsp-capability-matrix.md). Measured for the
-			// classic server manually (2026-07-08) AND for TS7's native
-			// `tsc --lsp --stdio` variant (PR #526) via the #529/#540
-			// clean-signal probe (2026-07-11, `typescript7-clean` fixture) —
-			// both silent. It's the lone core-set tier-3 server, which is
-			// exactly why the cascade lane's in-lane wait is worth skipping for
-			// it specifically. Applies to BOTH variants (#541); the nightly
-			// clean-signal drift check is the regression watch.
+			// clean→clean edit (docs/lsp-capability-matrix.md, re-confirmed
+			// 2026-07-12). It's the lone core-set tier-3 server, which is exactly
+			// why the cascade lane's in-lane wait is worth skipping for it
+			// specifically. Applies to the CLASSIC server only (#524/#529/#558)
+			// — TS7's native `tsc --lsp --stdio` variant shares this
+			// "typescript" server id but the 2026-07-12 dual-environment
+			// re-measurement found it now publishes on clean (a drift from the
+			// #541 measurement); cascade-tier.ts's classifier checks the live
+			// snapshot's launchVariant and never applies this flag to a
+			// native-ts7 instance.
 			silentOnClean: true,
 		},
 		"rust-analyzer": {

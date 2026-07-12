@@ -218,7 +218,7 @@ export function createReadSymbolTool(
 		name: "read_symbol" as const,
 		label: "Read Symbol",
 		description:
-			"Return the verbatim source of a single named symbol or module_report callback handle in a file — a targeted, cheap alternative to reading the whole file. Pair with module_report: module_report finds the symbol/callback handle, read_symbol shows its body. Unlike an outline, this delivers the actual lines, so it counts as having read that symbol for the read-before-edit guard.",
+			"Return the verbatim source of a single named symbol or module_report callback handle in a file — a targeted, cheap alternative to reading the whole file. Pair with module_report: module_report finds the symbol/callback handle, read_symbol shows its body. Unlike an outline, this delivers the actual lines, so it counts as having read that symbol for the read-before-edit guard. The returned body includes an attached doc comment when one exists. Accepts a dotted `Class.method` name to resolve a member directly, falling back to a plain top-level lookup when the qualifier doesn't resolve. A miss embeds the ~3 nearest symbol names in the file so a typo self-corrects without a second call. When multiple same-file symbols share a name (overloads, a type and a value sharing a name), the first is returned with an `ambiguous` note; pass `kind` to pick a specific one.",
 		promptSnippet: "Read one symbol's body instead of the whole file",
 		renderResult: compactRenderResult<{
 			found?: boolean;
@@ -247,12 +247,18 @@ export function createReadSymbolTool(
 			}),
 			symbol: Type.String({
 				description:
-					"Exact symbol name or callback handle to read (e.g. a function, class, type, or module_report callbacks[].name).",
+					"Exact symbol name or callback handle to read (e.g. a function, class, type, or module_report callbacks[].name). Accepts a dotted `Class.method` name to resolve a member.",
 			}),
+			kind: Type.Optional(
+				Type.String({
+					description:
+						"Optional kind filter (e.g. function, interface, class) to disambiguate when multiple same-file symbols share the requested name. Omitting it returns the first match, same as today.",
+				}),
+			),
 		}),
 		async execute(
 			_toolCallId: string,
-			params: { path: string; symbol: string },
+			params: { path: string; symbol: string; kind?: string },
 			_signal: AbortSignal | undefined,
 			_onUpdate: unknown,
 			ctx: { cwd?: string },
@@ -261,7 +267,9 @@ export function createReadSymbolTool(
 			const cwd = getProjectRoot() || ctx.cwd || ".";
 			let result: Awaited<ReturnType<typeof readSymbol>>;
 			try {
-				result = await readSymbol(absFile, params.symbol, cwd);
+				result = await readSymbol(absFile, params.symbol, cwd, {
+					kind: params.kind,
+				});
 			} catch (err) {
 				return {
 					content: [
@@ -278,9 +286,12 @@ export function createReadSymbolTool(
 				const warningSuffix = result.warnings?.length
 					? ` Warnings: ${result.warnings.join("; ")}`
 					: "";
+				const suggestionSuffix = result.suggestions?.length
+					? ` Did you mean: ${result.suggestions.join(", ")}?`
+					: " Use module_report to list available symbols.";
 				const text = result.error
 					? `Could not inspect ${path.basename(absFile)}: ${result.error}${warningSuffix}`
-					: `Symbol "${params.symbol}" not found in ${path.basename(absFile)}. Use module_report to list available symbols.${warningSuffix}`;
+					: `Symbol "${params.symbol}" not found in ${path.basename(absFile)}.${suggestionSuffix}${warningSuffix}`;
 				return {
 					content: [{ type: "text" as const, text }],
 					isError: true,
@@ -288,6 +299,7 @@ export function createReadSymbolTool(
 						found: false,
 						...(result.error ? { error: result.error } : {}),
 						...(result.warnings ? { warnings: result.warnings } : {}),
+						...(result.suggestions ? { suggestions: result.suggestions } : {}),
 					},
 				};
 			}
@@ -300,7 +312,10 @@ export function createReadSymbolTool(
 				result,
 				"read_symbol_guard_error",
 			);
-			const header = `${result.kind} ${result.name}  ${path.basename(result.path)}:${result.startLine}-${result.endLine}`;
+			const ambiguityNote = result.ambiguous
+				? ` (${result.ambiguous.count} matches — returned the ${result.kind}; pass \`kind\` to disambiguate: ${result.ambiguous.kinds.join(", ")})`
+				: "";
+			const header = `${result.kind} ${result.name}${ambiguityNote}  ${path.basename(result.path)}:${result.startLine}-${result.endLine}`;
 			const guardWarning = readRecorded
 				? ""
 				: "\n\nWarning: read coverage recording failed; the returned body may not satisfy the edit guard.";
@@ -318,6 +333,7 @@ export function createReadSymbolTool(
 					startLine: result.startLine,
 					endLine: result.endLine,
 					readRecorded,
+					...(result.ambiguous ? { ambiguous: result.ambiguous } : {}),
 				},
 			};
 		},

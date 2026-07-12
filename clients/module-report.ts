@@ -239,6 +239,30 @@ export interface ReadSymbolResult {
 	signature?: string;
 	/** The verbatim body lines — recording this read satisfies the read-guard. */
 	source?: string;
+	/**
+	 * ~3 nearest symbol/callback names in the file, by name similarity, when
+	 * `symbolName` misses (#523). Lets the caller self-correct a typo or
+	 * qualification mismatch without a module_report round-trip. Omitted when
+	 * found, or when nothing in the file scores above the similarity threshold.
+	 */
+	suggestions?: string[];
+	/**
+	 * Set when more than one same-file symbol shares the requested name
+	 * (overloads, a type and a value sharing a name) — `match` above is the
+	 * FIRST one (source order), same as the historical silent behavior; this
+	 * just makes the ambiguity visible so the caller can pass `kind` to pick a
+	 * specific one (#523).
+	 */
+	ambiguous?: { count: number; kinds: string[] };
+}
+
+export interface ReadSymbolOptions {
+	/**
+	 * Disambiguates same-name matches by kind (e.g. "function" vs "interface").
+	 * Optional; omitting it preserves the historical "return the first match"
+	 * behavior (#523).
+	 */
+	kind?: string;
 }
 
 export interface ReadEnclosingOutlineItem {
@@ -1919,6 +1943,123 @@ function baseNameNoExt(p: string): string {
 	return base.replace(/\.[^./\\]+$/, "");
 }
 
+// ── readSymbol lookup helpers (#523) ──────────────────────────────────────────
+
+interface SymbolSelection {
+	match?: ExtractedSymbol;
+	ambiguous?: { count: number; kinds: string[] };
+}
+
+// Duplicate-name disambiguation (#523 item 4). `candidates` is every symbol
+// already known to share the requested name; when `kind` is given it narrows
+// first, else the historical "first match" (source order) wins — unchanged
+// behavior for the common (unambiguous) case. `ambiguous` is populated only
+// when the CHOSEN pool still has more than one entry, so a kind that uniquely
+// resolves the collision reports no ambiguity.
+function selectMatch(
+	candidates: ExtractedSymbol[],
+	kind: string | undefined,
+): SymbolSelection {
+	if (candidates.length === 0) return {};
+	const filtered = kind ? candidates.filter((c) => c.kind === kind) : candidates;
+	const pool = filtered.length > 0 ? filtered : candidates;
+	const match = pool[0];
+	if (pool.length <= 1) return { match };
+	return {
+		match,
+		ambiguous: {
+			count: pool.length,
+			kinds: [...new Set(pool.map((c) => c.kind))],
+		},
+	};
+}
+
+// `Class.method` qualification (#523 item 3). Members are located by line-range
+// containment within the named parent — the same shape module-report's
+// `nestEntries` uses for the outline, computed directly here over the flat
+// extractor list (readSymbol never builds the nested outline). Returns
+// undefined (NOT a miss) when the qualifier doesn't resolve to a known parent —
+// the caller then falls through to the plain unqualified lookup using the full
+// dotted string, which naturally misses and feeds the did-you-mean path below
+// rather than crashing.
+function resolveQualifiedMatch(
+	symbols: ExtractedSymbol[],
+	qualifiedName: string,
+	kind: string | undefined,
+): SymbolSelection | undefined {
+	const dotIdx = qualifiedName.lastIndexOf(".");
+	if (dotIdx <= 0 || dotIdx === qualifiedName.length - 1) return undefined;
+	const parentName = qualifiedName.slice(0, dotIdx);
+	const memberName = qualifiedName.slice(dotIdx + 1);
+	const parent = symbols.find((candidate) => candidate.name === parentName);
+	if (!parent) return undefined;
+	const parentStart = parent.line;
+	const parentEnd = parent.endLine ?? parent.line;
+	const members = symbols.filter(
+		(candidate) =>
+			candidate !== parent &&
+			candidate.name === memberName &&
+			candidate.line >= parentStart &&
+			(candidate.endLine ?? candidate.line) <= parentEnd,
+	);
+	if (members.length === 0) return undefined;
+	return selectMatch(members, kind);
+}
+
+// Did-you-mean on miss (#523 item 2). A small, focused Levenshtein distance —
+// NOT a reuse of read-guard-tool-lines.ts's `findSimilarLines`/`tokenSimilarity`.
+// That function does Jaccard similarity over whitespace-tokenized LINE CONTENT
+// (built for relocated-block suggestions across a window of file lines); a
+// single identifier is one token to it, so "isAgentNudgeEnable" vs
+// "isAgentNudgeEnabled" scores 0 (disjoint token sets) despite being a
+// one-character typo. Symbol-name matching needs character-level edit distance
+// instead, so this is a small dedicated implementation rather than a forced
+// reuse. No existing levenshtein/editDistance utility was found elsewhere in
+// the codebase (checked clients/read-guard-tool-lines.ts and clients/dispatch/
+// dispatcher.ts, the only other "similarity" hits).
+function levenshteinDistance(a: string, b: string): number {
+	const al = a.length;
+	const bl = b.length;
+	if (al === 0) return bl;
+	if (bl === 0) return al;
+	let prev = new Array<number>(bl + 1);
+	let curr = new Array<number>(bl + 1);
+	for (let j = 0; j <= bl; j++) prev[j] = j;
+	for (let i = 1; i <= al; i++) {
+		curr[0] = i;
+		for (let j = 1; j <= bl; j++) {
+			const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+			curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+		}
+		[prev, curr] = [curr, prev];
+	}
+	return prev[bl];
+}
+
+// Normalized similarity in [0, 1]; 1 = identical (case-insensitive).
+function nameSimilarity(a: string, b: string): number {
+	const maxLen = Math.max(a.length, b.length);
+	if (maxLen === 0) return 1;
+	return 1 - levenshteinDistance(a.toLowerCase(), b.toLowerCase()) / maxLen;
+}
+
+// Threshold chosen so a plausible typo/near-miss (one-two edits on a
+// medium-length identifier, e.g. "isAgentNudgeEnable" -> "isAgentNudgeEnabled",
+// score ~0.95) clears it while a wildly-wrong name (near-zero character
+// overlap) doesn't — avoids suggesting misleading names on a genuine miss.
+const SIMILAR_NAME_MIN_SCORE = 0.45;
+const SIMILAR_NAME_MAX_SUGGESTIONS = 3;
+
+function suggestSimilarNames(candidates: string[], target: string): string[] {
+	const unique = [...new Set(candidates)].filter((name) => name !== target);
+	return unique
+		.map((name) => ({ name, score: nameSimilarity(target, name) }))
+		.filter((entry) => entry.score >= SIMILAR_NAME_MIN_SCORE)
+		.sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+		.slice(0, SIMILAR_NAME_MAX_SUGGESTIONS)
+		.map((entry) => entry.name);
+}
+
 /**
  * Return the verbatim body of a single symbol. Unlike moduleReport (which shows
  * shape, not content), this delivers the actual source lines — so the host can
@@ -1929,7 +2070,9 @@ export async function readSymbol(
 	file: string,
 	symbolName: string,
 	cwd: string,
+	options: ReadSymbolOptions = {},
 ): Promise<ReadSymbolResult> {
+	const { kind: symbolKindFilter } = options;
 	const startedAt = Date.now();
 	const absPath = path.resolve(cwd, file);
 	// Pure tree-sitter on one file — no graph, no LSP. Log for correlation with
@@ -1974,10 +2117,29 @@ export async function readSymbol(
 			error: extractionError,
 		};
 	}
-	const sym = symbols.find((candidate) => candidate.name === symbolName);
 	const lines = content.split(/\r?\n/);
-	if (sym) {
-		const startLine = sym.line;
+
+	// #523 item 3: a dotted name tries the qualified (Class.method) lookup
+	// first; a hit there wins outright. Otherwise fall through to the plain
+	// unqualified lookup using the FULL requested name (so an unresolved
+	// qualifier or a non-dotted name both flow through the same miss/did-you-
+	// mean path below rather than a separate branch).
+	const qualified = resolveQualifiedMatch(symbols, symbolName, symbolKindFilter);
+	const unqualifiedMatches = symbols.filter(
+		(candidate) => candidate.name === symbolName,
+	);
+	const selection = qualified ?? selectMatch(unqualifiedMatches, symbolKindFilter);
+
+	if (selection.match) {
+		const sym = selection.match;
+		// #523 item 1: extend the returned range (and thus the read-guard
+		// coverage recorded for it — see tools/module-report.ts's
+		// recordReadCoverage) to include an attached doc comment, when one
+		// exists. `docStartLine` is the SAME position-based, blank-line-gap-aware
+		// attachment computation the outline's `doc` summary already uses (#517's
+		// extractDocCommentInfo) — no re-derivation here, just reusing the line
+		// it already computed.
+		const startLine = sym.docStartLine ?? sym.line;
 		const endLine = sym.endLine ?? sym.line;
 		const source = lines.slice(startLine - 1, endLine).join("\n");
 
@@ -1991,6 +2153,7 @@ export async function readSymbol(
 			endLine,
 			signature: sym.signature,
 			source,
+			...(selection.ambiguous ? { ambiguous: selection.ambiguous } : {}),
 		};
 	}
 
@@ -2001,15 +2164,10 @@ export async function readSymbol(
 			startLine: candidate.line,
 			endLine: candidate.endLine ?? candidate.line,
 		}));
-	let callback: ModuleCallbackEntry | undefined;
+	let allCallbacks: ModuleCallbackEntry[];
 	const callbackWarnings = [...(extractionWarnings ?? [])];
 	try {
-		callback = extractCallbacks(
-			root,
-			owners,
-			languageId,
-			callbackWarnings,
-		).find((candidate) => candidate.name === symbolName);
+		allCallbacks = extractCallbacks(root, owners, languageId, callbackWarnings);
 	} catch (err) {
 		const message = `Callback extraction failed: ${diagnosticMessage(err)}`;
 		logLatency({
@@ -2022,13 +2180,27 @@ export async function readSymbol(
 		log(false);
 		return { found: false, path: absPath, name: symbolName, error: message };
 	}
+	const callback = allCallbacks.find(
+		(candidate) => candidate.name === symbolName,
+	);
 	if (!callback) {
 		log(false);
+		// #523 item 2: embed the ~3 nearest symbol/callback names directly in the
+		// miss response so the caller can self-correct without a module_report
+		// round-trip. Non-local symbols only — locals aren't reachable by name
+		// from outside their enclosing scope, so suggesting one would send the
+		// caller to a dead end.
+		const corpus = [
+			...symbols.filter((candidate) => !candidate.local).map((c) => c.name),
+			...allCallbacks.map((c) => c.name),
+		];
+		const suggestions = suggestSimilarNames(corpus, symbolName);
 		return {
 			found: false,
 			path: absPath,
 			name: symbolName,
 			...(callbackWarnings.length > 0 ? { warnings: callbackWarnings } : {}),
+			...(suggestions.length > 0 ? { suggestions } : {}),
 		};
 	}
 	const source = lines

@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { visibleWidth } from "./deps/pi-tui.js";
 import { fitLine } from "./tui-fit.js";
+import { WriteOrderingGuard } from "./write-ordering-guard.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -65,6 +66,17 @@ const lspServers = new Map<string, LspRecord>();
 let sessionLanguages: string[] = [];
 let requestRenderFn: (() => void) | null = null;
 
+/**
+ * Guards `recordDiagnostics` writes against the same race class fixed for
+ * `clients/lsp/client.ts` in #555: pi-lens allows concurrent pipeline runs
+ * for the same file across different same-turn edits, so an older edit's
+ * (slower) pipeline can finish its `recordDiagnostics` call AFTER a newer
+ * edit's (faster) pipeline already recorded fresher diagnostics for that
+ * path. Keyed by `filePath`, tokened by `writeIndex` (see
+ * `clients/runtime-tool-result.ts:nextWriteIndex`).
+ */
+const diagnosticsWriteGuard = new WriteOrderingGuard<string, number>();
+
 const MAX_STORED_DIAGNOSTICS_PER_FILE = 12;
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -78,6 +90,7 @@ export function clearWidgetState(): void {
 	lspServers.clear();
 	sessionLanguages = [];
 	requestRenderFn = null;
+	diagnosticsWriteGuard.clear();
 }
 
 const WIDGET_STATE_VERSION = 1;
@@ -130,6 +143,12 @@ export function exportWidgetState(): PersistedWidgetState {
 export function importWidgetState(state: PersistedWidgetState | undefined): boolean {
 	if (!state || state.version !== WIDGET_STATE_VERSION) return false;
 	files.clear();
+	// A resumed session's writeIndex counter starts fresh (#190 rehydration is
+	// process-bound like lspServers, see the export above) — any ordering
+	// tokens tracked before the restore no longer correspond to anything, so
+	// drop them rather than risk a legitimate post-resume write being read as
+	// "superseded" against a stale token.
+	diagnosticsWriteGuard.clear();
 	for (const f of state.files ?? []) {
 		files.set(f.filePath, {
 			filePath: f.filePath,
@@ -228,7 +247,17 @@ export function recordDiagnostics(
 		severity?: string;
 		semantic?: string;
 	}>,
+	writeIndex?: number,
 ): void {
+	// Drop a write that's superseded by a later same-turn edit to this file
+	// whose pipeline finished first (same race class as #555). No cache write,
+	// no count/timestamp update, no render trigger — the recorded state must
+	// stay exactly as the fresher write left it. `writeIndex` omitted (e.g.
+	// the `clients/mcp/analyze.ts` on-demand call site, which has no per-edit
+	// ordering token) always proceeds, same as version-less LSP servers in the
+	// #555 guard.
+	if (!diagnosticsWriteGuard.shouldWrite(filePath, writeIndex)) return;
+
 	const rec = getOrCreate(filePath);
 	const base = pathToFileURL(filePath).href;
 	const normalized = diagnostics.map((d) => {

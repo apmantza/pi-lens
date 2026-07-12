@@ -1366,3 +1366,243 @@ describe("readSymbol — verbatim body for guard-satisfying reads", () => {
 		expect(result.found).toBe(false);
 	});
 });
+
+describe("readSymbol — doc-comment inclusion (#523 item 1)", () => {
+	it("extends the returned body to include an attached doc comment", async () => {
+		const env = makeEnv();
+		createTempFile(
+			env.tmpDir,
+			"sample.ts",
+			[
+				"const noise = 1;", // 1
+				"/**", // 2
+				" * Whether agent nudges are enabled for this session.", // 3
+				" */", // 4
+				"export function isAgentNudgeEnabled(): boolean {", // 5
+				"  return true;", // 6
+				"}", // 7
+			].join("\n"),
+		);
+
+		const result = await readSymbol("sample.ts", "isAgentNudgeEnabled", env.tmpDir);
+
+		expect(result.found).toBe(true);
+		expect(result.startLine).toBe(2); // comment start, not the declaration line
+		expect(result.endLine).toBe(7);
+		expect(result.source).toContain("Whether agent nudges are enabled");
+		expect(result.source).toContain("export function isAgentNudgeEnabled");
+		expect(result.source).not.toContain("const noise");
+	});
+
+	it("behaves exactly as today when no doc comment is attached (no regression)", async () => {
+		const env = makeEnv();
+		createTempFile(
+			env.tmpDir,
+			"sample.ts",
+			[
+				"const noise = 1;",
+				"export function target(n: number): number {",
+				"  return n * 2;",
+				"}",
+			].join("\n"),
+		);
+
+		const result = await readSymbol("sample.ts", "target", env.tmpDir);
+
+		expect(result.found).toBe(true);
+		expect(result.startLine).toBe(2);
+		expect(result.endLine).toBe(4);
+		expect(result.source).not.toContain("const noise");
+	});
+
+	it("excludes an unrelated comment separated from the declaration by a blank line", async () => {
+		const env = makeEnv();
+		createTempFile(
+			env.tmpDir,
+			"sample.ts",
+			[
+				"// Unrelated remark about the file, not a doc comment for target.", // 1
+				"", // 2 — blank-line gap breaks attachment
+				"export function target(n: number): number {", // 3
+				"  return n * 2;", // 4
+				"}", // 5
+			].join("\n"),
+		);
+
+		const result = await readSymbol("sample.ts", "target", env.tmpDir);
+
+		expect(result.found).toBe(true);
+		expect(result.startLine).toBe(3); // declaration line, comment NOT attached
+		expect(result.source).not.toContain("Unrelated remark");
+	});
+});
+
+describe("readSymbol — did-you-mean on miss (#523 item 2)", () => {
+	it("returns the correct symbol as a top suggestion for a near-miss typo", async () => {
+		const env = makeEnv();
+		createTempFile(
+			env.tmpDir,
+			"sample.ts",
+			[
+				"export function isAgentNudgeEnabled(): boolean {",
+				"  return true;",
+				"}",
+			].join("\n"),
+		);
+
+		// One character short of the real name.
+		const result = await readSymbol("sample.ts", "isAgentNudgeEnable", env.tmpDir);
+
+		expect(result.found).toBe(false);
+		expect(result.suggestions).toBeDefined();
+		expect(result.suggestions?.[0]).toBe("isAgentNudgeEnabled");
+		expect(result.suggestions!.length).toBeLessThanOrEqual(3);
+	});
+
+	it("returns no misleading suggestions for a wildly-wrong name", async () => {
+		const env = makeEnv();
+		createTempFile(
+			env.tmpDir,
+			"sample.ts",
+			["export function isAgentNudgeEnabled(): boolean {", "  return true;", "}"].join(
+				"\n",
+			),
+		);
+
+		const result = await readSymbol("sample.ts", "zzzzzzzzzzzzzzzz", env.tmpDir);
+
+		expect(result.found).toBe(false);
+		expect(result.suggestions ?? []).toHaveLength(0);
+	});
+});
+
+describe("readSymbol — Class.method qualification (#523 item 3)", () => {
+	it("resolves a dotted name to disambiguate a same-named member across two classes", async () => {
+		const env = makeEnv();
+		createTempFile(
+			env.tmpDir,
+			"sample.ts",
+			[
+				"export class Foo {", // 1
+				"  bar(): number {", // 2
+				"    return 1;", // 3
+				"  }", // 4
+				"}", // 5
+				"", // 6
+				"export class Baz {", // 7
+				"  bar(): number {", // 8
+				"    return 2;", // 9
+				"  }", // 10
+				"}", // 11
+			].join("\n"),
+		);
+
+		const fooBar = await readSymbol("sample.ts", "Foo.bar", env.tmpDir);
+		expect(fooBar.found).toBe(true);
+		expect(fooBar.source).toContain("return 1;");
+		expect(fooBar.source).not.toContain("return 2;");
+
+		const bazBar = await readSymbol("sample.ts", "Baz.bar", env.tmpDir);
+		expect(bazBar.found).toBe(true);
+		expect(bazBar.source).toContain("return 2;");
+		expect(bazBar.source).not.toContain("return 1;");
+	});
+
+	it("leaves unqualified lookup unaffected", async () => {
+		const env = makeEnv();
+		createTempFile(
+			env.tmpDir,
+			"sample.ts",
+			[
+				"export function target(n: number): number {",
+				"  return n * 2;",
+				"}",
+			].join("\n"),
+		);
+
+		const result = await readSymbol("sample.ts", "target", env.tmpDir);
+		expect(result.found).toBe(true);
+	});
+
+	it("falls through to the did-you-mean miss path when the qualifier's parent doesn't exist", async () => {
+		const env = makeEnv();
+		createTempFile(
+			env.tmpDir,
+			"sample.ts",
+			[
+				"export class Foo {",
+				"  bar(): number {",
+				"    return 1;",
+				"  }",
+				"}",
+			].join("\n"),
+		);
+
+		const result = await readSymbol("sample.ts", "Ghost.bar", env.tmpDir);
+		expect(result.found).toBe(false);
+		expect(result.error).toBeUndefined();
+	});
+});
+
+describe("readSymbol — duplicate-name disambiguation (#523 item 4)", () => {
+	it("notes the ambiguity and returns the first match when kind is omitted", async () => {
+		const env = makeEnv();
+		createTempFile(
+			env.tmpDir,
+			"sample.ts",
+			[
+				"export interface Foo {", // 1
+				"  id: number;", // 2
+				"}", // 3
+				"", // 4
+				"export function Foo(): void {}", // 5
+			].join("\n"),
+		);
+
+		const result = await readSymbol("sample.ts", "Foo", env.tmpDir);
+
+		expect(result.found).toBe(true);
+		expect(result.ambiguous).toBeDefined();
+		expect(result.ambiguous?.count).toBe(2);
+		expect(result.ambiguous?.kinds.sort()).toEqual(["function", "interface"].sort());
+		// First match wins — source order (the interface, declared first).
+		expect(result.kind).toBe("interface");
+	});
+
+	it("resolves a specific match when kind is passed", async () => {
+		const env = makeEnv();
+		createTempFile(
+			env.tmpDir,
+			"sample.ts",
+			[
+				"export interface Foo {",
+				"  id: number;",
+				"}",
+				"",
+				"export function Foo(): void {}",
+			].join("\n"),
+		);
+
+		const result = await readSymbol("sample.ts", "Foo", env.tmpDir, {
+			kind: "function",
+		});
+
+		expect(result.found).toBe(true);
+		expect(result.kind).toBe("function");
+		expect(result.ambiguous).toBeUndefined();
+	});
+
+	it("has no ambiguity note for a single unambiguous match", async () => {
+		const env = makeEnv();
+		createTempFile(
+			env.tmpDir,
+			"sample.ts",
+			["export function target(): number {", "  return 1;", "}"].join("\n"),
+		);
+
+		const result = await readSymbol("sample.ts", "target", env.tmpDir);
+
+		expect(result.found).toBe(true);
+		expect(result.ambiguous).toBeUndefined();
+	});
+});

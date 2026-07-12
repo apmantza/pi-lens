@@ -105,4 +105,13 @@ describe("module_report + read_symbol over MCP (tiny project)", () => {
 		expect(text).toContain("export function foo");
 		expect(text).toContain("return 1;");
 	}, 30_000);
+
+	it("embeds did-you-mean suggestions on a near-miss (#523)", async () => {
+		const res = await harness.request(12, "tools/call", {
+			name: "pilens_read_symbol",
+			arguments: { file: path.join(projectDir, "a.ts"), symbol: "fooo" },
+		});
+		expect((res.result as { isError?: boolean }).isError).toBe(true);
+		expect(textOf(res)).toContain("foo");
+	}, 30_000);
 });

@@ -1212,7 +1212,11 @@ export async function runPipeline(
 			writeIndex: ctx.telemetry?.writeIndex ?? 0,
 		},
 	);
-	recordDiagnostics(filePath, dispatchResult.diagnostics);
+	recordDiagnostics(
+		filePath,
+		dispatchResult.diagnostics,
+		ctx.telemetry?.writeIndex,
+	);
 	// #502: emit the write batch's FINAL diagnostic state immediately after
 	// recordDiagnostics commits it — this call site runs after format,
 	// autofix, and dispatch have all completed for this batch (see the phase

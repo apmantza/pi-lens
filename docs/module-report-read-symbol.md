@@ -96,12 +96,52 @@ CALLBACKS:
 
 Default view stays JSON; `compact` is opt-in.
 
-### `read_symbol(filePath, symbol)`
+### `read_symbol(filePath, symbol, kind?)`
 
 Returns the verbatim body of one named symbol plus a one-line header
 (`<kind> <name>  <basename>:<startLine>-<endLine>`). The body is the
 actual source lines the file contains — no synthesized version, no
 ellipsis.
+
+**Doc-comment inclusion (#523).** When a doc comment is directly attached to
+the declaration (same position-based, blank-line-gap-aware attachment
+`module_report`'s `doc` field already uses), the returned range starts at the
+comment block, not the declaration line — an agent reading a symbol to edit
+it needs the contract above it, not just the body. The read-guard coverage
+recorded for the read is extended to match, so editing only the doc comment
+on an otherwise-read symbol is not blocked as a zero-read. A symbol with no
+attached comment (or one separated from the declaration by a blank line — not
+"attached") behaves exactly as before.
+
+**`Class.method` qualification (#523).** `symbol` accepts a dotted name
+(`"Foo.bar"`) to resolve a specific member: the lookup searches within the
+named parent's members (by line-range containment, same shape as
+`module_report`'s member nesting) before falling back to a plain top-level
+lookup. `read_symbol("bar", ...)` still works standalone; `read_symbol("Foo.bar",
+...)` disambiguates when a member name collides across containers or isn't a
+top-level export. An unresolved qualifier (unknown parent, or no matching
+member) falls through to the did-you-mean miss path below rather than
+erroring.
+
+**Did-you-mean on miss (#523).** A miss (`found: false`) embeds the ~3 nearest
+symbol/callback names in the file — by Levenshtein (character-edit-distance)
+similarity over the name, threshold 0.45 on a 0–1 normalized score — so a
+typo or near-miss self-corrects in one turn instead of a `module_report`
+round-trip. Wildly-wrong names get no suggestions (nothing clears the
+threshold) rather than a misleading list. (Chosen over reusing the
+read-guard's `findSimilarLines`/`tokenSimilarity` — that does Jaccard
+similarity over whitespace-tokenized *line content*, built for relocated-block
+suggestions; a single identifier is one token to it, so a one-character typo
+on a long name scores 0. Symbol names need character-level distance instead.)
+
+**Duplicate-name disambiguation (#523).** When more than one same-file symbol
+shares the requested name (overloads, an interface and a function sharing a
+name), the response returns the first match (source order — unchanged
+default behavior) but sets `ambiguous: { count, kinds }` and the tool/MCP
+text notes it ("N matches — returned the `<kind>`; pass `kind` to
+disambiguate"). Pass the optional `kind` parameter (e.g. `"function"`,
+`"interface"`) to pick a specific one; a single unambiguous match never sets
+`ambiguous`.
 
 ```text
 function createReadSymbolTool  tools/module-report.ts:73-150
@@ -198,7 +238,7 @@ file.
 Both tools are also exposed via the pi-lens MCP server:
 
 - `pilens_module_report({file, cwd?, maxRefsPerSymbol?, focus?, view?, blastRadius?, blastRadiusDepth?})`
-- `pilens_read_symbol({file, symbol, cwd?})`
+- `pilens_read_symbol({file, symbol, kind?, cwd?})`
 
 The MCP wrappers return the same JSON shape plus a one-line human summary, so
 an agent in Claude Code (or any MCP client) gets the same navigable flow

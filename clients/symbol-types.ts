@@ -41,6 +41,14 @@ export interface Symbol {
 	local?: boolean;
 	doc?: string; // JSDoc comment if available
 	/**
+	 * 1-based start line of the attached doc-comment block that `doc` was
+	 * summarized from (same attachment computation — position-based, blank-line-
+	 * gap aware). Undefined when no doc comment is attached. Lets a body reader
+	 * (readSymbol) extend its returned range to include the comment (#523) without
+	 * re-deriving attachment.
+	 */
+	docStartLine?: number;
+	/**
 	 * Decorators / attributes / annotations attached to the declaration, in source
 	 * order (e.g. `@app.get("/x")`, `#[tokio::main]`, `@Override`). Tells an agent
 	 * a symbol's ROLE (route/test/fixture/entrypoint) without reading its body.

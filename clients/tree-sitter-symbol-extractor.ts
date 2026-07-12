@@ -775,7 +775,7 @@ export class TreeSitterSymbolExtractor {
 		const decorators = this.extractDecorators(defNode);
 		const isAsync =
 			(kind === "function" || kind === "method") && this.isAsyncDecl(defNode);
-		const doc = this.extractDocComment(defNode);
+		const docInfo = this.extractDocCommentInfo(defNode);
 
 		return {
 			id: `${filePath}:${name}`,
@@ -791,7 +791,7 @@ export class TreeSitterSymbolExtractor {
 			...(visibility ? { visibility } : {}),
 			...(decorators.length > 0 ? { decorators } : {}),
 			...(isAsync ? { isAsync: true } : {}),
-			...(doc ? { doc } : {}),
+			...(docInfo ? { doc: docInfo.text, docStartLine: docInfo.startLine } : {}),
 		};
 	}
 
@@ -813,10 +813,15 @@ export class TreeSitterSymbolExtractor {
 	 * parses as a preceding sibling, but a real gap makes it not "attached").
 	 * JSDoc/TSDoc block comments strip the leading/trailing block markers and
 	 * per-line `*` gutters; plain `//`/`#` line comments strip the marker only.
-	 * Returns undefined when no comment is directly attached.
+	 * Returns undefined when no comment is directly attached. Returns both the
+	 * summarized text (`doc`) and the 1-based start line of the attached comment
+	 * block (`docStartLine`, #523) — readSymbol extends its returned range to that
+	 * line so an agent reading a symbol sees its contract, not just its body.
 	 */
 	// biome-ignore lint/suspicious/noExplicitAny: web-tree-sitter node
-	private extractDocComment(declNode: any): string | undefined {
+	private extractDocCommentInfo(
+		declNode: any,
+	): { text: string; startLine: number } | undefined {
 		const isComment = (n: any): boolean =>
 			!!n && n.type === TreeSitterSymbolExtractor.COMMENT_NODE_KIND;
 		const isDeco = (n: any) =>
@@ -879,7 +884,10 @@ export class TreeSitterSymbolExtractor {
 			.slice(start, end + 1)
 			.map((n) => String(n.text ?? ""))
 			.join("\n");
-		return this.summarizeDocComment(raw);
+		const text = this.summarizeDocComment(raw);
+		if (!text) return undefined;
+		const startLine = (siblings[start].startPosition?.row ?? 0) + 1;
+		return { text, startLine };
 	}
 
 	private static readonly DOC_MAX_CHARS = 120;

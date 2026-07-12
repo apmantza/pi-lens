@@ -381,4 +381,165 @@ describe("read_symbol tool", () => {
 			env.cleanup();
 		}
 	});
+
+	it("extends the recorded read-guard range to cover an attached doc comment (#523)", async () => {
+		const env = setupTestEnvironment("pi-lens-readsym-tool-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"sample.ts",
+				[
+					"/**", // 1
+					" * Whether agent nudges are enabled for this session.", // 2
+					" */", // 3
+					"export function isAgentNudgeEnabled(): boolean {", // 4
+					"  return true;", // 5
+					"}", // 6
+				].join("\n"),
+			);
+			const recorded: Recorded[] = [];
+			const tool = createReadSymbolTool(
+				() => env.tmpDir,
+				(filePath, symbol) => recorded.push({ filePath, symbol }),
+			);
+			const result = await tool.execute(
+				"1",
+				{ path: "sample.ts", symbol: "isAgentNudgeEnabled" },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			expect(result.isError).toBeUndefined();
+			expect(String(result.content[0]?.text)).toContain(
+				"Whether agent nudges are enabled",
+			);
+			expect(recorded).toHaveLength(1);
+			// Coverage starts at the comment, not the declaration line.
+			expect(recorded[0].symbol.startLine).toBe(1);
+			expect(recorded[0].symbol.endLine).toBe(6);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("embeds did-you-mean suggestions in the miss response (#523)", async () => {
+		const env = setupTestEnvironment("pi-lens-readsym-tool-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"sample.ts",
+				"export function isAgentNudgeEnabled(): boolean {\n  return true;\n}\n",
+			);
+			const tool = createReadSymbolTool(
+				() => env.tmpDir,
+				() => {},
+			);
+			const result = await tool.execute(
+				"1",
+				{ path: "sample.ts", symbol: "isAgentNudgeEnable" },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			expect(result.isError).toBe(true);
+			expect((result.details as { suggestions?: string[] }).suggestions).toContain(
+				"isAgentNudgeEnabled",
+			);
+			expect(String(result.content[0]?.text)).toContain("Did you mean");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("resolves a Class.method qualified name to the member's body (#523)", async () => {
+		const env = setupTestEnvironment("pi-lens-readsym-tool-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"sample.ts",
+				[
+					"export class Foo {",
+					"  bar(): number {",
+					"    return 1;",
+					"  }",
+					"}",
+					"",
+					"export class Baz {",
+					"  bar(): number {",
+					"    return 2;",
+					"  }",
+					"}",
+				].join("\n"),
+			);
+			const tool = createReadSymbolTool(
+				() => env.tmpDir,
+				() => {},
+			);
+			const result = await tool.execute(
+				"1",
+				{ path: "sample.ts", symbol: "Baz.bar" },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			expect(result.isError).toBeUndefined();
+			const text = String(result.content[0]?.text);
+			expect(text).toContain("return 2;");
+			expect(text).not.toContain("return 1;");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("notes ambiguity for a duplicate name and resolves it via kind (#523)", async () => {
+		const env = setupTestEnvironment("pi-lens-readsym-tool-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"sample.ts",
+				[
+					"export interface Foo {",
+					"  id: number;",
+					"}",
+					"",
+					"export function Foo(): void {}",
+				].join("\n"),
+			);
+			const tool = createReadSymbolTool(
+				() => env.tmpDir,
+				() => {},
+			);
+
+			const ambiguous = await tool.execute(
+				"1",
+				{ path: "sample.ts", symbol: "Foo" },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			expect(ambiguous.isError).toBeUndefined();
+			const ambiguousDetails = ambiguous.details as {
+				kind?: string;
+				ambiguous?: { count: number; kinds: string[] };
+			};
+			expect(ambiguousDetails.ambiguous).toMatchObject({ count: 2 });
+			expect(String(ambiguous.content[0]?.text)).toContain("pass `kind`");
+
+			const disambiguated = await tool.execute(
+				"2",
+				{ path: "sample.ts", symbol: "Foo", kind: "function" },
+				undefined,
+				null,
+				{ cwd: env.tmpDir },
+			);
+			const disambiguatedDetails = disambiguated.details as {
+				kind?: string;
+				ambiguous?: { count: number; kinds: string[] };
+			};
+			expect(disambiguatedDetails.kind).toBe("function");
+			expect(disambiguatedDetails.ambiguous).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
 });
