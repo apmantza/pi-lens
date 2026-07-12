@@ -59,6 +59,30 @@ export function _exitFlushersForTest(): ReadonlySet<() => void> {
 	return exitFlushers;
 }
 
+// Auto-derived retention coverage (clients/log-cleanup.ts): every *static*
+// filePath a createNdjsonLogger instance is constructed with self-registers
+// here at module-load time — the moment latency-logger.ts, bus-events-logger.ts,
+// etc. call createNdjsonLogger(), the sweep in log-cleanup.ts picks the file up
+// automatically. No second hand-maintained list to forget (the exact mistake
+// that left actionable-warnings/ast-grep-tools/dead-code, then bus-events.log,
+// unrotated — see log-cleanup.ts's module doc).
+//
+// A *lazy* filePath (a resolver function, e.g. diagnostic-logger's date-keyed
+// `logs/{date}.jsonl`) is deliberately NOT registered: those already live
+// under the `logs/` subdirectory and are covered by log-cleanup's separate
+// `*.jsonl` daily-log sweep, not the single-file rotation list.
+const registeredLogFiles = new Set<string>();
+
+/** Every absolute path registered by a static-filePath createNdjsonLogger instance. */
+export function getRegisteredLogFiles(): ReadonlySet<string> {
+	return registeredLogFiles;
+}
+
+/** Test-only reset — each test file gets a clean registry (see ndjson-logger.test.ts). */
+export function _resetRegisteredLogFilesForTest(): void {
+	registeredLogFiles.clear();
+}
+
 function registerExitFlusher(flushSync: () => void): void {
 	exitFlushers.add(flushSync);
 	if (!exitHandlerRegistered) {
@@ -74,6 +98,10 @@ function registerExitFlusher(flushSync: () => void): void {
 }
 
 export function createNdjsonLogger(options: NdjsonLoggerOptions): NdjsonLogger {
+	if (typeof options.filePath === "string") {
+		registeredLogFiles.add(options.filePath);
+	}
+
 	const queue: QueueItem[] = [];
 	let drainPromise: Promise<void> | null = null;
 	let ensuredDir = false;

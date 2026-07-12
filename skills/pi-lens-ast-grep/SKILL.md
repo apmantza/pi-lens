@@ -7,6 +7,8 @@ description: Use when searching or replacing code patterns - use ast-grep instea
 
 Use `ast_grep_search` and `ast_grep_replace` for semantic code search/replace. ast-grep understands code structure, not just text.
 
+These tools (plus `ast_grep_outline`, `ast_grep_dump`, `lsp_navigation`) are registered but inactive by default on hosts that support pi's dynamic tooling. If a call to one of them isn't recognized, activate it first: `pi_lens_activate_tools tools=["ast_grep_search", "ast_grep_replace"]`.
+
 ## When to Use
 
 - Function calls, imports, class methods (structured code)
@@ -89,7 +91,7 @@ When a pattern returns zero matches and you don't know the correct node kind or 
 ast_grep_dump source="function foo() { return 1; }" lang="typescript"
 ```
 
-Returns the full indented AST with node kinds and positions. Then use the correct kind in your pattern or `insideKind`. `ast_dump` remains a compatibility alias, but prefer `ast_grep_dump` in new instructions.
+Returns the full indented AST with node kinds and positions. Then use the correct kind in your pattern or `insideKind`. `ast_grep_dump` is registered but inactive by default — call `pi_lens_activate_tools` with `tools: ["ast_grep_dump"]` first if it isn't already active.
 
 ### Composite (has/inside) in raw YAML
 

@@ -1,27 +1,27 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-	createAstDumpTool,
-	createAstGrepDumpTool,
-} from "../../tools/ast-dump.js";
+import { createAstGrepDumpTool } from "../../tools/ast-dump.js";
 
 function makeClient(
-	overrides: Partial<Parameters<typeof createAstDumpTool>[0]> = {},
+	overrides: Partial<Parameters<typeof createAstGrepDumpTool>[0]> = {},
 ) {
 	return {
 		ensureAvailable: async () => true,
 		dumpAst: vi.fn().mockResolvedValue({ output: 'program [1,1] - [1,2] "x"' }),
 		...overrides,
-	} as Parameters<typeof createAstDumpTool>[0];
+	} as Parameters<typeof createAstGrepDumpTool>[0];
 }
 
-describe("ast_dump tool", () => {
-	it("registers ast_grep_dump as the preferred name and ast_dump as an alias", () => {
+describe("ast_grep_dump tool", () => {
+	it("registers ast_grep_dump as the tool name", () => {
+		// #ast_dump-dedup: the compatibility-alias registration (formerly
+		// createAstDumpTool / name "ast_dump") was dropped — it wrapped the same
+		// underlying implementation as createAstGrepDumpTool, so keeping both was
+		// redundant tool-list weight for zero functional benefit.
 		expect(createAstGrepDumpTool(makeClient()).name).toBe("ast_grep_dump");
-		expect(createAstDumpTool(makeClient()).name).toBe("ast_dump");
 	});
 
 	it("lang uses same enum shape as ast-grep tools", () => {
-		const tool = createAstDumpTool(makeClient());
+		const tool = createAstGrepDumpTool(makeClient());
 		const langSchema = (
 			tool.parameters as { properties: Record<string, unknown> }
 		).properties.lang as { type?: string; enum?: string[] };
@@ -32,7 +32,7 @@ describe("ast_dump tool", () => {
 
 	it("returns a clear error for empty source input", async () => {
 		const dumpAst = vi.fn();
-		const tool = createAstDumpTool(makeClient({ dumpAst }));
+		const tool = createAstGrepDumpTool(makeClient({ dumpAst }));
 
 		const result = await tool.execute(
 			"empty",
@@ -50,7 +50,7 @@ describe("ast_dump tool", () => {
 		const dumpAst = vi.fn().mockResolvedValue({
 			output: 'program [1,1] - [1,28] "function foo() { return 1; }"',
 		});
-		const tool = createAstDumpTool(makeClient({ dumpAst }));
+		const tool = createAstGrepDumpTool(makeClient({ dumpAst }));
 
 		const result = await tool.execute(
 			"1",
@@ -72,7 +72,7 @@ describe("ast_dump tool", () => {
 		const dumpAst = vi
 			.fn()
 			.mockResolvedValue({ output: 'function [1,1] - [1,9] "function"' });
-		const tool = createAstDumpTool(makeClient({ dumpAst }));
+		const tool = createAstGrepDumpTool(makeClient({ dumpAst }));
 
 		await tool.execute(
 			"2",
@@ -91,7 +91,7 @@ describe("ast_dump tool", () => {
 	});
 
 	it("returns CLI errors clearly", async () => {
-		const tool = createAstDumpTool(
+		const tool = createAstGrepDumpTool(
 			makeClient({
 				dumpAst: vi.fn().mockResolvedValue({ error: "invalid language" }),
 			}),
@@ -109,7 +109,7 @@ describe("ast_dump tool", () => {
 	});
 
 	it("returns a tool error when the dump client throws", async () => {
-		const tool = createAstDumpTool(
+		const tool = createAstGrepDumpTool(
 			makeClient({ dumpAst: vi.fn().mockRejectedValue(new Error("boom")) }),
 		);
 
@@ -128,7 +128,7 @@ describe("ast_dump tool", () => {
 		const dumpAst = vi.fn();
 		const controller = new AbortController();
 		controller.abort();
-		const tool = createAstDumpTool(makeClient({ dumpAst }));
+		const tool = createAstGrepDumpTool(makeClient({ dumpAst }));
 
 		const result = await tool.execute(
 			"5",
@@ -145,7 +145,7 @@ describe("ast_dump tool", () => {
 	it("returns a tool error when aborted after availability check", async () => {
 		const dumpAst = vi.fn();
 		const controller = new AbortController();
-		const tool = createAstDumpTool(
+		const tool = createAstGrepDumpTool(
 			makeClient({
 				dumpAst,
 				ensureAvailable: vi.fn().mockImplementation(async () => {

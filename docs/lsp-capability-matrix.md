@@ -154,4 +154,4 @@ Telemetry only — never a CI gate. Compares each probed server's observed
 marker; a mismatch means the marker may need a human update (#529). `unknown`
 observations are never compared (a slow/absent server is not evidence either way).
 
-_None observed as of the last probe run._
+- **[marked-not-silent]** server-strategies.ts marks "typescript7" silentOnClean:true but this run observed publishes-unversioned — the marker may be stale (too pessimistic; cascade is skipping a wait the server would have resolved with a real publish)

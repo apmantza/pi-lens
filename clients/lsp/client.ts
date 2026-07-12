@@ -840,7 +840,10 @@ export function applyDynamicCapabilities(state: LSPClientState): void {
 	}
 }
 
-function setupIncomingHandlers(
+// Exported (only) so tests can invoke the publishDiagnostics notification
+// handler directly against a mock LSPClientState/connection without spawning
+// a real language server. Not part of the public client API surface.
+export function setupIncomingHandlers(
 	state: LSPClientState,
 	initialization: Record<string, unknown> | undefined,
 ): void {
@@ -866,12 +869,39 @@ function setupIncomingHandlers(
 				}
 			};
 
+			// Late/superseded-push guard: if the server stamped this push with a
+			// version and that version already lags the latest didChange we sent,
+			// this is analysis for an edit that's since been overtaken — caching it
+			// would let getDiagnostics()/getAllDiagnostics()/pruneDiagnostics() (none
+			// of which consult isVersionStale — that check only gates the *wait*
+			// helper below) serve stale results as current until the next genuinely
+			// fresh push overwrites them. Drop it before it reaches the cache instead.
+			// Checked at write time (not at notification-receipt time) so a push that
+			// arrives fresh but whose debounce timer fires after a later didChange is
+			// still caught. Version-less servers (docVersion undefined) are
+			// unaffected — that's an intentional, separate tradeoff (see
+			// isVersionStale below), not something this guard touches.
+			//
+			// Known, deliberately out-of-scope gaps: the pull-diagnostics path
+			// (clientRequestPullDiagnostics/clientRequestWorkspaceDiagnostics) has no
+			// version stamp to compare against in this codebase's current handling,
+			// so nothing analogous is applied there. And diagnosticsVersion is a
+			// single global counter rather than per-path, so an unrelated path's
+			// fresh push can still satisfy a wait for this path's version bump —
+			// both are separate, larger changes.
+			const isSupersededPush = (): boolean => {
+				if (docVersion === undefined) return false;
+				const currentVersion = state.documentVersions.get(normalizedPath);
+				return currentVersion !== undefined && docVersion < currentVersion;
+			};
+
 			// Seed on first push for servers whose first push is known complete.
 			// Bypasses the debounce timer entirely — resolves waiting promises immediately.
 			if (
 				strategy.seedFirstPush &&
 				!state.pushDiagnostics.has(normalizedPath)
 			) {
+				if (isSupersededPush()) return;
 				state.pushDiagnostics.set(normalizedPath, newDiags);
 				state.pushDiagnosticTimestamps.set(normalizedPath, Date.now());
 				recordDocVersion();
@@ -884,10 +914,11 @@ function setupIncomingHandlers(
 			if (existingTimer) clearTimeout(existingTimer);
 
 			const timer = setTimeout(() => {
+				state.pendingDiagnostics.delete(normalizedPath);
+				if (isSupersededPush()) return;
 				state.pushDiagnostics.set(normalizedPath, newDiags);
 				state.pushDiagnosticTimestamps.set(normalizedPath, Date.now());
 				recordDocVersion();
-				state.pendingDiagnostics.delete(normalizedPath);
 				state.diagnosticsVersion += 1;
 				state.diagnosticEmitter.emit("diagnostics", normalizedPath);
 			}, strategy.debounceMs);

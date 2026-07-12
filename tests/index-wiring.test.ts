@@ -36,7 +36,7 @@ const EXPECTED_TOOLS = [
 	"ast_grep_replace",
 	"ast_grep_outline",
 	"ast_grep_dump",
-	"ast_dump",
+	"pi_lens_activate_tools",
 	"lens_diagnostics",
 	"lsp_diagnostics",
 	"lsp_navigation",
@@ -74,6 +74,62 @@ describe("index.ts extension wiring", () => {
 			}
 			for (const h of EXPECTED_HOOKS) {
 				expect(pi.getHandlers(h).length, `hook: ${h}`).toBeGreaterThan(0);
+			}
+		});
+
+		// #dynamic-tooling: 5 situational tools are registered but start
+		// inactive on a host that supports pi's dynamic tool loading
+		// (pi.getActiveTools/setActiveTools); the 6 always-active tools plus
+		// the loader itself stay active. Newly-activated tools only need to
+		// be visible from the NEXT turn, so this only asserts load-time state.
+		it("registers the 5 situational tools inactive and everything else active on a dynamic-tooling host", () => {
+			const pi = createPiMock();
+			extension(pi.asExtensionAPI());
+
+			const LAZY_TOOLS = [
+				"ast_grep_search",
+				"ast_grep_replace",
+				"ast_grep_outline",
+				"ast_grep_dump",
+				"lsp_navigation",
+			];
+			const ALWAYS_ACTIVE = [
+				"lens_diagnostics",
+				"lsp_diagnostics",
+				"symbol_search",
+				"module_report",
+				"read_symbol",
+				"read_enclosing",
+				"pi_lens_activate_tools",
+			];
+
+			for (const t of LAZY_TOOLS) {
+				expect(pi.getTool(t), `tool registered: ${t}`).toBeDefined();
+				expect(pi.activeTools.has(t), `should start inactive: ${t}`).toBe(
+					false,
+				);
+			}
+			for (const t of ALWAYS_ACTIVE) {
+				expect(pi.getTool(t), `tool registered: ${t}`).toBeDefined();
+				expect(pi.activeTools.has(t), `should start active: ${t}`).toBe(true);
+			}
+		});
+
+		// Feature-detection fallback: a host without getActiveTools/setActiveTools
+		// (older pi, or any host not implementing dynamic tooling) must not throw,
+		// and every tool — including the 5 normally-lazy ones — stays statically
+		// active, matching pi-lens's behavior before this feature existed.
+		it("falls back to all tools statically active on a host without dynamic-tooling support", () => {
+			const pi = createPiMock({}, { supportsActiveTools: false });
+
+			expect(() => extension(pi.asExtensionAPI())).not.toThrow();
+
+			for (const t of EXPECTED_TOOLS) {
+				expect(pi.getTool(t), `tool registered: ${t}`).toBeDefined();
+				// Every tool — including the normally-lazy 5 — stays active because
+				// index.ts never found getActiveTools/setActiveTools to call, so it
+				// skipped the deactivation step entirely (the graceful fallback).
+				expect(pi.activeTools.has(t), `should stay active: ${t}`).toBe(true);
 			}
 		});
 

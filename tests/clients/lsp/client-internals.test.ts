@@ -18,9 +18,11 @@ import {
 	handleNotifyChange,
 	navRequest,
 	runServerCommand,
+	setupIncomingHandlers,
 	stripDiagnosticNoiseLines,
 	handleNotifyOpen,
 	type LSPClientState,
+	type LSPDiagnostic,
 } from "../../../clients/lsp/client.js";
 import { normalizeMapKey } from "../../../clients/path-utils.js";
 import { WatchedFilesQueue } from "../../../clients/lsp/watch-queue.js";
@@ -474,6 +476,131 @@ describe("clientWaitForDiagnostics", () => {
 		}, 100);
 
 		await waitPromise;
+	});
+});
+
+describe("publishDiagnostics handler — superseded push guard (cache-poisoning fix)", () => {
+	// The handler is registered via connection.onNotification during
+	// setupIncomingHandlers; the mock connection's onNotification is a vi.fn(),
+	// so we capture the callback it's invoked with to drive the handler
+	// directly, the same way the real vscode-jsonrpc connection would.
+	type PublishDiagnosticsParams = {
+		uri: string;
+		diagnostics?: LSPDiagnostic[];
+		version?: number;
+	};
+
+	function createCapturingState(): {
+		state: LSPClientState;
+		emitPublishDiagnostics: (params: PublishDiagnosticsParams) => void;
+	} {
+		const state = createMockState({ serverId: "test-server" });
+		let handler: ((params: PublishDiagnosticsParams) => void) | undefined;
+		(
+			state.connection.onNotification as unknown as ReturnType<typeof vi.fn>
+		).mockImplementation(
+			(method: string, cb: (params: PublishDiagnosticsParams) => void) => {
+				if (method === "textDocument/publishDiagnostics") handler = cb;
+			},
+		);
+		setupIncomingHandlers(state, undefined);
+		if (!handler) {
+			throw new Error("publishDiagnostics handler was not registered");
+		}
+		return {
+			state,
+			emitPublishDiagnostics: (params) => handler?.(params),
+		};
+	}
+
+	// "test-server" doesn't match any known strategy id, so it falls to the
+	// DEFAULT_STRATEGY (seedFirstPush: false, debounceMs: 150) — the debounced
+	// cache-write path exercised here is the common one across real servers.
+	const DEBOUNCE_WAIT_MS = 220;
+
+	it("drops a late push whose version lags the current document version, without poisoning the cache", async () => {
+		const { state, emitPublishDiagnostics } = createCapturingState();
+		// Simulate two edits having already landed (didChange bumped this twice).
+		state.documentVersions.set(TEST_KEY, 2);
+
+		// A push that arrives late, still reporting analysis of the FIRST edit.
+		emitPublishDiagnostics({
+			uri: pathToFileURL(TEST_FILE).href,
+			version: 1,
+			diagnostics: [
+				{
+					severity: 1,
+					message: "stale diagnostic from edit #1",
+					range: {
+						start: { line: 0, character: 0 },
+						end: { line: 0, character: 0 },
+					},
+				},
+			],
+		});
+
+		await new Promise((resolve) => setTimeout(resolve, DEBOUNCE_WAIT_MS));
+
+		// The superseded push must never reach the cache — this is the actual
+		// bug: getDiagnostics()/getAllDiagnostics()/pruneDiagnostics() read
+		// pushDiagnostics directly and don't consult isVersionStale (that check
+		// only gates clientWaitForDiagnostics), so a cached stale push would be
+		// served as current until the next fresh push overwrites it.
+		expect(state.pushDiagnostics.has(TEST_KEY)).toBe(false);
+		expect(state.diagnosticDocVersions.has(TEST_KEY)).toBe(false);
+	});
+
+	it("caches a push whose version matches the current document version (no false-positive drops)", async () => {
+		const { state, emitPublishDiagnostics } = createCapturingState();
+		state.documentVersions.set(TEST_KEY, 2);
+
+		emitPublishDiagnostics({
+			uri: pathToFileURL(TEST_FILE).href,
+			version: 2,
+			diagnostics: [
+				{
+					severity: 1,
+					message: "current diagnostic",
+					range: {
+						start: { line: 0, character: 0 },
+						end: { line: 0, character: 0 },
+					},
+				},
+			],
+		});
+
+		await new Promise((resolve) => setTimeout(resolve, DEBOUNCE_WAIT_MS));
+
+		const cached = state.pushDiagnostics.get(TEST_KEY);
+		expect(cached).toBeDefined();
+		expect(cached?.[0]?.message).toBe("current diagnostic");
+		expect(state.diagnosticDocVersions.get(TEST_KEY)).toBe(2);
+	});
+
+	it("still caches a push when the document version is unknown (version-less servers unaffected)", async () => {
+		const { state, emitPublishDiagnostics } = createCapturingState();
+		// No entry in documentVersions for this path — server never reports one.
+
+		emitPublishDiagnostics({
+			uri: pathToFileURL(TEST_FILE).href,
+			version: undefined,
+			diagnostics: [
+				{
+					severity: 1,
+					message: "version-less diagnostic",
+					range: {
+						start: { line: 0, character: 0 },
+						end: { line: 0, character: 0 },
+					},
+				},
+			],
+		});
+
+		await new Promise((resolve) => setTimeout(resolve, DEBOUNCE_WAIT_MS));
+
+		const cached = state.pushDiagnostics.get(TEST_KEY);
+		expect(cached).toBeDefined();
+		expect(cached?.[0]?.message).toBe("version-less diagnostic");
 	});
 });
 
