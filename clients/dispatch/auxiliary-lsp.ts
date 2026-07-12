@@ -190,3 +190,40 @@ export function findAuxiliaryProfileForSource(
 	if (!source) return undefined;
 	return AUXILIARY_LSP_PROFILES.find((p) => p.sourceMatch.test(source));
 }
+
+/**
+ * Single-diagnostic suppression check (#586): look up the diagnostic's
+ * auxiliary profile by `source` and, if that profile declares an
+ * `isSuppressed` callback (currently only opengrep's `# nosemgrep`, #441),
+ * apply it. Returns false for diagnostics with no matching profile or whose
+ * profile has no native suppression syntax — the common case for plain
+ * language-server diagnostics.
+ *
+ * This is the ONE lookup+apply implementation; every call site that decides
+ * whether to drop a diagnostic for its tool's own inline suppression comment
+ * should go through this (or `applyAuxiliarySuppressions` below) rather than
+ * re-deriving the profile lookup.
+ */
+export function isAuxiliaryDiagnosticSuppressed(
+	d: LSPDiagnostic,
+	content: string,
+): boolean {
+	const profile = findAuxiliaryProfileForSource(d.source);
+	return Boolean(profile?.isSuppressed?.(d, content));
+}
+
+/**
+ * Filter a diagnostic list down to the ones NOT suppressed by their
+ * auxiliary profile's native inline-comment syntax (#586). This is the
+ * shared helper `tools/lsp-diagnostics.ts` and `clients/lsp/index.ts`'s
+ * `runWorkspaceDiagnostics` use so a `// nosemgrep` (or any future profile's
+ * equivalent) suppresses a finding identically whether it's seen via the
+ * per-edit dispatch runner or a standalone diagnostics query — previously
+ * only the former honored it (#586).
+ */
+export function applyAuxiliarySuppressions(
+	diagnostics: readonly LSPDiagnostic[],
+	content: string,
+): LSPDiagnostic[] {
+	return diagnostics.filter((d) => !isAuxiliaryDiagnosticSuppressed(d, content));
+}
