@@ -1025,11 +1025,16 @@ async function formatFullMode(
 	// tool JOINS that run instead of double-spawning it. Only when the caller
 	// opted into project-runner state (this is the expensive path — up to
 	// trivy's own ~180s timeout ceiling, run in parallel with the rest).
+	// `signal` is the SAME combined Escape/turn-abort + wall-clock-ceiling
+	// signal already threaded into the LSP sweep/cheap-runner scan above — an
+	// abort mid-fetch returns whatever settled so far (fresh-fetch.ts races
+	// rather than cancels in-flight spawns; see its header for why).
 	const extracted = shouldIncludeProjectRunners(options.refreshRunners)
 		? await fetchFreshProjectDiagnostics(
 				cacheManager,
 				cwd,
 				await loadBootstrapClients(),
+				options.signal,
 			)
 		: { diagnostics: [], runners: [], cold: [], timings: {} };
 	const projectSnapshot = foldExtraDiagnosticsIntoSnapshot(
@@ -1084,13 +1089,29 @@ async function formatFullMode(
 	// actionable-warning shape: say what's cold and what would warm it, only
 	// when the caller actually asked for runner state (extracted.cold is
 	// always [] otherwise).
+	// #585: an aborted fresh-fetch (Escape / the mode=full wall-clock ceiling)
+	// reports its still-in-flight analyzers separately from a genuine
+	// not-applicable/unavailable skip — "stopped mid-scan, unknown" is a
+	// different, more honest reason than "not applicable to this project", and
+	// conflating them would suggest re-running mode=full is pointless when it
+	// isn't (a re-run may well complete for that analyzer).
+	const abortedIds = new Set(extracted.abortedIds ?? []);
+	const genuinelyColdIds = extracted.cold.filter((id) => !abortedIds.has(id));
 	const coldNote =
-		extracted.cold.length > 0
-			? `\n\ncold (not applicable / unavailable this run): ${extracted.cold
+		genuinelyColdIds.length > 0
+			? `\n\ncold (not applicable / unavailable this run): ${genuinelyColdIds
 					.map((id) => `${id} — ${warmTriggerFor(id)}`)
 					.join(
 						", ",
 					)}. These analyzers have not contributed to this result — absence of their findings is NOT a clean verdict.`
+			: "";
+	const abortedNote =
+		abortedIds.size > 0
+			? `\n\nstopped mid-scan (still running in the background, not reflected in this result): ${[
+					...abortedIds,
+				].join(
+					", ",
+				)}. Not a clean verdict for these — re-run mode=full to pick up their result once it's cached.`
 			: "";
 	// #585: mode=full now fetches these analyzers fresh rather than reading a
 	// possibly-stale session_start cache — say so honestly, with per-analyzer
@@ -1114,6 +1135,8 @@ async function formatFullMode(
 			...result.details,
 			coldRunners: extracted.cold,
 			analyzerTimingsMs: extracted.timings,
+			analyzersAborted: extracted.aborted ?? false,
+			analyzersAbortedIds: extracted.abortedIds ?? [],
 		},
 	};
 	// Stopped mid-scan: the results above are whatever completed before the abort.
@@ -1134,18 +1157,25 @@ async function formatFullMode(
 			content: [
 				{
 					type: "text" as const,
-					text: result.content[0].text + note + coldNote + freshNote + missingNote,
+					text:
+						result.content[0].text +
+						note +
+						coldNote +
+						abortedNote +
+						freshNote +
+						missingNote,
 				},
 			],
 			details: { ...resultWithCold.details, timedOut },
 		};
 	}
-	if (missingNote || coldNote || freshNote) {
+	if (missingNote || coldNote || abortedNote || freshNote) {
 		return {
 			content: [
 				{
 					type: "text" as const,
-					text: result.content[0].text + coldNote + freshNote + missingNote,
+					text:
+						result.content[0].text + coldNote + abortedNote + freshNote + missingNote,
 				},
 			],
 			details: resultWithCold.details,

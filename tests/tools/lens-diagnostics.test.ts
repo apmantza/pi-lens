@@ -945,7 +945,62 @@ describe("lens_diagnostics mode=full", () => {
 			expect.anything(),
 			"/proj",
 			expect.anything(),
+			expect.anything(),
 		);
+	});
+
+	it("mode=full refreshRunners=cached threads the SAME combined abort signal into the analyzer fresh-fetch that the LSP sweep gets (#585 follow-up)", async () => {
+		mockSummaries.length = 0;
+		let capturedLspSignal: AbortSignal | undefined;
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockImplementation(
+				async (_cwd: string, opts: { signal?: AbortSignal }) => {
+					capturedLspSignal = opts.signal;
+					return [];
+				},
+			),
+		};
+		await run(makeTool({}, lspService), {
+			mode: "full",
+			refreshRunners: "cached",
+		});
+		const freshFetchSignal =
+			freshFetchMocks.fetchFreshProjectDiagnostics.mock.calls[0]?.[3];
+		expect(freshFetchSignal).toBeInstanceOf(AbortSignal);
+		expect(freshFetchSignal).toBe(capturedLspSignal);
+	});
+
+	it("mode=full: an aborted fresh-fetch is reported as a distinct 'stopped mid-scan' note, not folded into the generic cold note (#585 follow-up)", async () => {
+		mockSummaries.length = 0;
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
+		};
+		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+			diagnostics: [],
+			runners: [],
+			cold: ["trivy"],
+			timings: {},
+			aborted: true,
+			abortedIds: ["trivy"],
+		});
+
+		const result = await run(makeTool({}, lspService), {
+			mode: "full",
+			refreshRunners: "cached",
+		});
+
+		const text = String(result.content[0].text);
+		expect(text).toContain("stopped mid-scan");
+		expect(text).toContain("trivy");
+		// The generic "not applicable / unavailable" cold note should NOT also
+		// claim trivy — it has its own, more accurate reason.
+		expect(text).not.toContain("not applicable / unavailable this run): trivy");
+		expect(
+			(result.details as { analyzersAborted?: boolean }).analyzersAborted,
+		).toBe(true);
+		expect(
+			(result.details as { analyzersAbortedIds?: string[] }).analyzersAbortedIds,
+		).toEqual(["trivy"]);
 	});
 
 	it("deduplicates LSP diagnostics already present in widget state by file line and rule", async () => {

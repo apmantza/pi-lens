@@ -336,4 +336,60 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 		// Generous ceiling: serial execution of 6 x 20ms would be >=120ms.
 		expect(elapsed).toBeLessThan(100);
 	});
+
+	it("returns promptly with partial results when the signal aborts mid-scan, instead of waiting for every analyzer (#585 follow-up)", async () => {
+		fs.writeFileSync(path.join(tmp, "tsconfig.json"), "{}");
+		const cacheManager = makeCacheManager();
+		const clients = makeClients({ jscpdAvailable: true });
+
+		// knip resolves fast (well within the abort budget); jscpd is mocked to
+		// take far longer than the abort fires, simulating a slow analyzer still
+		// in flight when mode=full's wall-clock ceiling / Escape fires.
+		let jscpdResolve: (() => void) | undefined;
+		(clients.jscpdClient.scan as ReturnType<typeof vi.fn>).mockImplementation(
+			() =>
+				new Promise((resolve) => {
+					jscpdResolve = () =>
+						resolve({
+							success: true,
+							duplicatedLines: 0,
+							totalLines: 0,
+							percentage: 0,
+							clones: [],
+						});
+					// Deliberately never auto-resolves within the test — only via
+					// jscpdResolve(), called explicitly after assertions below so
+					// the process doesn't leak a dangling timer.
+				}),
+		);
+
+		const controller = new AbortController();
+		const start = Date.now();
+		const resultPromise = fetchFreshProjectDiagnostics(
+			cacheManager,
+			tmp,
+			clients,
+			controller.signal,
+		);
+		setTimeout(() => controller.abort(), 20);
+
+		const result = await resultPromise;
+		const elapsed = Date.now() - start;
+
+		// Returned promptly around the abort, not waiting for jscpd's still-
+		// pending promise (which would hang the test if awaited directly).
+		expect(elapsed).toBeLessThan(500);
+		expect(result.aborted).toBe(true);
+		expect(result.abortedIds).toContain("jscpd");
+		// knip had time to settle before the abort fired.
+		expect(result.abortedIds).not.toContain("knip");
+		// Aborted analyzers are folded into `cold` too, so a caller that only
+		// checks `cold` still treats them as "not a clean verdict" rather than
+		// silently absent.
+		expect(result.cold).toContain("jscpd");
+
+		// Let the still-in-flight jscpd promise resolve so it doesn't leak
+		// across tests / trigger an unhandled rejection warning.
+		jscpdResolve?.();
+	});
 });
