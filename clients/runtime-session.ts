@@ -1004,8 +1004,8 @@ export const SESSION_START_GUIDANCE: string[] = [
 		"Key tools (see each tool's own description for args):\n" +
 		"• lens_diagnostics — session-wide diagnostic state; mode=all resurfaces stale blocking errors that dropped from turn context.\n" +
 		"• symbol_search → module_report → read_symbol/read_enclosing — ranked identifier search, then navigable outline/callback handles + exact body reads; cheaper than reading a whole file before editing.\n" +
-		"• lsp_navigation / lsp_diagnostics — definitions/references/rename; probe LSP for errors in a file/folder/workspace.\n" +
-		"• ast_grep_search / ast_grep_replace — structural code patterns (ast_grep_dump to discover node kinds).",
+		"• lsp_diagnostics — probe LSP for errors in a file/folder/workspace.\n" +
+		"• Situational (activate via pi_lens_activate_tools): lsp_navigation, ast_grep_search, ast_grep_replace, ast_grep_dump.",
 ];
 
 export async function handleSessionStart(

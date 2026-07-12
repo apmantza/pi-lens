@@ -2,9 +2,19 @@
 
 pi-lens registers the following tools with the pi agent. Most are also exposed
 through the MCP mirror (`clients/lens-engine.ts` is the seam both adapters
-share) — current exceptions: `ast_grep_outline` and `ast_grep_dump`/`ast_dump`
+share) — current exceptions: `ast_grep_outline` and `ast_grep_dump`
 (module_report supersedes them for discovery). `read_enclosing` gained MCP
 parity (`pilens_read_enclosing`) as of #536, closing #522 item 1.
+
+**Dynamic tooling.** Six tools stay always-active: `lens_diagnostics`,
+`lsp_diagnostics`, `module_report`, `read_symbol`, `read_enclosing`,
+`symbol_search`. Five situational tools — `ast_grep_search`, `ast_grep_replace`,
+`ast_grep_outline`, `ast_grep_dump`, `lsp_navigation` — are registered but
+inactive by default; the model activates the ones it needs via the always-active
+loader tool `pi_lens_activate_tools`, per pi's dynamic-tool-loading API
+(`pi.setActiveTools`/`pi.getActiveTools`). Feature-detected: on hosts without
+that API, the five situational tools fall back to being statically active,
+exactly as before (`tools/activate-tools.ts`, wired in `index.ts`).
 
 ## Per-edit
 
@@ -39,7 +49,7 @@ parity (`pilens_read_enclosing`) as of #536, closing #522 item 1.
 - **`ast_grep_dump`** — Dumps the raw tree-sitter AST for a source snippet. Use
   this when an `ast_grep_search` or `ast_grep_replace` pattern returns zero
   matches and the correct node kind or field name is unknown. `includeAnonymous`
-  shows punctuation/CST nodes. (`ast_dump` remains as a compatibility alias.)
+  shows punctuation/CST nodes.
 - **`ast_grep_outline`** — Syntax-only code structure (symbols, imports, exports,
   members) for files or directories via `ast-grep outline`. Fast, local, no
   index/LSP/cross-file semantics. Supports `items`/`view`/`type`/`match`/

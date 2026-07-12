@@ -77,6 +77,13 @@ export interface PiMock {
 	readonly flagValues: Map<string, boolean | string>;
 	readonly messageRenderers: Map<string, unknown>;
 	readonly sentMessages: CapturedMessage[];
+	/**
+	 * #dynamic-tooling: tools registered via `registerTool` are active by
+	 * default (mirrors the real host — see docs' `getActiveTools`/
+	 * `setActiveTools` example, which starts from "all registered tools" and
+	 * filters DOWN). Only meaningful when `supportsActiveTools` is true.
+	 */
+	readonly activeTools: Set<string>;
 
 	// ── ExtensionAPI surface that index.ts uses ──────────────────────────────
 	registerFlag(name: string, options: RecordedFlag): void;
@@ -110,9 +117,22 @@ export interface PiMock {
 	asExtensionAPI(): ExtensionAPI;
 }
 
+export interface PiMockOptions {
+	/**
+	 * #dynamic-tooling: whether this mocked host exposes
+	 * `pi.getActiveTools`/`pi.setActiveTools`. Default true (current pi).
+	 * Set false to simulate an older host with no dynamic-tooling support —
+	 * `index.ts`'s feature-detection must fall back to leaving every tool
+	 * statically active rather than throwing.
+	 */
+	supportsActiveTools?: boolean;
+}
+
 export function createPiMock(
 	initialFlags: Record<string, boolean | string> = {},
+	options: PiMockOptions = {},
 ): PiMock {
+	const supportsActiveTools = options.supportsActiveTools ?? true;
 	const flags = new Map<string, RecordedFlag>();
 	const commands = new Map<string, RecordedCommand>();
 	const tools = new Map<string, unknown>();
@@ -122,6 +142,7 @@ export function createPiMock(
 	);
 	const messageRenderers = new Map<string, unknown>();
 	const sentMessages: CapturedMessage[] = [];
+	const activeTools = new Set<string>();
 
 	const mock: PiMock = {
 		flags,
@@ -131,6 +152,7 @@ export function createPiMock(
 		flagValues,
 		messageRenderers,
 		sentMessages,
+		activeTools,
 
 		registerFlag(name, options) {
 			flags.set(name, options);
@@ -149,6 +171,8 @@ export function createPiMock(
 				throw new Error(`tool already registered: ${tool.name}`);
 			}
 			tools.set(tool.name, tool);
+			// Mirror the real host: newly registered tools are active by default.
+			activeTools.add(tool.name);
 		},
 		on(event, handler) {
 			const list = handlers.get(event) ?? [];
@@ -203,7 +227,15 @@ export function createPiMock(
 			await cmd.handler(args, ctx);
 		},
 		asExtensionAPI() {
-			return mock as unknown as ExtensionAPI;
+			const api: Record<string, unknown> = { ...mock };
+			if (supportsActiveTools) {
+				api.getActiveTools = () => Array.from(activeTools);
+				api.setActiveTools = (names: string[]) => {
+					activeTools.clear();
+					for (const name of names) activeTools.add(name);
+				};
+			}
+			return api as unknown as ExtensionAPI;
 		},
 	};
 

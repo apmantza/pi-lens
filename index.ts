@@ -119,7 +119,11 @@ import { isExternalOrVendorFile } from "./clients/path-utils.js";
 import { setAmbientAbortSignal } from "./clients/safe-spawn.js";
 import { TreeSitterClient } from "./clients/tree-sitter-client.js";
 import { initI18n, t } from "./i18n.js";
-import { createAstDumpTool, createAstGrepDumpTool } from "./tools/ast-dump.js";
+import { createAstGrepDumpTool } from "./tools/ast-dump.js";
+import {
+	createActivateToolsTool,
+	type ActivatableToolInfo,
+} from "./tools/activate-tools.js";
 import { createLensDiagnosticsTool } from "./tools/lens-diagnostics.js";
 import { createAstGrepReplaceTool } from "./tools/ast-grep-replace.js";
 import { createAstGrepSearchTool } from "./tools/ast-grep-search.js";
@@ -1084,12 +1088,10 @@ export default function (pi: ExtensionAPI) {
 	// Guard each registration: if another extension (e.g. @narumitw/pi-lsp) already
 	// owns the same tool name, registerTool throws and would abort extension load.
 	// Catch the collision silently so both extensions can coexist.
-	for (const tool of [
-		createAstGrepSearchTool(astGrepClient),
-		createAstGrepReplaceTool(astGrepClient),
-		createAstGrepOutlineTool(astGrepClient),
-		createAstGrepDumpTool(astGrepClient),
-		createAstDumpTool(astGrepClient),
+	//
+	// Always-active tools (6): stay on for every turn — cheap, broadly useful,
+	// or (in the loader's case) required to bootstrap dynamic activation below.
+	const alwaysActiveTools = [
 		createLensDiagnosticsTool(
 			cacheManager,
 			() => runtime.projectRoot,
@@ -1099,7 +1101,6 @@ export default function (pi: ExtensionAPI) {
 			() => flushDebouncedToolResults(),
 		),
 		createLspDiagnosticsTool(),
-		createLspNavigationTool((name) => getLensFlag(name)),
 		createSymbolSearchTool(() => runtime.projectRoot),
 		createModuleReportTool(() => runtime.projectRoot),
 		createReadSymbolTool(
@@ -1124,12 +1125,91 @@ export default function (pi: ExtensionAPI) {
 					runtime.peekWriteIndex(),
 				),
 		),
-	]) {
+	];
+
+	// Situational tools (5): registered but, on hosts that support pi's dynamic
+	// tooling (`pi.getActiveTools`/`pi.setActiveTools`), left inactive at load —
+	// deactivated in the block below right after registration. The model
+	// activates the ones it needs via `pi_lens_activate_tools`. On hosts without
+	// that API this whole tier is simply left statically active, matching
+	// pi-lens's behavior before this feature existed.
+	const lazyTools = [
+		createAstGrepSearchTool(astGrepClient),
+		createAstGrepReplaceTool(astGrepClient),
+		createAstGrepOutlineTool(astGrepClient),
+		createAstGrepDumpTool(astGrepClient),
+		createLspNavigationTool((name) => getLensFlag(name)),
+	];
+	const LAZY_TOOL_CATALOG: ActivatableToolInfo[] = [
+		{
+			name: "ast_grep_search",
+			summary:
+				"AST-aware structural code search across ~40 languages (ast-grep patterns).",
+		},
+		{
+			name: "ast_grep_replace",
+			summary: "AST-aware structural code rewrite/refactor (ast-grep patterns).",
+		},
+		{
+			name: "ast_grep_outline",
+			summary:
+				"Syntax-only file/dir structure (symbols/imports/exports/members) via ast-grep outline — no index/LSP.",
+		},
+		{
+			name: "ast_grep_dump",
+			summary:
+				"Dump the tree-sitter AST for a source snippet to discover node kinds/field names.",
+		},
+		{
+			name: "lsp_navigation",
+			summary:
+				"IDE-style LSP navigation: definition, references, implementation, rename, call hierarchy.",
+		},
+	];
+	const activateToolsTool = createActivateToolsTool(
+		pi as unknown as {
+			getActiveTools?: () => string[];
+			setActiveTools?: (names: string[]) => void;
+		},
+		LAZY_TOOL_CATALOG,
+	);
+
+	for (const tool of [...alwaysActiveTools, activateToolsTool, ...lazyTools]) {
 		try {
 			pi.registerTool(tool as any);
 		} catch {
 			// another extension already registered a tool with this name
 		}
+	}
+
+	// Dynamic tooling (#pi 0.80.x+): deactivate the 5 situational tools right
+	// after registering them, so they start inactive and the model must call
+	// `pi_lens_activate_tools` to bring them in (next-turn visibility, per the
+	// docs' loader pattern). Feature-detected the same way as the
+	// `agent_settled` registration below: `pi.getActiveTools`/`setActiveTools`
+	// aren't guaranteed present on every host the broad
+	// `@earendil-works/pi-coding-agent` peer dependency allows, so probe with
+	// typeof rather than assuming the pinned devDependency version's API
+	// exists at runtime. Older/unsupported hosts simply keep every tool
+	// statically active — a silent, graceful fallback, not a thrown error.
+	try {
+		const piWithActiveTools = pi as unknown as {
+			getActiveTools?: () => string[];
+			setActiveTools?: (names: string[]) => void;
+		};
+		if (
+			typeof piWithActiveTools.getActiveTools === "function" &&
+			typeof piWithActiveTools.setActiveTools === "function"
+		) {
+			const lazyNames = new Set(LAZY_TOOL_CATALOG.map((t) => t.name));
+			const active = piWithActiveTools.getActiveTools();
+			const initiallyActive = active.filter((name) => !lazyNames.has(name));
+			piWithActiveTools.setActiveTools(initiallyActive);
+		}
+	} catch (deactivateErr) {
+		dbg(
+			`dynamic tool deactivation failed (older pi host, or tools not registered?): ${deactivateErr}`,
+		);
 	}
 
 	// REMOVED: ~450 lines of inline tool definitions moved to tools/

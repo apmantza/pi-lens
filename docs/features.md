@@ -236,7 +236,7 @@ Covers JavaScript/TypeScript, Python, Go, Rust, Ruby, Shell, and CMake. A TypeSc
 - **Strictness modes** — `strictness: "relaxed"` ignores optional punctuation (trailing commas, semicolons) that causes zero matches in `smart` mode. Also supports `ast`, `cst`, `signature`, `template`.
 - **Pagination** — `skip: N` offsets into large result sets; truncated results include a next-page hint.
 - **Stale-preview detection** — `ast_grep_replace` re-validates the pattern before writing; returns a clear error if files changed since the preview instead of applying against wrong content.
-- **`ast_dump`** — dumps the full tree-sitter AST for a source snippet. Use this when a pattern returns zero matches and the correct node kind or field name is unknown.
+- **`ast_grep_dump`** — dumps the full tree-sitter AST for a source snippet. Use this when a pattern returns zero matches and the correct node kind or field name is unknown.
 
 ### Tree-sitter Rules
 

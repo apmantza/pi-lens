@@ -5,15 +5,13 @@ import { LANGUAGES } from "./shared.js";
 
 function createAstDumpToolWithName(
 	astGrepClient: AstGrepClient,
-	name: "ast_dump" | "ast_grep_dump",
+	name: "ast_grep_dump",
 ) {
-	const preferred = name === "ast_grep_dump";
 	return {
 		name,
-		label: preferred ? "AST-Grep Dump" : "AST Dump",
-		description: preferred
-			? "Dump the tree-sitter AST for a source snippet using ast-grep CLI. Preferred name for this ast-grep debug tool; ast_dump remains as a compatibility alias. Use when ast_grep_search returns zero matches and you need exact node kinds, field names, or nesting. Named nodes only by default; includeAnonymous=true shows punctuation/CST nodes too."
-			: "Compatibility alias for ast_grep_dump. Dump the tree-sitter AST for a source snippet using ast-grep CLI. Use when ast_grep_search returns zero matches and you need exact node kinds, field names, or nesting. Named nodes only by default; includeAnonymous=true shows punctuation/CST nodes too.",
+		label: "AST-Grep Dump",
+		description:
+			"Dump the tree-sitter AST for a source snippet using ast-grep CLI. Use when ast_grep_search returns zero matches and you need exact node kinds, field names, or nesting. Named nodes only by default; includeAnonymous=true shows punctuation/CST nodes too.",
 		promptSnippet: "Inspect AST node kinds before writing ast-grep patterns",
 		renderResult: compactRenderResult<{ lang?: string }>(
 			({ details, args, isError, lineCount, text }) => {
@@ -126,8 +124,4 @@ function createAstDumpToolWithName(
 
 export function createAstGrepDumpTool(astGrepClient: AstGrepClient) {
 	return createAstDumpToolWithName(astGrepClient, "ast_grep_dump");
-}
-
-export function createAstDumpTool(astGrepClient: AstGrepClient) {
-	return createAstDumpToolWithName(astGrepClient, "ast_dump");
 }
