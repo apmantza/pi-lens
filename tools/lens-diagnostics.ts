@@ -42,9 +42,11 @@ import type { CodeQualityWarningsReport } from "../clients/code-quality-warnings
 import {
 	getFileDiagnosticSummaries,
 	type FileDiagnosticSummary,
+	reconcileScanDiagnostics,
 	reconcileStaleWidgetFiles,
 	type WidgetDiagnostic,
 } from "../clients/widget-state.js";
+import { convertLspDiagnostics } from "../clients/dispatch/utils/lsp-diagnostics.js";
 import { makeProgressReporter, scanningSummaryLine } from "./scan-progress.js";
 
 // The widget state exposes the full per-file diagnostic set; this is the tool's
@@ -76,6 +78,11 @@ type WorkspaceLspDiagnosticResult = {
 	filePath: string;
 	diagnostics: LSPDiagnostic[];
 	count?: number;
+	error?: string;
+	// See LSPWorkspaceDiagnosticResult in clients/lsp/index.ts — true when this
+	// file's per-file check didn't complete within budget (or threw), so
+	// `diagnostics` is a default-empty placeholder, not a confirmed result.
+	timedOut?: boolean;
 };
 
 // Wall-clock ceiling for the whole mode=full scan. Even with per-file budgets
@@ -98,6 +105,18 @@ export function createLensDiagnosticsTool(
 	// window. Injected (index wires `flushDebouncedToolResults`); optional so the
 	// tool stays decoupled and testable.
 	flushPending: () => Promise<void> = async () => {},
+	// #571: mode=full's own fresh LSP results are reconciled into the footer
+	// (widget-state's `allDiagnostics`) for files this scan got a CONFIRMED
+	// (non-timed-out) result for — otherwise an unedited file whose diagnostics
+	// only changed because of a change to a file it depends on stays stale in
+	// the footer forever. Each reconciled write draws a fresh token from the
+	// SAME monotonic source `pipeline.ts`'s per-edit writes use
+	// (`RuntimeCoordinator.nextWriteIndex()`, injected by index.ts) so the
+	// existing `WriteOrderingGuard` (#555/#560) can tell this scan-originated
+	// write apart from a concurrent, genuinely newer per-edit write for the
+	// same file. Optional/undefined in tests — an omitted writeIndex always
+	// proceeds (see `reconcileScanDiagnostics`'s doc comment).
+	nextWriteIndex?: () => number,
 ) {
 	return {
 		name: "lens_diagnostics" as const,
@@ -314,6 +333,7 @@ export function createLensDiagnosticsTool(
 					wallClockMs: FULL_SCAN_WALL_CLOCK_MS,
 					onProgress,
 					pathsScope,
+					nextWriteIndex,
 				});
 			}
 			return formatDeltaMode(cacheManager, cwd, severity, pathsScope);
@@ -916,6 +936,7 @@ async function formatFullMode(
 		wallClockMs?: number;
 		onProgress?: (completed: number, total: number) => void;
 		pathsScope?: PathsScope;
+		nextWriteIndex?: () => number;
 	} = {},
 ): Promise<{ content: [{ type: "text"; text: string }]; details: object }> {
 	const runWorkspaceDiagnostics = lspService.runWorkspaceDiagnostics;
@@ -930,7 +951,7 @@ async function formatFullMode(
 			details: { mode: "full", filesChecked: 0, lspUnavailable: true },
 		};
 	}
-	const { signal, pathsScope } = options;
+	const { signal, pathsScope, nextWriteIndex } = options;
 	const ignoreFile = createCurrentIgnoreFilter(cwd);
 	const includeFile = (filePath: string) =>
 		ignoreFile(filePath) && (!pathsScope || pathsScope.includeFile(filePath));
@@ -964,6 +985,29 @@ async function formatFullMode(
 	const lspResults = rawLspResults.filter((result) =>
 		includeFile(result.filePath),
 	);
+	// #571: reconcile this scan's fresh, CONFIRMED per-file results into the
+	// footer cache. `timedOut`/`error` means the check never actually completed
+	// or was inconclusive (#570's `touchFile().inconclusive`, or this sweep's
+	// own outer per-file deadline/throw — see LSPWorkspaceDiagnosticResult's
+	// doc comment) — `diagnostics` is a default-empty placeholder in that case,
+	// not a confirmed clean, and must not be written as if it were. A footer
+	// write is never allowed to fail the tool call, so any unexpected throw is
+	// swallowed.
+	for (const result of lspResults) {
+		if (result.timedOut || result.error) continue;
+		try {
+			reconcileScanDiagnostics(
+				result.filePath,
+				convertLspDiagnostics(result.diagnostics, result.filePath, {
+					source: "lens_diagnostics_full",
+				}),
+				true,
+				nextWriteIndex?.(),
+			);
+		} catch {
+			// Never let a footer-reconciliation hiccup fail the scan itself.
+		}
+	}
 	const scannedSnapshot = filterProjectDiagnosticsSnapshot(
 		rawProjectSnapshot,
 		includeFile,

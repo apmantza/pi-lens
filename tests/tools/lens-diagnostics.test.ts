@@ -36,9 +36,13 @@ const mockSummaries: ReturnType<
 
 let mockStaleDropped = 0;
 
+const reconcileScanDiagnosticsMock = vi.fn();
+
 vi.mock("../../clients/widget-state.js", () => ({
 	getFileDiagnosticSummaries: () => mockSummaries,
 	reconcileStaleWidgetFiles: async () => mockStaleDropped,
+	reconcileScanDiagnostics: (...args: unknown[]) =>
+		reconcileScanDiagnosticsMock(...args),
 }));
 
 beforeEach(() => {
@@ -47,6 +51,7 @@ beforeEach(() => {
 	projectDiagnosticsMocks.loadProjectDiagnosticsDeltaReport.mockReset();
 	mockSummaries.length = 0;
 	mockStaleDropped = 0;
+	reconcileScanDiagnosticsMock.mockReset();
 	resetProjectLensConfigCache();
 });
 
@@ -468,6 +473,95 @@ describe("lens_diagnostics mode=full", () => {
 			totalBlocking: 1,
 			totalWarnings: 1,
 		});
+	});
+
+	it("reconciles a confirmed per-file LSP result into the footer via reconcileScanDiagnostics (#571)", async () => {
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([
+				{
+					filePath: "/proj/src/unedited.ts",
+					diagnostics: [
+						{
+							severity: 1,
+							message: "project-wide type error",
+							range: {
+								start: { line: 9, character: 4 },
+								end: { line: 9, character: 8 },
+							},
+							source: "ts",
+							code: 2322,
+						},
+					],
+					count: 1,
+					// Not timed out — completed within budget.
+				},
+			]),
+		};
+		let drawn = 0;
+		const tool = createLensDiagnosticsTool(
+			makeCacheManager({}) as any,
+			() => "/proj",
+			() => lspService as any,
+			undefined,
+			() => (drawn += 1),
+		);
+		await run(tool, { mode: "full" });
+
+		expect(reconcileScanDiagnosticsMock).toHaveBeenCalledTimes(1);
+		const [filePath, diags, confirmed, writeIndex] =
+			reconcileScanDiagnosticsMock.mock.calls[0];
+		expect(filePath).toBe("/proj/src/unedited.ts");
+		expect(confirmed).toBe(true);
+		expect(writeIndex).toBe(1);
+		expect(diags).toEqual([
+			expect.objectContaining({ message: "project-wide type error" }),
+		]);
+	});
+
+	it("does NOT reconcile a timed-out per-file result into the footer (#571 / #570 dependency)", async () => {
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([
+				{
+					filePath: "/proj/src/timed-out.ts",
+					diagnostics: [],
+					count: 0,
+					timedOut: true,
+				},
+			]),
+		};
+		const tool = createLensDiagnosticsTool(
+			makeCacheManager({}) as any,
+			() => "/proj",
+			() => lspService as any,
+			undefined,
+			() => 1,
+		);
+		await run(tool, { mode: "full" });
+
+		expect(reconcileScanDiagnosticsMock).not.toHaveBeenCalled();
+	});
+
+	it("does NOT reconcile an errored per-file result into the footer", async () => {
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([
+				{
+					filePath: "/proj/src/errored.ts",
+					diagnostics: [],
+					count: 0,
+					error: "spawn failed",
+				},
+			]),
+		};
+		const tool = createLensDiagnosticsTool(
+			makeCacheManager({}) as any,
+			() => "/proj",
+			() => lspService as any,
+			undefined,
+			() => 1,
+		);
+		await run(tool, { mode: "full" });
+
+		expect(reconcileScanDiagnosticsMock).not.toHaveBeenCalled();
 	});
 
 	it("honors inline `# pi-lens-ignore` like mode=all (#442)", async () => {

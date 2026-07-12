@@ -272,6 +272,20 @@ export interface LSPWorkspaceDiagnosticResult {
 	diagnostics: import("./client.js").LSPDiagnostic[];
 	count: number;
 	error?: string;
+	/**
+	 * True when this file's per-file check was NOT confirmed — either
+	 * `touchFile`'s own `.inconclusive` flag was set (#570: the notify write
+	 * or the diagnostics wait itself timed out), the OUTER `perFileMs`
+	 * `withDeadline` wrapper never got a result back at all, or the check
+	 * threw. `diagnostics` is a default-empty placeholder in every one of
+	 * those cases, not a confirmed result, and must not be treated as
+	 * "confirmed clean" by any caller reconciling this into cached state
+	 * (#571). Absent/false means the per-file check completed within budget
+	 * AND was confirmed; workspace-pull results (`tryWorkspacePull`) are
+	 * always confirmed (a pull either returns a real report or the caller
+	 * falls back to per-file, never a silent empty default).
+	 */
+	timedOut?: boolean;
 }
 
 const WORKSPACE_DIAGNOSTICS_CONCURRENCY = 8;
@@ -2111,11 +2125,22 @@ export class LSPService {
 					}),
 					{ ms: perFileMs, onTimeout: "undefined" },
 				);
-				if (diagnostics === undefined) timedOutFiles += 1;
+				// #571: prefer #570's real per-touch inconclusive signal
+				// (`touchFile`'s non-enumerable `.inconclusive` flag — set when the
+				// notify write or the diagnostics wait itself timed out) over this
+				// sweep's own OUTER `perFileMs` deadline, which only catches a touch
+				// that never returned at all within budget. Either one means the
+				// result wasn't confirmed.
+				const inconclusive =
+					(diagnostics as (typeof diagnostics & { inconclusive?: boolean }))
+						?.inconclusive === true;
+				const timedOut = diagnostics === undefined || inconclusive;
+				if (timedOut) timedOutFiles += 1;
 				results.push({
 					filePath,
 					diagnostics: diagnostics ?? [],
 					count: diagnostics?.length ?? 0,
+					timedOut,
 				});
 			} catch (err) {
 				results.push({
@@ -2123,6 +2148,10 @@ export class LSPService {
 					diagnostics: [],
 					count: 0,
 					error: err instanceof Error ? err.message : String(err),
+					// An errored check is exactly as inconclusive as a timed-out one —
+					// no confirmed result was obtained, so reconciliation (#571) must
+					// skip it the same way.
+					timedOut: true,
 				});
 			}
 			completed += 1;
@@ -2235,7 +2264,10 @@ export class LSPService {
 			}
 			return groupFiles.map((filePath) => {
 				const diagnostics = byPath.get(normalizeMapKey(filePath)) ?? [];
-				return { filePath, diagnostics, count: diagnostics.length };
+				// A pull that got here returned a real workspace/diagnostic report
+				// (see the `!report` guard above) — always confirmed, unlike a
+				// per-file touchFile default-empty on timeout.
+				return { filePath, diagnostics, count: diagnostics.length, timedOut: false };
 			});
 		} catch {
 			return undefined;

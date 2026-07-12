@@ -16,6 +16,8 @@ import { getLSPService } from "../clients/lsp/index.js";
 import { combineAbortSignals } from "../clients/deadline-utils.js";
 import type { LSPDiagnostic } from "../clients/lsp/client.js";
 import { classifyCascadeWaitTier } from "../clients/lsp/cascade-tier.js";
+import { convertLspDiagnostics } from "../clients/dispatch/utils/lsp-diagnostics.js";
+import { reconcileScanDiagnostics } from "../clients/widget-state.js";
 import { baseName, compactRenderResult } from "./render-compact.js";
 import { makeProgressReporter, scanningSummaryLine } from "./scan-progress.js";
 
@@ -80,6 +82,10 @@ type BatchOptions = {
 	waitMs?: number;
 	signal?: AbortSignal;
 	onProgress?: (completed: number, total: number) => void;
+	// #571: threaded down to `collectFileDiagnosticResult` so each confirmed
+	// per-file result reconciled into the footer draws its own fresh
+	// write-ordering token.
+	nextWriteIndex?: () => number;
 };
 
 type FileDiag = {
@@ -228,7 +234,14 @@ function collectFiles(
 	return files;
 }
 
-export function createLspDiagnosticsTool() {
+export function createLspDiagnosticsTool(
+	// #571: same shared write-ordering token source `lens_diagnostics` mode=full
+	// uses (index.ts injects `() => runtime.nextWriteIndex()`) — a confirmed
+	// fresh result this tool reconciles into the footer draws a fresh token so
+	// `WriteOrderingGuard` can tell it apart from a concurrent, genuinely newer
+	// per-edit write for the same file. Optional/undefined in tests.
+	nextWriteIndex?: () => number,
+) {
 	return {
 		name: "lsp_diagnostics" as const,
 		label: "LSP Diagnostics",
@@ -389,6 +402,7 @@ export function createLspDiagnosticsTool() {
 					waitMs,
 					signal,
 					onProgress,
+					nextWriteIndex,
 				});
 			}
 
@@ -428,9 +442,16 @@ export function createLspDiagnosticsTool() {
 					waitMs,
 					signal,
 					onProgress,
+					nextWriteIndex,
 				});
 			}
-			return runFileDiagnostics(absPath, severity, lspService, waitMs);
+			return runFileDiagnostics(
+				absPath,
+				severity,
+				lspService,
+				waitMs,
+				nextWriteIndex,
+			);
 		},
 	};
 }
@@ -543,11 +564,48 @@ async function classifyEmptyResult(
 	}
 }
 
+/**
+ * #571: reconcile this tool's fresh LSP result into the footer cache
+ * (`widget-state.ts`'s `allDiagnostics`) — same shared choke point
+ * `lens_diagnostics` mode=full uses (`clients/widget-state.ts`'s
+ * `reconcileScanDiagnostics`). A manual `lsp_diagnostics` check that proves a
+ * stale footer error is actually gone (the real-world case that surfaced
+ * #571) is exactly the kind of confirmed result that should correct it.
+ *
+ * `rawDiags` (pre-severity-filter) is what gets written — the footer records
+ * the true known state, independent of this call's display-only severity
+ * filter. A non-empty result is definitionally confirmed (the server DID
+ * answer with real diagnostics); an empty result is only confirmed when
+ * `classifyEmptyResult` (#533) says "clean", not "unconfirmed" (silent
+ * push-only server — indistinguishable from still-analyzing/never-asked, so
+ * must not overwrite a real prior footer entry).
+ */
+function reconcileWidgetFromLspResult(
+	file: string,
+	rawDiags: LSPDiagnostic[],
+	confirmation: "clean" | "unconfirmed" | undefined,
+	nextWriteIndex: (() => number) | undefined,
+): void {
+	const confirmed = rawDiags.length > 0 || confirmation !== "unconfirmed";
+	if (!confirmed) return;
+	try {
+		reconcileScanDiagnostics(
+			file,
+			convertLspDiagnostics(rawDiags, file, { source: "lsp_diagnostics" }),
+			true,
+			nextWriteIndex?.(),
+		);
+	} catch {
+		// Never let a footer-reconciliation hiccup fail the diagnostics check.
+	}
+}
+
 async function collectFileDiagnosticResult(
 	file: string,
 	severity: string,
 	lspService: NonNullable<ReturnType<typeof getLSPService>>,
 	waitMs?: number,
+	nextWriteIndex?: () => number,
 ): Promise<FileDiagnosticResult> {
 	try {
 		const stat = fs.statSync(file);
@@ -576,6 +634,7 @@ async function collectFileDiagnosticResult(
 				? "unconfirmed"
 				: await classifyEmptyResult(file, lspService)
 			: undefined;
+	reconcileWidgetFromLspResult(file, rawDiags, confirmation, nextWriteIndex);
 	return {
 		file,
 		diagnostics: diagnosticsToFileDiags(file, filteredDiags),
@@ -590,6 +649,7 @@ async function runFileDiagnostics(
 	severity: string,
 	lspService: NonNullable<ReturnType<typeof getLSPService>>,
 	waitMs?: number,
+	nextWriteIndex?: () => number,
 ) {
 	const { diagnostics: rawDiags, timedOut } = await collectDiagnosticsForFile(
 		absPath,
@@ -617,6 +677,7 @@ async function runFileDiagnostics(
 				: await classifyEmptyResult(absPath, lspService)
 			: undefined;
 	const unconfirmed = confirmation === "unconfirmed";
+	reconcileWidgetFromLspResult(absPath, rawDiags, confirmation, nextWriteIndex);
 
 	let text: string;
 	if (total === 0) {
@@ -724,25 +785,47 @@ function unconfirmedReasonClause(unconfirmed: number, timedOut: number): string 
 	);
 }
 
-async function runBatchFileDiagnostics(
-	absPaths: string[],
+/**
+ * Fan out `collectFileDiagnosticResult` across a file list at bounded
+ * concurrency and reduce the results into the shape both batch-style callers
+ * (`runBatchFileDiagnostics`/`runDirectoryDiagnostics`) render from —
+ * previously duplicated identically between them (SonarCloud
+ * `new_duplicated_lines_density` gate, surfaced when #571 added the
+ * `nextWriteIndex` threading to both call sites). Purely mechanical
+ * extraction: no behavior change, and does NOT touch the confirmed/
+ * unconfirmed semantics `collectFileDiagnosticResult`/`tallyConfirmation`
+ * already encode — those, and `lens_diagnostics` mode=full's separate,
+ * deliberately different confirmation gate in `tools/lens-diagnostics.ts`,
+ * are unrelated to this file's internal duplication and are left exactly
+ * as they were.
+ */
+async function collectBatchDiagnostics(
+	files: string[],
 	severity: string,
 	lspService: NonNullable<ReturnType<typeof getLSPService>>,
 	options: BatchOptions,
-) {
-	if (absPaths.length === 0) {
-		return {
-			content: [{ type: "text" as const, text: "No file paths provided." }],
-			isError: true,
-			details: { mode: "batch", severity, filesChecked: 0 },
-		};
-	}
-
+): Promise<{
+	results: FileDiagnosticResult[];
+	fileErrors: string[];
+	lspHealthWarnings: string[];
+	total: number;
+	truncated: boolean;
+	display: FileDiag[];
+	clean: number;
+	unconfirmed: number;
+	timedOut: number;
+}> {
 	const results = await mapWithConcurrency(
-		absPaths,
+		files,
 		options.concurrency,
 		(file) =>
-			collectFileDiagnosticResult(file, severity, lspService, options.waitMs),
+			collectFileDiagnosticResult(
+				file,
+				severity,
+				lspService,
+				options.waitMs,
+				options.nextWriteIndex,
+			),
 		options.signal,
 		options.onProgress,
 	);
@@ -757,6 +840,44 @@ async function runBatchFileDiagnostics(
 	const truncated = total > MAX_DIAGNOSTICS;
 	const display = truncated ? allDiags.slice(0, MAX_DIAGNOSTICS) : allDiags;
 	const { clean, unconfirmed, timedOut } = tallyConfirmation(results);
+	return {
+		results,
+		fileErrors,
+		lspHealthWarnings,
+		total,
+		truncated,
+		display,
+		clean,
+		unconfirmed,
+		timedOut,
+	};
+}
+
+async function runBatchFileDiagnostics(
+	absPaths: string[],
+	severity: string,
+	lspService: NonNullable<ReturnType<typeof getLSPService>>,
+	options: BatchOptions,
+) {
+	if (absPaths.length === 0) {
+		return {
+			content: [{ type: "text" as const, text: "No file paths provided." }],
+			isError: true,
+			details: { mode: "batch", severity, filesChecked: 0 },
+		};
+	}
+
+	const {
+		results,
+		fileErrors,
+		lspHealthWarnings,
+		total,
+		truncated,
+		display,
+		clean,
+		unconfirmed,
+		timedOut,
+	} = await collectBatchDiagnostics(absPaths, severity, lspService, options);
 
 	const lines: string[] = [
 		`Files checked: ${results.length}`,
@@ -862,25 +983,21 @@ async function runDirectoryDiagnostics(
 
 	const wasCapped = collectedFiles.length > MAX_FILES;
 	const filesToProcess = collectedFiles.slice(0, MAX_FILES);
-	const results = await mapWithConcurrency(
+	const {
+		fileErrors,
+		lspHealthWarnings,
+		total,
+		truncated,
+		display,
+		clean,
+		unconfirmed,
+		timedOut,
+	} = await collectBatchDiagnostics(
 		filesToProcess,
-		options.concurrency,
-		(file) =>
-			collectFileDiagnosticResult(file, severity, lspService, options.waitMs),
-		options.signal,
-		options.onProgress,
+		severity,
+		lspService,
+		options,
 	);
-	const fileErrors = results.flatMap((result) =>
-		result.error ? [result.error] : [],
-	);
-	const lspHealthWarnings = results.flatMap((result) =>
-		result.unavailable ? [result.unavailable] : [],
-	);
-	const allDiags = results.flatMap((result) => result.diagnostics);
-	const total = allDiags.length;
-	const truncated = total > MAX_DIAGNOSTICS;
-	const display = truncated ? allDiags.slice(0, MAX_DIAGNOSTICS) : allDiags;
-	const { clean, unconfirmed, timedOut } = tallyConfirmation(results);
 
 	let text: string;
 	if (total === 0) {

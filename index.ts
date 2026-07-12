@@ -1099,8 +1099,18 @@ export default function (pi: ExtensionAPI) {
 			// Flush pending per-edit dispatches before reporting so fixes made
 			// earlier this turn are reflected (not the stale pre-fix state) (#190).
 			() => flushDebouncedToolResults(),
+			// #571: reconcile mode=full's fresh, confirmed results into the footer
+			// (widget-state's allDiagnostics) using the SAME write-ordering token
+			// source pipeline.ts's per-edit recordDiagnostics calls draw from, so
+			// a scan-originated write can't clobber a concurrent newer per-edit
+			// write (or vice versa).
+			() => runtime.nextWriteIndex(),
 		),
-		createLspDiagnosticsTool(),
+		createLspDiagnosticsTool(
+			// #571: same reconciliation wiring as lens_diagnostics mode=full, for
+			// the standalone on-demand check.
+			() => runtime.nextWriteIndex(),
+		),
 		createSymbolSearchTool(() => runtime.projectRoot),
 		createModuleReportTool(() => runtime.projectRoot),
 		createReadSymbolTool(

@@ -8,6 +8,7 @@ import {
 	getFileDiagnostics,
 	getFileDiagnosticSummaries,
 	getSessionLanguages,
+	reconcileScanDiagnostics,
 	recordDiagnostics,
 	recordFormatter,
 	recordLsp,
@@ -651,5 +652,111 @@ describe("recordDiagnostics — superseded write guard (same race class as #555)
 		const result = getFileDiagnostics(filePath);
 		expect(result).toHaveLength(1);
 		expect(result?.[0]?.message).toBe("after clear");
+	});
+});
+
+describe("reconcileScanDiagnostics — full-scan/on-demand footer reconciliation (#571)", () => {
+	it("does NOT write a timed-out/inconclusive scan result into the footer (confirmed=false)", () => {
+		const filePath = `${process.cwd()}/unconfirmed.ts`;
+
+		// A prior confirmed-dirty entry the footer already has (e.g. from a
+		// per-edit dispatch).
+		recordDiagnostics(
+			filePath,
+			[{ severity: "error", message: "real prior error", rule: "X" }],
+			1,
+		);
+
+		// A scan that timed out / was inconclusive must not overwrite it with a
+		// misleading "confirmed clean" default-empty result.
+		reconcileScanDiagnostics(filePath, [], false, 2);
+
+		const result = getFileDiagnostics(filePath);
+		expect(result).toHaveLength(1);
+		expect(result?.[0]?.message).toBe("real prior error");
+	});
+
+	it("a confirmed scan result DOES correct a stale footer entry for a file never re-edited", () => {
+		const filePath = `${process.cwd()}/stale.ts`;
+
+		// Stale footer entry, e.g. left over from before a dependency fix.
+		recordDiagnostics(
+			filePath,
+			[{ severity: "error", message: "stale error, already fixed", rule: "X" }],
+			1,
+		);
+
+		// A full-scan/on-demand check confirms the file is actually clean now.
+		reconcileScanDiagnostics(filePath, [], true, 2);
+
+		const result = getFileDiagnostics(filePath);
+		expect(result).toEqual([]);
+	});
+
+	it("a confirmed scan write does NOT clobber a newer, concurrent per-edit write (write-ordering guard respected)", () => {
+		const filePath = `${process.cwd()}/race-with-edit.ts`;
+
+		// A scan starts, but a concurrent per-edit pipeline for the SAME file
+		// finishes first with a higher (newer) writeIndex.
+		recordDiagnostics(
+			filePath,
+			[{ severity: "warning", message: "newer per-edit result", rule: "Y" }],
+			5,
+		);
+
+		// The scan's own confirmed result was drawn from an OLDER writeIndex
+		// (it started before the edit) and lands after — must be dropped, not
+		// clobber the fresher per-edit write.
+		reconcileScanDiagnostics(
+			filePath,
+			[{ severity: "error", message: "stale scan result", rule: "X" }],
+			true,
+			3,
+		);
+
+		const result = getFileDiagnostics(filePath);
+		expect(result).toHaveLength(1);
+		expect(result?.[0]?.message).toBe("newer per-edit result");
+	});
+
+	it("a confirmed scan write DOES win when its writeIndex is newer than the last-recorded one", () => {
+		const filePath = `${process.cwd()}/scan-wins.ts`;
+
+		recordDiagnostics(
+			filePath,
+			[{ severity: "warning", message: "older per-edit result", rule: "Y" }],
+			1,
+		);
+
+		reconcileScanDiagnostics(
+			filePath,
+			[{ severity: "error", message: "fresher scan result", rule: "X" }],
+			true,
+			2,
+		);
+
+		const result = getFileDiagnostics(filePath);
+		expect(result).toHaveLength(1);
+		expect(result?.[0]?.message).toBe("fresher scan result");
+	});
+
+	it("an omitted writeIndex always proceeds when confirmed (no ordering token available)", () => {
+		const filePath = `${process.cwd()}/no-token-scan.ts`;
+
+		recordDiagnostics(
+			filePath,
+			[{ severity: "warning", message: "before", rule: "Y" }],
+			5,
+		);
+
+		reconcileScanDiagnostics(
+			filePath,
+			[{ severity: "error", message: "untokened confirmed scan", rule: "X" }],
+			true,
+		);
+
+		const result = getFileDiagnostics(filePath);
+		expect(result).toHaveLength(1);
+		expect(result?.[0]?.message).toBe("untokened confirmed scan");
 	});
 });
