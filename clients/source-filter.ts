@@ -19,14 +19,14 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getProjectIgnoreMatcher, isExcludedDirName } from "./file-utils.js";
+import { getProjectIgnoreMatcher } from "./file-utils.js";
 import {
 	isDeclarationFile,
-	isGeneratedArtifactDirectoryName,
 	isGeneratedOrArtifact,
 } from "./generated-artifacts.js";
 import { normalizeEphemeralMapKey } from "./path-utils.js";
 import { isSlowFs, SLOW_FS_REDUCED_MAX_FILES } from "./slow-fs.js";
+import { readDirEntriesSafe, shouldRecurseIntoDir } from "./source-walker.js";
 
 /**
  * Per-walk memo of sibling-existence probe results (refs #191, item 1).
@@ -308,15 +308,13 @@ function classifyEntry(
 ): { recurseInto?: string; keepFile?: string } {
 	const { ignoreMatcher, extraExcludePatterns, extensions, options } = cfg;
 	if (entry.isDirectory()) {
-		if (isExcludedDirName(entry.name, extraExcludePatterns)) return {};
-		if (ignoreMatcher.isIgnored(fullPath, true)) return {};
-		if (
-			options?.includeGenerated !== true &&
-			isGeneratedArtifactDirectoryName(entry.name)
-		) {
-			return {};
-		}
-		if (!options?.followSymlinks && entry.isSymbolicLink()) return {};
+		const canRecurse = shouldRecurseIntoDir(entry, fullPath, {
+			ignoreMatcher,
+			extraExcludeDirs: extraExcludePatterns,
+			skipGeneratedArtifactDirs: options?.includeGenerated !== true,
+			followSymlinks: options?.followSymlinks === true,
+		});
+		if (!canRecurse) return {};
 		return { recurseInto: fullPath };
 	}
 	if (entry.isFile()) {
@@ -346,12 +344,7 @@ export function collectSourceFiles(
 
 	function scan(currentDir: string) {
 		if (files.length >= cfg.maxFiles) return; // hard cap (#250)
-		let entries: fs.Dirent[] = [];
-		try {
-			entries = fs.readdirSync(currentDir, { withFileTypes: true });
-		} catch {
-			return; // Permission denied or directory doesn't exist
-		}
+		const entries = readDirEntriesSafe(currentDir);
 
 		for (const entry of entries) {
 			if (files.length >= cfg.maxFiles) return;
@@ -408,12 +401,7 @@ export async function collectSourceFilesAsync(
 		const currentDir = stack.pop();
 		if (currentDir === undefined) continue;
 
-		let entries: fs.Dirent[] = [];
-		try {
-			entries = fs.readdirSync(currentDir, { withFileTypes: true });
-		} catch {
-			continue; // Permission denied or directory doesn't exist
-		}
+		const entries = readDirEntriesSafe(currentDir);
 
 		// Push subdirectories in reverse so the deepest-first pop order matches
 		// the sync collector's left-to-right recursion within a directory.

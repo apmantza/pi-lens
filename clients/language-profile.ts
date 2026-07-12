@@ -1,15 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { detectFileKind, type FileKind } from "./file-kinds.js";
-import {
-	getProjectIgnoreMatcher,
-	isExcludedDirName,
-} from "./file-utils.js";
+import { getProjectIgnoreMatcher } from "./file-utils.js";
 import {
 	LANGUAGE_POLICY,
 	type ProjectLanguageProfile,
 } from "./language-policy.js";
 import { getSourceFiles } from "./scan-utils.js";
+import { readDirEntriesSafe, shouldRecurseIntoDir } from "./source-walker.js";
 
 export const SUPPORTED_FILE_KINDS: readonly FileKind[] = [
 	"jsts",
@@ -346,18 +344,16 @@ export async function collectSourceFilesForWarmup(
 		const current = stack.pop();
 		if (!current) continue;
 
-		let entries: fs.Dirent[] = [];
-		try {
-			entries = fs.readdirSync(current, { withFileTypes: true });
-		} catch {
-			continue;
-		}
+		const entries = readDirEntriesSafe(current);
 
 		for (const entry of entries) {
 			const fullPath = path.join(current, entry.name);
 			if (entry.isDirectory()) {
-				if (isExcludedDirName(entry.name)) continue;
-				if (ignoreMatcher.isIgnored(fullPath, true)) continue;
+				// Never checked symlinks — always follows them (unlike
+				// source-filter.ts's collectSourceFiles*, refs #191).
+				if (!shouldRecurseIntoDir(entry, fullPath, { ignoreMatcher, followSymlinks: true })) {
+					continue;
+				}
 				stack.push(fullPath);
 			} else if (entry.isFile()) {
 				if (ignoreMatcher.isIgnored(fullPath, false)) continue;
