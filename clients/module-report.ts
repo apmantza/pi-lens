@@ -35,6 +35,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { detectFileKind } from "./file-kinds.js";
 import { logLatency } from "./latency-logger.js";
+import { annotateMiddleMan } from "./middle-man-analysis.js";
 import { normalizeMapKey } from "./path-utils.js";
 import { resolveImportToFiles } from "./review-graph/import-resolvers.js";
 import type { ReviewGraph, ReviewGraphEdgeKind } from "./review-graph/types.js";
@@ -100,10 +101,17 @@ export interface ModuleSymbolEntry {
 	/** McCabe complexity (jsts graph path only). */
 	complexity?: number;
 	/** Non-derivable risk/lifecycle signals (e.g. "async", "high fanout", "high
-	 * complexity", "boundary wrapper"). "exported" is NOT repeated here — it
-	 * already rides the `exported` boolean field above (#512). Empty flags omit
-	 * the key entirely from the wire. */
+	 * complexity", "boundary wrapper", "middle man"). "exported" is NOT repeated
+	 * here — it already rides the `exported` boolean field above (#512). Empty
+	 * flags omit the key entirely from the wire. */
 	flags?: string[];
+	/** Share of a class's real methods (excludes accessors/constructors) whose
+	 * ENTIRE body is a single pure-forwarding call to ONE held field (#325).
+	 * Only set on class-kind entries that clear the "middle man" flag threshold
+	 * — see `middle-man-analysis.ts`. Not a general-purpose metric surfaced for
+	 * every class; absent means either not a class, too few methods to judge,
+	 * or below threshold. */
+	delegationRatio?: number;
 	usedBy?: ModuleSymbolUsedBy[];
 	/** Members nested under their container by line-range containment (#301) —
 	 * a class/interface's methods/fields, an outer class's inner classes. Each
@@ -1645,6 +1653,11 @@ export async function moduleReport(
 		toEntry(sym, normalizedPath, graph, maxRefs, cwd),
 	);
 	const topLevel = nestEntries(entries);
+
+	// Middle-man / delegate-only class detection (#325): a whole-class judgment
+	// over the now-nested members[], so it must run AFTER nestEntries. Mutates
+	// `entries` in place (topLevel/api/internal hold the same object references).
+	annotateMiddleMan(entries, content, languageId);
 
 	const api = topLevel.filter((entry) => entry.exported);
 	const internal = topLevel.filter((entry) => !entry.exported);
