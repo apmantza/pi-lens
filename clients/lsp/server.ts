@@ -2005,14 +2005,30 @@ export const DartServer = createInteractiveServer({
 	args: ["language-server", "--protocol=lsp"],
 });
 
-export const LuaServer = createInteractiveServer({
+export const LuaServer: LSPServerInfo = {
 	id: "lua",
 	name: "Lua Language Server",
 	extensions: KIND_EXTENSIONS["lua"],
 	root: createRootDetector([".luarc.json", ".luacheckrc"]),
-	language: "lua",
-	command: "lua-language-server",
-});
+	spawn(root, options) {
+		// lua-language-server ships the same self-contained native TREE BUNDLE
+		// shape as clangd (#241/#564): bin/lua-language-server + bundled
+		// locale/meta files, no external runtime. Prefer a system install on
+		// PATH; else auto-install the managed bundle and launch
+		// bin/lua-language-server within it. Graceful skip when neither is
+		// available (→ coverage notice).
+		return resolveAndLaunchTreeBinary(
+			{
+				candidates: ["lua-language-server"],
+				bundleToolId: "lua-language-server",
+				binRelPath: "bin/lua-language-server",
+				cwd: root,
+				args: [],
+			},
+			options?.allowInstall,
+		);
+	},
+};
 
 export const CppServer: LSPServerInfo = {
 	id: "cpp",
