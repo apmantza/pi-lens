@@ -23,6 +23,7 @@ jobs:
     permissions:
       contents: write # commit-back branch for the LSP-docs refresh PR (#390)
       pull-requests: write # open/update the auto-refresh PR (#390)
+      issues: write # file/update/close the silentOnClean drift tracking issue (#529/#594)
     # The installer hits the GitHub REST API to resolve release assets.
     # Unauthenticated = 60 req/hr per IP, exhausted on shared-IP runners.
     # The auto-provided token raises this to 5000 req/hr; the installer sends it
@@ -111,6 +112,21 @@ jobs:
       - name: LSP clean-signal probe (Tier 2 vs 3 among push servers) + silentOnClean drift check
         continue-on-error: true
         run: node scripts/probe-clean-signal.mjs --install
+
+      # #594: make a genuine #529 drift finding ACTIONABLE instead of it only
+      # living in the step above's stdout + the docs-diff footnote, where
+      # nobody has a reason to look. Reads the JSON summary the probe step just
+      # wrote and files/updates a SINGLE persistent tracking issue (fixed
+      # `nightly-drift` label + title, never a new issue per night) when there
+      # IS a finding, or closes a prior open one when the drift has resolved.
+      # Reuses the job's existing GITHUB_TOKEN (same one the docs-refresh PR
+      # step below already uses) via `gh` — no new auth plumbing. Best-effort:
+      # never fails the job either way (continue-on-error, plus the script's
+      # own internal try/catch — same "always exit 0, telemetry only" contract
+      # as the probe itself).
+      - name: Notify on silentOnClean drift (file/update/close tracking issue)
+        continue-on-error: true
+        run: node scripts/notify-clean-signal-drift.mjs
 
       # Server capability inventory (#390 item 1): regenerate
       # docs/servercapabilities.md (mode + ws-pull + nav/edit ops + raw caps) —

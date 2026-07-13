@@ -31,6 +31,20 @@
 // Kept as a side-effect-free function so it can be unit-tested without spawning
 // a server (see tests/scripts/clean-signal.test.ts). #240/#460.
 
+import * as os from "node:os";
+import * as path from "node:path";
+
+// #594: the fixed path probe-clean-signal.mjs (writer) and
+// notify-clean-signal-drift.mjs (reader) agree on for the machine-readable
+// driftWarnings summary — same-job runner tmpdir, never committed to the repo,
+// never expected to survive across job boundaries (each nightly run is a fresh
+// runner). Living here (not a literal in each script) keeps the two scripts
+// from silently drifting onto different paths.
+export const DRIFT_SUMMARY_PATH = path.join(
+  os.tmpdir(),
+  "pilens-clean-signal-drift-summary.json",
+);
+
 /**
  * @typedef {Object} CleanSignalObservations
  * @property {number} [dirtyPublishes]           publishes during the dirty touch
