@@ -1,6 +1,10 @@
 import type { FactRule } from "../fact-provider-types.js";
 import type { Diagnostic } from "../types.js";
 import type { FunctionSummary } from "../facts/function-facts.js";
+import {
+	isTestFrameworkNoiseCall,
+	isTestSuiteOrganizer,
+} from "./framework-call-noise.js";
 
 // Default matches the historical hardcoded value so behavior is unchanged for
 // projects without a config. Project-specific overrides are read from the
@@ -40,7 +44,16 @@ export const highFanOutRule: FactRule = {
 		const activeFanOutThreshold = configuredFanOutThreshold ?? fanOutThreshold;
 
 		for (const f of fns) {
-			// Filter out noise: utility calls, logging, type assertions
+			// A describe()/it()/test() wrapper's own call list aggregates every call
+			// from ALL of its nested test bodies (#577) — not real fan-out. Genuinely
+			// complex test HELPER functions don't call it/describe/test themselves, so
+			// they're unaffected.
+			if (isTestSuiteOrganizer(f.outgoingCalls)) continue;
+
+			// Filter out noise: utility calls, logging, type assertions, and
+			// test-framework calls (expect/it/describe/vi.*/jest.*, #577) — assertion-
+			// and mock-heavy test bodies naturally call many of these; that's test
+			// structure, not a coordination smell.
 			const meaningful = f.outgoingCalls.filter((c) => {
 				const lower = c.toLowerCase();
 				return (
@@ -56,7 +69,8 @@ export const highFanOutRule: FactRule = {
 					c !== "resolve" &&
 					c !== "reject" &&
 					c !== "next" &&
-					c !== "done"
+					c !== "done" &&
+					!isTestFrameworkNoiseCall(c)
 				);
 			});
 
@@ -64,7 +78,7 @@ export const highFanOutRule: FactRule = {
 
 			diagnostics.push({
 				id: `high-fan-out:${ctx.filePath}:${f.line}`,
-				tool: "high-fan-out",
+				tool: "fact-rules",
 				rule: "high-fan-out",
 				filePath: ctx.filePath,
 				line: f.line,

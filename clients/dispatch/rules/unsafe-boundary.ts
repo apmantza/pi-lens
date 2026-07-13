@@ -87,7 +87,7 @@ export const unsafeBoundaryRule: FactRule = {
 
 			diagnostics.push({
 				id: `unsafe-boundary:${ctx.filePath}:${f.line}`,
-				tool: "unsafe-boundary",
+				tool: "fact-rules",
 				rule: "unsafe-boundary",
 				filePath: ctx.filePath,
 				line: f.line,

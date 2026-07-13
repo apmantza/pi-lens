@@ -297,6 +297,53 @@ export function recordDiagnostics(
 }
 
 /**
+ * Reconcile a diagnostics result obtained OUTSIDE the per-edit dispatch
+ * pipeline — a `lens_diagnostics` mode=full workspace scan, or a standalone
+ * `lsp_diagnostics` on-demand check — into the footer cache (#571).
+ *
+ * `recordDiagnostics` is otherwise only reachable from `pipeline.ts`'s
+ * per-edit dispatch, so a file that becomes stale/fresh purely because of a
+ * change to some OTHER file it depends on (and is never itself re-edited
+ * through pi-lens) has no path to correct the footer — a full scan proves
+ * the fresher truth but had nowhere to put it. This is that path, shared by
+ * both call sites so there's exactly one place that decides whether a scan
+ * result is trustworthy enough to write.
+ *
+ * `confirmed` MUST be false for any result the caller can't vouch for — a
+ * timed-out/inconclusive LSP check (see #570) must never present as
+ * "confirmed clean" in the footer, and must not clobber a real prior
+ * confirmed-dirty entry either. Non-confirmed results are silently skipped,
+ * leaving whatever the footer already had (stale-but-real beats
+ * fresh-but-fabricated).
+ *
+ * `writeIndex` should be a freshly-drawn token from the same monotonic
+ * source the per-edit pipeline uses (`RuntimeCoordinator.nextWriteIndex()`)
+ * so `recordDiagnostics`'s existing `WriteOrderingGuard` (#555) can tell a
+ * scan-originated write apart from a concurrent, genuinely newer per-edit
+ * write for the same file — an omitted `writeIndex` always proceeds (same
+ * version-less fallback `recordDiagnostics` already documents), which is
+ * only safe for callers with no ordering token to give (e.g. tests).
+ */
+export function reconcileScanDiagnostics(
+	filePath: string,
+	diagnostics: Array<{
+		tool?: string;
+		rule?: string;
+		id?: string;
+		message?: string;
+		line?: number;
+		column?: number;
+		severity?: string;
+		semantic?: string;
+	}>,
+	confirmed: boolean,
+	writeIndex?: number,
+): void {
+	if (!confirmed) return;
+	recordDiagnostics(filePath, diagnostics, writeIndex);
+}
+
+/**
  * Drop widget entries whose file changed on disk after pi-lens last recorded
  * them (`mtimeMs > touchedAt` → the recorded diagnostics predate the current
  * content → stale) or that no longer exist. Keeps `lens_diagnostics` from

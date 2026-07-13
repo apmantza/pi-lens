@@ -43,7 +43,7 @@ export const commentedCredentialsRule: FactRule = {
 				if (p.test(line)) {
 					diagnostics.push({
 						id: `no-commented-credentials:${ctx.filePath}:${i + 1}`,
-						tool: "no-commented-credentials",
+						tool: "fact-rules",
 						rule: "no-commented-credentials",
 						filePath: ctx.filePath,
 						line: i + 1,

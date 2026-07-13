@@ -45,7 +45,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { checkCleanSignalDrift, classifyCleanBehavior } from "./lib/clean-signal.mjs";
+import {
+	checkCleanSignalDrift,
+	classifyCleanBehavior,
+	DRIFT_SUMMARY_PATH,
+} from "./lib/clean-signal.mjs";
 import { mergeRows, mergeSrc, parseTable, replaceTable } from "./lib/md-matrix.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -337,6 +341,30 @@ if (driftWarnings.length) {
 	for (const d of driftWarnings) console.log(`    [${d.kind}] ${d.detail}`);
 } else {
 	console.log("\n  Drift vs server-strategies.ts silentOnClean marker: none.");
+}
+
+// #594: also write driftWarnings as a small machine-readable JSON summary so
+// the nightly workflow's follow-on step (notify-clean-signal-drift.mjs) can
+// turn a genuine finding into a single persistent tracking issue, instead of
+// it only living in this step's stdout + the docs-diff footnote below. Best
+// -effort, same spirit as the rest of this script: a write failure (e.g. a
+// read-only tmpdir) is logged and never escalated — the probe's own "always
+// exit 0, telemetry only" contract is unaffected either way.
+try {
+	fs.writeFileSync(
+		DRIFT_SUMMARY_PATH,
+		JSON.stringify(
+			{
+				generatedAt: new Date().toISOString(),
+				count: driftWarnings.length,
+				warnings: driftWarnings,
+			},
+			null,
+			2,
+		),
+	);
+} catch (e) {
+	console.error(`drift summary write skipped: ${e?.message ?? e}`);
 }
 console.log(`\n  Tier 2  (publishes-versioned — affirmative + currency-proven):        ${t2v}`);
 console.log(`  Tier 2* (publishes-unversioned — early-returns, currency correlated): ${t2u}`);

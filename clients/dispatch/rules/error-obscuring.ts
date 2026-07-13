@@ -25,7 +25,8 @@ export const errorObscuringRule: FactRule = {
       ) {
         diagnostics.push({
           id: `error-obscuring:${ctx.filePath}:${s.line}:${s.column}`,
-          tool: "error-obscuring",
+          tool: "fact-rules",
+          rule: "error-obscuring",
           filePath: ctx.filePath,
           line: s.line,
           column: s.column,

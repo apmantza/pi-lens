@@ -28,7 +28,7 @@ export const highImportCouplingRule: FactRule = {
 		return [
 			{
 				id: `high-import-coupling:${ctx.filePath}:1:1`,
-				tool: "high-import-coupling",
+				tool: "fact-rules",
 				rule: "high-import-coupling",
 				filePath: ctx.filePath,
 				line: 1,

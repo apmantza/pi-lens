@@ -30,7 +30,7 @@ export const placeholderCommentsRule: FactRule = {
 
       diagnostics.push({
         id: `placeholder-comments:${ctx.filePath}:${comment.line}:1`,
-        tool: "placeholder-comments",
+        tool: "fact-rules",
         filePath: ctx.filePath,
         line: comment.line,
         column: 1,

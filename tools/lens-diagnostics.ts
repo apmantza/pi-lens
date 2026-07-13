@@ -27,10 +27,9 @@ import {
 	PROJECT_DIAGNOSTICS_CACHE_VERSION,
 	reconcileProjectDiagnosticsSnapshot,
 } from "../clients/project-diagnostics/cache.js";
-import {
-	extractCachedProjectDiagnostics,
-	warmTriggerFor,
-} from "../clients/project-diagnostics/extractors.js";
+import { warmTriggerFor } from "../clients/project-diagnostics/extractors.js";
+import { fetchFreshProjectDiagnostics } from "../clients/project-diagnostics/fresh-fetch.js";
+import { loadBootstrapClients } from "../clients/bootstrap.js";
 import { scanProjectDiagnostics } from "../clients/project-diagnostics/scanner.js";
 import type {
 	ProjectDiagnostic,
@@ -42,9 +41,11 @@ import type { CodeQualityWarningsReport } from "../clients/code-quality-warnings
 import {
 	getFileDiagnosticSummaries,
 	type FileDiagnosticSummary,
+	reconcileScanDiagnostics,
 	reconcileStaleWidgetFiles,
 	type WidgetDiagnostic,
 } from "../clients/widget-state.js";
+import { convertLspDiagnostics } from "../clients/dispatch/utils/lsp-diagnostics.js";
 import { makeProgressReporter, scanningSummaryLine } from "./scan-progress.js";
 
 // The widget state exposes the full per-file diagnostic set; this is the tool's
@@ -76,6 +77,11 @@ type WorkspaceLspDiagnosticResult = {
 	filePath: string;
 	diagnostics: LSPDiagnostic[];
 	count?: number;
+	error?: string;
+	// See LSPWorkspaceDiagnosticResult in clients/lsp/index.ts — true when this
+	// file's per-file check didn't complete within budget (or threw), so
+	// `diagnostics` is a default-empty placeholder, not a confirmed result.
+	timedOut?: boolean;
 };
 
 // Wall-clock ceiling for the whole mode=full scan. Even with per-file budgets
@@ -98,6 +104,18 @@ export function createLensDiagnosticsTool(
 	// window. Injected (index wires `flushDebouncedToolResults`); optional so the
 	// tool stays decoupled and testable.
 	flushPending: () => Promise<void> = async () => {},
+	// #571: mode=full's own fresh LSP results are reconciled into the footer
+	// (widget-state's `allDiagnostics`) for files this scan got a CONFIRMED
+	// (non-timed-out) result for — otherwise an unedited file whose diagnostics
+	// only changed because of a change to a file it depends on stays stale in
+	// the footer forever. Each reconciled write draws a fresh token from the
+	// SAME monotonic source `pipeline.ts`'s per-edit writes use
+	// (`RuntimeCoordinator.nextWriteIndex()`, injected by index.ts) so the
+	// existing `WriteOrderingGuard` (#555/#560) can tell this scan-originated
+	// write apart from a concurrent, genuinely newer per-edit write for the
+	// same file. Optional/undefined in tests — an omitted writeIndex always
+	// proceeds (see `reconcileScanDiagnostics`'s doc comment).
+	nextWriteIndex?: () => number,
 ) {
 	return {
 		name: "lens_diagnostics" as const,
@@ -121,9 +139,11 @@ export function createLensDiagnosticsTool(
 			"all supported files (including unedited files), then merges/deduplicates " +
 			"that with mode=all cached runner state. Optional refreshRunners=cheap/all/cached " +
 			"folds in project-wide runner findings: the in-process scanners (tree-sitter + " +
-			"fact-rules + ast-grep) plus the CACHED heavyweight analyzers jscpd (copy-paste) " +
-			"and madge (circular deps) — read from the session-start/turn-end caches, never " +
-			"re-launched here.",
+			"fact-rules + ast-grep) plus a FRESH run of the heavyweight analyzers — knip, " +
+			"jscpd (copy-paste), madge (circular deps), gitleaks (secrets), govulncheck/trivy " +
+			"(CVEs), dead-code — rather than a possibly-stale session_start cache; each " +
+			"analyzer de-dupes against a concurrent background run of itself, so this can't " +
+			"double-spawn. Bounded by the slowest analyzer (trivy's own ~180s ceiling).",
 		promptSnippet:
 			"Use lens_diagnostics mode=all to verify no blocking errors remain; use mode=full for expensive project-wide checks",
 		renderResult: compactRenderResult<{
@@ -193,7 +213,7 @@ export function createLensDiagnosticsTool(
 					],
 					{
 						description:
-							"mode=full only: false/none = LSP + widget state only. cached = include cached project-runner snapshot + cached jscpd/madge findings. cheap = refresh the in-process runners (tree-sitter + fact-rules + ast-grep) first, plus cached jscpd/madge. all = same as cheap (jscpd/madge are always read from cache, never re-launched here).",
+							"mode=full only: false/none = LSP + widget state only. cached/cheap/all all now trigger a FRESH run (#585) of the heavyweight project analyzers (knip, jscpd, madge, gitleaks, govulncheck, trivy, dead-code) in parallel — bounded by the slowest one (trivy's own ~180s ceiling) — instead of reading a possibly-stale session_start cache; safe to relaunch since each analyzer de-dupes concurrent runs against the same project root. cheap/all additionally refresh the in-process runners (tree-sitter + fact-rules + ast-grep) first.",
 					},
 				),
 			),
@@ -314,6 +334,7 @@ export function createLensDiagnosticsTool(
 					wallClockMs: FULL_SCAN_WALL_CLOCK_MS,
 					onProgress,
 					pathsScope,
+					nextWriteIndex,
 				});
 			}
 			return formatDeltaMode(cacheManager, cwd, severity, pathsScope);
@@ -916,6 +937,7 @@ async function formatFullMode(
 		wallClockMs?: number;
 		onProgress?: (completed: number, total: number) => void;
 		pathsScope?: PathsScope;
+		nextWriteIndex?: () => number;
 	} = {},
 ): Promise<{ content: [{ type: "text"; text: string }]; details: object }> {
 	const runWorkspaceDiagnostics = lspService.runWorkspaceDiagnostics;
@@ -930,7 +952,7 @@ async function formatFullMode(
 			details: { mode: "full", filesChecked: 0, lspUnavailable: true },
 		};
 	}
-	const { signal, pathsScope } = options;
+	const { signal, pathsScope, nextWriteIndex } = options;
 	const ignoreFile = createCurrentIgnoreFilter(cwd);
 	const includeFile = (filePath: string) =>
 		ignoreFile(filePath) && (!pathsScope || pathsScope.includeFile(filePath));
@@ -964,17 +986,57 @@ async function formatFullMode(
 	const lspResults = rawLspResults.filter((result) =>
 		includeFile(result.filePath),
 	);
+	// #571: reconcile this scan's fresh, CONFIRMED per-file results into the
+	// footer cache. `timedOut`/`error` means the check never actually completed
+	// or was inconclusive (#570's `touchFile().inconclusive`, or this sweep's
+	// own outer per-file deadline/throw — see LSPWorkspaceDiagnosticResult's
+	// doc comment) — `diagnostics` is a default-empty placeholder in that case,
+	// not a confirmed clean, and must not be written as if it were. A footer
+	// write is never allowed to fail the tool call, so any unexpected throw is
+	// swallowed.
+	for (const result of lspResults) {
+		if (result.timedOut || result.error) continue;
+		try {
+			reconcileScanDiagnostics(
+				result.filePath,
+				convertLspDiagnostics(result.diagnostics, result.filePath, {
+					source: "lens_diagnostics_full",
+				}),
+				true,
+				nextWriteIndex?.(),
+			);
+		} catch {
+			// Never let a footer-reconciliation hiccup fail the scan itself.
+		}
+	}
 	const scannedSnapshot = filterProjectDiagnosticsSnapshot(
 		rawProjectSnapshot,
 		includeFile,
 	);
-	// Fold in the cached heavyweight-analyzer findings (jscpd, madge, gitleaks,
-	// knip …) via the extractor registry — cache-only reads, never a fresh scan,
-	// so mode=full can't relaunch or contend with the background runs. Only when
-	// the caller opted into project-runner state.
+	// Fold in the heavyweight-analyzer findings (jscpd, madge, gitleaks, knip,
+	// govulncheck, trivy, dead-code) — a FRESH run of each (#585), not a
+	// cache-only read: mode=full is the "authoritative full picture" call, so a
+	// session_start-only snapshot that can be hours stale in a long session is
+	// no longer good enough. Safe to trigger now: every one of these analyzers
+	// has its own in-flight de-dupe guard (KnipClient/JscpdClient/
+	// DeadCodeClient's `inFlight` map, SecurityScanClient.dedupeScan for
+	// gitleaks/govulncheck/trivy — see fresh-fetch.ts's header), so a fresh
+	// fetch here racing a concurrent session_start/turn_end pass over the same
+	// tool JOINS that run instead of double-spawning it. Only when the caller
+	// opted into project-runner state (this is the expensive path — up to
+	// trivy's own ~180s timeout ceiling, run in parallel with the rest).
+	// `signal` is the SAME combined Escape/turn-abort + wall-clock-ceiling
+	// signal already threaded into the LSP sweep/cheap-runner scan above — an
+	// abort mid-fetch returns whatever settled so far (fresh-fetch.ts races
+	// rather than cancels in-flight spawns; see its header for why).
 	const extracted = shouldIncludeProjectRunners(options.refreshRunners)
-		? extractCachedProjectDiagnostics(cacheManager, cwd)
-		: { diagnostics: [], runners: [], cold: [] };
+		? await fetchFreshProjectDiagnostics(
+				cacheManager,
+				cwd,
+				await loadBootstrapClients(),
+				options.signal,
+			)
+		: { diagnostics: [], runners: [], cold: [], timings: {} };
 	const projectSnapshot = foldExtraDiagnosticsIntoSnapshot(
 		scannedSnapshot,
 		extracted.diagnostics.filter((d) => includeFile(d.filePath)),
@@ -1018,26 +1080,64 @@ async function formatFullMode(
 					},
 	});
 	const missingNote = pathsScopeMissingNote(pathsScope);
-	// #533: a heavyweight analyzer (knip/jscpd/madge/gitleaks/…) with NO cache
-	// entry yet is COLD, not clean — it has never run this session, so it
-	// contributed zero findings for a reason unrelated to code quality. Silently
-	// folding that into "no issues found" would be exactly the false-empty this
-	// issue is about. Named per #511/#514's actionable-warning shape: say what's
-	// cold and what warms it, only when the caller actually asked for runner
-	// state (extracted.cold is always [] otherwise).
+	// #533/#585: a heavyweight analyzer (knip/jscpd/madge/gitleaks/govulncheck/
+	// trivy/dead-code) that contributed nothing this run is either COLD (not
+	// applicable to this project / tool unavailable — see fresh-fetch.ts's
+	// per-analyzer gates) or genuinely clean; `cold` only ever lists the
+	// former. Silently folding "not applicable" into "no issues found" would be
+	// exactly the false-empty #533 is about. Named per #511/#514's
+	// actionable-warning shape: say what's cold and what would warm it, only
+	// when the caller actually asked for runner state (extracted.cold is
+	// always [] otherwise).
+	// #585: an aborted fresh-fetch (Escape / the mode=full wall-clock ceiling)
+	// reports its still-in-flight analyzers separately from a genuine
+	// not-applicable/unavailable skip — "stopped mid-scan, unknown" is a
+	// different, more honest reason than "not applicable to this project", and
+	// conflating them would suggest re-running mode=full is pointless when it
+	// isn't (a re-run may well complete for that analyzer).
+	const abortedIds = new Set(extracted.abortedIds ?? []);
+	const genuinelyColdIds = extracted.cold.filter((id) => !abortedIds.has(id));
 	const coldNote =
-		extracted.cold.length > 0
-			? `\n\ncold (not yet scanned this session): ${extracted.cold
+		genuinelyColdIds.length > 0
+			? `\n\ncold (not applicable / unavailable this run): ${genuinelyColdIds
 					.map((id) => `${id} — ${warmTriggerFor(id)}`)
 					.join(
 						", ",
 					)}. These analyzers have not contributed to this result — absence of their findings is NOT a clean verdict.`
 			: "";
+	const abortedNote =
+		abortedIds.size > 0
+			? `\n\nstopped mid-scan (still running in the background, not reflected in this result): ${[
+					...abortedIds,
+				].join(
+					", ",
+				)}. Not a clean verdict for these — re-run mode=full to pick up their result once it's cached.`
+			: "";
+	// #585: mode=full now fetches these analyzers fresh rather than reading a
+	// possibly-stale session_start cache — say so honestly, with per-analyzer
+	// elapsed time, since this can legitimately take a while (trivy's own
+	// ~180s ceiling).
+	const timingEntries = Object.entries(extracted.timings ?? {});
+	const freshNote =
+		timingEntries.length > 0
+			? `\n\nfetched fresh this call: ${timingEntries
+					.map(([id, ms]) => `${id} (${Math.round(ms)}ms)`)
+					.join(", ")}.`
+			: "";
 	// coldRunners always lands in details (even when empty) so a caller can
 	// reliably check "were any extractors cold" without a presence check.
+	// analyzerTimingsMs surfaces the #585 fresh-fetch elapsed time per
+	// analyzer that actually ran this call (empty when refreshRunners opted
+	// out of runner state entirely).
 	const resultWithCold = {
 		...result,
-		details: { ...result.details, coldRunners: extracted.cold },
+		details: {
+			...result.details,
+			coldRunners: extracted.cold,
+			analyzerTimingsMs: extracted.timings,
+			analyzersAborted: extracted.aborted ?? false,
+			analyzersAbortedIds: extracted.abortedIds ?? [],
+		},
 	};
 	// Stopped mid-scan: the results above are whatever completed before the abort.
 	// Tell the agent so it doesn't read a partial sweep as "clean" (#341). The
@@ -1057,18 +1157,25 @@ async function formatFullMode(
 			content: [
 				{
 					type: "text" as const,
-					text: result.content[0].text + note + coldNote + missingNote,
+					text:
+						result.content[0].text +
+						note +
+						coldNote +
+						abortedNote +
+						freshNote +
+						missingNote,
 				},
 			],
 			details: { ...resultWithCold.details, timedOut },
 		};
 	}
-	if (missingNote || coldNote) {
+	if (missingNote || coldNote || abortedNote || freshNote) {
 		return {
 			content: [
 				{
 					type: "text" as const,
-					text: result.content[0].text + coldNote + missingNote,
+					text:
+						result.content[0].text + coldNote + abortedNote + freshNote + missingNote,
 				},
 			],
 			details: resultWithCold.details,

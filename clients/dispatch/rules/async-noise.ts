@@ -33,7 +33,7 @@ export const asyncNoiseRule: FactRule = {
       ) {
         diagnostics.push({
           id: `async-noise:${ctx.filePath}:${fn.line}:${fn.column}`,
-          tool: "async-noise",
+          tool: "fact-rules",
           filePath: ctx.filePath,
           line: fn.line,
           column: fn.column,

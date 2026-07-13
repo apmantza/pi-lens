@@ -1,5 +1,9 @@
 // Type declarations for clean-signal.mjs (untyped .mjs imported from .ts tests).
 
+// #594: fixed path shared by probe-clean-signal.mjs (writer) and
+// notify-clean-signal-drift.mjs (reader).
+export const DRIFT_SUMMARY_PATH: string;
+
 export interface CleanSignalObservations {
   dirtyPublishes?: number;
   dirtyVersioned?: number;

@@ -19,7 +19,7 @@ export const asyncUnnecessaryWrapperRule: FactRule = {
 
 			diagnostics.push({
 				id: `async-unnecessary-wrapper:${ctx.filePath}:${f.line}`,
-				tool: "async-unnecessary-wrapper",
+				tool: "fact-rules",
 				rule: "async-unnecessary-wrapper",
 				filePath: ctx.filePath,
 				line: f.line,

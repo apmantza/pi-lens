@@ -20,7 +20,8 @@ export const errorSwallowingRule: FactRule = {
       if (s.isEmpty && !s.isDocumentedLocalFallback && s.boundaryCategory !== "fs") {
         diagnostics.push({
           id: `error-swallowing:${ctx.filePath}:${s.line}:${s.column}`,
-          tool: "error-swallowing",
+          tool: "fact-rules",
+          rule: "error-swallowing",
           filePath: ctx.filePath,
           line: s.line,
           column: s.column,

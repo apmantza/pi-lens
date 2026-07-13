@@ -11,6 +11,7 @@ import { getDiagnosticTracker } from "./diagnostic-tracker.js";
 import { clearAllSessions as clearFileTimeSessions } from "./file-time.js";
 import { getKnipIgnorePatterns } from "./file-utils.js";
 import { GitleaksClient, type GitleaksResult } from "./gitleaks-client.js";
+import { OpengrepClient, type OpengrepResult } from "./opengrep-client.js";
 import { TrivyClient, type TrivyResult } from "./trivy-client.js";
 import type { GoClient } from "./go-client.js";
 import {
@@ -83,6 +84,7 @@ interface SessionStartDeps {
 	govulncheckClient: GovulncheckClient;
 	gitleaksClient: GitleaksClient;
 	trivyClient: TrivyClient;
+	opengrepClient: OpengrepClient;
 	depChecker: DependencyChecker;
 	testRunnerClient: TestRunnerClient;
 	goClient: GoClient;
@@ -468,6 +470,7 @@ function scheduleStartupScans(
 		govulncheckClient,
 		gitleaksClient,
 		trivyClient,
+		opengrepClient,
 		astGrepClient,
 		depChecker,
 	} = deps;
@@ -547,7 +550,7 @@ function scheduleStartupScans(
 		return;
 	}
 
-	// #462: knip/jscpd/madge/dead-code/govulncheck/gitleaks/trivy each spawn an
+	// #462: knip/jscpd/madge/dead-code/govulncheck/gitleaks/trivy/opengrep each spawn an
 	// external CLI that walks the whole project tree on its own — a walk we
 	// don't control or get to route to an async collector. On a measured-slow
 	// filesystem that walk reproduces the exact multi-second freeze this
@@ -575,12 +578,12 @@ function scheduleStartupScans(
 	};
 	if (skipHeavyweightScans) {
 		dbg(
-			`session_start: skipping knip/jscpd/madge/dead-code/govulncheck/gitleaks/trivy (${
+			`session_start: skipping knip/jscpd/madge/dead-code/govulncheck/gitleaks/trivy/opengrep (${
 				isSubagent ? "subagent" : "slow-fs"
 			})`,
 		);
 		deps.notify(
-			`⏭️ Skipped background code-quality scans (knip/jscpd/madge/dead-code/govulncheck/gitleaks/trivy): ${
+			`⏭️ Skipped background code-quality scans (knip/jscpd/madge/dead-code/govulncheck/gitleaks/trivy/opengrep): ${
 				isSubagent ? subagentLightModeNotice() : slowFsDegradationNotice()
 			}`,
 			"info",
@@ -769,6 +772,44 @@ function scheduleStartupScans(
 		});
 		dbg(
 			`session_start gitleaks: ${result.findings.length} findings (${Date.now() - startMs}ms)`,
+		);
+	});
+
+	// opengrep — full-workspace security/quality findings via a single CLI scan
+	// (#584). Structurally always-on (mirrors the LSP auxiliary's own
+	// enablement — see `OpengrepClient.resolveConfig`): the local rule file or
+	// `auto` registry ruleset always runs, `resolveOpengrepConfig` only picks
+	// which. Replaces the per-file LSP sweep as the source of opengrep
+	// findings for `lens_diagnostics mode=full` (`runWorkspaceDiagnostics` now
+	// excludes the opengrep server from its per-file "all"-scope touch —
+	// clients/lsp/index.ts `WORKSPACE_SWEEP_EXCLUDED_SERVER_IDS`); the per-edit
+	// real-time LSP path is untouched.
+	runHeavyweightTask("opengrep", async () => {
+		if (!(await opengrepClient.ensureAvailable())) {
+			if (!runtime.isCurrentSession(sessionGeneration)) return;
+			dbg("session_start opengrep: not available (install failed?)");
+			return;
+		}
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+		const cached = cacheManager.readCache<OpengrepResult>(
+			"opengrep",
+			analysisRoot,
+		);
+		if (cached) {
+			if (!runtime.isCurrentSession(sessionGeneration)) return;
+			dbg(
+				`session_start opengrep: cache hit (${cached.data.findings.length} findings)`,
+			);
+			return;
+		}
+		const startMs = Date.now();
+		const result = await opengrepClient.scan(analysisRoot);
+		if (!runtime.isCurrentSession(sessionGeneration)) return;
+		cacheManager.writeCache("opengrep", result, analysisRoot, {
+			scanDurationMs: Date.now() - startMs,
+		});
+		dbg(
+			`session_start opengrep: ${result.findings.length} findings (${Date.now() - startMs}ms)`,
 		);
 	});
 

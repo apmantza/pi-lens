@@ -335,6 +335,154 @@ describe("LSPService.touchFile collectDiagnostics", () => {
 		expect(auxClient.waitForDiagnostics).toHaveBeenCalledWith(FILE, 1200);
 	});
 
+	it("gives each server its own caller-cap-bounded deadline on the 'all' scope, not a shared flat number (#573)", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+
+		const primaryClient = makeBudgetClientWithId("python");
+		const auxClient = makeBudgetClientWithId("ast-grep");
+		createLSPClient.mockImplementation(async (args: { serverId: string }) =>
+			args.serverId === "ast-grep" ? auxClient : primaryClient,
+		);
+		getServersForFileWithConfig.mockReturnValue([
+			makeServer("python"),
+			{ ...makeServer("ast-grep"), role: "auxiliary" as const },
+		]);
+
+		// Before #573, clientScope "all" fell through to the flat
+		// `callerCap ?? modeFloor` branch: BOTH servers would have been called
+		// with the same 2500 caller cap regardless of their own strategy budget
+		// (python 1500, ast-grep 1800). Now each gets min(callerCap, ownBudget).
+		await service.touchFile(FILE, "print('x')\n", {
+			clientScope: "all",
+			diagnostics: "document",
+			collectDiagnostics: true,
+			maxClientWaitMs: 8000,
+			maxDiagnosticsWaitMs: 2500,
+			source: "lens_diagnostics_full",
+		});
+
+		expect(primaryClient.waitForDiagnostics).toHaveBeenCalledWith(FILE, 1500);
+		expect(auxClient.waitForDiagnostics).toHaveBeenCalledWith(FILE, 1800);
+	});
+
+	it("a fast primary server's own wait call is bounded by its own budget, not held to a slow auxiliary's larger one, on the 'all' scope (#573)", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+
+		// typescript strategy is 1000ms (fast, push-silent); opengrep is
+		// 3500ms (slow auxiliary scanner). No caller cap set.
+		const primaryClient = makeBudgetClientWithId("typescript");
+		const auxClient = makeBudgetClientWithId("opengrep");
+		createLSPClient.mockImplementation(async (args: { serverId: string }) =>
+			args.serverId === "opengrep" ? auxClient : primaryClient,
+		);
+		getServersForFileWithConfig.mockReturnValue([
+			makeServer("typescript"),
+			{ ...makeServer("opengrep"), role: "auxiliary" as const },
+		]);
+
+		await service.touchFile(FILE, "const x = 1;\n", {
+			clientScope: "all",
+			diagnostics: "document",
+			collectDiagnostics: true,
+			source: "lens_diagnostics_full",
+		});
+
+		// Each server's individual waitForDiagnostics call is bounded by its
+		// OWN strategy budget — the fast primary is not parked at 3500ms
+		// waiting for the slow auxiliary's ceiling.
+		expect(primaryClient.waitForDiagnostics).toHaveBeenCalledWith(FILE, 1000);
+		expect(auxClient.waitForDiagnostics).toHaveBeenCalledWith(FILE, 3500);
+	});
+
+	it("the caller cap is a ceiling on the 'all' scope — a tight cap binds every server (#573)", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+
+		const primaryClient = makeBudgetClientWithId("python");
+		const auxClient = makeBudgetClientWithId("ast-grep");
+		createLSPClient.mockImplementation(async (args: { serverId: string }) =>
+			args.serverId === "ast-grep" ? auxClient : primaryClient,
+		);
+		getServersForFileWithConfig.mockReturnValue([
+			makeServer("python"),
+			{ ...makeServer("ast-grep"), role: "auxiliary" as const },
+		]);
+
+		// Cap 1200 is tighter than both strategy budgets (1500, 1800), so both
+		// servers are capped to 1200.
+		await service.touchFile(FILE, "print('x')\n", {
+			clientScope: "all",
+			diagnostics: "document",
+			collectDiagnostics: true,
+			maxClientWaitMs: 8000,
+			maxDiagnosticsWaitMs: 1200,
+			source: "lens_diagnostics_full",
+		});
+
+		expect(primaryClient.waitForDiagnostics).toHaveBeenCalledWith(FILE, 1200);
+		expect(auxClient.waitForDiagnostics).toHaveBeenCalledWith(FILE, 1200);
+	});
+
+	it("PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS env override still wins on the 'all' scope (#573)", async () => {
+		const previous = process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS;
+		process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS = "700";
+		try {
+			const { LSPService } = await import("../../../clients/lsp/index.js");
+			const service = new LSPService();
+
+			const primaryClient = makeBudgetClientWithId("python");
+			const auxClient = makeBudgetClientWithId("ast-grep");
+			createLSPClient.mockImplementation(async (args: { serverId: string }) =>
+				args.serverId === "ast-grep" ? auxClient : primaryClient,
+			);
+			getServersForFileWithConfig.mockReturnValue([
+				makeServer("python"),
+				{ ...makeServer("ast-grep"), role: "auxiliary" as const },
+			]);
+
+			await service.touchFile(FILE, "print('x')\n", {
+				clientScope: "all",
+				diagnostics: "document",
+				collectDiagnostics: true,
+				maxClientWaitMs: 8000,
+				maxDiagnosticsWaitMs: 2500,
+				source: "lens_diagnostics_full",
+			});
+
+			expect(primaryClient.waitForDiagnostics).toHaveBeenCalledWith(FILE, 700);
+			expect(auxClient.waitForDiagnostics).toHaveBeenCalledWith(FILE, 700);
+		} finally {
+			if (previous === undefined) {
+				delete process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS;
+			} else {
+				process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS = previous;
+			}
+		}
+	});
+
+	it("with-auxiliary and single-server primary per-server behavior is unchanged by the 'all' fix (#573 regression guard)", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		const client = makeBudgetClient();
+		createLSPClient.mockResolvedValue(client);
+		getServersForFileWithConfig.mockReturnValue([makeServer("python")]);
+
+		await service.touchFile(FILE, "print('x')\n", {
+			clientScope: "primary",
+			diagnostics: "document",
+			collectDiagnostics: true,
+			maxClientWaitMs: 8000,
+			maxDiagnosticsWaitMs: 2500,
+			source: "dispatch-lsp-runner",
+		});
+
+		// Unchanged from the pre-#573 behavior: primary/single-server still gets
+		// its own strategy budget (1500), capped by the caller ceiling (2500).
+		expect(client.waitForDiagnostics).toHaveBeenCalledWith(FILE, 1500);
+	});
+
 	it("does not hang when notify.open backpressures — bounded by PI_LENS_LSP_NOTIFY_BUDGET_MS", async () => {
 		const prev = process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS;
 		process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS = "50";

@@ -124,6 +124,33 @@ describe("formatTurnSummaryLine (#484)", () => {
 		);
 	});
 
+	it("collapses multiple fact-rules findings (distinct rule ids, shared tool) into one bucket (#578)", () => {
+		// fact-rules diagnostics all share tool: "fact-rules" per the
+		// Diagnostic contract (tool = producing runner, rule = specific
+		// check) — like ast-grep, they must collapse into ONE bucket
+		// regardless of which individual rule fired, not scatter into
+		// N per-rule-id buckets.
+		const collector = new TurnSummaryCollector();
+		collector.recordDiagnostic("/repo/a.ts", {
+			tool: "fact-rules",
+			ruleId: "high-fan-out",
+		});
+		collector.recordDiagnostic("/repo/a.ts", {
+			tool: "fact-rules",
+			ruleId: "missing-error-propagation",
+		});
+		collector.recordDiagnostic("/repo/b.ts", {
+			tool: "fact-rules",
+			ruleId: "high-complexity",
+		});
+
+		const details = collector.consume(1);
+		expect(details.counts.byTool.diagnostic).toEqual({ "fact-rules": 3 });
+
+		const line = formatTurnSummaryLine(details);
+		expect(line).toBe("pi-lens: 3 diagnostics (fact-rules 3)");
+	});
+
 	it("omits sections with zero counts", () => {
 		const collector = new TurnSummaryCollector();
 		collector.recordFormat("/repo/a.ts", { tool: "prettier" });

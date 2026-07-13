@@ -54,7 +54,7 @@ export const missingErrorPropagationRule: FactRule = {
 
 				diagnostics.push({
 					id: `missing-error-propagation:${ctx.filePath}:${c.line}`,
-					tool: "missing-error-propagation",
+					tool: "fact-rules",
 					rule: "missing-error-propagation",
 					filePath: ctx.filePath,
 					line: c.line,

@@ -1,6 +1,7 @@
 import type { FactRule } from "../fact-provider-types.js";
 import type { Diagnostic } from "../types.js";
 import type { FunctionSummary } from "../facts/function-facts.js";
+import { isTestSuiteOrganizer } from "./framework-call-noise.js";
 
 // Defaults match the historical hardcoded values so behavior is unchanged for
 // projects without a config. Project-specific overrides are read from the
@@ -48,6 +49,16 @@ export const highComplexityRule: FactRule = {
 		const activeCcThreshold = configuredCcThreshold ?? ccThreshold;
 
 		for (const f of fns) {
+			// A describe()/it()/test() wrapper's own complexity/nesting-depth
+			// aggregates branches from ALL of its nested test bodies (#577) — e.g. a
+			// `for` loop inside each of several `it()`s sums into the enclosing
+			// `describe()`'s cyclomatic complexity, even though no single test is
+			// complex. Unlike high-fan-out's call-name filter, there's no per-call
+			// signal to exclude for branch counting, so the equivalent fix here is to
+			// skip the organizer function itself. Genuinely complex test HELPER
+			// functions don't call it/describe/test themselves, so they're unaffected.
+			if (isTestSuiteOrganizer(f.outgoingCalls)) continue;
+
 			const ccBreached = f.cyclomaticComplexity >= activeCcThreshold;
 			const depthBreached = f.maxNestingDepth >= depthThreshold;
 			if (!ccBreached && !depthBreached) continue;
@@ -59,7 +70,7 @@ export const highComplexityRule: FactRule = {
 
 			diagnostics.push({
 				id: `high-complexity:${ctx.filePath}:${f.line}`,
-				tool: "high-complexity",
+				tool: "fact-rules",
 				rule: "high-complexity",
 				filePath: ctx.filePath,
 				line: f.line,

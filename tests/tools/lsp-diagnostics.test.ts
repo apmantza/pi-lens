@@ -20,12 +20,20 @@ vi.mock("../../clients/lsp/cascade-tier.js", () => ({
 	classifyCascadeWaitTier: () => mocked.cascadeTier,
 }));
 
+const reconcileScanDiagnosticsMock = vi.fn();
+
+vi.mock("../../clients/widget-state.js", () => ({
+	reconcileScanDiagnostics: (...args: unknown[]) =>
+		reconcileScanDiagnosticsMock(...args),
+}));
+
 import { createLspDiagnosticsTool } from "../../tools/lsp-diagnostics.js";
 import { resetProjectLensConfigCache } from "../../clients/project-lens-config.js";
 
 describe("lsp_diagnostics tool", () => {
 	beforeEach(() => {
 		mocked.cascadeTier = "waits";
+		reconcileScanDiagnosticsMock.mockReset();
 		mocked.service = {
 			openFile: vi.fn().mockResolvedValue(undefined),
 			getDiagnostics: vi.fn().mockImplementation(async (filePath: string) => {
@@ -519,6 +527,268 @@ describe("lsp_diagnostics tool", () => {
 				expect(result.details?.unconfirmedFiles).toBe(2);
 				expect(result.details?.timedOutFiles).toBe(1);
 				expect(String(result.content[0]?.text)).toContain("timed out");
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
+	});
+
+	// #571: a standalone lsp_diagnostics check that gets a CONFIRMED fresh
+	// result should reconcile it into the footer (widget-state) the same way
+	// lens_diagnostics mode=full does — a manual check proving a stale footer
+	// error is actually gone (the real-world case that surfaced #571) must
+	// correct the footer, not just report the answer back to the caller. A
+	// timed-out check (#570, above) is a distinct "unconfirmed" reason and must
+	// NOT reconcile either — covered by the "does NOT reconcile an unconfirmed"
+	// test below, which shares the same tier3-silent unconfirmed path #570's
+	// touchFile-timeout path also feeds into (`confirmation === "unconfirmed"`).
+	describe("#571 footer reconciliation", () => {
+		it("reconciles a confirmed non-empty result into the footer with a freshly-drawn writeIndex", async () => {
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-reconcile-"),
+			);
+			const bad = path.join(tmpDir, "bad.ts");
+			fs.writeFileSync(bad, "const value: number = 'oops';\n");
+
+			let drawn = 0;
+			const tool = createLspDiagnosticsTool(() => (drawn += 1));
+			try {
+				await tool.execute(
+					"diag-reconcile",
+					{ path: bad, severity: "all" },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				);
+
+				expect(reconcileScanDiagnosticsMock).toHaveBeenCalledTimes(1);
+				const [filePath, diags, confirmed, writeIndex] =
+					reconcileScanDiagnosticsMock.mock.calls[0];
+				expect(filePath).toBe(bad);
+				expect(confirmed).toBe(true);
+				expect(writeIndex).toBe(1);
+				expect(diags).toEqual([
+					expect.objectContaining({
+						message: "Type 'string' is not assignable to type 'number'.",
+					}),
+				]);
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
+
+		it("does NOT reconcile an unconfirmed (tier3-silent, inconclusive) empty result into the footer", async () => {
+			mocked.cascadeTier = "tier3-silent";
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-reconcile-unconf-"),
+			);
+			const clean = path.join(tmpDir, "clean.ts");
+			fs.writeFileSync(clean, "const value = 1;\n");
+
+			const tool = createLspDiagnosticsTool(() => 1);
+			try {
+				await tool.execute(
+					"diag-reconcile-unconfirmed",
+					{ path: clean, severity: "all" },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				);
+
+				expect(reconcileScanDiagnosticsMock).not.toHaveBeenCalled();
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
+
+		it("does NOT reconcile a timed-out (#570 inconclusive) result into the footer", async () => {
+			const touchFile = vi.fn().mockImplementation(async () => {
+				const result: any[] = [];
+				Object.defineProperty(result, "inconclusive", { value: true });
+				return result;
+			});
+			(mocked.service as any).touchFile = touchFile;
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-reconcile-timeout-"),
+			);
+			const clean = path.join(tmpDir, "clean.ts");
+			fs.writeFileSync(clean, "const value = 1;\n");
+
+			const tool = createLspDiagnosticsTool(() => 1);
+			try {
+				await tool.execute(
+					"diag-reconcile-timeout",
+					{ path: clean, severity: "all", waitMs: 500 },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				);
+
+				expect(reconcileScanDiagnosticsMock).not.toHaveBeenCalled();
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
+
+		it("reconciles a confirmed CLEAN (empty, non-tier3-silent) result — corrects a stale footer to empty", async () => {
+			mocked.cascadeTier = "waits";
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-reconcile-clean-"),
+			);
+			const clean = path.join(tmpDir, "clean.ts");
+			fs.writeFileSync(clean, "const value = 1;\n");
+
+			const tool = createLspDiagnosticsTool(() => 1);
+			try {
+				await tool.execute(
+					"diag-reconcile-clean",
+					{ path: clean, severity: "all" },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				);
+
+				expect(reconcileScanDiagnosticsMock).toHaveBeenCalledTimes(1);
+				const [filePath, diags, confirmed] =
+					reconcileScanDiagnosticsMock.mock.calls[0];
+				expect(filePath).toBe(clean);
+				expect(confirmed).toBe(true);
+				expect(diags).toEqual([]);
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
+
+		it("batch mode also reconciles each confirmed file", async () => {
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-reconcile-batch-"),
+			);
+			const good = path.join(tmpDir, "good.ts");
+			const bad = path.join(tmpDir, "bad.ts");
+			fs.writeFileSync(good, "const value = 1;\n");
+			fs.writeFileSync(bad, "const value: number = 'oops';\n");
+
+			const tool = createLspDiagnosticsTool(() => 1);
+			try {
+				await tool.execute(
+					"diag-reconcile-batch",
+					{ paths: [good, bad], severity: "all", concurrency: 2 },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				);
+
+				const reconciledPaths = reconcileScanDiagnosticsMock.mock.calls.map(
+					(call) => call[0],
+				);
+				expect(reconciledPaths.sort()).toEqual([bad, good].sort());
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
+	});
+
+	// #586: a `// nosemgrep` comment must suppress an opengrep finding the same
+	// way it already does in the per-edit dispatch runner — previously this
+	// standalone diagnostics-query path ignored the tool's native inline
+	// suppression entirely.
+	describe("#586 auxiliary inline-suppression (nosemgrep)", () => {
+		const RULE = "generic.secrets.security.detected-github-token";
+
+		function semgrepDiag(line0Based: number) {
+			return {
+				severity: 1,
+				message: "GitHub token detected",
+				range: {
+					start: { line: line0Based, character: 0 },
+					end: { line: line0Based, character: 10 },
+				},
+				source: "Semgrep",
+				code: RULE,
+			};
+		}
+
+		it("single file: a `// nosemgrep` comment on the finding's line drops it from lsp_diagnostics", async () => {
+			(mocked.service as any).getDiagnostics = vi
+				.fn()
+				.mockResolvedValue([semgrepDiag(0)]);
+			const tool = createLspDiagnosticsTool();
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-nosemgrep-"),
+			);
+			const target = path.join(tmpDir, "secret.ts");
+			fs.writeFileSync(target, "const token = 'x';  // nosemgrep\n");
+
+			try {
+				const result = (await tool.execute(
+					"diag-nosemgrep-file",
+					{ path: target, severity: "all" },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				)) as any;
+
+				expect(result.isError).toBeUndefined();
+				expect(result.details?.totalDiagnostics).toBe(0);
+				expect(String(result.content[0]?.text)).toBe("No diagnostics found.");
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
+
+		it("single file: the same finding WITHOUT a nosemgrep comment still surfaces", async () => {
+			(mocked.service as any).getDiagnostics = vi
+				.fn()
+				.mockResolvedValue([semgrepDiag(0)]);
+			const tool = createLspDiagnosticsTool();
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-nosemgrep-control-"),
+			);
+			const target = path.join(tmpDir, "secret.ts");
+			fs.writeFileSync(target, "const token = 'x';\n");
+
+			try {
+				const result = (await tool.execute(
+					"diag-nosemgrep-control",
+					{ path: target, severity: "all" },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				)) as any;
+
+				expect(result.isError).toBeUndefined();
+				expect(result.details?.totalDiagnostics).toBe(1);
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
+
+		it("batch mode: nosemgrep-suppressed file drops its finding while an unsuppressed file keeps its own", async () => {
+			(mocked.service as any).getDiagnostics = vi
+				.fn()
+				.mockImplementation(async () => {
+					return [semgrepDiag(0)];
+				});
+			const tool = createLspDiagnosticsTool();
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-nosemgrep-batch-"),
+			);
+			const suppressed = path.join(tmpDir, "suppressed.ts");
+			const unsuppressed = path.join(tmpDir, "unsuppressed.ts");
+			fs.writeFileSync(suppressed, "const token = 'x';  // nosemgrep\n");
+			fs.writeFileSync(unsuppressed, "const token = 'x';\n");
+
+			try {
+				const result = (await tool.execute(
+					"diag-nosemgrep-batch",
+					{ paths: [suppressed, unsuppressed], severity: "all", concurrency: 2 },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				)) as any;
+
+				expect(result.isError).toBeUndefined();
+				expect(result.details?.totalDiagnostics).toBe(1);
 			} finally {
 				fs.rmSync(tmpDir, { recursive: true, force: true });
 			}

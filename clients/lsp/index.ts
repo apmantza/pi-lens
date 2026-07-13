@@ -19,6 +19,7 @@ import {
 	isExcludedDirName,
 } from "../file-utils.js";
 import { recordLsp } from "../widget-state.js";
+import { applyAuxiliarySuppressions } from "../dispatch/auxiliary-lsp.js";
 import { logLatency } from "../latency-logger.js";
 import { withDeadline } from "../deadline-utils.js";
 import { normalizeMapKey, uriToPath } from "../path-utils.js";
@@ -247,6 +248,16 @@ export interface LSPTouchFileOptions {
 	 * enabled (it owns flag access); the service just spawns + collects them.
 	 */
 	auxiliaryServerIds?: readonly string[];
+	/**
+	 * For clientScope "all": server ids to skip even though they match the
+	 * file's extension. Used by `runWorkspaceDiagnostics` (#584) to keep
+	 * opengrep off the per-file bulk-sweep touch loop — its findings now come
+	 * from a dedicated CLI project-diagnostics extractor (`opengrep-client.ts`)
+	 * that runs once per project instead of once per file, so re-touching it
+	 * here would be redundant AND (per #584/#387) the slow auxiliary that
+	 * dominates the per-file wait during a full workspace sweep.
+	 */
+	excludeServerIds?: ReadonlySet<string>;
 	/** Budget for waiting on the LSP client to spawn / become ready. */
 	maxClientWaitMs?: number;
 	/**
@@ -272,9 +283,39 @@ export interface LSPWorkspaceDiagnosticResult {
 	diagnostics: import("./client.js").LSPDiagnostic[];
 	count: number;
 	error?: string;
+	/**
+	 * True when this file's per-file check was NOT confirmed — either
+	 * `touchFile`'s own `.inconclusive` flag was set (#570: the notify write
+	 * or the diagnostics wait itself timed out), the OUTER `perFileMs`
+	 * `withDeadline` wrapper never got a result back at all, or the check
+	 * threw. `diagnostics` is a default-empty placeholder in every one of
+	 * those cases, not a confirmed result, and must not be treated as
+	 * "confirmed clean" by any caller reconciling this into cached state
+	 * (#571). Absent/false means the per-file check completed within budget
+	 * AND was confirmed; workspace-pull results (`tryWorkspacePull`) are
+	 * always confirmed (a pull either returns a real report or the caller
+	 * falls back to per-file, never a silent empty default).
+	 */
+	timedOut?: boolean;
 }
 
 const WORKSPACE_DIAGNOSTICS_CONCURRENCY = 8;
+
+// #584: opengrep has no `workspace/diagnostic` pull support (push-only,
+// docs/servercapabilities.md) and `reopenOnResync: true` (server-strategies.ts)
+// means every per-file LSP touch already forces a full re-scan anyway — there's
+// no incremental win from routing it through the sweep's per-file loop. On a
+// full workspace sweep it instead dominates the per-file wait (its own
+// wait-tier budget is the slowest of any spawned server) and serializes with
+// everything else in its server group (#387). Its findings for a BULK/
+// full-workspace scan come from `opengrep-client.ts` — a dedicated CLI
+// extractor that scans the whole tree once and is read via
+// `project-diagnostics/extractors.ts`, same architecture as knip/jscpd/
+// gitleaks. The per-edit real-time LSP path (clientScope "primary"/
+// "with-auxiliary") is untouched by this — opengrep still attaches there.
+const WORKSPACE_SWEEP_EXCLUDED_SERVER_IDS: ReadonlySet<string> = new Set([
+	"opengrep",
+]);
 
 // The notify write (didOpen/didChange) is normally instant, but it awaits a
 // JSON-RPC send that BACKPRESSURES when the server's stdin isn't being drained
@@ -636,8 +677,13 @@ export class LSPService {
 	 */
 	async getClientsForFile(
 		filePath: string,
+		excludeServerIds?: ReadonlySet<string>,
 	): Promise<{ clients: SpawnedServer[]; serverCountAttempted: number }> {
-		const servers = getServersForFileWithConfig(filePath);
+		const allServers = getServersForFileWithConfig(filePath);
+		const servers =
+			excludeServerIds && excludeServerIds.size > 0
+				? allServers.filter((s) => !excludeServerIds.has(s.id))
+				: allServers;
 		if (servers.length === 0) return { clients: [], serverCountAttempted: 0 };
 
 		// Count servers with a valid root as "attempted" — extension-only matches
@@ -1024,7 +1070,10 @@ export class LSPService {
 		let spawned: SpawnedServer[];
 		let serverCountAttempted: number;
 		if (useAllClients) {
-			const result = await this.getClientsForFile(filePath);
+			const result = await this.getClientsForFile(
+				filePath,
+				options.excludeServerIds,
+			);
 			spawned = result.clients;
 			serverCountAttempted = result.serverCountAttempted;
 		} else if (clientScope === "with-auxiliary") {
@@ -1147,7 +1196,23 @@ export class LSPService {
 			// (TypeScript ~1s) isn't held to a flat multi-second wait while a slow
 			// one (rust-analyzer 3s) gets the time it needs — bounded by any caller
 			// ceiling that exists to protect the per-edit pipeline budget (#203).
-			// The multi-server "full"/cascade path keeps the flat resolution.
+			// #573: clientScope "all" (lsp_diagnostics, lens_diagnostics_full) now
+			// gets the same per-server treatment as "with-auxiliary" — each spawned
+			// server (primary + any auxiliaries) is bounded by ITS OWN strategy
+			// budget instead of one flat number shared by every server. This was
+			// never a deliberate "all means wait for the group ceiling" semantic:
+			// #203 introduced perServerTimeout only for the single-server primary
+			// path and left "full"/"all" on the pre-existing flat resolution
+			// ("full/cascade path unchanged"); #242 later added "with-auxiliary"
+			// without revisiting "all". The one property "all" genuinely needs —
+			// the touch's overall detection deadline is the SLOWEST spawned
+			// server's budget, not the fastest — is unaffected: `timeoutMs` below
+			// is always `Math.max(...spawned.map(timeoutFor))` regardless of which
+			// timeoutFor is selected, so a slow auxiliary still gets to run to its
+			// own budget before the touch is logged as timed out. What changes is
+			// only that a fast server's *individual* `waitForDiagnostics` call
+			// (further below) now resolves/times out against its own budget
+			// instead of blocking to the flat multi-server number.
 			const envWait = readEnvDiagnosticsWaitMs();
 			const callerCap = options.maxDiagnosticsWaitMs ?? options.maxClientWaitMs;
 			const modeFloor = diagnosticsMode === "full" ? 3000 : 1200;
@@ -1169,10 +1234,14 @@ export class LSPService {
 				timeoutFor = () => envWait;
 			} else if (
 				(!useAllClients && spawned.length === 1) ||
-				clientScope === "with-auxiliary"
+				clientScope === "with-auxiliary" ||
+				clientScope === "all"
 			) {
 				timeoutFor = perServerTimeout;
 			} else {
+				// Fail-safe for any future clientScope this branch hasn't been
+				// taught about yet — keep the old flat resolution rather than
+				// silently mis-budgeting an unrecognized scope.
 				timeoutFor = () => callerCap ?? modeFloor;
 			}
 			// Detection deadline = the slowest individual server's budget.
@@ -2088,14 +2157,39 @@ export class LSPService {
 						collectDiagnostics: true,
 						clientScope: "all",
 						source: "lens_diagnostics_full",
+						// #584: opengrep's findings for a full sweep come from the
+						// `opengrep-client.ts` CLI extractor (one project-wide scan,
+						// cached, read via extractors.ts) instead — see the
+						// `excludeServerIds` doc on `LSPTouchFileOptions`.
+						excludeServerIds: WORKSPACE_SWEEP_EXCLUDED_SERVER_IDS,
 					}),
 					{ ms: perFileMs, onTimeout: "undefined" },
 				);
-				if (diagnostics === undefined) timedOutFiles += 1;
+				// #571: prefer #570's real per-touch inconclusive signal
+				// (`touchFile`'s non-enumerable `.inconclusive` flag — set when the
+				// notify write or the diagnostics wait itself timed out) over this
+				// sweep's own OUTER `perFileMs` deadline, which only catches a touch
+				// that never returned at all within budget. Either one means the
+				// result wasn't confirmed.
+				const inconclusive =
+					(diagnostics as (typeof diagnostics & { inconclusive?: boolean }))
+						?.inconclusive === true;
+				const timedOut = diagnostics === undefined || inconclusive;
+				if (timedOut) timedOutFiles += 1;
+				// #586: honor each auxiliary profile's native inline-suppression
+				// comment (e.g. opengrep's `// nosemgrep`, #441) — computed from the
+				// raw `diagnostics` (before this drops its non-enumerable
+				// `.inconclusive` flag, already read above) so a `lens_diagnostics
+				// mode=full` sweep suppresses the same findings the per-edit dispatch
+				// runner does, instead of only the latter honoring it.
+				const filteredDiagnostics = diagnostics
+					? applyAuxiliarySuppressions(diagnostics, content)
+					: diagnostics;
 				results.push({
 					filePath,
-					diagnostics: diagnostics ?? [],
-					count: diagnostics?.length ?? 0,
+					diagnostics: filteredDiagnostics ?? [],
+					count: filteredDiagnostics?.length ?? 0,
+					timedOut,
 				});
 			} catch (err) {
 				results.push({
@@ -2103,6 +2197,10 @@ export class LSPService {
 					diagnostics: [],
 					count: 0,
 					error: err instanceof Error ? err.message : String(err),
+					// An errored check is exactly as inconclusive as a timed-out one —
+					// no confirmed result was obtained, so reconciliation (#571) must
+					// skip it the same way.
+					timedOut: true,
 				});
 			}
 			completed += 1;
@@ -2215,7 +2313,10 @@ export class LSPService {
 			}
 			return groupFiles.map((filePath) => {
 				const diagnostics = byPath.get(normalizeMapKey(filePath)) ?? [];
-				return { filePath, diagnostics, count: diagnostics.length };
+				// A pull that got here returned a real workspace/diagnostic report
+				// (see the `!report` guard above) — always confirmed, unlike a
+				// per-file touchFile default-empty on timeout.
+				return { filePath, diagnostics, count: diagnostics.length, timedOut: false };
 			});
 		} catch {
 			return undefined;

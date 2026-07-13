@@ -41,7 +41,7 @@ export const corsWildcardRule: FactRule = {
 			if (isWildcard) {
 				diagnostics.push({
 					id: `cors-wildcard:${ctx.filePath}:${i + 1}`,
-					tool: "cors-wildcard",
+					tool: "fact-rules",
 					rule: "cors-wildcard",
 					filePath: ctx.filePath,
 					line: i + 1,

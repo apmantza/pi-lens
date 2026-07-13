@@ -36,7 +36,7 @@ export const passThroughWrappersRule: FactRule = {
 
       diagnostics.push({
         id: `pass-through-wrapper:${ctx.filePath}:${fn.line}:${fn.column}`,
-        tool: "pass-through-wrappers",
+        tool: "fact-rules",
         filePath: ctx.filePath,
         line: fn.line,
         column: fn.column,
