@@ -8,8 +8,9 @@ import { fetchFreshProjectDiagnostics } from "../../../clients/project-diagnosti
 // fetchFreshProjectDiagnostics calls each client through the plain
 // `BootstrapClients` interface, so a hand-rolled stub (not a real client
 // instance) is enough to exercise the orchestration — only the module-level
-// static gates (GitleaksClient.hasGitleaksSignal, GovulncheckClient.hasGoModule,
-// TrivyClient.shouldScan) run for real, against a real tmp-dir fixture.
+// static gates (GitleaksClient.hasGitRepo — #608's mode=full smart-default,
+// GovulncheckClient.hasGoModule, TrivyClient.shouldScan) run for real, against
+// a real tmp-dir fixture.
 
 let tmp: string;
 
@@ -181,24 +182,37 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 		expect(result.runners).toContain("jscpd");
 	});
 
-	it("gates gitleaks/govulncheck/trivy on their own static signals, without cache reads", async () => {
-		// No .gitleaks* marker, no go.mod, no .pi-lens.json trivy.enabled — every
-		// gated analyzer should report cold and never call scan()/analyze().
+	it("gates govulncheck/trivy on their own static signals, without cache reads", async () => {
+		// No go.mod, no .pi-lens.json trivy.enabled — both should report cold
+		// and never call analyze()/scan().
+		const cacheManager = makeCacheManager();
+		const clients = makeClients();
+
+		const result = await fetchFreshProjectDiagnostics(cacheManager, tmp, clients);
+
+		expect(clients.govulncheckClient.analyze).not.toHaveBeenCalled();
+		expect(clients.trivyClient.scan).not.toHaveBeenCalled();
+		expect(result.cold).toEqual(
+			expect.arrayContaining(["govulncheck", "trivy"]),
+		);
+	});
+
+	it("gates gitleaks on hasGitRepo (#608): cold when tmp isn't a git repo at all", async () => {
+		// tmp has no .git and no explicit gitleaks marker either — cold either way.
 		const cacheManager = makeCacheManager();
 		const clients = makeClients();
 
 		const result = await fetchFreshProjectDiagnostics(cacheManager, tmp, clients);
 
 		expect(clients.gitleaksClient.scan).not.toHaveBeenCalled();
-		expect(clients.govulncheckClient.analyze).not.toHaveBeenCalled();
-		expect(clients.trivyClient.scan).not.toHaveBeenCalled();
-		expect(result.cold).toEqual(
-			expect.arrayContaining(["gitleaks", "govulncheck", "trivy"]),
-		);
+		expect(result.cold).toContain("gitleaks");
 	});
 
-	it("runs gitleaks fresh and writes to cache once its opt-in signal is present", async () => {
-		fs.writeFileSync(path.join(tmp, ".gitleaksignore"), "");
+	it("runs gitleaks fresh on a bare git repo with NO explicit gitleaks config (#608 smart-default)", async () => {
+		// The whole point of #608: mode=full uses the looser gate (any tracked
+		// git repo), not #130's strict opt-in-config gate — no .gitleaks* marker
+		// here, only .git, and gitleaks should still run.
+		fs.mkdirSync(path.join(tmp, ".git"));
 		const cacheManager = makeCacheManager();
 		const clients = makeClients();
 		(clients.gitleaksClient.scan as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -210,6 +224,10 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 		const result = await fetchFreshProjectDiagnostics(cacheManager, tmp, clients);
 
 		expect(clients.gitleaksClient.scan).toHaveBeenCalledTimes(1);
+		expect(clients.gitleaksClient.scan).toHaveBeenCalledWith(
+			path.resolve(tmp),
+			{ requireSignal: false },
+		);
 		expect(cacheManager.writeCache).toHaveBeenCalledWith(
 			"gitleaks",
 			expect.objectContaining({ success: true }),
@@ -217,6 +235,25 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 			expect.anything(),
 		);
 		expect(result.runners).toContain("gitleaks");
+	});
+
+	it("still runs gitleaks fresh when both .git and an explicit gitleaks marker are present", async () => {
+		fs.mkdirSync(path.join(tmp, ".git"));
+		fs.writeFileSync(path.join(tmp, ".gitleaksignore"), "");
+		const cacheManager = makeCacheManager();
+		const clients = makeClients();
+		(clients.gitleaksClient.scan as ReturnType<typeof vi.fn>).mockResolvedValue({
+			success: true,
+			findings: [],
+			scannedAt: "now",
+		});
+
+		const result = await fetchFreshProjectDiagnostics(cacheManager, tmp, clients);
+
+		expect(clients.gitleaksClient.scan).toHaveBeenCalledTimes(1);
+		// A clean scan (no findings) doesn't land in `runners` by design (that
+		// list means "contributed a finding"), but `timings` proves it ran.
+		expect(result.timings.gitleaks).toBeDefined();
 	});
 
 	it("runs govulncheck fresh only when go.mod is present", async () => {
