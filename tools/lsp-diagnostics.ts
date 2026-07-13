@@ -13,6 +13,7 @@ import {
 	isExcludedDirName,
 } from "../clients/file-utils.js";
 import { getLSPService } from "../clients/lsp/index.js";
+import { getServersForFileWithConfig } from "../clients/lsp/config.js";
 import { combineAbortSignals } from "../clients/deadline-utils.js";
 import { applyAuxiliarySuppressions } from "../clients/dispatch/auxiliary-lsp.js";
 import type { LSPDiagnostic } from "../clients/lsp/client.js";
@@ -87,6 +88,11 @@ type BatchOptions = {
 	// per-file result reconciled into the footer draws its own fresh
 	// write-ordering token.
 	nextWriteIndex?: () => number;
+	// "primary" skips every cross-cutting auxiliary scanner (ast-grep,
+	// opengrep, zizmor, typos, marksman) and only touches the file's actual
+	// language server — for when the caller just wants "does the type
+	// checker/compiler confirm this clean", not a full security/lint pass.
+	serverScope?: "primary" | "all";
 };
 
 type FileDiag = {
@@ -123,7 +129,30 @@ type FileDiagnosticResult = {
 	 * purposes, but the reason differs and the rendered text should say so.
 	 */
 	timedOut?: boolean;
+	/**
+	 * The file's actual language server (e.g. "typescript"), as opposed to a
+	 * cross-cutting auxiliary scanner (ast-grep, opengrep, ...). Used to split
+	 * `diagnostics` into a primary-confirmation section and an auxiliary-
+	 * findings section so a page of aux noise never buries whether the real
+	 * type checker/compiler confirmed the file clean.
+	 */
+	primaryServerId?: string;
 };
+
+/**
+ * The primary language server for a file (e.g. "typescript"), as opposed to
+ * a cross-cutting auxiliary scanner attached via clientScope "all"/
+ * "with-auxiliary" (ast-grep, opengrep, zizmor, typos, marksman, ...).
+ * `role` is only ever set to "auxiliary" on those auxiliary entries (see
+ * clients/lsp/server.ts) — undefined means a language server. Used to split
+ * a file's diagnostics into "primary confirmation" vs "auxiliary findings"
+ * so a page of ast-grep/opengrep noise never buries whether the actual type
+ * checker confirmed the file clean.
+ */
+function primaryServerId(filePath: string): string | undefined {
+	return getServersForFileWithConfig(filePath).find((s) => s.role !== "auxiliary")
+		?.id;
+}
 
 function lspUnavailableMessage(
 	filePath: string,
@@ -340,6 +369,19 @@ export function createLspDiagnosticsTool(
 						"Optional per-file LSP wait budget for batch diagnostics. Uses server defaults when omitted.",
 				}),
 			),
+			serverScope: Type.Optional(
+				Type.String({
+					enum: ["primary", "all"],
+					description:
+						"'primary' (fast, low-noise): only the file's actual language " +
+						"server (e.g. typescript) — for 'does this have real type " +
+						"errors'. 'all' (default): also touches cross-cutting auxiliary " +
+						"scanners (ast-grep, opengrep, zizmor, typos, marksman) attached " +
+						"to this file, including findings for files not yet dispatched " +
+						"this session. Primary confirmation is always reported " +
+						"separately from auxiliary findings regardless of this setting.",
+				}),
+			),
 		}),
 		async execute(
 			_toolCallId: string,
@@ -360,6 +402,7 @@ export function createLspDiagnosticsTool(
 				severity?: string;
 				concurrency?: number;
 				waitMs?: number;
+				serverScope?: string;
 			};
 			const severity = (typedParams.severity ?? "all") as string;
 			const cwd = ctx.cwd ?? process.cwd();
@@ -373,6 +416,8 @@ export function createLspDiagnosticsTool(
 				typeof typedParams.waitMs === "number" && typedParams.waitMs >= 0
 					? Math.floor(typedParams.waitMs)
 					: undefined;
+			const serverScope: "primary" | "all" =
+				typedParams.serverScope === "primary" ? "primary" : "all";
 
 			const lspService = getLSPService();
 			if (!lspService) {
@@ -404,6 +449,7 @@ export function createLspDiagnosticsTool(
 					signal,
 					onProgress,
 					nextWriteIndex,
+					serverScope,
 				});
 			}
 
@@ -444,6 +490,7 @@ export function createLspDiagnosticsTool(
 					signal,
 					onProgress,
 					nextWriteIndex,
+					serverScope,
 				});
 			}
 			return runFileDiagnostics(
@@ -452,6 +499,7 @@ export function createLspDiagnosticsTool(
 				lspService,
 				waitMs,
 				nextWriteIndex,
+				serverScope,
 			);
 		},
 	};
@@ -474,6 +522,7 @@ async function collectDiagnosticsForFile(
 	absPath: string,
 	lspService: NonNullable<ReturnType<typeof getLSPService>>,
 	waitMs?: number,
+	serverScope: "primary" | "all" = "all",
 ): Promise<DiagnosticsCollectionResult> {
 	let timedOut = false;
 	let content: string | undefined;
@@ -490,14 +539,14 @@ async function collectDiagnosticsForFile(
 					collectDiagnostics: true;
 					maxClientWaitMs?: number;
 					source: string;
-					clientScope: "all";
+					clientScope: "all" | "primary";
 				},
 			) => Promise<
 				(LSPDiagnostic[] & { inconclusive?: boolean }) | undefined
 			>;
 		};
 		if (
-			waitMs !== undefined &&
+			(waitMs !== undefined || serverScope === "primary") &&
 			typeof serviceWithTouch.touchFile === "function"
 		) {
 			const touched = await serviceWithTouch.touchFile(absPath, content, {
@@ -505,7 +554,7 @@ async function collectDiagnosticsForFile(
 				collectDiagnostics: true,
 				maxClientWaitMs: waitMs,
 				source: "lsp_diagnostics",
-				clientScope: "all",
+				clientScope: serverScope,
 			});
 			timedOut = touched?.inconclusive === true;
 		} else {
@@ -794,6 +843,7 @@ async function collectFileDiagnosticResult(
 	lspService: NonNullable<ReturnType<typeof getLSPService>>,
 	waitMs?: number,
 	nextWriteIndex?: () => number,
+	serverScope: "primary" | "all" = "all",
 ): Promise<FileDiagnosticResult> {
 	try {
 		const stat = fs.statSync(file);
@@ -808,6 +858,7 @@ async function collectFileDiagnosticResult(
 		file,
 		lspService,
 		waitMs,
+		serverScope,
 	);
 	const health = lspService.getDiagnosticsHealth?.(file) as
 		| LspHealthLike
@@ -849,6 +900,7 @@ async function collectFileDiagnosticResult(
 		unavailable: lspUnavailableMessage(file, health),
 		confirmation,
 		timedOut: confirmation === "unconfirmed" ? timedOut : undefined,
+		primaryServerId: primaryServerId(file),
 	};
 }
 
@@ -858,11 +910,13 @@ async function runFileDiagnostics(
 	lspService: NonNullable<ReturnType<typeof getLSPService>>,
 	waitMs?: number,
 	nextWriteIndex?: () => number,
+	serverScope: "primary" | "all" = "all",
 ) {
 	const { diagnostics: rawDiags, timedOut } = await collectDiagnosticsForFile(
 		absPath,
 		lspService,
 		waitMs,
+		serverScope,
 	);
 	const lspHealth = lspService.getDiagnosticsHealth?.(absPath) as
 		| LspHealthLike
@@ -906,23 +960,50 @@ async function runFileDiagnostics(
 		nextWriteIndex,
 	);
 
-	let text: string;
-	if (total === 0) {
-		text = timedOut
-			? "Diagnostics check timed out: the LSP server didn't confirm a result " +
-				"within the wait budget. This is NOT the same as 0 diagnostics; the " +
+	const primaryId = primaryServerId(absPath);
+	const primaryDiags = limited.filter((d) => d.source === primaryId);
+	const auxiliaryDiags = limited.filter((d) => d.source !== primaryId);
+
+	// Primary confirmation is always its own line, independent of how many
+	// auxiliary findings exist — a wall of ast-grep/opengrep noise must never
+	// bury whether the actual language server confirmed the file clean.
+	const primaryLine = (() => {
+		if (timedOut) {
+			return (
+				"Primary LSP: check timed out — NOT the same as 0 diagnostics; the " +
 				"file may still have errors that just hadn't been reported yet. " +
 				"Re-check after the server settles, or increase waitMs."
-			: unconfirmed
-				? "Diagnostics unconfirmed: the server for this file cannot confirm a " +
-					"clean result (push-only, silent-on-clean — e.g. classic " +
-					"typescript-language-server never publishes on a clean re-check). " +
-					"This is NOT the same as 0 diagnostics; it may still be analyzing or " +
-					"may never have been asked. Re-check after an edit, or use waitMs to " +
-					"wait longer."
-				: (unavailable ?? "No diagnostics found.");
+			);
+		}
+		if (unconfirmed) {
+			return (
+				`Primary LSP${primaryId ? ` (${primaryId})` : ""}: unconfirmed — ` +
+				"cannot confirm clean (push-only, silent-on-clean, e.g. classic " +
+				"typescript-language-server never publishes on a clean re-check). " +
+				"NOT the same as 0 diagnostics; re-check after an edit, or use " +
+				"waitMs to wait longer."
+			);
+		}
+		if (primaryDiags.length === 0) {
+			return `Primary LSP${primaryId ? ` (${primaryId})` : ""}: confirmed clean.`;
+		}
+		return `Primary LSP${primaryId ? ` (${primaryId})` : ""}: ${primaryDiags.length} diagnostic${primaryDiags.length === 1 ? "" : "s"}.`;
+	})();
+
+	let text: string;
+	if (total === 0) {
+		text = [primaryLine, "", unavailable ?? "No auxiliary findings."].join(
+			"\n",
+		);
 	} else {
-		const lines = limited.map(formatDiag);
+		const lines = [primaryLine, ""];
+		if (primaryDiags.length > 0) {
+			lines.push(...primaryDiags.map(formatDiag), "");
+		}
+		if (auxiliaryDiags.length > 0) {
+			lines.push(`Auxiliary findings (${auxiliaryDiags.length}):`);
+			lines.push(...auxiliaryDiags.map(formatDiag));
+		}
 		if (unavailable) lines.unshift(unavailable, "");
 		if (truncated) {
 			lines.unshift(
@@ -938,6 +1019,10 @@ async function runFileDiagnostics(
 			filePath: absPath,
 			mode: "file",
 			severity,
+			serverScope,
+			primaryServerId: primaryId,
+			primaryDiagnosticsCount: primaryDiags.length,
+			auxiliaryDiagnosticsCount: auxiliaryDiags.length,
 			diagnostics: limited.map((d) => ({
 				line: d.range?.start?.line,
 				character: d.range?.start?.character,
@@ -1038,6 +1123,8 @@ async function collectBatchDiagnostics(
 	total: number;
 	truncated: boolean;
 	display: FileDiag[];
+	primaryDisplay: FileDiag[];
+	auxiliaryDisplay: FileDiag[];
 	clean: number;
 	unconfirmed: number;
 	timedOut: number;
@@ -1052,6 +1139,7 @@ async function collectBatchDiagnostics(
 				lspService,
 				options.waitMs,
 				options.nextWriteIndex,
+				options.serverScope,
 			),
 		options.signal,
 		options.onProgress,
@@ -1067,6 +1155,19 @@ async function collectBatchDiagnostics(
 	const truncated = total > MAX_DIAGNOSTICS;
 	const display = truncated ? allDiags.slice(0, MAX_DIAGNOSTICS) : allDiags;
 	const { clean, unconfirmed, timedOut } = tallyConfirmation(results);
+	// Per-file primary-server lookup so a flattened multi-file `display` list
+	// can still be split into "primary findings" vs "auxiliary findings" —
+	// `clean`/`unconfirmed` above already reflect ONLY the primary server's
+	// confirmation; this split does the same job for the listed diagnostics.
+	const primaryIdByFile = new Map(
+		results.map((r) => [r.file, r.primaryServerId] as const),
+	);
+	const primaryDisplay = display.filter(
+		(d) => d.source === primaryIdByFile.get(d.file),
+	);
+	const auxiliaryDisplay = display.filter(
+		(d) => d.source !== primaryIdByFile.get(d.file),
+	);
 	return {
 		results,
 		fileErrors,
@@ -1074,6 +1175,8 @@ async function collectBatchDiagnostics(
 		total,
 		truncated,
 		display,
+		primaryDisplay,
+		auxiliaryDisplay,
 		clean,
 		unconfirmed,
 		timedOut,
@@ -1101,6 +1204,8 @@ async function runBatchFileDiagnostics(
 		total,
 		truncated,
 		display,
+		primaryDisplay,
+		auxiliaryDisplay,
 		clean,
 		unconfirmed,
 		timedOut,
@@ -1120,7 +1225,9 @@ async function runBatchFileDiagnostics(
 	// #533/#570: surface unconfirmed files regardless of whether OTHER files in
 	// the batch found real diagnostics — a mixed found/unconfirmed result must
 	// not let the unconfirmed files silently pass as clean just because the
-	// batch as a whole isn't "0 diagnostics".
+	// batch as a whole isn't "0 diagnostics". This tally is primary-server-only
+	// (see collectFileDiagnosticResult) — it's the batch-level equivalent of
+	// the single-file "Primary LSP: ..." line, always reported on its own.
 	if (unconfirmed > 0) {
 		lines.push(
 			"",
@@ -1133,16 +1240,13 @@ async function runBatchFileDiagnostics(
 			lines.push("", "No diagnostics found.");
 		}
 	} else {
-		lines.push("");
-		for (const d of display) {
-			const sevName = SEVERITY_NAMES[d.severity] ?? "unknown";
-			const loc =
-				d.line !== undefined
-					? `${d.file}:${d.line + 1}:${(d.character ?? 0) + 1}`
-					: d.file;
-			const src = d.source ? `[${d.source}]` : "";
-			const code = d.code ? ` (${d.code})` : "";
-			lines.push(`${loc}: ${sevName}${src}${code}: ${d.message}`);
+		if (primaryDisplay.length > 0) {
+			lines.push("", `Primary findings (${primaryDisplay.length}):`);
+			lines.push(...primaryDisplay.map(formatDisplayDiag));
+		}
+		if (auxiliaryDisplay.length > 0) {
+			lines.push("", `Auxiliary findings (${auxiliaryDisplay.length}):`);
+			lines.push(...auxiliaryDisplay.map(formatDisplayDiag));
 		}
 		if (truncated) {
 			lines.push(
@@ -1157,10 +1261,13 @@ async function runBatchFileDiagnostics(
 		details: {
 			mode: "batch",
 			severity,
+			serverScope: options.serverScope ?? "all",
 			filesChecked: results.length,
 			concurrency: options.concurrency,
 			waitMs: options.waitMs,
 			diagnostics: display,
+			primaryDiagnosticsCount: primaryDisplay.length,
+			auxiliaryDiagnosticsCount: auxiliaryDisplay.length,
 			totalDiagnostics: total,
 			truncated,
 			cleanFiles: clean,
@@ -1216,6 +1323,8 @@ async function runDirectoryDiagnostics(
 		total,
 		truncated,
 		display,
+		primaryDisplay,
+		auxiliaryDisplay,
 		clean,
 		unconfirmed,
 		timedOut,
@@ -1267,16 +1376,18 @@ async function runDirectoryDiagnostics(
 				: []),
 			"",
 		];
-		for (const d of display) {
-			const sevName = SEVERITY_NAMES[d.severity] ?? "unknown";
-			const relPath = path.relative(absPath, d.file);
-			const loc =
-				d.line !== undefined
-					? `${relPath}:${d.line + 1}:${(d.character ?? 0) + 1}`
-					: d.file;
-			const src = d.source ? `[${d.source}]` : "";
-			const code = d.code ? ` (${d.code})` : "";
-			lines.push(`${loc}: ${sevName}${src}${code}: ${d.message}`);
+		const toRelative = (d: FileDiag): FileDiag => ({
+			...d,
+			file: path.relative(absPath, d.file),
+		});
+		if (primaryDisplay.length > 0) {
+			lines.push(`Primary findings (${primaryDisplay.length}):`);
+			lines.push(...primaryDisplay.map(toRelative).map(formatDisplayDiag));
+			lines.push("");
+		}
+		if (auxiliaryDisplay.length > 0) {
+			lines.push(`Auxiliary findings (${auxiliaryDisplay.length}):`);
+			lines.push(...auxiliaryDisplay.map(toRelative).map(formatDisplayDiag));
 		}
 		if (truncated) {
 			lines.push(
@@ -1293,6 +1404,7 @@ async function runDirectoryDiagnostics(
 			filePath: absPath,
 			mode: "directory",
 			severity,
+			serverScope: options.serverScope ?? "all",
 			filesScanned: filesToProcess.length,
 			capped: wasCapped,
 			diagnostics: display.map((d) => ({
@@ -1304,6 +1416,8 @@ async function runDirectoryDiagnostics(
 				source: d.source,
 				code: d.code,
 			})),
+			primaryDiagnosticsCount: primaryDisplay.length,
+			auxiliaryDiagnosticsCount: auxiliaryDisplay.length,
 			totalDiagnostics: total,
 			truncated,
 			cleanFiles: clean,
@@ -1334,6 +1448,17 @@ function applySeverityFilter<T extends { severity: number }>(
 	const max = maxLevel[severity] ?? 0;
 	if (max === 0) return diags;
 	return diags.filter((d) => (d.severity ?? 3) <= max);
+}
+
+function formatDisplayDiag(d: FileDiag): string {
+	const sevName = SEVERITY_NAMES[d.severity] ?? "unknown";
+	const loc =
+		d.line !== undefined
+			? `${d.file}:${d.line + 1}:${(d.character ?? 0) + 1}`
+			: d.file;
+	const src = d.source ? `[${d.source}]` : "";
+	const code = d.code ? ` (${d.code})` : "";
+	return `${loc}: ${sevName}${src}${code}: ${d.message}`;
 }
 
 function formatDiag(diag: LSPDiagnostic): string {

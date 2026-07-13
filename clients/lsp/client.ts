@@ -507,6 +507,12 @@ function installCrashGuard(): void {
 export interface LSPClientState {
 	isConnected: boolean;
 	isDestroyed: boolean;
+	/** Set only by clientShutdown() — distinguishes an intentional kill from a
+	 *  genuine crash so the exit handler below logs the latter even when the
+	 *  JSON-RPC connection's onClose/onError already flipped isConnected false
+	 *  before the process 'exit' event fires (the ordering that previously
+	 *  made every crash silently look "expected"). */
+	shutdownRequested: boolean;
 	connectionDisposed: boolean;
 	lastError: Error | undefined;
 	readonly connection: MessageConnection;
@@ -999,7 +1005,10 @@ export function setupIncomingHandlers(
 	state.connection.onRequest("window/workDoneProgress/create", async () => {});
 }
 
-function setupConnectionLifecycle(state: LSPClientState): void {
+function setupConnectionLifecycle(
+	state: LSPClientState,
+	recentStderr: (lines?: number) => string,
+): void {
 	state.connection.onError(([error]: [Error, ...unknown[]]) => {
 		state.lastError = error instanceof Error ? error : new Error(String(error));
 		state.isConnected = false;
@@ -1013,12 +1022,20 @@ function setupConnectionLifecycle(state: LSPClientState): void {
 		disposeClientConnection(state);
 	});
 
-	state.lspProcess.process.on("exit", (code) => {
-		const wasConnected = state.isConnected;
+	state.lspProcess.process.on("exit", (code, signal) => {
+		// Gate on shutdownRequested (our own clientShutdown() call), not
+		// isConnected: a genuine crash's connection.onClose/onError handler above
+		// can fire and flip isConnected false BEFORE this 'exit' event arrives,
+		// which used to make the old `wasConnected` check silently swallow every
+		// crash whose transport died before the process itself reported exiting
+		// (previously: 5 ast-grep deaths during a dogfooding sweep logged only
+		// "respawn, uptime=Xms" — no exit code, no signal, no stderr — because
+		// none of them tripped this log).
+		const wasIntentional = state.shutdownRequested;
 		state.isConnected = false;
 		state.isDestroyed = true;
 		disposeClientConnection(state);
-		if (wasConnected) {
+		if (!wasIntentional) {
 			logLatency({
 				type: "phase",
 				phase: "lsp_server_unexpected_exit",
@@ -1028,6 +1045,8 @@ function setupConnectionLifecycle(state: LSPClientState): void {
 					serverId: state.serverId,
 					pid: state.lspProcess.pid,
 					exitCode: code ?? null,
+					exitSignal: signal ?? null,
+					stderrTail: recentStderr(20),
 				},
 			});
 		}
@@ -1366,6 +1385,7 @@ export async function clientShutdown(
 	state: LSPClientState,
 	options: LSPShutdownOptions = {},
 ): Promise<void> {
+	state.shutdownRequested = true;
 	state.isConnected = false;
 	state.isDestroyed = true;
 	for (const timer of state.pendingDiagnostics.values()) {
@@ -1717,6 +1737,7 @@ export async function createLSPClient(options: {
 	const state: LSPClientState = {
 		isConnected: true,
 		isDestroyed: false,
+		shutdownRequested: false,
 		connectionDisposed: false,
 		lastError: undefined,
 		connection,
@@ -1761,7 +1782,7 @@ export async function createLSPClient(options: {
 
 	setupIncomingHandlers(state, initialization);
 	connection.listen();
-	setupConnectionLifecycle(state);
+	setupConnectionLifecycle(state, recentStderr);
 
 	let initResult: Awaited<ReturnType<typeof safeSendRequest>>;
 	try {
