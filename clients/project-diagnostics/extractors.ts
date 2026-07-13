@@ -104,7 +104,8 @@ const WARM_TRIGGER: Record<string, string> = {
 	knip: "runs at session-start",
 	jscpd: "runs at session-start",
 	madge: "runs at session-start",
-	gitleaks: "runs at session-start",
+	gitleaks:
+		"runs at session-start (config opt-in), or on any git repo via mode=full (#608)",
 	govulncheck: "runs at session-start (Go projects only)",
 	trivy: "runs at session-start",
 	"dead-code": "runs at session-start (Python projects only)",

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	GitleaksClient,
 	hasGitleaksSignal,
+	hasGitRepo,
 	parseGitleaksReport,
 } from "../../clients/gitleaks-client.js";
 import { setupTestEnvironment } from "./test-utils.js";
@@ -229,6 +230,106 @@ describe("parseGitleaksReport (#130)", () => {
 		const findings = parseGitleaksReport(raw);
 		expect(findings).toHaveLength(1);
 		expect(findings[0].startLine).toBe(42);
+	});
+});
+
+describe("GitleaksClient.scan requireSignal option (#608)", () => {
+	it("defaults to the strict gate: no signal -> no scan attempted", async () => {
+		const env = setupTestEnvironment("pi-lens-gitleaks-strict-default-");
+		try {
+			const client = new GitleaksClient(false) as unknown as {
+				ensureAvailable: () => Promise<boolean>;
+				scan: (
+					cwd: string,
+					options?: { requireSignal?: boolean },
+				) => Promise<{ success: boolean; summary?: string }>;
+			};
+			const ensureSpy = vi
+				.spyOn(client, "ensureAvailable")
+				.mockResolvedValue(true);
+
+			const result = await client.scan(env.tmpDir);
+			expect(result.summary).toBe("no gitleaks opt-in signal at project root");
+			expect(ensureSpy).not.toHaveBeenCalled();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("requireSignal:false skips the strict gate and attempts a scan on a bare git repo", async () => {
+		const env = setupTestEnvironment("pi-lens-gitleaks-loose-gate-");
+		try {
+			fs.mkdirSync(path.join(env.tmpDir, ".git"));
+			const client = new GitleaksClient(false) as unknown as {
+				ensureAvailable: () => Promise<boolean>;
+				runScan: (cwd: string) => Promise<{
+					success: boolean;
+					findings: unknown[];
+					scannedAt: string;
+				}>;
+				scan: (
+					cwd: string,
+					options?: { requireSignal?: boolean },
+				) => Promise<{ success: boolean; summary?: string }>;
+			};
+			vi.spyOn(client, "ensureAvailable").mockResolvedValue(true);
+			const runSpy = vi.spyOn(client, "runScan").mockResolvedValue({
+				success: true,
+				findings: [],
+				scannedAt: "now",
+			});
+
+			const result = await client.scan(env.tmpDir, { requireSignal: false });
+			expect(runSpy).toHaveBeenCalledTimes(1);
+			expect(result.success).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+});
+
+describe("hasGitRepo (#608 mode=full smart-default gate)", () => {
+	it("returns false for a project with no .git", () => {
+		const env = setupTestEnvironment("pi-lens-gitleaks-nogit-");
+		try {
+			expect(hasGitRepo(env.tmpDir)).toBe(false);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("returns true when .git is a directory (normal clone)", () => {
+		const env = setupTestEnvironment("pi-lens-gitleaks-gitdir-");
+		try {
+			fs.mkdirSync(path.join(env.tmpDir, ".git"));
+			expect(hasGitRepo(env.tmpDir)).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("returns true when .git is a file (worktree gitdir pointer)", () => {
+		const env = setupTestEnvironment("pi-lens-gitleaks-gitfile-");
+		try {
+			fs.writeFileSync(
+				path.join(env.tmpDir, ".git"),
+				"gitdir: ../main/.git/worktrees/wt\n",
+			);
+			expect(hasGitRepo(env.tmpDir)).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("is true even without any explicit gitleaks opt-in signal, unlike hasGitleaksSignal", () => {
+		const env = setupTestEnvironment("pi-lens-gitleaks-smartdefault-");
+		try {
+			fs.mkdirSync(path.join(env.tmpDir, ".git"));
+			expect(hasGitleaksSignal(env.tmpDir)).toBe(false);
+			expect(hasGitRepo(env.tmpDir)).toBe(true);
+		} finally {
+			env.cleanup();
+		}
 	});
 });
 

@@ -21,7 +21,11 @@
  * Mirrors the gating each analyzer already applies at session_start
  * (`clients/runtime-session.ts`) — same "not applicable to this project" /
  * "not installed" skip conditions — but never skips on a cache hit; it always
- * performs (or joins) an actual run. Every fresh result is written back to
+ * performs (or joins) an actual run. One deliberate exception: gitleaks (#608)
+ * uses a looser "smart-default" gate here (any tracked git repo) than
+ * session_start's strict opt-in-config gate, since mode=full is an
+ * explicitly-requested comprehensive review and gitleaks is cheap/advisory —
+ * see its own task below. Every fresh result is written back to
  * cache via the same `cacheManager.writeCache` session_start/turn_end use, so
  * a background pass racing in afterward reads a result at least as fresh as
  * its own.
@@ -218,9 +222,17 @@ export async function fetchFreshProjectDiagnostics(
 			);
 		}),
 
-		// gitleaks — committed-secrets detection. Config-gated per #130.
+		// gitleaks — committed-secrets detection. session_start/per-edit stay
+		// config-gated per #130's strict default (GitleaksClient.hasGitleaksSignal),
+		// but mode=full is an explicitly-requested comprehensive review — use
+		// #130's own considered-but-unshipped "smart-default" tier instead (any
+		// tracked git repo, GitleaksClient.hasGitRepo): gitleaks is cheap (~10MB
+		// binary, no external DB pull) and findings are advisory-only, so the
+		// stricter opt-in gate is needlessly conservative for this call. Refs #608
+		// dogfooding finding that flagged gitleaks/trivy/govulncheck/dead-code as
+		// "cold" on a project with no explicit gitleaks config.
 		task("gitleaks", async () => {
-			if (!GitleaksClient.hasGitleaksSignal(analysisRoot)) {
+			if (!GitleaksClient.hasGitRepo(analysisRoot)) {
 				cold.push("gitleaks");
 				return;
 			}
@@ -229,7 +241,9 @@ export async function fetchFreshProjectDiagnostics(
 				return;
 			}
 			const startMs = Date.now();
-			const result = await clients.gitleaksClient.scan(analysisRoot);
+			const result = await clients.gitleaksClient.scan(analysisRoot, {
+				requireSignal: false,
+			});
 			cacheManager.writeCache("gitleaks", result, analysisRoot, {
 				scanDurationMs: Date.now() - startMs,
 			});
