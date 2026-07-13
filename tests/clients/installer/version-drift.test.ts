@@ -154,6 +154,7 @@ import {
 	ensureTool,
 	getToolPath,
 	resetProbeCacheStateForTesting,
+	TOOLS,
 } from "../../../clients/installer/index.ts";
 
 const TOOLS_DIR = path.join(TEST_HOME, ".pi-lens", "tools");
@@ -169,6 +170,24 @@ const MADGE_BIN = path.join(
 	".bin",
 	process.platform === "win32" ? "madge.cmd" : "madge",
 );
+
+// Read the CURRENT pin straight off the TOOLS registry rather than
+// hardcoding it — jscpd's pin has already moved once (#582: 3.5.10 -> 5.0.12)
+// and will again; a hardcoded "matching" version silently rots into a false
+// "drift" as soon as the pin changes again, which is exactly what happened
+// here (CI caught a rebase that picked up a newer pin after this test was
+// written against the older one). "0.0.1" as the stale probe is guaranteed to
+// differ from any real semver pin pi-lens would plausibly use.
+const jscpdTool = TOOLS.find((t) => t.id === "jscpd");
+if (!jscpdTool?.packageName?.includes("@")) {
+	throw new Error(
+		"tests/clients/installer/version-drift.test.ts assumes the jscpd TOOLS entry has a pinned '<pkg>@<version>' packageName — update this fixture if that entry's shape changes.",
+	);
+}
+const JSCPD_PINNED_VERSION = jscpdTool.packageName.slice(
+	jscpdTool.packageName.lastIndexOf("@") + 1,
+);
+const JSCPD_STALE_VERSION = "0.0.1";
 
 function fakeAccess(...allowed: string[]): void {
 	const set = new Set(allowed);
@@ -204,14 +223,14 @@ afterEach(() => {
 describe("version-pin drift detection (#589)", () => {
 	it("forces reinstall when the installed jscpd version no longer matches the pin", async () => {
 		fakeAccess(JSCPD_BIN);
-		versionOutput.value = "3.4.0\n"; // stale — TOOLS entry pins jscpd@3.5.10
+		versionOutput.value = `${JSCPD_STALE_VERSION}\n`; // stale vs. the current TOOLS pin
 
 		const result = await ensureTool("jscpd");
 
-		// getToolPath's slow path spawned --version, saw 3.4.0 != 3.5.10, and
-		// ensureTool routed through forceReinstall — which attempts installTool
-		// (an npm install spawn) rather than resolving straight to the stale
-		// managed binary.
+		// getToolPath's slow path spawned --version, saw a version that doesn't
+		// match the pin, and ensureTool routed through forceReinstall — which
+		// attempts installTool (an npm install spawn) rather than resolving
+		// straight to the stale managed binary.
 		const installSpawns = spawnCalls.filter(
 			(c) => !c.args.includes("--version") && !c.cmd.includes("--version"),
 		);
@@ -224,7 +243,7 @@ describe("version-pin drift detection (#589)", () => {
 
 	it("resolves normally without forcing reinstall when the installed version matches the pin", async () => {
 		fakeAccess(JSCPD_BIN);
-		versionOutput.value = "3.5.10\n"; // matches the current TOOLS pin
+		versionOutput.value = `${JSCPD_PINNED_VERSION}\n`; // matches the current TOOLS pin
 
 		const result = await ensureTool("jscpd");
 
@@ -237,7 +256,7 @@ describe("version-pin drift detection (#589)", () => {
 
 	it("does not spawn a second probe for a cache hit on a matching-version tool", async () => {
 		fakeAccess(JSCPD_BIN);
-		versionOutput.value = "3.5.10\n";
+		versionOutput.value = `${JSCPD_PINNED_VERSION}\n`;
 
 		const first = await ensureTool("jscpd");
 		expect(first).toBe(JSCPD_BIN);
@@ -265,7 +284,7 @@ describe("version-pin drift detection (#589)", () => {
 
 	it("getToolPath resolves the pinned tool regardless of drift (discovery is not gated on version)", async () => {
 		fakeAccess(JSCPD_BIN);
-		versionOutput.value = "3.4.0\n"; // stale
+		versionOutput.value = `${JSCPD_STALE_VERSION}\n`; // stale
 
 		const result = await getToolPath("jscpd");
 
