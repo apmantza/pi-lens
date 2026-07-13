@@ -321,7 +321,9 @@ describe("lsp_diagnostics tool", () => {
 
 				expect(result.isError).toBeUndefined();
 				expect(result.details?.unconfirmed).toBe(false);
-				expect(String(result.content[0]?.text)).toBe("No diagnostics found.");
+				expect(String(result.content[0]?.text)).toBe(
+					"Primary LSP (typescript): confirmed clean.\n\nNo auxiliary findings.",
+				);
 			} finally {
 				fs.rmSync(tmpDir, { recursive: true, force: true });
 			}
@@ -477,7 +479,9 @@ describe("lsp_diagnostics tool", () => {
 				expect(result.isError).toBeUndefined();
 				expect(result.details?.totalDiagnostics).toBe(0);
 				expect(result.details?.unconfirmed).toBe(false);
-				expect(String(result.content[0]?.text)).toBe("No diagnostics found.");
+				expect(String(result.content[0]?.text)).toBe(
+					"Primary LSP (typescript): confirmed clean.\n\nNo auxiliary findings.",
+				);
 			} finally {
 				fs.rmSync(tmpDir, { recursive: true, force: true });
 			}
@@ -651,7 +655,9 @@ describe("lsp_diagnostics tool", () => {
 
 				expect(result.isError).toBeUndefined();
 				expect(result.details?.unconfirmed).toBe(false);
-				expect(String(result.content[0]?.text)).toBe("No diagnostics found.");
+				expect(String(result.content[0]?.text)).toBe(
+					"Primary LSP (typescript): confirmed clean.\n\nNo auxiliary findings.",
+				);
 				expect(getAdvertisedCommands).not.toHaveBeenCalled();
 				expect(executeCommand).not.toHaveBeenCalled();
 			} finally {
@@ -724,7 +730,9 @@ describe("lsp_diagnostics tool", () => {
 				expect(result.isError).toBeUndefined();
 				expect(result.details?.unconfirmed).toBe(false);
 				expect(result.details?.timedOut).toBeUndefined();
-				expect(String(result.content[0]?.text)).toBe("No diagnostics found.");
+				expect(String(result.content[0]?.text)).toBe(
+					"Primary LSP (typescript): confirmed clean.\n\nNo auxiliary findings.",
+				);
 			} finally {
 				fs.rmSync(tmpDir, { recursive: true, force: true });
 			}
@@ -969,7 +977,9 @@ describe("lsp_diagnostics tool", () => {
 
 				expect(result.isError).toBeUndefined();
 				expect(result.details?.totalDiagnostics).toBe(0);
-				expect(String(result.content[0]?.text)).toBe("No diagnostics found.");
+				expect(String(result.content[0]?.text)).toBe(
+					"Primary LSP (typescript): confirmed clean.\n\nNo auxiliary findings.",
+				);
 			} finally {
 				fs.rmSync(tmpDir, { recursive: true, force: true });
 			}
@@ -1028,6 +1038,193 @@ describe("lsp_diagnostics tool", () => {
 
 				expect(result.isError).toBeUndefined();
 				expect(result.details?.totalDiagnostics).toBe(1);
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
+	});
+
+	// Primary/auxiliary split + serverScope: a dogfooding session reported a
+	// 55-diagnostic lsp_diagnostics result that was 54 ast-grep findings and 1
+	// typescript entry — real signal (the type checker's confirmation) buried
+	// in aux noise. The fix reports primary-server confirmation as its own
+	// line/section, independent of however many auxiliary findings exist, and
+	// adds an opt-in `serverScope: "primary"` that skips auxiliary scanners
+	// entirely for a fast, low-noise "does this have real type errors" check.
+	describe("primary/auxiliary confirmation split + serverScope", () => {
+		it("single file: splits mixed-source diagnostics into a Primary line and an Auxiliary findings section", async () => {
+			(mocked.service as any).getDiagnostics = vi
+				.fn()
+				.mockImplementation(async (filePath: string) => {
+					if (filePath.endsWith("mixed.ts")) {
+						return [
+							{
+								severity: 1,
+								message: "Type 'string' is not assignable to type 'number'.",
+								range: {
+									start: { line: 0, character: 0 },
+									end: { line: 0, character: 1 },
+								},
+								source: "typescript",
+							},
+							{
+								severity: 2,
+								message: "avoid nested ternaries",
+								range: {
+									start: { line: 1, character: 0 },
+									end: { line: 1, character: 1 },
+								},
+								source: "ast-grep",
+							},
+						];
+					}
+					return [];
+				});
+			const tool = createLspDiagnosticsTool();
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-split-"),
+			);
+			const mixed = path.join(tmpDir, "mixed.ts");
+			fs.writeFileSync(mixed, "const value: number = 'oops';\nconst x = 1;\n");
+
+			try {
+				const result = (await tool.execute(
+					"diag-split-file",
+					{ path: mixed, severity: "all" },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				)) as any;
+
+				expect(result.isError).toBeUndefined();
+				expect(result.details?.primaryServerId).toBe("typescript");
+				expect(result.details?.primaryDiagnosticsCount).toBe(1);
+				expect(result.details?.auxiliaryDiagnosticsCount).toBe(1);
+				const text = String(result.content[0]?.text);
+				expect(text).toContain("Primary LSP (typescript): 1 diagnostic.");
+				expect(text).toContain("Auxiliary findings (1):");
+				expect(text).toContain("not assignable");
+				expect(text).toContain("nested ternaries");
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
+
+		it("serverScope: 'primary' passes clientScope: 'primary' to touchFile, skipping auxiliary scanners", async () => {
+			const touchFile = vi.fn().mockResolvedValue([]);
+			(mocked.service as any).touchFile = touchFile;
+			const tool = createLspDiagnosticsTool();
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-scope-"),
+			);
+			const clean = path.join(tmpDir, "clean.ts");
+			fs.writeFileSync(clean, "const value = 1;\n");
+
+			try {
+				const result = (await tool.execute(
+					"diag-scope-primary",
+					{ path: clean, severity: "all", serverScope: "primary" },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				)) as any;
+
+				expect(result.isError).toBeUndefined();
+				expect(touchFile).toHaveBeenCalledTimes(1);
+				expect(touchFile.mock.calls[0]?.[2]?.clientScope).toBe("primary");
+				expect(result.details?.serverScope).toBe("primary");
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
+
+		it("default (no serverScope param) still passes clientScope: 'all' to touchFile", async () => {
+			const touchFile = vi.fn().mockResolvedValue([]);
+			(mocked.service as any).touchFile = touchFile;
+			const tool = createLspDiagnosticsTool();
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-scope-default-"),
+			);
+			const clean = path.join(tmpDir, "clean.ts");
+			fs.writeFileSync(clean, "const value = 1;\n");
+
+			try {
+				const result = (await tool.execute(
+					"diag-scope-default",
+					{ path: clean, severity: "all", waitMs: 500 },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				)) as any;
+
+				expect(result.isError).toBeUndefined();
+				expect(touchFile.mock.calls[0]?.[2]?.clientScope).toBe("all");
+				expect(result.details?.serverScope).toBe("all");
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
+
+		it("directory: splits the flattened multi-file listing into Primary/Auxiliary sections", async () => {
+			(mocked.service as any).getDiagnostics = vi
+				.fn()
+				.mockImplementation(async (filePath: string) => {
+					if (filePath.endsWith("bad.ts")) {
+						return [
+							{
+								severity: 1,
+								message: "Type 'string' is not assignable to type 'number'.",
+								range: {
+									start: { line: 0, character: 0 },
+									end: { line: 0, character: 1 },
+								},
+								source: "typescript",
+							},
+						];
+					}
+					if (filePath.endsWith("noisy.ts")) {
+						return [
+							{
+								severity: 2,
+								message: "avoid nested ternaries",
+								range: {
+									start: { line: 0, character: 0 },
+									end: { line: 0, character: 1 },
+								},
+								source: "ast-grep",
+							},
+						];
+					}
+					return [];
+				});
+			const tool = createLspDiagnosticsTool();
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-dir-split-"),
+			);
+			fs.writeFileSync(
+				path.join(tmpDir, "bad.ts"),
+				"const value: number = 'oops';\n",
+			);
+			fs.writeFileSync(path.join(tmpDir, "noisy.ts"), "const x = 1;\n");
+
+			try {
+				const result = (await tool.execute(
+					"diag-dir-split",
+					{ path: tmpDir, severity: "all", concurrency: 2 },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				)) as any;
+
+				expect(result.isError).toBeUndefined();
+				expect(result.details?.primaryDiagnosticsCount).toBe(1);
+				expect(result.details?.auxiliaryDiagnosticsCount).toBe(1);
+				const text = String(result.content[0]?.text);
+				expect(text).toContain("Primary findings (1):");
+				expect(text).toContain("Auxiliary findings (1):");
+				expect(text.indexOf("Primary findings")).toBeLessThan(
+					text.indexOf("Auxiliary findings"),
+				);
 			} finally {
 				fs.rmSync(tmpDir, { recursive: true, force: true });
 			}

@@ -103,6 +103,7 @@ function createMockState(overrides?: Partial<LSPClientState>): LSPClientState {
 	const state: LSPClientState = {
 		isConnected: true,
 		isDestroyed: false,
+		shutdownRequested: false,
 		connectionDisposed: false,
 		lastError: undefined,
 		connection: createMockConnection(),
