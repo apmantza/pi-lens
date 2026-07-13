@@ -421,6 +421,245 @@ describe("lsp_diagnostics tool", () => {
 		});
 	});
 
+	// #611: for a tier3-silent server (classic typescript-language-server), an
+	// empty push-based result attempts the `typescript.tsserverRequest` sync
+	// escape hatch (`semanticDiagnosticsSync`/`syntacticDiagnosticsSync`) before
+	// falling back to #533's "unconfirmed" — a real request/response tsserver
+	// command, not push-timing-dependent, so an empty body IS a confirmed clean
+	// answer and a non-empty body is real diagnostics that must be surfaced.
+	describe("#611 tsserver sync escape hatch", () => {
+		function mockExecuteCommand(
+			bodies: Partial<
+				Record<"semanticDiagnosticsSync" | "syntacticDiagnosticsSync", unknown[]>
+			>,
+		) {
+			return vi
+				.fn()
+				.mockImplementation(
+					async (_file: string, _command: string, args: unknown[]) => {
+						const sub = args[0] as
+							| "semanticDiagnosticsSync"
+							| "syntacticDiagnosticsSync";
+						return {
+							executed: true,
+							result: {
+								success: true,
+								body: bodies[sub] ?? [],
+							},
+						};
+					},
+				);
+		}
+
+		it("confirmed-clean via sync path: both sync commands return an empty body", async () => {
+			mocked.cascadeTier = "tier3-silent";
+			(mocked.service as any).getAdvertisedCommands = vi
+				.fn()
+				.mockResolvedValue(["typescript.tsserverRequest"]);
+			(mocked.service as any).executeCommand = mockExecuteCommand({});
+
+			const tool = createLspDiagnosticsTool();
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-611-clean-"),
+			);
+			const clean = path.join(tmpDir, "clean.ts");
+			fs.writeFileSync(clean, "const value = 1;\n");
+
+			try {
+				const result = (await tool.execute(
+					"diag-611-clean",
+					{ path: clean, severity: "all" },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				)) as any;
+
+				expect(result.isError).toBeUndefined();
+				expect(result.details?.totalDiagnostics).toBe(0);
+				expect(result.details?.unconfirmed).toBe(false);
+				expect(String(result.content[0]?.text)).toBe("No diagnostics found.");
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
+
+		it("real diagnostics surfaced via sync path: semanticDiagnosticsSync returns a finding tsserver never published", async () => {
+			mocked.cascadeTier = "tier3-silent";
+			(mocked.service as any).getAdvertisedCommands = vi
+				.fn()
+				.mockResolvedValue(["typescript.tsserverRequest"]);
+			(mocked.service as any).executeCommand = mockExecuteCommand({
+				semanticDiagnosticsSync: [
+					{
+						message: "Type 'number' is not assignable to type 'string'.",
+						category: "error",
+						code: 2322,
+						startLocation: { line: 2, offset: 9 },
+						endLocation: { line: 2, offset: 10 },
+					},
+				],
+			});
+
+			const tool = createLspDiagnosticsTool();
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-611-found-"),
+			);
+			const clean = path.join(tmpDir, "clean.ts");
+			fs.writeFileSync(clean, "const value = 1;\n");
+
+			try {
+				const result = (await tool.execute(
+					"diag-611-found",
+					{ path: clean, severity: "all" },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				)) as any;
+
+				expect(result.isError).toBeUndefined();
+				expect(result.details?.totalDiagnostics).toBe(1);
+				expect(result.details?.unconfirmed).toBe(false);
+				expect(String(result.content[0]?.text)).toContain(
+					"not assignable to type 'string'",
+				);
+				// tsserver's 1-based startLocation.line=2/offset=9 converts to
+				// 0-based line=1/character=8.
+				expect(result.details?.diagnostics?.[0]).toMatchObject({
+					line: 1,
+					character: 8,
+				});
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
+
+		it("falls back to unconfirmed when executeCommand throws (e.g. tsserver 'No Project.')", async () => {
+			mocked.cascadeTier = "tier3-silent";
+			(mocked.service as any).getAdvertisedCommands = vi
+				.fn()
+				.mockResolvedValue(["typescript.tsserverRequest"]);
+			(mocked.service as any).executeCommand = vi
+				.fn()
+				.mockRejectedValue(new Error("No Project."));
+
+			const tool = createLspDiagnosticsTool();
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-611-error-"),
+			);
+			const clean = path.join(tmpDir, "clean.ts");
+			fs.writeFileSync(clean, "const value = 1;\n");
+
+			try {
+				const result = (await tool.execute(
+					"diag-611-error",
+					{ path: clean, severity: "all" },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				)) as any;
+
+				expect(result.isError).toBeUndefined();
+				expect(result.details?.unconfirmed).toBe(true);
+				expect(String(result.content[0]?.text)).toContain("unconfirmed");
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
+
+		it("falls back to unconfirmed when the command isn't advertised", async () => {
+			mocked.cascadeTier = "tier3-silent";
+			(mocked.service as any).getAdvertisedCommands = vi
+				.fn()
+				.mockResolvedValue([]);
+			const executeCommand = vi.fn();
+			(mocked.service as any).executeCommand = executeCommand;
+
+			const tool = createLspDiagnosticsTool();
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-611-unadvertised-"),
+			);
+			const clean = path.join(tmpDir, "clean.ts");
+			fs.writeFileSync(clean, "const value = 1;\n");
+
+			try {
+				const result = (await tool.execute(
+					"diag-611-unadvertised",
+					{ path: clean, severity: "all" },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				)) as any;
+
+				expect(result.isError).toBeUndefined();
+				expect(result.details?.unconfirmed).toBe(true);
+				expect(executeCommand).not.toHaveBeenCalled();
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
+
+		it("falls back to unconfirmed when the service exposes no executeCommand/getAdvertisedCommands at all (older mock/service shape)", async () => {
+			mocked.cascadeTier = "tier3-silent";
+			// beforeEach's mocked.service has neither method — the default shape.
+			const tool = createLspDiagnosticsTool();
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-611-nomethod-"),
+			);
+			const clean = path.join(tmpDir, "clean.ts");
+			fs.writeFileSync(clean, "const value = 1;\n");
+
+			try {
+				const result = (await tool.execute(
+					"diag-611-nomethod",
+					{ path: clean, severity: "all" },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				)) as any;
+
+				expect(result.isError).toBeUndefined();
+				expect(result.details?.unconfirmed).toBe(true);
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
+
+		it("native-ts7 (classifyCascadeWaitTier='waits') never attempts the sync path", async () => {
+			mocked.cascadeTier = "waits";
+			const getAdvertisedCommands = vi
+				.fn()
+				.mockResolvedValue(["typescript.tsserverRequest"]);
+			const executeCommand = mockExecuteCommand({});
+			(mocked.service as any).getAdvertisedCommands = getAdvertisedCommands;
+			(mocked.service as any).executeCommand = executeCommand;
+
+			const tool = createLspDiagnosticsTool();
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-611-native-ts7-"),
+			);
+			const clean = path.join(tmpDir, "clean.ts");
+			fs.writeFileSync(clean, "const value = 1;\n");
+
+			try {
+				const result = (await tool.execute(
+					"diag-611-native-ts7",
+					{ path: clean, severity: "all" },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				)) as any;
+
+				expect(result.isError).toBeUndefined();
+				expect(result.details?.unconfirmed).toBe(false);
+				expect(String(result.content[0]?.text)).toBe("No diagnostics found.");
+				expect(getAdvertisedCommands).not.toHaveBeenCalled();
+				expect(executeCommand).not.toHaveBeenCalled();
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
+	});
+
 	// #570: a timed-out priming touchFile() must never present as a confirmed
 	// clean result — it's a distinct "unconfirmed" reason from #533's
 	// silent-on-clean-server tier, and the tool's own touchFile call is the
