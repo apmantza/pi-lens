@@ -90,6 +90,15 @@ export function isNosemgrepSuppressed(
 	);
 }
 
+// #277 R7: every profile below used this exact same rule (ERROR-severity
+// findings block only when the workspace opted into curated/authored rules;
+// everything else stays advisory) — shared here instead of copy-pasted per
+// profile so a future policy change (e.g. a WARNING-blocking tier) is one edit.
+const blockOnErrorWhenAllowed = (
+	d: LSPDiagnostic,
+	{ blockingAllowed }: { blockingAllowed: boolean },
+): OutputSemantic => (blockingAllowed && d.severity === 1 ? "blocking" : "warning");
+
 export const AUXILIARY_LSP_PROFILES: readonly AuxiliaryLspProfile[] = [
 	{
 		serverId: "opengrep",
@@ -105,8 +114,7 @@ export const AUXILIARY_LSP_PROFILES: readonly AuxiliaryLspProfile[] = [
 		// supplies its own curated rules (the author's deliberate severity); the
 		// auto set is advisory. Either way, findings surface via lens_diagnostics.
 		allowBlocking: (cwd) => Boolean(findLocalOpengrepConfig(cwd)),
-		semantic: (d, { blockingAllowed }) =>
-			blockingAllowed && d.severity === 1 ? "blocking" : "warning",
+		semantic: blockOnErrorWhenAllowed,
 		defectClass: (d) =>
 			classifyDefect(String(d.code ?? ""), "opengrep", d.message ?? ""),
 		// Honor the canonical Semgrep suppression the user already knows (#441).
@@ -124,8 +132,7 @@ export const AUXILIARY_LSP_PROFILES: readonly AuxiliaryLspProfile[] = [
 		// deliberate, so preserve ast-grep's severity semantics: ERROR can block,
 		// WARNING/INFO stay advisory.
 		allowBlocking: () => true,
-		semantic: (d, { blockingAllowed }) =>
-			blockingAllowed && d.severity === 1 ? "blocking" : "warning",
+		semantic: blockOnErrorWhenAllowed,
 		defectClass: (d) =>
 			classifyDefect(String(d.code ?? ""), "ast-grep", d.message ?? ""),
 	},
@@ -142,8 +149,7 @@ export const AUXILIARY_LSP_PROFILES: readonly AuxiliaryLspProfile[] = [
 		// ignores). Advisory otherwise — findings still surface via lens_diagnostics.
 		// zizmor maps High→ERROR(1), Medium/Low→WARNING(2), Informational→INFO(3).
 		allowBlocking: (cwd) => Boolean(findLocalZizmorConfig(cwd)),
-		semantic: (d, { blockingAllowed }) =>
-			blockingAllowed && d.severity === 1 ? "blocking" : "warning",
+		semantic: blockOnErrorWhenAllowed,
 		defectClass: (d) =>
 			classifyDefect(String(d.code ?? ""), "zizmor", d.message ?? ""),
 	},
@@ -162,8 +168,7 @@ export const AUXILIARY_LSP_PROFILES: readonly AuxiliaryLspProfile[] = [
 		// severity is WARNING, so even with a config it stays advisory unless the
 		// repo raises `diagnostic-severity` to Error.
 		allowBlocking: (cwd) => Boolean(findLocalTyposConfig(cwd)),
-		semantic: (d, { blockingAllowed }) =>
-			blockingAllowed && d.severity === 1 ? "blocking" : "warning",
+		semantic: blockOnErrorWhenAllowed,
 		// A misspelling is a documentation/quality defect — not security or
 		// correctness. "style" is the closest taxonomy class.
 		defectClass: () => "style",
@@ -183,10 +188,22 @@ export function enabledAuxiliaryLspServerIds(getFlag: GetFlag): string[] {
 	);
 }
 
+// #277 R7: `findAuxiliaryProfileForSource` is called once per diagnostic, and a
+// file's diagnostics are typically dominated by a handful of distinct `source`
+// strings (one per tool that fired). Memoizing by exact `source` turns an
+// O(profiles) regex scan per diagnostic into one scan per distinct source seen
+// — safe because `AUXILIARY_LSP_PROFILES` is a fixed module-level const, never
+// mutated at runtime, so a source's matching profile never changes.
+const profileForSourceCache = new Map<string, AuxiliaryLspProfile | undefined>();
+
 /** Find the profile whose server emitted a diagnostic with this `source`. */
 export function findAuxiliaryProfileForSource(
 	source: string | undefined,
 ): AuxiliaryLspProfile | undefined {
 	if (!source) return undefined;
-	return AUXILIARY_LSP_PROFILES.find((p) => p.sourceMatch.test(source));
+	const cached = profileForSourceCache.get(source);
+	if (cached !== undefined || profileForSourceCache.has(source)) return cached;
+	const found = AUXILIARY_LSP_PROFILES.find((p) => p.sourceMatch.test(source));
+	profileForSourceCache.set(source, found);
+	return found;
 }
