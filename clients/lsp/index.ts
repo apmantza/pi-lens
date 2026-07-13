@@ -2190,18 +2190,54 @@ export class LSPService {
 				}
 				contentCache.set(filePath, content);
 				const languageId = getLanguageId(filePath) ?? "plaintext";
-				const { clients } = await this.getClientsForFile(
-					filePath,
-					WORKSPACE_SWEEP_EXCLUDED_SERVER_IDS,
+				// #615: this pre-open pass had NO bound at all — unlike every other
+				// per-file step in this sweep (`processFile`'s `touchFile` call
+				// below is `withDeadline`-wrapped). `getClientsForFile` can wait on
+				// a server spawn/initialize handshake, and `notify.open` can wait
+				// on a stuck notification write; either hanging left the WHOLE
+				// sweep stuck with no heartbeat and no escape (a real dogfooding
+				// incident: `lsp_workspace_diagnostics_start` logged, then total
+				// silence — and pressing Escape didn't help either, since the
+				// per-iteration `signal?.aborted` check above never gets a turn
+				// while stuck inside a single file's await). Two bounds, not one:
+				// `withDeadline` catches a hang with no abort press at all; racing
+				// the abort signal directly means an explicit Escape unblocks
+				// immediately too, instead of waiting out the rest of `perFileMs`.
+				// `onTimeout:"undefined"` mirrors the existing catch-based "best
+				// effort" intent below: a timed-out/aborted pre-open just means
+				// `processFile`'s own touchFile call pays for the open instead,
+				// exactly like a thrown error already did.
+				const preOpenAttempt = withDeadline(
+					(async () => {
+						const { clients } = await this.getClientsForFile(
+							filePath,
+							WORKSPACE_SWEEP_EXCLUDED_SERVER_IDS,
+						);
+						for (const entry of clients) {
+							try {
+								await entry.client.notify.open(filePath, content, languageId);
+							} catch {
+								// Best-effort: a failed pre-open just means processFile's own
+								// touchFile call below pays for the open instead.
+							}
+						}
+					})(),
+					{ ms: perFileMs, onTimeout: "undefined" },
 				);
-				for (const entry of clients) {
-					try {
-						await entry.client.notify.open(filePath, content, languageId);
-					} catch {
-						// Best-effort: a failed pre-open just means processFile's own
-						// touchFile call below pays for the open instead.
-					}
-				}
+				await (signal
+					? Promise.race([
+							preOpenAttempt,
+							new Promise<void>((resolve) => {
+								if (signal.aborted) {
+									resolve();
+									return;
+								}
+								signal.addEventListener("abort", () => resolve(), {
+									once: true,
+								});
+							}),
+						])
+					: preOpenAttempt);
 			}
 		};
 

@@ -142,3 +142,119 @@ describe("runWorkspaceDiagnostics — batch-open restores #271 coalescing for a 
 		expect(notifiedUriCount).toBe(fileNames.length);
 	}, 10_000);
 });
+
+/**
+ * #615: `preOpenGroupFiles` (the #608 fix above) had NO bound at all — unlike
+ * every other per-file step in the sweep (`processFile`'s `touchFile` call is
+ * `withDeadline`-wrapped). A real dogfooding incident hung an entire sweep
+ * with no heartbeat, no progress, and no escape (pressing Escape didn't even
+ * help, since the per-iteration `signal?.aborted` check never gets a turn
+ * while stuck inside one file's await). Two bounds were added: a time-based
+ * `withDeadline`, and a race against the abort signal so an explicit Escape
+ * unblocks immediately rather than waiting out the rest of the per-file
+ * budget.
+ */
+describe("runWorkspaceDiagnostics — pre-open is bounded, not just fast (#615)", () => {
+	let tmp: string;
+	const ORIGINAL_PER_FILE_MS = process.env.PI_LENS_LSP_WORKSPACE_PER_FILE_MS;
+
+	beforeEach(() => {
+		vi.resetModules();
+		getServersForFileWithConfig.mockReset();
+		createLSPClient.mockReset();
+		tmp = fs.mkdtempSync(path.join(os.tmpdir(), "wsd-preopen-bound-"));
+	});
+
+	afterEach(() => {
+		fs.rmSync(tmp, { recursive: true, force: true });
+		if (ORIGINAL_PER_FILE_MS === undefined) {
+			delete process.env.PI_LENS_LSP_WORKSPACE_PER_FILE_MS;
+		} else {
+			process.env.PI_LENS_LSP_WORKSPACE_PER_FILE_MS = ORIGINAL_PER_FILE_MS;
+		}
+	});
+
+	it("a pre-open call that never resolves does not hang the whole sweep — the per-file deadline unblocks it", async () => {
+		process.env.PI_LENS_LSP_WORKSPACE_PER_FILE_MS = "150";
+		fs.writeFileSync(path.join(tmp, "a.ts"), "x\n");
+
+		const tsServer = makeServer("typescript", ".ts");
+		getServersForFileWithConfig.mockImplementation((fp: string) =>
+			fp.endsWith(".ts") ? [tsServer] : [],
+		);
+
+		const client = {
+			isAlive: () => true,
+			shutdown: async () => {},
+			getWorkspaceDiagnosticsSupport: () => ({
+				advertised: false,
+				mode: "push-only" as const,
+				diagnosticProviderKind: "none",
+			}),
+			getOperationSupport: () => ({}),
+			serverId: "typescript",
+			notify: {
+				// Deliberately never resolves — reproduces a stuck notification
+				// write / hung server. Before #615 this hung `preOpenGroupFiles`
+				// forever, with no heartbeat and no way for the sweep to move on.
+				open: vi.fn(() => new Promise<void>(() => {})),
+			},
+			waitForDiagnostics: vi.fn(async () => []),
+			getDiagnostics: vi.fn(() => []),
+		};
+		createLSPClient.mockResolvedValue(client);
+
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const start = Date.now();
+		const results = await new LSPService().runWorkspaceDiagnostics(tmp);
+		const elapsedMs = Date.now() - start;
+
+		expect(results.length).toBe(1);
+		// Should resolve close to the 150ms per-file deadline, not hang forever
+		// (or for anywhere near the default 15s budget).
+		expect(elapsedMs).toBeLessThan(5_000);
+	}, 10_000);
+
+	it("aborting mid-pre-open unblocks immediately, without waiting out the full per-file deadline", async () => {
+		process.env.PI_LENS_LSP_WORKSPACE_PER_FILE_MS = "5000";
+		fs.writeFileSync(path.join(tmp, "a.ts"), "x\n");
+
+		const tsServer = makeServer("typescript", ".ts");
+		getServersForFileWithConfig.mockImplementation((fp: string) =>
+			fp.endsWith(".ts") ? [tsServer] : [],
+		);
+
+		const client = {
+			isAlive: () => true,
+			shutdown: async () => {},
+			getWorkspaceDiagnosticsSupport: () => ({
+				advertised: false,
+				mode: "push-only" as const,
+				diagnosticProviderKind: "none",
+			}),
+			getOperationSupport: () => ({}),
+			serverId: "typescript",
+			notify: {
+				open: vi.fn(() => new Promise<void>(() => {})),
+			},
+			waitForDiagnostics: vi.fn(async () => []),
+			getDiagnostics: vi.fn(() => []),
+		};
+		createLSPClient.mockResolvedValue(client);
+
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const controller = new AbortController();
+		setTimeout(() => controller.abort(), 50);
+
+		const start = Date.now();
+		await new LSPService().runWorkspaceDiagnostics(tmp, {
+			signal: controller.signal,
+		});
+		const elapsedMs = Date.now() - start;
+
+		// Aborted at ~50ms; must return well before the 5000ms per-file deadline
+		// would have — proving the abort signal itself unblocks the stuck
+		// pre-open, not just the timeout.
+		expect(elapsedMs).toBeLessThan(2_000);
+	}, 10_000);
+});
