@@ -16,6 +16,7 @@ import { circularDepsToProjectDiagnostics } from "../../clients/project-diagnost
 import { gitleaksResultToProjectDiagnostics } from "../../clients/project-diagnostics/runner-adapters/gitleaks.js";
 import { govulncheckResultToProjectDiagnostics } from "../../clients/project-diagnostics/runner-adapters/govulncheck.js";
 import { trivyResultToProjectDiagnostics } from "../../clients/project-diagnostics/runner-adapters/trivy.js";
+import { opengrepResultToProjectDiagnostics } from "../../clients/project-diagnostics/runner-adapters/opengrep.js";
 import { deadCodeResultToProjectDiagnostics } from "../../clients/project-diagnostics/runner-adapters/dead-code.js";
 import { extractCachedProjectDiagnostics } from "../../clients/project-diagnostics/extractors.js";
 import { scanProjectDiagnostics } from "../../clients/project-diagnostics/scanner.js";
@@ -331,6 +332,84 @@ describe("project diagnostics adapters", () => {
 		});
 	});
 
+	it("maps an opengrep ERROR finding to a BLOCKING diagnostic, with CWE in the message", () => {
+		const [diag] = opengrepResultToProjectDiagnostics(tmp, {
+			success: true,
+			scannedAt: "2026-01-01T00:00:00.000Z",
+			findings: [
+				{
+					checkId: "python.lang.security.audit.subprocess-shell-true",
+					path: "src/run.py",
+					startLine: 7,
+					startCol: 3,
+					endLine: 7,
+					endCol: 20,
+					message: "shell=True is dangerous",
+					severity: "ERROR",
+					cwe: ["CWE-78: OS Command Injection"],
+				},
+			],
+		});
+		expect(diag).toMatchObject({
+			filePath: path.join(tmp, "src/run.py"),
+			line: 7,
+			column: 3,
+			severity: "error",
+			semantic: "blocking",
+			runner: "opengrep",
+			rule: "opengrep:python.lang.security.audit.subprocess-shell-true",
+			message: "shell=True is dangerous (CWE-78: OS Command Injection)",
+		});
+	});
+
+	it("maps an opengrep WARNING/INFO finding to a non-blocking diagnostic", () => {
+		const diags = opengrepResultToProjectDiagnostics(tmp, {
+			success: true,
+			scannedAt: "",
+			findings: [
+				{
+					checkId: "generic.warning-rule",
+					path: "src/a.ts",
+					startLine: 1,
+					startCol: 1,
+					endLine: 1,
+					endCol: 1,
+					message: "warn finding",
+					severity: "WARNING",
+				},
+				{
+					checkId: "generic.info-rule",
+					path: "src/b.ts",
+					startLine: 1,
+					startCol: 1,
+					endLine: 1,
+					endCol: 1,
+					message: "info finding",
+					severity: "INFO",
+				},
+			],
+		});
+		expect(diags[0]).toMatchObject({ severity: "warning", semantic: "warning" });
+		expect(diags[1]).toMatchObject({ severity: "info", semantic: "warning" });
+	});
+
+	it("returns no opengrep diagnostics on a failed or empty scan", () => {
+		expect(
+			opengrepResultToProjectDiagnostics(tmp, {
+				success: false,
+				findings: [],
+				scannedAt: "",
+			}),
+		).toEqual([]);
+		expect(
+			opengrepResultToProjectDiagnostics(tmp, {
+				success: true,
+				findings: [],
+				scannedAt: "",
+			}),
+		).toEqual([]);
+	});
+
 	it("anchors a govulncheck finding at the first traced source frame", () => {
 		const [diag] = govulncheckResultToProjectDiagnostics(tmp, {
 			success: true,
@@ -466,18 +545,35 @@ describe("extractCachedProjectDiagnostics (registry)", () => {
 				unusedDeps: [],
 				unlistedDeps: [],
 			},
+			opengrep: {
+				success: true,
+				scannedAt: "",
+				findings: [
+					{
+						checkId: "python.lang.security.audit.subprocess-shell-true",
+						path: "f.py",
+						startLine: 3,
+						startCol: 1,
+						endLine: 3,
+						endCol: 5,
+						message: "shell=True is dangerous",
+						severity: "ERROR",
+					},
+				],
+			},
 		});
 
 		const { diagnostics, runners } = extractCachedProjectDiagnostics(cm, tmp);
 
-		// jscpd 2 + gitleaks 1 + madge 2 + govulncheck 1 + trivy 1 + dead-code 1 = 8
-		expect(diagnostics).toHaveLength(8);
+		// jscpd 2 + gitleaks 1 + madge 2 + govulncheck 1 + trivy 1 + dead-code 1 + opengrep 1 = 9
+		expect(diagnostics).toHaveLength(9);
 		expect(runners.sort()).toEqual([
 			"dead-code",
 			"gitleaks",
 			"govulncheck",
 			"jscpd",
 			"madge",
+			"opengrep",
 			"trivy",
 		]);
 	});
@@ -527,6 +623,7 @@ describe("extractCachedProjectDiagnostics (registry)", () => {
 				"govulncheck",
 				"trivy",
 				"dead-code",
+				"opengrep",
 			].sort(),
 		);
 	});
