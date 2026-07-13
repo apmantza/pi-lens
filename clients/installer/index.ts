@@ -1365,6 +1365,7 @@ export function resetProbeCacheStateForTesting(): void {
 	_probeCacheDirty = false;
 	resolvedPathCache.clear();
 	ensureInFlight.clear();
+	lastManagedInstallVersion.clear();
 	if (_probeCacheFlushTimer !== null) {
 		clearTimeout(_probeCacheFlushTimer);
 		_probeCacheFlushTimer = null;
@@ -1433,10 +1434,48 @@ export function isLspTransportRequiredError(output: string): boolean {
 }
 
 /**
- * Verify a tool binary actually works by running --version
- * This catches broken symlinks, partial installs, and corrupted binaries
+ * Parse the exact version pinned in a TOOLS `packageName` spec, e.g.
+ * `"jscpd@3.5.10"` -> `"3.5.10"`. Scoped packages (`"@ast-grep/cli"`) have no
+ * pin unless a version is appended after the package name
+ * (`"@scope/pkg@1.2.3"`) — `lastIndexOf("@")` on a bare scope marker (index 0)
+ * correctly reports "no pin" rather than mistaking the scope for a version.
+ * Returns undefined when packageName has no explicit `@version` suffix.
  */
-async function verifyToolBinary(binPath: string): Promise<boolean> {
+function parsePinnedVersion(packageName: string): string | undefined {
+	const at = packageName.lastIndexOf("@");
+	if (at <= 0) return undefined;
+	return packageName.slice(at + 1) || undefined;
+}
+
+/** Extract the first semver-ish token (e.g. "3.5.10") from `--version` output. */
+function extractVersionToken(output: string): string | undefined {
+	return output.match(/\d+\.\d+\.\d+(?:[-+][\w.]+)?/)?.[0];
+}
+
+/**
+ * Version reported by the last successful `--version` probe of a pi-lens
+ * managed local npm install, keyed by toolId. Populated only inside
+ * getToolPath()'s managed-local-install checks below — i.e. only when that
+ * code path already spawns verifyToolBinary anyway (cache hits in
+ * ensureTool()'s fast paths never reach getToolPath, so this never adds a new
+ * spawn). Consumed by ensureTool() to detect drift against the tool's current
+ * `packageName` pin (#589) — deliberately scoped to installStrategy "npm"
+ * with an explicit version pin; unpinned tools and non-npm strategies (github/
+ * maven/archive) never populate or read this map.
+ */
+const lastManagedInstallVersion = new Map<string, string>();
+
+/**
+ * Verify a tool binary actually works by running --version
+ * This catches broken symlinks, partial installs, and corrupted binaries.
+ * `onVersionOutput`, when provided, receives the raw stdout on a successful
+ * (exit 0) probe — used to piggyback version-pin drift detection onto this
+ * already-happening spawn instead of adding a new one (#589).
+ */
+async function verifyToolBinary(
+	binPath: string,
+	onVersionOutput?: (output: string) => void,
+): Promise<boolean> {
 	return new Promise((resolve) => {
 		const isWindows = process.platform === "win32";
 		const hasKnownWindowsExt = /\.(cmd|exe|ps1)$/i.test(binPath);
@@ -1477,6 +1516,7 @@ async function verifyToolBinary(binPath: string): Promise<boolean> {
 		proc.on("exit", (code) => {
 			if (code === 0) {
 				debugLog(`Verified: ${binPath} (version: ${stdout.trim()})`);
+				onVersionOutput?.(stdout);
 				resolve(true);
 			} else if (isLspTransportRequiredError(`${stdout}\n${stderr}`)) {
 				// Valid stdio LSP server that rejects `--version` (#208) — the
@@ -1742,6 +1782,23 @@ export async function getToolPath(toolId: string): Promise<string | undefined> {
 		return getArchiveTreeBundlePath(tool);
 	}
 
+	// Version-pin drift detection (#589) is scoped to npm-strategy tools with an
+	// explicit `@version` pin — everything else (unpinned npm entries, pip/gem,
+	// github/maven/archive) has no drift signal to piggyback on here. Clear any
+	// stale entry up front so a miss on the checks below never leaves a prior
+	// call's version lingering for ensureTool() to misread.
+	const pinnedVersion =
+		tool.installStrategy === "npm" && tool.packageName
+			? parsePinnedVersion(tool.packageName)
+			: undefined;
+	if (pinnedVersion) lastManagedInstallVersion.delete(toolId);
+	const recordVersion = pinnedVersion
+		? (output: string): void => {
+				const seen = extractVersionToken(output);
+				if (seen) lastManagedInstallVersion.set(toolId, seen);
+			}
+		: undefined;
+
 	// Fast path: check local npm install first (where auto-install places tools).
 	// This avoids the ~2-5s overhead of spawning npm global probes and PATH
 	// searches for tools we already manage locally.
@@ -1756,7 +1813,7 @@ export async function getToolPath(toolId: string): Promise<string | undefined> {
 		const cmdPath = `${localBase}.cmd`;
 		try {
 			await fs.access(cmdPath);
-			if (await verifyToolBinary(cmdPath)) {
+			if (await verifyToolBinary(cmdPath, recordVersion)) {
 				return cmdPath;
 			}
 			logSessionStart(
@@ -1770,7 +1827,7 @@ export async function getToolPath(toolId: string): Promise<string | undefined> {
 		const exePath = `${localBase}.exe`;
 		try {
 			await fs.access(exePath);
-			if (await verifyToolBinary(exePath)) {
+			if (await verifyToolBinary(exePath, recordVersion)) {
 				return exePath;
 			}
 			logSessionStart(
@@ -1782,7 +1839,7 @@ export async function getToolPath(toolId: string): Promise<string | undefined> {
 	}
 	try {
 		await fs.access(localBase);
-		if (await verifyToolBinary(localBase)) {
+		if (await verifyToolBinary(localBase, recordVersion)) {
 			return localBase;
 		}
 		logSessionStart(
@@ -3203,6 +3260,33 @@ export async function ensureTool(
 		// Check if already installed.
 		const existingPath = await getToolPath(toolId);
 		if (existingPath) {
+			// Version-pin drift (#589): getToolPath() above just spawned
+			// verifyToolBinary on the managed local install anyway (this is the
+			// slow path — fast paths 1/2 above already returned before reaching
+			// here), so lastManagedInstallVersion was populated for free if this
+			// is a pinned npm tool. Compare it to the current pin and, on
+			// mismatch, route through the EXISTING forceReinstall codepath rather
+			// than resolving to a known-stale binary. Piggybacks entirely on the
+			// probe-cache's ~once-per-24h/once-per-session cadence — no new spawn.
+			const tool = TOOLS.find((t) => t.id === toolId);
+			const pinnedVersion =
+				tool?.installStrategy === "npm" && tool.packageName
+					? parsePinnedVersion(tool.packageName)
+					: undefined;
+			if (pinnedVersion) {
+				const seenVersion = lastManagedInstallVersion.get(toolId);
+				if (seenVersion && seenVersion !== pinnedVersion) {
+					lastManagedInstallVersion.delete(toolId);
+					logSessionStart(
+						`auto-install ensure ${toolId}: version drift (installed ${seenVersion} != pinned ${pinnedVersion}) — forcing reinstall (${Date.now() - ensureStartMs}ms)`,
+					);
+					return ensureTool(toolId, {
+						forceReinstall: true,
+						allowInstall: opts?.allowInstall,
+					});
+				}
+			}
+
 			resolvedPathCache.set(toolId, existingPath);
 			void updateProbeCache(toolId, existingPath);
 			logSessionStart(
