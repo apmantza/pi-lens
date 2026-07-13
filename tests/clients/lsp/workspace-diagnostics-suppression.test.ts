@@ -6,6 +6,19 @@
  * exact same file. This guards the fix: the sweep must apply
  * `applyAuxiliarySuppressions` the same way the per-edit dispatch runner and
  * `tools/lsp-diagnostics.ts` do.
+ *
+ * #584 update: opengrep itself no longer participates in this sweep at all
+ * (`WORKSPACE_SWEEP_EXCLUDED_SERVER_IDS` in `clients/lsp/index.ts`) — its
+ * findings for a full-workspace scan now come from a dedicated CLI extractor
+ * (`opengrep-client.ts`), which honors `// nosemgrep` natively at the scan
+ * engine level (verified in `tests/clients/opengrep-client.test.ts`), so no
+ * extra filtering is needed there either. These tests below exercise the
+ * GENERIC `applyAuxiliarySuppressions` wiring against a server that DOES
+ * still flow through the sweep (`ast-grep`) rather than opengrep — the
+ * profile lookup keys off the diagnostic's `source` field (e.g. "Semgrep"),
+ * not the spawning server's id, so this still proves the sweep applies
+ * suppression to whatever auxiliary diagnostics it collects, regardless of
+ * which server produced them.
  */
 
 import * as fs from "node:fs";
@@ -56,16 +69,21 @@ describe("runWorkspaceDiagnostics — auxiliary inline-suppression (#586)", () =
 	});
 	afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
-	it("drops a `// nosemgrep`-suppressed opengrep finding from the sweep", async () => {
+	it("drops a `// nosemgrep`-suppressed finding from the sweep (generic wiring, non-opengrep server)", async () => {
 		const suppressed = path.join(tmp, "suppressed.py");
 		fs.writeFileSync(suppressed, "token = 'x'  // nosemgrep\n");
 
-		const server = makeServer("opengrep", ".py");
+		// #584: opengrep itself is excluded from this sweep now — use a server
+		// that's still touched (ast-grep) to prove `applyAuxiliarySuppressions`
+		// is still wired in generically. The diagnostic's `source: "Semgrep"`
+		// (from `semgrepDiag`) is what routes it through the opengrep profile's
+		// `isSuppressed` regardless of which server produced it.
+		const server = makeServer("ast-grep", ".py");
 		getServersForFileWithConfig.mockReturnValue([server]);
 		createLSPClient.mockResolvedValue({
 			isAlive: () => true,
 			shutdown: async () => {},
-			serverId: "opengrep",
+			serverId: "ast-grep",
 			getWorkspaceDiagnosticsSupport: () => ({
 				advertised: false,
 				mode: "push-only" as const,
@@ -85,16 +103,20 @@ describe("runWorkspaceDiagnostics — auxiliary inline-suppression (#586)", () =
 		expect(results[0]?.count).toBe(0);
 	});
 
-	it("keeps the same finding when the file has no nosemgrep comment", async () => {
+	it("keeps the same finding when the file has no nosemgrep comment (generic wiring, non-opengrep server)", async () => {
 		const unsuppressed = path.join(tmp, "unsuppressed.py");
 		fs.writeFileSync(unsuppressed, "token = 'x'\n");
 
-		const server = makeServer("opengrep", ".py");
+		// See the top-of-file note: opengrep is excluded from the sweep (#584),
+		// so this uses ast-grep (still swept) to prove the generic
+		// `applyAuxiliarySuppressions` call doesn't drop findings when there's
+		// nothing to suppress.
+		const server = makeServer("ast-grep", ".py");
 		getServersForFileWithConfig.mockReturnValue([server]);
 		createLSPClient.mockResolvedValue({
 			isAlive: () => true,
 			shutdown: async () => {},
-			serverId: "opengrep",
+			serverId: "ast-grep",
 			getWorkspaceDiagnosticsSupport: () => ({
 				advertised: false,
 				mode: "push-only" as const,

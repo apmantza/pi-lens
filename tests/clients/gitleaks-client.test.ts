@@ -1,7 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+	GitleaksClient,
 	hasGitleaksSignal,
 	parseGitleaksReport,
 } from "../../clients/gitleaks-client.js";
@@ -228,5 +229,62 @@ describe("parseGitleaksReport (#130)", () => {
 		const findings = parseGitleaksReport(raw);
 		expect(findings).toHaveLength(1);
 		expect(findings[0].startLine).toBe(42);
+	});
+});
+
+describe("GitleaksClient de-dupe guard (#585 prerequisite)", () => {
+	it("de-dupes concurrent scan() calls for the same project root (SecurityScanClient.dedupeScan)", async () => {
+		// #585: mode=full can now trigger a fresh gitleaks scan while a
+		// session_start scan of the same root may still be in flight. Without
+		// this guard (added via the shared SecurityScanClient base, #313) that
+		// would double-spawn gitleaks — the same CPU-contention pathology
+		// KnipClient.inFlight's docstring documents for knip.
+		const env = setupTestEnvironment("pi-lens-gitleaks-dedupe-");
+		try {
+			fs.writeFileSync(path.join(env.tmpDir, ".gitleaksignore"), "");
+
+			const client = new GitleaksClient(false) as unknown as {
+				ensureAvailable: () => Promise<boolean>;
+				runScan: (cwd: string) => Promise<{
+					success: boolean;
+					findings: unknown[];
+					scannedAt: string;
+				}>;
+				scan: (cwd: string) => Promise<unknown>;
+			};
+			vi.spyOn(client, "ensureAvailable").mockResolvedValue(true);
+
+			type Resolver = (v: {
+				success: boolean;
+				findings: unknown[];
+				scannedAt: string;
+			}) => void;
+			let resolveRun: Resolver | null = null;
+			let runCalls = 0;
+			const runSpy = vi.spyOn(client, "runScan").mockImplementation(
+				() =>
+					new Promise((res) => {
+						runCalls++;
+						resolveRun = res as unknown as Resolver;
+					}),
+			);
+
+			const first = client.scan(env.tmpDir);
+			const second = client.scan(env.tmpDir);
+
+			await Promise.resolve();
+			await Promise.resolve();
+
+			expect(runCalls).toBe(1);
+			expect(runSpy).toHaveBeenCalledTimes(1);
+
+			const payload = { success: true, findings: [], scannedAt: "now" };
+			(resolveRun as Resolver | null)?.(payload);
+
+			const [a, b] = await Promise.all([first, second]);
+			expect(a).toBe(b);
+		} finally {
+			env.cleanup();
+		}
 	});
 });
