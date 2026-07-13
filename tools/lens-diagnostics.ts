@@ -28,6 +28,7 @@ import {
 	reconcileProjectDiagnosticsSnapshot,
 } from "../clients/project-diagnostics/cache.js";
 import { warmTriggerFor } from "../clients/project-diagnostics/extractors.js";
+import type { FreshProjectDiagnosticsResult } from "../clients/project-diagnostics/fresh-fetch.js";
 import { fetchFreshProjectDiagnostics } from "../clients/project-diagnostics/fresh-fetch.js";
 import { loadBootstrapClients } from "../clients/bootstrap.js";
 import { scanProjectDiagnostics } from "../clients/project-diagnostics/scanner.js";
@@ -970,7 +971,27 @@ async function formatFullMode(
 		pathsScope && !pathsScope.hasDirectoryEntries
 			? pathsScope.existingEntries
 			: undefined;
-	const [rawLspResults, rawProjectSnapshot] = await Promise.all([
+	// #613: the heavyweight-analyzer fresh-fetch (below) used to be `await`ed
+	// AFTER this Promise.all had already fully resolved — sequentially eating
+	// into the SAME wall-clock ceiling (`FULL_SCAN_WALL_CLOCK_MS`) the LSP sweep
+	// already spent, rather than sharing it concurrently as the old comment here
+	// claimed. On a real project the LSP sweep alone can take 100+s, leaving the
+	// analyzers almost no budget before the shared abort signal fires — killing
+	// ALL of them (even unconditional ones like knip/jscpd/madge) before any
+	// could complete. Building its promise here, alongside the sweep and cheap
+	// scan, makes it genuinely concurrent — all three phases now race the SAME
+	// signal from the same starting point instead of stacking.
+	const analyzersPromise = shouldIncludeProjectRunners(options.refreshRunners)
+		? loadBootstrapClients().then((clients) =>
+				fetchFreshProjectDiagnostics(cacheManager, cwd, clients, signal),
+			)
+		: Promise.resolve<FreshProjectDiagnosticsResult>({
+				diagnostics: [],
+				runners: [],
+				cold: [],
+				timings: {},
+			});
+	const [rawLspResults, rawProjectSnapshot, extracted] = await Promise.all([
 		runWorkspaceDiagnostics.call(lspService, cwd, {
 			maxFiles: options.maxLspFiles,
 			signal,
@@ -981,6 +1002,7 @@ async function formatFullMode(
 			...options,
 			files: explicitFiles,
 		}),
+		analyzersPromise,
 	]);
 	const aborted = signal?.aborted ?? false;
 	const lspResults = rawLspResults.filter((result) =>
@@ -1013,30 +1035,19 @@ async function formatFullMode(
 		rawProjectSnapshot,
 		includeFile,
 	);
-	// Fold in the heavyweight-analyzer findings (jscpd, madge, gitleaks, knip,
-	// govulncheck, trivy, dead-code) — a FRESH run of each (#585), not a
-	// cache-only read: mode=full is the "authoritative full picture" call, so a
-	// session_start-only snapshot that can be hours stale in a long session is
-	// no longer good enough. Safe to trigger now: every one of these analyzers
-	// has its own in-flight de-dupe guard (KnipClient/JscpdClient/
+	// Heavyweight-analyzer findings (jscpd, madge, gitleaks, knip, govulncheck,
+	// trivy, dead-code) — a FRESH run of each (#585), not a cache-only read:
+	// mode=full is the "authoritative full picture" call, so a session_start-only
+	// snapshot that can be hours stale in a long session is no longer good
+	// enough. Safe to run concurrently with the LSP sweep: every one of these
+	// analyzers has its own in-flight de-dupe guard (KnipClient/JscpdClient/
 	// DeadCodeClient's `inFlight` map, SecurityScanClient.dedupeScan for
 	// gitleaks/govulncheck/trivy — see fresh-fetch.ts's header), so a fresh
 	// fetch here racing a concurrent session_start/turn_end pass over the same
-	// tool JOINS that run instead of double-spawning it. Only when the caller
-	// opted into project-runner state (this is the expensive path — up to
-	// trivy's own ~180s timeout ceiling, run in parallel with the rest).
-	// `signal` is the SAME combined Escape/turn-abort + wall-clock-ceiling
-	// signal already threaded into the LSP sweep/cheap-runner scan above — an
-	// abort mid-fetch returns whatever settled so far (fresh-fetch.ts races
-	// rather than cancels in-flight spawns; see its header for why).
-	const extracted = shouldIncludeProjectRunners(options.refreshRunners)
-		? await fetchFreshProjectDiagnostics(
-				cacheManager,
-				cwd,
-				await loadBootstrapClients(),
-				options.signal,
-			)
-		: { diagnostics: [], runners: [], cold: [], timings: {} };
+	// tool JOINS that run instead of double-spawning it. `extracted` was already
+	// computed above, in the SAME `Promise.all` as the LSP sweep (#613) — only
+	// when the caller opted into project-runner state (otherwise it's the
+	// `Promise.resolve({...})` stub from `analyzersPromise` above).
 	const projectSnapshot = foldExtraDiagnosticsIntoSnapshot(
 		scannedSnapshot,
 		extracted.diagnostics.filter((d) => includeFile(d.filePath)),
