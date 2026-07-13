@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetProjectLensConfigCache } from "../../clients/project-lens-config.js";
 import {
 	hasAnyDependencyManifest,
@@ -11,6 +11,7 @@ import {
 	parseTrivySecrets,
 	resolveSeverityFloor,
 	shouldScanTrivy,
+	TrivyClient,
 } from "../../clients/trivy-client.js";
 
 let tmp: string;
@@ -355,5 +356,62 @@ describe("parseTrivyLicenses", () => {
 		expect(parseTrivyLicenses("")).toEqual([]);
 		expect(parseTrivyLicenses("not json")).toEqual([]);
 		expect(parseTrivyLicenses("{}")).toEqual([]);
+	});
+});
+
+describe("TrivyClient de-dupe guard (#585 prerequisite)", () => {
+	it("de-dupes concurrent scan() calls for the same project root (SecurityScanClient.dedupeScan)", async () => {
+		// #585: mode=full can now trigger a fresh trivy scan while a
+		// session_start scan of the same root may still be in flight. Without
+		// this guard (added via the shared SecurityScanClient base, #313) that
+		// would double-spawn trivy — the slowest of these analyzers (own ~180s
+		// timeout ceiling), making a double-spawn especially costly.
+		fs.writeFileSync(
+			path.join(tmp, ".pi-lens.json"),
+			JSON.stringify({ trivy: { enabled: true } }),
+		);
+		fs.writeFileSync(path.join(tmp, "package.json"), "{}");
+		resetProjectLensConfigCache();
+
+		const client = new TrivyClient(false) as unknown as {
+			ensureAvailable: () => Promise<boolean>;
+			runScan: (cwd: string) => Promise<{
+				success: boolean;
+				findings: unknown[];
+				scannedAt: string;
+			}>;
+			scan: (cwd: string) => Promise<unknown>;
+		};
+		vi.spyOn(client, "ensureAvailable").mockResolvedValue(true);
+
+		type Resolver = (v: {
+			success: boolean;
+			findings: unknown[];
+			scannedAt: string;
+		}) => void;
+		let resolveRun: Resolver | null = null;
+		let runCalls = 0;
+		const runSpy = vi.spyOn(client, "runScan").mockImplementation(
+			() =>
+				new Promise((res) => {
+					runCalls++;
+					resolveRun = res as unknown as Resolver;
+				}),
+		);
+
+		const first = client.scan(tmp);
+		const second = client.scan(tmp);
+
+		await Promise.resolve();
+		await Promise.resolve();
+
+		expect(runCalls).toBe(1);
+		expect(runSpy).toHaveBeenCalledTimes(1);
+
+		const payload = { success: true, findings: [], scannedAt: "now" };
+		(resolveRun as Resolver | null)?.(payload);
+
+		const [a, b] = await Promise.all([first, second]);
+		expect(a).toBe(b);
 	});
 });

@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { parseGovulncheckJson } from "../../clients/govulncheck-client.js";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import {
+	GovulncheckClient,
+	parseGovulncheckJson,
+} from "../../clients/govulncheck-client.js";
+import { setupTestEnvironment } from "./test-utils.js";
 
 describe("parseGovulncheckJson (#132)", () => {
 	it("returns an empty list for empty / whitespace input", () => {
@@ -198,5 +204,64 @@ describe("parseGovulncheckJson (#132)", () => {
 		const findings = parseGovulncheckJson(stream);
 		expect(findings).toHaveLength(1);
 		expect(findings[0].osv).toBe("GO-2024-1111");
+	});
+});
+
+describe("GovulncheckClient de-dupe guard (#585 prerequisite)", () => {
+	it("de-dupes concurrent analyze() calls for the same project root (SecurityScanClient.dedupeScan)", async () => {
+		// #585: mode=full can now trigger a fresh govulncheck run while a
+		// session_start scan of the same root may still be in flight. Without
+		// this guard (added via the shared SecurityScanClient base, #313) that
+		// would double-spawn govulncheck.
+		const env = setupTestEnvironment("pi-lens-govulncheck-dedupe-");
+		try {
+			fs.writeFileSync(
+				path.join(env.tmpDir, "go.mod"),
+				"module example.com/demo\n\ngo 1.21\n",
+			);
+
+			const client = new GovulncheckClient(false) as unknown as {
+				ensureAvailable: () => Promise<boolean>;
+				runScan: (cwd: string) => Promise<{
+					success: boolean;
+					findings: unknown[];
+					scannedAt: string;
+				}>;
+				analyze: (cwd: string) => Promise<unknown>;
+			};
+			vi.spyOn(client, "ensureAvailable").mockResolvedValue(true);
+
+			type Resolver = (v: {
+				success: boolean;
+				findings: unknown[];
+				scannedAt: string;
+			}) => void;
+			let resolveRun: Resolver | null = null;
+			let runCalls = 0;
+			const runSpy = vi.spyOn(client, "runScan").mockImplementation(
+				() =>
+					new Promise((res) => {
+						runCalls++;
+						resolveRun = res as unknown as Resolver;
+					}),
+			);
+
+			const first = client.analyze(env.tmpDir);
+			const second = client.analyze(env.tmpDir);
+
+			await Promise.resolve();
+			await Promise.resolve();
+
+			expect(runCalls).toBe(1);
+			expect(runSpy).toHaveBeenCalledTimes(1);
+
+			const payload = { success: true, findings: [], scannedAt: "now" };
+			(resolveRun as Resolver | null)?.(payload);
+
+			const [a, b] = await Promise.all([first, second]);
+			expect(a).toBe(b);
+		} finally {
+			env.cleanup();
+		}
 	});
 });
