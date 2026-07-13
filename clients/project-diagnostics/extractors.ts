@@ -17,6 +17,7 @@ import type { GitleaksResult } from "../gitleaks-client.js";
 import type { GovulncheckResult } from "../govulncheck-client.js";
 import type { JscpdResult } from "../jscpd-client.js";
 import type { KnipIssue } from "../knip-client.js";
+import type { OpengrepResult } from "../opengrep-client.js";
 import type { TrivyResult } from "../trivy-client.js";
 import { deadCodeResultToProjectDiagnostics } from "./runner-adapters/dead-code.js";
 import { gitleaksResultToProjectDiagnostics } from "./runner-adapters/gitleaks.js";
@@ -24,6 +25,7 @@ import { govulncheckResultToProjectDiagnostics } from "./runner-adapters/govulnc
 import { jscpdResultToProjectDiagnostics } from "./runner-adapters/jscpd.js";
 import { knipIssuesToProjectDiagnostics } from "./runner-adapters/knip.js";
 import { circularDepsToProjectDiagnostics } from "./runner-adapters/madge.js";
+import { opengrepResultToProjectDiagnostics } from "./runner-adapters/opengrep.js";
 import { trivyResultToProjectDiagnostics } from "./runner-adapters/trivy.js";
 import type { ProjectDiagnostic } from "./types.js";
 
@@ -71,6 +73,14 @@ const EXTRACTORS: ProjectDiagnosticExtractor<any>[] = [
 			govulncheckResultToProjectDiagnostics(cwd, r),
 	},
 	{
+		// #584: opengrep's full-workspace findings, sourced from a single
+		// project-wide CLI scan (`opengrep-client.ts`) instead of the per-file
+		// LSP sweep — see the constant's doc in `clients/lsp/index.ts`.
+		id: "opengrep",
+		cacheKeys: ["opengrep"],
+		adapt: (cwd, r: OpengrepResult) => opengrepResultToProjectDiagnostics(cwd, r),
+	},
+	{
 		id: "trivy",
 		cacheKeys: ["trivy"],
 		adapt: (cwd, r: TrivyResult) => trivyResultToProjectDiagnostics(cwd, r),
@@ -98,6 +108,7 @@ const WARM_TRIGGER: Record<string, string> = {
 	govulncheck: "runs at session-start (Go projects only)",
 	trivy: "runs at session-start",
 	"dead-code": "runs at session-start (Python projects only)",
+	opengrep: "runs at session-start",
 };
 
 /** All registered extractor ids, in registry order — exported for tools/tests

@@ -8,6 +8,7 @@ import type { GovulncheckClient } from "./govulncheck-client.js";
 import type { JscpdClient } from "./jscpd-client.js";
 import type { KnipClient } from "./knip-client.js";
 import type { MetricsClient } from "./metrics-client.js";
+import type { OpengrepClient } from "./opengrep-client.js";
 import type { RuffClient } from "./ruff-client.js";
 import type { RustClient } from "./rust-client.js";
 import type { TestRunnerClient } from "./test-runner-client.js";
@@ -29,6 +30,7 @@ export interface BootstrapClients {
 	govulncheckClient: GovulncheckClient;
 	gitleaksClient: GitleaksClient;
 	trivyClient: TrivyClient;
+	opengrepClient: OpengrepClient;
 	rustClient: RustClient;
 	agentBehaviorClient: AgentBehaviorClient;
 	deadCodeClients: DeadCodeClient[];
@@ -129,6 +131,7 @@ export function loadBootstrapClients(): Promise<BootstrapClients> {
 			govulncheckClient,
 			gitleaksClient,
 			trivyClient,
+			opengrepClient,
 			rustClient,
 			agentBehaviorClient,
 			deadCodeClients,
@@ -168,6 +171,11 @@ export function loadBootstrapClients(): Promise<BootstrapClients> {
 				async () => new (await import("./gitleaks-client.js")).GitleaksClient(),
 			),
 			load("trivy", async () => new (await import("./trivy-client.js")).TrivyClient()),
+			load(
+				"opengrep",
+				async () =>
+					new (await import("./opengrep-client.js")).OpengrepClient(),
+			),
 			load("rust", async () => new (await import("./rust-client.js")).RustClient()),
 			load(
 				"agent-behavior",
@@ -196,6 +204,7 @@ export function loadBootstrapClients(): Promise<BootstrapClients> {
 			govulncheckClient,
 			gitleaksClient,
 			trivyClient,
+			opengrepClient,
 			rustClient,
 			agentBehaviorClient,
 			deadCodeClients,
