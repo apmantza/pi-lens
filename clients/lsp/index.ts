@@ -2145,9 +2145,71 @@ export class LSPService {
 			},
 		});
 
+		// #608: pre-open every swept file's document, across whichever server(s)
+		// it belongs to, in ONE fast pass BEFORE a group's serial per-file
+		// diagnostics-wait loop starts (see the per-group worker below).
+		// `handleNotifyOpen`'s workspace/didChangeWatchedFiles enqueue (#271)
+		// only coalesces opens that land within its 100ms debounce window
+		// (`WatchedFilesQueue`, watch-queue.ts) — it arms the flush timer on
+		// the FIRST enqueue and just accumulates on every call after that
+		// until the timer fires. The per-file loop waits up to several
+		// seconds per file for diagnostics before moving to the next one, so
+		// consecutive first-opens during a sweep land far outside that 100ms
+		// window: every previously-unopened file used to fire its OWN
+		// project-wide recheck notification instead of one for the whole
+		// sweep, and later files timed out purely from queueing behind those
+		// rechecks (#608). Firing every file's open notification here,
+		// back-to-back with no diagnostics wait between them, keeps them
+		// inside the debounce window so `WatchedFilesQueue` coalesces them
+		// into (at most a small handful of) flushes per server the same way
+		// a per-edit dispatch burst already does. By the time `processFile`
+		// below calls `touchFile`, each document is already in
+		// `openDocuments`, so `handleNotifyOpen` takes the cheap already-open
+		// `didChange` branch and enqueues nothing further. Content read here
+		// is cached so `processFile` doesn't re-read the same file from disk.
+		//
+		// Only used on the per-file fallback path — a group whose
+		// `workspace/diagnostic` pull (#387 Item 2) succeeds never opens
+		// per-file documents at all, so pre-opening ahead of a pull attempt
+		// would be pure waste (and would break that path's "no per-file
+		// opens" guarantee). Called from inside each group's own serial loop
+		// (below), so it inherits the SAME #387 shape: one in-flight open at
+		// a time per server, parallel across distinct servers via the
+		// existing group-worker pool.
+		const contentCache = new Map<string, string>();
+		const preOpenGroupFiles = async (
+			groupFiles: readonly string[],
+		): Promise<void> => {
+			for (const filePath of groupFiles) {
+				if (signal?.aborted) return;
+				let content: string;
+				try {
+					content = await nodeFs.promises.readFile(filePath, "utf-8");
+				} catch {
+					continue; // processFile's own read will surface the real error.
+				}
+				contentCache.set(filePath, content);
+				const languageId = getLanguageId(filePath) ?? "plaintext";
+				const { clients } = await this.getClientsForFile(
+					filePath,
+					WORKSPACE_SWEEP_EXCLUDED_SERVER_IDS,
+				);
+				for (const entry of clients) {
+					try {
+						await entry.client.notify.open(filePath, content, languageId);
+					} catch {
+						// Best-effort: a failed pre-open just means processFile's own
+						// touchFile call below pays for the open instead.
+					}
+				}
+			}
+		};
+
 		const processFile = async (filePath: string): Promise<void> => {
 			try {
-				const content = await nodeFs.promises.readFile(filePath, "utf-8");
+				const content =
+					contentCache.get(filePath) ??
+					(await nodeFs.promises.readFile(filePath, "utf-8"));
 				// onTimeout:"undefined" so a hung file yields no diagnostics and the
 				// worker moves on; a real touchFile rejection still propagates to the
 				// catch below and is recorded as an error.
@@ -2251,6 +2313,10 @@ export class LSPService {
 							continue;
 						}
 					}
+					// #608: batch-open this group's files before waiting on
+					// diagnostics for any of them individually — see
+					// `preOpenGroupFiles` above.
+					await preOpenGroupFiles(group.files);
 					for (const filePath of group.files) {
 						// Honor cancellation between files (#341); already-collected
 						// results are returned as a partial.
