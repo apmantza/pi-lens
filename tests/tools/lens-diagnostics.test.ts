@@ -1003,6 +1003,44 @@ describe("lens_diagnostics mode=full", () => {
 		).toEqual(["trivy"]);
 	});
 
+	// #613: fetchFreshProjectDiagnostics used to be `await`ed only AFTER the LSP
+	// sweep's own Promise.all had already resolved — sequentially eating into
+	// the SAME wall-clock ceiling the sweep already spent, instead of sharing it
+	// concurrently. A slow LSP sweep left the analyzer fetch almost no budget,
+	// so on a real project all 7 heavyweight analyzers could get aborted before
+	// any completed. Prove the fetch is now invoked (not just resolved) BEFORE
+	// the slow LSP sweep finishes.
+	it("mode=full starts the analyzer fresh-fetch CONCURRENTLY with the LSP sweep, not after it resolves (#613)", async () => {
+		mockSummaries.length = 0;
+		let lspSweepResolve: (() => void) | undefined;
+		let lspSweepStarted = false;
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockImplementation(
+				() =>
+					new Promise<unknown[]>((resolve) => {
+						lspSweepStarted = true;
+						lspSweepResolve = () => resolve([]);
+					}),
+			),
+		};
+
+		const runPromise = run(makeTool({}, lspService), {
+			mode: "full",
+			refreshRunners: "cached",
+		});
+
+		// Give the microtask queue a few turns for the sweep to start and, if the
+		// analyzer fetch were STILL sequential (the #613 bug), for it to be
+		// skipped since the sweep's own promise is deliberately never resolved
+		// in this test until after this assertion.
+		for (let i = 0; i < 5; i++) await Promise.resolve();
+		expect(lspSweepStarted).toBe(true);
+		expect(freshFetchMocks.fetchFreshProjectDiagnostics).toHaveBeenCalled();
+
+		lspSweepResolve?.();
+		await runPromise;
+	});
+
 	it("deduplicates LSP diagnostics already present in widget state by file line and rule", async () => {
 		mockSummaries.length = 0;
 		mockSummaries.push(
