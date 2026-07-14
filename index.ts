@@ -611,6 +611,13 @@ export default function (pi: ExtensionAPI) {
 		default: false,
 	});
 
+	pi.registerFlag("lens-partial-edit-apply", {
+		description:
+			"Opt in to applying the matching subset of a failed multi-edit. Disabled by default to preserve the host edit tool's atomic semantics. Also via edit.partialApply=true in ~/.pi-lens/config.json.",
+		type: "boolean",
+		default: false,
+	});
+
 	pi.registerFlag("no-lens-context", {
 		description:
 			"Disable automatic context injection (session-start guidance, turn-end & test findings) while keeping tools, LSP, read-guard, and formatting active. Toggle with /lens-context-toggle. Also via contextInjection.enabled=false in config or PI_LENS_NO_CONTEXT_INJECTION=1.",
@@ -2088,7 +2095,13 @@ export default function (pi: ExtensionAPI) {
 					runtime.telemetrySessionId,
 				);
 				if (preflightError) {
-					if (partiallyApplicable && partiallyApplicable.length > 0) {
+					const partialApplyEnabled =
+						getLensFlag("lens-partial-edit-apply") === true;
+					if (
+						partialApplyEnabled &&
+						partiallyApplicable &&
+						partiallyApplicable.length > 0
+					) {
 						try {
 							const partial = await applyPartiallyApplicableEdits({
 								filePath,
@@ -2149,14 +2162,33 @@ export default function (pi: ExtensionAPI) {
 									"🔄 RETRYABLE — Edit target not found",
 									`⚠️ PARTIAL APPLY — ${partial.appliedCount} edit${partial.appliedCount !== 1 ? "s" : ""} applied (${partial.appliedIndices})`,
 								);
+								reason += `\n\nDo not re-submit ${partial.appliedIndices}; only retry the unresolved edit targets.`;
 								if (partial.postEditOutput) {
 									reason += `\n\nPost-apply analysis:\n${partial.postEditOutput}`;
 								}
 								return { block: true, reason };
 							}
-						} catch {
-							// fall through to full block
+						} catch (error) {
+							const message =
+								error instanceof Error ? error.message : String(error);
+							return {
+								block: true,
+								reason:
+									`${preflightError}\n\n` +
+									`⚠️ PARTIAL APPLY ERROR — Disk state may have changed before post-edit analysis failed (${message}). Re-read the file before retrying.`,
+							};
 						}
+					}
+					if (partiallyApplicable && partiallyApplicable.length > 0) {
+						const matchedIndices = partiallyApplicable
+							.map((edit) => `edits[${edit.originalIndex}]`)
+							.join(", ");
+						return {
+							block: true,
+							reason:
+								`${preflightError}\n\n` +
+								`🔒 ATOMIC EDIT — No changes were written. ${matchedIndices} matched, but the entire batch was withheld because at least one edit target failed preflight. Correct the unresolved targets and retry the full batch.`,
+						};
 					}
 					return { block: true, reason: preflightError };
 				}

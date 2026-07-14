@@ -30,6 +30,13 @@ export interface PiLensGlobalConfig {
 		/** When to run auto-formatting after write/edit tool results. */
 		mode?: PiLensFormatMode;
 	};
+	edit?: {
+		/**
+		 * Whether pi-lens may apply the matching subset of a failed multi-edit.
+		 * Defaults false so the host edit tool retains all-or-nothing semantics.
+		 */
+		partialApply?: boolean;
+	};
 	actionableWarnings?: {
 		/** Write turn-delta fixable warning reports and inject a short advisory. */
 		enabled?: boolean;
@@ -92,6 +99,11 @@ export function loadPiLensGlobalConfig(
 			formatRaw && typeof formatRaw === "object"
 				? (formatRaw as Record<string, unknown>)
 				: undefined;
+		const editRaw = raw.edit;
+		const edit =
+			editRaw && typeof editRaw === "object"
+				? (editRaw as Record<string, unknown>)
+				: undefined;
 		const actionableWarningsRaw = raw.actionableWarnings;
 		const actionableWarnings =
 			actionableWarningsRaw && typeof actionableWarningsRaw === "object"
@@ -144,6 +156,14 @@ export function loadPiLensGlobalConfig(
 						enabled:
 							typeof format.enabled === "boolean" ? format.enabled : undefined,
 						mode: formatMode,
+					}
+				: undefined,
+			edit: edit
+				? {
+						partialApply:
+							typeof edit.partialApply === "boolean"
+								? edit.partialApply
+								: undefined,
 					}
 				: undefined,
 			actionableWarnings: actionableWarnings
@@ -229,6 +249,9 @@ export function resolvePiLensFlag(
 	}
 	if (name === "immediate-format") {
 		return config?.format?.mode === "immediate";
+	}
+	if (name === "lens-partial-edit-apply") {
+		return config?.edit?.partialApply === true;
 	}
 	if (name === "lens-actionable-warnings") {
 		return config?.actionableWarnings?.enabled === true;

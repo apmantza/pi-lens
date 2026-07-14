@@ -67,6 +67,7 @@ describe("global pi-lens config", () => {
 			JSON.stringify({
 				widget: { visible: false },
 				format: { enabled: true, mode: "immediate" },
+				edit: { partialApply: true },
 				actionableWarnings: {
 					enabled: true,
 					includeLspCodeActions: true,
@@ -80,6 +81,7 @@ describe("global pi-lens config", () => {
 		expect(loadPiLensGlobalConfig(configPath)).toEqual({
 			widget: { visible: false },
 			format: { enabled: true, mode: "immediate" },
+			edit: { partialApply: true },
 			actionableWarnings: {
 				enabled: true,
 				includeLspCodeActions: true,
@@ -134,6 +136,30 @@ describe("global pi-lens config", () => {
 		expect(resolvePiLensFlag("lens-opengrep-config", "p/ci", config)).toBe(
 			"p/ci",
 		);
+	});
+
+	it("keeps partial edit application disabled by default and allows explicit opt-in", () => {
+		expect(
+			resolvePiLensFlag("lens-partial-edit-apply", false, undefined),
+		).toBe(false);
+		expect(resolvePiLensFlag("lens-partial-edit-apply", false, {})).toBe(
+			false,
+		);
+		expect(
+			resolvePiLensFlag("lens-partial-edit-apply", false, {
+				edit: { partialApply: false },
+			}),
+		).toBe(false);
+		expect(
+			resolvePiLensFlag("lens-partial-edit-apply", false, {
+				edit: { partialApply: true },
+			}),
+		).toBe(true);
+		expect(
+			resolvePiLensFlag("lens-partial-edit-apply", true, {
+				edit: { partialApply: false },
+			}),
+		).toBe(true);
 	});
 
 	it("parses contextInjection.enabled and resolves the no-lens-context flag", () => {

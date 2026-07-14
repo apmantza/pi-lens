@@ -51,6 +51,8 @@ Coverage is tracked across multiple reads: two reads of lines 1–100 and 101–
 
 Override for a single edit: `/lens-allow-edit <path>`
 
+Mixed-validity multi-edits are atomic by default: if any `oldText` block fails preflight, pi-lens writes none of the matching blocks and returns the failure. Legacy partial application is an explicit opt-in via `--lens-partial-edit-apply` or `edit.partialApply: true` in `~/.pi-lens/config.json`.
+
 Configure behavior with `--no-read-guard` to disable entirely, or set mode to `warn` instead of `block`.
 
 ### Module Report + Read Symbol (Read Substitute)

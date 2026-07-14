@@ -525,6 +525,8 @@ seq/hash/range validation → atomic apply → read-guard stamp → seq/change-l
 
 Use it first for partial apply, then LSP workspace edits/actionable autofix. It must not bypass read guard for normal agent edits, replace oldText autopatch, guess stale ranges, or apply project-wide edits by default.
 
+**Native multi-edit atomicity is the default invariant.** A mixed-validity `edit` call (some `oldText` blocks match, others fail preflight) must leave the file unchanged unless the user explicitly opts in with `--lens-partial-edit-apply` or global config `edit.partialApply: true`. Keep the gate at the `tool_call` partial-apply call site; never infer consent from read-guard mode or from the number of matching blocks. A blocked atomic batch must say no changes were written; an opted-in partial-apply failure after the mutation path starts must report disk state as uncertain and require a re-read rather than claim a clean rollback.
+
 ## SDK-reuse boundaries (deliberate — don't naively "simplify")
 A 2026 audit against `@earendil-works/pi-coding-agent` confirmed a few places where pi-lens intentionally does *not* reuse an SDK facility:
 - **Per-session diagnostic persistence** uses our own sidecar store (`clients/session-state-store.ts` → `getProjectDataDir/sessions/<id>.json`, atomic overwrite) rather than the SDK's `pi.appendEntry`/`getEntries`. `appendEntry` is append-only, so writing a fresh widget snapshot every `turn_end` would bloat the session JSONL with superseded copies; overwrite-in-place is the right fit. (The one genuine upside of `appendEntry` — fork/branch inheriting state for free — would let us drop the `session_before_fork` in-memory hand-off; revisit only if that hand-off becomes painful.)

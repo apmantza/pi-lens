@@ -78,6 +78,7 @@ pi --no-tests            # Skip test runner
 pi --no-delta            # Disable delta mode (show all diagnostics, not just new ones)
 pi --lens-guard          # Block git commit/push when unresolved blockers exist (experimental)
 pi --no-opengrep         # Disable the Opengrep security scanner (default-on auxiliary LSP)
+pi --lens-partial-edit-apply # Opt in to applying matching blocks from a failed multi-edit (default is atomic)
 ```
 
 ## Rules

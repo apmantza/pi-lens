@@ -582,17 +582,13 @@ function resolveOldTextEdits(
 				errorCount: errors.length,
 			},
 		});
-		const appliedNote =
-			passedEdits.length > 0
-				? `\n\n${passedEdits.map((e) => `edits[${e.originalIndex}]`).join(", ")} ${passedEdits.length === 1 ? "was" : "were"} applied — do NOT re-submit ${passedEdits.length === 1 ? "it" : "them"}.`
-				: "";
 		const header =
 			maxFailCount >= 2
 				? `🛑 RE-READ REQUIRED — You have submitted this oldText before and it still does not match.\n\nDo NOT retry from memory. Re-read \`${filePath}\` to get the current content, then rebuild your edit from the verbatim file text.`
 				: `🔄 RETRYABLE — Edit target not found`;
 		return {
 			touchedLines: undefined,
-			preflightError: `${header}\n\n${failureDetails.join("\n\n")}${appliedNote}`,
+			preflightError: `${header}\n\n${failureDetails.join("\n\n")}`,
 			partiallyApplicable: passedEdits.length > 0 ? passedEdits : undefined,
 		};
 	}

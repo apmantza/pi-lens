@@ -622,6 +622,162 @@ describe("index.ts integration", () => {
 		expect(checkEdit).toHaveBeenCalled();
 	}, INTEGRATION_TIMEOUT_MS);
 
+	it.each([
+		{
+			mode: "default atomic mode",
+			allowPartialApply: false,
+			expectedContent: "const a = 1;\nconst b = 2;\n",
+			expectedMarker: "🔒 ATOMIC EDIT",
+			unexpectedMarker: "PARTIAL APPLY",
+			expectedPostEditCalls: 0,
+		},
+		{
+			mode: "explicit partial-apply opt-in",
+			allowPartialApply: true,
+			expectedContent: "const a = 10;\nconst b = 2;\n",
+			expectedMarker: "⚠️ PARTIAL APPLY",
+			unexpectedMarker: "ATOMIC EDIT",
+			expectedPostEditCalls: 1,
+		},
+	])(
+		"keeps mixed-validity multi-edits safe in $mode",
+		async ({
+			allowPartialApply,
+			expectedContent,
+			expectedMarker,
+			unexpectedMarker,
+			expectedPostEditCalls,
+		}: {
+			allowPartialApply: boolean;
+			expectedContent: string;
+			expectedMarker: string;
+			unexpectedMarker: string;
+			expectedPostEditCalls: number;
+		}) => {
+			const sourceFile = path.join(tmpDir, "src", "mixed-edit.ts");
+			fs.mkdirSync(path.dirname(sourceFile), { recursive: true });
+			fs.writeFileSync(sourceFile, "const a = 1;\nconst b = 2;\n");
+			const checkEdit = vi.fn(() => ({ action: "allow" as const }));
+			const handleToolResult = vi.fn(async () => undefined);
+
+			vi.doMock("../clients/runtime-coordinator.js", () => ({
+				RuntimeCoordinator: class {
+					projectRoot = tmpDir;
+					turnIndex = 0;
+					complexityBaselines = new Map();
+					cachedExports = new Map();
+					readGuard = {
+						recordRead: () => {},
+						getReadHistory: () => [],
+						getEditHistory: () => [],
+						isNewFile: () => false,
+						noteCreatedFile: () => {},
+						recordWritten: () => {},
+						checkEdit,
+					};
+					shouldWarmLspOnRead() {
+						return false;
+					}
+					markLspReadWarmStarted() {}
+					markLspReadWarmCompleted() {}
+					clearLspReadWarmState() {}
+					nextWriteIndex() {
+						return 1;
+					}
+					peekWriteIndex() {
+						return 1;
+					}
+					beginTurn() {}
+					resetForSession() {}
+					setTelemetryIdentity() {}
+					telemetrySessionId = "test-session";
+				},
+			}));
+			vi.doMock("../clients/bootstrap.js", () => ({
+				loadBootstrapClients: async () => ({
+					metricsClient: { reset: () => {} },
+					todoScanner: {},
+					biomeClient: { isAvailable: () => false },
+					ruffClient: { isAvailable: () => false },
+					knipClient: {
+						isAvailable: () => false,
+						analyze: async () => ({
+							success: false,
+							summary: "unavailable",
+							issues: [],
+						}),
+					},
+					jscpdClient: { isAvailable: () => false },
+					depChecker: { isAvailable: () => false },
+					testRunnerClient: { detectRunner: () => null },
+					goClient: { isGoAvailableAsync: async () => false },
+					rustClient: { isAvailableAsync: async () => false },
+					agentBehaviorClient: {
+						recordToolCall: () => {},
+						formatWarnings: () => "",
+					},
+					complexityClient: {
+						isSupportedFile: () => false,
+						analyzeFile: () => null,
+					},
+				}),
+			}));
+			vi.doMock("../clients/runtime-tool-result.js", () => ({
+				clearLastAnalyzedStateCache: vi.fn(),
+				flushDebouncedToolResults: vi.fn(async () => {}),
+				handleToolResult,
+			}));
+
+			const previousConfigPath = process.env.PI_LENS_CONFIG_PATH;
+			process.env.PI_LENS_CONFIG_PATH = path.join(
+				tmpDir,
+				"missing-config.json",
+			);
+			try {
+				const { default: registerExtension } = await import("../index.ts");
+				const { pi, handlers } = createMockPi({
+					"no-lsp": true,
+					"lens-partial-edit-apply": allowPartialApply,
+				});
+				registerExtension(pi as any);
+
+				const toolCall = handlers.tool_call?.[0];
+				expect(toolCall).toBeTypeOf("function");
+				const result = (await toolCall?.(
+					{
+						toolName: "edit",
+						input: {
+							path: sourceFile,
+							edits: [
+								{ oldText: "const a = 1;", newText: "const a = 10;" },
+								{
+									oldText: "const missing = true;",
+									newText: "const missing = false;",
+								},
+							],
+						},
+					},
+					{ cwd: tmpDir },
+				)) as { block: boolean; reason: string };
+
+				expect(result.block).toBe(true);
+				expect(result.reason).toContain(expectedMarker);
+				expect(result.reason).not.toContain(unexpectedMarker);
+				expect(fs.readFileSync(sourceFile, "utf-8")).toBe(expectedContent);
+				expect(handleToolResult).toHaveBeenCalledTimes(expectedPostEditCalls);
+				expect(checkEdit).not.toHaveBeenCalled();
+			} finally {
+				vi.doUnmock("../clients/runtime-tool-result.js");
+				if (previousConfigPath === undefined) {
+					delete process.env.PI_LENS_CONFIG_PATH;
+				} else {
+					process.env.PI_LENS_CONFIG_PATH = previousConfigPath;
+				}
+			}
+		},
+		INTEGRATION_TIMEOUT_MS,
+	);
+
 	it("tool_call only warms LSP on the first read until warm state is cleared", async () => {
 		const touchFileMock = vi.fn().mockResolvedValue([]);
 		const shouldWarmLspOnRead = vi

@@ -17,6 +17,9 @@ Hide the diagnostics widget by default, run formatting immediately after write/e
     "enabled": true,
     "mode": "immediate"
   },
+  "edit": {
+    "partialApply": false
+  },
   "actionableWarnings": {
     "enabled": true,
     "includeLspCodeActions": true,
@@ -33,6 +36,8 @@ Hide the diagnostics widget by default, run formatting immediately after write/e
 ```
 
 `format.mode` can be `"deferred"` (default) or `"immediate"`. Set `format.enabled` to `false` to match `--no-autoformat`. `/lens-widget-toggle` still works as a session-only override.
+
+`edit.partialApply` defaults to `false`. When a multi-edit contains both matching and non-matching `oldText` blocks, pi-lens blocks the whole batch without writing anything so the native edit tool keeps its all-or-nothing semantics. Set it to `true` (or pass `--lens-partial-edit-apply`) only to opt in to the legacy behavior that applies matching blocks before reporting the unresolved ones.
 
 `contextInjection.enabled` (default `true`) controls whether pi-lens prepends automatic findings — session-start guidance, turn-end findings, and test findings — into the next model turn. Set it to `false` (or use `--no-lens-context` / `PI_LENS_NO_CONTEXT_INJECTION=1` / `/lens-context-toggle`) to keep tools, LSP, read-guard, and formatting running while avoiding the prompt-cache invalidation that injected messages cause in long, cache-sensitive sessions. Findings are still cached, so `lens_diagnostics` and `/lens-health` keep working.
 

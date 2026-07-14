@@ -532,6 +532,7 @@ describe("read-guard tool line helpers", () => {
 			expect(result.preflightError).toMatch(/RETRYABLE/);
 			expect(result.preflightError).toMatch(/edits\[1\]/);
 			expect(result.preflightError).toMatch(/was not found/);
+			expect(result.preflightError).not.toMatch(/was applied/);
 			expect(result.partiallyApplicable).toEqual([
 				{
 					oldText: "function bar() {\n  return 2;\n}",
