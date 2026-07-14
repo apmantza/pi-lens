@@ -212,6 +212,60 @@ export function findNearestContaining(
 	return undefined;
 }
 
+export interface FindNearestMarkerRootOptions {
+	/**
+	 * Directory names/files that, if found BEFORE any of `markers`, stop the
+	 * walk and make it return `null` — e.g. `.git`/`.hg`/`.svn` so a search
+	 * starting inside a repo without its own project marker doesn't escape
+	 * past that repo's VCS boundary to pick up an unrelated parent's marker.
+	 * Omit for callers with no such boundary (default: none).
+	 */
+	boundaries?: readonly string[];
+	/** Override for `os.homedir()`, primarily for tests. */
+	homeDir?: string;
+}
+
+/**
+ * Walk up from `startDir` looking for a directory containing any of
+ * `markers`, the same containment-aware climb `knip-client.ts` and
+ * `dead-code-client.ts` each used to hand-roll independently (refs #625):
+ *
+ *   - Never resolves at or above `$HOME` (via `isAtOrAboveHomeDir`) — a
+ *     marker found there has escaped the user's workspace.
+ *   - If `options.boundaries` is given and one is found before any `marker`,
+ *     stops and returns `null` rather than continuing past it.
+ *   - Depth-capped at 64 climbs, matching the callers' existing safety bound
+ *     (guards a pathological symlink loop; real depths are ~10).
+ *   - Returns `null` — never `startDir` — when nothing is found. Callers
+ *     must treat `null` as "no project here", not fall back to the start
+ *     directory (a `null`-swallowing fallback was the #250/#296 bug class:
+ *     scanning $HOME wholesale from a bare cwd).
+ *
+ * For a plain "find nearest containing directory" with no boundary concept,
+ * use `findNearestContaining` instead. Distinct from `startup-scan.ts`'s
+ * `findNearestProjectRoot` (fixed marker list, no boundaries, no home-check —
+ * that caller applies `isAtOrAboveHomeDir` itself afterward); named
+ * differently here to avoid confusion between the two.
+ */
+export function findNearestMarkerRoot(
+	startDir: string,
+	markers: readonly string[],
+	options: FindNearestMarkerRootOptions = {},
+): string | null {
+	const boundaries = options.boundaries ?? [];
+	const homeDir = path.resolve(options.homeDir ?? os.homedir());
+	let current = path.resolve(startDir);
+	for (let depth = 0; depth < 64; depth++) {
+		if (isAtOrAboveHomeDir(current, homeDir)) return null;
+		if (markers.some((m) => existsSync(path.join(current, m)))) return current;
+		if (boundaries.some((m) => existsSync(path.join(current, m)))) return null;
+		const parent = path.dirname(current);
+		if (parent === current) return null;
+		current = parent;
+	}
+	return null;
+}
+
 /**
  * True when `dir` is the home directory OR an ancestor of it (`/home`,
  * `C:\Users`, the filesystem root, …). A project-root search that climbs to

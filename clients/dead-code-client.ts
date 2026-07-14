@@ -12,10 +12,8 @@
  * implementing DeadCodeClient and adding to getDeadCodeClients().
  */
 
-import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
-import { isAtOrAboveHomeDir } from "./path-utils.js";
+import { findNearestMarkerRoot } from "./path-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 
 // --- Types ---
@@ -166,35 +164,25 @@ export class PythonDeadCodeClient implements DeadCodeClient {
 	 * Nearest dir with a Python project marker, never at/above $HOME and never
 	 * escaping a VCS boundary — same containment rules as KnipClient so a scan
 	 * launched from a bare cwd can't recurse the whole home tree (#250/#296).
+	 * Delegates to the shared path-utils helper (refs #625) rather than
+	 * hand-rolling the climb; only the marker list differs from KnipClient's.
 	 */
 	private resolveProjectRoot(
 		startDir: string,
 		homeDirOverride?: string,
 	): string | null {
-		const markers = [
-			"pyproject.toml",
-			"setup.py",
-			"setup.cfg",
-			"requirements.txt",
-			"Pipfile",
-			"tox.ini",
-		];
-		const boundaries = [".git", ".hg", ".svn"];
-		const homeDir = path.resolve(homeDirOverride ?? os.homedir());
-		let current = path.resolve(startDir);
-		for (let depth = 0; depth < 64; depth++) {
-			if (isAtOrAboveHomeDir(current, homeDir)) return null;
-			if (markers.some((m) => fs.existsSync(path.join(current, m)))) {
-				return current;
-			}
-			if (boundaries.some((m) => fs.existsSync(path.join(current, m)))) {
-				return null;
-			}
-			const parent = path.dirname(current);
-			if (parent === current) return null;
-			current = parent;
-		}
-		return null;
+		return findNearestMarkerRoot(
+			startDir,
+			[
+				"pyproject.toml",
+				"setup.py",
+				"setup.cfg",
+				"requirements.txt",
+				"Pipfile",
+				"tox.ini",
+			],
+			{ boundaries: [".git", ".hg", ".svn"], homeDir: homeDirOverride },
+		);
 	}
 
 	async ensureAvailable(): Promise<boolean> {

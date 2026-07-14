@@ -7,6 +7,8 @@
  */
 
 import { execFileSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -18,6 +20,7 @@ import {
 	getDeadCodeClients,
 	type DeadCodeResult,
 } from "../../clients/dead-code-client.js";
+import { setupTestEnvironment } from "./test-utils.js";
 
 const REPO_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -86,6 +89,99 @@ describe("PythonDeadCodeClient.detect", () => {
 	it("does not detect a non-Python directory", () => {
 		// A temp dir with no marker and a VCS-less parent — walks to root, null.
 		expect(client.detect(path.join(REPO_ROOT, "tests/fixtures"))).toBe(false);
+	});
+});
+
+describe("PythonDeadCodeClient resolveProjectRoot (pin, refs #625)", () => {
+	// Pins the exact current behavior of the private resolveProjectRoot method
+	// (depth-64 climb, home-ceiling check, .git/.hg/.svn boundary short-circuit)
+	// BEFORE migrating it onto the shared clients/path-utils.ts helper, mirroring
+	// the equivalent knip-client.test.ts pins for its structurally-identical
+	// resolveProjectRoot.
+	type ResolveProjectRoot = {
+		resolveProjectRoot: (startDir: string, homeDir?: string) => string | null;
+	};
+
+	it("resolves the project root from a nested directory", () => {
+		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-deadcode-");
+		try {
+			fs.writeFileSync(path.join(tmpDir, "pyproject.toml"), "[project]");
+			const nested = path.join(tmpDir, "src", "pkg");
+			fs.mkdirSync(nested, { recursive: true });
+
+			const client = new PythonDeadCodeClient() as unknown as ResolveProjectRoot;
+			expect(client.resolveProjectRoot(nested)).toBe(tmpDir);
+		} finally {
+			cleanup();
+		}
+	});
+
+	it("does not resolve a marker at or above home", () => {
+		const tmpRoot = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-deadcode-home-ceiling-"),
+		);
+		try {
+			const ancestor = path.join(tmpRoot, "ancestor");
+			const home = path.join(ancestor, "home");
+			const nested = path.join(home, "empty-folder");
+			fs.mkdirSync(nested, { recursive: true });
+			fs.writeFileSync(path.join(ancestor, "setup.py"), "");
+
+			const client = new PythonDeadCodeClient() as unknown as ResolveProjectRoot;
+			expect(client.resolveProjectRoot(nested, home)).toBeNull();
+		} finally {
+			fs.rmSync(tmpRoot, { recursive: true, force: true });
+		}
+	});
+
+	it("does not resolve a marker at the home dir itself", () => {
+		const tmpRoot = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-deadcode-home-marker-"),
+		);
+		try {
+			const home = path.join(tmpRoot, "home");
+			fs.mkdirSync(home, { recursive: true });
+			fs.writeFileSync(path.join(home, "tox.ini"), "");
+
+			const client = new PythonDeadCodeClient() as unknown as ResolveProjectRoot;
+			expect(client.resolveProjectRoot(home, home)).toBeNull();
+		} finally {
+			fs.rmSync(tmpRoot, { recursive: true, force: true });
+		}
+	});
+
+	it("does not walk past a VCS boundary to a parent marker", () => {
+		const { tmpDir, cleanup } = setupTestEnvironment(
+			"pi-lens-deadcode-boundary-",
+		);
+		try {
+			fs.writeFileSync(path.join(tmpDir, "pyproject.toml"), "[project]");
+			const repoRoot = path.join(tmpDir, "sub-repo");
+			const nested = path.join(repoRoot, "src", "pkg");
+			fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+			fs.mkdirSync(nested, { recursive: true });
+
+			const client = new PythonDeadCodeClient() as unknown as ResolveProjectRoot;
+			expect(client.resolveProjectRoot(nested)).toBeNull();
+		} finally {
+			cleanup();
+		}
+	});
+
+	it("returns null (never the start dir) when no marker exists up the tree", () => {
+		const tmpRoot = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-deadcode-none-"),
+		);
+		try {
+			const nested = path.join(tmpRoot, "deep", "nowhere");
+			fs.mkdirSync(nested, { recursive: true });
+
+			const client = new PythonDeadCodeClient() as unknown as ResolveProjectRoot;
+			const resolved = client.resolveProjectRoot(nested);
+			expect(resolved).not.toBe(nested);
+		} finally {
+			fs.rmSync(tmpRoot, { recursive: true, force: true });
+		}
 	});
 });
 

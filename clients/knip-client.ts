@@ -10,10 +10,9 @@
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { getProjectDataDir } from "./file-utils.js";
-import { isAtOrAboveHomeDir } from "./path-utils.js";
+import { findNearestMarkerRoot } from "./path-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 
 // --- Types ---
@@ -90,49 +89,22 @@ export class KnipClient {
 	 * previously this fell back to `startDir`, which on a bare cwd like
 	 * `/home/v` caused knip to recurse through every project and balloon
 	 * memory/CPU.
+	 *
+	 * Delegates to the shared path-utils helper (refs #625) — never treats a
+	 * package/knip config at or above $HOME as the project (escapes the
+	 * workspace, #296/#250), and never walks past a `.git`/`.hg`/`.svn`
+	 * boundary to pick up an unrelated parent's package.json (Unity/non-JS
+	 * repos often have no package.json at their own root).
 	 */
 	private resolveProjectRoot(
 		startDir: string,
 		homeDirOverride?: string,
 	): string | null {
-		const markers = [
-			"package.json",
-			"knip.json",
-			"knip.ts",
-			"knip.config.js",
-			"knip.config.ts",
-		];
-		const boundaries = [".git", ".hg", ".svn"];
-		const homeDir = path.resolve(homeDirOverride ?? os.homedir());
-		let current = path.resolve(startDir);
-		// Safety bound: in practice depths are ~10. This cap just prevents a
-		// pathological symlink loop from hanging the search.
-		for (let depth = 0; depth < 64; depth++) {
-			// Never treat a package/knip config at $HOME — or above it, such as
-			// /home/package.json from a shared parent — as the project for startup
-			// analysis. That escapes the workspace and can make knip scan the whole
-			// home tree from an empty folder (#296/#250).
-			if (isAtOrAboveHomeDir(current, homeDir)) {
-				return null;
-			}
-
-			if (markers.some((m) => fs.existsSync(path.join(current, m)))) {
-				return current;
-			}
-
-			// Do not escape the current repository just to find an unrelated parent
-			// package.json. Unity/non-JS repos often have no package.json at their
-			// root; walking past their .git boundary can accidentally pick up
-			// ~/package.json and make knip scan the entire home directory.
-			if (boundaries.some((m) => fs.existsSync(path.join(current, m)))) {
-				return null;
-			}
-
-			const parent = path.dirname(current);
-			if (parent === current) return null;
-			current = parent;
-		}
-		return null;
+		return findNearestMarkerRoot(
+			startDir,
+			["package.json", "knip.json", "knip.ts", "knip.config.js", "knip.config.ts"],
+			{ boundaries: [".git", ".hg", ".svn"], homeDir: homeDirOverride },
+		);
 	}
 
 	/**
