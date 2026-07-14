@@ -53,6 +53,14 @@ export interface YamlRule {
 	metadata?: { weight?: number; category?: string };
 	rule?: YamlRuleCondition;
 	constraints?: Record<string, { regex?: string }>;
+	// Reusable named matchers referenced from `rule`/`constraints` via
+	// `matches: <name>`. Standard ast-grep YAML syntax
+	// (https://ast-grep.github.io/guide/rule-config/utility-rule.html);
+	// napi's native `findAll` accepts the same top-level `utils` key
+	// (`NapiConfig.utils: Record<string, Rule>`) so this parses straight
+	// through unchanged. Without it, `matches: <name>` can't resolve and the
+	// rule silently produces zero matches (#663).
+	utils?: Record<string, YamlRuleCondition>;
 }
 
 interface CachedRules {
