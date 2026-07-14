@@ -100,6 +100,15 @@ export interface LSPState {
 	broken: Map<string, number>; // servers that failed to initialize with retry-at timestamp
 	inFlight: Map<string, Promise<SpawnedServer | undefined>>; // prevent duplicate spawns
 	clientSpawnedAt: Map<string, number>; // key: "serverId:root" → epoch ms of last successful spawn
+	/**
+	 * #667: key "serverId:root" of every client that has already answered at
+	 * least one diagnostics-mode `touchFile` (not `.inconclusive`) this
+	 * session. Deliberately a STRONGER bar than `isAlive()`/spawned/
+	 * initialize-handshake-complete (all already true at `serverCountReady:1`
+	 * while the server was still uselessly timing out on real requests — see
+	 * `ensureWarmForSweep`): only a confirmed round trip counts as "warm".
+	 */
+	demonstratedReady: Set<string>;
 }
 
 const BROKEN_BASE_COOLDOWN_MS = 15_000;
@@ -117,6 +126,20 @@ const TOUCH_DEBOUNCE_MS = Math.max(
 	Number.parseInt(process.env.PI_LENS_LSP_TOUCH_DEBOUNCE_MS ?? "1500", 10) ||
 		1500,
 );
+// #667: the sweep warm-up round trip's OWN generous, one-time budget —
+// deliberately larger than any single per-file sweep budget (`perFileMs` in
+// `runWorkspaceDiagnostics`, or the batch tool's per-file wait) because this
+// pays for whatever a cold tsserver-style server needs to finish its internal
+// project load/index before it can usefully answer ANY diagnostics request,
+// not just one file's worth of work. Env-tunable like every other wait budget
+// in this file.
+function warmupTimeoutMs(): number {
+	const raw = Number.parseInt(
+		process.env.PI_LENS_LSP_WARMUP_TIMEOUT_MS ?? "",
+		10,
+	);
+	return Number.isFinite(raw) && raw > 0 ? raw : 20_000;
+}
 
 /**
  * Read the `PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS` env override at call time
@@ -601,6 +624,7 @@ export class LSPService {
 			broken: new Map(),
 			inFlight: new Map(),
 			clientSpawnedAt: new Map(),
+			demonstratedReady: new Set(),
 		};
 	}
 
@@ -680,6 +704,30 @@ export class LSPService {
 				}
 			}
 		}
+	}
+
+	/**
+	 * Key `demonstratedReady`/`clientSpawnedAt`/`state.clients` all share:
+	 * "serverId:normalizedRoot" — the same identity `ensureClientForServer`
+	 * uses to store/look up a client. Deliberately resolved from the
+	 * `LSPServerInfo.root()` config resolver (NOT `LSPClientInfo.root`):
+	 * `touchFile`'s spawned entries carry both `{ client, info }`, and
+	 * resolving from `info.root()` guarantees this lines up with
+	 * `ensureWarmForSweep`'s own key derivation (also via `server.root()`)
+	 * even for a not-fully-real client (test fixture, or any future client
+	 * implementation that doesn't independently stamp `.root`).
+	 */
+	private async demonstratedReadyKeyFor(
+		server: LSPServerInfo,
+		filePath: string,
+	): Promise<string | undefined> {
+		const root = await server.root(filePath);
+		if (!root) return undefined;
+		return `${server.id}:${normalizeMapKey(root)}`;
+	}
+
+	private markDemonstratedReadyKey(key: string): void {
+		this.state.demonstratedReady.add(key);
 	}
 
 	private activeClientsForCwd(
@@ -1485,6 +1533,17 @@ export class LSPService {
 		// confirmed answer.
 		const inconclusive = notifyWriteTimedOut || diagnosticsTimedOut;
 
+		// #667: a confirmed (non-inconclusive) diagnostics-mode touch is the
+		// "actually warm" signal `ensureWarmForSweep` waits for — mark every
+		// spawned server so a later sweep in this session sees the check as a
+		// no-op instead of paying the warm-up round trip again.
+		if (diagnosticsMode !== "none" && !inconclusive) {
+			for (const entry of spawned) {
+				const key = await this.demonstratedReadyKeyFor(entry.info, filePath);
+				if (key) this.markDemonstratedReadyKey(key);
+			}
+		}
+
 		// Prime the last-known cache WITH the hash of the content we just synced,
 		// so a hot-path consumer (actionable-warnings at turn_end) can verify the
 		// cached diagnostics are for the current bytes before reusing them instead
@@ -2226,6 +2285,124 @@ export class LSPService {
 	}
 
 	/**
+	 * #667: shared warm-check/ensure-warm step for BOTH `lsp_diagnostics`
+	 * (`tools/lsp-diagnostics.ts`'s batch/directory sweep) and
+	 * `lens_diagnostics mode=full` (`runWorkspaceDiagnostics` below) — one
+	 * implementation instead of two hand-copied ones, since both already
+	 * share `groupFilesByPrimaryServer`/`runPerServerGroups` (#631).
+	 *
+	 * Root cause this closes (#667): `serverCountReady:1` only proves the
+	 * server process spawned and passed the LSP `initialize` handshake — it
+	 * does NOT prove the server can usefully answer a diagnostics request
+	 * yet. tsserver-style servers can still be loading/indexing the project
+	 * internally for seconds after `initialize` resolves, and without this
+	 * check whichever file(s) land first in a sweep pay that cost as
+	 * individual per-file timeouts (observed: the first 5 files of a
+	 * 100-file sweep all hit the exact per-file ceiling with
+	 * `serverCountReady:1`, file 6 onward clean and fast).
+	 *
+	 * `representativeFile` should be one file from the group/batch about to
+	 * be swept — used only to resolve which server(s) serve it and, if
+	 * needed, to perform the warm-up touch itself.
+	 *
+	 * Cheap/no-op when every non-auxiliary server for `representativeFile`
+	 * has already answered a confirmed diagnostics touch earlier in THIS
+	 * session (`isDemonstratedReady` — set by `touchFile` above): resolves
+	 * the server list and root(s) (no spawn, no I/O beyond that) and
+	 * returns immediately. Only when at least one candidate server hasn't
+	 * demonstrated readiness does this perform one deliberate warm-up
+	 * `touchFile` round trip against `representativeFile`, bounded by its
+	 * OWN generous budget (`warmupTimeoutMs`/`PI_LENS_LSP_WARMUP_TIMEOUT_MS`
+	 * — distinct from the per-file sweep budget), and waits for it to
+	 * settle (success, timeout, or abort) before returning. This does NOT
+	 * change the per-file wait budgets or confirmed/unconfirmed contract
+	 * (#242/#611/#634) the sweep itself uses — it only runs once, before
+	 * the sweep's own loop starts.
+	 *
+	 * Returns `performedWarmup: true` only when the round trip actually ran
+	 * (false = already warm, no-op) — tests assert on this to guard against
+	 * the warm-up becoming a mandatory extra round trip on every sweep.
+	 */
+	async ensureWarmForSweep(
+		representativeFile: string,
+		options: { timeoutMs?: number; signal?: AbortSignal } = {},
+	): Promise<{ performedWarmup: boolean }> {
+		if (this.checkDestroyed() || options.signal?.aborted) {
+			return { performedWarmup: false };
+		}
+		const servers = getServersForFileWithConfig(representativeFile).filter(
+			(s) => s.role !== "auxiliary",
+		);
+		if (servers.length === 0) return { performedWarmup: false };
+
+		// A server with no resolvable root never spawns a client for this file
+		// either way, so it can't block "already warm" — only servers that WILL
+		// actually be used count toward the readiness check. Same key
+		// derivation `touchFile` uses to mark readiness (`demonstratedReadyKeyFor`)
+		// so this lines up exactly regardless of what a client instance itself
+		// reports as its `.root`.
+		const keys = await Promise.all(
+			servers.map((server) =>
+				this.demonstratedReadyKeyFor(server, representativeFile),
+			),
+		);
+		const alreadyWarm = keys.every(
+			(key) => key === undefined || this.state.demonstratedReady.has(key),
+		);
+		if (alreadyWarm) return { performedWarmup: false };
+
+		let content: string;
+		try {
+			content = await nodeFs.promises.readFile(representativeFile, "utf-8");
+		} catch {
+			// Nothing to warm up with — the real sweep's own read will surface
+			// the file error.
+			return { performedWarmup: false };
+		}
+		if (options.signal?.aborted) return { performedWarmup: false };
+
+		const timeoutMs = options.timeoutMs ?? warmupTimeoutMs();
+		const startedAt = Date.now();
+		logLatency({
+			type: "phase",
+			phase: "lsp_sweep_warmup_start",
+			filePath: representativeFile,
+			durationMs: 0,
+			metadata: { serverIds: servers.map((s) => s.id), timeoutMs },
+		});
+		const warmupAttempt = this.touchFile(representativeFile, content, {
+			diagnostics: "document",
+			collectDiagnostics: false,
+			clientScope: "primary",
+			source: "lsp_sweep_warmup",
+			maxClientWaitMs: timeoutMs,
+			maxDiagnosticsWaitMs: timeoutMs,
+		});
+		await (options.signal
+			? Promise.race([
+					withDeadline(warmupAttempt, { ms: timeoutMs, onTimeout: "undefined" }),
+					new Promise<void>((resolve) => {
+						if (options.signal!.aborted) {
+							resolve();
+							return;
+						}
+						options.signal!.addEventListener("abort", () => resolve(), {
+							once: true,
+						});
+					}),
+				])
+			: withDeadline(warmupAttempt, { ms: timeoutMs, onTimeout: "undefined" }));
+		logLatency({
+			type: "phase",
+			phase: "lsp_sweep_warmup_done",
+			filePath: representativeFile,
+			durationMs: Date.now() - startedAt,
+			metadata: { serverIds: servers.map((s) => s.id), timeoutMs },
+		});
+		return { performedWarmup: true };
+	}
+
+	/**
 	 * Actively scan every LSP-supported source file under a project root.
 	 * This is intentionally expensive and used only by explicit project-wide tools.
 	 */
@@ -2513,6 +2690,7 @@ export class LSPService {
 			groups,
 			groupWorkers,
 			async (group) => {
+				if (signal?.aborted) return;
 				// Fast path: one project-wide pull for the whole group (opt-in).
 				if (workspacePullEnabled && !group.multiServer) {
 					const pulled = await this.tryWorkspacePull(group.files, perFileMs);
@@ -2522,6 +2700,20 @@ export class LSPService {
 						options.onProgress?.(completed, files.length);
 						return;
 					}
+				}
+				// #667: warm-check before this group's own per-file loop starts —
+				// cheap/no-op when the group's primary server already demonstrated
+				// readiness (from an earlier sweep, or an earlier group sharing the
+				// same server root, this session); pays one deliberate warm-up round
+				// trip against the group's first file only when genuinely cold. Not
+				// needed above the pull fast path: a `workspace/diagnostic` pull
+				// already covers the WHOLE group with its own generous per-server
+				// budget in one shot — the per-file "first N files eat individual
+				// timeouts" failure mode this fixes doesn't apply there.
+				const first = group.files[0];
+				if (first) {
+					await this.ensureWarmForSweep(first, { signal });
+					if (signal?.aborted) return;
 				}
 				// #608/#621: batch-open a CHUNK of this group's files before
 				// waiting on diagnostics for any of them individually — see

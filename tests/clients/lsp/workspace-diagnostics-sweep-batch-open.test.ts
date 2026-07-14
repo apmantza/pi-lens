@@ -140,15 +140,23 @@ describe("runWorkspaceDiagnostics — batch-open restores #271 coalescing for a 
 		// second time by the main per-file loop's own `touchFile` — which by
 		// then finds the document already open and only sends the
 		// already-open didChange equivalent (no further enqueue, mirrored by
-		// this mock's early return).
-		expect(client.notify.open).toHaveBeenCalledTimes(fileNames.length * 2);
+		// this mock's early return). Plus exactly ONE extra `notify.open` from
+		// the #667 pre-sweep warm-up touch, which runs against the group's
+		// first file (f0.ts) BEFORE the #608 pre-open pass even starts — the
+		// warm-up call is the one that actually opens f0.ts first; the pre-open
+		// pass then finds it already open. One warm-up per GROUP (one server
+		// here), not one per file.
+		expect(client.notify.open).toHaveBeenCalledTimes(fileNames.length * 2 + 1);
 		// The watched-files queue coalesces each CHUNK's first-opens into its
 		// own single flush — 20 files at the default chunk width of 8 is 3
-		// chunks (8+8+4), so 3 flushes. The #608 regression would have produced
-		// one flush per file (20), since each `waitForDiagnostics` call blocks
-		// the old lazy-open path well past the 100ms debounce window before the
-		// next file's open is even attempted.
-		expect(flushCount).toBe(3);
+		// chunks (8+8+4), so 3 flushes from the #608 pre-open pass itself. The
+		// #667 warm-up touch above runs BEFORE that pass and pays its own
+		// (slow, 150ms) `waitForDiagnostics` wait standing alone against just
+		// f0.ts — well past the 100ms debounce window on its own, so it closes
+		// out its own flush before the pre-open pass's first chunk even starts
+		// enqueuing. +1 flush total (4), still nowhere near one flush per file
+		// (20) — the #608 regression this test guards against.
+		expect(flushCount).toBe(4);
 		expect(notifiedUriCount).toBe(fileNames.length);
 	}, 10_000);
 });

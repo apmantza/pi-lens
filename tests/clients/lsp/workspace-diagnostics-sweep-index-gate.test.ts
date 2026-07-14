@@ -95,7 +95,24 @@ describe("runWorkspaceDiagnostics — sweep-scoped index gate for workspaceIndex
 		createLSPClient.mockResolvedValue(client);
 
 		const { LSPService } = await import("../../../clients/lsp/index.js");
-		const results = await new LSPService().runWorkspaceDiagnostics(tmp);
+		const service = new LSPService();
+		// #667: prime the server as already-demonstrated-ready via an ordinary
+		// touch BEFORE the sweep, so the sweep's own pre-loop `ensureWarmForSweep`
+		// warm-check is a no-op here — this test is exercising the #645
+		// sweep-scoped index-gate mechanism, not the #667 warm-up round trip
+		// (that has its own dedicated coverage in sweep-warmup.test.ts). Reset
+		// the shared counters afterward so the assertions below still describe
+		// exactly the real sweep's own touches, unaffected by the priming call.
+		await service.touchFile(path.join(tmp, "a.md"), "# x\n", {
+			diagnostics: "document",
+			collectDiagnostics: false,
+			clientScope: "primary",
+			source: "test_prewarm",
+		});
+		waitCalls.length = 0;
+		fileIndex = 0;
+
+		const results = await service.runWorkspaceDiagnostics(tmp);
 
 		expect(results.length).toBe(3);
 		expect(waitCalls.length).toBe(3);
@@ -156,7 +173,19 @@ describe("runWorkspaceDiagnostics — sweep-scoped index gate for workspaceIndex
 		createLSPClient.mockResolvedValue(client);
 
 		const { LSPService } = await import("../../../clients/lsp/index.js");
-		await new LSPService().runWorkspaceDiagnostics(tmp);
+		const service = new LSPService();
+		// #667: prime the server as already-warm before the sweep (see the
+		// comment on the test above) so the pre-loop warm-check is a no-op and
+		// doesn't add its own extra `waitForDiagnostics` call to this array.
+		await service.touchFile(path.join(tmp, "a.py"), "x\n", {
+			diagnostics: "document",
+			collectDiagnostics: false,
+			clientScope: "primary",
+			source: "test_prewarm",
+		});
+		waitCalls.length = 0;
+
+		await service.runWorkspaceDiagnostics(tmp);
 
 		// python's strategy has no `workspaceIndexing` flag — every touch in
 		// the sweep keeps paying its own full strategy budget (1500ms per
