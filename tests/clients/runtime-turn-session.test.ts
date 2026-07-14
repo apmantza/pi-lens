@@ -848,3 +848,250 @@ describe("turn_end license-risk surfacing", () => {
 		}
 	});
 });
+
+// ── #628: stale test results are cached, not discarded ────────────────────────
+
+describe("turn_end test runner — stale results are cached, not discarded", () => {
+	it("caches a real failure even when the turn advances before the async run resolves", async () => {
+		const env = setupTestEnvironment("pi-lens-test-stale-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId: "stale-session" });
+			const cacheManager = new CacheManager(false);
+
+			const srcFile = path.join(env.tmpDir, "src/foo.ts");
+			fs.mkdirSync(path.dirname(srcFile), { recursive: true });
+			fs.writeFileSync(srcFile, "export const x = 1;\n");
+			cacheManager.addModifiedRange(
+				srcFile,
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+				"stale-session",
+			);
+
+			let resolveRun!: (v: {
+				file: string;
+				sourceFile: string;
+				runner: string;
+				passed: number;
+				failed: number;
+				skipped: number;
+				failures: unknown[];
+				duration: number;
+			}) => void;
+			const runPromise = new Promise((resolve) => {
+				resolveRun = resolve;
+			});
+
+			const testFile = path.join(env.tmpDir, "src/foo.test.ts");
+			const testRunnerClient = {
+				getTestRunTarget: () => ({
+					testFile,
+					runner: "vitest",
+					config: {} as any,
+					strategy: "related" as const,
+				}),
+				runTestFileAsync: () => runPromise,
+				formatResult: (r: { failed: number }) =>
+					r.failed > 0 ? "[Tests] ✗ 0/1 passed — vitest" : "",
+			};
+
+			const done = handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, {
+					ctxCwd: env.tmpDir,
+					testRunnerClient,
+				}),
+			);
+			await done;
+
+			// Simulate the turn advancing (another edit landed) before the fired
+			// test subprocess resolves — this is the routine, non-rare case from
+			// the real dogfooding logs.
+			runtime.beginTurn();
+			resolveRun({
+				file: testFile,
+				sourceFile: srcFile,
+				runner: "vitest",
+				passed: 0,
+				failed: 1,
+				skipped: 0,
+				failures: [],
+				duration: 5,
+			});
+			// Flush the now-resolved Promise.allSettled(...).then(...) chain.
+			await new Promise((r) => setImmediate(r));
+
+			const cached = cacheManager.readCache<{
+				content: string;
+				stale?: boolean;
+			}>("test-runner-findings", env.tmpDir);
+
+			// The old behavior discarded this entirely (no cache entry at all).
+			expect(cached?.data?.content).toContain("[Tests] ✗ 0/1 passed");
+			expect(cached?.data?.stale).toBe(true);
+			expect(cached?.data?.content).toContain("prior turn");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("does not tag the result stale when the turn has not advanced", async () => {
+		const env = setupTestEnvironment("pi-lens-test-nonstale-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId: "nonstale-session" });
+			const cacheManager = new CacheManager(false);
+
+			const srcFile = path.join(env.tmpDir, "src/foo.ts");
+			fs.mkdirSync(path.dirname(srcFile), { recursive: true });
+			fs.writeFileSync(srcFile, "export const x = 1;\n");
+			cacheManager.addModifiedRange(
+				srcFile,
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+				"nonstale-session",
+			);
+
+			const testFile = path.join(env.tmpDir, "src/foo.test.ts");
+			const testRunnerClient = {
+				getTestRunTarget: () => ({
+					testFile,
+					runner: "vitest",
+					config: {} as any,
+					strategy: "related" as const,
+				}),
+				runTestFileAsync: async () => ({
+					file: testFile,
+					sourceFile: srcFile,
+					runner: "vitest",
+					passed: 0,
+					failed: 1,
+					skipped: 0,
+					failures: [],
+					duration: 5,
+				}),
+				formatResult: () => "[Tests] ✗ 0/1 passed — vitest",
+			};
+
+			await handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, {
+					ctxCwd: env.tmpDir,
+					testRunnerClient,
+				}),
+			);
+			await new Promise((r) => setImmediate(r));
+
+			const cached = cacheManager.readCache<{
+				content: string;
+				stale?: boolean;
+			}>("test-runner-findings", env.tmpDir);
+
+			expect(cached?.data?.content).toContain("[Tests] ✗ 0/1 passed");
+			expect(cached?.data?.stale).toBe(false);
+			expect(cached?.data?.content).not.toContain("prior turn");
+		} finally {
+			env.cleanup();
+		}
+	});
+});
+
+// ── #628: cascade-neighbor test companions are also fired ─────────────────────
+
+describe("turn_end test runner — cascade neighbors get their own test companion run", () => {
+	it("fires the test companion for a cascade neighbor, not just the edited file", async () => {
+		const env = setupTestEnvironment("pi-lens-test-neighbor-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId: "neighbor-session" });
+			const cacheManager = new CacheManager(false);
+
+			const editedFile = path.join(env.tmpDir, "src/foo.ts");
+			const neighborFile = path.join(env.tmpDir, "src/bar.ts");
+			fs.mkdirSync(path.dirname(editedFile), { recursive: true });
+			fs.writeFileSync(editedFile, "export const x = 1;\n");
+			fs.writeFileSync(neighborFile, "import { x } from './foo'; export const y = x;\n");
+
+			cacheManager.addModifiedRange(
+				editedFile,
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+				"neighbor-session",
+			);
+
+			// Seed this turn's already-computed cascade result (as the #450
+			// deferred-cascade drain would have produced it) — bar.ts imports
+			// foo.ts, so it's a neighbor of the edited file.
+			runtime.appendCascadeRun({
+				filePath: editedFile,
+				result: {
+					filePath: editedFile,
+					impact: {} as any,
+					neighbors: [
+						{
+							filePath: neighborFile,
+							reason: "imports",
+							diagnostics: [],
+							lspTouched: false,
+						},
+					],
+					formatted: "",
+				},
+				neighborCount: 1,
+				diagnosticCount: 0,
+			});
+
+			const fooTestFile = path.join(env.tmpDir, "src/foo.test.ts");
+			const barTestFile = path.join(env.tmpDir, "src/bar.test.ts");
+			const getTestRunTarget = vi.fn((absPath: string) => {
+				if (path.basename(absPath) === path.basename(editedFile)) {
+					return {
+						testFile: fooTestFile,
+						runner: "vitest",
+						config: {} as any,
+						strategy: "related" as const,
+					};
+				}
+				if (path.basename(absPath) === path.basename(neighborFile)) {
+					return {
+						testFile: barTestFile,
+						runner: "vitest",
+						config: {} as any,
+						strategy: "related" as const,
+					};
+				}
+				return null;
+			});
+			const runTestFileAsync = vi.fn(async (testFile: string) => ({
+				file: testFile,
+				sourceFile: "",
+				runner: "vitest",
+				passed: 1,
+				failed: 0,
+				skipped: 0,
+				failures: [],
+				duration: 1,
+			}));
+
+			await handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, {
+					ctxCwd: env.tmpDir,
+					testRunnerClient: {
+						getTestRunTarget,
+						runTestFileAsync,
+						formatResult: () => "",
+					},
+				}),
+			);
+			await new Promise((r) => setImmediate(r));
+
+			const firedTestFiles = runTestFileAsync.mock.calls.map((c) => c[0]);
+			expect(firedTestFiles).toContain(fooTestFile);
+			expect(firedTestFiles).toContain(barTestFile);
+		} finally {
+			env.cleanup();
+		}
+	});
+});

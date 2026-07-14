@@ -47,7 +47,7 @@ import { updateHeartbeat } from "./instance-registry.js";
 import { emitLensTurnFindings } from "./lens-events.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
-import type { TestRunnerClient } from "./test-runner-client.js";
+import type { TestResult, TestRunnerClient } from "./test-runner-client.js";
 
 interface TurnEndDeps {
 	ctxCwd?: string;
@@ -647,17 +647,48 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		const targets: NonNullable<
 			ReturnType<TestRunnerClient["getTestRunTarget"]>
 		>[] = [];
+
+		// #628: also target the test companions of this turn's cascade neighbors
+		// (files that import an edited file) — a neighbor's own tests can break
+		// even though the neighbor's source wasn't touched. Reuses `cascadeResults`,
+		// already computed above (from the same #450 deferred-cascade drain) for the
+		// LSP cascade-diagnostics merge — no second reverse-dependency walk, and the
+		// neighbor set inherits whatever budget the cascade compute already applied
+		// (CASCADE_NEIGHBOUR_BUDGET), so this can't turn into unbounded per-edit work.
+		const candidates: Array<{ display: string; abs: string; isNeighbor: boolean }> =
+			[];
+		const seenCandidateKeys = new Set<string>();
 		for (const file of files) {
 			const abs = resolveRunnerPath(cwd, file);
+			const key = normalizeMapKey(abs);
+			if (seenCandidateKeys.has(key)) continue;
+			seenCandidateKeys.add(key);
+			candidates.push({ display: file, abs, isNeighbor: false });
+		}
+		for (const result of cascadeResults) {
+			for (const neighbor of result.neighbors) {
+				const abs = path.isAbsolute(neighbor.filePath)
+					? neighbor.filePath
+					: resolveRunnerPath(cwd, neighbor.filePath);
+				const key = normalizeMapKey(abs);
+				if (seenCandidateKeys.has(key)) continue;
+				seenCandidateKeys.add(key);
+				candidates.push({ display: neighbor.filePath, abs, isNeighbor: true });
+			}
+		}
+
+		for (const { display, abs, isNeighbor } of candidates) {
 			const target = testRunnerClient.getTestRunTarget(abs, cwd);
 			if (target && !seen.has(target.testFile)) {
 				seen.add(target.testFile);
 				targets.push(target);
 				dbg(
-					`turn_end: ${file} → test ${target.runner} ${path.relative(cwd, target.testFile)} (${target.strategy})`,
+					`turn_end: ${display} → test ${target.runner} ${path.relative(cwd, target.testFile)} (${target.strategy}${isNeighbor ? ", cascade-neighbor" : ""})`,
 				);
 			} else if (!target) {
-				dbg(`turn_end: ${file} → no test file found`);
+				dbg(
+					`turn_end: ${display} → no test file found${isNeighbor ? " (cascade-neighbor)" : ""}`,
+				);
 			}
 		}
 		if (targets.length > 0) {
@@ -676,13 +707,20 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				),
 			)
 				.then((results) => {
+					// #628: the turn advancing while tests ran no longer means the
+					// results are thrown away — a late result is still real
+					// information about what's currently broken. It's tagged `stale`
+					// so a downstream consumer can distinguish it from a result that
+					// arrived in time, but it's cached either way.
 					const stale = runtime.turnIndex !== firedAtTurn;
 					const failures: string[] = [];
+					const resultValues: TestResult[] = [];
 					for (const r of results) {
 						if (r.status === "rejected") {
 							dbg(`turn_end: test run rejected — ${r.reason}`);
 							continue;
 						}
+						resultValues.push(r.value);
 						const { file, runner, passed, failed, duration, error } = r.value;
 						const shortFile = path.basename(file);
 						const summary =
@@ -692,25 +730,27 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 						dbg(
 							`turn_end: ${stale ? "[stale] " : ""}test ${runner} ${shortFile} → ${summary}`,
 						);
-						if (!stale && failed > 0) {
+						if (failed > 0) {
 							const formatted = testRunnerClient.formatResult(r.value);
 							if (formatted) failures.push(formatted);
 						}
 					}
-					if (stale) {
-						dbg(
-							`turn_end: discarding test results — turn advanced while tests ran`,
-						);
-						return;
-					}
 					if (failures.length > 0) {
-						const content = failures.join("\n\n");
-						cacheManager.writeCache("test-runner-findings", { content }, cwd);
+						const content = stale
+							? `[from a prior turn — the edit that triggered this run had already been superseded by the time results came back]\n\n${failures.join("\n\n")}`
+							: failures.join("\n\n");
+						cacheManager.writeCache(
+							"test-runner-findings",
+							{ content, stale, results: resultValues },
+							cwd,
+						);
 						dbg(
-							`turn_end: ${failures.length} test failure(s) cached for next context injection`,
+							`turn_end: ${failures.length} test failure(s) cached for next context injection${stale ? " (stale — turn advanced while tests ran)" : ""}`,
 						);
 					} else if (results.length > 0) {
-						dbg(`turn_end: all tests passed`);
+						dbg(
+							`turn_end: all tests passed${stale ? " (stale — turn advanced while tests ran)" : ""}`,
+						);
 					}
 				})
 				.catch(() => {});

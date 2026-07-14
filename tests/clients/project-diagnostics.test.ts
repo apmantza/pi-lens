@@ -624,8 +624,70 @@ describe("extractCachedProjectDiagnostics (registry)", () => {
 				"trivy",
 				"dead-code",
 				"opengrep",
+				"test-runner",
 			].sort(),
 		);
+	});
+
+	// #628 item 4: cache-only extractor for the per-edit test-runner findings —
+	// same shape as every other row here (readCache, adapt, never relaunch).
+	it("adapts cached test-runner findings into per-file diagnostics", () => {
+		const cm = cacheManagerWith({
+			"test-runner-findings": {
+				content: "[Tests] ✗ 1/2 failed — vitest",
+				stale: false,
+				results: [
+					{
+						file: "src/foo.test.ts",
+						sourceFile: "src/foo.ts",
+						runner: "vitest",
+						passed: 1,
+						failed: 1,
+						skipped: 0,
+						failures: [
+							{ name: "does the thing", message: "expected 1 to be 2" },
+						],
+						duration: 12,
+					},
+				],
+			},
+		});
+
+		const { diagnostics, runners } = extractCachedProjectDiagnostics(cm, tmp);
+		expect(runners).toContain("test-runner");
+		const testDiag = diagnostics.find((d) => d.tool === "test-runner");
+		expect(testDiag).toBeDefined();
+		expect(testDiag?.filePath).toBe("src/foo.test.ts");
+		expect(testDiag?.message).toContain("does the thing");
+		expect(testDiag?.message).toContain("expected 1 to be 2");
+		expect(testDiag?.semantic).toBe("blocking");
+	});
+
+	it("does not surface a test-runner diagnostic for an all-passing cached result", () => {
+		const cm = cacheManagerWith({
+			"test-runner-findings": {
+				content: "",
+				stale: false,
+				results: [
+					{
+						file: "src/foo.test.ts",
+						sourceFile: "src/foo.ts",
+						runner: "vitest",
+						passed: 3,
+						failed: 0,
+						skipped: 0,
+						failures: [],
+						duration: 12,
+					},
+				],
+			},
+		});
+
+		const { diagnostics, runners } = extractCachedProjectDiagnostics(cm, tmp);
+		expect(diagnostics.filter((d) => d.tool === "test-runner")).toEqual([]);
+		// No findings contributed, but the cache entry existed — not cold either
+		// way (checked implicitly: runners list just doesn't include it here).
+		expect(runners).not.toContain("test-runner");
 	});
 
 	it("does not mark an analyzer cold once it has a cache entry, clean or not", () => {

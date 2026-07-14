@@ -26,6 +26,8 @@ import { jscpdResultToProjectDiagnostics } from "./runner-adapters/jscpd.js";
 import { knipIssuesToProjectDiagnostics } from "./runner-adapters/knip.js";
 import { circularDepsToProjectDiagnostics } from "./runner-adapters/madge.js";
 import { opengrepResultToProjectDiagnostics } from "./runner-adapters/opengrep.js";
+import type { TestRunnerFindingsCache } from "./runner-adapters/runner-findings.js";
+import { testRunnerFindingsToProjectDiagnostics } from "./runner-adapters/runner-findings.js";
 import { trivyResultToProjectDiagnostics } from "./runner-adapters/trivy.js";
 import type { ProjectDiagnostic } from "./types.js";
 
@@ -93,6 +95,15 @@ const EXTRACTORS: ProjectDiagnosticExtractor<any>[] = [
 		adapt: (cwd, r: DeadCodeResult) =>
 			deadCodeResultToProjectDiagnostics(cwd, r),
 	},
+	{
+		// #628 item 4: per-edit test-runner findings (turn_end, `runtime-turn.ts`).
+		// Cache-only like every row here — never relaunches a test run. `cwd` is
+		// unused (results already carry absolute file paths).
+		id: "test-runner",
+		cacheKeys: ["test-runner-findings"],
+		adapt: (_cwd, r: TestRunnerFindingsCache) =>
+			testRunnerFindingsToProjectDiagnostics(r),
+	},
 ];
 
 /**
@@ -110,6 +121,8 @@ const WARM_TRIGGER: Record<string, string> = {
 	trivy: "runs at session-start",
 	"dead-code": "runs at session-start (Python projects only)",
 	opengrep: "runs at session-start",
+	"test-runner":
+		"fires per-edit at turn_end (only after a source file with a discoverable test companion is edited)",
 };
 
 /** All registered extractor ids, in registry order — exported for tools/tests

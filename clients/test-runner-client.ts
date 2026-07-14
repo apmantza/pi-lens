@@ -583,6 +583,16 @@ export class TestRunnerClient {
 	 * and an `include` glob can catch a project that puts tests somewhere
 	 * unconventional. When no config is found or it can't be parsed, this
 	 * is a no-op and behavior is unchanged.
+	 *
+	 * #628: a positive `include` override is only trusted when the glob is a
+	 * *narrow* test signal (see `isNarrowTestGlob`) — a bare "any file with
+	 * this extension" include (e.g. `src/**\/*.ts`) is common in real vitest
+	 * configs and matches ordinary source files, so treating any match as
+	 * "this is a test" produced vacuous `0p/0f` self-runs on plain source
+	 * files (background-review.ts, index.ts, …). The `exclude` direction is
+	 * left as a plain match: over-excluding only causes discovery to run on a
+	 * file that's actually a test (falls back to `findTestFile`, not a false
+	 * "self" positive), which is the safe failure mode.
 	 */
 	private isTestFile(
 		sourceFilePath: string,
@@ -597,18 +607,58 @@ export class TestRunnerClient {
 				const rel = path
 					.relative(cwd, path.resolve(cwd, sourceFilePath))
 					.replace(/\\/g, "/");
-				const matches = (globs_: string[] | undefined) =>
-					!!globs_?.some((g) => minimatch(rel, g, { dot: true }));
+				const matches = (
+					globs_: string[] | undefined,
+					filter?: (g: string) => boolean,
+				) =>
+					!!globs_?.some(
+						(g) => (!filter || filter(g)) && minimatch(rel, g, { dot: true }),
+					);
 
 				if (matches(globs.exclude)) {
 					result = false;
-				} else if (!result && matches(globs.include)) {
+				} else if (
+					!result &&
+					matches(globs.include, (g) => this.isNarrowTestGlob(g))
+				) {
 					result = true;
 				}
 			}
 		}
 
 		return result;
+	}
+
+	/**
+	 * Whether an `include` glob is a specific enough signal to override a
+	 * plain "this is source, not a test" naming-convention verdict (#628).
+	 *
+	 * Trusted when either:
+	 *  - a literal (non-wildcard) path segment before the first wildcard
+	 *    names a conventional test location (`tests/`, `test/`, `spec/`,
+	 *    `specs/`, `__tests__/`) — the real case this override exists for:
+	 *    a project whose test files live in such a directory without a
+	 *    `.test.`/`.spec.` name (e.g. `tests/**\/*.ts`).
+	 *  - the static suffix after the last wildcard encodes more than the
+	 *    bare language extension (e.g. `.check.ts`, `.flow.ts`) — an explicit
+	 *    project-specific naming convention, not "any file with this
+	 *    extension" (e.g. `**\/*.check.ts`).
+	 *
+	 * Rejected for a bare extension glob with no test-ish directory (e.g.
+	 * `src/**\/*.ts`, `**\/*.ts`) — that shape matches every source file in
+	 * the tree and is exactly what produced vacuous self-runs in practice.
+	 */
+	private isNarrowTestGlob(glob: string): boolean {
+		const testDirPattern = /^(tests?|specs?|__tests__)$/i;
+		for (const segment of glob.split("/")) {
+			if (segment.includes("*") || segment.includes("?")) break;
+			if (testDirPattern.test(segment)) return true;
+		}
+
+		const lastWildcard = Math.max(glob.lastIndexOf("*"), glob.lastIndexOf("?"));
+		const suffix = lastWildcard >= 0 ? glob.slice(lastWildcard + 1) : glob;
+		const dotSegments = suffix.split(".").filter(Boolean);
+		return dotSegments.length >= 2;
 	}
 
 	/**

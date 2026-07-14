@@ -546,6 +546,89 @@ describe("test-runner-client", () => {
 			expect(target?.strategy).toBe("self");
 			expect(target?.testFile).toBe(path.resolve(src));
 		});
+
+		// #628 pin: a broad `include` glob (any `.ts` file under `src/`) must NOT
+		// alone classify a plain source file as its own test target. This is the
+		// exact shape of the real dogfooding bug — background-review.ts / index.ts
+		// got treated as strategy "self" and vitest reported a vacuous
+		// `PASS 0p/0f (0ms)` because the project's include glob happened to match
+		// every .ts file, not just test files.
+		it("does NOT classify a plain source file as self-test from a broad include glob alone (#628)", () => {
+			const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
+			cleanups.push(cleanup);
+
+			fs.writeFileSync(
+				path.join(tmpDir, "vitest.config.ts"),
+				[
+					"export default {",
+					"  test: {",
+					"    include: ['src/**/*.ts'],",
+					"  },",
+					"};",
+				].join("\n"),
+			);
+			fs.mkdirSync(path.join(tmpDir, "src"));
+			const src = path.join(tmpDir, "src", "background-review.ts");
+			fs.writeFileSync(src, "export function review() {}\n");
+			// No companion test file exists — this file has nothing to run.
+
+			const client = new TestRunnerClient(false);
+			const target = client.getTestRunTarget(src, tmpDir);
+			expect(target?.strategy).not.toBe("self");
+			expect(target).toBeNull();
+		});
+
+		// Same shape, but the broad glob is the maximally-generic `**/*.ts` (no
+		// directory restriction at all) — still must not self-classify.
+		it("does NOT classify a plain source file as self-test from an unrestricted **/*.ts include (#628)", () => {
+			const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
+			cleanups.push(cleanup);
+
+			fs.writeFileSync(
+				path.join(tmpDir, "vitest.config.ts"),
+				[
+					"export default {",
+					"  test: {",
+					"    include: ['**/*.ts'],",
+					"  },",
+					"};",
+				].join("\n"),
+			);
+			const src = path.join(tmpDir, "index.ts");
+			fs.writeFileSync(src, "export const x = 1;\n");
+
+			const client = new TestRunnerClient(false);
+			const target = client.getTestRunTarget(src, tmpDir);
+			expect(target?.strategy).not.toBe("self");
+		});
+
+		// The legitimate case the include-override exists for: a project whose
+		// tests live under a conventional `tests/` directory without `.test.` in
+		// the filename. This is a narrower signal (a literal test-ish directory
+		// segment) than "any file with this extension", so it must still work.
+		it("still classifies a file under a bare tests/ directory glob as self-test (legitimate override, #628)", () => {
+			const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
+			cleanups.push(cleanup);
+
+			fs.writeFileSync(
+				path.join(tmpDir, "vitest.config.ts"),
+				[
+					"export default {",
+					"  test: {",
+					"    include: ['tests/**/*.ts'],",
+					"  },",
+					"};",
+				].join("\n"),
+			);
+			fs.mkdirSync(path.join(tmpDir, "tests"));
+			const src = path.join(tmpDir, "tests", "widget.ts");
+			fs.writeFileSync(src, "// lives in tests/, no .test. in the name\n");
+
+			const client = new TestRunnerClient(false);
+			const target = client.getTestRunTarget(src, tmpDir);
+			expect(target?.strategy).toBe("self");
+			expect(target?.testFile).toBe(path.resolve(src));
+		});
 	});
 
 	// --- PHPUnit ---
