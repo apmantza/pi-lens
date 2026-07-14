@@ -202,11 +202,21 @@ function boundedPositiveInt(
  * Result order matches `items`' original order (not completion order),
  * matching the old flat pool's positional-assignment behavior — callers may
  * depend on `results[i]` corresponding to `items[i]`.
+ *
+ * #667: before a group's own per-file loop starts, calls the shared
+ * `LSPService.ensureWarmForSweep` warm-check/ensure-warm step (the same one
+ * `runWorkspaceDiagnostics` uses for `lens_diagnostics mode=full`) against
+ * the group's first file — a no-op when that group's primary server already
+ * demonstrated readiness earlier this session, one bounded warm-up round
+ * trip otherwise. Fixes the first-few-files-eat-cold-start-timeouts pattern
+ * for THIS tool's batch/directory sweep the same way #667 fixed it for the
+ * workspace-diagnostics sweep.
  */
 async function mapWithConcurrency<R>(
 	items: string[],
 	concurrency: number,
 	mapper: (item: string, index: number) => Promise<R>,
+	lspService: NonNullable<ReturnType<typeof getLSPService>> | undefined,
 	signal?: AbortSignal,
 	onProgress?: (completed: number, total: number) => void,
 ): Promise<R[]> {
@@ -226,6 +236,16 @@ async function mapWithConcurrency<R>(
 		groups,
 		concurrency,
 		async (group) => {
+			if (signal?.aborted) return;
+			const first = group.files[0];
+			if (
+				first &&
+				lspService &&
+				typeof lspService.ensureWarmForSweep === "function"
+			) {
+				await lspService.ensureWarmForSweep(first, { signal });
+				if (signal?.aborted) return;
+			}
 			for (const item of group.files) {
 				// Honor cancellation (Escape / turn abort): stop pulling new items
 				// rather than grind the whole batch. Completed entries are returned.
@@ -1197,6 +1217,7 @@ async function collectBatchDiagnostics(
 				options.nextWriteIndex,
 				options.serverScope,
 			),
+		lspService,
 		options.signal,
 		options.onProgress,
 	);
