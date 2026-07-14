@@ -1192,35 +1192,18 @@ export default function (pi: ExtensionAPI) {
 		}
 	}
 
-	// Dynamic tooling (#pi 0.80.x+): deactivate the 5 situational tools right
-	// after registering them, so they start inactive and the model must call
-	// `pi_lens_activate_tools` to bring them in (next-turn visibility, per the
-	// docs' loader pattern). Feature-detected the same way as the
-	// `agent_settled` registration below: `pi.getActiveTools`/`setActiveTools`
-	// aren't guaranteed present on every host the broad
-	// `@earendil-works/pi-coding-agent` peer dependency allows, so probe with
-	// typeof rather than assuming the pinned devDependency version's API
-	// exists at runtime. Older/unsupported hosts simply keep every tool
-	// statically active — a silent, graceful fallback, not a thrown error.
-	try {
-		const piWithActiveTools = pi as unknown as {
-			getActiveTools?: () => string[];
-			setActiveTools?: (names: string[]) => void;
-		};
-		if (
-			typeof piWithActiveTools.getActiveTools === "function" &&
-			typeof piWithActiveTools.setActiveTools === "function"
-		) {
-			const lazyNames = new Set(LAZY_TOOL_CATALOG.map((t) => t.name));
-			const active = piWithActiveTools.getActiveTools();
-			const initiallyActive = active.filter((name) => !lazyNames.has(name));
-			piWithActiveTools.setActiveTools(initiallyActive);
-		}
-	} catch (deactivateErr) {
-		dbg(
-			`dynamic tool deactivation failed (older pi host, or tools not registered?): ${deactivateErr}`,
-		);
-	}
+	// Dynamic tooling (#pi 0.80.x+): deactivate the 5 situational tools so they
+	// start inactive and the model must call `pi_lens_activate_tools` to bring
+	// them in (next-turn visibility, per the docs' loader pattern). This used
+	// to run synchronously right here, immediately after registration — but
+	// that point is still inside the extension's own load/activation function,
+	// before the runtime considers itself initialized, so `setActiveTools`
+	// structurally cannot succeed yet on ANY host (#643: it threw "Extension
+	// runtime not initialized. Action methods cannot be called during
+	// extension loading" on effectively every session_start, regardless of
+	// host version — the 5 lazy tools were never actually deactivated). Moved
+	// into the `pi.on("session_start", ...)` handler below, which fires after
+	// the extension has finished loading — see the deactivation block there.
 
 	// REMOVED: ~450 lines of inline tool definitions moved to tools/
 	// See tools/ast-grep-search.ts, tools/ast-grep-replace.ts, tools/lsp-navigation.ts
@@ -1249,6 +1232,43 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (event, ctx) => {
 		try {
 			dbg("session_start fired");
+
+			// Dynamic tooling (#pi 0.80.x+): deactivate the 5 situational tools
+			// (LAZY_TOOL_CATALOG) now that the extension has actually finished
+			// loading — session_start is the correct lifecycle point for this
+			// call (#643; see the comment left at the old call site above, right
+			// after tool registration, for why it can never succeed there).
+			// Feature-detected the same way as elsewhere in this handler:
+			// `pi.getActiveTools`/`setActiveTools` aren't guaranteed present on
+			// every host the broad `@earendil-works/pi-coding-agent` peer
+			// dependency allows, so probe with typeof rather than assuming the
+			// pinned devDependency version's API exists at runtime. session_start
+			// fires multiple times per process (fork/reload/new/resume, see the
+			// reasonLabel handling below); re-running this every time is fine —
+			// `setActiveTools` just replaces the current active set, it isn't
+			// additive or stateful across calls.
+			try {
+				const piWithActiveTools = pi as unknown as {
+					getActiveTools?: () => string[];
+					setActiveTools?: (names: string[]) => void;
+				};
+				if (
+					typeof piWithActiveTools.getActiveTools === "function" &&
+					typeof piWithActiveTools.setActiveTools === "function"
+				) {
+					const lazyNames = new Set(LAZY_TOOL_CATALOG.map((t) => t.name));
+					const active = piWithActiveTools.getActiveTools();
+					const initiallyActive = active.filter(
+						(name) => !lazyNames.has(name),
+					);
+					piWithActiveTools.setActiveTools(initiallyActive);
+				}
+			} catch (deactivateErr) {
+				dbg(
+					`dynamic tool deactivation failed (older pi host lacking getActiveTools/setActiveTools, or a genuine host error): ${deactivateErr}`,
+				);
+			}
+
 			// #190: pi's session lifecycle. `reason` distinguishes new/resume/fork/
 			// reload/startup; the STABLE session id comes from the session manager
 			// (the event carries none), and is what lets a resumed session rehydrate.
