@@ -11,7 +11,11 @@ import { detectFileKind, KIND_EXTENSIONS } from "../file-kinds.js";
 import { detectFileRole } from "../file-role.js";
 import { getProjectDataDir } from "../file-utils.js";
 import { logLatency } from "../latency-logger.js";
-import { normalizeFilePath, normalizeMapKey } from "../path-utils.js";
+import {
+	isAtOrAboveHomeDir,
+	normalizeFilePath,
+	normalizeMapKey,
+} from "../path-utils.js";
 import { collectProjectSourceFilesAsync } from "../project-scan-policy.js";
 import { resolveImportToFiles } from "./import-resolvers.js";
 import { RUNTIME_CONFIG } from "../runtime-config.js";
@@ -1701,6 +1705,44 @@ async function _doBuildGraph(
 	const normalizedChanged = changedFiles.map((file) => normalizeMapKey(file));
 	const normalizedChangedSet = new Set(normalizedChanged);
 	logCwdWorktreeMismatchOnce(cwd);
+
+	// #622: reject a cwd that IS (or is an ancestor of) $HOME before any walk is
+	// attempted. The 3 real per-edit callers (dispatch/integration.ts's
+	// computeCascadeForFile, mcp/analyze.ts, tree-sitter.ts's
+	// runBlastRadiusInBackground) pass their session/pipeline cwd straight
+	// through on the assumption it's already a real project root — true when Pi
+	// is launched inside a repo, false when Pi is launched from $HOME itself and
+	// then edits an absolute-path file in some other repo. In that case
+	// getGraphSourceFiles's maxGraphFiles cap (#250) only trips AFTER a full
+	// unfiltered $HOME walk (206k+ files, ~500s of blocked event loop — #622),
+	// because the cap counts post-filter *kept* files, not directory entries
+	// visited. Bail before the walk starts instead, mirroring the same
+	// isAtOrAboveHomeDir ceiling already used by startup-scan.ts,
+	// dead-code-client.ts, knip-client.ts, and runtime-session.ts's
+	// resolveSnapshotRoot for the identical class of escape (#253/#250). Unlike
+	// those (which resolve a root by walking UP from an arbitrary start dir),
+	// this checks cwd directly: buildOrUpdateGraph's contract is that cwd
+	// already IS the project root, so there is no safe substitute root to fall
+	// back to here — skip graph construction entirely (matching #622's own
+	// stated expected behavior) rather than walking a directory the caller never
+	// asked for.
+	if (isAtOrAboveHomeDir(path.resolve(cwd))) {
+		const graph = createEmptyGraph();
+		for (const file of normalizedChanged) {
+			upsertChangedSymbols(graph, facts, file);
+		}
+		_lastGraphBuildInfo = {
+			reused: false,
+			mode: "skipped",
+			skipReason: "unsafe_root",
+			// #459: never persisted/reused, same as the too_many_files skip below —
+			// treat as changed so dependents never trust stale derived state.
+			graphChanged: true,
+		};
+		facts.setSessionFact("session.reviewGraph", graph);
+		return graph;
+	}
+
 	// #451: capture the seq BEFORE any await — every builtAtProjectSeq stamp in
 	// this build uses this value, so a bump that interleaves mid-build has
 	// seq > stamp and is re-diffed next build (redundant re-extract, never a miss).

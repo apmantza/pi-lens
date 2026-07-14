@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { FactStore } from "../../clients/dispatch/fact-store.js";
@@ -419,6 +420,52 @@ describe("review graph service", () => {
 
 			const impact = computeImpactCascade(secondGraph, aPath);
 			expect(impact.directImporters).toContain(normalizeMapKey(bPath));
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("skips graph construction when cwd IS $HOME, without walking it (#622)", async () => {
+		// #622: launching Pi from $HOME and editing an absolute-path file in some
+		// other repo used to pass $HOME straight through to buildOrUpdateGraph as
+		// `cwd` (the 3 real per-edit callers assume cwd is already a project
+		// root). getGraphSourceFiles then walked the entire home tree — 206k+
+		// files, ~500s of blocked event loop — before its maxGraphFiles cap even
+		// had a chance to trip, because the cap counts post-filter kept files,
+		// not directory entries visited. buildOrUpdateGraph must now reject a
+		// cwd that is (or is an ancestor of) $HOME before any walk starts.
+		const facts = new FactStore();
+		const homeDir = os.homedir();
+		const start = Date.now();
+		const graph = await buildOrUpdateGraph(homeDir, [], facts);
+		const elapsedMs = Date.now() - start;
+
+		expect(getLastGraphBuildInfo()).toMatchObject({
+			mode: "skipped",
+			skipReason: "unsafe_root",
+		});
+		expect(graph.nodes.size).toBe(0);
+		expect(graph.fileNodes.size).toBe(0);
+		// A real walk of $HOME is the entire point of the bug (~500s in the
+		// issue's own logs) — bailing before it starts must be near-instant.
+		expect(elapsedMs).toBeLessThan(2_000);
+	});
+
+	it("does not skip a normal project root that merely lives UNDER home (#622)", async () => {
+		// Regression guard: the #622 fix must reject cwd only when it IS (or is
+		// an ancestor of) $HOME — a real project nested under home (the common
+		// case, e.g. ~/code/app) must still build normally.
+		const env = setupTestEnvironment("pi-lens-review-graph-under-home-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"src/a.ts",
+				"export function alpha() { return 1; }\n",
+			);
+			const facts = new FactStore();
+			const graph = await buildOrUpdateGraph(env.tmpDir, [], facts);
+			expect(getLastGraphBuildInfo().skipReason).not.toBe("unsafe_root");
+			expect(graph.fileNodes.size).toBeGreaterThan(0);
 		} finally {
 			env.cleanup();
 		}
