@@ -116,7 +116,7 @@ clients/dispatch/debug.log
 clients/lsp/.intelephense/
 AGENTS.md
 .npmignore
-.claude/settings.local.json
+.claude/
 autoresearch.jsonl
 coverage/
 PR_issues_Audit.md
