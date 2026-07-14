@@ -590,6 +590,107 @@ describe("lens_diagnostics mode=full", () => {
 		expect(reconcileScanDiagnosticsMock).not.toHaveBeenCalled();
 	});
 
+	// #630: a timed-out (or errored) per-file LSP result must never read as
+	// "confirmed clean" in the MERGED summary the agent actually sees — the
+	// tests above only covered the footer-write exclusion; these cover the
+	// merge/render/details path that #630 found unprotected.
+	it("does not render a timed-out LSP file as clean, and lists it as unconfirmed (#630)", async () => {
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([
+				{
+					filePath: "/proj/src/clean.ts",
+					diagnostics: [],
+					count: 0,
+					// Confirmed clean — genuinely completed with no findings.
+				},
+				{
+					filePath: "/proj/src/has-issue.ts",
+					diagnostics: [
+						{
+							severity: 1,
+							message: "real type error",
+							range: {
+								start: { line: 1, character: 0 },
+								end: { line: 1, character: 5 },
+							},
+							source: "ts",
+							code: 2322,
+						},
+					],
+					count: 1,
+				},
+				{
+					filePath: "/proj/src/timed-out.ts",
+					diagnostics: [],
+					count: 0,
+					timedOut: true,
+				},
+			]),
+		};
+		const result = await run(makeTool({}, lspService), { mode: "full" });
+		const text = String(result.content[0].text);
+
+		expect(text).toContain("real type error");
+		expect(text).toContain("timed-out.ts");
+		expect(text).toMatch(/unconfirmed/i);
+		expect(text).toContain("NOT the same as 0 diagnostics");
+		// The unconfirmed file must not be described/counted as clean, and its
+		// path must not silently drop out of the report.
+		expect(result.details).toMatchObject({
+			mode: "full",
+			lspFilesConfirmed: 2,
+			lspFilesUnconfirmed: 1,
+			unconfirmedLspFiles: ["/proj/src/timed-out.ts"],
+		});
+
+		// The footer-cache write behavior (#571) must be unaffected by this fix.
+		expect(reconcileScanDiagnosticsMock).toHaveBeenCalledTimes(2);
+		const reconciledFiles = reconcileScanDiagnosticsMock.mock.calls.map(
+			(call) => call[0],
+		);
+		expect(reconciledFiles).not.toContain("/proj/src/timed-out.ts");
+	});
+
+	it("does not render an errored LSP file as clean, and distinguishes error from timeout in the note (#630)", async () => {
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([
+				{
+					filePath: "/proj/src/errored.ts",
+					diagnostics: [],
+					count: 0,
+					error: "spawn failed",
+				},
+			]),
+		};
+		const result = await run(makeTool({}, lspService), { mode: "full" });
+		const text = String(result.content[0].text);
+
+		expect(text).toContain("errored.ts");
+		expect(text).toContain("check errored");
+		expect(result.details).toMatchObject({
+			lspFilesConfirmed: 0,
+			lspFilesUnconfirmed: 1,
+			unconfirmedLspFiles: ["/proj/src/errored.ts"],
+		});
+	});
+
+	it("does not surface an unconfirmed note when every LSP result is confirmed (#630)", async () => {
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([
+				{ filePath: "/proj/src/clean.ts", diagnostics: [], count: 0 },
+			]),
+		};
+		const result = await run(makeTool({}, lspService), { mode: "full" });
+		const text = String(result.content[0].text);
+
+		expect(text).not.toMatch(/unconfirmed/i);
+		expect(result.details).toMatchObject({
+			lspFilesConfirmed: 1,
+			lspFilesUnconfirmed: 0,
+			unconfirmedLspFiles: [],
+		});
+	});
+
 	it("honors inline `# pi-lens-ignore` like mode=all (#442)", async () => {
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-diag-suppress-"));
 		resetProjectLensConfigCache();

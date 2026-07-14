@@ -1008,16 +1008,27 @@ async function formatFullMode(
 	const lspResults = rawLspResults.filter((result) =>
 		includeFile(result.filePath),
 	);
+	// #630: `timedOut`/`error` means the per-file check never actually
+	// completed or was inconclusive (#570's `touchFile().inconclusive`, or
+	// this sweep's own outer per-file deadline/throw — see
+	// `LSPWorkspaceDiagnosticResult`'s doc comment) — `diagnostics` is a
+	// default-EMPTY placeholder in that case, not a confirmed clean. Partition
+	// once here so BOTH the footer write (below, #571) and the merge into
+	// `summaries` (further down) share the same confirmed/unconfirmed split.
+	// Previously only the footer write excluded these; the merge still fed
+	// the unfiltered `lspResults` in, so a timed-out file's placeholder `[]`
+	// read as "0 diagnostics" — false-clean — in the rendered/`details`
+	// output (#630).
+	const confirmedLspResults = lspResults.filter(
+		(result) => !result.timedOut && !result.error,
+	);
+	const unconfirmedLspResults = lspResults.filter(
+		(result) => result.timedOut || result.error,
+	);
 	// #571: reconcile this scan's fresh, CONFIRMED per-file results into the
-	// footer cache. `timedOut`/`error` means the check never actually completed
-	// or was inconclusive (#570's `touchFile().inconclusive`, or this sweep's
-	// own outer per-file deadline/throw — see LSPWorkspaceDiagnosticResult's
-	// doc comment) — `diagnostics` is a default-empty placeholder in that case,
-	// not a confirmed clean, and must not be written as if it were. A footer
-	// write is never allowed to fail the tool call, so any unexpected throw is
-	// swallowed.
-	for (const result of lspResults) {
-		if (result.timedOut || result.error) continue;
+	// footer cache. A footer write is never allowed to fail the tool call, so
+	// any unexpected throw is swallowed.
+	for (const result of confirmedLspResults) {
 		try {
 			reconcileScanDiagnostics(
 				result.filePath,
@@ -1058,12 +1069,17 @@ async function formatFullMode(
 		loadProjectDiagnosticsDeltaReport(cwd),
 		includeFile,
 	);
+	// #630: only the CONFIRMED LSP results contribute diagnostics to the merge
+	// — an unconfirmed (timed-out/errored) file's placeholder `[]` must not be
+	// read as "0 issues, clean" via its LSP contribution. It can still
+	// legitimately show diagnostics from widgetSummaries/project-runner state
+	// below if those independently have entries for it.
 	const summaries = await applyInlineSuppressionsToSummaries(
 		mergeDiagnosticsWithWidgetSummaries(
 			getFileDiagnosticSummaries().filter((summary) =>
 				includeFile(summary.filePath),
 			),
-			lspResults,
+			confirmedLspResults,
 			projectSnapshot,
 			projectDelta,
 		),
@@ -1091,6 +1107,35 @@ async function formatFullMode(
 					},
 	});
 	const missingNote = pathsScopeMissingNote(pathsScope);
+	// #630: mirrors `tools/lsp-diagnostics.ts`'s `unconfirmedReasonClause`/
+	// `tallyConfirmation` semantic guarantee (never silently render
+	// unconfirmed as clean), adapted to this tool's own aggregate-summary
+	// shape rather than its per-file result shape. `confirmedLspResults` were
+	// already excluded from the merge above, so an agent reading the summary
+	// alone would otherwise see nothing for these files and could read that
+	// as "0 diagnostics" — say explicitly which files the LSP sweep could not
+	// confirm and why, distinguishing a hard error from a soft timeout the
+	// same way #570 does upstream.
+	const unconfirmedTimedOut = unconfirmedLspResults.filter(
+		(result) => result.timedOut,
+	).length;
+	const unconfirmedErrored = unconfirmedLspResults.length - unconfirmedTimedOut;
+	const unconfirmedLspNote =
+		unconfirmedLspResults.length > 0
+			? `\n\n⚠ LSP sweep: ${confirmedLspResults.length} file(s) confirmed via LSP, ` +
+				`${unconfirmedLspResults.length} unconfirmed (${
+					unconfirmedTimedOut > 0 && unconfirmedErrored > 0
+						? `${unconfirmedTimedOut} timed out, ${unconfirmedErrored} errored`
+						: unconfirmedTimedOut > 0
+							? "check didn't complete within budget"
+							: "check errored"
+				}) — NOT the same as 0 diagnostics for: ${unconfirmedLspResults
+					.slice(0, 20)
+					.map((result) => result.filePath)
+					.join(
+						", ",
+					)}${unconfirmedLspResults.length > 20 ? ", …" : ""}. These files' LSP contribution is excluded from this result; re-run mode=full to retry them (they may still show findings above from cached/project-runner state).`
+			: "";
 	// #533/#585: a heavyweight analyzer (knip/jscpd/madge/gitleaks/govulncheck/
 	// trivy/dead-code) that contributed nothing this run is either COLD (not
 	// applicable to this project / tool unavailable — see fresh-fetch.ts's
@@ -1148,6 +1193,14 @@ async function formatFullMode(
 			analyzerTimingsMs: extracted.timings,
 			analyzersAborted: extracted.aborted ?? false,
 			analyzersAbortedIds: extracted.abortedIds ?? [],
+			// #630: confirmed/unconfirmed LSP-sweep tally, mirroring
+			// `lsp_diagnostics`' confirmation state — lets a caller check "were
+			// any files unconfirmed" without re-deriving it from the text.
+			lspFilesConfirmed: confirmedLspResults.length,
+			lspFilesUnconfirmed: unconfirmedLspResults.length,
+			unconfirmedLspFiles: unconfirmedLspResults.map(
+				(result) => result.filePath,
+			),
 		},
 	};
 	// Stopped mid-scan: the results above are whatever completed before the abort.
@@ -1171,6 +1224,7 @@ async function formatFullMode(
 					text:
 						result.content[0].text +
 						note +
+						unconfirmedLspNote +
 						coldNote +
 						abortedNote +
 						freshNote +
@@ -1180,13 +1234,18 @@ async function formatFullMode(
 			details: { ...resultWithCold.details, timedOut },
 		};
 	}
-	if (missingNote || coldNote || abortedNote || freshNote) {
+	if (missingNote || coldNote || abortedNote || freshNote || unconfirmedLspNote) {
 		return {
 			content: [
 				{
 					type: "text" as const,
 					text:
-						result.content[0].text + coldNote + abortedNote + freshNote + missingNote,
+						result.content[0].text +
+						unconfirmedLspNote +
+						coldNote +
+						abortedNote +
+						freshNote +
+						missingNote,
 				},
 			],
 			details: resultWithCold.details,
