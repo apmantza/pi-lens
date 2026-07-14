@@ -66,7 +66,7 @@ import {
 import { registerCascadeTierReconcileTask } from "./clients/lsp/cascade-tier.js";
 import { initLSPConfig } from "./clients/lsp/config.js";
 import { getLSPService, resetLSPService } from "./clients/lsp/index.js";
-import { sweepOrphans } from "./clients/instance-reaper.js";
+import { sweepOrphans, sweepUntrackedOrphans } from "./clients/instance-reaper.js";
 import {
 	deregisterInstance,
 	registerInstance,
@@ -1321,6 +1321,17 @@ export default function (pi: ExtensionAPI) {
 				// best-effort observability — never fail session_start over this
 			});
 			void sweepOrphans();
+			// #658: registry-INDEPENDENT backstop sweep, running alongside the
+			// registry-driven one above. `sweepOrphans` can only ever see pids
+			// still listed in some instance's `lspChildren[]`; once that trace is
+			// lost (stale-heartbeat entry removal, or a silently-failed
+			// `killPidTree`), the child becomes permanently invisible to it. This
+			// backstop instead scans the OS process table directly for known
+			// pi-lens-managed binary names and only acts on ones that are BOTH
+			// untracked by the current registry snapshot AND have a
+			// confirmed-dead parent — never on name alone. Fire-and-forget, same
+			// non-blocking/never-throws contract as `sweepOrphans`.
+			void sweepUntrackedOrphans();
 			// #449 slice 2 (prototype): machine-wide LSP budget check. Reads the
 			// same registry, decides locally whether THIS session should skip
 			// spawning auxiliary LSP servers, and caches the decision for

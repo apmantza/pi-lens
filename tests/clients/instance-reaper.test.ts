@@ -7,9 +7,11 @@
 import { describe, expect, it } from "vitest";
 import {
 	buildIdentityMatcher,
+	decideBackstopOrphanReaping,
 	decideOrphanReaping,
 	STALE_HEARTBEAT_MS,
 	type ChildToKill,
+	type OsProcessInfo,
 } from "../../clients/instance-reaper.js";
 import type { InstanceEntry, LspChildEntry } from "../../clients/instance-registry.js";
 
@@ -375,6 +377,80 @@ describe("decideOrphanReaping — heartbeat staleness (#525)", () => {
 		expect(decision.staleInstances).toHaveLength(1);
 		expect(decision.deadInstances).toHaveLength(0);
 		expect(decision.childrenToKill).toHaveLength(0);
+	});
+});
+
+/**
+ * #658: registry-INDEPENDENT backstop sweep. Fake OS-process rows + fake
+ * registry snapshot, no real process enumeration/kills — mirrors the
+ * pure/impure split `decideOrphanReaping` already established.
+ */
+function osProc(overrides: Partial<OsProcessInfo> = {}): OsProcessInfo {
+	return {
+		pid: 5000,
+		parentPid: 4000,
+		command: "C:\\tools\\opengrep.exe --lsp",
+		...overrides,
+	};
+}
+
+describe("decideBackstopOrphanReaping", () => {
+	it("untracked process + confirmed-dead parent ⇒ kill-eligible", () => {
+		const proc = osProc({ pid: 5000, parentPid: 4000 });
+		const decision = decideBackstopOrphanReaping([proc], [], alivePids()); // parent 4000 dead
+
+		expect(decision).toEqual([proc]);
+	});
+
+	it("untracked process + LIVE parent ⇒ never kill-eligible, however unfamiliar the binary", () => {
+		const proc = osProc({ pid: 5000, parentPid: 4000 });
+		const decision = decideBackstopOrphanReaping([proc], [], alivePids(4000));
+
+		expect(decision).toHaveLength(0);
+	});
+
+	it("process already tracked in the registry (any instance's lspChildren) ⇒ deferred to the registry-driven reaper, never backstop-killed — even with a dead parent", () => {
+		const proc = osProc({ pid: 5000, parentPid: 4000 });
+		const reg = [instance({ pid: 1, lspChildren: [child({ pid: 5000 })] })];
+		const decision = decideBackstopOrphanReaping([proc], reg, alivePids()); // parent dead too
+
+		expect(decision).toHaveLength(0);
+	});
+
+	it("unverifiable parent pid (0, negative, NaN) ⇒ never kill-eligible — ambiguity is conservative, not confirmed-dead", () => {
+		const zero = osProc({ pid: 5001, parentPid: 0 });
+		const negative = osProc({ pid: 5002, parentPid: -1 });
+		const nan = osProc({ pid: 5003, parentPid: Number.NaN });
+		const decision = decideBackstopOrphanReaping(
+			[zero, negative, nan],
+			[],
+			alivePids(),
+		);
+
+		expect(decision).toHaveLength(0);
+	});
+
+	it("self-parenting malformed row (parentPid === pid) ⇒ never kill-eligible", () => {
+		const proc = osProc({ pid: 5000, parentPid: 5000 });
+		const decision = decideBackstopOrphanReaping([proc], [], alivePids());
+
+		expect(decision).toHaveLength(0);
+	});
+
+	it("multiple untracked candidates with mixed parent liveness — only the dead-parent one is selected", () => {
+		const orphan = osProc({ pid: 5000, parentPid: 4000, command: "opengrep.exe" });
+		const legit = osProc({ pid: 6000, parentPid: 7000, command: "opengrep-core.exe" });
+		const decision = decideBackstopOrphanReaping(
+			[orphan, legit],
+			[],
+			alivePids(7000), // 7000 alive, 4000 dead
+		);
+
+		expect(decision).toEqual([orphan]);
+	});
+
+	it("empty process list ⇒ no work", () => {
+		expect(decideBackstopOrphanReaping([], [], alivePids())).toHaveLength(0);
 	});
 });
 

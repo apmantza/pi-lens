@@ -480,6 +480,237 @@ async function killPidTree(pid: number): Promise<void> {
 }
 
 /**
+ * #658: known pi-lens-managed LSP/scanner binary names (clients/lsp/server.ts
+ * spawn candidates), used by the registry-INDEPENDENT backstop sweep below.
+ * `opengrep-core` is opengrep's own native subprocess (not spawned directly by
+ * pi-lens, but still part of the tree we manage). `yaml-language-server` and
+ * `typescript-language-server` are node-launched — their OS image name is
+ * `node`/`node.exe`, so matching is done against the full command line
+ * (script path), not the process image name, exactly like the existing
+ * marker-search's WQL LIKE query below.
+ */
+export const MANAGED_BINARY_NAMES: readonly string[] = [
+	"ast-grep",
+	"opengrep-core",
+	"opengrep",
+	"marksman",
+	"zizmor",
+	"typos-lsp",
+	"yaml-language-server",
+	"typescript-language-server",
+];
+
+/** One OS process snapshot row, as enumerated independently of the instance
+ *  registry (#658). */
+export interface OsProcessInfo {
+	pid: number;
+	parentPid: number;
+	command: string;
+}
+
+/**
+ * PURE decision function for the #658 registry-independent backstop: given a
+ * live OS-process snapshot (already filtered to known managed binary names)
+ * and the current registry snapshot, decide which processes are backstop-
+ * kill-eligible. Zero I/O — unit-testable with fake data, mirroring
+ * `decideOrphanReaping`.
+ *
+ * A process is eligible ONLY when ALL of:
+ * - its pid is NOT already tracked in any instance's `lspChildren[]` (tracked
+ *   pids stay owned by the registry-driven `decideOrphanReaping` path above —
+ *   this backstop must never race or duplicate that logic);
+ * - its reported parent pid is a verifiable, well-formed pid (finite,
+ *   positive, and not equal to its own pid) — an unresolvable/malformed
+ *   parent pid is UNVERIFIABLE, never treated as "confirmed dead" (this is a
+ *   stricter contract than `realIsPidAlive`'s own conservatism, because here
+ *   an invalid value means "the OS couldn't tell us", not "confirmed gone");
+ * - `isPidAlive(parentPid)` reports the parent as dead.
+ *
+ * Note the direction of the ambiguity guard: if `parentPid` itself was
+ * recycled onto an unrelated live process, `isPidAlive` conservatively
+ * reports "alive" and the process is (safely) left alone — a false negative,
+ * never a false positive kill. Binary name alone is never sufficient (name
+ * matching only decides which processes are candidates for this check at
+ * all); a live parent is never overridden "however unfamiliar" the process.
+ */
+export function decideBackstopOrphanReaping(
+	processes: OsProcessInfo[],
+	registry: InstanceEntry[],
+	isPidAlive: (pid: number) => boolean,
+): OsProcessInfo[] {
+	const trackedPids = new Set<number>();
+	for (const instance of registry) {
+		for (const child of instance.lspChildren) trackedPids.add(child.pid);
+	}
+
+	const out: OsProcessInfo[] = [];
+	for (const proc of processes) {
+		if (trackedPids.has(proc.pid)) continue; // owned by the registry-driven reaper
+		if (!Number.isFinite(proc.parentPid) || proc.parentPid <= 0) continue; // unverifiable
+		if (proc.parentPid === proc.pid) continue; // malformed data guard
+		if (isPidAlive(proc.parentPid)) continue; // live parent — never kill
+		out.push(proc);
+	}
+	return out;
+}
+
+/** Enumerate live OS processes whose command line contains one of
+ *  `MANAGED_BINARY_NAMES` (#658), independent of the instance registry.
+ *  Windows: one batched CIM/WQL query (mirrors `findPidsByMarkerWindows`'s
+ *  query pattern). POSIX: `ps -eo pid=,ppid=,args=`, filtered in JS. Returns
+ *  `{pid, parentPid, command}` rows. Best-effort: any failure ⇒ []. */
+async function enumerateManagedProcesses(): Promise<OsProcessInfo[]> {
+	if (isWindows) {
+		const clauses = MANAGED_BINARY_NAMES.map(
+			(name) => `CommandLine LIKE '%${escapeWqlLikeValue(name)}%'`,
+		).join(" OR ");
+		const psScript =
+			`Get-CimInstance Win32_Process -Filter "${clauses}" ` +
+			`| ForEach-Object { "$($_.ProcessId)\t$($_.ParentProcessId)\t$($_.CommandLine)" }`;
+		return new Promise((resolve) => {
+			try {
+				const powershell = windowsExe("WindowsPowerShell\\v1.0\\powershell.exe");
+				const child = nodeSpawn(
+					powershell,
+					["-NoProfile", "-NonInteractive", "-Command", psScript],
+					{ shell: false, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] },
+				);
+				let out = "";
+				child.stdout?.on("data", (chunk) => {
+					out += chunk.toString();
+				});
+				child.once("error", () => resolve([]));
+				child.once("close", () => {
+					const results: OsProcessInfo[] = [];
+					for (const line of out.split(/\r?\n/)) {
+						const firstTab = line.indexOf("\t");
+						if (firstTab <= 0) continue;
+						const secondTab = line.indexOf("\t", firstTab + 1);
+						if (secondTab <= 0) continue;
+						const pid = Number(line.slice(0, firstTab).trim());
+						const parentPid = Number(line.slice(firstTab + 1, secondTab).trim());
+						const command = line.slice(secondTab + 1);
+						if (Number.isFinite(pid) && pid > 0) {
+							results.push({ pid, parentPid, command });
+						}
+					}
+					resolve(results);
+				});
+			} catch {
+				resolve([]);
+			}
+		});
+	}
+	// POSIX: enumerate everything, filter in JS by managed-name substring —
+	// there is no single-query WQL-style server-side filter available.
+	return new Promise((resolve) => {
+		try {
+			const child = nodeSpawn(posixPsPath(), ["-eo", "pid=,ppid=,args="], {
+				shell: false,
+				stdio: ["ignore", "pipe", "ignore"],
+			});
+			let out = "";
+			child.stdout?.on("data", (chunk) => {
+				out += chunk.toString();
+			});
+			child.once("error", () => resolve([]));
+			child.once("close", () => {
+				const results: OsProcessInfo[] = [];
+				for (const line of out.split(/\r?\n/)) {
+					// Linear parse (S8786/S6594): "  pid ppid args here".
+					const trimmed = line.trimStart();
+					if (!trimmed) continue;
+					let i = 0;
+					while (i < trimmed.length && trimmed[i] >= "0" && trimmed[i] <= "9") i++;
+					if (i === 0) continue;
+					const pid = Number(trimmed.slice(0, i));
+					let rest = trimmed.slice(i);
+					let k = 0;
+					while (k < rest.length && (rest[k] === " " || rest[k] === "\t")) k++;
+					rest = rest.slice(k);
+					let j = 0;
+					while (j < rest.length && rest[j] >= "0" && rest[j] <= "9") j++;
+					if (j === 0) continue;
+					const parentPid = Number(rest.slice(0, j));
+					let m = j;
+					while (m < rest.length && (rest[m] === " " || rest[m] === "\t")) m++;
+					const args = rest.slice(m);
+					if (!Number.isFinite(pid) || pid <= 0) continue;
+					const lowerArgs = args.toLowerCase();
+					if (MANAGED_BINARY_NAMES.some((name) => lowerArgs.includes(name.toLowerCase()))) {
+						results.push({ pid, parentPid, command: args });
+					}
+				}
+				resolve(results);
+			});
+		} catch {
+			resolve([]);
+		}
+	});
+}
+
+/**
+ * Fire-and-forget REGISTRY-INDEPENDENT backstop sweep (#658): finds
+ * pi-lens-managed LSP/scanner processes the registry-driven `sweepOrphans`
+ * can never see again once their registry trace is lost (a stale-heartbeat
+ * entry removal, or a `killPidTree` call that failed silently) — enumerates
+ * live OS processes by known binary name, and kills any that are both
+ * untracked and have a confirmed-dead parent. A strictly ADDITIVE second
+ * layer: `sweepOrphans`'s registry-driven path is untouched and remains the
+ * cheap, correct common case.
+ *
+ * Kill-attempt retry: deliberately NO separate retry-tracking state. If
+ * `killPidTree` fails silently, the process stays alive, untracked, and its
+ * parent stays dead — so it stays classified as backstop-kill-eligible and
+ * this exact sweep simply tries again at the next `session_start`, with zero
+ * extra bookkeeping. This only breaks if the orphan's *parent* pid gets
+ * reused by a live process in the interim (closes the window), which is the
+ * same residual risk `decideOrphanReaping`'s registry path already accepts.
+ * A future hardening (making `killPidTree` return a success signal so a
+ * failed kill can be logged distinctly from "already gone") is a reasonable
+ * follow-up, not required for correctness here.
+ *
+ * Never throws — every step is wrapped so a reap failure cannot block or
+ * crash the caller (session_start).
+ */
+export async function sweepUntrackedOrphans(): Promise<void> {
+	if (!isInstanceRegistryEnabled()) return;
+	const startedAt = Date.now();
+	try {
+		const [registry, processes] = await Promise.all([
+			readInstanceRegistry(),
+			enumerateManagedProcesses(),
+		]);
+		if (processes.length === 0) return;
+
+		const candidates = decideBackstopOrphanReaping(processes, registry, realIsPidAlive);
+
+		let killedCount = 0;
+		for (const proc of candidates) {
+			await killPidTree(proc.pid);
+			killedCount++;
+		}
+
+		try {
+			logLatency({
+				type: "phase",
+				phase: "orphan_backstop_reaped",
+				filePath: "",
+				durationMs: Date.now() - startedAt,
+				metadata: {
+					scanned: processes.length,
+					killed: killedCount,
+				},
+			});
+		} catch {
+			// best-effort logging only
+		}
+	} catch {
+		// The sweep must never throw out of session_start.
+	}
+}
+
+/**
  * Fire-and-forget orphan sweep: reads the registry, decides what's dead via
  * `decideOrphanReaping`, kills orphaned LSP children (by pid, with a
  * marker-based command-line search fallback), then drops fully-dead
