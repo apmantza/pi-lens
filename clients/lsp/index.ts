@@ -301,6 +301,28 @@ export interface LSPWorkspaceDiagnosticResult {
 
 const WORKSPACE_DIAGNOSTICS_CONCURRENCY = 8;
 
+// #621: a single-server group (the common case — one language, one server)
+// used to pre-open its ENTIRE file list in one uninterrupted burst (#608)
+// before the per-file diagnostics-wait loop even started. That coalesces
+// watched-files notifications into one flush (the #608 fix's intent), but at
+// real project scale (~150 files) it also dumps the whole group on the
+// server's single-threaded request queue essentially at once, forcing it to
+// ingest/typecheck the full burst before any per-file diagnostics request
+// even gets a turn — observed to collapse to near-100% per-file timeouts on
+// a ~150-file TS project (pi-drykiss dogfooding). `lsp_diagnostics`'
+// bounded-concurrency batch/directory mode (tools/lsp-diagnostics.ts, default
+// 8) never has this problem: it only ever has ~8 files in flight at once.
+// Chunking the pre-open+process cycle to the same width gets both properties:
+// each chunk's opens still land inside `WatchedFilesQueue`'s 100ms debounce
+// window and coalesce into one flush (bounded burst, not per-file — the
+// original #608 bug pre-opened lazily one file at a time with a full
+// diagnostics wait in between, which is what defeated the debounce), while no
+// single burst ever exceeds this width regardless of total group size.
+const WORKSPACE_SWEEP_PREOPEN_CHUNK_SIZE = (() => {
+	const raw = Number(process.env.PI_LENS_LSP_WORKSPACE_PREOPEN_CHUNK);
+	return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 8;
+})();
+
 // #584: opengrep has no `workspace/diagnostic` pull support (push-only,
 // docs/servercapabilities.md) and `reopenOnResync: true` (server-strategies.ts)
 // means every per-file LSP touch already forces a full re-scan anyway — there's
@@ -2349,15 +2371,30 @@ export class LSPService {
 							continue;
 						}
 					}
-					// #608: batch-open this group's files before waiting on
-					// diagnostics for any of them individually — see
-					// `preOpenGroupFiles` above.
-					await preOpenGroupFiles(group.files);
-					for (const filePath of group.files) {
-						// Honor cancellation between files (#341); already-collected
-						// results are returned as a partial.
+					// #608/#621: batch-open a CHUNK of this group's files before
+					// waiting on diagnostics for any of them individually — see
+					// `preOpenGroupFiles` above. Chunking (rather than the whole
+					// group at once) bounds how much a single burst can dump on
+					// the server's request queue at real project scale, while each
+					// chunk's opens still land inside the debounce window and
+					// coalesce into one flush — see `WORKSPACE_SWEEP_PREOPEN_CHUNK_SIZE`.
+					for (
+						let chunkStart = 0;
+						chunkStart < group.files.length;
+						chunkStart += WORKSPACE_SWEEP_PREOPEN_CHUNK_SIZE
+					) {
 						if (signal?.aborted) return;
-						await processFile(filePath);
+						const chunk = group.files.slice(
+							chunkStart,
+							chunkStart + WORKSPACE_SWEEP_PREOPEN_CHUNK_SIZE,
+						);
+						await preOpenGroupFiles(chunk);
+						for (const filePath of chunk) {
+							// Honor cancellation between files (#341); already-collected
+							// results are returned as a partial.
+							if (signal?.aborted) return;
+							await processFile(filePath);
+						}
 					}
 				}
 			}),

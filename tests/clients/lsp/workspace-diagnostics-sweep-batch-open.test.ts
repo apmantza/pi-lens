@@ -22,6 +22,16 @@
  * coalesce into one flush — restoring #271's "once per burst" intent for a
  * full sweep, not just per-edit dispatch bursts.
  *
+ * #621 follow-up: the pre-open pass is now CHUNKED (default width 8, see
+ * `WORKSPACE_SWEEP_PREOPEN_CHUNK_SIZE` and
+ * workspace-diagnostics-sweep-preopen-chunk.test.ts) instead of firing the
+ * WHOLE group's opens in one uninterrupted burst — a whole-group burst at
+ * real project scale (~150 files) was found to overwhelm a single-threaded
+ * server's request queue before any per-file diagnostics request got a turn.
+ * This test's 20 files span 3 chunks (8+8+4), so it now expects 3 flushes
+ * (one per chunk) instead of 1 (one for the whole group) — still far short of
+ * 20 (one per file, the original #608 bug this test guards against).
+ *
  * This test fakes the client's `notify.open` to reproduce the real
  * `WatchedFilesQueue` coalescing behavior (imported from source, not
  * reimplemented) plus a deliberately SLOW `waitForDiagnostics` (150ms, well
@@ -29,7 +39,7 @@
  * recompute latency — the exact condition that used to spread first-opens
  * past the debounce window one file at a time. If the pre-open batching
  * regressed back to "open lazily inside the per-file touch", this slow wait
- * would cause N flushes instead of 1.
+ * would cause N flushes instead of one-per-chunk.
  */
 
 import * as fs from "node:fs";
@@ -132,13 +142,13 @@ describe("runWorkspaceDiagnostics — batch-open restores #271 coalescing for a 
 		// already-open didChange equivalent (no further enqueue, mirrored by
 		// this mock's early return).
 		expect(client.notify.open).toHaveBeenCalledTimes(fileNames.length * 2);
-		// But the watched-files queue coalesced all of the FIRST opens into a
-		// single
-		// flush — the #608 regression would have produced one flush per file
-		// (30), since each `waitForDiagnostics` call blocks the old lazy-open
-		// path well past the 100ms debounce window before the next file's
-		// open is even attempted.
-		expect(flushCount).toBe(1);
+		// The watched-files queue coalesces each CHUNK's first-opens into its
+		// own single flush — 20 files at the default chunk width of 8 is 3
+		// chunks (8+8+4), so 3 flushes. The #608 regression would have produced
+		// one flush per file (20), since each `waitForDiagnostics` call blocks
+		// the old lazy-open path well past the 100ms debounce window before the
+		// next file's open is even attempted.
+		expect(flushCount).toBe(3);
 		expect(notifiedUriCount).toBe(fileNames.length);
 	}, 10_000);
 });
