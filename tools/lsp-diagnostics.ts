@@ -526,6 +526,21 @@ async function collectDiagnosticsForFile(
 ): Promise<DiagnosticsCollectionResult> {
 	let timedOut = false;
 	let content: string | undefined;
+	// #629: `touched` (when defined) is ALREADY the correctly-scoped,
+	// already-collected diagnostics array for this touch — `touchFile` below
+	// is called with `collectDiagnostics: true` and `clientScope: serverScope`,
+	// so its return value only contains diagnostics from the servers
+	// `serverScope` asked for. Previously this function discarded `touched`
+	// (reading only `.inconclusive` off it) and made a SECOND, unconditionally
+	// -unscoped `getDiagnostics()` call for the actual content — meaning every
+	// touchFile-branch call paid for two LSP round trips instead of one, and
+	// `serverScope: "primary"` never actually skipped the auxiliary scanners
+	// (getDiagnostics always queries every registered server for the file).
+	// `touched` is only undefined when touchFile itself couldn't produce a
+	// result (service destroyed, no clients resolved) — that's the one case
+	// that still needs the getDiagnostics() fallback below.
+	let touched: (LSPDiagnostic[] & { inconclusive?: boolean }) | undefined;
+	let usedTouch = false;
 	try {
 		content = fs.readFileSync(absPath, "utf-8");
 		const serviceWithTouch = lspService as NonNullable<
@@ -549,7 +564,8 @@ async function collectDiagnosticsForFile(
 			(waitMs !== undefined || serverScope === "primary") &&
 			typeof serviceWithTouch.touchFile === "function"
 		) {
-			const touched = await serviceWithTouch.touchFile(absPath, content, {
+			usedTouch = true;
+			touched = await serviceWithTouch.touchFile(absPath, content, {
 				diagnostics: "document",
 				collectDiagnostics: true,
 				maxClientWaitMs: waitMs,
@@ -566,10 +582,20 @@ async function collectDiagnosticsForFile(
 		// Non-fatal: getDiagnostics may still have stale/health information.
 	}
 
-	const diagnostics = await lspService.getDiagnostics(
-		absPath,
-		waitMs !== undefined ? "document" : "full",
-	);
+	// Only fall through to the unscoped getDiagnostics() read when the touch
+	// branch wasn't taken (openFile-only path, which never collected anything
+	// and genuinely needs the follow-up call) or couldn't resolve any clients
+	// at all (touched stays undefined despite usedTouch). When touched IS
+	// defined it's already the answer — reusing it is what makes
+	// serverScope:"primary" actually skip auxiliary scanners and drops the
+	// common case back to a single LSP round trip instead of two.
+	const diagnostics =
+		usedTouch && touched !== undefined
+			? touched
+			: await lspService.getDiagnostics(
+					absPath,
+					waitMs !== undefined ? "document" : "full",
+				);
 	// #586: honor each auxiliary profile's native inline-suppression comment
 	// (e.g. opengrep's `// nosemgrep`, #441) the same way the per-edit dispatch
 	// runner does — previously this standalone query path ignored it entirely.
