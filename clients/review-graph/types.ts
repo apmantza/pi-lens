@@ -22,6 +22,21 @@ export interface ReviewGraphEdge {
 	to: string;
 	kind: ReviewGraphEdgeKind;
 	metadata?: Record<string, unknown>;
+	/**
+	 * Resolution confidence for a `calls`/`references` edge (refs #655 — narrow
+	 * slice of its full `resolution` enum). A callee/reference is initially
+	 * matched by bare name only (the extractor sees no import/type info) —
+	 * `"name-only"` means it stayed that way: 0 or 2+ same-named candidates
+	 * existed graph-wide, so `edge.to` may point at an unresolved placeholder
+	 * node or, ambiguously, could be the wrong same-named symbol. `"exact"`
+	 * means exactly one same-named real symbol existed anywhere in the graph
+	 * at resolution time, so the match is provably unambiguous (not the same
+	 * as scope/type-checked resolution — see `resolveDeferredSymbolEdges` in
+	 * builder.ts). Undefined for edge kinds where resolution confidence
+	 * doesn't apply (`imports`/`contains`/`defines`) and for `calls` edges to
+	 * a definite external target (`callee.includes(".")` in builder.ts).
+	 */
+	resolution?: "exact" | "name-only";
 }
 
 export interface ReviewGraph {

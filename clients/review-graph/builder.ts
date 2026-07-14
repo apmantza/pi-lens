@@ -25,13 +25,20 @@ import {
 	TreeSitterSymbolExtractor,
 } from "../tree-sitter-symbol-extractor.js";
 import { resolveGitIdentity } from "./git-identity.js";
+import { buildSymbolId } from "./symbol-id.js";
 import type { ReviewGraph, ReviewGraphEdge, ReviewGraphNode } from "./types.js";
 
 // v3 (#260): test files are no longer indexed. Bumping the version makes
 // loadPersistedGraph reject any v2 snapshot (which still contains test-file
 // nodes/edges) → a clean tests-free rebuild on first load after upgrade, for
 // every project, without anyone deleting the cache by hand.
-const REVIEW_GRAPH_VERSION = "v3";
+// v4 (#655, narrow first slice): symbol-node IDs changed shape from
+// `<file>:<name>` to `<file>:<name>:<kind>:<startLine>` (see symbol-id.ts) to
+// stop overloads/same-named methods/nested functions from colliding onto one
+// node. A v3 snapshot's nodes/edges still use the old ID shape throughout, so
+// it must be rejected rather than merged with newly-built v4 IDs — same
+// safe-rebuild mechanism as the v2→v3 bump above.
+const REVIEW_GRAPH_VERSION = "v4";
 const MAIN_KINDS = new Set([
 	"jsts",
 	"python",
@@ -998,7 +1005,7 @@ function addJsTsFile(
 	}
 
 	for (const fn of functions) {
-		const symbolId = `${normalized}:${fn.name}`;
+		const symbolId = buildSymbolId(normalized, fn.name, "function", fn.line);
 		addNode(graph, {
 			id: symbolId,
 			kind: "symbol",
@@ -1039,6 +1046,12 @@ function addJsTsFile(
 				to: targetId,
 				kind: "calls",
 				metadata: { unresolvedName: callee },
+				// A definite external call (`callee.includes(".")`) is never
+				// ambiguous — no in-project candidate to collide with, so no
+				// resolution marker. An in-project bare-name callee starts
+				// "name-only" and resolveDeferredSymbolEdges below may upgrade it
+				// to "exact" once every file has been added.
+				...(callee.includes(".") ? {} : { resolution: "name-only" }),
 			});
 		}
 	}
@@ -1102,6 +1115,43 @@ async function extractTreeSitterSymbols(
 	return extractor.extract(tree, filePath, content);
 }
 
+// #655: some grammars' SYMBOL_QUERIES match the SAME declaration node under two
+// patterns — e.g. python's generic `function_definition` rule also matches a
+// method's `function_definition` nested inside a class body, in addition to
+// the class-scoped "method" rule (tree-sitter-symbol-extractor.ts has no
+// `#not-`-style scope predicate to exclude it). `extract()` then yields TWO
+// Symbol records for one real declaration: identical name/line/column,
+// differing only in `kind` ("function" vs "method"). The pre-#655
+// `${file}:${name}` ID silently collapsed these onto one node (`Map.set`
+// overwrote by name, last-extracted kind winning in whatever order
+// `Query.matches` returned). The new kind-qualified ID would otherwise turn
+// that pre-existing extractor quirk into two REAL, persisted duplicate nodes
+// for one symbol — so dedupe by (name, line, column) here, preferring the
+// more specific kind, keeping exactly one node per real declaration regardless
+// of how many query patterns matched it.
+const SYMBOL_KIND_SPECIFICITY: Record<string, number> = {
+	method: 2,
+	property: 2,
+};
+
+function dedupeSamePositionSymbols(
+	symbols: ExtractedSymbols["symbols"],
+): ExtractedSymbols["symbols"] {
+	const bestByKey = new Map<string, ExtractedSymbols["symbols"][number]>();
+	for (const symbol of symbols) {
+		const key = `${symbol.name} ${symbol.line} ${symbol.column}`;
+		const existing = bestByKey.get(key);
+		if (!existing) {
+			bestByKey.set(key, symbol);
+			continue;
+		}
+		const existingScore = SYMBOL_KIND_SPECIFICITY[existing.kind] ?? 0;
+		const candidateScore = SYMBOL_KIND_SPECIFICITY[symbol.kind] ?? 0;
+		if (candidateScore > existingScore) bestByKey.set(key, symbol);
+	}
+	return [...bestByKey.values()];
+}
+
 function addTreeSitterFile(
 	graph: ReviewGraph,
 	cwd: string,
@@ -1119,8 +1169,13 @@ function addTreeSitterFile(
 		metadata: featureHintMetadata(normalized),
 	});
 
-	for (const symbol of extracted.symbols) {
-		const symbolId = `${normalized}:${symbol.name}`;
+	for (const symbol of dedupeSamePositionSymbols(extracted.symbols)) {
+		const symbolId = buildSymbolId(
+			normalized,
+			symbol.name,
+			symbol.kind,
+			symbol.line,
+		);
 		addNode(graph, {
 			id: symbolId,
 			kind: "symbol",
@@ -1156,6 +1211,9 @@ function addTreeSitterFile(
 			to: targetId,
 			kind: "references",
 			metadata: { line: ref.line, column: ref.column },
+			// Always starts bare-name-only (the extractor has no scope/type info);
+			// resolveDeferredSymbolEdges may upgrade this to "exact" below.
+			resolution: "name-only",
 		});
 	}
 
@@ -1401,8 +1459,13 @@ function resolveDeferredSymbolEdges(graph: ReviewGraph): void {
 		if (!targetNode?.metadata?.unresolvedName) return edge;
 		const candidates = symbolNameToIds.get(targetNode.symbolName ?? "") ?? [];
 		if (candidates.length === 1) {
-			return { ...edge, to: candidates[0] };
+			// Exactly one same-named real symbol exists graph-wide: the bare-name
+			// match is provably unambiguous (refs #655 — resolution confidence).
+			return { ...edge, to: candidates[0], resolution: "exact" };
 		}
+		// 0 or 2+ candidates: stays on the unresolved placeholder, resolution
+		// stays "name-only" (set at edge creation) — a consumer must not treat
+		// this edge's target as a confirmed graph node.
 		return edge;
 	});
 	rebuildIndexes(graph);

@@ -725,6 +725,81 @@ describe("moduleReport — review-graph who-uses-this", () => {
 		expect(foo?.usedBy?.every((u) => !path.isAbsolute(u.file))).toBe(true);
 		// recommendedReads should surface the referenced, exported symbol.
 		expect(report.recommendedReads.some((r) => r.symbol === "foo")).toBe(true);
+		// refs #655: `foo` is the only symbol named "foo" anywhere in the graph,
+		// so the caller edge is provably unambiguous — "exact" resolution.
+		const fooHit = foo?.usedBy?.find((u) => u.file.endsWith("b.ts"));
+		expect(fooHit?.resolution).toBe("exact");
+	});
+
+	it("refs #655: a TS class METHOD still finds its graph node under the new collision-safe ID scheme", async () => {
+		// Regression guard for the jsts idKind mapping: builder.ts's graph node for
+		// a jsts method is stamped symbolKind "function" (dispatch/facts/function-facts.ts
+		// has no method/function distinction), while this file's own outline
+		// extractor (tree-sitter-symbol-extractor) reports `sym.kind === "method"`.
+		// toEntry must still map to the graph's "function" bucket for jsts lookups.
+		// A member-call (`new Service().run()`) isn't resolved to the callee graph
+		// node at all today (function-facts routes any dotted call text to an
+		// "external" node — a pre-existing, separate limitation, not part of this
+		// slice), so this asserts via graph-node METADATA (complexity), which
+		// only surfaces when `toEntry`'s symbolNodeId lookup actually finds the
+		// method's real graph node — the same lookup `usedBy` depends on.
+		const env = makeEnv();
+		createTempFile(
+			env.tmpDir,
+			"service.ts",
+			[
+				"export class Service {",
+				"  run(): number {",
+				"    if (Date.now() > 0) return 1;",
+				"    return 0;",
+				"  }",
+				"}",
+			].join("\n"),
+		);
+
+		await warmGraph(env.tmpDir);
+		const report = await moduleReport("service.ts", env.tmpDir);
+
+		const service = report.api.find((e) => e.name === "Service");
+		const run = service?.members?.find((m) => m.name === "run");
+		expect(run).toBeDefined();
+		// cyclomaticComplexity for the `if` above is 2 — only present when the
+		// graph node for THIS method was actually found by toEntry's lookup.
+		expect(run?.complexity).toBe(2);
+	});
+
+	it("refs #655: an ambiguous same-named callee across two files reports name-only resolution", async () => {
+		// Two functions named `handle` in two different files — a bare-name call
+		// site can't tell them apart. The edge must stay marked "name-only" so a
+		// consumer knows not to over-trust which `handle` it actually reached.
+		const env = makeEnv();
+		createTempFile(
+			env.tmpDir,
+			"a.ts",
+			"export function handle(): number {\n  return 1;\n}\n",
+		);
+		createTempFile(
+			env.tmpDir,
+			"b.ts",
+			"export function handle(): number {\n  return 2;\n}\n",
+		);
+		createTempFile(
+			env.tmpDir,
+			"caller.ts",
+			"export function useIt(): number {\n  return handle();\n}\n",
+		);
+
+		await warmGraph(env.tmpDir);
+		const reportA = await moduleReport("a.ts", env.tmpDir);
+		const handleA = reportA.api.find((e) => e.name === "handle");
+		// Either 0 hits (never resolved off the placeholder) or a hit explicitly
+		// marked "name-only" — never silently reported as "exact".
+		const ambiguousHit = handleA?.usedBy?.find((u) =>
+			u.file.endsWith("caller.ts"),
+		);
+		if (ambiguousHit) {
+			expect(ambiguousHit.resolution).toBe("name-only");
+		}
 	});
 
 	it("#536: carries graphBuiltAt (the cached graph's persisted ISO timestamp) when a graph was consulted", async () => {

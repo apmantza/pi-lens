@@ -180,6 +180,134 @@ describe("review graph service", () => {
 		}
 	});
 
+	it("refs #655: a v3 snapshot (pre-collision-safe-ID scheme) is detected as stale and safely rebuilt, never misread", async () => {
+		// #655's v4 bump changed the symbol-node ID shape from `<file>:<name>` to
+		// `<file>:<name>:<kind>:<startLine>`. A real v3 snapshot's nodes/edges still
+		// use the OLD id shape throughout — merging it with newly-built v4 IDs
+		// would silently duplicate/misalign nodes, so it must be rejected exactly
+		// like the v2→v3 (#260) bump was, not partially reused.
+		const env = setupTestEnvironment("pi-lens-review-graph-v3-migrate-");
+		try {
+			const cacheDir = path.join(getProjectDataDir(env.tmpDir), "cache");
+			fs.mkdirSync(cacheDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(cacheDir, "review-graph.json"),
+				JSON.stringify({
+					version: "v3",
+					builtAt: "x",
+					signature: "s",
+					nodes: [
+						[
+							"src/a.ts:alpha",
+							{
+								id: "src/a.ts:alpha",
+								kind: "symbol",
+								language: "jsts",
+								filePath: "src/a.ts",
+								symbolName: "alpha",
+								symbolKind: "function",
+							},
+						],
+					],
+					edges: [],
+				}),
+			);
+			// A v3 snapshot must be flagged as needing migration under the v4 build.
+			expect(isReviewGraphMigrationNeeded(env.tmpDir)).toBe(true);
+
+			// getCachedReviewGraph's blind read must also reject it outright (never
+			// hand back a v3-shaped graph to a v4-ID-aware caller like module-report).
+			const { getCachedReviewGraph } = await import(
+				"../../clients/review-graph/builder.js"
+			);
+			expect(getCachedReviewGraph(env.tmpDir)).toBeUndefined();
+
+			// A real build produces a fresh v4 graph with the new ID shape, not the
+			// old one, and is no longer flagged as needing migration.
+			createTempFile(
+				env.tmpDir,
+				"src/a.ts",
+				"export function alpha() {\n  return 1;\n}\n",
+			);
+			const graph = await buildOrUpdateGraph(env.tmpDir, [], new FactStore());
+			expect(graph.version).toBe("v4");
+			const alphaId = [...graph.nodes.keys()].find((id) =>
+				id.includes(":alpha:"),
+			);
+			expect(alphaId).toBeDefined();
+			flushReviewGraphPersistsForTests();
+			for (let i = 0; i < 20 && isReviewGraphMigrationNeeded(env.tmpDir); i++) {
+				await new Promise((r) => setTimeout(r, 25));
+			}
+			expect(isReviewGraphMigrationNeeded(env.tmpDir)).toBe(false);
+		} finally {
+			clearReviewGraphWorkspaceCache();
+			env.cleanup();
+		}
+	});
+
+	it("refs #655: an unresolved bare-name call stays 'name-only'; a unique-name call resolves 'exact'", async () => {
+		const env = setupTestEnvironment("pi-lens-review-graph-resolution-");
+		try {
+			// `alpha` is globally unique by name → its bare-name callee edge must
+			// upgrade to "exact" once resolveDeferredSymbolEdges runs.
+			const aPath = createTempFile(
+				env.tmpDir,
+				"src/a.ts",
+				[
+					"export function alpha() {",
+					"  return helper();",
+					"}",
+					"function helper() {",
+					"  return 1;",
+					"}",
+					"",
+				].join("\n"),
+			);
+			// Two `dup` functions in two different files → any bare-name call to
+			// `dup` can't be told apart → must stay "name-only", never "exact".
+			createTempFile(
+				env.tmpDir,
+				"src/dup1.ts",
+				"export function dup() { return 1; }\n",
+			);
+			createTempFile(
+				env.tmpDir,
+				"src/dup2.ts",
+				"export function dup() { return 2; }\n",
+			);
+			createTempFile(
+				env.tmpDir,
+				"src/caller.ts",
+				"export function useDup() { return dup(); }\n",
+			);
+
+			const facts = new FactStore();
+			const graph = await buildOrUpdateGraph(
+				env.tmpDir,
+				[aPath],
+				facts,
+			);
+
+			const helperCallEdge = graph.edges.find(
+				(e) =>
+					e.kind === "calls" &&
+					e.from.includes(":alpha:") &&
+					graph.nodes.get(e.to)?.symbolName === "helper",
+			);
+			expect(helperCallEdge).toBeDefined();
+			expect(helperCallEdge?.resolution).toBe("exact");
+
+			const dupCallEdge = graph.edges.find(
+				(e) => e.kind === "calls" && e.from.includes(":useDup:"),
+			);
+			expect(dupCallEdge).toBeDefined();
+			expect(dupCallEdge?.resolution).toBe("name-only");
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("builds file-level graphs for python/go/rust/ruby without crashing", async () => {
 		const env = setupTestEnvironment("pi-lens-review-graph-langs-");
 		try {

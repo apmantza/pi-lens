@@ -38,6 +38,7 @@ import { logLatency } from "./latency-logger.js";
 import { annotateMiddleMan } from "./middle-man-analysis.js";
 import { normalizeMapKey } from "./path-utils.js";
 import { resolveImportToFiles } from "./review-graph/import-resolvers.js";
+import { buildSymbolId } from "./review-graph/symbol-id.js";
 import type { ReviewGraph, ReviewGraphEdgeKind } from "./review-graph/types.js";
 import type { Symbol as ExtractedSymbol } from "./symbol-types.js";
 import { getSharedTreeSitterClient } from "./tree-sitter-shared.js";
@@ -79,6 +80,16 @@ export interface ModuleSymbolUsedBy {
 	relation: ReviewGraphEdgeKind;
 	/** Where this edge came from: the AST review graph, or a live LSP query. */
 	provenance?: "ast" | "lsp";
+	/**
+	 * Resolution confidence for an `ast`-provenance hit (refs #655). `"exact"` =
+	 * this caller/reference was matched to exactly one same-named symbol
+	 * graph-wide — unambiguous. `"name-only"` = the callee/reference name has 0
+	 * or 2+ same-named candidates in the graph, so this entry may be a
+	 * name-collision guess rather than a confirmed call to THIS symbol —
+	 * weight it accordingly. Undefined for `lsp`-provenance hits (out of scope
+	 * here; LSP resolution has its own, separate confidence story per #236).
+	 */
+	resolution?: "exact" | "name-only";
 }
 
 export interface ModuleSymbolEntry {
@@ -503,7 +514,13 @@ function resolveUsedBy(
 		const key = `${file} ${symbol} ${edge.kind}`;
 		if (seen.has(key)) continue;
 		seen.add(key);
-		out.push({ file, symbol, line, relation: edge.kind });
+		out.push({
+			file,
+			symbol,
+			line,
+			relation: edge.kind,
+			...(edge.resolution ? { resolution: edge.resolution } : {}),
+		});
 		if (out.length >= cap) break;
 	}
 	return out;
@@ -637,10 +654,23 @@ function toEntry(
 	graph: ReviewGraph | undefined,
 	maxRefs: number,
 	projectRoot: string,
+	fileKind: string | undefined,
 ): ModuleSymbolEntry {
 	const startLine = sym.line;
 	const endLine = sym.endLine ?? sym.line;
-	const symbolNodeId = `${normalizedPath}:${sym.name}`;
+	// The graph-node `kind` bucket in the ID must match whatever builder.ts
+	// actually stamped on the node (refs #655 shared-ID-helper invariant), NOT
+	// necessarily this file's own extractor's `sym.kind`. For jsts specifically,
+	// builder.ts's addJsTsFile sources symbols from a DIFFERENT extractor
+	// (dispatch/facts/function-facts.ts) that has no method/function distinction
+	// — every jsts symbol (including class methods) is stamped `"function"`. This
+	// extractor (tree-sitter-symbol-extractor, used here for ALL languages'
+	// outlines) does distinguish `"method"` from `"function"`, so naively reusing
+	// `sym.kind` for jsts would look up the wrong bucket and silently break
+	// usedBy/fanout for every TS/JS method. Every other language builds its graph
+	// node with THIS SAME extractor, so `sym.kind` matches there.
+	const idKind = fileKind === "jsts" ? "function" : sym.kind;
+	const symbolNodeId = buildSymbolId(normalizedPath, sym.name, idKind, sym.line);
 	const node = graph?.nodes.get(symbolNodeId);
 	const metadata = node?.metadata ?? {};
 
@@ -1650,7 +1680,7 @@ export async function moduleReport(
 	// list. `entries` is mutated by nestEntries (members attached); `topLevel` is
 	// the api/internal split surface.
 	const entries = outlineSymbols.map((sym) =>
-		toEntry(sym, normalizedPath, graph, maxRefs, cwd),
+		toEntry(sym, normalizedPath, graph, maxRefs, cwd, kind),
 	);
 	const topLevel = nestEntries(entries);
 
