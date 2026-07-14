@@ -252,22 +252,22 @@ describe("ast-grep Sonar gap rules (integration via real runner)", () => {
 			});
 		});
 
-		describe("no-dupe-class-members (#660 removed the skip; #663 tracks a separate gap)", () => {
+		describe("no-dupe-class-members (#660 removed the skip; #663 fixed the utils: gap)", () => {
 			// #660: this rule id was also in the removed TREE_SITTER_OVERLAP set
 			// despite never having had ANY tree-sitter query (active or
-			// disabled) — a pure coverage gap from that angle. However, unlike
-			// `nested-ternary`/`long-parameter-list`, it does NOT actually start
-			// firing once unskipped: this rule's YAML declares a top-level
-			// `utils:` block (reusable matchers via `matches: <name>`), which
-			// `yaml-rule-parser.ts`/`ast-grep-napi.ts` silently drop before
-			// calling napi's native `findAll` — a pre-existing, unrelated bug
-			// filed as #663. Document the current (still-gapped) behavior here
-			// rather than asserting a fix that hasn't landed; #663 should flip
-			// this to `.toContain(...)` once `utils:` passthrough is added.
-			it("does not yet flag a duplicate method — utils: block dropped (#663)", async () => {
+			// disabled) — a pure coverage gap from that angle. It did NOT
+			// actually fire once unskipped, though: this rule's YAML declares a
+			// top-level `utils:` block (reusable matchers via `matches: <name>`),
+			// which `yaml-rule-parser.ts`/`ast-grep-napi.ts` silently dropped
+			// before calling napi's native `findAll` — a pre-existing, unrelated
+			// bug fixed in #663 (see also
+			// tests/clients/dispatch/runners/ast-grep-utils-block.test.ts for
+			// dedicated utils:-passthrough regression coverage across all 5
+			// affected rules).
+			it("flags a duplicate method", async () => {
 				expect(
 					await rulesFiredOn("class A { foo() {} foo() {} }\n"),
-				).not.toContain("no-dupe-class-members");
+				).toContain("no-dupe-class-members");
 			});
 		});
 

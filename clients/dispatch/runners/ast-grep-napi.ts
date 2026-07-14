@@ -85,10 +85,10 @@ const MAX_TOTAL_DIAGNOSTICS = 50;
  * scoped skip alongside the query that actually covers it — don't recreate
  * a blanket assumption-based list.
  *
- * Note: `no-dupe-class-members` still doesn't fire post-removal — its rule
- * YAML uses a top-level `utils:` block that this runner's native-config
- * passthrough drops entirely, a separate pre-existing bug tracked in #663
- * (affects 5 shipped rules, not just this one).
+ * Note: `no-dupe-class-members` didn't actually fire immediately
+ * post-removal — its rule YAML uses a top-level `utils:` block that this
+ * runner's native-config passthrough dropped entirely, a separate bug
+ * (affecting 5 shipped rules, not just this one) fixed in #663.
  */
 
 /**
@@ -215,6 +215,14 @@ export interface AstGrepEvaluateOptions {
 	maxTotalDiagnostics?: number;
 	/** Workspace root that owns project-local rules; defaults to `cwd`. */
 	projectRoot?: string;
+	/**
+	 * Optional sink for a rule that napi's native engine rejected outright
+	 * (malformed shape, unresolved `matches: <name>` reference, invalid kind,
+	 * …). Without this, a rule failure is swallowed as "zero diagnostics"
+	 * indistinguishable from "the rule legitimately found nothing" (#663).
+	 * Best-effort only — never let a logging failure affect matching.
+	 */
+	log?: (message: string) => void;
 }
 
 function duplicateRuleIds(rules: YamlRule[]): string[] {
@@ -279,6 +287,7 @@ export function evaluateAstGrepRules(
 	const maxTotalDiagnostics =
 		options.maxTotalDiagnostics ?? MAX_TOTAL_DIAGNOSTICS;
 	const blockingOnly = options.blockingOnly === true;
+	const log = options.log;
 
 	const diagnostics: Diagnostic[] = [];
 	const seenRuleIds = new Set<string>();
@@ -367,17 +376,27 @@ export function evaluateAstGrepRules(
 				// Delegate matching to napi's native engine, which handles the
 				// full ast-grep rule grammar (pattern, kind, has/inside/follows/
 				// precedes/stopBy/field/nthChild, any/all/not) plus metavariable
-				// `constraints` (#206). A faithful js-yaml parse feeds the rule
+				// `constraints` (#206) AND top-level `utils` — reusable named
+				// matchers referenced via `matches: <name>` inside `rule`
+				// (#663; `NapiConfig.utils: Record<string, Rule>` per
+				// @ast-grep/napi's types, same shape napi already expects for
+				// `rule`/`constraints`). A faithful js-yaml parse feeds the rule
 				// object straight through. If napi rejects the rule (a malformed
-				// or invalid-kind rule), skip it — never silently match nothing
-				// through a partial interpreter.
-				const nativeConfig = rule.constraints
-					? { rule: rule.rule, constraints: rule.constraints }
-					: { rule: rule.rule };
+				// or invalid-kind rule, or an unresolved `matches:` reference),
+				// skip it — never silently match nothing through a partial
+				// interpreter.
+				const nativeConfig: Record<string, unknown> = { rule: rule.rule };
+				if (rule.constraints) nativeConfig.constraints = rule.constraints;
+				if (rule.utils) nativeConfig.utils = rule.utils;
 				try {
 					matches = rootNode.findAll(nativeConfig as never);
-				} catch {
+				} catch (err) {
 					matches = [];
+					log?.(
+						`ast-grep-napi: rule "${rule.id}" rejected by native engine (${
+							err instanceof Error ? err.message : String(err)
+						})`,
+					);
 				}
 
 				const limitedMatches = matches.slice(0, maxMatchesPerRule);
@@ -516,6 +535,7 @@ const astGrepNapiRunner: RunnerDefinition = {
 			{
 				blockingOnly: ctx.blockingOnly,
 				projectRoot: ctx.projectRoot,
+				log: (message: string) => ctx.log(message),
 			},
 		);
 
