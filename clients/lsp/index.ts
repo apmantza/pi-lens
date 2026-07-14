@@ -276,6 +276,16 @@ export interface LSPTouchFileOptions {
 	collectDiagnostics?: boolean;
 	/** Skip workspace/didChangeWatchedFiles — use for cascade reads, not real fs changes */
 	silent?: boolean;
+	/**
+	 * #645: per-sweep gate (see `createSweepIndexGate`/`SweepIndexGate`) that
+	 * lets a `workspaceIndexing`-strategy server (e.g. marksman) pay its full
+	 * `aggregateWaitMs` wait only once per `runWorkspaceDiagnostics` sweep
+	 * instead of once per swept file. Only `runWorkspaceDiagnostics` passes
+	 * this; every other caller (per-edit dispatch, cascade touches) omits it,
+	 * so `perServerTimeout` below always falls back to the pre-#645 full-wait
+	 * behavior for them.
+	 */
+	sweepIndexGate?: SweepIndexGate;
 }
 
 export interface LSPWorkspaceDiagnosticResult {
@@ -331,6 +341,41 @@ export function groupFilesByPrimaryServer(
 		}
 	}
 	return [...byServer.values()];
+}
+
+/**
+ * #645: tracks, for ONE `runWorkspaceDiagnostics` sweep, which server ids
+ * have already had at least one file pay the full `aggregateWaitMs` wait
+ * budget. `touchFile` consults this (via `LSPTouchFileOptions.sweepIndexGate`)
+ * only for servers whose strategy is marked `workspaceIndexing: true` —
+ * every other server is untouched. Deliberately a plain per-sweep object
+ * (created fresh by `runWorkspaceDiagnostics`, never stored on `LSPService`
+ * itself) so this is scoped to a single sweep call and can never leak state
+ * across sweeps or affect a per-edit touch, which never receives one.
+ */
+export interface SweepIndexGate {
+	/**
+	 * Returns true the first time it's called for `serverId` in this sweep
+	 * (and records that it was called), false on every subsequent call for
+	 * the same `serverId`. Synchronous and side-effecting by design — callers
+	 * must call it exactly once per touched file's server list (see
+	 * `touchFile`'s upfront per-server precompute) so a single `touchFile`
+	 * call's internal helper re-invocations don't each consume a separate
+	 * "first touch" slot.
+	 */
+	consumeFirstTouch(serverId: string): boolean;
+}
+
+/** Create a fresh, empty {@link SweepIndexGate} for one `runWorkspaceDiagnostics` call. */
+export function createSweepIndexGate(): SweepIndexGate {
+	const seen = new Set<string>();
+	return {
+		consumeFirstTouch(serverId: string): boolean {
+			if (seen.has(serverId)) return false;
+			seen.add(serverId);
+			return true;
+		},
+	};
 }
 
 /**
@@ -1319,13 +1364,49 @@ export class LSPService {
 			const envWait = readEnvDiagnosticsWaitMs();
 			const callerCap = options.maxDiagnosticsWaitMs ?? options.maxClientWaitMs;
 			const modeFloor = diagnosticsMode === "full" ? 3000 : 1200;
+			// #645: resolve each spawned server's "is this the first same-sweep
+			// touch for it" verdict EXACTLY ONCE up front, before `perServerTimeout`
+			// is defined. `SweepIndexGate.consumeFirstTouch` is side-effecting
+			// (it marks the server seen), and `perServerTimeout` below is invoked
+			// twice per server in this call (once to compute the overall
+			// `timeoutMs` deadline, again inside the wait `Promise.all`) — calling
+			// the gate directly from inside `perServerTimeout` would consume the
+			// "first touch" slot on the first of those two calls and read as
+			// already-warm on the second, silently shortchanging the very touch
+			// that was supposed to get the full budget.
+			const sweepFirstTouch = new Map<string, boolean>();
+			if (options.sweepIndexGate) {
+				for (const entry of spawned) {
+					const strategy = getStrategy(entry.client.serverId);
+					if (strategy.workspaceIndexing) {
+						sweepFirstTouch.set(
+							entry.client.serverId,
+							options.sweepIndexGate.consumeFirstTouch(entry.client.serverId),
+						);
+					}
+				}
+			}
 			// Each server gets its OWN deadline, bounded by the caller cap as a
 			// CEILING (never a floor) — so a clean push-silent primary (typescript
 			// ~1s) can't hold the whole touch to a slow auxiliary's budget, and a
 			// slow aux (opengrep) can't override the per-edit cap. Resolves as soon
 			// as a server publishes; this is just its individual deadline. (#242)
 			const perServerTimeout = (serverId: string): number => {
-				const strategyWait = getStrategy(serverId).aggregateWaitMs;
+				const strategy = getStrategy(serverId);
+				let strategyWait = strategy.aggregateWaitMs;
+				// #645: a `workspaceIndexing` server (marksman) only needs the
+				// full budget for the FIRST same-sweep touch to it — every
+				// subsequent touch in this sweep uses the much shorter warm-wait
+				// instead, since the one-time index build only needs to finish
+				// once. `sweepFirstTouch` only has entries when a sweep gate was
+				// passed in AND the strategy is marked, so a per-edit touch
+				// (no gate) or an unmarked server is completely unaffected.
+				const isFirstTouch = sweepFirstTouch.get(serverId);
+				if (isFirstTouch === false && strategy.workspaceIndexing) {
+					strategyWait =
+						strategy.workspaceIndexingWarmWaitMs ??
+						Math.min(300, strategyWait);
+				}
 				if (callerCap !== undefined) {
 					return Math.min(callerCap, strategyWait > 0 ? strategyWait : callerCap);
 				}
@@ -2207,6 +2288,13 @@ export class LSPService {
 		// where it exists (a mixed TS+Python repo runs both), no flooding where it
 		// doesn't. Capped so a many-language monorepo can't spawn unbounded groups.
 		const groups = groupFilesByPrimaryServer(files);
+		// #645: shared across every file/group in THIS sweep — lets a
+		// `workspaceIndexing`-strategy server (marksman) pay its full
+		// aggregateWaitMs budget only for the first file that touches it,
+		// instead of every markdown file independently racing the same cold
+		// workspace-index build. Scoped to this one call (never stored on the
+		// service), so it can't leak into a later sweep or a per-edit touch.
+		const sweepIndexGate = createSweepIndexGate();
 		// Opt-in project-wide pull: one `workspace/diagnostic` per server instead of
 		// N per-file opens (#387 Item 2). Gated off by default — a cold server can
 		// answer with an empty/partial report that reads as a false "all clean", and
@@ -2346,6 +2434,9 @@ export class LSPService {
 						// cached, read via extractors.ts) instead — see the
 						// `excludeServerIds` doc on `LSPTouchFileOptions`.
 						excludeServerIds: WORKSPACE_SWEEP_EXCLUDED_SERVER_IDS,
+						// #645: lets a workspaceIndexing server (marksman) pay its
+						// full wait budget only once across this whole sweep.
+						sweepIndexGate,
 					}),
 					{ ms: perFileMs, onTimeout: "undefined" },
 				);

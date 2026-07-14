@@ -123,6 +123,47 @@ export interface DiagnosticStrategy {
 	 * probe-clean-signal.mjs drift-check expectation change.
 	 */
 	silentOnClean?: boolean;
+	/**
+	 * True for a push-only server whose value depends on a ONE-TIME whole-
+	 * workspace index build rather than a per-file cost — e.g. marksman's
+	 * cross-file link/anchor graph (#645). A full-tree sweep
+	 * (`runWorkspaceDiagnostics`, the engine behind `lens_diagnostics
+	 * mode=full`) fires a `didOpen` for every matching file in the project;
+	 * without this flag every one of those touches independently pays the
+	 * server's full `aggregateWaitMs` racing the SAME cold index build, so on
+	 * a real project (34 markdown files in one dogfooded sweep) ALL of them
+	 * time out — not because the server is slow per file, but because the
+	 * one-time index cost gets charged once per file instead of once per
+	 * sweep. When set, `runWorkspaceDiagnostics` pays the full
+	 * `aggregateWaitMs` budget only for the FIRST file that touches this
+	 * server in one sweep; every subsequent same-sweep touch to the same
+	 * server uses `workspaceIndexingWarmWaitMs` instead (the index only needs
+	 * to finish once). Undefined/false is the fail-safe default: every touch
+	 * — sweep or not — keeps paying the full budget, identical to pre-#645
+	 * behavior. Per-edit (non-sweep, `clientScope !== "all"`) touches are
+	 * NEVER affected by this flag regardless of its value — the "first
+	 * touch"/"warm touch" distinction only exists within one
+	 * `runWorkspaceDiagnostics` call (see `createSweepIndexGate` in
+	 * `clients/lsp/index.ts`), so a normal per-edit touch always resolves as
+	 * a "first" touch and gets the full budget, matching this server's
+	 * documented single-touch strategy exactly as before.
+	 */
+	workspaceIndexing?: boolean;
+	/**
+	 * Wait budget (ms) for a same-sweep touch to this server AFTER an earlier
+	 * touch in the SAME `runWorkspaceDiagnostics` sweep already paid the full
+	 * `aggregateWaitMs` cost. Only consulted when `workspaceIndexing` is
+	 * true; ignored otherwise. Should be short — once the one-time workspace
+	 * index has had a full `aggregateWaitMs` window to build, a per-file
+	 * push-only server with a fast native parser (marksman) is expected to
+	 * publish quickly, so this is a much smaller ceiling than
+	 * `aggregateWaitMs`, not a second full wait. If a genuine timeout still
+	 * occurs at this shorter budget the touch is still marked
+	 * `diagnosticsTimedOut`/`inconclusive` exactly as before (#634's
+	 * unconfirmed rendering is unaffected) — this only shrinks the wasted
+	 * wait, it never changes the confirmed/unconfirmed contract.
+	 */
+	workspaceIndexingWarmWaitMs?: number;
 }
 
 export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
@@ -263,6 +304,13 @@ export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
 			debounceMs: 150,
 			aggregateWaitMs: 1500,
 			expectSemanticSecondPush: false,
+			// #645: a full-tree sweep opens every markdown file, all racing the
+			// SAME one-time workspace index build — pay the 1500ms budget once
+			// per sweep (the first markdown file touched), not once per file.
+			// 250ms covers a warm per-file publish (native binary, fast parse)
+			// once the index has already had a full aggregateWaitMs window.
+			workspaceIndexing: true,
+			workspaceIndexingWarmWaitMs: 250,
 		},
 	};
 
