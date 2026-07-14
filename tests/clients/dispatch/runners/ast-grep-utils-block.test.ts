@@ -18,13 +18,17 @@ const RULES_DIR = path.join(process.cwd(), "rules", "ast-grep-rules", "rules");
 //   no-dupe-class-members, no-dupe-keys, no-dupe-keys-js,
 //   rust-2024-let-chain-candidate, unnecessary-react-hook
 //
-// Two of the five (no-dupe-keys / no-dupe-keys-js) run through the runner's
-// full front door unblocked by any other gate, so those are exercised via
-// the real `runner.run()` path (same helper style as
-// ast-grep-sonar-rules.test.ts). The other three hit UNRELATED pre-existing
-// gates inside the same runner before the utils fix would ever matter:
-//   - no-dupe-class-members is listed in TREE_SITTER_OVERLAP (skipped in
-//     favor of the tree-sitter runner — see #660, a separate open issue)
+// Three of the five (no-dupe-keys / no-dupe-keys-js / no-dupe-class-members)
+// run through the runner's full front door unblocked by any other gate, so
+// those are exercised via the real `runner.run()` path (same helper style
+// as ast-grep-sonar-rules.test.ts). `no-dupe-class-members` used to be
+// listed in the runner's TREE_SITTER_OVERLAP skip-set (skipped in favor of
+// the tree-sitter runner), which #660 removed as its own separate fix —
+// this rule is verified end to end through the real runner now that that
+// gate is gone.
+//
+// The remaining two hit UNRELATED pre-existing gates inside the same
+// runner before the utils fix would ever matter:
 //   - unnecessary-react-hook is `language: Tsx`, and the runner's language
 //     filter only passes through "typescript"/"javascript" rule tags
 //   - rust-2024-let-chain-candidate is `language: Rust`; the @ast-grep/napi
@@ -32,7 +36,7 @@ const RULES_DIR = path.join(process.cwd(), "rules", "ast-grep-rules", "rules");
 //     enum is Html/JavaScript/Tsx/Css/TypeScript only) — Rust rules run via
 //     the ast-grep CLI/LSP only, already covered by
 //     ast-grep-catalog-rules.test.ts's CLI-based fixtures.
-// Those three are instead verified directly against napi's native engine —
+// Those two are instead verified directly against napi's native engine —
 // parsing the ACTUAL shipped rule YAML and calling the real `findAll` with
 // the same `{ rule, constraints, utils }` shape the fixed
 // `ast-grep-napi.ts` now builds — which isolates the utils-passthrough
@@ -107,6 +111,32 @@ describe("ast-grep NAPI utils: block passthrough (#663)", () => {
 				await rulesFiredOn("const o = { a: 1, b: 2 };\n", "sample.js"),
 			).not.toContain("no-dupe-keys-js");
 		});
+
+		// #660 removed the TREE_SITTER_OVERLAP skip-set that used to gate
+		// no-dupe-class-members out of this runner entirely, so it's now
+		// reachable end to end through the real runner front door — the
+		// same fixture cases as rules/ast-grep-rules/rule-tests/
+		// no-dupe-class-members-test.yml's invalid: / valid: entries.
+		it("no-dupe-class-members fires on a duplicate method", async () => {
+			expect(
+				await rulesFiredOn("class A { foo() {} foo() {} }\n"),
+			).toContain("no-dupe-class-members");
+		});
+		it("no-dupe-class-members fires on a duplicate field", async () => {
+			expect(
+				await rulesFiredOn("class A { foo = 1; foo = 2; }\n"),
+			).toContain("no-dupe-class-members");
+		});
+		it("no-dupe-class-members does not fire on distinct members", async () => {
+			expect(
+				await rulesFiredOn("class A { foo() {} bar() {} }\n"),
+			).not.toContain("no-dupe-class-members");
+		});
+		it("no-dupe-class-members does not fire on a getter/setter pair", async () => {
+			expect(
+				await rulesFiredOn("class A { get x() {} set x(v) {} }\n"),
+			).not.toContain("no-dupe-class-members");
+		});
 	});
 
 	describe("via napi's native engine directly (rules gated by unrelated filters)", () => {
@@ -123,27 +153,6 @@ describe("ast-grep NAPI utils: block passthrough (#663)", () => {
 			if (rule.utils) cfg.utils = rule.utils;
 			return cfg;
 		}
-
-		it("no-dupe-class-members fires on a duplicate method, not on distinct members", async () => {
-			const { loadAstGrepNapi } = await import(
-				"../../../../clients/deps/ast-grep-napi.js"
-			);
-			const { loadYamlRulesUncached } = await import(
-				"../../../../clients/dispatch/runners/yaml-rule-parser.js"
-			);
-			const sg = await loadAstGrepNapi();
-			const rules = loadYamlRulesUncached(RULES_DIR);
-			const rule = rules.find((r) => r.id === "no-dupe-class-members");
-			expect(rule, "no-dupe-class-members rule not found").toBeTruthy();
-			expect(rule?.utils, "rule should parse a utils: block").toBeTruthy();
-			const cfg = nativeConfigFor(rule as never);
-
-			const invalid = sg.ts.parse("class A { foo() {} foo() {} }\n").root();
-			expect(invalid.findAll(cfg as never).length).toBeGreaterThan(0);
-
-			const valid = sg.ts.parse("class A { foo() {} bar() {} }\n").root();
-			expect(valid.findAll(cfg as never).length).toBe(0);
-		});
 
 		it("unnecessary-react-hook fires on a use*-named function that calls no hook", async () => {
 			const { loadAstGrepNapi } = await import(
