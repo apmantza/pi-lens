@@ -12,7 +12,11 @@ import {
 	getProjectIgnoreMatcher,
 	isExcludedDirName,
 } from "../clients/file-utils.js";
-import { getLSPService } from "../clients/lsp/index.js";
+import {
+	getLSPService,
+	groupFilesByPrimaryServer,
+	runPerServerGroups,
+} from "../clients/lsp/index.js";
 import { getServersForFileWithConfig } from "../clients/lsp/config.js";
 import { combineAbortSignals } from "../clients/deadline-utils.js";
 import { applyAuxiliarySuppressions } from "../clients/dispatch/auxiliary-lsp.js";
@@ -186,31 +190,64 @@ function boundedPositiveInt(
 	return Math.max(min, Math.min(max, parsed));
 }
 
-async function mapWithConcurrency<T, R>(
-	items: T[],
+/**
+ * #631: fan `mapper` out across `items` (a batch/directory file list) while
+ * respecting per-LSP-server affinity — previously this was a flat,
+ * server-oblivious bounded-concurrency pool (up to `concurrency` files
+ * in flight at once, regardless of which server they belonged to). That let
+ * a single-language batch (the common case) fire many concurrent touches at
+ * the SAME shared, single-threaded LSP server — exactly the pattern #387
+ * found doesn't parallelize (it queues server-side and cascades per-file
+ * timeouts by queue position) and that `runWorkspaceDiagnostics` (the engine
+ * behind `lens_diagnostics mode=full`) has been protected against since #387.
+ *
+ * Groups `items` by primary server via `groupFilesByPrimaryServer` (the same
+ * grouping key `runWorkspaceDiagnostics` uses) and schedules them with
+ * `runPerServerGroups` (both extracted from `clients/lsp/index.ts` so this
+ * tool shares the real primitive instead of a second hand-copied
+ * implementation): at most one in-flight `mapper` call per server group,
+ * parallelized across distinct groups up to `concurrency`. A single-language
+ * batch collapses to one group and runs effectively serially regardless of
+ * `concurrency` — the CORRECT, intended #387 behavior, not a regression.
+ *
+ * Result order matches `items`' original order (not completion order),
+ * matching the old flat pool's positional-assignment behavior — callers may
+ * depend on `results[i]` corresponding to `items[i]`.
+ */
+async function mapWithConcurrency<R>(
+	items: string[],
 	concurrency: number,
-	mapper: (item: T, index: number) => Promise<R>,
+	mapper: (item: string, index: number) => Promise<R>,
 	signal?: AbortSignal,
 	onProgress?: (completed: number, total: number) => void,
 ): Promise<R[]> {
 	const results: R[] = [];
-	let nextIndex = 0;
 	let completed = 0;
-	const workers = Math.min(Math.max(1, concurrency), items.length);
-	await Promise.all(
-		Array.from({ length: workers }, async () => {
-			while (true) {
+	// Multiple original indices can map to the same file path (duplicate
+	// entries in an explicit `paths` batch) — track them as a per-file queue
+	// so each occurrence still lands in its own original slot.
+	const pendingIndices = new Map<string, number[]>();
+	items.forEach((item, index) => {
+		const queue = pendingIndices.get(item);
+		if (queue) queue.push(index);
+		else pendingIndices.set(item, [index]);
+	});
+	const groups = groupFilesByPrimaryServer(items);
+	await runPerServerGroups(
+		groups,
+		concurrency,
+		async (group) => {
+			for (const item of group.files) {
 				// Honor cancellation (Escape / turn abort): stop pulling new items
 				// rather than grind the whole batch. Completed entries are returned.
 				if (signal?.aborted) return;
-				const index = nextIndex;
-				nextIndex += 1;
-				if (index >= items.length) return;
-				results[index] = await mapper(items[index]!, index);
+				const index = pendingIndices.get(item)!.shift()!;
+				results[index] = await mapper(item, index);
 				completed += 1;
 				onProgress?.(completed, items.length);
 			}
-		}),
+		},
+		signal,
 	);
 	return results;
 }
@@ -360,7 +397,11 @@ export function createLspDiagnosticsTool(
 			concurrency: Type.Optional(
 				Type.Number({
 					description:
-						"Batch/directory concurrency for opening files and collecting diagnostics. Default 8, max 16.",
+						"Batch/directory concurrency, in distinct LSP server groups run in parallel " +
+						"(default 8, max 16) — not individual files. Files sharing one server " +
+						"(e.g. a same-language batch) are always processed one at a time against " +
+						"that server regardless of this value; this caps how many DIFFERENT " +
+						"servers run concurrently.",
 				}),
 			),
 			waitMs: Type.Optional(

@@ -12,9 +12,24 @@ const mocked = vi.hoisted(() => ({
 	cascadeTier: "waits" as "waits" | "tier3-silent",
 }));
 
-vi.mock("../../clients/lsp/index.js", () => ({
-	getLSPService: () => mocked.service,
-}));
+// #631: `groupFilesByPrimaryServer`/`runPerServerGroups` are the REAL
+// per-server-group scheduling primitives (`tools/lsp-diagnostics.ts` now
+// imports them from this module instead of using a flat, server-oblivious
+// pool) — only `getLSPService` is faked here. Keeping the real
+// grouping/scheduling implementations wired through the mock is what lets
+// the "#631 per-server scheduling" describe block below actually exercise
+// the property under test (never >1 in-flight touch per server group),
+// rather than a mock that would trivially satisfy it either way.
+vi.mock("../../clients/lsp/index.js", async () => {
+	const actual =
+		await vi.importActual<typeof import("../../clients/lsp/index.js")>(
+			"../../clients/lsp/index.js",
+		);
+	return {
+		...actual,
+		getLSPService: () => mocked.service,
+	};
+});
 
 vi.mock("../../clients/lsp/cascade-tier.js", () => ({
 	classifyCascadeWaitTier: () => mocked.cascadeTier,

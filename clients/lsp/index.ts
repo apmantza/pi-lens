@@ -299,6 +299,87 @@ export interface LSPWorkspaceDiagnosticResult {
 	timedOut?: boolean;
 }
 
+/**
+ * Group files by their primary language server id (#387/#631 — extracted
+ * from `runWorkspaceDiagnostics`'s inline grouping so other callers, e.g.
+ * `lsp_diagnostics`' batch/directory scan in tools/lsp-diagnostics.ts, can
+ * share the exact same server-affinity key instead of hand-copying it).
+ * `multiServer` flags a group containing at least one file with more than
+ * one attached server (primary + auxiliary) — callers that care about that
+ * distinction (the workspace-pull fast path below) can act on it; callers
+ * that don't (a plain per-file touch) can ignore it.
+ */
+export function groupFilesByPrimaryServer(
+	files: readonly string[],
+): Array<{ files: string[]; multiServer: boolean }> {
+	const byServer = new Map<
+		string,
+		{ files: string[]; multiServer: boolean }
+	>();
+	for (const filePath of files) {
+		const servers = getServersForFileWithConfig(filePath);
+		const primary = servers[0]?.id ?? "none";
+		const group = byServer.get(primary);
+		if (group) {
+			group.files.push(filePath);
+			if (servers.length > 1) group.multiServer = true;
+		} else {
+			byServer.set(primary, {
+				files: [filePath],
+				multiServer: servers.length > 1,
+			});
+		}
+	}
+	return [...byServer.values()];
+}
+
+/**
+ * Run one worker per server group (#387/#631): at most one in-flight
+ * `processGroup` call per group at a time — each group's own callback is
+ * responsible for iterating its files serially, this scheduler never starts
+ * a second concurrent call into the same group — parallelized ACROSS
+ * distinct groups up to `concurrency` workers. This is the exact scheduling
+ * shape `runWorkspaceDiagnostics` (the engine behind `lens_diagnostics
+ * mode=full`) has used since #387 to avoid flooding a single-threaded LSP
+ * server with concurrent touches that only queue server-side instead of
+ * parallelizing (observed: 51/123 files "timed out" purely from queue
+ * position in a flat pool) — extracted here so `lsp_diagnostics`' batch/
+ * directory scan (tools/lsp-diagnostics.ts, #631) can share the identical
+ * property instead of running a flat, server-oblivious bounded pool.
+ *
+ * `concurrency` caps how many DISTINCT groups run at once, not how many
+ * files run at once — a single-language batch (one group, the common case)
+ * becomes effectively serial for that group regardless of `concurrency`.
+ * That is the intended #387 behavior, not something to work around.
+ *
+ * `processGroup` receives the whole group (not just `.files`) so a caller
+ * that cares about `multiServer` (e.g. the workspace-pull fast path below,
+ * which only applies to a single-server group) can still act on it; a
+ * caller that doesn't can just destructure `.files`.
+ */
+export async function runPerServerGroups<
+	G extends { files: readonly string[]; multiServer?: boolean },
+>(
+	groups: readonly G[],
+	concurrency: number,
+	processGroup: (group: G) => Promise<void>,
+	signal?: AbortSignal,
+): Promise<void> {
+	let nextGroup = 0;
+	const workers = Math.min(Math.max(1, concurrency), groups.length);
+	await Promise.all(
+		Array.from({ length: workers }, async () => {
+			while (true) {
+				if (signal?.aborted) return;
+				const gi = nextGroup;
+				nextGroup += 1;
+				if (gi >= groups.length) return;
+				await processGroup(groups[gi]!);
+			}
+		}),
+	);
+}
+
 const WORKSPACE_DIAGNOSTICS_CONCURRENCY = 8;
 
 // #621: a single-server group (the common case — one language, one server)
@@ -2115,34 +2196,17 @@ export class LSPService {
 		let timedOutFiles = 0;
 		let lastHeartbeat = Date.now();
 
-		// Group files by their primary language server (#387). tsserver — and most
-		// servers — is single-threaded per project: N concurrent touches to ONE
-		// server don't parallelize, they queue. That inflates the working set (each
-		// didOpen can force a project recheck) and cascades per-file-budget timeouts
-		// by queue position (observed: 51/123 files "timed out" purely from being
-		// behind others in an 8-wide flat pool). So serialize WITHIN a server (one
+		// Group files by their primary language server (#387, extracted as
+		// `groupFilesByPrimaryServer` for #631). tsserver — and most servers — is
+		// single-threaded per project: N concurrent touches to ONE server don't
+		// parallelize, they queue. That inflates the working set (each didOpen can
+		// force a project recheck) and cascades per-file-budget timeouts by queue
+		// position (observed: 51/123 files "timed out" purely from being behind
+		// others in an 8-wide flat pool). So serialize WITHIN a server (one
 		// in-flight touch each) and parallelize ACROSS servers — real parallelism
 		// where it exists (a mixed TS+Python repo runs both), no flooding where it
 		// doesn't. Capped so a many-language monorepo can't spawn unbounded groups.
-		const byServer = new Map<
-			string,
-			{ files: string[]; multiServer: boolean }
-		>();
-		for (const filePath of files) {
-			const servers = getServersForFileWithConfig(filePath);
-			const primary = servers[0]?.id ?? "none";
-			const group = byServer.get(primary);
-			if (group) {
-				group.files.push(filePath);
-				if (servers.length > 1) group.multiServer = true;
-			} else {
-				byServer.set(primary, {
-					files: [filePath],
-					multiServer: servers.length > 1,
-				});
-			}
-		}
-		const groups = [...byServer.values()];
+		const groups = groupFilesByPrimaryServer(files);
 		// Opt-in project-wide pull: one `workspace/diagnostic` per server instead of
 		// N per-file opens (#387 Item 2). Gated off by default — a cold server can
 		// answer with an empty/partial report that reads as a false "all clean", and
@@ -2163,7 +2227,7 @@ export class LSPService {
 				fileCount: files.length,
 				maxFiles,
 				perFileMs,
-				serverGroups: byServer.size,
+				serverGroups: groups.length,
 			},
 		});
 
@@ -2347,57 +2411,54 @@ export class LSPService {
 		};
 
 		// One worker per server group (serial within a server), up to the
-		// concurrency cap across distinct servers.
-		let nextGroup = 0;
+		// concurrency cap across distinct servers — `runPerServerGroups` (#631)
+		// is the same primitive `tools/lsp-diagnostics.ts`'s batch/directory scan
+		// now uses for its own file list.
 		const groupWorkers = Math.min(
 			WORKSPACE_DIAGNOSTICS_CONCURRENCY,
 			groups.length,
 		);
-		await Promise.all(
-			Array.from({ length: groupWorkers }, async () => {
-				while (true) {
-					if (signal?.aborted) return;
-					const gi = nextGroup;
-					nextGroup += 1;
-					if (gi >= groups.length) return;
-					const group = groups[gi];
-					// Fast path: one project-wide pull for the whole group (opt-in).
-					if (workspacePullEnabled && !group.multiServer) {
-						const pulled = await this.tryWorkspacePull(group.files, perFileMs);
-						if (pulled) {
-							for (const result of pulled) results.push(result);
-							completed += group.files.length;
-							options.onProgress?.(completed, files.length);
-							continue;
-						}
-					}
-					// #608/#621: batch-open a CHUNK of this group's files before
-					// waiting on diagnostics for any of them individually — see
-					// `preOpenGroupFiles` above. Chunking (rather than the whole
-					// group at once) bounds how much a single burst can dump on
-					// the server's request queue at real project scale, while each
-					// chunk's opens still land inside the debounce window and
-					// coalesce into one flush — see `WORKSPACE_SWEEP_PREOPEN_CHUNK_SIZE`.
-					for (
-						let chunkStart = 0;
-						chunkStart < group.files.length;
-						chunkStart += WORKSPACE_SWEEP_PREOPEN_CHUNK_SIZE
-					) {
-						if (signal?.aborted) return;
-						const chunk = group.files.slice(
-							chunkStart,
-							chunkStart + WORKSPACE_SWEEP_PREOPEN_CHUNK_SIZE,
-						);
-						await preOpenGroupFiles(chunk);
-						for (const filePath of chunk) {
-							// Honor cancellation between files (#341); already-collected
-							// results are returned as a partial.
-							if (signal?.aborted) return;
-							await processFile(filePath);
-						}
+		await runPerServerGroups(
+			groups,
+			groupWorkers,
+			async (group) => {
+				// Fast path: one project-wide pull for the whole group (opt-in).
+				if (workspacePullEnabled && !group.multiServer) {
+					const pulled = await this.tryWorkspacePull(group.files, perFileMs);
+					if (pulled) {
+						for (const result of pulled) results.push(result);
+						completed += group.files.length;
+						options.onProgress?.(completed, files.length);
+						return;
 					}
 				}
-			}),
+				// #608/#621: batch-open a CHUNK of this group's files before
+				// waiting on diagnostics for any of them individually — see
+				// `preOpenGroupFiles` above. Chunking (rather than the whole
+				// group at once) bounds how much a single burst can dump on
+				// the server's request queue at real project scale, while each
+				// chunk's opens still land inside the debounce window and
+				// coalesce into one flush — see `WORKSPACE_SWEEP_PREOPEN_CHUNK_SIZE`.
+				for (
+					let chunkStart = 0;
+					chunkStart < group.files.length;
+					chunkStart += WORKSPACE_SWEEP_PREOPEN_CHUNK_SIZE
+				) {
+					if (signal?.aborted) return;
+					const chunk = group.files.slice(
+						chunkStart,
+						chunkStart + WORKSPACE_SWEEP_PREOPEN_CHUNK_SIZE,
+					);
+					await preOpenGroupFiles(chunk);
+					for (const filePath of chunk) {
+						// Honor cancellation between files (#341); already-collected
+						// results are returned as a partial.
+						if (signal?.aborted) return;
+						await processFile(filePath);
+					}
+				}
+			},
+			signal,
 		);
 
 		logLatency({
@@ -2411,7 +2472,7 @@ export class LSPService {
 					(sum, result) => sum + (result?.count ?? 0),
 					0,
 				),
-				serverGroups: byServer.size,
+				serverGroups: groups.length,
 				concurrency: groupWorkers,
 				maxFiles,
 				timedOutFiles,
