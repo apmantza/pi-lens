@@ -72,7 +72,7 @@ jobs:
         if: matrix.pm == 'pnpm'
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
-          version: latest
+          version: 11.7.0
 
       - name: Setup bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
@@ -152,7 +152,7 @@ jobs:
         if: matrix.pi_install == 'pnpm-global'
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
         with:
-          version: latest
+          version: 11.7.0
 
       - name: Setup bun
         if: matrix.pi_install == 'bun-global'
