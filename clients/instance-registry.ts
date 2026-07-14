@@ -34,6 +34,14 @@ export interface LspChildEntry {
 	 *  re-identification when the pid itself is gone/recycled. */
 	marker?: string;
 	spawnedAt: string;
+	/** Resident set size in bytes, sampled at heartbeat cadence via
+	 *  clients/resource-sampler.ts (#620). Best-effort — `undefined` when the
+	 *  pid couldn't be sampled (already exited, or sampling itself failed). */
+	rssBytes?: number;
+	/** CPU percent (0-100+, matching `pidusage`'s convention — can exceed 100
+	 *  on a multi-core box under sustained load) sampled at the same cadence.
+	 *  Same best-effort/undefined semantics as `rssBytes`. */
+	cpuPercent?: number;
 }
 
 export interface InstanceEntry {
@@ -43,6 +51,11 @@ export interface InstanceEntry {
 	lspChildren: LspChildEntry[];
 	lspChildCount: number;
 	rssBytes: number;
+	/** Host process CPU percent, sampled at the same heartbeat cadence as
+	 *  `rssBytes` (#620). `undefined` when sampling failed/unavailable (e.g.
+	 *  the `pidusage` dependency errored) — a missing value must never be
+	 *  read as "0% CPU". */
+	cpuPercent?: number;
 	heartbeatAt: string;
 }
 
@@ -172,9 +185,23 @@ export async function registerInstance(projectRoot: string): Promise<void> {
 
 export interface HeartbeatPatch {
 	rssBytes?: number;
+	/** Host CPU percent for this heartbeat (#620). Omit to leave the
+	 *  previously-recorded value untouched (sampling is best-effort and may
+	 *  legitimately fail on a given tick — an omission must not be read as
+	 *  "0% CPU", so this only overwrites when a fresh sample is supplied). */
+	cpuPercent?: number;
+	/** Per-lspChild resource samples (#620), keyed by pid, applied on top of
+	 *  the process's current `lspChildren` array. A pid not present in this
+	 *  map keeps its previous rss/cpu values untouched (the child may simply
+	 *  not have been sampled this tick, e.g. sampling failed for that pid
+	 *  alone) — never zeroed out. Pids the entry no longer knows about are
+	 *  ignored (the child was already removed via `removeLspChild`).
+	 */
+	childUsage?: Record<number, { rssBytes?: number; cpuPercent?: number }>;
 }
 
-/** Update this process's heartbeat/rss. Cheap — safe to call every turn end. */
+/** Update this process's heartbeat/rss (and, since #620, host CPU% + live
+ *  LSP children's rss/CPU%). Cheap — safe to call every turn end. */
 export async function updateHeartbeat(patch: HeartbeatPatch = {}): Promise<void> {
 	if (!isInstanceRegistryEnabled()) return;
 	const pid = process.pid;
@@ -188,10 +215,23 @@ export async function updateHeartbeat(patch: HeartbeatPatch = {}): Promise<void>
 	}
 	const now = new Date().toISOString();
 	const current = file.instances[idx];
+	const lspChildren = patch.childUsage
+		? current.lspChildren.map((child) => {
+				const usage = patch.childUsage?.[child.pid];
+				if (!usage) return child;
+				return {
+					...child,
+					rssBytes: usage.rssBytes ?? child.rssBytes,
+					cpuPercent: usage.cpuPercent ?? child.cpuPercent,
+				};
+			})
+		: current.lspChildren;
 	file.instances[idx] = {
 		...current,
 		rssBytes: patch.rssBytes ?? process.memoryUsage().rss,
-		lspChildCount: current.lspChildren.length,
+		cpuPercent: patch.cpuPercent ?? current.cpuPercent,
+		lspChildren,
+		lspChildCount: lspChildren.length,
 		heartbeatAt: now,
 	};
 	await writeRegistryAsync(file);
@@ -275,4 +315,95 @@ export function deregisterInstance(): void {
 	const remaining = file.instances.filter((entry) => entry.pid !== pid);
 	if (remaining.length === file.instances.length) return; // nothing to remove
 	writeRegistrySync({ instances: remaining });
+}
+
+// --- Resource footprint aggregation (#620) ----------------------------------
+
+export interface InstanceFootprint {
+	pid: number;
+	projectRoot: string;
+	rssBytes: number;
+	cpuPercent: number;
+	lspChildCount: number;
+	lspChildRssBytes: number;
+	lspChildCpuPercent: number;
+}
+
+export interface ResourceFootprint {
+	instanceCount: number;
+	totalRssBytes: number;
+	/** Sum of every sampled CPU%, host + every LSP child, across every
+	 *  registered instance. This is a SUM, not an average — on a multi-core
+	 *  box it can exceed 100 even for a single busy process (matches
+	 *  `pidusage`'s per-process convention), so read it as "how much CPU is
+	 *  attributable to pi-lens", not "% of one core". */
+	totalCpuPercent: number;
+	totalLspChildCount: number;
+	perInstance: InstanceFootprint[];
+}
+
+/**
+ * PURE aggregation over a registry snapshot: "how much CPU/RAM is pi-lens
+ * attributable to, right now, across every process it owns" (#620) — the
+ * host of every registered instance plus every one of its live LSP children.
+ * Missing/unsampled `rssBytes`/`cpuPercent` (best-effort sampling can fail)
+ * are treated as 0 for summation purposes — never as a full instance to
+ * exclude, since a partially-sampled instance's other numbers are still real
+ * data worth surfacing.
+ *
+ * Does NOT include transient analyzer children (jscpd/knip/etc.) — those are
+ * short-lived and sampled separately per-invocation via
+ * clients/resource-sampler.ts into clients/latency-logger.ts, not carried in
+ * the registry (see the module docstring's scope note).
+ */
+export function computeResourceFootprint(
+	instances: InstanceEntry[],
+): ResourceFootprint {
+	const perInstance: InstanceFootprint[] = instances.map((instance) => {
+		const lspChildRssBytes = instance.lspChildren.reduce(
+			(sum, child) => sum + (child.rssBytes ?? 0),
+			0,
+		);
+		const lspChildCpuPercent = instance.lspChildren.reduce(
+			(sum, child) => sum + (child.cpuPercent ?? 0),
+			0,
+		);
+		return {
+			pid: instance.pid,
+			projectRoot: instance.projectRoot,
+			rssBytes: instance.rssBytes ?? 0,
+			cpuPercent: instance.cpuPercent ?? 0,
+			lspChildCount: instance.lspChildren.length,
+			lspChildRssBytes,
+			lspChildCpuPercent,
+		};
+	});
+
+	let totalRssBytes = 0;
+	let totalCpuPercent = 0;
+	let totalLspChildCount = 0;
+	for (const inst of perInstance) {
+		totalRssBytes += inst.rssBytes + inst.lspChildRssBytes;
+		totalCpuPercent += inst.cpuPercent + inst.lspChildCpuPercent;
+		totalLspChildCount += inst.lspChildCount;
+	}
+
+	return {
+		instanceCount: perInstance.length,
+		totalRssBytes,
+		totalCpuPercent,
+		totalLspChildCount,
+		perInstance,
+	};
+}
+
+/**
+ * Read the live registry and compute the aggregate footprint — the query
+ * side of "how much CPU/RAM is pi-lens using right now" (#620). Best-effort
+ * (readInstanceRegistry never throws); the answer only reflects whatever
+ * heartbeats have landed so far.
+ */
+export async function getResourceFootprint(): Promise<ResourceFootprint> {
+	const instances = await readInstanceRegistry();
+	return computeResourceFootprint(instances);
 }

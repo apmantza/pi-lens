@@ -48,6 +48,7 @@ import {
 	recentLatency,
 	renderCompactModuleReport,
 	resolveRebuildScript,
+	resourceFootprint,
 	runRebuild,
 	runSessionStart,
 	runTurnEnd,
@@ -685,7 +686,9 @@ const TOOLS = [
 		name: "pilens_health",
 		description:
 			"pi-lens runtime health for THIS server: alive LSP servers, last dispatch " +
-			"summary, and session diagnostic counts.",
+			"summary, session diagnostic counts, and the total CPU/RAM footprint " +
+			"attributable to pi-lens across every process it owns (host + LSP " +
+			"children) machine-wide, from the shared instance registry.",
 		inputSchema: { type: "object", properties: {} },
 	},
 	{
@@ -1114,6 +1117,9 @@ async function callTool(
 		const last = recentLatency(1)[0];
 		const stats = diagnosticStats();
 		const autoSession = getAutoSessionStatus();
+		// #620: best-effort — a footprint read failure must never break the rest
+		// of pilens_health's (much older, more load-bearing) reporting.
+		const footprint = await resourceFootprint().catch(() => null);
 		const lines = [
 			`LSP: ${aliveClients} alive client(s)`,
 			...servers.map(
@@ -1127,6 +1133,12 @@ async function callTool(
 			autoSession
 				? `Auto session_start: ${autoSession.succeeded ? "succeeded" : autoSession.error ? "FAILED" : autoSession.attempted ? "in progress" : "not yet attempted"}${autoSession.firedAt ? ` (fired ${autoSession.firedAt})` : ""}${autoSession.error ? ` — ${autoSession.error}` : ""}`
 				: "Auto session_start: disabled (PI_LENS_MCP_AUTO_SESSION not set)",
+			footprint
+				? `Resource footprint: ${footprint.instanceCount} pi-lens instance(s) · ` +
+					`${(footprint.totalRssBytes / 1024 / 1024).toFixed(0)}MB RSS · ` +
+					`${footprint.totalCpuPercent.toFixed(1)}% CPU · ` +
+					`${footprint.totalLspChildCount} LSP child process(es)`
+				: "Resource footprint: unavailable (instance registry unreadable)",
 		];
 		return toolText(lines.join("\n"), {
 			aliveClients,
@@ -1144,6 +1156,7 @@ async function callTool(
 				unresolved: stats.totalUnresolved,
 			},
 			autoSession,
+			resourceFootprint: footprint,
 		});
 	}
 

@@ -171,6 +171,15 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	// process.memoryUsage().rss, one read-modify-write of instances.json) and
 	// fire-and-forget — the kill-switch check + no-op behavior live inside
 	// updateHeartbeat itself, so this call site doesn't need to know about it.
+	//
+	// #620: intentionally RSS-only here — CPU%/LSP-child sampling (which shells
+	// out to `pidusage`, and a full CIM query on Windows for a spawn's process
+	// tree) is left to the quiet-window "instance_registry_heartbeat" task
+	// (clients/quiet-window.ts's `buildHeartbeatResourcePatch`), which fires on
+	// the idle `agent_settled` window rather than every single turn end. Every
+	// turn end is a much hotter path than an idle window, and the issue's own
+	// guardrail is not to let the measurement itself become a new source of
+	// per-turn overhead worth investigating.
 	void updateHeartbeat().catch(() => {
 		// best-effort observability — never fail turn_end over this
 	});

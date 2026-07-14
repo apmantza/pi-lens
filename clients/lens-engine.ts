@@ -19,6 +19,10 @@ import {
 	type DispatchLatencyReport,
 	getLatencyReports,
 } from "./dispatch/integration.js";
+import {
+	getResourceFootprint as getResourceFootprintSnapshot,
+	type ResourceFootprint,
+} from "./instance-registry.js";
 import { initLSPConfig } from "./lsp/config.js";
 import { getLSPService } from "./lsp/index.js";
 import { getOrLoadWarmWordIndex } from "./mcp/analyze.js";
@@ -121,6 +125,20 @@ export function diagnosticStats(): ReturnType<
 /** Initialise LSP config for a workspace (idempotent at the LSP layer). */
 export function ensureLspConfig(cwd: string): Promise<void> {
 	return initLSPConfig(cwd);
+}
+
+export type { ResourceFootprint } from "./instance-registry.js";
+
+/**
+ * #620: total CPU/RAM footprint attributable to pi-lens across every process
+ * it owns — every registered instance's host, plus that instance's live LSP
+ * children. Reads the machine-global `~/.pi-lens/instances.json` registry, so
+ * this answers across ALL concurrent pi-lens sessions/worktrees on the box,
+ * not just this one. Best-effort: reflects whatever heartbeats have landed so
+ * far — a stale-heartbeat instance simply reports its last-sampled numbers.
+ */
+export function resourceFootprint(): Promise<ResourceFootprint> {
+	return getResourceFootprintSnapshot();
 }
 
 /** Slimmed wire shape (#517 conformity): `startLine`/`endLine` mark the hit's

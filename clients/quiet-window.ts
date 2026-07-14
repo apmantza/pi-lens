@@ -30,8 +30,13 @@
  * and returns immediately.
  */
 
-import { updateHeartbeat } from "./instance-registry.js";
+import {
+	type HeartbeatPatch,
+	readInstanceRegistry,
+	updateHeartbeat,
+} from "./instance-registry.js";
 import { logLatency } from "./latency-logger.js";
+import { sampleProcesses } from "./resource-sampler.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 import { toPositiveFinite } from "./env-utils.js";
 
@@ -199,8 +204,67 @@ export function registerBuiltinQuietWindowTasks(
 	});
 
 	registerQuietWindowTask("instance_registry_heartbeat", async () => {
-		await updateHeartbeat();
+		await updateHeartbeat(await buildHeartbeatResourcePatchBounded());
 	});
+}
+
+/**
+ * #620 sampling can never take longer than this to answer — on Windows it
+ * shells out to PowerShell/CIM (via `pidusage`), which is normally fast but
+ * has no hard upper bound the way an in-process computation would. Per this
+ * repo's "async work needs both bounds" convention (a bulk/background step
+ * needs a timeout, not just a happy-path await), a slow/hung sample must
+ * still let the quiet-window task — and, transitively, the caller awaiting
+ * `runQuietWindow` — return promptly rather than block on it indefinitely.
+ */
+const HEARTBEAT_SAMPLE_TIMEOUT_MS = 2000;
+
+/** Race `buildHeartbeatResourcePatch` against `HEARTBEAT_SAMPLE_TIMEOUT_MS`;
+ *  a timeout resolves to `{}` (same "leave everything untouched" semantics as
+ *  any other sampling failure — see the module docstring below). */
+async function buildHeartbeatResourcePatchBounded(): Promise<HeartbeatPatch> {
+	return Promise.race([
+		buildHeartbeatResourcePatch(),
+		new Promise<HeartbeatPatch>((resolve) =>
+			setTimeout(() => resolve({}), HEARTBEAT_SAMPLE_TIMEOUT_MS),
+		),
+	]);
+}
+
+/**
+ * #620: sample this process's host CPU% plus every currently-recorded LSP
+ * child's CPU%/RSS, once per heartbeat tick, and shape it into the patch
+ * `updateHeartbeat` expects. Lives here (not clients/instance-registry.ts)
+ * to keep that module a pure data store with no `pidusage` dependency of its
+ * own — this is the one call site that knows both "what's the heartbeat
+ * cadence" (quiet-window, off the turn hot path) and "what pids to sample"
+ * (this process's own registry entry).
+ *
+ * Best-effort end to end: any failure (registry read, sampling) resolves to
+ * `{}` — an empty patch leaves `updateHeartbeat` free to fall back to its own
+ * `process.memoryUsage().rss` default and leaves cpu/child values untouched,
+ * never zeroed.
+ */
+async function buildHeartbeatResourcePatch(): Promise<HeartbeatPatch> {
+	try {
+		const instances = await readInstanceRegistry();
+		const self = instances.find((instance) => instance.pid === process.pid);
+		const childPids = self?.lspChildren.map((child) => child.pid) ?? [];
+		const usage = await sampleProcesses([process.pid, ...childPids]);
+
+		const childUsage: Record<number, { rssBytes?: number; cpuPercent?: number }> = {};
+		for (const pid of childPids) {
+			const sample = usage.get(pid);
+			if (sample) childUsage[pid] = sample;
+		}
+
+		return {
+			cpuPercent: usage.get(process.pid)?.cpuPercent,
+			childUsage,
+		};
+	} catch {
+		return {};
+	}
 }
 
 /** Test-only: undo registerBuiltinQuietWindowTasks' idempotency guard. */

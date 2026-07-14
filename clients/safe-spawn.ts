@@ -15,12 +15,27 @@
  */
 
 import { type SpawnOptions, spawn, spawnSync } from "node:child_process";
+import { logLatency } from "./latency-logger.js";
+import { startSpawnUsageSampler } from "./resource-sampler.js";
+
+export interface SpawnResourceUsage {
+	sampleCount: number;
+	avgCpuPercent: number;
+	peakCpuPercent: number;
+	avgRssBytes: number;
+	peakRssBytes: number;
+}
 
 export interface SpawnResult {
 	stdout: string;
 	stderr: string;
 	status: number | null;
 	error?: Error;
+	/** Peak/average CPU%+RSS sampled across this spawn's lifetime (#620).
+	 *  `undefined` when no sample ever landed (process exited faster than the
+	 *  first poll tick, or sampling failed for the whole invocation) — never
+	 *  read that as "zero resource usage". */
+	resourceUsage?: SpawnResourceUsage;
 }
 
 export interface SafeSpawnOptions {
@@ -37,6 +52,13 @@ export interface SafeSpawnOptions {
 	 * `signal` still takes precedence over both.
 	 */
 	ignoreAmbientSignal?: boolean;
+	/**
+	 * Label recorded on the resource-usage latency.log phase entry (#620) —
+	 * typically the runner/tool id (e.g. "jscpd", "knip"). Defaults to the
+	 * bare command name when omitted. Purely cosmetic (log correlation); never
+	 * affects spawn behavior.
+	 */
+	resourceLabel?: string;
 }
 
 // ============================================================================
@@ -171,6 +193,22 @@ export async function safeSpawnAsync(
 			shell: isWindows,
 		});
 
+		// #620: bracket this spawn's lifetime with a short-interval CPU/RSS poll
+		// (started right here, stopped in the "close" handler below) so transient
+		// analyzer children (jscpd, knip, madge, gitleaks, etc.) — which live too
+		// briefly for heartbeat-cadence sampling to reliably catch — still get a
+		// peak/average resource reading. `startSpawnUsageSampler` itself is
+		// best-effort/never-throws by design, but this call site wraps it anyway
+		// (belt and suspenders: the sampling seam must never be the reason a real
+		// spawn fails) with a no-op fallback sampler.
+		let usageSampler: { stop: () => SpawnResourceUsage | null };
+		try {
+			usageSampler = startSpawnUsageSampler(child.pid);
+		} catch {
+			usageSampler = { stop: () => null };
+		}
+		const resourceLabel = options?.resourceLabel ?? command;
+
 		// On Windows, shell:true means child.pid is cmd.exe — child.kill() only
 		// kills the wrapper, leaving the actual subprocess (e.g. knip/npx) alive
 		// as an orphan. Use taskkill /F /T to kill the full process tree instead.
@@ -217,10 +255,34 @@ export async function safeSpawnAsync(
 			}
 		}, timeout);
 
+		// #620: stop the poll and log peak/average CPU%+RSS for this invocation
+		// into the existing per-runner latency.log phase entries — best-effort,
+		// wrapped so a logging hiccup can never affect the resolved SpawnResult.
+		const finishResourceUsage = (): SpawnResourceUsage | undefined => {
+			const summary = usageSampler.stop();
+			if (!summary) return undefined;
+			try {
+				logLatency({
+					type: "phase",
+					phase: "spawn_resource_usage",
+					filePath: "",
+					durationMs: 0,
+					metadata: {
+						command: resourceLabel,
+						...summary,
+					},
+				});
+			} catch {
+				// best-effort logging only
+			}
+			return summary;
+		};
+
 		// Process completion
 		child.on("close", (code, signal) => {
 			clearTimeout(timeoutId);
 			abortSignal?.removeEventListener("abort", onAbort);
+			const resourceUsage = finishResourceUsage();
 
 			if (timedOut) {
 				resolve({
@@ -230,6 +292,7 @@ export async function safeSpawnAsync(
 					error: new Error(
 						`Process timed out after ${timeout}ms (killed with ${signal || "SIGTERM"})`,
 					),
+					resourceUsage,
 				});
 			} else if (signal) {
 				resolve({
@@ -237,16 +300,18 @@ export async function safeSpawnAsync(
 					stderr,
 					status: null,
 					error: new Error(`Process killed by signal: ${signal}`),
+					resourceUsage,
 				});
 			} else {
-				resolve({ stdout, stderr, status: code });
+				resolve({ stdout, stderr, status: code, resourceUsage });
 			}
 		});
 
 		child.on("error", (err) => {
 			clearTimeout(timeoutId);
 			abortSignal?.removeEventListener("abort", onAbort);
-			resolve({ stdout, stderr, status: null, error: err });
+			const resourceUsage = finishResourceUsage();
+			resolve({ stdout, stderr, status: null, error: err, resourceUsage });
 		});
 	});
 }

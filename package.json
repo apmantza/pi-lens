@@ -85,6 +85,7 @@
 		"@earendil-works/pi-tui": "^0.80.2",
 		"js-yaml": "^4.1.1",
 		"minimatch": "^10.2.5",
+		"pidusage": "^4.0.1",
 		"typebox": "^1.0.0",
 		"vscode-jsonrpc": "^9.0.0"
 	},
@@ -104,6 +105,7 @@
 		"@earendil-works/pi-coding-agent": "^0.80.2",
 		"@types/js-yaml": "^4.0.9",
 		"@types/node": "^26.0.0",
+		"@types/pidusage": "^2.0.5",
 		"@vitest/coverage-v8": "^4.1.5",
 		"typescript": "^6.0.3",
 		"typescript-language-server": "^5.1.3",
