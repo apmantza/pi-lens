@@ -32,7 +32,10 @@ export default defineConfig({
 			"**/.{git,cache,output,temp}/**",
 			"**/.claude/**",
 		],
-		globalSetup: ["./tests/support/check-build-freshness.ts"],
+		globalSetup: [
+			"./tests/support/check-build-freshness.ts",
+			"./tests/support/prewarm-grammars.ts",
+		],
 		setupFiles: ["./tests/support/vitest-setup.ts"],
 		execArgv: [
 			`--max-old-space-size=${process.env.PI_LENS_TEST_WORKER_HEAP_MB || 4096}`,
