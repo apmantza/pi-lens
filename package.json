@@ -65,6 +65,7 @@
 	"license": "MIT",
 	"files": [
 		"dist/",
+		"docs/",
 		"grammars/",
 		"config/",
 		"rules/",
