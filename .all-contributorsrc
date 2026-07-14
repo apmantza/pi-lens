@@ -775,6 +775,15 @@
       "contributions": [
         "bug"
       ]
+    },
+    {
+      "login": "eisterman",
+      "name": "Federico Pasqua",
+      "avatar_url": "https://avatars.githubusercontent.com/u/3028953?v=4",
+      "profile": "https://eisterman.dev/",
+      "contributions": [
+        "bug"
+      ]
     }
   ]
 }
