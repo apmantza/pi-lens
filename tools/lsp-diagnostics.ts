@@ -57,7 +57,7 @@ const LANG_EXTENSIONS: Record<string, string[]> = {
 	".prisma": [".prisma"],
 };
 
-const MAX_FILES = 50;
+const MAX_FILES = 100;
 const MAX_BATCH_FILES = 100;
 const MAX_DIAGNOSTICS = 200;
 const DEFAULT_BATCH_CONCURRENCY = 8;
