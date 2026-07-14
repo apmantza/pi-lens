@@ -1133,6 +1133,106 @@ describe("lsp_diagnostics tool", () => {
 				expect(touchFile).toHaveBeenCalledTimes(1);
 				expect(touchFile.mock.calls[0]?.[2]?.clientScope).toBe("primary");
 				expect(result.details?.serverScope).toBe("primary");
+				// #629: the confirmation touch's own (already correctly-scoped)
+				// return value must be used directly as the diagnostics content —
+				// a second, unconditionally-UNSCOPED getDiagnostics() call would
+				// silently re-touch every auxiliary scanner (opengrep, typos, …)
+				// even though serverScope:"primary" asked to skip them, and would
+				// cost a second LSP round trip on top of the confirmation touch.
+				expect(
+					(mocked.service as { getDiagnostics: ReturnType<typeof vi.fn> })
+						.getDiagnostics,
+				).not.toHaveBeenCalled();
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
+
+		it("#629: serverScope 'primary' diagnostics content comes from touchFile's own return value, not a second getDiagnostics call", async () => {
+			const primaryOnlyDiagnostic = {
+				severity: 1,
+				message: "Type 'string' is not assignable to type 'number'.",
+				range: {
+					start: { line: 0, character: 0 },
+					end: { line: 0, character: 1 },
+				},
+				source: "typescript",
+			};
+			const touchFile = vi.fn().mockResolvedValue([primaryOnlyDiagnostic]);
+			(mocked.service as any).touchFile = touchFile;
+			// If the bug regresses (a second, unscoped getDiagnostics() call feeds
+			// the actual content) this mock would return an aux-scanner finding
+			// that serverScope:"primary" should never have touched, and the
+			// assertions below would catch it either way — either via the wrong
+			// diagnostic content or via getDiagnostics having been called at all.
+			(mocked.service as any).getDiagnostics = vi.fn().mockResolvedValue([
+				{
+					severity: 2,
+					message: "aux finding that primary scope must never see",
+					range: {
+						start: { line: 1, character: 0 },
+						end: { line: 1, character: 1 },
+					},
+					source: "ast-grep",
+				},
+			]);
+			const tool = createLspDiagnosticsTool();
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-scope-content-"),
+			);
+			const bad = path.join(tmpDir, "bad.ts");
+			fs.writeFileSync(bad, "const value: number = 'oops';\n");
+
+			try {
+				const result = (await tool.execute(
+					"diag-scope-primary-content",
+					{ path: bad, severity: "all", serverScope: "primary" },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				)) as any;
+
+				expect(result.isError).toBeUndefined();
+				expect(
+					(mocked.service as { getDiagnostics: ReturnType<typeof vi.fn> })
+						.getDiagnostics,
+				).not.toHaveBeenCalled();
+				expect(result.details?.totalDiagnostics).toBe(1);
+				expect(String(result.content[0]?.text)).toContain("not assignable");
+				expect(String(result.content[0]?.text)).not.toContain(
+					"aux finding that primary scope must never see",
+				);
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
+
+		it("#629: touchFile resolving to undefined (no clients) still falls back to getDiagnostics", async () => {
+			const touchFile = vi.fn().mockResolvedValue(undefined);
+			(mocked.service as any).touchFile = touchFile;
+			const tool = createLspDiagnosticsTool();
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-scope-fallback-"),
+			);
+			const bad = path.join(tmpDir, "bad.ts");
+			fs.writeFileSync(bad, "const value: number = 'oops';\n");
+
+			try {
+				const result = (await tool.execute(
+					"diag-scope-primary-fallback",
+					{ path: bad, severity: "all", serverScope: "primary" },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				)) as any;
+
+				expect(result.isError).toBeUndefined();
+				expect(
+					(mocked.service as { getDiagnostics: ReturnType<typeof vi.fn> })
+						.getDiagnostics,
+				).toHaveBeenCalled();
+				expect(result.details?.totalDiagnostics).toBe(1);
+				expect(String(result.content[0]?.text)).toContain("not assignable");
 			} finally {
 				fs.rmSync(tmpDir, { recursive: true, force: true });
 			}
@@ -1160,6 +1260,41 @@ describe("lsp_diagnostics tool", () => {
 				expect(result.isError).toBeUndefined();
 				expect(touchFile.mock.calls[0]?.[2]?.clientScope).toBe("all");
 				expect(result.details?.serverScope).toBe("all");
+				// #629: waitMs alone also takes the touchFile branch — same
+				// single-round-trip contract applies regardless of serverScope.
+				expect(
+					(mocked.service as { getDiagnostics: ReturnType<typeof vi.fn> })
+						.getDiagnostics,
+				).not.toHaveBeenCalled();
+			} finally {
+				fs.rmSync(tmpDir, { recursive: true, force: true });
+			}
+		});
+
+		it("#629: neither waitMs nor serverScope:'primary' set (openFile-only path) is unchanged — getDiagnostics('full') still called, touchFile is not", async () => {
+			const touchFile = vi.fn().mockResolvedValue([]);
+			(mocked.service as any).touchFile = touchFile;
+			const getDiagnostics = vi.fn().mockResolvedValue([]);
+			(mocked.service as any).getDiagnostics = getDiagnostics;
+			const tool = createLspDiagnosticsTool();
+			const tmpDir = fs.mkdtempSync(
+				path.join(os.tmpdir(), "pi-lens-lsp-diag-scope-unchanged-"),
+			);
+			const clean = path.join(tmpDir, "clean.ts");
+			fs.writeFileSync(clean, "const value = 1;\n");
+
+			try {
+				const result = (await tool.execute(
+					"diag-scope-unchanged",
+					{ path: clean, severity: "all" },
+					new AbortController().signal,
+					null,
+					{ cwd: "." },
+				)) as any;
+
+				expect(result.isError).toBeUndefined();
+				expect(touchFile).not.toHaveBeenCalled();
+				expect(getDiagnostics).toHaveBeenCalledWith(clean, "full");
 			} finally {
 				fs.rmSync(tmpDir, { recursive: true, force: true });
 			}
