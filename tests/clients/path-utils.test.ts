@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	findNearestContaining,
+	findNearestMarkerRoot,
 	isAtOrAboveHomeDir,
 	isExternalOrVendorFile,
 	normalizeEphemeralMapKey,
@@ -133,6 +134,100 @@ describe("walkUpDirs / findNearestContaining (#122)", () => {
 				"this-marker-name-will-not-collide-with-anything-XYZZY-pi-lens",
 			]);
 			expect(found).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+});
+
+describe("findNearestMarkerRoot (refs #625)", () => {
+	it("resolves the nearest directory containing a marker", () => {
+		const env = setupTestEnvironment("pi-lens-marker-root-");
+		try {
+			fs.writeFileSync(path.join(env.tmpDir, "package.json"), "{}");
+			const nested = path.join(env.tmpDir, "src", "pkg");
+			fs.mkdirSync(nested, { recursive: true });
+
+			expect(findNearestMarkerRoot(nested, ["package.json"])).toBe(
+				path.resolve(env.tmpDir),
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("never resolves at or above the given home dir", () => {
+		const env = setupTestEnvironment("pi-lens-marker-root-home-");
+		try {
+			const ancestor = path.join(env.tmpDir, "ancestor");
+			const home = path.join(ancestor, "home");
+			const nested = path.join(home, "empty-folder");
+			fs.mkdirSync(nested, { recursive: true });
+			fs.writeFileSync(path.join(ancestor, "package.json"), "{}");
+
+			expect(
+				findNearestMarkerRoot(nested, ["package.json"], { homeDir: home }),
+			).toBeNull();
+			// The home dir itself is also at-or-above home.
+			fs.writeFileSync(path.join(home, "package.json"), "{}");
+			expect(
+				findNearestMarkerRoot(home, ["package.json"], { homeDir: home }),
+			).toBeNull();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("stops at a boundary marker found before any project marker", () => {
+		const env = setupTestEnvironment("pi-lens-marker-root-boundary-");
+		try {
+			fs.writeFileSync(path.join(env.tmpDir, "package.json"), "{}");
+			const repoRoot = path.join(env.tmpDir, "sub-repo");
+			const nested = path.join(repoRoot, "src");
+			fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+			fs.mkdirSync(nested, { recursive: true });
+
+			expect(
+				findNearestMarkerRoot(nested, ["package.json"], {
+					boundaries: [".git", ".hg", ".svn"],
+				}),
+			).toBeNull();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("does not stop at a boundary that coincides with the marker directory itself", () => {
+		const env = setupTestEnvironment("pi-lens-marker-root-boundary-same-");
+		try {
+			const repoRoot = path.join(env.tmpDir, "repo");
+			const nested = path.join(repoRoot, "src");
+			fs.mkdirSync(path.join(repoRoot, ".git"), { recursive: true });
+			fs.writeFileSync(path.join(repoRoot, "package.json"), "{}");
+			fs.mkdirSync(nested, { recursive: true });
+
+			// Marker check happens before the boundary check at each directory, so
+			// a marker co-located with the boundary still resolves.
+			expect(
+				findNearestMarkerRoot(nested, ["package.json"], {
+					boundaries: [".git"],
+				}),
+			).toBe(path.resolve(repoRoot));
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("returns null (never startDir) when nothing matches up to the filesystem root", () => {
+		const env = setupTestEnvironment("pi-lens-marker-root-none-");
+		try {
+			const nested = path.join(env.tmpDir, "deep", "nowhere");
+			fs.mkdirSync(nested, { recursive: true });
+
+			const found = findNearestMarkerRoot(nested, [
+				"this-marker-will-not-collide-XYZZY-pi-lens",
+			]);
+			expect(found).not.toBe(nested);
 		} finally {
 			env.cleanup();
 		}
