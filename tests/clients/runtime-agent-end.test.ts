@@ -11,6 +11,10 @@ import {
 	_resetForTests as resetBusPublish,
 	wireBusEmitter,
 } from "../../clients/bus-publish.js";
+import {
+	_resetFormatEventsPublishForTests as resetFormatEventsPublish,
+	wireFormatEventsBusEmitter,
+} from "../../clients/format-events-publish.js";
 
 // Only the "stale report" test below enables lens-actionable-warning-autofix,
 // and it returns before reaching applyConservativeActionableWarningFixes (the
@@ -363,6 +367,95 @@ describe("runtime-agent-end deferred formatting", () => {
 			);
 		} finally {
 			resetBusPublish();
+			if (previousDataDir === undefined) {
+				delete process.env.PILENS_DATA_DIR;
+			} else {
+				process.env.PILENS_DATA_DIR = previousDataDir;
+			}
+			env.cleanup();
+		}
+	});
+
+	it("publishes pilens:format:start with the queued paths at deferred-format start (#673)", async () => {
+		const env = setupTestEnvironment("pi-lens-agent-end-bus-format-start-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const filePath = createTempFile(env.tmpDir, "src/app.ts", "const x=1");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.deferFormat(filePath, env.tmpDir, "edit", env.tmpDir);
+
+			const formatFile = vi.fn(async (fp: string) => {
+				fs.writeFileSync(fp, "const x = 1;\n");
+				return {
+					filePath: fp,
+					formatters: [{ name: "biome", success: true, changed: true }],
+					anyChanged: true,
+					allSucceeded: true,
+				};
+			});
+
+			const emit = vi.fn();
+			wireFormatEventsBusEmitter(emit);
+
+			await handleAgentEnd({
+				ctxCwd: env.tmpDir,
+				getFlag: (name) => name === "no-lsp",
+				notify: vi.fn(),
+				dbg: () => {},
+				runtime,
+				cacheManager: { addModifiedRange: () => {} } as any,
+				getFormatService: () => ({ recordRead: () => {}, formatFile }) as any,
+			});
+
+			expect(emit).toHaveBeenCalledWith(
+				"pilens:format:start",
+				expect.objectContaining({
+					v: 1,
+					source: "pi-lens",
+					fileCount: 1,
+					paths: [filePath.replace(/\\/g, "/")],
+				}),
+			);
+		} finally {
+			resetFormatEventsPublish();
+			if (previousDataDir === undefined) {
+				delete process.env.PILENS_DATA_DIR;
+			} else {
+				process.env.PILENS_DATA_DIR = previousDataDir;
+			}
+			env.cleanup();
+		}
+	});
+
+	it("does not publish pilens:format:start when there is nothing queued (#673)", async () => {
+		const env = setupTestEnvironment("pi-lens-agent-end-bus-format-start-empty-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+
+			const emit = vi.fn();
+			wireFormatEventsBusEmitter(emit);
+
+			await handleAgentEnd({
+				ctxCwd: env.tmpDir,
+				getFlag: () => false,
+				notify: vi.fn(),
+				dbg: () => {},
+				runtime,
+				cacheManager: { addModifiedRange: () => {} } as any,
+				getFormatService: () => ({ recordRead: () => {}, formatFile: vi.fn() }) as any,
+			});
+
+			expect(emit).not.toHaveBeenCalledWith(
+				"pilens:format:start",
+				expect.anything(),
+			);
+		} finally {
+			resetFormatEventsPublish();
 			if (previousDataDir === undefined) {
 				delete process.env.PILENS_DATA_DIR;
 			} else {

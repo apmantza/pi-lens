@@ -12,6 +12,7 @@ import {
 } from "./search-read-registration.js";
 import type { CacheManager } from "./cache-manager.js";
 import { createFileTime } from "./file-time.js";
+import { publishFormatQueued } from "./format-events-publish.js";
 import { isPathIgnoredByProject } from "./file-utils.js";
 import type { ReadGuard } from "./read-guard.js";
 import { getFormatService } from "./format-service.js";
@@ -660,7 +661,12 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		!getFlag("immediate-format") &&
 		nodeFs.existsSync(filePath)
 	) {
-		runtime.deferFormat(filePath, dispatchCwd, event.toolName, turnStateCwd);
+		const isNewlyQueued = runtime.deferFormat(
+			filePath,
+			dispatchCwd,
+			event.toolName,
+			turnStateCwd,
+		);
 		dbg(`tool_result: queued deferred format for ${filePath}`);
 		logLatency({
 			type: "phase",
@@ -670,6 +676,18 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			durationMs: 0,
 			metadata: { cwd: dispatchCwd },
 		});
+		// #673: only publish on first queue entry — a re-touch of an already
+		// queued file (a second edit before agent_end) is a structural no-op
+		// for a listener that just wants to know "has this file entered the
+		// queue", so re-emitting would be spam with zero new information.
+		if (isNewlyQueued) {
+			publishFormatQueued({
+				filePath,
+				cwd: dispatchCwd,
+				tool: event.toolName,
+				dbg,
+			});
+		}
 	}
 
 	for (const changedFile of result.changedFiles ?? []) {

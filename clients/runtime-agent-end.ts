@@ -10,6 +10,7 @@ import type { FormatService } from "./format-service.js";
 import { logLatency } from "./latency-logger.js";
 import { resyncLspFile, runFormatPhase } from "./pipeline.js";
 import { publishFilesTouched } from "./bus-publish.js";
+import { publishFormatStart } from "./format-events-publish.js";
 import {
 	appendProjectChange,
 	type ProjectChangeSource,
@@ -99,6 +100,16 @@ export async function handleAgentEnd({
 		durationMs: 0,
 		metadata: { fileCount: records.length },
 	});
+	// #673: same moment as the latency phase above — a same-process listener
+	// (e.g. a review/snapshot controller) can use this to know the deferred-
+	// format phase is starting and these specific paths may still be mutated.
+	if (records.length > 0) {
+		publishFormatStart({
+			cwd: ctxCwd ?? runtime.projectRoot,
+			paths: records.map((r) => r.filePath),
+			dbg,
+		});
+	}
 
 	const autoformatDisabled = !!getFlag("no-autoformat");
 	if (autoformatDisabled) {

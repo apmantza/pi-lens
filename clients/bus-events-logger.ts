@@ -1,14 +1,16 @@
 /**
  * Persistent NDJSON trace of `pi.events` bus publish attempts
- * (`pilens:files:touched` #482 / `pilens:diagnostics` #502).
+ * (`pilens:files:touched` #482 / `pilens:diagnostics` #502 /
+ * `pilens:format:queued` + `pilens:format:start` #673).
  *
- * Both producers (clients/bus-publish.ts, clients/diagnostics-publish.ts) are
- * fire-and-forget: on failure or on a structural no-op (never wired, kill
- * switch off) they only invoke an optional `dbg` callback, which varies by
- * host and is a documented no-op in the MCP host (clients/mcp/session.ts's
- * `dbg: noop`). That leaves bus-publish outcomes invisible in exactly the
- * context where they matter most — same failure shape as the #544 MCP
- * session_start incident this repo already fixed once.
+ * All four producers (clients/bus-publish.ts, clients/diagnostics-publish.ts,
+ * clients/format-events-publish.ts) are fire-and-forget: on failure or on a
+ * structural no-op (never wired, kill switch off) they only invoke an
+ * optional `dbg` callback, which varies by host and is a documented no-op in
+ * the MCP host (clients/mcp/session.ts's `dbg: noop`). That leaves
+ * bus-publish outcomes invisible in exactly the context where they matter
+ * most — same failure shape as the #544 MCP session_start incident this repo
+ * already fixed once.
  *
  * This module gives bus events the same durable trace every other pi-lens
  * subsystem already has (latency.log, cascade.log, read-guard.log, ...) —
@@ -39,7 +41,11 @@ const BUS_EVENTS_LOG_FILE = path.join(getGlobalPiLensDir(), "bus-events.log");
 
 const writer = createNdjsonLogger({ filePath: BUS_EVENTS_LOG_FILE });
 
-export type BusEventName = "pilens:files:touched" | "pilens:diagnostics";
+export type BusEventName =
+	| "pilens:files:touched"
+	| "pilens:diagnostics"
+	| "pilens:format:queued"
+	| "pilens:format:start";
 
 export type BusEventOutcome =
 	| "emitted"

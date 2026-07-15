@@ -6,6 +6,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Added
 
+- **Two new `pi.events` bus signals so an in-process extension can observe pi-lens's deferred-format queue before it mutates files, not just after** (#673) — `pilens:files:touched` (#482) only reports what changed AFTER deferred formatting at `agent_end` completes; there was no way for a same-process listener (e.g. a review/snapshot controller deriving an immutable candidate tree mid-turn) to know a file was queued for a formatter that hasn't run yet. `pilens:format:queued` (`clients/format-events-publish.ts`) fires once when a file NEWLY enters `RuntimeCoordinator`'s deferred-format pending queue (`{v, source, filePath, cwd, tool}`) — a second edit to an already-queued file before `agent_end` does not re-fire, avoiding spam. `pilens:format:start` fires once at the same moment as the existing `agent_end_deferred_format_start` latency-log phase, with the full pending file list (`{v, source, cwd, paths, fileCount}`), only when there's at least one file queued. Both follow the exact `pilens:files:touched` conventions: versioned frozen-additive payloads, fire-and-forget (bus failures swallowed, `dbg` invoked at most once per event type), logged via `logBusEvent`. This is visibility only — no synchronous flush/barrier API; that remains a separate future feature. `RuntimeCoordinator.deferFormat()` now returns a boolean (new-entry vs re-touch) so its caller (`clients/runtime-tool-result.ts`) knows when to publish.
+
 ### Changed
 
 ### Fixed
