@@ -544,12 +544,19 @@ export class RuntimeCoordinator {
 		return this._readGuard;
 	}
 
+	/**
+	 * Queue `filePath` for deferred formatting at `agent_end`. Returns `true`
+	 * when this call created a NEW pending entry, `false` when it re-touched
+	 * an already-queued file. #673: the caller uses this to publish
+	 * `pilens:format:queued` only on first queue entry, so repeated edits to
+	 * the same already-queued file before `agent_end` don't spam the bus.
+	 */
 	deferFormat(
 		filePath: string,
 		cwd: string,
 		toolName: "write" | "edit",
 		turnStateCwd: string,
-	): void {
+	): boolean {
 		const key = path.resolve(filePath);
 		const now = Date.now();
 		const existing = this._pendingDeferredFormatFiles.get(key);
@@ -558,7 +565,7 @@ export class RuntimeCoordinator {
 			existing.cwd = cwd;
 			existing.turnStateCwd = turnStateCwd;
 			existing.toolNames.add(toolName);
-			return;
+			return false;
 		}
 		this._pendingDeferredFormatFiles.set(key, {
 			filePath: key,
@@ -568,6 +575,7 @@ export class RuntimeCoordinator {
 			lastTouchedAt: now,
 			toolNames: new Set([toolName]),
 		});
+		return true;
 	}
 
 	get pendingDeferredFormatCount(): number {

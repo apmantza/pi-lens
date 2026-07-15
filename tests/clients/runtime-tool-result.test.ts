@@ -356,6 +356,103 @@ describe("runtime-tool-result inline behavior warnings", () => {
 		}
 	});
 
+	it("publishes pilens:format:queued only when deferFormat reports a NEW queue entry (#673)", async () => {
+		const { runPipeline } = await import("../../clients/pipeline.js");
+		vi.mocked(runPipeline).mockResolvedValue({
+			output: "✓ no blockers",
+			hasBlockers: false,
+			isError: false,
+			fileModified: false,
+		});
+		const formatEventsPublish = await import(
+			"../../clients/format-events-publish.js"
+		);
+
+		const env = setupTestEnvironment("pi-lens-runtime-tool-format-queued-");
+		try {
+			const filePath = path.join(env.tmpDir, "src", "app.ts");
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(filePath, "export const x = 1;\n");
+
+			const emit = vi.fn();
+			formatEventsPublish.wireFormatEventsBusEmitter(emit);
+
+			const baseDeps = {
+				getFlag: () => false,
+				dbg: () => {},
+				cacheManager: {
+					addModifiedRange: () => {},
+					readTurnState: () => ({}),
+				},
+				biomeClient: {},
+				ruffClient: {},
+				testRunnerClient: {},
+				metricsClient: {},
+				resetLSPService: () => {},
+				agentBehaviorRecord: () => [],
+				formatBehaviorWarnings: () => "",
+			};
+			const runtimeStub = {
+				projectRoot: env.tmpDir,
+				setTelemetryIdentity: () => {},
+				updateGitGuardStatus: () => {},
+				appendCascadeResult: () => {},
+				recordInlineBlockers: () => {},
+				clearInlineBlockers: () => {},
+				nextWriteIndex: () => 1,
+				turnIndex: 1,
+				telemetryModel: "test-model",
+				telemetrySessionId: "test-session",
+				fixedThisTurn: new Set<string>(),
+				reportedThisTurn: new Set<string>(),
+				formatPipelineCrashNotice: () => "",
+				lastCascadeOutput: "",
+				cachedExports: new Map(),
+			};
+
+			// First touch: deferFormat reports a NEW entry -> publish fires.
+			await handleToolResult({
+				event: {
+					toolName: "edit",
+					input: { path: filePath },
+					details: { diff: "+  1 export const x = 1;" },
+					content: [{ type: "text", text: "base" }],
+				},
+				runtime: { ...runtimeStub, deferFormat: () => true },
+				...baseDeps,
+			} as any);
+
+			expect(emit).toHaveBeenCalledTimes(1);
+			expect(emit).toHaveBeenCalledWith(
+				"pilens:format:queued",
+				expect.objectContaining({
+					v: 1,
+					source: "pi-lens",
+					tool: "edit",
+					filePath: filePath.replace(/\\/g, "/"),
+				}),
+			);
+
+			// Second touch (re-edit before agent_end): deferFormat reports a
+			// re-touch (not new) -> no second publish, avoiding event spam.
+			await handleToolResult({
+				event: {
+					toolName: "edit",
+					input: { path: filePath },
+					details: { diff: "+  1 export const x = 2;" },
+					content: [{ type: "text", text: "base" }],
+				},
+				runtime: { ...runtimeStub, deferFormat: () => false },
+				...baseDeps,
+			} as any);
+
+			expect(emit).toHaveBeenCalledTimes(1);
+		} finally {
+			formatEventsPublish._resetFormatEventsPublishForTests();
+			env.cleanup();
+		}
+	});
+
 	it("does not append behavior warnings when blockers are present", async () => {
 		const { runPipeline } = await import("../../clients/pipeline.js");
 		vi.mocked(runPipeline).mockResolvedValue({
