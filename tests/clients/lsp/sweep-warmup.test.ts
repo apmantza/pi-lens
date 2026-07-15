@@ -103,6 +103,32 @@ describe("LSPService.ensureWarmForSweep (#667)", () => {
 		expect(waitCalls.length).toBe(1); // unchanged — no new round trip
 	});
 
+	it("#669: gives a cold server the FULL requested warm-up budget, not the strategy's short steady-state aggregateWaitMs (regression: perServerTimeout's Math.min ceiling silently shrank a 20000ms ask down to typescript's 1000ms aggregateWaitMs)", async () => {
+		const filePath = path.join(tmp, "cold.ts");
+		fs.writeFileSync(filePath, "const x = 1;\n");
+		const tsServer = makeTsServer(tmp);
+		getServersForFileWithConfig.mockImplementation((fp: string) =>
+			fp.endsWith(".ts") ? [tsServer] : [],
+		);
+		const { client, waitCalls } = makeFakeClient(tmp);
+		createLSPClient.mockResolvedValue(client);
+
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+
+		// typescript's real strategy aggregateWaitMs is 1000ms (server-strategies.ts)
+		// — far below the 20000ms warm-up budget requested here. Before the fix,
+		// `perServerTimeout`'s `Math.min(callerCap, strategyWait)` silently capped
+		// the actual `waitForDiagnostics` call at 1000ms regardless of what was
+		// asked for.
+		const result = await service.ensureWarmForSweep(filePath, {
+			timeoutMs: 20000,
+		});
+		expect(result.performedWarmup).toBe(true);
+		expect(waitCalls.length).toBe(1);
+		expect(waitCalls[0]!.ms).toBe(20000);
+	});
+
 	it("is a no-op for a server that already answered a real touchFile diagnostics call earlier in the session", async () => {
 		const filePath = path.join(tmp, "b.ts");
 		fs.writeFileSync(filePath, "const y = 2;\n");

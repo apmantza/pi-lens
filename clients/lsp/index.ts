@@ -309,6 +309,22 @@ export interface LSPTouchFileOptions {
 	 * behavior for them.
 	 */
 	sweepIndexGate?: SweepIndexGate;
+	/**
+	 * #669: `perServerTimeout`'s caller-cap is a CEILING by design (#242) for
+	 * the normal per-edit/steady-state dispatch path — a slow strategy must
+	 * never blow past the pipeline's cap. `ensureWarmForSweep`'s cold-server
+	 * warm-up call is the inverse case: it deliberately asks for a budget
+	 * LARGER than the server's normal warm-state `aggregateWaitMs`, precisely
+	 * because the server hasn't finished its cold launch/indexing yet. Without
+	 * this flag, `Math.min(callerCap, strategyWait)` silently shrinks that
+	 * request back down to `strategyWait` (e.g. 1000ms for typescript)
+	 * regardless of the 20000ms actually requested, defeating the warm-up
+	 * entirely. When true, the caller's cap is treated as a FLOOR instead —
+	 * `Math.max(callerCap, strategyWait)` — never shrunk below what was asked.
+	 * Only `ensureWarmForSweep` sets this; every other caller leaves it unset
+	 * and keeps the pre-existing ceiling-only semantics exactly as-is.
+	 */
+	warmupOverride?: boolean;
 }
 
 export interface LSPWorkspaceDiagnosticResult {
@@ -1456,6 +1472,13 @@ export class LSPService {
 						Math.min(300, strategyWait);
 				}
 				if (callerCap !== undefined) {
+					// #669: `ensureWarmForSweep`'s cold-server warm-up wants its cap
+					// to act as a FLOOR (give it at least this much, possibly more
+					// if the strategy already wants more) rather than the normal
+					// ceiling — see `warmupOverride` doc on `LSPTouchFileOptions`.
+					if (options.warmupOverride) {
+						return Math.max(callerCap, strategyWait > 0 ? strategyWait : 0);
+					}
 					return Math.min(callerCap, strategyWait > 0 ? strategyWait : callerCap);
 				}
 				return strategyWait > 0 ? strategyWait : modeFloor;
@@ -2377,6 +2400,12 @@ export class LSPService {
 			source: "lsp_sweep_warmup",
 			maxClientWaitMs: timeoutMs,
 			maxDiagnosticsWaitMs: timeoutMs,
+			// #669: the caller's cap here is the warm-up budget for a genuinely
+			// COLD server — it must act as a floor, not the usual ceiling, or
+			// `perServerTimeout` silently shrinks it to the strategy's normal
+			// warm-state `aggregateWaitMs` (e.g. 1000ms for typescript) instead
+			// of the requested 20000ms.
+			warmupOverride: true,
 		});
 		await (options.signal
 			? Promise.race([
