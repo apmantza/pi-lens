@@ -17,6 +17,11 @@ import {
 	groupFilesByPrimaryServer,
 	runPerServerGroups,
 } from "../clients/lsp/index.js";
+import {
+	buildScopeKey,
+	createWorkspaceDiagnosticsCacheContext,
+	type WorkspaceDiagnosticsCacheContext,
+} from "../clients/lsp/workspace-diagnostics-cache.js";
 import { primaryServerId } from "../clients/lsp/config.js";
 import { combineAbortSignals } from "../clients/deadline-utils.js";
 import { applyAuxiliarySuppressions } from "../clients/dispatch/auxiliary-lsp.js";
@@ -97,6 +102,12 @@ type BatchOptions = {
 	// language server — for when the caller just wants "does the type
 	// checker/compiler confirm this clean", not a full security/lint pass.
 	serverScope?: "primary" | "all";
+	// #671: project root the workspace-diagnostics cache is rooted under
+	// (`getProjectDataDir(cwd)`) — threaded down to `collectBatchDiagnostics`
+	// so its per-file cache context lands in the same on-disk store
+	// `runWorkspaceDiagnostics` (`lens_diagnostics mode=full`) reads/writes,
+	// letting a file swept by either tool benefit the other's next sweep.
+	cwd?: string;
 };
 
 type FileDiag = {
@@ -500,6 +511,7 @@ export function createLspDiagnosticsTool(
 					onProgress,
 					nextWriteIndex,
 					serverScope,
+					cwd,
 				});
 			}
 
@@ -541,6 +553,7 @@ export function createLspDiagnosticsTool(
 					onProgress,
 					nextWriteIndex,
 					serverScope,
+					cwd,
 				});
 			}
 			return runFileDiagnostics(
@@ -920,14 +933,43 @@ async function collectFileDiagnosticResult(
 	waitMs?: number,
 	nextWriteIndex?: () => number,
 	serverScope: "primary" | "all" = "all",
+	// #671: shared workspace-diagnostics cache (see `createWorkspaceDiagnostics
+	// CacheContext`'s doc) — optional so single-file callers of this function
+	// (there are none today, but keep it non-breaking) can omit it and simply
+	// always touch. Only `collectBatchDiagnostics` (the batch/directory sweep)
+	// passes these.
+	cacheCtx?: WorkspaceDiagnosticsCacheContext,
+	scopeKey?: string,
 ): Promise<FileDiagnosticResult> {
+	let stat: ReturnType<typeof fs.statSync>;
 	try {
-		const stat = fs.statSync(file);
+		stat = fs.statSync(file);
 		if (!stat.isFile()) {
 			return { file, diagnostics: [], error: `${file}: not a file` };
 		}
 	} catch {
 		return { file, diagnostics: [], error: `${file}: path not found` };
+	}
+
+	if (cacheCtx && scopeKey !== undefined) {
+		const cached = cacheCtx.lookup(file, scopeKey);
+		if (cached) {
+			const filteredDiags = applySeverityFilter(cached.diagnostics, severity);
+			const confirmation: "clean" | undefined =
+				cached.diagnostics.length === 0 ? "clean" : undefined;
+			reconcileWidgetFromLspResult(
+				file,
+				cached.diagnostics,
+				confirmation,
+				nextWriteIndex,
+			);
+			return {
+				file,
+				diagnostics: diagnosticsToFileDiags(file, filteredDiags),
+				confirmation,
+				primaryServerId: primaryServerId(file),
+			};
+		}
 	}
 
 	const { diagnostics: rawDiags, timedOut } = await collectDiagnosticsForFile(
@@ -970,6 +1012,15 @@ async function collectFileDiagnosticResult(
 		confirmation,
 		nextWriteIndex,
 	);
+	// #671: only a CONFIRMED outcome ("clean", or a non-empty result — either
+	// is definitionally confirmed per this function's own doctrine above) is
+	// safe to cache; "unconfirmed" (timeout OR a silent-tier server's
+	// unescapable empty push) must never be persisted as a cacheable clean
+	// result — same false-clean bug class `runWorkspaceDiagnostics`'s cache
+	// wiring guards against.
+	if (cacheCtx && scopeKey !== undefined && confirmation !== "unconfirmed") {
+		cacheCtx.record(file, scopeKey, effectiveRawDiags, stat.mtimeMs);
+	}
 	return {
 		file,
 		diagnostics: diagnosticsToFileDiags(file, filteredDiags),
@@ -1205,6 +1256,18 @@ async function collectBatchDiagnostics(
 	unconfirmed: number;
 	timedOut: number;
 }> {
+	// #671: one cache context for this whole batch/directory sweep — loaded
+	// once, written back once after every file has been processed (see the
+	// `persist()` call below), rather than round-tripping the on-disk cache
+	// file per-file. Shared store with `runWorkspaceDiagnostics` (`lens_
+	// diagnostics mode=full`'s engine); `scopeKey` keeps the two tools'
+	// differently-scoped touches (this tool never excludes any server, that
+	// one excludes opengrep — see `buildScopeKey`'s doc) from cross-serving
+	// entries that wouldn't actually match what each asked for.
+	const cacheCtx = createWorkspaceDiagnosticsCacheContext(
+		options.cwd ?? process.cwd(),
+	);
+	const scopeKey = buildScopeKey(options.serverScope ?? "all");
 	const results = await mapWithConcurrency(
 		files,
 		options.concurrency,
@@ -1216,11 +1279,17 @@ async function collectBatchDiagnostics(
 				options.waitMs,
 				options.nextWriteIndex,
 				options.serverScope,
+				cacheCtx,
+				scopeKey,
 			),
 		lspService,
 		options.signal,
 		options.onProgress,
 	);
+	// Persist whatever was recorded, including a partial/aborted sweep's
+	// already-completed files — same "don't throw away confirmed work"
+	// posture as `runWorkspaceDiagnostics`.
+	cacheCtx.persist();
 	const fileErrors = results.flatMap((result) =>
 		result.error ? [result.error] : [],
 	);
