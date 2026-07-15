@@ -44,6 +44,10 @@ import {
 	mergeWorkspaceTextEditsByPriority,
 	summarizeWorkspaceEdit,
 } from "./edits.js";
+import {
+	buildScopeKey,
+	createWorkspaceDiagnosticsCacheContext,
+} from "./workspace-diagnostics-cache.js";
 
 // --- Init override helpers ---
 
@@ -2483,6 +2487,47 @@ export class LSPService {
 		let timedOutFiles = 0;
 		let lastHeartbeat = Date.now();
 
+		// #671: reuse the last CONFIRMED per-file result instead of re-touching
+		// every file through the language server(s) again when nothing relevant
+		// changed since the last sweep. `createWorkspaceDiagnosticsCacheContext`
+		// (`workspace-diagnostics-cache.ts`) is shared with `tools/lsp-
+		// diagnostics.ts`'s batch/directory sweep so a file swept by either tool
+		// benefits the other's next sweep under the SAME `scopeKey` — see that
+		// module's doc comment for the invalidation rules (own-mtime +
+		// best-effort cross-file dependency staleness) and why `scopeKey` exists
+		// (this sweep's `excludeServerIds` differs from that tool's).
+		const workspaceDiagnosticsCacheCtx =
+			createWorkspaceDiagnosticsCacheContext(root);
+		const workspaceSweepScopeKey = buildScopeKey("all", [
+			...WORKSPACE_SWEEP_EXCLUDED_SERVER_IDS,
+		]);
+		const cachedResults: LSPWorkspaceDiagnosticResult[] = [];
+		const filesToTouch: string[] = [];
+		for (const filePath of files) {
+			const cached = workspaceDiagnosticsCacheCtx.lookup(
+				filePath,
+				workspaceSweepScopeKey,
+			);
+			if (cached) {
+				cachedResults.push({
+					filePath,
+					diagnostics: cached.diagnostics,
+					count: cached.count,
+				});
+			} else {
+				filesToTouch.push(filePath);
+			}
+		}
+		completed = cachedResults.length;
+		if (cachedResults.length > 0) {
+			options.onProgress?.(completed, files.length);
+		}
+		// Per-file scan mtime captured as each file completes below, so a
+		// confirmed fresh result can be written back into the cache with the
+		// mtime it was ACTUALLY scanned at (not re-stat'd after the fact, which
+		// could race a concurrent edit).
+		const scannedMtimeByFile = new Map<string, number>();
+
 		// Group files by their primary language server (#387, extracted as
 		// `groupFilesByPrimaryServer` for #631). tsserver — and most servers — is
 		// single-threaded per project: N concurrent touches to ONE server don't
@@ -2493,7 +2538,9 @@ export class LSPService {
 		// in-flight touch each) and parallelize ACROSS servers — real parallelism
 		// where it exists (a mixed TS+Python repo runs both), no flooding where it
 		// doesn't. Capped so a many-language monorepo can't spawn unbounded groups.
-		const groups = groupFilesByPrimaryServer(files);
+		// Only files that failed the cache-freshness check above go through this
+		// (and the touch loop below) at all.
+		const groups = groupFilesByPrimaryServer(filesToTouch);
 		// #645: shared across every file/group in THIS sweep — lets a
 		// `workspaceIndexing`-strategy server (marksman) pay its full
 		// aggregateWaitMs budget only for the first file that touches it,
@@ -2519,6 +2566,8 @@ export class LSPService {
 			durationMs: 0,
 			metadata: {
 				fileCount: files.length,
+				cacheHits: cachedResults.length,
+				filesToTouch: filesToTouch.length,
 				maxFiles,
 				perFileMs,
 				serverGroups: groups.length,
@@ -2626,6 +2675,22 @@ export class LSPService {
 				const content =
 					contentCache.get(filePath) ??
 					(await nodeFs.promises.readFile(filePath, "utf-8"));
+				// #671: captured alongside the read, ahead of the (possibly slow)
+				// touchFile wait below, so the cache entry records the mtime this
+				// file actually had AT scan time — not a later re-stat that could
+				// race a concurrent edit and silently mis-date the entry. Deliberately
+				// synchronous (not `nodeFs.promises.stat`): this loop is timing-
+				// sensitive (its opens must land inside `WatchedFilesQueue`'s 100ms
+				// debounce window — see workspace-diagnostics-sweep-batch-open.test.ts
+				// / -preopen-chunk.test.ts), and a blocking `statSync` costs a few
+				// microseconds with no extra event-loop tick, where an awaited
+				// promise would insert one.
+				try {
+					scannedMtimeByFile.set(filePath, nodeFs.statSync(filePath).mtimeMs);
+				} catch {
+					// Best-effort: a failed stat here just means this file won't be
+					// eligible for caching below (no entry gets written for it).
+				}
 				// onTimeout:"undefined" so a hung file yields no diagnostics and the
 				// worker moves on; a real touchFile rejection still propagates to the
 				// catch below and is recorded as an error.
@@ -2724,7 +2789,21 @@ export class LSPService {
 				if (workspacePullEnabled && !group.multiServer) {
 					const pulled = await this.tryWorkspacePull(group.files, perFileMs);
 					if (pulled) {
-						for (const result of pulled) results.push(result);
+						for (const result of pulled) {
+							results.push(result);
+							// #671: a pull result is always confirmed (see
+							// `tryWorkspacePull`'s doc comment), so it's cache-eligible
+							// too — best-effort stat since the pull already resolved the
+							// diagnostics for this file some time ago.
+							try {
+								scannedMtimeByFile.set(
+									result.filePath,
+									nodeFs.statSync(result.filePath).mtimeMs,
+								);
+							} catch {
+								// Not cache-eligible without a confirmed mtime.
+							}
+						}
 						completed += group.files.length;
 						options.onProgress?.(completed, files.length);
 						return;
@@ -2780,6 +2859,7 @@ export class LSPService {
 			durationMs: Date.now() - startedAt,
 			metadata: {
 				filesChecked: files.length,
+				cacheHits: cachedResults.length,
 				diagnosticCount: results.reduce(
 					(sum, result) => sum + (result?.count ?? 0),
 					0,
@@ -2792,7 +2872,30 @@ export class LSPService {
 			},
 		});
 
-		return results.filter(Boolean);
+		// #671: record every CONFIRMED fresh result (`!timedOut && !error`) back
+		// into the cache, keyed by the mtime it was actually scanned at
+		// (`scannedMtimeByFile`, captured per-file above), then persist once.
+		// Deliberately survives an aborted/partial sweep — whatever completed
+		// before the abort is still real, confirmed work and shouldn't be thrown
+		// away; files that never got a confirmed result (including ones an abort
+		// cut off before `processFile` ran) are simply absent from
+		// `scannedMtimeByFile` and are skipped, leaving any pre-existing cache
+		// entry for them exactly as `createWorkspaceDiagnosticsCacheContext`
+		// loaded it (already-stale entries stay unreachable via `lookup`'s own
+		// freshness check; nothing here needs to explicitly evict them).
+		for (const result of results) {
+			const scannedAt = scannedMtimeByFile.get(result.filePath);
+			if (result.error || result.timedOut || scannedAt === undefined) continue;
+			workspaceDiagnosticsCacheCtx.record(
+				result.filePath,
+				workspaceSweepScopeKey,
+				result.diagnostics,
+				scannedAt,
+			);
+		}
+		workspaceDiagnosticsCacheCtx.persist();
+
+		return [...cachedResults, ...results].filter(Boolean);
 	}
 
 	/**
