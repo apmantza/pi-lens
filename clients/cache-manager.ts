@@ -12,6 +12,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getProjectDataDir } from "./file-utils.js";
+import { readJsonCache } from "./json-cache-read.js";
 import { normalizeMapKey } from "./path-utils.js";
 
 // --- Types ---
@@ -122,9 +123,18 @@ export class CacheManager {
 		}
 
 		try {
-			const meta: CacheMeta = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
-			const age = Date.now() - new Date(meta.timestamp).getTime();
+			const onReadError = (err: unknown) => {
+				this.log(`Cache read error: ${scanner} — ${err}`);
+			};
 
+			const meta = readJsonCache<CacheMeta>(
+				metaPath,
+				(parsed) => parsed as CacheMeta,
+				onReadError,
+			);
+			if (meta === undefined) return null;
+
+			const age = Date.now() - new Date(meta.timestamp).getTime();
 			if (age > maxAgeMs) {
 				this.log(
 					`Cache stale: ${scanner} (age: ${Math.round(age / 1000)}s, max: ${maxAgeMs / 1000}s)`,
@@ -132,7 +142,13 @@ export class CacheManager {
 				return null;
 			}
 
-			const data: T = JSON.parse(fs.readFileSync(cachePath, "utf-8"));
+			const data = readJsonCache<T>(
+				cachePath,
+				(parsed) => parsed as T,
+				onReadError,
+			);
+			if (data === undefined) return null;
+
 			this.log(`Cache hit: ${scanner} (age: ${Math.round(age / 1000)}s)`);
 			return { data, meta };
 		} catch (err) {
@@ -178,7 +194,11 @@ export class CacheManager {
 		if (!fs.existsSync(metaPath)) return false;
 
 		try {
-			const meta: CacheMeta = JSON.parse(fs.readFileSync(metaPath, "utf-8"));
+			const meta = readJsonCache<CacheMeta>(
+				metaPath,
+				(parsed) => parsed as CacheMeta,
+			);
+			if (meta === undefined) return false;
 			const age = Date.now() - new Date(meta.timestamp).getTime();
 			return age <= maxAgeMs;
 		} catch {
@@ -219,15 +239,17 @@ export class CacheManager {
 			};
 		}
 
-		try {
-			return JSON.parse(fs.readFileSync(statePath, "utf-8"));
-		} catch {
-			return {
+		const state = readJsonCache<TurnState>(
+			statePath,
+			(parsed) => parsed as TurnState,
+		);
+		return (
+			state ?? {
 				...DEFAULT_TURN_STATE,
 				files: {},
 				lastUpdated: new Date().toISOString(),
-			};
-		}
+			}
+		);
 	}
 
 	/**

@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getProjectDataDir } from "./file-utils.js";
+import { readJsonCache } from "./json-cache-read.js";
 import { normalizeMapKey } from "./path-utils.js";
 import type { ProjectLanguageProfile } from "./language-policy.js";
 import {
@@ -110,13 +111,11 @@ function parseSnapshot(value: unknown): ProjectSnapshot | null {
 }
 
 export function loadProjectSnapshot(cwd: string): ProjectSnapshot | null {
-	try {
-		return parseSnapshot(
-			JSON.parse(fs.readFileSync(getProjectSnapshotPath(cwd), "utf-8")),
-		);
-	} catch {
-		return null;
-	}
+	const snapshot = readJsonCache<ProjectSnapshot>(
+		getProjectSnapshotPath(cwd),
+		(parsed) => parseSnapshot(parsed) ?? undefined,
+	);
+	return snapshot ?? null;
 }
 
 export function saveProjectSnapshot(

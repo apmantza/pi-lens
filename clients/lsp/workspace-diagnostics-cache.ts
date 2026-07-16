@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getProjectDataDir } from "../file-utils.js";
+import { readJsonCache } from "../json-cache-read.js";
 import { normalizeMapKey } from "../path-utils.js";
 import { loadReverseDependencyIndexFromSnapshot } from "../reverse-deps.js";
 import type { LSPDiagnostic } from "./client.js";
@@ -78,18 +79,13 @@ function cachePath(cwd: string): string {
 export function loadWorkspaceDiagnosticsCache(
 	cwd: string,
 ): WorkspaceDiagnosticsCache | undefined {
-	try {
-		const parsed = JSON.parse(
-			fs.readFileSync(cachePath(cwd), "utf-8"),
-		) as unknown;
+	return readJsonCache<WorkspaceDiagnosticsCache>(cachePath(cwd), (parsed) => {
 		if (!parsed || typeof parsed !== "object") return undefined;
 		const cache = parsed as WorkspaceDiagnosticsCache;
 		if (cache.version !== WORKSPACE_DIAGNOSTICS_CACHE_VERSION) return undefined;
 		if (!cache.entries || typeof cache.entries !== "object") return undefined;
 		return cache;
-	} catch {
-		return undefined;
-	}
+	});
 }
 
 export function saveWorkspaceDiagnosticsCache(
