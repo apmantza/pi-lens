@@ -3,6 +3,11 @@ valid:
   - 'a.href = "https://x"'
   - 'a.href = "https://example.com"'
   - 'a.href = "/"'
+  - 'expect(openBrowser("javascript:alert(1)")).toBe(false)'
+  - |
+    it("rejects javascript: urls", () => {
+      expect(openBrowser("javascript:alert(1)")).toBe(false);
+    });
 invalid:
   - 'a.href = "javascript:alert(1)"'
   - 'a.href = "javascript:void(0)"'

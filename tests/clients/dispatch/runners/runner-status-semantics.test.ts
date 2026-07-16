@@ -40,12 +40,16 @@ vi.mock("../../../../clients/dispatch/runners/utils.js", () => ({
 	readFileContent,
 }));
 
-function ctx(filePath: string, cwd: string) {
+function ctx(
+	filePath: string,
+	cwd: string,
+	overrides: { fileRole?: string } = {},
+) {
 	return {
 		filePath,
 		cwd,
 		kind: "jsts",
-		fileRole: "source",
+		fileRole: overrides.fileRole ?? "source",
 		pi: {
 			getFlag: (name: string) => name === "lens-lsp",
 		},
@@ -344,6 +348,78 @@ describe("runner status/semantic edge cases", () => {
 			expect(result.diagnostics[0]?.fixSuggestion).toContain(
 				"Change type of 'a' to 'number'",
 			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("lsp runner drops ast-grep auxiliary findings on test files, but keeps opengrep's (#687)", async () => {
+		const runner = (await import("../../../../clients/dispatch/runners/lsp.js"))
+			.default;
+		const env = setupTestEnvironment("pi-lens-lsp-astgrep-test-skip-");
+		try {
+			const filePath = path.join(env.tmpDir, "main.test.ts");
+			fs.writeFileSync(filePath, "const x = 1;\n");
+
+			supportsLSP.mockReturnValue(true);
+			touchFile.mockResolvedValue([
+				{
+					severity: 2,
+					message: "ast-grep finding",
+					range: {
+						start: { line: 0, character: 0 },
+						end: { line: 0, character: 1 },
+					},
+					code: "no-javascript-url",
+					source: "ast-grep",
+				},
+				{
+					severity: 2,
+					message: "opengrep finding",
+					range: {
+						start: { line: 0, character: 0 },
+						end: { line: 0, character: 1 },
+					},
+					code: "some-rule",
+					source: "Semgrep",
+				},
+			]);
+
+			const result = await runner.run(
+				ctx(filePath, env.tmpDir, { fileRole: "test" }) as never,
+			);
+			expect(result.diagnostics).toHaveLength(1);
+			expect(result.diagnostics[0]?.tool).toBe("opengrep");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("lsp runner keeps ast-grep auxiliary findings on non-test files", async () => {
+		const runner = (await import("../../../../clients/dispatch/runners/lsp.js"))
+			.default;
+		const env = setupTestEnvironment("pi-lens-lsp-astgrep-source-");
+		try {
+			const filePath = path.join(env.tmpDir, "main.ts");
+			fs.writeFileSync(filePath, "const x = 1;\n");
+
+			supportsLSP.mockReturnValue(true);
+			touchFile.mockResolvedValue([
+				{
+					severity: 2,
+					message: "ast-grep finding",
+					range: {
+						start: { line: 0, character: 0 },
+						end: { line: 0, character: 1 },
+					},
+					code: "no-javascript-url",
+					source: "ast-grep",
+				},
+			]);
+
+			const result = await runner.run(ctx(filePath, env.tmpDir) as never);
+			expect(result.diagnostics).toHaveLength(1);
+			expect(result.diagnostics[0]?.tool).toBe("ast-grep");
 		} finally {
 			env.cleanup();
 		}

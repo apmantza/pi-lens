@@ -42,6 +42,22 @@ describe("auxiliary LSP enablement", () => {
 	});
 });
 
+describe("auxiliary profile skipTestFiles (#687)", () => {
+	it("ast-grep skips test files (matches the in-process runner's own skipTestFiles)", () => {
+		expect(
+			AUXILIARY_LSP_PROFILES.find((p) => p.tool === "ast-grep")?.skipTestFiles,
+		).toBe(true);
+	});
+
+	it("opengrep, zizmor, and typos do NOT skip test files", () => {
+		for (const tool of ["opengrep", "zizmor", "typos"]) {
+			expect(
+				AUXILIARY_LSP_PROFILES.find((p) => p.tool === tool)?.skipTestFiles,
+			).not.toBe(true);
+		}
+	});
+});
+
 describe("auxiliary profile source routing", () => {
 	it("routes Opengrep's 'Semgrep' source to the opengrep profile", () => {
 		expect(findAuxiliaryProfileForSource("Semgrep")?.tool).toBe("opengrep");
