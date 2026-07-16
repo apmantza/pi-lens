@@ -95,15 +95,16 @@ even if the answer is "not yet."
 ## 3. `clients/` is a 121-file flat junk drawer
 
 `dispatch/`, `lsp/`, `mcp/` are foldered; everything else sits at one level —
-read-guard (6+ files), security scanners, project intelligence, and **eight
-bespoke NDJSON loggers** (`cascade-logger`, `dead-code-logger`,
-`read-guard-logger`, `latency-logger`, `tree-sitter-logger`,
-`diagnostic-logger`, `actionable-warnings-logger`, `ast-grep-tool-logger`).
+read-guard (6+ files), security scanners, project intelligence, and (formerly)
+nine bespoke NDJSON loggers.
 
-- **Loggers are the genuine consolidation target** — eight hand-rolled
-  implementations of "append NDJSON, rotate at ~1 MiB." One
-  `createNdjsonLogger(name, opts)` factory collapses them and centralizes
-  rotation policy. Cheap, contained, real win.
+- **DONE — loggers are consolidated.** `clients/ndjson-logger.ts` is now a
+  shared `createNdjsonLogger(name, opts)` factory, and every logger
+  (`cascade-logger`, `dead-code-logger`, `read-guard-logger`, `latency-logger`,
+  `tree-sitter-logger`, `diagnostic-logger`, `actionable-warnings-logger`,
+  `ast-grep-tool-logger`, plus the newer `bus-events-logger` built on it from
+  day one) consumes it. Re-confirmed via an architecture review 2026-07-15 —
+  no further action here.
 - **The foldering itself ranks lower** — churny (every import path changes,
   open PRs conflict, concurrent worktree agent), and flat-but-well-named is
   livable. Do it opportunistically, not as a campaign.
