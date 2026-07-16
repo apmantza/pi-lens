@@ -152,7 +152,7 @@ function splitLines(text: string): string[] {
 	return text.split(/\r?\n/);
 }
 
-function lineContentHash(line: string): string {
+export function lineContentHash(line: string): string {
 	// FNV-1a over whitespace-stripped content. This treats no-op formatter/touch
 	// changes as still-valid context while detecting semantic line changes.
 	const normalized = line.replace(/\s+/g, "");

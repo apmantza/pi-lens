@@ -44,6 +44,7 @@ const writer = createNdjsonLogger({ filePath: BUS_EVENTS_LOG_FILE });
 export type BusEventName =
 	| "pilens:files:touched"
 	| "pilens:diagnostics"
+	| "pilens:diagnostic:disposition"
 	| "pilens:format:queued"
 	| "pilens:format:start"
 	| "pilens:autofix:start";

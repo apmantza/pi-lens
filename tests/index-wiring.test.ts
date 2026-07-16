@@ -75,6 +75,7 @@ const EXPECTED_TOOLS = [
 	"lens_diagnostics",
 	"lsp_diagnostics",
 	"lsp_navigation",
+	"lens_diagnostic_mark",
 	"symbol_search",
 	"module_report",
 	"read_symbol",
@@ -112,7 +113,7 @@ describe("index.ts extension wiring", () => {
 			}
 		});
 
-		// #dynamic-tooling: 5 situational tools are registered but start
+		// #dynamic-tooling: 6 situational tools are registered but start
 		// inactive on a host that supports pi's dynamic tool loading
 		// (pi.getActiveTools/setActiveTools); the 6 always-active tools plus
 		// the loader itself stay active. Newly-activated tools only need to
@@ -120,7 +121,7 @@ describe("index.ts extension wiring", () => {
 		// #643: the deactivation call moved from synchronous registration into
 		// the session_start handler (the correct lifecycle point — see
 		// index.ts), so this test now fires session_start before asserting.
-		it("registers the 5 situational tools inactive and everything else active on a dynamic-tooling host", async () => {
+		it("registers the 6 situational tools inactive and everything else active on a dynamic-tooling host", async () => {
 			const tmp = fs.mkdtempSync(
 				path.join(os.tmpdir(), "pi-lens-wiring-session-start-"),
 			);
@@ -137,6 +138,7 @@ describe("index.ts extension wiring", () => {
 					"ast_grep_outline",
 					"ast_grep_dump",
 					"lsp_navigation",
+					"lens_diagnostic_mark",
 				];
 				const ALWAYS_ACTIVE = [
 					"lens_diagnostics",
@@ -169,7 +171,7 @@ describe("index.ts extension wiring", () => {
 
 		// Feature-detection fallback: a host without getActiveTools/setActiveTools
 		// (older pi, or any host not implementing dynamic tooling) must not throw,
-		// and every tool — including the 5 normally-lazy ones — stays statically
+		// and every tool — including the 6 normally-lazy ones — stays statically
 		// active, matching pi-lens's behavior before this feature existed.
 		// #643: assert through session_start, the call's new (correct) home.
 		it("falls back to all tools statically active on a host without dynamic-tooling support", async () => {
@@ -186,7 +188,7 @@ describe("index.ts extension wiring", () => {
 
 				for (const t of EXPECTED_TOOLS) {
 					expect(pi.getTool(t), `tool registered: ${t}`).toBeDefined();
-					// Every tool — including the normally-lazy 5 — stays active because
+					// Every tool — including the normally-lazy 6 — stays active because
 					// index.ts never found getActiveTools/setActiveTools to call, so it
 					// skipped the deactivation step entirely (the graceful fallback).
 					expect(pi.activeTools.has(t), `should stay active: ${t}`).toBe(

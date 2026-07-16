@@ -13,6 +13,11 @@ import { promises as fs } from "node:fs";
 import * as fsSync from "node:fs";
 import * as path from "node:path";
 import { Type } from "../clients/deps/typebox.js";
+import {
+	anchorsForDiagnostic,
+	applyDispositions,
+	getDisposition,
+} from "../clients/diagnostic-dispositions.js";
 import { applyInlineSuppressions } from "../clients/dispatch/inline-suppressions.js";
 import { compactRenderResult } from "./render-compact.js";
 import { combineAbortSignals } from "../clients/deadline-utils.js";
@@ -911,6 +916,7 @@ function mergeDiagnosticsWithWidgetSummaries(
  */
 async function applyInlineSuppressionsToSummaries(
 	summaries: FileDiagnosticSummary[],
+	cwd: string,
 ): Promise<FileDiagnosticSummary[]> {
 	return Promise.all(
 		summaries.map(async (summary) => {
@@ -921,7 +927,24 @@ async function applyInlineSuppressionsToSummaries(
 			} catch {
 				return summary; // never hide a finding on a read error
 			}
-			const kept = applyInlineSuppressions(summary.diagnostics, content);
+			const inlineKept = applyInlineSuppressions(summary.diagnostics, content);
+			// #690: same false-positive/suppress/defer disposition filter the
+			// per-edit dispatch path applies (dispatcher.ts) — mode=full merges in
+			// diagnostics from a fresh LSP sweep/project scan that never went
+			// through that path, so without this a disposed finding reappears here.
+			const kept = applyDispositions(inlineKept, cwd, summary.filePath, content);
+			// Tag `flagged` diagnostics for the render loop (formatAllMode). Content
+			// is already in hand here (unlike mode=all/delta's cache-only path), so
+			// this is the one place the tag can be computed without adding I/O to
+			// the "instant" modes.
+			for (const d of kept) {
+				// flagged is weak-anchored (module doc, diagnostic-dispositions.ts) so
+				// the tag survives incidental edits to the flagged line itself.
+				const { weak } = anchorsForDiagnostic(cwd, summary.filePath, d, content);
+				if (getDisposition(cwd, weak)?.disposition === "flagged") {
+					(d as { flagged?: boolean }).flagged = true;
+				}
+			}
 			if (kept.length === summary.diagnostics.length) return summary;
 			return summarizeDiagnostics(
 				summary.filePath,
@@ -1165,6 +1188,7 @@ async function formatFullMode(
 			projectSnapshot,
 			projectDelta,
 		),
+		cwd,
 	);
 	const result = formatAllMode(cwd, severity, summaries, {
 		mode: "full",
@@ -1467,8 +1491,9 @@ function formatAllMode(
 				: "";
 			const label = d.rule ?? d.tool;
 			const tag = label ? ` [${label}]` : "";
+			const flaggedTag = d.flagged ? " 📌 flagged-to-fix" : "";
 			const msg = d.message.replace(/\s+/g, " ").trim();
-			lines.push(`  ${marker}L${d.line ?? "?"}: ${msg}${tag}`);
+			lines.push(`  ${marker}L${d.line ?? "?"}: ${msg}${tag}${flaggedTag}`);
 		}
 		if (matching.length > shown.length) {
 			lines.push(

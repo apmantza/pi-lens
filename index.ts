@@ -42,6 +42,7 @@ import {
 import { initLensEvents } from "./clients/lens-events.js";
 import { wireBusEmitter } from "./clients/bus-publish.js";
 import { wireDiagnosticsBusEmitter } from "./clients/diagnostics-publish.js";
+import { wireDispositionBusEmitter } from "./clients/disposition-publish.js";
 import { wireFormatEventsBusEmitter } from "./clients/format-events-publish.js";
 import {
 	consumeAgentNudge,
@@ -94,6 +95,7 @@ import {
 	type ActivatableToolInfo,
 } from "./tools/activate-tools.js";
 import { createLensDiagnosticsTool } from "./tools/lens-diagnostics.js";
+import { createLensDiagnosticMarkTool } from "./tools/lens-diagnostic-mark.js";
 import { createAstGrepReplaceTool } from "./tools/ast-grep-replace.js";
 import { createAstGrepSearchTool } from "./tools/ast-grep-search.js";
 import { createAstGrepOutlineTool } from "./tools/ast-grep-outline.js";
@@ -257,6 +259,7 @@ export default function (pi: ExtensionAPI) {
 	initLensEvents(pi);
 	wireBusEmitter(pi.events?.emit?.bind(pi.events));
 	wireDiagnosticsBusEmitter(pi.events?.emit?.bind(pi.events));
+	wireDispositionBusEmitter(pi.events?.emit?.bind(pi.events));
 	wireFormatEventsBusEmitter(pi.events?.emit?.bind(pi.events));
 	// #485: read-only bus subscriber — never publishes, so the #482 loop guard
 	// (ingest -> write -> publish) has no write side to trip here.
@@ -946,6 +949,7 @@ export default function (pi: ExtensionAPI) {
 		createAstGrepOutlineTool(astGrepClient),
 		createAstGrepDumpTool(astGrepClient),
 		createLspNavigationTool((name) => getLensFlag(name)),
+		createLensDiagnosticMarkTool(() => runtime.projectRoot),
 	];
 	const LAZY_TOOL_CATALOG: ActivatableToolInfo[] = [
 		{
@@ -971,6 +975,11 @@ export default function (pi: ExtensionAPI) {
 			name: "lsp_navigation",
 			summary:
 				"IDE-style LSP navigation: definition, references, implementation, rename, call hierarchy.",
+		},
+		{
+			name: "lens_diagnostic_mark",
+			summary:
+				"Record a disposition for a diagnostic: false-positive / suppress (inline ignore comment) / defer (this session) / flagged (to fix).",
 		},
 	];
 	const activateToolsTool = createActivateToolsTool(

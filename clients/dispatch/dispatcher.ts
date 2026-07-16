@@ -30,6 +30,7 @@ import { RUNTIME_CONFIG, getRunnerTimeoutFloorMs } from "../runtime-config.js";
 import { safeSpawnAsync } from "../safe-spawn.js";
 import { classifyDiagnostic } from "./diagnostic-taxonomy.js";
 import type { FactStore } from "./fact-store.js";
+import { applyDispositions } from "../diagnostic-dispositions.js";
 import { applyInlineSuppressions } from "./inline-suppressions.js";
 import { getToolPlan } from "./plan.js";
 import { resolveRunnerPath } from "./runner-context.js";
@@ -758,7 +759,16 @@ export async function dispatchForFile(
 		overlapSuppressed,
 		fileContent,
 	);
-	let visibleDiagnostics = inlineSuppressed;
+	// #690: agent/user disposition layer — drop false-positive/suppress marks
+	// and anything deferred this session. flagged marks are left in place;
+	// lens_diagnostics tags them at render time via the same anchor.
+	const dispositionFiltered = applyDispositions(
+		inlineSuppressed,
+		ctx.cwd,
+		ctx.filePath,
+		fileContent,
+	);
+	let visibleDiagnostics = dispositionFiltered;
 	let resolvedCount = 0;
 	if (ctx.deltaMode && previousBaseline) {
 		const filtered = filterDelta(

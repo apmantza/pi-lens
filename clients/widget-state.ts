@@ -16,6 +16,11 @@ export interface WidgetDiagnostic {
 	rule?: string;
 	tool?: string;
 	uri?: string;
+	/** Set when a `flagged` disposition (#690) is found for this diagnostic at
+	 * merge time — only populated where file content was already available
+	 * (mode=full's suppression pass), never computed for mode=all/delta to
+	 * keep those cache-only and instant. */
+	flagged?: boolean;
 }
 
 /**
