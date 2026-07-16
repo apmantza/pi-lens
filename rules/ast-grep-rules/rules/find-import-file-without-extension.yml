@@ -8,8 +8,10 @@ note: |
   extension will fail at runtime under bare ESM. Add the extension (or rely
   on the bundler-specific resolver if your project uses one).
 rule:
-  regex: "/[^.]+[^/]$"
   kind: string_fragment
+  all:
+    - regex: "^\\.\\.?/"
+    - regex: "/[^.]+[^/]$"
   any:
     - inside:
         stopBy: end
