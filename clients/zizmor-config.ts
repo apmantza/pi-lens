@@ -1,7 +1,6 @@
-import * as fs from "node:fs";
 import * as path from "node:path";
 import { safeSpawnAsync } from "./safe-spawn.js";
-import { walkUpDirs } from "./path-utils.js";
+import { findLocalToolConfig } from "./path-utils.js";
 
 /**
  * zizmor (GitHub Actions workflow security scanner) configuration discovery and
@@ -24,13 +23,7 @@ export const LOCAL_ZIZMOR_CONFIG_NAMES = [
 ] as const;
 
 export function findLocalZizmorConfig(startDir: string): string | undefined {
-	for (const dir of walkUpDirs(startDir || process.cwd())) {
-		for (const name of LOCAL_ZIZMOR_CONFIG_NAMES) {
-			const candidate = path.join(dir, name);
-			if (fs.existsSync(candidate)) return candidate;
-		}
-	}
-	return undefined;
+	return findLocalToolConfig(startDir, LOCAL_ZIZMOR_CONFIG_NAMES);
 }
 
 // zizmor's own input collection (see `zizmor --collect`) only ever audits three
