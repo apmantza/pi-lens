@@ -40,6 +40,13 @@ describe("oxlint runner", () => {
 		safeSpawn.mockReturnValue({ error: new Error("not found"), status: 1 });
 	});
 
+	it("does not skip test files (#576) — real correctness findings matter there too", async () => {
+		const { default: oxlintRunner } = await import(
+			"../../../../clients/dispatch/runners/oxlint.js"
+		);
+		expect(oxlintRunner.skipTestFiles).toBe(false);
+	});
+
 	it("auto-installs and runs oxlint as the no-config JS/TS fallback", async () => {
 		const env = setupTestEnvironment("pi-lens-oxlint-runner-");
 		try {

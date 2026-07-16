@@ -58,7 +58,7 @@ const oxlintRunner: RunnerDefinition = {
 	appliesTo: ["jsts"],
 	priority: PRIORITY.LINT_SECONDARY,
 	enabledByDefault: true,
-	skipTestFiles: true,
+	skipTestFiles: false,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = ctx.cwd || process.cwd();
