@@ -1,6 +1,4 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { walkUpDirs } from "./path-utils.js";
+import { findLocalToolConfig } from "./path-utils.js";
 
 /**
  * typos (source-code spell checker) configuration discovery. typos runs as a
@@ -24,11 +22,5 @@ export const LOCAL_TYPOS_CONFIG_NAMES = [
 ] as const;
 
 export function findLocalTyposConfig(startDir: string): string | undefined {
-	for (const dir of walkUpDirs(startDir || process.cwd())) {
-		for (const name of LOCAL_TYPOS_CONFIG_NAMES) {
-			const candidate = path.join(dir, name);
-			if (fs.existsSync(candidate)) return candidate;
-		}
-	}
-	return undefined;
+	return findLocalToolConfig(startDir, LOCAL_TYPOS_CONFIG_NAMES);
 }
