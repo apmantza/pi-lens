@@ -693,6 +693,7 @@ describe("index.ts integration", () => {
 		}));
 		vi.doMock("../clients/lsp/index.js", async () => ({
 			getLSPService: () => ({ touchFile: touchFileMock }),
+			resetLSPService: () => {},
 		}));
 
 		const { default: registerExtension } = await import("../index.ts");
@@ -786,6 +787,7 @@ describe("index.ts integration", () => {
 		}));
 		vi.doMock("../clients/lsp/index.js", async () => ({
 			getLSPService: () => ({ touchFile: touchFileMock }),
+			resetLSPService: () => {},
 		}));
 
 		const { default: registerExtension } = await import("../index.ts");
@@ -874,6 +876,7 @@ describe("index.ts integration", () => {
 		}));
 		vi.doMock("../clients/lsp/index.js", async () => ({
 			getLSPService: () => ({ touchFile: touchFileMock }),
+			resetLSPService: () => {},
 		}));
 
 		const { default: registerExtension } = await import("../index.ts");
