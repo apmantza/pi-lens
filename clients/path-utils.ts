@@ -212,6 +212,35 @@ export function findNearestContaining(
 	return undefined;
 }
 
+/**
+ * Walk up from `startDir` and return the first matching FILE path (not just
+ * the containing directory) for any of `names`, first-match-wins within each
+ * directory in `names` order. Single source of truth for the "walk up
+ * looking for one of these config filenames" loop that `opengrep-config.ts`,
+ * `typos-config.ts`, `zizmor-config.ts`, and `sgconfig.ts` each hand-rolled
+ * independently (refs #680).
+ *
+ * Distinct from `findNearestContaining`, which returns the containing
+ * directory rather than the matched file path — use that one when the caller
+ * only needs "is one of these present nearby", not which file it is.
+ *
+ * @example
+ *   findLocalToolConfig(cwd, ["typos.toml", "_typos.toml", ".typos.toml"]);
+ *   // → "/repo/typos.toml" if present, else undefined
+ */
+export function findLocalToolConfig(
+	startDir: string,
+	names: readonly string[],
+): string | undefined {
+	for (const dir of walkUpDirs(startDir || process.cwd())) {
+		for (const name of names) {
+			const candidate = path.join(dir, name);
+			if (existsSync(candidate)) return candidate;
+		}
+	}
+	return undefined;
+}
+
 export interface FindNearestMarkerRootOptions {
 	/**
 	 * Directory names/files that, if found BEFORE any of `markers`, stop the

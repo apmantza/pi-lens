@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+	findLocalToolConfig,
 	findNearestContaining,
 	findNearestMarkerRoot,
 	isAtOrAboveHomeDir,
@@ -137,6 +138,91 @@ describe("walkUpDirs / findNearestContaining (#122)", () => {
 		} finally {
 			env.cleanup();
 		}
+	});
+});
+
+describe("findLocalToolConfig (refs #680)", () => {
+	it("returns the matched FILE path, not just the containing directory", () => {
+		const env = setupTestEnvironment("pi-lens-find-tool-config-");
+		try {
+			const startDir = path.join(env.tmpDir, "src");
+			fs.mkdirSync(startDir, { recursive: true });
+			fs.writeFileSync(path.join(env.tmpDir, "typos.toml"), "");
+
+			const found = findLocalToolConfig(startDir, [
+				"typos.toml",
+				"_typos.toml",
+				".typos.toml",
+			]);
+			expect(found && path.resolve(found)).toBe(
+				path.resolve(env.tmpDir, "typos.toml"),
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("prefers the nearest directory over a match higher up the tree", () => {
+		const env = setupTestEnvironment("pi-lens-find-tool-config-nearest-");
+		try {
+			const inner = path.join(env.tmpDir, "outer", "inner");
+			fs.mkdirSync(inner, { recursive: true });
+			fs.writeFileSync(path.join(env.tmpDir, "outer", "sgconfig.yml"), "");
+			fs.writeFileSync(path.join(inner, "sgconfig.yml"), "");
+
+			const startDir = path.join(inner, "src");
+			fs.mkdirSync(startDir, { recursive: true });
+			const found = findLocalToolConfig(startDir, [
+				"sgconfig.yml",
+				"sgconfig.yaml",
+			]);
+			expect(found && path.resolve(found)).toBe(
+				path.resolve(inner, "sgconfig.yml"),
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("within a single directory, matches candidate names in list order", () => {
+		const env = setupTestEnvironment("pi-lens-find-tool-config-order-");
+		try {
+			fs.writeFileSync(path.join(env.tmpDir, "zizmor.yaml"), "");
+			fs.writeFileSync(path.join(env.tmpDir, "zizmor.yml"), "");
+			const startDir = path.join(env.tmpDir, "src");
+			fs.mkdirSync(startDir, { recursive: true });
+
+			const found = findLocalToolConfig(startDir, [
+				"zizmor.yml",
+				"zizmor.yaml",
+			]);
+			expect(found && path.resolve(found)).toBe(
+				path.resolve(env.tmpDir, "zizmor.yml"),
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("returns undefined when no candidate name is found anywhere up the tree", () => {
+		const env = setupTestEnvironment("pi-lens-find-tool-config-none-");
+		try {
+			const startDir = path.join(env.tmpDir, "src");
+			fs.mkdirSync(startDir, { recursive: true });
+			const found = findLocalToolConfig(startDir, [
+				"this-config-name-will-not-collide-XYZZY-pi-lens.toml",
+			]);
+			expect(found).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("falls back to process.cwd() when startDir is empty, matching prior per-tool behavior", () => {
+		const found = findLocalToolConfig("", [
+			"this-config-name-will-not-collide-XYZZY-pi-lens.toml",
+		]);
+		expect(found).toBeUndefined();
 	});
 });
 
