@@ -9,6 +9,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getProjectDataDir } from "../file-utils.js";
+import { readJsonCache } from "../json-cache-read.js";
 
 const CACHE_VERSION = "v3";
 
@@ -68,16 +69,18 @@ export class RuleCache {
 			this.ensureCacheDir();
 			if (!fs.existsSync(this.cacheFile)) return null;
 
-			const cached = JSON.parse(
-				fs.readFileSync(this.cacheFile, "utf-8"),
-			) as QueryCacheEntry;
 			const currentHash = this.computeRuleHash(ruleFiles);
-
-			if (cached.version !== CACHE_VERSION || cached.ruleHash !== currentHash) {
-				return null; // Cache invalid
-			}
-
-			return cached;
+			const cached = readJsonCache<QueryCacheEntry>(
+				this.cacheFile,
+				(parsed) => {
+					const entry = parsed as QueryCacheEntry;
+					if (entry.version !== CACHE_VERSION || entry.ruleHash !== currentHash) {
+						return undefined; // Cache invalid
+					}
+					return entry;
+				},
+			);
+			return cached ?? null;
 		} catch {
 			return null;
 		}

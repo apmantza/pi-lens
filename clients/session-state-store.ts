@@ -12,6 +12,7 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { getProjectDataDir } from "./file-utils.js";
+import { readJsonCacheAsync } from "./json-cache-read.js";
 import type { PersistedWidgetState } from "./widget-state.js";
 
 const STATE_VERSION = 1;
@@ -126,12 +127,12 @@ export async function loadSessionState(
 	sessionId: string | undefined,
 ): Promise<PersistedSessionState | undefined> {
 	if (!sessionId || !sessionId.trim()) return undefined;
-	try {
-		const raw = await fs.readFile(sessionFilePath(cwd, sessionId), "utf8");
-		const parsed = JSON.parse(raw) as PersistedSessionState;
-		if (parsed?.version !== STATE_VERSION || !parsed.widget) return undefined;
-		return parsed;
-	} catch {
-		return undefined;
-	}
+	return readJsonCacheAsync<PersistedSessionState>(
+		sessionFilePath(cwd, sessionId),
+		(parsed) => {
+			const state = parsed as PersistedSessionState;
+			if (state?.version !== STATE_VERSION || !state.widget) return undefined;
+			return state;
+		},
+	);
 }
