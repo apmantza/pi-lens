@@ -288,6 +288,10 @@ const lspRunner: RunnerDefinition = {
 		for (let i = 0; i < diagnostics.length; i++) {
 			const profile = findAuxiliaryProfileForSource(validLspDiags[i]?.source);
 			if (!profile) continue;
+			if (profile.skipTestFiles && ctx.fileRole === "test") {
+				suppressedIndices.add(i);
+				continue;
+			}
 			if (isAuxiliaryDiagnosticSuppressed(validLspDiags[i], content)) {
 				suppressedIndices.add(i);
 				continue;

@@ -51,6 +51,12 @@ export interface AuxiliaryLspProfile {
 	 *  the finding. Distinct from pi-lens's own `# pi-lens-ignore` — this honors the
 	 *  suppression syntax the tool's own users already know. */
 	isSuppressed?: (d: LSPDiagnostic, content: string) => boolean;
+	/** Drop this profile's findings on files with `fileRole: "test"` (#687).
+	 *  Mirrors a runner's own `skipTestFiles` — needed here too because a
+	 *  profile's diagnostics may arrive via the auxiliary LSP surface instead
+	 *  of (or as well as) an in-process runner, and that surface has no
+	 *  per-runner test-file gating of its own. */
+	skipTestFiles?: boolean;
 }
 
 /**
@@ -128,6 +134,11 @@ export const AUXILIARY_LSP_PROFILES: readonly AuxiliaryLspProfile[] = [
 		sourceMatch: /ast[-_]?grep/i,
 		killSwitchFlag: "no-ast-grep",
 		enabledByDefault: true,
+		// Matches the in-process ast-grep-napi runner's own `skipTestFiles: true`
+		// (#687) — that flag stops applying the moment the ast-grep binary is
+		// present, since the napi runner then skips entirely in favor of this
+		// LSP surface, which had no test-file gating of its own.
+		skipTestFiles: true,
 		// The ast-grep LSP runs either the repo's own sgconfig (when present) or
 		// pi-lens's shipped baseline sgconfig. In both cases the rule severity is
 		// deliberate, so preserve ast-grep's severity semantics: ERROR can block,

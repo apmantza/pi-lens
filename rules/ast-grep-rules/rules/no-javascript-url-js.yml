@@ -10,6 +10,18 @@ note: |
   so an unanchored `javascript:` would also match the substring inside
   `console.log("javascript: ...")` — the leading `"` is what makes it
   specific to string-literal values).
+
+  Excludes literals passed to `expect`/`it`/`test`/`describe` (and their
+  `.only`/`.skip`/`.each` variants): a test asserting that a guard REJECTS a
+  `javascript:` URL — e.g. `expect(openBrowser("javascript:...")).toBe(false)`
+  — is the adversarial input the code is meant to reject, not a real sink.
 rule:
   kind: string
   regex: '^"javascript:'
+  not:
+    inside:
+      stopBy: end
+      kind: call_expression
+      has:
+        field: function
+        regex: "^(expect|it|test|describe)(\\.\\w+)?$"
