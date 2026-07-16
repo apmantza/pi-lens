@@ -587,6 +587,241 @@ describe("runtime-agent-end deferred formatting", () => {
 		}
 	});
 
+	describe("pilens:autofix:start (#684)", () => {
+		function eligibleReport(
+			filePath: string,
+			projectSeqEnd: number,
+		): ActionableWarningsReport {
+			return {
+				generatedAt: new Date().toISOString(),
+				scope: "turn_delta",
+				sessionId: "s1",
+				turnIndex: 1,
+				projectSeqEnd,
+				deltaOnly: true,
+				includeLspCodeActions: true,
+				files: [
+					{
+						filePath,
+						displayPath: "app.ts",
+						warnings: [
+							{
+								id: "aw:1",
+								filePath,
+								displayPath: "app.ts",
+								severity: "warning",
+								tool: "eslint",
+								message: "unused var",
+								actions: [
+									{
+										title: "Remove unused variable",
+										hasEdit: true,
+										hasCommand: false,
+										autoFixEligible: true,
+									},
+								],
+								suppressed: false,
+								origin: "lsp",
+							},
+						],
+					},
+				],
+				summary: {
+					warnings: 1,
+					unsuppressed: 1,
+					suppressed: 0,
+					files: 1,
+					actions: 1,
+					autoFixEligible: 1,
+				},
+			};
+		}
+
+		it("publishes pilens:autofix:start with the eligible paths when the report is fresh and non-empty", async () => {
+			const env = setupTestEnvironment("pi-lens-agent-end-bus-autofix-start-");
+			try {
+				const filePath = createTempFile(env.tmpDir, "src/app.ts", "const x = 1;\n");
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				runtime.seedProjectSequence(1);
+				const report = eligibleReport(filePath, 1);
+				applyConservativeActionableWarningFixesMock.mockResolvedValueOnce({
+					considered: 1,
+					applied: 1,
+					changedFiles: [filePath],
+					skipped: [],
+				});
+
+				const emit = vi.fn();
+				wireFormatEventsBusEmitter(emit);
+
+				await handleAgentEnd({
+					ctxCwd: env.tmpDir,
+					getFlag: (name) =>
+						name === "lens-actionable-warning-autofix" || name === "no-lsp",
+					notify: vi.fn(),
+					dbg: vi.fn(),
+					runtime,
+					cacheManager: {
+						readCache: () => ({ data: report }),
+						addModifiedRange: vi.fn(),
+					} as any,
+					getFormatService: () =>
+						({ recordRead: () => {}, formatFile: vi.fn() }) as any,
+				});
+
+				expect(emit).toHaveBeenCalledWith(
+					"pilens:autofix:start",
+					expect.objectContaining({
+						v: 1,
+						source: "pi-lens",
+						fileCount: 1,
+						eligibleCount: 1,
+						paths: [filePath.replace(/\\/g, "/")],
+					}),
+				);
+			} finally {
+				resetFormatEventsPublish();
+				applyConservativeActionableWarningFixesMock.mockReset();
+				env.cleanup();
+			}
+		});
+
+		it("does not publish pilens:autofix:start when the cached report is stale", async () => {
+			const env = setupTestEnvironment("pi-lens-agent-end-bus-autofix-stale-");
+			try {
+				const filePath = createTempFile(env.tmpDir, "src/app.ts", "const x = 1;\n");
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				runtime.seedProjectSequence(2);
+				// projectSeqEnd (1) mismatches the current project seq (2) — stale.
+				const report = eligibleReport(filePath, 1);
+
+				const emit = vi.fn();
+				wireFormatEventsBusEmitter(emit);
+
+				await handleAgentEnd({
+					ctxCwd: env.tmpDir,
+					getFlag: (name) =>
+						name === "lens-actionable-warning-autofix" || name === "no-lsp",
+					notify: vi.fn(),
+					dbg: vi.fn(),
+					runtime,
+					cacheManager: {
+						readCache: () => ({ data: report }),
+						addModifiedRange: vi.fn(),
+					} as any,
+					getFormatService: () =>
+						({ recordRead: () => {}, formatFile: vi.fn() }) as any,
+				});
+
+				expect(emit).not.toHaveBeenCalledWith(
+					"pilens:autofix:start",
+					expect.anything(),
+				);
+				expect(applyConservativeActionableWarningFixesMock).not.toHaveBeenCalled();
+			} finally {
+				resetFormatEventsPublish();
+				applyConservativeActionableWarningFixesMock.mockReset();
+				env.cleanup();
+			}
+		});
+
+		it("does not publish pilens:autofix:start when the cached report is missing", async () => {
+			const env = setupTestEnvironment("pi-lens-agent-end-bus-autofix-missing-");
+			try {
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+
+				const emit = vi.fn();
+				wireFormatEventsBusEmitter(emit);
+
+				await handleAgentEnd({
+					ctxCwd: env.tmpDir,
+					getFlag: (name) =>
+						name === "lens-actionable-warning-autofix" || name === "no-lsp",
+					notify: vi.fn(),
+					dbg: vi.fn(),
+					runtime,
+					cacheManager: {
+						readCache: () => undefined,
+						addModifiedRange: vi.fn(),
+					} as any,
+					getFormatService: () =>
+						({ recordRead: () => {}, formatFile: vi.fn() }) as any,
+				});
+
+				expect(emit).not.toHaveBeenCalledWith(
+					"pilens:autofix:start",
+					expect.anything(),
+				);
+			} finally {
+				resetFormatEventsPublish();
+				env.cleanup();
+			}
+		});
+
+		it("does not publish pilens:autofix:start when the report is fresh but has no autofix-eligible warnings", async () => {
+			const env = setupTestEnvironment("pi-lens-agent-end-bus-autofix-empty-");
+			try {
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				runtime.seedProjectSequence(1);
+				const report: ActionableWarningsReport = {
+					generatedAt: new Date().toISOString(),
+					scope: "turn_delta",
+					sessionId: "s1",
+					turnIndex: 1,
+					projectSeqEnd: 1,
+					deltaOnly: true,
+					includeLspCodeActions: true,
+					files: [],
+					summary: {
+						warnings: 0,
+						unsuppressed: 0,
+						suppressed: 0,
+						files: 0,
+						actions: 0,
+						autoFixEligible: 0,
+					},
+				};
+				applyConservativeActionableWarningFixesMock.mockResolvedValueOnce({
+					considered: 0,
+					applied: 0,
+					changedFiles: [],
+					skipped: [],
+				});
+
+				const emit = vi.fn();
+				wireFormatEventsBusEmitter(emit);
+
+				await handleAgentEnd({
+					ctxCwd: env.tmpDir,
+					getFlag: (name) =>
+						name === "lens-actionable-warning-autofix" || name === "no-lsp",
+					notify: vi.fn(),
+					dbg: vi.fn(),
+					runtime,
+					cacheManager: {
+						readCache: () => ({ data: report }),
+						addModifiedRange: vi.fn(),
+					} as any,
+					getFormatService: () =>
+						({ recordRead: () => {}, formatFile: vi.fn() }) as any,
+				});
+
+				expect(emit).not.toHaveBeenCalledWith(
+					"pilens:autofix:start",
+					expect.anything(),
+				);
+			} finally {
+				resetFormatEventsPublish();
+				applyConservativeActionableWarningFixesMock.mockReset();
+				env.cleanup();
+			}
+		});
+	});
+
 	describe("#484 turn-summary collection gate", () => {
 		it("does not record deferred-format events on the turn-summary collector when lens-turn-summary is off (default)", async () => {
 			const env = setupTestEnvironment("pi-lens-agent-end-summary-off-");

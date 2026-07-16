@@ -1,6 +1,6 @@
 /**
- * Publishes `pilens:format:queued` and `pilens:format:start` on pi's shared
- * `pi.events` bus (#673).
+ * Publishes `pilens:format:queued`, `pilens:format:start`, and
+ * `pilens:autofix:start` on pi's shared `pi.events` bus (#673, #684).
  *
  * Sibling to `clients/bus-publish.ts` (#482 `pilens:files:touched`) and
  * `clients/diagnostics-publish.ts` (#502 `pilens:diagnostics`) rather than a
@@ -38,11 +38,28 @@
  * `pilens:files:touched` (`reason: "format"`) event; these two do not
  * duplicate it.
  *
+ * ## `pilens:autofix:start` (#684)
+ *
+ * Follow-up to #673/#674, applying the identical fix to a sibling race: the
+ * `agent_end` actionable-warnings autofix batch (`clients/runtime-agent-end.ts`,
+ * gated by `getFlag("lens-actionable-warning-autofix")`) also reads a cached
+ * report and applies fixes as a batch well after the edit that produced the
+ * warnings — same "runs later, unpredictably" shape as deferred formatting.
+ * It only emitted `pilens:files:touched` (`reason: "autofix"`) AFTER the fact.
+ * `pilens:autofix:start` fires once per batch, only when the cached
+ * actionable-warnings report is fresh (`checkActionableWarningsReportFresh`)
+ * AND has at least one autofix-eligible warning to act on — mirroring
+ * `pilens:format:start`'s "only when there's genuine work" gate. Note: this is
+ * distinct from `pipeline.ts`'s per-edit `runAutofix` (biome/ruff/eslint fixes
+ * applied synchronously inside the `tool_result` hook, awaited before the
+ * tool result returns) — that path isn't deferred and doesn't have this race,
+ * so it doesn't get a `start` event.
+ *
  * Versioning policy: frozen-additive per event, same discipline as #482/#502.
- * New optional fields may be added under the same `v: 1` for either event; a
- * breaking change to an existing field's meaning must bump that event's `v`
- * independently (the two events version separately since they're unrelated
- * payloads).
+ * New optional fields may be added under the same `v: 1` for any of the three
+ * events; a breaking change to an existing field's meaning must bump that
+ * event's `v` independently (each event versions separately since they're
+ * unrelated payloads).
  *
  * Fire-and-forget: publishing must never affect the write path's or
  * `agent_end`'s success or latency. Any failure (bus unavailable, emit
@@ -60,6 +77,9 @@ export const BUS_FORMAT_QUEUED_VERSION = 1;
 export const BUS_FORMAT_START_EVENT = "pilens:format:start";
 export const BUS_FORMAT_START_VERSION = 1;
 
+export const BUS_AUTOFIX_START_EVENT = "pilens:autofix:start";
+export const BUS_AUTOFIX_START_VERSION = 1;
+
 export interface FormatQueuedPayload {
 	v: typeof BUS_FORMAT_QUEUED_VERSION;
 	source: "pi-lens";
@@ -76,6 +96,15 @@ export interface FormatStartPayload {
 	fileCount: number;
 }
 
+export interface AutofixStartPayload {
+	v: typeof BUS_AUTOFIX_START_VERSION;
+	source: "pi-lens";
+	cwd: string;
+	paths: string[];
+	fileCount: number;
+	eligibleCount: number;
+}
+
 type BusEmitFn = (channel: string, data: unknown) => void;
 
 let busEmit: BusEmitFn | undefined;
@@ -85,6 +114,9 @@ let hasLoggedQueuedDisabled = false;
 let hasLoggedStartFailure = false;
 let hasLoggedStartUnwired = false;
 let hasLoggedStartDisabled = false;
+let hasLoggedAutofixStartFailure = false;
+let hasLoggedAutofixStartUnwired = false;
+let hasLoggedAutofixStartDisabled = false;
 
 /**
  * Wire the emit function from pi's `pi.events` bus. Called once at extension
@@ -105,6 +137,9 @@ export function _resetFormatEventsPublishForTests(): void {
 	hasLoggedStartFailure = false;
 	hasLoggedStartUnwired = false;
 	hasLoggedStartDisabled = false;
+	hasLoggedAutofixStartFailure = false;
+	hasLoggedAutofixStartUnwired = false;
+	hasLoggedAutofixStartDisabled = false;
 }
 
 export interface PublishFormatQueuedArgs {
@@ -242,6 +277,82 @@ export function publishFormatStart(args: PublishFormatStartArgs): void {
 			hasLoggedStartFailure = true;
 			args.dbg?.(
 				`format-events-publish: pilens:format:start emit failed (further failures suppressed): ${err}`,
+			);
+		}
+	}
+}
+
+export interface PublishAutofixStartArgs {
+	cwd: string;
+	paths: string[];
+	eligibleCount: number;
+	dbg?: (msg: string) => void;
+}
+
+/**
+ * Publish one `pilens:autofix:start` event when the `agent_end`
+ * actionable-warnings autofix batch begins (#684). Callers MUST only invoke
+ * this when `paths.length > 0` — i.e. after the cached report has been
+ * confirmed fresh (`checkActionableWarningsReportFresh`) AND has at least one
+ * autofix-eligible warning to act on, the same "genuine work" gate
+ * `publishFormatStart` applies for deferred formatting — see
+ * `clients/runtime-agent-end.ts`'s call site, placed immediately before
+ * `applyConservativeActionableWarningFixes` is invoked. Fire-and-forget:
+ * never throws, never awaited by `agent_end`.
+ */
+export function publishAutofixStart(args: PublishAutofixStartArgs): void {
+	if (args.paths.length === 0) return;
+	if (!isBusPublishEnabled()) {
+		if (!hasLoggedAutofixStartDisabled) {
+			hasLoggedAutofixStartDisabled = true;
+			logBusEvent({
+				event: BUS_AUTOFIX_START_EVENT,
+				outcome: "skipped_disabled",
+				cwd: normalizeFilePath(args.cwd),
+			});
+		}
+		return;
+	}
+	if (!busEmit) {
+		if (!hasLoggedAutofixStartUnwired) {
+			hasLoggedAutofixStartUnwired = true;
+			logBusEvent({
+				event: BUS_AUTOFIX_START_EVENT,
+				outcome: "skipped_unwired",
+				cwd: normalizeFilePath(args.cwd),
+			});
+		}
+		return;
+	}
+
+	try {
+		const paths = args.paths.map((p) => normalizeFilePath(p));
+		const payload: AutofixStartPayload = {
+			v: BUS_AUTOFIX_START_VERSION,
+			source: "pi-lens",
+			cwd: normalizeFilePath(args.cwd),
+			paths,
+			fileCount: paths.length,
+			eligibleCount: args.eligibleCount,
+		};
+		busEmit(BUS_AUTOFIX_START_EVENT, payload);
+		logBusEvent({
+			event: BUS_AUTOFIX_START_EVENT,
+			outcome: "emitted",
+			cwd: payload.cwd,
+			fileCount: payload.fileCount,
+		});
+	} catch (err) {
+		logBusEvent({
+			event: BUS_AUTOFIX_START_EVENT,
+			outcome: "emit_failed",
+			cwd: normalizeFilePath(args.cwd),
+			error: String(err),
+		});
+		if (!hasLoggedAutofixStartFailure) {
+			hasLoggedAutofixStartFailure = true;
+			args.dbg?.(
+				`format-events-publish: pilens:autofix:start emit failed (further failures suppressed): ${err}`,
 			);
 		}
 	}

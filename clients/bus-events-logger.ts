@@ -45,7 +45,8 @@ export type BusEventName =
 	| "pilens:files:touched"
 	| "pilens:diagnostics"
 	| "pilens:format:queued"
-	| "pilens:format:start";
+	| "pilens:format:start"
+	| "pilens:autofix:start";
 
 export type BusEventOutcome =
 	| "emitted"

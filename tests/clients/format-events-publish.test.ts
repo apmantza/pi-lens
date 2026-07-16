@@ -7,10 +7,13 @@ vi.mock("../../clients/bus-events-logger.js", () => ({
 
 import {
 	_resetFormatEventsPublishForTests,
+	BUS_AUTOFIX_START_EVENT,
+	BUS_AUTOFIX_START_VERSION,
 	BUS_FORMAT_QUEUED_EVENT,
 	BUS_FORMAT_QUEUED_VERSION,
 	BUS_FORMAT_START_EVENT,
 	BUS_FORMAT_START_VERSION,
+	publishAutofixStart,
 	publishFormatQueued,
 	publishFormatStart,
 	wireFormatEventsBusEmitter,
@@ -266,6 +269,137 @@ describe("format-events-publish — pilens:format:queued / pilens:format:start (
 			expect(logBusEvent).toHaveBeenCalledWith(
 				expect.objectContaining({
 					event: BUS_FORMAT_START_EVENT,
+					outcome: "emitted",
+					fileCount: 3,
+				}),
+			);
+		});
+	});
+
+	describe("pilens:autofix:start (#684)", () => {
+		it("no-ops when never wired", () => {
+			expect(() =>
+				publishAutofixStart({
+					cwd: "/repo",
+					paths: ["/repo/a.ts"],
+					eligibleCount: 1,
+				}),
+			).not.toThrow();
+		});
+
+		it("emits the exact payload shape: v, source, cwd, paths, fileCount, eligibleCount", () => {
+			const emit = vi.fn();
+			wireFormatEventsBusEmitter(emit);
+
+			publishAutofixStart({
+				cwd: "/repo",
+				paths: ["/repo/a.ts", "/repo/b.ts"],
+				eligibleCount: 3,
+			});
+
+			expect(emit).toHaveBeenCalledTimes(1);
+			const [channel, payload] = emit.mock.calls[0] as [
+				string,
+				Record<string, unknown>,
+			];
+			expect(channel).toBe(BUS_AUTOFIX_START_EVENT);
+			expect(payload).toMatchObject({
+				v: BUS_AUTOFIX_START_VERSION,
+				source: "pi-lens",
+				fileCount: 2,
+				eligibleCount: 3,
+			});
+			expect(payload.paths).toHaveLength(2);
+		});
+
+		it("does not emit for an empty paths batch", () => {
+			const emit = vi.fn();
+			wireFormatEventsBusEmitter(emit);
+
+			publishAutofixStart({ cwd: "/repo", paths: [], eligibleCount: 0 });
+
+			expect(emit).not.toHaveBeenCalled();
+		});
+
+		it("does not log anything for an empty paths batch", () => {
+			publishAutofixStart({ cwd: "/repo", paths: [], eligibleCount: 0 });
+			expect(logBusEvent).not.toHaveBeenCalled();
+		});
+
+		it("normalizes paths and cwd", () => {
+			const emit = vi.fn();
+			wireFormatEventsBusEmitter(emit);
+
+			publishAutofixStart({
+				cwd: "C:\\repo",
+				paths: ["C:\\repo\\a.ts"],
+				eligibleCount: 1,
+			});
+
+			const payload = emit.mock.calls[0][1] as {
+				paths: string[];
+				cwd: string;
+			};
+			expect(payload.paths[0]).not.toContain("\\");
+			expect(payload.cwd).not.toContain("\\");
+		});
+
+		it("kill switch: PI_LENS_BUS_PUBLISH=0 disables publishing", () => {
+			process.env.PI_LENS_BUS_PUBLISH = "0";
+			_resetBusPublishForTests();
+			const emit = vi.fn();
+			wireFormatEventsBusEmitter(emit);
+
+			publishAutofixStart({
+				cwd: "/repo",
+				paths: ["/repo/a.ts"],
+				eligibleCount: 1,
+			});
+
+			expect(emit).not.toHaveBeenCalled();
+		});
+
+		it("swallows emit throws and logs once via dbg without affecting the caller", () => {
+			const emit = vi.fn(() => {
+				throw new Error("bus explosion");
+			});
+			wireFormatEventsBusEmitter(emit);
+			const dbg = vi.fn();
+
+			expect(() =>
+				publishAutofixStart({
+					cwd: "/repo",
+					paths: ["/repo/a.ts"],
+					eligibleCount: 1,
+					dbg,
+				}),
+			).not.toThrow();
+			expect(dbg).toHaveBeenCalledTimes(1);
+
+			expect(() =>
+				publishAutofixStart({
+					cwd: "/repo",
+					paths: ["/repo/b.ts"],
+					eligibleCount: 1,
+					dbg,
+				}),
+			).not.toThrow();
+			expect(dbg).toHaveBeenCalledTimes(1);
+		});
+
+		it("logs 'emitted' with the file count on a successful emit", () => {
+			const emit = vi.fn();
+			wireFormatEventsBusEmitter(emit);
+
+			publishAutofixStart({
+				cwd: "/repo",
+				paths: ["/repo/a.ts", "/repo/b.ts", "/repo/c.ts"],
+				eligibleCount: 5,
+			});
+
+			expect(logBusEvent).toHaveBeenCalledWith(
+				expect.objectContaining({
+					event: BUS_AUTOFIX_START_EVENT,
 					outcome: "emitted",
 					fileCount: 3,
 				}),

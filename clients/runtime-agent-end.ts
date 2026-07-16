@@ -10,7 +10,10 @@ import type { FormatService } from "./format-service.js";
 import { logLatency } from "./latency-logger.js";
 import { resyncLspFile, runFormatPhase } from "./pipeline.js";
 import { publishFilesTouched } from "./bus-publish.js";
-import { publishFormatStart } from "./format-events-publish.js";
+import {
+	publishAutofixStart,
+	publishFormatStart,
+} from "./format-events-publish.js";
 import {
 	appendProjectChange,
 	type ProjectChangeSource,
@@ -285,6 +288,26 @@ export async function handleAgentEnd({
 					`agent_end actionable_warnings_autofix: stale report (${freshness.reason}; reportProjectSeqEnd=${freshness.reportProjectSeqEnd ?? "missing"}; currentProjectSeq=${freshness.currentProjectSeq}${freshness.filePath ? `; file=${freshness.filePath}; reportFileSeq=${freshness.reportFileSeq}; currentFileSeq=${freshness.currentFileSeq}` : ""}), skipping fixes`,
 				);
 			} else {
+				// #684: same "genuine work about to happen" gate as
+				// publishFormatStart — only fires when the report is fresh AND
+				// has at least one autofix-eligible warning, right before
+				// applyConservativeActionableWarningFixes actually starts.
+				if (actionReport.data.summary.autoFixEligible > 0) {
+					publishAutofixStart({
+						cwd: ctxCwd ?? runtime.projectRoot,
+						paths: actionReport.data.files
+							.filter((file) =>
+								file.warnings.some(
+									(warning) =>
+										!warning.suppressed &&
+										warning.actions.some((action) => action.autoFixEligible),
+								),
+							)
+							.map((file) => file.filePath),
+						eligibleCount: actionReport.data.summary.autoFixEligible,
+						dbg,
+					});
+				}
 				const fixStart = Date.now();
 				const fixSummary = await applyConservativeActionableWarningFixes({
 					cwd: ctxCwd ?? runtime.projectRoot,
