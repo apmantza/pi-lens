@@ -1089,10 +1089,15 @@ export async function computeCascadeForFile(
 				continue;
 			}
 
+			// #692: `source: "cascade"` used to be passed here to label `rule`
+			// (`cascade:<code>`) — that override is gone (identity must come from
+			// the diagnostic's own source; see `scanOrigin`'s doc comment), and
+			// cascade neighbor diagnostics are ephemeral display-only output
+			// (never reconciled into persisted widget/dedup state), so the label
+			// had no remaining purpose and is simply dropped rather than migrated.
 			const diags = convertLspDiagnostics(
 				entry.diags.filter((d) => d.severity === 1).slice(0, MAX_PER_FILE),
 				neighborPath,
-				{ source: "cascade" },
 			);
 			producedLspData = true;
 			const durationMs = Date.now() - neighborStart;
@@ -1287,10 +1292,13 @@ export async function computeCascadeForFile(
 					clientScope: "all",
 				});
 				if (!rawDiags) return undefined;
+				// #692: `source: "cascade"` no longer overrides `rule` (see the
+				// doc comment on the sibling call above) — dropped rather than
+				// migrated to `scanOrigin` since cascade output never touches
+				// persisted widget/dedup state.
 				const diags = convertLspDiagnostics(
 					rawDiags.filter((d) => d.severity === 1).slice(0, MAX_PER_FILE),
 					neighborPath,
-					{ source: "cascade" },
 				);
 				const durationMs = Date.now() - neighborStart;
 
@@ -1352,6 +1360,9 @@ export async function computeCascadeForFile(
 					error: String(result.reason),
 				});
 				const entry = allDiags.get(normalizeMapKey(neighborPath));
+				// #692: `source: "cascade"` dropped (see the doc comment above the
+				// first cascade call site in this file) — no longer affects `rule`
+				// and cascade output never touches persisted widget/dedup state.
 				const diags =
 					entry && Date.now() - entry.ts < CASCADE_TTL_MS
 						? convertLspDiagnostics(
@@ -1359,7 +1370,6 @@ export async function computeCascadeForFile(
 									.filter((d) => d.severity === 1)
 									.slice(0, MAX_PER_FILE),
 								neighborPath,
-								{ source: "cascade" },
 							)
 						: [];
 				neighbors.push({
@@ -1506,10 +1516,11 @@ function appendFallbackNeighbors(
 		if (isIgnoredCascadeNeighbor(diagPath, cwd)) continue;
 		if (!nodeFs.existsSync(diagPath)) continue;
 		if (now - ts > CASCADE_TTL_MS) continue;
+		// #692: `source: "cascade"` dropped — see the doc comment above the
+		// first cascade `convertLspDiagnostics` call site in this file.
 		const errors = convertLspDiagnostics(
 			diags.filter((d) => d.severity === 1).slice(0, MAX_PER_FILE),
 			diagPath,
-			{ source: "cascade" },
 		);
 		if (errors.length === 0) continue;
 		neighbors.push({

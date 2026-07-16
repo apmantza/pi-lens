@@ -20,6 +20,7 @@ import {
 } from "../file-utils.js";
 import { recordLsp } from "../widget-state.js";
 import { applyAuxiliarySuppressions } from "../dispatch/auxiliary-lsp.js";
+import { detectFileRole } from "../file-role.js";
 import { logLatency } from "../latency-logger.js";
 import { withDeadline } from "../deadline-utils.js";
 import { normalizeMapKey, uriToPath } from "../path-utils.js";
@@ -2728,8 +2729,17 @@ export class LSPService {
 				// `.inconclusive` flag, already read above) so a `lens_diagnostics
 				// mode=full` sweep suppresses the same findings the per-edit dispatch
 				// runner does, instead of only the latter honoring it.
+				// #692: also honor a profile's `skipTestFiles` gate (e.g. ast-grep,
+				// #687/#688) — those PRs added the gate only to the per-edit merge
+				// loop (`clients/dispatch/runners/lsp.ts`), so a `mode=full` sweep
+				// re-surfaced every ast-grep finding on `*.test.ts` files wholesale,
+				// duplicating what the per-edit path already suppresses. `content`
+				// was already read above for this file, so `detectFileRole` gets the
+				// higher-accuracy content-aware classification at no extra cost.
 				const filteredDiagnostics = diagnostics
-					? applyAuxiliarySuppressions(diagnostics, content)
+					? applyAuxiliarySuppressions(diagnostics, content, {
+							fileRole: detectFileRole(filePath, content),
+						})
 					: diagnostics;
 				results.push({
 					filePath,
