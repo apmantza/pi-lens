@@ -532,8 +532,15 @@ describe("parseUntrackedIgnoredOutput", () => {
 
 		const ids = parseUntrackedIgnoredOutput(stdout, cwd);
 
-		expect(ids.has(idFor("clients/orphan.js"))).toBe(true);
-		expect(ids.has(idFor("scripts/tmp-probe.mjs"))).toBe(true);
+		// The helper normalizes cwd-joined ABSOLUTE paths — the expectation must
+		// do the same. `idFor` on a bare relative path only happened to match on
+		// Windows (where normalizeFilePath realpath-resolves relative input
+		// against cwd); on POSIX it returns the relative string unchanged, so
+		// the two forms never compare equal (the CI-only failure this comment
+		// guards against).
+		const absIdFor = (p: string) => normalizeMapKey(path.join(cwd, p));
+		expect(ids.has(absIdFor("clients/orphan.js"))).toBe(true);
+		expect(ids.has(absIdFor("scripts/tmp-probe.mjs"))).toBe(true);
 		expect(ids.size).toBe(2);
 	});
 
