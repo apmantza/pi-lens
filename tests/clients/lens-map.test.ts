@@ -1,0 +1,404 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+	aggregateGraphToFiles,
+	computeLayout,
+	generateLensMap,
+	renderMapHtml,
+	type FileMapEdge,
+	type FileMapNode,
+	type LensMapPayload,
+} from "../../clients/lens-map.js";
+import { normalizeMapKey } from "../../clients/path-utils.js";
+import type {
+	ReviewGraph,
+	ReviewGraphEdge,
+	ReviewGraphNode,
+} from "../../clients/review-graph/types.js";
+
+// aggregateGraphToFiles keys files via normalizeMapKey (same as the rest of the
+// review-graph stack) — on Windows that resolves a relative path like "a.ts"
+// against cwd and lowercases it, so tests compare against the SAME
+// normalization rather than hardcoding a platform-specific literal.
+const idFor = (p: string) => normalizeMapKey(p);
+
+/** Build a minimal ReviewGraph from nodes + edges (mirrors
+ * tests/clients/review-graph/transitive-impact.test.ts's makeGraph). */
+function makeGraph(
+	nodes: ReviewGraphNode[],
+	edges: ReviewGraphEdge[],
+): ReviewGraph {
+	const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+	const edgesByTo = new Map<string, ReviewGraphEdge[]>();
+	const edgesByFrom = new Map<string, ReviewGraphEdge[]>();
+	for (const edge of edges) {
+		(edgesByTo.get(edge.to) ?? edgesByTo.set(edge.to, []).get(edge.to))?.push(
+			edge,
+		);
+		(
+			edgesByFrom.get(edge.from) ??
+			edgesByFrom.set(edge.from, []).get(edge.from)
+		)?.push(edge);
+	}
+	return {
+		version: "v4",
+		builtAt: new Date().toISOString(),
+		nodes: nodeMap,
+		edges,
+		edgesByFrom,
+		edgesByTo,
+		fileNodes: new Map(),
+		symbolNodesByFile: new Map(),
+		changedSymbolsByFile: new Map(),
+	};
+}
+
+describe("aggregateGraphToFiles", () => {
+	it("collapses symbol nodes to file nodes and dedupes/weights symbol edges to file edges", () => {
+		const nodes: ReviewGraphNode[] = [
+			{ id: "a#file", kind: "file", language: "ts", filePath: "a.ts" },
+			{ id: "b#file", kind: "file", language: "ts", filePath: "b.ts" },
+			{
+				id: "a#foo",
+				kind: "symbol",
+				language: "ts",
+				filePath: "a.ts",
+				symbolName: "foo",
+			},
+			{
+				id: "a#bar",
+				kind: "symbol",
+				language: "ts",
+				filePath: "a.ts",
+				symbolName: "bar",
+			},
+			{
+				id: "b#baz",
+				kind: "symbol",
+				language: "ts",
+				filePath: "b.ts",
+				symbolName: "baz",
+			},
+		];
+		const edges: ReviewGraphEdge[] = [
+			// Two distinct symbol-level calls from a.ts's symbols into b.ts's
+			// symbol — must collapse to ONE a.ts -> b.ts edge with weight 2.
+			{ from: "a#foo", to: "b#baz", kind: "calls" },
+			{ from: "a#bar", to: "b#baz", kind: "calls" },
+			// Same-file edges (contains/defines) must be dropped, not counted.
+			{ from: "a#file", to: "a#foo", kind: "contains" },
+			{ from: "a#file", to: "a#bar", kind: "defines" },
+		];
+
+		const result = aggregateGraphToFiles(makeGraph(nodes, edges));
+
+		expect(result.nodes.map((n) => n.id).sort()).toEqual(
+			[idFor("a.ts"), idFor("b.ts")].sort(),
+		);
+		const aNode = result.nodes.find((n) => n.id === idFor("a.ts"));
+		expect(aNode?.symbolCount).toBe(2);
+		expect(aNode?.outDegree).toBe(1);
+		const bNode = result.nodes.find((n) => n.id === idFor("b.ts"));
+		expect(bNode?.inDegree).toBe(1);
+		expect(bNode?.symbolCount).toBe(1);
+
+		expect(result.edges).toHaveLength(1);
+		expect(result.edges[0]).toMatchObject({
+			from: idFor("a.ts"),
+			to: idFor("b.ts"),
+			weight: 2,
+		});
+		expect(result.truncated).toBe(false);
+		expect(result.externalCount).toBe(0);
+		expect(result.testFileCount).toBe(0);
+	});
+
+	it("excludes test files (and their edges) from the map, counts them, and keeps ranking untainted", () => {
+		const nodes: ReviewGraphNode[] = [
+			{ id: "a#file", kind: "file", language: "ts", filePath: "a.ts" },
+			{
+				id: "foo.test#file",
+				kind: "file",
+				language: "ts",
+				filePath: "foo.test.ts",
+			},
+			{
+				id: "foo.test#sym",
+				kind: "symbol",
+				language: "ts",
+				filePath: "foo.test.ts",
+				symbolName: "itWorks",
+			},
+			// Non-test file with "test" merely in its name/dir — must be KEPT
+			// (detectFileRole's ".test."/"/test/" patterns require an exact
+			// segment match, not a bare substring).
+			{
+				id: "contest#file",
+				kind: "file",
+				language: "ts",
+				filePath: "contest.ts",
+			},
+		];
+		const edges: ReviewGraphEdge[] = [
+			// a.ts -> foo.test.ts: must disappear along with the excluded node.
+			{ from: "a#file", to: "foo.test#file", kind: "imports" },
+			{ from: "a#file", to: "contest#file", kind: "imports" },
+		];
+
+		const result = aggregateGraphToFiles(makeGraph(nodes, edges));
+
+		const ids = result.nodes.map((n) => n.id).sort();
+		expect(ids).toEqual([idFor("a.ts"), idFor("contest.ts")].sort());
+		expect(result.nodes.some((n) => n.id === idFor("foo.test.ts"))).toBe(
+			false,
+		);
+		expect(result.testFileCount).toBe(1);
+
+		// The edge into the excluded test file is gone; only the a->contest
+		// edge survives.
+		expect(result.edges).toHaveLength(1);
+		expect(result.edges[0]).toMatchObject({
+			from: idFor("a.ts"),
+			to: idFor("contest.ts"),
+		});
+
+		// Ranking (degree) must be computed AFTER exclusion: a.ts's outDegree
+		// only counts the surviving contest.ts edge, not the dropped test edge.
+		const aNode = result.nodes.find((n) => n.id === idFor("a.ts"));
+		expect(aNode?.outDegree).toBe(1);
+	});
+
+	it("excludes external kind nodes from the map but counts them", () => {
+		const nodes: ReviewGraphNode[] = [
+			{ id: "a#file", kind: "file", language: "ts", filePath: "a.ts" },
+			{
+				id: "a#foo",
+				kind: "symbol",
+				language: "ts",
+				filePath: "a.ts",
+				symbolName: "foo",
+			},
+			{ id: "external:lodash", kind: "external", language: "ts" },
+			{ id: "external:react", kind: "external", language: "ts" },
+		];
+		const edges: ReviewGraphEdge[] = [
+			{ from: "a#file", to: "external:lodash", kind: "imports" },
+			{ from: "a#file", to: "external:react", kind: "imports" },
+		];
+
+		const result = aggregateGraphToFiles(makeGraph(nodes, edges));
+
+		expect(result.nodes.map((n) => n.id)).toEqual([idFor("a.ts")]);
+		expect(result.edges).toHaveLength(0);
+		expect(result.externalCount).toBe(2);
+	});
+
+	it("computes transitive dependents over the rendered file graph", () => {
+		// c.ts -> b.ts -> a.ts (file-level imports chain)
+		const nodes: ReviewGraphNode[] = [
+			{ id: "a#file", kind: "file", language: "ts", filePath: "a.ts" },
+			{ id: "b#file", kind: "file", language: "ts", filePath: "b.ts" },
+			{ id: "c#file", kind: "file", language: "ts", filePath: "c.ts" },
+		];
+		const edges: ReviewGraphEdge[] = [
+			{ from: "b#file", to: "a#file", kind: "imports" },
+			{ from: "c#file", to: "b#file", kind: "imports" },
+		];
+
+		const result = aggregateGraphToFiles(makeGraph(nodes, edges));
+		const aNode = result.nodes.find((n) => n.id === idFor("a.ts"));
+		// b.ts (direct) + c.ts (transitive) both depend on a.ts.
+		expect(aNode?.dependents).toBe(2);
+		const cNode = result.nodes.find((n) => n.id === idFor("c.ts"));
+		expect(cNode?.dependents).toBe(0);
+	});
+
+	it("truncates to the highest-degree files and sets truncated:true", () => {
+		// hub.ts is imported by every leaf; leaves have degree 1, hub has degree 5.
+		const nodes: ReviewGraphNode[] = [
+			{ id: "hub#file", kind: "file", language: "ts", filePath: "hub.ts" },
+		];
+		const edges: ReviewGraphEdge[] = [];
+		for (let i = 0; i < 5; i += 1) {
+			const id = `leaf${i}.ts`;
+			nodes.push({
+				id: `leaf${i}#file`,
+				kind: "file",
+				language: "ts",
+				filePath: id,
+			});
+			edges.push({ from: `leaf${i}#file`, to: "hub#file", kind: "imports" });
+		}
+
+		const result = aggregateGraphToFiles(makeGraph(nodes, edges), {
+			maxNodes: 3,
+		});
+
+		expect(result.truncated).toBe(true);
+		expect(result.nodes).toHaveLength(3);
+		// hub.ts has the highest degree (5) and must survive the cut.
+		expect(result.nodes.some((n) => n.id === idFor("hub.ts"))).toBe(true);
+	});
+});
+
+describe("computeLayout", () => {
+	const nodes: FileMapNode[] = [
+		{
+			id: "a.ts",
+			path: "a.ts",
+			language: "ts",
+			symbolCount: 1,
+			inDegree: 0,
+			outDegree: 1,
+			dependents: 0,
+		},
+		{
+			id: "b.ts",
+			path: "b.ts",
+			language: "ts",
+			symbolCount: 1,
+			inDegree: 1,
+			outDegree: 1,
+			dependents: 1,
+		},
+		{
+			id: "c.ts",
+			path: "c.ts",
+			language: "ts",
+			symbolCount: 1,
+			inDegree: 1,
+			outDegree: 0,
+			dependents: 2,
+		},
+	];
+	const edges: FileMapEdge[] = [
+		{ from: "a.ts", to: "b.ts", weight: 1 },
+		{ from: "b.ts", to: "c.ts", weight: 2 },
+	];
+
+	it("is deterministic: identical input produces identical positions", () => {
+		const first = computeLayout(nodes, edges, { iterations: 60 });
+		const second = computeLayout(nodes, edges, { iterations: 60 });
+		expect(second).toEqual(first);
+	});
+
+	it("produces only finite coordinates", () => {
+		const layout = computeLayout(nodes, edges, { iterations: 60 });
+		expect(layout).toHaveLength(3);
+		for (const point of layout) {
+			expect(Number.isFinite(point.x)).toBe(true);
+			expect(Number.isFinite(point.y)).toBe(true);
+		}
+	});
+
+	it("handles an empty node list without error", () => {
+		expect(computeLayout([], [])).toEqual([]);
+	});
+});
+
+describe("renderMapHtml", () => {
+	function payload(overrides: Partial<LensMapPayload> = {}): LensMapPayload {
+		return {
+			generatedAt: new Date(0).toISOString(),
+			projectLabel: "demo",
+			fileCount: 1,
+			edgeCount: 0,
+			externalCount: 0,
+			testFileCount: 0,
+			truncated: false,
+			maxNodes: 500,
+			width: 1600,
+			height: 1200,
+			nodes: [
+				{
+					id: "a.ts",
+					path: "a.ts",
+					language: "ts",
+					symbolCount: 1,
+					inDegree: 0,
+					outDegree: 0,
+					dependents: 0,
+					x: 100,
+					y: 100,
+				},
+			],
+			edges: [],
+			...overrides,
+		};
+	}
+
+	it("escapes a malicious file name so it cannot break out of the JSON script tag", () => {
+		const malicious = '</script><img src=x onerror=alert(1)>';
+		const html = renderMapHtml(
+			payload({
+				nodes: [
+					{
+						id: malicious,
+						path: malicious,
+						language: "ts",
+						symbolCount: 0,
+						inDegree: 0,
+						outDegree: 0,
+						dependents: 0,
+						x: 0,
+						y: 0,
+					},
+				],
+			}),
+		);
+		expect(html).not.toContain("</script><img");
+		expect(html).toContain("\\u003c/script\\u003e");
+	});
+
+	it("contains the strict CSP meta tag and both light/dark accent colors", () => {
+		const html = renderMapHtml(payload());
+		expect(html).toContain('http-equiv="Content-Security-Policy"');
+		expect(html).toContain("default-src 'none'");
+		expect(html).toContain("#2563eb");
+		expect(html).toContain("#60a5fa");
+	});
+
+	it("never string-concatenates the CDN/script-src into an external host", () => {
+		const html = renderMapHtml(payload());
+		expect(html).not.toMatch(/script-src[^"]*https?:/);
+	});
+});
+
+describe("generateLensMap", () => {
+	let tmpDir: string;
+	let previousDataDir: string | undefined;
+
+	beforeEach(() => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-map-"));
+		previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(tmpDir, "data");
+	});
+
+	afterEach(() => {
+		if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+		else process.env.PILENS_DATA_DIR = previousDataDir;
+		fs.rmSync(tmpDir, { recursive: true, force: true });
+	});
+
+	it("writes a self-contained HTML file under the project data dir's reports/ folder", async () => {
+		const projectDir = path.join(tmpDir, "project");
+		fs.mkdirSync(projectDir, { recursive: true });
+		fs.writeFileSync(
+			path.join(projectDir, "a.ts"),
+			"export function foo() { return 1; }\n",
+			"utf-8",
+		);
+
+		const result = await generateLensMap(projectDir);
+
+		expect(fs.existsSync(result.filePath)).toBe(true);
+		expect(result.filePath.replace(/\\/g, "/")).toMatch(
+			/\/reports\/lens-map\.html$/,
+		);
+		const html = fs.readFileSync(result.filePath, "utf-8");
+		expect(html).toContain("<!doctype html>");
+		expect(html).toContain("lens-map-payload");
+	});
+});
