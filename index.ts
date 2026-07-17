@@ -615,9 +615,15 @@ export default function (pi: ExtensionAPI) {
 					result.testFileCount > 0
 						? `, ${result.testFileCount} test files excluded`
 						: "";
+				// Compiled twins (X.js merged into X.ts) only occur in
+				// compile-in-place projects — mention only when something merged.
+				const twinNote =
+					result.compiledTwinCount > 0
+						? `, ${result.compiledTwinCount} compiled twins merged`
+						: "";
 				const lines = [
 					`🗺️ Project map written to ${result.filePath}`,
-					`${result.fileCount} files, ${result.edgeCount} edges, ${result.externalCount} external deps excluded${testNote}.`,
+					`${result.fileCount} files, ${result.edgeCount} edges, ${result.externalCount} external deps excluded${testNote}${twinNote}.`,
 				];
 				if (result.truncated) {
 					lines.push(

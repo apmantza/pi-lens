@@ -57,6 +57,8 @@ export interface AggregatedFileGraph {
 	externalCount: number;
 	/** Count of distinct test files (per `detectFileRole`) excluded from the map. */
 	testFileCount: number;
+	/** Count of compiled twins (`X.js` with an `X.ts`/`X.tsx` sibling, etc.) merged into their source file's node. */
+	compiledTwinCount: number;
 	/** True when the source graph had more files than the node cap and the lowest-degree ones were dropped. */
 	truncated: boolean;
 }
@@ -106,32 +108,101 @@ export function aggregateGraphToFiles(
 	// computed entirely from the (post-exclusion) nodeToFile map.
 	const nodeToFile = new Map<string, string>();
 
+	// detectFileRole is pure on the path, and a file's many symbol nodes all
+	// share one path — cache per normalized id so the classification runs once
+	// per FILE, not once per node.
+	const isTestById = new Map<string, boolean>();
+	function isTestFile(id: string, filePath: string): boolean {
+		let isTest = isTestById.get(id);
+		if (isTest === undefined) {
+			isTest = detectFileRole(filePath) === "test";
+			isTestById.set(id, isTest);
+		}
+		return isTest;
+	}
+
+	// ── Pass 1: gather file identities (post test-exclusion) ────────────────
+	// Needed BEFORE aggregation because compiled-twin canonicalization (below)
+	// can only decide "does X.js have an X.ts sibling?" once the full set of
+	// file identities is known.
+	const allFileIds = new Set<string>();
 	for (const node of graph.nodes.values()) {
 		if (node.kind === "external") {
 			externalCount += 1;
 			continue;
 		}
-		if (node.kind === "file" && node.filePath) {
-			const id = normalizeMapKey(node.filePath);
-			if (detectFileRole(node.filePath) === "test") {
-				testFileIds.add(id);
-				continue;
+		if ((node.kind !== "file" && node.kind !== "symbol") || !node.filePath) {
+			continue;
+		}
+		const id = normalizeMapKey(node.filePath);
+		if (isTestFile(id, node.filePath)) {
+			testFileIds.add(id);
+			continue;
+		}
+		allFileIds.add(id);
+	}
+
+	// ── Pass 2: canonicalize compiled twins ─────────────────────────────────
+	// pi-lens (and many TS projects) compile in place, so the review graph's
+	// import resolution frequently lands on the compiled `X.js` sibling of an
+	// `X.ts` source. Rendering both as separate map nodes doubles the project
+	// and splits each file's edges across the pair. When BOTH the compiled
+	// form and a source twin exist as file identities, the compiled one is
+	// canonicalized onto the source: its symbols and ALL its edges remap onto
+	// the source node (merge, never drop — the compiled twin carries most
+	// import edges). Deterministic sibling families: .js → .ts (preferred)
+	// then .tsx; .mjs → .mts; .cjs → .cts. A compiled-looking file with no
+	// source twin (vendored deps, pure-JS projects) is untouched.
+	const COMPILED_TWIN_SOURCES: ReadonlyArray<
+		readonly [compiledExt: string, sourceExts: readonly string[]]
+	> = [
+		[".js", [".ts", ".tsx"]],
+		[".mjs", [".mts"]],
+		[".cjs", [".cts"]],
+	];
+	const canonicalOf = new Map<string, string>();
+	for (const id of allFileIds) {
+		for (const [compiledExt, sourceExts] of COMPILED_TWIN_SOURCES) {
+			if (!id.endsWith(compiledExt)) continue;
+			const stem = id.slice(0, id.length - compiledExt.length);
+			for (const sourceExt of sourceExts) {
+				const candidate = stem + sourceExt;
+				if (allFileIds.has(candidate)) {
+					canonicalOf.set(id, candidate);
+					break;
+				}
 			}
+			break;
+		}
+	}
+	const compiledTwinCount = canonicalOf.size;
+
+	// ── Pass 3: aggregate nodes under their canonical file identity ─────────
+	for (const node of graph.nodes.values()) {
+		if (node.kind === "external") continue; // counted in pass 1
+		if (node.kind === "file" && node.filePath) {
+			const raw = normalizeMapKey(node.filePath);
+			if (isTestById.get(raw)) continue;
+			const id = canonicalOf.get(raw) ?? raw;
 			nodeToFile.set(node.id, id);
 			const existing = files.get(id);
 			if (existing) {
-				existing.language = node.language || existing.language;
+				// A canonicalized (compiled-twin) node must not overwrite the
+				// source file's language — only fill a still-empty slot.
+				if (raw === id) {
+					existing.language = node.language || existing.language;
+				} else if (!existing.language) {
+					existing.language = node.language || "";
+				}
 			} else {
 				files.set(id, { id, path: id, language: node.language || "", symbolCount: 0 });
 			}
 			continue;
 		}
 		if (node.kind === "symbol" && node.filePath) {
-			const id = normalizeMapKey(node.filePath);
-			if (detectFileRole(node.filePath) === "test") {
-				testFileIds.add(id);
-				continue;
-			}
+			const raw = normalizeMapKey(node.filePath);
+			if (isTestById.get(raw)) continue;
+			const id = canonicalOf.get(raw) ?? raw;
 			nodeToFile.set(node.id, id);
 			const existing = files.get(id);
 			if (existing) {
@@ -152,7 +223,10 @@ export function aggregateGraphToFiles(
 	// Aggregate edges to file->file, deduped with a weight (#679: "keep a
 	// count as edge weight"). Same-file edges (a symbol's own `contains`/
 	// `defines` edge back to its file, or an intra-file call) are dropped —
-	// they're not informative at the file-map altitude.
+	// they're not informative at the file-map altitude. Because nodeToFile
+	// already maps compiled twins to their canonical source id, an edge that
+	// becomes self-referential only AFTER canonicalization (e.g. x.js → x.ts)
+	// collapses through the same fromFile === toFile check.
 	const edgeWeights = new Map<string, number>();
 	for (const edge of graph.edges) {
 		const fromFile = nodeToFile.get(edge.from);
@@ -250,7 +324,14 @@ export function aggregateGraphToFiles(
 		}))
 		.sort((a, b) => a.id.localeCompare(b.id));
 
-	return { nodes, edges: finalEdges, externalCount, testFileCount: testFileIds.size, truncated };
+	return {
+		nodes,
+		edges: finalEdges,
+		externalCount,
+		testFileCount: testFileIds.size,
+		compiledTwinCount,
+		truncated,
+	};
 }
 
 // ── Layout: deterministic force-directed simulation ─────────────────────────
@@ -441,6 +522,7 @@ export interface LensMapPayload {
 	edgeCount: number;
 	externalCount: number;
 	testFileCount: number;
+	compiledTwinCount: number;
 	truncated: boolean;
 	maxNodes: number;
 	width: number;
@@ -541,6 +623,7 @@ export function renderMapHtml(payload: LensMapPayload): string {
     <span><strong id="stat-edges">-</strong> edges</span>
     <span><strong id="stat-external">-</strong> external deps (excluded)</span>
     <span id="stat-testfiles-wrap" hidden><strong id="stat-testfiles">-</strong> test files (excluded)</span>
+    <span id="stat-twins-wrap" hidden><strong id="stat-twins">-</strong> compiled twins (merged into sources)</span>
     <span>generated <strong id="stat-generated">-</strong></span>
     <span id="stat-project"></span>
   </div>
@@ -584,6 +667,13 @@ export function renderMapHtml(payload: LensMapPayload): string {
     setText("stat-testfiles", String(payload.testFileCount));
     var tfWrap = document.getElementById("stat-testfiles-wrap");
     if (tfWrap) tfWrap.hidden = false;
+  }
+  // Compiled twins (X.js merged into its X.ts source) only occur in
+  // compile-in-place projects — hide the stat when nothing was merged.
+  if (payload.compiledTwinCount > 0) {
+    setText("stat-twins", String(payload.compiledTwinCount));
+    var twWrap = document.getElementById("stat-twins-wrap");
+    if (twWrap) twWrap.hidden = false;
   }
   setText("stat-generated", payload.generatedAt || "");
   setText("stat-project", payload.projectLabel || "");
@@ -768,6 +858,7 @@ export interface GenerateLensMapResult {
 	truncated: boolean;
 	externalCount: number;
 	testFileCount: number;
+	compiledTwinCount: number;
 }
 
 function resolveMaxNodes(): number {
@@ -832,6 +923,7 @@ export async function generateLensMap(
 		edgeCount: aggregated.edges.length,
 		externalCount: aggregated.externalCount,
 		testFileCount: aggregated.testFileCount,
+		compiledTwinCount: aggregated.compiledTwinCount,
 		truncated: aggregated.truncated,
 		maxNodes,
 		width,
@@ -853,5 +945,6 @@ export async function generateLensMap(
 		truncated: aggregated.truncated,
 		externalCount: aggregated.externalCount,
 		testFileCount: aggregated.testFileCount,
+		compiledTwinCount: aggregated.compiledTwinCount,
 	};
 }

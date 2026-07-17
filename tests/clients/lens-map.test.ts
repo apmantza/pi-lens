@@ -113,6 +113,78 @@ describe("aggregateGraphToFiles", () => {
 		expect(result.truncated).toBe(false);
 		expect(result.externalCount).toBe(0);
 		expect(result.testFileCount).toBe(0);
+		expect(result.compiledTwinCount).toBe(0);
+	});
+
+	it("merges compiled .js twins onto their .ts sources: nodes, symbols, and edges remap; self-edges collapse", () => {
+		const nodes: ReviewGraphNode[] = [
+			// a.ts is the source, with its own symbol; a.js is the compiled twin.
+			{ id: "a.ts#file", kind: "file", language: "ts", filePath: "a.ts" },
+			{
+				id: "a.ts#foo",
+				kind: "symbol",
+				language: "ts",
+				filePath: "a.ts",
+				symbolName: "foo",
+			},
+			{ id: "a.js#file", kind: "file", language: "js", filePath: "a.js" },
+			{
+				id: "a.js#foo",
+				kind: "symbol",
+				language: "js",
+				filePath: "a.js",
+				symbolName: "foo",
+			},
+			// b.js is compiled; b.ts exists as its source twin.
+			{ id: "b.js#file", kind: "file", language: "js", filePath: "b.js" },
+			{ id: "b.ts#file", kind: "file", language: "ts", filePath: "b.ts" },
+			// vendored.js has NO source twin — must be kept as-is.
+			{
+				id: "vendored#file",
+				kind: "file",
+				language: "js",
+				filePath: "vendored.js",
+			},
+		];
+		const edges: ReviewGraphEdge[] = [
+			// The compiled-twin import edge: must become b.ts -> a.ts.
+			{ from: "b.js#file", to: "a.js#file", kind: "imports" },
+			// Becomes self-referential after canonicalization (a.js -> a.ts):
+			// must be dropped like any other same-file edge.
+			{ from: "a.js#file", to: "a.ts#foo", kind: "imports" },
+			// vendored.js -> a.js: endpoint canonicalizes, edge survives remapped.
+			{ from: "vendored#file", to: "a.js#file", kind: "imports" },
+		];
+
+		const result = aggregateGraphToFiles(makeGraph(nodes, edges));
+
+		const ids = result.nodes.map((n) => n.id).sort();
+		expect(ids).toEqual(
+			[idFor("a.ts"), idFor("b.ts"), idFor("vendored.js")].sort(),
+		);
+		expect(result.nodes.some((n) => n.id === idFor("a.js"))).toBe(false);
+		expect(result.nodes.some((n) => n.id === idFor("b.js"))).toBe(false);
+		expect(result.compiledTwinCount).toBe(2); // a.js + b.js merged
+
+		// The b.js -> a.js edge remapped to b.ts -> a.ts; the post-canonical
+		// self-edge (a.js -> a.ts) is gone; vendored.js's edge remapped too.
+		expect(result.edges).toHaveLength(2);
+		expect(result.edges).toContainEqual({
+			from: idFor("b.ts"),
+			to: idFor("a.ts"),
+			weight: 1,
+		});
+		expect(result.edges).toContainEqual({
+			from: idFor("vendored.js"),
+			to: idFor("a.ts"),
+			weight: 1,
+		});
+
+		// Symbol counts merge: a.ts's own symbol + the twin a.js's symbol.
+		const aNode = result.nodes.find((n) => n.id === idFor("a.ts"));
+		expect(aNode?.symbolCount).toBe(2);
+		// The merged node keeps the SOURCE file's language.
+		expect(aNode?.language).toBe("ts");
 	});
 
 	it("excludes test files (and their edges) from the map, counts them, and keeps ranking untainted", () => {
@@ -307,6 +379,7 @@ describe("renderMapHtml", () => {
 			edgeCount: 0,
 			externalCount: 0,
 			testFileCount: 0,
+			compiledTwinCount: 0,
 			truncated: false,
 			maxNodes: 500,
 			width: 1600,
