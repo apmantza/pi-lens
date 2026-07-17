@@ -62,6 +62,7 @@ const EXPECTED_COMMANDS = [
 	"lens-context-toggle",
 	"lens-widget-toggle",
 	"lens-tdi",
+	"lens-map",
 	"lens-health",
 	"lens-tools",
 	"lens-allow-edit",

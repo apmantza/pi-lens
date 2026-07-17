@@ -1275,7 +1275,7 @@ function dedupeSamePositionSymbols(
 ): ExtractedSymbols["symbols"] {
 	const bestByKey = new Map<string, ExtractedSymbols["symbols"][number]>();
 	for (const symbol of symbols) {
-		const key = `${symbol.name} ${symbol.line} ${symbol.column}`;
+		const key = `${symbol.name}0000${symbol.line}0000${symbol.column}`;
 		const existing = bestByKey.get(key);
 		if (!existing) {
 			bestByKey.set(key, symbol);

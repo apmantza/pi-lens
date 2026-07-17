@@ -600,6 +600,52 @@ export default function (pi: ExtensionAPI) {
 		},
 	});
 
+	pi.registerCommand("lens-map", {
+		description:
+			"Render the review graph as a self-contained interactive HTML project map (pan/zoom/hover/click) and write it to disk. Usage: /lens-map",
+		handler: async (_args, ctx) => {
+			const cwd = ctx.cwd ?? process.cwd();
+			try {
+				const { generateLensMap } = await import("./clients/lens-map.js");
+				const result = await generateLensMap(cwd);
+				// testFileCount is normally 0 (the review graph excludes tests by
+				// role since #260) — only mention it when the map-level guard
+				// actually dropped something.
+				const testNote =
+					result.testFileCount > 0
+						? `, ${result.testFileCount} test files excluded`
+						: "";
+				// Compiled twins (X.js merged into X.ts) only occur in
+				// compile-in-place projects — mention only when something merged.
+				const twinNote =
+					result.compiledTwinCount > 0
+						? `, ${result.compiledTwinCount} compiled twins merged`
+						: "";
+				// Untracked-gitignored files dropped from the map (0 outside a
+				// git repo, where the filter degrades to a no-op).
+				const ignoredNote =
+					result.ignoredFileCount > 0
+						? `, ${result.ignoredFileCount} gitignored files excluded`
+						: "";
+				const lines = [
+					`🗺️ Project map written to ${result.filePath}`,
+					`${result.fileCount} files, ${result.edgeCount} edges, ${result.externalCount} external deps excluded${testNote}${twinNote}${ignoredNote}.`,
+				];
+				if (result.truncated) {
+					lines.push(
+						"Graph exceeded the map's node cap — showing the highest-degree files only (see the in-page note).",
+					);
+				}
+				ctx.ui.notify(lines.join("\n"), "info");
+			} catch (err) {
+				ctx.ui.notify(
+					`Failed to generate the project map: ${err instanceof Error ? err.message : String(err)}`,
+					"error",
+				);
+			}
+		},
+	});
+
 	pi.registerCommand("lens-health", {
 		description:
 			"Show pi-lens runtime health: pipeline crashes, slow runners, and last dispatch latency. Usage: /lens-health",
