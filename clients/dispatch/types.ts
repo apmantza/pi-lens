@@ -89,6 +89,16 @@ export interface Diagnostic {
 	matchedText?: string;
 	/** Tree-sitter AST node type of the match (e.g. "call_expression", "template_string") */
 	astNodeType?: string;
+	/**
+	 * #692: purely informational provenance label for a diagnostic reconciled
+	 * from a project-wide SCAN path (e.g. `"lens_diagnostics_full"`,
+	 * `"lsp_diagnostics"`) rather than the per-edit dispatch pipeline. This
+	 * field must NEVER participate in identity, dedup, or suppression —
+	 * `id`/`rule` always derive from the diagnostic's own real source (see
+	 * `convertLspDiagnostics`'s `scanOrigin` option). Absent for per-edit
+	 * diagnostics.
+	 */
+	scanOrigin?: string;
 }
 
 export interface DispatchResult {

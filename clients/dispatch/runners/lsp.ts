@@ -25,8 +25,7 @@ import type {
 import { convertLspDiagnostics } from "../utils/lsp-diagnostics.js";
 import {
 	enabledAuxiliaryLspServerIds,
-	findAuxiliaryProfileForSource,
-	isAuxiliaryDiagnosticSuppressed,
+	retagAuxiliaryDiagnostics,
 } from "../auxiliary-lsp.js";
 import { readFileContent } from "./utils.js";
 
@@ -280,39 +279,15 @@ const lspRunner: RunnerDefinition = {
 		// convertLspDiagnostics maps validLspDiags 1:1, so re-tag any
 		// auxiliary-sourced diagnostics (opengrep emits source "Semgrep", …) with
 		// their tool id + semantic policy — language-server diagnostics keep "lsp".
-		// blockingAllowed is per-workspace (e.g. curated repo rules), computed once.
-		const blockingAllowedByProfile = new Map<unknown, boolean>();
-		// Diagnostics dropped by the tool's NATIVE inline suppression (e.g. opengrep
-		// `# nosemgrep`, #441). Reuses `content` from the sync read above.
-		const suppressedIndices = new Set<number>();
-		for (let i = 0; i < diagnostics.length; i++) {
-			const profile = findAuxiliaryProfileForSource(validLspDiags[i]?.source);
-			if (!profile) continue;
-			if (profile.skipTestFiles && ctx.fileRole === "test") {
-				suppressedIndices.add(i);
-				continue;
-			}
-			if (isAuxiliaryDiagnosticSuppressed(validLspDiags[i], content)) {
-				suppressedIndices.add(i);
-				continue;
-			}
-			let blockingAllowed = blockingAllowedByProfile.get(profile);
-			if (blockingAllowed === undefined) {
-				blockingAllowed = profile.allowBlocking?.(ctx.cwd) ?? false;
-				blockingAllowedByProfile.set(profile, blockingAllowed);
-			}
-			const d = diagnostics[i];
-			d.tool = profile.tool;
-			d.semantic = profile.semantic(validLspDiags[i], { blockingAllowed });
-			if (d.semantic !== "blocking" && d.severity === "error") {
-				d.severity = "warning";
-			}
-			const defectClass = profile.defectClass?.(validLspDiags[i]);
-			if (defectClass) d.defectClass = defectClass;
-		}
-		const keptDiagnostics = suppressedIndices.size
-			? diagnostics.filter((_, i) => !suppressedIndices.has(i))
-			: diagnostics;
+		// #692: shared with the scan/sweep reconcile paths (`retagAuxiliaryDiagnostics`
+		// in `../auxiliary-lsp.js`) so a scan-reconciled aux finding gets identical
+		// tool/semantic/defectClass tagging instead of keeping tool "lsp".
+		const keptDiagnostics = retagAuxiliaryDiagnostics(
+			diagnostics,
+			validLspDiags,
+			content,
+			{ cwd: ctx.cwd, fileRole: ctx.fileRole },
+		);
 
 		const hasErrors = keptDiagnostics.some((d) => d.semantic === "blocking");
 		const resultSemantic = hasErrors

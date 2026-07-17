@@ -53,6 +53,8 @@ import {
 	type WidgetDiagnostic,
 } from "../clients/widget-state.js";
 import { convertLspDiagnostics } from "../clients/dispatch/utils/lsp-diagnostics.js";
+import { retagAuxiliaryDiagnostics } from "../clients/dispatch/auxiliary-lsp.js";
+import { detectFileRole } from "../clients/file-role.js";
 import { makeProgressReporter, scanningSummaryLine } from "./scan-progress.js";
 
 // The widget state exposes the full per-file diagnostic set; this is the tool's
@@ -1135,11 +1137,33 @@ async function formatFullMode(
 	// any unexpected throw is swallowed.
 	for (const result of confirmedLspResults) {
 		try {
+			// #692: provenance label ONLY — must never affect `rule`/identity (see
+			// `ConvertLspDiagnosticsOptions.scanOrigin`'s doc comment).
+			const diagnostics = convertLspDiagnostics(
+				result.diagnostics,
+				result.filePath,
+				{ scanOrigin: "lens_diagnostics_full" },
+			);
+			// #692: re-tag aux-sourced findings (ast-grep, opengrep, zizmor, typos)
+			// with their real tool id + semantic policy — the same treatment the
+			// per-edit dispatch runner gives them — so a scan-reconciled entry no
+			// longer keeps tool "lsp". No file content is read here (this loop
+			// only has `result.diagnostics`/`result.filePath` from the sweep, not
+			// the file body) — `detectFileRole` still classifies test files
+			// correctly from the path alone (its content-based checks only refine
+			// generated/stub detection), and native inline-suppression comments
+			// were already applied upstream by `runWorkspaceDiagnostics`
+			// (`applyAuxiliarySuppressions`), so an empty content string here is a
+			// safe no-op re-check rather than a behavior gap.
+			const retagged = retagAuxiliaryDiagnostics(
+				diagnostics,
+				result.diagnostics,
+				"",
+				{ cwd, fileRole: detectFileRole(result.filePath) },
+			);
 			reconcileScanDiagnostics(
 				result.filePath,
-				convertLspDiagnostics(result.diagnostics, result.filePath, {
-					source: "lens_diagnostics_full",
-				}),
+				retagged,
 				true,
 				nextWriteIndex?.(),
 			);

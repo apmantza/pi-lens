@@ -24,7 +24,11 @@ import {
 } from "../clients/lsp/workspace-diagnostics-cache.js";
 import { primaryServerId } from "../clients/lsp/config.js";
 import { combineAbortSignals } from "../clients/deadline-utils.js";
-import { applyAuxiliarySuppressions } from "../clients/dispatch/auxiliary-lsp.js";
+import {
+	applyAuxiliarySuppressions,
+	retagAuxiliaryDiagnostics,
+} from "../clients/dispatch/auxiliary-lsp.js";
+import { detectFileRole } from "../clients/file-role.js";
 import type { LSPDiagnostic } from "../clients/lsp/client.js";
 import { classifyCascadeWaitTier } from "../clients/lsp/cascade-tier.js";
 import { convertLspDiagnostics } from "../clients/dispatch/utils/lsp-diagnostics.js";
@@ -563,6 +567,7 @@ export function createLspDiagnosticsTool(
 				waitMs,
 				nextWriteIndex,
 				serverScope,
+				cwd,
 			);
 		},
 	};
@@ -579,6 +584,13 @@ type DiagnosticsCollectionResult = {
 	 * bare 0.
 	 */
 	timedOut: boolean;
+	/**
+	 * #692: the file content read while collecting (undefined only when the
+	 * read itself failed) — reused by the widget-reconcile caller so it can
+	 * derive `fileRole` for `retagAuxiliaryDiagnostics`'s `skipTestFiles` gate
+	 * without a second disk read.
+	 */
+	content?: string;
 };
 
 async function collectDiagnosticsForFile(
@@ -662,13 +674,19 @@ async function collectDiagnosticsForFile(
 	// #586: honor each auxiliary profile's native inline-suppression comment
 	// (e.g. opengrep's `// nosemgrep`, #441) the same way the per-edit dispatch
 	// runner does — previously this standalone query path ignored it entirely.
-	// `content` is only unset if the read itself failed above; fail-open (no
-	// filtering) rather than lose diagnostics over an unrelated read error.
+	// #692: also honor a profile's `skipTestFiles` gate (e.g. ast-grep, #687) —
+	// this standalone-query path had no test-file gating of its own, so an
+	// `lsp_diagnostics` check on a test file surfaced ast-grep findings the
+	// per-edit dispatch runner would have suppressed. `content` is only unset
+	// if the read itself failed above; fail-open (no filtering) rather than
+	// lose diagnostics over an unrelated read error.
 	const filtered =
 		content !== undefined
-			? applyAuxiliarySuppressions(diagnostics, content)
+			? applyAuxiliarySuppressions(diagnostics, content, {
+					fileRole: detectFileRole(absPath, content),
+				})
 			: diagnostics;
-	return { diagnostics: filtered, timedOut };
+	return { diagnostics: filtered, timedOut, content };
 }
 
 function diagnosticsToFileDiags(
@@ -905,22 +923,39 @@ async function resolveEmptyResult(
  * `classifyEmptyResult` (#533) says "clean", not "unconfirmed" (silent
  * push-only server — indistinguishable from still-analyzing/never-asked, so
  * must not overwrite a real prior footer entry).
+ *
+ * #692: `retagAuxiliaryDiagnostics` re-tags aux-sourced entries (ast-grep,
+ * opengrep, zizmor, typos) with their real tool id + semantic policy before
+ * they're written — the same treatment the per-edit dispatch runner gives
+ * them — so a scan-reconciled entry no longer keeps tool `"lsp"`. `content`
+ * is the file content `collectDiagnosticsForFile`/the cache already read (or
+ * undefined for a cache-hit branch, whose `rawDiags` were already suppression-
+ * /skipTestFiles-filtered at write time — an empty string here is then a safe
+ * no-op re-check, not a behavior gap).
  */
 function reconcileWidgetFromLspResult(
 	file: string,
 	rawDiags: LSPDiagnostic[],
 	confirmation: "clean" | "unconfirmed" | undefined,
 	nextWriteIndex: (() => number) | undefined,
+	cwd: string,
+	content: string | undefined,
 ): void {
 	const confirmed = rawDiags.length > 0 || confirmation !== "unconfirmed";
 	if (!confirmed) return;
 	try {
-		reconcileScanDiagnostics(
-			file,
-			convertLspDiagnostics(rawDiags, file, { source: "lsp_diagnostics" }),
-			true,
-			nextWriteIndex?.(),
+		// #692: provenance label ONLY — must never affect `rule`/identity (see
+		// `ConvertLspDiagnosticsOptions.scanOrigin`'s doc comment).
+		const diagnostics = convertLspDiagnostics(rawDiags, file, {
+			scanOrigin: "lsp_diagnostics",
+		});
+		const retagged = retagAuxiliaryDiagnostics(
+			diagnostics,
+			rawDiags,
+			content ?? "",
+			{ cwd, fileRole: detectFileRole(file, content) },
 		);
+		reconcileScanDiagnostics(file, retagged, true, nextWriteIndex?.());
 	} catch {
 		// Never let a footer-reconciliation hiccup fail the diagnostics check.
 	}
@@ -940,6 +975,11 @@ async function collectFileDiagnosticResult(
 	// passes these.
 	cacheCtx?: WorkspaceDiagnosticsCacheContext,
 	scopeKey?: string,
+	// #692: threaded through so `reconcileWidgetFromLspResult` can compute
+	// `allowBlocking(cwd)` for a scan-reconciled aux finding — defaults to
+	// `process.cwd()` for any call site that predates this (there are none
+	// today besides the two below, both of which now pass it explicitly).
+	cwd: string = process.cwd(),
 ): Promise<FileDiagnosticResult> {
 	let stat: ReturnType<typeof fs.statSync>;
 	try {
@@ -957,11 +997,17 @@ async function collectFileDiagnosticResult(
 			const filteredDiags = applySeverityFilter(cached.diagnostics, severity);
 			const confirmation: "clean" | undefined =
 				cached.diagnostics.length === 0 ? "clean" : undefined;
+			// #692: cached.diagnostics were already suppression-/skipTestFiles-
+			// filtered at write time (this same code path); no file content was
+			// cached alongside them, so `undefined` here is a safe re-check, not
+			// a gap.
 			reconcileWidgetFromLspResult(
 				file,
 				cached.diagnostics,
 				confirmation,
 				nextWriteIndex,
+				cwd,
+				undefined,
 			);
 			return {
 				file,
@@ -972,12 +1018,11 @@ async function collectFileDiagnosticResult(
 		}
 	}
 
-	const { diagnostics: rawDiags, timedOut } = await collectDiagnosticsForFile(
-		file,
-		lspService,
-		waitMs,
-		serverScope,
-	);
+	const {
+		diagnostics: rawDiags,
+		timedOut,
+		content: collectedContent,
+	} = await collectDiagnosticsForFile(file, lspService, waitMs, serverScope);
 	const health = lspService.getDiagnosticsHealth?.(file) as
 		| LspHealthLike
 		| undefined;
@@ -1011,6 +1056,8 @@ async function collectFileDiagnosticResult(
 		effectiveRawDiags,
 		confirmation,
 		nextWriteIndex,
+		cwd,
+		collectedContent,
 	);
 	// #671: only a CONFIRMED outcome ("clean", or a non-empty result — either
 	// is definitionally confirmed per this function's own doctrine above) is
@@ -1038,13 +1085,13 @@ async function runFileDiagnostics(
 	waitMs?: number,
 	nextWriteIndex?: () => number,
 	serverScope: "primary" | "all" = "all",
+	cwd: string = process.cwd(),
 ) {
-	const { diagnostics: rawDiags, timedOut } = await collectDiagnosticsForFile(
-		absPath,
-		lspService,
-		waitMs,
-		serverScope,
-	);
+	const {
+		diagnostics: rawDiags,
+		timedOut,
+		content: collectedContent,
+	} = await collectDiagnosticsForFile(absPath, lspService, waitMs, serverScope);
 	const lspHealth = lspService.getDiagnosticsHealth?.(absPath) as
 		| LspHealthLike
 		| undefined;
@@ -1085,6 +1132,8 @@ async function runFileDiagnostics(
 		effectiveRawDiags,
 		confirmation,
 		nextWriteIndex,
+		cwd,
+		collectedContent,
 	);
 
 	const primaryId = primaryServerId(absPath);
@@ -1264,9 +1313,8 @@ async function collectBatchDiagnostics(
 	// differently-scoped touches (this tool never excludes any server, that
 	// one excludes opengrep — see `buildScopeKey`'s doc) from cross-serving
 	// entries that wouldn't actually match what each asked for.
-	const cacheCtx = createWorkspaceDiagnosticsCacheContext(
-		options.cwd ?? process.cwd(),
-	);
+	const resolvedCwd = options.cwd ?? process.cwd();
+	const cacheCtx = createWorkspaceDiagnosticsCacheContext(resolvedCwd);
 	const scopeKey = buildScopeKey(options.serverScope ?? "all");
 	const results = await mapWithConcurrency(
 		files,
@@ -1281,6 +1329,7 @@ async function collectBatchDiagnostics(
 				options.serverScope,
 				cacheCtx,
 				scopeKey,
+				resolvedCwd,
 			),
 		lspService,
 		options.signal,

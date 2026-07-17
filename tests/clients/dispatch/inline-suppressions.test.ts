@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import type { LSPDiagnostic } from "../../../clients/lsp/client.js";
 import {
 	applyInlineSuppressions,
 	type SuppressibleDiagnostic,
 } from "../../../clients/dispatch/inline-suppressions.js";
+import { convertLspDiagnostics } from "../../../clients/dispatch/utils/lsp-diagnostics.js";
 
 type D = SuppressibleDiagnostic & { message?: string };
 
@@ -64,5 +66,32 @@ describe("applyInlineSuppressions (#442 — shared by mode=all + mode=full)", ()
 		const content = "eval(x)\nalert(1)\n";
 		const diags: D[] = [{ line: 1, rule: "no-eval" }];
 		expect(applyInlineSuppressions(diags, content)).toBe(diags);
+	});
+
+	// #692: a scan reconcile (`lens_diagnostics mode=full`, `lsp_diagnostics`)
+	// used to bake its scan-provenance label straight into `rule`
+	// (`lens_diagnostics_full:no-eval`), which `normalizeSuppressRule` doesn't
+	// strip — an inline `pi-lens-ignore: no-eval` comment suppressed the
+	// per-edit-written entry but NOT the scan-written one. Now that
+	// `scanOrigin` never touches `rule`, a scan conversion produces the exact
+	// same `ast-grep:<id>` rule the per-edit path does, so suppression round-
+	// trips identically regardless of which path wrote the entry.
+	it("suppresses a scan-written entry (convertLspDiagnostics with scanOrigin) exactly like a per-edit one (#692)", () => {
+		const content = "eval(x)  # pi-lens-ignore: no-eval\n";
+		const raw: LSPDiagnostic[] = [
+			{
+				range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+				message: "no-eval finding",
+				severity: 2,
+				source: "ast-grep",
+				code: "no-eval",
+			} as LSPDiagnostic,
+		];
+		const perEdit = convertLspDiagnostics(raw, "/repo/a.js");
+		const scanned = convertLspDiagnostics(raw, "/repo/a.js", {
+			scanOrigin: "lens_diagnostics_full",
+		});
+		expect(applyInlineSuppressions(perEdit, content)).toEqual([]);
+		expect(applyInlineSuppressions(scanned, content)).toEqual([]);
 	});
 });

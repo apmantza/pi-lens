@@ -19,11 +19,12 @@
 
 import type { LSPDiagnostic } from "../lsp/client.js";
 import { shouldDegradeAuxiliaryLsp } from "../lsp-budget.js";
+import type { FileRole } from "../file-role.js";
 import { findLocalOpengrepConfig } from "../opengrep-config.js";
 import { findLocalTyposConfig } from "../typos-config.js";
 import { findLocalZizmorConfig } from "../zizmor-config.js";
 import { classifyDefect } from "./diagnostic-taxonomy.js";
-import type { DefectClass, OutputSemantic } from "./types.js";
+import type { DefectClass, Diagnostic, OutputSemantic } from "./types.js";
 
 export interface AuxiliaryLspProfile {
 	/** LSPServerInfo.id of the auxiliary server. */
@@ -257,10 +258,84 @@ export function isAuxiliaryDiagnosticSuppressed(
  * equivalent) suppresses a finding identically whether it's seen via the
  * per-edit dispatch runner or a standalone diagnostics query — previously
  * only the former honored it (#586).
+ *
+ * #692: `opts.fileRole` additionally drops a diagnostic whose auxiliary
+ * profile declares `skipTestFiles` (e.g. ast-grep, #687) when the file is a
+ * test file — the per-edit dispatch runner (`clients/dispatch/runners/lsp.ts`)
+ * has applied this gate since #687/#688 via its own inline check; the
+ * `runWorkspaceDiagnostics` workspace sweep (`clients/lsp/index.ts`) called
+ * this function WITHOUT ever passing a fileRole, so ast-grep findings on test
+ * files that are suppressed per-edit reappeared wholesale in every
+ * `mode=full` sweep. Omitting `opts` (or `opts.fileRole`) keeps every existing
+ * 2-arg call site's behavior byte-for-byte unchanged.
  */
 export function applyAuxiliarySuppressions(
 	diagnostics: readonly LSPDiagnostic[],
 	content: string,
+	opts?: { fileRole?: FileRole },
 ): LSPDiagnostic[] {
-	return diagnostics.filter((d) => !isAuxiliaryDiagnosticSuppressed(d, content));
+	return diagnostics.filter((d) => {
+		if (isAuxiliaryDiagnosticSuppressed(d, content)) return false;
+		if (opts?.fileRole === "test") {
+			const profile = findAuxiliaryProfileForSource(d.source);
+			if (profile?.skipTestFiles) return false;
+		}
+		return true;
+	});
+}
+
+/**
+ * #692: shared aux re-tag implementation — extracted from the per-edit
+ * dispatch runner (`clients/dispatch/runners/lsp.ts`) so a scan/sweep path
+ * that reconciles LSP diagnostics into widget state (`lens_diagnostics
+ * mode=full`, `lsp_diagnostics`) gives its auxiliary-sourced findings
+ * (ast-grep, opengrep, zizmor, typos) the SAME tool re-tag, semantic policy,
+ * and defect-class classification the per-edit path always has — previously
+ * only the per-edit runner ran this loop, so a scan-reconciled aux finding
+ * kept `tool: "lsp"` and lost its curated-repo-rules `blockingAllowed`
+ * context entirely (#692).
+ *
+ * `diagnostics` and `rawLspDiags` must be the SAME length and index-aligned —
+ * `convertLspDiagnostics` maps its input 1:1, so this holds for every caller
+ * that passes it the same array it just converted. Mutates and returns the
+ * SURVIVING subset of `diagnostics` (native-inline-suppressed and
+ * `skipTestFiles`-dropped entries removed), mirroring the per-edit runner's
+ * prior inline behavior exactly.
+ */
+export function retagAuxiliaryDiagnostics(
+	diagnostics: Diagnostic[],
+	rawLspDiags: readonly LSPDiagnostic[],
+	content: string,
+	ctx: { cwd: string; fileRole: FileRole },
+): Diagnostic[] {
+	const blockingAllowedByProfile = new Map<AuxiliaryLspProfile, boolean>();
+	const suppressedIndices = new Set<number>();
+	for (let i = 0; i < diagnostics.length; i++) {
+		const profile = findAuxiliaryProfileForSource(rawLspDiags[i]?.source);
+		if (!profile) continue;
+		if (profile.skipTestFiles && ctx.fileRole === "test") {
+			suppressedIndices.add(i);
+			continue;
+		}
+		if (isAuxiliaryDiagnosticSuppressed(rawLspDiags[i], content)) {
+			suppressedIndices.add(i);
+			continue;
+		}
+		let blockingAllowed = blockingAllowedByProfile.get(profile);
+		if (blockingAllowed === undefined) {
+			blockingAllowed = profile.allowBlocking?.(ctx.cwd) ?? false;
+			blockingAllowedByProfile.set(profile, blockingAllowed);
+		}
+		const d = diagnostics[i];
+		d.tool = profile.tool;
+		d.semantic = profile.semantic(rawLspDiags[i], { blockingAllowed });
+		if (d.semantic !== "blocking" && d.severity === "error") {
+			d.severity = "warning";
+		}
+		const defectClass = profile.defectClass?.(rawLspDiags[i]);
+		if (defectClass) d.defectClass = defectClass;
+	}
+	return suppressedIndices.size
+		? diagnostics.filter((_, i) => !suppressedIndices.has(i))
+		: diagnostics;
 }
