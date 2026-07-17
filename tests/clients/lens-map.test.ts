@@ -532,11 +532,20 @@ describe("renderMapHtml", () => {
 
 	it("emits a syntactically valid viewer script", () => {
 		const html = renderMapHtml(payload());
-		const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
-		expect(scripts).toHaveLength(1);
+		// indexOf slicing, not a tag regex: we're extracting OUR OWN generated
+		// markup (exactly one bare lowercase `<script>` block — asserted below),
+		// not filtering untrusted HTML. A regex here trips CodeQL's
+		// js/bad-tag-filter (regexes that look like sanitizers must handle
+		// `<SCRIPT>`/attributes), which doesn't apply to extraction but is
+		// cheap to avoid outright.
+		expect(html.split("<script>").length - 1).toBe(1);
+		const open = html.indexOf("<script>") + "<script>".length;
+		const close = html.indexOf("</script>", open);
+		expect(close).toBeGreaterThan(open);
+		const body = html.slice(open, close);
 		// new Function PARSES the body without executing it — a syntax error
 		// (e.g. a stray template-literal escape) throws here.
-		expect(() => new Function(scripts[0][1])).not.toThrow();
+		expect(() => new Function(body)).not.toThrow();
 	});
 
 	it("renders fine for a tiny graph (fewer nodes than the client-side top-25 label set)", () => {
