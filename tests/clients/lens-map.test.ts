@@ -6,6 +6,7 @@ import {
 	aggregateGraphToFiles,
 	computeLayout,
 	generateLensMap,
+	parseUntrackedIgnoredOutput,
 	renderMapHtml,
 	type FileMapEdge,
 	type FileMapNode,
@@ -114,6 +115,78 @@ describe("aggregateGraphToFiles", () => {
 		expect(result.externalCount).toBe(0);
 		expect(result.testFileCount).toBe(0);
 		expect(result.compiledTwinCount).toBe(0);
+		expect(result.ignoredFileCount).toBe(0);
+	});
+
+	it("drops untracked-gitignored files via excludeIds — unless a surviving twin merge rescues them", () => {
+		const nodes: ReviewGraphNode[] = [
+			// Tracked source — stays (not in excludeIds).
+			{ id: "a.ts#file", kind: "file", language: "ts", filePath: "a.ts" },
+			// Ignored orphan: gitignored compiled file with NO source twin in
+			// the graph — must vanish along with its edges.
+			{
+				id: "orphan#file",
+				kind: "file",
+				language: "js",
+				filePath: "orphan.js",
+			},
+			{
+				id: "orphan#sym",
+				kind: "symbol",
+				language: "js",
+				filePath: "orphan.js",
+				symbolName: "leftover",
+			},
+			// Ignored compiled file WITH a surviving .ts twin: the twin merge
+			// takes precedence — merged (edges preserved), not dropped.
+			{ id: "b.js#file", kind: "file", language: "js", filePath: "b.js" },
+			{ id: "b.ts#file", kind: "file", language: "ts", filePath: "b.ts" },
+			// Tracked vendored .js (matches a .gitignore pattern but is
+			// TRACKED, so git never reports it ignored → not in excludeIds).
+			{
+				id: "vendored#file",
+				kind: "file",
+				language: "js",
+				filePath: "vendored.js",
+			},
+		];
+		const edges: ReviewGraphEdge[] = [
+			// Edges touching the ignored orphan — must disappear with it.
+			{ from: "a.ts#file", to: "orphan#file", kind: "imports" },
+			{ from: "orphan#file", to: "vendored#file", kind: "imports" },
+			// The ignored-but-twinned b.js's edge — must survive, remapped to b.ts.
+			{ from: "b.js#file", to: "a.ts#file", kind: "imports" },
+		];
+
+		const result = aggregateGraphToFiles(makeGraph(nodes, edges), {
+			excludeIds: new Set([idFor("orphan.js"), idFor("b.js")]),
+		});
+
+		const ids = result.nodes.map((n) => n.id).sort();
+		expect(ids).toEqual(
+			[idFor("a.ts"), idFor("b.ts"), idFor("vendored.js")].sort(),
+		);
+		expect(result.nodes.some((n) => n.id === idFor("orphan.js"))).toBe(false);
+		expect(result.nodes.some((n) => n.id === idFor("b.js"))).toBe(false);
+
+		// Only the orphan counts as ignored; b.js was rescued by the twin
+		// merge and counts as a twin instead.
+		expect(result.ignoredFileCount).toBe(1);
+		expect(result.compiledTwinCount).toBe(1);
+
+		// Both orphan edges are gone; b.js -> a.ts survives remapped.
+		expect(result.edges).toHaveLength(1);
+		expect(result.edges[0]).toMatchObject({
+			from: idFor("b.ts"),
+			to: idFor("a.ts"),
+			weight: 1,
+		});
+
+		// Ranking inputs reflect the post-exclusion world: a.ts's only degree
+		// is the incoming b.ts edge (its edge to the dropped orphan is gone).
+		const aNode = result.nodes.find((n) => n.id === idFor("a.ts"));
+		expect(aNode?.outDegree).toBe(0);
+		expect(aNode?.inDegree).toBe(1);
 	});
 
 	it("merges compiled .js twins onto their .ts sources: nodes, symbols, and edges remap; self-edges collapse", () => {
@@ -380,6 +453,7 @@ describe("renderMapHtml", () => {
 			externalCount: 0,
 			testFileCount: 0,
 			compiledTwinCount: 0,
+			ignoredFileCount: 0,
 			truncated: false,
 			maxNodes: 500,
 			width: 1600,
@@ -436,6 +510,35 @@ describe("renderMapHtml", () => {
 	it("never string-concatenates the CDN/script-src into an external host", () => {
 		const html = renderMapHtml(payload());
 		expect(html).not.toMatch(/script-src[^"]*https?:/);
+	});
+});
+
+// The git integration itself (spawn) is deliberately NOT mocked here: a
+// module-wide vi.mock of safe-spawn would also intercept the review-graph
+// build's own git calls in the end-to-end generateLensMap test below. The
+// spawn wrapper is a thin try/catch around safeSpawnAsync; the testable
+// logic (line split, excluded-dir pruning, normalization) lives in this
+// exported pure helper.
+describe("parseUntrackedIgnoredOutput", () => {
+	it("parses repo-relative lines into normalized ids, skipping blanks and excluded-dir paths", () => {
+		const cwd = process.cwd();
+		const stdout = [
+			"clients/orphan.js",
+			"", // blank line — skipped
+			"node_modules/lodash/index.js", // excluded dir — pruned pre-normalize
+			"dist/bundle.js", // excluded dir — pruned pre-normalize
+			"scripts/tmp-probe.mjs",
+		].join("\n");
+
+		const ids = parseUntrackedIgnoredOutput(stdout, cwd);
+
+		expect(ids.has(idFor("clients/orphan.js"))).toBe(true);
+		expect(ids.has(idFor("scripts/tmp-probe.mjs"))).toBe(true);
+		expect(ids.size).toBe(2);
+	});
+
+	it("returns an empty set for empty output", () => {
+		expect(parseUntrackedIgnoredOutput("", process.cwd()).size).toBe(0);
 	});
 });
 

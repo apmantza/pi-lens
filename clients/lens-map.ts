@@ -19,7 +19,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { FactStore } from "./dispatch/fact-store.js";
-import { getProjectDataDir } from "./file-utils.js";
+import { getProjectDataDir, isExcludedDirName } from "./file-utils.js";
+import { safeSpawnAsync } from "./safe-spawn.js";
 import { normalizeMapKey } from "./path-utils.js";
 import { buildOrUpdateGraph } from "./review-graph/service.js";
 import type { ReviewGraph } from "./review-graph/types.js";
@@ -59,6 +60,8 @@ export interface AggregatedFileGraph {
 	testFileCount: number;
 	/** Count of compiled twins (`X.js` with an `X.ts`/`X.tsx` sibling, etc.) merged into their source file's node. */
 	compiledTwinCount: number;
+	/** Count of files dropped via `excludeIds` (untracked-gitignored) — NOT counting excluded files rescued by the twin merge. */
+	ignoredFileCount: number;
 	/** True when the source graph had more files than the node cap and the lowest-degree ones were dropped. */
 	truncated: boolean;
 }
@@ -66,6 +69,14 @@ export interface AggregatedFileGraph {
 export interface AggregateOptions {
 	/** Cap on rendered file nodes; default resolved by the caller (env PI_LENS_MAP_MAX_NODES, else 500). */
 	maxNodes?: number;
+	/**
+	 * Normalized file ids (per `normalizeMapKey`) to exclude from the map.
+	 * The impure caller (`generateLensMap`) computes this as git's own
+	 * "untracked AND ignored" set; this pure layer only does membership
+	 * checks. A file in this set that would canonicalize onto a SURVIVING
+	 * source twin is merged instead of dropped (see the pass-2 comment).
+	 */
+	excludeIds?: ReadonlySet<string>;
 }
 
 export const DEFAULT_MAX_MAP_NODES = 500;
@@ -160,6 +171,16 @@ export function aggregateGraphToFiles(
 		[".mjs", [".mts"]],
 		[".cjs", [".cts"]],
 	];
+	// Interplay with the untracked-gitignored exclusion (`excludeIds`):
+	// twin canonicalization takes PRECEDENCE over exclusion. An excluded
+	// compiled file whose source twin survives is merged onto that twin
+	// (edges preserved) rather than dropped — dropping it would silently
+	// discard the import edges the compiled twin carries, which is strictly
+	// worse than merging them onto the source node. Only excluded files with
+	// NO surviving canonical target actually vanish. Conversely an excluded
+	// file can never BE a canonical target — merging a survivor onto a node
+	// that's about to disappear would drop both.
+	const excludeIds = options?.excludeIds;
 	const canonicalOf = new Map<string, string>();
 	for (const id of allFileIds) {
 		for (const [compiledExt, sourceExts] of COMPILED_TWIN_SOURCES) {
@@ -167,7 +188,7 @@ export function aggregateGraphToFiles(
 			const stem = id.slice(0, id.length - compiledExt.length);
 			for (const sourceExt of sourceExts) {
 				const candidate = stem + sourceExt;
-				if (allFileIds.has(candidate)) {
+				if (allFileIds.has(candidate) && !excludeIds?.has(candidate)) {
 					canonicalOf.set(id, candidate);
 					break;
 				}
@@ -177,12 +198,27 @@ export function aggregateGraphToFiles(
 	}
 	const compiledTwinCount = canonicalOf.size;
 
+	// Excluded ids that actually drop: in the graph, untracked-gitignored,
+	// and NOT rescued by the twin merge above. Computed before pass 3 so the
+	// aggregation skip (and therefore edge dropping, degree/dependents/
+	// truncation ranking) all see the post-exclusion world.
+	const droppedIgnoredIds = new Set<string>();
+	if (excludeIds) {
+		for (const id of allFileIds) {
+			if (excludeIds.has(id) && !canonicalOf.has(id)) {
+				droppedIgnoredIds.add(id);
+			}
+		}
+	}
+	const ignoredFileCount = droppedIgnoredIds.size;
+
 	// ── Pass 3: aggregate nodes under their canonical file identity ─────────
 	for (const node of graph.nodes.values()) {
 		if (node.kind === "external") continue; // counted in pass 1
 		if (node.kind === "file" && node.filePath) {
 			const raw = normalizeMapKey(node.filePath);
 			if (isTestById.get(raw)) continue;
+			if (droppedIgnoredIds.has(raw)) continue;
 			const id = canonicalOf.get(raw) ?? raw;
 			nodeToFile.set(node.id, id);
 			const existing = files.get(id);
@@ -202,6 +238,7 @@ export function aggregateGraphToFiles(
 		if (node.kind === "symbol" && node.filePath) {
 			const raw = normalizeMapKey(node.filePath);
 			if (isTestById.get(raw)) continue;
+			if (droppedIgnoredIds.has(raw)) continue;
 			const id = canonicalOf.get(raw) ?? raw;
 			nodeToFile.set(node.id, id);
 			const existing = files.get(id);
@@ -330,6 +367,7 @@ export function aggregateGraphToFiles(
 		externalCount,
 		testFileCount: testFileIds.size,
 		compiledTwinCount,
+		ignoredFileCount,
 		truncated,
 	};
 }
@@ -523,6 +561,7 @@ export interface LensMapPayload {
 	externalCount: number;
 	testFileCount: number;
 	compiledTwinCount: number;
+	ignoredFileCount: number;
 	truncated: boolean;
 	maxNodes: number;
 	width: number;
@@ -624,6 +663,7 @@ export function renderMapHtml(payload: LensMapPayload): string {
     <span><strong id="stat-external">-</strong> external deps (excluded)</span>
     <span id="stat-testfiles-wrap" hidden><strong id="stat-testfiles">-</strong> test files (excluded)</span>
     <span id="stat-twins-wrap" hidden><strong id="stat-twins">-</strong> compiled twins (merged into sources)</span>
+    <span id="stat-ignored-wrap" hidden><strong id="stat-ignored">-</strong> gitignored files (excluded)</span>
     <span>generated <strong id="stat-generated">-</strong></span>
     <span id="stat-project"></span>
   </div>
@@ -674,6 +714,13 @@ export function renderMapHtml(payload: LensMapPayload): string {
     setText("stat-twins", String(payload.compiledTwinCount));
     var twWrap = document.getElementById("stat-twins-wrap");
     if (twWrap) twWrap.hidden = false;
+  }
+  // Untracked-gitignored files dropped from the map (0 when the project is
+  // not a git repo — the filter degrades to a no-op there): hide when zero.
+  if (payload.ignoredFileCount > 0) {
+    setText("stat-ignored", String(payload.ignoredFileCount));
+    var igWrap = document.getElementById("stat-ignored-wrap");
+    if (igWrap) igWrap.hidden = false;
   }
   setText("stat-generated", payload.generatedAt || "");
   setText("stat-project", payload.projectLabel || "");
@@ -859,6 +906,7 @@ export interface GenerateLensMapResult {
 	externalCount: number;
 	testFileCount: number;
 	compiledTwinCount: number;
+	ignoredFileCount: number;
 }
 
 function resolveMaxNodes(): number {
@@ -868,6 +916,66 @@ function resolveMaxNodes(): number {
 	return Number.isFinite(parsed) && parsed > 0
 		? Math.floor(parsed)
 		: DEFAULT_MAX_MAP_NODES;
+}
+
+/**
+ * Parses `git ls-files --others --ignored --exclude-standard` output
+ * (repo-relative paths, one per line) into normalized map-key file ids.
+ * Exported as a pure function so the parse/normalize step is unit-testable
+ * without mocking the spawn (mocking safe-spawn module-wide in the lens-map
+ * test file would also intercept the review-graph build's own git calls in
+ * the end-to-end test — disproportionate for what's a line-split + join).
+ */
+export function parseUntrackedIgnoredOutput(
+	stdout: string,
+	cwd: string,
+): Set<string> {
+	const ids = new Set<string>();
+	for (const line of stdout.split(/\r?\n/)) {
+		const rel = line.trim();
+		if (!rel) continue;
+		// Paths inside shared-excluded dirs (node_modules, dist, .git, …) can
+		// never be review-graph nodes — the graph walk itself routes exclusion
+		// through `isExcludedDirName` — so skip them BEFORE paying for
+		// `normalizeMapKey` (realpath-backed, per-call filesystem cost): on
+		// pi-lens itself this prunes a 66k-line ignored list (node_modules)
+		// down to ~1.6k paths that actually need normalizing.
+		const dirSegments = rel.split("/").slice(0, -1);
+		if (dirSegments.some((segment) => isExcludedDirName(segment))) continue;
+		ids.add(normalizeMapKey(path.join(cwd, rel)));
+	}
+	return ids;
+}
+
+/**
+ * The exclusion set for the map: files that are untracked AND gitignored —
+ * exactly the set git itself considers ignored. THE critical git semantic: a
+ * TRACKED file is never ignored, even when a .gitignore pattern matches it
+ * (pi-lens's own committed `clients/deps/*.js` vendored sources match the
+ * repo's `*.js` ignore pattern and MUST stay on the map) — which is why this
+ * asks git (`ls-files --others --ignored --exclude-standard`) instead of
+ * running a matcher over .gitignore patterns.
+ *
+ * Degradation: when git is absent/fails/times out (not a git repo, bare
+ * checkout, etc.) this returns undefined and the caller SKIPS the filter
+ * entirely — the map shows the graph as-known. A matcher-only fallback would
+ * wrongly drop tracked vendored files; silently guessing is worse than
+ * rendering what we know.
+ */
+async function collectUntrackedIgnoredIds(
+	cwd: string,
+): Promise<ReadonlySet<string> | undefined> {
+	try {
+		const result = await safeSpawnAsync(
+			"git",
+			["ls-files", "--others", "--ignored", "--exclude-standard"],
+			{ cwd, timeout: 10_000, resourceLabel: "lens-map-git-ignored" },
+		);
+		if (result.error || result.status !== 0) return undefined;
+		return parseUntrackedIgnoredOutput(result.stdout, cwd);
+	} catch {
+		return undefined;
+	}
 }
 
 // Human-facing display path: cwd-relative + forward-slashed when the file
@@ -893,10 +1001,15 @@ export async function generateLensMap(
 	cwd: string,
 ): Promise<GenerateLensMapResult> {
 	const facts = new FactStore();
+	// Kick off the git ignored-file listing concurrently with the (much
+	// slower) graph build — both are bounded (10s spawn timeout + the ambient
+	// turn abort signal safeSpawnAsync applies by default).
+	const excludeIdsPromise = collectUntrackedIgnoredIds(cwd);
 	const graph = await buildOrUpdateGraph(cwd, [], facts);
+	const excludeIds = await excludeIdsPromise;
 
 	const maxNodes = resolveMaxNodes();
-	const aggregated = aggregateGraphToFiles(graph, { maxNodes });
+	const aggregated = aggregateGraphToFiles(graph, { maxNodes, excludeIds });
 
 	const displayNodes: FileMapNode[] = aggregated.nodes.map((node) => ({
 		...node,
@@ -924,6 +1037,7 @@ export async function generateLensMap(
 		externalCount: aggregated.externalCount,
 		testFileCount: aggregated.testFileCount,
 		compiledTwinCount: aggregated.compiledTwinCount,
+		ignoredFileCount: aggregated.ignoredFileCount,
 		truncated: aggregated.truncated,
 		maxNodes,
 		width,
@@ -946,5 +1060,6 @@ export async function generateLensMap(
 		externalCount: aggregated.externalCount,
 		testFileCount: aggregated.testFileCount,
 		compiledTwinCount: aggregated.compiledTwinCount,
+		ignoredFileCount: aggregated.ignoredFileCount,
 	};
 }

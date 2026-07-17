@@ -621,9 +621,15 @@ export default function (pi: ExtensionAPI) {
 					result.compiledTwinCount > 0
 						? `, ${result.compiledTwinCount} compiled twins merged`
 						: "";
+				// Untracked-gitignored files dropped from the map (0 outside a
+				// git repo, where the filter degrades to a no-op).
+				const ignoredNote =
+					result.ignoredFileCount > 0
+						? `, ${result.ignoredFileCount} gitignored files excluded`
+						: "";
 				const lines = [
 					`🗺️ Project map written to ${result.filePath}`,
-					`${result.fileCount} files, ${result.edgeCount} edges, ${result.externalCount} external deps excluded${testNote}${twinNote}.`,
+					`${result.fileCount} files, ${result.edgeCount} edges, ${result.externalCount} external deps excluded${testNote}${twinNote}${ignoredNote}.`,
 				];
 				if (result.truncated) {
 					lines.push(
