@@ -1,9 +1,11 @@
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FactStore } from "../../clients/dispatch/fact-store.js";
 import { getProjectDataDir } from "../../clients/file-utils.js";
+import { _resetUntrackedIgnoredCacheForTests } from "../../clients/git-tracked-ignore.js";
 import { normalizeMapKey } from "../../clients/path-utils.js";
 import {
 	buildOrUpdateGraph,
@@ -230,11 +232,68 @@ describe("review graph service", () => {
 				"export function alpha() {\n  return 1;\n}\n",
 			);
 			const graph = await buildOrUpdateGraph(env.tmpDir, [], new FactStore());
-			expect(graph.version).toBe("v4");
+			expect(graph.version).toBe("v5");
 			const alphaId = [...graph.nodes.keys()].find((id) =>
 				id.includes(":alpha:"),
 			);
 			expect(alphaId).toBeDefined();
+			flushReviewGraphPersistsForTests();
+			for (let i = 0; i < 20 && isReviewGraphMigrationNeeded(env.tmpDir); i++) {
+				await new Promise((r) => setTimeout(r, 25));
+			}
+			expect(isReviewGraphMigrationNeeded(env.tmpDir)).toBe(false);
+		} finally {
+			clearReviewGraphWorkspaceCache();
+			env.cleanup();
+		}
+	});
+
+	it("refs #694: a v4 snapshot (pre-twin-preference, compiled-artifact edges) is detected as stale and safely rebuilt", async () => {
+		// #694's v5 bump: import resolution now prefers a .ts/.tsx source twin
+		// over a compiled .js sibling, and node creation is gated against
+		// untracked-AND-ignored files. A real v4 snapshot from a compile-in-place
+		// project has edges materialized on the compiled artifact node
+		// throughout — merging that with newly-built v5 edges would leave the
+		// graph in mixed, partially-corrected state, so it must be rejected
+		// exactly like the earlier version bumps.
+		const env = setupTestEnvironment("pi-lens-review-graph-v4-migrate-");
+		try {
+			const cacheDir = path.join(getProjectDataDir(env.tmpDir), "cache");
+			fs.mkdirSync(cacheDir, { recursive: true });
+			fs.writeFileSync(
+				path.join(cacheDir, "review-graph.json"),
+				JSON.stringify({
+					version: "v4",
+					builtAt: "x",
+					signature: "s",
+					nodes: [
+						[
+							"file:src/types.js",
+							{
+								id: "file:src/types.js",
+								kind: "file",
+								language: "jsts",
+								filePath: "src/types.js",
+							},
+						],
+					],
+					edges: [],
+				}),
+			);
+			expect(isReviewGraphMigrationNeeded(env.tmpDir)).toBe(true);
+
+			const { getCachedReviewGraph } = await import(
+				"../../clients/review-graph/builder.js"
+			);
+			expect(getCachedReviewGraph(env.tmpDir)).toBeUndefined();
+
+			createTempFile(
+				env.tmpDir,
+				"src/types.ts",
+				"export interface Foo {\n  a: number;\n}\n",
+			);
+			const graph = await buildOrUpdateGraph(env.tmpDir, [], new FactStore());
+			expect(graph.version).toBe("v5");
 			flushReviewGraphPersistsForTests();
 			for (let i = 0; i < 20 && isReviewGraphMigrationNeeded(env.tmpDir); i++) {
 				await new Promise((r) => setTimeout(r, 25));
@@ -630,6 +689,108 @@ describe("review graph service", () => {
 			// who-imports-this works at file granularity through the resolved edge.
 			const impact = computeImpactCascade(graph, bPath);
 			expect(impact.directImporters).toContain(normalizeMapKey(aPath));
+		} finally {
+			env.cleanup();
+		}
+	});
+});
+
+describe("review graph: ignore-gated node creation (#694)", () => {
+	function initGitRepo(cwd: string): void {
+		execFileSync("git", ["init", "-q"], { cwd });
+		execFileSync("git", ["config", "user.email", "test@example.com"], { cwd });
+		execFileSync("git", ["config", "user.name", "Test"], { cwd });
+	}
+
+	beforeEach(() => {
+		_resetUntrackedIgnoredCacheForTests();
+	});
+	afterEach(() => {
+		_resetUntrackedIgnoredCacheForTests();
+	});
+
+	it("never materializes an untracked-AND-gitignored import target as a file node, but keeps a tracked one matching the same pattern", async () => {
+		const env = setupTestEnvironment("pi-lens-review-graph-ignore-gate-");
+		try {
+			initGitRepo(env.tmpDir);
+			// vendor.js is committed BEFORE the `*.js` ignore pattern exists — the
+			// real-world shape of "vendored source that predates/survives a later
+			// broad ignore rule." Git's own semantic: once tracked, a file is never
+			// "ignored" even when a later pattern matches it.
+			const vendorPath = createTempFile(
+				env.tmpDir,
+				"src/vendor.js",
+				"exports.vendor = 1;\n",
+			);
+			execFileSync("git", ["add", "src/vendor.js"], { cwd: env.tmpDir });
+			execFileSync("git", ["commit", "-q", "-m", "vendor"], {
+				cwd: env.tmpDir,
+			});
+
+			// Broad `*.js` pattern (mirrors pi-lens's own root .gitignore) — matches
+			// BOTH gen.js (untracked build artifact, no .ts twin) and vendor.js.
+			createTempFile(env.tmpDir, ".gitignore", "*.js\n");
+			const genPath = createTempFile(
+				env.tmpDir,
+				"src/gen.js",
+				"exports.gen = 1;\n",
+			);
+			const aPath = createTempFile(
+				env.tmpDir,
+				"src/a.ts",
+				"import './gen.js';\nimport './vendor.js';\n",
+			);
+			// Commit .gitignore and a.ts — deliberately NOT gen.js, so it stays
+			// untracked (and therefore actually ignored by git).
+			execFileSync("git", ["add", ".gitignore", "src/a.ts"], {
+				cwd: env.tmpDir,
+			});
+			execFileSync("git", ["commit", "-q", "-m", "init"], { cwd: env.tmpDir });
+
+			const facts = new FactStore();
+			const graph = await buildOrUpdateGraph(env.tmpDir, [aPath], facts);
+
+			const genId = `file:${normalizeMapKey(genPath)}`;
+			const vendorId = `file:${normalizeMapKey(vendorPath)}`;
+			expect(graph.nodes.has(genId)).toBe(false);
+			expect(graph.nodes.has(vendorId)).toBe(true);
+
+			const aId = `file:${normalizeMapKey(aPath)}`;
+			expect(
+				graph.edges.some(
+					(e) => e.from === aId && e.to === vendorId && e.kind === "imports",
+				),
+			).toBe(true);
+			// The filtered-out ignored target must not leave a dangling edge either.
+			expect(graph.edges.some((e) => e.to === genId)).toBe(false);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("degrades to unfiltered (no git binary reachable in the repo) without throwing", async () => {
+		// Not a git repo at all: collectUntrackedIgnoredIds' spawn fails/returns
+		// non-zero, so the caller must skip the filter entirely rather than
+		// guessing via a matcher that can't see tracked status.
+		const env = setupTestEnvironment("pi-lens-review-graph-ignore-gate-nogit-");
+		try {
+			createTempFile(env.tmpDir, ".gitignore", "*.js\n");
+			const genPath = createTempFile(
+				env.tmpDir,
+				"src/gen.js",
+				"exports.gen = 1;\n",
+			);
+			const aPath = createTempFile(
+				env.tmpDir,
+				"src/a.ts",
+				"import './gen.js';\n",
+			);
+			const facts = new FactStore();
+			const graph = await buildOrUpdateGraph(env.tmpDir, [aPath], facts);
+			// No git identity available ⇒ filter skipped ⇒ the import target is
+			// still admitted (status quo, not a regression from this change).
+			const genId = `file:${normalizeMapKey(genPath)}`;
+			expect(graph.nodes.has(genId)).toBe(true);
 		} finally {
 			env.cleanup();
 		}
