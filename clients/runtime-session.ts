@@ -59,6 +59,7 @@ import {
 } from "./subagent-mode.js";
 import {
 	findNearestProjectRoot,
+	isStartupScanVerdictFresh,
 	resolveStartupScanContext,
 	type StartupScanContext,
 } from "./startup-scan.js";
@@ -1109,11 +1110,44 @@ export async function handleSessionStart(
 					// fires, well after the TUI is interactive.
 					const startupScanModule = await import("./startup-scan.js");
 					const languageProfileModule = await import("./language-profile.js");
-					const scan =
-						await startupScanModule.resolveStartupScanContextAsync(warmupCwd);
-					warmupDbg(
-						`warmup: scan-context done in ${Date.now() - warmupStartedAt}ms (canWarm=${scan.canWarmCaches})`,
-					);
+					const warmupSnapshotRoot = resolveSnapshotRoot(warmupCwd);
+
+					// #699: this background timer is the ONLY place a quick-mode
+					// session (i.e. every `-p`/`--print` invocation, which forces
+					// quick mode and returns before line ~1253 without ever touching
+					// scan-context) computes scan-context — and that process exits
+					// right after, discarding the result. Before walking, check for a
+					// still-fresh persisted verdict (mirrors the interactive path's
+					// snapshot reuse); after walking, persist unconditionally
+					// (canWarmCaches true OR false) so the NEXT one-shot process can
+					// reuse it instead of re-walking a possibly huge tree from
+					// scratch on every single startup.
+					const cachedSnapshot = loadProjectSnapshot(warmupSnapshotRoot);
+					const cachedVerdict = cachedSnapshot?.startupScan;
+					let scan: StartupScanContext;
+					if (
+						cachedVerdict &&
+						startupScanModule.isStartupScanVerdictFresh(cachedVerdict)
+					) {
+						scan = { ...cachedVerdict, cwd: path.resolve(warmupCwd) };
+						warmupDbg(
+							`warmup: scan-context reused from cache (canWarm=${scan.canWarmCaches}${scan.reason ? `, reason=${scan.reason}` : ""})`,
+						);
+					} else {
+						scan =
+							await startupScanModule.resolveStartupScanContextAsync(warmupCwd);
+						warmupDbg(
+							`warmup: scan-context done in ${Date.now() - warmupStartedAt}ms (canWarm=${scan.canWarmCaches})`,
+						);
+						// Best-effort: a save failure must never affect warmup itself —
+						// saveRuntimeProjectSnapshot already swallows its own errors.
+						saveRuntimeProjectSnapshot({
+							cwd: warmupSnapshotRoot,
+							runtime: deps.runtime,
+							startupScan: scan,
+							dbg: warmupDbg,
+						});
+					}
 					// Respect the startup-scan guard (#250): canWarmCaches is false for
 					// home-dir / no-project-root / too-many-source-files. Proceeding into
 					// the language-profile source walk in those cases lets it root at an
@@ -1141,7 +1175,6 @@ export async function handleSessionStart(
 					// runTask above; this is the quick-mode equivalent, once per
 					// process, off the hot path.
 					const wordIndexStartedAt = Date.now();
-					const warmupSnapshotRoot = resolveSnapshotRoot(warmupCwd);
 					await buildOrRefreshWordIndex({
 						runtime: deps.runtime,
 						sessionGeneration: deps.runtime.sessionGeneration,
@@ -1289,11 +1322,19 @@ export async function handleSessionStart(
 		hydrateRuntimeFromProjectSnapshot(runtime, freshSnapshot);
 	}
 
-	const startupScanSource = freshSnapshot?.startupScan
-		? "snapshot"
-		: "computed";
-	const startupScan: StartupScanContext = freshSnapshot?.startupScan
-		? { ...freshSnapshot.startupScan, cwd: path.resolve(cwd) }
+	// #699: a persisted `too-many-source-files` verdict is only reused while
+	// still within its TTL (isStartupScanVerdictFresh) — the seq-based
+	// freshness check above (isProjectSnapshotFresh) never fires for that
+	// reason on its own, since pi-lens never wrote anything while
+	// canWarmCaches was false, so the snapshot's seq never advances.
+	const cachedStartupScan =
+		freshSnapshot?.startupScan &&
+		isStartupScanVerdictFresh(freshSnapshot.startupScan)
+			? freshSnapshot.startupScan
+			: undefined;
+	const startupScanSource = cachedStartupScan ? "snapshot" : "computed";
+	const startupScan: StartupScanContext = cachedStartupScan
+		? { ...cachedStartupScan, cwd: path.resolve(cwd) }
 		: resolveStartupScanContext(cwd);
 	phase("scan-context");
 	dbg(`session_start scan-context source=${startupScanSource}`);

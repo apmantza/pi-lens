@@ -10,6 +10,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { toPositiveFinite } from "./env-utils.js";
 import {
 	getProjectIgnoreMatcher,
 	type ProjectIgnoreMatcher,
@@ -37,11 +38,87 @@ export interface StartupScanContext {
 	canWarmCaches: boolean;
 	reason?: "home-dir" | "no-project-root" | "too-many-source-files";
 	sourceFileCount?: number;
+	/**
+	 * Wall-clock time (`Date.now()`) this verdict was computed. Stamped by
+	 * `resolveStartupScanContext`/`Async` right before it's cached, and carried
+	 * through when the verdict is persisted to `project-snapshot.json`'s
+	 * `startupScan` field (#699) so a later process can decide whether a
+	 * persisted `too-many-source-files` verdict is still fresh enough to skip
+	 * the walk — see `isStartupScanVerdictFresh`.
+	 */
+	computedAt?: number;
 }
 
 export interface StartupScanOptions {
 	homeDir?: string;
 	maxSourceFiles?: number;
+}
+
+// Default TTL for a persisted `too-many-source-files` verdict (#699): 24h.
+const DEFAULT_STARTUP_SCAN_VERDICT_TTL_MS = 24 * 60 * 60 * 1000;
+
+let _startupScanVerdictTtlCache: number | undefined;
+
+/**
+ * How long a persisted `too-many-source-files` verdict stays reusable before
+ * a session re-walks the tree to refresh it (#699).
+ *
+ * Resolution order: `PI_LENS_STARTUP_SCAN_VERDICT_TTL_MS` env var, else the
+ * 24h default. Lazy + memoized so importing this module never touches
+ * `process.env` at load time (house style — see `runtime-config.ts` /
+ * `slow-fs.ts` / `subagent-mode.ts`).
+ */
+export function getStartupScanVerdictTtlMs(): number {
+	if (_startupScanVerdictTtlCache !== undefined) {
+		return _startupScanVerdictTtlCache;
+	}
+	const envTtl = toPositiveFinite(
+		process.env.PI_LENS_STARTUP_SCAN_VERDICT_TTL_MS,
+	);
+	_startupScanVerdictTtlCache =
+		envTtl > 0 ? envTtl : DEFAULT_STARTUP_SCAN_VERDICT_TTL_MS;
+	return _startupScanVerdictTtlCache;
+}
+
+/** Test-only: clears the memoized TTL so a subsequent call re-reads the env
+ * var (matching the `_resetForTests` convention). */
+export function _resetStartupScanVerdictTtlForTests(): void {
+	_startupScanVerdictTtlCache = undefined;
+}
+
+/**
+ * Whether a persisted startup-scan verdict is still safe to reuse without
+ * re-walking the project tree (#699).
+ *
+ * Only the `too-many-source-files` reason is TTL'd. It's the one verdict
+ * that can go stale on its own: the repo can shrink below
+ * `MAX_STARTUP_SOURCE_FILES` between sessions, and nothing else would notice
+ * — the seq-based freshness check that guards every other
+ * `project-snapshot.json` field never fires for it, because pi-lens never
+ * writes anything while `canWarmCaches` is false, so the snapshot's seq
+ * never advances on its own. Trade-off, by design: a shrunk repo recovers
+ * automatically once the TTL expires and the next session re-walks, in
+ * exchange for skipping a walk that (per #699) can cost 17s+ on a large
+ * monorepo, on every single process start, for a result nothing could use.
+ *
+ * `home-dir` / `no-project-root` describe the resolved root's location
+ * relative to $HOME, not its contents, so they don't drift the same way —
+ * reused indefinitely here (still gated by the snapshot's own seq-freshness
+ * check upstream). `canWarmCaches: true` verdicts aren't TTL'd by this
+ * function either; a fresh snapshot's `seq` match already implies the
+ * project state hasn't moved since it warmed successfully.
+ *
+ * Fails closed on a verdict with no `computedAt` (e.g. hand-written test
+ * fixture, or a pre-#699 snapshot) — treated as stale so it gets refreshed
+ * rather than trusted indefinitely.
+ */
+export function isStartupScanVerdictFresh(
+	verdict: StartupScanContext,
+	now: number = Date.now(),
+): boolean {
+	if (verdict.reason !== "too-many-source-files") return true;
+	if (typeof verdict.computedAt !== "number") return false;
+	return now - verdict.computedAt < getStartupScanVerdictTtlMs();
 }
 
 export function findNearestProjectRoot(startDir: string): string | null {
@@ -148,7 +225,7 @@ export function resolveStartupScanContext(
 		(options.maxSourceFiles ?? "");
 	const cached = startupScanContextCache.get(cacheKey);
 	if (cached) return cached;
-	const result = computeStartupScanContext(cwd, options);
+	const result = { ...computeStartupScanContext(cwd, options), computedAt: Date.now() };
 	startupScanContextCache.set(cacheKey, result);
 	return result;
 }
@@ -326,6 +403,7 @@ export async function resolveStartupScanContextAsync(
 			};
 		}
 	}
+	result = { ...result, computedAt: Date.now() };
 	startupScanContextCache.set(cacheKey, result);
 	return result;
 }
