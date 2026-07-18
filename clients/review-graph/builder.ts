@@ -10,6 +10,7 @@ import { featureHintMetadata } from "../feature-hints.js";
 import { detectFileKind, KIND_EXTENSIONS } from "../file-kinds.js";
 import { detectFileRole } from "../file-role.js";
 import { getProjectDataDir } from "../file-utils.js";
+import { collectUntrackedIgnoredIds } from "../git-tracked-ignore.js";
 import { logLatency } from "../latency-logger.js";
 import {
 	isAtOrAboveHomeDir,
@@ -17,7 +18,7 @@ import {
 	normalizeMapKey,
 } from "../path-utils.js";
 import { collectProjectSourceFilesAsync } from "../project-scan-policy.js";
-import { resolveImportToFiles } from "./import-resolvers.js";
+import { jsTsCandidatePaths, resolveImportToFiles } from "./import-resolvers.js";
 import { RUNTIME_CONFIG } from "../runtime-config.js";
 import { buildQualifiedName, findOwnerName } from "../symbol-containment.js";
 import { getSharedTreeSitterClient } from "../tree-sitter-shared.js";
@@ -39,7 +40,15 @@ import type { ReviewGraph, ReviewGraphEdge, ReviewGraphNode } from "./types.js";
 // node. A v3 snapshot's nodes/edges still use the old ID shape throughout, so
 // it must be rejected rather than merged with newly-built v4 IDs — same
 // safe-rebuild mechanism as the v2→v3 bump above.
-const REVIEW_GRAPH_VERSION = "v4";
+// v5 (#694): import resolution now prefers a `.ts`/`.tsx`/`.mts`/`.cts` source
+// twin over a compiled `.js`/`.mjs`/`.cjs` sibling (jsTsCandidatePaths), and
+// node creation is gated against untracked-AND-gitignored targets (see
+// git-tracked-ignore.ts). A v4 snapshot from a compile-in-place project has
+// cross-file import edges materialized on the compiled artifact nodes
+// throughout (up to 100% of them, per #694's measurement) — merging that with
+// newly-built v5 edges would leave the graph in mixed, partially-corrected
+// state. Same safe-rebuild mechanism as the v2→v3/v3→v4 bumps above.
+const REVIEW_GRAPH_VERSION = "v5";
 const MAIN_KINDS = new Set([
 	"jsts",
 	"python",
@@ -874,44 +883,34 @@ export function flushReviewGraphPersistsForTests(): void {
 	for (const key of [..._pendingPersist.keys()]) writePending(key);
 }
 
-// TS-as-ESM sources commonly write `import { x } from "./service.js"` while
-// the real file on disk is `service.ts` (Node's ESM resolver requires the
-// RUNTIME extension in the specifier, which is `.js` even for a `.ts` source —
-// this repo's own `clients/**/*.ts` does this throughout). Stripping a known
-// JS/TS extension from the specifier before re-appending candidate extensions
-// below lets that universal pattern resolve to the real `.ts` file; refs #655
-// phase 2, where this directly gates the new "import" resolution tier, but it
-// was already a latent gap for the plain file->file `imports` edge too.
-const JS_TS_EXT_RE = /\.(mjs|cjs|jsx?|tsx?)$/i;
-
+/**
+ * Resolve a relative ESM import to an in-project file — the warm jsts
+ * counterpart to import-resolvers.ts's `resolveJsTs` (the cold module_report
+ * path). Both share `jsTsCandidatePaths`'s SOURCE-TWIN-PREFERRING candidate
+ * order (#694: try `.ts`/`.tsx`/`.mts`/`.cts` before the literal/compiled
+ * extension) so a repo that compiles in place never diverges on which of the
+ * two an import edge lands on.
+ *
+ * `ignoredIds` (#694): when the first existing candidate is untracked-AND-
+ * gitignored (a build artifact with no surviving source twin — see
+ * git-tracked-ignore.ts), it is skipped rather than returned, so the ignore
+ * invariant (#243) reaches import-resolution-created nodes too, not just the
+ * initial file walk. Undefined ⇒ no filtering (the fetch degraded or wasn't
+ * requested).
+ */
 function localImportToFile(
 	cwd: string,
 	filePath: string,
 	source: string,
+	ignoredIds?: ReadonlySet<string>,
 ): string | undefined {
 	if (!source.startsWith(".")) return undefined;
-	const base = path.resolve(path.dirname(filePath), source);
-	const strippedSource = source.replace(JS_TS_EXT_RE, "");
-	const strippedBase =
-		strippedSource === source
-			? base
-			: path.resolve(path.dirname(filePath), strippedSource);
-	const candidates = [
-		base,
-		strippedBase,
-		`${strippedBase}.ts`,
-		`${strippedBase}.tsx`,
-		`${strippedBase}.js`,
-		`${strippedBase}.jsx`,
-		path.join(base, "index.ts"),
-		path.join(base, "index.tsx"),
-		path.join(base, "index.js"),
-		path.join(base, "index.jsx"),
-	];
-	for (const candidate of candidates) {
-		if (candidate.startsWith(path.resolve(cwd)) && fs.existsSync(candidate)) {
-			return normalizeMapKey(candidate);
-		}
+	const root = path.resolve(cwd);
+	for (const candidate of jsTsCandidatePaths(filePath, source)) {
+		if (!candidate.startsWith(root) || !fs.existsSync(candidate)) continue;
+		const normalized = normalizeMapKey(candidate);
+		if (ignoredIds?.has(normalized)) continue;
+		return normalized;
 	}
 	return undefined;
 }
@@ -971,6 +970,7 @@ function addJsTsFile(
 	cwd: string,
 	filePath: string,
 	facts: FactStore,
+	ignoredIds?: ReadonlySet<string>,
 ): void {
 	const normalized = normalizeMapKey(filePath);
 	const content = facts.getFileFact<string>(normalized, "file.content") ?? "";
@@ -995,7 +995,7 @@ function addJsTsFile(
 		) ?? [];
 
 	for (const entry of imports) {
-		const localFile = localImportToFile(cwd, normalized, entry.source);
+		const localFile = localImportToFile(cwd, normalized, entry.source, ignoredIds);
 		if (localFile) {
 			const targetId = `file:${localFile}`;
 			if (!graph.nodes.has(targetId)) {
@@ -1029,7 +1029,7 @@ function addJsTsFile(
 	// hint — third-party/stdlib imports have no graph file to narrow to.
 	const importedNameToFile = new Map<string, string>();
 	for (const entry of imports) {
-		const localFile = localImportToFile(cwd, normalized, entry.source);
+		const localFile = localImportToFile(cwd, normalized, entry.source, ignoredIds);
 		if (!localFile) continue;
 		for (const name of entry.names) importedNameToFile.set(name, localFile);
 		if (entry.defaultName) importedNameToFile.set(entry.defaultName, localFile);
@@ -1294,6 +1294,7 @@ function addTreeSitterFile(
 	filePath: string,
 	languageId: string,
 	extracted: ExtractedSymbols,
+	ignoredIds?: ReadonlySet<string>,
 ): void {
 	const normalized = normalizeMapKey(filePath);
 	const fileNodeId = `file:${normalized}`;
@@ -1380,7 +1381,17 @@ function addTreeSitterFile(
 	// An unresolvable source (stdlib, third-party, namespace-only langs) falls
 	// back to an UNRESOLVED external/module node — never a fabricated file edge.
 	for (const imp of extracted.imports) {
-		const resolved = resolveImportToFiles(cwd, filePath, languageId, imp.source);
+		// #694: drop any resolved target that's untracked-AND-gitignored (a build
+		// artifact with no surviving source twin) BEFORE deciding resolved vs
+		// unresolved — a fully-filtered-out result falls through to the same
+		// unresolved module/external placeholder below, never a fabricated
+		// ignored-file node.
+		const resolved = resolveImportToFiles(
+			cwd,
+			filePath,
+			languageId,
+			imp.source,
+		).filter((target) => !ignoredIds?.has(target));
 		if (resolved.length > 0) {
 			for (const target of resolved) {
 				const toNode = ensureFileNode(
@@ -1481,6 +1492,7 @@ function addCxxIncludeEdges(
 	graph: ReviewGraph,
 	cwd: string,
 	filePath: string,
+	ignoredIds?: ReadonlySet<string>,
 ): void {
 	let content = "";
 	try {
@@ -1493,7 +1505,9 @@ function addCxxIncludeEdges(
 		const source = parseLocalCxxInclude(line);
 		if (!source) continue;
 		const target = resolveCxxInclude(cwd, filePath, source);
-		if (!target) continue;
+		// #694: same ignore-gate as the tree-sitter import loop above — an
+		// untracked-AND-gitignored include target never becomes a node.
+		if (!target || ignoredIds?.has(target)) continue;
 		const languageId = mapKindToTreeSitterLanguage("cxx", target) ?? "cpp";
 		const toNode = ensureFileNode(graph, target, languageId);
 		addEdge(graph, {
@@ -1543,6 +1557,7 @@ async function addFileToGraph(
 	cwd: string,
 	file: string,
 	facts: FactStore,
+	ignoredIds?: ReadonlySet<string>,
 ): Promise<void> {
 	const kind = detectFileKind(file);
 	if (!kind || !MAIN_KINDS.has(kind)) return;
@@ -1551,14 +1566,14 @@ async function addFileToGraph(
 	if (detectFileRole(file) === "test") return;
 	if (kind === "jsts") {
 		await ensureReviewGraphFacts(file, cwd, facts);
-		addJsTsFile(graph, cwd, file, facts);
+		addJsTsFile(graph, cwd, file, facts, ignoredIds);
 		return;
 	}
 	const languageId = mapKindToTreeSitterLanguage(kind, file);
 	if (!languageId) return;
 	const extracted = await extractTreeSitterSymbols(file, languageId);
-	addTreeSitterFile(graph, cwd, file, languageId, extracted);
-	if (kind === "cxx") addCxxIncludeEdges(graph, cwd, file);
+	addTreeSitterFile(graph, cwd, file, languageId, extracted, ignoredIds);
+	if (kind === "cxx") addCxxIncludeEdges(graph, cwd, file, ignoredIds);
 }
 
 function restoreValidIncomingEdges(
@@ -1586,11 +1601,12 @@ async function updateGraphFiles(
 	cwd: string,
 	files: string[],
 	facts: FactStore,
+	ignoredIds?: ReadonlySet<string>,
 ): Promise<void> {
 	const preservedIncoming: ReviewGraphEdge[] = [];
 	for (const file of files) {
 		preservedIncoming.push(...removeFileOwnedGraphData(graph, file));
-		await addFileToGraph(graph, cwd, file, facts);
+		await addFileToGraph(graph, cwd, file, facts, ignoredIds);
 	}
 	restoreValidIncomingEdges(graph, preservedIncoming);
 	resolveDeferredSymbolEdges(graph);
@@ -1660,6 +1676,8 @@ interface IncrementalCtx {
 	facts: FactStore;
 	/** #451: seq to stamp onto the freshly-built entry (undefined ⇒ no fast path later). */
 	seqAtBuildStart?: number;
+	/** #694: untracked-AND-ignored ids, fetched once per build — see `_doBuildGraph`. */
+	ignoredIds?: ReadonlySet<string>;
 }
 
 /**
@@ -1756,7 +1774,7 @@ async function tryIncrementalFromCache(
 	}
 
 	const graph = cloneGraph(cached.graph);
-	await updateGraphFiles(graph, ctx.cwd, filesToUpdate, ctx.facts);
+	await updateGraphFiles(graph, ctx.cwd, filesToUpdate, ctx.facts, ctx.ignoredIds);
 	// #459: real re-extract ⇒ new generation.
 	const generation = ++_graphGenerationCounter;
 	const graphSnapshot = cloneGraph(graph);
@@ -1805,6 +1823,7 @@ async function trySeqFastpath(
 	facts: FactStore,
 	seqHint: GraphSeqHint,
 	seqAtBuildStart: number,
+	ignoredIds?: ReadonlySet<string>,
 ): Promise<SeqFastpathResult> {
 	const cached = _workspaceGraphCache.get(normalizedCwd);
 	// Condition 2: need an in-process entry that recorded a build seq.
@@ -1889,7 +1908,7 @@ async function trySeqFastpath(
 	// there's no second incremental implementation.
 	const graph = cloneGraph(cached.graph);
 	try {
-		await updateGraphFiles(graph, cwd, filesToUpdate, facts);
+		await updateGraphFiles(graph, cwd, filesToUpdate, facts, ignoredIds);
 	} catch {
 		return { fallback: "stat-error" };
 	}
@@ -1982,6 +2001,12 @@ async function _doBuildGraph(
 	// seq > stamp and is re-diffed next build (redundant re-extract, never a miss).
 	const seqAtBuildStart = seqHint?.projectSeq();
 
+	// #694: kick off the untracked-AND-ignored id fetch concurrently with the
+	// walk below — it's independent of both. Memoized/time-bounded internally
+	// (git-tracked-ignore.ts) so a hot per-edit rebuild loop shares one `git`
+	// spawn instead of paying for one per file/per edit.
+	const ignoredIdsPromise = collectUntrackedIgnoredIds(cwd);
+
 	// #451: seq fast path — skip the O(project) walk+stat sweep when the
 	// RuntimeCoordinator can tell us exactly which files changed. Any doubt inside
 	// falls through to the full sweep below (which refreshes the verify clock). The
@@ -1996,12 +2021,14 @@ async function _doBuildGraph(
 			facts,
 			seqHint,
 			seqAtBuildStart,
+			await ignoredIdsPromise,
 		);
 		if ("graph" in fast) return fast.graph;
 		seqFastpathFallback = fast.fallback;
 	}
 
 	const filesToBuild = await getGraphSourceFiles(cwd);
+	const ignoredIds = await ignoredIdsPromise;
 	const maxGraphFiles = getReviewGraphMaxFiles();
 	if (filesToBuild.length > maxGraphFiles) {
 		const graph = createEmptyGraph();
@@ -2063,6 +2090,7 @@ async function _doBuildGraph(
 			signature,
 			facts,
 			seqAtBuildStart,
+			ignoredIds,
 		});
 		if (incremental) {
 			_lastGraphBuildInfo.seqFastpathFallback = seqFastpathFallback;
@@ -2125,6 +2153,7 @@ async function _doBuildGraph(
 				signature,
 				facts,
 				seqAtBuildStart,
+				ignoredIds,
 			},
 		);
 		if (incremental) {
@@ -2136,7 +2165,7 @@ async function _doBuildGraph(
 	// Tier 3: full build
 	const graph = createEmptyGraph();
 	for (const file of filesToBuild) {
-		await addFileToGraph(graph, cwd, file, facts);
+		await addFileToGraph(graph, cwd, file, facts, ignoredIds);
 		if (normalizedChangedSet.has(file)) {
 			upsertChangedSymbols(graph, facts, file);
 		}
