@@ -82,6 +82,53 @@ describe("relative-path resolvers (ruby/zig/bash/dart)", () => {
 	});
 });
 
+describe("jsts resolver — source-twin preference (#694)", () => {
+	it("prefers the .ts source twin over a compiled .js sibling for an explicit .js specifier", () => {
+		write("src/a.ts", "import { b } from './b.js';\n");
+		write("src/b.ts", "export const b = 1;\n");
+		write("src/b.js", "exports.b = 1;\n"); // the compiled artifact
+		expect(resolveRel("jsts", "src/a.ts", "./b.js")).toEqual(["src/b.ts"]);
+	});
+
+	it("prefers the .tsx source twin over a compiled .js sibling", () => {
+		write("src/a.ts", "import { B } from './b.js';\n");
+		write("src/b.tsx", "export const B = () => null;\n");
+		write("src/b.js", "exports.B = () => null;\n");
+		expect(resolveRel("jsts", "src/a.ts", "./b.js")).toEqual(["src/b.tsx"]);
+	});
+
+	it("falls back to the compiled .js when no source twin exists (pure-JS project)", () => {
+		write("src/a.ts", "import { b } from './b.js';\n");
+		write("src/b.js", "exports.b = 1;\n");
+		expect(resolveRel("jsts", "src/a.ts", "./b.js")).toEqual(["src/b.js"]);
+	});
+
+	it("prefers .mts over a compiled .mjs sibling", () => {
+		write("src/a.ts", "import { b } from './b.mjs';\n");
+		write("src/b.mts", "export const b = 1;\n");
+		write("src/b.mjs", "export const b = 1;\n");
+		expect(resolveRel("jsts", "src/a.ts", "./b.mjs")).toEqual(["src/b.mts"]);
+	});
+
+	it("prefers .cts over a compiled .cjs sibling", () => {
+		write("src/a.ts", "import { b } from './b.cjs';\n");
+		write("src/b.cts", "export const b = 1;\n");
+		write("src/b.cjs", "module.exports.b = 1;\n");
+		expect(resolveRel("jsts", "src/a.ts", "./b.cjs")).toEqual(["src/b.cts"]);
+	});
+
+	it("resolves an extensionless specifier to the .ts source (no compiled twin involved)", () => {
+		write("src/a.ts", "import { b } from './b';\n");
+		write("src/b.ts", "export const b = 1;\n");
+		expect(resolveRel("jsts", "src/a.ts", "./b")).toEqual(["src/b.ts"]);
+	});
+
+	it("bare package specifiers stay unresolved", () => {
+		write("src/a.ts");
+		expect(resolveRel("jsts", "src/a.ts", "react")).toEqual([]);
+	});
+});
+
 describe("python resolver", () => {
 	it("resolves an absolute dotted module to a package file", () => {
 		write("pkg/__init__.py");

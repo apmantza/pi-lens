@@ -90,29 +90,69 @@ function resolveDart(cwd: string, filePath: string, source: string): string[] {
 
 // --- JS/TS -------------------------------------------------------------------
 
+// TS-as-ESM sources commonly write `import { x } from "./service.js"` while
+// the real file on disk is `service.ts` (Node's ESM resolver requires the
+// RUNTIME extension in the specifier, which is `.js` even for a `.ts` source —
+// this repo's own `clients/**/*.ts` does this throughout). Stripping a known
+// JS/TS extension from the specifier before re-appending candidate extensions
+// lets that universal pattern resolve to the real source file. Exported so
+// builder.ts's warm `localImportToFile` shares the exact same regex (#694).
+export const JS_TS_EXT_RE = /\.(mjs|cjs|jsx?|tsx?)$/i;
+
 /**
- * Resolve a relative ESM import (`./x`, `../y`) to an in-project file, trying the
- * ts/tsx/js/jsx extensions and the `index.*` directory form. Mirrors the warm
- * graph's `localImportToFile` (builder.ts) — duplicated rather than imported to
- * avoid a builder→resolvers cycle. Bare specifiers (`react`, `@scope/pkg`) are
- * package deps → external, so they return []. Used only on the COLD module_report
- * path: the warm jsts builder resolves imports via the TS compiler and never
- * reaches this resolver.
+ * Ordered candidate list for resolving a relative JS/TS import specifier
+ * (already resolved to an absolute base path) to an on-disk file, with
+ * SOURCE-TWIN PREFERENCE (#694): on a repo that compiles in place, `./foo.js`
+ * commonly has BOTH the written `foo.js` (compiled artifact) and a `foo.ts`
+ * source sitting next to it. Trying the `.ts`/`.tsx` (or `.mts`/`.cts` for an
+ * `.mjs`/`.cjs` specifier) twin BEFORE the literal/compiled extension means
+ * the edge lands on the file developers actually edit; the compiled artifact
+ * is only used when no source twin exists on disk (pure-JS projects, vendored
+ * `.js`, or a genuinely JS-only import). Every candidate is still
+ * existence-checked by the caller — a wrong guess can never fabricate an edge
+ * to a file that isn't there, it just tries the next candidate.
+ *
+ * Shared between the cold module_report path ({@link resolveJsTs} below) and
+ * the warm review-graph builder's `localImportToFile` (builder.ts) so the two
+ * resolution paths can never diverge on which twin wins (#694 — a divergent
+ * second mapping was exactly the kind of thing to avoid).
  */
-function resolveJsTs(cwd: string, filePath: string, source: string): string[] {
-	if (!source.startsWith(".")) return [];
+export function jsTsCandidatePaths(filePath: string, source: string): string[] {
 	const base = path.resolve(path.dirname(filePath), source);
-	return firstExistingFile(cwd, [
-		base,
-		`${base}.ts`,
-		`${base}.tsx`,
-		`${base}.js`,
-		`${base}.jsx`,
+	const strippedSource = source.replace(JS_TS_EXT_RE, "");
+	const strippedBase =
+		strippedSource === source
+			? base
+			: path.resolve(path.dirname(filePath), strippedSource);
+	const ext = path.extname(source).toLowerCase();
+	const candidates: string[] = [];
+	if (ext === ".mjs") candidates.push(`${strippedBase}.mts`);
+	if (ext === ".cjs") candidates.push(`${strippedBase}.cts`);
+	candidates.push(`${strippedBase}.ts`, `${strippedBase}.tsx`);
+	// The literal specifier path (covers both "no extension in the specifier"
+	// — base === strippedBase — and the compiled/as-written extension itself).
+	candidates.push(base);
+	candidates.push(`${strippedBase}.js`, `${strippedBase}.jsx`);
+	candidates.push(
 		path.join(base, "index.ts"),
 		path.join(base, "index.tsx"),
 		path.join(base, "index.js"),
 		path.join(base, "index.jsx"),
-	]);
+	);
+	return candidates;
+}
+
+/**
+ * Resolve a relative ESM import (`./x`, `../y`) to an in-project file — see
+ * {@link jsTsCandidatePaths} for the source-twin-preferring candidate order.
+ * Bare specifiers (`react`, `@scope/pkg`) are package deps → external, so they
+ * return []. Used only on the COLD module_report path: the warm jsts builder
+ * resolves imports via `localImportToFile` (builder.ts), which shares this
+ * same candidate list.
+ */
+function resolveJsTs(cwd: string, filePath: string, source: string): string[] {
+	if (!source.startsWith(".")) return [];
+	return firstExistingFile(cwd, jsTsCandidatePaths(filePath, source));
 }
 
 // --- C / C++ -----------------------------------------------------------------

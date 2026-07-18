@@ -19,8 +19,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { FactStore } from "./dispatch/fact-store.js";
-import { getProjectDataDir, isExcludedDirName } from "./file-utils.js";
-import { safeSpawnAsync } from "./safe-spawn.js";
+import { getProjectDataDir } from "./file-utils.js";
+import { collectUntrackedIgnoredIds } from "./git-tracked-ignore.js";
 import { normalizeMapKey } from "./path-utils.js";
 import { buildOrUpdateGraph } from "./review-graph/service.js";
 import type { ReviewGraph } from "./review-graph/types.js";
@@ -1143,65 +1143,12 @@ function resolveMaxNodes(): number {
 		: DEFAULT_MAX_MAP_NODES;
 }
 
-/**
- * Parses `git ls-files --others --ignored --exclude-standard` output
- * (repo-relative paths, one per line) into normalized map-key file ids.
- * Exported as a pure function so the parse/normalize step is unit-testable
- * without mocking the spawn (mocking safe-spawn module-wide in the lens-map
- * test file would also intercept the review-graph build's own git calls in
- * the end-to-end test — disproportionate for what's a line-split + join).
- */
-export function parseUntrackedIgnoredOutput(
-	stdout: string,
-	cwd: string,
-): Set<string> {
-	const ids = new Set<string>();
-	for (const line of stdout.split(/\r?\n/)) {
-		const rel = line.trim();
-		if (!rel) continue;
-		// Paths inside shared-excluded dirs (node_modules, dist, .git, …) can
-		// never be review-graph nodes — the graph walk itself routes exclusion
-		// through `isExcludedDirName` — so skip them BEFORE paying for
-		// `normalizeMapKey` (realpath-backed, per-call filesystem cost): on
-		// pi-lens itself this prunes a 66k-line ignored list (node_modules)
-		// down to ~1.6k paths that actually need normalizing.
-		const dirSegments = rel.split("/").slice(0, -1);
-		if (dirSegments.some((segment) => isExcludedDirName(segment))) continue;
-		ids.add(normalizeMapKey(path.join(cwd, rel)));
-	}
-	return ids;
-}
-
-/**
- * The exclusion set for the map: files that are untracked AND gitignored —
- * exactly the set git itself considers ignored. THE critical git semantic: a
- * TRACKED file is never ignored, even when a .gitignore pattern matches it
- * (pi-lens's own committed `clients/deps/*.js` vendored sources match the
- * repo's `*.js` ignore pattern and MUST stay on the map) — which is why this
- * asks git (`ls-files --others --ignored --exclude-standard`) instead of
- * running a matcher over .gitignore patterns.
- *
- * Degradation: when git is absent/fails/times out (not a git repo, bare
- * checkout, etc.) this returns undefined and the caller SKIPS the filter
- * entirely — the map shows the graph as-known. A matcher-only fallback would
- * wrongly drop tracked vendored files; silently guessing is worse than
- * rendering what we know.
- */
-async function collectUntrackedIgnoredIds(
-	cwd: string,
-): Promise<ReadonlySet<string> | undefined> {
-	try {
-		const result = await safeSpawnAsync(
-			"git",
-			["ls-files", "--others", "--ignored", "--exclude-standard"],
-			{ cwd, timeout: 10_000, resourceLabel: "lens-map-git-ignored" },
-		);
-		if (result.error || result.status !== 0) return undefined;
-		return parseUntrackedIgnoredOutput(result.stdout, cwd);
-	} catch {
-		return undefined;
-	}
-}
+// #694: the untracked-AND-ignored id computation (parse + git spawn + the
+// tracked-file semantic) now lives in git-tracked-ignore.ts, shared with the
+// review-graph builder's ignore-gated node creation. Re-exported here so
+// existing imports of `parseUntrackedIgnoredOutput` from this module keep
+// working unchanged.
+export { parseUntrackedIgnoredOutput } from "./git-tracked-ignore.js";
 
 // Human-facing display path: cwd-relative + forward-slashed when the file
 // sits under the project root, else the absolute (slash-normalized) path.
