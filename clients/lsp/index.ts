@@ -1106,6 +1106,22 @@ export class LSPService {
 		recordLsp(server.id, root, "spawn_start");
 		try {
 			const spawned = await server.spawn(root, { allowInstall });
+
+			// Guard 1: service was shut down while we were waiting for the spawn.
+			// Kill the raw process — no LSPClient exists yet — and bail out without
+			// marking the key broken (this is not a server failure).
+			if (this.isDestroyed) {
+				try {
+					spawned?.process?.process?.kill();
+				} catch {
+					// pi-lens-ignore: missing-error-propagation — best-effort kill on aborted spawn
+				}
+				logSessionStart(
+					`lsp spawn ${server.id}: aborted (service shut down mid-spawn)`,
+				);
+				return undefined;
+			}
+
 			if (!spawned) {
 				logSessionStart(
 					`lsp spawn ${server.id}: unavailable (${Date.now() - startedAt}ms)`,
@@ -1155,6 +1171,17 @@ export class LSPService {
 				initializeTimeoutMs: server.initializeTimeoutMs,
 				launchVariant: spawned.launchVariant,
 			});
+
+			// Guard 2: service was shut down while we were completing the initialize
+			// handshake. Shut down the live client best-effort and do not register it.
+			if (this.isDestroyed) {
+				client.shutdown({ fast: true }).catch(() => {});
+				logSessionStart(
+					`lsp spawn ${server.id}: aborted (service shut down mid-initialize)`,
+				);
+				return undefined;
+			}
+
 			const wsDiag =
 				typeof client.getWorkspaceDiagnosticsSupport === "function"
 					? client.getWorkspaceDiagnosticsSupport()
@@ -3034,8 +3061,22 @@ export class LSPService {
 	async shutdown(options: LSPShutdownOptions = {}): Promise<void> {
 		if (this.checkDestroyed()) return;
 		this.isDestroyed = true;
-		// Cancel any in-flight spawns
-		this.state.inFlight.clear();
+
+		// Belt-and-braces: wait for any in-flight spawns so that Guard 1/2 in
+		// spawnClient can observe isDestroyed and clean up. Skip on the
+		// process-exiting path — the event loop is closing and we must not block.
+		if (!options.processExiting && this.state.inFlight.size > 0) {
+			const pending = Array.from(this.state.inFlight.values());
+			this.state.inFlight.clear();
+			const settled = await Promise.allSettled(pending);
+			for (const result of settled) {
+				if (result.status === "fulfilled" && result.value?.client) {
+					result.value.client.shutdown({ fast: true }).catch(() => {});
+				}
+			}
+		} else {
+			this.state.inFlight.clear();
+		}
 
 		for (const [_key, client] of this.state.clients) {
 			try {
