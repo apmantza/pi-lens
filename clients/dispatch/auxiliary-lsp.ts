@@ -19,6 +19,7 @@
 
 import type { LSPDiagnostic } from "../lsp/client.js";
 import { shouldDegradeAuxiliaryLsp } from "../lsp-budget.js";
+import { isSubagentSession } from "../subagent-mode.js";
 import type { FileRole } from "../file-role.js";
 import { findLocalOpengrepConfig } from "../opengrep-config.js";
 import { findLocalTyposConfig } from "../typos-config.js";
@@ -200,7 +201,12 @@ export type GetFlag = (flag: string) => boolean | string | undefined;
  * per-file: once over budget, this session never spawns its auxiliary fleet,
  * rather than flip-flopping file to file. */
 export function enabledAuxiliaryLspServerIds(getFlag: GetFlag): string[] {
-	if (shouldDegradeAuxiliaryLsp()) return [];
+	// #449 slice 2 (budget): skip auxiliaries when machine-wide LSP budget is
+	// exceeded. #713 (subagent light mode): reuse the same seam — a subagent
+	// session also skips auxiliaries; the parent session already runs them on
+	// the same cwd. PI_LENS_SUBAGENT_FULL=1 restores full behavior via
+	// isSubagentSession() returning false.
+	if (shouldDegradeAuxiliaryLsp() || isSubagentSession()) return [];
 	return AUXILIARY_LSP_PROFILES.flatMap((p) =>
 		p.enabledByDefault &&
 		!(p.killSwitchFlag && getFlag(p.killSwitchFlag) === true)

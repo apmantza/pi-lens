@@ -46,6 +46,7 @@ import { logLatency } from "./latency-logger.js";
 import { updateHeartbeat } from "./instance-registry.js";
 import { emitLensTurnFindings } from "./lens-events.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
+import { isSubagentSession } from "./subagent-mode.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 import type { TestResult, TestRunnerClient } from "./test-runner-client.js";
 
@@ -203,10 +204,18 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	const files = Object.keys(turnState.files);
 
 	if (files.length === 0) {
-		dbg("turn_end: no modified files, scheduling LSP idle reset (240s)");
+		// #713: subagent sessions use a shorter idle reset (60s) — a short-lived
+		// task agent holding a warm fleet for 4 minutes after its last turn is
+		// pure waste under fan-out. Classify ONCE here so every tick in this call
+		// path shares the same answer. PI_LENS_SUBAGENT_FULL=1 restores 240s via
+		// isSubagentSession() returning false.
+		const idleResetMs = isSubagentSession() ? 60_000 : 240_000;
+		dbg(
+			`turn_end: no modified files, scheduling LSP idle reset (${idleResetMs / 1000}s)`,
+		);
 		if (!getFlag("no-lsp")) {
 			const sessionGeneration = runtime.sessionGeneration;
-			scheduleLSPIdleReset(resetLSPService, 240_000, {
+			scheduleLSPIdleReset(resetLSPService, idleResetMs, {
 				isCurrentSession: () => runtime.isCurrentSession(sessionGeneration),
 				onError: (err) => dbg(`lsp idle reset failed: ${err}`),
 			});

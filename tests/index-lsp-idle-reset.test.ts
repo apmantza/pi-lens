@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { _resetSubagentModeForTests } from "../clients/subagent-mode.js";
 import { createPiMock } from "./support/pi-mock.js";
 
 const INTEGRATION_TIMEOUT_MS = 45_000;
@@ -121,6 +122,185 @@ describe("index.ts LSP idle reset", () => {
 			expect(lspStatuses().at(-1)).toBe("LSP Inactive");
 		} finally {
 			vi.useRealTimers();
+		}
+	}, INTEGRATION_TIMEOUT_MS);
+
+	// #713: subagent light mode uses a shorter idle reset (60s instead of 240s).
+	it("subagent session fires the idle reset at 60s, not 240s (#713)", async () => {
+		process.env.PI_SUBAGENT_CHILD = "1";
+		_resetSubagentModeForTests();
+
+		try {
+			const resetLSPService = vi.fn();
+			vi.doMock("../clients/lsp/index.js", () => ({
+				getLSPService: () => ({
+					touchFile: vi.fn(),
+					getAliveClientCount: () => 0,
+					getAliveServerIds: () => [],
+				}),
+				resetLSPService,
+			}));
+			vi.doMock("../clients/bootstrap.js", () => ({
+				loadBootstrapClients: async () => ({
+					knipClient: { isAvailable: () => false },
+					depChecker: { isAvailable: () => false },
+					testRunnerClient: { detectRunner: () => null },
+				}),
+			}));
+
+			const { default: registerExtension } = await import("../index.ts");
+			const { pi, handlers } = createMockPi({ "no-lsp": false });
+			registerExtension(pi);
+
+			const turnEnd = handlers.turn_end?.[0];
+			expect(turnEnd).toBeTypeOf("function");
+
+			const ctx = {
+				cwd: tmpDir,
+				ui: {
+					notify: vi.fn(),
+					setStatus: vi.fn(),
+					theme: { fg: (_color: string, text: string) => text },
+				},
+			};
+
+			vi.useFakeTimers();
+			try {
+				await turnEnd?.({}, ctx);
+
+				// Should NOT fire at 59 seconds
+				await vi.advanceTimersByTimeAsync(59_000);
+				expect(resetLSPService).not.toHaveBeenCalled();
+
+				// Should fire at exactly 60 seconds
+				await vi.advanceTimersByTimeAsync(1_000);
+				expect(resetLSPService).toHaveBeenCalledTimes(1);
+			} finally {
+				vi.useRealTimers();
+			}
+		} finally {
+			delete process.env.PI_SUBAGENT_CHILD;
+			_resetSubagentModeForTests();
+		}
+	}, INTEGRATION_TIMEOUT_MS);
+
+	it("normal (non-subagent) session still uses 240s idle reset (#713)", async () => {
+		// Ensure no subagent env vars are set
+		delete process.env.PI_SUBAGENT_CHILD;
+		delete process.env.PI_SUBAGENT_CHILD_AGENT;
+		delete process.env.PI_SUBAGENT_PARENT_PID;
+		_resetSubagentModeForTests();
+
+		const resetLSPService = vi.fn();
+		vi.doMock("../clients/lsp/index.js", () => ({
+			getLSPService: () => ({
+				touchFile: vi.fn(),
+				getAliveClientCount: () => 0,
+				getAliveServerIds: () => [],
+			}),
+			resetLSPService,
+		}));
+		vi.doMock("../clients/bootstrap.js", () => ({
+			loadBootstrapClients: async () => ({
+				knipClient: { isAvailable: () => false },
+				depChecker: { isAvailable: () => false },
+				testRunnerClient: { detectRunner: () => null },
+			}),
+		}));
+
+		const { default: registerExtension } = await import("../index.ts");
+		const { pi, handlers } = createMockPi({ "no-lsp": false });
+		registerExtension(pi);
+
+		const turnEnd = handlers.turn_end?.[0];
+		expect(turnEnd).toBeTypeOf("function");
+
+		const ctx = {
+			cwd: tmpDir,
+			ui: {
+				notify: vi.fn(),
+				setStatus: vi.fn(),
+				theme: { fg: (_color: string, text: string) => text },
+			},
+		};
+
+		vi.useFakeTimers();
+		try {
+			await turnEnd?.({}, ctx);
+
+			// Should NOT fire at 60s (subagent threshold)
+			await vi.advanceTimersByTimeAsync(60_000);
+			expect(resetLSPService).not.toHaveBeenCalled();
+
+			// Should NOT fire at 239s
+			await vi.advanceTimersByTimeAsync(179_000);
+			expect(resetLSPService).not.toHaveBeenCalled();
+
+			// Should fire at 240s
+			await vi.advanceTimersByTimeAsync(1_000);
+			expect(resetLSPService).toHaveBeenCalledTimes(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	}, INTEGRATION_TIMEOUT_MS);
+
+	it("PI_LENS_SUBAGENT_FULL=1 restores 240s idle reset even in a subagent session (#713)", async () => {
+		process.env.PI_SUBAGENT_CHILD = "1";
+		process.env.PI_LENS_SUBAGENT_FULL = "1";
+		_resetSubagentModeForTests();
+
+		try {
+			const resetLSPService = vi.fn();
+			vi.doMock("../clients/lsp/index.js", () => ({
+				getLSPService: () => ({
+					touchFile: vi.fn(),
+					getAliveClientCount: () => 0,
+					getAliveServerIds: () => [],
+				}),
+				resetLSPService,
+			}));
+			vi.doMock("../clients/bootstrap.js", () => ({
+				loadBootstrapClients: async () => ({
+					knipClient: { isAvailable: () => false },
+					depChecker: { isAvailable: () => false },
+					testRunnerClient: { detectRunner: () => null },
+				}),
+			}));
+
+			const { default: registerExtension } = await import("../index.ts");
+			const { pi, handlers } = createMockPi({ "no-lsp": false });
+			registerExtension(pi);
+
+			const turnEnd = handlers.turn_end?.[0];
+			expect(turnEnd).toBeTypeOf("function");
+
+			const ctx = {
+				cwd: tmpDir,
+				ui: {
+					notify: vi.fn(),
+					setStatus: vi.fn(),
+					theme: { fg: (_color: string, text: string) => text },
+				},
+			};
+
+			vi.useFakeTimers();
+			try {
+				await turnEnd?.({}, ctx);
+
+				// Escape hatch: should NOT fire at 60s
+				await vi.advanceTimersByTimeAsync(60_000);
+				expect(resetLSPService).not.toHaveBeenCalled();
+
+				// Should fire at 240s (full behavior restored)
+				await vi.advanceTimersByTimeAsync(180_000);
+				expect(resetLSPService).toHaveBeenCalledTimes(1);
+			} finally {
+				vi.useRealTimers();
+			}
+		} finally {
+			delete process.env.PI_SUBAGENT_CHILD;
+			delete process.env.PI_LENS_SUBAGENT_FULL;
+			_resetSubagentModeForTests();
 		}
 	}, INTEGRATION_TIMEOUT_MS);
 });
