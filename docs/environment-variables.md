@@ -39,6 +39,22 @@ read-guard,…}.log` likewise stay put.
 path. One-shot `pi --print` sessions auto-use `quick` to reduce latency
 without changing the steady-state behaviour of an interactive session.
 
+### `PI_LENS_STARTUP_SCAN_VERDICT_TTL_MS`
+
+How long (ms) a persisted `too-many-source-files` startup-scan verdict is
+trusted before the source-file count is re-walked (default 24h). The verdict
+is cached in the project snapshot so repeated `pi -p` runs in a very large
+repo skip the counting walk entirely; a repo that shrinks below the threshold
+recovers when the TTL expires. Other verdicts use content-based freshness and
+ignore this setting.
+
+## Project map
+
+### `PI_LENS_MAP_MAX_NODES`
+
+Node cap for `/lens-map` (default 500). Graphs with more files keep only the
+highest-degree ones and render a visible truncation note.
+
 ## Context injection
 
 ### `PI_LENS_NO_CONTEXT_INJECTION`

@@ -18,6 +18,10 @@ pi-lens gives AI coding agents fast, language-aware feedback while they write/ed
 - Review-graph intelligence for supported languages via bundled tree-sitter WASMs
 - Ranked identifier search (`symbol_search`) over an always-warm word index,
   feeding the discovery funnel (symbol_search → module_report → read_symbol)
+- Diagnostic triage (`lens_diagnostic_mark`): findings can be marked
+  false-positive, suppressed in source, deferred, or flagged-to-fix — honored
+  across all surfaces
+- `/lens-map` — interactive HTML dependency map of the project
 - Read-guard and edit-autopatch support to reduce bad edits
 - Background security/dependency scans for opted-in projects
 
@@ -42,6 +46,8 @@ pi install git:github.com/apmantza/pi-lens
 - [Word index](docs/word-index.md) — identifier search (`symbol_search`) and
   the discovery funnel
 - [Tools and commands](docs/tools.md) — runtime flags and slash commands
+- [Diagnostic dispositions](docs/dispositions.md) — triage: false-positive,
+  suppress, defer, flagged-to-fix
 - [Configuration](docs/globalconfig.md) — global and project config files
 - [Environment variables](docs/env_variables.md) — common env vars and full
   reference link

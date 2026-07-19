@@ -78,6 +78,7 @@ migrate-*.js
 !docs/environment-variables.md
 !docs/fable.md
 !docs/subagent-compat.md
+!docs/dispositions.md
 !docs/word-index.md
 !skills/**/*.md
 !.github/PULL_REQUEST_TEMPLATE.md

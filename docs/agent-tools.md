@@ -3,13 +3,15 @@
 pi-lens registers the following tools with the pi agent. Most are also exposed
 through the MCP mirror (`clients/lens-engine.ts` is the seam both adapters
 share) — current exceptions: `ast_grep_outline` and `ast_grep_dump`
-(module_report supersedes them for discovery). `read_enclosing` gained MCP
-parity (`pilens_read_enclosing`) as of #536, closing #522 item 1.
+(module_report supersedes them for discovery), and `lens_diagnostic_mark`
+(pi-lens-internal for now). `read_enclosing` gained MCP parity
+(`pilens_read_enclosing`) as of #536, closing #522 item 1.
 
 **Dynamic tooling.** Six tools stay always-active: `lens_diagnostics`,
 `lsp_diagnostics`, `module_report`, `read_symbol`, `read_enclosing`,
-`symbol_search`. Five situational tools — `ast_grep_search`, `ast_grep_replace`,
-`ast_grep_outline`, `ast_grep_dump`, `lsp_navigation` — are registered but
+`symbol_search`. Six situational tools — `ast_grep_search`, `ast_grep_replace`,
+`ast_grep_outline`, `ast_grep_dump`, `lsp_navigation`, `lens_diagnostic_mark` —
+are registered but
 inactive by default; the model activates the ones it needs via the always-active
 loader tool `pi_lens_activate_tools`, per pi's dynamic-tool-loading API
 (`pi.setActiveTools`/`pi.getActiveTools`). Feature-detected: on hosts without
@@ -21,6 +23,11 @@ exactly as before (`tools/activate-tools.ts`, wired in `index.ts`).
 - **`lens_diagnostics`** — Cached diagnostic state for the current session.
   Modes: `delta` (current turn), `all` (resurfaces stale blockers dropped from
   turn context), `full` (project-wide scan).
+- **`lens_diagnostic_mark`** — Triage a diagnostic: `false-positive` /
+  `suppress` (writes an inline `pi-lens-ignore` comment) / `defer`
+  (session-only) / `flagged` (persists, rendered `📌 flagged-to-fix`).
+  Content-anchored so marks survive edits; every mark is logged and published
+  on the bus. See [dispositions.md](dispositions.md).
 - **`lsp_diagnostics`** — File- or directory-scoped LSP diagnostics via the
   active language server.
 - **`lsp_navigation`** — IDE-style navigation: `definition`, `references`,
