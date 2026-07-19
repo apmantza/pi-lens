@@ -49,6 +49,10 @@ import {
 	buildScopeKey,
 	createWorkspaceDiagnosticsCacheContext,
 } from "./workspace-diagnostics-cache.js";
+import {
+	attemptTsserverSyncDiagnostics,
+} from "./tsserver-sync.js";
+import { classifyCascadeWaitTier } from "./cascade-tier.js";
 
 // --- Init override helpers ---
 
@@ -157,6 +161,22 @@ function readEnvDiagnosticsWaitMs(): number | undefined {
 	if (raw === undefined) return undefined;
 	const parsed = Number.parseInt(raw, 10);
 	if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+	return parsed;
+}
+
+/**
+ * #707: grace delay before the racing tsserver sync clean-confirm fires on a
+ * tier-3 silent primary. Short enough to beat the full push-wait budget by a
+ * wide margin (~300ms grace + sync RTT vs ~1000ms budget), long enough to give
+ * a genuinely dirty file's push a head start — a push that arrives within the
+ * grace costs zero extra requests. Read at call time (not memoized) so tests
+ * and users can tune without a rebuild.
+ */
+function readTsserverSyncGraceMs(): number {
+	const raw = process.env.PI_LENS_TSSERVER_SYNC_GRACE_MS;
+	if (raw === undefined) return 300;
+	const parsed = Number.parseInt(raw, 10);
+	if (!Number.isFinite(parsed) || parsed < 0) return 300;
 	return parsed;
 }
 const DIAGNOSTICS_SEMANTIC_SETTLE_THRESHOLD_MS = Math.max(
@@ -1437,6 +1457,15 @@ export class LSPService {
 		}
 
 		let diagnosticsTimedOut = false;
+		// #707: tsserver sync clean-confirm state. `tsserverSyncEligible` is the
+		// full gate (evaluated once, before the wait); `tsserverSyncConfirmed`
+		// holds the sync commands' answer when the racing confirm won the wait
+		// (undefined = the race didn't produce an answer; the end-of-wait
+		// fallback below may still fill it in on a timed-out empty result).
+		let tsserverSyncEligible = false;
+		let tsserverSyncConfirmed:
+			| import("./client.js").LSPDiagnostic[]
+			| undefined = undefined;
 		if (diagnosticsMode !== "none") {
 			// Resolution: env wins so users can tune the cap without rebuilding.
 			// Otherwise, on the single-server hot path (primary scope), use that
@@ -1540,8 +1569,37 @@ export class LSPService {
 				0,
 				...spawned.map((e) => timeoutFor(e.client.serverId)),
 			);
+
+			// #707: evaluate the tsserver sync clean-confirm gate BEFORE the wait
+			// starts. Cheap synchronous gates first (notify succeeded, collecting,
+			// primary scope, strategy marked silentOnClean — only classic
+			// typescript-language-server carries that flag today), then the live
+			// capability-snapshot tier classification (`classifyCascadeWaitTier`,
+			// which also excludes native-ts7 via `launchVariant`). Non-typescript
+			// and pull-capable servers fail the synchronous `silentOnClean` gate and
+			// pay ZERO extra work — not even the snapshot read.
+			if (
+				!notifyWriteTimedOut &&
+				options.collectDiagnostics === true &&
+				clientScope === "primary" &&
+				spawned.length === 1 &&
+				getStrategy(spawned[0].client.serverId).silentOnClean === true
+			) {
+				try {
+					const snapshots = await this.getCapabilitySnapshots(filePath);
+					tsserverSyncEligible =
+						classifyCascadeWaitTier(this, filePath, snapshots) ===
+						"tier3-silent";
+				} catch {
+					// Fail-safe: ineligible — today's full wait, no sync attempt.
+				}
+			}
+
 			const waitStartedAt = Date.now();
-			await Promise.all(
+			// The push wait — same per-server budget composition as before #707;
+			// only the awaiting changed (assigned so it can be raced below).
+			let pushWaitSettled = false;
+			const pushWait = Promise.all(
 				spawned.map((entry) => {
 					const serverTimeout = timeoutFor(entry.client.serverId);
 					const baseline = diagnosticBaselines.get(entry.client);
@@ -1553,12 +1611,105 @@ export class LSPService {
 							: entry.client.waitForDiagnostics(filePath, serverTimeout);
 					return wait.catch(() => undefined);
 				}),
-			);
+			).then(() => {
+				pushWaitSettled = true;
+			});
+
+			if (tsserverSyncEligible) {
+				// #707 racing variant: rather than burning the full push-wait budget
+				// on a silent-on-clean server (which by definition never answers on a
+				// clean file), race the push wait against a grace-delayed sync
+				// confirm. The grace (default 300ms, PI_LENS_TSSERVER_SYNC_GRACE_MS)
+				// gives a genuinely dirty file's push a head start: if diagnostics
+				// arrive before the grace elapses, the sync request never goes out —
+				// zero new latency or requests on the push-answers path.
+				//
+				// Race semantics:
+				//   - sync answers first → that's the confirmed result (clean OR
+				//     dirty — the sync commands return the file's real syntactic +
+				//     semantic state, so a dirty-file win is still correct and its
+				//     findings are surfaced, never discarded).
+				//   - push settles first → push wins; a still-in-flight sync outcome
+				//     is discarded (the racer checks `pushWaitSettled` after the
+				//     call returns and drops its own result).
+				//   - sync unavailable/fails → the racer parks on a never-resolving
+				//     promise so the race is decided by the push wait's own budget,
+				//     exactly today's behavior (the end-of-wait fallback below still
+				//     gets its shot on a timed-out empty result).
+				// The racer never rejects (every failure path is caught), so the
+				// losing promise can never surface as an unhandled rejection.
+				const graceMs = readTsserverSyncGraceMs();
+				const primaryClient = spawned[0].client;
+				// Resolves with the sync commands' diagnostics when the confirm
+				// succeeds; parks on a never-resolving promise on EVERY other path
+				// (push already answered, sync unavailable/failed, push won while
+				// in flight) so the race is then decided by the push wait's own
+				// budget — exactly today's behavior.
+				const syncRacer = (async (): Promise<
+					import("./client.js").LSPDiagnostic[]
+				> => {
+					await new Promise<void>((resolve) => {
+						const timer = setTimeout(resolve, graceMs);
+						timer.unref?.();
+					});
+					// Push already answered (settled, or published diagnostics that
+					// its wait is about to settle on) — nothing to confirm, no sync
+					// request goes out.
+					if (
+						pushWaitSettled ||
+						primaryClient.getDiagnostics(filePath).length > 0
+					) {
+						return new Promise<never>(() => {});
+					}
+					try {
+						const result = await attemptTsserverSyncDiagnostics(
+							filePath,
+							this,
+						);
+						if (result === undefined || pushWaitSettled) {
+							// Sync unavailable/failed, or push won while the sync call
+							// was in flight — drop the sync outcome and let the push
+							// wait decide the race.
+							return new Promise<never>(() => {});
+						}
+						return result;
+					} catch {
+						return new Promise<never>(() => {});
+					}
+				})();
+				const raceOutcome = await Promise.race([
+					pushWait.then((): undefined => undefined),
+					syncRacer,
+				]);
+				if (raceOutcome !== undefined) {
+					tsserverSyncConfirmed = raceOutcome;
+				}
+			} else {
+				await pushWait;
+			}
 			const waitedMs = Date.now() - waitStartedAt;
-			// Within ~20 ms of the configured budget we treat it as a timeout;
-			// the LSP didn't beat the cap. Diagnostics that arrive late still
-			// land in the client's cache and surface on the next edit.
-			if (waitedMs + 20 >= timeoutMs) {
+			if (tsserverSyncConfirmed !== undefined) {
+				// #707: the racing sync confirm won — a definitive answer well under
+				// the push-wait budget. Not a timeout, not inconclusive.
+				logLatency({
+					type: "phase",
+					phase: "lsp_tsserver_sync_confirm",
+					filePath: normalizedPath,
+					durationMs: waitedMs,
+					metadata: {
+						source,
+						clientScope,
+						diagnosticsMode,
+						mode: "race",
+						confirmedDiagnosticCount: tsserverSyncConfirmed.length,
+						budgetMs: timeoutMs,
+						savedVsBudgetMs: Math.max(0, timeoutMs - waitedMs),
+					},
+				});
+			} else if (waitedMs + 20 >= timeoutMs) {
+				// Within ~20 ms of the configured budget we treat it as a timeout;
+				// the LSP didn't beat the cap. Diagnostics that arrive late still
+				// land in the client's cache and surface on the next edit.
 				diagnosticsTimedOut = true;
 				logLatency({
 					type: "phase",
@@ -1575,11 +1726,70 @@ export class LSPService {
 			}
 		}
 
-		const collected = options.collectDiagnostics
-			? mergeLspDiagnostics(
-					spawned.flatMap((entry) => entry.client.getDiagnostics(filePath)),
-				)
+		// #707: when the racing sync confirm won the wait, its answer IS the
+		// collected result — the file's real syntactic + semantic state straight
+		// from tsserver (clean = [], dirty = real findings that a silentOnClean
+		// server had computed but never published). Otherwise merge the push
+		// diagnostics from the client cache as always.
+		let collected = options.collectDiagnostics
+			? tsserverSyncConfirmed !== undefined
+				? mergeLspDiagnostics(tsserverSyncConfirmed)
+				: mergeLspDiagnostics(
+						spawned.flatMap((entry) => entry.client.getDiagnostics(filePath)),
+					)
 			: undefined;
+
+		// #707 end-of-wait fallback: when the racing confirm did NOT decide the
+		// wait (sync unavailable/failed mid-race, or push resolved as a bare
+		// timeout) and the wait timed out with an empty result on an eligible
+		// touch, give the sync clean-confirm one last shot before reporting
+		// inconclusive. `tsserverSyncEligible` already encodes every gate (notify
+		// succeeded, collecting, primary scope, tier3-silent classic typescript —
+		// native-ts7 excluded by `classifyCascadeWaitTier`). If the sync call
+		// answers (even with an empty body, which is a confirmed clean), we use
+		// those diagnostics as the confirmed result and clear the
+		// `diagnosticsTimedOut` flag so the touch is no longer treated as
+		// inconclusive. Sync diagnostics on a dirty file are surfaced, not
+		// discarded. If the sync call fails or is unavailable, we fall through to
+		// today's behavior: `inconclusive` = true, `collected` unchanged. This
+		// turns "unconfirmed after ~1000ms" into "confirmed at ~wait+sync-RTT"
+		// even when the race path couldn't answer.
+		if (
+			diagnosticsTimedOut &&
+			tsserverSyncEligible &&
+			collected !== undefined &&
+			collected.length === 0
+		) {
+			try {
+				const syncResult = await attemptTsserverSyncDiagnostics(
+					filePath,
+					this,
+				);
+				if (syncResult !== undefined) {
+					// Sync answered — confirmed result (clean or with diagnostics).
+					// Clear the timed-out flag so the touch is no longer inconclusive.
+					diagnosticsTimedOut = false;
+					collected = syncResult.length > 0
+						? mergeLspDiagnostics(syncResult)
+						: [];
+					logLatency({
+						type: "phase",
+						phase: "lsp_tsserver_sync_confirm",
+						filePath: normalizedPath,
+						durationMs: Date.now() - startedAt,
+						metadata: {
+							source,
+							clientScope,
+							diagnosticsMode,
+							mode: "end-of-wait",
+							confirmedDiagnosticCount: collected.length,
+						},
+					});
+				}
+			} catch {
+				// Any failure here falls through to today's inconclusive behavior.
+			}
+		}
 
 		// A touch is inconclusive when EITHER the notify write or the
 		// diagnostics wait hit their deadline for ANY of the spawned servers
