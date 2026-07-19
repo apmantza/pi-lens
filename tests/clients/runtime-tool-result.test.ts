@@ -862,7 +862,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				formatBehaviorWarnings: () => "",
 			} as any);
 
-			expect(resetLSPService).toHaveBeenCalledWith({ fast: true });
+			expect(resetLSPService).toHaveBeenCalledWith({ fast: true, reason: "pipeline_crash" });
 		} finally {
 			env.cleanup();
 		}

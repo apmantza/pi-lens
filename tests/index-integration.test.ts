@@ -222,6 +222,7 @@ describe("index.ts integration", () => {
 		expect(resetLSPService).toHaveBeenCalledWith({
 			fast: true,
 			processExiting: true,
+			reason: "session_shutdown",
 		});
 	}, INTEGRATION_TIMEOUT_MS);
 

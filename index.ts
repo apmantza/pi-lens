@@ -1552,7 +1552,7 @@ export default function (pi: ExtensionAPI) {
 				// must not touch ctx.ui after session replacement/reload (#338).
 				resetLSPService: () => {
 					try {
-						resetLSPService();
+						resetLSPService({ reason: "idle" });
 					} finally {
 						repaintLspStatus?.();
 					}
@@ -1733,7 +1733,7 @@ export default function (pi: ExtensionAPI) {
 		// children when a parent dies) — they rely on stdin EOF, LSP
 		// `initialize.processId` self-watchdog compliance, and the #449/#472
 		// cross-process instance registry's orphan reaper as the backstop (#472).
-		resetLSPService({ fast: true, processExiting: true });
+		resetLSPService({ fast: true, processExiting: true, reason: "session_shutdown" });
 	});
 
 	// --- Inject turn-end findings into next agent turn ---

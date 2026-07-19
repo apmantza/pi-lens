@@ -612,7 +612,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		dbg(`runPipeline crashed: ${pipelineErr}`);
 		dbg(`runPipeline crash stack: ${(pipelineErr as Error).stack}`);
 		if (!getFlag("no-lsp")) {
-			resetLSPService({ fast: true });
+			resetLSPService({ fast: true, reason: "pipeline_crash" });
 		}
 
 		logLatency({

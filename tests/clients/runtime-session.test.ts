@@ -328,7 +328,7 @@ describe("runtime-session notifications", () => {
 			);
 			expect(scanDirectory).not.toHaveBeenCalled();
 			expect(ensureTool).not.toHaveBeenCalled();
-			expect(resetLSPService).toHaveBeenCalledWith({ fast: true });
+			expect(resetLSPService).toHaveBeenCalledWith({ fast: true, reason: "session_start" });
 		} finally {
 			env.cleanup();
 		}
