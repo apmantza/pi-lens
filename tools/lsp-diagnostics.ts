@@ -31,6 +31,9 @@ import {
 import { detectFileRole } from "../clients/file-role.js";
 import type { LSPDiagnostic } from "../clients/lsp/client.js";
 import { classifyCascadeWaitTier } from "../clients/lsp/cascade-tier.js";
+import {
+	attemptTsserverSyncDiagnostics,
+} from "../clients/lsp/tsserver-sync.js";
 import { convertLspDiagnostics } from "../clients/dispatch/utils/lsp-diagnostics.js";
 import { reconcileScanDiagnostics } from "../clients/widget-state.js";
 import { baseName, compactRenderResult } from "./render-compact.js";
@@ -731,145 +734,9 @@ async function classifyEmptyResult(
 	}
 }
 
-// --- #611: tier-3 silent escape hatch (typescript.tsserverRequest sync commands) ---
-
-const TSSERVER_REQUEST_COMMAND = "typescript.tsserverRequest";
-
-interface TsserverSyncRawDiagnostic {
-	message: string;
-	category: string;
-	code?: number;
-	startLocation?: { line: number; offset: number };
-	endLocation?: { line: number; offset: number };
-}
-
-function isTsserverSyncRawDiagnostic(
-	value: unknown,
-): value is TsserverSyncRawDiagnostic {
-	if (!value || typeof value !== "object") return false;
-	const v = value as Record<string, unknown>;
-	return typeof v.message === "string" && typeof v.category === "string";
-}
-
-function tsserverSeverityFromCategory(category: string): 1 | 2 | 3 | 4 {
-	switch (category) {
-		case "error":
-			return 1;
-		case "warning":
-			return 2;
-		case "suggestion":
-			return 4; // Hint
-		default:
-			return 3; // "message" or unrecognized -> Info
-	}
-}
-
-/**
- * Convert a tsserver-protocol sync diagnostic into pi-lens's LSP-shaped
- * `LSPDiagnostic`. Empirically verified live (2026-07,
- * typescript-language-server 5.9.3, this repo's own tsconfig.json as the
- * fixture project): `workspace/executeCommand` with
- * `{command:"typescript.tsserverRequest",
- * arguments:["semanticDiagnosticsSync"|"syntacticDiagnosticsSync",
- * {file, includeLinePosition:true}]}` resolves
- * `{executed:true, result:{seq,type:"response",command,request_seq,success,
- * body:[...]}}`, where each `body` entry is tsserver's NATIVE protocol
- * diagnostic shape — `message`, `category` ("error"|"warning"|"suggestion"),
- * `code`, `startLocation`/`endLocation` as `{line, offset}` — NOT the LSP
- * `Diagnostic` shape, and both `line`/`offset` are 1-based (LSP is 0-based).
- */
-function tsserverSyncDiagnosticToLsp(
-	d: TsserverSyncRawDiagnostic,
-): LSPDiagnostic {
-	const startLine = Math.max(0, (d.startLocation?.line ?? 1) - 1);
-	const startChar = Math.max(0, (d.startLocation?.offset ?? 1) - 1);
-	const endLine = Math.max(
-		0,
-		(d.endLocation?.line ?? d.startLocation?.line ?? 1) - 1,
-	);
-	const endChar = Math.max(
-		0,
-		(d.endLocation?.offset ?? d.startLocation?.offset ?? 1) - 1,
-	);
-	return {
-		severity: tsserverSeverityFromCategory(d.category),
-		message: d.message,
-		range: {
-			start: { line: startLine, character: startChar },
-			end: { line: endLine, character: endChar },
-		},
-		code: d.code,
-		source: "typescript",
-	};
-}
-
-async function runTsserverSyncCommand(
-	lspService: NonNullable<ReturnType<typeof getLSPService>>,
-	file: string,
-	command: "semanticDiagnosticsSync" | "syntacticDiagnosticsSync",
-): Promise<TsserverSyncRawDiagnostic[] | undefined> {
-	const svc = lspService as NonNullable<ReturnType<typeof getLSPService>> & {
-		executeCommand?: (
-			filePath: string | undefined,
-			command: string,
-			args?: unknown[],
-		) => Promise<{ executed: boolean; result?: unknown; reason?: string }>;
-	};
-	if (typeof svc.executeCommand !== "function") return undefined;
-	const outcome = await svc.executeCommand(file, TSSERVER_REQUEST_COMMAND, [
-		command,
-		{ file, includeLinePosition: true },
-	]);
-	if (!outcome.executed) return undefined;
-	const result = outcome.result as
-		| { success?: boolean; body?: unknown }
-		| undefined;
-	if (!result || result.success !== true || !Array.isArray(result.body)) {
-		return undefined;
-	}
-	return result.body.filter(isTsserverSyncRawDiagnostic);
-}
-
-/**
- * #611: attempt classic typescript-language-server's `typescript.tsserverRequest`
- * escape hatch — a genuine synchronous request/response tsserver command, not
- * push/timing-dependent — to get a definitive answer for a Tier-3 silent
- * server's empty push-based result. Runs BOTH `semanticDiagnosticsSync` and
- * `syntacticDiagnosticsSync` (mirroring what the server itself publishes on a
- * dirty file) so a syntax-only error isn't missed.
- *
- * Returns `undefined` (never throws, never hangs beyond the existing
- * `executeCommand` anti-deadlock backstop) when: the command isn't advertised
- * by this server (older/different server/config), `executeCommand` throws
- * (live-verified case: tsserver rejects with a `ResponseError` — "No
- * Project." — for a file outside any tsconfig project) or times out, or the
- * response shape isn't the expected `{success:true, body:[...]}` envelope.
- * Every one of these must fall through to the existing "unconfirmed"
- * behavior in the caller.
- */
-async function attemptTsserverSyncDiagnostics(
-	file: string,
-	lspService: NonNullable<ReturnType<typeof getLSPService>>,
-): Promise<LSPDiagnostic[] | undefined> {
-	try {
-		const svc = lspService as NonNullable<ReturnType<typeof getLSPService>> & {
-			getAdvertisedCommands?: (filePath?: string) => Promise<string[]>;
-		};
-		if (typeof svc.getAdvertisedCommands !== "function") return undefined;
-		const advertised = await svc.getAdvertisedCommands(file);
-		if (!advertised.includes(TSSERVER_REQUEST_COMMAND)) return undefined;
-
-		const [semantic, syntactic] = await Promise.all([
-			runTsserverSyncCommand(lspService, file, "semanticDiagnosticsSync"),
-			runTsserverSyncCommand(lspService, file, "syntacticDiagnosticsSync"),
-		]);
-		if (semantic === undefined || syntactic === undefined) return undefined;
-
-		return [...syntactic, ...semantic].map(tsserverSyncDiagnosticToLsp);
-	} catch {
-		return undefined;
-	}
-}
+// --- #611/#707: tier-3 silent escape hatch (typescript.tsserverRequest sync
+// commands) — implementation extracted to clients/lsp/tsserver-sync.ts and
+// re-used from there by the per-edit dispatch path (#707). ---
 
 /**
  * #611: resolve an EMPTY diagnostic result for a Tier-3 silent server (see

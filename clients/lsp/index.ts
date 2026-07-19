@@ -49,6 +49,10 @@ import {
 	buildScopeKey,
 	createWorkspaceDiagnosticsCacheContext,
 } from "./workspace-diagnostics-cache.js";
+import {
+	attemptTsserverSyncDiagnostics,
+} from "./tsserver-sync.js";
+import { classifyCascadeWaitTier } from "./cascade-tier.js";
 
 // --- Init override helpers ---
 
@@ -1548,11 +1552,78 @@ export class LSPService {
 			}
 		}
 
-		const collected = options.collectDiagnostics
+		let collected = options.collectDiagnostics
 			? mergeLspDiagnostics(
 					spawned.flatMap((entry) => entry.client.getDiagnostics(filePath)),
 				)
 			: undefined;
+
+		// #707: when the diagnostics wait timed out with an empty result on a
+		// primary-scope touch, attempt the tsserver sync clean-confirm escape hatch
+		// (extracted to clients/lsp/tsserver-sync.ts from the #611 tool-side
+		// implementation). This only fires when ALL of the following hold:
+		//   1. the notify write succeeded (the server got the change)
+		//   2. the diagnostics wait timed out (the push never arrived — the silent case)
+		//   3. we're collecting diagnostics on the primary-scope path (one server:
+		//      the dispatch lsp-runner and its equivalents)
+		//   4. nothing arrived via push (collected is empty — if push already surfaced
+		//      diagnostics, there's nothing to confirm via sync)
+		//
+		// If the sync call answers (even with an empty body, which is a confirmed
+		// clean), we use those diagnostics as the confirmed result and clear the
+		// `diagnosticsTimedOut` flag so the touch is no longer treated as
+		// inconclusive. Sync diagnostics on a dirty file (silentOnClean server that
+		// had computed-but-unpublished results) are surfaced, not discarded.
+		// If the sync call fails or is unavailable, we fall through to today's
+		// behavior: `inconclusive` = true, `collected` unchanged.
+		//
+		// Seam choice (end-of-wait confirm rather than early-return): the sync call
+		// goes out AFTER the push-wait budget is exhausted. This is the safe "first
+		// cut" — it turns "unconfirmed after ~1000ms" into "confirmed at ~wait+sync-RTT"
+		// without touching the wait scheduling logic. The latency win is correctness
+		// (caller no longer reports "skipped" on a clean TS file) rather than
+		// raw speed; the sync RTT is typically <50ms for a resident tsserver.
+		if (
+			diagnosticsTimedOut &&
+			!notifyWriteTimedOut &&
+			options.collectDiagnostics &&
+			clientScope === "primary" &&
+			collected !== undefined &&
+			collected.length === 0
+		) {
+			try {
+				const snapshots = await this.getCapabilitySnapshots(filePath);
+				const tier = classifyCascadeWaitTier(this, filePath, snapshots);
+				if (tier === "tier3-silent") {
+					const syncResult = await attemptTsserverSyncDiagnostics(
+						filePath,
+						this,
+					);
+					if (syncResult !== undefined) {
+						// Sync answered — confirmed result (clean or with diagnostics).
+						// Clear the timed-out flag so the touch is no longer inconclusive.
+						diagnosticsTimedOut = false;
+						collected = syncResult.length > 0
+							? mergeLspDiagnostics(syncResult)
+							: [];
+						logLatency({
+							type: "phase",
+							phase: "lsp_tsserver_sync_confirm",
+							filePath: normalizedPath,
+							durationMs: Date.now() - startedAt,
+							metadata: {
+								source,
+								clientScope,
+								diagnosticsMode,
+								confirmedDiagnosticCount: collected.length,
+							},
+						});
+					}
+				}
+			} catch {
+				// Any failure here falls through to today's inconclusive behavior.
+			}
+		}
 
 		// A touch is inconclusive when EITHER the notify write or the
 		// diagnostics wait hit their deadline for ANY of the spawned servers
