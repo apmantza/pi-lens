@@ -513,6 +513,211 @@ describe("runtime-session notifications", () => {
 		}
 	});
 
+	it("startupModeOverride:'full' on first call gets full mode (MCP host path, #546)", async () => {
+		// Simulate the MCP host: first call of the process, no PI_LENS_STARTUP_MODE
+		// set in env, but deps.startupModeOverride = "full". The dbg log line
+		// "startup mode: full" is the cheapest reliable discriminant — it's
+		// emitted synchronously for every startup mode before the quick/full
+		// branch diverges.
+		const env = setupTestEnvironment("pi-lens-mcp-startup-mode-");
+		const globals = globalThis as unknown as {
+			__piLensFirstSessionDone?: boolean;
+			__piLensWarmupScheduled?: boolean;
+		};
+		const prevFirst = globals.__piLensFirstSessionDone;
+		const prevWarmup = globals.__piLensWarmupScheduled;
+		globals.__piLensFirstSessionDone = false;
+		globals.__piLensWarmupScheduled = false;
+		delete process.env.PI_LENS_STARTUP_MODE;
+		const dbg = vi.fn();
+		try {
+			await handleSessionStart({
+				ctxCwd: env.tmpDir,
+				startupModeOverride: "full",
+				getFlag: (name: string) => name === "no-lsp",
+				notify: () => {},
+				dbg,
+				log: () => {},
+				runtime: {
+					sessionGeneration: 1,
+					isCurrentSession: () => true,
+					markStartupScanInFlight: () => {},
+					clearStartupScanInFlight: () => {},
+					complexityBaselines: new Map(),
+					resetForSession: () => {},
+					projectRoot: "",
+					projectRulesScan: { hasCustomRules: false, rules: [] },
+					cachedExports: new Map(),
+					errorDebtBaseline: { testsPassed: true, buildPassed: true },
+				},
+				metricsClient: { reset: () => {} },
+				cacheManager: { writeCache: () => {}, readCache: () => null },
+				todoScanner: { scanDirectory: () => ({ items: [] }), scanFile: () => [] },
+				astGrepClient: { isAvailable: () => false, ensureAvailable: async () => false, scanExports: async () => new Map() },
+				biomeClient: { isAvailable: () => false, ensureAvailable: async () => false },
+				ruffClient: { isAvailable: () => false, ensureAvailable: async () => false },
+				knipClient: { isAvailable: () => false, ensureAvailable: async () => false, analyze: async () => ({ success: true, issues: [], unusedExports: [], unusedFiles: [], unusedDeps: [], unlistedDeps: [], summary: "skipped" }) },
+				jscpdClient: { isAvailable: () => false, ensureAvailable: async () => false },
+				depChecker: { isAvailable: () => false, ensureAvailable: async () => false },
+				testRunnerClient: { detectRunner: () => ({ runner: "vitest", config: null }), runTestFile: () => ({ failed: 1, error: false }) },
+				goClient: { isGoAvailableAsync: async () => false },
+				rustClient: { isAvailableAsync: async () => false },
+				ensureTool: async () => null,
+				cleanStaleTsBuildInfo: () => [],
+				resetDispatchBaselines: () => {},
+				resetLSPService: () => {},
+			} as any);
+			// dbg records the resolved startup mode synchronously
+			expect(
+				dbg.mock.calls.some(([msg]) =>
+					String(msg).includes("startup mode: full"),
+				),
+			).toBe(true);
+			// quick-mode emits a "skipping slow tool probes" dbg line; full does not
+			expect(
+				dbg.mock.calls.some(([msg]) =>
+					String(msg).includes("quick mode active"),
+				),
+			).toBe(false);
+		} finally {
+			globals.__piLensFirstSessionDone = prevFirst;
+			globals.__piLensWarmupScheduled = prevWarmup;
+			env.cleanup();
+		}
+	});
+
+	it("plain/TUI first call (no startupModeOverride) still gets quick mode (#546 non-regression)", async () => {
+		// Ensure the TUI path is unchanged: first call with no override → quick.
+		const env = setupTestEnvironment("pi-lens-tui-startup-mode-");
+		const globals = globalThis as unknown as {
+			__piLensFirstSessionDone?: boolean;
+			__piLensWarmupScheduled?: boolean;
+		};
+		const prevFirst = globals.__piLensFirstSessionDone;
+		const prevWarmup = globals.__piLensWarmupScheduled;
+		globals.__piLensFirstSessionDone = false;
+		globals.__piLensWarmupScheduled = false;
+		delete process.env.PI_LENS_STARTUP_MODE;
+		const dbg = vi.fn();
+		try {
+			await handleSessionStart({
+				ctxCwd: env.tmpDir,
+				// no startupModeOverride → TUI heuristic applies → quick
+				getFlag: (name: string) => name === "no-lsp",
+				notify: () => {},
+				dbg,
+				log: () => {},
+				runtime: {
+					sessionGeneration: 1,
+					isCurrentSession: () => true,
+					markStartupScanInFlight: () => {},
+					clearStartupScanInFlight: () => {},
+					complexityBaselines: new Map(),
+					resetForSession: () => {},
+					projectRoot: "",
+					projectRulesScan: { hasCustomRules: false, rules: [] },
+					cachedExports: new Map(),
+					errorDebtBaseline: { testsPassed: true, buildPassed: true },
+				},
+				metricsClient: { reset: () => {} },
+				cacheManager: { writeCache: () => {}, readCache: () => null },
+				todoScanner: { scanDirectory: () => ({ items: [] }), scanFile: () => [] },
+				astGrepClient: { isAvailable: () => false, ensureAvailable: async () => false, scanExports: async () => new Map() },
+				biomeClient: { isAvailable: () => false, ensureAvailable: async () => false },
+				ruffClient: { isAvailable: () => false, ensureAvailable: async () => false },
+				knipClient: { isAvailable: () => false, ensureAvailable: async () => false, analyze: async () => ({ success: true, issues: [], unusedExports: [], unusedFiles: [], unusedDeps: [], unlistedDeps: [], summary: "skipped" }) },
+				jscpdClient: { isAvailable: () => false, ensureAvailable: async () => false },
+				depChecker: { isAvailable: () => false, ensureAvailable: async () => false },
+				testRunnerClient: { detectRunner: () => ({ runner: "vitest", config: null }), runTestFile: () => ({ failed: 1, error: false }) },
+				goClient: { isGoAvailableAsync: async () => false },
+				rustClient: { isAvailableAsync: async () => false },
+				ensureTool: async () => null,
+				cleanStaleTsBuildInfo: () => [],
+				resetDispatchBaselines: () => {},
+				resetLSPService: () => {},
+			} as any);
+			expect(
+				dbg.mock.calls.some(([msg]) =>
+					String(msg).includes("startup mode: quick"),
+				),
+			).toBe(true);
+			expect(
+				dbg.mock.calls.some(([msg]) =>
+					String(msg).includes("quick mode active"),
+				),
+			).toBe(true);
+		} finally {
+			globals.__piLensFirstSessionDone = prevFirst;
+			globals.__piLensWarmupScheduled = prevWarmup;
+			env.cleanup();
+		}
+	});
+
+	it("explicit PI_LENS_STARTUP_MODE env wins over startupModeOverride (both hosts, #546)", async () => {
+		// Even with startupModeOverride:"full", if PI_LENS_STARTUP_MODE=quick is
+		// set, the env var takes precedence (highest priority rule).
+		const env = setupTestEnvironment("pi-lens-env-override-startup-mode-");
+		const globals = globalThis as unknown as {
+			__piLensFirstSessionDone?: boolean;
+			__piLensWarmupScheduled?: boolean;
+		};
+		const prevFirst = globals.__piLensFirstSessionDone;
+		const prevWarmup = globals.__piLensWarmupScheduled;
+		globals.__piLensFirstSessionDone = false;
+		globals.__piLensWarmupScheduled = false;
+		process.env.PI_LENS_STARTUP_MODE = "quick";
+		const dbg = vi.fn();
+		try {
+			await handleSessionStart({
+				ctxCwd: env.tmpDir,
+				startupModeOverride: "full", // would normally force full for MCP host…
+				getFlag: (name: string) => name === "no-lsp",
+				notify: () => {},
+				dbg,
+				log: () => {},
+				runtime: {
+					sessionGeneration: 1,
+					isCurrentSession: () => true,
+					markStartupScanInFlight: () => {},
+					clearStartupScanInFlight: () => {},
+					complexityBaselines: new Map(),
+					resetForSession: () => {},
+					projectRoot: "",
+					projectRulesScan: { hasCustomRules: false, rules: [] },
+					cachedExports: new Map(),
+					errorDebtBaseline: { testsPassed: true, buildPassed: true },
+				},
+				metricsClient: { reset: () => {} },
+				cacheManager: { writeCache: () => {}, readCache: () => null },
+				todoScanner: { scanDirectory: () => ({ items: [] }), scanFile: () => [] },
+				astGrepClient: { isAvailable: () => false, ensureAvailable: async () => false, scanExports: async () => new Map() },
+				biomeClient: { isAvailable: () => false, ensureAvailable: async () => false },
+				ruffClient: { isAvailable: () => false, ensureAvailable: async () => false },
+				knipClient: { isAvailable: () => false, ensureAvailable: async () => false, analyze: async () => ({ success: true, issues: [], unusedExports: [], unusedFiles: [], unusedDeps: [], unlistedDeps: [], summary: "skipped" }) },
+				jscpdClient: { isAvailable: () => false, ensureAvailable: async () => false },
+				depChecker: { isAvailable: () => false, ensureAvailable: async () => false },
+				testRunnerClient: { detectRunner: () => ({ runner: "vitest", config: null }), runTestFile: () => ({ failed: 1, error: false }) },
+				goClient: { isGoAvailableAsync: async () => false },
+				rustClient: { isAvailableAsync: async () => false },
+				ensureTool: async () => null,
+				cleanStaleTsBuildInfo: () => [],
+				resetDispatchBaselines: () => {},
+				resetLSPService: () => {},
+			} as any);
+			// PI_LENS_STARTUP_MODE=quick wins → resolveStartupMode() returns "quick"
+			// before the heuristic even runs (env var check skips the override branch)
+			expect(
+				dbg.mock.calls.some(([msg]) =>
+					String(msg).includes("startup mode: quick"),
+				),
+			).toBe(true);
+		} finally {
+			globals.__piLensFirstSessionDone = prevFirst;
+			globals.__piLensWarmupScheduled = prevWarmup;
+			env.cleanup();
+		}
+	});
+
 	it("limits deferred availability probes to relevant uncovered tools", async () => {
 		const {
 			env,

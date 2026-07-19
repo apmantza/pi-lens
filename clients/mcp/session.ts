@@ -89,6 +89,14 @@ export async function runSessionStart(
 
 	await handleSessionStart({
 		ctxCwd: cwd,
+		// The MCP server has no TUI keystroke latency to protect, so the
+		// first-call-quick heuristic must not apply. Force "full" mode so
+		// the dominant-language LSP pre-warm, scans, and error-debt baseline
+		// all run on the first (and only) session_start of the process.
+		// An explicit PI_LENS_STARTUP_MODE env var still wins (handled in
+		// handleSessionStart — the override is only checked when the env var
+		// is unset).
+		startupModeOverride: "full",
 		getFlag: host.getFlag,
 		notify: noop,
 		dbg: noop,

@@ -72,6 +72,18 @@ interface SessionStartDeps {
 	notify: (msg: string, level: "info" | "warning" | "error") => void;
 	dbg: (msg: string) => void;
 	log: (msg: string) => void;
+	/**
+	 * Host-provided startup-mode override. When set, the first-call-quick
+	 * heuristic (TUI cold-start latency mitigation) is skipped and this value
+	 * wins — but only when `PI_LENS_STARTUP_MODE` is NOT explicitly set in the
+	 * environment (an explicit env var still takes highest precedence).
+	 *
+	 * Use case: the MCP server has no TUI keystroke latency to protect and
+	 * should always get "full" mode on its first (and only) session_start so
+	 * the dominant-language LSP pre-warm, scans, and error-debt baseline all
+	 * run. Pass `"full"` from `clients/mcp/session.ts`.
+	 */
+	startupModeOverride?: StartupMode;
 	runtime: RuntimeCoordinator;
 	metricsClient: MetricsClient;
 	cacheManager: CacheManager;
@@ -1075,6 +1087,10 @@ export async function handleSessionStart(
 	//
 	// Opt-out: PI_LENS_COLD_START_QUICK=0 disables this behaviour.
 	// Override: PI_LENS_STARTUP_MODE explicitly set wins (we honour it).
+	//   deps.startupModeOverride lets a host (e.g. the MCP server, which has
+	//   no TUI keystroke latency to protect) skip the quick-mode heuristic
+	//   entirely — but only when PI_LENS_STARTUP_MODE is unset in the env
+	//   (an explicit env var still takes highest precedence).
 	// Tunable: PI_LENS_WARMUP_DELAY_MS adjusts the warmup delay.
 	let startupMode = resolveStartupMode();
 	const processGlobals = globalThis as unknown as {
@@ -1087,7 +1103,9 @@ export async function handleSessionStart(
 		process.env.PI_LENS_COLD_START_QUICK !== "0" &&
 		!process.env.PI_LENS_STARTUP_MODE
 	) {
-		startupMode = "quick";
+		// Apply host-provided override (e.g. MCP server forces "full") before
+		// falling back to the TUI quick-mode heuristic.
+		startupMode = deps.startupModeOverride ?? "quick";
 	}
 	processGlobals.__piLensFirstSessionDone = true;
 
