@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { LSPDiagnostic } from "../../../clients/lsp/client.js";
 import {
 	AUXILIARY_LSP_PROFILES,
@@ -9,6 +9,7 @@ import {
 	retagAuxiliaryDiagnostics,
 } from "../../../clients/dispatch/auxiliary-lsp.js";
 import { convertLspDiagnostics } from "../../../clients/dispatch/utils/lsp-diagnostics.js";
+import { _resetSubagentModeForTests } from "../../../clients/subagent-mode.js";
 
 const diag = (over: Partial<LSPDiagnostic>): LSPDiagnostic =>
 	({
@@ -19,6 +20,14 @@ const diag = (over: Partial<LSPDiagnostic>): LSPDiagnostic =>
 	}) as LSPDiagnostic;
 
 describe("auxiliary LSP enablement", () => {
+	// #713: reset subagent classification between tests so env changes are picked up.
+	beforeEach(() => {
+		_resetSubagentModeForTests();
+	});
+	afterEach(() => {
+		_resetSubagentModeForTests();
+	});
+
 	it("opengrep is default-on (no kill-switch flag set)", () => {
 		const ids = enabledAuxiliaryLspServerIds(() => undefined);
 		expect(ids).toContain("opengrep");
@@ -41,6 +50,51 @@ describe("auxiliary LSP enablement", () => {
 		expect(enabledAuxiliaryLspServerIds((f) => f === "no-typos")).not.toContain(
 			"typos",
 		);
+	});
+
+	// #713: subagent light mode skips all auxiliary servers (same seam as budget
+	// degrade) — parent session already runs them on the same cwd.
+	it("subagent session returns empty auxiliary set (#713)", () => {
+		process.env.PI_SUBAGENT_CHILD = "1";
+		_resetSubagentModeForTests();
+		try {
+			expect(enabledAuxiliaryLspServerIds(() => undefined)).toEqual([]);
+		} finally {
+			delete process.env.PI_SUBAGENT_CHILD;
+			_resetSubagentModeForTests();
+		}
+	});
+
+	it("subagent session skips auxiliaries regardless of kill-switch flags (#713)", () => {
+		process.env.PI_SUBAGENT_CHILD = "1";
+		_resetSubagentModeForTests();
+		try {
+			// Even with no kill switches active, the subagent seam returns empty
+			const ids = enabledAuxiliaryLspServerIds(() => undefined);
+			expect(ids).not.toContain("opengrep");
+			expect(ids).not.toContain("zizmor");
+			expect(ids).not.toContain("typos");
+			expect(ids).toEqual([]);
+		} finally {
+			delete process.env.PI_SUBAGENT_CHILD;
+			_resetSubagentModeForTests();
+		}
+	});
+
+	it("PI_LENS_SUBAGENT_FULL=1 restores auxiliaries inside a subagent session (#713)", () => {
+		process.env.PI_SUBAGENT_CHILD = "1";
+		process.env.PI_LENS_SUBAGENT_FULL = "1";
+		_resetSubagentModeForTests();
+		try {
+			const ids = enabledAuxiliaryLspServerIds(() => undefined);
+			expect(ids).toContain("opengrep");
+			expect(ids).toContain("zizmor");
+			expect(ids).toContain("typos");
+		} finally {
+			delete process.env.PI_SUBAGENT_CHILD;
+			delete process.env.PI_LENS_SUBAGENT_FULL;
+			_resetSubagentModeForTests();
+		}
 	});
 });
 
