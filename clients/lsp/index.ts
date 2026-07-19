@@ -565,6 +565,10 @@ async function collectWorkspaceDiagnosticFiles(
 ): Promise<string[]> {
 	const files: string[] = [];
 	const ignoreMatcher = getProjectIgnoreMatcher(root);
+	// #703: prime the tracked-files set once before the walk so a tracked file
+	// matching a `.gitignore`/global pattern still gets its workspace
+	// diagnostics pulled. Fail-open on no-git/spawn failure.
+	await ignoreMatcher.ensureTrackedIndex();
 	async function walk(current: string): Promise<void> {
 		if (signal?.aborted || files.length >= maxFiles) return;
 		let entries: nodeFs.Dirent[];

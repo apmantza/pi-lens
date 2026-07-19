@@ -48,7 +48,16 @@ import type { ReviewGraph, ReviewGraphEdge, ReviewGraphNode } from "./types.js";
 // throughout (up to 100% of them, per #694's measurement) — merging that with
 // newly-built v5 edges would leave the graph in mixed, partially-corrected
 // state. Same safe-rebuild mechanism as the v2→v3/v3→v4 bumps above.
-const REVIEW_GRAPH_VERSION = "v5";
+// v6 (#703): `getProjectIgnoreMatcher` is now tracked-aware — a TRACKED file
+// that merely matches a `.gitignore`/global pattern (e.g.
+// `clients/test-runner-client.ts` vs. `.gitignore`'s `test-*.ts`) is no
+// longer dropped from the walk. A v5 snapshot built before this fix is
+// missing those nodes entirely (never walked, never parsed) and instead has
+// phantom compiled-artifact nodes standing in for them (0 symbols, importer
+// edges materialized on the wrong node) — merging that with newly-walked v6
+// nodes would leave the phantom AND the real node coexisting. Same
+// safe-rebuild mechanism as the v2→v3/v3→v4/v4→v5 bumps above.
+const REVIEW_GRAPH_VERSION = "v6";
 const MAIN_KINDS = new Set([
 	"jsts",
 	"python",
