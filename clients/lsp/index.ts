@@ -3037,6 +3037,23 @@ export class LSPService {
 		// Cancel any in-flight spawns
 		this.state.inFlight.clear();
 
+		// Count alive clients BEFORE tearing them down — gives a meaningful
+		// snapshot of what was released by this reset (post-teardown the count
+		// would always be zero, which is useless for root-cause analysis).
+		const aliveClients = this.getAliveClientCount();
+		logLatency({
+			type: "phase",
+			phase: "lsp_service_reset",
+			filePath: "",
+			durationMs: 0,
+			metadata: {
+				reason: options.reason ?? null,
+				aliveClients,
+				fast: !!options.fast,
+				processExiting: !!options.processExiting,
+			},
+		});
+
 		for (const [_key, client] of this.state.clients) {
 			try {
 				await client.shutdown(options);

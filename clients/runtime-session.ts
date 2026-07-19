@@ -1238,7 +1238,7 @@ export async function handleSessionStart(
 	dbg(`session_start startup mode: ${startupMode}`);
 
 	if (!getFlag("no-lsp")) {
-		resetLSPService({ fast: true });
+		resetLSPService({ fast: true, reason: "session_start" });
 		dbg("session_start: LSP service reset");
 		dbg(
 			"session_start: phase0 workspace diagnostics observation enabled (capability probe only)",

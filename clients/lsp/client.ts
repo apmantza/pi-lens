@@ -162,6 +162,13 @@ export interface LSPShutdownOptions {
 	 * running and the `/T` tree-kill is still wanted to avoid zombie accumulation.
 	 */
 	processExiting?: boolean;
+	/**
+	 * Human-readable label identifying why this shutdown was triggered — e.g.
+	 * `"session_start"`, `"idle"`, `"session_shutdown"`, `"pipeline_crash"`.
+	 * Written to latency.log as `lsp_service_reset.metadata.reason` so the death
+	 * side of the LSP lifecycle is distinguishable from the birth side.
+	 */
+	reason?: string;
 }
 
 export interface LSPOperationSupport {
@@ -660,10 +667,25 @@ export async function killProcessTree(
 			}
 			await new Promise<void>((resolve) => {
 				killer.once("close", () => resolve());
-				killer.once("error", () => resolve());
+				killer.once("error", (err) => {
+					logLatency({
+						type: "phase",
+						phase: "lsp_kill_escalation",
+						filePath: "",
+						durationMs: 0,
+						metadata: { pid, platform: "win32", taskkillError: String(err) },
+					});
+					resolve();
+				});
 			});
-		} catch {
-			// ignore
+		} catch (err) {
+			logLatency({
+				type: "phase",
+				phase: "lsp_kill_escalation",
+				filePath: "",
+				durationMs: 0,
+				metadata: { pid, platform: "win32", taskkillSpawnError: String(err) },
+			});
 		}
 		return;
 	}
@@ -692,6 +714,13 @@ export async function killProcessTree(
 		if (options.fast) {
 			const timer = setTimeout(() => {
 				if (!(proc as { killed?: boolean }).killed) {
+					logLatency({
+						type: "phase",
+						phase: "lsp_kill_escalation",
+						filePath: "",
+						durationMs: 1500,
+						metadata: { pid, platform: "posix", method: "SIGKILL", fast: true },
+					});
 					if (!killPosixProcessGroup("SIGKILL")) {
 						killDirectChild("SIGKILL");
 					}
@@ -705,6 +734,13 @@ export async function killProcessTree(
 		// SIGTERM alone can leave zombie processes if the server hangs.
 		await new Promise<void>((resolve) => setTimeout(resolve, 1500));
 		if (!(proc as { killed?: boolean }).killed) {
+			logLatency({
+				type: "phase",
+				phase: "lsp_kill_escalation",
+				filePath: "",
+				durationMs: 1500,
+				metadata: { pid, platform: "posix", method: "SIGKILL", fast: false },
+			});
 			if (!killPosixProcessGroup("SIGKILL")) {
 				killDirectChild("SIGKILL");
 			}
@@ -1385,6 +1421,7 @@ export async function clientShutdown(
 	state: LSPClientState,
 	options: LSPShutdownOptions = {},
 ): Promise<void> {
+	const shutdownStart = Date.now();
 	state.shutdownRequested = true;
 	state.isConnected = false;
 	state.isDestroyed = true;
@@ -1398,6 +1435,7 @@ export async function clientShutdown(
 	// queued FS changes are moot, and the timer must not outlive the connection).
 	state.watchQueue?.cancel();
 	state.diagnosticEmitter.removeAllListeners();
+	let shutdownRequestTimedOut = false;
 	if (!options.fast) {
 		try {
 			await withTimeout(
@@ -1406,6 +1444,7 @@ export async function clientShutdown(
 			);
 		} catch {
 			/* ignore — proceed to exit/kill so shutdown cannot hang the session */
+			shutdownRequestTimedOut = true;
 		}
 		try {
 			await safeSendNotification(state.connection, "exit", {});
@@ -1415,13 +1454,32 @@ export async function clientShutdown(
 	}
 	disposeClientConnection(state);
 	const pid = state.lspProcess.pid;
+	logLatency({
+		type: "phase",
+		phase: "lsp_client_shutdown",
+		filePath: state.root,
+		durationMs: Date.now() - shutdownStart,
+		metadata: {
+			serverId: state.serverId,
+			pid,
+			fast: !!options.fast,
+			processExiting: !!options.processExiting,
+			shutdownRequestTimedOut,
+		},
+	});
 	// #449/#472: deregister this LSP child from the instance registry. Fire-
 	// and-forget (async fs, no spawn) — must not add latency/risk to shutdown,
 	// including the `processExiting` path where the event loop is closing
 	// (#234 forbids spawning here, but a plain fs write/rename is fine; even
 	// so, we don't await it to keep this teardown path as fast as before).
-	void removeLspChild(pid).catch(() => {
-		// best-effort — a stale entry is caught dead-pid by the reaper later
+	void removeLspChild(pid).catch((err) => {
+		logLatency({
+			type: "phase",
+			phase: "lsp_registry_write_failed",
+			filePath: "",
+			durationMs: 0,
+			metadata: { op: "remove", pid, error: String(err) },
+		});
 	});
 	// On Windows, killing the direct child first can orphan grandchildren before
 	// taskkill can traverse the tree. Kill the full tree first and wait briefly.
@@ -1625,8 +1683,15 @@ export async function createLSPClient(options: {
 		serverId,
 		command: lspProcess.command,
 		marker: extractSpawnMarker(lspProcess.args),
-	}).catch(() => {
+	}).catch((err) => {
 		// best-effort observability — never fail LSP startup over this
+		logLatency({
+			type: "phase",
+			phase: "lsp_registry_write_failed",
+			filePath: "",
+			durationMs: 0,
+			metadata: { op: "record", pid: lspProcess.pid, error: String(err) },
+		});
 	});
 
 	const startupState: {
@@ -1806,9 +1871,16 @@ export async function createLSPClient(options: {
 		// A child registered above (recordLspChild) but never reaching a healthy
 		// createLSPClient return must still be deregistered here — otherwise the
 		// registry keeps a stale entry for a process we just killed.
-		void removeLspChild(pid).catch(() => {
+		void removeLspChild(pid).catch((err) => {
 			// best-effort — a stale registry entry is harmless (the reaper's
 			// liveness check will find it dead on the next sweep regardless)
+			logLatency({
+				type: "phase",
+				phase: "lsp_registry_write_failed",
+				filePath: "",
+				durationMs: 0,
+				metadata: { op: "remove", pid, error: String(err) },
+			});
 		});
 		setTimeout(() => {
 			if (!lspProcess.process.killed && process.platform !== "win32") {
