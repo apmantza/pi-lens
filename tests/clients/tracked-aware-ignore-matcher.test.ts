@@ -226,6 +226,47 @@ describe("tracked-aware ignore matcher (#703)", () => {
 		}
 	});
 
+	it("Windows-cased lookup path still resolves the tracked-rescue verdict (#703 perf follow-up: normalizeEphemeralMapKey, not realpath)", async () => {
+		// The tracked-set switched from `normalizeMapKey` (realpath-backed) to
+		// `normalizeEphemeralMapKey` (cheap slash-fold + Windows-lowercase, no
+		// fs I/O) for perf — this pins that an upper-cased lookup path still
+		// finds the (lowercase-folded) tracked entry on win32, and is a no-op
+		// assertion elsewhere (POSIX never folds case).
+		const env = setupTestEnvironment("pi-lens-tracked-ignore-case-");
+		try {
+			initGitRepo(env.tmpDir);
+			createTempFile(
+				env.tmpDir,
+				"clients/test-runner-client.ts",
+				"export const x = 1;\n",
+			);
+			commitFile(env.tmpDir, "clients/test-runner-client.ts");
+			createTempFile(env.tmpDir, ".gitignore", "test-*.ts\n");
+
+			const matcher = getProjectIgnoreMatcher(env.tmpDir);
+			await matcher.ensureTrackedIndex();
+
+			const upperCasedPath = path.join(
+				env.tmpDir.toUpperCase(),
+				"CLIENTS",
+				"TEST-RUNNER-CLIENT.TS",
+			);
+			if (process.platform === "win32") {
+				// The tracked-rescue must still apply: the syntactic fold
+				// case-normalizes both sides of the comparison.
+				expect(matcher.isIgnored(upperCasedPath, false)).toBe(false);
+			} else {
+				// POSIX is case-sensitive end to end (no fold applied, and
+				// path.relative treats the differently-cased root as outside the
+				// matcher's root entirely) — nothing meaningful to assert about
+				// tracked-rescue here beyond "does not throw".
+				expect(() => matcher.isIgnored(upperCasedPath, false)).not.toThrow();
+			}
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("integration: a walk over the fixture repo includes the tracked pattern-matched file", async () => {
 		const env = setupTestEnvironment("pi-lens-tracked-ignore-walk-");
 		try {

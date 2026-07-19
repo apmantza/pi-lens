@@ -19,11 +19,22 @@
  * return `undefined` and every caller SKIPS/degrades — the graph/map shows
  * what's known rather than guessing via a matcher that can't see tracked
  * status, and `getProjectIgnoreMatcher` falls back to pattern-only behavior.
+ *
+ * Keying asymmetry (deliberate, not an oversight): `collectUntrackedIgnoredIds`
+ * keys its ids with `normalizeMapKey` (realpath-backed) because those ids are
+ * compared against review-graph/map NODE ids — externally-produced state that
+ * genuinely needs canonical on-disk casing/symlink resolution to match up.
+ * `collectTrackedFiles`'s ids, by contrast, are only ever compared against a
+ * `ProjectIgnoreMatcher`'s own `path.resolve`'d paths, produced by THIS
+ * process in the SAME walk — an ephemeral, self-consistent comparison per
+ * `normalizeEphemeralMapKey`'s contract (`path-utils.ts`), so it uses the
+ * cheap syntactic-only fold instead. Do not "fix" this asymmetry by unifying
+ * the two — they solve different problems (#703 review).
  */
 
 import * as path from "node:path";
 import { isExcludedDirName } from "./file-utils.js";
-import { normalizeMapKey } from "./path-utils.js";
+import { normalizeEphemeralMapKey, normalizeMapKey } from "./path-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 
 /**
@@ -109,18 +120,35 @@ export function _resetUntrackedIgnoredCacheForTests(): void {
 
 /**
  * Parses `git ls-files` output (repo-relative paths, one per line, tracked
- * files only — no `--others`) into normalized map-key ids. Mirrors
- * {@link parseUntrackedIgnoredOutput}'s shape (same dir-exclusion prune, same
- * `normalizeMapKey` join) so the two sets are directly comparable/mergeable.
+ * files only — no `--others`) into normalized ids, keyed for comparison
+ * against a `ProjectIgnoreMatcher`'s own (non-realpath'd) `path.resolve`'d
+ * paths — NOT against {@link parseUntrackedIgnoredOutput}'s ids, which are
+ * realpath-keyed for a different consumer (review-graph/map node ids). The
+ * two sets are NOT directly comparable/mergeable despite the shared
+ * dir-exclusion-prune shape — see this file's module doc for the asymmetry.
+ *
+ * `cwd` is realpath'd exactly ONCE here (not per file) to reconcile the one
+ * divergence that matters in practice: on Windows, the matcher's
+ * `resolvedRoot` comes from `path.resolve` while this fetch's `cwd` may carry
+ * different on-disk casing (e.g. `c:\users` vs `C:\Users`) — a single
+ * realpath on the shared root, followed by a cheap syntactic fold
+ * (`normalizeEphemeralMapKey`) on every per-file join, reconciles that without
+ * paying `realpathSync` per tracked file (#703 perf follow-up — a ~2k-file
+ * repo was doing ~2k realpath calls in one synchronous burst per fetch).
+ * Accepted edge case: a symlinked or 8.3-short-name project root can still
+ * make the cheap per-file fold miss even after this one realpath — degrades
+ * to today's pattern-only behavior for that root, consistent with the
+ * fail-open contract elsewhere in this module.
  */
 export function parseTrackedFilesOutput(stdout: string, cwd: string): Set<string> {
 	const ids = new Set<string>();
+	const base = normalizeMapKey(cwd);
 	for (const line of stdout.split(/\r?\n/)) {
 		const rel = line.trim();
 		if (!rel) continue;
 		const dirSegments = rel.split("/").slice(0, -1);
 		if (dirSegments.some((segment) => isExcludedDirName(segment))) continue;
-		ids.add(normalizeMapKey(path.join(cwd, rel)));
+		ids.add(normalizeEphemeralMapKey(path.join(base, rel)));
 	}
 	return ids;
 }
@@ -163,7 +191,13 @@ const _trackedSnapshot = new Map<string, ReadonlySet<string> | undefined>();
 export function collectTrackedFiles(
 	cwd: string,
 ): Promise<ReadonlySet<string> | undefined> {
-	const key = normalizeMapKey(cwd);
+	// #703 perf follow-up: `normalizeEphemeralMapKey`, not `normalizeMapKey` —
+	// this map's only readers/writers are `ensureTrackedIndex`/`isIgnored`
+	// (file-utils.ts), both of which derive `cwd` from the SAME matcher's
+	// `resolvedRoot` (`path.resolve`, not realpath) within one process, so the
+	// cheap syntactic fold is sufficient and avoids a realpath per call — see
+	// this file's module doc for why this diverges from `collectUntrackedIgnoredIds`.
+	const key = normalizeEphemeralMapKey(cwd);
 	const now = Date.now();
 	const cached = _trackedCache.get(key);
 	if (cached && now - cached.fetchedAtMs < CACHE_TTL_MS) return cached.promise;
@@ -181,9 +215,12 @@ export function collectTrackedFiles(
  * called `collectTrackedFiles`), when git degraded (no repo/spawn failure),
  * OR when a fetch is still in flight — all three collapse to the same
  * fail-open "tracked status unknown, use pattern-only behavior" contract.
+ * Called on every `isIgnored` check that reaches the tracked-rescue branch
+ * (file-utils.ts's `isTrackedAndRescued`), so this key MUST stay the cheap
+ * `normalizeEphemeralMapKey` fold, not a realpath.
  */
 export function getTrackedFilesSnapshot(cwd: string): ReadonlySet<string> | undefined {
-	return _trackedSnapshot.get(normalizeMapKey(cwd));
+	return _trackedSnapshot.get(normalizeEphemeralMapKey(cwd));
 }
 
 /** Test hook: drop the memoized tracked-files cache/snapshot. */

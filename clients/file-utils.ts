@@ -11,7 +11,7 @@ import {
 	getGlobalIgnorePatterns,
 	getPiLensGlobalConfigPath,
 } from "./lens-config.js";
-import { normalizeFilePath, normalizeMapKey } from "./path-utils.js";
+import { normalizeEphemeralMapKey, normalizeFilePath } from "./path-utils.js";
 import {
 	findPiLensProjectConfig,
 	loadPiLensProjectConfig,
@@ -345,19 +345,37 @@ function buildProjectIgnoreMatcher(
 	// partway through the matcher's lifetime), so baking the tracked check
 	// into this memo would let an early, pre-priming call poison every later
 	// lookup of the same path for this matcher's entire cache lifetime. The
-	// tracked-set lookup itself is a cheap Set#has (after one `normalizeMapKey`
-	// realpath call), and — critically — it's only ever paid for paths a
-	// pattern already flagged as ignored, so it doesn't reintroduce the
-	// per-file cost this memo exists to avoid for the common (not-ignored) case.
+	// tracked-set lookup itself is a cheap Set#has over syntactically-folded
+	// keys (see `isTrackedAndRescued` — no `realpathSync` anywhere in this
+	// function), and — critically — it's only ever paid for paths a pattern
+	// already flagged as ignored, so it doesn't reintroduce the per-file cost
+	// this memo exists to avoid for the common (not-ignored) case.
 	const patternMemo = new Map<
 		string,
 		{ ignored: boolean; layer: GitignorePatternLayer | undefined }
 	>();
 
+	// #703 perf follow-up: `normalizeEphemeralMapKey` (cheap slash-fold +
+	// Windows-lowercase, zero fs I/O), NOT `normalizeMapKey` (realpath-backed).
+	// This runs on every `isIgnored` call that reaches this branch — walks
+	// over this repo alone visit thousands of pattern-ignored compiled
+	// `*.js`/`*.d.ts` files, and `dispatch/integration.ts`'s per-edit cascade
+	// check hits it too — so a `realpathSync` here would violate the
+	// event-loop/slow-FS discipline `isIgnored` is required to keep (#462: 75x
+	// slower on 9p/drvfs). Both `resolved` (this matcher's own `path.resolve`,
+	// never realpath'd) and the tracked-set's keys (`git-tracked-ignore.ts`,
+	// realpath'd ONCE per fetch on the shared root, not per file) are
+	// self-consistent within one process/session, which is exactly
+	// `normalizeEphemeralMapKey`'s contract — see that function's doc and
+	// `git-tracked-ignore.ts`'s module doc for the full reasoning. Accepted
+	// edge case: a symlinked or 8.3-short-name project root can make the cheap
+	// fold miss even after the fetch side's one realpath — the file then stays
+	// pattern-ignored, i.e. degrades to today's (pre-#703) behavior, which is
+	// consistent with this whole feature's fail-open contract.
 	function isTrackedAndRescued(resolved: string): boolean {
 		const snapshot = getTrackedFilesSnapshot(resolvedRoot);
 		if (!snapshot) return false; // never primed / git unavailable: fail-open to pattern-only
-		return snapshot.has(normalizeMapKey(resolved));
+		return snapshot.has(normalizeEphemeralMapKey(resolved));
 	}
 
 	return {
