@@ -6,11 +6,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { minimatch } from "./deps/minimatch.js";
+import { collectTrackedFiles, getTrackedFilesSnapshot } from "./git-tracked-ignore.js";
 import {
 	getGlobalIgnorePatterns,
 	getPiLensGlobalConfigPath,
 } from "./lens-config.js";
-import { normalizeFilePath } from "./path-utils.js";
+import { normalizeFilePath, normalizeMapKey } from "./path-utils.js";
 import {
 	findPiLensProjectConfig,
 	loadPiLensProjectConfig,
@@ -125,18 +126,45 @@ export const EXCLUDED_DIRS = [
 	"vendors",
 ];
 
+/**
+ * Which layer produced a pattern, per #703's layer-semantics fix. Precedence
+ * (lowest → highest) is `global` → `gitignore` → `pilens` — see
+ * `createProjectIgnoreMatcher`'s ordering comment. The layer determines
+ * whether a winning positive match is subject to git's "a tracked file is
+ * never ignored" rule:
+ *   - `global` / `gitignore` emulate git itself, so they inherit that rule —
+ *     a winning match from either NEVER excludes a file git tracks.
+ *   - `pilens` (`.pi-lens.json`'s `ignore` field) is pi-lens-native user
+ *     intent ("don't analyze this"), not a git emulation, so it excludes
+ *     regardless of tracked status.
+ */
+export type GitignorePatternLayer = "global" | "gitignore" | "pilens";
+
 export interface GitignorePattern {
 	pattern: string;
 	negated: boolean;
 	directoryOnly: boolean;
 	rooted: boolean;
 	hasSlash: boolean;
+	layer: GitignorePatternLayer;
 }
 
 export interface ProjectIgnoreMatcher {
 	rootDir: string;
 	patterns: GitignorePattern[];
 	isIgnored(filePath: string, isDirectory?: boolean): boolean;
+	/**
+	 * Primes the tracked-files set for `rootDir` (async `git ls-files`,
+	 * memoized — see `git-tracked-ignore.ts`) so subsequent synchronous
+	 * `isIgnored` calls in the SAME walk can honor #703's tracked-aware
+	 * layer semantics. Callers with an async walk loop should await this
+	 * ONCE before the loop starts, not per file. Fail-open: resolves even
+	 * when git is absent/fails/times out (tracked-check then silently stays
+	 * unavailable and `isIgnored` degrades to today's pattern-only
+	 * behavior). Sync callers that never call this simply never prime — that
+	 * degrade-to-pattern-only is intended, not a bug.
+	 */
+	ensureTrackedIndex(): Promise<void>;
 }
 
 function resolveGitIgnoreRoot(startDir: string): string {
@@ -192,7 +220,10 @@ function stripTrailingSpaces(value: string): string {
 	return value.slice(0, end).replace(/\\ /g, " ");
 }
 
-function parseGitignoreContent(content: string): GitignorePattern[] {
+function parseGitignoreContent(
+	content: string,
+	layer: GitignorePatternLayer,
+): GitignorePattern[] {
 	const patterns: GitignorePattern[] = [];
 	for (const rawLine of content.split(/\r?\n/)) {
 		let line = stripTrailingSpaces(rawLine.trimStart());
@@ -217,6 +248,7 @@ function parseGitignoreContent(content: string): GitignorePattern[] {
 			directoryOnly,
 			rooted,
 			hasSlash: line.includes("/"),
+			layer,
 		});
 	}
 	return patterns;
@@ -251,10 +283,13 @@ function matchesGitignorePattern(
 	});
 }
 
-export function readGitignorePatterns(rootDir: string): GitignorePattern[] {
+export function readGitignorePatterns(
+	rootDir: string,
+	layer: GitignorePatternLayer = "gitignore",
+): GitignorePattern[] {
 	const gitignorePath = path.join(rootDir, ".gitignore");
 	try {
-		return parseGitignoreContent(fs.readFileSync(gitignorePath, "utf-8"));
+		return parseGitignoreContent(fs.readFileSync(gitignorePath, "utf-8"), layer);
 	} catch {
 		return [];
 	}
@@ -294,7 +329,7 @@ function buildProjectIgnoreMatcher(
 		return nextPatterns;
 	};
 
-	// Per-matcher path → boolean memo. The matcher itself is cached by
+	// Per-matcher path → pattern-verdict memo. The matcher itself is cached by
 	// `getProjectIgnoreMatcher` keyed on `.gitignore` mtime, so this Map's
 	// lifetime is bounded to a single set of ignore rules — when any
 	// `.gitignore` changes, the matcher is rebuilt and the memo is dropped
@@ -302,46 +337,88 @@ function buildProjectIgnoreMatcher(
 	// jscpd, call-graph, source-filter, pipeline) recomputes O(ancestorDirs ×
 	// patterns) per file, multiplying into 2-3s of pure CPU on a 2k-file
 	// project. With it, the second visitor of the same path is O(1).
-	const isIgnoredMemo = new Map<string, boolean>();
+	//
+	// #703: this memoizes only the PATTERN verdict (which is deterministic —
+	// it never changes for a given matcher instance), NOT the tracked-aware
+	// final verdict. The tracked-files set can transition from "not yet
+	// primed" to "primed" mid-process (a walker calls `ensureTrackedIndex()`
+	// partway through the matcher's lifetime), so baking the tracked check
+	// into this memo would let an early, pre-priming call poison every later
+	// lookup of the same path for this matcher's entire cache lifetime. The
+	// tracked-set lookup itself is a cheap Set#has (after one `normalizeMapKey`
+	// realpath call), and — critically — it's only ever paid for paths a
+	// pattern already flagged as ignored, so it doesn't reintroduce the
+	// per-file cost this memo exists to avoid for the common (not-ignored) case.
+	const patternMemo = new Map<
+		string,
+		{ ignored: boolean; layer: GitignorePatternLayer | undefined }
+	>();
+
+	function isTrackedAndRescued(resolved: string): boolean {
+		const snapshot = getTrackedFilesSnapshot(resolvedRoot);
+		if (!snapshot) return false; // never primed / git unavailable: fail-open to pattern-only
+		return snapshot.has(normalizeMapKey(resolved));
+	}
 
 	return {
 		rootDir: resolvedRoot,
 		patterns,
+		ensureTrackedIndex(): Promise<void> {
+			return collectTrackedFiles(resolvedRoot).then(() => undefined);
+		},
 		isIgnored(filePath: string, isDirectory = false): boolean {
 			const resolved = path.resolve(filePath);
 			// Two namespaces (D: for directory queries, F: for file queries)
 			// because gitignore semantics differ for trailing-slash patterns.
 			const memoKey = (isDirectory ? "D:" : "F:") + resolved;
-			const cached = isIgnoredMemo.get(memoKey);
-			if (cached !== undefined) return cached;
-			const rootRelative = path.relative(resolvedRoot, resolved);
-			if (
-				!rootRelative ||
-				rootRelative.startsWith("..") ||
-				path.isAbsolute(rootRelative)
-			) {
-				isIgnoredMemo.set(memoKey, false);
-				return false;
+			let verdict = patternMemo.get(memoKey);
+			if (verdict === undefined) {
+				const rootRelative = path.relative(resolvedRoot, resolved);
+				if (
+					!rootRelative ||
+					rootRelative.startsWith("..") ||
+					path.isAbsolute(rootRelative)
+				) {
+					verdict = { ignored: false, layer: undefined };
+				} else {
+					let ignored = false;
+					let layer: GitignorePatternLayer | undefined;
+					const patternDirs = ancestorDirsBetween(
+						resolvedRoot,
+						path.dirname(resolved),
+					);
+					for (const dir of patternDirs) {
+						const dirPatterns = patternsForDir(dir);
+						if (dirPatterns.length === 0) continue;
+						const relative = path.relative(dir, resolved);
+						const normalized = normalizeIgnorePath(relative);
+						for (const pattern of dirPatterns) {
+							if (!matchesGitignorePattern(pattern, normalized, isDirectory))
+								continue;
+							ignored = !pattern.negated;
+							layer = pattern.layer;
+						}
+					}
+					verdict = { ignored, layer };
+				}
+				patternMemo.set(memoKey, verdict);
 			}
 
-			let ignored = false;
-			const patternDirs = ancestorDirsBetween(
-				resolvedRoot,
-				path.dirname(resolved),
-			);
-			for (const dir of patternDirs) {
-				const dirPatterns = patternsForDir(dir);
-				if (dirPatterns.length === 0) continue;
-				const relative = path.relative(dir, resolved);
-				const normalized = normalizeIgnorePath(relative);
-				for (const pattern of dirPatterns) {
-					if (!matchesGitignorePattern(pattern, normalized, isDirectory))
-						continue;
-					ignored = !pattern.negated;
-				}
+			if (!verdict.ignored) return false;
+			// #703 layer semantics: a winning positive match from `global` or
+			// `gitignore` emulates git, so it inherits git's "a tracked file is
+			// never ignored" rule. A winning match from `pilens` is pi-lens-native
+			// intent and stays excluded regardless of tracked status. Directory
+			// queries are never tracked-rescued — the tracked set is a file-id
+			// set, not a directory set.
+			if (
+				!isDirectory &&
+				verdict.layer !== "pilens" &&
+				isTrackedAndRescued(resolved)
+			) {
+				return false;
 			}
-			isIgnoredMemo.set(memoKey, ignored);
-			return ignored;
+			return true;
 		},
 	};
 }
@@ -355,10 +432,13 @@ export function createProjectIgnoreMatcher(
 	// Precedence is gitignore order: LATER patterns override earlier ones. So
 	// global (lowest) → project .gitignore → project .pi-lens.json (highest),
 	// which lets a project `!negation` re-include a globally-ignored path (#252).
+	// Each layer is tagged (#703) so `isIgnored` can tell a git-emulating match
+	// (`global`/`gitignore` — subject to "a tracked file is never ignored")
+	// apart from pi-lens-native intent (`pilens` — excludes regardless).
 	const patterns = [
-		...parseGitignoreContent(globalPatterns.join("\n")),
-		...readGitignorePatterns(resolvedRoot),
-		...parseGitignoreContent(extraPatterns.join("\n")),
+		...parseGitignoreContent(globalPatterns.join("\n"), "global"),
+		...readGitignorePatterns(resolvedRoot, "gitignore"),
+		...parseGitignoreContent(extraPatterns.join("\n"), "pilens"),
 	];
 	return buildProjectIgnoreMatcher(resolvedRoot, patterns);
 }

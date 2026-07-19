@@ -318,6 +318,12 @@ export async function countSourceFilesWithinLimitAsync(
 	let count = 0;
 	let processedSinceYield = 0;
 	const { ignoreMatcher, stack } = initSourceCountWalk(dir);
+	// #703: prime the tracked-files set ONCE before the walk (not per file) so
+	// a tracked file matching a `.gitignore`/global pattern isn't dropped from
+	// the startup source-file count. Fail-open: resolves even when git is
+	// absent, and `isIgnored` degrades to pattern-only if this never resolves
+	// before a caller inspects results.
+	await ignoreMatcher.ensureTrackedIndex();
 
 	while (stack.length > 0) {
 		const current = stack.pop();

@@ -383,6 +383,11 @@ export async function collectSourceFilesAsync(
 ): Promise<string[]> {
 	const rootDir = path.resolve(dir);
 	const cfg = resolveCollectionConfig(rootDir, options);
+	// #703: prime the tracked-files set once before the walk so a tracked file
+	// matching a `.gitignore`/global pattern still surfaces (the review-graph
+	// build walk, word-index, and every other async caller of this function
+	// funnel through here). Fail-open on no-git/spawn failure.
+	await cfg.ignoreMatcher.ensureTrackedIndex();
 	// 50 entries/chunk keeps the worst-case synchronous burst under ~40ms even
 	// on a cold scan where every kept file pays the 4 KB generated-header read
 	// (measured on a 2k-file fixture). Larger values regress past the ~50ms

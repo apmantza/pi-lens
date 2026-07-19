@@ -232,7 +232,7 @@ describe("review graph service", () => {
 				"export function alpha() {\n  return 1;\n}\n",
 			);
 			const graph = await buildOrUpdateGraph(env.tmpDir, [], new FactStore());
-			expect(graph.version).toBe("v5");
+			expect(graph.version).toBe("v6");
 			const alphaId = [...graph.nodes.keys()].find((id) =>
 				id.includes(":alpha:"),
 			);
@@ -293,7 +293,7 @@ describe("review graph service", () => {
 				"export interface Foo {\n  a: number;\n}\n",
 			);
 			const graph = await buildOrUpdateGraph(env.tmpDir, [], new FactStore());
-			expect(graph.version).toBe("v5");
+			expect(graph.version).toBe("v6");
 			flushReviewGraphPersistsForTests();
 			for (let i = 0; i < 20 && isReviewGraphMigrationNeeded(env.tmpDir); i++) {
 				await new Promise((r) => setTimeout(r, 25));
