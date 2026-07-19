@@ -107,7 +107,7 @@ function makeSyncResponse(
 	// (the service layer strips the filePath before forwarding to the client).
 	return vi
 		.fn()
-		.mockImplementation(async (command: string, args: unknown[]) => {
+		.mockImplementation(async (_command: string, args: unknown[]) => {
 			// command is the outer "typescript.tsserverRequest"; first arg element
 			// is the inner tsserver sub-command name.
 			const sub = (args as [string, unknown])[0] as
@@ -247,7 +247,7 @@ describe("#707 per-edit tsserver sync clean-confirm in touchFile", () => {
 		const { LSPService } = await import("../../../clients/lsp/index.js");
 		const service = new LSPService();
 
-		const result = await service.touchFile("C:/repo/main.go", "package main\n", {
+		await service.touchFile("C:/repo/main.go", "package main\n", {
 			clientScope: "primary",
 			diagnostics: "document",
 			collectDiagnostics: true,
