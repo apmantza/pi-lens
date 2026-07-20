@@ -24,6 +24,16 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getGlobalPiLensDir } from "./file-utils.js";
+// #735: reuse the #449/#525 reaper's exact conservative liveness check
+// (`process.kill(pid, 0)`, ESRCH-only-means-dead) rather than inventing a
+// second one — see realIsPidAlive's own docstring, which already calls out
+// clients/lsp-budget.ts as a precedent consumer. This creates a live-binding
+// import cycle with instance-reaper.ts (which imports readInstanceRegistry/
+// isInstanceRegistryEnabled from here); safe under Node ESM because every
+// use on both sides happens inside function bodies, never at module-
+// evaluation time, so both modules are fully initialized before either
+// import is actually invoked.
+import { realIsPidAlive } from "./instance-reaper.js";
 import { normalizeFilePath } from "./path-utils.js";
 
 export interface LspChildEntry {
@@ -355,11 +365,35 @@ export interface ResourceFootprint {
  * short-lived and sampled separately per-invocation via
  * clients/resource-sampler.ts into clients/latency-logger.ts, not carried in
  * the registry (see the module docstring's scope note).
+ *
+ * #735: `isPidAlive`, when supplied, drops any instance whose owning pid is
+ * confirmed dead BEFORE aggregation — a hard-killed pi process otherwise
+ * leaves a registry entry with heartbeat-cached RSS that reads as a live,
+ * resource-consuming instance until it eventually ages out (up to
+ * `STALE_HEARTBEAT_MS`, see clients/instance-reaper.ts). Dropped rather than
+ * flagged `stale: true`: a dead pid is unambiguous (unlike heartbeat
+ * staleness, which the reaper deliberately treats as "maybe idle-but-alive"
+ * and never uses to justify removing/hiding anything) — the wire shape and
+ * every existing caller (chiefly `pilens_health`'s headline instance
+ * count/RSS/CPU numbers) simply expects a footprint of currently-live
+ * instances. Left `undefined` for pure/synchronous callers (incl. every
+ * pre-#735 unit test) that pass a plain snapshot with no intent to check OS
+ * process state — no filtering happens, preserving prior behavior exactly.
+ * No pid-reuse identity check is applied here (unlike the reaper's child-pid
+ * `matchProcess`): `InstanceEntry` never recorded the host's own command
+ * line to verify against (same gap #525 called out for the reaper's PARENT
+ * pid, deliberately left unfixed there too), and a health-report false
+ * positive is a much smaller blast radius than the reaper's mistaken kill —
+ * so plain liveness is judged sufficient here.
  */
 export function computeResourceFootprint(
 	instances: InstanceEntry[],
+	isPidAlive?: (pid: number) => boolean,
 ): ResourceFootprint {
-	const perInstance: InstanceFootprint[] = instances.map((instance) => {
+	const liveInstances = isPidAlive
+		? instances.filter((instance) => isPidAlive(instance.pid))
+		: instances;
+	const perInstance: InstanceFootprint[] = liveInstances.map((instance) => {
 		const lspChildRssBytes = instance.lspChildren.reduce(
 			(sum, child) => sum + (child.rssBytes ?? 0),
 			0,
@@ -402,8 +436,49 @@ export function computeResourceFootprint(
  * side of "how much CPU/RAM is pi-lens using right now" (#620). Best-effort
  * (readInstanceRegistry never throws); the answer only reflects whatever
  * heartbeats have landed so far.
+ *
+ * #735: defaults to the reaper's `realIsPidAlive` so dead-pid registry
+ * entries (a hard-killed pi process) are excluded from both the returned
+ * footprint AND — opportunistically, fire-and-forget, best-effort — pruned
+ * from the on-disk registry, the same "entry removal only, never blocks the
+ * caller" convention `sweepOrphans`/`pruneDeadInstances` already use.
+ * Pruning here is a bonus cleanup, not a substitute for the reaper sweep:
+ * this path only prunes pids this particular read happened to find dead,
+ * while the reaper sweep is the authoritative, scheduled cleanup. Injectable
+ * so tests can pass a fake predicate (or omit filtering entirely by passing
+ * a function that always returns true) without touching real OS process
+ * state.
  */
-export async function getResourceFootprint(): Promise<ResourceFootprint> {
+export async function getResourceFootprint(
+	isPidAlive: (pid: number) => boolean = realIsPidAlive,
+): Promise<ResourceFootprint> {
 	const instances = await readInstanceRegistry();
-	return computeResourceFootprint(instances);
+	const deadPids = new Set(
+		instances.filter((instance) => !isPidAlive(instance.pid)).map((instance) => instance.pid),
+	);
+	if (deadPids.size > 0) {
+		// Fire-and-forget: a health-report read must never block on, or fail
+		// because of, a registry write.
+		prunePids(deadPids).catch(() => {
+			// best-effort — a dead-pid entry that fails to prune here is simply
+			// re-evaluated (and re-dropped from the report) on the next read, and
+			// remains catchable by the scheduled reaper sweep regardless.
+		});
+	}
+	return computeResourceFootprint(instances, isPidAlive);
+}
+
+/** Best-effort removal of specific dead pids' entries from the on-disk
+ *  registry (#735). Re-reads immediately before writing (rather than reusing
+ *  an earlier snapshot) to narrow — not eliminate — the last-writer-wins race
+ *  already accepted for this module's read-modify-write model (see the
+ *  module docstring). Mirrors clients/instance-reaper.ts's
+ *  `pruneDeadInstances`, kept local here rather than imported to avoid
+ *  reaching back across the same import edge `realIsPidAlive` already
+ *  crosses in the other direction. */
+async function prunePids(deadPids: Set<number>): Promise<void> {
+	const file = await readRegistryAsync();
+	const remaining = file.instances.filter((entry) => !deadPids.has(entry.pid));
+	if (remaining.length === file.instances.length) return;
+	await writeRegistryAsync({ instances: remaining });
 }
