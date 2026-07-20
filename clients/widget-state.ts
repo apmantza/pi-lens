@@ -382,6 +382,28 @@ export async function reconcileStaleWidgetFiles(): Promise<number> {
 	return dropped;
 }
 
+/**
+ * Keep the TUI honest (#298 follow-up). `reconcileStaleWidgetFiles` drops
+ * widget entries whose file changed on disk after they were last recorded
+ * (i.e. diagnostics the agent already fixed) — but it was only ever wired
+ * into the `lens_diagnostics` tool, so the widget rendered cached diagnostics
+ * verbatim and kept showing fixed errors until `lens_diagnostics` was run by
+ * hand. This debounced scheduler fires it from the widget render path (see
+ * `mountLensWidget` in index.ts) so stale entries self-correct. The debounce
+ * collapses the burst of renders that accompany a save into a single sweep.
+ */
+let staleReconcileTimer: ReturnType<typeof setTimeout> | null = null;
+export const STALE_RECONCILE_DEBOUNCE_MS = 1500;
+export function scheduleStaleReconcile(): void {
+	if (staleReconcileTimer !== null) return;
+	staleReconcileTimer = setTimeout(() => {
+		staleReconcileTimer = null;
+		void reconcileStaleWidgetFiles().catch(() => {});
+	}, STALE_RECONCILE_DEBOUNCE_MS);
+	// Don't keep the process alive solely for this background sweep.
+	staleReconcileTimer?.unref?.();
+}
+
 /** Summary of current diagnostic counts across all files in the widget. */
 export interface FileDiagnosticSummary {
 	filePath: string;
