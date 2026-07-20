@@ -680,6 +680,70 @@ describe("lsp server policy", () => {
 		).toBe(false);
 	});
 
+	it("falls back to `ty server` when pyright/basedpyright aren't found locally, without triggering an install", async () => {
+		const { PythonServer } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ty-lsp-"));
+		dirs.push(tmp);
+
+		launchLSP.mockImplementation(async (command: string, args: string[]) => {
+			if (command === "ty" && args?.[0] === "server") {
+				return {
+					process: { killed: false } as never,
+					stdin: {} as never,
+					stdout: {} as never,
+					stderr: {} as never,
+					pid: 5678,
+				};
+			}
+			throw new Error(`unexpected command: ${command}`);
+		});
+
+		const spawned = await PythonServer.spawn(tmp, { allowInstall: true });
+
+		expect(spawned).toBeDefined();
+		expect(spawned?.source).toBe("direct");
+		expect(spawned?.initialization).toBeUndefined();
+		// ty is PATH-only — never gated behind ensureTool/managed install.
+		expect(ensureTool).not.toHaveBeenCalled();
+		expect(
+			launchLSP.mock.calls.some(
+				([command, args]) =>
+					command === "ty" &&
+					Array.isArray(args) &&
+					args[0] === "server",
+			),
+		).toBe(true);
+	});
+
+	it("prefers a locally-found pyright over ty (opt-in fallback never wins when pyright is available)", async () => {
+		const { PythonServer } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-pyright-over-ty-"),
+		);
+		dirs.push(tmp);
+
+		launchLSP.mockImplementation(async (command: string) => {
+			if (command === "pyright-langserver") {
+				return {
+					process: { killed: false } as never,
+					stdin: {} as never,
+					stdout: {} as never,
+					stderr: {} as never,
+					pid: 4321,
+				};
+			}
+			throw new Error(`unexpected command: ${command}`);
+		});
+
+		const spawned = await PythonServer.spawn(tmp, { allowInstall: true });
+
+		expect(spawned).toBeDefined();
+		expect(ensureTool).not.toHaveBeenCalled();
+		expect(
+			launchLSP.mock.calls.some(([command]) => command === "ty"),
+		).toBe(false);
+	});
+
 	it("falls back to the file directory for standalone python files", async () => {
 		const { PythonJediServer } = await import("../../../clients/lsp/server.js");
 		const tmp = fs.mkdtempSync(
