@@ -95,16 +95,19 @@ jobs:
     if: needs.prepare.outputs.should_release == 'true'
     permissions:
       contents: write
+      pull-requests: read
     steps:
       # yamllint disable-line rule:line-length
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       # The release body is the curated CHANGELOG section for this version, not
       # the auto-generated PR-title list — so the release reads as a meaningful
       # summary of what changed (especially new features). `prepare` already
-      # verified the `## [VERSION]` heading exists, so extraction can't be empty.
+      # verified the `## [VERSION]` heading exists, so extraction cannot be
+      # empty.
       - name: Extract release notes from CHANGELOG
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
@@ -119,6 +122,14 @@ jobs:
         run: >
           gh release create "$TAG" --title "$TAG"
           --notes-file "$RUNNER_TEMP/release-notes.md"
+
+      - name: Append contributor thanks
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          git fetch --tags origin
+          node scripts/backfill-release-thanks.mjs --apply --only "$TAG"
 
   publish-npm:
     runs-on: ubuntu-latest
