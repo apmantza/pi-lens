@@ -14,6 +14,7 @@ import {
 	importWidgetState,
 	type PersistedWidgetState,
 	renderWidget,
+	scheduleStaleReconcile,
 	setRenderCallback,
 } from "./clients/widget-state.js";
 import { selectLspStatus } from "./clients/lsp-status.js";
@@ -475,9 +476,15 @@ export default function (pi: ExtensionAPI) {
 		setWidget(
 			"pi-lens",
 			(tui: LensWidgetTui, theme: LensWidgetTheme) => {
-				setRenderCallback(() => tui.requestRender());
+				setRenderCallback(() => {
+					scheduleStaleReconcile();
+					tui.requestRender();
+				});
 				return {
-					render: (width: number) => renderWidget(width, theme),
+					render: (width: number) => {
+						scheduleStaleReconcile();
+						return renderWidget(width, theme);
+					},
 					invalidate: () => setRenderCallback(() => {}),
 				};
 			},
