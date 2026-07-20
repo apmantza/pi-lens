@@ -1567,6 +1567,26 @@ export const PythonServer: LSPServerInfo = {
 			};
 		}
 
+		// ty (astral-sh/ty, #717) — an alternative Python checker/language server,
+		// tried ONLY when neither pyright nor basedpyright was found locally, and
+		// ONLY on PATH (allowInstall: false below — no managed/auto-install, unlike
+		// pyright's fallback right after this block). That keeps ty strictly
+		// opt-in: it never displaces an already-installed pyright/basedpyright,
+		// and it's never silently auto-installed as a default — a user only gets
+		// it by having installed `ty` themselves (e.g. `uv tool install ty` /
+		// `pip install ty`). Unlike pyright-langserver's `--stdio` flag, ty's CLI
+		// launches its language server via the `server` subcommand; it has no
+		// stable initializationOptions equivalent to pyright's `pythonPath` yet
+		// (astral-sh/ty#2032) — it auto-discovers `.venv`/`VIRTUAL_ENV` from cwd,
+		// so no `initialization` payload is sent.
+		const ty = await resolveAndLaunch(
+			{ candidates: ["ty"], args: ["server"], cwd: root, env },
+			false,
+		);
+		if (ty) {
+			return { process: ty.process, source: ty.source };
+		}
+
 		// Discover a globally-installed pyright even when install is disabled;
 		// only the download is gated by canInstall.
 		const pyrightPath = await ensureTool("pyright", {
@@ -2785,7 +2805,7 @@ export const TyposServer: LSPServerInfo = {
 export const LSP_SERVERS: LSPServerInfo[] = [
 	TypeScriptServer,
 	DenoServer,
-	PythonServer, // pyright / basedpyright — preferred; openFilesOnly avoids cold-start
+	PythonServer, // pyright / basedpyright — preferred; openFilesOnly avoids cold-start; ty (#717) is a local-only opt-in fallback
 	PythonJediServer, // fallback when neither pyright nor basedpyright is available
 	GoServer,
 	RustServer,
