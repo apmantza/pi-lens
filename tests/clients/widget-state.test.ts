@@ -1,6 +1,8 @@
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	__testing,
 	clearWidgetState,
@@ -12,6 +14,8 @@ import {
 	recordDiagnostics,
 	recordFormatter,
 	recordLsp,
+	scheduleStaleReconcile,
+	STALE_RECONCILE_DEBOUNCE_MS,
 	recordRunner,
 	renderWidget,
 	setRenderCallback,
@@ -758,5 +762,98 @@ describe("reconcileScanDiagnostics — full-scan/on-demand footer reconciliation
 		const result = getFileDiagnostics(filePath);
 		expect(result).toHaveLength(1);
 		expect(result?.[0]?.message).toBe("untokened confirmed scan");
+	});
+});
+
+describe("scheduleStaleReconcile — widget self-corrects fixed files (#298 follow-up)", () => {
+	it("drops a widget entry once its file is edited on disk after the last record", async () => {
+		vi.useFakeTimers();
+		const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "stale-reconcile-"));
+		const filePath = path.join(tmpDir, `stale-reconcile-${Date.now()}.ts`);
+		try {
+			await fs.writeFile(filePath, "const x = 1;\n");
+			// Pipeline records a real error for the file.
+			recordDiagnostics(
+				filePath,
+				[{ severity: "error", message: "real error", rule: "X" }],
+				1,
+			);
+			expect(getFileDiagnostics(filePath)).toHaveLength(1);
+
+			// Agent fixes the file on disk, but the pipeline never re-confirms it
+			// (cross-file fix / external edit / missed write event). mtime is now
+			// newer than the record's touchedAt, so the entry is stale.
+			const fixed = new Date(Date.now() + 10_000);
+			await fs.utimes(filePath, fixed, fixed);
+
+			// The render path now schedules a reconcile (as mountLensWidget does).
+			scheduleStaleReconcile();
+			await vi.advanceTimersByTimeAsync(STALE_RECONCILE_DEBOUNCE_MS);
+
+			// The sweep's fs.stat I/O settles on the REAL event loop — fake-timer
+			// flushes can't await it, so poll for the observable outcome instead
+			// of racing it (flaked on CI: entry not yet dropped at assert time).
+			vi.useRealTimers();
+			// Stale entry is gone — the TUI stops showing the fixed error.
+			await vi.waitFor(
+				() => expect(getFileDiagnostics(filePath)).toBeUndefined(),
+				{ timeout: 5000 },
+			);
+		} finally {
+			await vi.useRealTimers();
+			await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+		}
+	});
+
+	it("keeps a widget entry whose file has NOT changed since the last record (no false-positive drops)", async () => {
+		vi.useFakeTimers();
+		const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "stale-reconcile-keep-"));
+		const filePath = path.join(tmpDir, `stale-reconcile-keep-${Date.now()}.ts`);
+		try {
+			await fs.writeFile(filePath, "const y = 2;\n");
+			// Force the file's mtime into the PAST relative to the record's touchedAt
+			// (deterministic regardless of fake-timer/real-fs clock skew): the entry
+			// is fresh, so reconcile must NOT drop it.
+			const past = new Date(Date.now() - 10_000);
+			await fs.utimes(filePath, past, past);
+			recordDiagnostics(
+				filePath,
+				[{ severity: "error", message: "real error", rule: "X" }],
+				1,
+			);
+			expect(getFileDiagnostics(filePath)).toHaveLength(1);
+
+			// Sentinel: a second, genuinely STALE entry in the same sweep. When it
+			// drops we KNOW the sweep completed — only then is asserting the fresh
+			// entry still present meaningful (otherwise a not-yet-finished sweep
+			// would false-pass this test).
+			const sentinelPath = path.join(tmpDir, "sentinel-stale.ts");
+			await fs.writeFile(sentinelPath, "const s = 3;\n");
+			recordDiagnostics(
+				sentinelPath,
+				[{ severity: "error", message: "stale error", rule: "X" }],
+				1,
+			);
+			const future = new Date(Date.now() + 10_000);
+			await fs.utimes(sentinelPath, future, future);
+
+			// The render path schedules a reconcile, but the file is not stale.
+			scheduleStaleReconcile();
+			await vi.advanceTimersByTimeAsync(STALE_RECONCILE_DEBOUNCE_MS);
+
+			// Same real-I/O caveat as above: wait for the sweep to observably
+			// finish (sentinel dropped) on real timers.
+			vi.useRealTimers();
+			await vi.waitFor(
+				() => expect(getFileDiagnostics(sentinelPath)).toBeUndefined(),
+				{ timeout: 5000 },
+			);
+
+			// Valid entry preserved — the fix must not drop current diagnostics.
+			expect(getFileDiagnostics(filePath)).toHaveLength(1);
+		} finally {
+			await vi.useRealTimers();
+			await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+		}
 	});
 });

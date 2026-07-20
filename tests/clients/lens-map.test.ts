@@ -615,7 +615,14 @@ describe("generateLensMap", () => {
 	afterEach(() => {
 		if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 		else process.env.PILENS_DATA_DIR = previousDataDir;
-		fs.rmSync(tmpDir, { recursive: true, force: true });
+		// Retry cleanup: generateLensMap can still be flushing writes into the
+		// data dir when afterEach runs, which surfaces as ENOTEMPTY on Linux.
+		fs.rmSync(tmpDir, {
+			recursive: true,
+			force: true,
+			maxRetries: 5,
+			retryDelay: 100,
+		});
 	});
 
 	it("writes a self-contained HTML file under the project data dir's reports/ folder", async () => {
