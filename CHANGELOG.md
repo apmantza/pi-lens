@@ -4,6 +4,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+## [3.8.71] - 2026-07-20
+
 ### Added
 
 - **`ty` (astral-sh/ty) support as an alternative Python language server** (closes #717) — `PythonServer.spawn()` (`clients/lsp/server.ts`) now tries a bare `ty server` on `PATH` after the existing local `pyright-langserver`/`basedpyright-langserver` candidates fail, and before pyright's managed/auto-install fallback. Strictly opt-in and PATH-only: ty is deliberately NOT added to the installer registry (`clients/installer/index.ts`)/`ensureTool`, and the `resolveAndLaunch` call hardcodes `allowInstall: false`, so ty is only ever picked up when a user has already installed it themselves (`uv tool install ty` / `pipx install ty` / `pip install ty`) — it never displaces an already-installed pyright/basedpyright and never becomes the silently auto-installed Python LSP default (that stays pyright). ty's CLI invocation shape differs from pyright/basedpyright's shared `--stdio` flag — it's launched via the `server` subcommand instead — so it gets its own `resolveAndLaunch` call rather than joining the existing `localCandidates` array. No `initializationOptions` payload is sent to ty: it has no stable `pythonPath`-equivalent init option yet (astral-sh/ty#2032) and instead auto-discovers `.venv`/`VIRTUAL_ENV` relative to `cwd`. New tests in `tests/clients/lsp/server-policy.test.ts` cover the ty fallback tier (launched when pyright/basedpyright aren't found locally, `ty server` args, never triggers install, and pyright still wins when found locally).
