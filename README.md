@@ -37,6 +37,14 @@ Or from git:
 pi install git:github.com/apmantza/pi-lens
 ```
 
+> **npm v12 users:** dependency lifecycle scripts (e.g. `@ast-grep/cli`'s
+> `postinstall`) now require explicit approval — if `npm install` warns about
+> unreviewed install scripts, review and allow them with
+> `npm approve-scripts`, or trust the `allowScripts` entries already declared
+> in this package's `package.json`. Installing from a git source (`pi install
+> git:...` / `pi update --extension git:...`) may similarly prompt for
+> git-dependency approval; accept it to let the `prepare` build step run.
+
 ## Documentation
 
 - [Agent tools](docs/agent-tools.md) — pi tool names, scopes, and arguments
