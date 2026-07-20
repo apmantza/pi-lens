@@ -82,12 +82,17 @@ jobs:
       - name: Setup yarn (classic — hoists to node_modules like npm)
         if: matrix.pm == 'yarn'
         shell: bash
-        run: npm i -g yarn@1
+        # --ignore-scripts: yarn's own postinstall isn't needed for the classic
+        # CLI to function as the package manager under test.
+        run: npm i -g --ignore-scripts yarn@1.22.22
 
       - name: Build + pack the current repo
         shell: bash
         run: |
           set -euxo pipefail
+          # No --ignore-scripts here (S6505): this `npm ci` is OUR OWN package's
+          # install — the `prepare` script (grammar download + dist build) must
+          # run for the pack below to emit a working tarball.
           npm ci
           # prepare script builds dist; pack emits a tarball of the real files[] set.
           # `npm pack --silent` prints ONLY the tarball name to stdout — but the
@@ -164,7 +169,10 @@ jobs:
         shell: bash
         run: |
           set -uxo pipefail
-          PKG="@earendil-works/pi-coding-agent"
+          # Pinned deliberately (bump by hand when a newer pi release is
+          # verified — see #731): keeps a token-bearing CI job from pulling an
+          # arbitrary newest-on-registry version of a third-party package.
+          PKG="@earendil-works/pi-coding-agent@0.80.10"
           case "${{ matrix.pi_install }}" in
             npm-global)
               npm install -g --ignore-scripts "$PKG"
@@ -176,7 +184,9 @@ jobs:
               export PNPM_HOME="$HOME/.pnpm-global"; mkdir -p "$PNPM_HOME"
               export PATH="$PNPM_HOME:$PATH"
               pnpm config set global-bin-dir "$PNPM_HOME"
-              pnpm add -g "$PKG" || echo "::notice::pnpm add -g exit $? (blocked scripts?)"
+              # --ignore-scripts: pi's own lifecycle scripts aren't needed for
+              # this smoke test (same as the npm-global case above).
+              pnpm add -g --ignore-scripts "$PKG" || echo "::notice::pnpm add -g exit $? (blocked scripts?)"
               echo "$PNPM_HOME" >> "$GITHUB_PATH"
               echo "NPMCMD=pnpm" >> "$GITHUB_ENV" ;;
             bun-global)
@@ -188,7 +198,7 @@ jobs:
             curl)
               # Download then run (no pipe → no SIGPIPE/pipefail abort); the
               # installer ultimately `npm install -g`s pi when Node is present.
-              curl -fsSL --retry 3 --retry-delay 2 https://pi.dev/install.sh -o "$RUNNER_TEMP/pi-install.sh"
+              curl --proto '=https' --tlsv1.2 -fsSL --retry 3 --retry-delay 2 https://pi.dev/install.sh -o "$RUNNER_TEMP/pi-install.sh"
               sh "$RUNNER_TEMP/pi-install.sh" < /dev/null || echo "::notice::installer exit $? (verifying pi next)"
               echo "$(npm prefix -g)/bin" >> "$GITHUB_PATH"
               echo "$HOME/.local/bin" >> "$GITHUB_PATH"
@@ -252,11 +262,28 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7 # RPC driver
 
-      - name: Install mise
+      - name: Install mise (pinned + checksum-verified)
         shell: bash
+        env:
+          # Pinned deliberately (bump by hand after checking
+          # https://github.com/jdx/mise/releases and recomputing the sha256
+          # below — see #731): avoids `curl | sh`-ing an unpinned, unverified
+          # installer script straight off the network.
+          MISE_INSTALL_VERSION: v2026.7.7
+          MISE_INSTALL_SHA256: 0b98c2dc48edc807be860a76e14209afcfe36684c591f92337c5d9ff909e7740
         run: |
           set -uxo pipefail
-          curl -fsSL https://mise.run | sh
+          curl --proto '=https' --tlsv1.2 -fsSL \
+            -o "$RUNNER_TEMP/mise-install.sh" \
+            "https://github.com/jdx/mise/releases/download/${MISE_INSTALL_VERSION}/install.sh"
+          # sha256sum (Linux) vs shasum -a 256 (macOS default) — both runner
+          # images ship one or the other; prefer sha256sum when present.
+          if command -v sha256sum >/dev/null 2>&1; then
+            echo "${MISE_INSTALL_SHA256}  $RUNNER_TEMP/mise-install.sh" | sha256sum -c -
+          else
+            echo "${MISE_INSTALL_SHA256}  $RUNNER_TEMP/mise-install.sh" | shasum -a 256 -c -
+          fi
+          sh "$RUNNER_TEMP/mise-install.sh"
           # Expose the mise binary AND its shim dir so later steps see the
           # mise-managed node/npm/pnpm/pi as shims (realpath-through-shim = the
           # #285 trigger). No `mise activate` — that PATH-injects the real bins and
@@ -281,7 +308,9 @@ jobs:
         shell: bash
         run: |
           set -uxo pipefail
-          npm install -g pnpm
+          # Pinned deliberately (bump by hand — see #731): avoids an
+          # unpinned global install pulling an arbitrary newest pnpm.
+          npm install -g --ignore-scripts pnpm@11.15.1
           mise reshim
           pnpm --version
 
@@ -289,7 +318,9 @@ jobs:
         shell: bash
         run: |
           set -uxo pipefail
-          PKG="@earendil-works/pi-coding-agent"
+          # Pinned deliberately (bump by hand when a newer pi release is
+          # verified — see #731).
+          PKG="@earendil-works/pi-coding-agent@0.80.10"
           case "${{ matrix.pi_via }}" in
             mise-node)
               # node from mise; pi as a plain npm-global under that node.

@@ -329,6 +329,116 @@ describe("instance-registry", () => {
 			expect(footprint.totalCpuPercent).toBe(12);
 			expect(footprint.totalRssBytes).toBeGreaterThan(999); // host rss + 999
 		});
+
+		// --- #735: dead-pid registry entries must not report as live instances ---
+
+		it("computeResourceFootprint drops instances whose pid is confirmed dead when isPidAlive is supplied", async () => {
+			const { computeResourceFootprint } = await import(
+				"../../clients/instance-registry.js"
+			);
+			const registry = [
+				{
+					pid: 1,
+					startedAt: "t",
+					projectRoot: "/alive",
+					rssBytes: 100,
+					cpuPercent: 5,
+					heartbeatAt: "t",
+					lspChildCount: 0,
+					lspChildren: [],
+				},
+				{
+					pid: 22624, // hard-killed pi process (#735 repro pid)
+					startedAt: "t",
+					projectRoot: "/dead",
+					rssBytes: 233 * 1024 * 1024,
+					cpuPercent: 12,
+					heartbeatAt: "t",
+					lspChildCount: 0,
+					lspChildren: [],
+				},
+			];
+			const isPidAlive = (pid: number) => pid === 1;
+
+			const footprint = computeResourceFootprint(registry, isPidAlive);
+
+			expect(footprint.instanceCount).toBe(1);
+			expect(footprint.perInstance.map((i) => i.pid)).toEqual([1]);
+			expect(footprint.totalRssBytes).toBe(100);
+			expect(footprint.totalCpuPercent).toBe(5);
+		});
+
+		it("computeResourceFootprint applies no filtering when isPidAlive is omitted (pure default, unchanged pre-#735 behavior)", async () => {
+			const { computeResourceFootprint } = await import(
+				"../../clients/instance-registry.js"
+			);
+			const registry = [
+				{
+					pid: 99999,
+					startedAt: "t",
+					projectRoot: "/whatever",
+					rssBytes: 50,
+					cpuPercent: 1,
+					heartbeatAt: "t",
+					lspChildCount: 0,
+					lspChildren: [],
+				},
+			];
+
+			const footprint = computeResourceFootprint(registry);
+
+			expect(footprint.instanceCount).toBe(1);
+			expect(footprint.totalRssBytes).toBe(50);
+		});
+
+		it("getResourceFootprint excludes a dead-pid instance and opportunistically prunes it from the registry file", async () => {
+			const { registerInstance, recordLspChild, getResourceFootprint, readInstanceRegistry } =
+				await import("../../clients/instance-registry.js");
+			await registerInstance("/proj");
+			await recordLspChild({ pid: 7002, serverId: "typescript", command: "tsserver" });
+
+			// Simulate a second, hard-killed instance's stale registry entry by
+			// writing directly to the registry file (bypassing registerInstance,
+			// which always stamps the CURRENT process's own live pid).
+			const raw = JSON.parse(fs.readFileSync(registryFilePath(), "utf-8"));
+			raw.instances.push({
+				pid: 424242, // guaranteed-dead fake pid for this test
+				startedAt: "t",
+				projectRoot: "/dead-project",
+				rssBytes: 233 * 1024 * 1024,
+				cpuPercent: 9,
+				heartbeatAt: new Date().toISOString(),
+				lspChildCount: 0,
+				lspChildren: [],
+			});
+			fs.writeFileSync(registryFilePath(), JSON.stringify(raw), "utf-8");
+
+			const isPidAlive = (pid: number) => pid !== 424242;
+			const footprint = await getResourceFootprint(isPidAlive);
+
+			expect(footprint.instanceCount).toBe(1);
+			expect(footprint.perInstance.map((i) => i.pid)).not.toContain(424242);
+
+			// Prune is fire-and-forget — wait a tick for the background write.
+			await new Promise((r) => setTimeout(r, 20));
+			const remaining = await readInstanceRegistry();
+			expect(remaining.map((i) => i.pid)).not.toContain(424242);
+			expect(remaining).toHaveLength(1);
+		});
+
+		it("getResourceFootprint leaves the registry untouched when every pid is alive", async () => {
+			const { registerInstance, getResourceFootprint, readInstanceRegistry } = await import(
+				"../../clients/instance-registry.js"
+			);
+			await registerInstance("/proj");
+
+			const footprint = await getResourceFootprint(() => true);
+			expect(footprint.instanceCount).toBe(1);
+
+			await new Promise((r) => setTimeout(r, 20));
+			const remaining = await readInstanceRegistry();
+			expect(remaining).toHaveLength(1);
+		});
 	});
 
 	describe("kill switch (PI_LENS_INSTANCE_REGISTRY=0)", () => {
