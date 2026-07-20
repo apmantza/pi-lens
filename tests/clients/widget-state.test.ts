@@ -789,10 +789,16 @@ describe("scheduleStaleReconcile — widget self-corrects fixed files (#298 foll
 			// The render path now schedules a reconcile (as mountLensWidget does).
 			scheduleStaleReconcile();
 			await vi.advanceTimersByTimeAsync(STALE_RECONCILE_DEBOUNCE_MS);
-			await vi.runOnlyPendingTimersAsync();
 
+			// The sweep's fs.stat I/O settles on the REAL event loop — fake-timer
+			// flushes can't await it, so poll for the observable outcome instead
+			// of racing it (flaked on CI: entry not yet dropped at assert time).
+			vi.useRealTimers();
 			// Stale entry is gone — the TUI stops showing the fixed error.
-			expect(getFileDiagnostics(filePath)).toBeUndefined();
+			await vi.waitFor(
+				() => expect(getFileDiagnostics(filePath)).toBeUndefined(),
+				{ timeout: 5000 },
+			);
 		} finally {
 			await vi.useRealTimers();
 			await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
@@ -817,10 +823,31 @@ describe("scheduleStaleReconcile — widget self-corrects fixed files (#298 foll
 			);
 			expect(getFileDiagnostics(filePath)).toHaveLength(1);
 
+			// Sentinel: a second, genuinely STALE entry in the same sweep. When it
+			// drops we KNOW the sweep completed — only then is asserting the fresh
+			// entry still present meaningful (otherwise a not-yet-finished sweep
+			// would false-pass this test).
+			const sentinelPath = path.join(tmpDir, "sentinel-stale.ts");
+			await fs.writeFile(sentinelPath, "const s = 3;\n");
+			recordDiagnostics(
+				sentinelPath,
+				[{ severity: "error", message: "stale error", rule: "X" }],
+				1,
+			);
+			const future = new Date(Date.now() + 10_000);
+			await fs.utimes(sentinelPath, future, future);
+
 			// The render path schedules a reconcile, but the file is not stale.
 			scheduleStaleReconcile();
 			await vi.advanceTimersByTimeAsync(STALE_RECONCILE_DEBOUNCE_MS);
-			await vi.runOnlyPendingTimersAsync();
+
+			// Same real-I/O caveat as above: wait for the sweep to observably
+			// finish (sentinel dropped) on real timers.
+			vi.useRealTimers();
+			await vi.waitFor(
+				() => expect(getFileDiagnostics(sentinelPath)).toBeUndefined(),
+				{ timeout: 5000 },
+			);
 
 			// Valid entry preserved — the fix must not drop current diagnostics.
 			expect(getFileDiagnostics(filePath)).toHaveLength(1);
