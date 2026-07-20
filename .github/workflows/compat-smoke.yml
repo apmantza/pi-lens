@@ -72,7 +72,9 @@ jobs:
       - name: Install pi
         run: |
           set -uxo pipefail
-          npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+          # Pinned deliberately (bump by hand when a newer pi release is
+          # verified — see #731).
+          npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0.80.10
           echo "$(npm prefix -g)/bin" >> "$GITHUB_PATH"
 
       - name: Layer A — pinned-contract verification (no pi, no LLM)
