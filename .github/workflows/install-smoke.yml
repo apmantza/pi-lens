@@ -84,7 +84,7 @@ jobs:
         shell: bash
         # --ignore-scripts: yarn's own postinstall isn't needed for the classic
         # CLI to function as the package manager under test.
-        run: npm i -g --ignore-scripts yarn@1
+        run: npm i -g --ignore-scripts yarn@1.22.22
 
       - name: Build + pack the current repo
         shell: bash
