@@ -100,7 +100,7 @@
 		}
 	},
 	"optionalDependencies": {
-		"web-tree-sitter": "0.25.10"
+		"web-tree-sitter": "0.26.11"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.10",
