@@ -1,7 +1,8 @@
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	__testing,
 	clearWidgetState,
@@ -767,7 +768,8 @@ describe("reconcileScanDiagnostics — full-scan/on-demand footer reconciliation
 describe("scheduleStaleReconcile — widget self-corrects fixed files (#298 follow-up)", () => {
 	it("drops a widget entry once its file is edited on disk after the last record", async () => {
 		vi.useFakeTimers();
-		const filePath = path.join(process.cwd(), `stale-reconcile-${Date.now()}.ts`);
+		const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "stale-reconcile-"));
+		const filePath = path.join(tmpDir, `stale-reconcile-${Date.now()}.ts`);
 		try {
 			await fs.writeFile(filePath, "const x = 1;\n");
 			// Pipeline records a real error for the file.
@@ -793,13 +795,14 @@ describe("scheduleStaleReconcile — widget self-corrects fixed files (#298 foll
 			expect(getFileDiagnostics(filePath)).toBeUndefined();
 		} finally {
 			await vi.useRealTimers();
-			await fs.unlink(filePath).catch(() => {});
+			await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
 		}
 	});
 
 	it("keeps a widget entry whose file has NOT changed since the last record (no false-positive drops)", async () => {
 		vi.useFakeTimers();
-		const filePath = path.join(process.cwd(), `stale-reconcile-keep-${Date.now()}.ts`);
+		const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "stale-reconcile-keep-"));
+		const filePath = path.join(tmpDir, `stale-reconcile-keep-${Date.now()}.ts`);
 		try {
 			await fs.writeFile(filePath, "const y = 2;\n");
 			// Force the file's mtime into the PAST relative to the record's touchedAt
@@ -823,7 +826,7 @@ describe("scheduleStaleReconcile — widget self-corrects fixed files (#298 foll
 			expect(getFileDiagnostics(filePath)).toHaveLength(1);
 		} finally {
 			await vi.useRealTimers();
-			await fs.unlink(filePath).catch(() => {});
+			await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
 		}
 	});
 });
