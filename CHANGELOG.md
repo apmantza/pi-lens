@@ -4,6 +4,10 @@ All notable changes to pi-lens will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`hasOxlintConfig` now detects `.oxlintrc.jsonc`, `oxlint.config.ts`, and `oxlint.config.mts`** (closes #745) — previously only `.oxlintrc.json`/`oxlint.json` were recognized, so projects using oxlint's TS-based config format (`oxlint.config.ts` + `defineConfig`) or the `.oxlintrc.jsonc` variant were treated as having no oxlint config at all, causing `getPreferredJstsLintRunners` to fall back to `["oxlint", "biome-check-json"]` instead of `["oxlint"]` and run `biome-check-json` as an uninvited fallback linter. New `OXLINT_CONFIGS` list (mirroring the existing `ESLINT_CONFIGS` pattern) covers all four oxlint-documented auto-discovery filenames alongside the legacy `oxlint.json` name.
+
 ## [3.8.71] - 2026-07-20
 
 ### Added

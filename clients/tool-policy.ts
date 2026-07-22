@@ -2252,13 +2252,22 @@ export function hasVitePlusConfig(cwd: string): boolean {
 	return false;
 }
 
+// Per https://oxc.rs/docs/guide/usage/linter/config.html, oxlint auto-discovers
+// `.oxlintrc.json`, `.oxlintrc.jsonc`, `oxlint.config.ts`, and `oxlint.config.mts`
+// (in addition to the legacy `oxlint.json` name pi-lens already recognized).
+const OXLINT_CONFIGS = [
+	".oxlintrc.json",
+	".oxlintrc.jsonc",
+	"oxlint.json",
+	"oxlint.config.ts",
+	"oxlint.config.mts",
+];
+
 export function hasOxlintConfig(cwd: string): boolean {
 	for (const dir of walkUpDirsUntilPackageJson(cwd)) {
-		if (
-			fs.existsSync(path.join(dir, ".oxlintrc.json")) ||
-			fs.existsSync(path.join(dir, "oxlint.json"))
-		)
-			return true;
+		for (const cfg of OXLINT_CONFIGS) {
+			if (fs.existsSync(path.join(dir, cfg))) return true;
+		}
 	}
 	return hasVitePlusConfig(cwd);
 }

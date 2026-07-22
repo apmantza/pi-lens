@@ -729,6 +729,50 @@ describe("tool-policy", () => {
 		}
 	});
 
+	it("hasOxlintConfig detects .oxlintrc.jsonc in a parent directory", () => {
+		const env = setupTestEnvironment("pi-lens-tool-policy-oxlint-jsonc-walkup-");
+		try {
+			createTempFile(env.tmpDir, ".oxlintrc.jsonc", "{\n// comment\n}\n");
+			const subDir = path.join(env.tmpDir, "src");
+			fs.mkdirSync(subDir, { recursive: true });
+			expect(hasOxlintConfig(subDir)).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("hasOxlintConfig detects oxlint.config.ts in a parent directory", () => {
+		const env = setupTestEnvironment("pi-lens-tool-policy-oxlint-config-ts-walkup-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"oxlint.config.ts",
+				'import { defineConfig } from "oxlint";\nexport default defineConfig({});\n',
+			);
+			const subDir = path.join(env.tmpDir, "src");
+			fs.mkdirSync(subDir, { recursive: true });
+			expect(hasOxlintConfig(subDir)).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("hasOxlintConfig detects oxlint.config.mts in a parent directory", () => {
+		const env = setupTestEnvironment("pi-lens-tool-policy-oxlint-config-mts-walkup-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"oxlint.config.mts",
+				'import { defineConfig } from "oxlint";\nexport default defineConfig({});\n',
+			);
+			const subDir = path.join(env.tmpDir, "src");
+			fs.mkdirSync(subDir, { recursive: true });
+			expect(hasOxlintConfig(subDir)).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("detects Vite+ as oxfmt/oxlint project configuration", () => {
 		const env = setupTestEnvironment("pi-lens-tool-policy-vite-plus-");
 		try {
