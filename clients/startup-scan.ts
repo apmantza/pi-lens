@@ -243,43 +243,77 @@ export interface SourceCountResult {
 	entryBudgetExceeded: boolean;
 }
 
+/** Mutable per-walk tallies shared by `visitCountEntry` and its two drivers. */
+interface SourceCountTally {
+	count: number;
+	visited: number;
+}
+
+/**
+ * Per-entry step of the source-count walk, shared by the sync and async
+ * drivers (which differ only in yield cadence). Applies both bounds:
+ *   - `limit`: source-file early-exit (existing behavior) — fires as soon as
+ *     more than `limit` source files are seen.
+ *   - `maxEntries`: total directory-entry ceiling (#758) — fires as soon as
+ *     `maxEntries` entries have been visited, flagging `entryBudgetExceeded` so
+ *     a mixed source/non-source tree can't drag the walk across the whole tree.
+ *
+ * Returns the early-exit result when a bound fires, or null to keep walking.
+ */
+function visitCountEntry(
+	entry: fs.Dirent,
+	current: string,
+	ignoreMatcher: ProjectIgnoreMatcher,
+	stack: string[],
+	tally: SourceCountTally,
+	limit: number,
+	maxEntries: number,
+): SourceCountResult | null {
+	tally.visited += 1;
+	const fullPath = path.join(current, entry.name);
+	if (classifyCountEntry(entry, fullPath, ignoreMatcher, stack)) {
+		tally.count += 1;
+		if (tally.count > limit) {
+			return { count: tally.count, entryBudgetExceeded: false };
+		}
+	}
+	if (tally.visited >= maxEntries) {
+		return { count: tally.count, entryBudgetExceeded: true };
+	}
+	return null;
+}
+
 /**
  * Core synchronous source-count walk shared by the public
  * `countSourceFilesWithinLimit` wrapper and `computeStartupScanContext`.
- *
- * Two independent bounds keep it finite:
- *   - `limit`: source-file early-exit (existing behavior) — returns as soon as
- *     more than `limit` source files are seen.
- *   - `maxEntries`: total directory-entry ceiling (#758) — returns as soon as
- *     `maxEntries` entries have been visited, flagging `entryBudgetExceeded` so
- *     a mixed source/non-source tree can't drag the walk across the whole tree.
+ * Bounds are documented on `visitCountEntry`.
  */
 function walkSourceCount(
 	dir: string,
 	limit: number,
 	maxEntries: number,
 ): SourceCountResult {
-	let count = 0;
-	let visited = 0;
+	const tally: SourceCountTally = { count: 0, visited: 0 };
 	const { ignoreMatcher, stack } = initSourceCountWalk(dir);
 
 	while (stack.length > 0) {
 		const current = stack.pop();
 		if (!current) continue;
 
-		const entries = readDirEntriesSafe(current);
-
-		for (const entry of entries) {
-			visited += 1;
-			const fullPath = path.join(current, entry.name);
-			if (classifyCountEntry(entry, fullPath, ignoreMatcher, stack)) {
-				count += 1;
-				if (count > limit) return { count, entryBudgetExceeded: false };
-			}
-			if (visited >= maxEntries) return { count, entryBudgetExceeded: true };
+		for (const entry of readDirEntriesSafe(current)) {
+			const early = visitCountEntry(
+				entry,
+				current,
+				ignoreMatcher,
+				stack,
+				tally,
+				limit,
+				maxEntries,
+			);
+			if (early) return early;
 		}
 	}
-	return { count, entryBudgetExceeded: false };
+	return { count: tally.count, entryBudgetExceeded: false };
 }
 
 export function countSourceFilesWithinLimit(
@@ -417,8 +451,7 @@ async function walkSourceCountAsync(
 	// async overhead is well under 5ms while keeping per-burst sync work
 	// under 50ms (the perceptual threshold for "instant" keystrokes).
 	const yieldEvery = opts.yieldEvery ?? 100;
-	let count = 0;
-	let visited = 0;
+	const tally: SourceCountTally = { count: 0, visited: 0 };
 	let processedSinceYield = 0;
 	const { ignoreMatcher, stack } = initSourceCountWalk(dir);
 	// #703: prime the tracked-files set ONCE before the walk (not per file) so
@@ -432,16 +465,17 @@ async function walkSourceCountAsync(
 		const current = stack.pop();
 		if (!current) continue;
 
-		const entries = readDirEntriesSafe(current);
-
-		for (const entry of entries) {
-			visited += 1;
-			const fullPath = path.join(current, entry.name);
-			if (classifyCountEntry(entry, fullPath, ignoreMatcher, stack)) {
-				count += 1;
-				if (count > limit) return { count, entryBudgetExceeded: false };
-			}
-			if (visited >= maxEntries) return { count, entryBudgetExceeded: true };
+		for (const entry of readDirEntriesSafe(current)) {
+			const early = visitCountEntry(
+				entry,
+				current,
+				ignoreMatcher,
+				stack,
+				tally,
+				limit,
+				maxEntries,
+			);
+			if (early) return early;
 			if (++processedSinceYield % yieldEvery === 0) {
 				// Yield to the macrotask queue. setImmediate (not Promise.resolve)
 				// is required: stdin "data" events are macrotasks too, and a
@@ -450,7 +484,7 @@ async function walkSourceCountAsync(
 			}
 		}
 	}
-	return { count, entryBudgetExceeded: false };
+	return { count: tally.count, entryBudgetExceeded: false };
 }
 
 export async function countSourceFilesWithinLimitAsync(
