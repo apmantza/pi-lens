@@ -16,6 +16,7 @@ import { Type } from "../clients/deps/typebox.js";
 import {
 	anchorsForDiagnostic,
 	applyDispositions,
+	applyWeakDispositions,
 	getDisposition,
 } from "../clients/diagnostic-dispositions.js";
 import { applyInlineSuppressions } from "../clients/dispatch/inline-suppressions.js";
@@ -394,6 +395,28 @@ function appendProjectDiagnosticsDeltaLines(
 	return diagnostics.length;
 }
 
+/**
+ * #755: drop project-diagnostics-delta findings disposed suppress/defer before
+ * delta mode re-serves them. Anchored via `projectDiagnosticToWidget` so the
+ * (tool, rule) an agent's mark binds to matches mode=full's own project-runner
+ * filter (`applyInlineSuppressionsToSummaries`), keeping the two paths in
+ * agreement. Weak-anchored → no file read.
+ */
+function filterDeltaReportDispositions(
+	report: ProjectDiagnosticsDeltaReport | undefined,
+	cwd: string,
+): ProjectDiagnosticsDeltaReport | undefined {
+	if (!report?.diagnostics.length) return report;
+	const kept = report.diagnostics.filter(
+		(d) =>
+			applyWeakDispositions([projectDiagnosticToWidget(d)], cwd, d.filePath)
+				.length === 1,
+	);
+	return kept.length === report.diagnostics.length
+		? report
+		: { ...report, diagnostics: kept };
+}
+
 function formatDeltaMode(
 	cacheManager: CacheManager,
 	cwd: string,
@@ -410,25 +433,41 @@ function formatDeltaMode(
 	);
 	const actionable = actionableEntry?.data;
 	const quality = qualityEntry?.data;
-	const projectDelta = loadProjectDiagnosticsDeltaReport(cwd);
+	const projectDelta = filterDeltaReportDispositions(
+		loadProjectDiagnosticsDeltaReport(cwd),
+		cwd,
+	);
 	const ignoreFile = createCurrentIgnoreFilter(cwd);
 	const includeFile = (filePath: string) =>
 		ignoreFile(filePath) && (!pathsScope || pathsScope.includeFile(filePath));
-	const actionableFiles = (actionable?.files ?? []).filter((file) =>
-		includeFile(file.filePath),
-	);
-	const qualityFiles = (quality?.files ?? []).filter((file) =>
-		includeFile(file.filePath),
-	);
+	// #755: delta re-serves the actionable/quality caches verbatim, but those
+	// were filtered at DISPATCH time — before any lens_diagnostic_mark. Re-apply
+	// the weak disposition filter (suppress/defer) here so a mark converges
+	// immediately, not only on the next edit. Weak-anchored → zero file I/O, so
+	// this stays "instant" (see applyWeakDispositions).
+	const actionableFiles = (actionable?.files ?? [])
+		.filter((file) => includeFile(file.filePath))
+		.map((file) => ({
+			filePath: file.filePath,
+			warnings: applyWeakDispositions(file.warnings ?? [], cwd, file.filePath),
+		}))
+		.filter((file) => file.warnings.length > 0);
+	const qualityFiles = (quality?.files ?? [])
+		.filter((file) => includeFile(file.filePath))
+		.map((file) => ({
+			filePath: file.filePath,
+			warnings: applyWeakDispositions(file.warnings ?? [], cwd, file.filePath),
+		}))
+		.filter((file) => file.warnings.length > 0);
 
 	const lines: string[] = [];
 
 	// Fixable warnings from actionable-warnings
-	if (actionableFiles.length > 0 && severity !== "error") {
+	if (severity !== "error") {
 		for (const file of actionableFiles) {
 			const rel = path.relative(cwd, file.filePath);
 			lines.push(`${rel}`);
-			for (const w of file.warnings ?? []) {
+			for (const w of file.warnings) {
 				lines.push(
 					`  ⚠ L${w.line ?? "?"}  ${w.rule ?? w.code ?? w.tool}  ${w.message}`,
 				);
@@ -437,11 +476,11 @@ function formatDeltaMode(
 	}
 
 	// Quality issues
-	if (qualityFiles.length > 0 && severity !== "error") {
+	if (severity !== "error") {
 		for (const file of qualityFiles) {
 			const rel = path.relative(cwd, file.filePath);
 			if (!lines.includes(rel)) lines.push(rel);
-			for (const w of file.warnings ?? []) {
+			for (const w of file.warnings) {
 				lines.push(
 					`  ℹ L${w.line ?? "?"}  ${w.rule ?? w.code ?? w.tool}  ${w.message}`,
 				);
@@ -458,11 +497,11 @@ function formatDeltaMode(
 	);
 
 	const aw = actionableFiles.reduce(
-		(count, file) => count + (file.warnings?.length ?? 0),
+		(count, file) => count + file.warnings.length,
 		0,
 	);
 	const cq = qualityFiles.reduce(
-		(count, file) => count + (file.warnings?.length ?? 0),
+		(count, file) => count + file.warnings.length,
 		0,
 	);
 
@@ -471,9 +510,13 @@ function formatDeltaMode(
 		// Discoverability (#190): `delta` is current-turn-scoped, so it's empty
 		// right after a resume even when prior findings were rehydrated into the
 		// session-wide view. Point the agent at `mode=all` when that's the case.
-		const carried = getFileDiagnosticSummaries().filter(
-			(f) => includeFile(f.filePath) && f.diagnostics.length > 0,
-		);
+		const carried = getFileDiagnosticSummaries()
+			.filter((f) => includeFile(f.filePath))
+			.map((f) => ({
+				...f,
+				diagnostics: applyWeakDispositions(f.diagnostics, cwd, f.filePath),
+			}))
+			.filter((f) => f.diagnostics.length > 0);
 		const carriedIssues = carried.reduce((n, f) => n + f.diagnostics.length, 0);
 		if (carried.length > 0) {
 			text += ` ${carriedIssues} finding${carriedIssues === 1 ? "" : "s"} across ${carried.length} file${carried.length === 1 ? "" : "s"} carried over from earlier this session — use mode=all to see them.`;
@@ -1473,10 +1516,29 @@ function formatAllMode(
 			? ` (${staleDropped} changed file${staleDropped === 1 ? "" : "s"} omitted as stale — use mode=full to rescan)`
 			: "";
 
+	// mode=full already actively scanned exactly the requested paths, so a zero
+	// result there IS a legitimate clean read — the cache-only note only applies
+	// to delta/all, which is why this is gated on detailOverrides.mode !== "full".
+	const isFullMode = (detailOverrides as { mode?: string }).mode === "full";
+
 	const ignoreFile = createCurrentIgnoreFilter(cwd);
 	const includeFile = (filePath: string) =>
 		ignoreFile(filePath) && (!pathsScope || pathsScope.includeFile(filePath));
-	const visibleSummaries = summaries.filter((s) => includeFile(s.filePath));
+	// #755: mode=full already ran the full disposition + inline-suppression
+	// filter (applyInlineSuppressionsToSummaries, file content in hand); mode=all
+	// re-serves the widget summaries verbatim from dispatch time, so a
+	// post-dispatch lens_diagnostic_mark (suppress/defer) would otherwise still
+	// show here. Re-apply the weak filter (zero I/O) for the cache-only path and
+	// re-summarize so blocking/error/warning counts reflect the drop.
+	const dispositioned = isFullMode
+		? summaries
+		: summaries.map((s) => {
+				const kept = applyWeakDispositions(s.diagnostics ?? [], cwd, s.filePath);
+				return kept.length === (s.diagnostics?.length ?? 0)
+					? s
+					: summarizeDiagnostics(s.filePath, kept, s.hasFinalSnapshot);
+			});
+	const visibleSummaries = dispositioned.filter((s) => includeFile(s.filePath));
 
 	// Filter to files with actual issues
 	const withIssues = visibleSummaries.filter((s) => {
@@ -1485,10 +1547,6 @@ function formatAllMode(
 		return s.blocking > 0 || s.errors > 0 || s.warnings > 0;
 	});
 
-	// mode=full already actively scanned exactly the requested paths, so a zero
-	// result there IS a legitimate clean read — the cache-only note only applies
-	// to delta/all, which is why this is gated on detailOverrides.mode !== "full".
-	const isFullMode = (detailOverrides as { mode?: string }).mode === "full";
 	const pathsNote = isFullMode ? "" : pathsScopeCacheOnlyNote(pathsScope);
 
 	if (withIssues.length === 0) {

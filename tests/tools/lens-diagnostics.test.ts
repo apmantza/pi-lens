@@ -1,8 +1,13 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLensDiagnosticsTool } from "../../tools/lens-diagnostics.js";
+import { createLensDiagnosticMarkTool } from "../../tools/lens-diagnostic-mark.js";
+import {
+	_resetDeferredForTests,
+	_resetStateCacheForTests,
+} from "../../clients/diagnostic-dispositions.js";
 import { resetProjectLensConfigCache } from "../../clients/project-lens-config.js";
 
 const projectDiagnosticsMocks = vi.hoisted(() => ({
@@ -2150,5 +2155,167 @@ describe("lens_diagnostics wall-clock ceiling (never-hang guarantee)", () => {
 		expect(String(result.content[0].text)).toContain("time budget");
 		expect(result.details).toMatchObject({ mode: "full", timedOut: true });
 		delete process.env.PI_LENS_LENS_DIAGNOSTICS_FULL_TIMEOUT_MS;
+	});
+});
+
+// ── #755: dispositions apply to cached delta/all without a re-dispatch ─────────
+//
+// Repro: a finding is served from the actionable/quality/widget caches (filled
+// at dispatch time), the agent marks it suppress/defer via lens_diagnostic_mark
+// (which writes the store entry but never re-dispatches the file), then re-runs
+// lens_diagnostics. Before the fix the disposed finding reappeared until the
+// file was next edited; these assert it's gone immediately in delta AND all.
+describe("lens_diagnostics disposition read-filter (#755)", () => {
+	let ddTmp: string;
+	let ddPrevDataDir: string | undefined;
+
+	beforeEach(() => {
+		ddTmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-diag-755-"));
+		ddPrevDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(ddTmp, "data");
+		_resetDeferredForTests();
+		_resetStateCacheForTests();
+	});
+
+	afterEach(() => {
+		if (ddPrevDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+		else process.env.PILENS_DATA_DIR = ddPrevDataDir;
+		_resetDeferredForTests();
+		_resetStateCacheForTests();
+		fs.rmSync(ddTmp, { recursive: true, force: true });
+	});
+
+	function markTool() {
+		return createLensDiagnosticMarkTool(() => ddTmp);
+	}
+
+	function runMark(params: Record<string, unknown>) {
+		return markTool().execute("m", params, undefined, () => {}, { cwd: ddTmp });
+	}
+
+	it("mode=delta hides a finding suppressed via the mark tool without a re-dispatch", async () => {
+		const filePath = path.join(ddTmp, "a.ts");
+		fs.writeFileSync(filePath, "const a = 1;\nconst target = bad();\n");
+		const cacheData = {
+			"actionable-warnings": {
+				files: [
+					{
+						filePath,
+						displayPath: "a.ts",
+						warnings: [
+							{
+								id: "1",
+								filePath,
+								displayPath: "a.ts",
+								line: 2,
+								severity: "warning",
+								tool: "eslint",
+								rule: "no-bad",
+								message: "bad call",
+								actions: [],
+								suppressed: false,
+								origin: "dispatch",
+							},
+						],
+					},
+				],
+			},
+		};
+
+		// Before the mark: the finding is served from the cache.
+		const before = await run(makeTool(cacheData), { mode: "delta" }, ddTmp);
+		expect(String(before.content[0].text)).toContain("bad call");
+
+		// Mark it suppressed — same fields the tool reported.
+		const marked = await runMark({
+			filePath,
+			line: 2,
+			message: "bad call",
+			rule: "no-bad",
+			tool: "eslint",
+			disposition: "suppress",
+		});
+		expect(marked.isError).toBeFalsy();
+
+		// After the mark, WITHOUT re-dispatching the file: the finding is gone.
+		const after = await run(makeTool(cacheData), { mode: "delta" }, ddTmp);
+		expect(String(after.content[0].text)).not.toContain("bad call");
+		// All cached findings filtered out → delta reports a clean turn.
+		expect(String(after.content[0].text)).toContain("No");
+		expect(after.details).toMatchObject({ mode: "delta" });
+	});
+
+	it("mode=all hides a finding deferred via the mark tool without a re-dispatch", async () => {
+		const filePath = path.join(ddTmp, "b.ts");
+		fs.writeFileSync(filePath, "const target = bad();\n");
+		mockSummaries.push({
+			filePath,
+			blocking: 0,
+			errors: 0,
+			warnings: 1,
+			hasFinalSnapshot: true,
+			diagnostics: [
+				{
+					severity: "warning",
+					message: "bad call",
+					line: 1,
+					rule: "no-bad",
+					tool: "eslint",
+				},
+			],
+		});
+
+		const before = await run(makeTool(), { mode: "all" }, ddTmp);
+		expect(String(before.content[0].text)).toContain("bad call");
+
+		const marked = await runMark({
+			filePath,
+			line: 1,
+			message: "bad call",
+			rule: "no-bad",
+			tool: "eslint",
+			disposition: "defer",
+		});
+		expect(marked.isError).toBeFalsy();
+
+		const after = await run(makeTool(), { mode: "all" }, ddTmp);
+		expect(String(after.content[0].text)).not.toContain("bad call");
+		expect(after.details).toMatchObject({ mode: "all" });
+	});
+
+	it("mode=full filtering is unaffected — its own content-based pass still runs", async () => {
+		// A defer mark also drops in mode=full (applyDispositions there), so the
+		// cache-only weak filter added for delta/all doesn't regress full.
+		const filePath = path.join(ddTmp, "c.ts");
+		fs.writeFileSync(filePath, "const target = bad();\n");
+		mockSummaries.push({
+			filePath,
+			blocking: 0,
+			errors: 0,
+			warnings: 1,
+			hasFinalSnapshot: true,
+			diagnostics: [
+				{
+					severity: "warning",
+					message: "bad call",
+					line: 1,
+					rule: "no-bad",
+					tool: "eslint",
+				},
+			],
+		});
+		await runMark({
+			filePath,
+			line: 1,
+			message: "bad call",
+			rule: "no-bad",
+			tool: "eslint",
+			disposition: "defer",
+		});
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
+		};
+		const after = await run(makeTool({}, lspService), { mode: "full" }, ddTmp);
+		expect(String(after.content[0].text)).not.toContain("bad call");
 	});
 });

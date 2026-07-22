@@ -408,3 +408,43 @@ export function applyDispositions<T extends DispositionCandidate>(
 		return true;
 	});
 }
+
+/**
+ * WEAK-anchor-only disposition filter for the "instant" (cache-only)
+ * lens_diagnostics modes (delta/all). Drops diagnostics disposed `suppress`
+ * or deferred this session — both WEAK-anchored (`file|tool|rule|message`, no
+ * line-content hash; see module doc), so this needs ZERO file I/O: it computes
+ * only the weak anchor and never touches the diagnostic's line content.
+ *
+ * `false-positive` is deliberately NOT filtered here: it is STRICT-anchored,
+ * which requires the flagged line's content to re-derive its hash, and reading
+ * every findings file just for that would defeat the instant contract of these
+ * cache-only modes. A false-positive mark still filters at the next per-edit
+ * dispatch (`dispatcher.ts`) and in `mode=full`'s merge — both of which already
+ * have file content in hand and call `applyDispositions` (the full,
+ * content-based filter). suppress/defer, being intent-level and weak-anchored,
+ * are the marks that must apply the instant a query re-serves cached findings,
+ * and they do so here without any read.
+ */
+export function applyWeakDispositions<T extends DispositionCandidate>(
+	diagnostics: T[],
+	cwd: string,
+	filePath: string,
+): T[] {
+	if (!diagnostics.length) return diagnostics;
+	const dispositions = readState(cwd).dispositions;
+	if (!dispositions && deferredThisSession.size === 0) return diagnostics;
+	return diagnostics.filter((d) => {
+		const weak = computeWeakAnchor({
+			cwd,
+			filePath,
+			tool: d.tool,
+			rule: d.rule,
+			message: d.message,
+			line: d.line,
+		});
+		if (deferredThisSession.has(weak)) return false;
+		if (dispositions?.[weak]?.disposition === "suppress") return false;
+		return true;
+	});
+}
