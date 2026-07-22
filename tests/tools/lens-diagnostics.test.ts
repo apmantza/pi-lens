@@ -1205,6 +1205,48 @@ describe("lens_diagnostics mode=full", () => {
 		).toEqual(["trivy"]);
 	});
 
+	// #747: a fresh-fetch that refused an at-or-above-$HOME root reports ONE
+	// unsafe-root note, not seven per-analyzer "not applicable" reasons.
+	it("mode=full: an unsafe-root fresh-fetch renders the home-directory refusal, not the generic cold list (#747)", async () => {
+		mockSummaries.length = 0;
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
+		};
+		freshFetchMocks.fetchFreshProjectDiagnostics.mockResolvedValue({
+			diagnostics: [],
+			runners: [],
+			cold: [
+				"knip",
+				"jscpd",
+				"madge",
+				"gitleaks",
+				"govulncheck",
+				"trivy",
+				"dead-code",
+			],
+			timings: {},
+			unsafeRoot: true,
+		});
+
+		const result = await run(makeTool({}, lspService), {
+			mode: "full",
+			refreshRunners: "cached",
+		});
+
+		const text = String(result.content[0].text);
+		expect(text).toContain("heavyweight analyzers skipped");
+		expect(text).toContain("at or above the home directory");
+		expect(text).not.toContain("not applicable / unavailable this run");
+		expect(
+			(result.details as { analyzersUnsafeRoot?: boolean }).analyzersUnsafeRoot,
+		).toBe(true);
+		// coldRunners still carries the full list so "did analyzer X contribute"
+		// checks keep working unchanged.
+		expect(
+			(result.details as { coldRunners?: string[] }).coldRunners,
+		).toContain("jscpd");
+	});
+
 	// #613: fetchFreshProjectDiagnostics used to be `await`ed only AFTER the LSP
 	// sweep's own Promise.all had already resolved — sequentially eating into
 	// the SAME wall-clock ceiling the sweep already spent, instead of sharing it

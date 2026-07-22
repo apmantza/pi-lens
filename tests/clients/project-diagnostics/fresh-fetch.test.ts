@@ -126,6 +126,79 @@ describe("fetchFreshProjectDiagnostics (#585)", () => {
 		expect(result.timings.knip).toBeGreaterThanOrEqual(0);
 	});
 
+	// #747: cwd at — or above — $HOME must never spawn a single analyzer; the
+	// observed failure was a jscpd walk of an entire WSL home (44 GB RSS, OOM
+	// kill of the whole instance).
+	it("refuses to run anything when cwd IS the home directory (#747)", async () => {
+		const cacheManager = makeCacheManager();
+		const clients = makeClients({ jscpdAvailable: true, madgeAvailable: true });
+
+		const result = await fetchFreshProjectDiagnostics(
+			cacheManager,
+			tmp,
+			clients,
+			undefined,
+			{ homeDir: tmp },
+		);
+
+		expect(result.unsafeRoot).toBe(true);
+		expect(result.diagnostics).toEqual([]);
+		expect(result.runners).toEqual([]);
+		expect(result.cold).toEqual([
+			"knip",
+			"jscpd",
+			"madge",
+			"gitleaks",
+			"govulncheck",
+			"trivy",
+			"dead-code",
+		]);
+		expect(clients.knipClient.analyze).not.toHaveBeenCalled();
+		expect(clients.jscpdClient.ensureAvailable).not.toHaveBeenCalled();
+		expect(clients.jscpdClient.scan).not.toHaveBeenCalled();
+		expect(clients.depChecker.scanProject).not.toHaveBeenCalled();
+		expect(clients.gitleaksClient.scan).not.toHaveBeenCalled();
+		expect(cacheManager.writeCache).not.toHaveBeenCalled();
+	});
+
+	it("refuses to run anything when cwd is an ANCESTOR of the home directory (#747)", async () => {
+		const cacheManager = makeCacheManager();
+		const clients = makeClients({ jscpdAvailable: true });
+		const fakeHome = path.join(tmp, "home", "user");
+		fs.mkdirSync(fakeHome, { recursive: true });
+
+		const result = await fetchFreshProjectDiagnostics(
+			cacheManager,
+			tmp,
+			clients,
+			undefined,
+			{ homeDir: fakeHome },
+		);
+
+		expect(result.unsafeRoot).toBe(true);
+		expect(clients.knipClient.analyze).not.toHaveBeenCalled();
+		expect(cacheManager.writeCache).not.toHaveBeenCalled();
+	});
+
+	it("runs normally for a project directory UNDER the home directory (#747)", async () => {
+		const cacheManager = makeCacheManager();
+		const clients = makeClients();
+		const fakeHome = path.join(tmp, "home", "user");
+		const project = path.join(fakeHome, "code", "app");
+		fs.mkdirSync(project, { recursive: true });
+
+		const result = await fetchFreshProjectDiagnostics(
+			cacheManager,
+			project,
+			clients,
+			undefined,
+			{ homeDir: fakeHome },
+		);
+
+		expect(result.unsafeRoot).toBeUndefined();
+		expect(clients.knipClient.analyze).toHaveBeenCalledTimes(1);
+	});
+
 	it("reports jscpd cold when the tool isn't available, without writing cache", async () => {
 		const cacheManager = makeCacheManager();
 		const clients = makeClients({ jscpdAvailable: false });

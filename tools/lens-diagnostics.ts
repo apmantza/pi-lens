@@ -1310,8 +1310,13 @@ async function formatFullMode(
 	// isn't (a re-run may well complete for that analyzer).
 	const abortedIds = new Set(extracted.abortedIds ?? []);
 	const genuinelyColdIds = extracted.cold.filter((id) => !abortedIds.has(id));
-	const coldNote =
-		genuinelyColdIds.length > 0
+	// #747: an unsafe analysis root (cwd at/above $HOME) skips ALL heavyweight
+	// analyzers before anything spawns — rendering that as the per-analyzer
+	// "not applicable / unavailable" list would send the caller chasing seven
+	// wrong reasons. One note with the real one instead.
+	const coldNote = extracted.unsafeRoot
+		? `\n\nheavyweight analyzers skipped: the working directory resolves at or above the home directory, so a fresh knip/jscpd/madge/gitleaks/govulncheck/trivy/dead-code scan would walk every unrelated tree under it. Re-run from inside a project directory. Absence of their findings is NOT a clean verdict.`
+		: genuinelyColdIds.length > 0
 			? `\n\ncold (not applicable / unavailable this run): ${genuinelyColdIds
 					.map((id) => `${id} — ${warmTriggerFor(id)}`)
 					.join(
@@ -1350,6 +1355,10 @@ async function formatFullMode(
 			analyzerTimingsMs: extracted.timings,
 			analyzersAborted: extracted.aborted ?? false,
 			analyzersAbortedIds: extracted.abortedIds ?? [],
+			// #747: true when the fresh fetch refused an at-or-above-$HOME root —
+			// lets a caller distinguish "skipped for safety" from per-analyzer
+			// cold reasons without parsing the text note.
+			analyzersUnsafeRoot: extracted.unsafeRoot ?? false,
 			// #630: confirmed/unconfirmed LSP-sweep tally, mirroring
 			// `lsp_diagnostics`' confirmation state — lets a caller check "were
 			// any files unconfirmed" without re-deriving it from the text.
