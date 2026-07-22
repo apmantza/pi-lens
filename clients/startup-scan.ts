@@ -16,7 +16,12 @@ import {
 	type ProjectIgnoreMatcher,
 } from "./file-utils.js";
 import { isAtOrAboveHomeDir } from "./path-utils.js";
-import { readDirEntriesSafe, shouldRecurseIntoDir } from "./source-walker.js";
+import {
+	shouldRecurseIntoDir,
+	walkTreeStackAsync,
+	walkTreeStackSync,
+	type WalkVisitor,
+} from "./source-walker.js";
 
 export const PROJECT_ROOT_MARKERS = [
 	".git",
@@ -189,48 +194,6 @@ export function findNearestProjectRoot(startDir: string): string | null {
 	}
 }
 
-/** Shared (rootDir, ignoreMatcher, stack) setup for both count-walk variants below. */
-function initSourceCountWalk(dir: string): {
-	rootDir: string;
-	ignoreMatcher: ProjectIgnoreMatcher;
-	stack: string[];
-} {
-	const rootDir = path.resolve(dir);
-	const ignoreMatcher = getProjectIgnoreMatcher(rootDir);
-	return { rootDir, ignoreMatcher, stack: [rootDir] };
-}
-
-/**
- * Shared per-entry decision for both `countSourceFilesWithinLimit` and its
- * async twin: pushes a recursable directory onto `stack` (mutated in place)
- * and reports whether `entry` itself counts as a source file. Extracted
- * (refs #191) so the sync/async loops don't carry a byte-identical
- * directory-branch block — the two loops still own their own traversal
- * shape (sync recursion-via-stack vs. async with a yield cadence), only this
- * per-entry classification is shared.
- *
- * Directories here never check for symlinks or generated-artifact names —
- * always follows symlinks (unlike source-filter.ts's collectSourceFiles*).
- */
-function classifyCountEntry(
-	entry: fs.Dirent,
-	fullPath: string,
-	ignoreMatcher: ProjectIgnoreMatcher,
-	stack: string[],
-): boolean {
-	if (entry.isDirectory()) {
-		if (shouldRecurseIntoDir(entry, fullPath, { ignoreMatcher, followSymlinks: true })) {
-			stack.push(fullPath);
-		}
-		return false;
-	}
-	return (
-		entry.isFile() &&
-		!ignoreMatcher.isIgnored(fullPath, false) &&
-		SOURCE_FILE_PATTERN.test(entry.name)
-	);
-}
-
 export interface SourceCountResult {
 	/** Source files found (capped at `limit + 1` once the early-exit fires). */
 	count: number;
@@ -243,77 +206,82 @@ export interface SourceCountResult {
 	entryBudgetExceeded: boolean;
 }
 
-/** Mutable per-walk tallies shared by `visitCountEntry` and its two drivers. */
-interface SourceCountTally {
+/** Mutable per-walk tallies threaded through the shared count visitor below. */
+interface SourceCountState {
 	count: number;
 	visited: number;
+	entryBudgetExceeded: boolean;
 }
 
 /**
- * Per-entry step of the source-count walk, shared by the sync and async
- * drivers (which differ only in yield cadence). Applies both bounds:
+ * Per-entry step of the source-count walk (#761), plugged into both the sync
+ * and async {@link walkTreeStackSync}/`Async` drivers, which differ only in
+ * yield cadence. Applies both bounds in their historical order:
  *   - `limit`: source-file early-exit (existing behavior) — fires as soon as
  *     more than `limit` source files are seen.
  *   - `maxEntries`: total directory-entry ceiling (#758) — fires as soon as
- *     `maxEntries` entries have been visited, flagging `entryBudgetExceeded` so
- *     a mixed source/non-source tree can't drag the walk across the whole tree.
+ *     `maxEntries` entries have been visited (`visited >= maxEntries`, checked
+ *     AFTER classification), flagging `entryBudgetExceeded` so a mixed
+ *     source/non-source tree can't drag the walk across the whole tree.
+ * The source-limit check precedes the entry-budget check, so an entry that
+ * trips both stops as a source-limit hit (`entryBudgetExceeded` stays false).
  *
- * Returns the early-exit result when a bound fires, or null to keep walking.
+ * Directories here never check for symlinks or generated-artifact names —
+ * always follows symlinks (unlike source-filter.ts's collectSourceFiles*).
  */
-function visitCountEntry(
-	entry: fs.Dirent,
-	current: string,
+function makeSourceCountVisitor(
+	state: SourceCountState,
 	ignoreMatcher: ProjectIgnoreMatcher,
-	stack: string[],
-	tally: SourceCountTally,
 	limit: number,
 	maxEntries: number,
-): SourceCountResult | null {
-	tally.visited += 1;
-	const fullPath = path.join(current, entry.name);
-	if (classifyCountEntry(entry, fullPath, ignoreMatcher, stack)) {
-		tally.count += 1;
-		if (tally.count > limit) {
-			return { count: tally.count, entryBudgetExceeded: false };
+): WalkVisitor {
+	return (entry, fullPath) => {
+		state.visited += 1;
+		if (entry.isDirectory()) {
+			const recurse = shouldRecurseIntoDir(entry, fullPath, {
+				ignoreMatcher,
+				followSymlinks: true,
+			});
+			if (state.visited >= maxEntries) {
+				state.entryBudgetExceeded = true;
+				return "stop";
+			}
+			return recurse ? "recurse" : "skip";
 		}
-	}
-	if (tally.visited >= maxEntries) {
-		return { count: tally.count, entryBudgetExceeded: true };
-	}
-	return null;
+		if (
+			entry.isFile() &&
+			!ignoreMatcher.isIgnored(fullPath, false) &&
+			SOURCE_FILE_PATTERN.test(entry.name)
+		) {
+			state.count += 1;
+			if (state.count > limit) return "stop";
+		}
+		if (state.visited >= maxEntries) {
+			state.entryBudgetExceeded = true;
+			return "stop";
+		}
+		return "skip";
+	};
 }
 
 /**
  * Core synchronous source-count walk shared by the public
  * `countSourceFilesWithinLimit` wrapper and `computeStartupScanContext`.
- * Bounds are documented on `visitCountEntry`.
+ * Bounds are documented on `makeSourceCountVisitor`.
  */
 function walkSourceCount(
 	dir: string,
 	limit: number,
 	maxEntries: number,
 ): SourceCountResult {
-	const tally: SourceCountTally = { count: 0, visited: 0 };
-	const { ignoreMatcher, stack } = initSourceCountWalk(dir);
-
-	while (stack.length > 0) {
-		const current = stack.pop();
-		if (!current) continue;
-
-		for (const entry of readDirEntriesSafe(current)) {
-			const early = visitCountEntry(
-				entry,
-				current,
-				ignoreMatcher,
-				stack,
-				tally,
-				limit,
-				maxEntries,
-			);
-			if (early) return early;
-		}
-	}
-	return { count: tally.count, entryBudgetExceeded: false };
+	const state: SourceCountState = { count: 0, visited: 0, entryBudgetExceeded: false };
+	const rootDir = path.resolve(dir);
+	const ignoreMatcher = getProjectIgnoreMatcher(rootDir);
+	walkTreeStackSync(
+		rootDir,
+		makeSourceCountVisitor(state, ignoreMatcher, limit, maxEntries),
+	);
+	return { count: state.count, entryBudgetExceeded: state.entryBudgetExceeded };
 }
 
 export function countSourceFilesWithinLimit(
@@ -436,9 +404,10 @@ function computeStartupScanContext(
 
 /**
  * Async core of the source-count walk (the yield-cadence twin of
- * `walkSourceCount`). Same two bounds — `limit` (source files) and
- * `maxEntries` (total entries, #758) — plus the `setImmediate` yield every
- * `yieldEvery` entries that keeps `session_start` keystrokes responsive.
+ * `walkSourceCount`). Same visitor and two bounds — `limit` (source files) and
+ * `maxEntries` (total entries, #758) — driven through the shared
+ * {@link walkTreeStackAsync} engine (#761), which yields via `setImmediate`
+ * every `yieldEvery` entries to keep `session_start` keystrokes responsive.
  */
 async function walkSourceCountAsync(
 	dir: string,
@@ -446,45 +415,27 @@ async function walkSourceCountAsync(
 	maxEntries: number,
 	opts: { yieldEvery?: number } = {},
 ): Promise<SourceCountResult> {
-	// Yield every 100 entries by default. Empirically each yield costs ~0.1ms
-	// of overhead and a 2k-file project produces ~20 yields, so the total
-	// async overhead is well under 5ms while keeping per-burst sync work
-	// under 50ms (the perceptual threshold for "instant" keystrokes).
-	const yieldEvery = opts.yieldEvery ?? 100;
-	const tally: SourceCountTally = { count: 0, visited: 0 };
-	let processedSinceYield = 0;
-	const { ignoreMatcher, stack } = initSourceCountWalk(dir);
-	// #703: prime the tracked-files set ONCE before the walk (not per file) so
-	// a tracked file matching a `.gitignore`/global pattern isn't dropped from
-	// the startup source-file count. Fail-open: resolves even when git is
-	// absent, and `isIgnored` degrades to pattern-only if this never resolves
-	// before a caller inspects results.
-	await ignoreMatcher.ensureTrackedIndex();
-
-	while (stack.length > 0) {
-		const current = stack.pop();
-		if (!current) continue;
-
-		for (const entry of readDirEntriesSafe(current)) {
-			const early = visitCountEntry(
-				entry,
-				current,
-				ignoreMatcher,
-				stack,
-				tally,
-				limit,
-				maxEntries,
-			);
-			if (early) return early;
-			if (++processedSinceYield % yieldEvery === 0) {
-				// Yield to the macrotask queue. setImmediate (not Promise.resolve)
-				// is required: stdin "data" events are macrotasks too, and a
-				// microtask-only yield would not unblock keystroke handling.
-				await new Promise<void>((resolve) => setImmediate(resolve));
-			}
-		}
-	}
-	return { count: tally.count, entryBudgetExceeded: false };
+	const state: SourceCountState = { count: 0, visited: 0, entryBudgetExceeded: false };
+	const rootDir = path.resolve(dir);
+	const ignoreMatcher = getProjectIgnoreMatcher(rootDir);
+	await walkTreeStackAsync(
+		rootDir,
+		makeSourceCountVisitor(state, ignoreMatcher, limit, maxEntries),
+		{
+			// Yield every 100 entries by default. Empirically each yield costs
+			// ~0.1ms of overhead and a 2k-file project produces ~20 yields, so the
+			// total async overhead is well under 5ms while keeping per-burst sync
+			// work under 50ms (the perceptual threshold for "instant" keystrokes).
+			yieldEvery: opts.yieldEvery ?? 100,
+			// #703: prime the tracked-files set ONCE before the walk (not per file)
+			// so a tracked file matching a `.gitignore`/global pattern isn't dropped
+			// from the startup source-file count. Fail-open: resolves even when git
+			// is absent, and `isIgnored` degrades to pattern-only if this never
+			// resolves before a caller inspects results.
+			beforeWalk: () => ignoreMatcher.ensureTrackedIndex(),
+		},
+	);
+	return { count: state.count, entryBudgetExceeded: state.entryBudgetExceeded };
 }
 
 export async function countSourceFilesWithinLimitAsync(

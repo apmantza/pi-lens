@@ -26,7 +26,11 @@ import {
 } from "./generated-artifacts.js";
 import { normalizeEphemeralMapKey } from "./path-utils.js";
 import { isSlowFs, SLOW_FS_REDUCED_MAX_FILES } from "./slow-fs.js";
-import { readDirEntriesSafe, shouldRecurseIntoDir } from "./source-walker.js";
+import {
+	shouldRecurseIntoDir,
+	walkTreeRecursiveSync,
+	walkTreeStackAsync,
+} from "./source-walker.js";
 
 /**
  * Per-walk memo of sibling-existence probe results (refs #191, item 1).
@@ -449,27 +453,24 @@ export function collectSourceFilesWithBudget(
 	const probeCache = createArtifactProbeCache();
 	const budget = createEntryBudget(cfg.maxScanEntries);
 
-	function scan(currentDir: string) {
-		if (files.length >= cfg.maxFiles) return; // hard cap (#250)
-		if (budget.exceeded) return; // entry budget (#760)
-		const entries = readDirEntriesSafe(currentDir);
-
-		for (const entry of entries) {
-			if (files.length >= cfg.maxFiles) return;
-			if (!chargeEntryBudget(budget)) return;
-			const fullPath = path.join(currentDir, entry.name);
-			const { recurseInto, keepFile } = classifyEntry(
-				entry,
-				fullPath,
-				cfg,
-				probeCache,
-			);
-			if (recurseInto) scan(recurseInto);
-			else if (keepFile) files.push(keepFile);
-		}
-	}
-
-	scan(rootDir);
+	// #761: immediate-descent recursion driver (result-array order preserved),
+	// with both caps kept as this walker's own per-entry policy: the hard
+	// `maxFiles` results cap (#250) is checked BEFORE charging the entry budget
+	// (#760), and a file that reaches `maxFiles` is the last one kept — the cap
+	// then trips on the following entry, matching the pre-#761 loop exactly.
+	walkTreeRecursiveSync(rootDir, (entry, fullPath) => {
+		if (files.length >= cfg.maxFiles) return "stop"; // hard cap (#250)
+		if (!chargeEntryBudget(budget)) return "stop"; // entry budget (#760)
+		const { recurseInto, keepFile } = classifyEntry(
+			entry,
+			fullPath,
+			cfg,
+			probeCache,
+		);
+		if (recurseInto) return "recurse";
+		if (keepFile) files.push(keepFile);
+		return "skip";
+	});
 	return { files, entryBudgetExceeded: budget.exceeded };
 }
 
@@ -511,62 +512,49 @@ export async function collectSourceFilesWithBudgetAsync(
 ): Promise<SourceCollectionResult> {
 	const rootDir = path.resolve(dir);
 	const cfg = resolveCollectionConfig(rootDir, options);
-	// #703: prime the tracked-files set once before the walk so a tracked file
-	// matching a `.gitignore`/global pattern still surfaces (the review-graph
-	// build walk, word-index, and every other async caller of this function
-	// funnel through here). Fail-open on no-git/spawn failure.
-	await cfg.ignoreMatcher.ensureTrackedIndex();
-	// 50 entries/chunk keeps the worst-case synchronous burst under ~40ms even
-	// on a cold scan where every kept file pays the 4 KB generated-header read
-	// (measured on a 2k-file fixture). Larger values regress past the ~50ms
-	// event-loop budget; see PERF-AUDIT.md.
-	const yieldEvery = Math.max(1, options?.yieldEvery ?? 50);
 	const files: string[] = [];
-	// Depth-first stack mirrors the recursion order of the sync collector.
-	const stack: string[] = [rootDir];
-	let processedSinceYield = 0;
 	// Per-walk sibling-probe memo (refs #191, item 1). A single async walk is
 	// still one point-in-time snapshot despite yielding between chunks, so
 	// caching across the whole call remains invalidation-free.
 	const probeCache = createArtifactProbeCache();
 	const budget = createEntryBudget(cfg.maxScanEntries);
 
-	while (stack.length > 0) {
-		const currentDir = stack.pop();
-		if (currentDir === undefined) continue;
-
-		const entries = readDirEntriesSafe(currentDir);
-
-		// Push subdirectories in reverse so the deepest-first pop order matches
-		// the sync collector's left-to-right recursion within a directory.
-		const subDirs: string[] = [];
-		for (const entry of entries) {
-			if (!chargeEntryBudget(budget)) {
-				return { files, entryBudgetExceeded: true }; // entry budget (#760)
-			}
-			const fullPath = path.join(currentDir, entry.name);
+	// #761: shared depth-first stack driver (its reverse-push mirrors the sync
+	// collector's left-to-right recursion). The async collector charges the
+	// entry budget (#760) FIRST, then checks the `maxFiles` cap immediately
+	// after keeping a file — subtly different from the sync collector's ordering
+	// but preserved verbatim, so both stay byte-identical to their pre-#761 form.
+	await walkTreeStackAsync(
+		rootDir,
+		(entry, fullPath) => {
+			if (!chargeEntryBudget(budget)) return "stop"; // entry budget (#760)
 			const { recurseInto, keepFile } = classifyEntry(
 				entry,
 				fullPath,
 				cfg,
 				probeCache,
 			);
-			if (recurseInto) subDirs.push(recurseInto);
-			else if (keepFile) {
+			if (recurseInto) return "recurse";
+			if (keepFile) {
 				files.push(keepFile);
-				if (files.length >= cfg.maxFiles) {
-					return { files, entryBudgetExceeded: false }; // hard cap (#250)
-				}
+				if (files.length >= cfg.maxFiles) return "stop"; // hard cap (#250)
 			}
-			if (++processedSinceYield >= yieldEvery) {
-				processedSinceYield = 0;
-				await new Promise<void>((resolve) => setImmediate(resolve));
-			}
-		}
-		for (let i = subDirs.length - 1; i >= 0; i--) stack.push(subDirs[i]);
-	}
+			return "skip";
+		},
+		{
+			// 50 entries/chunk keeps the worst-case synchronous burst under ~40ms
+			// even on a cold scan where every kept file pays the 4 KB generated-
+			// header read (measured on a 2k-file fixture). Larger values regress
+			// past the ~50ms event-loop budget; see PERF-AUDIT.md.
+			yieldEvery: Math.max(1, options?.yieldEvery ?? 50),
+			// #703: prime the tracked-files set once before the walk so a tracked
+			// file matching a `.gitignore`/global pattern still surfaces. Fail-open
+			// on no-git/spawn failure.
+			beforeWalk: () => cfg.ignoreMatcher.ensureTrackedIndex(),
+		},
+	);
 
-	return { files, entryBudgetExceeded: false };
+	return { files, entryBudgetExceeded: budget.exceeded };
 }
 
 /**

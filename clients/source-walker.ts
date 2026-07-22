@@ -29,6 +29,7 @@
  */
 
 import * as fs from "node:fs";
+import * as path from "node:path";
 import type { ProjectIgnoreMatcher } from "./file-utils.js";
 import { isExcludedDirName } from "./file-utils.js";
 import { isGeneratedArtifactDirectoryName } from "./generated-artifacts.js";
@@ -92,4 +93,173 @@ export function shouldRecurseIntoDir(
 	}
 	if (policy.followSymlinks !== true && entry.isSymbolicLink()) return false;
 	return true;
+}
+
+// ---------------------------------------------------------------------------
+// Bounded-walk engine (refs #761).
+//
+// Every recursive tree walker in the repo re-implemented the same traversal
+// skeleton — the `readdirSync` + for-entry loop, the sync-recursion / async-
+// stack shapes, and the `setImmediate` yield cadence — so each hardening
+// episode (#747→#751/#754 home ceilings, #758/#759→#760/#764 entry budgets)
+// cost O(number-of-walkers) to apply. These three drivers own the LOOP and the
+// mechanical yield cadence exactly once; each walker plugs in a per-entry
+// `WalkVisitor` that classifies one entry and charges its own bounds, keeping
+// the classification/policy (symlink handling, artifact probes, source-file
+// patterns, budget arithmetic) caller-specific by design — the bounds
+// arithmetic genuinely differs by an off-by-one between the count family
+// (post-classify `visited >= max`) and the collect family (pre-classify
+// `visited > max`), so it stays in the visitor rather than being forced onto
+// one shared comparison (#761: consolidate the loop, not the policy).
+// ---------------------------------------------------------------------------
+
+/**
+ * What a {@link WalkVisitor} tells the driver to do with one directory entry
+ * after it has classified (and bound-charged) it:
+ *  - `"recurse"`: this entry is a directory to descend into. The driver owns
+ *    the traversal order (depth-first; see each driver).
+ *  - `"skip"`: nothing to do — keep walking.
+ *  - `"stop"`: terminate the ENTIRE walk immediately (a bound tripped, or the
+ *    walker found what it was looking for). Any state the caller needs
+ *    (results collected, which bound tripped) lives in its own closure.
+ */
+export type WalkDisposition = "recurse" | "skip" | "stop";
+
+/**
+ * Per-entry step. Receives one directory entry and its already-joined absolute
+ * path (the driver computes `path.join(dir, entry.name)` once), classifies it,
+ * mutates the caller's own walk state via closure, and returns a
+ * {@link WalkDisposition}. This is the single pluggable seam of the engine —
+ * generalized from `visitCountEntry` (startup-scan) and
+ * `chargeEntryBudget`/`classifyEntry` (source-filter).
+ */
+export type WalkVisitor = (entry: fs.Dirent, fullPath: string) => WalkDisposition;
+
+export interface StackWalkOptions {
+	/**
+	 * Loop guard checked once before popping each directory (not per entry).
+	 * Reproduces jscpd's per-directory entry budget (`visited < MAX_ENTRIES` as
+	 * a `while` condition): the current directory's entry loop always runs to
+	 * completion, but no further directory is popped once this returns true.
+	 * When it stops the walk this way the driver returns `false` (the visitor
+	 * never signalled `"stop"`).
+	 */
+	shouldStop?: () => boolean;
+}
+
+export interface AsyncStackWalkOptions extends StackWalkOptions {
+	/**
+	 * Yield to the macrotask queue (via `setImmediate`) after every N entries
+	 * the visitor processes without stopping. `setImmediate` — not
+	 * `Promise.resolve` — is required so stdin "data" events (also macrotasks)
+	 * can interleave and keystrokes stay responsive during `session_start`
+	 * (#703). Each caller passes its own historical cadence (startup: 100,
+	 * source-filter: 50).
+	 */
+	yieldEvery: number;
+	/**
+	 * Optional async hook awaited once before the walk begins — used to prime
+	 * the ignore-matcher's tracked-file index (`ensureTrackedIndex`, #703) so a
+	 * tracked file matching a `.gitignore` pattern isn't dropped.
+	 */
+	beforeWalk?: () => Promise<void>;
+}
+
+/**
+ * The one depth-first stack loop, written once as a generator so the sync and
+ * async drivers below can't drift: it yields after every visited entry (the
+ * async driver's chance to `setImmediate` between steps; the sync driver just
+ * drains it), and its return value is true iff the visitor stopped the walk
+ * via `"stop"` (vs. exhausting the tree or tripping `shouldStop`). Within each
+ * directory, entries are visited left-to-right; entries the visitor marks
+ * `"recurse"` are gathered and pushed in reverse after the entry loop, so the
+ * pop order descends left-to-right.
+ */
+function* walkTreeStackSteps(
+	rootDir: string,
+	visit: WalkVisitor,
+	shouldStop?: () => boolean,
+): Generator<void, boolean> {
+	const stack: string[] = [rootDir];
+	while (stack.length > 0) {
+		if (shouldStop?.()) return false;
+		const dir = stack.pop();
+		if (dir === undefined) continue;
+		const subDirs: string[] = [];
+		for (const entry of readDirEntriesSafe(dir)) {
+			const fullPath = path.join(dir, entry.name);
+			const disposition = visit(entry, fullPath);
+			if (disposition === "stop") return true;
+			if (disposition === "recurse") subDirs.push(fullPath);
+			yield;
+		}
+		for (let i = subDirs.length - 1; i >= 0; i--) stack.push(subDirs[i]);
+	}
+	return false;
+}
+
+/**
+ * Depth-first, stack-based synchronous driver — drains
+ * {@link walkTreeStackSteps} with no pause between steps. Returns true iff the
+ * visitor stopped the walk via `"stop"`.
+ */
+export function walkTreeStackSync(
+	rootDir: string,
+	visit: WalkVisitor,
+	opts: StackWalkOptions = {},
+): boolean {
+	const steps = walkTreeStackSteps(rootDir, visit, opts.shouldStop);
+	let step = steps.next();
+	while (!step.done) step = steps.next();
+	return step.value;
+}
+
+/**
+ * Async, chunked-yield twin of {@link walkTreeStackSync} — the identical
+ * {@link walkTreeStackSteps} traversal, plus a `setImmediate` yield every
+ * `yieldEvery` processed entries so a large tree never holds the event loop in
+ * one synchronous burst. Returns true iff the visitor stopped the walk via
+ * `"stop"`.
+ */
+export async function walkTreeStackAsync(
+	rootDir: string,
+	visit: WalkVisitor,
+	opts: AsyncStackWalkOptions,
+): Promise<boolean> {
+	await opts.beforeWalk?.();
+	const steps = walkTreeStackSteps(rootDir, visit, opts.shouldStop);
+	let processedSinceYield = 0;
+	let step = steps.next();
+	while (!step.done) {
+		if (++processedSinceYield >= opts.yieldEvery) {
+			processedSinceYield = 0;
+			await new Promise<void>((resolve) => setImmediate(resolve));
+		}
+		step = steps.next();
+	}
+	return step.value;
+}
+
+/**
+ * Depth-first synchronous driver that descends into a `"recurse"` directory
+ * IMMEDIATELY, before visiting the remaining sibling entries — the recursion
+ * shape (and therefore the result-array order) of `source-filter.ts`'s sync
+ * collector, which its stack-based async twin deliberately does NOT share.
+ * Returns true iff the visitor stopped the walk via `"stop"`; the stop
+ * propagates up through every recursion frame so the walk halts at once.
+ */
+export function walkTreeRecursiveSync(
+	rootDir: string,
+	visit: WalkVisitor,
+): boolean {
+	function scan(currentDir: string): boolean {
+		for (const entry of readDirEntriesSafe(currentDir)) {
+			const fullPath = path.join(currentDir, entry.name);
+			const disposition = visit(entry, fullPath);
+			if (disposition === "stop") return true;
+			if (disposition === "recurse" && scan(fullPath)) return true;
+		}
+		return false;
+	}
+	return scan(rootDir);
 }

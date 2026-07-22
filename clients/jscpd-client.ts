@@ -17,11 +17,11 @@ import {
 	getGlobalPiLensDir,
 	getProjectIgnoreGlobs,
 	getProjectIgnoreMatcher,
-	isExcludedDirName,
 } from "./file-utils.js";
 import { findNodeToolBinary } from "./package-manager.js";
 import { isAtOrAboveHomeDir } from "./path-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
+import { shouldRecurseIntoDir, walkTreeStackSync } from "./source-walker.js";
 
 // --- Types ---
 
@@ -78,47 +78,45 @@ export class JscpdClient {
 	 * them.
 	 */
 	private hasSourceFilesRecursive(rootDir: string): boolean {
-		const stack = [rootDir];
 		const ignoreMatcher = getProjectIgnoreMatcher(rootDir);
-		let visited = 0;
+		const state = { visited: 0 };
 		const MAX_ENTRIES = 6000;
 
-		while (stack.length > 0 && visited < MAX_ENTRIES) {
-			const dir = stack.pop();
-			if (!dir) continue;
-
-			let entries: fs.Dirent[];
-			try {
-				entries = fs.readdirSync(dir, { withFileTypes: true });
-			} catch {
-				continue;
-			}
-
-			for (const entry of entries) {
-				visited += 1;
-				if (entry.isSymbolicLink()) continue;
+		// #761: the traversal loop, readdir-safety, and directory-recursion
+		// decision are the shared `walkTreeStackSync` engine; this client keeps
+		// its own per-entry policy (skip ALL symlinks — files too — before the
+		// dir/file branch, its own multi-language source regex, and a
+		// per-directory entry budget via `shouldStop`, matching the pre-#761
+		// `while (stack.length > 0 && visited < MAX_ENTRIES)` condition: the
+		// current directory's entry loop always finishes, but no further
+		// directory is popped once the budget is spent).
+		return walkTreeStackSync(
+			rootDir,
+			(entry, fullPath) => {
+				state.visited += 1;
+				if (entry.isSymbolicLink()) return "skip";
 				if (entry.isDirectory()) {
-					const fullPath = path.join(dir, entry.name);
-					if (isExcludedDirName(entry.name)) continue;
-					if (ignoreMatcher.isIgnored(fullPath, true)) continue;
-					stack.push(fullPath);
-					continue;
+					return shouldRecurseIntoDir(entry, fullPath, {
+						ignoreMatcher,
+						followSymlinks: true,
+					})
+						? "recurse"
+						: "skip";
 				}
-				if (!entry.isFile()) continue;
-				if (ignoreMatcher.isIgnored(path.join(dir, entry.name), false))
-					continue;
+				if (!entry.isFile()) return "skip";
+				if (ignoreMatcher.isIgnored(fullPath, false)) return "skip";
 				if (
 					/\.(ts|tsx|js|jsx|mjs|cjs|py|pyi|java|go|rs|rb|php|swift|kt|kts|dart|lua|scala|c|h|cpp|cc|cxx|hpp|hxx|cs|m|mm)$/.test(
 						entry.name,
 					)
 				) {
-					if (entry.name.endsWith(".d.ts")) continue;
-					return true;
+					if (entry.name.endsWith(".d.ts")) return "skip";
+					return "stop";
 				}
-			}
-		}
-
-		return false;
+				return "skip";
+			},
+			{ shouldStop: () => state.visited >= MAX_ENTRIES },
+		);
 	}
 
 	/**
