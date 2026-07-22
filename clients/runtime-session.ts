@@ -1357,8 +1357,14 @@ export async function handleSessionStart(
 	phase("scan-context");
 	dbg(`session_start scan-context source=${startupScanSource}`);
 	const scanRoot = startupScan.projectRoot ?? cwd;
+	// Both "tree is too big" verdicts still found a real project root — the
+	// walk just refused to warm caches over it — so signals stay anchored at
+	// that root rather than falling back to cwd (#758 added too-many-entries
+	// as the sibling of too-many-source-files).
 	const useScanRootForSignals =
-		startupScan.canWarmCaches || startupScan.reason === "too-many-source-files";
+		startupScan.canWarmCaches ||
+		startupScan.reason === "too-many-source-files" ||
+		startupScan.reason === "too-many-entries";
 	const analysisRoot = useScanRootForSignals ? scanRoot : cwd;
 	runtime.projectRoot = cwd;
 	const languageProfileSource = freshSnapshot?.languageProfile
