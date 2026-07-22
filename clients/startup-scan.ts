@@ -29,6 +29,17 @@ export const PROJECT_ROOT_MARKERS = [
 
 export const MAX_STARTUP_SOURCE_FILES = 2000;
 
+// #758: hard ceiling on the number of directory entries the startup source
+// count walk will visit before it gives up and declares the tree too big to
+// warm. The source-file early-exit (MAX_STARTUP_SOURCE_FILES) only fires when
+// a project has MANY source files — a repo with FEW source files but a huge
+// pile of non-source files (e.g. a game mod: 300 scripts among 84k data files)
+// never trips it, so the pre-#758 walk traversed the entire tree, dominated by
+// one ignoreMatcher.isIgnored() call per entry, blocking session_start for
+// seconds. Capping total entries bounds that worst case deterministically. The
+// same pattern already guards jscpd-client.ts's hasSourceFilesRecursive walk.
+export const MAX_STARTUP_SCAN_ENTRIES = 50_000;
+
 const SOURCE_FILE_PATTERN = /\.(ts|tsx|js|jsx|py|go|rs|rb)$/;
 
 export interface StartupScanContext {
@@ -36,7 +47,11 @@ export interface StartupScanContext {
 	scanRoot: string;
 	projectRoot: string | null;
 	canWarmCaches: boolean;
-	reason?: "home-dir" | "no-project-root" | "too-many-source-files";
+	reason?:
+		| "home-dir"
+		| "no-project-root"
+		| "too-many-source-files"
+		| "too-many-entries";
 	sourceFileCount?: number;
 	/**
 	 * Wall-clock time (`Date.now()`) this verdict was computed. Stamped by
@@ -52,6 +67,12 @@ export interface StartupScanContext {
 export interface StartupScanOptions {
 	homeDir?: string;
 	maxSourceFiles?: number;
+	/**
+	 * Entry-budget ceiling for the source-count walk (#758). Defaults to
+	 * `getStartupScanMaxEntries()`. Exposed mainly so tests can drive the
+	 * `too-many-entries` verdict deterministically with a tiny fixture.
+	 */
+	maxScanEntries?: number;
 }
 
 // Default TTL for a persisted `too-many-source-files` verdict (#699): 24h.
@@ -86,15 +107,42 @@ export function _resetStartupScanVerdictTtlForTests(): void {
 	_startupScanVerdictTtlCache = undefined;
 }
 
+let _startupScanMaxEntriesCache: number | undefined;
+
+/**
+ * Total directory-entry ceiling for the startup source-count walk (#758).
+ *
+ * Resolution order: `PI_LENS_STARTUP_SCAN_MAX_ENTRIES` env var, else the
+ * `MAX_STARTUP_SCAN_ENTRIES` default. Lazy + memoized so importing this module
+ * never touches `process.env` at load time (same house style as
+ * `getStartupScanVerdictTtlMs`).
+ */
+export function getStartupScanMaxEntries(): number {
+	if (_startupScanMaxEntriesCache !== undefined) {
+		return _startupScanMaxEntriesCache;
+	}
+	const envMax = toPositiveFinite(process.env.PI_LENS_STARTUP_SCAN_MAX_ENTRIES);
+	_startupScanMaxEntriesCache =
+		envMax > 0 ? envMax : MAX_STARTUP_SCAN_ENTRIES;
+	return _startupScanMaxEntriesCache;
+}
+
+/** Test-only: clears the memoized entry cap so a subsequent call re-reads the
+ * env var (matching the `_resetForTests` convention). */
+export function _resetStartupScanMaxEntriesForTests(): void {
+	_startupScanMaxEntriesCache = undefined;
+}
+
 /**
  * Whether a persisted startup-scan verdict is still safe to reuse without
  * re-walking the project tree (#699).
  *
- * Only the `too-many-source-files` reason is TTL'd. It's the one verdict
- * that can go stale on its own: the repo can shrink below
- * `MAX_STARTUP_SOURCE_FILES` between sessions, and nothing else would notice
+ * The content-derived reasons `too-many-source-files` and `too-many-entries`
+ * (#758) are the ones that are TTL'd. They can go stale on their own: the repo
+ * can shrink below `MAX_STARTUP_SOURCE_FILES` (or below the entry ceiling)
+ * between sessions, and nothing else would notice
  * — the seq-based freshness check that guards every other
- * `project-snapshot.json` field never fires for it, because pi-lens never
+ * `project-snapshot.json` field never fires for them, because pi-lens never
  * writes anything while `canWarmCaches` is false, so the snapshot's seq
  * never advances on its own. Trade-off, by design: a shrunk repo recovers
  * automatically once the TTL expires and the next session re-walks, in
@@ -116,7 +164,11 @@ export function isStartupScanVerdictFresh(
 	verdict: StartupScanContext,
 	now: number = Date.now(),
 ): boolean {
-	if (verdict.reason !== "too-many-source-files") return true;
+	if (
+		verdict.reason !== "too-many-source-files" &&
+		verdict.reason !== "too-many-entries"
+	)
+		return true;
 	if (typeof verdict.computedAt !== "number") return false;
 	return now - verdict.computedAt < getStartupScanVerdictTtlMs();
 }
@@ -179,11 +231,36 @@ function classifyCountEntry(
 	);
 }
 
-export function countSourceFilesWithinLimit(
+export interface SourceCountResult {
+	/** Source files found (capped at `limit + 1` once the early-exit fires). */
+	count: number;
+	/**
+	 * True when the walk stopped because it hit `maxEntries` before either
+	 * finishing the tree or crossing the source-file limit — i.e. the tree is
+	 * large and dominated by non-source files (#758). Callers treat this as
+	 * "too big to warm" rather than trusting the partial `count`.
+	 */
+	entryBudgetExceeded: boolean;
+}
+
+/**
+ * Core synchronous source-count walk shared by the public
+ * `countSourceFilesWithinLimit` wrapper and `computeStartupScanContext`.
+ *
+ * Two independent bounds keep it finite:
+ *   - `limit`: source-file early-exit (existing behavior) — returns as soon as
+ *     more than `limit` source files are seen.
+ *   - `maxEntries`: total directory-entry ceiling (#758) — returns as soon as
+ *     `maxEntries` entries have been visited, flagging `entryBudgetExceeded` so
+ *     a mixed source/non-source tree can't drag the walk across the whole tree.
+ */
+function walkSourceCount(
 	dir: string,
 	limit: number,
-): number {
+	maxEntries: number,
+): SourceCountResult {
 	let count = 0;
+	let visited = 0;
 	const { ignoreMatcher, stack } = initSourceCountWalk(dir);
 
 	while (stack.length > 0) {
@@ -193,14 +270,26 @@ export function countSourceFilesWithinLimit(
 		const entries = readDirEntriesSafe(current);
 
 		for (const entry of entries) {
+			visited += 1;
 			const fullPath = path.join(current, entry.name);
 			if (classifyCountEntry(entry, fullPath, ignoreMatcher, stack)) {
 				count += 1;
-				if (count > limit) return count;
+				if (count > limit) return { count, entryBudgetExceeded: false };
 			}
+			if (visited >= maxEntries) return { count, entryBudgetExceeded: true };
 		}
 	}
-	return count;
+	return { count, entryBudgetExceeded: false };
+}
+
+export function countSourceFilesWithinLimit(
+	dir: string,
+	limit: number,
+): number {
+	// Public wrapper keeps its pre-#758 contract: only the source-file limit
+	// bounds it (no entry ceiling). The #758 entry budget applies solely to the
+	// startup-scan verdict path via `walkSourceCount`.
+	return walkSourceCount(dir, limit, Number.POSITIVE_INFINITY).count;
 }
 
 // Process-lifetime memo for the (cwd, homeDir, maxSourceFiles) tuple. The
@@ -222,7 +311,9 @@ export function resolveStartupScanContext(
 		"|" +
 		(options.homeDir ?? "") +
 		"|" +
-		(options.maxSourceFiles ?? "");
+		(options.maxSourceFiles ?? "") +
+		"|" +
+		(options.maxScanEntries ?? "");
 	const cached = startupScanContextCache.get(cacheKey);
 	if (cached) return cached;
 	const result = { ...computeStartupScanContext(cwd, options), computedAt: Date.now() };
@@ -237,6 +328,7 @@ function computeStartupScanContext(
 	const resolvedCwd = path.resolve(cwd);
 	const homeDir = path.resolve(options.homeDir ?? os.homedir());
 	const maxSourceFiles = options.maxSourceFiles ?? MAX_STARTUP_SOURCE_FILES;
+	const maxScanEntries = options.maxScanEntries ?? getStartupScanMaxEntries();
 	const projectRoot = findNearestProjectRoot(resolvedCwd);
 
 	if (!projectRoot) {
@@ -265,17 +357,20 @@ function computeStartupScanContext(
 		};
 	}
 
-	const sourceFileCount = countSourceFilesWithinLimit(
+	const { count: sourceFileCount, entryBudgetExceeded } = walkSourceCount(
 		projectRoot,
 		maxSourceFiles,
+		maxScanEntries,
 	);
-	if (sourceFileCount > maxSourceFiles) {
+	if (sourceFileCount > maxSourceFiles || entryBudgetExceeded) {
 		return {
 			cwd: resolvedCwd,
 			scanRoot: projectRoot,
 			projectRoot,
 			canWarmCaches: false,
-			reason: "too-many-source-files",
+			reason: entryBudgetExceeded
+				? "too-many-entries"
+				: "too-many-source-files",
 			sourceFileCount,
 		};
 	}
@@ -305,17 +400,25 @@ function computeStartupScanContext(
 // entirely.
 // ---------------------------------------------------------------------------
 
-export async function countSourceFilesWithinLimitAsync(
+/**
+ * Async core of the source-count walk (the yield-cadence twin of
+ * `walkSourceCount`). Same two bounds — `limit` (source files) and
+ * `maxEntries` (total entries, #758) — plus the `setImmediate` yield every
+ * `yieldEvery` entries that keeps `session_start` keystrokes responsive.
+ */
+async function walkSourceCountAsync(
 	dir: string,
 	limit: number,
+	maxEntries: number,
 	opts: { yieldEvery?: number } = {},
-): Promise<number> {
+): Promise<SourceCountResult> {
 	// Yield every 100 entries by default. Empirically each yield costs ~0.1ms
 	// of overhead and a 2k-file project produces ~20 yields, so the total
 	// async overhead is well under 5ms while keeping per-burst sync work
 	// under 50ms (the perceptual threshold for "instant" keystrokes).
 	const yieldEvery = opts.yieldEvery ?? 100;
 	let count = 0;
+	let visited = 0;
 	let processedSinceYield = 0;
 	const { ignoreMatcher, stack } = initSourceCountWalk(dir);
 	// #703: prime the tracked-files set ONCE before the walk (not per file) so
@@ -332,11 +435,13 @@ export async function countSourceFilesWithinLimitAsync(
 		const entries = readDirEntriesSafe(current);
 
 		for (const entry of entries) {
+			visited += 1;
 			const fullPath = path.join(current, entry.name);
 			if (classifyCountEntry(entry, fullPath, ignoreMatcher, stack)) {
 				count += 1;
-				if (count > limit) return count;
+				if (count > limit) return { count, entryBudgetExceeded: false };
 			}
+			if (visited >= maxEntries) return { count, entryBudgetExceeded: true };
 			if (++processedSinceYield % yieldEvery === 0) {
 				// Yield to the macrotask queue. setImmediate (not Promise.resolve)
 				// is required: stdin "data" events are macrotasks too, and a
@@ -345,7 +450,19 @@ export async function countSourceFilesWithinLimitAsync(
 			}
 		}
 	}
-	return count;
+	return { count, entryBudgetExceeded: false };
+}
+
+export async function countSourceFilesWithinLimitAsync(
+	dir: string,
+	limit: number,
+	opts: { yieldEvery?: number } = {},
+): Promise<number> {
+	// Public wrapper keeps its pre-#758 contract: only the source-file limit
+	// bounds it (no entry ceiling).
+	return (
+		await walkSourceCountAsync(dir, limit, Number.POSITIVE_INFINITY, opts)
+	).count;
 }
 
 export async function resolveStartupScanContextAsync(
@@ -357,13 +474,16 @@ export async function resolveStartupScanContextAsync(
 		"|" +
 		(options.homeDir ?? "") +
 		"|" +
-		(options.maxSourceFiles ?? "");
+		(options.maxSourceFiles ?? "") +
+		"|" +
+		(options.maxScanEntries ?? "");
 	const cached = startupScanContextCache.get(cacheKey);
 	if (cached) return cached;
 
 	const resolvedCwd = path.resolve(cwd);
 	const homeDir = path.resolve(options.homeDir ?? os.homedir());
 	const maxSourceFiles = options.maxSourceFiles ?? MAX_STARTUP_SOURCE_FILES;
+	const maxScanEntries = options.maxScanEntries ?? getStartupScanMaxEntries();
 	const projectRoot = findNearestProjectRoot(resolvedCwd);
 
 	let result: StartupScanContext;
@@ -386,17 +506,17 @@ export async function resolveStartupScanContextAsync(
 			reason: "home-dir",
 		};
 	} else {
-		const sourceFileCount = await countSourceFilesWithinLimitAsync(
-			projectRoot,
-			maxSourceFiles,
-		);
-		if (sourceFileCount > maxSourceFiles) {
+		const { count: sourceFileCount, entryBudgetExceeded } =
+			await walkSourceCountAsync(projectRoot, maxSourceFiles, maxScanEntries);
+		if (sourceFileCount > maxSourceFiles || entryBudgetExceeded) {
 			result = {
 				cwd: resolvedCwd,
 				scanRoot: projectRoot,
 				projectRoot,
 				canWarmCaches: false,
-				reason: "too-many-source-files",
+				reason: entryBudgetExceeded
+					? "too-many-entries"
+					: "too-many-source-files",
 				sourceFileCount,
 			};
 		} else {
