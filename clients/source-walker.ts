@@ -166,20 +166,23 @@ export interface AsyncStackWalkOptions extends StackWalkOptions {
 }
 
 /**
- * Depth-first, stack-based synchronous driver. Within each directory, entries
- * are visited left-to-right; entries the visitor marks `"recurse"` are gathered
- * and pushed in reverse after the entry loop, so the pop order descends
- * left-to-right. Returns true iff the visitor stopped the walk via `"stop"`
- * (vs. exhausting the tree or tripping `shouldStop`).
+ * The one depth-first stack loop, written once as a generator so the sync and
+ * async drivers below can't drift: it yields after every visited entry (the
+ * async driver's chance to `setImmediate` between steps; the sync driver just
+ * drains it), and its return value is true iff the visitor stopped the walk
+ * via `"stop"` (vs. exhausting the tree or tripping `shouldStop`). Within each
+ * directory, entries are visited left-to-right; entries the visitor marks
+ * `"recurse"` are gathered and pushed in reverse after the entry loop, so the
+ * pop order descends left-to-right.
  */
-export function walkTreeStackSync(
+function* walkTreeStackSteps(
 	rootDir: string,
 	visit: WalkVisitor,
-	opts: StackWalkOptions = {},
-): boolean {
+	shouldStop?: () => boolean,
+): Generator<void, boolean> {
 	const stack: string[] = [rootDir];
 	while (stack.length > 0) {
-		if (opts.shouldStop?.()) return false;
+		if (shouldStop?.()) return false;
 		const dir = stack.pop();
 		if (dir === undefined) continue;
 		const subDirs: string[] = [];
@@ -188,6 +191,7 @@ export function walkTreeStackSync(
 			const disposition = visit(entry, fullPath);
 			if (disposition === "stop") return true;
 			if (disposition === "recurse") subDirs.push(fullPath);
+			yield;
 		}
 		for (let i = subDirs.length - 1; i >= 0; i--) stack.push(subDirs[i]);
 	}
@@ -195,10 +199,27 @@ export function walkTreeStackSync(
 }
 
 /**
- * Async, chunked-yield twin of {@link walkTreeStackSync}. Same depth-first
- * stack traversal, plus a `setImmediate` yield every `yieldEvery` processed
- * entries so a large tree never holds the event loop in one synchronous burst.
- * Returns true iff the visitor stopped the walk via `"stop"`.
+ * Depth-first, stack-based synchronous driver — drains
+ * {@link walkTreeStackSteps} with no pause between steps. Returns true iff the
+ * visitor stopped the walk via `"stop"`.
+ */
+export function walkTreeStackSync(
+	rootDir: string,
+	visit: WalkVisitor,
+	opts: StackWalkOptions = {},
+): boolean {
+	const steps = walkTreeStackSteps(rootDir, visit, opts.shouldStop);
+	let step = steps.next();
+	while (!step.done) step = steps.next();
+	return step.value;
+}
+
+/**
+ * Async, chunked-yield twin of {@link walkTreeStackSync} — the identical
+ * {@link walkTreeStackSteps} traversal, plus a `setImmediate` yield every
+ * `yieldEvery` processed entries so a large tree never holds the event loop in
+ * one synchronous burst. Returns true iff the visitor stopped the walk via
+ * `"stop"`.
  */
 export async function walkTreeStackAsync(
 	rootDir: string,
@@ -206,26 +227,17 @@ export async function walkTreeStackAsync(
 	opts: AsyncStackWalkOptions,
 ): Promise<boolean> {
 	await opts.beforeWalk?.();
-	const stack: string[] = [rootDir];
+	const steps = walkTreeStackSteps(rootDir, visit, opts.shouldStop);
 	let processedSinceYield = 0;
-	while (stack.length > 0) {
-		if (opts.shouldStop?.()) return false;
-		const dir = stack.pop();
-		if (dir === undefined) continue;
-		const subDirs: string[] = [];
-		for (const entry of readDirEntriesSafe(dir)) {
-			const fullPath = path.join(dir, entry.name);
-			const disposition = visit(entry, fullPath);
-			if (disposition === "stop") return true;
-			if (disposition === "recurse") subDirs.push(fullPath);
-			if (++processedSinceYield >= opts.yieldEvery) {
-				processedSinceYield = 0;
-				await new Promise<void>((resolve) => setImmediate(resolve));
-			}
+	let step = steps.next();
+	while (!step.done) {
+		if (++processedSinceYield >= opts.yieldEvery) {
+			processedSinceYield = 0;
+			await new Promise<void>((resolve) => setImmediate(resolve));
 		}
-		for (let i = subDirs.length - 1; i >= 0; i--) stack.push(subDirs[i]);
+		step = steps.next();
 	}
-	return false;
+	return step.value;
 }
 
 /**
