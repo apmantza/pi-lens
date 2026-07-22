@@ -18,6 +18,7 @@ import {
 	synthesizeRule,
 } from "../clients/ast-grep-yaml-synth.js";
 import type { SearchReadLocation } from "../clients/search-read-registration.js";
+import { isAtOrAboveHomeDir } from "../clients/path-utils.js";
 import { compactRenderResult } from "./render-compact.js";
 import { combineAbortSignals } from "../clients/deadline-utils.js";
 import { LANGUAGES } from "./shared.js";
@@ -592,6 +593,28 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 					};
 				}
 
+				// #747/#250: only guard the DEFAULTED-cwd case. Explicit `paths` are
+				// what the user asked to search — never second-guessed. But when no
+				// paths are given we fall back to `ctx.cwd`, and if that resolves at or
+				// above $HOME a full structural scan of the entire home tree would be
+				// spawned. Refuse and tell the caller how to scope it.
+				if (!paths?.length && isAtOrAboveHomeDir(ctx.cwd || ".")) {
+					logOutcome("error", {
+						errorRaw: "defaulted cwd resolves at or above home directory",
+					});
+					return {
+						content: [
+							{
+								type: "text" as const,
+								text: `Refused: no \`paths\` given and the working directory (${
+									ctx.cwd || "."
+								}) resolves at or above the home directory — searching it would scan every unrelated tree under your home. Pass explicit \`paths\`, or run from a project directory.`,
+							},
+						],
+						isError: true,
+						details: {},
+					};
+				}
 				const searchPaths = paths?.length ? paths : [ctx.cwd || "."];
 				const PAGE_SIZE = Math.max(
 					1,

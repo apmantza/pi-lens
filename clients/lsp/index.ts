@@ -23,7 +23,11 @@ import { applyAuxiliarySuppressions } from "../dispatch/auxiliary-lsp.js";
 import { detectFileRole } from "../file-role.js";
 import { logLatency } from "../latency-logger.js";
 import { withDeadline } from "../deadline-utils.js";
-import { normalizeMapKey, uriToPath } from "../path-utils.js";
+import {
+	isAtOrAboveHomeDir,
+	normalizeMapKey,
+	uriToPath,
+} from "../path-utils.js";
 import type {
 	LSPClientInfo,
 	LSPOperationSupport,
@@ -631,8 +635,17 @@ async function collectWorkspaceDiagnosticFiles(
 	root: string,
 	maxFiles: number = getMaxWorkspaceDiagnosticFiles(),
 	signal?: AbortSignal,
+	homeDir?: string,
 ): Promise<string[]> {
 	const files: string[] = [];
+	// #747/#250: the 5000-file cap alone bounds total work, but from a cwd at or
+	// above $HOME the walk still traverses (and pulls diagnostics for) 5000 files
+	// spread across every unrelated repo under home. Refuse outright — walking
+	// nothing is the honest result; the caller (runWorkspaceDiagnostics →
+	// tools/lens-diagnostics.ts) renders "unsafe root" so an empty sweep never
+	// reads as a clean project. Same ceiling as fresh-fetch.ts / the cheap-tier
+	// scanner.
+	if (isAtOrAboveHomeDir(root, homeDir)) return files;
 	const ignoreMatcher = getProjectIgnoreMatcher(root);
 	// #703: prime the tracked-files set once before the walk so a tracked file
 	// matching a `.gitignore`/global pattern still gets its workspace
@@ -3770,8 +3783,12 @@ export function __collectWorkspaceDiagnosticFilesForTest(
 	root: string,
 	maxFiles?: number,
 	signal?: AbortSignal,
+	homeDir?: string,
 ): Promise<string[]> {
-	return maxFiles === undefined
-		? collectWorkspaceDiagnosticFiles(path.resolve(root), undefined, signal)
-		: collectWorkspaceDiagnosticFiles(path.resolve(root), maxFiles, signal);
+	return collectWorkspaceDiagnosticFiles(
+		path.resolve(root),
+		maxFiles ?? getMaxWorkspaceDiagnosticFiles(),
+		signal,
+		homeDir,
+	);
 }

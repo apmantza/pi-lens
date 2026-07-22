@@ -22,7 +22,10 @@ import { applyInlineSuppressions } from "../clients/dispatch/inline-suppressions
 import { compactRenderResult } from "./render-compact.js";
 import { combineAbortSignals } from "../clients/deadline-utils.js";
 import { getProjectIgnoreMatcher } from "../clients/file-utils.js";
-import { normalizeFilePath } from "../clients/path-utils.js";
+import {
+	isAtOrAboveHomeDir,
+	normalizeFilePath,
+} from "../clients/path-utils.js";
 import { getLSPService } from "../clients/lsp/index.js";
 import { primaryServerId } from "../clients/lsp/config.js";
 import type { LSPDiagnostic } from "../clients/lsp/client.js";
@@ -1323,6 +1326,17 @@ async function formatFullMode(
 						", ",
 					)}. These analyzers have not contributed to this result — absence of their findings is NOT a clean verdict.`
 			: "";
+	// #747/#250: the cheap project-diagnostics scan (scanProjectDiagnostics) and
+	// the LSP workspace sweep (collectWorkspaceDiagnosticFiles) both refuse to
+	// WALK from a cwd at/above $HOME — from there, walking would enumerate every
+	// unrelated tree under home. An explicit `paths` file list (explicitFiles)
+	// bypasses both walks, so it is never unsafe. Their empty results in that
+	// case are "walked nothing", not "clean" — say so, matching the fresh-fetch
+	// unsafeRoot note above.
+	const walkUnsafeRoot = explicitFiles === undefined && isAtOrAboveHomeDir(cwd);
+	const walkUnsafeRootNote = walkUnsafeRoot
+		? `\n\nproject file walk skipped: the working directory resolves at or above the home directory, so the cheap project scan and the LSP workspace sweep would each enumerate every unrelated tree under it. Re-run from inside a project directory. Absence of their findings is NOT a clean verdict.`
+		: "";
 	const abortedNote =
 		abortedIds.size > 0
 			? `\n\nstopped mid-scan (still running in the background, not reflected in this result): ${[
@@ -1359,6 +1373,10 @@ async function formatFullMode(
 			// lets a caller distinguish "skipped for safety" from per-analyzer
 			// cold reasons without parsing the text note.
 			analyzersUnsafeRoot: extracted.unsafeRoot ?? false,
+			// #747: true when the cwd resolved at/above $HOME so the cheap project
+			// scan and the LSP workspace sweep both refused to walk — lets a caller
+			// distinguish "walked nothing for safety" from a genuinely clean sweep.
+			projectWalkUnsafeRoot: walkUnsafeRoot,
 			// #630: confirmed/unconfirmed LSP-sweep tally, mirroring
 			// `lsp_diagnostics`' confirmation state — lets a caller check "were
 			// any files unconfirmed" without re-deriving it from the text.
@@ -1400,6 +1418,7 @@ async function formatFullMode(
 						unconfirmedLspNote +
 						lspPrimaryVsAuxiliaryNote +
 						coldNote +
+						walkUnsafeRootNote +
 						abortedNote +
 						freshNote +
 						missingNote,
@@ -1411,6 +1430,7 @@ async function formatFullMode(
 	if (
 		missingNote ||
 		coldNote ||
+		walkUnsafeRootNote ||
 		abortedNote ||
 		freshNote ||
 		unconfirmedLspNote ||
@@ -1425,6 +1445,7 @@ async function formatFullMode(
 						unconfirmedLspNote +
 						lspPrimaryVsAuxiliaryNote +
 						coldNote +
+						walkUnsafeRootNote +
 						abortedNote +
 						freshNote +
 						missingNote,

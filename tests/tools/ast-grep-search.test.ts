@@ -1,3 +1,4 @@
+import * as os from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import {
 	_telemetryClassificationErrorForTest,
@@ -112,6 +113,45 @@ describe("ast_grep_search tool", () => {
 			"expects a valid AST code pattern",
 		);
 		expect(search).not.toHaveBeenCalled();
+	});
+
+	// #747/#250: only the DEFAULTED-cwd case is guarded. Explicit `paths` are
+	// exactly what the user asked to search and are never second-guessed.
+	describe("defaulted-cwd home ceiling (#747)", () => {
+		it("refuses when no paths are given and cwd is at/above home", async () => {
+			const search = vi.fn();
+			const tool = createAstGrepSearchTool(makeClient({ search }));
+			const result = await tool.execute(
+				"h1",
+				{ pattern: "console.log($MSG)", lang: "typescript" },
+				new AbortController().signal,
+				null,
+				{ cwd: os.homedir() },
+			);
+
+			expect(result.isError).toBe(true);
+			expect(String(result.content[0].text)).toContain("Refused");
+			expect(String(result.content[0].text)).toContain("paths");
+			expect(search).not.toHaveBeenCalled();
+		});
+
+		it("does NOT refuse when explicit paths are given, even at home", async () => {
+			const search = vi.fn().mockResolvedValue({ matches: [] });
+			const tool = createAstGrepSearchTool(makeClient({ search }));
+			await tool.execute(
+				"h2",
+				{
+					pattern: "console.log($MSG)",
+					lang: "typescript",
+					paths: [os.homedir()],
+				},
+				new AbortController().signal,
+				null,
+				{ cwd: os.homedir() },
+			);
+
+			expect(search).toHaveBeenCalled();
+		});
 	});
 
 	describe("structural-intent parameters (Phase 3)", () => {

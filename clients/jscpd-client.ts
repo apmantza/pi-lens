@@ -20,6 +20,7 @@ import {
 	isExcludedDirName,
 } from "./file-utils.js";
 import { findNodeToolBinary } from "./package-manager.js";
+import { isAtOrAboveHomeDir } from "./path-utils.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 
 // --- Types ---
@@ -188,14 +189,30 @@ export class JscpdClient {
 	 * Scan a directory for duplicate code blocks.
 	 * Uses a temp output dir to capture JSON report.
 	 * @param isTsProject - If true, excludes .js files (they're compiled artifacts in TS projects)
+	 *
+	 * Root contract (#747/#250): unlike `KnipClient`/`DeadCodeClient`, this
+	 * client does NOT resolve a project root via `findNearestMarkerRoot`, so it
+	 * has historically relied on every caller to guard the scan root itself. The
+	 * `isAtOrAboveHomeDir` refusal below is belt-and-braces internal protection
+	 * so a FUTURE caller that forgets that contract can't spawn a whole-$HOME
+	 * jscpd walk (the observed OOM: a jscpd run from a WSL home reached 44 GB
+	 * RSS). `options.homeDir` overrides `os.homedir()` for tests.
 	 */
 	async scan(
 		cwd: string,
 		minLines = 5,
 		minTokens = 50,
 		isTsProject = false,
+		options: { homeDir?: string } = {},
 	): Promise<JscpdResult> {
 		const targetDir = path.resolve(cwd);
+
+		// #747/#250: never walk from a cwd at/above $HOME — from there jscpd's
+		// tokenizer would run across every unrelated repo under home.
+		if (isAtOrAboveHomeDir(targetDir, options.homeDir)) {
+			this.log(`Refusing scan of unsafe root at/above home: ${targetDir}`);
+			return { ...EMPTY_RESULT };
+		}
 
 		// Return early for non-existent or empty directories before probing/installing.
 		if (!fs.existsSync(targetDir)) {
