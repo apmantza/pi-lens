@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { isTestMode, toPositiveFinite } from "../../clients/env-utils.js";
+import {
+	isTestMode,
+	lazyEnvNumber,
+	toPositiveFinite,
+} from "../../clients/env-utils.js";
 
 let previousTestMode: string | undefined;
 let previousVitest: string | undefined;
@@ -85,5 +89,59 @@ describe("toPositiveFinite", () => {
 			expect(Number.isNaN(toPositiveFinite(input))).toBe(false);
 			expect(Number.isFinite(toPositiveFinite(input))).toBe(true);
 		}
+	});
+});
+
+describe("lazyEnvNumber", () => {
+	const ENV_NAME = "PI_LENS_TEST_LAZY_ENV_NUMBER";
+
+	afterEach(() => {
+		delete process.env[ENV_NAME];
+	});
+
+	it("does not read process.env at construction time", () => {
+		process.env[ENV_NAME] = "999";
+		// Constructing must not memoize a value yet — only `get()` reads env.
+		const knob = lazyEnvNumber(ENV_NAME, 7);
+		delete process.env[ENV_NAME];
+		expect(knob.get()).toBe(7);
+	});
+
+	it("defaults to fallback when the env var is unset", () => {
+		const knob = lazyEnvNumber(ENV_NAME, 42);
+		expect(knob.get()).toBe(42);
+	});
+
+	it("honours a positive finite env override", () => {
+		process.env[ENV_NAME] = "123";
+		const knob = lazyEnvNumber(ENV_NAME, 42);
+		expect(knob.get()).toBe(123);
+	});
+
+	it("falls back on a non-finite/negative/zero override", () => {
+		for (const bad of ["not-a-number", "-5", "0", "", "Infinity"]) {
+			process.env[ENV_NAME] = bad;
+			const knob = lazyEnvNumber(ENV_NAME, 42);
+			expect(knob.get()).toBe(42);
+		}
+	});
+
+	it("memoizes until _resetForTests is called", () => {
+		const knob = lazyEnvNumber(ENV_NAME, 42);
+		expect(knob.get()).toBe(42);
+		process.env[ENV_NAME] = "123";
+		// No reset yet — still the memoized fallback.
+		expect(knob.get()).toBe(42);
+		knob._resetForTests();
+		expect(knob.get()).toBe(123);
+	});
+
+	it("keeps independent memo state per factory instance", () => {
+		const a = lazyEnvNumber(ENV_NAME, 1);
+		const b = lazyEnvNumber(ENV_NAME, 2);
+		process.env[ENV_NAME] = "10";
+		expect(a.get()).toBe(10);
+		delete process.env[ENV_NAME];
+		expect(b.get()).toBe(2);
 	});
 });
