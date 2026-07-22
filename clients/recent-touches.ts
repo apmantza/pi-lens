@@ -33,6 +33,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { writeFileAtomicAsync } from "./atomic-write.js";
 import { getProjectDataDir } from "./file-utils.js";
 import { normalizeFilePath } from "./path-utils.js";
 
@@ -96,7 +97,7 @@ async function readRecentTouchesAsync(cwd: string): Promise<RecentTouchesFile> {
 	}
 }
 
-// --- Write (atomic tmp + rename, same pattern as instance-registry.ts) ---
+// --- Write (atomic tmp + rename via clients/atomic-write.ts, #762) ---
 
 async function writeRecentTouchesAsync(
 	cwd: string,
@@ -104,21 +105,16 @@ async function writeRecentTouchesAsync(
 ): Promise<void> {
 	const dir = getProjectDataDir(cwd);
 	const target = recentTouchesPath(cwd);
-	const tmpPath = `${target}.tmp-${process.pid}`;
 	try {
 		await fs.promises.mkdir(dir, { recursive: true });
-		await fs.promises.writeFile(tmpPath, JSON.stringify(file), "utf-8");
-		await fs.promises.rename(tmpPath, target);
 	} catch {
-		// Best-effort record — a failed write just means this batch of touches
+		// Best-effort record — a failed mkdir just means this batch of touches
 		// never reaches other instances; never throw for the caller (the
 		// producer seam is the fire-and-forget bus-publish path).
-		try {
-			await fs.promises.rm(tmpPath, { force: true });
-		} catch {
-			// ignore
-		}
+		return;
 	}
+	// bestEffort (default): same reasoning as the mkdir failure above.
+	await writeFileAtomicAsync(target, JSON.stringify(file));
 }
 
 export interface AppendRecentTouchesArgs {

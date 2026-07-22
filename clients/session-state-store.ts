@@ -11,6 +11,7 @@
 
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import { writeFileAtomicAsync } from "./atomic-write.js";
 import { getProjectDataDir } from "./file-utils.js";
 import { readJsonCacheAsync } from "./json-cache-read.js";
 import type { PersistedWidgetState } from "./widget-state.js";
@@ -80,9 +81,13 @@ export async function saveSessionState(
 			widget,
 		};
 		const file = sessionFilePath(cwd, sessionId);
-		const tmp = `${file}.${process.pid}.tmp`;
-		await fs.writeFile(tmp, JSON.stringify(payload), "utf8");
-		await fs.rename(tmp, file);
+		// bestEffort (default): a failed write/rename just means this snapshot is
+		// lost, matching this store's documented "start clean" fallback — never
+		// throw for the caller. (Tmp naming is now the shared
+		// `${target}.tmp-${pid}` shape rather than this site's former
+		// `${file}.${pid}.tmp` — no behavioral difference: nothing reads the
+		// intermediate tmp filename.)
+		await writeFileAtomicAsync(file, JSON.stringify(payload));
 	} catch {
 		/* best-effort */
 	}
