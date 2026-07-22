@@ -223,6 +223,15 @@ function readState(cwd: string): DispositionStateFile {
 		state =
 			parsed && typeof parsed === "object" ? (parsed as DispositionStateFile) : {};
 	} catch {
+		// Now that writeState is tmp+rename atomic, a torn read (another process
+		// mid-write) can no longer land here — this only fires on genuine
+		// corruption/wrong-shape content. Caching `{}` against this stat is still
+		// correct, not a permanent trap: any future rewrite of the file (a fix,
+		// or this process's own next writeState) changes mtime/size, which
+		// invalidates the cache below on the next readState call. Only a file
+		// that never changes again would serve empty state forever — and
+		// reparsing the same invalid bytes every hot-path call would yield the
+		// same `{}` anyway, so the cache costs nothing in that case.
 		state = {};
 	}
 	stateCache = {
@@ -235,10 +244,30 @@ function readState(cwd: string): DispositionStateFile {
 	return state;
 }
 
+// Atomic tmp+rename (same `${target}.tmp-${pid}` shape as instance-registry.ts
+// / recent-touches.ts / review-graph/builder.ts): a cross-process reader must
+// never observe a partially-written file — rename() replaces the destination
+// atomically on both POSIX and Windows (libuv uses MOVEFILE_REPLACE_EXISTING),
+// so a concurrent readState sees either the old JSON or the new JSON, never a
+// torn write that fails to parse. Unlike those best-effort writers, a failure
+// here still propagates (matches the pre-atomic writeFileSync's behavior,
+// which never swallowed errors either) — a disposition mark silently vanishing
+// is a correctness bug for this store, not just a lost observability sample.
 function writeState(cwd: string, state: DispositionStateFile): void {
 	const p = statePath(cwd);
 	fs.mkdirSync(path.dirname(p), { recursive: true });
-	fs.writeFileSync(p, JSON.stringify(state, null, 2));
+	const tmpPath = `${p}.tmp-${process.pid}`;
+	fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2));
+	try {
+		fs.renameSync(tmpPath, p);
+	} catch (err) {
+		try {
+			fs.rmSync(tmpPath, { force: true });
+		} catch {
+			// ignore — best-effort cleanup of our own tmp file
+		}
+		throw err;
+	}
 	// Refresh the cache from the write we just did instead of invalidating it —
 	// avoids an immediate re-stat+re-parse of the file we already have in hand,
 	// and guards against coarse filesystem mtime granularity making a
