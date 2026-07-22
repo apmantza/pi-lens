@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { writeFileAtomic } from "../atomic-write.js";
 import type { FactStore } from "../dispatch/fact-store.js";
 import { fileContentProvider } from "../dispatch/facts/file-content.js";
 import type { FunctionSummary } from "../dispatch/facts/function-facts.js";
@@ -803,6 +804,20 @@ function writePending(key: string): void {
 		// corrupt and silently forces a full rebuild. rename() replaces the
 		// destination atomically on both POSIX and Windows (libuv uses
 		// MOVEFILE_REPLACE_EXISTING).
+		//
+		// #762: intentionally NOT migrated onto clients/atomic-write.ts's
+		// writeFileAtomic/writeFileAtomicAsync. This callback-style writer
+		// (fs.mkdir/writeFile/rename, not fs.promises) logs a DIFFERENT,
+		// step-specific console.error per failure (mkdir vs write vs rename) so
+		// operators can tell which stage failed; the shared helper collapses all
+		// failures into one silent (bestEffort) or one rethrown (non-bestEffort)
+		// outcome and has no hook for per-step logging. Forcing this onto the
+		// helper would either lose that diagnostic granularity or require
+		// awaiting a promise-based helper from a plain `void`-returning
+		// fire-and-forget function, changing this path from non-blocking
+		// callback I/O to an async microtask chain. The sync exit-hook writer
+		// just below (`ensurePersistExitHook`) uses the shared helper instead —
+		// it has no per-step logging to preserve.
 		const tmpPath = `${pending.cachePath}.tmp-${process.pid}`;
 		fs.writeFile(tmpPath, json, "utf-8", (writeErr) => {
 			if (writeErr) {
@@ -833,11 +848,10 @@ function ensurePersistExitHook(): void {
 		for (const [, pending] of _pendingPersist) {
 			try {
 				fs.mkdirSync(pending.cacheDir, { recursive: true });
-				// Same atomic tmp+rename as writePending: even at teardown a crash
-				// mid-write must not leave a truncated snapshot for the next start.
-				const tmpPath = `${pending.cachePath}.tmp-${process.pid}`;
-				fs.writeFileSync(tmpPath, JSON.stringify(pending.data), "utf-8");
-				fs.renameSync(tmpPath, pending.cachePath);
+				// Same atomic tmp+rename as writePending (via clients/atomic-write.ts,
+				// #762): even at teardown a crash mid-write must not leave a
+				// truncated snapshot for the next start.
+				writeFileAtomic(pending.cachePath, JSON.stringify(pending.data));
 			} catch {
 				// Teardown is best-effort; a missed persist just re-confirms next start.
 			}

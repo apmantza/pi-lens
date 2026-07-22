@@ -23,6 +23,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { writeFileAtomic, writeFileAtomicAsync } from "./atomic-write.js";
 import { getGlobalPiLensDir } from "./file-utils.js";
 // #735: reuse the #449/#525 reaper's exact conservative liveness check
 // (`process.kill(pid, 0)`, ESRCH-only-means-dead) rather than inventing a
@@ -132,42 +133,32 @@ export async function readInstanceRegistry(): Promise<InstanceEntry[]> {
 	return file.instances;
 }
 
-// --- Write (atomic tmp + rename, same pattern as review-graph/builder.ts) ---
+// --- Write (atomic tmp + rename via clients/atomic-write.ts, #762) ---
 
 async function writeRegistryAsync(file: RegistryFile): Promise<void> {
 	const dir = getGlobalPiLensDir();
 	const target = registryPath();
-	const tmpPath = `${target}.tmp-${process.pid}`;
 	try {
 		await fs.promises.mkdir(dir, { recursive: true });
-		await fs.promises.writeFile(tmpPath, JSON.stringify(file), "utf-8");
-		await fs.promises.rename(tmpPath, target);
 	} catch {
-		// Best-effort observability substrate — a failed write just means this
+		// Best-effort observability substrate — a failed mkdir just means this
 		// update is lost, never a thrown error for the caller.
-		try {
-			await fs.promises.rm(tmpPath, { force: true });
-		} catch {
-			// ignore
-		}
+		return;
 	}
+	// bestEffort (default): a failed write just means this update is lost,
+	// never a thrown error for the caller.
+	await writeFileAtomicAsync(target, JSON.stringify(file));
 }
 
 function writeRegistrySync(file: RegistryFile): void {
 	const dir = getGlobalPiLensDir();
 	const target = registryPath();
-	const tmpPath = `${target}.tmp-${process.pid}`;
 	try {
 		fs.mkdirSync(dir, { recursive: true });
-		fs.writeFileSync(tmpPath, JSON.stringify(file), "utf-8");
-		fs.renameSync(tmpPath, target);
 	} catch {
-		try {
-			fs.rmSync(tmpPath, { force: true });
-		} catch {
-			// ignore
-		}
+		return;
 	}
+	writeFileAtomic(target, JSON.stringify(file));
 }
 
 // --- Mutations (all read-modify-write whole file) ---
