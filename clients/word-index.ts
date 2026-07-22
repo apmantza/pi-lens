@@ -16,6 +16,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { isAtOrAboveHomeDir } from "./path-utils.js";
 import {
 	createDebounceScheduler,
 	type DebounceScheduler,
@@ -282,7 +283,13 @@ export async function collectWordIndexDocs(
 	shouldContinue: () => boolean = () => true,
 ): Promise<Array<{ path: string; content: string }>> {
 	const { collectSourceFilesAsync } = await import("./source-filter.js");
-	const files = await collectSourceFilesAsync(root);
+	// #747 hardening: pass the cap INTO the walk — without it,
+	// `collectSourceFilesAsync` defaults to an unbounded traversal and the
+	// `WORD_INDEX_MAX_FILES` slice below only trims the result AFTER the whole
+	// tree (all of $HOME, on a misrooted cwd) has already been enumerated.
+	const files = await collectSourceFilesAsync(root, {
+		maxFiles: WORD_INDEX_MAX_FILES,
+	});
 	if (!shouldContinue()) return [];
 	const docs: Array<{ path: string; content: string }> = [];
 	let processed = 0;
@@ -555,8 +562,21 @@ export function _resetWordIndexBuildGuardForTests(): void {
 export function triggerBackgroundWordIndexBuild(
 	cwd: string,
 	dbg?: (msg: string) => void,
+	options: { homeDir?: string } = {},
 ): void {
 	const key = path.resolve(cwd);
+	// #747 hardening: this trigger is the one word-index build path with NO
+	// session lifecycle in front of it (cold `symbol_search` queries, in-process
+	// and via MCP where cwd can be a raw tool argument) — the session-start and
+	// quick-mode-warmup builds sit behind `canWarmCaches`, which already refuses
+	// a home-rooted cwd. Apply the same `isAtOrAboveHomeDir` ceiling here so a
+	// cold query from $HOME never starts a whole-home walk-and-read.
+	if (isAtOrAboveHomeDir(key, options.homeDir)) {
+		dbg?.(
+			`word-index cold-build: skipped — root at/above home directory (${key})`,
+		);
+		return;
+	}
 	if (inFlightBuilds.has(key)) return;
 	inFlightBuilds.add(key);
 	void (async () => {
