@@ -123,6 +123,12 @@ export interface LSPState {
 const BROKEN_BASE_COOLDOWN_MS = 15_000;
 const BROKEN_MAX_COOLDOWN_MS = 5 * 60_000; // cap at 5 minutes
 const BROKEN_PERMANENT_AFTER = 5; // disable for session after N consecutive failures
+// #743: a server whose per-server notify write (didOpen/didChange) times out
+// this many times in a row is a persistently backpressured server; it is demoted
+// into the `broken` cooldown map (evicted + cooled down) so subsequent sweeps
+// stop re-paying its notify budget on every file. A single successful write
+// resets the streak.
+const NOTIFY_BACKPRESSURE_BROKEN_AFTER = 3;
 const OPTIONAL_LSP_RETRY_COOLDOWN_MS = 5 * 60_000;
 const OPTIONAL_LSP_SERVER_IDS = new Set<string>();
 const NAV_CLIENT_WAIT_TIMEOUT_MS = Math.max(
@@ -676,6 +682,15 @@ export class LSPService {
 		string,
 		{ fingerprint: string; touchedAt: number; clientScope: LSPTouchClientScope }
 	>();
+	/**
+	 * #743: consecutive per-server notify-write timeout count, keyed by
+	 * "serverId:normalizedRoot" — the SAME identity as {@link LSPState.broken}
+	 * and {@link demonstratedReadyKeyFor}. A server that backpressures its stdin
+	 * write {@link NOTIFY_BACKPRESSURE_BROKEN_AFTER} times in a row is demoted
+	 * into the broken cooldown (see {@link recordNotifyWriteBackpressure}); any
+	 * successful write clears its entry.
+	 */
+	private readonly notifyWriteBackpressureStreak = new Map<string, number>();
 	/** True after shutdown() has been called; blocks new operations */
 	private isDestroyed = false;
 
@@ -790,6 +805,46 @@ export class LSPService {
 
 	private markDemonstratedReadyKey(key: string): void {
 		this.state.demonstratedReady.add(key);
+	}
+
+	/**
+	 * #743: record one notify-write timeout for a server and, once it has stalled
+	 * {@link NOTIFY_BACKPRESSURE_BROKEN_AFTER} times in a row, demote it through
+	 * the EXISTING broken-cooldown map so subsequent sweeps stop re-paying its
+	 * notify budget on every file. The wedged client is also evicted: an alive
+	 * client is reused before the broken check in {@link ensureClientForServer},
+	 * so the cooldown only bites once the stale client is gone. `key` is
+	 * "serverId:normalizedRoot" (the broken-map identity); undefined when the
+	 * server's root could not be resolved, in which case there is nothing to key.
+	 */
+	private recordNotifyWriteBackpressure(
+		key: string | undefined,
+		entry: SpawnedServer,
+		filePath: string,
+	): void {
+		if (!key) return;
+		const streak = (this.notifyWriteBackpressureStreak.get(key) ?? 0) + 1;
+		if (streak < NOTIFY_BACKPRESSURE_BROKEN_AFTER) {
+			this.notifyWriteBackpressureStreak.set(key, streak);
+			return;
+		}
+		this.notifyWriteBackpressureStreak.delete(key);
+		this.state.broken.set(key, Date.now() + BROKEN_BASE_COOLDOWN_MS);
+		void entry.client.shutdown().catch(() => {});
+		this.state.clients.delete(key);
+		this.state.clientSpawnedAt.delete(key);
+		this.state.demonstratedReady.delete(key);
+		logLatency({
+			type: "phase",
+			phase: "lsp_notify_backpressure_broken",
+			filePath: normalizeMapKey(filePath),
+			durationMs: 0,
+			metadata: {
+				serverId: entry.info.id,
+				cooldownMs: BROKEN_BASE_COOLDOWN_MS,
+				consecutiveTimeouts: NOTIFY_BACKPRESSURE_BROKEN_AFTER,
+			},
+		});
 	}
 
 	private activeClientsForCwd(
@@ -1442,36 +1497,74 @@ export class LSPService {
 		const diagnosticBaselines = new Map(
 			spawned.map((entry) => [entry.client, entry.client.diagnosticsVersion]),
 		);
-		let notifyWriteTimedOut = false;
+		// #743: PER-SERVER notify-write deadlines. Each server's didOpen/didChange
+		// write gets its OWN notifyWriteBudgetMs budget rather than one shared
+		// deadline over a single Promise.all — otherwise one backpressured server
+		// (stalled stdin) times out the write for the ENTIRE file, flipping every
+		// co-touched healthy server to inconclusive and zeroing its diagnostics.
+		// Bounded so a backpressured write can't hang the caller; on timeout we
+		// proceed — the diagnostics wait below is separately bounded and simply
+		// returns no fresh diagnostics for the server(s) that stalled.
+		//
+		// Holds the serverId of every server whose write did NOT land in time.
+		// The file-level `notifyWriteTimedOut` (logged below) means "at least one
+		// server timed out"; this list carries the per-server detail the
+		// demonstratedReady gate reads so a healthy sibling stays eligible.
+		const notifyWriteTimedOutServerIds: string[] = [];
 		if (!notifySkipped) {
-			// Bounded so a backpressured write can't hang the caller (see
-			// notifyWriteBudgetMs). On timeout we proceed: the diagnostics wait below
-			// is separately bounded and simply returns no fresh diagnostics.
-			const wrote = await withDeadline(
-				Promise.all(
-					spawned.map((entry) =>
-						entry.client.notify.open(
-							filePath,
-							content,
-							languageId,
-							undefined,
-							silent,
-						),
-					),
-				),
-				{ ms: notifyWriteBudgetMs(), onTimeout: "undefined", onReject: "undefined" },
+			const budget = notifyWriteBudgetMs();
+			await Promise.all(
+				spawned.map(async (entry) => {
+					// Same identity as the broken/demonstratedReady maps.
+					const clientKey = await this.demonstratedReadyKeyFor(
+						entry.info,
+						filePath,
+					);
+					let wrote: true | undefined;
+					let rejected = false;
+					try {
+						wrote = await withDeadline(
+							entry.client.notify
+								.open(filePath, content, languageId, undefined, silent)
+								.then(() => true as const),
+							{ ms: budget, onTimeout: "undefined", onReject: "propagate" },
+						);
+					} catch {
+						// The write itself rejected (not backpressure): the content did
+						// not land, so this server is inconclusive for the touch, but a
+						// rejection is not a stdin-backpressure signal and must not count
+						// toward the backpressure demotion streak.
+						rejected = true;
+					}
+					if (wrote === true) {
+						// A clean write clears any accrued backpressure streak (#743).
+						if (clientKey) this.notifyWriteBackpressureStreak.delete(clientKey);
+						return;
+					}
+					notifyWriteTimedOutServerIds.push(entry.info.id);
+					if (!rejected) {
+						this.recordNotifyWriteBackpressure(clientKey, entry, filePath);
+					}
+				}),
 			);
-			if (wrote === undefined) {
-				notifyWriteTimedOut = true;
+			if (notifyWriteTimedOutServerIds.length > 0) {
 				logLatency({
 					type: "phase",
 					phase: "lsp_notify_timeout",
 					filePath: normalizedPath,
 					durationMs: Date.now() - startedAt,
-					metadata: { source, clientScope, serverCount: spawned.length },
+					metadata: {
+						source,
+						clientScope,
+						serverCount: spawned.length,
+						timedOutServerIds: notifyWriteTimedOutServerIds,
+					},
 				});
 			}
 		}
+		// File-level flag: at least one server's write timed out (kept for the
+		// conservative touch-wide `inconclusive` merge semantics — see below).
+		const notifyWriteTimedOut = notifyWriteTimedOutServerIds.length > 0;
 
 		let diagnosticsTimedOut = false;
 		// R8 (#714): server ids of aux-role servers whose push wait was cut off by
@@ -1904,8 +1997,16 @@ export class LSPService {
 		// "actually warm" signal `ensureWarmForSweep` waits for — mark every
 		// spawned server so a later sweep in this session sees the check as a
 		// no-op instead of paying the warm-up round trip again.
-		if (diagnosticsMode !== "none" && !inconclusive) {
+		//
+		// #743: the diagnostics wait is a blanket (touch-wide) gate, but the
+		// notify-write timeout is now PER-SERVER — a healthy server whose sibling's
+		// write stalled must still be eligible, so only servers whose OWN write
+		// timed out are skipped here (rather than gating the whole loop on the
+		// file-level `inconclusive`).
+		const notifyTimedOutServerIds = new Set(notifyWriteTimedOutServerIds);
+		if (diagnosticsMode !== "none" && !diagnosticsTimedOut) {
 			for (const entry of spawned) {
+				if (notifyTimedOutServerIds.has(entry.info.id)) continue;
 				const key = await this.demonstratedReadyKeyFor(entry.info, filePath);
 				if (key) this.markDemonstratedReadyKey(key);
 			}
@@ -1964,6 +2065,12 @@ export class LSPService {
 				collectedDiagnostics: collected?.length,
 				notifySkipped,
 				notifyWriteTimedOut,
+				// #743: per-server detail — which servers' writes actually timed out.
+				// Absent when none did. `notifyWriteTimedOut` is the file-level "at
+				// least one" summary.
+				...(notifyWriteTimedOutServerIds.length > 0 && {
+					notifyWriteTimedOutServerIds,
+				}),
 				diagnosticsTimedOut,
 				inconclusive,
 				// R8 (#714): server ids of auxiliaries whose push wait was cut off by
