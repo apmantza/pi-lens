@@ -150,6 +150,21 @@ function warmupTimeoutMs(): number {
 	return Number.isFinite(raw) && raw > 0 ? raw : 20_000;
 }
 
+// #744: short pause between the first warm-up round trip and the single retry
+// `ensureWarmForSweep` gives a server that didn't warm on its first attempt.
+// Deliberately small — it's a breather for a server mid-relaunch/index (the
+// state where warmup failure is most likely, e.g. a sweep starting seconds
+// after an `lsp_service_reset`), not a second full budget. Read at call time so
+// tests can drive the retry without waiting out a real backoff. 0 disables the
+// pause entirely (retry fires immediately).
+function warmupRetryBackoffMs(): number {
+	const raw = Number.parseInt(
+		process.env.PI_LENS_LSP_WARMUP_RETRY_BACKOFF_MS ?? "",
+		10,
+	);
+	return Number.isFinite(raw) && raw >= 0 ? raw : 500;
+}
+
 /**
  * Read the `PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS` env override at call time
  * (process.env mutations in tests stay live). Returns undefined when unset,
@@ -388,6 +403,17 @@ export interface LSPWorkspaceDiagnosticResult {
 	 * falls back to per-file, never a silent empty default).
 	 */
 	timedOut?: boolean;
+	/**
+	 * #744: true when this file's per-file check was never even attempted
+	 * because its primary language server failed the pre-sweep warm-up (an
+	 * initial round trip plus one retry both left it cold — e.g. marksman still
+	 * building its workspace index). Such a server would re-pay its full timeout
+	 * on every one of its files and drag the whole sweep, so the group is skipped
+	 * up front. Always accompanies `timedOut: true` (the result is unconfirmed,
+	 * NOT a confirmed-clean `[]`); this flag only records WHY, so the outcome
+	 * reads honestly as "skipped after failed warm-up" rather than "ran clean".
+	 */
+	skippedWarmupFailure?: boolean;
 }
 
 /**
@@ -2708,18 +2734,50 @@ export class LSPService {
 	 * Returns `performedWarmup: true` only when the round trip actually ran
 	 * (false = already warm, no-op) — tests assert on this to guard against
 	 * the warm-up becoming a mandatory extra round trip on every sweep.
+	 *
+	 * #744: a warm-up that TIMES OUT is no longer left as a silent dead end.
+	 * The old one-shot behavior left a wedged server (observed live: marksman,
+	 * a `workspaceIndexing` server, burned the full 20s and stayed cold) with
+	 * no re-warm and no skip — so every subsequent per-file touch in the sweep
+	 * re-paid a full per-file budget against it and timed out again, dragging
+	 * the whole sweep. Now: on a failed warm-up this retries exactly once (after
+	 * a short `warmupRetryBackoffMs` breather — the state where warm-up fails is
+	 * usually a server mid-relaunch/index that just needs a moment), and if the
+	 * retry ALSO leaves the server cold it is reported in `failedServerIds`. The
+	 * caller (the sweep loop) skips that server's files up front and marks them
+	 * unconfirmed, so per-file touches stop paying its timeout. This is a
+	 * sweep-scoped skip (the caller discards `failedServerIds` when the sweep
+	 * ends), deliberately NOT the global `broken` cooldown map: a server that is
+	 * merely still indexing is not broken and must not be cooldown-banned across
+	 * the whole session — it just wasn't ready for THIS sweep.
+	 *
+	 * "Failed warm-up" is measured per non-auxiliary server via the SAME
+	 * `demonstratedReady` signal `touchFile` marks on a confirmed round trip: a
+	 * server whose key is still absent from `demonstratedReady` after both
+	 * attempts never proved it can answer diagnostics. Warm-up stays
+	 * `clientScope:"primary"` (not the sweep's `"all"`) on purpose: `"all"`
+	 * would additionally spawn the sweep-EXCLUDED auxiliaries
+	 * (`WORKSPACE_SWEEP_EXCLUDED_SERVER_IDS`), and because `touchFile`'s
+	 * `inconclusive` flag is touch-wide, one slow advisory auxiliary would then
+	 * suppress the `demonstratedReady` marking for a perfectly healthy primary —
+	 * falsely condemning it. Recording per-primary-server outcomes and skipping
+	 * on those is the correct, non-regressing way to cover the servers the sweep
+	 * actually gates on (the sweep groups by primary server, so the group this
+	 * warms IS the one whose per-file touches would drag).
 	 */
 	async ensureWarmForSweep(
 		representativeFile: string,
 		options: { timeoutMs?: number; signal?: AbortSignal } = {},
-	): Promise<{ performedWarmup: boolean }> {
+	): Promise<{ performedWarmup: boolean; failedServerIds: string[] }> {
 		if (this.checkDestroyed() || options.signal?.aborted) {
-			return { performedWarmup: false };
+			return { performedWarmup: false, failedServerIds: [] };
 		}
 		const servers = getServersForFileWithConfig(representativeFile).filter(
 			(s) => s.role !== "auxiliary",
 		);
-		if (servers.length === 0) return { performedWarmup: false };
+		if (servers.length === 0) {
+			return { performedWarmup: false, failedServerIds: [] };
+		}
 
 		// A server with no resolvable root never spawns a client for this file
 		// either way, so it can't block "already warm" — only servers that WILL
@@ -2735,7 +2793,7 @@ export class LSPService {
 		const alreadyWarm = keys.every(
 			(key) => key === undefined || this.state.demonstratedReady.has(key),
 		);
-		if (alreadyWarm) return { performedWarmup: false };
+		if (alreadyWarm) return { performedWarmup: false, failedServerIds: [] };
 
 		let content: string;
 		try {
@@ -2743,55 +2801,121 @@ export class LSPService {
 		} catch {
 			// Nothing to warm up with — the real sweep's own read will surface
 			// the file error.
-			return { performedWarmup: false };
+			return { performedWarmup: false, failedServerIds: [] };
 		}
-		if (options.signal?.aborted) return { performedWarmup: false };
+		if (options.signal?.aborted) {
+			return { performedWarmup: false, failedServerIds: [] };
+		}
 
 		const timeoutMs = options.timeoutMs ?? warmupTimeoutMs();
-		const startedAt = Date.now();
-		logLatency({
-			type: "phase",
-			phase: "lsp_sweep_warmup_start",
-			filePath: representativeFile,
-			durationMs: 0,
-			metadata: { serverIds: servers.map((s) => s.id), timeoutMs },
-		});
-		const warmupAttempt = this.touchFile(representativeFile, content, {
-			diagnostics: "document",
-			collectDiagnostics: false,
-			clientScope: "primary",
-			source: "lsp_sweep_warmup",
-			maxClientWaitMs: timeoutMs,
-			maxDiagnosticsWaitMs: timeoutMs,
-			// #669: the caller's cap here is the warm-up budget for a genuinely
-			// COLD server — it must act as a floor, not the usual ceiling, or
-			// `perServerTimeout` silently shrinks it to the strategy's normal
-			// warm-state `aggregateWaitMs` (e.g. 1000ms for typescript) instead
-			// of the requested 20000ms.
-			warmupOverride: true,
-		});
-		await (options.signal
-			? Promise.race([
-					withDeadline(warmupAttempt, { ms: timeoutMs, onTimeout: "undefined" }),
-					new Promise<void>((resolve) => {
-						if (options.signal!.aborted) {
-							resolve();
-							return;
-						}
-						options.signal!.addEventListener("abort", () => resolve(), {
-							once: true,
-						});
-					}),
-				])
-			: withDeadline(warmupAttempt, { ms: timeoutMs, onTimeout: "undefined" }));
-		logLatency({
-			type: "phase",
-			phase: "lsp_sweep_warmup_done",
-			filePath: representativeFile,
-			durationMs: Date.now() - startedAt,
-			metadata: { serverIds: servers.map((s) => s.id), timeoutMs },
-		});
-		return { performedWarmup: true };
+
+		// A non-auxiliary server that WILL spawn for this file (resolvable key)
+		// but whose key is still absent from `demonstratedReady` after an attempt
+		// never proved it can answer diagnostics — that's a failed warm-up. A
+		// server with an unresolvable key never spawns here, so it can't fail this
+		// way and is excluded (never skipped by the caller for this file).
+		const stillColdServerIds = (): string[] => {
+			const cold: string[] = [];
+			for (let i = 0; i < servers.length; i++) {
+				const key = keys[i];
+				if (key !== undefined && !this.state.demonstratedReady.has(key)) {
+					cold.push(servers[i].id);
+				}
+			}
+			return cold;
+		};
+
+		const runWarmupTouch = async (attempt: number): Promise<void> => {
+			if (options.signal?.aborted) return;
+			const startedAt = Date.now();
+			logLatency({
+				type: "phase",
+				phase: "lsp_sweep_warmup_start",
+				filePath: representativeFile,
+				durationMs: 0,
+				metadata: { serverIds: servers.map((s) => s.id), timeoutMs, attempt },
+			});
+			const warmupAttempt = this.touchFile(representativeFile, content, {
+				diagnostics: "document",
+				collectDiagnostics: false,
+				clientScope: "primary",
+				source: "lsp_sweep_warmup",
+				maxClientWaitMs: timeoutMs,
+				maxDiagnosticsWaitMs: timeoutMs,
+				// #669: the caller's cap here is the warm-up budget for a genuinely
+				// COLD server — it must act as a floor, not the usual ceiling, or
+				// `perServerTimeout` silently shrinks it to the strategy's normal
+				// warm-state `aggregateWaitMs` (e.g. 1000ms for typescript) instead
+				// of the requested 20000ms.
+				warmupOverride: true,
+			});
+			await (options.signal
+				? Promise.race([
+						withDeadline(warmupAttempt, {
+							ms: timeoutMs,
+							onTimeout: "undefined",
+						}),
+						new Promise<void>((resolve) => {
+							if (options.signal!.aborted) {
+								resolve();
+								return;
+							}
+							options.signal!.addEventListener("abort", () => resolve(), {
+								once: true,
+							});
+						}),
+					])
+				: withDeadline(warmupAttempt, {
+						ms: timeoutMs,
+						onTimeout: "undefined",
+					}));
+			logLatency({
+				type: "phase",
+				phase: "lsp_sweep_warmup_done",
+				filePath: representativeFile,
+				durationMs: Date.now() - startedAt,
+				metadata: {
+					serverIds: servers.map((s) => s.id),
+					timeoutMs,
+					attempt,
+					coldServerIds: stillColdServerIds(),
+				},
+			});
+		};
+
+		await runWarmupTouch(1);
+		let failedServerIds = stillColdServerIds();
+
+		// One retry, and only when the first attempt actually left a server cold —
+		// a short backoff first so a server mid-relaunch/index gets a breather
+		// rather than an immediate second hammer.
+		if (failedServerIds.length > 0 && !options.signal?.aborted) {
+			const backoffMs = warmupRetryBackoffMs();
+			if (backoffMs > 0) {
+				await new Promise<void>((resolve) => {
+					const timer = setTimeout(resolve, backoffMs);
+					timer.unref?.();
+					options.signal?.addEventListener("abort", () => resolve(), {
+						once: true,
+					});
+				});
+			}
+			if (!options.signal?.aborted) {
+				await runWarmupTouch(2);
+				failedServerIds = stillColdServerIds();
+			}
+		}
+
+		if (failedServerIds.length > 0) {
+			logLatency({
+				type: "phase",
+				phase: "lsp_sweep_warmup_failed",
+				filePath: representativeFile,
+				durationMs: 0,
+				metadata: { failedServerIds, timeoutMs },
+			});
+		}
+		return { performedWarmup: true, failedServerIds };
 	}
 
 	/**
@@ -3188,8 +3312,41 @@ export class LSPService {
 				// timeouts" failure mode this fixes doesn't apply there.
 				const first = group.files[0];
 				if (first) {
-					await this.ensureWarmForSweep(first, { signal });
+					const warmup = await this.ensureWarmForSweep(first, { signal });
 					if (signal?.aborted) return;
+					// #744: the group's primary server failed warm-up (initial round
+					// trip + one retry both left it cold). Every per-file touch to it
+					// would re-pay its full timeout and time out again, dragging the
+					// whole sweep — the exact wedged-marksman failure mode this closes.
+					// So skip this group's files and record each as UNCONFIRMED
+					// (timedOut + skippedWarmupFailure), never as confirmed-clean `[]`:
+					// the group is keyed by its primary server, so a non-empty
+					// `failedServerIds` means that primary is the one that couldn't warm.
+					if (warmup.failedServerIds.length > 0) {
+						logLatency({
+							type: "phase",
+							phase: "lsp_sweep_group_skipped_warmup",
+							filePath: first,
+							durationMs: 0,
+							metadata: {
+								failedServerIds: warmup.failedServerIds,
+								skippedFiles: group.files.length,
+							},
+						});
+						for (const filePath of group.files) {
+							results.push({
+								filePath,
+								diagnostics: [],
+								count: 0,
+								timedOut: true,
+								skippedWarmupFailure: true,
+							});
+							timedOutFiles += 1;
+							completed += 1;
+						}
+						options.onProgress?.(completed, files.length);
+						return;
+					}
 				}
 				// #608/#621: batch-open a CHUNK of this group's files before
 				// waiting on diagnostics for any of them individually — see
