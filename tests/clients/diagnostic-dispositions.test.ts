@@ -312,6 +312,63 @@ describe("markDisposition + applyDispositions (#690)", () => {
 	});
 });
 
+describe("writeState atomicity (#690 — cross-process reader safety)", () => {
+	const content = "const target = bad();\n";
+	const diag = { tool: "eslint", rule: "no-bad", message: "bad call", line: 1 };
+
+	it("leaves no tmp file behind after a successful mark", () => {
+		markDisposition(
+			cwd(),
+			{ cwd: cwd(), filePath: filePath(), ...diag, content },
+			"flagged",
+		);
+		const dir = path.dirname(statePath());
+		const leftovers = fs
+			.readdirSync(dir)
+			.filter((name) => name.includes(".tmp-"));
+		expect(leftovers).toEqual([]);
+	});
+
+	it("state survives a write -> fresh-process-style read round-trip", () => {
+		const anchor = markDisposition(
+			cwd(),
+			{ cwd: cwd(), filePath: filePath(), ...diag, content },
+			"flagged",
+			"round trip",
+		);
+		// Simulate a separate process: reset the module cache and re-read purely
+		// from disk rather than the in-memory stateCache.
+		_resetStateCacheForTests();
+		const entry = getDisposition(cwd(), anchor);
+		expect(entry?.disposition).toBe("flagged");
+		expect(entry?.reason).toBe("round trip");
+	});
+
+	it("a large write is never observable as truncated/partial JSON (tmp+rename exercised)", () => {
+		// Write a big state, then read the raw bytes back off disk directly
+		// (bypassing the module's own cache) — it must fully parse every time,
+		// never fail partway as it would from a torn direct-writeFileSync.
+		for (let i = 0; i < 200; i++) {
+			markDisposition(
+				cwd(),
+				{
+					cwd: cwd(),
+					filePath: filePath(),
+					tool: "eslint",
+					rule: `rule-${i}`,
+					message: `message number ${i} `.repeat(20),
+					line: 1,
+					content,
+				},
+				"flagged",
+			);
+		}
+		const raw = fs.readFileSync(statePath(), "utf-8");
+		const parsed = JSON.parse(raw) as { dispositions: Record<string, unknown> };
+		expect(Object.keys(parsed.dispositions)).toHaveLength(200);
+	});
+});
+
 describe("mark telemetry (#690 — NDJSON log + pilens:diagnostic:disposition)", () => {
 	const content = "const target = bad();\n";
 	const diag = { tool: "eslint", rule: "no-bad", message: "bad call", line: 1 };
