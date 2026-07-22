@@ -33,6 +33,15 @@ export interface ProjectDiagnosticsSnapshot {
 	 * scanned nothing" rather than reading the empty result as a clean verdict.
 	 */
 	unsafeRoot?: boolean;
+	/**
+	 * True when the source-file walk stopped at its visited-entry budget (#760)
+	 * — the file list (and therefore `diagnostics` / `filesScanned`) covers a
+	 * truncated best-effort subset of the tree, not the whole project. Unlike
+	 * `unsafeRoot` this is NOT a refusal: a truncated analysis is still useful;
+	 * the flag only keeps a caller from reading the partial result as a
+	 * complete, clean sweep.
+	 */
+	scanTruncated?: boolean;
 }
 
 export interface ProjectDiagnosticsDeltaReport {
@@ -51,6 +60,13 @@ export interface ProjectDiagnosticsScanOptions {
 	cwd: string;
 	tier: ProjectDiagnosticsTier;
 	maxFiles?: number;
+	/**
+	 * Budget on directory entries the source-file walk may VISIT (#760),
+	 * independent of `maxFiles` (results kept). Defaults to source-filter's
+	 * DEFAULT_MAX_SCAN_ENTRIES; when it trips, the scan proceeds on the
+	 * truncated list and the snapshot carries `scanTruncated: true`.
+	 */
+	maxScanEntries?: number;
 	/**
 	 * Cancellation for a long full-mode scan (#341). When aborted mid-scan the
 	 * scanner returns a partial snapshot and does NOT persist it, so an

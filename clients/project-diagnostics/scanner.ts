@@ -13,7 +13,7 @@ import {
 import type { Diagnostic } from "../dispatch/types.js";
 import { isTestFile } from "../file-utils.js";
 import { isAtOrAboveHomeDir } from "../path-utils.js";
-import { collectSourceFilesAsync } from "../source-filter.js";
+import { collectSourceFilesWithBudgetAsync } from "../source-filter.js";
 import { getSharedTreeSitterClient } from "../tree-sitter-shared.js";
 import { TreeSitterQueryLoader } from "../tree-sitter-query-loader.js";
 import {
@@ -257,9 +257,18 @@ export async function scanProjectDiagnostics(
 		};
 	}
 	const maxFiles = Math.max(1, options.maxFiles ?? DEFAULT_MAX_FILES);
-	const files = options.files
-		? options.files.slice(0, maxFiles)
-		: await collectSourceFilesAsync(cwd, { maxFiles });
+	// #760: bound the walk by entries VISITED, not just files kept — a mixed
+	// tree with few source files among a huge pile of non-source files never
+	// trips `maxFiles`. Unlike `unsafeRoot` this is not a refusal: when the
+	// budget trips we scan the truncated best-effort list and flag the snapshot
+	// so callers don't read the partial result as a complete sweep.
+	const collected = options.files
+		? { files: options.files.slice(0, maxFiles), entryBudgetExceeded: false }
+		: await collectSourceFilesWithBudgetAsync(cwd, {
+				maxFiles,
+				maxScanEntries: options.maxScanEntries,
+			});
+	const files = collected.files;
 	// Check cancellation at each phase boundary so a full-mode scan stops
 	// promptly when the agent/user aborts (#341). The per-phase runners are
 	// already file-capped, so phase granularity is enough to bound the work.
@@ -286,6 +295,9 @@ export async function scanProjectDiagnostics(
 		filesScanned: files.length,
 		runners,
 	};
+	// #760: only present when true — keeps existing snapshots/serializations
+	// byte-identical for the untruncated (normal) case.
+	if (collected.entryBudgetExceeded) snapshot.scanTruncated = true;
 	// A cancelled scan yields a partial snapshot; don't persist it as the
 	// authoritative cross-session cache — only a complete run is cacheable.
 	// Likewise, an explicit `files` scan (#461) only covers a caller-chosen

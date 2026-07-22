@@ -152,7 +152,11 @@ export class TodoScanner {
 	 * This is the preferred entry point for new callers.
 	 */
 	scanDirectory(dirPath: string): TodoScanResult {
-		// Use source-filter to collect only source files (no build artifacts)
+		// Use source-filter to collect only source files (no build artifacts).
+		// #760: the walk is bounded by source-filter's default visited-entry
+		// budget (DEFAULT_MAX_SCAN_ENTRIES) — on a pathological mixed tree this
+		// sync call gets a truncated best-effort list instead of blocking its
+		// caller for a full-tree walk; a partial TODO sweep is acceptable here.
 		const sourceFiles = collectSourceFiles(dirPath);
 		return this.scanFiles(sourceFiles);
 	}

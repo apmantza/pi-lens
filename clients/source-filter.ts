@@ -131,6 +131,27 @@ export const ALL_SCANNABLE_EXTENSIONS = [
  */
 export const DEFAULT_MAX_SOURCE_FILES = 20000;
 
+/**
+ * Entry-visit budget for the collect walks (#760, the #758 escape class).
+ *
+ * `maxFiles` caps results FOUND, not entries VISITED — so a mixed tree with
+ * few source files but a huge pile of non-source files (reporter's case: ~300
+ * scripts among ~84k game-mod data files) never trips it and still gets a
+ * full-tree walk, dominated by one `ignoreMatcher.isIgnored()` call per entry.
+ * This budget counts every directory entry the walk touches — including
+ * ignored/skipped ones, because the per-entry ignore probe IS the dominant
+ * cost — and stops the walk when exhausted, returning the best-effort list
+ * collected so far.
+ *
+ * 200k is deliberately generous: at the ~25µs/entry ignore-probe cost that
+ * motivated #758 it bounds the worst case to a few seconds instead of an
+ * unbounded multi-minute walk over a misrooted ($HOME-scale) or
+ * data-dominated tree, while staying an order of magnitude above any healthy
+ * project's entry count — so real repos never see a truncated list. Callers
+ * that need a tighter bound pass `maxScanEntries` explicitly.
+ */
+export const DEFAULT_MAX_SCAN_ENTRIES = 200_000;
+
 export interface SourceCollectionOptions {
 	/** Additional directory names to exclude (merged with defaults) */
 	excludeDirs?: string[];
@@ -153,6 +174,26 @@ export interface SourceCollectionOptions {
 	 * never unbounded). Refs #250/#747.
 	 */
 	maxFiles?: number;
+	/**
+	 * Budget on directory entries VISITED (including ignored/skipped ones) —
+	 * independent of the `maxFiles` results cap, exactly as in #758: `maxFiles`
+	 * bounds what the walk keeps, this bounds the work it does to find it. When
+	 * exhausted the walk stops and returns the files collected so far. Unset =
+	 * {@link DEFAULT_MAX_SCAN_ENTRIES} (finite, never unbounded). Named
+	 * consistently with startup-scan's entry budget. Refs #760.
+	 */
+	maxScanEntries?: number;
+}
+
+/**
+ * Result of a budget-aware collect walk (#760). `files` is the same list the
+ * plain collectors return; `entryBudgetExceeded` is true when the walk stopped
+ * because it visited `maxScanEntries` directory entries — the list is then a
+ * truncated best-effort view of the tree, not a complete enumeration.
+ */
+export interface SourceCollectionResult {
+	files: string[];
+	entryBudgetExceeded: boolean;
 }
 
 function shouldSkipGeneratedOrArtifact(
@@ -277,7 +318,19 @@ interface ResolvedCollectionConfig {
 	extraExcludePatterns: string[];
 	extensions: Set<string>;
 	maxFiles: number;
+	maxScanEntries: number;
 	options?: SourceCollectionOptions;
+}
+
+/**
+ * Coerce a caller-supplied cap to a finite positive integer, falling back to
+ * the module default — omitted / non-finite / non-positive means the FINITE
+ * default, never `Infinity` (#250/#747/#760: an unbounded walk was the bug).
+ */
+function resolveFiniteCap(raw: number | undefined, fallback: number): number {
+	return typeof raw === "number" && Number.isFinite(raw) && raw > 0
+		? Math.floor(raw)
+		: fallback;
 }
 
 function resolveCollectionConfig(
@@ -285,13 +338,10 @@ function resolveCollectionConfig(
 	options?: SourceCollectionOptions,
 	config?: { clampForSlowFsSyncWalk?: boolean },
 ): ResolvedCollectionConfig {
-	const rawMax = options?.maxFiles;
-	// Omitted / non-finite / non-positive → the finite structural default, never
-	// `Infinity` (#250/#747): an unbounded walk from a misrooted cwd was the bug.
-	const requestedMax =
-		typeof rawMax === "number" && Number.isFinite(rawMax) && rawMax > 0
-			? Math.floor(rawMax)
-			: DEFAULT_MAX_SOURCE_FILES;
+	const requestedMax = resolveFiniteCap(
+		options?.maxFiles,
+		DEFAULT_MAX_SOURCE_FILES,
+	);
 	// Slow-FS mode (#462): the sync collector can't yield to the event loop, so
 	// on a measured-slow filesystem (9p/drvfs/NFS) clamp its walk to a much
 	// smaller cap regardless of what the caller asked for. The async twin
@@ -307,6 +357,10 @@ function resolveCollectionConfig(
 		extraExcludePatterns: options?.excludeDirs ?? [],
 		extensions: new Set(options?.extensions || ALL_SCANNABLE_EXTENSIONS),
 		maxFiles,
+		maxScanEntries: resolveFiniteCap(
+			options?.maxScanEntries,
+			DEFAULT_MAX_SCAN_ENTRIES,
+		),
 		options,
 	};
 }
@@ -347,10 +401,44 @@ function classifyEntry(
 	return {};
 }
 
-export function collectSourceFiles(
+/**
+ * Mutable per-walk visited-entry counter (#760). Shared verbatim by the sync
+ * and async collectors (like `classifyEntry`) so both charge the budget
+ * identically: one tick per directory entry TOUCHED — before the entry is
+ * classified, so ignored/skipped entries count too (the per-entry ignore probe
+ * is the dominant cost the budget exists to bound).
+ */
+interface EntryBudget {
+	visited: number;
+	limit: number;
+	exceeded: boolean;
+}
+
+function createEntryBudget(limit: number): EntryBudget {
+	return { visited: 0, limit, exceeded: false };
+}
+
+/**
+ * Charge one visited entry against the budget. Returns false — permanently,
+ * once tripped — when the walk must stop.
+ */
+function chargeEntryBudget(budget: EntryBudget): boolean {
+	if (budget.exceeded) return false;
+	budget.visited += 1;
+	if (budget.visited > budget.limit) budget.exceeded = true;
+	return !budget.exceeded;
+}
+
+/**
+ * Budget-aware core of {@link collectSourceFiles} (#760). Same walk, same
+ * list — plus `entryBudgetExceeded` so callers can tell a complete
+ * enumeration from a truncated best-effort one. The plain collector wraps
+ * this, keeping the existing `string[]` return contract intact.
+ */
+export function collectSourceFilesWithBudget(
 	dir: string,
 	options?: SourceCollectionOptions,
-): string[] {
+): SourceCollectionResult {
 	const rootDir = path.resolve(dir);
 	const cfg = resolveCollectionConfig(rootDir, options, {
 		clampForSlowFsSyncWalk: true,
@@ -359,13 +447,16 @@ export function collectSourceFiles(
 	// Per-walk sibling-probe memo (refs #191, item 1). Created here, discarded
 	// on return — never persisted across calls.
 	const probeCache = createArtifactProbeCache();
+	const budget = createEntryBudget(cfg.maxScanEntries);
 
 	function scan(currentDir: string) {
 		if (files.length >= cfg.maxFiles) return; // hard cap (#250)
+		if (budget.exceeded) return; // entry budget (#760)
 		const entries = readDirEntriesSafe(currentDir);
 
 		for (const entry of entries) {
 			if (files.length >= cfg.maxFiles) return;
+			if (!chargeEntryBudget(budget)) return;
 			const fullPath = path.join(currentDir, entry.name);
 			const { recurseInto, keepFile } = classifyEntry(
 				entry,
@@ -379,7 +470,14 @@ export function collectSourceFiles(
 	}
 
 	scan(rootDir);
-	return files;
+	return { files, entryBudgetExceeded: budget.exceeded };
+}
+
+export function collectSourceFiles(
+	dir: string,
+	options?: SourceCollectionOptions,
+): string[] {
+	return collectSourceFilesWithBudget(dir, options).files;
 }
 
 /**
@@ -399,6 +497,18 @@ export async function collectSourceFilesAsync(
 	dir: string,
 	options?: SourceCollectionOptions & { yieldEvery?: number },
 ): Promise<string[]> {
+	return (await collectSourceFilesWithBudgetAsync(dir, options)).files;
+}
+
+/**
+ * Budget-aware core of {@link collectSourceFilesAsync} (#760) — the async twin
+ * of {@link collectSourceFilesWithBudget}, with the same
+ * `entryBudgetExceeded` contract.
+ */
+export async function collectSourceFilesWithBudgetAsync(
+	dir: string,
+	options?: SourceCollectionOptions & { yieldEvery?: number },
+): Promise<SourceCollectionResult> {
 	const rootDir = path.resolve(dir);
 	const cfg = resolveCollectionConfig(rootDir, options);
 	// #703: prime the tracked-files set once before the walk so a tracked file
@@ -419,6 +529,7 @@ export async function collectSourceFilesAsync(
 	// still one point-in-time snapshot despite yielding between chunks, so
 	// caching across the whole call remains invalidation-free.
 	const probeCache = createArtifactProbeCache();
+	const budget = createEntryBudget(cfg.maxScanEntries);
 
 	while (stack.length > 0) {
 		const currentDir = stack.pop();
@@ -430,6 +541,9 @@ export async function collectSourceFilesAsync(
 		// the sync collector's left-to-right recursion within a directory.
 		const subDirs: string[] = [];
 		for (const entry of entries) {
+			if (!chargeEntryBudget(budget)) {
+				return { files, entryBudgetExceeded: true }; // entry budget (#760)
+			}
 			const fullPath = path.join(currentDir, entry.name);
 			const { recurseInto, keepFile } = classifyEntry(
 				entry,
@@ -440,7 +554,9 @@ export async function collectSourceFilesAsync(
 			if (recurseInto) subDirs.push(recurseInto);
 			else if (keepFile) {
 				files.push(keepFile);
-				if (files.length >= cfg.maxFiles) return files; // hard cap (#250)
+				if (files.length >= cfg.maxFiles) {
+					return { files, entryBudgetExceeded: false }; // hard cap (#250)
+				}
 			}
 			if (++processedSinceYield >= yieldEvery) {
 				processedSinceYield = 0;
@@ -450,7 +566,7 @@ export async function collectSourceFilesAsync(
 		for (let i = subDirs.length - 1; i >= 0; i--) stack.push(subDirs[i]);
 	}
 
-	return files;
+	return { files, entryBudgetExceeded: false };
 }
 
 /**
