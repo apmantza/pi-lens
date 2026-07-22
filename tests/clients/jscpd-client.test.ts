@@ -121,6 +121,41 @@ describe("jscpd-client", () => {
 		}
 	});
 
+	// #747/#250 — internal root contract: belt-and-braces refusal so a future
+	// caller that doesn't guard the root can't spawn a whole-$HOME jscpd walk.
+	it("refuses to scan a root at/above the home directory without spawning (#747)", async () => {
+		const { JscpdClient } = await import("../../clients/jscpd-client.js");
+		const safeSpawnMod = await import("../../clients/safe-spawn.js");
+
+		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-jscpd-");
+		try {
+			const srcFile = path.join(tmpDir, "src", "index.ts");
+			fs.mkdirSync(path.dirname(srcFile), { recursive: true });
+			fs.writeFileSync(srcFile, "export const x = 1;\n");
+
+			const client = new JscpdClient(false) as unknown as {
+				scan: (
+					cwd: string,
+					minLines: number,
+					minTokens: number,
+					isTsProject: boolean,
+					options?: { homeDir?: string },
+				) => Promise<{ success: boolean; clones: unknown[] }>;
+				available: boolean;
+			};
+			client.available = true;
+
+			// cwd IS the home directory.
+			const result = await client.scan(tmpDir, 5, 50, true, { homeDir: tmpDir });
+
+			expect(result.success).toBe(false);
+			expect(result.clones).toEqual([]);
+			expect(safeSpawnMod.safeSpawnAsync).not.toHaveBeenCalled();
+		} finally {
+			cleanup();
+		}
+	});
+
 	// #126 — language gate expanded beyond JS/TS
 
 	for (const lang of [

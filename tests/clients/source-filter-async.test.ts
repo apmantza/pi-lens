@@ -24,6 +24,7 @@ import { _resetGeneratedArtifactCaches } from "../../clients/generated-artifacts
 import {
 	collectSourceFiles,
 	collectSourceFilesAsync,
+	DEFAULT_MAX_SOURCE_FILES,
 } from "../../clients/source-filter.js";
 import {
 	generateSourceTree,
@@ -122,14 +123,23 @@ describe("maxFiles cap (#250) — bounds the walk", () => {
 		expect(capped.length).toBe(10);
 	});
 
-	it("treats a non-positive / non-finite maxFiles as unbounded", async () => {
+	it("treats a non-positive / non-finite maxFiles as the finite default cap (#747)", async () => {
 		generateSourceTree(tmpDir, 120);
 		const uncapped = await collectSourceFilesAsync(tmpDir);
-		// 0, negative, and NaN must NOT cap to zero — they mean "no cap".
+		// 0, negative, and NaN must NOT cap to zero — they fall back to the finite
+		// structural default (never `Infinity`), which on a small tree returns
+		// everything just like an omitted cap.
 		for (const bad of [0, -5, Number.NaN]) {
 			const result = await collectSourceFilesAsync(tmpDir, { maxFiles: bad });
 			expect(result.length).toBe(uncapped.length);
 		}
+	});
+
+	it("the default cap is finite, not unbounded (#747/#250)", () => {
+		// The structural safety net: an omitted `maxFiles` must never mean an
+		// unbounded walk — a misrooted cwd could otherwise enumerate all of $HOME.
+		expect(Number.isFinite(DEFAULT_MAX_SOURCE_FILES)).toBe(true);
+		expect(DEFAULT_MAX_SOURCE_FILES).toBeGreaterThan(0);
 	});
 
 	it("a cap larger than the tree returns everything (cap is a ceiling)", async () => {

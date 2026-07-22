@@ -25,6 +25,14 @@ export interface ProjectDiagnosticsSnapshot {
 	diagnostics: ProjectDiagnostic[];
 	filesScanned: number;
 	runners: string[];
+	/**
+	 * True when the scan refused to walk because `cwd` resolved at or above the
+	 * home directory (#747/#250 escape class) — `diagnostics` is empty and
+	 * `filesScanned` is 0 because NOTHING was walked, not because the project is
+	 * clean. Kept as a machine-readable flag so a caller renders "unsafe root,
+	 * scanned nothing" rather than reading the empty result as a clean verdict.
+	 */
+	unsafeRoot?: boolean;
 }
 
 export interface ProjectDiagnosticsDeltaReport {
@@ -55,4 +63,6 @@ export interface ProjectDiagnosticsScanOptions {
 	 * already resolved/deduped/filtered these against the ignore matcher.
 	 */
 	files?: string[];
+	/** Override for `os.homedir()`, primarily for tests (mirrors fresh-fetch). */
+	homeDir?: string;
 }

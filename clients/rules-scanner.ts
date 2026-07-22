@@ -42,17 +42,34 @@ const PROMPT_RULES_MAX_TOTAL = 12;
 const PROMPT_RULES_MAX_PER_SOURCE = 4;
 const PROMPT_RULES_MAX_CHARS = 900;
 
-function findMarkdownFiles(dir: string, baseDir: string): ProjectRule[] {
+// #250/#747 class: this walk is scoped to `.claude/rules`/`.agents/rules`
+// subtrees, so it never walks the whole cwd — but it's still unbounded
+// recursion. A small depth/file cap guards a pathologically deep or huge rules
+// directory (or a symlink loop) without needing the full home ceiling the
+// project-wide walkers use. Rules trees are shallow and small in practice, so
+// these bounds never trim a legitimate layout.
+const RULES_SCAN_MAX_DEPTH = 8;
+const RULES_SCAN_MAX_FILES = 500;
+
+function findMarkdownFiles(
+	dir: string,
+	baseDir: string,
+	depth = 0,
+	collected: { count: number } = { count: 0 },
+): ProjectRule[] {
 	const results: ProjectRule[] = [];
 
+	if (depth > RULES_SCAN_MAX_DEPTH) return results;
 	if (!fs.existsSync(dir)) return results;
 
 	const entries = fs.readdirSync(dir, { withFileTypes: true });
 	for (const entry of entries) {
+		if (collected.count >= RULES_SCAN_MAX_FILES) break;
 		const fullPath = path.join(dir, entry.name);
 		if (entry.isDirectory()) {
-			results.push(...findMarkdownFiles(fullPath, baseDir));
+			results.push(...findMarkdownFiles(fullPath, baseDir, depth + 1, collected));
 		} else if (entry.isFile() && entry.name.endsWith(".md")) {
+			collected.count += 1;
 			results.push({
 				source: path.relative(baseDir, dir) || path.basename(baseDir),
 				name: entry.name,

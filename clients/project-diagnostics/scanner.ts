@@ -12,6 +12,7 @@ import {
 } from "../dispatch/runners/ast-grep-napi.js";
 import type { Diagnostic } from "../dispatch/types.js";
 import { isTestFile } from "../file-utils.js";
+import { isAtOrAboveHomeDir } from "../path-utils.js";
 import { collectSourceFilesAsync } from "../source-filter.js";
 import { getSharedTreeSitterClient } from "../tree-sitter-shared.js";
 import { TreeSitterQueryLoader } from "../tree-sitter-query-loader.js";
@@ -238,6 +239,23 @@ export async function scanProjectDiagnostics(
 ): Promise<ProjectDiagnosticsSnapshot> {
 	const cwd = path.resolve(options.cwd);
 	const { signal } = options;
+	// #747/#250: refuse to WALK from a cwd at — or above — the home directory.
+	// The cheap tier is bounded by DEFAULT_MAX_FILES, but from $HOME it still
+	// traverses a huge unrelated tree until it happens to keep that many source
+	// files. An explicit `files` list (#461) is a caller-chosen subset, not a
+	// walk, so it is never refused here. Same ceiling as fresh-fetch.ts.
+	if (!options.files && isAtOrAboveHomeDir(cwd, options.homeDir)) {
+		return {
+			version: PROJECT_DIAGNOSTICS_CACHE_VERSION,
+			cwd,
+			tier: options.tier,
+			scannedAt: new Date().toISOString(),
+			diagnostics: [],
+			filesScanned: 0,
+			runners: [],
+			unsafeRoot: true,
+		};
+	}
 	const maxFiles = Math.max(1, options.maxFiles ?? DEFAULT_MAX_FILES);
 	const files = options.files
 		? options.files.slice(0, maxFiles)

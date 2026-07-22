@@ -116,6 +116,21 @@ export const ALL_SCANNABLE_EXTENSIONS = [
 	".ru",
 ];
 
+/**
+ * Structural safety net for the source-file walk (#250/#747 escape class).
+ *
+ * `maxFiles` is optional, and historically an omitted cap meant an UNBOUNDED
+ * traversal — so any caller that forgot to pass one could, from a misrooted cwd
+ * (e.g. one that climbed to $HOME), enumerate the entire home tree before it
+ * ever decided to bail. This finite default caps that walk regardless of what
+ * the caller asked for: no caller can trigger an unbounded collection just by
+ * omitting `maxFiles`. Deliberately generous — real projects are far under it,
+ * so it never trims a legitimate scan; it only exists to bound the pathological
+ * misrooted case. A caller that genuinely needs more must pass an explicit
+ * larger `maxFiles`.
+ */
+export const DEFAULT_MAX_SOURCE_FILES = 20000;
+
 export interface SourceCollectionOptions {
 	/** Additional directory names to exclude (merged with defaults) */
 	excludeDirs?: string[];
@@ -134,7 +149,8 @@ export interface SourceCollectionOptions {
 	 * as soon as this many files are kept — so an over-broad root (e.g. one that
 	 * climbed to $HOME) can't enumerate the whole tree before a caller decides to
 	 * bail on count. Callers that only need "are there more than N?" should pass
-	 * `N + 1`. Unset = unbounded (default). Refs #250.
+	 * `N + 1`. Unset = {@link DEFAULT_MAX_SOURCE_FILES} (a finite structural cap,
+	 * never unbounded). Refs #250/#747.
 	 */
 	maxFiles?: number;
 }
@@ -270,10 +286,12 @@ function resolveCollectionConfig(
 	config?: { clampForSlowFsSyncWalk?: boolean },
 ): ResolvedCollectionConfig {
 	const rawMax = options?.maxFiles;
+	// Omitted / non-finite / non-positive → the finite structural default, never
+	// `Infinity` (#250/#747): an unbounded walk from a misrooted cwd was the bug.
 	const requestedMax =
 		typeof rawMax === "number" && Number.isFinite(rawMax) && rawMax > 0
 			? Math.floor(rawMax)
-			: Number.POSITIVE_INFINITY;
+			: DEFAULT_MAX_SOURCE_FILES;
 	// Slow-FS mode (#462): the sync collector can't yield to the event loop, so
 	// on a measured-slow filesystem (9p/drvfs/NFS) clamp its walk to a much
 	// smaller cap regardless of what the caller asked for. The async twin

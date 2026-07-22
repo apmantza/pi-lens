@@ -872,6 +872,15 @@ async function callTool(
 				? Math.max(1, Math.floor(args.maxFiles))
 				: undefined;
 		const snapshot = await projectScan(cwd, maxFiles);
+		// #747: a cwd at/above $HOME refuses to walk — say so instead of letting
+		// "Scanned 0 file(s) → 0 diagnostics" read as a clean project.
+		if (snapshot.unsafeRoot) {
+			return toolText(
+				`Refused to scan: the working directory (${cwd}) resolves at or above the home directory, so a project scan would walk every unrelated tree under it. Run pilens_project_scan from inside a project directory. This is NOT a clean result — nothing was scanned.`,
+				{ filesScanned: 0, unsafeRoot: true, cwd },
+				true,
+			);
+		}
 		const { deduped, byRule, byFile } = summarizeScan(snapshot.diagnostics);
 		const topRules = Object.entries(byRule).sort((a, b) => b[1] - a[1]);
 		const topFiles = Object.entries(byFile)

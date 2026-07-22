@@ -128,6 +128,51 @@ describe("LSP workspace-diagnostics cap (#250)", () => {
 	});
 });
 
+describe("LSP workspace-diagnostics home ceiling (#747/#250)", () => {
+	it("refuses to walk when the root IS the home directory", async () => {
+		for (let i = 0; i < 10; i++) write(`src/f${i}.ts`);
+
+		const files = await __collectWorkspaceDiagnosticFilesForTest(
+			tmpDir,
+			undefined,
+			undefined,
+			tmpDir,
+		);
+		// The 5000-file cap alone would still traverse thousands of files across
+		// unrelated repos under home; the ceiling refuses the walk outright.
+		expect(files).toEqual([]);
+	});
+
+	it("refuses to walk when the root is an ANCESTOR of the home directory", async () => {
+		for (let i = 0; i < 10; i++) write(`src/f${i}.ts`);
+		const fakeHome = path.join(tmpDir, "home", "user");
+		fs.mkdirSync(fakeHome, { recursive: true });
+
+		const files = await __collectWorkspaceDiagnosticFilesForTest(
+			tmpDir,
+			undefined,
+			undefined,
+			fakeHome,
+		);
+		expect(files).toEqual([]);
+	});
+
+	it("still walks a project directory UNDER the home directory", async () => {
+		write("src/real.ts");
+		// tmpDir sits directly under its parent, so treating the parent as $HOME
+		// makes tmpDir a normal project UNDER home — it must still be walked.
+		const fakeHome = path.dirname(tmpDir);
+
+		const files = await __collectWorkspaceDiagnosticFilesForTest(
+			tmpDir,
+			undefined,
+			undefined,
+			fakeHome,
+		);
+		expect(relUnix(files)).toContain("src/real.ts");
+	});
+});
+
 describe("LSP workspace-diagnostics cancellation (#341)", () => {
 	it("bails the walk immediately when the signal is already aborted", async () => {
 		for (let i = 0; i < 30; i++) write(`src/f${i}.ts`);
