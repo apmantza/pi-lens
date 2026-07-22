@@ -245,6 +245,51 @@ describe("triggerBackgroundWordIndexBuild (#348 cold-query stampede guard)", () 
 		}
 	}, 10_000);
 
+	// #747 hardening: this trigger is the one word-index build path with no
+	// canWarmCaches gate in front of it — a cold symbol_search from a
+	// $HOME-rooted cwd must refuse instead of walking-and-reading the whole
+	// home tree.
+	it("refuses to build when cwd is at or above the home directory (#747)", async () => {
+		const env = setupTestEnvironment("pi-lens-wordindex-unsafe-root-");
+		try {
+			createTempFile(env.tmpDir, "src/a.ts", "export function helperA() {}");
+			const messages: string[] = [];
+			triggerBackgroundWordIndexBuild(env.tmpDir, (m) => messages.push(m), {
+				homeDir: env.tmpDir,
+			});
+			// The refusal is synchronous — no build is ever scheduled.
+			expect(messages.some((m) => m.includes("at/above home directory"))).toBe(
+				true,
+			);
+			// Give any (wrongly) scheduled build a beat to persist, then confirm
+			// nothing was written.
+			await new Promise((resolve) => setTimeout(resolve, 250));
+			expect(loadProjectSnapshot(env.tmpDir)?.wordIndex).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	}, 10_000);
+
+	it("still builds for a project directory UNDER the home directory (#747)", async () => {
+		const env = setupTestEnvironment("pi-lens-wordindex-under-home-");
+		try {
+			const project = path.join(env.tmpDir, "code", "app");
+			createTempFile(project, "src/a.ts", "export function helperA() {}");
+			triggerBackgroundWordIndexBuild(project, undefined, {
+				homeDir: env.tmpDir,
+			});
+			await vi.waitFor(
+				() => {
+					const snapshot = loadProjectSnapshot(project);
+					expect(snapshot?.wordIndex).toBeDefined();
+				},
+				{ timeout: 5000 },
+			);
+		} finally {
+			env.cleanup();
+		}
+	}, 10_000);
+
 	it("dedupes concurrent triggers for the same cwd (stampede guard)", async () => {
 		const env = setupTestEnvironment("pi-lens-wordindex-stampede-");
 		try {

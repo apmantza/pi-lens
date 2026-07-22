@@ -72,6 +72,7 @@ import * as path from "node:path";
 import type { BootstrapClients } from "../bootstrap.js";
 import type { CacheManager } from "../cache-manager.js";
 import { getKnipIgnorePatterns } from "../file-utils.js";
+import { isAtOrAboveHomeDir } from "../path-utils.js";
 import { GitleaksClient } from "../gitleaks-client.js";
 import { GovulncheckClient } from "../govulncheck-client.js";
 import { TrivyClient } from "../trivy-client.js";
@@ -101,6 +102,11 @@ export interface FreshProjectDiagnosticsResult {
 	 *  subset of `cold` — kept separate so a caller can render a distinct
 	 *  "stopped mid-scan" reason instead of "not applicable to this project". */
 	abortedIds?: string[];
+	/** True when the fetch refused to run because `cwd` resolved at or above
+	 *  the home directory (#747) — every analyzer is listed in `cold`, and
+	 *  nothing was spawned. Kept separate from the per-analyzer skip reasons so
+	 *  a caller can render "unsafe root" instead of "not applicable". */
+	unsafeRoot?: boolean;
 }
 
 /** Registry order mirrors `extractors.ts`'s `EXTRACTORS` ids — kept in sync by
@@ -137,8 +143,27 @@ export async function fetchFreshProjectDiagnostics(
 	cwd: string,
 	clients: BootstrapClients,
 	signal?: AbortSignal,
+	options: { homeDir?: string } = {},
 ): Promise<FreshProjectDiagnosticsResult> {
 	const analysisRoot = path.resolve(cwd);
+	// #747: refuse to spawn any heavyweight analyzer when the analysis root is
+	// at — or above — the home directory (the #250/#253 escape class). Every
+	// analyzer here treats `analysisRoot` as a whole tree to walk; from $HOME
+	// that means scanning every unrelated repo under it (observed: a jscpd run
+	// from a WSL home reached 44 GB RSS and OOM-killed the whole instance).
+	// Same ceiling as startup-scan.ts / runtime-session.ts's resolveSnapshotRoot
+	// / review-graph's buildOrUpdateGraph; like the latter, there is no safe
+	// substitute root to fall back to — the caller's `paths` scope only filters
+	// REPORTED results, it never narrows what these analyzers walk.
+	if (isAtOrAboveHomeDir(analysisRoot, options.homeDir)) {
+		return {
+			diagnostics: [],
+			runners: [],
+			cold: [...ANALYZER_IDS],
+			timings: {},
+			unsafeRoot: true,
+		};
+	}
 	const diagnostics: ProjectDiagnostic[] = [];
 	const runners: string[] = [];
 	const cold: string[] = [];
