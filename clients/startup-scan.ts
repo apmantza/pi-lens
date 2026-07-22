@@ -10,7 +10,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { toPositiveFinite } from "./env-utils.js";
+import { lazyEnvNumber } from "./env-utils.js";
 import {
 	getProjectIgnoreMatcher,
 	type ProjectIgnoreMatcher,
@@ -83,60 +83,42 @@ export interface StartupScanOptions {
 // Default TTL for a persisted `too-many-source-files` verdict (#699): 24h.
 const DEFAULT_STARTUP_SCAN_VERDICT_TTL_MS = 24 * 60 * 60 * 1000;
 
-let _startupScanVerdictTtlCache: number | undefined;
-
 /**
  * How long a persisted `too-many-source-files` verdict stays reusable before
  * a session re-walks the tree to refresh it (#699).
  *
  * Resolution order: `PI_LENS_STARTUP_SCAN_VERDICT_TTL_MS` env var, else the
- * 24h default. Lazy + memoized so importing this module never touches
- * `process.env` at load time (house style — see `runtime-config.ts` /
- * `slow-fs.ts` / `subagent-mode.ts`).
+ * 24h default. Lazy + memoized (via `lazyEnvNumber`, #763) so importing this
+ * module never touches `process.env` at load time (house style — see
+ * `runtime-config.ts` / `slow-fs.ts` / `subagent-mode.ts`).
  */
-export function getStartupScanVerdictTtlMs(): number {
-	if (_startupScanVerdictTtlCache !== undefined) {
-		return _startupScanVerdictTtlCache;
-	}
-	const envTtl = toPositiveFinite(
-		process.env.PI_LENS_STARTUP_SCAN_VERDICT_TTL_MS,
-	);
-	_startupScanVerdictTtlCache =
-		envTtl > 0 ? envTtl : DEFAULT_STARTUP_SCAN_VERDICT_TTL_MS;
-	return _startupScanVerdictTtlCache;
-}
+const _ttl = lazyEnvNumber(
+	"PI_LENS_STARTUP_SCAN_VERDICT_TTL_MS",
+	DEFAULT_STARTUP_SCAN_VERDICT_TTL_MS,
+);
+export const getStartupScanVerdictTtlMs = _ttl.get;
 
 /** Test-only: clears the memoized TTL so a subsequent call re-reads the env
  * var (matching the `_resetForTests` convention). */
-export function _resetStartupScanVerdictTtlForTests(): void {
-	_startupScanVerdictTtlCache = undefined;
-}
-
-let _startupScanMaxEntriesCache: number | undefined;
+export const _resetStartupScanVerdictTtlForTests = _ttl._resetForTests;
 
 /**
  * Total directory-entry ceiling for the startup source-count walk (#758).
  *
  * Resolution order: `PI_LENS_STARTUP_SCAN_MAX_ENTRIES` env var, else the
- * `MAX_STARTUP_SCAN_ENTRIES` default. Lazy + memoized so importing this module
- * never touches `process.env` at load time (same house style as
- * `getStartupScanVerdictTtlMs`).
+ * `MAX_STARTUP_SCAN_ENTRIES` default. Lazy + memoized (via `lazyEnvNumber`,
+ * #763) so importing this module never touches `process.env` at load time
+ * (same house style as `getStartupScanVerdictTtlMs`).
  */
-export function getStartupScanMaxEntries(): number {
-	if (_startupScanMaxEntriesCache !== undefined) {
-		return _startupScanMaxEntriesCache;
-	}
-	const envMax = toPositiveFinite(process.env.PI_LENS_STARTUP_SCAN_MAX_ENTRIES);
-	_startupScanMaxEntriesCache =
-		envMax > 0 ? envMax : MAX_STARTUP_SCAN_ENTRIES;
-	return _startupScanMaxEntriesCache;
-}
+const _maxEntries = lazyEnvNumber(
+	"PI_LENS_STARTUP_SCAN_MAX_ENTRIES",
+	MAX_STARTUP_SCAN_ENTRIES,
+);
+export const getStartupScanMaxEntries = _maxEntries.get;
 
 /** Test-only: clears the memoized entry cap so a subsequent call re-reads the
  * env var (matching the `_resetForTests` convention). */
-export function _resetStartupScanMaxEntriesForTests(): void {
-	_startupScanMaxEntriesCache = undefined;
-}
+export const _resetStartupScanMaxEntriesForTests = _maxEntries._resetForTests;
 
 /**
  * Whether a persisted startup-scan verdict is still safe to reuse without
