@@ -67,6 +67,45 @@ describe("scanProjectDiagnostics home ceiling (#747/#250)", () => {
 		expect(snapshot.filesScanned).toBeGreaterThanOrEqual(1);
 	});
 
+	it("flags scanTruncated (without refusing) when the walk's entry budget trips (#760)", async () => {
+		const fakeHome = path.join(tmp, "home", "user");
+		const project = path.join(fakeHome, "code", "app");
+		fs.mkdirSync(project, { recursive: true });
+		// Mixed tree: real source buried among non-source data files so a tiny
+		// visited-entry budget trips while the maxFiles results cap never would.
+		fs.writeFileSync(path.join(project, "index.ts"), "export const x = 1;\n");
+		for (let i = 0; i < 30; i++) {
+			fs.writeFileSync(path.join(project, `blob-${i}.dat`), "not source\n");
+		}
+
+		const snapshot = await scanProjectDiagnostics({
+			cwd: project,
+			tier: "cheap",
+			homeDir: fakeHome,
+			maxScanEntries: 5,
+		});
+
+		// Truncation is surfaced but is NOT a refusal — the partial scan ran.
+		expect(snapshot.scanTruncated).toBe(true);
+		expect(snapshot.unsafeRoot).toBeUndefined();
+		expect(snapshot.runners.length).toBeGreaterThan(0);
+	});
+
+	it("omits scanTruncated entirely on an untruncated scan", async () => {
+		const fakeHome = path.join(tmp, "home", "user");
+		const project = path.join(fakeHome, "code", "app");
+		fs.mkdirSync(project, { recursive: true });
+		fs.writeFileSync(path.join(project, "index.ts"), "export const x = 1;\n");
+
+		const snapshot = await scanProjectDiagnostics({
+			cwd: project,
+			tier: "cheap",
+			homeDir: fakeHome,
+		});
+
+		expect(snapshot.scanTruncated).toBeUndefined();
+	});
+
 	it("does not refuse an explicit `files` scan even at home (subset, not a walk)", async () => {
 		const file = path.join(tmp, "index.ts");
 		fs.writeFileSync(file, "export const x = 1;\n");

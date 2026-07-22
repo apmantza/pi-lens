@@ -17,7 +17,7 @@ import {
 	normalizeFilePath,
 	normalizeMapKey,
 } from "../path-utils.js";
-import { collectProjectSourceFilesAsync } from "../project-scan-policy.js";
+import { collectProjectSourceFilesWithBudgetAsync } from "../project-scan-policy.js";
 import { jsTsCandidatePaths, resolveImportToFiles } from "./import-resolvers.js";
 import { RUNTIME_CONFIG } from "../runtime-config.js";
 import { buildQualifiedName, findOwnerName } from "../symbol-containment.js";
@@ -513,12 +513,28 @@ async function getGraphSourceFiles(cwd: string): Promise<string[]> {
 	// the cap is hit the caller skips the build on count alone, so the unfiltered
 	// over-limit list is all it needs — see _doBuildGraph's too_many_files branch.
 	const maxGraphFiles = getReviewGraphMaxFiles();
-	const collected = await collectProjectSourceFilesAsync(cwd, {
-		// Only walk graph-relevant extensions so the cap counts what the graph
-		// keeps (post-filter), not JSON/YAML/MD noise it would discard anyway.
-		extensions: MAIN_KIND_EXTENSIONS,
-		maxFiles: maxGraphFiles + 1,
-	});
+	// #760: the maxFiles cap above bounds results FOUND, not entries VISITED —
+	// a mixed tree with few source files among a huge pile of non-source files
+	// never trips it. The walk's default entry budget (DEFAULT_MAX_SCAN_ENTRIES)
+	// bounds the visit count; a truncated best-effort list is acceptable for the
+	// graph (it degrades to a partial graph, same as maxFiles trimming), so just
+	// log the truncation for observability rather than failing the build.
+	const { files: collected, entryBudgetExceeded } =
+		await collectProjectSourceFilesWithBudgetAsync(cwd, {
+			// Only walk graph-relevant extensions so the cap counts what the graph
+			// keeps (post-filter), not JSON/YAML/MD noise it would discard anyway.
+			extensions: MAIN_KIND_EXTENSIONS,
+			maxFiles: maxGraphFiles + 1,
+		});
+	if (entryBudgetExceeded) {
+		logLatency({
+			type: "phase",
+			phase: "review_graph_source_walk_entry_budget",
+			filePath: cwd,
+			durationMs: 0,
+			metadata: { cwd, collectedFiles: collected.length },
+		});
+	}
 	if (collected.length > maxGraphFiles) {
 		// Contents are unused by the too_many_files branch; return the capped list
 		// so the caller's `length > maxGraphFiles` check still trips.
