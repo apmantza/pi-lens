@@ -24,6 +24,7 @@ import {
 	_resetStateCacheForTests,
 	anchorsForDiagnostic,
 	applyDispositions,
+	applyWeakDispositions,
 	computeStrictAnchor,
 	getDisposition,
 	markDisposition,
@@ -409,5 +410,70 @@ describe("mark telemetry (#690 — NDJSON log + pilens:diagnostic:disposition)",
 		});
 		expect(() => mark("flagged")).not.toThrow();
 		expect(getDisposition(cwd(), mark("flagged"))?.disposition).toBe("flagged");
+	});
+});
+
+describe("applyWeakDispositions (#755 — instant cache-only filter)", () => {
+	const content = "const target = bad();\n";
+	const diag = { tool: "eslint", rule: "no-bad", message: "bad call", line: 1 };
+	const other = { tool: "eslint", rule: "keep", message: "keep me", line: 2 };
+
+	it("drops a suppress-marked finding WITHOUT being given any file content", () => {
+		markDisposition(
+			cwd(),
+			{ cwd: cwd(), filePath: filePath(), ...diag, content },
+			"suppress",
+		);
+		// No content argument — proves the weak filter needs zero file I/O.
+		const kept = applyWeakDispositions([diag, other], cwd(), filePath());
+		expect(kept.map((d) => d.rule)).toEqual(["keep"]);
+	});
+
+	it("drops a finding deferred this session", () => {
+		markDisposition(
+			cwd(),
+			{ cwd: cwd(), filePath: filePath(), ...diag, content },
+			"defer",
+		);
+		const kept = applyWeakDispositions([diag, other], cwd(), filePath());
+		expect(kept.map((d) => d.rule)).toEqual(["keep"]);
+	});
+
+	it("does NOT drop a false-positive — that is strict-anchored and only filters where content is available", () => {
+		markDisposition(
+			cwd(),
+			{ cwd: cwd(), filePath: filePath(), ...diag, content },
+			"false-positive",
+		);
+		// Deliberate: false-positive re-derivation needs the flagged line's
+		// content, which the instant modes don't read. It still filters via
+		// applyDispositions (content in hand) on the next dispatch / in mode=full.
+		const kept = applyWeakDispositions([diag, other], cwd(), filePath());
+		expect(kept.map((d) => d.rule)).toEqual(["no-bad", "keep"]);
+		// ...and the content-based filter DOES drop it, confirming the mark itself
+		// is sound and it's only the weak filter that intentionally skips it.
+		const strictKept = applyDispositions(
+			[diag, other],
+			cwd(),
+			filePath(),
+			content,
+		);
+		expect(strictKept.map((d) => d.rule)).toEqual(["keep"]);
+	});
+
+	it("keeps a flagged finding (flagged is surfaced, not hidden)", () => {
+		markDisposition(
+			cwd(),
+			{ cwd: cwd(), filePath: filePath(), ...diag, content },
+			"flagged",
+		);
+		const kept = applyWeakDispositions([diag, other], cwd(), filePath());
+		expect(kept.map((d) => d.rule)).toEqual(["no-bad", "keep"]);
+	});
+
+	it("passes everything through when the store is empty (fast path)", () => {
+		const input = [diag, other];
+		const kept = applyWeakDispositions(input, cwd(), filePath());
+		expect(kept).toBe(input);
 	});
 });
