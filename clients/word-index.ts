@@ -21,6 +21,7 @@ import {
 	createDebounceScheduler,
 	type DebounceScheduler,
 } from "./persist-debounce.js";
+import { getWordIndexMaxFilesDerived } from "./project-scale.js";
 
 export interface WordHit {
 	file: string;
@@ -274,7 +275,13 @@ export function updateWordIndexDocument(
 /** Bounds shared by every word-index build path — keep the walk off the
  * critical path on large repos: cap the file count, and skip files too large
  * to be hand-written source (generated/bundled output the source filter
- * didn't already exclude). */
+ * didn't already exclude).
+ *
+ * Deprecated (#776): `collectWordIndexDocs` below no longer reads this
+ * constant directly — it derives its cap from `getWordIndexMaxFilesDerived`
+ * (project-scale.ts's `maxProjectFiles` knob), which reproduces this same
+ * 6,000 default at the default base. Kept exported for tests/callers that
+ * still reference the literal. */
 export const WORD_INDEX_MAX_FILES = 6000;
 export const WORD_INDEX_MAX_BYTES = 512 * 1024;
 
@@ -299,13 +306,14 @@ export async function collectWordIndexDocs(
 	// visited-entry budget (DEFAULT_MAX_SCAN_ENTRIES), so a mixed tree with few
 	// source files among a huge pile of non-source files can't force a
 	// full-tree walk either; an index over the truncated list is acceptable.
+	const maxFiles = getWordIndexMaxFilesDerived(root);
 	const files = await collectSourceFilesAsync(root, {
-		maxFiles: WORD_INDEX_MAX_FILES,
+		maxFiles,
 	});
 	if (!shouldContinue()) return [];
 	const docs: Array<{ path: string; content: string }> = [];
 	let processed = 0;
-	for (const file of files.slice(0, WORD_INDEX_MAX_FILES)) {
+	for (const file of files.slice(0, maxFiles)) {
 		try {
 			const stat = fs.statSync(file);
 			if (stat.size <= WORD_INDEX_MAX_BYTES) {

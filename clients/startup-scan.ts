@@ -16,6 +16,7 @@ import {
 	type ProjectIgnoreMatcher,
 } from "./file-utils.js";
 import { isAtOrAboveHomeDir } from "./path-utils.js";
+import { getStartupScanMaxSourceFilesDerived } from "./project-scale.js";
 import {
 	shouldRecurseIntoDir,
 	walkTreeStackAsync,
@@ -32,6 +33,12 @@ export const PROJECT_ROOT_MARKERS = [
 	"composer.json",
 ];
 
+// Deprecated (#776): no longer read directly below — `computeStartupScanContext`
+// / `resolveStartupScanContextAsync` now default `maxSourceFiles` to
+// `getStartupScanMaxSourceFilesDerived(cwd)` (project-scale.ts's
+// `maxProjectFiles` knob), which reproduces this same 2,000 value at the
+// default base. Kept exported for tests/callers that still reference the
+// literal.
 export const MAX_STARTUP_SOURCE_FILES = 2000;
 
 // #758: hard ceiling on the number of directory entries the startup source
@@ -321,7 +328,8 @@ function computeStartupScanContext(
 ): StartupScanContext {
 	const resolvedCwd = path.resolve(cwd);
 	const homeDir = path.resolve(options.homeDir ?? os.homedir());
-	const maxSourceFiles = options.maxSourceFiles ?? MAX_STARTUP_SOURCE_FILES;
+	const maxSourceFiles =
+		options.maxSourceFiles ?? getStartupScanMaxSourceFilesDerived(resolvedCwd);
 	const maxScanEntries = options.maxScanEntries ?? getStartupScanMaxEntries();
 	const projectRoot = findNearestProjectRoot(resolvedCwd);
 
@@ -463,7 +471,8 @@ export async function resolveStartupScanContextAsync(
 
 	const resolvedCwd = path.resolve(cwd);
 	const homeDir = path.resolve(options.homeDir ?? os.homedir());
-	const maxSourceFiles = options.maxSourceFiles ?? MAX_STARTUP_SOURCE_FILES;
+	const maxSourceFiles =
+		options.maxSourceFiles ?? getStartupScanMaxSourceFilesDerived(resolvedCwd);
 	const maxScanEntries = options.maxScanEntries ?? getStartupScanMaxEntries();
 	const projectRoot = findNearestProjectRoot(resolvedCwd);
 

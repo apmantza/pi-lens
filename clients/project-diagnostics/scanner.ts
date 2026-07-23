@@ -13,6 +13,7 @@ import {
 import type { Diagnostic } from "../dispatch/types.js";
 import { isTestFile } from "../file-utils.js";
 import { isAtOrAboveHomeDir } from "../path-utils.js";
+import { getProjectDiagnosticsScannerMaxFiles } from "../project-scale.js";
 import { collectSourceFilesWithBudgetAsync } from "../source-filter.js";
 import { getSharedTreeSitterClient } from "../tree-sitter-shared.js";
 import { TreeSitterQueryLoader } from "../tree-sitter-query-loader.js";
@@ -28,6 +29,11 @@ import type {
 // Side-effect import: registers fact providers and fact rules.
 import "../dispatch/integration.js";
 
+// Deprecated: kept only as the pre-#776 literal default for callers/tests
+// that reference it directly. New code should not need this — the scan
+// below now derives its default from `getProjectDiagnosticsScannerMaxFiles`
+// (#776's `maxProjectFiles` scale knob), which reproduces this same value at
+// the default base.
 const DEFAULT_MAX_FILES = 500;
 // Skip files this large: matches the per-edit ast-grep runner's guard so a single
 // generated megafile can't dominate a project scan.
@@ -256,7 +262,10 @@ export async function scanProjectDiagnostics(
 			unsafeRoot: true,
 		};
 	}
-	const maxFiles = Math.max(1, options.maxFiles ?? DEFAULT_MAX_FILES);
+	const maxFiles = Math.max(
+		1,
+		options.maxFiles ?? getProjectDiagnosticsScannerMaxFiles(cwd),
+	);
 	// #760: bound the walk by entries VISITED, not just files kept — a mixed
 	// tree with few source files among a huge pile of non-source files never
 	// trips `maxFiles`. Unlike `unsafeRoot` this is not a refusal: when the

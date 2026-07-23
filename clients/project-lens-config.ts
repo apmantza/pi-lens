@@ -13,6 +13,11 @@
  *       rules["high-complexity"].threshold — cyclomatic complexity (default 15)
  *       rules["high-fan-out"].threshold   — distinct-function calls (default 20)
  *
+ *   - `maxProjectFiles` — the base project-size scale knob (#776). Read by
+ *     `clients/project-scale.ts`'s `getProjectScaleBase`, which derives the
+ *     five subsystem size budgets (project-diagnostics scanner, review graph,
+ *     startup scan, jscpd, word index) as documented ratios of this value.
+ *
  * The file is loaded once per `(path, mtimeMs)` and cached — editing the file
  * invalidates the cache so the next access sees the new values without
  * restarting pi. Discovery is cached by starting directory and validated by the
@@ -42,6 +47,11 @@ export interface PiLensProjectConfig {
 	ignore: string[];
 	/** Per-rule threshold overrides; missing keys mean "use hardcoded default". */
 	rules: Record<string, PiLensProjectRuleConfig>;
+	/**
+	 * Base project-size scale knob (#776) — see `clients/project-scale.ts`.
+	 * `undefined` means "use the env override / default chain".
+	 */
+	maxProjectFiles: number | undefined;
 	/** The parsed JSON as-is, for forward-compat consumers. */
 	raw: unknown;
 	/** Absolute path of the config file that was loaded, or undefined if none. */
@@ -51,6 +61,7 @@ export interface PiLensProjectConfig {
 export const EMPTY_PROJECT_CONFIG: PiLensProjectConfig = {
 	ignore: [],
 	rules: {},
+	maxProjectFiles: undefined,
 	raw: undefined,
 	configPath: undefined,
 };
@@ -216,5 +227,21 @@ function parseConfigFile(configPath: string): PiLensProjectConfig {
 		}
 	}
 
-	return { ignore, rules, raw, configPath };
+	let maxProjectFiles: number | undefined;
+	if ("maxProjectFiles" in obj) {
+		if (
+			typeof obj.maxProjectFiles === "number" &&
+			Number.isFinite(obj.maxProjectFiles) &&
+			obj.maxProjectFiles > 0
+		) {
+			maxProjectFiles = obj.maxProjectFiles;
+		} else {
+			warnInvalidConfigOnce(
+				configPath,
+				"maxProjectFiles must be a positive finite number",
+			);
+		}
+	}
+
+	return { ignore, rules, maxProjectFiles, raw, configPath };
 }

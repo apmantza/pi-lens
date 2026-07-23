@@ -55,7 +55,8 @@ In addition to the user-level `~/.pi-lens/config.json` above, pi-lens reads a pe
   "rules": {
     "high-complexity": { "threshold": 25 },
     "high-fan-out": { "threshold": 30 }
-  }
+  },
+  "maxProjectFiles": 5000
 }
 ```
 
@@ -69,6 +70,10 @@ Per-rule threshold overrides. Currently honored:
 
 - `high-complexity.threshold` — cyclomatic complexity (default `15`)
 - `high-fan-out.threshold` — distinct function calls (default `20`)
+
+### `maxProjectFiles`
+
+Single scale knob (default `2000`) that a large-but-healthy repo can raise to scale five independent size budgets together instead of tripping each one separately: the project-diagnostics scanner (0.25×, default 500 files), the review graph (0.5×, default 1,000 files), the startup scan (1×, default 2,000 source files), jscpd (3×, default 6,000 directory entries), and the word index (3×, default 6,000 files). Raising it (e.g. to `5000`) scales all five proportionally. Each subsystem's own environment-variable override (e.g. `PI_LENS_REVIEW_GRAPH_MAX_FILES`, `PI_LENS_STARTUP_SCAN_MAX_ENTRIES`) still takes precedence over this knob when set, and a separate `PI_LENS_MAX_PROJECT_FILES` environment variable sits below `maxProjectFiles` but above the built-in default. See `clients/project-scale.ts` for the full ratio table and precedence order.
 
 ### Schema rules
 
