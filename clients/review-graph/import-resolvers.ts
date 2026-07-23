@@ -25,6 +25,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { normalizeMapKey } from "../path-utils.js";
+import { buildModuleGraph, type WorkspaceModule } from "./workspace-modules.js";
 
 /** True when `p` is inside (or equal to) `cwd` — blocks resolution escaping the workspace. */
 function isWithin(cwd: string, p: string): boolean {
@@ -117,14 +118,18 @@ export const JS_TS_EXT_RE = /\.(mjs|cjs|jsx?|tsx?)$/i;
  * resolution paths can never diverge on which twin wins (#694 — a divergent
  * second mapping was exactly the kind of thing to avoid).
  */
-export function jsTsCandidatePaths(filePath: string, source: string): string[] {
-	const base = path.resolve(path.dirname(filePath), source);
-	const strippedSource = source.replace(JS_TS_EXT_RE, "");
-	const strippedBase =
-		strippedSource === source
-			? base
-			: path.resolve(path.dirname(filePath), strippedSource);
-	const ext = path.extname(source).toLowerCase();
+/**
+ * Shared tail of {@link jsTsCandidatePaths} and the workspace-package subpath
+ * resolver below (#775) — both need "given a base path (already stripped of
+ * any known JS/TS extension) and the original extension (if any), produce the
+ * source-twin-preferring candidate list." Only how `base`/`strippedBase` are
+ * computed differs (relative-to-importing-file vs. relative-to-package-root).
+ */
+function jsTsExtensionCandidates(
+	base: string,
+	strippedBase: string,
+	ext: string,
+): string[] {
 	const candidates: string[] = [];
 	if (ext === ".mjs") candidates.push(`${strippedBase}.mts`);
 	if (ext === ".cjs") candidates.push(`${strippedBase}.cts`);
@@ -142,16 +147,136 @@ export function jsTsCandidatePaths(filePath: string, source: string): string[] {
 	return candidates;
 }
 
+export function jsTsCandidatePaths(filePath: string, source: string): string[] {
+	const base = path.resolve(path.dirname(filePath), source);
+	const strippedSource = source.replace(JS_TS_EXT_RE, "");
+	const strippedBase =
+		strippedSource === source
+			? base
+			: path.resolve(path.dirname(filePath), strippedSource);
+	const ext = path.extname(source).toLowerCase();
+	return jsTsExtensionCandidates(base, strippedBase, ext);
+}
+
+/**
+ * Longest-name match of a bare specifier against known workspace package
+ * names, handling `@scope/pkg/subpath` imports (subpath is everything after
+ * the matched name + "/"). "Longest" only matters for the theoretical case of
+ * two workspace packages whose names are string-prefixes of one another
+ * (`@scope/pkg` vs `@scope/pkg-two`) — the required "/" boundary already
+ * makes that case unambiguous, but longest-match is kept as a defensive tie
+ * breaker rather than relying on Map iteration order.
+ */
+function findWorkspaceModuleForSpecifier(
+	modules: Iterable<WorkspaceModule>,
+	source: string,
+): { mod: WorkspaceModule; subpath: string } | undefined {
+	let best: { mod: WorkspaceModule; subpath: string } | undefined;
+	for (const mod of modules) {
+		let subpath: string | undefined;
+		if (source === mod.name) subpath = "";
+		else if (source.startsWith(`${mod.name}/`))
+			subpath = source.slice(mod.name.length + 1);
+		if (subpath === undefined) continue;
+		if (!best || mod.name.length > best.mod.name.length) best = { mod, subpath };
+	}
+	return best;
+}
+
+/** First string found among `exports`'s "." condition (or the field itself if
+ * it's a bare string) — covers the common `"exports": "./index.js"` and
+ * `"exports": {".": {"import": "./index.js", ...}}` shapes. Anything more
+ * exotic (subpath patterns, condition arrays) falls through to the
+ * index.ts/js fallback below rather than guessing. */
+function pickExportsMain(exportsField: unknown): string | undefined {
+	if (typeof exportsField === "string") return exportsField;
+	if (!exportsField || typeof exportsField !== "object") return undefined;
+	const obj = exportsField as Record<string, unknown>;
+	const dot = obj["."] ?? obj;
+	if (typeof dot === "string") return dot;
+	if (dot && typeof dot === "object") {
+		for (const key of ["import", "require", "default"]) {
+			const v = (dot as Record<string, unknown>)[key];
+			if (typeof v === "string") return v;
+		}
+	}
+	return undefined;
+}
+
+/** Candidate entry-file paths for a workspace package root: package.json's
+ * `main`/`module`/`exports`-main first, then the conventional index files. */
+function workspaceEntryCandidates(pkgRoot: string): string[] {
+	let main: string | undefined;
+	try {
+		const pkg = JSON.parse(
+			fs.readFileSync(path.join(pkgRoot, "package.json"), "utf-8"),
+		) as { main?: string; module?: string; exports?: unknown };
+		main = pickExportsMain(pkg.exports) ?? pkg.module ?? pkg.main;
+	} catch {
+		// missing/unreadable package.json — fall through to index candidates
+	}
+	const candidates: string[] = [];
+	if (main) candidates.push(path.resolve(pkgRoot, main));
+	candidates.push(
+		path.join(pkgRoot, "index.ts"),
+		path.join(pkgRoot, "index.tsx"),
+		path.join(pkgRoot, "index.js"),
+		path.join(pkgRoot, "src", "index.ts"),
+		path.join(pkgRoot, "src", "index.js"),
+	);
+	return candidates;
+}
+
+/** Candidate paths for a workspace-package SUBPATH import (`@scope/pkg/foo`)
+ * — same source-twin-preferring extension probe as a relative import, rooted
+ * at the package dir instead of the importing file's dir. */
+function workspaceSubpathCandidates(pkgRoot: string, subpath: string): string[] {
+	const base = path.join(pkgRoot, subpath);
+	const strippedSubpath = subpath.replace(JS_TS_EXT_RE, "");
+	const strippedBase =
+		strippedSubpath === subpath ? base : path.join(pkgRoot, strippedSubpath);
+	const ext = path.extname(subpath).toLowerCase();
+	return jsTsExtensionCandidates(base, strippedBase, ext);
+}
+
+/**
+ * Resolve a bare specifier that names a sibling workspace package (npm/pnpm
+ * workspaces, cargo, go.work — detected by `workspace-modules.ts`) to that
+ * package's entry file, or a file within it for a subpath import (#775). A
+ * specifier that doesn't match any known workspace package name returns []
+ * — an ordinary third-party dependency stays `external:`, unchanged.
+ *
+ * `buildModuleGraph` memoizes the workspace scan per cwd, so this costs a
+ * real filesystem scan only once per graph build (first bare specifier hit),
+ * not once per import edge.
+ */
+export function resolveWorkspacePackageImport(
+	cwd: string,
+	source: string,
+): string[] {
+	if (source.startsWith(".")) return [];
+	const graph = buildModuleGraph(cwd);
+	if (!graph) return [];
+	const match = findWorkspaceModuleForSpecifier(graph.modules.values(), source);
+	if (!match) return [];
+	const candidates = match.subpath
+		? workspaceSubpathCandidates(match.mod.root, match.subpath)
+		: workspaceEntryCandidates(match.mod.root);
+	return firstExistingFile(cwd, candidates);
+}
+
 /**
  * Resolve a relative ESM import (`./x`, `../y`) to an in-project file — see
  * {@link jsTsCandidatePaths} for the source-twin-preferring candidate order.
- * Bare specifiers (`react`, `@scope/pkg`) are package deps → external, so they
- * return []. Used only on the COLD module_report path: the warm jsts builder
- * resolves imports via `localImportToFile` (builder.ts), which shares this
- * same candidate list.
+ * A bare specifier (`react`, `@scope/pkg`) is resolved against known
+ * workspace package names (#775 — see {@link resolveWorkspacePackageImport});
+ * anything that isn't a recognized workspace package stays an external dep,
+ * returning []. Used only on the COLD module_report path: the warm jsts
+ * builder resolves imports via `localImportToFile` (builder.ts), which shares
+ * both candidate lists.
  */
 function resolveJsTs(cwd: string, filePath: string, source: string): string[] {
-	if (!source.startsWith(".")) return [];
+	if (!source.startsWith(".")) return resolveWorkspacePackageImport(cwd, source);
 	return firstExistingFile(cwd, jsTsCandidatePaths(filePath, source));
 }
 

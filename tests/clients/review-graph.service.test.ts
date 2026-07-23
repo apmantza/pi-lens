@@ -20,6 +20,7 @@ import {
 	getLastGraphBuildInfo,
 	isReviewGraphMigrationNeeded,
 } from "../../clients/review-graph/builder.js";
+import { clearModuleGraphCache } from "../../clients/review-graph/workspace-modules.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 
 describe("review graph service", () => {
@@ -791,6 +792,125 @@ describe("review graph: ignore-gated node creation (#694)", () => {
 			// still admitted (status quo, not a regression from this change).
 			const genId = `file:${normalizeMapKey(genPath)}`;
 			expect(graph.nodes.has(genId)).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+});
+
+describe("review graph - workspace-package bare specifiers (#775)", () => {
+	afterEach(() => {
+		clearReviewGraphWorkspaceCache();
+		clearModuleGraphCache();
+	});
+
+	it("resolves a bare specifier pointing at a sibling workspace package to a file-level import edge", async () => {
+		const env = setupTestEnvironment("pi-lens-review-graph-workspace-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"package.json",
+				JSON.stringify({ name: "root", workspaces: ["packages/*"] }),
+			);
+			createTempFile(
+				env.tmpDir,
+				"packages/b/package.json",
+				JSON.stringify({ name: "@scope/b", main: "src/index.ts" }),
+			);
+			const bEntry = createTempFile(
+				env.tmpDir,
+				"packages/b/src/index.ts",
+				"export const b = 1;\n",
+			);
+			const aPath = createTempFile(
+				env.tmpDir,
+				"packages/a/src/index.ts",
+				"import { b } from '@scope/b';\nexport function useB() { return b; }\n",
+			);
+
+			clearModuleGraphCache();
+			const graph = await buildOrUpdateGraph(env.tmpDir, [], new FactStore());
+			const aId = `file:${normalizeMapKey(aPath)}`;
+			const bId = `file:${normalizeMapKey(bEntry)}`;
+			expect(graph.nodes.has(bId)).toBe(true);
+			expect(
+				graph.edges.some(
+					(e) => e.from === aId && e.to === bId && e.kind === "imports",
+				),
+			).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("resolves a workspace-package subpath import to a file within the package", async () => {
+		const env = setupTestEnvironment("pi-lens-review-graph-workspace-subpath-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"package.json",
+				JSON.stringify({ name: "root", workspaces: ["packages/*"] }),
+			);
+			createTempFile(
+				env.tmpDir,
+				"packages/b/package.json",
+				JSON.stringify({ name: "@scope/b" }),
+			);
+			const bUtil = createTempFile(
+				env.tmpDir,
+				"packages/b/src/utils.ts",
+				"export const util = 1;\n",
+			);
+			const aPath = createTempFile(
+				env.tmpDir,
+				"packages/a/src/index.ts",
+				"import { util } from '@scope/b/src/utils';\n",
+			);
+
+			clearModuleGraphCache();
+			const graph = await buildOrUpdateGraph(env.tmpDir, [], new FactStore());
+			const aId = `file:${normalizeMapKey(aPath)}`;
+			const bId = `file:${normalizeMapKey(bUtil)}`;
+			expect(
+				graph.edges.some(
+					(e) => e.from === aId && e.to === bId && e.kind === "imports",
+				),
+			).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("a non-workspace bare specifier stays an external node, not a fabricated file edge", async () => {
+		const env = setupTestEnvironment("pi-lens-review-graph-workspace-external-");
+		try {
+			createTempFile(
+				env.tmpDir,
+				"package.json",
+				JSON.stringify({ name: "root", workspaces: ["packages/*"] }),
+			);
+			createTempFile(
+				env.tmpDir,
+				"packages/b/package.json",
+				JSON.stringify({ name: "@scope/b" }),
+			);
+			const aPath = createTempFile(
+				env.tmpDir,
+				"packages/a/src/index.ts",
+				"import React from 'react';\n",
+			);
+
+			clearModuleGraphCache();
+			const graph = await buildOrUpdateGraph(env.tmpDir, [], new FactStore());
+			const aId = `file:${normalizeMapKey(aPath)}`;
+			expect(
+				graph.edges.some(
+					(e) =>
+						e.from === aId &&
+						e.kind === "imports" &&
+						e.to === "external:react",
+				),
+			).toBe(true);
 		} finally {
 			env.cleanup();
 		}
