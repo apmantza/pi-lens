@@ -41,6 +41,7 @@ import { warmTriggerFor } from "../clients/project-diagnostics/extractors.js";
 import type { FreshProjectDiagnosticsResult } from "../clients/project-diagnostics/fresh-fetch.js";
 import { fetchFreshProjectDiagnostics } from "../clients/project-diagnostics/fresh-fetch.js";
 import { loadBootstrapClients } from "../clients/bootstrap.js";
+import { scanTruncationNotice } from "../clients/lens-engine.js";
 import { scanProjectDiagnostics } from "../clients/project-diagnostics/scanner.js";
 import type {
 	ProjectDiagnostic,
@@ -1380,6 +1381,16 @@ async function formatFullMode(
 	const walkUnsafeRootNote = walkUnsafeRoot
 		? `\n\nproject file walk skipped: the working directory resolves at or above the home directory, so the cheap project scan and the LSP workspace sweep would each enumerate every unrelated tree under it. Re-run from inside a project directory. Absence of their findings is NOT a clean verdict.`
 		: "";
+	// #784: the cheap project scan's `scanTruncated` flag (#760) reached this
+	// seam already but nothing rendered it, so a capped scan read as a
+	// complete clean sweep. Say so explicitly, same wording the MCP
+	// `pilens_project_scan` tool uses.
+	const scanTruncatedNoticeText = projectSnapshot
+		? scanTruncationNotice(projectSnapshot)
+		: undefined;
+	const scanTruncatedNote = scanTruncatedNoticeText
+		? `\n\n${scanTruncatedNoticeText}`
+		: "";
 	const abortedNote =
 		abortedIds.size > 0
 			? `\n\nstopped mid-scan (still running in the background, not reflected in this result): ${[
@@ -1435,6 +1446,9 @@ async function formatFullMode(
 			lspServerBreakdown: Object.fromEntries(lspServerBreakdown),
 			lspPrimaryDiagnosticsCount: lspPrimaryVsAuxiliary.primary,
 			lspAuxiliaryDiagnosticsCount: lspPrimaryVsAuxiliary.auxiliary,
+			// #784: lets a caller check "was the cheap project scan truncated"
+			// without parsing the text note.
+			projectScanTruncated: projectSnapshot?.scanTruncated ?? false,
 		},
 	};
 	// Stopped mid-scan: the results above are whatever completed before the abort.
@@ -1462,6 +1476,7 @@ async function formatFullMode(
 						lspPrimaryVsAuxiliaryNote +
 						coldNote +
 						walkUnsafeRootNote +
+						scanTruncatedNote +
 						abortedNote +
 						freshNote +
 						missingNote,
@@ -1474,6 +1489,7 @@ async function formatFullMode(
 		missingNote ||
 		coldNote ||
 		walkUnsafeRootNote ||
+		scanTruncatedNote ||
 		abortedNote ||
 		freshNote ||
 		unconfirmedLspNote ||
@@ -1489,6 +1505,7 @@ async function formatFullMode(
 						lspPrimaryVsAuxiliaryNote +
 						coldNote +
 						walkUnsafeRootNote +
+						scanTruncatedNote +
 						abortedNote +
 						freshNote +
 						missingNote,

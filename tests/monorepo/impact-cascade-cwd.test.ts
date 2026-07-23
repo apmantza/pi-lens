@@ -4,25 +4,23 @@
  * workspace module-graph fallback (query.ts:189-206, `moduleGraph` param)
  * actually engages?
  *
- * Empirical finding: it depends on the caller.
+ * Both real callers now pass `cwd` through:
  *   - `dispatch/integration.ts:858` (the primary per-edit cascade path,
- *     `computeCascadeForFile`) DOES pass `cwd` through to
- *     `service.computeImpactCascade(graph, normalizedFile, cwd)` — the
- *     module-graph fallback engages there.
+ *     `computeCascadeForFile`) passes `cwd` through to
+ *     `service.computeImpactCascade(graph, normalizedFile, cwd)`.
  *   - `dispatch/runners/tree-sitter.ts`'s `runBlastRadiusInBackground` (the
  *     OTHER real caller, feeding cascade.log's background blast-radius
- *     enrichment) calls `computeImpactCascade(graph, filePath)` — WITHOUT
- *     `cwd` — even though `cwd` is already a parameter in scope at that call
- *     site (see the function signature). KNOWN GAP (#775): this path's
- *     workspace module-graph fallback can never engage, so its cross-package
- *     downstream-module risk flag is silently unavailable — not because cwd
- *     is unavailable, but because it's dropped at the call site.
+ *     enrichment) now also calls `computeImpactCascade(graph, filePath, cwd)`
+ *     — fixed in #781, where `cwd` was previously dropped at the call site
+ *     despite being in scope.
  *
  * This file pins the observed difference at the `service.ts` seam directly
  * (with vs. without `cwd`) using a monorepo fixture where the module-level
  * fallback is the ONLY thing that can surface a cross-package dependent (a
  * package with no direct file-level import edge to the changed file, only a
- * workspace dependency edge).
+ * workspace dependency edge), and confirms the tree-sitter.ts background
+ * blast-radius call site engages that fallback now that `cwd` is threaded
+ * through.
  */
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -78,7 +76,7 @@ describe("computeImpactCascade's module-graph fallback requires cwd (#775 item 7
 	});
 
 	it(
-		"KNOWN GAP (#775): dispatch/runners/tree-sitter.ts's runBlastRadiusInBackground calls computeImpactCascade WITHOUT cwd despite having it in scope — reproduced here by calling the service function the same way that call site does",
+		"fixed (#781): dispatch/runners/tree-sitter.ts's runBlastRadiusInBackground now calls computeImpactCascade WITH cwd, so the module-graph fallback engages — reproduced here by calling the service function the same way that call site does",
 		async () => {
 			const repo = makeMonorepo({
 				packages: [
@@ -98,13 +96,13 @@ describe("computeImpactCascade's module-graph fallback requires cwd (#775 item 7
 			try {
 				const bEntry = repo.filePath("@scope/b", "src/index.ts");
 				const graph = await buildOrUpdateGraph(repo.root, [], new FactStore());
-				// Mirrors dispatch/runners/tree-sitter.ts:54's exact call shape
-				// (`computeImpactCascade(graph, filePath)`, cwd available in the
-				// enclosing scope but not threaded through).
-				const impact = computeImpactCascade(graph, bEntry);
+				// Mirrors dispatch/runners/tree-sitter.ts:54's exact call shape post-#781
+				// (`computeImpactCascade(graph, filePath, cwd)`, cwd now threaded
+				// through from the enclosing scope).
+				const impact = computeImpactCascade(graph, bEntry, repo.root);
 				expect(
 					impact.riskFlags.some((f) => f.includes("downstream module")),
-				).toBe(false);
+				).toBe(true);
 			} finally {
 				repo.cleanup();
 			}
