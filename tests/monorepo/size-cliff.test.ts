@@ -7,25 +7,28 @@
  *  1. startup-scan's verdict flips exactly at `maxSourceFiles` (N vs N+1
  *     source files) — sync AND async.
  *  2. review-graph's build bails above `PI_LENS_REVIEW_GRAPH_MAX_FILES` — and
- *     this file pins WHAT the downstream experience is afterward (#775's open
- *     question: "exact fallback when graph build was size-skipped"):
+ *     this file pins WHAT the downstream experience is afterward:
  *       - `getCachedReviewGraph` returns `undefined` when no graph was ever
  *         built/persisted before the project crossed the cap — a fresh
  *         size-skipped build never writes the in-memory or on-disk cache
  *         (`builder.ts`'s `too_many_files` branch only calls
  *         `facts.setSessionFact`, never `_workspaceGraphCache.set`/
  *         `persistGraph`).
- *       - If a graph WAS already cached/persisted from BEFORE the project grew
- *         past the cap, `getCachedReviewGraph` keeps returning that STALE
- *         graph — the size-skip is invisible at the read layer once a prior
- *         warm graph exists. Marked KNOWN GAP below: a caller reading
- *         `module_report`/`symbol_search` after the repo crossed the cap has
- *         no way to tell "graph reflects a smaller, stale past state" from
- *         "graph is current."
+ *       - #782 (was KNOWN GAP): if a graph WAS already cached/persisted from
+ *         BEFORE the project grew past the cap, `getCachedReviewGraph` now
+ *         stops serving that STALE graph too — the `too_many_files` branch
+ *         records a TTL'd size-skip verdict (`getReviewGraphSizeSkipVerdict`)
+ *         that `getCachedReviewGraph` consults before returning either cache
+ *         tier, so a caller reading `module_report`/`symbol_search` after the
+ *         repo crosses the cap sees a cold cache rather than a graph
+ *         reflecting a smaller, stale past state.
  *       - `module_report`'s `usedBy`/`semantic.source` degrade to `"none"`
  *         exactly like an ordinary cold cache (no graph at all) — there is no
  *         distinct signal for "skipped for size" vs. "never warmed" at this
- *         read layer either.
+ *         read layer either (the distinct signal lives in
+ *         `getReviewGraphSizeSkipVerdict`, which `project_report` reads
+ *         instead — see `project-report.test.ts`... `project-report`'s own
+ *         hint-text assertions cover that consumer).
  */
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -38,10 +41,13 @@ import {
 	buildOrUpdateGraph,
 } from "../../clients/review-graph/service.js";
 import {
+	_resetReviewGraphSizeSkipTtlForTests,
+	_resetReviewGraphSizeSkipVerdictsForTests,
 	clearGraphCache,
 	clearReviewGraphWorkspaceCache,
 	getCachedReviewGraph,
 	getLastGraphBuildInfo,
+	getReviewGraphSizeSkipVerdict,
 } from "../../clients/review-graph/builder.js";
 import { clearModuleGraphCache } from "../../clients/review-graph/workspace-modules.js";
 import { moduleReport } from "../../clients/module-report.js";
@@ -120,6 +126,9 @@ describe("monorepo size-cliff behavior (#775 item 2)", () => {
 		afterEach(() => {
 			if (previousEnv === undefined) delete process.env[ENV_REVIEW_GRAPH_MAX];
 			else process.env[ENV_REVIEW_GRAPH_MAX] = previousEnv;
+			delete process.env.PI_LENS_REVIEW_GRAPH_SIZE_SKIP_TTL_MS;
+			_resetReviewGraphSizeSkipTtlForTests();
+			_resetReviewGraphSizeSkipVerdictsForTests();
 			clearReviewGraphWorkspaceCache();
 			clearModuleGraphCache();
 		});
@@ -152,7 +161,7 @@ describe("monorepo size-cliff behavior (#775 item 2)", () => {
 			}
 		});
 
-		it("module_report degrades usedBy/semantic.source to 'none' identically to a cold cache (#775 open question)", async () => {
+		it("module_report degrades usedBy/semantic.source to 'none' identically to a cold cache", async () => {
 			previousEnv = process.env[ENV_REVIEW_GRAPH_MAX];
 			process.env[ENV_REVIEW_GRAPH_MAX] = "3";
 			const repo = fixtureWithSourceFiles(4);
@@ -162,8 +171,9 @@ describe("monorepo size-cliff behavior (#775 item 2)", () => {
 				const report = await moduleReport(file, repo.root);
 				expect(report.provenance?.usedBy).toBe("none");
 				expect(report.semantic.source).toBe("none");
-				// No warning distinguishes "size-skipped" from "never warmed" —
-				// `graphBuiltAt` is simply absent, same as a truly cold cache.
+				// No warning distinguishes "size-skipped" from "never warmed" at
+				// module_report's read layer — the distinct signal instead lives in
+				// getReviewGraphSizeSkipVerdict (#782), which project_report surfaces.
 				expect(report.graphBuiltAt).toBeUndefined();
 			} finally {
 				repo.cleanup();
@@ -171,7 +181,7 @@ describe("monorepo size-cliff behavior (#775 item 2)", () => {
 		});
 
 		it(
-			"KNOWN GAP (#775): getCachedReviewGraph keeps returning a STALE prior graph once the repo grows past the cap — the size-skip is invisible once a warm graph already existed",
+			"FIXED (#782, was KNOWN GAP): getCachedReviewGraph stops serving a STALE prior graph once the repo grows past the cap",
 			async () => {
 				// Build once while still within budget, warming the in-memory
 				// (tier-1) cache with a real, populated graph.
@@ -186,7 +196,6 @@ describe("monorepo size-cliff behavior (#775 item 2)", () => {
 					expect(firstBuild.nodes.size).toBeGreaterThan(0);
 					const cachedAfterFirstBuild = getCachedReviewGraph(repo.root);
 					expect(cachedAfterFirstBuild).toBeDefined();
-					const staleBuiltAt = cachedAfterFirstBuild?.builtAt;
 
 					// ...then shrink the cap below the (unchanged) file count and rebuild
 					// WITHOUT clearing the tier-1 workspace-graph cache first (mirrors
@@ -210,18 +219,62 @@ describe("monorepo size-cliff behavior (#775 item 2)", () => {
 					// too_many_files branch never reads or writes the tier-1 cache)...
 					expect(secondBuild.nodes.size).toBe(0);
 
-					// ...but a READER going through the read-only accessor instead of the
-					// builder's return value still sees the untouched, now-stale tier-1
-					// entry from the first (under-cap) build — the size-skip never
-					// invalidates it.
-					const cachedAfterSecondBuild = getCachedReviewGraph(repo.root);
-					expect(cachedAfterSecondBuild).toBeDefined();
-					expect(cachedAfterSecondBuild?.builtAt).toBe(staleBuiltAt);
-					expect(cachedAfterSecondBuild?.nodes.size).toBeGreaterThan(0);
+					// ...and now a READER going through the read-only accessor also sees
+					// the size-skip: the too_many_files branch recorded a fresh verdict,
+					// which getCachedReviewGraph consults before serving either cache
+					// tier — the stale, pre-cap graph is no longer handed out.
+					expect(getCachedReviewGraph(repo.root)).toBeUndefined();
+					const verdict = getReviewGraphSizeSkipVerdict(repo.root);
+					expect(verdict).toBeDefined();
+					// getGraphSourceFiles's walk is capped at maxGraphFiles+1 (#250: an
+					// over-limit repo short-circuits collection instead of enumerating
+					// the whole tree), so the recorded sourceFileCount reflects that
+					// capped collection size, not the repo's true file count.
+					expect(verdict?.sourceFileCount).toBe(2);
+					expect(verdict?.maxFileCount).toBe(1);
 				} finally {
 					repo.cleanup();
 				}
 			},
 		);
+
+		it("size-skip verdict expires after its TTL, re-enabling reads without a rebuild", async () => {
+			process.env.PI_LENS_REVIEW_GRAPH_SIZE_SKIP_TTL_MS = "50";
+			_resetReviewGraphSizeSkipTtlForTests();
+			previousEnv = process.env[ENV_REVIEW_GRAPH_MAX];
+			process.env[ENV_REVIEW_GRAPH_MAX] = "3";
+			const repo = fixtureWithSourceFiles(4);
+			try {
+				await buildOrUpdateGraph(repo.root, [], new FactStore());
+				expect(getReviewGraphSizeSkipVerdict(repo.root)).toBeDefined();
+				await new Promise((resolve) => setTimeout(resolve, 75));
+				expect(getReviewGraphSizeSkipVerdict(repo.root)).toBeUndefined();
+			} finally {
+				delete process.env.PI_LENS_REVIEW_GRAPH_SIZE_SKIP_TTL_MS;
+				_resetReviewGraphSizeSkipTtlForTests();
+				repo.cleanup();
+			}
+		});
+
+		it("a successful build below the cap clears a previously recorded size-skip verdict immediately", async () => {
+			previousEnv = process.env[ENV_REVIEW_GRAPH_MAX];
+			process.env[ENV_REVIEW_GRAPH_MAX] = "3";
+			const repo = fixtureWithSourceFiles(4);
+			try {
+				await buildOrUpdateGraph(repo.root, [], new FactStore());
+				expect(getReviewGraphSizeSkipVerdict(repo.root)).toBeDefined();
+
+				// Raise the cap and rebuild — this time the repo fits, so the verdict
+				// should clear immediately rather than lingering until its TTL expires.
+				process.env[ENV_REVIEW_GRAPH_MAX] = "10";
+				clearGraphCache();
+				const graph = await buildOrUpdateGraph(repo.root, [], new FactStore());
+				expect(graph.nodes.size).toBeGreaterThan(0);
+				expect(getReviewGraphSizeSkipVerdict(repo.root)).toBeUndefined();
+				expect(getCachedReviewGraph(repo.root)).toBeDefined();
+			} finally {
+				repo.cleanup();
+			}
+		});
 	});
 });
