@@ -3,24 +3,23 @@
  *
  * The audit's open question: does `scanTruncated` (a snapshot flag added
  * post-#760, threaded through independently of `maxFiles`) actually reach the
- * scan result the tools see? Driven over a tiny, option-configured
- * `maxScanEntries` cap so a handful of files is enough to trip it. Verified at
- * two layers:
+ * scan result the tools see, and is it actually RENDERED for the agent/user?
+ * Driven over a tiny, option-configured `maxScanEntries` cap so a handful of
+ * files is enough to trip it. Verified at three layers:
  *   1. `scanProjectDiagnostics` itself (`project-diagnostics/scanner.ts`).
  *   2. `lens-engine.ts`'s `projectScan` — the seam host adapters (MCP tools)
  *      actually call — returns the `ProjectDiagnosticsSnapshot` unmodified,
- *      so `scanTruncated` DOES reach that surface. Whether an individual MCP
- *      tool's rendered/serialized response text goes on to surface the flag
- *      to the model is a presentation concern outside this scan layer; grep
- *      confirms `scanTruncated` has exactly one reader (the field
- *      declaration + this one setter) anywhere in `clients/` — no renderer
- *      currently reads it. Marked KNOWN GAP: the data reaches the seam but
- *      apparently no caller renders it yet.
+ *      so `scanTruncated` DOES reach that surface.
+ *   3. Fixed in #784: `lens-engine.ts`'s `scanTruncationNotice` renders the
+ *      flag into a one-line notice (mirroring the #777 warm-skip notify's
+ *      style), and both `mcp/server.ts`'s `pilens_project_scan` tool and
+ *      `tools/lens-diagnostics.ts`'s mode=full renderer now append it —
+ *      a truncated scan no longer reads as a complete clean sweep.
  */
 
 import { describe, expect, it } from "vitest";
 import { scanProjectDiagnostics } from "../../clients/project-diagnostics/scanner.js";
-import { projectScan } from "../../clients/lens-engine.js";
+import { projectScan, scanTruncationNotice } from "../../clients/lens-engine.js";
 import { makeMonorepo, type MonorepoPackageSpec } from "./fixture.js";
 
 function fileMap(count: number): Record<string, string> {
@@ -93,6 +92,37 @@ describe("diagnostics-scanner truncation surfacing (#775 item 6)", () => {
 			expect(snapshot.scanTruncated).toBeUndefined();
 			expect(snapshot.filesScanned).toBe(6);
 			expect("scanTruncated" in snapshot).toBe(false);
+		} finally {
+			repo.cleanup();
+		}
+	});
+
+	it("fixed (#784): scanTruncationNotice renders a one-line notice once scanTruncated is set, and stays silent otherwise", async () => {
+		const pkg: MonorepoPackageSpec = {
+			name: "@scope/a",
+			dir: "packages/a",
+			files: fileMap(6),
+		};
+		const repo = makeMonorepo({ packages: [pkg] });
+		try {
+			const untruncated = await scanProjectDiagnostics({
+				cwd: repo.root,
+				tier: "cheap",
+				maxScanEntries: 1000,
+			});
+			expect(scanTruncationNotice(untruncated)).toBeUndefined();
+
+			const truncated = await scanProjectDiagnostics({
+				cwd: repo.root,
+				tier: "cheap",
+				maxScanEntries: 3,
+			});
+			expect(truncated.scanTruncated).toBe(true);
+			const notice = scanTruncationNotice(truncated);
+			expect(notice).toBeDefined();
+			expect(notice).toContain("truncated");
+			expect(notice).toContain(String(truncated.filesScanned));
+			expect(notice).toContain("maxProjectFiles");
 		} finally {
 			repo.cleanup();
 		}

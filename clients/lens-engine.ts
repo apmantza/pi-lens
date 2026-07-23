@@ -112,6 +112,23 @@ export function projectScan(
 	return scanProjectDiagnostics({ cwd, tier: "cheap", maxFiles });
 }
 
+/**
+ * #784: `scanTruncated` (#760) reaches this seam intact but, until now, no
+ * caller rendered it — a capped scan read as a complete clean sweep to the
+ * agent/user. One shared, unit-testable line adapters can append to their
+ * rendered summary, matching the #777 warm-skip notify's override-hint style.
+ * Returns `undefined` when the scan was not truncated (no line to append).
+ */
+export function scanTruncationNotice(
+	snapshot: Pick<ProjectDiagnosticsSnapshot, "scanTruncated" | "filesScanned">,
+): string | undefined {
+	if (!snapshot.scanTruncated) return undefined;
+	return (
+		`⚠ Scan truncated at ${snapshot.filesScanned} file(s) — results are partial; ` +
+		"raise maxProjectFiles in .pi-lens.json to scan fully."
+	);
+}
+
 export interface LspStatus {
 	aliveClients: number;
 	servers: Array<{ serverId: string; root: string; connected: boolean }>;

@@ -54,6 +54,7 @@ import {
 	runRebuild,
 	runSessionStart,
 	runTurnEnd,
+	scanTruncationNotice,
 	summarizeScan,
 	symbolSearch,
 	type WarmAnalyzeRequest,
@@ -952,6 +953,11 @@ async function callTool(
 					: ""),
 			...topRules.slice(0, 12).map(([rule, count]) => `  ${count}× ${rule}`),
 		];
+		// #784: scanTruncated reached this seam already (#760) but nothing
+		// rendered it, so a capped scan read as a complete clean sweep. Say so
+		// explicitly — mirrors the #777 warm-skip notify's override-hint wording.
+		const truncationNotice = scanTruncationNotice(snapshot);
+		if (truncationNotice) summaryLines.push(truncationNotice);
 		return toolText(summaryLines.join("\n"), {
 			filesScanned: snapshot.filesScanned,
 			runners: snapshot.runners,
@@ -960,6 +966,7 @@ async function callTool(
 			byRule,
 			topFiles,
 			sample: deduped.slice(0, 40),
+			...(snapshot.scanTruncated ? { scanTruncated: true } : {}),
 		});
 	}
 
