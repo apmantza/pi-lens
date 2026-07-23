@@ -193,16 +193,6 @@ interface SourceCountState {
 	count: number;
 	visited: number;
 	entryBudgetExceeded: boolean;
-	/**
-	 * Realpaths of symlinked directories already queued to recurse into (#775).
-	 * Only populated for symlinked entries — an ordinary directory never pays
-	 * the `fs.realpathSync` syscall. Guards a symlink cycle (or two symlinks
-	 * pointing at the same target) from being walked more than once, which
-	 * would otherwise hang this walk forever since `followSymlinks: true` is
-	 * intentionally kept (changing that would change verdicts on legitimate
-	 * symlinked layouts, e.g. pnpm's node_modules).
-	 */
-	visitedRealDirs: Set<string>;
 }
 
 /**
@@ -218,12 +208,14 @@ interface SourceCountState {
  * The source-limit check precedes the entry-budget check, so an entry that
  * trips both stops as a source-limit hit (`entryBudgetExceeded` stays false).
  *
- * Directories here never check for generated-artifact names — always follows
- * symlinks (unlike source-filter.ts's collectSourceFiles*), but guards
- * against a symlink cycle (#775: two symlinks pointing at each other, or at a
- * shared target, would otherwise re-walk the same subtree forever) by
- * resolving the realpath of each symlinked directory and skipping one whose
- * target was already queued.
+ * Directories here never check for generated-artifact names. Symlinked
+ * directories are NEVER traversed — not by policy but by classification
+ * (#775 audit follow-up): `fs.Dirent` reports a symlink-to-directory as
+ * `isSymbolicLink() === true` / `isDirectory() === false` (junctions
+ * included), so such entries fall through to the file branch below and are
+ * merely counted as entries. The `followSymlinks: true` passed to
+ * `shouldRecurseIntoDir` is therefore inert here; a symlink cycle cannot
+ * hang this walk. Pinned by tests/clients/startup-scan-symlink-cycle.test.ts.
  */
 function makeSourceCountVisitor(
 	state: SourceCountState,
@@ -234,29 +226,10 @@ function makeSourceCountVisitor(
 	return (entry, fullPath) => {
 		state.visited += 1;
 		if (entry.isDirectory()) {
-			let recurse = shouldRecurseIntoDir(entry, fullPath, {
+			const recurse = shouldRecurseIntoDir(entry, fullPath, {
 				ignoreMatcher,
 				followSymlinks: true,
 			});
-			if (recurse && entry.isSymbolicLink()) {
-				// Only symlinked entries pay the realpath syscall — an ordinary
-				// directory never does.
-				let realDir: string;
-				try {
-					realDir = fs.realpathSync(fullPath);
-				} catch {
-					// Broken symlink target — nothing to recurse into.
-					recurse = false;
-					realDir = "";
-				}
-				if (recurse) {
-					if (state.visitedRealDirs.has(realDir)) {
-						recurse = false;
-					} else {
-						state.visitedRealDirs.add(realDir);
-					}
-				}
-			}
 			if (state.visited >= maxEntries) {
 				state.entryBudgetExceeded = true;
 				return "stop";
@@ -293,7 +266,6 @@ function walkSourceCount(
 		count: 0,
 		visited: 0,
 		entryBudgetExceeded: false,
-		visitedRealDirs: new Set(),
 	};
 	const rootDir = path.resolve(dir);
 	const ignoreMatcher = getProjectIgnoreMatcher(rootDir);
@@ -439,7 +411,6 @@ async function walkSourceCountAsync(
 		count: 0,
 		visited: 0,
 		entryBudgetExceeded: false,
-		visitedRealDirs: new Set(),
 	};
 	const rootDir = path.resolve(dir);
 	const ignoreMatcher = getProjectIgnoreMatcher(rootDir);

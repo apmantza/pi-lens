@@ -1,15 +1,15 @@
 /**
- * #775 — the startup source-count walk follows symlinks unconditionally
- * (`followSymlinks: true`, kept as-is so legitimate symlinked layouts like a
- * pnpm store don't change verdict), but had no cycle protection: two
- * directories symlinked into each other (or a directory symlinked into
- * itself) would otherwise re-walk the same subtree forever and hang
- * `session_start`.
+ * #775 audit follow-up — the startup source-count walk cannot be hung by a
+ * symlink cycle, because symlinked directories are never traversed AT ALL:
+ * `fs.Dirent` reports a symlink-to-directory as `isSymbolicLink() === true` /
+ * `isDirectory() === false` (junctions included), so the visitor's directory
+ * branch never sees them and they fall through to entry counting only. The
+ * audit's suspected hang vector does not exist; these tests pin that
+ * classification-derived behavior so a future walker refactor (e.g. one that
+ * stat()s through symlinks) can't silently reintroduce the risk unbounded.
  *
- * These tests pin that a symlink cycle completes (does not hang) with a sane
- * verdict, for both the sync and async walkers. `fs.symlinkSync(..., "junction")`
- * is used for directory symlinks on Windows since junctions work without
- * elevation; POSIX symlinks work unelevated already.
+ * `fs.symlinkSync(..., "junction")` is used for directory symlinks on Windows
+ * since junctions work without elevation; POSIX symlinks work unelevated.
  */
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -29,7 +29,7 @@ function symlinkDir(target: string, linkPath: string): void {
 	);
 }
 
-describe("startup-scan symlink-cycle guard (#775)", () => {
+describe("startup-scan symlink handling (#775)", () => {
 	const cleanups: Array<() => void> = [];
 	afterEach(() => {
 		while (cleanups.length) cleanups.pop()?.();
@@ -48,14 +48,10 @@ describe("startup-scan symlink-cycle guard (#775)", () => {
 		const ctx = resolveStartupScanContext(env.tmpDir, {
 			homeDir: homeEnv.tmpDir,
 		});
-		// The guard only prevents an unbounded re-walk of the SAME symlink
-		// target, so the directory the symlink points at is still legitimately
-		// visited once more via the symlink before the cycle is caught on the
-		// second recursion — the assertion here is boundedness (completes, small
-		// finite count), not an exact count.
 		expect(ctx.canWarmCaches).toBe(true);
-		expect(ctx.sourceFileCount).toBeGreaterThan(0);
-		expect(ctx.sourceFileCount).toBeLessThan(10);
+		// The symlinked dir is never walked into, so main.ts is counted exactly
+		// once — not once per traversal of the loop.
+		expect(ctx.sourceFileCount).toBe(1);
 	}, 10_000);
 
 	it("two directories symlinked into each other complete instead of hanging (sync)", () => {
@@ -78,8 +74,34 @@ describe("startup-scan symlink-cycle guard (#775)", () => {
 			homeDir: homeEnv.tmpDir,
 		});
 		expect(ctx.canWarmCaches).toBe(true);
-		expect(ctx.sourceFileCount).toBeGreaterThan(0);
-		expect(ctx.sourceFileCount).toBeLessThan(10);
+		// Each real file counted exactly once; the cross-links add zero.
+		expect(ctx.sourceFileCount).toBe(2);
+	}, 10_000);
+
+	it("a symlinked-in subtree is NOT counted — symlinked dirs are never traversed", () => {
+		const env = setupTestEnvironment("pi-lens-symlink-subtree-");
+		cleanups.push(env.cleanup);
+		const homeEnv = setupTestEnvironment("pi-lens-symlink-subtree-home-");
+		cleanups.push(homeEnv.cleanup);
+		const outside = setupTestEnvironment("pi-lens-symlink-outside-");
+		cleanups.push(outside.cleanup);
+
+		fs.mkdirSync(path.join(env.tmpDir, ".git"));
+		fs.writeFileSync(path.join(env.tmpDir, "main.ts"), "export {};\n");
+		// A real directory full of source files, reachable ONLY via a symlink.
+		fs.writeFileSync(path.join(outside.tmpDir, "hidden1.ts"), "export {};\n");
+		fs.writeFileSync(path.join(outside.tmpDir, "hidden2.ts"), "export {};\n");
+		symlinkDir(outside.tmpDir, path.join(env.tmpDir, "linked"));
+
+		const ctx = resolveStartupScanContext(env.tmpDir, {
+			homeDir: homeEnv.tmpDir,
+		});
+		expect(ctx.canWarmCaches).toBe(true);
+		// Only main.ts — the symlinked subtree's files are invisible to this
+		// walk. If a refactor ever makes the walker follow symlinked dirs, this
+		// starts failing (count 3), signalling that cycle protection is now
+		// genuinely needed.
+		expect(ctx.sourceFileCount).toBe(1);
 	}, 10_000);
 
 	it("a symlink cycle completes instead of hanging (async)", async () => {
@@ -96,7 +118,6 @@ describe("startup-scan symlink-cycle guard (#775)", () => {
 			homeDir: homeEnv.tmpDir,
 		});
 		expect(ctx.canWarmCaches).toBe(true);
-		expect(ctx.sourceFileCount).toBeGreaterThan(0);
-		expect(ctx.sourceFileCount).toBeLessThan(10);
+		expect(ctx.sourceFileCount).toBe(1);
 	}, 10_000);
 });
