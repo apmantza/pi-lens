@@ -547,6 +547,17 @@ const TOOLS = [
 					type: "number",
 					description: "Max files to return (default 20).",
 				},
+				paths: {
+					type: "array",
+					items: { type: "string" },
+					description:
+						"Glob array scoping hits to matching files — same shape/semantics as pilens_ast_grep_search's `paths` (a bare directory/file entry scopes its whole subtree). Filters before ranking, so scores within the scoped set are unaffected.",
+				},
+				lang: {
+					type: "string",
+					description:
+						"Restrict hits to one language, using the same identifiers as pilens_ast_grep_search's `lang` param (e.g. 'typescript', 'python', 'go').",
+				},
 			},
 			required: ["query"],
 		},
@@ -960,10 +971,15 @@ async function callTool(
 			typeof args.limit === "number" && Number.isFinite(args.limit)
 				? Math.max(1, Math.floor(args.limit))
 				: 20;
-		const { available, results, hint, snapshotGeneratedAt } = symbolSearch(
+		const paths = Array.isArray(args.paths)
+			? args.paths.filter((p): p is string => typeof p === "string")
+			: undefined;
+		const lang = typeof args.lang === "string" ? args.lang : undefined;
+		const { available, results, hint, snapshotGeneratedAt } = await symbolSearch(
 			query,
 			cwd,
 			limit,
+			{ paths, lang },
 		);
 		if (!available) {
 			return toolText(
@@ -1003,13 +1019,20 @@ async function callTool(
 			lines.join("\n"),
 			{
 				query,
-				results: results.map((result) => ({
-					file: path.relative(cwd, result.file),
-					score: result.score,
-					hits: result.hits,
-					startLine: result.startLine,
-					endLine: result.endLine,
-				})),
+				results: results.map((result) => {
+					const relFile = path.relative(cwd, result.file);
+					return {
+						file: relFile,
+						score: result.score,
+						hits: result.hits,
+						startLine: result.startLine,
+						endLine: result.endLine,
+						...(result.annotations ? { annotations: result.annotations } : {}),
+						// #771: machine-actionable discovery-funnel hint, mirroring the
+						// pi-tool-surface's suggestedNext (tools/symbol-search.ts).
+						suggestedNext: { tool: "pilens_module_report", path: relFile },
+					};
+				}),
 				...(stalenessNote ? { staleness: stalenessNote } : {}),
 			},
 			true,

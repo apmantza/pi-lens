@@ -105,6 +105,50 @@ describe("buildWordIndex + searchWordIndex", () => {
 	});
 });
 
+// #771: symbol_search's `paths`/`lang` params compile down to a `fileFilter`
+// predicate applied BEFORE scoring — a surviving file's score must be
+// byte-identical to what an unfiltered query would have produced for it.
+describe("searchWordIndex fileFilter (#771)", () => {
+	const files = [
+		{
+			path: "src/auth/login.ts",
+			content:
+				"export function authenticateUser(credentials) {\n  return verifyPassword(credentials);\n}",
+		},
+		{
+			path: "src/user/profile.ts",
+			content:
+				"export function loadUserProfile(userId) {\n  return db.users.find(userId);\n}",
+		},
+	];
+
+	it("drops files the predicate rejects without changing surviving files' scores", () => {
+		const index = buildWordIndex(files);
+		const unfiltered = searchWordIndex(index, "user");
+		expect(unfiltered.map((r) => r.file)).toEqual(
+			expect.arrayContaining(["src/auth/login.ts", "src/user/profile.ts"]),
+		);
+		const unfilteredProfile = unfiltered.find(
+			(r) => r.file === "src/user/profile.ts",
+		);
+
+		const filtered = searchWordIndex(index, "user", {
+			fileFilter: (file) => file.startsWith("src/user/"),
+		});
+		expect(filtered.map((r) => r.file)).toEqual(["src/user/profile.ts"]);
+		expect(filtered[0].score).toBe(unfilteredProfile?.score);
+	});
+
+	it("omitting fileFilter reproduces the unfiltered result set", () => {
+		const index = buildWordIndex(files);
+		const withUndefinedFilter = searchWordIndex(index, "user", {
+			fileFilter: undefined,
+		});
+		const plain = searchWordIndex(index, "user");
+		expect(withUndefinedFilter).toEqual(plain);
+	});
+});
+
 describe("searchWordIndex priors", () => {
 	it("demotes a test-path file below an equivalent source match", () => {
 		const index = buildWordIndex([
