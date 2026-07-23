@@ -13,7 +13,9 @@ import {
 } from "./lens-config.js";
 import { normalizeEphemeralMapKey, normalizeFilePath } from "./path-utils.js";
 import {
+	findPiLensConfigInDir,
 	findPiLensProjectConfig,
+	loadPiLensConfigInDir,
 	loadPiLensProjectConfig,
 } from "./project-lens-config.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
@@ -137,6 +139,12 @@ export const EXCLUDED_DIRS = [
  *   - `pilens` (`.pi-lens.json`'s `ignore` field) is pi-lens-native user
  *     intent ("don't analyze this"), not a git emulation, so it excludes
  *     regardless of tracked status.
+ *
+ * `pilens` patterns can come from the root `.pi-lens.json` (loaded once at
+ * matcher-construction time in `createProjectIgnoreMatcher`) OR from a
+ * package-local `.pi-lens.json` layered in per ancestor directory by
+ * `buildProjectIgnoreMatcher`'s `patternsForDir` (#783) — both are tagged
+ * `"pilens"` and share the same tracked-file-rescue exemption.
  */
 export type GitignorePatternLayer = "global" | "gitignore" | "pilens";
 
@@ -314,16 +322,41 @@ function buildProjectIgnoreMatcher(
 ): ProjectIgnoreMatcher {
 	const nestedCache = new Map<
 		string,
-		{ gitignoreMtimeMs: number; patterns: GitignorePattern[] }
+		{
+			gitignoreMtimeMs: number;
+			pilensMtimeMs: number;
+			patterns: GitignorePattern[];
+		}
 	>();
+	// #783: layer a NESTED `.pi-lens.json`'s `ignore` field the same way a
+	// nested `.gitignore` is already layered — each ancestor directory between
+	// `resolvedRoot` and the target is checked for its OWN config file (no
+	// upward walk; `findPiLensConfigInDir`/`loadPiLensConfigInDir` look only
+	// directly in `dir`), and its `ignore` patterns are anchored to `dir` (same
+	// anchoring semantics as a `.gitignore` living in that directory) and
+	// tagged `"pilens"` so #703's tracked-file-rescue rule still skips them.
+	// `loadPiLensConfigInDir` reuses `project-lens-config.ts`'s own
+	// path+mtime cache, so this never re-reads/re-parses JSON that some other
+	// caller (or the root-config lookup above) already loaded.
 	const patternsForDir = (dir: string): GitignorePattern[] => {
 		if (dir === resolvedRoot) return patterns;
 		const gitignoreMtime = gitignoreMtimeMs(dir);
+		const pilensMtime = findPiLensConfigInDir(dir)?.mtimeMs ?? -1;
 		const cached = nestedCache.get(dir);
-		if (cached?.gitignoreMtimeMs === gitignoreMtime) return cached.patterns;
-		const nextPatterns = readGitignorePatterns(dir);
+		if (
+			cached?.gitignoreMtimeMs === gitignoreMtime &&
+			cached?.pilensMtimeMs === pilensMtime
+		) {
+			return cached.patterns;
+		}
+		const nestedConfig = loadPiLensConfigInDir(dir);
+		const nextPatterns = [
+			...readGitignorePatterns(dir),
+			...parseGitignoreContent(nestedConfig.ignore.join("\n"), "pilens"),
+		];
 		nestedCache.set(dir, {
 			gitignoreMtimeMs: gitignoreMtime,
+			pilensMtimeMs: pilensMtime,
 			patterns: nextPatterns,
 		});
 		return nextPatterns;
