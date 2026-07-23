@@ -173,6 +173,33 @@ describe("projectReport — warm path section shapes", () => {
 		expect(text).toContain(report.deadWeight!.disclaimer);
 	});
 
+	it("never reclassifies entry points past the display cap as dead weight", async () => {
+		const env = makeEnv();
+		createTempFile(env.tmpDir, "lib/shared.ts", "export const shared = 1;\n");
+		// Three entry-point-like files (zero fan-in, real fan-out) — more than
+		// the display cap below, so at least two overflow the entryPoints list.
+		for (let i = 1; i <= 3; i += 1) {
+			createTempFile(
+				env.tmpDir,
+				`entry/main${i}.ts`,
+				[
+					"import { shared } from '../lib/shared';",
+					`export function main${i}() { return shared; }`,
+				].join("\n"),
+			);
+		}
+		await warmGraph(env.tmpDir);
+
+		const report = await projectReport(env.tmpDir, { limit: 1 });
+		expect(report.available).toBe(true);
+		expect(report.entryPoints!.length).toBe(1);
+		// The exclusion set is uncapped (#773: "zero-importer files that aren't
+		// entry points") — the two overflow entry points must not appear here.
+		expect(
+			report.deadWeight!.files.some((f) => f.file.includes("entry/main")),
+		).toBe(false);
+	});
+
 	it("scales every ranked list's cap with the single `limit` knob", async () => {
 		const env = makeEnv();
 		createTempFile(

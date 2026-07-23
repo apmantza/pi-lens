@@ -402,11 +402,13 @@ function computeEntryPoints(
 				focusScore(a.filePath, focusTerms) - focusScore(b.filePath, focusTerms);
 			if (focusDelta !== 0) return -focusDelta;
 			return b.fanOut - a.fanOut || a.filePath.localeCompare(b.filePath);
-		})
-		.slice(0, limit);
+		});
 
+	// The exclusion set for dead weight is UNCAPPED (#773: "zero-importer files
+	// that aren't entry points") — an entry-point-like file past the display
+	// cap must not be reclassified as suspected dead weight.
 	const entryPointFiles = new Set(candidates.map((c) => c.filePath));
-	const entryPoints = candidates.map((f) => {
+	const entryPoints = candidates.slice(0, limit).map((f) => {
 		const display = toDisplayPath(f.filePath, cwd);
 		return {
 			file: display,
