@@ -107,6 +107,7 @@ import {
 	createReadEnclosingTool,
 	createReadSymbolTool,
 } from "./tools/module-report.js";
+import { createProjectReportTool } from "./tools/project-report.js";
 import { createSymbolSearchTool } from "./tools/symbol-search.js";
 import { logLatency } from "./clients/latency-logger.js";
 import {
@@ -965,6 +966,7 @@ export default function (pi: ExtensionAPI) {
 			() => runtime.nextWriteIndex(),
 		),
 		createSymbolSearchTool(() => runtime.projectRoot),
+		createProjectReportTool(() => runtime.projectRoot),
 		createModuleReportTool(() => runtime.projectRoot),
 		createReadSymbolTool(
 			() => runtime.projectRoot,
