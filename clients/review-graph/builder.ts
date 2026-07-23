@@ -7,6 +7,7 @@ import { fileContentProvider } from "../dispatch/facts/file-content.js";
 import type { FunctionSummary } from "../dispatch/facts/function-facts.js";
 import type { ImportEntry } from "../dispatch/facts/import-facts.js";
 import type { DispatchContext } from "../dispatch/types.js";
+import { lazyEnvNumber } from "../env-utils.js";
 import { featureHintMetadata } from "../feature-hints.js";
 import { detectFileKind, KIND_EXTENSIONS } from "../file-kinds.js";
 import { detectFileRole } from "../file-role.js";
@@ -194,6 +195,7 @@ export function clearGraphCache(): void {
 export function clearReviewGraphWorkspaceCache(): void {
 	_buildCache.clear();
 	_workspaceGraphCache.clear();
+	_sizeSkipVerdicts.clear();
 	_lastGraphBuildInfo = { reused: false, mode: "full", graphChanged: true };
 }
 
@@ -262,6 +264,15 @@ function ensureIndexed(graph: ReviewGraph): void {
  */
 export function getCachedReviewGraph(cwd: string): ReviewGraph | undefined {
 	const key = normalizeMapKey(cwd);
+	// #782: a fresh size-skip verdict means the LAST build attempt found the
+	// repo over the file cap — any graph cached/persisted from before that
+	// (necessarily built over a smaller file set, since the too_many_files
+	// branch never populates either cache tier) would silently under-report
+	// fan-in/blastRadius as if the repo were still that small. Stop serving it
+	// while the verdict is fresh rather than let it look current; it comes back
+	// automatically the moment the verdict expires (repo shrunk, or the cap was
+	// raised) and a build succeeds again.
+	if (getReviewGraphSizeSkipVerdict(cwd)) return undefined;
 	const cached = _workspaceGraphCache.get(key);
 	if (cached) {
 		ensureIndexed(cached.graph);
@@ -513,6 +524,92 @@ function isWithinReviewGraphSizeLimit(file: string): boolean {
 	} catch {
 		return false;
 	}
+}
+
+// #782: a size-skipped build (too_many_files below) is otherwise
+// indistinguishable, at the read layer, from an ordinary cold cache — and a
+// graph cached/persisted BEFORE the repo crossed the cap kept being served by
+// getCachedReviewGraph forever. Recording a TTL'd "size-skip verdict" per cwd
+// fixes both: getCachedReviewGraph consults it below to stop serving a
+// pre-cap graph while the repo is confirmed over cap, and consumers
+// (project_report) can read it to render an honest "disabled, not cold" hint
+// instead of "retry shortly".
+//
+// In-memory only, per cwd, mirroring `_workspaceGraphCache` — not persisted
+// to disk. Every real caller either rebuilds within a session (the edit
+// pipeline, project_report's background trigger) or restarts the process (a
+// fresh in-memory verdict is recomputed on the very next build attempt), so
+// there's no cross-process staleness gap worth the extra persistence
+// machinery `too-many-source-files` needed (that verdict is cached across
+// process starts specifically to skip a slow walk — this one is a cheap
+// flag alongside a walk that already ran).
+//
+// TTL default matches project-report.ts's STALE_THRESHOLD_MS (15 minutes):
+// long enough that a single flag isn't thrashed by back-to-back builds, short
+// enough that a repo shrink or a `.pi-lens.json`/env cap raise is noticed
+// without restarting the process.
+const DEFAULT_REVIEW_GRAPH_SIZE_SKIP_TTL_MS = 15 * 60_000;
+
+const _sizeSkipTtl = lazyEnvNumber(
+	"PI_LENS_REVIEW_GRAPH_SIZE_SKIP_TTL_MS",
+	DEFAULT_REVIEW_GRAPH_SIZE_SKIP_TTL_MS,
+);
+
+/** Test-only: clears the memoized TTL so a subsequent call re-reads the env var. */
+export const _resetReviewGraphSizeSkipTtlForTests = _sizeSkipTtl._resetForTests;
+
+export interface ReviewGraphSizeSkipVerdict {
+	/** Graph-relevant source files found on the skipped walk. */
+	sourceFileCount: number;
+	/** The cap (derived `maxProjectFiles` or `PI_LENS_REVIEW_GRAPH_MAX_FILES`) that was exceeded. */
+	maxFileCount: number;
+	/** Wall-clock (`Date.now()`) the skip was recorded — see {@link getReviewGraphSizeSkipVerdict}. */
+	skippedAt: number;
+}
+
+const _sizeSkipVerdicts = new Map<string, ReviewGraphSizeSkipVerdict>();
+
+/** Test-only: clears every recorded size-skip verdict. */
+export function _resetReviewGraphSizeSkipVerdictsForTests(): void {
+	_sizeSkipVerdicts.clear();
+}
+
+function recordReviewGraphSizeSkip(
+	cwd: string,
+	sourceFileCount: number,
+	maxFileCount: number,
+): void {
+	_sizeSkipVerdicts.set(normalizeMapKey(cwd), {
+		sourceFileCount,
+		maxFileCount,
+		skippedAt: Date.now(),
+	});
+}
+
+function clearReviewGraphSizeSkip(cwd: string): void {
+	_sizeSkipVerdicts.delete(normalizeMapKey(cwd));
+}
+
+/**
+ * The most recent size-skip verdict for `cwd`, if one was recorded and it's
+ * still within its TTL — undefined once expired (a shrink or a raised cap
+ * gets re-checked on the next build attempt) or if no skip has ever been
+ * recorded. Consumers (project_report) use this to tell "graph disabled
+ * because the repo is over the file cap" apart from "cold cache, build in
+ * progress".
+ */
+export function getReviewGraphSizeSkipVerdict(
+	cwd: string,
+	now: number = Date.now(),
+): ReviewGraphSizeSkipVerdict | undefined {
+	const key = normalizeMapKey(cwd);
+	const verdict = _sizeSkipVerdicts.get(key);
+	if (!verdict) return undefined;
+	if (now - verdict.skippedAt >= _sizeSkipTtl.get()) {
+		_sizeSkipVerdicts.delete(key);
+		return undefined;
+	}
+	return verdict;
 }
 
 async function getGraphSourceFiles(cwd: string): Promise<string[]> {
@@ -2098,6 +2195,11 @@ async function _doBuildGraph(
 		for (const file of normalizedChanged) {
 			upsertChangedSymbols(graph, facts, file);
 		}
+		// #782: record a TTL'd verdict so getCachedReviewGraph can stop serving
+		// any graph cached/persisted from before the repo crossed the cap, and so
+		// project_report can render an honest "disabled at N files" hint instead
+		// of "retry shortly" — see getReviewGraphSizeSkipVerdict.
+		recordReviewGraphSizeSkip(cwd, filesToBuild.length, maxGraphFiles);
 		_lastGraphBuildInfo = {
 			reused: false,
 			mode: "skipped",
@@ -2114,6 +2216,11 @@ async function _doBuildGraph(
 		facts.setSessionFact("session.reviewGraph", graph);
 		return graph;
 	}
+	// #782: the repo is within the cap on this build attempt — drop any
+	// previously recorded size-skip verdict immediately (rather than waiting
+	// out the TTL) so a shrink or a raised cap re-enables reads the moment a
+	// build actually succeeds.
+	clearReviewGraphSizeSkip(cwd);
 	const fileSignatures = await sourceSignatureMapAsync(filesToBuild);
 	const signature = sourceSignatureFromMap(fileSignatures);
 

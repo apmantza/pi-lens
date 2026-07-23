@@ -712,7 +712,9 @@ export async function projectReport(
 	const focusTerms = normalizeFocus(options?.focus);
 	const view = options?.view;
 
-	const { getCachedReviewGraph } = await import("./review-graph/builder.js");
+	const { getCachedReviewGraph, getReviewGraphSizeSkipVerdict } = await import(
+		"./review-graph/builder.js"
+	);
 	let graph: ReviewGraph | undefined;
 	try {
 		graph = getCachedReviewGraph(cwd);
@@ -721,6 +723,26 @@ export async function projectReport(
 	}
 
 	if (!graph) {
+		// #782: a fresh size-skip verdict means the graph will never build at the
+		// CURRENT cap — retrying "shortly" is actively wrong guidance here, so
+		// this branches before the generic cold-cache hint (and skips kicking off
+		// another background build that would just re-hit the same cap).
+		let sizeSkip: ReturnType<typeof getReviewGraphSizeSkipVerdict>;
+		try {
+			sizeSkip = getReviewGraphSizeSkipVerdict(cwd);
+		} catch {
+			sizeSkip = undefined;
+		}
+		if (sizeSkip) {
+			return {
+				available: false,
+				hint:
+					`review graph disabled: project has ${sizeSkip.sourceFileCount} files, ` +
+					`cap is ${sizeSkip.maxFileCount} — raise maxProjectFiles in .pi-lens.json ` +
+					"or set PI_LENS_REVIEW_GRAPH_MAX_FILES",
+				...(view ? { view } : {}),
+			};
+		}
 		triggerBackgroundGraphBuild(cwd);
 		return {
 			available: false,
