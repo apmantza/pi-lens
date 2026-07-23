@@ -61,6 +61,7 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		// pilens_module_report's `blastRadius` option.
 		expect(names).not.toContain("pilens_impact");
 		expect(names).toContain("pilens_module_report");
+		expect(names).toContain("pilens_project_report");
 		expect(names).toContain("pilens_read_symbol");
 		// Each tool advertises an object input schema.
 		for (const tool of tools) {
