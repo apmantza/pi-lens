@@ -543,7 +543,9 @@ function computeSubsystems(
 	const seenPairs = new Set<string>();
 	const violations: LayeringViolation[] = [];
 	for (const edge of edges) {
-		const pairKey = [edge.from, edge.to].sort().join("|");
+		const pairKey = [edge.from, edge.to]
+			.sort((a, b) => a.localeCompare(b))
+			.join("|");
 		if (seenPairs.has(pairKey)) continue;
 		const reverseKey = `${edge.to}|${edge.from}`;
 		const reverseCount = edgeCounts.get(reverseKey);
