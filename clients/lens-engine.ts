@@ -80,6 +80,12 @@ export {
 	type RecommendedRead,
 	renderCompactModuleReport,
 } from "./module-report.js";
+export {
+	projectReport,
+	type ProjectReport,
+	type ProjectReportOptions,
+	renderCompactProjectReport,
+} from "./project-report.js";
 
 // --- Query wrappers (own the remaining internal reach-ins) -------------------
 
