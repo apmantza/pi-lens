@@ -59,6 +59,7 @@ import {
 } from "./subagent-mode.js";
 import {
 	findNearestProjectRoot,
+	getStartupScanMaxEntries,
 	isStartupScanVerdictFresh,
 	resolveStartupScanContext,
 	type StartupScanContext,
@@ -1534,6 +1535,25 @@ export async function handleSessionStart(
 		dbg(
 			`session_start: skipping TODO scan (${startupScan.reason ?? "unknown"})`,
 		);
+		// #775: mirror the slow-fs notify above — a size-skipped warm pipeline is
+		// otherwise silent (debug-log only), so a large project can look like
+		// pi-lens just isn't scanning anything. Fires ONCE per session (this
+		// `else` branch runs once per handleSessionStart call — the
+		// dominant-language LSP pre-warm skip further down reuses this same
+		// verdict rather than notifying a second time).
+		if (
+			startupScan.reason === "too-many-source-files" ||
+			startupScan.reason === "too-many-entries"
+		) {
+			const overrideHint =
+				startupScan.reason === "too-many-entries"
+					? ` (set PI_LENS_STARTUP_SCAN_MAX_ENTRIES=<n> to override the ${getStartupScanMaxEntries()}-entry cap)`
+					: "";
+			notify(
+				`📦 Project-size limits disabled background warm scans (heavy scans, TODO scan, LSP pre-warm)${overrideHint}.`,
+				"warning",
+			);
+		}
 	} else {
 		scheduleStartupScans(
 			deps,

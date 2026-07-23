@@ -208,8 +208,14 @@ interface SourceCountState {
  * The source-limit check precedes the entry-budget check, so an entry that
  * trips both stops as a source-limit hit (`entryBudgetExceeded` stays false).
  *
- * Directories here never check for symlinks or generated-artifact names —
- * always follows symlinks (unlike source-filter.ts's collectSourceFiles*).
+ * Directories here never check for generated-artifact names. Symlinked
+ * directories are NEVER traversed — not by policy but by classification
+ * (#775 audit follow-up): `fs.Dirent` reports a symlink-to-directory as
+ * `isSymbolicLink() === true` / `isDirectory() === false` (junctions
+ * included), so such entries fall through to the file branch below and are
+ * merely counted as entries. The `followSymlinks: true` passed to
+ * `shouldRecurseIntoDir` is therefore inert here; a symlink cycle cannot
+ * hang this walk. Pinned by tests/clients/startup-scan-symlink-cycle.test.ts.
  */
 function makeSourceCountVisitor(
 	state: SourceCountState,
@@ -256,7 +262,11 @@ function walkSourceCount(
 	limit: number,
 	maxEntries: number,
 ): SourceCountResult {
-	const state: SourceCountState = { count: 0, visited: 0, entryBudgetExceeded: false };
+	const state: SourceCountState = {
+		count: 0,
+		visited: 0,
+		entryBudgetExceeded: false,
+	};
 	const rootDir = path.resolve(dir);
 	const ignoreMatcher = getProjectIgnoreMatcher(rootDir);
 	walkTreeStackSync(
@@ -397,7 +407,11 @@ async function walkSourceCountAsync(
 	maxEntries: number,
 	opts: { yieldEvery?: number } = {},
 ): Promise<SourceCountResult> {
-	const state: SourceCountState = { count: 0, visited: 0, entryBudgetExceeded: false };
+	const state: SourceCountState = {
+		count: 0,
+		visited: 0,
+		entryBudgetExceeded: false,
+	};
 	const rootDir = path.resolve(dir);
 	const ignoreMatcher = getProjectIgnoreMatcher(rootDir);
 	await walkTreeStackAsync(

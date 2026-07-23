@@ -19,7 +19,11 @@ import {
 	normalizeMapKey,
 } from "../path-utils.js";
 import { collectProjectSourceFilesWithBudgetAsync } from "../project-scan-policy.js";
-import { jsTsCandidatePaths, resolveImportToFiles } from "./import-resolvers.js";
+import {
+	jsTsCandidatePaths,
+	resolveImportToFiles,
+	resolveWorkspacePackageImport,
+} from "./import-resolvers.js";
 import { RUNTIME_CONFIG } from "../runtime-config.js";
 import { buildQualifiedName, findOwnerName } from "../symbol-containment.js";
 import { getSharedTreeSitterClient } from "../tree-sitter-shared.js";
@@ -936,6 +940,11 @@ export function flushReviewGraphPersistsForTests(): void {
  * invariant (#243) reaches import-resolution-created nodes too, not just the
  * initial file walk. Undefined ⇒ no filtering (the fetch degraded or wasn't
  * requested).
+ *
+ * A bare specifier (`react`, `@scope/pkg[/subpath]`) is resolved against
+ * known workspace package names (#775) via `resolveWorkspacePackageImport` —
+ * the same resolver the cold module_report path (`resolveJsTs`) uses — before
+ * falling back to `undefined` (external dep, unchanged behavior).
  */
 function localImportToFile(
 	cwd: string,
@@ -943,7 +952,13 @@ function localImportToFile(
 	source: string,
 	ignoredIds?: ReadonlySet<string>,
 ): string | undefined {
-	if (!source.startsWith(".")) return undefined;
+	if (!source.startsWith(".")) {
+		for (const normalized of resolveWorkspacePackageImport(cwd, source)) {
+			if (ignoredIds?.has(normalized)) continue;
+			return normalized;
+		}
+		return undefined;
+	}
 	const root = path.resolve(cwd);
 	for (const candidate of jsTsCandidatePaths(filePath, source)) {
 		if (!candidate.startsWith(root) || !fs.existsSync(candidate)) continue;
