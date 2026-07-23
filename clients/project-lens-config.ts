@@ -30,6 +30,15 @@
  *
  * A malformed file is treated as "no config" and logged once — we never want a
  * stray syntax error in user-edited JSON to break diagnostics.
+ *
+ * `findPiLensConfigInDir` / `loadPiLensConfigInDir` are the per-directory
+ * (no upward walk) counterparts used by `file-utils.ts`'s
+ * `getProjectIgnoreMatcher` to layer NESTED `.pi-lens.json` `ignore` fields
+ * the same way nested `.gitignore`s are already layered (#783): every
+ * ancestor directory between the git root and a scanned file is checked for
+ * its own config file, so a package-local `.pi-lens.json`'s `ignore`
+ * patterns apply to files inside that package, in addition to (and with
+ * higher precedence than) the root config's `ignore` patterns.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -113,6 +122,46 @@ export interface PiLensProjectConfigFileInfo {
 	path: string;
 	dir: string;
 	mtimeMs: number;
+}
+
+/**
+ * Look for a `.pi-lens.json`/`pi-lens.json` directly IN `dir` — no upward
+ * walk. Used to layer nested per-package configs (#783) the same way
+ * `file-utils.ts` layers nested `.gitignore`s: each ancestor directory
+ * between the git root and a target file is checked for its OWN config
+ * file, independent of whatever config `loadPiLensProjectConfig`'s upward
+ * walk would find starting from `dir`.
+ */
+export function findPiLensConfigInDir(
+	dir: string,
+): PiLensProjectConfigFileInfo | undefined {
+	for (const name of PROJECT_CONFIG_BASENAMES) {
+		const candidate = path.join(dir, name);
+		const stat = safeFileStat(candidate);
+		if (stat?.isFile()) return { path: candidate, dir, mtimeMs: stat.mtimeMs };
+	}
+	return undefined;
+}
+
+/**
+ * Load the `.pi-lens.json`/`pi-lens.json` directly IN `dir` (no upward
+ * walk) — the per-directory counterpart to `loadPiLensProjectConfig`'s
+ * upward-walking discovery. Shares `configCache` (keyed by absolute config
+ * path + mtime), so a directory whose config was already loaded via the
+ * upward-walk path (e.g. the git root itself) is not re-read here.
+ */
+export function loadPiLensConfigInDir(dir: string): PiLensProjectConfig {
+	const info = findPiLensConfigInDir(dir);
+	if (!info) return EMPTY_PROJECT_CONFIG;
+
+	const cached = configCache.get(info.path);
+	if (cached && cached.mtimeMs === info.mtimeMs) {
+		return cached.config;
+	}
+
+	const config = parseConfigFile(info.path);
+	configCache.set(info.path, { mtimeMs: info.mtimeMs, config });
+	return config;
 }
 
 export function findPiLensProjectConfig(

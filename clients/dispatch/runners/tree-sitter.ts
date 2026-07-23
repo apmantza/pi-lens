@@ -51,7 +51,7 @@ function runBlastRadiusInBackground(
 	void (async () => {
 		try {
 			const graph = await buildOrUpdateGraph(cwd, [filePath], facts);
-			const impact = computeImpactCascade(graph, filePath);
+			const impact = computeImpactCascade(graph, filePath, cwd);
 			logTreeSitter({
 				phase: "blast_radius",
 				filePath,

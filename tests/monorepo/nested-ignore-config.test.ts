@@ -9,9 +9,8 @@
  *     finding 12 — `file-utils.ts`'s nested-.gitignore layering).
  *
  *  2. A nested `.pi-lens.json` INSIDE a package, with the repo root ALSO
- *     having one — audit open question 13, empirically resolved here:
- *     pi-lens has TWO independent `.pi-lens.json` discovery paths that do not
- *     agree:
+ *     having one — audit open question 13. Originally pi-lens had TWO
+ *     independent `.pi-lens.json` discovery paths that did not agree:
  *       - `getProjectScaleBase(cwd)` / `getProjectIgnoreMatcher`'s companion
  *         `loadPiLensProjectConfig` call for `maxProjectFiles` walks up from
  *         whatever `cwd` a subsystem is given (`project-lens-config.ts`'s
@@ -21,19 +20,22 @@
  *         starts there and stops at the first match.
  *       - `getProjectIgnoreMatcher(rootDir)` (the walk-wide ignore matcher
  *         used by every scanner) ALWAYS re-anchors its root to the nearest
- *         `.git` via `resolveGitIgnoreRoot` BEFORE loading `.pi-lens.json` —
- *         so its `ignore`/`rules` fields are read starting from the GIT ROOT,
- *         regardless of which `cwd` a subsystem was given. A package-local
- *         `.pi-lens.json`'s `ignore` field is therefore NEVER consulted by
- *         the ignore matcher — only the repo-root one is, even for files
- *         deep inside that same package.
- *     Net effect: "which `.pi-lens.json` wins" depends on WHICH FIELD and
- *     WHICH SUBSYSTEM — `maxProjectFiles` can be package-scoped,
- *     `ignore`/`rules` cannot. This is subtle and almost certainly NOT what a
- *     user authoring a package-local `.pi-lens.json` for its `ignore` field
- *     would expect (they'd expect it to affect files in that package) — so
- *     the `ignore`/`rules` half is marked KNOWN GAP below, not a "matches
- *     expectation" pin.
+ *         `.git` via `resolveGitIgnoreRoot` before loading `.pi-lens.json` —
+ *         so its `ignore`/`rules` fields were read starting from the GIT
+ *         ROOT ONLY, regardless of which `cwd` a subsystem was given. A
+ *         package-local `.pi-lens.json`'s `ignore` field was therefore never
+ *         consulted by the ignore matcher — only the repo-root one was, even
+ *         for files deep inside that same package. This was #783.
+ *     Fixed (#783) by layering nested `.pi-lens.json` `ignore` patterns the
+ *     same way nested `.gitignore`s are already layered: `file-utils.ts`'s
+ *     `buildProjectIgnoreMatcher` now checks every ancestor directory
+ *     between the git root and the target file for its OWN config file
+ *     (`project-lens-config.ts`'s `findPiLensConfigInDir` /
+ *     `loadPiLensConfigInDir`, no upward walk) and merges its `ignore`
+ *     patterns, anchored to that directory, with higher precedence than
+ *     shallower ancestors' patterns (mirroring gitignore's "later/closer
+ *     pattern wins" semantics). `maxProjectFiles` is unaffected by this fix —
+ *     it keeps using `loadPiLensProjectConfig`'s upward-walk discovery.
  */
 
 import { describe, expect, it } from "vitest";
@@ -108,7 +110,7 @@ describe("nested .gitignore + .pi-lens.json layering in a monorepo (#775 item 5)
 		});
 
 		it(
-			"KNOWN GAP (#775): a package-local .pi-lens.json's `ignore` field is NEVER consulted — the ignore matcher always re-anchors to the git root first, so only the ROOT .pi-lens.json's ignore patterns ever apply, even to files inside the package that defines its own",
+			"FIXED (#783): a package-local .pi-lens.json's `ignore` field IS consulted, alongside the root .pi-lens.json's ignore patterns",
 			() => {
 				const pkg: MonorepoPackageSpec = {
 					name: "@scope/a",
@@ -135,20 +137,87 @@ describe("nested .gitignore + .pi-lens.json layering in a monorepo (#775 item 5)
 							false,
 						),
 					).toBe(true);
-					// ...but the package's OWN .pi-lens.json ignore rule for a file
-					// inside itself is silently never applied — not what a user
-					// authoring a package-local ignore rule would expect.
+					// ...and the package's OWN .pi-lens.json ignore rule for a file
+					// inside itself is now also honored (#783).
 					expect(
 						matcher.isIgnored(
 							repo.filePath("@scope/a", "src/package-local-ignored.ts"),
 							false,
 						),
-					).toBe(false);
+					).toBe(true);
 				} finally {
 					resetProjectLensConfigCache();
 					repo.cleanup();
 				}
 			},
 		);
+
+		it("root .pi-lens.json ignore patterns still apply project-wide when there is no nested config at all", () => {
+			const pkg: MonorepoPackageSpec = {
+				name: "@scope/a",
+				dir: "packages/a",
+				files: {
+					"src/root-ignored.ts": "export const y = 1;\n",
+					"src/keep.ts": "export const keep = 1;\n",
+				},
+				// No package-local .pi-lens.json here at all.
+			};
+			const repo = makeMonorepo({
+				packages: [pkg],
+				rootPiLensConfig: { ignore: ["packages/a/src/root-ignored.ts"] },
+			});
+			try {
+				resetProjectLensConfigCache();
+				const matcher = getProjectIgnoreMatcher(repo.root);
+				expect(
+					matcher.isIgnored(
+						repo.filePath("@scope/a", "src/root-ignored.ts"),
+						false,
+					),
+				).toBe(true);
+				expect(
+					matcher.isIgnored(repo.filePath("@scope/a", "src/keep.ts"), false),
+				).toBe(false);
+			} finally {
+				resetProjectLensConfigCache();
+				repo.cleanup();
+			}
+		});
+
+		it("a nested .pi-lens.json's ignore patterns do NOT leak outside its own package directory", () => {
+			const pkgA: MonorepoPackageSpec = {
+				name: "@scope/a",
+				dir: "packages/a",
+				files: { "src/local.ts": "export const a = 1;\n" },
+				// @scope/a ignores a file named "src/local.ts" relative to ITSELF.
+				piLensConfig: { ignore: ["src/local.ts"] },
+			};
+			const pkgB: MonorepoPackageSpec = {
+				name: "@scope/b",
+				dir: "packages/b",
+				// @scope/b has a file with the IDENTICAL relative path/name — it
+				// must stay un-ignored since @scope/a's config is scoped to @scope/a.
+				files: { "src/local.ts": "export const b = 1;\n" },
+			};
+			const repo = makeMonorepo({ packages: [pkgA, pkgB] });
+			try {
+				resetProjectLensConfigCache();
+				const matcher = getProjectIgnoreMatcher(repo.root);
+				expect(
+					matcher.isIgnored(repo.filePath("@scope/a", "src/local.ts"), false),
+				).toBe(true);
+				expect(
+					matcher.isIgnored(repo.filePath("@scope/b", "src/local.ts"), false),
+				).toBe(false);
+				// Same relative path at the repo root (outside any package) must
+				// also stay un-ignored — @scope/a's config doesn't leak upward.
+				expect(
+					matcher.isIgnored(repo.rootFilePath("src/local.ts"), false),
+				).toBe(false);
+			} finally {
+				resetProjectLensConfigCache();
+				repo.cleanup();
+			}
+		});
 	});
 });

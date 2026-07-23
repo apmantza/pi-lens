@@ -64,6 +64,10 @@ In addition to the user-level `~/.pi-lens/config.json` above, pi-lens reads a pe
 
 Array of gitignore-style glob patterns. Any path matching is excluded from every diagnostic scan (LSP walk, fact-rules, tree-sitter, jscpd, knip, review graph, source-filter). Useful for vendored code, generated files, or per-project noise you want to silence without editing `.gitignore` (which would also affect git itself). These patterns take precedence over the global `~/.pi-lens/config.json` `ignore`, so a `!negation` here can re-include a globally-ignored path.
 
+In a monorepo, `ignore` **layers** across nested `.pi-lens.json` files the same way nested `.gitignore`s do: a `.pi-lens.json` inside a package directory (e.g. `packages/a/.pi-lens.json`) contributes its own `ignore` patterns for files under that package, in addition to the repo-root config's patterns — each anchored relative to its own directory, and a nested package's patterns winning over the root's for files inside that package. A package-local config's `ignore` patterns never affect files outside its own directory.
+
+Note: `maxProjectFiles` (below) is discovered differently — via an upward walk from whatever directory a subsystem is invoked with — so it can resolve to a package-local override even where `ignore` does not, if the two configs disagree. See `clients/project-lens-config.ts` for the discovery details.
+
 ### `rules`
 
 Per-rule threshold overrides. Currently honored:
