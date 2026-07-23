@@ -29,12 +29,6 @@ import type {
 // Side-effect import: registers fact providers and fact rules.
 import "../dispatch/integration.js";
 
-// Deprecated: kept only as the pre-#776 literal default for callers/tests
-// that reference it directly. New code should not need this — the scan
-// below now derives its default from `getProjectDiagnosticsScannerMaxFiles`
-// (#776's `maxProjectFiles` scale knob), which reproduces this same value at
-// the default base.
-const DEFAULT_MAX_FILES = 500;
 // Skip files this large: matches the per-edit ast-grep runner's guard so a single
 // generated megafile can't dominate a project scan.
 const AST_GREP_MAX_FILE_BYTES = 1024 * 1024;
