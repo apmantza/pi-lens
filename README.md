@@ -186,6 +186,14 @@ Thanks goes to these wonderful people:
       <td align="center" valign="top" width="14.28%"><a href="https://eisterman.dev/"><img src="https://avatars.githubusercontent.com/u/3028953?v=4" width="100px;" alt=""/><br /><sub><b>Federico Pasqua</b></sub></a><br /><a href="#bug-eisterman" title="Bug reports">🐛</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/ymek"><img src="https://avatars.githubusercontent.com/u/300569?v=4" width="100px;" alt=""/><br /><sub><b>Myke Stubbs</b></sub></a><br /><a href="#code-ymek" title="Code">💻</a> <a href="#bug-ymek" title="Bug reports">🐛</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/black-snow"><img src="https://avatars.githubusercontent.com/u/579733?v=4" width="100px;" alt=""/><br /><sub><b>Ronald</b></sub></a><br /><a href="#bug-black-snow" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/JSap0914"><img src="https://avatars.githubusercontent.com/u/116227558?v=4" width="100px;" alt=""/><br /><sub><b>JSap0914</b></sub></a><br /><a href="#code-JSap0914" title="Code">💻</a></td>
+    </tr><br />
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/AngriestBird"><img src="https://avatars.githubusercontent.com/u/12663269?v=4" width="100px;" alt=""/><br /><sub><b>Kenneth McCormick</b></sub></a><br /><a href="#bug-AngriestBird" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/knthmn"><img src="https://avatars.githubusercontent.com/u/60438008?v=4" width="100px;" alt=""/><br /><sub><b>Kent Hou Man</b></sub></a><br /><a href="#code-knthmn" title="Code">💻</a> <a href="#bug-knthmn" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/aaronkyriesenbach"><img src="https://avatars.githubusercontent.com/u/12665860?v=4" width="100px;" alt=""/><br /><sub><b>Aaron Ky-Riesenbach</b></sub></a><br /><a href="#bug-aaronkyriesenbach" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/LovelyLoong"><img src="https://avatars.githubusercontent.com/u/54889641?v=4" width="100px;" alt=""/><br /><sub><b>可爱的龙</b></sub></a><br /><a href="#bug-LovelyLoong" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/pppobear"><img src="https://avatars.githubusercontent.com/u/21952175?v=4" width="100px;" alt=""/><br /><sub><b>pppobear</b></sub></a><br /><a href="#bug-pppobear" title="Bug reports">🐛</a></td>
     </tr>
 </tbody>
 </table>

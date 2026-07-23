@@ -784,6 +784,80 @@
       "contributions": [
         "bug"
       ]
+    },
+    {
+      "login": "ymek",
+      "name": "Myke Stubbs",
+      "avatar_url": "https://avatars.githubusercontent.com/u/300569?v=4",
+      "profile": "https://github.com/ymek",
+      "contributions": [
+        "code",
+        "bug"
+      ]
+    },
+    {
+      "login": "black-snow",
+      "name": "Ronald",
+      "avatar_url": "https://avatars.githubusercontent.com/u/579733?v=4",
+      "profile": "https://github.com/black-snow",
+      "contributions": [
+        "bug"
+      ]
+    },
+    {
+      "login": "JSap0914",
+      "name": "JSap0914",
+      "avatar_url": "https://avatars.githubusercontent.com/u/116227558?v=4",
+      "profile": "https://github.com/JSap0914",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "AngriestBird",
+      "name": "Kenneth McCormick",
+      "avatar_url": "https://avatars.githubusercontent.com/u/12663269?v=4",
+      "profile": "https://github.com/AngriestBird",
+      "contributions": [
+        "bug"
+      ]
+    },
+    {
+      "login": "knthmn",
+      "name": "Kent Hou Man",
+      "avatar_url": "https://avatars.githubusercontent.com/u/60438008?v=4",
+      "profile": "https://github.com/knthmn",
+      "contributions": [
+        "code",
+        "bug"
+      ]
+    },
+    {
+      "login": "aaronkyriesenbach",
+      "name": "Aaron Ky-Riesenbach",
+      "avatar_url": "https://avatars.githubusercontent.com/u/12665860?v=4",
+      "profile": "https://github.com/aaronkyriesenbach",
+      "contributions": [
+        "bug"
+      ]
+    },
+    {
+      "login": "LovelyLoong",
+      "name": "可爱的龙",
+      "avatar_url": "https://avatars.githubusercontent.com/u/54889641?v=4",
+      "profile": "https://github.com/LovelyLoong",
+      "contributions": [
+        "bug"
+      ]
+    },
+    {
+      "login": "pppobear",
+      "name": "pppobear",
+      "avatar_url": "https://avatars.githubusercontent.com/u/21952175?v=4",
+      "profile": "https://github.com/pppobear",
+      "contributions": [
+        "bug"
+      ]
     }
   ]
 }
