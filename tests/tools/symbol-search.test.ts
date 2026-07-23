@@ -5,14 +5,39 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { FactStore } from "../../clients/dispatch/fact-store.js";
 import { PROJECT_SNAPSHOT_VERSION, saveProjectSnapshot } from "../../clients/project-snapshot.js";
+import {
+	buildOrUpdateGraph,
+	clearReviewGraphWorkspaceCache,
+	getCachedReviewGraph,
+} from "../../clients/review-graph/builder.js";
 import { buildWordIndex, serializeWordIndex, _resetWordIndexBuildGuardForTests } from "../../clients/word-index.js";
 import { createSymbolSearchTool } from "../../tools/symbol-search.js";
 import { createTempFile, setupTestEnvironment } from "../clients/test-utils.js";
 
 afterEach(() => {
 	_resetWordIndexBuildGuardForTests();
+	clearReviewGraphWorkspaceCache();
 });
+
+function warmWordIndexSnapshot(
+	tmpDir: string,
+	files: Array<{ path: string; content: string }>,
+): void {
+	const index = buildWordIndex(files);
+	saveProjectSnapshot(tmpDir, {
+		version: PROJECT_SNAPSHOT_VERSION,
+		projectRoot: tmpDir,
+		generatedAt: new Date().toISOString(),
+		seq: 0,
+		files: {},
+		symbols: {},
+		reverseDeps: {},
+		cachedExports: [],
+		wordIndex: serializeWordIndex(index),
+	});
+}
 
 describe("symbol_search tool", () => {
 	it("cold path: returns available:false with an actionable hint and kicks off a background build", async () => {
@@ -145,5 +170,231 @@ describe("symbol_search tool", () => {
 		} finally {
 			env.cleanup();
 		}
+	});
+
+	// #771: `paths`/`lang` scope hits before ranking; omitting them reproduces
+	// today's output. Every hit also carries a `suggestedNext` discovery hint.
+	describe("paths/lang filters + suggestedNext (#771)", () => {
+		function makeFixture(env: { tmpDir: string }) {
+			const tsFile = createTempFile(
+				env.tmpDir,
+				"src/auth/login.ts",
+				"export function authenticateUser(id) { return id; }",
+			);
+			const pyFile = createTempFile(
+				env.tmpDir,
+				"scripts/authenticate.py",
+				"def authenticate_user(id):\n    return id\n",
+			);
+			warmWordIndexSnapshot(env.tmpDir, [
+				{ path: tsFile, content: "export function authenticateUser(id) { return id; }" },
+				{
+					path: pyFile,
+					content: "def authenticate_user(id):\n    return id\n",
+				},
+			]);
+			return { tsFile, pyFile };
+		}
+
+		it("omitting paths/lang returns identical output to today (both files ranked)", async () => {
+			const env = setupTestEnvironment("pi-lens-symbolsearch-nofilter-");
+			try {
+				makeFixture(env);
+				const tool = createSymbolSearchTool(() => env.tmpDir);
+				const result = await tool.execute(
+					"1",
+					{ query: "authenticate user" },
+					undefined,
+					null,
+					{ cwd: env.tmpDir },
+				);
+				const text = String(result.content[0]?.text);
+				const payload = JSON.parse(text.slice(text.indexOf("{"))) as {
+					results: Array<{ file: string }>;
+				};
+				expect(payload.results.map((r) => r.file.replace(/\\/g, "/")).sort()).toEqual(
+					["scripts/authenticate.py", "src/auth/login.ts"].sort(),
+				);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("`lang` filters hits before ranking to one language", async () => {
+			const env = setupTestEnvironment("pi-lens-symbolsearch-lang-");
+			try {
+				makeFixture(env);
+				const tool = createSymbolSearchTool(() => env.tmpDir);
+				const result = await tool.execute(
+					"1",
+					{ query: "authenticate user", lang: "python" },
+					undefined,
+					null,
+					{ cwd: env.tmpDir },
+				);
+				const text = String(result.content[0]?.text);
+				const payload = JSON.parse(text.slice(text.indexOf("{"))) as {
+					results: Array<{ file: string }>;
+				};
+				expect(payload.results).toHaveLength(1);
+				expect(payload.results[0].file.replace(/\\/g, "/")).toBe(
+					"scripts/authenticate.py",
+				);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("`paths` glob scopes hits to matching files (same shape as ast_grep_search)", async () => {
+			const env = setupTestEnvironment("pi-lens-symbolsearch-paths-");
+			try {
+				makeFixture(env);
+				const tool = createSymbolSearchTool(() => env.tmpDir);
+				const result = await tool.execute(
+					"1",
+					{ query: "authenticate user", paths: ["src"] },
+					undefined,
+					null,
+					{ cwd: env.tmpDir },
+				);
+				const text = String(result.content[0]?.text);
+				const payload = JSON.parse(text.slice(text.indexOf("{"))) as {
+					results: Array<{ file: string }>;
+				};
+				expect(payload.results).toHaveLength(1);
+				expect(payload.results[0].file.replace(/\\/g, "/")).toBe("src/auth/login.ts");
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("attaches a suggestedNext module_report hint per hit", async () => {
+			const env = setupTestEnvironment("pi-lens-symbolsearch-suggestednext-");
+			try {
+				const { tsFile } = makeFixture(env);
+				void tsFile;
+				const tool = createSymbolSearchTool(() => env.tmpDir);
+				const result = await tool.execute(
+					"1",
+					{ query: "authenticate user" },
+					undefined,
+					null,
+					{ cwd: env.tmpDir },
+				);
+				const text = String(result.content[0]?.text);
+				const payload = JSON.parse(text.slice(text.indexOf("{"))) as {
+					results: Array<{
+						file: string;
+						suggestedNext?: { tool: string; path: string };
+					}>;
+				};
+				expect(payload.results.length).toBeGreaterThan(0);
+				for (const hit of payload.results) {
+					expect(hit.suggestedNext).toEqual({
+						tool: "module_report",
+						path: hit.file,
+					});
+				}
+			} finally {
+				env.cleanup();
+			}
+		});
+	});
+
+	// #771: graph-aware hit annotations — read-only, present only when the
+	// cached review graph happens to be warm; a cold cache must neither
+	// annotate nor trigger a build (the tool's latency profile is unchanged).
+	describe("graph-aware annotations (#771)", () => {
+		it("cold graph: no annotations, and no graph build is triggered", async () => {
+			const env = setupTestEnvironment("pi-lens-symbolsearch-graphcold-");
+			try {
+				createTempFile(
+					env.tmpDir,
+					"src/auth.ts",
+					"export function authenticateUser(id) { return id; }",
+				);
+				warmWordIndexSnapshot(env.tmpDir, [
+					{
+						path: "src/auth.ts",
+						content: "export function authenticateUser(id) { return id; }",
+					},
+				]);
+				expect(getCachedReviewGraph(env.tmpDir)).toBeUndefined();
+
+				const tool = createSymbolSearchTool(() => env.tmpDir);
+				const result = await tool.execute(
+					"1",
+					{ query: "authenticate user" },
+					undefined,
+					null,
+					{ cwd: env.tmpDir },
+				);
+				const text = String(result.content[0]?.text);
+				const payload = JSON.parse(text.slice(text.indexOf("{"))) as {
+					results: Array<{ annotations?: unknown }>;
+				};
+				expect(payload.results.length).toBeGreaterThan(0);
+				for (const hit of payload.results) {
+					expect(hit.annotations).toBeUndefined();
+				}
+				// The read-only accessor must not have built/cached a graph as a
+				// side effect of this call.
+				expect(getCachedReviewGraph(env.tmpDir)).toBeUndefined();
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("warm graph: annotates hits with fanIn/complexity signals", async () => {
+			const env = setupTestEnvironment("pi-lens-symbolsearch-graphwarm-");
+			try {
+				const authFile = createTempFile(
+					env.tmpDir,
+					"src/auth.ts",
+					[
+						"export function authenticateUser(id) {",
+						"  if (id) {",
+						"    return id;",
+						"  }",
+						"  return null;",
+						"}",
+					].join("\n"),
+				);
+				warmWordIndexSnapshot(env.tmpDir, [
+					{
+						path: authFile,
+						content: [
+							"export function authenticateUser(id) {",
+							"  if (id) {",
+							"    return id;",
+							"  }",
+							"  return null;",
+							"}",
+						].join("\n"),
+					},
+				]);
+				await buildOrUpdateGraph(env.tmpDir, [], new FactStore());
+				expect(getCachedReviewGraph(env.tmpDir)).toBeDefined();
+
+				const tool = createSymbolSearchTool(() => env.tmpDir);
+				const result = await tool.execute(
+					"1",
+					{ query: "authenticate user" },
+					undefined,
+					null,
+					{ cwd: env.tmpDir },
+				);
+				const text = String(result.content[0]?.text);
+				const payload = JSON.parse(text.slice(text.indexOf("{"))) as {
+					results: Array<{ annotations?: { fanIn: number; complexity?: number } }>;
+				};
+				expect(payload.results.length).toBeGreaterThan(0);
+				const hit = payload.results[0];
+				expect(hit.annotations).toBeDefined();
+				expect(typeof hit.annotations?.fanIn).toBe("number");
+			} finally {
+				env.cleanup();
+			}
+		});
 	});
 });

@@ -114,6 +114,24 @@ describe("index.ts extension wiring", () => {
 			}
 		});
 
+		// #771: symbol_search's ergonomics additions (paths/lang filters) must
+		// actually be registered on the tool's parameter schema, not just
+		// present in the tool's implementation.
+		it("registers symbol_search's paths/lang params (#771)", () => {
+			const pi = createPiMock();
+			extension(pi.asExtensionAPI());
+
+			const tool = pi.getTool("symbol_search") as
+				| { parameters?: { properties?: Record<string, unknown> } }
+				| undefined;
+			expect(tool).toBeDefined();
+			const properties = tool?.parameters?.properties ?? {};
+			expect(properties).toHaveProperty("paths");
+			expect(properties).toHaveProperty("lang");
+			expect(properties).toHaveProperty("query");
+			expect(properties).toHaveProperty("limit");
+		});
+
 		// #dynamic-tooling: 6 situational tools are registered but start
 		// inactive on a host that supports pi's dynamic tool loading
 		// (pi.getActiveTools/setActiveTools); the 6 always-active tools plus

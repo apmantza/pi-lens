@@ -66,6 +66,14 @@ export interface RankOptions {
 	centrality?: Map<string, number>;
 	/** Max results to return (default 20). */
 	limit?: number;
+	/**
+	 * Optional pre-ranking scope predicate (#771, e.g. symbol_search's `paths`/
+	 * `lang` params) — a file failing this check is dropped BEFORE its score
+	 * entry is created, so a surviving file's score/priors/centrality boost are
+	 * computed identically to an unfiltered run; only which files make it into
+	 * the results list changes. Omitted (default) behaves exactly as before.
+	 */
+	fileFilter?: (file: string) => boolean;
 }
 
 // Common language keywords / boilerplate — indexing them adds noise and bloats
@@ -329,6 +337,7 @@ export function searchWordIndex(
 		demoteDocs = true,
 		centrality,
 		limit = 20,
+		fileFilter,
 	} = options;
 
 	const queryTokens = [...new Set(tokenizeLine(query))];
@@ -359,6 +368,7 @@ export function searchWordIndex(
 		);
 
 		for (const [file, lines] of linesByFile) {
+			if (fileFilter && !fileFilter(file)) continue;
 			const termFrequency = lines.length;
 			const docLength = index.docLengths.get(file) ?? avgDocLength;
 			const denominator =
