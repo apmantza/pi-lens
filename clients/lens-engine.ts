@@ -29,8 +29,10 @@ import { getOrLoadWarmWordIndex } from "./mcp/analyze.js";
 import { scanProjectDiagnostics } from "./project-diagnostics/scanner.js";
 import type { ProjectDiagnosticsSnapshot } from "./project-diagnostics/types.js";
 import * as path from "node:path";
+import { minimatch } from "./deps/minimatch.js";
 import { normalizeMapKey } from "./path-utils.js";
 import { loadProjectSnapshot } from "./project-snapshot.js";
+import type { ReviewGraph } from "./review-graph/types.js";
 import {
 	centralityFromReverseDeps,
 	deserializeWordIndex,
@@ -154,6 +156,145 @@ export interface SymbolSearchHit {
 	hits: number;
 	startLine: number;
 	endLine: number;
+	/**
+	 * Graph-aware transparency for the ranking (#771): present only when the
+	 * cached review graph happens to be warm (never built/blocked on for this —
+	 * see `symbolSearch`'s doc comment). `fanIn` is the SAME reverse-dependency
+	 * centrality value already used to boost this hit's score (0 when the file
+	 * has no known importers); `complexity` is the highest per-symbol cyclomatic
+	 * complexity the graph recorded for this file, omitted when the graph has no
+	 * symbol nodes for it (e.g. a non-jsts file, or the file has none).
+	 */
+	annotations?: { fanIn: number; complexity?: number };
+}
+
+/**
+ * Optional pre-ranking scope for `symbolSearch` (#771). Both filters are
+ * applied to the word index BEFORE BM25/priors/centrality scoring runs, so a
+ * surviving file's score is identical to what an unfiltered query would have
+ * produced for it — only which files make it into `results` changes. Omitting
+ * both (the default) reproduces today's output byte-for-byte.
+ */
+export interface SymbolSearchOptions {
+	/**
+	 * Glob array scoping hits to matching files — same shape/semantics as
+	 * `ast_grep_search`'s `paths` param: a bare directory/file entry scopes its
+	 * whole subtree, a full glob pattern (`src/**\/*.ts`) is matched as-is.
+	 * Matched against each candidate file's path relative to `cwd`.
+	 */
+	paths?: string[];
+	/**
+	 * Restrict hits to one language, using the same language identifiers as
+	 * `ast_grep_search`'s `lang` param (e.g. "typescript", "python", "go").
+	 */
+	lang?: string;
+}
+
+// Same language identifiers ast_grep_search's `lang` param accepts
+// (tools/shared.ts's LANGUAGES) mapped to source file extensions. Duplicated
+// here rather than imported — clients/ never reaches into tools/ (see
+// AGENTS.md's MCP-mirror layering note) — so this is symbol_search's own small
+// copy, scoped to what its `lang` filter needs (extension matching only, no
+// AST/LSP concerns).
+const SYMBOL_SEARCH_LANG_EXTENSIONS: Readonly<Record<string, readonly string[]>> = {
+	bash: [".sh", ".bash"],
+	c: [".c", ".h"],
+	cpp: [".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx"],
+	csharp: [".cs"],
+	css: [".css", ".scss", ".less"],
+	elixir: [".ex", ".exs"],
+	go: [".go"],
+	haskell: [".hs", ".lhs"],
+	html: [".html", ".htm"],
+	java: [".java"],
+	javascript: [".js", ".jsx", ".mjs", ".cjs"],
+	json: [".json", ".jsonc", ".json5"],
+	kotlin: [".kt", ".kts"],
+	lua: [".lua"],
+	nix: [".nix"],
+	php: [".php"],
+	python: [".py", ".pyi"],
+	ruby: [".rb", ".rake", ".gemspec"],
+	rust: [".rs"],
+	scala: [".scala", ".sc"],
+	solidity: [".sol"],
+	swift: [".swift"],
+	tsx: [".tsx"],
+	typescript: [".ts", ".mts", ".cts"],
+	yaml: [".yaml", ".yml"],
+};
+
+function fileMatchesLang(file: string, lang: string): boolean {
+	const exts = SYMBOL_SEARCH_LANG_EXTENSIONS[lang];
+	if (!exts) return false;
+	return exts.includes(path.extname(file).toLowerCase());
+}
+
+/** Same glob semantics as ast_grep_search's `paths`: a bare directory/file
+ * entry scopes its whole subtree (via a `/**` suffix match), a full glob
+ * pattern is matched as-is. Matched relative to `cwd` so absolute index paths
+ * and repo-relative globs line up regardless of platform path separators. */
+function fileMatchesPathGlobs(
+	file: string,
+	cwd: string,
+	globs: readonly string[],
+): boolean {
+	const rel = path.relative(cwd, file).split(path.sep).join("/");
+	const options = { dot: true, nocase: process.platform === "win32" };
+	return globs.some((raw) => {
+		const pattern = raw.split("\\").join("/");
+		return (
+			minimatch(rel, pattern, options) ||
+			minimatch(rel, `${pattern}/**`, options)
+		);
+	});
+}
+
+function buildSymbolSearchFileFilter(
+	cwd: string,
+	options: SymbolSearchOptions,
+): ((file: string) => boolean) | undefined {
+	const paths = options.paths?.filter((p) => p.trim().length > 0);
+	const lang = options.lang?.trim();
+	if (!paths?.length && !lang) return undefined;
+	return (file: string) => {
+		if (paths?.length && !fileMatchesPathGlobs(file, cwd, paths)) return false;
+		if (lang && !fileMatchesLang(file, lang)) return false;
+		return true;
+	};
+}
+
+/**
+ * Attaches read-only graph signals to already-ranked hits (#771) — mutates
+ * each hit in place. `fanIn` reuses the SAME `centrality` map `symbolSearch`
+ * already computed for its ranking boost (zero extra cost); `complexity` is
+ * the highest per-symbol `cyclomaticComplexity` the (warm) review graph
+ * recorded for that file. Caller only invokes this when `graph` is defined —
+ * never builds one itself.
+ */
+function annotateSymbolSearchHitsWithGraph(
+	hits: SymbolSearchHit[],
+	centrality: Map<string, number>,
+	graph: ReviewGraph,
+): void {
+	for (const hit of hits) {
+		const normalized = normalizeMapKey(path.resolve(hit.file));
+		const fanIn = centrality.get(hit.file) ?? 0;
+		let complexity: number | undefined;
+		for (const symbolId of graph.symbolNodesByFile.get(normalized) ?? []) {
+			const raw = graph.nodes.get(symbolId)?.metadata?.cyclomaticComplexity;
+			if (
+				typeof raw === "number" &&
+				(complexity === undefined || raw > complexity)
+			) {
+				complexity = raw;
+			}
+		}
+		hit.annotations = {
+			fanIn,
+			...(complexity !== undefined ? { complexity } : {}),
+		};
+	}
 }
 
 export interface SymbolSearchResult {
@@ -205,12 +346,27 @@ function toSymbolSearchHit(result: RankedFile): SymbolSearchHit {
  * pilens_analyze yet this process, or #348 phase 2's forward-index isn't
  * available) — this function's public contract (available/hint/results shape)
  * is unchanged either way.
+ *
+ * `options.paths`/`options.lang` (#771) scope the word index BEFORE ranking
+ * (`searchWordIndex`'s `fileFilter`), so a surviving file's score is identical
+ * to an unfiltered run; omitting both reproduces prior output byte-for-byte.
+ *
+ * Every hit is additionally annotated (#771) with the graph signals already
+ * available when the cached review graph happens to be warm —
+ * `getCachedReviewGraph` (`clients/review-graph/builder.ts`) is a READ-ONLY
+ * accessor: an in-memory miss falls through to a persisted-disk read, and
+ * NOTHING here ever triggers a fresh build. A cold cache (no in-memory graph,
+ * no persisted snapshot) simply omits `annotations` — this function's latency
+ * profile is unchanged either way. The module is dynamic-imported (mirroring
+ * module-report.ts's own lazy load of it) so an unused review graph costs
+ * nothing on this hot path.
  */
-export function symbolSearch(
+export async function symbolSearch(
 	query: string,
 	cwd: string,
 	limit = 20,
-): SymbolSearchResult {
+	options: SymbolSearchOptions = {},
+): Promise<SymbolSearchResult> {
 	const snapshot = loadProjectSnapshot(cwd);
 	const index = getOrLoadWarmWordIndex(cwd) ?? deserializeWordIndex(snapshot?.wordIndex);
 	if (!index) {
@@ -229,11 +385,18 @@ export function symbolSearch(
 		snapshot?.reverseDeps,
 		(file) => normalizeMapKey(path.resolve(file)),
 	);
-	const results = searchWordIndex(index, query, { limit, centrality });
+	const fileFilter = buildSymbolSearchFileFilter(cwd, options);
+	const results = searchWordIndex(index, query, { limit, centrality, fileFilter });
+	const hits = results.map(toSymbolSearchHit);
+
+	const { getCachedReviewGraph } = await import("./review-graph/builder.js");
+	const graph = getCachedReviewGraph(cwd);
+	if (graph) annotateSymbolSearchHitsWithGraph(hits, centrality, graph);
+
 	return {
 		available: true,
 		query,
-		results: results.map(toSymbolSearchHit),
+		results: hits,
 		snapshotGeneratedAt: snapshot?.generatedAt,
 	};
 }
