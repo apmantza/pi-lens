@@ -67,6 +67,10 @@ export const RUNTIME_CONFIG = {
 		showEveryNth: 5,
 	},
 	reviewGraph: {
+		// Deprecated (#776): no longer read by `review-graph/builder.ts`, which
+		// now derives its fallback from `project-scale.ts`'s `maxProjectFiles`
+		// knob (reproducing this same 1,000 default at the default base). Left
+		// in place only in case an external caller still reads the constant.
 		maxFiles: 1_000,
 		maxFileBytes: 1 * 1024 * 1024,
 	},

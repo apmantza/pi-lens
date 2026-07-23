@@ -20,6 +20,7 @@ import {
 } from "./file-utils.js";
 import { findNodeToolBinary } from "./package-manager.js";
 import { isAtOrAboveHomeDir } from "./path-utils.js";
+import { getJscpdMaxEntriesDerived } from "./project-scale.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { shouldRecurseIntoDir, walkTreeStackSync } from "./source-walker.js";
 
@@ -80,7 +81,9 @@ export class JscpdClient {
 	private hasSourceFilesRecursive(rootDir: string): boolean {
 		const ignoreMatcher = getProjectIgnoreMatcher(rootDir);
 		const state = { visited: 0 };
-		const MAX_ENTRIES = 6000;
+		// #776: derived from the `maxProjectFiles` scale knob (project-scale.ts),
+		// reproducing this same 6,000 default at the default base.
+		const MAX_ENTRIES = getJscpdMaxEntriesDerived(rootDir);
 
 		// #761: the traversal loop, readdir-safety, and directory-recursion
 		// decision are the shared `walkTreeStackSync` engine; this client keeps

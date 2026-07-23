@@ -153,6 +153,15 @@ export const DEFAULT_MAX_SOURCE_FILES = 20000;
  * data-dominated tree, while staying an order of magnitude above any healthy
  * project's entry count — so real repos never see a truncated list. Callers
  * that need a tighter bound pass `maxScanEntries` explicitly.
+ *
+ * #776 note: deliberately NOT derived from `project-scale.ts`'s
+ * `maxProjectFiles` knob, unlike the five file-count budgets it unifies. This
+ * is a directory-ENTRIES-visited safety valve, not a source-files-kept
+ * budget — the two units don't scale together (a repo with a huge
+ * non-source data/asset tree needs a much larger entries budget than its
+ * file count would suggest), so coupling them risks changing behavior on
+ * exactly the pathological-tree shapes this ceiling protects. See
+ * `project-scale.ts`'s file header for the full rationale.
  */
 export const DEFAULT_MAX_SCAN_ENTRIES = 200_000;
 

@@ -19,6 +19,7 @@ import {
 	normalizeMapKey,
 } from "../path-utils.js";
 import { collectProjectSourceFilesWithBudgetAsync } from "../project-scan-policy.js";
+import { getReviewGraphMaxFilesDerived } from "../project-scale.js";
 import {
 	jsTsCandidatePaths,
 	resolveImportToFiles,
@@ -480,14 +481,20 @@ function diffSignatureMaps(
 	return { added, removed, changed };
 }
 
-function getReviewGraphMaxFiles(): number {
+// #776: `PI_LENS_REVIEW_GRAPH_MAX_FILES` (the existing per-subsystem env
+// override) still wins outright; below it, the derived `maxProjectFiles`
+// scale-knob value (see `project-scale.ts`) replaces the old hardcoded
+// `RUNTIME_CONFIG.reviewGraph.maxFiles` constant as the fallback — the ratio
+// table reproduces that same 1,000-file default at the default base, so this
+// is behavior-neutral when nothing is configured.
+function getReviewGraphMaxFiles(cwd?: string): number {
 	const override = Number.parseInt(
 		process.env.PI_LENS_REVIEW_GRAPH_MAX_FILES ?? "",
 		10,
 	);
 	return Number.isFinite(override) && override > 0
 		? override
-		: RUNTIME_CONFIG.reviewGraph.maxFiles;
+		: getReviewGraphMaxFilesDerived(cwd);
 }
 
 function getReviewGraphMaxFileBytes(): number {
@@ -517,7 +524,7 @@ async function getGraphSourceFiles(cwd: string): Promise<string[]> {
 	// and paying a statSync per file before the caller bails on count (#250). When
 	// the cap is hit the caller skips the build on count alone, so the unfiltered
 	// over-limit list is all it needs — see _doBuildGraph's too_many_files branch.
-	const maxGraphFiles = getReviewGraphMaxFiles();
+	const maxGraphFiles = getReviewGraphMaxFiles(cwd);
 	// #760: the maxFiles cap above bounds results FOUND, not entries VISITED —
 	// a mixed tree with few source files among a huge pile of non-source files
 	// never trips it. The walk's default entry budget (DEFAULT_MAX_SCAN_ENTRIES)
@@ -2083,7 +2090,7 @@ async function _doBuildGraph(
 
 	const filesToBuild = await getGraphSourceFiles(cwd);
 	const ignoredIds = await ignoredIdsPromise;
-	const maxGraphFiles = getReviewGraphMaxFiles();
+	const maxGraphFiles = getReviewGraphMaxFiles(cwd);
 	if (filesToBuild.length > maxGraphFiles) {
 		const graph = createEmptyGraph();
 		graph.version = REVIEW_GRAPH_VERSION;
