@@ -85,7 +85,7 @@
 		"@ast-grep/cli": "^0.44.0",
 		"@ast-grep/napi": "^0.44.0",
 		"@earendil-works/pi-tui": "^0.80.2",
-		"js-yaml": "^4.1.1",
+		"js-yaml": "^5.2.1",
 		"minimatch": "^10.2.5",
 		"pidusage": "^4.0.1",
 		"typebox": "^1.0.0",
