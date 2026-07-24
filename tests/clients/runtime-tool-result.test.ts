@@ -350,6 +350,7 @@ describe("runtime-tool-result inline behavior warnings", () => {
 				expect.any(String),
 				"edit",
 				env.tmpDir,
+				undefined,
 			);
 		} finally {
 			env.cleanup();
