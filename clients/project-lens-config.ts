@@ -46,6 +46,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { parseEnabledShape } from "./config-enabled-shape.js";
 import { walkUpDirs } from "./path-utils.js";
 
 const PROJECT_CONFIG_BASENAMES = [".pi-lens.json", "pi-lens.json"];
@@ -252,22 +253,9 @@ function parseEnabledConfig(
 	fieldPath: string,
 	value: unknown,
 ): PiLensProjectMutationConfig | undefined {
-	if (value === undefined) return undefined;
-	if (!value || typeof value !== "object" || Array.isArray(value)) {
-		warnInvalidConfigOnce(configPath, `${fieldPath} must be an object`);
-		return undefined;
-	}
-
-	const raw = value as Record<string, unknown>;
-	if (!("enabled" in raw)) return {};
-	if (typeof raw.enabled !== "boolean") {
-		warnInvalidConfigOnce(
-			configPath,
-			`${fieldPath}.enabled must be a boolean`,
-		);
-		return {};
-	}
-	return { enabled: raw.enabled };
+	return parseEnabledShape(value, fieldPath, (reason) =>
+		warnInvalidConfigOnce(configPath, reason),
+	);
 }
 
 function parseConfigFile(configPath: string): PiLensProjectConfig {

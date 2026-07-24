@@ -39,6 +39,7 @@ import { getAllToolStatuses } from "./clients/installer/index.js";
 import {
 	loadPiLensGlobalConfig,
 	resolvePiLensFlag,
+	resolvePiLensFlagWithSource,
 } from "./clients/lens-config.js";
 import { loadPiLensProjectConfig } from "./clients/project-lens-config.js";
 import { initLensEvents } from "./clients/lens-events.js";
@@ -459,6 +460,21 @@ export default function (pi: ExtensionAPI) {
 			: pi.getFlag(name);
 		const projectConfig = loadPiLensProjectConfig(runtime.projectRoot);
 		return resolvePiLensFlag(name, cliValue, globalConfig, projectConfig);
+	}
+
+	// #792: sibling of getLensFlag reporting WHICH config tier decided the
+	// value, so mutation-skip dbg lines can name it (e.g. "source=project")
+	// instead of a bare boolean. Threaded to pipeline/agent_end via the
+	// optional `getFlagSource` field — zero effect on getLensFlag itself.
+	function getLensFlagSource(name: string): ReturnType<
+		typeof resolvePiLensFlagWithSource
+	>["source"] {
+		const cliValue = globalConfigOnlyFlags.has(name)
+			? undefined
+			: pi.getFlag(name);
+		const projectConfig = loadPiLensProjectConfig(runtime.projectRoot);
+		return resolvePiLensFlagWithSource(name, cliValue, globalConfig, projectConfig)
+			.source;
 	}
 
 	let lensEnabled = !getLensFlag("no-lens");
@@ -1445,6 +1461,7 @@ export default function (pi: ExtensionAPI) {
 			return await handleToolResult({
 				event: event as any,
 				getFlag: (name: string) => getLensFlag(name),
+				getFlagSource: (name: string) => getLensFlagSource(name),
 				dbg,
 				runtime,
 				cacheManager,
@@ -1547,6 +1564,7 @@ export default function (pi: ExtensionAPI) {
 			await handleAgentEnd({
 				ctxCwd: ctx.cwd,
 				getFlag: (name: string) => getLensFlag(name),
+				getFlagSource: (name: string) => getLensFlagSource(name),
 				notify: (msg, level) => ctx.ui.notify(msg, level),
 				dbg,
 				runtime,

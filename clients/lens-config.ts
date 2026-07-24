@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { parseEnabledShape } from "./config-enabled-shape.js";
 import type { PiLensProjectConfig } from "./project-lens-config.js";
 
 export type PiLensFormatMode = "deferred" | "immediate";
@@ -30,6 +31,14 @@ export interface PiLensGlobalConfig {
 		enabled?: boolean;
 		/** When to run auto-formatting after write/edit tool results. */
 		mode?: PiLensFormatMode;
+	};
+	autofix?: {
+		/**
+		 * Whether the pipeline may apply deterministic linter fixes (Biome,
+		 * Ruff, ESLint, ...). Defaults true. A project `.pi-lens.json`
+		 * `autofix.enabled` overrides this in either direction (#792).
+		 */
+		enabled?: boolean;
 	};
 	actionableWarnings?: {
 		/** Write turn-delta fixable warning reports and inject a short advisory. */
@@ -70,6 +79,27 @@ export function getPiLensGlobalConfigPath(homeDir = os.homedir()): string {
 	return path.join(homeDir, ".pi-lens", "config.json");
 }
 
+const warnedInvalidGlobalConfigs = new Set<string>();
+
+/**
+ * Same warn-once-per-(path, reason) contract as project-lens-config.ts's
+ * `warnInvalidConfigOnce` — a malformed global config value is logged once
+ * and then treated as absent, rather than silently dropped (#792).
+ */
+function warnInvalidGlobalConfigOnce(configPath: string, reason: string): void {
+	const key = `${configPath}:${reason}`;
+	if (warnedInvalidGlobalConfigs.has(key)) return;
+	warnedInvalidGlobalConfigs.add(key);
+	console.error(
+		`[pi-lens] ignoring invalid global config ${configPath}: ${reason}`,
+	);
+}
+
+/** For tests that need to force the warn-once cache to reset between cases. */
+export function resetGlobalConfigWarnCache(): void {
+	warnedInvalidGlobalConfigs.clear();
+}
+
 export function loadPiLensGlobalConfig(
 	configPath = getPiLensGlobalConfigPath(),
 ): PiLensGlobalConfig | undefined {
@@ -78,6 +108,8 @@ export function loadPiLensGlobalConfig(
 		if (!parsed || typeof parsed !== "object") return undefined;
 
 		const raw = parsed as Record<string, unknown>;
+		const warnInvalid = (reason: string) =>
+			warnInvalidGlobalConfigOnce(configPath, reason);
 		const dispatchRaw = raw.dispatch;
 		const dispatch =
 			dispatchRaw && typeof dispatchRaw === "object"
@@ -88,22 +120,23 @@ export function loadPiLensGlobalConfig(
 			widgetRaw && typeof widgetRaw === "object"
 				? (widgetRaw as Record<string, unknown>)
 				: undefined;
-		const formatRaw = raw.format;
-		const format =
-			formatRaw && typeof formatRaw === "object"
-				? (formatRaw as Record<string, unknown>)
+		const format = parseEnabledShape(raw.format, "format", warnInvalid);
+		const autofix = parseEnabledShape(raw.autofix, "autofix", warnInvalid);
+		const formatModeRaw = raw.format;
+		const formatModeSource =
+			formatModeRaw && typeof formatModeRaw === "object"
+				? (formatModeRaw as Record<string, unknown>)
 				: undefined;
 		const actionableWarningsRaw = raw.actionableWarnings;
 		const actionableWarnings =
 			actionableWarningsRaw && typeof actionableWarningsRaw === "object"
 				? (actionableWarningsRaw as Record<string, unknown>)
 				: undefined;
-		const actionableWarningsAutoFixRaw = actionableWarnings?.autoFix;
-		const actionableWarningsAutoFix =
-			actionableWarningsAutoFixRaw &&
-			typeof actionableWarningsAutoFixRaw === "object"
-				? (actionableWarningsAutoFixRaw as Record<string, unknown>)
-				: undefined;
+		const actionableWarningsAutoFix = parseEnabledShape(
+			actionableWarnings?.autoFix,
+			"actionableWarnings.autoFix",
+			warnInvalid,
+		);
 		const contextInjectionRaw = raw.contextInjection;
 		const contextInjection =
 			contextInjectionRaw && typeof contextInjectionRaw === "object"
@@ -115,8 +148,9 @@ export function loadPiLensGlobalConfig(
 				? (turnSummaryRaw as Record<string, unknown>)
 				: undefined;
 		const formatMode =
-			format?.mode === "immediate" || format?.mode === "deferred"
-				? format.mode
+			formatModeSource?.mode === "immediate" ||
+			formatModeSource?.mode === "deferred"
+				? (formatModeSource.mode as PiLensFormatMode)
 				: undefined;
 		const ignore = Array.isArray(raw.ignore)
 			? raw.ignore.filter((p): p is string => typeof p === "string")
@@ -142,11 +176,11 @@ export function loadPiLensGlobalConfig(
 				: undefined,
 			format: format
 				? {
-						enabled:
-							typeof format.enabled === "boolean" ? format.enabled : undefined,
+						enabled: format.enabled,
 						mode: formatMode,
 					}
 				: undefined,
+			autofix: autofix ? { enabled: autofix.enabled } : undefined,
 			actionableWarnings: actionableWarnings
 				? {
 						enabled:
@@ -162,12 +196,7 @@ export function loadPiLensGlobalConfig(
 								? actionableWarnings.deltaOnly
 								: undefined,
 						autoFix: actionableWarningsAutoFix
-							? {
-									enabled:
-										typeof actionableWarningsAutoFix.enabled === "boolean"
-											? actionableWarningsAutoFix.enabled
-											: undefined,
-								}
+							? { enabled: actionableWarningsAutoFix.enabled }
 							: undefined,
 					}
 				: undefined,
@@ -205,6 +234,10 @@ export function getGlobalAutoformatEnabled(configPath?: string): boolean {
 	return loadPiLensGlobalConfig(configPath)?.format?.enabled !== false;
 }
 
+export function getGlobalAutofixEnabled(configPath?: string): boolean {
+	return loadPiLensGlobalConfig(configPath)?.autofix?.enabled !== false;
+}
+
 export function getGlobalImmediateFormatDefault(configPath?: string): boolean {
 	return loadPiLensGlobalConfig(configPath)?.format?.mode === "immediate";
 }
@@ -219,45 +252,91 @@ export function getGlobalTurnSummaryEnabled(configPath?: string): boolean {
 	return loadPiLensGlobalConfig(configPath)?.turnSummary?.enabled === true;
 }
 
+/** Which tier decided a resolved flag's value — for provenance in debug/skip logs (#792). */
+export type PiLensFlagSource = "cli" | "project" | "global" | "default";
+
+export interface ResolvedPiLensFlag {
+	value: boolean | string | undefined;
+	source: PiLensFlagSource;
+}
+
+/**
+ * Resolve a flag AND report which config tier decided it — same precedence
+ * as {@link resolvePiLensFlag} (which now delegates here), just also
+ * returning the `source` so callers can log e.g.
+ * "(--no-autofix, source=project)" instead of a bare boolean (#792).
+ *
+ * Precedence (unchanged, maintainer decision — project wins over global,
+ * including re-enabling; only an explicit CLI disabling flag outranks
+ * project config): cli → project → global → default.
+ */
+export function resolvePiLensFlagWithSource(
+	name: string,
+	value: boolean | string | undefined,
+	config: PiLensGlobalConfig | undefined,
+	projectConfig?: PiLensProjectConfig,
+): ResolvedPiLensFlag {
+	if (value) return { value, source: "cli" };
+	if (name === "no-autoformat") {
+		if (projectConfig?.format?.enabled !== undefined) {
+			return { value: !projectConfig.format.enabled, source: "project" };
+		}
+		if (config?.format?.enabled === false) {
+			return { value: true, source: "global" };
+		}
+		return { value: false, source: "default" };
+	}
+	if (name === "no-autofix") {
+		if (projectConfig?.autofix?.enabled !== undefined) {
+			return { value: !projectConfig.autofix.enabled, source: "project" };
+		}
+		if (config?.autofix?.enabled === false) {
+			return { value: true, source: "global" };
+		}
+		return { value: false, source: "default" };
+	}
+	if (name === "immediate-format") {
+		const immediate = config?.format?.mode === "immediate";
+		return { value: immediate, source: immediate ? "global" : "default" };
+	}
+	if (name === "lens-actionable-warnings") {
+		const enabled = config?.actionableWarnings?.enabled === true;
+		return { value: enabled, source: enabled ? "global" : "default" };
+	}
+	if (name === "lens-actionable-warning-actions") {
+		const enabled = config?.actionableWarnings?.includeLspCodeActions === true;
+		return { value: enabled, source: enabled ? "global" : "default" };
+	}
+	if (name === "lens-actionable-warning-autofix") {
+		if (projectConfig?.actionableWarnings?.autoFix?.enabled !== undefined) {
+			return {
+				value: projectConfig.actionableWarnings.autoFix.enabled,
+				source: "project",
+			};
+		}
+		const enabled = config?.actionableWarnings?.autoFix?.enabled === true;
+		return { value: enabled, source: enabled ? "global" : "default" };
+	}
+	if (name === "lens-actionable-warning-all") {
+		const all = config?.actionableWarnings?.deltaOnly === false;
+		return { value: all, source: all ? "global" : "default" };
+	}
+	if (name === "no-lens-context") {
+		const disabled = config?.contextInjection?.enabled === false;
+		return { value: disabled, source: disabled ? "global" : "default" };
+	}
+	if (name === "lens-turn-summary") {
+		const enabled = config?.turnSummary?.enabled === true;
+		return { value: enabled, source: enabled ? "global" : "default" };
+	}
+	return { value, source: "default" };
+}
+
 export function resolvePiLensFlag(
 	name: string,
 	value: boolean | string | undefined,
 	config: PiLensGlobalConfig | undefined,
 	projectConfig?: PiLensProjectConfig,
 ): boolean | string | undefined {
-	if (value) return value;
-	if (name === "no-autoformat") {
-		if (projectConfig?.format?.enabled !== undefined) {
-			return !projectConfig.format.enabled;
-		}
-		return config?.format?.enabled === false;
-	}
-	if (name === "no-autofix") {
-		return projectConfig?.autofix?.enabled === false;
-	}
-	if (name === "immediate-format") {
-		return config?.format?.mode === "immediate";
-	}
-	if (name === "lens-actionable-warnings") {
-		return config?.actionableWarnings?.enabled === true;
-	}
-	if (name === "lens-actionable-warning-actions") {
-		return config?.actionableWarnings?.includeLspCodeActions === true;
-	}
-	if (name === "lens-actionable-warning-autofix") {
-		if (projectConfig?.actionableWarnings?.autoFix?.enabled !== undefined) {
-			return projectConfig.actionableWarnings.autoFix.enabled;
-		}
-		return config?.actionableWarnings?.autoFix?.enabled === true;
-	}
-	if (name === "lens-actionable-warning-all") {
-		return config?.actionableWarnings?.deltaOnly === false;
-	}
-	if (name === "no-lens-context") {
-		return config?.contextInjection?.enabled === false;
-	}
-	if (name === "lens-turn-summary") {
-		return config?.turnSummary?.enabled === true;
-	}
-	return value;
+	return resolvePiLensFlagWithSource(name, value, config, projectConfig).value;
 }

@@ -731,7 +731,15 @@ async function openFileBestEffort(
 }
 
 export function createLspNavigationTool(
-	getFlag: (name: string) => boolean | string | undefined,
+	/**
+	 * Resolves a flag, optionally scoped to a call's `cwd` (#792). Callers that
+	 * need per-request project config (e.g. the MCP host, which has no single
+	 * "current project root" the way an in-pi session does) can rebuild their
+	 * flag resolver against `cwd` instead of whatever directory the tool was
+	 * constructed in; callers that only have a single fixed project root (e.g.
+	 * pi's own `getLensFlag`) may ignore the second argument.
+	 */
+	getFlag: (name: string, cwd?: string) => boolean | string | undefined,
 ) {
 	return {
 		name: "lsp_navigation" as const,
@@ -985,7 +993,7 @@ export function createLspNavigationTool(
 				};
 			};
 
-			if (getFlag("no-lsp")) {
+			if (getFlag("no-lsp", ctx.cwd)) {
 				return finalize(
 					{
 						content: [

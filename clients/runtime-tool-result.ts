@@ -19,6 +19,7 @@ import { getFormatService } from "./format-service.js";
 import { isExternalOrVendorFile } from "./path-utils.js";
 import { resolveLanguageRootForFile } from "./language-profile.js";
 import { logLatency } from "./latency-logger.js";
+import type { PiLensFlagSource } from "./lens-config.js";
 import type { LSPShutdownOptions } from "./lsp/client.js";
 import type { MetricsClient } from "./metrics-client.js";
 import { runPipeline, type PipelineResult } from "./pipeline.js";
@@ -45,6 +46,8 @@ interface ToolResultEvent {
 interface ToolResultDeps {
 	event: ToolResultEvent;
 	getFlag: (name: string) => boolean | string | undefined;
+	/** Optional: provenance for dbg/skip logs — see `PipelineContext["getFlagSource"]` (#792). */
+	getFlagSource?: (name: string) => PiLensFlagSource;
 	dbg: (msg: string) => void;
 	runtime: RuntimeCoordinator;
 	cacheManager: CacheManager;
@@ -302,6 +305,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	const {
 		event,
 		getFlag,
+		getFlagSource,
 		dbg,
 		runtime,
 		cacheManager,
@@ -583,6 +587,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 				writeIndex,
 			},
 			getFlag,
+			getFlagSource,
 			dbg,
 			// #451: hand the deferred cascade live sequence accessors so the
 			// review-graph builder can skip its per-build O(project) sweep when

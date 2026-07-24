@@ -419,7 +419,16 @@ const lensDiagnosticsTool = createLensDiagnosticsTool(
 const astGrepClient = new AstGrepClient();
 const astGrepSearchTool = createAstGrepSearchTool(astGrepClient);
 const astGrepReplaceTool = createAstGrepReplaceTool(astGrepClient);
-const lspNavigationTool = createLspNavigationTool(createMcpHost().getFlag);
+// #792: unlike every other per-request `cwd` resolution in this file, this
+// tool used to be built ONCE at module load with `createMcpHost().getFlag`,
+// which freezes `projectRoot` at the server's own launch directory — a
+// project-config-gated flag consulted through this tool would silently read
+// whatever `.pi-lens.json` happens to sit there, never the caller's project.
+// Resolve lazily against the call's own `cwd` instead (config loads are
+// mtime-cached, so this stays cheap).
+const lspNavigationTool = createLspNavigationTool((name, cwd) =>
+	createMcpHost(undefined, cwd ?? DEFAULT_CWD).getFlag(name),
+);
 const lspDiagnosticsTool = createLspDiagnosticsTool();
 
 // Wrapped pi tools already declare their params as typebox (which IS JSON

@@ -6,11 +6,6 @@ Hide the diagnostics widget by default, run formatting immediately after write/e
 
 ```json
 {
-  "format": { "enabled": false },
-  "autofix": { "enabled": false },
-  "actionableWarnings": {
-    "autoFix": { "enabled": false }
-  },
   "ignore": [
     "**/*.snapshot",
     "scratch/**"
@@ -21,6 +16,9 @@ Hide the diagnostics widget by default, run formatting immediately after write/e
   "format": {
     "enabled": true,
     "mode": "immediate"
+  },
+  "autofix": {
+    "enabled": true
   },
   "actionableWarnings": {
     "enabled": true,
@@ -38,6 +36,8 @@ Hide the diagnostics widget by default, run formatting immediately after write/e
 ```
 
 `format.mode` can be `"deferred"` (default) or `"immediate"`. Set `format.enabled` to `false` to match `--no-autoformat`. `/lens-widget-toggle` still works as a session-only override.
+
+`autofix.enabled` (default `true`) is the global-config counterpart to the project `.pi-lens.json` `autofix.enabled` below — set it to `false` to match `--no-autofix` for every project that doesn't set its own `autofix.enabled`. As with `format.enabled` and `actionableWarnings.autoFix.enabled`, a project's own `.pi-lens.json` value overrides this global default in either direction (see "Mutation controls" below).
 
 `contextInjection.enabled` (default `true`) controls whether pi-lens prepends automatic findings — session-start guidance, turn-end findings, and test findings — into the next model turn. Set it to `false` (or use `--no-lens-context` / `PI_LENS_NO_CONTEXT_INJECTION=1` / `/lens-context-toggle`) to keep tools, LSP, read-guard, and formatting running while avoiding the prompt-cache invalidation that injected messages cause in long, cache-sensitive sessions. Findings are still cached, so `lens_diagnostics` and `/lens-health` keep working.
 
@@ -77,10 +77,28 @@ original write/edit:
 - `actionableWarnings.autoFix.enabled: false` disables conservative LSP
   quickfixes at `agent_end`.
 
-These settings do not disable LSP synchronization, lint dispatch, actionable
-warning reports, or diagnostics. Explicit disabling CLI flags
-(`--no-autoformat` and `--no-autofix`) take highest precedence; project
-settings take precedence over user-level global defaults.
+All three are supported at **both** tiers — the user-level
+`~/.pi-lens/config.json` above (applies to every project) and the per-project
+`.pi-lens.json` below (applies to one repo). These settings do not disable LSP
+synchronization, lint dispatch, actionable warning reports, or diagnostics.
+
+Precedence, highest to lowest:
+
+1. Explicit disabling CLI flags (`--no-autoformat`, `--no-autofix`) — always win.
+2. Project `.pi-lens.json` — wins over the global default in **either**
+   direction, including re-enabling a mutation path the user's global config
+   disabled (maintainer decision: a repo's own contract for its own files
+   takes precedence over a user's blanket preference; there is currently no
+   "hard off" global setting that outranks a project's `enabled: true` — see
+   #792). `actionableWarnings.autoFix.enabled` follows the same rule: project
+   wins outright when set, whether that means turning it on or off.
+3. Global `~/.pi-lens/config.json` — the user-level default when a project
+   doesn't say.
+4. Built-in default (`format`/`autofix` on, `actionableWarnings.autoFix` off).
+
+Nested/monorepo layering (a package-local `.pi-lens.json` overriding the
+repo-root config's mutation controls for just its own subtree, the way
+`ignore` already layers) is not implemented yet — tracked in #792.
 
 ### `ignore`
 

@@ -18,6 +18,8 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Fixed
 
+- mutation-control config follow-ups (#792): global `autofix.enabled` now honored (docs promised it, code ignored it), the MCP LSP-navigation tool now resolves project config from the request cwd, global+project config share one `{enabled}` parser with warn-once on invalid values, and mutation-skip debug lines name the deciding config source
+
 - deferred auto-format queue: records are now owned by the queuing session/turn — a read-only or concurrent-secondary subagent turn no longer flushes and formats another turn's pending files (#791)
 
 - compat-smoke behavioral harness: scratch-dir cleanup crash (ENOTEMPTY race) no longer discards assertion results and falsely reports Layer B contract drift (#785)

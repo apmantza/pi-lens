@@ -18,6 +18,7 @@ import {
 	appendProjectChange,
 	type ProjectChangeSource,
 } from "./project-changes.js";
+import type { PiLensFlagSource } from "./lens-config.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 
 /**
@@ -33,6 +34,8 @@ export const DEFERRED_FORMAT_STALE_AFTER_MS = 10 * 60_000;
 interface AgentEndDeps {
 	ctxCwd?: string;
 	getFlag: (name: string) => boolean | string | undefined;
+	/** Optional: provenance for dbg/skip logs — see `PipelineContext["getFlagSource"]` (#792). */
+	getFlagSource?: (name: string) => PiLensFlagSource;
 	notify: (msg: string, level: "info" | "warning" | "error") => void;
 	dbg: (msg: string) => void;
 	runtime: RuntimeCoordinator;
@@ -85,6 +88,7 @@ function recordProjectChange(args: {
 export async function handleAgentEnd({
 	ctxCwd,
 	getFlag,
+	getFlagSource,
 	notify,
 	dbg,
 	runtime,
@@ -191,6 +195,12 @@ export async function handleAgentEnd({
 
 	const autoformatDisabled = !!getFlag("no-autoformat");
 	if (autoformatDisabled) {
+		const source = getFlagSource?.("no-autoformat");
+		if (records.length > 0) {
+			dbg(
+				`agent_end deferred_format: skipping ${records.length} file(s) (--no-autoformat${source ? `, source=${source}` : ""})`,
+			);
+		}
 		for (const record of records) {
 			summary.skipped.push({
 				filePath: record.filePath,
@@ -340,6 +350,13 @@ export async function handleAgentEnd({
 				fixes: deferredFormatFixes,
 			});
 		}
+	}
+
+	if (!actionableAutofixEnabled) {
+		const source = getFlagSource?.("lens-actionable-warning-autofix");
+		dbg(
+			`agent_end actionable_warnings_autofix: skipped (lens-actionable-warning-autofix disabled${source ? `, source=${source}` : ""})`,
+		);
 	}
 
 	if (actionableAutofixEnabled) {
