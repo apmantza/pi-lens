@@ -3,6 +3,7 @@ import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleSessionStart } from "../../clients/runtime-session.js";
 import {
 	_resetSessionLifecycleForTests,
+	classifyCurrentSessionEmission,
 	classifySessionStart,
 	classifySessionStartGuarded,
 	decideSessionStart,
@@ -239,6 +240,79 @@ describe("noteSessionShutdown", () => {
 	it("both ids undefined + DIFFERENT ctx + primary probes active -> primary (conservative miss, by design)", () => {
 		registerPrimarySession(activeCtx(), undefined);
 		expect(noteSessionShutdown(activeCtx(), undefined)).toBe("primary");
+	});
+});
+
+describe("classifyCurrentSessionEmission (#791 agent_end/turn_end read-only classifier)", () => {
+	afterEach(() => {
+		_resetSessionLifecycleForTests();
+		delete process.env.PI_LENS_CONCURRENT_SESSION_GUARD;
+	});
+
+	it("no primary registered -> primary (nothing to compare against)", () => {
+		expect(classifyCurrentSessionEmission(activeCtx(), "some-id")).toBe(
+			"primary",
+		);
+	});
+
+	it("same ctx object as the registered primary -> primary", () => {
+		const ownCtx = activeCtx();
+		registerPrimarySession(ownCtx, "session-a");
+		expect(classifyCurrentSessionEmission(ownCtx, "session-b")).toBe(
+			"primary",
+		);
+	});
+
+	it("same session id as the registered primary -> primary", () => {
+		registerPrimarySession(activeCtx(), "session-a");
+		expect(classifyCurrentSessionEmission(activeCtx(), "session-a")).toBe(
+			"primary",
+		);
+	});
+
+	it("different KNOWN session id AND the primary's ctx still probes active -> concurrent-secondary", () => {
+		registerPrimarySession(activeCtx(), "session-a");
+		expect(classifyCurrentSessionEmission(activeCtx(), "session-b")).toBe(
+			"concurrent-secondary",
+		);
+	});
+
+	it("different session id but the primary's ctx is confirmed stale -> primary (fail-safe)", () => {
+		registerPrimarySession(staleCtx(), "session-a");
+		expect(classifyCurrentSessionEmission(activeCtx(), "session-b")).toBe(
+			"primary",
+		);
+	});
+
+	it("either session id unknown -> primary (never secondary on uncertainty)", () => {
+		registerPrimarySession(activeCtx(), "session-a");
+		expect(classifyCurrentSessionEmission(activeCtx(), undefined)).toBe(
+			"primary",
+		);
+		_resetSessionLifecycleForTests();
+		registerPrimarySession(activeCtx(), undefined);
+		expect(classifyCurrentSessionEmission(activeCtx(), "session-b")).toBe(
+			"primary",
+		);
+	});
+
+	it("is side-effect-free: repeated calls never mutate the registration", () => {
+		registerPrimarySession(activeCtx(), "session-a");
+		classifyCurrentSessionEmission(activeCtx(), "session-b");
+		classifyCurrentSessionEmission(activeCtx(), "session-c");
+		// A THIRD distinct id still classifies concurrent-secondary — nothing
+		// about the second call re-registered "session-b" as the primary.
+		expect(classifyCurrentSessionEmission(activeCtx(), "session-d")).toBe(
+			"concurrent-secondary",
+		);
+	});
+
+	it("kill switch forces primary even for what would otherwise be concurrent-secondary", () => {
+		registerPrimarySession(activeCtx(), "session-a");
+		process.env.PI_LENS_CONCURRENT_SESSION_GUARD = "0";
+		expect(classifyCurrentSessionEmission(activeCtx(), "session-b")).toBe(
+			"primary",
+		);
 	});
 });
 

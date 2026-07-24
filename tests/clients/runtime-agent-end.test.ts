@@ -863,6 +863,208 @@ describe("runtime-agent-end deferred formatting", () => {
 		});
 	});
 
+	describe("#791 deferred-format ownership", () => {
+		it("a non-owning session's agent_end does NOT format a foreign record; it stays queued", async () => {
+			const env = setupTestEnvironment("pi-lens-agent-end-ownership-foreign-");
+			try {
+				const filePath = createTempFile(env.tmpDir, "src/app.ts", "const x=1");
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				// Turn N: the OWNER (session-parent) writes the file.
+				runtime.deferFormat(
+					filePath,
+					env.tmpDir,
+					"edit",
+					env.tmpDir,
+					"session-parent",
+				);
+				// Turn N+1: a read-only turn begins (e.g. a concurrent in-process
+				// subagent's own turn_start), advancing the shared turn counter.
+				runtime.beginTurn();
+
+				const formatFile = vi.fn();
+				const summary = await handleAgentEnd({
+					ctxCwd: env.tmpDir,
+					getFlag: (name) => name === "no-lsp",
+					notify: vi.fn(),
+					dbg: () => {},
+					runtime,
+					cacheManager: { addModifiedRange: vi.fn() } as any,
+					getFormatService: () =>
+						({ recordRead: () => {}, formatFile }) as any,
+					// The non-owner: a different, KNOWN session id.
+					currentSessionId: "session-subagent",
+				});
+
+				expect(formatFile).not.toHaveBeenCalled();
+				expect(summary).toBeUndefined();
+				expect(runtime.pendingDeferredFormatCount).toBe(1);
+			} finally {
+				env.cleanup();
+			}
+		});
+
+		it("the owning session's agent_end DOES format its own queued record", async () => {
+			const env = setupTestEnvironment("pi-lens-agent-end-ownership-owner-");
+			const previousDataDir = process.env.PILENS_DATA_DIR;
+			process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+			try {
+				const filePath = createTempFile(env.tmpDir, "src/app.ts", "const x=1");
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				runtime.deferFormat(
+					filePath,
+					env.tmpDir,
+					"edit",
+					env.tmpDir,
+					"session-parent",
+				);
+
+				const formatFile = vi.fn(async (fp: string) => {
+					fs.writeFileSync(fp, "const x = 1;\n");
+					return {
+						filePath: fp,
+						formatters: [{ name: "biome", success: true, changed: true }],
+						anyChanged: true,
+						allSucceeded: true,
+					};
+				});
+
+				const summary = await handleAgentEnd({
+					ctxCwd: env.tmpDir,
+					getFlag: (name) => name === "no-lsp",
+					notify: vi.fn(),
+					dbg: () => {},
+					runtime,
+					cacheManager: { addModifiedRange: vi.fn() } as any,
+					getFormatService: () =>
+						({ recordRead: () => {}, formatFile }) as any,
+					currentSessionId: "session-parent",
+				});
+
+				expect(formatFile).toHaveBeenCalledTimes(1);
+				expect(summary?.changed).toEqual([filePath]);
+				expect(runtime.pendingDeferredFormatCount).toBe(0);
+			} finally {
+				if (previousDataDir === undefined) {
+					delete process.env.PILENS_DATA_DIR;
+				} else {
+					process.env.PILENS_DATA_DIR = previousDataDir;
+				}
+				env.cleanup();
+			}
+		});
+
+		it("an unknown current session id falls back to claiming everything (fail-safe: no regression on hosts without stable ids)", async () => {
+			const env = setupTestEnvironment("pi-lens-agent-end-ownership-unknown-");
+			const previousDataDir = process.env.PILENS_DATA_DIR;
+			process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+			try {
+				const filePath = createTempFile(env.tmpDir, "src/app.ts", "const x=1");
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				runtime.deferFormat(
+					filePath,
+					env.tmpDir,
+					"edit",
+					env.tmpDir,
+					"session-parent",
+				);
+
+				const formatFile = vi.fn(async (fp: string) => {
+					fs.writeFileSync(fp, "const x = 1;\n");
+					return {
+						filePath: fp,
+						formatters: [{ name: "biome", success: true, changed: true }],
+						anyChanged: true,
+						allSucceeded: true,
+					};
+				});
+
+				const summary = await handleAgentEnd({
+					ctxCwd: env.tmpDir,
+					getFlag: (name) => name === "no-lsp",
+					notify: vi.fn(),
+					dbg: () => {},
+					runtime,
+					cacheManager: { addModifiedRange: vi.fn() } as any,
+					getFormatService: () =>
+						({ recordRead: () => {}, formatFile }) as any,
+					// currentSessionId omitted — host never supplied one.
+				});
+
+				expect(formatFile).toHaveBeenCalledTimes(1);
+				expect(summary?.changed).toEqual([filePath]);
+			} finally {
+				if (previousDataDir === undefined) {
+					delete process.env.PILENS_DATA_DIR;
+				} else {
+					process.env.PILENS_DATA_DIR = previousDataDir;
+				}
+				env.cleanup();
+			}
+		});
+
+		it("staleness fallback: an old orphaned foreign record IS claimed and logged", async () => {
+			const env = setupTestEnvironment("pi-lens-agent-end-ownership-stale-");
+			const previousDataDir = process.env.PILENS_DATA_DIR;
+			process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+			try {
+				const filePath = createTempFile(env.tmpDir, "src/app.ts", "const x=1");
+				const runtime = new RuntimeCoordinator();
+				runtime.projectRoot = env.tmpDir;
+				runtime.deferFormat(
+					filePath,
+					env.tmpDir,
+					"edit",
+					env.tmpDir,
+					"session-dead-parent",
+				);
+
+				const formatFile = vi.fn(async (fp: string) => {
+					fs.writeFileSync(fp, "const x = 1;\n");
+					return {
+						filePath: fp,
+						formatters: [{ name: "biome", success: true, changed: true }],
+						anyChanged: true,
+						allSucceeded: true,
+					};
+				});
+				const dbg = vi.fn();
+
+				const summary = await handleAgentEnd({
+					ctxCwd: env.tmpDir,
+					getFlag: (name) => name === "no-lsp",
+					notify: vi.fn(),
+					dbg,
+					runtime,
+					cacheManager: { addModifiedRange: vi.fn() } as any,
+					getFormatService: () =>
+						({ recordRead: () => {}, formatFile }) as any,
+					currentSessionId: "session-new-secondary",
+					// Negative threshold: any elapsed time at all counts as stale,
+					// the smallest reliable way to force the fallback without a
+					// clock-injection hook.
+					staleAfterMs: -1,
+				});
+
+				expect(formatFile).toHaveBeenCalledTimes(1);
+				expect(summary?.changed).toEqual([filePath]);
+				expect(runtime.pendingDeferredFormatCount).toBe(0);
+				expect(dbg).toHaveBeenCalledWith(
+					expect.stringContaining("staleness fallback claimed"),
+				);
+			} finally {
+				if (previousDataDir === undefined) {
+					delete process.env.PILENS_DATA_DIR;
+				} else {
+					process.env.PILENS_DATA_DIR = previousDataDir;
+				}
+				env.cleanup();
+			}
+		});
+	});
+
 	describe("#484 turn-summary collection gate", () => {
 		it("does not record deferred-format events on the turn-summary collector when lens-turn-summary is off (default)", async () => {
 			const env = setupTestEnvironment("pi-lens-agent-end-summary-off-");

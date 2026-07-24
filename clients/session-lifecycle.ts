@@ -214,6 +214,40 @@ export function noteSessionShutdown(
 	return "primary";
 }
 
+/**
+ * Read-only counterpart to {@link classifySessionStart}, usable from ANY
+ * event handler (agent_end, turn_end, ...) rather than only session_start.
+ * Unlike `decideSessionStart` this never mutates the module-scope
+ * registration — repeated calls across a session's many agent_end/turn_end
+ * firings are side-effect-free.
+ *
+ * Same fail-safe direction as the rest of this module: only returns
+ * `"concurrent-secondary"` on POSITIVE evidence — a different, KNOWN session
+ * id than the registered primary's, AND the registered primary's ctx still
+ * probes active (i.e. a live sibling, not a primary that simply never
+ * re-registered). Every uncertain case (no primary registered yet, same ctx
+ * object, same session id, either id unknown, or the primary's probe isn't
+ * affirmatively `true`) classifies as `"primary"` so today's behavior (run
+ * the handler) is preserved. #791: used to skip the deferred-format flush at
+ * `agent_end` for a concurrent secondary's own firing, mirroring how
+ * `decideSessionStart` already skips `handleSessionStart`.
+ */
+export function classifyCurrentSessionEmission(
+	ctx: unknown,
+	sessionId: string | undefined,
+): "primary" | "concurrent-secondary" {
+	if (!guardEnabled()) return "primary";
+	if (activeCtx === undefined && activeSessionId === undefined) return "primary";
+	if (ctx !== undefined && ctx === activeCtx) return "primary";
+	if (sessionId !== undefined && sessionId === activeSessionId) return "primary";
+	// Uncertainty guard: if EITHER side's session id is unknown we cannot
+	// positively establish "different session", so never classify secondary.
+	if (sessionId === undefined || activeSessionId === undefined) return "primary";
+	const primaryStillActive = probeCtxActive(activeCtx);
+	if (primaryStillActive === true) return "concurrent-secondary";
+	return "primary";
+}
+
 export function getSecondarySessionCount(): number {
 	return secondarySessionCount;
 }

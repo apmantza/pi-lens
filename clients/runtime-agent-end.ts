@@ -20,6 +20,16 @@ import {
 } from "./project-changes.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 
+/**
+ * A queued file is claimed by any flush once it has sat unclaimed by its own
+ * owning session for this long — recovery for an orphaned record whose
+ * owner (e.g. a primary session that crashed mid-run) will never flush it
+ * itself. Generous on purpose: normal same-session flushes never hit this
+ * path at all (they match on `ownerSessionId`), so this only trades a little
+ * extra staleness for guaranteed eventual formatting. (#791)
+ */
+export const DEFERRED_FORMAT_STALE_AFTER_MS = 10 * 60_000;
+
 interface AgentEndDeps {
 	ctxCwd?: string;
 	getFlag: (name: string) => boolean | string | undefined;
@@ -28,6 +38,15 @@ interface AgentEndDeps {
 	runtime: RuntimeCoordinator;
 	cacheManager: CacheManager;
 	getFormatService: () => FormatService;
+	/**
+	 * The STABLE pi session id for the ctx this `agent_end` fired on. Used to
+	 * scope the deferred-format drain to records this session actually
+	 * queued (#791) — omit (or leave `undefined`, e.g. in existing tests) to
+	 * fall back to today's "claim everything" behavior.
+	 */
+	currentSessionId?: string;
+	/** Test/override hook for {@link DEFERRED_FORMAT_STALE_AFTER_MS}. */
+	staleAfterMs?: number;
 }
 
 export interface AgentEndFormatSummary {
@@ -71,8 +90,51 @@ export async function handleAgentEnd({
 	runtime,
 	cacheManager,
 	getFormatService,
+	currentSessionId,
+	staleAfterMs = DEFERRED_FORMAT_STALE_AFTER_MS,
 }: AgentEndDeps): Promise<AgentEndFormatSummary | undefined> {
-	const records = runtime.consumeDeferredFormatFiles();
+	// #791: ownership-filtered drain — records queued by a DIFFERENT known
+	// session (e.g. a concurrent in-process secondary/subagent) stay queued
+	// for their owner's own agent_end, unless they've been stale long enough
+	// to fall back to "claim as orphaned" (see claimDeferredFormatFiles).
+	const { claimed, staleClaimed, deferredToOwner } =
+		runtime.claimDeferredFormatFiles(
+			currentSessionId,
+			Date.now(),
+			staleAfterMs,
+		);
+	const records = [...claimed, ...staleClaimed];
+	if (deferredToOwner.length > 0) {
+		dbg(
+			`agent_end deferred_format: leaving ${deferredToOwner.length} file(s) queued for their owning session (${deferredToOwner
+				.map((r) => `${r.filePath} owner=${r.ownerSessionId}`)
+				.join(", ")})`,
+		);
+	}
+	if (staleClaimed.length > 0) {
+		dbg(
+			`agent_end deferred_format: staleness fallback claimed ${staleClaimed.length} orphaned file(s) (unclaimed >${staleAfterMs}ms): ${staleClaimed
+				.map((r) => r.filePath)
+				.join(", ")}`,
+		);
+		logLatency({
+			type: "phase",
+			toolName: "agent_end",
+			filePath: ctxCwd ?? runtime.projectRoot,
+			phase: "agent_end_deferred_format_stale_claim",
+			durationMs: 0,
+			metadata: {
+				fileCount: staleClaimed.length,
+				staleAfterMs,
+				files: staleClaimed.map((r) => ({
+					filePath: r.filePath,
+					ownerSessionId: r.ownerSessionId,
+					queuedTurnIndex: r.queuedTurnIndex,
+					ageMs: Date.now() - r.lastTouchedAt,
+				})),
+			},
+		});
+	}
 	const actionableAutofixEnabled = !!getFlag("lens-actionable-warning-autofix");
 	if (records.length === 0 && !actionableAutofixEnabled) return undefined;
 
@@ -101,7 +163,20 @@ export async function handleAgentEnd({
 		filePath: ctxCwd ?? runtime.projectRoot,
 		phase: "agent_end_deferred_format_start",
 		durationMs: 0,
-		metadata: { fileCount: records.length },
+		metadata: {
+			fileCount: records.length,
+			currentSessionId,
+			// #791: per-record provenance so a future incident can be diagnosed
+			// straight from latency.log — which session/turn queued each file,
+			// and whether it was claimed via the staleness fallback.
+			records: records.map((r) => ({
+				filePath: r.filePath,
+				queuedTurnIndex: r.queuedTurnIndex,
+				ownerSessionId: r.ownerSessionId,
+				staleClaim: staleClaimed.includes(r),
+			})),
+			deferredToOwnerCount: deferredToOwner.length,
+		},
 	});
 	// #673: same moment as the latency phase above — a same-process listener
 	// (e.g. a review/snapshot controller) can use this to know the deferred-
