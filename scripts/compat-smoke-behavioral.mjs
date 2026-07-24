@@ -335,7 +335,20 @@ async function main() {
 		console.error(
 			`INFRA FAILURE: could not install pi-lens tarball: ${err instanceof Error ? err.message : err}`,
 		);
-		if (!opts.keep) fs.rmSync(scratchRoot, { recursive: true, force: true });
+		if (!opts.keep) {
+			try {
+				fs.rmSync(scratchRoot, {
+					recursive: true,
+					force: true,
+					maxRetries: 5,
+					retryDelay: 200,
+				});
+			} catch (cleanupErr) {
+				console.warn(
+					`cleanup warning: could not remove ${scratchRoot}: ${cleanupErr instanceof Error ? cleanupErr.message : cleanupErr}`,
+				);
+			}
+		}
 		process.exit(2);
 	}
 
@@ -505,13 +518,6 @@ async function main() {
 			"stubbable without a real model key. See docs/subagent-compat.md.",
 	});
 
-	if (!opts.keep) {
-		fs.rmSync(scratchRoot, { recursive: true, force: true });
-		try {
-			fs.rmSync(tarball, { force: true });
-		} catch {}
-	}
-
 	console.log("\nbehavioral smoke assertions:");
 	for (const r of results) {
 		const label = r.skipped ? "SKIP" : r.pass ? "PASS" : "FAIL";
@@ -523,7 +529,35 @@ async function main() {
 	console.log(
 		`\n${failed.length === 0 ? "ALL ASSERTIONS PASSED" : `${failed.length} ASSERTION(S) FAILED`}`,
 	);
-	process.exit(failed.length === 0 ? 0 : 1);
+	const exitCode = failed.length === 0 ? 0 : 1;
+
+	// Cleanup runs after results are reported so a cleanup crash (e.g. an
+	// ENOTEMPTY race with a just-exited pi child still releasing files)
+	// can never discard already-collected assertion results or flip the
+	// exit code (#785).
+	if (!opts.keep) {
+		try {
+			fs.rmSync(scratchRoot, {
+				recursive: true,
+				force: true,
+				maxRetries: 5,
+				retryDelay: 200,
+			});
+		} catch (err) {
+			console.warn(
+				`cleanup warning: could not remove ${scratchRoot}: ${err instanceof Error ? err.message : err}`,
+			);
+		}
+		try {
+			fs.rmSync(tarball, { force: true, maxRetries: 5, retryDelay: 200 });
+		} catch (err) {
+			console.warn(
+				`cleanup warning: could not remove ${tarball}: ${err instanceof Error ? err.message : err}`,
+			);
+		}
+	}
+
+	process.exit(exitCode);
 }
 
 main().catch((err) => {
