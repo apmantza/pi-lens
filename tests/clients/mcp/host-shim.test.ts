@@ -3,6 +3,9 @@
  * global config + per-call overrides (no pi process, no CLI flags).
  */
 
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createMcpHost } from "../../../clients/mcp/host-shim.js";
 
@@ -35,5 +38,28 @@ describe("createMcpHost", () => {
 	it("passes a string override through unchanged", () => {
 		const host = createMcpHost({ "lens-opengrep-config": "p/security" });
 		expect(host.getFlag("lens-opengrep-config")).toBe("p/security");
+	});
+
+	it("resolves mutation flags from project config", () => {
+		const projectRoot = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-mcp-project-config-"),
+		);
+		try {
+			fs.writeFileSync(
+				path.join(projectRoot, ".pi-lens.json"),
+				JSON.stringify({
+					format: { enabled: false },
+					autofix: { enabled: false },
+					actionableWarnings: { autoFix: { enabled: false } },
+				}),
+			);
+			const host = createMcpHost(undefined, projectRoot);
+
+			expect(host.getFlag("no-autoformat")).toBe(true);
+			expect(host.getFlag("no-autofix")).toBe(true);
+			expect(host.getFlag("lens-actionable-warning-autofix")).toBe(false);
+		} finally {
+			fs.rmSync(projectRoot, { recursive: true, force: true });
+		}
 	});
 });

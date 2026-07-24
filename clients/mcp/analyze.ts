@@ -276,7 +276,10 @@ export async function analyzeFile(
 		: path.resolve(cwd, filePath);
 	// no-delta by default → a full snapshot every call (not delta-filtered);
 	// caller flags win over the default.
-	const host = createMcpHost({ "no-delta": true, ...(options.flags ?? {}) });
+	const host = createMcpHost(
+		{ "no-delta": true, ...(options.flags ?? {}) },
+		cwd,
+	);
 
 	if (options.warmLsp !== false) {
 		await warmLspForFile(absPath, host);
