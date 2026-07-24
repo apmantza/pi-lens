@@ -37,6 +37,27 @@ export interface DeferredFormatRecord {
 	firstTouchedAt: number;
 	lastTouchedAt: number;
 	toolNames: Set<"write" | "edit">;
+	/**
+	 * The runtime's turn counter at the moment this file was (most recently)
+	 * queued/re-touched. Carried purely for provenance/instrumentation (#791)
+	 * — NOT used as a hard ownership filter, because a single agent run can
+	 * legitimately span multiple `turn_start`/`turn_end` cycles (retries,
+	 * in-process subagent calls) before its OWN `agent_end` fires, and that
+	 * later `agent_end` must still be allowed to flush work queued earlier in
+	 * the same run.
+	 */
+	queuedTurnIndex: number;
+	/**
+	 * The STABLE pi session id (`ctx.sessionManager.getSessionId()`) active
+	 * when this file was (most recently) queued/re-touched, or `undefined`
+	 * when the host never supplied one. This IS the ownership signal (#791):
+	 * a concurrent in-process secondary session (subagent) gets its own
+	 * distinct stable session id, so its `agent_end` firing can be told apart
+	 * from the queuing session's own `agent_end`. `undefined` on either side
+	 * is treated as "can't prove different" (fail-safe — never orphan a
+	 * record just because a host doesn't supply stable ids).
+	 */
+	ownerSessionId: string | undefined;
 }
 
 export class RuntimeCoordinator {
@@ -556,6 +577,7 @@ export class RuntimeCoordinator {
 		cwd: string,
 		toolName: "write" | "edit",
 		turnStateCwd: string,
+		ownerSessionId?: string,
 	): boolean {
 		const key = path.resolve(filePath);
 		const now = Date.now();
@@ -565,6 +587,8 @@ export class RuntimeCoordinator {
 			existing.cwd = cwd;
 			existing.turnStateCwd = turnStateCwd;
 			existing.toolNames.add(toolName);
+			existing.queuedTurnIndex = this._turnIndex;
+			existing.ownerSessionId = ownerSessionId;
 			return false;
 		}
 		this._pendingDeferredFormatFiles.set(key, {
@@ -574,6 +598,8 @@ export class RuntimeCoordinator {
 			firstTouchedAt: now,
 			lastTouchedAt: now,
 			toolNames: new Set([toolName]),
+			queuedTurnIndex: this._turnIndex,
+			ownerSessionId,
 		});
 		return true;
 	}
@@ -582,10 +608,65 @@ export class RuntimeCoordinator {
 		return this._pendingDeferredFormatFiles.size;
 	}
 
+	/**
+	 * Legacy unconditional drain — still exposed for any caller that
+	 * genuinely wants "everything, no ownership check" (and for tests). New
+	 * flush call sites should prefer {@link claimDeferredFormatFiles}.
+	 */
 	consumeDeferredFormatFiles(): DeferredFormatRecord[] {
 		const records = [...this._pendingDeferredFormatFiles.values()];
 		this._pendingDeferredFormatFiles.clear();
 		return records;
+	}
+
+	/**
+	 * Ownership-filtered drain (#791). Claims and removes only the records
+	 * this flush is entitled to:
+	 *  - `ownerSessionId` unset on the record, OR `currentSessionId` unset, OR
+	 *    they match → claimed as "same session" (the common case, and the
+	 *    fail-safe default when either side lacks a stable session id).
+	 *  - otherwise (both known, and they differ) the record belongs to a
+	 *    DIFFERENT session (e.g. a concurrent in-process secondary/subagent)
+	 *    and is left queued for its owner's own flush — UNLESS it has sat
+	 *    unclaimed longer than `staleAfterMs` (the owner presumably died),
+	 *    in which case this flush claims it anyway as an orphan-recovery
+	 *    fallback.
+	 *
+	 * Returns both the claimed records and, per skipped record, why it was
+	 * left behind — callers use this for `agent_end`'s latency-log
+	 * provenance and for the "stale fallback fired" log line.
+	 */
+	claimDeferredFormatFiles(
+		currentSessionId: string | undefined,
+		now: number,
+		staleAfterMs: number,
+	): {
+		claimed: DeferredFormatRecord[];
+		staleClaimed: DeferredFormatRecord[];
+		deferredToOwner: DeferredFormatRecord[];
+	} {
+		const claimed: DeferredFormatRecord[] = [];
+		const staleClaimed: DeferredFormatRecord[] = [];
+		const deferredToOwner: DeferredFormatRecord[] = [];
+		for (const [key, record] of this._pendingDeferredFormatFiles) {
+			const sameSession =
+				record.ownerSessionId === undefined ||
+				currentSessionId === undefined ||
+				record.ownerSessionId === currentSessionId;
+			if (sameSession) {
+				claimed.push(record);
+				this._pendingDeferredFormatFiles.delete(key);
+				continue;
+			}
+			const age = now - record.lastTouchedAt;
+			if (age > staleAfterMs) {
+				staleClaimed.push(record);
+				this._pendingDeferredFormatFiles.delete(key);
+				continue;
+			}
+			deferredToOwner.push(record);
+		}
+		return { claimed, staleClaimed, deferredToOwner };
 	}
 
 	shouldWarmLspOnRead(filePath: string, maxAgeMs = 120_000): boolean {

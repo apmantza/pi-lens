@@ -56,6 +56,14 @@ interface ToolResultDeps {
 	formatBehaviorWarnings: (warnings: unknown[]) => string;
 	readGuard?: ReadGuard;
 	/**
+	 * The STABLE pi session id for the ctx this tool_result fired on
+	 * (`ctx.sessionManager.getSessionId()`), when the host supplies one.
+	 * Threaded onto the resulting `DeferredFormatRecord` as `ownerSessionId`
+	 * (#791) so a later `agent_end` can tell "did THIS session queue this
+	 * file" apart from a concurrent in-process secondary session's firing.
+	 */
+	sessionId?: string;
+	/**
 	 * Internal: set when the debounce timer fires to skip re-scheduling.
 	 * Do not pass from external callers.
 	 */
@@ -666,6 +674,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			dispatchCwd,
 			event.toolName,
 			turnStateCwd,
+			deps.sessionId,
 		);
 		dbg(`tool_result: queued deferred format for ${filePath}`);
 		logLatency({

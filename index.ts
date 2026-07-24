@@ -74,6 +74,7 @@ import { RuntimeCoordinator } from "./clients/runtime-coordinator.js";
 import { handleSessionStart } from "./clients/runtime-session.js";
 import { handleToolCall } from "./clients/runtime-tool-call.js";
 import {
+	classifyCurrentSessionEmission,
 	decideSessionStart,
 	decrementSecondarySessionCount,
 	noteSessionShutdown,
@@ -151,6 +152,23 @@ function dbg(msg: string) {
 	} catch (e) {
 		// Pipeline error logged
 		console.error("[pi-lens-debug] write failed:", e);
+	}
+}
+
+/**
+ * Best-effort read of the STABLE pi session id off an event ctx
+ * (`ctx.sessionManager.getSessionId()`), the same accessor #473's
+ * session_start handling and #791's deferred-format ownership tagging both
+ * rely on. Never throws — returns `undefined` on any unexpected ctx shape
+ * or accessor error (older host, inconclusive probe, etc).
+ */
+function getStableSessionId(ctx: unknown): string | undefined {
+	try {
+		return (
+			ctx as { sessionManager?: { getSessionId?: () => string } } | null | undefined
+		)?.sessionManager?.getSessionId?.();
+	} catch {
+		return undefined;
 	}
 }
 
@@ -1439,6 +1457,11 @@ export default function (pi: ExtensionAPI) {
 					agentBehaviorClient.recordToolCall(toolName, filePath),
 				formatBehaviorWarnings: (warnings) =>
 					agentBehaviorClient.formatWarnings(warnings as any),
+				// #791: tags any deferred-format record queued from this tool_result
+				// with the STABLE session id of the ctx that produced it, so a
+				// later agent_end can tell its own queued work apart from a
+				// concurrent in-process secondary session's.
+				sessionId: getStableSessionId(ctx),
 			});
 		} finally {
 			setAmbientAbortSignal(undefined);
@@ -1494,6 +1517,29 @@ export default function (pi: ExtensionAPI) {
 		// Esc/abort during the deferred format + flush kills in-flight children.
 		setAmbientAbortSignal((ctx as { signal?: AbortSignal })?.signal);
 		try {
+			const currentSessionId = getStableSessionId(ctx);
+			// #791 defense-in-depth: mirrors how session_start already skips
+			// handleSessionStart for a concurrent in-process secondary
+			// (subagent) — if THIS agent_end firing is positively identified as
+			// belonging to a live sibling secondary session rather than the
+			// registered primary, skip the deferred-format flush entirely
+			// rather than relying only on the per-record ownership filter
+			// inside handleAgentEnd. Fail-safe: any inconclusive signal
+			// classifies "primary" and runs as before.
+			const emission = classifyCurrentSessionEmission(ctx, currentSessionId);
+			if (emission === "concurrent-secondary") {
+				dbg(
+					`agent_end: concurrent secondary session detected — skipping deferred-format flush (sessionId=${currentSessionId})`,
+				);
+				logLatency({
+					type: "phase",
+					filePath: ctx.cwd ?? "<pi-lens>",
+					phase: "agent_end_concurrent_secondary_skip",
+					durationMs: 0,
+					metadata: { sessionId: currentSessionId },
+				});
+				return;
+			}
 			// Ensure any pipeline still queued in the debounce window finishes
 			// before agent_end runs — otherwise project change-log entries and
 			// modified ranges this turn produced may not be reflected yet.
@@ -1507,6 +1553,7 @@ export default function (pi: ExtensionAPI) {
 				cacheManager,
 				getFormatService: () =>
 					getFormatService(runtime.telemetrySessionId, true),
+				currentSessionId,
 			});
 			ctx.ui && updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
 		} catch (agentEndErr) {
