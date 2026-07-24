@@ -42,13 +42,19 @@ pi-lens exposes these high-value tools to agents:
 
 ## Project config
 
-Project-level `.pi-lens.json` can configure ignore patterns and selected rule
-thresholds. Global config lives under `~/.pi-lens/config.json`.
+Project-level `.pi-lens.json` can configure mutation policy, ignore patterns,
+and selected rule thresholds. Global config lives under
+`~/.pi-lens/config.json`.
 
 Typical project config:
 
 ```jsonc
 {
+  "format": { "enabled": false },
+  "autofix": { "enabled": false },
+  "actionableWarnings": {
+    "autoFix": { "enabled": false }
+  },
   "ignore": ["generated/**", "fixtures/**"],
   "rules": {
     "high-complexity": { "threshold": 20 },
@@ -60,6 +66,11 @@ Typical project config:
   }
 }
 ```
+
+The three mutation controls disable auto-formatting, deterministic pipeline
+autofix, and actionable-warning quickfixes respectively. Diagnostics continue
+to run. See [Global and Project Config](globalconfig.md#project-config) for
+precedence and the complete project schema.
 
 ## Runtime flags
 

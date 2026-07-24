@@ -2,7 +2,7 @@
  * Project-level `.pi-lens.json` config loader.
  *
  * Reads an optional `.pi-lens.json` (or `pi-lens.json`) at the project root and
- * surfaces two fields the rest of pi-lens now honors:
+ * surfaces the fields the rest of pi-lens honors:
  *
  *   - `ignore` — gitignore-style glob patterns added to every scan (LSP walk,
  *     fact-rules, tree-sitter, jscpd, knip, review graph, source-filter). Wired
@@ -17,6 +17,10 @@
  *     `clients/project-scale.ts`'s `getProjectScaleBase`, which derives the
  *     five subsystem size budgets (project-diagnostics scanner, review graph,
  *     startup scan, jscpd, word index) as documented ratios of this value.
+ *
+ *   - `format.enabled`, `autofix.enabled`, and
+ *     `actionableWarnings.autoFix.enabled` — project-owned mutation controls.
+ *     These can disable pi-lens writes while leaving diagnostics enabled.
  *
  * The file is loaded once per `(path, mtimeMs)` and cached — editing the file
  * invalidates the cache so the next access sees the new values without
@@ -51,11 +55,25 @@ export interface PiLensProjectRuleConfig {
 	threshold?: number;
 }
 
+export interface PiLensProjectMutationConfig {
+	/** Whether this mutation path is enabled for the project. */
+	enabled?: boolean;
+}
+
 export interface PiLensProjectConfig {
 	/** gitignore-style glob patterns added to every diagnostic scan. */
 	ignore: string[];
 	/** Per-rule threshold overrides; missing keys mean "use hardcoded default". */
 	rules: Record<string, PiLensProjectRuleConfig>;
+	/** Whether automatic formatting is enabled after write/edit tool calls. */
+	format?: PiLensProjectMutationConfig;
+	/** Whether the pipeline may apply deterministic linter fixes. */
+	autofix?: PiLensProjectMutationConfig;
+	/** Project-level controls for actionable-warning behavior. */
+	actionableWarnings?: {
+		/** Whether conservative warning fixes may run at agent_end. */
+		autoFix?: PiLensProjectMutationConfig;
+	};
 	/**
 	 * Base project-size scale knob (#776) — see `clients/project-scale.ts`.
 	 * `undefined` means "use the env override / default chain".
@@ -229,6 +247,29 @@ function warnInvalidConfigOnce(configPath: string, reason: string): void {
 	);
 }
 
+function parseEnabledConfig(
+	configPath: string,
+	fieldPath: string,
+	value: unknown,
+): PiLensProjectMutationConfig | undefined {
+	if (value === undefined) return undefined;
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		warnInvalidConfigOnce(configPath, `${fieldPath} must be an object`);
+		return undefined;
+	}
+
+	const raw = value as Record<string, unknown>;
+	if (!("enabled" in raw)) return {};
+	if (typeof raw.enabled !== "boolean") {
+		warnInvalidConfigOnce(
+			configPath,
+			`${fieldPath}.enabled must be a boolean`,
+		);
+		return {};
+	}
+	return { enabled: raw.enabled };
+}
+
 function parseConfigFile(configPath: string): PiLensProjectConfig {
 	let raw: unknown;
 	try {
@@ -252,6 +293,28 @@ function parseConfigFile(configPath: string): PiLensProjectConfig {
 	const ignore = Array.isArray(obj.ignore)
 		? obj.ignore.filter((p): p is string => typeof p === "string")
 		: [];
+	const format = parseEnabledConfig(configPath, "format", obj.format);
+	const autofix = parseEnabledConfig(configPath, "autofix", obj.autofix);
+	const actionableWarningsRaw =
+		obj.actionableWarnings &&
+		typeof obj.actionableWarnings === "object" &&
+		!Array.isArray(obj.actionableWarnings)
+			? (obj.actionableWarnings as Record<string, unknown>)
+			: undefined;
+	if (obj.actionableWarnings !== undefined && !actionableWarningsRaw) {
+		warnInvalidConfigOnce(
+			configPath,
+			"actionableWarnings must be an object",
+		);
+	}
+	const actionableWarningsAutoFix = parseEnabledConfig(
+		configPath,
+		"actionableWarnings.autoFix",
+		actionableWarningsRaw?.autoFix,
+	);
+	const actionableWarnings = actionableWarningsRaw
+		? { autoFix: actionableWarningsAutoFix }
+		: undefined;
 
 	const rules: Record<string, PiLensProjectRuleConfig> = {};
 	if (obj.rules && typeof obj.rules === "object" && !Array.isArray(obj.rules)) {
@@ -292,5 +355,14 @@ function parseConfigFile(configPath: string): PiLensProjectConfig {
 		}
 	}
 
-	return { ignore, rules, maxProjectFiles, raw, configPath };
+	return {
+		ignore,
+		rules,
+		format,
+		autofix,
+		actionableWarnings,
+		maxProjectFiles,
+		raw,
+		configPath,
+	};
 }

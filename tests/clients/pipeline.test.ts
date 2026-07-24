@@ -14,11 +14,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BiomeClient } from "../../clients/biome-client.js";
 import { getFormatService } from "../../clients/format-service.js";
 import { MetricsClient } from "../../clients/metrics-client.js";
+import { resolvePiLensFlag } from "../../clients/lens-config.js";
 import {
 	type PipelineContext,
 	type PipelineDeps,
 	runPipeline,
 } from "../../clients/pipeline.js";
+import { loadPiLensProjectConfig } from "../../clients/project-lens-config.js";
 import type { RuffClient } from "../../clients/ruff-client.js";
 import { TestRunnerClient } from "../../clients/test-runner-client.js";
 import { createTempFile, setupTestEnvironment } from "../clients/test-utils.js";
@@ -119,6 +121,66 @@ describe("Pipeline", () => {
 			...overrides,
 		};
 	}
+
+	it("project config disables format and autofix while preserving diagnostics", async () => {
+		fs.writeFileSync(
+			path.join(tmpDir, ".pi-lens.json"),
+			JSON.stringify({
+				format: { enabled: false },
+				autofix: { enabled: false },
+			}),
+		);
+		const projectConfig = loadPiLensProjectConfig(tmpDir);
+		const getFlag = (name: string) =>
+			resolvePiLensFlag(
+				name,
+				false,
+				{ format: { mode: "immediate" } },
+				projectConfig,
+			);
+		const filePath = createTempFile(tmpDir, "project-policy.ts", "const x=1");
+		const formatFile = vi.fn();
+		const ensureBiomeAvailable = vi.fn().mockResolvedValue(true);
+		const diagnostic = {
+			id: "project-policy-diagnostic",
+			message: "unused var",
+			filePath,
+			severity: "warning" as const,
+			source: "test",
+			tool: "test",
+			semantic: "warning" as const,
+			line: 1,
+			column: 1,
+		};
+		vi.mocked(dispatchLintWithResult).mockResolvedValue({
+			diagnostics: [diagnostic],
+			blockers: [],
+			warnings: [diagnostic],
+			baselineWarningCount: 0,
+			fixed: [],
+			resolvedCount: 0,
+			output: "unused var",
+			blockerOutput: "",
+			hasBlockers: false,
+		});
+
+		const result = await runPipeline(
+			createMockContext(filePath, { getFlag }),
+			createMockDeps({
+				getFormatService: () => ({ formatFile }) as any,
+				biomeClient: {
+					isSupportedFile: () => true,
+					ensureAvailable: ensureBiomeAvailable,
+				} as unknown as BiomeClient,
+			}),
+		);
+
+		expect(formatFile).not.toHaveBeenCalled();
+		expect(ensureBiomeAvailable).not.toHaveBeenCalled();
+		expect(dispatchLintWithResult).toHaveBeenCalledOnce();
+		expect(result.diagnostics).toEqual([diagnostic]);
+		expect(result.fileModified).toBe(false);
+	});
 
 	describe("Format phase", () => {
 		it("defers format by default", async () => {

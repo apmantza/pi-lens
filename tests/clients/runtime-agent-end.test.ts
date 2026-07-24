@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import * as path from "node:path";
 import type { ActionableWarningsReport } from "../../clients/actionable-warnings.js";
 import { CacheManager } from "../../clients/cache-manager.js";
+import { resolvePiLensFlag } from "../../clients/lens-config.js";
 import { readChangesSince } from "../../clients/project-changes.js";
+import { loadPiLensProjectConfig } from "../../clients/project-lens-config.js";
 import { handleAgentEnd } from "../../clients/runtime-agent-end.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
@@ -287,6 +289,45 @@ describe("runtime-agent-end deferred formatting", () => {
 				expect.stringContaining("conservative LSP warning quickfix"),
 				"info",
 			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("project config disables actionable warning autofix", async () => {
+		const env = setupTestEnvironment("pi-lens-agent-end-project-policy-");
+		try {
+			fs.writeFileSync(
+				path.join(env.tmpDir, ".pi-lens.json"),
+				JSON.stringify({
+					actionableWarnings: { autoFix: { enabled: false } },
+				}),
+			);
+			const projectConfig = loadPiLensProjectConfig(env.tmpDir);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			const readCache = vi.fn();
+			applyConservativeActionableWarningFixesMock.mockClear();
+
+			const summary = await handleAgentEnd({
+				ctxCwd: env.tmpDir,
+				getFlag: (name) =>
+					resolvePiLensFlag(
+						name,
+						undefined,
+						{ actionableWarnings: { autoFix: { enabled: true } } },
+						projectConfig,
+					),
+				notify: vi.fn(),
+				dbg: vi.fn(),
+				runtime,
+				cacheManager: { readCache } as any,
+				getFormatService: () => ({}) as any,
+			});
+
+			expect(summary).toBeUndefined();
+			expect(readCache).not.toHaveBeenCalled();
+			expect(applyConservativeActionableWarningFixesMock).not.toHaveBeenCalled();
 		} finally {
 			env.cleanup();
 		}

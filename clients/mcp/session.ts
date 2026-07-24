@@ -85,7 +85,7 @@ export async function runSessionStart(
 	cwd: string,
 ): Promise<SessionStartOutcome> {
 	const ctx = await getMcpSessionContext();
-	const host = createMcpHost();
+	const host = createMcpHost(undefined, cwd);
 
 	await handleSessionStart({
 		ctxCwd: cwd,
@@ -153,7 +153,7 @@ export async function runTurnEnd(
 	files: string[] = [],
 ): Promise<TurnEndOutcome> {
 	const ctx = await getMcpSessionContext();
-	const host = createMcpHost();
+	const host = createMcpHost(undefined, cwd);
 
 	let registered = 0;
 	for (const file of files) {

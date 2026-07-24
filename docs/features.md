@@ -34,6 +34,12 @@ Detection rules:
 - **Biome-default**: for JS/TS files without Prettier or Biome config, Biome is used as the default formatter
 - **Ruff-default**: for Python files without Black config, Ruff format is used when available
 
+Repositories can disable all immediate and deferred auto-format mutations with
+`format.enabled: false` in `.pi-lens.json`. Likewise,
+`autofix.enabled: false` disables the separate pipeline fixer phase while
+keeping formatter detection, lint dispatch, LSP synchronization, and
+diagnostics available.
+
 ### Review Graph - Cascade Diagnostics
 
 pi-lens builds a review graph (`file → symbol → dependency`) during session and uses it at turn end to render an impact cascade: which files were affected by a change and how diagnostics propagated through the dependency graph. Nodes track kind, language, and export status; edges track contains/imports/calls/references.
@@ -116,7 +122,7 @@ At `turn_end`, pi-lens writes `.pi-lens/cache/actionable-warnings.json` summariz
 
 **Conservative autofix (`agent_end`):**
 
-When `actionableWarnings.autoFix.enabled` is set in global config (or `--lens-actionable-warning-autofix`), pi-lens applies LSP quickfixes from the report at `agent_end`. Safety gates:
+When `actionableWarnings.autoFix.enabled` is set in global or project config (or `--lens-actionable-warning-autofix`), pi-lens applies LSP quickfixes from the report at `agent_end`. A project can explicitly disable this mutation with `actionableWarnings.autoFix.enabled: false` without disabling the report. Safety gates:
 
 - Re-fetches code actions from the live LSP server at fix time (stale actions are skipped)
 - Skips any warning with zero or multiple eligible actions (ambiguity is not resolved)

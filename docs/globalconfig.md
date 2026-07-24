@@ -6,6 +6,11 @@ Hide the diagnostics widget by default, run formatting immediately after write/e
 
 ```json
 {
+  "format": { "enabled": false },
+  "autofix": { "enabled": false },
+  "actionableWarnings": {
+    "autoFix": { "enabled": false }
+  },
   "ignore": [
     "**/*.snapshot",
     "scratch/**"
@@ -60,6 +65,23 @@ In addition to the user-level `~/.pi-lens/config.json` above, pi-lens reads a pe
 }
 ```
 
+### Mutation controls
+
+`format.enabled`, `autofix.enabled`, and `actionableWarnings.autoFix.enabled`
+control the three pi-lens paths that can mutate files outside the agent's
+original write/edit:
+
+- `format.enabled: false` disables immediate and deferred auto-formatting.
+- `autofix.enabled: false` disables deterministic pipeline fixes from Biome,
+  Ruff, ESLint, and other fix-capable runners.
+- `actionableWarnings.autoFix.enabled: false` disables conservative LSP
+  quickfixes at `agent_end`.
+
+These settings do not disable LSP synchronization, lint dispatch, actionable
+warning reports, or diagnostics. Explicit disabling CLI flags
+(`--no-autoformat` and `--no-autofix`) take highest precedence; project
+settings take precedence over user-level global defaults.
+
 ### `ignore`
 
 Array of gitignore-style glob patterns. Any path matching is excluded from every diagnostic scan (LSP walk, fact-rules, tree-sitter, jscpd, knip, review graph, source-filter). Useful for vendored code, generated files, or per-project noise you want to silence without editing `.gitignore` (which would also affect git itself). These patterns take precedence over the global `~/.pi-lens/config.json` `ignore`, so a `!negation` here can re-include a globally-ignored path.
@@ -84,5 +106,6 @@ Single scale knob (default `2000`) that a large-but-healthy repo can raise to sc
 - Unknown top-level keys and unknown rule ids are ignored, so a forward-compat file with extra fields (e.g. an LSP `servers` block from `lsp.json`) won't break the parse.
 - A malformed JSON file is logged once and treated as "no config" — your diagnostics never get blocked by a syntax error in your own config.
 - Rule thresholds must be positive finite numbers; invalid, zero, or negative values are logged once and ignored.
+- Mutation-control `enabled` values must be booleans; invalid values are logged once and ignored.
 - The depth sub-threshold of `high-complexity` (default `6`) is intentionally not exposed; only the cyclomatic-complexity knob ships today to keep the schema tight.
 - The file is mtime-cached, so editing it takes effect on the next scan without restarting the agent.
