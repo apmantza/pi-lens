@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { PiLensProjectConfig } from "./project-lens-config.js";
 
 export type PiLensFormatMode = "deferred" | "immediate";
 
@@ -222,10 +223,17 @@ export function resolvePiLensFlag(
 	name: string,
 	value: boolean | string | undefined,
 	config: PiLensGlobalConfig | undefined,
+	projectConfig?: PiLensProjectConfig,
 ): boolean | string | undefined {
 	if (value) return value;
 	if (name === "no-autoformat") {
+		if (projectConfig?.format?.enabled !== undefined) {
+			return !projectConfig.format.enabled;
+		}
 		return config?.format?.enabled === false;
+	}
+	if (name === "no-autofix") {
+		return projectConfig?.autofix?.enabled === false;
 	}
 	if (name === "immediate-format") {
 		return config?.format?.mode === "immediate";
@@ -237,6 +245,9 @@ export function resolvePiLensFlag(
 		return config?.actionableWarnings?.includeLspCodeActions === true;
 	}
 	if (name === "lens-actionable-warning-autofix") {
+		if (projectConfig?.actionableWarnings?.autoFix?.enabled !== undefined) {
+			return projectConfig.actionableWarnings.autoFix.enabled;
+		}
 		return config?.actionableWarnings?.autoFix?.enabled === true;
 	}
 	if (name === "lens-actionable-warning-all") {

@@ -40,6 +40,7 @@ import {
 	loadPiLensGlobalConfig,
 	resolvePiLensFlag,
 } from "./clients/lens-config.js";
+import { loadPiLensProjectConfig } from "./clients/project-lens-config.js";
 import { initLensEvents } from "./clients/lens-events.js";
 import { wireBusEmitter } from "./clients/bus-publish.js";
 import { wireDiagnosticsBusEmitter } from "./clients/diagnostics-publish.js";
@@ -438,7 +439,8 @@ export default function (pi: ExtensionAPI) {
 		const cliValue = globalConfigOnlyFlags.has(name)
 			? undefined
 			: pi.getFlag(name);
-		return resolvePiLensFlag(name, cliValue, globalConfig);
+		const projectConfig = loadPiLensProjectConfig(runtime.projectRoot);
+		return resolvePiLensFlag(name, cliValue, globalConfig, projectConfig);
 	}
 
 	let lensEnabled = !getLensFlag("no-lens");

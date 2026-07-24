@@ -45,6 +45,51 @@ describe("loadPiLensProjectConfig", () => {
 		expect(cfg.configPath).toBe(path.join(tmpDir, ".pi-lens.json"));
 	});
 
+	it("parses project-level mutation controls", () => {
+		fs.writeFileSync(
+			path.join(tmpDir, ".pi-lens.json"),
+			JSON.stringify({
+				format: { enabled: false },
+				autofix: { enabled: false },
+				actionableWarnings: { autoFix: { enabled: false } },
+			}),
+		);
+
+		const cfg = loadPiLensProjectConfig(tmpDir);
+		expect(cfg.format).toEqual({ enabled: false });
+		expect(cfg.autofix).toEqual({ enabled: false });
+		expect(cfg.actionableWarnings).toEqual({
+			autoFix: { enabled: false },
+		});
+	});
+
+	it("ignores invalid project-level mutation controls", () => {
+		fs.writeFileSync(
+			path.join(tmpDir, ".pi-lens.json"),
+			JSON.stringify({
+				format: { enabled: "no" },
+				autofix: false,
+				actionableWarnings: { autoFix: { enabled: 1 } },
+			}),
+		);
+
+		const cfg = loadPiLensProjectConfig(tmpDir);
+		expect(cfg.format?.enabled).toBeUndefined();
+		expect(cfg.autofix).toBeUndefined();
+		expect(cfg.actionableWarnings?.autoFix?.enabled).toBeUndefined();
+		expect(console.error).toHaveBeenCalledWith(
+			expect.stringContaining("format.enabled must be a boolean"),
+		);
+		expect(console.error).toHaveBeenCalledWith(
+			expect.stringContaining("autofix must be an object"),
+		);
+		expect(console.error).toHaveBeenCalledWith(
+			expect.stringContaining(
+				"actionableWarnings.autoFix.enabled must be a boolean",
+			),
+		);
+	});
+
 	it("accepts pi-lens.json (no leading dot) as a fallback name", () => {
 		fs.writeFileSync(
 			path.join(tmpDir, "pi-lens.json"),

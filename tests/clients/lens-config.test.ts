@@ -12,6 +12,7 @@ import {
 	loadPiLensGlobalConfig,
 	resolvePiLensFlag,
 } from "../../clients/lens-config.js";
+import { EMPTY_PROJECT_CONFIG } from "../../clients/project-lens-config.js";
 
 const tmpDirs: string[] = [];
 let previousConfigPath: string | undefined;
@@ -134,6 +135,83 @@ describe("global pi-lens config", () => {
 		expect(resolvePiLensFlag("lens-opengrep-config", "p/ci", config)).toBe(
 			"p/ci",
 		);
+	});
+
+	it("resolves mutation flags from project config before global defaults", () => {
+		const globalConfig = {
+			format: { enabled: false },
+			actionableWarnings: { autoFix: { enabled: true } },
+		};
+		const disabledProjectConfig = {
+			...EMPTY_PROJECT_CONFIG,
+			format: { enabled: false },
+			autofix: { enabled: false },
+			actionableWarnings: { autoFix: { enabled: false } },
+		};
+
+		expect(
+			resolvePiLensFlag(
+				"no-autoformat",
+				false,
+				{ format: { enabled: true } },
+				disabledProjectConfig,
+			),
+		).toBe(true);
+		expect(
+			resolvePiLensFlag(
+				"no-autofix",
+				false,
+				globalConfig,
+				disabledProjectConfig,
+			),
+		).toBe(true);
+		expect(
+			resolvePiLensFlag(
+				"lens-actionable-warning-autofix",
+				undefined,
+				globalConfig,
+				disabledProjectConfig,
+			),
+		).toBe(false);
+
+		const enabledProjectConfig = {
+			...EMPTY_PROJECT_CONFIG,
+			format: { enabled: true },
+			autofix: { enabled: true },
+			actionableWarnings: { autoFix: { enabled: true } },
+		};
+		expect(
+			resolvePiLensFlag(
+				"no-autoformat",
+				false,
+				globalConfig,
+				enabledProjectConfig,
+			),
+		).toBe(false);
+		expect(
+			resolvePiLensFlag(
+				"no-autofix",
+				false,
+				globalConfig,
+				enabledProjectConfig,
+			),
+		).toBe(false);
+		expect(
+			resolvePiLensFlag(
+				"lens-actionable-warning-autofix",
+				undefined,
+				{ actionableWarnings: { autoFix: { enabled: false } } },
+				enabledProjectConfig,
+			),
+		).toBe(true);
+		expect(
+			resolvePiLensFlag(
+				"no-autoformat",
+				true,
+				{ format: { enabled: true } },
+				enabledProjectConfig,
+			),
+		).toBe(true);
 	});
 
 	it("parses contextInjection.enabled and resolves the no-lens-context flag", () => {
