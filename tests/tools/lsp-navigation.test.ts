@@ -181,6 +181,26 @@ describe("lsp_navigation tool", () => {
 		});
 	});
 
+	it("passes the call's ctx.cwd to getFlag (#792 — MCP host must resolve per-request project config, not the process's launch cwd)", async () => {
+		const calls: Array<{ name: string; cwd: string | undefined }> = [];
+		const tool = createLspNavigationTool((name, cwd) => {
+			calls.push({ name, cwd });
+			return false;
+		});
+
+		await tool.execute(
+			"call-1",
+			{ operation: "capabilities" },
+			new AbortController().signal,
+			null,
+			{ cwd: "/some/other/project" },
+		);
+
+		expect(calls).toEqual([
+			{ name: "no-lsp", cwd: "/some/other/project" },
+		]);
+	});
+
 	it("allows incomingCalls without path when callHierarchyItem exists", async () => {
 		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
 		const callHierarchyItem = {

@@ -1,8 +1,9 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	getGlobalAutofixEnabled,
 	getGlobalAutoformatEnabled,
 	getGlobalContextInjectionEnabled,
 	getGlobalImmediateFormatDefault,
@@ -10,7 +11,9 @@ import {
 	getGlobalWidgetDefaultVisible,
 	getPiLensGlobalConfigPath,
 	loadPiLensGlobalConfig,
+	resetGlobalConfigWarnCache,
 	resolvePiLensFlag,
+	resolvePiLensFlagWithSource,
 } from "../../clients/lens-config.js";
 import { EMPTY_PROJECT_CONFIG } from "../../clients/project-lens-config.js";
 
@@ -33,9 +36,13 @@ function writeConfig(home: string, contents: string): string {
 beforeEach(() => {
 	previousConfigPath = process.env.PI_LENS_CONFIG_PATH;
 	delete process.env.PI_LENS_CONFIG_PATH;
+	resetGlobalConfigWarnCache();
+	vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
 afterEach(() => {
+	vi.restoreAllMocks();
+	resetGlobalConfigWarnCache();
 	if (previousConfigPath === undefined) delete process.env.PI_LENS_CONFIG_PATH;
 	else process.env.PI_LENS_CONFIG_PATH = previousConfigPath;
 	for (const dir of tmpDirs.splice(0)) {
@@ -341,5 +348,208 @@ describe("global pi-lens config", () => {
 
 		expect(getGlobalWidgetDefaultVisible(missingPath)).toBe(true);
 		expect(getGlobalWidgetDefaultVisible(invalidPath)).toBe(true);
+	});
+
+	// #792: docs/globalconfig.md documented a global `autofix.enabled` example
+	// long before the parser/resolver actually honored it. These pin down the
+	// full precedence chain now that it's wired up.
+	describe("global autofix.enabled parity (#792)", () => {
+		it("parses autofix.enabled from global config", () => {
+			const home = makeTempHome();
+			const configPath = writeConfig(
+				home,
+				JSON.stringify({ autofix: { enabled: false } }),
+			);
+
+			expect(loadPiLensGlobalConfig(configPath)).toEqual({
+				autofix: { enabled: false },
+			});
+			expect(getGlobalAutofixEnabled(configPath)).toBe(false);
+		});
+
+		it("defaults autofix to enabled when config is missing or silent", () => {
+			const home = makeTempHome();
+			expect(getGlobalAutofixEnabled(path.join(home, "nope.json"))).toBe(true);
+			const configPath = writeConfig(home, JSON.stringify({ widget: {} }));
+			expect(getGlobalAutofixEnabled(configPath)).toBe(true);
+		});
+
+		it("global autofix.enabled=false disables --no-autofix's default", () => {
+			expect(
+				resolvePiLensFlag("no-autofix", false, { autofix: { enabled: false } }),
+			).toBe(true);
+			expect(
+				resolvePiLensFlag("no-autofix", false, { autofix: { enabled: true } }),
+			).toBe(false);
+			expect(resolvePiLensFlag("no-autofix", false, {})).toBe(false);
+		});
+
+		it("project autofix.enabled overrides global in EITHER direction (project wins, #792 maintainer decision)", () => {
+			const globalDisabled = { autofix: { enabled: false } };
+			const globalEnabled = { autofix: { enabled: true } };
+
+			// Project re-enables what global disabled.
+			expect(
+				resolvePiLensFlag("no-autofix", false, globalDisabled, {
+					...EMPTY_PROJECT_CONFIG,
+					autofix: { enabled: true },
+				}),
+			).toBe(false);
+			// Project disables regardless of global.
+			expect(
+				resolvePiLensFlag("no-autofix", false, globalEnabled, {
+					...EMPTY_PROJECT_CONFIG,
+					autofix: { enabled: false },
+				}),
+			).toBe(true);
+			// Explicit CLI flag still outranks everything.
+			expect(
+				resolvePiLensFlag("no-autofix", true, globalEnabled, {
+					...EMPTY_PROJECT_CONFIG,
+					autofix: { enabled: true },
+				}),
+			).toBe(true);
+		});
+
+		it("warns once (not repeatedly) on an invalid global autofix.enabled value", () => {
+			const home = makeTempHome();
+			const configPath = writeConfig(
+				home,
+				JSON.stringify({ autofix: { enabled: "no" } }),
+			);
+
+			expect(loadPiLensGlobalConfig(configPath)?.autofix?.enabled).toBeUndefined();
+			expect(console.error).toHaveBeenCalledWith(
+				expect.stringContaining("autofix.enabled must be a boolean"),
+			);
+			const callsAfterFirst = (console.error as ReturnType<typeof vi.fn>).mock
+				.calls.length;
+
+			loadPiLensGlobalConfig(configPath);
+			loadPiLensGlobalConfig(configPath);
+			expect(
+				(console.error as ReturnType<typeof vi.fn>).mock.calls.length,
+			).toBe(callsAfterFirst);
+		});
+
+		it("warns once on an invalid global format.enabled and actionableWarnings.autoFix.enabled value", () => {
+			const home = makeTempHome();
+			const configPath = writeConfig(
+				home,
+				JSON.stringify({
+					format: { enabled: "nope" },
+					actionableWarnings: { autoFix: { enabled: 1 } },
+				}),
+			);
+
+			const parsed = loadPiLensGlobalConfig(configPath);
+			expect(parsed?.format?.enabled).toBeUndefined();
+			expect(parsed?.actionableWarnings?.autoFix?.enabled).toBeUndefined();
+			expect(console.error).toHaveBeenCalledWith(
+				expect.stringContaining("format.enabled must be a boolean"),
+			);
+			expect(console.error).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"actionableWarnings.autoFix.enabled must be a boolean",
+				),
+			);
+		});
+	});
+
+	describe("resolvePiLensFlagWithSource (#792)", () => {
+		it("reports source=cli when an explicit CLI value wins", () => {
+			expect(
+				resolvePiLensFlagWithSource("no-autofix", true, undefined, undefined),
+			).toEqual({ value: true, source: "cli" });
+			expect(
+				resolvePiLensFlagWithSource("no-autoformat", true, undefined, undefined),
+			).toEqual({ value: true, source: "cli" });
+		});
+
+		it("reports source=project when project config decides no-autofix/no-autoformat", () => {
+			const projectConfig = {
+				...EMPTY_PROJECT_CONFIG,
+				format: { enabled: false },
+				autofix: { enabled: false },
+			};
+			expect(
+				resolvePiLensFlagWithSource(
+					"no-autoformat",
+					false,
+					undefined,
+					projectConfig,
+				),
+			).toEqual({ value: true, source: "project" });
+			expect(
+				resolvePiLensFlagWithSource(
+					"no-autofix",
+					false,
+					undefined,
+					projectConfig,
+				),
+			).toEqual({ value: true, source: "project" });
+			expect(
+				resolvePiLensFlagWithSource(
+					"lens-actionable-warning-autofix",
+					undefined,
+					undefined,
+					{
+						...EMPTY_PROJECT_CONFIG,
+						actionableWarnings: { autoFix: { enabled: true } },
+					},
+				),
+			).toEqual({ value: true, source: "project" });
+		});
+
+		it("reports source=global when only global config decides", () => {
+			expect(
+				resolvePiLensFlagWithSource("no-autofix", false, {
+					autofix: { enabled: false },
+				}),
+			).toEqual({ value: true, source: "global" });
+			expect(
+				resolvePiLensFlagWithSource("no-autoformat", false, {
+					format: { enabled: false },
+				}),
+			).toEqual({ value: true, source: "global" });
+			expect(
+				resolvePiLensFlagWithSource("lens-actionable-warning-autofix", undefined, {
+					actionableWarnings: { autoFix: { enabled: true } },
+				}),
+			).toEqual({ value: true, source: "global" });
+		});
+
+		it("reports source=default when nothing overrides the built-in default", () => {
+			expect(
+				resolvePiLensFlagWithSource("no-autofix", false, undefined, undefined),
+			).toEqual({ value: false, source: "default" });
+			expect(
+				resolvePiLensFlagWithSource("no-autoformat", false, undefined, undefined),
+			).toEqual({ value: false, source: "default" });
+			expect(
+				resolvePiLensFlagWithSource(
+					"lens-actionable-warning-autofix",
+					undefined,
+					undefined,
+					undefined,
+				),
+			).toEqual({ value: false, source: "default" });
+		});
+
+		it("resolvePiLensFlag delegates to resolvePiLensFlagWithSource with zero behavior change", () => {
+			const globalConfig = { autofix: { enabled: false } };
+			const projectConfig = {
+				...EMPTY_PROJECT_CONFIG,
+				autofix: { enabled: true },
+			};
+			expect(resolvePiLensFlag("no-autofix", false, globalConfig, projectConfig)).toBe(
+				resolvePiLensFlagWithSource(
+					"no-autofix",
+					false,
+					globalConfig,
+					projectConfig,
+				).value,
+			);
+		});
 	});
 });

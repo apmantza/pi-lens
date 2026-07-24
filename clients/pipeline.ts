@@ -14,6 +14,7 @@
 
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
+import type { PiLensFlagSource } from "./lens-config.js";
 import { findNearestContaining } from "./path-utils.js";
 import {
 	recordFromDispatchDiagnostic,
@@ -231,6 +232,13 @@ export interface PipelineContext {
 	};
 	/** pi.getFlag accessor */
 	getFlag: (name: string) => boolean | string | undefined;
+	/**
+	 * Optional: resolve which config tier (cli/project/global/default) decided
+	 * a mutation flag's value, for provenance in dbg/skip logs (#792). Absent
+	 * ⇒ logs omit the `source=` suffix (existing tests that don't wire this
+	 * through keep passing unchanged).
+	 */
+	getFlagSource?: (name: string) => PiLensFlagSource;
 	/** Debug logger */
 	dbg: (msg: string) => void;
 	/**
@@ -557,6 +565,7 @@ export async function runAutofix(
 	getFlag: PipelineContext["getFlag"],
 	dbg: PipelineContext["dbg"],
 	deps: Pick<PipelineDeps, "biomeClient" | "ruffClient" | "fixedThisTurn">,
+	getFlagSource?: PipelineContext["getFlagSource"],
 ): Promise<{
 	fixedCount: number;
 	autofixTools: string[];
@@ -587,7 +596,10 @@ export async function runAutofix(
 	}
 
 	if (noAutofix) {
-		dbg(`autofix: skipped for ${filePath} (--no-autofix)`);
+		const source = getFlagSource?.("no-autofix");
+		dbg(
+			`autofix: skipped for ${filePath} (--no-autofix${source ? `, source=${source}` : ""})`,
+		);
 		return {
 			fixedCount,
 			autofixTools,
@@ -1082,7 +1094,7 @@ export async function runPipeline(
 	ctx: PipelineContext,
 	deps: PipelineDeps,
 ): Promise<PipelineResult> {
-	const { filePath, cwd, toolName, getFlag, dbg } = ctx;
+	const { filePath, cwd, toolName, getFlag, getFlagSource, dbg } = ctx;
 	const { getFormatService } = deps;
 
 	const phase = createPhaseTracker(toolName, filePath);
@@ -1133,6 +1145,11 @@ export async function runPipeline(
 		}
 	} else if (formatDeferred) {
 		dbg(`autoformat: deferred until agent_end for ${filePath}`);
+	} else if (autoformatDisabled) {
+		const source = getFlagSource?.("no-autoformat");
+		dbg(
+			`autoformat: skipped for ${filePath} (--no-autoformat${source ? `, source=${source}` : ""})`,
+		);
 	}
 	phase.end("format", {
 		formattersUsed,
@@ -1149,7 +1166,7 @@ export async function runPipeline(
 		changedFiles: autofixChangedFiles,
 		needsContentRefresh: fixRefresh,
 		skipReason: autofixSkipReason,
-	} = await runAutofix(filePath, cwd, getFlag, dbg, deps);
+	} = await runAutofix(filePath, cwd, getFlag, dbg, deps, getFlagSource);
 	for (const changedFile of autofixChangedFiles) {
 		piChangedFiles.add(path.resolve(changedFile));
 	}
