@@ -5,6 +5,7 @@ import { FactStore } from "../../../../clients/dispatch/fact-store.js";
 import { setupTestEnvironment } from "../../test-utils.js";
 
 const safeSpawnAsync = vi.fn();
+const hasMarkdownlintConfigMock = vi.fn(() => true);
 
 vi.mock("../../../../clients/safe-spawn.js", () => ({
 	safeSpawn: vi.fn(),
@@ -27,7 +28,7 @@ vi.mock("../../../../clients/tool-policy.js", async (importOriginal) => {
 	return {
 		...actual,
 		getLinterPolicyForCwd: () => null,
-		hasMarkdownlintConfig: () => true,
+		hasMarkdownlintConfig: hasMarkdownlintConfigMock,
 	};
 });
 
@@ -50,6 +51,7 @@ describe("markdownlint runner — fixable metadata", () => {
 	beforeEach(() => {
 		vi.resetModules();
 		safeSpawnAsync.mockReset();
+		hasMarkdownlintConfigMock.mockReset().mockReturnValue(true);
 	});
 
 	it("marks known-fixable MD rules as fixable with a fixSuggestion", async () => {
@@ -74,6 +76,11 @@ describe("markdownlint runner — fixable metadata", () => {
 			).default;
 			const result = await runner.run(createCtx(filePath, env.tmpDir) as never);
 
+			expect(safeSpawnAsync).toHaveBeenCalledWith(
+				"markdownlint-cli2",
+				[filePath],
+				expect.objectContaining({ cwd: env.tmpDir }),
+			);
 			expect(result.diagnostics.length).toBeGreaterThanOrEqual(2);
 			const md009 = result.diagnostics.find((d) => d.rule === "MD009");
 			const md013 = result.diagnostics.find((d) => d.rule === "MD013");
@@ -81,6 +88,41 @@ describe("markdownlint runner — fixable metadata", () => {
 			expect(md009?.fixSuggestion).toMatch(/markdownlint-cli2 --fix/);
 			expect(md013?.fixable).toBeFalsy();
 			expect(md013?.fixSuggestion).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("uses the package-owned MD013-disabled config when no project config exists", async () => {
+		const env = setupTestEnvironment("pi-lens-markdownlint-default-config-");
+		try {
+			const filePath = path.join(env.tmpDir, "README.md");
+			fs.writeFileSync(filePath, "# Title\n");
+			hasMarkdownlintConfigMock.mockReturnValue(false);
+			safeSpawnAsync.mockResolvedValueOnce({
+				error: null,
+				status: 0,
+				stdout: "",
+				stderr: "",
+			});
+
+			const runner = (
+				await import("../../../../clients/dispatch/runners/markdownlint.ts")
+			).default;
+			await runner.run(createCtx(filePath, env.tmpDir) as never);
+
+			const [, args] = safeSpawnAsync.mock.calls[0] as [
+				string,
+				string[],
+				unknown,
+			];
+			expect(args[0]).toBe("--config");
+			expect(args).not.toContain("--disable");
+			expect(args).not.toContain("MD013");
+			expect(args.at(-1)).toBe(filePath);
+			expect(args[1]).toMatch(/config[\\/]markdownlint[\\/]core\.json$/);
+			expect(fs.existsSync(args[1])).toBe(true);
+			expect(path.resolve(args[1])).not.toContain(path.basename(env.tmpDir));
 		} finally {
 			env.cleanup();
 		}

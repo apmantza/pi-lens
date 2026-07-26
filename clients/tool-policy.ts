@@ -1142,10 +1142,21 @@ const YAMLLINT_CONFIGS = [
 ];
 
 const MARKDOWNLINT_CONFIGS = [
-	".markdownlint.json",
+	// markdownlint-cli2's built-in config names (keep this list in sync with
+	// the installed CLI's supported configuration file names).
+	".markdownlint-cli2.jsonc",
+	".markdownlint-cli2.yaml",
+	".markdownlint-cli2.yml",
+	".markdownlint-cli2.cjs",
+	".markdownlint-cli2.mjs",
 	".markdownlint.jsonc",
+	".markdownlint.json",
 	".markdownlint.yaml",
 	".markdownlint.yml",
+	".markdownlint.cjs",
+	".markdownlint.mjs",
+	// Retain the legacy detector name for compatibility with existing policy
+	// behavior, even though current markdownlint-cli2 versions do not prefer it.
 	".markdownlintrc",
 ];
 

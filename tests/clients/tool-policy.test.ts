@@ -454,6 +454,24 @@ describe("tool-policy", () => {
 		}
 	});
 
+	it.each([
+		".markdownlint-cli2.jsonc",
+		".markdownlint-cli2.yaml",
+		".markdownlint-cli2.yml",
+		".markdownlint-cli2.cjs",
+		".markdownlint-cli2.mjs",
+		".markdownlint.cjs",
+		".markdownlint.mjs",
+	])("detects markdownlint-cli2 config filename %s", (configName) => {
+		const env = setupTestEnvironment(`pi-lens-markdownlint-config-${configName}`);
+		try {
+			createTempFile(env.tmpDir, configName, "{}\n");
+			expect(hasMarkdownlintConfig(env.tmpDir)).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("formatter config detectors walk past package.json boundaries consistently", () => {
 		const env = setupTestEnvironment("pi-lens-tool-policy-fmt-config-walkup-");
 		try {

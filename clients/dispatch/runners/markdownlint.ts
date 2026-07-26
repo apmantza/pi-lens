@@ -1,3 +1,4 @@
+import { resolvePackagePath } from "../../package-root.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import {
 	getLinterPolicyForCwd,
@@ -110,9 +111,6 @@ const markdownlintRunner: RunnerDefinition = {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 		const hasConfig = hasMarkdownlintConfig(cwd);
-		if (!hasConfig) {
-			// Run with sensible defaults even without explicit config
-		}
 
 		let cmd: string | null = null;
 		if (await (markdownlint.isAvailableAsync(cwd))) {
@@ -123,7 +121,12 @@ const markdownlintRunner: RunnerDefinition = {
 
 		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
 
-		const configArgs = hasConfig ? [] : ["--disable", "MD013"];
+		const configArgs = hasConfig
+			? []
+			: [
+					"--config",
+					resolvePackagePath(import.meta.url, "config/markdownlint/core.json"),
+				];
 		const result = await safeSpawnAsync(cmd, [...configArgs, ctx.filePath], {
 			timeout: 15000,
 			cwd,
