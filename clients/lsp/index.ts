@@ -393,6 +393,9 @@ export interface LSPTouchFileOptions {
 	 * regardless of the 20000ms actually requested, defeating the warm-up
 	 * entirely. When true, the caller's cap is treated as a FLOOR instead —
 	 * `Math.max(callerCap, strategyWait)` — never shrunk below what was asked.
+	 * #832: the first warm-up touch is exempt from this floor when the live
+	 * capability classification identifies a workspace-indexing push-only
+	 * server as silent-on-clean; that server uses its configured strategy wait.
 	 * Only `ensureWarmForSweep` sets this; every other caller leaves it unset
 	 * and keeps the pre-existing ceiling-only semantics exactly as-is.
 	 */
@@ -400,16 +403,18 @@ export interface LSPTouchFileOptions {
 	/**
 	 * #799: which `warmupOverride` attempt this touch is (1 = the first
 	 * round trip against a cold server, 2 = `ensureWarmForSweep`'s single
-	 * retry). Only the FIRST attempt gets the full cold-start floor
+	 * retry). Normally only the FIRST attempt gets the full cold-start floor
 	 * (`Math.max(callerCap, strategyWait)`) — a genuinely slow-to-index
-	 * server (tsserver-style) deserves that full window once. A retry
+	 * server (tsserver-style) deserves that full window once. #832's
+	 * workspace-indexing push-only silent-on-clean exception uses the shorter
+	 * configured strategy wait on both attempts. A retry
 	 * attempt already got that window and re-flooring it to another 20s
 	 * would silently double-pay the ceiling for a server whose real issue
 	 * is that it's `silentOnClean` and simply never publishes (marksman) —
 	 * that retry instead respects the server's own (much shorter) strategy
-	 * budget, same as a normal steady-state touch. Undefined/1 keeps
-	 * today's floor-every-attempt behavior; only `ensureWarmForSweep`'s
-	 * retry sets this to 2.
+	 * budget, same as a normal steady-state touch. For non-exempt servers,
+	 * undefined/1 keeps today's floor-every-attempt behavior; only
+	 * `ensureWarmForSweep`'s retry sets this to 2.
 	 */
 	warmupAttempt?: number;
 }
@@ -551,13 +556,13 @@ export async function runPerServerGroups<
 	const workers = Math.min(Math.max(1, concurrency), groups.length);
 	await Promise.all(
 		Array.from({ length: workers }, async () => {
-			while (true) {
-				if (signal?.aborted) return;
+			while (!signal?.aborted) {
 				const gi = nextGroup;
 				nextGroup += 1;
-				if (gi >= groups.length) return;
+				if (gi >= groups.length) break;
 				await processGroup(groups[gi]!);
 			}
+			return true;
 		}),
 	);
 }
@@ -1603,12 +1608,13 @@ export class LSPService {
 					if (wrote === true) {
 						// A clean write clears any accrued backpressure streak (#743).
 						if (clientKey) this.notifyWriteBackpressureStreak.delete(clientKey);
-						return;
+					} else {
+						notifyWriteTimedOutServerIds.push(entry.info.id);
+						if (!rejected) {
+							this.recordNotifyWriteBackpressure(clientKey, entry, filePath);
+						}
 					}
-					notifyWriteTimedOutServerIds.push(entry.info.id);
-					if (!rejected) {
-						this.recordNotifyWriteBackpressure(clientKey, entry, filePath);
-					}
+					return true;
 				}),
 			);
 			if (notifyWriteTimedOutServerIds.length > 0) {
@@ -1643,7 +1649,7 @@ export class LSPService {
 		let tsserverSyncEligible = false;
 		let tsserverSyncConfirmed:
 			| import("./client.js").LSPDiagnostic[]
-			| undefined = undefined;
+			| undefined;
 		if (diagnosticsMode !== "none") {
 			// Resolution: env wins so users can tune the cap without rebuilding.
 			// Otherwise, on the single-server hot path (primary scope), use that
@@ -1693,6 +1699,45 @@ export class LSPService {
 					}
 				}
 			}
+			// #832: workspace-indexing servers that are classified as silent on
+			// clean do not benefit from the generic cold-indexing floor. Their
+			// configured strategy already gives the first sweep touch a bounded
+			// workspace-index budget (marksman: 1500ms), while the capability
+			// classification proves that a clean push has no affirmative signal to
+			// wait for. Keep this restricted to the workspace-indexing strategy:
+			// TypeScript is also a silent-on-clean push server, but its cold project
+			// load still needs the longer 20s floor.
+			//
+			// Build this from the live spawned client's capabilities rather than
+			// server id alone. Missing/throwing capability data fails closed, so a
+			// new or ambiguous server keeps the existing generous warm-up budget.
+			const silentCleanWarmupServers = new Set<string>();
+			if (options.warmupOverride && (options.warmupAttempt ?? 1) <= 1) {
+				for (const entry of spawned) {
+					const strategy = getStrategy(entry.client.serverId);
+					if (strategy.workspaceIndexing !== true) continue;
+					try {
+						const snapshot: LSPCapabilitySnapshot = {
+							serverId: entry.client.serverId,
+							root: entry.client.root,
+							operationSupport: entry.client.getOperationSupport(),
+							workspaceDiagnosticsSupport:
+								entry.client.getWorkspaceDiagnosticsSupport(),
+							advertisedCommands: entry.client.getAdvertisedCommands(),
+							rawCapabilityKeys: entry.client.getRawCapabilityKeys?.() ?? [],
+							launchVariant: entry.client.getLaunchVariant?.(),
+						};
+						if (
+							classifyServerWaitTier(entry.client.serverId, snapshot) ===
+							"tier3-silent"
+						) {
+							silentCleanWarmupServers.add(entry.client.serverId);
+						}
+					} catch {
+						// Fail closed: capability uncertainty must retain the cold floor.
+					}
+				}
+			}
 			// Each server gets its OWN deadline, bounded by the caller cap as a
 			// CEILING (never a floor) — so a clean push-silent primary (typescript
 			// ~1s) can't hold the whole touch to a slow auxiliary's budget, and a
@@ -1720,6 +1765,16 @@ export class LSPService {
 					// if the strategy already wants more) rather than the normal
 					// ceiling — see `warmupOverride` doc on `LSPTouchFileOptions`.
 					if (options.warmupOverride) {
+						// #832: a workspace-indexing server already classified as
+						// silent-on-clean uses its strategy's bounded wait on the first
+						// attempt; the generic cold floor is for servers whose cold work
+						// can eventually produce a push answer (notably TypeScript).
+						if (silentCleanWarmupServers.has(serverId)) {
+							return Math.min(
+								callerCap,
+								strategyWait > 0 ? strategyWait : callerCap,
+							);
+						}
 						// #799: only the FIRST warm-up attempt for a cold server gets the
 						// floor — see the `warmupAttempt` doc on `LSPTouchFileOptions`.
 						if ((options.warmupAttempt ?? 1) > 1) {
@@ -3885,6 +3940,7 @@ export class LSPService {
 					} catch {
 						/* missing → will be pruned */
 					}
+					return true;
 				}),
 			);
 			client.pruneDiagnostics(

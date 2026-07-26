@@ -43,7 +43,7 @@ function makeTsServer(root: string) {
 }
 
 /** Fake client: one shared instance (real servers are single per project root). */
-function makeFakeClient(root: string) {
+function makeFakeClient(root: string, serverId = "typescript") {
 	const waitCalls: Array<{ filePath: string; ms: number }> = [];
 	return {
 		client: {
@@ -55,7 +55,9 @@ function makeFakeClient(root: string) {
 				diagnosticProviderKind: "none",
 			}),
 			getOperationSupport: () => ({}),
-			serverId: "typescript",
+			getAdvertisedCommands: () => [],
+			getRawCapabilityKeys: () => [],
+			serverId,
 			root,
 			notify: { open: vi.fn(async () => {}) },
 			waitForDiagnostics: vi.fn(async (filePath: string, ms: number) => {
@@ -102,6 +104,28 @@ describe("LSPService.ensureWarmForSweep (#667)", () => {
 		const second = await service.ensureWarmForSweep(filePath);
 		expect(second.performedWarmup).toBe(false);
 		expect(waitCalls.length).toBe(1); // unchanged — no new round trip
+	});
+
+	it("#832: skips the generic cold floor for a workspace-indexing server classified silent-on-clean", async () => {
+		const filePath = path.join(tmp, "cold.md");
+		fs.writeFileSync(filePath, "# clean\n");
+		const marksman = makeServer("marksman", ".md", tmp);
+		getServersForFileWithConfig.mockImplementation((fp: string) =>
+			fp.endsWith(".md") ? [marksman] : [],
+		);
+		const { client, waitCalls } = makeFakeClient(tmp, "marksman");
+		createLSPClient.mockResolvedValue(client);
+
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+
+		await service.ensureWarmForSweep(filePath, { timeoutMs: 20000 });
+
+		// Marksman's configured 1500ms workspace-indexing budget is enough for
+		// the first attempt. Before #832, warmupOverride turned this into the
+		// generic 20000ms cold floor.
+		expect(waitCalls).toHaveLength(1);
+		expect(waitCalls[0]!.ms).toBe(1500);
 	});
 
 	it("#669: gives a cold server the FULL requested warm-up budget, not the strategy's short steady-state aggregateWaitMs (regression: perServerTimeout's Math.min ceiling silently shrank a 20000ms ask down to typescript's 1000ms aggregateWaitMs)", async () => {
