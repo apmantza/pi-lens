@@ -82,7 +82,7 @@
 		"banner.png"
 	],
 	"dependencies": {
-		"@ast-grep/cli": "^0.44.0",
+		"@ast-grep/cli": "^0.45.0",
 		"@ast-grep/napi": "^0.45.0",
 		"@earendil-works/pi-tui": "^0.82.1",
 		"js-yaml": "^4.1.1",
