@@ -61,7 +61,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         pm: [npm, pnpm, bun, yarn]
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
 
@@ -150,7 +150,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         pi_install: [npm-global, pnpm-global, bun-global, curl]
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7 # for the RPC driver
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 # for the RPC driver
         with:
           persist-credentials: false
 
@@ -267,7 +267,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
         pi_via: [mise-node, mise-npm-backend]
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7 # RPC driver
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 # RPC driver
         with:
           persist-credentials: false
 
