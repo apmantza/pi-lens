@@ -138,6 +138,20 @@ describe("tree-sitter runner — entity extraction skip threshold (#885)", () =>
 		expect(recordEntitySnapshotDiffMock).not.toHaveBeenCalled();
 	}, 30_000);
 
+	it("runs entity extraction when modifiedRanges is absent (full-file dispatch)", async () => {
+		recordEntitySnapshotDiffMock.mockClear();
+		// No modifiedRanges override — e.g. clients/mcp/analyze.ts passes
+		// undefined for full-file analysis. Absent ranges mean "whole file"
+		// (matching isLineInModifiedRanges), never "trivial edit", so the
+		// <5-line skip must NOT suppress the snapshot.
+		const { ctx } = env.addFile("full-file-dispatch.ts", MIXED_SRC, {
+			modifiedRanges: undefined,
+		});
+		const result = await treeSitterRunner.run(ctx);
+		expect(result.diagnostics.length).toBeGreaterThan(0);
+		expect(recordEntitySnapshotDiffMock).toHaveBeenCalledTimes(1);
+	}, 30_000);
+
 	it("runs entity extraction exactly once for edits at the threshold", async () => {
 		recordEntitySnapshotDiffMock.mockClear();
 		const { ctx } = env.addFile("threshold-edit.ts", MIXED_SRC, {

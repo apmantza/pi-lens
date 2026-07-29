@@ -619,6 +619,7 @@ const treeSitterRunner: RunnerDefinition = {
 					filePath,
 					languageId,
 					error: "wasm_aborted_fatal",
+					metadata: { queryIds: effectiveQueries.map((q) => q.id) },
 				});
 			} else {
 				console.error("[tree-sitter] Batched query run failed:", err);
@@ -627,6 +628,7 @@ const treeSitterRunner: RunnerDefinition = {
 					filePath,
 					languageId,
 					error: msg,
+					metadata: { queryIds: effectiveQueries.map((q) => q.id) },
 				});
 			}
 		}
@@ -637,8 +639,13 @@ const treeSitterRunner: RunnerDefinition = {
 		// after it, so small edits (skipEntityExtraction=true) still paid the
 		// ~500-800ms snapshot cost on every dispatch. One guarded block now
 		// serves both paths.
+		// Absent/empty modifiedRanges means "whole file" (full-file dispatches,
+		// fresh writes — see isLineInModifiedRanges above), never "trivial edit":
+		// entity extraction must run in that case.
 		const totalLinesChanged = getTotalLinesChanged(ctx.modifiedRanges);
 		const skipEntityExtraction =
+			ctx.modifiedRanges != null &&
+			ctx.modifiedRanges.length > 0 &&
 			totalLinesChanged < ENTITY_EXTRACTION_LINE_THRESHOLD;
 
 		if (!skipEntityExtraction) {
