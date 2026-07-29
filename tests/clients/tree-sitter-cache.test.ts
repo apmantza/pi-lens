@@ -88,7 +88,7 @@ describe("TreeCache frees WASM trees on removal (#417)", () => {
 		expect(b.delete).toHaveBeenCalledTimes(1);
 	});
 
-	it("frees the tree when the file changed on disk (mtime bump)", async () => {
+	it("frees the tree when a content-less lookup sees a newer mtime", async () => {
 		const env = setupTestEnvironment("pi-lens-tccache-mtime-");
 		cleanups.push(env.cleanup);
 		const src = "export const x = 1;\n";
@@ -97,11 +97,13 @@ describe("TreeCache frees WASM trees on removal (#417)", () => {
 		const a = fakeTree();
 		cache.set(file, src, "typescript", a);
 
-		// Same content (hash matches) but a newer mtime ⇒ get() must invalidate+free.
+		// Without content to hash, mtime is the only freshness proof: a bump
+		// invalidates + frees (#890). (With content, the SAME bump is a hit —
+		// see the save-without-change test below.)
 		const future = new Date(Date.now() + 5000);
 		fs.utimesSync(file, future, future);
 
-		expect(cache.get(file, src, "typescript")).toBeNull();
+		expect(cache.get(file, undefined, "typescript")).toBeNull();
 		await flushRetiredTrees();
 		expect(a.delete).toHaveBeenCalledTimes(1);
 	});
@@ -137,6 +139,96 @@ describe("TreeCache frees WASM trees on removal (#417)", () => {
 	});
 });
 
+describe("TreeCache hash-authoritative hits and true LRU (#890)", () => {
+	it("treats a save-without-change (same hash, newer mtime) as a hit with no reparse", () => {
+		const env = setupTestEnvironment("pi-lens-tccache-save-");
+		cleanups.push(env.cleanup);
+		const src = "export const x = 1;\n";
+		const file = createTempFile(env.tmpDir, "s.ts", src);
+		const cache = new TreeCache(10);
+		const a = fakeTree();
+		cache.set(file, src, "typescript", a);
+
+		// Agent re-saves identical bytes ⇒ mtime bumps, content unchanged.
+		const future = new Date(Date.now() + 5000);
+		fs.utimesSync(file, future, future);
+
+		// Hash is authoritative: the SAME tree comes back (no reparse) and
+		// nothing is retired.
+		expect(cache.get(file, src, "typescript")).toBe(a);
+		expect(a.delete).not.toHaveBeenCalled();
+		expect(cache.getStats()).toMatchObject({
+			hits: 1,
+			misses: 0,
+			mtimeMisses: 0,
+		});
+
+		// Metadata was refreshed on the hit: a content-less lookup (mtime is
+		// its only freshness proof) also hits instead of mtime-missing.
+		expect(cache.get(file, undefined, "typescript")).toBe(a);
+		expect(cache.getStats()).toMatchObject({ hits: 2, mtimeMisses: 0 });
+	});
+
+	it("protects a recently-read entry from eviction by later inserts (true LRU)", async () => {
+		// Real files: a hash-matched hit stats the file, and a stat failure
+		// invalidates (virtual paths would miss on stat, not exercise the LRU
+		// touch).
+		const env = setupTestEnvironment("pi-lens-tccache-lru-");
+		cleanups.push(env.cleanup);
+		const fileA = createTempFile(env.tmpDir, "a.ts", "a");
+		const fileB = createTempFile(env.tmpDir, "b.ts", "b");
+		const fileC = createTempFile(env.tmpDir, "c.ts", "c");
+		const cache = new TreeCache(2);
+		const a = fakeTree();
+		const b = fakeTree();
+		const c = fakeTree();
+		cache.set(fileA, "a", "typescript", a); // oldest insertion
+		cache.set(fileB, "b", "typescript", b);
+
+		// Touch a ⇒ it becomes the newest entry; b is now the LRU one.
+		expect(cache.get(fileA, "a", "typescript")).toBe(a);
+
+		cache.set(fileC, "c", "typescript", c); // evicts LRU = b, NOT a
+
+		expect(cache.get(fileA, "a", "typescript")).toBe(a); // survived
+		expect(cache.get(fileB, "b", "typescript")).toBeNull(); // evicted
+		expect(cache.getStats()).toMatchObject({
+			evictions: 1,
+			capacityMisses: 1, // ghost history recognizes the same-content miss
+		});
+
+		// The LRU touch re-inserts the SAME entry — it must not retire a's
+		// tree, and the evicted tree is freed exactly once (no double-retire).
+		await flushRetiredTrees();
+		expect(a.delete).not.toHaveBeenCalled();
+		expect(b.delete).toHaveBeenCalledTimes(1);
+		expect(c.delete).not.toHaveBeenCalled();
+	});
+
+	it("still retires a genuinely replaced tree after a hash-match metadata refresh", async () => {
+		const env = setupTestEnvironment("pi-lens-tccache-refresh-");
+		cleanups.push(env.cleanup);
+		const src = "export const x = 1;\n";
+		const file = createTempFile(env.tmpDir, "r.ts", src);
+		const cache = new TreeCache(10);
+		const old = fakeTree();
+		const fresh = fakeTree();
+		cache.set(file, src, "typescript", old);
+
+		// Save-without-change hit refreshes metadata on the old entry...
+		const future = new Date(Date.now() + 5000);
+		fs.utimesSync(file, future, future);
+		expect(cache.get(file, src, "typescript")).toBe(old);
+
+		// ...and a genuine re-parse of the same key must still retire the old
+		// tree exactly once — the metadata refresh must not swallow it.
+		cache.set(file, `${src}// v2`, "typescript", fresh);
+		await flushRetiredTrees();
+		expect(old.delete).toHaveBeenCalledTimes(1);
+		expect(fresh.delete).not.toHaveBeenCalled();
+	});
+});
+
 describe("TreeCache statistics (#675)", () => {
 	it("tracks cold, content-changed, mtime, and stat-failure misses", () => {
 		const env = setupTestEnvironment("pi-lens-tccache-stats-");
@@ -150,9 +242,14 @@ describe("TreeCache statistics (#675)", () => {
 		expect(cache.get(file, source, "typescript")).not.toBeNull();
 		expect(cache.get(file, `${source}// changed`, "typescript")).toBeNull();
 
+		// Same content + newer mtime is a hash-authoritative HIT (#890)...
 		const future = new Date(Date.now() + 5000);
 		fs.utimesSync(file, future, future);
-		expect(cache.get(file, source, "typescript")).toBeNull();
+		expect(cache.get(file, source, "typescript")).not.toBeNull();
+		// ...and an mtime miss is only reachable on the content-less path.
+		const later = new Date(Date.now() + 10000);
+		fs.utimesSync(file, later, later);
+		expect(cache.get(file, undefined, "typescript")).toBeNull();
 
 		const deleted = createTempFile(env.tmpDir, "deleted.ts", source);
 		cache.set(deleted, source, "typescript", fakeTree());
@@ -160,8 +257,8 @@ describe("TreeCache statistics (#675)", () => {
 		expect(cache.get(deleted, source, "typescript")).toBeNull();
 
 		expect(cache.getStats()).toMatchObject({
-			lookups: 5,
-			hits: 1,
+			lookups: 6,
+			hits: 2,
 			misses: 4,
 			coldMisses: 1,
 			contentChangedMisses: 1,

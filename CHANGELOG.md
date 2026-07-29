@@ -76,6 +76,11 @@ All notable changes to pi-lens will be documented in this file.
 	javascript set is the same queries minus the type-only patterns, with class
 	names matched as `(identifier)` instead of `(type_identifier)`.
 - **A rule whose query fails to compile now warns once instead of silently reporting nothing** (refs #884) — both compile paths (`compileQueryBatch`'s per-rule drop and `compileRawQuery`, which every per-edit `runQueryOnFile` call falls back on) previously either `dbg()`-logged (invisible without verbose mode) or returned `null`/`[]` with no trail at all. They now call a shared `reportQueryCompileFailure`, mirroring the existing unimplemented-`post_filter` warning: one `console.error` per broken rule id, not per file. A new compile-guard test (`tests/clients/tree-sitter-rule-compile-guard.test.ts`) compiles every non-disabled shipped rule against its real grammar and caught the 32 rules #884 reports as currently broken (tracked there in a shrink-only `KNOWN_BROKEN` allowlist so follow-up fix PRs are forced to remove their entries, and the list can't grow or go stale unnoticed).
+- **TreeCache mtime false misses and FIFO eviction** (closes #890) — a content
+	hash match is now authoritative: a save-without-change (same bytes, newer
+	mtime) is a cache hit that refreshes the entry's stat metadata instead of
+	invalidating and re-parsing, and `get()` re-inserts hit entries so eviction
+	is true LRU — hot per-edit files are no longer evicted by scan traffic.
 - **Eight enabled typescript/javascript tree-sitter rules whose queries never
 	compiled** (refs #884) — each had been silently dead since authoring because
 	its query failed to compile against the real grammar, so it matched nothing
