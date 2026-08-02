@@ -5,26 +5,13 @@
  * Handles: spawn, spawnSync, temp dir management, JSON parsing.
  */
 
-import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getSgCommand } from "./dispatch/runners/utils/runner-helpers.js";
 import { getProjectIgnoreGlobs } from "./file-utils.js";
 import { findGlobalBinary } from "./package-manager.js";
-import { safeSpawnAsync } from "./safe-spawn.js";
-
-/**
- * Escape an argument for Windows cmd.exe shell execution.
- * Handles spaces, quotes, and special characters.
- */
-function escapeWindowsArg(arg: string): string {
-	// If no special characters, return as-is
-	if (!/[\s"]/.test(arg)) return arg;
-
-	// Escape quotes by doubling them
-	return `"${arg.replace(/"/g, '""')}"`;
-}
+import { safeSpawnAsync, type SpawnResult } from "./safe-spawn.js";
 
 /**
  * Build the `bash -c` argv that runs `cmd` with `allArgs` as POSITIONAL
@@ -80,12 +67,40 @@ export interface SgResult {
 	error?: string;
 }
 
+export type SgFailureKind =
+	| "cli-failure"
+	| "unavailable"
+	| "timeout"
+	| "aborted"
+	| "parse-failure";
+
+export interface SgExecutionOptions {
+	signal?: AbortSignal;
+	/** Absolute wall-clock deadline shared by a multi-path search. */
+	deadlineAt?: number;
+}
+
 export interface SgRawResult {
 	stdout: string;
 	stderr: string;
 	status: number | null;
 	error?: string;
+	failure?: SgFailureKind;
+	outputTruncated?: boolean;
 }
+
+/** Detailed result for generated-rule scans. An empty match list is only a
+ * no-match when `failure` is absent; callers that need backwards compatibility
+ * can continue using `tempScanAsync`, which returns just `matches`. */
+export interface SgScanResult {
+	matches: SgMatch[];
+	status: number | null;
+	error?: string;
+	failure?: SgFailureKind;
+}
+
+const DEFAULT_EXEC_TIMEOUT_MS = 30_000;
+const MAX_SG_OUTPUT_BYTES = 8 * 1024 * 1024;
 
 /**
  * Format metavariable captures for display below a match line.
@@ -232,12 +247,17 @@ export class SgRunner {
 
 		// Map Node.js platform/arch to @ast-grep/cli package suffix.
 		const pkgSuffixes: string[] = [];
-		if (platform === "linux" && arch === "x64") pkgSuffixes.push("linux-x64-gnu");
-		if (platform === "linux" && arch === "arm64") pkgSuffixes.push("linux-arm64-gnu");
-		if (platform === "darwin" && arch === "arm64") pkgSuffixes.push("darwin-arm64");
+		if (platform === "linux" && arch === "x64")
+			pkgSuffixes.push("linux-x64-gnu");
+		if (platform === "linux" && arch === "arm64")
+			pkgSuffixes.push("linux-arm64-gnu");
+		if (platform === "darwin" && arch === "arm64")
+			pkgSuffixes.push("darwin-arm64");
 		if (platform === "darwin" && arch === "x64") pkgSuffixes.push("darwin-x64");
-		if (platform === "win32" && arch === "x64") pkgSuffixes.push("win32-x64-msvc");
-		if (platform === "win32" && arch === "arm64") pkgSuffixes.push("win32-arm64-msvc");
+		if (platform === "win32" && arch === "x64")
+			pkgSuffixes.push("win32-x64-msvc");
+		if (platform === "win32" && arch === "arm64")
+			pkgSuffixes.push("win32-arm64-msvc");
 
 		// Search roots: local node_modules and any parent node_modules directories.
 		const searchRoots: string[] = [];
@@ -254,7 +274,10 @@ export class SgRunner {
 			for (const root of searchRoots) {
 				const candidate = path.join(root, pkgName, exeName);
 				try {
-					if (fs.existsSync(candidate) && (await this.probeCommand(candidate, []))) {
+					if (
+						fs.existsSync(candidate) &&
+						(await this.probeCommand(candidate, []))
+					) {
 						return candidate;
 					}
 				} catch {
@@ -279,7 +302,10 @@ export class SgRunner {
 			if (!prefix) return undefined;
 			for (const name of ["ast-grep", "sg"]) {
 				const candidate = path.join(prefix, "bin", name);
-				if (fs.existsSync(candidate) && (await this.probeCommand(candidate, []))) {
+				if (
+					fs.existsSync(candidate) &&
+					(await this.probeCommand(candidate, []))
+				) {
 					return candidate;
 				}
 			}
@@ -328,159 +354,138 @@ export class SgRunner {
 		};
 	}
 
-	async execRaw(args: string[], timeout = 30000): Promise<SgRawResult> {
+	private failureForSpawnResult(result: {
+		error?: Error;
+		failure?: string;
+	}): SgFailureKind | undefined {
+		if (result.failure === "aborted") return "aborted";
+		if (result.failure === "timeout") return "timeout";
+		if (result.error && /ENOENT|not found|not installed/i.test(result.error.message)) {
+			return "unavailable";
+		}
+		return result.error ? "cli-failure" : undefined;
+	}
+
+	private formatPatternError(stderr: string, args: string[]): string {
+		if (stderr.includes("Multiple AST nodes are detected")) {
+			return (
+				`Invalid AST pattern: The pattern appears to contain multiple AST nodes or is malformed.\n` +
+				`Common causes:\n` +
+				`  1. Missing parentheses: use it($TEST) not it"test"\n` +
+				`  2. Raw text without structure: use console.log($MSG) not just "console.log"\n` +
+				`  3. Unclosed quotes or brackets\n\n` +
+				`Original error: ${stderr}`
+			);
+		}
+		if (stderr.includes("Cannot parse query")) {
+			return (
+				`Pattern syntax error: The pattern could not be parsed as valid code.\n` +
+				`Tips:\n` +
+				`  - Patterns must be valid ${args.includes("--lang") ? args[args.indexOf("--lang") + 1] : "language"} syntax\n` +
+				`  - Use metavariables like $NAME, $ARGS for variable parts\n` +
+				`  - Example: 'function $NAME($$$PARAMS) { $$$BODY }'\n\n` +
+				`Original error: ${stderr}`
+			);
+		}
+		return stderr;
+	}
+
+	async execRaw(
+		args: string[],
+		timeout = DEFAULT_EXEC_TIMEOUT_MS,
+		options: SgExecutionOptions = {},
+	): Promise<SgRawResult> {
 		const command = this.getSgCommand();
 		const result = await safeSpawnAsync(
 			command.cmd,
 			[...command.argsPrefix, ...args],
-			{ timeout },
+			{
+				timeout,
+				deadlineAt: options.deadlineAt,
+				signal: options.signal,
+				maxOutputBytes: MAX_SG_OUTPUT_BYTES,
+			},
 		);
+		const failure = this.failureForSpawnResult(result);
 		return {
 			stdout: result.stdout,
 			stderr: result.stderr,
 			status: result.status,
 			error: result.error?.message,
+			failure,
+			...(result.outputTruncated ? { outputTruncated: true } : {}),
 		};
 	}
 
 	/**
-	 * Run ast-grep asynchronously, return parsed matches
+	 * Run ast-grep asynchronously, return parsed matches. The Windows Git
+	 * Bash/MSYS path deliberately remains positional-argument based, but the
+	 * child itself now goes through safeSpawnAsync so cancellation, deadlines,
+	 * tree-kill, and output caps are shared with every other CLI runner.
 	 */
-	async exec(args: string[]): Promise<SgResult> {
-		return new Promise((resolve) => {
-			const command = this.getSgCommand();
-			const allArgs = [...command.argsPrefix, ...args];
-			// On Windows with Git Bash/MSYS2, we need to use bash to properly
-			// handle $variables in patterns (prevent shell expansion)
-			const isWindows = process.platform === "win32";
-			const hasBash = process.env.MSYSTEM || process.env.GIT_SHELL;
-
-			const empty = (): SgResult => ({
-				matches: [],
-				totalMatches: 0,
-				truncated: false,
-			});
-
-			let proc: ReturnType<typeof spawn>;
-			try {
-				if (isWindows && hasBash) {
-					// Run via bash (Git Bash/MSYS2) so $-metavariables in ast-grep
-					// patterns aren't shell-expanded. Pass the command + args as
-					// POSITIONAL parameters (`"$0"`/`"$@"`) instead of interpolating
-					// them into the -c string: bash re-emits `"$@"` verbatim — no
-					// parameter expansion, no word-splitting — so patterns stay literal
-					// AND an environment-derived command path cannot inject shell
-					// (fixes CodeQL js/shell-command-injection-from-environment). This
-					// also removes the brittle hand-rolled quoting it replaced.
-					proc = spawn("bash", buildBashRunArgs(command.cmd, allArgs), {
-						stdio: ["ignore", "pipe", "pipe"],
-						windowsHide: true,
-					});
-				} else if (isWindows) {
-					// Fallback: shell:true needed for npm-installed .cmd wrappers on Windows.
-					// Pass cmd and args separately — do not concatenate into one string.
-					proc = spawn(command.cmd, allArgs.map(escapeWindowsArg), {
-						stdio: ["ignore", "pipe", "pipe"],
-						shell: true,
-						windowsHide: true,
-					});
-				} else {
-					// Unix: normal spawn without shell
-					proc = spawn(command.cmd, allArgs, {
-						stdio: ["ignore", "pipe", "pipe"],
-					});
-				}
-			} catch (err) {
-				// A SYNCHRONOUS spawn throw (Windows `spawn UNKNOWN`/EINVAL — the
-				// pidusage bug class, #533) would reject this Promise; `exec` is
-				// contracted to always resolve (callers read `error`, never catch),
-				// so resolve gracefully instead of letting it escape as an
-				// unhandledRejection. Async spawn `'error'` events are already
-				// handled by the `proc.on("error", ...)` listener below.
-				resolve({
-					...empty(),
-					error: err instanceof Error ? err.message : String(err),
-				});
-				return;
-			}
-
-			let stdout = "";
-			let stderr = "";
-
-			proc.stdout?.on("data", (data: Buffer) => (stdout += data.toString()));
-			proc.stderr?.on("data", (data: Buffer) => (stderr += data.toString()));
-
-			proc.on("error", (err: Error) => {
-				if (err.message.includes("ENOENT")) {
-					resolve({
-						...empty(),
-						error: "ast-grep CLI not found. Install: npm i -D @ast-grep/cli",
-					});
-				} else {
-					resolve({ ...empty(), error: err.message });
-				}
-			});
-
-			proc.on("close", (code: number | null) => {
-				if (code !== 0 && !stdout.trim()) {
-					const stderrMsg = stderr.trim();
-
-					if (code === 1 && !stderrMsg) {
-						resolve(empty());
-						return;
-					}
-
-					if (stderrMsg.includes("Multiple AST nodes are detected")) {
-						resolve({
-							...empty(),
-							error:
-								`Invalid AST pattern: The pattern appears to contain multiple AST nodes or is malformed.\n` +
-								`Common causes:\n` +
-								`  1. Missing parentheses: use it($TEST) not it"test"\n` +
-								`  2. Raw text without structure: use console.log($MSG) not just "console.log"\n` +
-								`  3. Unclosed quotes or brackets\n\n` +
-								`Original error: ${stderrMsg}`,
-						});
-						return;
-					}
-
-					if (stderrMsg.includes("Cannot parse query")) {
-						resolve({
-							...empty(),
-							error:
-								`Pattern syntax error: The pattern could not be parsed as valid code.\n` +
-								`Tips:\n` +
-								`  - Patterns must be valid ${args.includes("--lang") ? args[args.indexOf("--lang") + 1] : "language"} syntax\n` +
-								`  - Use metavariables like $NAME, $ARGS for variable parts\n` +
-								`  - Example: 'function $NAME($$$PARAMS) { $$$BODY }'\n\n` +
-								`Original error: ${stderrMsg}`,
-						});
-						return;
-					}
-
-					resolve({
-						...empty(),
-						error: stderrMsg || `Command failed with exit code ${code}`,
-					});
-					return;
-				}
-				if (!stdout.trim()) {
-					resolve(empty());
-					return;
-				}
-				try {
-					const parsed = JSON.parse(stdout);
-					const matches = Array.isArray(parsed) ? parsed : [parsed];
-					resolve({
-						matches,
-						totalMatches: matches.length,
-						truncated: false,
-					});
-				} catch {
-					resolve({ ...empty(), error: "Failed to parse output" });
-				}
-			});
+	async exec(
+		args: string[],
+		options: SgExecutionOptions = {},
+	): Promise<SgResult> {
+		const command = this.getSgCommand();
+		const allArgs = [...command.argsPrefix, ...args];
+		const isWindows = process.platform === "win32";
+		const hasBash = Boolean(process.env.MSYSTEM || process.env.GIT_SHELL);
+		const useBash = isWindows && hasBash;
+		const result = await safeSpawnAsync(
+			useBash ? "bash" : command.cmd,
+			useBash ? buildBashRunArgs(command.cmd, allArgs) : allArgs,
+			{
+				timeout: DEFAULT_EXEC_TIMEOUT_MS,
+				deadlineAt: options.deadlineAt,
+				signal: options.signal,
+				maxOutputBytes: MAX_SG_OUTPUT_BYTES,
+			},
+		);
+		const empty = (): SgResult => ({
+			matches: [],
+			totalMatches: 0,
+			truncated: false,
 		});
+		const spawnFailure = this.failureForSpawnResult(result);
+		if (spawnFailure) {
+			return {
+				...empty(),
+				error:
+					spawnFailure === "unavailable"
+						? "ast-grep CLI not found. Install: npm i -D @ast-grep/cli"
+						: result.error?.message || "ast-grep CLI failed to start",
+			};
+		}
+		if (result.status !== 0) {
+			const stderr = result.stderr.trim();
+			// ast-grep uses status 1 with no output for a genuine no-match in
+			// some CLI versions. Preserve that historical empty-result behavior;
+			// any stderr (including an invalid kind/YAML diagnostic) is a failure.
+			if (result.status === 1 && !result.stdout.trim() && !stderr) return empty();
+			return {
+				...empty(),
+				error: this.formatPatternError(
+					stderr || `Command failed with exit code ${result.status}`,
+					args,
+				),
+			};
+		}
+		if (!result.stdout.trim()) return empty();
+		if (result.outputTruncated) {
+			return { ...empty(), error: "Failed to parse output: output was truncated" };
+		}
+		try {
+			const parsed = JSON.parse(result.stdout);
+			const matches = Array.isArray(parsed) ? parsed : [parsed];
+			return {
+				matches,
+				totalMatches: matches.length,
+				truncated: false,
+			};
+		} catch {
+			return { ...empty(), error: "Failed to parse output" };
+		}
 	}
 
 	// --- Shared helpers for temp-dir rule scans ---
@@ -504,12 +509,6 @@ export class SgRunner {
 		return { sessionDir, configFile };
 	}
 
-	private parseScanOutput(output: string): SgMatch[] {
-		if (!output.trim()) return [];
-		const items = JSON.parse(output);
-		return Array.isArray(items) ? items : [items];
-	}
-
 	private cleanupTempScan(sessionDir: string): void {
 		try {
 			fs.rmSync(sessionDir, { recursive: true, force: true });
@@ -518,12 +517,68 @@ export class SgRunner {
 		}
 	}
 
-	async tempScanAsync(
+	private interpretScanResult(
+		result: SpawnResult,
+		args: string[],
+	): SgScanResult {
+		const failure = this.failureForSpawnResult(result);
+		if (failure) {
+			return {
+				matches: [],
+				status: result.status,
+				error: result.error?.message || "ast-grep CLI failed to start",
+				failure,
+			};
+		}
+		if (result.status !== 0) {
+			const stderr = result.stderr.trim();
+			// Preserve ast-grep's status-1/no-output no-match convention. A
+			// diagnostic on stderr is never treated as a no-match.
+			if (result.status === 1 && !result.stdout.trim() && !stderr) {
+				return { matches: [], status: result.status };
+			}
+			return {
+				matches: [],
+				status: result.status,
+				error: this.formatPatternError(
+					stderr || `ast-grep scan failed with exit code ${result.status}`,
+					args,
+				),
+				failure: "cli-failure",
+			};
+		}
+		if (!result.stdout.trim()) return { matches: [], status: result.status };
+		if (result.outputTruncated) {
+			return {
+				matches: [],
+				status: result.status,
+				error: "Failed to parse ast-grep scan output: output was truncated",
+				failure: "parse-failure",
+			};
+		}
+		try {
+			const items = JSON.parse(result.stdout);
+			return {
+				matches: Array.isArray(items) ? items : [items],
+				status: result.status,
+			};
+		} catch (err) {
+			return {
+				matches: [],
+				status: result.status,
+				error: `Failed to parse ast-grep scan output: ${err instanceof Error ? err.message : String(err)}`,
+				failure: "parse-failure",
+			};
+		}
+	}
+
+	async tempScanDetailedAsync(
 		dir: string,
 		ruleId: string,
 		ruleYaml: string,
-		timeout = 30000,
-	): Promise<SgMatch[]> {
+		timeout = DEFAULT_EXEC_TIMEOUT_MS,
+		options: SgExecutionOptions = {},
+	): Promise<SgScanResult> {
 		const { sessionDir, configFile } = this.prepareTempScan(ruleId, ruleYaml);
 		try {
 			const { cmd: sgCmd, args: sgPre } = getSgCommand();
@@ -538,14 +593,35 @@ export class SgRunner {
 					...sgExcludeArgsForProject(dir),
 					dir,
 				],
-				{ timeout },
+				{
+					timeout,
+					deadlineAt: options.deadlineAt,
+					signal: options.signal,
+					maxOutputBytes: MAX_SG_OUTPUT_BYTES,
+				},
 			);
-			return this.parseScanOutput(result.stdout || result.stderr || "");
-		} catch {
-			return [];
+			return this.interpretScanResult(result, ["scan"]);
 		} finally {
 			this.cleanupTempScan(sessionDir);
 		}
+	}
+
+	/** Backwards-compatible match-only wrapper for existing session scanners. */
+	async tempScanAsync(
+		dir: string,
+		ruleId: string,
+		ruleYaml: string,
+		timeout = DEFAULT_EXEC_TIMEOUT_MS,
+		options: SgExecutionOptions = {},
+	): Promise<SgMatch[]> {
+		const result = await this.tempScanDetailedAsync(
+			dir,
+			ruleId,
+			ruleYaml,
+			timeout,
+			options,
+		);
+		return result.matches;
 	}
 
 	/**
@@ -558,42 +634,64 @@ export class SgRunner {
 		ruleId: string,
 		ruleYaml: string,
 		applyFixes: boolean,
-		timeout = 30000,
+		timeout = DEFAULT_EXEC_TIMEOUT_MS,
+		options: SgExecutionOptions = {},
 	): Promise<{ matches: SgMatch[]; error?: string }> {
 		const { sessionDir, configFile } = this.prepareTempScan(ruleId, ruleYaml);
 		try {
 			const { cmd: sgCmd, args: sgPre } = getSgCommand();
+			const scanArgs = [
+				...sgPre,
+				"scan",
+				"--config",
+				configFile,
+				"--json",
+				...sgExcludeArgsForProject(dir),
+				dir,
+			];
+			const spawnOptions = {
+				timeout,
+				deadlineAt: options.deadlineAt,
+				signal: options.signal,
+				maxOutputBytes: MAX_SG_OUTPUT_BYTES,
+			};
 			if (!applyFixes) {
-				const result = await safeSpawnAsync(
-					sgCmd,
-					[...sgPre, "scan", "--config", configFile, "--json",
-						...sgExcludeArgsForProject(dir), dir],
-					{ timeout },
-				);
-				return { matches: this.parseScanOutput(result.stdout || result.stderr || "") };
+				const result = await safeSpawnAsync(sgCmd, scanArgs, spawnOptions);
+				const scan = this.interpretScanResult(result, ["scan"]);
+				return scan.failure || scan.error
+					? { matches: [], error: scan.error }
+					: { matches: scan.matches };
 			}
 			// Apply: capture matches BEFORE writing — once --update-all applies
 			// the fix the rule no longer matches, so a post-apply json pass would
 			// report zero even on a successful apply. Count first, then write.
-			const jsonResult = await safeSpawnAsync(
-				sgCmd,
-				[...sgPre, "scan", "--config", configFile, "--json",
-					...sgExcludeArgsForProject(dir), dir],
-				{ timeout },
-			);
-			const matches = this.parseScanOutput(
-				jsonResult.stdout || jsonResult.stderr || "",
-			);
+			const jsonResult = await safeSpawnAsync(sgCmd, scanArgs, spawnOptions);
+			const scan = this.interpretScanResult(jsonResult, ["scan"]);
+			if (scan.failure || scan.error) {
+				return { matches: [], error: scan.error };
+			}
 			const applyResult = await safeSpawnAsync(
 				sgCmd,
-				[...sgPre, "scan", "--config", configFile, "--update-all",
-					...sgExcludeArgsForProject(dir), dir],
-				{ timeout },
+				[
+					...sgPre,
+					"scan",
+					"--config",
+					configFile,
+					"--update-all",
+					...sgExcludeArgsForProject(dir),
+					dir,
+				],
+				spawnOptions,
 			);
-			if (applyResult.error) {
-				return { matches: [], error: applyResult.error.message };
+			if (applyResult.error || applyResult.failure || applyResult.status !== 0) {
+				return {
+					matches: [],
+					error:
+						applyResult.error?.message ||
+							`ast-grep apply failed with exit code ${applyResult.status}`,
+				};
 			}
-			return { matches };
+			return { matches: scan.matches };
 		} catch (err) {
 			return { matches: [], error: String(err) };
 		} finally {

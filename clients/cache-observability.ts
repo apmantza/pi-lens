@@ -10,9 +10,11 @@
  *      fact. This is what the provider DID, not what we hoped it would do.
  *
  *   2. Request-side context observations (`cache_context`) — one bounded record
- *      for every `context` call, describing local before/after message counts,
- *      placement, injection sources, and privacy-preserving hashes. This is what
- *      pi-lens changed locally, not a provider cache result.
+ *      for every `context` call, describing pi-lens's own before/after message
+ *      transformation, placement, injection sources, and privacy-preserving
+ *      hashes. This is what pi-lens observed locally, not the final provider
+ *      request after other context handlers have run and not a provider cache
+ *      result.
  *
  *   3. Request-side prefix stability (`cache_prefix_break`) — a content hash of
  *      `messages[0]` observed on every `context` call. After #1016 the first
@@ -74,8 +76,13 @@ type ContextMessageLike = { role?: unknown; content?: unknown };
 
 interface CacheUsageContext {
 	sessionId?: string;
+	sessionRole?: "primary" | "concurrent-secondary";
 	turnIndex?: number;
 }
+
+/** RuntimeCoordinator's counter is process-global when sessions share a host. */
+const PROCESS_TURN_SCOPE = "process-global-runtime" as const;
+const SECONDARY_TURN_SCOPE = "unavailable-concurrent-secondary" as const;
 
 /**
  * Keep context telemetry bounded even when a tool result or user message is
@@ -89,15 +96,22 @@ const MAX_INJECTED_CHARS = 16_384;
 const MAX_INJECTED_BYTES = 65_536;
 let contextObservationCounter = 0;
 
+interface BoundedHashState {
+	contentTruncated: boolean;
+}
+
 function boundedHashValue(
 	value: unknown,
 	depth = 0,
 	seen = new Set<object>(),
+	state: BoundedHashState = { contentTruncated: false },
 ): string {
 	if (value === null) return "null";
 	if (value === undefined) return "undefined";
 	if (typeof value === "string") {
-		return `string:${value.length}:${value.slice(0, MAX_HASHED_CONTENT_CHARS)}`;
+		const truncated = value.length > MAX_HASHED_CONTENT_CHARS;
+		if (truncated) state.contentTruncated = true;
+		return `string:${value.length}:${value.slice(0, MAX_HASHED_CONTENT_CHARS)}${truncated ? ":content-truncated" : ""}`;
 	}
 	if (
 		typeof value === "number" ||
@@ -109,23 +123,28 @@ function boundedHashValue(
 	if (typeof value === "function" || typeof value === "symbol") {
 		return typeof value;
 	}
-	if (depth >= 3) return Object.prototype.toString.call(value);
+	if (depth >= 3) {
+		state.contentTruncated = true;
+		return Object.prototype.toString.call(value);
+	}
 	if (typeof value !== "object") return typeof value;
 	if (seen.has(value)) return "[cycle]";
 	seen.add(value);
 	try {
 		if (Array.isArray(value)) {
+			if (value.length > 12) state.contentTruncated = true;
 			const items = value
 				.slice(0, 12)
-				.map((item) => boundedHashValue(item, depth + 1, seen));
+				.map((item) => boundedHashValue(item, depth + 1, seen, state));
 			return `array:${value.length}:[${items.join(",")}]`;
 		}
 		const keys = Object.keys(value).sort();
+		if (keys.length > 24) state.contentTruncated = true;
 		const fields = keys
 			.slice(0, 24)
 			.map(
 				(key) =>
-					`${key}:${boundedHashValue((value as Record<string, unknown>)[key], depth + 1, seen)}`,
+					`${key}:${boundedHashValue((value as Record<string, unknown>)[key], depth + 1, seen, state)}`,
 			);
 		return `object:${keys.length}:{${fields.join(",")}}`;
 	} catch {
@@ -138,19 +157,25 @@ function boundedHashValue(
 function hashMessageSequence(messages: ReadonlyArray<ContextMessageLike>): {
 	hash: string;
 	truncated: boolean;
+	contentTruncated: boolean;
 } {
 	const hash = createHash("sha256");
+	const state: BoundedHashState = { contentTruncated: false };
 	hash.update(`message-count:${messages.length};`);
 	const sampled = Math.min(messages.length, MAX_HASHED_MESSAGES);
 	for (let i = 0; i < sampled; i++) {
 		const message = messages[i];
 		hash.update(
-			`${i}|role:${boundedHashValue(message?.role)}|content:${boundedHashValue(message?.content)};`,
+			`${i}|role:${boundedHashValue(message?.role)}|content:${boundedHashValue(message?.content, 0, new Set<object>(), state)};`,
 		);
 	}
 	const truncated = messages.length > sampled;
 	if (truncated) hash.update(`truncated-after:${sampled};`);
-	return { hash: hash.digest("hex"), truncated };
+	return {
+		hash: hash.digest("hex"),
+		truncated,
+		contentTruncated: state.contentTruncated,
+	};
 }
 
 function messageTextSize(content: unknown): { chars: number; bytes: number } {
@@ -181,7 +206,9 @@ function measureInjectedMessages(messages: ReadonlyArray<ContextMessageLike>): {
 } {
 	let chars = 0;
 	let bytes = 0;
-	for (const message of messages) {
+	const measuredCount = Math.min(messages.length, MAX_REPORTED_MESSAGES);
+	for (let i = 0; i < measuredCount; i++) {
+		const message = messages[i];
 		const size = messageTextSize(message?.content);
 		chars = Math.min(MAX_INJECTED_CHARS, chars + size.chars);
 		bytes = Math.min(MAX_INJECTED_BYTES, bytes + size.bytes);
@@ -200,11 +227,13 @@ function sessionKey(sessionId?: string): string {
 
 /**
  * Log one bounded request-side observation for every `context` call. This is
- * deliberately a separate phase from `cache_prefix_break`: it describes what
- * pi-lens saw and returned locally, not whether a provider reused or missed a
- * prompt cache. `observationId` is local to this process; the host currently
- * exposes no request id on ContextEvent/MessageEndEvent, so response records
- * are correlated by session and turn only when those are available.
+ * deliberately a separate phase from `cache_prefix_break`: it describes the
+ * messages pi-lens saw and returned from its own context handler, not the final
+ * provider request after other context handlers and not whether a provider
+ * reused or missed a prompt cache. `observationId` is local to this process; the
+ * host currently exposes no request id on ContextEvent/MessageEndEvent. A
+ * RuntimeCoordinator turn is process-global, so it is explicitly scoped as
+ * such and is omitted for concurrent secondary sessions.
  */
 export function observeCacheContext(args: {
 	existingMessages?: ReadonlyArray<ContextMessageLike>;
@@ -242,13 +271,26 @@ export function observeCacheContext(args: {
 		const afterPrefix = hashMessageSequence(
 			resultMessages.slice(0, afterPrefixLength),
 		);
-		const beforeFirst = existingMessages.length
-			? hashMessageSequence([existingMessages[0]]).hash
-			: null;
-		const afterFirst = resultMessages.length
-			? hashMessageSequence([resultMessages[0]]).hash
-			: null;
-		const prefixObservation = args.prefixObservation ?? "empty";
+		const beforeFirstSequence = existingMessages.length
+			? hashMessageSequence([existingMessages[0]])
+			: undefined;
+		const afterFirstSequence = resultMessages.length
+			? hashMessageSequence([resultMessages[0]])
+			: undefined;
+		const beforeFirst = beforeFirstSequence?.hash ?? null;
+		const afterFirst = afterFirstSequence?.hash ?? null;
+		const firstMessageHashTruncated =
+			beforeFirstSequence?.truncated === true ||
+			beforeFirstSequence?.contentTruncated === true ||
+			afterFirstSequence?.truncated === true ||
+			afterFirstSequence?.contentTruncated === true;
+		const prefixHashTruncated =
+			beforePrefix.truncated ||
+			afterPrefix.truncated ||
+			beforePrefix.contentTruncated ||
+			afterPrefix.contentTruncated;
+		const prefixObservation =
+			prefixHashTruncated ? "unknown" : (args.prefixObservation ?? "empty");
 		const sizes = measureInjectedMessages(injectedMessages);
 		const messageCountCapped =
 			existingMessages.length > MAX_REPORTED_MESSAGES ||
@@ -261,10 +303,13 @@ export function observeCacheContext(args: {
 			durationMs: 0,
 			metadata: {
 				version: 1,
+				observedStage: "pi-lens-context-handler",
 				observationId: `ctx-${(++contextObservationCounter).toString(36)}`,
 				sessionId: sessionKey(args.sessionId),
 				sessionRole: args.sessionRole,
-				turnIndex: args.turnIndex,
+				...(args.sessionRole === "concurrent-secondary"
+					? { turnScope: SECONDARY_TURN_SCOPE }
+					: { turnIndex: args.turnIndex, turnScope: PROCESS_TURN_SCOPE }),
 				injectionEnabled: args.injectionEnabled,
 				injectionSources: Array.from(args.injectionSources ?? []),
 				injectedMessageCount: Math.min(
@@ -287,13 +332,23 @@ export function observeCacheContext(args: {
 				messageCountCapped,
 				placement,
 				prefixObservation,
+				prefixObservationUnknown: prefixObservation === "unknown",
 				prefixBaseline:
 					prefixObservation === "baseline"
 						? true
-						: prefixObservation === "empty"
+						: prefixObservation === "empty" || prefixObservation === "unknown"
 							? null
 							: false,
-				firstMessageChanged: beforeFirst !== afterFirst,
+				firstMessageChanged: firstMessageHashTruncated
+					? null
+					: beforeFirst !== afterFirst,
+				firstMessageChange:
+					firstMessageHashTruncated
+						? "unknown"
+						: beforeFirst !== afterFirst
+							? "changed"
+							: "unchanged",
+				firstMessageHashTruncated,
 				beforeFirstMessageHash: beforeFirst,
 				afterFirstMessageHash: afterFirst,
 				beforeSequenceHash: beforeSequence.hash,
@@ -301,8 +356,19 @@ export function observeCacheContext(args: {
 				beforePrefixHash: beforePrefix.hash,
 				afterPrefixHash: afterPrefix.hash,
 				sequenceHashTruncated:
+					beforeSequence.truncated ||
+					afterSequence.truncated ||
+					beforeSequence.contentTruncated ||
+					afterSequence.contentTruncated,
+				sequenceMessageCountTruncated:
 					beforeSequence.truncated || afterSequence.truncated,
-				prefixHashTruncated: beforePrefix.truncated || afterPrefix.truncated,
+				sequenceContentHashTruncated:
+					beforeSequence.contentTruncated || afterSequence.contentTruncated,
+				prefixHashTruncated,
+				prefixMessageCountTruncated:
+					beforePrefix.truncated || afterPrefix.truncated,
+				prefixContentHashTruncated:
+					beforePrefix.contentTruncated || afterPrefix.contentTruncated,
 			},
 		});
 	} catch (err) {
@@ -349,12 +415,15 @@ export function logCacheUsage(
 				...(context
 					? {
 							// MessageEndEvent has no request/context id in the host API. These
-							// fields permit session/turn correlation without inventing an
-							// exact provider-request linkage.
+							// fields permit session correlation without inventing an exact
+							// provider-request linkage. The process-global turn is omitted
+							// for a concurrent secondary session.
 							sessionId: sessionKey(context.sessionId),
-							turnIndex: context.turnIndex,
+							...(context.sessionRole === "concurrent-secondary"
+								? { turnScope: SECONDARY_TURN_SCOPE }
+								: { turnIndex: context.turnIndex, turnScope: PROCESS_TURN_SCOPE }),
 							contextCorrelation: context.sessionId
-								? "session-turn-only"
+								? "session-only-no-request-id"
 								: "no-stable-session-id",
 						}
 					: {}),
@@ -477,7 +546,9 @@ export function observeCachePrefix(
 				phase: "cache_prefix_break",
 				durationMs: 0,
 				metadata: {
-					turnIndex,
+					...(sessionRole === "concurrent-secondary"
+						? { turnScope: SECONDARY_TURN_SCOPE }
+						: { turnIndex, turnScope: PROCESS_TURN_SCOPE }),
 					previousHash: null,
 					currentHash,
 					baseline: true,
@@ -494,7 +565,9 @@ export function observeCachePrefix(
 				phase: "cache_prefix_break",
 				durationMs: 0,
 				metadata: {
-					turnIndex,
+					...(sessionRole === "concurrent-secondary"
+						? { turnScope: SECONDARY_TURN_SCOPE }
+						: { turnIndex, turnScope: PROCESS_TURN_SCOPE }),
 					previousHash,
 					currentHash,
 					sessionId: key,

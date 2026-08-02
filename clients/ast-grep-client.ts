@@ -19,7 +19,11 @@ import type {
 	SgMatch,
 } from "./ast-grep-types.js";
 import { resolvePackagePath } from "./package-root.js";
-import { SgRunner } from "./sg-runner.js";
+import {
+	SgRunner,
+	type SgExecutionOptions,
+	type SgScanResult,
+} from "./sg-runner.js";
 
 // --- Client ---
 
@@ -193,13 +197,18 @@ export class AstGrepClient {
 		const allMatches: AstGrepMatch[] = [];
 		for (const scanPath of paths) {
 			if (apply) {
-				// Stale-preview check: dry-run first
-				const preCheck = await this.runner.tempScanAsync(
-					scanPath,
-					"agent-rule",
-					ruleYaml,
-				);
-				if (preCheck.length === 0) {
+				// Stale-preview check: dry-run first. Preserve CLI failures instead of
+				// treating an invalid rule as a stale, no-match preview.
+				const preCheck = await this.tempScanDetailed(scanPath, ruleYaml);
+				if (preCheck.failure || preCheck.error) {
+					return {
+						matches: allMatches,
+						totalMatches: allMatches.length,
+						applied: false,
+						error: preCheck.error ?? "ast-grep preview failed",
+					};
+				}
+				if (preCheck.matches.length === 0) {
 					return {
 						matches: [],
 						totalMatches: 0,
@@ -236,9 +245,49 @@ export class AstGrepClient {
 	 * Routes through sg scan --config rather than sg run -p.
 	 * Each path is scanned independently; results are merged.
 	 */
+	private async tempScanDetailed(
+		dir: string,
+		ruleYaml: string,
+		options: SgExecutionOptions = {},
+	): Promise<SgScanResult> {
+		// Keep tests and older embedders that replace the runner with the historic
+		// match-only seam working. The production SgRunner always has the detailed
+		// method, so failures cannot be mistaken for an empty result there.
+		const detailed = (
+			this.runner as unknown as {
+				tempScanDetailedAsync?: (
+					dir: string,
+					ruleId: string,
+					ruleYaml: string,
+					timeout?: number,
+					options?: SgExecutionOptions,
+				) => Promise<SgScanResult>;
+			}
+		).tempScanDetailedAsync;
+		if (detailed) {
+			return detailed.call(
+				this.runner,
+				dir,
+				"agent-rule",
+				ruleYaml,
+				30_000,
+				options,
+			);
+		}
+		const matches = await this.runner.tempScanAsync(
+			dir,
+			"agent-rule",
+			ruleYaml,
+			30_000,
+			options,
+		);
+		return { matches, status: 0 };
+	}
+
 	async searchWithRule(
 		ruleYaml: string,
 		paths: string[],
+		options: SgExecutionOptions = {},
 	): Promise<{
 		matches: AstGrepMatch[];
 		totalMatches: number;
@@ -247,12 +296,21 @@ export class AstGrepClient {
 		const allMatches: AstGrepMatch[] = [];
 		for (const scanPath of paths) {
 			try {
-				const results = await this.runner.tempScanAsync(
+				const results = await this.tempScanDetailed(
 					scanPath,
-					"agent-rule",
 					ruleYaml,
+					options,
 				);
-				allMatches.push(...results);
+				if (results.failure || results.error) {
+					return {
+						matches: allMatches,
+						totalMatches: allMatches.length,
+						error:
+							results.error ||
+								`ast-grep scan failed (${results.failure ?? "unknown failure"})`,
+					};
+				}
+				allMatches.push(...results.matches);
 			} catch (err) {
 				return {
 					matches: allMatches,
@@ -307,7 +365,10 @@ export class AstGrepClient {
 	async validatePattern(
 		pattern: string,
 		lang: string,
-		options?: { selector?: string; strictness?: string },
+		options?: {
+			selector?: string;
+			strictness?: string;
+		} & SgExecutionOptions,
 	): Promise<{ valid: boolean; warning?: string; error?: string }> {
 		const shapeError = validateInputShape(
 			pattern,
@@ -327,10 +388,19 @@ export class AstGrepClient {
 			if (options?.selector) args.push("--selector", options.selector);
 			if (options?.strictness) args.push("--strictness", options.strictness);
 			args.push(tmpFile);
-			const result = await this.runner.execRaw(args);
+			const result = await this.runner.execRaw(args, 10_000, options);
 			const stderr = result.stderr.trim();
 			const stdout = result.stdout.trim();
 			if (result.error) return { valid: false, error: result.error };
+			if (result.status !== 0 && !(result.status === 1 && !stderr)) {
+				return {
+					valid: false,
+					error: stderr || `ast-grep validation failed with exit code ${result.status}`,
+				};
+			}
+			if (result.outputTruncated) {
+				return { valid: false, error: "ast-grep validation output was truncated" };
+			}
 			if (stderrHasError(stderr)) return { valid: false, error: stderr };
 			const warning = stderr || stdout || undefined;
 			return {
@@ -348,6 +418,7 @@ export class AstGrepClient {
 
 	async validateRule(
 		ruleYaml: string,
+		options: SgExecutionOptions = {},
 	): Promise<{ valid: boolean; error?: string }> {
 		const shapeError = validateInputShape(
 			ruleYaml,
@@ -365,7 +436,15 @@ export class AstGrepClient {
 				snippet.source,
 				"utf-8",
 			);
-			await this.runner.tempScanAsync(tmpDir, "agent-rule", ruleYaml, 10000);
+			const result = await this.tempScanDetailed(tmpDir, ruleYaml, options);
+			if (result.failure || result.error) {
+				return {
+					valid: false,
+					error:
+						result.error ||
+							`ast-grep rule validation failed (${result.failure ?? "unknown failure"})`,
+				};
+			}
 			return { valid: true };
 		} catch (err) {
 			return { valid: false, error: String(err) };
@@ -435,7 +514,11 @@ export class AstGrepClient {
 		pattern: string,
 		lang: string,
 		paths: string[],
-		options?: { selector?: string; context?: number; strictness?: string },
+		options?: {
+			selector?: string;
+			context?: number;
+			strictness?: string;
+		} & SgExecutionOptions,
 	): Promise<{
 		matches: AstGrepMatch[];
 		totalMatches: number;
@@ -453,7 +536,7 @@ export class AstGrepClient {
 			args.push("--strictness", options.strictness);
 		}
 		args.push(...paths);
-		const result = await this.runner.exec(args);
+		const result = await this.runner.exec(args, options);
 		return {
 			matches: result.matches,
 			totalMatches: result.totalMatches,

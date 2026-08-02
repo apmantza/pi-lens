@@ -258,6 +258,55 @@ describe("cache-observability — context observations (#1018 follow-up)", () =>
 		);
 	});
 
+	it("reports unknown rather than unchanged when the bounded first-message hash truncates a suffix", () => {
+		const existing = {
+			role: "user",
+			content: `${"a".repeat(2048)}-suffix-a`,
+		};
+		const changedSuffix = {
+			role: "user",
+			content: `${"a".repeat(2048)}-suffix-b`,
+		};
+		observeCacheContext({
+			sessionId: "s",
+			turnIndex: 5,
+			injectionEnabled: false,
+			existingMessages: [existing],
+			resultMessages: [changedSuffix],
+			prefixObservation: "unchanged",
+		});
+
+		const metadata = latencyEntries[0].metadata;
+		expect(metadata).toMatchObject({
+			observedStage: "pi-lens-context-handler",
+			firstMessageChanged: null,
+			firstMessageChange: "unknown",
+			firstMessageHashTruncated: true,
+			sequenceContentHashTruncated: true,
+			prefixHashTruncated: true,
+			prefixContentHashTruncated: true,
+			prefixObservation: "unknown",
+			prefixObservationUnknown: true,
+			prefixBaseline: null,
+		});
+	});
+
+	it("marks a secondary context observation without a session-local turn", () => {
+		observeCacheContext({
+			sessionId: "secondary",
+			sessionRole: "concurrent-secondary",
+			turnIndex: 99,
+			injectionEnabled: false,
+			existingMessages: [{ role: "user", content: "private" }],
+		});
+		expect(latencyEntries[0].metadata).toMatchObject({
+			observedStage: "pi-lens-context-handler",
+			sessionRole: "concurrent-secondary",
+			turnScope: "unavailable-concurrent-secondary",
+		});
+		expect(latencyEntries[0].metadata).not.toHaveProperty("turnIndex");
+	});
+
 	it("adds only session/turn correlation to cache usage when the host has no request id", () => {
 		logCacheUsage(assistantMessage(), undefined, {
 			sessionId: "s",
@@ -266,9 +315,24 @@ describe("cache-observability — context observations (#1018 follow-up)", () =>
 		expect(latencyEntries[0].metadata).toMatchObject({
 			sessionId: "s",
 			turnIndex: 4,
-			contextCorrelation: "session-turn-only",
+			turnScope: "process-global-runtime",
+			contextCorrelation: "session-only-no-request-id",
 		});
 		expect(latencyEntries[0].metadata).not.toHaveProperty("requestId");
+	});
+
+	it("does not present the shared process turn as a secondary session turn", () => {
+		logCacheUsage(assistantMessage(), undefined, {
+			sessionId: "secondary",
+			sessionRole: "concurrent-secondary",
+			turnIndex: 99,
+		});
+		expect(latencyEntries[0].metadata).toMatchObject({
+			sessionId: "secondary",
+			turnScope: "unavailable-concurrent-secondary",
+			contextCorrelation: "session-only-no-request-id",
+		});
+		expect(latencyEntries[0].metadata).not.toHaveProperty("turnIndex");
 	});
 });
 

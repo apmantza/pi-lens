@@ -152,6 +152,54 @@ describe("SgRunner", () => {
 				removeTempDirSync(root);
 			}
 		});
+
+		it("reports invalid generated-rule CLI output instead of an empty success", async () => {
+			const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-sg-invalid-"));
+			try {
+				safeSpawnAsync.mockResolvedValueOnce({
+					status: 8,
+					error: undefined,
+					stdout: "",
+					stderr: "invalid node kind: definitely_not_a_kind",
+				});
+				const { SgRunner } = await import("../../clients/sg-runner.js");
+				const result = await new SgRunner().tempScanDetailedAsync(
+					root,
+					"bad",
+					"id: bad\nlanguage: TypeScript\nrule: { kind: definitely_not_a_kind }\n",
+				);
+
+				expect(result.matches).toEqual([]);
+				expect(result.failure).toBe("cli-failure");
+				expect(result.error).toContain("invalid node kind");
+			} finally {
+				removeTempDirSync(root);
+			}
+		});
+
+		it("preserves status-one empty output as a genuine no-match", async () => {
+			const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-sg-empty-"));
+			try {
+				safeSpawnAsync.mockResolvedValueOnce({
+					status: 1,
+					error: undefined,
+					stdout: "",
+					stderr: "",
+				});
+				const { SgRunner } = await import("../../clients/sg-runner.js");
+				const result = await new SgRunner().tempScanDetailedAsync(
+					root,
+					"empty",
+					"id: empty\nrule: { kind: function_declaration }\n",
+				);
+
+				expect(result.matches).toEqual([]);
+				expect(result.failure).toBeUndefined();
+				expect(result.error).toBeUndefined();
+			} finally {
+				removeTempDirSync(root);
+			}
+		});
 	});
 
 	describe("formatMatches()", () => {

@@ -13,6 +13,8 @@ function clientWithExec(exec: (args: string[]) => unknown): AstGrepClient {
 function clientWithValidationRunner(runner: {
 	execRaw?: (args: string[]) => unknown;
 	tempScanAsync?: (...args: unknown[]) => unknown;
+	tempScanDetailedAsync?: (...args: unknown[]) => unknown;
+	tempScanWithFixAsync?: (...args: unknown[]) => unknown;
 }): AstGrepClient {
 	const client = new AstGrepClient();
 	(client as unknown as { runner: typeof runner }).runner = runner;
@@ -90,6 +92,32 @@ describe("AstGrepClient.replace() — apply reports the pre-apply match count", 
 		);
 		expect(wrote).toBe(false);
 	});
+
+	it("does not classify an invalid raw-rule preview as stale", async () => {
+		const tempScanDetailedAsync = vi.fn().mockResolvedValue({
+			matches: [],
+			status: 8,
+			error: "invalid node kind",
+			failure: "cli-failure",
+		});
+		const tempScanWithFixAsync = vi.fn();
+		const client = clientWithValidationRunner({
+			tempScanDetailedAsync,
+			tempScanWithFixAsync,
+		});
+
+		const result = await client.replaceWithRule(
+			"id: bad\nlanguage: TypeScript\nrule: { kind: definitely_not_a_kind }",
+			["a.ts"],
+			true,
+		);
+
+		expect(result.applied).toBe(false);
+		expect(result.stalePreview).toBeUndefined();
+		expect(result.error).toContain("invalid node kind");
+		expect(tempScanDetailedAsync).toHaveBeenCalledOnce();
+		expect(tempScanWithFixAsync).not.toHaveBeenCalled();
+	});
 });
 
 describe("AstGrepClient validatePattern/validateRule", () => {
@@ -138,7 +166,30 @@ describe("AstGrepClient validatePattern/validateRule", () => {
 		).toBe(true);
 	});
 
-	it("validates raw rules using the rule language", async () => {
+	it("fails closed when detailed rule scanning reports an invalid CLI rule", async () => {
+		const tempScanDetailedAsync = vi.fn().mockResolvedValue({
+			matches: [],
+			status: 2,
+			error: "invalid AST kind: definitely_not_a_kind",
+			failure: "cli-failure",
+		});
+		const tempScanAsync = vi.fn();
+		const client = clientWithValidationRunner({
+			tempScanDetailedAsync,
+			tempScanAsync,
+		});
+
+		const result = await client.validateRule(
+			"id: bad\nlanguage: TypeScript\nrule:\n  kind: definitely_not_a_kind",
+		);
+
+		expect(result.valid).toBe(false);
+		expect(result.error).toContain("invalid AST kind");
+		expect(tempScanDetailedAsync).toHaveBeenCalledOnce();
+		expect(tempScanAsync).not.toHaveBeenCalled();
+	});
+
+	it("validates raw rules using the language-appropriate temp file", async () => {
 		const seenFiles: string[][] = [];
 		const tempScanAsync = vi.fn(async (...args: unknown[]) => {
 			const dir = args[0] as string;

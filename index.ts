@@ -1939,8 +1939,10 @@ export default function (pi: ExtensionAPI) {
 			(event: { message?: unknown } | unknown, ctx: unknown) => {
 				if (!lensEnabled) return;
 				try {
+					const sessionId = getStableSessionId(ctx);
 					logCacheUsage((event as { message?: unknown })?.message, dbg, {
-						sessionId: getStableSessionId(ctx),
+						sessionId,
+						sessionRole: classifyCurrentSessionEmission(ctx, sessionId),
 						turnIndex: runtime.turnIndex,
 					});
 				} catch (err) {

@@ -69,6 +69,7 @@ function toSearchReads(matches: AstGrepMatch[]): SearchReadLocation[] {
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 200;
 const MAX_PATHS = 200;
+const AST_GREP_SEARCH_TIMEOUT_MS = 30_000;
 
 /**
  * Compact, file-grouped rendering for high-volume searches (refs #345). Instead
@@ -286,17 +287,17 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			"✅ GOOD patterns (complete AST shapes; $$$ accepts zero or more nodes):\n" +
 			"  - function $NAME($$$ARGS) { $$$BODY } (function declaration)\n" +
 			"  - fetchMetrics($$$ARGS)             (call with any arguments)\n" +
-			'  - import { $$$NAMES } from "./utils" (exact string-literal import)\n' +
+			'  - import { $$$NAMES } from "module-name" (exact string-literal import)\n' +
 			"  - console.log($MSG)                 (method call)\n\n" +
 			"❌ BAD patterns (multiple nodes / raw text):\n" +
 			'  - it"test name"                     (missing parens - use it($TEST))\n' +
 			"  - console.log without args           (incomplete code)\n" +
 			"  - arbitrary text without code structure\n\n" +
-			"Metavariables match AST nodes, not text inside quoted string literals: `from \"$PATH\"` matches the literal text $PATH. Use an exact quoted string for a known import, or grep for wildcard text. " +
+			'Metavariables match AST nodes, not text inside quoted string literals: `from "$PATH"` matches the literal text $PATH. Use an exact quoted string for a known import, or grep for wildcard text. ' +
 			"Use 'paths' to scope to specific files/folders. " +
 			"Use 'nodeKind' to find every node of a known AST kind, or 'ast_grep_dump' first when the kind is unknown. " +
 			"Avoid 'selector' unless you know the exact AST node kind; it narrows matching and does not extract fields. " +
-			"If this tool is inactive, call pi_lens_activate_tools with tools=[\"ast_grep_search\"]; activation takes effect next turn. If zero matches, retry once with a simpler AST pattern, then use ast_grep_dump on a small representative snippet before falling back to grep.",
+			'If this tool is inactive, call pi_lens_activate_tools with tools=["ast_grep_search"]; activation takes effect next turn. If zero matches, retry once with a simpler AST pattern, then use ast_grep_dump on a small representative snippet before falling back to grep.',
 		promptSnippet: "AST-aware structural code search",
 		renderResult: compactRenderResult<{
 			matchCount?: number;
@@ -354,7 +355,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			nodeKind: Type.Optional(
 				Type.String({
 					description:
-						'Expert grammar-specific escape hatch: find every node of this exact AST kind (for example `call_expression`) without writing a pattern. Node kinds are not universal across languages; use ast_grep_dump to discover them. Mutually exclusive with `pattern` and `rule`; can be combined with structural constraints.',
+						"Expert grammar-specific escape hatch: find every node of this exact AST kind (for example `call_expression`) without writing a pattern. Node kinds are not universal across languages; use ast_grep_dump to discover them. Mutually exclusive with `pattern` and `rule`; can be combined with structural constraints.",
 				}),
 			),
 			insideKind: Type.Optional(
@@ -372,7 +373,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			hasDescendantKind: Type.Optional(
 				Type.String({
 					description:
-						'Restrict matches to nodes containing this AST node kind anywhere in their descendants. Explicit recursive form (`stopBy: end`); use this instead of `hasKind` when nesting is not immediate.',
+						"Restrict matches to nodes containing this AST node kind anywhere in their descendants. Explicit recursive form (`stopBy: end`); use this instead of `hasKind` when nesting is not immediate.",
 				}),
 			),
 			follows: Type.Optional(
@@ -435,6 +436,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			// tool-call one. Honor both so a broad search cancels on Escape.
 			const abortSignal = combineAbortSignals(_signal, ctx.signal);
 			const startedAt = Date.now();
+			const deadlineAt = startedAt + AST_GREP_SEARCH_TIMEOUT_MS;
 			const {
 				paths,
 				nodeKind,
@@ -477,6 +479,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 			const skipOffset = Math.max(0, Math.floor(skip ?? 0));
 			const lang = rawLang.replace(/^"|"$/g, "");
 			const searchPathsCount = paths?.length ?? 1;
+			const executionOptions = { signal: abortSignal, deadlineAt };
 
 			function logOutcome(
 				outcome: AstGrepToolOutcome,
@@ -620,7 +623,11 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 				}
 				if (abortSignal?.aborted) return abortError();
 
-				if (!hasRawRule && hasPattern && looksLikeRuleYamlOrPlainText(pattern)) {
+				if (
+					!hasRawRule &&
+					hasPattern &&
+					looksLikeRuleYamlOrPlainText(pattern)
+				) {
 					logOutcome("error", {
 						errorRaw:
 							"pattern looks like rule YAML or plain text (rejected pre-spawn)",
@@ -730,10 +737,11 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 
 				if (validateOnly) {
 					const validation = effectiveRule?.trim()
-						? await astGrepClient.validateRule(effectiveRule)
+						? await astGrepClient.validateRule(effectiveRule, executionOptions)
 						: await astGrepClient.validatePattern(pattern, lang, {
 								selector,
 								strictness,
+								...executionOptions,
 							});
 					if (!validation.valid) {
 						logOutcome("error", { errorRaw: validation.error });
@@ -773,6 +781,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 					const ruleResult = await astGrepClient.searchWithRule(
 						effectiveRule,
 						searchPaths,
+						executionOptions,
 					);
 					if (abortSignal?.aborted) return abortError();
 					if (ruleResult.error) {
@@ -830,6 +839,7 @@ export function createAstGrepSearchTool(astGrepClient: AstGrepClient) {
 					selector,
 					context,
 					strictness,
+					...executionOptions,
 				});
 				if (abortSignal?.aborted) return abortError();
 

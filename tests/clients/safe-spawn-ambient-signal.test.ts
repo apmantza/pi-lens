@@ -73,4 +73,20 @@ describe("safeSpawnAsync ambient abort signal (#197)", () => {
 		expect(result.error?.message ?? "").not.toMatch(/aborted before start/i);
 		expect(result.status).not.toBeNull();
 	});
+
+	it("kills a noisy child when the retained output reaches its byte cap", async () => {
+		const result = await safeSpawnAsync(
+			NODE,
+			[
+				"-e",
+				"process.stdout.write('x'.repeat(100000)); setTimeout(() => {}, 10000);",
+			],
+			{ timeout: 5000, maxOutputBytes: 1024 },
+		);
+
+		expect(result.outputTruncated).toBe(true);
+		expect(
+			Buffer.byteLength(result.stdout) + Buffer.byteLength(result.stderr),
+		).toBeLessThanOrEqual(1024);
+	});
 });

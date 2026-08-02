@@ -33,11 +33,17 @@ export interface SpawnResourceUsage {
 	peakRssBytes: number;
 }
 
+export type SpawnFailureKind = "aborted" | "timeout" | "spawn" | "signal";
+
 export interface SpawnResult {
 	stdout: string;
 	stderr: string;
 	status: number | null;
 	error?: Error;
+	/** Structured failure reason; nonzero exit statuses are not spawn failures. */
+	failure?: SpawnFailureKind;
+	/** True when stdout or stderr was capped before process completion. */
+	outputTruncated?: boolean;
 	/** Peak/average CPU%+RSS sampled across this spawn's lifetime (#620).
 	 *  `undefined` when no sample ever landed (process exited faster than the
 	 *  first poll tick, or sampling failed for the whole invocation) — never
@@ -47,6 +53,8 @@ export interface SpawnResult {
 
 export interface SafeSpawnOptions {
 	timeout?: number;
+	/** Absolute wall-clock deadline. The earlier of this and `timeout` wins. */
+	deadlineAt?: number;
 	cwd?: string;
 	env?: NodeJS.ProcessEnv;
 	signal?: AbortSignal;
@@ -66,6 +74,8 @@ export interface SafeSpawnOptions {
 	 * affects spawn behavior.
 	 */
 	resourceLabel?: string;
+	/** Maximum bytes retained across stdout and stderr for this child. */
+	maxOutputBytes?: number;
 	/**
 	 * Couple a long-lived, side-effecting child to this Node process. Registered
 	 * children are synchronously tree-killed during process exit/signals.
@@ -395,7 +405,17 @@ export async function safeSpawnAsync(
 	args: string[],
 	options?: SafeSpawnOptions,
 ): Promise<SpawnResult> {
-	const timeout = options?.timeout ?? 30000;
+	const configuredTimeout =
+		options?.timeout !== undefined &&
+		Number.isFinite(options.timeout) &&
+		options.timeout >= 0
+			? options.timeout
+			: 30000;
+	const deadlineRemaining =
+		options?.deadlineAt !== undefined && Number.isFinite(options.deadlineAt)
+			? options.deadlineAt - Date.now()
+			: Number.POSITIVE_INFINITY;
+	const timeout = Math.max(0, Math.min(configuredTimeout, deadlineRemaining));
 	// Fall back to the current turn's ambient signal (set from ctx.signal) so an
 	// Esc/abort mid-turn cancels dispatches that didn't thread a signal of their
 	// own — unless the caller opts out (installs, which must run to completion).
@@ -411,6 +431,17 @@ export async function safeSpawnAsync(
 				stderr: "",
 				status: null,
 				error: new Error("Spawn aborted before start"),
+				failure: "aborted",
+			});
+			return;
+		}
+		if (timeout <= 0) {
+			resolve({
+				stdout: "",
+				stderr: "",
+				status: null,
+				error: new Error(`Process timed out after ${timeout}ms`),
+				failure: "timeout",
 			});
 			return;
 		}
@@ -418,7 +449,29 @@ export async function safeSpawnAsync(
 		let stdout = "";
 		let stderr = "";
 		let timedOut = false;
+		let aborted = false;
 		let killed = false;
+		let outputTruncated = false;
+		const maxOutputBytes =
+			options?.maxOutputBytes !== undefined &&
+			Number.isFinite(options.maxOutputBytes) &&
+			options.maxOutputBytes > 0
+				? Math.floor(options.maxOutputBytes)
+				: undefined;
+		const appendOutput = (current: string, chunk: string | Buffer): string => {
+			const text = typeof chunk === "string" ? chunk : chunk.toString();
+			if (maxOutputBytes === undefined) return current + text;
+			const used = Buffer.byteLength(stdout) + Buffer.byteLength(stderr);
+			const remaining = maxOutputBytes - used;
+			if (remaining <= 0) {
+				outputTruncated = true;
+				return current;
+			}
+			const bytes = Buffer.byteLength(text);
+			if (bytes <= remaining) return current + text;
+			outputTruncated = true;
+			return current + Buffer.from(text).subarray(0, remaining).toString();
+		};
 
 		// Spawn the process (non-blocking). Keeping Node's `shell` option false
 		// is important on every path here: shell:true concatenates tainted
@@ -484,7 +537,13 @@ export async function safeSpawnAsync(
 		}
 
 		if (resolutionError) {
-			resolve({ stdout: "", stderr: "", status: null, error: resolutionError });
+			resolve({
+				stdout: "",
+				stderr: "",
+				status: null,
+				error: resolutionError,
+				failure: "spawn",
+			});
 			return;
 		}
 
@@ -510,6 +569,7 @@ export async function safeSpawnAsync(
 				stderr: "",
 				status: null,
 				error: err instanceof Error ? err : new Error(String(err)),
+				failure: "spawn",
 			});
 			return;
 		}
@@ -542,11 +602,15 @@ export async function safeSpawnAsync(
 				const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
 				try {
 					await new Promise<void>((done) => {
-						const killer = spawn(taskkill, ["/F", "/T", "/PID", String(child.pid)], {
-							shell: false,
-							windowsHide: true,
-							stdio: "ignore",
-						});
+						const killer = spawn(
+							taskkill,
+							["/F", "/T", "/PID", String(child.pid)],
+							{
+								shell: false,
+								windowsHide: true,
+								stdio: "ignore",
+							},
+						);
 						killer.once("close", () => done());
 						killer.once("error", () => {
 							child.kill("SIGKILL");
@@ -566,6 +630,7 @@ export async function safeSpawnAsync(
 
 		// Handle abort signal
 		const onAbort = () => {
+			aborted = true;
 			if (!killed && !child.killed) {
 				killed = true;
 				void killTree();
@@ -573,14 +638,30 @@ export async function safeSpawnAsync(
 		};
 		abortSignal?.addEventListener("abort", onAbort, { once: true });
 
+		// Output-cap kills are awaited by the close handler below, just like
+		// timeout/abort kills. This keeps a noisy CLI from continuing in the
+		// background after its retained output has been bounded.
+		let killPromise: Promise<void> | undefined;
+		const stopForOutputLimit = (): void => {
+			if (outputTruncated && !killed && !child.killed) {
+				killed = true;
+				killPromise = killTree();
+			}
+		};
+
 		// Collect output
 		child.stdout?.setEncoding("utf-8");
 		child.stderr?.setEncoding("utf-8");
-		child.stdout?.on("data", (data) => (stdout += data));
-		child.stderr?.on("data", (data) => (stderr += data));
+		child.stdout?.on("data", (data) => {
+			stdout = appendOutput(stdout, data);
+			stopForOutputLimit();
+		});
+		child.stderr?.on("data", (data) => {
+			stderr = appendOutput(stderr, data);
+			stopForOutputLimit();
+		});
 
 		// Timeout handling - KILL the process, don't just abandon it
-		let killPromise: Promise<void> | undefined;
 		const timeoutId = setTimeout(() => {
 			timedOut = true;
 			if (!killed && !child.killed) {
@@ -620,6 +701,7 @@ export async function safeSpawnAsync(
 			await killPromise;
 			const resourceUsage = finishResourceUsage();
 
+			const outputInfo = outputTruncated ? { outputTruncated: true } : {};
 			if (timedOut) {
 				resolve({
 					stdout,
@@ -628,6 +710,18 @@ export async function safeSpawnAsync(
 					error: new Error(
 						`Process timed out after ${timeout}ms (killed with ${signal || "SIGTERM"})`,
 					),
+					failure: "timeout",
+					...outputInfo,
+					resourceUsage,
+				});
+			} else if (aborted) {
+				resolve({
+					stdout,
+					stderr,
+					status: null,
+					error: new Error("Spawn aborted"),
+					failure: "aborted",
+					...outputInfo,
 					resourceUsage,
 				});
 			} else if (signal) {
@@ -636,10 +730,12 @@ export async function safeSpawnAsync(
 					stderr,
 					status: null,
 					error: new Error(`Process killed by signal: ${signal}`),
+					failure: "signal",
+					...outputInfo,
 					resourceUsage,
 				});
 			} else {
-				resolve({ stdout, stderr, status: code, resourceUsage });
+				resolve({ stdout, stderr, status: code, ...outputInfo, resourceUsage });
 			}
 		});
 
@@ -648,7 +744,15 @@ export async function safeSpawnAsync(
 			abortSignal?.removeEventListener("abort", onAbort);
 			if (child.pid) lifetimeState.pids.delete(child.pid);
 			const resourceUsage = finishResourceUsage();
-			resolve({ stdout, stderr, status: null, error: err, resourceUsage });
+			resolve({
+				stdout,
+				stderr,
+				status: null,
+				error: err,
+				failure: aborted ? "aborted" : timedOut ? "timeout" : "spawn",
+				...(outputTruncated ? { outputTruncated: true } : {}),
+				resourceUsage,
+			});
 		});
 	});
 }

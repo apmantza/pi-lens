@@ -294,6 +294,54 @@ describe("ast_grep_search tool", () => {
 			expect(search).not.toHaveBeenCalled();
 		});
 
+		it("forwards the combined signal and shared deadline to generated searches", async () => {
+			const searchWithRule = vi
+				.fn()
+				.mockResolvedValue({ matches: [], totalMatches: 0 });
+			const tool = createAstGrepSearchTool(makeClient({ searchWithRule }));
+			const controller = new AbortController();
+
+			await tool.execute(
+				"signal-deadline",
+				{
+					lang: "typescript",
+					nodeKind: "call_expression",
+					paths: ["src"],
+				},
+				controller.signal,
+				null,
+				{ cwd: "." },
+			);
+
+			const options = searchWithRule.mock.calls[0]?.[2] as {
+				signal?: AbortSignal;
+				deadlineAt?: number;
+			};
+			expect(options.signal).toBe(controller.signal);
+			expect(options.deadlineAt).toBeGreaterThan(Date.now());
+		});
+
+		it("forwards the combined signal and shared deadline to normal searches", async () => {
+			const search = vi.fn().mockResolvedValue({ matches: [] });
+			const tool = createAstGrepSearchTool(makeClient({ search }));
+			const controller = new AbortController();
+
+			await tool.execute(
+				"signal-deadline-normal",
+				{ pattern: "foo($X)", lang: "typescript", paths: ["src"] },
+				controller.signal,
+				null,
+				{ cwd: "." },
+			);
+
+			const options = search.mock.calls[0]?.[3] as {
+				signal?: AbortSignal;
+				deadlineAt?: number;
+			};
+			expect(options.signal).toBe(controller.signal);
+			expect(options.deadlineAt).toBeGreaterThan(Date.now());
+		});
+
 		it("routes to normal search when no structural params", async () => {
 			const searchWithRule = vi.fn();
 			const search = vi.fn().mockResolvedValue({ matches: [] });
@@ -393,7 +441,10 @@ describe("ast_grep_search tool", () => {
 
 			expect(result.isError).toBeUndefined();
 			expect(result.details).toMatchObject({ mode: "rule", valid: true });
-			expect(validateRule).toHaveBeenCalledWith(rule);
+			expect(validateRule).toHaveBeenCalledWith(
+				rule,
+				expect.objectContaining({ deadlineAt: expect.any(Number) }),
+			);
 			expect(searchWithRule).not.toHaveBeenCalled();
 		});
 
@@ -584,7 +635,11 @@ describe("ast_grep_search tool", () => {
 				null,
 				{ cwd: "." },
 			);
-			expect(searchWithRule).toHaveBeenCalledWith(expect.any(String), ["src/"]);
+			expect(searchWithRule).toHaveBeenCalledWith(
+				expect.any(String),
+				["src/"],
+				expect.objectContaining({ deadlineAt: expect.any(Number) }),
+			);
 		});
 
 		it("returns read handles and no dump suggestion for YAML-rule matches", async () => {
