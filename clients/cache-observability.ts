@@ -100,10 +100,7 @@ interface BoundedHashState {
 	contentTruncated: boolean;
 }
 
-function boundedHashScalar(
-	value: unknown,
-	state: BoundedHashState,
-): string {
+function boundedHashScalar(value: unknown, state: BoundedHashState): string {
 	if (value === null) return "null";
 	if (value === undefined) return "undefined";
 	if (typeof value === "string") {
@@ -145,10 +142,11 @@ function boundedHashObject(
 		left.localeCompare(right),
 	);
 	if (keys.length > 24) state.contentTruncated = true;
-	const fields = keys.slice(0, 24).map(
-		(key) =>
-			`${key}:${boundedHashValue(value[key], depth + 1, seen, state)}`,
-	);
+	const fields = keys
+		.slice(0, 24)
+		.map(
+			(key) => `${key}:${boundedHashValue(value[key], depth + 1, seen, state)}`,
+		);
 	return `object:${keys.length}:{${fields.join(",")}}`;
 }
 

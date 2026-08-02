@@ -1954,22 +1954,19 @@ export default function (pi: ExtensionAPI) {
 	// that never fires it simply produces no records rather than crashing wireup.
 	try {
 		// biome-ignore lint/suspicious/noExplicitAny: message_end overload absent on older host types
-		(pi as any).on?.(
-			"message_end",
-			(event: unknown, ctx: unknown) => {
-				if (!lensEnabled) return;
-				try {
-					const sessionId = getStableSessionId(ctx);
-					logCacheUsage((event as { message?: unknown })?.message, dbg, {
-						sessionId,
-						sessionRole: classifyCurrentSessionEmission(ctx, sessionId),
-						turnIndex: runtime.turnIndex,
-					});
-				} catch (err) {
-					dbg(`message_end handler error: ${err}`);
-				}
-			},
-		);
+		(pi as any).on?.("message_end", (event: unknown, ctx: unknown) => {
+			if (!lensEnabled) return;
+			try {
+				const sessionId = getStableSessionId(ctx);
+				logCacheUsage((event as { message?: unknown })?.message, dbg, {
+					sessionId,
+					sessionRole: classifyCurrentSessionEmission(ctx, sessionId),
+					turnIndex: runtime.turnIndex,
+				});
+			} catch (err) {
+				dbg(`message_end handler error: ${err}`);
+			}
+		});
 	} catch (err) {
 		dbg(`message_end subscribe failed (older pi host?): ${err}`);
 	}

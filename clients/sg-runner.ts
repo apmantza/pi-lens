@@ -360,7 +360,10 @@ export class SgRunner {
 	}): SgFailureKind | undefined {
 		if (result.failure === "aborted") return "aborted";
 		if (result.failure === "timeout") return "timeout";
-		if (result.error && /ENOENT|not found|not installed/i.test(result.error.message)) {
+		if (
+			result.error &&
+			/ENOENT|not found|not installed/i.test(result.error.message)
+		) {
 			return "unavailable";
 		}
 		return result.error ? "cli-failure" : undefined;
@@ -462,7 +465,8 @@ export class SgRunner {
 			// ast-grep uses status 1 with no output for a genuine no-match in
 			// some CLI versions. Preserve that historical empty-result behavior;
 			// any stderr (including an invalid kind/YAML diagnostic) is a failure.
-			if (result.status === 1 && !result.stdout.trim() && !stderr) return empty();
+			if (result.status === 1 && !result.stdout.trim() && !stderr)
+				return empty();
 			return {
 				...empty(),
 				error: this.formatPatternError(
@@ -473,7 +477,10 @@ export class SgRunner {
 		}
 		if (!result.stdout.trim()) return empty();
 		if (result.outputTruncated) {
-			return { ...empty(), error: "Failed to parse output: output was truncated" };
+			return {
+				...empty(),
+				error: "Failed to parse output: output was truncated",
+			};
 		}
 		try {
 			const parsed = JSON.parse(result.stdout);
@@ -683,12 +690,16 @@ export class SgRunner {
 				],
 				spawnOptions,
 			);
-			if (applyResult.error || applyResult.failure || applyResult.status !== 0) {
+			if (
+				applyResult.error ||
+				applyResult.failure ||
+				applyResult.status !== 0
+			) {
 				return {
 					matches: [],
 					error:
 						applyResult.error?.message ||
-							`ast-grep apply failed with exit code ${applyResult.status}`,
+						`ast-grep apply failed with exit code ${applyResult.status}`,
 				};
 			}
 			return { matches: scan.matches };
