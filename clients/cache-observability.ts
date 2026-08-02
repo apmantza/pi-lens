@@ -100,18 +100,17 @@ interface BoundedHashState {
 	contentTruncated: boolean;
 }
 
-function boundedHashValue(
+function boundedHashScalar(
 	value: unknown,
-	depth = 0,
-	seen = new Set<object>(),
-	state: BoundedHashState = { contentTruncated: false },
+	state: BoundedHashState,
 ): string {
 	if (value === null) return "null";
 	if (value === undefined) return "undefined";
 	if (typeof value === "string") {
 		const truncated = value.length > MAX_HASHED_CONTENT_CHARS;
 		if (truncated) state.contentTruncated = true;
-		return `string:${value.length}:${value.slice(0, MAX_HASHED_CONTENT_CHARS)}${truncated ? ":content-truncated" : ""}`;
+		const suffix = truncated ? ":content-truncated" : "";
+		return `string:${value.length}:${value.slice(0, MAX_HASHED_CONTENT_CHARS)}${suffix}`;
 	}
 	if (
 		typeof value === "number" ||
@@ -120,33 +119,65 @@ function boundedHashValue(
 	) {
 		return `${typeof value}:${String(value)}`;
 	}
-	if (typeof value === "function" || typeof value === "symbol") {
-		return typeof value;
+	return typeof value;
+}
+
+function boundedHashArray(
+	value: unknown[],
+	depth: number,
+	seen: Set<object>,
+	state: BoundedHashState,
+): string {
+	if (value.length > 12) state.contentTruncated = true;
+	const items = value
+		.slice(0, 12)
+		.map((item) => boundedHashValue(item, depth + 1, seen, state));
+	return `array:${value.length}:[${items.join(",")}]`;
+}
+
+function boundedHashObject(
+	value: Record<string, unknown>,
+	depth: number,
+	seen: Set<object>,
+	state: BoundedHashState,
+): string {
+	const keys = Object.keys(value).sort((left, right) =>
+		left.localeCompare(right),
+	);
+	if (keys.length > 24) state.contentTruncated = true;
+	const fields = keys.slice(0, 24).map(
+		(key) =>
+			`${key}:${boundedHashValue(value[key], depth + 1, seen, state)}`,
+	);
+	return `object:${keys.length}:{${fields.join(",")}}`;
+}
+
+function boundedHashValue(
+	value: unknown,
+	depth = 0,
+	seen = new Set<object>(),
+	state?: BoundedHashState,
+): string {
+	const hashState = state ?? { contentTruncated: false };
+	if (value === null || typeof value !== "object") {
+		return boundedHashScalar(value, hashState);
 	}
 	if (depth >= 3) {
-		state.contentTruncated = true;
+		hashState.contentTruncated = true;
 		return Object.prototype.toString.call(value);
 	}
-	if (typeof value !== "object") return typeof value;
 	if (seen.has(value)) return "[cycle]";
 	seen.add(value);
 	try {
 		if (Array.isArray(value)) {
-			if (value.length > 12) state.contentTruncated = true;
-			const items = value
-				.slice(0, 12)
-				.map((item) => boundedHashValue(item, depth + 1, seen, state));
-			return `array:${value.length}:[${items.join(",")}]`;
+			return boundedHashArray(value, depth, seen, hashState);
 		}
-		const keys = Object.keys(value).sort();
-		if (keys.length > 24) state.contentTruncated = true;
-		const fields = keys
-			.slice(0, 24)
-			.map(
-				(key) =>
-					`${key}:${boundedHashValue((value as Record<string, unknown>)[key], depth + 1, seen, state)}`,
-			);
-		return `object:${keys.length}:{${fields.join(",")}}`;
+		return boundedHashObject(
+			value as Record<string, unknown>,
+			depth,
+			seen,
+			hashState,
+		);
 	} catch {
 		return "[unreadable]";
 	} finally {
@@ -165,8 +196,9 @@ function hashMessageSequence(messages: ReadonlyArray<ContextMessageLike>): {
 	const sampled = Math.min(messages.length, MAX_HASHED_MESSAGES);
 	for (let i = 0; i < sampled; i++) {
 		const message = messages[i];
+		const seen = new Set<object>();
 		hash.update(
-			`${i}|role:${boundedHashValue(message?.role)}|content:${boundedHashValue(message?.content, 0, new Set<object>(), state)};`,
+			`${i}|role:${boundedHashValue(message?.role, 0, seen, state)}|content:${boundedHashValue(message?.content, 0, seen, state)};`,
 		);
 	}
 	const truncated = messages.length > sampled;
@@ -225,6 +257,42 @@ function sessionKey(sessionId?: string): string {
 	return sessionId?.trim() ? sessionId.trim() : NO_SESSION_KEY;
 }
 
+function prefixLengthForPlacement(
+	placement: CacheContextPlacement,
+	messageCount: number,
+): number {
+	if (placement === "insert-before-final") {
+		return Math.max(0, messageCount - 1);
+	}
+	if (placement === "prepend") return 0;
+	return messageCount;
+}
+
+function resolvePrefixObservation(
+	truncated: boolean,
+	observation?: CachePrefixObservation,
+): CachePrefixObservation | "unknown" {
+	if (truncated) return "unknown";
+	return observation ?? "empty";
+}
+
+function prefixBaselineForObservation(
+	observation: CachePrefixObservation | "unknown",
+): boolean | null {
+	if (observation === "baseline") return true;
+	if (observation === "empty" || observation === "unknown") return null;
+	return false;
+}
+
+function firstMessageChangeFor(
+	truncated: boolean,
+	before: string | null,
+	after: string | null,
+): "unknown" | "changed" | "unchanged" {
+	if (truncated) return "unknown";
+	return before !== after ? "changed" : "unchanged";
+}
+
 /**
  * Log one bounded request-side observation for every `context` call. This is
  * deliberately a separate phase from `cache_prefix_break`: it describes the
@@ -255,12 +323,10 @@ export function observeCacheContext(args: {
 		const placement = args.placement ?? "none";
 		const beforeSequence = hashMessageSequence(existingMessages);
 		const afterSequence = hashMessageSequence(resultMessages);
-		const beforePrefixLength =
-			placement === "insert-before-final"
-				? Math.max(0, existingMessages.length - 1)
-				: placement === "prepend"
-					? 0
-					: existingMessages.length;
+		const beforePrefixLength = prefixLengthForPlacement(
+			placement,
+			existingMessages.length,
+		);
 		const afterPrefixLength = Math.min(
 			beforePrefixLength,
 			resultMessages.length,
@@ -289,8 +355,10 @@ export function observeCacheContext(args: {
 			afterPrefix.truncated ||
 			beforePrefix.contentTruncated ||
 			afterPrefix.contentTruncated;
-		const prefixObservation =
-			prefixHashTruncated ? "unknown" : (args.prefixObservation ?? "empty");
+		const prefixObservation = resolvePrefixObservation(
+			prefixHashTruncated,
+			args.prefixObservation,
+		);
 		const sizes = measureInjectedMessages(injectedMessages);
 		const messageCountCapped =
 			existingMessages.length > MAX_REPORTED_MESSAGES ||
@@ -333,21 +401,15 @@ export function observeCacheContext(args: {
 				placement,
 				prefixObservation,
 				prefixObservationUnknown: prefixObservation === "unknown",
-				prefixBaseline:
-					prefixObservation === "baseline"
-						? true
-						: prefixObservation === "empty" || prefixObservation === "unknown"
-							? null
-							: false,
+				prefixBaseline: prefixBaselineForObservation(prefixObservation),
 				firstMessageChanged: firstMessageHashTruncated
 					? null
 					: beforeFirst !== afterFirst,
-				firstMessageChange:
-					firstMessageHashTruncated
-						? "unknown"
-						: beforeFirst !== afterFirst
-							? "changed"
-							: "unchanged",
+				firstMessageChange: firstMessageChangeFor(
+					firstMessageHashTruncated,
+					beforeFirst,
+					afterFirst,
+				),
 				firstMessageHashTruncated,
 				beforeFirstMessageHash: beforeFirst,
 				afterFirstMessageHash: afterFirst,
@@ -421,7 +483,10 @@ export function logCacheUsage(
 							sessionId: sessionKey(context.sessionId),
 							...(context.sessionRole === "concurrent-secondary"
 								? { turnScope: SECONDARY_TURN_SCOPE }
-								: { turnIndex: context.turnIndex, turnScope: PROCESS_TURN_SCOPE }),
+								: {
+										turnIndex: context.turnIndex,
+										turnScope: PROCESS_TURN_SCOPE,
+									}),
 							contextCorrelation: context.sessionId
 								? "session-only-no-request-id"
 								: "no-stable-session-id",

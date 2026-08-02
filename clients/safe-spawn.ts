@@ -744,12 +744,15 @@ export async function safeSpawnAsync(
 			abortSignal?.removeEventListener("abort", onAbort);
 			if (child.pid) lifetimeState.pids.delete(child.pid);
 			const resourceUsage = finishResourceUsage();
+			let failure: SpawnFailureKind = "spawn";
+			if (aborted) failure = "aborted";
+			else if (timedOut) failure = "timeout";
 			resolve({
 				stdout,
 				stderr,
 				status: null,
 				error: err,
-				failure: aborted ? "aborted" : timedOut ? "timeout" : "spawn",
+				failure,
 				...(outputTruncated ? { outputTruncated: true } : {}),
 				resourceUsage,
 			});

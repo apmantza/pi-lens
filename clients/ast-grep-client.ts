@@ -76,7 +76,7 @@ const VALIDATION_SNIPPETS: Record<string, { ext: string; source: string }> = {
 	html: { ext: "html", source: "<main>pi-lens</main>\n" },
 	java: { ext: "java", source: "class Main { void run() {} }\n" },
 	javascript: { ext: "js", source: "const piLensValidate = 1;\n" },
-	json: { ext: "json", source: "{\"piLensValidate\":true}\n" },
+	json: { ext: "json", source: '{"piLensValidate":true}\n' },
 	kotlin: { ext: "kt", source: "fun main() {}\n" },
 	lua: { ext: "lua", source: "local pi_lens_validate = 1\n" },
 	php: { ext: "php", source: "<?php $piLensValidate = 1;\n" },
@@ -88,9 +88,17 @@ const VALIDATION_SNIPPETS: Record<string, { ext: string; source: string }> = {
 	yaml: { ext: "yaml", source: "piLensValidate: true\n" },
 };
 
-function validationSnippetFor(language: string): { ext: string; source: string } {
+function validationSnippetFor(language: string): {
+	ext: string;
+	source: string;
+} {
 	const key = language.toLowerCase().replace(/^"|"$/g, "");
-	return VALIDATION_SNIPPETS[key] ?? { ext: key.replace(/[^a-z0-9_-]/gi, "") || "txt", source: "pi_lens_validate\n" };
+	return (
+		VALIDATION_SNIPPETS[key] ?? {
+			ext: key.replace(/[^a-z0-9_-]/gi, "") || "txt",
+			source: "pi_lens_validate\n",
+		}
+	);
 }
 
 function validateInputShape(
@@ -307,7 +315,7 @@ export class AstGrepClient {
 						totalMatches: allMatches.length,
 						error:
 							results.error ||
-								`ast-grep scan failed (${results.failure ?? "unknown failure"})`,
+							`ast-grep scan failed (${results.failure ?? "unknown failure"})`,
 					};
 				}
 				allMatches.push(...results.matches);
@@ -395,11 +403,16 @@ export class AstGrepClient {
 			if (result.status !== 0 && !(result.status === 1 && !stderr)) {
 				return {
 					valid: false,
-					error: stderr || `ast-grep validation failed with exit code ${result.status}`,
+					error:
+						stderr ||
+						`ast-grep validation failed with exit code ${result.status}`,
 				};
 			}
 			if (result.outputTruncated) {
-				return { valid: false, error: "ast-grep validation output was truncated" };
+				return {
+					valid: false,
+					error: "ast-grep validation output was truncated",
+				};
 			}
 			if (stderrHasError(stderr)) return { valid: false, error: stderr };
 			const warning = stderr || stdout || undefined;
@@ -427,7 +440,8 @@ export class AstGrepClient {
 		);
 		if (shapeError) return { valid: false, error: shapeError };
 
-		const language = /^\s*language:\s*([^\s#]+)/im.exec(ruleYaml)?.[1] ?? "typescript";
+		const language =
+			/^\s*language:\s*([^\s#]+)/im.exec(ruleYaml)?.[1] ?? "typescript";
 		const snippet = validationSnippetFor(language);
 		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-sg-rule-"));
 		try {
@@ -442,7 +456,7 @@ export class AstGrepClient {
 					valid: false,
 					error:
 						result.error ||
-							`ast-grep rule validation failed (${result.failure ?? "unknown failure"})`,
+						`ast-grep rule validation failed (${result.failure ?? "unknown failure"})`,
 				};
 			}
 			return { valid: true };

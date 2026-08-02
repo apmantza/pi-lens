@@ -73,9 +73,7 @@ describe("renderTurnSummaryMessage (#484)", () => {
 			description: "'x' is declared but never used",
 		});
 		collector.recordAutofix("/repo/a.ts", { tool: "ruff" });
-		const details = collector.consume(1, (fp) =>
-			fp.replace("/repo/", ""),
-		);
+		const details = collector.consume(1, (fp) => fp.replace("/repo/", ""));
 
 		const theme = makeFakeTheme();
 		const component = renderTurnSummaryMessage(

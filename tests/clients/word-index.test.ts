@@ -24,9 +24,7 @@ describe("splitIdentifier", () => {
 
 	it("splits PascalCase acronym boundaries", () => {
 		const parts = splitIdentifier("HTTPServerConfig");
-		expect(parts).toEqual(
-			expect.arrayContaining(["http", "server", "config"]),
-		);
+		expect(parts).toEqual(expect.arrayContaining(["http", "server", "config"]));
 	});
 
 	it("splits snake_case, kebab, and digit boundaries (dropping 1-char tokens)", () => {
@@ -52,7 +50,14 @@ describe("tokenizeLine", () => {
 	it("extracts identifiers and splits them, ignoring punctuation/operators", () => {
 		const tokens = tokenizeLine("  const userName = getUser(accountId);");
 		expect(tokens).toEqual(
-			expect.arrayContaining(["username", "user", "name", "getuser", "account", "id"]),
+			expect.arrayContaining([
+				"username",
+				"user",
+				"name",
+				"getuser",
+				"account",
+				"id",
+			]),
 		);
 		expect(tokens).not.toContain("const");
 	});
@@ -181,7 +186,9 @@ describe("searchWordIndex priors", () => {
 		const results = searchWordIndex(index, "render widget");
 		const source = results.find((result) => result.file === "src/widget.ts");
 		const vendor = results.find((result) => result.file === "vendor/widget.ts");
-		const generated = results.find((result) => result.file === "dist/widget.js");
+		const generated = results.find(
+			(result) => result.file === "dist/widget.js",
+		);
 
 		expect(results[0].file).toBe("src/widget.ts");
 		expect(source?.score).toBeGreaterThan(vendor?.score ?? 0);
@@ -234,7 +241,9 @@ describe("centralityFromReverseDeps", () => {
 
 	it("feeds searchWordIndex to reorder tied files", () => {
 		const ranked = searchWordIndex(index, "helper", {
-			centrality: centralityFromReverseDeps(index, { "src/b.ts": ["a", "b", "c"] }),
+			centrality: centralityFromReverseDeps(index, {
+				"src/b.ts": ["a", "b", "c"],
+			}),
 		});
 		expect(ranked[0].file).toBe("src/b.ts");
 	});

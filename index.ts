@@ -63,7 +63,10 @@ import { formatCascadeNeighborDiagnostics } from "./clients/cascade-format.js";
 import { convertLspDiagnostics } from "./clients/dispatch/utils/lsp-diagnostics.js";
 import { initLSPConfig } from "./clients/lsp/config.js";
 import { getLSPService, resetLSPService } from "./clients/lsp/index.js";
-import { sweepOrphans, sweepUntrackedOrphans } from "./clients/instance-reaper.js";
+import {
+	sweepOrphans,
+	sweepUntrackedOrphans,
+} from "./clients/instance-reaper.js";
 import {
 	deregisterInstance,
 	registerInstance,
@@ -169,7 +172,10 @@ function dbg(msg: string) {
 function getStableSessionId(ctx: unknown): string | undefined {
 	try {
 		return (
-			ctx as { sessionManager?: { getSessionId?: () => string } } | null | undefined
+			ctx as
+				| { sessionManager?: { getSessionId?: () => string } }
+				| null
+				| undefined
 		)?.sessionManager?.getSessionId?.();
 	} catch {
 		return undefined;
@@ -432,9 +438,10 @@ export default function (pi: ExtensionAPI) {
 	// value, so mutation-skip dbg lines can name it (e.g. "source=project")
 	// instead of a bare boolean. Threaded to pipeline/agent_end via the
 	// optional `getFlagSource` field — zero effect on getLensFlag itself.
-	function getLensFlagSource(name: string, editedFilePath?: string): ReturnType<
-		typeof resolvePiLensFlagWithSource
-	>["source"] {
+	function getLensFlagSource(
+		name: string,
+		editedFilePath?: string,
+	): ReturnType<typeof resolvePiLensFlagWithSource>["source"] {
 		const projectConfig = loadPiLensProjectConfig(runtime.projectRoot);
 		return resolvePiLensFlagWithSource(
 			name,
@@ -514,9 +521,15 @@ export default function (pi: ExtensionAPI) {
 	// hosts without registerMessageRenderer simply never get a renderer
 	// registered (the raw `content` fallback text still shows since sendMessage
 	// itself is guarded the same way at the emit site below).
-	if (typeof (pi as { registerMessageRenderer?: unknown }).registerMessageRenderer === "function") {
+	if (
+		typeof (pi as { registerMessageRenderer?: unknown })
+			.registerMessageRenderer === "function"
+	) {
 		try {
-			pi.registerMessageRenderer(TURN_SUMMARY_CUSTOM_TYPE, renderTurnSummaryMessage);
+			pi.registerMessageRenderer(
+				TURN_SUMMARY_CUSTOM_TYPE,
+				renderTurnSummaryMessage,
+			);
 		} catch (registerRendererErr) {
 			dbg(`turn-summary renderer registration failed: ${registerRendererErr}`);
 		}
@@ -1043,7 +1056,8 @@ export default function (pi: ExtensionAPI) {
 		},
 		{
 			name: "ast_grep_replace",
-			summary: "AST-aware structural code rewrite/refactor (ast-grep patterns).",
+			summary:
+				"AST-aware structural code rewrite/refactor (ast-grep patterns).",
 		},
 		{
 			name: "ast_grep_outline",
@@ -1149,9 +1163,7 @@ export default function (pi: ExtensionAPI) {
 				) {
 					const lazyNames = new Set(LAZY_TOOL_CATALOG.map((t) => t.name));
 					const active = piWithActiveTools.getActiveTools();
-					const initiallyActive = active.filter(
-						(name) => !lazyNames.has(name),
-					);
+					const initiallyActive = active.filter((name) => !lazyNames.has(name));
 					piWithActiveTools.setActiveTools(initiallyActive);
 				}
 			} catch (deactivateErr) {
@@ -1276,8 +1288,7 @@ export default function (pi: ExtensionAPI) {
 				rustClient,
 				deadCodeClients,
 			} = await loadBootstrapClients();
-			const bootstrapClientsDurationMs =
-				Date.now() - bootstrapClientsStartedAt;
+			const bootstrapClientsDurationMs = Date.now() - bootstrapClientsStartedAt;
 			const handlerEnteredAt = Date.now();
 			await handleSessionStart({
 				ctxCwd: ctx.cwd,
@@ -1864,16 +1875,19 @@ export default function (pi: ExtensionAPI) {
 		});
 	}
 	try {
-		(pi as any).on("agent_settled", (_event: unknown, ctx: { cwd?: string }) => {
-			if (!lensEnabled) return;
-			void runQuietWindow({
-				runtime,
-				dbg,
-				cwd: ctx?.cwd,
-			}).catch((err) => {
-				dbg(`quiet_window crashed: ${err}`);
-			});
-		});
+		(pi as any).on(
+			"agent_settled",
+			(_event: unknown, ctx: { cwd?: string }) => {
+				if (!lensEnabled) return;
+				void runQuietWindow({
+					runtime,
+					dbg,
+					cwd: ctx?.cwd,
+				}).catch((err) => {
+					dbg(`quiet_window crashed: ${err}`);
+				});
+			},
+		);
 	} catch (registerErr) {
 		dbg(`agent_settled registration failed (older pi host?): ${registerErr}`);
 	}
@@ -1901,7 +1915,9 @@ export default function (pi: ExtensionAPI) {
 		const shutdownClassification = noteSessionShutdown(ctx, stableSessionId);
 		if (shutdownClassification === "secondary") {
 			decrementSecondarySessionCount();
-			dbg("session_shutdown: concurrent secondary — skipping shared-infra teardown");
+			dbg(
+				"session_shutdown: concurrent secondary — skipping shared-infra teardown",
+			);
 			return;
 		}
 
@@ -1923,7 +1939,11 @@ export default function (pi: ExtensionAPI) {
 		// children when a parent dies) — they rely on stdin EOF, LSP
 		// `initialize.processId` self-watchdog compliance, and the #449/#472
 		// cross-process instance registry's orphan reaper as the backstop (#472).
-		resetLSPService({ fast: true, processExiting: true, reason: "session_shutdown" });
+		resetLSPService({
+			fast: true,
+			processExiting: true,
+			reason: "session_shutdown",
+		});
 	});
 
 	// --- Prompt-cache response-side usage observability (#1018) ---
@@ -1936,7 +1956,7 @@ export default function (pi: ExtensionAPI) {
 		// biome-ignore lint/suspicious/noExplicitAny: message_end overload absent on older host types
 		(pi as any).on?.(
 			"message_end",
-			(event: { message?: unknown } | unknown, ctx: unknown) => {
+			(event: unknown, ctx: unknown) => {
 				if (!lensEnabled) return;
 				try {
 					const sessionId = getStableSessionId(ctx);

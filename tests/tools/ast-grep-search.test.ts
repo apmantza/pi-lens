@@ -247,7 +247,9 @@ describe("ast_grep_search tool", () => {
 		it("rejects ambiguous nodeKind plus pattern or raw rule", async () => {
 			const searchWithRule = vi.fn();
 			const search = vi.fn();
-			const tool = createAstGrepSearchTool(makeClient({ searchWithRule, search }));
+			const tool = createAstGrepSearchTool(
+				makeClient({ searchWithRule, search }),
+			);
 			const patternConflict = await tool.execute(
 				"node-kind-pattern-conflict",
 				{ lang: "go", nodeKind: "call_expression", pattern: "foo()" },
@@ -1090,7 +1092,9 @@ describe("ast_grep_search tool", () => {
 
 		it("passes maxMatches above the formatter's historical 50-item default", async () => {
 			const matches = Array.from({ length: 60 }, (_, i) => matchAt("a.ts", i));
-			const formatMatches = vi.fn((page: unknown[]) => `formatted-${page.length}`);
+			const formatMatches = vi.fn(
+				(page: unknown[]) => `formatted-${page.length}`,
+			);
 			const tool = createAstGrepSearchTool(
 				makeClient({
 					search: vi.fn().mockResolvedValue({ matches }),
@@ -1105,7 +1109,10 @@ describe("ast_grep_search tool", () => {
 				{ cwd: "." },
 			);
 			expect(String(result.content[0].text)).toContain("formatted-60");
-			expect(result.details).toMatchObject({ matchCount: 60, totalMatches: 60 });
+			expect(result.details).toMatchObject({
+				matchCount: 60,
+				totalMatches: 60,
+			});
 			expect(formatMatches).toHaveBeenCalledWith(
 				expect.any(Array),
 				false,
