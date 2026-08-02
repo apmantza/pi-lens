@@ -16,6 +16,13 @@ describe("hasStructuralIntent", () => {
 		);
 	});
 
+	it("returns true for nodeKind and recursive descendant intent", () => {
+		expect(hasStructuralIntent({ nodeKind: "call_expression" })).toBe(true);
+		expect(
+			hasStructuralIntent({ hasDescendantKind: "await_expression" }),
+		).toBe(true);
+	});
+
 	it("returns true for hasKind", () => {
 		expect(hasStructuralIntent({ hasKind: "await_expression" })).toBe(true);
 	});
@@ -77,6 +84,49 @@ describe("synthesizeRule", () => {
 		expect(yaml).toContain("has:");
 		expect(yaml).toContain("kind: await_expression");
 		expect(yaml).not.toContain("stopBy");
+	});
+
+	it("supports a kind-only search and explicit recursive has", () => {
+		const yaml = synthesizeRule({
+			nodeKind: "call_expression",
+			lang: "typescript",
+			hasDescendantKind: "await_expression",
+		});
+		expect(yaml).toContain("kind: call_expression");
+		expect(yaml).toContain("kind: await_expression");
+		expect(yaml).toContain("stopBy: end");
+		expect(yaml).not.toContain("pattern:");
+	});
+
+	it("supports grammar-specific kinds across common languages", () => {
+		for (const [lang, kind] of [
+			["javascript", "call_expression"],
+			["typescript", "function_declaration"],
+			["python", "call"],
+			["go", "call_expression"],
+			["rust", "call_expression"],
+		] as const) {
+			const yaml = synthesizeRule({ nodeKind: kind, lang });
+			expect(yaml).toContain(`kind: ${kind}`);
+		}
+	});
+
+	it("rejects ambiguous pattern/kind and has constraints", () => {
+		expect(() =>
+			synthesizeRule({
+				pattern: "foo()",
+				nodeKind: "call_expression",
+				lang: "typescript",
+			}),
+		).toThrow(/exactly one/);
+		expect(() =>
+			synthesizeRule({
+				pattern: "foo()",
+				lang: "typescript",
+				hasKind: "identifier",
+				hasDescendantKind: "await_expression",
+			}),
+		).toThrow(/mutually exclusive/);
 	});
 
 	it("rejects unsafe node-kind structural parameters", () => {

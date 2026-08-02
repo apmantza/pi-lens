@@ -695,11 +695,12 @@ message: found
 		matches: AstGrepMatch[],
 		isDryRun = false,
 		showModeIndicator = false,
+		maxItems = 50,
 	): string {
 		return this.runner.formatMatches(
 			matches as SgMatch[],
 			isDryRun,
-			50,
+			maxItems,
 			showModeIndicator,
 		);
 	}

@@ -9,6 +9,7 @@ vi.mock("../../clients/latency-logger.js", () => ({
 import {
 	clearCachePrefixSession,
 	logCacheUsage,
+	observeCacheContext,
 	observeCachePrefix,
 	resetCachePrefixObservation,
 } from "../../clients/cache-observability.js";
@@ -90,6 +91,187 @@ describe("cache-observability — response-side usage (#1018)", () => {
 	});
 });
 
+describe("cache-observability — context observations (#1018 follow-up)", () => {
+	beforeEach(() => {
+		latencyEntries.length = 0;
+		resetCachePrefixObservation();
+	});
+
+	it("logs a no-injection observation with bounded structural metadata", () => {
+		observeCacheContext({
+			sessionId: "session-alpha",
+			turnIndex: 3,
+			injectionEnabled: false,
+			existingMessages: [{ role: "user", content: "private prompt" }],
+			prefixObservation: "baseline",
+		});
+
+		expect(latencyEntries).toHaveLength(1);
+		expect(latencyEntries[0]).toMatchObject({
+			phase: "cache_context",
+			metadata: {
+				version: 1,
+				sessionId: "session-alpha",
+				turnIndex: 3,
+				injectionEnabled: false,
+				injectionSources: [],
+				injectedMessageCount: 0,
+				injectedChars: 0,
+				injectedBytes: 0,
+				existingMessageCount: 1,
+				resultMessageCount: 1,
+				placement: "none",
+				prefixObservation: "baseline",
+				prefixBaseline: true,
+				firstMessageChanged: false,
+			},
+		});
+		expect(latencyEntries[0].metadata?.observationId).toMatch(/^ctx-/);
+	});
+
+	it.each([
+		["prepend", [], [{ role: "user", content: "injected" }]],
+		[
+			"insert-before-final",
+			[
+				{ role: "user", content: "old" },
+				{ role: "user", content: "prompt" },
+			],
+			[
+				{ role: "user", content: "old" },
+				{ role: "user", content: "injected" },
+				{ role: "user", content: "prompt" },
+			],
+		],
+		[
+			"append",
+			[
+				{ role: "user", content: "old" },
+				{ role: "toolResult", content: "result" },
+			],
+			[
+				{ role: "user", content: "old" },
+				{ role: "toolResult", content: "result" },
+				{ role: "user", content: "injected" },
+			],
+		],
+	] as const)(
+		"records %s placement and source",
+		(placement, existing, result) => {
+			observeCacheContext({
+				sessionId: "s",
+				turnIndex: 1,
+				injectionEnabled: true,
+				injectionSources: [
+					"session-guidance",
+					"turn-findings",
+					"test-findings",
+					"agent-nudge",
+				],
+				injectedMessages: [{ role: "user", content: "injected" }],
+				existingMessages: existing,
+				resultMessages: result,
+				placement,
+				prefixObservation: "unchanged",
+			});
+			const metadata = latencyEntries[0].metadata;
+			expect(metadata?.placement).toBe(placement);
+			expect(metadata?.injectionSources).toEqual([
+				"session-guidance",
+				"turn-findings",
+				"test-findings",
+				"agent-nudge",
+			]);
+			expect(metadata?.injectedMessageCount).toBe(1);
+			expect(metadata?.existingMessageCount).toBe(existing.length);
+			expect(metadata?.resultMessageCount).toBe(result.length);
+		},
+	);
+
+	it("distinguishes a prefix baseline from a later actual first-message change", () => {
+		const first = { role: "user", content: "first" };
+		const changed = { role: "user", content: "changed" };
+		const baseline = observeCachePrefix([first], 0, "s");
+		observeCacheContext({
+			sessionId: "s",
+			turnIndex: 0,
+			injectionEnabled: false,
+			existingMessages: [first],
+			prefixObservation: baseline,
+		});
+		const actualChange = observeCachePrefix([changed], 1, "s");
+		observeCacheContext({
+			sessionId: "s",
+			turnIndex: 1,
+			injectionEnabled: false,
+			existingMessages: [changed],
+			prefixObservation: actualChange,
+		});
+
+		const observations = latencyEntries.filter(
+			(entry) => entry.phase === "cache_context",
+		);
+		expect(observations[0].metadata).toMatchObject({
+			prefixObservation: "baseline",
+			prefixBaseline: true,
+		});
+		expect(observations[1].metadata).toMatchObject({
+			prefixObservation: "changed",
+			prefixBaseline: false,
+			firstMessageChanged: false,
+		});
+		// The existing signal remains the provider-independent local change signal.
+		expect(
+			latencyEntries.find(
+				(entry) =>
+					entry.phase === "cache_prefix_break" &&
+					entry.metadata?.baseline === undefined,
+			),
+		).toBeDefined();
+	});
+
+	it("caps counts and hashes without writing prompt or finding contents", () => {
+		const privateText = "DO_NOT_LOG_THIS_PROMPT_".repeat(20_000);
+		observeCacheContext({
+			sessionId: "s",
+			turnIndex: 2,
+			injectionEnabled: true,
+			injectionSources: ["turn-findings"],
+			injectedMessages: [{ role: "user", content: privateText }],
+			existingMessages: Array.from({ length: 70 }, (_, i) => ({
+				role: "user",
+				content: `m${i}`,
+			})),
+			resultMessages: [{ role: "user", content: privateText }],
+			placement: "prepend",
+		});
+
+		const entry = latencyEntries[0];
+		expect(entry.metadata?.injectedChars).toBe(16_384);
+		expect(entry.metadata?.injectedBytes).toBeLessThanOrEqual(65_536);
+		expect(entry.metadata?.injectedCountsCapped).toBe(true);
+		expect(entry.metadata?.sequenceHashTruncated).toBe(true);
+		expect(entry.metadata?.beforeSequenceHash).toMatch(/^[a-f0-9]{64}$/);
+		expect(entry.metadata?.afterSequenceHash).toMatch(/^[a-f0-9]{64}$/);
+		expect(JSON.stringify(entry.metadata)).not.toContain(
+			"DO_NOT_LOG_THIS_PROMPT",
+		);
+	});
+
+	it("adds only session/turn correlation to cache usage when the host has no request id", () => {
+		logCacheUsage(assistantMessage(), undefined, {
+			sessionId: "s",
+			turnIndex: 4,
+		});
+		expect(latencyEntries[0].metadata).toMatchObject({
+			sessionId: "s",
+			turnIndex: 4,
+			contextCorrelation: "session-turn-only",
+		});
+		expect(latencyEntries[0].metadata).not.toHaveProperty("requestId");
+	});
+});
+
 describe("cache-observability — request-side prefix stability (#1018)", () => {
 	beforeEach(() => {
 		latencyEntries.length = 0;
@@ -101,7 +283,12 @@ describe("cache-observability — request-side prefix stability (#1018)", () => 
 	const SID = "session-alpha";
 
 	it("logs a baseline on first observation, then a break when messages[0] changes", () => {
-		observeCachePrefix([first, { role: "assistant", content: "ok" }], 0, SID, "primary");
+		observeCachePrefix(
+			[first, { role: "assistant", content: "ok" }],
+			0,
+			SID,
+			"primary",
+		);
 		expect(latencyEntries).toHaveLength(1);
 		const baseline = latencyEntries[0];
 		expect(baseline.phase).toBe("cache_prefix_break");
@@ -113,7 +300,12 @@ describe("cache-observability — request-side prefix stability (#1018)", () => 
 		expect(typeof baselineHash).toBe("string");
 
 		// messages[0] changed within the SAME session -> one break record.
-		observeCachePrefix([changed, { role: "assistant", content: "ok" }], 1, SID, "primary");
+		observeCachePrefix(
+			[changed, { role: "assistant", content: "ok" }],
+			1,
+			SID,
+			"primary",
+		);
 		expect(latencyEntries).toHaveLength(2);
 		const brk = latencyEntries[1];
 		expect(brk).toMatchObject({
@@ -130,12 +322,24 @@ describe("cache-observability — request-side prefix stability (#1018)", () => 
 	});
 
 	it("logs NOTHING when messages[0] is identical across calls (same session)", () => {
-		observeCachePrefix([first, { role: "assistant", content: "turn 1" }], 0, SID);
+		observeCachePrefix(
+			[first, { role: "assistant", content: "turn 1" }],
+			0,
+			SID,
+		);
 		expect(latencyEntries).toHaveLength(1); // baseline only
 
 		// Same messages[0] content, different later messages / turnIndex — no break.
-		observeCachePrefix([first, { role: "assistant", content: "turn 2 differs" }], 1, SID);
-		observeCachePrefix([{ role: "user", content: "the original first user turn" }], 2, SID);
+		observeCachePrefix(
+			[first, { role: "assistant", content: "turn 2 differs" }],
+			1,
+			SID,
+		);
+		observeCachePrefix(
+			[{ role: "user", content: "the original first user turn" }],
+			2,
+			SID,
+		);
 		expect(latencyEntries).toHaveLength(1);
 	});
 
@@ -146,16 +350,21 @@ describe("cache-observability — request-side prefix stability (#1018)", () => 
 
 		// A concurrent subagent (different id) with a DIFFERENT messages[0] must NOT
 		// be compared against the parent — it gets its OWN baseline, no break.
-		observeCachePrefix([changed], 0, "session-subagent", "concurrent-secondary");
+		observeCachePrefix(
+			[changed],
+			0,
+			"session-subagent",
+			"concurrent-secondary",
+		);
 		expect(latencyEntries).toHaveLength(2);
 		const sub = latencyEntries[1];
 		expect(sub.metadata?.baseline).toBe(true);
 		expect(sub.metadata?.previousHash).toBeNull();
 		expect(sub.metadata?.sessionId).toBe("session-subagent");
 		expect(sub.metadata?.sessionRole).toBe("concurrent-secondary");
-		expect(
-			latencyEntries.some((e) => e.metadata?.baseline === undefined),
-		).toBe(false); // no break record emitted for either session
+		expect(latencyEntries.some((e) => e.metadata?.baseline === undefined)).toBe(
+			false,
+		); // no break record emitted for either session
 	});
 
 	it("keeps two concurrent sessions' baselines independent (no cross-contamination)", () => {

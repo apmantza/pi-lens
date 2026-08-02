@@ -821,8 +821,11 @@ const ALL_TOOLS = [
 		name: "pilens_ast_grep_search",
 		description:
 			"Structural (AST) code search via ast-grep — match by code structure, not " +
-			"text. Use meta-variables ($X) and AST context (e.g. 'console.log($MSG)', " +
-			"'function $NAME() { $$$ }'). Far more precise than grep for code shapes.",
+			"text. Use complete patterns with arguments (e.g. 'console.log($MSG)', " +
+			"'function $NAME($$$ARGS) { $$$BODY }'), or use nodeKind to find every " +
+			"node of a known grammar kind. Metavariables do not match text inside " +
+			"quoted string literals; use an exact string or grep for wildcard text. " +
+			"This is the same schema and synthesis path as the pi tool.",
 		inputSchema: schemaWithCwd(astGrepSearchTool.parameters),
 	},
 	{

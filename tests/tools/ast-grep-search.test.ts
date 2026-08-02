@@ -72,6 +72,16 @@ describe("ast_grep_search tool", () => {
 			expect(langSchema.enum).toContain("python");
 			expect(langSchema.enum).toContain("rust");
 		});
+
+		it("advertises nodeKind and recursive hasDescendantKind", () => {
+			const tool = createAstGrepSearchTool(makeClient());
+			const properties = (
+				tool.parameters as { properties: Record<string, unknown> }
+			).properties;
+			expect(properties).toHaveProperty("nodeKind");
+			expect(properties).toHaveProperty("hasDescendantKind");
+			expect((properties.paths as { maxItems?: number }).maxItems).toBe(200);
+		});
 	});
 
 	describe("lang double-quote stripping", () => {
@@ -213,6 +223,75 @@ describe("ast_grep_search tool", () => {
 			expect(calledYaml).toContain("inside:");
 			expect(calledYaml).toContain("method_definition");
 			expect(calledYaml).toContain("stopBy: end");
+		});
+
+		it("supports a language-agnostic nodeKind search through YAML synthesis", async () => {
+			const searchWithRule = vi
+				.fn()
+				.mockResolvedValue({ matches: [], totalMatches: 0 });
+			const tool = createAstGrepSearchTool(makeClient({ searchWithRule }));
+			await tool.execute(
+				"node-kind",
+				{ lang: "python", nodeKind: "call", hasDescendantKind: "await" },
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+			const yaml = searchWithRule.mock.calls[0][0] as string;
+			expect(yaml).toContain("language: Python");
+			expect(yaml).toContain("kind: call");
+			expect(yaml).toContain("has:");
+			expect(yaml).toContain("kind: await");
+		});
+
+		it("rejects ambiguous nodeKind plus pattern or raw rule", async () => {
+			const searchWithRule = vi.fn();
+			const search = vi.fn();
+			const tool = createAstGrepSearchTool(makeClient({ searchWithRule, search }));
+			const patternConflict = await tool.execute(
+				"node-kind-pattern-conflict",
+				{ lang: "go", nodeKind: "call_expression", pattern: "foo()" },
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+			const ruleConflict = await tool.execute(
+				"node-kind-rule-conflict",
+				{
+					lang: "rust",
+					nodeKind: "call_expression",
+					rule: "id: r\nlanguage: Rust\nrule:\n  kind: call_expression",
+				},
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+			expect(String(patternConflict.content[0].text)).toContain(
+				"cannot be combined with pattern",
+			);
+			expect(String(ruleConflict.content[0].text)).toContain(
+				"cannot be combined with rule",
+			);
+			expect(search).not.toHaveBeenCalled();
+		});
+
+		it("rejects explicit path lists above the bounded cap", async () => {
+			const search = vi.fn();
+			const tool = createAstGrepSearchTool(makeClient({ search }));
+			const result = await tool.execute(
+				"too-many-paths",
+				{
+					lang: "typescript",
+					pattern: "foo()",
+					paths: Array.from({ length: 201 }, (_, index) => `src/${index}.ts`),
+				},
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+			expect(result.isError).toBe(true);
+			expect(String(result.content[0].text)).toContain("at most 200");
+			expect(search).not.toHaveBeenCalled();
 		});
 
 		it("routes to normal search when no structural params", async () => {
@@ -952,6 +1031,32 @@ describe("ast_grep_search tool", () => {
 			expect(result.details).toMatchObject({ matchCount: 2, hasMore: true });
 			// pagination step follows maxMatches, not the default 50
 			expect(String(result.content[0].text)).toContain("skip=2");
+		});
+
+		it("passes maxMatches above the formatter's historical 50-item default", async () => {
+			const matches = Array.from({ length: 60 }, (_, i) => matchAt("a.ts", i));
+			const formatMatches = vi.fn((page: unknown[]) => `formatted-${page.length}`);
+			const tool = createAstGrepSearchTool(
+				makeClient({
+					search: vi.fn().mockResolvedValue({ matches }),
+					formatMatches,
+				}),
+			);
+			const result = await tool.execute(
+				"m2-large",
+				{ pattern: "foo($X)", lang: "typescript", maxMatches: 60 },
+				new AbortController().signal,
+				null,
+				{ cwd: "." },
+			);
+			expect(String(result.content[0].text)).toContain("formatted-60");
+			expect(result.details).toMatchObject({ matchCount: 60, totalMatches: 60 });
+			expect(formatMatches).toHaveBeenCalledWith(
+				expect.any(Array),
+				false,
+				false,
+				60,
+			);
 		});
 
 		it("clamps maxMatches below 1 up to 1", async () => {

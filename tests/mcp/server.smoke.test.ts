@@ -77,6 +77,13 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 			| { inputSchema: { properties?: Record<string, unknown> } }
 			| undefined;
 		expect(diagnosticsTool?.inputSchema.properties).toHaveProperty("paths");
+		const astSearchTool = tools.find(
+			(t) => t.name === "pilens_ast_grep_search",
+		) as { inputSchema: { properties?: Record<string, unknown> } } | undefined;
+		expect(astSearchTool?.inputSchema.properties).toHaveProperty("nodeKind");
+		expect(astSearchTool?.inputSchema.properties).toHaveProperty(
+			"hasDescendantKind",
+		);
 	}, 25_000);
 
 	it("does not advertise rebuild from an installed package", async () => {

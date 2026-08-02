@@ -14,9 +14,11 @@ share) — current exceptions: `ast_grep_outline` and `ast_grep_dump`
 are registered but
 inactive by default; the model activates the ones it needs via the always-active
 loader tool `pi_lens_activate_tools`, per pi's dynamic-tool-loading API
-(`pi.setActiveTools`/`pi.getActiveTools`). Feature-detected: on hosts without
-that API, the five situational tools fall back to being statically active,
-exactly as before (`tools/activate-tools.ts`, wired in `index.ts`).
+(`pi.setActiveTools`/`pi.getActiveTools`). The loader explicitly reports
+"Available starting next turn"; do not retry the tool in the same turn.
+Feature-detected: on hosts without that API, the six situational tools fall back
+to being statically active, exactly as before (`tools/activate-tools.ts`, wired
+in `index.ts`).
 
 ## Per-edit
 
@@ -40,13 +42,22 @@ exactly as before (`tools/activate-tools.ts`, wired in `index.ts`).
 - **`ast_grep_search`** — AST-aware structural search across ~40 languages via
   the `sg` CLI. Supports metavariables (`$VAR`, `$$$ARGS`), `strictness`
   modes (`smart`, `relaxed`, `ast`, `cst`, `signature`, `template`), structural
-  constraints (`insideKind`, `hasKind`, `follows`, `precedes`), raw YAML `rule`
-  passthrough, `validateOnly` for compile/shape checks without scanning project
-  files, and pagination via `skip` / `maxMatches` (per-call cap, default 50,
-  max 200; also sets the pagination step). `groupByFile: true` renders a compact
-  one-line-per-file distribution (`L<line>:<col>` locations) instead of each
-  match body — for high-volume searches. `pattern` is optional when a `rule` is
-  given.
+  constraints (`insideKind`, `hasKind`, `hasDescendantKind`, `follows`,
+  `precedes`), raw YAML `rule` passthrough, `validateOnly` for compile/shape
+  checks without scanning project files, and pagination via `skip` / `maxMatches`
+  (per-call cap, default 50, max 200; also sets the pagination step).
+  `nodeKind` is an expert grammar-specific escape hatch: it finds every node of
+  the exact kind used by the target grammar. Node kinds are not universal across
+  languages; use `ast_grep_dump` to discover the kind in the target language. It is mutually exclusive with `pattern` and `rule`.
+  `hasKind` retains ast-grep's immediate-child semantics; use
+  `hasDescendantKind` for an explicit recursive descendant search. A future
+  canonical `find`/`query` facade (call/function/import/etc.) should map to
+  this same synthesized YAML path, with per-language templates and a clear
+  unsupported-concept error — it is intentionally not a second search engine
+  in this patch.
+  `groupByFile: true` renders a compact one-line-per-file distribution
+  (`L<line>:<col>` locations) instead of each match body — for high-volume
+  searches. `pattern` is optional when a `rule` or `nodeKind` is given.
   Results include `details.matchLocations[]` — each hit carries a ready
   `readSlice` (`path`/`offset`/`limit`) for a bounded context read; zero-match
   results include a `suggestedDump` hint pointing at `ast_grep_dump`.
