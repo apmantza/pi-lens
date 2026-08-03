@@ -105,7 +105,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.10",
-    "@earendil-works/pi-coding-agent": "^0.82.1",
+    "@earendil-works/pi-coding-agent": "^0.83.0",
     "@types/node": "^26.0.0",
     "@types/pidusage": "^2.0.5",
     "@vitest/coverage-v8": "^4.1.5",
