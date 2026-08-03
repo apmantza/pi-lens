@@ -85,7 +85,7 @@
   "dependencies": {
     "@ast-grep/cli": "^0.45.0",
     "@ast-grep/napi": "^0.45.0",
-    "@earendil-works/pi-tui": "^0.82.1",
+    "@earendil-works/pi-tui": "^0.83.0",
     "js-yaml": "^5.2.2",
     "minimatch": "^10.2.5",
     "pidusage": "^4.0.1",
