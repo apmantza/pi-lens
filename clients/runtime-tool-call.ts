@@ -35,6 +35,8 @@ import {
 	tryExpandRead,
 } from "./read-expansion.js";
 import {
+	boundedIndexesForCount,
+	createReadGuardEditBatchSummary,
 	getReadGuardCorrelationId,
 	logReadGuardEvent,
 } from "./read-guard-logger.js";
@@ -288,10 +290,49 @@ export async function handleToolCall(
 	} = deps;
 
 	const readGuardCorrelationId = getReadGuardCorrelationId(event);
+	let filePath: string | undefined;
 	const logToolReadGuardEvent = (
 		entry: Parameters<typeof logReadGuardEvent>[0],
 	): void => logReadGuardEvent({ ...entry, correlationId: readGuardCorrelationId });
 	const toolName = (event as { toolName?: string }).toolName ?? "";
+	const editInputForTelemetry = (event as { input?: unknown }).input as
+		| { edits?: unknown[] }
+		| undefined;
+	const requestedEditIndexes =
+		toolName === "write"
+			? [0]
+			: Array.isArray(editInputForTelemetry?.edits)
+				? boundedIndexesForCount(editInputForTelemetry.edits.length)
+				: [0];
+	const logBlockedEditSummary = (source: string): void =>
+		logToolReadGuardEvent({
+				event: "edit_batch_summary",
+				filePath: filePath ?? "",
+				metadata: {
+					tool: toolName,
+					source,
+					editBatchSummary: createReadGuardEditBatchSummary({
+						requestedIndexes: requestedEditIndexes,
+						requestedTotal:
+							toolName === "write"
+								? 1
+								: Array.isArray(editInputForTelemetry?.edits)
+									? editInputForTelemetry.edits.length
+									: 1,
+						rejectedReasons: requestedEditIndexes.map((index) => ({
+							index,
+							code: "preflight_blocked" as const,
+						})),
+						rejectedTotal:
+							toolName === "write"
+								? 1
+								: Array.isArray(editInputForTelemetry?.edits)
+									? editInputForTelemetry.edits.length
+									: 1,
+						terminalStatus: "blocked",
+					}),
+				},
+			});
 	if (!lensEnabled) return;
 	if (
 		getFlag("lens-guard") &&
@@ -311,7 +352,7 @@ export async function handleToolCall(
 	}
 
 	const rawFilePath = getToolCallRawFilePath(toolName, event);
-	const filePath = resolveToolCallFilePath(
+	filePath = resolveToolCallFilePath(
 		rawFilePath,
 		ctx.cwd,
 		runtime.projectRoot,
@@ -976,25 +1017,34 @@ export async function handleToolCall(
 									formatBehaviorWarnings: (warnings) =>
 										agentBehaviorClient.formatWarnings(warnings as any),
 								});
+								if (result?.isError) {
+									throw new Error("post-edit pipeline rejected synthetic partial apply");
+								}
 								return result?.content
 									?.map((item) => item.text)
 									.filter((text): text is string => !!text)
 									.join("\n\n");
 							},
 						});
-						if (
-							partial.appliedCount > 0 &&
-							partial.postEditStatus !== "failed"
-						) {
+						if (partial.postEditStatus === "failed") {
+							return {
+								block: true,
+								reason: `${preflightError}\n\nPartial apply pipeline failed after ${partial.appliedCount} edit${partial.appliedCount === 1 ? "" : "s"} committed.`,
+							};
+						}
+						if (partial.appliedCount > 0) {
 							logToolReadGuardEvent({
 								event: "edit_partial_apply",
 								sessionId: runtime.telemetrySessionId,
 								filePath,
 								metadata: {
 									appliedCount: partial.appliedCount,
+									appliedTotal: partial.appliedTotal,
 									appliedIndices: partial.appliedIndices,
 									skippedCount: partial.skippedCount ?? 0,
+									skippedTotal: partial.skippedTotal ?? 0,
 									skippedIndices: partial.skippedIndices ?? "",
+									indexesTruncated: partial.indexesTruncated ?? false,
 									editBatchSummary: partial.summary,
 									routedThroughPostEditPipeline: true,
 								},
@@ -1012,6 +1062,7 @@ export async function handleToolCall(
 						// fall through to full block
 					}
 				}
+				if (!editBatchSummary) logBlockedEditSummary("preflight");
 				return { block: true, reason: preflightError };
 			}
 			logToolReadGuardEvent({
@@ -1068,9 +1119,11 @@ export async function handleToolCall(
 					});
 					// Relocation applied — let the re-targeted edit proceed.
 				} else if (verdict.action === "block") {
+					logBlockedEditSummary("range_relocated_blocked");
 					return { block: true, reason: verdict.reason };
 				}
 			} else if (verdict.action === "block") {
+				logBlockedEditSummary("read_guard_blocked");
 				return {
 					block: true,
 					reason: verdict.reason,

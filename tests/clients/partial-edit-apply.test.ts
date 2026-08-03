@@ -147,16 +147,40 @@ describe("applyPartiallyApplicableEdits", () => {
 			expect(result.skippedIndices).toBe("edits[0]");
 			expect(result.summary).toMatchObject({
 				requestedCount: 3,
+				requestedTotal: 3,
 				requestedIndexes: [0, 1, 2],
 				appliedCount: 2,
+				appliedTotal: 2,
 				appliedIndexes: [1, 2],
+				participantIds: ["tool-42"],
 				commitStatus: "committed",
 				postEditStatus: "not_run",
+				terminalStatus: "success",
 			});
 			expect(JSON.stringify(result.summary)).not.toMatch(/const|present|never/);
 		} finally {
 			env.cleanup();
 		}
+	});
+
+	it("keeps true batch totals beside bounded index samples", () => {
+		const summary = createReadGuardEditBatchSummary({
+			requestedIndexes: Array.from({ length: 150 }, (_, index) => index),
+			resolvedIndexes: Array.from({ length: 150 }, (_, index) => index),
+			appliedIndexes: Array.from({ length: 150 }, (_, index) => index),
+			participantIds: Array.from({ length: 150 }, (_, index) => `call-${index}`),
+			requestedTotal: 150,
+			resolvedTotal: 150,
+			appliedTotal: 150,
+			participantTotal: 150,
+		});
+
+		expect(summary.requestedIndexes).toHaveLength(100);
+		expect(summary.requestedTotal).toBe(150);
+		expect(summary.appliedTotal).toBe(150);
+		expect(summary.participantIds).toHaveLength(100);
+		expect(summary.indexesTruncated).toBe(true);
+		expect(summary.participantIdsTruncated).toBe(true);
 	});
 
 	it("distinguishes a committed write from a failed post-edit pipeline", async () => {

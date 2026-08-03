@@ -20,6 +20,7 @@ import { isExternalOrVendorFile } from "./path-utils.js";
 import { resolveLanguageRootForFile } from "./language-profile.js";
 import { logLatency } from "./latency-logger.js";
 import {
+	boundedIndexesForCount,
 	createReadGuardEditBatchSummary,
 	getReadGuardCorrelationId,
 	logReadGuardEvent,
@@ -43,6 +44,8 @@ interface ToolResultEvent {
 	toolCallId?: string | number;
 	callId?: string | number;
 	requestId?: string | number;
+	/** Host tool_result status; distinct from pi-lens PipelineResult.isError. */
+	isError?: boolean;
 	input: unknown;
 	details?: unknown;
 	content: Array<{ type: string; text?: string }>;
@@ -80,6 +83,9 @@ interface ToolResultDeps {
 	 * Do not pass from external callers.
 	 */
 	_bypassDebounce?: boolean;
+	/** Internal bounded provenance carried through debounce/coalescing. */
+	_telemetryParticipantIds?: string[];
+	_telemetryParticipantTotal?: number;
 }
 
 function parseDiffRanges(diff: string): { start: number; end: number }[] {
@@ -116,7 +122,13 @@ function parseDiffRanges(diff: string): { start: number; end: number }[] {
 // The pi framework can emit one tool_result per edit hunk; those events often
 // observe the same final file content. Deduping by file alone is unsafe because
 // a later same-turn edit to the same file must still run the pipeline.
-const inFlightPipelines = new Map<string, Promise<unknown>>();
+interface InFlightPipeline {
+	promise: Promise<unknown>;
+	participantIds: string[];
+	participantTotal: number;
+}
+
+const inFlightPipelines = new Map<string, InFlightPipeline>();
 const lastAnalyzedStateByFile = new Map<
 	string,
 	{ turnIndex: number; stateHash: string }
@@ -206,7 +218,15 @@ function scheduleDebounced(
 	const existing = debouncedPipelines.get(filePath);
 	if (existing) {
 		clearTimeout(existing.timer);
-		existing.latestDeps = deps;
+		const incomingId =
+			deps._telemetryParticipantIds?.[0] ?? getReadGuardCorrelationId(deps.event);
+		const priorIds = existing.latestDeps._telemetryParticipantIds ?? [];
+		existing.latestDeps = {
+			...deps,
+			_telemetryParticipantIds: [...priorIds, incomingId].slice(0, 100),
+			_telemetryParticipantTotal:
+				(existing.latestDeps._telemetryParticipantTotal ?? priorIds.length) + 1,
+		};
 		existing.coalescedCount += 1;
 		existing.timer = setTimeout(() => {
 			debouncedPipelines.delete(filePath);
@@ -232,6 +252,8 @@ function scheduleDebounced(
 		resolveFn = res;
 		rejectFn = rej;
 	});
+	const initialParticipantIds =
+		deps._telemetryParticipantIds ?? [getReadGuardCorrelationId(deps.event)];
 	const entry: DebouncedEntry = {
 		timer: setTimeout(() => {
 			debouncedPipelines.delete(filePath);
@@ -243,7 +265,12 @@ function scheduleDebounced(
 		promise,
 		resolve: resolveFn,
 		reject: rejectFn,
-		latestDeps: deps,
+		latestDeps: {
+			...deps,
+			_telemetryParticipantIds: initialParticipantIds.slice(0, 100),
+			_telemetryParticipantTotal:
+				deps._telemetryParticipantTotal ?? initialParticipantIds.length,
+		},
 		scheduledAt: Date.now(),
 		coalescedCount: 1,
 	};
@@ -261,12 +288,14 @@ function getFileStateHash(filePath: string): string {
 	}
 }
 
-function getRequestedEditIndexes(event: ToolResultEvent): number[] {
-	if (event.toolName === "write") return [0];
+function getRequestedEditCount(event: ToolResultEvent): number {
+	if (event.toolName === "write") return 1;
 	const edits = (event.input as { edits?: unknown[] } | undefined)?.edits;
-	return Array.isArray(edits) && edits.length > 0
-		? edits.map((_, index) => index).slice(0, 100)
-		: [0];
+	return Array.isArray(edits) && edits.length > 0 ? edits.length : 1;
+}
+
+function getRequestedEditIndexes(event: ToolResultEvent): number[] {
+	return boundedIndexesForCount(getRequestedEditCount(event));
 }
 
 function sourceForToolName(
@@ -428,6 +457,41 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	const resultDetails = (event.details ?? {}) as Record<string, unknown>;
 	const isPartialApplyResult = resultDetails.piLensPartialApply === true;
 	const requestedEditIndexes = getRequestedEditIndexes(event);
+	const requestedEditTotal = getRequestedEditCount(event);
+	const participantIds = [
+		...(deps._telemetryParticipantIds ?? []),
+		readGuardCorrelationId,
+	].slice(0, 100);
+	const participantTotal =
+		(deps._telemetryParticipantTotal ?? 0) +
+		(deps._telemetryParticipantIds?.includes(readGuardCorrelationId) ? 0 : 1);
+	const hostToolResultFailed =
+		event.isError === true || resultDetails.isError === true;
+	if (hostToolResultFailed) {
+		logReadGuardEvent({
+			event: "edit_batch_summary",
+			correlationId: readGuardCorrelationId,
+			filePath,
+			metadata: {
+				tool: event.toolName,
+				source: "host_tool_result",
+				editBatchSummary: createReadGuardEditBatchSummary({
+					requestedIndexes: requestedEditIndexes,
+					requestedTotal: requestedEditTotal,
+					rejectedReasons: requestedEditIndexes.map((index) => ({
+						index,
+						code: "write_failed" as const,
+					})),
+					rejectedTotal: requestedEditTotal,
+					participantIds: [readGuardCorrelationId],
+					participantTotal: 1,
+					commitStatus: "failed",
+					terminalStatus: "failed",
+				}),
+			},
+		});
+		return { content: event.content, isError: true };
+	}
 
 	// Coalesce sequential edits to the same file into one pipeline run against
 	// the final state. Only the debounce-fired call (with _bypassDebounce=true)
@@ -435,7 +499,11 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	if (!deps._bypassDebounce) {
 		const debounceMs = getDebounceMs();
 		if (debounceMs > 0) {
-			return scheduleDebounced(filePath, debounceMs, deps);
+			return scheduleDebounced(filePath, debounceMs, {
+				...deps,
+				_telemetryParticipantIds: [readGuardCorrelationId],
+				_telemetryParticipantTotal: 1,
+			});
 		}
 	}
 
@@ -472,9 +540,15 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	// Deduplicate concurrent calls for the same final file state (pi can fire one
 	// tool_result per edit hunk). Do not dedupe by file alone: a distinct later
 	// same-turn edit to this file must still be analyzed.
-	if (inFlightPipelines.has(pipelineDedupeKey)) {
+	const inFlight = inFlightPipelines.get(pipelineDedupeKey);
+	if (inFlight) {
 		dbg(`tool_result: skipping duplicate concurrent state for ${filePath}`);
-		await inFlightPipelines.get(pipelineDedupeKey);
+		const duplicateId = readGuardCorrelationId;
+		if (inFlight.participantIds.length < 100) {
+			inFlight.participantIds.push(duplicateId);
+		}
+		inFlight.participantTotal += 1;
+		await inFlight.promise;
 		return;
 	}
 
@@ -640,7 +714,12 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			fixedThisTurn: runtime.fixedThisTurn,
 		},
 	);
-	inFlightPipelines.set(pipelineDedupeKey, pipelinePromise);
+	const pipelineTelemetry: InFlightPipeline = {
+		promise: pipelinePromise,
+		participantIds: [...new Set(participantIds)].slice(0, 100),
+		participantTotal,
+	};
+	inFlightPipelines.set(pipelineDedupeKey, pipelineTelemetry);
 	try {
 		result = await pipelinePromise;
 	} catch (pipelineErr) {
@@ -663,10 +742,16 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 				tool: event.toolName,
 				editBatchSummary: createReadGuardEditBatchSummary({
 					requestedIndexes: requestedEditIndexes,
+					requestedTotal: requestedEditTotal,
 					resolvedIndexes: requestedEditIndexes,
+					resolvedTotal: requestedEditTotal,
 					appliedIndexes: requestedEditIndexes,
+					appliedTotal: requestedEditTotal,
+					participantIds: pipelineTelemetry.participantIds,
+					participantTotal: pipelineTelemetry.participantTotal,
 					commitStatus: "committed",
 					postEditStatus: "failed",
+					terminalStatus: "failed",
 					durationMs: Date.now() - toolResultStart,
 				}),
 			},
@@ -685,10 +770,11 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		});
 
 		const notice = runtime.formatPipelineCrashNotice(filePath, pipelineErr);
-		if (!notice) return;
-
 		return {
-			content: [...event.content, { type: "text", text: notice }],
+			content: notice
+				? [...event.content, { type: "text", text: notice }]
+				: event.content,
+			isError: true,
 		};
 	} finally {
 		inFlightPipelines.delete(pipelineDedupeKey);
@@ -716,10 +802,16 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 				tool: event.toolName,
 				editBatchSummary: createReadGuardEditBatchSummary({
 					requestedIndexes: requestedEditIndexes,
+					requestedTotal: requestedEditTotal,
 					resolvedIndexes: requestedEditIndexes,
+					resolvedTotal: requestedEditTotal,
 					appliedIndexes: requestedEditIndexes,
+					appliedTotal: requestedEditTotal,
+					participantIds: pipelineTelemetry.participantIds,
+					participantTotal: pipelineTelemetry.participantTotal,
 					commitStatus: "committed",
 					postEditStatus,
+					terminalStatus: postEditStatus === "failed" ? "failed" : "success",
 					durationMs: Date.now() - toolResultStart,
 				}),
 			},

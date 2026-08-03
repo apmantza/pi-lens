@@ -6,6 +6,7 @@ import {
 } from "./host-edit-normalize.js";
 import type { PartiallyApplicableEdit } from "./partial-edit-apply.js";
 import {
+	boundedIndexesForCount,
 	createReadGuardEditBatchSummary,
 	logReadGuardEvent,
 	type EditBatchRejection,
@@ -225,12 +226,15 @@ function resolveHashlineEditInput(
 
 	if (errors.length > 0) {
 		const editBatchSummary = createReadGuardEditBatchSummary({
-			requestedIndexes: operations.map((_, index) => index),
-			rejectedReasons: operations.map((_, index) => ({
+			requestedIndexes: boundedIndexesForCount(operations.length),
+			requestedTotal: operations.length,
+			rejectedReasons: boundedIndexesForCount(operations.length).map((index) => ({
 				index,
 				code: "preflight_blocked" as const,
 			})),
+			rejectedTotal: operations.length,
 			durationMs: 0,
+			terminalStatus: "blocked",
 		});
 		if (filePath) {
 			logReadGuardEvent({
@@ -269,6 +273,7 @@ function resolveHashlineEditInput(
 	if (filePath) {
 		logReadGuardEvent({
 			event: "touched_lines_detected",
+			correlationId,
 			sessionId,
 			filePath,
 			metadata: {
@@ -372,7 +377,7 @@ function resolveOldTextEdits(
 	correlationId?: string,
 ): GuardLineResult {
 	const startedAt = Date.now();
-	const requestedIndexes = edits.map((edit, index) => edit.originalIndex ?? index);
+	const requestedIndexes: number[] = [];
 	const logBatchEvent = (
 		entry: Parameters<typeof logReadGuardEvent>[0],
 	): void => logReadGuardEvent({ ...entry, correlationId });
@@ -424,6 +429,7 @@ function resolveOldTextEdits(
 	for (let i = 0; i < edits.length; i++) {
 		const oldText = edits[i].oldText;
 		const editIndex = edits[i].originalIndex ?? i;
+		if (requestedIndexes.length < 100) requestedIndexes.push(editIndex);
 		if (!oldText) continue;
 
 		let needle = normalizeContent(oldText);
@@ -455,9 +461,13 @@ function resolveOldTextEdits(
 		if (occurrenceLines.length === 0) {
 			const preview = oldText.trimStart().substring(0, 60).replace(/\n/g, "↵");
 			failureKinds.push("oldtext_not_found");
-			failedEditIndexes.push(editIndex);
-			rejectedReasons.push({ index: editIndex, code: "oldtext_not_found" });
-			failedOldTextPreviews.push(preview);
+			if (failedEditIndexes.length < 100) {
+				failedEditIndexes.push(editIndex);
+				failedOldTextPreviews.push(preview);
+			}
+			if (rejectedReasons.length < 100) {
+				rejectedReasons.push({ index: editIndex, code: "oldtext_not_found" });
+			}
 			const failCount = trackOldTextFailure(filePath, preview);
 			if (failCount > maxFailCount) maxFailCount = failCount;
 			let errorMsg = `edits[${editIndex}].oldText ("${preview}") was not found in the current file content.`;
@@ -548,7 +558,7 @@ function resolveOldTextEdits(
 			const startLine = occurrenceLines[0];
 			const endLine = startLine + needle.split("\n").length - 1;
 			resolvedRanges.push([startLine, endLine]);
-			resolvedIndexes.push(editIndex);
+			if (resolvedIndexes.length < 100) resolvedIndexes.push(editIndex);
 			const applyOldText = exactOldTextForApply(rawContentLf, oldText, needle);
 			if (applyOldText !== undefined) {
 				passedEdits.push({
@@ -571,9 +581,13 @@ function resolveOldTextEdits(
 		} else {
 			const preview = oldText.trimStart().substring(0, 60).replace(/\n/g, "↵");
 			failureKinds.push("oldtext_duplicate");
-			failedEditIndexes.push(editIndex);
-			rejectedReasons.push({ index: editIndex, code: "oldtext_duplicate" });
-			failedOldTextPreviews.push(preview);
+			if (failedEditIndexes.length < 100) {
+				failedEditIndexes.push(editIndex);
+				failedOldTextPreviews.push(preview);
+			}
+			if (rejectedReasons.length < 100) {
+				rejectedReasons.push({ index: editIndex, code: "oldtext_duplicate" });
+			}
 			const matchSpanLines = needle.split("\n").length;
 			const contextBlock = formatOccurrenceContext(
 				content,
@@ -591,8 +605,8 @@ function resolveOldTextEdits(
 					tool: "edit",
 					source: "edits_without_ranges",
 					editIndex,
+					occurrenceLines: occurrenceLines.slice(0, 100),
 					occurrenceCount: occurrenceLines.length,
-					occurrenceLines,
 					oldTextPreview: preview,
 				},
 			});
@@ -610,9 +624,13 @@ function resolveOldTextEdits(
 		const uniqueFailureKinds = [...new Set(failureKinds)];
 		const editBatchSummary = createReadGuardEditBatchSummary({
 			requestedIndexes,
+			requestedTotal: edits.length,
 			resolvedIndexes,
+			resolvedTotal: resolvedRanges.length,
 			rejectedReasons,
+			rejectedTotal: Math.max(0, oldTextEditCount - resolvedRanges.length),
 			durationMs: Date.now() - startedAt,
+			terminalStatus: "blocked",
 		});
 		logBatchEvent({
 			event: "edit_preflight_blocked",
@@ -659,7 +677,13 @@ function resolveOldTextEdits(
 	}
 
 	if (resolvedRanges.length === 0) {
-		logReadGuardEvent({
+		const editBatchSummary = createReadGuardEditBatchSummary({
+			requestedIndexes,
+			requestedTotal: edits.length,
+			rejectedTotal: oldTextEditCount,
+			terminalStatus: "blocked",
+		});
+		logBatchEvent({
 			event: "touched_lines_missing",
 			sessionId,
 			filePath,
@@ -669,7 +693,12 @@ function resolveOldTextEdits(
 				editCount: edits.length,
 			},
 		});
-		return { touchedLines: undefined };
+		logBatchEvent({
+			event: "edit_batch_summary",
+			filePath,
+			metadata: { tool: "edit", editBatchSummary },
+		});
+		return { touchedLines: undefined, editBatchSummary };
 	}
 
 	const starts = resolvedRanges.map(([s]) => s);
@@ -693,8 +722,11 @@ function resolveOldTextEdits(
 	});
 	const editBatchSummary = createReadGuardEditBatchSummary({
 		requestedIndexes,
+		requestedTotal: edits.length,
 		resolvedIndexes,
+		resolvedTotal: resolvedRanges.length,
 		durationMs: Date.now() - startedAt,
+		terminalStatus: "success",
 	});
 	return {
 		touchedLines,
@@ -1163,6 +1195,7 @@ export function getTouchedLinesForGuard(
 			if (filePath) {
 				logReadGuardEvent({
 					event: "touched_lines_detected",
+					correlationId,
 					sessionId,
 					filePath,
 					metadata: {
@@ -1237,6 +1270,7 @@ export function getTouchedLinesForGuard(
 			if (filePath) {
 				logReadGuardEvent({
 					event: "touched_lines_detected",
+					correlationId,
 					sessionId,
 					filePath,
 					metadata: {
@@ -1258,6 +1292,7 @@ export function getTouchedLinesForGuard(
 			const topLevelKeys = Object.keys(editInput as Record<string, unknown>);
 			logReadGuardEvent({
 				event: "touched_lines_missing",
+				correlationId,
 				sessionId,
 				filePath,
 				metadata: {
@@ -1284,6 +1319,7 @@ export function getTouchedLinesForGuard(
 		if (filePath) {
 			logReadGuardEvent({
 				event: "touched_lines_detected",
+				correlationId,
 				sessionId,
 				filePath,
 				metadata: {
