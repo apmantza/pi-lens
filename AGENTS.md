@@ -958,6 +958,10 @@ Mixing different capture names in one `[...]` block causes tree-sitter to silent
 
 **Post-filters** (`post_filter` in YAML, `applyPostFilter` in `clients/tree-sitter-client.ts`): evaluated after query matching to reject false positives. Key ones: `count_params` (long-param-list: excludes optional/defaulted params), `ts_ssrf_sink` (requires URL to look like external input), `check_secret_pattern` (variable name must match secret-sounding pattern).
 
+## Experimental git guard (#1063)
+
+`--lens-guard`/`guard.enabled` is strictly opt-in and defaults false. It analyzes actual git commit/push executable invocations through the shared shell tokenizer, then consults the existing structured `turn-end-findings` record only for those attempts. Only current blocking findings gate (blocking test failures follow the repository's blocker semantics); advisory findings do not. The record is session/project/file-sequence bound, clean turns invalidate it, and malformed/stale/ambiguous blocker state blocks conservatively; advisory records never gate. Runtime per-file blockers aggregate through the normalized `PathKeyedMap`, so a clean later file cannot erase an unresolved earlier file. Decision telemetry uses the existing latency logger and contains no command text or source.
+
 ## Current version / state
 
 v3.8.74. Release history lives in `CHANGELOG.md` (dated, versioned, kept current per-PR — see "Release notes" below) — this section previously duplicated it with an ever-growing, ever-staler narrative; don't refill it with a highlights list again.

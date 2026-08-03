@@ -36,6 +36,7 @@ import {
 } from "./project-changes.js";
 import type { RuffClient } from "./ruff-client.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
+import { syncGitGuardRecord } from "./git-guard.js";
 import { scheduleWordIndexPersist } from "./word-index.js";
 
 interface ToolResultEvent {
@@ -723,6 +724,9 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	try {
 		result = await pipelinePromise;
 	} catch (pipelineErr) {
+		if (getFlag("lens-guard")) {
+			runtime.markGitGuardCacheUnknown("pipeline_crash");
+		}
 		dbg(`runPipeline crashed: ${pipelineErr}`);
 		logReadGuardEvent({
 			event: "edit_post_edit_pipeline_failed",
@@ -960,6 +964,14 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		runtime.clearInlineBlockers(filePath);
 	}
 
+	runtime.updateGitGuardStatus(result.hasBlockers, result.output);
+	if (getFlag("lens-guard")) {
+		syncGitGuardRecord(runtime, cacheManager, turnStateCwd, filePath);
+		if (result.isError && !result.hasBlockers) {
+			runtime.markGitGuardCacheUnknown("pipeline_error");
+		}
+	}
+
 	if (result.isError) {
 		return {
 			content: [...event.content, { type: "text", text: result.output }],
@@ -968,7 +980,6 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 	}
 
 	let output = result.output;
-	runtime.updateGitGuardStatus(result.hasBlockers, result.output);
 	if (behaviorWarnings.length > 0 && !result.hasBlockers) {
 		output += `\n\n${formatBehaviorWarnings(behaviorWarnings)}`;
 	}

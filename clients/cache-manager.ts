@@ -12,6 +12,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getProjectDataDir } from "./file-utils.js";
+import { writeFileAtomic } from "./atomic-write.js";
 import { readJsonCache } from "./json-cache-read.js";
 import { normalizeMapKey } from "./path-utils.js";
 
@@ -27,6 +28,13 @@ export interface CacheEntry<T> {
 	data: T;
 	meta: CacheMeta;
 }
+
+export type CacheInspection =
+	| "missing"
+	| "fresh"
+	| "stale"
+	| "malformed"
+	| "unreadable";
 
 export interface ModifiedRange {
 	start: number;
@@ -177,9 +185,39 @@ export class CacheManager {
 			...extraMeta,
 		};
 
-		fs.writeFileSync(cachePath, JSON.stringify(data, null, 2));
-		fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+		writeFileAtomic(cachePath, JSON.stringify(data, null, 2), {
+			bestEffort: false,
+		});
+		writeFileAtomic(metaPath, JSON.stringify(meta, null, 2), {
+			bestEffort: false,
+		});
 		this.log(`Cache written: ${scanner}`);
+	}
+
+	/** Inspect a cache without changing the behavior of readCache consumers. */
+	inspectCache(scanner: string, cwd: string, maxAgeMs = DEFAULT_MAX_AGE_MS): CacheInspection {
+		const cachePath = path.join(getCacheDir(cwd), `${scanner}.json`);
+		const metaPath = path.join(getCacheDir(cwd), `${scanner}.meta.json`);
+		for (const cachePathname of [cachePath, metaPath]) {
+			try {
+				fs.statSync(cachePathname);
+			} catch (err) {
+				if ((err as NodeJS.ErrnoException).code === "ENOENT") return "missing";
+				return "unreadable";
+			}
+		}
+		try {
+			const meta = readJsonCache<CacheMeta>(metaPath, (parsed) => parsed as CacheMeta);
+			if (!meta || typeof meta.timestamp !== "string") return "malformed";
+			const timestamp = new Date(meta.timestamp).getTime();
+			if (!Number.isFinite(timestamp)) return "malformed";
+			const age = Date.now() - timestamp;
+			if (age < 0 || age > maxAgeMs) return age < 0 ? "malformed" : "stale";
+			const data = readJsonCache<unknown>(cachePath, (parsed) => parsed);
+			return data === undefined ? "malformed" : "fresh";
+		} catch {
+			return "unreadable";
+		}
 	}
 
 	/**

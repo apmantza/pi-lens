@@ -14,6 +14,12 @@ import {
 } from "./code-quality-warnings.js";
 import type { CacheManager } from "./cache-manager.js";
 import type { CascadeSkipReason } from "./cascade-types.js";
+import {
+	clearGitGuardTestFailure,
+	mergeGitGuardTestFailure,
+	writeGitGuardRecord,
+	type TurnEndFindingsCache,
+} from "./git-guard.js";
 import { logCascade } from "./cascade-logger.js";
 import { normalizeMapKey } from "./path-utils.js";
 import type { DependencyChecker } from "./dependency-checker.js";
@@ -208,6 +214,20 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	const files = Object.keys(turnState.files);
 
 	if (files.length === 0) {
+		// A genuinely clean session must invalidate the persisted guard record.
+		// Blocker records are retained only while the runtime still reports one.
+		if (getFlag("lens-guard") && !runtime.gitGuardHasBlockers) {
+			const guardRecord = cacheManager.readCache<Partial<TurnEndFindingsCache>>(
+				"turn-end-findings",
+				cwd,
+			)?.data;
+			if (
+				guardRecord?.sessionId === runtime.telemetrySessionId &&
+				guardRecord.testFailures !== true
+			) {
+				cacheManager.clearCache("turn-end-findings", cwd);
+			}
+		}
 		// #713: subagent sessions use a shorter idle reset (60s) — a short-lived
 		// task agent holding a warm fleet for 4 minutes after its last turn is
 		// pure waste under fan-out. Classify ONCE here so every tick in this call
@@ -257,7 +277,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 
 	// Re-surface inline blockers from this turn that the agent didn't fix.
 	// These were shown inline during write/edit but the agent moved on without resolving them.
-	const unresolvedBlockers = runtime.consumeInlineBlockers();
+	const unresolvedBlockers = runtime.getInlineBlockersSnapshot();
 	for (const { filePath: bPath, summary } of unresolvedBlockers) {
 		const displayPath = toRunnerDisplayPath(cwd, bPath);
 		blockerParts.push(
@@ -288,7 +308,16 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	//   2. Neighbor-level: each neighbor is claimed by the latest cascade result
 	//      that covers it — suppresses stale neighbor state from earlier writes.
 	const t0 = Date.now();
-	const cascadeRuns = runtime.consumeCascadeRuns();
+	const cascadeRuns = runtime.consumeCascadeRuns().filter((run) => {
+		const originSeq = run.origin?.projectSeq;
+		const originTurn = run.origin?.turnSeq;
+		// A deferred result from before a later write/turn is not current state.
+		// Old test fixtures without provenance remain accepted for compatibility.
+		return (
+			(originSeq === undefined || originSeq === runtime.projectSeq) &&
+			(originTurn === undefined || originTurn === runtime.turnIndex)
+		);
+	});
 	const cascadeResults = cascadeRuns.flatMap((r) =>
 		r.result ? [r.result] : [],
 	);
@@ -781,6 +810,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				`turn_end: firing ${targets.length} test target(s) async (non-blocking)`,
 			);
 			const firedAtTurn = runtime.turnIndex;
+			const firedSessionId = runtime.telemetrySessionId;
 			Promise.allSettled(
 				targets.map((t) =>
 					testRunnerClient.runTestFileAsync(
@@ -829,10 +859,32 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 							{ content, stale, results: resultValues },
 							cwd,
 						);
+						if (getFlag("lens-guard") && firedSessionId === runtime.telemetrySessionId) {
+							clearGitGuardTestFailure(
+								cacheManager,
+								cwd,
+								runtime,
+								resultValues
+									.filter((value) => value.failed === 0)
+									.map((value) => value.file),
+							);
+							mergeGitGuardTestFailure(
+								cacheManager,
+								cwd,
+								runtime,
+								content,
+								resultValues
+									.filter((value) => value.failed > 0)
+									.map((value) => value.file),
+							);
+						}
 						dbg(
 							`turn_end: ${failures.length} test failure(s) cached for next context injection${stale ? " (stale — turn advanced while tests ran)" : ""}`,
 						);
 					} else if (results.length > 0) {
+						if (getFlag("lens-guard") && firedSessionId === runtime.telemetrySessionId) {
+							clearGitGuardTestFailure(cacheManager, cwd, runtime, resultValues.map((value) => value.file));
+						}
 						dbg(
 							`turn_end: all tests passed${stale ? " (stale — turn advanced while tests ran)" : ""}`,
 						);
@@ -1090,12 +1142,77 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			dbg(
 				"turn_end: duplicate findings detected (same session), suppressing re-prompt",
 			);
+			if (getFlag("lens-guard")) {
+				const existingGuard = cacheManager.readCache<Partial<TurnEndFindingsCache>>(
+					"turn-end-findings",
+					cwd,
+				)?.data;
+				if (existingGuard) {
+					writeGitGuardRecord(cacheManager, runtime, cwd, {
+						...(existingGuard as TurnEndFindingsCache),
+						content,
+						blockerContent: blockerParts.length > 0
+							? capTurnEndMessage(blockerParts.join("\n\n"))
+							: undefined,
+						hasBlockers: blockerParts.length > 0 || existingGuard.testFailures === true,
+						blockingFiles: blockerParts.length > 0 ? existingGuard.affectedFiles : undefined,
+						projectSeqStart: runtime.turnStartProjectSeq,
+						projectSeqEnd: runtime.projectSeq,
+						fileSeqByPath: Object.fromEntries(
+								runtime.getFileSeqEntries().map(([filePath, seq]) => [normalizeMapKey(path.resolve(filePath)), seq]),
+						),
+						fileContentHashes: {},
+						consumed: false,
+					});
+				}
+			}
 			cacheManager.clearTurnState(cwd);
 			runtime.fixedThisTurn.clear();
 			resetFormatService();
 			return;
 		}
-		cacheManager.writeCache("turn-end-findings", { content }, cwd);
+		const fileSeqByPath: Record<string, number> = {};
+		for (const [filePath, seq] of runtime.getFileSeqEntries()) {
+			fileSeqByPath[normalizeMapKey(path.resolve(filePath))] = seq;
+		}
+		if (getFlag("lens-guard")) {
+			const existingGuard = cacheManager.readCache<Partial<TurnEndFindingsCache>>(
+				"turn-end-findings",
+				cwd,
+			)?.data;
+			const blockingContent = blockerParts.length > 0
+				? capTurnEndMessage(blockerParts.join("\n\n"))
+				: undefined;
+			const affectedFiles = [
+				...(existingGuard?.affectedFiles ?? []),
+				...files.map((file) => resolveRunnerPath(cwd, file)),
+				...cascadeResults.flatMap((result) =>
+					result.neighbors
+						.filter((neighbor) => neighbor.diagnostics.length > 0)
+						.map((neighbor) => resolveRunnerPath(cwd, neighbor.filePath)),
+				),
+			];
+			writeGitGuardRecord(cacheManager, runtime, cwd, {
+				content: [content, existingGuard?.testFailureContent]
+					.filter((value): value is string => !!value)
+					.join("\n\n"),
+				blockerContent: blockingContent,
+				blockingFiles: blockerParts.length > 0 ? affectedFiles : undefined,
+				hasBlockers: !!blockingContent || existingGuard?.testFailures === true,
+				affectedFiles,
+				sessionId: runtime.telemetrySessionId,
+				projectSeqStart: runtime.turnStartProjectSeq,
+				projectSeqEnd: runtime.projectSeq,
+				fileSeqByPath,
+				fileContentHashes: {},
+				consumed: false,
+				testFailures: existingGuard?.testFailures,
+				testFailureContent: existingGuard?.testFailureContent,
+				testFailureFiles: existingGuard?.testFailureFiles,
+			});
+		} else {
+			cacheManager.writeCache("turn-end-findings", { content }, cwd);
+		}
 		cacheManager.writeCache(
 			"turn-end-findings-last",
 			{
@@ -1118,6 +1235,18 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	}
 	if (blockerParts.length === 0) {
 		cacheManager.clearTurnState(cwd);
+		if (getFlag("lens-guard") && advisoryParts.length === 0 && !runtime.gitGuardHasBlockers) {
+			const guardRecord = cacheManager.readCache<Partial<TurnEndFindingsCache>>(
+				"turn-end-findings",
+				cwd,
+			)?.data;
+			if (
+				guardRecord?.sessionId === runtime.telemetrySessionId &&
+				guardRecord.testFailures !== true
+			) {
+				cacheManager.clearCache("turn-end-findings", cwd);
+			}
+		}
 	}
 
 	runtime.fixedThisTurn.clear();

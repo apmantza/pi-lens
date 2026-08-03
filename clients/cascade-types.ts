@@ -36,6 +36,8 @@ export type CascadeSkipReason =
  */
 export interface CascadeRun {
 	filePath: string;
+	/** Sequence captured when the write launched this deferred computation. */
+	origin?: { turnSeq?: number; writeSeq?: number; projectSeq?: number };
 	result: CascadeResult | undefined;
 	neighborCount: number;
 	diagnosticCount: number;

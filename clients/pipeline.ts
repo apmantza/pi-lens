@@ -1362,6 +1362,11 @@ export async function runPipeline(
 	// result is never shown inline — settled (bounded) and surfaced at turn_end.
 	// The stored promise must never reject: an unhandled rejection is fatal, so a
 	// failing compute resolves to an "error" skip-run instead.
+	const cascadeOrigin = {
+		turnSeq: ctx.telemetry?.turnIndex,
+		writeSeq: ctx.telemetry?.writeIndex,
+		projectSeq: ctx.seqState?.projectSeq(),
+	};
 	const cascadePromise = getFlag("no-lsp")
 		? undefined
 		: computeCascadeForFile(filePath, cwd, {
@@ -1373,11 +1378,13 @@ export async function runPipeline(
 				fileContent,
 				wordIndex: ctx.wordIndex,
 				onWordIndexUpdated: ctx.onWordIndexUpdated,
-			}).catch(
+			}).then((run) => ({ ...run, origin: cascadeOrigin }))
+			.catch(
 				(err): import("./cascade-types.js").CascadeRun => {
 					dbg(`cascade compute failed for ${filePath}: ${err}`);
 					return {
 						filePath,
+						origin: cascadeOrigin,
 						result: undefined,
 						neighborCount: 0,
 						diagnosticCount: 0,

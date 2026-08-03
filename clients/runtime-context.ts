@@ -1,20 +1,31 @@
 import type { CacheManager } from "./cache-manager.js";
+import type { TurnEndFindingsCache } from "./git-guard.js";
 
 export function consumeTurnEndFindings(
 	cacheManager: CacheManager,
 	cwd: string,
 ): { messages: Array<{ role: "user"; content: string }> } | undefined {
-	const findings = cacheManager.readCache<{ content: string }>(
+	const findings = cacheManager.readCache<Partial<TurnEndFindingsCache>>(
 		"turn-end-findings",
 		cwd,
 	);
-	if (!findings?.data?.content) return;
+	if (!findings?.data?.content || findings.data.consumed === true) return;
 
-	cacheManager.writeCache(
-		"turn-end-findings",
-		null as unknown as { content: string },
-		cwd,
-	);
+	// A blocker record is also the opt-in commit gate's durable state. Mark the
+	// context message consumed without deleting the record; clean/advisory-only
+	// records retain the historical consume-and-clear behavior.
+	if (
+		findings.data.hasBlockers === true &&
+		typeof findings.data.sessionId === "string"
+	) {
+		cacheManager.writeCache(
+			"turn-end-findings",
+			{ ...findings.data, consumed: true },
+			cwd,
+		);
+	} else {
+		cacheManager.clearCache("turn-end-findings", cwd);
+	}
 
 	return {
 		messages: [

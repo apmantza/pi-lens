@@ -122,7 +122,7 @@ unresolved blockers exist, with:
 > `🔴 COMMIT BLOCKED (--lens-guard): unresolved blockers must be fixed before
 > commit/push. … Run lens_diagnostics mode=all for full details, then commit again.`
 
-Don't try to route around it — clear the blockers, then commit.
+Don't try to route around it — clear the blockers, then commit. The guard is strictly opt-in (off by default) and is marked **EXPERIMENTAL**. It gates only structured blocking findings, including blocking test failures under the current test-runner policy; advisory/no-action-required findings never gate. The blocker state is sequence- and session-bound, so an ambiguous or stale blocker record blocks conservatively until pi-lens runs again; advisory records never gate.
 
 ---
 

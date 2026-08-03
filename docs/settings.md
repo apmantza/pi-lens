@@ -60,6 +60,7 @@ column is the effective behavior when nothing is set.
 | `--no-tests` | `tests.enabled` | global | test runner **on** |
 | `--no-delta` | `delta.enabled` | global | delta mode **on** (new diagnostics only) |
 | `--lens-guard` | `guard.enabled` | global | **off** |
+
 | `--no-opengrep` | `opengrep.enabled` | global | Opengrep scanner **on** |
 | `--no-read-guard` | `readGuard.enabled` | global | read-before-edit monitor **on** |
 | `--no-lens-context` | `contextInjection.enabled` | global | context injection **on** |
@@ -68,6 +69,12 @@ column is the effective behavior when nothing is set.
 | `--lens-actionable-warning-actions` | `actionableWarnings.includeLspCodeActions` | global | **off** |
 | `--lens-actionable-warning-autofix` | `actionableWarnings.autoFix.enabled` | project | **off** |
 | `--lens-actionable-warning-all` | `actionableWarnings.deltaOnly` (`false`) | global | `deltaOnly` **on** (report this turn only) |
+
+`--lens-guard` is **EXPERIMENTAL and strictly opt-in**. When enabled, actual
+`git commit`/`git push` commands are blocked only for current, structured
+blocking findings (including blocking test failures); advisory/no-action-required
+findings do not block. Stale, malformed, or ambiguous persisted state blocks
+conservatively until checks run again.
 
 `--immediate-format` and `--lens-actionable-warning-all` are not `--no-*` flags,
 so they set a value rather than flipping a boolean off.

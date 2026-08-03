@@ -7,6 +7,7 @@ import type { CascadeRun } from "./cascade-types.js";
 import type { CodeQualityWarningRecord } from "./code-quality-warnings.js";
 import type { FileComplexity } from "./complexity-client.js";
 import { normalizeMapKey } from "./path-utils.js";
+import { PathKeyedMap } from "./path-keyed-map.js";
 import { ReadGuard } from "./read-guard.js";
 import type { RuleScanResult } from "./rules-scanner.js";
 import { RUNTIME_CONFIG } from "./runtime-config.js";
@@ -101,6 +102,7 @@ export class RuntimeCoordinator {
 	private readonly _fileLastProjectSeq = new Map<string, number>();
 	private _gitGuardHasBlockers = false;
 	private _gitGuardSummary = "";
+	private _gitGuardCacheUnknownReason: string | undefined;
 	callGraph: FunctionCallGraph | null = null;
 	wordIndex: WordIndex | null = null;
 	private _readGuard: ReadGuard | null = null;
@@ -112,10 +114,10 @@ export class RuntimeCoordinator {
 		string,
 		{ status: "warming" | "ready"; ts: number }
 	>();
-	private readonly _pendingInlineBlockers = new Map<
-		string,
-		{ filePath: string; summary: string }
-	>();
+	private readonly _pendingInlineBlockers = new PathKeyedMap<{
+		filePath: string;
+		summary: string;
+	}>(normalizeMapKey);
 	private readonly _actionableWarningsThisTurn = new Map<
 		string,
 		ActionableWarningRecord
@@ -159,6 +161,7 @@ export class RuntimeCoordinator {
 		this._fileLastProjectSeq.clear();
 		this._gitGuardHasBlockers = false;
 		this._gitGuardSummary = "";
+		this._gitGuardCacheUnknownReason = undefined;
 		this._readGuard = null;
 		this._pendingDeferredFormatFiles.clear();
 		this._lspReadWarmState.clear();
@@ -186,8 +189,11 @@ export class RuntimeCoordinator {
 	}
 
 	updateGitGuardStatus(hasBlockers: boolean, output: string): void {
-		this._gitGuardHasBlockers = hasBlockers;
-		if (!hasBlockers) {
+		// The status is an aggregate over the current per-file map. A clean B
+		// result must not erase an unresolved A result; the pipeline records/clears
+		// the edited file immediately before this method runs.
+		this._gitGuardHasBlockers = hasBlockers || this._pendingInlineBlockers.size > 0;
+		if (!this._gitGuardHasBlockers) {
 			this._gitGuardSummary = "";
 			return;
 		}
@@ -195,7 +201,10 @@ export class RuntimeCoordinator {
 			.split("\n")
 			.map((line) => line.trim())
 			.find((line) => line.length > 0);
-		this._gitGuardSummary = (firstLine ?? "Unresolved blockers detected").slice(
+		const summaries = this.getInlineBlockersSnapshot()
+			.map((entry) => entry.summary.trim())
+			.filter(Boolean);
+		this._gitGuardSummary = (summaries[0] ?? firstLine ?? "Unresolved blockers detected").slice(
 			0,
 			160,
 		);
@@ -209,6 +218,18 @@ export class RuntimeCoordinator {
 		return this._gitGuardSummary;
 	}
 
+	markGitGuardCacheUnknown(reason: string): void {
+		this._gitGuardCacheUnknownReason = reason;
+	}
+
+	clearGitGuardCacheUnknown(): void {
+		this._gitGuardCacheUnknownReason = undefined;
+	}
+
+	get gitGuardCacheUnknownReason(): string | undefined {
+		return this._gitGuardCacheUnknownReason;
+	}
+
 	beginTurn(): void {
 		this._cascadeRuns = [];
 		// _pendingCascadeRuns is deliberately NOT cleared here: a cascade compute
@@ -216,7 +237,9 @@ export class RuntimeCoordinator {
 		// measured up to ~19s) must surface on the NEXT turn_end, not be dropped —
 		// pre-#450 those findings were always awaited, never lost. Session reset
 		// still clears it.
-		this._pendingInlineBlockers.clear();
+		// Inline blockers are session-scoped per-file state. They are cleared only
+		// when that file is re-analyzed clean or the session resets; a new turn must
+		// not let a clean unrelated file erase an unresolved blocker.
 		this._actionableWarningsThisTurn.clear();
 		this._codeQualityWarningsThisTurn.clear();
 		// _turnSummary is deliberately NOT cleared here (#484 rework): the
@@ -502,8 +525,12 @@ export class RuntimeCoordinator {
 		this._pendingInlineBlockers.delete(path.resolve(filePath));
 	}
 
+	getInlineBlockersSnapshot(): Array<{ filePath: string; summary: string }> {
+		return [...this._pendingInlineBlockers.values()];
+	}
+
 	consumeInlineBlockers(): Array<{ filePath: string; summary: string }> {
-		const entries = [...this._pendingInlineBlockers.values()];
+		const entries = this.getInlineBlockersSnapshot();
 		this._pendingInlineBlockers.clear();
 		return entries;
 	}

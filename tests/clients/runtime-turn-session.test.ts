@@ -882,12 +882,12 @@ describe("unresolved inline blocker re-surfacing", () => {
 		expect(second).toHaveLength(0);
 	});
 
-	it("beginTurn clears pending inline blockers from previous turn", () => {
+	it("beginTurn preserves unresolved inline blockers from previous turns", () => {
 		const runtime = new RuntimeCoordinator();
 		runtime.recordInlineBlockers("/a/x.ts", "🔴 STOP");
 		runtime.beginTurn();
-		const entries = runtime.consumeInlineBlockers();
-		expect(entries).toHaveLength(0);
+		const entries = runtime.getInlineBlockersSnapshot();
+		expect(entries).toHaveLength(1);
 	});
 });
 

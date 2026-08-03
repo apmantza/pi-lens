@@ -47,6 +47,99 @@ function stripAnsi(value: string): string {
 	return value.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
 }
 
+/** Small conservative shell lexer shared by command-analysis consumers. */
+export interface ShellCommandSegment {
+	tokens: string[];
+	unsupported: boolean;
+}
+
+export function tokenizeShellCommand(command: string): ShellCommandSegment[] {
+	const segments: ShellCommandSegment[] = [];
+	let tokens: string[] = [];
+	let word = "";
+	let quote: "single" | "double" | undefined;
+	let escaped = false;
+	let unsupported = false;
+	let atTokenStart = true;
+	const flushWord = () => {
+		if (word) tokens.push(word);
+		word = "";
+		atTokenStart = true;
+	};
+	const flushSegment = () => {
+		flushWord();
+		if (tokens.length > 0 || unsupported) segments.push({ tokens, unsupported });
+		tokens = [];
+		unsupported = false;
+		atTokenStart = true;
+	};
+	for (let i = 0; i < command.length; i++) {
+		const ch = command[i];
+		const next = command[i + 1];
+		if (quote === "single") {
+			if (ch === "'") quote = undefined;
+			else word += ch;
+			continue;
+		}
+		if (quote === "double") {
+			if (escaped) {
+				word += ch;
+				escaped = false;
+			} else if (ch === "\\") escaped = true;
+			else if (ch === '"') quote = undefined;
+			else word += ch;
+			continue;
+		}
+		if (escaped) {
+			word += ch;
+			escaped = false;
+			atTokenStart = false;
+			continue;
+		}
+		if (ch === "\\") {
+			escaped = true;
+			atTokenStart = false;
+			continue;
+		}
+		if (ch === "'") {
+			quote = "single";
+			atTokenStart = false;
+			continue;
+		}
+		if (ch === '"') {
+			quote = "double";
+			atTokenStart = false;
+			continue;
+		}
+		if (ch === "#" && atTokenStart) {
+			while (i + 1 < command.length && command[i + 1] !== "\n") i++;
+			continue;
+		}
+		if (/\s/.test(ch)) {
+			flushWord();
+			continue;
+		}
+		if (ch === ";" || ch === "\n" || ch === "|" || ch === "&") {
+			flushWord();
+			if (ch === "|" && next === "|") i++;
+			else if (ch === "&" && next === "&") i++;
+			else if (ch === "|" || ch === "&") unsupported = true;
+			flushSegment();
+			continue;
+		}
+		if (ch === "<" || ch === ">") {
+			flushWord();
+			unsupported = true;
+			continue;
+		}
+		word += ch;
+		atTokenStart = false;
+	}
+	if (quote || escaped) unsupported = true;
+	flushSegment();
+	return segments;
+}
+
 function tokenizeSegment(segment: string): string[] {
 	const matches = segment.match(/'[^']*'|"(?:[^"\\]|\\.)*"|\S+/g);
 	return matches ?? [];
