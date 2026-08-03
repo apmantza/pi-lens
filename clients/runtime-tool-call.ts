@@ -34,7 +34,10 @@ import {
 	EXPANSION_LIMIT_LINES,
 	tryExpandRead,
 } from "./read-expansion.js";
-import { logReadGuardEvent } from "./read-guard-logger.js";
+import {
+	getReadGuardCorrelationId,
+	logReadGuardEvent,
+} from "./read-guard-logger.js";
 import {
 	countFileLines,
 	getTouchedLinesForGuard,
@@ -284,6 +287,10 @@ export async function handleToolCall(
 		getTreeSitterClient = getSharedTreeSitterClient,
 	} = deps;
 
+	const readGuardCorrelationId = getReadGuardCorrelationId(event);
+	const logToolReadGuardEvent = (
+		entry: Parameters<typeof logReadGuardEvent>[0],
+	): void => logReadGuardEvent({ ...entry, correlationId: readGuardCorrelationId });
 	const toolName = (event as { toolName?: string }).toolName ?? "";
 	if (!lensEnabled) return;
 	if (
@@ -506,7 +513,7 @@ export async function handleToolCall(
 				} else {
 					enclosingSymbol = expansion.enclosingSymbol;
 				}
-				logReadGuardEvent({
+				logToolReadGuardEvent({
 					event: "ts_range_expanded",
 					sessionId: runtime.telemetrySessionId,
 					filePath,
@@ -544,7 +551,7 @@ export async function handleToolCall(
 	if (toolName === "read" && filePath && !isExternalOrVendor) {
 		const totalLines = countFileLines(filePath);
 		const deliveredLimit = effectiveReadLimit ?? 1;
-		logReadGuardEvent({
+		logToolReadGuardEvent({
 			event: "read_pattern",
 			sessionId: runtime.telemetrySessionId,
 			filePath,
@@ -738,7 +745,7 @@ export async function handleToolCall(
 					continue;
 				entry.apply(escaped);
 				entry.value = escaped;
-				logReadGuardEvent({
+				logToolReadGuardEvent({
 					event: "oldtext_escape_autopatched",
 					sessionId: runtime.telemetrySessionId,
 					filePath,
@@ -769,7 +776,7 @@ export async function handleToolCall(
 					entry.applyNewText(patch.newText!);
 					entry.newText = patch.newText;
 				}
-				logReadGuardEvent({
+				logToolReadGuardEvent({
 					event: "oldtext_trailing_ws_autopatched",
 					sessionId: runtime.telemetrySessionId,
 					filePath,
@@ -870,7 +877,7 @@ export async function handleToolCall(
 				if (correctedNewText !== undefined) {
 					entry.applyNewText(correctedNewText);
 				}
-				logReadGuardEvent({
+				logToolReadGuardEvent({
 					event: "oldtext_indent_autopatched",
 					sessionId: runtime.telemetrySessionId,
 					filePath,
@@ -919,13 +926,21 @@ export async function handleToolCall(
 				preflightError,
 				partiallyApplicable,
 				contentMatchValidated,
-			} = getTouchedLinesForGuard(event, filePath, runtime.telemetrySessionId);
+				editBatchSummary,
+			} = getTouchedLinesForGuard(
+				event,
+				filePath,
+				runtime.telemetrySessionId,
+				readGuardCorrelationId,
+			);
 			if (preflightError) {
 				if (partiallyApplicable && partiallyApplicable.length > 0) {
 					try {
 						const partial = await applyPartiallyApplicableEdits({
 							filePath,
 							edits: partiallyApplicable,
+							summary: editBatchSummary,
+							correlationId: readGuardCorrelationId,
 							afterWrite: async () => {
 								const {
 									biomeClient,
@@ -937,7 +952,10 @@ export async function handleToolCall(
 									event: {
 										toolName: "write",
 										input: { path: filePath },
-										details: { piLensPartialApply: true },
+										details: {
+										piLensPartialApply: true,
+										readGuardCorrelationId,
+									},
 										content: [],
 										provider: (event as { provider?: string }).provider,
 										model: (event as { model?: string }).model,
@@ -964,14 +982,20 @@ export async function handleToolCall(
 									.join("\n\n");
 							},
 						});
-						if (partial.appliedCount > 0) {
-							logReadGuardEvent({
+						if (
+							partial.appliedCount > 0 &&
+							partial.postEditStatus !== "failed"
+						) {
+							logToolReadGuardEvent({
 								event: "edit_partial_apply",
 								sessionId: runtime.telemetrySessionId,
 								filePath,
 								metadata: {
 									appliedCount: partial.appliedCount,
 									appliedIndices: partial.appliedIndices,
+									skippedCount: partial.skippedCount ?? 0,
+									skippedIndices: partial.skippedIndices ?? "",
+									editBatchSummary: partial.summary,
 									routedThroughPostEditPipeline: true,
 								},
 							});
@@ -990,7 +1014,7 @@ export async function handleToolCall(
 				}
 				return { block: true, reason: preflightError };
 			}
-			logReadGuardEvent({
+			logToolReadGuardEvent({
 				event: "edit_check_started",
 				sessionId: runtime.telemetrySessionId,
 				filePath,
@@ -1032,7 +1056,7 @@ export async function handleToolCall(
 						writeIndex: 0,
 						timestamp: Date.now(),
 					});
-					logReadGuardEvent({
+					logToolReadGuardEvent({
 						event: "edit_range_relocated",
 						sessionId: runtime.telemetrySessionId,
 						filePath,

@@ -11,7 +11,8 @@ import {
 import { logReadGuardEvent } from "../../clients/read-guard-logger.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
-vi.mock("../../clients/read-guard-logger.js", () => ({
+vi.mock("../../clients/read-guard-logger.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../clients/read-guard-logger.js")>()),
 	logReadGuardEvent: vi.fn(),
 }));
 
@@ -425,6 +426,48 @@ describe("read-guard tool line helpers", () => {
 			const err = result.preflightError as string;
 			expect(err).toMatch(/← match start/);
 			expect(err).toMatch(/← match end/);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("correlates bounded summaries without logging edit content", () => {
+		const env = setupTestEnvironment("read-guard-lines-observability-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			fs.writeFileSync(filePath, "const value = 1;\n");
+			const result = getTouchedLinesForGuard(
+				{
+					toolName: "edit",
+					input: {
+						path: filePath,
+						edits: [
+							{ oldText: "const value = 1;", newText: "const value = 2;" },
+							{ oldText: "const missing = 1;", newText: "never" },
+						],
+					},
+				},
+				filePath,
+				"session",
+				"host-call-7",
+			);
+
+			expect(result.preflightError).toBeDefined();
+			const summaryCall = vi.mocked(logReadGuardEvent).mock.calls.find(
+				([entry]) => entry.event === "edit_batch_summary",
+			);
+			expect(summaryCall?.[0]).toMatchObject({
+				correlationId: "host-call-7",
+				metadata: {
+					editBatchSummary: {
+						requestedCount: 2,
+						resolvedIndexes: [0],
+						rejectedIndexes: [1],
+						appliedCount: 0,
+					},
+				},
+			});
+			expect(JSON.stringify(summaryCall?.[0])).not.toContain("const missing");
 		} finally {
 			env.cleanup();
 		}

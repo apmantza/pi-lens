@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { applyPartiallyApplicableEdits } from "../../clients/partial-edit-apply.js";
+import { createReadGuardEditBatchSummary } from "../../clients/read-guard-logger.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 describe("applyPartiallyApplicableEdits", () => {
@@ -116,6 +117,73 @@ describe("applyPartiallyApplicableEdits", () => {
 				"const total = a—b; // em dash on purpose\n",
 			);
 			expect(result.appliedCount).toBe(1);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("reports applied and silently skipped indexes in the bounded summary", async () => {
+		const env = setupTestEnvironment("partial-apply-observability-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			fs.writeFileSync(filePath, "const a = 1;\nconst b = 2;\n");
+			const result = await applyPartiallyApplicableEdits({
+				filePath,
+				correlationId: "tool-42",
+				summary: createReadGuardEditBatchSummary({
+					requestedIndexes: [0, 1, 2],
+					resolvedIndexes: [1, 2],
+					rejectedReasons: [{ index: 0, code: "oldtext_not_found" }],
+				}),
+				edits: [
+					{ oldText: "const b = 2;", newText: "const b = 20;", originalIndex: 1 },
+					{ oldText: "const b = 20;", newText: "const b = 200;", originalIndex: 2 },
+					{ oldText: "not present", newText: "never", originalIndex: 0 },
+				],
+			});
+
+			expect(result.appliedIndices).toBe("edits[1], edits[2]");
+			expect(result.skippedCount).toBe(1);
+			expect(result.skippedIndices).toBe("edits[0]");
+			expect(result.summary).toMatchObject({
+				requestedCount: 3,
+				requestedIndexes: [0, 1, 2],
+				appliedCount: 2,
+				appliedIndexes: [1, 2],
+				commitStatus: "committed",
+				postEditStatus: "not_run",
+			});
+			expect(JSON.stringify(result.summary)).not.toMatch(/const|present|never/);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("distinguishes a committed write from a failed post-edit pipeline", async () => {
+		const env = setupTestEnvironment("partial-apply-pipeline-failure-");
+		try {
+			const filePath = path.join(env.tmpDir, "file.ts");
+			fs.writeFileSync(filePath, "const a = 1;\n");
+			const result = await applyPartiallyApplicableEdits({
+				filePath,
+				correlationId: "tool-pipeline-1",
+				summary: createReadGuardEditBatchSummary({
+					requestedIndexes: [0],
+					resolvedIndexes: [0],
+				}),
+				edits: [{ oldText: "const a = 1;", newText: "const a = 2;", originalIndex: 0 }],
+				afterWrite: async () => {
+					throw new Error("pipeline failure with source content");
+				},
+			});
+
+			expect(fs.readFileSync(filePath, "utf-8")).toBe("const a = 2;\n");
+			expect(result.postEditStatus).toBe("failed");
+			expect(result.summary).toMatchObject({
+				commitStatus: "committed",
+				postEditStatus: "failed",
+				appliedCount: 1,
+			});
 		} finally {
 			env.cleanup();
 		}

@@ -19,6 +19,11 @@ import { getFormatService } from "./format-service.js";
 import { isExternalOrVendorFile } from "./path-utils.js";
 import { resolveLanguageRootForFile } from "./language-profile.js";
 import { logLatency } from "./latency-logger.js";
+import {
+	createReadGuardEditBatchSummary,
+	getReadGuardCorrelationId,
+	logReadGuardEvent,
+} from "./read-guard-logger.js";
 import type { PiLensFlagSource } from "./lens-config.js";
 import type { LSPShutdownOptions } from "./lsp/client.js";
 import type { MetricsClient } from "./metrics-client.js";
@@ -34,6 +39,10 @@ import { scheduleWordIndexPersist } from "./word-index.js";
 
 interface ToolResultEvent {
 	toolName: string;
+	id?: string | number;
+	toolCallId?: string | number;
+	callId?: string | number;
+	requestId?: string | number;
 	input: unknown;
 	details?: unknown;
 	content: Array<{ type: string; text?: string }>;
@@ -252,6 +261,14 @@ function getFileStateHash(filePath: string): string {
 	}
 }
 
+function getRequestedEditIndexes(event: ToolResultEvent): number[] {
+	if (event.toolName === "write") return [0];
+	const edits = (event.input as { edits?: unknown[] } | undefined)?.edits;
+	return Array.isArray(edits) && edits.length > 0
+		? edits.map((_, index) => index).slice(0, 100)
+		: [0];
+}
+
 function sourceForToolName(
 	toolName: string,
 	details?: unknown,
@@ -407,6 +424,10 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		);
 		return;
 	}
+	const readGuardCorrelationId = getReadGuardCorrelationId(event);
+	const resultDetails = (event.details ?? {}) as Record<string, unknown>;
+	const isPartialApplyResult = resultDetails.piLensPartialApply === true;
+	const requestedEditIndexes = getRequestedEditIndexes(event);
 
 	// Coalesce sequential edits to the same file into one pipeline run against
 	// the final state. Only the debounce-fired call (with _bypassDebounce=true)
@@ -624,6 +645,32 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		result = await pipelinePromise;
 	} catch (pipelineErr) {
 		dbg(`runPipeline crashed: ${pipelineErr}`);
+		logReadGuardEvent({
+			event: "edit_post_edit_pipeline_failed",
+			correlationId: readGuardCorrelationId,
+			filePath,
+			metadata: {
+				tool: event.toolName,
+				commitStatus: "committed",
+				reasonCode: "pipeline_failed",
+			},
+		});
+		logReadGuardEvent({
+			event: "edit_batch_summary",
+			correlationId: readGuardCorrelationId,
+			filePath,
+			metadata: {
+				tool: event.toolName,
+				editBatchSummary: createReadGuardEditBatchSummary({
+					requestedIndexes: requestedEditIndexes,
+					resolvedIndexes: requestedEditIndexes,
+					appliedIndexes: requestedEditIndexes,
+					commitStatus: "committed",
+					postEditStatus: "failed",
+					durationMs: Date.now() - toolResultStart,
+				}),
+			},
+		});
 		dbg(`runPipeline crash stack: ${(pipelineErr as Error).stack}`);
 		if (!getFlag("no-lsp")) {
 			resetLSPService({ fast: true, reason: "pipeline_crash" });
@@ -645,6 +692,38 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		};
 	} finally {
 		inFlightPipelines.delete(pipelineDedupeKey);
+	}
+
+	if (!isPartialApplyResult) {
+		const postEditStatus = result.isError ? "failed" : "succeeded";
+		if (result.isError) {
+			logReadGuardEvent({
+				event: "edit_post_edit_pipeline_failed",
+				correlationId: readGuardCorrelationId,
+				filePath,
+				metadata: {
+					tool: event.toolName,
+					commitStatus: "committed",
+					reasonCode: "pipeline_failed",
+				},
+			});
+		}
+		logReadGuardEvent({
+			event: "edit_batch_summary",
+			correlationId: readGuardCorrelationId,
+			filePath,
+			metadata: {
+				tool: event.toolName,
+				editBatchSummary: createReadGuardEditBatchSummary({
+					requestedIndexes: requestedEditIndexes,
+					resolvedIndexes: requestedEditIndexes,
+					appliedIndexes: requestedEditIndexes,
+					commitStatus: "committed",
+					postEditStatus,
+					durationMs: Date.now() - toolResultStart,
+				}),
+			},
+		});
 	}
 
 	lastAnalyzedStateByFile.set(filePath, {
