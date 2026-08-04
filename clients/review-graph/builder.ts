@@ -322,6 +322,33 @@ export function _getReviewGraphCacheStateForTests(cwd: string):
 	};
 }
 
+/**
+ * Identity of the canonical review-graph cache used by derived projections.
+ * This is deliberately read-only: callers get the cache's source signature and
+ * graph schema version, never the source-file map or graph itself.
+ *
+ * The workspace entry is populated by both the in-memory build path and the
+ * persisted-snapshot hydration path, so consumers do not need a second source
+ * walk (or an independent mtime policy) to validate derived data.
+ */
+export interface ReviewGraphCacheIdentity {
+	version: string;
+	signature: string;
+}
+
+export function getReviewGraphCacheIdentity(
+	cwd: string,
+	graph?: ReviewGraph,
+): ReviewGraphCacheIdentity | undefined {
+	const cached = _workspaceGraphCache.get(normalizeMapKey(cwd));
+	if (!cached) return undefined;
+	if (graph && cached.graph.version !== graph.version) return undefined;
+	return {
+		version: graph?.version ?? cached.graph.version,
+		signature: cached.signature,
+	};
+}
+
 // #300 Edge 2: the review-graph's cross-worktree isolation is INCIDENTAL to
 // the cwd-derived data-dir slug (getProjectDataDir) — it holds only because
 // every process is launched with its own worktree as cwd. If a host ever

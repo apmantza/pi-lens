@@ -87,10 +87,19 @@ export interface FunctionCallGraph {
 
 // ── Serialisable form for disk persistence ────────────────────────────────────
 
+export interface CallGraphCacheIdentity {
+	reviewGraphVersion: string;
+	reviewGraphSignature: string;
+}
+
 interface PersistedCallGraph {
-	version: 4;
+	version: 5;
 	builtAt: string;
-	fileMtimes: Record<string, number>;
+	/** The canonical review graph this projection was derived from. */
+	reviewGraphVersion?: string;
+	reviewGraphSignature?: string;
+	/** Retained only for migration/tests; runtime freshness uses review-graph identity. */
+	fileMtimes?: Record<string, number>;
 	edges: ResolvedCallEdge[];
 	callees: [SymbolKey, SymbolKey[]][];
 	callers: [SymbolKey, SymbolKey[]][];
@@ -101,7 +110,7 @@ interface PersistedCallGraph {
 	coverage?: CallGraphEvidenceCoverage;
 }
 
-const CACHE_VERSION = 4;
+const CACHE_VERSION = 5;
 
 // ── Section 3: BFS impact analysis ───────────────────────────────────────────
 
@@ -536,14 +545,34 @@ function metaFilePath(cwd: string): string {
 }
 
 /**
- * Persist the call graph to disk with per-file mtime tracking.
- * On the next session-start, stale files can be identified without a full rebuild.
+ * Persist a call-graph projection. Current callers pass the canonical
+ * review-graph identity; the Map overload remains for migration/tests and is
+ * intentionally not considered fresh by runtime-session without an identity.
  */
 export function saveCallGraph(
 	cwd: string,
 	graph: FunctionCallGraph,
+	identity: CallGraphCacheIdentity,
+	fileMtimes?: Map<string, number>,
+): void;
+export function saveCallGraph(
+	cwd: string,
+	graph: FunctionCallGraph,
 	fileMtimes: Map<string, number>,
+	identity?: CallGraphCacheIdentity,
+): void;
+export function saveCallGraph(
+	cwd: string,
+	graph: FunctionCallGraph,
+	identityOrMtimes: CallGraphCacheIdentity | Map<string, number>,
+	legacyIdentityOrMtimes?: CallGraphCacheIdentity | Map<string, number>,
 ): void {
+	const identity = identityOrMtimes instanceof Map
+		? legacyIdentityOrMtimes instanceof Map ? undefined : legacyIdentityOrMtimes
+		: identityOrMtimes;
+	const fileMtimes = identityOrMtimes instanceof Map
+		? identityOrMtimes
+		: legacyIdentityOrMtimes instanceof Map ? legacyIdentityOrMtimes : undefined;
 	const cacheFile = cacheFilePath(cwd);
 	const metaFile = metaFilePath(cwd);
 	try {
@@ -551,9 +580,15 @@ export function saveCallGraph(
 		const persisted: PersistedCallGraph = {
 			version: CACHE_VERSION,
 			builtAt: graph.builtAt,
+			...(identity ? {
+				reviewGraphVersion: identity.reviewGraphVersion,
+				reviewGraphSignature: identity.reviewGraphSignature,
+			} : {}),
+			...(fileMtimes ? {
 				fileMtimes: Object.fromEntries(
 					[...fileMtimes].map(([file, mtime]) => [normalizeMapKey(file), mtime]),
 				),
+			} : {}),
 			edges: graph.edges,
 			callees: [...graph.callees.entries()].map(([k, v]) => [k, [...v]]),
 			callers: [...graph.callers.entries()].map(([k, v]) => [k, [...v]]),
