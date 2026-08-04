@@ -39,6 +39,7 @@ export function createModuleReportTool(getProjectRoot: () => string) {
 			"Structured, navigable overview of a source module — a token-efficient substitute for reading the whole file. Returns each symbol's name/kind/signature/line-range (plus a first-line `doc` summary when a doc comment is attached), important inline callbacks/closures/lambdas with stable handles, plus who-uses-this, risk flags, and ranked recommendedReads. To read a symbol's body: call read/read_symbol with offset=startLine, limit=endLine-startLine+1 on THIS report's `path` — those aren't repeated per symbol. Prefer this before a full read; then use read_symbol (or read) for the exact body you need.\n" +
 			"Single mode: language-uniform tree-sitter outline + review-graph who-uses-this + inline executable extraction; degrades to outline-only when no cached graph is available. `semantic.source` reports whether graph data was used.\n" +
 			'Pass `blastRadius: true` to also get the cross-file blast radius — the transitive dependents of this module aggregated to ranked file `read` args ("if you change this, verify these files"). Read-only over the cached graph; omitted on a cold cache. Supersedes the standalone impact query.\n' +
+			'Pass `callGraph: true` to include bounded derived callers/callees from the cached FunctionCallGraph; unavailable cache state is explicit and never reported as zero calls.\n' +
 			'`view: "compact"` returns a line-oriented text rendering (one line per symbol/callback, cheapest option) instead of JSON — same data, roughly a quarter of the token cost; use it for a quick skim. Default view returns JSON. An outline shows shape, not bodies — it does NOT count as having read a symbol\'s body for editing; use read_symbol for that.',
 		promptSnippet:
 			"Navigable file outline — a cheap substitute for reading a whole file",
@@ -96,6 +97,17 @@ export function createModuleReportTool(getProjectRoot: () => string) {
 						"Max hops for the blast-radius walk (default 3). Only used with blastRadius.",
 				}),
 			),
+			callGraph: Type.Optional(
+				Type.Boolean({
+					description:
+						"Include bounded derived callers/callees from the cached FunctionCallGraph; cold or stale cache state is explicit.",
+				}),
+			),
+			maxCallGraphEntries: Type.Optional(
+				Type.Number({
+					description: "Per-direction cap for call-graph relations (default 20).",
+				}),
+			),
 		}),
 		async execute(
 			_toolCallId: string,
@@ -106,6 +118,8 @@ export function createModuleReportTool(getProjectRoot: () => string) {
 				view?: "summary" | "default" | "compact";
 				blastRadius?: boolean;
 				blastRadiusDepth?: number;
+				callGraph?: boolean;
+				maxCallGraphEntries?: number;
 			},
 			_signal: AbortSignal | undefined,
 			_onUpdate: unknown,
@@ -123,6 +137,8 @@ export function createModuleReportTool(getProjectRoot: () => string) {
 					view: params.view,
 					blastRadius: params.blastRadius,
 					blastRadiusDepth: params.blastRadiusDepth,
+					callGraph: params.callGraph,
+					maxCallGraphEntries: params.maxCallGraphEntries,
 				});
 			} catch (err) {
 				return {

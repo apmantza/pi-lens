@@ -38,6 +38,12 @@ import { detectFileKind } from "./file-kinds.js";
 import { logLatency } from "./latency-logger.js";
 import { annotateMiddleMan } from "./middle-man-analysis.js";
 import { normalizeMapKey, toProjectRelativePath } from "./path-utils.js";
+import {
+	loadCallGraph,
+	staleFiles,
+	type CallGraphEvidenceCoverage,
+	type ResolvedCallEdge,
+} from "./call-graph.js";
 import { resolveImportToFiles } from "./review-graph/import-resolvers.js";
 import { buildSymbolId } from "./review-graph/symbol-id.js";
 import type { ReviewGraph, ReviewGraphEdgeKind } from "./review-graph/types.js";
@@ -75,6 +81,10 @@ export interface ModuleReportOptions {
 	/** Max hops for the blast-radius walk (default 3). Only meaningful with
 	 * `blastRadius`. */
 	blastRadiusDepth?: number;
+	/** Include the bounded derived caller/callee view from the cached call graph. */
+	callGraph?: boolean;
+	/** Per-direction cap for call-graph relations (default 20). */
+	maxCallGraphEntries?: number;
 }
 
 export interface ModuleSymbolUsedBy {
@@ -198,6 +208,47 @@ export interface BlastRadius {
 	files: BlastRadiusFile[];
 }
 
+export interface ModuleCallGraphRelation {
+	/** Stable FunctionCallGraph symbol key for the related symbol. */
+	symbolId: string;
+	/** Stable symbol key for the module symbol this relation belongs to. */
+	targetSymbolId: string;
+	file: string;
+	symbol?: string;
+	kind?: string;
+	line?: number;
+	evidenceKind?: "calls" | "references" | "mixed";
+	resolution?: "exact" | "import" | "receiver-type" | "name-only" | "unresolved";
+	evidenceCount?: number;
+	weight?: number;
+}
+
+export interface ModuleCallGraphCoverage {
+	status: "complete" | "partial" | "unavailable";
+	complete: boolean;
+	totalEvidence?: number;
+	callsEvidence?: number;
+	referencesEvidence?: number;
+	eligibleEvidence?: number;
+	resolvedEvidence?: number;
+	unresolvedEvidence?: number;
+	typeOnlyEvidence?: number;
+	unsupportedEvidence?: number;
+	duplicateEvidence?: number;
+	languages?: Record<string, "complete" | "partial" | "unavailable">;
+}
+
+export interface ModuleCallGraph {
+	available: boolean;
+	/** Why the cached view is unavailable; never infer zero calls from this state. */
+	reason?: "cache-missing" | "stale" | "file-cap";
+	callers: ModuleCallGraphRelation[];
+	callees: ModuleCallGraphRelation[];
+	/** True when either bounded relation list is a prefix of the cached data. */
+	truncated: boolean;
+	coverage: ModuleCallGraphCoverage;
+}
+
 export interface ModuleReport {
 	/** False when the file is unreadable or has no symbols and no graph node. */
 	available: boolean;
@@ -228,6 +279,9 @@ export interface ModuleReport {
 	/** Cross-file blast radius (#304) — present only when requested via
 	 * `blastRadius` and the cached graph is warm; omitted otherwise. */
 	blastRadius?: BlastRadius;
+	/** Derived caller/callee relationships — present only when requested via
+	 * `callGraph`, including explicit cache coverage when unavailable. */
+	callGraph?: ModuleCallGraph;
 	/**
 	 * ISO timestamp the cached review graph was last built (`ReviewGraph.builtAt`),
 	 * present whenever a graph was consulted (warm or cold-but-existing). Omitted
@@ -243,6 +297,7 @@ export interface ModuleReport {
 		usedBy: "cached-review-graph" | "unavailable:file-cap" | "none";
 		callbacks: "heuristic-tree-sitter" | "none";
 		blastRadius?: "cached-review-graph" | "unavailable:file-cap" | "none";
+		callGraph?: "cached-call-graph" | "unavailable:file-cap" | "none";
 	};
 	semantic: {
 		/** Provenance of who-uses-this: AST review graph, future graph-LSP edges
@@ -1650,6 +1705,134 @@ function extractCallbacks(
 	return callbacks.slice(0, callbackCap);
 }
 
+const CALL_GRAPH_DEFAULT_ENTRY_CAP = 20;
+const CALL_GRAPH_MAX_ENTRY_CAP = 100;
+
+function unavailableCallGraph(
+	reason: ModuleCallGraph["reason"],
+): ModuleCallGraph {
+	return {
+		available: false,
+		reason,
+		callers: [],
+		callees: [],
+		truncated: false,
+		coverage: { status: "unavailable", complete: false },
+	};
+}
+
+function callGraphCoverage(
+	coverage: CallGraphEvidenceCoverage,
+): ModuleCallGraphCoverage {
+	const languages = coverage.languages;
+	const complete = coverage.complete && Object.values(languages ?? {}).every(
+		(status) => status === "complete",
+	);
+	return {
+		status: complete ? "complete" : "partial",
+		complete,
+		totalEvidence: coverage.totalEvidence,
+		callsEvidence: coverage.callsEvidence,
+		referencesEvidence: coverage.referencesEvidence,
+		eligibleEvidence: coverage.eligibleEvidence,
+		resolvedEvidence: coverage.resolvedEvidence,
+		unresolvedEvidence: coverage.unresolvedEvidence,
+		typeOnlyEvidence: coverage.typeOnlyEvidence,
+		unsupportedEvidence: coverage.unsupportedEvidence,
+		duplicateEvidence: coverage.duplicateEvidence,
+		...(languages ? { languages } : {}),
+	};
+}
+
+function callGraphRelation(
+	edge: ResolvedCallEdge,
+	kind: "caller" | "callee",
+	projectRoot: string,
+): ModuleCallGraphRelation {
+	const caller = kind === "caller";
+	return {
+		symbolId: caller ? edge.callerKey : edge.calleeKey,
+		targetSymbolId: caller ? edge.calleeKey : edge.callerKey,
+		file: toDisplayPath(caller ? edge.callerFile : edge.calleeFile, projectRoot),
+		...(caller
+			? {
+					symbol: edge.callerSymbol,
+					kind: edge.callerKind,
+					line: edge.callerLine,
+				}
+			: {
+					symbol: edge.calleeSymbol,
+					kind: edge.calleeKind,
+					line: edge.calleeLine,
+			}),
+		...(edge.evidenceKind ? { evidenceKind: edge.evidenceKind } : {}),
+		...(edge.resolution ? { resolution: edge.resolution } : {}),
+		...(edge.evidenceCount && edge.evidenceCount > 1
+			? { evidenceCount: edge.evidenceCount }
+			: {}),
+		...(edge.weight !== 1 ? { weight: edge.weight } : {}),
+	};
+}
+
+/**
+ * Read the separately persisted FunctionCallGraph projection. This accessor is
+ * deliberately conservative: the module-report path never walks/builds the
+ * review graph, and a changed source file invalidates the projection rather
+ * than being reported as a clean zero-call result.
+ */
+function readCallGraph(
+	projectRoot: string,
+	normalizedPath: string,
+	maxEntries: number,
+	graphFileCap: number | undefined,
+): ModuleCallGraph {
+	if (graphFileCap !== undefined) return unavailableCallGraph("file-cap");
+	const cached = loadCallGraph(projectRoot);
+	if (!cached) return unavailableCallGraph("cache-missing");
+	const cachedFiles = [...cached.fileMtimes.keys()];
+	if (
+		!cached.fileMtimes.has(normalizedPath) ||
+		staleFiles(cached.fileMtimes, cachedFiles).length > 0
+	) {
+		return unavailableCallGraph("stale");
+	}
+
+	const callers: ModuleCallGraphRelation[] = [];
+	const callees: ModuleCallGraphRelation[] = [];
+	for (const edge of cached.graph.edges) {
+		if (normalizeMapKey(edge.calleeFile) === normalizedPath) {
+			callers.push(callGraphRelation(edge, "caller", projectRoot));
+		}
+		if (normalizeMapKey(edge.callerFile) === normalizedPath) {
+			callees.push(callGraphRelation(edge, "callee", projectRoot));
+		}
+	}
+	const stable = (left: ModuleCallGraphRelation, right: ModuleCallGraphRelation) =>
+		left.targetSymbolId.localeCompare(right.targetSymbolId) ||
+		(left.line ?? 0) - (right.line ?? 0) ||
+		left.symbolId.localeCompare(right.symbolId);
+	callers.sort(stable);
+	callees.sort(stable);
+	return {
+		available: true,
+		callers: callers.slice(0, maxEntries),
+		callees: callees.slice(0, maxEntries),
+		truncated: callers.length > maxEntries || callees.length > maxEntries,
+		coverage: callGraphCoverage(cached.graph.coverage ?? {
+			totalEvidence: cached.graph.totalRefs,
+			callsEvidence: cached.graph.totalRefs,
+			referencesEvidence: 0,
+			eligibleEvidence: cached.graph.totalRefs,
+			resolvedEvidence: cached.graph.totalRefs,
+			unresolvedEvidence: cached.graph.unresolvedRefs,
+			typeOnlyEvidence: 0,
+			unsupportedEvidence: 0,
+			duplicateEvidence: 0,
+			complete: false,
+		}),
+	};
+}
+
 function unavailableReport(displayPath: string, error?: string): ModuleReport {
 	return {
 		available: false,
@@ -1681,6 +1864,10 @@ export async function moduleReport(
 ): Promise<ModuleReport> {
 	const startedAt = Date.now();
 	const maxRefs = Math.max(1, options?.maxRefsPerSymbol ?? 10);
+	const maxCallGraphEntries = Math.min(
+		CALL_GRAPH_MAX_ENTRY_CAP,
+		Math.max(1, Math.floor(options?.maxCallGraphEntries ?? CALL_GRAPH_DEFAULT_ENTRY_CAP)),
+	);
 	const absPath = path.resolve(cwd, file);
 	const normalizedPath = normalizeMapKey(absPath);
 
@@ -1821,6 +2008,9 @@ export async function moduleReport(
 					Math.max(1, options.blastRadiusDepth ?? 3),
 				)
 			: undefined;
+	const callGraph = options?.callGraph
+		? readCallGraph(cwd, normalizedPath, maxCallGraphEntries, graphFileCap)
+		: undefined;
 
 	const view = options?.view ?? "default";
 	const summaryView = view === "summary";
@@ -1841,6 +2031,11 @@ export async function moduleReport(
 	const blastRadiusProvenance = blastRadius
 		? "cached-review-graph"
 		: unavailableGraphProvenance;
+	const callGraphProvenance = callGraph?.available
+		? "cached-call-graph"
+		: callGraph?.reason === "file-cap"
+			? "unavailable:file-cap"
+			: "none";
 	const report: ModuleReport = {
 		available: entries.length > 0 || hasGraphNode,
 		staleness: entries.length === 0 && !hasGraphNode ? "unavailable" : "fresh",
@@ -1867,6 +2062,7 @@ export async function moduleReport(
 		...(summaryView ? { view: "summary" } : {}),
 		...(compactView ? { view: "compact" } : {}),
 		...(blastRadius && !summaryView ? { blastRadius } : {}),
+		...(callGraph ? { callGraph } : {}),
 		...(graph ? { graphBuiltAt: graph.builtAt } : {}),
 		provenance: {
 			symbols: languageId ? "syntax" : "none",
@@ -1878,6 +2074,7 @@ export async function moduleReport(
 			...(options?.blastRadius
 				? { blastRadius: blastRadiusProvenance }
 				: {}),
+			...(options?.callGraph ? { callGraph: callGraphProvenance } : {}),
 		},
 		semantic: {
 			// Provenance of who-uses-this / references. The AST review graph is the
@@ -2043,6 +2240,19 @@ export function renderCompactModuleReport(report: ModuleReport): string {
 		lines.push("CALLBACKS:");
 		for (const callback of report.callbacks) {
 			lines.push(compactCallbackLine(callback, width));
+		}
+	}
+	if (report.callGraph) {
+		const callGraph = report.callGraph;
+		const suffix = callGraph.truncated ? " (truncated)" : "";
+		lines.push("CALL GRAPH:");
+		if (!callGraph.available) {
+			lines.push(`  unavailable (${callGraph.reason ?? "unknown"})`);
+		} else {
+			lines.push(
+				`  callers: ${callGraph.callers.length} · callees: ${callGraph.callees.length}` +
+				` · coverage: ${callGraph.coverage.status}${suffix}`,
+			);
 		}
 	}
 	if (report.recommendedReads.length > 0) {

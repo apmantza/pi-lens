@@ -610,7 +610,9 @@ const ALL_TOOLS = [
 			"(this path never calls LSP). `semantic.source` reports whether graph " +
 			"data was used. Pass `blastRadius: true` for the cross-file blast radius " +
 			"(transitive dependents as ranked file reads, read-only over the cached " +
-			'graph). `view: "compact"` returns a line-oriented text rendering ' +
+			"graph). Pass `callGraph: true` for bounded derived callers/callees; a " +
+			"cold or stale call-graph cache is reported explicitly, never as zero calls. " +
+			'`view: "compact"` returns a line-oriented text rendering ' +
 			"(cheapest option) instead of JSON. An outline shows shape, not bodies.",
 		inputSchema: {
 			type: "object",
@@ -644,6 +646,15 @@ const ALL_TOOLS = [
 					type: "number",
 					description:
 						"Max hops for the blast-radius walk (default 3). Only used with blastRadius.",
+				},
+				callGraph: {
+					type: "boolean",
+					description:
+						"Include bounded derived callers/callees from the cached FunctionCallGraph; cold or stale cache state is explicit.",
+				},
+				maxCallGraphEntries: {
+					type: "number",
+					description: "Per-direction cap for call-graph relations (default 20).",
 				},
 			},
 			required: ["file"],
@@ -1133,6 +1144,12 @@ async function callTool(
 			Number.isFinite(args.blastRadiusDepth)
 				? Math.max(1, Math.floor(args.blastRadiusDepth))
 				: undefined;
+		const callGraph = args.callGraph === true;
+		const maxCallGraphEntries =
+			typeof args.maxCallGraphEntries === "number" &&
+			Number.isFinite(args.maxCallGraphEntries)
+				? Math.max(1, Math.floor(args.maxCallGraphEntries))
+				: undefined;
 		const view =
 			args.view === "summary" || args.view === "compact" ? args.view : undefined;
 		const focus = typeof args.focus === "string" ? args.focus : undefined;
@@ -1140,6 +1157,8 @@ async function callTool(
 			maxRefsPerSymbol,
 			blastRadius,
 			blastRadiusDepth,
+			callGraph,
+			maxCallGraphEntries,
 			view,
 			focus,
 		});
