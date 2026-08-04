@@ -26,25 +26,40 @@ function createMockPi(overrides: Record<string, boolean> = {}) {
 	};
 }
 
-vi.mock("../clients/read-guard.js", () => ({
-	createReadGuard: () => ({
-		isNewFile: () => false,
-		checkEdit: () => ({ action: "allow" }),
-		recordRead: () => {},
-		recordWritten: () => {},
-		noteCreatedFile: () => {},
-		getReadHistory: () => [],
-		getEditHistory: () => [],
-		addExemption: () => {},
-		getSummary: () => ({
-			totalEdits: 0,
-			totalBlocks: 0,
-			byReason: {},
-			byFile: {},
-			lspExpansionsHelped: 0,
-		}),
-	}),
-}));
+vi.mock("../clients/read-guard.js", () => {
+	class MockReadGuard {
+		isNewFile() {
+			return false;
+		}
+		checkEdit() {
+			return { action: "allow" };
+		}
+		recordRead() {}
+		recordWritten() {}
+		noteCreatedFile() {}
+		getReadHistory() {
+			return [];
+		}
+		getEditHistory() {
+			return [];
+		}
+		addExemption() {}
+		getSummary() {
+			return {
+				totalEdits: 0,
+				totalBlocks: 0,
+				byReason: {},
+				byFile: {},
+				lspExpansionsHelped: 0,
+			};
+		}
+	}
+
+	return {
+		ReadGuard: MockReadGuard,
+		createReadGuard: () => new MockReadGuard(),
+	};
+});
 
 describe("index.ts LSP idle reset", () => {
 	let tmpDir: string;
