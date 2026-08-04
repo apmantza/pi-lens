@@ -556,6 +556,7 @@ describe("turn_end call-graph impact — persists to the delta report", () => {
 			unresolvedEvidence: 0,
 			typeOnlyEvidence: 0,
 			unsupportedEvidence: 0,
+			sameFileEvidence: 0,
 			duplicateEvidence: 0,
 			complete: true,
 			languages: { jsts: "complete" },
@@ -582,6 +583,57 @@ describe("turn_end call-graph impact — persists to the delta report", () => {
 		fs.writeFileSync(filePath, "export function doThing() { return 1; }\n");
 		return filePath;
 	}
+
+	it("same-file evidence does not suppress valid cross-file impact", async () => {
+		const env = setupTestEnvironment("pi-lens-callgraph-same-file-");
+		const previousDataDir = process.env.PILENS_DATA_DIR;
+		process.env.PILENS_DATA_DIR = path.join(env.tmpDir, "data");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId: "cg-same-file-session" });
+			runtime.callGraph = makeCallGraph({
+				totalEvidence: 2,
+				callsEvidence: 2,
+				referencesEvidence: 0,
+				eligibleEvidence: 1,
+				resolvedEvidence: 1,
+				unresolvedEvidence: 0,
+				typeOnlyEvidence: 0,
+				unsupportedEvidence: 0,
+				sameFileEvidence: 1,
+				duplicateEvidence: 0,
+				complete: true,
+				languages: { jsts: "complete" },
+			});
+			const cacheManager = new CacheManager(false);
+			seedEditedFoo(env);
+			cacheManager.addModifiedRange(
+				path.join(env.tmpDir, "src/foo.ts"),
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+			);
+
+			await handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, { ctxCwd: env.tmpDir }),
+			);
+
+			const report = loadProjectDiagnosticsDeltaReport(env.tmpDir);
+			expect(report?.sources).toContain("call-graph");
+			expect(report?.diagnostics).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({
+						runner: "call-graph",
+						filePath: path.join(env.tmpDir, "src/bar.ts"),
+					}),
+				]),
+			);
+		} finally {
+			if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+			else process.env.PILENS_DATA_DIR = previousDataDir;
+			env.cleanup();
+		}
+	});
 
 	it("persists call-graph diagnostics + source on a call-graph-ONLY turn (no knip delta)", async () => {
 		const env = setupTestEnvironment("pi-lens-callgraph-only-");

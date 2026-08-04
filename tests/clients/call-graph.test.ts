@@ -178,15 +178,15 @@ describe("buildCallGraph", () => {
 					{ ...ref(fileA, "target", 4), targetId: sameFileId, evidenceKind: "calls", referenceKind: "call", resolution: "exact" },
 					{ ...ref(fileA, "remote", 11), targetId: crossFileId, callerSymbolId: callerId, evidenceKind: "calls", referenceKind: "call", resolution: "exact" },
 				]]]),
-				{ totalEvidence: 2, callsEvidence: 2, referencesEvidence: 0, eligibleEvidence: 2, resolvedEvidence: 2, unresolvedEvidence: 0, typeOnlyEvidence: 0, unsupportedEvidence: 0, duplicateEvidence: 0, complete: true },
+				{ totalEvidence: 2, callsEvidence: 2, referencesEvidence: 0, eligibleEvidence: 2, resolvedEvidence: 2, unresolvedEvidence: 0, typeOnlyEvidence: 0, unsupportedEvidence: 0, sameFileEvidence: 0, duplicateEvidence: 0, complete: true },
 			);
 			expect(graph.edges).toHaveLength(1);
-			expect(graph.coverage).toMatchObject({ resolvedEvidence: 1, eligibleEvidence: 1, unsupportedEvidence: 1, complete: false });
+			expect(graph.coverage).toMatchObject({ resolvedEvidence: 1, eligibleEvidence: 1, sameFileEvidence: 1, unsupportedEvidence: 0, complete: true });
 			saveCallGraph("/proj", graph, { reviewGraphVersion: "v7", reviewGraphSignature: "sig-same-file" });
 			const loaded = loadCallGraph("/proj");
 			expect(loaded?.graph.callees.get(callerId)).toEqual(new Set([crossFileId]));
 			expect(loaded?.graph.callers.get(crossFileId)).toEqual(new Set([callerId]));
-			expect(loaded?.graph.coverage).toMatchObject({ resolvedEvidence: 1, unsupportedEvidence: 1 });
+			expect(loaded?.graph.coverage).toMatchObject({ resolvedEvidence: 1, sameFileEvidence: 1, unsupportedEvidence: 0, complete: true });
 		} finally {
 			delete process.env.PILENS_DATA_DIR;
 		}
@@ -511,6 +511,7 @@ describe("saveCallGraph / loadCallGraph", () => {
 			unresolvedEvidence: 0,
 			typeOnlyEvidence: 0,
 			unsupportedEvidence: 0,
+			sameFileEvidence: 0,
 			duplicateEvidence: 0,
 			complete: true,
 		};
@@ -544,7 +545,7 @@ describe("saveCallGraph / loadCallGraph", () => {
 			inDegree: [[callee, 2]],
 			totalRefs: 1,
 			unresolvedRefs: 0,
-			coverage: { totalEvidence: 1, callsEvidence: 1, referencesEvidence: 0, eligibleEvidence: 1, resolvedEvidence: 1, unresolvedEvidence: 0, typeOnlyEvidence: 0, unsupportedEvidence: 0, duplicateEvidence: 0, complete: false },
+			coverage: { totalEvidence: 1, callsEvidence: 1, referencesEvidence: 0, eligibleEvidence: 1, resolvedEvidence: 1, unresolvedEvidence: 0, typeOnlyEvidence: 0, unsupportedEvidence: 0, sameFileEvidence: 0, duplicateEvidence: 0, complete: false },
 		}), "utf-8");
 		expect(loadCallGraph("/proj")).toBeUndefined();
 		delete process.env.PILENS_DATA_DIR;
@@ -557,7 +558,7 @@ describe("saveCallGraph / loadCallGraph", () => {
 		fs.writeFileSync(cacheFile, JSON.stringify({
 			version: 4, builtAt: "bad-coverage", fileMtimes: {}, edges: [], callees: [], callers: [], inDegree: [],
 			totalRefs: 1, unresolvedRefs: 0,
-			coverage: { totalEvidence: 1, callsEvidence: 1, referencesEvidence: 0, eligibleEvidence: 0, resolvedEvidence: 0, unresolvedEvidence: 0, typeOnlyEvidence: 0, unsupportedEvidence: 1, duplicateEvidence: 0, complete: true },
+			coverage: { totalEvidence: 1, callsEvidence: 1, referencesEvidence: 0, eligibleEvidence: 0, resolvedEvidence: 0, unresolvedEvidence: 0, typeOnlyEvidence: 0, unsupportedEvidence: 1, sameFileEvidence: 0, duplicateEvidence: 0, complete: true },
 		}), "utf-8");
 		expect(loadCallGraph("/proj")).toBeUndefined();
 		delete process.env.PILENS_DATA_DIR;

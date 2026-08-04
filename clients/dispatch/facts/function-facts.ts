@@ -150,7 +150,10 @@ function getParameters(node: TsNode): TsNode[] {
 }
 
 function parameterName(param: TsNode): string {
-	return firstNamedChild(param)?.text ?? "";
+	// JavaScript's grammar keeps a leaf parameter as the identifier itself;
+	// there is no named child to unwrap. TypeScript parameter wrapper nodes still
+	// use their first named child (type annotation/default/rest target).
+	return param.type === "identifier" ? param.text : firstNamedChild(param)?.text ?? "";
 }
 
 function getFunctionName(node: TsNode): string {

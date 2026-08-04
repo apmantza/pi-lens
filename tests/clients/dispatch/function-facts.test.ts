@@ -1,3 +1,5 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { FactStore } from "../../../clients/dispatch/fact-store.js";
 import {
@@ -15,6 +17,16 @@ async function run(content: string, ext = "ts"): Promise<FunctionSummary[]> {
 
 const byName = (s: FunctionSummary[], name: string) =>
   s.find((f) => f.name === name);
+
+async function runFixture(name: string): Promise<FunctionSummary[]> {
+  return run(
+    fs.readFileSync(
+      path.join(process.cwd(), "tests", "fixtures", "function-facts", name),
+      "utf8",
+    ),
+    path.extname(name).slice(1),
+  );
+}
 
 describe("functionFactProvider — names & forms", () => {
   it("names function declarations, methods, and const-bound arrows/expressions", async () => {
@@ -39,6 +51,15 @@ const fnExpr = function (z: number) { return z; };
     const s = await run(`const id = (x: number) => x;`);
     // No block body ⇒ no summary (matches the old !isBlock skip).
     expect(s).toHaveLength(0);
+  });
+});
+
+describe("functionFactProvider — JavaScript parameters", () => {
+  it("uses a leaf identifier parameter name in a real JS fixture", async () => {
+    const s = await runFixture("javascript-parameter.js");
+    const wrap = byName(s, "wrap")!;
+    expect(wrap.isPassThroughWrapper).toBe(true);
+    expect(wrap.passThroughTarget).toBe("inner");
   });
 });
 

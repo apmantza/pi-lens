@@ -4813,6 +4813,7 @@ export function extractSymbolsAndRefsFromGraph(graph: ReviewGraph): {
 		unresolvedEvidence: 0,
 		typeOnlyEvidence: 0,
 		unsupportedEvidence: 0,
+		sameFileEvidence: 0,
 		duplicateEvidence: 0,
 		complete: graph.persistCoverage?.partial !== true && graph.persistCoverage?.inProgress !== true,
 		languages: {},

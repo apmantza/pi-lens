@@ -242,6 +242,7 @@ export interface ModuleCallGraphCoverage {
 	unresolvedEvidence?: number;
 	typeOnlyEvidence?: number;
 	unsupportedEvidence?: number;
+	sameFileEvidence?: number;
 	duplicateEvidence?: number;
 	languages?: Record<string, "complete" | "partial" | "unavailable">;
 }
@@ -1753,6 +1754,7 @@ function callGraphCoverage(
 		unresolvedEvidence: coverage.unresolvedEvidence,
 		typeOnlyEvidence: coverage.typeOnlyEvidence,
 		unsupportedEvidence: coverage.unsupportedEvidence,
+		sameFileEvidence: coverage.sameFileEvidence,
 		duplicateEvidence: coverage.duplicateEvidence,
 		...(languages ? { languages } : {}),
 	};
@@ -1844,6 +1846,7 @@ function readCallGraph(
 			unresolvedEvidence: cached.graph.unresolvedRefs,
 			typeOnlyEvidence: 0,
 			unsupportedEvidence: 0,
+			sameFileEvidence: 0,
 			duplicateEvidence: 0,
 			complete: false,
 		}),

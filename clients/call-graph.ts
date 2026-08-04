@@ -37,6 +37,8 @@ export interface CallGraphEvidenceCoverage {
 	unresolvedEvidence: number;
 	typeOnlyEvidence: number;
 	unsupportedEvidence: number;
+	/** Resolved same-file evidence intentionally omitted from this cross-file projection. */
+	sameFileEvidence: number;
 	/** Raw evidence records beyond the first for each logical caller→callee edge. */
 	duplicateEvidence: number;
 	/** False for capped/in-progress graphs or incomplete extractor queries. */
@@ -349,6 +351,7 @@ export function buildCallGraph(
 				unresolvedEvidence: 0,
 				typeOnlyEvidence: 0,
 				unsupportedEvidence: 0,
+				sameFileEvidence: 0,
 				duplicateEvidence: 0,
 				complete: false,
 			 };
@@ -444,12 +447,14 @@ export function buildCallGraph(
 			for (const { callee, resolution, candidateCount } of candidates) {
 				if (normalizeMapKey(callee.filePath) === normalizeMapKey(callerFile)) {
 					// This projection is intentionally cross-file-only. A canonical
-					// same-file target is resolved by the source graph but unsupported
-					// here, so coverage must not claim a persisted resolved edge.
+					// same-file target is resolved by the source graph, but is represented
+					// by an explicit coverage category rather than as unsupported evidence.
+					// That keeps the projection contract while allowing complete coverage
+					// to gate user-facing cross-file impact honestly.
+					coverage.sameFileEvidence++;
 					if (hasInputCoverage) {
 						coverage.eligibleEvidence--;
 						coverage.resolvedEvidence--;
-						coverage.unsupportedEvidence++;
 					}
 					continue;
 				}
@@ -613,6 +618,7 @@ function inferLegacyCoverage(edges: ResolvedCallEdge[]): CallGraphEvidenceCovera
 		unresolvedEvidence: 0,
 		typeOnlyEvidence: 0,
 		unsupportedEvidence: 0,
+		sameFileEvidence: 0,
 		duplicateEvidence,
 		// A legacy graph can still be queried, but it cannot prove that the old
 		// extractor covered every source/reference kind.
@@ -658,13 +664,14 @@ function validatePersistedCallGraph(
 		coverage.unresolvedEvidence,
 		coverage.typeOnlyEvidence,
 		coverage.unsupportedEvidence,
+		coverage.sameFileEvidence,
 		coverage.duplicateEvidence,
 	];
 	if (coverageValues.some((value) => !finiteCount(value))) return false;
 	if (coverage.callsEvidence + coverage.referencesEvidence !== coverage.totalEvidence) return false;
 	if (coverage.resolvedEvidence > coverage.eligibleEvidence) return false;
 	if (coverage.eligibleEvidence !== coverage.resolvedEvidence) return false;
-	if (coverage.resolvedEvidence + coverage.unresolvedEvidence + coverage.typeOnlyEvidence + coverage.unsupportedEvidence !== coverage.totalEvidence) return false;
+	if (coverage.resolvedEvidence + coverage.unresolvedEvidence + coverage.typeOnlyEvidence + coverage.unsupportedEvidence + coverage.sameFileEvidence !== coverage.totalEvidence) return false;
 	if (coverage.complete && coverage.unsupportedEvidence > 0) return false;
 	if (coverage.languages && Object.values(coverage.languages).some(
 		(status) => status !== "complete" && status !== "partial" && status !== "unavailable",
@@ -703,7 +710,7 @@ function validatePersistedCallGraph(
 	if (!countsMatch(weightedDuplicateEvidence, coverage.duplicateEvidence)) return false;
 	if (!countsMatch(
 		coverage.totalEvidence,
-		weightedEdgeEvidence + coverage.unresolvedEvidence + coverage.typeOnlyEvidence + coverage.unsupportedEvidence,
+		weightedEdgeEvidence + coverage.unresolvedEvidence + coverage.typeOnlyEvidence + coverage.unsupportedEvidence + coverage.sameFileEvidence,
 	)) return false;
 	if (raw.totalRefs !== undefined && raw.totalRefs !== coverage.totalEvidence) return false;
 	if (raw.unresolvedRefs !== undefined && raw.unresolvedRefs !== coverage.unresolvedEvidence) return false;
