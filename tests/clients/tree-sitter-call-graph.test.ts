@@ -27,6 +27,19 @@ const CALL_FIXTURES: CallFixture[] = [
 	{ language: "python", directory: "python", caller: "caller.py", callee: "callee.py" },
 	{ language: "go", directory: "go", caller: "caller.go", callee: "callee.go" },
 	{ language: "rust", directory: "rust", caller: "caller.rs", callee: "callee.rs" },
+	{ language: "ruby", directory: "ruby", caller: "caller.rb", callee: "callee.rb" },
+	{ language: "c", directory: "c", caller: "caller.c", callee: "callee.c" },
+	{ language: "cpp", directory: "cpp", caller: "caller.cpp", callee: "callee.cpp" },
+	{ language: "java", directory: "java-call", caller: "Caller.java", callee: "Callee.java" },
+	{ language: "kotlin", directory: "kotlin-call", caller: "Caller.kt", callee: "Callee.kt" },
+	{ language: "csharp", directory: "csharp", caller: "caller.cs", callee: "callee.cs" },
+	{ language: "php", directory: "php", caller: "caller.php", callee: "callee.php" },
+	{ language: "swift", directory: "swift", caller: "caller.swift", callee: "callee.swift" },
+	{ language: "lua", directory: "lua", caller: "caller.lua", callee: "callee.lua" },
+	{ language: "ocaml", directory: "ocaml", caller: "caller.ml", callee: "callee.ml" },
+	{ language: "zig", directory: "zig", caller: "caller.zig", callee: "callee.zig" },
+	{ language: "bash", directory: "bash", caller: "caller.sh", callee: "callee.sh" },
+	{ language: "elixir", directory: "elixir", caller: "caller.ex", callee: "callee.ex" },
 	{ language: "javascript", directory: "javascript", caller: "caller.js", callee: "callee.js" },
 	{ language: "javascript", directory: "javascript", caller: "caller.jsx", callee: "callee.js" },
 	{ language: "javascript", directory: "javascript", caller: "caller.mjs", callee: "callee.js" },
@@ -36,6 +49,9 @@ const CALL_FIXTURES: CallFixture[] = [
 const TYPE_REFERENCE_FIXTURES: CallFixture[] = [
 	{ language: "java", directory: "java", caller: "Caller.java", callee: "Callee.java" },
 	{ language: "kotlin", directory: "kotlin", caller: "Caller.kt", callee: "Callee.kt" },
+	// Dart's shipped refs query intentionally exposes type references only; keep
+	// an actual fixture assertion so it is not mistaken for call coverage.
+	{ language: "dart", directory: "dart", caller: "caller.dart", callee: "callee.dart" },
 ];
 
 let client: TreeSitterClient;
