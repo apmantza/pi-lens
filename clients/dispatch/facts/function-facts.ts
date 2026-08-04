@@ -342,10 +342,10 @@ function hasReturnAwaitCall(node: TsNode): boolean {
 
 export const functionFactProvider: FactProvider = {
 	id: "fact.file.functions",
-	provides: ["file.functionSummaries"],
+	provides: ["file.functionSummaries", "file.functionFactsCoverage"],
 	requires: ["file.content"],
 	appliesTo(ctx) {
-		return /\.tsx?$/.test(ctx.filePath);
+		return /\.tsx?$/.test(ctx.filePath.toLowerCase());
 	},
 	async run(ctx, store) {
 		await extractFactsFromTree(
@@ -432,6 +432,7 @@ export const functionFactProvider: FactProvider = {
 
 				return { "file.functionSummaries": summaries };
 			},
+			"file.functionFactsCoverage",
 		);
 	},
 };

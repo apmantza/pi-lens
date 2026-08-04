@@ -7,11 +7,22 @@ import type {
 import { normalizeMapKey } from "../path-utils.js";
 import type { ExtractedSymbols } from "../tree-sitter-symbol-extractor.js";
 
+export type ReviewGraphExtractionStatus = "complete" | "partial" | "unavailable";
+
+export interface ReviewGraphExtractionCoverage {
+	definitions: ReviewGraphExtractionStatus;
+	references: ReviewGraphExtractionStatus;
+	imports: ReviewGraphExtractionStatus;
+	/** Warm TS/TSX function facts; JS-like files intentionally report unavailable. */
+	calls: ReviewGraphExtractionStatus;
+}
+
 export interface JsTsReviewGraphIr {
 	kind: "jsts";
 	imports: ImportEntry[];
 	reexports: ReExportEntry[];
 	functionSummaries: FunctionSummary[];
+	coverage: ReviewGraphExtractionCoverage;
 }
 
 export interface TreeSitterReviewGraphIr {

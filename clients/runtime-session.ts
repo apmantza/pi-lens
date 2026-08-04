@@ -1076,6 +1076,8 @@ function scheduleStartupScans(
 			buildOrUpdateGraph,
 			extractSymbolsAndRefsFromGraph,
 			isReviewGraphMigrationNeeded,
+			getReviewGraphMaxFiles,
+			getGraphSourceFiles,
 		} = await import("./review-graph/builder.js");
 		const {
 			buildCallGraph,
@@ -1089,8 +1091,17 @@ function scheduleStartupScans(
 		// Try loading from cache first
 		const cached = loadCallGraph(snapshotRoot);
 		if (cached) {
+			// Validate against the current canonical, source-filtered set rather
+			// than only the cached keys. This catches additions, deletions, and a
+			// newly-preferred TS/TSX twin replacing a cached JS artifact. The walk
+			// is bounded by the same review-graph file/entry policy and is deferred
+			// here, never performed on the interactive hook path.
+			const maxGraphFiles = getReviewGraphMaxFiles(analysisRoot);
+			const currentSourceSet = await getGraphSourceFiles(analysisRoot);
 			const cachedFiles = [...cached.fileMtimes.keys()];
-			const stale = staleFiles(cached.fileMtimes, cachedFiles);
+			const stale = currentSourceSet.entryBudgetExceeded || currentSourceSet.files.length > maxGraphFiles
+				? [analysisRoot]
+				: staleFiles(cached.fileMtimes, currentSourceSet.files);
 			// #260: a stale REVIEW-graph version must force a rebuild even when the
 			// (separate) call-graph cache is fresh — otherwise an upgrade that
 			// invalidated the persisted graph (e.g. v2→v3 test exclusion) leaves
@@ -1111,10 +1122,13 @@ function scheduleStartupScans(
 		const sessionFacts = new FactStore();
 		const graph = await buildOrUpdateGraph(analysisRoot, [], sessionFacts);
 		if (!runtime.isCurrentSession(sessionGeneration)) return;
-		const { allSymbols, allRefs } = extractSymbolsAndRefsFromGraph(graph);
-		const callGraph = buildCallGraph(allSymbols, allRefs);
+		const { allSymbols, allRefs, coverage } = extractSymbolsAndRefsFromGraph(graph);
+		const callGraph = buildCallGraph(allSymbols, allRefs, coverage);
 		runtime.callGraph = callGraph;
-		const mtimes = readMtimes([...allSymbols.keys()]);
+		// Persist the complete canonical graph source set, including files with no
+		// symbols. Otherwise an empty file could be added/deleted without
+		// invalidating the cache.
+		const mtimes = readMtimes([...graph.fileNodes.keys()]);
 		saveCallGraph(snapshotRoot, callGraph, mtimes);
 		dbg(
 			`session_start call-graph: built ${callGraph.edges.length} edges, ${callGraph.callers.size} callee entries (${Date.now() - startMs}ms)`,

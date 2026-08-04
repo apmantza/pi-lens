@@ -575,7 +575,9 @@ function resolveUsedBy(
 			symbol,
 			line,
 			relation: edge.kind,
-			...(edge.resolution ? { resolution: edge.resolution } : {}),
+			...(edge.resolution && edge.resolution !== "unresolved"
+				? { resolution: edge.resolution }
+				: {}),
 		});
 		if (out.length >= cap) break;
 	}

@@ -5,9 +5,9 @@ import {
   type FunctionSummary,
 } from "../../../clients/dispatch/facts/function-facts.js";
 
-async function run(content: string): Promise<FunctionSummary[]> {
+async function run(content: string, ext = "ts"): Promise<FunctionSummary[]> {
   const facts = new FactStore();
-  const filePath = "/tmp/fn.ts";
+  const filePath = `/tmp/fn.${ext}`;
   facts.setFileFact(filePath, "file.content", content);
   await functionFactProvider.run({ filePath } as never, facts);
   return facts.getFileFact<FunctionSummary[]>(filePath, "file.functionSummaries") ?? [];

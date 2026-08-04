@@ -75,7 +75,7 @@ export interface ReviewGraphEdge {
 	 * definite external target (`callee.includes(".")` with no in-project
 	 * receiver hint, in builder.ts).
 	 */
-	resolution?: "exact" | "import" | "receiver-type" | "name-only";
+	resolution?: "exact" | "import" | "receiver-type" | "name-only" | "unresolved";
 }
 
 export interface ReviewGraph {

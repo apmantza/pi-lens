@@ -14,6 +14,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getProjectDataDir } from "./file-utils.js";
+import { parseSymbolKey } from "./call-graph.js";
 import type { FunctionCallGraph, SymbolKey } from "./call-graph.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -52,10 +53,10 @@ const MIN_IN_DEGREE = 0.5; // skip symbols with low centrality (avoids noise)
 // ── Builder ───────────────────────────────────────────────────────────────────
 
 function inferKind(symbolKey: SymbolKey): ModelEntry["kind"] {
-	const name = symbolKey.split(":").pop() ?? "";
-	if (/^[A-Z]/.test(name)) return "class";
-	if (name.includes(".")) return "method";
-	return "function";
+	const parsed = parseSymbolKey(symbolKey);
+	if (parsed.kind === "class") return "class";
+	if (parsed.kind === "method" || parsed.symbolName?.includes(".")) return "method";
+	return /^[A-Z]/.test(parsed.symbolName ?? "") ? "class" : "function";
 }
 
 function estimateTokens(entry: Omit<ModelEntry, "tokens">): number {
@@ -95,9 +96,9 @@ export function buildCodebaseModel(
 	for (const [calleeKey, inDegree] of ranked) {
 		if (totalTokens >= budget) break;
 
-		const parts = calleeKey.split(":");
-		const name = parts.pop() ?? calleeKey;
-		const filePath = parts.join(":");
+		const parsedCallee = parseSymbolKey(calleeKey);
+		const name = parsedCallee.symbolName ?? calleeKey;
+		const filePath = parsedCallee.filePath;
 
 		// Skip if file is in test/node_modules/generated directories
 		if (
@@ -116,12 +117,12 @@ export function buildCodebaseModel(
 		seenNames.add(name);
 
 		const calls = [...(graph.callees.get(calleeKey) ?? new Set())]
-			.map((k) => k.split(":").pop() ?? k)
+			.map((k) => parseSymbolKey(k).symbolName ?? k)
 			.filter(Boolean)
 			.slice(0, MAX_CALLS_PER_SYMBOL);
 
 		const calledBy = [...(graph.callers.get(calleeKey) ?? new Set())]
-			.map((k) => k.split(":").pop() ?? k)
+			.map((k) => parseSymbolKey(k).symbolName ?? k)
 			.filter((n) => !n.startsWith("file:"))
 			.slice(0, MAX_CALLS_PER_SYMBOL);
 
@@ -147,7 +148,7 @@ export function buildCodebaseModel(
 
 	const allFiles = new Set(
 		[...graph.callers.keys(), ...graph.callees.keys()]
-			.map((k) => k.split(":").slice(0, -1).join(":"))
+			.map((k) => parseSymbolKey(k).filePath)
 			.filter(Boolean),
 	);
 

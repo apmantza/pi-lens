@@ -60,3 +60,52 @@ export function buildSymbolId(
 ): string {
 	return `${filePath}:${name}:${kind}:${startLine}`;
 }
+
+const CANONICAL_SYMBOL_KINDS = new Set([
+	"function", "method", "class", "interface", "type", "variable", "property",
+]);
+
+export interface ParsedSymbolKey {
+	filePath: string;
+	symbolName?: string;
+	kind?: string;
+	line?: number;
+}
+
+/**
+ * Parse both canonical symbol IDs and the legacy `file:name` compatibility
+ * shape. Canonical IDs are recognized from their typed line suffix, so drive
+ * letters and colons in POSIX filenames are data rather than separators. A
+ * known file hint makes the legacy form lossless too; without it, legacy IDs
+ * remain inherently ambiguous and use their historical final separator.
+ */
+export function parseSymbolKey(
+	key: string,
+	knownFilePath?: string,
+): ParsedSymbolKey {
+	if (key.startsWith("file:")) {
+		return { filePath: key.slice("file:".length) };
+	}
+	const canonical = /^(.*):([^:]*):([^:]+):(\d+)$/.exec(key);
+	if (canonical && CANONICAL_SYMBOL_KINDS.has(canonical[3])) {
+		return {
+			filePath: canonical[1],
+			symbolName: canonical[2] || undefined,
+			kind: canonical[3],
+			line: Number(canonical[4]),
+		};
+	}
+	if (knownFilePath && key.startsWith(`${knownFilePath}:`)) {
+		return {
+			filePath: knownFilePath,
+			symbolName: key.slice(knownFilePath.length + 1) || undefined,
+		};
+	}
+	const separator = key.lastIndexOf(":");
+	return separator < 0
+		? { filePath: key }
+		: {
+				filePath: key.slice(0, separator),
+				symbolName: key.slice(separator + 1) || undefined,
+			};
+}

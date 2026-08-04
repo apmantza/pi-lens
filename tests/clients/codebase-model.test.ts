@@ -133,6 +133,17 @@ describe("buildCodebaseModel", () => {
 		expect(entry?.calledBy.length).toBeLessThanOrEqual(10);
 	});
 
+	it("parses canonical symbol ids with Windows drives and POSIX colons", () => {
+		const graph = makeGraph({
+			"C:\\repo\\src:svc.ts:run:method:27": 2.0,
+			"/proj/dir:name.ts:Target:class:9": 1.0,
+		});
+		const model = buildCodebaseModel(graph, "/proj");
+		expect(model.entries.map((entry) => entry.name)).toEqual(["run", "Target"]);
+		expect(model.entries[0]?.kind).toBe("method");
+		expect(model.entries[1]?.kind).toBe("class");
+	});
+
 	it("infers class kind for PascalCase names", () => {
 		const graph = makeGraph({ "/proj/MyClass.ts:MyClass": 2.0 });
 		const model = buildCodebaseModel(graph, "/proj");

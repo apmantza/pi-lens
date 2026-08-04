@@ -92,12 +92,55 @@ function probeExists(filePath: string, cache?: ArtifactProbeCache): boolean {
  * Order matters: first entry has highest precedence.
  */
 export const SOURCE_PRECEDENCE: Record<string, string[]> = {
-	".ts": [".js", ".mjs", ".cjs"],
-	".tsx": [".jsx", ".js", ".mjs", ".cjs"],
+	".ts": [".js", ".jsx", ".mjs", ".cjs"],
+	".tsx": [".js", ".jsx", ".mjs", ".cjs"],
+	".mts": [".js", ".jsx", ".mjs", ".cjs"],
+	".cts": [".js", ".jsx", ".mjs", ".cjs"],
 	".vue": [".js", ".mjs"],
 	".svelte": [".js", ".mjs"],
 	".coffee": [".js"],
 };
+
+/**
+ * Return source-twin candidates in the policy order for a compiled path.
+ * This is the pure counterpart to {@link findSourceSibling}: callers that
+ * already have a complete file identity set (the review graph and lens map)
+ * must not probe the filesystem or reimplement the extension matrix.
+ */
+export function sourceTwinCandidates(filePath: string): string[] {
+	const ext = path.extname(filePath).toLowerCase();
+	const stem = filePath.slice(0, filePath.length - ext.length);
+	const sourceExts =
+		ext === ".mjs"
+			? [".mts", ".ts", ".tsx", ".cts"]
+			: ext === ".cjs"
+				? [".cts", ".ts", ".tsx", ".mts"]
+				: ext === ".jsx"
+					? [".tsx", ".ts", ".mts", ".cts"]
+					: ext === ".js"
+						? [".ts", ".tsx", ".mts", ".cts"]
+						: [];
+	return sourceExts.map((sourceExt) => `${stem}${sourceExt}`);
+}
+
+/**
+ * Resolve a compiled file to its canonical source identity within a known
+ * file set. The caller supplies normalized identities; this helper deliberately
+ * does not touch the filesystem, so complete source-set walks remain bounded
+ * and point-in-time consistent.
+ */
+export function canonicalSourceTwin(
+	filePath: string,
+	availableFiles: ReadonlySet<string>,
+	excludedFiles?: ReadonlySet<string>,
+): string {
+	for (const candidate of sourceTwinCandidates(filePath)) {
+		if (availableFiles.has(candidate) && !excludedFiles?.has(candidate)) {
+			return candidate;
+		}
+	}
+	return filePath;
+}
 
 /**
  * Every extension belonging to a supported file kind. KIND_EXTENSIONS is the
@@ -288,21 +331,21 @@ export function findSourceSibling(
 	filePath: string,
 	probeCache?: ArtifactProbeCache,
 ): string | null {
+	for (const candidate of sourceTwinCandidates(filePath)) {
+		if (probeExists(candidate, probeCache)) return candidate;
+	}
+
+	// Keep the legacy non-JS source policies (Vue/Svelte/CoffeeScript) on the
+	// same seam without making them part of the JS/TS twin matrix above.
 	const ext = path.extname(filePath).toLowerCase();
 	const dir = getDir(filePath);
 	const base = getBasename(filePath);
-
-	// Find which precedence group this extension belongs to
 	for (const [sourceExt, shadowedExts] of Object.entries(SOURCE_PRECEDENCE)) {
-		if (shadowedExts.includes(ext)) {
-			// This file could be shadowed by a source file with sourceExt
+		if (!sourceExtsForCompiledExt(sourceExt).length && shadowedExts.includes(ext)) {
 			const siblingPath = path.join(dir, base + sourceExt);
-			if (probeExists(siblingPath, probeCache)) {
-				return siblingPath;
-			}
+			if (probeExists(siblingPath, probeCache)) return siblingPath;
 		}
 	}
-
 	return null;
 }
 
@@ -312,6 +355,12 @@ export function findSourceSibling(
  * @param probeCache - Optional per-walk memo (see {@link ArtifactProbeCache}).
  * Omit for the original, uncached behavior.
  */
+function sourceExtsForCompiledExt(sourceExt: string): string[] {
+	return sourceExt === ".ts" || sourceExt === ".tsx" || sourceExt === ".mts" || sourceExt === ".cts"
+		? [sourceExt]
+		: [];
+}
+
 export function isBuildArtifact(
 	filePath: string,
 	probeCache?: ArtifactProbeCache,

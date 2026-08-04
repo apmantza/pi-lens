@@ -111,7 +111,7 @@ function parseReExport(node: TsNode): ReExportEntry | null {
 
 export const importFactProvider: FactProvider = {
 	id: "fact.file.imports",
-	provides: ["file.imports", "file.reexports"],
+	provides: ["file.imports", "file.reexports", "file.importFactsCoverage"],
 	requires: ["file.content"],
 	appliesTo(ctx) {
 		const ext = ctx.filePath.slice(ctx.filePath.lastIndexOf(".")).toLowerCase();
@@ -119,11 +119,16 @@ export const importFactProvider: FactProvider = {
 	},
 	async run(ctx, store) {
 		const content = store.getFileFact<string>(ctx.filePath, "file.content");
-		const setEmpty = () => {
+		const setEmpty = (complete = false) => {
 			store.setFileFact(ctx.filePath, "file.imports", []);
 			store.setFileFact(ctx.filePath, "file.reexports", []);
+			store.setFileFact(
+				ctx.filePath,
+				"file.importFactsCoverage",
+				complete ? "complete" : "unavailable",
+			);
 		};
-		if (!content) {
+		if (content == null) {
 			setEmpty();
 			return;
 		}
@@ -235,5 +240,6 @@ export const importFactProvider: FactProvider = {
 			}
 		});
 		if (!parsed.parsed) setEmpty();
+		else store.setFileFact(ctx.filePath, "file.importFactsCoverage", "complete");
 	},
 };

@@ -621,6 +621,12 @@ export interface ExtractedSymbols {
 	symbols: Symbol[];
 	refs: SymbolRef[];
 	imports: ImportRef[];
+	/** Query availability is explicit so a missing grammar/query is not a clean zero. */
+	coverage?: {
+		definitions: "complete" | "unavailable";
+		references: "complete" | "unavailable";
+		imports: "complete" | "unavailable";
+	};
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: tree-sitter match type
@@ -750,7 +756,16 @@ export class TreeSitterSymbolExtractor {
 			}
 		}
 
-		return { symbols, refs, imports };
+		return {
+			symbols,
+			refs,
+			imports,
+			coverage: {
+				definitions: this.defQuery ? "complete" : "unavailable",
+				references: this.refQuery ? "complete" : "unavailable",
+				imports: this.importQuery ? "complete" : "unavailable",
+			},
+		};
 	}
 
 	private queryMatches(query: any, rootNode: any): any[] {
@@ -1068,20 +1083,30 @@ export class TreeSitterSymbolExtractor {
 	private parseRefMatch(match: any, filePath: string): SymbolRef | null {
 		let name: string | undefined;
 		let refNode: { startPosition: { row: number; column: number } } | undefined;
+		let referenceKind: SymbolRef["referenceKind"] = "unknown";
 
 		for (const capture of match.captures) {
+			const captureName = String(capture.name);
 			if (
-				capture.name.endsWith("Ident") ||
-				capture.name.endsWith("Method") ||
-				capture.name.endsWith("Field")
+				captureName.endsWith("Ident") ||
+				captureName.endsWith("Method") ||
+				captureName.endsWith("Field")
 			) {
 				name = capture.node.text;
 				// biome-ignore lint/suspicious/noExplicitAny: Node type
 				refNode = capture.node as any;
+				if (captureName.startsWith("type")) referenceKind = "type";
+				else if (captureName.startsWith("call") || captureName.startsWith("new")) {
+					referenceKind = "call";
+				}
 			}
-			if (capture.name.endsWith("Ref") && !refNode) {
+			if (captureName.endsWith("Ref") && !refNode) {
 				// biome-ignore lint/suspicious/noExplicitAny: Node type
 				refNode = capture.node as any;
+				if (captureName.startsWith("type")) referenceKind = "type";
+				else if (captureName.startsWith("call") || captureName.startsWith("new")) {
+					referenceKind = "call";
+				}
 			}
 		}
 
@@ -1089,9 +1114,11 @@ export class TreeSitterSymbolExtractor {
 
 		return {
 			symbolId: `${filePath}:${name}`, // Will be resolved later
+			symbolName: name,
 			filePath,
 			line: refNode.startPosition.row + 1,
 			column: refNode.startPosition.column + 1,
+			referenceKind,
 		};
 	}
 

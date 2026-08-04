@@ -18,6 +18,7 @@ import {
 	clearReviewGraphWorkspaceCache,
 	flushReviewGraphPersistsForTests,
 	getCachedReviewGraph,
+	getGraphSourceFiles,
 	getLastGraphBuildInfo,
 	isReviewGraphMigrationNeeded,
 } from "../../clients/review-graph/builder.js";
@@ -116,6 +117,26 @@ describe("review graph service", () => {
 			);
 			expect(g2.fileNodes.has(normalizeMapKey(testPath))).toBe(false);
 		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("getGraphSourceFiles matches the graph's canonical file set", async () => {
+		const env = setupTestEnvironment("pi-lens-review-graph-source-set-");
+		const previousMaxBytes = process.env.PI_LENS_REVIEW_GRAPH_MAX_FILE_BYTES;
+		try {
+			const sourcePath = createTempFile(env.tmpDir, "src/source.ts", "x");
+			const testPath = createTempFile(env.tmpDir, "src/source.test.ts", "x");
+			const oversizedPath = createTempFile(env.tmpDir, "src/oversized.ts", "this file is deliberately oversized\n");
+			process.env.PI_LENS_REVIEW_GRAPH_MAX_FILE_BYTES = "2";
+
+			const result = await getGraphSourceFiles(env.tmpDir);
+			expect(result.files).toContain(normalizeMapKey(sourcePath));
+			expect(result.files).not.toContain(normalizeMapKey(testPath));
+			expect(result.files).not.toContain(normalizeMapKey(oversizedPath));
+		} finally {
+			if (previousMaxBytes === undefined) delete process.env.PI_LENS_REVIEW_GRAPH_MAX_FILE_BYTES;
+			else process.env.PI_LENS_REVIEW_GRAPH_MAX_FILE_BYTES = previousMaxBytes;
 			env.cleanup();
 		}
 	});
@@ -230,7 +251,7 @@ describe("review graph service", () => {
 			);
 			expect(getCachedReviewGraph(env.tmpDir)).toBeUndefined();
 
-			// A real build produces a fresh v4 graph with the new ID shape, not the
+			// A real build produces a fresh v8 graph with the new ID shape, not the
 			// old one, and is no longer flagged as needing migration.
 			createTempFile(
 				env.tmpDir,
@@ -238,7 +259,7 @@ describe("review graph service", () => {
 				"export function alpha() {\n  return 1;\n}\n",
 			);
 			const graph = await buildOrUpdateGraph(env.tmpDir, [], new FactStore());
-			expect(graph.version).toBe("v7");
+			expect(graph.version).toBe("v8");
 			const alphaId = [...graph.nodes.keys()].find((id) =>
 				id.includes(":alpha:"),
 			);
@@ -299,7 +320,7 @@ describe("review graph service", () => {
 				"export interface Foo {\n  a: number;\n}\n",
 			);
 			const graph = await buildOrUpdateGraph(env.tmpDir, [], new FactStore());
-			expect(graph.version).toBe("v7");
+			expect(graph.version).toBe("v8");
 			flushReviewGraphPersistsForTests();
 			for (let i = 0; i < 20 && isReviewGraphMigrationNeeded(env.tmpDir); i++) {
 				await new Promise((r) => setTimeout(r, 25));

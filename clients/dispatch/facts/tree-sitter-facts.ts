@@ -38,16 +38,20 @@ export async function extractFactsFromTree(
 	store: FactStore,
 	defaults: Record<string, unknown[]>,
 	extract: (root: TsNode, content: string) => Record<string, unknown[]>,
+	coverageFact?: string,
 ): Promise<void> {
-	const writeAll = (facts: Record<string, unknown[]>): void => {
+	const writeAll = (facts: Record<string, unknown[]>, complete: boolean): void => {
 		for (const key of Object.keys(defaults)) {
 			store.setFileFact(ctx.filePath, key, facts[key] ?? defaults[key]);
 		}
+		if (coverageFact) {
+			store.setFileFact(ctx.filePath, coverageFact, complete ? "complete" : "unavailable");
+		}
 	};
-	const content = store.getFileFact<string>(ctx.filePath, "file.content");
-	if (!content) return writeAll(defaults);
+	const content = store.getFileFact<string | null>(ctx.filePath, "file.content");
+	if (content == null) return writeAll(defaults, false);
 	const parsed = await withFactTree(ctx.filePath, content, (root) =>
 		extract(root, content),
 	);
-	writeAll(parsed.parsed ? parsed.value : defaults);
+	writeAll(parsed.parsed ? parsed.value : defaults, parsed.parsed);
 }

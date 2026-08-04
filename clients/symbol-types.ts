@@ -65,12 +65,39 @@ export interface Symbol {
 	isAsync?: boolean;
 }
 
+export type CallGraphEvidenceKind = "calls" | "references";
+export type SymbolReferenceKind = "call" | "type" | "unknown";
+export type SymbolResolution =
+	| "exact"
+	| "import"
+	| "receiver-type"
+	| "name-only"
+	| "unresolved";
+
 export interface SymbolRef {
-	symbolId: string; // Reference to which symbol (by id)
+	/** Legacy name-based reference id; normalized graph refs also carry targetId. */
+	symbolId: string;
+	/** Reference name as extracted, avoiding delimiter-based id parsing. */
+	symbolName?: string;
 	filePath: string;
 	line: number;
 	column: number;
 	context?: string; // Surrounding line for context
+	/** Evidence source in the review graph. Undefined means legacy call-graph input. */
+	evidenceKind?: CallGraphEvidenceKind;
+	/** Whether a references edge is call-like, type-only, or unsupported. */
+	referenceKind?: SymbolReferenceKind;
+	/** Canonical review-graph target node id, when the graph supplied one. */
+	targetId?: string;
+	/** Canonical caller symbol node id for a symbol-originated calls edge. */
+	callerSymbolId?: string;
+	resolution?: SymbolResolution;
+	/** Target metadata copied from the graph node; never inferred from targetId text. */
+	targetName?: string;
+	targetKind?: string;
+	targetFilePath?: string;
+	targetLine?: number;
+	targetColumn?: number;
 }
 
 export interface SymbolIndex {

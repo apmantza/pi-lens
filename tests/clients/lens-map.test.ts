@@ -119,6 +119,27 @@ describe("aggregateGraphToFiles", () => {
 		expect(result.ignoredFileCount).toBe(0);
 	});
 
+	it("deduplicates identical source/twin symbols and remapped edge evidence", () => {
+		const nodes: ReviewGraphNode[] = [
+			{ id: "a.ts#file", kind: "file", language: "ts", filePath: "a.ts" },
+			{ id: "a.js#file", kind: "file", language: "js", filePath: "a.js" },
+			{ id: "b.ts#file", kind: "file", language: "ts", filePath: "b.ts" },
+			{ id: "b.js#file", kind: "file", language: "js", filePath: "b.js" },
+			{ id: "a.ts#run", kind: "symbol", language: "ts", filePath: "a.ts", symbolName: "run", symbolKind: "function" },
+			{ id: "a.js#run", kind: "symbol", language: "js", filePath: "a.js", symbolName: "run", symbolKind: "function" },
+			{ id: "b.ts#target", kind: "symbol", language: "ts", filePath: "b.ts", symbolName: "target", symbolKind: "function" },
+			{ id: "b.js#target", kind: "symbol", language: "js", filePath: "b.js", symbolName: "target", symbolKind: "function" },
+		];
+		const result = aggregateGraphToFiles(makeGraph(nodes, [
+			{ from: "a.ts#run", to: "b.ts#target", kind: "calls" },
+			{ from: "a.js#run", to: "b.js#target", kind: "calls" },
+		]));
+		expect(result.compiledTwinCount).toBe(2);
+		expect(result.nodes.find((node) => node.id === idFor("a.ts"))?.symbolCount).toBe(1);
+		expect(result.nodes.find((node) => node.id === idFor("b.ts"))?.symbolCount).toBe(1);
+		expect(result.edges).toEqual([{ from: idFor("a.ts"), to: idFor("b.ts"), weight: 1 }]);
+	});
+
 	it("drops untracked-gitignored files via excludeIds — unless a surviving twin merge rescues them", () => {
 		const nodes: ReviewGraphNode[] = [
 			// Tracked source — stays (not in excludeIds).
@@ -254,9 +275,9 @@ describe("aggregateGraphToFiles", () => {
 			weight: 1,
 		});
 
-		// Symbol counts merge: a.ts's own symbol + the twin a.js's symbol.
+		// Compiled twins are one logical source symbol, not duplicate evidence.
 		const aNode = result.nodes.find((n) => n.id === idFor("a.ts"));
-		expect(aNode?.symbolCount).toBe(2);
+		expect(aNode?.symbolCount).toBe(1);
 		// The merged node keeps the SOURCE file's language.
 		expect(aNode?.language).toBe("ts");
 	});
