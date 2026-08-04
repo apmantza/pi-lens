@@ -343,10 +343,12 @@ export function getReviewGraphCacheIdentity(
 	const cached = _workspaceGraphCache.get(normalizeMapKey(cwd));
 	if (!cached) return undefined;
 	if (graph && cached.graph.version !== graph.version) return undefined;
-	return {
-		version: graph?.version ?? cached.graph.version,
-		signature: cached.signature,
-	};
+	const version = graph?.version ?? cached.graph.version;
+	if (typeof version !== "string" || version.length === 0 ||
+		typeof cached.signature !== "string") {
+		return undefined;
+	}
+	return { version, signature: cached.signature };
 }
 
 // #300 Edge 2: the review-graph's cross-worktree isolation is INCIDENTAL to
@@ -1040,7 +1042,15 @@ function loadPersistedGraph(
 			? gunzipSync(fs.readFileSync(cachePath)).toString("utf-8")
 			: fs.readFileSync(legacyPath, "utf-8");
 		const data = JSON.parse(raw) as PersistedGraphData;
-		if (data.version !== REVIEW_GRAPH_VERSION) return null;
+		// Derived projections require a canonical source identity. Legacy or
+		// malformed snapshots are unavailable, never a clean empty graph.
+		if (
+			data.version !== REVIEW_GRAPH_VERSION ||
+			typeof data.signature !== "string" ||
+			typeof data.builtAt !== "string" ||
+			!Array.isArray(data.nodes) ||
+			!Array.isArray(data.edges)
+		) return null;
 		if (data.coverage?.partial && !opts?.allowPartial) return null;
 		if (opts?.verifyGitStamp && data.gitStamp) {
 			// #300: a stamped snapshot must match the CURRENT repo identity. This

@@ -555,24 +555,24 @@ export function saveCallGraph(
 	identity: CallGraphCacheIdentity,
 	fileMtimes?: Map<string, number>,
 ): void;
+/**
+ * Legacy overload retained so old callers can write a cache, but such a cache
+ * deliberately cannot be loaded as current because it has no canonical graph
+ * identity. This is a migration aid, not a freshness fallback.
+ */
 export function saveCallGraph(
 	cwd: string,
 	graph: FunctionCallGraph,
 	fileMtimes: Map<string, number>,
-	identity?: CallGraphCacheIdentity,
 ): void;
 export function saveCallGraph(
 	cwd: string,
 	graph: FunctionCallGraph,
 	identityOrMtimes: CallGraphCacheIdentity | Map<string, number>,
-	legacyIdentityOrMtimes?: CallGraphCacheIdentity | Map<string, number>,
+	legacyFileMtimes?: Map<string, number>,
 ): void {
-	const identity = identityOrMtimes instanceof Map
-		? legacyIdentityOrMtimes instanceof Map ? undefined : legacyIdentityOrMtimes
-		: identityOrMtimes;
-	const fileMtimes = identityOrMtimes instanceof Map
-		? identityOrMtimes
-		: legacyIdentityOrMtimes instanceof Map ? legacyIdentityOrMtimes : undefined;
+	const identity = identityOrMtimes instanceof Map ? undefined : identityOrMtimes;
+	const fileMtimes = identityOrMtimes instanceof Map ? identityOrMtimes : legacyFileMtimes;
 	const cacheFile = cacheFilePath(cwd);
 	const metaFile = metaFilePath(cwd);
 	try {
@@ -666,9 +666,11 @@ function validatePersistedCallGraph(
 	coverage: CallGraphEvidenceCoverage,
 ): boolean {
 	if (!raw || raw.version !== CACHE_VERSION || typeof raw.builtAt !== "string") return false;
-	if (!raw.fileMtimes || typeof raw.fileMtimes !== "object" || Array.isArray(raw.fileMtimes)) return false;
+	if (typeof raw.reviewGraphVersion !== "string" || raw.reviewGraphVersion.length === 0 ||
+		typeof raw.reviewGraphSignature !== "string") return false;
+	if (raw.fileMtimes !== undefined && (typeof raw.fileMtimes !== "object" || Array.isArray(raw.fileMtimes))) return false;
 	if (!Array.isArray(raw.edges) || !Array.isArray(raw.callees) || !Array.isArray(raw.callers) || !Array.isArray(raw.inDegree)) return false;
-	for (const mtime of Object.values(raw.fileMtimes)) {
+	for (const mtime of Object.values(raw.fileMtimes ?? {})) {
 		if (typeof mtime !== "number" || !Number.isFinite(mtime)) return false;
 	}
 	const coverageValues = [
@@ -766,14 +768,25 @@ function validatePersistedCallGraph(
  * Load the persisted call graph from disk.
  * Returns undefined if the cache is missing, version-mismatched, or corrupt.
  */
-export function loadCallGraph(cwd: string): {
+export function loadCallGraph(
+	cwd: string,
+	expectedIdentity?: CallGraphCacheIdentity,
+): {
 	graph: FunctionCallGraph;
+	identity: CallGraphCacheIdentity;
 	fileMtimes: Map<string, number>;
 } | undefined {
 	const cacheFile = cacheFilePath(cwd);
 	try {
 		const raw = JSON.parse(fs.readFileSync(cacheFile, "utf-8")) as PersistedCallGraph;
 		if (raw.version !== CACHE_VERSION) return undefined;
+		if (typeof raw.reviewGraphVersion !== "string" || typeof raw.reviewGraphSignature !== "string") return undefined;
+		const identity: CallGraphCacheIdentity = {
+			reviewGraphVersion: raw.reviewGraphVersion,
+			reviewGraphSignature: raw.reviewGraphSignature,
+		};
+		if (expectedIdentity && (identity.reviewGraphVersion !== expectedIdentity.reviewGraphVersion ||
+			identity.reviewGraphSignature !== expectedIdentity.reviewGraphSignature)) return undefined;
 
 		const coverage = loadCoverage(raw.coverage, raw.edges);
 		if (!validatePersistedCallGraph(raw, coverage)) return undefined;
@@ -788,12 +801,13 @@ export function loadCallGraph(cwd: string): {
 				coverage,
 				builtAt: raw.builtAt,
 			},
-				fileMtimes: new Map(
-					Object.entries(raw.fileMtimes).map(([file, mtime]) => [
-						normalizeMapKey(file),
-						mtime,
-					]),
-				),
+			identity,
+			fileMtimes: new Map(
+				Object.entries(raw.fileMtimes ?? {}).map(([file, mtime]) => [
+					normalizeMapKey(file),
+					mtime,
+				]),
+			),
 		};
 	} catch {
 		return undefined;

@@ -220,7 +220,12 @@ export function aggregateGraphToFiles(
 		sourceSymbolsByFile.set(canonical, byName);
 		logicalSymbolByNode.set(node.id, node.id);
 	}
-	const usedTwinSymbols = new Set<string>();
+	// Assign each twin's declarations by occurrence within THAT twin file, not
+	// through one process-wide "used" set. A source can have several compiled
+	// siblings (`x.ts`, `x.js`, `x.mjs`, ...); every sibling's first `run` must
+	// map to the source's first `run`, while overloads with the same name/kind
+	// remain distinct by occurrence.
+	const twinOccurrencesByFile = new Map<string, Map<string, number>>();
 	for (const node of graph.nodes.values()) {
 		if (node.kind !== "symbol" || !node.filePath || !node.symbolName) continue;
 		const raw = normalizeMapKey(node.filePath);
@@ -228,9 +233,12 @@ export function aggregateGraphToFiles(
 		if (raw === canonical) continue;
 		const key = `${node.symbolName}\u0000${node.symbolKind ?? ""}`;
 		const sourceIds = sourceSymbolsByFile.get(canonical)?.get(key) ?? [];
-		const logical = sourceIds.find((id) => !usedTwinSymbols.has(id));
+		const occurrences = twinOccurrencesByFile.get(raw) ?? new Map<string, number>();
+		const occurrence = occurrences.get(key) ?? 0;
+		occurrences.set(key, occurrence + 1);
+		twinOccurrencesByFile.set(raw, occurrences);
+		const logical = sourceIds[occurrence];
 		if (logical) {
-			usedTwinSymbols.add(logical);
 			logicalSymbolByNode.set(node.id, logical);
 		} else {
 			// A compiled-only declaration remains real evidence.

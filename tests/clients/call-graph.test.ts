@@ -154,7 +154,7 @@ describe("buildCallGraph", () => {
 				new Map([[fileA, [ref(fileA, "shared")]]]),
 			);
 
-			saveCallGraph("/proj", graph, new Map([[fileA, 1], [fileB, 2], [fileC, 3]]));
+			saveCallGraph("/proj", graph, { reviewGraphVersion: "v7", reviewGraphSignature: "sig-ambiguous" }, new Map([[fileA, 1], [fileB, 2], [fileC, 3]]));
 			expect(loadCallGraph("/proj")?.graph.coverage).toMatchObject({
 				totalEvidence: 1,
 				resolvedEvidence: 1,
@@ -180,12 +180,12 @@ describe("buildCallGraph", () => {
 				new Map([[fileA, [
 					{ ...ref(fileA, "target", 4), targetId: sameFileId, evidenceKind: "calls", referenceKind: "call", resolution: "exact" },
 					{ ...ref(fileA, "remote", 11), targetId: crossFileId, callerSymbolId: callerId, evidenceKind: "calls", referenceKind: "call", resolution: "exact" },
-				]]),
+				]]]),
 				{ totalEvidence: 2, callsEvidence: 2, referencesEvidence: 0, eligibleEvidence: 2, resolvedEvidence: 2, unresolvedEvidence: 0, typeOnlyEvidence: 0, unsupportedEvidence: 0, duplicateEvidence: 0, complete: true },
 			);
 			expect(graph.edges).toHaveLength(1);
 			expect(graph.coverage).toMatchObject({ resolvedEvidence: 1, eligibleEvidence: 1, unsupportedEvidence: 1, complete: false });
-			saveCallGraph("/proj", graph, new Map([[fileA, 1], [fileB, 2]]));
+			saveCallGraph("/proj", graph, { reviewGraphVersion: "v7", reviewGraphSignature: "sig-same-file" }, new Map([[fileA, 1], [fileB, 2]]));
 			const loaded = loadCallGraph("/proj");
 			expect(loaded?.graph.callees.get(callerId)).toEqual(new Set([crossFileId]));
 			expect(loaded?.graph.callers.get(crossFileId)).toEqual(new Set([callerId]));
@@ -218,7 +218,7 @@ describe("buildCallGraph", () => {
 		expect(graph.inDegree.get(calleeId)).toBe(1);
 		process.env.PILENS_DATA_DIR = tmpDir;
 		try {
-			saveCallGraph("/proj", graph, new Map([[fileA, 1], [fileB, 2]]));
+			saveCallGraph("/proj", graph, { reviewGraphVersion: "v7", reviewGraphSignature: "sig-duplicate" }, new Map([[fileA, 1], [fileB, 2]]));
 			const loaded = loadCallGraph("/proj");
 			expect(loaded?.graph.edges[0].evidenceCount).toBe(2);
 			expect(loaded?.graph.coverage?.duplicateEvidence).toBe(1);
@@ -448,7 +448,7 @@ describe("saveCallGraph / loadCallGraph", () => {
 		const graph = buildCallGraph(allSymbols, allRefs);
 		const mtimes = new Map([[fileA, 1234], [fileB, 5678]]);
 
-		saveCallGraph("/proj", graph, mtimes);
+		saveCallGraph("/proj", graph, { reviewGraphVersion: "v7", reviewGraphSignature: "sig-roundtrip" }, mtimes);
 		const loaded = loadCallGraph("/proj");
 
 		expect(loaded).toBeDefined();
@@ -479,10 +479,9 @@ describe("saveCallGraph / loadCallGraph", () => {
 			inDegree: [[calleeKey, 1]],
 		}), "utf-8");
 
-		const loaded = loadCallGraph("/proj");
-		expect(loaded?.graph.totalRefs).toBe(1);
-		expect(loaded?.graph.coverage).toMatchObject({ totalEvidence: 1, callsEvidence: 1, eligibleEvidence: 1, resolvedEvidence: 1, complete: false });
-		expect(loaded?.graph.unresolvedRefs).toBe(0);
+		// v4 is legacy: no canonical review-graph identity means unavailable,
+		// rather than a seemingly clean migrated projection.
+		expect(loadCallGraph("/proj")).toBeUndefined();
 		delete process.env.PILENS_DATA_DIR;
 	});
 
@@ -521,7 +520,7 @@ describe("saveCallGraph / loadCallGraph", () => {
 			complete: true,
 		};
 		const graph = buildCallGraph(allSymbols, allRefs, coverage);
-		saveCallGraph("/proj", graph, new Map([[fileA, 1], [fileB, 2]]));
+		saveCallGraph("/proj", graph, { reviewGraphVersion: "v8", reviewGraphSignature: "sig-evidence" }, new Map([[fileA, 1], [fileB, 2]]));
 		const loaded = loadCallGraph("/proj");
 		expect(loaded?.graph.edges[0]).toMatchObject({
 			calleeKey: calleeId,

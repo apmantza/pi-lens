@@ -140,6 +140,33 @@ describe("aggregateGraphToFiles", () => {
 		expect(result.edges).toEqual([{ from: idFor("a.ts"), to: idFor("b.ts"), weight: 1 }]);
 	});
 
+	it("merges multiple compiled siblings onto one source identity", () => {
+		const nodes: ReviewGraphNode[] = [
+			{ id: "src.ts#file", kind: "file", language: "ts", filePath: "src.ts" },
+			{ id: "src.js#file", kind: "file", language: "js", filePath: "src.js" },
+			{ id: "src.mjs#file", kind: "file", language: "js", filePath: "src.mjs" },
+			{ id: "dep.ts#file", kind: "file", language: "ts", filePath: "dep.ts" },
+			{ id: "dep.js#file", kind: "file", language: "js", filePath: "dep.js" },
+			{ id: "dep.mjs#file", kind: "file", language: "js", filePath: "dep.mjs" },
+			{ id: "src.ts#run", kind: "symbol", language: "ts", filePath: "src.ts", symbolName: "run", symbolKind: "function" },
+			{ id: "src.js#run", kind: "symbol", language: "js", filePath: "src.js", symbolName: "run", symbolKind: "function" },
+			{ id: "src.mjs#run", kind: "symbol", language: "js", filePath: "src.mjs", symbolName: "run", symbolKind: "function" },
+			{ id: "dep.ts#target", kind: "symbol", language: "ts", filePath: "dep.ts", symbolName: "target", symbolKind: "function" },
+			{ id: "dep.js#target", kind: "symbol", language: "js", filePath: "dep.js", symbolName: "target", symbolKind: "function" },
+			{ id: "dep.mjs#target", kind: "symbol", language: "js", filePath: "dep.mjs", symbolName: "target", symbolKind: "function" },
+		];
+		const result = aggregateGraphToFiles(makeGraph(nodes, [
+			{ from: "src.ts#run", to: "dep.ts#target", kind: "calls" },
+			{ from: "src.js#run", to: "dep.js#target", kind: "calls" },
+			{ from: "src.mjs#run", to: "dep.mjs#target", kind: "calls" },
+		]));
+		expect(result.compiledTwinCount).toBe(4);
+		expect(result.nodes).toHaveLength(2);
+		expect(result.nodes.find((node) => node.id === idFor("src.ts"))?.symbolCount).toBe(1);
+		expect(result.nodes.find((node) => node.id === idFor("dep.ts"))?.symbolCount).toBe(1);
+		expect(result.edges).toEqual([{ from: idFor("src.ts"), to: idFor("dep.ts"), weight: 1 }]);
+	});
+
 	it("drops untracked-gitignored files via excludeIds — unless a surviving twin merge rescues them", () => {
 		const nodes: ReviewGraphNode[] = [
 			// Tracked source — stays (not in excludeIds).

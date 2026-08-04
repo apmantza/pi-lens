@@ -40,7 +40,7 @@ import { annotateMiddleMan } from "./middle-man-analysis.js";
 import { normalizeMapKey, toProjectRelativePath } from "./path-utils.js";
 import {
 	loadCallGraph,
-	staleFiles,
+	type CallGraphCacheIdentity,
 	type CallGraphEvidenceCoverage,
 	type ResolvedCallEdge,
 } from "./call-graph.js";
@@ -241,7 +241,13 @@ export interface ModuleCallGraphCoverage {
 export interface ModuleCallGraph {
 	available: boolean;
 	/** Why the cached view is unavailable; never infer zero calls from this state. */
-	reason?: "cache-missing" | "stale" | "file-cap";
+	reason?:
+		| "cache-missing"
+		| "review-graph-missing"
+		| "identity-missing"
+		| "partial"
+		| "stale"
+		| "file-cap";
 	callers: ModuleCallGraphRelation[];
 	callees: ModuleCallGraphRelation[];
 	/** True when either bounded relation list is a prefix of the cached data. */
@@ -1785,17 +1791,20 @@ function readCallGraph(
 	normalizedPath: string,
 	maxEntries: number,
 	graphFileCap: number | undefined,
+	identity: CallGraphCacheIdentity | undefined,
+	reviewGraph: ReviewGraph | undefined,
 ): ModuleCallGraph {
 	if (graphFileCap !== undefined) return unavailableCallGraph("file-cap");
-	const cached = loadCallGraph(projectRoot);
-	if (!cached) return unavailableCallGraph("cache-missing");
-	const cachedFiles = [...cached.fileMtimes.keys()];
-	if (
-		!cached.fileMtimes.has(normalizedPath) ||
-		staleFiles(cached.fileMtimes, cachedFiles).length > 0
-	) {
-		return unavailableCallGraph("stale");
+	// The canonical review graph is the only freshness authority. This path is
+	// read-only: do not walk source files or compare an independent mtime map.
+	if (!reviewGraph) return unavailableCallGraph("review-graph-missing");
+	if (reviewGraph.persistCoverage?.partial || reviewGraph.persistCoverage?.inProgress) {
+		return unavailableCallGraph("partial");
 	}
+	if (!identity) return unavailableCallGraph("identity-missing");
+	if (!reviewGraph.fileNodes.has(normalizedPath)) return unavailableCallGraph("stale");
+	const cached = loadCallGraph(projectRoot, identity);
+	if (!cached) return unavailableCallGraph("stale");
 
 	const callers: ModuleCallGraphRelation[] = [];
 	const callees: ModuleCallGraphRelation[] = [];
@@ -1908,14 +1917,29 @@ export async function moduleReport(
 	// jsts) and two racing builds OOM'd pi (#256). Cold cache → outline-only.
 	let graph: ReviewGraph | undefined;
 	let graphFileCap: number | undefined;
+	let callGraphIdentity: CallGraphCacheIdentity | undefined;
 	try {
-		const { getCachedReviewGraph, getReviewGraphSizeSkipVerdict } = await import(
-			"./review-graph/builder.js"
-		);
+		const {
+			getCachedReviewGraph,
+			getReviewGraphCacheIdentity,
+			getReviewGraphSizeSkipVerdict,
+		} = await import("./review-graph/builder.js");
 		graph = getCachedReviewGraph(cwd);
 		graphFileCap = getReviewGraphSizeSkipVerdict(cwd)?.maxFileCount;
+		callGraphIdentity = graph
+			? (() => {
+					const identity = getReviewGraphCacheIdentity(cwd, graph);
+					return identity
+						? {
+							reviewGraphVersion: identity.version,
+							reviewGraphSignature: identity.signature,
+						}
+						: undefined;
+			  })()
+			: undefined;
 	} catch {
 		graph = undefined;
+		callGraphIdentity = undefined;
 	}
 
 	// Drop function-local declarations (a nested const/arrow/function) from the
@@ -2009,7 +2033,14 @@ export async function moduleReport(
 				)
 			: undefined;
 	const callGraph = options?.callGraph
-		? readCallGraph(cwd, normalizedPath, maxCallGraphEntries, graphFileCap)
+		? readCallGraph(
+				cwd,
+				normalizedPath,
+				maxCallGraphEntries,
+				graphFileCap,
+				callGraphIdentity,
+				graph,
+			)
 		: undefined;
 
 	const view = options?.view ?? "default";
