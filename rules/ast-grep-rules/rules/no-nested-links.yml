@@ -9,6 +9,12 @@ rule:
   all:
     - kind: jsx_element
     - has:
+        field: open_tag
+        kind: jsx_opening_element
+        has:
+          field: name
+          regex: "^a$"
+    - has:
         kind: jsx_element
         stopBy: end
         has:
@@ -17,12 +23,3 @@ rule:
           has:
             field: name
             regex: "^a$"
-  not:
-    inside:
-      kind: jsx_element
-      has:
-        field: open_tag
-        kind: jsx_opening_element
-        has:
-          field: name
-          regex: "^a$"

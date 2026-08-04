@@ -2,7 +2,9 @@ id: no-nested-links
 valid:
   - '<a href="/x">link</a>'
   - '<a href="/x"><span>nested</span></a>'
+  - '<div><a href="/x">link</a></div>'
+  - '<div><a href="/x">first</a><a href="/y">second</a></div>'
 invalid:
   - '<a href="/x">outer <a href="/y">inner</a></a>'
   - '<a><a>double</a></a>'
-  - '<div><a href="/x">link</a></div>'
+  - '<a href="/x"><span><a href="/y">inner</a></span></a>'
