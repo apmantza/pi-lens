@@ -24,7 +24,7 @@ jobs:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           issue_message: >
             Thanks for opening your first issue! Please check
-            [`CONTRIBUTING.md`](../../blob/master/CONTRIBUTING.md) for issue
+            [`CONTRIBUTING.md`](../blob/master/CONTRIBUTING.md) for issue
             templates and guidelines. A maintainer will triage this soon.
           pr_message: >
             Thanks for your first pull request! A maintainer will review it

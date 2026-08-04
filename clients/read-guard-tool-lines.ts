@@ -3,6 +3,8 @@ import * as nodeFs from "node:fs";
 import {
 	hostWouldApplyOldText,
 	normalizeForGuardMatch,
+	normalizeToLF,
+	stripBom,
 } from "./host-edit-normalize.js";
 import type { PartiallyApplicableEdit } from "./partial-edit-apply.js";
 import {
@@ -86,35 +88,57 @@ function tokenSimilarity(a: string, b: string): number {
  * its edit from verbatim text in one turn instead of re-reading blind. Scans a
  * ±window around `nearLine` when known (the first-line locator), else the whole
  * file. Returns the top matches above `minScore`, with their real line numbers.
+ *
+ * Scores in normalized space but returns only `{ line, score }` — the caller
+ * renders the text from a structurally-aligned RAW view so a suggestion can
+ * never quote the normalized projection (#1050). NFKC folds CJK full-width
+ * punctuation (`：`→`:`, `，`→`,`, `；`→`;`) and HOST_UNICODE_DASHES folds
+ * `—`→`-`, so a suggestion rendered from normalized content told the agent to
+ * copy bytes the file does not contain; the host's edit tool then fuzzy-matched
+ * it and wrote the folded form onto the touched line. Normalization here is
+ * comparison-only, exactly as everywhere else in this file.
  */
 function findSimilarLines(
 	content: string,
 	target: string,
 	options: { nearLine?: number; window?: number; max?: number; minScore?: number } = {},
-): Array<{ line: number; text: string; score: number }> {
+): Array<{ line: number; score: number }> {
 	const { nearLine, window = 60, max = 3, minScore = 0.5 } = options;
 	const needle = target.trim();
 	if (needle.length < 4) return [];
 	const lines = content.split("\n");
 	const start = nearLine ? Math.max(0, nearLine - 1 - window) : 0;
 	const end = nearLine ? Math.min(lines.length, nearLine - 1 + window) : lines.length;
-	const scored: Array<{ line: number; text: string; score: number }> = [];
+	const scored: Array<{ line: number; score: number }> = [];
 	for (let i = start; i < end; i += 1) {
 		const text = lines[i];
 		if (text.trim() === "") continue;
 		const score = tokenSimilarity(needle, text);
-		if (score >= minScore) scored.push({ line: i + 1, text, score });
+		if (score >= minScore) scored.push({ line: i + 1, score });
 	}
 	scored.sort((a, b) => b.score - a.score);
 	return scored.slice(0, max);
 }
 
+/**
+ * Render did-you-mean rows from the file's real characters rather than the
+ * normalized match space the line numbers were scored in. Taking only
+ * `{ line }` from the scan makes quoting normalized text structurally
+ * impossible (#1050).
+ *
+ * `rawLineAligned` must be `normalizeToLF(stripBom(raw).text)`: the same
+ * STRUCTURAL normalization `normalizeForGuardMatch` applies (so line indices
+ * cross-index 1:1 even for lone-CR or BOM files) but none of its CHARACTER
+ * folding, so full-width punctuation, smart quotes, and NBSP survive.
+ */
 function formatSimilarLines(
-	suggestions: Array<{ line: number; text: string }>,
+	suggestions: Array<{ line: number }>,
+	rawLineAligned: string,
 ): string {
+	const rawLines = rawLineAligned.split("\n");
 	const pad = (n: number) => String(n).padStart(4, " ");
 	const rows = suggestions.map(
-		({ line, text }) => `      ${pad(line)} │ ${text.trimEnd()}`,
+		({ line }) => `      ${pad(line)} │ ${(rawLines[line - 1] ?? "").trimEnd()}`,
 	);
 	return `\n\nDid you mean one of these current lines?\n${rows.join("\n")}`;
 }
@@ -522,7 +546,10 @@ function resolveOldTextEdits(
 			// similarity) so the model can rebuild oldText verbatim in one turn
 			// instead of re-reading blind. Skipped on the quote-style path, which
 			// already names the precise fix. Anchored near the first-line locator
-			// when known, else scans the whole file.
+			// when known, else scans the whole file. Scored against `content`
+			// (normalized) but RENDERED from a structurally-aligned raw view —
+			// quoting the normalized projection told the agent to copy bytes the
+			// file does not contain (#1050).
 			if (!errorMsg.includes("quote style")) {
 				const similarLines = findSimilarLines(
 					content,
@@ -530,7 +557,10 @@ function resolveOldTextEdits(
 					{ nearLine: findFirstLineOfOldText(content, oldText) },
 				);
 				if (similarLines.length > 0) {
-					errorMsg += formatSimilarLines(similarLines);
+					errorMsg += formatSimilarLines(
+						similarLines,
+						normalizeToLF(stripBom(rawContent).text),
+					);
 				}
 			}
 			errors.push(errorMsg);

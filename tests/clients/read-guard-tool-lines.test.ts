@@ -1168,6 +1168,88 @@ describe("getTouchedLinesForGuard — did-you-mean suggestions", () => {
 			env.cleanup();
 		}
 	});
+
+	// #1050: suggestions are rendered from the file's real characters, not from
+	// the NFKC-normalized match space. NFKC folds full-width CJK punctuation and
+	// HOST_UNICODE_DASHES folds em-dashes, so quoting normalized content told the
+	// agent to copy bytes the file does not contain — and the host's edit tool
+	// then fuzzy-matched that half-width oldText and wrote the folded form onto
+	// the touched line.
+	it("quotes full-width CJK punctuation verbatim, not NFKC-folded", () => {
+		const env = setupTestEnvironment("pi-lens-didyoumean-cjk-");
+		try {
+			const filePath = path.join(env.tmpDir, "MAP.md");
+			const realLine =
+				"- [05 执行生命周期：批量要不要脱离 HTTP 进程](issues/05.md) — **选 (d) 混合，但续跑是手动的**；结尾。";
+			fs.writeFileSync(filePath, `# Map\n\n${realLine}\n\n## Next\n`);
+			const result = getTouchedLinesForGuard(
+				{
+					toolName: "edit",
+					input: {
+						path: filePath,
+						edits: [
+							{
+								// Same line, one wrong token deep inside => guard miss.
+								oldText:
+									"- [05 执行生命周期：批量要不要脱离 HTTP 进程](issues/05.md) — **选 (d) 混合，但续跑是自动的**；结尾。",
+								newText: "replacement",
+							},
+						],
+					},
+				},
+				filePath,
+			);
+			const err = result.preflightError as string;
+			expect(err).toMatch(/Did you mean/);
+			// The real bytes, verbatim.
+			expect(err).toContain(realLine);
+			// And specifically NOT the folded forms NFKC would produce.
+			expect(err).not.toContain("执行生命周期:批量");
+			expect(err).not.toContain("混合,但续跑");
+			expect(err).not.toContain("是手动的**;结尾");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #1050 follow-on: the raw view handed to the renderer must carry the same
+	// STRUCTURAL normalization as the match space (stripBom + normalizeToLF), or
+	// line numbers scored in normalized space misindex it. A lone CR is the
+	// case that desyncs: normalizeToLF splits on it, a plain \r\n-only fold does
+	// not.
+	it("cross-indexes correctly on lone-CR and BOM files", () => {
+		const env = setupTestEnvironment("pi-lens-didyoumean-cr-");
+		try {
+			const filePath = path.join(env.tmpDir, "crlf.md");
+			// BOM + a lone CR before the target line: both shift line indices in
+			// the match space relative to a naive raw split.
+			const target = "const findModelByHint = (名前：string) => 登録.参照(名前);";
+			fs.writeFileSync(filePath, `\ufeffheader\rsecond line\n${target}\ntail\n`);
+			const result = getTouchedLinesForGuard(
+				{
+					toolName: "edit",
+					input: {
+						path: filePath,
+						edits: [
+							{
+								oldText:
+									"const findModelByHint = (名前：string) => 登録.参照厳密(名前);",
+								newText: "replacement",
+							},
+						],
+					},
+				},
+				filePath,
+			);
+			const err = result.preflightError as string;
+			expect(err).toMatch(/Did you mean/);
+			// Correct line quoted (not "second line" / "tail"), and still verbatim.
+			expect(err).toContain(target);
+			expect(err).not.toContain("(名前:string)");
+		} finally {
+			env.cleanup();
+		}
+	});
 });
 
 describe("relocateEditRange", () => {
