@@ -662,36 +662,40 @@ function scheduleStartupScans(
 		"ast-grep exports": 5400,
 		"project index": 5400,
 	};
-	const runTask = (name: string, task: () => Promise<void>): void => {
+	const runTask = (name: string, task: () => Promise<void>): Promise<void> => {
 		const queuedAt = Date.now();
 		dbg(`session_start task ${name}: scheduled`);
 		runtime.markStartupScanInFlight(name, sessionGeneration);
-		const fire = (): void => {
-			const startedAt = Date.now();
-			dbg(`session_start task ${name}: start queuedMs=${startedAt - queuedAt}`);
-			void task()
-				.then(() => {
-					dbg(
-						`session_start task ${name}: success runMs=${Date.now() - startedAt} queuedMs=${startedAt - queuedAt}`,
-					);
-				})
-				.catch((err) => {
-					dbg(`session_start: ${name} background scan failed: ${err}`);
-					dbg(
-						`session_start task ${name}: failed runMs=${Date.now() - startedAt} queuedMs=${startedAt - queuedAt}`,
-					);
-				})
-				.finally(() => {
-					runtime.clearStartupScanInFlight(name, sessionGeneration);
-					dbg(`session_start task ${name}: end`);
-				});
-		};
-		const delay = taskDeferMsByName[name] ?? 0;
-		if (delay > 0) {
-			setTimeout(fire, delay);
-		} else {
-			setImmediate(fire);
-		}
+		const completion = new Promise<void>((resolve) => {
+			const fire = (): void => {
+				const startedAt = Date.now();
+				dbg(`session_start task ${name}: start queuedMs=${startedAt - queuedAt}`);
+				void task()
+					.then(() => {
+						dbg(
+							`session_start task ${name}: success runMs=${Date.now() - startedAt} queuedMs=${startedAt - queuedAt}`,
+						);
+					})
+					.catch((err) => {
+						dbg(`session_start: ${name} background scan failed: ${err}`);
+						dbg(
+							`session_start task ${name}: failed runMs=${Date.now() - startedAt} queuedMs=${startedAt - queuedAt}`,
+						);
+					})
+					.finally(() => {
+						runtime.clearStartupScanInFlight(name, sessionGeneration);
+						dbg(`session_start task ${name}: end`);
+						resolve();
+					});
+			};
+			const delay = taskDeferMsByName[name] ?? 0;
+			if (delay > 0) {
+				setTimeout(fire, delay);
+			} else {
+				setImmediate(fire);
+			}
+		});
+		return completion;
 	};
 
 	const canRunJsTsHeavyScans = canRunStartupHeavyScans(languageProfile, "jsts");
@@ -1070,7 +1074,7 @@ function scheduleStartupScans(
 	});
 
 	// call-graph — build function-level call graph from review graph data
-	runTask("call-graph", async () => {
+	const callGraphTask = runTask("call-graph", async () => {
 		const { FactStore } = await import("./dispatch/fact-store.js");
 		const {
 			buildOrUpdateGraph,
@@ -1136,9 +1140,14 @@ function scheduleStartupScans(
 	});
 
 	// codebase-model — build mental model from call graph (internal-only until validated)
+	// Keep this deferred, but await the call-graph task's completion rather than
+	// racing its independently deferred timer. Otherwise a slow graph build leaves
+	// `runtime.callGraph` unset at this task's start and loses the model for the
+	// entire session (#1070).
 	runTask("codebase-model", async () => {
+		await callGraphTask;
 		if (!runtime.isCurrentSession(sessionGeneration)) return;
-		if (!runtime.callGraph) return; // call-graph task may not have completed yet
+		if (!runtime.callGraph) return;
 		const { buildCodebaseModel, saveCodebaseModel } = await import(
 			"./codebase-model.js"
 		);
