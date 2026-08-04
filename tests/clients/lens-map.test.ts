@@ -167,6 +167,57 @@ describe("aggregateGraphToFiles", () => {
 		expect(result.edges).toEqual([{ from: idFor("src.ts"), to: idFor("dep.ts"), weight: 1 }]);
 	});
 
+	it("dedupes absolute multi-twin sets after native path normalization", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-map-twins-"));
+		try {
+			const source = path.join(root, "src.ts");
+			const sourceTwins = [
+				path.join(root, "src.js").replaceAll(path.sep, "/"),
+				path.join(root, "src.mjs"),
+				path.join(root, "src.cjs"),
+			];
+			const dep = path.join(root, "dep.ts");
+			const depTwins = [
+				path.join(root, "dep.js"),
+				path.join(root, "dep.mjs").replaceAll(path.sep, "/"),
+				path.join(root, "dep.cjs"),
+			];
+			for (const file of [source, ...sourceTwins, dep, ...depTwins]) {
+				fs.writeFileSync(file, "");
+			}
+			const nodes: ReviewGraphNode[] = [];
+			const edges: ReviewGraphEdge[] = [];
+			const addFile = (file: string, prefix: string, kind: string) => {
+				nodes.push({ id: `${prefix}:file`, kind: "file", language: kind, filePath: file });
+				nodes.push({
+					id: `${prefix}:run`,
+					kind: "symbol",
+					language: kind,
+					filePath: file,
+					symbolName: prefix.startsWith("dep") ? "target" : "run",
+					symbolKind: kind === "ts" ? "function" : "variable",
+				});
+			};
+			addFile(source, "src-ts", "ts");
+			addFile(dep, "dep-ts", "ts");
+			for (const [index, file] of sourceTwins.entries()) addFile(file, `src-${index}`, "js");
+			for (const [index, file] of depTwins.entries()) addFile(file, `dep-${index}`, "js");
+			edges.push({ from: "src-ts:run", to: "dep-ts:run", kind: "calls" });
+			for (let index = 0; index < sourceTwins.length; index += 1) {
+				edges.push({ from: `src-${index}:run`, to: `dep-${index}:run`, kind: "calls" });
+			}
+
+			const result = aggregateGraphToFiles(makeGraph(nodes, edges));
+			expect(result.compiledTwinCount).toBe(6);
+			expect(result.nodes).toHaveLength(2);
+			expect(result.nodes.find((node) => node.id === idFor(source))?.symbolCount).toBe(1);
+			expect(result.nodes.find((node) => node.id === idFor(dep))?.symbolCount).toBe(1);
+			expect(result.edges).toEqual([{ from: idFor(source), to: idFor(dep), weight: 1 }]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("drops untracked-gitignored files via excludeIds — unless a surviving twin merge rescues them", () => {
 		const nodes: ReviewGraphNode[] = [
 			// Tracked source — stays (not in excludeIds).
