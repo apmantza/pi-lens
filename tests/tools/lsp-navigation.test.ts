@@ -298,12 +298,19 @@ describe("lsp_navigation tool", () => {
 		);
 
 		expect(result.isError).toBeUndefined();
-		expect(
-			(mocked.service as { executeCommand: ReturnType<typeof vi.fn> })
-				.executeCommand,
-		).toHaveBeenCalledWith(undefined, "_typescript.organizeImports", [
-			"file:///x.ts",
+		const executeCall = (
+			mocked.service as { executeCommand: ReturnType<typeof vi.fn> }
+		).executeCommand.mock.calls[0];
+		expect(executeCall?.slice(0, 3)).toEqual([
+			undefined,
+			"_typescript.organizeImports",
+			["file:///x.ts"],
 		]);
+		expect(executeCall?.[3]).toMatchObject({
+			correlationId: "exec-apply",
+			tool: "lsp_navigation",
+			source: "lsp-edit",
+		});
 	});
 
 	it("executeCommand refuses a command the server did not advertise", async () => {
@@ -1089,6 +1096,47 @@ describe("lsp_navigation tool", () => {
 			expect(fs.readFileSync(filePath, "utf-8")).toBe(
 				"const newName = 1;\nconsole.log(newName);\n",
 			);
+		} finally {
+			removeTempDirSync(tmpDir);
+		}
+	});
+
+	it("returns an error and terminal failed mutation outcome when apply is true cannot write", async () => {
+		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-nav-fail-"));
+		const filePath = path.join(tmpDir, "missing.ts");
+		(
+			mocked.service as { rename: ReturnType<typeof vi.fn> }
+		).rename = vi.fn().mockResolvedValue({
+			changes: {
+				[pathToFileURL(filePath).href]: [
+					{
+						range: {
+							start: { line: 0, character: 0 },
+							end: { line: 0, character: 0 },
+						},
+						newText: "new",
+					},
+				],
+			},
+		});
+		try {
+			const result = await tool.execute(
+				"rename-fail",
+				{
+					operation: "rename",
+					path: filePath,
+					line: 1,
+					character: 1,
+					newName: "new",
+					apply: true,
+				},
+				new AbortController().signal,
+				null,
+				{ cwd: tmpDir },
+			);
+			expect(result.isError).toBe(true);
+			expect(result.details?.failureKind).toBe("lsp_error");
 		} finally {
 			removeTempDirSync(tmpDir);
 		}

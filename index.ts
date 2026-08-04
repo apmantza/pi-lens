@@ -1045,7 +1045,12 @@ export default function (pi: ExtensionAPI) {
 		createAstGrepReplaceTool(astGrepClient),
 		createAstGrepOutlineTool(astGrepClient),
 		createAstGrepDumpTool(astGrepClient),
-		createLspNavigationTool((name) => getLensFlag(name)),
+		createLspNavigationTool((name, cwd) => getLensFlag(name, cwd), {
+			runtime,
+			cacheManager,
+			readGuard: runtime.readGuard,
+			dbg,
+		}),
 		createLensDiagnosticMarkTool(() => runtime.projectRoot),
 	];
 	const LAZY_TOOL_CATALOG: ActivatableToolInfo[] = [

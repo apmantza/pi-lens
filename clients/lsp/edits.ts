@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { uriToPath } from "./path-utils.js";
+import {
+	recordLspMutation,
+	type LspMutationContext,
+} from "../lsp-mutation.js";
 
 export interface LSPPosition {
 	line: number;
@@ -38,9 +42,28 @@ interface DeleteFileOp {
 	uri: string;
 }
 
+export interface AppliedWorkspaceFileDetail {
+	filePath: string;
+	range?: { start: number; end: number };
+	importsChanged?: boolean;
+}
+
 export interface AppliedWorkspaceEdit {
 	descriptions: string[];
 	files: string[];
+	/** Total logical operations, including text edits and resource operations. */
+	operationTotal: number;
+	/** Number of logical operations that actually reached disk. */
+	appliedOperationTotal: number;
+	/** Bounded samples; totals above remain explicit in the result. */
+	appliedOperationIndexes: number[];
+	operationCounts: {
+		textEdits: number;
+		create: number;
+		rename: number;
+		delete: number;
+	};
+	fileDetails: AppliedWorkspaceFileDetail[];
 }
 
 function isPosition(value: unknown): value is LSPPosition {
@@ -284,10 +307,42 @@ export async function applyWorkspaceEdit(
 		documentChanges?: unknown[];
 	},
 	cwd: string,
+	options: { mutationContext?: LspMutationContext; observe?: boolean } = {},
 ): Promise<AppliedWorkspaceEdit> {
 	const descriptions: string[] = [];
 	const touchedFiles = new Set<string>();
+	const fileDetails: AppliedWorkspaceFileDetail[] = [];
+	const appliedOperationIndexes: number[] = [];
+	let appliedOperationTotal = 0;
+	let operationIndex = 0;
+	const operationCounts = { textEdits: 0, create: 0, rename: 0, delete: 0 };
 	const textEditsByUri = flattenWorkspaceTextEdits(edit);
+	for (const edits of Object.values(edit.changes ?? {})) {
+		operationCounts.textEdits += edits.filter(isTextEdit).length;
+	}
+	for (const change of edit.documentChanges ?? []) {
+		if (isTextDocumentEdit(change)) {
+			operationCounts.textEdits += change.edits.filter(isTextEdit).length;
+		} else if (typeof change === "object" && change !== null && "kind" in change) {
+			const kind = (change as { kind?: unknown }).kind;
+			if (kind === "create") operationCounts.create++;
+			if (kind === "rename") operationCounts.rename++;
+			if (kind === "delete") operationCounts.delete++;
+		}
+	}
+	const operationTotal =
+		operationCounts.textEdits +
+		operationCounts.create +
+		operationCounts.rename +
+		operationCounts.delete;
+	const markApplied = (count = 1): void => {
+		for (let index = 0; index < count; index++) {
+			if (appliedOperationIndexes.length < 100)
+				appliedOperationIndexes.push(operationIndex + index);
+		}
+		appliedOperationTotal += count;
+		operationIndex += count;
+	};
 
 	try {
 		for (const [uri, edits] of textEditsByUri) {
@@ -295,13 +350,40 @@ export async function applyWorkspaceEdit(
 			const content = await fs.readFile(filePath, "utf-8");
 			const updated = applyTextEditsToString(content, edits);
 			await fs.writeFile(filePath, updated, "utf-8");
+			const start = Math.min(...edits.map((edit) => edit.range.start.line + 1));
+			const end = Math.max(...edits.map((edit) => edit.range.end.line + 1));
 			touchedFiles.add(filePath);
+			fileDetails.push({
+				filePath,
+				range: { start, end },
+				importsChanged: /^import\s/m.test(updated),
+			});
+			markApplied(edits.length);
 			descriptions.push(
 				`Applied ${edits.length} edit(s) to ${relativeToCwd(filePath, cwd)}`,
 			);
 		}
 
 		for (const change of edit.documentChanges ?? []) {
+			if (isTextDocumentEdit(change)) {
+				// These edits were already applied through `changes`-style grouping
+				// only when the URI was present there; documentChanges-only text edits
+				// are applied here to preserve the existing path.
+				const uri = change.textDocument.uri;
+				if (textEditsByUri.has(uri)) continue;
+				const edits = change.edits.filter(isTextEdit);
+				if (edits.length === 0) continue;
+				const filePath = uriToPath(uri);
+				const content = await fs.readFile(filePath, "utf-8");
+				const updated = applyTextEditsToString(content, edits);
+				await fs.writeFile(filePath, updated, "utf-8");
+				const start = Math.min(...edits.map((edit) => edit.range.start.line + 1));
+				const end = Math.max(...edits.map((edit) => edit.range.end.line + 1));
+				touchedFiles.add(filePath);
+				fileDetails.push({ filePath, range: { start, end }, importsChanged: /^import\s/m.test(updated) });
+				markApplied(edits.length);
+				continue;
+			}
 			if (typeof change !== "object" || change === null || !("kind" in change))
 				continue;
 			const kind = (change as { kind?: unknown }).kind;
@@ -317,6 +399,8 @@ export async function applyWorkspaceEdit(
 						if ((err as { code?: string }).code !== "EEXIST") throw err;
 					});
 				touchedFiles.add(filePath);
+				fileDetails.push({ filePath, range: { start: 1, end: 1 }, importsChanged: false });
+				markApplied();
 				descriptions.push(`Created ${relativeToCwd(filePath, cwd)}`);
 			} else if (
 				kind === "rename" &&
@@ -329,6 +413,11 @@ export async function applyWorkspaceEdit(
 				await fs.rename(oldPath, newPath);
 				touchedFiles.add(oldPath);
 				touchedFiles.add(newPath);
+				fileDetails.push(
+					{ filePath: oldPath, range: { start: 1, end: 1 }, importsChanged: true },
+					{ filePath: newPath, range: { start: 1, end: 1 }, importsChanged: true },
+				);
+				markApplied();
 				descriptions.push(
 					`Renamed ${relativeToCwd(oldPath, cwd)} → ${relativeToCwd(newPath, cwd)}`,
 				);
@@ -339,21 +428,55 @@ export async function applyWorkspaceEdit(
 				const filePath = uriToPath((change as DeleteFileOp).uri);
 				await fs.rm(filePath, { recursive: true, force: true });
 				touchedFiles.add(filePath);
+				fileDetails.push({ filePath, range: { start: 1, end: 1 }, importsChanged: true });
+				markApplied();
 				descriptions.push(`Deleted ${relativeToCwd(filePath, cwd)}`);
 			}
 		}
 	} catch (err) {
+		const partial: AppliedWorkspaceEdit = {
+			descriptions,
+			files: [...touchedFiles],
+			operationTotal,
+			appliedOperationTotal,
+			appliedOperationIndexes,
+			operationCounts,
+			fileDetails,
+		};
+		if (options.mutationContext && options.observe !== false) {
+			recordLspMutation(options.mutationContext, {
+				results: [partial],
+				status: "failed",
+			});
+		}
 		const already = [...touchedFiles];
 		if (already.length > 0) {
 			const alreadyList = already
 				.map((f) => `  • ${relativeToCwd(f, cwd)}`)
 				.join("\n");
-			throw new Error(
+			const failure = new Error(
 				`Workspace edit failed mid-application — ${already.length} file(s) already written, no rollback performed:\n${alreadyList}\nCause: ${err instanceof Error ? err.message : String(err)}`,
-			);
+			) as Error & { appliedWorkspaceEdit?: AppliedWorkspaceEdit };
+			failure.appliedWorkspaceEdit = partial;
+			throw failure;
 		}
 		throw err;
 	}
 
-	return { descriptions, files: [...touchedFiles] };
+	const applied: AppliedWorkspaceEdit = {
+		descriptions,
+		files: [...touchedFiles],
+		operationTotal,
+		appliedOperationTotal,
+		appliedOperationIndexes,
+		operationCounts,
+		fileDetails,
+	};
+	if (options.mutationContext && options.observe !== false) {
+		recordLspMutation(options.mutationContext, {
+			results: [applied],
+			status: appliedOperationTotal > 0 ? "success" : "skipped",
+		});
+	}
+	return applied;
 }

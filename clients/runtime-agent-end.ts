@@ -13,6 +13,7 @@ import {
 } from "./format-events-publish.js";
 import type { FormatService } from "./format-service.js";
 import { logLatency } from "./latency-logger.js";
+import { newLspMutationCorrelationId, type LspMutationContext } from "./lsp-mutation.js";
 import {
 	getGlobalActionableWarningMaxFixes,
 	type PiLensFlagSource,
@@ -444,37 +445,27 @@ export async function handleAgentEnd({
 					});
 				}
 				const fixStart = Date.now();
+				const fixCwd = ctxCwd ?? runtime.projectRoot;
+				const mutationContext: LspMutationContext = {
+					cwd: fixCwd,
+					correlationId: newLspMutationCorrelationId(),
+					tool: "lsp-quickfix",
+					source: "autofix",
+					runtime,
+					cacheManager,
+					readGuard: getFlag("no-read-guard") ? undefined : runtime.readGuard,
+					recordAutofix: getFlag("lens-turn-summary")
+						? (filePath) => runtime.turnSummary.recordAutofix(filePath, { tool: "lsp-quickfix" })
+						: undefined,
+					dbg,
+				};
 				const fixSummary = await applyConservativeActionableWarningFixes({
-					cwd: ctxCwd ?? runtime.projectRoot,
+					cwd: fixCwd,
 					report: eligibleReport,
 					maxFixes: getGlobalActionableWarningMaxFixes(),
 					dbg,
+					mutationContext,
 				});
-				for (const changedFile of fixSummary.changedFiles) {
-					if (!nodeFs.existsSync(changedFile)) continue;
-					recordProjectChange({
-						runtime,
-						cwd: ctxCwd ?? runtime.projectRoot,
-						filePath: changedFile,
-						source: "autofix",
-						dbg,
-					});
-					if (!getFlag("no-read-guard"))
-						runtime.readGuard.recordWritten(changedFile);
-					try {
-						const content = nodeFs.readFileSync(changedFile, "utf-8");
-						cacheManager.addModifiedRange(
-							changedFile,
-							{ start: 1, end: content.split("\n").length },
-							/^import\s/m.test(content),
-							ctxCwd ?? runtime.projectRoot,
-						);
-					} catch (err) {
-						dbg(
-							`agent_end actionable warning changed-file tracking failed for ${changedFile}: ${err}`,
-						);
-					}
-				}
 				if (fixSummary.changedFiles.length > 0) {
 					publishFilesTouched({
 						reason: "autofix",
@@ -487,13 +478,6 @@ export async function handleAgentEnd({
 							kind: "autofix" as const,
 						})),
 					});
-					if (getFlag("lens-turn-summary")) {
-						for (const changedFile of fixSummary.changedFiles) {
-							runtime.turnSummary.recordAutofix(changedFile, {
-								tool: "lsp-quickfix",
-							});
-						}
-					}
 				}
 				logLatency({
 					type: "phase",

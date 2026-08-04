@@ -25,6 +25,10 @@ import {
 	StreamMessageWriter,
 } from "../deps/vscode-jsonrpc.js";
 import { getAmbientAbortSignal } from "../safe-spawn.js";
+import {
+	newLspMutationCorrelationId,
+	type LspMutationContext,
+} from "../lsp-mutation.js";
 
 import { applyWorkspaceEdit } from "./edits.js";
 import { recordLspChild, removeLspChild } from "../instance-registry.js";
@@ -295,6 +299,7 @@ export interface LSPClientInfo {
 	executeCommand(
 		command: string,
 		args?: unknown[],
+		mutationContext?: LspMutationContext,
 	): Promise<{ executed: boolean; result?: unknown; reason?: string }>;
 	/** Go to definition — returns Location[] */
 	definition(
@@ -581,6 +586,10 @@ export interface LSPClientState {
 	 * disk whenever it likes — only as the direct effect of an opted-in command).
 	 */
 	serverEditsAllowed: number;
+	/** One active command context is safe to associate with a nested applyEdit.
+	 * Concurrent commands deliberately clear this rather than cross-correlate. */
+	activeMutationContext?: LspMutationContext;
+	activeMutationDepth?: number;
 	readonly serverId: string;
 	/** See `LSPServerInfo.spawn`'s `launchVariant` (server.ts). Undefined =
 	 *  single-variant server or not yet reported. */
@@ -1089,10 +1098,22 @@ export function setupIncomingHandlers(
 			if (state.serverEditsAllowed <= 0 || !params?.edit) {
 				return { applied: false, failureReason: "edit not solicited" };
 			}
+			const context =
+				(state.activeMutationDepth ?? 0) === 1
+					? state.activeMutationContext
+					: undefined;
+			const telemetryContext: LspMutationContext =
+				context ?? {
+					cwd: state.root,
+					correlationId: newLspMutationCorrelationId(),
+					tool: "lsp-workspace-applyEdit",
+					source: "lsp-edit",
+				};
 			try {
 				await applyWorkspaceEdit(
 					params.edit as Parameters<typeof applyWorkspaceEdit>[0],
 					state.root,
+					{ mutationContext: telemetryContext },
 				);
 				return { applied: true };
 			} catch (err) {
@@ -1675,6 +1696,7 @@ export async function runServerCommand(
 	command: string,
 	args: unknown[] | undefined,
 	timeoutMs: number = EXECUTE_COMMAND_TIMEOUT_MS,
+	mutationContext?: LspMutationContext,
 ): Promise<{ executed: boolean; result?: unknown; reason?: string }> {
 	if (!isClientAlive(state)) {
 		return { executed: false, reason: "lsp client not alive" };
@@ -1686,6 +1708,9 @@ export async function runServerCommand(
 		};
 	}
 	state.serverEditsAllowed += 1;
+	state.activeMutationDepth = (state.activeMutationDepth ?? 0) + 1;
+	if (state.activeMutationDepth === 1) state.activeMutationContext = mutationContext;
+	else state.activeMutationContext = undefined;
 	try {
 		let result: unknown;
 		try {
@@ -1712,6 +1737,8 @@ export async function runServerCommand(
 		return { executed: true, result };
 	} finally {
 		state.serverEditsAllowed -= 1;
+		state.activeMutationDepth = Math.max(0, (state.activeMutationDepth ?? 0) - 1);
+		if (state.activeMutationDepth === 0) state.activeMutationContext = undefined;
 	}
 }
 
@@ -1918,6 +1945,7 @@ export async function createLSPClient(options: {
 		dynamicRegistrations: new Map(),
 		advertisedCommands: new Set(),
 		serverEditsAllowed: 0,
+		activeMutationDepth: 0,
 		serverId,
 		launchVariant,
 		root,
@@ -2138,8 +2166,8 @@ export async function createLSPClient(options: {
 			return state.launchVariant;
 		},
 
-		async executeCommand(command, args) {
-			return runServerCommand(state, command, args);
+		async executeCommand(command, args, mutationContext) {
+			return runServerCommand(state, command, args, EXECUTE_COMMAND_TIMEOUT_MS, mutationContext);
 		},
 
 		get diagnosticsVersion() {

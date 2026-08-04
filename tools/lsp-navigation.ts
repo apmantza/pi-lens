@@ -9,6 +9,11 @@ import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Type } from "../clients/deps/typebox.js";
 import { logLatency } from "../clients/latency-logger.js";
+import {
+	newLspMutationCorrelationId,
+	recordLspMutationOutcome,
+	type LspMutationContext,
+} from "../clients/lsp-mutation.js";
 import type { LSPCallHierarchyItem } from "../clients/lsp/client.js";
 import { compactRenderResult } from "./render-compact.js";
 import {
@@ -717,6 +722,10 @@ export function createLspNavigationTool(
 	 * pi's own `getLensFlag`) may ignore the second argument.
 	 */
 	getFlag: (name: string, cwd?: string) => boolean | string | undefined,
+	mutationDeps?: Pick<
+		LspMutationContext,
+		"runtime" | "cacheManager" | "readGuard" | "dbg"
+	>,
 ) {
 	return {
 		name: "lsp_navigation" as const,
@@ -907,6 +916,8 @@ export function createLspNavigationTool(
 			let supported: boolean | null = null;
 			let diagnosticsMode: "pull" | "push-only" | "unknown" = "unknown";
 			let columnResolution: SymbolColumnResolution | undefined;
+			let mutationContext: LspMutationContext | undefined;
+			let requestedApply = false;
 
 			const finalize = (
 				payload: {
@@ -925,6 +936,14 @@ export function createLspNavigationTool(
 					failureKind: string;
 				};
 			} => {
+				if (
+					payload.isError &&
+					requestedApply &&
+					mutationContext &&
+					["rename", "rename_file", "executeCommand"].includes(meta.operation)
+				) {
+					recordLspMutationOutcome(mutationContext, "failed");
+				}
 				const normalizedFilePath = meta.filePath.replace(/\\/g, "/");
 				logLatency({
 					type: "phase",
@@ -1057,6 +1076,23 @@ export function createLspNavigationTool(
 				);
 			}
 			const operation = normalizedOperation;
+			requestedApply = apply === true;
+			if (
+				requestedApply &&
+				["rename", "rename_file", "executeCommand"].includes(operation)
+			) {
+				const cwd = ctx.cwd || ".";
+				mutationContext = {
+					cwd,
+					correlationId: newLspMutationCorrelationId(_toolCallId),
+					tool: "lsp_navigation",
+					source: "lsp-edit",
+					...mutationDeps,
+					readGuard: getFlag("no-read-guard", cwd)
+						? undefined
+						: mutationDeps?.readGuard,
+				};
+			}
 
 			const isCallHierarchyTraversal =
 				operation === "incomingCalls" || operation === "outgoingCalls";
@@ -1455,7 +1491,11 @@ export function createLspNavigationTool(
 								edit,
 							};
 						}
-						const applied = await applyWorkspaceEdit(edit, ctx.cwd || ".");
+						const applied = await applyWorkspaceEdit(
+							edit,
+							ctx.cwd || ".",
+							{ mutationContext },
+						);
 						for (const touchedFile of applied.files) {
 							try {
 								await openFileBestEffort(lspService, touchedFile, false);
@@ -1480,6 +1520,7 @@ export function createLspNavigationTool(
 							{
 								cwd: ctx.cwd || ".",
 								apply: apply ?? false,
+								...(mutationContext ? { mutationContext } : {}),
 							},
 						);
 						if (result.applied) {
@@ -1531,6 +1572,7 @@ export function createLspNavigationTool(
 							rawPath ? filePath : undefined,
 							command,
 							commandArguments,
+							mutationContext,
 						);
 					}
 					case "incomingCalls": {
@@ -1601,6 +1643,27 @@ export function createLspNavigationTool(
 							usedDocumentSymbolFallback = true;
 						}
 					}
+				}
+				if (
+					mutationContext &&
+					requestedApply &&
+					!mutationContext.summaryEmitted
+				) {
+					const outcome =
+						operation === "rename_file" &&
+						result &&
+						typeof result === "object" &&
+						"applied" in result &&
+						(result as { applied?: unknown }).applied === false
+							? "failed"
+							: operation === "executeCommand" &&
+								result &&
+								typeof result === "object" &&
+								"executed" in result &&
+								(result as { executed?: unknown }).executed === false
+								? "failed"
+								: "skipped";
+					recordLspMutationOutcome(mutationContext, outcome);
 				}
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);

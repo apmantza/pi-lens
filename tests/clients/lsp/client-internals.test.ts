@@ -6,6 +6,9 @@
  */
 
 import { EventEmitter } from "node:events";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import type { MessageConnection } from "vscode-jsonrpc";
@@ -64,6 +67,64 @@ describe("CLIENT_CAPABILITIES (#278 regression)", () => {
 			(CLIENT_CAPABILITIES.textDocument.publishDiagnostics as { versionSupport?: boolean })
 				.versionSupport,
 		).toBe(true);
+	});
+});
+
+describe("solicited workspace/applyEdit observability", () => {
+	it("applies and correlates solicited edits, but refuses unsolicited edits", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-apply-edit-"));
+		const filePath = path.join(root, "app.ts");
+		fs.writeFileSync(filePath, "const old = 1;\n", "utf8");
+		const state = createMockState({ root });
+		const written: string[] = [];
+		state.serverEditsAllowed = 1;
+		state.activeMutationDepth = 1;
+		state.activeMutationContext = {
+			cwd: root,
+			correlationId: "apply-edit-1",
+			tool: "workspace/applyEdit",
+			source: "lsp-edit",
+			readGuard: { recordWritten: (file) => written.push(file) },
+		};
+		setupIncomingHandlers(state, {});
+		const calls = vi.mocked(state.connection.onRequest).mock.calls as unknown as Array<
+			[string, (...args: unknown[]) => unknown]
+		>;
+		const handler = calls.find((call) => call[0] === "workspace/applyEdit")?.[1];
+		expect(handler).toBeDefined();
+		await expect(
+			handler!({
+			edit: {
+				changes: {
+					[pathToFileURL(filePath).href]: [
+						{
+							range: {
+								start: { line: 0, character: 6 },
+								end: { line: 0, character: 9 },
+							},
+							newText: "new",
+						},
+					],
+				},
+			},
+		}),
+		).resolves.toMatchObject({ applied: true });
+		expect(fs.readFileSync(filePath, "utf8")).toBe("const new = 1;\n");
+		expect(written).toEqual([filePath]);
+		expect(state.activeMutationContext?.summaryEmitted).toBe(true);
+
+		fs.writeFileSync(filePath, "const old = 1;\n", "utf8");
+		state.serverEditsAllowed = 0;
+		const refused = await handler!({
+			edit: {
+				changes: {
+					[pathToFileURL(filePath).href]: [],
+				},
+			},
+		});
+		expect(refused).toEqual({ applied: false, failureReason: "edit not solicited" });
+		expect(fs.readFileSync(filePath, "utf8")).toBe("const old = 1;\n");
+		fs.rmSync(root, { recursive: true, force: true });
 	});
 });
 

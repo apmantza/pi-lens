@@ -7,6 +7,10 @@ import type { LSPCodeAction, LSPDiagnostic } from "./lsp/client.js";
 import { applyWorkspaceEdit } from "./lsp/edits.js";
 import { getLSPService } from "./lsp/index.js";
 import { normalizeMapKey } from "./path-utils.js";
+import {
+	recordLspMutationBatch,
+	type LspMutationContext,
+} from "./lsp-mutation.js";
 import { toRunnerDisplayPath } from "./dispatch/runner-context.js";
 import { logActionableWarningsEvent } from "./actionable-warnings-logger.js";
 import { getProjectDataDir } from "./file-utils.js";
@@ -663,6 +667,7 @@ export async function applyConservativeActionableWarningFixes(args: {
 	report: ActionableWarningsReport;
 	maxFixes?: number;
 	dbg?: (msg: string) => void;
+	mutationContext?: LspMutationContext;
 }): Promise<ActionableWarningsAutofixSummary> {
 	const summary: ActionableWarningsAutofixSummary = {
 		considered: 0,
@@ -671,6 +676,8 @@ export async function applyConservativeActionableWarningFixes(args: {
 		skipped: [],
 	};
 	const changedFiles = new Set<string>();
+	const appliedResults: Array<Awaited<ReturnType<typeof applyWorkspaceEdit>>> = [];
+	let failedCount = 0;
 	const lspService = getLSPService();
 	const maxFixes = Math.max(0, args.maxFixes ?? 5);
 	for (const file of args.report.files) {
@@ -727,10 +734,24 @@ export async function applyConservativeActionableWarningFixes(args: {
 					continue;
 				}
 				const edit = selected.edit as Parameters<typeof applyWorkspaceEdit>[0];
-				const applied = await applyWorkspaceEdit(edit, args.cwd);
+				const applied = await applyWorkspaceEdit(
+					edit,
+					args.cwd,
+					args.mutationContext
+						? { mutationContext: { ...args.mutationContext, emitSummary: false } }
+						: undefined,
+				);
+				appliedResults.push(applied);
 				for (const changedFile of applied.files) changedFiles.add(changedFile);
 				summary.applied++;
 			} catch (err) {
+				failedCount++;
+				const partial = (err as { appliedWorkspaceEdit?: Awaited<ReturnType<typeof applyWorkspaceEdit>> })
+					.appliedWorkspaceEdit;
+				if (partial) {
+					appliedResults.push(partial);
+					for (const changedFile of partial.files) changedFiles.add(changedFile);
+				}
 				const message = err instanceof Error ? err.message : String(err);
 				args.dbg?.(
 					`actionable_warnings_autofix failed for ${warning.id}: ${message}`,
@@ -740,6 +761,16 @@ export async function applyConservativeActionableWarningFixes(args: {
 		}
 	}
 	summary.changedFiles = [...changedFiles];
+	if (args.mutationContext && (summary.considered > 0 || appliedResults.length > 0)) {
+		recordLspMutationBatch(args.mutationContext, {
+			results: appliedResults,
+			considered: summary.considered,
+			completed: summary.applied,
+			failedCount,
+			status: failedCount > 0 ? "failed" : appliedResults.length > 0 ? "success" : "skipped",
+			bookkeep: false,
+		});
+	}
 	return summary;
 }
 
