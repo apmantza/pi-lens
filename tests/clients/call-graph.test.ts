@@ -19,8 +19,8 @@ import { removeTempDirSync } from "./test-utils.js";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
-function sym(filePath: string, name: string, kind: Symbol["kind"] = "function", line = 1): Symbol {
-	return { id: `${filePath}:${name}`, name, kind, filePath, line, column: 1, isExported: true };
+function sym(filePath: string, name: string, kind: Symbol["kind"] = "function", line = 1, endLine?: number): Symbol {
+	return { id: `${filePath}:${name}`, name, kind, filePath, line, ...(endLine === undefined ? {} : { endLine }), column: 1, isExported: true };
 }
 
 function ref(callerFile: string, refName: string, line = 5): SymbolRef {
@@ -82,6 +82,29 @@ describe("buildCallGraph", () => {
 		expect(graph.callers.size).toBe(0);
 	});
 
+	it("uses the file-level fallback after a completed function", () => {
+		const fileA = "/proj/a.ts";
+		const fileB = "/proj/b.ts";
+		const graph = buildCallGraph(
+			new Map([[fileA, [sym(fileA, "done", "function", 1, 3)]], [fileB, [sym(fileB, "init")]]]),
+			new Map([[fileA, [ref(fileA, "init", 5)]]]),
+		);
+		expect(graph.callees.has(`file:${fileA}`)).toBe(true);
+		expect(graph.callees.has(`${fileA}:done`)).toBe(false);
+	});
+
+	it("respects nested and adjacent function end boundaries", () => {
+		const fileA = "/proj/a.ts";
+		const fileB = "/proj/b.ts";
+		const graph = buildCallGraph(
+			new Map([[fileA, [sym(fileA, "outer", "function", 1, 10), sym(fileA, "inner", "function", 3, 5)]], [fileB, [sym(fileB, "target")]]]),
+			new Map([[fileA, [ref(fileA, "target", 4), ref(fileA, "target", 7), ref(fileA, "target", 12)]]]),
+		);
+		expect(graph.callees.has(`${fileA}:inner`)).toBe(true);
+		expect(graph.callees.has(`${fileA}:outer`)).toBe(true);
+		expect(graph.callees.has(`file:${fileA}`)).toBe(true);
+	});
+
 	it("applies ambiguity discounting when multiple files define same name", () => {
 		const fileA = "/proj/a.ts";
 		const fileB = "/proj/b.ts";
@@ -141,6 +164,37 @@ describe("buildCallGraph", () => {
 		}
 	});
 
+	it("classifies canonical same-file evidence as unsupported and persists cross-file edges", () => {
+		process.env.PILENS_DATA_DIR = tmpDir;
+		try {
+			const fileA = "/proj/a.ts";
+			const fileB = "/proj/b.ts";
+			const sameFileId = `${fileA}:target:function:3`;
+			const crossFileId = `${fileB}:remote:function:3`;
+			const callerId = `${fileA}:caller:function:10`;
+			const graph = buildCallGraph(
+				new Map([
+					[fileA, [{ ...sym(fileA, "target", "function", 3), id: sameFileId }, { ...sym(fileA, "caller", "function", 10), id: callerId }]],
+					[fileB, [{ ...sym(fileB, "remote", "function", 3), id: crossFileId }]],
+				]),
+				new Map([[fileA, [
+					{ ...ref(fileA, "target", 4), targetId: sameFileId, evidenceKind: "calls", referenceKind: "call", resolution: "exact" },
+					{ ...ref(fileA, "remote", 11), targetId: crossFileId, callerSymbolId: callerId, evidenceKind: "calls", referenceKind: "call", resolution: "exact" },
+				]]),
+				{ totalEvidence: 2, callsEvidence: 2, referencesEvidence: 0, eligibleEvidence: 2, resolvedEvidence: 2, unresolvedEvidence: 0, typeOnlyEvidence: 0, unsupportedEvidence: 0, duplicateEvidence: 0, complete: true },
+			);
+			expect(graph.edges).toHaveLength(1);
+			expect(graph.coverage).toMatchObject({ resolvedEvidence: 1, eligibleEvidence: 1, unsupportedEvidence: 1, complete: false });
+			saveCallGraph("/proj", graph, new Map([[fileA, 1], [fileB, 2]]));
+			const loaded = loadCallGraph("/proj");
+			expect(loaded?.graph.callees.get(callerId)).toEqual(new Set([crossFileId]));
+			expect(loaded?.graph.callers.get(crossFileId)).toEqual(new Set([callerId]));
+			expect(loaded?.graph.coverage).toMatchObject({ resolvedEvidence: 1, unsupportedEvidence: 1 });
+		} finally {
+			delete process.env.PILENS_DATA_DIR;
+		}
+	});
+
 	it("counts duplicate evidence once while keeping centrality on logical edges", () => {
 		const fileA = "/proj/a.ts";
 		const fileB = "/proj/b.ts";
@@ -162,6 +216,18 @@ describe("buildCallGraph", () => {
 		expect(graph.edges[0].evidenceCount).toBe(2);
 		expect(graph.coverage).toMatchObject({ totalEvidence: 2, duplicateEvidence: 1, eligibleEvidence: 2, resolvedEvidence: 2 });
 		expect(graph.inDegree.get(calleeId)).toBe(1);
+		process.env.PILENS_DATA_DIR = tmpDir;
+		try {
+			saveCallGraph("/proj", graph, new Map([[fileA, 1], [fileB, 2]]));
+			const loaded = loadCallGraph("/proj");
+			expect(loaded?.graph.edges[0].evidenceCount).toBe(2);
+			expect(loaded?.graph.coverage?.duplicateEvidence).toBe(1);
+			expect(loaded?.graph.callees.get(callerId)).toEqual(new Set([calleeId]));
+			expect(loaded?.graph.callers.get(calleeId)).toEqual(new Set([callerId]));
+			expect(loaded?.graph.inDegree.get(calleeId)).toBe(1);
+		} finally {
+			delete process.env.PILENS_DATA_DIR;
+		}
 	});
 
 	it("filters stdlib names from resolution", () => {

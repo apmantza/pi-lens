@@ -286,9 +286,11 @@ function buildDefIndex(
 }
 
 /**
- * Find the enclosing function/method for a ref at `refLine` using a
- * "last start-line before ref" heuristic. Returns the symbol whose
- * start line is closest to (and not after) the ref's line.
+ * Find the enclosing function/method for a ref at `refLine`. A symbol with
+ * an end line is eligible only while the reference is inside its inclusive
+ * source range; symbols without an end line retain the conservative start-line
+ * fallback. Returns undefined when no symbol encloses the reference so callers
+ * can use the file-level module key.
  */
 function findEnclosingSymbol(
 	symbols: Symbol[],
@@ -298,6 +300,7 @@ function findEnclosingSymbol(
 	for (const sym of symbols) {
 		if (
 			sym.line <= refLine &&
+			(sym.endLine === undefined || refLine <= sym.endLine) &&
 			(sym.kind === "function" || sym.kind === "method")
 		) {
 			if (!best || sym.line > best.line) best = sym;
@@ -431,7 +434,17 @@ export function buildCallGraph(
 			let producedEdge = false;
 			let duplicateRef = false;
 			for (const { callee, resolution, candidateCount } of candidates) {
-				if (callee.filePath === callerFile) continue;
+				if (normalizeMapKey(callee.filePath) === normalizeMapKey(callerFile)) {
+					// This projection is intentionally cross-file-only. A canonical
+					// same-file target is resolved by the source graph but unsupported
+					// here, so coverage must not claim a persisted resolved edge.
+					if (hasInputCoverage) {
+						coverage.eligibleEvidence--;
+						coverage.resolvedEvidence--;
+						coverage.unsupportedEvidence++;
+					}
+					continue;
+				}
 				producedEdge = true;
 				const pairKey = `${callerKey}\u0000${callee.id}`;
 				const existing = edgeByPair.get(pairKey);
@@ -485,6 +498,7 @@ export function buildCallGraph(
 				coverage.resolvedEvidence++;
 				if (duplicateRef) coverage.duplicateEvidence++;
 			}
+			if (hasInputCoverage && producedEdge && duplicateRef) coverage.duplicateEvidence++;
 		}
 	}
 
