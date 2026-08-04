@@ -207,6 +207,13 @@ export function aggregateGraphToFiles(
 	// in stable insertion order so overloads with the same name/kind stay distinct.
 	const logicalSymbolByNode = new Map<string, string>();
 	const sourceSymbolsByFile = new Map<string, Map<string, string[]>>();
+	// A symbol kind is not stable across extractor surfaces: a declaration can
+	// be a `function` in a JS/TS fact and a `variable` in a compiled twin's
+	// syntax extraction. Keep a name-only index for the safe case where there is
+	// exactly one source declaration with that name; this prevents equivalent
+	// twins from inflating the preferred source while preserving overloads and
+	// genuinely ambiguous same-name declarations.
+	const sourceSymbolsByName = new Map<string, Map<string, string[]>>();
 	for (const node of graph.nodes.values()) {
 		if (node.kind !== "symbol" || !node.filePath || !node.symbolName) continue;
 		const raw = normalizeMapKey(node.filePath);
@@ -218,6 +225,11 @@ export function aggregateGraphToFiles(
 		ids.push(node.id);
 		byName.set(key, ids);
 		sourceSymbolsByFile.set(canonical, byName);
+		const bySymbolName = sourceSymbolsByName.get(canonical) ?? new Map<string, string[]>();
+		const nameIds = bySymbolName.get(node.symbolName) ?? [];
+		nameIds.push(node.id);
+		bySymbolName.set(node.symbolName, nameIds);
+		sourceSymbolsByName.set(canonical, bySymbolName);
 		logicalSymbolByNode.set(node.id, node.id);
 	}
 	// Assign each twin's declarations by occurrence within THAT twin file, not
@@ -232,10 +244,19 @@ export function aggregateGraphToFiles(
 		const canonical = canonicalOf.get(raw) ?? raw;
 		if (raw === canonical) continue;
 		const key = `${node.symbolName}\u0000${node.symbolKind ?? ""}`;
-		const sourceIds = sourceSymbolsByFile.get(canonical)?.get(key) ?? [];
+		const exactSourceIds = sourceSymbolsByFile.get(canonical)?.get(key) ?? [];
+		const nameSourceIds = sourceSymbolsByName.get(canonical)?.get(node.symbolName) ?? [];
+		// Prefer the kind-qualified mapping. Fall back only when the source name
+		// is unique; never guess among overloads or same-name declarations.
+		const sourceIds = exactSourceIds.length > 0
+			? exactSourceIds
+			: nameSourceIds.length === 1
+				? nameSourceIds
+				: [];
+		const occurrenceKey = exactSourceIds.length > 0 ? key : node.symbolName;
 		const occurrences = twinOccurrencesByFile.get(raw) ?? new Map<string, number>();
-		const occurrence = occurrences.get(key) ?? 0;
-		occurrences.set(key, occurrence + 1);
+		const occurrence = occurrences.get(occurrenceKey) ?? 0;
+		occurrences.set(occurrenceKey, occurrence + 1);
 		twinOccurrencesByFile.set(raw, occurrences);
 		const logical = sourceIds[occurrence];
 		if (logical) {

@@ -917,11 +917,23 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	// would drop the call-graph entries — so lens_diagnostics (which only reads the
 	// persisted report) would never surface the findings (#179/#533).
 	if (runtime.callGraph && files.length > 0) {
-		try {
-			const { impact, formatImpact, parseSymbolKey } = await import("./call-graph.js");
-			const { callGraphImpactToProjectDiagnostics } = await import(
-				"./project-diagnostics/runner-adapters/call-graph-impact.js"
+		const coverage = runtime.callGraph.coverage;
+		if (!coverage || coverage.complete !== true) {
+			// An incomplete graph can still contain useful edges, but emitting them
+			// as ordinary impact findings would turn unsupported/partial extraction
+			// into an authoritative-looking clean result for the rest of the file.
+			// Keep the limitation visible and require a complete graph for this
+			// user-facing impact surface (#1070).
+			advisoryParts.push(
+				"Call-graph impact was not emitted because call-graph extraction coverage is incomplete; " +
+					"the affected files may have unreported callers.",
 			);
+		} else {
+			try {
+				const { impact, formatImpact, parseSymbolKey } = await import("./call-graph.js");
+				const { callGraphImpactToProjectDiagnostics } = await import(
+					"./project-diagnostics/runner-adapters/call-graph-impact.js"
+				);
 			const impactLines: string[] = [];
 			const impactFindings: { calleeKey: string; results: ReturnType<typeof impact> }[] =
 				[];
@@ -960,8 +972,10 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					projectDiagnosticsSources.add("call-graph");
 				}
 			}
+			// Non-fatal — call graph is best-effort
 		} catch {
 			// Non-fatal — call graph is best-effort
+		}
 		}
 	}
 

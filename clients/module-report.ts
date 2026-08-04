@@ -63,8 +63,16 @@ import {
 // lsp.ts) to be re-homed in #236, where LSP writes provenance-tagged edges INTO
 // the review graph (computed once, persisted) so this path just reads them.
 
+/** Hard payload bound for the per-symbol who-uses-this section. */
+export const MAX_MODULE_REPORT_REFS = 100;
+
+function normalizeMaxRefsPerSymbol(value: number | undefined): number {
+	if (value === undefined || !Number.isFinite(value)) return 10;
+	return Math.min(MAX_MODULE_REPORT_REFS, Math.max(1, Math.floor(value)));
+}
+
 export interface ModuleReportOptions {
-	/** Cap on who-uses-this entries per symbol. */
+	/** Cap on who-uses-this entries per symbol (hard-capped at 100). */
 	maxRefsPerSymbol?: number;
 	/** Optional task hint used only to rank recommendedReads; never expands scope or triggers scans. */
 	focus?: string;
@@ -1872,7 +1880,7 @@ export async function moduleReport(
 	options?: ModuleReportOptions,
 ): Promise<ModuleReport> {
 	const startedAt = Date.now();
-	const maxRefs = Math.max(1, options?.maxRefsPerSymbol ?? 10);
+	const maxRefs = normalizeMaxRefsPerSymbol(options?.maxRefsPerSymbol);
 	const maxCallGraphEntries = Math.min(
 		CALL_GRAPH_MAX_ENTRY_CAP,
 		Math.max(1, Math.floor(options?.maxCallGraphEntries ?? CALL_GRAPH_DEFAULT_ENTRY_CAP)),

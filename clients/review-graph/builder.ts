@@ -2803,14 +2803,14 @@ function addJsTsFile(
 	const hintPath = toProjectRelativePath(normalized, cwd);
 	const content = facts.getFileFact<string>(normalized, "file.content") ?? "";
 	const fileNodeId = `file:${normalized}`;
-	// The warm function-fact provider intentionally covers only .ts/.tsx. A
-	// compiled JS twin must not be treated as a second complete call source: the
-	// review graph's import resolver prefers the TypeScript source twin, while
-	// this metadata makes the unsupported warm-call coverage explicit to the
-	// call-graph adapter (#1070/#694).
-	const warmCallCoverage = /\.tsx?$/.test(normalized.toLowerCase())
-		? (facts.getFileFact<string>(normalized, "file.functionFactsCoverage") ?? "unavailable")
-		: "unavailable";
+	// The function-facts provider uses the shared tree-sitter integration for
+	// both TypeScript and JavaScript-family grammars. Do not suppress JS call
+	// evidence merely because import resolution may canonicalize a compiled twin
+	// onto its source; the graph must describe every supported source file, and
+	// lens-map performs the separate presentation-level twin merge.
+	const warmCallCoverage =
+		facts.getFileFact<string>(normalized, "file.functionFactsCoverage") ??
+		"unavailable";
 	const importCoverage =
 		facts.getFileFact<string>(normalized, "file.importFactsCoverage") ?? "unavailable";
 	addNode(graph, {

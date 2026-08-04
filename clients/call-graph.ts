@@ -4,7 +4,8 @@
  * Builds a bidirectional function-level call graph by resolving symbol
  * references across files. Provides BFS impact analysis with severity tiers.
  * Uses the Symbol/SymbolRef data produced by TreeSitterSymbolExtractor and
- * persists the result with per-file mtime tracking for incremental sessions.
+ * persists the result under the canonical review-graph identity; freshness is
+ * owned exclusively by the review-graph snapshot.
  */
 
 import * as fs from "node:fs";
@@ -98,8 +99,6 @@ interface PersistedCallGraph {
 	/** The canonical review graph this projection was derived from. */
 	reviewGraphVersion?: string;
 	reviewGraphSignature?: string;
-	/** Retained only for migration/tests; runtime freshness uses review-graph identity. */
-	fileMtimes?: Record<string, number>;
 	edges: ResolvedCallEdge[];
 	callees: [SymbolKey, SymbolKey[]][];
 	callers: [SymbolKey, SymbolKey[]][];
@@ -546,33 +545,19 @@ function metaFilePath(cwd: string): string {
 
 /**
  * Persist a call-graph projection. Current callers pass the canonical
- * review-graph identity; the Map overload remains for migration/tests and is
- * intentionally not considered fresh by runtime-session without an identity.
+ * review-graph identity. There is deliberately no independent file/mtime
+ * freshness argument: callers must use the review graph's canonical identity.
  */
 export function saveCallGraph(
 	cwd: string,
 	graph: FunctionCallGraph,
 	identity: CallGraphCacheIdentity,
-	fileMtimes?: Map<string, number>,
-): void;
-/**
- * Legacy overload retained so old callers can write a cache, but such a cache
- * deliberately cannot be loaded as current because it has no canonical graph
- * identity. This is a migration aid, not a freshness fallback.
- */
-export function saveCallGraph(
-	cwd: string,
-	graph: FunctionCallGraph,
-	fileMtimes: Map<string, number>,
 ): void;
 export function saveCallGraph(
 	cwd: string,
 	graph: FunctionCallGraph,
-	identityOrMtimes: CallGraphCacheIdentity | Map<string, number>,
-	legacyFileMtimes?: Map<string, number>,
+	identity: CallGraphCacheIdentity,
 ): void {
-	const identity = identityOrMtimes instanceof Map ? undefined : identityOrMtimes;
-	const fileMtimes = identityOrMtimes instanceof Map ? identityOrMtimes : legacyFileMtimes;
 	const cacheFile = cacheFilePath(cwd);
 	const metaFile = metaFilePath(cwd);
 	try {
@@ -583,11 +568,6 @@ export function saveCallGraph(
 			...(identity ? {
 				reviewGraphVersion: identity.reviewGraphVersion,
 				reviewGraphSignature: identity.reviewGraphSignature,
-			} : {}),
-			...(fileMtimes ? {
-				fileMtimes: Object.fromEntries(
-					[...fileMtimes].map(([file, mtime]) => [normalizeMapKey(file), mtime]),
-				),
 			} : {}),
 			edges: graph.edges,
 			callees: [...graph.callees.entries()].map(([k, v]) => [k, [...v]]),
@@ -668,11 +648,7 @@ function validatePersistedCallGraph(
 	if (!raw || raw.version !== CACHE_VERSION || typeof raw.builtAt !== "string") return false;
 	if (typeof raw.reviewGraphVersion !== "string" || raw.reviewGraphVersion.length === 0 ||
 		typeof raw.reviewGraphSignature !== "string") return false;
-	if (raw.fileMtimes !== undefined && (typeof raw.fileMtimes !== "object" || Array.isArray(raw.fileMtimes))) return false;
 	if (!Array.isArray(raw.edges) || !Array.isArray(raw.callees) || !Array.isArray(raw.callers) || !Array.isArray(raw.inDegree)) return false;
-	for (const mtime of Object.values(raw.fileMtimes ?? {})) {
-		if (typeof mtime !== "number" || !Number.isFinite(mtime)) return false;
-	}
 	const coverageValues = [
 		coverage.totalEvidence,
 		coverage.callsEvidence,
@@ -774,7 +750,6 @@ export function loadCallGraph(
 ): {
 	graph: FunctionCallGraph;
 	identity: CallGraphCacheIdentity;
-	fileMtimes: Map<string, number>;
 } | undefined {
 	const cacheFile = cacheFilePath(cwd);
 	try {
@@ -802,65 +777,9 @@ export function loadCallGraph(
 				builtAt: raw.builtAt,
 			},
 			identity,
-			fileMtimes: new Map(
-				Object.entries(raw.fileMtimes ?? {}).map(([file, mtime]) => [
-					normalizeMapKey(file),
-					mtime,
-				]),
-			),
 		};
 	} catch {
 		return undefined;
 	}
 }
 
-/**
- * Returns the set of file paths whose mtime has changed since the cache was saved.
- * Files not in the mtime map are treated as new (stale).
- *
- * The persisted call-graph API uses normalized path keys, but this boundary
- * also accepts maps from older/existing callers that still contain raw keys.
- * Normalize the supplied map once so both forms compare against the same
- * long-lived path-key contract.
- */
-export function staleFiles(
-	fileMtimes: Map<string, number>,
-	currentFiles: string[],
-): string[] {
-	const normalizedMtimes = new Map<string, number>();
-	for (const [file, mtime] of fileMtimes) {
-		normalizedMtimes.set(normalizeMapKey(file), mtime);
-	}
-	const normalizedCurrent = new Set(currentFiles.map((file) => normalizeMapKey(file)));
-	const stale = currentFiles.filter((f) => {
-		const cached = normalizedMtimes.get(normalizeMapKey(f));
-		if (cached === undefined) return true; // new file
-		try {
-			return fs.statSync(f).mtimeMs !== cached;
-		} catch {
-			return true; // deleted or unreadable
-		}
-	});
-	// A current-source walk also has to invalidate cached files that vanished;
-	// otherwise validating only current entries makes deletion look clean.
-	for (const file of normalizedMtimes.keys()) {
-		if (!normalizedCurrent.has(file)) stale.push(file);
-	}
-	return stale;
-}
-
-/**
- * Read current mtimes for a set of files.
- * Returned keys use the normalized long-lived path-key representation.
- */
-export function readMtimes(files: string[]): Map<string, number> {
-	const mtimes = new Map<string, number>();
-	for (const f of files) {
-		try {
-			mtimes.set(normalizeMapKey(f), fs.statSync(f).mtimeMs);
-		} catch {
-			// skip
-		}
-	}
-	return mtimes;
-}

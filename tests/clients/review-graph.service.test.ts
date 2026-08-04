@@ -85,6 +85,56 @@ describe("review graph service", () => {
 		}
 	});
 
+	it("extracts production call edges for every JavaScript-family extension", async () => {
+		const env = setupTestEnvironment("pi-lens-review-graph-javascript-");
+		try {
+			const calleePath = createTempFile(
+				env.tmpDir,
+				"src/callee.js",
+				"export function helper() { return 1; }\n",
+			);
+			const callers = [
+				["caller.js", "callerJs"],
+				["caller.jsx", "callerJsx"],
+				["caller.mjs", "callerMjs"],
+				["caller.cjs", "callerCjs"],
+			] as const;
+			const callerPaths = callers.map(([file, name]) =>
+				createTempFile(
+					env.tmpDir,
+					`src/${file}`,
+					`import { helper } from "./callee.js";\nexport function ${name}() { return helper(); }\n`,
+				),
+			);
+
+			const graph = await buildOrUpdateGraph(env.tmpDir, [], new FactStore());
+			const helperNode = [...graph.nodes.values()].find(
+				(node) => node.symbolName === "helper" && node.filePath === normalizeMapKey(calleePath),
+			);
+			expect(helperNode).toBeDefined();
+			for (const [index, [, name]] of callers.entries()) {
+				const callerPath = normalizeMapKey(callerPaths[index]);
+				const callerNode = [...graph.nodes.values()].find(
+					(node) => node.symbolName === name && node.filePath === callerPath,
+				);
+				expect(callerNode, `${name} was not extracted`).toBeDefined();
+				expect(
+					graph.edges.some(
+						(edge) =>
+							edge.kind === "calls" &&
+							edge.from === callerNode?.id &&
+							edge.to === helperNode?.id,
+					),
+				).toBe(true);
+				const fileNode = graph.nodes.get(`file:${callerPath}`);
+				expect(fileNode?.metadata?.extractionCoverage).toMatchObject({ calls: "complete" });
+			}
+		} finally {
+			clearReviewGraphWorkspaceCache();
+			env.cleanup();
+		}
+	});
+
 	it("excludes test files from the graph (#260)", async () => {
 		const env = setupTestEnvironment("pi-lens-review-graph-notests-");
 		try {

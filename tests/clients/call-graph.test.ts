@@ -7,14 +7,11 @@ import {
 	formatImpact,
 	impact,
 	loadCallGraph,
-	readMtimes,
 	saveCallGraph,
-	staleFiles,
 	type FunctionCallGraph,
 } from "../../clients/call-graph.js";
 import type { Symbol, SymbolRef } from "../../clients/symbol-types.js";
 import { getProjectDataDir } from "../../clients/file-utils.js";
-import { normalizeMapKey } from "../../clients/path-utils.js";
 import { removeTempDirSync } from "./test-utils.js";
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -154,7 +151,7 @@ describe("buildCallGraph", () => {
 				new Map([[fileA, [ref(fileA, "shared")]]]),
 			);
 
-			saveCallGraph("/proj", graph, { reviewGraphVersion: "v7", reviewGraphSignature: "sig-ambiguous" }, new Map([[fileA, 1], [fileB, 2], [fileC, 3]]));
+			saveCallGraph("/proj", graph, { reviewGraphVersion: "v7", reviewGraphSignature: "sig-ambiguous" });
 			expect(loadCallGraph("/proj")?.graph.coverage).toMatchObject({
 				totalEvidence: 1,
 				resolvedEvidence: 1,
@@ -185,7 +182,7 @@ describe("buildCallGraph", () => {
 			);
 			expect(graph.edges).toHaveLength(1);
 			expect(graph.coverage).toMatchObject({ resolvedEvidence: 1, eligibleEvidence: 1, unsupportedEvidence: 1, complete: false });
-			saveCallGraph("/proj", graph, { reviewGraphVersion: "v7", reviewGraphSignature: "sig-same-file" }, new Map([[fileA, 1], [fileB, 2]]));
+			saveCallGraph("/proj", graph, { reviewGraphVersion: "v7", reviewGraphSignature: "sig-same-file" });
 			const loaded = loadCallGraph("/proj");
 			expect(loaded?.graph.callees.get(callerId)).toEqual(new Set([crossFileId]));
 			expect(loaded?.graph.callers.get(crossFileId)).toEqual(new Set([callerId]));
@@ -218,7 +215,7 @@ describe("buildCallGraph", () => {
 		expect(graph.inDegree.get(calleeId)).toBe(1);
 		process.env.PILENS_DATA_DIR = tmpDir;
 		try {
-			saveCallGraph("/proj", graph, { reviewGraphVersion: "v7", reviewGraphSignature: "sig-duplicate" }, new Map([[fileA, 1], [fileB, 2]]));
+			saveCallGraph("/proj", graph, { reviewGraphVersion: "v7", reviewGraphSignature: "sig-duplicate" });
 			const loaded = loadCallGraph("/proj");
 			expect(loaded?.graph.edges[0].evidenceCount).toBe(2);
 			expect(loaded?.graph.coverage?.duplicateEvidence).toBe(1);
@@ -446,9 +443,8 @@ describe("saveCallGraph / loadCallGraph", () => {
 		const allRefs = new Map([[fileA, [ref(fileA, "callee", 5)]]]);
 
 		const graph = buildCallGraph(allSymbols, allRefs);
-		const mtimes = new Map([[fileA, 1234], [fileB, 5678]]);
 
-		saveCallGraph("/proj", graph, { reviewGraphVersion: "v7", reviewGraphSignature: "sig-roundtrip" }, mtimes);
+		saveCallGraph("/proj", graph, { reviewGraphVersion: "v7", reviewGraphSignature: "sig-roundtrip" });
 		const loaded = loadCallGraph("/proj");
 
 		expect(loaded).toBeDefined();
@@ -456,7 +452,6 @@ describe("saveCallGraph / loadCallGraph", () => {
 		const calleeKey = `${fileB}:callee`;
 		expect(loaded?.graph.callees.get(callerKey)?.has(calleeKey)).toBe(true);
 		expect(loaded?.graph.callers.get(calleeKey)?.has(callerKey)).toBe(true);
-		expect(loaded?.fileMtimes.get(normalizeMapKey(fileA))).toBe(1234);
 
 		delete process.env.PILENS_DATA_DIR;
 	});
@@ -520,7 +515,7 @@ describe("saveCallGraph / loadCallGraph", () => {
 			complete: true,
 		};
 		const graph = buildCallGraph(allSymbols, allRefs, coverage);
-		saveCallGraph("/proj", graph, { reviewGraphVersion: "v8", reviewGraphSignature: "sig-evidence" }, new Map([[fileA, 1], [fileB, 2]]));
+		saveCallGraph("/proj", graph, { reviewGraphVersion: "v8", reviewGraphSignature: "sig-evidence" });
 		const loaded = loadCallGraph("/proj");
 		expect(loaded?.graph.edges[0]).toMatchObject({
 			calleeKey: calleeId,
@@ -575,70 +570,3 @@ describe("saveCallGraph / loadCallGraph", () => {
 	});
 });
 
-// ── staleFiles ─────────────────────────────────────────────────────────────────
-
-describe("staleFiles", () => {
-	it("returns files whose mtime differs", () => {
-		const fileA = path.join(tmpDir, "a.ts");
-		fs.writeFileSync(fileA, "x");
-		const mtime = fs.statSync(fileA).mtimeMs;
-
-		// File with wrong mtime → stale
-		const stale = staleFiles(new Map([[fileA, mtime - 1000]]), [fileA]);
-		expect(stale).toContain(fileA);
-	});
-
-	it("returns file as stale if not in mtime map", () => {
-		const fileA = path.join(tmpDir, "new.ts");
-		fs.writeFileSync(fileA, "x");
-
-		const stale = staleFiles(new Map(), [fileA]);
-		expect(stale).toContain(fileA);
-	});
-
-	it("invalidates a cached compiled twin when the preferred source appears", () => {
-		const compiled = path.join(tmpDir, "foo.js");
-		const source = path.join(tmpDir, "foo.ts");
-		fs.writeFileSync(compiled, "compiled");
-		const stale = staleFiles(new Map([[compiled, fs.statSync(compiled).mtimeMs]]), [source]);
-		expect(stale.map(normalizeMapKey)).toEqual(expect.arrayContaining([
-			normalizeMapKey(source),
-			normalizeMapKey(compiled),
-		]));
-	});
-
-	it("invalidates a cached file removed from the current source set", () => {
-		const removed = path.join(tmpDir, "removed.ts");
-		fs.writeFileSync(removed, "x");
-		const stale = staleFiles(new Map([[removed, fs.statSync(removed).mtimeMs]]), []);
-		expect(stale).toContain(normalizeMapKey(removed));
-		fs.rmSync(removed);
-	});
-
-	it("does not return file as stale when mtime matches", () => {
-		const fileA = path.join(tmpDir, "fresh.ts");
-		fs.writeFileSync(fileA, "x");
-		const mtime = fs.statSync(fileA).mtimeMs;
-
-		const stale = staleFiles(new Map([[fileA, mtime]]), [fileA]);
-		expect(stale).not.toContain(fileA);
-	});
-});
-
-describe("readMtimes", () => {
-	it("reads current mtimes for existing files", () => {
-		const fileA = path.join(tmpDir, "a.ts");
-		fs.writeFileSync(fileA, "x");
-
-		const mtimes = readMtimes([fileA]);
-		const normalizedFileA = normalizeMapKey(fileA);
-		expect(mtimes.has(normalizedFileA)).toBe(true);
-		expect(typeof mtimes.get(normalizedFileA)).toBe("number");
-	});
-
-	it("skips files that do not exist", () => {
-		const missing = path.join(tmpDir, "missing.ts");
-		const mtimes = readMtimes([missing]);
-		expect(mtimes.has(missing)).toBe(false);
-	});
-});
