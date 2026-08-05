@@ -1,5 +1,7 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { buildCallGraph, saveCallGraph } from "../../clients/call-graph.js";
 import { FactStore } from "../../clients/dispatch/fact-store.js";
 import {
 	moduleReport,
@@ -12,14 +14,35 @@ import { resolveTreeSitterLanguage } from "../../clients/tree-sitter-shared.js";
 import {
 	buildOrUpdateGraph,
 	clearReviewGraphWorkspaceCache,
+	extractSymbolsAndRefsFromGraph,
+	getReviewGraphCacheIdentity,
+	getCachedReviewGraph,
+	flushReviewGraphPersistsForExitForTests,
 } from "../../clients/review-graph/builder.js";
+import { getProjectDataDir } from "../../clients/file-utils.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 
 // module_report consumes the cached review graph read-only (#256) — it never
 // builds and never calls an LSP server. Production warms the cache via the edit
 // pipeline; tests must do the same before asserting graph-derived who-uses-this.
-async function warmGraph(cwd: string): Promise<void> {
-	await buildOrUpdateGraph(cwd, [], new FactStore());
+async function warmGraph(cwd: string) {
+	return buildOrUpdateGraph(cwd, [], new FactStore());
+}
+
+async function warmCallGraph(cwd: string): Promise<void> {
+	const graph = await warmGraph(cwd);
+	const identity = getReviewGraphCacheIdentity(cwd, graph);
+	if (!identity) throw new Error("test graph did not expose a canonical identity");
+	const normalized = extractSymbolsAndRefsFromGraph(graph);
+	const callGraph = buildCallGraph(
+		normalized.allSymbols,
+		normalized.allRefs,
+		normalized.coverage,
+	);
+	saveCallGraph(cwd, callGraph, {
+		reviewGraphVersion: identity.version,
+		reviewGraphSignature: identity.signature,
+	});
 }
 
 const cleanups: Array<() => void> = [];
@@ -1023,6 +1046,137 @@ describe("moduleReport — review-graph who-uses-this", () => {
 		expect(foo).toBeDefined();
 		expect(foo?.usedBy).toBeUndefined(); // cold graph → no who-uses-this
 		expect(report.imports.external).toHaveLength(0);
+	});
+});
+
+describe("moduleReport — call-graph reader surface (#1070)", () => {
+	it("reads available callers and callees from the real warm graph, with bounded output", async () => {
+		const env = makeEnv();
+		createTempFile(
+			env.tmpDir,
+			"a.ts",
+			[
+				'import { helper } from "./c.js";',
+				"export function foo(): number {",
+				"  return helper();",
+				"}",
+			].join("\n"),
+		);
+		createTempFile(
+			env.tmpDir,
+			"b.ts",
+			[
+				'import { foo } from "./a.js";',
+				"export function callsFoo(): number { return foo(); }",
+				"export function callsFooAgain(): number { return foo(); }",
+			].join("\n"),
+		);
+		createTempFile(env.tmpDir, "c.ts", "export function helper(): number { return 1; }\n");
+
+		await warmCallGraph(env.tmpDir);
+		const report = await moduleReport("a.ts", env.tmpDir, {
+			callGraph: true,
+			maxCallGraphEntries: 1,
+		});
+
+		expect(report.callGraph).toMatchObject({
+			available: true,
+			truncated: true,
+			coverage: { status: expect.any(String), totalEvidence: expect.any(Number) },
+		});
+		expect(report.callGraph?.callers).toHaveLength(1);
+		expect(report.callGraph?.callers[0]).toMatchObject({
+			file: "b.ts",
+			symbol: expect.stringMatching(/^callsFoo/),
+			kind: "function",
+			targetSymbolId: expect.stringContaining("a.ts:foo"),
+		});
+		expect(report.callGraph?.callees[0]).toMatchObject({
+			file: "c.ts",
+			symbol: "helper",
+			targetSymbolId: expect.stringContaining("a.ts:foo"),
+		});
+
+		const callerReport = await moduleReport("b.ts", env.tmpDir, { callGraph: true });
+		expect(callerReport.callGraph?.available).toBe(true);
+		expect(callerReport.callGraph?.callees).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ file: "a.ts", symbol: "foo", evidenceKind: expect.any(String) }),
+			]),
+		);
+	});
+
+	it("reports identity mismatch, legacy, and malformed call-graph caches as stale", async () => {
+		const env = makeEnv();
+		createTempFile(env.tmpDir, "a.ts", "export function foo(): number { return 1; }\n");
+		await warmGraph(env.tmpDir);
+		const graph = getCachedReviewGraph(env.tmpDir);
+		expect(graph).toBeDefined();
+		const identity = getReviewGraphCacheIdentity(env.tmpDir, graph);
+		expect(identity).toBeDefined();
+		const cacheFile = path.join(getProjectDataDir(env.tmpDir), "cache", "call-graph.json");
+		fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+
+		const write = (raw: unknown) => fs.writeFileSync(cacheFile, JSON.stringify(raw), "utf-8");
+		const base = {
+			version: 5,
+			builtAt: "2026-08-04T00:00:00.000Z",
+			reviewGraphVersion: identity!.version,
+			reviewGraphSignature: "wrong-signature",
+			edges: [], callees: [], callers: [], inDegree: [], totalRefs: 0, unresolvedRefs: 0,
+			coverage: {
+				totalEvidence: 0, callsEvidence: 0, referencesEvidence: 0, eligibleEvidence: 0,
+				resolvedEvidence: 0, unresolvedEvidence: 0, typeOnlyEvidence: 0,
+				unsupportedEvidence: 0, sameFileEvidence: 0, duplicateEvidence: 0,
+				complete: false,
+			},
+		};
+		write(base);
+		expect((await moduleReport("a.ts", env.tmpDir, { callGraph: true })).callGraph).toMatchObject({
+			available: false,
+			reason: "stale",
+		});
+
+		write({ ...base, version: 4, reviewGraphSignature: identity!.signature });
+		expect((await moduleReport("a.ts", env.tmpDir, { callGraph: true })).callGraph).toMatchObject({
+			available: false,
+			reason: "stale",
+		});
+	});
+
+	it("reports partial persisted review graphs and a cold graph as unavailable", async () => {
+		const env = makeEnv();
+		createTempFile(env.tmpDir, "a.ts", "export function foo(): number { return 1; }\n");
+		const previousCap = process.env.PI_LENS_GRAPH_PERSIST_MAX_ELEMENTS;
+		process.env.PI_LENS_GRAPH_PERSIST_MAX_ELEMENTS = "1";
+		try {
+			await warmGraph(env.tmpDir);
+			flushReviewGraphPersistsForExitForTests();
+			clearReviewGraphWorkspaceCache();
+			const partial = await moduleReport("a.ts", env.tmpDir, { callGraph: true });
+			expect(partial.callGraph).toMatchObject({ available: false, reason: "partial" });
+		} finally {
+			if (previousCap === undefined) delete process.env.PI_LENS_GRAPH_PERSIST_MAX_ELEMENTS;
+			else process.env.PI_LENS_GRAPH_PERSIST_MAX_ELEMENTS = previousCap;
+		}
+
+		const coldEnv = makeEnv();
+		createTempFile(coldEnv.tmpDir, "a.ts", "export function foo(): number { return 1; }\n");
+		const cold = await moduleReport("a.ts", coldEnv.tmpDir, { callGraph: true });
+		expect(cold.callGraph).toMatchObject({
+			available: false,
+			reason: "review-graph-missing",
+			coverage: { status: "unavailable", complete: false },
+		});
+	});
+
+	it("is read-only: a cold call-graph request never builds a review graph", async () => {
+		const env = makeEnv();
+		const file = createTempFile(env.tmpDir, "a.ts", "export function foo(): number { return 1; }\n");
+		clearReviewGraphWorkspaceCache();
+		const report = await moduleReport(file, env.tmpDir, { callGraph: true });
+		expect(report.callGraph?.reason).toBe("review-graph-missing");
+		expect(getCachedReviewGraph(env.tmpDir)).toBeUndefined();
 	});
 });
 

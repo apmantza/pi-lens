@@ -651,9 +651,16 @@ function validatePersistedCallGraph(
 	raw: PersistedCallGraph,
 	coverage: CallGraphEvidenceCoverage,
 ): boolean {
-	if (!raw || raw.version !== CACHE_VERSION || typeof raw.builtAt !== "string") return false;
-	if (typeof raw.reviewGraphVersion !== "string" || raw.reviewGraphVersion.length === 0 ||
-		typeof raw.reviewGraphSignature !== "string") return false;
+	const nonEmptyString = (value: unknown): value is string =>
+		typeof value === "string" && value.trim().length > 0;
+	const enumValue = <T extends string>(value: unknown, values: readonly T[]): value is T =>
+		typeof value === "string" && values.includes(value as T);
+	const edgeKinds = ["calls", "references", "mixed"] as const;
+	const resolutions = ["exact", "import", "receiver-type", "name-only", "unresolved"] as const;
+	if (!raw || raw.version !== CACHE_VERSION || !nonEmptyString(raw.builtAt)) return false;
+	if (!nonEmptyString(raw.reviewGraphVersion) || !nonEmptyString(raw.reviewGraphSignature)) return false;
+	if (raw.coverage !== undefined &&
+		(!raw.coverage || typeof raw.coverage !== "object" || Array.isArray(raw.coverage))) return false;
 	if (!Array.isArray(raw.edges) || !Array.isArray(raw.callees) || !Array.isArray(raw.callers) || !Array.isArray(raw.inDegree)) return false;
 	const coverageValues = [
 		coverage.totalEvidence,
@@ -667,15 +674,16 @@ function validatePersistedCallGraph(
 		coverage.sameFileEvidence,
 		coverage.duplicateEvidence,
 	];
-	if (coverageValues.some((value) => !finiteCount(value))) return false;
+	if (typeof coverage.complete !== "boolean" || coverageValues.some((value) => !finiteCount(value))) return false;
+	if (coverage.languages !== undefined &&
+		(!coverage.languages || typeof coverage.languages !== "object" || Array.isArray(coverage.languages) ||
+		Object.entries(coverage.languages).some(([language, status]) =>
+			!nonEmptyString(language) || !enumValue(status, ["complete", "partial", "unavailable"] as const)))) return false;
 	if (coverage.callsEvidence + coverage.referencesEvidence !== coverage.totalEvidence) return false;
 	if (coverage.resolvedEvidence > coverage.eligibleEvidence) return false;
 	if (coverage.eligibleEvidence !== coverage.resolvedEvidence) return false;
 	if (coverage.resolvedEvidence + coverage.unresolvedEvidence + coverage.typeOnlyEvidence + coverage.unsupportedEvidence + coverage.sameFileEvidence !== coverage.totalEvidence) return false;
 	if (coverage.complete && coverage.unsupportedEvidence > 0) return false;
-	if (coverage.languages && Object.values(coverage.languages).some(
-		(status) => status !== "complete" && status !== "partial" && status !== "unavailable",
-	)) return false;
 	if (coverage.complete && Object.values(coverage.languages ?? {}).some((status) => status !== "complete")) return false;
 
 	const expectedCallees = new Map<string, Set<string>>();
@@ -685,11 +693,22 @@ function validatePersistedCallGraph(
 	let weightedEdgeEvidence = 0;
 	let weightedDuplicateEvidence = 0;
 	for (const edge of raw.edges) {
-		if (!edge || typeof edge !== "object" || typeof edge.callerKey !== "string" || typeof edge.calleeKey !== "string" ||
-			typeof edge.callerFile !== "string" || typeof edge.calleeFile !== "string" ||
-			typeof edge.calleeSymbol !== "string" || typeof edge.weight !== "number" || !Number.isFinite(edge.weight) || edge.weight <= 0) return false;
+		if (!edge || typeof edge !== "object" || !nonEmptyString(edge.callerKey) || !nonEmptyString(edge.calleeKey) ||
+			!nonEmptyString(edge.callerFile) || !nonEmptyString(edge.calleeFile) ||
+			!nonEmptyString(edge.calleeSymbol) || typeof edge.weight !== "number" || !Number.isFinite(edge.weight) || edge.weight <= 0 || edge.weight > 1) return false;
+		if (edge.callerSymbol !== undefined && !nonEmptyString(edge.callerSymbol)) return false;
+		if (edge.callerKind !== undefined && !nonEmptyString(edge.callerKind)) return false;
+		if (edge.calleeKind !== undefined && !nonEmptyString(edge.calleeKind)) return false;
+		if (edge.evidenceKind !== undefined && !enumValue(edge.evidenceKind, edgeKinds)) return false;
+		if (edge.resolution !== undefined && !enumValue(edge.resolution, resolutions)) return false;
+		if (edge.evidenceCount !== undefined && (!finiteCount(edge.evidenceCount) || edge.evidenceCount < 1)) return false;
 		const evidenceCount = edge.evidenceCount ?? 1;
-		if (!finiteCount(evidenceCount) || evidenceCount < 1) return false;
+		const callerIdentity = parseCanonicalSymbolKey(edge.callerKey, edge.callerFile);
+		const calleeIdentity = parseCanonicalSymbolKey(edge.calleeKey, edge.calleeFile);
+		if (normalizeMapKey(callerIdentity.filePath) !== normalizeMapKey(edge.callerFile) ||
+			normalizeMapKey(calleeIdentity.filePath) !== normalizeMapKey(edge.calleeFile) ||
+			(calleeIdentity.symbolName !== undefined && calleeIdentity.symbolName !== edge.calleeSymbol) ||
+			(callerIdentity.symbolName !== undefined && edge.callerSymbol !== undefined && callerIdentity.symbolName !== edge.callerSymbol)) return false;
 		const pair = `${edge.callerKey}\u0000${edge.calleeKey}`;
 		if (pairKeys.has(pair)) return false;
 		pairKeys.add(pair);
@@ -712,6 +731,8 @@ function validatePersistedCallGraph(
 		coverage.totalEvidence,
 		weightedEdgeEvidence + coverage.unresolvedEvidence + coverage.typeOnlyEvidence + coverage.unsupportedEvidence + coverage.sameFileEvidence,
 	)) return false;
+	if (raw.totalRefs !== undefined && !finiteCount(raw.totalRefs)) return false;
+	if (raw.unresolvedRefs !== undefined && !finiteCount(raw.unresolvedRefs)) return false;
 	if (raw.totalRefs !== undefined && raw.totalRefs !== coverage.totalEvidence) return false;
 	if (raw.unresolvedRefs !== undefined && raw.unresolvedRefs !== coverage.unresolvedEvidence) return false;
 
@@ -719,8 +740,10 @@ function validatePersistedCallGraph(
 		const result = new Map<string, Set<string>>();
 		if (!Array.isArray(entries)) return undefined;
 		for (const entry of entries) {
-			if (!Array.isArray(entry) || typeof entry[0] !== "string" || !Array.isArray(entry[1]) || entry[1].some((key) => typeof key !== "string")) return undefined;
-			result.set(entry[0], new Set(entry[1] as string[]));
+			if (!Array.isArray(entry) || !nonEmptyString(entry[0]) || !Array.isArray(entry[1]) || entry[1].some((key) => !nonEmptyString(key))) return undefined;
+			const keys = entry[1] as string[];
+			if (new Set(keys).size !== keys.length || result.has(entry[0])) return undefined;
+			result.set(entry[0], new Set(keys));
 		}
 		return result;
 	};
@@ -737,7 +760,7 @@ function validatePersistedCallGraph(
 	if (!sameSets(actualCallees, expectedCallees) || !sameSets(actualCallers, expectedCallers)) return false;
 	const actualInDegree = new Map<string, number>();
 	for (const entry of raw.inDegree) {
-		if (!Array.isArray(entry) || typeof entry[0] !== "string" || typeof entry[1] !== "number" || !Number.isFinite(entry[1]) || entry[1] < 0) return false;
+		if (!Array.isArray(entry) || !nonEmptyString(entry[0]) || typeof entry[1] !== "number" || !Number.isFinite(entry[1]) || entry[1] < 0 || actualInDegree.has(entry[0])) return false;
 		actualInDegree.set(entry[0], entry[1]);
 	}
 	if (actualInDegree.size !== expectedInDegree.size) return false;

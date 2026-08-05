@@ -24,6 +24,50 @@ function ref(callerFile: string, refName: string, line = 5): SymbolRef {
 	return { symbolId: `${callerFile}:${refName}`, filePath: callerFile, line, column: 1 };
 }
 
+function validPersistedCallGraph(): Record<string, unknown> {
+	const callerFile = "/proj/a.ts";
+	const calleeFile = "/proj/b.ts";
+	const callerKey = `${callerFile}:caller`;
+	const calleeKey = `${calleeFile}:callee`;
+	return {
+		version: 5,
+		builtAt: "2026-08-04T00:00:00.000Z",
+		reviewGraphVersion: "v9",
+		reviewGraphSignature: "sig-valid",
+		edges: [{
+			callerFile,
+			callerSymbol: "caller",
+			callerKey,
+			calleeFile,
+			calleeSymbol: "callee",
+			calleeKey,
+			evidenceKind: "calls",
+			resolution: "exact",
+			evidenceCount: 1,
+			weight: 1,
+		}],
+		callees: [[callerKey, [calleeKey]]],
+		callers: [[calleeKey, [callerKey]]],
+		inDegree: [[calleeKey, 1]],
+		totalRefs: 1,
+		unresolvedRefs: 0,
+		coverage: {
+			totalEvidence: 1,
+			callsEvidence: 1,
+			referencesEvidence: 0,
+			eligibleEvidence: 1,
+			resolvedEvidence: 1,
+			unresolvedEvidence: 0,
+			typeOnlyEvidence: 0,
+			unsupportedEvidence: 0,
+			sameFileEvidence: 0,
+			duplicateEvidence: 0,
+			complete: true,
+			languages: { typescript: "complete" },
+		},
+	};
+}
+
 let tmpDir: string;
 beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-cg-")); });
 afterEach(() => { removeTempDirSync(tmpDir); });
@@ -562,6 +606,47 @@ describe("saveCallGraph / loadCallGraph", () => {
 		}), "utf-8");
 		expect(loadCallGraph("/proj")).toBeUndefined();
 		delete process.env.PILENS_DATA_DIR;
+	});
+
+	it("rejects malformed v5 semantic fields instead of serving a partial graph", () => {
+		const mutations: Array<[string, (raw: Record<string, any>) => void]> = [
+			["non-boolean coverage.complete", (raw) => { raw.coverage.complete = "true"; }],
+			["unknown evidence enum", (raw) => { raw.edges[0].evidenceKind = "not-an-evidence-kind"; }],
+			["unknown resolution enum", (raw) => { raw.edges[0].resolution = "guessed"; }],
+			["empty graph identity", (raw) => { raw.reviewGraphSignature = ""; }],
+			["empty edge identity", (raw) => { raw.edges[0].calleeSymbol = ""; }],
+			["edge/file identity mismatch", (raw) => { raw.edges[0].calleeFile = "/proj/other.ts"; }],
+			["duplicate logical edges", (raw) => { raw.edges.push({ ...raw.edges[0] }); }],
+			["duplicate adjacency targets", (raw) => { raw.callees[0][1].push(raw.callees[0][1][0]); }],
+			["duplicate adjacency entries", (raw) => { raw.callers.push([...raw.callers[0]]); }],
+		];
+
+		for (const [label, mutate] of mutations) {
+			process.env.PILENS_DATA_DIR = tmpDir;
+			try {
+				const raw = validPersistedCallGraph();
+				mutate(raw);
+				const cacheFile = path.join(getProjectDataDir("/proj"), "cache", "call-graph.json");
+				fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+				fs.writeFileSync(cacheFile, JSON.stringify(raw), "utf-8");
+				expect(loadCallGraph("/proj"), label).toBeUndefined();
+			} finally {
+				delete process.env.PILENS_DATA_DIR;
+			}
+		}
+	});
+
+	it("accepts a strict v5 cache with consistent semantic metadata", () => {
+		process.env.PILENS_DATA_DIR = tmpDir;
+		try {
+			const raw = validPersistedCallGraph();
+			const cacheFile = path.join(getProjectDataDir("/proj"), "cache", "call-graph.json");
+			fs.mkdirSync(path.dirname(cacheFile), { recursive: true });
+			fs.writeFileSync(cacheFile, JSON.stringify(raw), "utf-8");
+			expect(loadCallGraph("/proj")?.graph.coverage).toMatchObject({ complete: true, totalEvidence: 1 });
+		} finally {
+			delete process.env.PILENS_DATA_DIR;
+		}
 	});
 
 	it("returns undefined for missing cache", () => {
