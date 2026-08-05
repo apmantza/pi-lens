@@ -18,15 +18,13 @@ query: |
   (jsx_element
     open_tag: (jsx_opening_element
       (identifier) @OUTER
-      (#eq? @OUTER "a"))
-    (jsx_element
-      open_tag: (jsx_opening_element
-        (identifier) @INNER
-        (#eq? @INNER "a"))))
+      (#eq? @OUTER "a"))) @OUTER_ELEMENT
 
 metavars:
   - OUTER
-  - INNER
+  - OUTER_ELEMENT
+
+post_filter: no_nested_anchor_chain
 
 tags:
   - correctness

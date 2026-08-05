@@ -1912,6 +1912,40 @@ export class TreeSitterClient {
 		}
 
 		switch (postFilter) {
+			case "no_nested_anchor_chain": {
+				// Tree-sitter queries can express the opening-tag shape, but they
+				// cannot express both an arbitrary-depth descendant relationship and
+				// an ancestor exclusion. Walk the captured JSX element here so the
+				// TSX path agrees with the ast-grep rule: keep exactly the outermost
+				// anchor that contains another anchor, including through wrappers.
+				const outer = captures.OUTER_ELEMENT;
+				if (!outer) return false;
+				const isAnchorElement = (node: TreeSitterNode): boolean => {
+					if (node.type !== "jsx_element") return false;
+					const opening =
+						node.childForFieldName?.("open_tag") ??
+						node.children?.find((child) => child.type === "jsx_opening_element");
+					const name =
+						opening?.childForFieldName?.("name") ??
+						opening?.children?.find((child) => child.type === "identifier");
+					return name?.text === "a";
+				};
+
+				let ancestor = outer.parent;
+				while (ancestor) {
+					if (isAnchorElement(ancestor)) return false;
+					ancestor = ancestor.parent;
+				}
+
+				const pending = [...(outer.children ?? [])];
+				while (pending.length > 0) {
+					const node = pending.pop();
+					if (!node) continue;
+					if (isAnchorElement(node)) return true;
+					pending.push(...(node.children ?? []));
+				}
+				return false;
+			}
 			case "differs_only_by_case": {
 				try {
 					const field = captures.FIELD?.text ?? "";

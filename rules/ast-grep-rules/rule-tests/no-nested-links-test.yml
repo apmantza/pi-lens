@@ -8,3 +8,11 @@ invalid:
   - '<a href="/x">outer <a href="/y">inner</a></a>'
   - '<a><a>double</a></a>'
   - '<a href="/x"><span><a href="/y">inner</a></span></a>'
+  - |
+      <a href="/outer">
+        <span>
+          <a href="/middle">
+            <em><a href="/inner">deep</a></em>
+          </a>
+        </span>
+      </a>
