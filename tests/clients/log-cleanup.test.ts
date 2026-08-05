@@ -128,6 +128,13 @@ describe("getManagedLogFiles — auto-derivation", () => {
 		expect(getManagedLogFiles(dir)).toContain("new-subsystem.log");
 	});
 
+	it("matches registered paths when the directory uses Windows separators", () => {
+		createNdjsonLogger({ filePath: path.join(dir, "separator-safe.log") });
+		const slashVariant = dir.replace(/\\/g, "/");
+
+		expect(getManagedLogFiles(slashVariant)).toContain("separator-safe.log");
+	});
+
 	it("does not register a lazy (function) filePath — those are logs/*.jsonl territory", () => {
 		createNdjsonLogger({ filePath: () => path.join(dir, "dated.jsonl") });
 
