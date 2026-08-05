@@ -55,6 +55,11 @@ const TREE_SITTER_MAX_SCAN_FILES = 20_000;
 // instead of paying the 3.3x per-rule fallback for the process lifetime (#889).
 const QUERY_BATCH_MAX_LOAD_FAILURES = 3;
 
+// Keep post-filter tree walks bounded. A malformed or unexpectedly huge tree
+// must not stall the batched query walk; the filter fails open when this cap
+// is reached so unrelated diagnostics and the current match are preserved.
+const NO_NESTED_ANCHOR_VISIT_CAP = 10_000;
+
 // --- Type Declarations (local, no import needed) ---
 
 // biome-ignore lint/suspicious/noExplicitAny: Language from web-tree-sitter
@@ -1918,33 +1923,70 @@ export class TreeSitterClient {
 				// an ancestor exclusion. Walk the captured JSX element here so the
 				// TSX path agrees with the ast-grep rule: keep exactly the outermost
 				// anchor that contains another anchor, including through wrappers.
-				const outer = captures.OUTER_ELEMENT;
-				if (!outer) return false;
-				const isAnchorElement = (node: TreeSitterNode): boolean => {
-					if (node.type !== "jsx_element") return false;
-					const opening =
-						node.childForFieldName?.("open_tag") ??
-						node.children?.find((child) => child.type === "jsx_opening_element");
-					const name =
-						opening?.childForFieldName?.("name") ??
-						opening?.children?.find((child) => child.type === "identifier");
-					return name?.text === "a";
-				};
+				// This post-filter runs inside a batched query walk. It must never
+				// abort that walk or turn a malformed tree into a false negative.
+				try {
+					const outer = captures.OUTER_ELEMENT;
+					if (!outer) {
+						this.reportPostFilterFailure(
+							postFilter,
+							"missing OUTER_ELEMENT capture",
+						);
+						return true;
+					}
+					const isAnchorElement = (node: TreeSitterNode): boolean => {
+						if (node.type !== "jsx_element") return false;
+						const opening =
+							node.childForFieldName?.("open_tag") ??
+							node.children?.find(
+								(child) => child.type === "jsx_opening_element",
+							);
+						const name =
+							opening?.childForFieldName?.("name") ??
+							opening?.children?.find(
+								(child) => child.type === "identifier",
+							);
+						return name?.text === "a";
+					};
 
-				let ancestor = outer.parent;
-				while (ancestor) {
-					if (isAnchorElement(ancestor)) return false;
-					ancestor = ancestor.parent;
-				}
+					let visited = 0;
+					let ancestor = outer.parent;
+					while (ancestor) {
+						if (++visited > NO_NESTED_ANCHOR_VISIT_CAP) {
+							this.reportPostFilterFailure(
+								postFilter,
+								`ancestor walk exceeded ${NO_NESTED_ANCHOR_VISIT_CAP} nodes`,
+							);
+							return true;
+						}
+						if (isAnchorElement(ancestor)) return false;
+						ancestor = ancestor.parent;
+					}
 
-				const pending = [...(outer.children ?? [])];
-				while (pending.length > 0) {
-					const node = pending.pop();
-					if (!node) continue;
-					if (isAnchorElement(node)) return true;
-					pending.push(...(node.children ?? []));
+					const pending = [...(outer.children ?? [])];
+					while (pending.length > 0) {
+						const node = pending.pop();
+						if (!node) continue;
+						if (++visited > NO_NESTED_ANCHOR_VISIT_CAP) {
+							this.reportPostFilterFailure(
+								postFilter,
+								`descendant walk exceeded ${NO_NESTED_ANCHOR_VISIT_CAP} nodes`,
+							);
+							return true;
+						}
+						if (isAnchorElement(node)) return true;
+						pending.push(...(node.children ?? []));
+					}
+					return false;
+				} catch (error) {
+					const reason =
+						error instanceof Error ? error.message : String(error);
+					this.reportPostFilterFailure(
+						postFilter,
+						`tree walk failed${reason ? `: ${reason}` : ""}`,
+					);
+					return true;
 				}
-				return false;
 			}
 			case "differs_only_by_case": {
 				try {
@@ -3205,6 +3247,17 @@ export class TreeSitterClient {
 	}
 
 	private reportedMissingPostFilters = new Set<string>();
+	private reportedPostFilterFailures = new Set<string>();
+
+	/** Keep a failed post-filter match and leave a bounded diagnostic trail. */
+	private reportPostFilterFailure(postFilter: string, reason: string): void {
+		if (this.reportedPostFilterFailures.has(postFilter)) return;
+		this.reportedPostFilterFailures.add(postFilter);
+		console.error(
+			`[pi-lens] tree-sitter rule post_filter '${postFilter}' failed — ` +
+				`keeping the diagnostic (fail-open): ${reason}.`,
+		);
+	}
 
 	/** Warn once per unimplemented post_filter — a silent rule needs a trail. */
 	private reportMissingPostFilter(postFilter: string): void {
