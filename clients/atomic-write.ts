@@ -1,48 +1,16 @@
 /**
  * Shared atomic tmp+rename file writer (closes #762).
  *
- * The `${target}.tmp-…` + `renameSync` shape was independently hand-rolled in
- * five places (`instance-registry.ts`, `session-state-store.ts`,
+ * The `${target}.tmp-${process.pid}` + `renameSync` shape was independently
+ * hand-rolled in five places (`instance-registry.ts`, `session-state-store.ts`,
  * `recent-touches.ts`, `review-graph/builder.ts`, `diagnostic-dispositions.ts`)
- * as each one picked up the need for a reader to never observe a
- * partially-written file. Five independent copies of the same shape invite
- * drift (e.g. forgetting the tmp-file cleanup on the failure path) — this
- * module is the single implementation the rest re-use.
- *
- * ## What this guarantees (#1205)
- *
- * Data is written in full to a staging file that no other writer can name,
- * then `rename()`d over the target. `rename()` replaces the destination
- * atomically on both POSIX and Windows (libuv uses
- * `MOVEFILE_REPLACE_EXISTING`). Therefore:
- *
- *   - **Crash-safe replacement.** A crash mid-write leaves the target holding
- *     its previous complete contents plus an orphan staging file; it never
- *     leaves the target half-written.
- *   - **Tear-free publication.** Any reader — same process or not — observes
- *     either the fully-old or the fully-new file at the target path. Because
- *     the staging name is unique *per call* (pid + a monotonic per-process
- *     counter), this now holds for concurrent writes from the same process
- *     too. Before #1205 the staging name was only `.tmp-${pid}`, so two
- *     in-flight same-process writes to one target shared a staging inode; the
- *     first `rename` published it while the second writer was still writing
- *     into it, publishing a torn hybrid file.
- *
- * ## What this explicitly does NOT provide
- *
- *   - **No read-modify-write isolation.** Concurrent read → mutate → write
- *     cycles still lose updates: each writer publishes the state it computed
- *     from the snapshot it read, and last-rename-wins silently discards the
- *     other's mutation. Callers needing this must serialize themselves (see
- *     `lspChildRemovalTail` in `instance-registry.ts`).
- *   - **No ordering.** Nothing sequences concurrent writers, within or across
- *     processes. The winner is whichever `rename` lands last, which is not
- *     necessarily the write that started or finished last.
- *   - **No mutual exclusion.** This is not a lock. Overlapping writes are
- *     permitted and expected; only *torn* output is prevented.
- *   - **No fsync/durability guarantee.** Neither the staging file nor the
- *     parent directory is fsync'd, so a power loss (as opposed to a process
- *     crash) may lose the rename.
+ * as each one picked up the need for a cross-process reader to never observe a
+ * partially-written file: `rename()` replaces the destination atomically on
+ * both POSIX and Windows (libuv uses `MOVEFILE_REPLACE_EXISTING`), so a
+ * concurrent reader always sees either the fully-old or fully-new file, never
+ * a torn write. Five independent copies of the same shape invite drift (e.g.
+ * forgetting the tmp-file cleanup on the failure path) — this module is the
+ * single implementation the rest re-use.
  *
  * Per-write-site error policy varies and is NOT a detail this helper should
  * paper over:
@@ -73,40 +41,7 @@ export interface WriteFileAtomicOptions {
 }
 
 /**
- * Monotonic per-process counter that makes each staging path unique per CALL,
- * not merely per process (#1205).
- *
- * A counter is used rather than `randomBytes`: it is allocation-free and
- * synchronous on what are hot per-turn/per-touch write paths, and it is
- * *exactly* as unique as needed — collisions only matter between two writes
- * live at the same instant in the same process, and a monotonic counter makes
- * those impossible by construction rather than merely improbable. `process.pid`
- * continues to supply cross-process distinctness.
- */
-let _stageSeq = 0;
-
-/**
- * Staging path for one write call: `${targetPath}.tmp-<pid>-<seq>`.
- *
- * Exported so that sweepers of orphaned staging files stay in lockstep with
- * the naming scheme instead of re-deriving it (see {@link STAGE_TMP_PATTERN}).
- */
-export function stagePathFor(targetPath: string): string {
-	return `${targetPath}.tmp-${process.pid}-${_stageSeq++}`;
-}
-
-/**
- * Matches the trailing staging-file marker produced by {@link stagePathFor},
- * for sweepers that garbage-collect staging files orphaned by a crashed
- * process (e.g. `sweepStaleStageFiles` in `review-graph/builder.ts`).
- *
- * The `<seq>` group is optional so that staging files written by a *pre-#1205*
- * build still on disk (`.tmp-<pid>`) are also swept.
- */
-export const STAGE_TMP_PATTERN = /\.tmp-\d+(?:-\d+)?$/;
-
-/**
- * Synchronous atomic write of text or binary data to a per-call staging file,
+ * Synchronous atomic write of text or binary data to `${targetPath}.tmp-${pid}`,
  * then `fs.renameSync` over `targetPath`. On any failure (from either step),
  * attempts a best-effort `fs.rmSync(tmp, { force: true })` cleanup, then
  * either swallows (default) or rethrows per `options.bestEffort`.
@@ -121,7 +56,7 @@ export function writeFileAtomic(
 	options?: WriteFileAtomicOptions,
 ): void {
 	const bestEffort = options?.bestEffort ?? true;
-	const tmpPath = stagePathFor(targetPath);
+	const tmpPath = `${targetPath}.tmp-${process.pid}`;
 	try {
 		fs.writeFileSync(tmpPath, data, typeof data === "string" ? "utf-8" : undefined);
 		fs.renameSync(tmpPath, targetPath);
@@ -138,8 +73,8 @@ export function writeFileAtomic(
 /**
  * Async counterpart of {@link writeFileAtomic}, built on `fs.promises` instead
  * of the sync `fs` API — for call sites that must not block the event loop
- * (e.g. writes on a hot per-turn/per-touch path). Same per-call tmp-naming,
- * cleanup, and `bestEffort` semantics.
+ * (e.g. writes on a hot per-turn/per-touch path). Same tmp-naming, cleanup,
+ * and `bestEffort` semantics.
  */
 export async function writeFileAtomicAsync(
 	targetPath: string,
@@ -147,7 +82,7 @@ export async function writeFileAtomicAsync(
 	options?: WriteFileAtomicOptions,
 ): Promise<void> {
 	const bestEffort = options?.bestEffort ?? true;
-	const tmpPath = stagePathFor(targetPath);
+	const tmpPath = `${targetPath}.tmp-${process.pid}`;
 	try {
 		await fs.promises.writeFile(
 			tmpPath,
@@ -164,3 +99,12 @@ export async function writeFileAtomicAsync(
 		if (!bestEffort) throw err;
 	}
 }
+
+// --- TEMPORARY pre-fix probe shim — throwaway branch, never merged ---------
+// Mirrors exactly what the pre-fix implementation above computes inline, so
+// the #1205 regression test can run against the pre-fix naming scheme on
+// Linux CI and we can report honestly whether the tear reproduces there.
+export function stagePathFor(targetPath: string): string {
+	return `${targetPath}.tmp-${process.pid}`;
+}
+export const STAGE_TMP_PATTERN = /\.tmp-\d+$/;
