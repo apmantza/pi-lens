@@ -2,7 +2,8 @@
  * AgentBehaviorClient for pi-lens
  *
  * Tracks tool call sequences and flags anti-patterns in real-time:
- * - Blind writes: editing or writing without reading first
+ * - Blind writes: editing or writing without reading first (a same-session
+ *   write/edit of the same path counts as file knowledge)
  * - Thrashing: repeated identical tool calls with no progress
  *
  * No external dependencies — purely tracks tool call history.
@@ -95,7 +96,17 @@ export class AgentBehaviorClient {
 		// Check for blind writes
 		if (WRITE_OPS.has(toolName)) {
 			const recentWindow = this.toolHistory.slice(-BLIND_WRITE_WINDOW);
-			const hasRecentRead = recentWindow.some((r) => READ_OPS.has(r.toolName));
+			// A read in the window proves file knowledge; so does a same-session
+			// write/edit of THIS path — the agent authored the content, so the
+			// write-then-edit loop on a self-authored file is not a blind write.
+			const hasRecentRead = recentWindow.some(
+				(r) =>
+					READ_OPS.has(r.toolName) ||
+					(WRITE_OPS.has(r.toolName) &&
+						r.filePath !== undefined &&
+						normalizedPath !== null &&
+						normalizeMapKey(r.filePath) === normalizedPath),
+			);
 
 			if (!hasRecentRead && recentWindow.length > 0) {
 				// Count how many writes in the window without reads
