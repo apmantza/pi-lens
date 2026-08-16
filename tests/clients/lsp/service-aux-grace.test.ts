@@ -290,6 +290,73 @@ describe("R8 — aux grace: touchFile with-auxiliary path", () => {
 		);
 		expect(messages).toContain("primary error");
 	});
+
+	it("derives aux grace from auxiliary server timeout when env override is absent (#1458)", async () => {
+		// When PI_LENS_AUX_GRACE_MS is NOT set, aux grace derives from the auxiliary server's aggregateWaitMs (3500ms for opengrep)
+		// rather than cutting off at a flat 500ms.
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+
+		// Primary settles at 100ms; opengrep aux takes 1200ms (which is >500ms flat grace, but <= 3500ms aggregateWaitMs).
+		const primaryClient = makeClient(100, [makeDiagnostic("primary error")]);
+		const auxClient = makeClient(1200, [makeDiagnostic("opengrep security alert")]);
+
+		const primaryServer = makePrimaryServer("ts-primary");
+		const auxServer = makeAuxServer("opengrep");
+
+		getServersForFileWithConfig.mockReturnValue([primaryServer, auxServer]);
+		createLSPClient
+			.mockResolvedValueOnce(primaryClient)
+			.mockResolvedValueOnce(auxClient);
+
+		await service.getClientsForFile(FILE);
+
+		const touchPromise = service.touchFile(FILE, "content-issue-1458", {
+			clientScope: "with-auxiliary",
+			auxiliaryServerIds: ["opengrep"],
+			collectDiagnostics: true,
+			diagnostics: "document",
+		});
+
+		// Advance past primary (100ms) + 1200ms aux settlement.
+		await vi.advanceTimersByTimeAsync(1300);
+		await vi.advanceTimersByTimeAsync(10);
+
+		const result = await touchPromise;
+		const messages = (result?.diags ?? []).map(
+			(d: { message: string }) => d.message,
+		);
+		expect(messages).toContain("primary error");
+		expect(messages).toContain("opengrep security alert");
+	});
+
+	it("getDiagnostics derives aux grace from auxiliary server strategy aggregateWaitMs (#1458)", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+
+		const primaryClient = makeClient(100, [makeDiagnostic("primary error")]);
+		const auxClient = makeClient(1200, [makeDiagnostic("opengrep finding")]);
+
+		const primaryServer = makePrimaryServer("ts-primary");
+		const auxServer = makeAuxServer("opengrep");
+
+		getServersForFileWithConfig.mockReturnValue([primaryServer, auxServer]);
+		createLSPClient
+			.mockResolvedValueOnce(primaryClient)
+			.mockResolvedValueOnce(auxClient);
+
+		await service.getClientsForFile(FILE);
+
+		const diagPromise = service.getDiagnostics(FILE, "document");
+
+		await vi.advanceTimersByTimeAsync(1300);
+		await vi.advanceTimersByTimeAsync(10);
+
+		const result = await diagPromise;
+		const messages = (result ?? []).map((d: { message: string }) => d.message);
+		expect(messages).toContain("primary error");
+		expect(messages).toContain("opengrep finding");
+	});
 });
 
 describe("R8 — aux grace: raceToCompletion per-role unit tests", () => {

@@ -2711,14 +2711,27 @@ export class LSPService {
 						const auxWaits = perServerWaits
 							.map((p, i) =>
 								spawned[i].info.role === "auxiliary"
-									? { promise: p, serverId: spawned[i].info.id }
+									? {
+											promise: p,
+											serverId: spawned[i].info.id,
+											timeout: timeoutFor(spawned[i].client.serverId),
+										}
 									: null,
 							)
 							.filter(
-								(x): x is { promise: Promise<void | undefined>; serverId: string } =>
-									x !== null,
+								(
+									x,
+								): x is {
+									promise: Promise<void | undefined>;
+									serverId: string;
+									timeout: number;
+								} => x !== null,
 							);
-						const auxGraceMs = readEnvAuxGraceMs() ?? 500;
+						const derivedAuxGraceMs = Math.max(
+							500,
+							...auxWaits.map((a) => a.timeout),
+						);
+						const auxGraceMs = readEnvAuxGraceMs() ?? derivedAuxGraceMs;
 						// After all primaries settle, give auxiliaries at most auxGraceMs.
 						// Late aux results are dropped from the wait (advisory only — they
 						// land in the client cache and surface on the next edit); aux servers
@@ -3457,7 +3470,20 @@ export class LSPService {
 				),
 				graceMs,
 				descriptors: diagDescriptors,
-				auxGraceMs: readEnvAuxGraceMs(),
+				auxGraceMs:
+					readEnvAuxGraceMs() ??
+					Math.max(
+						500,
+						...spawned
+							.filter((entry) => entry.info.role === "auxiliary")
+							.map(
+								(entry) =>
+									getStrategy(
+										entry.info.id,
+										entry.client.getLaunchVariant?.(),
+									).aggregateWaitMs,
+							),
+					),
 			},
 		);
 
