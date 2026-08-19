@@ -26,7 +26,10 @@ import {
 import * as nodeFs from "node:fs";
 import * as path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createDefaultHostPorts, type HostPorts } from "./clients/host-ports.js";
+import {
+	createDefaultHostPorts,
+	type HostPorts,
+} from "./clients/host-ports.js";
 import { AstGrepClient } from "./clients/ast-grep-client.js";
 import { loadBootstrapClients } from "./clients/bootstrap.js";
 import { CacheManager } from "./clients/cache-manager.js";
@@ -55,13 +58,17 @@ import {
 	sessionStartMode,
 } from "./clients/session-state-store.js";
 import { getDiagnosticTracker } from "./clients/diagnostic-tracker.js";
-import { warmDispatchIntegration, loadDispatchIntegration } from "./clients/dispatch/lazy.js";
+import {
+	warmDispatchIntegration,
+	loadDispatchIntegration,
+} from "./clients/dispatch/lazy.js";
 import {
 	getFormatService,
 	resetFormatService,
 } from "./clients/format-service.js";
 import { getAllToolStatuses } from "./clients/installer/index.js";
 import {
+	getPiLensGlobalConfigPath,
 	loadPiLensGlobalConfig,
 	resolvePiLensFlag,
 	resolvePiLensFlagWithSource,
@@ -203,11 +210,17 @@ type DispatchIntegration = Awaited<ReturnType<typeof loadDispatchIntegration>>;
 let loadedDispatchIntegration: DispatchIntegration | undefined;
 
 function warmDispatchAtSessionStart(): void {
-	void warmDispatchIntegration().then((integration) => {
-		loadedDispatchIntegration = integration;
-	}).catch((err) => {
-		logExtension({ subsystem: "dispatch", level: "warn", message: `dispatch warm failed: ${err}` });
-	});
+	void warmDispatchIntegration()
+		.then((integration) => {
+			loadedDispatchIntegration = integration;
+		})
+		.catch((err) => {
+			logExtension({
+				subsystem: "dispatch",
+				level: "warn",
+				message: `dispatch warm failed: ${err}`,
+			});
+		});
 }
 
 function resetDispatchBaselines(cwd?: string): void {
@@ -357,17 +370,31 @@ export function createHostPorts(
 			// their per-subsystem files, NOT extension.log) is S4 scope; this
 			// placeholder exists so the interface is complete for contract tests.
 			sink: (subsystem) => (entry) =>
-				logExtension({ subsystem, level: "debug", message: "host sink entry", metadata: { entry } }),
+				logExtension({
+					subsystem,
+					level: "debug",
+					message: "host sink entry",
+					metadata: { entry },
+				}),
 		},
 		emit: { bus: emit },
 		status: { set: (name, value) => context()?.ui?.setStatus?.(name, value) },
-		spawn: { abortSignal: () => context()?.signal, isAllowed: assertInstallAllowed },
+		spawn: {
+			abortSignal: () => context()?.signal,
+			isAllowed: assertInstallAllowed,
+		},
 		render: { invalidate: () => options.getRenderInvalidator?.()?.() },
 		session: { id: () => getStableSessionId(context()) },
-		workspace: { cwd: () => context()?.cwd, projectRoot: () => options.getProjectRoot?.() },
+		workspace: {
+			cwd: () => context()?.cwd,
+			projectRoot: () => options.getProjectRoot?.(),
+		},
 		flags: { get: (name) => pi.getFlag(name) },
 		tools: {
-			has: async (name) => typeof (pi as unknown as { getTool?: (tool: string) => unknown }).getTool?.(name) !== "undefined",
+			has: async (name) =>
+				typeof (pi as unknown as { getTool?: (tool: string) => unknown }).getTool?.(
+					name,
+				) !== "undefined",
 			getActive: () => activeTools.getActiveTools?.() ?? [],
 			setActive: (names) => activeTools.setActiveTools?.(names),
 		},
@@ -434,7 +461,9 @@ const runtime = new RuntimeCoordinator();
 // have it read the CURRENT activation's pi/flag closures through this
 // holder, refreshed on every activation — never a stale captured `pi`.
 let _readBridgeRegistered = false;
-let _readBridgeGetFlag: ((name: string) => boolean | string | undefined) | undefined;
+let _readBridgeGetFlag:
+	| ((name: string) => boolean | string | undefined)
+	| undefined;
 let _turnSummaryEmitRegistered = false;
 let _turnSummaryEmitCtx:
 	| {
@@ -497,9 +526,7 @@ function cleanStaleTsBuildInfo(cwd: string): string[] {
 				const data = JSON.parse(nodeFs.readFileSync(infoPath, "utf-8"));
 				const root: string[] = data.root ?? [];
 				const dir = path.dirname(infoPath);
-				const isStale = root.some(
-					(f) => !nodeFs.existsSync(path.resolve(dir, f)),
-				);
+				const isStale = root.some((f) => !nodeFs.existsSync(path.resolve(dir, f)));
 				if (isStale) {
 					nodeFs.unlinkSync(infoPath);
 					cleaned.push(infoPath);
@@ -737,7 +764,8 @@ function activateExtension(hostPi: ExtensionAPI) {
 			peekWriteIndex: () => runtime.peekWriteIndex(),
 			isRecordable(filePath: string): boolean {
 				if (_readBridgeGetFlag?.("no-read-guard")) return false;
-				if (isPathIgnoredByProject(filePath, runtime.projectRoot, false)) return false;
+				if (isPathIgnoredByProject(filePath, runtime.projectRoot, false))
+					return false;
 				if (isExternalOrVendorFile(filePath, runtime.projectRoot)) return false;
 				return true;
 			},
@@ -748,6 +776,13 @@ function activateExtension(hostPi: ExtensionAPI) {
 	// env override → CLI flag → global config, all resolved inside getLensFlag
 	// from the registry's PI_LENS_NO_CONTEXT_INJECTION env binding (#166).
 	let contextInjectionEnabled = !getLensFlag("no-lens-context");
+	// Mode determines HOW findings are delivered when enabled: "inject" prepends
+	// into the transcript via the context hook (default); "steer" sends them as a
+	// steer message so they land after the current assistant turn finishes tool
+	// calls instead of invalidating the prompt cache.
+	type ContextInjectionMode = "inject" | "steer";
+	let contextInjectionMode: ContextInjectionMode =
+		globalConfig?.contextInjection?.mode === "steer" ? "steer" : "inject";
 	let lensWidgetVisible = globalConfig?.widget?.visible !== false;
 	let mountedLensWidgetUi: LensWidgetUi | undefined;
 	let widgetMountFailureLogged = false;
@@ -877,16 +912,103 @@ function activateExtension(hostPi: ExtensionAPI) {
 
 	pi.registerCommand("lens-context-toggle", {
 		description:
-			"Toggle automatic context injection on/off for the current session (tools/LSP/read-guard/formatting stay active). Usage: /lens-context-toggle",
-		handler: async (_args, ctx) => {
-			contextInjectionEnabled = !contextInjectionEnabled;
-			notifyUi(
-				ctx,
-				contextInjectionEnabled
-					? "pi-lens context injection enabled — findings will be added to the next turn."
-					: "pi-lens context injection disabled — findings are still cached (lens_diagnostics, /lens-health) but not added to model context.",
-				contextInjectionEnabled ? "info" : "warning",
-			);
+			"Choose automatic context injection mode for this session (tools/LSP/read-guard/formatting stay active). Usage: /lens-context-toggle [inject|steer|off]",
+		handler: async (args, ctx) => {
+			const arg = args?.trim().toLowerCase() as
+				| "inject"
+				| "steer"
+				| "off"
+				| undefined;
+
+			// If no argument, show submenu explaining options.
+			if (!arg) {
+				const currentState = contextInjectionEnabled
+					? contextInjectionMode === "steer"
+						? "Steer"
+						: "Inject"
+					: "Off";
+
+				const message = [
+					`pi-lens context injection: **${currentState}**`,
+					"",
+					"**Options:**",
+					"• **Inject** — Findings prepended to transcript (default, interrupts prompt cache)",
+					"• **Steer** — Findings sent as steer message after turn finishes (preserves cache)",
+					"• **Off** — No findings injected (still cached for lens_diagnostics, /lens-health)",
+					"",
+					`Current: ${currentState}. Run /lens-context-toggle <option> to change.`,
+				].join("\n");
+
+				notifyUi(ctx, message, "info");
+				return;
+			}
+
+			// Apply selected mode.
+			if (arg === "off") {
+				contextInjectionEnabled = false;
+				notifyUi(
+					ctx,
+					"pi-lens context injection disabled — findings are still cached (lens_diagnostics, /lens-health) but not added to model context.",
+					"warning",
+				);
+			} else if (arg === "inject") {
+				contextInjectionEnabled = true;
+				contextInjectionMode = "inject";
+				notifyUi(
+					ctx,
+					"pi-lens context injection enabled (inject mode) — findings will be prepended to the next turn.",
+					"info",
+				);
+			} else if (arg === "steer") {
+				contextInjectionEnabled = true;
+				contextInjectionMode = "steer";
+				notifyUi(
+					ctx,
+					"pi-lens context injection switched to steer mode — findings will be sent as a steer message after the current turn finishes.",
+					"info",
+				);
+			} else {
+				notifyUi(
+					ctx,
+					`Invalid option "${arg}". Use: inject, steer, or off.`,
+					"error",
+				);
+				return;
+			}
+
+			// Persist the mode choice to global config so it survives across sessions.
+			try {
+				const configPath = getPiLensGlobalConfigPath();
+				let existing: Record<string, unknown> = {};
+				try {
+					const raw = nodeFs.readFileSync(configPath, "utf-8");
+					existing = JSON.parse(raw);
+				} catch {
+					/* fresh config */
+				}
+				const next: Record<string, unknown> = { ...existing };
+				if (contextInjectionEnabled) {
+					next.contextInjection = {
+						...((existing.contextInjection as Record<string, unknown>) ?? {}),
+						mode: contextInjectionMode,
+					};
+				} else {
+					// Remove contextInjection if present.
+					const ci = next.contextInjection as Record<string, unknown> | undefined;
+					if (ci) {
+						const { mode, ...rest } = ci;
+						if (Object.keys(rest).length > 0) {
+							next.contextInjection = rest;
+						} else {
+							delete next.contextInjection;
+						}
+					}
+				}
+				nodeFs.mkdirSync(path.dirname(configPath), { recursive: true });
+				nodeFs.writeFileSync(configPath, JSON.stringify(next, null, 2));
+			} catch {
+				/* best-effort persistence — never throw */
+			}
 		},
 	});
 
@@ -1019,13 +1141,8 @@ function activateExtension(hostPi: ExtensionAPI) {
 		description:
 			"Show pi-lens runtime health: pipeline crashes, slow runners, and last dispatch latency. Usage: /lens-health",
 		handler: async (_args, ctx) => {
-			const crashEntries = runtime
-				.getCrashEntries()
-				.sort((a, b) => b[1] - a[1]);
-			const totalCrashes = crashEntries.reduce(
-				(sum, [, count]) => sum + count,
-				0,
-			);
+			const crashEntries = runtime.getCrashEntries().sort((a, b) => b[1] - a[1]);
+			const totalCrashes = crashEntries.reduce((sum, [, count]) => sum + count, 0);
 
 			const dispatchIntegration =
 				loadedDispatchIntegration ?? (await loadDispatchIntegration());
@@ -1034,9 +1151,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 			const last = reports.length > 0 ? reports[reports.length - 1] : undefined;
 			const diagStats = getDiagnosticTracker().getStats();
 			const slowRunners = last
-				? [...last.runners]
-						.sort((a, b) => b.durationMs - a.durationMs)
-						.slice(0, 3)
+				? [...last.runners].sort((a, b) => b.durationMs - a.durationMs).slice(0, 3)
 				: [];
 
 			// Session duration
@@ -1044,13 +1159,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 			const sessionMins = Math.floor(sessionAge / 60_000);
 			const sessionHrs = Math.floor(sessionMins / 60);
 			const sessionAgeStr =
-				sessionHrs > 0
-					? `${sessionHrs}h ${sessionMins % 60}m`
-					: `${sessionMins}m`;
-			const startedAt = new Date(runtime.sessionStartedAt).toLocaleTimeString(
-				[],
-				{ hour: "2-digit", minute: "2-digit" },
-			);
+				sessionHrs > 0 ? `${sessionHrs}h ${sessionMins % 60}m` : `${sessionMins}m`;
+			const startedAt = new Date(runtime.sessionStartedAt).toLocaleTimeString([], {
+				hour: "2-digit",
+				minute: "2-digit",
+			});
 
 			const lines: string[] = [
 				t("lens.health.title", "🩺 PI-LENS HEALTH"),
@@ -1214,9 +1327,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 					`Cascade diagnostics surfaced: ${cascadeStats.diagnosticsSurfaced}`,
 				);
 				if (cascadeStats.coldSnapshotTouches > 0) {
-					lines.push(
-						`Cold-snapshot touches: ${cascadeStats.coldSnapshotTouches}`,
-					);
+					lines.push(`Cold-snapshot touches: ${cascadeStats.coldSnapshotTouches}`);
 				}
 			}
 
@@ -1306,10 +1417,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 
 			// GitHub releases
 			if (bySource["github-release"].length > 0) {
-				lines.push(
-					"",
-					`⬇️ GitHub releases (${bySource["github-release"].length}):`,
-				);
+				lines.push("", `⬇️ GitHub releases (${bySource["github-release"].length}):`);
 				for (const tool of bySource["github-release"]) {
 					lines.push(`  ✓ ${tool.name}`);
 				}
@@ -1317,10 +1425,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 
 			// pi-lens auto-installed
 			if (bySource["pi-lens-auto"].length > 0) {
-				lines.push(
-					"",
-					`🤖 Auto-installed (${bySource["pi-lens-auto"].length}):`,
-				);
+				lines.push("", `🤖 Auto-installed (${bySource["pi-lens-auto"].length}):`);
 				for (const tool of bySource["pi-lens-auto"]) {
 					lines.push(`  ✓ ${tool.name}`);
 				}
@@ -1451,10 +1556,13 @@ function activateExtension(hostPi: ExtensionAPI) {
 			readGuard: runtime.readGuard,
 			dbg,
 		}),
-		createLensDiagnosticMarkTool(() => runtime.projectRoot, () => ({
-			model: runtime.telemetryModelId,
-			provider: runtime.telemetryProviderId,
-		})),
+		createLensDiagnosticMarkTool(
+			() => runtime.projectRoot,
+			() => ({
+				model: runtime.telemetryModelId,
+				provider: runtime.telemetryProviderId,
+			}),
+		),
 	];
 	const LAZY_TOOL_CATALOG: ActivatableToolInfo[] = [
 		{
@@ -1464,8 +1572,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 		},
 		{
 			name: "ast_grep_replace",
-			summary:
-				"AST-aware structural code rewrite/refactor (ast-grep patterns).",
+			summary: "AST-aware structural code rewrite/refactor (ast-grep patterns).",
 		},
 		{
 			name: "ast_grep_outline",
@@ -1581,10 +1688,18 @@ function activateExtension(hostPi: ExtensionAPI) {
 	pi.on("session_start", async (event, ctx) => {
 		warmDispatchAtSessionStart();
 		void warmLspService().catch((err) =>
-			logExtension({ subsystem: "lsp", level: "warn", message: `LSP warm failed: ${err}` }),
+			logExtension({
+				subsystem: "lsp",
+				level: "warn",
+				message: `LSP warm failed: ${err}`,
+			}),
 		);
 		void warmFormatters().catch((err) =>
-			logExtension({ subsystem: "format", level: "warn", message: `formatter warm failed: ${err}` }),
+			logExtension({
+				subsystem: "format",
+				level: "warn",
+				message: `formatter warm failed: ${err}`,
+			}),
 		);
 		rememberOwnEventCtx(ctx);
 		refreshCtxDerivedPlumbing();
@@ -1703,8 +1818,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 								? "fresh_session_lazy_deactivation"
 								: "session_rebuild_restore",
 							deferralApplies: supportsDeferredTools(
-								(ctx as { model?: Parameters<typeof supportsDeferredTools>[0] })
-									?.model,
+								(ctx as { model?: Parameters<typeof supportsDeferredTools>[0] })?.model,
 							),
 						});
 					}
@@ -1917,10 +2031,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 					if (persisted?.widget) {
 						// #180/#190: drop files changed on disk since the snapshot so a
 						// resume never surfaces stale diagnostics; they re-scan on edit.
-						const fresh = await dropStaleFiles(
-							persisted.widget,
-							persisted.savedAt,
-						);
+						const fresh = await dropStaleFiles(persisted.widget, persisted.savedAt);
 						const dropped = persisted.widget.files.length - fresh.files.length;
 						importWidgetState(fresh);
 						// #1041: rehydrate the read-before-edit guard's read-set on the
@@ -1928,9 +2039,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 						// file isn't falsely zero-read-blocked. importState reconciles
 						// each read against current disk (drops changed/missing files),
 						// so a resume never masks a real staleness.
-						const readImport = runtime.readGuard.importState(
-							persisted.readGuard,
-						);
+						const readImport = runtime.readGuard.importState(persisted.readGuard);
 						dbg(
 							`session_start: ${reasonLabel} ${stableSessionId} — rehydrated ${fresh.files.length} file(s)` +
 								(dropped > 0 ? `, dropped ${dropped} stale` : "") +
@@ -2022,8 +2131,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 				await loadBootstrapClients();
 			return await handleToolResult({
 				event: event as any,
-				getFlag: (name: string, filePath?: string) =>
-					getLensFlag(name, filePath),
+				getFlag: (name: string, filePath?: string) => getLensFlag(name, filePath),
 				getFlagSource: (name: string, filePath?: string) =>
 					getLensFlagSource(name, filePath),
 				dbg,
@@ -2138,16 +2246,14 @@ function activateExtension(hostPi: ExtensionAPI) {
 			await flushDebouncedToolResults();
 			await handleAgentEnd({
 				ctxCwd: ctx.cwd,
-				getFlag: (name: string, filePath?: string) =>
-					getLensFlag(name, filePath),
+				getFlag: (name: string, filePath?: string) => getLensFlag(name, filePath),
 				getFlagSource: (name: string, filePath?: string) =>
 					getLensFlagSource(name, filePath),
 				notify: (msg, level) => notifyUi(ctx, msg, level),
 				dbg,
 				runtime,
 				cacheManager,
-				getFormatService: () =>
-					getFormatService(runtime.telemetrySessionId, true),
+				getFormatService: () => getFormatService(runtime.telemetrySessionId, true),
 				getAutofixClients: async () => {
 					const { biomeClient, ruffClient } = await loadBootstrapClients();
 					return { biomeClient, ruffClient };
@@ -2205,10 +2311,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 					sessionSuspectedStalls += 1;
 				} else {
 					lastLoggedLoopWorstMs = loopMaxMs;
-					sessionWorstRealBlockMs = Math.max(
-						sessionWorstRealBlockMs,
-						loopMaxMs,
-					);
+					sessionWorstRealBlockMs = Math.max(sessionWorstRealBlockMs, loopMaxMs);
 				}
 			}
 			// Start a fresh per-turn occupancy window so the next turn's worst
@@ -2246,7 +2349,9 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// window — turn_end already knows exactly when this session
 					// began, so admitted rows are scoped to it, not to a day-wide
 					// guess that could straddle multiple sessions.
-					for (const note of checkSmellsAndNoteOnce(countRecentSmells(undefined, runtime.sessionStartedAt))) {
+					for (const note of checkSmellsAndNoteOnce(
+						countRecentSmells(undefined, runtime.sessionStartedAt),
+					)) {
 						notifyUi(ctx, note, "warning");
 					}
 				} catch {
@@ -2427,9 +2532,8 @@ function activateExtension(hostPi: ExtensionAPI) {
 				toRunnerDisplayPath(cwd, fp),
 			);
 			const line = formatTurnSummaryLine(details);
-			const sendMessage = (
-				emitCtx.pi as { sendMessage?: (msg: unknown) => void }
-			).sendMessage;
+			const sendMessage = (emitCtx.pi as { sendMessage?: (msg: unknown) => void })
+				.sendMessage;
 			if (typeof sendMessage === "function") {
 				try {
 					sendMessage.call(emitCtx.pi, {
@@ -2448,9 +2552,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 					dbg(`turn-summary sendMessage failed: ${sendErr}`);
 				}
 			} else {
-				dbg(
-					"turn-summary: pi.sendMessage unavailable on this host, skipping emit",
-				);
+				dbg("turn-summary: pi.sendMessage unavailable on this host, skipping emit");
 			}
 			logLatency({
 				type: "phase",
@@ -2468,24 +2570,21 @@ function activateExtension(hostPi: ExtensionAPI) {
 		});
 	}
 	try {
-		(pi as any).on(
-			"agent_settled",
-			(_event: unknown, ctx: { cwd?: string }) => {
-				if (!lensEnabled) return;
-				void runQuietWindow({
-					runtime,
-					dbg,
-					cwd: ctx?.cwd,
-				}).catch((err) => {
-					dbg(`quiet_window crashed: ${err}`);
-				});
-				// #1123 item 4: dump active handles AFTER the quiet-window work is
-				// scheduled — the #1097-class leak (a stray ref'd timer surviving
-				// past settle) is only visible once whatever settle itself queued is
-				// already in flight. No-op unless PI_LENS_DEBUG_HANDLES=1.
-				dumpActiveHandles("agent_settled");
-			},
-		);
+		(pi as any).on("agent_settled", (_event: unknown, ctx: { cwd?: string }) => {
+			if (!lensEnabled) return;
+			void runQuietWindow({
+				runtime,
+				dbg,
+				cwd: ctx?.cwd,
+			}).catch((err) => {
+				dbg(`quiet_window crashed: ${err}`);
+			});
+			// #1123 item 4: dump active handles AFTER the quiet-window work is
+			// scheduled — the #1097-class leak (a stray ref'd timer surviving
+			// past settle) is only visible once whatever settle itself queued is
+			// already in flight. No-op unless PI_LENS_DEBUG_HANDLES=1.
+			dumpActiveHandles("agent_settled");
+		});
 	} catch (registerErr) {
 		dbg(`agent_settled registration failed (older pi host?): ${registerErr}`);
 	}
@@ -2643,7 +2742,7 @@ function activateExtension(hostPi: ExtensionAPI) {
 			let telemetryLogged = false;
 			const logContextObservation = (
 				resultMessages: Array<{ role: string; content: unknown }>,
-				placement: "prepend" | "insert-before-final" | "append" | "none",
+				placement: "prepend" | "insert-before-final" | "append" | "steer" | "none",
 				injectionSources: Array<
 					"session-guidance" | "turn-findings" | "test-findings" | "agent-nudge"
 				>,
@@ -2701,6 +2800,88 @@ function activateExtension(hostPi: ExtensionAPI) {
 				const injectionSources = sourceMessages.map((source) => source.source);
 				if (injectedMessages.length === 0) {
 					logContextObservation(existingMessages, "none", [], []);
+					return;
+				}
+
+				// Steer mode: send findings as a steer message via pi.sendUserMessage
+				// so they land after the current assistant turn finishes its tool calls
+				// instead of interrupting the prompt cache. Clean up content to remove
+				// internal framing, operational noise, and non-actionable advisories.
+				if (contextInjectionMode === "steer") {
+					// Filter out session-guidance (tool list) and agent-nudge (best-effort)
+					// in steer mode — they're not actionable findings.
+					const steerSources = [
+						...sourceMessages.filter(
+							(s) => s.source === "turn-findings" || s.source === "test-findings",
+						),
+					];
+					const steerMessages = steerSources.flatMap((s) => s.messages);
+					if (steerMessages.length === 0) {
+						logContextObservation(existingMessages, "none", [], []);
+						return;
+					}
+
+					// Clean up each message: strip framing, remove operational headers,
+					// filter out non-actionable noise.
+					const cleanedMessages = steerMessages
+						.map((m) => {
+							let content =
+								typeof m.content === "string" ? m.content : String(m.content);
+
+							// Strip AUTOMATION_FRAMING prefix (turn-end findings).
+							content = content.replace(
+								/^\[pi-lens automated check — not a user request\] /,
+								"",
+							);
+
+							// Strip agent-nudge prefix.
+							content = content.replace(
+								/^\[pi-lens automated context — not a user request\] /,
+								"",
+							);
+
+							// Remove the "Address 🔴 blockers" header from turn-end findings.
+							content = content.replace(
+								/^Address 🔴 blockers before continuing; ℹ️ advisories are informational only\.\s*\n\n?/,
+								"",
+							);
+
+							// Remove historical prefix if present.
+							content = content.replace(
+								/^Historical finding; workspace changed since capture; re-run to confirm\.\s*\([^)]+\)\s*\n\n?/,
+								"",
+							);
+
+							// Check if content is purely advisory/noise and skip it entirely.
+							const trimmed = content.trim();
+							if (
+								!trimmed ||
+								/^\s*[ℹ️⚠️]?\s*Advisory — no action required/i.test(trimmed) ||
+								/^\s*[ℹ️⚠️]?\s*Cascade could not compute/i.test(trimmed) ||
+								/^\s*pi-lens: \d+ file\(s\) were/i.test(trimmed)
+							) {
+								return undefined;
+							}
+
+							return trimmed;
+						})
+						.filter((c): c is string => typeof c === "string");
+
+					if (cleanedMessages.length === 0) {
+						logContextObservation(existingMessages, "none", [], []);
+						return;
+					}
+
+					const steerContent = cleanedMessages.join("\n\n");
+					logContextObservation(
+						existingMessages,
+						"steer",
+						injectionSources.filter(
+							(s) => s === "turn-findings" || s === "test-findings",
+						),
+						injectedMessages,
+					);
+					void pi.sendUserMessage(steerContent, { deliverAs: "steer" });
 					return;
 				}
 

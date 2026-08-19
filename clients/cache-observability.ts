@@ -65,6 +65,7 @@ export type CacheContextPlacement =
 	| "prepend"
 	| "insert-before-final"
 	| "append"
+	| "steer"
 	| "none";
 export type CachePrefixObservation =
 	| "baseline"
@@ -262,7 +263,7 @@ function prefixLengthForPlacement(
 	if (placement === "insert-before-final") {
 		return Math.max(0, messageCount - 1);
 	}
-	if (placement === "prepend") return 0;
+	if (placement === "prepend" || placement === "steer") return 0;
 	return messageCount;
 }
 
@@ -325,10 +326,7 @@ export function observeCacheContext(args: {
 			placement,
 			existingMessages.length,
 		);
-		const afterPrefixLength = Math.min(
-			beforePrefixLength,
-			resultMessages.length,
-		);
+		const afterPrefixLength = Math.min(beforePrefixLength, resultMessages.length);
 		const beforePrefix = hashMessageSequence(
 			existingMessages.slice(0, beforePrefixLength),
 		);
@@ -382,8 +380,7 @@ export function observeCacheContext(args: {
 					injectedMessages.length,
 					MAX_REPORTED_MESSAGES,
 				),
-				injectedMessageCountCapped:
-					injectedMessages.length > MAX_REPORTED_MESSAGES,
+				injectedMessageCountCapped: injectedMessages.length > MAX_REPORTED_MESSAGES,
 				injectedChars: sizes.chars,
 				injectedBytes: sizes.bytes,
 				injectedCountsCapped: sizes.capped,
@@ -391,10 +388,7 @@ export function observeCacheContext(args: {
 					existingMessages.length,
 					MAX_REPORTED_MESSAGES,
 				),
-				resultMessageCount: Math.min(
-					resultMessages.length,
-					MAX_REPORTED_MESSAGES,
-				),
+				resultMessageCount: Math.min(resultMessages.length, MAX_REPORTED_MESSAGES),
 				messageCountCapped,
 				placement,
 				prefixObservation,

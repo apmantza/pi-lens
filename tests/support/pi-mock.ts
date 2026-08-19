@@ -68,6 +68,15 @@ export interface CapturedMessage {
 	details: unknown;
 }
 
+/** A `pi.sendUserMessage(...)` call captured for assertions. */
+export interface CapturedUserMessage {
+	content: unknown;
+	options?: {
+		deliverAs?: "steer" | "followUp" | "nextTurn";
+		triggerTurn?: boolean;
+	};
+}
+
 export interface PiMock {
 	// ── recordings ───────────────────────────────────────────────────────────
 	readonly flags: Map<string, RecordedFlag>;
@@ -77,6 +86,8 @@ export interface PiMock {
 	readonly flagValues: Map<string, boolean | string>;
 	readonly messageRenderers: Map<string, unknown>;
 	readonly sentMessages: CapturedMessage[];
+	/** Every `pi.sendUserMessage(...)` call, in order. */
+	readonly sentUserMessages: CapturedUserMessage[];
 	/**
 	 * #dynamic-tooling: tools registered via `registerTool` are active by
 	 * default (mirrors the real host — see docs' `getActiveTools`/
@@ -123,7 +134,11 @@ export interface PiMock {
 	/** Run every handler registered for `event`; return the last defined result. */
 	emit(event: string, payload?: unknown, ctx?: unknown): Promise<unknown>;
 	/** Invoke a registered command's handler. */
-	runCommand(name: string, args?: string, ctx?: ExtensionCommandContext): Promise<void>;
+	runCommand(
+		name: string,
+		args?: string,
+		ctx?: ExtensionCommandContext,
+	): Promise<void>;
 	/** Cast to the host type for `extension(pi.asExtensionAPI())`. */
 	asExtensionAPI(): ExtensionAPI;
 }
@@ -153,6 +168,7 @@ export function createPiMock(
 	);
 	const messageRenderers = new Map<string, unknown>();
 	const sentMessages: CapturedMessage[] = [];
+	const sentUserMessages: CapturedUserMessage[] = [];
 	const activeTools = new Set<string>();
 
 	const mock: PiMock = {
@@ -163,6 +179,7 @@ export function createPiMock(
 		flagValues,
 		messageRenderers,
 		sentMessages,
+		sentUserMessages,
 		activeTools,
 
 		registerFlag(name, options) {
@@ -249,6 +266,15 @@ export function createPiMock(
 					for (const name of names) activeTools.add(name);
 				};
 			}
+			api.sendUserMessage = (
+				content: unknown,
+				options?: {
+					deliverAs?: "steer" | "followUp" | "nextTurn";
+					triggerTurn?: boolean;
+				},
+			) => {
+				sentUserMessages.push({ content, options });
+			};
 			return api as unknown as ExtensionAPI;
 		},
 	};

@@ -55,17 +55,37 @@ function historicalPrefix(provenance: AdvisoryProvenance | undefined): string {
 	return `Historical finding; workspace changed since capture; re-run to confirm. (${provenanceStamp(provenance)})`;
 }
 
-function historicalTestContent(content: string, provenance?: AdvisoryProvenance): string {
+function historicalTestContent(
+	content: string,
+	provenance?: AdvisoryProvenance,
+): string {
 	return content.startsWith("[from a prior turn")
 		? content
 		: `${historicalPrefix(provenance)}\n\n${content}`;
+}
+
+/**
+ * Check if content is purely advisory/noise that should be skipped in steer mode.
+ * Returns true if the content is non-actionable operational noise.
+ */
+function isAdvisoryOnlyContent(content: string): boolean {
+	const trimmed = content.trim();
+	return (
+		/^\s*[ℹ️⚠️]?\s*Advisory — no action required/i.test(trimmed) ||
+		/^\s*[ℹ️⚠️]?\s*Cascade could not compute/i.test(trimmed) ||
+		/^\s*pi-lens: \d+ file\(s\) were/i.test(trimmed)
+	);
 }
 
 function turnEndMessage(
 	content: string,
 	current: boolean,
 	provenance?: AdvisoryProvenance,
-): { role: "user"; content: string } {
+): { role: "user"; content: string } | undefined {
+	// Skip purely advisory/noise content — it's not actionable.
+	if (isAdvisoryOnlyContent(content)) {
+		return undefined;
+	}
 	return {
 		role: "user",
 		content: current
@@ -87,15 +107,16 @@ export function peekTurnEndFindings(
 	);
 	if (!findings?.data?.content || findings.data.consumed === true) return;
 	const validation = validateAdvisoryProvenance(findings.data, cwd, runtime);
-	if (logDelivery) logProvenanceDecision(validation, findings.data.provenance, "turn-end", cwd);
+	if (logDelivery)
+		logProvenanceDecision(validation, findings.data.provenance, "turn-end", cwd);
 	if (validation.allFilesDeleted) return;
-	return {
-		messages: [turnEndMessage(
-			findings.data.content,
-			validation.status === "current",
-			findings.data.provenance,
-		)],
-	};
+	const msg = turnEndMessage(
+		findings.data.content,
+		validation.status === "current",
+		findings.data.provenance,
+	);
+	if (!msg) return undefined;
+	return { messages: [msg] };
 }
 
 export function consumeTurnEndFindings(
@@ -127,13 +148,13 @@ export function consumeTurnEndFindings(
 		cacheManager.clearCache("turn-end-findings", cwd);
 	}
 	if (validation.allFilesDeleted) return;
-	return {
-		messages: [turnEndMessage(
-			findings.data.content,
-			validation.status === "current",
-			findings.data.provenance,
-		)],
-	};
+	const msg = turnEndMessage(
+		findings.data.content,
+		validation.status === "current",
+		findings.data.provenance,
+	);
+	if (!msg) return undefined;
+	return { messages: [msg] };
 }
 
 /** Read test findings without consuming them; used by acknowledged IPC delivery. */
@@ -149,7 +170,13 @@ export function peekTestFindings(
 	);
 	if (!findings?.data?.content) return;
 	const validation = validateAdvisoryProvenance(findings.data, cwd, runtime);
-	if (logDelivery) logProvenanceDecision(validation, findings.data.provenance, "test-findings", cwd);
+	if (logDelivery)
+		logProvenanceDecision(
+			validation,
+			findings.data.provenance,
+			"test-findings",
+			cwd,
+		);
 	if (validation.allFilesDeleted) return;
 	const current = validation.status === "current";
 	return {
@@ -169,7 +196,10 @@ export function consumeTestFindings(
 	cwd: string,
 	runtime?: RuntimeCoordinator,
 ): ContextResult | undefined {
-	const record = cacheManager.readCache<TestRunnerFindingsCache>("test-runner-findings", cwd);
+	const record = cacheManager.readCache<TestRunnerFindingsCache>(
+		"test-runner-findings",
+		cwd,
+	);
 	if (!record?.data?.content) return;
 	const findings = peekTestFindings(cacheManager, cwd, runtime, true);
 	if (!findings) return;
@@ -184,25 +214,47 @@ export function consumeTestFindings(
 	)?.data?.testRunGeneration;
 	cacheManager.writeCache(
 		"test-runner-findings",
-		{ content: "", testRunGeneration: priorGeneration } as TestRunnerFindingsCache,
+		{
+			content: "",
+			testRunGeneration: priorGeneration,
+		} as TestRunnerFindingsCache,
 		cwd,
 	);
 	return findings;
 }
 
 /** Complete an acknowledged MCP delivery without re-validating or re-rendering it. */
-export function acknowledgeTurnEndFindings(cacheManager: CacheManager, cwd: string): void {
-	const findings = cacheManager.readCache<Partial<TurnEndFindingsCache>>("turn-end-findings", cwd);
+export function acknowledgeTurnEndFindings(
+	cacheManager: CacheManager,
+	cwd: string,
+): void {
+	const findings = cacheManager.readCache<Partial<TurnEndFindingsCache>>(
+		"turn-end-findings",
+		cwd,
+	);
 	if (!findings?.data?.content || findings.data.consumed === true) return;
-	if (findings.data.hasBlockers === true && typeof findings.data.sessionId === "string") {
-		cacheManager.writeCache("turn-end-findings", { ...findings.data, consumed: true }, cwd);
+	if (
+		findings.data.hasBlockers === true &&
+		typeof findings.data.sessionId === "string"
+	) {
+		cacheManager.writeCache(
+			"turn-end-findings",
+			{ ...findings.data, consumed: true },
+			cwd,
+		);
 	} else {
 		cacheManager.clearCache("turn-end-findings", cwd);
 	}
 }
 
-export function acknowledgeTestFindings(cacheManager: CacheManager, cwd: string): void {
-	const findings = cacheManager.readCache<TestRunnerFindingsCache>("test-runner-findings", cwd);
+export function acknowledgeTestFindings(
+	cacheManager: CacheManager,
+	cwd: string,
+): void {
+	const findings = cacheManager.readCache<TestRunnerFindingsCache>(
+		"test-runner-findings",
+		cwd,
+	);
 	if (!findings?.data?.content) return;
 	// Same high-water-mark preservation as consumeTestFindings.
 	cacheManager.writeCache(

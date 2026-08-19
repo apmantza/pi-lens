@@ -34,7 +34,11 @@ vi.mock("../clients/bootstrap.js", () => ({
 		ruffClient: { isAvailable: () => false },
 		knipClient: {
 			isAvailable: () => false,
-			analyze: async () => ({ success: false, summary: "unavailable", issues: [] }),
+			analyze: async () => ({
+				success: false,
+				summary: "unavailable",
+				issues: [],
+			}),
 		},
 		jscpdClient: { isAvailable: () => false },
 		depChecker: { isAvailable: () => false },
@@ -109,7 +113,9 @@ describe("index.ts extension wiring", () => {
 		try {
 			const parent = createPiMock();
 			const parentApi = parent.asExtensionAPI();
-			(parentApi as unknown as { events: { emit: ReturnType<typeof vi.fn> } }).events = {
+			(
+				parentApi as unknown as { events: { emit: ReturnType<typeof vi.fn> } }
+			).events = {
 				emit: vi.fn(),
 			};
 			extension(parentApi);
@@ -121,7 +127,9 @@ describe("index.ts extension wiring", () => {
 
 			const dbg = vi.fn();
 			wireBusEmitter(() => {
-				throw new Error("This extension ctx is stale after session replacement or reload");
+				throw new Error(
+					"This extension ctx is stale after session replacement or reload",
+				);
 			});
 			publishFilesTouched({
 				reason: "autofix",
@@ -137,14 +145,18 @@ describe("index.ts extension wiring", () => {
 			const recoveredEmit = vi.fn();
 			const subagent = createPiMock();
 			const subagentApi = subagent.asExtensionAPI();
-			(subagentApi as unknown as { events: { emit: typeof recoveredEmit } }).events = {
+			(
+				subagentApi as unknown as { events: { emit: typeof recoveredEmit } }
+			).events = {
 				emit: recoveredEmit,
 			};
 			extension(subagentApi);
 			// Model another activation winning the module singleton after factory
 			// load. The guarded session_start itself must reclaim the wiring.
 			wireBusEmitter(() => {
-				throw new Error("This extension ctx is stale after session replacement or reload");
+				throw new Error(
+					"This extension ctx is stale after session replacement or reload",
+				);
 			});
 			await subagent.emit(
 				"session_start",
@@ -160,7 +172,9 @@ describe("index.ts extension wiring", () => {
 
 			expect(recoveredEmit).toHaveBeenCalledWith(
 				"pilens:files:touched",
-				expect.objectContaining({ paths: [expect.stringContaining("recovered.ts")] }),
+				expect.objectContaining({
+					paths: [expect.stringContaining("recovered.ts")],
+				}),
 			);
 			expect(dbg).toHaveBeenCalledTimes(1);
 		} finally {
@@ -214,11 +228,17 @@ describe("index.ts extension wiring", () => {
 		_resetSessionLifecycleForTests();
 		resetBusPublishForTests();
 		try {
-			const staleOwnerCtx = makeCtx({ cwd: process.cwd(), sessionId: "stale-owner" });
+			const staleOwnerCtx = makeCtx({
+				cwd: process.cwd(),
+				sessionId: "stale-owner",
+			});
 			staleOwnerCtx.isIdle = () => {
 				throw new Error("This extension ctx is stale after session replacement");
 			};
-			const freshGlobalCtx = makeCtx({ cwd: process.cwd(), sessionId: "fresh-sibling" });
+			const freshGlobalCtx = makeCtx({
+				cwd: process.cwd(),
+				sessionId: "fresh-sibling",
+			});
 			const ownerEmit = vi.fn();
 			const owner = createPiMock();
 			const ownerApi = owner.asExtensionAPI();
@@ -265,7 +285,10 @@ describe("index.ts extension wiring", () => {
 		_resetSessionLifecycleForTests();
 		resetBusPublishForTests();
 		try {
-			const staleSiblingCtx = makeCtx({ cwd: process.cwd(), sessionId: "stale-sibling" });
+			const staleSiblingCtx = makeCtx({
+				cwd: process.cwd(),
+				sessionId: "stale-sibling",
+			});
 			staleSiblingCtx.isIdle = () => {
 				throw new Error("This extension ctx is stale after session replacement");
 			};
@@ -393,15 +416,11 @@ describe("index.ts extension wiring", () => {
 
 				for (const t of LAZY_TOOLS) {
 					expect(pi.getTool(t), `tool registered: ${t}`).toBeDefined();
-					expect(pi.activeTools.has(t), `should start inactive: ${t}`).toBe(
-						false,
-					);
+					expect(pi.activeTools.has(t), `should start inactive: ${t}`).toBe(false);
 				}
 				for (const t of ALWAYS_ACTIVE) {
 					expect(pi.getTool(t), `tool registered: ${t}`).toBeDefined();
-					expect(pi.activeTools.has(t), `should start active: ${t}`).toBe(
-						true,
-					);
+					expect(pi.activeTools.has(t), `should start active: ${t}`).toBe(true);
 				}
 			} finally {
 				if (prevDataDir === undefined) delete process.env.PILENS_DATA_DIR;
@@ -432,9 +451,7 @@ describe("index.ts extension wiring", () => {
 					// Every tool — including the normally-lazy 6 — stays active because
 					// index.ts never found getActiveTools/setActiveTools to call, so it
 					// skipped the deactivation step entirely (the graceful fallback).
-					expect(pi.activeTools.has(t), `should stay active: ${t}`).toBe(
-						true,
-					);
+					expect(pi.activeTools.has(t), `should stay active: ${t}`).toBe(true);
 				}
 			} finally {
 				if (prevDataDir === undefined) delete process.env.PILENS_DATA_DIR;
@@ -625,10 +642,14 @@ describe("index.ts extension wiring", () => {
 						| { renderCall?: unknown; renderResult?: unknown }
 						| undefined;
 					expect(tool, `tool: ${t}`).toBeDefined();
-					expect(tool?.renderCall, `${t}.renderCall should be absent when off`).toBeUndefined();
-					expect(tool?.renderResult, `${t}.renderResult should still exist`).toBeTypeOf(
-						"function",
-					);
+					expect(
+						tool?.renderCall,
+						`${t}.renderCall should be absent when off`,
+					).toBeUndefined();
+					expect(
+						tool?.renderResult,
+						`${t}.renderResult should still exist`,
+					).toBeTypeOf("function");
 				}
 			});
 
@@ -664,7 +685,10 @@ describe("index.ts extension wiring", () => {
 				expect(callComponent?.render(80)).toEqual([]);
 
 				const resultComponent = tool.renderResult?.(
-					{ content: [], details: { mode: "all", totalBlocking: 0, filesWithIssues: 0 } },
+					{
+						content: [],
+						details: { mode: "all", totalBlocking: 0, filesWithIssues: 0 },
+					},
 					{ expanded: false, isPartial: false },
 					theme,
 					ctx,
@@ -753,7 +777,11 @@ describe("index.ts extension wiring", () => {
 			removeTempDirSync(tmp);
 		});
 
-		function seedTurnEndFindings(cwd: string, content: string, sessionId: string): void {
+		function seedTurnEndFindings(
+			cwd: string,
+			content: string,
+			sessionId: string,
+		): void {
 			const file = path.join(cwd, "unchanged.ts");
 			fs.writeFileSync(file, "export const unchanged = true;\n");
 			const provenance = snapshotAdvisoryProvenance({
@@ -762,7 +790,11 @@ describe("index.ts extension wiring", () => {
 				generation: 1,
 				files: [{ path: file, role: "affected" }],
 			});
-			new CacheManager().writeCache("turn-end-findings", { content, provenance }, cwd);
+			new CacheManager().writeCache(
+				"turn-end-findings",
+				{ content, provenance },
+				cwd,
+			);
 		}
 
 		it("suppresses injection when --no-lens-context is set, then injects after /lens-context-toggle", async () => {
@@ -770,7 +802,11 @@ describe("index.ts extension wiring", () => {
 			_resetSessionLifecycleForTests();
 			const pi = createPiMock({ "no-lens-context": true });
 			extension(pi.asExtensionAPI());
-			await pi.emit("session_start", { sessionId: "wiring-session" }, makeCtx({ cwd: tmp, sessionId: "wiring-session" }));
+			await pi.emit(
+				"session_start",
+				{ sessionId: "wiring-session" },
+				makeCtx({ cwd: tmp, sessionId: "wiring-session" }),
+			);
 			seedTurnEndFindings(tmp, "TESTFINDINGS_XYZZY", "wiring-session");
 
 			const existing = [{ role: "system", content: "orig" }];
@@ -784,7 +820,7 @@ describe("index.ts extension wiring", () => {
 			expect(off).toBeUndefined();
 
 			// Flip it on through the real command handler.
-			await pi.runCommand("lens-context-toggle", "", makeCtx({ cwd: tmp }));
+			await pi.runCommand("lens-context-toggle", "inject", makeCtx({ cwd: tmp }));
 
 			// Now the same hook injects the cached findings into the transcript.
 			// The lone existing message is a `system` message (not a plain user
@@ -802,6 +838,182 @@ describe("index.ts extension wiring", () => {
 			expect(on?.messages[0]).toEqual({ role: "system", content: "orig" });
 			expect(on?.messages.at(-1)?.content).toMatch(/TESTFINDINGS_XYZZY/);
 			expect(on?.messages.at(-1)?.content).toContain("Address 🔴 blockers");
+		});
+
+		it("shows submenu with options via /lens-context-toggle", async () => {
+			_resetSessionLifecycleForTests();
+			const pi = createPiMock();
+			extension(pi.asExtensionAPI());
+			await pi.emit(
+				"session_start",
+				{ sessionId: "wiring-session" },
+				makeCtx({ cwd: tmp, sessionId: "wiring-session" }),
+			);
+
+			const ctx = makeCtx({ cwd: tmp });
+
+			// No argument: shows submenu explaining options.
+			await pi.runCommand("lens-context-toggle", "", ctx);
+			const notifications = ctx.notifications.map((n) => n.message);
+			expect(notifications.some((n) => n.includes("**Options:**"))).toBe(true);
+			expect(notifications.some((n) => n.includes("**Inject**"))).toBe(true);
+			expect(notifications.some((n) => n.includes("**Steer**"))).toBe(true);
+			expect(notifications.some((n) => n.includes("**Off**"))).toBe(true);
+		});
+
+		it("sets steer mode via /lens-context-toggle steer", async () => {
+			_resetSessionLifecycleForTests();
+			const pi = createPiMock();
+			extension(pi.asExtensionAPI());
+			await pi.emit(
+				"session_start",
+				{ sessionId: "wiring-session" },
+				makeCtx({ cwd: tmp, sessionId: "wiring-session" }),
+			);
+
+			const ctx = makeCtx({ cwd: tmp });
+
+			// Set steer mode explicitly.
+			await pi.runCommand("lens-context-toggle", "steer", ctx);
+			const notifications = ctx.notifications.map((n) => n.message);
+			expect(notifications.some((n) => n.includes("steer mode"))).toBe(true);
+		});
+
+		it("sets off mode via /lens-context-toggle off", async () => {
+			_resetSessionLifecycleForTests();
+			const pi = createPiMock();
+			extension(pi.asExtensionAPI());
+			await pi.emit(
+				"session_start",
+				{ sessionId: "wiring-session" },
+				makeCtx({ cwd: tmp, sessionId: "wiring-session" }),
+			);
+
+			const ctx = makeCtx({ cwd: tmp });
+
+			// Set off mode explicitly.
+			await pi.runCommand("lens-context-toggle", "off", ctx);
+			const notifications = ctx.notifications.map((n) => n.message);
+			expect(notifications.some((n) => n.includes("disabled"))).toBe(true);
+		});
+
+		it("sets inject mode via /lens-context-toggle inject", async () => {
+			_resetSessionLifecycleForTests();
+			const pi = createPiMock();
+			extension(pi.asExtensionAPI());
+			await pi.emit(
+				"session_start",
+				{ sessionId: "wiring-session" },
+				makeCtx({ cwd: tmp, sessionId: "wiring-session" }),
+			);
+
+			const ctx = makeCtx({ cwd: tmp });
+
+			// Set inject mode explicitly.
+			await pi.runCommand("lens-context-toggle", "inject", ctx);
+			const notifications = ctx.notifications.map((n) => n.message);
+			expect(notifications.some((n) => n.includes("enabled (inject mode)"))).toBe(
+				true,
+			);
+		});
+
+		it("sends findings via sendUserMessage in steer mode", async () => {
+			_resetSessionLifecycleForTests();
+			const pi = createPiMock();
+			extension(pi.asExtensionAPI());
+			await pi.emit(
+				"session_start",
+				{ sessionId: "wiring-session" },
+				makeCtx({ cwd: tmp, sessionId: "wiring-session" }),
+			);
+			seedTurnEndFindings(tmp, "STEER_CONTENT_ABC", "wiring-session");
+
+			const ctx = makeCtx({ cwd: tmp });
+
+			// Set steer mode explicitly.
+			await pi.runCommand("lens-context-toggle", "steer", ctx);
+
+			const existing = [{ role: "user", content: "hello" }];
+			// Steer mode: context hook returns undefined (no transcript modification)
+			// and calls sendUserMessage instead.
+			const result = await pi.emit("context", { messages: existing }, ctx);
+			expect(result).toBeUndefined();
+
+			// Verify sendUserMessage was called with steer delivery.
+			expect(pi.sentUserMessages).toHaveLength(1);
+			expect(pi.sentUserMessages[0].options?.deliverAs).toBe("steer");
+			expect(pi.sentUserMessages[0].content).toMatch(/STEER_CONTENT_ABC/);
+		});
+
+		it("persists steer mode in global config across sessions", async () => {
+			const prevConfigPath = process.env.PI_LENS_CONFIG_PATH;
+			const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-config-"));
+			const configPath = path.join(configDir, "config.json");
+			process.env.PI_LENS_CONFIG_PATH = configPath;
+
+			try {
+				_resetSessionLifecycleForTests();
+				const pi = createPiMock();
+				extension(pi.asExtensionAPI());
+				await pi.emit(
+					"session_start",
+					{ sessionId: "persist-session" },
+					makeCtx({ cwd: tmp, sessionId: "persist-session" }),
+				);
+
+				const ctx = makeCtx({ cwd: tmp });
+
+				// Set steer mode explicitly.
+				await pi.runCommand("lens-context-toggle", "steer", ctx);
+
+				// Read back the config file to verify persistence.
+				const rawConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+				expect(rawConfig.contextInjection?.mode).toBe("steer");
+			} finally {
+				if (prevConfigPath === undefined) delete process.env.PI_LENS_CONFIG_PATH;
+				else process.env.PI_LENS_CONFIG_PATH = prevConfigPath;
+				removeTempDirSync(configDir);
+			}
+		});
+
+		it("respects persisted steer mode on fresh session start", async () => {
+			const prevConfigPath = process.env.PI_LENS_CONFIG_PATH;
+			const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-config-"));
+			const configPath = path.join(configDir, "config.json");
+			process.env.PI_LENS_CONFIG_PATH = configPath;
+
+			try {
+				// Pre-write steer mode into config.
+				fs.writeFileSync(
+					configPath,
+					JSON.stringify({ contextInjection: { mode: "steer" } }),
+				);
+
+				_resetSessionLifecycleForTests();
+				const pi = createPiMock();
+				extension(pi.asExtensionAPI());
+				await pi.emit(
+					"session_start",
+					{ sessionId: "fresh-session" },
+					makeCtx({ cwd: tmp, sessionId: "fresh-session" }),
+				);
+				seedTurnEndFindings(tmp, "PERSIST_TEST", "fresh-session");
+
+				const ctx = makeCtx({ cwd: tmp });
+				const existing = [{ role: "user", content: "hello" }];
+
+				// Should use steer mode from config — no transcript modification.
+				const result = await pi.emit("context", { messages: existing }, ctx);
+				expect(result).toBeUndefined();
+
+				// And sendUserMessage should have been called.
+				expect(pi.sentUserMessages).toHaveLength(1);
+				expect(pi.sentUserMessages[0].options?.deliverAs).toBe("steer");
+			} finally {
+				if (prevConfigPath === undefined) delete process.env.PI_LENS_CONFIG_PATH;
+				else process.env.PI_LENS_CONFIG_PATH = prevConfigPath;
+				removeTempDirSync(configDir);
+			}
 		});
 	});
 

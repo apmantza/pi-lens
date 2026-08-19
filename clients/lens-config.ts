@@ -98,6 +98,14 @@ export interface PiLensGlobalConfig {
 		 * messages. Findings are still cached for `lens_diagnostics` / `/lens-health`.
 		 */
 		enabled?: boolean;
+		/**
+		 * How findings are delivered when enabled. `"inject"` (default) prepends
+		 * findings into the transcript via the `context` hook. `"steer"` sends
+		 * findings as a steer message via `pi.sendUserMessage` so they land after
+		 * the current assistant turn finishes its tool calls instead of interrupting
+		 * the prompt cache.
+		 */
+		mode?: "inject" | "steer";
 	};
 	turnSummary?: {
 		/**
@@ -238,6 +246,25 @@ export function loadPiLensGlobalConfig(
 					warnInvalid('format.mode must be "immediate" or "deferred"');
 				}
 				formatSection.mode = undefined;
+			}
+		}
+
+		const contextInjection = asConfigObject(raw.contextInjection);
+		if (contextInjection) {
+			config.contextInjection ??= {};
+			const ciSection = config.contextInjection as Record<string, unknown>;
+			if (
+				contextInjection.mode === "inject" ||
+				contextInjection.mode === "steer"
+			) {
+				ciSection.mode = contextInjection.mode;
+			} else {
+				// #533: a present-but-invalid mode warns and falls back; an
+				// absent mode stays silent.
+				if ("mode" in contextInjection) {
+					warnInvalid('contextInjection.mode must be "inject" or "steer"');
+				}
+				ciSection.mode = undefined;
 			}
 		}
 
