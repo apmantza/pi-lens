@@ -38,7 +38,9 @@ async function main(): Promise<void> {
 		}
 	}
 
-	const result = await analyzeFile(file, cwd, { flags });
+	const ownerId = arg("ownerId");
+
+	const result = await analyzeFile(file, cwd, { flags, ownerId });
 	// Flush before exiting — a bare process.exit can truncate a piped write. The
 	// explicit exit is needed because spawned LSP/runner handles would otherwise
 	// keep the event loop alive.

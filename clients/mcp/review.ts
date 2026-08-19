@@ -55,6 +55,7 @@ export function analyzeFileFresh(
 	return new Promise((resolve) => {
 		const args = [workerPath, `--file=${file}`, `--cwd=${cwd}`];
 		if (options.flags) args.push(`--flags=${JSON.stringify(options.flags)}`);
+		if (options.ownerId) args.push(`--ownerId=${options.ownerId}`);
 
 		let child: ChildProcessByStdio<null, Readable, Readable>;
 		try {

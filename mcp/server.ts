@@ -24,7 +24,10 @@ import * as net from "node:net";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { AstGrepClient } from "../clients/ast-grep-client.js";
-import { CacheManager } from "../clients/cache-manager.js";
+import {
+	CacheManager,
+	MCP_TURN_STATE_OWNER_ID,
+} from "../clients/cache-manager.js";
 import {
 	getDegradationSummary,
 	renderDegradationLines,
@@ -74,6 +77,7 @@ import { createLensDiagnosticsTool } from "../tools/lens-diagnostics.js";
 import { peekMcpSessionRuntime } from "../clients/mcp/session.js";
 import { createLspDiagnosticsTool } from "../tools/lsp-diagnostics.js";
 import { createLspNavigationTool } from "../tools/lsp-navigation.js";
+import { createLensDiagnosticMarkTool } from "../tools/lens-diagnostic-mark.js";
 import {
 	computeBuildStamp,
 	STALE_SERVED_BY_FRESH,
@@ -194,9 +198,7 @@ async function ensureReady(cwd: string): Promise<void> {
 		await ensureLspConfig(normalized);
 		// pi-lens-ignore: missing-error-propagation
 	} catch (err) {
-		console.error(
-			`[pi-lens-mcp] initLSPConfig failed for ${normalized}: ${err}`,
-		);
+		console.error(`[pi-lens-mcp] initLSPConfig failed for ${normalized}: ${err}`);
 	}
 	lspReadyCwds.add(normalized);
 }
@@ -220,12 +222,16 @@ interface AutoSessionState {
 	succeeded: boolean;
 	firedAt: string | null;
 	error: string | null;
+	retryCount: number;
+	nextRetryAt: number;
 }
 let autoSessionState: AutoSessionState = {
 	attempted: false,
 	succeeded: false,
 	firedAt: null,
 	error: null,
+	retryCount: 0,
+	nextRetryAt: 0,
 };
 // Non-null while a run is in flight — guards both the `initialize` call site
 // and the `tools/call` self-heal fallback against double-firing/races.
@@ -233,19 +239,28 @@ let autoSessionInFlight: Promise<void> | null = null;
 
 function maybeAutoSessionStart(): void {
 	if (process.env.PI_LENS_MCP_AUTO_SESSION !== "1") return;
-	// Already running, or already completed successfully — nothing to do. A
-	// prior *failed* attempt is retried (this is the self-heal path).
+	// Already running, or already completed successfully — nothing to do.
 	if (autoSessionInFlight || autoSessionState.succeeded) return;
+	// Backoff for failed attempts: exponential backoff capped at 60s.
+	const now = Date.now();
+	if (now < autoSessionState.nextRetryAt) return;
 	autoSessionState = {
 		attempted: true,
 		succeeded: false,
 		firedAt: new Date().toISOString(),
 		error: null,
+		retryCount: autoSessionState.retryCount + 1,
+		nextRetryAt: now + Math.min(1000 * 2 ** autoSessionState.retryCount, 60_000),
 	};
 	autoSessionInFlight = ensureReady(DEFAULT_CWD)
 		.then(() => runSessionStart(DEFAULT_CWD))
 		.then(() => {
-			autoSessionState = { ...autoSessionState, succeeded: true };
+			autoSessionState = {
+				...autoSessionState,
+				succeeded: true,
+				retryCount: 0,
+				nextRetryAt: 0,
+			};
 			console.error("[pi-lens-mcp] auto session_start complete");
 		})
 		.catch((err) => {
@@ -338,8 +353,7 @@ function startIpcServer(): void {
 						if ((parsed as { route?: string }).route === "turn-end-ack") {
 							if (
 								parsed.version !== WARM_TURN_END_SCHEMA_VERSION ||
-								typeof (parsed as { deliveryId?: unknown }).deliveryId !==
-									"string"
+								typeof (parsed as { deliveryId?: unknown }).deliveryId !== "string"
 							) {
 								socket.end(
 									`${JSON.stringify({ error: `turn-end ack schema ${parsed.version} != ${WARM_TURN_END_SCHEMA_VERSION}` })}\n`,
@@ -570,6 +584,10 @@ const lspNavigationTool = createLspNavigationTool((name, cwd) =>
 	createMcpHost(undefined, cwd ?? DEFAULT_CWD).getFlag(name),
 );
 const lspDiagnosticsTool = createLspDiagnosticsTool();
+const lensDiagnosticMarkTool = createLensDiagnosticMarkTool(
+	() => DEFAULT_CWD,
+	() => ({ model: undefined, provider: undefined }),
+);
 
 // Wrapped pi tools already declare their params as typebox (which IS JSON
 // Schema). Emit that directly as the MCP inputSchema (+ the MCP-only `cwd`)
@@ -605,8 +623,7 @@ const ALL_TOOLS = [
 			properties: {
 				file: {
 					type: "string",
-					description:
-						"Path to the file to analyze (absolute, or relative to cwd).",
+					description: "Path to the file to analyze (absolute, or relative to cwd).",
 				},
 				cwd: {
 					type: "string",
@@ -788,8 +805,7 @@ const ALL_TOOLS = [
 				},
 				maxCallGraphEntries: {
 					type: "number",
-					description:
-						"Per-direction cap for call-graph relations (default 20).",
+					description: "Per-direction cap for call-graph relations (default 20).",
 				},
 			},
 			required: ["file"],
@@ -884,13 +900,11 @@ const ALL_TOOLS = [
 			properties: {
 				file: {
 					type: "string",
-					description:
-						"Absolute or workspace-relative path to the source file.",
+					description: "Absolute or workspace-relative path to the source file.",
 				},
 				line: {
 					type: "number",
-					description:
-						"1-based line number inside the desired symbol/callback.",
+					description: "1-based line number inside the desired symbol/callback.",
 				},
 				cwd: { type: "string" },
 				kinds: {
@@ -996,6 +1010,16 @@ const ALL_TOOLS = [
 		inputSchema: schemaWithCwd(lspNavigationTool.parameters),
 	},
 	{
+		name: "pilens_diagnostic_mark",
+		description:
+			"Record a disposition for a lens_diagnostics finding: false-positive / " +
+			"suppress (inline ignore comment) / defer (this session) / flagged (to fix) / " +
+			"info (informational only, filters from steering/injection). Uses the exact " +
+			"filePath/rule/message/line the finding was reported with. Same schema as " +
+			"the pi tool.",
+		inputSchema: schemaWithCwd(lensDiagnosticMarkTool.parameters),
+	},
+	{
 		name: "pilens_lsp_diagnostics",
 		description:
 			"Pure LSP diagnostics for a file, directory, or batch of files (type " +
@@ -1066,7 +1090,10 @@ async function callTool(
 			// Honest review loop: a forked worker loads the freshly-built code, so
 			// the result reflects the latest commit — not this long-lived server's
 			// in-memory image.
-			const outcome = await analyzeFileFresh(WORKER_PATH, file, cwd, { flags });
+			const outcome = await analyzeFileFresh(WORKER_PATH, file, cwd, {
+				flags,
+				ownerId: MCP_TURN_STATE_OWNER_ID,
+			});
 			if (outcome.error || !outcome.result) {
 				return {
 					...toolText(`fresh analyze failed: ${outcome.error ?? "no result"}`),
@@ -1283,8 +1310,7 @@ async function callTool(
 
 	if (name === "pilens_module_report") {
 		const file = typeof args.file === "string" ? args.file : "";
-		if (!file.trim())
-			return { ...toolText("Provide a `file`."), isError: true };
+		if (!file.trim()) return { ...toolText("Provide a `file`."), isError: true };
 		const cwd = typeof args.cwd === "string" ? args.cwd : DEFAULT_CWD;
 		const maxRefsPerSymbol =
 			typeof args.maxRefsPerSymbol === "number" &&
@@ -1304,9 +1330,7 @@ async function callTool(
 				? Math.max(1, Math.floor(args.maxCallGraphEntries))
 				: undefined;
 		const view =
-			args.view === "summary" || args.view === "compact"
-				? args.view
-				: undefined;
+			args.view === "summary" || args.view === "compact" ? args.view : undefined;
 		const focus = typeof args.focus === "string" ? args.focus : undefined;
 		const report = await moduleReport(file, cwd, {
 			maxRefsPerSymbol,
@@ -1353,9 +1377,7 @@ async function callTool(
 		// agent parses this payload, it doesn't read it formatted.
 		return toolText(
 			summary,
-			graphStaleness
-				? { ...report, graphStalenessNote: graphStaleness }
-				: report,
+			graphStaleness ? { ...report, graphStalenessNote: graphStaleness } : report,
 			true,
 		);
 	}
@@ -1401,9 +1423,7 @@ async function callTool(
 			(graphStaleness ? `\n\n${graphStaleness}` : "");
 		return toolText(
 			summary,
-			graphStaleness
-				? { ...report, graphStalenessNote: graphStaleness }
-				: report,
+			graphStaleness ? { ...report, graphStalenessNote: graphStaleness } : report,
 			true,
 		);
 	}
@@ -1531,10 +1551,12 @@ async function callTool(
 			`LSP: ${aliveClients} alive client(s)`,
 			...servers.flatMap((server) => [
 				`  ${server.connected ? "✓" : "✗"} ${server.serverId} (${server.root})`,
-				...server.pullFailureHistory.slice(-1).map(
-					(failure) =>
-						`    ⚠ diagnostics pull failed: ${failure.method}${failure.code !== undefined ? ` (${failure.code})` : ""} — ${failure.message.length > 200 ? `${failure.message.slice(0, 200)}…` : failure.message}`,
-				),
+				...server.pullFailureHistory
+					.slice(-1)
+					.map(
+						(failure) =>
+							`    ⚠ diagnostics pull failed: ${failure.method}${failure.code !== undefined ? ` (${failure.code})` : ""} — ${failure.message.length > 200 ? `${failure.message.slice(0, 200)}…` : failure.message}`,
+					),
 			]),
 			...renderLspBrokenStatusLines(brokenServers),
 			...renderDegradationLines(degradations),
@@ -1645,12 +1667,22 @@ async function callTool(
 		return toolText(parts.filter(Boolean).join("\n"), outcome);
 	}
 
+	if (name === "pilens_diagnostic_mark") {
+		const cwd = typeof args.cwd === "string" ? args.cwd : DEFAULT_CWD;
+		const out = await lensDiagnosticMarkTool.execute(
+			"mcp",
+			args,
+			undefined,
+			undefined,
+			{ cwd },
+		);
+		return out;
+	}
+
 	if (name === "pilens_ast_grep_search" || name === "pilens_ast_grep_replace") {
 		const cwd = typeof args.cwd === "string" ? args.cwd : DEFAULT_CWD;
 		const tool =
-			name === "pilens_ast_grep_search"
-				? astGrepSearchTool
-				: astGrepReplaceTool;
+			name === "pilens_ast_grep_search" ? astGrepSearchTool : astGrepReplaceTool;
 		const out = (await tool.execute(
 			"mcp",
 			args,
@@ -1822,9 +1854,7 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
 				// Surface as a tool error (isError), not a transport error, so the
 				// agent sees the message instead of a dead request.
 				sendResult(id ?? null, {
-					...toolText(
-						`pi-lens tool '${name}' failed: ${(err as Error).message}`,
-					),
+					...toolText(`pi-lens tool '${name}' failed: ${(err as Error).message}`),
 					isError: true,
 				});
 			}
