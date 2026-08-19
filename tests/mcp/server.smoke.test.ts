@@ -58,6 +58,7 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		expect(names).toContain("pilens_ast_grep_replace");
 		expect(names).toContain("pilens_lsp_navigation");
 		expect(names).toContain("pilens_lsp_diagnostics");
+		expect(names).toContain("pilens_diagnostic_mark");
 		expect(names).toContain("pilens_symbol_search");
 		// pilens_impact was removed (#304) — its blast radius folded into
 		// pilens_module_report's `blastRadius` option.
@@ -95,9 +96,9 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		});
 		try {
 			const listed = await installedHarness.request(20, "tools/list");
-			const tools = (
-				listed.result as { tools: { name: string }[] }
-			).tools.map((tool) => tool.name);
+			const tools = (listed.result as { tools: { name: string }[] }).tools.map(
+				(tool) => tool.name,
+			);
 			expect(tools).not.toContain("pilens_rebuild");
 
 			// Defense in depth: a client that calls the hidden tool directly still
@@ -179,7 +180,7 @@ describe("pi-lens MCP server (stdio smoke)", { retry: 2 }, () => {
 		expect(result.content[0].text).toContain("[warm]");
 		expect(result.content[0].text).toContain("host-shim.ts");
 		// The structured JSON payload (fenced) carries the latency record.
-		expect(result.content[0].text).toContain("\"latency\"");
+		expect(result.content[0].text).toContain('"latency"');
 	}, 60_000);
 
 	// pilens_module_report + pilens_read_symbol execute against a tiny project in

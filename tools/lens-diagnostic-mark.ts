@@ -2,7 +2,7 @@
  * lens_diagnostic_mark — agent-facing disposition operation (#690, unifying
  * #181/#503/#504's discussion into one triage layer).
  *
- * Four dispositions, given the exact filePath/rule/message/line a
+ * Five dispositions, given the exact filePath/rule/message/line a
  * lens_diagnostics finding was reported with (same fields shown in that
  * tool's output):
  *   false-positive — the rule misfired. Persists project-wide.
@@ -50,9 +50,18 @@ import {
 	type Disposition,
 } from "../clients/diagnostic-dispositions.js";
 import { insertSuppressComment } from "../clients/dispatch/suppress-writer.js";
-import { getFileDiagnostics, type WidgetDiagnostic } from "../clients/widget-state.js";
+import {
+	getFileDiagnostics,
+	type WidgetDiagnostic,
+} from "../clients/widget-state.js";
 
-const DISPOSITIONS = ["false-positive", "suppress", "defer", "flagged"] as const;
+const DISPOSITIONS = [
+	"false-positive",
+	"suppress",
+	"defer",
+	"flagged",
+	"info",
+] as const;
 
 // How far ± the caller's line the fuzzy fallback searches for a plausible
 // (non-blank) line when there's no widget-state match to reanchor from.
@@ -99,7 +108,8 @@ function widgetCrossCheck(
 	if (matches.length === 0) return undefined;
 	if (matches.length === 1) return { line: matches[0].line, ambiguous: false };
 	const closest = matches.reduce(
-		(best, d) => (Math.abs(d.line - callerLine) < Math.abs(best.line - callerLine) ? d : best),
+		(best, d) =>
+			Math.abs(d.line - callerLine) < Math.abs(best.line - callerLine) ? d : best,
 		matches[0],
 	);
 	return { line: closest.line, ambiguous: true };
@@ -209,26 +219,29 @@ export function createLensDiagnosticMarkTool(
 		label: "Mark Diagnostic",
 		description:
 			"Record a disposition for a lens_diagnostics finding, using the exact filePath/rule/message/line " +
-			"it was reported with. false-positive/suppress persist across sessions; defer lasts only for the " +
+			"it was reported with. false-positive/suppress/info persist across sessions; defer lasts only for the " +
 			"current session (resurfaces next time); flagged marks it for you to come back and fix, and shows " +
 			"up tagged in a later lens_diagnostics mode=full. suppress additionally writes a `pi-lens-ignore: " +
-			"<rule>` comment into the source above the flagged line — rule is required for suppress. " +
+			"<rule>` comment into the source above the flagged line — rule is required for suppress. info " +
+			"filters from steering/injection without an inline comment. " +
 			"The line is verified/reanchored against current diagnostics before writing (#802): if a live " +
 			"diagnostic for this tool/rule/message is now at a different line, that line is used instead of " +
 			"the one you passed. When suppressing several findings in the SAME file in one turn, work " +
 			"bottom-up (highest line number first) — each inserted comment shifts later lines down by one, " +
 			"and reanchoring can't always disambiguate two nearby findings.",
 		promptSnippet:
-			"Use lens_diagnostic_mark to dismiss a false-positive, suppress a won't-fix, defer, or flag a finding to fix later",
+			"Use lens_diagnostic_mark to dismiss a false-positive, suppress a won\'t-fix, defer, flag a finding to fix later, or mark as info only",
 		parameters: Type.Object({
 			filePath: Type.String({
-				description: "The file the diagnostic was reported on (relative or absolute).",
+				description:
+					"The file the diagnostic was reported on (relative or absolute).",
 			}),
 			line: Type.Number({
 				description: "The 1-based line the diagnostic was reported at.",
 			}),
 			message: Type.String({
-				description: "The diagnostic's message, exactly as lens_diagnostics reported it.",
+				description:
+					"The diagnostic's message, exactly as lens_diagnostics reported it.",
 			}),
 			rule: Type.Optional(
 				Type.String({
@@ -237,15 +250,19 @@ export function createLensDiagnosticMarkTool(
 				}),
 			),
 			tool: Type.Optional(
-				Type.String({ description: "The tool that produced the diagnostic, if known." }),
+				Type.String({
+					description: "The tool that produced the diagnostic, if known.",
+				}),
 			),
 			disposition: Type.String({
 				enum: DISPOSITIONS,
 				description:
-					"false-positive = the rule misfired. suppress = real finding, won't fix (writes an inline ignore comment). defer = fix later, this session only. flagged = mark for you to fix.",
+					"false-positive = the rule misfired. suppress = real finding, won\'t fix (writes an inline ignore comment). defer = fix later, this session only. flagged = mark for you to fix. info = real finding, informational only (filters from steering/injection, no inline comment).",
 			}),
 			reason: Type.Optional(
-				Type.String({ description: "Optional short reason, kept alongside the disposition." }),
+				Type.String({
+					description: "Optional short reason, kept alongside the disposition.",
+				}),
 			),
 		}),
 		async execute(
@@ -286,7 +303,8 @@ export function createLensDiagnosticMarkTool(
 					content: [
 						{
 							type: "text" as const,
-							text: "disposition=suppress requires `rule` — the inline pi-lens-ignore comment names a rule id.",
+							text:
+								"disposition=suppress requires `rule` — the inline pi-lens-ignore comment names a rule id.",
 						},
 					],
 					isError: true,
@@ -323,7 +341,14 @@ export function createLensDiagnosticMarkTool(
 			let verifiedLine = line;
 			let reanchorNote: string | undefined;
 			try {
-				const verification = verifyLine(content, absPath, tool, rule, message, line);
+				const verification = verifyLine(
+					content,
+					absPath,
+					tool,
+					rule,
+					message,
+					line,
+				);
 				if ("error" in verification) {
 					if (disposition === "suppress") {
 						return {
@@ -337,7 +362,7 @@ export function createLensDiagnosticMarkTool(
 							details: {},
 						};
 					}
-					// false-positive/defer/flagged: same worst-case as before #802 — a
+					// false-positive/defer/flagged/info: same worst-case as before #802 — a
 					// stale line produces a rotted (never-matching) anchor rather than a
 					// blocked mark.
 				} else {
@@ -402,7 +427,9 @@ export function createLensDiagnosticMarkTool(
 						? "deferred for this session"
 						: disposition === "flagged"
 							? "flagged to fix"
-							: "marked false-positive";
+							: disposition === "info"
+								? "marked info (filtered from steering/injection)"
+								: "marked false-positive";
 			const reanchorSuffix = reanchorNote ? ` (${reanchorNote})` : "";
 			return {
 				content: [
