@@ -10,6 +10,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 import { logSessionStart } from "../../../sessionstart-logger.js";
 import { getGlobalPiLensDir } from "../../../file-utils.js";
 import { PathKeyedMap } from "../../../path-keyed-map.js";
@@ -263,7 +264,9 @@ export async function getManagedToolEnvironment(
 }
 
 /** Read-only managed/PATH discovery for spawn-time resolution memos. */
-export async function discoverManagedTool(toolId: string): Promise<string | null> {
+export async function discoverManagedTool(
+	toolId: string,
+): Promise<string | null> {
 	return (await ensureTool(toolId, { allowInstall: false })) ?? null;
 }
 
@@ -388,7 +391,12 @@ export function createAvailabilityChecker(
 
 	function getCache(cwd: string): AvailabilityCache {
 		ensureCurrentGeneration();
-		const key = path.resolve(cwd || process.cwd());
+		const resolvedCwd = path.resolve(cwd || process.cwd());
+		const pathHash = createHash("sha256")
+			.update(process.env.PATH ?? "")
+			.digest("hex")
+			.slice(0, 8);
+		const key = `${resolvedCwd}|${pathHash}`;
 		const existing = cacheByCwd.get(key);
 		if (existing) return existing;
 		const created: AvailabilityCache = {
@@ -429,10 +437,7 @@ export function createAvailabilityChecker(
 			cache.transientAttempts = 0;
 		} else {
 			cache.transientAttempts += 1;
-			retryAfterMs = transientRetryDelayMs(
-				cache.transientAttempts,
-				verdict.cause,
-			);
+			retryAfterMs = transientRetryDelayMs(cache.transientAttempts, verdict.cause);
 			cache.retryAtMs = Date.now() + retryAfterMs;
 		}
 		logAvailabilityDecision(
@@ -834,16 +839,18 @@ export function resolveAvailableOrInstall(
 	if (existing) return existing;
 
 	const generation = availabilityStateGeneration;
-	const promise = resolveAvailableOrInstallUnshared(checker, toolId, cwd).finally(
-		() => {
-			if (generation !== availabilityStateGeneration) return;
-			const current = resolveInstallInFlightByCwd.get(key);
-			if (current?.get(toolId) === promise) {
-				current.delete(toolId);
-				if (current.size === 0) resolveInstallInFlightByCwd.delete(key);
-			}
-		},
-	);
+	const promise = resolveAvailableOrInstallUnshared(
+		checker,
+		toolId,
+		cwd,
+	).finally(() => {
+		if (generation !== availabilityStateGeneration) return;
+		const current = resolveInstallInFlightByCwd.get(key);
+		if (current?.get(toolId) === promise) {
+			current.delete(toolId);
+			if (current.size === 0) resolveInstallInFlightByCwd.delete(key);
+		}
+	});
 	byTool.set(toolId, promise);
 	return promise;
 }
@@ -959,7 +966,9 @@ export async function isSgAvailableAsync(): Promise<boolean> {
 		// 1. Local node_modules/.bin
 		for (const localBin of buildSgLocalBins()) {
 			if (await probeAstGrepCommandAsync(localBin)) {
-				sgCmd = localBin; sgCmdArgs = []; noteSgAvailable(startedAt);
+				sgCmd = localBin;
+				sgCmdArgs = [];
+				noteSgAvailable(startedAt);
 				return true;
 			}
 		}
@@ -967,7 +976,9 @@ export async function isSgAvailableAsync(): Promise<boolean> {
 		// 2. Global PATH
 		for (const cmd of ["ast-grep", "sg"]) {
 			if (await probeAstGrepCommandAsync(cmd)) {
-				sgCmd = cmd; sgCmdArgs = []; noteSgAvailable(startedAt);
+				sgCmd = cmd;
+				sgCmdArgs = [];
+				noteSgAvailable(startedAt);
 				return true;
 			}
 		}
@@ -977,14 +988,18 @@ export async function isSgAvailableAsync(): Promise<boolean> {
 		for (const name of ["ast-grep", "sg"]) {
 			const globalBin = await findGlobalBinary(name);
 			if (globalBin && (await probeAstGrepCommandAsync(globalBin))) {
-				sgCmd = globalBin; sgCmdArgs = []; noteSgAvailable(startedAt);
+				sgCmd = globalBin;
+				sgCmdArgs = [];
+				noteSgAvailable(startedAt);
 				return true;
 			}
 		}
 
 		// 3. npx --no (cache-only, no silent download).
 		if (await probeAstGrepCommandAsync("npx", ["--no", "--", "ast-grep"])) {
-			sgCmd = "npx"; sgCmdArgs = ["--no", "--", "ast-grep"]; noteSgAvailable(startedAt);
+			sgCmd = "npx";
+			sgCmdArgs = ["--no", "--", "ast-grep"];
+			noteSgAvailable(startedAt);
 			return true;
 		}
 
