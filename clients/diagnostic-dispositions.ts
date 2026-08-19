@@ -1,6 +1,6 @@
 /**
  * Agent+user disposition layer over dispatch diagnostics (#690, unifying #181/
- * #503/#504's discussion). Four dispositions:
+ * #503/#504's discussion). Five dispositions:
  *
  *   false-positive — the rule misfired. Project-persistent, routed nowhere
  *                     special yet (telemetry hookup is a fast-follow).
@@ -17,6 +17,10 @@
  *                     resolved; surfaced through the existing lens_diagnostics
  *                     query (tagged), not a separate file/tool the agent has
  *                     to separately poll.
+ *   info           — real finding, but informational only. Persistent,
+ *                     filters from steering/injection; weak-anchored so it
+ *                     survives incidental edits. Does not write an inline
+ *                     comment; the agent simply won't see it in context.
  *
  * Anchoring: TWO flavors, chosen per-disposition because each one binds to a
  * different thing conceptually:
@@ -30,12 +34,12 @@
  *     anchor, while a semantic edit to the flagged line correctly invalidates
  *     it.
  *   WEAK ("ddw:" prefix) — relativeFile|tool|rule|normalizedMessage, no line
- *     hash at all. Used for defer, flagged, and suppress: these are
+ *     hash at all. Used for defer, flagged, suppress, and info: these are
  *     intent-level judgments ("I'll get to this", "fix this", "policy says
- *     don't") about a finding identity, not about one exact line's bytes —
- *     they must survive incidental edits elsewhere on the flagged line
- *     (reformatting, a nearby rename) without silently dropping the mark.
- *     suppress's real enforcement is the inline comment (see
+ *     don't", "informational only") about a finding identity, not about one
+ *     exact line's bytes — they must survive incidental edits elsewhere on the
+ *     flagged line (reformatting, a nearby rename) without silently dropping
+ *     the mark. suppress's real enforcement is the inline comment (see
  *     suppress-writer.ts) which travels with the code by construction; the
  *     weak-anchored store entry is just an audit mirror plus a second,
  *     belt-and-braces filter.
@@ -74,7 +78,12 @@ export interface DispositionCandidate {
 	line?: number;
 }
 
-export type Disposition = "false-positive" | "suppress" | "defer" | "flagged";
+export type Disposition =
+	| "false-positive"
+	| "suppress"
+	| "defer"
+	| "flagged"
+	| "info";
 export type PersistedDisposition = Exclude<Disposition, "defer">;
 
 export interface DispositionEntry {
@@ -447,16 +456,26 @@ export function markDisposition(
 	const existing = readState(cwd).dispositions?.[anchor];
 	if (disposition === "defer") {
 		deferredThisSession.add(anchor);
-		emitMarkTelemetry(cwd, target, disposition, anchor, reason, existing, identity);
+		emitMarkTelemetry(
+			cwd,
+			target,
+			disposition,
+			anchor,
+			reason,
+			existing,
+			identity,
+		);
 		return anchor;
 	}
 
 	const now = new Date().toISOString();
 	const capturesFixContext = disposition === "flagged";
 	const lineText = capturesFixContext
-		? (target.content?.split(/\r?\n/)[
-				target.line !== undefined ? target.line - 1 : -1
-			] ?? existing?.lineText)?.trim()
+		? (
+				target.content?.split(/\r?\n/)[
+					target.line === undefined ? -1 : target.line - 1
+				] ?? existing?.lineText
+			)?.trim()
 		: existing?.lineText;
 	const entry: DispositionEntry = {
 		disposition,
@@ -467,7 +486,15 @@ export function markDisposition(
 		lineText,
 	};
 	commitDisposition(cwd, anchor, entry);
-	emitMarkTelemetry(cwd, target, disposition, anchor, reason, existing, identity);
+	emitMarkTelemetry(
+		cwd,
+		target,
+		disposition,
+		anchor,
+		reason,
+		existing,
+		identity,
+	);
 	return anchor;
 }
 
@@ -489,13 +516,13 @@ export function _resetDeferredForTests(): void {
 }
 
 /**
- * Drop diagnostics disposed false-positive/suppress, or deferred this session,
+ * Drop diagnostics disposed false-positive/suppress/info, or deferred this session,
  * from `diagnostics`. `flagged` diagnostics are kept as-is — callers that want
  * to surface the flag (e.g. lens_diagnostics' rendering) look it up separately
  * via getDisposition on the WEAK anchor (anchorsForDiagnostic(...).weak).
  *
  * Computes both anchors per diagnostic (cheap — same hash primitive, twice)
- * since false-positive is keyed strict while defer/suppress are keyed weak;
+ * since false-positive is keyed strict while defer/suppress/info are keyed weak;
  * see module doc for why each disposition binds the way it does.
  */
 export function applyDispositions<T extends DispositionCandidate>(
@@ -516,13 +543,14 @@ export function applyDispositions<T extends DispositionCandidate>(
 		// dropped this finding upstream via applyInlineSuppressions. This is a
 		// harmless second cover for the store-only audit trail case.
 		if (dispositions?.[weak]?.disposition === "suppress") return false;
+		if (dispositions?.[weak]?.disposition === "info") return false;
 		return true;
 	});
 }
 
 /**
  * WEAK-anchor-only disposition filter for the "instant" (cache-only)
- * lens_diagnostics modes (delta/all). Drops diagnostics disposed `suppress`
+ * lens_diagnostics modes (delta/all). Drops diagnostics disposed `suppress`/`info`
  * or deferred this session — both WEAK-anchored (`file|tool|rule|message`, no
  * line-content hash; see module doc), so this needs ZERO file I/O: it computes
  * only the weak anchor and never touches the diagnostic's line content.
@@ -533,7 +561,7 @@ export function applyDispositions<T extends DispositionCandidate>(
  * cache-only modes. A false-positive mark still filters at the next per-edit
  * dispatch (`dispatcher.ts`) and in `mode=full`'s merge — both of which already
  * have file content in hand and call `applyDispositions` (the full,
- * content-based filter). suppress/defer, being intent-level and weak-anchored,
+ * content-based filter). suppress/defer/info, being intent-level and weak-anchored,
  * are the marks that must apply the instant a query re-serves cached findings,
  * and they do so here without any read.
  */
@@ -556,6 +584,7 @@ export function applyWeakDispositions<T extends DispositionCandidate>(
 		});
 		if (deferredThisSession.has(weak)) return false;
 		if (dispositions?.[weak]?.disposition === "suppress") return false;
+		if (dispositions?.[weak]?.disposition === "info") return false;
 		return true;
 	});
 }
