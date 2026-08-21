@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import {
 	getLinterPolicyForCwd,
@@ -106,11 +107,19 @@ const markdownlintRunner: RunnerDefinition = {
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
 		const cwd = ctx.cwd || process.cwd();
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
+
+		// Skip files outside the project root to avoid linting random files on the user's Desktop/etc.
+		const resolvedFilePath = path.resolve(ctx.filePath);
+		const resolvedCwd = path.resolve(cwd);
+		const relative = path.relative(resolvedCwd, resolvedFilePath);
+		if (relative.startsWith("..") || path.isAbsolute(relative)) {
+			return { status: "skipped", diagnostics: [], semantic: "none" };
+		}
 		if (policy && !policy.preferredRunners.includes("markdownlint")) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 		let cmd: string | null = null;
-		if (await (markdownlint.isAvailableAsync(cwd))) {
+		if (await markdownlint.isAvailableAsync(cwd)) {
 			cmd = markdownlint.getCommand(cwd);
 		} else {
 			cmd = await resolveToolCommandWithInstallFallback(cwd, "markdownlint");
