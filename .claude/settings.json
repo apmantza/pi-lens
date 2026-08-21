@@ -1,0 +1,5 @@
+{
+  "env": {
+    "PI_LENS_SKIP_HOOKS": "1"
+  }
+}

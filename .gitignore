@@ -128,6 +128,7 @@ AGENTS.md
 .claude/*
 !.claude/agents/
 !.claude/agents/*.md
+!.claude/settings.json
 !.claude/skills/
 !.claude/skills/**
 !.claude/skills/**/*.md
