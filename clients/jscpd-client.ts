@@ -152,16 +152,18 @@ export class JscpdClient {
 						: "skip";
 				}
 				if (!entry.isFile()) return "skip";
-				if (ignoreMatcher.isIgnored(fullPath, false)) return "skip";
-				if (
+				const isSourceExt =
 					/\.(ts|tsx|js|jsx|mjs|cjs|py|pyi|java|go|rs|rb|php|swift|kt|kts|dart|lua|scala|c|h|cpp|cc|cxx|hpp|hxx|cs|m|mm)$/.test(
 						entry.name,
-					)
-				) {
-					if (entry.name.endsWith(".d.ts")) return "skip";
-					return "stop";
-				}
-				return "skip";
+					);
+				// #1974: run the cheap extension gate BEFORE the ignore matcher —
+				// `isIgnored` recompiles minimatch patterns per unique path, so a
+				// non-source file (e.g. runtime output like wal/*.log) must not pay
+				// it. A file that fails the ext gate is skipped either way.
+				if (!isSourceExt) return "skip";
+				if (ignoreMatcher.isIgnored(fullPath, false)) return "skip";
+				if (entry.name.endsWith(".d.ts")) return "skip";
+				return "stop";
 			},
 			{ shouldStop: () => state.visited >= MAX_ENTRIES },
 		);

@@ -356,9 +356,17 @@ export async function collectSourceFilesForWarmup(
 				}
 				stack.push(fullPath);
 			} else if (entry.isFile()) {
-				if (ignoreMatcher.isIgnored(fullPath, false)) continue;
 				const ext = path.extname(entry.name).toLowerCase();
+				// #1974: run the cheap extension gate BEFORE the ignore matcher.
+				// `isIgnored` is O(ancestorDirs × patterns) with a fresh minimatch
+				// regex compile per call — measured 0.7–0.9ms per unique file on a
+				// repo whose runtime output dir (wal/) held 43k ignored *.log files,
+				// dominating the warmup walk (30.4s of 30.9s). A file that fails
+				// the ext gate is dropped by the walk either way, so the ignore
+				// probe on it is pure waste. Both gates must pass to collect; only
+				// the order changes, so output is unchanged.
 				if (!WARMUP_SOURCE_EXTS.has(ext)) continue;
+				if (ignoreMatcher.isIgnored(fullPath, false)) continue;
 				matchedSeen += 1;
 				const bucket = WARMUP_CODE_EXTS.has(ext) ? codeOut : nonCodeOut;
 				// Per-category hard cap — language detection only needs

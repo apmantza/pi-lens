@@ -267,8 +267,12 @@ function makeSourceCountVisitor(
 		}
 		if (
 			entry.isFile() &&
-			!ignoreMatcher.isIgnored(fullPath, false) &&
-			SOURCE_FILE_PATTERN.test(entry.name)
+			// #1974: run the cheap extension gate BEFORE the ignore matcher —
+			// `isIgnored` recompiles minimatch patterns per unique path, so a
+			// non-source file (e.g. runtime output like wal/*.log) must not pay
+			// it. A file that fails the ext gate is skipped either way.
+			SOURCE_FILE_PATTERN.test(entry.name) &&
+			!ignoreMatcher.isIgnored(fullPath, false)
 		) {
 			state.count += 1;
 			if (state.count > limit) return "stop";

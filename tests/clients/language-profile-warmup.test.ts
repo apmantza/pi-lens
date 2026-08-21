@@ -10,9 +10,35 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { collectSourceFilesForWarmup } from "../../clients/language-profile.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+
+// #1899: record every isIgnored() probe the walk makes (with its file/dir
+// role) so a test can assert the walk NEVER consults the ignore matcher about
+// a file it will drop by extension anyway. Delegates to the real matcher so
+// ignore semantics stay intact.
+const { ignoreCalls } = vi.hoisted(() => ({
+	ignoreCalls: [] as { path: string; isDir: boolean }[],
+}));
+
+vi.mock("../../clients/file-utils.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../../clients/file-utils.js")>();
+	return {
+		...actual,
+		getProjectIgnoreMatcher: (rootDir: string) => {
+			const real = actual.getProjectIgnoreMatcher(rootDir);
+			return {
+				...real,
+				isIgnored: (filePath: string, isDirectory = false): boolean => {
+					ignoreCalls.push({ path: filePath, isDir: isDirectory });
+					return real.isIgnored(filePath, isDirectory);
+				},
+			};
+		},
+	};
+});
 
 describe("collectSourceFilesForWarmup (#250)", () => {
 	it("hard-caps the number of source files collected", async () => {
@@ -105,6 +131,38 @@ describe("collectSourceFilesForWarmup (#250)", () => {
 				f.replace(/\\/g, "/"),
 			);
 			expect(files.some((f) => f.endsWith("/lib/main.dart"))).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("checks the extension gate before consulting the ignore matcher (#1899)", async () => {
+		const env = setupTestEnvironment("pi-lens-warmup-extgate-");
+		try {
+			// A wal/-style runtime-output pile: many .log files, gitignored by the
+			// FILE-level `*.log` pattern — so the directory itself is NOT pruned
+			// and the walk descends into it (the yams shape that cost 30s).
+			createTempFile(env.tmpDir, ".gitignore", "*.log\n");
+			for (let i = 0; i < 30; i++) {
+				createTempFile(env.tmpDir, `wal/wal_${i}.log`, "");
+			}
+			createTempFile(env.tmpDir, "src/a.ts", "export const a = 1;\n");
+
+			ignoreCalls.length = 0;
+			const files = (await collectSourceFilesForWarmup(env.tmpDir)).map((f) =>
+				f.replace(/\\/g, "/"),
+			);
+
+			// Behavior preserved: the source file is collected, the .log pile is
+			// excluded either way.
+			expect(files.some((f) => f.endsWith("/src/a.ts"))).toBe(true);
+			expect(files.some((f) => f.includes("/wal/"))).toBe(false);
+			// The fix: the walk must never have asked the ignore matcher about a
+			// non-source file — the cheap ext gate ran first and skipped it.
+			const askedAboutLogs = ignoreCalls.filter(
+				(c) => !c.isDir && c.path.endsWith(".log"),
+			);
+			expect(askedAboutLogs).toEqual([]);
 		} finally {
 			env.cleanup();
 		}
