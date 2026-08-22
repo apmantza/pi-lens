@@ -4,7 +4,7 @@
  */
 import { incrementDegradationCount } from "../../../degradation-ledger.js";
 import { truncateForLedger } from "../../../ledger-bounds.js";
-import type { RunnerResult } from "../../types.js";
+import type { Diagnostic, DispatchContext, RunnerResult } from "../../types.js";
 import {
 	type ClassifyRunOutcomeInput,
 	classifyRunOutcome,
@@ -276,4 +276,86 @@ export function parseToolRun<D>(
 		};
 	}
 	return { skipped: null, diagnostics, parsedNothing };
+}
+
+/**
+ * The shared tail for CLI lint runners that spawn a tool, parse structured
+ * findings, and map them to a result (#1839 consolidation).
+ *
+ * Twelve runners hand-rolled this branch and all twelve copies had the same
+ * defect: on a NONZERO exit whose output failed to parse (or parsed to
+ * nothing), they reported `succeeded` with zero diagnostics — "we checked,
+ * it's clean" — while the tool was saying it found problems or errored. The
+ * garbage battery turned the shape up 79 times in one pass; this seam is the
+ * single fix.
+ *
+ * Semantics:
+ * - findings present        → `classify` decides (default: any blocking
+ *                             diagnostic → `failed`/`blocking`, else
+ *                             `succeeded`/`warning`).
+ * - no findings, exit 0     → clean: `succeeded`/`none`.
+ * - no findings, nonzero exit,
+ *   bytes emitted           → `failed` + one parse-error warning diagnostic.
+ *                             Never clean (#1781 shape). A runner whose tool
+ *                             legitimately exits nonzero on a clean file must
+ *                             normalize the status BEFORE calling this.
+ */
+export interface FinishParsedRunInput {
+	/** The tool as a reader would name it — used in the parse-error finding. */
+	tool: string;
+	/** Only `filePath` is read from the context. */
+	ctx: Pick<DispatchContext, "filePath">;
+	/** The spawn result whose exit/output the findings came from. */
+	result: {
+		status?: number | null;
+		stdout?: string | undefined;
+		stderr?: string | undefined;
+	};
+	diagnostics: Diagnostic[];
+	/**
+	 * Override the default findings mapping when the runner's convention
+	 * differs (e.g. phpstan always reports `failed`/`blocking`). Receives the
+	 * non-empty diagnostics array.
+	 */
+	classify?: (
+		diagnostics: Diagnostic[],
+	) => Pick<RunnerResult, "status" | "semantic">;
+}
+
+export function finishParsedRun(input: FinishParsedRunInput): RunnerResult {
+	const raw = `${input.result.stdout ?? ""}${input.result.stderr ?? ""}`;
+	const status = input.result.status ?? null;
+
+	if (input.diagnostics.length === 0) {
+		if (status !== 0 && raw.trim().length > 0) {
+			return {
+				status: "failed",
+				diagnostics: [
+					{
+						id: `${input.tool}:parse-error:1`,
+						message: `${input.tool} exited ${status} but its output could not be parsed`,
+						filePath: input.ctx.filePath,
+						line: 1,
+						column: 1,
+						severity: "warning",
+						semantic: "warning",
+						tool: input.tool,
+					},
+				],
+				semantic: "warning",
+			};
+		}
+		return { status: "succeeded", diagnostics: [], semantic: "none" };
+	}
+
+	const mapped = input.classify?.(input.diagnostics);
+	if (mapped) {
+		return { ...mapped, diagnostics: input.diagnostics };
+	}
+	const hasBlocking = input.diagnostics.some((d) => d.semantic === "blocking");
+	return {
+		status: hasBlocking ? "failed" : "succeeded",
+		diagnostics: input.diagnostics,
+		semantic: hasBlocking ? "blocking" : "warning",
+	};
 }

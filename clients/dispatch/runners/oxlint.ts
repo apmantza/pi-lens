@@ -26,6 +26,7 @@ import {
 	resolveToolCommand,
 	resolveToolCommandWithInstallFallback,
 } from "./utils/runner-helpers.js";
+import { finishParsedRun } from "./utils/tool-failure.js";
 
 function resolveLocalVp(cwd: string): string | null {
 	const isWin = process.platform === "win32";
@@ -112,6 +113,10 @@ const oxlintRunner: RunnerDefinition = {
 		}
 
 		if (diagnostics.length === 0) {
+			// Read BEFORE anything else — real captured bytes show oxlint exits
+			// 1 with "No files found" + number_of_files: 0 when a config excludes
+			// the target, so "nonzero exit" alone cannot mean "unreadable report
+			// of problems" until the no-files shape is ruled out.
 			// Read BEFORE reporting "succeeded" — a config (root's or a nested
 			// one nearer the file, per oxlint's own discovery) that ignores this
 			// file reports the same empty diagnostics array a clean file does.
@@ -123,10 +128,22 @@ const oxlintRunner: RunnerDefinition = {
 				);
 				return { status: "skipped", diagnostics: [], semantic: "none" };
 			}
+			// Nonzero exit WITH output that parsed to nothing (and files WERE
+			// matched) is an unreadable report of problems, never clean (#1839).
+			if (
+				(result.status ?? 0) !== 0 &&
+				(stdout.length > 0 || stderr.length > 0)
+			) {
+				return finishParsedRun({
+					tool: "oxlint",
+					ctx,
+					result,
+					diagnostics,
+				});
+			}
 			return { status: "succeeded", diagnostics: [], semantic: "none" };
 		}
 
-		const hasBlocking = diagnostics.some((d) => d.semantic === "blocking");
 		// A warning-only result on exit 0 is oxlint's normal outcome, not a
 		// failure: exit 0 means nothing hit ERROR severity. `status: "failed"`
 		// here would stop this arm from reporting "succeeded", which breaks two
@@ -139,11 +156,19 @@ const oxlintRunner: RunnerDefinition = {
 		// off the tool's raw exit code. The findings themselves still reach the
 		// delivery pipeline regardless of `status` — dispatcher.ts buckets by
 		// each diagnostic's own `semantic`, so a warning stays a warning.
-		return {
-			status: !hasBlocking && result.status === 0 ? "succeeded" : "failed",
+		return finishParsedRun({
+			tool: "oxlint",
+			ctx,
+			result,
 			diagnostics,
-			semantic: hasBlocking ? "blocking" : "warning",
-		};
+			classify: (diagnostics) => {
+				const hasBlocking = diagnostics.some((d) => d.semantic === "blocking");
+				return {
+					status: !hasBlocking && result.status === 0 ? "succeeded" : "failed",
+					semantic: hasBlocking ? "blocking" : "warning",
+				};
+			},
+		});
 	},
 };
 

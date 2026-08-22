@@ -31,7 +31,6 @@ const NOT_YET_ON_PRIMITIVE: Record<string, string> = {
 	// Spawning runners that already consult the spawn outcome with their own
 	// per-tool check. Correct today, not yet unified. #1737.
 	"actionlint.ts": "reads its own exit status; #1737 strangler",
-	"biome-check.ts": "reads its own exit status; #1737 strangler",
 	"cpp-check.ts": "reads its own exit status; #1737 strangler",
 	"credo.ts": "reads its own exit status; #1737 strangler",
 	"dart-analyze.ts": "reads its own exit status; #1737 strangler",
@@ -45,15 +44,12 @@ const NOT_YET_ON_PRIMITIVE: Record<string, string> = {
 	"helm-render.ts": "reads its own exit status; #1737 strangler",
 	"javac.ts": "reads its own exit status; #1737 strangler",
 	"ktlint.ts": "reads its own exit status; #1737 strangler",
-	"oxlint.ts": "reads its own exit status; #1737 strangler",
 	"php-lint.ts": "reads its own exit status; #1737 strangler",
 	"prisma-validate.ts": "reads its own exit status; #1737 strangler",
 	"psscriptanalyzer.ts": "reads its own exit status; #1737 strangler",
-	"pyright.ts": "reads its own exit status; #1737 strangler",
 	"rubocop.ts": "reads its own exit status; #1737 strangler",
 	"ruff.ts": "reads its own exit status; #1737 strangler",
 	"rust-clippy.ts": "reads its own exit status; #1737 strangler",
-	"shellcheck.ts": "reads its own exit status; #1737 strangler",
 	"shfmt.ts": "reads its own exit status; #1737 strangler",
 	"spotbugs.ts": "reads its own exit status; #1737 strangler",
 	"zig-check.ts": "reads its own exit status; #1737 strangler",
@@ -109,8 +105,12 @@ describe("run-outcome primitive ratchet", () => {
 	// means a revert cannot pass by quietly adding an exemption instead.
 	it("pins the runners already on the primitive", () => {
 		for (const name of [
+			"biome-check.ts",
 			"go-vet.ts",
+			"oxlint.ts",
 			"phpstan.ts",
+			"pyright.ts",
+			"shellcheck.ts",
 			"markdownlint.ts",
 			"mypy.ts",
 			"spellcheck.ts",

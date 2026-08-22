@@ -14,6 +14,7 @@ import {
 } from "./utils/runner-helpers.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { parseToolRun } from "./utils/tool-failure.js";
+import { finishParsedRun } from "./utils/tool-failure.js";
 
 const mypy = createAvailabilityChecker("mypy", "");
 
@@ -120,16 +121,12 @@ const mypyRunner: RunnerDefinition = {
 		if (run.skipped) return run.skipped;
 
 		const diagnostics = run.diagnostics;
-		if (diagnostics.length === 0) {
-			return { status: "succeeded", diagnostics: [], semantic: "none" };
-		}
-
-		const hasBlocking = diagnostics.some((d) => d.semantic === "blocking");
-		return {
-			status: hasBlocking ? "failed" : "succeeded",
+		return finishParsedRun({
+			tool: "mypy",
+			ctx,
+			result,
 			diagnostics,
-			semantic: hasBlocking ? "blocking" : "warning",
-		};
+		});
 	},
 };
 

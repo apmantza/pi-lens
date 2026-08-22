@@ -13,6 +13,7 @@ import {
 } from "./utils/runner-helpers.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { parseToolRun } from "./utils/tool-failure.js";
+import { finishParsedRun } from "./utils/tool-failure.js";
 
 const sqlfluff = createAvailabilityChecker("sqlfluff", ".exe");
 
@@ -194,15 +195,13 @@ const sqlfluffRunner: RunnerDefinition = {
 		if (run.skipped) return run.skipped;
 
 		const diagnostics = run.diagnostics;
-		if (diagnostics.length === 0) {
-			return { status: "succeeded", diagnostics: [], semantic: "none" };
-		}
-
-		return {
-			status: "failed",
+		return finishParsedRun({
+			tool: "sqlfluff",
+			ctx,
+			result,
 			diagnostics,
-			semantic: "warning",
-		};
+			classify: () => ({ status: "failed", semantic: "warning" }),
+		});
 	},
 };
 

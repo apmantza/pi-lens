@@ -16,6 +16,7 @@ import {
 } from "./utils/runner-helpers.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { parseToolRun } from "./utils/tool-failure.js";
+import { finishParsedRun } from "./utils/tool-failure.js";
 
 const markdownlint = createAvailabilityChecker("markdownlint-cli2", ".cmd");
 
@@ -148,11 +149,13 @@ const markdownlintRunner: RunnerDefinition = {
 		if (run.skipped) return run.skipped;
 
 		const diagnostics = run.diagnostics;
-		if (diagnostics.length === 0) {
-			return { status: "succeeded", diagnostics: [], semantic: "none" };
-		}
-
-		return { status: "succeeded", diagnostics, semantic: "warning" };
+		return finishParsedRun({
+			tool: "markdownlint",
+			ctx,
+			result,
+			diagnostics,
+			classify: () => ({ status: "succeeded", semantic: "warning" }),
+		});
 	},
 };
 

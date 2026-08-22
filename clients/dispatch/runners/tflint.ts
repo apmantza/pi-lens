@@ -14,6 +14,7 @@ import {
 	resolveAvailableOrInstall,
 } from "./utils/runner-helpers.js";
 import { parseToolRun } from "./utils/tool-failure.js";
+import { finishParsedRun } from "./utils/tool-failure.js";
 
 const tflint = createAvailabilityChecker("tflint", ".exe");
 
@@ -122,16 +123,19 @@ const tflintRunner: RunnerDefinition = {
 		if (run.skipped) return run.skipped;
 
 		const diagnostics = run.diagnostics;
-		if (diagnostics.length === 0) {
-			return { status: "succeeded", diagnostics: [], semantic: "none" };
-		}
-
-		const hasErrors = diagnostics.some((d) => d.severity === "error");
-		return {
-			status: hasErrors ? "failed" : "succeeded",
+		return finishParsedRun({
+			tool: "tflint",
+			ctx,
+			result,
 			diagnostics,
-			semantic: hasErrors ? "blocking" : "warning",
-		};
+			classify: (diagnostics) => {
+				const hasErrors = diagnostics.some((d) => d.severity === "error");
+				return {
+					status: hasErrors ? "failed" : "succeeded",
+					semantic: hasErrors ? "blocking" : "warning",
+				};
+			},
+		});
 	},
 };
 

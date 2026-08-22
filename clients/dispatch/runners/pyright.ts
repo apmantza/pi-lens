@@ -21,6 +21,7 @@ import {
 	createAvailabilityChecker,
 	resolveAvailableOrInstall,
 } from "./utils/runner-helpers.js";
+import { finishParsedRun } from "./utils/tool-failure.js";
 
 const pyright = createAvailabilityChecker("pyright", ".exe");
 
@@ -88,28 +89,34 @@ const pyrightRunner: RunnerDefinition = {
 
 		const output = (result.stdout || "").trim();
 		if (!output) {
-			return { status: "succeeded", diagnostics: [], semantic: "none" };
+			// Empty stdout with a nonzero exit and stderr chatter is an unreadable
+			// report of problems, never clean (#1839). The helper turns that into
+			// failed + parse-error; exit 0 stays clean.
+			return finishParsedRun({
+				tool: "pyright",
+				ctx,
+				result,
+				diagnostics: [],
+			});
 		}
 
 		try {
 			const data = JSON.parse(output);
 			const diagnostics = parsePyrightOutput(data, ctx.filePath);
 
-			if (diagnostics.length === 0) {
-				return { status: "succeeded", diagnostics: [], semantic: "none" };
-			}
-
-			const hasErrors = diagnostics.some((d) => d.severity === "error");
-
-			return {
-				status: hasErrors ? "failed" : "succeeded",
+			return finishParsedRun({
+				tool: "pyright",
+				ctx,
+				result,
 				diagnostics,
-				semantic: hasErrors
-					? "blocking"
-					: diagnostics.length > 0
-						? "warning"
-						: "none",
-			};
+				classify: (diagnostics) => {
+					const hasErrors = diagnostics.some((d) => d.severity === "error");
+					return {
+						status: hasErrors ? "failed" : "succeeded",
+						semantic: hasErrors ? "blocking" : "warning",
+					};
+				},
+			});
 			// pi-lens-ignore: missing-error-propagation
 		} catch {
 			logExtension({

@@ -94,7 +94,10 @@ const shfmtRunner: RunnerDefinition = {
 		// .editorconfig — otherwise this nags on every shell write against shfmt's
 		// defaults (#211). Parse errors (above) are always reported.
 		if (!hasEditorConfig(cwd)) {
-			return { status: "succeeded", diagnostics: [], semantic: "none" };
+			// #211: without project opt-in, do not nag about formatting. But
+			// shfmt DID exit 1 — differences exist — so this is "chose not to
+			// check", reported as skipped, never as a clean result (#1839).
+			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
 		// Extract first changed line from diff if possible

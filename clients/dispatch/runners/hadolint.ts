@@ -13,6 +13,7 @@ import {
 	resolveToolCommandWithInstallFallback,
 } from "./utils/runner-helpers.js";
 import { parseToolRun } from "./utils/tool-failure.js";
+import { finishParsedRun } from "./utils/tool-failure.js";
 
 const hadolint = createAvailabilityChecker("hadolint", ".exe");
 
@@ -90,17 +91,19 @@ const hadolintRunner: RunnerDefinition = {
 		if (run.skipped) return run.skipped;
 
 		const diagnostics = run.diagnostics;
-
-		if (diagnostics.length === 0) {
-			return { status: "succeeded", diagnostics: [], semantic: "none" };
-		}
-
-		const hasErrors = diagnostics.some((d) => d.severity === "error");
-		return {
-			status: "failed",
+		return finishParsedRun({
+			tool: "hadolint",
+			ctx,
+			result,
 			diagnostics,
-			semantic: hasErrors ? "blocking" : "warning",
-		};
+			classify: (diagnostics) => {
+				const hasErrors = diagnostics.some((d) => d.severity === "error");
+				return {
+					status: "failed",
+					semantic: hasErrors ? "blocking" : "warning",
+				};
+			},
+		});
 	},
 };
 

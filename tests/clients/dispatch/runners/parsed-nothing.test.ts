@@ -353,7 +353,17 @@ describe("runners that reached the gate through spawnFailedWithNoOutput (#1948 F
 				createCtx("terraform", filePath, env.tmpDir) as never,
 			);
 
-			expect(result.diagnostics).toEqual([]);
+			// #1839: the parsed-nothing degradation record still fires, AND the
+			// result is no longer silently clean — a nonzero exit whose report
+			// carries errors our parser never read surfaces as failed with an
+			// explicit parse-error diagnostic.
+			expect(result.status).toBe("failed");
+			expect(result.diagnostics).toHaveLength(1);
+			expect(result.diagnostics[0]).toMatchObject({
+				id: "tflint:parse-error:1",
+				severity: "warning",
+				semantic: "warning",
+			});
 			const { row } = parsedNothingRow(summary, "tflint");
 			expect(
 				row,

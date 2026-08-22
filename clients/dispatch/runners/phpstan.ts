@@ -14,6 +14,7 @@ import {
 } from "./utils/runner-helpers.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { parseToolRun } from "./utils/tool-failure.js";
+import { finishParsedRun } from "./utils/tool-failure.js";
 
 // phpstan's documented exit codes: 0 = no errors, 1 = errors found, 2 = a
 // fatal/internal error that stopped the analysis. Only 1 is a run that carries
@@ -167,11 +168,13 @@ const phpstanRunner: RunnerDefinition = {
 		if (run.skipped) return run.skipped;
 
 		const diagnostics = run.diagnostics;
-		if (diagnostics.length === 0) {
-			return { status: "succeeded", diagnostics: [], semantic: "none" };
-		}
-
-		return { status: "failed", diagnostics, semantic: "blocking" };
+		return finishParsedRun({
+			tool: "phpstan",
+			ctx,
+			result,
+			diagnostics,
+			classify: () => ({ status: "failed", semantic: "blocking" }),
+		});
 	},
 };
 

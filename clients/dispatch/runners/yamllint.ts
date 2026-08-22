@@ -12,6 +12,7 @@ import {
 	resolveToolCommandWithInstallFallback,
 } from "./utils/runner-helpers.js";
 import { parseToolRun } from "./utils/tool-failure.js";
+import { finishParsedRun } from "./utils/tool-failure.js";
 
 const yamllint = createAvailabilityChecker("yamllint", ".exe");
 
@@ -94,16 +95,12 @@ const yamllintRunner: RunnerDefinition = {
 		if (run.skipped) return run.skipped;
 
 		const diagnostics = run.diagnostics;
-		if (diagnostics.length === 0) {
-			return { status: "succeeded", diagnostics: [], semantic: "none" };
-		}
-
-		const hasBlocking = diagnostics.some((d) => d.semantic === "blocking");
-		return {
-			status: hasBlocking ? "failed" : "succeeded",
+		return finishParsedRun({
+			tool: "yamllint",
+			ctx,
+			result,
 			diagnostics,
-			semantic: hasBlocking ? "blocking" : "warning",
-		};
+		});
 	},
 };
 
