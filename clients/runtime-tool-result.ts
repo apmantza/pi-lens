@@ -121,6 +121,8 @@ interface ToolResultDeps {
 	 * Do not pass from external callers.
 	 */
 	_bypassDebounce?: boolean;
+	/** #2000: overrides the change-log source for this synthetic dispatch. */
+	_mutationSourceOverride?: ProjectChangeSource;
 	/** Internal bounded provenance carried through debounce/coalescing. */
 	_telemetryParticipantIds?: string[];
 	_telemetryParticipantTotal?: number;
@@ -583,6 +585,9 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 				});
 			}
 		}
+		// wp iterates opaquePaths VERBATIM (already normalizeMapKey keys), so the
+		// set must hold those exact strings - no re-resolution.
+		const opaqueSet = new Set(opaquePaths);
 		const written = [
 			...recognized.filter(
 				(wp) =>
@@ -599,12 +604,16 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			const autofixMode = receipt
 				? receipt.call(runtime, wp, "write").autofixMode
 				: "immediate";
+			// Recovered opaque writes carry their own source so the change log
+			// distinguishes them from parsed writes (auditable in production).
+			const isOpaque = opaqueSet.has(wp);
 			const syntheticResult = await handleToolResult({
 				...deps,
 				event: { ...event, toolName: "write", input: { path: wp } },
 				_bypassDebounce: true,
 				_autofixMode: autofixMode,
 				_attachmentBudget: syntheticAttachmentBudget,
+				_mutationSourceOverride: isOpaque ? "opaque-script" : undefined,
 			});
 			if (syntheticResult) {
 				// #1590: forward verbatim. The synthetic call already charged the
@@ -945,7 +954,9 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		runtime,
 		cwd: turnStateCwd,
 		filePath,
-		source: sourceForToolName(event.toolName, event.details),
+		source:
+			deps._mutationSourceOverride ??
+			sourceForToolName(event.toolName, event.details),
 		changedRange: singleRange(modifiedRanges),
 		dbg,
 	});

@@ -10,6 +10,7 @@ export type ProjectChangeSource =
 	| "autofix"
 	| "partial-apply"
 	| "lsp-edit"
+	| "opaque-script"
 	| "external";
 
 export interface ProjectChangeRange {
