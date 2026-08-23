@@ -2094,9 +2094,89 @@ describe("lens_diagnostics mode=full", () => {
 
 		const result = await run(makeTool({}, lspService), { mode: "full" });
 		const text = String(result.content[0].text);
-		expect(text).toContain("cached dispatch message");
-		expect(text).not.toContain("same diagnostic from workspace scan");
+		// #1993: a CONFIRMED, fully-covered sweep is AUTHORITATIVE for the file -
+		// the fresh workspace-scan copy renders and the cached dispatch-time
+		// copy is retired instead of the reverse. Still exactly ONE row (the
+		// dedup-by-file/line/rule guarantee is unchanged).
+		expect(text).toContain("same diagnostic from workspace scan");
+		expect(text).not.toContain("cached dispatch message");
 		expect(result.details).toMatchObject({ totalBlocking: 1, totalErrors: 1 });
+	});
+
+	it("a clean fully-covered sweep RETIRES stale widget blockers for the file (#1993)", async () => {
+		// The #1993 defect: mid-edit broken-state diagnostics captured in the
+		// widget store rendered as current blocking findings forever, because
+		// mode=full's merge was additive-only - a clean authoritative sweep
+		// never retired them.
+		mockSummaries.length = 0;
+		mockSummaries.push(
+			sum(
+				"/proj/src/stale.ts",
+				{ blocking: 1, errors: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "error",
+							semantic: "blocking",
+							message:
+								"Duplicate function implementation (stale mid-edit state)",
+							line: 400,
+							rule: "ts:2393",
+							tool: "lsp",
+						},
+					],
+				},
+			),
+		);
+		const lspService = {
+			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([
+				{
+					filePath: "/proj/src/stale.ts",
+					diagnostics: [],
+					count: 0,
+				},
+			]),
+		};
+
+		const result = await run(makeTool({}, lspService), { mode: "full" });
+		const text = String(result.content[0].text);
+		expect(text).not.toContain("stale mid-edit state");
+		// details omits totalBlocking entirely when zero.
+		expect(
+			(result.details as { totalBlocking?: number }).totalBlocking ?? 0,
+		).toBe(0);
+
+		// Fail-open guard: WITHOUT a sweep result for the file (unconfirmed /
+		// not re-checked), the stored finding must stay visible.
+		mockSummaries.length = 0;
+		mockSummaries.push(
+			sum(
+				"/proj/src/stale.ts",
+				{ blocking: 1, errors: 1 },
+				{
+					diagnostics: [
+						{
+							severity: "error",
+							semantic: "blocking",
+							message:
+								"Duplicate function implementation (stale mid-edit state)",
+							line: 400,
+							rule: "ts:2393",
+							tool: "lsp",
+						},
+					],
+				},
+			),
+		);
+		const noSweepService = {
+			runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
+		};
+		const keepResult = await run(makeTool({}, noSweepService), {
+			mode: "full",
+		});
+		expect(String(keepResult.content[0].text)).toContain(
+			"stale mid-edit state",
+		);
 	});
 
 	it("dedups the napi project scan against ast-grep LSP findings despite the source prefix (#308)", async () => {
