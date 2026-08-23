@@ -10,7 +10,9 @@ import { logLatency } from "./latency-logger.js";
 import { normalizeMapKey } from "./path-utils.js";
 import {
 	captureFileStats,
-	getOpaqueSnapshotStore,
+	getOpaqueBaselineStore,
+	isGitWorktree,
+	type PendingOpaqueBaseline,
 } from "./opaque-mutation-scan.js";
 import { normalizeForGuardMatch } from "./host-edit-normalize.js";
 import { retargetReplacementIndentation } from "./indent-retarget.js";
@@ -505,22 +507,40 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 			const scanRoot = ctx.cwd ?? runtime.projectRoot;
 			if (scanRoot) {
 				const started = Date.now();
-				const outcome = await captureFileStats(scanRoot);
-				if (outcome.snapshot) {
-					// Session-stamped key: a concurrent-secondary session (#473)
-					// replacing this slot must yield a no-pending-snapshot UNKNOWN
-					// for us - never a diff against another session's baseline.
-					getOpaqueSnapshotStore().record(
-						`${normalizeMapKey(path.resolve(scanRoot))}:${runtime.sessionGeneration}`,
-						outcome.snapshot,
-					);
+				const rootKey = `${normalizeMapKey(path.resolve(scanRoot))}:${runtime.sessionGeneration}`;
+				let baseline: PendingOpaqueBaseline;
+				let resultNote: string;
+				if (await isGitWorktree(scanRoot)) {
+					// Git-first: the timestamp IS the baseline; git answers what
+					// changed, at any repo size, with no file-universe cap.
+					baseline = { startedAt: started, strategy: "git" };
+					resultNote = "git";
+				} else {
+					const outcome = await captureFileStats(scanRoot);
+					baseline = outcome.snapshot
+						? {
+								startedAt: started,
+								strategy: "stat-diff",
+								stats: outcome.snapshot,
+							}
+						: {
+								startedAt: started,
+								strategy: "stat-diff",
+								statsUnknownReason: outcome.unknownReason ?? "walk-failed",
+							};
+					resultNote =
+						outcome.unknownReason ?? `scanned:${outcome.scannedCount}`;
 				}
+				// Session-stamped key: a concurrent-secondary session (#473)
+				// replacing this slot must yield a no-pending-snapshot UNKNOWN
+				// for us - never a diff against another session's baseline.
+				getOpaqueBaselineStore().record(rootKey, baseline);
 				logLatency({
 					type: "phase",
 					phase: "opaque_mutation_prescan",
 					filePath: commandInput.command.slice(0, 80),
 					durationMs: Date.now() - started,
-					result: outcome.unknownReason ?? `scanned:${outcome.scannedCount}`,
+					result: resultNote,
 				});
 			}
 		}

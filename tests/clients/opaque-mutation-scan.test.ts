@@ -8,13 +8,34 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { execSync } from "node:child_process";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The synthetic-write dispatch runs the full per-edit pipeline; point it at
+// a resolved verdict instead of spawning real linters over a bare temp repo
+// (same seam the runtime-tool-result suite mocks).
+vi.mock("../../clients/pipeline.js", () => ({
+	runPipeline: vi.fn().mockResolvedValue({
+		output: "✓ no blockers",
+		hasBlockers: false,
+		isError: false,
+		fileModified: false,
+	}),
+}));
+
+import { handleToolCall } from "../../clients/runtime-tool-call.js";
+import { handleToolResult } from "../../clients/runtime-tool-result.js";
+import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import { CacheManager } from "../../clients/cache-manager.js";
+import { getProjectChangeLogPath } from "../../clients/project-changes.js";
+import type { ProjectChangeEntry } from "../../clients/project-changes.js";
 
 import {
 	captureFileStats,
 	diffFileStats,
+	OpaqueBaselineStore,
 	OPAQUE_SCAN_MAX_FILES,
-	OpaqueSnapshotStore,
+	recoverOpaqueChangesViaGit,
 } from "../../clients/opaque-mutation-scan.js";
 import { normalizeMapKey } from "../../clients/path-utils.js";
 import { removeTempDirSync } from "./test-utils.js";
@@ -78,14 +99,142 @@ describe("diffFileStats", () => {
 	});
 });
 
-describe("OpaqueSnapshotStore", () => {
+describe("OpaqueBaselineStore", () => {
 	it("one slot per cwd: take consumes, replacement evicts with a count", () => {
-		const store = new OpaqueSnapshotStore();
-		store.record("/p", new Map([["a", { mtimeMs: 1, size: 1 }]]));
-		store.record("/p", new Map([["b", { mtimeMs: 2, size: 2 }]]));
+		const store = new OpaqueBaselineStore();
+		store.record("/p", { startedAt: 1, strategy: "git" });
+		store.record("/p", { startedAt: 2, strategy: "git" });
 		expect(store.evictionCount).toBe(1);
 		const taken = store.take("/p");
-		expect(taken?.get("b")).toEqual({ mtimeMs: 2, size: 2 });
+		expect(taken?.startedAt).toBe(2);
 		expect(store.take("/p")).toBeUndefined();
 	});
+});
+
+describe("recoverOpaqueChangesViaGit (real git repo)", () => {
+	let repoDir = "";
+
+	beforeEach(() => {
+		repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-opaque-git-"));
+		execSync("git init -q", { cwd: repoDir });
+		execSync("git config user.email t@t.local", { cwd: repoDir });
+		execSync("git config user.name t", { cwd: repoDir });
+		fs.mkdirSync(path.join(repoDir, "src"), { recursive: true });
+		fs.writeFileSync(path.join(repoDir, "src", "base.ts"), "base\n", "utf8");
+		execSync("git add -A && git commit -qm base", { cwd: repoDir });
+	});
+
+	afterEach(() => {
+		removeTempDirSync(repoDir);
+	});
+
+	function nodeScriptFile(script: string): string {
+		const file = path.join(repoDir, `.opaque-child-${Date.now()}.cjs`);
+		fs.writeFileSync(file, script, "utf8");
+		return file;
+	}
+
+	function writeViaNodeChild(target: string, content: string): void {
+		const scriptFile = nodeScriptFile(
+			`require('fs').writeFileSync(${JSON.stringify(target)}, ${JSON.stringify(content)});`,
+		);
+		try {
+			execSync(`node "${scriptFile}"`, { cwd: repoDir });
+		} finally {
+			fs.rmSync(scriptFile, { force: true });
+		}
+	}
+
+	it("reports modified and added files inside the mtime window", async () => {
+		const startedAt = Date.now();
+		writeViaNodeChild(path.join(repoDir, "src", "base.ts"), "modified\n");
+		writeViaNodeChild(path.join(repoDir, "src", "new.ts"), "added\n");
+		const outcome = await recoverOpaqueChangesViaGit(repoDir, startedAt);
+		expect(outcome.verdict).toBe("recovered");
+		expect(outcome.paths).toContain(
+			normalizeMapKey(path.join(repoDir, "src", "base.ts")),
+		);
+		expect(outcome.paths).toContain(
+			normalizeMapKey(path.join(repoDir, "src", "new.ts")),
+		);
+	});
+
+	it("excludes files last written BEFORE the window floor", async () => {
+		// A pre-existing dirty file from long before the command started.
+		fs.writeFileSync(path.join(repoDir, "src", "base.ts"), "early\n", "utf8");
+		// A window that opens far in the future excludes everything on disk.
+		const outcome = await recoverOpaqueChangesViaGit(
+			repoDir,
+			Date.now() + 10_000,
+		);
+		expect(outcome.verdict).toBe("recovered");
+		expect(outcome.paths).toEqual([]);
+	});
+
+	it(
+		"end-to-end: node child write is recovered as opaque-script in the change log",
+		{ timeout: 15_000 },
+		async () => {
+			const previousDataDir = process.env.PILENS_DATA_DIR;
+			process.env.PILENS_DATA_DIR = path.join(repoDir, "data");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = repoDir;
+			runtime.setTelemetryIdentity({ sessionId: "opaque-e2e" });
+			try {
+				const target = path.join(repoDir, "src", "generated.ts");
+				const command = nodeScriptFile(
+					`require('fs').writeFileSync(${JSON.stringify(target)}, 'generated by child\\n');`,
+				);
+				await handleToolCall({
+					event: { toolName: "bash", input: { command } },
+					ctx: { cwd: repoDir },
+					lensEnabled: true,
+					getFlag: () => false,
+					dbg: () => {},
+					runtime,
+					cacheManager: new CacheManager(false),
+					ensureLSPConfigInitialized: async () => {},
+					updateLspStatus: () => {},
+					resetLSPService: () => {},
+				} as Parameters<typeof handleToolCall>[0]);
+				try {
+					execSync(`node "${command}"`, { cwd: repoDir });
+				} finally {
+					fs.rmSync(command, { force: true });
+				}
+				await handleToolResult({
+					event: {
+						toolName: "bash",
+						input: { command },
+						content: [{ type: "text", text: "done" }],
+					},
+					getFlag: () => false,
+					dbg: () => {},
+					runtime,
+					cacheManager: new CacheManager(false),
+					biomeClient: {},
+					ruffClient: {},
+					testRunnerClient: {},
+					metricsClient: {},
+					resetLSPService: () => {},
+					agentBehaviorRecord: () => [],
+					formatBehaviorWarnings: () => "",
+				} as unknown as Parameters<typeof handleToolResult>[0]);
+
+				const lines = fs
+					.readFileSync(getProjectChangeLogPath(repoDir), "utf8")
+					.split("\n")
+					.filter((l) => l.trim());
+				const entries = lines.map((l) => JSON.parse(l) as ProjectChangeEntry);
+				const recovered = entries.filter((e) => e.source === "opaque-script");
+				expect(recovered.length).toBeGreaterThanOrEqual(1);
+				expect(recovered.some((e) => e.filePath.endsWith("generated.ts"))).toBe(
+					true,
+				);
+			} finally {
+				if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
+				else process.env.PILENS_DATA_DIR = previousDataDir;
+			}
+		},
+	);
 });

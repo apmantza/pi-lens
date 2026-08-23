@@ -5,7 +5,8 @@ import { noteAuthoritativeContentAttachment } from "./agent-nudge.js";
 import {
 	captureFileStats,
 	diffFileStats,
-	getOpaqueSnapshotStore,
+	getOpaqueBaselineStore,
+	recoverOpaqueChangesViaGit,
 } from "./opaque-mutation-scan.js";
 import { normalizeMapKey } from "./path-utils.js";
 import {
@@ -559,20 +560,47 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		if (recognized.length === 0 && workspaceRoot && !getFlag("no-read-guard")) {
 			const scanRoot = workspaceRoot;
 			const started = Date.now();
-			const outcome = await captureFileStats(scanRoot);
-			const pending = getOpaqueSnapshotStore().take(
+			const pending = getOpaqueBaselineStore().take(
 				`${normalizeMapKey(path.resolve(scanRoot))}:${runtime.sessionGeneration}`,
 			);
-			if (pending && !outcome.unknownReason) {
-				opaquePaths = diffFileStats(pending, outcome.snapshot ?? new Map());
+			let unknownReason: string | undefined;
+			if (!pending) {
+				unknownReason = "no-pending-snapshot";
+			} else if (pending.strategy === "git") {
+				// Git-first: no universe cap - works on any repo size.
+				const recovery = await recoverOpaqueChangesViaGit(
+					scanRoot,
+					pending.startedAt,
+				);
+				if (recovery.verdict === "recovered") {
+					opaquePaths = recovery.paths.filter(
+						(p) =>
+							!isExternalOrVendorFile(p, scanRoot) &&
+							!isPathIgnoredByProject(p, scanRoot, false),
+					);
+				} else {
+					unknownReason = recovery.unknownReason;
+				}
+			} else if (pending.stats) {
+				const outcome = await captureFileStats(scanRoot);
+				if (outcome.snapshot && !outcome.unknownReason) {
+					opaquePaths = diffFileStats(pending.stats, outcome.snapshot);
+				} else {
+					unknownReason =
+						outcome.unknownReason ??
+						pending.statsUnknownReason ??
+						"walk-failed";
+				}
 			} else {
+				unknownReason = pending.statsUnknownReason ?? "walk-failed";
+			}
+			if (unknownReason) {
 				logLatency({
 					type: "phase",
 					phase: "opaque_mutation_coverage_unknown",
 					filePath: command.slice(0, 80),
 					durationMs: Date.now() - started,
-					result:
-						outcome.unknownReason ?? (pending ? "ok" : "no-pending-snapshot"),
+					result: unknownReason,
 				});
 			}
 			if (opaquePaths.length > 0) {
