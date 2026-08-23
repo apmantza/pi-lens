@@ -20,7 +20,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { collectSourceFilesAsync } from "./source-filter.js";
+import { collectSourceFilesWithBudgetAsync } from "./source-filter.js";
 import { normalizeMapKey } from "./path-utils.js";
 
 export interface FileStatEntry {
@@ -36,7 +36,7 @@ export const OPAQUE_SCAN_MAX_FILES = 2000;
 export interface CaptureOutcome {
 	snapshot?: FileStatsSnapshot;
 	/** Why no usable snapshot was produced (then snapshot is undefined). */
-	unknownReason?: "walk-failed" | "file-cap-exceeded";
+	unknownReason?: "walk-failed" | "file-cap-exceeded" | "entry-budget-exceeded";
 	scannedCount: number;
 }
 
@@ -45,13 +45,18 @@ export async function captureFileStats(
 	budgetMs = 50,
 ): Promise<CaptureOutcome> {
 	try {
-		const files = await collectSourceFilesAsync(root, {
+		const walk = await collectSourceFilesWithBudgetAsync(root, {
 			maxFiles: OPAQUE_SCAN_MAX_FILES + 1,
 			budgetMs,
 		});
-		if (files.length > OPAQUE_SCAN_MAX_FILES) {
+		const files = walk.files;
+		if (walk.entryBudgetExceeded || files.length > OPAQUE_SCAN_MAX_FILES) {
+			// A PARTIAL universe must never read as a confident diff (invariant 3):
+			// writes in the unvisited tail would silently vanish.
 			return {
-				unknownReason: "file-cap-exceeded",
+				unknownReason: walk.entryBudgetExceeded
+					? "entry-budget-exceeded"
+					: "file-cap-exceeded",
 				scannedCount: files.length,
 			};
 		}

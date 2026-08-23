@@ -561,7 +561,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			const started = Date.now();
 			const outcome = await captureFileStats(scanRoot);
 			const pending = getOpaqueSnapshotStore().take(
-				normalizeMapKey(path.resolve(scanRoot)),
+				`${normalizeMapKey(path.resolve(scanRoot))}:${runtime.sessionGeneration}`,
 			);
 			if (pending && !outcome.unknownReason) {
 				opaquePaths = diffFileStats(pending, outcome.snapshot ?? new Map());

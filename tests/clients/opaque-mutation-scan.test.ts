@@ -1,7 +1,8 @@
 /**
  * Opaque-mutation recovery (#2000 phase 2) — real-filesystem tests: actual
- * stat walks over temp trees, real diffs, real child-process writes are
- * covered at the handler level; this file pins the seam contract.
+ * stat walks over temp trees and real diffs. This file pins the SEAM contract
+ * only; handler wiring coverage (real node -e / python -c child writes through
+ * handleToolCall/handleToolResult) is PR-B scope and NOT covered here.
  */
 import * as fs from "node:fs";
 import * as os from "node:os";

@@ -507,8 +507,11 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 				const started = Date.now();
 				const outcome = await captureFileStats(scanRoot);
 				if (outcome.snapshot) {
+					// Session-stamped key: a concurrent-secondary session (#473)
+					// replacing this slot must yield a no-pending-snapshot UNKNOWN
+					// for us - never a diff against another session's baseline.
 					getOpaqueSnapshotStore().record(
-						normalizeMapKey(path.resolve(scanRoot)),
+						`${normalizeMapKey(path.resolve(scanRoot))}:${runtime.sessionGeneration}`,
 						outcome.snapshot,
 					);
 				}
