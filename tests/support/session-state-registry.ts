@@ -902,6 +902,9 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	"lsp/client.ts": 2,
 	"lsp/config.ts": 1,
 	"lsp/index.ts": 2,
+	// #2000 phase 2: the pending-baseline store (one slot per cwd:generation)
+	// plus the process-global Symbol.for slot; cleared via resetOpaqueMutationState.
+	"opaque-mutation-scan.ts": 1,
 	"lsp/jvm-runtime.ts": 0,
 	"lsp/spawn-history.ts": 1,
 	"lsp/server.ts": 5,
