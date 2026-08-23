@@ -135,7 +135,7 @@ export async function captureFileStats(
 					options.withHashes &&
 					hashBytesSpent + stat.size <= OPAQUE_HASH_BUDGET_BYTES
 				) {
-					entry.hash = createHash("sha1")
+					entry.hash = createHash("sha256")
 						.update(await fs.promises.readFile(file))
 						.digest("hex");
 					hashBytesSpent += stat.size;
@@ -159,14 +159,17 @@ export function diffFileStats(
 	const changed: string[] = [];
 	for (const [key, stat] of after) {
 		const prev = before.get(key);
-		if (!prev || prev.mtimeMs !== stat.mtimeMs || prev.size !== stat.size) {
-			changed.push(key);
-		} else if (
-			prev.hash !== undefined &&
+		// Content confirm: same mtime tick + same size but different bytes.
+		const contentConfirm =
+			prev?.hash !== undefined &&
 			stat.hash !== undefined &&
-			prev.hash !== stat.hash
+			prev.hash !== stat.hash;
+		if (
+			!prev ||
+			prev.mtimeMs !== stat.mtimeMs ||
+			prev.size !== stat.size ||
+			contentConfirm
 		) {
-			// Content confirm: same mtime tick + same size but different bytes.
 			changed.push(key);
 		}
 	}
