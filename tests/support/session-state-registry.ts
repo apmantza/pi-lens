@@ -88,9 +88,9 @@ import * as formattersModule from "../../clients/formatters.js";
 import { resetZizmorTokenAvailability } from "../../clients/zizmor-config.js";
 import * as zizmorConfigModule from "../../clients/zizmor-config.js";
 import {
-	_resetSpawnTimeoutCooldownForTests,
 	isInSpawnTimeoutCooldown,
 	noteSpawnTimeout,
+	resetSpawnTimeoutCooldowns,
 } from "../../clients/spawn-timeout-cooldown.js";
 import {
 	consumeHostReadyDelayAnchor,
@@ -546,7 +546,7 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 		module: "spawn-timeout-cooldown.ts",
 		state: "timedOutByCommand",
 		policy: "session_start",
-		resetName: "_resetSpawnTimeoutCooldownForTests",
+		resetName: "resetSpawnTimeoutCooldowns",
 		reason:
 			"#1995: a wedged command's post-timeout cooldown is session-scoped - a hot loop of edits must not hand the same .cmd shim a second budget, but a NEW session may retry because the executable or its environment may have changed.",
 		probe: {
@@ -558,7 +558,7 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 				});
 			},
 			isArmed: () => !isInSpawnTimeoutCooldown("/pi-lens-probe-cmd"),
-			reset: () => _resetSpawnTimeoutCooldownForTests(),
+			reset: () => resetSpawnTimeoutCooldowns(),
 		},
 	},
 	{

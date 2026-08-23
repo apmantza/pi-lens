@@ -41,6 +41,7 @@ import {
 	shouldAutoInstallTool,
 } from "../../../tool-policy.js";
 import type { DispatchContext } from "../../types.js";
+import { isInSpawnTimeoutCooldown } from "../../../spawn-timeout-cooldown.js";
 import {
 	type AvailabilityCause,
 	type AvailabilityLatch,
@@ -1011,6 +1012,27 @@ export function createAvailabilityChecker(
 			}
 
 			const cmd = await findCommand(resolvedCwd);
+			// #1995: a command cooling down after a RUNTIME timeout (lint or
+			// autofix lane blew its real budget) must not re-probe on every
+			// edit - the positive verdict is effectively cooled. Consult-only:
+			// probe timeouts do NOT arm the cooldown here, because a single
+			// slow --version under host stall (#1467) is transient evidence,
+			// and session-long suppression from it would contradict the
+			// #1494 retry ladder this classification exists for.
+			if (isInSpawnTimeoutCooldown(cmd)) {
+				noteDecision(cache, resolvedCwd, {
+					available: false,
+					outcome: "transient",
+					cause: "probe-timeout",
+					elapsedMs: 0,
+					classifiedBy: "caller",
+					evidence: {
+						command: cmd,
+						status: null,
+					},
+				});
+				return false;
+			}
 			const env = await options.environment?.(resolvedCwd);
 			// The probe budget is enforced by a HOST-side timer, so host event-loop
 			// stalls are charged to the child. Measure the stall that overlapped the

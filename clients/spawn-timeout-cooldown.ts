@@ -25,7 +25,6 @@
 
 import path from "node:path";
 import { logLatency } from "./latency-logger.js";
-import { normalizeEphemeralMapKey } from "./path-utils.js";
 
 interface SpawnTimeoutRecord {
 	tool: string;
@@ -73,8 +72,23 @@ export interface NoteSpawnTimeoutInput {
 	durationMs?: number;
 }
 
+/**
+ * Cooldown key: the command's basename minus extension, lowercased.
+ *
+ * Deliberately NOT the full resolved path: the three lanes resolve the same
+ * physical binary through different helpers (PATH-resolved absolute,
+ * `<cwd>/node_modules/.bin/...`, bare name), and cross-lane sharing is the
+ * entire point (#1995 - otherwise each lane pays its own first budget).
+ */
+function cooldownKey(command: string): string {
+	return path
+		.basename(command)
+		.replace(/\.[^.]+$/, "")
+		.toLowerCase();
+}
+
 export function noteSpawnTimeout(input: NoteSpawnTimeoutInput): void {
-	const key = normalizeEphemeralMapKey(input.command);
+	const key = cooldownKey(input.command);
 	timedOutByCommand.set(key, {
 		tool: input.tool,
 		command: input.command,
@@ -105,10 +119,14 @@ export function noteSpawnTimeout(input: NoteSpawnTimeoutInput): void {
  * an honest "not checked" outcome (skipped / 0-fixes), never clean.
  */
 export function isInSpawnTimeoutCooldown(command: string): boolean {
-	return timedOutByCommand.has(normalizeEphemeralMapKey(command));
+	return timedOutByCommand.has(cooldownKey(command));
 }
 
-/** Test-only reset; also the session-start re-arm seam via the registry. */
-export function _resetSpawnTimeoutCooldownForTests(): void {
+/**
+ * Session-start re-arm seam (registered in the session-state registry):
+ * a new session may retry a command the previous session cooled down -
+ * the executable or its environment may have changed.
+ */
+export function resetSpawnTimeoutCooldowns(): void {
 	timedOutByCommand.clear();
 }

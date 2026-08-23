@@ -650,7 +650,9 @@ async function tryDetektFix(filePath: string, cwd: string): Promise<number> {
 	);
 }
 
-async function tryMarkdownlintFix(
+// Exported for #1995 cooldown wiring tests: the guard on this lane is
+// one of three mutation-proof surfaces.
+export async function tryMarkdownlintFix(
 	filePath: string,
 	cwd: string,
 ): Promise<number> {
