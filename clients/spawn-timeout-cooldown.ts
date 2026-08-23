@@ -98,7 +98,6 @@ function cooldownKey(command: string): string {
 
 export function noteSpawnTimeout(input: NoteSpawnTimeoutInput): void {
 	const key = cooldownKey(input.command);
-	console.log("[DBG] seam logLatency:", typeof logLatency, logLatency?.name);
 	timedOutByCommand.set(key, {
 		tool: input.tool,
 		command: input.command,

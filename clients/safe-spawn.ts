@@ -89,12 +89,23 @@ export function resolveTeardownOutcome(input: {
 	killStartedAtMs?: number;
 	deathObservedAtMs?: number;
 	escalated: boolean;
-}): { ms: number; outcome: "exited" | "killed-by-signal" | "escalate-kill" } {
+}):
+	| {
+			ms: number;
+			outcome: "exited" | "killed-by-signal" | "escalate-kill";
+	  }
+	| undefined {
+	// Another path (abort / output-limit) owns this death: emitting teardown
+	// evidence here would describe a kill this timeout didn't perform.
 	if (
 		input.killStartedAtMs === undefined ||
-		input.deathObservedAtMs === undefined ||
-		input.deathObservedAtMs <= input.killStartedAtMs
+		input.deathObservedAtMs === undefined
 	) {
+		return undefined;
+	}
+	// True natural-exit race: the child beat the budget-expired kill by a
+	// hair - death observed before (or exactly at) the kill start.
+	if (input.deathObservedAtMs <= input.killStartedAtMs) {
 		return { ms: 0, outcome: "exited" };
 	}
 	return {
@@ -126,7 +137,11 @@ export interface SpawnResult {
 	 * a slow teardown is visible rather than folded into "how long the tool
 	 * ran". `outcome`: the child beat the signal ("exited"), the first
 	 * signal ended it ("killed-by-signal"), or the SIGKILL escalation fired
-	 * ("escalate-kill").
+	 * ("escalate-kill"). Platform note: on Windows taskkill /F is always
+	 * forceful and arms no escalation timer, so "escalate-kill" is
+	 * POSIX-only; forced Windows kills report "killed-by-signal" despite no
+	 * signal being delivered - the name describes the semantic tier
+	 * (first-tier vs escalated force), not the OS mechanism.
 	 */
 	timeoutTeardown?: {
 		ms: number;
@@ -1640,7 +1655,7 @@ export async function safeSpawnAsync(
 					error: cause,
 					failure: "timeout",
 					...signalInfo,
-					timeoutTeardown,
+					...(timeoutTeardown && { timeoutTeardown }),
 					spawnFailure: new SpawnFailureError("timeout", cause.message, cause),
 					...outputInfo,
 					resourceUsage,

@@ -62,13 +62,13 @@ describe("resolveTeardownOutcome branches (#2010 deep review)", () => {
 		expect(out).toEqual({ ms: 0, outcome: "exited" });
 	});
 
-	it("no kill start at all (guard saw the child already dying): exited", () => {
+	it("no kill start (another path owns the death, review P2-2): field omitted", () => {
 		const out = resolveTeardownOutcome({
 			killStartedAtMs: undefined,
 			deathObservedAtMs: 4000,
 			escalated: false,
 		});
-		expect(out).toEqual({ ms: 0, outcome: "exited" });
+		expect(out).toBeUndefined();
 	});
 
 	it("clock jitter can never produce a negative duration", () => {
@@ -77,8 +77,9 @@ describe("resolveTeardownOutcome branches (#2010 deep review)", () => {
 			deathObservedAtMs: 1999,
 			escalated: true,
 		});
-		expect(out.ms).toBe(0);
-		expect(out.outcome).toBe("exited");
+		// Jitter lands in the same "death before kill" arm as the race: honest
+		// exited rather than a negative duration.
+		expect(out).toEqual({ ms: 0, outcome: "exited" });
 	});
 });
 
@@ -132,43 +133,46 @@ describe("timeout teardown evidence (#2010)", () => {
 		// emits (#1742 real-sink direction). Scoped to this test only.
 		const prevTestMode = process.env.PI_LENS_TEST_MODE;
 		process.env.PI_LENS_TEST_MODE = "0";
-		resetSpawnTimeoutCooldowns();
-		noteSpawnTimeout({
-			tool: "markdownlint",
-			command: "C:/ws/markdownlint-cli2.cmd",
-			phase: "lint",
-			durationMs: 15000,
-			teardown: { ms: 412, outcome: "escalate-kill" },
-		});
-		await flushLatencyLog();
+		try {
+			resetSpawnTimeoutCooldowns();
+			noteSpawnTimeout({
+				tool: "markdownlint",
+				command: "C:/ws/markdownlint-cli2.cmd",
+				phase: "lint",
+				durationMs: 15000,
+				teardown: { ms: 412, outcome: "escalate-kill" },
+			});
+			await flushLatencyLog();
 
-		// #1742 direction: assert against the REAL emitted row on disk - the
-		// same bytes a smell analyzer or human would read - instead of a
-		// module mock. vitest-setup points PI_LENS_HOME at a per-worker temp
-		// dir, so the read is hermetic.
-		const logPath = path.join(getGlobalPiLensDir(), "latency.log");
-		const rows = fs
-			.readFileSync(logPath, "utf8")
-			.split("\n")
-			.filter((line) => line.includes('"spawn_timeout_cooldown"'))
-			.map((line) => JSON.parse(line) as Record<string, unknown>)
-			.filter(
-				(r) =>
-					(r.metadata as Record<string, unknown>)?.command ===
-					"C:/ws/markdownlint-cli2.cmd",
-			);
-		expect(
-			rows.length,
-			"no spawn_timeout_cooldown row for the primed command",
-		).toBeGreaterThan(0);
-		const last = rows.at(-1);
-		expect(last?.metadata).toMatchObject({
-			timeoutBudgetMs: 15000,
-			teardownMs: 412,
-			teardownOutcome: "escalate-kill",
-		});
-		if (prevTestMode === undefined) delete process.env.PI_LENS_TEST_MODE;
-		else process.env.PI_LENS_TEST_MODE = prevTestMode;
+			// #1742 direction: assert against the REAL emitted row on disk - the
+			// same bytes a smell analyzer or human would read - instead of a
+			// module mock. vitest-setup points PI_LENS_HOME at a per-worker temp
+			// dir, so the read is hermetic.
+			const logPath = path.join(getGlobalPiLensDir(), "latency.log");
+			const rows = fs
+				.readFileSync(logPath, "utf8")
+				.split("\n")
+				.filter((line) => line.includes('"spawn_timeout_cooldown"'))
+				.map((line) => JSON.parse(line) as Record<string, unknown>)
+				.filter(
+					(r) =>
+						(r.metadata as Record<string, unknown>)?.command ===
+						"C:/ws/markdownlint-cli2.cmd",
+				);
+			expect(
+				rows.length,
+				"no spawn_timeout_cooldown row for the primed command",
+			).toBeGreaterThan(0);
+			const last = rows.at(-1);
+			expect(last?.metadata).toMatchObject({
+				timeoutBudgetMs: 15000,
+				teardownMs: 412,
+				teardownOutcome: "escalate-kill",
+			});
+		} finally {
+			if (prevTestMode === undefined) delete process.env.PI_LENS_TEST_MODE;
+			else process.env.PI_LENS_TEST_MODE = prevTestMode;
+		}
 	});
 
 	it(
