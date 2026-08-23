@@ -7,6 +7,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { minimatch } from "./deps/minimatch.js";
 import {
+	isInSpawnTimeoutCooldown,
+	noteSpawnTimeout,
+} from "./spawn-timeout-cooldown.js";
+import {
 	collectTrackedFiles,
 	getTrackedFilesSnapshot,
 } from "./git-tracked-ignore.js";
@@ -756,11 +760,25 @@ export async function detectFileChangedAfterCommand(
 		return 0;
 	}
 
+	// #1995: a command cooling down after a spawn timeout must not be handed
+	// a second budget - autofix is one of the lanes that paid twice for a
+	// wedged .cmd shim. Return "no fix applied" (an honest not-checked).
+	if (isInSpawnTimeoutCooldown(command)) return 0;
+
 	const result = await safeSpawnAsync(command, args, {
 		timeout: 30000,
 		cwd,
 	});
 	if (result.error) return 0;
+	if (result.failure === "timeout") {
+		noteSpawnTimeout({
+			tool: path.basename(command).replace(/\.[^.]+$/, ""),
+			command,
+			phase: "autofix",
+			durationMs: 30000,
+		});
+		return 0;
+	}
 	if (result.status !== 0 && !ignoreStatuses.includes(result.status ?? -1)) {
 		return 0;
 	}
