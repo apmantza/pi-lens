@@ -112,6 +112,9 @@ import { setSessionLanguages } from "./widget-state.js";
 import { logWordIndex } from "./word-index-logger.js";
 import { resetWorkspaceTopology } from "./workspace-topology.js";
 import { resetZizmorTokenAvailability } from "./zizmor-config.js";
+import {
+	_resetSpawnTimeoutCooldownForTests,
+} from "./spawn-timeout-cooldown.js";
 
 interface SessionStartDeps {
 	ctxCwd?: string;
@@ -2119,6 +2122,11 @@ export async function handleSessionStart(
 	// the tool for the rest of the process lifetime. Clear it here, same
 	// boundary as the other per-session caches on this line.
 	resetDispatchAvailabilityState();
+	// #1995: a command that TIMED OUT (not merely failed a probe) cools down
+	// for the rest of the session so a hot loop of edits cannot hand the same
+	// wedged .cmd shim a second budget. A new session may retry: the executable
+	// or its environment may have changed.
+	_resetSpawnTimeoutCooldownForTests();
 	// #1895: formatter PATH verdicts are session-scoped, but they live in
 	// formatters.ts and are not covered by the dispatch generation. Re-arm them
 	// here so a formatter installed or removed between sessions is observed by

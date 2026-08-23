@@ -88,6 +88,11 @@ import * as formattersModule from "../../clients/formatters.js";
 import { resetZizmorTokenAvailability } from "../../clients/zizmor-config.js";
 import * as zizmorConfigModule from "../../clients/zizmor-config.js";
 import {
+	_resetSpawnTimeoutCooldownForTests,
+	isInSpawnTimeoutCooldown,
+	noteSpawnTimeout,
+} from "../../clients/spawn-timeout-cooldown.js";
+import {
 	consumeHostReadyDelayAnchor,
 	resetHostReadyDelayAnchorForTests,
 } from "../../clients/startup-timing.js";
@@ -537,6 +542,26 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 			"The service is torn down and rebuilt per session; this reset is also the seam that carries the sweep hold and TS-repair guard resets.",
 	},
 	{
+		id: "spawn-timeout-cooldown:latches",
+		module: "spawn-timeout-cooldown.ts",
+		state: "timedOutByCommand",
+		policy: "session_start",
+		resetName: "_resetSpawnTimeoutCooldownForTests",
+		reason:
+			"#1995: a wedged command's post-timeout cooldown is session-scoped - a hot loop of edits must not hand the same .cmd shim a second budget, but a NEW session may retry because the executable or its environment may have changed.",
+		probe: {
+			arm: () => {
+				noteSpawnTimeout({
+					tool: "markdownlint",
+					command: "/pi-lens-probe-cmd",
+					phase: "lint",
+				});
+			},
+			isArmed: () => !isInSpawnTimeoutCooldown("/pi-lens-probe-cmd"),
+			reset: () => _resetSpawnTimeoutCooldownForTests(),
+		},
+	},
+	{
 		id: "formatters:whichLatches",
 		module: "formatters.ts",
 		state:
@@ -830,6 +855,10 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<Record<string, string>> = {
  */
 export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	"agent-nudge.ts": 1,
+	// #1995: the sweep counts 0 stateful symbols because the map lives behind
+	// the Symbol.for global (module-identity-proof by design); behavior is
+	// pinned by the registry entry's arm/disarm probe instead.
+	"spawn-timeout-cooldown.ts": 0,
 	"blocker-freshness.ts": 2,
 	"bounded-telemetry.ts": 2,
 	"bus-events-logger.ts": 1,

@@ -16,6 +16,10 @@ import {
 } from "./utils/runner-helpers.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { parseToolRun } from "./utils/tool-failure.js";
+import {
+	isInSpawnTimeoutCooldown,
+	noteSpawnTimeout,
+} from "../../spawn-timeout-cooldown.js";
 import { finishParsedRun } from "./utils/tool-failure.js";
 
 const markdownlint = createAvailabilityChecker("markdownlint-cli2", ".cmd");
@@ -126,6 +130,16 @@ const markdownlintRunner: RunnerDefinition = {
 
 		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
 
+		// #1995: a command cooling down after a spawn timeout already consumed
+		// its budget in another lane (availability verify, autofix --fix). Skip
+		// without spawning — "not checked", never re-reported as clean.
+		if (isInSpawnTimeoutCooldown(cmd)) {
+			ctx.log(
+				`markdownlint: ${cmd} is cooling down after a spawn timeout — skipping (one bounded failure budget per edit)`,
+			);
+			return { status: "skipped", diagnostics: [], semantic: "none" };
+		}
+
 		// Shared config-args seam (#1247): the autofix path consumes the same
 		// builder, so the package-owned fallback config can never drift.
 		const configArgs = markdownlintConfigArgs(cwd);
@@ -133,6 +147,18 @@ const markdownlintRunner: RunnerDefinition = {
 			timeout: 15000,
 			cwd,
 		});
+
+		// #1995: a timeout is negative runtime evidence. Arm the cooldown so
+		// the autofix and availability lanes cannot hand this command a second
+		// budget within the same session.
+		if (result.failure === "timeout") {
+			noteSpawnTimeout({
+				tool: "markdownlint",
+				command: cmd,
+				phase: "lint",
+				durationMs: 15000,
+			});
+		}
 
 		// #1816: this runner read `result.status` zero times, so an exit-2
 		// config error with an empty stdout parsed to zero diagnostics and was

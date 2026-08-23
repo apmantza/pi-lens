@@ -54,6 +54,7 @@ import {
 	getProjectIgnoreMatcher,
 	isExcludedDirName,
 } from "./file-utils.js";
+import { isInSpawnTimeoutCooldown } from "./spawn-timeout-cooldown.js";
 import type { FormatService } from "./format-service.js";
 import { logLatency } from "./latency-logger.js";
 import type { PostAutofixNotice } from "./post-autofix-notice.js";
@@ -655,6 +656,10 @@ async function tryMarkdownlintFix(
 ): Promise<number> {
 	const cmd = await resolveToolCommandWithInstallFallback(cwd, "markdownlint");
 	if (!cmd) return 0;
+	// #1995: skip the spawn entirely when the command is cooling down after a
+	// timeout — detectFileChangedAfterCommand also self-guards, but a wedged
+	// command should not even reach a second budget in the hot loop.
+	if (isInSpawnTimeoutCooldown(cmd)) return 0;
 	// Shared config-args seam (#1247): the lint runner consumes the same
 	// builder, so the bare --fix here can never fall back to markdownlint's
 	// default all-rules-on config again (the whole-file CHANGELOG/AGENTS
