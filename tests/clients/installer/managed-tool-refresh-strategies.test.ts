@@ -54,19 +54,14 @@ const TEST_HOME = vi.hoisted(() => {
 	return dir;
 });
 
-const { spawnMock, sessionLogSpy, httpsGetMock, childSpawnMock, renameMock } =
-	vi.hoisted(() => ({
+const { spawnMock, sessionLogSpy, httpsGetMock, renameMock } = vi.hoisted(
+	() => ({
 		spawnMock: vi.fn(),
 		sessionLogSpy: vi.fn(),
 		httpsGetMock: vi.fn(),
-		childSpawnMock: vi.fn(),
 		renameMock: vi.fn(),
-	}));
-
-vi.mock("node:child_process", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("node:child_process")>();
-	return { ...actual, default: actual, spawn: childSpawnMock };
-});
+	}),
+);
 
 // Every method delegates to the REAL `node:fs/promises` except `rename`,
 // which defaults to the real implementation too but is reconfigurable per
@@ -241,29 +236,6 @@ httpsGetMock.mockImplementation(
 	},
 );
 
-/**
- * `verifyToolBinary` runs the refreshed artifact through a bare
- * `child_process.spawn`, not `safeSpawnAsync`, so the post-refresh verification
- * needs its own stub. Default: the artifact runs and prints a version.
- */
-let verifyExitCode = 0;
-
-function installDefaultVerifySpawn(): void {
-	childSpawnMock.mockImplementation(() => {
-		const proc = new EventEmitter() as EventEmitter & {
-			stdout: EventEmitter;
-			stderr: EventEmitter;
-		};
-		proc.stdout = new EventEmitter();
-		proc.stderr = new EventEmitter();
-		queueMicrotask(() => {
-			proc.stdout.emit("data", "1.2.3");
-			proc.emit("exit", verifyExitCode, null);
-		});
-		return proc;
-	});
-}
-
 /** A `releases/latest` route for shfmt returning `tag`, plus its asset. */
 function routeGitHubRelease(
 	tag: string,
@@ -393,10 +365,7 @@ beforeEach(() => {
 	fs.rmSync(PROBE_CACHE_PATH, { force: true });
 	fs.mkdirSync(TOOLS_DIR, { recursive: true });
 	httpsRoutes = [];
-	verifyExitCode = 0;
 	httpsGetMock.mockClear();
-	childSpawnMock.mockReset();
-	installDefaultVerifySpawn();
 	spawnMock.mockReset();
 	sessionLogSpy.mockReset();
 	resetDegradationLedger();
@@ -724,7 +693,17 @@ describe("github strategy", () => {
 		});
 		routeGitHubRelease("v3.12.0", { etag: 'W/"new"' });
 		// The download succeeds, the asset is written, and the binary is broken.
-		verifyExitCode = 1;
+		// (#2015: the post-refresh verification runs through `safeSpawnAsync`,
+		// the same seam as every other spawn, so the broken-binary scenario
+		// overrides it directly: the refreshed artifact's --version probe exits
+		// nonzero while any other spawn keeps the beforeEach default.)
+		const baseSpawn = spawnMock.getMockImplementation();
+		spawnMock.mockImplementation(async (command: string, args: string[]) => {
+			if ((args ?? []).includes("--version")) {
+				return { stdout: "", stderr: "cannot execute", status: 126 };
+			}
+			return baseSpawn?.(command, args) ?? { stdout: "1.2.3", stderr: "", status: 0 };
+		});
 
 		const outcome = await runManagedToolRefresh(NOW);
 

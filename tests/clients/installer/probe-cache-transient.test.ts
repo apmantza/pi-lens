@@ -40,38 +40,27 @@ vi.mock("../../../clients/atomic-write.js", () => ({
 	writeFileAtomicAsync: mockWriteFileAtomicAsync,
 }));
 
-// ── child_process spawn mock ───────────────────────────────────────────────
-// The `.cmd` candidate simulates a real spawn timeout — Node kills the child
-// and fires `exit` with `code: null, signal: "SIGTERM"` — while the `.exe`
-// candidate answers cleanly. This is the #1569 shape: a preferred tier stalls
-// (never gets a fair run), a lower-priority candidate succeeds, and the
+// ── safe-spawn mock ──
+// #2015: verifyToolBinary probes route through `safeSpawnAsync`, not raw
+// `node:child_process.spawn`. The `.cmd` candidate simulates a real spawn
+// timeout — the prober is killed and reports `signal: "SIGTERM"` — while the
+// `.exe` candidate answers cleanly. This is the #1569 shape: a preferred tier
+// stalls (never gets a fair run), a lower-priority candidate succeeds, and the
 // SELECTION must remember that a candidate along the way was never confirmed
 // broken — only unlucky.
 const spawnCalls = vi.hoisted(() => [] as string[]);
-const mockSpawn = vi.hoisted(() =>
-	vi.fn((cmd: string) => {
+vi.mock("../../../clients/safe-spawn.js", () => ({
+	safeSpawn: vi.fn(() => ({ stdout: "", stderr: "", status: 0 })),
+	safeSpawnAsync: async (command: string) => {
+		const cmd = String(command);
 		spawnCalls.push(cmd);
-		const handlers: Record<string, (...args: unknown[]) => void> = {};
-		const proc = {
-			on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
-				handlers[event] = cb;
-				return proc;
-			}),
-			stdout: { on: vi.fn() },
-			stderr: { on: vi.fn() },
-			kill: vi.fn(),
-		};
-		setImmediate(() => {
-			if (cmd.includes(".cmd")) {
-				handlers.exit?.(null, "SIGTERM");
-			} else {
-				handlers.exit?.(0);
-			}
-		});
-		return proc;
-	}),
-);
-vi.mock("node:child_process", () => ({ spawn: mockSpawn }));
+		if (cmd.includes(".cmd")) {
+			return { stdout: "", stderr: "", status: null, signal: "SIGTERM" };
+		}
+		return { stdout: "1.0.0\n", stderr: "", status: 0 };
+	},
+	resetSafeSpawnWindowsCommandCache: vi.fn(),
+}));
 
 import * as path from "node:path";
 import { getGlobalPiLensDir } from "../../../clients/file-utils.js";

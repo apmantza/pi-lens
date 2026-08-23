@@ -89,7 +89,15 @@ function testEnv(
 	script: string,
 ): NodeJS.ProcessEnv {
 	const nodeDir = path.dirname(process.execPath);
-	const toolPath = nodeDir;
+	// #2015: verifyToolBinary routes through safeSpawnAsync, whose Windows
+	// .cmd/.bat wrapper runs `chcp 65001 && <shim>` (clients/safe-spawn.ts).
+	// chcp.com lives in System32, so System32 must stay on PATH or every
+	// .cmd shim probe exits 1 with no output. Node's dir stays first so the
+	// restricted PATH still cannot collide with a real oxlint.
+	const toolPath =
+		process.platform === "win32"
+			? `${nodeDir};${process.env.SystemRoot ?? "C:\\Windows"}\\System32`
+			: nodeDir;
 	const env: NodeJS.ProcessEnv = {
 		...process.env,
 		PI_LENS_HOME: home,
@@ -120,6 +128,15 @@ afterEach(() => {
 });
 
 describe("installer process lifecycle (#945)", () => {
+	// These tests spawn REAL child node processes that run the full ensureTool
+	// flow (discovery probes, the install lock, the package-manager spawn, and
+	// — since #2015 routes verifyToolBinary through safeSpawnAsync — the
+	// cmd.exe-wrapped shim verification). Under parallel vitest workers a
+	// single run can legitimately take several seconds, so the 5s default
+	// test budget is too tight (same reasoning as tool-discovery.test.ts's
+	// 30s installTool budget). 15s still catches a true hang.
+	const REAL_PROCESS_TIMEOUT_MS = 15_000;
+
 	it.skipIf(process.platform !== "win32")(
 		"kills a fake npm's complete Windows process tree on timeout",
 		async () => {
@@ -139,6 +156,7 @@ describe("installer process lifecycle (#945)", () => {
 			await new Promise((resolve) => setTimeout(resolve, 250));
 			expect(pidAlive(childPid)).toBe(false);
 		},
+		REAL_PROCESS_TIMEOUT_MS,
 	);
 
 	it("serializes two processes so exactly one package-manager install runs", async () => {
@@ -153,7 +171,7 @@ describe("installer process lifecycle (#945)", () => {
 			1,
 		);
 		expect(results.every((result) => /oxlint/.test(result.stdout))).toBe(true);
-	});
+	}, REAL_PROCESS_TIMEOUT_MS);
 
 	it("reports disabled installation and never spawns the package manager", async () => {
 		const root = tempDir();
@@ -169,7 +187,7 @@ describe("installer process lifecycle (#945)", () => {
 			"installation disabled by PI_LENS_DISABLE_TOOL_INSTALL=1",
 		);
 		expect(fs.existsSync(counter)).toBe(false);
-	});
+	}, REAL_PROCESS_TIMEOUT_MS);
 
 	it("ordinary Vitest execution has tool installation disabled", () => {
 		expect(process.env.PI_LENS_DISABLE_TOOL_INSTALL).toBe("1");

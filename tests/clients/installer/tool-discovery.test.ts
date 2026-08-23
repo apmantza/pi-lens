@@ -152,6 +152,20 @@ const mockSpawn = vi.hoisted(() =>
 
 vi.mock("node:child_process", () => ({ spawn: mockSpawn }));
 
+// #2015: verifyToolBinary probes (and installNpmTool's npm-install spawn)
+// route through `safeSpawnAsync`, so this file mocks that seam directly and
+// records every invocation into the same `spawnCalls` log the raw-spawn mock
+// above feeds. Probes and installs both answer success; tests that need a
+// failure simulate it at their own seams (network, fs access).
+vi.mock("../../../clients/safe-spawn.js", () => ({
+	safeSpawn: vi.fn(() => ({ stdout: "", stderr: "", status: 0 })),
+	safeSpawnAsync: async (command: string, args: string[]) => {
+		spawnCalls.push({ cmd: String(command), args: args ?? [] });
+		return { stdout: "", stderr: "", status: 0 };
+	},
+	resetSafeSpawnWindowsCommandCache: vi.fn(),
+}));
+
 // ── https mock ──────────────────────────────────────────────────────────
 // Keep the suite hermetic: installTool's github path does a real GitHub API
 // fetch via node:https. Without this mock the install tests depend on the
