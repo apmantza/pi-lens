@@ -11,6 +11,7 @@ import {
 	resetSequenceFoldCountForTests,
 } from "../../clients/project-changes.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import { normalizeMapKey } from "../../clients/path-utils.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 describe("project change sequence", () => {
@@ -20,9 +21,13 @@ describe("project change sequence", () => {
 		const second = runtime.bumpFileSeq("src/a.ts");
 		const third = runtime.bumpFileSeq("src/b.ts");
 
-		expect(first).toEqual({ projectSeq: 1, fileSeq: 1 });
-		expect(second).toEqual({ projectSeq: 2, fileSeq: 2 });
-		expect(third).toEqual({ projectSeq: 3, fileSeq: 1 });
+		// bumpFileSeq returns the normalized key it recorded under (#2000
+		// phase 1) so callers reuse it instead of paying realpath twice.
+		expect(first.projectSeq).toBe(1);
+		expect(first.fileSeq).toBe(1);
+		expect(first.key).toBe(normalizeMapKey(path.resolve("src/a.ts")));
+		expect(second).toMatchObject({ projectSeq: 2, fileSeq: 2 });
+		expect(third).toMatchObject({ projectSeq: 3, fileSeq: 1 });
 		expect(runtime.projectSeq).toBe(3);
 		expect(runtime.getFileSeq("src/a.ts")).toBe(2);
 		expect(runtime.getFileSeq("src/b.ts")).toBe(1);
