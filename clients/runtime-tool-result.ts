@@ -557,14 +557,24 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		// them) — a deliberate divergence from the isError filter above, which
 		// exists for restore semantics where attribution would lie.
 		let opaquePaths: string[] = [];
-		if (recognized.length === 0 && workspaceRoot && !getFlag("no-read-guard")) {
+		// Recovery runs for EVERY bash command with a pending baseline - not
+		// only recognized-empty ones. A mixed command (`python x.py > out.ts`
+		// plus script-internal writes) previously skipped observation entirely
+		// with zero telemetry; git-first recovery is cheap enough (~60ms) to
+		// close that gap, subtracting already-recognized paths so nothing
+		// double-dispatches.
+		if (workspaceRoot && !getFlag("no-read-guard")) {
 			const scanRoot = workspaceRoot;
 			const started = Date.now();
 			const pending = getOpaqueBaselineStore().take(
 				`${normalizeMapKey(path.resolve(scanRoot))}:${runtime.sessionGeneration}`,
 			);
 			let unknownReason: string | undefined;
-			if (!pending) {
+			if (!pending && recognized.length > 0) {
+				// Partial coverage without observation: the explicit verdict
+				// invariant 1 demands (never silently imply no change).
+				unknownReason = "partial-recognition-no-baseline";
+			} else if (!pending) {
 				unknownReason = "no-pending-snapshot";
 			} else if (pending.strategy === "git") {
 				// Git-first: no universe cap - works on any repo size.
@@ -578,7 +588,9 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 							!isExternalOrVendorFile(p, scanRoot) &&
 							!isPathIgnoredByProject(p, scanRoot, false),
 					);
-				} else {
+				} else if (recovery.verdict === "unknown" && recognized.length > 0) {
+					// Git hiccup on a partially-recognized command: the
+					// remainder's coverage is unknown, never clean-by-default.
 					unknownReason = recovery.unknownReason;
 				}
 			} else if (pending.stats) {
@@ -612,6 +624,12 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 					result: `changed:${opaquePaths.length}`,
 				});
 			}
+		}
+		if (opaquePaths.length > 0 && recognized.length > 0) {
+			const recognizedKeys = new Set(
+				recognized.map((p) => normalizeMapKey(path.resolve(p))),
+			);
+			opaquePaths = opaquePaths.filter((p) => !recognizedKeys.has(p));
 		}
 		// wp iterates opaquePaths VERBATIM (already normalizeMapKey keys), so the
 		// set must hold those exact strings - no re-resolution.
