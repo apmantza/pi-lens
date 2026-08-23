@@ -6,7 +6,7 @@ import { readJsonCache } from "../json-cache-read.js";
 import { createGenerationMap } from "../generation-guard.js";
 import { normalizeMapKey } from "../path-utils.js";
 import { loadReverseDependencyIndexFromSnapshot } from "../reverse-deps.js";
-import { MTIME_DRIFT_TOLERANCE_MS } from "../blocker-freshness.js";
+import { freshnessFromMtime } from "../freshness.js";
 import { logLatency } from "../latency-logger.js";
 import { workspaceDiagnosticsCacheSessionStart } from "./workspace-diagnostics-session.js";
 import type { LSPDiagnostic } from "./client.js";
@@ -443,16 +443,17 @@ export function isEntryFresh(
 		return entry.depIndexAtScan !== true;
 	}
 	for (const dep of imports) {
+		let mtimeMs: number | undefined;
 		try {
-			if (
-				fs.statSync(dep).mtimeMs >
-				entry.scannedAt + MTIME_DRIFT_TOLERANCE_MS
-			) {
-				return false;
-			}
+			mtimeMs = fs.statSync(dep).mtimeMs;
 		} catch {
 			return false; // dependency deleted/unreadable: fail closed
 		}
+		const verdict = freshnessFromMtime({
+			mtimeMs,
+			referenceMs: entry.scannedAt,
+		});
+		if (verdict.verdict === "stale") return false;
 	}
 	return true;
 }

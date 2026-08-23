@@ -5,7 +5,7 @@ import type { RuntimeCoordinator } from "./runtime-coordinator.js";
 import { logLatency } from "./latency-logger.js";
 import { normalizeMapKey, toProjectRelativePath } from "./path-utils.js";
 import { resolveRunnerPath } from "./dispatch/runner-context.js";
-import { MTIME_DRIFT_TOLERANCE_MS } from "./blocker-freshness.js";
+import { freshnessFromMtime } from "./freshness.js";
 
 export type AdvisoryFileRole = "source" | "test" | "affected";
 
@@ -365,13 +365,14 @@ export function findingPathFreshness(
 ): FindingPathFreshness {
 	try {
 		const stat = fs.statSync(resolvedPath);
-		if (
-			scannedAtMs !== undefined &&
-			stat.mtimeMs > scannedAtMs + MTIME_DRIFT_TOLERANCE_MS
-		) {
-			return "stale";
-		}
-		return "live";
+		// No scan timestamp recorded: the pre-kernel behavior treated the
+		// path as live (no reference to be stale against) - preserved.
+		if (scannedAtMs === undefined) return "live";
+		const verdict = freshnessFromMtime({
+			mtimeMs: stat.mtimeMs,
+			referenceMs: scannedAtMs,
+		});
+		return verdict.verdict === "stale" ? "stale" : "live";
 	} catch (error) {
 		const code = (error as NodeJS.ErrnoException).code ?? "unknown";
 		// ENOTDIR: an ancestor component is no longer a directory — the cited

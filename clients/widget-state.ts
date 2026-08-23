@@ -9,10 +9,8 @@ import { visibleWidth } from "./deps/pi-tui.js";
 import { normalizeEphemeralMapKey, normalizeMapKey } from "./path-utils.js";
 import { fitLine } from "./tui-fit.js";
 import { WriteOrderingGuard } from "./write-ordering-guard.js";
-import {
-	collectForwardImportMtimes,
-	MTIME_DRIFT_TOLERANCE_MS,
-} from "./blocker-freshness.js";
+import { collectForwardImportMtimes } from "./blocker-freshness.js";
+import { freshnessFromMtime } from "./freshness.js";
 import { PAST_EOF_STALE_MARKER } from "./diagnostic-line-freshness.js";
 import { STALE_LINE_MARKER } from "./stale-marker.js";
 
@@ -878,7 +876,8 @@ export async function reconcileStaleWidgetFiles(): Promise<number> {
 			// under this gate, not from cross-test state. Same tolerance, same
 			// constant, for the same reason.
 			if (rec.allDiagnostics.length === 0) {
-				return mtimeMs > rec.touchedAt + MTIME_DRIFT_TOLERANCE_MS
+				return freshnessFromMtime({ mtimeMs, referenceMs: rec.touchedAt })
+					.verdict === "stale"
 					? { mapKey, action: "drop" as const }
 					: { mapKey, action: "keep" as const };
 			}
@@ -889,13 +888,13 @@ export async function reconcileStaleWidgetFiles(): Promise<number> {
 			// at dispatch/integration.ts). A missing per-entry stamp (a migrated
 			// pre-#1186 record) inherits the record's `touchedAt`. Tolerance matches
 			// the Windows host-clock skew rationale above.
-			const survivors = rec.allDiagnostics.filter(
-				(d) =>
-					!(
-						mtimeMs >
-						(d.observedAt ?? rec.touchedAt) + MTIME_DRIFT_TOLERANCE_MS
-					),
-			);
+			const survivors = rec.allDiagnostics.filter((d) => {
+				const v = freshnessFromMtime({
+					mtimeMs,
+					referenceMs: d.observedAt ?? rec.touchedAt,
+				});
+				return v.verdict !== "stale";
+			});
 			if (survivors.length === rec.allDiagnostics.length) {
 				return { mapKey, action: "keep" as const }; // nothing stale
 			}
@@ -1005,7 +1004,11 @@ export async function reconcileStaleWidgetDependencyBlockers(
 			// measured skew while staying far below the gap between real edits.
 			if (
 				importMtimes.some(
-					(im) => im.mtimeMs > baseline + MTIME_DRIFT_TOLERANCE_MS,
+					(im) =>
+						freshnessFromMtime({
+							mtimeMs: im.mtimeMs,
+							referenceMs: baseline,
+						}).verdict === "stale",
 				)
 			) {
 				d.stale = true;

@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { getProjectDataDir } from "../file-utils.js";
 import { writeFileAtomic } from "../atomic-write.js";
 import { readJsonCache } from "../json-cache-read.js";
-import { MTIME_DRIFT_TOLERANCE_MS } from "../blocker-freshness.js";
+import { freshnessFromMtime } from "../freshness.js";
 import type {
 	ProjectDiagnosticsDeltaReport,
 	ProjectDiagnosticsSnapshot,
@@ -104,15 +104,12 @@ export function reconcileProjectDiagnosticsSnapshot(
 		const cached = staleByFile.get(filePath);
 		if (cached !== undefined) return cached;
 		let stale: boolean;
-		try {
-			// MTIME_DRIFT_TOLERANCE_MS: a file scanned at scannedAt, or written
-			// within the tolerance window of the scan timestamp being captured,
-			// has mtime <= scannedAt + MTIME_DRIFT_TOLERANCE_MS.
-			stale =
-				fs.statSync(filePath).mtimeMs > scannedAtMs + MTIME_DRIFT_TOLERANCE_MS;
-		} catch {
-			stale = true; // deleted / unreadable → drop
-		}
+		const verdict = freshnessFromMtime({
+			mtimeMs: fs.statSync(filePath).mtimeMs,
+			referenceMs: scannedAtMs,
+		});
+		// Pre-kernel policy: an unreadable/missing file is stale (dropped).
+		stale = verdict.verdict !== "fresh";
 		staleByFile.set(filePath, stale);
 		return stale;
 	};
