@@ -6,6 +6,12 @@ import { recordDegradationOnce } from "./degradation-ledger.js";
 import { detectFileKind } from "./file-kinds.js";
 import { isPathIgnoredByProject } from "./file-utils.js";
 import { evaluateGitGuard, isGitCommitOrPushAttempt } from "./git-guard.js";
+import { logLatency } from "./latency-logger.js";
+import { normalizeMapKey } from "./path-utils.js";
+import {
+	captureFileStats,
+	getOpaqueSnapshotStore,
+} from "./opaque-mutation-scan.js";
 import { normalizeForGuardMatch } from "./host-edit-normalize.js";
 import { retargetReplacementIndentation } from "./indent-retarget.js";
 import { LANGUAGE_POLICY } from "./language-policy.js";
@@ -487,6 +493,35 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 			},
 		});
 	if (!lensEnabled) return;
+	// #2000 phase 2: opaque-command pre-snapshot. A bash command whose writes
+	// the extractor will not recognize gets a bounded stat snapshot of the
+	// project source universe BEFORE it runs; the tool_result side diffs it.
+	// Fire-and-forget capture is WRONG here (the child may finish first), but
+	// the capture is stat-only and budgeted, so awaiting it is bounded work on
+	// an already-second-scale bash path.
+	if (toolName === "bash") {
+		const commandInput = (event as { input?: { command?: unknown } }).input;
+		if (typeof commandInput?.command === "string" && commandInput.command) {
+			const scanRoot = ctx.cwd ?? runtime.projectRoot;
+			if (scanRoot) {
+				const started = Date.now();
+				const outcome = await captureFileStats(scanRoot);
+				if (outcome.snapshot) {
+					getOpaqueSnapshotStore().record(
+						normalizeMapKey(path.resolve(scanRoot)),
+						outcome.snapshot,
+					);
+				}
+				logLatency({
+					type: "phase",
+					phase: "opaque_mutation_prescan",
+					filePath: commandInput.command.slice(0, 80),
+					durationMs: Date.now() - started,
+					result: outcome.unknownReason ?? `scanned:${outcome.scannedCount}`,
+				});
+			}
+		}
+	}
 	if (
 		getFlag("lens-guard") &&
 		isGitCommitOrPushAttempt(toolName, event.input)
@@ -665,7 +700,7 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 						}
 					}
 					if (ctx.ui) {
-						ctx.ui && updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
+						updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
 					}
 				})
 				.catch((err) => {

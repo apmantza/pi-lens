@@ -3,6 +3,12 @@ import * as nodeFs from "node:fs";
 import * as path from "node:path";
 import { noteAuthoritativeContentAttachment } from "./agent-nudge.js";
 import {
+	captureFileStats,
+	diffFileStats,
+	getOpaqueSnapshotStore,
+} from "./opaque-mutation-scan.js";
+import { normalizeMapKey } from "./path-utils.js";
+import {
 	extractReadPathsFromCommand,
 	extractDeletedPathsFromCommand,
 	extractGrepSearchReadsFromOutput,
@@ -540,15 +546,52 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 		typeof (event.input as { command?: unknown }).command === "string"
 	) {
 		const command = (event.input as { command: string }).command;
-		const written = extractWrittenPathsFromCommand(
-			command,
-			workspaceRoot,
-		).filter(
-			(wp) =>
-				event.isError !== true &&
-				!isExternalOrVendorFile(wp, workspaceRoot) &&
-				!isPathIgnoredByProject(wp, workspaceRoot, false),
-		);
+		const recognized = extractWrittenPathsFromCommand(command, workspaceRoot);
+		// #2000 phase 2: when the extractor recognizes NOTHING, the command is
+		// opaque-candidate — recover its actual changed set by diffing the pre
+		// snapshot taken at tool_call. Partial writes that landed before a
+		// nonzero exit ARE attributed (the files changed and the agent authored
+		// them) — a deliberate divergence from the isError filter above, which
+		// exists for restore semantics where attribution would lie.
+		let opaquePaths: string[] = [];
+		if (recognized.length === 0 && workspaceRoot && !getFlag("no-read-guard")) {
+			const scanRoot = workspaceRoot;
+			const started = Date.now();
+			const outcome = await captureFileStats(scanRoot);
+			const pending = getOpaqueSnapshotStore().take(
+				normalizeMapKey(path.resolve(scanRoot)),
+			);
+			if (pending && !outcome.unknownReason) {
+				opaquePaths = diffFileStats(pending, outcome.snapshot ?? new Map());
+			} else {
+				logLatency({
+					type: "phase",
+					phase: "opaque_mutation_coverage_unknown",
+					filePath: command.slice(0, 80),
+					durationMs: Date.now() - started,
+					result:
+						outcome.unknownReason ?? (pending ? "ok" : "no-pending-snapshot"),
+				});
+			}
+			if (opaquePaths.length > 0) {
+				logLatency({
+					type: "phase",
+					phase: "opaque_mutation_recovered",
+					filePath: opaquePaths.slice(0, 5).join(","),
+					durationMs: Date.now() - started,
+					result: `changed:${opaquePaths.length}`,
+				});
+			}
+		}
+		const written = [
+			...recognized.filter(
+				(wp) =>
+					event.isError !== true &&
+					!isExternalOrVendorFile(wp, workspaceRoot) &&
+					!isPathIgnoredByProject(wp, workspaceRoot, false),
+			),
+			...opaquePaths,
+		];
 		for (const wp of written) {
 			if (!getFlag("no-read-guard")) deps.readGuard?.recordWritten(wp);
 			const receipt = (runtime as Partial<RuntimeCoordinator>)
