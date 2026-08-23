@@ -179,6 +179,16 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 			reset: () => resetBoundedTelemetry(),
 		},
 	},
+	// ── #2000 phase 2 opaque-recovery baselines ─────────────────────────
+	{
+		id: "opaque-mutation-scan:baselineStore+gitMemo",
+		module: "opaque-mutation-scan.ts",
+		state: "OpaqueBaselineStore byCwd map, gitRepoMemo",
+		policy: "session_start",
+		resetName: "resetOpaqueMutationState",
+		reason:
+			"#2000 phase 2: pending pre-command baselines are keyed cwd:generation and become unreachable when the session generation advances; and the git-worktree memo must re-probe after a session that may have seen a directory become a worktree. Without the reset both leak per session and the memo mis-answers forever.",
+	},
 	// ── The named population from #1635 ──────────────────────────────────────
 	{
 		id: "degradation-ledger:onceKeys",

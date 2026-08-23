@@ -31,6 +31,7 @@ import * as path from "node:path";
 
 import { collectSourceFilesWithBudgetAsync } from "./source-filter.js";
 import { normalizeMapKey } from "./path-utils.js";
+import { freshnessFromMtime } from "./freshness.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 
 export interface FileStatEntry {
@@ -139,6 +140,11 @@ export class OpaqueBaselineStore {
 	get evictionCount(): number {
 		return this.evictions;
 	}
+
+	/** Session-boundary clear - unconsumed baselines are unreachable after reset. */
+	takeAllForTest(): void {
+		this.byCwd.clear();
+	}
 }
 
 const globalStoreSymbol = Symbol.for("pi-lens:opaque-snapshot-store");
@@ -157,6 +163,17 @@ export function getOpaqueBaselineStore(): OpaqueBaselineStore {
 }
 
 const gitRepoMemo = new Map<string, boolean>();
+
+/**
+ * Session-boundary clear (#1635): unconsumed pending baselines are keyed by
+ * cwd:generation, so entries from a finished session are unreachable; and a
+ * directory that was not a worktree last session may be one now. Without this
+ * reset both leak and mis-answer forever.
+ */
+export function resetOpaqueMutationState(): void {
+	getOpaqueBaselineStore().takeAllForTest();
+	gitRepoMemo.clear();
+}
 
 /** Cached git-worktree probe (repos don't stop being git mid-session). */
 export async function isGitWorktree(root: string): Promise<boolean> {
@@ -226,7 +243,13 @@ export async function recoverOpaqueChangesViaGit(
 		const abs = path.resolve(root, relPath);
 		try {
 			const stat = await fs.promises.stat(abs);
-			if (stat.isFile() && stat.mtimeMs >= floorMs) {
+			if (
+				stat.isFile() &&
+				freshnessFromMtime({ mtimeMs: stat.mtimeMs, referenceMs: floorMs })
+					.verdict === "stale"
+			) {
+				// Kernel "stale" = modified AFTER the window floor - exactly the
+				// writes this command may have authored.
 				paths.push(normalizeMapKey(abs));
 			}
 		} catch {

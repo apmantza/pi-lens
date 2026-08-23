@@ -110,6 +110,7 @@ import { TrivyClient, type TrivyResult } from "./trivy-client.js";
 import { isWarmAttached } from "./warm-attach.js";
 import { setSessionLanguages } from "./widget-state.js";
 import { logWordIndex } from "./word-index-logger.js";
+import { resetOpaqueMutationState } from "./opaque-mutation-scan.js";
 import { resetWorkspaceTopology } from "./workspace-topology.js";
 import { resetZizmorTokenAvailability } from "./zizmor-config.js";
 import { resetSpawnTimeoutCooldowns } from "./spawn-timeout-cooldown.js";
@@ -2107,6 +2108,10 @@ export async function handleSessionStart(
 	// previously session-lived with no reset hook at all).
 	resetWorkspaceTopology();
 	clearTsconfigPathsCache();
+	// #2000: opaque-recovery baselines are keyed cwd:generation (unreachable
+	// after reset) and the git-worktree memo must re-probe after a session
+	// that may have seen a non-git dir become one.
+	resetOpaqueMutationState();
 	// #817/#1199: Windows command resolution is cached per (command, canonical
 	// effective child PATH/PATHEXT/cwd/per-drive provenance); drop it each
 	// session so environment changes (e.g.
