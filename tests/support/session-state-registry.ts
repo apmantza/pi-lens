@@ -855,10 +855,6 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<Record<string, string>> = {
  */
 export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	"agent-nudge.ts": 1,
-	// #1995: the sweep counts 0 stateful symbols because the map lives behind
-	// the Symbol.for global (module-identity-proof by design); behavior is
-	// pinned by the registry entry's arm/disarm probe instead.
-	"spawn-timeout-cooldown.ts": 0,
 	"blocker-freshness.ts": 2,
 	"bounded-telemetry.ts": 2,
 	"bus-events-logger.ts": 1,
