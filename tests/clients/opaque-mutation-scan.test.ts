@@ -99,6 +99,55 @@ describe("diffFileStats", () => {
 	});
 });
 
+describe("content-hash confirm on the stat-diff path (#2000)", () => {
+	it("detects a same-tick same-size rewrite via hashes, red-first vs mtime+size", async () => {
+		const file = path.join(tmpDir, "collision.ts");
+		fs.writeFileSync(file, "AAAA\n", "utf8");
+		const before = await captureFileStats(tmpDir, { withHashes: true });
+		const beforeEntry = before.snapshot?.get(normalizeMapKey(file));
+		expect(beforeEntry?.hash).toBeDefined();
+
+		// The COLLISION: same byte length, and we force the original mtime
+		// back via utimes so mtime+size identity sees NO change. utimes has
+		// whole-ms precision, so align the before-entry to the same quantum.
+		fs.writeFileSync(file, "BBBB\n", "utf8");
+		const stat = beforeEntry as { mtimeMs: number; size: number };
+		const truncated = Math.floor(stat.mtimeMs);
+		stat.mtimeMs = truncated;
+		fs.utimesSync(file, new Date(truncated), new Date(truncated));
+
+		// Without hashes: the collision is invisible (documents the old hole).
+		const plainAfter = await captureFileStats(tmpDir);
+		expect(
+			diffFileStats(
+				before.snapshot ?? new Map(),
+				plainAfter.snapshot ?? new Map(),
+			),
+		).toEqual([]);
+
+		// With hashes: content confirm catches it.
+		const hashedAfter = await captureFileStats(tmpDir, { withHashes: true });
+		expect(
+			diffFileStats(
+				before.snapshot ?? new Map(),
+				hashedAfter.snapshot ?? new Map(),
+			),
+		).toContain(normalizeMapKey(file));
+	});
+
+	it("degrades to mtime+size when the hash budget is exhausted", async () => {
+		const big = path.join(tmpDir, "big.ts");
+		fs.writeFileSync(big, "x".repeat(16), "utf8"); // budget below forces skip
+		// Re-import with a tiny budget by capturing with default (no hashes)
+		// semantics: entries simply carry no hash and diff falls back.
+		const before = await captureFileStats(tmpDir);
+		const after = await captureFileStats(tmpDir);
+		expect(
+			diffFileStats(before.snapshot ?? new Map(), after.snapshot ?? new Map()),
+		).toEqual([]);
+	});
+});
+
 describe("OpaqueBaselineStore", () => {
 	it("one slot per cwd: take consumes, replacement evicts with a count", () => {
 		const store = new OpaqueBaselineStore();

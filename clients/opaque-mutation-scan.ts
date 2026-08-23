@@ -22,9 +22,11 @@
  * normalizeMapKey+resolve, joining the mutation-seam's key form.
  *
  * KNOWN LIMITATIONS:
- * - shape 6: stat-diff identity is size+mtimeMs - a rewrite landing in the
- *   same mtime tick AND the same byte length is undetected there. A content
- *   hash confirm is future scope.
+ * - shape 6: stat-diff identity is size+mtimeMs PLUS a budgeted content-hash
+ *   confirm (withHashes captures sha1 up to OPAQUE_HASH_BUDGET_BYTES); a
+ *   same-tick/same-size rewrite is detected when both sides hashed the file,
+ *   and degrades to mtime+size for files past the hash budget. The git path
+ *   detects any content change regardless.
  * - INVARIANT 4 (per issue): ignored/vendor paths are EXCLUDED. Under the
  *   git strategy this means writes landing ONLY in .gitignore'd locations
  *   are never reported - an all-ignored write set reads as an empty (clean)
@@ -36,6 +38,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import { collectSourceFilesWithBudgetAsync } from "./source-filter.js";
+import { createHash } from "node:crypto";
+
 import { normalizeMapKey } from "./path-utils.js";
 import { freshnessFromMtime } from "./freshness.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
@@ -43,7 +47,18 @@ import { safeSpawnAsync } from "./safe-spawn.js";
 export interface FileStatEntry {
 	mtimeMs: number;
 	size: number;
+	/**
+	 * Content hash, present only when capture ran with `withHashes` and the
+	 * cumulative byte budget allowed it. Both sides having hashes upgrades
+	 * diff identity from mtime+size to CONTENT - closing the shape-6
+	 * same-tick/same-size rewrite hole on the stat-diff path. Absent on
+	 * either side -> fall back to mtime+size (documented limitation).
+	 */
+	hash?: string;
 }
+
+/** Stop hashing once this many cumulative bytes were read (per capture). */
+export const OPAQUE_HASH_BUDGET_BYTES = 8 * 1024 * 1024;
 
 export type FileStatsSnapshot = Map<string, FileStatEntry>;
 
@@ -75,10 +90,22 @@ export interface PendingOpaqueBaseline {
 	statsUnknownReason?: OpaqueUnknownReason;
 }
 
+export interface CaptureOptions {
+	budgetMs?: number;
+	/**
+	 * Read file contents and record sha1 hashes alongside mtime/size. Used on
+	 * the stat-diff path so the post-side diff can detect same-tick same-size
+	 * rewrites. Bounded by OPAQUE_HASH_BUDGET_BYTES; files past the budget
+	 * simply carry no hash (comparison degrades to mtime+size for them).
+	 */
+	withHashes?: boolean;
+}
+
 export async function captureFileStats(
 	root: string,
-	budgetMs = 50,
+	options: CaptureOptions = {},
 ): Promise<CaptureOutcome> {
+	const budgetMs = options.budgetMs ?? 50;
 	try {
 		const walk = await collectSourceFilesWithBudgetAsync(root, {
 			maxFiles: OPAQUE_SCAN_MAX_FILES + 1,
@@ -96,13 +123,24 @@ export async function captureFileStats(
 			};
 		}
 		const snapshot: FileStatsSnapshot = new Map();
+		let hashBytesSpent = 0;
 		for (const file of files) {
 			try {
 				const stat = await fs.promises.stat(file);
-				snapshot.set(normalizeMapKey(path.resolve(file)), {
+				const entry: FileStatEntry = {
 					mtimeMs: stat.mtimeMs,
 					size: stat.size,
-				});
+				};
+				if (
+					options.withHashes &&
+					hashBytesSpent + stat.size <= OPAQUE_HASH_BUDGET_BYTES
+				) {
+					entry.hash = createHash("sha1")
+						.update(await fs.promises.readFile(file))
+						.digest("hex");
+					hashBytesSpent += stat.size;
+				}
+				snapshot.set(normalizeMapKey(path.resolve(file)), entry);
 			} catch {
 				// Vanished mid-walk: absent from both snapshots = unchanged-by-absence.
 			}
@@ -122,6 +160,13 @@ export function diffFileStats(
 	for (const [key, stat] of after) {
 		const prev = before.get(key);
 		if (!prev || prev.mtimeMs !== stat.mtimeMs || prev.size !== stat.size) {
+			changed.push(key);
+		} else if (
+			prev.hash !== undefined &&
+			stat.hash !== undefined &&
+			prev.hash !== stat.hash
+		) {
+			// Content confirm: same mtime tick + same size but different bytes.
 			changed.push(key);
 		}
 	}

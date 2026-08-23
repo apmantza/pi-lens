@@ -516,7 +516,9 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 					baseline = { startedAt: started, strategy: "git" };
 					resultNote = "git";
 				} else {
-					const outcome = await captureFileStats(scanRoot);
+					const outcome = await captureFileStats(scanRoot, {
+						withHashes: true,
+					});
 					baseline = outcome.snapshot
 						? {
 								startedAt: started,

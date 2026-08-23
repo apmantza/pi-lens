@@ -594,7 +594,9 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 					unknownReason = recovery.unknownReason;
 				}
 			} else if (pending.stats) {
-				const outcome = await captureFileStats(scanRoot);
+				const outcome = await captureFileStats(scanRoot, {
+					withHashes: true,
+				});
 				if (outcome.snapshot && !outcome.unknownReason) {
 					opaquePaths = diffFileStats(pending.stats, outcome.snapshot);
 				} else {
