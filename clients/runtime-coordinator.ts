@@ -520,14 +520,16 @@ export class RuntimeCoordinator {
 		changedRange?: ProjectChangeRange;
 		onAppendError?: (err: unknown) => void;
 	}): { projectSeq: number; fileSeq: number } {
-		const { projectSeq, fileSeq } = this.bumpFileSeq(args.filePath);
+		const { projectSeq, fileSeq, key } = this.bumpFileSeq(args.filePath);
 		if (this._mutationReceipts.length >= MAX_MUTATION_RECEIPTS) {
 			this._mutationReceipts.shift();
 			this._droppedMutationReceipts += 1;
 		}
 		this._mutationReceipts.push({
 			seq: projectSeq,
-			filePath: normalizeMapKey(path.resolve(args.filePath)),
+			// Reuse the bump's normalized key (~200us realpath on Windows) —
+			// never re-derive it here.
+			filePath: key,
 			source: args.source,
 			turnIndex: this._turnIndex,
 			ts: Date.now(),
@@ -713,13 +715,20 @@ export class RuntimeCoordinator {
 		}
 	}
 
-	bumpFileSeq(filePath: string): { projectSeq: number; fileSeq: number } {
+	bumpFileSeq(filePath: string): {
+		projectSeq: number;
+		fileSeq: number;
+		/** The normalized key the bump was recorded under — reuse, never re-derive. */
+		key: string;
+	} {
+		// normalizeMapKey costs ~200us/call on Windows (realpath); every caller
+		// that also needs the key must reuse this one instead of paying it twice.
 		const key = normalizeMapKey(path.resolve(filePath));
 		this._projectSeq += 1;
 		const fileSeq = (this._fileSeq.get(key) ?? 0) + 1;
 		this._fileSeq.set(key, fileSeq);
 		this._fileLastProjectSeq.set(key, this._projectSeq);
-		return { projectSeq: this._projectSeq, fileSeq };
+		return { projectSeq: this._projectSeq, fileSeq, key };
 	}
 
 	/**
