@@ -21,10 +21,16 @@
  * never a clean claim (issue invariant 3). All path keys use
  * normalizeMapKey+resolve, joining the mutation-seam's key form.
  *
- * KNOWN LIMITATION (shape 6): identity is mtime-window (+size for the
- * stat-diff path). A rewrite landing in the same mtime tick AND the same
- * byte length is undetected on the stat path; the git path detects any
- * content change regardless. A content-hash confirm is future scope.
+ * KNOWN LIMITATIONS:
+ * - shape 6: stat-diff identity is size+mtimeMs - a rewrite landing in the
+ *   same mtime tick AND the same byte length is undetected there. A content
+ *   hash confirm is future scope.
+ * - INVARIANT 4 (per issue): ignored/vendor paths are EXCLUDED. Under the
+ *   git strategy this means writes landing ONLY in .gitignore'd locations
+ *   are never reported - an all-ignored write set reads as an empty (clean)
+ *   recovery BY SPEC, not by oversight. Codegen targeting dist/build-style
+ *   outputs should use explicit redirect destinations so the extractor
+ *   recognizes them.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -239,7 +245,7 @@ export async function recoverOpaqueChangesViaGit(
 		if (token.length < 4 || token[2] !== " ") continue;
 		const status = token.slice(0, 2);
 		const relPath = token.slice(3);
-		if (status.includes("R")) skipNext = true;
+		if (status.includes("R") || status.includes("C")) skipNext = true;
 		const abs = path.resolve(root, relPath);
 		try {
 			const stat = await fs.promises.stat(abs);
