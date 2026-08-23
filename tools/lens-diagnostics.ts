@@ -1348,6 +1348,12 @@ export function mergeDiagnosticsWithWidgetSummaries(
 
 	for (const summary of widgetSummaries) {
 		const filePath = path.resolve(summary.filePath);
+		// NOTE (#1993 review): dispositions recorded against a CACHED copy's
+		// message text may not match this file's fresh sweep copy (weak
+		// anchors key on message). Both copies derive from the same LSP
+		// diagnostic via convertLspDiagnostics, so identity is stable in
+		// practice; inline pi-lens-ignore comments are the primary
+		// suppression mechanism.
 		if (authoritativeLspFiles?.has(filePath)) continue;
 		const diagnostics = (summary.diagnostics ?? []).map((d) => ({ ...d }));
 		byFile.set(filePath, { ...summary, filePath, diagnostics });
@@ -1812,6 +1818,23 @@ async function formatFullMode(
 	const authoritativeLspFiles = new Set(
 		fullyCoveredLspResults.map((result) => path.resolve(result.filePath)),
 	);
+	// #1993 review: retirement must be observable - if a future regression
+	// makes the set falsely authoritative, findings would vanish silently.
+	const authoritativeRetiredCount = getFileDiagnosticSummaries().filter(
+		(summary) =>
+			includeFile(summary.filePath) &&
+			authoritativeLspFiles.has(path.resolve(summary.filePath)) &&
+			(summary.diagnostics?.length ?? 0) > 0,
+	).length;
+	if (authoritativeRetiredCount > 0) {
+		logLatency({
+			type: "phase",
+			phase: "lsp_authoritative_widget_retire",
+			filePath: "",
+			durationMs: 0,
+			metadata: { files: authoritativeRetiredCount },
+		});
+	}
 	const summaries = await applyInlineSuppressionsToSummaries(
 		mergeDiagnosticsWithWidgetSummaries(
 			getFileDiagnosticSummaries().filter((summary) =>
