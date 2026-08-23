@@ -401,12 +401,12 @@ async function detectDrift(
 		resolveForwardImports,
 		turnIndex,
 	);
-	for (const { mtimeMs } of mtimes) {
-		if (
-			freshnessFromMtime({ mtimeMs, referenceMs: recordedAtMs }).verdict ===
-			"stale"
-		)
-			drifted.push(filePath);
+	for (const { path: depPath, mtimeMs } of mtimes) {
+		const verdict = freshnessFromMtime({
+			mtimeMs,
+			referenceMs: recordedAtMs,
+		});
+		if (verdict.verdict === "stale") drifted.push(depPath);
 	}
 	return { drifted, truncated };
 }

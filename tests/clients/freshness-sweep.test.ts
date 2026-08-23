@@ -11,6 +11,11 @@
  * (`Date.now() - mtime > TTL`) and max-selection comparisons
  * (`mtime > best.mtimeMs`) are structurally different and listed as
  * exemptions with reasons where they coexist in a file.
+ *
+ * KNOWN MISSED SHAPES (accepted floor - the needle cannot see them):
+ * destructured comparisons without a dot (for (const { mtimeMs } of mtimes)
+ * if (mtimeMs > ref) - exactly master's detectDrift import-loop shape),
+ * reversed operand order (ref + TOL < x.mtimeMs), and aliased locals.
  */
 
 import * as fs from "node:fs";
@@ -32,7 +37,7 @@ const EXEMPT: Record<string, string> = {
 		"age-based TTL staleness of a lock file (Date.now() - mtime), not comparison against a recorded scan/record timestamp",
 	"installer/index.ts":
 		"age-based maxAge expiry of a cached install probe, same TTL-not-freshness shape",
-	"lombok.ts":
+	"lsp/lombok.ts":
 		"max-selection among candidates (find newest), no reference timestamp",
 	"read-guard.ts":
 		"session-start membership gate (mtime >= sessionStartMs) - different semantic than post-record drift",

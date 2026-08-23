@@ -104,8 +104,14 @@ export function reconcileProjectDiagnosticsSnapshot(
 		const cached = staleByFile.get(filePath);
 		if (cached !== undefined) return cached;
 		let stale: boolean;
+		let mtimeMs: number | undefined;
+		try {
+			mtimeMs = fs.statSync(filePath).mtimeMs;
+		} catch {
+			mtimeMs = undefined; // deleted / unreadable -> indeterminate -> drop
+		}
 		const verdict = freshnessFromMtime({
-			mtimeMs: fs.statSync(filePath).mtimeMs,
+			mtimeMs,
 			referenceMs: scannedAtMs,
 		});
 		// Pre-kernel policy: an unreadable/missing file is stale (dropped).
