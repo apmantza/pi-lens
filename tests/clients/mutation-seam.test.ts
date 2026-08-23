@@ -93,17 +93,34 @@ describe("recordProjectMutation — the one mutation seam", () => {
 	});
 
 	it("change-log append failure is isolated: receipt survives, error routes to callback", () => {
-		const runtime = makeRuntime();
-		const onAppendError = vi.fn();
-		// cwd points somewhere whose append throws — simulate via a bad path type.
-		// appendProjectChange throws on unwritable dirs; point it at a file.
-		runtime.recordProjectMutation({
-			filePath: "/p/a.ts",
-			source: "agent-write",
-			cwd: "\\\\?\\nul\\definitely-not-writable",
-			onAppendError,
-		});
-		expect(runtime.getMutationsSince(0)).toHaveLength(1);
+		const cwd = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-mutation-seam-fail-"),
+		);
+		try {
+			const runtime = makeRuntime();
+			const onAppendError = vi.fn();
+			// REAL filesystem fault, no mocks: pre-create the project data dir
+			// as a regular FILE so the append's recursive mkdir throws EEXIST.
+			const logPath = getProjectChangeLogPath(cwd);
+			// REAL filesystem fault, no mocks: pre-create the project DATA DIR
+			// itself (the slug directory) as a regular FILE, so the append's
+			// recursive mkdir throws EEXIST.
+			const projectDataDir = path.dirname(logPath);
+			fs.mkdirSync(path.dirname(projectDataDir), { recursive: true });
+			fs.writeFileSync(projectDataDir, "not a directory", "utf8");
+			runtime.recordProjectMutation({
+				filePath: "/p/a.ts",
+				source: "agent-write",
+				cwd,
+				onAppendError,
+			});
+			// The dispatch path must survive AND the failure must be observable.
+			expect(runtime.getMutationsSince(0)).toHaveLength(1);
+			expect(onAppendError).toHaveBeenCalledTimes(1);
+			expect(onAppendError.mock.calls[0][0]).toBeInstanceOf(Error);
+		} finally {
+			fs.rmSync(cwd, { recursive: true, force: true });
+		}
 	});
 
 	it("no cwd means no change-log attempt but full receipt bookkeeping", () => {

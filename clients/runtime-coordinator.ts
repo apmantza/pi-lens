@@ -558,7 +558,11 @@ export class RuntimeCoordinator {
 	 * before treating the result as a complete window.
 	 */
 	getMutationsSince(seq: number): MutationReceipt[] {
-		return this._mutationReceipts.filter((r) => r.seq > seq);
+		// Shallow copies: a consumer mutating a returned receipt must not
+		// corrupt the ring's internal state.
+		return this._mutationReceipts
+			.filter((r) => r.seq > seq)
+			.map((r) => ({ ...r }));
 	}
 
 	get droppedMutationReceiptCount(): number {
