@@ -231,6 +231,17 @@ describe("recoverOpaqueChangesViaGit (real git repo)", () => {
 				expect(recovered.some((e) => e.filePath.endsWith("generated.ts"))).toBe(
 					true,
 				);
+
+				// Dispatch really ran for the recovered file - the synthetic write
+				// re-enters the full per-edit pipeline (runPipeline), same as any
+				// native or recognized write. Assert it, don't assume it.
+				const { runPipeline } = await import("../../clients/pipeline.js");
+				const dispatchedPaths = vi
+					.mocked(runPipeline)
+					.mock.calls.map((call) => String(call[0]?.filePath));
+				expect(dispatchedPaths.some((p) => p.endsWith("generated.ts"))).toBe(
+					true,
+				);
 			} finally {
 				if (previousDataDir === undefined) delete process.env.PILENS_DATA_DIR;
 				else process.env.PILENS_DATA_DIR = previousDataDir;
