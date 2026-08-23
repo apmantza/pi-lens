@@ -70,6 +70,15 @@ export interface NoteSpawnTimeoutInput {
 	phase: string;
 	/** The timeout budget that was consumed, when known. */
 	durationMs?: number;
+	/**
+	 * #2010: how the process tree died after the budget expired, from the
+	 * spawn result's own measurement - distinct evidence from the budget
+	 * number, never folded into it.
+	 */
+	teardown?: {
+		ms: number;
+		outcome: "exited" | "killed-by-signal" | "escalate-kill";
+	};
 }
 
 /**
@@ -89,6 +98,7 @@ function cooldownKey(command: string): string {
 
 export function noteSpawnTimeout(input: NoteSpawnTimeoutInput): void {
 	const key = cooldownKey(input.command);
+	console.log("[DBG] seam logLatency:", typeof logLatency, logLatency?.name);
 	timedOutByCommand.set(key, {
 		tool: input.tool,
 		command: input.command,
@@ -108,6 +118,10 @@ export function noteSpawnTimeout(input: NoteSpawnTimeoutInput): void {
 			timeoutPhase: input.phase,
 			...(input.durationMs !== undefined && {
 				timeoutBudgetMs: input.durationMs,
+			}),
+			...(input.teardown && {
+				teardownMs: input.teardown.ms,
+				teardownOutcome: input.teardown.outcome,
 			}),
 		},
 	});

@@ -776,6 +776,7 @@ export async function detectFileChangedAfterCommand(
 			command,
 			phase: "autofix",
 			durationMs: 30000,
+			teardown: result.timeoutTeardown,
 		});
 		return 0;
 	}

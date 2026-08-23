@@ -157,6 +157,7 @@ const markdownlintRunner: RunnerDefinition = {
 				command: cmd,
 				phase: "lint",
 				durationMs: 15000,
+				teardown: result.timeoutTeardown,
 			});
 		}
 
