@@ -6,6 +6,11 @@ import type { FunctionCallGraph } from "./call-graph.js";
 import type { WordIndex } from "./word-index.js";
 import type { CascadeRun } from "./cascade-types.js";
 import { logCascade } from "./cascade-logger.js";
+import {
+	appendProjectChange,
+	type ProjectChangeRange,
+	type ProjectChangeSource,
+} from "./project-changes.js";
 import type { CodeQualityWarningRecord } from "./code-quality-warnings.js";
 import type { FileComplexity } from "./complexity-client.js";
 import { normalizeMapKey, pathsEqual } from "./path-utils.js";
@@ -27,6 +32,33 @@ export interface CascadeSessionStats {
 	diagnosticsSurfaced: number;
 	coldSnapshotTouches: number;
 }
+
+/**
+ * One attributed mutation, recorded by {@link RuntimeCoordinator.recordProjectMutation}
+ * alongside its projectSeq bump. This is the in-memory receipt for "who touched
+ * this file, when, through which path" — the queryable twin of the durable
+ * change-log entry. Consumers derive mutation answers from
+ * {@link RuntimeCoordinator.getMutationsSince} instead of re-walking the JSONL.
+ */
+export interface MutationReceipt {
+	/** projectSeq stamped by the bump this receipt rode on. */
+	seq: number;
+	/** normalizeMapKey + resolve form — same as getFilesChangedSince keys. */
+	filePath: string;
+	source: ProjectChangeSource;
+	turnIndex: number;
+	ts: number;
+}
+
+/**
+ * Bounded receipt ring capacity (defect shape 9: bound the axis that grows —
+ * per-mutation receipts are unbounded across a long session). Oldest receipts
+ * evict first; eviction is counted and surfaced via
+ * {@link RuntimeCoordinator.droppedMutationReceiptCount} so a consumer that
+ * needs a complete window knows the answer was truncated, never silently
+ * incomplete (#936 honesty rule).
+ */
+const MAX_MUTATION_RECEIPTS = 512;
 
 export type DeferredMutationKind = "autofix" | "format";
 
@@ -241,6 +273,8 @@ export class RuntimeCoordinator {
 		normalizeMapKey,
 	);
 	private readonly _reportedThisTurn = new Set<string>();
+	private _mutationReceipts: MutationReceipt[] = [];
+	private _droppedMutationReceipts = 0;
 	private _projectRulesScan: RuleScanResult = {
 		rules: [],
 		hasCustomRules: false,
@@ -326,6 +360,8 @@ export class RuntimeCoordinator {
 		this._writtenThisTurn.clear();
 		this._autofixDemotedThisTurn.clear();
 		this._reportedThisTurn.clear();
+		this._mutationReceipts = [];
+		this._droppedMutationReceipts = 0;
 		this._telemetrySessionId = `lens-${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`;
 		this._hasStableSessionId = false;
 		this._telemetryModel = "unknown";
@@ -462,6 +498,71 @@ export class RuntimeCoordinator {
 		this._reportedThisTurn.clear();
 		this._writtenThisTurn.clear();
 		this._autofixDemotedThisTurn.clear();
+	}
+
+	/**
+	 * THE one mutation seam. Every producer of an in-project file mutation —
+	 * native write/edit, recognized bash writes, format/autofix, LSP workspace
+	 * edits, and (phase 2) opaque script-write recovery — records through here,
+	 * once: it bumps the seq store (`bumpFileSeq`), appends a bounded attributed
+	 * receipt, and optionally appends the durable change-log entry. Consumers
+	 * derive from `getFilesChangedSince` / `getMutationsSince`; no producer or
+	 * consumer may hand-roll a parallel bump+log pairing (#2000 phase 1).
+	 *
+	 * Receipt recording never throws; change-log append failures route to
+	 * `onAppendError` (default: swallowed) so telemetry cannot break dispatch.
+	 */
+	recordProjectMutation(args: {
+		filePath: string;
+		source: ProjectChangeSource;
+		/** When set, a durable change-log entry is appended for this cwd. */
+		cwd?: string;
+		changedRange?: ProjectChangeRange;
+		onAppendError?: (err: unknown) => void;
+	}): { projectSeq: number; fileSeq: number } {
+		const { projectSeq, fileSeq } = this.bumpFileSeq(args.filePath);
+		if (this._mutationReceipts.length >= MAX_MUTATION_RECEIPTS) {
+			this._mutationReceipts.shift();
+			this._droppedMutationReceipts += 1;
+		}
+		this._mutationReceipts.push({
+			seq: projectSeq,
+			filePath: normalizeMapKey(path.resolve(args.filePath)),
+			source: args.source,
+			turnIndex: this._turnIndex,
+			ts: Date.now(),
+		});
+		if (args.cwd !== undefined) {
+			try {
+				appendProjectChange(args.cwd, {
+					seq: projectSeq,
+					timestamp: new Date().toISOString(),
+					sessionId: this.telemetrySessionId,
+					turnIndex: this.turnIndex,
+					source: args.source,
+					filePath: path.resolve(args.filePath),
+					fileSeq,
+					changedRange: args.changedRange,
+				});
+			} catch (err) {
+				args.onAppendError?.(err);
+			}
+		}
+		return { projectSeq, fileSeq };
+	}
+
+	/**
+	 * Attributed mutations whose seq is strictly after `seq` — the receipt-level
+	 * counterpart of {@link getFilesChangedSince}. Bounded: entries evicted by
+	 * the ring cap are gone; compare `droppedMutationReceiptCount` against zero
+	 * before treating the result as a complete window.
+	 */
+	getMutationsSince(seq: number): MutationReceipt[] {
+		return this._mutationReceipts.filter((r) => r.seq > seq);
+	}
+
+	get droppedMutationReceiptCount(): number {
+		return this._droppedMutationReceipts;
 	}
 
 	/** Atomically records write/edit ordering before debounce can coalesce it. */

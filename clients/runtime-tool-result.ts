@@ -45,7 +45,6 @@ import {
 	renderPostAutofixNotice,
 } from "./post-autofix-notice.js";
 import {
-	appendProjectChange,
 	type ProjectChangeRange,
 	type ProjectChangeSource,
 } from "./project-changes.js";
@@ -385,23 +384,17 @@ function recordProjectChange(args: {
 	changedRange?: ProjectChangeRange;
 	dbg: (msg: string) => void;
 }): void {
-	const bump = (args.runtime as Partial<RuntimeCoordinator>).bumpFileSeq;
-	if (!bump) return;
-	const { projectSeq, fileSeq } = bump.call(args.runtime, args.filePath);
-	try {
-		appendProjectChange(args.cwd, {
-			seq: projectSeq,
-			timestamp: new Date().toISOString(),
-			sessionId: args.runtime.telemetrySessionId,
-			turnIndex: args.runtime.turnIndex,
-			source: args.source,
-			filePath: path.resolve(args.filePath),
-			fileSeq,
-			changedRange: args.changedRange,
-		});
-	} catch (err) {
-		args.dbg(`project change log append failed for ${args.filePath}: ${err}`);
-	}
+	// One mutation seam (#2000 phase 1): bump + receipt + change-log live in
+	// RuntimeCoordinator.recordProjectMutation; this wrapper only carries the
+	// legacy dbg shape.
+	(args.runtime as Partial<RuntimeCoordinator>).recordProjectMutation?.({
+		filePath: args.filePath,
+		source: args.source,
+		cwd: args.cwd,
+		changedRange: args.changedRange,
+		onAppendError: (err) =>
+			args.dbg(`project change log append failed for ${args.filePath}: ${err}`),
+	});
 }
 
 export async function handleToolResult(deps: ToolResultDeps): Promise<{

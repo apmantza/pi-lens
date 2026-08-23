@@ -11,7 +11,8 @@ import {
 	mergeWorkspaceTextEditsByPriority,
 } from "../../../clients/lsp/edits.js";
 import { measureMaxSyncBlockMs } from "../../support/perf-harness.js";
-import { normalizeMapKey } from "../../../clients/lsp/path-utils.js";
+import { normalizeMapKey } from "../../../clients/path-utils.js";
+import { RuntimeCoordinator } from "../../../clients/runtime-coordinator.js";
 import { removeTempDirSync } from "../test-utils.js";
 import {
 	recordLspMutation,
@@ -256,7 +257,8 @@ describe("LSP workspace edits", () => {
 		const createdPath = path.join(tmpDir, "created.ts");
 		fs.writeFileSync(filePath, "const old = 1;\n", "utf-8");
 		const written: string[] = [];
-		const bumped: string[] = [];
+		const realRuntime = new RuntimeCoordinator();
+		realRuntime.projectRoot = tmpDir;
 		const ranges: Array<{ filePath: string; start: number; end: number }> = [];
 		const context: LspMutationContext = {
 			cwd: tmpDir,
@@ -264,14 +266,9 @@ describe("LSP workspace edits", () => {
 			tool: "lsp_navigation",
 			source: "lsp-edit",
 			readGuard: { recordWritten: (file) => written.push(file) },
-			runtime: {
-				telemetrySessionId: "session",
-				turnIndex: 3,
-				bumpFileSeq: (file) => {
-					bumped.push(file);
-					return { projectSeq: bumped.length, fileSeq: 1 };
-				},
-			},
+			// REAL coordinator (#1742 direction): assert the mutation actually
+			// landed in the one seam's store, not in a test-local spy.
+			runtime: realRuntime,
 			cacheManager: {
 				addModifiedRange: (file, range) =>
 					ranges.push({ filePath: file, ...range }),
@@ -302,7 +299,14 @@ describe("LSP workspace edits", () => {
 			expect(result.appliedOperationTotal).toBe(2);
 			expect(result.appliedOperationIndexes).toEqual([0, 1]);
 			expect(written).toEqual([createdPath, filePath]);
-			expect(bumped).toEqual([createdPath, filePath]);
+			const receipts = realRuntime.getMutationsSince(0);
+			expect(receipts.map((r) => r.filePath)).toEqual(
+				[createdPath, filePath].map((p) => normalizeMapKey(p)),
+			);
+			expect(receipts.every((r) => r.source === "lsp-edit")).toBe(true);
+			expect(realRuntime.getFilesChangedSince(0)).toEqual(
+				[createdPath, filePath].map((p) => normalizeMapKey(p)),
+			);
 			expect(ranges).toHaveLength(2);
 			expect(context.summaryEmitted).toBe(true);
 		} finally {
