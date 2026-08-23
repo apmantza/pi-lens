@@ -103,20 +103,20 @@ describe("diffFileStats", () => {
 
 describe("content-hash confirm on the stat-diff path (#2000)", () => {
 	it("detects a same-tick same-size rewrite via hashes, red-first vs mtime+size", async () => {
+		// The COLLISION, constructed deterministically: pin a known whole-ms
+		// mtime via utimes on BOTH sides (before AND after the rewrite), so
+		// mtime+size identity sees NO change on every platform/filesystem -
+		// restoring a captured sub-ms timestamp is NOT portable (Linux CI red).
 		const file = path.join(tmpDir, "collision.ts");
+		const pinned = new Date(Date.now() - 5_000);
 		fs.writeFileSync(file, "AAAA\n", "utf8");
+		fs.utimesSync(file, pinned, pinned);
 		const before = await captureFileStats(tmpDir, { withHashes: true });
 		const beforeEntry = before.snapshot?.get(normalizeMapKey(file));
 		expect(beforeEntry?.hash).toBeDefined();
 
-		// The COLLISION: same byte length, and we force the original mtime
-		// back via utimes so mtime+size identity sees NO change. utimes has
-		// whole-ms precision, so align the before-entry to the same quantum.
 		fs.writeFileSync(file, "BBBB\n", "utf8");
-		const stat = beforeEntry as { mtimeMs: number; size: number };
-		const truncated = Math.floor(stat.mtimeMs);
-		stat.mtimeMs = truncated;
-		fs.utimesSync(file, new Date(truncated), new Date(truncated));
+		fs.utimesSync(file, pinned, pinned);
 
 		// Without hashes: the collision is invisible (documents the old hole).
 		const plainAfter = await captureFileStats(tmpDir);
