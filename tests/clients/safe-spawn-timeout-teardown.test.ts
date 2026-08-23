@@ -17,7 +17,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { safeSpawnAsync } from "../../clients/safe-spawn.js";
+import {
+	resolveTeardownOutcome,
+	safeSpawnAsync,
+} from "../../clients/safe-spawn.js";
 import {
 	noteSpawnTimeout,
 	resetSpawnTimeoutCooldowns,
@@ -30,6 +33,54 @@ const WEDGED_SIGTERM_IMMUNE =
 	"process.on('SIGTERM', () => {}); setInterval(() => {}, 1_000_000);";
 
 const OUTCOMES = ["exited", "killed-by-signal", "escalate-kill"] as const;
+
+describe("resolveTeardownOutcome branches (#2010 deep review)", () => {
+	it("kill started then death observed: killed-by-signal, ms is the observed gap", () => {
+		const out = resolveTeardownOutcome({
+			killStartedAtMs: 1000,
+			deathObservedAtMs: 1245,
+			escalated: false,
+		});
+		expect(out).toEqual({ ms: 245, outcome: "killed-by-signal" });
+	});
+
+	it("escalation fired: escalate-kill", () => {
+		const out = resolveTeardownOutcome({
+			killStartedAtMs: 1000,
+			deathObservedAtMs: 2250,
+			escalated: true,
+		});
+		expect(out).toEqual({ ms: 1250, outcome: "escalate-kill" });
+	});
+
+	it("THE RACE: child died before the kill started - honest exited, not a claimed kill", () => {
+		const out = resolveTeardownOutcome({
+			killStartedAtMs: 5000,
+			deathObservedAtMs: 4999,
+			escalated: false,
+		});
+		expect(out).toEqual({ ms: 0, outcome: "exited" });
+	});
+
+	it("no kill start at all (guard saw the child already dying): exited", () => {
+		const out = resolveTeardownOutcome({
+			killStartedAtMs: undefined,
+			deathObservedAtMs: 4000,
+			escalated: false,
+		});
+		expect(out).toEqual({ ms: 0, outcome: "exited" });
+	});
+
+	it("clock jitter can never produce a negative duration", () => {
+		const out = resolveTeardownOutcome({
+			killStartedAtMs: 2000,
+			deathObservedAtMs: 1999,
+			escalated: true,
+		});
+		expect(out.ms).toBe(0);
+		expect(out.outcome).toBe("exited");
+	});
+});
 
 describe("timeout teardown evidence (#2010)", () => {
 	it(

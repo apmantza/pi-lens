@@ -70,6 +70,39 @@ export function hasSpawnFailureKind(
 	);
 }
 
+/**
+ * #2010: derive teardown evidence from observed timestamps.
+ *
+ * Pure by design so every branch is deterministically unit-testable,
+ * including the natural-exit-at-budget-expiry race where the timeout
+ * callback arms a kill against an already-dead child.
+ *
+ * - No recorded kill start (the guard saw the child already dying), no
+ *   observed death at all, or death PREDATING the kill start: the child
+ *   left on its own -> "exited", ms 0. Claiming a kill we cannot
+ *   distinguish from a natural exit would be invented evidence.
+ * - Death observed after the kill started: "escalate-kill" when the
+ *   SIGKILL escalation fired, otherwise "killed-by-signal"; ms is the
+ *   observed gap (floor 0 - clock jitter must never produce a negative).
+ */
+export function resolveTeardownOutcome(input: {
+	killStartedAtMs?: number;
+	deathObservedAtMs?: number;
+	escalated: boolean;
+}): { ms: number; outcome: "exited" | "killed-by-signal" | "escalate-kill" } {
+	if (
+		input.killStartedAtMs === undefined ||
+		input.deathObservedAtMs === undefined ||
+		input.deathObservedAtMs <= input.killStartedAtMs
+	) {
+		return { ms: 0, outcome: "exited" };
+	}
+	return {
+		ms: Math.max(0, input.deathObservedAtMs - input.killStartedAtMs),
+		outcome: input.escalated ? "escalate-kill" : "killed-by-signal",
+	};
+}
+
 export interface SpawnResult {
 	stdout: string;
 	stderr: string;
@@ -1406,8 +1439,14 @@ export async function safeSpawnAsync(
 		// boolean here, before any await, means `waitForPipeIdle` can check
 		// "did close already happen" synchronously the moment it runs.
 		let closeSeen = false;
+		// #2010: WHEN death was observed - the stop-clock for teardown evidence
+		// and the discriminator for its outcome. A close that predates the
+		// budget-expired kill means the child exited on its own ("exited"), no
+		// matter that the timer callback raced and armed a kill anyway.
+		let closedAtMs: number | undefined;
 		child.on("close", () => {
 			closeSeen = true;
+			closedAtMs ??= Date.now();
 		});
 
 		// Timeout handling - KILL the process, don't just abandon it
@@ -1589,15 +1628,11 @@ export async function safeSpawnAsync(
 				// describes how long the tree took to die after the budget
 				// expired, and how it died ("exited" = the child beat the signal;
 				// "killed-by-signal" / "escalate-kill" = how WE ended it).
-				const timeoutTeardown =
-					teardownStartedAtMs === undefined
-						? { ms: 0, outcome: "exited" as const }
-						: {
-								ms: Date.now() - teardownStartedAtMs,
-								outcome: (teardownEscalated
-									? "escalate-kill"
-									: "killed-by-signal") as "escalate-kill" | "killed-by-signal",
-							};
+				const timeoutTeardown = resolveTeardownOutcome({
+					killStartedAtMs: teardownStartedAtMs,
+					deathObservedAtMs: closedAtMs,
+					escalated: teardownEscalated,
+				});
 				resolve({
 					stdout,
 					stderr,
