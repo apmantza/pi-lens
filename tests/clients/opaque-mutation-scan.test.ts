@@ -418,13 +418,24 @@ describe("partial-recognition recovery (#2000 PR-B)", () => {
 			const outTarget = path.join(repoDir, "echo-out.txt");
 			const command = `node -e "" > "${outTarget}"`;
 			// No handleToolCall baseline on purpose.
+			// Delta assertion: latency.log is append-only and shared, so assert
+			// on the LINES THIS RUN ADDED - a plain toContain would stay green
+			// forever after the first ever emission (review round-2 P2).
+			const latencyPath = path.join(getGlobalPiLensDir(), "latency.log");
+			const beforeLines = new Set(
+				fs.existsSync(latencyPath)
+					? fs.readFileSync(latencyPath, "utf8").split("\n")
+					: [],
+			);
 			await handleToolResult(depsFor(runtime, command));
 			await flushLatencyLog();
-			const latencyLog = fs.readFileSync(
-				path.join(getGlobalPiLensDir(), "latency.log"),
-				"utf8",
-			);
-			expect(latencyLog).toContain("partial-recognition-no-baseline");
+			const appended = fs
+				.readFileSync(latencyPath, "utf8")
+				.split("\n")
+				.filter((l) => l.trim() && !beforeLines.has(l));
+			expect(
+				appended.some((l) => l.includes("partial-recognition-no-baseline")),
+			).toBe(true);
 		} finally {
 			if (previousTestMode === undefined) delete process.env.PI_LENS_TEST_MODE;
 			else process.env.PI_LENS_TEST_MODE = previousTestMode;
