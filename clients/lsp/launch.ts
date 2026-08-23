@@ -334,6 +334,10 @@ function trySpawn(
 		// shell:true justified: Windows .cmd/.bat LSP binaries (e.g. typescript-language-server.cmd)
 		// cannot be spawned via execFile — cmd.exe must interpret the script wrapper.
 		const shellCommand = `"${command}" ${args.map(escapeCmdArg).join(" ")}`;
+		// #2015 class-sweep exemption: this is a LONG-LIVED language-server launch,
+		// not a bounded probe - killing it on a timeout would be wrong, and its
+		// lifetime is owned by the LSP lifecycle, not the spawner. Exempt from the
+		// verifyToolBinary/probe tree-kill migration.
 		proc = nodeSpawn(shellCommand, [], {
 			cwd,
 			env,

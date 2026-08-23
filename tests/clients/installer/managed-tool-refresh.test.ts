@@ -257,6 +257,7 @@ let restoreDisableToolInstall: () => void;
 beforeEach(() => {
 	fs.rmSync(TOOLS_DIR, { recursive: true, force: true });
 	fs.mkdirSync(NODE_MODULES, { recursive: true });
+	shimExitCodes.clear();
 	spawnMock.mockReset();
 	sessionLogSpy.mockReset();
 	resetDegradationLedger();

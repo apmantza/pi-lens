@@ -71,20 +71,37 @@ describe("verifyToolBinary (#2015)", () => {
 		expect(transient).not.toHaveBeenCalled();
 	});
 
-	it("timeout kill fires the transient callback - a stall, not a verdict", async () => {
-		const bin = writeShim(
-			"slow-tool",
-			process.platform === "win32" ? "ping -n 30 127.0.0.1 >nul" : "sleep 30",
+	it("timeout kill fires transient AND tree-kills the grandchild (#2015)", async () => {
+		// The COLLISION PROBE: cmd.exe launches a DETACHED node grandchild that
+		// writes a marker at +6s, then cmd itself holds for ~3s so the timeout
+		// (1.5s) fires mid-tree. Old raw-spawn killed ONLY cmd.exe -> the
+		// grandchild survived and wrote the marker (RED on pre-fix code).
+		// safeSpawnAsync's tree-kill kills the whole tree -> no marker.
+		const marker = path.join(binDir, "grandchild-survived.marker");
+		const writer = path.join(binDir, "writer.cjs");
+		fs.writeFileSync(
+			writer,
+			`setTimeout(() => require('fs').writeFileSync(${JSON.stringify(marker)}, 'survived'), 6000);`,
+			"utf8",
 		);
+		const body =
+			process.platform === "win32"
+				? `start "" /b node "${writer}"\r\nping -n 4 127.0.0.1 >nul`
+				: `node "${writer}" &\nsleep 3`;
+		const bin = writeShim("slow-tool", body);
 		const transient = vi.fn();
 		const started = Date.now();
 		await expect(
 			verifyToolBinary(bin, undefined, transient, 1_500),
 		).resolves.toBe(false);
-		const elapsed = Date.now() - started;
+		expect(Date.now() - started).toBeLessThan(15_000);
 		expect(transient).toHaveBeenCalledTimes(1);
-		// Tree-killed promptly by lifetimeCoupled semantics, not left to the
-		// full child runtime.
-		expect(elapsed).toBeLessThan(15_000);
-	}, 20_000);
+
+		// Poll past the grandchild's scheduled write (+6s): no marker = the
+		// whole TREE died with the budget, not just cmd.exe.
+		for (let waited = 0; waited < 7_000; waited += 250) {
+			await new Promise((r) => setTimeout(r, 250));
+			expect(fs.existsSync(marker)).toBe(false);
+		}
+	}, 25_000);
 });
