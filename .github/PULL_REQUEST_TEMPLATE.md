@@ -41,3 +41,15 @@ Closes #(issue)
 ## What changed and why
 
 Use this section for any non-obvious design decisions or gotchas the reviewer should know about.
+
+## Tests
+
+Name each NEW test file/case and each EDIT of an existing test, with one line on what it pins and why it exists (regression proof / contract seam / occupancy budget). If no tests changed, say so explicitly.
+
+## Blast radius
+
+State affected dependents for each touched production module (from `module_report` with `blastRadius: true`), callbacks/entry points, and the verification plan. If a hot path is touched (per-spawn / per-file / per-render), state the measured cost delta. Record "empty/unavailable" explicitly with why.
+
+## Class sweep
+
+If this PR fixes or files a defect: name the defect class/shape and record which sibling sites were swept (grep + what was found OK). "Class of size 1" requires the grep that proves it.
