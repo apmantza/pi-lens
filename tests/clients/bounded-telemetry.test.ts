@@ -23,6 +23,7 @@ vi.mock("../../clients/latency-logger.js", async (importActual) => {
 });
 
 import {
+	_boundedTrackedTurnsForTest,
 	_boundedTurnCountForTest,
 	admitBounded,
 	BOUNDED_TELEMETRY_PHASES,
@@ -165,6 +166,47 @@ describe("emitBounded (#1743)", () => {
 			// which is exactly the "state that must re-arm hiding behind a
 			// process-lifetime latch" shape.
 			expect([sameTurn, nextTurn]).toEqual([false, true]);
+		});
+
+		it("does not reopen an older turn when its async result arrives late", () => {
+			const emit = (turnIndex: number) =>
+				emitBounded(
+					"loop_block",
+					`turn-${turnIndex}`,
+					{ durationMs: 1 },
+					{ capPerTurn: { limit: 2, turnIndex } },
+				);
+
+			expect([emit(7), emit(7), emit(8), emit(7)]).toEqual([
+				true,
+				true,
+				true,
+				false,
+			]);
+			expect(_boundedTurnCountForTest("loop_block", 7)).toBe(2);
+			expect(_boundedTurnCountForTest("loop_block", 8)).toBe(1);
+		});
+
+		it("bounds retained turn buckets and fails closed for retired turns", () => {
+			for (let turnIndex = 0; turnIndex < 80; turnIndex++) {
+				expect(
+					emitBounded(
+						"loop_block",
+						`turn-${turnIndex}`,
+						{ durationMs: 1 },
+						{ capPerTurn: { limit: 1, turnIndex } },
+					),
+				).toBe(true);
+			}
+			expect(_boundedTrackedTurnsForTest()).toBeLessThanOrEqual(64);
+			expect(
+				emitBounded(
+					"loop_block",
+					"late-turn-0",
+					{ durationMs: 1 },
+					{ capPerTurn: { limit: 1, turnIndex: 0 } },
+				),
+			).toBe(false);
 		});
 
 		it("counts each phase against its own budget", () => {

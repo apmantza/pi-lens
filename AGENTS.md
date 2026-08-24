@@ -1607,7 +1607,7 @@ non-light behavior in a detected subagent child, either vocabulary),
 
 ## Runner process model
 
-Test-runner failed-first state is path-canonical at both the project-root and target boundaries. It retains at most 32 recent targets per runner and validates at most 8 candidates per selection. A probe retires state only on `ENOENT`/`ENOTDIR`; permission and transient errors retain the target. Remaining unchecked candidates carry into the next turn. Missing, indeterminate, and capacity-eviction outcomes use the bounded `test_runner_failed_target_state` telemetry phase, with exact ledger counts and at most eight detailed rows per turn. (#2044)
+Test-runner failed-first state is path-canonical at both the project-root and target boundaries while retaining the caller's path spelling for execution. It retains the globally newest 32 targets per runner and validates at most 8 candidates per selection. A probe retires state only on `ENOENT`/`ENOTDIR`; permission and transient errors retain the target. Remaining unchecked candidates carry into the next turn. Missing, indeterminate, and capacity-eviction outcomes use the bounded `test_runner_failed_target_state` telemetry phase, with exact ledger counts and at most eight detailed rows per originating turn. Per-turn telemetry counters retain 64 interleavable turn buckets; a result older than that bounded window fails closed rather than reopening its budget. (#2044)
 
 Expected runner skips must stay distinct from clean success and runner failure.
 Return a bounded machine-readable `skipReason` on `RunnerResult` and carry it

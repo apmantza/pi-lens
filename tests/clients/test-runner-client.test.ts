@@ -1064,8 +1064,8 @@ describe("test-runner-client", () => {
 			fs.writeFileSync(path.join(tmpDir, "Cargo.toml"), "[package]\nname='tmp'\n");
 			const goSource = path.join(tmpDir, "widget.go");
 			const staleGoTest = path.join(tmpDir, "stale_test.go");
-			const cargoSource = path.join(aliasRoot, "widget.rs");
-			const cargoTest = path.join(tmpDir, "widget_test.rs");
+			const cargoSource = path.join(tmpDir, "widget.rs");
+			const cargoTest = path.join(aliasRoot, "widget_test.rs");
 			for (const file of [goSource, staleGoTest, cargoSource, cargoTest]) {
 				fs.writeFileSync(file, "fixture\n");
 			}
@@ -1099,15 +1099,15 @@ describe("test-runner-client", () => {
 			fs.rmSync(staleGoTest);
 			expect(client.getTestRunTarget(goSource, tmpDir)).toBeNull();
 
-			// Re-probe through the symlink spelling after removing Go's marker. The
-			// root must collapse to the same project, while the cargo state survives
-			// retirement of the missing Go target.
+			// Seed the target through its symlink spelling, then consume the project
+			// through the aliased root. Keys collapse while the returned target keeps
+			// caller spelling and Cargo survives retirement of the missing Go target.
 			fs.rmSync(path.join(tmpDir, "go.mod"));
 			const cargoTarget = client.getTestRunTarget(cargoSource, aliasRoot);
 			expect(cargoTarget).toMatchObject({
 				runner: "cargo",
 				strategy: "failed-first",
-				testFile: fs.realpathSync.native(cargoTest),
+				testFile: path.resolve(cargoTest),
 			});
 		});
 
@@ -1260,6 +1260,53 @@ describe("test-runner-client", () => {
 					process.env.PI_LENS_TEST_MODE = previousTestMode;
 				}
 			}
+		});
+
+		it("evicts the globally oldest target after a cross-root refresh", async () => {
+			const first = setupTestEnvironment("pi-lens-tests-2044-hot-");
+			const second = setupTestEnvironment("pi-lens-tests-2044-cold-");
+			cleanups.push(first.cleanup, second.cleanup);
+			for (const root of [first.tmpDir, second.tmpDir]) {
+				fs.writeFileSync(path.join(root, "go.mod"), "module example.com/tmp\n");
+				fs.writeFileSync(path.join(root, "widget.go"), "package widget\n");
+			}
+			const hot = path.join(first.tmpDir, "hot_test.go");
+			const cold = Array.from({ length: 31 }, (_, index) =>
+				path.join(second.tmpDir, `cold-${index}_test.go`),
+			);
+			const newest = path.join(second.tmpDir, "newest_test.go");
+			const client = new TestRunnerClient(false);
+			const recordFailure = async (root: string, testFile: string) => {
+				fs.writeFileSync(testFile, "package widget\n");
+				const result = await client.runTestFileAsync(
+					testFile,
+					root,
+					"go",
+					failingNodeConfig,
+				);
+				expect(result.failed).toBe(1);
+			};
+
+			await recordFailure(first.tmpDir, hot);
+			for (const testFile of cold) {
+				await recordFailure(second.tmpDir, testFile);
+			}
+			// Refresh A after every original B entry, then force one eviction in B.
+			await recordFailure(first.tmpDir, hot);
+			await recordFailure(second.tmpDir, newest);
+
+			expect(
+				client.getTestRunTarget(
+					path.join(first.tmpDir, "widget.go"),
+					first.tmpDir,
+				)?.testFile,
+			).toBe(path.resolve(hot));
+			expect(
+				client.getTestRunTarget(
+					path.join(second.tmpDir, "widget.go"),
+					second.tmpDir,
+				)?.testFile,
+			).toBe(path.resolve(cold[1]));
 		});
 	});
 

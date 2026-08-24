@@ -289,10 +289,15 @@ interface FailedTargetStateRecord {
 	turnIndex?: number;
 }
 
+interface FailedTargetEntry {
+	displayPath: string;
+	sequence: number;
+}
+
 interface FailedTargetSelection {
 	cwd: string;
 	runner: string;
-	failedTargets: PathKeyedMap<string>;
+	failedTargets: PathKeyedMap<FailedTargetEntry>;
 	relatedAbs?: string;
 	selfAbs?: string;
 	turnIndex?: number;
@@ -306,17 +311,13 @@ interface TestResultRecord {
 	turnIndex?: number;
 }
 
-function canonicalFailedDisplayPath(filePath: string): string {
+function canonicalFailedPath(filePath: string): string {
 	const absolute = path.resolve(filePath);
 	try {
-		return fs.realpathSync.native(absolute);
+		return normalizeMapKey(fs.realpathSync.native(absolute));
 	} catch {
-		return absolute;
+		return normalizeMapKey(absolute);
 	}
-}
-
-function canonicalFailedPath(filePath: string): string {
-	return normalizeMapKey(canonicalFailedDisplayPath(filePath));
 }
 
 function filesystemErrorCode(error: unknown): string | undefined {
@@ -336,8 +337,9 @@ export class TestRunnerClient {
 	private availableRunners: Map<string, boolean> = new Map();
 	private failedTestsByRunner = new Map<
 		string,
-		PathKeyedMap<PathKeyedMap<string>>
+		PathKeyedMap<PathKeyedMap<FailedTargetEntry>>
 	>();
+	private failedTargetSequence = 0;
 	private readonly statFailedTarget: (filePath: string) => void;
 	// Best-effort vitest config `test.include`/`test.exclude` globs, scraped as
 	// plain text (never executed) and cached per cwd so the config file is
@@ -1132,10 +1134,12 @@ export class TestRunnerClient {
 		cwd: string,
 		runner: string,
 		create = false,
-	): PathKeyedMap<string> | undefined {
+	): PathKeyedMap<FailedTargetEntry> | undefined {
 		let roots = this.failedTestsByRunner.get(runner);
 		if (!roots && create) {
-			roots = new PathKeyedMap<PathKeyedMap<string>>(canonicalFailedPath);
+			roots = new PathKeyedMap<PathKeyedMap<FailedTargetEntry>>(
+				canonicalFailedPath,
+			);
 			this.failedTestsByRunner.set(runner, roots);
 		}
 		if (!roots) return undefined;
@@ -1143,7 +1147,7 @@ export class TestRunnerClient {
 		const root = canonicalFailedPath(cwd);
 		let targets = roots.get(root);
 		if (!targets && create) {
-			targets = new PathKeyedMap<string>(canonicalFailedPath);
+			targets = new PathKeyedMap<FailedTargetEntry>(canonicalFailedPath);
 			roots.set(root, targets);
 		}
 		return targets;
@@ -1167,15 +1171,27 @@ export class TestRunnerClient {
 	private evictOldestFailedTarget(runner: string): string | undefined {
 		const roots = this.failedTestsByRunner.get(runner);
 		if (!roots) return undefined;
+		let oldest:
+			| {
+					root: string;
+					identity: string;
+					entry: FailedTargetEntry;
+			  }
+			| undefined;
 		for (const [root, targets] of roots) {
-			const oldest = targets.keys().next();
-			if (oldest.done) continue;
-			targets.delete(oldest.value);
-			if (targets.size === 0) roots.delete(root);
-			if (roots.size === 0) this.failedTestsByRunner.delete(runner);
-			return oldest.value;
+			for (const [identity, entry] of targets) {
+				if (!oldest || entry.sequence < oldest.entry.sequence) {
+					oldest = { root, identity, entry };
+				}
+			}
 		}
-		return undefined;
+		if (!oldest) return undefined;
+
+		const targets = roots.get(oldest.root);
+		targets?.delete(oldest.identity);
+		if (targets?.size === 0) roots.delete(oldest.root);
+		if (roots.size === 0) this.failedTestsByRunner.delete(runner);
+		return oldest.entry.displayPath;
 	}
 
 	private classifyFailedTarget(candidate: string): {
@@ -1247,10 +1263,14 @@ export class TestRunnerClient {
 		} = selection;
 		let checked = 0;
 		const inspected = new Set<string>();
-		const inspect = (identity: string, candidate: string): string | undefined => {
+		const inspect = (
+			identity: string,
+			entry: FailedTargetEntry,
+		): string | undefined => {
 			if (checked >= MAX_FAILED_TARGET_CHECKS_PER_SELECTION) return undefined;
 			checked += 1;
 			inspected.add(identity);
+			const candidate = entry.displayPath;
 			const verdict = this.classifyFailedTarget(candidate);
 			if (verdict.status === "missing") {
 				failedTargets.delete(identity);
@@ -1278,16 +1298,16 @@ export class TestRunnerClient {
 		for (const preferred of [relatedAbs, selfAbs]) {
 			if (!preferred) continue;
 			const identity = canonicalFailedPath(preferred);
-			const candidate = failedTargets.get(identity);
-			if (!candidate) continue;
-			const selected = inspect(identity, candidate);
+			const entry = failedTargets.get(identity);
+			if (!entry) continue;
+			const selected = inspect(identity, entry);
 			if (selected) return selected;
 		}
 
-		for (const [identity, candidate] of failedTargets) {
+		for (const [identity, entry] of failedTargets) {
 			if (inspected.has(identity)) continue;
 			if (checked >= MAX_FAILED_TARGET_CHECKS_PER_SELECTION) break;
-			const selected = inspect(identity, candidate);
+			const selected = inspect(identity, entry);
 			if (selected) return selected;
 		}
 
@@ -2536,7 +2556,7 @@ export class TestRunnerClient {
 
 	private recordResult(record: TestResultRecord): void {
 		const { cwd, runner, testFile, result, turnIndex } = record;
-		const targetPath = canonicalFailedDisplayPath(testFile);
+		const targetPath = path.resolve(testFile);
 		const target = canonicalFailedPath(targetPath);
 		let failedTargets = this.getFailedTargets(
 			cwd,
@@ -2566,9 +2586,12 @@ export class TestRunnerClient {
 				failedTargets = this.getFailedTargets(cwd, runner, true);
 				if (!failedTargets) return;
 			}
-			// Refresh insertion order so the cap retains the latest failures.
-			if (alreadyRecorded) failedTargets.delete(target);
-			failedTargets.set(target, targetPath);
+			// Sequence is global across roots, so a refreshed target becomes the
+			// newest failure without relying on one root map's insertion order.
+			failedTargets.set(target, {
+				displayPath: targetPath,
+				sequence: ++this.failedTargetSequence,
+			});
 			return;
 		}
 

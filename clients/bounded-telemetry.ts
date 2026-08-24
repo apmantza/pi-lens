@@ -24,10 +24,9 @@
  *    that must re-arm at `session_start` and will eventually be forgotten
  *    (the #1266–#1625 defect class).
  * 2. **A per-turn cap names its turn.** `capPerTurn` carries the caller's
- *    `turnIndex` in the same object as the limit, so there is no separate
- *    reset to wire and forget: the counters clear when the observed turn
- *    changes. This is the same lazy clear-on-transition shape as
- *    `noteImportResolutionMemoTurn` (`clients/blocker-freshness.ts`).
+ *    `turnIndex` in the same object as the limit. A bounded 64-turn window
+ *    keeps overlapping async turns independent; results older than that window
+ *    fail closed. Session start clears the window when numbering restarts.
  * 3. **Identity always survives.** Every emitted record carries the
  *    discriminating identity in `filePath` and in `metadata.identity`, so
  *    aggregation can still answer "which file, which method, which record is
@@ -189,14 +188,15 @@ export type BoundedTelemetryPayload = Omit<
 };
 
 /**
- * Per-turn admission counters, keyed by phase. Cleared lazily when a call
- * observes a turn index different from the one the counters were built for,
- * and eagerly by `resetBoundedTelemetry` at `session_start` (a new session
- * restarts turn numbering at 0, so the lazy check alone could carry a stale
- * count across a session boundary that happened to land on the same index).
+ * Per-turn admission counters, keyed by turn and phase. Multiple turns remain
+ * live because async work can finish T1 after T2 has already emitted. The map
+ * retains a bounded recent window; work older than that window fails closed
+ * rather than reopening an exhausted budget. Session start clears all state.
  */
-let turnCounts = new Map<string, number>();
-let countedTurnIndex: number | undefined;
+const MAX_TRACKED_TURN_CAPS = 64;
+let turnCounts = new Map<number, Map<string, number>>();
+let latestCountedTurnIndex: number | undefined;
+let retiredThroughTurnIndex = Number.NEGATIVE_INFINITY;
 
 /**
  * Decide whether this occurrence earns a detailed record, and count it in the
@@ -275,13 +275,29 @@ function admitAgainstTurnCap(
 	cap: BoundedTelemetryOptions["capPerTurn"],
 ): boolean {
 	if (cap === undefined) return true;
-	if (countedTurnIndex !== cap.turnIndex) {
-		turnCounts = new Map();
-		countedTurnIndex = cap.turnIndex;
+	if (cap.turnIndex <= retiredThroughTurnIndex) return false;
+
+	let counts = turnCounts.get(cap.turnIndex);
+	if (!counts) {
+		if (turnCounts.size >= MAX_TRACKED_TURN_CAPS) {
+			const oldestTrackedTurn = Math.min(...turnCounts.keys());
+			if (cap.turnIndex < oldestTrackedTurn) return false;
+			turnCounts.delete(oldestTrackedTurn);
+			retiredThroughTurnIndex = Math.max(
+				retiredThroughTurnIndex,
+				oldestTrackedTurn,
+			);
+		}
+		counts = new Map();
+		turnCounts.set(cap.turnIndex, counts);
 	}
-	const used = turnCounts.get(phase) ?? 0;
+	latestCountedTurnIndex = Math.max(
+		latestCountedTurnIndex ?? cap.turnIndex,
+		cap.turnIndex,
+	);
+	const used = counts.get(phase) ?? 0;
 	if (used >= cap.limit) return false;
-	turnCounts.set(phase, used + 1);
+	counts.set(phase, used + 1);
 	return true;
 }
 
@@ -293,10 +309,20 @@ function admitAgainstTurnCap(
  */
 export function resetBoundedTelemetry(): void {
 	turnCounts = new Map();
-	countedTurnIndex = undefined;
+	latestCountedTurnIndex = undefined;
+	retiredThroughTurnIndex = Number.NEGATIVE_INFINITY;
 }
 
-/** Test-only: the live per-turn admission count for a phase. */
-export function _boundedTurnCountForTest(phase: string): number {
-	return turnCounts.get(phase) ?? 0;
+/** Test-only: one turn's live admission count for a phase. */
+export function _boundedTurnCountForTest(
+	phase: string,
+	turnIndex = latestCountedTurnIndex,
+): number {
+	if (turnIndex === undefined) return 0;
+	return turnCounts.get(turnIndex)?.get(phase) ?? 0;
+}
+
+/** Test-only: number of turn buckets retained by the bounded counter. */
+export function _boundedTrackedTurnsForTest(): number {
+	return turnCounts.size;
 }
