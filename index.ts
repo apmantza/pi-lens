@@ -117,7 +117,9 @@ import { logVanishedInstances } from "./clients/vanished-instance-marker.js";
 import {
 	buildMemorySample,
 	formatMemoryHealthLine,
-	shouldEmitMemorySample,
+	recordMemorySampleOutcome,
+	resetMemorySamplerCadence,
+	shouldEmitMemorySampleAdaptive,
 } from "./clients/memory-sampler.js";
 import { dumpActiveHandles } from "./clients/debug-handles.js";
 import {
@@ -1980,6 +1982,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 					// Consume the process-lifetime measurement at the first real session
 					// start. Concurrent secondary starts never reach this handler.
 					const emitHostReadyDelay = consumeHostReadyDelayAnchor();
+					// #1999: rising-edge sampler state is session-scoped module state —
+					// reset beside the primary session-start reset block so a tightened
+					// sampling window cannot leak across sessions.
+					resetMemorySamplerCadence();
 					await handleSessionStart({
 						ctxCwd: ctx.cwd,
 						sessionStartFiredAt,
@@ -2554,13 +2560,24 @@ function activateExtension(hostPi: ExtensionAPI) {
 			// over the same span (#1122).
 			resetEventLoopMonitor();
 
-			// #1123 item 2: periodic memory-attribution sample, every
-			// MEMORY_SAMPLE_TURN_INTERVAL turns — cheap (O(1)/O(bounded-cache-size)
-			// reads only, see clients/memory-sampler.ts) so no extra throttling is
-			// needed beyond the turn cadence itself.
-			if (shouldEmitMemorySample(runtime.turnIndex)) {
+			// #1123 item 2 + #1999: periodic memory-attribution sample. Base cadence
+			// is every MEMORY_SAMPLE_TURN_INTERVAL turns; when heapUsed grew >20%
+			// between samples the gate tightens to every turn until growth stabilizes
+			// (see clients/memory-sampler.ts). Session age + turn count ride along so
+			// growth-vs-age curves are plottable from logs alone. Still cheap:
+			// O(1)/O(bounded-cache-size) reads only, no extra throttling needed.
+			if (shouldEmitMemorySampleAdaptive(runtime.turnIndex)) {
 				try {
-					const sample = buildMemorySample(runtime.wordIndex);
+					const sample = buildMemorySample(
+						runtime.wordIndex,
+						undefined,
+						undefined,
+						{
+							sessionAgeMs: Math.max(0, Date.now() - runtime.sessionStartedAt),
+							sessionStartedAt: runtime.sessionStartedAt,
+							turnCount: runtime.turnIndex,
+						},
+					);
 					logLatency({
 						type: "phase",
 						filePath: "<pi-lens>",
@@ -2568,6 +2585,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 						durationMs: 0,
 						metadata: { turnIndex: runtime.turnIndex, ...sample },
 					});
+					recordMemorySampleOutcome(
+						sample.process.heapUsedBytes,
+						runtime.turnIndex,
+					);
 				} catch {
 					// best-effort observability — never fail turn_end over this
 				}

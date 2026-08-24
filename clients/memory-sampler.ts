@@ -45,25 +45,103 @@ export function shouldEmitMemorySample(turnIndex: number): boolean {
 	return turnIndex > 0 && turnIndex % MEMORY_SAMPLE_TURN_INTERVAL === 0;
 }
 
+/**
+ * Rising-edge cadence (#1999): when heapUsed grows more than
+ * {@link HEAP_GROWTH_TIGHTEN_RATIO} between two sampled turns, sampling
+ * tightens from every {@link MEMORY_SAMPLE_TURN_INTERVAL} turns to every turn
+ * until growth stabilizes. The state below is module-scoped SESSION state —
+ * reset it at every primary `session_start` via
+ * {@link resetMemorySamplerCadence} (defect shape 17: a process-lifetime latch
+ * holding a session-scoped signal).
+ */
+export const HEAP_GROWTH_TIGHTEN_RATIO = 1.2;
+
+let _lastSampledHeapUsedBytes = 0;
+let _tightenThroughTurn = 0;
+
+/** Clear the rising-edge cadence state. Called on primary session_start. */
+export function resetMemorySamplerCadence(): void {
+	_lastSampledHeapUsedBytes = 0;
+	_tightenThroughTurn = 0;
+}
+
+/** PURE: >20% heap growth between two sampled readings warrants tightening. */
+export function isRapidHeapGrowth(
+	previousHeapUsedBytes: number,
+	currentHeapUsedBytes: number,
+): boolean {
+	return (
+		previousHeapUsedBytes > 0 &&
+		currentHeapUsedBytes > previousHeapUsedBytes * HEAP_GROWTH_TIGHTEN_RATIO
+	);
+}
+
+/** Record the heap reading of a sample just emitted at `turnIndex`. A rapid
+ *  growth edge extends the tightened window through the NEXT turn; each
+ *  subsequent still-growing sample (including one taken inside an already
+ *  tightened window) extends it again, so the window naturally expires once
+ *  growth stabilizes. Monotonic max so an out-of-order turn can never shrink
+ *  the window. O(1). */
+export function recordMemorySampleOutcome(
+	heapUsedBytes: number,
+	turnIndex: number,
+): void {
+	if (isRapidHeapGrowth(_lastSampledHeapUsedBytes, heapUsedBytes)) {
+		_tightenThroughTurn = Math.max(_tightenThroughTurn, turnIndex + 1);
+	}
+	_lastSampledHeapUsedBytes = heapUsedBytes;
+}
+
+/** Adaptive gate used by turn_end: base every-10 cadence OR an open tightened
+ *  window. Pure w.r.t. its argument; the window itself is session state owned
+ *  by {@link recordMemorySampleOutcome}. */
+export function shouldEmitMemorySampleAdaptive(turnIndex: number): boolean {
+	if (turnIndex <= 0) return false;
+	return (
+		turnIndex % MEMORY_SAMPLE_TURN_INTERVAL === 0 ||
+		turnIndex <= _tightenThroughTurn
+	);
+}
+
 export interface MemoryProcessUsage {
 	rssBytes: number;
 	heapUsedBytes: number;
 	heapTotalBytes: number;
 	externalBytes: number;
 	arrayBuffersBytes: number;
+	/** OS high-water mark (#1999): `process.resourceUsage().maxRSS` × 1024.
+	 *  On Windows libuv backs BOTH this and `rssBytes` with the same
+	 *  `GetProcessMemoryInfo()` call — rss reads `WorkingSetSize` (current),
+	 *  maxRSS reads `PeakWorkingSetSize` (high-water) — see libuv
+	 *  src/win/util.c `uv_resident_set_memory`. So `rss` IS the OS current
+	 *  working set at sample time (tasklist's "Mem Usage" column); there is no
+	 *  second live counter to cross-check it against, hence no separate OS call
+	 *  here. The #1999 "327MB sample vs 1767MB tasklist" gap is TEMPORAL, not
+	 *  counter divergence: the sampler fired at an idle/trimmed moment while
+	 *  tasklist observed a peak. `peakWorkingSetBytes` makes that distinguishable
+	 *  from logs alone: rss ≪ peak ⇒ samples are catching valleys, not missing
+	 *  growth. `null` when the reading is unavailable. */
+	peakWorkingSetBytes: number | null;
 }
 
-/** PURE: reshape Node's `process.memoryUsage()` into this module's field
- *  names — testable without touching the real process. */
+/** PURE: reshape Node's `process.memoryUsage()` (+ optional
+ *  `process.resourceUsage()`) into this module's field names — testable
+ *  without touching the real process. */
 export function toMemoryProcessUsage(
 	mem: NodeJS.MemoryUsage,
+	resourceUsage?: Partial<NodeJS.ResourceUsage>,
 ): MemoryProcessUsage {
+	const maxKb = resourceUsage?.maxRSS;
 	return {
 		rssBytes: mem.rss,
 		heapUsedBytes: mem.heapUsed,
 		heapTotalBytes: mem.heapTotal,
 		externalBytes: mem.external,
 		arrayBuffersBytes: mem.arrayBuffers,
+		peakWorkingSetBytes:
+			typeof maxKb === "number" && Number.isFinite(maxKb) && maxKb > 0
+				? maxKb * 1024
+				: null,
 	};
 }
 
@@ -95,9 +173,19 @@ export interface MemorySampleSubsystems {
 	};
 }
 
+/** Session-age ridealong (#1999): lets growth-vs-age curves be plotted from
+ *  latency.log alone. */
+export interface MemorySampleSessionContext {
+	sessionAgeMs: number;
+	sessionStartedAt: number;
+	turnCount: number;
+}
+
 export interface MemorySample {
 	process: MemoryProcessUsage;
 	subsystems: MemorySampleSubsystems;
+	/** Present only when the caller supplies session context. */
+	session?: MemorySampleSessionContext;
 }
 
 /**
@@ -141,14 +229,27 @@ export function collectMemorySampleSubsystems(
 }
 
 /** Assemble one full sample. `mem` is injectable for tests; defaults to a
- *  live `process.memoryUsage()` read. */
+ *  live `process.memoryUsage()` read. `resourceUsage` (peak working set) and
+ *  `session` are optional ridealongs (#1999); when `resourceUsage` is omitted
+ *  a live `process.resourceUsage()` read supplies the peak. */
 export function buildMemorySample(
 	wordIndex: WordIndex | null,
 	mem: NodeJS.MemoryUsage = process.memoryUsage(),
+	resourceUsage?: Partial<NodeJS.ResourceUsage>,
+	session?: MemorySampleSessionContext,
 ): MemorySample {
+	let resolvedResourceUsage = resourceUsage;
+	if (!resolvedResourceUsage) {
+		try {
+			resolvedResourceUsage = process.resourceUsage();
+		} catch {
+			resolvedResourceUsage = undefined;
+		}
+	}
 	return {
-		process: toMemoryProcessUsage(mem),
+		process: toMemoryProcessUsage(mem, resolvedResourceUsage),
 		subsystems: collectMemorySampleSubsystems(wordIndex),
+		session,
 	};
 }
 
@@ -170,8 +271,15 @@ export function formatMemoryHealthLine(sample: MemorySample): string {
 		? `${toMb(subsystems.treeSitter.treeCacheTotalBytes)}MB (${subsystems.treeSitter.treeCacheSize} trees)`
 		: "n/a";
 	const graph = `${subsystems.reviewGraph.totalNodes}n/${subsystems.reviewGraph.totalEdges}e (${subsystems.reviewGraph.cacheEntries} cwd)`;
+	// #1999: peak WS rides along when known — rss far below peak means the
+	// periodic samples are catching idle valleys, not the true high-water mark.
+	const peak =
+		proc.peakWorkingSetBytes !== null
+			? ` · peak WS ${toMb(proc.peakWorkingSetBytes)}MB`
+			: "";
 	return (
 		`Memory: RSS ${toMb(proc.rssBytes)}MB · heap ${toMb(proc.heapUsedBytes)}/${toMb(proc.heapTotalBytes)}MB` +
-		` · external ${toMb(proc.externalBytes)}MB · tree-sitter cache ${treeCache} · review-graph ${graph}`
+		` · external ${toMb(proc.externalBytes)}MB${peak}` +
+		` · tree-sitter cache ${treeCache} · review-graph ${graph}`
 	);
 }

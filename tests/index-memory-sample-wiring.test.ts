@@ -106,6 +106,10 @@ describe(
 			expect(metadata.subsystems).toBeDefined();
 			const proc = metadata.process as Record<string, number>;
 			expect(proc.rssBytes).toBeGreaterThan(0);
+			// #1999: session-age + turn-count ridealong for growth-vs-age curves.
+			const session = metadata.session as Record<string, number>;
+			expect(session.sessionAgeMs).toBeGreaterThanOrEqual(0);
+			expect(session.turnCount).toBe(10);
 		});
 
 		it("emits again on turn 20 but not on turns 11-19 (cadence, not a one-shot)", async () => {

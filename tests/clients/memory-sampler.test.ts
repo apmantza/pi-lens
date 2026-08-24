@@ -10,13 +10,18 @@
  * shared with the rest of the suite.
  */
 
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
 	buildMemorySample,
 	collectMemorySampleSubsystems,
 	formatMemoryHealthLine,
+	HEAP_GROWTH_TIGHTEN_RATIO,
+	isRapidHeapGrowth,
 	MEMORY_SAMPLE_TURN_INTERVAL,
+	recordMemorySampleOutcome,
+	resetMemorySamplerCadence,
 	shouldEmitMemorySample,
+	shouldEmitMemorySampleAdaptive,
 	toMemoryProcessUsage,
 } from "../../clients/memory-sampler.js";
 import { getReviewGraphWorkspaceCacheSnapshot } from "../../clients/review-graph/builder.js";
@@ -43,6 +48,87 @@ describe("shouldEmitMemorySample (cadence)", () => {
 	});
 });
 
+describe("adaptive cadence (#1999 rising edge)", () => {
+	beforeEach(() => {
+		resetMemorySamplerCadence();
+	});
+
+	it("matches the base every-10 cadence when no growth has been recorded", () => {
+		expect(shouldEmitMemorySampleAdaptive(0)).toBe(false);
+		expect(shouldEmitMemorySampleAdaptive(5)).toBe(false);
+		expect(shouldEmitMemorySampleAdaptive(MEMORY_SAMPLE_TURN_INTERVAL)).toBe(
+			true,
+		);
+		expect(
+			shouldEmitMemorySampleAdaptive(MEMORY_SAMPLE_TURN_INTERVAL + 1),
+		).toBe(false);
+	});
+
+	it(`tightens to every turn after >${HEAP_GROWTH_TIGHTEN_RATIO}x growth between samples, then reverts once stable`, () => {
+		recordMemorySampleOutcome(100, 10);
+		recordMemorySampleOutcome(130, 20); // +30% — rapid growth
+		// Tightened: the turn immediately after the growing sample samples too.
+		expect(shouldEmitMemorySampleAdaptive(21)).toBe(true);
+		// Stabilized: without another rapid-growth reading the window does not
+		// extend past that one tightened turn.
+		expect(shouldEmitMemorySampleAdaptive(22)).toBe(false);
+		expect(shouldEmitMemorySampleAdaptive(29)).toBe(false);
+		expect(shouldEmitMemorySampleAdaptive(30)).toBe(true);
+	});
+
+	it("keeps tightening while growth continues each sampled turn", () => {
+		recordMemorySampleOutcome(100, 10);
+		recordMemorySampleOutcome(130, 20); // +30% vs 100
+		expect(shouldEmitMemorySampleAdaptive(21)).toBe(true);
+		recordMemorySampleOutcome(200, 21); // +54% vs 130 — still growing
+		expect(shouldEmitMemorySampleAdaptive(22)).toBe(true);
+		recordMemorySampleOutcome(210, 22); // +5% vs 200 — stabilized
+		expect(shouldEmitMemorySampleAdaptive(23)).toBe(false);
+		expect(shouldEmitMemorySampleAdaptive(24)).toBe(false);
+		expect(shouldEmitMemorySampleAdaptive(30)).toBe(true);
+	});
+
+	it("does not tighten on sub-threshold growth", () => {
+		recordMemorySampleOutcome(100, 10);
+		recordMemorySampleOutcome(110, 20); // +10% — below threshold
+		expect(shouldEmitMemorySampleAdaptive(21)).toBe(false);
+		expect(shouldEmitMemorySampleAdaptive(30)).toBe(true);
+	});
+
+	it("isRapidHeapGrowth: exactly-at-threshold is not rapid; zero/negative baselines never tighten", () => {
+		expect(isRapidHeapGrowth(0, 1_000_000_000)).toBe(false);
+		expect(isRapidHeapGrowth(-1, 1_000_000_000)).toBe(false);
+		expect(isRapidHeapGrowth(100, 100 * HEAP_GROWTH_TIGHTEN_RATIO)).toBe(false);
+		expect(isRapidHeapGrowth(100, 100 * HEAP_GROWTH_TIGHTEN_RATIO + 1)).toBe(
+			true,
+		);
+	});
+
+	it("reset clears the tightened window and baseline (session boundary)", () => {
+		recordMemorySampleOutcome(100, 10);
+		recordMemorySampleOutcome(130, 20);
+		expect(shouldEmitMemorySampleAdaptive(21)).toBe(true);
+		resetMemorySamplerCadence();
+		expect(shouldEmitMemorySampleAdaptive(21)).toBe(false);
+		// Baseline cleared too: the next base-cadence sample has no pre-reset
+		// history to grow from, so it records a baseline instead of tightening.
+		expect(shouldEmitMemorySampleAdaptive(30)).toBe(true);
+		recordMemorySampleOutcome(140, 30);
+		expect(shouldEmitMemorySampleAdaptive(31)).toBe(false);
+		// ...but a fresh growing pair tightens again.
+		recordMemorySampleOutcome(180, 40);
+		expect(shouldEmitMemorySampleAdaptive(41)).toBe(true);
+	});
+
+	it("never tightens on turn 0 or negative turn indexes", () => {
+		recordMemorySampleOutcome(100, 10);
+		recordMemorySampleOutcome(130, 20);
+		resetMemorySamplerCadence();
+		expect(shouldEmitMemorySampleAdaptive(-10)).toBe(false);
+		expect(shouldEmitMemorySampleAdaptive(0)).toBe(false);
+	});
+});
+
 describe("toMemoryProcessUsage (pure reshape)", () => {
 	it("maps every process.memoryUsage() field to this module's names", () => {
 		const mem: NodeJS.MemoryUsage = {
@@ -58,7 +144,15 @@ describe("toMemoryProcessUsage (pure reshape)", () => {
 			heapUsedBytes: 60,
 			externalBytes: 20,
 			arrayBuffersBytes: 10,
+			peakWorkingSetBytes: null,
 		});
+
+		// #1999: OS high-water mark rides along so an idle-moment rss sample can be
+		// distinguished from true growth (libuv maps PeakWorkingSetSize → maxRSS in KB).
+		expect(
+			toMemoryProcessUsage(mem, { maxRSS: 500_000 }).peakWorkingSetBytes,
+		).toBe(500_000 * 1024);
+		expect(toMemoryProcessUsage(mem, {}).peakWorkingSetBytes).toBeNull();
 	});
 });
 
@@ -139,6 +233,31 @@ describe("buildMemorySample", () => {
 		const sample = buildMemorySample(null, fakeMem());
 		expect(sample.process.rssBytes).toBe(300 * 1024 * 1024);
 		expect(sample.subsystems).toBeDefined();
+	});
+
+	it("carries an injected peak-working-set reading into process usage (#1999)", () => {
+		const sample = buildMemorySample(null, fakeMem(), { maxRSS: 800_000 });
+		expect(sample.process.peakWorkingSetBytes).toBe(800_000 * 1024);
+	});
+
+	it("session context rides along when supplied (#1999)", () => {
+		const sample = buildMemorySample(null, fakeMem(), undefined, {
+			sessionAgeMs: 6543,
+			sessionStartedAt: 1000,
+			turnCount: 12,
+		});
+		expect(sample.session).toEqual({
+			sessionAgeMs: 6543,
+			sessionStartedAt: 1000,
+			turnCount: 12,
+		});
+		// Absent context stays absent — /lens-health callers omit it.
+		expect(buildMemorySample(null, fakeMem()).session).toBeUndefined();
+	});
+
+	it("health line renders peak working set when present (#1999)", () => {
+		const sample = buildMemorySample(null, fakeMem(), { maxRSS: 800_000 });
+		expect(formatMemoryHealthLine(sample)).toContain("peak WS 781MB");
 	});
 });
 
