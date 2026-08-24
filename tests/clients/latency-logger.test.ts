@@ -174,6 +174,22 @@ describe("getLastLoggedPhase (loop_block attribution, #1122/#1123)", () => {
 		});
 		expect(getLastLoggedPhase()?.phase).toBe("provider_request");
 	});
+
+	it("does not let failed-target decision telemetry own stall attribution (#2044)", () => {
+		logLatency({
+			type: "phase",
+			phase: "turn_end_tests",
+			filePath: "<pi-lens>",
+			durationMs: 5,
+		});
+		logLatency({
+			type: "phase",
+			phase: "test_runner_failed_target_state",
+			filePath: "/repo/stale.test.ts",
+			durationMs: 0,
+		});
+		expect(getLastLoggedPhase()?.phase).toBe("turn_end_tests");
+	});
 });
 
 describe("getRecentLoggedPhases (#1723: bounded attribution ring)", () => {

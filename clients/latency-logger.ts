@@ -117,6 +117,10 @@ let recentPhases: Array<{ phase: string; ts: string }> = [];
  * #1996: `cache_usage_summary` is a zero-duration session rollup over earlier
  * usage records. It reports no new work and therefore cannot own last-phase
  * stall attribution.
+ *
+ * #2044: `test_runner_failed_target_state` is a zero-duration decision after a
+ * bounded filesystem probe. The surrounding turn-end test-selection phase owns
+ * any real work, so this row must not replace it in stall attribution.
  */
 const LAST_PHASE_EXCLUDED = new Set([
 	"loop_block",
@@ -127,6 +131,7 @@ const LAST_PHASE_EXCLUDED = new Set([
 	"agent_end_deferred_mutation_requeue",
 	"session_end_bus_rollup",
 	"cache_usage_summary",
+	"test_runner_failed_target_state",
 	"lsp_aux_wait_outcome",
 	"tool_set_mutation",
 	"availability_decision",

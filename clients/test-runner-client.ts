@@ -11,12 +11,16 @@
  * specific file being edited, not the entire suite.
  */
 
-import { createSubsystemLogger } from "./extension-log.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { emitBounded } from "./bounded-telemetry.js";
+import { truncateForLedger } from "./degradation-ledger.js";
 import { minimatch } from "./deps/minimatch.js";
+import { createSubsystemLogger } from "./extension-log.js";
 import { detectFileRole } from "./file-role.js";
 import { findGlobalBinary } from "./package-manager.js";
+import { PathKeyedMap } from "./path-keyed-map.js";
+import { normalizeMapKey } from "./path-utils.js";
 import { isMeasuredDuration, toMeasuredDurationMs } from "./run-duration.js";
 import { safeSpawn, safeSpawnAsync } from "./safe-spawn.js";
 
@@ -260,11 +264,81 @@ export function stripWrapperArgs(binName: string, args: string[]): string[] {
 
 // --- Client ---
 
+const MAX_FAILED_TARGETS_PER_RUNNER = 32;
+const MAX_FAILED_TARGET_CHECKS_PER_SELECTION = 8;
+const FAILED_TARGET_DETAIL_CAP_PER_TURN = 8;
+
+interface TestRunnerClientOptions {
+	statFailedTarget?: (filePath: string) => void;
+}
+
+interface TestRunRequest {
+	runner: string;
+	config: RunnerConfig;
+	turnIndex?: number;
+}
+
+interface FailedTargetStateRecord {
+	outcome:
+		| "retired-missing"
+		| "retained-indeterminate"
+		| "capacity-evicted";
+	runner: string;
+	candidate: string;
+	errorCode?: string;
+	turnIndex?: number;
+}
+
+interface FailedTargetSelection {
+	cwd: string;
+	runner: string;
+	failedTargets: PathKeyedMap<string>;
+	relatedAbs?: string;
+	selfAbs?: string;
+	turnIndex?: number;
+}
+
+interface TestResultRecord {
+	cwd: string;
+	runner: string;
+	testFile: string;
+	result: TestResult;
+	turnIndex?: number;
+}
+
+function canonicalFailedDisplayPath(filePath: string): string {
+	const absolute = path.resolve(filePath);
+	try {
+		return fs.realpathSync.native(absolute);
+	} catch {
+		return absolute;
+	}
+}
+
+function canonicalFailedPath(filePath: string): string {
+	return normalizeMapKey(canonicalFailedDisplayPath(filePath));
+}
+
+function filesystemErrorCode(error: unknown): string | undefined {
+	if (
+		error !== null &&
+		typeof error === "object" &&
+		"code" in error &&
+		typeof error.code === "string"
+	) {
+		return error.code;
+	}
+	return undefined;
+}
+
 export class TestRunnerClient {
 	private log: (msg: string) => void;
-	private retirementLog: (msg: string) => void;
 	private availableRunners: Map<string, boolean> = new Map();
-	private failedTestsByRunner: Map<string, Set<string>> = new Map();
+	private failedTestsByRunner = new Map<
+		string,
+		PathKeyedMap<PathKeyedMap<string>>
+	>();
+	private readonly statFailedTarget: (filePath: string) => void;
 	// Best-effort vitest config `test.include`/`test.exclude` globs, scraped as
 	// plain text (never executed) and cached per cwd so the config file is
 	// only read/parsed once, not on every edit. `null` means "no config found
@@ -276,14 +350,12 @@ export class TestRunnerClient {
 		{ include?: string[]; exclude?: string[] } | null
 	> = new Map();
 
-	constructor(verbose = false) {
+	constructor(verbose = false, options: TestRunnerClientOptions = {}) {
 		this.log = verbose
 			? createSubsystemLogger("test-runner")
 			: () => {};
-		// Retirement is a correctness decision, not optional verbose chatter.
-		// Keep it on the existing subsystem sink so production can prove that a
-		// stale failed-first target was removed without logging every run.
-		this.retirementLog = createSubsystemLogger("test-runner");
+		this.statFailedTarget =
+			options.statFailedTarget ?? ((filePath) => void fs.statSync(filePath));
 	}
 
 	/**
@@ -850,6 +922,7 @@ export class TestRunnerClient {
 	getTestRunTarget(
 		sourceFilePath: string,
 		cwd: string,
+		turnIndex?: number,
 	): {
 		testFile: string;
 		runner: string;
@@ -859,8 +932,7 @@ export class TestRunnerClient {
 		const detected = this.detectRunner(cwd, sourceFilePath);
 		if (!detected) return null;
 
-		const key = this.failedKey(cwd, detected.runner);
-		const failedSet = this.failedTestsByRunner.get(key);
+		const failedSet = this.getFailedTargets(cwd, detected.runner);
 
 		// If the edited file is itself a test file, there's no "related test"
 		// to discover — running findTestFile on it would strip its own
@@ -872,13 +944,14 @@ export class TestRunnerClient {
 			: this.findTestFile(sourceFilePath, cwd, detected.runner);
 
 		if (failedSet && failedSet.size > 0) {
-			const failedFirst = this.retireMissingFailedTargets(
-				key,
-				detected.runner,
-				failedSet,
-				related ? path.resolve(related.testFile) : undefined,
-				selfIsTest ? path.resolve(sourceFilePath) : undefined,
-			);
+			const failedFirst = this.retireMissingFailedTargets({
+				cwd,
+				runner: detected.runner,
+				failedTargets: failedSet,
+				relatedAbs: related ? path.resolve(related.testFile) : undefined,
+				selfAbs: selfIsTest ? path.resolve(sourceFilePath) : undefined,
+				turnIndex,
+			});
 			if (failedFirst) {
 				return {
 					testFile: failedFirst,
@@ -918,8 +991,34 @@ export class TestRunnerClient {
 		cwd: string,
 		runner: string,
 		config: RunnerConfig,
+	): Promise<TestResult>;
+	async runTestFileAsync(
+		testFile: string,
+		cwd: string,
+		request: TestRunRequest,
+	): Promise<TestResult>;
+	async runTestFileAsync(
+		testFile: string,
+		cwd: string,
+		runnerOrRequest: string | TestRunRequest,
+		legacyConfig?: RunnerConfig,
 	): Promise<TestResult> {
 		const absoluteTestFile = path.resolve(testFile);
+		let request: TestRunRequest;
+		if (typeof runnerOrRequest === "string") {
+			if (!legacyConfig) {
+				return this.emptyResult(
+					absoluteTestFile,
+					"",
+					runnerOrRequest,
+					"Runner configuration missing",
+				);
+			}
+			request = { runner: runnerOrRequest, config: legacyConfig };
+		} else {
+			request = runnerOrRequest;
+		}
+		const { runner, config, turnIndex } = request;
 		if (!fs.existsSync(absoluteTestFile)) {
 			return this.emptyResult(
 				absoluteTestFile,
@@ -1015,7 +1114,13 @@ export class TestRunnerClient {
 					break;
 			}
 
-			this.recordResult(cwd, runner, absoluteTestFile, parsed);
+			this.recordResult({
+				cwd,
+				runner,
+				testFile: absoluteTestFile,
+				result: parsed,
+				turnIndex,
+			});
 			return parsed;
 		} catch (err: any) {
 			this.log(`Run error: ${err.message}`);
@@ -1023,48 +1128,171 @@ export class TestRunnerClient {
 		}
 	}
 
+	private getFailedTargets(
+		cwd: string,
+		runner: string,
+		create = false,
+	): PathKeyedMap<string> | undefined {
+		let roots = this.failedTestsByRunner.get(runner);
+		if (!roots && create) {
+			roots = new PathKeyedMap<PathKeyedMap<string>>(canonicalFailedPath);
+			this.failedTestsByRunner.set(runner, roots);
+		}
+		if (!roots) return undefined;
+
+		const root = canonicalFailedPath(cwd);
+		let targets = roots.get(root);
+		if (!targets && create) {
+			targets = new PathKeyedMap<string>(canonicalFailedPath);
+			roots.set(root, targets);
+		}
+		return targets;
+	}
+
+	private deleteFailedRoot(cwd: string, runner: string): void {
+		const roots = this.failedTestsByRunner.get(runner);
+		if (!roots) return;
+		roots.delete(canonicalFailedPath(cwd));
+		if (roots.size === 0) this.failedTestsByRunner.delete(runner);
+	}
+
+	private failedTargetCount(runner: string): number {
+		const roots = this.failedTestsByRunner.get(runner);
+		if (!roots) return 0;
+		let count = 0;
+		for (const targets of roots.values()) count += targets.size;
+		return count;
+	}
+
+	private evictOldestFailedTarget(runner: string): string | undefined {
+		const roots = this.failedTestsByRunner.get(runner);
+		if (!roots) return undefined;
+		for (const [root, targets] of roots) {
+			const oldest = targets.keys().next();
+			if (oldest.done) continue;
+			targets.delete(oldest.value);
+			if (targets.size === 0) roots.delete(root);
+			if (roots.size === 0) this.failedTestsByRunner.delete(runner);
+			return oldest.value;
+		}
+		return undefined;
+	}
+
+	private classifyFailedTarget(candidate: string): {
+		status: "present" | "missing" | "indeterminate";
+		errorCode?: string;
+	} {
+		try {
+			this.statFailedTarget(candidate);
+			return { status: "present" };
+		} catch (error) {
+			const errorCode = filesystemErrorCode(error);
+			if (errorCode === "ENOENT" || errorCode === "ENOTDIR") {
+				return { status: "missing", errorCode };
+			}
+			return { status: "indeterminate", errorCode };
+		}
+	}
+
+	private recordFailedTargetState(record: FailedTargetStateRecord): void {
+		const { outcome, runner, candidate, errorCode, turnIndex } = record;
+		const boundedTarget = truncateForLedger(candidate);
+		const identity = truncateForLedger(`${outcome}:${runner}:${candidate}`);
+		const payload = {
+			durationMs: 0,
+			filePath: boundedTarget,
+			metadata: {
+				outcome,
+				runner,
+				errorCode: errorCode ?? "unknown",
+			},
+		};
+		const options = {
+			ledgerKind: "test-runner-failed-target-state" as const,
+			risingEdgePer: "identity" as const,
+			reason: `${outcome}: ${boundedTarget}`,
+		};
+		emitBounded(
+			"test_runner_failed_target_state",
+			identity,
+			payload,
+			turnIndex === undefined
+				? options
+				: {
+						...options,
+						capPerTurn: {
+							limit: FAILED_TARGET_DETAIL_CAP_PER_TURN,
+							turnIndex,
+						},
+					},
+		);
+	}
+
 	/**
-	 * Remove failed-first paths that disappeared since their failed run, then
-	 * return the first surviving target. Related/self targets keep their
-	 * existing priority over an unrelated failed target.
+	 * Retire only confirmed-missing failed-first paths, then return one usable
+	 * target. A bounded prefix is checked per selection; remaining candidates
+	 * carry over to the next selection instead of adding unbounded synchronous
+	 * filesystem work to turn_end. Related/self targets keep priority.
 	 */
 	private retireMissingFailedTargets(
-		key: string,
-		runner: string,
-		failedSet: Set<string>,
-		relatedAbs?: string,
-		selfAbs?: string,
+		selection: FailedTargetSelection,
 	): string | undefined {
-		let firstValid: string | undefined;
-		let preferredValid: string | undefined;
-
-		// Failed-first is a process-local hint, so validate it at the point of
-		// use. Missing paths can survive indefinitely because the missing-file
-		// result returns before recordResult() gets a chance to retire them.
-		for (const candidate of failedSet) {
-			const candidateAbs = path.resolve(candidate);
-			if (!fs.existsSync(candidateAbs)) {
-				failedSet.delete(candidate);
-				const boundedTarget =
-					candidateAbs.length > 200
-						? `…${candidateAbs.slice(-199)}`
-						: candidateAbs;
-				this.retirementLog(
-					`failed-first-retired runner=${runner} target=${boundedTarget}`,
-				);
-				continue;
+		const {
+			cwd,
+			runner,
+			failedTargets,
+			relatedAbs,
+			selfAbs,
+			turnIndex,
+		} = selection;
+		let checked = 0;
+		const inspected = new Set<string>();
+		const inspect = (identity: string, candidate: string): string | undefined => {
+			if (checked >= MAX_FAILED_TARGET_CHECKS_PER_SELECTION) return undefined;
+			checked += 1;
+			inspected.add(identity);
+			const verdict = this.classifyFailedTarget(candidate);
+			if (verdict.status === "missing") {
+				failedTargets.delete(identity);
+				this.recordFailedTargetState({
+					outcome: "retired-missing",
+					runner,
+					candidate,
+					errorCode: verdict.errorCode,
+					turnIndex,
+				});
+				return undefined;
 			}
-
-			firstValid ??= candidateAbs;
-			if (candidateAbs === relatedAbs || candidateAbs === selfAbs) {
-				preferredValid = candidateAbs;
+			if (verdict.status === "indeterminate") {
+				this.recordFailedTargetState({
+					outcome: "retained-indeterminate",
+					runner,
+					candidate,
+					errorCode: verdict.errorCode,
+					turnIndex,
+				});
 			}
+			return candidate;
+		};
+
+		for (const preferred of [relatedAbs, selfAbs]) {
+			if (!preferred) continue;
+			const identity = canonicalFailedPath(preferred);
+			const candidate = failedTargets.get(identity);
+			if (!candidate) continue;
+			const selected = inspect(identity, candidate);
+			if (selected) return selected;
 		}
 
-		if (failedSet.size === 0) this.failedTestsByRunner.delete(key);
-		else this.failedTestsByRunner.set(key, failedSet);
+		for (const [identity, candidate] of failedTargets) {
+			if (inspected.has(identity)) continue;
+			if (checked >= MAX_FAILED_TARGET_CHECKS_PER_SELECTION) break;
+			const selected = inspect(identity, candidate);
+			if (selected) return selected;
+		}
 
-		return preferredValid ?? firstValid;
+		if (failedTargets.size === 0) this.deleteFailedRoot(cwd, runner);
+		return undefined;
 	}
 
 	/**
@@ -2306,30 +2534,46 @@ export class TestRunnerClient {
 		return lines.join("\n").slice(0, 500);
 	}
 
-	private failedKey(cwd: string, runner: string): string {
-		return `${path.resolve(cwd)}:${runner}`;
-	}
-
-	private recordResult(
-		cwd: string,
-		runner: string,
-		testFile: string,
-		result: TestResult,
-	): void {
-		const key = this.failedKey(cwd, runner);
-		const abs = path.resolve(testFile);
-		const set = this.failedTestsByRunner.get(key) ?? new Set<string>();
+	private recordResult(record: TestResultRecord): void {
+		const { cwd, runner, testFile, result, turnIndex } = record;
+		const targetPath = canonicalFailedDisplayPath(testFile);
+		const target = canonicalFailedPath(targetPath);
+		let failedTargets = this.getFailedTargets(
+			cwd,
+			runner,
+			result.failed > 0,
+		);
+		if (!failedTargets) return;
 
 		if (result.failed > 0) {
-			set.add(abs);
-			this.failedTestsByRunner.set(key, set);
+			const alreadyRecorded = failedTargets.has(target);
+			if (
+				!alreadyRecorded &&
+				this.failedTargetCount(runner) >= MAX_FAILED_TARGETS_PER_RUNNER
+			) {
+				const evicted = this.evictOldestFailedTarget(runner);
+				if (evicted) {
+					this.recordFailedTargetState({
+						outcome: "capacity-evicted",
+						runner,
+						candidate: evicted,
+						turnIndex,
+					});
+				}
+				// Eviction can remove this root's final prior target. Reacquire the
+				// root map before inserting so the newest failure never lands in a
+				// detached PathKeyedMap.
+				failedTargets = this.getFailedTargets(cwd, runner, true);
+				if (!failedTargets) return;
+			}
+			// Refresh insertion order so the cap retains the latest failures.
+			if (alreadyRecorded) failedTargets.delete(target);
+			failedTargets.set(target, targetPath);
 			return;
 		}
 
-		if (set.has(abs)) {
-			set.delete(abs);
-			if (set.size === 0) this.failedTestsByRunner.delete(key);
-			else this.failedTestsByRunner.set(key, set);
+		if (failedTargets.delete(target) && failedTargets.size === 0) {
+			this.deleteFailedRoot(cwd, runner);
 		}
 	}
 }

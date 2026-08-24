@@ -64,6 +64,13 @@ export type DegradationKind =
 	 * is the exact number of detections this session.
 	 */
 	| "snapshot-integrity"
+	/**
+	 * Failed-first test state was retired only after ENOENT/ENOTDIR evidence,
+	 * retained when the filesystem probe was indeterminate, or evicted at the
+	 * state cap (#2044). Subject is outcome + runner + bounded path, so repeated
+	 * checks stay attributable.
+	 */
+	| "test-runner-failed-target-state"
 	| "formatter-failure"
 	| "wasm-abort"
 	| "lsp-diagnostics-timeout"

@@ -2372,16 +2372,22 @@ describe("turn_end test runner — cascade neighbors get their own test companio
 				}
 				return null;
 			});
-			const runTestFileAsync = vi.fn(async (testFile: string) => ({
-				file: testFile,
-				sourceFile: "",
-				runner: "vitest",
-				passed: 1,
-				failed: 0,
-				skipped: 0,
-				failures: [],
-				duration: 1,
-			}));
+			const runTestFileAsync = vi.fn(
+				async (
+					testFile: string,
+					_cwd?: string,
+					_request?: { turnIndex?: number },
+				) => ({
+					file: testFile,
+					sourceFile: "",
+					runner: "vitest",
+					passed: 1,
+					failed: 0,
+					skipped: 0,
+					failures: [],
+					duration: 1,
+				}),
+			);
 
 			await handleTurnEnd(
 				makeTurnEndDeps(runtime, cacheManager, {
@@ -2398,6 +2404,9 @@ describe("turn_end test runner — cascade neighbors get their own test companio
 			const firedTestFiles = runTestFileAsync.mock.calls.map((c) => c[0]);
 			expect(firedTestFiles).toContain(fooTestFile);
 			expect(firedTestFiles).toContain(barTestFile);
+			for (const call of runTestFileAsync.mock.calls) {
+				expect(call[2]).toMatchObject({ turnIndex: runtime.turnIndex });
+			}
 		} finally {
 			env.cleanup();
 		}

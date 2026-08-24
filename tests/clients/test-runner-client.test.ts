@@ -1,6 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetBoundedTelemetry } from "../../clients/bounded-telemetry.js";
+import {
+	clearLatencyLog,
+	flushLatencyLog,
+	getLatencyLogPath,
+} from "../../clients/latency-logger.js";
 import { RUNNERS, TestRunnerClient } from "../../clients/test-runner-client.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 
@@ -931,7 +937,7 @@ describe("test-runner-client", () => {
 		});
 	});
 
-	it("prefers failed-first target when failure cache exists", () => {
+	it("prefers failed-first target when failure cache exists", async () => {
 		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
 		cleanups.push(cleanup);
 
@@ -941,8 +947,18 @@ describe("test-runner-client", () => {
 		fs.writeFileSync(src, "package main\n");
 		fs.writeFileSync(testFile, "package main\n");
 
-		const client = new TestRunnerClient(false) as any;
-		client.failedTestsByRunner.set(`${path.resolve(tmpDir)}:go`, new Set([testFile]));
+		const client = new TestRunnerClient(false);
+		const seeded = await client.runTestFileAsync(testFile, tmpDir, "go", {
+			...RUNNERS.go,
+			command: process.execPath,
+			binName: "pi-lens-failed-first-fixture",
+			args: (target) => [
+				"-e",
+				"console.log('--- FAIL: fixture'); process.exitCode = 1;",
+				target,
+			],
+		});
+		expect(seeded.failed).toBe(1);
 
 		const target = client.getTestRunTarget(src, tmpDir);
 		expect(target?.strategy).toBe("failed-first");
@@ -1031,56 +1047,218 @@ describe("test-runner-client", () => {
 			});
 		});
 
-		it("keeps failed-first state isolated between runners", async () => {
-			const go = setupTestEnvironment("pi-lens-tests-2044-go-");
-			const cargo = setupTestEnvironment("pi-lens-tests-2044-cargo-");
-			cleanups.push(go.cleanup, cargo.cleanup);
+		it("retires one runner without clearing another in the same project", async () => {
+			const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-2044-");
+			const aliasRoot = `${tmpDir}-alias`;
+			fs.symlinkSync(
+				tmpDir,
+				aliasRoot,
+				process.platform === "win32" ? "junction" : "dir",
+			);
+			cleanups.push(
+				() => fs.rmSync(aliasRoot, { recursive: true, force: true }),
+				cleanup,
+			);
 
+			fs.writeFileSync(path.join(tmpDir, "go.mod"), "module example.com/tmp\n");
+			fs.writeFileSync(path.join(tmpDir, "Cargo.toml"), "[package]\nname='tmp'\n");
+			const goSource = path.join(tmpDir, "widget.go");
+			const staleGoTest = path.join(tmpDir, "stale_test.go");
+			const cargoSource = path.join(aliasRoot, "widget.rs");
+			const cargoTest = path.join(tmpDir, "widget_test.rs");
+			for (const file of [goSource, staleGoTest, cargoSource, cargoTest]) {
+				fs.writeFileSync(file, "fixture\n");
+			}
+
+			const cargoConfig = {
+				...RUNNERS.cargo,
+				command: process.execPath,
+				binName: "pi-lens-2044-cargo-runner",
+				args: (testFile: string) => [
+					"-e",
+					"console.log('test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out'); process.exitCode = 1;",
+					testFile,
+				],
+			};
 			const client = new TestRunnerClient(false);
-			const projects = [
-				{
-					root: go.tmpDir,
-					manifest: "go.mod",
-					runner: "go",
-					testName: "go_test.go",
-					sourceName: "go.go",
-					config: failingNodeConfig,
-				},
-				{
-					root: cargo.tmpDir,
-					manifest: "Cargo.toml",
-					runner: "cargo",
-					testName: "cargo_test.rs",
-					sourceName: "cargo.rs",
-					config: {
-						...RUNNERS.cargo,
-						command: process.execPath,
-						binName: "pi-lens-2044-cargo-runner",
-						args: (testFile: string) => [
-							"-e",
-							"console.log('test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out'); process.exitCode = 1;",
-							testFile,
-						],
-					},
-				},
-			];
+			const goFailure = await client.runTestFileAsync(
+				staleGoTest,
+				tmpDir,
+				"go",
+				failingNodeConfig,
+			);
+			const cargoFailure = await client.runTestFileAsync(
+				cargoTest,
+				tmpDir,
+				"cargo",
+				cargoConfig,
+			);
+			expect(goFailure.failed).toBe(1);
+			expect(cargoFailure.failed).toBe(1);
 
-			for (const project of projects) {
-				fs.writeFileSync(path.join(project.root, project.manifest), "manifest\n");
-				const sourceFile = path.join(project.root, project.sourceName);
-				const testFile = path.join(project.root, project.testName);
-				fs.writeFileSync(sourceFile, "fixture\n");
-				fs.writeFileSync(testFile, "fixture\n");
+			fs.rmSync(staleGoTest);
+			expect(client.getTestRunTarget(goSource, tmpDir)).toBeNull();
+
+			// Re-probe through the symlink spelling after removing Go's marker. The
+			// root must collapse to the same project, while the cargo state survives
+			// retirement of the missing Go target.
+			fs.rmSync(path.join(tmpDir, "go.mod"));
+			const cargoTarget = client.getTestRunTarget(cargoSource, aliasRoot);
+			expect(cargoTarget).toMatchObject({
+				runner: "cargo",
+				strategy: "failed-first",
+				testFile: fs.realpathSync.native(cargoTest),
+			});
+		});
+
+		it("retains indeterminate paths and writes bounded real telemetry", async () => {
+			const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-2044-");
+			cleanups.push(cleanup);
+			fs.writeFileSync(path.join(tmpDir, "go.mod"), "module example.com/tmp\n");
+			const sourceFile = path.join(tmpDir, "widget.go");
+			const failedTest = path.join(tmpDir, "widget_test.go");
+			fs.writeFileSync(sourceFile, "package widget\n");
+			fs.writeFileSync(failedTest, "package widget\n");
+
+			const denied = Object.assign(new Error("access denied"), { code: "EACCES" });
+			const client = new TestRunnerClient(false, {
+				statFailedTarget: () => {
+					throw denied;
+				},
+			});
+			const seeded = await client.runTestFileAsync(
+				failedTest,
+				tmpDir,
+				"go",
+				failingNodeConfig,
+			);
+			expect(seeded.failed).toBe(1);
+
+			const previousTestMode = process.env.PI_LENS_TEST_MODE;
+			process.env.PI_LENS_TEST_MODE = "0";
+			try {
+				resetBoundedTelemetry();
+				clearLatencyLog();
+				await flushLatencyLog();
+				const target = client.getTestRunTarget(sourceFile, tmpDir, 2044);
+				expect(target).toMatchObject({
+					strategy: "failed-first",
+					testFile: fs.realpathSync.native(failedTest),
+				});
+				await flushLatencyLog();
+				const records = fs
+					.readFileSync(getLatencyLogPath(), "utf8")
+					.trim()
+					.split("\n")
+					.map((line) => JSON.parse(line));
+				expect(records).toContainEqual(
+					expect.objectContaining({
+						phase: "test_runner_failed_target_state",
+						metadata: expect.objectContaining({
+							outcome: "retained-indeterminate",
+							runner: "go",
+							errorCode: "EACCES",
+						}),
+					}),
+				);
+			} finally {
+				if (previousTestMode === undefined) {
+					delete process.env.PI_LENS_TEST_MODE;
+				} else {
+					process.env.PI_LENS_TEST_MODE = previousTestMode;
+				}
+			}
+		});
+
+		it("bounds missing-target probes and carries the remainder forward", async () => {
+			const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-2044-");
+			cleanups.push(cleanup);
+			fs.writeFileSync(path.join(tmpDir, "go.mod"), "module example.com/tmp\n");
+			const sourceFile = path.join(tmpDir, "widget.go");
+			const relatedTest = path.join(tmpDir, "widget_test.go");
+			fs.writeFileSync(sourceFile, "package widget\n");
+			fs.writeFileSync(relatedTest, "package widget\n");
+
+			let statCalls = 0;
+			const client = new TestRunnerClient(false, {
+				statFailedTarget: (filePath) => {
+					statCalls += 1;
+					void fs.statSync(filePath);
+				},
+			});
+			const staleTests = Array.from({ length: 12 }, (_, index) =>
+				path.join(tmpDir, `stale-${index}_test.go`),
+			);
+			for (const testFile of staleTests) {
+				fs.writeFileSync(testFile, "package widget\n");
 				const seeded = await client.runTestFileAsync(
 					testFile,
-					project.root,
-					project.runner,
-					project.config,
+					tmpDir,
+					"go",
+					failingNodeConfig,
 				);
 				expect(seeded.failed).toBe(1);
-				expect(client.getTestRunTarget(sourceFile, project.root)?.testFile).toBe(
-					path.resolve(testFile),
-				);
+				fs.rmSync(testFile);
+			}
+
+			expect(client.getTestRunTarget(sourceFile, tmpDir, 88)?.testFile).toBe(
+				path.resolve(relatedTest),
+			);
+			expect(statCalls).toBe(8);
+			expect(client.getTestRunTarget(sourceFile, tmpDir, 88)?.testFile).toBe(
+				path.resolve(relatedTest),
+			);
+			expect(statCalls).toBe(12);
+		});
+
+		it("caps each runner at the newest 32 failed targets", async () => {
+			const first = setupTestEnvironment("pi-lens-tests-2044-first-");
+			const second = setupTestEnvironment("pi-lens-tests-2044-second-");
+			cleanups.push(first.cleanup, second.cleanup);
+			for (const root of [first.tmpDir, second.tmpDir]) {
+				fs.writeFileSync(path.join(root, "go.mod"), "module example.com/tmp\n");
+			}
+			const sourceFile = path.join(first.tmpDir, "widget.go");
+			const oldest = path.join(first.tmpDir, "oldest_test.go");
+			const newest = path.join(first.tmpDir, "newest_test.go");
+			fs.writeFileSync(sourceFile, "package widget\n");
+			const middle = Array.from({ length: 31 }, (_, index) =>
+				path.join(second.tmpDir, `failure-${index}_test.go`),
+			);
+			const client = new TestRunnerClient(false);
+			const previousTestMode = process.env.PI_LENS_TEST_MODE;
+			process.env.PI_LENS_TEST_MODE = "0";
+			try {
+				resetBoundedTelemetry();
+				clearLatencyLog();
+				await flushLatencyLog();
+				for (const [root, testFile] of [
+					[first.tmpDir, oldest],
+					...middle.map((testFile) => [second.tmpDir, testFile]),
+					[first.tmpDir, newest],
+				]) {
+					fs.writeFileSync(testFile, "package widget\n");
+					const seeded = await client.runTestFileAsync(testFile, root, {
+						runner: "go",
+						config: failingNodeConfig,
+						turnIndex: 2045,
+					});
+					expect(seeded.failed).toBe(1);
+				}
+
+				expect(
+					client.getTestRunTarget(sourceFile, first.tmpDir)?.testFile,
+				).toBe(fs.realpathSync.native(newest));
+				await flushLatencyLog();
+				const log = fs.readFileSync(getLatencyLogPath(), "utf8");
+				expect(log).toContain('"outcome":"capacity-evicted"');
+				expect(log).toContain('"phase":"test_runner_failed_target_state"');
+			} finally {
+				if (previousTestMode === undefined) {
+					delete process.env.PI_LENS_TEST_MODE;
+				} else {
+					process.env.PI_LENS_TEST_MODE = previousTestMode;
+				}
 			}
 		});
 	});
@@ -1440,19 +1618,31 @@ describe("test-runner-client", () => {
 			expect(target?.strategy).toBe("related");
 		});
 
-		it("prefers failed-first over self when the edited test file is itself in the failed set", () => {
+		it("prefers failed-first over self when the edited test file is itself in the failed set", async () => {
 			const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
 			cleanups.push(cleanup);
 
 			fs.writeFileSync(path.join(tmpDir, "vitest.config.ts"), "export default {}\n");
 			const src = path.join(tmpDir, "flaky.test.ts");
 			fs.writeFileSync(src, "// test\n");
+			const vitestFailureConfig = {
+				...RUNNERS.vitest,
+				command: process.execPath,
+				binName: "pi-lens-failed-vitest-fixture",
+				args: (testFile: string) => [
+					"-e",
+					`console.log(JSON.stringify({ numPassedTests: 0, numFailedTests: 1, numPendingTests: 0, testResults: [{ name: ${JSON.stringify(testFile)}, assertionResults: [{ status: "failed", title: "fixture", failureMessages: ["boom"] }] }] })); process.exitCode = 1;`,
+				],
+			};
 
-			const client = new TestRunnerClient(false) as any;
-			client.failedTestsByRunner.set(
-				`${path.resolve(tmpDir)}:vitest`,
-				new Set([path.resolve(src)]),
+			const client = new TestRunnerClient(false);
+			const seeded = await client.runTestFileAsync(
+				src,
+				tmpDir,
+				"vitest",
+				vitestFailureConfig,
 			);
+			expect(seeded.failed).toBe(1);
 
 			const target = client.getTestRunTarget(src, tmpDir);
 			expect(target?.strategy).toBe("failed-first");

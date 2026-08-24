@@ -1753,7 +1753,11 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		}
 
 		for (const { display, abs, isNeighbor } of candidates) {
-			const target = testRunnerClient.getTestRunTarget(abs, cwd);
+			const target = testRunnerClient.getTestRunTarget(
+				abs,
+				cwd,
+				runtime.turnIndex,
+			);
 			if (target && !seen.has(target.testFile)) {
 				seen.add(target.testFile);
 				targets.push(target);
@@ -1800,12 +1804,11 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 			);
 			Promise.allSettled(
 				targets.map((t) =>
-					testRunnerClient.runTestFileAsync(
-						t.testFile,
-						cwd,
-						t.runner,
-						t.config,
-					),
+					testRunnerClient.runTestFileAsync(t.testFile, cwd, {
+						runner: t.runner,
+						config: t.config,
+						turnIndex: firedAtTurn,
+					}),
 				),
 			)
 				.then((results) => {

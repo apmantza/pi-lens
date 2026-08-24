@@ -89,6 +89,12 @@ export const BOUNDED_TELEMETRY_PHASES = [
 	 */
 	"lsp_warm_client_missing",
 	/**
+	 * #2044: failed-first test state was retired after a confirmed missing path,
+	 * retained because the filesystem verdict was indeterminate, or evicted at
+	 * the state cap. Selection checks and detailed rows are both capped per turn.
+	 */
+	"test_runner_failed_target_state",
+	/**
 	 * #1723: an event-loop block at or above the floor. Not a degradation, so
 	 * no ledger kind; bounded by call cadence (one `turn_end` runs it once per
 	 * turn) rather than by an option here.
