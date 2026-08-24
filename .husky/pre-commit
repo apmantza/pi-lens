@@ -3,4 +3,4 @@ if [ -n "$PI_LENS_SKIP_HOOKS" ]; then
   exit 0
 fi
 
-npm run changelog:check && npm run lint
+npm run check:lockfile && npm run changelog:check && npm run lint

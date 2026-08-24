@@ -8,34 +8,62 @@
 //   node scripts/changelog-release.mjs            # package version, today
 //   node scripts/changelog-release.mjs 3.8.61     # explicit version
 //   node scripts/changelog-release.mjs 3.8.61 --date 2026-06-25
+//   node scripts/changelog-release.mjs --root-dir <checkout>
 
 import { readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import {
+	formatPackageLockSyncFailure,
+	validatePackageLockSync,
+} from "./lib/package-lock-sync.mjs";
 import { rollupChangelog } from "./rollup-changelog.mjs";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const PKG_PATH = join(__dirname, "..", "package.json");
+const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 function parseArgs(argv) {
-	const args = { version: undefined, date: undefined };
+	const args = { version: undefined, date: undefined, rootDir: undefined };
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		if (arg === "--date") args.date = argv[++i];
+		else if (arg === "--root-dir") args.rootDir = resolve(argv[++i]);
 		else if (!args.version) args.version = arg;
 	}
 	return args;
 }
 
+function readJson(file) {
+	try {
+		return JSON.parse(readFileSync(file, "utf8"));
+	} catch (error) {
+		throw new Error(
+			`Cannot read ${file}: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+}
+
+function validateReleaseInputs(rootDir) {
+	const pkg = readJson(join(rootDir, "package.json"));
+	const lock = readJson(join(rootDir, "package-lock.json"));
+	const problems = validatePackageLockSync(pkg, lock);
+	if (problems.length > 0) {
+		throw new Error(formatPackageLockSyncFailure(problems));
+	}
+	return pkg;
+}
+
 function main() {
 	const args = parseArgs(process.argv.slice(2));
-	const version =
-		args.version ?? JSON.parse(readFileSync(PKG_PATH, "utf8")).version;
-	const date = args.date ?? new Date().toISOString().slice(0, 10);
+	const rootDir = args.rootDir ?? PACKAGE_ROOT;
 
 	try {
+		// This preflight must remain before rollupChangelog: that function deletes
+		// consumed fragments and rewrites CHANGELOG.md.
+		const pkg = validateReleaseInputs(rootDir);
+		const version = args.version ?? pkg.version;
+		const date = args.date ?? new Date().toISOString().slice(0, 10);
 		const result = rollupChangelog(version, {
-			rootDir: join(__dirname, ".."),
+			rootDir,
 			date,
 		});
 		console.log(
