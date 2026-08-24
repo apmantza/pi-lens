@@ -475,13 +475,19 @@ function cmdEscapeArg(arg: string): string {
  * that already worked. The `chcp 65001` prefix forces the UTF-8 code page (so
  * tool output isn't mangled by the system code page) and, as a side benefit,
  * keeps the (possibly quoted) command off the front of the line, avoiding
- * cmd.exe's `/s` outer-quote-stripping quirk.
+ * cmd.exe's `/s` outer-quote-stripping quirk. #2023: chcp is invoked via its
+ * absolute `%SystemRoot%\System32\chcp.com` path and chained with `&`, not
+ * `&&` — a child environment whose PATH cannot resolve System32 used to fail
+ * the bare `chcp` lookup, and `&&` then short-circuited EVERY .cmd/.bat spawn
+ * into exit 1 with empty output. With the pin plus `&`, even a chcp failure
+ * can never suppress the real command.
  */
 export function buildWindowsShellCommand(
 	command: string,
 	args: string[],
 ): string {
-	return `chcp 65001 >nul 2>&1 && ${[command, ...args].map(cmdEscapeArg).join(" ")}`;
+	const chcp = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\chcp.com`;
+	return `${chcp} 65001 >nul 2>&1 & ${[command, ...args].map(cmdEscapeArg).join(" ")}`;
 }
 
 // ============================================================================

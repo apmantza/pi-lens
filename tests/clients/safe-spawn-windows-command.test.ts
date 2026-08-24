@@ -30,8 +30,9 @@ describe("buildWindowsShellCommand (Windows cmd.exe quoting — #214)", () => {
 	});
 
 	it("leaves a space-free command unquoted (no regression for npm/.pi-lens paths)", () => {
+		const chcp = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\chcp.com`;
 		expect(buildWindowsShellCommand("ruff", ["check", "x.py"])).toBe(
-			"chcp 65001 >nul 2>&1 && ruff check x.py",
+			`${chcp} 65001 >nul 2>&1 & ruff check x.py`,
 		);
 	});
 
@@ -40,10 +41,12 @@ describe("buildWindowsShellCommand (Windows cmd.exe quoting — #214)", () => {
 		expect(s).toContain('"C:\\a b\\c.txt"');
 	});
 
-	it("always prefixes the UTF-8 code-page switch", () => {
-		expect(buildWindowsShellCommand("go", ["version"])).toMatch(
-			/^chcp 65001 >nul 2>&1 && /,
-		);
+	it("always prefixes the UTF-8 code-page switch, pinned via System32 (#2023)", () => {
+		const s = buildWindowsShellCommand("go", ["version"]);
+		// Absolute chcp path (independent of the child PATH) chained with `&`,
+		// so a chcp failure can never short-circuit the real command.
+		const chcp = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\chcp.com`;
+		expect(s.startsWith(`${chcp} 65001 >nul 2>&1 & `)).toBe(true);
 	});
 
 	it("keeps shell metacharacters inside one argument", () => {
@@ -176,6 +179,24 @@ describe.runIf(process.platform === "win32")(
 			expect(JSON.parse(result.stdout)).toEqual(["hello world", "plain"]);
 		});
 
+		it("(b2) #2023: a .cmd shim still runs when the child PATH cannot resolve System32 (chcp is pinned)", async () => {
+			// Pre-fix, the cmd.exe wrapper prefixed every spawn with bare
+			// `chcp 65001 &&`. With System32 absent from the CHILD's PATH the
+			// chcp lookup failed inside cmd.exe and `&&` short-circuited, so the
+			// shim exited 1 with empty output. chcp is now invoked via its
+			// SystemRoot-pinned absolute path, independent of the child PATH.
+			const result = await safeSpawnAsync(echoArgsCmd, ["no-system32"], {
+				env: {
+					PATH: fixtureDir,
+					Path: fixtureDir,
+					PATHEXT: ".COM;.EXE;.BAT;.CMD",
+				},
+			});
+			expect(result.error).toBeUndefined();
+			expect(result.status).toBe(0);
+			expect(JSON.parse(result.stdout)).toEqual(["no-system32"]);
+		});
+
 		it('(c) an arg containing "%" targeting a .cmd shim is rejected loudly, nothing spawned', async () => {
 			const result = await safeSpawnAsync(echoArgsCmd, ["%APPDATA%.md"]);
 			expect(result.error).toBeDefined();
@@ -295,15 +316,14 @@ describe.runIf(process.platform === "win32")(
 			expect(JSON.parse(result.stdout)).toEqual(["hello world", "plain"]);
 		});
 
-		it("sync safeSpawn resolves a command from its overridden PATH", () => {
-			// Keep the ambient system directory after the fixture so the pinned
-			// cmd.exe can still find its `chcp` helper; the fixture remains first
-			// and is the only source of the command under test.
-			const overriddenPath = `${fixtureDir};${process.env.Path ?? process.env.PATH ?? ""}`;
+		it("sync safeSpawn resolves a command from its overridden PATH (#2023: System32 may be absent)", () => {
+			// The fixture is the ONLY entry — System32 is deliberately absent.
+			// chcp runs via its SystemRoot-pinned absolute path, so the wrapper
+			// no longer depends on the child environment resolving it.
 			const result = safeSpawn("echo-args", ["from-overridden-path"], {
 				env: {
-					PATH: overriddenPath,
-					Path: overriddenPath,
+					PATH: fixtureDir,
+					Path: fixtureDir,
 					PATHEXT: ".COM;.CMD",
 				},
 			});

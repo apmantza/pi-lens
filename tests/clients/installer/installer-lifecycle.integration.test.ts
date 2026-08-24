@@ -90,10 +90,11 @@ function testEnv(
 ): NodeJS.ProcessEnv {
 	const nodeDir = path.dirname(process.execPath);
 	// #2015: verifyToolBinary routes through safeSpawnAsync, whose Windows
-	// .cmd/.bat wrapper runs `chcp 65001 && <shim>` (clients/safe-spawn.ts).
-	// chcp.com lives in System32, so System32 must stay on PATH or every
-	// .cmd shim probe exits 1 with no output. Node's dir stays first so the
-	// restricted PATH still cannot collide with a real oxlint.
+	// .cmd/.bat wrapper runs `chcp ... & <shim>` (clients/safe-spawn.ts).
+	// Since #2023 chcp is invoked via its pinned System32 absolute path, so
+	// System32 no longer HAS to be on PATH; keeping it here exercises the
+	// restricted-PATH scenario without depending on the pin. Node's dir stays
+	// first so the restricted PATH still cannot collide with a real oxlint.
 	const toolPath =
 		process.platform === "win32"
 			? `${nodeDir};${process.env.SystemRoot ?? "C:\\Windows"}\\System32`
