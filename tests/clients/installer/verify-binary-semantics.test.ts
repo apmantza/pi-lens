@@ -87,10 +87,14 @@ describe("verifyToolBinary (#2015)", () => {
 			`process.on('SIGTERM', () => {});setTimeout(() => require('fs').writeFileSync(${JSON.stringify(marker)}, 'survived'), 6000);`,
 			"utf8",
 		);
+		// CodeQL js/bad-code-sanitization: strip every character cmd.exe / sh
+		// treat as special so the interpolated paths are provably inert. Our
+		// mkdtemp paths already satisfy the allowlist, so behavior is unchanged.
+		const safeWriter = writer.replace(/[^A-Za-z0-9_\\/. :-]/g, "_");
 		const body =
 			process.platform === "win32"
-				? `start "" /b node "${writer}"\r\nping -n 4 127.0.0.1 >nul`
-				: `node "${writer}" &\nsleep 3`;
+				? `start "" /b node "${safeWriter}"\r\nping -n 4 127.0.0.1 >nul`
+				: `node "${safeWriter}" &\nsleep 3`;
 		const bin = writeShim("slow-tool", body);
 		const transient = vi.fn();
 		const started = Date.now();
