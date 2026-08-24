@@ -126,7 +126,10 @@ export function pendingAuxiliaryCoverageSizeForTests(): number {
 	return pending.size;
 }
 
-/** Test-only: clear all state between tests. */
-export function resetPendingAuxiliaryCoverageForTests(): void {
+/**
+ * Session-boundary clear (#1635): pending baselines are unreachable after
+ * reset (the generation-stamped keys no longer match any active session).
+ */
+export function resetPendingAuxiliaryCoverage(): void {
 	pending.clear();
 }

@@ -111,6 +111,7 @@ import { isWarmAttached } from "./warm-attach.js";
 import { setSessionLanguages } from "./widget-state.js";
 import { logWordIndex } from "./word-index-logger.js";
 import { resetOpaqueMutationState } from "./opaque-mutation-scan.js";
+import { resetPendingAuxiliaryCoverage } from "./lsp/pending-aux-coverage.js";
 import { resetWorkspaceTopology } from "./workspace-topology.js";
 import { resetZizmorTokenAvailability } from "./zizmor-config.js";
 import { resetSpawnTimeoutCooldowns } from "./spawn-timeout-cooldown.js";
@@ -2112,6 +2113,8 @@ export async function handleSessionStart(
 	// after reset) and the git-worktree memo must re-probe after a session
 	// that may have seen a non-git dir become one.
 	resetOpaqueMutationState();
+	// #2026: pending auxiliary baselines are unreachable after generation bump.
+	resetPendingAuxiliaryCoverage();
 	// #817/#1199: Windows command resolution is cached per (command, canonical
 	// effective child PATH/PATHEXT/cwd/per-drive provenance); drop it each
 	// session so environment changes (e.g.

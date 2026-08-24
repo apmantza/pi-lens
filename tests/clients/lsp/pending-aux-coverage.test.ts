@@ -17,11 +17,11 @@ import {
 	LATE_AUX_REARM_TTL_MS,
 	markPendingAuxiliaryCoverage,
 	pendingAuxiliaryCoverageSizeForTests,
-	resetPendingAuxiliaryCoverageForTests,
+	resetPendingAuxiliaryCoverage,
 } from "../../../clients/lsp/pending-aux-coverage.js";
 
 beforeEach(() => {
-	resetPendingAuxiliaryCoverageForTests();
+	resetPendingAuxiliaryCoverage();
 });
 
 describe("pending auxiliary coverage store (#2001/#2002)", () => {

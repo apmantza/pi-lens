@@ -38,7 +38,7 @@ import {
 	drainPendingAuxiliaryCoverage,
 	LATE_AUX_REARM_TTL_MS,
 	markPendingAuxiliaryCoverage,
-	resetPendingAuxiliaryCoverageForTests,
+	resetPendingAuxiliaryCoverage,
 } from "../../../clients/lsp/pending-aux-coverage.js";
 import type { LSPDiagnostic } from "../../../clients/lsp/client.js";
 import { setupTestEnvironment } from "../test-utils.js";
@@ -128,11 +128,11 @@ function lateAuxRecord(): any | undefined {
 beforeEach(() => {
 	readCachedDiagnosticsForServers.mockReset();
 	logLatency.mockClear();
-	resetPendingAuxiliaryCoverageForTests();
+	resetPendingAuxiliaryCoverage();
 });
 
 afterEach(() => {
-	resetPendingAuxiliaryCoverageForTests();
+	resetPendingAuxiliaryCoverage();
 });
 
 describe("turn-end late-auxiliary findings (#2001/#2002)", () => {
@@ -275,7 +275,7 @@ describe("turn-end late-auxiliary findings (#2001/#2002)", () => {
 			// Past the TTL the same empty probe retires the pair instead. The
 			// store preserves a live pair's baseline, so expire by draining first
 			// and marking fresh with an already-aged timestamp.
-			resetPendingAuxiliaryCoverageForTests();
+			resetPendingAuxiliaryCoverage();
 			registerEdit(env, "late-aux-rearm", cacheManager, file);
 			markPendingAuxiliaryCoverage(
 				file,

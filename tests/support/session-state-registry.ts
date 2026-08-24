@@ -189,6 +189,16 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 		reason:
 			"#2000 phase 2: pending pre-command baselines are keyed cwd:generation and become unreachable when the session generation advances; and the git-worktree memo must re-probe after a session that may have seen a directory become a worktree. Without the reset both leak per session and the memo mis-answers forever.",
 	},
+	// ── #2026 pending auxiliary coverage baselines ──────────────────────
+	{
+		id: "lsp:pending-aux-coverage",
+		module: "lsp/pending-aux-coverage.ts",
+		state: "pending Map (filePath,serverId) pairs",
+		policy: "session_start",
+		resetName: "resetPendingAuxiliaryCoverage",
+		reason:
+			"#2026: pending auxiliary baselines are keyed by cwd and become unreachable when the session generation advances.",
+	},
 	// ── The named population from #1635 ──────────────────────────────────────
 	{
 		id: "degradation-ledger:onceKeys",
@@ -905,6 +915,7 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// #2000 phase 2: the pending-baseline store (one slot per cwd:generation)
 	// plus the process-global Symbol.for slot; cleared via resetOpaqueMutationState.
 	"opaque-mutation-scan.ts": 1,
+	"lsp/pending-aux-coverage.ts": 1,
 	"lsp/jvm-runtime.ts": 0,
 	"lsp/spawn-history.ts": 1,
 	"lsp/server.ts": 5,
