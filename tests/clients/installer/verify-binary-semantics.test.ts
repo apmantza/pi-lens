@@ -79,9 +79,12 @@ describe("verifyToolBinary (#2015)", () => {
 		// safeSpawnAsync's tree-kill kills the whole tree -> no marker.
 		const marker = path.join(binDir, "grandchild-survived.marker");
 		const writer = path.join(binDir, "writer.cjs");
+		// The writer IGNORES SIGTERM (#2027 round-1): surviving a soft group
+		// TERM proves the SIGKILL escalation reaches the group even after the
+		// direct child has exited.
 		fs.writeFileSync(
 			writer,
-			`setTimeout(() => require('fs').writeFileSync(${JSON.stringify(marker)}, 'survived'), 6000);`,
+			`process.on('SIGTERM', () => {});setTimeout(() => require('fs').writeFileSync(${JSON.stringify(marker)}, 'survived'), 6000);`,
 			"utf8",
 		);
 		const body =

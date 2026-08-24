@@ -390,17 +390,12 @@ function killPidTreeSync(pid: number): void {
 	}
 	try {
 		// #2026: negative pid = whole process group (POSIX children spawn
-		// detached), reaching grandchildren too; fall back to the direct pid
-		// when no group exists (pre-detachment callers / already reaped).
+		// detached), reaching grandchildren too. Any failure (ESRCH = already
+		// gone, EPERM = raced) falls through to the direct-child attempt.
 		try {
 			process.kill(-pid, "SIGKILL");
-		} catch (groupErr) {
-			const code = (groupErr as NodeJS.ErrnoException).code;
-			if (code === "ESRCH") {
-				process.kill(pid, "SIGKILL");
-			} else {
-				process.kill(pid, "SIGKILL");
-			}
+		} catch {
+			process.kill(pid, "SIGKILL");
 		}
 	} catch {
 		// Child already exited.
@@ -1429,14 +1424,32 @@ export async function safeSpawnAsync(
 				} catch {
 					child.kill("SIGTERM");
 				}
+				// #2027 round-1: gate the SIGKILL escalation on GROUP liveness,
+				// not direct-child death - a tool can exit instantly on SIGTERM
+				// while a SIGTERM-hardy grandchild keeps the group alive. The
+				// timer stays REF'D for group mode (max 1s tail after resolve):
+				// it is the only backstop for this group once finalize deletes
+				// the pid from lifetimeState.
 				escalationTimer = setTimeout(() => {
-					if (!closed) {
-						teardownEscalated = true;
-						try {
-							process.kill(pgid, "SIGKILL");
-						} catch {
-							child.kill("SIGKILL");
-						}
+					let groupAlive = true;
+					try {
+						process.kill(pgid, 0);
+					} catch {
+						groupAlive = false;
+					}
+					if (!groupAlive) return;
+					teardownEscalated = true;
+					logLatency({
+						type: "phase",
+						phase: "spawn_group_kill_escalation",
+						filePath: "",
+						durationMs: 0,
+						metadata: { pgid: child.pid },
+					});
+					try {
+						process.kill(pgid, "SIGKILL");
+					} catch {
+						// Raced with group exit.
 					}
 				}, 1000);
 			} else {
@@ -1654,10 +1667,14 @@ export async function safeSpawnAsync(
 			// else has ALREADY resolved, never on `error` merely having fired.
 			await killPromise;
 			if (resolved) return;
-			// #1109: the child has exited — if killTree armed the non-Windows
-			// SIGTERM→SIGKILL escalation timer and it hasn't fired yet, clear it
-			// so it doesn't linger as a ref'd handle after this promise resolves.
-			if (escalationTimer) clearTimeout(escalationTimer);
+			// #1109: the child has exited - clear the non-Windows escalation
+			// timer so it doesn't linger as a ref'd handle. #2027 EXCEPTION:
+			// in POSIX group mode the timer is the liveness-gated SIGKILL
+			// backstop for SIGTERM-hardy grandchildren; it stays armed and
+			// self-cleans within 1s of firing (max 1s ref'd tail).
+			if (escalationTimer && !posixProcessGroup) {
+				clearTimeout(escalationTimer);
+			}
 			// #1673 review F1: latch the verdict as DECIDED here, before the
 			// idle-pipe wait — not after it. `code`/`signal`/`timedOut`/`aborted`
 			// are already fixed by this point (they don't change during the
@@ -1779,7 +1796,10 @@ export async function safeSpawnAsync(
 			closed = true;
 			clearTimeout(timeoutId);
 			abortSignal?.removeEventListener("abort", onAbort);
-			if (escalationTimer) clearTimeout(escalationTimer);
+			// #2027: group-mode timer stays armed as the grandchild backstop.
+			if (escalationTimer && !posixProcessGroup) {
+				clearTimeout(escalationTimer);
+			}
 			if (child.pid) lifetimeState.pids.delete(child.pid);
 			const resourceUsage = finishResourceUsage();
 			let failure: SpawnFailureKind = "spawn";
