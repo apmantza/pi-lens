@@ -1091,4 +1091,101 @@ describe("Pipeline", () => {
 			expect(result.inlineBlockerLines).toEqual([3]);
 		});
 	});
+
+	// #2028: the 🔴 STOP block is a registered agent-facing delivery surface
+	// (finding-delivery-gate.ts's `tool-call:stop-blocker`), so blockers whose
+	// cited file no longer exists are dropped before rendering — there is no
+	// remediation for content in a deleted file.
+	describe("#2028 stop-blocker deleted-path gate", () => {
+		it("drops blockers whose cited file was deleted from the rendered STOP block", async () => {
+			const filePath = createTempFile(
+				tmpDir,
+				"live.ts",
+				"const x = 1;\nconst y = 2;\n",
+			);
+			const deletedPath = path.join(tmpDir, "deleted-by-agent.ts");
+			vi.mocked(dispatchLintWithResult).mockResolvedValue({
+				diagnostics: [],
+				blockers: [
+					{
+						id: "dead-1",
+						message: "DELETED-FILE-BLOCKER-MARKER secret in removed file",
+						filePath: deletedPath,
+						line: 1,
+						severity: "error",
+						semantic: "blocking",
+						tool: "gitleaks",
+					},
+					{
+						id: "live-1",
+						message: "LIVE-FILE-BLOCKER-MARKER unused var",
+						filePath,
+						line: 1,
+						severity: "error",
+						semantic: "blocking",
+						tool: "lsp",
+					},
+				],
+				warnings: [],
+				baselineWarningCount: 0,
+				fixed: [],
+				resolvedCount: 0,
+				output:
+					"DELETED-FILE-BLOCKER-MARKER secret in removed file\nLIVE-FILE-BLOCKER-MARKER unused var\ncoverage: ok",
+				blockerOutput:
+					"DELETED-FILE-BLOCKER-MARKER secret in removed file\nLIVE-FILE-BLOCKER-MARKER unused var\n",
+				hasBlockers: true,
+			});
+
+			const result = await runPipeline(
+				createMockContext(filePath),
+				createMockDeps(),
+			);
+
+			expect(result.hasBlockers).toBe(true);
+			// The live blocker renders at full authority…
+			expect(result.output).toContain("LIVE-FILE-BLOCKER-MARKER");
+			expect(result.output).toContain("🔴 STOP");
+			// …the deleted-file blocker does not render at all.
+			expect(result.output).not.toContain("DELETED-FILE-BLOCKER-MARKER");
+			// The surviving blocker's count is the LIVE one, not the raw total.
+			expect(result.output).toContain("1 issue(s)");
+		});
+
+		it("renders no STOP header when every blocker cites a deleted file", async () => {
+			const filePath = createTempFile(tmpDir, "clean-now.ts", "const x = 1;");
+			const deletedPath = path.join(tmpDir, "also-deleted.ts");
+			vi.mocked(dispatchLintWithResult).mockResolvedValue({
+				diagnostics: [],
+				blockers: [
+					{
+						id: "dead-2",
+						message: "GHOST-BLOCKER-MARKER finding in removed file",
+						filePath: deletedPath,
+						line: 1,
+						severity: "error",
+						semantic: "blocking",
+						tool: "gitleaks",
+					},
+				],
+				warnings: [],
+				baselineWarningCount: 0,
+				fixed: [],
+				resolvedCount: 0,
+				output: "GHOST-BLOCKER-MARKER finding in removed file",
+				blockerOutput: "GHOST-BLOCKER-MARKER finding in removed file",
+				hasBlockers: true,
+			});
+
+			const result = await runPipeline(
+				createMockContext(filePath),
+				createMockDeps(),
+			);
+
+			// No "🔴 STOP — 0 issue(s)" ghost header, and no replay of the raw
+			// blocker text either.
+			expect(result.output).not.toContain("🔴 STOP");
+			expect(result.output).not.toContain("GHOST-BLOCKER-MARKER");
+		});
+	});
 });

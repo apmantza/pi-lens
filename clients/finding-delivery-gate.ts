@@ -505,6 +505,57 @@ export const DELIVERY_SURFACES: Record<string, DeliverySurfaceEntry> = {
 		["reconcileProjectDiagnosticsSnapshot"],
 		["reconcileProjectDiagnosticsSnapshot("],
 	),
+
+	// ── #2028: the remaining agent-facing surfaces ──────────────────────────
+	// Registered after #2028's root-cause review found the 🔴 STOP block
+	// rendering stale/deleted-file blockers because its surface was never in
+	// this registry — the exact "gated or labeled, never neither" gap this
+	// module exists to close.
+	"tool-call:stop-blocker": gated(
+		"clients/pipeline.ts",
+		"Per-edit 🔴 STOP blocker output appended to the write/edit tool result.",
+		["dropFindingsForMissingPaths"],
+		['store: "stop-blocker"'],
+	),
+	// The freshness stack itself (own-file mtime + reverse-dependency mtimes
+	// via isEntryFresh, plus the #1095 content binding) lives inside
+	// clients/lsp/workspace-diagnostics-cache.ts; the two evidence calls are
+	// the tool's literal entry points into that gated path.
+	"lsp-diagnostics:tool-output": gated(
+		"tools/lsp-diagnostics.ts",
+		"`lsp_diagnostics` batch/directory sweep results. Cache hits replay through " +
+			"the shared workspace-diagnostics cache: createWorkspaceDiagnosticsCacheContext " +
+			"is the tool's entry, and its lookup() applies the #671/#672 freshness stack " +
+			"(own-file mtime + reverse-dependency mtimes via isEntryFresh) plus the " +
+			"#1095 content binding.",
+		["createWorkspaceDiagnosticsCacheContext", "isEntryFresh", "cacheCtx.lookup"],
+		[
+			"createWorkspaceDiagnosticsCacheContext(resolvedCwd)",
+			"cacheCtx.lookup(file, scopeKey)",
+		],
+	),
+	"git-guard:commit-blocked": labeled(
+		"clients/git-guard.ts",
+		"Git-guard commit/push 🔴 COMMIT BLOCKED verdict (--lens-guard).",
+		"Synchronous preflight rejection returned inline with the failed git " +
+			"command — no stored state is delivered, so nothing can go stale between " +
+			"detection and delivery.",
+		"live",
+	),
+	"read-guard-tool-lines:preflight-errors": labeled(
+		"clients/read-guard-tool-lines.ts",
+		"Read-guard hashline BLOCKED / RE-READ REQUIRED preflight errors.",
+		"Computed fresh per edit attempt and returned as that attempt's rejection — " +
+			"no cached findings are replayed, so there is no staleness window.",
+		"live",
+	),
+	"agent-behavior:thrashing-notice": labeled(
+		"clients/agent-behavior-client.ts",
+		"In-result thrashing/blind-write detection notice.",
+		"Ephemeral notice computed at detection time inside the same tool result — " +
+			"no persistence and no cache, so nothing can be stale.",
+		"live",
+	),
 };
 
 function assertPartialStatusHasReason(

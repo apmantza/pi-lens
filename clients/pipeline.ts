@@ -75,6 +75,7 @@ import type { WordIndex } from "./word-index.js";
 import { getAmbientAbortSignal, safeSpawnAsync } from "./safe-spawn.js";
 import { combineAbortSignals } from "./deadline-utils.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
+import { dropFindingsForMissingPaths } from "./advisory-provenance.js";
 import {
 	getAutofixPolicyForFile,
 	getPreferredAutofixTools,
@@ -1532,10 +1533,27 @@ export async function runPipeline(
 		getDiagnosticTracker().trackAgentFixed(dispatchResult.resolvedCount);
 
 	let output = "";
+	// #2028: the 🔴 STOP block is an agent-facing delivery surface
+	// (finding-delivery-gate.ts's `tool-call:stop-blocker`), so it routes through
+	// the shared deleted-path gate before rendering: a blocker whose cited file
+	// no longer exists has no remediation the agent can perform (the finding IS
+	// the deleted file's content), so it is dropped here rather than re-asserted.
+	// One bounded stat per unique cited path, only when blockers exist — zero
+	// cost on the clean/fast paths.
+	const deliverableBlockers = dispatchResult.hasBlockers
+		? dropFindingsForMissingPaths({
+				store: "stop-blocker",
+				findings: dispatchResult.blockers,
+				cwd,
+				citedPath: (b) => b.filePath || undefined,
+			})
+		: dispatchResult.blockers;
 	if (dispatchResult.hasBlockers && fileContent) {
 		// Enrich blocker output with a code snippet so the agent can see the
 		// exact line it wrote that caused each violation — no re-read needed.
-		output += buildEnrichedBlockerOutput(dispatchResult.blockers, fileContent);
+		if (deliverableBlockers.length > 0) {
+			output += buildEnrichedBlockerOutput(deliverableBlockers, fileContent);
+		}
 		// Append fixed/coverage parts from the original output (slice off the
 		// blocker section we're replacing).
 		const rest = dispatchResult.output.slice(

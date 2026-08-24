@@ -73,6 +73,12 @@ const EXPECTED_SURFACE_IDS = [
 	"widget-state:footer",
 	"agent-nudge:context-message",
 	"project-diagnostics:persisted-snapshot",
+	// #2028: the remaining agent-facing surfaces.
+	"tool-call:stop-blocker",
+	"lsp-diagnostics:tool-output",
+	"git-guard:commit-blocked",
+	"read-guard-tool-lines:preflight-errors",
+	"agent-behavior:thrashing-notice",
 ].sort();
 
 // ── Real seam scan (#1634 review F2) ────────────────────────────────────────
