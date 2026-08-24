@@ -11,8 +11,10 @@
  *   2. A cited file edited after the mark timestamp drops its findings; a
  *      deleted cited file drops too. Neither is delivered stale, and both are
  *      counted in the `late_auxiliary_findings` latency record.
- *   3. A pair whose client is alive but still empty re-arms within the TTL
- *      (original markedAtMs preserved); a dead client's pair drops silently.
+ *   3. A pair whose client is alive but still empty re-arms — freshness
+ *      baseline preserved, TTL anchored on the last re-arm so each probe
+ *      extends the window (`PI_LENS_LATE_AUX_REARM_TTL_MS`-tunable); past
+ *      the TTL or with a dead client the pair drops.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -36,8 +38,8 @@ import { RuntimeCoordinator } from "../../../clients/runtime-coordinator.js";
 import { handleTurnEnd } from "../../../clients/runtime-turn.js";
 import {
 	drainPendingAuxiliaryCoverage,
-	LATE_AUX_REARM_TTL_MS,
 	markPendingAuxiliaryCoverage,
+	readLateAuxRearmTtlMs,
 	resetPendingAuxiliaryCoverage,
 } from "../../../clients/lsp/pending-aux-coverage.js";
 import type { LSPDiagnostic } from "../../../clients/lsp/client.js";
@@ -133,6 +135,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	resetPendingAuxiliaryCoverage();
+	delete process.env.PI_LENS_LATE_AUX_REARM_TTL_MS;
 });
 
 describe("turn-end late-auxiliary findings (#2001/#2002)", () => {
@@ -270,7 +273,10 @@ describe("turn-end late-auxiliary findings (#2001/#2002)", () => {
 			);
 			const stillPending = drainPendingAuxiliaryCoverage();
 			expect(stillPending).toHaveLength(1);
+			// The freshness baseline survives re-arm untouched...
 			expect(stillPending[0].markedAtMs).toBe(markedAt);
+			// ...and the successful probe advanced the TTL anchor past the mark.
+			expect(stillPending[0].lastRearmedAtMs).toBeGreaterThan(markedAt);
 
 			// Past the TTL the same empty probe retires the pair instead. The
 			// store preserves a live pair's baseline, so expire by draining first
@@ -280,8 +286,73 @@ describe("turn-end late-auxiliary findings (#2001/#2002)", () => {
 			markPendingAuxiliaryCoverage(
 				file,
 				["opengrep"],
-				Date.now() - LATE_AUX_REARM_TTL_MS - 5000,
+				Date.now() - readLateAuxRearmTtlMs() - 5000,
 			);
+			await handleTurnEnd(makeDeps(runtime, cacheManager, env.tmpDir));
+			expect(drainPendingAuxiliaryCoverage()).toHaveLength(0);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("a successful probe extends the window past the original mark's TTL", async () => {
+		// Red-first core of the decoupled-clock fix: a pair whose MARK is older
+		// than the TTL but that was just re-armed by a successful empty probe
+		// must stay pending — each probe proves the scanner is alive but slow.
+		const env = setupTestEnvironment("pi-lens-late-aux-extend-") as any;
+		try {
+			process.env.PI_LENS_LATE_AUX_REARM_TTL_MS = "5000";
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId: "late-aux-extend" });
+			runtime.beginTurn();
+			const cacheManager = new CacheManager(false);
+			const file = path.join(env.tmpDir, "src", "extend.ts");
+			registerEdit(env, "late-aux-extend", cacheManager, file);
+
+			// Marked 10s ago (past the 5s TTL from mark) but re-armed 1s ago by
+			// the previous turn's probe.
+			markPendingAuxiliaryCoverage(
+				file,
+				["opengrep"],
+				Date.now() - 10_000,
+				Date.now() - 1_000,
+			);
+			readCachedDiagnosticsForServers.mockImplementation(
+				async () => new Map([["opengrep", []]]),
+			);
+
+			await handleTurnEnd(makeDeps(runtime, cacheManager, env.tmpDir));
+
+			// Kept for the next turn end; baseline unchanged, anchor advanced.
+			const stillPending = drainPendingAuxiliaryCoverage();
+			expect(stillPending).toHaveLength(1);
+			expect(stillPending[0].markedAtMs).toBeLessThan(Date.now() - 5_000);
+			expect(stillPending[0].lastRearmedAtMs).toBeGreaterThan(
+				Date.now() - 5_000,
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("an un-re-armed pair past the TTL still drops (no always-keep drift)", async () => {
+		// Mirror guard for the extension test: without a re-arm stamp the TTL
+		// must keep measuring from the mark, so an old silent pair is retired.
+		const env = setupTestEnvironment("pi-lens-late-aux-expire-") as any;
+		try {
+			process.env.PI_LENS_LATE_AUX_REARM_TTL_MS = "5000";
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId: "late-aux-expire" });
+			runtime.beginTurn();
+			const cacheManager = new CacheManager(false);
+			const file = path.join(env.tmpDir, "src", "expire.ts");
+			registerEdit(env, "late-aux-expire", cacheManager, file);
+
+			markPendingAuxiliaryCoverage(file, ["opengrep"], Date.now() - 10_000);
+			readCachedDiagnosticsForServers.mockImplementation(
+				async () => new Map([["opengrep", []]]),
+			);
+
 			await handleTurnEnd(makeDeps(runtime, cacheManager, env.tmpDir));
 			expect(drainPendingAuxiliaryCoverage()).toHaveLength(0);
 		} finally {

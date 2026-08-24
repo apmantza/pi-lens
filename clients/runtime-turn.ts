@@ -98,7 +98,7 @@ import { sweepInlineBlockerPastEof } from "./blocker-past-eof.js";
 import { getLSPService } from "./lsp/index.js";
 import {
 	drainPendingAuxiliaryCoverage,
-	LATE_AUX_REARM_TTL_MS,
+	isPendingAuxiliaryPastRearmTtl,
 	markPendingAuxiliaryCoverage,
 } from "./lsp/pending-aux-coverage.js";
 import type { LSPDiagnostic } from "./lsp/client.js";
@@ -2245,7 +2245,8 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	// the read-only cache seam (never spawns), freshness-gate the result
 	// against when the pair was marked, and deliver survivors as an advisory.
 	// A pair whose client is alive but has STILL published nothing re-arms
-	// (same original markedAtMs) until the TTL; a dead client drops silently.
+	// (baseline preserved, TTL anchor advanced) until the re-arm TTL; a dead
+	// client drops silently.
 	const lateAuxStart = Date.now();
 	const drainedPairs = drainPendingAuxiliaryCoverage();
 	let lateAuxDelivered = 0;
@@ -2293,14 +2294,18 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					}
 					if (rawDiags.length === 0) {
 						// Still scanning (or published nothing yet) — keep waiting
-						// within the TTL so a scan finishing before the NEXT turn end
-						// still delivers. The original markedAtMs survives re-arming:
-						// it is the freshness baseline, not a recency stamp.
-						if (Date.now() - pair.markedAtMs < LATE_AUX_REARM_TTL_MS) {
+						// so a scan finishing before the NEXT turn end still
+						// delivers. Two clocks, deliberately decoupled: the
+						// freshness baseline (`markedAtMs`) NEVER moves — it is what
+						// the delivery gate stats against — while the re-arm TTL is
+						// anchored on `lastRearmedAtMs`, advanced by every successful
+						// empty probe: the scanner is demonstrably alive, just slow.
+						if (!isPendingAuxiliaryPastRearmTtl(pair)) {
 							markPendingAuxiliaryCoverage(
 								lateAuxPath,
 								[pair.serverId],
 								pair.markedAtMs,
+								Date.now(),
 							);
 							lateAuxRearmed += 1;
 						}
