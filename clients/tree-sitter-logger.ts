@@ -76,13 +76,17 @@ export function logTreeSitterCacheStats(options: {
 	fileCount: number;
 	durationMs: number;
 	stats: TreeSitterParseCacheStats;
-	// #1935 review: ast-grep-napi is merged into the same file-major pass this
-	// record measures, but parses through its own engine (never this record's
-	// TreeCache), so its cost has no counter of its own here. Carry it as a
-	// named sub-field instead of silently folding it into `durationMs` (the
-	// caller already subtracts it there) or dropping it — a scan's most
-	// expensive phase must stay visible somewhere.
-	astGrep?: { durationMs: number; fileCount: number };
+	// #1935 review / #1982: ast-grep-napi is merged into the same file-major
+	// pass this record measures, but parses through its own engine (never this
+	// record's TreeCache), so its cost has no counter of its own here. The
+	// CONTRACT: a caller whose scope RUNS an ast-grep pass must subtract that
+	// pass's duration from `durationMs` above AND report it in this sub-field —
+	// never fold it silently into `durationMs` or drop it. A caller whose scope
+	// runs no ast-grep pass reports explicit zeros. REQUIRED (#1982): every
+	// cache_stats record carries the field so consumers never distinguish by
+	// absence; enforced by this option type and by
+	// tests/clients/tree-sitter-cache-stats-astgrep-coverage.test.ts.
+	astGrep: { durationMs: number; fileCount: number };
 }): void {
 	const delta = Object.fromEntries(
 		CACHE_COUNTER_KEYS.map((key) => [key, options.stats[key]]),
@@ -102,7 +106,7 @@ export function logTreeSitterCacheStats(options: {
 				totalBytes: options.stats.totalBytes,
 				totalLines: options.stats.totalLines,
 			},
-			...(options.astGrep ? { astGrep: options.astGrep } : {}),
+			astGrep: options.astGrep,
 		},
 	});
 }

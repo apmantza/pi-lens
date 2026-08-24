@@ -105,6 +105,10 @@ describe("tree-sitter-logger", () => {
 				parserInvocations: 1,
 				parserDurationMs: 2.5,
 			}),
+			// #1982: the sub-field is required on every record — a scope that ran
+			// an ast-grep pass reports its cost here (subtracted from durationMs
+			// above); this test pins that it round-trips into the payload.
+			astGrep: { durationMs: 7, fileCount: 2 },
 		});
 		await mod.flushTreeSitterLog();
 
@@ -125,6 +129,7 @@ describe("tree-sitter-logger", () => {
 					parserDurationMs: 2.5,
 				},
 				resident: { size: 1, maxSize: 50, totalBytes: 128, totalLines: 8 },
+				astGrep: { durationMs: 7, fileCount: 2 },
 			},
 		});
 	});

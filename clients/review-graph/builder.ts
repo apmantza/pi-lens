@@ -5117,6 +5117,10 @@ async function _doBuildGraph(
 					fileCount: filesToBuild.length,
 					durationMs: Date.now() - extractionStartedAt,
 					stats,
+					// #1982: this scope never runs an ast-grep pass (extraction is
+					// tree-sitter only), so durationMs carries none and explicit
+					// zeros keep every cache_stats record uniformly parseable.
+					astGrep: { durationMs: 0, fileCount: 0 },
 				});
 			},
 		);
