@@ -67,9 +67,7 @@ describe("safeSpawnAsync POSIX process-group kill (#2026/#2027)", () => {
 				timeout: 300,
 			});
 
-			expect(result.status === null || result.signal !== undefined).toBe(
-				true,
-			);
+			expect(result.status === null || result.signal !== undefined).toBe(true);
 			expect(transient).toHaveBeenCalledTimes(0); // not wired here
 
 			// Poll past the writer's scheduled mark (+6s): the group kill must
