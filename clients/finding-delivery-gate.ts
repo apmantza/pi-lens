@@ -528,7 +528,11 @@ export const DELIVERY_SURFACES: Record<string, DeliverySurfaceEntry> = {
 			"is the tool's entry, and its lookup() applies the #671/#672 freshness stack " +
 			"(own-file mtime + reverse-dependency mtimes via isEntryFresh) plus the " +
 			"#1095 content binding.",
-		["createWorkspaceDiagnosticsCacheContext", "isEntryFresh", "cacheCtx.lookup"],
+		[
+			"createWorkspaceDiagnosticsCacheContext",
+			"isEntryFresh",
+			"cacheCtx.lookup",
+		],
 		[
 			"createWorkspaceDiagnosticsCacheContext(resolvedCwd)",
 			"cacheCtx.lookup(file, scopeKey)",
