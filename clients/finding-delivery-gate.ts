@@ -397,6 +397,20 @@ export const DELIVERY_SURFACES: Record<string, DeliverySurfaceEntry> = {
 			"gated surfaces, not a cache of its own.",
 		"live",
 	),
+	// #2001/#2002 collect-later: findings an auxiliary LSP published AFTER its
+	// aux-grace window expired, probed from the client cache at the next
+	// turn_end. Gated on the mark timestamp: a cited file deleted or edited
+	// since the mark drops its findings (never delivered before, and the
+	// drifting edit already re-touched the file — a fresh pending pair
+	// supersedes this one), with both drop arms counted in the
+	// `late_auxiliary_findings` latency record rather than silenced.
+	"runtime-turn:late-auxiliary-findings": gated(
+		RUNTIME_TURN_FILE,
+		"Turn-end late-auxiliary LSP findings (collect-later probe of aux " +
+			"client caches whose grace window expired).",
+		["gateFindingsByPathFreshness"],
+		['store: "late-auxiliary-findings"'],
+	),
 	"runtime-turn:cascade-blocker": labeled(
 		RUNTIME_TURN_FILE,
 		"Turn-end 🧪 cascade neighbor blocker.",

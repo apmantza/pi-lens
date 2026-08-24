@@ -41,6 +41,7 @@ import {
 	fingerprintDocumentContent,
 	type DriftSweepResult,
 } from "./document-drift.js";
+import { markPendingAuxiliaryCoverage } from "./pending-aux-coverage.js";
 import {
 	isAtOrAboveHomeDir,
 	isWindowsPath,
@@ -2633,6 +2634,34 @@ export class LSPService {
 	}
 
 	/**
+	 * #2001/#2002 collect-later: read-only cached-diagnostics probe for the
+	 * turn-end late-auxiliary delivery (`clients/runtime-turn.ts`). Like
+	 * `isServerAliveForFile`, this NEVER creates or warms a client — it only
+	 * resolves each requested server's root and reads the already-connected
+	 * client's cached diagnostics for `filePath`. Servers with no live client
+	 * are simply absent from the returned map (the caller drops those pairs
+	 * silently); a present server maps to its cache contents, possibly empty
+	 * (still scanning).
+	 */
+	async readCachedDiagnosticsForServers(
+		filePath: string,
+		serverIds: ReadonlySet<string>,
+	): Promise<Map<string, import("./client.js").LSPDiagnostic[]>> {
+		const out = new Map<string, import("./client.js").LSPDiagnostic[]>();
+		if (this.checkDestroyed() || serverIds.size === 0) return out;
+		for (const server of getServersForFileWithConfig(filePath)) {
+			if (!serverIds.has(server.id) || out.has(server.id)) continue;
+			const root = await this.resolveServerRoot(server, filePath);
+			if (!root) continue;
+			const key = `${server.id}:${normalizeMapKey(root)}`;
+			const client = this.state.clients.get(key);
+			if (!client?.isAlive()) continue;
+			out.set(server.id, client.getDiagnostics(filePath));
+		}
+		return out;
+	}
+
+	/**
 	 * #1668: deliver a `workspace/didChangeWatchedFiles` event for a disk
 	 * change the client did not author through open-document sync — a bash
 	 * write/delete, or any other external change. `type` is the LSP
@@ -4533,6 +4562,27 @@ export class LSPService {
 								// an outcome string.
 								const uncovered = auxiliaryCoverageGap(outcomes);
 								if (uncovered.length > 0) auxUnconfirmedServerIds = uncovered;
+								// #2001/#2002 collect-later: an auxiliary with NO publication
+								// evidence for this content (`cut_off` — our grace timer won; or
+								// `silent` — its own budget lapsed with nothing published) may still
+								// publish into its client cache seconds later. Mark the pair so the
+								// NEXT turn_end can probe the cache and deliver the late findings
+								// instead of dropping them on the floor. Exclusions mirror the
+								// coverage-gap policy: `answered` already rode along, a #1493-exempt
+								// scanner's stored findings are bound to exactly these bytes (its
+								// answer is already carried), and DEFERRED servers never received
+								// this content at all (#1459) — their cache describes the PREVIOUS
+								// revision and probing it would replay stale findings.
+								const collectLaterServerIds = outcomes
+									.filter(
+										(o) =>
+											!o.publishedThisContent &&
+											(o.outcome === "cut_off" || o.outcome === "silent"),
+									)
+									.map((o) => o.serverId);
+								if (collectLaterServerIds.length > 0) {
+									markPendingAuxiliaryCoverage(filePath, collectLaterServerIds);
+								}
 								logLatency({
 									type: "phase",
 									phase: "lsp_aux_wait_outcome",

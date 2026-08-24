@@ -94,6 +94,15 @@ import {
 } from "./advisory-provenance.js";
 import { sweepInlineBlockerFreshness } from "./blocker-freshness.js";
 import { sweepInlineBlockerPastEof } from "./blocker-past-eof.js";
+// #2001/#2002: collect-later delivery for slow auxiliary LSP servers.
+import { getLSPService } from "./lsp/index.js";
+import {
+	drainPendingAuxiliaryCoverage,
+	LATE_AUX_REARM_TTL_MS,
+	markPendingAuxiliaryCoverage,
+} from "./lsp/pending-aux-coverage.js";
+import type { LSPDiagnostic } from "./lsp/client.js";
+import { convertLspDiagnostics } from "./dispatch/utils/lsp-diagnostics.js";
 // #1631 review V2: moved to its own leaf module so a low-level store
 // (widget-state.ts) can use the marker without importing this orchestrator —
 // see clients/stale-marker.ts's doc comment.
@@ -2228,6 +2237,119 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	}
 
 	cacheManager.incrementTurnCycle(cwd, currentOwner);
+
+	// #2001/#2002: collect-later delivery for auxiliary LSP servers whose
+	// aux-grace window expired without a publication (opengrep on Windows:
+	// ~8s per scan against a 2s grace — the scanner's eventual findings sat
+	// in its client cache, agent-invisible). Probe each pending pair through
+	// the read-only cache seam (never spawns), freshness-gate the result
+	// against when the pair was marked, and deliver survivors as an advisory.
+	// A pair whose client is alive but has STILL published nothing re-arms
+	// (same original markedAtMs) until the TTL; a dead client drops silently.
+	const lateAuxStart = Date.now();
+	const drainedPairs = drainPendingAuxiliaryCoverage();
+	let lateAuxDelivered = 0;
+	let lateAuxStale = 0;
+	let lateAuxMissing = 0;
+	let lateAuxRearmed = 0;
+	let lateAuxClientGone = 0;
+	if (drainedPairs.length > 0) {
+		const byFile = new Map<string, typeof drainedPairs>();
+		for (const pair of drainedPairs) {
+			const list = byFile.get(pair.filePath);
+			if (list) list.push(pair);
+			else byFile.set(pair.filePath, [pair]);
+		}
+		try {
+			const service = getLSPService();
+			for (const [lateAuxPath, pairs] of byFile) {
+				let cached: Map<string, LSPDiagnostic[]>;
+				try {
+					cached = await service.readCachedDiagnosticsForServers(
+						lateAuxPath,
+						new Set(pairs.map((p) => p.serverId)),
+					);
+				} catch {
+					continue;
+				}
+				const displayLateAuxPath = toRunnerDisplayPath(cwd, lateAuxPath);
+				for (const pair of pairs) {
+					const rawDiags = cached.get(pair.serverId);
+					if (rawDiags === undefined) {
+						// No live client for this server any more — best-effort probe,
+						// drop the pair silently.
+						lateAuxClientGone += 1;
+						continue;
+					}
+					if (rawDiags.length === 0) {
+						// Still scanning (or published nothing yet) — keep waiting
+						// within the TTL so a scan finishing before the NEXT turn end
+						// still delivers. The original markedAtMs survives re-arming:
+						// it is the freshness baseline, not a recency stamp.
+						if (Date.now() - pair.markedAtMs < LATE_AUX_REARM_TTL_MS) {
+							markPendingAuxiliaryCoverage(
+								lateAuxPath,
+								[pair.serverId],
+								pair.markedAtMs,
+							);
+							lateAuxRearmed += 1;
+						}
+						continue;
+					}
+					const converted = convertLspDiagnostics(rawDiags, lateAuxPath, {
+						tool: "lsp",
+					});
+					if (converted.length === 0) continue;
+					// Freshness kernel (#1634 gated surface): stat the cited file
+					// against the mark timestamp. Missing → drop (no remediation for
+					// a deleted file); mtime drifted past the mark → drop too, NOT
+					// demote — unlike the cached-blocker gates these findings were
+					// NEVER delivered before, and the edit that drifted the file
+					// already re-touched it (a fresh pending pair supersedes this
+					// one), so a stale-arm replay would double-report old content.
+					// Both drops are COUNTED here and in the latency record below —
+					// never silent (shape 10).
+					const gate = gateFindingsByPathFreshness({
+						store: "late-auxiliary-findings",
+						findings: converted,
+						cwd,
+						scannedAt: pair.markedAtMs,
+						citedPath: () => lateAuxPath,
+					});
+					lateAuxStale += gate.stale.length;
+					lateAuxMissing +=
+						converted.length - gate.live.length - gate.stale.length;
+					if (gate.live.length === 0) continue;
+					const lines = gate.live.map(
+						(f) =>
+							`  ${displayLateAuxPath}:${f.line}:${f.column} [${f.rule}] ${f.message}`,
+					);
+					lateAuxDelivered += gate.live.length;
+					// @delivery-surface: runtime-turn:late-auxiliary-findings
+					advisoryParts.push(
+						`🕐 Late auxiliary diagnostics (${pair.serverId} answered after its grace window):\n${lines.join("\n")}`,
+					);
+				}
+			}
+		} catch (err) {
+			dbg(`turn_end: late-auxiliary probe failed: ${err}`);
+		}
+		logLatency({
+			type: "phase",
+			toolName: "turn_end",
+			filePath: cwd,
+			phase: "late_auxiliary_findings",
+			durationMs: Date.now() - lateAuxStart,
+			metadata: {
+				pending: drainedPairs.length,
+				delivered: lateAuxDelivered,
+				stale: lateAuxStale,
+				missing: lateAuxMissing,
+				rearmed: lateAuxRearmed,
+				clientGone: lateAuxClientGone,
+			},
+		});
+	}
 
 	const labeledAdvisoryParts = advisoryParts.map(
 		(p) => `ℹ️ Advisory — no action required this turn:\n${p}`,
