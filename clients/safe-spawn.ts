@@ -389,7 +389,19 @@ function killPidTreeSync(pid: number): void {
 		return;
 	}
 	try {
-		process.kill(pid, "SIGKILL");
+		// #2026: negative pid = whole process group (POSIX children spawn
+		// detached), reaching grandchildren too; fall back to the direct pid
+		// when no group exists (pre-detachment callers / already reaped).
+		try {
+			process.kill(-pid, "SIGKILL");
+		} catch (groupErr) {
+			const code = (groupErr as NodeJS.ErrnoException).code;
+			if (code === "ESRCH") {
+				process.kill(pid, "SIGKILL");
+			} else {
+				process.kill(pid, "SIGKILL");
+			}
+		}
 	} catch {
 		// Child already exited.
 	}
@@ -1318,6 +1330,14 @@ export async function safeSpawnAsync(
 		}
 
 		let child: ChildProcess;
+		// #2026: on POSIX, run the child in its OWN process group (detached).
+		// killTree/killPidTreeSync then signal the whole GROUP (-pid), which
+		// makes grandchildren (npm -> node, sh -> sleep, etc.) die with their
+		// tool instead of surviving every timeout as orphans. Detachment stops
+		// direct terminal-signal delivery, so EVERY POSIX pid registers for
+		// lifetime cleanup - pi's signal/exit handlers forward the kill,
+		// preserving die-with-host semantics.
+		const posixProcessGroup = process.platform !== "win32";
 		try {
 			child = spawn(spawnCmd, spawnArgs, {
 				cwd: spawnCwd,
@@ -1325,6 +1345,7 @@ export async function safeSpawnAsync(
 				windowsHide: true,
 				shell: false,
 				windowsVerbatimArguments,
+				detached: posixProcessGroup,
 			});
 		} catch (err) {
 			// A SYNCHRONOUS spawn throw (Windows `spawn UNKNOWN`/EINVAL — the
@@ -1348,7 +1369,10 @@ export async function safeSpawnAsync(
 			);
 			return;
 		}
-		if (options?.lifetimeCoupled && child.pid) {
+		if (child.pid && (posixProcessGroup || options?.lifetimeCoupled)) {
+			// #2026: POSIX registers unconditionally - detached children no
+			// longer receive terminal signals directly, so the lifetime
+			// cleanup's signal forwarding IS their die-with-host path.
 			installLifetimeCleanup();
 			lifetimeState.pids.add(child.pid);
 		}
@@ -1395,6 +1419,26 @@ export async function safeSpawnAsync(
 				} catch {
 					child.kill("SIGKILL");
 				}
+			} else if (posixProcessGroup && child.pid && child.pid > 0) {
+				// #2026: signal the whole process group. Grandchildren spawned
+				// by the tool share its group, so one signal reaches the whole
+				// tree; a negative-pid ESRCH means it already exited.
+				const pgid = -child.pid;
+				try {
+					process.kill(pgid, "SIGTERM");
+				} catch {
+					child.kill("SIGTERM");
+				}
+				escalationTimer = setTimeout(() => {
+					if (!closed) {
+						teardownEscalated = true;
+						try {
+							process.kill(pgid, "SIGKILL");
+						} catch {
+							child.kill("SIGKILL");
+						}
+					}
+				}, 1000);
 			} else {
 				child.kill("SIGTERM");
 				escalationTimer = setTimeout(() => {

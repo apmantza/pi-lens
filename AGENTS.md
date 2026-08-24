@@ -844,7 +844,12 @@ Installer package-manager and archive-extraction subprocesses must use
 `safeSpawnAsync` with `lifetimeCoupled: true` and `ignoreAmbientSignal: true`.
 This gives timeouts an awaited Windows tree-kill and prevents interrupted parent
 processes from orphaning package-manager descendants; do not reintroduce raw
-`spawn(..., { shell: true })` for install mutations.
+`spawn(..., { shell: true })` for install mutations. On POSIX (#2026), every
+safe-spawn child runs detached in its own process group and timeout/abort kills
+signal the GROUP (`process.kill(-pid)`), so grandchildren (npm→node, sh→sleep)
+die with their tool instead of surviving as orphans; detached children no longer
+receive terminal signals directly, which is why every POSIX pid registers for
+lifetime cleanup — pi's signal/exit handlers forward the kill.
 All mutations of the shared managed `tools/` tree are also serialized by its
 atomic `.install.lock`; after waiting, re-run discovery before installing because
 the preceding process may already have satisfied the request. A lock is stale
