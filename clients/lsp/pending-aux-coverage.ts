@@ -81,9 +81,12 @@ export function markPendingAuxiliaryCoverage(
 		const key = pairKey(filePath, serverId);
 		const existing = pending.get(key);
 		if (existing) {
-			// Refresh recency WITHOUT moving the freshness baseline.
+			// #2027 review: bump the freshness baseline on re-mark. A newer
+			// touch means the auxiliary is scanning a NEWER revision; keeping
+			// the original baseline would make every post-baseline mtime read
+			// as stale, permanently dropping current-revision findings.
 			pending.delete(key);
-			pending.set(key, existing);
+			pending.set(key, { filePath, serverId, markedAtMs });
 			continue;
 		}
 		pending.set(key, { filePath, serverId, markedAtMs });

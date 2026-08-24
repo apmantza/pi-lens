@@ -43,15 +43,16 @@ describe("pending auxiliary coverage store (#2001/#2002)", () => {
 		);
 	});
 
-	it("re-marking an existing pair preserves its original markedAtMs", () => {
+	it("re-marking an existing pair BUMPS its markedAtMs (#2027 review)", () => {
+		// #2027 round-1 P2-1: the baseline must advance when a newer touch
+		// re-marks, so post-baseline mtimes don't falsely read as stale and
+		// drop current-revision findings.
 		markPendingAuxiliaryCoverage("/w/a.ts", ["opengrep"], 1111);
-		// Turn-end re-arm passes the SAME baseline back; a plain re-mark from
-		// another touch must not clobber it either.
 		markPendingAuxiliaryCoverage("/w/a.ts", ["opengrep"], 9999);
 
 		const drained = drainPendingAuxiliaryCoverage();
 		expect(drained).toHaveLength(1);
-		expect(drained[0].markedAtMs).toBe(1111);
+		expect(drained[0].markedAtMs).toBe(9999);
 	});
 
 	it("clearPendingAuxiliaryCoverage removes exactly one pair", () => {
@@ -70,7 +71,7 @@ describe("pending auxiliary coverage store (#2001/#2002)", () => {
 
 		expect(pendingAuxiliaryCoverageSizeForTests()).toBe(1);
 		const drained = drainPendingAuxiliaryCoverage();
-		expect(drained[0].markedAtMs).toBe(1000);
+		expect(drained[0].markedAtMs).toBe(2000); // newer mark bumps baseline
 	});
 
 	it("evicts the OLDEST pair beyond the cap (bounded store, shape 9)", () => {

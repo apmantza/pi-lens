@@ -2253,6 +2253,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	let lateAuxMissing = 0;
 	let lateAuxRearmed = 0;
 	let lateAuxClientGone = 0;
+	let lateAuxProbeFailed = 0;
 	if (drainedPairs.length > 0) {
 		const byFile = new Map<string, typeof drainedPairs>();
 		for (const pair of drainedPairs) {
@@ -2270,6 +2271,15 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 						new Set(pairs.map((p) => p.serverId)),
 					);
 				} catch {
+					// #2027 round-1 P3-2: count dropped pairs — never silent.
+					lateAuxProbeFailed += pairs.length;
+					for (const pair of pairs) {
+						markPendingAuxiliaryCoverage(
+							pair.filePath,
+							[pair.serverId],
+							Date.now(),
+						);
+					}
 					continue;
 				}
 				const displayLateAuxPath = toRunnerDisplayPath(cwd, lateAuxPath);
@@ -2319,6 +2329,16 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 					lateAuxStale += gate.stale.length;
 					lateAuxMissing +=
 						converted.length - gate.live.length - gate.stale.length;
+					if (gate.stale.length > 0) {
+						// Stale findings mean the scan predates the last edit.
+						// Re-arm with a REFRESHED baseline so the next turn probes
+						// the newer revision (#2027 round-1 P2-1).
+						markPendingAuxiliaryCoverage(
+							lateAuxPath,
+							[pair.serverId],
+							Date.now(),
+						);
+					}
 					if (gate.live.length === 0) continue;
 					const lines = gate.live.map(
 						(f) =>
@@ -2347,6 +2367,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 				missing: lateAuxMissing,
 				rearmed: lateAuxRearmed,
 				clientGone: lateAuxClientGone,
+				probeFailed: lateAuxProbeFailed,
 			},
 		});
 	}
