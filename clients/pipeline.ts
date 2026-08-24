@@ -1268,9 +1268,11 @@ export async function runFormatPhase(
  */
 function buildEnrichedBlockerOutput(
 	blockers: Diagnostic[],
-	fileContent: string,
+	fileContent = "",
 ): string {
-	const fileLines = fileContent.split("\n");
+	// Empty fileContent (readback failed, e.g. deleted-file race) still
+	// renders the gated blocker list - just without per-line snippets.
+	const fileLines = fileContent ? fileContent.split("\n") : [];
 	const MAX_SNIPPET = 120; // chars — keep it tight in context
 
 	let out = `\n\n🔴 STOP — ${blockers.length} issue(s) must be fixed:\n`;
@@ -1561,7 +1563,22 @@ export async function runPipeline(
 		);
 		if (rest) output += rest;
 	} else if (dispatchResult.output) {
-		output += `\n\n${dispatchResult.output}`;
+		// #2028 review P3: this path fires when readback FAILED - raw output
+		// still cites possibly-deleted files. Re-render from the gated set
+		// (no snippets without fileContent) and keep the post-blocker slice.
+		if (
+			dispatchResult.hasBlockers &&
+			deliverableBlockers.length !== dispatchResult.blockers.length
+		) {
+			let gatedOut = buildEnrichedBlockerOutput(deliverableBlockers);
+			const rest = dispatchResult.output.slice(
+				dispatchResult.blockerOutput.length,
+			);
+			if (rest) gatedOut += rest;
+			output += `\n\n${gatedOut}`;
+		} else {
+			output += `\n\n${dispatchResult.output}`;
+		}
 	}
 	if (fixedCount > 0) {
 		const detail =
