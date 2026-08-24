@@ -55,6 +55,15 @@ export type DegradationKind =
 	 * record; the count here is the exact total.
 	 */
 	| "review-graph-snapshot-read"
+	/**
+	 * The project-snapshot persist seam detected durable meta/body evidence
+	 * failing the #2008 integrity gate — the meta's recorded gz size no longer
+	 * matches the on-disk body (torn/truncated gzip under an intact meta), or a
+	 * legacy meta carries no gzBytes yet — and withheld dedupe so the pending
+	 * save republishes the body. Subject is the snapshot body path; the count
+	 * is the exact number of detections this session.
+	 */
+	| "snapshot-integrity"
 	| "formatter-failure"
 	| "wasm-abort"
 	| "lsp-diagnostics-timeout"

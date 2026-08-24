@@ -238,9 +238,12 @@ describe("project snapshot", () => {
 				siblingJson,
 				sibling.generatedAt,
 			);
+			// #2008: a meta written since the integrity gate carries the on-disk gz
+			// size; a sibling process persisting concurrently writes the same shape.
+			const siblingGz = gzipSync(siblingJson);
 			realWriteFileAtomicHolder.current(
 				getProjectSnapshotPath(cwd),
-				gzipSync(siblingJson),
+				siblingGz,
 				{ bestEffort: false },
 			);
 			realWriteFileAtomicHolder.current(
@@ -250,6 +253,7 @@ describe("project snapshot", () => {
 					version: sibling.version,
 					seq: sibling.seq,
 					fingerprint: siblingFingerprint,
+					gzBytes: siblingGz.byteLength,
 				}),
 				{ bestEffort: false },
 			);
@@ -383,6 +387,100 @@ describe("project snapshot", () => {
 				active: false,
 				queued: false,
 			});
+		}));
+
+	// #2008: a torn/truncated gzip under an INTACT meta used to win same-
+	// fingerprint dedupe forever — every unchanged save skipped, leaving the
+	// corrupt body canonical until seq advanced. The skip decision now compares
+	// the meta's recorded gz size against a live stat and force-publishes on
+	// mismatch.
+	it("force-publishes when the gz body is torn under an intact meta", () =>
+		withProjectDataDir((cwd) => {
+			const runtime = new RuntimeCoordinator();
+			runtime.seedProjectSequence(7);
+			const snapshot = buildProjectSnapshotFromRuntime({ cwd, runtime });
+			saveProjectSnapshot(cwd, snapshot);
+			const bodyPath = getProjectSnapshotPath(cwd);
+			const intactSize = fs.statSync(bodyPath).size;
+			expect(readProjectSnapshotMeta(cwd)?.gzBytes).toBe(intactSize);
+
+			// Simulate the torn write: truncate the canonical gzip in place. The
+			// meta sidecar still records the old fingerprint and gz size.
+			fs.truncateSync(bodyPath, Math.floor(intactSize / 2));
+
+			writeFileAtomicSpy.mockClear();
+			saveProjectSnapshot(cwd, {
+				...snapshot,
+				generatedAt: new Date(
+					Date.parse(snapshot.generatedAt) + 1000,
+				).toISOString(),
+			});
+			expect(
+				writeFileAtomicSpy.mock.calls.filter(
+					([filePath]) => filePath === bodyPath,
+				),
+			).toHaveLength(1);
+			// The republished meta re-binds the integrity evidence to the new body
+			// (byte length may differ from the torn one: generatedAt is in the JSON).
+			const republishedSize = fs.statSync(bodyPath).size;
+			expect(republishedSize).toBeGreaterThan(intactSize / 2);
+			expect(readProjectSnapshotMeta(cwd)?.gzBytes).toBe(republishedSize);
+			_resetProjectSnapshotParseCacheForTests();
+			expect(loadProjectSnapshot(cwd)?.seq).toBe(7);
+		}));
+
+	it("withholds dedupe on a legacy meta until its next write populates gzBytes", () =>
+		withProjectDataDir((cwd) => {
+			const runtime = new RuntimeCoordinator();
+			runtime.seedProjectSequence(7);
+			const snapshot = buildProjectSnapshotFromRuntime({ cwd, runtime });
+			saveProjectSnapshot(cwd, snapshot);
+			const bodyPath = getProjectSnapshotPath(cwd);
+			const metaPath = getProjectSnapshotMetaPath(cwd);
+
+			// Downgrade the sidecar to the legacy shape (no gzBytes).
+			const legacyMeta = readProjectSnapshotMeta(cwd);
+			expect(legacyMeta?.fingerprint).toBeDefined();
+			fs.writeFileSync(
+				metaPath,
+				JSON.stringify({
+					timestamp: legacyMeta?.timestamp,
+					version: legacyMeta?.version,
+					seq: legacyMeta?.seq,
+					fingerprint: legacyMeta?.fingerprint,
+				}),
+			);
+
+			writeFileAtomicSpy.mockClear();
+			saveProjectSnapshot(cwd, {
+				...snapshot,
+				generatedAt: new Date(
+					Date.parse(snapshot.generatedAt) + 1000,
+				).toISOString(),
+			});
+			expect(
+				writeFileAtomicSpy.mock.calls.filter(
+					([filePath]) => filePath === bodyPath,
+				),
+			).toHaveLength(1);
+			// Self-healing: this successful write populates the field.
+			expect(readProjectSnapshotMeta(cwd)?.gzBytes).toBe(
+				fs.statSync(bodyPath).size,
+			);
+
+			// …and the next unchanged save dedupes again.
+			writeFileAtomicSpy.mockClear();
+			saveProjectSnapshot(cwd, {
+				...snapshot,
+				generatedAt: new Date(
+					Date.parse(snapshot.generatedAt) + 2000,
+				).toISOString(),
+			});
+			expect(
+				writeFileAtomicSpy.mock.calls.filter(
+					([filePath]) => filePath === bodyPath,
+				),
+			).toHaveLength(0);
 		}));
 
 	it("bounds and idles authoritative snapshots", () =>
@@ -1445,9 +1543,11 @@ describe("project snapshot worker persist (#958)", () => {
 					siblingJson,
 					sibling.generatedAt,
 				);
+				// #2008: same-shape meta as production writes, gz size included.
+				const siblingGz = gzipSync(siblingJson);
 				realWriteFileAtomicHolder.current(
 					getProjectSnapshotPath(cwd),
-					gzipSync(siblingJson),
+					siblingGz,
 					{ bestEffort: false },
 				);
 				realWriteFileAtomicHolder.current(
@@ -1457,6 +1557,7 @@ describe("project snapshot worker persist (#958)", () => {
 						version: sibling.version,
 						seq: sibling.seq,
 						fingerprint: siblingFingerprint,
+						gzBytes: siblingGz.byteLength,
 					}),
 					{ bestEffort: false },
 				);

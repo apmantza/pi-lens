@@ -5,6 +5,7 @@ import { Worker } from "node:worker_threads";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { writeFileAtomic } from "./atomic-write.js";
 import { getProjectDataDir } from "./file-utils.js";
+import { incrementDegradationCount } from "./degradation-ledger.js";
 import { readJsonCache } from "./json-cache-read.js";
 import { logLatency } from "./latency-logger.js";
 import { normalizeMapKey } from "./path-utils.js";
@@ -174,6 +175,14 @@ export interface ProjectSnapshotMeta {
 	/** SHA-256 of the snapshot body with volatile `generatedAt` omitted (#1997). */
 	fingerprint?: string;
 	/**
+	 * #2008: on-disk byte length of the gz body at the last successful persist.
+	 * The dedupe skip decision compares it against a live stat so a torn or
+	 * truncated gzip under an intact meta cannot keep winning unchanged-skip.
+	 * Absent on legacy metas → dedupe is withheld (always publish) until the
+	 * next successful write populates it.
+	 */
+	gzBytes?: number;
+	/**
 	 * The derived sequence index as of `seq` (#1019), MIRRORED here from the
 	 * snapshot body so session-start can bound the change-log replay WITHOUT
 	 * parsing the (40-112MB) body — which would forfeit the #947 skip-stale
@@ -195,6 +204,12 @@ function parseSnapshotMeta(value: unknown): ProjectSnapshotMeta | null {
 			typeof meta.fingerprint === "string" &&
 			/^[a-f0-9]{64}$/.test(meta.fingerprint)
 				? meta.fingerprint
+				: undefined,
+		gzBytes:
+			typeof meta.gzBytes === "number" &&
+			Number.isInteger(meta.gzBytes) &&
+			meta.gzBytes > 0
+				? meta.gzBytes
 				: undefined,
 		sequenceIndex: parseSequenceIndex(meta.sequenceIndex),
 	};
@@ -946,10 +961,115 @@ function rememberSuccessfulSnapshotPersist(
 	}
 }
 
+/**
+ * #2008 verdict on the durable meta+body pair. Absent from the baselines when
+ * there is no evidence to judge (no meta fingerprint or no body on disk).
+ * Anything other than `"ok"` means a same-fingerprint skip must NOT be
+ * trusted: the persisted body may be torn under an intact meta.
+ */
+type SnapshotBodyIntegrity = "ok" | "legacy-meta" | "size-mismatch";
+
+interface SnapshotPersistBaselines {
+	durable?: SnapshotPersistRecord;
+	fingerprints: string[];
+	integrity?: SnapshotBodyIntegrity;
+}
+
+function assessSnapshotBodyIntegrity(
+	meta: ProjectSnapshotMeta,
+	body: { gz: boolean; size: number },
+): {
+	outcome: SnapshotBodyIntegrity;
+	expectedGzBytes?: number;
+	actualBytes: number;
+} {
+	if (meta.gzBytes === undefined) {
+		// Legacy meta (pre-#2008): nothing to compare against, so the evidence is
+		// untrusted until the next successful persist populates gzBytes.
+		return { outcome: "legacy-meta", actualBytes: body.size };
+	}
+	if (!body.gz || body.size !== meta.gzBytes) {
+		return {
+			outcome: "size-mismatch",
+			expectedGzBytes: meta.gzBytes,
+			actualBytes: body.size,
+		};
+	}
+	return {
+		outcome: "ok",
+		expectedGzBytes: meta.gzBytes,
+		actualBytes: body.size,
+	};
+}
+
+/**
+ * Bounded observability for #2008: the degradation ledger keeps one entry per
+ * corrupted subject with the exact detection count for the session; every
+ * detection also emits one `project_snapshot_body_integrity` latency row
+ * naming expected vs actual bytes, so an operator can confirm both the
+ * detection and the forced republish from logs alone.
+ */
+function noteSnapshotBodyIntegrityWithheld(args: {
+	gzPath: string;
+	verdict: Exclude<SnapshotBodyIntegrity, "ok">;
+	seq?: number;
+	expectedGzBytes?: number;
+	actualBytes: number;
+}): void {
+	incrementDegradationCount({
+		kind: "snapshot-integrity",
+		subject: args.gzPath,
+		reason: args.verdict,
+	});
+	logLatency({
+		type: "phase",
+		phase: "project_snapshot_body_integrity",
+		filePath: args.gzPath,
+		durationMs: 0,
+		metadata: {
+			outcome: "dedupe_withheld",
+			reason: args.verdict,
+			...(args.seq !== undefined ? { seq: args.seq } : {}),
+			...(args.expectedGzBytes === undefined
+				? {}
+				: { expectedGzBytes: args.expectedGzBytes }),
+			actualBytes: args.actualBytes,
+		},
+	});
+}
+
+/** Log one row naming a skip that was refused because integrity regressed. */
+function noteSnapshotSkipRefused(args: {
+	gzPath: string;
+	verdict: Exclude<SnapshotBodyIntegrity, "ok">;
+	seq: number;
+}): void {
+	logLatency({
+		type: "phase",
+		phase: "project_snapshot_body_integrity",
+		filePath: args.gzPath,
+		durationMs: 0,
+		metadata: {
+			outcome: "skip_refused_rewrite",
+			reason: args.verdict,
+			seq: args.seq,
+		},
+	});
+}
+
+/**
+ * PURE READ of the durable meta+body evidence for a snapshot key (#2008
+ * refactor): it must never mutate {@link _successfulSnapshotPersists}. This
+ * runs up to three times per persist — admission in saveProjectSnapshot, the
+ * dispatch-time refresh, and the skip-honor re-read — including on results
+ * whose fingerprints are only partially used, so the seeding write lives in
+ * {@link seedSnapshotPersistBaselineFromDurable} and is called only by the
+ * seam that owns the persist lifecycle (dispatchSnapshotPersist).
+ */
 function snapshotPersistBaselinesFor(
 	cwd: string,
 	key: string,
-): { durable?: SnapshotPersistRecord; fingerprints: string[] } {
+): SnapshotPersistBaselines {
 	const local = _successfulSnapshotPersists.get(key);
 	const meta = readProjectSnapshotMeta(cwd);
 	const body = resolveSnapshotBodyPath(cwd);
@@ -958,14 +1078,29 @@ function snapshotPersistBaselinesFor(
 		if (!body) _successfulSnapshotPersists.delete(key);
 		return { fingerprints: [] };
 	}
+	// #2008: a meta whose recorded gz size no longer matches the on-disk body
+	// describes evidence we cannot trust — a truncated/torn gzip under an
+	// intact meta used to win same-fingerprint dedupe forever, keeping the
+	// corrupt body canonical until seq advanced. Withhold the fingerprints so
+	// the pending save republishes (and rewrites) the body.
+	const integrity = assessSnapshotBodyIntegrity(meta, body);
+	if (integrity.outcome !== "ok") {
+		noteSnapshotBodyIntegrityWithheld({
+			gzPath: getProjectSnapshotPath(cwd),
+			verdict: integrity.outcome,
+			seq: meta.seq,
+			expectedGzBytes: integrity.expectedGzBytes,
+			actualBytes: integrity.actualBytes,
+		});
+		return { fingerprints: [] };
+	}
 	const durable: SnapshotPersistRecord = {
 		seq: meta.seq,
 		fingerprint: meta.fingerprint,
 		generatedAt: meta.timestamp,
 		generation: _snapshotGenerationStates.get(key)?.generation ?? 0,
-		gzBytes: body.gz ? body.size : undefined,
+		gzBytes: meta.gzBytes,
 	};
-	if (!local) rememberSuccessfulSnapshotPersist(key, durable);
 	const fingerprints = [durable.fingerprint];
 	// A sibling process may have advanced durable state from local A to B. An
 	// unchanged replay of A is stale work and must not overwrite B. A third
@@ -973,13 +1108,30 @@ function snapshotPersistBaselinesFor(
 	if (local && local.fingerprint !== durable.fingerprint) {
 		fingerprints.push(local.fingerprint);
 	}
-	return { durable, fingerprints };
+	return { durable, fingerprints, integrity: "ok" };
+}
+
+/**
+ * Seed the in-process baseline for `key` from freshly-read durable state.
+ * Deliberately separate from {@link snapshotPersistBaselinesFor} so the read
+ * stays pure; called only at the dispatch seam where the persist lifecycle
+ * begins.
+ */
+function seedSnapshotPersistBaselineFromDurable(
+	key: string,
+	durable: SnapshotPersistRecord | undefined,
+): void {
+	if (!durable || _successfulSnapshotPersists.has(key)) return;
+	rememberSuccessfulSnapshotPersist(key, durable);
 }
 
 function writeProjectSnapshotMeta(
 	metaPath: string,
 	snapshot: ProjectSnapshot,
-	bodyRecord?: Pick<SnapshotPersistRecord, "fingerprint" | "generatedAt">,
+	bodyRecord?: Pick<
+		SnapshotPersistRecord,
+		"fingerprint" | "generatedAt" | "gzBytes"
+	>,
 ): void {
 	writeFileAtomic(
 		metaPath,
@@ -987,7 +1139,14 @@ function writeProjectSnapshotMeta(
 			timestamp: bodyRecord?.generatedAt ?? snapshot.generatedAt,
 			version: snapshot.version,
 			seq: snapshot.seq,
-			...(bodyRecord ? { fingerprint: bodyRecord.fingerprint } : {}),
+			...(bodyRecord
+				? {
+						fingerprint: bodyRecord.fingerprint,
+						...(bodyRecord.gzBytes === undefined
+							? {}
+							: { gzBytes: bodyRecord.gzBytes }),
+					}
+				: {}),
 			...(snapshot.sequenceIndex
 				? { sequenceIndex: snapshot.sequenceIndex }
 				: {}),
@@ -1148,7 +1307,10 @@ function reconcileAuthoritativeAfterWrite(
 
 function finalizeProjectSnapshotMeta(
 	pending: PendingSnapshotBody,
-	record: Pick<SnapshotPersistRecord, "fingerprint" | "generatedAt">,
+	record: Pick<
+		SnapshotPersistRecord,
+		"fingerprint" | "generatedAt" | "gzBytes"
+	>,
 ): boolean {
 	try {
 		writeProjectSnapshotMeta(
@@ -1214,23 +1376,37 @@ function writeSnapshotBodyOnMainThread(
 			pending.snapshot.generatedAt,
 		);
 		if (pending.dedupeFingerprints.includes(fingerprint)) {
-			const prior =
-				snapshotPersistBaselinesFor(pending.cwd, pending.key).durable ??
-				pending.durablePersist;
-			if (
-				authoritativeSnapshots.get(pending.key)?.snapshot === pending.snapshot
-			) {
-				deleteAuthoritativeSnapshot(pending.key);
+			// Re-read the tiny durable sidecar before honoring a fingerprint
+			// captured at dispatch time (#2008): a body torn between dispatch and
+			// execution must fall through to the full write, not skip.
+			const current = snapshotPersistBaselinesFor(pending.cwd, pending.key);
+			if (current.integrity === "ok") {
+				const prior = current.durable ?? pending.durablePersist;
+				if (
+					authoritativeSnapshots.get(pending.key)?.snapshot === pending.snapshot
+				) {
+					deleteAuthoritativeSnapshot(pending.key);
+				}
+				logSnapshotPersistDecision({
+					cwd: pending.cwd,
+					seq: pending.snapshot.seq,
+					fingerprint,
+					decision: "skipped_unchanged",
+					avoidedRawBytes: rawBytes,
+					avoidedGzipBytes: prior?.gzBytes,
+				});
+				return;
 			}
-			logSnapshotPersistDecision({
-				cwd: pending.cwd,
-				seq: pending.snapshot.seq,
-				fingerprint,
-				decision: "skipped_unchanged",
-				avoidedRawBytes: rawBytes,
-				avoidedGzipBytes: prior?.gzBytes,
-			});
-			return;
+			if (current.integrity !== undefined) {
+				noteSnapshotSkipRefused({
+					gzPath: pending.gzPath,
+					verdict: current.integrity,
+					seq: pending.snapshot.seq,
+				});
+			}
+			// integrity === undefined: the meta/body evidence vanished entirely
+			// since dispatch — falling through to the full write repairs it, the
+			// same contract as deletion-before-dispatch.
 		}
 		const writeStarted = performance.now();
 		const gzip = gzipSync(json);
@@ -1240,6 +1416,7 @@ function writeSnapshotBodyOnMainThread(
 		const metadataFinalized = finalizeProjectSnapshotMeta(pending, {
 			fingerprint,
 			generatedAt: pending.snapshot.generatedAt,
+			gzBytes: gzip.byteLength,
 		});
 		if (!metadataFinalized) return;
 		reconcileAuthoritativeAfterWrite(pending, rawBytes);
@@ -1321,9 +1498,29 @@ function handleSnapshotWorkerResult(
 		// Re-read the tiny durable sidecar at the decision seam. A sibling process
 		// may have advanced B after this request captured A. A stale replay of A
 		// must preserve B's body metadata, not restore the captured A sidecar.
-		const prior =
-			snapshotPersistBaselinesFor(pending.cwd, pending.key).durable ??
-			pending.durablePersist;
+		const baselines = snapshotPersistBaselinesFor(pending.cwd, pending.key);
+		if (baselines.integrity !== "ok") {
+			// The worker skipped WITHOUT staging a body, trusting the durable
+			// fingerprint captured at dispatch. The re-read says that evidence no
+			// longer passes the #2008 integrity gate — refuse the skip and rewrite
+			// synchronously so a torn/missing body cannot outlive this save. The
+			// sync writer recomputes the same baselines, finds them untrusted, and
+			// performs the full gzip+stage+promote (its finally completes this
+			// pending, so do not complete it twice here).
+			if (baselines.integrity !== undefined) {
+				noteSnapshotSkipRefused({
+					gzPath: pending.gzPath,
+					verdict: baselines.integrity,
+					seq: pending.snapshot.seq,
+				});
+			}
+			dispatchMainThreadWriteThroughSeam(
+				pending,
+				"snapshot body integrity regressed",
+			);
+			return;
+		}
+		const prior = baselines.durable ?? pending.durablePersist;
 		if (
 			authoritativeSnapshots.get(pending.key)?.snapshot === pending.snapshot
 		) {
@@ -1346,6 +1543,7 @@ function handleSnapshotWorkerResult(
 		const metadataFinalized = finalizeProjectSnapshotMeta(pending, {
 			fingerprint: result.semanticFingerprint,
 			generatedAt: pending.snapshot.generatedAt,
+			gzBytes: result.gzBytes,
 		});
 		if (!metadataFinalized) {
 			completeSnapshotPersist(pending);
@@ -1376,6 +1574,7 @@ function dispatchSnapshotPersist(pending: PendingSnapshotBody): void {
 	const baselines = snapshotPersistBaselinesFor(pending.cwd, pending.key);
 	pending.durablePersist = baselines.durable;
 	pending.dedupeFingerprints = baselines.fingerprints;
+	seedSnapshotPersistBaselineFromDurable(pending.key, baselines.durable);
 	_activeSnapshotPersists.set(pending.key, pending);
 	if (!snapshotWorkerEnabled()) {
 		dispatchMainThreadWriteThroughSeam(pending, undefined);
