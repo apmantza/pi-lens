@@ -19,6 +19,9 @@ function fixtureRoot() {
 	const pkg = {
 		name: "pi-lens",
 		version: "4.1.2",
+		license: "MIT",
+		bin: { alpha: "dist/alpha.js", beta: "dist/beta.js" },
+		engines: { node: ">=22" },
 		dependencies: { demo: "^1.0.0" },
 		peerDependencies: { peer: "^1.0.0" },
 		peerDependenciesMeta: { peer: { optional: true } },
@@ -32,6 +35,9 @@ function fixtureRoot() {
 			"": {
 				name: "pi-lens",
 				version: "4.1.2",
+				license: "MIT",
+				bin: { beta: "dist/beta.js", alpha: "dist/alpha.js" },
+				engines: { node: ">=22" },
 				dependencies: { demo: "^1.0.0" },
 				peerDependencies: { peer: "^1.0.0" },
 				peerDependenciesMeta: { peer: { optional: true } },
@@ -81,6 +87,68 @@ describe("package-lock identity guard (#2043)", () => {
 			expect(result.stderr, field).toContain(expectedMessage);
 			expect(result.stderr, field).toContain("Run `npm install`");
 		}
+	});
+
+	it("checks every copied root metadata mirror through the real CLI", () => {
+		const cases = [
+			[
+				"license",
+				(lock: ReturnType<typeof fixtureRoot>["lock"]) => {
+					lock.packages[""].license = "Apache-2.0";
+				},
+			],
+			[
+				"bin",
+				(lock: ReturnType<typeof fixtureRoot>["lock"]) => {
+					lock.packages[""].bin.alpha = "dist/other.js";
+				},
+			],
+			[
+				"engines",
+				(lock: ReturnType<typeof fixtureRoot>["lock"]) => {
+					lock.packages[""].engines.node = ">=24";
+				},
+			],
+		] as const;
+
+		for (const [field, mutate] of cases) {
+			const { root, lock } = fixtureRoot();
+			mutate(lock);
+			fs.writeFileSync(
+				path.join(root, "package-lock.json"),
+				JSON.stringify(lock),
+			);
+
+			const result = run(CHECKER, root);
+			expect(result.status, field).not.toBe(0);
+			expect(result.stderr, field).toContain(`package.json.${field}`);
+			expect(result.stderr, field).toContain("Run `npm install`");
+		}
+	});
+
+	it("accepts npm's normalized string bin shorthand", () => {
+		const { root, pkg, lock } = fixtureRoot();
+		const stringBinPackage = { ...pkg, bin: "dist/pi-lens.js" };
+		const normalizedLock = {
+			...lock,
+			packages: {
+				"": {
+					...lock.packages[""],
+					bin: { "pi-lens": "dist/pi-lens.js" },
+				},
+			},
+		};
+		fs.writeFileSync(
+			path.join(root, "package.json"),
+			JSON.stringify(stringBinPackage),
+		);
+		fs.writeFileSync(
+			path.join(root, "package-lock.json"),
+			JSON.stringify(normalizedLock),
+		);
+
+		const result = run(CHECKER, root);
+		expect(result.status).toBe(0);
 	});
 
 	it("checks the peer optionality policy mirror through the real CLI", () => {

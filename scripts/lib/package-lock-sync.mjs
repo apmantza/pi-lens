@@ -19,6 +19,13 @@ function objectSection(value, field, problems) {
 	return value;
 }
 
+function normalizeRootMetadata(field, value, packageName) {
+	if (field === "bin" && typeof value === "string") {
+		return typeof packageName === "string" ? { [packageName]: value } : value;
+	}
+	return value;
+}
+
 /**
  * Return every package.json/package-lock.json mirror mismatch.
  *
@@ -55,6 +62,16 @@ export function validatePackageLockSync(pkg, lock) {
 		if (packageValue !== lockValue) {
 			problems.push(
 				`${packageField}=${display(packageValue)} does not match ${lockField}=${display(lockValue)}`,
+			);
+		}
+	}
+
+	for (const field of ["license", "bin", "engines"]) {
+		const packageValue = normalizeRootMetadata(field, pkg[field], pkg.name);
+		const lockValue = normalizeRootMetadata(field, root[field], root.name);
+		if (!isDeepStrictEqual(packageValue, lockValue)) {
+			problems.push(
+				`package.json.${field}=${display(pkg[field])} does not match ${LOCK_ROOT}.${field}=${display(root[field])}`,
 			);
 		}
 	}
