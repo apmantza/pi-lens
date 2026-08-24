@@ -1,7 +1,22 @@
+import { isDeepStrictEqual } from "node:util";
+
 const LOCK_ROOT = 'package-lock.json.packages[""]';
 
 function display(value) {
 	return value === undefined ? "(missing)" : JSON.stringify(value);
+}
+
+function isJsonObject(value) {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function objectSection(value, field, problems) {
+	if (value === undefined) return {};
+	if (!isJsonObject(value)) {
+		problems.push(`${field} must be a JSON object`);
+		return undefined;
+	}
+	return value;
 }
 
 /**
@@ -11,8 +26,19 @@ function display(value) {
  * validator can guard the CLI, CI, and release-time mutation path.
  */
 export function validatePackageLockSync(pkg, lock) {
-	const root = lock?.packages?.[""] ?? {};
 	const problems = [];
+	if (!isJsonObject(pkg)) {
+		problems.push("package.json root must be a JSON object");
+	}
+	if (!isJsonObject(lock)) {
+		problems.push("package-lock.json root must be a JSON object");
+	}
+	if (problems.length > 0) return problems;
+
+	const root = lock.packages?.[""];
+	if (!isJsonObject(root)) {
+		return [`${LOCK_ROOT} must be a JSON object`];
+	}
 
 	const identities = [
 		["package.json.name", pkg.name, "package-lock.json.name", lock.name],
@@ -40,8 +66,17 @@ export function validatePackageLockSync(pkg, lock) {
 		"peerDependencies",
 	];
 	for (const section of sections) {
-		const pkgDeps = pkg[section] ?? {};
-		const lockDeps = root[section] ?? {};
+		const pkgDeps = objectSection(
+			pkg[section],
+			`package.json.${section}`,
+			problems,
+		);
+		const lockDeps = objectSection(
+			root[section],
+			`${LOCK_ROOT}.${section}`,
+			problems,
+		);
+		if (pkgDeps === undefined || lockDeps === undefined) continue;
 		for (const [name, spec] of Object.entries(pkgDeps)) {
 			if (lockDeps[name] !== spec) {
 				problems.push(
@@ -56,6 +91,26 @@ export function validatePackageLockSync(pkg, lock) {
 				);
 			}
 		}
+	}
+
+	const pkgPeerMeta = objectSection(
+		pkg.peerDependenciesMeta,
+		"package.json.peerDependenciesMeta",
+		problems,
+	);
+	const lockPeerMeta = objectSection(
+		root.peerDependenciesMeta,
+		`${LOCK_ROOT}.peerDependenciesMeta`,
+		problems,
+	);
+	if (
+		pkgPeerMeta !== undefined &&
+		lockPeerMeta !== undefined &&
+		!isDeepStrictEqual(pkgPeerMeta, lockPeerMeta)
+	) {
+		problems.push(
+			`package.json.peerDependenciesMeta=${display(pkgPeerMeta)} does not match ${LOCK_ROOT}.peerDependenciesMeta=${display(lockPeerMeta)}`,
+		);
 	}
 
 	return problems;

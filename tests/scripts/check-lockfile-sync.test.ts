@@ -20,6 +20,8 @@ function fixtureRoot() {
 		name: "pi-lens",
 		version: "4.1.2",
 		dependencies: { demo: "^1.0.0" },
+		peerDependencies: { peer: "^1.0.0" },
+		peerDependenciesMeta: { peer: { optional: true } },
 	};
 	const lock = {
 		name: "pi-lens",
@@ -31,6 +33,8 @@ function fixtureRoot() {
 				name: "pi-lens",
 				version: "4.1.2",
 				dependencies: { demo: "^1.0.0" },
+				peerDependencies: { peer: "^1.0.0" },
+				peerDependenciesMeta: { peer: { optional: true } },
 			},
 		},
 	};
@@ -76,6 +80,34 @@ describe("package-lock identity guard (#2043)", () => {
 			expect(result.status, field).not.toBe(0);
 			expect(result.stderr, field).toContain(expectedMessage);
 			expect(result.stderr, field).toContain("Run `npm install`");
+		}
+	});
+
+	it("checks the peer optionality policy mirror through the real CLI", () => {
+		const { root, lock } = fixtureRoot();
+		lock.packages[""].peerDependenciesMeta.peer.optional = false;
+		fs.writeFileSync(
+			path.join(root, "package-lock.json"),
+			JSON.stringify(lock),
+		);
+
+		const result = run(CHECKER, root);
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("peerDependenciesMeta");
+		expect(result.stderr).toContain("Run `npm install`");
+	});
+
+	it("rejects malformed JSON roots without an exception stack", () => {
+		for (const file of ["package.json", "package-lock.json"]) {
+			const { root } = fixtureRoot();
+			fs.writeFileSync(path.join(root, file), "null");
+
+			const result = run(CHECKER, root);
+			expect(result.status, file).not.toBe(0);
+			expect(result.stderr, file).toContain(
+				`${file} root must be a JSON object`,
+			);
+			expect(result.stderr, file).not.toContain("TypeError");
 		}
 	});
 

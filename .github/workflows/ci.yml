@@ -230,6 +230,12 @@ jobs:
           git clone --quiet . "$RUNNER_TEMP/gh-install"
           cd "$RUNNER_TEMP/gh-install"
           npm install --omit=dev --no-audit --no-fund
+          if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+            echo "ERROR: npm install --omit=dev changed tracked source files"
+            git status --short --untracked-files=no
+            git diff
+            exit 1
+          fi
           test -f dist/index.js || \
             (echo "ERROR: dist/index.js not built from a clean clone under --omit=dev" && exit 1)
           # #1926: the clean clone is the shape real users get. Assert pi's
