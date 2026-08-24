@@ -262,6 +262,7 @@ export function stripWrapperArgs(binName: string, args: string[]): string[] {
 
 export class TestRunnerClient {
 	private log: (msg: string) => void;
+	private retirementLog: (msg: string) => void;
 	private availableRunners: Map<string, boolean> = new Map();
 	private failedTestsByRunner: Map<string, Set<string>> = new Map();
 	// Best-effort vitest config `test.include`/`test.exclude` globs, scraped as
@@ -279,6 +280,10 @@ export class TestRunnerClient {
 		this.log = verbose
 			? createSubsystemLogger("test-runner")
 			: () => {};
+		// Retirement is a correctness decision, not optional verbose chatter.
+		// Keep it on the existing subsystem sink so production can prove that a
+		// stale failed-first target was removed without logging every run.
+		this.retirementLog = createSubsystemLogger("test-runner");
 	}
 
 	/**
@@ -867,36 +872,21 @@ export class TestRunnerClient {
 			: this.findTestFile(sourceFilePath, cwd, detected.runner);
 
 		if (failedSet && failedSet.size > 0) {
-			if (related) {
-				const relatedAbs = path.resolve(related.testFile);
-				if (failedSet.has(relatedAbs)) {
-					return {
-						testFile: relatedAbs,
-						runner: detected.runner,
-						config: detected.config,
-						strategy: "failed-first",
-					};
-				}
+			const failedFirst = this.retireMissingFailedTargets(
+				key,
+				detected.runner,
+				failedSet,
+				related ? path.resolve(related.testFile) : undefined,
+				selfIsTest ? path.resolve(sourceFilePath) : undefined,
+			);
+			if (failedFirst) {
+				return {
+					testFile: failedFirst,
+					runner: detected.runner,
+					config: detected.config,
+					strategy: "failed-first",
+				};
 			}
-
-			if (selfIsTest) {
-				const selfAbs = path.resolve(sourceFilePath);
-				if (failedSet.has(selfAbs)) {
-					return {
-						testFile: selfAbs,
-						runner: detected.runner,
-						config: detected.config,
-						strategy: "failed-first",
-					};
-				}
-			}
-
-			return {
-				testFile: [...failedSet][0],
-				runner: detected.runner,
-				config: detected.config,
-				strategy: "failed-first",
-			};
 		}
 
 		if (selfIsTest) {
@@ -1031,6 +1021,50 @@ export class TestRunnerClient {
 			this.log(`Run error: ${err.message}`);
 			return this.emptyResult(absoluteTestFile, "", runner, err.message);
 		}
+	}
+
+	/**
+	 * Remove failed-first paths that disappeared since their failed run, then
+	 * return the first surviving target. Related/self targets keep their
+	 * existing priority over an unrelated failed target.
+	 */
+	private retireMissingFailedTargets(
+		key: string,
+		runner: string,
+		failedSet: Set<string>,
+		relatedAbs?: string,
+		selfAbs?: string,
+	): string | undefined {
+		let firstValid: string | undefined;
+		let preferredValid: string | undefined;
+
+		// Failed-first is a process-local hint, so validate it at the point of
+		// use. Missing paths can survive indefinitely because the missing-file
+		// result returns before recordResult() gets a chance to retire them.
+		for (const candidate of failedSet) {
+			const candidateAbs = path.resolve(candidate);
+			if (!fs.existsSync(candidateAbs)) {
+				failedSet.delete(candidate);
+				const boundedTarget =
+					candidateAbs.length > 200
+						? `…${candidateAbs.slice(-199)}`
+						: candidateAbs;
+				this.retirementLog(
+					`failed-first-retired runner=${runner} target=${boundedTarget}`,
+				);
+				continue;
+			}
+
+			firstValid ??= candidateAbs;
+			if (candidateAbs === relatedAbs || candidateAbs === selfAbs) {
+				preferredValid = candidateAbs;
+			}
+		}
+
+		if (failedSet.size === 0) this.failedTestsByRunner.delete(key);
+		else this.failedTestsByRunner.set(key, failedSet);
+
+		return preferredValid ?? firstValid;
 	}
 
 	/**

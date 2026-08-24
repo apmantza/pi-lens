@@ -949,6 +949,142 @@ describe("test-runner-client", () => {
 		expect(target?.testFile).toBe(path.resolve(testFile));
 	});
 
+	describe("failed-first target retirement (#2044)", () => {
+		const failingNodeConfig = {
+			...RUNNERS.go,
+			command: process.execPath,
+			binName: "pi-lens-2044-fixture-runner",
+			args: (testFile: string) => [
+				"-e",
+				"console.log('--- FAIL: fixture'); process.exitCode = 1;",
+				testFile,
+			],
+		};
+
+		it("retires one deleted failed target and falls back to normal discovery", async () => {
+			const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-2044-");
+			cleanups.push(cleanup);
+
+			fs.writeFileSync(path.join(tmpDir, "go.mod"), "module example.com/tmp\n");
+			const sourceFile = path.join(tmpDir, "widget.go");
+			const staleTest = path.join(tmpDir, "stale_test.go");
+			const relatedTest = path.join(tmpDir, "widget_test.go");
+			fs.writeFileSync(sourceFile, "package widget\n");
+			fs.writeFileSync(staleTest, "package widget\n");
+			fs.writeFileSync(relatedTest, "package widget\n");
+
+			const client = new TestRunnerClient(false);
+			const seeded = await client.runTestFileAsync(
+				staleTest,
+				tmpDir,
+				"go",
+				failingNodeConfig,
+			);
+			expect(seeded.failed).toBe(1);
+			fs.rmSync(staleTest);
+
+			const target = client.getTestRunTarget(sourceFile, tmpDir);
+			expect(target).toMatchObject({
+				testFile: path.resolve(relatedTest),
+				runner: "go",
+				strategy: "related",
+			});
+		});
+
+		it("keeps the next valid failed target after missing execution", async () => {
+			const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-2044-");
+			cleanups.push(cleanup);
+
+			fs.writeFileSync(path.join(tmpDir, "go.mod"), "module example.com/tmp\n");
+			const sourceFile = path.join(tmpDir, "widget.go");
+			const staleTest = path.join(tmpDir, "stale_test.go");
+			const validFailedTest = path.join(tmpDir, "other_test.go");
+			fs.writeFileSync(sourceFile, "package widget\n");
+			fs.writeFileSync(staleTest, "package widget\n");
+			fs.writeFileSync(validFailedTest, "package widget\n");
+
+			const client = new TestRunnerClient(false);
+			for (const testFile of [staleTest, validFailedTest]) {
+				const seeded = await client.runTestFileAsync(
+					testFile,
+					tmpDir,
+					"go",
+					failingNodeConfig,
+				);
+				expect(seeded.failed).toBe(1);
+			}
+			fs.rmSync(staleTest);
+
+			const missing = await client.runTestFileAsync(
+				staleTest,
+				tmpDir,
+				"go",
+				failingNodeConfig,
+			);
+			expect(missing.error).toBe("Test file not found");
+
+			const target = client.getTestRunTarget(sourceFile, tmpDir);
+			expect(target).toMatchObject({
+				testFile: path.resolve(validFailedTest),
+				runner: "go",
+				strategy: "failed-first",
+			});
+		});
+
+		it("keeps failed-first state isolated between runners", async () => {
+			const go = setupTestEnvironment("pi-lens-tests-2044-go-");
+			const cargo = setupTestEnvironment("pi-lens-tests-2044-cargo-");
+			cleanups.push(go.cleanup, cargo.cleanup);
+
+			const client = new TestRunnerClient(false);
+			const projects = [
+				{
+					root: go.tmpDir,
+					manifest: "go.mod",
+					runner: "go",
+					testName: "go_test.go",
+					sourceName: "go.go",
+					config: failingNodeConfig,
+				},
+				{
+					root: cargo.tmpDir,
+					manifest: "Cargo.toml",
+					runner: "cargo",
+					testName: "cargo_test.rs",
+					sourceName: "cargo.rs",
+					config: {
+						...RUNNERS.cargo,
+						command: process.execPath,
+						binName: "pi-lens-2044-cargo-runner",
+						args: (testFile: string) => [
+							"-e",
+							"console.log('test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out'); process.exitCode = 1;",
+							testFile,
+						],
+					},
+				},
+			];
+
+			for (const project of projects) {
+				fs.writeFileSync(path.join(project.root, project.manifest), "manifest\n");
+				const sourceFile = path.join(project.root, project.sourceName);
+				const testFile = path.join(project.root, project.testName);
+				fs.writeFileSync(sourceFile, "fixture\n");
+				fs.writeFileSync(testFile, "fixture\n");
+				const seeded = await client.runTestFileAsync(
+					testFile,
+					project.root,
+					project.runner,
+					project.config,
+				);
+				expect(seeded.failed).toBe(1);
+				expect(client.getTestRunTarget(sourceFile, project.root)?.testFile).toBe(
+					path.resolve(testFile),
+				);
+			}
+		});
+	});
+
 	it("does not infer pytest from pyproject without pytest section", () => {
 		const { tmpDir, cleanup } = setupTestEnvironment("pi-lens-tests-");
 		cleanups.push(cleanup);
