@@ -205,12 +205,24 @@ describe("package-lock identity guard (#2043)", () => {
 		packageCopy.bin = {};
 		packageCopy.engines = {};
 		packageCopy.funding = [];
+		packageCopy.os = [];
+		packageCopy.cpu = [];
+		packageCopy.libc = [];
+		packageCopy.bundleDependencies = [];
 		packageCopy.bundledDependencies = packageCopy.bundleDependencies;
 		delete packageCopy.bundleDependencies;
 		const lockCopy = JSON.parse(JSON.stringify(lock));
-		delete lockCopy.packages[""].bin;
-		delete lockCopy.packages[""].engines;
-		delete lockCopy.packages[""].funding;
+		for (const field of [
+			"bin",
+			"engines",
+			"funding",
+			"os",
+			"cpu",
+			"libc",
+			"bundleDependencies",
+		]) {
+			delete lockCopy.packages[""][field];
+		}
 		fs.writeFileSync(
 			path.join(root, "package.json"),
 			JSON.stringify(packageCopy),

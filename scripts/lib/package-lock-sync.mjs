@@ -19,6 +19,7 @@ function objectSection(value, field, problems) {
 	return value;
 }
 
+/** Fields npm mirrors into the lock root (verified against npm 11.17). */
 const ROOT_METADATA_FIELDS = [
 	"license",
 	"bin",
@@ -31,6 +32,7 @@ const ROOT_METADATA_FIELDS = [
 ];
 
 function isEmptyContainer(value) {
+	if (typeof value === "string") return value.trim() === "";
 	if (Array.isArray(value)) return value.length === 0;
 	return isJsonObject(value) && Object.keys(value).length === 0;
 }
@@ -41,10 +43,10 @@ function packageMetadataValue(pkg, field) {
 }
 
 function normalizeRootMetadata(field, value, packageName) {
-	if (
-		(field === "bin" || field === "engines" || field === "funding") &&
-		isEmptyContainer(value)
-	) {
+	// npm omits empty/blank metadata when writing the lock root (verified
+	// against npm 11.17 fresh installs): empty bin/engines/funding/os/cpu/
+	// bundleDependencies containers and blank strings never appear there.
+	if (isEmptyContainer(value)) {
 		return undefined;
 	}
 	if (field === "bin" && typeof value === "string") {

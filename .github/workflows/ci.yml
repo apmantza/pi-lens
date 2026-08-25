@@ -162,7 +162,7 @@ jobs:
       # silently removes them and installs both glibc and musl optional binaries.
       - name: Pin npm with libc-aware lockfile metadata
         run: |
-          npm install --global npm@11.17.0
+          npm install --ignore-scripts --global npm@11.17.0
           test "$(npm --version)" = "11.17.0"
 
       # #437: typescript is a devDependency (#402), so --omit=dev omits it. pi builds
