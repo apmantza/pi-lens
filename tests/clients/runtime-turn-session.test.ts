@@ -1,8 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { CacheManager } from "../../clients/cache-manager.js";
 import { snapshotAdvisoryProvenance } from "../../clients/advisory-provenance.js";
+import {
+	_boundedTurnCountForTest,
+	resetBoundedTelemetry,
+} from "../../clients/bounded-telemetry.js";
+import { CacheManager } from "../../clients/cache-manager.js";
+import { resetDegradationLedger } from "../../clients/degradation-ledger.js";
 import {
 	evaluateGitGuard,
 	mergeGitGuardTestFailure,
@@ -13,6 +18,11 @@ import {
 	consumeTurnEndFindings,
 } from "../../clients/runtime-context.js";
 import { loadProjectDiagnosticsDeltaReport } from "../../clients/project-diagnostics/cache.js";
+import {
+	clearLatencyLog,
+	flushLatencyLog,
+	getLatencyLogPath,
+} from "../../clients/latency-logger.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { SESSION_START_GUIDANCE } from "../../clients/runtime-session.js";
 import {
@@ -24,6 +34,7 @@ import {
 	checkCrossProcessLspBudget,
 	_resetLspBudgetDecisionForTests,
 } from "../../clients/lsp-budget.js";
+import { RUNNERS, TestRunnerClient } from "../../clients/test-runner-client.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 const EMPTY_KNIP_RESULT = {
@@ -2408,6 +2419,84 @@ describe("turn_end test runner — cascade neighbors get their own test companio
 				expect(call[2]).toMatchObject({ turnIndex: runtime.turnIndex });
 			}
 		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #2044 review: the hand-written doubles above cannot prove originating-turn
+	// propagation through REAL selection, REAL recording, and the REAL sink.
+	// This test wires the actual TestRunnerClient into handleTurnEnd.
+	it("retires a deleted failed target through the real client and records real telemetry", async () => {
+		const env = setupTestEnvironment("pi-lens-test-real-2044-");
+		const previousTestMode = process.env.PI_LENS_TEST_MODE;
+		process.env.PI_LENS_TEST_MODE = "0";
+		try {
+			resetDegradationLedger();
+			resetBoundedTelemetry();
+			clearLatencyLog();
+			await flushLatencyLog();
+
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId: "real-2044-session" });
+			const cacheManager = new CacheManager(false);
+
+			fs.writeFileSync(
+				path.join(env.tmpDir, "go.mod"),
+				"module example.com/tmp\n",
+			);
+			const editedFile = path.join(env.tmpDir, "widget.go");
+			const staleTest = path.join(env.tmpDir, "stale_test.go");
+			fs.writeFileSync(editedFile, "package widget\n");
+			fs.writeFileSync(staleTest, "package widget\n");
+			cacheManager.addModifiedRange(
+				editedFile,
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+				"real-2044-session",
+			);
+
+			const testRunnerClient = new TestRunnerClient(false);
+			const seeded = await testRunnerClient.runTestFileAsync(
+				staleTest,
+				env.tmpDir,
+				{
+					runner: "go",
+					config: {
+						...RUNNERS.go,
+						command: process.execPath,
+						binName: "pi-lens-real-2044-runner",
+						args: (testFile: string) => [
+							"-e",
+							"console.log('--- FAIL: fixture'); process.exitCode = 1;",
+							testFile,
+						],
+					},
+					turnIndex: runtime.turnIndex,
+				},
+			);
+			expect(seeded.failed).toBe(1);
+			fs.rmSync(staleTest);
+
+			await handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, {
+					ctxCwd: env.tmpDir,
+					testRunnerClient,
+				}),
+			);
+			await flushLatencyLog();
+
+			// Real selection retired the missing path and the real sink recorded it.
+			const log = fs.readFileSync(getLatencyLogPath(), "utf8");
+			expect(log).toContain('"phase":"test_runner_failed_target_state"');
+			expect(log).toContain('"outcome":"retired-missing"');
+			expect(log).toContain('"runner":"go"');
+		} finally {
+			if (previousTestMode === undefined) {
+				delete process.env.PI_LENS_TEST_MODE;
+			} else {
+				process.env.PI_LENS_TEST_MODE = previousTestMode;
+			}
 			env.cleanup();
 		}
 	});

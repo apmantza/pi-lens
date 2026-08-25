@@ -43,6 +43,18 @@ describe("PathKeyedMap", () => {
 		expect(map.size).toBe(0);
 	});
 
+	it("deletes a captured display key when normalization changes after file removal", () => {
+		let exists = true;
+		const map = new PathKeyedMap<number>((p) =>
+			exists ? p.toUpperCase() : p.toLowerCase(),
+		);
+		map.set("MixedCase_Test.go", 7);
+		exists = false;
+
+		expect(map.delete("MixedCase_Test.go")).toBe(true);
+		expect(map.size).toBe(0);
+	});
+
 	it("two differently-formed keys for the same path collapse to ONE entry", () => {
 		const map = new PathKeyedMap<number>(fold);
 		map.set("SUB\\a.ts", 1);

@@ -11,10 +11,11 @@
  * specific file being edited, not the entire suite.
  */
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { emitBounded } from "./bounded-telemetry.js";
-import { truncateForLedger } from "./degradation-ledger.js";
+import { LEDGER_FIELD_MAX } from "./degradation-ledger.js";
 import { minimatch } from "./deps/minimatch.js";
 import { createSubsystemLogger } from "./extension-log.js";
 import { detectFileRole } from "./file-role.js";
@@ -279,10 +280,7 @@ interface TestRunRequest {
 }
 
 interface FailedTargetStateRecord {
-	outcome:
-		| "retired-missing"
-		| "retained-indeterminate"
-		| "capacity-evicted";
+	outcome: "retired-missing" | "retained-indeterminate" | "capacity-evicted";
 	runner: string;
 	candidate: string;
 	errorCode?: string;
@@ -353,9 +351,7 @@ export class TestRunnerClient {
 	> = new Map();
 
 	constructor(verbose = false, options: TestRunnerClientOptions = {}) {
-		this.log = verbose
-			? createSubsystemLogger("test-runner")
-			: () => {};
+		this.log = verbose ? createSubsystemLogger("test-runner") : () => {};
 		this.statFailedTarget =
 			options.statFailedTarget ?? ((filePath) => void fs.statSync(filePath));
 	}
@@ -595,10 +591,18 @@ export class TestRunnerClient {
 	 * `clients/knip-client.ts`, so `tests/clients/knip-client.test.ts` is
 	 * checked alongside the flat `tests/knip-client.test.ts` candidate).
 	 */
-	private relativeSourceDir(sourceFilePath: string, cwd: string): string | null {
+	private relativeSourceDir(
+		sourceFilePath: string,
+		cwd: string,
+	): string | null {
 		const dir = path.dirname(sourceFilePath);
 		const relDir = path.relative(cwd, path.resolve(cwd, dir));
-		if (!relDir || relDir === "." || relDir.startsWith("..") || path.isAbsolute(relDir)) {
+		if (
+			!relDir ||
+			relDir === "." ||
+			relDir.startsWith("..") ||
+			path.isAbsolute(relDir)
+		) {
 			return null;
 		}
 		return relDir;
@@ -1212,8 +1216,16 @@ export class TestRunnerClient {
 
 	private recordFailedTargetState(record: FailedTargetStateRecord): void {
 		const { outcome, runner, candidate, errorCode, turnIndex } = record;
-		const boundedTarget = truncateForLedger(candidate);
-		const identity = truncateForLedger(`${outcome}:${runner}:${candidate}`);
+		const boundedTarget =
+			candidate.length <= LEDGER_FIELD_MAX
+				? candidate
+				: `…${candidate.slice(1 - LEDGER_FIELD_MAX)}`;
+		const targetIdentity = createHash("sha256")
+			.update(runner)
+			.update("\0")
+			.update(candidate)
+			.digest("hex");
+		const identity = `${outcome}:${targetIdentity}`;
 		const payload = {
 			durationMs: 0,
 			filePath: boundedTarget,
@@ -1253,14 +1265,8 @@ export class TestRunnerClient {
 	private retireMissingFailedTargets(
 		selection: FailedTargetSelection,
 	): string | undefined {
-		const {
-			cwd,
-			runner,
-			failedTargets,
-			relatedAbs,
-			selfAbs,
-			turnIndex,
-		} = selection;
+		const { cwd, runner, failedTargets, relatedAbs, selfAbs, turnIndex } =
+			selection;
 		let checked = 0;
 		const inspected = new Set<string>();
 		const inspect = (
@@ -1632,7 +1638,9 @@ export class TestRunnerClient {
 		let skipped = 0;
 
 		// Success (or success-with-incomplete/skipped): "OK (12 tests, 34 assertions)"
-		const okMatch = output.match(/OK\s*\((\d+)\s+tests?,\s*\d+\s+assertions?\)/i);
+		const okMatch = output.match(
+			/OK\s*\((\d+)\s+tests?,\s*\d+\s+assertions?\)/i,
+		);
 		if (okMatch) {
 			passed = Number.parseInt(okMatch[1], 10);
 		} else {
@@ -1643,7 +1651,9 @@ export class TestRunnerClient {
 			const skippedMatch = output.match(/Skipped:\s*(\d+)/i);
 
 			const total = testsMatch ? Number.parseInt(testsMatch[1], 10) : 0;
-			const failures = failuresMatch ? Number.parseInt(failuresMatch[1], 10) : 0;
+			const failures = failuresMatch
+				? Number.parseInt(failuresMatch[1], 10)
+				: 0;
 			const errors = errorsMatch ? Number.parseInt(errorsMatch[1], 10) : 0;
 			skipped = skippedMatch ? Number.parseInt(skippedMatch[1], 10) : 0;
 			failed = failures + errors;
@@ -1691,11 +1701,12 @@ export class TestRunnerClient {
 			if (legacyMatch) {
 				const value = Number.parseFloat(legacyMatch[1]);
 				const unit = legacyMatch[2].toLowerCase();
-				const scale = unit.startsWith("ms") || unit.startsWith("milli")
-					? 1
-					: unit.startsWith("min")
-						? 60_000
-						: 1000;
+				const scale =
+					unit.startsWith("ms") || unit.startsWith("milli")
+						? 1
+						: unit.startsWith("min")
+							? 60_000
+							: 1000;
 				if (Number.isFinite(value) && value > 0) {
 					duration = Math.round(value * scale);
 				}
@@ -1741,7 +1752,9 @@ export class TestRunnerClient {
 		if (summaryMatch) {
 			const total = Number.parseInt(summaryMatch[1], 10);
 			failed = Number.parseInt(summaryMatch[2], 10);
-			const excluded = summaryMatch[3] ? Number.parseInt(summaryMatch[3], 10) : 0;
+			const excluded = summaryMatch[3]
+				? Number.parseInt(summaryMatch[3], 10)
+				: 0;
 			const skippedCount = summaryMatch[4]
 				? Number.parseInt(summaryMatch[4], 10)
 				: 0;
@@ -2163,9 +2176,7 @@ export class TestRunnerClient {
 		// Package-line counts, like the go duration probe above, take the
 		// FIRST package summary only — the same known limit already
 		// documented on `parseGenericRunnerDuration`.
-		const goFailNames = [
-			...output.matchAll(/--- FAIL:[^\S\n]+([^\s(]+)/g),
-		];
+		const goFailNames = [...output.matchAll(/--- FAIL:[^\S\n]+([^\s(]+)/g)];
 		// #1524-r4: only COUNT unparented failures. go prints a `--- FAIL:`
 		// line for every level of a failing subtest tree — `TestA` AND
 		// `TestA/sub` each get their own line for what is really one
@@ -2192,9 +2203,7 @@ export class TestRunnerClient {
 			// were rendering as `✗ 1/1 failed ✗ go failure` instead of the
 			// runner error they are.
 			const goFailPackage =
-				/^FAIL(?![^\n]*\[(?:build|setup) failed\])[^\S\n]+\S+/m.test(
-					output,
-				);
+				/^FAIL(?![^\n]*\[(?:build|setup) failed\])[^\S\n]+\S+/m.test(output);
 			const goOkPackages = [
 				...output.matchAll(/^ok[^\S\n]+\S+[^\S\n]+[\d.]+s/gm),
 			];
@@ -2264,7 +2273,10 @@ export class TestRunnerClient {
 		// `failures` above when `matched` or `goFailNames` already settled
 		// the question some other way, but they no longer settle it alone.
 		const runnerError =
-			exitCode !== 0 && !matched && goFailNames.length === 0 && lower.includes("error")
+			exitCode !== 0 &&
+			!matched &&
+			goFailNames.length === 0 &&
+			lower.includes("error")
 				? `Runner ${runner} exited with ${exitCode}`
 				: undefined;
 
@@ -2416,9 +2428,7 @@ export class TestRunnerClient {
 		const relDir = path.relative(cwd, dir);
 		const segments = relDir.split(path.sep).filter(Boolean);
 		if (segments.length > 1 && knownSourceRoots.has(segments[0])) {
-			return [
-				path.join(cwd, testDir, ...segments.slice(1), testFilename),
-			];
+			return [path.join(cwd, testDir, ...segments.slice(1), testFilename)];
 		}
 		return [];
 	}
@@ -2515,13 +2525,19 @@ export class TestRunnerClient {
 		// itself, so the leading wrapper-name arg(s) that named it (e.g. "vitest",
 		// or "-m pytest") are stripped from args() — see stripWrapperArgs.
 		if (fs.existsSync(localBin)) {
-			return { command: localBin, args: stripWrapperArgs(binName, config.args(testFile, cwd)) };
+			return {
+				command: localBin,
+				args: stripWrapperArgs(binName, config.args(testFile, cwd)),
+			};
 		}
 
 		// Any package manager's global bin dir (npm/pnpm/yarn/bun) before npx (#375).
 		const globalBin = await findGlobalBinary(binName);
 		if (globalBin) {
-			return { command: globalBin, args: stripWrapperArgs(binName, config.args(testFile, cwd)) };
+			return {
+				command: globalBin,
+				args: stripWrapperArgs(binName, config.args(testFile, cwd)),
+			};
 		}
 
 		return { command: config.command, args: config.args(testFile, cwd) };
@@ -2558,11 +2574,7 @@ export class TestRunnerClient {
 		const { cwd, runner, testFile, result, turnIndex } = record;
 		const targetPath = path.resolve(testFile);
 		const target = canonicalFailedPath(targetPath);
-		let failedTargets = this.getFailedTargets(
-			cwd,
-			runner,
-			result.failed > 0,
-		);
+		let failedTargets = this.getFailedTargets(cwd, runner, result.failed > 0);
 		if (!failedTargets) return;
 
 		if (result.failed > 0) {

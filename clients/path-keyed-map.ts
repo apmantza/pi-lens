@@ -51,7 +51,18 @@ export class PathKeyedMap<V> {
 	}
 
 	delete(path: string): boolean {
-		return this.store.delete(this.normalize(path));
+		if (this.store.delete(this.normalize(path))) return true;
+		// A filesystem-aware normalizer can change after the keyed file is
+		// deleted (for example, real on-disk casing becomes a lowercased missing
+		// tail on Windows). The caller may still hold the exact display key it
+		// received from this map. Honor that captured identity without deriving a
+		// second path form, so deletion remains possible across existence changes.
+		for (const [key, entry] of this.store) {
+			if (entry.displayPath !== path) continue;
+			this.store.delete(key);
+			return true;
+		}
+		return false;
 	}
 
 	clear(): void {
