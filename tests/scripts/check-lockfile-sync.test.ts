@@ -22,6 +22,11 @@ function fixtureRoot() {
 		license: "MIT",
 		bin: { alpha: "dist/alpha.js", beta: "dist/beta.js" },
 		engines: { node: ">=22" },
+		os: ["linux"],
+		cpu: ["x64"],
+		libc: ["glibc"],
+		funding: { type: "individual", url: "https://example.test" },
+		bundleDependencies: ["demo"],
 		dependencies: { demo: "^1.0.0" },
 		peerDependencies: { peer: "^1.0.0" },
 		peerDependenciesMeta: { peer: { optional: true } },
@@ -38,6 +43,11 @@ function fixtureRoot() {
 				license: "MIT",
 				bin: { beta: "dist/beta.js", alpha: "dist/alpha.js" },
 				engines: { node: ">=22" },
+				os: ["linux"],
+				cpu: ["x64"],
+				libc: ["glibc"],
+				funding: { type: "individual", url: "https://example.test" },
+				bundleDependencies: ["demo"],
 				dependencies: { demo: "^1.0.0" },
 				peerDependencies: { peer: "^1.0.0" },
 				peerDependenciesMeta: { peer: { optional: true } },
@@ -109,6 +119,36 @@ describe("package-lock identity guard (#2043)", () => {
 					lock.packages[""].engines.node = ">=24";
 				},
 			],
+			[
+				"os",
+				(lock: ReturnType<typeof fixtureRoot>["lock"]) => {
+					lock.packages[""].os[0] = "darwin";
+				},
+			],
+			[
+				"cpu",
+				(lock: ReturnType<typeof fixtureRoot>["lock"]) => {
+					lock.packages[""].cpu[0] = "arm64";
+				},
+			],
+			[
+				"libc",
+				(lock: ReturnType<typeof fixtureRoot>["lock"]) => {
+					lock.packages[""].libc[0] = "musl";
+				},
+			],
+			[
+				"funding",
+				(lock: ReturnType<typeof fixtureRoot>["lock"]) => {
+					lock.packages[""].funding.url = "https://other.test";
+				},
+			],
+			[
+				"bundleDependencies",
+				(lock: ReturnType<typeof fixtureRoot>["lock"]) => {
+					lock.packages[""].bundleDependencies[0] = "peer";
+				},
+			],
 		] as const;
 
 		for (const [field, mutate] of cases) {
@@ -127,24 +167,57 @@ describe("package-lock identity guard (#2043)", () => {
 	});
 
 	it("accepts npm's normalized string bin shorthand", () => {
-		const { root, pkg, lock } = fixtureRoot();
-		const stringBinPackage = { ...pkg, bin: "dist/pi-lens.js" };
-		const normalizedLock = {
-			...lock,
-			packages: {
-				"": {
-					...lock.packages[""],
-					bin: { "pi-lens": "dist/pi-lens.js" },
+		for (const packageName of ["pi-lens", "@scope/pi-lens"]) {
+			const { root, pkg, lock } = fixtureRoot();
+			const stringBinPackage = {
+				...pkg,
+				name: packageName,
+				bin: "dist/pi-lens.js",
+			};
+			const normalizedLock = {
+				...lock,
+				name: packageName,
+				packages: {
+					"": {
+						...lock.packages[""],
+						name: packageName,
+						bin: { "pi-lens": "dist/pi-lens.js" },
+					},
 				},
-			},
-		};
+			};
+			fs.writeFileSync(
+				path.join(root, "package.json"),
+				JSON.stringify(stringBinPackage),
+			);
+			fs.writeFileSync(
+				path.join(root, "package-lock.json"),
+				JSON.stringify(normalizedLock),
+			);
+
+			const result = run(CHECKER, root);
+			expect(result.status, packageName).toBe(0);
+		}
+	});
+
+	it("accepts npm's omitted empty metadata containers and bundled alias", () => {
+		const { root, pkg, lock } = fixtureRoot();
+		const packageCopy = JSON.parse(JSON.stringify(pkg));
+		packageCopy.bin = {};
+		packageCopy.engines = {};
+		packageCopy.funding = [];
+		packageCopy.bundledDependencies = packageCopy.bundleDependencies;
+		delete packageCopy.bundleDependencies;
+		const lockCopy = JSON.parse(JSON.stringify(lock));
+		delete lockCopy.packages[""].bin;
+		delete lockCopy.packages[""].engines;
+		delete lockCopy.packages[""].funding;
 		fs.writeFileSync(
 			path.join(root, "package.json"),
-			JSON.stringify(stringBinPackage),
+			JSON.stringify(packageCopy),
 		);
 		fs.writeFileSync(
 			path.join(root, "package-lock.json"),
-			JSON.stringify(normalizedLock),
+			JSON.stringify(lockCopy),
 		);
 
 		const result = run(CHECKER, root);

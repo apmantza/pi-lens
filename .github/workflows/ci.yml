@@ -158,6 +158,13 @@ jobs:
         with:
           node-version: '22'
 
+      # npm 11.11 restored libc descriptors in lockfile v3 (#9025). Older npm
+      # silently removes them and installs both glibc and musl optional binaries.
+      - name: Pin npm with libc-aware lockfile metadata
+        run: |
+          npm install --global npm@11.17.0
+          test "$(npm --version)" = "11.17.0"
+
       # #437: typescript is a devDependency (#402), so --omit=dev omits it. pi builds
       # the GitHub install from source under --omit=dev, so `build:dist` must resolve
       # tsc WITHOUT a local typescript. GitHub runners ship typescript GLOBALLY, which

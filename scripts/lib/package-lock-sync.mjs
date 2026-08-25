@@ -19,9 +19,40 @@ function objectSection(value, field, problems) {
 	return value;
 }
 
+const ROOT_METADATA_FIELDS = [
+	"license",
+	"bin",
+	"engines",
+	"os",
+	"cpu",
+	"libc",
+	"funding",
+	"bundleDependencies",
+];
+
+function isEmptyContainer(value) {
+	if (Array.isArray(value)) return value.length === 0;
+	return isJsonObject(value) && Object.keys(value).length === 0;
+}
+
+function packageMetadataValue(pkg, field) {
+	if (field !== "bundleDependencies") return pkg[field];
+	return pkg.bundleDependencies ?? pkg.bundledDependencies;
+}
+
 function normalizeRootMetadata(field, value, packageName) {
+	if (
+		(field === "bin" || field === "engines" || field === "funding") &&
+		isEmptyContainer(value)
+	) {
+		return undefined;
+	}
 	if (field === "bin" && typeof value === "string") {
-		return typeof packageName === "string" ? { [packageName]: value } : value;
+		const command =
+			typeof packageName === "string"
+				? packageName.split("/").filter(Boolean).at(-1)
+				: undefined;
+		return command ? { [command]: value } : value;
 	}
 	return value;
 }
@@ -66,12 +97,17 @@ export function validatePackageLockSync(pkg, lock) {
 		}
 	}
 
-	for (const field of ["license", "bin", "engines"]) {
-		const packageValue = normalizeRootMetadata(field, pkg[field], pkg.name);
+	for (const field of ROOT_METADATA_FIELDS) {
+		const packageRawValue = packageMetadataValue(pkg, field);
+		const packageValue = normalizeRootMetadata(
+			field,
+			packageRawValue,
+			pkg.name,
+		);
 		const lockValue = normalizeRootMetadata(field, root[field], root.name);
 		if (!isDeepStrictEqual(packageValue, lockValue)) {
 			problems.push(
-				`package.json.${field}=${display(pkg[field])} does not match ${LOCK_ROOT}.${field}=${display(root[field])}`,
+				`package.json.${field}=${display(packageRawValue)} does not match ${LOCK_ROOT}.${field}=${display(root[field])}`,
 			);
 		}
 	}
