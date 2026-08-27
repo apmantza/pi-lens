@@ -2117,8 +2117,8 @@ function capGraphForPersist(
 	const reachableNodes = (byFile: Map<string, string[]>): number => {
 		let reached = 0;
 		for (const filePath of rankedFiles)
-			reached += byFile.get(filePath)?.length ?? 0;
-		return reached;
+			reached += (byFile.get(filePath)?.length ?? 0) > 0 ? 1 : 0;
+		return reached === rankedFiles.length ? placeableNodes : reached;
 	};
 	let placeableNodes = 0;
 	for (const node of graph.nodes.values()) if (node.filePath) placeableNodes++;
