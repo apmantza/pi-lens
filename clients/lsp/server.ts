@@ -16,6 +16,14 @@ import {
 	getProjectIgnoreGlobs,
 	isPathIgnoredByProject,
 } from "../file-utils.js";
+import {
+	augmentPythonEnvironment,
+	detectPythonEnvironment,
+	detectPythonVenv,
+	pythonEnvironmentToolCandidates,
+} from "../python-environment.js";
+
+export { detectPythonVenv };
 import { STAGE_TMP_PATTERN } from "../atomic-write-staging.js";
 import {
 	DOTNET_CSHARP_ROOT_MARKERS,
@@ -1955,36 +1963,6 @@ export function DenoExcludeRoot(primary: RootFunction): RootFunction {
 	};
 }
 
-/**
- * Find the active Python interpreter inside the nearest virtual environment.
- * Search order: VIRTUAL_ENV → CONDA_PREFIX → .venv → venv (all under root).
- * Returns undefined when no venv python binary is found.
- */
-export async function detectPythonVenv(
-	root: string,
-): Promise<string | undefined> {
-	const isWin = process.platform === "win32";
-	const candidates = [
-		process.env.VIRTUAL_ENV,
-		process.env.CONDA_PREFIX,
-		path.join(root, ".venv"),
-		path.join(root, "venv"),
-	].filter((v): v is string => Boolean(v));
-
-	for (const venv of candidates) {
-		const pythonPath = isWin
-			? path.join(venv, "Scripts", "python.exe")
-			: path.join(venv, "bin", "python");
-		try {
-			await access(pythonPath);
-			return pythonPath;
-		} catch {
-			// not found — try next candidate
-		}
-	}
-	return undefined;
-}
-
 // --- Server Definitions ---
 
 const JS_TS_LSP_EXTENSIONS = KIND_EXTENSIONS["jsts"].filter(
@@ -2276,7 +2254,11 @@ export const PythonServer: LSPServerInfo = {
 		]),
 	),
 	async spawn(root, options) {
-		const env = await getToolEnvironment();
+		const pythonEnvironment = await detectPythonEnvironment(root);
+		const env = augmentPythonEnvironment(
+			await getToolEnvironment(),
+			pythonEnvironment,
+		);
 		let source: "direct" | "managed" | "package-manager" = "direct";
 
 		// openFilesOnly: true — analyse only open files rather than the full workspace.
@@ -2291,7 +2273,15 @@ export const PythonServer: LSPServerInfo = {
 		// Prefer pyright-langserver; basedpyright-langserver is a drop-in fork with
 		// the same --stdio protocol and additional rules (e.g. reportUnusedExpression).
 		const localCandidates = [
+			...pythonEnvironmentToolCandidates(
+				pythonEnvironment,
+				"pyright-langserver",
+			),
 			...nodeBinCandidates(root, "pyright-langserver"),
+			...pythonEnvironmentToolCandidates(
+				pythonEnvironment,
+				"basedpyright-langserver",
+			),
 			...nodeBinCandidates(root, "basedpyright-langserver"),
 		];
 		const direct = await resolveAndLaunch(
@@ -2299,28 +2289,31 @@ export const PythonServer: LSPServerInfo = {
 			false,
 		);
 		if (direct) {
-			const pythonPath = await detectPythonVenv(root);
 			return {
 				process: direct.process,
 				source: direct.source,
-				initialization: pyrightInit(pythonPath),
+				initialization: pyrightInit(pythonEnvironment?.pythonPath),
 			};
 		}
 
 		// ty (astral-sh/ty, #717) — an alternative Python checker/language server,
-		// tried ONLY when neither pyright nor basedpyright was found locally, and
-		// ONLY on PATH (allowInstall: false below — no managed/auto-install, unlike
-		// pyright's fallback right after this block). That keeps ty strictly
-		// opt-in: it never displaces an already-installed pyright/basedpyright,
-		// and it's never silently auto-installed as a default — a user only gets
-		// it by having installed `ty` themselves (e.g. `uv tool install ty` /
-		// `pip install ty`). Unlike pyright-langserver's `--stdio` flag, ty's CLI
-		// launches its language server via the `server` subcommand; it has no
-		// stable initializationOptions equivalent to pyright's `pythonPath` yet
-		// (astral-sh/ty#2032) — it auto-discovers `.venv`/`VIRTUAL_ENV` from cwd,
-		// so no `initialization` payload is sent.
+		// tried only when neither pyright nor basedpyright was found locally. A ty
+		// already installed in the detected project environment wins over PATH;
+		// allowInstall remains false, so ty stays opt-in and never becomes the
+		// silently managed default. Unlike pyright-langserver's `--stdio` flag,
+		// ty launches through `ty server`. It has no stable initializationOptions
+		// equivalent to pyright's `pythonPath` (astral-sh/ty#2032), so the child
+		// environment and cwd provide its interpreter discovery instead.
 		const ty = await resolveAndLaunch(
-			{ candidates: ["ty"], args: ["server"], cwd: root, env },
+			{
+				candidates: [
+					...pythonEnvironmentToolCandidates(pythonEnvironment, "ty"),
+					"ty",
+				],
+				args: ["server"],
+				cwd: root,
+				env,
+			},
 			false,
 		);
 		if (ty) {
@@ -2351,11 +2344,10 @@ export const PythonServer: LSPServerInfo = {
 		);
 		if (!resolved) return undefined;
 
-		const pythonPath = await detectPythonVenv(root);
 		return {
 			process: resolved.process,
 			source,
-			initialization: pyrightInit(pythonPath),
+			initialization: pyrightInit(pythonEnvironment?.pythonPath),
 		};
 	},
 };

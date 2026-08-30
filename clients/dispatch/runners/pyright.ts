@@ -9,6 +9,10 @@
 
 import { logExtension } from "../../extension-log.js";
 import { getLSPService } from "../../lsp/index.js";
+import {
+	augmentPythonEnvironment,
+	detectPythonEnvironment,
+} from "../../python-environment.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
 import { PRIORITY } from "../priorities.js";
 import type {
@@ -73,12 +77,15 @@ const pyrightRunner: RunnerDefinition = {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
-		// Run pyright with JSON output. Pass cwd so pyright resolves
-		// pyrightconfig.json / the project venv from the project root rather than
-		// falling back to process.cwd() (which mis-resolves in multi-root setups).
+		// Pyright's Node CLI falls back to `python` on PATH when the project has no
+		// explicit Pyright config. Apply the same environment the Python LSP uses so
+		// a conventional project .venv resolves without shell activation.
+		const pythonEnvironment = await detectPythonEnvironment(cwd);
+		const env = augmentPythonEnvironment(process.env, pythonEnvironment);
 		const result = await safeSpawnAsync(cmd, ["--outputjson", ctx.filePath], {
 			timeout: 60000,
 			cwd,
+			env,
 		});
 
 		// Pyright returns non-zero when errors found, that's OK

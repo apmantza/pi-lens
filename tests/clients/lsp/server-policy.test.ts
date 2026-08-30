@@ -1102,7 +1102,7 @@ describe("lsp server policy", () => {
 		expect(spawned).toBeDefined();
 		expect(spawned?.source).toBe("direct");
 		expect(spawned?.initialization).toBeUndefined();
-		// ty is PATH-only — never gated behind ensureTool/managed install.
+		// ty remains opt-in and never enters the managed installer tier.
 		expect(ensureTool).not.toHaveBeenCalled();
 		expect(
 			launchLSP.mock.calls.some(
@@ -1110,6 +1110,70 @@ describe("lsp server policy", () => {
 					command === "ty" && Array.isArray(args) && args[0] === "server",
 			),
 		).toBe(true);
+	});
+
+	it("launches project-local ty from an unactivated .venv", async () => {
+		const { PythonServer } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ty-venv-"));
+		dirs.push(tmp);
+
+		const environmentRoot = path.join(tmp, ".venv");
+		const binDir = path.join(
+			environmentRoot,
+			process.platform === "win32" ? "Scripts" : "bin",
+		);
+		const pythonPath = path.join(
+			binDir,
+			process.platform === "win32" ? "python.exe" : "python",
+		);
+		const tyPath = path.join(
+			binDir,
+			process.platform === "win32" ? "ty.exe" : "ty",
+		);
+		fs.mkdirSync(binDir, { recursive: true });
+		fs.writeFileSync(pythonPath, "#!/usr/bin/env python\n");
+		fs.writeFileSync(tyPath, "#!/usr/bin/env python\n");
+
+		const originalVenv = process.env.VIRTUAL_ENV;
+		const originalConda = process.env.CONDA_PREFIX;
+		delete process.env.VIRTUAL_ENV;
+		delete process.env.CONDA_PREFIX;
+
+		let tyLaunchOptions: { env?: NodeJS.ProcessEnv; cwd?: string } | undefined;
+		launchLSP.mockImplementation(
+			async (
+				command: string,
+				args: string[],
+				options?: { env?: NodeJS.ProcessEnv; cwd?: string },
+			) => {
+				if (command === tyPath && args?.[0] === "server") {
+					tyLaunchOptions = options;
+					return {
+						process: { killed: false } as never,
+						stdin: {} as never,
+						stdout: {} as never,
+						stderr: {} as never,
+						pid: 5679,
+					};
+				}
+				throw toolNotFound(`unexpected command: ${command}`);
+			},
+		);
+
+		try {
+			const spawned = await PythonServer.spawn(tmp, { allowInstall: true });
+			expect(spawned).toBeDefined();
+			expect(tyLaunchOptions?.cwd).toBe(tmp);
+			expect(tyLaunchOptions?.env?.VIRTUAL_ENV).toBe(environmentRoot);
+			expect(tyLaunchOptions?.env?.PATH?.split(path.delimiter)[0]).toBe(binDir);
+			expect(process.env.VIRTUAL_ENV).toBeUndefined();
+			expect(ensureTool).not.toHaveBeenCalled();
+		} finally {
+			if (originalVenv === undefined) delete process.env.VIRTUAL_ENV;
+			else process.env.VIRTUAL_ENV = originalVenv;
+			if (originalConda === undefined) delete process.env.CONDA_PREFIX;
+			else process.env.CONDA_PREFIX = originalConda;
+		}
 	});
 
 	it("prefers a locally-found pyright over ty (opt-in fallback never wins when pyright is available)", async () => {
