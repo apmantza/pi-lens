@@ -1169,12 +1169,16 @@ async function resolveAndLaunchTreeBinary(
 	}
 }
 
-function nodeBinCandidates(root: string, baseName: string): string[] {
+function nodeBinLocalCandidates(root: string, baseName: string): string[] {
 	const localBase = path.join(root, "node_modules", ".bin", baseName);
 	if (process.platform === "win32") {
-		return [`${localBase}.cmd`, `${localBase}.exe`, baseName];
+		return [`${localBase}.cmd`, `${localBase}.exe`];
 	}
-	return [localBase, baseName];
+	return [localBase];
+}
+
+function nodeBinCandidates(root: string, baseName: string): string[] {
+	return [...nodeBinLocalCandidates(root, baseName), baseName];
 }
 
 function normalizeSlashKey(value: string): string {
@@ -2270,54 +2274,86 @@ export const PythonServer: LSPServerInfo = {
 			openFilesOnly: true,
 		});
 
-		// Prefer pyright-langserver; basedpyright-langserver is a drop-in fork with
-		// the same --stdio protocol and additional rules (e.g. reportUnusedExpression).
-		const localCandidates = [
-			...pythonEnvironmentToolCandidates(
-				pythonEnvironment,
-				"pyright-langserver",
-			),
-			...nodeBinCandidates(root, "pyright-langserver"),
-			...pythonEnvironmentToolCandidates(
-				pythonEnvironment,
-				"basedpyright-langserver",
-			),
-			...nodeBinCandidates(root, "basedpyright-langserver"),
-		];
-		const direct = await resolveAndLaunch(
-			{ candidates: localCandidates, args: ["--stdio"], cwd: root, env },
+		// Project ownership outranks checker preference: exhaust explicit project
+		// candidates before a bare command can resolve to pi-lens's managed bin or
+		// the host PATH. Within the project tier, preserve the established
+		// pyright → basedpyright → ty preference.
+		const projectPyright = await resolveAndLaunch(
+			{
+				candidates: [
+					...pythonEnvironmentToolCandidates(
+						pythonEnvironment,
+						"pyright-langserver",
+					),
+					...nodeBinLocalCandidates(root, "pyright-langserver"),
+					...pythonEnvironmentToolCandidates(
+						pythonEnvironment,
+						"basedpyright-langserver",
+					),
+					...nodeBinLocalCandidates(root, "basedpyright-langserver"),
+				],
+				args: ["--stdio"],
+				cwd: root,
+				env,
+			},
 			false,
 		);
-		if (direct) {
+		if (projectPyright) {
 			return {
-				process: direct.process,
-				source: direct.source,
+				process: projectPyright.process,
+				source: projectPyright.source,
 				initialization: pyrightInit(pythonEnvironment?.pythonPath),
 			};
 		}
 
-		// ty (astral-sh/ty, #717) — an alternative Python checker/language server,
-		// tried only when neither pyright nor basedpyright was found locally. A ty
-		// already installed in the detected project environment wins over PATH;
-		// allowInstall remains false, so ty stays opt-in and never becomes the
-		// silently managed default. Unlike pyright-langserver's `--stdio` flag,
-		// ty launches through `ty server`. It has no stable initializationOptions
-		// equivalent to pyright's `pythonPath` (astral-sh/ty#2032), so the child
-		// environment and cwd provide its interpreter discovery instead.
-		const ty = await resolveAndLaunch(
+		// ty uses `ty server`, so it needs a separate launch phase from the
+		// Pyright-compatible servers. It has no stable initializationOptions
+		// equivalent to pyright's `pythonPath` (astral-sh/ty#2032); the child
+		// environment and cwd provide interpreter discovery instead.
+		const projectTy = await resolveAndLaunch(
 			{
-				candidates: [
-					...pythonEnvironmentToolCandidates(pythonEnvironment, "ty"),
-					"ty",
-				],
+				candidates: pythonEnvironmentToolCandidates(pythonEnvironment, "ty"),
 				args: ["server"],
 				cwd: root,
 				env,
 			},
 			false,
 		);
-		if (ty) {
-			return { process: ty.process, source: ty.source };
+		if (projectTy) {
+			return { process: projectTy.process, source: projectTy.source };
+		}
+
+		// With no project-owned checker, retain the existing PATH preference and
+		// keep ty opt-in: pyright, then basedpyright, then ty. The augmented child
+		// PATH includes pi-lens-managed bins before the inherited global PATH.
+		const pathPyright = await resolveAndLaunch(
+			{
+				candidates: ["pyright-langserver", "basedpyright-langserver"],
+				args: ["--stdio"],
+				cwd: root,
+				env,
+			},
+			false,
+		);
+		if (pathPyright) {
+			return {
+				process: pathPyright.process,
+				source: pathPyright.source,
+				initialization: pyrightInit(pythonEnvironment?.pythonPath),
+			};
+		}
+
+		const pathTy = await resolveAndLaunch(
+			{
+				candidates: ["ty"],
+				args: ["server"],
+				cwd: root,
+				env,
+			},
+			false,
+		);
+		if (pathTy) {
+			return { process: pathTy.process, source: pathTy.source };
 		}
 
 		// Discover a globally-installed pyright even when install is disabled;

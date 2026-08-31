@@ -1112,7 +1112,7 @@ describe("lsp server policy", () => {
 		).toBe(true);
 	});
 
-	it("launches project-local ty from an unactivated .venv", async () => {
+	it("prefers project-local ty over PATH pyright from an unactivated .venv", async () => {
 		const { PythonServer } = await import("../../../clients/lsp/server.js");
 		const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-ty-venv-"));
 		dirs.push(tmp);
@@ -1156,6 +1156,16 @@ describe("lsp server policy", () => {
 						pid: 5679,
 					};
 				}
+				// Simulate pi-lens's managed Pyright being visible to a bare PATH lookup.
+				if (command === "pyright-langserver") {
+					return {
+						process: { killed: false } as never,
+						stdin: {} as never,
+						stdout: {} as never,
+						stderr: {} as never,
+						pid: 5680,
+					};
+				}
 				throw toolNotFound(`unexpected command: ${command}`);
 			},
 		);
@@ -1167,6 +1177,75 @@ describe("lsp server policy", () => {
 			expect(tyLaunchOptions?.env?.VIRTUAL_ENV).toBe(environmentRoot);
 			expect(tyLaunchOptions?.env?.PATH?.split(path.delimiter)[0]).toBe(binDir);
 			expect(process.env.VIRTUAL_ENV).toBeUndefined();
+			expect(ensureTool).not.toHaveBeenCalled();
+			expect(
+				launchLSP.mock.calls.some(
+					([command]) => command === "pyright-langserver",
+				),
+			).toBe(false);
+		} finally {
+			if (originalVenv === undefined) delete process.env.VIRTUAL_ENV;
+			else process.env.VIRTUAL_ENV = originalVenv;
+			if (originalConda === undefined) delete process.env.CONDA_PREFIX;
+			else process.env.CONDA_PREFIX = originalConda;
+		}
+	});
+
+	it("prefers project-local basedpyright over PATH pyright", async () => {
+		const { PythonServer } = await import("../../../clients/lsp/server.js");
+		const tmp = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-basedpyright-venv-"),
+		);
+		dirs.push(tmp);
+
+		const environmentRoot = path.join(tmp, ".venv");
+		const binDir = path.join(
+			environmentRoot,
+			process.platform === "win32" ? "Scripts" : "bin",
+		);
+		const pythonPath = path.join(
+			binDir,
+			process.platform === "win32" ? "python.exe" : "python",
+		);
+		const basedpyrightPath = path.join(
+			binDir,
+			process.platform === "win32"
+				? "basedpyright-langserver.exe"
+				: "basedpyright-langserver",
+		);
+		fs.mkdirSync(binDir, { recursive: true });
+		fs.writeFileSync(pythonPath, "#!/usr/bin/env python\n");
+		fs.writeFileSync(basedpyrightPath, "#!/usr/bin/env python\n");
+
+		const originalVenv = process.env.VIRTUAL_ENV;
+		const originalConda = process.env.CONDA_PREFIX;
+		delete process.env.VIRTUAL_ENV;
+		delete process.env.CONDA_PREFIX;
+
+		launchLSP.mockImplementation(async (command: string) => {
+			if (command === basedpyrightPath || command === "pyright-langserver") {
+				return {
+					process: { killed: false } as never,
+					stdin: {} as never,
+					stdout: {} as never,
+					stderr: {} as never,
+					pid: 5681,
+				};
+			}
+			throw toolNotFound(`unexpected command: ${command}`);
+		});
+
+		try {
+			const spawned = await PythonServer.spawn(tmp, { allowInstall: true });
+			expect(spawned).toBeDefined();
+			expect(
+				launchLSP.mock.calls.some(([command]) => command === basedpyrightPath),
+			).toBe(true);
+			expect(
+				launchLSP.mock.calls.some(
+					([command]) => command === "pyright-langserver",
+				),
+			).toBe(false);
 			expect(ensureTool).not.toHaveBeenCalled();
 		} finally {
 			if (originalVenv === undefined) delete process.env.VIRTUAL_ENV;
