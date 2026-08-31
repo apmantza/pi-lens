@@ -352,6 +352,56 @@ function filesystemErrorCode(error: unknown): string | undefined {
 	return undefined;
 }
 
+interface PytestSummary {
+	passed: number;
+	failed: number;
+	skipped: number;
+	duration?: number;
+}
+
+/** Extract aggregate values from pytest's final outcome line only. */
+function parsePytestSummary(output: string): PytestSummary {
+	const summaryLine = output
+		.split(/\r?\n/)
+		.reverse()
+		.find(
+			(line) =>
+				/\b\d+\s+(?:passed|failed|skipped|errors?|warnings?|deselected|xfailed|xpassed)\b/i.test(
+					line,
+				) && /\bin\s+[\d.]+s\b/i.test(line),
+		);
+	let passed = 0;
+	let failed = 0;
+	let skipped = 0;
+	if (!summaryLine) return { passed, failed, skipped };
+
+	const summaryBody = summaryLine.replace(/^=+\s*/, "");
+	for (const field of summaryBody.split(",")) {
+		const [countText, outcome] = field.trim().split(/\s+/, 2);
+		const count = Number.parseInt(countText, 10);
+		if (!Number.isFinite(count)) continue;
+		switch (outcome) {
+			case "passed":
+				passed = count;
+				break;
+			case "failed":
+				failed = count;
+				break;
+			case "skipped":
+				skipped = count;
+				break;
+		}
+	}
+
+	const durationMatch = /in\s+([\d.]+)s/.exec(summaryLine);
+	// Rounded, like `jsonRunDurationMs` and PHPUnit's legacy path:
+	// `in 2.01s` is 2009.9999999999998 in binary floating point.
+	const duration = durationMatch
+		? Math.round(Number.parseFloat(durationMatch[1]) * 1000)
+		: undefined;
+	return { passed, failed, skipped, duration };
+}
+
 export class TestRunnerClient {
 	private log: (msg: string) => void;
 	// This is an instance-lifetime memo of RESOLVED spellings only, which leaves
@@ -1693,53 +1743,9 @@ export class TestRunnerClient {
 		const failures: TestFailure[] = [];
 		const output = `${stdout}\n${stderr}`;
 
-		// Parse only pytest's final outcome line. Tracebacks can contain unrelated
-		// phrases such as "port 55432 failed" before the real summary.
-		const summaryLine = output
-			.split(/\r?\n/)
-			.reverse()
-			.find(
-				(line) =>
-					/\b\d+\s+(?:passed|failed|skipped|errors?|warnings?|deselected|xfailed|xpassed)\b/i.test(
-						line,
-					) && /\bin\s+[\d.]+s\b/i.test(line),
-			);
-
-		let passed = 0;
-		let failed = 0;
-		let skipped = 0;
-		// #1479: undefined until pytest's own `in N.NNs` is read. `in 0.00s` is
-		// a real pytest summary, so 0 has to stay available as a measurement.
-		let duration: number | undefined;
-
-		if (summaryLine) {
-			// Extract counts from comma-delimited summary fields, never arbitrary
-			// traceback text. Token parsing also avoids backtracking over long output.
-			const summaryBody = summaryLine.replace(/^=+\s*/, "");
-			for (const field of summaryBody.split(",")) {
-				const [countText, outcome] = field.trim().split(/\s+/, 2);
-				const count = Number.parseInt(countText, 10);
-				if (!Number.isFinite(count)) continue;
-				switch (outcome) {
-					case "passed":
-						passed = count;
-						break;
-					case "failed":
-						failed = count;
-						break;
-					case "skipped":
-						skipped = count;
-						break;
-				}
-			}
-			const durationMatch = /in\s+([\d.]+)s/.exec(summaryLine);
-			// Rounded, like `jsonRunDurationMs` and PHPUnit's legacy path:
-			// `in 2.01s` is 2009.9999999999998 in binary floating point, and
-			// the turn-end log prints the number as it stands.
-			// (Routing this through `toMeasuredDurationMs` is #1484, not this.)
-			if (durationMatch)
-				duration = Math.round(parseFloat(durationMatch[1]) * 1000);
-		}
+		// #1479: `duration` stays undefined unless pytest emits its own `in N.NNs`
+		// summary. A measured `in 0.00s` remains a real zero.
+		const { passed, failed, skipped, duration } = parsePytestSummary(output);
 
 		// Parse individual failures: "FAILED tests/test_foo.py::test_something - AssertionError: ..."
 		const failureRegex = /FAILED\s+(\S+::\S+)\s*-\s*(.+?)(?:\n|$)/g;
