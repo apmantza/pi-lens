@@ -1713,15 +1713,26 @@ export class TestRunnerClient {
 		let duration: number | undefined;
 
 		if (summaryLine) {
-			// Extract counts from the summary itself, never arbitrary traceback text.
-			const passedMatch = summaryLine.match(/(\d+)\s+passed/);
-			const failedMatch = summaryLine.match(/(\d+)\s+failed/);
-			const skippedMatch = summaryLine.match(/(\d+)\s+skipped/);
-			const durationMatch = summaryLine.match(/in\s+([\d.]+)s/);
-
-			passed = passedMatch ? parseInt(passedMatch[1], 10) : 0;
-			failed = failedMatch ? parseInt(failedMatch[1], 10) : 0;
-			skipped = skippedMatch ? parseInt(skippedMatch[1], 10) : 0;
+			// Extract counts from comma-delimited summary fields, never arbitrary
+			// traceback text. Token parsing also avoids backtracking over long output.
+			const summaryBody = summaryLine.replace(/^=+\s*/, "");
+			for (const field of summaryBody.split(",")) {
+				const [countText, outcome] = field.trim().split(/\s+/, 2);
+				const count = Number.parseInt(countText, 10);
+				if (!Number.isFinite(count)) continue;
+				switch (outcome) {
+					case "passed":
+						passed = count;
+						break;
+					case "failed":
+						failed = count;
+						break;
+					case "skipped":
+						skipped = count;
+						break;
+				}
+			}
+			const durationMatch = /in\s+([\d.]+)s/.exec(summaryLine);
 			// Rounded, like `jsonRunDurationMs` and PHPUnit's legacy path:
 			// `in 2.01s` is 2009.9999999999998 in binary floating point, and
 			// the turn-end log prints the number as it stands.
