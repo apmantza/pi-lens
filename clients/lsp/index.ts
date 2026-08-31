@@ -2624,8 +2624,10 @@ export class LSPService {
 	}
 
 	/**
-	 * Get or create ALL LSP clients that can serve a file.
-	 * Used for diagnostics aggregation across complementary servers.
+	 * Get or create all complementary LSP clients that can serve a file. Alternate
+	 * language servers marked with `fallbackFor` remain sequential fallbacks: an
+	 * aggregate diagnostics pass must not launch them beside a working preferred
+	 * server merely because it requested `clientScope: "all"`.
 	 */
 	async getClientsForFile(
 		filePath: string,
@@ -2639,24 +2641,48 @@ export class LSPService {
 				: allServers;
 		if (servers.length === 0) return { clients: [], serverCountAttempted: 0 };
 
-		// Count servers with a valid root as "attempted" — extension-only matches
-		// that fail the root check are not real spawn attempts.
-		const roots = await Promise.all(
-			servers.map((s) => this.resolveServerRoot(s, filePath)),
+		// Resolve once to keep the attempted count tied to servers with a real root.
+		const rootedServers = (
+			await Promise.all(
+				servers.map(async (server) => ({
+					server,
+					root: await this.resolveServerRoot(server, filePath),
+				})),
+			)
+		).filter(
+			(entry): entry is { server: LSPServerInfo; root: string } =>
+				entry.root !== undefined,
 		);
-		const serverCountAttempted = roots.filter(Boolean).length;
 
-		const spawned = await Promise.all(
-			servers.map((server) =>
-				this.ensureClientForServer(filePath, server, resolvedRoots),
-			),
-		);
-		return {
-			clients: spawned.filter((entry): entry is SpawnedServer =>
-				Boolean(entry),
-			),
-			serverCountAttempted,
+		let serverCountAttempted = 0;
+		const acquisitions = new Map<string, Promise<SpawnedServer | undefined>>();
+		const acquire = (server: LSPServerInfo) => {
+			serverCountAttempted += 1;
+			return this.ensureClientForServer(filePath, server, resolvedRoots);
 		};
+
+		// Start complementary servers immediately. An alternate waits only for its
+		// own preferred server, not for unrelated scanners, and starts if that server
+		// declines. Registry order makes chained fallbacks deterministic.
+		for (const { server } of rootedServers) {
+			const preferred = server.fallbackFor
+				? acquisitions.get(server.fallbackFor)
+				: undefined;
+			const acquisition = preferred
+				? preferred.then((entry) =>
+						entry === undefined ? acquire(server) : undefined,
+					)
+				: acquire(server);
+			acquisitions.set(server.id, acquisition);
+		}
+
+		const results = await Promise.all(
+			rootedServers.map(({ server }) => acquisitions.get(server.id)),
+		);
+		const clients = results.filter(
+			(entry): entry is SpawnedServer => entry !== undefined,
+		);
+		return { clients, serverCountAttempted };
 	}
 
 	/**

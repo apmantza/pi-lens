@@ -339,6 +339,12 @@ group (see the placement rules in "Maintaining this file").
 
 ### LSP: acquisition, touches, waits, and diagnostics
 
+Alternate language servers declare their preferred server through
+`LSPServerInfo.fallbackFor`. Primary acquisition and aggregate
+`clientScope: "all"` diagnostics preserve that order: an alternate starts only
+when its preferred server is unavailable. Complementary servers remain
+concurrent, and cross-cutting scanners use `role: "auxiliary"`. (#2400)
+
 The live LSP service, generation handoff, workspace-sweep hold state, and
 classic TypeScript repair latch use separate versioned families in
 `getProcessSingleton`. The service's incompatible-cell teardown uses

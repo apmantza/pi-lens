@@ -338,6 +338,13 @@ export interface LSPServerInfo {
 	 * diagnostics path. See clients/dispatch/auxiliary-lsp.ts.
 	 */
 	role?: "language" | "auxiliary";
+	/**
+	 * ID of the preferred language server this server backs up. Primary selection
+	 * already tries language servers in registry order; this marker prevents an
+	 * aggregate `clientScope: "all"` diagnostics pass from launching the fallback
+	 * alongside a working preferred server.
+	 */
+	fallbackFor?: string;
 	/** Simple command name whose absence disables spawn attempts briefly across roots. */
 	availabilityKey?: string;
 	/**
@@ -1255,6 +1262,7 @@ interface InteractiveServerSpec {
 	extensions: readonly string[];
 	root: RootFunction;
 	language: string;
+	fallbackFor?: string;
 	command: string | ((root: string) => string);
 	args?: string[] | ((root: string) => string[]);
 	initialization?:
@@ -1275,6 +1283,7 @@ function createInteractiveServer(spec: InteractiveServerSpec): LSPServerInfo {
 		name: spec.name,
 		extensions: spec.extensions,
 		root: spec.root,
+		fallbackFor: spec.fallbackFor,
 		availabilityKey:
 			typeof spec.command === "string" && isSimpleCommand(spec.command)
 				? spec.command
@@ -2226,6 +2235,7 @@ export const TypeScriptServer: LSPServerInfo = {
 export const DenoServer: LSPServerInfo = {
 	id: "deno",
 	name: "Deno Language Server",
+	fallbackFor: "typescript",
 	extensions: JS_TS_LSP_EXTENSIONS,
 	autoPropagateDiagnostics: true,
 	root: createRootDetector(["deno.json", "deno.jsonc"]),
@@ -2391,6 +2401,7 @@ export const PythonServer: LSPServerInfo = {
 export const PythonJediServer: LSPServerInfo = {
 	id: "python-jedi",
 	name: "Jedi Language Server",
+	fallbackFor: "python",
 	extensions: KIND_EXTENSIONS["python"],
 	root: RootWithFallback(
 		createRootDetector([
@@ -2974,6 +2985,7 @@ export const CSharpServer: LSPServerInfo = {
 export const OmniSharpServer = createInteractiveServer({
 	id: "omnisharp",
 	name: "OmniSharp",
+	fallbackFor: "csharp",
 	extensions: KIND_EXTENSIONS["csharp"],
 	root: createRootDetector([...DOTNET_CSHARP_ROOT_MARKERS]),
 	language: "csharp",
@@ -3178,6 +3190,7 @@ export const ElixirServer = createInteractiveServer({
 export const ElixirExpertServer: LSPServerInfo = {
 	id: "expert",
 	name: "Expert",
+	fallbackFor: "elixir",
 	extensions: KIND_EXTENSIONS["elixir"],
 	root: RootWithFallback(createRootDetector(["mix.exs"])),
 	availabilityKey: "expert",

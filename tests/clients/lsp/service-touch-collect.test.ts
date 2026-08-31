@@ -60,6 +60,49 @@ describe("LSPService.touchFile collectDiagnostics", () => {
 		createLSPClient.mockReset();
 	});
 
+	it("does not start a fallback server when its primary is available", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		const primary = makeServer("python");
+		const fallback = { ...makeServer("python-jedi"), fallbackFor: "python" };
+		getServersForFileWithConfig.mockReturnValue([primary, fallback]);
+		createLSPClient.mockImplementation(async (args: { serverId: string }) => ({
+			serverId: args.serverId,
+			isAlive: () => true,
+		}));
+
+		const result = await service.getClientsForFile(FILE);
+
+		expect(result.clients.map((entry) => entry.info.id)).toEqual(["python"]);
+		expect(primary.spawn).toHaveBeenCalledOnce();
+		expect(fallback.spawn).not.toHaveBeenCalled();
+		expect(result.serverCountAttempted).toBe(1);
+	});
+
+	it("starts a fallback server when its primary is unavailable", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		const primary = {
+			...makeServer("python"),
+			spawn: vi.fn(async () => undefined),
+		};
+		const fallback = { ...makeServer("python-jedi"), fallbackFor: "python" };
+		getServersForFileWithConfig.mockReturnValue([primary, fallback]);
+		createLSPClient.mockImplementation(async (args: { serverId: string }) => ({
+			serverId: args.serverId,
+			isAlive: () => true,
+		}));
+
+		const result = await service.getClientsForFile(FILE);
+
+		expect(result.clients.map((entry) => entry.info.id)).toEqual([
+			"python-jedi",
+		]);
+		expect(primary.spawn).toHaveBeenCalledOnce();
+		expect(fallback.spawn).toHaveBeenCalledOnce();
+		expect(result.serverCountAttempted).toBe(2);
+	});
+
 	it("uses pull-only diagnostics for a pull-capable server under budget pressure", async () => {
 		const { LSPService } = await import("../../../clients/lsp/index.js");
 		const { checkCrossProcessLspBudget, _resetLspBudgetDecisionForTests } =

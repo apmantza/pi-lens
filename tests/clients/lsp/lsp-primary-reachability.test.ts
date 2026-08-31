@@ -126,14 +126,16 @@ describe("LSP primary reachability", () => {
 
 	it("declared alternates and their defaults are real, distinct, non-auxiliary servers", () => {
 		for (const { id, defaultId } of ALTERNATES) {
+			const alternate = NON_AUX.find((server) => server.id === id);
+			expect(alternate, `${id} is a registered non-aux server`).toBeDefined();
 			expect(
-				NON_AUX.some((s) => s.id === id),
-				`${id} is a registered non-aux server`,
-			).toBe(true);
-			expect(
-				NON_AUX.some((s) => s.id === defaultId),
+				NON_AUX.some((server) => server.id === defaultId),
 				`${defaultId} is a registered non-aux server`,
 			).toBe(true);
+			expect(
+				alternate?.fallbackFor,
+				`${id} declares its preferred server`,
+			).toBe(defaultId);
 			expect(id, `${id} must differ from its default`).not.toBe(defaultId);
 		}
 	});
