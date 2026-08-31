@@ -1092,6 +1092,12 @@ immediate `ctx.isIdle()` recheck. The durable `test-runner-findings` cache stays
 available to pull diagnostics and the commit guard; unavailable or failed host
 entry capabilities never fall back to `sendMessage`. (#2366)
 
+Pytest aggregate counts come only from pytest's final outcome summary line
+(#2408), never from a whole-output search. Tracebacks, service errors, assertion
+messages, and captured logs can contain unrelated phrases such as `port 55432
+failed`; summary detection and count extraction must remain bound to the same
+line.
+
 Host-ready delay is a process-lifetime measurement from load-complete to the
 first real `session_start`. The extension consumes that anchor once at the
 entry point; later sessions emit no host-ready phase because no clean

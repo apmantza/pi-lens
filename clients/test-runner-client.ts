@@ -1693,10 +1693,17 @@ export class TestRunnerClient {
 		const failures: TestFailure[] = [];
 		const output = `${stdout}\n${stderr}`;
 
-		// Parse summary line: "5 passed, 2 failed, 1 skipped in 0.23s"
-		const summaryMatch =
-			output.match(/(\d+)\s+passed?.*?(\d+)\s+failed.*?in\s+([\d.]+)s/i) ||
-			output.match(/(\d+)\s+passed.*?in\s+([\d.]+)s/i);
+		// Parse only pytest's final outcome line. Tracebacks can contain unrelated
+		// phrases such as "port 55432 failed" before the real summary.
+		const summaryLine = output
+			.split(/\r?\n/)
+			.reverse()
+			.find(
+				(line) =>
+					/\b\d+\s+(?:passed|failed|skipped|errors?|warnings?|deselected|xfailed|xpassed)\b/i.test(
+						line,
+					) && /\bin\s+[\d.]+s\b/i.test(line),
+			);
 
 		let passed = 0;
 		let failed = 0;
@@ -1705,12 +1712,12 @@ export class TestRunnerClient {
 		// a real pytest summary, so 0 has to stay available as a measurement.
 		let duration: number | undefined;
 
-		if (summaryMatch) {
-			// Extract numbers from various patterns
-			const passedMatch = output.match(/(\d+)\s+passed/);
-			const failedMatch = output.match(/(\d+)\s+failed/);
-			const skippedMatch = output.match(/(\d+)\s+skipped/);
-			const durationMatch = output.match(/in\s+([\d.]+)s/);
+		if (summaryLine) {
+			// Extract counts from the summary itself, never arbitrary traceback text.
+			const passedMatch = summaryLine.match(/(\d+)\s+passed/);
+			const failedMatch = summaryLine.match(/(\d+)\s+failed/);
+			const skippedMatch = summaryLine.match(/(\d+)\s+skipped/);
+			const durationMatch = summaryLine.match(/in\s+([\d.]+)s/);
 
 			passed = passedMatch ? parseInt(passedMatch[1], 10) : 0;
 			failed = failedMatch ? parseInt(failedMatch[1], 10) : 0;
