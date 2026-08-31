@@ -159,7 +159,7 @@
 		]
 	},
 	"allowScripts": {
-		"@ast-grep/cli@0.45.1": true,
+		"@ast-grep/cli@0.45.2": true,
 		"@google/genai@1.52.0": true,
 		"protobufjs@7.6.5": true
 	}

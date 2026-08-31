@@ -26,9 +26,29 @@ const pkg = JSON.parse(
 	devDependencies?: Record<string, string>;
 	peerDependencies?: Record<string, string>;
 	peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+	allowScripts?: Record<string, boolean>;
+};
+
+const lock = JSON.parse(
+	fs.readFileSync(path.join(root, "package-lock.json"), "utf8"),
+) as {
+	packages?: {
+		"node_modules/@ast-grep/cli"?: {
+			version?: string;
+			hasInstallScript?: boolean;
+		};
+	};
 };
 
 describe("published package entry points (dist mode, #182)", () => {
+	it("allows the exact ast-grep CLI version with an install script (#2401)", () => {
+		const cli = lock.packages?.["node_modules/@ast-grep/cli"];
+		const version = cli?.version;
+		expect(version, "lockfile must pin @ast-grep/cli").toBeTruthy();
+		expect(cli?.hasInstallScript).toBe(true);
+		expect(pkg.allowScripts?.[`@ast-grep/cli@${version}`]).toBe(true);
+	});
+
 	it("main points at the compiled dist entry", () => {
 		expect(pkg.main).toBe("./dist/index.js");
 	});
