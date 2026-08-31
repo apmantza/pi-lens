@@ -2676,9 +2676,7 @@ export class LSPService {
 			acquisitions.set(server.id, acquisition);
 		}
 
-		const results = await Promise.all(
-			rootedServers.map(({ server }) => acquisitions.get(server.id)),
-		);
+		const results = await Promise.all(acquisitions.values());
 		const clients = results.filter(
 			(entry): entry is SpawnedServer => entry !== undefined,
 		);
