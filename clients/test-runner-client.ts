@@ -21,6 +21,10 @@ import { createSubsystemLogger } from "./extension-log.js";
 import { detectFileRole } from "./file-role.js";
 import { findGlobalBinary } from "./package-manager.js";
 import { PathKeyedMap } from "./path-keyed-map.js";
+import {
+	augmentPythonEnvironment,
+	detectPythonEnvironment,
+} from "./python-environment.js";
 import { normalizeEphemeralMapKey, normalizeMapKey } from "./path-utils.js";
 import { isMeasuredDuration, toMeasuredDurationMs } from "./run-duration.js";
 import { safeSpawn, safeSpawnAsync } from "./safe-spawn.js";
@@ -1168,7 +1172,7 @@ export class TestRunnerClient {
 		}
 
 		try {
-			const { command, args } = await this.resolveExec(
+			const { command, args, env } = await this.resolveExec(
 				runner,
 				config,
 				absoluteTestFile,
@@ -1179,6 +1183,7 @@ export class TestRunnerClient {
 			const result = await safeSpawnAsync(command, args, {
 				cwd,
 				timeout: 60000,
+				env,
 			});
 
 			const stdout = result.stdout || "";
@@ -2637,7 +2642,21 @@ export class TestRunnerClient {
 		config: RunnerConfig,
 		testFile: string,
 		cwd: string,
-	): Promise<{ command: string; args: string[] }> {
+	): Promise<{ command: string; args: string[]; env?: NodeJS.ProcessEnv }> {
+		// Run pytest through the project interpreter itself, not a generic `python`
+		// resolved from the host PATH. The child-only environment also keeps tools
+		// spawned by tests inside the same project environment.
+		if (runner === "pytest") {
+			const pythonEnvironment = await detectPythonEnvironment(cwd);
+			if (pythonEnvironment) {
+				return {
+					command: pythonEnvironment.pythonPath,
+					args: config.args(testFile, cwd),
+					env: augmentPythonEnvironment(process.env, pythonEnvironment),
+				};
+			}
+		}
+
 		// PHPUnit has no npx-style automatic local-binary resolution — Composer's
 		// standard local-install location is vendor/bin/phpunit, so check that
 		// explicitly before falling back to a global `phpunit` on PATH.
