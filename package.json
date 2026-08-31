@@ -132,7 +132,7 @@
 		"husky": "^9.1.7",
 		"json5": "^2.2.3",
 		"oxfmt": "0.64.0",
-		"oxlint": "1.79.0",
+		"oxlint": "1.80.0",
 		"typebox": "^1.0.0",
 		"typescript": "^7.0.2",
 		"typescript-language-server": "^6.0.0",
