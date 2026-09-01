@@ -1028,6 +1028,25 @@ describe("test-runner-client", () => {
 			expect(result.duration).toBe(3210);
 		});
 
+		it("recognizes rerun outcomes with ANSI, CRLF, and a trailing lookalike", () => {
+			const result = (new TestRunnerClient(false) as any).parsePytestOutput(
+				[
+					"\u001b[1m===== 1 rerun, 2 failed, 3 passed, 4 skipped in 0.50s =====\u001b[0m\r",
+					"post-run: 55432 failed in 4s",
+				].join("\n"),
+				"",
+				1,
+				"/tmp/test_foo.py",
+				"/tmp",
+				"pytest",
+			);
+
+			expect(result.passed).toBe(3);
+			expect(result.failed).toBe(2);
+			expect(result.skipped).toBe(4);
+			expect(result.duration).toBe(500);
+		});
+
 		it("rounds the mix test summary duration", () => {
 			const result = (new TestRunnerClient(false) as any).parseMixTestOutput(
 				"Finished in 2.01 seconds (0.00s async, 2.01s sync)\n3 tests, 0 failures",

@@ -361,7 +361,7 @@ interface PytestSummary {
 }
 
 const PYTEST_SUMMARY_OUTCOME =
-	"(?:passed|failed|skipped|errors?|warnings?|deselected|xfailed|xpassed)";
+	"(?:passed|failed|skipped|reruns?|errors?|warnings?|deselected|xfailed|xpassed)";
 const PYTEST_SUMMARY_LINE = new RegExp(
 	`^\\s*(?:=+\\s*)?\\d+\\s+${PYTEST_SUMMARY_OUTCOME}` +
 		`(?:\\s*,\\s*\\d+\\s+${PYTEST_SUMMARY_OUTCOME})*` +
