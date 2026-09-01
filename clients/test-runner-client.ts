@@ -24,6 +24,7 @@ import { PathKeyedMap } from "./path-keyed-map.js";
 import { normalizeEphemeralMapKey, normalizeMapKey } from "./path-utils.js";
 import { isMeasuredDuration, toMeasuredDurationMs } from "./run-duration.js";
 import { safeSpawn, safeSpawnAsync } from "./safe-spawn.js";
+import { stripAnsi } from "./sanitize.js";
 
 // --- Types ---
 
@@ -359,23 +360,30 @@ interface PytestSummary {
 	duration?: number;
 }
 
+const PYTEST_SUMMARY_OUTCOME =
+	"(?:passed|failed|skipped|errors?|warnings?|deselected|xfailed|xpassed)";
+const PYTEST_SUMMARY_LINE = new RegExp(
+	`^\\s*(?:=+\\s*)?\\d+\\s+${PYTEST_SUMMARY_OUTCOME}` +
+		`(?:\\s*,\\s*\\d+\\s+${PYTEST_SUMMARY_OUTCOME})*` +
+		`\\s+in\\s+[\\d.]+s(?:\\s*=+)?\\s*$`,
+	"i",
+);
+
 /** Extract aggregate values from pytest's final outcome line only. */
 function parsePytestSummary(output: string): PytestSummary {
-	const summaryLine = output
+	// Pytest may color the whole summary or individual tokens. Strip ANSI before
+	// selecting and extracting so formatting cannot turn the first count into 0.
+	const normalizedOutput = stripAnsi(output);
+	const summaryLine = normalizedOutput
 		.split(/\r?\n/)
 		.reverse()
-		.find(
-			(line) =>
-				/\b\d+\s+(?:passed|failed|skipped|errors?|warnings?|deselected|xfailed|xpassed)\b/i.test(
-					line,
-				) && /\bin\s+[\d.]+s\b/i.test(line),
-		);
+		.find((line) => PYTEST_SUMMARY_LINE.test(line));
 	let passed = 0;
 	let failed = 0;
 	let skipped = 0;
 	if (!summaryLine) return { passed, failed, skipped };
 
-	const summaryBody = summaryLine.replace(/^=+\s*/, "");
+	const summaryBody = summaryLine.replace(/^=+\s*|\s*=+\s*$/g, "");
 	for (const field of summaryBody.split(",")) {
 		const [countText, outcome] = field.trim().split(/\s+/, 2);
 		const count = Number.parseInt(countText, 10);
