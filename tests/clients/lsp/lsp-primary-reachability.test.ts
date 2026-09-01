@@ -24,24 +24,12 @@ import { LSP_SERVERS } from "../../../clients/lsp/server.js";
  * declared alternate, with guidance to mark it auxiliary or declare it.
  */
 
-/**
- * Intentional alternate primaries: a second language server for a language
- * whose default is registered ahead of it. Reached at runtime by availability
- * fallthrough (default not installed) or by disabling the default in
- * `.pi-lens/lsp.json`. `ext` is one extension both servers share. Derived from
- * the registry's actual zero-default-win set — keep it in lockstep with reality
- * (the completeness test below fails if a non-aux server is neither a winner
- * nor declared here).
- */
-const ALTERNATES = [
-	{ id: "deno", defaultId: "typescript", ext: ".ts" },
-	{ id: "python-jedi", defaultId: "python", ext: ".py" },
-	{ id: "omnisharp", defaultId: "csharp", ext: ".cs" },
-	{ id: "expert", defaultId: "elixir", ext: ".ex" },
-] as const;
-
 const NON_AUX = LSP_SERVERS.filter((s) => s.role !== "auxiliary");
 const AUX = LSP_SERVERS.filter((s) => s.role === "auxiliary");
+const DECLARED_FALLBACKS = LSP_SERVERS.filter(
+	(s) => s.fallbackFor !== undefined,
+);
+const SERVER_BY_ID = new Map(LSP_SERVERS.map((server) => [server.id, server]));
 
 const probePath = (token: string) =>
 	token.startsWith(".") ? `/proj/probe${token}` : `/proj/${token}`;
@@ -58,15 +46,60 @@ const primaryCandidates = (token: string) =>
 	);
 const defaultPrimary = (token: string) => primaryCandidates(token)[0]?.id;
 
+/**
+ * Validate fallback declarations without relying on primary selection. The
+ * production selection path only consumes `fallbackFor` as a lookup key, so
+ * these registry-wide checks independently reject malformed metadata.
+ */
+function fallbackDeclarationIssues(
+	servers: readonly (typeof LSP_SERVERS)[number][],
+): string[] {
+	const byId = new Map(servers.map((server) => [server.id, server]));
+	const issues: string[] = [];
+	for (const fallback of servers.filter(
+		(server) => server.fallbackFor !== undefined,
+	)) {
+		const preferred = byId.get(fallback.fallbackFor as string);
+		if (!preferred) {
+			issues.push(`${fallback.id} targets missing ${fallback.fallbackFor}`);
+			continue;
+		}
+		if (fallback.role === "auxiliary") {
+			issues.push(`${fallback.id} is auxiliary`);
+		}
+		if (preferred.role === "auxiliary") {
+			issues.push(`${fallback.id} targets auxiliary ${preferred.id}`);
+		}
+		if (fallback.id === preferred.id) {
+			issues.push(`${fallback.id} targets itself`);
+		}
+		if (
+			!fallback.extensions.some((extension) =>
+				preferred.extensions.includes(extension),
+			)
+		) {
+			issues.push(`${fallback.id} shares no extension with ${preferred.id}`);
+		}
+		if (servers.indexOf(preferred) >= servers.indexOf(fallback)) {
+			issues.push(`${fallback.id} is not after ${preferred.id}`);
+		}
+	}
+	return issues;
+}
+
 describe("LSP primary reachability", () => {
 	it("every non-auxiliary server is selectable as primary (default winner or declared alternate)", () => {
-		const declaredAlternates = new Set<string>(ALTERNATES.map((a) => a.id));
+		const declaredFallbackIds = new Set(
+			DECLARED_FALLBACKS.filter((server) => server.role !== "auxiliary").map(
+				(server) => server.id,
+			),
+		);
 		const unreachable: string[] = [];
 		for (const s of NON_AUX) {
 			const winsByDefault = s.extensions.some(
 				(t) => defaultPrimary(t) === s.id,
 			);
-			if (!winsByDefault && !declaredAlternates.has(s.id)) {
+			if (!winsByDefault && !declaredFallbackIds.has(s.id)) {
 				unreachable.push(s.id);
 			}
 		}
@@ -76,8 +109,8 @@ describe("LSP primary reachability", () => {
 				`so getClientForFile can never select them in the common case (a real language server ` +
 				`shadows them for every extension they claim). If a server is a cross-cutting / ` +
 				`diagnostic-only tool (linter, scanner, spellcheck), set role:"auxiliary" so it attaches ` +
-				`ALONGSIDE the primary. If it is a genuine alternate language server, add it to ALTERNATES ` +
-				`with the default it falls back from. Offenders: ${unreachable.join(", ")}`,
+				`ALONGSIDE the primary. If it is a genuine alternate language server, declare its ` +
+				`preferred server with fallbackFor. Offenders: ${unreachable.join(", ")}`,
 		).toEqual([]);
 	});
 
@@ -98,45 +131,41 @@ describe("LSP primary reachability", () => {
 		expect(defaultPrimary("CMakeLists.txt")).toBe("cmake");
 	});
 
-	it("each declared alternate is wired behind its default and is the next pick when predecessors drop out", () => {
-		for (const { id, defaultId, ext } of ALTERNATES) {
-			const chain = primaryCandidates(ext).map((s) => s.id);
-			expect(chain, `${id} should be a primary candidate for ${ext}`).toContain(
-				id,
+	it("fallback declarations target reachable, ordered, compatible primary servers", () => {
+		const issues = fallbackDeclarationIssues(LSP_SERVERS);
+		expect(issues, "malformed fallbackFor declarations").toEqual([]);
+
+		for (const fallback of DECLARED_FALLBACKS) {
+			const preferred = SERVER_BY_ID.get(fallback.fallbackFor as string);
+			expect(preferred, `${fallback.id} preferred server exists`).toBeDefined();
+			if (!preferred) continue;
+			const sharedExtension = fallback.extensions.find((extension) =>
+				preferred.extensions.includes(extension),
 			);
 			expect(
-				chain,
-				`${id}'s declared default ${defaultId} should be a candidate for ${ext}`,
-			).toContain(defaultId);
-			// The default precedes the alternate, so it wins when both are available…
+				sharedExtension,
+				`${fallback.id} shares an extension`,
+			).toBeDefined();
+			if (!sharedExtension) continue;
+			const chain = primaryCandidates(sharedExtension).map((s) => s.id);
 			expect(
-				chain.indexOf(defaultId),
-				`${defaultId} should be ordered before ${id} for ${ext}`,
-			).toBeLessThan(chain.indexOf(id));
-			// …and with every predecessor unavailable/disabled, the alternate is the
-			// next server selected as primary (models spawn-fallthrough / config disable).
-			const predecessors = new Set(chain.slice(0, chain.indexOf(id)));
-			const next = chain.find((c) => !predecessors.has(c));
+				chain,
+				`${fallback.id} is reachable for ${sharedExtension}`,
+			).toContain(fallback.id);
+			expect(
+				chain,
+				`${preferred.id} is reachable for ${sharedExtension}`,
+			).toContain(preferred.id);
+			expect(
+				chain.indexOf(preferred.id),
+				`${preferred.id} should precede ${fallback.id} for ${sharedExtension}`,
+			).toBeLessThan(chain.indexOf(fallback.id));
+			const predecessors = new Set(chain.slice(0, chain.indexOf(fallback.id)));
+			const next = chain.find((serverId) => !predecessors.has(serverId));
 			expect(
 				next,
-				`with [${[...predecessors].join(", ")}] unavailable, ${id} should be selected for ${ext}`,
-			).toBe(id);
-		}
-	});
-
-	it("declared alternates and their defaults are real, distinct, non-auxiliary servers", () => {
-		for (const { id, defaultId } of ALTERNATES) {
-			const alternate = NON_AUX.find((server) => server.id === id);
-			expect(alternate, `${id} is a registered non-aux server`).toBeDefined();
-			expect(
-				NON_AUX.some((server) => server.id === defaultId),
-				`${defaultId} is a registered non-aux server`,
-			).toBe(true);
-			expect(
-				alternate?.fallbackFor,
-				`${id} declares its preferred server`,
-			).toBe(defaultId);
-			expect(id, `${id} must differ from its default`).not.toBe(defaultId);
+				`with [${[...predecessors].join(", ")}] unavailable, ${fallback.id} should be selected for ${sharedExtension}`,
+			).toBe(fallback.id);
 		}
 	});
 
