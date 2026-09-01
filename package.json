@@ -131,8 +131,8 @@
 		"dependency-cruiser": "^18.2.0",
 		"husky": "^9.1.7",
 		"json5": "^2.2.3",
-		"oxfmt": "0.64.0",
-		"oxlint": "1.79.0",
+		"oxfmt": "0.65.0",
+		"oxlint": "1.80.0",
 		"typebox": "^1.0.0",
 		"typescript": "^7.0.2",
 		"typescript-language-server": "^6.0.0",
@@ -159,7 +159,7 @@
 		]
 	},
 	"allowScripts": {
-		"@ast-grep/cli@0.45.1": true,
+		"@ast-grep/cli@0.45.2": true,
 		"@google/genai@1.52.0": true,
 		"protobufjs@7.6.5": true
 	}

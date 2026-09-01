@@ -218,12 +218,14 @@ describe("generation-guard ratchet (#1754)", () => {
 });
 
 describe("generation-guard declaration registry (#1741 charter direction)", () => {
-	it("both #1754 migrations declare themselves", async () => {
+	it("all migrated guarded-write sources declare themselves", async () => {
 		await import("../../clients/dispatch/runners/utils/runner-helpers.js");
 		await import("../../clients/lsp/workspace-diagnostics-cache.js");
+		await import("../../clients/package-manager.js");
 		expect(listDeclaredGenerationSources()).toEqual(
 			expect.arrayContaining([
 				"dispatch-availability",
+				"package-manager-global-bin",
 				"workspace-diagnostics-cache",
 			]),
 		);

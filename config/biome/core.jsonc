@@ -12,8 +12,17 @@
 				"noUnusedImports": "error",
 				"noUndeclaredVariables": "warn"
 			},
-			"style": {
-				"useConst": "error",
+		"style": {
+			// Off (refs #2385): its "safe" fix rewrites value imports to
+			// `import type` for imports used only in type positions, which
+			// erases the runtime binding that experimental decorator metadata
+			// (`emitDecoratorMetadata` -> design:type) still needs — verified
+			// against real biome 2.5.9 + tsc: the emitted design:type identity
+			// changes from the imported class to `Function`. Biome's own rule
+			// docs recommend disabling this rule for such repos. Explicit
+			// project biome.json(c) configs remain authoritative and unaffected.
+			"useImportType": "off",
+			"useConst": "error",
 				"useTemplate": "error",
 				"noNegationElse": "error",
 				"noNestedTernary": "error",

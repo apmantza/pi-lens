@@ -2095,6 +2095,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 						handlerEnteredAt,
 						bootstrapClientsStartedAt,
 						bootstrapClientsDurationMs,
+						// #2129: this call site is only reached for "primary"/
+						// "sequential-replacement" — a declined start returned above.
+						sessionStartClassification: sessionStartDecision.classification,
+						sessionStartSameRoot: sessionStartDecision.sameRoot,
 						getFlag: (name: string) => getLensFlag(name),
 						notify: (msg, level) => notifyUi(ctx, msg, level),
 						dbg,

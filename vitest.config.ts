@@ -302,6 +302,10 @@ const wallClockBudgetInclude = [
 	"tests/clients/cascade-turn-merge.test.ts",
 	"tests/clients/read-expansion-enrichment.test.ts",
 	"tests/clients/pipeline-lsp-sync.test.ts",
+	// #2358: the flat-server discriminator asserts the real outstanding wedge
+	// window. Keep child-process CPU sampling and this wall-clock lower bound in
+	// the fully serialized, dead-last phase.
+	"tests/clients/lsp/service-notify-cpu-liveness.test.ts",
 ];
 
 export default defineConfig({

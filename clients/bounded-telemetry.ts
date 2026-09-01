@@ -124,6 +124,8 @@ export const BOUNDED_TELEMETRY_PHASES = [
 	 * replacement window. Detailed rows are capped per turn; the ledger and
 	 * aggregate turn-end row retain the complete count and identity. */
 	"lsp_scanner_coverage_gap",
+	/** #2358: a busy CPU discriminator deferred notify-stall teardown. */
+	"lsp_notify_stall_cpu_busy",
 ] as const;
 
 export type BoundedPhase = (typeof BOUNDED_TELEMETRY_PHASES)[number];

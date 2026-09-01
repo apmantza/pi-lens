@@ -174,7 +174,7 @@ describe("startup-scan verdict cache in session_start (#699)", () => {
 			expect(logLatencySpy).toHaveBeenCalledWith(
 				expect.objectContaining({
 					phase: "session_start_total",
-					metadata: { mode: "full" },
+					metadata: { mode: "full", sameRoot: "unknown" },
 				}),
 			);
 			const totalEntry = logLatencySpy.mock.calls
@@ -300,7 +300,7 @@ describe("startup-scan verdict cache in session_start (#699)", () => {
 			expect(logLatencySpy).toHaveBeenCalledWith(
 				expect.objectContaining({
 					phase: "session_start_total",
-					metadata: { mode: "quick" },
+					metadata: { mode: "quick", sameRoot: "unknown" },
 				}),
 			);
 		} finally {

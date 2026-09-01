@@ -25,6 +25,13 @@ name: Merge train
 # (default: the repository owner). Anyone who can label would otherwise be
 # able to merge, which is a much larger grant than this lane intends. An
 # unreadable timeline denies, never passes.
+#
+# A successful merge uses repository_dispatch with the exact merge SHA because
+# this workflow authenticates its Git write with GITHUB_TOKEN. GitHub suppresses
+# the resulting push event for downstream workflows, while repository_dispatch
+# remains eligible. The master-push workflows consume the event and pin every
+# checkout to its payload SHA; their per-SHA concurrency groups collapse a
+# duplicate event without allowing concurrent validation of one commit.
 
 on:
   schedule:

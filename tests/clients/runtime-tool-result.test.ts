@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CacheManager } from "../../clients/cache-manager.js";
@@ -10,6 +11,10 @@ import {
 } from "../../clients/session-lifecycle.js";
 import { handleToolCall } from "../../clients/runtime-tool-call.js";
 import { handleToolResult } from "../../clients/runtime-tool-result.js";
+import {
+	clearFormatterRuntimeState,
+	getFormattersForFile,
+} from "../../clients/formatters.js";
 import { getProjectIgnoreMatcher } from "../../clients/file-utils.js";
 import {
 	getVerifiedPathAttributionGuessCount,
@@ -18,6 +23,11 @@ import {
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 
 const logLatency = vi.hoisted(() => vi.fn());
+vi.mock("node:fs/promises", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs/promises")>();
+	return { ...actual, readdir: vi.fn(actual.readdir) };
+});
+
 vi.mock("../../clients/latency-logger.js", async (importActual) => ({
 	...(await importActual<typeof import("../../clients/latency-logger.js")>()),
 	logLatency,
@@ -30,7 +40,211 @@ vi.mock("../../clients/pipeline.js", () => ({
 const notifyExternalFileChange = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../../clients/lsp/index.js", () => ({ notifyExternalFileChange }));
 
+const readdirMock = vi.mocked(fsp.readdir);
+const realReaddir = readdirMock.getMockImplementation()!;
+
+beforeEach(() => {
+	readdirMock.mockImplementation(realReaddir);
+	readdirMock.mockClear();
+});
+
 describe("bash grep searchReads registration", () => {
+	it("invalidates formatter selection through handleToolResult", async () => {
+		const { runPipeline } = await import("../../clients/pipeline.js");
+		vi.mocked(runPipeline).mockResolvedValue({
+			output: "",
+			hasBlockers: false,
+			isError: false,
+			fileModified: false,
+		});
+		const env = setupTestEnvironment("pi-lens-1603-tool-result-");
+		try {
+			const filePath = path.join(env.tmpDir, "init.lua");
+			const configPath = path.join(env.tmpDir, "stylua.toml");
+			expect(await getFormattersForFile(filePath, env.tmpDir)).toEqual([]);
+			fs.writeFileSync(configPath, "column_width = 100\n");
+			expect(await getFormattersForFile(filePath, env.tmpDir)).toEqual([]);
+
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			await handleToolResult({
+				event: {
+					toolName: "write",
+					input: { path: configPath },
+					content: [{ type: "text", text: "written" }],
+				},
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: { addModifiedRange: () => {}, readTurnState: () => ({}) },
+				biomeClient: {},
+				ruffClient: {},
+				metricsClient: {},
+				resetLSPService: () => {},
+				agentBehaviorRecord: () => [],
+				formatBehaviorWarnings: () => "",
+			} as any);
+
+			expect(
+				(await getFormattersForFile(filePath, env.tmpDir)).map((f) => f.name),
+			).toEqual(["stylua"]);
+		} finally {
+			clearFormatterRuntimeState();
+			env.cleanup();
+		}
+	});
+
+	it("invalidates a warm formatter selection after an in-place config rewrite", async () => {
+		const { runPipeline } = await import("../../clients/pipeline.js");
+		vi.mocked(runPipeline).mockResolvedValue({
+			output: "",
+			hasBlockers: false,
+			isError: false,
+			fileModified: false,
+		});
+		const env = setupTestEnvironment("pi-lens-1603-rewrite-");
+		try {
+			const filePath = path.join(env.tmpDir, "init.lua");
+			const configPath = path.join(env.tmpDir, "stylua.toml");
+			fs.writeFileSync(configPath, "column_width = 100\n");
+
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			const deps = {
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: { addModifiedRange: () => {}, readTurnState: () => ({}) },
+				biomeClient: {},
+				ruffClient: {},
+				metricsClient: {},
+				resetLSPService: () => {},
+				agentBehaviorRecord: () => [],
+				formatBehaviorWarnings: () => "",
+			} as any;
+
+			expect(
+				(await getFormattersForFile(filePath, env.tmpDir)).map((f) => f.name),
+			).toEqual(["stylua"]);
+			readdirMock.mockClear();
+			expect(
+				(await getFormattersForFile(filePath, env.tmpDir)).map((f) => f.name),
+			).toEqual(["stylua"]);
+			expect(readdirMock).not.toHaveBeenCalled();
+
+			// Keep the same path and file name. Only the contents change in place.
+			fs.writeFileSync(configPath, "column_width = 120\n");
+			await handleToolResult({
+				...deps,
+				event: {
+					toolName: "write",
+					input: { path: configPath },
+					content: [{ type: "text", text: "rewritten" }],
+				},
+			});
+
+			readdirMock.mockClear();
+			expect(
+				(await getFormattersForFile(filePath, env.tmpDir)).map((f) => f.name),
+			).toEqual(["stylua"]);
+			// A warm stale entry would return above without walking ancestors.
+			expect(readdirMock.mock.calls.length).toBeGreaterThan(0);
+		} finally {
+			clearFormatterRuntimeState();
+			env.cleanup();
+		}
+	});
+
+	it("invalidates formatter selection for config removal and changedFiles side effects", async () => {
+		const { runPipeline } = await import("../../clients/pipeline.js");
+		vi.mocked(runPipeline).mockResolvedValue({
+			output: "",
+			hasBlockers: false,
+			isError: false,
+			fileModified: false,
+		});
+		const env = setupTestEnvironment("pi-lens-1603-removal-");
+		try {
+			const filePath = path.join(env.tmpDir, "init.lua");
+			const sourcePath = path.join(env.tmpDir, "source.ts");
+			const configPath = path.join(env.tmpDir, "stylua.toml");
+			fs.writeFileSync(sourcePath, "const value = 1;\n");
+			fs.writeFileSync(configPath, "column_width = 100\n");
+
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			const deps = {
+				getFlag: () => false,
+				dbg: () => {},
+				runtime,
+				cacheManager: { addModifiedRange: () => {}, readTurnState: () => ({}) },
+				biomeClient: {},
+				ruffClient: {},
+				metricsClient: {},
+				resetLSPService: () => {},
+				agentBehaviorRecord: () => [],
+				formatBehaviorWarnings: () => "",
+			} as any;
+
+			await handleToolResult({
+				...deps,
+				event: {
+					toolName: "write",
+					input: { path: configPath },
+					content: [{ type: "text", text: "written" }],
+				},
+			});
+			expect(
+				(await getFormattersForFile(filePath, env.tmpDir)).map((f) => f.name),
+			).toEqual(["stylua"]);
+
+			fs.rmSync(configPath);
+			await handleToolResult({
+				...deps,
+				event: {
+					toolName: "write",
+					input: { path: configPath },
+					content: [{ type: "text", text: "removed" }],
+				},
+			});
+			expect(await getFormattersForFile(filePath, env.tmpDir)).toEqual([]);
+
+			fs.writeFileSync(configPath, "column_width = 120\n");
+			await handleToolResult({
+				...deps,
+				event: {
+					toolName: "write",
+					input: { path: configPath },
+					content: [{ type: "text", text: "written" }],
+				},
+			});
+			expect(
+				(await getFormattersForFile(filePath, env.tmpDir)).map((f) => f.name),
+			).toEqual(["stylua"]);
+
+			fs.rmSync(configPath);
+			vi.mocked(runPipeline).mockResolvedValue({
+				output: "",
+				hasBlockers: false,
+				isError: false,
+				fileModified: false,
+				changedFiles: [configPath],
+			});
+			await handleToolResult({
+				...deps,
+				event: {
+					toolName: "write",
+					input: { path: sourcePath },
+					content: [{ type: "text", text: "source changed" }],
+				},
+			});
+			expect(await getFormattersForFile(filePath, env.tmpDir)).toEqual([]);
+		} finally {
+			clearFormatterRuntimeState();
+			env.cleanup();
+		}
+	});
+
 	it("invalidates the ignore matcher through handleToolResult", async () => {
 		const { runPipeline } = await import("../../clients/pipeline.js");
 		vi.mocked(runPipeline).mockResolvedValue({

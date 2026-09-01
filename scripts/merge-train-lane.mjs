@@ -4,7 +4,10 @@
 // .github/workflows/merge-train-lane.yml for the triggers and permissions.
 
 import { appendFileSync } from "node:fs";
-import { runMergeLane } from "./lib/merge-train-lane.mjs";
+import {
+	reconcilePostMergeValidations,
+	runMergeLane,
+} from "./lib/merge-train-lane.mjs";
 
 async function main() {
 	const repository = process.env.GITHUB_REPOSITORY;
@@ -33,11 +36,29 @@ async function main() {
 	const approvers =
 		configuredApprovers.length > 0 ? configuredApprovers : [owner];
 
+	const reconciliations = await reconcilePostMergeValidations({
+		fetcher,
+		owner,
+		repo,
+	});
 	const results = await runMergeLane({ fetcher, owner, repo, approvers });
 
 	const lines = [
-		`Merge train: evaluated ${results.length} approved PR record(s).`,
+		`Merge train: reconciled ${reconciliations.length} merged PR record(s); evaluated ${results.length} approved PR record(s).`,
 	];
+	for (const reconciliation of reconciliations) {
+		if (!reconciliation.sha && reconciliation.number === null) {
+			lines.push(
+				`- post-merge reconciliation: ERROR: ${reconciliation.errors.join("; ")}`,
+			);
+			continue;
+		}
+		if (!reconciliation.dispatched && reconciliation.errors.length === 0)
+			continue;
+		lines.push(
+			`- post-merge #${reconciliation.number} ${reconciliation.sha ?? "unknown SHA"}: ${reconciliation.dispatched ? "DISPATCHED" : "ERROR"}${reconciliation.errors.length > 0 ? `: ${reconciliation.errors.join("; ")}` : ""}`,
+		);
+	}
 	for (const r of results) {
 		let verdict = `holding — ${r.reason}`;
 		if (r.merged) verdict = `MERGED (${r.method})`;
@@ -63,7 +84,10 @@ async function main() {
 
 	// Same benign/fatal split as the warden: a 409 from a head that moved
 	// mid-cycle is the guard working, not a lane failure.
-	if (results.some((r) => r.errors.some((e) => !e.benign)))
+	if (
+		reconciliations.some((r) => r.errors.length > 0) ||
+		results.some((r) => r.errors.some((e) => !e.benign))
+	)
 		process.exitCode = 1;
 }
 

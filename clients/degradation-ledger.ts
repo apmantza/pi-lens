@@ -100,6 +100,8 @@ export type DegradationKind =
 	| "lsp-diagnostics-timeout"
 	| "lsp-scanner-coverage-gap"
 	| "lsp-notify-inflight-stall"
+	/** A busy notify-stall discriminator was deferred; detail is rising-edge bounded. */
+	| "lsp-notify-stall-cpu-busy"
 	/** A didChange content mirror was recorded behind a newer document version. */
 	| "lsp-document-send-order"
 	| "bus-stale"

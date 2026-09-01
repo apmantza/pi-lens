@@ -127,8 +127,8 @@ function isLspSpawnHeavy(source: string): boolean {
 
 /**
  * Deliberate, reason-carrying exceptions (#2344 census, 2026-08-29). The
- * pre-existing population of real-child tests is 19; 16 stay in the default
- * project. Each reason names the structural reason it does not carry the
+ * pre-existing population of real-child tests is 19; 4 are phased and 15 are
+ * exempted. Each reason names the structural reason it does not carry the
  * lane's budget shape (already-routed-out, seam-self-test, or no contended
  * first-diagnostics wait). `auditRegistry` enforces the reason length and
  * reds any exemption whose file stops being a candidate (#1735).
@@ -142,6 +142,8 @@ const SPAWN_EXEMPTIONS: Readonly<Record<string, string>> = {
 		"real child exit-cause ledger cases; the fixture self-exits on a short delay, no handshake-then-diagnostics wait to starve",
 	"tests/clients/lsp/client-retention-process-scope.test.ts":
 		"real clients across two module instances to prove process-scope retention; handshake only against the instant fixture, no contention budget",
+	"tests/clients/lsp/service-notify-cpu-liveness.test.ts":
+		"real wedged child and CPU sampling run in the serialized wall-clock-budget phase; the lower-bound wedge assertion needs that quiet phase",
 	"tests/clients/lsp/initialize-timeout-backstop.test.ts":
 		"POSIX-only real-child initialize-timeout backstop; waits on a 50ms timeout firing then sleeps past kill escalation — deterministic and short",
 	"tests/clients/lsp/launch.test.ts":

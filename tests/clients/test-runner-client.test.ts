@@ -945,6 +945,108 @@ describe("test-runner-client", () => {
 			expect(result.duration).toBe(2010);
 		});
 
+		it("parses an ANSI-colored pytest summary through the real output parser", () => {
+			const result = (new TestRunnerClient(false) as any).parsePytestOutput(
+				"\u001b[1m2 failed, 1 passed, 3 skipped in 2.19s\u001b[0m",
+				"",
+				1,
+				"/tmp/test_foo.py",
+				"/tmp",
+				"pytest",
+			);
+
+			expect(result.passed).toBe(1);
+			expect(result.failed).toBe(2);
+			expect(result.skipped).toBe(3);
+			expect(result.duration).toBe(2190);
+		});
+
+		it("ignores a count-and-duration lookalike after the genuine summary", () => {
+			const result = (new TestRunnerClient(false) as any).parsePytestOutput(
+				[
+					"===== 2 passed, 1 failed in 1.25s =====",
+					"post-run: 55432 failed in 4s",
+				].join("\n"),
+				"",
+				1,
+				"/tmp/test_foo.py",
+				"/tmp",
+				"pytest",
+			);
+
+			expect(result.passed).toBe(2);
+			expect(result.failed).toBe(1);
+			expect(result.duration).toBe(1250);
+		});
+
+		it("uses the terminal summary when output repeats summary-looking lines", () => {
+			const result = (new TestRunnerClient(false) as any).parsePytestOutput(
+				[
+					"===== 1 passed in 0.10s =====",
+					"===== 2 failed, 3 passed in 0.20s =====",
+				].join("\n"),
+				"",
+				1,
+				"/tmp/test_foo.py",
+				"/tmp",
+				"pytest",
+			);
+
+			expect(result.passed).toBe(3);
+			expect(result.failed).toBe(2);
+			expect(result.duration).toBe(200);
+		});
+
+		it("parses a CRLF-terminated pytest summary", () => {
+			const result = (new TestRunnerClient(false) as any).parsePytestOutput(
+				"===== 2 passed, 1 skipped in 0.50s =====\r\n",
+				"",
+				0,
+				"/tmp/test_foo.py",
+				"/tmp",
+				"pytest",
+			);
+
+			expect(result.passed).toBe(2);
+			expect(result.skipped).toBe(1);
+			expect(result.duration).toBe(500);
+		});
+
+		it("recognizes pytest's outcome token variants in one summary", () => {
+			const result = (new TestRunnerClient(false) as any).parsePytestOutput(
+				"===== 4 passed, 2 failed, 3 skipped, 1 error, 5 warnings, 6 deselected, 7 xfailed, 8 xpassed in 3.21s =====",
+				"",
+				1,
+				"/tmp/test_foo.py",
+				"/tmp",
+				"pytest",
+			);
+
+			expect(result.passed).toBe(4);
+			expect(result.failed).toBe(2);
+			expect(result.skipped).toBe(3);
+			expect(result.duration).toBe(3210);
+		});
+
+		it("recognizes rerun outcomes with ANSI, CRLF, and a trailing lookalike", () => {
+			const result = (new TestRunnerClient(false) as any).parsePytestOutput(
+				[
+					"\u001b[1m===== 1 rerun, 2 failed, 3 passed, 4 skipped in 0.50s =====\u001b[0m\r",
+					"post-run: 55432 failed in 4s",
+				].join("\n"),
+				"",
+				1,
+				"/tmp/test_foo.py",
+				"/tmp",
+				"pytest",
+			);
+
+			expect(result.passed).toBe(3);
+			expect(result.failed).toBe(2);
+			expect(result.skipped).toBe(4);
+			expect(result.duration).toBe(500);
+		});
+
 		it("rounds the mix test summary duration", () => {
 			const result = (new TestRunnerClient(false) as any).parseMixTestOutput(
 				"Finished in 2.01 seconds (0.00s async, 2.01s sync)\n3 tests, 0 failures",

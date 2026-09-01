@@ -522,7 +522,8 @@ scanner accepts each write in milliseconds, so every file still gets scanned,
 and only a scanner that cannot accept a write inside the budget makes a waiter
 give up. A write that lands after its deadline but inside the wedge window
 retracts the timeout it was charged for (slow is not broken); one nothing
-accepts for the whole wedge window keeps its strike and demotes the server, so
+accepts for the whole wedge window keeps its strike and demotes the server (see
+the #2358 paragraph below for the CPU-liveness guard on that teardown), so
 the gate cannot defer a dead input path forever. Its queue wait uses the
 effective `primaryServerWaitFloorMs`, which includes the caller's
 `maxClientWaitMs` and any primary server `clientWaitTimeoutMs` override, so a
@@ -551,6 +552,49 @@ and deferral open BEFORE any wait, so `auxiliaryCoverageGap` (which reads wait
 outcomes) cannot see them on the `clientScope: "all"` sweep path, which emits no
 outcome rows at all — they are unioned into `unconfirmedServerIds` separately.
 (#1459)
+
+**The notify-stall teardown tells dead from busy before it kills (#2358).** The
+wedge timer armed by `claimAuxNotifySlot` and the #743 streak ladder both call
+the same `demoteForNotifyStall`, and both now decide through the CPU-liveness
+discriminator. The wedged-write window is ADAPTIVE: max(fixed floor, k x EWMA
+per-write drain latency x unacked depth), capped at `notifyWedgedCapMs()`
+(default 60s). The EWMA (`auxNotifyDrainLatencyEwma`, `noteAuxNotifyDrainLatency`)
+is folded only from DRAINED notify barriers — a round-trip that proves the
+server processed its backlog — so a scanner that historically answers slowly
+earns patience instead of dying by construction. Past the window, the server's
+live process tree is sampled twice across `notifyStallCpuSampleMs()`
+(`notifyStallCpuVerdict` -> `sampleProcessTreeCpuPercent`, `clients/
+resource-sampler.ts`); a BUSY server is left alone and the timer re-arms, and
+only a flat or unmeasured one is torn down. The hard cap still kills a server
+whose CPU burns past its deadline: the replacement is the self-heal. The record
+`lsp_notify_backpressure_broken` names which discriminator fired
+(`budget-exceeded-cpu-flat`, `budget-exceeded`, or `cap-exceeded`) and carries
+the measured `budgetMs`, the `ewmaInputMs` input, the `unackedDepth`, and the
+`cpuVerdict`, so a production kill is classifiable from its own log line. A
+write that lands inside the adaptive window retracts the strike it was charged
+(the retraction ceiling matches the wedge window). The unacked ceiling stays
+pure backpressure; only the teardown decision gained discrimination. A busy
+defer emits the bounded `lsp_notify_stall_cpu_busy` record, one per re-arm
+cycle. Clients expose their live pid through the optional `getProcessPid`
+capability; a client without it (a test double, a legacy client) keeps the
+pre-#2358 demote-at-budget behavior. #2358's prerequisite is its own Windows
+fix: `clients/resource-sampler.ts` resolves `powershell.exe` through the shared
+`windowsExe` seam (System32) — the old path omitted `System32`, so every
+Windows CPU sample read as null and the discriminator was blind there.
+
+The notify-stall token is generation-owned: replacement, idle eviction, capacity
+eviction, and reset release its timer before state changes. Async decisions check
+the exact client object before sampling, after sampling, and before demotion or
+re-arm. Windows CPU history includes CIM `CreationDate`, so PID reuse starts a
+fresh rate window. A target missing from either sample or a failed query is
+`unmeasured`; missing descendants remain partial but valid evidence. Busy detail
+telemetry is rising-edge bounded per client/file identity, with repeat counts and
+dropped detail retained by the degradation ledger. The unmeasured verdict maps to
+the supported `budget-exceeded` discriminator, never to a fabricated flat result.
+Windows and POSIX samples validate finite, nonnegative RSS and CPU counters before
+they enter measured evidence; counter resets retire the baseline. Busy decision rows
+are excluded from `lastPhase` attribution because they describe an outcome, not host
+work. CPU identity history is capped at 4096 entries with oldest-entry eviction.
 
 **A touch's `inconclusive` verdict is PRIMARY-scoped; an auxiliary can only
 narrow it.** `resolveTouchVerdict` (`clients/lsp/diagnostic-binding.ts`) owns the
@@ -783,7 +827,13 @@ answers a same-cwd lookup from `detectionCache` before it reaches a probe, so
 dropping the latches without the selection cache leaves the previous session's
 verdict standing in the working directory. Formatter selection emits
 `formatter_selected` with `outcome: "hit" | "miss"` on both cache hits and
-re-detections so hit rate is computable from `latency.log`. (#1895, #1940)
+re-detections so hit rate is computable from `latency.log`. The first lookup for
+a cwd computes one session-generation config signature; warm extension lookups
+do no config polling. The write-result seam calls
+`invalidateFormatterCacheForPath` for config create, change, and remove events,
+which clears the signature and selection state together. External editor
+changes remain outside that seam and are rechecked at session reset. (#1895,
+#1940, #1603)
 
 Helm chart linting uses the shared workspace-topology `Chart.yaml` marker. YAML
 and `.tpl` edits inside a chart dispatch one canonical-root-deduplicated,
@@ -877,6 +927,10 @@ not make those callbacks async without updating their ordering contract/tests.
 **Truncation guards read the output-cap predicate before status handling (#2100).** `safeSpawnAsync` only sets `outputTruncated` when a call site passes `maxOutputBytes`. `truncatedByOutputCap` (`clients/spawn-output-cap.ts`) is the only guard for those incomplete bytes. It runs before failure or status handling and excludes timeout and abort, which own their classifications even when the output was capped. `stopForOutputLimit` separately records `killedForOutputCap` when it starts ending the child. POSIX commonly returns null status plus `SIGTERM`; Windows returns status 1 with no signal or failure. Callers that need to know whether pi-lens ended the process use `killedForOutputCap`, never either platform exit shape. This distinction matters to helm render: a cap-killed render leaves an unchecked prefix, while a completed render with truncated progress output still validates its output tree. A `maxOutputBytes` needs a rationale comment and a spawn-options cap test. Test POSIX and Windows cap-kill builders plus timeout and abort variants (`tests/support/spawn-shapes.ts`), anchored to a live cross-platform invariant in `safe-spawn-ambient-signal.test.ts`. The predicate stays dependency-free because shared runner tests mock `safe-spawn.js` directly. `classifyRunOutcome` uses output-cap evidence only to improve ledger wording, never to change outcome kind.
 
 **Markdownlint default-config invariant (#833):** the Markdown dispatch runner invokes `markdownlint-cli2` with the package-owned `config/markdownlint/core.json` when no project markdownlint config is found; that config disables MD013 and sets MD024 to `siblings_only` so intentional repeated category headings in changelogs are allowed while duplicate sibling headings remain violations. A project config is left to markdownlint-cli2 unchanged (no runner-level rule overrides). `hasMarkdownlintConfig` must recognize every config filename supported by the installed markdownlint-cli2, including the `.markdownlint-cli2.*` and `.markdownlint.{jsonc,json,yaml,yml,cjs,mjs}` families.
+
+**Biome bundled-config decorator-metadata invariant (#2385):** the bundled fallback `config/biome/core.jsonc` disables `style/useImportType`. The rule's safe fix rewrites a value import used only in type positions into `import type`, which erases the runtime binding that `experimentalDecorators` + `emitDecoratorMetadata` still need: verified against real Biome 2.5.9 plus tsc, the emitted `design:type` metadata changes from the imported class to `Function`, breaking decorator-based dependency injection. Biome's own rule docs recommend disabling the rule for such repos. An explicit project `biome.json(c)` remains authoritative: `biomeConfigArgs` passes no flag there, so a user-enabled `useImportType` still applies. Do not re-enable the rule in the bundled config without solving the metadata hazard; the lint and autofix surfaces both lose this one advisory, and no `skipReason` is added because nothing is skipped — the rule simply never fires. `tests/clients/biome-config-decorator-metadata.test.ts` drives the real pinned binary through `BiomeClient.fixFileAsync` and pins the preservation, the intact recommended ruleset, and the user-config authority; removing the override or the fallback flag turns it red. The sibling bundled fallbacks are not members of the hazard class: the ruff fallback selects no flake8-type-checking rules and `ruff-client.ts` never passes `--unsafe-fixes` (verified with real ruff on an annotation-only import), and the markdownlint fallback touches no runtime semantics.
+
+**Template-bearing extensions select no unconfigured formatter (#2384):** `FORMATTER_POLICY_BY_EXTENSION` sets `defaultWhenUnconfigured: false` for `.html`, `.htm`, `.yaml`, and `.yml` (the `.md`/#89 precedent). Real Prettier reinterprets template markers as code — an HTML `<script>{{JS}}</script>` embed became nested JavaScript blocks, and a Helm `{{ .Values.x }}` became `{ { .Values.x } }` (verified against prettier 3.3.3). A project `.prettierrc` or `package.json` `prettier` field opts in through the ordinary explicit-config branch; oxfmt's explicit-config path is unchanged. Do not restore a smart default for these extensions without solving marker preservation; a one-line fixture cannot prove safety because it hits `indentationArgs`/SKIP_FORMATTING before the tool runs.
 
 ### Rules and analyzers
 
@@ -1098,6 +1152,12 @@ immediate `ctx.isIdle()` recheck. The durable `test-runner-findings` cache stays
 available to pull diagnostics and the commit guard; unavailable or failed host
 entry capabilities never fall back to `sendMessage`. (#2366)
 
+Pytest aggregate counts come only from pytest's final outcome summary line
+(#2408), never from a whole-output search. Tracebacks, service errors, assertion
+messages, and captured logs can contain unrelated phrases such as `port 55432
+failed`; summary detection and count extraction must remain bound to the same
+line.
+
 Host-ready delay is a process-lifetime measurement from load-complete to the
 first real `session_start`. The extension consumes that anchor once at the
 entry point; later sessions emit no host-ready phase because no clean
@@ -1206,9 +1266,14 @@ one slot map and flattening each affected token lane once. File removal falls
 back to a full serialization because it changes slot identity; replacements
 retain their previous wire order. `serializeWordIndex` clears dirty markers only
 after it has produced the view, so deleting the dirty mark makes the stale-
-persist test fail. Snapshot stringify and gzip remain in the existing
-project-snapshot worker; do not send a structured-clone object graph to a new
-worker.
+persist test fail. A reload seeds the flat wire cache only when files, numeric
+metadata, postings, and the optional forward lanes are canonical and mutually
+consistent; sanitized or partial snapshots leave it unseeded so the first
+persist publishes `serializeWordIndexFull` output. The reload check keeps the
+valid wire path structural and uses the duplicate and per-file consistency
+accumulators to reserve deep sanitization for suspicious snapshots. Snapshot
+stringify and gzip remain in the existing project-snapshot worker; do not send a
+structured-clone object graph to a new worker.
 
 Memory-sample subsystem records report the axis that grows and at least one
 byte-denominated estimate. `reviewGraph.residentBytes` uses bounded node/edge
@@ -1388,6 +1453,32 @@ re-gates a fix round, so the lane stores no "approved at SHA" state that could
 drift; the merge call passes `sha` so a head that moves mid-cycle 409s instead
 of merging on a stale verdict. Only the maintainer applies the label, so the
 adversarial-review-first policy is unchanged; removing the label aborts.
+
+After a successful merge, `runMergeLane` reads a strict 40-hex merge SHA and
+sends a `merge-train-post-merge` `repository_dispatch` payload containing
+`{repository, sha, pr_number}`. The lane uses this event because its
+`GITHUB_TOKEN` merge suppresses the ordinary `push` event. Transient HTTP
+failures and ambiguous timeouts receive one bounded retry with the same SHA;
+the scheduled lane also reconciles recent bot-merged PRs from a dedicated
+GraphQL connection ordered by `UPDATED_AT` descending. That reader follows
+cursors only until the last `updatedAt` is strictly older than its merge window,
+preserves equality at the cutoff, and fails closed on ordering, cursor, shape,
+or page-cap violations. It reads `mergedAt`, `mergedBy`, and the exact merge
+OID in the same record, rather than relying on the REST pull-list's incomplete
+merge identity. It waits through a
+bounded grace period, retries missing validation across process restarts, and
+opens a later six-hour retry generation after two attempts exhaust one
+generation, without a hot loop. It accepts completion only from bot-authored
+exact-SHA terminal markers. A final
+failure leaves the merge landed but records a fatal post-merge-validation
+error. The master-push validation workflows (`ci.yml`, `lint.yml`,
+`install-smoke.yml`, and `labels.yml`) gate all repository actions behind a
+dispatch prerequisite that validates repository identity, strict SHA and PR
+number shape, trusted workflow-revision checkout, authenticated commit
+resolution, and ancestry to `master`; downstream jobs then check out the exact
+payload SHA. They use per-workflow SHA concurrency with cancellation so duplicate
+dispatches cannot validate one commit concurrently. A missing or invalid merge
+SHA means no dispatch, and the lane must never report that verification ran.
 
 Four facts about THIS repository the lane must keep matching, each probed live
 rather than assumed (review round 1 on PR #2191, all four were wrong first):
@@ -1741,6 +1832,12 @@ a *second host adapter* alongside `index.ts`. Design rationale + progress: `mcp.
   delayed warmup child phases in `latency.log`; concurrent secondaries emit only
   `concurrent_session_bind`. Keep logging fire-and-forget and preserve contiguous
   top-level timing so quick-start child durations remain within ~10 ms of total.
+  `session_start_total.metadata.classification` carries the accepted start's
+  `primary` or `sequential-replacement` decision, and `sameRoot` carries
+  `true`, `false`, or the explicit bounded value `"unknown"`; never omit the
+  field when root identity was unavailable because NDJSON serialization drops
+  `undefined`. The quick and full writers share this durable shape, and strict
+  readers must accept only those three root values. (#2129)
   #1019: `session_start_log_cleanup` is now emitted from a deferred `setImmediate`
   (its `metadata.deferred:true`), NOT synchronously in the awaited chain, so it is
   no longer a top-level critical-path phase — do not re-add it to the contiguous

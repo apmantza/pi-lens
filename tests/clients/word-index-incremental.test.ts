@@ -14,6 +14,7 @@ import {
 	removeWordIndexDocumentAsync,
 	searchWordIndex,
 	serializeWordIndex,
+	getLastWordIndexSerializeWork,
 	updateWordIndexDocument,
 	updateWordIndexDocumentForEdit,
 	type WordIndex,
@@ -64,6 +65,212 @@ describe("updateWordIndexDocument / removeWordIndexDocument", () => {
 		]);
 		expect(wordIndexPostingHits(restored!, "untouched")).toEqual([
 			{ file: "b.ts", line: 1 },
+		]);
+	});
+
+	it("keeps persisting edits after a session-start reload from a snapshot (#2068)", () => {
+		const built = buildWordIndex([
+			{ path: "a.ts", content: "oldalpha" },
+			{ path: "b.ts", content: "untouched" },
+		]);
+		const restored = deserializeWordIndex(serializeWordIndex(built));
+		expect(restored).not.toBeNull();
+
+		// Mirrors session start's own first save right after deserialize
+		// (`saveRuntimeProjectSnapshot`), which primes the wire cache before
+		// any further edit happens in this process.
+		serializeWordIndex(restored!);
+
+		updateWordIndexDocument(restored!, { path: "a.ts", content: "newalpha" });
+
+		const roundTripped = deserializeWordIndex(serializeWordIndex(restored!));
+		expect(roundTripped).not.toBeNull();
+		expect(wordIndexPostingHits(roundTripped!, "oldalpha")).toEqual([]);
+		expect(wordIndexPostingHits(roundTripped!, "newalpha")).toEqual([
+			{ file: "a.ts", line: 1 },
+		]);
+	});
+
+	it("does not republish sanitized snapshot lanes from the reload cache", () => {
+		const valid = serializeWordIndex(
+			buildWordIndex([{ path: "a.ts", content: "good" }]),
+		);
+		const malformed = {
+			...valid,
+			postings: [
+				["GOOD", [0, 1]],
+				["good", [0, 1, 999, 1]],
+			] as Array<[string, number[]]>,
+			docLengths: ["not-a-length"] as unknown as number[],
+			totalTokens: Number.NaN,
+			indexedFileCount: 99,
+			truncated: "yes" as unknown as boolean,
+			fileMtimes: [Number.POSITIVE_INFINITY],
+			fileSizes: [null] as unknown as number[],
+			forward: [[0, [["good", -1]]]] as Array<
+				[number, Array<[string, number]>]
+			>,
+		};
+
+		const restored = deserializeWordIndex(malformed);
+		expect(restored).not.toBeNull();
+		expect(wordIndexPostingHits(restored!, "good")).toEqual([
+			{ file: "a.ts", line: 1 },
+		]);
+		expect(wordIndexPostingHits(restored!, "GOOD")).toEqual([]);
+
+		const output = serializeWordIndex(restored!);
+		expect(getLastWordIndexSerializeWork()).toMatchObject({
+			tookFullPath: true,
+		});
+		expect(output.postings).toEqual([["good", [0, 1]]]);
+		expect(output.docLengths).toEqual([0]);
+		expect(output.totalTokens).toBe(0);
+		expect(output.indexedFileCount).toBe(1);
+		expect(output.truncated).toBe(false);
+		expect(output.fileMtimes).toEqual([0]);
+		expect(output.fileSizes).toEqual([0]);
+		expect(output.forward).toEqual([[0, [["good", 1]]]]);
+	});
+
+	it("seeds the incremental cache for a canonical snapshot", () => {
+		const wire = serializeWordIndex(
+			buildWordIndex([{ path: "a.ts", content: "good" }]),
+		);
+		const restored = deserializeWordIndex(wire);
+		expect(restored).not.toBeNull();
+
+		serializeWordIndex(restored!);
+		expect(getLastWordIndexSerializeWork()).toMatchObject({
+			tookFullPath: false,
+			affectedTokenCount: 0,
+		});
+	});
+
+	it("keeps the fast path for valid historical posting order", () => {
+		const index = buildWordIndex([
+			{ path: "a.ts", content: "shared alpha" },
+			{ path: "b.ts", content: "shared beta" },
+		]);
+		serializeWordIndex(index);
+		updateWordIndexDocument(index, { path: "a.ts", content: "shared gamma" });
+		const wire = serializeWordIndex(index);
+		expect(wire.postings.find(([token]) => token === "shared")?.[1]).toEqual([
+			1, 1, 0, 1,
+		]);
+
+		const restored = deserializeWordIndex(wire);
+		expect(restored).not.toBeNull();
+		serializeWordIndex(restored!);
+		expect(getLastWordIndexSerializeWork()?.tookFullPath).toBe(false);
+	});
+
+	it("takes the full path for aliases and partial legacy snapshots", () => {
+		const valid = serializeWordIndex(
+			buildWordIndex([{ path: "a.ts", content: "good" }]),
+		);
+		const aliased = {
+			...valid,
+			files: ["src/a.ts", "src\\a.ts"],
+			docLengths: [1, 1],
+			fileMtimes: [0, 0],
+			fileSizes: [4, 4],
+			indexedFileCount: 2,
+			postings: [["good", [0, 1, 1, 1]]] as Array<[string, number[]]>,
+			forward: [
+				[0, [["good", 1]]],
+				[1, [["good", 1]]],
+			] as Array<[number, Array<[string, number]>]>,
+		};
+		const restoredAlias = deserializeWordIndex(aliased);
+		expect(restoredAlias).not.toBeNull();
+		expect(wordIndexPostingHits(restoredAlias!, "good")).toEqual([
+			{ file: "src/a.ts", line: 1 },
+		]);
+		const aliasOutput = serializeWordIndex(restoredAlias!);
+		expect(getLastWordIndexSerializeWork()?.tookFullPath).toBe(true);
+		expect(aliasOutput.indexedFileCount).toBe(aliasOutput.files.length);
+		expect(JSON.stringify(aliasOutput)).not.toBe(JSON.stringify(aliased));
+
+		const legacy = { ...valid } as Record<string, unknown>;
+		delete legacy.fileSizes;
+		delete legacy.forward;
+		const restoredLegacy = deserializeWordIndex(legacy as never);
+		expect(restoredLegacy).not.toBeNull();
+		const legacyOutput = serializeWordIndex(restoredLegacy!);
+		expect(getLastWordIndexSerializeWork()?.tookFullPath).toBe(true);
+		expect(legacyOutput.fileSizes).toEqual([0]);
+		expect(legacyOutput.forward).toBeUndefined();
+
+		const missingSizes = { ...valid } as Record<string, unknown>;
+		delete missingSizes.fileSizes;
+		const restoredMissingSizes = deserializeWordIndex(missingSizes as never);
+		expect(restoredMissingSizes).not.toBeNull();
+		const missingSizesOutput = serializeWordIndex(restoredMissingSizes!);
+		expect(getLastWordIndexSerializeWork()?.tookFullPath).toBe(true);
+		expect(missingSizesOutput.fileSizes).toEqual([0]);
+		expect(missingSizesOutput.forward).toEqual(valid.forward);
+
+		const missingForward = { ...valid } as Record<string, unknown>;
+		delete missingForward.forward;
+		const restoredMissingForward = deserializeWordIndex(
+			missingForward as never,
+		);
+		expect(restoredMissingForward).not.toBeNull();
+		const missingForwardOutput = serializeWordIndex(restoredMissingForward!);
+		expect(getLastWordIndexSerializeWork()?.tookFullPath).toBe(true);
+		expect(missingForwardOutput.fileSizes).toEqual(valid.fileSizes);
+		expect(missingForwardOutput.forward).toBeUndefined();
+		expect(
+			updateWordIndexDocument(restoredMissingForward!, {
+				path: "a.ts",
+				content: "changed",
+			}),
+		).toBe(false);
+		const afterUnsupportedEdit = serializeWordIndex(restoredMissingForward!);
+		expect(afterUnsupportedEdit).toEqual(missingForwardOutput);
+	});
+
+	it("does not cache duplicate or per-file-inconsistent postings", () => {
+		const valid = serializeWordIndex(
+			buildWordIndex([
+				{ path: "a.ts", content: "shared" },
+				{ path: "b.ts", content: "shared" },
+			]),
+		);
+		const duplicate = {
+			...valid,
+			postings: [["shared", [0, 1, 0, 1]]] as Array<[string, number[]]>,
+			forward: [
+				[0, [["shared", 2]]],
+				[1, []],
+			] as Array<[number, Array<[string, number]>]>,
+		};
+
+		const restored = deserializeWordIndex(duplicate);
+		expect(restored).not.toBeNull();
+		expect(wordIndexPostingHits(restored!, "shared")).toEqual([
+			{ file: "a.ts", line: 1 },
+		]);
+		const output = serializeWordIndex(restored!);
+		expect(getLastWordIndexSerializeWork()?.tookFullPath).toBe(true);
+		expect(output.postings).toEqual([["shared", [0, 1]]]);
+		expect(output.forward).toEqual([
+			[0, [["shared", 1]]],
+			[1, []],
+		]);
+
+		const inconsistent = {
+			...valid,
+			postings: [["shared", [0, 1, 0, 2]]] as Array<[string, number[]]>,
+		};
+		const restoredInconsistent = deserializeWordIndex(inconsistent);
+		expect(restoredInconsistent).not.toBeNull();
+		const inconsistentOutput = serializeWordIndex(restoredInconsistent!);
+		expect(getLastWordIndexSerializeWork()?.tookFullPath).toBe(true);
+		expect(inconsistentOutput.forward).toEqual([
+			[0, [["shared", 2]]],
+			[1, []],
 		]);
 	});
 

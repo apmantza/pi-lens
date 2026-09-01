@@ -14,6 +14,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { BoundedLruCache } from "./bounded-cache.js";
+import { createGenerationSource } from "./generation-guard.js";
 import { normalizeMapKey } from "./path-utils.js";
 import { TERRAGRUNT_FILENAMES } from "./file-kinds.js";
 import {
@@ -183,11 +184,44 @@ async function findUp(
 	let currentDir = startDir;
 
 	while (currentDir !== stopDir) {
-		for (const target of targets) {
-			const checkPath = path.join(currentDir, target);
-			if (await fileExists(checkPath)) {
-				found.push(checkPath);
+		// One `readdir` per directory instead of one `access` per target: the
+		// per-target probe made this loop's cost O(targets), so a long target
+		// list (e.g. `FORMATTER_CONFIG_FILES`) paid for every entry at every
+		// ancestor directory even when almost none of them exist (#1603).
+		let entries: string[];
+		try {
+			entries = await fs.readdir(currentDir);
+		} catch {
+			entries = [];
+		}
+		if (entries.length > 0) {
+			// On default-case-insensitive platforms the old `fs.access` probe
+			// matched a config file regardless of on-disk casing; fold so the
+			// readdir membership check keeps that behavior.
+			const foldCase =
+				process.platform === "win32" || process.platform === "darwin";
+			const entrySet = new Set(
+				foldCase ? entries.map((e) => e.toLowerCase()) : entries,
+			);
+			for (const target of targets) {
+				// Nested candidates (for example node_modules/.bin/biome) do
+				// not appear as direct readdir members. They retain the old
+				// bounded candidate probe; direct names use the O(depth + matches)
+				// directory-membership path above.
+				if (target.includes("/") || target.includes("\\")) continue;
+				if (entrySet.has(foldCase ? target.toLowerCase() : target)) {
+					const candidate = path.join(currentDir, target);
+					// Directory membership is only a cheap candidate filter. Keep the
+					// old access check for matched entries so dangling links and entries
+					// that cannot be read do not become config evidence (#1603 R2).
+					if (await fileExists(candidate)) found.push(candidate);
+				}
 			}
+		}
+		for (const target of targets) {
+			if (!target.includes("/") && !target.includes("\\")) continue;
+			const candidate = path.join(currentDir, target);
+			if (await fileExists(candidate)) found.push(candidate);
 		}
 		const parent = path.dirname(currentDir);
 		if (parent === currentDir) break;
@@ -195,6 +229,15 @@ async function findUp(
 	}
 
 	return found;
+}
+
+/** Test-only access to the real filesystem walker and its candidate filter. */
+export function _findUpForTests(
+	targets: string[],
+	startDir: string,
+	stopDir?: string,
+): Promise<string[]> {
+	return findUp(targets, startDir, stopDir);
 }
 
 const WHICH_BUDGET_MS = 5000;
@@ -1548,10 +1591,19 @@ const detectionCache = new BoundedLruCache<
 	string,
 	{ signature: string; entries: Map<string, string[]> }
 >(32);
+// The signature is immutable for a cache generation. This memo is separate
+// from detectionCache because a cwd can have several extension entries, and a
+// warm lookup must not repeat the ancestor walk or stat matched configs.
+const formatterSignatureFlights = new Map<
+	string,
+	{ promise: Promise<string> }
+>();
+const formatterCacheGeneration = createGenerationSource("formatter-cache");
 
 // These are the formatter configuration files consulted by the policy helpers
-// above. Their metadata is part of detection cache identity: changing a file
-// must re-run detection even when PATH and installed tools are unchanged. A
+// above. Their metadata is captured by the cold detection signature. The
+// write-result seam invalidates that signature when a config path changes, so
+// detection re-runs even when PATH and installed tools are unchanged. A
 // filename a `has*Config` check reads but this list omits is invisible to the
 // cache: the signature never moves when that file is added, so a project that
 // opts in AFTER the first `getFormattersForFile` call for its cwd keeps
@@ -1655,6 +1707,21 @@ async function formatterConfigSignature(cwd: string): Promise<string> {
 	return parts.join("|");
 }
 
+async function getFormatterConfigSignature(
+	cwd: string,
+	normalizedCwd: string,
+): Promise<string> {
+	const existing = formatterSignatureFlights.get(normalizedCwd);
+	if (existing) return existing.promise;
+	const promise = formatterConfigSignature(cwd).finally(() => {
+		const current = formatterSignatureFlights.get(normalizedCwd);
+		if (current?.promise === promise)
+			formatterSignatureFlights.delete(normalizedCwd);
+	});
+	formatterSignatureFlights.set(normalizedCwd, { promise });
+	return promise;
+}
+
 // --- Public API ---
 
 export async function getFormattersForFile(
@@ -1673,33 +1740,20 @@ export async function getFormattersForFile(
 		? `${normalizedCwd}:${ext}:${base}`
 		: `${normalizedCwd}:${ext}`;
 
-	const configSignature = await formatterConfigSignature(cwd);
-	// Check cache
+	// A warm entry is authoritative until the write-result seam invalidates its
+	// config path. This is the only way to make the warm path free of config
+	// polling while still reacting immediately to pi-authored create/remove/
+	// change events. External editor changes remain a documented session-boundary
+	// limitation, like other write-result-owned freshness seams.
 	let cached = detectionCache.get(normalizedCwd);
-	if (cached && cached.signature !== configSignature) {
-		// An EXISTING entry whose signature moved is the user telling us the world
-		// changed. Re-probe PATH too, so "install the tool, touch the config" still
-		// works within one session now that a durable absence latches (#1495).
-		// Scoped to a real change on purpose: keying this off "no entry yet" would
-		// drop every PATH verdict on the first save in each new directory, which in
-		// a monorepo means re-probing forever.
-		detectionCache.delete(normalizedCwd);
-		cached = undefined;
-		resetWhichLatches();
-	}
-	if (!cached) {
-		cached = { signature: configSignature, entries: new Map() };
-		detectionCache.set(normalizedCwd, cached);
-	}
-
-	if (cached.entries.has(cacheKey)) {
+	if (cached?.entries.has(cacheKey)) {
 		const enabledNames = cached.entries.get(cacheKey);
 		const selectedFormatterName =
 			enabledNames && enabledNames.length > 0 ? enabledNames[0] : null;
 		logLatency({
 			type: "phase",
 			phase: "formatter_selected",
-			filePath: filePath,
+			filePath,
 			durationMs: 0,
 			metadata: {
 				formatter: selectedFormatterName,
@@ -1710,8 +1764,28 @@ export async function getFormattersForFile(
 			},
 		});
 		if (!enabledNames || enabledNames.length === 0) return [];
-		// Return cached formatters by name (preserves priority order)
 		return ALL_FORMATTERS.filter((f) => enabledNames.includes(f.name));
+	}
+	if (!cached) {
+		const generation = formatterCacheGeneration.capture();
+		const configSignature = await getFormatterConfigSignature(
+			cwd,
+			normalizedCwd,
+		);
+		// An invalidation can happen while the first signature walk is in flight.
+		// Do not publish a pre-invalidation signature into the new generation.
+		if (!generation.isCurrent()) {
+			return getFormattersForFile(filePath, cwd);
+		}
+		// Another cold caller for this cwd can finish the shared signature flight
+		// first. Re-read the LRU before installing an object so the later caller
+		// merges its extension entry into the existing object instead of replacing
+		// the earlier entry.
+		cached = detectionCache.get(normalizedCwd);
+		if (!cached) {
+			cached = { signature: configSignature, entries: new Map() };
+			detectionCache.set(normalizedCwd, cached);
+		}
 	}
 
 	// Detect formatters for this extension (or exact filename, e.g. terragrunt.hcl)
@@ -1885,7 +1959,11 @@ export async function getFormattersForFile(
 
 	// Store the list of enabled formatter names in cache
 	const enabledNames = enabled.map((f) => f.name);
-	cached.entries.set(cacheKey, enabledNames);
+	// An invalidation may have removed or replaced this object while detection
+	// awaited a tool probe. Never repopulate the old generation.
+	if (detectionCache.get(normalizedCwd) === cached) {
+		cached.entries.set(cacheKey, enabledNames);
+	}
 	return enabled;
 }
 
@@ -1900,8 +1978,23 @@ export async function getFormattersForFile(
  * therefore re-arms every directory EXCEPT the one the user is working in.
  */
 export function clearFormatterCache(): void {
+	formatterCacheGeneration.bump();
+	formatterSignatureFlights.clear();
 	detectionCache.clear();
 	resetWhichLatches();
+}
+
+const formatterConfigBasenames = new Set(
+	FORMATTER_CONFIG_FILES.map((fileName) => fileName.toLowerCase()),
+);
+
+/** Invalidate selection when the write-result seam reports a config path. */
+export function invalidateFormatterCacheForPath(filePath: string): void {
+	const basename = filePath.includes("\\")
+		? path.win32.basename(filePath)
+		: path.basename(filePath);
+	if (!formatterConfigBasenames.has(basename.toLowerCase())) return;
+	clearFormatterCache();
 }
 
 /**
@@ -1930,8 +2023,7 @@ export function _getFormatterResetStateForTests(): {
 }
 
 export function clearFormatterRuntimeState(): void {
-	detectionCache.clear();
-	resetWhichLatches();
+	clearFormatterCache();
 	// NO `resetLazyInstallAttempts()` here (#1537 review F1). This function runs
 	// from `resetFormatService()`, which `handleTurnEnd` calls every turn — so
 	// clearing the lazy-install hold here made "held for the session" mean "held

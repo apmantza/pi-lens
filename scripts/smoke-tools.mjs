@@ -816,8 +816,8 @@ const FORMAT_FIXTURES = [
 		tools: ["shfmt"],
 	},
 	{
-		// css/html/yaml carry a smart-default formatter policy, so the formatter
-		// is auto-selected without project config (no .prettierrc/.biome needed).
+		// css keeps a smart-default formatter policy (biome), so the formatter
+		// is auto-selected without project config.
 		lang: "css",
 		dir: "tests/fixtures/format-smoke/css",
 		file: "messy.css",
@@ -825,6 +825,9 @@ const FORMAT_FIXTURES = [
 		tools: ["biome"],
 	},
 	{
+		// html/yaml have NO unconfigured default (#2384: template markers) —
+		// prettier is only selected with explicit config, so the fixtures ship
+		// a `.prettierrc`, like markdown/json below.
 		lang: "html",
 		dir: "tests/fixtures/format-smoke/html",
 		file: "messy.html",

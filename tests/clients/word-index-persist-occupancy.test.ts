@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	buildWordIndex,
+	deserializeWordIndex,
 	getLastWordIndexSerializeWork,
 	serializeWordIndex,
 	updateWordIndexDocument,
@@ -126,6 +127,47 @@ describe("incremental word-index persist occupancy (#2068)", () => {
 			});
 			// Issue #2068 measured 1,183ms before this change on 2,221,462 postings.
 			// This branch measures the fixed flat incremental path at about 10ms.
+			expect(maxBlockMs).toBeLessThan(50);
+		},
+	);
+
+	it(
+		"keeps the first persist after a session-start reload below the hot-path budget at 2M postings (#2068)",
+		{ retry: 2, timeout: 120_000 },
+		async () => {
+			// Same fixture as above, but the index under test comes from
+			// `deserializeWordIndex` — the shape of every session AFTER the
+			// first, which loads the persisted snapshot rather than building
+			// fresh. `snapshotSaveSyncMs` measures exactly this: the FIRST
+			// serialize call in a new process, with no prior in-process cache
+			// to prime it, right after the incremental refresh edits one
+			// stale document.
+			const shared = Array.from(
+				{ length: 2_000 },
+				(_, line) => `shared_${line}`,
+			).join("\n");
+			const docs = [
+				...Array.from({ length: 999 }, (_, file) => ({
+					path: `src/f${file}.ts`,
+					content: shared,
+				})),
+				{
+					path: "src/target.ts",
+					content: "target_token",
+				},
+			];
+			const built = buildWordIndex(docs);
+			const wire = serializeWordIndex(built);
+			const restored = deserializeWordIndex(wire);
+			expect(restored).not.toBeNull();
+			updateWordIndexDocument(restored!, {
+				path: "src/target.ts",
+				content: "changed_token",
+			});
+
+			const maxBlockMs = await measureMaxSyncBlockMs(async () => {
+				serializeWordIndex(restored!);
+			});
 			expect(maxBlockMs).toBeLessThan(50);
 		},
 	);

@@ -49,19 +49,27 @@ vi.mock("node:child_process", async (importOriginal) => {
 		spawn: (...args: unknown[]) => fakeSpawn(...args),
 	};
 });
-vi.mock("../../clients/instance-reaper.js", () => ({
-	terminateScannerChild: async (child: unknown, options: unknown) => {
-		timeoutControl.called = true;
-		return timeoutControl.handler?.(child, options) ?? "gone";
-	},
-}));
+vi.mock("../../clients/instance-reaper.js", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../../clients/instance-reaper.js")>();
+	return {
+		...actual,
+		terminateScannerChild: async (child: unknown, options: unknown) => {
+			timeoutControl.called = true;
+			return timeoutControl.handler?.(child, options) ?? "gone";
+		},
+	};
+});
 
 const {
 	sampleProcesses,
 	UsageAccumulator,
 	walkDescendantPids,
 	startSpawnUsageSampler,
+	sampleProcessTreeCpuPercent,
 	__resetWindowsCpuHistoryForTests,
+	__windowsCpuHistorySizeForTests,
+	__windowsCpuHistoryHasForTests,
 } = await import("../../clients/resource-sampler.js");
 
 /**
@@ -240,6 +248,19 @@ describe("sampleProcesses (POSIX / pidusage path)", () => {
 		expect(result.has(999)).toBe(false);
 	});
 
+	for (const [label, stats] of [
+		["NaN CPU", { cpu: Number.NaN, memory: 512 }],
+		["infinite CPU", { cpu: Number.POSITIVE_INFINITY, memory: 512 }],
+		["negative CPU", { cpu: -1, memory: 512 }],
+		["infinite memory", { cpu: 2, memory: Number.POSITIVE_INFINITY }],
+		["negative memory", { cpu: 2, memory: -1 }],
+	] as const) {
+		it(`leaves ${label} usage unmeasured`, async () => {
+			pidusageMock.mockResolvedValue({ "111": stats });
+			expect(requireMap(await sampleProcesses([111])).has(111)).toBe(false);
+		});
+	}
+
 	it("treats a rejected pidusage query as unknown, not an empty map", async () => {
 		pidusageMock.mockRejectedValue(new Error("boom"));
 
@@ -270,7 +291,11 @@ describe("sampleProcesses (Windows / guarded CIM path)", () => {
 	});
 
 	it("never calls pidusage on Windows — the whole point of the fix", async () => {
-		fakeSpawn = () => makeFakeChild({ stdout: "111,1024,0,0\r\n", code: 0 });
+		fakeSpawn = () =>
+			makeFakeChild({
+				stdout: "111,1024,0,0,2026-08-30T00:00:00Z\r\n",
+				code: 0,
+			});
 		await sampleProcesses([111]);
 		expect(pidusageMock).not.toHaveBeenCalled();
 	});
@@ -278,7 +303,11 @@ describe("sampleProcesses (Windows / guarded CIM path)", () => {
 	it("parses RSS (WorkingSetSize) from the CIM output; first tick reports cpu 0", async () => {
 		// One line: pid,workingSet,kernel100ns,user100ns
 		fakeSpawn = () =>
-			makeFakeChild({ stdout: "111,4096,0,0\r\n222,8192,0,0\r\n", code: 0 });
+			makeFakeChild({
+				stdout:
+					"111,4096,0,0,2026-08-30T00:00:00Z\r\n222,8192,0,0,2026-08-30T00:00:01Z\r\n",
+				code: 0,
+			});
 
 		const result = requireMap(await sampleProcesses([111, 222]));
 		expect(result.get(111)).toEqual({ rssBytes: 4096, cpuPercent: 0 });
@@ -290,7 +319,11 @@ describe("sampleProcesses (Windows / guarded CIM path)", () => {
 		try {
 			vi.setSystemTime(0);
 			// Tick 1: cumulative CPU time = 0 (kernel=0,user=0). Seeds history.
-			fakeSpawn = () => makeFakeChild({ stdout: "111,4096,0,0\r\n", code: 0 });
+			fakeSpawn = () =>
+				makeFakeChild({
+					stdout: "111,4096,0,0,2026-08-30T00:00:00Z\r\n",
+					code: 0,
+				});
 			const first = requireMap(await sampleProcesses([111]));
 			expect(first.get(111)).toEqual({ rssBytes: 4096, cpuPercent: 0 });
 
@@ -298,11 +331,108 @@ describe("sampleProcesses (Windows / guarded CIM path)", () => {
 			// UserModeTime is in 100 ns units → 5000 ms = 5000 * 1e4 = 5e7 units.
 			vi.setSystemTime(10_000);
 			fakeSpawn = () =>
-				makeFakeChild({ stdout: "111,4096,0,50000000\r\n", code: 0 });
+				makeFakeChild({
+					stdout: "111,4096,0,50000000,2026-08-30T00:00:00Z\r\n",
+					code: 0,
+				});
 			const second = requireMap(await sampleProcesses([111]));
 			// 5000 ms CPU / 10000 ms wall * 100 = 50%.
 			expect(second.get(111)?.cpuPercent).toBeCloseTo(50);
 			expect(second.get(111)?.rssBytes).toBe(4096);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("invalidates CPU history when Windows reuses a PID", async () => {
+		vi.useFakeTimers();
+		try {
+			vi.setSystemTime(0);
+			fakeSpawn = () =>
+				makeFakeChild({ stdout: "111,4096,0,0,2026-08-30T00:00:00Z\r\n" });
+			await sampleProcesses([111]);
+			vi.setSystemTime(10_000);
+			fakeSpawn = () =>
+				makeFakeChild({
+					stdout: "111,4096,0,50000000,2026-08-30T00:01:00Z\r\n",
+				});
+			const replacement = requireMap(await sampleProcesses([111]));
+			// The large inherited counter delta belongs to the predecessor. A
+			// replacement starts at zero instead of appearing busy.
+			expect(replacement.get(111)?.cpuPercent).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("treats a Windows counter reset as unmeasured for that tick", async () => {
+		vi.useFakeTimers();
+		try {
+			vi.setSystemTime(0);
+			fakeSpawn = () =>
+				makeFakeChild({
+					stdout: "111,4096,10000000,0,2026-08-30T00:00:00Z\r\n",
+				});
+			await sampleProcesses([111]);
+			vi.setSystemTime(10_000);
+			fakeSpawn = () =>
+				makeFakeChild({ stdout: "111,4096,0,0,2026-08-30T00:00:00Z\r\n" });
+			expect(requireMap(await sampleProcesses([111])).has(111)).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	for (const [label, row] of [
+		["empty kernel", "111,4096,,0,2026-08-30T00:00:00Z"],
+		["empty user", "111,4096,0,,2026-08-30T00:00:00Z"],
+		["nonfinite kernel", "111,4096,NaN,0,2026-08-30T00:00:00Z"],
+		["nonfinite user", "111,4096,0,Infinity,2026-08-30T00:00:00Z"],
+		["negative kernel", "111,4096,-1,0,2026-08-30T00:00:00Z"],
+		["negative user", "111,4096,0,-1,2026-08-30T00:00:00Z"],
+		["negative RSS", "111,-1,0,0,2026-08-30T00:00:00Z"],
+		["missing creation identity", "111,4096,0,0,"],
+	] as const) {
+		it(`leaves ${label} Windows usage unmeasured`, async () => {
+			fakeSpawn = () => makeFakeChild({ stdout: `${row}\r\n` });
+			expect(requireMap(await sampleProcesses([111])).has(111)).toBe(false);
+		});
+	}
+
+	it("caps dated PID history and evicts the oldest entry", async () => {
+		const rows = Array.from(
+			{ length: 4_097 },
+			(_, index) => `${index + 1},1,0,0,2026-08-30T00:00:${index}Z`,
+		).join("\r\n");
+		fakeSpawn = () => makeFakeChild({ stdout: rows });
+		await sampleProcesses(Array.from({ length: 4_097 }, (_, i) => i + 1));
+		expect(__windowsCpuHistorySizeForTests()).toBeLessThanOrEqual(4_096);
+		expect(__windowsCpuHistoryHasForTests(1, "2026-08-30T00:00:0Z")).toBe(
+			false,
+		);
+		expect(
+			__windowsCpuHistoryHasForTests(4_097, "2026-08-30T00:00:4096Z"),
+		).toBe(true);
+	});
+
+	it("marks a missing target unmeasured while tolerating missing descendants", async () => {
+		vi.useFakeTimers();
+		try {
+			vi.setSystemTime(0);
+			const outputs = [
+				"200,0\r\n", // descendant query: one child
+				"111,4096,0,0,2026-08-30T00:00:00Z\r\n", // target only
+				"200,0\r\n",
+				"200,4096,0,50000000,2026-08-30T00:00:00Z\r\n", // target gone
+			];
+			fakeSpawn = () => makeFakeChild({ stdout: outputs.shift() ?? "" });
+			const resultPromise = sampleProcessTreeCpuPercent(111, 1, 10);
+			await vi.runAllTimersAsync();
+			await expect(resultPromise).resolves.toMatchObject({
+				busy: false,
+				measured: false,
+				cpuPercent: null,
+			});
 		} finally {
 			vi.useRealTimers();
 		}
@@ -431,7 +561,10 @@ describe("resource-sampler: fire-and-forget CIM spawns are unref'd (#1155)", () 
 	it("sampleProcesses (sampleProcessesWindows) unrefs its CIM child + stdout", async () => {
 		const spawned: ReturnType<typeof makeFakeChild>[] = [];
 		fakeSpawn = () => {
-			const child = makeFakeChild({ stdout: "111,4096,0,0\r\n", code: 0 });
+			const child = makeFakeChild({
+				stdout: "111,4096,0,0,2026-08-30T00:00:00Z\r\n",
+				code: 0,
+			});
 			spawned.push(child);
 			return child;
 		};

@@ -185,6 +185,102 @@ describe("TypeScript language-service idle eviction (#1332 b2)", () => {
 		expect(client.shutdown).toHaveBeenCalledTimes(1);
 	});
 
+	it("does not let a stale demotion delete a replacement generation", async () => {
+		const predecessor = fakeClient("predecessor");
+		const replacement = fakeClient("replacement");
+		createLSPClient.mockResolvedValue(predecessor);
+		configureTypeScriptServer();
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		const entry = await service.getClientForFile("/repo/main.ts");
+		expect(entry?.client).toBe(predecessor);
+		const harness = service as unknown as {
+			state: { clients: Map<string, typeof predecessor> };
+			demoteForNotifyStall(
+				key: string,
+				entry: unknown,
+				filePath: string,
+				reason: unknown,
+			): void;
+		};
+		const key = [...harness.state.clients.keys()][0];
+		harness.state.clients.set(key as string, replacement);
+		harness.demoteForNotifyStall(key as string, entry, "/repo/main.ts", {
+			outstandingMs: 1,
+			discriminator: "budget-exceeded",
+		});
+		expect(harness.state.clients.get(key as string)).toBe(replacement);
+		expect(predecessor.shutdown).not.toHaveBeenCalled();
+		await service.shutdown();
+	});
+
+	it("keeps token B when stale fireWedge A releases the same client", async () => {
+		vi.useFakeTimers();
+		const client = fakeClient("same-client");
+		createLSPClient.mockResolvedValue(client);
+		configureTypeScriptServer();
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		const entry = await service.getClientForFile("/repo/main.ts");
+		expect(entry?.client).toBe(client);
+		const harness = service as unknown as {
+			state: { clients: Map<string, typeof client> };
+			outstandingAuxNotifyWrites: Map<string, unknown>;
+			claimAuxNotifySlot: (
+				key: string,
+				entry: unknown,
+				filePath: string,
+				budgetMs: number,
+			) => Promise<{ release: () => void } | { outstandingMs: number }>;
+		};
+		const key = [...harness.state.clients.keys()][0];
+		expect(key).toBeDefined();
+		const callbacks: Array<() => void> = [];
+		const realSetTimeout = globalThis.setTimeout;
+		const invokeSetTimeout = realSetTimeout as unknown as (
+			...args: unknown[]
+		) => ReturnType<typeof setTimeout>;
+		vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+			handler: (() => void) | string,
+			timeout?: number,
+			...args: unknown[]
+		) => {
+			if (typeof handler === "function") {
+				const callback = handler as (...callbackArgs: unknown[]) => unknown;
+				callbacks.push(() => void callback(...args));
+			}
+			return invokeSetTimeout(handler, timeout, ...args);
+		}) as unknown as typeof setTimeout);
+		try {
+			const claimA = await harness.claimAuxNotifySlot(
+				key as string,
+				entry,
+				"/repo/main.ts",
+				100,
+			);
+			expect("release" in claimA).toBe(true);
+			const callbackA = callbacks.at(-1);
+			expect(callbackA).toBeDefined();
+			(claimA as { release: () => void }).release();
+			const claimB = await harness.claimAuxNotifySlot(
+				key as string,
+				entry,
+				"/repo/main.ts",
+				100,
+			);
+			expect("release" in claimB).toBe(true);
+			const tokenB = harness.outstandingAuxNotifyWrites.get(key as string);
+			await callbackA?.();
+			await Promise.resolve();
+			expect(harness.outstandingAuxNotifyWrites.get(key as string)).toBe(
+				tokenB,
+			);
+			(claimB as { release: () => void }).release();
+		} finally {
+			await service.shutdown();
+		}
+	});
+
 	it("unrefs the timer and clears it on service disposal", async () => {
 		const client = fakeClient("lifecycle");
 		createLSPClient.mockResolvedValue(client);

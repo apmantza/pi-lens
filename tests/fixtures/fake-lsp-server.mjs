@@ -311,9 +311,23 @@ function handle(raw) {
 		// bug). Keep a harmless interval alive so the process (and its stdin
 		// pipe) stays open and unread indefinitely, like a real wedged
 		// server whose main loop is busy elsewhere.
+		//
+		// #2358: two stop-reading-but-alive liveness profiles for the
+		// notify-stall breaker's CPU discriminator. `FAKE_LSP_BURN_CPU_AFTER_INIT`
+		// makes the "dead but spinning" server real — one core busy-looping
+		// forever while nothing drains (the breaker must NOT kill it); without
+		// it the server is idle and flat (the breaker must kill it). Whether the
+		// fixture's burns are visible depends on the discriminator sampling
+		// this same process's cumulative CPU, which both Windows and POSIX
+		// do via kernel counters.
 		if (process.env.FAKE_LSP_WEDGE_STDIN_AFTER_INIT === "1") {
 			process.stdin.pause();
-			setInterval(() => {}, 60_000);
+			if (process.env.FAKE_LSP_BURN_CPU_AFTER_INIT === "1") {
+				const burnHandle = setInterval(() => burnCpu(100), 100);
+				process.on("exit", () => clearInterval(burnHandle));
+			} else {
+				setInterval(() => {}, 60_000);
+			}
 		}
 		return;
 	}

@@ -28,6 +28,7 @@ import {
 	invalidateProjectIgnoreMatcherForPath,
 	isPathIgnoredByProject,
 } from "./file-utils.js";
+import { invalidateFormatterCacheForPath } from "./formatters.js";
 import type { ReadGuard } from "./read-guard.js";
 import { getFormatService } from "./format-service.js";
 import {
@@ -569,7 +570,10 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 			? rawFilePath
 			: path.resolve(resolutionBasis, rawFilePath)
 		: rawFilePath;
-	if (filePath) invalidateProjectIgnoreMatcherForPath(filePath);
+	if (filePath) {
+		invalidateProjectIgnoreMatcherForPath(filePath);
+		invalidateFormatterCacheForPath(filePath);
+	}
 
 	// Purely diagnostic: tool_call's call-time verdict (computed on ITS OWN
 	// resolved path, which may since have been superseded) disagreed with
@@ -1403,6 +1407,7 @@ export async function handleToolResult(deps: ToolResultDeps): Promise<{
 
 	for (const changedFile of result.changedFiles ?? []) {
 		const resolvedChanged = path.resolve(changedFile);
+		invalidateFormatterCacheForPath(resolvedChanged);
 		if (!nodeFs.existsSync(resolvedChanged)) continue;
 		recordProjectChange({
 			runtime,

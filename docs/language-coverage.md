@@ -17,8 +17,8 @@ Dispatch is diagnostics-oriented: automatic formatting and safe autofix happen i
 | Shell                 | ✓   | lsp, shellcheck                                                                                                | shfmt                   |
 | Fish                  | ✓ (fish-lsp) | lsp, fish-indent                                                                                      | fish_indent             |
 | CSS/SCSS/Less         | ✓   | lsp, stylelint                                                                                                 | biome, prettier         |
-| HTML                  | ✓   | lsp, htmlhint                                                                                                  | prettier                |
-| YAML                  | ✓   | lsp, yamllint, actionlint (GitHub workflows), trivy-config (opt-in; Kubernetes manifests, CloudFormation)      | prettier                |
+| HTML                  | ✓   | lsp, htmlhint                                                                                                  | prettier (with project config) |
+| YAML                  | ✓   | lsp, yamllint, actionlint (GitHub workflows), trivy-config (opt-in; Kubernetes manifests, CloudFormation)      | prettier (with project config) |
 | JSON                  | ✓   | lsp, trivy-config (opt-in; CloudFormation templates only)                                                      | biome, prettier         |
 | Svelte                | ✓   | lsp                                                                                                            | oxfmt (needs `svelte` pkg installed + config `svelte: true`) |
 | Vue                   | ✓   | lsp                                                                                                            | prettier, oxfmt         |

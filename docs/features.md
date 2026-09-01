@@ -53,6 +53,18 @@ so the final state is formatter-stable. A `write` immediately followed by an
 deferred too. See `clients/pipeline.ts`, `clients/runtime-tool-result.ts`, and
 `clients/runtime-agent-end.ts`.
 
+**Bundled fallback lint configs stay conservative.** When a project ships no
+tool config, the package-owned fallback configs set the rules (`config/biome/core.jsonc`,
+`config/ruff/core.toml`, `config/markdownlint/core.json`). The biome fallback
+disables `useImportType`: its safe fix rewrites a value import used only in
+type positions into `import type`, which erases the runtime binding that
+experimental decorator metadata (`emitDecoratorMetadata`) still needs and
+breaks decorator-based dependency injection (refs #2385). Every other
+recommended rule stays on, and an explicit project `biome.json(c)` remains
+authoritative: if you enable `useImportType` there, pi-lens does not override
+it. The ruff fallback selects no flake8-type-checking (TC) rules and applies
+only safe fixes, so it never hoists imports into `TYPE_CHECKING` blocks.
+
 Deferred formatting (the `agent_end` default) runs with **bounded
 concurrency**: at most three formatter subprocesses in flight at once, with
 results applied in admission order and cooperative yields between files, so a

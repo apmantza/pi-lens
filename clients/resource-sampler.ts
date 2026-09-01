@@ -44,11 +44,10 @@
  * clients/instance-reaper.ts (`decideOrphanReaping` vs `sweepOrphans`).
  */
 
-import * as path from "node:path";
 import pidusage from "pidusage";
 import { spawnCollectStdoutResult } from "./child-unref.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
-import { terminateScannerChild } from "./instance-reaper.js";
+import { terminateScannerChild, windowsExe } from "./instance-reaper.js";
 
 export const RESOURCE_SAMPLE_QUERY_TIMEOUT_MS = 2_000;
 
@@ -137,12 +136,7 @@ async function findDescendantPidsWindows(
 		"Get-CimInstance Win32_Process " +
 		"| Select-Object -Property ProcessId,ParentProcessId " +
 		'| ForEach-Object { "$($_.ProcessId),$($_.ParentProcessId)" }';
-	const powershell = path.join(
-		process.env.SystemRoot ?? String.raw`C:\Windows`,
-		"WindowsPowerShell",
-		"v1.0",
-		"powershell.exe",
-	);
+	const powershell = windowsExe("WindowsPowerShell\\v1.0\\powershell.exe");
 	// Fire-and-forget, per-poll-tick spawn (#1155): `spawnCollectStdout` unrefs
 	// the child AND its piped stdout so this one-shot CIM query can never keep
 	// a settled `pi --print` process alive past its own close — mirrors the
@@ -191,11 +185,13 @@ async function findDescendantPidsWindows(
  * without bound as pids come and go.
  */
 interface WindowsCpuHistoryEntry {
+	processIdentity: string;
 	cpuMs: number;
 	ts: number;
 }
-const windowsCpuHistory = new Map<number, WindowsCpuHistoryEntry>();
+const windowsCpuHistory = new Map<string, WindowsCpuHistoryEntry>();
 const CPU_HISTORY_MAX_AGE_MS = 60_000;
+const CPU_HISTORY_MAX_ENTRIES = 4_096;
 
 /**
  * TEST-ONLY: clear the Windows CPU%-history so a test's two-sample CPU%
@@ -204,6 +200,17 @@ const CPU_HISTORY_MAX_AGE_MS = 60_000;
  */
 export function __resetWindowsCpuHistoryForTests(): void {
 	windowsCpuHistory.clear();
+}
+
+export function __windowsCpuHistorySizeForTests(): number {
+	return windowsCpuHistory.size;
+}
+
+export function __windowsCpuHistoryHasForTests(
+	pid: number,
+	processIdentity: string,
+): boolean {
+	return windowsCpuHistory.has(`${pid}:${processIdentity}`);
 }
 
 /**
@@ -227,19 +234,14 @@ async function sampleProcessesWindows(
 	if (valid.length === 0) return samples;
 
 	// pids are pre-validated finite positive integers, so this WQL filter is
-	// injection-safe. One line per pid: "pid,workingSet,kernel100ns,user100ns".
+	// injection-safe. One line per pid: "pid,workingSet,kernel100ns,user100ns,creationDate".
 	const filter = valid.map((p) => `ProcessId=${p}`).join(" or ");
 	const psScript =
 		`Get-CimInstance Win32_Process -Filter "${filter}" ` +
-		"| Select-Object -Property ProcessId,WorkingSetSize,KernelModeTime,UserModeTime " +
-		'| ForEach-Object { "$($_.ProcessId),$($_.WorkingSetSize),$($_.KernelModeTime),$($_.UserModeTime)" }';
+		"| Select-Object -Property ProcessId,WorkingSetSize,KernelModeTime,UserModeTime,CreationDate " +
+		'| ForEach-Object { "$($_.ProcessId),$($_.WorkingSetSize),$($_.KernelModeTime),$($_.UserModeTime),$($_.CreationDate)" }';
 
-	const powershell = path.join(
-		process.env.SystemRoot ?? String.raw`C:\Windows`,
-		"WindowsPowerShell",
-		"v1.0",
-		"powershell.exe",
-	);
+	const powershell = windowsExe("WindowsPowerShell\\v1.0\\powershell.exe");
 	// Fire-and-forget, per-poll-tick spawn (#1155): `spawnCollectStdout` unrefs
 	// the child AND its piped stdout so this one-shot CIM query can never keep
 	// a settled `pi --print` process alive past its own close — mirrors the
@@ -267,16 +269,44 @@ async function sampleProcessesWindows(
 		const seen = new Set<number>();
 		for (const line of query.stdout.split(/\r?\n/)) {
 			const parts = line.split(",");
-			if (parts.length < 4) continue;
+			if (parts.length < 5) continue;
+			if (parts.slice(0, 5).some((part) => part.trim().length === 0)) continue;
 			const pid = Number(parts[0]);
 			const workingSet = Number(parts[1]);
 			const kernel100ns = Number(parts[2]);
 			const user100ns = Number(parts[3]);
+			const processIdentity = parts.slice(4).join(",").trim();
 			if (!Number.isFinite(pid) || pid <= 0) continue;
-			if (!Number.isFinite(workingSet)) continue;
+			if (
+				!Number.isFinite(workingSet) ||
+				workingSet < 0 ||
+				!Number.isFinite(kernel100ns) ||
+				kernel100ns < 0 ||
+				!Number.isFinite(user100ns) ||
+				user100ns < 0 ||
+				processIdentity.length === 0
+			)
+				continue;
 
 			const cpuMs = Math.round(kernel100ns / 1e4) + Math.round(user100ns / 1e4);
-			const prev = windowsCpuHistory.get(pid);
+			const historyKey = `${pid}:${processIdentity}`;
+			// A reused PID must start a fresh rate window. Drop every prior identity
+			// for this PID before looking up the current one.
+			for (const [key, prior] of windowsCpuHistory) {
+				if (
+					prior.processIdentity !== processIdentity &&
+					key.startsWith(`${pid}:`)
+				) {
+					windowsCpuHistory.delete(key);
+				}
+			}
+			const prev = windowsCpuHistory.get(historyKey);
+			if (prev && cpuMs < prev.cpuMs) {
+				// A counter reset is not a flat sample. Retire the baseline so the
+				// next valid observation starts a new rate window.
+				windowsCpuHistory.delete(historyKey);
+				continue;
+			}
 			let cpuPercent = 0;
 			if (prev) {
 				const wallMs = now - prev.ts;
@@ -285,15 +315,28 @@ async function sampleProcessesWindows(
 					if (!Number.isFinite(cpuPercent) || cpuPercent < 0) cpuPercent = 0;
 				}
 			}
-			windowsCpuHistory.set(pid, { cpuMs, ts: now });
+			windowsCpuHistory.set(historyKey, { processIdentity, cpuMs, ts: now });
 			seen.add(pid);
 			samples.set(pid, { rssBytes: workingSet, cpuPercent });
 		}
 		// Prune stale history so pids that have gone away don't accumulate.
-		for (const [pid, entry] of windowsCpuHistory) {
+		for (const [key, entry] of windowsCpuHistory) {
+			const pid = Number(key.slice(0, key.indexOf(":")));
 			if (!seen.has(pid) && now - entry.ts > CPU_HISTORY_MAX_AGE_MS) {
-				windowsCpuHistory.delete(pid);
+				windowsCpuHistory.delete(key);
 			}
+		}
+		while (windowsCpuHistory.size > CPU_HISTORY_MAX_ENTRIES) {
+			let oldestKey: string | undefined;
+			let oldestTs = Number.POSITIVE_INFINITY;
+			for (const [key, entry] of windowsCpuHistory) {
+				if (entry.ts < oldestTs) {
+					oldestKey = key;
+					oldestTs = entry.ts;
+				}
+			}
+			if (oldestKey === undefined) break;
+			windowsCpuHistory.delete(oldestKey);
 		}
 	} catch {
 		// Parsing must never throw into the caller; best-effort.
@@ -328,6 +371,13 @@ export async function sampleProcesses(
 		for (const pid of valid) {
 			const stat = stats[String(pid)];
 			if (!stat) continue; // pidusage couldn't resolve this pid — leave absent
+			if (
+				!Number.isFinite(stat.cpu) ||
+				stat.cpu < 0 ||
+				!Number.isFinite(stat.memory) ||
+				stat.memory < 0
+			)
+				continue;
 			result.set(pid, {
 				rssBytes: stat.memory,
 				cpuPercent: stat.cpu,
@@ -414,6 +464,97 @@ export interface SpawnUsageSummary {
  * (or one that re-execs itself) is actually captured. POSIX spawns are
  * unwrapped (`shell: false`), so `pid` there is already the real tool.
  */
+export interface ProcessTreeCpuSample {
+	/** True when the process tree burned CPU above the liveness floor. */
+	busy: boolean;
+	/** True when at least one CPU sample resolved (a real measurement). */
+	measured: boolean;
+	/** Highest summed CPU% across pid + descendants, or null when unmeasurable. */
+	cpuPercent: number | null;
+}
+
+/**
+ * #2358: sample a live process tree twice across a short window and answer
+ * whether it burned CPU above `floorPercent`.
+ *
+ * The notify-stall breaker uses this to tell a BUSY server (burning a core
+ * while it drains a burst) from a genuinely DEAD input path (flat CPU), and
+ * only tears the latter down. It reuses the same platform machinery as
+ * `startSpawnUsageSampler`: on Windows the direct child may be a `cmd`/`.cmd`
+ * shim that does no work itself, so the live descendant tree resolves once per
+ * read and CPU% is summed across it.
+ *
+ * Best-effort like every other export here: a failed query loses a data point,
+ * it never throws, and it never blocks for longer than the query timeouts plus
+ * `windowMs`. The target itself must resolve for `measured` to be true;
+ * missing descendants are partial but valid evidence. An unmeasurable target
+ * answers `{ busy: false, measured: false }` for the caller to classify.
+ */
+export async function sampleProcessTreeCpuPercent(
+	pid: number | undefined,
+	windowMs = 1200,
+	floorPercent = 10,
+): Promise<ProcessTreeCpuSample> {
+	if (!Number.isFinite(pid) || (pid as number) <= 0) {
+		return { busy: false, measured: false, cpuPercent: null };
+	}
+	const targetPid = pid as number;
+	const readOnce = async (): Promise<{
+		cpuPercent: number;
+		measured: boolean;
+	} | null> => {
+		try {
+			const descendants = runningOnWindows()
+				? await findDescendantPidsWindows(targetPid)
+				: [];
+			if (descendants === null) return null;
+			const pids = runningOnWindows()
+				? [targetPid, ...descendants]
+				: [targetPid];
+			const usageByPid = await sampleProcesses(pids);
+			if (usageByPid === null) return null;
+			const targetUsage = usageByPid.get(targetPid);
+			if (!targetUsage) return { cpuPercent: 0, measured: false };
+			let cpuPercent = 0;
+			for (const usage of usageByPid.values()) cpuPercent += usage.cpuPercent;
+			return { cpuPercent, measured: true };
+		} catch {
+			return null;
+		}
+	};
+	// The FIRST read populates the per-pid CPU history on Windows (a fresh pid
+	// reports 0%; the rate lands on the next read), so the second read is the
+	// one that carries the liveness verdict. Both reads must retain the target;
+	// disappearance or query failure is explicitly unmeasured, never flat.
+	const first = await readOnce();
+	const second = await new Promise<{
+		cpuPercent: number;
+		measured: boolean;
+	} | null>((resolve) => {
+		const timer = setTimeout(() => {
+			void readOnce().then(resolve);
+		}, windowMs);
+		timer.unref?.();
+	});
+	if (first === null && second === null) {
+		return { busy: false, measured: false, cpuPercent: null };
+	}
+	if (
+		first === null ||
+		second === null ||
+		!first.measured ||
+		!second.measured
+	) {
+		return { busy: false, measured: false, cpuPercent: null };
+	}
+	const observed = Math.max(first.cpuPercent, second.cpuPercent);
+	return {
+		busy: observed > floorPercent,
+		measured: true,
+		cpuPercent: observed,
+	};
+}
+
 export function startSpawnUsageSampler(
 	pid: number | undefined,
 	intervalMs = 750,

@@ -63,8 +63,6 @@ describe("tool-policy", () => {
 		expect(getSmartDefaultFormatterName("/tmp/file.py")).toBe("ruff");
 		expect(getSmartDefaultFormatterName("/tmp/file.css")).toBe("biome");
 		expect(getSmartDefaultFormatterName("/tmp/file.less")).toBe("prettier");
-		expect(getSmartDefaultFormatterName("/tmp/file.html")).toBe("prettier");
-		expect(getSmartDefaultFormatterName("/tmp/file.yaml")).toBe("prettier");
 		expect(getSmartDefaultFormatterName("/tmp/file.gleam")).toBe("gleam");
 		expect(getSmartDefaultFormatterName("/tmp/file.go")).toBe("gofmt");
 		expect(getSmartDefaultFormatterName("/tmp/file.rs")).toBe("rustfmt");
@@ -111,6 +109,23 @@ describe("tool-policy", () => {
 		});
 	});
 
+	// #2384: unconfigured HTML/YAML commonly carry template markers ({{JS}}
+	// embeds, Helm `{{ .Values.x }}`). Real Prettier reinterprets them as code
+	// and corrupts them. Users opt in via project `.prettierrc`; the smart-
+	// default gate still honours an explicit config.
+	it.each([".html", ".htm", ".yaml", ".yml"])(
+		"does not auto-apply prettier to unconfigured %s files (#2384)",
+		(ext) => {
+			expect(getSmartDefaultFormatterName(`/tmp/file${ext}`)).toBeUndefined();
+			expect(getFormatterPolicyForFile(`/tmp/file${ext}`)).toMatchObject({
+				formatterNames: ["prettier", "oxfmt"],
+				defaultFormatter: "prettier",
+				defaultWhenUnconfigured: false,
+				gate: "smart-default",
+			});
+		},
+	);
+
 	it("maps managed smart-default formatters to auto-installable tool ids", () => {
 		expect(getAutoInstallToolIdForFormatter("biome")).toBe("biome");
 		expect(getAutoInstallToolIdForFormatter("ruff")).toBe("ruff");
@@ -143,7 +158,7 @@ describe("tool-policy", () => {
 		});
 		expect(getFormatterPolicyForFile("/tmp/file.html")).toMatchObject({
 			defaultFormatter: "prettier",
-			defaultWhenUnconfigured: true,
+			defaultWhenUnconfigured: false,
 		});
 		expect(getFormatterPolicyForFile("/tmp/file.kt")).toMatchObject({
 			defaultFormatter: "ktlint",

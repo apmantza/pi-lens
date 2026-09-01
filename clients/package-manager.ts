@@ -27,6 +27,10 @@ import {
 } from "./dispatch/runners/utils/availability-policy.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { createAvailabilityProbeFlight } from "./availability-probe-flight.js";
+import {
+	createGenerationSource,
+	type GenerationHandle,
+} from "./generation-guard.js";
 
 export type NodePackageManager = "npm" | "pnpm" | "yarn" | "bun";
 
@@ -239,11 +243,16 @@ function isAvailable(
  * day, start a fresh session, pi-lens still reports it missing until a
  * process restart (#1653). Called from `handleSessionStart`'s per-session
  * reset block beside `resetZizmorTokenAvailability()` /
- * `resetPsScriptAnalyzerAvailability()`; also used directly by tests.
+ * `resetPsScriptAnalyzerAvailability()`; also used directly by tests. Also
+ * clears `globalBinDirCache`, whose memo lifetime rides the same reset — it
+ * must not outlive the availability verdicts it was derived from (#1602).
  */
 export function _resetPackageManagerCache(): void {
+	packageManagerCacheGeneration.bump();
 	availabilityLatches.clear();
 	packageManagerProbeFlights.clear();
+	globalBinDirCache.clear();
+	globalBinDirProbeFlights.clear();
 }
 
 // ============================================================================
@@ -387,12 +396,48 @@ export function execArgs(
 // GLOBAL BIN DISCOVERY
 // ============================================================================
 
+/**
+ * Per-manager global bin dir, memoized for the process (cleared alongside
+ * `availabilityLatches` in `_resetPackageManagerCache`). Only a SUCCESSFUL
+ * lookup is cached: a spawn failure here is evidence about this call, not
+ * about the manager (the manager already passed `isAvailable`'s own probe),
+ * so it must not latch an empty result the way a genuine absence would. The
+ * generation guard owns post-await cache publication, so a probe crossing
+ * a session reset cannot repopulate the fresh memo. Reset clears the flight
+ * map separately, so later callers cannot share the pre-reset probe.
+ */
+const globalBinDirCache = new Map<NodePackageManager, string[]>();
+const packageManagerCacheGeneration = createGenerationSource(
+	"package-manager-global-bin",
+);
+const globalBinDirProbeFlights = createAvailabilityProbeFlight<string[]>();
+
 /** Directories where a given manager installs global binaries. */
 async function globalBinDirsFor(pm: NodePackageManager): Promise<string[]> {
+	const cached = globalBinDirCache.get(pm);
+	if (cached) return cached;
+	const generation = packageManagerCacheGeneration.capture();
+
+	// Concurrent callers (dispatch runs several tools per edit) must share ONE
+	// probe rather than each spawning their own `npm config get prefix` (#1602).
+	const shared = globalBinDirProbeFlights.run(pm, () =>
+		probeGlobalBinDirs(pm, generation),
+	);
+	return shared.promise;
+}
+
+async function probeGlobalBinDirs(
+	pm: NodePackageManager,
+	generation: GenerationHandle,
+): Promise<string[]> {
 	if (pm === "bun") {
 		// bun has no per-call query cost — the global bin dir is deterministic.
 		const base = process.env.BUN_INSTALL || path.join(os.homedir(), ".bun");
-		return [path.join(base, "bin")];
+		const dirs = [path.join(base, "bin")];
+		generation.guardedWrite(pm, () => {
+			globalBinDirCache.set(pm, dirs);
+		});
+		return dirs;
 	}
 
 	const query =
@@ -408,10 +453,12 @@ async function globalBinDirsFor(pm: NodePackageManager): Promise<string[]> {
 
 	// npm reports a prefix; binaries live in `<prefix>/bin` on Unix, `<prefix>`
 	// on Windows. pnpm/yarn already print the bin dir directly.
-	if (pm === "npm") {
-		return [onWindows() ? out : path.join(out, "bin")];
-	}
-	return [out];
+	const dirs =
+		pm === "npm" ? [onWindows() ? out : path.join(out, "bin")] : [out];
+	generation.guardedWrite(pm, () => {
+		globalBinDirCache.set(pm, dirs);
+	});
+	return dirs;
 }
 
 /**

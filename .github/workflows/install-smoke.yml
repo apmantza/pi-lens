@@ -39,6 +39,8 @@ on:
   schedule:
     - cron: "0 6 * * *" # nightly 06:00 UTC
   workflow_dispatch: {}
+  repository_dispatch:
+    types: [merge-train-post-merge]
   push:
     branches: [master]
     paths:
@@ -48,13 +50,81 @@ on:
       - "scripts/rpc-load-check.mjs"
       - ".github/workflows/install-smoke.yml"
 
-permissions:
-  contents: read
+# A merge made with GITHUB_TOKEN suppresses its push event. Replayed
+# repository_dispatch runs validate the exact merge commit, and duplicate
+# events for that commit must not run concurrently.
+concurrency:
+  group: install-smoke-${{ github.event_name == 'repository_dispatch' && github.event.client_payload.sha || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
 
 jobs:
+  validate-merge-train-dispatch:
+    name: Validate merge-train dispatch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: github.event_name == 'repository_dispatch'
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Validate merge-train dispatch ancestry
+        if: github.event_name == 'repository_dispatch'
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_TOKEN: ${{ github.token }}
+          PAYLOAD_REPOSITORY: ${{ github.event.client_payload.repository }}
+          PAYLOAD_SHA: ${{ github.event.client_payload.sha }}
+          PAYLOAD_PR_NUMBER: ${{ github.event.client_payload.pr_number }}
+        run: node scripts/lib/merge-train-dispatch-validation.mjs
+
+  record-post-merge-validation:
+    name: Record post-merge validation
+    if: always() && github.event_name == 'repository_dispatch' && needs.validate-merge-train-dispatch.result == 'success'
+    needs: [validate-merge-train-dispatch, smoke, pi-load, mise-repro]
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Record exact-SHA terminal state
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PAYLOAD_SHA: ${{ github.event.client_payload.sha }}
+          PAYLOAD_PR_NUMBER: ${{ github.event.client_payload.pr_number }}
+          SMOKE_RESULT: ${{ needs.smoke.result }}
+          PI_LOAD_RESULT: ${{ needs.pi-load.result }}
+          MISE_RESULT: ${{ needs.mise-repro.result }}
+        run: |
+          set -euo pipefail
+          state=succeeded
+          unknown=0
+          for result in "$SMOKE_RESULT" "$PI_LOAD_RESULT" "$MISE_RESULT"; do
+            case "$result" in
+              success) ;;
+              failure) state=failed ;;
+              *) unknown=1 ;;
+            esac
+          done
+          if [[ "$state" != failed && "$unknown" == 1 ]]; then exit 0; fi
+          marker="<!-- merge-train-post-merge:sha=$PAYLOAD_SHA:workflow=install-smoke.yml:state=$state -->"
+          body="Post-merge validation $state for $PAYLOAD_SHA.\n\n$marker"
+          curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer $GITHUB_TOKEN" \
+            --header "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/issues/$PAYLOAD_PR_NUMBER/comments" \
+            --data "$(jq -n --arg body "$body" '{body:$body}')"
+
   smoke:
     name: ${{ matrix.os }} · ${{ matrix.pm }}
+    needs: validate-merge-train-dispatch
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -63,7 +133,30 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.sha || github.ref }}
           persist-credentials: false
+
+
+      - name: Validate merge-train dispatch payload
+        if: github.event_name == 'repository_dispatch'
+        env:
+          PAYLOAD_REPOSITORY: ${{ github.event.client_payload.repository }}
+          PAYLOAD_SHA: ${{ github.event.client_payload.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$PAYLOAD_REPOSITORY" != "$GITHUB_REPOSITORY" ]]; then
+            echo "::error::repository_dispatch repository does not match this repository"
+            exit 1
+          fi
+          if [[ ! "$PAYLOAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::repository_dispatch SHA must be a 40-hex commit"
+            exit 1
+          fi
+          checked_sha="$(git rev-parse --verify HEAD)"
+          if [[ "${PAYLOAD_SHA,,}" != "$checked_sha" ]]; then
+            echo "::error::checkout does not match the repository_dispatch SHA"
+            exit 1
+          fi
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
@@ -145,7 +238,10 @@ jobs:
   # users get) — guards the shipped artifact; the `smoke` job guards current code.
   pi-load:
     name: pi-load · ${{ matrix.os }} · ${{ matrix.pi_install }}
+    needs: validate-merge-train-dispatch
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -154,7 +250,30 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 # for the RPC driver
         with:
+          ref: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.sha || github.ref }}
           persist-credentials: false
+
+
+      - name: Validate merge-train dispatch payload
+        if: github.event_name == 'repository_dispatch'
+        env:
+          PAYLOAD_REPOSITORY: ${{ github.event.client_payload.repository }}
+          PAYLOAD_SHA: ${{ github.event.client_payload.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$PAYLOAD_REPOSITORY" != "$GITHUB_REPOSITORY" ]]; then
+            echo "::error::repository_dispatch repository does not match this repository"
+            exit 1
+          fi
+          if [[ ! "$PAYLOAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::repository_dispatch SHA must be a 40-hex commit"
+            exit 1
+          fi
+          checked_sha="$(git rev-parse --verify HEAD)"
+          if [[ "${PAYLOAD_SHA,,}" != "$checked_sha" ]]; then
+            echo "::error::checkout does not match the repository_dispatch SHA"
+            exit 1
+          fi
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
@@ -261,7 +380,10 @@ jobs:
   # of #285 coverage.
   mise-repro:
     name: mise repro (#285) · ${{ matrix.os }} · ${{ matrix.pi_via }}
+    needs: validate-merge-train-dispatch
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     continue-on-error: true
     strategy:
       fail-fast: false
@@ -271,7 +393,30 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7 # RPC driver
         with:
+          ref: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.sha || github.ref }}
           persist-credentials: false
+
+
+      - name: Validate merge-train dispatch payload
+        if: github.event_name == 'repository_dispatch'
+        env:
+          PAYLOAD_REPOSITORY: ${{ github.event.client_payload.repository }}
+          PAYLOAD_SHA: ${{ github.event.client_payload.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$PAYLOAD_REPOSITORY" != "$GITHUB_REPOSITORY" ]]; then
+            echo "::error::repository_dispatch repository does not match this repository"
+            exit 1
+          fi
+          if [[ ! "$PAYLOAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::repository_dispatch SHA must be a 40-hex commit"
+            exit 1
+          fi
+          checked_sha="$(git rev-parse --verify HEAD)"
+          if [[ "${PAYLOAD_SHA,,}" != "$checked_sha" ]]; then
+            echo "::error::checkout does not match the repository_dispatch SHA"
+            exit 1
+          fi
 
       - name: Install mise (pinned + checksum-verified)
         shell: bash

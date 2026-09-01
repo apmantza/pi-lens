@@ -12,6 +12,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { removeTempDirSync } from "./test-utils.js";
+import { waitFor } from "./interleaving-kit.js";
+import { gatedPromise } from "../support/fault-injection.js";
 
 vi.mock("../../clients/safe-spawn.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../clients/safe-spawn.js")>()),
@@ -507,6 +509,162 @@ describe("findGlobalBinary", () => {
 	it("returns undefined when no manager is installed", async () => {
 		onlyAvailable();
 		expect(await findGlobalBinary("prisma")).toBeUndefined();
+	});
+
+	/**
+	 * #1602 — `globalBinDirsFor` re-spawned `npm config get prefix` (and its
+	 * pnpm/yarn equivalents) on every `findGlobalBinary` miss, even though
+	 * `isAvailable` above it is latched. Two misses must spawn the prefix
+	 * lookup once. Must FAIL on pre-fix code (two query spawns).
+	 */
+	it("memoizes the per-manager global bin dir across findGlobalBinary misses", async () => {
+		setPlatform("linux");
+		npmGlobalPrefix(); // available, but no binary ever written — both calls miss
+		expect(await findGlobalBinary("does-not-exist")).toBeUndefined();
+		expect(await findGlobalBinary("still-not-there")).toBeUndefined();
+		const npmQueries = queryCalls.filter((c) => c.cmd === "npm");
+		expect(npmQueries.length).toBe(1);
+	});
+
+	/**
+	 * #1602 review — the memo must not latch a transient bin-dir lookup
+	 * failure the way a genuine absence would: npm already passed
+	 * `isAvailable`'s own probe, so a failed `config get prefix` here is
+	 * evidence about this one call, not about npm. A memo that cached every
+	 * result — including an empty one — would keep serving no bin dirs for
+	 * npm forever.
+	 */
+	it("does not latch a failed bin-dir lookup forever", async () => {
+		setPlatform("linux");
+		const prefix = tmpDir();
+		const binDir = path.join(prefix, "bin");
+		fs.mkdirSync(binDir, { recursive: true });
+		fs.writeFileSync(path.join(binDir, "prisma"), "#!/bin/sh\n");
+		onlyAvailable("npm");
+		let attempt = 0;
+		setQueryResponder(async () => {
+			attempt += 1;
+			if (attempt === 1) return { stdout: "", stderr: "", status: 1 };
+			return { stdout: `${prefix}\n`, stderr: "", status: 0 };
+		});
+
+		// First call: the prefix query fails — npm's bin dir can't be resolved.
+		expect(await findGlobalBinary("prisma")).toBeUndefined();
+
+		// Second call: the prefix query now succeeds.
+		expect(await findGlobalBinary("prisma")).toBe(
+			path.resolve(path.join(binDir, "prisma")),
+		);
+	});
+
+	it("does not repopulate the bin-dir memo with a pre-reset result", async () => {
+		setPlatform("linux");
+		const oldPrefix = tmpDir();
+		const oldBinDir = path.join(oldPrefix, "bin");
+		const newPrefix = tmpDir();
+		const newBinDir = path.join(newPrefix, "bin");
+		fs.mkdirSync(oldBinDir, { recursive: true });
+		fs.mkdirSync(newBinDir, { recursive: true });
+		fs.writeFileSync(path.join(oldBinDir, "prisma"), "old\n");
+		fs.writeFileSync(path.join(newBinDir, "prisma"), "new\n");
+		onlyAvailable("npm");
+		await resolveNodePackageManager(tmpDir());
+
+		let queryAttempt = 0;
+		const oldQuery = gatedPromise<{
+			stdout: string;
+			stderr: string;
+			status: number;
+		}>();
+		setQueryResponder(async () => {
+			queryAttempt += 1;
+			if (queryAttempt === 1) return oldQuery.promise;
+			return { stdout: `${newPrefix}\n`, stderr: "", status: 0 };
+		});
+		try {
+			const oldLookup = findGlobalBinary("prisma");
+			await waitFor(
+				() => queryAttempt,
+				(count) => count === 1,
+			);
+
+			_resetPackageManagerCache();
+			const newLookup = findGlobalBinary("prisma");
+			await expect(newLookup).resolves.toBe(
+				path.resolve(path.join(newBinDir, "prisma")),
+			);
+			// Release the old probe only after the replacement has cached its result.
+			oldQuery.resolve({ stdout: `${oldPrefix}\n`, stderr: "", status: 0 });
+			await expect(oldLookup).resolves.toBe(
+				path.resolve(path.join(oldBinDir, "prisma")),
+			);
+			await expect(findGlobalBinary("prisma")).resolves.toBe(
+				path.resolve(path.join(newBinDir, "prisma")),
+			);
+			expect(queryAttempt).toBe(2);
+		} finally {
+			oldQuery.resolve({ stdout: `${oldPrefix}\n`, stderr: "", status: 0 });
+		}
+	});
+
+	it("re-probes concurrently after a rejected pre-reset lookup", async () => {
+		setPlatform("linux");
+		const newPrefix = tmpDir();
+		const newBinDir = path.join(newPrefix, "bin");
+		fs.mkdirSync(newBinDir, { recursive: true });
+		fs.writeFileSync(path.join(newBinDir, "prisma"), "new\n");
+		onlyAvailable("npm");
+		await resolveNodePackageManager(tmpDir());
+
+		let queryAttempt = 0;
+		const oldQuery = gatedPromise<{
+			stdout: string;
+			stderr: string;
+			status: number;
+		}>();
+		const newQuery = gatedPromise<{
+			stdout: string;
+			stderr: string;
+			status: number;
+		}>();
+		setQueryResponder(async () => {
+			queryAttempt += 1;
+			if (queryAttempt === 1) return oldQuery.promise;
+			if (queryAttempt === 2) return newQuery.promise;
+			return { stdout: `${newPrefix}\n`, stderr: "", status: 0 };
+		});
+		try {
+			const oldLookup = findGlobalBinary("prisma");
+			await waitFor(
+				() => queryAttempt,
+				(count) => count === 1,
+			);
+
+			_resetPackageManagerCache();
+			const postResetLookups = [
+				findGlobalBinary("prisma"),
+				findGlobalBinary("prisma"),
+			];
+			await waitFor(
+				() => queryAttempt,
+				(count) => count === 2,
+			);
+			newQuery.resolve({ stdout: `${newPrefix}\n`, stderr: "", status: 0 });
+			await expect(Promise.all(postResetLookups)).resolves.toEqual([
+				path.resolve(path.join(newBinDir, "prisma")),
+				path.resolve(path.join(newBinDir, "prisma")),
+			]);
+
+			oldQuery.reject(new Error("pre-reset global-bin probe failed"));
+			await expect(oldLookup).resolves.toBeUndefined();
+			await expect(findGlobalBinary("prisma")).resolves.toBe(
+				path.resolve(path.join(newBinDir, "prisma")),
+			);
+			expect(queryAttempt).toBe(2);
+		} finally {
+			oldQuery.reject(new Error("release pre-reset probe"));
+			newQuery.resolve({ stdout: `${newPrefix}\n`, stderr: "", status: 0 });
+		}
 	});
 });
 

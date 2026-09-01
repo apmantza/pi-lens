@@ -1876,6 +1876,29 @@ export interface SerializedWordIndex {
 /** Persisted word-index serialization format version. Bump on breaking format changes. */
 export const WORD_INDEX_FORMAT_VERSION = 2;
 
+const WORD_INDEX_INT32_MAX = 2_147_483_647;
+// A file id and line fit in one exact Number key through this boundary.
+const WORD_INDEX_PACKED_FILE_ID_MAX = 4_194_303;
+
+function isCanonicalWordIndexNumber(value: unknown): value is number {
+	return (
+		typeof value === "number" &&
+		Number.isFinite(value) &&
+		Number.isSafeInteger(value) &&
+		!Object.is(value, -0)
+	);
+}
+
+function isCanonicalWordIndexToken(token: unknown): token is string {
+	return (
+		typeof token === "string" &&
+		token.length >= 2 &&
+		token === token.toLowerCase() &&
+		/^[a-z0-9_$]+$/.test(token) &&
+		!STOPWORDS.has(token)
+	);
+}
+
 interface SerializedWordIndexCache {
 	serialized: SerializedWordIndex;
 	slotByFileId: Map<number, number>;
@@ -2110,10 +2133,24 @@ export function deserializeWordIndex(
 		!Array.isArray(data.files) ||
 		!Array.isArray(data.postings) ||
 		!Array.isArray(data.docLengths) ||
-		!Array.isArray(data.fileMtimes) ||
-		data.fileMtimes.length !== data.files.length
+		!Array.isArray(data.fileMtimes)
 	) {
 		return null;
+	}
+	let canonical =
+		data.docLengths.length === data.files.length &&
+		data.fileMtimes.length === data.files.length;
+	let needsDeepSanitize = !Array.isArray(data.forward);
+	if (needsDeepSanitize) canonical = false;
+	const fileKeys = new Set<string>();
+	for (const file of data.files) {
+		if (typeof file !== "string") return null;
+		const key = wordIndexKey(file);
+		if (fileKeys.has(key)) {
+			canonical = false;
+			needsDeepSanitize = true;
+		}
+		fileKeys.add(key);
 	}
 	const docLengths = new PathKeyedMap<number>(wordIndexKey);
 	// Slot i of the wire `files` array becomes file id `fileIdBySlot[i]`. Two
@@ -2124,14 +2161,28 @@ export function deserializeWordIndex(
 	const fileIdBySlot = data.files.map((file) =>
 		fileTable.intern(wordIndexKey(file), file),
 	);
+	const slotByFileId = new Map<number, number>();
+	fileIdBySlot.forEach((fileId, slot) => {
+		if (!slotByFileId.has(fileId)) slotByFileId.set(fileId, slot);
+	});
 	const fileMtimes = new PathKeyedMap<number>(wordIndexKey);
 	const fileSizes = new PathKeyedMap<number>(wordIndexKey);
-	data.files.forEach((file, i) =>
-		docLengths.set(file, data.docLengths[i] ?? 0),
-	);
-	data.files.forEach((file, i) =>
-		fileMtimes.set(file, data.fileMtimes[i] ?? 0),
-	);
+	data.files.forEach((file, i) => {
+		const value = data.docLengths[i];
+		if (!isCanonicalWordIndexNumber(value) || value < 0) canonical = false;
+		docLengths.set(
+			file,
+			isCanonicalWordIndexNumber(value) && value >= 0 ? value : 0,
+		);
+	});
+	data.files.forEach((file, i) => {
+		const value = data.fileMtimes[i];
+		if (typeof value !== "number" || !Number.isFinite(value)) canonical = false;
+		fileMtimes.set(
+			file,
+			typeof value === "number" && Number.isFinite(value) ? value : 0,
+		);
+	});
 	// #1105: `fileSizes` is optional on the wire (pre-#1105 snapshots omit it).
 	// Only populate when the array is present AND parallel to `files`; otherwise
 	// leave it empty so the refresh gate re-reads every file once to repopulate,
@@ -2140,25 +2191,75 @@ export function deserializeWordIndex(
 		Array.isArray(data.fileSizes) &&
 		data.fileSizes.length === data.files.length
 	) {
-		data.files.forEach((file, i) =>
-			fileSizes.set(file, data.fileSizes?.[i] ?? 0),
-		);
+		data.files.forEach((file, i) => {
+			const value = data.fileSizes?.[i];
+			if (!isCanonicalWordIndexNumber(value) || value < 0) canonical = false;
+			fileSizes.set(
+				file,
+				isCanonicalWordIndexNumber(value) && value >= 0 ? value : 0,
+			);
+		});
+	} else {
+		canonical = false;
 	}
 
 	const postings = new Map<string, WordPostingList>();
-	for (const [token, flat] of data.postings) {
-		if (typeof token !== "string" || !Array.isArray(flat)) continue;
+	const postingTokens = new Set<string>();
+	const postingFileCounts = new Map<string, Map<number, number>>();
+	for (const posting of data.postings) {
+		if (!Array.isArray(posting) || posting.length !== 2) {
+			canonical = false;
+			needsDeepSanitize = true;
+			continue;
+		}
+		const [token, flat] = posting;
+		if (
+			!isCanonicalWordIndexToken(token) ||
+			postingTokens.has(token) ||
+			!Array.isArray(flat) ||
+			flat.length === 0 ||
+			flat.length % 2 !== 0
+		) {
+			canonical = false;
+			needsDeepSanitize = true;
+			continue;
+		}
+		postingTokens.add(token);
 		const lanes: number[] = [];
-		for (let i = 0; i + 1 < flat.length; i += 2) {
-			const fileId = fileIdBySlot[flat[i]];
+		const seenPairs = new Set<number | string>();
+		const observedCounts = new Map<number, number>();
+		for (let i = 0; i < flat.length; i += 2) {
+			const slot = flat[i];
 			const line = flat[i + 1];
-			if (typeof fileId === "number" && typeof line === "number") {
-				lanes.push(fileId, line);
+			if (
+				!isCanonicalWordIndexNumber(slot) ||
+				slot < 0 ||
+				slot >= fileIdBySlot.length ||
+				!isCanonicalWordIndexNumber(line) ||
+				line < 1 ||
+				line > WORD_INDEX_INT32_MAX
+			) {
+				canonical = false;
+				needsDeepSanitize = true;
+				continue;
 			}
+			const fileId = fileIdBySlot[slot];
+			const pairKey =
+				fileId <= WORD_INDEX_PACKED_FILE_ID_MAX
+					? fileId * (WORD_INDEX_INT32_MAX + 1) + line
+					: `${fileId}:${line}`;
+			if (seenPairs.has(pairKey)) {
+				canonical = false;
+				needsDeepSanitize = true;
+			}
+			seenPairs.add(pairKey);
+			lanes.push(fileId, line);
+			observedCounts.set(fileId, (observedCounts.get(fileId) ?? 0) + 1);
 		}
-		if (lanes.length > 0) {
-			postings.set(token, WordPostingList.fromLanes(token, lanes));
-		}
+		if (lanes.length === 0) continue;
+		const list = WordPostingList.fromLanes(token, lanes);
+		postings.set(token, list);
+		postingFileCounts.set(token, observedCounts);
 	}
 
 	// Every list above was sized exactly from the wire payload, so there is no
@@ -2169,32 +2270,135 @@ export function deserializeWordIndex(
 
 	let forward: PathKeyedMap<WordForwardEntry> | undefined;
 	if (Array.isArray(data.forward)) {
-		forward = new PathKeyedMap<WordForwardEntry>(wordIndexKey);
-		for (const entry of data.forward) {
-			if (!Array.isArray(entry) || entry.length !== 2) continue;
+		const candidate = data.files.map(() => new Map<string, number>());
+		const forwardTotals = new Map<string, number>();
+		if (data.forward.length !== data.files.length) canonical = false;
+		if (data.forward.length !== data.files.length) needsDeepSanitize = true;
+		for (const [entryIndex, entry] of data.forward.entries()) {
+			if (!Array.isArray(entry) || entry.length !== 2) {
+				canonical = false;
+				needsDeepSanitize = true;
+				continue;
+			}
 			const [fileIdx, tokenCounts] = entry;
-			const file = data.files[fileIdx];
-			if (typeof file !== "string" || !Array.isArray(tokenCounts)) continue;
-			const perToken = new Map<string, number>();
+			if (
+				!isCanonicalWordIndexNumber(fileIdx) ||
+				fileIdx !== entryIndex ||
+				fileIdx < 0 ||
+				fileIdx >= data.files.length ||
+				!Array.isArray(tokenCounts)
+			) {
+				canonical = false;
+				needsDeepSanitize = true;
+				continue;
+			}
 			for (const pair of tokenCounts) {
-				if (!Array.isArray(pair) || pair.length !== 2) continue;
-				const [token, count] = pair;
-				if (typeof token === "string" && typeof count === "number") {
-					// Point at the canonical instance the postings map holds, not
-					// this document’s own JSON.parse allocation (#2069).
-					perToken.set(postings.get(token)?.token ?? token, count);
+				if (
+					!Array.isArray(pair) ||
+					pair.length !== 2 ||
+					!isCanonicalWordIndexToken(pair[0]) ||
+					!isCanonicalWordIndexNumber(pair[1]) ||
+					pair[1] < 1 ||
+					pair[1] > WORD_INDEX_INT32_MAX ||
+					candidate[fileIdx].has(pair[0])
+				) {
+					canonical = false;
+					needsDeepSanitize = true;
+					continue;
+				}
+				candidate[fileIdx].set(pair[0], pair[1]);
+				forwardTotals.set(pair[0], (forwardTotals.get(pair[0]) ?? 0) + pair[1]);
+			}
+		}
+		let forwardMatchesPostings = true;
+		for (const [token, list] of postings) {
+			if (forwardTotals.get(token) !== list.length) {
+				forwardMatchesPostings = false;
+			}
+			const observed = postingFileCounts.get(token);
+			if (!observed) {
+				forwardMatchesPostings = false;
+				continue;
+			}
+			for (const [fileId, count] of observed) {
+				const slot = slotByFileId.get(fileId);
+				if (slot === undefined || candidate[slot].get(token) !== count) {
+					forwardMatchesPostings = false;
 				}
 			}
-			forward.set(file, WordForwardEntry.fromTally(perToken));
+		}
+		for (const token of forwardTotals.keys()) {
+			if (!postingTokens.has(token)) forwardMatchesPostings = false;
+		}
+		if (!forwardMatchesPostings) canonical = false;
+		if (!forwardMatchesPostings) needsDeepSanitize = true;
+		forward = new PathKeyedMap<WordForwardEntry>(wordIndexKey);
+		for (let i = 0; i < data.files.length; i += 1) {
+			forward.set(data.files[i], WordForwardEntry.fromTally(candidate[i]));
+		}
+	} else if (Object.prototype.hasOwnProperty.call(data, "forward")) {
+		canonical = false;
+		needsDeepSanitize = true;
+	}
+	if (needsDeepSanitize) {
+		const actualForwardCounts = data.files.map(() => new Map<string, number>());
+		for (const [token, list] of postings) {
+			const seenPairs = new Set<string>();
+			const sanitized = new WordPostingList(token, list.length);
+			for (let i = 0; i < list.length; i += 1) {
+				const fileId = list.fileIdAt(i);
+				const line = list.lineAt(i);
+				const pairKey = `${fileId}:${line}`;
+				if (seenPairs.has(pairKey)) continue;
+				seenPairs.add(pairKey);
+				sanitized.push(fileId, line);
+				const slot = slotByFileId.get(fileId);
+				if (slot !== undefined) {
+					const counts = actualForwardCounts[slot];
+					counts.set(token, (counts.get(token) ?? 0) + 1);
+				}
+			}
+			postings.set(token, sanitized);
+		}
+		compactPostingsIntoArena(postings);
+		if (Array.isArray(data.forward)) {
+			forward = new PathKeyedMap<WordForwardEntry>(wordIndexKey);
+			for (let i = 0; i < data.files.length; i += 1) {
+				const canonicalSlot = slotByFileId.get(fileIdBySlot[i]) ?? i;
+				forward.set(
+					data.files[i],
+					WordForwardEntry.fromTally(actualForwardCounts[canonicalSlot]),
+				);
+			}
 		}
 	}
+	const expectedTotalTokens = [...docLengths.values()].reduce(
+		(total, length) => total + length,
+		0,
+	);
+	const totalTokens = isCanonicalWordIndexNumber(expectedTotalTokens)
+		? expectedTotalTokens
+		: 0;
+	if (
+		!isCanonicalWordIndexNumber(data.totalTokens) ||
+		data.totalTokens !== totalTokens
+	) {
+		canonical = false;
+	}
+	if (
+		typeof data.indexedFileCount !== "number" ||
+		data.indexedFileCount !== docLengths.size
+	) {
+		canonical = false;
+	}
+	if (typeof data.truncated !== "boolean") canonical = false;
 
-	return {
+	const index: WordIndex = {
 		postings,
 		fileTable,
 		docLengths,
-		totalTokens: typeof data.totalTokens === "number" ? data.totalTokens : 0,
-		docCount: data.files.length,
+		totalTokens,
+		docCount: docLengths.size,
 		truncated: data.truncated === true,
 		forward,
 		fileMtimes,
@@ -2203,7 +2407,37 @@ export function deserializeWordIndex(
 		// starts from the exact post-compaction store count (#2117).
 		postingStoreCount: countPostingBackingStores(postings),
 		recompactFlight: createSingleFlight<void>(),
+		// A deserialized index is a fresh object distinct from whichever index
+		// produced `data`. Without this, every per-edit dirty mark on a
+		// session-start reload (#2068) is a no-op against `undefined`, and
+		// serializeWordIndexIncrementally's `!dirty` branch then returns the
+		// stale cached wire view forever, silently dropping every later edit
+		// from the persisted snapshot.
+		dirtyFiles: new Set<string>(),
 	};
+
+	// Seed the wire cache from the snapshot just loaded so the FIRST persist
+	// of a reloaded session (session-start's `snapshotSaveSyncMs`, #2068) also
+	// takes the bounded incremental path instead of paying a full rebuild —
+	// mirrors exactly what one priming `serializeWordIndex` call would cache.
+	const tokensByFile = new Map<string, Set<string>>();
+	if (forward) {
+		for (const file of data.files) {
+			tokensByFile.set(
+				wordIndexKey(file),
+				new Set(forward.get(file)?.keys() ?? []),
+			);
+		}
+	}
+	if (canonical) {
+		serializedWordIndexCaches.set(index, {
+			serialized: data,
+			slotByFileId,
+			tokensByFile,
+		});
+	}
+
+	return index;
 }
 
 // --- Cold-query background build trigger (#348) -------------------------------

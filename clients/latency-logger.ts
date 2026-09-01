@@ -146,6 +146,7 @@ const LAST_PHASE_EXCLUDED = new Set([
 	"lsp_scanner_coverage_gap",
 	"lsp_notify_resync_deferred",
 	"lsp_notify_write_late_landed",
+	"lsp_notify_stall_cpu_busy",
 	"degradation_ledger",
 	"path_attribution_verified_rollup",
 	"concurrent_session_bind_rollup",

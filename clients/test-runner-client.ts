@@ -28,6 +28,7 @@ import {
 import { normalizeEphemeralMapKey, normalizeMapKey } from "./path-utils.js";
 import { isMeasuredDuration, toMeasuredDurationMs } from "./run-duration.js";
 import { safeSpawn, safeSpawnAsync } from "./safe-spawn.js";
+import { stripAnsi } from "./sanitize.js";
 
 // --- Types ---
 
@@ -354,6 +355,63 @@ function filesystemErrorCode(error: unknown): string | undefined {
 		return error.code;
 	}
 	return undefined;
+}
+
+interface PytestSummary {
+	passed: number;
+	failed: number;
+	skipped: number;
+	duration?: number;
+}
+
+const PYTEST_SUMMARY_OUTCOME =
+	"(?:passed|failed|skipped|reruns?|errors?|warnings?|deselected|xfailed|xpassed)";
+const PYTEST_SUMMARY_LINE = new RegExp(
+	`^\\s*(?:=+\\s*)?\\d+\\s+${PYTEST_SUMMARY_OUTCOME}` +
+		`(?:\\s*,\\s*\\d+\\s+${PYTEST_SUMMARY_OUTCOME})*` +
+		`\\s+in\\s+[\\d.]+s(?:\\s*=+)?\\s*$`,
+	"i",
+);
+
+/** Extract aggregate values from pytest's final outcome line only. */
+function parsePytestSummary(output: string): PytestSummary {
+	// Pytest may color the whole summary or individual tokens. Strip ANSI before
+	// selecting and extracting so formatting cannot turn the first count into 0.
+	const normalizedOutput = stripAnsi(output);
+	const summaryLine = normalizedOutput
+		.split(/\r?\n/)
+		.reverse()
+		.find((line) => PYTEST_SUMMARY_LINE.test(line));
+	let passed = 0;
+	let failed = 0;
+	let skipped = 0;
+	if (!summaryLine) return { passed, failed, skipped };
+
+	const summaryBody = summaryLine.replace(/^=+\s*|\s*=+\s*$/g, "");
+	for (const field of summaryBody.split(",")) {
+		const [countText, outcome] = field.trim().split(/\s+/, 2);
+		const count = Number.parseInt(countText, 10);
+		if (!Number.isFinite(count)) continue;
+		switch (outcome) {
+			case "passed":
+				passed = count;
+				break;
+			case "failed":
+				failed = count;
+				break;
+			case "skipped":
+				skipped = count;
+				break;
+		}
+	}
+
+	const durationMatch = /in\s+([\d.]+)s/.exec(summaryLine);
+	// Rounded, like `jsonRunDurationMs` and PHPUnit's legacy path:
+	// `in 2.01s` is 2009.9999999999998 in binary floating point.
+	const duration = durationMatch
+		? Math.round(Number.parseFloat(durationMatch[1]) * 1000)
+		: undefined;
+	return { passed, failed, skipped, duration };
 }
 
 export class TestRunnerClient {
@@ -1698,35 +1756,9 @@ export class TestRunnerClient {
 		const failures: TestFailure[] = [];
 		const output = `${stdout}\n${stderr}`;
 
-		// Parse summary line: "5 passed, 2 failed, 1 skipped in 0.23s"
-		const summaryMatch =
-			output.match(/(\d+)\s+passed?.*?(\d+)\s+failed.*?in\s+([\d.]+)s/i) ||
-			output.match(/(\d+)\s+passed.*?in\s+([\d.]+)s/i);
-
-		let passed = 0;
-		let failed = 0;
-		let skipped = 0;
-		// #1479: undefined until pytest's own `in N.NNs` is read. `in 0.00s` is
-		// a real pytest summary, so 0 has to stay available as a measurement.
-		let duration: number | undefined;
-
-		if (summaryMatch) {
-			// Extract numbers from various patterns
-			const passedMatch = output.match(/(\d+)\s+passed/);
-			const failedMatch = output.match(/(\d+)\s+failed/);
-			const skippedMatch = output.match(/(\d+)\s+skipped/);
-			const durationMatch = output.match(/in\s+([\d.]+)s/);
-
-			passed = passedMatch ? parseInt(passedMatch[1], 10) : 0;
-			failed = failedMatch ? parseInt(failedMatch[1], 10) : 0;
-			skipped = skippedMatch ? parseInt(skippedMatch[1], 10) : 0;
-			// Rounded, like `jsonRunDurationMs` and PHPUnit's legacy path:
-			// `in 2.01s` is 2009.9999999999998 in binary floating point, and
-			// the turn-end log prints the number as it stands.
-			// (Routing this through `toMeasuredDurationMs` is #1484, not this.)
-			if (durationMatch)
-				duration = Math.round(parseFloat(durationMatch[1]) * 1000);
-		}
+		// #1479: `duration` stays undefined unless pytest emits its own `in N.NNs`
+		// summary. A measured `in 0.00s` remains a real zero.
+		const { passed, failed, skipped, duration } = parsePytestSummary(output);
 
 		// Parse individual failures: "FAILED tests/test_foo.py::test_something - AssertionError: ..."
 		const failureRegex = /FAILED\s+(\S+::\S+)\s*-\s*(.+?)(?:\n|$)/g;

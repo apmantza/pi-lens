@@ -308,6 +308,15 @@ export interface LSPClientInfo {
 	 * capability-accessor pattern (`getRawCapabilityKeys`, `getLaunchVariant`).
 	 */
 	pingLiveness?: (timeoutMs?: number) => Promise<boolean>;
+	/**
+	 * #2358: the OS pid of the server's live process tree (the direct child;
+	 * on Windows a `cmd`/`.cmd` shim's pid, whose real descendant does the
+	 * work). The notify-stall breaker's liveness discriminator samples this
+	 * pid's CPU to tell a busy server from a dead input path before tearing it
+	 * down. Optional because test/mock clients model no real process — a
+	 * client without it keeps the pre-#2358 demote-at-budget behavior.
+	 */
+	getProcessPid?: () => number | undefined;
 	notify: {
 		open(
 			filePath: string,
@@ -5437,6 +5446,9 @@ export async function createLSPClient(options: {
 
 		/** #1277: cheap request round-trip proving the server still responds. */
 		pingLiveness: (timeoutMs?: number) => clientPingLiveness(state, timeoutMs),
+
+		/** #2358: the OS pid of the live server process (see interface doc). */
+		getProcessPid: () => lspProcess.pid,
 
 		notify: {
 			async open(filePath, content, languageId, preserveDiagnostics, silent) {

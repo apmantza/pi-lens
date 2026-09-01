@@ -33,6 +33,113 @@ import { fetchHeadRunHealth, RUN_HEALTH } from "./warden-run-health.mjs";
 
 export const TRAIN_APPROVED_LABEL = "train:approved";
 export const TRAIN_SQUASH_LABEL = "train:squash";
+export const POST_MERGE_EVENT = "merge-train-post-merge";
+export const POST_MERGE_DISPATCH_ATTEMPTS = 2;
+export const POST_MERGE_RECONCILE_WINDOW_MS = 24 * 60 * 60 * 1000;
+export const POST_MERGE_RECONCILE_GRACE_MS = 15 * 60 * 1000;
+export const POST_MERGE_RETRY_GENERATION_MS = 6 * 60 * 60 * 1000;
+export const POST_MERGE_RECONCILE_PAGE_SIZE = 100;
+export const POST_MERGE_RECONCILE_MAX_PAGES = 10;
+export const POST_MERGE_RECONCILE_MAX_RECORDS =
+	POST_MERGE_RECONCILE_PAGE_SIZE * POST_MERGE_RECONCILE_MAX_PAGES;
+export const POST_MERGE_VALIDATION_WORKFLOWS = Object.freeze([
+	"ci.yml",
+	"lint.yml",
+	"install-smoke.yml",
+	"labels.yml",
+]);
+const POST_MERGE_ERROR_CAP = 200;
+const POST_MERGE_BOT_LOGIN = "github-actions[bot]";
+const GRAPHQL_DATETIME_RE =
+	/^(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})T(?<hour>\d{2}):(?<minute>\d{2}):(?<second>\d{2})(?:\.(?<fraction>\d{1,9}))?(?<zone>Z|[+-]\d{2}:\d{2})$/;
+
+const RECENT_MERGED_PR_QUERY = `
+query($owner: String!, $name: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(
+      states: [CLOSED, MERGED]
+      first: ${POST_MERGE_RECONCILE_PAGE_SIZE}
+      after: $after
+      orderBy: { field: UPDATED_AT, direction: DESC }
+    ) {
+      pageInfo { hasNextPage endCursor }
+      edges {
+        cursor
+        node {
+          number
+          state
+          updatedAt
+          mergedAt
+          mergedBy { login }
+          mergeCommit { oid }
+        }
+      }
+    }
+  }
+}`;
+
+function boundedError(error) {
+	return String(error instanceof Error ? error.message : error).slice(
+		0,
+		POST_MERGE_ERROR_CAP,
+	);
+}
+
+function parseGraphqlDateTime(value, field, page, number) {
+	const prefix = `recent merged-PR page ${page} #${number}`;
+	if (typeof value !== "string")
+		throw new Error(`${prefix} has invalid ${field}`);
+	const match = GRAPHQL_DATETIME_RE.exec(value);
+	if (!match?.groups) throw new Error(`${prefix} has invalid ${field}`);
+	const year = Number(match.groups.year);
+	const month = Number(match.groups.month);
+	const day = Number(match.groups.day);
+	const hour = Number(match.groups.hour);
+	const minute = Number(match.groups.minute);
+	const second = Number(match.groups.second);
+	const fraction = match.groups.fraction ?? "";
+	const zone = match.groups.zone;
+	const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+	const daysInMonth = [
+		31,
+		leapYear ? 29 : 28,
+		31,
+		30,
+		31,
+		30,
+		31,
+		31,
+		30,
+		31,
+		30,
+		31,
+	][month - 1];
+	const offsetHours = zone === "Z" ? 0 : Number(zone.slice(1, 3));
+	const offsetMinutes = zone === "Z" ? 0 : Number(zone.slice(4, 6));
+	if (
+		!daysInMonth ||
+		day < 1 ||
+		day > daysInMonth ||
+		hour > 23 ||
+		minute > 59 ||
+		second > 59 ||
+		offsetHours > 23 ||
+		offsetMinutes > 59
+	)
+		throw new Error(`${prefix} has invalid ${field}`);
+	const timestamp = Date.parse(value);
+	if (!Number.isFinite(timestamp))
+		throw new Error(`${prefix} has invalid ${field}`);
+	const offset =
+		(zone === "Z" ? 1 : zone[0] === "+" ? 1 : -1) *
+		(offsetHours * 60 + offsetMinutes) *
+		60_000;
+	const milliseconds = fraction.padEnd(3, "0").slice(0, 3);
+	const canonical = new Date(timestamp + offset).toISOString();
+	const expected = `${match.groups.year}-${match.groups.month}-${match.groups.day}T${match.groups.hour}:${match.groups.minute}:${match.groups.second}.${milliseconds}Z`;
+	if (canonical !== expected) throw new Error(`${prefix} has invalid ${field}`);
+	return timestamp;
+}
 
 // How this repository ACTUALLY marks a check advisory: the workflow job name
 // ends in "(advisory)". Probed 2026-08-26 against the live rollups of every
@@ -329,6 +436,522 @@ export async function mergePullRequest(fetcher, owner, repo, pr, method) {
 }
 
 /**
+ * Ask GitHub to replay the master-push validation workflows for the commit
+ * produced by the merge. `GITHUB_TOKEN` suppresses the push event that would
+ * normally start them, but repository_dispatch is explicitly exempt from
+ * that recursion rule. The payload carries both identities so consumers
+ * cannot accidentally validate the default branch at a different commit.
+ */
+export async function dispatchPostMergeValidation(
+	fetcher,
+	owner,
+	repo,
+	mergeSha,
+	prNumber,
+) {
+	return rest(
+		fetcher,
+		"POST",
+		`https://api.github.com/repos/${owner}/${repo}/dispatches`,
+		{
+			event_type: POST_MERGE_EVENT,
+			client_payload: {
+				repository: `${owner}/${repo}`,
+				sha: mergeSha,
+				pr_number: prNumber,
+			},
+		},
+	);
+}
+
+/**
+ * Retry only the transient/ambiguous dispatch outcomes. A timeout can mean
+ * GitHub accepted the event before the client lost its response, so retries
+ * are intentionally idempotent at the workflow boundary: each consumer has
+ * a per-SHA concurrency key and cancels a duplicate in-flight run.
+ */
+export async function dispatchPostMergeValidationWithRetry(
+	fetcher,
+	owner,
+	repo,
+	mergeSha,
+	prNumber,
+) {
+	let lastResponse;
+	let lastError;
+	for (let attempt = 1; attempt <= POST_MERGE_DISPATCH_ATTEMPTS; attempt++) {
+		try {
+			lastResponse = await dispatchPostMergeValidation(
+				fetcher,
+				owner,
+				repo,
+				mergeSha,
+				prNumber,
+			);
+			const retryable =
+				lastResponse.status === 408 ||
+				lastResponse.status === 429 ||
+				lastResponse.status >= 500;
+			if (
+				lastResponse.ok ||
+				!retryable ||
+				attempt === POST_MERGE_DISPATCH_ATTEMPTS
+			)
+				return { response: lastResponse, attempts: attempt };
+		} catch (error) {
+			lastError = error;
+			if (attempt === POST_MERGE_DISPATCH_ATTEMPTS) throw error;
+		}
+	}
+	if (lastResponse) {
+		return { response: lastResponse, attempts: POST_MERGE_DISPATCH_ATTEMPTS };
+	}
+	throw lastError ?? new Error("post-merge validation dispatch failed");
+}
+
+function postMergeRequestMarker(mergeSha, attempt, generation, requestedAt) {
+	return `<!-- merge-train-post-merge:sha=${mergeSha}:state=requested:attempt=${attempt}:generation=${generation}:at=${requestedAt} -->`;
+}
+
+function postMergeExhaustedMarker(mergeSha, generation, exhaustedAt) {
+	return `<!-- merge-train-post-merge:sha=${mergeSha}:state=exhausted:generation=${generation}:at=${exhaustedAt} -->`;
+}
+
+async function readIssueComments(fetcher, owner, repo, number) {
+	return paginate(
+		fetcher,
+		`https://api.github.com/repos/${owner}/${repo}/issues/${number}/comments`,
+	);
+}
+
+async function readPostMergeState(fetcher, owner, repo, number, mergeSha, now) {
+	const comments = await readIssueComments(fetcher, owner, repo, number);
+	const requests = [];
+	const exhaustedGenerations = new Set();
+	const workflows = new Map();
+	const escapedSha = mergeSha.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const requestPattern = new RegExp(
+		`merge-train-post-merge:sha=${escapedSha}:state=requested:attempt=(\\d+):generation=(\\d+):at=(\\d+)`,
+	);
+	const legacyPattern = new RegExp(
+		`merge-train-post-merge:sha=${escapedSha}:dispatched`,
+	);
+	const exhaustedPattern = new RegExp(
+		`merge-train-post-merge:sha=${escapedSha}:state=exhausted:generation=(\\d+):at=(\\d+)`,
+	);
+	const validationPattern = new RegExp(
+		`merge-train-post-merge:sha=${escapedSha}:workflow=([^:]+):state=(succeeded|failed)`,
+	);
+	for (const comment of comments) {
+		if (comment?.user?.login !== POST_MERGE_BOT_LOGIN) continue;
+		const body = String(comment?.body ?? "");
+		const request = body.match(requestPattern);
+		if (request) {
+			const attempt = Number(request[1]);
+			const generation = Number(request[2]);
+			const requestedAt = Number(request[3]);
+			if (
+				Number.isSafeInteger(attempt) &&
+				Number.isSafeInteger(generation) &&
+				Number.isSafeInteger(requestedAt) &&
+				requestedAt <= now
+			) {
+				requests.push({ attempt, generation, requestedAt });
+			}
+		} else if (legacyPattern.test(body)) {
+			requests.push({ attempt: 1, generation: 0, requestedAt: 0 });
+		}
+		const exhausted = body.match(exhaustedPattern);
+		if (exhausted && Number.isSafeInteger(Number(exhausted[1])))
+			exhaustedGenerations.add(Number(exhausted[1]));
+		const validation = body.match(validationPattern);
+		if (!validation || !POST_MERGE_VALIDATION_WORKFLOWS.includes(validation[1]))
+			continue;
+		const previous = workflows.get(validation[1]);
+		if (previous !== "failed") workflows.set(validation[1], validation[2]);
+	}
+	return { requests, exhaustedGenerations, workflows };
+}
+
+async function recordPostMergeDispatch(
+	fetcher,
+	owner,
+	repo,
+	number,
+	mergeSha,
+	attempt,
+	generation,
+	requestedAt,
+) {
+	return rest(
+		fetcher,
+		"POST",
+		`https://api.github.com/repos/${owner}/${repo}/issues/${number}/comments`,
+		{
+			body: `Post-merge validation dispatch requested for ${mergeSha} (generation ${generation}, attempt ${attempt}).\n\n${postMergeRequestMarker(mergeSha, attempt, generation, requestedAt)}`,
+		},
+	);
+}
+
+async function recordPostMergeExhausted(
+	fetcher,
+	owner,
+	repo,
+	number,
+	mergeSha,
+	generation,
+	exhaustedAt,
+) {
+	return rest(
+		fetcher,
+		"POST",
+		`https://api.github.com/repos/${owner}/${repo}/issues/${number}/comments`,
+		{
+			body: `Post-merge validation has no terminal result for ${mergeSha} after ${POST_MERGE_DISPATCH_ATTEMPTS} request attempts in generation ${generation}.\n\n${postMergeExhaustedMarker(mergeSha, generation, exhaustedAt)}`,
+		},
+	);
+}
+
+/**
+ * Read only the recent ordered window. The REST pull-list is exhaustive and
+ * omits mergedBy, so it cannot be shared with comment-marker reads: this
+ * connection carries the identity and uses updatedAt only as its boundary.
+ */
+async function readRecentMergedPullRequests(
+	fetcher,
+	owner,
+	repo,
+	now,
+	windowMs,
+) {
+	const cutoff = now - windowMs;
+	const records = [];
+	const seenNumbers = new Set();
+	const seenCursors = new Set();
+	let after = null;
+	let previousUpdatedAt = Number.POSITIVE_INFINITY;
+
+	for (let page = 1; page <= POST_MERGE_RECONCILE_MAX_PAGES; page++) {
+		const response = await fetcher("https://api.github.com/graphql", {
+			method: "POST",
+			headers: {
+				accept: "application/vnd.github+json",
+				"content-type": "application/json",
+			},
+			body: JSON.stringify({
+				query: RECENT_MERGED_PR_QUERY,
+				variables: { owner, name: repo, after },
+			}),
+		});
+		if (!response.ok)
+			throw new Error(
+				`recent merged-PR page ${page} -> HTTP ${response.status}`,
+			);
+		const payload = await response.json();
+		if (payload?.errors?.length)
+			throw new Error(
+				`recent merged-PR page ${page} -> GraphQL: ${payload.errors.map((error) => error?.message ?? String(error)).join("; ")}`,
+			);
+		const connection = payload?.data?.repository?.pullRequests;
+		if (!connection || !Array.isArray(connection.edges))
+			throw new Error(`recent merged-PR page ${page} returned no edges`);
+		const pageEdges = connection.edges;
+		const pageInfo = connection.pageInfo;
+		if (!pageInfo || typeof pageInfo.hasNextPage !== "boolean")
+			throw new Error(`recent merged-PR page ${page} has malformed page info`);
+		if (pageEdges.length === 0) {
+			if (pageInfo.hasNextPage)
+				throw new Error(
+					`recent merged-PR page ${page} has next page without records`,
+				);
+			if (pageInfo.endCursor !== null)
+				throw new Error(
+					`recent merged-PR page ${page} has invalid empty terminal cursor`,
+				);
+			return records;
+		}
+		if (records.length + pageEdges.length > POST_MERGE_RECONCILE_MAX_RECORDS)
+			throw new Error(
+				`recent merged-PR window exceeded ${POST_MERGE_RECONCILE_MAX_RECORDS} records; read truncated`,
+			);
+		if (pageEdges.length > POST_MERGE_RECONCILE_PAGE_SIZE)
+			throw new Error(
+				`recent merged-PR page ${page} exceeded ${POST_MERGE_RECONCILE_PAGE_SIZE} records`,
+			);
+		if (
+			typeof pageInfo.endCursor !== "string" ||
+			pageInfo.endCursor.length === 0
+		)
+			throw new Error(`recent merged-PR page ${page} has no end cursor`);
+		if (after !== null && pageInfo.endCursor === after)
+			throw new Error(`recent merged-PR page ${page} cursor did not advance`);
+
+		for (const edge of pageEdges) {
+			if (typeof edge?.cursor !== "string" || edge.cursor.length === 0)
+				throw new Error(
+					`recent merged-PR page ${page} has malformed edge cursor`,
+				);
+			if (seenCursors.has(edge.cursor))
+				throw new Error(
+					`recent merged-PR page ${page} has repeated edge cursor`,
+				);
+			seenCursors.add(edge.cursor);
+			const node = edge?.node;
+			if (!node || !Number.isSafeInteger(node.number))
+				throw new Error(`recent merged-PR page ${page} has malformed record`);
+			if (node.state !== "CLOSED" && node.state !== "MERGED")
+				throw new Error(
+					`recent merged-PR page ${page} #${node.number} has invalid state`,
+				);
+			const updatedAt = parseGraphqlDateTime(
+				node.updatedAt,
+				"updatedAt",
+				page,
+				node.number,
+			);
+			if (updatedAt > previousUpdatedAt)
+				throw new Error(
+					`recent merged-PR ordering increased at page ${page} #${node.number}`,
+				);
+			previousUpdatedAt = updatedAt;
+			if (seenNumbers.has(node.number))
+				throw new Error(
+					`recent merged-PR pagination repeated #${node.number} at page ${page}`,
+				);
+			seenNumbers.add(node.number);
+			if (node.state === "MERGED")
+				parseGraphqlDateTime(node.mergedAt, "mergedAt", page, node.number);
+			if (
+				node.state === "MERGED" &&
+				(!node.mergedBy || typeof node.mergedBy.login !== "string")
+			)
+				throw new Error(
+					`recent merged-PR #${node.number} has invalid mergedBy`,
+				);
+			records.push({
+				number: node.number,
+				updated_at: node.updatedAt,
+				merged_at: node.mergedAt,
+				merged_by: node.mergedBy,
+				merge_commit_sha: node.mergeCommit?.oid ?? null,
+			});
+		}
+
+		const lastEdge = pageEdges[pageEdges.length - 1];
+		if (lastEdge.cursor !== pageInfo.endCursor)
+			throw new Error(
+				`recent merged-PR page ${page} cursor does not match its edge`,
+			);
+		const lastUpdatedAt = previousUpdatedAt;
+		if (lastUpdatedAt < cutoff) return records;
+		if (!pageInfo.hasNextPage) return records;
+		if (page === POST_MERGE_RECONCILE_MAX_PAGES)
+			throw new Error(
+				`recent merged-PR window still full at page ${POST_MERGE_RECONCILE_MAX_PAGES}; read truncated`,
+			);
+		after = pageInfo.endCursor;
+	}
+	throw new Error(
+		`recent merged-PR window exceeded ${POST_MERGE_RECONCILE_MAX_RECORDS} records; read truncated`,
+	);
+}
+
+/**
+ * Reconcile merge-train dispatches from GitHub's durable merged-PR record.
+ * The scan runs on every lane process, so a crash after merge and before the
+ * dispatch, or after an accepted dispatch and before validation completes, is
+ * repaired by a later run. Only merges performed by this workflow's bot are eligible;
+ * ordinary human merges already receive the normal push workflows.
+ */
+export async function reconcilePostMergeValidations({
+	fetcher,
+	owner,
+	repo,
+	now = Date.now(),
+	windowMs = POST_MERGE_RECONCILE_WINDOW_MS,
+	graceMs = POST_MERGE_RECONCILE_GRACE_MS,
+}) {
+	let closedPrs;
+	try {
+		closedPrs = await readRecentMergedPullRequests(
+			fetcher,
+			owner,
+			repo,
+			now,
+			windowMs,
+		);
+	} catch (error) {
+		return [
+			{
+				number: null,
+				sha: null,
+				dispatched: false,
+				errors: [`merged-PR reconciliation read -> ${boundedError(error)}`],
+			},
+		];
+	}
+
+	const results = [];
+	for (const pr of closedPrs) {
+		if (pr?.merged_by?.login !== POST_MERGE_BOT_LOGIN) continue;
+		const mergedAt = Date.parse(String(pr?.merged_at ?? ""));
+		if (!Number.isFinite(mergedAt) || now - mergedAt > windowMs) continue;
+		const mergeSha = pr?.merge_commit_sha;
+		if (typeof mergeSha !== "string" || !/^[0-9a-f]{40}$/i.test(mergeSha)) {
+			results.push({
+				number: pr?.number ?? null,
+				sha: null,
+				dispatched: false,
+				errors: ["merged-PR record has no exact merge SHA"],
+			});
+			continue;
+		}
+
+		let state;
+		try {
+			state = await readPostMergeState(
+				fetcher,
+				owner,
+				repo,
+				pr.number,
+				mergeSha,
+				now,
+			);
+		} catch (error) {
+			results.push({
+				number: pr.number,
+				sha: mergeSha,
+				dispatched: false,
+				errors: [`post-merge marker read -> ${boundedError(error)}`],
+			});
+			continue;
+		}
+
+		const failedWorkflows = POST_MERGE_VALIDATION_WORKFLOWS.filter(
+			(workflow) => state.workflows.get(workflow) === "failed",
+		);
+		if (failedWorkflows.length > 0) {
+			results.push({
+				number: pr.number,
+				sha: mergeSha,
+				dispatched: false,
+				errors: [
+					`post-merge validation failed for ${failedWorkflows.join(", ")} at ${mergeSha}`,
+				],
+			});
+			continue;
+		}
+		if (
+			POST_MERGE_VALIDATION_WORKFLOWS.every(
+				(workflow) => state.workflows.get(workflow) === "succeeded",
+			)
+		)
+			continue;
+		const generation = Math.floor(
+			Math.max(0, now - mergedAt) / POST_MERGE_RETRY_GENERATION_MS,
+		);
+		const generationRequests = state.requests.filter(
+			(request) => request.generation === generation,
+		);
+		const latestRequestedAt = Math.max(
+			-1,
+			...generationRequests.map((request) => request.requestedAt),
+		);
+		if (latestRequestedAt >= 0 && now - latestRequestedAt < graceMs) continue;
+		const attempt =
+			Math.max(0, ...generationRequests.map((request) => request.attempt)) + 1;
+		if (attempt > POST_MERGE_DISPATCH_ATTEMPTS) {
+			if (state.exhaustedGenerations.has(generation)) continue;
+			let exhaustedMarker;
+			try {
+				exhaustedMarker = await recordPostMergeExhausted(
+					fetcher,
+					owner,
+					repo,
+					pr.number,
+					mergeSha,
+					generation,
+					now,
+				);
+			} catch (error) {
+				results.push({
+					number: pr.number,
+					sha: mergeSha,
+					dispatched: false,
+					errors: [`post-merge exhaustion marker -> ${boundedError(error)}`],
+				});
+				continue;
+			}
+			results.push({
+				number: pr.number,
+				sha: mergeSha,
+				dispatched: false,
+				errors: exhaustedMarker.ok
+					? [
+							`post-merge validation missing after ${POST_MERGE_DISPATCH_ATTEMPTS} request attempt(s) for ${mergeSha}`,
+						]
+					: [`post-merge exhaustion marker -> HTTP ${exhaustedMarker.status}`],
+			});
+			continue;
+		}
+
+		try {
+			const marker = await recordPostMergeDispatch(
+				fetcher,
+				owner,
+				repo,
+				pr.number,
+				mergeSha,
+				attempt,
+				generation,
+				now,
+			);
+			if (!marker.ok) {
+				results.push({
+					number: pr.number,
+					sha: mergeSha,
+					dispatched: false,
+					errors: [`post-merge request marker -> HTTP ${marker.status}`],
+				});
+				continue;
+			}
+			const dispatch = await dispatchPostMergeValidationWithRetry(
+				fetcher,
+				owner,
+				repo,
+				mergeSha,
+				pr.number,
+			);
+			if (!dispatch.response.ok) {
+				results.push({
+					number: pr.number,
+					sha: mergeSha,
+					dispatched: false,
+					errors: [`post-merge dispatch -> HTTP ${dispatch.response.status}`],
+				});
+				continue;
+			}
+			results.push({
+				number: pr.number,
+				sha: mergeSha,
+				dispatched: true,
+				errors: [],
+			});
+		} catch (error) {
+			results.push({
+				number: pr.number,
+				sha: mergeSha,
+				dispatched: false,
+				errors: [
+					`post-merge dispatch -> failed after ${POST_MERGE_DISPATCH_ATTEMPTS} attempt(s): ${boundedError(error)}`,
+				],
+			});
+		}
+	}
+	return results;
+}
+
+/**
  * The strict-protection update kick (review round 1, F1). `expected_head_sha`
  * makes it as head-atomic as the merge call: if the branch moved since the
  * gate read, GitHub refuses rather than updating a head nobody evaluated.
@@ -414,6 +1037,74 @@ export async function runMergeLane({
 					gate.method,
 				);
 				merged = response.ok;
+				if (response.ok) {
+					let mergeBody;
+					let mergeBodyReadable = true;
+					try {
+						mergeBody = await response.json();
+					} catch (error) {
+						mergeBodyReadable = false;
+						errors.push({
+							message: `PR #${pr.number}: post-merge validation missing; merge response could not be read (${boundedError(error)})`,
+							benign: false,
+						});
+					}
+					const mergeSha = mergeBody?.sha;
+					if (!mergeBodyReadable) {
+						// The parse failure above already records the missing validation.
+					} else if (
+						typeof mergeSha !== "string" ||
+						!/^[0-9a-f]{40}$/i.test(mergeSha)
+					) {
+						errors.push({
+							message: `PR #${pr.number}: post-merge validation missing; merge response had no exact merge SHA`,
+							benign: false,
+						});
+					} else {
+						try {
+							const marker = await recordPostMergeDispatch(
+								fetcher,
+								owner,
+								repo,
+								pr.number,
+								mergeSha,
+								1,
+								0,
+								Date.now(),
+							);
+							if (!marker.ok) {
+								errors.push({
+									message: `PR #${pr.number}: post-merge request marker -> HTTP ${marker.status} for ${mergeSha}`,
+									benign: false,
+								});
+								continue;
+							}
+							const dispatchResult = await dispatchPostMergeValidationWithRetry(
+								fetcher,
+								owner,
+								repo,
+								mergeSha,
+								pr.number,
+							);
+							const dispatch = dispatchResult.response;
+							if (!dispatch.ok)
+								errors.push({
+									message: `PR #${pr.number}: post-merge validation dispatch -> HTTP ${dispatch.status} after ${dispatchResult.attempts} attempt(s) for ${mergeSha.slice(0, 64)}`,
+									benign: false,
+								});
+							else {
+								// The requested marker is durable state. HTTP acceptance is
+								// not validation completion; terminal workflow markers are
+								// written by the four repository_dispatch workflows.
+							}
+						} catch (error) {
+							errors.push({
+								message: `PR #${pr.number}: post-merge validation dispatch -> failed after ${POST_MERGE_DISPATCH_ATTEMPTS} attempt(s): ${boundedError(error)}`,
+								benign: false,
+							});
+						}
+					}
+				}
 				if (!response.ok) {
 					errors.push({
 						message: `PR #${pr.number}: merge -> HTTP ${response.status}`,

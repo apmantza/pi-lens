@@ -191,7 +191,10 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 		{
 			formatterNames: ["prettier"],
 			defaultFormatter: "prettier",
-			defaultWhenUnconfigured: true,
+			// HTML commonly carries template markers ({{JS}} embeds, Handlebars,
+			// Helm-adjacent Go templates). Prettier reinterprets them as code and
+			// corrupts them. Opt in via project prettier config; do not run by default.
+			defaultWhenUnconfigured: false,
 			gate: "smart-default",
 		},
 	],
@@ -200,7 +203,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 		{
 			formatterNames: ["prettier"],
 			defaultFormatter: "prettier",
-			defaultWhenUnconfigured: true,
+			defaultWhenUnconfigured: false,
 			gate: "smart-default",
 		},
 	],
@@ -209,7 +212,10 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 		{
 			formatterNames: ["prettier"],
 			defaultFormatter: "prettier",
-			defaultWhenUnconfigured: true,
+			// YAML commonly carries template markers (Helm `{{ .Values.x }}`,
+			// Ansible `{{ var }}`). Prettier splits `{{` into `{ {` and reindents
+			// embedded templates. Opt in via project prettier config.
+			defaultWhenUnconfigured: false,
 			gate: "smart-default",
 		},
 	],
@@ -218,7 +224,7 @@ const FORMATTER_POLICY_BY_EXTENSION = new Map<string, FormatterPolicy>([
 		{
 			formatterNames: ["prettier"],
 			defaultFormatter: "prettier",
-			defaultWhenUnconfigured: true,
+			defaultWhenUnconfigured: false,
 			gate: "smart-default",
 		},
 	],

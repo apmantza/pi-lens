@@ -199,6 +199,7 @@ describe("startup overhead — interactive path regression guard", () => {
 			expect(phases.get("session_start_total")?.metadata).toEqual({
 				mode: "quick",
 				reason: "startup",
+				sameRoot: "unknown",
 			});
 			expect(phases.get("session_start_sequence_read")?.metadata).toEqual(
 				expect.objectContaining({ entries: expect.any(Number) }),

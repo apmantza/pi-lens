@@ -347,7 +347,7 @@ export async function sweepAtomicWriteStages(
 	return sweepOwnStagingFiles(directories, { maxEntries, isPidAlive });
 }
 
-function windowsExe(name: string): string {
+export function windowsExe(name: string): string {
 	return path.join(
 		process.env.SystemRoot ?? String.raw`C:\Windows`,
 		"System32",

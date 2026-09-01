@@ -59,6 +59,8 @@ const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
 		"contract fixture assertions, not a registered-or-fail source population sweep",
 	"tests/clients/formatter-probe-commands.test.ts":
 		"direct formatter probe behavior tests; the formatter registry sweep is formatter-policy-consistency",
+	"tests/clients/runtime-tool-result.test.ts":
+		"runtime seam behavior cases; filesystem counters verify re-detection, not a population sweep",
 	"tests/clients/language-policy.test.ts":
 		"policy unit cases over synthetic language definitions, not a production walk",
 	"tests/clients/lsp/lsp-primary-reachability.test.ts":
