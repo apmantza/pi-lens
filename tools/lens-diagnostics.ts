@@ -895,9 +895,7 @@ function formatDeltaMode(
 		cwd,
 		policyMap,
 	);
-	const ignoreFile = createCurrentIgnoreFilter(cwd);
-	const includeFile = (filePath: string) =>
-		ignoreFile(filePath) && (!pathsScope || pathsScope.includeFile(filePath));
+	const includeFile = createScopedFileFilter(cwd, pathsScope);
 	// #755: delta re-serves the actionable/quality caches verbatim, but those
 	// were filtered at DISPATCH time — before any lens_diagnostic_mark. Re-apply
 	// dispositions here so a mark converges immediately, not only on the next
@@ -1045,6 +1043,8 @@ function createCurrentIgnoreFilter(cwd: string): (filePath: string) => boolean {
 interface PathsScope {
 	/** True when the file (or a directory prefix of it) was requested. */
 	includeFile: (filePath: string) => boolean;
+	/** True only when the exact file was explicitly named by the caller. */
+	includeExplicitFile: (filePath: string) => boolean;
 	/** Absolute paths of requested entries that don't exist on disk. */
 	missing: string[];
 	/**
@@ -1120,6 +1120,8 @@ function resolvePathsScope(
 	const fileKeys = new Set(fileEntries.map((f) => normalizeFilePath(f)));
 	const dirPrefixes = dirEntries.map((d) => normalizeFilePath(d));
 
+	const includeExplicitFile = (filePath: string): boolean =>
+		fileKeys.has(normalizeFilePath(path.resolve(filePath)));
 	const includeFile = (filePath: string): boolean => {
 		const key = normalizeFilePath(path.resolve(filePath));
 		if (fileKeys.has(key)) return true;
@@ -1130,6 +1132,7 @@ function resolvePathsScope(
 
 	return {
 		includeFile,
+		includeExplicitFile,
 		missing,
 		existingEntries,
 		hasDirectoryEntries: dirEntries.length > 0,
@@ -1155,6 +1158,18 @@ function pathsScopeMissingNote(scope: PathsScope | undefined): string {
 			? ` (+${scope.missing.length - shown.length} more)`
 			: "";
 	return `\n\n⚠ Skipped ${scope.missing.length} path(s) not found on disk: ${shown.join(", ")}${more}`;
+}
+
+function createScopedFileFilter(
+	cwd: string,
+	pathsScope?: PathsScope,
+): (filePath: string) => boolean {
+	const ignoreFile = createCurrentIgnoreFilter(cwd);
+	return (filePath: string) => {
+		if (!pathsScope) return ignoreFile(filePath);
+		if (!pathsScope.includeFile(filePath)) return false;
+		return pathsScope.includeExplicitFile(filePath) || ignoreFile(filePath);
+	};
 }
 
 function filterProjectDiagnosticsSnapshot(
@@ -1787,9 +1802,7 @@ async function formatFullMode(
 		};
 	}
 	const { signal, pathsScope, nextWriteIndex } = options;
-	const ignoreFile = createCurrentIgnoreFilter(cwd);
-	const includeFile = (filePath: string) =>
-		ignoreFile(filePath) && (!pathsScope || pathsScope.includeFile(filePath));
+	const includeFile = createScopedFileFilter(cwd, pathsScope);
 	// `paths` (#461): route the active scans at exactly the requested files
 	// instead of walking the whole project. Three cases:
 	// - files only → pass them as the explicit list (skips the walk). An EMPTY
@@ -2055,28 +2068,35 @@ async function formatFullMode(
 			projectScanObservedAt,
 		);
 	}
-	const result = formatAllMode(cwd, severity, summaries, {
-		mode: "full",
-		lspFilesChecked: rawLspResults.length,
-		partial: aborted,
-		projectDiagnostics:
-			projectSnapshot === undefined
-				? undefined
-				: {
-						tier: projectSnapshot.tier,
-						filesScanned: projectSnapshot.filesScanned,
-						diagnostics: projectSnapshot.diagnostics.length,
-						runners: projectSnapshot.runners,
-					},
-		projectDiagnosticsDelta:
-			projectDelta === undefined
-				? undefined
-				: {
-						diagnostics: projectDelta.diagnostics.length,
-						sources: projectDelta.sources,
-						turnIndex: projectDelta.turnIndex,
-					},
-	});
+	const result = formatAllMode(
+		cwd,
+		severity,
+		summaries,
+		{
+			mode: "full",
+			lspFilesChecked: rawLspResults.length,
+			partial: aborted,
+			projectDiagnostics:
+				projectSnapshot === undefined
+					? undefined
+					: {
+							tier: projectSnapshot.tier,
+							filesScanned: projectSnapshot.filesScanned,
+							diagnostics: projectSnapshot.diagnostics.length,
+							runners: projectSnapshot.runners,
+						},
+			projectDiagnosticsDelta:
+				projectDelta === undefined
+					? undefined
+					: {
+							diagnostics: projectDelta.diagnostics.length,
+							sources: projectDelta.sources,
+							turnIndex: projectDelta.turnIndex,
+						},
+		},
+		0,
+		pathsScope,
+	);
 	const missingNote = pathsScopeMissingNote(pathsScope);
 	// #630: mirrors `tools/lsp-diagnostics.ts`'s `unconfirmedReasonClause`/
 	// `tallyConfirmation` semantic guarantee (never silently render
@@ -2523,9 +2543,7 @@ function formatAllMode(
 	// to delta/all, which is why this is gated on detailOverrides.mode !== "full".
 	const isFullMode = (detailOverrides as { mode?: string }).mode === "full";
 
-	const ignoreFile = createCurrentIgnoreFilter(cwd);
-	const includeFile = (filePath: string) =>
-		ignoreFile(filePath) && (!pathsScope || pathsScope.includeFile(filePath));
+	const includeFile = createScopedFileFilter(cwd, pathsScope);
 	// Cached summaries predate marks. Every cache-only surface re-applies
 	// dispositions through the shared applyCachedDispositions seam — strict
 	// false-positive anchors against current content when the file is

@@ -3018,6 +3018,58 @@ describe("lens_diagnostics paths", () => {
 		}
 	});
 
+	it("mode=full: an explicitly named ignored file remains visible to an audit", async () => {
+		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-diag-audit-"));
+		try {
+			const ignoredFile = path.join(cwd, "ignored", "secret.env");
+			fs.mkdirSync(path.dirname(ignoredFile), { recursive: true });
+			fs.writeFileSync(ignoredFile, "SECRET=real-shaped-value\n");
+			fs.writeFileSync(
+				path.join(cwd, ".pi-lens.json"),
+				JSON.stringify({ ignore: ["ignored/**"] }),
+			);
+			resetProjectLensConfigCache();
+			const lspService = {
+				runWorkspaceDiagnostics: vi.fn().mockResolvedValue([]),
+			};
+			mockSummaries.push(
+				sum(
+					ignoredFile,
+					{ advisories: 1 },
+					{
+						diagnostics: [
+							{
+								severity: "info",
+								semantic: "none",
+								tool: "gitleaks",
+								rule: "gitleaks:generic-api-key",
+								message: "ignored audit finding [git: ignored]",
+								line: 1,
+							},
+						],
+					},
+				),
+			);
+			const tool = createLensDiagnosticsTool(
+				makeCacheManager({}) as any,
+				() => cwd,
+				() => lspService as any,
+			);
+			const result = await tool.execute(
+				"1",
+				{ mode: "full", refreshRunners: "cheap", paths: [ignoredFile] },
+				new AbortController().signal,
+				null,
+				{ cwd },
+			);
+
+			expect(String(result.content[0].text)).toContain("ignored audit finding");
+		} finally {
+			resetProjectLensConfigCache();
+			removeTempDirSync(cwd);
+		}
+	});
+
 	it("mode=full: a mixed dir+file list falls back to the walk (no silent under-scan of the directory)", async () => {
 		mockSummaries.length = 0;
 		const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-diag-mixed-"));

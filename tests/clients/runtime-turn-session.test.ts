@@ -1534,6 +1534,93 @@ describe("turn_end unified secret surfacing", () => {
 			env.cleanup();
 		}
 	});
+
+	it("reclassifies a legacy cached finding inside a nested repository before delivery", async () => {
+		const env = setupTestEnvironment("pi-lens-secret-legacy-nested-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.setTelemetryIdentity({ sessionId: "legacy-nested-session" });
+			const cacheManager = new CacheManager(false);
+			const nested = path.join(env.tmpDir, "submodule");
+			fs.mkdirSync(nested, { recursive: true });
+			fs.writeFileSync(
+				path.join(nested, ".git"),
+				"gitdir: ../.git/modules/submodule\n",
+			);
+			const secretFile = path.join(nested, ".env");
+			fs.writeFileSync(secretFile, "SECRET=real-shaped-value\n");
+			cacheManager.writeCache(
+				"gitleaks",
+				{
+					success: true,
+					scannedAt: "",
+					findings: [
+						{
+							ruleId: "generic-api-key",
+							file: secretFile,
+							startLine: 1,
+							pathStatus: "untracked" as const,
+						},
+					],
+				},
+				env.tmpDir,
+			);
+
+			await handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, { ctxCwd: env.tmpDir }),
+			);
+
+			const content =
+				consumeTurnEndFindings(cacheManager, env.tmpDir)?.messages?.[0]
+					?.content ?? "";
+			expect(content).not.toContain("hardcoded secrets detected");
+			expect(content).not.toContain("generic-api-key");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it.each(["ignored", "nested-repository", "scratch"] as const)(
+		"does not inject a %s gitleaks finding into turn context",
+		async (pathStatus) => {
+			const env = setupTestEnvironment(`pi-lens-secret-${pathStatus}-`);
+			try {
+				const runtime = new RuntimeCoordinator();
+				runtime.setTelemetryIdentity({ sessionId: "demoted-secret-session" });
+				const cacheManager = new CacheManager(false);
+				const secretFile = path.join(env.tmpDir, ".env");
+				fs.writeFileSync(secretFile, "SECRET=real-shaped-value\n");
+				cacheManager.writeCache(
+					"gitleaks",
+					{
+						success: true,
+						scannedAt: "",
+						findings: [
+							{
+								ruleId: "generic-api-key",
+								file: secretFile,
+								startLine: 1,
+								pathStatus,
+							},
+						],
+					},
+					env.tmpDir,
+				);
+
+				await handleTurnEnd(
+					makeTurnEndDeps(runtime, cacheManager, { ctxCwd: env.tmpDir }),
+				);
+
+				const content =
+					consumeTurnEndFindings(cacheManager, env.tmpDir)?.messages?.[0]
+						?.content ?? "";
+				expect(content).not.toContain("hardcoded secrets detected");
+				expect(content).not.toContain("generic-api-key");
+			} finally {
+				env.cleanup();
+			}
+		},
+	);
 });
 
 // ── Dead-path gitleaks findings (#1461 slice 1 / #1460) ───────────────────────

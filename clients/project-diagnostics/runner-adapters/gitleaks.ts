@@ -6,12 +6,11 @@ import type { ProjectDiagnostic } from "../types.js";
  * A gitleaks finding is a leaked secret at a concrete `file:startLine`. Secrets
  * are treated as **blocking** — a committed credential is not a style nit.
  *
- * Exception: `pathStatus: "scratch"` (#1562 review-round F2) — a finding
- * `classifyAndFilterFindings` demoted rather than dropped, so the observability
- * criterion ("record carries tracked/ignored/scratch status") stays honest
- * about a fourth REACHABLE value instead of silently deleting it. Demoted to
- * `severity: "info"`/`semantic: "none"` so it can never read as a blocking
- * "leaked secret" alarm, while remaining visible for an audit read.
+ * Findings in scratch trees, gitignored files, and nested repositories are
+ * retained for explicit audit but demoted to `severity: "info"` / `semantic:
+ * "none"`. They are outside the current repository's shippable source, so they
+ * must never read as blocking leaked-secret alarms. Tracked files and ordinary
+ * untracked files remain blocking.
  */
 export function gitleaksFindingToProjectDiagnostic(
 	cwd: string,
@@ -23,14 +22,17 @@ export function gitleaksFindingToProjectDiagnostic(
 	const statusSuffix = finding.pathStatus
 		? ` [git: ${finding.pathStatus}]`
 		: "";
-	const isScratch = finding.pathStatus === "scratch";
+	const isBlocking =
+		finding.pathStatus !== "scratch" &&
+		finding.pathStatus !== "ignored" &&
+		finding.pathStatus !== "nested-repository";
 	return {
 		filePath: path.isAbsolute(finding.file)
 			? finding.file
 			: path.resolve(cwd, finding.file),
 		line: finding.startLine,
-		severity: isScratch ? "info" : "error",
-		semantic: isScratch ? "none" : "blocking",
+		severity: isBlocking ? "error" : "info",
+		semantic: isBlocking ? "blocking" : "none",
 		tool: "gitleaks",
 		runner: "gitleaks",
 		rule: `gitleaks:${finding.ruleId}`,
