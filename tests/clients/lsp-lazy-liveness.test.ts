@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createPiMock, makeCtx } from "../support/pi-mock.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 import { removeTempDirSync } from "./test-utils.js";
 
 describe("LSP session warm/first-use liveness (#1394)", () => {
@@ -11,13 +12,12 @@ describe("LSP session warm/first-use liveness (#1394)", () => {
 	it("session_start -> first edit services the LSP and produces pipeline output", async () => {
 		vi.resetModules();
 		const touchFile = vi.fn(async () => []);
+		const service = makeLspServiceDouble({
+			touchFile,
+			supportsLSP: () => true,
+		});
 		vi.doMock("../../clients/lsp/index.js", () => ({
-			getLSPService: () => ({
-				touchFile,
-				supportsLSP: () => true,
-				getStatus: () => [],
-				getAliveServerIds: () => [],
-			}),
+			getLSPService: () => service,
 			resetLSPService: () => {},
 		}));
 		vi.doMock(
