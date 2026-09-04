@@ -61,7 +61,9 @@ function scanTrackedSourceFiles(files: readonly string[]): string[] {
 describe("tracked source files contain no literal control bytes (#2571)", () => {
 	it("scans a non-empty tracked TypeScript, JavaScript, and Markdown population", () => {
 		const files = trackedSourceFiles();
-		assertNonEmptyScan("git ls-files source population", files.length, 500);
+		// Calibration: 1,786 tracked source files are scanned on this tree. Keep
+		// the floor below half the population so a silently empty walk still reds.
+		assertNonEmptyScan("git ls-files source population", files.length, 800);
 		const violations = scanTrackedSourceFiles(files);
 		expect(violations, violations.join("\n")).toEqual([]);
 	});
@@ -70,9 +72,13 @@ describe("tracked source files contain no literal control bytes (#2571)", () => 
 	// two-character escaped spelling that the repository guard must recommend.
 	it("reports a literal NUL with its escaped remediation", () => {
 		const findings = findForbiddenControlBytes(
-			Uint8Array.from([0x70, 0x00, 0x69]),
+			Uint8Array.from([0x70, 0x00, 0x01, 0x1f, 0x69]),
 		);
-		expect(findings).toEqual([{ offset: 1, byte: 0x00 }]);
+		expect(findings).toEqual([
+			{ offset: 1, byte: 0x00 },
+			{ offset: 2, byte: 0x01 },
+			{ offset: 3, byte: 0x1f },
+		]);
 		const escaped = "\\u0000";
 		expect(
 			`U+${findings[0].byte.toString(16).padStart(4, "0")}; use escaped spelling such as ${escaped}.`,
