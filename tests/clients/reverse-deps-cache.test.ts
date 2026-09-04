@@ -7,6 +7,7 @@ import type {
 } from "../../clients/review-graph/types.js";
 import type { GraphBuildInfo } from "../../clients/review-graph/builder.js";
 import { setupTestEnvironment } from "./test-utils.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 /**
  * #459: computeCascadeForFile should skip rebuilding + re-persisting the
@@ -138,11 +139,7 @@ describe("reverse-deps index cache (#459)", () => {
 			maxDepthReached: 0,
 		});
 		mocks.formatImpactCascade.mockReset().mockReturnValue("impact header");
-		mocks.getLSPService.mockReset().mockReturnValue({
-			getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-			touchFile: vi.fn(),
-			getDiagnostics: vi.fn(),
-		});
+		mocks.getLSPService.mockReset().mockReturnValue(makeLspServiceDouble());
 		mocks.getLastGraphBuildInfo.mockReset();
 		mocks.getGraphImportChanges.mockReset().mockReturnValue(undefined);
 		mocks.buildReverseDependencyIndexFromGraph
