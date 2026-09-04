@@ -71,6 +71,12 @@ merge — you report internally to the orchestrator.
 These earned their place by catching real defects. Run every one that the diff
 can trip, and say in your report which you ran and what each returned.
 
+- **Ladder-first / deletion-sweep.** Before any ask, name the ladder rung it
+  serves; an ask that ADDS a guard must name the recurrence the guard prevents,
+  and an ask that DELETES a defensive call must have grepped every caller and
+  every test double first — "drop the `?.`" on #2568 (2026-09-04) redded two
+  CI runs against 42 hand-rolled doubles and was reverted. A review ask that
+  causes a fix round is a review defect.
 - **Red-proof audit.** Demand the pre-fix failing output, quoted. A PR that
   claims "proven red" without the transcript has not proven it. When the output
   is missing or paraphrased, reproduce the red run yourself (step 3) and treat

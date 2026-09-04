@@ -14,7 +14,10 @@ instructions say so.
 1. `gh issue view <N>` with comments — the issue body is the spec; its
    acceptance criteria are the contract. Read AGENTS.md, especially
    "Recurring defect shapes — screen against these BEFORE you write code",
-   and screen your own design against it before writing.
+   and screen your own design against it before writing — but climb the
+   AGENTS.md minimalism ladder FIRST: the catalog says what must not break,
+   never what to add. A guard/governance test you add names the recurrence
+   it prevents in its comment or it does not ship (#2582, 2026-09-04).
    **Mutation output is quoted, not ticked.** For every new guard, branch,
    filter, cap or fallback you add, neuter it (delete the line, force the
    condition) in the built output, run the suite that should catch it, and
