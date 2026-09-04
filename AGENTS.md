@@ -1062,6 +1062,8 @@ attributes, class static blocks, and switch cases use the enclosing statement.
 
 Rule-id normalization derives its language suffixes from the bundled CodeRabbit rule tree at startup; tests must keep that derived set covered so new vendored language rules cannot silently evade project policy matching.
 
+**Structural-provenance rule invariant (#2576):** A tree-sitter security-rule suppression must prove its safe API through same-file AST structure, not a receiver name or a broad call spelling. The Python SQL rule suppresses `Session.query` only when an unshadowed `sqlalchemy.orm.Session` import and a typed receiver prove the relationship. It suppresses psycopg composition only for an unshadowed `psycopg` or `psycopg2` `sql` import, a static `sql.SQL` template, and `sql.Identifier`-only format arguments. Missing, duplicate, shadowed, or reassigned provenance remains diagnostic.
+
 The shipped ast-grep catalog includes `no-bare-host-path-in-win32-branch`
 (#1158 shape 2). It deliberately matches only the consequence of an `if`
 guarded by `isWindowsPath` or `isFullyQualifiedWin32`; host-default path calls

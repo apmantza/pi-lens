@@ -60,6 +60,10 @@ import {
 } from "./tree-sitter-cache.js";
 import { TreeSitterNavigator } from "./tree-sitter-navigator.js";
 import {
+	isProvenSqlAlchemySessionReceiver,
+	isSafePsycopgIdentifierComposition,
+} from "./python-provenance.js";
+import {
 	type TreeSitterQuery,
 	TreeSitterQueryLoader,
 } from "./tree-sitter-query-loader.js";
@@ -80,6 +84,75 @@ const QUERY_BATCH_MAX_LOAD_FAILURES = 3;
 // must not stall the batched query walk; the filter fails open when this cap
 // is reached so unrelated diagnostics and the current match are preserved.
 const NO_NESTED_ANCHOR_VISIT_CAP = 10_000;
+const LEGACY_PYTHON_HALLUCINATED_IMPORT_MODULES: ReadonlySet<string> = new Set([
+	"requests",
+	"flask",
+	"django",
+	"typing",
+	"collections",
+	"asyncio",
+	"json",
+	"unittest",
+	"pytest",
+	"urllib",
+]);
+const LEGACY_PYTHON_HALLUCINATED_IMPORT_NAMES: ReadonlySet<string> = new Set([
+	"JSONResponse",
+	"HTMLResponse",
+	"RedirectResponse",
+	"StreamingResponse",
+	"Depends",
+	"Query",
+	"Path",
+	"Body",
+	"Header",
+	"Cookie",
+	"Form",
+	"File",
+	"UploadFile",
+	"FastAPI",
+	"APIRouter",
+	"HTTPException",
+	"BackgroundTasks",
+	"dataclass",
+	"fields",
+	"BaseModel",
+	"Field",
+	"validator",
+	"aiohttp",
+	"parse",
+	"stringify",
+	"fixture",
+	"TestCase",
+	"get",
+	"post",
+	"put",
+	"delete",
+	"Model",
+	"Session",
+	"Column",
+	"Integer",
+	"String",
+]);
+const PYTHON_SQL_SINK_METHODS: ReadonlySet<string> = new Set([
+	"execute",
+	"executemany",
+	"query",
+	"raw",
+	"scalar",
+	"scalars",
+]);
+
+function isKnownPythonHallucinatedImport(
+	moduleName: string,
+	importedName: string,
+): boolean {
+	if (moduleName === "sqlalchemy") return importedName === "JSONResponse";
+	return (
+		LEGACY_PYTHON_HALLUCINATED_IMPORT_MODULES.has(moduleName) &&
+		LEGACY_PYTHON_HALLUCINATED_IMPORT_NAMES.has(importedName)
+	);
+}
 
 // --- Type Declarations (local, no import needed) ---
 
@@ -1811,7 +1884,8 @@ export class TreeSitterClient {
 			contentOverride,
 			(tree) => {
 				try {
-					for (const match of batch.query.matches(tree.rootNode)) {
+					const rootNode = tree.rootNode;
+					for (const match of batch.query.matches(rootNode)) {
 						const owner = batch.ownerOfPattern[match.patternIndex];
 						if (owner === undefined) continue;
 						const bucket = perQuery.get(owner) ?? [];
@@ -1830,7 +1904,7 @@ export class TreeSitterClient {
 								entry.postFilter,
 								entry.postFilterParams,
 								captures,
-								tree.rootNode,
+								rootNode,
 							)
 						) {
 							continue;
@@ -2289,16 +2363,6 @@ export class TreeSitterClient {
 			if (this.containsYieldInFunctionBody(child, root)) return true;
 		}
 		return false;
-	}
-
-	private isLikelySqlAlchemyReceiver(text: string): boolean {
-		const tail = text.split(".").pop() ?? text;
-		return new Set([
-			"session",
-			"db_session",
-			"async_session",
-			"sync_session",
-		]).has(tail.toLowerCase());
 	}
 
 	/**
@@ -2899,15 +2963,6 @@ export class TreeSitterClient {
 		const object = member.childForFieldName?.("object");
 		if (object?.type !== "identifier") return null;
 		return object.text;
-	}
-
-	private isSafeSqlAlchemyExpressionCall(node: TreeSitterNode): boolean {
-		if (node.type !== "call") return false;
-		const callee = node.children?.[0]?.text ?? "";
-		const expression = node.text;
-		return ["select", "insert", "update", "delete"].some(
-			(name) => callee === name || expression.startsWith(`${name}(`),
-		);
 	}
 
 	/**
@@ -4095,25 +4150,24 @@ export class TreeSitterClient {
 						captures.FN?.text ?? "",
 					)
 				);
+			case "py_hallucinated_import": {
+				const moduleName = captures.MODULE?.text ?? "";
+				const importedName = captures.NAME?.text ?? "";
+				return isKnownPythonHallucinatedImport(moduleName, importedName);
+			}
 			case "py_sql_injection_sink": {
 				const fn = captures.FN?.text ?? "";
-				if (!new Set(["execute", "executemany", "query", "raw"]).has(fn)) {
+				if (!PYTHON_SQL_SINK_METHODS.has(fn)) return false;
+
+				if (
+					fn === "query" &&
+					isProvenSqlAlchemySessionReceiver(captures.OBJ, rootNode)
+				) {
 					return false;
 				}
-
-				const sqlNode = captures.SQL;
-				const receiver = captures.OBJ?.text ?? "";
-
-				// SQLAlchemy ORM sessions execute expression objects, not raw SQL
-				// strings. `session.execute(stmt)` and `session.execute(select(...))`
-				// are parameterized by construction and were too noisy as blockers.
-				if (fn === "execute" && this.isLikelySqlAlchemyReceiver(receiver)) {
+				if (isSafePsycopgIdentifierComposition(captures.SQL, rootNode)) {
 					return false;
 				}
-				if (sqlNode && this.isSafeSqlAlchemyExpressionCall(sqlNode)) {
-					return false;
-				}
-
 				return true;
 			}
 			case "go_sql_injection_sink":
@@ -4447,7 +4501,8 @@ export class TreeSitterClient {
 			contentOverride,
 			(tree) => {
 				try {
-					const queryMatches = query.matches(tree.rootNode);
+					const rootNode = tree.rootNode;
+					const queryMatches = query.matches(rootNode);
 
 					for (const match of queryMatches) {
 						const captures: Record<string, TreeSitterNode> = {};
@@ -4471,7 +4526,7 @@ export class TreeSitterClient {
 								postFilter,
 								postFilterParams,
 								captures,
-								tree.rootNode,
+								rootNode,
 							)
 						) {
 							continue;
