@@ -185,6 +185,26 @@ describe("classifyAndFilterFindings — secrets-lane scratch exclusion (#1562)",
 		}
 	});
 
+	it("labels a finding inside a nested repository without claiming it for the parent", async () => {
+		const env = setupTestEnvironment("pi-lens-gitleaks-nested-repo-");
+		try {
+			initGitRepo(env.tmpDir);
+			const nested = path.join(env.tmpDir, "submodule");
+			fs.mkdirSync(nested, { recursive: true });
+			initGitRepo(nested);
+			fs.writeFileSync(path.join(nested, ".env"), "SECRET=real-shaped-value\n");
+
+			const result = await classifyAndFilterFindings(
+				[finding({ file: "submodule/.env" })],
+				env.tmpDir,
+			);
+			expect(result).toHaveLength(1);
+			expect(result[0].pathStatus).toBe("nested-repository");
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("labels a tracked finding 'tracked'", async () => {
 		const env = setupTestEnvironment("pi-lens-gitleaks-tracked-");
 		try {
@@ -250,14 +270,30 @@ describe("gitleaksFindingToProjectDiagnostic — pathStatus observability (#1562
 		expect(diag.message).toContain("[git: scratch]");
 	});
 
-	it("keeps a non-scratch finding blocking (error/blocking)", () => {
-		const diag = gitleaksFindingToProjectDiagnostic(
-			"/repo",
-			finding({ file: ".env", pathStatus: "untracked" }),
-		);
-		expect(diag.severity).toBe("error");
-		expect(diag.semantic).toBe("blocking");
-	});
+	it.each(["ignored", "nested-repository"] as const)(
+		"demotes a pathStatus:'%s' finding to info/none",
+		(pathStatus) => {
+			const diag = gitleaksFindingToProjectDiagnostic(
+				"/repo",
+				finding({ file: ".env", pathStatus }),
+			);
+			expect(diag.severity).toBe("info");
+			expect(diag.semantic).toBe("none");
+			expect(diag.message).toContain(`[git: ${pathStatus}]`);
+		},
+	);
+
+	it.each(["tracked", "untracked", undefined] as const)(
+		"keeps a pathStatus:'%s' finding blocking (error/blocking)",
+		(pathStatus) => {
+			const diag = gitleaksFindingToProjectDiagnostic(
+				"/repo",
+				finding({ file: ".env", pathStatus }),
+			);
+			expect(diag.severity).toBe("error");
+			expect(diag.semantic).toBe("blocking");
+		},
+	);
 });
 
 describe("writeScopedGitleaksConfig — placeholder allowlist + secrets-lane paths (#1562)", () => {

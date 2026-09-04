@@ -42,7 +42,10 @@ import {
 	SWEEP_IDLE_SAFETY_MARGIN_MS,
 } from "./lsp/workspace-sweep-hold.js";
 import { isTestRoleCollateral } from "./collateral-test-role.js";
-import type { GitleaksResult } from "./gitleaks-client.js";
+import {
+	classifyAndFilterFindings,
+	type GitleaksResult,
+} from "./gitleaks-client.js";
 import type { GovulncheckResult } from "./govulncheck-client.js";
 import type { TrivyResult } from "./trivy-client.js";
 import {
@@ -1864,6 +1867,19 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 		cwd,
 	)?.data;
 	const trivySecretsData = trivyCacheEntry?.data;
+	// Gitleaks deliberately scans gitignored local files and nested repositories
+	// so an explicit security audit can still inspect them. The adapter is the
+	// source of truth for whether a finding belongs in a blocking delivery lane;
+	// filter here before freshness handling so demoted findings cannot leak into
+	// either the blocker or stale-secret turn context.
+	const classifiedGitleaksFindings = await classifyAndFilterFindings(
+		gitleaksData?.findings ?? [],
+		cwd,
+	);
+	const blockingGitleaksFindings = classifiedGitleaksFindings.filter(
+		(finding) =>
+			gitleaksFindingToProjectDiagnostic(cwd, finding).semantic === "blocking",
+	);
 	// #1461 slice 1 (#1460): the gitleaks cache is TTL-only, so a finding for a
 	// file deleted after the scan is still served as a 🔴 blocker for the rest
 	// of the 30-minute window — the live case, and 119 of 126 findings in
@@ -1878,7 +1894,7 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 	// would let any edit — malicious or accidental — mute a real secret.
 	const gitleaksGate = gateFindingsByPathFreshness({
 		store: "gitleaks",
-		findings: gitleaksData?.findings ?? [],
+		findings: blockingGitleaksFindings,
 		cwd,
 		scannedAt: gitleaksData?.scannedAt,
 		citedPath: (finding) => finding.file,
