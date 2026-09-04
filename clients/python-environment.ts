@@ -1,7 +1,12 @@
 import { access, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { isAtOrAboveHomeDir, walkUpDirs } from "./path-utils.js";
+import {
+	extractTomlTableSection,
+	parseTomlStringArray,
+} from "./cargo-manifest.js";
+import { minimatch } from "./deps/minimatch.js";
+import { isAtOrAboveHomeDir, toPosix, walkUpDirs } from "./path-utils.js";
 
 export type PythonEnvironmentSource =
 	| "virtual-env"
@@ -22,7 +27,12 @@ interface UvWorkspace {
 	root: string;
 	explicit: boolean;
 	startIsProject: boolean;
+	projectRoot: string;
+	members: string[];
+	exclude: string[];
 }
+
+const UV_WORKSPACE_TABLE = "tool\\.uv\\.workspace";
 
 /**
  * Resolve the uv workspace root using the same discovery shape as uv:
@@ -49,10 +59,17 @@ async function findUvWorkspace(
 
 		if (!nearestProject) nearestProject = dir;
 		if (hasUvWorkspaceTable(content)) {
+			const workspaceTable = extractTomlTableSection(
+				content,
+				UV_WORKSPACE_TABLE,
+			);
 			return {
 				root: dir,
 				explicit: true,
 				startIsProject: dir === resolvedStart,
+				projectRoot: nearestProject,
+				members: parseTomlStringArray(workspaceTable, "members"),
+				exclude: parseTomlStringArray(workspaceTable, "exclude"),
 			};
 		}
 	}
@@ -62,17 +79,54 @@ async function findUvWorkspace(
 				root: nearestProject,
 				explicit: false,
 				startIsProject: nearestProject === resolvedStart,
+				projectRoot: nearestProject,
+				members: [],
+				exclude: [],
 			}
 		: undefined;
 }
 
 /** Match only the top-level uv workspace table, not a commented heading. */
 function hasUvWorkspaceTable(content: string): boolean {
-	return content
-		.replace(/^\uFEFF/, "")
-		.replace(/\r\n/g, "\n")
-		.split("\n")
-		.some((line) => /^\s*\[tool\.uv\.workspace\]\s*(?:#.*)?$/.test(line));
+	return extractTomlTableSection(content, UV_WORKSPACE_TABLE) !== undefined;
+}
+
+/**
+ * Apply uv's explicit-workspace membership rules before inheriting its root
+ * environment. The workspace root is always a member; descendants must match
+ * a declared member glob and must not match an exclusion glob.
+ */
+function isUvWorkspaceMember(
+	workspace: UvWorkspace,
+	projectRoot: string,
+): boolean {
+	const resolvedProject = path.resolve(projectRoot);
+	if (resolvedProject === workspace.root) return true;
+
+	const relative = toPosix(path.relative(workspace.root, resolvedProject));
+	if (
+		relative.length === 0 ||
+		relative === ".." ||
+		relative.startsWith("../") ||
+		path.isAbsolute(relative)
+	) {
+		return false;
+	}
+
+	const minimatchOptions = {
+		dot: true,
+		nocase: process.platform === "win32",
+	};
+	if (
+		workspace.exclude.some((pattern) =>
+			minimatch(relative, toPosix(pattern), minimatchOptions),
+		)
+	) {
+		return false;
+	}
+	return workspace.members.some((pattern) =>
+		minimatch(relative, toPosix(pattern), minimatchOptions),
+	);
 }
 
 /**
@@ -83,7 +137,13 @@ export async function detectPythonEnvironment(
 	projectRoot: string,
 ): Promise<PythonEnvironment | undefined> {
 	const uvWorkspace = await findUvWorkspace(projectRoot);
-	const workspaceRoot = uvWorkspace?.root ?? path.resolve(projectRoot);
+	const workspaceMember =
+		uvWorkspace?.explicit === true &&
+		isUvWorkspaceMember(uvWorkspace, uvWorkspace.projectRoot);
+	const workspaceRoot =
+		uvWorkspace && (!uvWorkspace.explicit || workspaceMember)
+			? uvWorkspace.root
+			: path.resolve(projectRoot);
 	const uvProjectEnvironment = process.env.UV_PROJECT_ENVIRONMENT;
 	// PEP 723 `uv run --script` environments are cache-keyed by script content;
 	// without a stable project marker or explicit path, they remain undiscoverable.
@@ -99,7 +159,7 @@ export async function detectPythonEnvironment(
 				: undefined,
 			source: "uv-project-environment",
 		},
-		...(uvWorkspace?.explicit
+		...(uvWorkspace?.explicit && workspaceMember
 			? [
 					{
 						root: path.join(workspaceRoot, ".venv"),

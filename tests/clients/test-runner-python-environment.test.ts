@@ -259,6 +259,111 @@ describe("pytest project environment", () => {
 		expect(options.env?.VIRTUAL_ENV).toBe(path.join(workspace.root, ".venv"));
 	});
 
+	it("keeps an independent nested project on its own .venv", async () => {
+		const workspace = createProject(false);
+		fs.writeFileSync(
+			path.join(workspace.root, "pyproject.toml"),
+			"[tool.uv.workspace]\nmembers = ['packages/*']\n",
+		);
+		const workspaceBinDir = path.join(
+			workspace.root,
+			".venv",
+			process.platform === "win32" ? "Scripts" : "bin",
+		);
+		const workspacePythonPath = path.join(
+			workspaceBinDir,
+			process.platform === "win32" ? "python.exe" : "python",
+		);
+		fs.mkdirSync(workspaceBinDir, { recursive: true });
+		fs.writeFileSync(workspacePythonPath, "");
+
+		const nested = path.join(workspace.root, "tools", "standalone");
+		const nestedTestFile = path.join(nested, "tests", "test_example.py");
+		fs.mkdirSync(path.dirname(nestedTestFile), { recursive: true });
+		fs.writeFileSync(nestedTestFile, "def test_example():\n    assert True\n");
+		fs.writeFileSync(
+			path.join(nested, "pyproject.toml"),
+			"[project]\nname='standalone'\n",
+		);
+		const nestedBinDir = path.join(
+			nested,
+			".venv",
+			process.platform === "win32" ? "Scripts" : "bin",
+		);
+		const nestedPythonPath = path.join(
+			nestedBinDir,
+			process.platform === "win32" ? "python.exe" : "python",
+		);
+		fs.mkdirSync(nestedBinDir, { recursive: true });
+		fs.writeFileSync(nestedPythonPath, "");
+
+		await new TestRunnerClient(false).runTestFileAsync(
+			nestedTestFile,
+			nested,
+			"pytest",
+			RUNNERS.pytest,
+		);
+
+		const [command, , options] = safeSpawnAsync.mock.calls[0];
+		if (!options) throw new Error("pytest spawn options were not supplied");
+		expect(command).toBe(nestedPythonPath);
+		expect(options.env?.VIRTUAL_ENV).toBe(path.join(nested, ".venv"));
+	});
+
+	it("honors uv workspace exclusions over member globs", async () => {
+		const workspace = createProject(false);
+		fs.writeFileSync(
+			path.join(workspace.root, "pyproject.toml"),
+			"[tool.uv.workspace]\nmembers = ['packages/*']\nexclude = ['packages/excluded']\n",
+		);
+		const workspaceBinDir = path.join(
+			workspace.root,
+			".venv",
+			process.platform === "win32" ? "Scripts" : "bin",
+		);
+		const workspacePythonPath = path.join(
+			workspaceBinDir,
+			process.platform === "win32" ? "python.exe" : "python",
+		);
+		fs.mkdirSync(workspaceBinDir, { recursive: true });
+		fs.writeFileSync(workspacePythonPath, "");
+
+		const excluded = path.join(workspace.root, "packages", "excluded");
+		const excludedTestFile = path.join(excluded, "tests", "test_example.py");
+		fs.mkdirSync(path.dirname(excludedTestFile), { recursive: true });
+		fs.writeFileSync(
+			excludedTestFile,
+			"def test_example():\n    assert True\n",
+		);
+		fs.writeFileSync(
+			path.join(excluded, "pyproject.toml"),
+			"[project]\nname='excluded'\n",
+		);
+		const excludedBinDir = path.join(
+			excluded,
+			".venv",
+			process.platform === "win32" ? "Scripts" : "bin",
+		);
+		const excludedPythonPath = path.join(
+			excludedBinDir,
+			process.platform === "win32" ? "python.exe" : "python",
+		);
+		fs.mkdirSync(excludedBinDir, { recursive: true });
+		fs.writeFileSync(excludedPythonPath, "");
+
+		await new TestRunnerClient(false).runTestFileAsync(
+			excludedTestFile,
+			excluded,
+			"pytest",
+			RUNNERS.pytest,
+		);
+
+		const [command, , options] = safeSpawnAsync.mock.calls[0];
+		if (!options) throw new Error("pytest spawn options were not supplied");
+		expect(command).toBe(excludedPythonPath);
+		expect(options.env?.VIRTUAL_ENV).toBe(path.join(excluded, ".venv"));
+	});
+
 	it("labels pytest usage errors and interruptions by their real exit codes", () => {
 		const client = new TestRunnerClient(false) as any;
 		// The label is derived from pytest's status enum, so keep output empty and
