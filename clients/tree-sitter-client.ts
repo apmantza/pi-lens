@@ -84,6 +84,75 @@ const QUERY_BATCH_MAX_LOAD_FAILURES = 3;
 // must not stall the batched query walk; the filter fails open when this cap
 // is reached so unrelated diagnostics and the current match are preserved.
 const NO_NESTED_ANCHOR_VISIT_CAP = 10_000;
+const LEGACY_PYTHON_HALLUCINATED_IMPORT_MODULES: ReadonlySet<string> = new Set([
+	"requests",
+	"flask",
+	"django",
+	"typing",
+	"collections",
+	"asyncio",
+	"json",
+	"unittest",
+	"pytest",
+	"urllib",
+]);
+const LEGACY_PYTHON_HALLUCINATED_IMPORT_NAMES: ReadonlySet<string> = new Set([
+	"JSONResponse",
+	"HTMLResponse",
+	"RedirectResponse",
+	"StreamingResponse",
+	"Depends",
+	"Query",
+	"Path",
+	"Body",
+	"Header",
+	"Cookie",
+	"Form",
+	"File",
+	"UploadFile",
+	"FastAPI",
+	"APIRouter",
+	"HTTPException",
+	"BackgroundTasks",
+	"dataclass",
+	"fields",
+	"BaseModel",
+	"Field",
+	"validator",
+	"aiohttp",
+	"parse",
+	"stringify",
+	"fixture",
+	"TestCase",
+	"get",
+	"post",
+	"put",
+	"delete",
+	"Model",
+	"Session",
+	"Column",
+	"Integer",
+	"String",
+]);
+const PYTHON_SQL_SINK_METHODS: ReadonlySet<string> = new Set([
+	"execute",
+	"executemany",
+	"query",
+	"raw",
+	"scalar",
+	"scalars",
+]);
+
+function isKnownPythonHallucinatedImport(
+	moduleName: string,
+	importedName: string,
+): boolean {
+	if (moduleName === "sqlalchemy") return importedName === "JSONResponse";
+	return (
+		LEGACY_PYTHON_HALLUCINATED_IMPORT_MODULES.has(moduleName) &&
+		LEGACY_PYTHON_HALLUCINATED_IMPORT_NAMES.has(importedName)
+	);
+}
 
 // --- Type Declarations (local, no import needed) ---
 
@@ -4084,30 +4153,11 @@ export class TreeSitterClient {
 			case "py_hallucinated_import": {
 				const moduleName = captures.MODULE?.text ?? "";
 				const importedName = captures.NAME?.text ?? "";
-				return (
-					(moduleName === "sqlalchemy" && importedName === "JSONResponse") ||
-					(/^(requests|flask|django|typing|collections|asyncio|json|unittest|pytest|urllib)$/.test(
-						moduleName,
-					) &&
-						/^(JSONResponse|HTMLResponse|RedirectResponse|StreamingResponse|Depends|Query|Path|Body|Header|Cookie|Form|File|UploadFile|FastAPI|APIRouter|HTTPException|BackgroundTasks|dataclass|fields|BaseModel|Field|validator|aiohttp|parse|stringify|fixture|TestCase|get|post|put|delete|Model|Session|Column|Integer|String)$/.test(
-							importedName,
-						))
-				);
+				return isKnownPythonHallucinatedImport(moduleName, importedName);
 			}
 			case "py_sql_injection_sink": {
 				const fn = captures.FN?.text ?? "";
-				if (
-					!new Set([
-						"execute",
-						"executemany",
-						"query",
-						"raw",
-						"scalar",
-						"scalars",
-					]).has(fn)
-				) {
-					return false;
-				}
+				if (!PYTHON_SQL_SINK_METHODS.has(fn)) return false;
 
 				if (
 					fn === "query" &&

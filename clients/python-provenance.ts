@@ -29,6 +29,19 @@ interface EligibleImport {
 	endIndex: number;
 }
 
+interface ParsedImportBinding {
+	source: string;
+	local: string;
+}
+
+interface ParsedImportStatement {
+	kind: "from" | "plain" | "unknown";
+	moduleName: string | undefined;
+	bindings: ParsedImportBinding[];
+	unknown: boolean;
+	star: boolean;
+}
+
 interface FunctionSummary {
 	parameterAnnotations: ReadonlyMap<string, string>;
 	bindingCounts: ReadonlyMap<string, number>;
@@ -52,8 +65,19 @@ const TRAVERSAL_DEPTH_CAP = 128;
 const EXPRESSION_DEPTH_CAP = 8;
 const ANCESTOR_DEPTH_CAP = 64;
 
-const PSYCOPG_MODULES = new Set(["psycopg", "psycopg2"]);
-const PSYCOPG_SQL_MODULES = new Set(["psycopg.sql", "psycopg2.sql"]);
+const FROM_IMPORT_PROVENANCE = new Map<string, PythonProvenance>([
+	["sqlalchemy.orm:Session", "sqlalchemy-session"],
+	["psycopg:sql", "psycopg-sql-module"],
+	["psycopg2:sql", "psycopg-sql-module"],
+	["psycopg.sql:SQL", "psycopg-sql-constructor"],
+	["psycopg2.sql:SQL", "psycopg-sql-constructor"],
+	["psycopg.sql:Identifier", "psycopg-identifier-constructor"],
+	["psycopg2.sql:Identifier", "psycopg-identifier-constructor"],
+]);
+const PLAIN_PACKAGE_PROVENANCE = new Map<string, PythonProvenance>([
+	["psycopg", "psycopg-package"],
+	["psycopg2", "psycopg-package"],
+]);
 
 function nodeKey(node: PythonSyntaxNode): string {
 	return `${node.type}:${node.startIndex}:${node.endIndex}`;
@@ -70,213 +94,269 @@ function directNamedChild(
 	return namedChildren(node).find((child) => child.type === type);
 }
 
+type BindingNameClassifier = (node: PythonSyntaxNode) => BindingNameDecision;
+
+type BindingNameDecision =
+	| { kind: "record" }
+	| { kind: "stop" }
+	| { kind: "unknown" }
+	| { kind: "descend"; children: PythonSyntaxNode[] }
+	| {
+			kind: "delegate";
+			node: PythonSyntaxNode | undefined;
+			classifier: BindingNameClassifier;
+	  };
+
+const BINDING_TARGET_CONTAINER_TYPES = new Set([
+	"tuple",
+	"pattern_list",
+	"list",
+	"list_pattern",
+	"tuple_pattern",
+	"starred_expression",
+	"list_splat_pattern",
+	"dictionary_splat_pattern",
+]);
+const BINDING_TARGET_REFERENCE_TYPES = new Set(["attribute", "subscript"]);
+const BINDING_PATTERN_CONTAINER_TYPES = new Set([
+	"case_pattern",
+	"as_pattern",
+	"union_pattern",
+	"list_pattern",
+	"tuple_pattern",
+	"list_splat_pattern",
+	"dictionary_splat_pattern",
+	"class_pattern",
+]);
+const BINDING_PATTERN_REFERENCE_TYPES = new Set([
+	"attribute",
+	"qualified_pattern",
+]);
+
+function collectBindingNames(
+	root: PythonSyntaxNode | undefined,
+	classifier: BindingNameClassifier,
+): { names: string[]; unknown: boolean } {
+	if (!root) return { names: [], unknown: true };
+	const names: string[] = [];
+	const stack: Array<{
+		node: PythonSyntaxNode;
+		classifier: BindingNameClassifier;
+	}> = [{ node: root, classifier }];
+	let unknown = false;
+	while (stack.length > 0) {
+		const current = stack.pop();
+		if (!current) continue;
+		const decision = current.classifier(current.node);
+		if (decision.kind === "record") {
+			if (current.node.text !== "_") names.push(current.node.text);
+			continue;
+		}
+		if (decision.kind === "stop") continue;
+		if (decision.kind === "unknown") {
+			unknown = true;
+			continue;
+		}
+		if (decision.kind === "descend") {
+			for (const child of decision.children) {
+				stack.push({ node: child, classifier: current.classifier });
+			}
+			continue;
+		}
+		if (!decision.node) {
+			unknown = true;
+			continue;
+		}
+		stack.push({
+			node: decision.node,
+			classifier: decision.classifier,
+		});
+	}
+	return { names, unknown };
+}
+
+function classifyBindingTarget(node: PythonSyntaxNode): BindingNameDecision {
+	if (node.type === "identifier") return { kind: "record" };
+	// These contain references, never binding positions.
+	if (BINDING_TARGET_REFERENCE_TYPES.has(node.type)) return { kind: "stop" };
+	if (BINDING_TARGET_CONTAINER_TYPES.has(node.type)) {
+		return { kind: "descend", children: namedChildren(node) };
+	}
+	return { kind: "unknown" };
+}
+
+function classifyAsPatternTarget(node: PythonSyntaxNode): BindingNameDecision {
+	if (node.type === "as_pattern_target") {
+		return {
+			kind: "delegate",
+			node: namedChildren(node)[0],
+			classifier: classifyBindingTarget,
+		};
+	}
+	return { kind: "descend", children: namedChildren(node) };
+}
+
+function classifyBindingPattern(node: PythonSyntaxNode): BindingNameDecision {
+	if (node.type === "identifier") return { kind: "record" };
+	if (node.type === "dotted_name") {
+		return node.text.includes(".") ? { kind: "stop" } : { kind: "record" };
+	}
+	if (BINDING_PATTERN_REFERENCE_TYPES.has(node.type)) return { kind: "stop" };
+	if (node.type === "keyword_pattern") {
+		// The first named child is the keyword field; only its value pattern
+		// may introduce captures (`Wrapper(field=capture)`).
+		const value = namedChildren(node).slice(1);
+		return value.length === 1
+			? {
+					kind: "delegate",
+					node: value[0],
+					classifier: classifyBindingPattern,
+				}
+			: { kind: "unknown" };
+	}
+	if (BINDING_PATTERN_CONTAINER_TYPES.has(node.type)) {
+		return { kind: "descend", children: namedChildren(node) };
+	}
+	if (node.type === "as_pattern_target") {
+		return {
+			kind: "delegate",
+			node,
+			classifier: classifyBindingTarget,
+		};
+	}
+	return { kind: "unknown" };
+}
+
 /** Extract only identifiers in Python binding positions. */
 function bindingTargetNames(node: PythonSyntaxNode | undefined): {
 	names: string[];
 	unknown: boolean;
 } {
-	if (!node) return { names: [], unknown: true };
-	const names: string[] = [];
-	const stack = [node];
-	let unknown = false;
-	while (stack.length > 0) {
-		const current = stack.pop();
-		if (!current) continue;
-		if (current.type === "identifier") {
-			if (current.text !== "_") names.push(current.text);
-			continue;
-		}
-		// These contain references, never binding positions.
-		if (current.type === "attribute" || current.type === "subscript") continue;
-		if (
-			current.type === "tuple" ||
-			current.type === "pattern_list" ||
-			current.type === "list" ||
-			current.type === "list_pattern" ||
-			current.type === "tuple_pattern" ||
-			current.type === "starred_expression" ||
-			current.type === "list_splat_pattern" ||
-			current.type === "dictionary_splat_pattern"
-		) {
-			stack.push(...namedChildren(current));
-			continue;
-		}
-		unknown = true;
-	}
-	return { names, unknown };
+	return collectBindingNames(node, classifyBindingTarget);
 }
 
 function asPatternTargetNames(node: PythonSyntaxNode): {
 	names: string[];
 	unknown: boolean;
 } {
-	const names: string[] = [];
-	let unknown = false;
-	const stack = [node];
-	while (stack.length > 0) {
-		const current = stack.pop();
-		if (!current) continue;
-		if (current.type === "as_pattern_target") {
-			const extracted = bindingTargetNames(namedChildren(current)[0]);
-			names.push(...extracted.names);
-			unknown ||= extracted.unknown;
-			continue;
-		}
-		stack.push(...namedChildren(current));
-	}
-	return { names, unknown };
+	return collectBindingNames(node, classifyAsPatternTarget);
 }
 
 function bindingPatternNames(node: PythonSyntaxNode | undefined): {
 	names: string[];
 	unknown: boolean;
 } {
-	if (!node) return { names: [], unknown: true };
-	const names: string[] = [];
-	const stack = [node];
-	let unknown = false;
-	while (stack.length > 0) {
-		const current = stack.pop();
-		if (!current) continue;
-		if (current.type === "identifier") {
-			if (current.text !== "_") names.push(current.text);
-			continue;
-		}
-		if (current.type === "dotted_name") {
-			if (!current.text.includes(".") && current.text !== "_") {
-				names.push(current.text);
-			}
-			continue;
-		}
-		if (current.type === "attribute") continue;
-		if (current.type === "keyword_pattern") {
-			// The first named child is the keyword field; only its value pattern
-			// may introduce captures (`Wrapper(field=capture)`).
-			const value = namedChildren(current).slice(1);
-			if (value.length !== 1) {
-				unknown = true;
-			} else {
-				stack.push(value[0]!);
-			}
-			continue;
-		}
-		if (
-			current.type === "case_pattern" ||
-			current.type === "as_pattern" ||
-			current.type === "union_pattern" ||
-			current.type === "list_pattern" ||
-			current.type === "tuple_pattern" ||
-			current.type === "list_splat_pattern" ||
-			current.type === "dictionary_splat_pattern" ||
-			current.type === "class_pattern"
-		) {
-			for (const child of namedChildren(current)) stack.push(child);
-			continue;
-		}
-		if (current.type === "as_pattern_target") {
-			const target = bindingTargetNames(current);
-			names.push(...target.names);
-			unknown ||= target.unknown;
-			continue;
-		}
-		unknown = true;
-	}
-	return { names, unknown };
+	return collectBindingNames(node, classifyBindingPattern);
 }
 
-function importedNames(node: PythonSyntaxNode): {
+function parseAliasedImport(
+	node: PythonSyntaxNode,
+): ParsedImportBinding | undefined {
+	const children = namedChildren(node);
+	const source = children[0]?.text;
+	const local = children.at(-1);
+	if (!source || local?.type !== "identifier") return undefined;
+	return { source, local: local.text };
+}
+
+function parseFromBinding(
+	node: PythonSyntaxNode,
+): ParsedImportBinding | undefined {
+	if (node.type === "aliased_import") return parseAliasedImport(node);
+	if (node.type !== "dotted_name" && node.type !== "identifier") {
+		return undefined;
+	}
+	return { source: node.text, local: node.text };
+}
+
+function parsePlainBinding(
+	node: PythonSyntaxNode,
+): ParsedImportBinding | undefined {
+	if (node.type === "aliased_import") return parseAliasedImport(node);
+	if (node.type !== "dotted_name" && node.type !== "identifier") {
+		return undefined;
+	}
+	const [local] = node.text.split(".");
+	return local ? { source: node.text, local } : undefined;
+}
+
+function parseFromImport(node: PythonSyntaxNode): ParsedImportStatement {
+	const children = namedChildren(node);
+	const moduleName = children[0]?.text;
+	const bindings: ParsedImportBinding[] = [];
+	let unknown = !moduleName;
+	for (const part of children.slice(1)) {
+		const binding = parseFromBinding(part);
+		if (binding) bindings.push(binding);
+		else unknown = true;
+	}
+	return {
+		kind: "from",
+		moduleName,
+		bindings,
+		unknown,
+		star: node.text.includes("*"),
+	};
+}
+
+function parsePlainImport(node: PythonSyntaxNode): ParsedImportStatement {
+	const bindings: ParsedImportBinding[] = [];
+	let unknown = false;
+	for (const part of namedChildren(node)) {
+		const binding = parsePlainBinding(part);
+		if (binding) bindings.push(binding);
+		else unknown = true;
+	}
+	return {
+		kind: "plain",
+		moduleName: undefined,
+		bindings,
+		unknown,
+		star: node.text.includes("*"),
+	};
+}
+
+function parseImportStatement(node: PythonSyntaxNode): ParsedImportStatement {
+	if (node.type === "import_from_statement") return parseFromImport(node);
+	if (node.type === "import_statement") return parsePlainImport(node);
+	return {
+		kind: "unknown",
+		moduleName: undefined,
+		bindings: [],
+		unknown: true,
+		star: node.text.includes("*"),
+	};
+}
+
+function importedNames(statement: ParsedImportStatement): {
 	names: string[];
 	unknown: boolean;
 	star: boolean;
 } {
-	const children = namedChildren(node);
-	const names: string[] = [];
-	let unknown = false;
-	let star = node.text.includes("*");
-	if (node.type === "import_from_statement") {
-		for (const part of children.slice(1)) {
-			if (part.type === "aliased_import") {
-				const alias = namedChildren(part).at(-1);
-				if (alias?.type === "identifier") names.push(alias.text);
-				else unknown = true;
-			} else if (part.type === "dotted_name" || part.type === "identifier") {
-				names.push(part.text);
-			} else {
-				unknown = true;
-			}
-		}
-	} else if (node.type === "import_statement") {
-		for (const part of children) {
-			if (part.type === "aliased_import") {
-				const alias = namedChildren(part).at(-1);
-				if (alias?.type === "identifier") names.push(alias.text);
-				else unknown = true;
-			} else if (part.type === "dotted_name" || part.type === "identifier") {
-				names.push(part.text.split(".")[0]!);
-			} else {
-				unknown = true;
-			}
-		}
-	} else {
-		unknown = true;
-	}
-	return { names, unknown, star };
+	return {
+		names: statement.bindings.map((binding) => binding.local),
+		unknown: statement.unknown,
+		star: statement.star,
+	};
 }
 
-function eligibleImports(node: PythonSyntaxNode): EligibleImport[] {
-	const children = namedChildren(node);
-	const candidates: EligibleImport[] = [];
-	if (node.type === "import_from_statement") {
-		const moduleName = children[0]?.text;
-		for (const part of children.slice(1)) {
-			const source =
-				part.type === "aliased_import"
-					? namedChildren(part)[0]?.text
-					: part.text;
-			const local =
-				part.type === "aliased_import"
-					? namedChildren(part).at(-1)?.text
-					: source;
-			if (!source || !local) continue;
-			let provenance: PythonProvenance | undefined;
-			if (moduleName === "sqlalchemy.orm" && source === "Session") {
-				provenance = "sqlalchemy-session";
-			} else if (PSYCOPG_MODULES.has(moduleName ?? "") && source === "sql") {
-				provenance = "psycopg-sql-module";
-			} else if (
-				PSYCOPG_SQL_MODULES.has(moduleName ?? "") &&
-				source === "SQL"
-			) {
-				provenance = "psycopg-sql-constructor";
-			} else if (
-				PSYCOPG_SQL_MODULES.has(moduleName ?? "") &&
-				source === "Identifier"
-			) {
-				provenance = "psycopg-identifier-constructor";
-			}
-			if (provenance)
-				candidates.push({ name: local, provenance, endIndex: node.endIndex });
-		}
-	} else if (node.type === "import_statement") {
-		for (const part of children) {
-			const moduleName =
-				part.type === "aliased_import"
-					? namedChildren(part)[0]?.text
-					: part.text;
-			const local =
-				part.type === "aliased_import"
-					? namedChildren(part).at(-1)?.text
-					: moduleName?.split(".")[0];
-			if (moduleName && local && PSYCOPG_MODULES.has(moduleName)) {
-				candidates.push({
-					name: local,
-					provenance: "psycopg-package",
-					endIndex: node.endIndex,
-				});
-			}
-		}
+function eligibleImports(
+	statement: ParsedImportStatement,
+	endIndex: number,
+): EligibleImport[] {
+	if (statement.kind === "plain") {
+		return statement.bindings.flatMap((binding) => {
+			const provenance = PLAIN_PACKAGE_PROVENANCE.get(binding.source);
+			return provenance ? [{ name: binding.local, provenance, endIndex }] : [];
+		});
 	}
-	return candidates;
+	if (statement.kind !== "from" || !statement.moduleName) return [];
+	return statement.bindings.flatMap((binding) => {
+		const provenance = FROM_IMPORT_PROVENANCE.get(
+			`${statement.moduleName}:${binding.source}`,
+		);
+		return provenance ? [{ name: binding.local, provenance, endIndex }] : [];
+	});
 }
 
 function directAnnotationName(parameter: PythonSyntaxNode): string | undefined {
@@ -293,6 +373,227 @@ function parameterName(parameter: PythonSyntaxNode): string | undefined {
 	return directNamedChild(parameter, "identifier")?.text;
 }
 
+interface SummaryBuildState {
+	imports: Map<string, EligibleImport>;
+	bindingCounts: Map<string, number>;
+	functionBindings: Map<string, Map<string, number>>;
+	functionAnnotations: Map<string, Map<string, string>>;
+	invalid: boolean;
+	visits: number;
+	functionChain: PythonSyntaxNode[];
+	parentFunctionChain: PythonSyntaxNode[];
+	moduleDirect: boolean;
+}
+
+type SummaryNodeRecorder = (
+	node: PythonSyntaxNode,
+	state: SummaryBuildState,
+) => void;
+
+function markInvalid(state: SummaryBuildState): void {
+	state.invalid = true;
+}
+
+function addBinding(
+	state: SummaryBuildState,
+	name: string,
+	functionChain: PythonSyntaxNode[],
+): void {
+	state.bindingCounts.set(name, (state.bindingCounts.get(name) ?? 0) + 1);
+	for (const fn of functionChain) {
+		const key = nodeKey(fn);
+		const bindings =
+			state.functionBindings.get(key) ?? new Map<string, number>();
+		bindings.set(name, (bindings.get(name) ?? 0) + 1);
+		state.functionBindings.set(key, bindings);
+	}
+}
+
+function addTarget(
+	state: SummaryBuildState,
+	target: PythonSyntaxNode | undefined,
+	functionChain: PythonSyntaxNode[],
+): void {
+	const extracted = bindingTargetNames(target);
+	if (extracted.unknown) markInvalid(state);
+	for (const name of extracted.names) addBinding(state, name, functionChain);
+}
+
+function recordFunctionParameters(
+	node: PythonSyntaxNode,
+	state: SummaryBuildState,
+): void {
+	const annotations = new Map<string, string>();
+	const parameters = directNamedChild(node, "parameters");
+	for (const parameter of namedChildren(parameters ?? node)) {
+		const name = parameterName(parameter);
+		if (!name) {
+			if (parameter.type !== "list_splat_pattern") markInvalid(state);
+			continue;
+		}
+		addBinding(state, name, state.functionChain);
+		const annotation = directAnnotationName(parameter);
+		if (annotation) annotations.set(name, annotation);
+	}
+	state.functionAnnotations.set(nodeKey(node), annotations);
+}
+
+function recordFunctionDefinition(
+	node: PythonSyntaxNode,
+	state: SummaryBuildState,
+): void {
+	recordFunctionParameters(node, state);
+	recordDefinitionBinding(node, state);
+}
+
+function recordLambdaParameters(
+	node: PythonSyntaxNode,
+	state: SummaryBuildState,
+): void {
+	const parameters = directNamedChild(node, "lambda_parameters");
+	for (const parameter of namedChildren(parameters ?? node)) {
+		const name = parameterName(parameter);
+		if (name) addBinding(state, name, state.functionChain);
+		else markInvalid(state);
+	}
+}
+
+function recordImportBindings(
+	node: PythonSyntaxNode,
+	state: SummaryBuildState,
+): void {
+	const statement = parseImportStatement(node);
+	const imported = importedNames(statement);
+	if (imported.unknown || imported.star) markInvalid(state);
+	for (const name of imported.names)
+		addBinding(state, name, state.functionChain);
+	if (!state.moduleDirect) return;
+	for (const candidate of eligibleImports(statement, node.endIndex)) {
+		state.imports.set(candidate.name, candidate);
+	}
+}
+
+function recordTargetBinding(
+	node: PythonSyntaxNode,
+	state: SummaryBuildState,
+): void {
+	addTarget(
+		state,
+		node.childForFieldName?.("left") ?? namedChildren(node)[0],
+		state.functionChain,
+	);
+}
+
+function recordAsPatternBinding(
+	node: PythonSyntaxNode,
+	state: SummaryBuildState,
+): void {
+	const extracted = asPatternTargetNames(node);
+	if (extracted.unknown) markInvalid(state);
+	for (const name of extracted.names)
+		addBinding(state, name, state.functionChain);
+}
+
+function recordDeleteTargets(
+	node: PythonSyntaxNode,
+	state: SummaryBuildState,
+): void {
+	for (const child of namedChildren(node)) {
+		addTarget(state, child, state.functionChain);
+	}
+}
+
+function recordCaseBindings(
+	node: PythonSyntaxNode,
+	state: SummaryBuildState,
+): void {
+	const extracted = bindingPatternNames(directNamedChild(node, "case_pattern"));
+	if (extracted.unknown) markInvalid(state);
+	for (const name of extracted.names)
+		addBinding(state, name, state.functionChain);
+}
+
+function recordDefinitionBinding(
+	node: PythonSyntaxNode,
+	state: SummaryBuildState,
+): void {
+	const name = directNamedChild(node, "identifier")?.text;
+	if (name) addBinding(state, name, state.parentFunctionChain);
+	else markInvalid(state);
+}
+
+function recordTypeAliasBinding(
+	node: PythonSyntaxNode,
+	state: SummaryBuildState,
+): void {
+	const name = directNamedChild(node, "type")?.children?.find(
+		(child) => child.type === "identifier",
+	)?.text;
+	if (name) addBinding(state, name, state.functionChain);
+	else markInvalid(state);
+}
+
+function recordDeclarationBindings(
+	node: PythonSyntaxNode,
+	state: SummaryBuildState,
+): void {
+	for (const child of namedChildren(node)) {
+		addBinding(state, child.text, state.functionChain);
+	}
+}
+
+function recordTypeParameterBindings(
+	node: PythonSyntaxNode,
+	state: SummaryBuildState,
+): void {
+	for (const child of namedChildren(node)) {
+		if (child.type === "identifier") {
+			addBinding(state, child.text, state.functionChain);
+		}
+	}
+}
+
+function hasDynamicNamespaceHazard(node: PythonSyntaxNode): boolean {
+	if (node.type !== "call") return false;
+	const callee = node.childForFieldName?.("function") ?? namedChildren(node)[0];
+	return (
+		callee?.type === "identifier" &&
+		["exec", "eval", "globals", "locals", "vars"].includes(callee.text)
+	);
+}
+
+function recordDynamicNamespaceHazard(
+	node: PythonSyntaxNode,
+	state: SummaryBuildState,
+): void {
+	if (hasDynamicNamespaceHazard(node)) markInvalid(state);
+}
+
+const SUMMARY_NODE_RECORDERS: Readonly<Record<string, SummaryNodeRecorder>> =
+	Object.freeze({
+		function_definition: recordFunctionDefinition,
+		class_definition: recordDefinitionBinding,
+		lambda: recordLambdaParameters,
+		import_from_statement: recordImportBindings,
+		import_statement: recordImportBindings,
+		assignment: recordTargetBinding,
+		augmented_assignment: recordTargetBinding,
+		named_expression: recordTargetBinding,
+		for_statement: recordTargetBinding,
+		for_in_clause: recordTargetBinding,
+		with_item: recordAsPatternBinding,
+		except_clause: recordAsPatternBinding,
+		except_group_clause: recordAsPatternBinding,
+		delete_statement: recordDeleteTargets,
+		case_clause: recordCaseBindings,
+		type_alias_statement: recordTypeAliasBinding,
+		global_statement: recordDeclarationBindings,
+		nonlocal_statement: recordDeclarationBindings,
+		type_parameter: recordTypeParameterBindings,
+		type_parameter_list: recordTypeParameterBindings,
+		call: recordDynamicNamespaceHazard,
+	});
+
 class Summary implements PythonProvenanceSummary {
 	readonly invalid: boolean;
 	private readonly imports: ReadonlyMap<string, EligibleImport>;
@@ -300,29 +601,16 @@ class Summary implements PythonProvenanceSummary {
 	private readonly functions: ReadonlyMap<string, FunctionSummary>;
 
 	constructor(root: PythonSyntaxNode) {
-		const imports = new Map<string, EligibleImport>();
-		const bindingCounts = new Map<string, number>();
-		const functionBindings = new Map<string, Map<string, number>>();
-		const functionAnnotations = new Map<string, Map<string, string>>();
-		let invalid = false;
-		let visits = 0;
-
-		const addBinding = (name: string, activeFunctions: PythonSyntaxNode[]) => {
-			bindingCounts.set(name, (bindingCounts.get(name) ?? 0) + 1);
-			for (const fn of activeFunctions) {
-				const bindings =
-					functionBindings.get(nodeKey(fn)) ?? new Map<string, number>();
-				bindings.set(name, (bindings.get(name) ?? 0) + 1);
-				functionBindings.set(nodeKey(fn), bindings);
-			}
-		};
-		const addTarget = (
-			target: PythonSyntaxNode | undefined,
-			functions: PythonSyntaxNode[],
-		) => {
-			const extracted = bindingTargetNames(target);
-			invalid ||= extracted.unknown;
-			for (const name of extracted.names) addBinding(name, functions);
+		const state: SummaryBuildState = {
+			imports: new Map(),
+			bindingCounts: new Map(),
+			functionBindings: new Map(),
+			functionAnnotations: new Map(),
+			invalid: false,
+			visits: 0,
+			functionChain: [],
+			parentFunctionChain: [],
+			moduleDirect: false,
 		};
 		const visit = (
 			node: PythonSyntaxNode,
@@ -330,150 +618,45 @@ class Summary implements PythonProvenanceSummary {
 			moduleDirect: boolean,
 			activeFunctions: PythonSyntaxNode[],
 		): void => {
-			if (++visits > TRAVERSAL_VISIT_CAP || depth > TRAVERSAL_DEPTH_CAP) {
-				invalid = true;
+			if (++state.visits > TRAVERSAL_VISIT_CAP || depth > TRAVERSAL_DEPTH_CAP) {
+				markInvalid(state);
 				return;
 			}
 			if (node.hasError || node.type === "ERROR" || node.type === "MISSING") {
-				invalid = true;
+				markInvalid(state);
 				return;
 			}
-			const functions =
+			const functionChain =
 				node.type === "function_definition"
 					? [...activeFunctions, node]
 					: activeFunctions;
-			if (node.type === "function_definition") {
-				const annotations = new Map<string, string>();
-				const parameters = directNamedChild(node, "parameters");
-				for (const parameter of namedChildren(parameters ?? node)) {
-					const name = parameterName(parameter);
-					if (!name) {
-						if (parameter.type !== "list_splat_pattern") invalid = true;
-						continue;
-					}
-					addBinding(name, functions);
-					const annotation = directAnnotationName(parameter);
-					if (annotation) annotations.set(name, annotation);
-				}
-				functionAnnotations.set(nodeKey(node), annotations);
-			}
-			if (node.type === "lambda") {
-				const params = directNamedChild(node, "lambda_parameters");
-				for (const parameter of namedChildren(params ?? node)) {
-					const name = parameterName(parameter);
-					if (name) addBinding(name, functions);
-					else invalid = true;
-				}
-			}
-			if (
-				node.type === "import_from_statement" ||
-				node.type === "import_statement"
-			) {
-				const imported = importedNames(node);
-				invalid ||= imported.unknown || imported.star;
-				for (const name of imported.names) addBinding(name, functions);
-				if (moduleDirect) {
-					for (const candidate of eligibleImports(node))
-						imports.set(candidate.name, candidate);
-				}
-			}
-			if (
-				node.type === "assignment" ||
-				node.type === "augmented_assignment" ||
-				node.type === "named_expression"
-			) {
-				addTarget(
-					node.childForFieldName?.("left") ?? namedChildren(node)[0],
-					functions,
-				);
-			}
-			if (node.type === "for_statement" || node.type === "for_in_clause") {
-				addTarget(
-					node.childForFieldName?.("left") ?? namedChildren(node)[0],
-					functions,
-				);
-			}
-			if (
-				node.type === "with_item" ||
-				node.type === "except_clause" ||
-				node.type === "except_group_clause"
-			) {
-				const extracted = asPatternTargetNames(node);
-				invalid ||= extracted.unknown;
-				for (const name of extracted.names) addBinding(name, functions);
-			}
-			if (node.type === "delete_statement") {
-				for (const child of namedChildren(node)) addTarget(child, functions);
-			}
-			if (node.type === "case_clause") {
-				const extracted = bindingPatternNames(
-					directNamedChild(node, "case_pattern"),
-				);
-				invalid ||= extracted.unknown;
-				for (const name of extracted.names) addBinding(name, functions);
-			}
-			if (
-				node.type === "function_definition" ||
-				node.type === "class_definition"
-			) {
-				const name = directNamedChild(node, "identifier")?.text;
-				if (name) addBinding(name, activeFunctions);
-				else invalid = true;
-			}
-			if (node.type === "type_alias_statement") {
-				const name = directNamedChild(node, "type")?.children?.find(
-					(child) => child.type === "identifier",
-				)?.text;
-				if (name) addBinding(name, functions);
-				else invalid = true;
-			}
-			if (
-				node.type === "global_statement" ||
-				node.type === "nonlocal_statement"
-			) {
-				for (const child of namedChildren(node))
-					addBinding(child.text, functions);
-			}
-			if (
-				node.type === "type_parameter" ||
-				node.type === "type_parameter_list"
-			) {
-				for (const child of namedChildren(node)) {
-					if (child.type === "identifier") addBinding(child.text, functions);
-				}
-			}
-			if (node.type === "call") {
-				const callee =
-					node.childForFieldName?.("function") ?? namedChildren(node)[0];
-				if (
-					callee?.type === "identifier" &&
-					["exec", "eval", "globals", "locals", "vars"].includes(callee.text)
-				) {
-					invalid = true;
-				}
-			}
+			state.functionChain = functionChain;
+			state.parentFunctionChain = activeFunctions;
+			state.moduleDirect = moduleDirect;
+			const recorder = SUMMARY_NODE_RECORDERS[node.type];
+			if (recorder) recorder(node, state);
 			for (const child of node.children ?? []) {
-				visit(child, depth + 1, node === root, functions);
+				visit(child, depth + 1, node === root, functionChain);
 			}
 		};
 		visit(root, 0, false, []);
 
 		const tainted = new Set<string>();
-		for (const [name, count] of bindingCounts) {
-			if (count !== 1 || !imports.has(name)) tainted.add(name);
+		for (const [name, count] of state.bindingCounts) {
+			if (count !== 1 || !state.imports.has(name)) tainted.add(name);
 		}
-		for (const name of imports.keys()) {
-			if ((bindingCounts.get(name) ?? 0) !== 1) tainted.add(name);
+		for (const name of state.imports.keys()) {
+			if ((state.bindingCounts.get(name) ?? 0) !== 1) tainted.add(name);
 		}
-		this.invalid = invalid;
-		this.imports = imports;
+		this.invalid = state.invalid;
+		this.imports = state.imports;
 		this.tainted = tainted;
 		this.functions = new Map(
-			[...functionAnnotations.entries()].map(([key, annotations]) => [
+			[...state.functionAnnotations.entries()].map(([key, annotations]) => [
 				key,
 				{
 					parameterAnnotations: annotations,
-					bindingCounts: functionBindings.get(key) ?? new Map(),
+					bindingCounts: state.functionBindings.get(key) ?? new Map(),
 				},
 			]),
 		);
@@ -548,16 +731,18 @@ export function isSafePsycopgIdentifierComposition(
 	node: PythonSyntaxNode | undefined,
 	root: PythonSyntaxNode | undefined,
 ): boolean {
-	if (!node || node.type !== "call" || !root) return false;
+	if (node?.type !== "call" || !root) return false;
 	const summary = getPythonProvenanceSummary(root);
 	if (summary.invalid) return false;
 	const formatCallee =
 		node.childForFieldName?.("function") ?? namedChildren(node)[0];
 	if (formatCallee?.type !== "attribute") return false;
 	const formatChildren = namedChildren(formatCallee);
-	const formatName = formatChildren.find((child) => child.text === "format");
+	const hasFormatMethod = formatChildren.some(
+		(child) => child.text === "format",
+	);
 	const sqlConstructor = formatChildren.find((child) => child.type === "call");
-	if (!formatName || !sqlConstructor) return false;
+	if (!hasFormatMethod || !sqlConstructor) return false;
 	const constructorCallee =
 		sqlConstructor.childForFieldName?.("function") ??
 		namedChildren(sqlConstructor)[0];

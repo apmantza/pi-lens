@@ -253,6 +253,20 @@ describe("post-filter repairs (#879)", () => {
 		).toBe(1);
 	});
 
+	it("keeps hallucinated-import pairs exact", async () => {
+		const cases: Array<[string, number]> = [
+			["from requests import JSONResponse", 1],
+			["from requests import Session", 1],
+			["from sqlalchemy import JSONResponse", 1],
+			["from sqlalchemy import Session", 0],
+		];
+		for (const [source, expected] of cases) {
+			expect(
+				await count("python-hallucinated-import", "py", "python", source),
+			).toBe(expected);
+		}
+	});
+
 	it("flags only true bare except, not dotted/qualified exception types", async () => {
 		// Qualified/dotted exception types (e.g. `asyncio.TimeoutError`) parse as
 		// an `attribute` node in tree-sitter-python, not `identifier`. The

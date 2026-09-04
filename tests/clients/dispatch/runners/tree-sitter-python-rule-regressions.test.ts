@@ -297,6 +297,14 @@ def run(value):
 			"arbitrary-scalar.py",
 			"client.scalar(statement)\nclient.scalars(statement)\n",
 		);
+		const fromPsycopgPackage = env.addFile(
+			"from-psycopg-package.py",
+			'from psycopg import psycopg\ncursor.execute(psycopg.sql.SQL("SELECT * FROM {}").format(psycopg.sql.Identifier(table)))\n',
+		);
+		const fromPsycopg2Package = env.addFile(
+			"from-psycopg2-package.py",
+			'from psycopg2 import psycopg2\ncursor.execute(psycopg2.sql.SQL("SELECT * FROM {}").format(psycopg2.sql.Identifier(table)))\n',
+		);
 		const results = await Promise.all([
 			treeSitterRunner.run(safeSessionAliasChain.ctx),
 			treeSitterRunner.run(safePsycopgConstructorAliasChain.ctx),
@@ -304,6 +312,8 @@ def run(value):
 			treeSitterRunner.run(innerPsycopgShadow.ctx),
 			treeSitterRunner.run(latePsycopgImport.ctx),
 			treeSitterRunner.run(arbitraryScalar.ctx),
+			treeSitterRunner.run(fromPsycopgPackage.ctx),
+			treeSitterRunner.run(fromPsycopg2Package.ctx),
 		]);
 
 		for (const result of results) {
