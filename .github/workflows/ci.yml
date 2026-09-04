@@ -226,8 +226,13 @@ jobs:
       # `npm install --omit=dev`). Scoped to high/critical to avoid blocking PRs on
       # fix-less moderate advisories; transitive moderate ones are handled by
       # Dependabot security updates. DevDeps are excluded — they never reach users.
+      # Bounded + retried (scripts/audit-prod-deps.mjs): a registry outage
+      # (2026-09-04: ~5 min hang then 400 from the retired quick endpoint) must
+      # not red the job the way a real high/critical finding does. The script
+      # fails only on findings, retries transport errors, and on exhaustion
+      # passes with a visible warning annotation.
       - name: Audit production dependencies
-        run: npm audit --omit=dev --audit-level=high
+        run: node scripts/audit-prod-deps.mjs
 
       # `npm run lint` chains tsc (the TS project) with `lint:js` (oxlint over
       # scripts/**/*.mjs, root *.mjs, tests/**/*.mjs, and other non-TS JS) —
