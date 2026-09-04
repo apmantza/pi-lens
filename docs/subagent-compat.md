@@ -71,7 +71,7 @@ first session.
 Assertions:
 
 1. **Subagent light mode engages** — with `PI_SUBAGENT_CHILD=1` set,
-   `subagent_light_mode` is logged to `~/.pi-lens/latency.log` (a `type:
+   `subagent_light_mode` is logged to `$PI_LENS_HOME/latency.log` (a `type:
    "phase"` entry) and none of the seven heavyweight-scan phases
    (`knip`/`jscpd`/`madge`/`dead-code`/`govulncheck`/`gitleaks`/`trivy`) are
    logged for that run.
