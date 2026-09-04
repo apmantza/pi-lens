@@ -38,9 +38,10 @@ import { RUNNERS, TestRunnerClient } from "../../clients/test-runner-client.js";
 const tempDirs: string[] = [];
 let originalVirtualEnv: string | undefined;
 let originalCondaPrefix: string | undefined;
+let originalUvProjectEnvironment: string | undefined;
 
 function restoreEnvironmentVariable(
-	name: "VIRTUAL_ENV" | "CONDA_PREFIX",
+	name: "VIRTUAL_ENV" | "CONDA_PREFIX" | "UV_PROJECT_ENVIRONMENT",
 	value: string | undefined,
 ): void {
 	if (value === undefined) delete process.env[name];
@@ -81,8 +82,10 @@ describe("pytest project environment", () => {
 	beforeEach(() => {
 		originalVirtualEnv = process.env.VIRTUAL_ENV;
 		originalCondaPrefix = process.env.CONDA_PREFIX;
+		originalUvProjectEnvironment = process.env.UV_PROJECT_ENVIRONMENT;
 		delete process.env.VIRTUAL_ENV;
 		delete process.env.CONDA_PREFIX;
+		delete process.env.UV_PROJECT_ENVIRONMENT;
 		safeSpawnAsync.mockClear();
 		findGlobalBinary.mockClear();
 	});
@@ -90,6 +93,10 @@ describe("pytest project environment", () => {
 	afterEach(() => {
 		restoreEnvironmentVariable("VIRTUAL_ENV", originalVirtualEnv);
 		restoreEnvironmentVariable("CONDA_PREFIX", originalCondaPrefix);
+		restoreEnvironmentVariable(
+			"UV_PROJECT_ENVIRONMENT",
+			originalUvProjectEnvironment,
+		);
 		for (const dir of tempDirs.splice(0)) {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
@@ -134,5 +141,146 @@ describe("pytest project environment", () => {
 		expect(command).toBe("python");
 		expect(args).toEqual(["-m", "pytest", testFile, "--tb=short", "-q"]);
 		expect(options.env).toBeUndefined();
+	});
+
+	it("uses an absolute UV_PROJECT_ENVIRONMENT path", async () => {
+		const { root, testFile } = createProject(false);
+		const uvEnvironmentRoot = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-uv-project-env-"),
+		);
+		const binDir = path.join(
+			uvEnvironmentRoot,
+			process.platform === "win32" ? "Scripts" : "bin",
+		);
+		const pythonPath = path.join(
+			binDir,
+			process.platform === "win32" ? "python.exe" : "python",
+		);
+		fs.mkdirSync(binDir, { recursive: true });
+		fs.writeFileSync(pythonPath, "");
+		process.env.UV_PROJECT_ENVIRONMENT = uvEnvironmentRoot;
+
+		try {
+			await new TestRunnerClient(false).runTestFileAsync(
+				testFile,
+				root,
+				"pytest",
+				RUNNERS.pytest,
+			);
+
+			const [command, , options] = safeSpawnAsync.mock.calls[0];
+			if (!options) throw new Error("pytest spawn options were not supplied");
+			expect(command).toBe(pythonPath);
+			expect(options.env?.VIRTUAL_ENV).toBe(uvEnvironmentRoot);
+			expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(binDir);
+		} finally {
+			fs.rmSync(uvEnvironmentRoot, { recursive: true, force: true });
+		}
+	});
+
+	it("resolves a relative UV_PROJECT_ENVIRONMENT from the workspace root", async () => {
+		const workspace = createProject(false);
+		const member = path.join(workspace.root, "packages", "member");
+		const memberTestFile = path.join(member, "tests", "test_example.py");
+		fs.mkdirSync(path.dirname(memberTestFile), { recursive: true });
+		fs.writeFileSync(memberTestFile, "def test_example():\n    assert True\n");
+		fs.writeFileSync(
+			path.join(workspace.root, "pyproject.toml"),
+			"[tool.uv.workspace]\nmembers = ['packages/*']\n",
+		);
+		fs.writeFileSync(
+			path.join(member, "pyproject.toml"),
+			"[project]\nname='member'\n",
+		);
+
+		const uvEnvironmentRoot = path.join(workspace.root, ".uv-env");
+		const binDir = path.join(
+			uvEnvironmentRoot,
+			process.platform === "win32" ? "Scripts" : "bin",
+		);
+		const pythonPath = path.join(
+			binDir,
+			process.platform === "win32" ? "python.exe" : "python",
+		);
+		fs.mkdirSync(binDir, { recursive: true });
+		fs.writeFileSync(pythonPath, "");
+		process.env.UV_PROJECT_ENVIRONMENT = ".uv-env";
+
+		await new TestRunnerClient(false).runTestFileAsync(
+			memberTestFile,
+			member,
+			"pytest",
+			RUNNERS.pytest,
+		);
+
+		const [command, , options] = safeSpawnAsync.mock.calls[0];
+		if (!options) throw new Error("pytest spawn options were not supplied");
+		expect(command).toBe(pythonPath);
+		expect(options.env?.VIRTUAL_ENV).toBe(uvEnvironmentRoot);
+	});
+
+	it("uses the uv workspace .venv for a member package", async () => {
+		const workspace = createProject(false);
+		const member = path.join(workspace.root, "packages", "member");
+		const memberTestFile = path.join(member, "tests", "test_example.py");
+		fs.mkdirSync(path.dirname(memberTestFile), { recursive: true });
+		fs.writeFileSync(memberTestFile, "def test_example():\n    assert True\n");
+		fs.writeFileSync(
+			path.join(workspace.root, "pyproject.toml"),
+			"[tool.uv.workspace]\nmembers = ['packages/*']\n",
+		);
+		fs.writeFileSync(
+			path.join(member, "pyproject.toml"),
+			"[project]\nname='member'\n",
+		);
+
+		const binDir = path.join(
+			workspace.root,
+			".venv",
+			process.platform === "win32" ? "Scripts" : "bin",
+		);
+		const pythonPath = path.join(
+			binDir,
+			process.platform === "win32" ? "python.exe" : "python",
+		);
+		fs.mkdirSync(binDir, { recursive: true });
+		fs.writeFileSync(pythonPath, "");
+
+		await new TestRunnerClient(false).runTestFileAsync(
+			memberTestFile,
+			member,
+			"pytest",
+			RUNNERS.pytest,
+		);
+
+		const [command, , options] = safeSpawnAsync.mock.calls[0];
+		if (!options) throw new Error("pytest spawn options were not supplied");
+		expect(command).toBe(pythonPath);
+		expect(options.env?.VIRTUAL_ENV).toBe(path.join(workspace.root, ".venv"));
+	});
+
+	it("labels pytest usage errors and interruptions by their real exit codes", () => {
+		const client = new TestRunnerClient(false) as any;
+		// The label is derived from pytest's status enum, so keep output empty and
+		// avoid pinning a hand-written tool transcript in this parser contract test.
+		const usageError = client.parsePytestOutput(
+			"",
+			"",
+			4,
+			"/tmp/test_example.py",
+			"/tmp",
+			"pytest",
+		);
+		const interrupted = client.parsePytestOutput(
+			"",
+			"",
+			2,
+			"/tmp/test_example.py",
+			"/tmp",
+			"pytest",
+		);
+
+		expect(usageError.error).toBe("Pytest configuration error");
+		expect(interrupted.error).toBe("Pytest interrupted");
 	});
 });

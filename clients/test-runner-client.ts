@@ -1869,7 +1869,12 @@ export class TestRunnerClient {
 			skipped,
 			failures,
 			duration,
-			error: exitCode === 2 ? "Pytest configuration error" : undefined,
+			error:
+				exitCode === 4
+					? "Pytest configuration error"
+					: exitCode === 2
+						? "Pytest interrupted"
+						: undefined,
 		};
 	}
 
