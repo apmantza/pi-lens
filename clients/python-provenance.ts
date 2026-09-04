@@ -133,6 +133,35 @@ const BINDING_PATTERN_REFERENCE_TYPES = new Set([
 	"qualified_pattern",
 ]);
 
+function applyBindingNameDecision(
+	current: { node: PythonSyntaxNode; classifier: BindingNameClassifier },
+	decision: BindingNameDecision,
+	names: string[],
+	stack: Array<{ node: PythonSyntaxNode; classifier: BindingNameClassifier }>,
+): boolean {
+	switch (decision.kind) {
+		case "record":
+			if (current.node.text !== "_") names.push(current.node.text);
+			return false;
+		case "stop":
+			return false;
+		case "unknown":
+			return true;
+		case "descend":
+			for (const child of decision.children) {
+				stack.push({ node: child, classifier: current.classifier });
+			}
+			return false;
+		case "delegate":
+			if (!decision.node) return true;
+			stack.push({
+				node: decision.node,
+				classifier: decision.classifier,
+			});
+			return false;
+	}
+}
+
 function collectBindingNames(
 	root: PythonSyntaxNode | undefined,
 	classifier: BindingNameClassifier,
@@ -148,29 +177,9 @@ function collectBindingNames(
 		const current = stack.pop();
 		if (!current) continue;
 		const decision = current.classifier(current.node);
-		if (decision.kind === "record") {
-			if (current.node.text !== "_") names.push(current.node.text);
-			continue;
-		}
-		if (decision.kind === "stop") continue;
-		if (decision.kind === "unknown") {
+		if (applyBindingNameDecision(current, decision, names, stack)) {
 			unknown = true;
-			continue;
 		}
-		if (decision.kind === "descend") {
-			for (const child of decision.children) {
-				stack.push({ node: child, classifier: current.classifier });
-			}
-			continue;
-		}
-		if (!decision.node) {
-			unknown = true;
-			continue;
-		}
-		stack.push({
-			node: decision.node,
-			classifier: decision.classifier,
-		});
 	}
 	return { names, unknown };
 }
