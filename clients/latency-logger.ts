@@ -150,6 +150,7 @@ const LAST_PHASE_EXCLUDED = new Set([
 	"degradation_ledger",
 	"path_attribution_verified_rollup",
 	"concurrent_session_bind_rollup",
+	"auxiliary_readiness",
 ]);
 
 /**

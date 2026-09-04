@@ -249,6 +249,22 @@ describe("getLastLoggedPhase (loop_block attribution, #1122/#1123)", () => {
 		expect(getLastLoggedPhase()?.phase).toBe("provider_request");
 	});
 
+	it("does not let auxiliary readiness own stall attribution (#2540)", () => {
+		logLatency({
+			type: "phase",
+			phase: "provider_request",
+			filePath: "<pi-lens>",
+			durationMs: 5,
+		});
+		logLatency({
+			type: "phase",
+			phase: "auxiliary_readiness",
+			filePath: "<pi-lens>",
+			durationMs: 120,
+		});
+		expect(getLastLoggedPhase()?.phase).toBe("provider_request");
+	});
+
 	it("does not let a busy notify decision own stall attribution (#2358)", () => {
 		logLatency({
 			type: "phase",

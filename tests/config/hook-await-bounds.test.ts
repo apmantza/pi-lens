@@ -2274,6 +2274,12 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"The AMBIENT turn abort signal, set for the whole tool_result path and " +
 		"absent only in a bare unit harness. PI_LENS_LSP_SYNC_BUDGET_MS is the " +
 		"bound that is always live.",
+	"call:clients/lsp/index.ts#55b587e6~3997fa51":
+		"`signal` parameter, defaulting to `getAmbientAbortSignal()`. Caller-supplied " +
+		"on the pre-dispatch resync path (passing the turn's ambient signal so Escape mid-turn " +
+		"abandons auxiliary warmup without gating the edit hook) and defaulted to the " +
+		"ambient signal on the touchFile with-auxiliary path. LSP_SPAWN_BUDGET_MS wall-clock " +
+		"bound is live per server.",
 };
 
 /** `auditRegistry` takes flat strings; the structure is folded in here. */

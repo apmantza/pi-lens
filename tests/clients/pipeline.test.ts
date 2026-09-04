@@ -75,6 +75,7 @@ describe("Pipeline", () => {
 			hasLSP: vi.fn().mockResolvedValue(true),
 			openFile: vi.fn().mockResolvedValue(undefined),
 			touchFile: vi.fn().mockResolvedValue(undefined),
+			getAuxiliaryClientsForFile: vi.fn().mockResolvedValue([]),
 			getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
 		};
 	}

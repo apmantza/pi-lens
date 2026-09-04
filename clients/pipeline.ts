@@ -73,6 +73,7 @@ import { RUNTIME_CONFIG } from "./runtime-config.js";
 import type { WordIndex } from "./word-index.js";
 import { getAmbientAbortSignal, safeSpawnAsync } from "./safe-spawn.js";
 import { bounded } from "./deadline-utils.js";
+import { enabledAuxiliaryLspServerIds } from "./dispatch/auxiliary-lsp.js";
 import { recordDegradationOnce } from "./degradation-ledger.js";
 import { dropFindingsForMissingPaths } from "./advisory-provenance.js";
 import {
@@ -1077,6 +1078,28 @@ export async function resyncLspFile(
 			const budgetMs = lspSyncBudgetMs();
 			const abort = getAmbientAbortSignal();
 			if (abort?.aborted) return;
+
+			// #2540: Kick off auxiliary server acquisition concurrently and unawaited
+			// with the ambient turn signal so auxiliary warmup overlaps with the primary
+			// server during resync. Leaves the single-occupancy deferred slot (#2509)
+			// free for actionable-warnings while Escape mid-turn abandons the wait.
+			const auxServerIds = enabledAuxiliaryLspServerIds(getFlag);
+			if (auxServerIds.length > 0) {
+				// Optional call: 42 test files hand-roll a partial LSPService double
+				// without this method (#2582 consolidates them behind one factory);
+				// the production service always has it. Drop the `?.` with #2582.
+				void lspService
+					.getAuxiliaryClientsForFile?.(
+						filePath,
+						new Set(auxServerIds),
+						undefined,
+						LSP_SPAWN_BUDGET_MS,
+						abort,
+						"tool_result_edit",
+					)
+					?.catch(() => {});
+			}
+
 			const startedAt = Date.now();
 			const touch = lspService
 				.touchFile(filePath, fileContent, {

@@ -33,7 +33,9 @@ import {
 } from "../project-trust.js";
 import { shouldPreferPullOnlyDiagnostics } from "../lsp-budget.js";
 import { sampleProcessTreeCpuPercent } from "../resource-sampler.js";
-import { withDeadline, withTimeout } from "../deadline-utils.js";
+import { bounded, withDeadline, withTimeout } from "../deadline-utils.js";
+import type { LedgerHookKey } from "../hook-budgets.js";
+import { getAmbientAbortSignal } from "../safe-spawn.js";
 import { abortDeferredLspWork } from "../deferred-lsp-work.js";
 import {
 	acquireWorkspaceSweepHold,
@@ -678,6 +680,8 @@ export interface LSPTouchFileOptions {
 	excludeServerIds?: ReadonlySet<string>;
 	/** Budget for waiting on the LSP client to spawn / become ready. */
 	maxClientWaitMs?: number;
+	/** Hook identity for bounded abandonment attribution (defaults to tool_result_edit). */
+	hook?: LedgerHookKey;
 	/**
 	 * Budget for waiting on `textDocument/publishDiagnostics` after the notify
 	 * lands. The dispatch-lsp-runner sets this to a tighter value so a slow
@@ -3256,22 +3260,38 @@ export class LSPService {
 			serverId: string,
 			outcome: LSPClientAcquisitionOutcome,
 		) => void,
+		maxWaitMs?: number,
+		signal?: AbortSignal,
+		hook?: LedgerHookKey,
 	): Promise<SpawnedServer[]> {
 		if (this.checkDestroyed() || enabledIds.size === 0) return [];
 		const servers = getServersForFileWithConfig(filePath).filter(
 			(s) => s.role === "auxiliary" && enabledIds.has(s.id),
 		);
 		if (servers.length === 0) return [];
+		const rootMemo = new Map<string, Promise<string | undefined>>();
+		const effectiveSignal = signal ?? getAmbientAbortSignal();
+		const effectiveHook = hook ?? "tool_result_edit";
 		const spawned = await Promise.all(
-			servers.map((server) =>
-				this.ensureClientForServer(
+			servers.map(async (server) => {
+				const acquisition = this.ensureClientForServer(
 					filePath,
 					server,
 					undefined,
 					undefined,
 					(reported) => onOutcome?.(server.id, reported),
-				),
-			),
+					rootMemo,
+				);
+				if (!maxWaitMs || maxWaitMs <= 0) {
+					return acquisition;
+				}
+				return bounded(acquisition, {
+					ms: maxWaitMs,
+					signal: effectiveSignal,
+					hook: effectiveHook,
+					label: `auxiliary-spawn:${server.id}`,
+				});
+			}),
 		);
 		return spawned.filter((entry): entry is SpawnedServer => Boolean(entry));
 	}
@@ -4467,6 +4487,7 @@ export class LSPService {
 		} else if (clientScope === "with-auxiliary") {
 			// Primary language server + the enabled cross-cutting auxiliaries
 			// (opengrep, …). The aggregation layer merges/dedups their diagnostics.
+			const auxStartedAt = Date.now();
 			const [entry, aux] = await Promise.all([
 				this.getClientForFile(
 					filePath,
@@ -4479,8 +4500,27 @@ export class LSPService {
 					filePath,
 					new Set(options.auxiliaryServerIds ?? []),
 					noteColdAuxiliary,
+					options.maxClientWaitMs,
+					undefined,
+					options.hook,
 				),
 			]);
+			const auxDurationMs = Date.now() - auxStartedAt;
+			if (options.auxiliaryServerIds && options.auxiliaryServerIds.length > 0) {
+				logLatency({
+					type: "phase",
+					phase: "auxiliary_readiness",
+					filePath: normalizedPath,
+					durationMs: auxDurationMs,
+					metadata: {
+						serverIds: aux.map((s) => s.info.id),
+						attemptedCount: options.auxiliaryServerIds.length,
+						readyCount: aux.length,
+						coldServerIds: [...coldAuxiliaryServerIds],
+						source,
+					},
+				});
+			}
 			spawned = entry ? [entry, ...aux] : aux;
 			serverCountAttempted = spawned.length;
 		} else {
