@@ -21,3 +21,8 @@ export function noPhasesLogged(
 	phases: string[],
 	sinceIso?: string,
 ): boolean;
+
+export function countEntriesSince(
+	entries: Array<Record<string, unknown>>,
+	sinceIso: string,
+): number;

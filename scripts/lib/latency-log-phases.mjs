@@ -76,3 +76,20 @@ export function phaseWasLogged(entries, phase, sinceIso) {
 export function noPhasesLogged(entries, phases, sinceIso) {
 	return phases.every((phase) => !phaseWasLogged(entries, phase, sinceIso));
 }
+
+/**
+ * Number of entries (any type) whose `ts` falls at or after `sinceIso`.
+ * Positive control for the absence assertions: "no heavyweight phase logged"
+ * is only evidence when the run wrote SOMETHING to the log the smoke is
+ * reading — an empty or mis-located log made those pass vacuously (#2570).
+ *
+ * @param {Array<Record<string, unknown>>} entries
+ * @param {string} sinceIso ISO timestamp lower bound (inclusive)
+ */
+export function countEntriesSince(entries, sinceIso) {
+	const sinceMs = Date.parse(sinceIso);
+	return entries.filter((e) => {
+		const ts = typeof e.ts === "string" ? Date.parse(e.ts) : Number.NaN;
+		return Number.isFinite(ts) && ts >= sinceMs;
+	}).length;
+}
