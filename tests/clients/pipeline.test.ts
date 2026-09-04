@@ -29,6 +29,7 @@ import {
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
 import { createTempFile, setupTestEnvironment } from "../clients/test-utils.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 import {
 	_resetForTests as resetBusPublish,
 	wireBusEmitter,
@@ -55,30 +56,22 @@ import { getLSPService } from "../../clients/lsp/index.js";
 
 describe("Pipeline", () => {
 	let tmpDir: string;
-	let mockLSPService: ReturnType<typeof createMockLSPService>;
+	let mockLSPService: ReturnType<typeof makeLspServiceDouble>;
 
 	beforeEach(async () => {
 		resetDegradationLedger();
 		const env = setupTestEnvironment();
 		tmpDir = env.tmpDir;
-		mockLSPService = createMockLSPService();
+		mockLSPService = makeLspServiceDouble({
+			supportsLSP: vi.fn().mockReturnValue(true),
+			hasLSP: vi.fn().mockResolvedValue(true),
+		});
 		vi.mocked(getLSPService).mockReturnValue(mockLSPService as any);
 		vi.mocked(dispatchLintWithResult).mockReset();
 		const { resetFormatService } =
 			await import("../../clients/format-service.js");
 		resetFormatService();
 	});
-
-	function createMockLSPService() {
-		return {
-			supportsLSP: vi.fn().mockReturnValue(true),
-			hasLSP: vi.fn().mockResolvedValue(true),
-			openFile: vi.fn().mockResolvedValue(undefined),
-			touchFile: vi.fn().mockResolvedValue(undefined),
-			getAuxiliaryClientsForFile: vi.fn().mockResolvedValue([]),
-			getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-		};
-	}
 
 	function createMockDeps(overrides?: Partial<PipelineDeps>): PipelineDeps {
 		// Use mock clients to avoid real tool execution during tests

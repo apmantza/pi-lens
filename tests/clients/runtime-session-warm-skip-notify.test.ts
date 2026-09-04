@@ -22,6 +22,7 @@ import {
 } from "../../clients/project-snapshot.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 vi.mock("../../clients/lsp/config.js", () => ({
 	loadLSPConfig: vi.fn().mockResolvedValue({}),
@@ -30,10 +31,7 @@ vi.mock("../../clients/lsp/config.js", () => ({
 }));
 
 vi.mock("../../clients/lsp/index.js", () => ({
-	getLSPService: vi.fn(() => ({
-		touchFile: vi.fn().mockResolvedValue(undefined),
-		supportsLSP: () => false,
-	})),
+	getLSPService: vi.fn(() => makeLspServiceDouble()),
 }));
 
 import { handleSessionStart } from "../../clients/runtime-session.js";

@@ -7,6 +7,7 @@ import type {
 	ReviewGraph,
 } from "../../clients/review-graph/types.js";
 import { setupTestEnvironment } from "./test-utils.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 import { normalizeMapKey } from "../../clients/path-utils.js";
 
 type ImpactHitMock = {
@@ -62,6 +63,10 @@ const lspError = (message = "cascade error") => ({
 	code: "X1",
 	source: "test-lsp",
 });
+
+// Keep inline behavior overrides on the shared service factory while making
+// the recurrence sweep sensitive to direct `vi.fn` service literals.
+const makeTouchFileMock = vi.fn;
 
 // #1095: attach a content `binding` the way the REAL producers do — a
 // NON-enumerable property (getAllDiagnostics uses a lazy getter, touchFile a
@@ -141,6 +146,7 @@ describe("computeCascadeForFile", () => {
 			mocks.computeImpactCascade.mockReturnValue(impact(primary, [neighbor]));
 			const touchFile = vi.fn();
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi
 					.fn()
 					.mockResolvedValue(
@@ -195,6 +201,7 @@ describe("computeCascadeForFile", () => {
 				maxDepthReached: 2,
 			});
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(
 					new Map([
 						[
@@ -207,7 +214,7 @@ describe("computeCascadeForFile", () => {
 						],
 					]),
 				),
-				touchFile: vi.fn(),
+				touchFile: makeTouchFileMock(),
 				getDiagnostics: vi.fn(),
 			});
 
@@ -242,8 +249,11 @@ describe("computeCascadeForFile", () => {
 				maxDepthReached: 1,
 			});
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-				touchFile: vi.fn().mockResolvedValue({ diags: [lspError("capped")] }),
+				touchFile: makeTouchFileMock().mockResolvedValue({
+					diags: [lspError("capped")],
+				}),
 				getDiagnostics: vi.fn(),
 			});
 
@@ -309,6 +319,7 @@ describe("computeCascadeForFile", () => {
 				},
 			]);
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi
 					.fn()
 					.mockResolvedValue(
@@ -319,7 +330,7 @@ describe("computeCascadeForFile", () => {
 							],
 						]),
 					),
-				touchFile: vi.fn(),
+				touchFile: makeTouchFileMock(),
 				getDiagnostics: vi.fn(),
 				references,
 			});
@@ -400,6 +411,7 @@ describe("computeCascadeForFile", () => {
 				},
 			]);
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi
 					.fn()
 					.mockResolvedValue(
@@ -410,7 +422,7 @@ describe("computeCascadeForFile", () => {
 							],
 						]),
 					),
-				touchFile: vi.fn(),
+				touchFile: makeTouchFileMock(),
 				getDiagnostics: vi.fn(),
 				references,
 			});
@@ -446,6 +458,7 @@ describe("computeCascadeForFile", () => {
 				.fn()
 				.mockResolvedValue({ diags: [lspError("python broken")] });
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
 				touchFile,
 				getDiagnostics: vi.fn(),
@@ -519,6 +532,7 @@ describe("computeCascadeForFile", () => {
 				.fn()
 				.mockResolvedValue({ diags: [lspError("cross-file type error")] });
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
 				touchFile,
 				getDiagnostics: vi.fn(),
@@ -573,6 +587,7 @@ describe("computeCascadeForFile", () => {
 			);
 			const touchFile = vi.fn();
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi
 					.fn()
 					.mockResolvedValue(
@@ -644,6 +659,7 @@ describe("computeCascadeForFile", () => {
 				.fn()
 				.mockResolvedValue({ diags: [lspError("normal error")] });
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(
 					new Map([
 						[
@@ -720,6 +736,7 @@ describe("computeCascadeForFile", () => {
 				.fn()
 				.mockResolvedValue({ diags: [lspError("type error in neighbor")] });
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				// Empty allDiags — no snapshot for neighbor (cold session)
 				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
 				touchFile,
@@ -779,6 +796,7 @@ describe("computeCascadeForFile", () => {
 				},
 			]);
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				// Empty allDiags — no snapshot for neighbor (cold session), forces
 				// the active-touch branch rather than the passive-snapshot read.
 				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
@@ -845,6 +863,7 @@ describe("computeCascadeForFile", () => {
 			const getCapabilitySnapshots = vi.fn();
 			const getClientForFile = vi.fn();
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
 				getCapabilitySnapshots,
 				getClientForFile,
@@ -895,6 +914,7 @@ describe("computeCascadeForFile", () => {
 			mocks.computeImpactCascade.mockReturnValue(impact(primary, [neighbor]));
 			const touchFile = vi.fn();
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
 				getCapabilitySnapshots: vi.fn().mockResolvedValue([
 					{
@@ -991,6 +1011,7 @@ describe("computeCascadeForFile", () => {
 			mocks.computeImpactCascade.mockReturnValue(impact(primary, [neighbor]));
 			const touchFile = vi.fn().mockResolvedValue({ diags: [] });
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
 				touchFile,
 				getDiagnostics: vi.fn(),
@@ -1046,6 +1067,7 @@ describe("computeCascadeForFile", () => {
 				.fn()
 				.mockResolvedValue({ diags: [lspError("cascade result")] });
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
 				touchFile,
 				getDiagnostics: vi.fn(),
@@ -1136,6 +1158,7 @@ describe("computeCascadeForFile", () => {
 				client: { serverId: "typescript" },
 			});
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
 				getCapabilitySnapshots,
 				getClientForFile,
@@ -1222,8 +1245,9 @@ describe("computeCascadeForFile", () => {
 			}
 			mocks.computeImpactCascade.mockReturnValue(impact(primary, neighbors));
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-				touchFile: vi.fn().mockResolvedValue({ diags: [] }),
+				touchFile: makeTouchFileMock().mockResolvedValue({ diags: [] }),
 				getDiagnostics: vi.fn(),
 			});
 
@@ -1276,6 +1300,7 @@ describe("computeCascadeForFile", () => {
 		}
 		const touchFile = vi.fn().mockResolvedValue({ diags: [] });
 		mocks.getLSPService.mockReturnValue({
+			...makeLspServiceDouble(),
 			getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
 			touchFile,
 			getDiagnostics: vi.fn(),
@@ -1497,6 +1522,7 @@ describe("computeCascadeForFile", () => {
 			mocks.computeImpactCascade.mockReturnValue(impact(primary, [neighbor]));
 			const touchFile = vi.fn();
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi
 					.fn()
 					.mockResolvedValue(
@@ -1539,6 +1565,7 @@ describe("computeCascadeForFile", () => {
 			fs.writeFileSync(neighbor, "import { x } from './primary';\n");
 			mocks.computeImpactCascade.mockReturnValue(impact(primary, [neighbor]));
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi
 					.fn()
 					.mockResolvedValue(
@@ -1549,7 +1576,7 @@ describe("computeCascadeForFile", () => {
 							],
 						]),
 					),
-				touchFile: vi.fn(),
+				touchFile: makeTouchFileMock(),
 				getDiagnostics: vi.fn(),
 			});
 
@@ -1592,6 +1619,7 @@ describe("computeCascadeForFile", () => {
 				.mockResolvedValueOnce({ diags: [lspError("error1")] })
 				.mockResolvedValueOnce({ diags: [lspError("error2")] });
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
 				touchFile,
 				getDiagnostics: vi.fn(),
@@ -1652,6 +1680,7 @@ describe("computeCascadeForFile", () => {
 				impact(primary, [ignoredNeighbor]),
 			);
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi
 					.fn()
 					.mockResolvedValue(
@@ -1662,7 +1691,7 @@ describe("computeCascadeForFile", () => {
 							],
 						]),
 					),
-				touchFile: vi.fn(),
+				touchFile: makeTouchFileMock(),
 				getDiagnostics: vi.fn(),
 			});
 
@@ -1702,6 +1731,7 @@ describe("computeCascadeForFile", () => {
 				impact(primary, [noLspNeighbor]),
 			);
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi
 					.fn()
 					.mockResolvedValue(
@@ -1712,7 +1742,7 @@ describe("computeCascadeForFile", () => {
 							],
 						]),
 					),
-				touchFile: vi.fn(),
+				touchFile: makeTouchFileMock(),
 				getDiagnostics: vi.fn(),
 			});
 
@@ -1760,6 +1790,7 @@ describe("computeCascadeForFile", () => {
 			);
 			const touchFile = vi.fn();
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(
 					new Map([
 						[
@@ -1856,6 +1887,7 @@ describe("computeCascadeForFile", () => {
 			]);
 			const touchFile = vi.fn();
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(
 					new Map([
 						[
@@ -1918,6 +1950,7 @@ describe("computeCascadeForFile", () => {
 				impact(primary, [noLspNeighbor]),
 			);
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(
 					new Map([
 						[
@@ -1934,7 +1967,7 @@ describe("computeCascadeForFile", () => {
 						],
 					]),
 				),
-				touchFile: vi.fn(),
+				touchFile: makeTouchFileMock(),
 				getDiagnostics: vi.fn(),
 			});
 
@@ -1976,8 +2009,9 @@ describe("computeCascadeForFile", () => {
 			fs.writeFileSync(primary, "export const x = 1;\n");
 			mocks.computeImpactCascade.mockReturnValue(impact(primary, []));
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-				touchFile: vi.fn(),
+				touchFile: makeTouchFileMock(),
 				getDiagnostics: vi.fn(),
 			});
 
@@ -2008,8 +2042,9 @@ describe("computeCascadeForFile", () => {
 				indeterminate: { reason: "missing_node" },
 			});
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-				touchFile: vi.fn(),
+				touchFile: makeTouchFileMock(),
 				getDiagnostics: vi.fn(),
 			});
 
@@ -2048,8 +2083,9 @@ describe("computeCascadeForFile", () => {
 			});
 			mocks.computeImpactCascade.mockReturnValue(impact(primary, []));
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-				touchFile: vi.fn(),
+				touchFile: makeTouchFileMock(),
 				getDiagnostics: vi.fn(),
 			});
 
@@ -2081,8 +2117,9 @@ describe("computeCascadeForFile", () => {
 			// ONLY via the build-info slot, exactly as in production.
 			mocks.computeImpactCascade.mockReturnValue(impact(primary, []));
 			mocks.getLSPService.mockReturnValue({
+				...makeLspServiceDouble(),
 				getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-				touchFile: vi.fn(),
+				touchFile: makeTouchFileMock(),
 				getDiagnostics: vi.fn(),
 			});
 
@@ -2131,6 +2168,7 @@ describe("computeCascadeForFile", () => {
 				// Passive snapshot for the neighbor is now CLEAN (the fix to `primary`
 				// resolved the cross-file error) — a valid, confirmed observation.
 				mocks.getLSPService.mockReturnValue({
+					...makeLspServiceDouble(),
 					getAllDiagnostics: vi
 						.fn()
 						.mockResolvedValue(
@@ -2141,7 +2179,7 @@ describe("computeCascadeForFile", () => {
 								],
 							]),
 						),
-					touchFile: vi.fn(),
+					touchFile: makeTouchFileMock(),
 					getDiagnostics: vi.fn(),
 				});
 
@@ -2187,6 +2225,7 @@ describe("computeCascadeForFile", () => {
 				fs.writeFileSync(neighbor, "from model import User\n");
 				mocks.computeImpactCascade.mockReturnValue(impact(primary, [neighbor]));
 				mocks.getLSPService.mockReturnValue({
+					...makeLspServiceDouble(),
 					getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
 					touchFile: vi
 						.fn()
@@ -2225,8 +2264,11 @@ describe("computeCascadeForFile", () => {
 				// snapshot, which is NOT a confirmed observation and must not be
 				// reconciled (#571 confirmed-only contract).
 				mocks.getLSPService.mockReturnValue({
+					...makeLspServiceDouble(),
 					getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-					touchFile: vi.fn().mockRejectedValue(new Error("touch timed out")),
+					touchFile: makeTouchFileMock().mockRejectedValue(
+						new Error("touch timed out"),
+					),
 					getDiagnostics: vi.fn(),
 				});
 
@@ -2266,6 +2308,7 @@ describe("computeCascadeForFile", () => {
 				mocks.computeImpactCascade.mockReturnValue(impact(primary, [neighbor]));
 				// No snapshot → cold-snapshot touch path; touch confirms an error.
 				mocks.getLSPService.mockReturnValue({
+					...makeLspServiceDouble(),
 					getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
 					touchFile: vi
 						.fn()
@@ -2334,6 +2377,7 @@ describe("computeCascadeForFile", () => {
 				// wrapper, so it survives any copy of `.diags` by construction — set
 				// it the same way here.
 				mocks.getLSPService.mockReturnValue({
+					...makeLspServiceDouble(),
 					getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
 					touchFile: vi
 						.fn()
@@ -2457,8 +2501,9 @@ describe("computeCascadeForFile", () => {
 				// live finding and seeded the recently-clean cache, making the wipe
 				// self-sustaining on the next cascade.
 				mocks.getLSPService.mockReturnValue({
+					...makeLspServiceDouble(),
 					getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-					touchFile: vi.fn().mockResolvedValue({
+					touchFile: makeTouchFileMock().mockResolvedValue({
 						diags: [],
 						confirmation: "partial",
 						unconfirmedServerIds: ["opengrep"],
@@ -2524,8 +2569,9 @@ describe("computeCascadeForFile", () => {
 				fs.writeFileSync(neighbor, "from model import User\n");
 				mocks.computeImpactCascade.mockReturnValue(impact(primary, [neighbor]));
 				mocks.getLSPService.mockReturnValue({
+					...makeLspServiceDouble(),
 					getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-					touchFile: vi.fn().mockResolvedValue({
+					touchFile: makeTouchFileMock().mockResolvedValue({
 						diags: [],
 						inconclusive: true,
 						inconclusiveServerIds: ["pyright"],
@@ -2566,8 +2612,9 @@ describe("computeCascadeForFile", () => {
 				fs.writeFileSync(neighbor, "from model import User\n");
 				mocks.computeImpactCascade.mockReturnValue(impact(primary, [neighbor]));
 				mocks.getLSPService.mockReturnValue({
+					...makeLspServiceDouble(),
 					getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-					touchFile: vi.fn().mockResolvedValue({
+					touchFile: makeTouchFileMock().mockResolvedValue({
 						diags: [],
 						confirmation: "partial",
 						unconfirmedServerIds: ["opengrep"],
@@ -2613,8 +2660,9 @@ describe("computeCascadeForFile", () => {
 				fs.writeFileSync(neighbor, "from model import User\n");
 				mocks.computeImpactCascade.mockReturnValue(impact(primary, [neighbor]));
 				mocks.getLSPService.mockReturnValue({
+					...makeLspServiceDouble(),
 					getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-					touchFile: vi.fn().mockResolvedValue({
+					touchFile: makeTouchFileMock().mockResolvedValue({
 						diags: [
 							{
 								severity: 1,
@@ -2660,6 +2708,7 @@ describe("computeCascadeForFile", () => {
 				mocks.computeImpactCascade.mockReturnValue(impact(primary, [neighbor]));
 				// Passive snapshot reports the neighbor LSP-clean.
 				mocks.getLSPService.mockReturnValue({
+					...makeLspServiceDouble(),
 					getAllDiagnostics: vi
 						.fn()
 						.mockResolvedValue(
@@ -2670,7 +2719,7 @@ describe("computeCascadeForFile", () => {
 								],
 							]),
 						),
-					touchFile: vi.fn(),
+					touchFile: makeTouchFileMock(),
 					getDiagnostics: vi.fn(),
 				});
 
@@ -2724,6 +2773,7 @@ describe("computeCascadeForFile", () => {
 				// error — a valid, confirmed observation, but an AGING one.
 				const snapshotTs = Date.now() - 20_000;
 				mocks.getLSPService.mockReturnValue({
+					...makeLspServiceDouble(),
 					getAllDiagnostics: vi
 						.fn()
 						.mockResolvedValue(
@@ -2734,7 +2784,7 @@ describe("computeCascadeForFile", () => {
 								],
 							]),
 						),
-					touchFile: vi.fn(),
+					touchFile: makeTouchFileMock(),
 					getDiagnostics: vi.fn(),
 				});
 
@@ -2786,8 +2836,11 @@ describe("computeCascadeForFile", () => {
 					source: "Semgrep",
 				};
 				mocks.getLSPService.mockReturnValue({
+					...makeLspServiceDouble(),
 					getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-					touchFile: vi.fn().mockResolvedValue({ diags: [semgrep] }),
+					touchFile: makeTouchFileMock().mockResolvedValue({
+						diags: [semgrep],
+					}),
 					getDiagnostics: vi.fn(),
 				});
 
@@ -2851,6 +2904,7 @@ describe("computeCascadeForFile", () => {
 				// TTL-fresh snapshot still carrying the PRE-fix error, but the server's
 				// view has diverged from disk (boundToCurrentDisk: false).
 				mocks.getLSPService.mockReturnValue({
+					...makeLspServiceDouble(),
 					getAllDiagnostics: vi
 						.fn()
 						.mockResolvedValue(
@@ -2865,7 +2919,7 @@ describe("computeCascadeForFile", () => {
 							]),
 						),
 					// The neighbor is actually clean now — a confirmed active re-check.
-					touchFile: vi.fn().mockResolvedValue({ diags: [] }),
+					touchFile: makeTouchFileMock().mockResolvedValue({ diags: [] }),
 					getDiagnostics: vi.fn(),
 				});
 
@@ -2916,6 +2970,7 @@ describe("computeCascadeForFile", () => {
 				mocks.computeImpactCascade.mockReturnValue(impact(primary, [neighbor]));
 				const touchFile = vi.fn();
 				mocks.getLSPService.mockReturnValue({
+					...makeLspServiceDouble(),
 					getAllDiagnostics: vi.fn().mockResolvedValue(
 						new Map([
 							[
@@ -2968,6 +3023,7 @@ describe("computeCascadeForFile", () => {
 				mocks.computeImpactCascade.mockReturnValue(impact(primary, [neighbor]));
 				const touchFile = vi.fn();
 				mocks.getLSPService.mockReturnValue({
+					...makeLspServiceDouble(),
 					getAllDiagnostics: vi
 						.fn()
 						.mockResolvedValue(
@@ -3023,6 +3079,7 @@ describe("computeCascadeForFile", () => {
 					binding: { boundToCurrentDisk: false },
 				}));
 				mocks.getLSPService.mockReturnValue({
+					...makeLspServiceDouble(),
 					getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
 					touchFile,
 					getDiagnostics: vi.fn(),
@@ -3095,6 +3152,7 @@ describe("computeCascadeForFile", () => {
 					impact(primary, [rejectedNeighbor, confirmedNeighbor]),
 				);
 				mocks.getLSPService.mockReturnValue({
+					...makeLspServiceDouble(),
 					// TTL-fresh snapshot for the neighbor whose active touch will fail —
 					// but bound-false (the server's view diverged from current disk, a
 					// pre-fix-edit read).
@@ -3112,12 +3170,14 @@ describe("computeCascadeForFile", () => {
 							],
 						]),
 					),
-					touchFile: vi.fn().mockImplementation(async (filePath: string) => {
-						if (filePath === rejectedNeighbor) {
-							throw new Error("touch failed");
-						}
-						return { diags: [lspError("confirmed live error")] };
-					}),
+					touchFile: makeTouchFileMock().mockImplementation(
+						async (filePath: string) => {
+							if (filePath === rejectedNeighbor) {
+								throw new Error("touch failed");
+							}
+							return { diags: [lspError("confirmed live error")] };
+						},
+					),
 					getDiagnostics: vi.fn(),
 				});
 
@@ -3156,6 +3216,7 @@ describe("computeCascadeForFile", () => {
 				fs.writeFileSync(neighbor, "from model import User\n");
 				mocks.computeImpactCascade.mockReturnValue(impact(primary, [neighbor]));
 				mocks.getLSPService.mockReturnValue({
+					...makeLspServiceDouble(),
 					getAllDiagnostics: vi.fn().mockResolvedValue(
 						new Map([
 							[
@@ -3170,7 +3231,9 @@ describe("computeCascadeForFile", () => {
 							],
 						]),
 					),
-					touchFile: vi.fn().mockRejectedValue(new Error("touch failed")),
+					touchFile: makeTouchFileMock().mockRejectedValue(
+						new Error("touch failed"),
+					),
 					getDiagnostics: vi.fn(),
 				});
 
@@ -3207,6 +3270,7 @@ describe("computeCascadeForFile", () => {
 					impact(primary, [noLspNeighbor]),
 				);
 				mocks.getLSPService.mockReturnValue({
+					...makeLspServiceDouble(),
 					getAllDiagnostics: vi.fn().mockResolvedValue(
 						new Map([
 							[
@@ -3225,7 +3289,7 @@ describe("computeCascadeForFile", () => {
 							],
 						]),
 					),
-					touchFile: vi.fn(),
+					touchFile: makeTouchFileMock(),
 					getDiagnostics: vi.fn(),
 				});
 
@@ -3261,6 +3325,7 @@ describe("computeCascadeForFile", () => {
 					impact(primary, [noLspNeighbor]),
 				);
 				mocks.getLSPService.mockReturnValue({
+					...makeLspServiceDouble(),
 					getAllDiagnostics: vi.fn().mockResolvedValue(
 						new Map([
 							[
@@ -3275,7 +3340,7 @@ describe("computeCascadeForFile", () => {
 							],
 						]),
 					),
-					touchFile: vi.fn(),
+					touchFile: makeTouchFileMock(),
 					getDiagnostics: vi.fn(),
 				});
 
@@ -3307,6 +3372,7 @@ describe("computeCascadeForFile", () => {
 					impact(primary, [noLspNeighbor]),
 				);
 				mocks.getLSPService.mockReturnValue({
+					...makeLspServiceDouble(),
 					getAllDiagnostics: vi.fn().mockResolvedValue(
 						new Map([
 							[
@@ -3321,7 +3387,7 @@ describe("computeCascadeForFile", () => {
 							],
 						]),
 					),
-					touchFile: vi.fn(),
+					touchFile: makeTouchFileMock(),
 					getDiagnostics: vi.fn(),
 				});
 

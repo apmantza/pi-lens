@@ -14,6 +14,7 @@
 import { withResidentBootstrap } from "../support/bootstrap-access.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { LatencyEntry } from "../../clients/latency-logger.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 const latencyEntries = vi.hoisted(() => [] as LatencyEntry[]);
 
@@ -29,10 +30,7 @@ vi.mock("../../clients/lsp/config.js", () => ({
 }));
 
 vi.mock("../../clients/lsp/index.js", () => ({
-	getLSPService: vi.fn(() => ({
-		touchFile: vi.fn().mockResolvedValue(undefined),
-		supportsLSP: () => false,
-	})),
+	getLSPService: vi.fn(() => makeLspServiceDouble()),
 }));
 
 vi.mock("../../clients/safe-spawn.js", () => ({

@@ -12,6 +12,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeLspServiceDouble } from "../../../support/lsp-service-double.js";
 
 const mocked = vi.hoisted(() => ({
 	service: null as unknown,
@@ -39,7 +40,7 @@ import lspRunner from "../../../../clients/dispatch/runners/lsp.js";
 const INFERRED_BODY = { configFileName: "/dev/null/inferredProject1*" };
 
 function makeService() {
-	return {
+	return makeLspServiceDouble({
 		executeReadOnlyCommandOnLiveClient: vi.fn(async () => ({
 			executed: true,
 			result: { success: true, body: INFERRED_BODY },
@@ -51,8 +52,7 @@ function makeService() {
 		getAdvertisedCommands: vi.fn(async () => ["typescript.tsserverRequest"]),
 		supportsLSP: vi.fn(() => true),
 		codeAction: vi.fn(async () => []),
-		touchFile: vi.fn(),
-	};
+	});
 }
 
 describe("LSP dispatch runner — warm attach skips the membership probe (#1645 F2)", () => {

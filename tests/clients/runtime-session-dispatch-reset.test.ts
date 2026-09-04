@@ -15,6 +15,7 @@ import { withResidentBootstrap } from "../support/bootstrap-access.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleSessionStart } from "../../clients/runtime-session.js";
 import { removeTempDirSync, setupTestEnvironment } from "./test-utils.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 vi.mock("../../clients/safe-spawn.js", () => ({
 	safeSpawn: vi.fn(() => ({ stdout: "", stderr: "", status: 1 })),
@@ -40,10 +41,7 @@ vi.mock("../../clients/lsp/config.js", () => ({
 }));
 
 vi.mock("../../clients/lsp/index.js", () => ({
-	getLSPService: vi.fn(() => ({
-		touchFile: vi.fn().mockResolvedValue(undefined),
-		supportsLSP: () => false,
-	})),
+	getLSPService: vi.fn(() => makeLspServiceDouble()),
 }));
 
 function makeDefaultRuntime() {

@@ -6,6 +6,7 @@ import { CacheManager } from "../clients/cache-manager.js";
 import { getEffectiveLspIdleResetMs } from "../clients/runtime-turn.js";
 import { createPiMock, makeCtx, makeStaleCtx } from "./support/pi-mock.js";
 import { removeTempDirSync } from "./clients/test-utils.js";
+import { makeLspServiceDouble } from "./support/lsp-service-double.js";
 // #2146: process-scope state (the primary-session registration, the instance
 // registry's mutation tail) now lives on `globalThis`, so `vi.resetModules()`
 // no longer clears it — that is the fix, not a regression. This suite gives
@@ -225,11 +226,7 @@ describe("index.ts integration", () => {
 		async () => {
 			const resetLSPService = vi.fn();
 			vi.doMock("../clients/lsp/index.js", () => ({
-				getLSPService: () => ({
-					touchFile: vi.fn(),
-					getAliveClientCount: () => 0,
-					getAliveServerIds: () => [],
-				}),
+				getLSPService: () => makeLspServiceDouble(),
 				resetLSPService,
 			}));
 
@@ -263,11 +260,7 @@ describe("index.ts integration", () => {
 				order.push("reset_lsp_service");
 			});
 			vi.doMock("../clients/lsp/index.js", () => ({
-				getLSPService: () => ({
-					touchFile: vi.fn(),
-					getAliveClientCount: () => 0,
-					getAliveServerIds: () => [],
-				}),
+				getLSPService: () => makeLspServiceDouble(),
 				resetLSPService,
 			}));
 			vi.doMock("../clients/debug-handles.js", () => ({
@@ -293,11 +286,7 @@ describe("index.ts integration", () => {
 		"session_shutdown emits the bus-event session-end rollup (S2d gap 5, #1432 review)",
 		async () => {
 			vi.doMock("../clients/lsp/index.js", () => ({
-				getLSPService: () => ({
-					touchFile: vi.fn(),
-					getAliveClientCount: () => 0,
-					getAliveServerIds: () => [],
-				}),
+				getLSPService: () => makeLspServiceDouble(),
 				resetLSPService: vi.fn(),
 			}));
 			const emitBusEventRollupAtSessionEnd = vi.fn();
@@ -717,11 +706,7 @@ describe("index.ts integration", () => {
 			// fire after runQuietWindow is invoked, not before.
 			const order: string[] = [];
 			vi.doMock("../clients/lsp/index.js", () => ({
-				getLSPService: () => ({
-					touchFile: vi.fn(),
-					getAliveClientCount: () => 0,
-					getAliveServerIds: () => [],
-				}),
+				getLSPService: () => makeLspServiceDouble(),
 				resetLSPService: vi.fn(),
 			}));
 			vi.doMock("../clients/quiet-window.js", () => ({
@@ -756,11 +741,7 @@ describe("index.ts integration", () => {
 	describe("#1654 deferred-mutation drain runs at agent_settled, not agent_end", () => {
 		function mockDrainDeps(handleAgentEndMock: ReturnType<typeof vi.fn>) {
 			vi.doMock("../clients/lsp/index.js", () => ({
-				getLSPService: () => ({
-					touchFile: vi.fn(),
-					getAliveClientCount: () => 0,
-					getAliveServerIds: () => [],
-				}),
+				getLSPService: () => makeLspServiceDouble(),
 				resetLSPService: vi.fn(),
 			}));
 			vi.doMock("../clients/quiet-window.js", () => ({
@@ -952,11 +933,11 @@ describe("index.ts integration", () => {
 				aliveIds = [];
 			});
 			vi.doMock("../clients/lsp/index.js", () => ({
-				getLSPService: () => ({
-					touchFile: vi.fn(),
-					getAliveClientCount: () => aliveIds.length,
-					getAliveServerIds: () => aliveIds,
-				}),
+				getLSPService: () =>
+					makeLspServiceDouble({
+						getAliveClientCount: () => aliveIds.length,
+						getAliveServerIds: () => aliveIds,
+					}),
 				resetLSPService,
 			}));
 			vi.doMock("../clients/bootstrap.js", async () => {
@@ -1641,7 +1622,7 @@ describe("index.ts integration", () => {
 				}));
 			});
 			vi.doMock("../clients/lsp/index.js", async () => ({
-				getLSPService: () => ({ touchFile: touchFileMock }),
+				getLSPService: () => makeLspServiceDouble({ touchFile: touchFileMock }),
 				resetLSPService: () => {},
 			}));
 
@@ -1745,7 +1726,7 @@ describe("index.ts integration", () => {
 				}));
 			});
 			vi.doMock("../clients/lsp/index.js", async () => ({
-				getLSPService: () => ({ touchFile: touchFileMock }),
+				getLSPService: () => makeLspServiceDouble({ touchFile: touchFileMock }),
 				resetLSPService: () => {},
 			}));
 
@@ -1844,7 +1825,7 @@ describe("index.ts integration", () => {
 				}));
 			});
 			vi.doMock("../clients/lsp/index.js", async () => ({
-				getLSPService: () => ({ touchFile: touchFileMock }),
+				getLSPService: () => makeLspServiceDouble({ touchFile: touchFileMock }),
 				resetLSPService: () => {},
 			}));
 
@@ -1898,15 +1879,14 @@ describe("index.ts integration", () => {
 				},
 			}));
 			vi.doMock("../clients/lsp/index.js", () => ({
-				getLSPService: () => ({
-					getAliveClientCount: () => 1,
-					getAliveServerIds: () => ["typescript"],
-					getStatus: () => [
-						{ serverId: "typescript", root: tmpDir, connected: true },
-					],
-					touchFile: vi.fn(),
-					resetLSPService: () => {},
-				}),
+				getLSPService: () =>
+					makeLspServiceDouble({
+						getAliveClientCount: () => 1,
+						getAliveServerIds: () => ["typescript"],
+						getStatus: () => [
+							{ serverId: "typescript", root: tmpDir, connected: true },
+						],
+					}),
 				resetLSPService: () => {},
 			}));
 			vi.doMock("../clients/dispatch/integration.js", async () => ({
@@ -2711,11 +2691,7 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 			}));
 			const resetLSPService = vi.fn();
 			vi.doMock("../clients/lsp/index.js", () => ({
-				getLSPService: () => ({
-					touchFile: vi.fn(),
-					getAliveClientCount: () => 0,
-					getAliveServerIds: () => [],
-				}),
+				getLSPService: () => makeLspServiceDouble(),
 				resetLSPService,
 			}));
 
@@ -2791,11 +2767,7 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 			}));
 			const resetLSPService = vi.fn();
 			vi.doMock("../clients/lsp/index.js", () => ({
-				getLSPService: () => ({
-					touchFile: vi.fn(),
-					getAliveClientCount: () => 0,
-					getAliveServerIds: () => [],
-				}),
+				getLSPService: () => makeLspServiceDouble(),
 				resetLSPService,
 			}));
 
@@ -2963,11 +2935,7 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 				incrementDegradationCount: r6Mocks.incrementDegradationCount,
 			}));
 			vi.doMock("../clients/lsp/index.js", () => ({
-				getLSPService: () => ({
-					touchFile: vi.fn(),
-					getAliveClientCount: () => 0,
-					getAliveServerIds: () => [],
-				}),
+				getLSPService: () => makeLspServiceDouble(),
 				resetLSPService: vi.fn(),
 			}));
 

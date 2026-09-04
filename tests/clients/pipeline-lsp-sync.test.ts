@@ -10,6 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { gatedPromise, starveBudget } from "../support/fault-injection.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 vi.mock("../../clients/lsp/index.js", () => ({ getLSPService: vi.fn() }));
 
@@ -35,12 +36,15 @@ function mockService(
 	touchFile: () => Promise<unknown>,
 	isSpawnInFlight: () => boolean = () => false,
 ) {
-	vi.mocked(getLSPService).mockReturnValue({
-		supportsLSP: () => true,
-		touchFile: vi.fn(touchFile),
-		isSpawnInFlight: vi.fn(isSpawnInFlight),
-		getAuxiliaryClientsForFile: vi.fn().mockResolvedValue([]),
-	} as any);
+	const touch = vi.fn(touchFile);
+	const spawn = vi.fn(isSpawnInFlight);
+	vi.mocked(getLSPService).mockReturnValue(
+		makeLspServiceDouble({
+			supportsLSP: () => true,
+			touchFile: touch,
+			isSpawnInFlight: spawn,
+		}) as any,
+	);
 }
 
 beforeEach(() => {
@@ -215,12 +219,15 @@ describe("resyncLspFile — bounded pre-dispatch LSP sync", () => {
 	it("degrades to the old timeout wording, without throwing, when the service lacks isSpawnInFlight", async () => {
 		const dbgCalls: string[] = [];
 		const dbgSpy = (msg: string) => dbgCalls.push(msg);
-		vi.mocked(getLSPService).mockReturnValue({
+		const hangingTouch = vi.fn(() => new Promise(() => {}));
+		const service = makeLspServiceDouble({
 			supportsLSP: () => true,
-			touchFile: vi.fn(() => new Promise(() => {})),
-			getAuxiliaryClientsForFile: vi.fn().mockResolvedValue([]),
-			// isSpawnInFlight intentionally omitted — partial double / older shape.
-		} as any);
+			touchFile: hangingTouch,
+		});
+		// Deliberately remove the method to exercise the production fallback for
+		// an older host service shape. The normal fixture always supplies it.
+		delete (service as Record<string, unknown>).isSpawnInFlight;
+		vi.mocked(getLSPService).mockReturnValue(service as any);
 
 		await resyncLspFile("/proj/a.ts", "content", true, false, getFlag, dbgSpy);
 
@@ -238,11 +245,14 @@ describe("resyncLspFile — bounded pre-dispatch LSP sync", () => {
 	it("kicks off auxiliary server acquisition concurrently and unawaited (#2540)", async () => {
 		const neverResolvingAux = new Promise<never>(() => {});
 		const getAuxSpy = vi.fn().mockImplementation(() => neverResolvingAux);
-		vi.mocked(getLSPService).mockReturnValue({
-			supportsLSP: () => true,
-			touchFile: vi.fn().mockResolvedValue("done"),
-			getAuxiliaryClientsForFile: getAuxSpy,
-		} as any);
+		const completedTouch = vi.fn().mockResolvedValue("done");
+		vi.mocked(getLSPService).mockReturnValue(
+			makeLspServiceDouble({
+				supportsLSP: () => true,
+				touchFile: completedTouch,
+				getAuxiliaryClientsForFile: getAuxSpy,
+			}) as any,
+		);
 
 		const resyncPromise = resyncLspFile(
 			"/proj/a.ts",

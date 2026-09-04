@@ -1085,11 +1085,8 @@ export async function resyncLspFile(
 			// free for actionable-warnings while Escape mid-turn abandons the wait.
 			const auxServerIds = enabledAuxiliaryLspServerIds(getFlag);
 			if (auxServerIds.length > 0) {
-				// Optional call: 42 test files hand-roll a partial LSPService double
-				// without this method (#2582 consolidates them behind one factory);
-				// the production service always has it. Drop the `?.` with #2582.
 				void lspService
-					.getAuxiliaryClientsForFile?.(
+					.getAuxiliaryClientsForFile(
 						filePath,
 						new Set(auxServerIds),
 						undefined,
@@ -1097,7 +1094,7 @@ export async function resyncLspFile(
 						abort,
 						"tool_result_edit",
 					)
-					?.catch(() => {});
+					.catch(() => {});
 			}
 
 			const startedAt = Date.now();
