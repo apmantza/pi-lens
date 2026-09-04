@@ -244,7 +244,7 @@ export const TEST_RUNNER_MAX_PERSISTED_TARGETS = 64;
  * (AGENTS.md cross-form-path screen).
  */
 function deferralEntryKey(entry: DeferredTestTarget): string {
-	return `${entry.sessionId ?? ""} ${normalizeMapKey(path.resolve(entry.testFile))}`;
+	return `${entry.sessionId ?? ""}\u0000${normalizeMapKey(path.resolve(entry.testFile))}`;
 }
 
 function mergeDeferredTargets(
