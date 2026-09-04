@@ -93,26 +93,547 @@ describe("tree-sitter security gap rules", () => {
 		expect(matches.length).toBe(0);
 	});
 
-	it("does not match SQLAlchemy session.execute(stmt)", async () => {
+	it("does not match a structurally proven SQLAlchemy Session query", async () => {
 		const client = getSharedTreeSitterClient()!;
 		const query = await getQuery("python-sql-injection");
 		const filePath = writeTempFile(
 			"py",
-			`from sqlalchemy import select\nstmt = select(MyModel).where(MyModel.id == 42)\nresult = await session.execute(stmt)\n`,
+			`from sqlalchemy.orm import Session\ndef find(db: Session):\n    return db.query(MyModel)\n`,
 		);
 		const matches = await client.runQueryOnFile(query, filePath, "python");
-		expect(matches.length).toBe(0);
+		expect(matches).toHaveLength(0);
 	});
 
-	it("does not match SQLAlchemy expression-builder execute calls", async () => {
+	it("keeps a receiver-named session query without Session provenance", async () => {
 		const client = getSharedTreeSitterClient()!;
 		const query = await getQuery("python-sql-injection");
 		const filePath = writeTempFile(
 			"py",
-			`result = conn.execute(select(MyModel).where(MyModel.id == user_id))\n`,
+			`def find(session):\n    return session.query(MyModel)\n`,
 		);
 		const matches = await client.runQueryOnFile(query, filePath, "python");
-		expect(matches.length).toBe(0);
+		expect(matches.length).toBeGreaterThan(0);
+	});
+
+	it("keeps a Session query when the imported Session name is shadowed", async () => {
+		const client = getSharedTreeSitterClient()!;
+		const query = await getQuery("python-sql-injection");
+		const filePath = writeTempFile(
+			"py",
+			`from sqlalchemy.orm import Session\ndef find(db: Session):\n    Session = object\n    return db.query(MyModel)\n`,
+		);
+		const matches = await client.runQueryOnFile(query, filePath, "python");
+		expect(matches.length).toBeGreaterThan(0);
+	});
+
+	it("does not match structurally proven psycopg Identifier composition", async () => {
+		const client = getSharedTreeSitterClient()!;
+		const query = await getQuery("python-sql-injection");
+		const filePath = writeTempFile(
+			"py",
+			`from psycopg import sql\ncursor.execute(sql.SQL("SELECT * FROM {}").format(sql.Identifier(table)))\n`,
+		);
+		const matches = await client.runQueryOnFile(query, filePath, "python");
+		expect(matches).toHaveLength(0);
+	});
+
+	it("does not match structurally proven psycopg2 Identifier composition", async () => {
+		const client = getSharedTreeSitterClient()!;
+		const query = await getQuery("python-sql-injection");
+		const filePath = writeTempFile(
+			"py",
+			`from psycopg2 import sql as postgres_sql\ncursor.execute(postgres_sql.SQL("SELECT * FROM {}").format(postgres_sql.Identifier(table)))\n`,
+		);
+		const matches = await client.runQueryOnFile(query, filePath, "python");
+		expect(matches).toHaveLength(0);
+	});
+
+	it("keeps psycopg composition with a dynamic template, non-Identifier arg, or ambiguous sql binding", async () => {
+		const client = getSharedTreeSitterClient()!;
+		const query = await getQuery("python-sql-injection");
+		const dynamicTemplate = writeTempFile(
+			"py",
+			`from psycopg import sql\ncursor.execute(sql.SQL(template).format(sql.Identifier(table)))\n`,
+		);
+		const nonIdentifierArg = writeTempFile(
+			"py",
+			`from psycopg import sql\ncursor.execute(sql.SQL("SELECT * FROM {}").format(sql.Literal(value)))\n`,
+		);
+		const reassignedImport = writeTempFile(
+			"py",
+			`from psycopg import sql\nsql = unsafe_sql\ncursor.execute(sql.SQL("SELECT * FROM {}").format(sql.Identifier(table)))\n`,
+		);
+		expect(
+			await client.runQueryOnFile(query, dynamicTemplate, "python"),
+		).not.toHaveLength(0);
+		expect(
+			await client.runQueryOnFile(query, nonIdentifierArg, "python"),
+		).not.toHaveLength(0);
+		expect(
+			await client.runQueryOnFile(query, reassignedImport, "python"),
+		).not.toHaveLength(0);
+	});
+
+	it("keeps raw execute calls even when the receiver is Session-annotated", async () => {
+		const client = getSharedTreeSitterClient()!;
+		const query = await getQuery("python-sql-injection");
+		const filePath = writeTempFile(
+			"py",
+			`from sqlalchemy.orm import Session\ndef run(db: Session, statement):\n    return db.execute(statement)\n`,
+		);
+		const matches = await client.runQueryOnFile(query, filePath, "python");
+		expect(matches.length).toBeGreaterThan(0);
+	});
+
+	it("suppresses direct SQLAlchemy Session import aliases but not assignment aliases", async () => {
+		const client = getSharedTreeSitterClient()!;
+		const query = await getQuery("python-sql-injection");
+		const importAlias = writeTempFile(
+			"py",
+			`from sqlalchemy.orm import Session as DbSession\ndef find(db: DbSession):\n    return db.query(Model)\n`,
+		);
+		const aliasChain = writeTempFile(
+			"py",
+			`from sqlalchemy.orm import Session\nDbSession = Session\ndef find(db: DbSession):\n    return db.query(Model)\n`,
+		);
+		const nestedVisibleImport = writeTempFile(
+			"py",
+			`from sqlalchemy.orm import Session\ndef outer():\n    def find(db: Session):\n        return db.query(Model)\n    return find\n`,
+		);
+		for (const filePath of [importAlias, nestedVisibleImport]) {
+			expect(
+				await client.runQueryOnFile(query, filePath, "python"),
+			).toHaveLength(0);
+		}
+		expect(
+			await client.runQueryOnFile(query, aliasChain, "python"),
+		).not.toHaveLength(0);
+	});
+
+	it("keeps SQLAlchemy queries after receiver or Session provenance changes", async () => {
+		const client = getSharedTreeSitterClient()!;
+		const query = await getQuery("python-sql-injection");
+		const receiverRebound = writeTempFile(
+			"py",
+			`from sqlalchemy.orm import Session\ndef find(db: Session):\n    db = unsafe_receiver\n    return db.query(Model)\n`,
+		);
+		const innerSessionShadow = writeTempFile(
+			"py",
+			`from sqlalchemy.orm import Session\ndef outer():\n    Session = object\n    def find(db: Session):\n        return db.query(Model)\n    return find\n`,
+		);
+		const useBeforeImport = writeTempFile(
+			"py",
+			`def find(db: Session):\n    return db.query(Model)\nfrom sqlalchemy.orm import Session\n`,
+		);
+		for (const filePath of [
+			receiverRebound,
+			innerSessionShadow,
+			useBeforeImport,
+		]) {
+			expect(
+				await client.runQueryOnFile(query, filePath, "python"),
+			).not.toHaveLength(0);
+		}
+	});
+
+	it("suppresses direct psycopg import aliases but not assignment aliases", async () => {
+		const client = getSharedTreeSitterClient()!;
+		const query = await getQuery("python-sql-injection");
+		const packageAlias = writeTempFile(
+			"py",
+			`import psycopg2 as pg\ncursor.execute(pg.sql.SQL("SELECT * FROM {}").format(pg.sql.Identifier(table)))\n`,
+		);
+		const moduleAliasChain = writeTempFile(
+			"py",
+			`from psycopg import sql\npg_sql = sql\ncursor.execute(pg_sql.SQL("SELECT * FROM {}").format(pg_sql.Identifier(table)))\n`,
+		);
+		const constructorAliases = writeTempFile(
+			"py",
+			`from psycopg.sql import SQL as Query, Identifier as Ident\ncursor.execute(Query("SELECT * FROM {}").format(Ident(table)))\n`,
+		);
+		const constructorAliasChain = writeTempFile(
+			"py",
+			`from psycopg2.sql import SQL, Identifier\nQuery = SQL\nIdent = Identifier\ncursor.execute(Query("SELECT * FROM {}").format(Ident(table)))\n`,
+		);
+		for (const filePath of [packageAlias, constructorAliases]) {
+			expect(
+				await client.runQueryOnFile(query, filePath, "python"),
+			).toHaveLength(0);
+		}
+		for (const filePath of [moduleAliasChain, constructorAliasChain]) {
+			expect(
+				await client.runQueryOnFile(query, filePath, "python"),
+			).not.toHaveLength(0);
+		}
+	});
+
+	it("keeps psycopg calls with shadowed, use-before-import, or rebound provenance", async () => {
+		const client = getSharedTreeSitterClient()!;
+		const query = await getQuery("python-sql-injection");
+		const nestedShadow = writeTempFile(
+			"py",
+			`from psycopg import sql\ndef run():\n    sql = unsafe_sql\n    cursor.execute(sql.SQL("SELECT * FROM {}").format(sql.Identifier(table)))\n`,
+		);
+		const useBeforeImport = writeTempFile(
+			"py",
+			`cursor.execute(sql.SQL("SELECT * FROM {}").format(sql.Identifier(table)))\nfrom psycopg import sql\n`,
+		);
+		const reboundConstructor = writeTempFile(
+			"py",
+			`from psycopg.sql import SQL, Identifier\nSQL = unsafe_sql\ncursor.execute(SQL("SELECT * FROM {}").format(Identifier(table)))\n`,
+		);
+		for (const filePath of [
+			nestedShadow,
+			useBeforeImport,
+			reboundConstructor,
+		]) {
+			expect(
+				await client.runQueryOnFile(query, filePath, "python"),
+			).not.toHaveLength(0);
+		}
+	});
+
+	it("keeps arbitrary object scalar and scalars calls diagnostic", async () => {
+		const client = getSharedTreeSitterClient()!;
+		const query = await getQuery("python-sql-injection");
+		const filePath = writeTempFile(
+			"py",
+			`client.scalar(statement)\nclient.scalars(statement)\n`,
+		);
+		const matches = await client.runQueryOnFile(query, filePath, "python");
+		expect(matches).toHaveLength(2);
+	});
+
+	it("keeps function-local and comprehension psycopg shadows diagnostic", async () => {
+		const client = getSharedTreeSitterClient()!;
+		const query = await getQuery("python-sql-injection");
+		const parameterShadow = writeTempFile(
+			"py",
+			`from psycopg import sql\ndef run(sql):\n    cursor.execute(sql.SQL("SELECT * FROM {}").format(sql.Identifier(table)))\n`,
+		);
+		const laterLocalBinding = writeTempFile(
+			"py",
+			`from psycopg import sql\ndef run():\n    cursor.execute(sql.SQL("SELECT * FROM {}").format(sql.Identifier(table)))\n    sql = unsafe_sql\n`,
+		);
+		const comprehensionShadows = [
+			`results = [cursor.execute(sql.SQL("SELECT * FROM {}").format(sql.Identifier(table))) for sql in sources]`,
+			`results = {cursor.execute(sql.SQL("SELECT * FROM {}").format(sql.Identifier(table))) for sql in sources}`,
+			`results = {table: cursor.execute(sql.SQL("SELECT * FROM {}").format(sql.Identifier(table))) for sql in sources}`,
+			`results = (cursor.execute(sql.SQL("SELECT * FROM {}").format(sql.Identifier(table))) for sql in sources)`,
+		].map((expression) =>
+			writeTempFile("py", `from psycopg import sql\n${expression}\n`),
+		);
+		for (const filePath of [
+			parameterShadow,
+			laterLocalBinding,
+			...comprehensionShadows,
+		]) {
+			expect(
+				await client.runQueryOnFile(query, filePath, "python"),
+			).not.toHaveLength(0);
+		}
+	});
+
+	it("keeps function-local Session shadows diagnostic", async () => {
+		const client = getSharedTreeSitterClient()!;
+		const query = await getQuery("python-sql-injection");
+		const parameterShadow = writeTempFile(
+			"py",
+			`from sqlalchemy.orm import Session\ndef outer(Session):\n    def find(db: Session):\n        return db.query(Model)\n    return find\n`,
+		);
+		const laterLocalBinding = writeTempFile(
+			"py",
+			`from sqlalchemy.orm import Session\ndef find(db: Session):\n    return db.query(Model)\n    Session = unsafe_session\n`,
+		);
+		for (const filePath of [parameterShadow, laterLocalBinding]) {
+			expect(
+				await client.runQueryOnFile(query, filePath, "python"),
+			).not.toHaveLength(0);
+		}
+	});
+
+	it("keeps every statically discoverable function-local Python binder diagnostic", async () => {
+		const client = getSharedTreeSitterClient()!;
+		const query = await getQuery("python-sql-injection");
+		const sink = `cursor.execute(sql.SQL("SELECT * FROM {}").format(sql.Identifier(table)))`;
+		const binders = [
+			["destructuring", `x, (sql, y) = values`],
+			["annotated", `sql: object = unsafe_sql`],
+			["augmented", `sql += unsafe_sql`],
+			["walrus", `if (sql := unsafe_sql):\n        pass`],
+			["import", `from unsafe_module import sql`],
+			["for", `for sql in values:\n        pass`],
+			["with", `with connection.cursor() as sql:\n        pass`],
+			["except", `try:\n        pass\n    except Error as sql:\n        pass`],
+			[
+				"except-star",
+				`try:\n        pass\n    except* Error as sql:\n        pass`,
+			],
+			["del", `del sql`],
+			["function", `def sql():\n        pass`],
+			["class", `class sql:\n        pass`],
+			["type-alias", `type sql = object`],
+			["match-capture", `match value:\n        case sql:\n            pass`],
+			["match-as", `match value:\n        case _ as sql:\n            pass`],
+		].map(([name, binder]) => ({
+			name,
+			filePath: writeTempFile(
+				"py",
+				`from psycopg import sql\ndef run():\n    ${sink}\n    ${binder}\n`,
+			),
+		}));
+		const asyncFor = writeTempFile(
+			"py",
+			`from psycopg import sql\nasync def run():\n    ${sink}\n    async for sql in values:\n        pass\n`,
+		);
+		const lambdaParameter = writeTempFile(
+			"py",
+			`from psycopg import sql\nrun = lambda sql: ${sink}\n`,
+		);
+		for (const { name, filePath } of binders) {
+			expect(
+				await client.runQueryOnFile(query, filePath, "python"),
+				name,
+			).not.toHaveLength(0);
+		}
+		for (const filePath of [asyncFor, lambdaParameter]) {
+			expect(
+				await client.runQueryOnFile(query, filePath, "python"),
+			).not.toHaveLength(0);
+		}
+	});
+
+	it("does not bind match wildcard underscore", async () => {
+		const client = getSharedTreeSitterClient()!;
+		const query = await getQuery("python-sql-injection");
+		const filePath = writeTempFile(
+			"py",
+			`from psycopg import sql\ndef run():\n    match value:\n        case _:\n            pass\n    cursor.execute(sql.SQL("SELECT * FROM {}").format(sql.Identifier(table)))\n`,
+		);
+		expect(await client.runQueryOnFile(query, filePath, "python")).toHaveLength(
+			0,
+		);
+	});
+
+	it("indexes class-pattern keyword values without binding keyword names or qualified values", async () => {
+		const client = getSharedTreeSitterClient()!;
+		const query = await getQuery("python-sql-injection");
+		const sqlCapture = writeTempFile(
+			"py",
+			`from psycopg import sql
+def run(value):
+    match value:
+        case Wrapper(sql=sql):
+            pass
+    cursor.execute(sql.SQL("SELECT {} ").format(sql.Identifier(table)))
+`,
+		);
+		const sessionCapture = writeTempFile(
+			"py",
+			`from sqlalchemy.orm import Session
+def run(value, db: Session):
+    match value:
+        case Wrapper(session=Session):
+            pass
+    return db.query(Model)
+`,
+		);
+		const nonBindingPatterns = writeTempFile(
+			"py",
+			`from psycopg import sql
+def run(value):
+    match value:
+        case Wrapper(sql=constants.VALUE):
+            pass
+        case constants.Other:
+            pass
+    cursor.execute(sql.SQL("SELECT {} ").format(sql.Identifier(table)))
+`,
+		);
+		for (const filePath of [sqlCapture, sessionCapture]) {
+			expect(
+				await client.runQueryOnFile(query, filePath, "python"),
+			).not.toHaveLength(0);
+		}
+		expect(
+			await client.runQueryOnFile(query, nonBindingPatterns, "python"),
+		).toHaveLength(0);
+	});
+
+	it("does not use class imports for method-body psycopg provenance", async () => {
+		const client = getSharedTreeSitterClient()!;
+		const query = await getQuery("python-sql-injection");
+		const classImport = writeTempFile(
+			"py",
+			`class Repository:\n    import psycopg\n    def run(self):\n        cursor.execute(psycopg.sql.SQL("SELECT * FROM {}").format(psycopg.sql.Identifier(table)))\n`,
+		);
+		const moduleImport = writeTempFile(
+			"py",
+			`import psycopg\nclass Repository:\n    def run(self):\n        cursor.execute(psycopg.sql.SQL("SELECT * FROM {}").format(psycopg.sql.Identifier(table)))\n`,
+		);
+		expect(
+			await client.runQueryOnFile(query, classImport, "python"),
+		).not.toHaveLength(0);
+		expect(
+			await client.runQueryOnFile(query, moduleImport, "python"),
+		).toHaveLength(0);
+	});
+
+	it("keeps eight- and nine-hop assignment aliases diagnostic", async () => {
+		const client = getSharedTreeSitterClient()!;
+		const query = await getQuery("python-sql-injection");
+		const aliases = (count: number) =>
+			Array.from({ length: count }, (_, index) => {
+				const name = `a${index + 1}`;
+				const source = index === 0 ? "sql" : `a${index}`;
+				return `${name} = ${source}`;
+			}).join("\n");
+		const eightHops = writeTempFile(
+			"py",
+			`from psycopg import sql\n${aliases(8)}\ncursor.execute(a8.SQL("SELECT * FROM {}").format(a8.Identifier(table)))\n`,
+		);
+		const nineHops = writeTempFile(
+			"py",
+			`from psycopg import sql\n${aliases(9)}\ncursor.execute(a9.SQL("SELECT * FROM {}").format(a9.Identifier(table)))\n`,
+		);
+		for (const filePath of [eightHops, nineHops]) {
+			expect(
+				await client.runQueryOnFile(query, filePath, "python"),
+			).not.toHaveLength(0);
+		}
+	});
+
+	it("proves the consumer Session and psycopg SQL shapes without treating valid binders as hazards", async () => {
+		const client = getSharedTreeSitterClient()!;
+		const query = await getQuery("python-sql-injection");
+		const sessionQueries = writeTempFile(
+			"py",
+			`from sqlalchemy.orm import Session
+
+def accessible_lessons(session: Session, user_id):
+    rows = session.query(Lesson).filter(Lesson.user_id == user_id).all()
+    progress = {item.id: item for item in session.query(LessonProgress).filter(LessonProgress.user_id == user_id).all()}
+    for lesson, week_id, _, version_id in rows:
+        pass
+    return progress
+`,
+		);
+		const psycopgCommands = writeTempFile(
+			"py",
+			`import psycopg
+from psycopg import sql
+
+def create_and_drop(url, name):
+    with psycopg.connect(url) as admin, admin.cursor() as cursor:
+        cursor.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+    with psycopg.connect(url) as admin, admin.cursor() as cursor:
+        cursor.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(name)))
+`,
+		);
+		for (const filePath of [sessionQueries, psycopgCommands]) {
+			expect(
+				await client.runQueryOnFile(query, filePath, "python"),
+			).toHaveLength(0);
+		}
+	});
+
+	it("keeps consumer-shape lookalikes diagnostic when a receiver or SQL proof changes", async () => {
+		const client = getSharedTreeSitterClient()!;
+		const query = await getQuery("python-sql-injection");
+		const unsafeSession = writeTempFile(
+			"py",
+			`from sqlalchemy.orm import Session
+
+def accessible_lessons(session: Session):
+    for lesson, week_id, _, version_id in rows:
+        pass
+    session = unsafe_session
+    return session.query(Lesson)
+`,
+		);
+		const unsafePsycopg = [
+			`from psycopg import sql\ncursor.execute("DROP DATABASE " + name)`,
+			`from psycopg import sql\ncursor.execute(sql.SQL(template).format(sql.Identifier(name)))`,
+			`from psycopg import sql\ncursor.execute(sql.SQL("DROP DATABASE {} ").format(sql.Literal(name)))`,
+		].map((source) => writeTempFile("py", source));
+		for (const filePath of [unsafeSession, ...unsafePsycopg]) {
+			expect(
+				await client.runQueryOnFile(query, filePath, "python"),
+			).not.toHaveLength(0);
+		}
+	});
+
+	it("fails closed for dynamic namespaces, conditional imports, and comprehension walruses", async () => {
+		const client = getSharedTreeSitterClient()!;
+		const query = await getQuery("python-sql-injection");
+		const sink = `cursor.execute(sql.SQL("SELECT * FROM {}").format(sql.Identifier(table)))`;
+		const dynamicNamespaces = [
+			`exec("sql = unsafe_sql")`,
+			`eval("sql = unsafe_sql")`,
+			`globals()["sql"] = unsafe_sql`,
+			`locals()["sql"] = unsafe_sql`,
+			`vars()["sql"] = unsafe_sql`,
+		];
+		const walruses = [
+			`[(sql := unsafe_sql) for _ in values]`,
+			`{(sql := unsafe_sql) for _ in values}`,
+			`{key: (sql := unsafe_sql) for key in values}`,
+			`((sql := unsafe_sql) for _ in values)`,
+			`[(sql := unsafe_sql) for _ in values for _ in values]`,
+		];
+		const sources = [
+			`if enabled:\n    from psycopg import sql\n${sink}`,
+			`from psycopg import sql\nfrom plugin import *\n${sink}`,
+			...dynamicNamespaces.map(
+				(mutation) => `from psycopg import sql\n${mutation}\n${sink}`,
+			),
+			...walruses.map(
+				(walrus) =>
+					`from psycopg import sql\ndef run():\n    ${walrus}\n    ${sink}`,
+			),
+			`from psycopg import sql\ndef outer():\n    def run():\n        global sql\n        ${sink}`,
+			`from psycopg import sql\ndef outer():\n    sql = unsafe_sql\n    def run():\n        nonlocal sql\n        ${sink}`,
+			`class Repository:\n    from psycopg import sql\n    rows = [${sink} for table in tables]`,
+		];
+		for (const source of sources) {
+			expect(
+				await client.runQueryOnFile(
+					query,
+					writeTempFile("py", source),
+					"python",
+				),
+			).not.toHaveLength(0);
+		}
+	});
+
+	it("uses only direct imports and exact binding targets for provenance", async () => {
+		const client = getSharedTreeSitterClient()!;
+		const query = await getQuery("python-sql-injection");
+		const safe = [
+			`from psycopg import sql as pg\ncursor.execute(pg.SQL("SELECT * FROM {}").format(pg.Identifier(table)))`,
+			`import psycopg\ncursor.execute(psycopg.sql.SQL("SELECT * FROM {}").format(psycopg.sql.Identifier(table)))`,
+			`from psycopg.sql import SQL, Identifier\ncursor.execute(SQL("SELECT * FROM {}").format(Identifier(table)))`,
+			`from psycopg2.sql import SQL as Query, Identifier as Ident\ncursor.execute(Query("SELECT * FROM {}").format(Ident(table)))`,
+			`from psycopg import sql\nobj.sql = unsafe_sql\ncursor.execute(sql.SQL("SELECT * FROM {}").format(sql.Identifier(table)))`,
+			`from psycopg import sql\nitems[sql] = unsafe_sql\ncursor.execute(sql.SQL("SELECT * FROM {}").format(sql.Identifier(table)))`,
+		];
+		for (const source of safe) {
+			expect(
+				await client.runQueryOnFile(
+					query,
+					writeTempFile("py", source),
+					"python",
+				),
+			).toHaveLength(0);
+		}
+		const conditionalAlias = `from psycopg import sql\nalias = unsafe_sql\nif enabled:\n    alias = sql\ncursor.execute(alias.SQL("SELECT * FROM {}").format(alias.Identifier(table)))`;
+		expect(
+			await client.runQueryOnFile(
+				query,
+				writeTempFile("py", conditionalAlias),
+				"python",
+			),
+		).not.toHaveLength(0);
 	});
 
 	it("matches raw cursor.execute(sql_identifier)", async () => {

@@ -17,9 +17,14 @@ description: |
   - cursor.execute(dynamic_sql) — variable with NO params arg (could be unsafe)
   
   Suppressed:
-  - cursor.execute(query, params) — parameterized query (safe)
-  - session.execute(select(...)) — SQLAlchemy ORM (safe by construction)
-  - cursor.execute(f"...") — f-string with literal-only interpolation (rare false positive)
+  - db.query(...) where `db: Session` and `Session` is proven from a same-file
+    `from sqlalchemy.orm import Session` import
+  - cursor.execute(sql.SQL("...").format(sql.Identifier(...))) where `sql` is
+    an unshadowed same-file psycopg or psycopg2 import and every format argument
+    is an Identifier
+
+  Other raw, dynamic, or ambiguous SQL remains diagnostic so this rule fails
+  closed when it cannot prove the safe API provenance.
   
   ✅ FIX: use placeholders and parameter binding instead of string composition.
 
