@@ -70,6 +70,7 @@ const yamllintRunner: RunnerDefinition = {
 		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
 
 		const result = await safeSpawnAsync(cmd, ["-f", "parsable", ctx.filePath], {
+			cwd,
 			timeout: 15000,
 		});
 

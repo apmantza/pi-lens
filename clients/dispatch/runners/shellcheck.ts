@@ -190,7 +190,7 @@ const shellcheckRunner: RunnerDefinition = {
 
 		args.push(ctx.filePath);
 
-		const result = await safeSpawnAsync(cmd, args, { timeout: 15000 });
+		const result = await safeSpawnAsync(cmd, args, { cwd, timeout: 15000 });
 
 		// shellcheck exits with code 1 if issues found, 0 if clean
 		if (result.status === 0 && !result.stdout?.trim()) {
