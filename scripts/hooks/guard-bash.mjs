@@ -142,9 +142,13 @@ export const RULE_MESSAGES = {
 
 /**
  * Characters after which a `#` starts a comment and a new word begins --
- * bash's own rule (a `#` in the MIDDLE of a word, `a#b`, is literal).
+ * bash's own rule (a `#` in the MIDDLE of a word, `a#b`, is literal). Also
+ * terminates a bare heredoc delimiter. `(`/`)` are deliberately NOT members:
+ * adding them was mutation-inert (round 3's M14 stayed green), and inside a
+ * `$( … )` body {@link lexRegions} already sets the word-start flag on those
+ * two characters explicitly.
  */
-const WORD_BREAK = /[\s;&|()<>]/;
+const WORD_BREAK = /[\s;&|<>]/;
 
 /**
  * Segment separators in the retained text. Single characters only: `&&`

@@ -529,6 +529,18 @@ const LEXER_STATE_SPACE: LexerCell[] = [
 		command: `echo "he said \\"${S}\\""`,
 		expect: "allow",
 	},
+	{
+		id: "LX-2-5b",
+		cell: "R2/C5 an escaped $ inside double quotes is not a substitution",
+		command: `echo "\\$(${S})"`,
+		expect: "allow",
+	},
+	{
+		id: "LX-2-5c",
+		cell: "R2/C5 an escaped backtick inside double quotes is not a substitution",
+		command: `echo "\\\`${S}\\\`"`,
+		expect: "allow",
+	},
 
 	// R3 -- single-quoted span
 	{
@@ -605,6 +617,12 @@ const LEXER_STATE_SPACE: LexerCell[] = [
 		id: "LX-5-1",
 		cell: "R5/C1 a ) inside quotes must not close the span early",
 		command: `echo $(echo ')') ; ${S}`,
+		expect: "deny",
+	},
+	{
+		id: "LX-5-1b",
+		cell: "R5/C1 plain nested ( ) must not close the span early -- with the enclosing double quotes, a truncated span leaves the rest as ONE quoted word",
+		command: `echo "$( (echo a) ; ${S} )"`,
 		expect: "deny",
 	},
 	{
@@ -847,9 +865,10 @@ describe("scripts/hooks/guard-bash.mjs -- lexer state space (review round 3)", (
 	it("covers all 55 (region kind × nesting context) cells with no duplicate ids", () => {
 		const ids = LEXER_STATE_SPACE.map((f) => f.id);
 		expect(new Set(ids).size).toBe(ids.length);
-		// 11 rows × 5 columns, plus 3 same-cell discriminators (LX-3-1b,
-		// LX-9-1b, LX-10-1b) that pin a second behaviour of their own cell.
-		expect(ids).toHaveLength(58);
+		// 11 rows × 5 columns, plus 6 same-cell discriminators (LX-2-5b,
+		// LX-2-5c, LX-3-1b, LX-5-1b, LX-9-1b, LX-10-1b) that each pin a
+		// second behaviour of their own cell.
+		expect(ids).toHaveLength(61);
 		for (let row = 1; row <= 11; row++)
 			for (let col = 1; col <= 5; col++)
 				expect(ids).toContain(`LX-${row}-${col}`);
@@ -867,6 +886,17 @@ describe("scripts/hooks/guard-bash.mjs -- heredoc terminator matching (review ro
 		expect(findDeny("cat <<-EOF\r\n\tbody\r\n\tEOF\r\ngit stash")).toBe(
 			"stash",
 		);
+	});
+
+	it("strips tabs ONLY for <<-, never for a plain << (the inverse mutation)", () => {
+		// Real bash: a TAB-indented "EOF" does not terminate a plain <<
+		// heredoc, so `git stash` here is body text and nothing runs. If tabs
+		// were stripped unconditionally the body would end early and that
+		// line would be read as a live command -- a false DENY.
+		expect(findDeny("cat <<EOF\n\tEOF\ngit stash\nEOF")).toBeNull();
+		// Control, same shape with <<-: the tab-stripped delimiter DOES
+		// terminate, so the line after it is a live command.
+		expect(findDeny("cat <<-EOF\n\tEOF\ngit stash")).toBe("stash");
 	});
 
 	it("still swallows nothing when the delimiter genuinely never appears", () => {
