@@ -374,6 +374,11 @@ const wallClockBudgetInclude = [
 	// gate, which requires it for any newly admitted real spawn regardless
 	// of this list's own "carries a budget assertion" charter above.
 	"tests/scripts/knip-sibling-purge.test.ts",
+	// #2699: the subject is the guard's own stdin/exit-code/stderr contract --
+	// what Claude Code actually invokes for a PreToolUse hook. No in-process
+	// call to the exported classify functions can see a drift in that
+	// contract (flake-shape admission).
+	"tests/scripts/guard-bash-hook.test.ts",
 ];
 // #2512 round 2: runtime-turn-session.test.ts's "retires a deleted failed
 // target through the real client and records real telemetry" spawns a REAL

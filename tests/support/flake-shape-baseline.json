@@ -186,6 +186,7 @@
 		"scripts/check-lockfile-sync.test.ts": 2,
 		"scripts/classify-ci-failure-cli.test.ts": 2,
 		"scripts/download-grammars.test.ts": 2,
+		"scripts/guard-bash-hook.test.ts": 8,
 		"scripts/knip-sibling-purge.test.ts": 1,
 		"scripts/lint-js.test.ts": 5,
 		"scripts/notify-install-smoke-drift.test.ts": 5,

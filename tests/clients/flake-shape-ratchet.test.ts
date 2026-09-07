@@ -198,6 +198,15 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"gitignore/tracked-vs-untracked resolution is the mechanism under test; no mock reproduces git's own resolution faithfully",
 	},
+	// 2026-09-07 (#2699): the PreToolUse guard's own stdin/exit-code/stderr
+	// contract is the subject under test; an in-process call to the exported
+	// classify functions cannot see a drift in what Claude Code actually
+	// invokes.
+	"real-process-spawn:scripts/guard-bash-hook.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the hook's real stdin/exit-code/stderr contract is unobservable from an in-process call to the exported classify functions",
+	},
 };
 
 /** The `wallClockBudgetInclude` project's `include` list, read from the live config — not a hand-copied mirror of it (single-source-of-truth). */
