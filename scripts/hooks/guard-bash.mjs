@@ -224,6 +224,8 @@ function parseHeredocMarker(text, start) {
  * @param {string[]} out flat sink for every substitution body found
  */
 function scanHeredocBodyForSubstitutions(body, out) {
+	/** @type {string[]} */
+	const found = [];
 	let i = 0;
 	while (i < body.length) {
 		const ch = body[i];
@@ -232,19 +234,22 @@ function scanHeredocBodyForSubstitutions(body, out) {
 			continue;
 		}
 		if (ch === "$" && body[i + 1] === "(") {
-			const span = lexRegions(body, i + 2, ")", out);
-			out.push(span.retained);
+			const span = lexRegions(body, i + 2, ")", found);
+			if (!span.closed) return;
+			found.push(span.retained);
 			i = span.end;
 			continue;
 		}
 		if (ch === "`") {
-			const span = lexRegions(body, i + 1, "`", out);
-			out.push(span.retained);
+			const span = lexRegions(body, i + 1, "`", found);
+			if (!span.closed) return;
+			found.push(span.retained);
 			i = span.end;
 			continue;
 		}
 		i++;
 	}
+	out.push(...found);
 }
 
 /**
@@ -308,7 +313,7 @@ function consumeHeredocBody(text, start, heredoc, out) {
  * @param {number} start
  * @param {")"|"`"|null} closer
  * @param {string[]} out
- * @returns {{ end: number; retained: string }}
+ * @returns {{ end: number; retained: string; closed: boolean }}
  */
 function lexRegions(text, start, closer, out) {
 	let retained = "";
@@ -360,7 +365,7 @@ function lexRegions(text, start, closer, out) {
 			continue;
 		}
 		if (closer === ")" && ch === ")") {
-			if (parenDepth === 0) return { end: i + 1, retained };
+			if (parenDepth === 0) return { end: i + 1, retained, closed: true };
 			parenDepth--;
 			retained += ch;
 			atWordStart = true;
@@ -374,7 +379,8 @@ function lexRegions(text, start, closer, out) {
 			i++;
 			continue;
 		}
-		if (closer === "`" && ch === "`") return { end: i + 1, retained };
+		if (closer === "`" && ch === "`")
+			return { end: i + 1, retained, closed: true };
 		if (ch === "\\" && text[i + 1] === "\n") {
 			i += 2;
 			continue;
@@ -391,6 +397,15 @@ function lexRegions(text, start, closer, out) {
 		if (ch === "#" && atWordStart) {
 			const nl = text.indexOf("\n", i);
 			i = nl === -1 ? text.length : nl;
+			continue;
+		}
+		if (ch === "<" && text[i + 1] === "<" && text[i + 2] === "<") {
+			// A here-string is a redirection with one word of input, not a
+			// heredoc marker. Consume all three '<' characters so the third
+			// one cannot be re-read as the start of a phantom delimiter.
+			retained += "<<<";
+			atWordStart = false;
+			i += 3;
 			continue;
 		}
 		if (ch === "<" && text[i + 1] === "<" && text[i + 2] !== "<") {
@@ -447,7 +462,7 @@ function lexRegions(text, start, closer, out) {
 		atWordStart = WORD_BREAK.test(ch);
 		i++;
 	}
-	return { end: i, retained };
+	return { end: i, retained, closed: closer === null };
 }
 
 /**
