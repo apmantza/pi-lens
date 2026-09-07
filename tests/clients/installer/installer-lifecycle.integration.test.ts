@@ -69,6 +69,60 @@ function writeFakeNpm(dir: string): {
 	return { binDir, counter, script };
 }
 
+/**
+ * #2722: the layout plan for a managed npm LSP server installed in its REAL
+ * broken-verification shape — a package whose entry module writes >2 MiB to
+ * stderr, then the #208 transport-required marker, then exits 1, plus the
+ * `.bin` shim npm generates for it. Node drops the piped stderr tail at exit,
+ * so the marker never reaches the verifier: `--version` verification cannot
+ * return a verdict, and the installer used to delete the package it had just
+ * installed. Written as a plan file the fake npm materializes, so the tree
+ * appears only when the install actually runs.
+ */
+function writeDumpingPackageLayout(
+	root: string,
+	home: string,
+	pkg: { packageName: string; binaryName: string; entry: string[] },
+): string {
+	const isWin = process.platform === "win32";
+	const entryRelative = ["node_modules", pkg.packageName, ...pkg.entry];
+	const entryAbsolute = path.join(home, "tools", ...entryRelative);
+	const layout = path.join(root, `${pkg.binaryName}-layout.json`);
+	fs.writeFileSync(
+		layout,
+		JSON.stringify([
+			{
+				path: ["node_modules", pkg.packageName, "package.json"],
+				content: JSON.stringify({
+					name: pkg.packageName,
+					version: "1.18.5",
+					bin: { [pkg.binaryName]: `./${pkg.entry.join("/")}` },
+				}),
+			},
+			{
+				path: entryRelative,
+				content: [
+					'process.stderr.write("x".repeat(2 * 1024 * 1024) + "\\n");',
+					'process.stderr.write("Connection input stream is not set. Please use listen()\\n");',
+					"process.exit(1);",
+				].join("\n"),
+			},
+			{
+				path: [
+					"node_modules",
+					".bin",
+					isWin ? `${pkg.binaryName}.cmd` : pkg.binaryName,
+				],
+				content: isWin
+					? `@echo off\r\n"${process.execPath}" "${entryAbsolute}" %*\r\n`
+					: `#!/bin/sh\nexec "${process.execPath}" "${entryAbsolute}" "$@"\n`,
+				mode: isWin ? undefined : 0o750,
+			},
+		]),
+	);
+	return layout;
+}
+
 function runEnsure(
 	env: NodeJS.ProcessEnv,
 	toolId = "oxlint",
@@ -232,39 +286,11 @@ describe("installer process lifecycle (#945)", () => {
 			const root = tempDir();
 			const home = path.join(root, "home");
 			const { counter, script } = writeFakeNpm(root);
-			const entrySource = [
-				'process.stderr.write("x".repeat(2 * 1024 * 1024) + "\\n");',
-				'process.stderr.write("Connection input stream is not set. Please use listen()\\n");',
-				"process.exit(1);",
-			].join("\n");
-			const entryRelative = ["node_modules", "intelephense", "lib", "x.js"];
-			const entryAbsolute = path.join(home, "tools", ...entryRelative);
-			const layout = path.join(root, "intelephense-layout.json");
-			fs.writeFileSync(
-				layout,
-				JSON.stringify([
-					{
-						path: ["node_modules", "intelephense", "package.json"],
-						content: JSON.stringify({
-							name: "intelephense",
-							version: "1.18.5",
-							bin: { intelephense: "./lib/x.js" },
-						}),
-					},
-					{ path: entryRelative, content: entrySource },
-					{
-						path:
-							process.platform === "win32"
-								? ["node_modules", ".bin", "intelephense.cmd"]
-								: ["node_modules", ".bin", "intelephense"],
-						content:
-							process.platform === "win32"
-								? `@echo off\r\n"${process.execPath}" "${entryAbsolute}" %*\r\n`
-								: `#!/bin/sh\nexec "${process.execPath}" "${entryAbsolute}" "$@"\n`,
-						mode: process.platform === "win32" ? undefined : 0o750,
-					},
-				]),
-			);
+			const layout = writeDumpingPackageLayout(root, home, {
+				packageName: "intelephense",
+				binaryName: "intelephense",
+				entry: ["lib", "x.js"],
+			});
 			const result = await runEnsure(
 				{ ...testEnv(home, counter, script), FAKE_NPM_LAYOUT: layout },
 				"intelephense",
@@ -296,6 +322,56 @@ describe("installer process lifecycle (#945)", () => {
 					process.platform === "win32" ? "intelephense.cmd" : "intelephense",
 				),
 			);
+		},
+		REAL_PROCESS_TIMEOUT_MS,
+	);
+
+	it(
+		"keeps a spawn-verified install whose probe came back inconclusive (#2722)",
+		async () => {
+			// The class-wide half of the fix, on a tool that is NOT declared
+			// `verification: "package-entry"` — svelte-language-server still
+			// verifies by spawning `--version`. When that probe comes back with the
+			// transport matcher armed, unmatched, and the output truncated, it is a
+			// NON-VERDICT: the installer must keep the package for a later re-probe
+			// instead of taking the delete-and-cleanup branch, exactly as #2015
+			// ruled for the transient case.
+			//
+			// Cross-platform by construction, for two different reasons: on POSIX
+			// the child's stderr tail is dropped at exit, so the probe is
+			// inconclusive and the KEEP branch is what saves the tree; on Windows
+			// pipes are synchronous, the marker arrives, and #208's rescue verifies
+			// the install outright. Either way the package must still be on disk,
+			// which is the assertion. The ubuntu Unit tests lane exercises the
+			// branch this PR adds.
+			const root = tempDir();
+			const home = path.join(root, "home");
+			const { counter, script } = writeFakeNpm(root);
+			const layout = writeDumpingPackageLayout(root, home, {
+				packageName: "svelte-language-server",
+				binaryName: "svelteserver",
+				entry: ["bin", "server.js"],
+			});
+			const result = await runEnsure(
+				{ ...testEnv(home, counter, script), FAKE_NPM_LAYOUT: layout },
+				"svelte-language-server",
+			);
+			expect(result.code, JSON.stringify(result)).toBe(0);
+			const nodeModules = path.join(home, "tools", "node_modules");
+			expect(
+				fs.existsSync(path.join(nodeModules, "svelte-language-server")),
+				result.stdout,
+			).toBe(true);
+			expect(
+				fs.existsSync(
+					path.join(
+						nodeModules,
+						".bin",
+						process.platform === "win32" ? "svelteserver.cmd" : "svelteserver",
+					),
+				),
+				result.stdout,
+			).toBe(true);
 		},
 		REAL_PROCESS_TIMEOUT_MS,
 	);
