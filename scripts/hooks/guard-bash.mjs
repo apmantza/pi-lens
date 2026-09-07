@@ -34,57 +34,94 @@
  * names it, and it is the simpler of the two to test (one exit code, one
  * stream, no JSON-shape drift risk on stdout).
  *
- * ## Tokenizer scope (accepted blind spots)
+ * ## Shape: subtract the inert regions, THEN tokenize (review round 3)
  *
- * A small hand-rolled tokenizer, not a general shell parser.
- * `clients/bash-file-access.ts`'s `tokenizeShellCommand` (the "shared shell
- * tokenizer" AGENTS.md's git-guard section names) was considered and
- * rejected: it never splits `$( … )`/backtick subshells into their own
- * segments (this hook needs that to catch `echo $(git stash)`), it does not
- * strip leading env assignments, and its import graph pulls in
- * read-guard/mutating-tool/partial-edit-apply machinery built for the
- * extension's own in-process tool-call interception -- disproportionate
- * weight, and the wrong bounded context, for a <50ms external hook process
- * that shares no runtime with that code.
+ * Round 2 delimited a `$( … )` span with a standalone paren/quote counter
+ * that ran THROUGH heredoc bodies. One unbalanced `)` in prose therefore
+ * closed the span early and the rest of a PR description leaked into the
+ * top-level command scan (round 2's own PR body was denied by its own
+ * hook). The lesson is structural, not a missing case: span extents and
+ * heredoc bodies cannot be decided by two separate scanners.
  *
- * Handled: `&&`, `||`, `;`, `|`, `&`, newlines as top-level split points;
- * single/double-quoted spans as opaque words (so quoted text is never
- * mistaken for a command -- `echo "git stash"` reads as one `echo` word and
- * one opaque argument word); `$( … )` and backtick spans, recursively
- * re-tokenized as their own commands (so `echo $(git stash)` is still
- * caught) UNLESS the span is inside a heredoc body (see below); `<<`/`<<-`
- * heredocs, whose body is consumed verbatim and dropped -- never split into
- * segments, never scanned for `$()`/backticks (review round 2 F1: a
- * markdown inline-code span or a command name inside a PR body / issue
- * comment / file written through `cat <<'EOF' … EOF` is not a live command,
- * and 18% of one day's real transcript carried a heredoc); a backslash-
- * newline line continuation (`git \`, next line `stash`, is one segment);
- * a leading `{` command-group brace and `command`/`exec`/`env` runner
- * prefixes, stripped before the command word is identified (round 2 F7);
- * `export VAR=val` (or a standalone `VAR=val` with no command in that
- * segment) persisted forward to LATER `;`/newline-separated segments in the
- * same scan, not just this segment's own prefix or `process.env` (round 2
- * F2 -- AGENTS.md's own sanctioned `export PI_LENS_HOME=<dir>` form); a
- * command word resolved by its final path segment, so `/usr/bin/git`,
- * `./git`, and `git` are the same command (round 2 F7); leading `FOO=bar`
- * env assignments and `-c <key>=<value>` / `-C <dir>` git global options,
- * skipped when finding the command word / subcommand.
+ * So there is now exactly ONE region pass, {@link lexRegions}, which is
+ * simultaneously quote-, comment-, heredoc- and substitution-aware and
+ * calls ITSELF to find a nested span's extent. It returns
  *
- * NOT handled (accepted, not exercised green by the test suite): `eval
- * "…"`, `bash -c "…"` / `sh -c "…"` / `xargs git stash` (the nested string
- * or spawned argv is opaque to this tokenizer, so a denied command hidden
- * behind any of these is not caught), bare `( … )` command grouping (only
- * `{ … }` is stripped), a heredoc nested inside a `$()`/backtick span whose
- * body itself contains an unbalanced `(`/`)`/backtick (the span-matching
- * paren/backtick scan is not heredoc-aware, so a stray one inside such a
- * body can close the span early -- none of #2699's own reviewed cases hit
- * this), and general backslash escaping outside quotes beyond the
- * heredoc/newline continuation above (quote handling covers `\"` inside
- * double quotes only).
+ *   - `retained`: the text left after every INERT region is subtracted, and
+ *   - a flat list of every command-substitution body at any depth,
+ *
+ * and only then does {@link splitSegments} split on operators (it has to
+ * know about quotes and nothing else, because substitutions, heredoc
+ * bodies and comments are already gone). A stray `)`/backtick inside a
+ * heredoc body is unreachable by construction rather than special-cased.
+ *
+ * The regions are classified from REAL bash, empirically -- every
+ * (region kind × nesting context) cell of the state space was run through
+ * `bash -c` with a side-effecting stand-in for the forbidden command, and
+ * the cell's verdict is whether the side effect happened. The full table,
+ * with the fixture id that pins each cell, is in the PR body and in
+ * `tests/scripts/guard-bash-hook.test.ts`'s `LEXER_STATE_SPACE`. The three
+ * results that are easy to get backwards from reading code alone:
+ *
+ *   - A heredoc body with a QUOTED delimiter (`<<'EOF'`, `<<"EOF"`,
+ *     `<<\EOF`) is inert in full and is dropped.
+ *   - A heredoc body with an UNQUOTED delimiter (`<<EOF`) is NOT inert:
+ *     bash still expands `$( … )` and backticks inside it, so
+ *     `cat <<EOF` / `$(git stash)` / `EOF` really runs it. Its body text is
+ *     dropped but its substitutions are recursed into.
+ *   - Quotes and `#` are LITERAL inside any heredoc body -- so
+ *     `'$(git stash)'` and `# $(git stash)` on a body line both still run.
+ *
+ * A single-quoted span is deliberately NOT subtracted. It is inert for
+ * operator splitting, expansion, and comment/heredoc recognition, but it
+ * still takes part in WORD formation: `git 'stash'` and `'git' stash` both
+ * really run `git stash`. It is retained as literal word text instead, and
+ * {@link splitWords} strips the quotes when fusing the word.
+ *
+ * ## Handled
+ *
+ * `&&`, `||`, `;`, `|`, `&`, `(`, `)`, newline as segment separators;
+ * single/double-quoted spans as opaque fused words; `$( … )` and backtick
+ * spans, recursively (including a `\``-escaped backtick span nested inside
+ * a backtick span, which bash does execute); `<<`/`<<-` heredocs with a
+ * quoted, bare, or backslash-escaped delimiter, `<<-`'s leading-tab strip,
+ * and a `\r` before the delimiter's newline (a CRLF command whose
+ * terminator would otherwise never match, swallowing every later command);
+ * `<<<` here-strings (content inert, substitutions live); `#` comments,
+ * recognized only at a word start the way bash does (`a#b` is not a
+ * comment); backslash-newline line continuation; a leading `{`
+ * command-group brace and `command`/`exec`/`env`/`sudo`/`time` runner
+ * prefixes; `export VAR=val` persisted forward to later segments of the
+ * same scan; a command word resolved by its final path segment
+ * (`/usr/bin/git` == `./git` == `git`); leading `FOO=bar` env assignments
+ * and `-c <k>=<v>` / `-C <dir>` git global options; a backslash-escaped
+ * command word (`\g\i\t stash`, which bash runs).
+ *
+ * ## NOT handled (accepted; no test claims otherwise)
+ *
+ *   - `eval "…"`, `bash -c "…"` / `sh -c "…"`, `xargs git stash`: the
+ *     nested string or spawned argv is opaque to any text scan.
+ *   - A runner prefix carrying its OWN options -- `sudo -u root git stash`,
+ *     `timeout 30 git stash`, `nice -n 10 git stash`, `stdbuf -o0 …`. Only
+ *     the bare prefix forms above are stripped; a prefix followed by a
+ *     flag stops the search (the flag becomes the command word and matches
+ *     no rule).
+ *   - A command word assembled by expansion (`git st$(echo a)sh`,
+ *     `${G} stash`, `$(which git) stash`): no static text scan can resolve
+ *     a runtime-computed word.
+ *   - `require(mod)` with a variable specifier, for the probe rule.
+ *
+ * These are documented blind spots, not silent ones: the guard's threat
+ * model is an agent's own slip, not a party deliberately hiding a command
+ * from it.
  *
  * Never throws: any stdin/JSON/classification failure degrades to "allow"
  * (exit 0) rather than blocking every Bash call in the session -- a crashed
- * hook must never be the thing that blocks the tool.
+ * hook must never be the thing that blocks the tool. That is also what
+ * bounds recursion: {@link lexRegions} nests once per nested span, and a
+ * pathologically deep input raises RangeError, which {@link run} catches
+ * and allows. (Round 2 capped nesting at depth 8, which silently ALLOWED
+ * anything nested deeper; the cap is deleted rather than raised.)
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -104,68 +141,38 @@ export const RULE_MESSAGES = {
 };
 
 /**
- * Read a `$( … )` body starting just after the opening "$(". Honors nested
- * parens and quotes so a nested `$(…)` or a quoted `)` does not close the
- * span early. Runs to end-of-text (never throws) if unterminated.
- *
- * @param {string} text
- * @param {number} start index just after "$("
- * @returns {{ body: string; end: number }} end is just past the matching ")"
+ * Characters after which a `#` starts a comment and a new word begins --
+ * bash's own rule (a `#` in the MIDDLE of a word, `a#b`, is literal).
  */
-function readParenSpan(text, start) {
-	let depth = 1;
-	let i = start;
-	/** @type {"single"|"double"|null} */
-	let quote = null;
-	while (i < text.length && depth > 0) {
-		const ch = text[i];
-		if (quote === "single") {
-			if (ch === "'") quote = null;
-		} else if (quote === "double") {
-			if (ch === "\\") {
-				i += 2;
-				continue;
-			}
-			if (ch === '"') quote = null;
-		} else {
-			if (ch === "'") quote = "single";
-			else if (ch === '"') quote = "double";
-			else if (ch === "(") depth++;
-			else if (ch === ")") depth--;
-		}
-		i++;
-	}
-	return { body: text.slice(start, Math.max(start, i - 1)), end: i };
-}
+const WORD_BREAK = /[\s;&|()<>]/;
 
 /**
- * Read a backtick-command-substitution body starting just after the opening
- * backtick. Runs to end-of-text (never throws) if unterminated.
- *
- * @param {string} text
- * @param {number} start index just after the opening backtick
- * @returns {{ body: string; end: number }} end is just past the closing backtick
+ * Segment separators in the retained text. Single characters only: `&&`
+ * and `||` fall out as two consecutive separators with nothing between
+ * them, which {@link splitSegments} discards. `(` and `)` are here because
+ * bash treats them as metacharacters that delimit commands, which is what
+ * makes `(git stash)` and `( cd x && git stash )` reachable.
  */
-function readBacktickSpan(text, start) {
-	let i = start;
-	while (i < text.length && text[i] !== "`") {
-		if (text[i] === "\\") i++;
-		i++;
-	}
-	return { body: text.slice(start, i), end: Math.min(text.length, i + 1) };
-}
+const SEGMENT_SEPARATOR = /[;&|()\n]/;
+
+/**
+ * Characters a backslash escapes INSIDE a double-quoted span (bash: every
+ * other backslash there is literal).
+ */
+const DOUBLE_QUOTE_ESCAPABLE = new Set(['"', "\\", "$", "`"]);
 
 /**
  * Parse a `<<`/`<<-` heredoc operator's delimiter, starting just after the
- * two `<` characters. Handles a quoted delimiter (`'EOF'`/`"EOF"`, dequoted
- * for matching) and a bareword one, plus a leading `-` (`<<-`, which strips
- * leading tabs from body lines before matching the delimiter). An empty
- * delimiter (malformed `<<`) is reported as `null` so the caller treats the
- * `<<` as ordinary text instead of starting a heredoc.
+ * two `<` characters. A delimiter is "quoted" -- meaning bash performs NO
+ * expansion in the body -- if any part of it is single-quoted,
+ * double-quoted, or backslash-escaped (`<<'EOF'`, `<<"EOF"`, `<<\EOF`,
+ * `<<EO'F'` all qualify). An empty delimiter (malformed `<<`) is reported
+ * as `null` so the caller treats the `<<` as ordinary text instead of
+ * starting a heredoc.
  *
  * @param {string} text
  * @param {number} start index just after "<<"
- * @returns {{ delimiter: string | null; stripTabs: boolean; end: number }}
+ * @returns {{ delimiter: string | null; stripTabs: boolean; quoted: boolean; end: number }}
  */
 function parseHeredocMarker(text, start) {
 	let i = start;
@@ -176,153 +183,355 @@ function parseHeredocMarker(text, start) {
 	}
 	while (text[i] === " " || text[i] === "\t") i++;
 	let delimiter = "";
-	if (text[i] === "'" || text[i] === '"') {
-		const q = text[i];
-		i++;
-		while (i < text.length && text[i] !== q) {
-			delimiter += text[i];
+	let quoted = false;
+	while (i < text.length && !WORD_BREAK.test(text[i])) {
+		const ch = text[i];
+		if (ch === "'" || ch === '"') {
+			quoted = true;
 			i++;
-		}
-		if (text[i] === q) i++;
-	} else {
-		while (i < text.length && !/[\s;&|<>]/.test(text[i])) {
-			if (text[i] === "\\" && i + 1 < text.length) {
-				delimiter += text[i + 1];
-				i += 2;
-				continue;
+			while (i < text.length && text[i] !== ch) {
+				delimiter += text[i];
+				i++;
 			}
-			delimiter += text[i];
-			i++;
+			if (text[i] === ch) i++;
+			continue;
 		}
+		if (ch === "\\" && i + 1 < text.length) {
+			quoted = true;
+			delimiter += text[i + 1];
+			i += 2;
+			continue;
+		}
+		delimiter += ch;
+		i++;
 	}
-	return { delimiter: delimiter || null, stripTabs, end: i };
+	return { delimiter: delimiter || null, stripTabs, quoted, end: i };
 }
 
 /**
- * Consume a heredoc body starting at `start` (just after the newline that
- * triggered it), reading whole lines verbatim -- never tokenized, never
- * scanned for `$()`/backticks -- until a line that equals `delimiter`
- * (leading tabs stripped first when `stripTabs`). Runs to end-of-text
- * (never throws) if the delimiter is never found.
+ * Scan an UNQUOTED-delimiter heredoc body for the only two things bash
+ * still executes inside one: `$( … )` and backtick command substitution.
+ * Quotes and `#` are LITERAL here (verified against real bash --
+ * `cat <<EOF` / `'$(git stash)'` / `EOF` and `# $(git stash)` on a body
+ * line both run), so this scan deliberately does NOT track quote or
+ * comment state; a backslash still escapes the next character.
+ *
+ * @param {string} body
+ * @param {string[]} out flat sink for every substitution body found
+ */
+function scanHeredocBodyForSubstitutions(body, out) {
+	let i = 0;
+	while (i < body.length) {
+		const ch = body[i];
+		if (ch === "\\" && i + 1 < body.length) {
+			i += 2;
+			continue;
+		}
+		if (ch === "$" && body[i + 1] === "(") {
+			const span = lexRegions(body, i + 2, ")", out);
+			out.push(span.retained);
+			i = span.end;
+			continue;
+		}
+		if (ch === "`") {
+			const span = lexRegions(body, i + 1, "`", out);
+			out.push(span.retained);
+			i = span.end;
+			continue;
+		}
+		i++;
+	}
+}
+
+/**
+ * Consume one heredoc body, starting just after the newline that triggered
+ * it, and DROP it: body lines are never tokenized as commands (a PR
+ * description, an issue comment, a file written through `cat <<'EOF' … EOF`
+ * is data, not a command line). A body whose delimiter was UNQUOTED is
+ * first handed to {@link scanHeredocBodyForSubstitutions}, because bash
+ * does expand `$( )`/backticks there.
+ *
+ * The delimiter line is matched with `<<-`'s leading tabs stripped and with
+ * a trailing `\r` tolerated: a CRLF command text whose terminator never
+ * matches makes the body run to end-of-text and silently swallows every
+ * later command, which is a false ALLOW -- the one direction this guard
+ * must never fail in.
  *
  * @param {string} text
  * @param {number} start
- * @param {string} delimiter
- * @param {boolean} stripTabs
+ * @param {{ delimiter: string; stripTabs: boolean; quoted: boolean }} heredoc
+ * @param {string[]} out
  * @returns {number} index just past the delimiter line's newline (or EOF)
  */
-function consumeHeredocBody(text, start, delimiter, stripTabs) {
+function consumeHeredocBody(text, start, heredoc, out) {
 	let i = start;
 	while (i <= text.length) {
 		const nl = text.indexOf("\n", i);
 		const lineEnd = nl === -1 ? text.length : nl;
-		const line = text.slice(i, lineEnd);
-		const compareLine = stripTabs ? line.replace(/^\t+/, "") : line;
-		if (compareLine === delimiter) return nl === -1 ? lineEnd : lineEnd + 1;
-		if (nl === -1) return text.length;
+		let line = text.slice(i, lineEnd);
+		if (line.endsWith("\r")) line = line.slice(0, -1);
+		if (heredoc.stripTabs) line = line.replace(/^\t+/, "");
+		if (line === heredoc.delimiter) {
+			if (!heredoc.quoted)
+				scanHeredocBodyForSubstitutions(text.slice(start, i), out);
+			return nl === -1 ? lineEnd : lineEnd + 1;
+		}
+		if (nl === -1) break;
 		i = lineEnd + 1;
 	}
+	if (!heredoc.quoted) scanHeredocBodyForSubstitutions(text.slice(start), out);
 	return text.length;
 }
 
 /**
- * Split `text` into top-level simple-command segments (split on `&&`,
- * `||`, `;`, `|`, `&`, newline outside quotes) plus every `$( … )` /
- * backtick subshell body found OUTSIDE any heredoc body, for the caller to
- * recursively re-scan. Single quotes suppress everything, including
- * subshell expansion (matching bash); double quotes suppress
- * operator-splitting but still let `$()`/backticks expand inside them.
+ * THE region pass. Walks `text` from `start` until `closer` (`")"` for a
+ * `$( … )` body, `` "`" `` for a backtick body, or `null` for end-of-text),
+ * returning the text left once every inert region is subtracted, and
+ * pushing every command-substitution body it finds -- at any depth, since
+ * it recurses into itself to find a nested span's extent -- into `out`.
  *
- * A `<<`/`<<-` heredoc's body (the lines up to and including its delimiter
- * line) is consumed verbatim and DROPPED -- never split into segments,
- * never scanned for `$()`/backticks -- so a markdown inline-code span or a
- * mention of a forbidden command inside a heredoc (a PR body, an issue
- * comment, a file written via `cat <<'EOF'`) is never mistaken for a live
- * command (#2699 review round 2 F1). A real command placed on the line
- * AFTER a heredoc's closing delimiter is a genuinely new, separately
- * scanned segment.
+ * Because the SAME pass decides span extents and consumes heredoc bodies,
+ * a `)` or a backtick inside a heredoc body can never close an enclosing
+ * span (#2699 review round 2's V1). That is a property of the shape, not a
+ * case that was remembered.
+ *
+ * Subtracted: comments, heredoc bodies, and substitution bodies (the last
+ * are re-scanned via `out`, not discarded). Retained: everything else,
+ * including single- and double-quoted spans with their quote characters,
+ * so word formation downstream is unaffected.
  *
  * @param {string} text
- * @returns {{ segments: string[]; subshells: string[] }}
+ * @param {number} start
+ * @param {")"|"`"|null} closer
+ * @param {string[]} out
+ * @returns {{ end: number; retained: string }}
  */
-export function splitTopLevel(text) {
-	/** @type {string[]} */
-	const segments = [];
-	/** @type {string[]} */
-	const subshells = [];
-	let buf = "";
+function lexRegions(text, start, closer, out) {
+	let retained = "";
+	let i = start;
 	/** @type {"single"|"double"|null} */
 	let quote = null;
-	let i = 0;
-	/** Heredoc markers seen since the last line-triggered consumption, consumed in order at the next top-level newline. */
-	/** @type {Array<{ delimiter: string; stripTabs: boolean }>} */
+	/** Nested plain `(`/`)` inside a `$( … )` body, so `$(( … ))` closes correctly. */
+	let parenDepth = 0;
+	let atWordStart = true;
+	/** Heredoc markers seen on the current line, consumed in order at its newline. */
+	/** @type {Array<{ delimiter: string; stripTabs: boolean; quoted: boolean }>} */
 	let pendingHeredocs = [];
-	const push = () => {
-		if (buf.trim()) segments.push(buf);
-		buf = "";
-	};
 	while (i < text.length) {
 		const ch = text[i];
-		if (quote === null && ch === "\\" && text[i + 1] === "\n") {
-			// Line continuation: the backslash-newline pair is removed, and the
-			// next physical line joins this one -- never a segment split.
+		if (quote === "single") {
+			retained += ch;
+			if (ch === "'") quote = null;
+			i++;
+			continue;
+		}
+		if (quote === "double") {
+			if (ch === "\\" && text[i + 1] === "\n") {
+				i += 2;
+				continue;
+			}
+			if (ch === "\\" && DOUBLE_QUOTE_ESCAPABLE.has(text[i + 1])) {
+				retained += ch + text[i + 1];
+				i += 2;
+				continue;
+			}
+			if (ch === '"') {
+				quote = null;
+				retained += ch;
+				i++;
+				continue;
+			}
+			if (ch === "$" && text[i + 1] === "(") {
+				const span = lexRegions(text, i + 2, ")", out);
+				out.push(span.retained);
+				i = span.end;
+				continue;
+			}
+			if (ch === "`") {
+				i = collectBacktickSpan(text, i, out);
+				continue;
+			}
+			retained += ch;
+			i++;
+			continue;
+		}
+		if (closer === ")" && ch === ")") {
+			if (parenDepth === 0) return { end: i + 1, retained };
+			parenDepth--;
+			retained += ch;
+			atWordStart = true;
+			i++;
+			continue;
+		}
+		if (closer === ")" && ch === "(") {
+			parenDepth++;
+			retained += ch;
+			atWordStart = true;
+			i++;
+			continue;
+		}
+		if (closer === "`" && ch === "`") return { end: i + 1, retained };
+		if (ch === "\\" && text[i + 1] === "\n") {
 			i += 2;
 			continue;
 		}
-		if (
-			quote === null &&
-			ch === "<" &&
-			text[i + 1] === "<" &&
-			text[i + 2] !== "<"
-		) {
+		if (ch === "\\" && i + 1 < text.length) {
+			// An escaped character is never special -- and the backslash is
+			// KEPT here so a later `\$(`/`\#` is not re-read as live syntax;
+			// splitWords drops it when forming the word.
+			retained += ch + text[i + 1];
+			atWordStart = false;
+			i += 2;
+			continue;
+		}
+		if (ch === "#" && atWordStart) {
+			const nl = text.indexOf("\n", i);
+			i = nl === -1 ? text.length : nl;
+			continue;
+		}
+		if (ch === "<" && text[i + 1] === "<" && text[i + 2] !== "<") {
 			const marker = parseHeredocMarker(text, i + 2);
 			if (marker.delimiter !== null) {
 				pendingHeredocs.push({
 					delimiter: marker.delimiter,
 					stripTabs: marker.stripTabs,
+					quoted: marker.quoted,
 				});
-				buf += text.slice(i, marker.end);
+				retained += text.slice(i, marker.end);
+				atWordStart = false;
 				i = marker.end;
 				continue;
 			}
 		}
+		if (ch === "\n" && pendingHeredocs.length > 0) {
+			retained += "\n";
+			let pos = i + 1;
+			for (const heredoc of pendingHeredocs)
+				pos = consumeHeredocBody(text, pos, heredoc, out);
+			pendingHeredocs = [];
+			atWordStart = true;
+			i = pos;
+			continue;
+		}
+		if (ch === "$" && text[i + 1] === "(") {
+			const span = lexRegions(text, i + 2, ")", out);
+			out.push(span.retained);
+			atWordStart = false;
+			i = span.end;
+			continue;
+		}
+		if (ch === "`") {
+			i = collectBacktickSpan(text, i, out);
+			atWordStart = false;
+			continue;
+		}
+		if (ch === "'") {
+			quote = "single";
+			retained += ch;
+			atWordStart = false;
+			i++;
+			continue;
+		}
+		if (ch === '"') {
+			quote = "double";
+			retained += ch;
+			atWordStart = false;
+			i++;
+			continue;
+		}
+		retained += ch;
+		atWordStart = WORD_BREAK.test(ch);
+		i++;
+	}
+	return { end: i, retained };
+}
+
+/**
+ * Collect one backtick span that starts at `text[open]`, pushing its body
+ * into `out` and returning the index just past its closing backtick.
+ *
+ * The extent comes from {@link lexRegions} (heredoc- and quote-aware, so a
+ * heredoc body inside the span cannot close it early). The one thing a
+ * backtick span needs on top: bash requires a NESTED backtick span to be
+ * written `` \` ``, and it does execute it -- so when the body carries an
+ * escaped backtick, the escape is undone and the body re-lexed, which
+ * surfaces the inner substitution. Only `` \` `` is undone; `\$` and `\\`
+ * are left alone, since undoing those would invent substitutions bash
+ * treats as literal.
+ *
+ * @param {string} text
+ * @param {number} open index of the opening backtick
+ * @param {string[]} out
+ * @returns {number}
+ */
+function collectBacktickSpan(text, open, out) {
+	const span = lexRegions(text, open + 1, "`", out);
+	if (span.retained.includes("\\`")) {
+		const unescaped = span.retained.replace(/\\`/g, "`");
+		const nested = lexRegions(unescaped, 0, null, out);
+		out.push(nested.retained);
+	} else {
+		out.push(span.retained);
+	}
+	return span.end;
+}
+
+/**
+ * Every region of `commandText` that bash can EXECUTE, as raw text ready
+ * for {@link splitSegments}. Index 0 is the top level; the rest are
+ * command-substitution bodies (from anywhere, including inside an
+ * unquoted-delimiter heredoc body), already flattened, already stripped of
+ * their own inert regions.
+ *
+ * @param {string} commandText
+ * @returns {string[]}
+ */
+export function scannableRegions(commandText) {
+	/** @type {string[]} */
+	const substitutions = [];
+	const { retained } = lexRegions(commandText, 0, null, substitutions);
+	return [retained, ...substitutions];
+}
+
+/**
+ * Split one scannable region into simple-command segments. Only quote
+ * state matters here: {@link lexRegions} has already removed every
+ * substitution, heredoc body and comment, so there is nothing else left
+ * that could hide a separator.
+ *
+ * @param {string} region
+ * @returns {string[]}
+ */
+export function splitSegments(region) {
+	/** @type {string[]} */
+	const segments = [];
+	let buf = "";
+	/** @type {"single"|"double"|null} */
+	let quote = null;
+	let i = 0;
+	const push = () => {
+		if (buf.trim()) segments.push(buf);
+		buf = "";
+	};
+	while (i < region.length) {
+		const ch = region[i];
 		if (quote === "single") {
 			buf += ch;
 			if (ch === "'") quote = null;
 			i++;
 			continue;
 		}
+		if (ch === "\\" && i + 1 < region.length) {
+			buf += ch + region[i + 1];
+			i += 2;
+			continue;
+		}
 		if (quote === "double") {
-			if (ch === "\\" && (text[i + 1] === '"' || text[i + 1] === "\\")) {
-				buf += ch + text[i + 1];
-				i += 2;
-				continue;
-			}
-			if (ch === '"') {
-				quote = null;
-				buf += ch;
-				i++;
-				continue;
-			}
-			if (ch === "$" && text[i + 1] === "(") {
-				const { body, end } = readParenSpan(text, i + 2);
-				subshells.push(body);
-				buf += text.slice(i, end);
-				i = end;
-				continue;
-			}
-			if (ch === "`") {
-				const { body, end } = readBacktickSpan(text, i + 1);
-				subshells.push(body);
-				buf += text.slice(i, end);
-				i = end;
-				continue;
-			}
 			buf += ch;
+			if (ch === '"') quote = null;
 			i++;
 			continue;
 		}
-		// not in a quote
 		if (ch === "'") {
 			quote = "single";
 			buf += ch;
@@ -335,61 +544,26 @@ export function splitTopLevel(text) {
 			i++;
 			continue;
 		}
-		if (ch === "$" && text[i + 1] === "(") {
-			const { body, end } = readParenSpan(text, i + 2);
-			subshells.push(body);
-			buf += text.slice(i, end);
-			i = end;
-			continue;
-		}
-		if (ch === "`") {
-			const { body, end } = readBacktickSpan(text, i + 1);
-			subshells.push(body);
-			buf += text.slice(i, end);
-			i = end;
-			continue;
-		}
-		if (ch === "&" && text[i + 1] === "&") {
+		if (SEGMENT_SEPARATOR.test(ch)) {
 			push();
-			i += 2;
-			continue;
-		}
-		if (ch === "|" && text[i + 1] === "|") {
-			push();
-			i += 2;
-			continue;
-		}
-		if (ch === "\n" && pendingHeredocs.length > 0) {
-			push();
-			let pos = i + 1;
-			for (const hd of pendingHeredocs) {
-				pos = consumeHeredocBody(text, pos, hd.delimiter, hd.stripTabs);
-			}
-			pendingHeredocs = [];
-			i = pos;
-			continue;
-		}
-		if (ch === ";" || ch === "|" || ch === "&" || ch === "\n") {
-			push();
-			i += 1;
+			i++;
 			continue;
 		}
 		buf += ch;
 		i++;
 	}
 	push();
-	return { segments, subshells };
+	return segments;
 }
 
 /**
- * Split one top-level segment into words: whitespace-separated outside
- * quotes. A quoted span (single or double) fuses into the surrounding word
- * rather than splitting on internal whitespace, and its quote characters
- * are stripped -- so `echo "git stash"` yields the two words `echo` and
- * `git stash` (one opaque word), never four. A `$( … )`/backtick span is
- * kept as raw text inside its enclosing word (its content is scanned
- * separately, via {@link splitTopLevel}'s `subshells` over the original
- * text).
+ * Split one segment into words: whitespace-separated outside quotes. A
+ * quoted span fuses into the surrounding word rather than splitting on
+ * internal whitespace, and its quote characters are stripped -- so
+ * `echo "git stash"` yields the two words `echo` and `git stash` (one
+ * opaque argument), while `git 'stash'` correctly yields `git` and
+ * `stash`. Outside quotes a backslash escapes the next character and is
+ * dropped, matching bash -- `\g\i\t stash` really does run `git stash`.
  *
  * @param {string} segment
  * @returns {string[]}
@@ -422,7 +596,7 @@ export function splitWords(segment) {
 		}
 		if (quote === "double") {
 			started = true;
-			if (ch === "\\" && (segment[i + 1] === '"' || segment[i + 1] === "\\")) {
+			if (ch === "\\" && DOUBLE_QUOTE_ESCAPABLE.has(segment[i + 1])) {
 				buf += segment[i + 1];
 				i += 2;
 				continue;
@@ -434,6 +608,12 @@ export function splitWords(segment) {
 			}
 			buf += ch;
 			i++;
+			continue;
+		}
+		if (ch === "\\" && i + 1 < segment.length) {
+			started = true;
+			buf += segment[i + 1];
+			i += 2;
 			continue;
 		}
 		if (/\s/.test(ch)) {
@@ -451,20 +631,6 @@ export function splitWords(segment) {
 			quote = "double";
 			started = true;
 			i++;
-			continue;
-		}
-		if (ch === "$" && segment[i + 1] === "(") {
-			started = true;
-			const { end } = readParenSpan(segment, i + 2);
-			buf += segment.slice(i, end);
-			i = end;
-			continue;
-		}
-		if (ch === "`") {
-			started = true;
-			const { end } = readBacktickSpan(segment, i + 1);
-			buf += segment.slice(i, end);
-			i = end;
 			continue;
 		}
 		started = true;
@@ -623,14 +789,20 @@ function classifyNode(args, env, rawSegment) {
 	return "probe";
 }
 
-/** Bash builtins that just mean "run the following command" -- stripped before the command word is identified (#2699 review round 2 F7). */
-const RUNNER_PREFIX_WORDS = new Set(["command", "exec", "env"]);
+/**
+ * Words that just mean "run the following command", stripped before the
+ * command word is identified. `command`/`exec`/`env` came from review
+ * round 2 F7; `sudo`/`time` from round 3's V5 (both confirmed against real
+ * bash to run their argument). Only the BARE forms are handled -- a prefix
+ * carrying its own options (`sudo -u root`, `nice -n 10`, `timeout 30`) is
+ * in the header's NOT-handled list.
+ */
+const RUNNER_PREFIX_WORDS = new Set(["command", "exec", "env", "sudo", "time"]);
 
 /**
- * Strip a leading `{` command-group brace and any leading `command`/`exec`/
- * `env` runner-prefix words (repeated, so `command env git stash` and
- * `{ command git stash` both resolve to `git stash`) before the command
- * word is identified. `env`'s own `FOO=bar` assignments (if any) still
+ * Strip a leading `{` command-group brace and any leading runner-prefix
+ * words (repeated, so `command env git stash` and `{ sudo git stash` both
+ * resolve to `git stash`). `env`'s own `FOO=bar` assignments (if any) still
  * parse correctly afterward via {@link stripEnvAssignments} once `env`
  * itself is dropped.
  *
@@ -657,19 +829,18 @@ function commandBasename(cmd) {
 }
 
 /**
- * Classify one raw top-level segment. `sharedEnv` carries `export VAR=val`
- * (or a standalone `VAR=val` with no command on the same segment)
- * assignments forward to LATER segments in the same {@link findDeny} scan
- * (#2699 review round 2 F2: AGENTS.md sanctions `export
- * PI_LENS_HOME=<worktree>/.probe-home` as an earlier `;`/newline-separated
- * segment, not only as this segment's own prefix or `process.env`). The
- * `export` builtin NEVER runs a trailing command in real bash -- any word
- * after its assignments is another (bare) name marked for export, not a
- * command -- so a segment starting with `export` always terminates here,
- * persisting into `sharedEnv` (mutated in place) and returning `null`. A
- * NON-exported `FOO=bar cmd` prefix, by contrast, applies only to THIS
- * segment's own command (matching real bash), merged into the
- * `effectiveEnv` passed to {@link classifyNode}.
+ * Classify one segment. `sharedEnv` carries `export VAR=val` (or a
+ * standalone `VAR=val` with no command on the same segment) assignments
+ * forward to LATER segments in the same {@link findDeny} scan (#2699 review
+ * round 2 F2: AGENTS.md sanctions `export PI_LENS_HOME=<worktree>/.probe-home`
+ * as an earlier `;`/newline-separated segment, not only as this segment's
+ * own prefix or `process.env`). The `export` builtin NEVER runs a trailing
+ * command in real bash -- any word after its assignments is another (bare)
+ * name marked for export, not a command -- so a segment starting with
+ * `export` always terminates here, persisting into `sharedEnv` (mutated in
+ * place) and returning `null`. A NON-exported `FOO=bar cmd` prefix, by
+ * contrast, applies only to THIS segment's own command (matching real
+ * bash), merged into the `effectiveEnv` passed to {@link classifyNode}.
  *
  * @param {string} rawSegment
  * @param {Record<string, string>} sharedEnv
@@ -704,33 +875,27 @@ export function classifySegment(rawSegment, sharedEnv = {}) {
 }
 
 /**
- * Scan a full Bash command (top-level segments AND every `$()`/backtick
- * subshell body, recursively) for the first denied rule. Depth-bounded so a
- * pathologically nested subshell degrades to "no match found" rather than
- * recursing without limit -- consistent with "never throw / never hang".
- * `inheritedEnv` seeds this scan's shared `export`ed-assignment state (see
- * {@link classifySegment}); each subshell recurses starting from the
- * accumulated state after ALL of this scan's own top-level segments ran --
- * an approximation of bash's left-to-right export visibility, not a
- * fully-ordered interleaving with what appears textually inside a
- * `$()`/backtick span (#2699 review round 2 F2).
+ * Scan a full Bash command for the first denied rule: every executable
+ * region {@link scannableRegions} found, split into segments and
+ * classified. The top-level region runs first and accumulates `export`ed
+ * assignments; each substitution region then starts from a COPY of that
+ * state -- an approximation of bash's left-to-right export visibility, not
+ * a fully-ordered interleaving with what appears textually inside a
+ * `$( )`/backtick span (#2699 review round 2 F2).
  *
  * @param {string} commandText
- * @param {number} [depth]
- * @param {Record<string, string>} [inheritedEnv]
  * @returns {DenyRule | null}
  */
-export function findDeny(commandText, depth = 0, inheritedEnv = {}) {
-	if (depth > 8) return null;
-	const { segments, subshells } = splitTopLevel(commandText);
-	const sharedEnv = { ...inheritedEnv };
-	for (const seg of segments) {
-		const rule = classifySegment(seg, sharedEnv);
-		if (rule) return rule;
-	}
-	for (const sub of subshells) {
-		const rule = findDeny(sub, depth + 1, sharedEnv);
-		if (rule) return rule;
+export function findDeny(commandText) {
+	const regions = scannableRegions(commandText);
+	/** @type {Record<string, string>} */
+	const sharedEnv = {};
+	for (let index = 0; index < regions.length; index++) {
+		const env = index === 0 ? sharedEnv : { ...sharedEnv };
+		for (const segment of splitSegments(regions[index])) {
+			const rule = classifySegment(segment, env);
+			if (rule) return rule;
+		}
 	}
 	return null;
 }

@@ -21,7 +21,8 @@ import { describe, expect, it } from "vitest";
 import {
 	classifyPayload,
 	findDeny,
-	splitTopLevel,
+	scannableRegions,
+	splitSegments,
 	splitWords,
 	stripEnvAssignments,
 } from "../../scripts/hooks/guard-bash.mjs";
@@ -106,6 +107,24 @@ const DENY_CASES: Array<[command: string, ruleNeedle: string]> = [
 	["cd /tmp & git stash", "stash"],
 	["{ git stash; }", "stash"],
 	["git \\\nstash", "stash"],
+	// review round 3 V5: `sudo` and `time` are runner prefixes -- both
+	// confirmed against real bash to run their argument.
+	["sudo git stash", "stash"],
+	["time git stash", "stash"],
+	// review round 3 V3b: a CRLF command text. Before this round the
+	// delimiter line "EOF\r" never matched "EOF", so the body ran to
+	// end-of-text and silently swallowed the real command after it.
+	["cat <<'EOF'\r\nbody\r\nEOF\r\ngit stash", "stash"],
+	// review round 3: bash drops a backslash before an ordinary character,
+	// so this really does run git stash.
+	["\\g\\i\\t stash", "stash"],
+	// review round 3: `( … )` command grouping (round 2 documented this as
+	// unhandled; segment splitting on the metacharacters makes it free).
+	["(cd /tmp && git stash)", "stash"],
+	// review round 3 V3a (LX-5-4), through the real CLI: an UNQUOTED
+	// heredoc delimiter does not stop bash expanding $( ) in the body --
+	// verified by running it with a side-effecting stand-in.
+	["cat <<EOF\n$(git stash)\nEOF", "stash"],
 ];
 
 // Every allow string the issue lists, which must stay green.
@@ -166,6 +185,13 @@ const ALLOW_CASES: string[] = [
 	// actually loading it (the orchestrator's doc-patching idiom) must
 	// allow -- only an actual require(/import(/from load specifier denies.
 	"node -e \"console.log('note: see clients/ for the service list')\"",
+	// review round 3 V1 (LX-6-2), through the real CLI: the exact minimal
+	// reproduction the round 2 verify filed -- one unbalanced ")" in a
+	// quoted heredoc body used to close the enclosing $( ) span early and
+	// leak the rest of the document into the top-level scan.
+	"gh pr create --body \"$(cat <<'EOF'\nsmiley :) here\nwe never run `git stash`\nEOF\n)\"",
+	// review round 3 (LX-10-1), through the real CLI: a `#` comment.
+	"echo hi # $(git stash)",
 ];
 
 describe("scripts/hooks/guard-bash.mjs -- deny list (#2699)", () => {
@@ -300,12 +326,32 @@ describe("scripts/hooks/guard-bash.mjs -- tokenizer unit behavior (#2699)", () =
 		expect(rest).toEqual(["git", "stash"]);
 	});
 
-	it("splitTopLevel collects $() and backtick subshell bodies for recursive scanning", () => {
-		const { segments, subshells } = splitTopLevel(
-			"echo $(git stash) `git log`",
-		);
-		expect(segments).toHaveLength(1);
-		expect(subshells).toEqual(["git stash", "git log"]);
+	it("scannableRegions returns the top level first, then every substitution body, flattened", () => {
+		expect(scannableRegions("echo $(git stash) `git log`")).toEqual([
+			"echo  ",
+			"git stash",
+			"git log",
+		]);
+		// Flattened at ANY depth -- round 2 recursed with a depth cap of 8,
+		// which silently ALLOWED anything nested deeper.
+		expect(scannableRegions("echo $(echo $(echo $(git stash)))")).toEqual([
+			"echo ",
+			"git stash",
+			"echo ",
+			"echo ",
+		]);
+	});
+
+	it("splitSegments splits the retained text on every metacharacter", () => {
+		expect(splitSegments("a && b || c ; d | e & f\ng")).toEqual([
+			"a ",
+			" b ",
+			" c ",
+			" d ",
+			" e ",
+			" f",
+			"g",
+		]);
 	});
 
 	it("classifyPayload allows a Read tool call carrying a denied-looking command field", () => {
@@ -321,13 +367,14 @@ describe("scripts/hooks/guard-bash.mjs -- tokenizer unit behavior (#2699)", () =
 		expect(splitWords('echo "git stash"')).toEqual(["echo", "git stash"]);
 	});
 
-	it("(review round 2 F1) drops a heredoc body verbatim -- its backtick span is never collected as a subshell", () => {
-		const { segments, subshells } = splitTopLevel(
+	it("(review round 2 F1) drops a QUOTED-delimiter heredoc body -- its backtick span is never collected as a substitution", () => {
+		const regions = scannableRegions(
 			"cat <<'EOF'\nmentions `git stash` here\nEOF",
 		);
-		expect(subshells).toEqual([]);
+		// Only the top level survives; no substitution region was produced.
+		expect(regions).toHaveLength(1);
 		// The command's own text ("cat <<'EOF'") survives; the body does not.
-		expect(segments.join(" ")).not.toContain("git stash");
+		expect(regions[0]).not.toContain("git stash");
 	});
 
 	it("(review round 2 F1) a heredoc nested inside a $() subshell still drops its own body", () => {
@@ -380,5 +427,483 @@ describe("scripts/hooks/guard-bash.mjs -- cross-segment export tracking (review 
 			"export SOME_OTHER_VAR=/x node -e \"require('./clients/foo.js')\"",
 		);
 		expect(result.status).toBe(0);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Lexer state space (review round 3)
+// ---------------------------------------------------------------------------
+//
+// Round 2's verify found a NEW defect on the seam round 2 built (V1: a
+// `$( … )` span delimited by a paren counter that ran THROUGH heredoc
+// bodies), so this round enumerates the seam's whole axis instead of
+// patching the case that was reported: (region kind) × (nesting context),
+// 11 rows × 5 columns. Row/column ids match the table in the PR body.
+//
+// Every `expect` value below is EMPIRICAL. Each command was run through
+// real `bash -c` with the forbidden command rewritten to `touch <marker>`,
+// and the expectation is whether the marker FILE appeared -- so a `cat`
+// that merely PRINTS a heredoc body cannot be mistaken for one that
+// executes it. All 58 agreed with real bash (transcript in the PR body);
+// an earlier pass that grepped stdout for a printed marker instead was
+// wrong on six cells, which is why the side-effect form is the one that
+// ships.
+//
+// Driven through the exported `findDeny` rather than a spawned process:
+// the subject here is the LEXER, and 58 more child processes would add ~2s
+// of wall clock to a suite whose CLI contract is already pinned by the 90+
+// spawned cases above (the four headline cells -- V1, V3a, V2, the comment
+// region -- are additionally spawned in DENY_CASES/ALLOW_CASES). No case
+// in this table can reach the probe rule, so none of them reads
+// `process.env`.
+const S = "git stash";
+
+type LexerCell = {
+	id: string;
+	cell: string;
+	command: string;
+	expect: "deny" | "allow";
+};
+
+const LEXER_STATE_SPACE: LexerCell[] = [
+	// R1 -- top-level text (a bare simple command)
+	{
+		id: "LX-1-1",
+		cell: "R1/C1 a bare simple command",
+		command: S,
+		expect: "deny",
+	},
+	{
+		id: "LX-1-2",
+		cell: "R1/C2 command inside $( )",
+		command: `echo $(${S})`,
+		expect: "deny",
+	},
+	{
+		id: "LX-1-3",
+		cell: "R1/C3 command inside backticks",
+		command: `echo \`${S}\``,
+		expect: "deny",
+	},
+	{
+		id: "LX-1-4",
+		cell: "R1/C4 plain body text is data, never a command",
+		command: `cat <<EOF\n${S}\nEOF`,
+		expect: "allow",
+	},
+	{
+		id: "LX-1-5",
+		cell: "R1/C5 command text in double quotes is one opaque word",
+		command: `echo "${S}"`,
+		expect: "allow",
+	},
+
+	// R2 -- double-quoted span
+	{
+		id: "LX-2-1",
+		cell: "R2/C1 a double-quoted span fuses into the surrounding word",
+		command: `git "stash"`,
+		expect: "deny",
+	},
+	{
+		id: "LX-2-2",
+		cell: "R2/C2 same, inside $( )",
+		command: `echo $(git "stash")`,
+		expect: "deny",
+	},
+	{
+		id: "LX-2-3",
+		cell: "R2/C3 same, inside backticks",
+		command: 'echo `git "stash"`',
+		expect: "deny",
+	},
+	{
+		id: "LX-2-4",
+		cell: "R2/C4 quotes are LITERAL in a body; the $( ) inside still runs",
+		command: `cat <<EOF\n"$(${S})"\nEOF`,
+		expect: "deny",
+	},
+	{
+		id: "LX-2-5",
+		cell: "R2/C5 an escaped quote inside double quotes stays literal",
+		command: `echo "he said \\"${S}\\""`,
+		expect: "allow",
+	},
+
+	// R3 -- single-quoted span
+	{
+		id: "LX-3-1",
+		cell: "R3/C1 no expansion inside single quotes",
+		command: `echo '$(${S})'`,
+		expect: "allow",
+	},
+	{
+		id: "LX-3-1b",
+		cell: "R3/C1 a single-quoted span still forms the WORD (must not be deleted)",
+		command: `git 'stash'`,
+		expect: "deny",
+	},
+	{
+		id: "LX-3-2",
+		cell: "R3/C2 same, inside $( )",
+		command: `echo $(echo '$(${S})')`,
+		expect: "allow",
+	},
+	{
+		id: "LX-3-3",
+		cell: "R3/C3 same, inside backticks",
+		command: `echo \`echo '$(${S})'\``,
+		expect: "allow",
+	},
+	{
+		id: "LX-3-4",
+		cell: "R3/C4 single quotes are LITERAL in a body; the $( ) still runs",
+		command: `cat <<EOF\n'$(${S})'\nEOF`,
+		expect: "deny",
+	},
+	{
+		id: "LX-3-5",
+		cell: "R3/C5 an apostrophe in double quotes must not open a quote region",
+		command: `echo "it's $(${S})"`,
+		expect: "deny",
+	},
+
+	// R4 -- backtick span
+	{
+		id: "LX-4-1",
+		cell: "R4/C1 a backtick span closes; text after it is still scanned",
+		command: `echo \`date\`; ${S}`,
+		expect: "deny",
+	},
+	{
+		id: "LX-4-2",
+		cell: "R4/C2 backtick span inside $( )",
+		command: `echo $(echo \`${S}\`)`,
+		expect: "deny",
+	},
+	{
+		id: "LX-4-3",
+		cell: "R4/C3 a backslash-escaped backtick span nested in a backtick span",
+		command: `echo \`echo \\\`${S}\\\`\``,
+		expect: "deny",
+	},
+	{
+		id: "LX-4-4",
+		cell: "R4/C4 backtick substitution inside an unquoted-delimiter body",
+		command: `cat <<EOF\n\`${S}\`\nEOF`,
+		expect: "deny",
+	},
+	{
+		id: "LX-4-5",
+		cell: "R4/C5 backtick span inside double quotes",
+		command: `echo "\`${S}\`"`,
+		expect: "deny",
+	},
+
+	// R5 -- $( ) span
+	{
+		id: "LX-5-1",
+		cell: "R5/C1 a ) inside quotes must not close the span early",
+		command: `echo $(echo ')') ; ${S}`,
+		expect: "deny",
+	},
+	{
+		id: "LX-5-2",
+		cell: "R5/C2 nested $( )",
+		command: `echo $(echo $(${S}))`,
+		expect: "deny",
+	},
+	{
+		id: "LX-5-3",
+		cell: "R5/C3 $( ) inside backticks",
+		command: `echo \`echo $(${S})\``,
+		expect: "deny",
+	},
+	{
+		id: "LX-5-4",
+		cell: "R5/C4 V3a -- $( ) in an unquoted-delimiter body really runs",
+		command: `cat <<EOF\n$(${S})\nEOF`,
+		expect: "deny",
+	},
+	{
+		id: "LX-5-5",
+		cell: "R5/C5 $( ) inside double quotes",
+		command: `echo "$(${S})"`,
+		expect: "deny",
+	},
+
+	// R6 -- heredoc body, QUOTED delimiter
+	{
+		id: "LX-6-1",
+		cell: "R6/C1 a quoted-delimiter body is inert in full",
+		command: `cat <<'EOF'\n$(${S})\nEOF`,
+		expect: "allow",
+	},
+	{
+		id: "LX-6-2",
+		cell: "R6/C2 V1 -- an unbalanced ) in a quoted body must not close the enclosing $( )",
+		command: `gh pr create --body "$(cat <<'EOF'\nsmiley :) here\nwe never run \`${S}\`\nEOF\n)"`,
+		expect: "allow",
+	},
+	{
+		id: "LX-6-3",
+		cell: "R6/C3 a quoted-delimiter heredoc inside a backtick span",
+		command: `echo \`cat <<'EOF'\n$(${S})\nEOF\n\``,
+		expect: "allow",
+	},
+	{
+		id: "LX-6-4",
+		cell: "R6/C4 a << operator inside a body is literal text",
+		command: `cat <<'EOF'\ncat <<'X'\n${S}\nEOF`,
+		expect: "allow",
+	},
+	{
+		id: "LX-6-5",
+		cell: "R6/C5 a << inside double quotes NEVER starts a heredoc",
+		command: `echo "cat <<'EOF'"; ${S}`,
+		expect: "deny",
+	},
+
+	// R7 -- heredoc body, UNQUOTED delimiter
+	{
+		id: "LX-7-1",
+		cell: "R7/C1 unquoted-delimiter body text with no substitution is inert",
+		command: `cat <<EOF\nmentions ${S} here\nEOF`,
+		expect: "allow",
+	},
+	{
+		id: "LX-7-2",
+		cell: "R7/C2 unquoted-delimiter body inside $( )",
+		command: `gh pr create --body "$(cat <<EOF\n$(${S})\nEOF\n)"`,
+		expect: "deny",
+	},
+	{
+		id: "LX-7-3",
+		cell: "R7/C3 unquoted-delimiter body inside backticks",
+		command: `echo \`cat <<EOF\n$(${S})\nEOF\n\``,
+		expect: "deny",
+	},
+	{
+		id: "LX-7-4",
+		cell: "R7/C4 a nested << inside an unquoted body is literal",
+		command: `cat <<EOF\ncat <<'X'\n${S}\nX\nEOF`,
+		expect: "allow",
+	},
+	{
+		id: "LX-7-5",
+		cell: "R7/C5 unquoted-delimiter body inside double quotes",
+		command: `echo "$(cat <<EOF\n$(${S})\nEOF\n)"`,
+		expect: "deny",
+	},
+
+	// R8 -- <<- tab-stripped body
+	{
+		id: "LX-8-1",
+		cell: "R8/C1 V2 -- <<- strips leading tabs before matching the delimiter",
+		command: `cat <<-EOF\n\tbody\n\tEOF\n${S}`,
+		expect: "deny",
+	},
+	{
+		id: "LX-8-2",
+		cell: "R8/C2 <<-'EOF' body inside $( ) is inert",
+		command: `gh pr create --body "$(cat <<-'EOF'\n\tmentions ${S}\n\tEOF\n)"`,
+		expect: "allow",
+	},
+	{
+		id: "LX-8-3",
+		cell: "R8/C3 <<-EOF body substitution inside backticks",
+		command: `echo \`cat <<-EOF\n\t$(${S})\n\tEOF\n\``,
+		expect: "deny",
+	},
+	{
+		id: "LX-8-4",
+		cell: "R8/C4 a quoted <<- delimiter drops substitutions",
+		command: `cat <<-'EOF'\n\t$(${S})\n\tEOF`,
+		expect: "allow",
+	},
+	{
+		id: "LX-8-5",
+		cell: "R8/C5 <<-EOF body substitution inside double quotes",
+		command: `echo "$(cat <<-EOF\n\t$(${S})\n\tEOF\n)"`,
+		expect: "deny",
+	},
+
+	// R9 -- here-string <<<
+	{
+		id: "LX-9-1",
+		cell: "R9/C1 here-string content is data",
+		command: `cat <<< "${S}"`,
+		expect: "allow",
+	},
+	{
+		id: "LX-9-1b",
+		cell: "R9/C1 a substitution in a here-string IS live",
+		command: `cat <<< $(${S})`,
+		expect: "deny",
+	},
+	{
+		id: "LX-9-2",
+		cell: "R9/C2 here-string inside $( )",
+		command: `echo $(cat <<< "${S}")`,
+		expect: "allow",
+	},
+	{
+		id: "LX-9-3",
+		cell: "R9/C3 here-string inside backticks",
+		command: `echo \`cat <<< "${S}"\``,
+		expect: "allow",
+	},
+	{
+		id: "LX-9-4",
+		cell: "R9/C4 a <<< inside a heredoc body is literal",
+		command: `cat <<EOF\ncat <<< "${S}"\nEOF`,
+		expect: "allow",
+	},
+	{
+		id: "LX-9-5",
+		cell: "R9/C5 <<< must not read as << with delimiter <",
+		command: `cat <<< "hi"; ${S}`,
+		expect: "deny",
+	},
+
+	// R10 -- comment
+	{
+		id: "LX-10-1",
+		cell: "R10/C1 a comment hides a substitution",
+		command: `echo hi # $(${S})`,
+		expect: "allow",
+	},
+	{
+		id: "LX-10-1b",
+		cell: "R10/C1 a # mid-word is NOT a comment",
+		command: `echo a#b; ${S}`,
+		expect: "deny",
+	},
+	{
+		id: "LX-10-2",
+		cell: "R10/C2 comment inside $( )",
+		command: `echo $(echo hi # $(${S})\n)`,
+		expect: "allow",
+	},
+	{
+		id: "LX-10-3",
+		cell: "R10/C3 comment inside backticks",
+		command: `echo \`echo hi # $(${S})\n\``,
+		expect: "allow",
+	},
+	{
+		id: "LX-10-4",
+		cell: "R10/C4 # is NOT a comment in a heredoc body",
+		command: `cat <<EOF\n# $(${S})\nEOF`,
+		expect: "deny",
+	},
+	{
+		id: "LX-10-5",
+		cell: "R10/C5 # inside double quotes is not a comment",
+		command: `echo "# hi"; ${S}`,
+		expect: "deny",
+	},
+
+	// R11 -- backslash-newline continuation
+	{
+		id: "LX-11-1",
+		cell: "R11/C1 backslash-newline splices one command",
+		command: "git \\\nstash",
+		expect: "deny",
+	},
+	{
+		id: "LX-11-2",
+		cell: "R11/C2 splice inside $( )",
+		command: "echo $(git \\\nstash)",
+		expect: "deny",
+	},
+	{
+		id: "LX-11-3",
+		cell: "R11/C3 splice inside backticks",
+		command: "echo `git \\\nstash`",
+		expect: "deny",
+	},
+	{
+		id: "LX-11-4",
+		cell: "R11/C4 splice inside a heredoc body's $( )",
+		command: "cat <<EOF\n$(git \\\nstash)\nEOF",
+		expect: "deny",
+	},
+	{
+		id: "LX-11-5",
+		cell: "R11/C5 splice inside double quotes must not swallow the next command",
+		command: `echo "a\\\nb"; ${S}`,
+		expect: "deny",
+	},
+];
+
+describe("scripts/hooks/guard-bash.mjs -- lexer state space (review round 3)", () => {
+	it.each(
+		LEXER_STATE_SPACE.map((f) => [f.id, f.cell, f.command, f.expect] as const),
+	)("%s %s", (_id, _cell, command, expected) => {
+		expect(findDeny(command) === null ? "allow" : "deny").toBe(expected);
+	});
+
+	it("covers all 55 (region kind × nesting context) cells with no duplicate ids", () => {
+		const ids = LEXER_STATE_SPACE.map((f) => f.id);
+		expect(new Set(ids).size).toBe(ids.length);
+		// 11 rows × 5 columns, plus 3 same-cell discriminators (LX-3-1b,
+		// LX-9-1b, LX-10-1b) that pin a second behaviour of their own cell.
+		expect(ids).toHaveLength(58);
+		for (let row = 1; row <= 11; row++)
+			for (let col = 1; col <= 5; col++)
+				expect(ids).toContain(`LX-${row}-${col}`);
+	});
+});
+
+describe("scripts/hooks/guard-bash.mjs -- heredoc terminator matching (review round 3 V3b)", () => {
+	// A CRLF command text is what a Windows/Git-Bash-shaped tool call
+	// carries. Round 2 compared the raw line, so "EOF\r" never equalled
+	// "EOF": the body ran to end-of-text and every later command was
+	// silently swallowed -- a false ALLOW, the one direction this guard
+	// must never fail in.
+	it("tolerates a \\r before the delimiter line's newline", () => {
+		expect(findDeny("cat <<'EOF'\r\nbody\r\nEOF\r\ngit stash")).toBe("stash");
+		expect(findDeny("cat <<-EOF\r\n\tbody\r\n\tEOF\r\ngit stash")).toBe(
+			"stash",
+		);
+	});
+
+	it("still swallows nothing when the delimiter genuinely never appears", () => {
+		// No terminator at all: the body runs to end-of-text, which is what
+		// bash does too (it reports an unterminated heredoc and runs nothing).
+		expect(findDeny("cat <<'EOF'\ngit stash")).toBeNull();
+	});
+});
+
+describe("scripts/hooks/guard-bash.mjs -- runner prefixes (review round 3 V5)", () => {
+	it("strips sudo and time, which really do run their argument", () => {
+		expect(findDeny("sudo git stash")).toBe("stash");
+		expect(findDeny("time git stash")).toBe("stash");
+		expect(findDeny("sudo time command git stash")).toBe("stash");
+	});
+
+	it("does NOT claim to handle a runner prefix carrying its own options", () => {
+		// Documented in the script header's NOT-handled block rather than
+		// silently believed to work: the option becomes the command word.
+		expect(findDeny("sudo -u root git stash")).toBeNull();
+		expect(findDeny("timeout 30 git stash")).toBeNull();
+	});
+});
+
+describe("scripts/hooks/guard-bash.mjs -- unbounded nesting never throws (review round 3)", () => {
+	// Round 2 capped substitution recursion at depth 8, which silently
+	// ALLOWED anything nested deeper. The cap is deleted; what bounds the
+	// pass now is `run`'s own never-throw contract.
+	it("allows (exit 0) rather than crashing on pathologically deep nesting", () => {
+		const deep = `${"$(".repeat(5000)}git stash${")".repeat(5000)}`;
+		const result = runHook(`echo ${deep}`);
+		expect(result.status === 0 || result.status === 2).toBe(true);
+		expect(result.status).not.toBe(1);
+	});
+
+	it("catches nesting far deeper than round 2's depth cap of 8", () => {
+		const deep = `${"$(".repeat(20)}git stash${")".repeat(20)}`;
+		expect(findDeny(`echo ${deep}`)).toBe("stash");
 	});
 });

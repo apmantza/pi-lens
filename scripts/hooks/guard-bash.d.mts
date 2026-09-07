@@ -7,10 +7,14 @@ export type DenyRule = "stash" | "reset" | "worktreeForce" | "probe";
 
 export const RULE_MESSAGES: Readonly<Record<DenyRule, string>>;
 
-export function splitTopLevel(text: string): {
-	segments: string[];
-	subshells: string[];
-};
+/**
+ * Every region of the command text that bash can EXECUTE, inert regions
+ * (heredoc bodies, comments) already subtracted. Index 0 is the top level;
+ * the rest are command-substitution bodies from any depth, flattened.
+ */
+export function scannableRegions(commandText: string): string[];
+
+export function splitSegments(region: string): string[];
 
 export function splitWords(segment: string): string[];
 
@@ -24,11 +28,7 @@ export function classifySegment(
 	sharedEnv?: Record<string, string>,
 ): DenyRule | null;
 
-export function findDeny(
-	commandText: string,
-	depth?: number,
-	inheritedEnv?: Record<string, string>,
-): DenyRule | null;
+export function findDeny(commandText: string): DenyRule | null;
 
 export function classifyPayload(payload: unknown): DenyRule | null;
 
