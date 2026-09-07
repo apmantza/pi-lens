@@ -291,7 +291,8 @@ export function evaluateMergeGate(pr, health, { approvedBy } = {}) {
 		);
 
 	// A discovered non-advisory check must reach a terminal conclusion before
-	// UNSTABLE can merge. A discovered CANCELLED row is held because
+	// the PR can merge, whatever the merge state (CLEAN holds too, not only
+	// UNSTABLE). A discovered CANCELLED row is held because
 	// cancel-in-progress can leave it as the latest evidence until a newer
 	// sibling posts; resolveLatestByName already removes it once that happens.
 	const pending = [...byName.values()].filter(

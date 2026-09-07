@@ -2492,7 +2492,7 @@ describe("merge-lane gate (#2185)", () => {
 		["IN_PROGRESS", "SUCCESS"],
 		["QUEUED", null],
 		["COMPLETED", null],
-	])("holds a discovered %s check until it concludes", (status, conclusion) => {
+	])("holds a discovered %s check (conclusion %s) until it concludes", (status, conclusion) => {
 		const checkName = `discovered ${status.toLowerCase()} check`;
 		const gate = gateOf(
 			approved({
