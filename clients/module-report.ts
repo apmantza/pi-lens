@@ -96,6 +96,7 @@ export interface ModuleReportOptions {
 	maxCallGraphEntries?: number;
 }
 
+/** @public — consumed by clients/module-report-lsp.ts, which knip.jsonc lists under `ignore`. */
 export interface ModuleSymbolUsedBy {
 	file: string;
 	symbol: string;

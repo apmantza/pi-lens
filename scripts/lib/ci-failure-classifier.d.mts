@@ -30,8 +30,6 @@ export interface ClassifierDecision {
 	commentBody: string;
 }
 
-export declare function stripAnsi(text: string): string;
-export declare function stripLineTimestamps(text: string): string;
 export declare function classifyFailureLog(rawLog: string): Classification;
 export declare function readCgroupOomKillCount(log: string): number | null;
 export declare function describeKernelKillEvidence(log: string): string | null;
@@ -62,47 +60,6 @@ export interface FetchedJob {
 	jobId: number;
 	jobName: string;
 }
-export declare function fetchRunAndFailedJob(args: {
-	fetcher: FetchFn;
-	owner: string;
-	repo: string;
-	runId: number | string;
-	jobName?: string;
-}): Promise<FetchedJob>;
-export declare function fetchJobLog(args: {
-	fetcher: FetchFn;
-	owner: string;
-	repo: string;
-	jobId: number;
-}): Promise<string>;
-export declare function findExistingClassifierComment(args: {
-	fetcher: FetchFn;
-	owner: string;
-	repo: string;
-	prNumber: number;
-}): Promise<{ id: number; body: string } | null>;
-export declare function upsertComment(args: {
-	fetcher: FetchFn;
-	owner: string;
-	repo: string;
-	prNumber: number;
-	existingComment: { id: number; body: string } | null;
-	body: string;
-}): Promise<{ id: number; body: string } | null>;
-export declare function reconcileDuplicateClassifierComments(args: {
-	fetcher: FetchFn;
-	owner: string;
-	repo: string;
-	prNumber: number;
-	sha: string;
-	postedCommentId: number | undefined;
-}): Promise<{ isWinner: boolean; winningCommentId: number | undefined }>;
-export declare function attemptRerun(args: {
-	fetcher: FetchFn;
-	owner: string;
-	repo: string;
-	runId: number | string;
-}): Promise<{ ok: boolean; status: number }>;
 export interface RunClassifierArgs {
 	fetcher: FetchFn;
 	owner: string;
@@ -135,11 +92,3 @@ export declare function runClassifier(
 export declare function runClassifier(
 	args: RunClassifierArgs,
 ): Promise<SuccessfulClassifierRun | SkippedClassifierRun>;
-export declare function commentClassificationFailure(args: {
-	fetcher: FetchFn;
-	owner: string;
-	repo: string;
-	prNumber?: number;
-	sha?: string;
-	error: unknown;
-}): Promise<boolean>;

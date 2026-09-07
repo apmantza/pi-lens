@@ -71,7 +71,7 @@ export function shouldPrint(sample, state) {
  * 7 GB runner and on a 16 GB one.
  */
 const EXHAUSTION_AVAILABLE_FRACTION = 0.1;
-const EXHAUSTION_AVAILABLE_FLOOR_MB = 512;
+export const EXHAUSTION_AVAILABLE_FLOOR_MB = 512;
 
 /**
  * Is the low-water mark consistent with memory exhaustion?

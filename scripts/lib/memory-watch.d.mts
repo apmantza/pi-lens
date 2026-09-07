@@ -31,13 +31,7 @@ export interface MemoryWatchState {
 	intervalMs?: number | null;
 }
 
-export declare const EXHAUSTION_AVAILABLE_FRACTION: number;
 export declare const EXHAUSTION_AVAILABLE_FLOOR_MB: number;
-
-export declare function looksMemoryExhausted(watch: {
-	totalMb: number;
-	lowWaterMb: number;
-}): boolean;
 
 export declare function formatVerdict(
 	exit: { code: number | null; signal: string | null },
