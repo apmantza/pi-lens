@@ -355,6 +355,11 @@ export interface RefreshCandidate {
 	binaryName?: string;
 	checkArgs: string[];
 	verificationTimeoutMs: number;
+	/**
+	 * npm only — see `packageEntryVerification`. Carried through so the refresh
+	 * verifies the binary exactly the way the install did (#2722).
+	 */
+	packageEntryOf?: string;
 }
 
 /**
@@ -378,6 +383,9 @@ async function installedRefreshCandidates(): Promise<RefreshCandidate[]> {
 			verificationTimeoutMs: tool.verificationTimeoutMs ?? 10_000,
 			...(tool.packageName !== undefined && { packageName: tool.packageName }),
 			...(tool.binaryName !== undefined && { binaryName: tool.binaryName }),
+			...(tool.packageEntryOf !== undefined && {
+				packageEntryOf: tool.packageEntryOf,
+			}),
 		});
 	}
 	return candidates;
@@ -718,6 +726,10 @@ async function performNpmRefresh(
 		undefined,
 		candidate.verificationTimeoutMs,
 		candidate.checkArgs,
+		// #2722: the same verification the install used. Without this the daily
+		// refresh would demand a `--version` verdict from a server that can never
+		// give one — a ~4 MB doomed spawn that stamps the refresh failed forever.
+		candidate.packageEntryOf,
 	);
 	if (!verified) {
 		recordDegradationOnce({

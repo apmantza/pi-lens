@@ -168,15 +168,44 @@ function installBinShim(binaryName: string, exitCode = 0): void {
 function installFixture(
 	packageName: string,
 	version: string,
-	options: { binaryName?: string; shimExitCode?: number } = {},
+	options: {
+		binaryName?: string;
+		shimExitCode?: number;
+		/**
+		 * #2722: a `bin` map plus the entry module it names, which is the whole
+		 * evidence a `verification: "package-entry"` tool is verified from.
+		 */
+		bin?: Record<string, string>;
+	} = {},
 ): void {
 	const dir = path.join(NODE_MODULES, packageName);
+	const manifestPath = path.join(dir, "package.json");
+	// An `npm update` bumps the version; it does not rewrite what the package
+	// declares or change what its binary does. Re-installing over an existing
+	// fixture therefore CARRIES the previous `bin` map and shim exit code
+	// forward unless the caller overrides them (#2722).
+	let previousBin: Record<string, string> | undefined;
+	try {
+		previousBin = JSON.parse(fs.readFileSync(manifestPath, "utf-8")).bin;
+	} catch {
+		previousBin = undefined;
+	}
+	const bin = options.bin ?? previousBin;
+	const binaryName = options.binaryName ?? packageName;
 	fs.mkdirSync(dir, { recursive: true });
 	fs.writeFileSync(
-		path.join(dir, "package.json"),
-		JSON.stringify({ name: packageName, version }),
+		manifestPath,
+		JSON.stringify({ name: packageName, version, ...(bin && { bin }) }),
 	);
-	installBinShim(options.binaryName ?? packageName, options.shimExitCode ?? 0);
+	for (const entry of Object.values(bin ?? {})) {
+		const entryPath = path.join(dir, entry);
+		fs.mkdirSync(path.dirname(entryPath), { recursive: true });
+		fs.writeFileSync(entryPath, "module.exports = {};\n");
+	}
+	installBinShim(
+		binaryName,
+		options.shimExitCode ?? shimExitCodes.get(binaryName) ?? 0,
+	);
 }
 
 function installedVersion(packageName: string): string | undefined {
@@ -938,6 +967,50 @@ describe("post-update verification (review F2)", () => {
 			expect(verifyOptions).toHaveBeenCalledWith(
 				expect.objectContaining({ timeout: 30_000 }),
 			);
+		} finally {
+			TOOLS.splice(TOOLS.indexOf(fixtureTool), 1);
+		}
+	});
+
+	it("verifies a package-entry tool from the tree, never spawning it (#2722)", async () => {
+		// The daily refresh verifies the SAME binary `installNpmTool` does, so a
+		// tool whose `--version` probe can never return a verdict must not have
+		// one demanded of it after an `npm update` either. The fixture's shim
+		// EXITS 1 — if anything on this path still spawns `--version` at it, the
+		// refresh stamps the tool failed and takes it out of service.
+		const fixtureTool: ToolDefinition = {
+			id: "refresh-package-entry-fixture",
+			name: "Refresh package-entry fixture",
+			checkCommand: "refresh-package-entry-fixture",
+			checkArgs: ["--version"],
+			verification: "package-entry",
+			installStrategy: "npm",
+			packageName: "refresh-package-entry-fixture",
+			binaryName: "refresh-package-entry-fixture",
+		};
+		TOOLS.push(fixtureTool);
+		try {
+			installFixture("refresh-package-entry-fixture", "1.0.0", {
+				shimExitCode: 1,
+				bin: { "refresh-package-entry-fixture": "./lib/server.js" },
+			});
+			stubSpawn("ok", { "refresh-package-entry-fixture": "2.0.0" });
+			verifyCalls.mockClear();
+
+			const outcome = await runManagedToolRefresh(NOW);
+
+			expect(outcome.refreshed[0]).toMatchObject({
+				toolId: "refresh-package-entry-fixture",
+				ok: true,
+				verified: true,
+			});
+			expect(
+				verifyCalls.mock.calls.filter(
+					(call: unknown[]) =>
+						String(call[0]).includes("refresh-package-entry-fixture") &&
+						((call[1] as string[] | undefined) ?? []).includes("--version"),
+				),
+			).toEqual([]);
 		} finally {
 			TOOLS.splice(TOOLS.indexOf(fixtureTool), 1);
 		}

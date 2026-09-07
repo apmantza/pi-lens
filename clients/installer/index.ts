@@ -3706,6 +3706,13 @@ export interface RefreshableManagedTool {
 	/** Registry-scoped ceiling for managed verification probes. */
 	verificationTimeoutMs?: number;
 	/**
+	 * npm only — see {@link packageEntryVerification}. Carried on the candidate
+	 * because the refresh verifies the SAME binary `installNpmTool` does, and a
+	 * tool whose `--version` probe can never return a verdict must not have one
+	 * demanded of it after an update either (#2722).
+	 */
+	packageEntryOf?: string;
+	/**
 	 * The identity of what the tool's coordinate resolves to TODAY, when that
 	 * identity is knowable without a network call. `archive` and `maven` entries
 	 * carry a version pinned in this registry, so their identity is the resolved
@@ -3760,6 +3767,7 @@ export function getRefreshableManagedTools(): RefreshableManagedTool[] {
 					packageName: tool.packageName,
 					binaryName: tool.binaryName,
 					verificationTimeoutMs: tool.verificationTimeoutMs,
+					packageEntryOf: packageEntryVerification(tool),
 				});
 				break;
 			}
