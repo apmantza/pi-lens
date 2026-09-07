@@ -6,14 +6,16 @@
  * file) against the extension host's `process.cwd()` instead of the
  * project being linted.
  *
- * #1731 fixed this shape for sqlfluff BY SYMBOL and missed four more
- * instances (yamllint, ruff, spellcheck/typos, psscriptanalyzer) that #2691
- * reported. A symbol-grep for the next tool name will miss the next
- * instance the same way. This sweep instead walks every `safeSpawnAsync(`/
- * `safeSpawnSync(` call site directly under `clients/dispatch/runners/*.ts`
- * and fails, by file:line, on any whose options object literal does not
- * mention `cwd` at all -- catching the SHAPE (an omitted `cwd` key)
- * regardless of which tool's name appears at the call site.
+ * #1731 fixed this shape for sqlfluff BY SYMBOL and missed five more
+ * instances that a shape-based sweep found while fixing #2691's reported
+ * yamllint case: ruff, spellcheck/typos, psscriptanalyzer, oxlint, and
+ * shellcheck (the last two were not named in #2691 itself). A symbol-grep
+ * for the next tool name will miss the next instance the same way. This
+ * sweep instead walks every `safeSpawnAsync(`/`safeSpawnSync(` call site
+ * directly under `clients/dispatch/runners/*.ts` and fails, by file:line,
+ * on any whose options object literal does not mention `cwd` at all --
+ * catching the SHAPE (an omitted `cwd` key) regardless of which tool's
+ * name appears at the call site.
  *
  * Scoped to direct children of `runners/` (not `runners/utils/*.ts`, the
  * shared availability-probe/installer helpers): several of those
@@ -134,7 +136,7 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 	assertNonEmptyScan(
 		"runner-spawn-cwd-sweep: safeSpawnAsync/safeSpawnSync call sites found",
 		allSites.length,
-		// 55 call sites measured 2026-09-07; half rounded down.
+		// 54 call sites measured 2026-09-07; half rounded down.
 		25,
 	);
 
