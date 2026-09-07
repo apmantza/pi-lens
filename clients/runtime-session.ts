@@ -127,6 +127,8 @@ import { resetSpawnTimeoutCooldowns } from "./spawn-timeout-cooldown.js";
 import { resetTestRunnerDelivery } from "./test-runner-delivery.js";
 import { resetLspMutationNoBridgeDbgLatch } from "./lsp-mutation.js";
 import type { SessionStartClassification } from "./session-lifecycle.js";
+import type { PiLensGlobalConfig } from "./lens-config.js";
+import type { PiLensProjectConfig } from "./project-lens-config.js";
 
 /** Durable root-identity value on `session_start_total` records. */
 export type SessionStartRootTelemetry = boolean | "unknown";
@@ -144,6 +146,8 @@ interface SessionStartDeps {
 	sessionReason?: string;
 	handlerEnteredAt?: number;
 	getFlag: (name: string) => boolean | string | undefined;
+	globalConfig?: PiLensGlobalConfig;
+	projectConfig?: PiLensProjectConfig;
 	notify: (msg: string, level: "info" | "warning" | "error") => void;
 	dbg: (msg: string) => void;
 	log: (msg: string) => void;
@@ -449,11 +453,17 @@ function logProjectSnapshotProbe(args: {
 	}
 }
 
-function resolveStartupMode(): StartupMode {
+function resolveStartupMode(
+	projectConfig?: PiLensProjectConfig,
+	globalConfig?: PiLensGlobalConfig,
+): StartupMode {
 	const envMode = (process.env.PI_LENS_STARTUP_MODE ?? "").trim().toLowerCase();
 	if (envMode === "full" || envMode === "minimal" || envMode === "quick") {
 		return envMode;
 	}
+	const configMode =
+		projectConfig?.startup?.mode ?? globalConfig?.startup?.mode;
+	if (configMode) return configMode;
 
 	if (isPrintMode()) {
 		return "quick";
@@ -1201,6 +1211,10 @@ function scheduleStartupScansWithClients(
 		astGrepClient,
 		depChecker,
 	} = deps;
+	const analyzerEnabled = (flag: string): boolean => !deps.getFlag(flag);
+	if (!analyzerEnabled("no-complexity")) {
+		dbg("session_start complexity: skipped (disabled by config)");
+	}
 
 	// Some background scans are CPU-heavy and arrive on the event loop
 	// just as the user is most likely typing (right after /new). Defer
@@ -1311,6 +1325,11 @@ function scheduleStartupScansWithClients(
 		name: string,
 		task: () => Promise<void>,
 	): void => {
+		const flag = `no-${name}`;
+		if (name !== "opengrep" && name !== "trivy" && !analyzerEnabled(flag)) {
+			dbg(`session_start ${name}: skipped (disabled by config)`);
+			return;
+		}
 		if (skipHeavyweightScans) return;
 		void runTask(name, task);
 	};
@@ -1931,7 +1950,7 @@ export async function handleSessionStart(
 	//   entirely — but only when PI_LENS_STARTUP_MODE is unset in the env
 	//   (an explicit env var still takes highest precedence).
 	// Tunable: PI_LENS_WARMUP_DELAY_MS adjusts the warmup delay.
-	let startupMode = resolveStartupMode();
+	let startupMode = resolveStartupMode(deps.projectConfig, deps.globalConfig);
 	// SAFETY: these two flags are process-lifetime state pi-lens stashes on
 	// `globalThis` so a second extension instance in the same process sees the
 	// first one's warmup. There is no ambient declaration for them, and adding
@@ -1945,7 +1964,9 @@ export async function handleSessionStart(
 	if (
 		isFirstSessionOfProcess &&
 		process.env.PI_LENS_COLD_START_QUICK !== "0" &&
-		!process.env.PI_LENS_STARTUP_MODE
+		!process.env.PI_LENS_STARTUP_MODE &&
+		!deps.projectConfig?.startup?.mode &&
+		!deps.globalConfig?.startup?.mode
 	) {
 		// Apply host-provided override (e.g. MCP server forces "full") before
 		// falling back to the TUI quick-mode heuristic.
@@ -2869,7 +2890,12 @@ export async function handleSessionStart(
 		dbg("session_start: no language defaults selected for pre-install");
 	}
 
-	const startupScansWillRun = allowBootstrapTasks && startupScan.canWarmCaches;
+	const startupScansEnabled =
+		deps.projectConfig?.startup?.scans?.enabled ??
+		deps.globalConfig?.startup?.scans?.enabled ??
+		true;
+	const startupScansWillRun =
+		allowBootstrapTasks && startupScan.canWarmCaches && startupScansEnabled;
 	const jstsHeavyScansWillRun =
 		startupScansWillRun && canRunStartupHeavyScans(languageProfile, "jsts");
 	if (allowBootstrapTasks) {
@@ -2940,6 +2966,10 @@ export async function handleSessionStart(
 	// needs it before this point) and is stable across this whole call.
 	if (!allowBootstrapTasks) {
 		dbg("session_start: skipping startup background scans (startup mode)");
+	} else if (!startupScansEnabled) {
+		dbg(
+			"session_start: skipping startup background scans (disabled by config)",
+		);
 	} else if (!startupScan.canWarmCaches) {
 		dbg(
 			`session_start: skipping heavy scans (${startupScan.reason ?? "unknown"})`,

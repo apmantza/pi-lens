@@ -62,6 +62,10 @@ interface PiLensToggleConfig {
 }
 
 export interface PiLensGlobalConfig {
+	startup?: {
+		mode?: "quick" | "full" | "minimal";
+		scans?: { enabled?: boolean };
+	};
 	/**
 	 * Gitignore-style patterns excluded from pi-lens scans across ALL projects.
 	 * Merged at LOWEST precedence: a project `.gitignore` or `.pi-lens.json`
@@ -271,6 +275,25 @@ export function loadPiLensGlobalConfig(
 			? raw.ignore.filter((p): p is string => typeof p === "string")
 			: undefined;
 		if (ignore && ignore.length > 0) config.ignore = ignore;
+
+		const startup = asConfigObject(raw.startup);
+		if (startup) {
+			const startupConfig: PiLensGlobalConfig["startup"] = {};
+			const mode = startup.mode;
+			const scans = asConfigObject(startup.scans);
+			if (mode === "quick" || mode === "full" || mode === "minimal")
+				startupConfig.mode = mode;
+			else if ("mode" in startup)
+				warnInvalid('startup.mode must be "quick", "full", or "minimal"');
+			if (scans) {
+				if (typeof scans.enabled === "boolean") {
+					startupConfig.scans = { enabled: scans.enabled };
+				} else if ("enabled" in scans)
+					warnInvalid("startup.scans.enabled must be a boolean");
+			}
+			if (startupConfig.mode !== undefined || startupConfig.scans !== undefined)
+				config.startup = startupConfig;
+		}
 
 		const dispatch = asConfigObject(raw.dispatch);
 		if (dispatch) {

@@ -1037,6 +1037,7 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 	// needs nothing but the extension registry; `ComplexityClient.isSupportedFile`
 	// delegates to it, so this is not a second copy.
 	if (
+		!getFlag("no-complexity") &&
 		!isExternalOrVendor &&
 		filePath &&
 		!runtime.complexityBaselines.has(filePath) &&
