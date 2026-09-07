@@ -76,7 +76,7 @@ const RUNNERS_DIR = path.join(REPO_ROOT, "clients/dispatch/runners");
 
 /**
  * The exact population, measured 2026-09-07. These are pinned, not floored:
- * round 2 used `assertNonEmptyScan(…, 25)` against 58 live sites, and a floor
+ * round 2 declared an emptiness floor of 25 against 58 live sites, and a floor
  * that loose is one-sided — it catches a sweep that goes dead but not one that
  * quietly stops SEEING sites. Reverting `spawnPs` to positional arguments, or
  * reintroducing round 1's wrapper blindness, each drops three or more sites
