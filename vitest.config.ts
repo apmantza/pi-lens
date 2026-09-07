@@ -339,6 +339,10 @@ const wallClockBudgetInclude = [
 	// #2586 review F1: proves the ACTUAL stdout bytes supply-host-provided-deps.mjs
 	// prints (real child process, flake-shape admission).
 	"tests/scripts/supply-host-provided-deps.test.ts",
+	// #2700: the gating/advisory subset test resolves oxlint's real
+	// --print-config for both npm scripts (real child process, flake-shape
+	// admission).
+	"tests/scripts/lint-js.test.ts",
 	// #2507: a real headless child whose own exit decision is the subject — it
 	// must not drain mid `lsp_diagnostics`, and must still exit by itself
 	// afterwards. Real child spawn (flake-shape admission), and it also spawns a
@@ -361,6 +365,15 @@ const wallClockBudgetInclude = [
 	// spawns of scripts/classify-ci-failure.mjs, asserting exit code and argv
 	// wiring the library-level suite (in-process) cannot see.
 	"tests/scripts/classify-ci-failure-cli.test.ts",
+	// #2698: real `git init`/`add`/`commit`/`ls-files` calls against a
+	// throwaway fixture repo — gitignore/tracked-vs-untracked resolution is
+	// the exact mechanism under test, which no mock reproduces faithfully.
+	// No wall-clock budget assertion (a handful of `git` calls on a
+	// two-file fixture has none worth pinning); membership here is solely
+	// to satisfy flake-shape-ratchet.test.ts's real-process-spawn admission
+	// gate, which requires it for any newly admitted real spawn regardless
+	// of this list's own "carries a budget assertion" charter above.
+	"tests/scripts/knip-sibling-purge.test.ts",
 ];
 // #2512 round 2: runtime-turn-session.test.ts's "retires a deleted failed
 // target through the real client and records real telemetry" spawns a REAL
