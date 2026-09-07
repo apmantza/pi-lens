@@ -155,7 +155,7 @@ describe("automatic test-runner delivery (#2366)", () => {
 		}
 	});
 
-	it("does not rehydrate a shared-cache marker into another activation", () => {
+	it("rehydrates a shared-cache marker after quit-and-resume", () => {
 		const { env, cache, runtime } = setup();
 		try {
 			stageTestRunnerDelivery({
@@ -180,24 +180,15 @@ describe("automatic test-runner delivery (#2366)", () => {
 			});
 			resetTestRunnerDelivery();
 
-			expect(
-				consumeStagedTestRunnerFindings({
-					cwd: env.tmpDir,
-					sessionId: "session-a",
-					ownerId: "activation-b",
-					cacheManager: cache,
-					runtime,
-				}),
-			).toBeUndefined();
-			expect(
-				consumeStagedTestRunnerFindings({
-					cwd: env.tmpDir,
-					sessionId: "session-a",
-					ownerId: "activation-a",
-					cacheManager: cache,
-					runtime,
-				})?.messages,
-			).toHaveLength(1);
+			const resumed = consumeStagedTestRunnerFindings({
+				cwd: env.tmpDir,
+				sessionId: "session-a",
+				ownerId: "activation-b",
+				cacheManager: cache,
+				runtime,
+			});
+			expect(resumed?.messages).toHaveLength(1);
+			expect(resumed?.messages[0]?.content).toContain("FAIL");
 		} finally {
 			env.cleanup();
 		}

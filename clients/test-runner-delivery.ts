@@ -221,7 +221,6 @@ export function deliverTestRunnerFindings(args: {
 			...current,
 			deliveryEligible: {
 				sessionId: delivery.sessionId,
-				...(delivery.ownerId ? { ownerId: delivery.ownerId } : {}),
 				generation: delivery.generation,
 				eligibleAt: Date.now(),
 			},
@@ -281,8 +280,7 @@ export function consumeStagedTestRunnerFindings(args: {
 	const eligible = persisted?.deliveryEligible;
 	if (!delivery && persisted?.content && eligible) {
 		const sameSession = eligible.sessionId === args.sessionId;
-		const sameOwner = eligible.ownerId === args.ownerId;
-		if (!sameSession || !sameOwner) {
+		if (!sameSession) {
 			const foreignDelivery: PendingDelivery = {
 				cwd: args.cwd,
 				sessionId: eligible.sessionId,
@@ -296,7 +294,7 @@ export function consumeStagedTestRunnerFindings(args: {
 			record(deliveryKey, "foreign-session", foreignDelivery, {
 				currentSessionId: args.sessionId,
 				currentOwnerId: args.ownerId,
-				reason: !sameSession ? "session-mismatch" : "owner-mismatch",
+				reason: "session-mismatch",
 			});
 			return undefined;
 		}

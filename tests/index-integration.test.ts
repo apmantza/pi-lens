@@ -2317,6 +2317,61 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 	);
 
 	it(
+		"refuses a replacement session and retains the eligible marker",
+		async () => {
+			mockSuiteDeps();
+			const cache = new CacheManager(false);
+			cache.writeCache(
+				"test-runner-findings",
+				{ content: "FAIL replacement.test.ts:1", testRunGeneration: 1 },
+				tmpDir,
+			);
+			let stagedSessionId: string | undefined;
+			handleTurnEndHook = (deps) => {
+				stagedSessionId = deps.runtime.telemetrySessionId;
+				deps.onTestRunnerComplete?.({
+					cwd: tmpDir,
+					sessionId: stagedSessionId,
+					generation: 1,
+					targetCount: 1,
+					hasFindings: true,
+				});
+			};
+
+			const { default: registerExtension } = await import("../index.js");
+			const { pi, mock, handlers } = createMockPi();
+			registerExtension(pi as any);
+			const filePath = path.join(tmpDir, "src", "app.ts");
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(filePath, "export const x = 1;\n");
+			await driveEditThenTurnEnd(handlers, filePath);
+			await fireAgentSettled(handlers);
+			await mock.emit(
+				"session_start",
+				{},
+				makeCtx({
+					cwd: tmpDir,
+					sessionId: "replacement-session",
+				}),
+			);
+
+			const result = await mock.emit(
+				"context",
+				{ messages: [{ role: "user", content: "continue" }] },
+				{ cwd: tmpDir },
+			);
+			expect(result).toBeUndefined();
+			expect(
+				cache.readCache<{ deliveryEligible?: { sessionId: string } }>(
+					"test-runner-findings",
+					tmpDir,
+				)?.data.deliveryEligible,
+			).toMatchObject({ sessionId: stagedSessionId });
+		},
+		INTEGRATION_TIMEOUT_MS,
+	);
+
+	it(
 		"keeps primary and concurrent secondary test delivery on their owning activation",
 		async () => {
 			mockSuiteDeps();
