@@ -172,6 +172,15 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the CLI's real exit code and distinct infra label on exhaustion are unobservable from an in-process stub",
 	},
+	// 2026-09-07 (#2723): the second, independent tool-smoke red-notifier
+	// CLI's --dry-run env-to-report wiring and real (stubbed) `gh`
+	// create/edit/comment/close subcommands are the subject; same documented
+	// exception as its sibling notify-install-smoke-drift.test.ts above.
+	"real-process-spawn:scripts/notify-tool-smoke-red.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the CLI's env-to-report wiring and real gh subcommand invocations are unobservable from an in-process stub",
+	},
 };
 
 /** The `wallClockBudgetInclude` project's `include` list, read from the live config — not a hand-copied mirror of it (single-source-of-truth). */

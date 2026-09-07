@@ -77,20 +77,30 @@ describe("notify-tool-smoke-red.mjs --dry-run (#2723)", () => {
 		expect(out).toContain(
 			"`php` / `intelephense` — ensureTool(intelephense) failed (npm toolchain present): install failed",
 		);
-		expect(out).toContain(
-			"36 passed · 1 failed · 0 setup-failed · 12 skipped",
-		);
+		expect(out).toContain("36 passed · 1 failed · 0 setup-failed · 12 skipped");
 	});
 
 	it("plans a close when all three gating layers succeeded", () => {
 		const dir = mkTempDir("pi-lens-tool-smoke-clean-");
 		const out = runDryRun({
 			TOOL_LAYER_OUTCOME: "success",
-			TOOL_LAYER_LOG: writeLog(dir, "tool.log", "40 passed · 0 failed · 0 setup-failed · 0 skipped (tool/config unavailable)\n"),
+			TOOL_LAYER_LOG: writeLog(
+				dir,
+				"tool.log",
+				"40 passed · 0 failed · 0 setup-failed · 0 skipped (tool/config unavailable)\n",
+			),
 			LSP_HANDSHAKE_OUTCOME: "success",
-			LSP_HANDSHAKE_LOG: writeLog(dir, "lsp.log", "38 passed · 0 failed · 0 setup-failed · 0 skipped (tool/config unavailable)\n"),
+			LSP_HANDSHAKE_LOG: writeLog(
+				dir,
+				"lsp.log",
+				"38 passed · 0 failed · 0 setup-failed · 0 skipped (tool/config unavailable)\n",
+			),
 			FORMAT_LAYER_OUTCOME: "success",
-			FORMAT_LAYER_LOG: writeLog(dir, "fmt.log", "10 passed · 0 failed · 0 setup-failed · 0 skipped (tool/config unavailable)\n"),
+			FORMAT_LAYER_LOG: writeLog(
+				dir,
+				"fmt.log",
+				"10 passed · 0 failed · 0 setup-failed · 0 skipped (tool/config unavailable)\n",
+			),
 		});
 		expect(out).toContain("action=close-if-open");
 	});
@@ -103,7 +113,11 @@ describe("notify-tool-smoke-red.mjs --dry-run (#2723)", () => {
 		const dir = mkTempDir("pi-lens-tool-smoke-early-fail-");
 		const out = runDryRun({
 			TOOL_LAYER_OUTCOME: "failure",
-			TOOL_LAYER_LOG: writeLog(dir, "tool.log", "0 passed · 1 failed · 0 setup-failed · 0 skipped (tool/config unavailable)\n"),
+			TOOL_LAYER_LOG: writeLog(
+				dir,
+				"tool.log",
+				"0 passed · 1 failed · 0 setup-failed · 0 skipped (tool/config unavailable)\n",
+			),
 			LSP_HANDSHAKE_OUTCOME: "skipped",
 			LSP_HANDSHAKE_LOG: writeLog(dir, "lsp.log", ""),
 			FORMAT_LAYER_OUTCOME: "skipped",
@@ -122,7 +136,11 @@ describe("notify-tool-smoke-red.mjs --dry-run (#2723)", () => {
 		const dir = mkTempDir("pi-lens-tool-smoke-cancelled-");
 		const out = runDryRun({
 			TOOL_LAYER_OUTCOME: "success",
-			TOOL_LAYER_LOG: writeLog(dir, "tool.log", "40 passed · 0 failed · 0 setup-failed · 0 skipped (tool/config unavailable)\n"),
+			TOOL_LAYER_LOG: writeLog(
+				dir,
+				"tool.log",
+				"40 passed · 0 failed · 0 setup-failed · 0 skipped (tool/config unavailable)\n",
+			),
 			LSP_HANDSHAKE_OUTCOME: "cancelled",
 			LSP_HANDSHAKE_LOG: writeLog(dir, "lsp.log", ""),
 			FORMAT_LAYER_OUTCOME: "skipped",
@@ -199,7 +217,11 @@ function readGhCalls(logFile: string): string[][] {
 
 const RED_ENV = (dir: string) => ({
 	TOOL_LAYER_OUTCOME: "success",
-	TOOL_LAYER_LOG: writeLog(dir, "tool.log", "40 passed · 0 failed · 0 setup-failed · 0 skipped (tool/config unavailable)\n"),
+	TOOL_LAYER_LOG: writeLog(
+		dir,
+		"tool.log",
+		"40 passed · 0 failed · 0 setup-failed · 0 skipped (tool/config unavailable)\n",
+	),
 	LSP_HANDSHAKE_OUTCOME: "failure",
 	LSP_HANDSHAKE_LOG: writeLog(dir, "lsp.log", REPLAY_LOG),
 	FORMAT_LAYER_OUTCOME: "skipped",
@@ -208,11 +230,23 @@ const RED_ENV = (dir: string) => ({
 
 const GREEN_ENV = (dir: string) => ({
 	TOOL_LAYER_OUTCOME: "success",
-	TOOL_LAYER_LOG: writeLog(dir, "tool.log", "40 passed · 0 failed · 0 setup-failed · 0 skipped (tool/config unavailable)\n"),
+	TOOL_LAYER_LOG: writeLog(
+		dir,
+		"tool.log",
+		"40 passed · 0 failed · 0 setup-failed · 0 skipped (tool/config unavailable)\n",
+	),
 	LSP_HANDSHAKE_OUTCOME: "success",
-	LSP_HANDSHAKE_LOG: writeLog(dir, "lsp.log", "38 passed · 0 failed · 0 setup-failed · 0 skipped (tool/config unavailable)\n"),
+	LSP_HANDSHAKE_LOG: writeLog(
+		dir,
+		"lsp.log",
+		"38 passed · 0 failed · 0 setup-failed · 0 skipped (tool/config unavailable)\n",
+	),
 	FORMAT_LAYER_OUTCOME: "success",
-	FORMAT_LAYER_LOG: writeLog(dir, "fmt.log", "10 passed · 0 failed · 0 setup-failed · 0 skipped (tool/config unavailable)\n"),
+	FORMAT_LAYER_LOG: writeLog(
+		dir,
+		"fmt.log",
+		"10 passed · 0 failed · 0 setup-failed · 0 skipped (tool/config unavailable)\n",
+	),
 });
 
 describe("notify-tool-smoke-red.mjs against a real (stubbed) gh (#2723)", () => {
@@ -247,9 +281,9 @@ describe("notify-tool-smoke-red.mjs against a real (stubbed) gh (#2723)", () => 
 		expect(out).toContain("updated tracking issue #4343");
 		expect(out).toContain("consecutive red: 2");
 		const calls = readGhCalls(logFile);
-		expect(calls.filter((c) => c[0] === "issue" && c[1] === "create").length).toBe(
-			0,
-		);
+		expect(
+			calls.filter((c) => c[0] === "issue" && c[1] === "create").length,
+		).toBe(0);
 		expect(calls.some((c) => c[0] === "issue" && c[1] === "edit")).toBe(true);
 		expect(calls.some((c) => c[0] === "issue" && c[1] === "comment")).toBe(
 			true,
@@ -285,34 +319,27 @@ describe("notify-tool-smoke-red.mjs against a real (stubbed) gh (#2723)", () => 
 		).toBe(false);
 	});
 
-	// Acceptance #5: "A thrown notifier on a green run leaves it green; on a
-	// red run, red." -- this script's OWN internal try/catch around main()
-	// must swallow any thrown error and still `process.exit(0)`; the workflow
-	// step's `continue-on-error: true` covers the other half (the nightly's
-	// conclusion is driven by the three gating layer steps, never by this
-	// step). Simulated here by pointing `gh` at a binary that always throws.
-	it("acceptance #5: a thrown gh call never produces a nonzero exit, on a red OR green run", () => {
-		const root = mkTempDir("pi-lens-tool-smoke-gh-throw-");
-		const logDir = mkTempDir("pi-lens-tool-smoke-logs-");
-		const binDir = path.join(root, "bin");
-		fs.mkdirSync(binDir);
-		fs.writeFileSync(
-			path.join(binDir, "gh"),
-			["#!/usr/bin/env node", 'process.stderr.write("boom\\n");', "process.exit(1);", ""].join(
-				"\n",
-			),
-			{ mode: 0o755 },
-		);
-		const redResult = spawnSync(process.execPath, [CLI], {
-			env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, ...RED_ENV(logDir) },
+	// Acceptance #5, the genuinely discriminating case: every `gh` call in
+	// this script already sits behind its OWN local try/catch (findTrackingIssue,
+	// the create/edit/comment block, the close block), so a throwing `gh`
+	// alone never reaches the OUTER try/catch around main() -- that test
+	// below passes even with the outer try/catch deleted (proved by mutation
+	// during this PR's own mutation-proofing pass). `writeBodyToTempFile`
+	// (an `fs.mkdtempSync` under `os.tmpdir()`) is the one call in the
+	// "file-or-refresh" path that ISN'T behind a local try/catch -- pointing
+	// TMPDIR at a nonexistent directory forces exactly that failure, so only
+	// the outer wrapper can save the exit code.
+	it("acceptance #5: an uncaught internal throw (TMPDIR unwritable) still exits 0 on a red run", () => {
+		const dir = mkTempDir("pi-lens-tool-smoke-tmpdir-");
+		const result = spawnSync(process.execPath, [CLI], {
+			env: {
+				...process.env,
+				TMPDIR: "/nonexistent-dir-2723-xyz",
+				...RED_ENV(dir),
+			},
 			encoding: "utf-8",
 		});
-		expect(redResult.status).toBe(0);
-
-		const greenResult = spawnSync(process.execPath, [CLI], {
-			env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, ...GREEN_ENV(logDir) },
-			encoding: "utf-8",
-		});
-		expect(greenResult.status).toBe(0);
+		expect(result.status).toBe(0);
+		expect(result.stderr).toContain("unexpected error");
 	});
 });

@@ -70,7 +70,8 @@ describe("parseFailingRows (#2723)", () => {
 	});
 
 	it("returns an empty array for a clean log with no ✗ rows", () => {
-		const log = "✓  go           gopls                        3     ok\n36 passed · 0 failed · 0 setup-failed · 0 skipped (tool/config unavailable)\n";
+		const log =
+			"✓  go           gopls                        3     ok\n36 passed · 0 failed · 0 setup-failed · 0 skipped (tool/config unavailable)\n";
 		expect(parseFailingRows(log)).toEqual([]);
 	});
 
@@ -109,7 +110,9 @@ describe("buildLayer (#2723)", () => {
 
 describe("parseConsecutiveRedCount / nextConsecutiveRedCount (#2723 acceptance #1)", () => {
 	it("reads back the count this module's own body builder writes", () => {
-		expect(parseConsecutiveRedCount("blah\nConsecutive red nights: **3**\nblah")).toBe(3);
+		expect(
+			parseConsecutiveRedCount("blah\nConsecutive red nights: **3**\nblah"),
+		).toBe(3);
 	});
 
 	it("reads 0 when the line is absent (first red night)", () => {
@@ -148,7 +151,11 @@ describe("decideAction reused from install-smoke-drift.mjs, applied to tool-smok
 describe("buildToolSmokeDriftBody (#2723 acceptance #4: names both the ✗ row and the summary line)", () => {
 	const report = {
 		layers: [
-			buildLayer("Tool layer", "success", "40 passed · 0 failed · 0 setup-failed · 0 skipped (tool/config unavailable)"),
+			buildLayer(
+				"Tool layer",
+				"success",
+				"40 passed · 0 failed · 0 setup-failed · 0 skipped (tool/config unavailable)",
+			),
 			buildLayer("LSP handshake layer", "failure", REPLAY_LOG),
 			buildLayer("Format layer", "skipped", null),
 		],
@@ -169,7 +176,9 @@ describe("buildToolSmokeDriftBody (#2723 acceptance #4: names both the ✗ row a
 	});
 
 	it("includes the replayed summary line's counts for the failing layer", () => {
-		expect(body).toContain("36 passed · 1 failed · 0 setup-failed · 12 skipped");
+		expect(body).toContain(
+			"36 passed · 1 failed · 0 setup-failed · 12 skipped",
+		);
 	});
 
 	it("includes the consecutive-red count", () => {
@@ -183,7 +192,9 @@ describe("buildToolSmokeDriftBody (#2723 acceptance #4: names both the ✗ row a
 	});
 
 	it("says the tracking issue auto-closes on green", () => {
-		expect(body).toContain("closed automatically once a nightly run is fully green");
+		expect(body).toContain(
+			"closed automatically once a nightly run is fully green",
+		);
 	});
 });
 

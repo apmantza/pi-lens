@@ -131,7 +131,9 @@ function readExistingBody(number) {
 }
 
 function writeBodyToTempFile(body) {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pilens-tool-smoke-drift-"));
+	const dir = fs.mkdtempSync(
+		path.join(os.tmpdir(), "pilens-tool-smoke-drift-"),
+	);
 	const file = path.join(dir, "body.md");
 	fs.writeFileSync(file, body);
 	return file;
@@ -161,7 +163,10 @@ function main(env) {
 
 	if (dryRun) {
 		const body = buildToolSmokeDriftBody(
-			{ ...report, consecutiveRed: action === "file-or-refresh" ? 1 : undefined },
+			{
+				...report,
+				consecutiveRed: action === "file-or-refresh" ? 1 : undefined,
+			},
 			{ runUrl: workflowRunUrl(env) },
 		);
 		console.log(
@@ -231,7 +236,9 @@ function main(env) {
 				`[notify-tool-smoke-red] closed tracking issue #${existing.number} (drift resolved).`,
 			);
 		} catch (e) {
-			console.error(`[notify-tool-smoke-red] gh issue close failed: ${e?.message ?? e}`);
+			console.error(
+				`[notify-tool-smoke-red] gh issue close failed: ${e?.message ?? e}`,
+			);
 		}
 		return;
 	}

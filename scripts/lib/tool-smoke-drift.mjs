@@ -217,7 +217,9 @@ export function buildToolSmokeDriftBody(report, opts = {}) {
 	if (failingRows.length > 0) {
 		lines.push("", "Failing rows:", "");
 		for (const r of failingRows) {
-			lines.push(`- **[${r.layer}]** \`${r.lang}\` / \`${r.runner}\` — ${r.detail}`);
+			lines.push(
+				`- **[${r.layer}]** \`${r.lang}\` / \`${r.runner}\` — ${r.detail}`,
+			);
 		}
 	}
 	if (opts.runUrl) {

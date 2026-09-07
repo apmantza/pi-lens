@@ -38,6 +38,7 @@
 		"scripts/download-grammars.test.ts": 2,
 		"scripts/lint-js.test.ts": 4,
 		"scripts/notify-install-smoke-drift.test.ts": 5,
+		"scripts/notify-tool-smoke-red.test.ts": 5,
 		"scripts/npm-retry.test.ts": 3,
 		"scripts/pre-push-targeted-tests.test.ts": 3,
 		"scripts/prune-agent-worktrees.test.ts": 5,

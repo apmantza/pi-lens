@@ -59,7 +59,7 @@ describe("tool-smoke.yml's red-notify step runs on failure too (#2723)", () => {
 	const workflow = loadWorkflow();
 	const notifyStep = findStep(workflow, NOTIFY_STEP_NAME);
 
-	it('carries if: always() -- the exact gate #2723\'s bug lacked', () => {
+	it("carries if: always() -- the exact gate #2723's bug lacked", () => {
 		expect(notifyStep.if).toBe("always()");
 	});
 
@@ -79,16 +79,12 @@ describe("tool-smoke.yml's red-notify step runs on failure too (#2723)", () => {
 		expect(env.LSP_HANDSHAKE_OUTCOME).toBe(
 			"${{ steps.lsp_handshake.outcome }}",
 		);
-		expect(env.FORMAT_LAYER_OUTCOME).toBe(
-			"${{ steps.format_layer.outcome }}",
-		);
+		expect(env.FORMAT_LAYER_OUTCOME).toBe("${{ steps.format_layer.outcome }}");
 	});
 
 	it("each referenced layer step actually declares the id the notify step reads", () => {
 		expect(findStep(workflow, "Tool layer").id).toBe("tool_layer");
-		expect(findStep(workflow, "LSP handshake layer").id).toBe(
-			"lsp_handshake",
-		);
+		expect(findStep(workflow, "LSP handshake layer").id).toBe("lsp_handshake");
 		expect(findStep(workflow, "Format layer").id).toBe("format_layer");
 	});
 

@@ -359,6 +359,11 @@ const wallClockBudgetInclude = [
 	// spawns of scripts/classify-ci-failure.mjs, asserting exit code and argv
 	// wiring the library-level suite (in-process) cannot see.
 	"tests/scripts/classify-ci-failure-cli.test.ts",
+	// #2723: mirrors notify-install-smoke-drift.test.ts's own admission --
+	// this second, independent drift-notifier CLI's --dry-run env-reading and
+	// real (stubbed) `gh` wiring are the subject; no in-process double is
+	// faithful to the real subcommands it invokes.
+	"tests/scripts/notify-tool-smoke-red.test.ts",
 ];
 // #2512 round 2: runtime-turn-session.test.ts's "retires a deleted failed
 // target through the real client and records real telemetry" spawns a REAL
