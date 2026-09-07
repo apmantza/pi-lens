@@ -515,17 +515,19 @@ describe("K10 — `// cwd-exempt:` tags", () => {
 		]);
 	});
 
-	it("f-exempt-thin-reason: a tag's reason text is carried through for the length gate", async () => {
-		const scan = await scanSpawnCwd(
-			"fixture.ts",
-			`
+	it("f-exempt-thin-reason: a tag with no real reason exempts nothing", async () => {
+		// The admission has to cost something (defect shape 38): a bare tag is a
+		// one-line data edit that would otherwise buy a permanent pass.
+		const source = `
 			async function probe() {
 				// cwd-exempt: no
 				await safeSpawnAsync("cl", [], { timeout: 5000 });
 			}
-		`,
-		);
-		expect(scan.sites.map((s) => s.exemptReason)).toEqual(["no"]);
+		`;
+		const { flagged } = await analyze(source);
+		expect(flagged).toEqual([
+			at(source, "await safeSpawnAsync(", "safeSpawnAsync"),
+		]);
 	});
 
 	it("exempts a WRAPPER call site by the tag above the wrapper call, not the spawn", async () => {

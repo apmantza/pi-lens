@@ -74,7 +74,12 @@ export interface SpawnCwdSite {
 	kind: "direct" | "wrapper";
 	/** Whether this site supplies a cwd (see the two rules in the header). */
 	hasCwd: boolean;
-	/** Text after `// cwd-exempt:` on the line directly above, when present. */
+	/**
+	 * Text after `// cwd-exempt:` on the line DIRECTLY above the call, when
+	 * that text is a real reason (see {@link MIN_EXEMPT_REASON_LENGTH}). A tag
+	 * with a too-short reason leaves this undefined, so the site is reported
+	 * like any other one missing a `cwd`.
+	 */
 	exemptReason?: string;
 }
 
@@ -100,6 +105,14 @@ const SPAWN_NAMES = new Set(["safeSpawnAsync", "safeSpawnSync"]);
 /** `safeSpawn*(command, args, options?)` — the options object is argument 2. */
 const SPAWN_OPTIONS_INDEX = 2;
 const EXEMPT_TAG = /^\s*\/\/\s*cwd-exempt:\s*(.+)/;
+/**
+ * An exemption needs a REASON, not a tag. Below this length the tag does not
+ * exempt anything and the site is reported like any other missing `cwd` —
+ * one rule in one place, so a fixture can prove it. Rounds 1 and 2 spelled
+ * this as a separate assertion in the sweep, where it could only ever see the
+ * live tree's (all long) reasons and so reverted green under any mutation.
+ */
+const MIN_EXEMPT_REASON_LENGTH = 15;
 
 const FUNCTION_KINDS = new Set([
 	"function_declaration",
@@ -454,8 +467,12 @@ export async function scanSpawnCwd(
 	const napi = await loadAstGrepNapi();
 	const root = napi.parse(napi.Lang.TypeScript, source).root();
 	const rawLines = source.split("\n");
-	const exemptAbove = (line: number): string | undefined =>
-		EXEMPT_TAG.exec(rawLines[line - 2] ?? "")?.[1]?.trim();
+	const exemptAbove = (line: number): string | undefined => {
+		const reason = EXEMPT_TAG.exec(rawLines[line - 2] ?? "")?.[1]?.trim();
+		return reason && reason.length >= MIN_EXEMPT_REASON_LENGTH
+			? reason
+			: undefined;
+	};
 
 	const calls = allCalls(root);
 	const sites: SpawnCwdSite[] = [];

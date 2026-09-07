@@ -51,8 +51,10 @@
  * A call site that genuinely has no cwd to get wrong carries a single-line
  * `// cwd-exempt: <reason>` comment on the line DIRECTLY above the call (other
  * explanatory comments may sit above that; the tag line itself must be the one
- * immediately preceding). The sweep fails on an exemption whose call site now
- * passes `cwd` anyway, so a stale exemption cannot rot in place.
+ * immediately preceding), and the reason has to be a real one — a tag under
+ * 15 characters of reason exempts nothing, which the scan decides so a fixture
+ * can prove it. The sweep additionally fails on an exemption whose call site
+ * now passes `cwd` anyway, so a stale exemption cannot rot in place.
  */
 
 import * as fs from "node:fs";
@@ -221,11 +223,5 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 					.map((site) => `  ${site.file}:${site.line} (${site.exemptReason})`)
 					.join("\n"),
 		).toHaveLength(0);
-		for (const site of exemptSites) {
-			expect(
-				(site.exemptReason ?? "").length,
-				`${site.file}:${site.line}'s cwd-exempt comment needs a real reason`,
-			).toBeGreaterThanOrEqual(15);
-		}
 	});
 });
