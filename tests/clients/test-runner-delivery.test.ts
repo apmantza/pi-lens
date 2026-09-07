@@ -8,10 +8,10 @@ import {
 	consumeStagedTestRunnerFindings,
 	deliverTestRunnerFindings,
 	deliverStagedTestRunnerFindings,
+	resetTestRunnerDelivery,
 	stageTestRunnerDelivery,
 } from "../../clients/test-runner-delivery.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
-import { createPiMock } from "../support/pi-mock.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 describe("automatic test-runner delivery (#2366)", () => {
@@ -33,7 +33,6 @@ describe("automatic test-runner delivery (#2366)", () => {
 	it("delivers once through context without appending a terminal entry", () => {
 		const { env, cache, runtime } = setup();
 		try {
-			const pi = createPiMock();
 			stageTestRunnerDelivery({
 				cwd: env.tmpDir,
 				sessionId: "session-a",
@@ -42,12 +41,18 @@ describe("automatic test-runner delivery (#2366)", () => {
 				hasFindings: true,
 			});
 			deliverTestRunnerFindings({
-				pi: pi.asExtensionAPI(),
 				ctx: { cwd: env.tmpDir, isIdle: () => true },
 				cacheManager: cache,
 				runtime,
 				sessionId: "session-a",
 			});
+			expect(
+				cache.readCache<{
+					deliveryEligible?: { sessionId: string; generation: number };
+				}>("test-runner-findings", env.tmpDir)?.data.deliveryEligible,
+			).toMatchObject({ sessionId: "session-a", generation: 1 });
+			// This is the exact reset invoked by production handleSessionStart.
+			resetTestRunnerDelivery();
 
 			expect(
 				cache.readCache<{ content: string }>("test-runner-findings", env.tmpDir)
@@ -65,13 +70,26 @@ describe("automatic test-runner delivery (#2366)", () => {
 			);
 			expect(context?.messages[0]?.content).toContain("FAIL");
 			expect(
-			consumeStagedTestRunnerFindings({
-				cwd: env.tmpDir,
-				sessionId: "session-a",
-				cacheManager: cache,
-				runtime,
-			}),
-		).toBeUndefined();
+				cache.readCache<Record<string, unknown>>(
+					"test-runner-findings",
+					env.tmpDir,
+				)?.data.content,
+			).toBe("");
+			resetTestRunnerDelivery();
+			expect(
+				consumeStagedTestRunnerFindings({
+					cwd: env.tmpDir,
+					sessionId: "session-a",
+					cacheManager: cache,
+					runtime,
+				}),
+			).toBeUndefined();
+			expect(
+				cache.readCache<{ deliveryEligible?: unknown }>(
+					"test-runner-findings",
+					env.tmpDir,
+				)?.data.deliveryEligible,
+			).toBeUndefined();
 		} finally {
 			env.cleanup();
 		}
@@ -80,7 +98,6 @@ describe("automatic test-runner delivery (#2366)", () => {
 	it("carries a result when a prompt makes the immediate idle check fail", () => {
 		const { env, cache, runtime } = setup();
 		try {
-			const pi = createPiMock();
 			let idle = false;
 			stageTestRunnerDelivery({
 				cwd: env.tmpDir,
@@ -90,7 +107,6 @@ describe("automatic test-runner delivery (#2366)", () => {
 				hasFindings: true,
 			});
 			deliverTestRunnerFindings({
-				pi: pi.asExtensionAPI(),
 				ctx: { cwd: env.tmpDir, isIdle: () => idle },
 				cacheManager: cache,
 				runtime,
@@ -98,7 +114,6 @@ describe("automatic test-runner delivery (#2366)", () => {
 			});
 			idle = true;
 			deliverTestRunnerFindings({
-				pi: pi.asExtensionAPI(),
 				ctx: { cwd: env.tmpDir, isIdle: () => idle },
 				cacheManager: cache,
 				runtime,
@@ -112,7 +127,6 @@ describe("automatic test-runner delivery (#2366)", () => {
 	it("rechecks idleness immediately before append", () => {
 		const { env, cache, runtime } = setup();
 		try {
-			const pi = createPiMock();
 			let checks = 0;
 			stageTestRunnerDelivery({
 				cwd: env.tmpDir,
@@ -122,7 +136,6 @@ describe("automatic test-runner delivery (#2366)", () => {
 				hasFindings: true,
 			});
 			deliverTestRunnerFindings({
-				pi: pi.asExtensionAPI(),
 				ctx: {
 					cwd: env.tmpDir,
 					isIdle: () => ++checks === 1,
@@ -140,7 +153,6 @@ describe("automatic test-runner delivery (#2366)", () => {
 	it("retains a result when a stale host context rejects idle access", () => {
 		const { env, cache, runtime } = setup();
 		try {
-			const pi = createPiMock();
 			stageTestRunnerDelivery({
 				cwd: env.tmpDir,
 				sessionId: "session-a",
@@ -150,7 +162,6 @@ describe("automatic test-runner delivery (#2366)", () => {
 			});
 			expect(() =>
 				deliverTestRunnerFindings({
-					pi: pi.asExtensionAPI(),
 					ctx: {
 						cwd: env.tmpDir,
 						isIdle: () => {
@@ -170,7 +181,6 @@ describe("automatic test-runner delivery (#2366)", () => {
 	it("does not resurrect an older generation after a clean result supersedes it", () => {
 		const { env, cache, runtime } = setup();
 		try {
-			const pi = createPiMock();
 			stageTestRunnerDelivery({
 				cwd: env.tmpDir,
 				sessionId: "session-a",
@@ -191,7 +201,6 @@ describe("automatic test-runner delivery (#2366)", () => {
 				hasFindings: false,
 			});
 			deliverTestRunnerFindings({
-				pi: pi.asExtensionAPI(),
 				ctx: { cwd: env.tmpDir, isIdle: () => true },
 				cacheManager: cache,
 				runtime,
@@ -205,7 +214,6 @@ describe("automatic test-runner delivery (#2366)", () => {
 	it("drops a pending older generation while newer findings remain cached", () => {
 		const { env, cache, runtime } = setup();
 		try {
-			const pi = createPiMock();
 			stageTestRunnerDelivery({
 				cwd: env.tmpDir,
 				sessionId: "session-a",
@@ -221,7 +229,6 @@ describe("automatic test-runner delivery (#2366)", () => {
 				env.tmpDir,
 			);
 			deliverTestRunnerFindings({
-				pi: pi.asExtensionAPI(),
 				ctx: { cwd: env.tmpDir, isIdle: () => true },
 				cacheManager: cache,
 				runtime,
@@ -239,20 +246,16 @@ describe("automatic test-runner delivery (#2366)", () => {
 	it("delivers each activation's staged result through its own owner", () => {
 		const { env, cache, runtime } = setup();
 		try {
-			const primaryPi = createPiMock();
-			const secondaryPi = createPiMock();
 			const secondaryRuntime = new RuntimeCoordinator();
 			secondaryRuntime.setTelemetryIdentity({ sessionId: "session-b" });
 			const primaryOwner = {
 				ownerId: "activation-primary",
-				pi: primaryPi.asExtensionAPI(),
 				cacheManager: cache,
 				runtime,
 				getCtx: () => ({ cwd: env.tmpDir, isIdle: () => true }),
 			};
 			const secondaryOwner = {
 				ownerId: "activation-secondary",
-				pi: secondaryPi.asExtensionAPI(),
 				cacheManager: cache,
 				runtime: secondaryRuntime,
 				getCtx: () => ({ cwd: env.tmpDir, isIdle: () => true }),
@@ -284,7 +287,6 @@ describe("automatic test-runner delivery (#2366)", () => {
 				sessionId: "session-b",
 				ownerId: "activation-secondary",
 			});
-
 		} finally {
 			env.cleanup();
 		}
@@ -308,7 +310,6 @@ describe("automatic test-runner delivery (#2366)", () => {
 				env.tmpDir,
 			);
 			fs.rmSync(file);
-			const pi = createPiMock();
 			stageTestRunnerDelivery({
 				cwd: env.tmpDir,
 				sessionId: "session-a",
@@ -317,41 +318,11 @@ describe("automatic test-runner delivery (#2366)", () => {
 				hasFindings: true,
 			});
 			deliverTestRunnerFindings({
-				pi: pi.asExtensionAPI(),
 				ctx: { cwd: env.tmpDir, isIdle: () => true },
 				cacheManager: cache,
 				runtime,
 				sessionId: "session-a",
 			});
-		} finally {
-			env.cleanup();
-		}
-	});
-
-	it("does not consume another session or fall back when appendEntry is absent", () => {
-		const { env, cache, runtime } = setup();
-		try {
-			const pi = createPiMock();
-			stageTestRunnerDelivery({
-				cwd: env.tmpDir,
-				sessionId: "session-a",
-				generation: 1,
-				targetCount: 1,
-				hasFindings: true,
-			});
-			delete (pi as unknown as Record<string, unknown>).appendEntry;
-			deliverTestRunnerFindings({
-				pi: pi.asExtensionAPI(),
-				ctx: { cwd: env.tmpDir, isIdle: () => true },
-				cacheManager: cache,
-				runtime,
-				sessionId: "session-a",
-			});
-			expect(pi.sentMessages).toHaveLength(0);
-			expect(
-				cache.readCache<{ content: string }>("test-runner-findings", env.tmpDir)
-					?.data.content,
-			).toContain("FAIL");
 		} finally {
 			env.cleanup();
 		}
@@ -360,7 +331,6 @@ describe("automatic test-runner delivery (#2366)", () => {
 	it("delivers eligible findings without a terminal renderer", () => {
 		const { env, cache, runtime } = setup();
 		try {
-			const pi = createPiMock();
 			stageTestRunnerDelivery({
 				cwd: env.tmpDir,
 				sessionId: "session-a",
@@ -369,7 +339,6 @@ describe("automatic test-runner delivery (#2366)", () => {
 				hasFindings: true,
 			});
 			deliverTestRunnerFindings({
-				pi: pi.asExtensionAPI(),
 				ctx: { cwd: env.tmpDir, isIdle: () => true },
 				cacheManager: cache,
 				runtime,
@@ -401,7 +370,6 @@ describe("automatic test-runner delivery (#2366)", () => {
 			});
 			const deliver = () =>
 				deliverTestRunnerFindings({
-					pi: createPiMock().asExtensionAPI(),
 					ctx: { cwd: env.tmpDir, isIdle: () => idle },
 					cacheManager: cache,
 					runtime,
@@ -434,6 +402,15 @@ describe("automatic test-runner delivery (#2366)", () => {
 					runtime,
 				})?.messages,
 			).toHaveLength(1);
+			resetTestRunnerDelivery();
+			expect(
+				consumeStagedTestRunnerFindings({
+					cwd: env.tmpDir,
+					sessionId: "session-a",
+					cacheManager: cache,
+					runtime,
+				}),
+			).toBeUndefined();
 		} finally {
 			env.cleanup();
 		}
@@ -462,7 +439,6 @@ describe("automatic test-runner delivery (#2366)", () => {
 				hasFindings: true,
 			});
 			deliverTestRunnerFindings({
-				pi: createPiMock().asExtensionAPI(),
 				ctx: { cwd: env.tmpDir, isIdle: () => true },
 				cacheManager: cache,
 				runtime,
@@ -491,7 +467,6 @@ describe("automatic test-runner delivery (#2366)", () => {
 				hasFindings: true,
 			});
 			deliverTestRunnerFindings({
-				pi: createPiMock().asExtensionAPI(),
 				ctx: { cwd: env.tmpDir, isIdle: () => true },
 				cacheManager: cache,
 				runtime,

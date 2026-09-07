@@ -394,8 +394,9 @@ retains its owning host, cache, runtime, and event context, while the quiet
 window receives the settled event's stable session identity and activation
 owner. A process-global latest activation must never select the pi/cache/runtime
 for another session's result. Persisted test-runner generations gate
-eligibility before the next context build, and consumption remains once-only
-through the real context seam (#2366, #2733).
+eligibility before the next context build, and the eligible session/generation
+marker rehydrates after session reset; retirement clears it, so consumption
+remains once-only through the real context seam (#2366, #2733).
 
 Live contracts, grouped by subsystem. Consult the group for the seam you
 touch; each paragraph carries its evidence issue. New entries join their

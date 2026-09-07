@@ -2279,26 +2279,36 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 			await driveEditThenTurnEnd(handlers, filePath);
 
 			await fireAgentSettled(handlers);
+			// The production session-start path clears in-memory delivery state.
+			// Eligibility must survive that reset and reach the next context build.
+			await mock.emit(
+				"session_start",
+				{},
+				makeCtx({ cwd: tmpDir, sessionId: "replacement-session" }),
+			);
 
 			expect(sentMessages).toHaveLength(0);
-		const firstContext = await mock.emit(
-			"context",
-			{ messages: [{ role: "user", content: "continue" }] },
-			{ cwd: tmpDir },
-		);
-		const messages = (firstContext as { messages?: Array<{ content: string }> })
-			?.messages
-			?.map((message) => message.content)
-			.join("\n");
-		expect(messages).toContain("[pi-lens automated check — not a user request]");
-		expect(messages).toContain("[from a prior turn");
-		expect(messages).toContain("FAIL test/app.test.ts:1");
-		const secondContext = await mock.emit(
-			"context",
-			{ messages: [{ role: "user", content: "continue again" }] },
-			{ cwd: tmpDir },
-		);
-		expect(secondContext).toBeUndefined();
+			const firstContext = await mock.emit(
+				"context",
+				{ messages: [{ role: "user", content: "continue" }] },
+				{ cwd: tmpDir },
+			);
+			const messages = (
+				firstContext as { messages?: Array<{ content: string }> }
+			)?.messages
+				?.map((message) => message.content)
+				.join("\n");
+			expect(messages).toContain(
+				"[pi-lens automated check — not a user request]",
+			);
+			expect(messages).toContain("[from a prior turn");
+			expect(messages).toContain("FAIL test/app.test.ts:1");
+			const secondContext = await mock.emit(
+				"context",
+				{ messages: [{ role: "user", content: "continue again" }] },
+				{ cwd: tmpDir },
+			);
+			expect(secondContext).toBeUndefined();
 		},
 		INTEGRATION_TIMEOUT_MS,
 	);
@@ -2360,7 +2370,6 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 				{},
 				makeCtx({ cwd: tmpDir, sessionId: "secondary-delivery" }),
 			);
-
 		},
 		INTEGRATION_TIMEOUT_MS,
 	);

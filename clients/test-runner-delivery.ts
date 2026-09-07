@@ -23,6 +23,7 @@ interface PendingDelivery {
 	targetCount: number;
 	createdAt: number;
 	eligible: boolean;
+	rehydrated?: boolean;
 	owner?: TestRunnerDeliveryOwner;
 }
 
@@ -53,7 +54,6 @@ function record(
 		| "delivered"
 		| "superseded"
 		| "carried"
-		| "capability-unavailable"
 		| "delivery-failed",
 	delivery: PendingDelivery,
 	metadata: Record<string, unknown> = {},
@@ -78,9 +78,7 @@ function record(
 		{
 			capPerTurn: { limit: 8, turnIndex: delivery.generation },
 			ledgerKind:
-				outcome === "delivery-failed" || outcome === "capability-unavailable"
-					? "test-runner-delivery"
-					: undefined,
+				outcome === "delivery-failed" ? "test-runner-delivery" : undefined,
 			reason: `test runner delivery ${outcome}`,
 		},
 	);
@@ -175,9 +173,6 @@ export function deliverTestRunnerFindings(args: {
 	}
 	if (typeof args.ctx.isIdle !== "function") {
 		pending.delete(deliveryKey);
-		record(deliveryKey, "capability-unavailable", delivery, {
-			reason: "host does not expose ctx.isIdle",
-		});
 		return;
 	}
 	try {
@@ -210,6 +205,27 @@ export function deliverTestRunnerFindings(args: {
 		return;
 	}
 	delivery.eligible = true;
+	const current = args.cacheManager.readCache<{
+		content: string;
+		testRunGeneration?: number;
+		[key: string]: unknown;
+	}>("test-runner-findings", cwd)?.data;
+	if (!current?.content || current.testRunGeneration !== delivery.generation) {
+		pending.delete(deliveryKey);
+		return;
+	}
+	args.cacheManager.writeCache(
+		"test-runner-findings",
+		{
+			...current,
+			deliveryEligible: {
+				sessionId: delivery.sessionId,
+				generation: delivery.generation,
+				eligibleAt: Date.now(),
+			},
+		},
+		cwd,
+	);
 	record(deliveryKey, "eligible", delivery, {
 		ageMs: Math.max(0, Date.now() - delivery.createdAt),
 	});
@@ -249,15 +265,32 @@ export function consumeStagedTestRunnerFindings(args: {
 	runtime: RuntimeCoordinator;
 }): ReturnType<typeof consumeTestFindings> {
 	const deliveryKey = key(args.cwd, args.sessionId, args.ownerId);
-	const delivery = pending.get(deliveryKey);
-	if (!delivery?.eligible) return undefined;
-	const currentGeneration = args.cacheManager.readCache<{
+	let delivery = pending.get(deliveryKey);
+	const persisted = args.cacheManager.readCache<{
+		content: string;
 		testRunGeneration?: number;
-	}>("test-runner-findings", args.cwd)?.data?.testRunGeneration;
-	if (
-		currentGeneration !== undefined &&
-		currentGeneration > delivery.generation
-	) {
+		deliveryEligible?: {
+			sessionId: string;
+			generation: number;
+			eligibleAt: number;
+		};
+	}>("test-runner-findings", args.cwd)?.data;
+	if (!delivery && persisted?.content && persisted.deliveryEligible) {
+		delivery = {
+			cwd: args.cwd,
+			sessionId: args.sessionId,
+			ownerId: args.ownerId,
+			generation: persisted.deliveryEligible.generation,
+			targetCount: 0,
+			createdAt: persisted.deliveryEligible.eligibleAt,
+			eligible: true,
+			rehydrated: true,
+		};
+		pending.set(deliveryKey, delivery);
+	}
+	if (!delivery?.eligible) return undefined;
+	const currentGeneration = persisted?.testRunGeneration;
+	if (currentGeneration !== delivery.generation) {
 		pending.delete(deliveryKey);
 		record(deliveryKey, "superseded", delivery, { currentGeneration });
 		return undefined;
@@ -275,6 +308,7 @@ export function consumeStagedTestRunnerFindings(args: {
 	pending.delete(deliveryKey);
 	record(deliveryKey, "delivered", delivery, {
 		ageMs: Math.max(0, Date.now() - delivery.createdAt),
+		rehydrated: delivery.rehydrated === true,
 	});
 	return findings;
 }

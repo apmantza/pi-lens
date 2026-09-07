@@ -111,6 +111,11 @@ export interface TestRunnerFindingsCache {
 	 * another session's load.
 	 */
 	retiredTargets?: DeferredTestTarget[];
+	deliveryEligible?: {
+		sessionId: string;
+		generation: number;
+		eligibleAt: number;
+	};
 }
 
 function failureMessage(failure: TestFailure): string {
