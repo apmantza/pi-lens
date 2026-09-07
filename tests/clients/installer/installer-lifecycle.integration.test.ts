@@ -93,12 +93,19 @@ function writeDumpingPackageLayout(
 		 */
 		omitShim?: boolean;
 		/**
-		 * R2-F2: leave the package's own manifest unreadable — the "corrupted in
-		 * place" shape a re-install does NOT repair (measured on npm 9.2.0: the
-		 * second `npm install` reports `up to date` and the damaged file stays
-		 * damaged), so deleting the tree is the only repair that exists for it.
+		 * R2-F2: the manifest declares an entry module that is not on disk — a
+		 * partial install, with the shim and the manifest present. Chosen because
+		 * it leaves the PROBE byte-identical to the intact case: the file the shim
+		 * runs is untouched, and package.json stays valid JSON so Node's own
+		 * module-type lookup still reads it. (An unreadable package.json does NOT
+		 * work as a fixture here, and the difference is invisible until you look:
+		 * Node parses the enclosing manifest before running the entry, so the
+		 * child died in 40 bytes instead of dumping 2 MiB, and the probe was never
+		 * inconclusive at all — the pre-fix code deleted that tree for the
+		 * ordinary reason, which would have made this test green against the very
+		 * bug it exists to pin.)
 		 */
-		corruptManifest?: boolean;
+		declareMissingEntry?: boolean;
 	},
 ): string {
 	const isWin = process.platform === "win32";
@@ -110,13 +117,15 @@ function writeDumpingPackageLayout(
 		JSON.stringify([
 			{
 				path: ["node_modules", pkg.packageName, "package.json"],
-				content: pkg.corruptManifest
-					? "{ not json"
-					: JSON.stringify({
-							name: pkg.packageName,
-							version: "1.18.5",
-							bin: { [pkg.binaryName]: `./${pkg.entry.join("/")}` },
-						}),
+				content: JSON.stringify({
+					name: pkg.packageName,
+					version: "1.18.5",
+					bin: {
+						[pkg.binaryName]: pkg.declareMissingEntry
+							? `./${[...pkg.entry.slice(0, -1), "never-extracted.js"].join("/")}`
+							: `./${pkg.entry.join("/")}`,
+					},
+				}),
 			},
 			{
 				path: entryRelative,
@@ -413,11 +422,12 @@ describe("installer process lifecycle (#945)", () => {
 		async () => {
 			// The other half of the keep gate, and the reason it exists. The live
 			// population of "inconclusive" is broken servers that spew past the
-			// retained window and die; for those the delete IS the repair, because
-			// a re-install does not fix a file corrupted in place. Same probe
-			// shape as the case above (2 MiB, marker, exit 1) but the package's
-			// own manifest is unreadable, so the on-disk evidence says the install
-			// is incomplete and the cleanup branch must run.
+			// retained window and die, and for those the delete IS the repair (a
+			// re-install does not fix a file corrupted in place — measured, npm
+			// 9.2.0). The probe here is byte-identical to the intact case above —
+			// same 2 MiB, same marker, same exit 1 — and ONLY the on-disk evidence
+			// differs: the manifest names an entry module that was never
+			// extracted. So this pins the gate itself, not a probe difference.
 			const root = tempDir();
 			const home = path.join(root, "home");
 			const { counter, script } = writeFakeNpm(root);
@@ -425,7 +435,7 @@ describe("installer process lifecycle (#945)", () => {
 				packageName: "svelte-language-server",
 				binaryName: "svelteserver",
 				entry: ["bin", "server.js"],
-				corruptManifest: true,
+				declareMissingEntry: true,
 			});
 			const result = await runEnsure(
 				{ ...testEnv(home, counter, script), FAKE_NPM_LAYOUT: layout },
