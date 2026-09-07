@@ -2193,15 +2193,21 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/formatters.ts": 115,
 	"clients/gitleaks-client.ts": 4,
 	"clients/govulncheck-client.ts": 6,
-	// 192 → 193 (#2722): `verifyNpmPackageEntry` reads the installed package's
-	// own `package.json` to verify a managed npm LSP server from the tree on
-	// disk instead of spawning `--version` at it. One `await fs.readFile` of a
-	// few KB on a path the same function then `statSync`s — registered rather
-	// than absorbed, and the rung it replaces on this path was a spawn with a
-	// 10s budget and up to three attempts, so the hook path got shorter, not
-	// longer. Like every other entry here it cannot take a hook's signal until
-	// #2523 AC4 threads it through the deps types.
-	"clients/installer/index.ts": 193,
+	// 192 → 194 (#2722), in two steps, both registered rather than absorbed:
+	//   +1  `verifyNpmPackageEntry` reads the installed package's own
+	//       `package.json` to verify a managed npm LSP server from the tree on
+	//       disk instead of spawning `--version` at it — one `await
+	//       fs.readFile` of a few KB on a path the same function then
+	//       `statSync`s.
+	//   +1  (review round 2, F2) `installNpmTool` awaits that SAME function
+	//       once more, as the gate deciding whether an inconclusive probe keeps
+	//       the installation or lets the cleanup branch repair it. No new I/O
+	//       shape, no new file: the second await is the same manifest read.
+	// The rung both replace on this path was a `--version` spawn with a 10s
+	// budget and up to three attempts, so the hook path got shorter, not longer.
+	// Like every other entry here neither can take a hook's signal until #2523
+	// AC4 threads it through the deps types.
+	"clients/installer/index.ts": 194,
 	"clients/installer/managed-tool-refresh.ts": 29,
 	"clients/instance-reaper.ts": 26,
 	"clients/instance-registry.ts": 23,
