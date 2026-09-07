@@ -181,9 +181,7 @@ async function resolvePowerShellCmd(): Promise<string | null> {
 	for (const candidate of ["pwsh", "powershell"]) {
 		const sampler = startHostStallSampler();
 		const startedAt = Date.now();
-		// cwd-exempt: global interpreter-presence probe -- "is pwsh/powershell on
-		// PATH at all", not tied to any project; PowerShell resolution has no
-		// per-project-local shim the way a venv/node_modules binary would.
+		// cwd-exempt: global interpreter-presence probe ("is pwsh/powershell on PATH at all"), not tied to any project
 		const result = await spawnPs(candidate, [
 			"-NoProfile",
 			"-NonInteractive",
@@ -235,9 +233,7 @@ async function checkModuleAvailable(cmd: string): Promise<boolean> {
 
 	const sampler = startHostStallSampler();
 	const startedAt = Date.now();
-	// cwd-exempt: global module-presence probe -- PSScriptAnalyzer is resolved
-	// from PowerShell's module search path (typically a per-user/per-system
-	// location), not a per-project-relative install this cwd could redirect.
+	// cwd-exempt: global module-presence probe -- PSScriptAnalyzer resolves from PowerShell's module search path, not a per-project install
 	const result = await spawnPs(cmd, [
 		"-NoProfile",
 		"-NonInteractive",
