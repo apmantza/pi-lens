@@ -48,7 +48,9 @@ describe("normalizeForLedger", () => {
 				throw new Error("corrupted ledger value");
 			},
 		};
-		expect(() => normalizeForLedger(corrupted)).toThrow("corrupted ledger value");
+		expect(() => normalizeForLedger(corrupted)).toThrow(
+			"corrupted ledger value",
+		);
 	});
 
 	it("keeps the String() form of a class instance without its own toString", () => {
