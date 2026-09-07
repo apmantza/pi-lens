@@ -195,7 +195,10 @@ if a daemon copy has drifted.
 
 Name the role, absolute worktree, branch, base, acceptance criteria, non-goals,
 and Git authority in every delegation. A role never grants Git authority by
-itself. Follow "Prove filesystem isolation before coding subagents touch Git":
+itself. When authority is withheld, the worker hands off through `PR_BODY.md`
+and `COMMIT_MSG.txt` at the worktree root (see `docs/pi-lens-subagent.md`) and
+the orchestrator commits with `git push origin HEAD:<branch>` from a detached
+worktree (2026-09-08: seven PRs landed this way through plegma codex workers). Follow "Prove filesystem isolation before coding subagents touch Git":
 if the worker cannot verify a distinct registered worktree, it runs no Git
 commands, and the orchestrator owns commits, pushes, and PR operations.
 
