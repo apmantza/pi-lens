@@ -2224,7 +2224,11 @@ function activateExtension(hostPi: ExtensionAPI) {
 						resetDispatchBaselines,
 						resetLSPService,
 					});
-					if (ctx.ui) updateLspStatus(ctx.ui.setStatus, ctx.ui.theme);
+					const ui = ctx.ui;
+					// Bound call, not a detached method reference: a host whose
+					// `setStatus` reads `this` would otherwise lose it (oxlint
+					// unbound-method, 2026-09-07).
+					if (ui) updateLspStatus((id, text) => ui.setStatus(id, text), ui.theme);
 
 					// Pin the stable identity + reason AFTER handleSessionStart (which ran
 					// resetForSession → a fresh random id); the stable id now wins (#190).

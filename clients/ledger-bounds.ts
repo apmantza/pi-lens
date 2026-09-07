@@ -26,7 +26,22 @@ export const LEDGER_FIELD_MAX = 200;
 export const DEGRADATION_ENTRIES_PER_KIND = 20;
 
 export function normalizeForLedger(value: unknown): string {
-	return String(value ?? "unknown");
+	if (value === null || value === undefined) return "unknown";
+	// A plain object or array has no `toString` of its own, so `String()`
+	// writes "[object Object]" — a ledger row that names nothing. Serialise
+	// those; everything with its own string form (Error, Date, URL,
+	// primitives) keeps it. Circular input degrades to a fixed marker.
+	if (typeof value === "object") {
+		const proto = Object.getPrototypeOf(value);
+		if (proto === Object.prototype || proto === null || Array.isArray(value)) {
+			try {
+				return JSON.stringify(value) ?? "unknown";
+			} catch {
+				return "[unserializable object]";
+			}
+		}
+	}
+	return String(value);
 }
 
 /** Bound a value to `LEDGER_FIELD_MAX`, marking the elision. */

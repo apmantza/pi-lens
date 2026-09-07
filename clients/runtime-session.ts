@@ -1265,7 +1265,7 @@ function scheduleStartupScansWithClients(
 	}
 	dbg(`session_start: launching background scans (${scanNames.join(", ")})`);
 
-	runTask("todo", async () => {
+	void runTask("todo", async () => {
 		if (!runtime.isCurrentSession(sessionGeneration)) return;
 		// The original implementation called todoScanner.scanDirectory(), which
 		// walks the project synchronously and freezes the TUI for ~3s on a 2k-file
@@ -1312,7 +1312,7 @@ function scheduleStartupScansWithClients(
 		task: () => Promise<void>,
 	): void => {
 		if (skipHeavyweightScans) return;
-		runTask(name, task);
+		void runTask(name, task);
 	};
 	if (skipHeavyweightScans) {
 		dbg(
@@ -1702,7 +1702,7 @@ function scheduleStartupScansWithClients(
 	// racing its independently deferred timer. Otherwise a slow graph build leaves
 	// `runtime.callGraph` unset at this task's start and loses the model for the
 	// entire session (#1070).
-	runTask("codebase-model", async () => {
+	void runTask("codebase-model", async () => {
 		await callGraphTask;
 		if (!runtime.isCurrentSession(sessionGeneration)) return;
 		if (!runtime.callGraph) return;
@@ -1730,7 +1730,7 @@ function scheduleStartupScansWithClients(
 	});
 
 	// ast-grep — export scan for duplicate detection
-	runTask("ast-grep-exports", async () => {
+	void runTask("ast-grep-exports", async () => {
 		if (await astGrepClient.ensureAvailable()) {
 			if (!runtime.isCurrentSession(sessionGeneration)) return;
 			const exports = await astGrepClient.scanExports(
@@ -1749,7 +1749,7 @@ function scheduleStartupScansWithClients(
 	// word-index — identifier inverted index + BM25 for ranked symbol search
 	// (#162). Load -> rebuild-if-stale -> persist lifecycle (#348), shared with
 	// the quick-mode cold-start warmup pass below.
-	runTask("word-index", async () => {
+	void runTask("word-index", async () => {
 		await buildOrRefreshWordIndex({
 			runtime,
 			sessionGeneration,
