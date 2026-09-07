@@ -190,6 +190,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the CLI's real exit code and distinct infra label on exhaustion are unobservable from an in-process stub",
 	},
+	// #2698: gitignore/tracked-vs-untracked resolution (git init/add/commit/
+	// ls-files against a throwaway fixture repo) is the exact mechanism
+	// scripts/lib/knip-sibling-purge.mjs depends on and this file tests.
+	"real-process-spawn:scripts/knip-sibling-purge.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"gitignore/tracked-vs-untracked resolution is the mechanism under test; no mock reproduces git's own resolution faithfully",
+	},
 };
 
 /** The `wallClockBudgetInclude` project's `include` list, read from the live config — not a hand-copied mirror of it (single-source-of-truth). */

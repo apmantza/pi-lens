@@ -987,6 +987,7 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 		"oxfmt format check (advisory)",
 		"Vale prose lint (advisory)",
 		"OSV scan (advisory)",
+		"knip (advisory)",
 		"greeting",
 		// #2700 review round 3: named "oxlint (advisory)" (the `(advisory)`
 		// suffix, not a hand-maintained ci-checks.mjs entry like `greeting`
