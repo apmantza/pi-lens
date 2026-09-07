@@ -2264,7 +2264,9 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 			const filePath = path.join(tmpDir, "src", "app.ts");
 			fs.mkdirSync(path.dirname(filePath), { recursive: true });
 			fs.writeFileSync(filePath, "export const x = 1;\n");
-			handleTurnEndHook = (deps) =>
+			let stagedSessionId: string | undefined;
+			handleTurnEndHook = (deps) => {
+				stagedSessionId = deps.runtime.telemetrySessionId;
 				deps.onTestRunnerComplete?.({
 					cwd: tmpDir,
 					sessionId: deps.runtime.telemetrySessionId,
@@ -2272,6 +2274,7 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 					targetCount: 1,
 					hasFindings: true,
 				});
+			};
 
 			const { default: registerExtension } = await import("../index.js");
 			const { pi, mock, handlers, sentMessages } = createMockPi();
@@ -2284,7 +2287,7 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 			await mock.emit(
 				"session_start",
 				{},
-				makeCtx({ cwd: tmpDir, sessionId: "replacement-session" }),
+				makeCtx({ cwd: tmpDir, sessionId: stagedSessionId }),
 			);
 
 			expect(sentMessages).toHaveLength(0);

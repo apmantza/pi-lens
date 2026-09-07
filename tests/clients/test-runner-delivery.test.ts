@@ -95,6 +95,114 @@ describe("automatic test-runner delivery (#2366)", () => {
 		}
 	});
 
+	it("does not rehydrate an eligible marker into a different session", () => {
+		const { env, cache, runtime } = setup();
+		try {
+			stageTestRunnerDelivery({
+				cwd: env.tmpDir,
+				sessionId: "session-a",
+				generation: 1,
+				targetCount: 1,
+				hasFindings: true,
+			});
+			deliverTestRunnerFindings({
+				ctx: { cwd: env.tmpDir, isIdle: () => true },
+				cacheManager: cache,
+				runtime,
+				sessionId: "session-a",
+			});
+
+			// Production session_start clears only the in-memory pointer.
+			resetTestRunnerDelivery();
+			const secondaryRuntime = new RuntimeCoordinator();
+			secondaryRuntime.setTelemetryIdentity({ sessionId: "session-b" });
+			expect(
+				consumeStagedTestRunnerFindings({
+					cwd: env.tmpDir,
+					sessionId: "session-b",
+					cacheManager: cache,
+					runtime: secondaryRuntime,
+				}),
+			).toBeUndefined();
+			expect(
+				cache.readCache<{
+					content: string;
+					deliveryEligible?: { sessionId: string };
+				}>("test-runner-findings", env.tmpDir)?.data,
+			).toMatchObject({
+				content: "FAIL test/app.test.ts:1",
+				deliveryEligible: { sessionId: "session-a" },
+			});
+
+			const findings = consumeStagedTestRunnerFindings({
+				cwd: env.tmpDir,
+				sessionId: "session-a",
+				cacheManager: cache,
+				runtime,
+			});
+			expect(findings?.messages).toHaveLength(1);
+			expect(findings?.messages[0]?.content).toContain("FAIL");
+			expect(
+				consumeStagedTestRunnerFindings({
+					cwd: env.tmpDir,
+					sessionId: "session-a",
+					cacheManager: cache,
+					runtime,
+				}),
+			).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("does not rehydrate a shared-cache marker into another activation", () => {
+		const { env, cache, runtime } = setup();
+		try {
+			stageTestRunnerDelivery({
+				cwd: env.tmpDir,
+				sessionId: "session-a",
+				owner: {
+					ownerId: "activation-a",
+					cacheManager: cache,
+					runtime,
+					getCtx: () => ({ cwd: env.tmpDir, isIdle: () => true }),
+				},
+				generation: 1,
+				targetCount: 1,
+				hasFindings: true,
+			});
+			deliverTestRunnerFindings({
+				ctx: { cwd: env.tmpDir, isIdle: () => true },
+				cacheManager: cache,
+				runtime,
+				sessionId: "session-a",
+				ownerId: "activation-a",
+			});
+			resetTestRunnerDelivery();
+
+			expect(
+				consumeStagedTestRunnerFindings({
+					cwd: env.tmpDir,
+					sessionId: "session-a",
+					ownerId: "activation-b",
+					cacheManager: cache,
+					runtime,
+				}),
+			).toBeUndefined();
+			expect(
+				consumeStagedTestRunnerFindings({
+					cwd: env.tmpDir,
+					sessionId: "session-a",
+					ownerId: "activation-a",
+					cacheManager: cache,
+					runtime,
+				})?.messages,
+			).toHaveLength(1);
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("carries a result when a prompt makes the immediate idle check fail", () => {
 		const { env, cache, runtime } = setup();
 		try {

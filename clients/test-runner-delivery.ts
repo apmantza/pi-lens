@@ -54,6 +54,7 @@ function record(
 		| "delivered"
 		| "superseded"
 		| "carried"
+		| "foreign-session"
 		| "delivery-failed",
 	delivery: PendingDelivery,
 	metadata: Record<string, unknown> = {},
@@ -220,6 +221,7 @@ export function deliverTestRunnerFindings(args: {
 			...current,
 			deliveryEligible: {
 				sessionId: delivery.sessionId,
+				...(delivery.ownerId ? { ownerId: delivery.ownerId } : {}),
 				generation: delivery.generation,
 				eligibleAt: Date.now(),
 			},
@@ -271,18 +273,40 @@ export function consumeStagedTestRunnerFindings(args: {
 		testRunGeneration?: number;
 		deliveryEligible?: {
 			sessionId: string;
+			ownerId?: string;
 			generation: number;
 			eligibleAt: number;
 		};
 	}>("test-runner-findings", args.cwd)?.data;
-	if (!delivery && persisted?.content && persisted.deliveryEligible) {
+	const eligible = persisted?.deliveryEligible;
+	if (!delivery && persisted?.content && eligible) {
+		const sameSession = eligible.sessionId === args.sessionId;
+		const sameOwner = eligible.ownerId === args.ownerId;
+		if (!sameSession || !sameOwner) {
+			const foreignDelivery: PendingDelivery = {
+				cwd: args.cwd,
+				sessionId: eligible.sessionId,
+				ownerId: eligible.ownerId,
+				generation: eligible.generation,
+				targetCount: 0,
+				createdAt: eligible.eligibleAt,
+				eligible: true,
+				rehydrated: true,
+			};
+			record(deliveryKey, "foreign-session", foreignDelivery, {
+				currentSessionId: args.sessionId,
+				currentOwnerId: args.ownerId,
+				reason: !sameSession ? "session-mismatch" : "owner-mismatch",
+			});
+			return undefined;
+		}
 		delivery = {
 			cwd: args.cwd,
 			sessionId: args.sessionId,
 			ownerId: args.ownerId,
-			generation: persisted.deliveryEligible.generation,
+			generation: eligible.generation,
 			targetCount: 0,
-			createdAt: persisted.deliveryEligible.eligibleAt,
+			createdAt: eligible.eligibleAt,
 			eligible: true,
 			rehydrated: true,
 		};
