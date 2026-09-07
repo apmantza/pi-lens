@@ -2260,6 +2260,22 @@ export async function verifyNpmPackageEntry(
 		return false;
 	};
 
+	// R2-F1: the shim ITSELF, before anything else. Every path below is DERIVED
+	// from `binPath`, so without this a partial install — npm never wrote the
+	// `.bin` entry, or wrote one that is empty, a directory, or a symlink
+	// dangling at a deleted target — verified `true` on the strength of a
+	// package tree that nothing can execute, and `installNpmTool` then recorded
+	// the install as SUCCEEDED. `classifyInstallOutcome` grades any non-"failed"
+	// outcome as `⚠ unavailable (succeeded)`, so that answer re-hid exactly the
+	// nightly row #2722 exists to expose. `statSync` FOLLOWS the link, which is
+	// what makes missing and dangling one branch.
+	try {
+		const shim = statSync(binPath);
+		if (!shim.isFile() || shim.size === 0) return fail("shim-not-a-file");
+	} catch {
+		return fail("shim-missing");
+	}
+
 	let manifest: {
 		version?: unknown;
 		bin?: unknown;
@@ -2298,8 +2314,13 @@ export async function verifyNpmPackageEntry(
 		return fail("entry-missing");
 	}
 
-	debugLog(
-		`Verified (npm package entry, no spawn): ${packageDir} v${manifest.version} → ${entry}`,
+	// R2-F3 (catalog shape 31): "did the new verifier run at all, and on what"
+	// has to be answerable from sessionstart.log, not only from a debug build —
+	// the failure branches above already log there. Roughly one row per tool per
+	// session: `getToolPathResolved` caches its answer in `resolvedPathCache`,
+	// and `installTool` verifies once.
+	logSessionStart(
+		`auto-install verify: succeeded for ${binPath} (check=package-entry, version=${manifest.version}, entry=${entry})`,
 	);
 	return true;
 }
@@ -2417,7 +2438,11 @@ export async function verifyToolBinary(
 		// A kill (timeout fired) or spawn-boundary failure is a stall, not a
 		// verdict from the binary (#1569 transient semantics).
 		if (result.signal !== undefined || result.spawnFailure) onTransient?.();
-		if (result.outputTruncated) {
+		if (
+			result.outputTruncated &&
+			result.signal === undefined &&
+			!result.spawnFailure
+		) {
 			// #2722: the transport-required matcher above is armed on EVERY probe,
 			// and it never matched — but the output we kept is a prefix, so the
 			// marker may simply sit past it (intelephense emits ~4 MB of bundle
@@ -2425,6 +2450,14 @@ export async function verifyToolBinary(
 			// is not "this binary is broken"; callers must not delete the install
 			// on it. Recorded as its own kind so a monitor can tell an unreadable
 			// probe apart from a rejected binary.
+			//
+			// R2-F4: gated on the probe having actually FINISHED. A verbose child
+			// that is SIGTERMed at the timeout also arrives here truncated, and
+			// that is the #1569 transient class one line above, not this one —
+			// ungated, the two overlapped and `installNpmTool` (which tests
+			// inconclusive first) replaced the #2015 transient message with this
+			// one. The doc comment's "the prober DID run to completion" is now
+			// true rather than aspirational.
 			onInconclusive?.();
 			recordDegradationOnce({
 				kind: "installer-verification-inconclusive",
@@ -4908,10 +4941,29 @@ async function installNpmTool(
 			// re-probing reproduces this exactly, so it is durable, and a
 			// transient verdict would keep re-arming the reinstall path
 			// (catalog shape 13).
+			// R2-F2: a non-verdict is a reason to keep ONLY while the tree on disk
+			// still looks like a complete install. With intelephense verified
+			// spawn-free, no registry entry reaches this branch healthy (measured:
+			// no other npm-strategy LSP server emits more than 1,527 bytes), so
+			// its live population is BROKEN servers that spew past the retained
+			// window and die — and for those the delete was the only repair that
+			// existed. Measured on npm 9.2.0 against a real managed prefix: a
+			// package file corrupted IN PLACE is not repaired by re-installing
+			// (`up to date`, the zeroed file stays zeroed), while a package
+			// directory, a `.bin` shim or a nested dependency that is GONE is
+			// reinstalled. So the same on-disk evidence `verification:
+			// "package-entry"` uses decides keep-vs-delete here — strictly as a
+			// gate, never as a verdict: the install is still recorded as failed,
+			// so the tool still reads `✗` and nothing is re-hidden.
+			if (await verifyNpmPackageEntry(binPath, packageName)) {
+				logSessionStart(
+					`auto-install ${packageName}: verification inconclusive (output truncated before the transport-required marker) but the installed tree is intact; keeping installation for re-probe`,
+				);
+				return undefined;
+			}
 			logSessionStart(
-				`auto-install ${packageName}: verification inconclusive (output truncated before the transport-required marker); keeping installation for re-probe`,
+				`auto-install ${packageName}: verification inconclusive AND the installed tree is incomplete; cleaning up so the next install can repair it`,
 			);
-			return undefined;
 		}
 		if (!isValid && lastAttemptTransient) {
 			// #2015: a killed/spawn-failed prober is NOT a verdict about the

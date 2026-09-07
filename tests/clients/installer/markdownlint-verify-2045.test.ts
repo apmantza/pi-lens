@@ -222,6 +222,42 @@ describe("managed markdownlint verification (#2045)", () => {
 		]);
 	});
 
+	it("a SIGTERM-killed verbose probe is transient, not inconclusive (#2722 R2-F4)", async () => {
+		// The two classes overlapped: a child that is still talking when the
+		// timeout kills it arrives here BOTH truncated and signalled, so the
+		// #2722 row fired on a #1569 stall — and `installNpmTool` tests
+		// inconclusive first, so its message replaced the #2015 transient one.
+		// A killed prober never ran to completion, which is exactly what the
+		// inconclusive kind's doc comment claims it did.
+		resetDegradationLedger();
+		const onTransient = vi.fn();
+		const onInconclusive = vi.fn();
+		safeSpawnAsync.mockResolvedValueOnce(
+			result({
+				status: null,
+				signal: "SIGTERM",
+				error: new Error("killed"),
+				outputTruncated: true,
+			}),
+		);
+		await expect(
+			verifyToolBinary(
+				"verbose-hanging-lsp",
+				undefined,
+				onTransient,
+				10,
+				["--version"],
+				undefined,
+				onInconclusive,
+			),
+		).resolves.toBe(false);
+		expect(onTransient).toHaveBeenCalledTimes(1);
+		expect(onInconclusive).not.toHaveBeenCalled();
+		expect(getDegradationSummary().map((group) => group.kind)).toEqual([
+			"installer-verification-output-truncated",
+		]);
+	});
+
 	it.skipIf(!resolveMarkdownlintBinary())(
 		"proves the old real probe and corrected production verification",
 		async () => {

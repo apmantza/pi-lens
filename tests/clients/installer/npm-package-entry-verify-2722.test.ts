@@ -30,6 +30,18 @@ import * as path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// R2-F3: sessionstart.log is where "did the new verifier run, and on what" has
+// to be answerable (catalog shape 31), so the rows are asserted rather than
+// described. Mocked the same way markdownlint-verify-2045.test.ts does; the
+// real logger is a no-op under test mode.
+const sessionLog = vi.hoisted(() => vi.fn());
+vi.mock("../../../clients/sessionstart-logger.js", () => ({
+	logSessionStart: sessionLog,
+	flushSessionStartLog: async () => {},
+	flushSessionStartLogSync: () => {},
+	SESSIONSTART_LOG_FILE: "",
+}));
+
 import {
 	getDegradationSummary,
 	resetDegradationLedger,
@@ -252,6 +264,7 @@ describe.each(ENTRY_FIXTURES)(
 		});
 
 		it("verifies from the tree on disk without spawning the shim", async () => {
+			sessionLog.mockClear();
 			await expect(
 				verifyToolBinary(
 					bin,
@@ -263,6 +276,27 @@ describe.each(ENTRY_FIXTURES)(
 				),
 			).resolves.toBe(true);
 			expect(fs.existsSync(spawnMarker)).toBe(false);
+			// R2-F3: the success is a readable row, not a debug-only breadcrumb.
+			expect(sessionLog).toHaveBeenCalledWith(
+				`auto-install verify: succeeded for ${bin} (check=package-entry, version=${String(fixture.manifest.version)}, entry=${
+					typeof fixture.manifest.bin === "string"
+						? fixture.manifest.bin
+						: `./${fixture.entryPath.split(path.sep).join("/")}`
+				})`,
+			);
+		});
+
+		it("names the shim in the refusal row when the shim is missing", async () => {
+			// R2-F1's failure branch is as legible as the spawn path's: the row
+			// says which check ran and why it said no.
+			sessionLog.mockClear();
+			fs.rmSync(bin);
+			await expect(
+				verifyNpmPackageEntry(bin, fixture.packageName),
+			).resolves.toBe(false);
+			expect(sessionLog).toHaveBeenCalledWith(
+				`auto-install verify: failed for ${bin} (check=package-entry, kind=shim-missing)`,
+			);
 		});
 
 		it("verifies a pinned coordinate against the unpinned install dir", async () => {

@@ -92,6 +92,13 @@ function writeDumpingPackageLayout(
 		 * to catch.
 		 */
 		omitShim?: boolean;
+		/**
+		 * R2-F2: leave the package's own manifest unreadable — the "corrupted in
+		 * place" shape a re-install does NOT repair (measured on npm 9.2.0: the
+		 * second `npm install` reports `up to date` and the damaged file stays
+		 * damaged), so deleting the tree is the only repair that exists for it.
+		 */
+		corruptManifest?: boolean;
 	},
 ): string {
 	const isWin = process.platform === "win32";
@@ -103,11 +110,13 @@ function writeDumpingPackageLayout(
 		JSON.stringify([
 			{
 				path: ["node_modules", pkg.packageName, "package.json"],
-				content: JSON.stringify({
-					name: pkg.packageName,
-					version: "1.18.5",
-					bin: { [pkg.binaryName]: `./${pkg.entry.join("/")}` },
-				}),
+				content: pkg.corruptManifest
+					? "{ not json"
+					: JSON.stringify({
+							name: pkg.packageName,
+							version: "1.18.5",
+							bin: { [pkg.binaryName]: `./${pkg.entry.join("/")}` },
+						}),
 			},
 			{
 				path: entryRelative,
@@ -386,6 +395,52 @@ describe("installer process lifecycle (#945)", () => {
 				),
 				result.stdout,
 			).toBe(true);
+			// R2-F2: the RECORD, not just the disk. Keeping the tree must NOT
+			// launder the outcome — pi-lens still cannot run this server, so the
+			// attempt stays `failed` and `classifyInstallOutcome` still grades the
+			// row `✗`. A keep that flipped this to "succeeded" would be the
+			// re-hiding #2722 forbids.
+			const kept = JSON.parse(result.stdout) as {
+				attempt?: { outcome?: string; reason?: string };
+			};
+			expect(kept.attempt?.outcome, result.stdout).toBe("failed");
+		},
+		REAL_PROCESS_TIMEOUT_MS,
+	);
+
+	it(
+		"deletes an inconclusive install whose tree is NOT intact (R2-F2)",
+		async () => {
+			// The other half of the keep gate, and the reason it exists. The live
+			// population of "inconclusive" is broken servers that spew past the
+			// retained window and die; for those the delete IS the repair, because
+			// a re-install does not fix a file corrupted in place. Same probe
+			// shape as the case above (2 MiB, marker, exit 1) but the package's
+			// own manifest is unreadable, so the on-disk evidence says the install
+			// is incomplete and the cleanup branch must run.
+			const root = tempDir();
+			const home = path.join(root, "home");
+			const { counter, script } = writeFakeNpm(root);
+			const layout = writeDumpingPackageLayout(root, home, {
+				packageName: "svelte-language-server",
+				binaryName: "svelteserver",
+				entry: ["bin", "server.js"],
+				corruptManifest: true,
+			});
+			const result = await runEnsure(
+				{ ...testEnv(home, counter, script), FAKE_NPM_LAYOUT: layout },
+				"svelte-language-server",
+			);
+			expect(result.code, JSON.stringify(result)).toBe(0);
+			const nodeModules = path.join(home, "tools", "node_modules");
+			expect(
+				fs.existsSync(path.join(nodeModules, "svelte-language-server")),
+				result.stdout,
+			).toBe(false);
+			const payload = JSON.parse(result.stdout) as {
+				attempt?: { outcome?: string };
+			};
+			expect(payload.attempt?.outcome, result.stdout).toBe("failed");
 		},
 		REAL_PROCESS_TIMEOUT_MS,
 	);
