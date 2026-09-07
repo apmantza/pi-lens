@@ -2229,10 +2229,13 @@ export function packageEntryVerification(
  * accepts through `treeMarker`: the installed tree is inspected on disk. The
  * install verifies when the package directory beside the `.bin` shim carries a
  * readable `package.json` with a `version`, and the entry module that
- * package.json itself names (`bin[<shim name>]`, a bare `bin` string, or
- * `main`) exists as a non-empty file. That is exactly what `verifyToolBinary`
- * was documented to catch here — broken symlinks and partial installs — and it
- * is strictly more than the `--version` spawn can report for this class.
+ * package.json itself names — `bin[<shim name>]` or a bare `bin` string —
+ * exists as a non-empty file. `main` is deliberately NOT a fallback: npm
+ * creates the `node_modules/.bin/<shim>` this function is given only from a
+ * `bin` field, so a manifest without one cannot be the manifest behind this
+ * shim. That is exactly what `verifyToolBinary` was documented to catch here —
+ * broken symlinks and partial installs — and it is strictly more than the
+ * `--version` spawn can report for this class.
  */
 export async function verifyNpmPackageEntry(
 	binPath: string,
@@ -2259,7 +2262,6 @@ export async function verifyNpmPackageEntry(
 
 	let manifest: {
 		version?: unknown;
-		main?: unknown;
 		bin?: unknown;
 	};
 	try {
@@ -2279,9 +2281,12 @@ export async function verifyNpmPackageEntry(
 			? bin
 			: bin && typeof bin === "object"
 				? Object.entries(bin as Record<string, unknown>).find(
+						// Case-folded on purpose: on a case-insensitive filesystem the
+						// shim on disk can differ in case from the manifest key npm
+						// wrote it from, and `path.basename` reads the disk name.
 						([name]) => name.toLowerCase() === shimName,
 					)?.[1]
-				: manifest.main;
+				: undefined;
 	if (typeof entry !== "string" || !entry) {
 		return fail("package-json-no-entry");
 	}
