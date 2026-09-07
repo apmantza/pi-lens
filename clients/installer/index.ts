@@ -4204,7 +4204,6 @@ async function verifyRefreshedArtifact(
 			undefined,
 			getToolVerificationTimeout(tool),
 			tool.checkArgs,
-			packageEntryVerification(tool),
 		))
 	) {
 		logSessionStart(
