@@ -110,6 +110,9 @@ const ALLOW_CASES: string[] = [
 	// worktree subcommand other than "remove" -- the remove check, not a
 	// bare "worktree" match, must decide.
 	"git worktree list",
+	// double-force on a non-"remove" worktree subcommand -- the rule is
+	// "remove with two forces", not "worktree with two forces anywhere".
+	"git worktree add /tmp/new-tree -f -f",
 	// $(...) fully inside single quotes is literal text to bash (no
 	// expansion), so the tokenizer must not extract it as a subshell.
 	"echo '$(git stash)'",
