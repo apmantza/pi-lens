@@ -175,12 +175,19 @@ describe("managed markdownlint verification (#2045)", () => {
 
 	it("bounds retained output for noisy language-server probes", async () => {
 		resetDegradationLedger();
+		const onInconclusive = vi.fn();
 		safeSpawnAsync.mockResolvedValueOnce(
 			result({ status: 1, outputTruncated: true }),
 		);
-		await verifyToolBinary("intelephense", undefined, undefined, 10, [
-			"--version",
-		]);
+		await verifyToolBinary(
+			"intelephense",
+			undefined,
+			undefined,
+			10,
+			["--version"],
+			undefined,
+			onInconclusive,
+		);
 		expect(safeSpawnAsync).toHaveBeenLastCalledWith(
 			process.platform === "win32" ? "intelephense.cmd" : "intelephense",
 			["--version"],
@@ -189,10 +196,28 @@ describe("managed markdownlint verification (#2045)", () => {
 				matchWhileStreaming: expect.any(RegExp),
 			}),
 		);
+		// #2722: this SAME probe shape — armed matcher, unmatched, truncated
+		// prefix — is the one the installer must not delete an install on, and it
+		// now records a second, differently-named row. Asserted here because this
+		// is the seam's cross-platform coverage: the real-fixture proof in
+		// npm-package-entry-verify-2722.test.ts depends on Node dropping a piped
+		// stderr tail at exit, which is POSIX-only.
+		expect(onInconclusive).toHaveBeenCalledTimes(1);
 		expect(getDegradationSummary()).toEqual([
 			expect.objectContaining({
 				kind: "installer-verification-output-truncated",
 				count: 1,
+			}),
+			expect.objectContaining({
+				kind: "installer-verification-inconclusive",
+				count: 1,
+				latestReasons: [
+					{
+						subject: "intelephense",
+						reason:
+							"transport-required marker unresolved in truncated output (--version)",
+					},
+				],
 			}),
 		]);
 	});

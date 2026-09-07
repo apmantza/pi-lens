@@ -33,6 +33,18 @@ function writeFakeNpm(dir: string): {
 			' const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });',
 			" fs.writeFileSync(process.env.FAKE_NPM_CHILD_PID, String(child.pid));",
 			" setInterval(() => {}, 1000);",
+			// #2722: a layout PLAN (a JSON file of {path, content, mode} entries,
+			// written by the test in TypeScript) rather than more generated-source
+			// escaping — the intelephense case has to lay down a whole package tree
+			// plus its `.bin` shim, which the inline string form cannot express
+			// readably.
+			"} else if (process.env.FAKE_NPM_LAYOUT) {",
+			' const tools = path.join(process.env.PI_LENS_HOME, "tools");',
+			' for (const file of JSON.parse(fs.readFileSync(process.env.FAKE_NPM_LAYOUT, "utf8"))) {',
+			"  const target = path.join(tools, ...file.path);",
+			"  fs.mkdirSync(path.dirname(target), { recursive: true });",
+			"  fs.writeFileSync(target, file.content, file.mode ? { mode: file.mode } : undefined);",
+			" }",
 			"} else {",
 			' const bin = path.join(process.env.PI_LENS_HOME, "tools", "node_modules", ".bin");',
 			" fs.mkdirSync(bin, { recursive: true });",
@@ -57,17 +69,21 @@ function writeFakeNpm(dir: string): {
 	return { binDir, counter, script };
 }
 
-function runEnsure(env: NodeJS.ProcessEnv): Promise<{
+function runEnsure(
+	env: NodeJS.ProcessEnv,
+	toolId = "oxlint",
+): Promise<{
 	code: number | null;
 	stdout: string;
 	stderr: string;
 }> {
+	const id = JSON.stringify(toolId);
 	const program =
 		'import("./clients/installer/index.js").then(async m => {' +
-		'const value = await m.ensureTool("oxlint"); await new Promise(r => setTimeout(r, 500));' +
+		`const value = await m.ensureTool(${id}); await new Promise(r => setTimeout(r, 500));` +
 		'const fs = await import("node:fs"); const path = await import("node:path");' +
 		'let log = ""; try { log = fs.readFileSync(path.join(process.env.PI_LENS_HOME, "sessionstart.log"), "utf8"); } catch {}' +
-		'console.log(JSON.stringify({ value, log, reason: m.getInstallFailureReason("oxlint") }));' +
+		`console.log(JSON.stringify({ value, log, reason: m.getInstallFailureReason(${id}) }));` +
 		"}).catch(e => { console.error(e); process.exitCode = 1; });";
 	return new Promise((resolve) => {
 		const child = spawn(process.execPath, ["-e", program], {
@@ -196,6 +212,89 @@ describe("installer process lifecycle (#945)", () => {
 				"installation disabled by PI_LENS_DISABLE_TOOL_INSTALL=1",
 			);
 			expect(fs.existsSync(counter)).toBe(false);
+		},
+		REAL_PROCESS_TIMEOUT_MS,
+	);
+
+	it(
+		"keeps a freshly installed intelephense and resolves it (#2722)",
+		async () => {
+			// The whole PRODUCTION call path: ensureTool -> installNpmTool -> the
+			// package-manager spawn -> verification -> the cleanup decision, in a
+			// real child process against a scratch PI_LENS_HOME.
+			//
+			// The installed package is intelephense's real shape: an entry module
+			// that writes >2 MiB to stderr, then the #208 transport-required
+			// marker, then exits 1. Node drops the piped tail at exit, so the
+			// marker never reaches the verifier — which is why `--version`
+			// verification cannot pass and, before this fix, the installer deleted
+			// the package it had just installed.
+			const root = tempDir();
+			const home = path.join(root, "home");
+			const { counter, script } = writeFakeNpm(root);
+			const entrySource = [
+				'process.stderr.write("x".repeat(2 * 1024 * 1024) + "\\n");',
+				'process.stderr.write("Connection input stream is not set. Please use listen()\\n");',
+				"process.exit(1);",
+			].join("\n");
+			const entryRelative = ["node_modules", "intelephense", "lib", "x.js"];
+			const entryAbsolute = path.join(home, "tools", ...entryRelative);
+			const layout = path.join(root, "intelephense-layout.json");
+			fs.writeFileSync(
+				layout,
+				JSON.stringify([
+					{
+						path: ["node_modules", "intelephense", "package.json"],
+						content: JSON.stringify({
+							name: "intelephense",
+							version: "1.18.5",
+							bin: { intelephense: "./lib/x.js" },
+						}),
+					},
+					{ path: entryRelative, content: entrySource },
+					{
+						path:
+							process.platform === "win32"
+								? ["node_modules", ".bin", "intelephense.cmd"]
+								: ["node_modules", ".bin", "intelephense"],
+						content:
+							process.platform === "win32"
+								? `@echo off\r\n"${process.execPath}" "${entryAbsolute}" %*\r\n`
+								: `#!/bin/sh\nexec "${process.execPath}" "${entryAbsolute}" "$@"\n`,
+						mode: process.platform === "win32" ? undefined : 0o750,
+					},
+				]),
+			);
+			const result = await runEnsure(
+				{ ...testEnv(home, counter, script), FAKE_NPM_LAYOUT: layout },
+				"intelephense",
+			);
+			expect(result.code, JSON.stringify(result)).toBe(0);
+			const payload = JSON.parse(result.stdout) as {
+				value?: string;
+				log: string;
+				reason?: string;
+			};
+			// The package survives on disk (acceptance 2) …
+			expect(
+				fs.existsSync(path.join(home, "tools", "node_modules", "intelephense")),
+				payload.log,
+			).toBe(true);
+			// … the cleanup branch never ran …
+			expect(payload.log).not.toContain(
+				"installed but verification failed, cleaning up",
+			);
+			expect(payload.reason).toBeUndefined();
+			// … and ensureTool hands back the real managed binary.
+			expect(payload.value, payload.log).toBe(
+				path.join(
+					home,
+					"tools",
+					"node_modules",
+					".bin",
+					process.platform === "win32" ? "intelephense.cmd" : "intelephense",
+				),
+			);
 		},
 		REAL_PROCESS_TIMEOUT_MS,
 	);
