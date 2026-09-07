@@ -46,12 +46,6 @@ export const ADVISORY_CHECKS = new Set([
 	// first-time-contributor welcome bot; a token or action-version failure
 	// in it must never block the train (#2618 fix-round-2 F3).
 	"greeting",
-	// lint.yml's oxlint-advisory job (#2700): the full categories+plugins+
-	// type-aware oxlint sweep, continue-on-error at job level. Named
-	// "oxlint advisory" (no trailing "(advisory)") to match the issue's
-	// literal job name, so it needs this explicit entry rather than the
-	// suffix convention -- same shape as `greeting` above.
-	"oxlint advisory",
 ]);
 
 export function isAdvisoryCheck(name) {

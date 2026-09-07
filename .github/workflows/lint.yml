@@ -408,7 +408,7 @@ jobs:
         run: ./vale docs AGENTS.md CLAUDE.md README.md CONTRIBUTING.md .claude/agents .changelog
 
   oxlint-advisory:
-    name: oxlint advisory
+    name: oxlint (advisory)
     needs: validate-merge-train-dispatch
     runs-on: ubuntu-latest
     permissions:
@@ -416,14 +416,18 @@ jobs:
     # #2700: the full categories (correctness+suspicious+perf) + plugins
     # (typescript+unicorn+promise+import+oxc) + --type-aware set, kept out
     # of `lint:js` (gating) because most of it has un-triaged findings on
-    # master today (see the PR body's per-rule table). continue-on-error at
-    # job level, same posture the reviewer chose for `greeting` -- a red
-    # here must stay visible without ever blocking a merge, and this job is
-    # NOT on the required-checks branch protection list. Unlike the other
-    # jobs in this workflow, type-aware linting needs the real dependency
-    # tree resolved (tsconfig-driven import resolution), so this job runs a
-    # full `npm install`, not a single pinned-binary install.
-    continue-on-error: true
+    # master today (see the PR body's per-rule table). Advisory via the
+    # `(advisory)` NAME SUFFIX (`ci-checks.mjs`'s `isAdvisoryCheck`), the
+    # SAME convention `oxfmt format check (advisory)` and `Vale prose lint
+    # (advisory)` already use above -- NOT `continue-on-error` (#2700 review
+    # round 3: the round-1 check-runs payload proved that flag buys no
+    # check-level tolerance beyond what the suffix already gives, and this
+    # job's own findings-vs-degraded distinction below needs the step's
+    # REAL exit code to reach the job, which continue-on-error would have
+    # masked either way). Unlike the other jobs in this workflow, type-aware
+    # linting needs the real dependency tree resolved (tsconfig-driven
+    # import resolution), so this job runs a full `npm install`, not a
+    # single pinned-binary install.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -471,17 +475,22 @@ jobs:
 
       # #2709: with `oxlint-tsgolint` absent, oxlint's --type-aware flag
       # degrades SILENTLY -- exit 1, one `Failed to find tsgolint
-      # executable` line, ZERO rules run, no findings -- which under this
-      # job's own continue-on-error is INDISTINGUISHABLE at the check level
-      # from a healthy run that found real issues (also exit 1). `--format
-      # default` (pinned below, also fixing the CI auto-selected `github`
-      # reporter stripping every rule id from #2700's per-rule table) prints
-      # a `Finished in … on N files with R rules using T threads.` trailer
-      # this step parses: R below RULE_FLOOR fails the step with a named
-      # reason instead of quietly passing as "just more findings".
-      # RULE_FLOOR=100 sits well under the ~164 rules a healthy run reports
-      # today (margin for routine oxlint version bumps) and well over the 0
-      # a missing peer produces.
+      # executable` line, ZERO rules run, no findings -- which, now that
+      # this job carries no continue-on-error, would otherwise be
+      # INDISTINGUISHABLE at the check level from a healthy run that found
+      # real issues (also exit 1: #2697's findings are still un-triaged).
+      # `--format default` (pinned below, also fixing the CI auto-selected
+      # `github` reporter stripping every rule id from #2700's per-rule
+      # table) prints a `Finished in … on N files with R rules using T
+      # threads.` trailer this step parses. The step's own natural exit
+      # code ($status) is deliberately NOT what decides this job's
+      # conclusion (#2700 review round 3): a healthy run with 4900+
+      # un-triaged findings must read GREEN (type-aware ran correctly),
+      # and only a floor breach -- R below RULE_FLOOR -- must read RED,
+      # with the named reason in an `::error::` annotation. RULE_FLOOR=100
+      # sits well under the ~164 rules a healthy run reports today (margin
+      # for routine oxlint version bumps) and well over the 0 a missing
+      # peer produces.
       - name: oxlint advisory (categories + plugins + type-aware)
         run: |
           set +e
@@ -489,6 +498,7 @@ jobs:
           status=$?
           set -e
           echo "$output"
+          echo "(lint:js:advisory exited $status -- findings, if any, are advisory and do not affect this job's conclusion; only the rule-count floor below does)"
           RULE_FLOOR=100
           rules="$(printf '%s\n' "$output" | grep -oE 'with [0-9]+ rules' | grep -oE '[0-9]+' | tail -1 || true)"
           rules="${rules:-0}"
@@ -496,4 +506,4 @@ jobs:
             echo "::error::oxlint advisory ran with only $rules rules (floor $RULE_FLOOR) -- oxlint-tsgolint is likely missing or --type-aware silently degraded; this is NOT the same as a clean or lightly-findinged run"
             exit 1
           fi
-          exit "$status"
+          exit 0
