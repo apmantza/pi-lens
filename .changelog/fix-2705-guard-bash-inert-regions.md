@@ -1,5 +1,4 @@
 ---
 section: Fixed
 ---
-- **Guard-bash preserves here-string boundaries and rejects malformed heredoc substitutions (refs #2705, #2726)** — `<<<` is consumed as a here-string operator instead of being re-read as a phantom heredoc delimiter, and an unclosed `$(` or backtick in an unquoted heredoc body is treated as non-executable by the scanner while later live commands remain classified.
-- **Guard-bash retains valid heredoc substitutions before malformed ones (refs #2705, #2726)** — a valid `$()` or backtick substitution discovered before a later unclosed substitution remains classified, while substitutions nested inside the malformed span remain inert like bash.
+- **Guard-bash preserves here-string boundaries and classifies heredoc substitutions the way bash expands them (refs #2705, #2726)** — `<<<` is consumed as a here-string operator instead of being re-read as a phantom heredoc delimiter; an unclosed `$(` or backtick in an unquoted heredoc body is treated as non-executable while later live commands remain classified; and a valid `$()` or backtick substitution discovered before a later unclosed one stays classified, with substitutions nested inside the malformed span kept inert like bash.
