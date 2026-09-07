@@ -2316,9 +2316,11 @@ export async function verifyNpmPackageEntry(
 
 	// R2-F3 (catalog shape 31): "did the new verifier run at all, and on what"
 	// has to be answerable from sessionstart.log, not only from a debug build —
-	// the failure branches above already log there. Roughly one row per tool per
-	// session: `getToolPathResolved` caches its answer in `resolvedPathCache`,
-	// and `installTool` verifies once.
+	// the failure branches above already log there. Measured volume on a real
+	// intelephense install, scratch PI_LENS_HOME: TWO rows on the session that
+	// installs (installNpmTool's verify, then the post-install resolution), and
+	// ZERO on every later session — the probe cache answers before any verify
+	// runs (`auto-install ensure intelephense: probe cache hit`).
 	logSessionStart(
 		`auto-install verify: succeeded for ${binPath} (check=package-entry, version=${manifest.version}, entry=${entry})`,
 	);
