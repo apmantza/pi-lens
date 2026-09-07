@@ -345,8 +345,11 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 	assertNonEmptyScan(
 		"runner-spawn-cwd-sweep: safeSpawnAsync/safeSpawnSync/wrapper call sites found",
 		allSites.length,
-		// 57 sites measured 2026-09-07 (54 direct safeSpawnAsync/safeSpawnSync
-		// calls + 3 psscriptanalyzer.ts spawnPs(...) wrapper call sites); half
+		// 58 sites measured 2026-09-07 (54 direct safeSpawnAsync/safeSpawnSync
+		// calls + 3 psscriptanalyzer.ts spawnPs(...) wrapper call sites + 1
+		// helm-render.ts runIacPass(...) wrapper call site -- the same
+		// options-shaped-cwd-param rule independently picked up a second,
+		// unrelated wrapper and confirmed it correctly passes cwd); half
 		// rounded down.
 		25,
 	);
