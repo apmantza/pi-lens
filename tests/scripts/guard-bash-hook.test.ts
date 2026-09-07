@@ -129,6 +129,10 @@ const DENY_CASES: Array<[command: string, ruleNeedle: string]> = [
 	// remain visible to the guard, because bash expands it before reporting
 	// the later malformed substitution.
 	["cat <<EOF\n$(git stash)\n$(echo harmless\nEOF\ngit diff", "stash"],
+	// verify round 2: the backtick flush is a separate branch in the hook, so
+	// it needs its own case -- deleting only that branch left the `$( )` case
+	// green while this one allowed.
+	["cat <<EOF\n`git stash`\n`echo harmless\nEOF\ngit diff", "stash"],
 	// W1 (#2726): a here-string is not a heredoc marker.  The command after
 	// it remains live and must still be classified.
 	["grep x <<< foo\ngit stash", "stash"],
