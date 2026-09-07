@@ -654,6 +654,7 @@ export async function acquireTestLock(options = {}) {
 				// sites together with this string.
 				throw new Error(
 					`timed out after ${timeoutMs}ms waiting for test-suite lock held by ${describeOwner(owner)}`,
+					{ cause: error },
 				);
 			}
 			if (now - lastHeartbeat >= heartbeatIntervalMs) {

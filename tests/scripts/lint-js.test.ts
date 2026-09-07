@@ -13,6 +13,10 @@
  * a missing `--deny-warnings` fails here, not just in someone's manual
  * dogfood run.
  */
+// flake-shape: real-process-spawn — the #2700 gating/advisory subset test
+// below adds one more real oxlint `--print-config` spawn; no in-process
+// double is faithful to which rules each npm script actually enables (see
+// `ADMITTED_AFTER_BASELINE` in tests/clients/flake-shape-ratchet.test.ts).
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -155,6 +159,144 @@ describe("lint:js (#2439 — oxlint wired over .mjs/.cjs)", () => {
 		},
 		SPAWN_TIMEOUT_MS + 5_000,
 	);
+});
+
+/**
+ * #2700 — two tiers: `lint:js` (gating) enumerates individually-promoted
+ * rules with zero findings on master, `lint:js:advisory` (continue-on-error
+ * in lint.yml) runs the full categories+plugins+type-aware set. Nothing
+ * stops the two npm-script strings from drifting apart by hand (a rule
+ * added to `lint:js` without ever reaching `lint:js:advisory`, or a rule
+ * removed from `lint:js:advisory` that `lint:js` still names) — this
+ * resolves each script's REAL enabled-rule set via oxlint's own
+ * `--print-config` (never a hand-copied rule list) and asserts the gating
+ * set is a subset of the advisory set.
+ */
+describe("lint:js / lint:js:advisory — the gating rule set stays a subset of the advisory set (#2700)", () => {
+	function enabledRules(npmScript: string): Set<string> {
+		// oxlint's own argv, not a re-typed copy: strip the leading `oxlint`
+		// token off the REAL package.json script string and run the shipped
+		// binary directly (resolved the same way as OXLINT_ENTRY above) so a
+		// change to either script's flags is picked up automatically.
+		const rest = npmScript.replace(/^oxlint\s+/, "");
+		const result = spawnSync(`${OXLINT_ENTRY} ${rest} --print-config`, {
+			encoding: "utf8",
+			cwd: REPO_ROOT,
+			shell: true,
+			timeout: SPAWN_TIMEOUT_MS,
+		});
+		expect(result.status, result.stdout + result.stderr).toBe(0);
+		const config = JSON.parse(result.stdout) as {
+			rules: Record<string, string | null>;
+		};
+		return new Set(
+			Object.entries(config.rules)
+				.filter(([, severity]) => severity && severity !== "off")
+				.map(([name]) => name),
+		);
+	}
+
+	it(
+		"every rule `lint:js` denies is also enabled in `lint:js:advisory`",
+		() => {
+			const pkg = JSON.parse(
+				fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
+			);
+			const gating = enabledRules(pkg.scripts["lint:js"]);
+			const advisory = enabledRules(pkg.scripts["lint:js:advisory"]);
+			expect(gating.size).toBeGreaterThan(0);
+			const missing = [...gating].filter((rule) => !advisory.has(rule));
+			expect(missing).toEqual([]);
+		},
+		SPAWN_TIMEOUT_MS * 2 + 5_000,
+	);
+
+	// `gating.size > 0` above holds even with none of the 32 individually
+	// promoted rules present (the default `correctness` category alone is
+	// non-empty), so it would not notice one silently dropped from the
+	// `lint:js` argv. Named here instead.
+	const PROMOTED_RULES = [
+		"block-scoped-var",
+		"import/default",
+		"import/namespace",
+		"import/no-absolute-path",
+		"import/no-empty-named-blocks",
+		"import/no-named-as-default",
+		"import/no-self-import",
+		"no-extend-native",
+		"no-extra-bind",
+		"no-implied-eval",
+		"no-new",
+		"no-unexpected-multiline",
+		"no-useless-constructor",
+		"oxc/approx-constant",
+		"oxc/misrefactored-assign-op",
+		"oxc/no-accumulating-spread",
+		"oxc/no-async-endpoint-handlers",
+		"oxc/no-this-in-exported-function",
+		"promise/no-callback-in-promise",
+		"promise/no-multiple-resolved",
+		"promise/no-new-statics",
+		"promise/valid-params",
+		"typescript/no-confusing-non-null-assertion",
+		"typescript/no-extraneous-class",
+		"typescript/no-unnecessary-type-constraint",
+		"typescript/no-unsafe-enum-comparison",
+		"unicorn/no-accessor-recursion",
+		"unicorn/no-array-fill-with-reference-type",
+		"unicorn/no-confusing-array-with",
+		"unicorn/no-instanceof-builtins",
+		"unicorn/prefer-array-flat-map",
+		"unicorn/require-module-specifiers",
+	];
+
+	it(
+		"all 32 individually-promoted rules are actually enabled in `lint:js`",
+		() => {
+			const pkg = JSON.parse(
+				fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
+			);
+			const gating = enabledRules(pkg.scripts["lint:js"]);
+			const missing = PROMOTED_RULES.filter((rule) => !gating.has(rule));
+			expect(missing).toEqual([]);
+		},
+		SPAWN_TIMEOUT_MS + 5_000,
+	);
+
+	// Coordination note from the orchestrator (2026-09-07, #2700): eight
+	// rules are policy-`-A`llowed in `lint:js:advisory` rather than left to
+	// deny-and-triage, each for a named reason -- NOT drive-by suppression:
+	//   - no-underscore-dangle, no-await-in-loop, unicorn/no-array-sort,
+	//     unicorn/consistent-function-scoping: overwhelmingly test-tree
+	//     noise (755/696/451/369 hits respectively on the full advisory
+	//     sweep) that would swamp the tier's signal rather than surface a
+	//     real defect class.
+	//   - promise/no-promise-in-callback: false positive on a deliberate
+	//     `void x.then(...)` inside a callback.
+	//   - no-useless-call: false positive on an explicit `.call(bus, ...)`
+	//     this-binding.
+	//   - import/no-unassigned-import: false positive on a deliberate
+	//     side-effect import.
+	//   - no-unmodified-loop-condition: false positive on an AbortSignal
+	//     property poll (`while (!signal.aborted)`).
+	it("the eight policy-allowed rules resolve to off in `lint:js:advisory`", () => {
+		const pkg = JSON.parse(
+			fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
+		);
+		const advisory = enabledRules(pkg.scripts["lint:js:advisory"]);
+		for (const rule of [
+			"no-underscore-dangle",
+			"no-await-in-loop",
+			"unicorn/no-array-sort",
+			"unicorn/consistent-function-scoping",
+			"promise/no-promise-in-callback",
+			"no-useless-call",
+			"import/no-unassigned-import",
+			"no-unmodified-loop-condition",
+		]) {
+			expect(advisory.has(rule)).toBe(false);
+		}
+	});
 });
 
 describe("lint:js — TS lane (#2454 — clients/tools/mcp/index.ts scanned for warning-tier hits)", () => {

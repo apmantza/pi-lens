@@ -5581,9 +5581,14 @@ export class LSPService {
 							});
 						})()
 					: Promise.all(perServerWaits).then(() => {});
-				pushWait.then(() => {
+				// Mark on BOTH paths: a rejected `pushWait` is settled too, and a
+				// resolve-only `.then` left a derived promise that rejected unhandled
+				// whenever a per-server wait failed (oxlint no-floating-promises,
+				// 2026-09-07). The rejection itself still reaches the awaiters below.
+				const markPushWaitSettled = (): void => {
 					pushWaitSettled = true;
-				});
+				};
+				void pushWait.then(markPushWaitSettled, markPushWaitSettled);
 
 				if (tsserverSyncEligible) {
 					// #707 racing variant: rather than burning the full push-wait budget

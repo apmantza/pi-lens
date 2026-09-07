@@ -232,6 +232,24 @@ row missing that had merged an hour earlier (#2693 r1 F6).
 
 ## Probe hygiene (mandatory)
 
+**The shared main checkout is not yours.** Every review runs in its own
+worktree: `git worktree add` under the scratchpad or `.claude/worktrees/`,
+checked out at the PR head, `node_modules` symlinked, removed when the report
+is done. Never `git checkout` a branch in the shared tree, never pass its path
+as `repoRoot`/`cwd` to a probe that writes or deletes (a #2704 review probe
+purged its 473 build artifacts), and never rebuild it to "fix" what a probe
+did. Facts about master come from `git fetch origin` and `origin/master`, not
+from whatever the shared tree happens to have checked out. The record: on
+2026-09-07 the shared checkout was switched under other agents four times
+(`pr-2703-r2`, `pr-2703-verify`, `pr-2707`, `pr-2725`), and each switch
+invalidated another reviewer's or the orchestrator's in-flight commands. A
+report that ends with the shared tree on a branch other than `master` is a
+finding against the report.
+
+**One CI read.** `node scripts/ci-verdict.mjs <pr>; echo $?` once, in the
+report. Polling CI is the orchestrator's job; a reviewer or fixer that loops on
+it is a zombie the maintainer has to notice (2026-09-07, #2707 round 3).
+
 Any ad-hoc probe you run against the built `clients/*.js` outside vitest — a
 `node -e`, a throwaway `.mjs`, a harness script — runs with NO test-mode gate
 and NO home pin, so every logger, ledger and cache it touches writes into the

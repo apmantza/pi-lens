@@ -1,0 +1,137 @@
+{
+	"$schema": "https://unpkg.com/knip@6/schema-jsonc.json",
+
+	// #2698 (refs #2697 item 6): dogfooding knip on pi-lens itself. Pinned
+	// devDependency version: knip@6.34.0 — cite that version when reading
+	// knip's own docs/source for this file's semantics (fetched from
+	// https://github.com/webpro-nl/knip at tag knip@6.34.0).
+	//
+	// THE COMPILED-SIBLING PROBLEM (why `project`/`entry` alone don't fix
+	// this): `npm run build` (tsc, no outDir) writes `clients/x.js` beside
+	// every `clients/x.ts` — gitignored, but present on disk after any build.
+	// index.ts and every clients/*.ts file import with an explicit `.js`
+	// specifier (nodenext moduleResolution). knip's own resolver
+	// (packages/knip/src/util/resolve.ts, `extensionAlias`) tries the literal
+	// `.js` candidate BEFORE the `.ts` source for a `.js` specifier — and its
+	// graph walker does not gitignore-filter a RESOLVED target (only
+	// unresolved-import candidates and a few plugin-added paths get that
+	// filter; verified by reading packages/knip/src/graph/build.ts at the
+	// pinned tag). So whenever a build artifact sits on disk, the reachability
+	// graph walks into the compiled `.js` copy and never returns to the `.ts`
+	// source — every source file the entry doesn't reach through a `.js`-free
+	// path reports as "unused", 491 files on a built tree (root-caused via
+	// `git ls-files --others --ignored --exclude-standard -- '*.js'` cross-
+	// referenced against tracked `.ts` siblings, then re-run with those
+	// siblings removed: unused files fell to 31, dependencies false-positives
+	// vanished). No knip config option overrides `extensionAlias`'s order, so
+	// `npm run knip` (scripts/run-knip.mjs) removes exactly those gitignored
+	// compiled `.js` siblings before invoking knip — never a bare
+	// `git clean`, so it can't touch grammars/ or other gitignored state.
+	"entry": [
+		"index.ts",
+		// MCP server/CLI entry points (package.json#bin targets, built
+		// separately to dist/ by tsconfig.dist.json) and the `fresh`-mode
+		// worker mcp/worker.ts spawns by file path (clients/mcp/analyze.ts),
+		// never a static import knip's graph can trace.
+		"mcp/analyze-cli.ts",
+		"mcp/cli.ts",
+		"mcp/server.ts",
+		"mcp/worker.ts",
+		// Manually-invoked dev scripts, and the source of the checked-in
+		// scripts/download-grammars.js the `prepare` lifecycle and every
+		// install-smoke/parser-smoke workflow run directly — neither is
+		// reached by any import from index.ts.
+		"scripts/*.ts",
+		"scripts/*.mjs",
+		// scripts/lib/merge-train-dispatch-validation.mjs — the one
+		// scripts/lib/*.mjs a workflow `run:` step invokes directly — is
+		// NOT listed here despite that: it's already reached through
+		// tests/scripts/merge-train-warden.test.ts's import (knip's own
+		// "redundant entry pattern" hint caught this). Every other
+		// scripts/lib/*.mjs is reached the same way import graphs normally
+		// work: via a scripts/*.mjs entry's own import, or a test's.
+		// Doesn't exist yet (#2697 item 1 adds it); the glob costs nothing
+		// today and needs no follow-up edit once hook scripts land there.
+		"scripts/hooks/**/*.mjs",
+		"scripts/hooks/**/*.ts"
+		// tools/*.ts and vitest's setupFiles are NOT listed here: both are
+		// already reached without help — tools/*.ts via index.ts's and
+		// mcp/server.ts's own imports, tests/support/vitest-setup.ts via
+		// knip's vitest plugin parsing vitest.config.ts's `setupFiles`
+		// (confirmed: neither appears in the post-cleanup unused-files list).
+	],
+	"project": [
+		"**/*.ts",
+		"scripts/**/*.mjs",
+		"!**/*.test.ts",
+		// Agent worktrees (never a shared checkout to scan — same reasoning
+		// as vitest.config.ts's own `**/.claude/**` exclude).
+		"!.claude/**",
+		"!dist/**",
+		// Fixture/example trees: inputs to the tool-smoke, call-graph and
+		// harness-POC suites, not source belonging to this codebase (mirrors
+		// tsconfig.json's own `tests/fixtures` exclude).
+		"!tests/fixtures/**",
+		"!cases/**"
+	],
+	// Genuinely unreferenced everywhere (verified: no import of this file's
+	// exports anywhere in clients/, mcp/, tools/, or tests/ — only two
+	// filename-string mentions, in a test-infra registry and a doc comment)
+	// but deliberately kept, per its own file header:
+	// "PARKED BY DECISION (#1090, 2026-08-12): zero live importers by
+	// design ... Kept for that future implementation; do not re-flag in
+	// dead-code sweeps while #236 is open."
+	//
+	// scripts/lib/ts-sibling-loader.mjs is likewise genuinely used but
+	// invisible to knip's static import graph: scripts/rekey-hook-await-
+	// exemptions.mjs registers it via node:module's `register()` with a
+	// path built from `path.join(...)` + `pathToFileURL(...)`, not a
+	// literal `import`/`require` specifier.
+	"ignore": [
+		"clients/module-report-lsp.ts",
+		"scripts/lib/ts-sibling-loader.mjs"
+	],
+	// Each package.json binary these devDependencies provide is spawned by
+	// path/PATH lookup in tests or dev tooling, never `import`ed — and none
+	// of knip's plugins for these tools activates the way this repo uses
+	// them, so knip cannot see the usage on its own:
+	"ignoreDependencies": [
+		// knip's husky plugin (packages/knip/src/plugins/husky/index.ts,
+		// pinned tag) only credits the `husky` package itself from the
+		// legacy v8 `package.json#husky.hooks` field; this repo uses v9
+		// file-based hooks (.husky/pre-commit, .husky/pre-push, wired by
+		// scripts/setup-git-hooks.mjs) — matched by the plugin's `config`
+		// glob and parsed for command inputs, but that branch never adds
+		// `toDependency('husky')`. Verified by reading the plugin source.
+		"husky",
+		// knip's Biome plugin only activates config discovery for a root
+		// `biome.json`/`biome.jsonc` — this repo lints itself with
+		// oxlint/oxfmt, not biome; `@biomejs/biome` is a devDependency only
+		// so tests can exercise the real binary (e.g.
+		// tests/clients/biome-config-decorator-metadata.test.ts,
+		// tests/clients/dispatch/runners/biome-check.test.ts) and so the
+		// installer/formatter code can reference its package name as a
+		// string when managing it for USER projects — never `import`ed.
+		"@biomejs/biome",
+		// Spawned as an external LSP server binary (by path/PATH lookup) in
+		// the real-LSP integration and budget tests; no knip plugin models
+		// arbitrary LSP server devDependencies.
+		"typescript-language-server"
+	],
+	"ignoreBinaries": [
+		// .github/workflows/lint.yml installs this with `--no-save`
+		// (`npm install --no-save --no-audit --no-fund --ignore-scripts
+		// markdownlint-cli2@0.23.2`) precisely so its version pin lives only
+		// in the workflow step and never touches package.json/
+		// package-lock.json for a binary nothing else in the repo needs —
+		// see that step's own comment. Declaring it a real devDependency
+		// would undo that deliberate choice.
+		"markdownlint-cli2",
+		// scripts/playground-chrome.mjs shells out to OS-level port-checking
+		// utilities (Windows `netstat`, POSIX `ss`) — system binaries, never
+		// npm-installable, so there is no dependency that could ever provide
+		// them.
+		"netstat",
+		"ss"
+	]
+}
