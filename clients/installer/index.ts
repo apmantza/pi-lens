@@ -723,12 +723,17 @@ export const TOOLS: ToolDefinition[] = [
 		// error. The bundle is one ~4 MB minified line, so the transport-required
 		// marker #208 rescues on lands at byte 4,154,741 of a 4,423,356-byte
 		// stderr while Node truncates piped stderr at 1 MiB on exit. Measured on
-		// intelephense@1.18.5, linux, Node 24:
+		// intelephense@1.18.5, linux, Node v22.22.1:
 		//   $ intelephense --version 2>&1 | wc -c              -> 1048576
 		//   $ intelephense --version 2>&1 | grep -c "Connection input stream is not set" -> 0
 		//   $ intelephense --version 2>err.txt; wc -c < err.txt -> 4423356
-		// `--stdio </dev/null`, `--help`, `-v` and `--socket=0` all reproduce the
-		// dump, so no checkArgs value fixes it. Verified spawn-free instead.
+		// Same run over the alternatives, each with stdin closed the way
+		// verifyToolBinary closes it (`input: ""`):
+		//   --help, -v, --socket=0 -> identical dump (exit 1, 4423356 bytes,
+		//     marker at 4154741, 1048576 through a pipe, marker absent)
+		//   --stdio                -> exit 1 with ZERO bytes on either stream,
+		//     so it carries no marker to rescue on either.
+		// No checkArgs value produces a verdict. Verified spawn-free instead.
 		id: "intelephense",
 		name: "Intelephense",
 		checkCommand: "intelephense",
