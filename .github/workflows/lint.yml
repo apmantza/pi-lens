@@ -269,17 +269,22 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    # Advisory, WITH continue-on-error (unlike oxfmt/vale/osv-scan's advisory
-    # jobs, which deliberately omit it so a real finding still shows red):
-    # this first landing carries known, pre-existing "Unused exports"/"Unused
-    # exported types" debt (#2698's PR body has the count) that is out of
-    # this PR's scope to clean up, so the underlying `knip` exit code is
-    # non-zero on a clean tree too. continue-on-error keeps the check
-    # informative (logs/annotations still show) without red-flagging every
-    # future PR for debt it didn't introduce. #2697 item 6's follow-up drops
-    # continue-on-error once that debt is cleared and the run is genuinely
-    # green.
-    continue-on-error: true
+    # Advisory: not in required-checks branch protection, so a finding never
+    # blocks a merge on its own -- same posture as oxfmt/vale/osv-scan below.
+    # No continue-on-error, for the same reason those give (#2698 review
+    # round 2, F4): a job-level continue-on-error does NOT turn this check
+    # green in the PR UI when its own steps fail (verified live on PR #2704
+    # -- the job reported `completed`/`failure` with continue-on-error set),
+    # it only lets a DOWNSTREAM job that `needs:` this one proceed past a
+    # failure, and nothing in this workflow needs `knip`. The actual merge
+    # tolerance comes entirely from the "(advisory)" name suffix via
+    # `isAdvisoryCheck` (scripts/lib/ci-checks.mjs). This first landing
+    # carries known, pre-existing "Unused exports"/"Unused exported types"
+    # debt (#2698's PR body has the count) that is out of this PR's scope to
+    # clean up, so the underlying `knip` exit code is non-zero on a clean
+    # tree today -- the check-run WILL show red, which is correct: a real
+    # finding must show as a red advisory check a reviewer can see, not a
+    # silently-green one.
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

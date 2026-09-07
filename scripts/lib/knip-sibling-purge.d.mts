@@ -4,6 +4,8 @@
 export interface PurgeDeps {
 	/** Injectable git runner for tests; defaults to a real `git` child process. */
 	git?: (args: string[]) => string;
+	/** Overrides the real runner's buffer cap (tests only). */
+	maxBuffer?: number;
 }
 
 export function purgeCompiledSiblings(

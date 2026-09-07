@@ -76,4 +76,18 @@ describe("purgeCompiledSiblings (#2698)", () => {
 
 		expect(() => purgeCompiledSiblings(notARepo)).toThrow();
 	});
+
+	// #2698 review round 2, F3, red-first: the unbounded `execFileSync` call
+	// this replaced used Node's 1 MB default `maxBuffer` against a listing
+	// already 43% of that cap on this repo — a real ENOBUFS, not a
+	// hypothetical. `deps.maxBuffer` makes the same real overflow (real
+	// `git`, real buffer cap, no mocked error) reproducible against a tiny
+	// fixture: `git ls-files` output for even one file exceeds 1 byte.
+	it("F3: throws (real ENOBUFS) when git's output exceeds maxBuffer", () => {
+		const root = fixtureRepo();
+
+		expect(() => purgeCompiledSiblings(root, { maxBuffer: 1 })).toThrow(
+			/ENOBUFS|maxBuffer/i,
+		);
+	});
 });
