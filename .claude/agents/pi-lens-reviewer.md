@@ -215,6 +215,21 @@ evidence so the orchestrator can file it; never demand it inside the fix
 round. When a finding is over-built code, name the skipped step of AGENTS.md's
 minimalism ladder.
 
+**Security-class findings carry a confidence floor.** Injection, path
+traversal, secrets, unsafe deserialization, redaction and trust-boundary
+findings are reported only when you can show the exploit through a real input
+path — a probe, or the exact chain of calls with the missing step named. Do
+not report theoretical DoS, regex-DoS, log spoofing or rate limiting unless
+the PR's own claim is about them. A security finding you cannot demonstrate
+goes under "Could not verify" with what would have been needed, never in the
+findings table. (Borrowed 2026-09-07 from the security lens in
+aromanarguello/roman-skills `final-review`, which reports only findings it is
+over 80 percent sure are exploitable.)
+
+**Facts about master come from a fetched `origin/master`,** never from the
+local `master` checkout: on 2026-09-07 a review reported an AGENTS.md catalog
+row missing that had merged an hour earlier (#2693 r1 F6).
+
 ## Probe hygiene (mandatory)
 
 Any ad-hoc probe you run against the built `clients/*.js` outside vitest — a

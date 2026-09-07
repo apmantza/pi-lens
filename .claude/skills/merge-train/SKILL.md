@@ -169,12 +169,25 @@ operator's private notes, so a different orchestrator can run the same train.
   event, so the required checks stay ABSENT and `ci-verdict` reports "absent,
   treating as pending" — exit 3, not 0; the "exit 0" first recorded on #2664
   was `$?` read after a `| tail`. After a retarget, push a commit or
-  close/reopen. Read exit codes without a pipe (`node scripts/ci-verdict.mjs
-  <pr>; echo $?`); the merge loop keys on the literal "every gating check
-  concluded success" line.
+  close/reopen. Read exit codes without a pipe. The merge loop is
+  `node scripts/ci-verdict.mjs <pr> --wait <seconds>; echo $?` — 0 merge, 3
+  still pending (re-arm the wait), anything else read the table. Never
+  text-match the table for `failure`: advisory rows (PR body, oxfmt, Vale)
+  print `failure` while the verdict is green, and on 2026-09-07 that stopped
+  the #2692 loop on a green PR.
 - **Maintainer trailing commits** are for intent-free deltas only (a literal
   NUL byte, a false comment, a missing PR-body heading); anything that changes
   what code MEANS goes through a fix round.
+- **Mechanical-only verdict (2026-09-07).** When EVERY finding in a review or
+  verify is intent-free — a PR-body census the reviewer corrected, an inverted
+  body sentence, a heading, a literal, a comment — the orchestrator applies
+  them as trailing commits and merges on green: no fixer resume, no re-verify.
+  That is one resume saved per such PR. One finding that changes what code
+  means, however small, makes it a fix round; a fix round that exists anyway
+  carries the mechanical findings with it (#2693 r2 carried F3–F5). Borrowed
+  from the auto-fix-mechanical rule in aromanarguello/roman-skills
+  `final-review`; NOT borrowed from it: auto-fixing null checks, error
+  handling or cleanup hooks, which change meaning.
 - **Detection retrospective on every merged bug fix (2026-09-06).** The
   catalog records the CODE lesson of a bug (a shape, a screen, a guard). Before
   a bug-labelled lane's ledger row closes, the orchestrator also records the
@@ -245,3 +258,22 @@ operator's private notes, so a different orchestrator can run the same train.
   comment is how #1968 and #2355 sat open for weeks after their fixes
   landed (found 2026-09-02).
 - Report what ran, what was skipped, and what CI must still confirm.
+
+## Common mistakes (scan at task start)
+
+Each row cost a lane at least once; the prose above carries the record.
+
+| Mistake | Fix |
+|---------|-----|
+| Pruning trees with `merge-base --is-ancestor` | Prune only trees whose branch is the head of the PR just merged (#2358's tree, 2026-09-06) |
+| Retargeting a PR base and waiting for CI | `edited` does not fire ci.yml; push a commit or close/reopen |
+| Reading `$?` after a pipe | `node scripts/ci-verdict.mjs <pr> --wait N; echo $?` on its own line |
+| Text-matching the verdict table for `failure` | Key on the exit code; advisory rows print `failure` on green PRs (#2692) |
+| Judging master from the local checkout | `git fetch origin` and read `origin/master`; #2693 r1 reported a catalog row missing that had merged an hour earlier, and the orchestrator's own branch that morning was cut from a master six commits behind |
+| Swapping reviewers between rounds | Same reviewer verifies; the probes and the mutation set are the continuity |
+| Trusting the fixer's "CI green" | Read ci-verdict on the exact head SHA yourself; absent required checks are not green |
+| A third patch-only round on one seam | Round-count rail: state-space table in the body first, Opus fixer |
+| Merging a `refs` PR with no remainder comment | Post the remainder or close the issue crediting the PR |
+| Dispatching independent agents one message at a time | All independent Agent calls in one message; the quota gate is read once before the batch |
+| Resuming a fixer whose tree was reaped | Spawn a fresh fixer on the branch, or export `PILENS_HYGIENE_KEEP_AGENT_TREES=1` for the session up front |
+| Sweeping a shape by grep-counting tokens | A ratchet reads the exact literal it governs (#2693: four sites counted, six real) |
