@@ -11,10 +11,11 @@ Every child process the runner spawns — `pi`, the MCP server, `node`, `npm` �
 runs under a pinned environment: `HOME`, `USERPROFILE`, `PI_LENS_HOME`,
 `PILENS_DATA_DIR`, `PI_LENS_INSTALL_LOG` and `npm_config_cache` all inside the
 scratch root. `PI_LENS_INSTALL_LOG` is on that list by hard experience: it is
-what `scripts/warm-loader-cache.mjs` keys its install log on, `PI_LENS_HOME`
-does NOT redirect it, and the runner's first six runs — which pinned the pi-lens
-home but passed no environment to `npm` at all — put 41 records into the
-maintainer's real `~/.pi-lens/install.log` (#2619 review F1). The pack runs in a
+what `scripts/warm-loader-cache.mjs` keys its install log on, with
+`PI_LENS_HOME/install.log` as the fallback when it is unset, and the runner's
+first six runs — which pinned the pi-lens home but passed no environment to
+`npm` at all — put 41 records into the maintainer's real
+`~/.pi-lens/install.log` (#2619 review F1). The pack runs in a
 `git archive HEAD` export, never the live checkout, because `npm pack` fires our
 own `prepack` (rewrites `package.json` + `package-lock.json`) and `prepare`
 (rebuilds `dist/`, downloads grammars, reinstalls git hooks).

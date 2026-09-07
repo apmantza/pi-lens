@@ -2201,6 +2201,8 @@ function activateExtension(hostPi: ExtensionAPI) {
 						emitHostReadyDelay,
 						sessionReason,
 						handlerEnteredAt,
+						globalConfig,
+						projectConfig: loadPiLensProjectConfig(runtime.projectRoot),
 						// #2129: this call site is only reached for "primary"/
 						// "sequential-replacement" — a declined start returned above.
 						sessionStartClassification: sessionStartDecision.classification,

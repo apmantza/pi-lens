@@ -384,6 +384,11 @@ const wallClockBudgetInclude = [
 	// call to the exported classify functions can see a drift in that
 	// contract (flake-shape admission).
 	"tests/scripts/guard-bash-hook.test.ts",
+	// #2628: the warm-loader's install-log home resolution spawns a real child
+	// under a fully pinned env; the child's own os.homedir() fallback decides
+	// where the record lands and is unobservable in-process (flake-shape
+	// admission).
+	"tests/scripts/warm-loader-cache.test.ts",
 ];
 // #2512 round 2: runtime-turn-session.test.ts's "retires a deleted failed
 // target through the real client and records real telemetry" spawns a REAL

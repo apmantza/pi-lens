@@ -216,6 +216,14 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the hook's real stdin/exit-code/stderr contract is unobservable from an in-process call to the exported classify functions",
 	},
+	// 2026-09-08 (#2628): the warm's install-log home resolution is the
+	// subject — a child whose env is fully pinned decides where the record
+	// lands, and its own `os.homedir()` fallback is unobservable in-process.
+	"real-process-spawn:scripts/warm-loader-cache.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the record's landing spot is decided by a child's own env-pinned os.homedir() fallback; unobservable in-process",
+	},
 };
 
 /** The `wallClockBudgetInclude` project's `include` list, read from the live config — not a hand-copied mirror of it (single-source-of-truth). */

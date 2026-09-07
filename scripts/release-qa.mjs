@@ -28,11 +28,8 @@
  *      pins `HOME`, `USERPROFILE`, `PI_LENS_HOME`, `PILENS_DATA_DIR`,
  *      `PI_LENS_INSTALL_LOG` and `npm_config_cache` inside the scratch root
  *      (AGENTS.md probe hygiene, #2506). `PI_LENS_INSTALL_LOG` is listed
- *      separately for a reason: `scripts/warm-loader-cache.mjs` keys its
- *      install log on THAT variable, not on `PI_LENS_HOME`, and the first six
- *      runs of this runner — which pinned the other three but passed no env to
- *      `npm` at all — put 41 records into the maintainer's real
- *      `~/.pi-lens/install.log` (#2619 review F1).
+ *      separately for a reason: it explicitly selects the warm-loader log
+ *      file, while `PI_LENS_HOME` selects its fallback directory.
  *   4. Drives each row's entry point — the command or RPC a USER path takes,
  *      never a raw internal function — and writes `release-qa-report.md` plus
  *      one witness file per row under `release-qa-evidence/`.
@@ -782,11 +779,9 @@ function log(message) {
  * every `npm` child inherited the maintainer's real environment — and npm
  * runs OUR lifecycle scripts: `prepare` invokes
  * `scripts/warm-loader-cache.mjs`, whose install-log sink is
- * `PI_LENS_INSTALL_LOG` or, failing that, `os.homedir()/.pi-lens/install.log`.
- * It is keyed on that variable, NOT on `PI_LENS_HOME`, so pinning the pi-lens
- * home alone was not enough: a review of the first six runs found 41
- * `warm_loader_cache` records in the maintainer's real
- * `~/.pi-lens/install.log`, timestamped across them.
+ * `PI_LENS_INSTALL_LOG` or, failing that, `PI_LENS_HOME/install.log`.
+ * Pinning the explicit file keeps the sink and the assertion independent of
+ * fallback resolution.
  */
 export function npm(args, cwd, env) {
 	// #2619 review N1: `env` was an OPTIONAL positional, so dropping it at a
@@ -822,10 +817,9 @@ export function npm(args, cwd, env) {
  * - `PI_LENS_HOME` — pi-lens's logs, ledgers and caches.
  * - `PILENS_DATA_DIR` — project-scoped pi-lens data.
  * - `PI_LENS_INSTALL_LOG` — `scripts/warm-loader-cache.mjs`'s install log.
- *   Keyed on this variable ALONE; `PI_LENS_HOME` does not redirect it. Pinning
- *   the other three and not this one is exactly how the first six runs of this
- *   runner put 41 records into the maintainer's real `~/.pi-lens/install.log`
- *   (#2619 review F1).
+ *   It overrides the `install.log` file under `PI_LENS_HOME`; pinning it makes
+ *   the sink explicit and keeps the test's assertion independent of fallback
+ *   resolution.
  * - `npm_config_cache` — npm's own cache, so a QA run cannot mutate the
  *   developer's package cache either.
  *

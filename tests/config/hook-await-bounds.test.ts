@@ -829,7 +829,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 				"budget many times over.",
 			owner: "#2523 slice 2",
 		},
-	"clients/runtime-session.ts#scheduleStartupScansWithClients:d7c597d6~b67d7877":
+	"clients/runtime-session.ts#d7c597d6~b67d7877":
 		{
 			family: "hook-await",
 			site: "session_start",

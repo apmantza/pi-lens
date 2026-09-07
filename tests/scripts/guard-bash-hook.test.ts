@@ -125,6 +125,17 @@ const DENY_CASES: Array<[command: string, ruleNeedle: string]> = [
 	// heredoc delimiter does not stop bash expanding $( ) in the body --
 	// verified by running it with a side-effecting stand-in.
 	["cat <<EOF\n$(git stash)\nEOF", "stash"],
+	// review round 2 F1: a valid substitution before an unclosed one must
+	// remain visible to the guard, because bash expands it before reporting
+	// the later malformed substitution.
+	["cat <<EOF\n$(git stash)\n$(echo harmless\nEOF\ngit diff", "stash"],
+	// verify round 2: the backtick flush is a separate branch in the hook, so
+	// it needs its own case -- deleting only that branch left the `$( )` case
+	// green while this one allowed.
+	["cat <<EOF\n`git stash`\n`echo harmless\nEOF\ngit diff", "stash"],
+	// W1 (#2726): a here-string is not a heredoc marker.  The command after
+	// it remains live and must still be classified.
+	["grep x <<< foo\ngit stash", "stash"],
 ];
 
 // Every allow string the issue lists, which must stay green.
@@ -192,6 +203,22 @@ const ALLOW_CASES: string[] = [
 	"gh pr create --body \"$(cat <<'EOF'\nsmiley :) here\nwe never run `git stash`\nEOF\n)\"",
 	// review round 3 (LX-10-1), through the real CLI: a `#` comment.
 	"echo hi # $(git stash)",
+	// W2 (#2726): real bash does not execute an unclosed substitution in an
+	// unquoted heredoc body, but it does continue with a later live command.
+	"cat <<EOF\n$(git stash\nEOF\ngit diff",
+	"cat <<EOF\n`git stash\nEOF\ngit diff",
+	// Real bash reports the malformed outer substitution and does not run a
+	// nested substitution inside it.
+	"cat <<EOF\n$(echo x\n$(git stash)\nEOF",
+];
+
+// Round-2 survey harness retained as a regression fixture for #2705. The
+// 2026-09-07 corpus is the checked-in deny/allow corpus above; the GitHub
+// discussion that originally described the survey is not part of the repo.
+const SURVEY_CORPUS_DATE = "2026-09-07";
+const SURVEY_CORPUS = [
+	...DENY_CASES.map(([command]) => ({ command, expected: "deny" as const })),
+	...ALLOW_CASES.map((command) => ({ command, expected: "allow" as const })),
 ];
 
 describe("scripts/hooks/guard-bash.mjs -- deny list (#2699)", () => {
@@ -218,6 +245,24 @@ describe("scripts/hooks/guard-bash.mjs -- ambient PI_LENS_HOME (#2699)", () => {
 		});
 		expect(result.status).toBe(0);
 	});
+});
+
+describe("scripts/hooks/guard-bash.mjs -- round-2 survey corpus (#2705)", () => {
+	it.each(SURVEY_CORPUS)(
+		`keeps the ${SURVEY_CORPUS_DATE} corpus free of non-rule denies: $command`,
+		({ command, expected }) => {
+			const result = runHook(command);
+			if (expected === "allow") {
+				expect(result.status, command).toBe(0);
+				expect(result.stderr, command).toBe("");
+			} else {
+				expect(result.status, command).toBe(2);
+				expect(result.stderr.toLowerCase(), command).toMatch(
+					/stash|reset|worktree|probe/,
+				);
+			}
+		},
+	);
 });
 
 describe("scripts/hooks/guard-bash.mjs -- never throws (#2699)", () => {

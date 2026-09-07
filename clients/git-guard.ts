@@ -199,6 +199,11 @@ function canonicalizeGuardCommand(command: string): string {
 	let pendingSpace = false;
 	quote = undefined;
 	for (const ch of result) {
+		if (!quote && ch === "\n") {
+			collapsed += ch;
+			pendingSpace = false;
+			continue;
+		}
 		if (!quote && /\s/.test(ch)) {
 			pendingSpace = collapsed.length > 0;
 			continue;

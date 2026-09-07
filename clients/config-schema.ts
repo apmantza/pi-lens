@@ -187,6 +187,45 @@ function buildConfigSchema(): ConfigSchemaNode {
 		properties[key] ??= opaque("experimental");
 	}
 
+	for (const key of [
+		"knip",
+		"jscpd",
+		"madge",
+		"gitleaks",
+		"govulncheck",
+		"deadCode",
+		"complexity",
+	]) {
+		properties[key] = {
+			type: "object",
+			additionalProperties: true,
+			properties: {
+				enabled: { type: "boolean", [STABILITY_TIER_KEY]: "experimental" },
+			},
+			[STABILITY_TIER_KEY]: "stable",
+		};
+	}
+	properties.startup = {
+		type: "object",
+		additionalProperties: true,
+		properties: {
+			mode: {
+				type: "string",
+				enum: ["quick", "full", "minimal"],
+				[STABILITY_TIER_KEY]: "experimental",
+			},
+			scans: {
+				type: "object",
+				additionalProperties: true,
+				properties: {
+					enabled: { type: "boolean", [STABILITY_TIER_KEY]: "experimental" },
+				},
+				[STABILITY_TIER_KEY]: "experimental",
+			},
+		},
+		[STABILITY_TIER_KEY]: "stable",
+	};
+
 	// The four legacy ROOT LSP keys. Still accepted for their deprecation window
 	// (#2418 registry), and `experimental` because they are scheduled for
 	// removal — a `stable` tier on a key with a `removeNotBefore` would be two

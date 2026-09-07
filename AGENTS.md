@@ -1359,6 +1359,13 @@ record and admitted tally milestones also emit a `degradation_ledger` row throug
 the session remains auditable when no health render reaches the transcript.
 Scanner coverage gaps and stalled notify-inflight barriers use the ledger;
 successful notify drains remain latency-only because they are not degradations.
+
+Session-start analyzer controls follow the same rule: a configured analyzer
+skip uses the `startup-analyzer-disabled` kind with the analyzer name as its
+subject, and `startup-scans` identifies the aggregate scan switch. The ledger
+reset in `handleSessionStart` re-arms these rows for each session; do not add a
+second debug-only latch for analyzer configuration.
+
 The `message_end` handler uses `cache-usage-attribution-stale` (subject
 `message_end`) when a confirmed-stale ctx strips the stable id from a
 `cache_usage` row — the row still writes, so the degraded ATTRIBUTION is the
@@ -3457,7 +3464,7 @@ evadable by construction, so its exception map records intentional non-sweeps.
 - **An LSPService double** → `makeLspServiceDouble(overrides, { omit })` (`tests/support/lsp-service-double.ts`). Overrides are typed; `omit` is the ONLY way to express an ABSENT method (a default that resolves is not absence). `tests/config/lsp-service-double-sweep.test.ts` reds on any hand-rolled double at the `getLSPService` seam; admission needs a reason citing an issue AND a `// lsp-double:` header — never a data edit alone (shape 38).
 - **A governance sweep** → `tests/support/sweep-kit.ts`: `listSourceFiles` with EXPLICIT directories and extensions (include `scripts/` and `.mjs` when the class lives there; never compiled `.js`); `assertNonEmptyScan` with a real floor per directory (calibrated just under the live count, like `tracked-control-bytes`); `stripSource` before any body/comment match so a string cannot launder a match; a missing scan directory throws, never silently narrows. Body-matching sweeps: one shared helper is #2624; until then follow `escape-regexp-fold-sweep.test.ts`.
 - **Git fixtures** → `tests/support/git-fixture-env.ts` (`gitFixtureEnv`, `gitExecFileSync`); never `git` against the checkout.
-- **Any spawn from a test** (npm, pi, tar, a script) → a PINNED env: `HOME`, `PI_LENS_HOME`, `PILENS_DATA_DIR`, `PI_LENS_INSTALL_LOG` (the loader-cache warmer keys on it, not on `PI_LENS_HOME`), `npm_config_cache`, all inside the test's temp dir. `npm pack` runs pi-lens's own prepack/prepare: pack from a `git archive HEAD` export, never the live checkout (#2634; #2619 review F1). The 2026-09-06 receipt: 42 records in the maintainer's real `install.log` from agent installs and one test.
+- **Any spawn from a test** (npm, pi, tar, a script) → a PINNED env: `HOME`, `PI_LENS_HOME`, `PILENS_DATA_DIR`, `PI_LENS_INSTALL_LOG`, `npm_config_cache`, all inside the test's temp dir. The loader-cache warmer uses `PI_LENS_INSTALL_LOG` when present and otherwise writes under `PI_LENS_HOME`; pin both because each is an explicit lifecycle boundary. `npm pack` runs pi-lens's own prepack/prepare: pack from a `git archive HEAD` export, never the live checkout (#2634; #2619 review F1). The 2026-09-06 receipt: 42 records in the maintainer's real `install.log` from agent installs and one test.
 - **A wall-clock, timer, or spawn shape** → the flake-shape ratchet's four-part admission (`// flake-shape:` header naming the reason, `ADMITTED_AFTER_BASELINE` entry, baseline pin, `wallClockBudgetInclude` membership); the ratchet is two-sided, so a stale ceiling reds too.
 - **Markdown tables** → `scripts/lib/md-matrix.mjs` `parseTable`; **skills discovery** → `scripts/lib/skills-predicate.mjs` (pi-faithful; shared with install-selftest); **check-run payloads** → the fixtures in `tests/scripts/ci-verdict.test.ts`.
 - **Module mocks of `node:fs`** are file-scoped under the isolated forks pool and stay that way; prefer a real filesystem fixture — every 2026-09-06 review probe that broke a mocked case used the real fs.
@@ -3715,6 +3722,8 @@ derived eager-import set.
   async sweep/timer callbacks must never dereference `ctx.ui`, which can become
   stale after session replacement.
 - Guard command analysis uses `tokenizeShellCommand` for quoted/separated argv;
+  its heredoc lexer drops quoted bodies, drops unquoted body text, and retains
+  command substitutions because Bash expands them;
   bash read/ownership grants are committed only from successful `tool_result`
   events. Tool-call inspection must not mutate read-guard state, and wrapper,
   launcher, and continuation forms must remain conservative for git commits and
