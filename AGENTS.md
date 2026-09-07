@@ -1350,6 +1350,13 @@ record and admitted tally milestones also emit a `degradation_ledger` row throug
 the session remains auditable when no health render reaches the transcript.
 Scanner coverage gaps and stalled notify-inflight barriers use the ledger;
 successful notify drains remain latency-only because they are not degradations.
+
+Session-start analyzer controls follow the same rule: a configured analyzer
+skip uses the `startup-analyzer-disabled` kind with the analyzer name as its
+subject, and `startup-scans` identifies the aggregate scan switch. The ledger
+reset in `handleSessionStart` re-arms these rows for each session; do not add a
+second debug-only latch for analyzer configuration.
+
 The `message_end` handler uses `cache-usage-attribution-stale` (subject
 `message_end`) when a confirmed-stale ctx strips the stable id from a
 `cache_usage` row — the row still writes, so the degraded ATTRIBUTION is the
