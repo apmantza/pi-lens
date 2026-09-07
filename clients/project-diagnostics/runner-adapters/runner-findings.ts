@@ -113,7 +113,6 @@ export interface TestRunnerFindingsCache {
 	retiredTargets?: DeferredTestTarget[];
 	deliveryEligible?: {
 		sessionId: string;
-		ownerId?: string;
 		generation: number;
 		eligibleAt: number;
 	};

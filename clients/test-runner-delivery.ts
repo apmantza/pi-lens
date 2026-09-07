@@ -272,7 +272,6 @@ export function consumeStagedTestRunnerFindings(args: {
 		testRunGeneration?: number;
 		deliveryEligible?: {
 			sessionId: string;
-			ownerId?: string;
 			generation: number;
 			eligibleAt: number;
 		};
@@ -284,7 +283,6 @@ export function consumeStagedTestRunnerFindings(args: {
 			const foreignDelivery: PendingDelivery = {
 				cwd: args.cwd,
 				sessionId: eligible.sessionId,
-				ownerId: eligible.ownerId,
 				generation: eligible.generation,
 				targetCount: 0,
 				createdAt: eligible.eligibleAt,
