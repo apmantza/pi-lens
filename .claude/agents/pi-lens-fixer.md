@@ -347,7 +347,7 @@ two mutation-inert branches under a ticked checklist box; #2595 r1 shipped an
 axis no manifest can reach. #2599 is the positive case — four `omit` entries
 deleted before reporting because the mutation showed they did nothing.
 
-Two more checks before the report, both from the same day:
+More checks before the report (the first two from the same day):
 - **Re-run every prior round's mutation set on the new head**, not only the
   new mutations. #2583 r3's home-ceiling test went vacuous the moment the new
   gate subsumed its fixture; only the re-run caught it. A guard that was live
@@ -382,6 +382,15 @@ Two more checks before the report, both from the same day:
      was wiped by `resetDegradationLedger()` and never re-recorded; #2649's
      failsafe was anchored to the first hold's epoch and released every
      later healthy call.
+- **Every changed line traces to the brief.** Read the diff hunk by hunk and
+  name the finding or acceptance box each hunk serves; a hunk that serves
+  none — adjacent code "improved", a comment reworded, formatting touched,
+  pre-existing dead code removed — comes out. Orphans YOUR change created
+  (an import, a variable, a helper now unused) come out too; dead code you
+  merely noticed goes in the follow-up section, not the diff. A reviewer
+  reads every hunk as a claim, so a hunk with no purpose costs a question
+  and sometimes a round. (Borrowed 2026-09-07 from the "surgical changes"
+  rule in aromanarguello/roman-skills `coding-guidelines`.)
 - **The closing keyword lives in the PR BODY.** GitHub ignores `closes #N` in
   a title; four 2026-09-06 PRs needed hand-closing. `closes` only when every
   acceptance box is met, else `refs` plus the remainder comment.
