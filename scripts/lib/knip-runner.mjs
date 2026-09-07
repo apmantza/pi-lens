@@ -19,11 +19,16 @@
 //   tree now needs `npm run build` before `npm test` (the CLAUDE.md
 //   non-negotiable, but easy to forget immediately after this script just
 //   deleted the build's own output).
+//
+// #2698 review round 3, R2-F1: knip's actual short version flag is `-V`
+// (capital) -- `-v` is "Unknown option" to knip itself (verified:
+// `node_modules/.bin/knip -v` errors, `-V`/`--version` both print the
+// version). Round 2 listed `-v`, so `npm run knip -- -V` still purged.
 import { spawnSync } from "node:child_process";
 import { purgeCompiledSiblings } from "./knip-sibling-purge.mjs";
 import { resolveKnipCommand } from "./knip-command.mjs";
 
-const SKIP_PURGE_ARGS = new Set(["--help", "-h", "--version", "-v"]);
+const SKIP_PURGE_ARGS = new Set(["--help", "-h", "--version", "-V"]);
 
 /**
  * @typedef {{

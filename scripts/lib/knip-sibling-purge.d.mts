@@ -6,6 +6,8 @@ export interface PurgeDeps {
 	git?: (args: string[]) => string;
 	/** Overrides the real runner's buffer cap (tests only). */
 	maxBuffer?: number;
+	/** Overrides the real runner's wall-clock bound in ms (tests only). */
+	timeout?: number;
 }
 
 export function purgeCompiledSiblings(

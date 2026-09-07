@@ -5,7 +5,7 @@ function fakeSpawn(status: number | null, error?: Error) {
 	return vi.fn().mockReturnValue({ status, error });
 }
 
-describe("runKnip (#2698 review round 2)", () => {
+describe("runKnip (#2698 review rounds 2-3)", () => {
 	it("purges, then spawns the resolved command, and propagates knip's exit code", () => {
 		const purge = vi.fn().mockReturnValue(["clients/a.js"]);
 		const resolveCommand = vi
@@ -80,14 +80,28 @@ describe("runKnip (#2698 review round 2)", () => {
 		expect(logError).toHaveBeenCalledWith(expect.stringMatching(/^::error::/));
 	});
 
-	it("F5: skips the purge entirely for --help", () => {
-		const purge = vi.fn();
+	// #2698 review round 3, R2-F1, red-first over the whole per-argv skip
+	// table: round 2 listed `-v` (lowercase) as knip's short version flag,
+	// but knip's real short flag is `-V` (capital) — `-v` is "Unknown
+	// option" to knip itself (verified against the installed 6.34.0 binary).
+	// `npm run knip -- -V` still purged under round 2's code. This table
+	// covers every skip arg AND proves `-v` is no longer treated as one.
+	it.each([
+		["--help", 0],
+		["-h", 0],
+		["--version", 0],
+		["-V", 0],
+		// Not a recognized knip flag (knip itself rejects it) — must NOT be
+		// treated as a version request, so the purge still runs.
+		["-v", 1],
+	])("F5/R2-F1: purge call count for %s is %i", (arg, purgeCallCount) => {
+		const purge = vi.fn().mockReturnValue([]);
 		const resolveCommand = vi
 			.fn()
-			.mockReturnValue({ command: "node", args: ["bin/knip.js", "--help"] });
+			.mockReturnValue({ command: "node", args: ["bin/knip.js", arg] });
 		const spawn = fakeSpawn(0);
 
-		const code = runKnip(["--help"], "/repo", {
+		const code = runKnip([arg], "/repo", {
 			purge,
 			resolveCommand,
 			spawn,
@@ -95,21 +109,9 @@ describe("runKnip (#2698 review round 2)", () => {
 			logError: vi.fn(),
 		});
 
-		expect(purge).not.toHaveBeenCalled();
+		expect(purge).toHaveBeenCalledTimes(purgeCallCount);
 		expect(spawn).toHaveBeenCalled();
 		expect(code).toBe(0);
-	});
-
-	it("F5: skips the purge entirely for --version", () => {
-		const purge = vi.fn();
-		runKnip(["--version"], "/repo", {
-			purge,
-			resolveCommand: vi.fn().mockReturnValue({ command: "node", args: [] }),
-			spawn: fakeSpawn(0),
-			log: vi.fn(),
-			logError: vi.fn(),
-		});
-		expect(purge).not.toHaveBeenCalled();
 	});
 
 	it("F5: prints the rebuild reminder only when files were actually purged", () => {

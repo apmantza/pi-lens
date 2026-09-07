@@ -90,4 +90,16 @@ describe("purgeCompiledSiblings (#2698)", () => {
 			/ENOBUFS|maxBuffer/i,
 		);
 	});
+
+	// #2698 review round 3, R2-F3, red-first: `timeout`/`killSignal` were the
+	// one guard added alongside `maxBuffer` with no test of their own —
+	// deleting both lines from the real runner left every prior test green.
+	// `deps.timeout: 1` forces a REAL `ETIMEDOUT`/`SIGKILL` against a real
+	// `git` process (fork+exec alone reliably exceeds 1ms; verified 5/5 runs
+	// against this repo before writing this test) — no mocked error.
+	it("F3/R2-F3: throws (real ETIMEDOUT/SIGKILL) when a git call exceeds timeout", () => {
+		const root = fixtureRepo();
+
+		expect(() => purgeCompiledSiblings(root, { timeout: 1 })).toThrow();
+	});
 });

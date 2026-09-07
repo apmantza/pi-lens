@@ -272,12 +272,17 @@ jobs:
     # Advisory: not in required-checks branch protection, so a finding never
     # blocks a merge on its own -- same posture as oxfmt/vale/osv-scan below.
     # No continue-on-error, for the same reason those give (#2698 review
-    # round 2, F4): a job-level continue-on-error does NOT turn this check
-    # green in the PR UI when its own steps fail (verified live on PR #2704
-    # -- the job reported `completed`/`failure` with continue-on-error set),
-    # it only lets a DOWNSTREAM job that `needs:` this one proceed past a
-    # failure, and nothing in this workflow needs `knip`. The actual merge
-    # tolerance comes entirely from the "(advisory)" name suffix via
+    # round 2, F4): a job-level continue-on-error does NOT turn THIS CHECK
+    # green in the PR checks list when its own steps fail (verified live on
+    # PR #2704 -- the job reported `completed`/`failure` with continue-on-
+    # error set, and branch protection reads exactly that per-job check-run,
+    # not the workflow run's own conclusion). What it DOES do (round 1): (a)
+    # lets a DOWNSTREAM job that `needs:` this one proceed past a failure --
+    # nothing in this workflow needs `knip`, so moot here -- and (b) greens
+    # the overall lint.yml WORKFLOW RUN's own conclusion even though this
+    # job's check-run stays red, which is not the same signal branch
+    # protection consumes and buys nothing for merge tolerance. The actual
+    # merge tolerance comes entirely from the "(advisory)" name suffix via
     # `isAdvisoryCheck` (scripts/lib/ci-checks.mjs). This first landing
     # carries known, pre-existing "Unused exports"/"Unused exported types"
     # debt (#2698's PR body has the count) that is out of this PR's scope to

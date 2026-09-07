@@ -18,29 +18,38 @@
 // dependency bump (it walks node_modules' own ignored/tracked state too) --
 // so an unbounded call was one `npm install` away from ENOBUFS. `maxBuffer`
 // is now 16 MB (same value scripts/prune-agent-worktrees.mjs's own `git()`
-// helper uses for the same class of listing), and a wall-clock `timeout` +
-// `killSignal` guards a stalled call the same way: that file's own comment
-// records a single `git status --porcelain` measured over 100 SECONDS on
-// this box under multi-agent contention (#2435) -- a phenomenon of THIS
-// machine, not of `git ls-files` specifically, so the same bound applies
-// here. Both failures now THROW (never silently degrade) -- the caller
-// (scripts/lib/knip-runner.mjs) must fail loudly, not run knip against a
-// still-built tree that would silently regenerate the false "unused files"
-// report this wrapper exists to prevent.
+// helper uses for the same class of listing). Both failures now THROW
+// (never silently degrade) -- the caller (scripts/lib/knip-runner.mjs) must
+// fail loudly, not run knip against a still-built tree that would silently
+// regenerate the false "unused files" report this wrapper exists to
+// prevent.
+//
+// #2698 review round 3, R2-F2: the wall-clock `timeout` guards a stalled
+// call, but round 2's initial value (10s) was tighter than the contention
+// its OWN justifying comment cites -- scripts/prune-agent-worktrees.mjs
+// measured a single `git status --porcelain` over 100 SECONDS under 5-agent
+// load (#2435), so a 10s bound would abort (loudly, per F3) on perfectly
+// healthy contention, not just a wedged git. Raised to 60s, matching
+// prune-agent-worktrees.mjs's own `REMOVE_TIMEOUT_MS`: "set far above any
+// real removal ... and only ever fires on a wedged git" is exactly the
+// property this bound needs too, and the sibling file already establishes
+// 60s as this repo's calibrated value for it.
 import { existsSync, unlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import * as path from "node:path";
 
 const DEFAULT_MAX_BUFFER = 16 * 1024 * 1024;
-const GIT_TIMEOUT_MS = 10_000;
+const GIT_TIMEOUT_MS = 60_000;
 
 /**
  * @typedef {{
  *   git?: (args: string[]) => string,
  *   maxBuffer?: number,
+ *   timeout?: number,
  * }} PurgeDeps `git` is an injectable git runner for tests; defaults to a
- *   real `git` child process. `maxBuffer` overrides the real runner's
- *   buffer cap (tests only -- `deps.git` bypasses it entirely).
+ *   real `git` child process. `maxBuffer`/`timeout` override the real
+ *   runner's buffer cap / wall-clock bound (tests only -- `deps.git`
+ *   bypasses both entirely).
  */
 
 /**
@@ -57,7 +66,7 @@ export function purgeCompiledSiblings(repoRoot, deps = {}) {
 				encoding: "utf-8",
 				shell: false,
 				maxBuffer: deps.maxBuffer ?? DEFAULT_MAX_BUFFER,
-				timeout: GIT_TIMEOUT_MS,
+				timeout: deps.timeout ?? GIT_TIMEOUT_MS,
 				killSignal: "SIGKILL",
 			}));
 

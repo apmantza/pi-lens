@@ -28,6 +28,15 @@
 // `package.json` sidesteps the `exports` map entirely -- the same technique
 // `clients/package-root.ts`'s `getPackageRoot` uses for this repo's own
 // root, applied to an installed dependency instead of the running package.
+//
+// #2698 review round 3, R2-F4: that upward walk stops at the FIRST
+// package.json it finds, which is knip@6.34.0's own root today (its `dist/`
+// has no package.json of its own to stop at early) -- but nothing enforced
+// that. A future knip layout (or any other package resolved the same way)
+// with an intermediate package.json between the entry file and its real
+// root would resolve THAT package's `bin` silently, with no error. Asserting
+// `pkg.name === "knip"` turns a silent wrong-binary resolution into a loud
+// one.
 import { createRequire } from "node:module";
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
@@ -64,6 +73,11 @@ export function resolveKnipCommand(extraArgs, deps = {}) {
 	const entryPath = resolve("knip");
 	const pkgPath = findPackageJsonUpward(entryPath);
 	const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+	if (pkg.name !== "knip") {
+		throw new Error(
+			`resolved ${pkgPath} while looking for knip's package.json, but its "name" is ${JSON.stringify(pkg.name)}, not "knip"`,
+		);
+	}
 	const bin = typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.knip;
 	if (!bin) {
 		throw new Error(`knip's package.json (${pkgPath}) has no "knip" bin entry`);
