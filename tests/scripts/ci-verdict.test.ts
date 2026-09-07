@@ -2,7 +2,10 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import * as yaml from "js-yaml";
 import { describe, expect, it } from "vitest";
-import { isAdvisoryCheck } from "../../scripts/lib/ci-checks.mjs";
+import {
+	ADVISORY_CHECKS,
+	isAdvisoryCheck,
+} from "../../scripts/lib/ci-checks.mjs";
 import {
 	computeVerdict,
 	DEFAULT_GH_TIMEOUT_MS,
@@ -986,6 +989,15 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 		"OSV scan (advisory)",
 		"knip (advisory)",
 		"greeting",
+		// #2700 review round 3: named "oxlint (advisory)" (the `(advisory)`
+		// suffix, not a hand-maintained ci-checks.mjs entry like `greeting`
+		// above) -- the full categories+plugins+type-aware oxlint sweep
+		// (lint.yml), most of whose findings are un-triaged on master today
+		// (see the PR body's per-rule table), so this must never gate like
+		// `lint:js` does. See the dedicated "classified by the suffix, not
+		// an explicit allowlist entry" case below for the proof that this
+		// name carries NO entry in `ADVISORY_CHECKS`.
+		"oxlint (advisory)",
 		...EXTERNAL_ADVISORY_NAMES,
 	]);
 
@@ -1043,9 +1055,24 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 			"oxfmt format check (advisory)",
 			"Vale prose lint (advisory)",
 			"OSV scan (advisory)",
+			"oxlint (advisory)",
 		]) {
 			expect(isAdvisoryCheck(name)).toBe(true);
 		}
+	});
+
+	// #2700 review round 3: the repo's settled convention for a NEW advisory
+	// job is the `(advisory)` name suffix with no continue-on-error (what
+	// `oxfmt format check (advisory)`/`Vale prose lint (advisory)` above and
+	// osv-scan.yml already do) -- not a hand-maintained ADVISORY_CHECKS
+	// entry like `greeting`'s (that shape exists only because `greeting`'s
+	// real GitHub Actions job name, from greetings.yml's job KEY, carries no
+	// suffix at all and cannot be renamed without losing the upstream
+	// action's own posting identity). Proves the classification comes from
+	// the suffix, not a copy this file forgot to keep updated.
+	it("oxlint (advisory) is classified by the name suffix, not a hand-maintained ADVISORY_CHECKS entry", () => {
+		expect(ADVISORY_CHECKS.has("oxlint (advisory)")).toBe(false);
+		expect(isAdvisoryCheck("oxlint (advisory)")).toBe(true);
 	});
 });
 
