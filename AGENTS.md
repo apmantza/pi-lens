@@ -3713,6 +3713,8 @@ derived eager-import set.
   async sweep/timer callbacks must never dereference `ctx.ui`, which can become
   stale after session replacement.
 - Guard command analysis uses `tokenizeShellCommand` for quoted/separated argv;
+  its heredoc lexer drops quoted bodies, drops unquoted body text, and retains
+  command substitutions because Bash expands them;
   bash read/ownership grants are committed only from successful `tool_result`
   events. Tool-call inspection must not mutate read-guard state, and wrapper,
   launcher, and continuation forms must remain conservative for git commits and
