@@ -1070,6 +1070,12 @@ async function handleToolCallImpl(deps: ToolCallDeps): Promise<ToolCallResult> {
 				entropy: baseline.codeEntropy,
 			});
 		}
+	} else if (getFlag("no-complexity") && filePath && isComplexitySupportedFile(filePath)) {
+		recordDegradationOnce({
+			kind: "startup-analyzer-disabled",
+			subject: "complexity",
+			reason: "skipped (disabled by config)",
+		});
 	}
 
 	// --- Read-Before-Edit Guard: check edits ---

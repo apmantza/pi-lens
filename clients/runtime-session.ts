@@ -10,6 +10,7 @@ import { deadCodeIssueCount } from "./dead-code-client.js";
 import { logDeadCodeScan } from "./dead-code-logger.js";
 import {
 	incrementDegradationCount,
+	recordDegradationOnce,
 	resetDegradationLedger,
 } from "./degradation-ledger.js";
 import { getDiagnosticTracker } from "./diagnostic-tracker.js";
@@ -1214,6 +1215,11 @@ function scheduleStartupScansWithClients(
 	const analyzerEnabled = (flag: string): boolean => !deps.getFlag(flag);
 	if (!analyzerEnabled("no-complexity")) {
 		dbg("session_start complexity: skipped (disabled by config)");
+		recordDegradationOnce({
+			kind: "startup-analyzer-disabled",
+			subject: "complexity",
+			reason: "skipped (disabled by config)",
+		});
 	}
 
 	// Some background scans are CPU-heavy and arrive on the event loop
@@ -1328,6 +1334,11 @@ function scheduleStartupScansWithClients(
 		const flag = `no-${name}`;
 		if (name !== "opengrep" && name !== "trivy" && !analyzerEnabled(flag)) {
 			dbg(`session_start ${name}: skipped (disabled by config)`);
+			recordDegradationOnce({
+				kind: "startup-analyzer-disabled",
+				subject: name,
+				reason: "skipped (disabled by config)",
+			});
 			return;
 		}
 		if (skipHeavyweightScans) return;
@@ -2970,6 +2981,11 @@ export async function handleSessionStart(
 		dbg(
 			"session_start: skipping startup background scans (disabled by config)",
 		);
+		recordDegradationOnce({
+			kind: "startup-analyzer-disabled",
+			subject: "startup-scans",
+			reason: "skipped (disabled by config)",
+		});
 	} else if (!startupScan.canWarmCaches) {
 		dbg(
 			`session_start: skipping heavy scans (${startupScan.reason ?? "unknown"})`,

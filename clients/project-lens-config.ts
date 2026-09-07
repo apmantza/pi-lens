@@ -354,8 +354,17 @@ export function loadPiLensProjectConfig(
 	// a pi-lens-owned file were then produced by nobody at all. The pi-lens
 	// loader now enumerates those documents itself, for records only: nothing
 	// here is merged, and which file supplies a VALUE is unchanged.
-	reportPiLensConfigRecords(entry.legacyRecords);
 	const configInfo = preloadedInfo ?? freshInfoFor(entry);
+	// The selected legacy document is resolved below and its bounded migration
+	// records are cached with that projection. Reporting the discovery copy as
+	// well would produce two suppression records with different totals, because
+	// the discovery walk and the single-document resolution see different
+	// record populations. Keep discovery-only documents here; the selected file
+	// is reported by `loadCachedConfigFile`.
+	const selectedLegacyPath = configInfo?.path;
+	reportPiLensConfigRecords(
+		entry.legacyRecords.filter((record) => record.file !== selectedLegacyPath),
+	);
 	if (!configInfo) return EMPTY_PROJECT_CONFIG;
 	return loadCachedConfigFile(configInfo);
 }
