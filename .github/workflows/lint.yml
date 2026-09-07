@@ -456,8 +456,44 @@ jobs:
         with:
           node-version: "22"
 
+      # `npm ci` (not `npm install`) + `--ignore-scripts` (SonarCloud S6505 /
+      # S8543, the #1923 posture ci.yml's oxfmt-adjacent steps already cite):
+      # no package this job needs (oxlint, oxlint-tsgolint, and their own
+      # deps) carries an install script, the lockfile is already in sync
+      # (checked elsewhere in CI), and `--ignore-scripts` skips this repo's
+      # own `prepare` (build:dist, grammar download, git hooks) -- none of
+      # which the lint reads. Do not copy this to the OTHER bare
+      # `npm install` sites in this repo (ci.yml, release.yml, grammar
+      # health, tool-smoke, compat-smoke): several of those genuinely need
+      # `prepare` to run.
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci --no-audit --no-fund --ignore-scripts
 
+      # #2709: with `oxlint-tsgolint` absent, oxlint's --type-aware flag
+      # degrades SILENTLY -- exit 1, one `Failed to find tsgolint
+      # executable` line, ZERO rules run, no findings -- which under this
+      # job's own continue-on-error is INDISTINGUISHABLE at the check level
+      # from a healthy run that found real issues (also exit 1). `--format
+      # default` (pinned below, also fixing the CI auto-selected `github`
+      # reporter stripping every rule id from #2700's per-rule table) prints
+      # a `Finished in … on N files with R rules using T threads.` trailer
+      # this step parses: R below RULE_FLOOR fails the step with a named
+      # reason instead of quietly passing as "just more findings".
+      # RULE_FLOOR=100 sits well under the ~164 rules a healthy run reports
+      # today (margin for routine oxlint version bumps) and well over the 0
+      # a missing peer produces.
       - name: oxlint advisory (categories + plugins + type-aware)
-        run: npm run lint:js:advisory
+        run: |
+          set +e
+          output="$(npm run lint:js:advisory --silent 2>&1)"
+          status=$?
+          set -e
+          echo "$output"
+          RULE_FLOOR=100
+          rules="$(printf '%s\n' "$output" | grep -oE 'with [0-9]+ rules' | grep -oE '[0-9]+' | tail -1 || true)"
+          rules="${rules:-0}"
+          if [ "$rules" -lt "$RULE_FLOOR" ]; then
+            echo "::error::oxlint advisory ran with only $rules rules (floor $RULE_FLOOR) -- oxlint-tsgolint is likely missing or --type-aware silently degraded; this is NOT the same as a clean or lightly-findinged run"
+            exit 1
+          fi
+          exit "$status"
