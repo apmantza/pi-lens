@@ -1262,7 +1262,6 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<Record<string, string>> = {
 		"successful spawn duration history intentionally spans session boundaries within the host process so later sessions can avoid waits that prior evidence proves cannot succeed",
 	"review-graph/git-identity.ts": "git user identity, read once per process",
 	"slow-fs.ts": "measured filesystem-latency classification of the host",
-	"tui-fit.ts": "terminal truncation-behavior probe",
 	"project-scale.ts":
 		"project-scale base measurement, recomputed on its own inputs",
 	"sgconfig.ts":
@@ -1274,8 +1273,6 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<Record<string, string>> = {
 		"generated-file classification derived from path patterns",
 	"git-tracked-ignore.ts":
 		"git tracked/ignored sets, invalidated by their own mtime checks rather than by the session boundary",
-	"blocker-freshness.ts":
-		"grammar-load memo plus a turn-scoped forward-import parse memo keyed on each file's own mtime and size; both re-derive from disk, so a session boundary cannot make them lie",
 	"diagnostic-line-freshness.ts":
 		"the #1641 past-EOF line-count memo, keyed on mtime AND size and re-stat'd on every read — a mismatch always recomputes, so it is invalidated by its own freshness check per file, not by the session boundary, same as git-tracked-ignore.ts",
 	"warm-attach.ts":
@@ -1334,11 +1331,9 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<Record<string, string>> = {
 	"diagnostics-publish.ts":
 		"diagnostics publisher registration and dirty-path dedupe",
 	"bus-events-logger.ts": "bus event rollup counters, an observability tally",
-	"ndjson-logger.ts": "registered log-file paths",
 	"quiet-window.ts": "quiet-window task registration",
 	"quiet-window-config.ts":
 		"the env-derived quiet-window kill switch and wait budget, split out of quiet-window.ts by #1462; a memo of configuration, not of a session verdict",
-	"dispatch/lazy.ts": "the lazy dispatch-integration import cell",
 	"extension-log.ts": "console-method guard installation",
 	"cache-observability.ts":
 		"cache-prefix observation and per-session miss-attribution/summary state; both maps are role-separated when session identity is absent, bounded by the same LRU cap, summarized then cleared on each role-specific shutdown",
@@ -1406,12 +1401,11 @@ export const EXEMPT_SESSION_STATE_FILES: Readonly<Record<string, string>> = {
  */
 export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	"agent-nudge.ts": 1,
-	"blocker-freshness.ts": 2,
 	// #2467: flagged because the file now exports a session_start reset; the
 	// scan counts no module-scope CONTAINER here (the gate is a boolean and the
 	// resident slot a nullable reference).
 	"bootstrap.ts": 0,
-	"bounded-telemetry.ts": 2,
+	"bounded-telemetry.ts": 1,
 	"bus-events-logger.ts": 1,
 	"bus-publish.ts": 0,
 	// #1071 added the per-session miss-attribution ledger (1 → 2).
@@ -1460,7 +1454,6 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// counted (10 -> 11). Import-time frozen vocabulary, same class as this
 	// file's other constant lookups above — SWEEP_HEURISTIC_LIMITS item 5.
 	"dispatch/integration.ts": 11,
-	"dispatch/lazy.ts": 0,
 	// #2215 added the language matrix's two derived lookups
 	// (`BINDING_BY_EXTENSION`, `LSP_ONLY_RULE_LANGUAGES`) (5 → 7). Both are
 	// import-time frozen lookups with no session lifetime —
@@ -1571,7 +1564,6 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// #2423: the frozen built-in tool-name table plus the call-scoped
 	// resolved-range carry. Both are argued in EXEMPT_SESSION_STATE_FILES.
 	"mutating-tool.ts": 2,
-	"ndjson-logger.ts": 0,
 	// #1602 added `globalBinDirCache` (1 → 2), cleared by the same
 	// `_resetPackageManagerCache` the registry entry above names.
 	"package-manager.ts": 2,
@@ -1643,7 +1635,6 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// scan's reset-signal detector) — see this file's EXEMPT_SESSION_STATE_FILES
 	// entry above for why it is exempt rather than registered.
 	"tree-sitter-query-loader.ts": 2,
-	"tui-fit.ts": 0,
 	"warm-attach.ts": 0,
 	// #2275 added `renderedDependencyDriftFiles` (the drained per-turn footer
 	// delivery set) alongside the existing two.
