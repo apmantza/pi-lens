@@ -175,6 +175,8 @@ Message-end stale attribution anchors the session id when a live ctx is handled,
 
 For human contributors and issue/PR authors, see `CONTRIBUTING.md` at the repo root. It covers the development workflow, how to add runners, LSP servers, formatters, and rules, and the issue/PR templates. This `AGENTS.md` is the durable agent context; `CONTRIBUTING.md` is the public contributor guide.
 
+**`scripts/hooks/guard-bash.mjs` mechanically enforces four of the non-negotiables below** (#2699): `git stash` in any form, `git reset --soft origin/<branch>` / `--hard`, `git worktree remove` with two force flags, and an unpinned `node` probe against `clients/`/`dist/` with no `PI_LENS_HOME`. Registered as a `PreToolUse` hook on the Bash tool in `.claude/settings.json`, it denies with exit code 2 and a one-line reason on stderr before the tool runs, and never blocks on its own failure (malformed input degrades to allow). It is a net under the prose in CLAUDE.md and the playbooks, not a replacement for reading them — it catches the four rules a tokenizer can reliably classify, not the judgment calls the rest of this document asks for.
+
 ### Role contracts for delegated work
 
 Every delegated worker receives `docs/pi-lens-subagent.md` and exactly one role
