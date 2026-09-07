@@ -408,6 +408,28 @@ describe("psscriptanalyzer execution-policy-blocked -File run (#1540)", () => {
 		expect(result.diagnostics).toHaveLength(0);
 	});
 
+	// #2691: the `-File` analysis spawn passed no `cwd`, so it ran under the
+	// extension host's `process.cwd()` instead of `ctx.cwd` -- same shape as
+	// #1731 (sqlfluff). `Invoke-ScriptAnalyzer -Path $FilePath` with no
+	// `-Settings` only auto-discovers `PSScriptAnalyzerSettings.psd1` in the
+	// directory of the `-Path` argument itself (PSScriptAnalyzer's
+	// `FindSettingsMode` derives `directory` from `Path.GetDirectoryName`
+	// of the `-Path` value, with no upward walk and no cwd fallback), and
+	// `$FilePath` here is already the absolute `path.resolve(cwd,
+	// ctx.filePath)`, so this is a consistency fix (matching the two
+	// `-Command` probes' cwd) rather than a config-resolution behavior
+	// change.
+	it("spawns the -File analysis run with ctx.cwd, not the host's (#2691)", async () => {
+		const runner = await loadRunner();
+		const testCtx = ctx();
+		healthyHost();
+		await runner.run(testCtx);
+		const fileCalls = callsMatching("-File");
+		expect(fileCalls).toHaveLength(1);
+		const [, , options] = fileCalls[0];
+		expect(options?.cwd).toBe((testCtx as unknown as { cwd: string }).cwd);
+	});
+
 	/**
 	 * #1604 N1 -- the #1556 F4 review tightened `policyDenied` from a bare
 	 * `securityerror|execution polic(y|ies)|running scripts is disabled|

@@ -54,9 +54,11 @@ const PS_TIMEOUT_MS = 30000;
 function spawnPs(
 	cmd: string,
 	args: string[],
-	timeoutMs = PS_TIMEOUT_MS,
+	options: { timeoutMs?: number; cwd?: string } = {},
 ): Promise<SpawnResult> {
+	const { timeoutMs = PS_TIMEOUT_MS, cwd } = options;
 	return safeSpawnAsync(cmd, args, {
+		cwd,
 		timeout: timeoutMs,
 		resourceLabel: "psscriptanalyzer",
 	});
@@ -179,6 +181,7 @@ async function resolvePowerShellCmd(): Promise<string | null> {
 	for (const candidate of ["pwsh", "powershell"]) {
 		const sampler = startHostStallSampler();
 		const startedAt = Date.now();
+		// cwd-exempt: global interpreter-presence probe ("is pwsh/powershell on PATH at all"), not tied to any project
 		const result = await spawnPs(candidate, [
 			"-NoProfile",
 			"-NonInteractive",
@@ -230,6 +233,7 @@ async function checkModuleAvailable(cmd: string): Promise<boolean> {
 
 	const sampler = startHostStallSampler();
 	const startedAt = Date.now();
+	// cwd-exempt: global module-presence probe -- PSScriptAnalyzer resolves from PowerShell's module search path, not a per-project install
 	const result = await spawnPs(cmd, [
 		"-NoProfile",
 		"-NonInteractive",
@@ -359,14 +363,18 @@ const psScriptAnalyzerRunner: RunnerDefinition = {
 		try {
 			const sampler = startHostStallSampler();
 			const startedAt = Date.now();
-			const result = await spawnPs(cmd, [
-				"-NoProfile",
-				"-NonInteractive",
-				"-File",
-				tmpScript,
-				"-FilePath",
-				absPath,
-			]);
+			const result = await spawnPs(
+				cmd,
+				[
+					"-NoProfile",
+					"-NonInteractive",
+					"-File",
+					tmpScript,
+					"-FilePath",
+					absPath,
+				],
+				{ timeoutMs: PS_TIMEOUT_MS, cwd },
+			);
 			const hostStallMs = sampler.stop();
 			const elapsedMs = Date.now() - startedAt;
 

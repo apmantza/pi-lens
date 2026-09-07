@@ -143,7 +143,7 @@
 		"husky": "^9.1.7",
 		"json5": "^2.2.3",
 		"oxfmt": "0.66.0",
-		"oxlint": "1.80.0",
+		"oxlint": "1.81.0",
 		"oxlint-tsgolint": "7.0.2001",
 		"publint": "0.3.24",
 		"semver": "^7.8.0",
@@ -173,7 +173,7 @@
 		]
 	},
 	"allowScripts": {
-		"@ast-grep/cli@0.45.2": true,
+		"@ast-grep/cli@0.45.3": true,
 		"@google/genai@1.52.0": true,
 		"protobufjs@7.6.5": true
 	}
