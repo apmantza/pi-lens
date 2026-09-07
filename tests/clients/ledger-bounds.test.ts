@@ -40,6 +40,28 @@ describe("normalizeForLedger", () => {
 		expect(normalizeForLedger(a)).toBe("[unserializable object]");
 	});
 
+	it("lets an own throwing toString propagate so the ledger failsafe fires", () => {
+		// #2703 r1 F1: `recordDegradation` catches this and records the
+		// corrupted input; serialising it silently would admit "{}".
+		const corrupted = {
+			toString: () => {
+				throw new Error("corrupted ledger value");
+			},
+		};
+		expect(() => normalizeForLedger(corrupted)).toThrow("corrupted ledger value");
+	});
+
+	it("keeps the String() form of a class instance without its own toString", () => {
+		class Plain {
+			id = 7;
+		}
+		expect(normalizeForLedger(new Plain())).toBe("[object Object]");
+	});
+
+	it("writes unknown when toJSON yields undefined", () => {
+		expect(normalizeForLedger({ toJSON: () => undefined })).toBe("unknown");
+	});
+
 	it("truncates the serialised form like any other text", () => {
 		const long = { k: "x".repeat(5000) };
 		expect(truncateForLedger(long).endsWith("…")).toBe(true);
