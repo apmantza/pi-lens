@@ -194,11 +194,7 @@ describe("yaml/sql runners", () => {
 			});
 
 			await runner.run(
-				createCtx(
-					"yaml",
-					path.join(env.tmpDir, "a.yaml"),
-					env.tmpDir,
-				) as never,
+				createCtx("yaml", path.join(env.tmpDir, "a.yaml"), env.tmpDir) as never,
 			);
 
 			expect(safeSpawn).toHaveBeenCalled();

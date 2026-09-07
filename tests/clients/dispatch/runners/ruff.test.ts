@@ -114,8 +114,8 @@ describe("ruff runner", () => {
 
 			await runner.run(createCtx(filePath, env.tmpDir) as never);
 
-			const checkCall = safeSpawnAsync.mock.calls.find(
-				(call) => (call[1] as string[]).includes("check"),
+			const checkCall = safeSpawnAsync.mock.calls.find((call) =>
+				(call[1] as string[]).includes("check"),
 			) as [string, string[], { cwd?: string } | undefined];
 			expect(checkCall).toBeDefined();
 			expect(checkCall[2]?.cwd).toBe(env.tmpDir);
