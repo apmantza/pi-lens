@@ -195,7 +195,10 @@ if a daemon copy has drifted.
 
 Name the role, absolute worktree, branch, base, acceptance criteria, non-goals,
 and Git authority in every delegation. A role never grants Git authority by
-itself. Follow "Prove filesystem isolation before coding subagents touch Git":
+itself. When authority is withheld, the worker hands off through `PR_BODY.md`
+and `COMMIT_MSG.txt` at the worktree root (see `docs/pi-lens-subagent.md`) and
+the orchestrator commits with `git push origin HEAD:<branch>` from a detached
+worktree (2026-09-08: seven PRs landed this way through plegma codex workers). Follow "Prove filesystem isolation before coding subagents touch Git":
 if the worker cannot verify a distinct registered worktree, it runs no Git
 commands, and the orchestrator owns commits, pushes, and PR operations.
 
@@ -393,8 +396,17 @@ Post-agent test-runner delivery is activation/session-owned: the staged record
 retains its owning host, cache, runtime, and event context, while the quiet
 window receives the settled event's stable session identity and activation
 owner. A process-global latest activation must never select the pi/cache/runtime
-for another session's result. Persisted test-runner generations still gate
-delivery before append (#2366).
+for another session's result. Persisted test-runner generations gate
+eligibility before the next context build, and the eligible session/generation
+marker rehydrates after session reset when its stable pi session id matches the
+requesting context. In-process activation sharing remains isolated because the
+pending map is keyed by activation owner; `ownerId` is not persisted in the
+durable marker. The stable id comes from `getStableSessionId(ctx)` and survives
+#190 resume, while #473's different live session ids remain isolated;
+`resetTestRunnerDelivery()` clears only the in-memory pointer. A foreign
+rehydration is refused with one bounded `test_runner_delivery` record and
+leaves the marker for its owner; retirement clears it, so consumption remains
+once-only through the real context seam (#2366, #2733).
 
 Live contracts, grouped by subsystem. Consult the group for the seam you
 touch; each paragraph carries its evidence issue. New entries join their
@@ -1305,12 +1317,13 @@ buckets but still fails correlation closed. Never infer provider behavior from
 stable local bytes, and never serialize transcript evidence.
 (#1016, #1071, #1996)
 
-Automatic test-runner failures use a separate non-context custom-entry surface.
-Completion stages an owner-qualified session/generation record, and
-`agent_settled` delivers only the newest provenance-validated result after an
-immediate `ctx.isIdle()` recheck. The durable `test-runner-findings` cache stays
-available to pull diagnostics and the commit guard; unavailable or failed host
-entry capabilities never fall back to `sendMessage`. (#2366)
+Automatic test-runner failures use the model context surface, not a terminal
+custom entry. Completion stages an owner-qualified session/generation record;
+`agent_settled` marks only the newest provenance-validated result eligible after
+an immediate `ctx.isIdle()` recheck; the next context build consumes it once.
+The durable `test-runner-findings` cache stays available to pull diagnostics and
+the commit guard. MCP `turn_end` and `lens_diagnostics` retain their existing
+pull behavior, and delivery never falls back to `sendMessage`. (#2366, #2733)
 
 Pytest aggregate counts come only from pytest's final outcome summary line
 (#2408), never from a whole-output search. Tracebacks, service errors, assertion
@@ -3713,6 +3726,8 @@ derived eager-import set.
   async sweep/timer callbacks must never dereference `ctx.ui`, which can become
   stale after session replacement.
 - Guard command analysis uses `tokenizeShellCommand` for quoted/separated argv;
+  its heredoc lexer drops quoted bodies, drops unquoted body text, and retains
+  command substitutions because Bash expands them;
   bash read/ownership grants are committed only from successful `tool_result`
   events. Tool-call inspection must not mutate read-guard state, and wrapper,
   launcher, and continuation forms must remain conservative for git commits and

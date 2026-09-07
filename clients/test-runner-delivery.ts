@@ -2,35 +2,18 @@
  * Automatic test-runner delivery for the post-agent idle window (#2366).
  *
  * Test results remain in `test-runner-findings` for pull diagnostics and the
- * commit guard. This module only stages an owner-qualified pointer and
- * appends a non-context custom entry after the host proves that the agent is
+ * commit guard. This module stages an owner-qualified pointer and marks it
+ * eligible for the next context build after the host proves that the agent is
  * idle. Provenance validation stays in `peekTestFindings`, the one shared
  * delivery gate for this cache.
  */
 
-import type {
-	EntryRenderer,
-	ExtensionAPI,
-	Theme,
-} from "@earendil-works/pi-coding-agent";
 import type { CacheManager } from "./cache-manager.js";
 import { emitBounded } from "./bounded-telemetry.js";
 import type { RuntimeCoordinator } from "./runtime-coordinator.js";
-import { peekTestFindings } from "./runtime-context.js";
-import { fitLines } from "./tui-fit.js";
-import type { Component } from "./deps/pi-tui.js";
+import { consumeTestFindings, peekTestFindings } from "./runtime-context.js";
 
-const TEST_RUNNER_ENTRY_TYPE = "pilens:test-runner-findings";
 const MAX_PENDING_DELIVERIES = 32;
-const MAX_ENTRY_CONTENT = 12_000;
-
-interface TestRunnerDeliveryEntry {
-	content: string;
-	sessionId: string;
-	generation: number;
-	targetCount: number;
-	droppedDetailCount: number;
-}
 
 interface PendingDelivery {
 	cwd: string;
@@ -39,6 +22,8 @@ interface PendingDelivery {
 	generation: number;
 	targetCount: number;
 	createdAt: number;
+	eligible: boolean;
+	rehydrated?: boolean;
 	owner?: TestRunnerDeliveryOwner;
 }
 
@@ -46,7 +31,6 @@ const pending = new Map<string, PendingDelivery>();
 
 export interface TestRunnerDeliveryOwner {
 	ownerId: string;
-	pi: ExtensionAPI;
 	cacheManager: CacheManager;
 	runtime: RuntimeCoordinator;
 	getCtx: () => {
@@ -62,26 +46,15 @@ function key(cwd: string, sessionId: string, ownerId?: string): string {
 	return `${ownerId ?? "direct"}\u0000${cwd}\u0000${sessionId}`;
 }
 
-function boundedContent(content: string): {
-	content: string;
-	droppedDetailCount: number;
-} {
-	if (content.length <= MAX_ENTRY_CONTENT)
-		return { content, droppedDetailCount: 0 };
-	return {
-		content: `${content.slice(0, MAX_ENTRY_CONTENT)}\n[…details truncated]`,
-		droppedDetailCount: content.length - MAX_ENTRY_CONTENT,
-	};
-}
-
 function record(
 	identity: string,
 	outcome:
 		| "staged"
+		| "eligible"
 		| "delivered"
 		| "superseded"
 		| "carried"
-		| "capability-unavailable"
+		| "foreign-session"
 		| "delivery-failed",
 	delivery: PendingDelivery,
 	metadata: Record<string, unknown> = {},
@@ -106,9 +79,7 @@ function record(
 		{
 			capPerTurn: { limit: 8, turnIndex: delivery.generation },
 			ledgerKind:
-				outcome === "delivery-failed" || outcome === "capability-unavailable"
-					? "test-runner-delivery"
-					: undefined,
+				outcome === "delivery-failed" ? "test-runner-delivery" : undefined,
 			reason: `test runner delivery ${outcome}`,
 		},
 	);
@@ -141,6 +112,7 @@ export function stageTestRunnerDelivery(args: {
 			generation: args.generation,
 			targetCount: args.targetCount,
 			createdAt: Date.now(),
+			eligible: false,
 			owner: args.owner,
 		};
 		record(deliveryKey, "superseded", superseded, {
@@ -166,6 +138,7 @@ export function stageTestRunnerDelivery(args: {
 		generation: args.generation,
 		targetCount: args.targetCount,
 		createdAt: Date.now(),
+		eligible: false,
 		owner: args.owner,
 	};
 	pending.set(deliveryKey, delivery);
@@ -173,9 +146,8 @@ export function stageTestRunnerDelivery(args: {
 	record(deliveryKey, "staged", delivery);
 }
 
-/** Deliver the latest staged result during a host-confirmed idle window. */
+/** Mark the latest staged result eligible during a host-confirmed idle window. */
 export function deliverTestRunnerFindings(args: {
-	pi: ExtensionAPI;
 	ctx: {
 		cwd?: string;
 		isIdle?: () => boolean;
@@ -197,16 +169,11 @@ export function deliverTestRunnerFindings(args: {
 		currentGeneration > delivery.generation
 	) {
 		pending.delete(deliveryKey);
-		record(deliveryKey, "superseded", delivery, {
-			currentGeneration,
-		});
+		record(deliveryKey, "superseded", delivery, { currentGeneration });
 		return;
 	}
 	if (typeof args.ctx.isIdle !== "function") {
 		pending.delete(deliveryKey);
-		record(deliveryKey, "capability-unavailable", delivery, {
-			reason: "host does not expose ctx.isIdle",
-		});
 		return;
 	}
 	try {
@@ -220,14 +187,13 @@ export function deliverTestRunnerFindings(args: {
 		});
 		return;
 	}
-	const findings = peekTestFindings(args.cacheManager, cwd, args.runtime, true);
-	if (!findings) {
+	if (!peekTestFindings(args.cacheManager, cwd, args.runtime, true)) {
 		pending.delete(deliveryKey);
 		record(deliveryKey, "superseded", delivery);
 		return;
 	}
-	// Recheck immediately before append. The host may accept a prompt between
-	// the first check and this synchronous call.
+	// Recheck immediately before marking eligible. The host may accept a prompt
+	// between the first check and this synchronous call.
 	try {
 		if (!args.ctx.isIdle()) {
 			record(deliveryKey, "carried", delivery);
@@ -239,35 +205,31 @@ export function deliverTestRunnerFindings(args: {
 		});
 		return;
 	}
-	// SAFETY: appendEntry is an optional host capability absent from older Pi SDKs.
-	const appendEntry = (
-		args.pi as unknown as {
-			appendEntry?: (customType: string, data: TestRunnerDeliveryEntry) => void;
-		}
-	).appendEntry;
-	if (typeof appendEntry !== "function") {
+	delivery.eligible = true;
+	const current = args.cacheManager.readCache<{
+		content: string;
+		testRunGeneration?: number;
+		[key: string]: unknown;
+	}>("test-runner-findings", cwd)?.data;
+	if (!current?.content || current.testRunGeneration !== delivery.generation) {
 		pending.delete(deliveryKey);
-		record(deliveryKey, "capability-unavailable", delivery);
 		return;
 	}
-	const bounded = boundedContent(findings.messages[0]?.content ?? "");
-	try {
-		appendEntry.call(args.pi, TEST_RUNNER_ENTRY_TYPE, {
-			...bounded,
-			sessionId: delivery.sessionId,
-			generation: delivery.generation,
-			targetCount: delivery.targetCount,
-		});
-		pending.delete(deliveryKey);
-		record(deliveryKey, "delivered", delivery, {
-			droppedDetailCount: bounded.droppedDetailCount,
-			ageMs: Math.max(0, Date.now() - delivery.createdAt),
-		});
-	} catch (error) {
-		record(deliveryKey, "delivery-failed", delivery, {
-			error: String(error).slice(0, 500),
-		});
-	}
+	args.cacheManager.writeCache(
+		"test-runner-findings",
+		{
+			...current,
+			deliveryEligible: {
+				sessionId: delivery.sessionId,
+				generation: delivery.generation,
+				eligibleAt: Date.now(),
+			},
+		},
+		cwd,
+	);
+	record(deliveryKey, "eligible", delivery, {
+		ageMs: Math.max(0, Date.now() - delivery.createdAt),
+	});
 }
 
 /** Deliver only the result staged by this activation and settled session. */
@@ -287,7 +249,6 @@ export function deliverStagedTestRunnerFindings(args?: {
 				);
 	if (!delivery?.owner) return;
 	deliverTestRunnerFindings({
-		pi: delivery.owner.pi,
 		ctx: delivery.owner.getCtx(),
 		cacheManager: delivery.owner.cacheManager,
 		runtime: delivery.owner.runtime,
@@ -296,42 +257,80 @@ export function deliverStagedTestRunnerFindings(args?: {
 	});
 }
 
-export function registerTestRunnerEntryRenderer(pi: ExtensionAPI): boolean {
-	// SAFETY: registerEntryRenderer is an optional host capability absent from older Pi SDKs.
-	const register = (
-		pi as unknown as {
-			registerEntryRenderer?: (
-				customType: string,
-				renderer: EntryRenderer<TestRunnerDeliveryEntry>,
-			) => void;
+/** Consume the result made eligible by the settled idle boundary. */
+export function consumeStagedTestRunnerFindings(args: {
+	cwd: string;
+	sessionId: string;
+	ownerId?: string;
+	cacheManager: CacheManager;
+	runtime: RuntimeCoordinator;
+}): ReturnType<typeof consumeTestFindings> {
+	const deliveryKey = key(args.cwd, args.sessionId, args.ownerId);
+	let delivery = pending.get(deliveryKey);
+	const persisted = args.cacheManager.readCache<{
+		content: string;
+		testRunGeneration?: number;
+		deliveryEligible?: {
+			sessionId: string;
+			generation: number;
+			eligibleAt: number;
+		};
+	}>("test-runner-findings", args.cwd)?.data;
+	const eligible = persisted?.deliveryEligible;
+	if (!delivery && persisted?.content && eligible) {
+		const sameSession = eligible.sessionId === args.sessionId;
+		if (!sameSession) {
+			const foreignDelivery: PendingDelivery = {
+				cwd: args.cwd,
+				sessionId: eligible.sessionId,
+				generation: eligible.generation,
+				targetCount: 0,
+				createdAt: eligible.eligibleAt,
+				eligible: true,
+				rehydrated: true,
+			};
+			record(deliveryKey, "foreign-session", foreignDelivery, {
+				currentSessionId: args.sessionId,
+				currentOwnerId: args.ownerId,
+				reason: "session-mismatch",
+			});
+			return undefined;
 		}
-	).registerEntryRenderer;
-	if (typeof register !== "function") return false;
-	try {
-		register.call(pi, TEST_RUNNER_ENTRY_TYPE, renderTestRunnerEntry);
-		return true;
-	} catch {
-		return false;
+		delivery = {
+			cwd: args.cwd,
+			sessionId: args.sessionId,
+			ownerId: args.ownerId,
+			generation: eligible.generation,
+			targetCount: 0,
+			createdAt: eligible.eligibleAt,
+			eligible: true,
+			rehydrated: true,
+		};
+		pending.set(deliveryKey, delivery);
 	}
-}
-
-type TestRunnerEntry = Parameters<EntryRenderer<TestRunnerDeliveryEntry>>[0];
-
-function renderTestRunnerEntry(
-	entry: TestRunnerEntry,
-	_options: { expanded: boolean },
-	theme: Theme,
-): Component | undefined {
-	const content = entry.data?.content;
-	if (typeof content !== "string") return undefined;
-	const lines = [
-		theme.fg("error", "pi-lens test failures"),
-		...content.split("\n"),
-	];
-	return {
-		render: (width: number) => fitLines(lines, width),
-		invalidate: () => {},
-	};
+	if (!delivery?.eligible) return undefined;
+	const currentGeneration = persisted?.testRunGeneration;
+	if (currentGeneration !== delivery.generation) {
+		pending.delete(deliveryKey);
+		record(deliveryKey, "superseded", delivery, { currentGeneration });
+		return undefined;
+	}
+	const findings = consumeTestFindings(
+		args.cacheManager,
+		args.cwd,
+		args.runtime,
+	);
+	if (!findings) {
+		pending.delete(deliveryKey);
+		record(deliveryKey, "superseded", delivery);
+		return undefined;
+	}
+	pending.delete(deliveryKey);
+	record(deliveryKey, "delivered", delivery, {
+		ageMs: Math.max(0, Date.now() - delivery.createdAt),
+		rehydrated: delivery.rehydrated === true,
+	});
+	return findings;
 }
 
 /** Test-only reset; session ownership prevents cross-session consumption. */

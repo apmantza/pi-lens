@@ -2248,19 +2248,25 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 	);
 
 	it(
-		"delivers staged test failures once through a non-context custom entry",
+		"delivers stale staged test failures once through the next model context",
 		async () => {
 			mockSuiteDeps();
 			const cache = new CacheManager(false);
 			cache.writeCache(
 				"test-runner-findings",
-				{ content: "FAIL test/app.test.ts:1", testRunGeneration: 1 },
+				{
+					content:
+						"[from a prior turn — the edit that triggered this run had already been superseded by the time results came back]\n\nFAIL test/app.test.ts:1",
+					testRunGeneration: 1,
+				},
 				tmpDir,
 			);
 			const filePath = path.join(tmpDir, "src", "app.ts");
 			fs.mkdirSync(path.dirname(filePath), { recursive: true });
 			fs.writeFileSync(filePath, "export const x = 1;\n");
-			handleTurnEndHook = (deps) =>
+			let stagedSessionId: string | undefined;
+			handleTurnEndHook = (deps) => {
+				stagedSessionId = deps.runtime.telemetrySessionId;
 				deps.onTestRunnerComplete?.({
 					cwd: tmpDir,
 					sessionId: deps.runtime.telemetrySessionId,
@@ -2268,6 +2274,7 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 					targetCount: 1,
 					hasFindings: true,
 				});
+			};
 
 			const { default: registerExtension } = await import("../index.js");
 			const { pi, mock, handlers, sentMessages } = createMockPi();
@@ -2275,14 +2282,91 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 			await driveEditThenTurnEnd(handlers, filePath);
 
 			await fireAgentSettled(handlers);
+			// The production session-start path clears in-memory delivery state.
+			// Eligibility must survive that reset and reach the next context build.
+			await mock.emit(
+				"session_start",
+				{},
+				makeCtx({ cwd: tmpDir, sessionId: stagedSessionId }),
+			);
 
-			expect(mock.appendedEntries).toHaveLength(1);
-			expect(mock.appendedEntries[0]).toMatchObject({
-				customType: "pilens:test-runner-findings",
-				data: { content: expect.stringContaining("FAIL") },
-			});
 			expect(sentMessages).toHaveLength(0);
-			expect(mock.entryRenderers.has("pilens:test-runner-findings")).toBe(true);
+			const firstContext = await mock.emit(
+				"context",
+				{ messages: [{ role: "user", content: "continue" }] },
+				{ cwd: tmpDir },
+			);
+			const messages = (
+				firstContext as { messages?: Array<{ content: string }> }
+			)?.messages
+				?.map((message) => message.content)
+				.join("\n");
+			expect(messages).toContain(
+				"[pi-lens automated check — not a user request]",
+			);
+			expect(messages).toContain("[from a prior turn");
+			expect(messages).toContain("FAIL test/app.test.ts:1");
+			const secondContext = await mock.emit(
+				"context",
+				{ messages: [{ role: "user", content: "continue again" }] },
+				{ cwd: tmpDir },
+			);
+			expect(secondContext).toBeUndefined();
+		},
+		INTEGRATION_TIMEOUT_MS,
+	);
+
+	it(
+		"refuses a replacement session and retains the eligible marker",
+		async () => {
+			mockSuiteDeps();
+			const cache = new CacheManager(false);
+			cache.writeCache(
+				"test-runner-findings",
+				{ content: "FAIL replacement.test.ts:1", testRunGeneration: 1 },
+				tmpDir,
+			);
+			let stagedSessionId: string | undefined;
+			handleTurnEndHook = (deps) => {
+				stagedSessionId = deps.runtime.telemetrySessionId;
+				deps.onTestRunnerComplete?.({
+					cwd: tmpDir,
+					sessionId: stagedSessionId,
+					generation: 1,
+					targetCount: 1,
+					hasFindings: true,
+				});
+			};
+
+			const { default: registerExtension } = await import("../index.js");
+			const { pi, mock, handlers } = createMockPi();
+			registerExtension(pi as any);
+			const filePath = path.join(tmpDir, "src", "app.ts");
+			fs.mkdirSync(path.dirname(filePath), { recursive: true });
+			fs.writeFileSync(filePath, "export const x = 1;\n");
+			await driveEditThenTurnEnd(handlers, filePath);
+			await fireAgentSettled(handlers);
+			await mock.emit(
+				"session_start",
+				{},
+				makeCtx({
+					cwd: tmpDir,
+					sessionId: "replacement-session",
+				}),
+			);
+
+			const result = await mock.emit(
+				"context",
+				{ messages: [{ role: "user", content: "continue" }] },
+				{ cwd: tmpDir },
+			);
+			expect(result).toBeUndefined();
+			expect(
+				cache.readCache<{ deliveryEligible?: { sessionId: string } }>(
+					"test-runner-findings",
+					tmpDir,
+				)?.data.deliveryEligible,
+			).toMatchObject({ sessionId: stagedSessionId });
 		},
 		INTEGRATION_TIMEOUT_MS,
 	);
@@ -2344,17 +2428,6 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 				{},
 				makeCtx({ cwd: tmpDir, sessionId: "secondary-delivery" }),
 			);
-
-			expect(primary.mock.appendedEntries).toHaveLength(1);
-			expect(secondary.mock.appendedEntries).toHaveLength(1);
-			expect(primary.mock.appendedEntries[0]?.data).toMatchObject({
-				sessionId: "primary-delivery",
-				targetCount: 11,
-			});
-			expect(secondary.mock.appendedEntries[0]?.data).toMatchObject({
-				sessionId: "secondary-delivery",
-				targetCount: 22,
-			});
 		},
 		INTEGRATION_TIMEOUT_MS,
 	);

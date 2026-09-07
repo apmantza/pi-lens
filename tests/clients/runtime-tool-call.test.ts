@@ -93,7 +93,11 @@ describe("handleToolCall", () => {
 		resetDegradationLedger();
 		const env = setupTestEnvironment("pi-lens-runtime-tool-call-complexity-");
 		try {
-			const filePath = createTempFile(env.tmpDir, "src/disabled.ts", "const x = 1;\n");
+			const filePath = createTempFile(
+				env.tmpDir,
+				"src/disabled.ts",
+				"const x = 1;\n",
+			);
 			const runtime = new RuntimeCoordinator();
 			runtime.projectRoot = env.tmpDir;
 			await handleToolCall(
@@ -104,11 +108,85 @@ describe("handleToolCall", () => {
 				}),
 			);
 			expect(runtime.complexityBaselines.has(filePath)).toBe(false);
-		expect(
-			getDegradationSummary().some(
-				(entry) => entry.kind === "startup-analyzer-disabled",
-			),
-		).toBe(true);
+			expect(
+				getDegradationSummary().some(
+					(entry) => entry.kind === "startup-analyzer-disabled",
+				),
+			).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("does not let heredoc body words trigger the real git guard", async () => {
+		const env = setupTestEnvironment("pi-lens-2726-heredoc-guard-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.setTelemetryIdentity({ sessionId: "session-2726" });
+			runtime.updateGitGuardStatus(true, "existing blocker");
+			const result = await handleToolCall(
+				baseDeps({
+					runtime,
+					ctx: { cwd: env.tmpDir },
+					getFlag: (name) => name === "lens-guard",
+					event: {
+						toolName: "bash",
+						input: {
+							command: "cat <<EOF\nbody text: git push\nEOF\n",
+						},
+					},
+				}),
+			);
+			expect(result).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("does not block a command after a heredoc delimiter metacharacter", async () => {
+		const env = setupTestEnvironment("pi-lens-2726-heredoc-operator-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.setTelemetryIdentity({ sessionId: "session-2726-operator" });
+			runtime.updateGitGuardStatus(true, "existing blocker");
+			const result = await handleToolCall(
+				baseDeps({
+					runtime,
+					ctx: { cwd: env.tmpDir },
+					getFlag: (name) => name === "lens-guard",
+					event: {
+						toolName: "bash",
+						input: { command: "cat <<EOF; echo git push\nbody\nEOF" },
+					},
+				}),
+			);
+			expect(result).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("still blocks a git command after a heredoc body", async () => {
+		const env = setupTestEnvironment("pi-lens-2726-heredoc-git-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.setTelemetryIdentity({ sessionId: "session-2726-git" });
+			runtime.updateGitGuardStatus(true, "existing blocker");
+			const result = await handleToolCall(
+				baseDeps({
+					runtime,
+					ctx: { cwd: env.tmpDir },
+					getFlag: (name) => name === "lens-guard",
+					event: {
+						toolName: "bash",
+						input: { command: "cat <<EOF; git push\nbody\nEOF" },
+					},
+				}),
+			);
+			expect(result).toMatchObject({ block: expect.anything() });
 		} finally {
 			env.cleanup();
 		}
