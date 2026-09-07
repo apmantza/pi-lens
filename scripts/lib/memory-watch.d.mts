@@ -31,8 +31,6 @@ export interface MemoryWatchState {
 	intervalMs?: number | null;
 }
 
-export declare const EXHAUSTION_AVAILABLE_FLOOR_MB: number;
-
 export declare function formatVerdict(
 	exit: { code: number | null; signal: string | null },
 	watch: MemoryWatchState,

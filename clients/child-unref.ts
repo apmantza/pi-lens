@@ -2,6 +2,7 @@
  * Shared plumbing for best-effort, fire-and-forget child-process spawns
  * (shape 4 of the recurring-defect catalog in AGENTS.md: "a timer / promise /
  * worker / child that outlives its one-shot settle"). Extracted from the
+ * orphan reaper's `unrefReaperChild` (#1153/#1160) into a
  * shared, dependency-free module so every one-shot
  * `spawn(..., { stdio: ["ignore","pipe",...] })` call site in the codebase —
  * the reaper's enumeration/kill spawns AND the resource sampler's Windows

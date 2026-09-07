@@ -29,7 +29,7 @@ export const REQUIRED_CHECKS = ["Unit tests", "Lint & type-check"];
 // multiplied by every duplicate copy of this set, not just the original.
 // merge-train-lane.mjs re-exports these three names unchanged for its
 // existing importers.
-export const ADVISORY_SUFFIX = "(advisory)";
+const ADVISORY_SUFFIX = "(advisory)";
 export const ADVISORY_CHECKS = new Set([
 	// Third-party SonarCloud GitHub App check-run (posted via the SonarCloud
 	// integration, not a workflow job in .github/workflows) -- has no
@@ -68,7 +68,7 @@ export function isAdvisoryCheck(name) {
 // ordinary pull_request run (probed live on PR #2588, 2026-09-06: two
 // "Record post-merge validation" rows, both "skipping"). Treating a job's
 // own conditional skip as a failure would red every PR forever (#2609).
-export const BLOCKING_CONCLUSIONS = new Set([
+const BLOCKING_CONCLUSIONS = new Set([
 	"FAILURE",
 	"TIMED_OUT",
 	"CANCELLED",
@@ -122,7 +122,7 @@ function isConcludedSuccess(run) {
  * exactly equal), the run that is NOT a concluded success wins. An
  * unorderable tie can only ever withhold a pass, never grant one.
  */
-export function preferCheckRun(a, b) {
+function preferCheckRun(a, b) {
 	const ta = Date.parse(startedAtOf(a) ?? "");
 	const tb = Date.parse(startedAtOf(b) ?? "");
 	if (!Number.isNaN(ta) && !Number.isNaN(tb) && ta !== tb)

@@ -22,7 +22,7 @@
  * This module gives bus events the same durable trace every other pi-lens
  * subsystem already has (latency.log, cascade.log, read-guard.log, ...) —
  * see clients/latency-logger.ts for the house pattern this mirrors exactly:
- * one shared `createNdjsonLogger` writer, `isTestMode()` no-op guard,
+ * one shared `createNdjsonLogger` writer, `isTestMode()` no-op guard.
  *
  * Logging volume: `emitted` and `emit_failed` are logged on every call —
  * they're the two outcomes an operator actually needs a per-event trace for.

@@ -38,12 +38,6 @@ const PROJECT_ROOT_MARKERS = [
 	"composer.json",
 ];
 
-// Deprecated (#776): no longer read directly below — `computeStartupScanContext`
-// / `resolveStartupScanContextAsync` now default `maxSourceFiles` to
-// `getStartupScanMaxSourceFilesDerived(cwd)` (project-scale.ts's
-// `maxProjectFiles` knob), which reproduces this same 2,000 value at the
-// default base. Kept exported for tests/callers that still reference the
-
 // #758: hard ceiling on the number of directory entries the startup source
 // count walk will visit before it gives up and declares the tree too big to
 // a project has MANY source files — a repo with FEW source files but a huge
@@ -135,6 +129,7 @@ export const _resetStartupScanMaxEntriesForTests = _maxEntries._resetForTests;
  *
  * The content-derived reasons `too-many-source-files` and `too-many-entries`
  * (#758) are the ones that are TTL'd. They can go stale on their own: the repo
+ * can shrink below the source-file cap (or below the entry ceiling)
  * between sessions, and nothing else would notice
  * — the seq-based freshness check that guards every other
  * `project-snapshot.json` field never fires for them, because pi-lens never
