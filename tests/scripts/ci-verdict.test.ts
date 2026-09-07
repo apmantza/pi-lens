@@ -985,6 +985,11 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 		"Vale prose lint (advisory)",
 		"OSV scan (advisory)",
 		"greeting",
+		// #2700: full categories+plugins+type-aware oxlint sweep, run
+		// continue-on-error at job level (lint.yml) -- most of its findings
+		// are un-triaged on master today (see the PR body's per-rule table),
+		// so this must never gate like `lint:js` does.
+		"oxlint advisory",
 		...EXTERNAL_ADVISORY_NAMES,
 	]);
 
@@ -1042,6 +1047,7 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 			"oxfmt format check (advisory)",
 			"Vale prose lint (advisory)",
 			"OSV scan (advisory)",
+			"oxlint advisory",
 		]) {
 			expect(isAdvisoryCheck(name)).toBe(true);
 		}
