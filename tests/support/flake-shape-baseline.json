@@ -201,7 +201,7 @@
 		"scripts/rule-language-case.test.ts": 4,
 		"scripts/smoke-tools-lsp-fixture-registration.test.ts": 2,
 		"scripts/supply-host-provided-deps.test.ts": 2,
-		"scripts/warm-loader-cache.test.ts": 2,
+		"scripts/warm-loader-cache.test.ts": 3,
 		"scripts/with-memory-watch.test.ts": 1
 	},
 	"ungoverned-wait-for": {

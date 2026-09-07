@@ -2,6 +2,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CacheManager } from "../../clients/cache-manager.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleToolCall } from "../../clients/runtime-tool-call.js";
 import type { TreeSitterClient } from "../../clients/tree-sitter-client.js";
@@ -85,6 +89,30 @@ function baseDeps(
 }
 
 describe("handleToolCall", () => {
+	it("does not collect a complexity baseline when disabled", async () => {
+		resetDegradationLedger();
+		const env = setupTestEnvironment("pi-lens-runtime-tool-call-complexity-");
+		try {
+			const filePath = createTempFile(env.tmpDir, "src/disabled.ts", "const x = 1;\n");
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			await handleToolCall(
+				baseDeps({
+					runtime,
+					getFlag: (name) => name === "no-complexity",
+					event: { toolName: "read", input: { filePath } },
+				}),
+			);
+			expect(runtime.complexityBaselines.has(filePath)).toBe(false);
+		expect(
+			getDegradationSummary().some(
+				(entry) => entry.kind === "startup-analyzer-disabled",
+			),
+		).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
 	it("is a no-op when lensEnabled is false", async () => {
 		const runtime = new RuntimeCoordinator();
 		const recordRead = vi.spyOn(runtime.readGuard, "recordRead");

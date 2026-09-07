@@ -27,6 +27,20 @@ Each runtime toggle is settable from the CLI *and* from `config.json`. The two a
 | `--lens-compact-tool-line` | `ui.compactToolLine` | `false` |
 | `--no-lazy-tools` | `tools.lazy` | `true` |
 | `--lens-turn-end-madge` | `turnEnd.madge.enabled` | `false` |
+| `--no-knip` | `knip.enabled` | `true` |
+| `--no-jscpd` | `jscpd.enabled` | `true` |
+| `--no-madge` | `madge.enabled` | `true` |
+| `--no-gitleaks` | `gitleaks.enabled` | `true` |
+| `--no-govulncheck` | `govulncheck.enabled` | `true` |
+| `--no-dead-code` | `deadCode.enabled` | `true` |
+| `--no-complexity` | `complexity.enabled` | `true` |
+
+## Startup controls
+
+| Configuration key | Default | Accepted values |
+| --- | --- | --- |
+| `startup.mode` | `full` | `quick`, `full`, or `minimal`; `PI_LENS_STARTUP_MODE` wins |
+| `startup.scans.enabled` | `true` | `true` or `false` |
 
 By default pi-lens registers six situational tools (the `ast_grep_*` family,
 `lsp_navigation`, `lens_diagnostic_mark`) inactive and exposes a small loader,
@@ -248,6 +262,12 @@ Explicit override for the review graph's own file budget (#775), for monorepos t
 - Why the review graph tapers instead of scaling flatly like the other four budgets: its per-file cost (tree-sitter parse + import-fact extraction) is measurably higher than a directory-entry count or file-existence check, so an unbounded linear budget on a huge `maxProjectFiles` would risk a very slow cold build on the synchronous edit-hook path. See `clients/project-scale.ts`'s `taperedReviewGraphMaxFiles` doc comment for the exact shape and the measured per-file cost it's grounded in.
 
 ### Schema rules
+
+Session-start analyzer keys default to `true` and work in both the global
+config and `.pi-lens.json`. Set one to `false` to skip that analyzer; pi-lens
+records the disabled skip. `startup.mode` accepts `quick`, `full`, or
+`minimal`, and `startup.scans.enabled: false` disables background startup scans
+while leaving diagnostics and LSP active. `PI_LENS_STARTUP_MODE` still wins.
 
 - Unknown rule ids are ignored (forward-compat). Unrecognized **top-level** keys are logged once and then ignored — never fatal to the parse. The LSP namespaces a shared file legitimately carries (`servers`, `serverOverrides`, `disabledServers`, `warmFiles`) and `$schema` are tolerated silently; a user-level-only lens key placed here (e.g. `lsp`, `tests`, `delta`) is logged as "not honored at project scope"; anything else is logged as a likely typo. The raw parsed JSON is still exposed for forward-compat consumers regardless.
 - Every toggle key in the table above must be a boolean, and its containing section must be an object. A wrong type is logged once and the key is treated as absent, so the flag falls through to its default rather than the whole file being rejected.

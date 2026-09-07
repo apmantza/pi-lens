@@ -1042,6 +1042,13 @@ describe("global pi-lens config", () => {
 				"no-autoformat",
 				"no-autofix",
 				"lens-actionable-warning-autofix",
+				"no-knip",
+				"no-jscpd",
+				"no-madge",
+				"no-gitleaks",
+				"no-govulncheck",
+				"no-dead-code",
+				"no-complexity",
 			]);
 
 			// A global-scoped key sitting in a project config decides nothing.
