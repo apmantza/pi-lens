@@ -151,6 +151,26 @@ operator's private notes, so a different orchestrator can run the same train.
 - **A lane's worktree lives until its PR merges.** Pruning it after a report
   makes the owning worker un-resumable, so every fix round then costs a fresh
   worker. Prune on merge, or when the lane is abandoned.
+- **Scope changes are mirrored on the issue before they are sent.** A fixer
+  cannot verify a mid-task `SendMessage`; it CAN verify an issue comment.
+  Post the comment first, then send the message pointing at it (the fixer
+  playbook says to check). Unmirrored additions are declined by design.
+- **Dependabot PRs merge on real checks, no issue needed (maintainer,
+  2026-09-07).** The PR-title issue-ref gate is a policy check this train
+  applies to human PRs; a bump title can never carry a ref. Merge order: one
+  at a time (each merge dirties the rest; dependabot rebases them itself);
+  gate on Lint, Unit tests and every non-advisory check on the exact head,
+  ignoring only "PR title"/"PR body"; hold anything red on a real check with a
+  comment naming the check (2026-09-07: tsls 6 needs a Node-floor bump, biome
+  fails the install test, vitest 5 fails four gates; a bump whose install
+  script is pinned by `allowScripts` needs the pin moved in a maintainer
+  commit on the bump branch). A major bump with peers (vitest + coverage-v8)
+  lands together or not at all.
+- **Detector, ratchet and governance-sweep authoring goes to Opus from
+  round 1.** Their correctness lives in parsing edge cases, exactly where the
+  smaller model loses: #2693 took two Sonnet rounds (~720k tokens) on a text
+  scanner before the rail sent round 3 to Opus, which rewrote it on the AST
+  and closed in two rounds.
 - **Brief shape for a fixer.** Issue/PR number and head; the checked-out
   branch; the exact findings with file:line, the reviewer's probe to reproduce
   FIRST, and the remedy shape the maintainer chose; what to fold (net-count)
@@ -296,3 +316,9 @@ Each row cost a lane at least once; the prose above carries the record.
 | Dispatching independent agents one message at a time | All independent Agent calls in one message; the quota gate is read once before the batch |
 | Resuming a fixer whose tree was reaped | Spawn a fresh fixer on the branch, or export `PILENS_HYGIENE_KEEP_AGENT_TREES=1` for the session up front |
 | Sweeping a shape by grep-counting tokens | A ratchet reads the exact literal it governs (#2693: four sites counted, six real) |
+| `npx <tool>@latest` inside the repo to measure something | It rewrote package-lock.json (108 deletions) on 2026-09-07; run one-off tools from a scratch prefix, and `git diff --stat` before every commit |
+| `git add -A` in a worktree that links `node_modules` | The ignore rule `node_modules/` does not match a SYMLINK; #2703 committed one and broke the clean-clone install and the tracked-shadow test. `git add <paths>`, and `.gitignore` now says `node_modules` without the slash |
+| Checking a branch out in the shared main tree for your own fix | Reviewers saw the checkout switch under them three times on 2026-09-07; use a throwaway `git worktree add` under the scratchpad, remove it after the push |
+| `gh run rerun --failed` while the run is still in progress | GitHub refuses it; wait for the run to complete (poll `gh run view --json status`), then rerun, then re-read the verdict |
+| Reading a failed job's log before its run completes | Empty output; the log is withheld until the whole run finishes |
+| Treating a reviewer's prescription as the fix | It is a hypothesis: #2693 r2's blanked-slice remedy stayed green on `env: { PWD: cwd }`; the fixer's AST rule replaced it and the reviewer withdrew the prescription |

@@ -141,6 +141,7 @@ export function runSelfScan({
 	} catch (e) {
 		throw new Error(
 			`[astgrep-self-scan] failed to parse ast-grep JSON output: ${e?.message ?? e}\nstdout:\n${stdout}`,
+			{ cause: e },
 		);
 	}
 
