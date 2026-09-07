@@ -131,7 +131,7 @@ import { lineContentHash } from "./read-guard.js";
  * must not turn every first observation into a timeout, which is the least
  * useful possible outcome.
  */
-export const OBSERVED_CAPTURE_BUDGET_MS = 200;
+const OBSERVED_CAPTURE_BUDGET_MS = 200;
 
 /**
  * Cumulative ceiling for every ARMED capture in one turn. A turn that calls
@@ -155,7 +155,7 @@ export const OBSERVED_TURN_BUDGET_MS = 600;
  * holds regardless of the clock. What it CAN cut is a directory target's tail,
  * and that is reported as `stoppedEarly` rather than scored as clean.
  */
-export const OBSERVED_SETTLE_DEADLINE_MS = 50;
+const OBSERVED_SETTLE_DEADLINE_MS = 50;
 
 /**
  * Entries taken from a DIRECTORY-shaped target path, non-recursively.
@@ -192,7 +192,7 @@ export const OBSERVED_TRACKED_MAX_FILES = 400;
  * closes it as soon as anything moves the size or the tick, and the armed
  * observation (which hashes the target unconditionally) never depended on it.
  */
-export const OBSERVED_LEDGER_SETTLE_MS = 150;
+const OBSERVED_LEDGER_SETTLE_MS = 150;
 
 /**
  * Path keys the "pi-lens already recorded this" set may hold.
@@ -218,25 +218,25 @@ export const OBSERVED_HANDLED_MAX = 1000;
 export const OBSERVED_SWEEP_STAT_WINDOW = 128;
 
 /** Cumulative content-hash budget for ONE capture. */
-export const OBSERVED_HASH_BUDGET_BYTES = 2 * 1024 * 1024;
+const OBSERVED_HASH_BUDGET_BYTES = 2 * 1024 * 1024;
 
 /** Cumulative bytes ONE settled sweep may read to seed or verify a hash. */
 export const OBSERVED_SWEEP_HASH_BUDGET_BYTES = 2 * 1024 * 1024;
 
 /** Cumulative bytes ONE settled sweep may read to derive edit RANGES. */
-export const OBSERVED_SWEEP_RANGE_BUDGET_BYTES = 1024 * 1024;
+const OBSERVED_SWEEP_RANGE_BUDGET_BYTES = 1024 * 1024;
 
 /** Largest file whose per-line hashes are captured for range derivation. */
-export const OBSERVED_LINE_HASH_MAX_BYTES = 512 * 1024;
+const OBSERVED_LINE_HASH_MAX_BYTES = 512 * 1024;
 
 /** Ranges reported per file before they collapse to one bounding box. */
-export const OBSERVED_MAX_EDIT_RANGES = 32;
+const OBSERVED_MAX_EDIT_RANGES = 32;
 
 /** Pending baselines held between `tool_call` and `tool_result`. */
-export const OBSERVED_PENDING_MAX = 32;
+const OBSERVED_PENDING_MAX = 32;
 
 /** Files remembered by the settled-sweep content ledger. */
-export const OBSERVED_LEDGER_MAX = 1000;
+const OBSERVED_LEDGER_MAX = 1000;
 
 /** The replay payload, structurally identical to `MutationBridgeEntry`. */
 export interface ObservedReplayEntry {
@@ -249,7 +249,7 @@ export interface ObservedReplayEntry {
 }
 
 /** How a caller hands an observed change back to the pipeline. */
-export type ObservedReplayRecorder = (entry: ObservedReplayEntry) => boolean;
+type ObservedReplayRecorder = (entry: ObservedReplayEntry) => boolean;
 
 interface PendingObservation {
 	toolName: string;

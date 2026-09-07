@@ -86,7 +86,7 @@ export interface PilensDiagnosticEntry {
 	fixable?: boolean;
 }
 
-export interface PilensDiagnosticsFileEntry {
+interface PilensDiagnosticsFileEntry {
 	/** Absolute, normalized path (forward slashes, canonical casing — same normalization as #482 `paths`). */
 	path: string;
 	/** Complete current diagnostic set for this file (full-replace; see CONSUMER CONTRACT above). Empty = explicitly clean. */
@@ -149,7 +149,7 @@ export function _resetDiagnosticsPublishForTests(): void {
 	reportedDirtyPaths.clear();
 }
 
-export interface PublishDiagnosticsFileInput {
+interface PublishDiagnosticsFileInput {
 	/** Absolute path (pre-normalization — this function normalizes). */
 	path: string;
 	/** Current FULL diagnostic set for this file (this call's complete picture — full-replace semantics). */

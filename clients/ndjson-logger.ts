@@ -275,11 +275,6 @@ export function getRegisteredLogFiles(): ReadonlySet<string> {
 	return registeredLogFiles;
 }
 
-/** Test-only reset — each test file gets a clean registry (see ndjson-logger.test.ts). */
-export function _resetRegisteredLogFilesForTest(): void {
-	registeredLogFiles.clear();
-}
-
 export interface SinkWriteFailureSummary {
 	/** Canonicalized absolute path of the sink that lost writes. */
 	file: string;

@@ -5,8 +5,6 @@ export const INSTALL_SMOKE_DRIFT_TITLE: string;
 
 export type StepOutcome = "success" | "failure" | "cancelled" | "skipped";
 
-export const VALID_STEP_OUTCOMES: readonly StepOutcome[];
-
 export interface InstallSmokeDriftReport {
 	version: string;
 	steps: { name: string; outcome: string }[];

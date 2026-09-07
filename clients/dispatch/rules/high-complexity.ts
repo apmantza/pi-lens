@@ -7,8 +7,8 @@ import { isTestSuiteOrganizer } from "./framework-call-noise.js";
 // projects without a config. Project-specific overrides are read from the
 // per-dispatch context; these mutable fallbacks exist for tests/legacy direct
 // rule evaluation only.
-export const DEFAULT_HIGH_COMPLEXITY_THRESHOLD = 15;
-export const DEFAULT_HIGH_COMPLEXITY_DEPTH_THRESHOLD = 6;
+const DEFAULT_HIGH_COMPLEXITY_THRESHOLD = 15;
+const DEFAULT_HIGH_COMPLEXITY_DEPTH_THRESHOLD = 6;
 let ccThreshold = DEFAULT_HIGH_COMPLEXITY_THRESHOLD;
 let depthThreshold = DEFAULT_HIGH_COMPLEXITY_DEPTH_THRESHOLD;
 

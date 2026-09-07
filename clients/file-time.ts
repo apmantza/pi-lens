@@ -172,7 +172,7 @@ export class FileTime {
 
 // --- Error Type ---
 
-export class FileTimeError extends Error {
+class FileTimeError extends Error {
 	readonly filePath: string;
 	readonly reason: "not-read" | "modified";
 

@@ -11,7 +11,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TIER_PRECEDENCE } from "../../clients/config-core/index.js";
+import { SOURCE_TIERS } from "../../clients/config-core/index.js";
 import {
 	CANONICAL_GLOBAL_CONFIG_FILE,
 	CANONICAL_PROJECT_CONFIG_FILE,
@@ -60,7 +60,7 @@ describe("documented lookup order (#2426)", () => {
 	 * core actually sorts by — not a second ordering that happens to agree today.
 	 */
 	it("is the config core's own tier precedence, not a second list", () => {
-		expect([...TIER_PRECEDENCE]).toEqual([
+		expect([...SOURCE_TIERS]).toEqual([
 			"builtin",
 			"global",
 			"project",

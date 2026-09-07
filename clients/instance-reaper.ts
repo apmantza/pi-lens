@@ -101,7 +101,7 @@ export interface ChildToKill {
 	command: string;
 }
 
-export interface MarkerSearch {
+interface MarkerSearch {
 	marker: string;
 	serverId: string;
 }
@@ -483,13 +483,13 @@ export function buildIdentityMatcher(
  * a permanently unkillable process read exactly like a successful reap while
  * paying the full sweep cost every session.
  */
-export type KillOutcome = "gone" | "alive" | "invalid";
+type KillOutcome = "gone" | "alive" | "invalid";
 
 /** Post-kill liveness poll budget. `taskkill /F /T` returns before the kernel
  *  has finished tearing the tree down, so a single immediate check would
  *  report false `alive`s. */
-export const KILL_VERIFY_ATTEMPTS = 5;
-export const KILL_VERIFY_INTERVAL_MS = 100;
+const KILL_VERIFY_ATTEMPTS = 5;
+const KILL_VERIFY_INTERVAL_MS = 100;
 
 /** `setTimeout` as an awaitable, with the timer unref'd so a settled one-shot
  *  `pi --print` never waits on best-effort kill verification. */
@@ -500,7 +500,7 @@ function sleepUnref(ms: number): Promise<void> {
 	});
 }
 
-export interface KillPidTreeOptions {
+interface KillPidTreeOptions {
 	isPidAlive?: (pid: number) => boolean;
 	verifyAttempts?: number;
 	verifyIntervalMs?: number;
@@ -588,7 +588,7 @@ async function verifyPidGone(
  * (script path), not the process image name, exactly like the existing
  * marker-search's WQL LIKE query below.
  */
-export const MANAGED_BINARIES: readonly ManagedBinary[] = [
+const MANAGED_BINARIES: readonly ManagedBinary[] = [
 	{ name: "ast-grep", launcher: "native" },
 	{ name: "opengrep-core", launcher: "native" },
 	{ name: "opengrep", launcher: "native" },
@@ -606,7 +606,7 @@ export const MANAGED_BINARIES: readonly ManagedBinary[] = [
  * `native` entry runs as `<name>.exe`, a `node` entry runs as `node.exe`
  * with the script path on its command line.
  */
-export interface ManagedBinary {
+interface ManagedBinary {
 	name: string;
 	launcher: "native" | "node";
 }
@@ -1171,12 +1171,12 @@ export interface BackstopSweepOptions {
  * not time-critical, so paying its cost once per half hour instead of once
  * per session_start removes essentially all of its aggregate cost.
  */
-export const BACKSTOP_COOLDOWN_MS = 30 * 60 * 1000;
+const BACKSTOP_COOLDOWN_MS = 30 * 60 * 1000;
 
 /** How long after session_start the deferred sweep fires. Chosen to clear the
  *  warmup window it was measured starving: `warmup_total` median 3288ms,
  *  worst on record 5480ms (#1857). */
-export const BACKSTOP_START_DELAY_MS = 30_000;
+const BACKSTOP_START_DELAY_MS = 30_000;
 
 /** Cap on process identities embedded in one latency record. */
 const BACKSTOP_IDENTITY_LOG_LIMIT = 10;
@@ -1186,7 +1186,7 @@ const BACKSTOP_IDENTITY_LOG_LIMIT = 10;
  * a candidate that was 1ms too fresh is comfortably past the grace by the
  * time the retry looks at it again.
  */
-export const BACKSTOP_GRACE_RETRY_MARGIN_MS = 30_000;
+const BACKSTOP_GRACE_RETRY_MARGIN_MS = 30_000;
 
 /** How long the sweep lock may be held before another process reclaims it.
  *  Well above the scan timeout plus the kill budget, and irrelevant when the

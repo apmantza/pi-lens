@@ -1512,7 +1512,7 @@ function tallyLspPrimaryVsAuxiliary(results: WorkspaceLspDiagnosticResult[]): {
 	return { primary, auxiliary };
 }
 
-export function mergeDiagnosticsWithWidgetSummaries(
+function mergeDiagnosticsWithWidgetSummaries(
 	widgetSummaries: FileDiagnosticSummary[],
 	lspResults: WorkspaceLspDiagnosticResult[],
 	projectSnapshot?: ProjectDiagnosticsSnapshot,

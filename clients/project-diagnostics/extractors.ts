@@ -51,7 +51,7 @@ const WARM_TRIGGER: Record<string, string> = {
 		"fires per-edit at turn_end (only after a source file with a discoverable test companion is edited)",
 };
 
-export function warmTriggerFor(analyzerId: string): string {
+function warmTriggerFor(analyzerId: string): string {
 	return WARM_TRIGGER[analyzerId] ?? "runs at session-start";
 }
 

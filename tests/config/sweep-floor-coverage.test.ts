@@ -55,6 +55,10 @@ function sweepShapeFiles(): string[] {
 }
 
 const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
+	// #2725: two-direction set equality over every .d.mts/.mjs sibling pair; the
+	// failure list is the whole registry and there are no exemptions by design.
+	"tests/config/dmts-export-drift.test.ts":
+		"set equality over sibling pairs, no exemption table to audit",
 	"tests/clients/dispatch/format-smoke-style-contract.test.ts":
 		"contract fixture assertions, not a registered-or-fail source population sweep",
 	"tests/clients/formatter-probe-commands.test.ts":

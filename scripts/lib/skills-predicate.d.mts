@@ -7,11 +7,6 @@
 
 import type { Dirent } from "node:fs";
 
-export function resolvedEntryKind(
-	fullPath: string,
-	entry: Dirent,
-): "file" | "dir" | "other";
-
 export function scanEntriesForSkills(
 	dir: string,
 	entries: Dirent[],

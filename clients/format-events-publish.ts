@@ -95,7 +95,7 @@ export const BUS_FORMAT_START_VERSION = 1;
 export const BUS_AUTOFIX_START_EVENT = "pilens:autofix:start";
 export const BUS_AUTOFIX_START_VERSION = 1;
 
-export interface FormatQueuedPayload {
+interface FormatQueuedPayload {
 	v: typeof BUS_FORMAT_QUEUED_VERSION;
 	source: "pi-lens";
 	filePath: string;
@@ -104,7 +104,7 @@ export interface FormatQueuedPayload {
 	kinds: Array<"autofix" | "format">;
 }
 
-export interface FormatStartPayload {
+interface FormatStartPayload {
 	v: typeof BUS_FORMAT_START_VERSION;
 	source: "pi-lens";
 	cwd: string;
@@ -113,7 +113,7 @@ export interface FormatStartPayload {
 	kinds: Array<"autofix" | "format">;
 }
 
-export interface AutofixStartPayload {
+interface AutofixStartPayload {
 	v: typeof BUS_AUTOFIX_START_VERSION;
 	source: "pi-lens";
 	cwd: string;

@@ -49,7 +49,7 @@ function runningOnWindows() {
 }
 
 /** Default ceiling for one process listing. */
-export const DEFAULT_SNAPSHOT_TIMEOUT_MS = 4_000;
+const DEFAULT_SNAPSHOT_TIMEOUT_MS = 4_000;
 
 /**
  * @typedef {"pid" | "ppid" | "ageMs" | "rssBytes" | "cpuKernel100ns" | "cpuUser100ns" | "startedAt" | "command"} ProcessField

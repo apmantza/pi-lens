@@ -9,7 +9,7 @@ import {
 	type BusEmitGetter,
 } from "./live-bus-emitter.js";
 
-export const LENS_EVENT_VERSION = 1;
+const LENS_EVENT_VERSION = 1;
 
 export const LENS_EVENT_NAMES = {
 	analysisComplete: "pi-lens/analysis-complete",
@@ -19,7 +19,7 @@ export const LENS_EVENT_NAMES = {
 
 type LensEventName = (typeof LENS_EVENT_NAMES)[keyof typeof LENS_EVENT_NAMES];
 
-export interface LensTelemetryPayload {
+interface LensTelemetryPayload {
 	model: string;
 	sessionId: string;
 	turnIndex: number;

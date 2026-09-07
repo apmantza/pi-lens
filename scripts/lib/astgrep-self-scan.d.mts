@@ -1,11 +1,5 @@
-// Type declarations for astgrep-self-scan.mjs (untyped .mjs imported from .ts tests).
-
-export const SELF_SCAN_CATEGORY: string;
-
 export function repoRoot(): string;
 export function rulesDir(root?: string): string;
-export function sgConfigPath(root?: string): string;
-export function baselinePath(root?: string): string;
 
 export function selfScanRuleIds(root?: string): string[];
 

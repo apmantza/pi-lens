@@ -4,8 +4,6 @@ import type {
 	ImpactCascadeResult,
 } from "./review-graph/types.js";
 
-export type { CascadeIndeterminate };
-
 export interface CascadeNeighborResult {
 	filePath: string;
 	reason: "imports" | "calls" | "references" | "fallback";

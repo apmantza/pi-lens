@@ -167,7 +167,7 @@ export interface RecordAnchor {
  * A list with no records cannot overflow, so this is the floor under an
  * anchorless producer rather than a case production reaches.
  */
-export const UNANCHORED_RECORD_LABEL = "(config resolution)";
+const UNANCHORED_RECORD_LABEL = "(config resolution)";
 
 /**
  * A bounded collector for one resolution.

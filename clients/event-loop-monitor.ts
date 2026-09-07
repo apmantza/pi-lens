@@ -152,7 +152,7 @@ export interface EventLoopStats {
  *   pre-existing {@link isSuspendSuspectedBlock} verdict: machine sleep,
  *   Modern Standby, or commit-charge paging.
  */
-export type LoopBlockStallClass =
+type LoopBlockStallClass =
 	| "below-floor"
 	| "cpu-accounted"
 	| "non-cpu-stall"
@@ -164,7 +164,7 @@ export type LoopBlockStallClass =
  * every block that tier cares about while keeping sub-second jitter — where
  * measurement slop rivals the signal — out of the verdict.
  */
-export const STALL_CLASSIFY_FLOOR_MS = 1000;
+const STALL_CLASSIFY_FLOOR_MS = 1000;
 
 /**
  * Slack allowed to the CPU budget before a block counts as unaccounted.
@@ -172,7 +172,7 @@ export const STALL_CLASSIFY_FLOOR_MS = 1000;
  * instants and the histogram quantizes, so a block whose CPU coverage is
  * within this much of exact is called `cpu-accounted`, not a stall.
  */
-export const STALL_CLASSIFY_SLOP_MS = 250;
+const STALL_CLASSIFY_SLOP_MS = 250;
 
 /** What {@link classifyLoopBlock} decides about one sample. */
 export interface LoopBlockClassification {

@@ -1545,38 +1545,3 @@ async function runRunner(
 }
 
 // --- Simple Integration Helper ---
-
-/**
- * @internal
- * Low-level dispatch entry point. Use `dispatchLint` from `./integration.js` instead —
- * that version provides session-persistent baselines and FactStore.
- * This function creates an ephemeral FactStore per call; facts do not persist across calls.
- */
-export async function dispatchLint(
-	filePath: string,
-	cwd: string,
-	pi: PiAgentAPI,
-	facts: FactStore,
-	registry: RunnerRegistryContract,
-): Promise<string> {
-	// By default, only run BLOCKING rules for fast feedback on file write
-	const ctx = createDispatchContext(filePath, cwd, pi, facts, true);
-
-	// Get runners for this file kind
-	if (!ctx.kind) return "";
-	const runners = registry.getForKind(ctx.kind, ctx.filePath);
-	if (runners.length === 0) {
-		return "";
-	}
-
-	// Create groups from registered runners (all in fallback mode)
-	const groups: RunnerGroup[] = [
-		{
-			mode: "fallback",
-			runnerIds: runners.map((r) => r.id),
-		},
-	];
-
-	const result = await dispatchForFile(ctx, groups, registry);
-	return result.output;
-}

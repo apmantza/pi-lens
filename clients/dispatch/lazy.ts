@@ -16,10 +16,3 @@ export function warmDispatchIntegration(): Promise<DispatchIntegration> {
 export function loadDispatchIntegration(): Promise<DispatchIntegration> {
 	return warmDispatchIntegration();
 }
-
-/** Test-only reset; production sessions intentionally retain the promise
- * across successful loads (a rejection already evicts itself — see
- * `createLazyImport`). */
-export function resetDispatchIntegrationForTests(): void {
-	lazyIntegration.resetForTests();
-}

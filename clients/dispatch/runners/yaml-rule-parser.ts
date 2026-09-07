@@ -105,14 +105,7 @@ export interface YamlRichPattern {
 // --- Constants ---
 
 /** Overly broad patterns that match everything (cause false positive explosions) */
-export const OVERLY_BROAD_PATTERNS = [
-	"$NAME",
-	"$FIELD",
-	"$_",
-	"$X",
-	"$VAR",
-	"$EXPR",
-];
+const OVERLY_BROAD_PATTERNS = ["$NAME", "$FIELD", "$_", "$X", "$VAR", "$EXPR"];
 
 /** Maximum complexity score for rules in blockingOnly mode */
 export const MAX_BLOCKING_RULE_COMPLEXITY = 8;
@@ -232,10 +225,7 @@ export function loadYamlRulesFresh(
 	return rules;
 }
 
-export function getCachedRules(
-	ruleDir: string,
-	severityFilter?: "error",
-): YamlRule[] {
+function getCachedRules(ruleDir: string, severityFilter?: "error"): YamlRule[] {
 	if (!fs.existsSync(ruleDir)) {
 		return [];
 	}
@@ -293,16 +283,6 @@ export function isOverlyBroadPattern(
 	if (typeof pattern !== "string") return false;
 	if (OVERLY_BROAD_PATTERNS.includes(pattern.trim())) return true;
 	return /^\$[A-Z_]+$/i.test(pattern.trim());
-}
-
-export function isValidCondition(
-	condition: YamlRuleCondition | undefined,
-): boolean {
-	if (!condition) return false;
-	if (condition.all !== undefined && condition.all.length === 0) return false;
-	if (condition.any !== undefined && condition.any.length === 0) return false;
-	if (isOverlyBroadPattern(condition.pattern)) return false;
-	return true;
 }
 
 export function isStructuredRule(rule: YamlRule): boolean {

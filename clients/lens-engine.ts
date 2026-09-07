@@ -48,19 +48,13 @@ import {
 
 // --- Facades (re-exported so adapters import only this module) ---------------
 
-export {
-	type AnalyzeFileOptions,
-	analyzeFile,
-	type McpAnalyzeResult,
-} from "./mcp/analyze.js";
+export { analyzeFile, type McpAnalyzeResult } from "./mcp/analyze.js";
 export { createMcpHost } from "./mcp/host-shim.js";
 export {
 	createWarmIpcLineReader,
 	createWarmIpcRequestQueue,
 	ipcPathForCwd,
 	readTurnEndStatus,
-	requestWarmAnalyze,
-	type TurnEndStatus,
 	WARM_TURN_END_SCHEMA_VERSION,
 	type WarmAnalyzeRequest,
 	type WarmTurnEndRequest,
@@ -69,10 +63,8 @@ export {
 export {
 	analyzeFileFresh,
 	canRebuildPiLens,
-	REBUILD_UNAVAILABLE_MESSAGE,
 	resolveRebuildScript,
 	runRebuild,
-	type ScanDiagnostic,
 	summarizeScan,
 } from "./mcp/review.js";
 export {
@@ -80,35 +72,18 @@ export {
 	runSessionStart,
 	runTurnEnd,
 	runTurnEndForIpc,
-	type SessionStartOutcome,
-	type TurnEndDelivery,
-	type TurnEndOutcome,
 } from "./mcp/session.js";
 export {
-	type ModuleReport,
-	type ModuleReportOptions,
-	type ModuleSymbolEntry,
 	moduleReport,
-	type ReadEnclosingOptions,
-	type ReadEnclosingResult,
-	type ReadSymbolResult,
-	type RecommendedRead,
 	readEnclosing,
 	readSymbol,
 	renderCompactModuleReport,
 } from "./module-report.js";
 export {
 	type ProjectReport,
-	type ProjectReportOptions,
 	projectReport,
 	renderCompactProjectReport,
 } from "./project-report.js";
-export {
-	createDefaultHostPorts,
-	type HostLogSink,
-	type HostPorts,
-	type HostPortsOverrides,
-} from "./host-ports.js";
 // Effective-config introspection (#2427). A facade rather than a wrapper for
 // the same reason the others are: the computation reaches into the config
 // resolution, the LSP registry and the dispatch plan at once, and putting that
@@ -116,16 +91,10 @@ export {
 // server is selected. Adapters route to it; nobody re-derives it.
 export {
 	effectiveConfig,
-	type EffectiveConfigDocument,
-	type EffectiveConfigOptions,
 	type EffectiveConfigView,
 	type EffectiveFileView,
-	type EffectiveFileViewError,
 	type EffectiveServerDecision,
-	type EffectiveToolDecision,
 	isEffectiveFileViewError,
-	type RedactedServerSpec,
-	type ToolSelectionReason,
 } from "./effective-config.js";
 
 // --- Query wrappers (own the remaining internal reach-ins) -------------------
@@ -321,7 +290,7 @@ export function resourceFootprint(): Promise<ResourceFootprint> {
  * offset=startLine, limit=endLine-startLine+1 for a one-line peek — prefer
  * module_report on `file` for the real outline. No per-hit `read` block, no
  * repeated raw `lines[]` array on the wire. */
-export interface SymbolSearchHit {
+interface SymbolSearchHit {
 	file: string;
 	score: number;
 	hits: number;

@@ -95,7 +95,7 @@ const ENCLOSING_TYPES: Record<string, string[]> = {
 	bash: ["function_definition"],
 };
 
-export interface AncestorSymbol {
+interface AncestorSymbol {
 	name: string;
 	kind: string;
 	startLine: number;

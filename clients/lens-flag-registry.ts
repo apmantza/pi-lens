@@ -20,7 +20,7 @@
 
 import { DEPRECATED_CONFIG_SURFACES } from "./config-diagnostic-codes.js";
 
-export type LensFlagScope = "global" | "project";
+type LensFlagScope = "global" | "project";
 
 export interface LensFlagSpec {
 	/** CLI flag name (`--<name>`) and the key callers pass to `getFlag`. */

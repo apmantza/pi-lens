@@ -44,16 +44,16 @@ import {
 } from "./provenance.js";
 
 /** Where the process runs: the project root, or the touched file's directory. */
-export type CwdMode = "root" | "file-dir";
+type CwdMode = "root" | "file-dir";
 
 /** How input reaches the process. */
-export type InputMode = "none" | "stdin" | "file";
+type InputMode = "none" | "stdin" | "file";
 
 /** Longest argv a spec may carry. A command line, not a file list. */
 export const MAX_ARGV_ENTRIES = 128;
 
 /** Total argv bytes a spec may carry. */
-export const MAX_ARGV_BYTES = 32 * 1024;
+const MAX_ARGV_BYTES = 32 * 1024;
 
 /** Most env entries a spec may carry. */
 export const MAX_ENV_ENTRIES = 64;
@@ -91,7 +91,7 @@ export interface ProcessSpecInput {
 }
 
 /** Why a spec could not be built. A closed vocabulary, greppable in tests. */
-export type ProcessSpecRejectionCode =
+type ProcessSpecRejectionCode =
 	| "empty-argv"
 	| "argv-not-strings"
 	| "argv-too-many"
@@ -103,7 +103,7 @@ export type ProcessSpecRejectionCode =
 	| "invalid-cwd-mode"
 	| "invalid-input-mode";
 
-export interface ProcessSpecRejection {
+interface ProcessSpecRejection {
 	readonly code: ProcessSpecRejectionCode;
 	/** Structural only: counts and limits, never an argv entry or an env value. */
 	readonly reason: string;
@@ -231,7 +231,7 @@ function reject(
 }
 
 /** Why a spec was refused spawn arguments. Carries no env value and no argv tail. */
-export interface TrustRefusal {
+interface TrustRefusal {
 	readonly kind: "trust-refusal";
 	/** `spec-trust` when the recorded decision fails, `host-trust` when the live one does. */
 	readonly cause: "spec-trust" | "host-trust";
@@ -246,7 +246,7 @@ export interface TrustRefusal {
 }
 
 /** What a spawn seam needs, and nothing more. */
-export interface SpawnArgs {
+interface SpawnArgs {
 	readonly argv: readonly string[];
 	readonly env: Readonly<Record<string, string>>;
 	readonly cwdMode: CwdMode;

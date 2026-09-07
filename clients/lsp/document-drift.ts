@@ -98,7 +98,7 @@ export interface SyncedDocumentRecord {
 	readonly syncedAt: number;
 }
 
-export type DriftDisposition =
+type DriftDisposition =
 	/** Stat diverged, the content really changed, and the resync completed. */
 	| "resynced"
 	/** The resync was attempted and threw; the old record is kept for a retry. */
@@ -146,7 +146,7 @@ const SKIPPED: DriftSweepResult = {
 };
 
 /** Documents stat'd per pass. Bounds the per-pass cost on a large workspace. */
-export const DRIFT_CHECK_BATCH = 64;
+const DRIFT_CHECK_BATCH = 64;
 /** Resyncs issued per pass. Paces the heal so a bulk edit cannot burst. */
 export const DRIFT_RESYNC_BATCH = 4;
 /** Tracked-document ceiling. A workspace sweep can open far more than this. */

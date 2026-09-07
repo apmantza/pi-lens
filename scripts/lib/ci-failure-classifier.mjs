@@ -21,7 +21,7 @@
  * brittle across reporter versions. */
 // oxlint-disable-next-line no-control-regex -- ESC (\x1b) is the literal ANSI escape-sequence lead byte this pattern strips, not accidental input.
 const ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
-export function stripAnsi(text) {
+function stripAnsi(text) {
 	return text.replace(ANSI_PATTERN, "");
 }
 
@@ -38,7 +38,7 @@ export function stripAnsi(text) {
  * line".
  */
 const LINE_TIMESTAMP_PREFIX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z ?/gm;
-export function stripLineTimestamps(text) {
+function stripLineTimestamps(text) {
 	return text.replace(LINE_TIMESTAMP_PREFIX, "");
 }
 
@@ -592,13 +592,7 @@ async function fetchText(fetcher, url) {
  *
  * @param {{ fetcher: typeof fetch, owner: string, repo: string, runId: number | string, jobName?: string }} args
  */
-export async function fetchRunAndFailedJob({
-	fetcher,
-	owner,
-	repo,
-	runId,
-	jobName,
-}) {
+async function fetchRunAndFailedJob({ fetcher, owner, repo, runId, jobName }) {
 	const base = `https://api.github.com/repos/${owner}/${repo}`;
 	const run = await restJson(fetcher, "GET", `${base}/actions/runs/${runId}`);
 	const jobsResponse = await restJson(
@@ -624,7 +618,7 @@ export async function fetchRunAndFailedJob({
 	};
 }
 
-export async function fetchJobLog({ fetcher, owner, repo, jobId }) {
+async function fetchJobLog({ fetcher, owner, repo, jobId }) {
 	const base = `https://api.github.com/repos/${owner}/${repo}`;
 	return fetchText(fetcher, `${base}/actions/jobs/${jobId}/logs`);
 }
@@ -633,7 +627,7 @@ export async function fetchJobLog({ fetcher, owner, repo, jobId }) {
  * Find this PR's existing classifier comment, if any -- there is at most one
  * at a time (upsert, never append), so the first match wins.
  */
-export async function findExistingClassifierComment({
+async function findExistingClassifierComment({
 	fetcher,
 	owner,
 	repo,
@@ -651,7 +645,7 @@ export async function findExistingClassifierComment({
 	);
 }
 
-export async function upsertComment({
+async function upsertComment({
 	fetcher,
 	owner,
 	repo,
@@ -684,7 +678,7 @@ export async function upsertComment({
  *
  * @returns {Promise<{ isWinner: boolean, winningCommentId: number | undefined }>}
  */
-export async function reconcileDuplicateClassifierComments({
+async function reconcileDuplicateClassifierComments({
 	fetcher,
 	owner,
 	repo,
@@ -729,7 +723,7 @@ export async function reconcileDuplicateClassifierComments({
  *
  * @returns {Promise<{ ok: boolean, status: number }>}
  */
-export async function attemptRerun({ fetcher, owner, repo, runId }) {
+async function attemptRerun({ fetcher, owner, repo, runId }) {
 	const base = `https://api.github.com/repos/${owner}/${repo}`;
 	try {
 		const response = await fetcher(
@@ -957,7 +951,7 @@ export async function runClassifier({
  * into a silent no-op. When those identifiers are unavailable, the original
  * error remains authoritative and no broader permission is assumed.
  */
-export async function commentClassificationFailure({
+async function commentClassificationFailure({
 	fetcher,
 	owner,
 	repo,

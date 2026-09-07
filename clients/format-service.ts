@@ -296,4 +296,3 @@ export function clearFormatServiceAndFileState(): void {
 }
 
 // Re-export for convenience
-export { clearAllSessions } from "./file-time.js";

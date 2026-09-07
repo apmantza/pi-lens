@@ -37,12 +37,6 @@ import {
 	type ProcessFilter,
 	type ProcRow,
 } from "../scripts/lib/process-scan.mjs";
-
-export type {
-	ProcessField,
-	ProcessFilter,
-	ProcRow,
-} from "../scripts/lib/process-scan.mjs";
 /**
  * Re-exported, not redefined. `windowsExe` resolves an absolute System32
  * interpreter path for a spawn this process is about to make (a bare

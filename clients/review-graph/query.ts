@@ -39,7 +39,7 @@ function collectIncomingEdges(
 	return edges;
 }
 
-export interface ImpactHit {
+interface ImpactHit {
 	/** Empty for a file-level dependent (e.g. an importer reached via an `imports` edge). */
 	symbol: string;
 	file: string;

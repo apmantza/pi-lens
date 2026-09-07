@@ -9,7 +9,7 @@ import { findLocalToolConfig } from "./path-utils.js";
 // ast-grep's root config marker. The `ast-grep lsp` server is workspace-gated:
 // it only operates in a project that has an `sgconfig.y[a]ml` at (or above) the
 // file. These are the names ast-grep itself looks for as root markers.
-export const SGCONFIG_NAMES = ["sgconfig.yml", "sgconfig.yaml"] as const;
+const SGCONFIG_NAMES = ["sgconfig.yml", "sgconfig.yaml"] as const;
 
 export interface AstGrepRuleSource {
 	dir: string;
@@ -110,13 +110,6 @@ export function getAstGrepRuleSources(
 		seen.add(key);
 		return true;
 	});
-}
-
-/** Compatibility export retained for callers that only need ordered dirs. */
-export function shippedRuleDirsInPrecedenceOrder(
-	projectRoot = process.cwd(),
-): string[] {
-	return getAstGrepRuleSources(projectRoot).map((source) => source.dir);
 }
 
 function findYamlFiles(dir: string): string[] {

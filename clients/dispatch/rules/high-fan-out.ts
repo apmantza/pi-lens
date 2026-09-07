@@ -10,7 +10,7 @@ import {
 // projects without a config. Project-specific overrides are read from the
 // per-dispatch context; this mutable fallback exists for tests/legacy direct
 // rule evaluation only.
-export const DEFAULT_HIGH_FAN_OUT_THRESHOLD = 20;
+const DEFAULT_HIGH_FAN_OUT_THRESHOLD = 20;
 let fanOutThreshold = DEFAULT_HIGH_FAN_OUT_THRESHOLD;
 
 /** Override fallback threshold for tests/legacy direct rule evaluation. */

@@ -5,7 +5,7 @@ import { logBusEvent, type BusEventLogEntry } from "./bus-events-logger.js";
 /** Resolve a pi event-bus emitter and its ctx at delivery time, not
  * subscription time. */
 export type BusEmitFn = (channel: string, data: unknown) => void;
-export interface BusEmitTarget {
+interface BusEmitTarget {
 	emit: BusEmitFn;
 	/**
 	 * Required (L3, #1415 review): every `BusEmitTarget` wiring must pair its

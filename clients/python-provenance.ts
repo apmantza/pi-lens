@@ -40,7 +40,7 @@ interface FunctionSummary {
 	bindingCounts: ReadonlyMap<string, number>;
 }
 
-export interface PythonProvenanceSummary {
+interface PythonProvenanceSummary {
 	readonly invalid: boolean;
 	provenanceFor(
 		name: string,
@@ -653,7 +653,7 @@ class Summary implements PythonProvenanceSummary {
 	}
 }
 
-export function getPythonProvenanceSummary(
+function getPythonProvenanceSummary(
 	root: PythonSyntaxNode,
 ): PythonProvenanceSummary {
 	const cached = SUMMARY_BY_ROOT.get(root);

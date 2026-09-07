@@ -21,8 +21,8 @@ import type { Symbol, SymbolRef, SymbolResolution } from "./symbol-types.js";
 /** Unique key for a symbol: `normalizedFilePath:symbolName` */
 export type SymbolKey = string;
 
-export type CallGraphResolution = SymbolResolution;
-export type CallGraphEvidenceKind = "calls" | "references" | "mixed";
+type CallGraphResolution = SymbolResolution;
+type CallGraphEvidenceKind = "calls" | "references" | "mixed";
 
 export interface CallGraphEvidenceCoverage {
 	/** Number of raw evidence records, including records folded into duplicates. */
@@ -113,7 +113,7 @@ export const CALL_GRAPH_CACHE_VERSION = 5;
 
 // ── Section 3: BFS impact analysis ───────────────────────────────────────────
 
-export type ImpactSeverity = "WillBreak" | "MayBreak" | "Review";
+type ImpactSeverity = "WillBreak" | "MayBreak" | "Review";
 
 export interface ImpactResult {
 	/** The affected symbol key. */

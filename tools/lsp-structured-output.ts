@@ -1,8 +1,8 @@
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-export type LspToolName = "lsp_navigation" | "lsp_diagnostics";
+type LspToolName = "lsp_navigation" | "lsp_diagnostics";
 
-export type LspToolStatus =
+type LspToolStatus =
 	| "success"
 	| "empty"
 	| "unsupported"
@@ -13,7 +13,7 @@ export type LspToolStatus =
 	| "tracked_snapshot"
 	| "error";
 
-export type LspToolLocation = {
+type LspToolLocation = {
 	uri?: string;
 	filePath: string;
 	range: {
@@ -72,7 +72,7 @@ function finiteNumber(value: unknown): number | undefined {
 		: undefined;
 }
 
-export function lspStatusFromFailureKind(failureKind: string): LspToolStatus {
+function lspStatusFromFailureKind(failureKind: string): LspToolStatus {
 	if (failureKind === "success" || failureKind === "fallback_success") {
 		return "success";
 	}
@@ -236,7 +236,7 @@ function collectCallHierarchyLocationSummaries(
 	return out;
 }
 
-export function collectLspToolLocationsForOperation(
+function collectLspToolLocationsForOperation(
 	operation: string,
 	result: unknown,
 	filePath: string,
@@ -304,7 +304,7 @@ function parseBalancedJsonPrefix(
 	return undefined;
 }
 
-export function parseLspNavigationTextPayload(text: string): ParsedTextPayload {
+function parseLspNavigationTextPayload(text: string): ParsedTextPayload {
 	const notes: string[] = [];
 	const hints: string[] = [];
 	const errors: string[] = [];
