@@ -75,6 +75,9 @@ const DENY_CASES: Array<[command: string, ruleNeedle: string]> = [
 	// nested inside a subshell -- the tokenizer must recurse into $()/backticks.
 	["echo $(git stash)", "stash"],
 	["echo `git stash`", "stash"],
+	// a non-PI_LENS_HOME env assignment must not defeat env-assignment
+	// stripping -- the command word search must still land on "node".
+	["FOO=bar node -e \"require('./clients/foo.js')\"", "probe"],
 ];
 
 // Every allow string the issue lists, which must stay green.
@@ -92,6 +95,21 @@ const ALLOW_CASES: string[] = [
 	"npm test",
 	"npm run build",
 	"echo hi",
+	// node with neither an eval flag nor a .mjs/.js file argument, even
+	// though the text mentions clients/ -- the flag/file-arg gate, not the
+	// clients/dist reference alone, must decide.
+	"node -c clients/tsconfig.json",
+	// node -e with no clients/ or dist/ reference at all -- the reference
+	// gate, not the eval flag alone, must decide.
+	'node -e "console.log(1)"',
+	// --soft with no origin/ target -- only "--soft origin/<branch>" denies.
+	"git reset --soft HEAD~1",
+	// worktree subcommand other than "remove" -- the remove check, not a
+	// bare "worktree" match, must decide.
+	"git worktree list",
+	// $(...) fully inside single quotes is literal text to bash (no
+	// expansion), so the tokenizer must not extract it as a subshell.
+	"echo '$(git stash)'",
 ];
 
 describe("scripts/hooks/guard-bash.mjs -- deny list (#2699)", () => {
