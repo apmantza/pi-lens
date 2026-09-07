@@ -337,6 +337,10 @@ const wallClockBudgetInclude = [
 	// #2586 review F1: proves the ACTUAL stdout bytes supply-host-provided-deps.mjs
 	// prints (real child process, flake-shape admission).
 	"tests/scripts/supply-host-provided-deps.test.ts",
+	// #2700: the gating/advisory subset test resolves oxlint's real
+	// --print-config for both npm scripts (real child process, flake-shape
+	// admission).
+	"tests/scripts/lint-js.test.ts",
 	// #2507: a real headless child whose own exit decision is the subject — it
 	// must not drain mid `lsp_diagnostics`, and must still exit by itself
 	// afterwards. Real child spawn (flake-shape admission), and it also spawns a

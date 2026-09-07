@@ -13,6 +13,10 @@
  * a missing `--deny-warnings` fails here, not just in someone's manual
  * dogfood run.
  */
+// flake-shape: real-process-spawn — the #2700 gating/advisory subset test
+// below adds one more real oxlint `--print-config` spawn; no in-process
+// double is faithful to which rules each npm script actually enables (see
+// `ADMITTED_AFTER_BASELINE` in tests/clients/flake-shape-ratchet.test.ts).
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";

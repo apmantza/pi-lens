@@ -106,6 +106,16 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"observes the script's real stdout bytes (newline- vs. space-delimited); no in-process double is faithful",
 	},
+	// 2026-09-07 (#2700): the gating/advisory subset test resolves oxlint's
+	// REAL `--print-config` for both npm scripts (never a hand-copied rule
+	// list) so a change to either script's flags is caught automatically; an
+	// in-process double would just restate the test author's assumption
+	// about which rules each tier enables.
+	"real-process-spawn:scripts/lint-js.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"resolves oxlint's real --print-config for lint:js and lint:js:advisory; no in-process double is faithful",
+	},
 	// 2026-09-06 (#2603, was #2591 review round 2, F1): the defect is 2^N regex
 	// backtracking through detectPythonEnvironment — the ANSWER was always
 	// right, only the time was wrong, so no non-clock assertion separates
