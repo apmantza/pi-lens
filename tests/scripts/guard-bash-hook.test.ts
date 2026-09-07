@@ -58,6 +58,9 @@ const DENY_CASES: Array<[command: string, ruleNeedle: string]> = [
 	["git stash drop", "stash"],
 	["git stash push", "stash"],
 	["git -C /tmp/some-worktree stash", "stash"],
+	// a quoted -C argument with an internal space must still fuse into ONE
+	// word, or the -C pairing misaligns and "stash" is missed.
+	['git -C "/tmp/some dir" stash', "stash"],
 	["git reset --soft origin/master", "reset"],
 	["git reset --soft origin/fix/2699-guard-bash-hook", "reset"],
 	["git reset --hard HEAD", "reset"],
