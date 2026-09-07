@@ -566,6 +566,34 @@ describe("the wrapper rule itself", () => {
 		]);
 	});
 
+	it("keeps following at depth three — the fixed point iterates, it does not do one pass", async () => {
+		// Without the iteration, `lintForDispatch` is never reached: the direct
+		// scan finds `lintChart`, one pass finds `lintNearestChart`, and the
+		// third hop is where a laundered `process.cwd()` would go free.
+		const source = `${K4_WRAPPER}
+			async function lintNearestChart(root: string, cwd: string) {
+				return lintChart(root, cwd);
+			}
+			async function lintForDispatch(root: string, cwd: string) {
+				return lintNearestChart(root, cwd);
+			}
+			lintForDispatch(chartRoot, process.cwd());
+		`;
+		const { flagged, wrappers } = await analyze(source);
+		expect(wrappers).toEqual([
+			"lintChart:positional@1",
+			"lintForDispatch:positional@1",
+			"lintNearestChart:positional@1",
+		]);
+		expect(flagged).toEqual([
+			at(
+				source,
+				"lintForDispatch(chartRoot, process.cwd())",
+				"lintForDispatch",
+			),
+		]);
+	});
+
 	it("does NOT treat a runner's `run(ctx)` as a cwd wrapper", async () => {
 		// `ctx` is a dispatch context, not a cwd. If `ctx.cwd` counted as
 		// "parameter 0 is the cwd", every in-file `run(ctx)` call would be flagged
