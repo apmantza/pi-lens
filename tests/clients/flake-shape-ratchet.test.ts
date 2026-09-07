@@ -91,6 +91,14 @@ const FLAKE_SHAPE_BASELINE: Baseline = JSON.parse(
 const ADMITTED_AFTER_BASELINE: Readonly<
 	Record<string, { detector: DetectorName; reason: string }>
 > = {
+	// 2026-09-07 (#2703 review r1): an unhandled derived-promise rejection is
+	// only observable through Node's `unhandledRejection` event, which fires
+	// on a real macrotask; the file drains one real `setImmediate` tick.
+	"raw-timer-wait:clients/lsp/push-wait-settle-rejection.test.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"unhandledRejection is delivered on a real macrotask; one real setImmediate drain, assertion on the captured list",
+	},
 	// 2026-09-03: the published-manifest guard must run the real `npm pack`
 	// (prepack/postpack are npm lifecycle hooks); header on the file states why.
 	"real-process-spawn:packaging-pack-manifest.test.ts": {
