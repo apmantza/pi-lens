@@ -125,6 +125,10 @@ const DENY_CASES: Array<[command: string, ruleNeedle: string]> = [
 	// heredoc delimiter does not stop bash expanding $( ) in the body --
 	// verified by running it with a side-effecting stand-in.
 	["cat <<EOF\n$(git stash)\nEOF", "stash"],
+	// review round 2 F1: a valid substitution before an unclosed one must
+	// remain visible to the guard, because bash expands it before reporting
+	// the later malformed substitution.
+	["cat <<EOF\n$(git stash)\n$(echo harmless\nEOF\ngit diff", "stash"],
 	// W1 (#2726): a here-string is not a heredoc marker.  The command after
 	// it remains live and must still be classified.
 	["grep x <<< foo\ngit stash", "stash"],
@@ -199,6 +203,9 @@ const ALLOW_CASES: string[] = [
 	// unquoted heredoc body, but it does continue with a later live command.
 	"cat <<EOF\n$(git stash\nEOF\ngit diff",
 	"cat <<EOF\n`git stash\nEOF\ngit diff",
+	// Real bash reports the malformed outer substitution and does not run a
+	// nested substitution inside it.
+	"cat <<EOF\n$(echo x\n$(git stash)\nEOF",
 ];
 
 // Round-2 survey harness retained as a regression fixture for #2705. The

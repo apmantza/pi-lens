@@ -234,15 +234,27 @@ function scanHeredocBodyForSubstitutions(body, out) {
 			continue;
 		}
 		if (ch === "$" && body[i + 1] === "(") {
-			const span = lexRegions(body, i + 2, ")", found);
-			if (!span.closed) return;
+			/** @type {string[]} */
+			const spanFound = [];
+			const span = lexRegions(body, i + 2, ")", spanFound);
+			if (!span.closed) {
+				out.push(...found);
+				return;
+			}
+			found.push(...spanFound);
 			found.push(span.retained);
 			i = span.end;
 			continue;
 		}
 		if (ch === "`") {
-			const span = lexRegions(body, i + 1, "`", found);
-			if (!span.closed) return;
+			/** @type {string[]} */
+			const spanFound = [];
+			const span = lexRegions(body, i + 1, "`", spanFound);
+			if (!span.closed) {
+				out.push(...found);
+				return;
+			}
+			found.push(...spanFound);
 			found.push(span.retained);
 			i = span.end;
 			continue;
