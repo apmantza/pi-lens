@@ -353,6 +353,15 @@ export interface ToolDefinition {
 	 * mechanism for any npm/pnpm/bun-distributed platform-CLI tool.
 	 */
 	platformPackage?: PlatformPackageSpec;
+	/**
+	 * How the managed binary is verified. Absent (the default) spawns
+	 * `checkArgs`. `"package-entry"` verifies SPAWN-FREE — see
+	 * {@link verifyNpmPackageEntry} — for an npm stdio LSP server that has no
+	 * CLI surface at all AND whose transport-required diagnostic cannot be read
+	 * back through a pipe, so neither `checkArgs` nor #208's rescue can produce
+	 * a verdict (#2722).
+	 */
+	verification?: "package-entry";
 }
 
 export interface PlatformPackageSpec {
@@ -709,10 +718,27 @@ export const TOOLS: ToolDefinition[] = [
 		binaryName: "docker-langserver",
 	},
 	{
+		// #2722: intelephense has no CLI — its entry calls createConnection()
+		// unconditionally — and Node prints the offending source line before the
+		// error. The bundle is one ~4 MB minified line, so the transport-required
+		// marker #208 rescues on lands at byte 4,154,741 of a 4,423,356-byte
+		// stderr while Node truncates piped stderr at 1 MiB on exit. Measured on
+		// intelephense@1.18.5, linux, Node v22.22.1:
+		//   $ intelephense --version 2>&1 | wc -c              -> 1048576
+		//   $ intelephense --version 2>&1 | grep -c "Connection input stream is not set" -> 0
+		//   $ intelephense --version 2>err.txt; wc -c < err.txt -> 4423356
+		// Same run over the alternatives, each with stdin closed the way
+		// verifyToolBinary closes it (`input: ""`):
+		//   --help, -v, --socket=0 -> identical dump (exit 1, 4423356 bytes,
+		//     marker at 4154741, 1048576 through a pipe, marker absent)
+		//   --stdio                -> exit 1 with ZERO bytes on either stream,
+		//     so it carries no marker to rescue on either.
+		// No checkArgs value produces a verdict. Verified spawn-free instead.
 		id: "intelephense",
 		name: "Intelephense",
 		checkCommand: "intelephense",
 		checkArgs: ["--version"],
+		verification: "package-entry",
 		installStrategy: "npm",
 		packageName: "intelephense",
 		binaryName: "intelephense",
@@ -2178,6 +2204,130 @@ function extractVersionToken(output: string): string | undefined {
 const lastManagedInstallVersion = new Map<string, string>();
 
 /**
+ * The package whose entry module verifies `tool`'s managed install spawn-free,
+ * or undefined when the tool is verified by spawning `checkArgs` (#2722).
+ * Registry-declared per tool — never inferred from the strategy: a spawn probe
+ * is the stronger check everywhere it can actually return a verdict.
+ */
+export function packageEntryVerification(
+	tool: ToolDefinition,
+): string | undefined {
+	return tool.verification === "package-entry" ? tool.packageName : undefined;
+}
+
+/**
+ * Spawn-free verification of a managed npm install (#2722).
+ *
+ * For an stdio LSP server with no CLI surface, every `checkArgs` value is a
+ * throw, and #208's transport-required rescue is output-ORDER dependent: Node
+ * prints the offending source line ahead of the error, so a server whose bundle
+ * is megabytes of minified JS pushes the marker past both our retained window
+ * and Node's own 1 MiB pipe truncation. The bytes never leave the child, so no
+ * spawn can answer "is this install intact".
+ *
+ * The evidence used instead is the same class the `archive` strategy already
+ * accepts through `treeMarker`: the installed tree is inspected on disk. The
+ * install verifies when the package directory beside the `.bin` shim carries a
+ * readable `package.json` with a `version`, and the entry module that
+ * package.json itself names — `bin[<shim name>]` or a bare `bin` string —
+ * exists as a non-empty file. `main` is deliberately NOT a fallback: npm
+ * creates the `node_modules/.bin/<shim>` this function is given only from a
+ * `bin` field, so a manifest without one cannot be the manifest behind this
+ * shim. That is exactly what `verifyToolBinary` was documented to catch here —
+ * broken symlinks and partial installs — and it is strictly more than the
+ * `--version` spawn can report for this class.
+ */
+export async function verifyNpmPackageEntry(
+	binPath: string,
+	packageName: string,
+): Promise<boolean> {
+	// `<...>/node_modules/.bin/<shim>` → `<...>/node_modules`.
+	const nodeModulesDir = path.dirname(path.dirname(binPath));
+	const pinned = parsePinnedVersion(packageName);
+	const bareName = pinned
+		? packageName.slice(0, -(pinned.length + 1))
+		: packageName;
+	const packageDir = path.join(nodeModulesDir, ...bareName.split("/"));
+	const shimName = path
+		.basename(binPath)
+		.replace(/\.(cmd|exe|ps1|bat)$/i, "")
+		.toLowerCase();
+
+	const fail = (reason: string): false => {
+		logSessionStart(
+			`auto-install verify: failed for ${binPath} (check=package-entry, kind=${reason})`,
+		);
+		return false;
+	};
+
+	// R2-F1: the shim ITSELF, before anything else. Every path below is DERIVED
+	// from `binPath`, so without this a partial install — npm never wrote the
+	// `.bin` entry, or wrote one that is empty, a directory, or a symlink
+	// dangling at a deleted target — verified `true` on the strength of a
+	// package tree that nothing can execute, and `installNpmTool` then recorded
+	// the install as SUCCEEDED. `classifyInstallOutcome` grades any non-"failed"
+	// outcome as `⚠ unavailable (succeeded)`, so that answer re-hid exactly the
+	// nightly row #2722 exists to expose. `statSync` FOLLOWS the link, which is
+	// what makes missing and dangling one branch.
+	try {
+		const shim = statSync(binPath);
+		if (!shim.isFile() || shim.size === 0) return fail("shim-not-a-file");
+	} catch {
+		return fail("shim-missing");
+	}
+
+	let manifest: {
+		version?: unknown;
+		bin?: unknown;
+	};
+	try {
+		manifest = JSON.parse(
+			await fs.readFile(path.join(packageDir, "package.json"), "utf8"),
+		) as typeof manifest;
+	} catch {
+		return fail("package-json-unreadable");
+	}
+	if (typeof manifest.version !== "string" || !manifest.version) {
+		return fail("package-json-no-version");
+	}
+
+	const bin = manifest.bin;
+	const entry =
+		typeof bin === "string"
+			? bin
+			: bin && typeof bin === "object"
+				? Object.entries(bin as Record<string, unknown>).find(
+						// Case-folded on purpose: on a case-insensitive filesystem the
+						// shim on disk can differ in case from the manifest key npm
+						// wrote it from, and `path.basename` reads the disk name.
+						([name]) => name.toLowerCase() === shimName,
+					)?.[1]
+				: undefined;
+	if (typeof entry !== "string" || !entry) {
+		return fail("package-json-no-entry");
+	}
+
+	try {
+		const stat = statSync(path.join(packageDir, entry));
+		if (!stat.isFile() || stat.size === 0) return fail("entry-not-a-file");
+	} catch {
+		return fail("entry-missing");
+	}
+
+	// R2-F3 (catalog shape 31): "did the new verifier run at all, and on what"
+	// has to be answerable from sessionstart.log, not only from a debug build —
+	// the failure branches above already log there. Measured volume on a real
+	// intelephense install, scratch PI_LENS_HOME: TWO rows on the session that
+	// installs (installNpmTool's verify, then the post-install resolution), and
+	// ZERO on every later session — the probe cache answers before any verify
+	// runs (`auto-install ensure intelephense: probe cache hit`).
+	logSessionStart(
+		`auto-install verify: succeeded for ${binPath} (check=package-entry, version=${manifest.version}, entry=${entry})`,
+	);
+	return true;
+}
+
+/**
  * Verify a tool binary actually works by running its configured checkArgs.
  * This catches broken symlinks, partial installs, and corrupted binaries.
  * `onVersionOutput`, when provided, receives the raw stdout on a successful
@@ -2208,7 +2358,26 @@ export async function verifyToolBinary(
 	 */
 	timeoutMs = 10000,
 	verificationArgs: string[] = ["--version"],
+	/**
+	 * Package name from {@link packageEntryVerification} — present only for a
+	 * registry entry declaring `verification: "package-entry"`. When present the
+	 * spawn is skipped entirely and {@link verifyNpmPackageEntry} answers (#2722).
+	 */
+	packageEntryOf?: string,
+	/**
+	 * Called when a `false` verdict is INCONCLUSIVE rather than a verdict: the
+	 * transport-required matcher was armed, never matched, and the child's
+	 * output was cut off before the tail arrived, so the #208 rescue could not
+	 * be evaluated at all (#2722). Distinct from `onTransient` on purpose — the
+	 * prober DID run to completion and re-probing reproduces it exactly, so this
+	 * is a durable "cannot be verified", not a stall (catalog shape 13). A
+	 * caller must not treat it as "broken" and delete the installation.
+	 */
+	onInconclusive?: () => void,
 ): Promise<boolean> {
+	if (packageEntryOf !== undefined) {
+		return verifyNpmPackageEntry(binPath, packageEntryOf);
+	}
 	// #2015: safeSpawnAsync instead of raw spawn. Raw spawn's timeout
 	// SIGTERMed only cmd.exe on Windows (.cmd shims run shell:true), orphaning
 	// the grandchild node process - which kept scanning, held handles against
@@ -2271,6 +2440,33 @@ export async function verifyToolBinary(
 		// A kill (timeout fired) or spawn-boundary failure is a stall, not a
 		// verdict from the binary (#1569 transient semantics).
 		if (result.signal !== undefined || result.spawnFailure) onTransient?.();
+		if (
+			result.outputTruncated &&
+			result.signal === undefined &&
+			!result.spawnFailure
+		) {
+			// #2722: the transport-required matcher above is armed on EVERY probe,
+			// and it never matched — but the output we kept is a prefix, so the
+			// marker may simply sit past it (intelephense emits ~4 MB of bundle
+			// ahead of its own diagnostic). "Unmatched within a truncated prefix"
+			// is not "this binary is broken"; callers must not delete the install
+			// on it. Recorded as its own kind so a monitor can tell an unreadable
+			// probe apart from a rejected binary.
+			//
+			// R2-F4: gated on the probe having actually FINISHED. A verbose child
+			// that is SIGTERMed at the timeout also arrives here truncated, and
+			// that is the #1569 transient class one line above, not this one —
+			// ungated, the two overlapped and `installNpmTool` (which tests
+			// inconclusive first) replaced the #2015 transient message with this
+			// one. The doc comment's "the prober DID run to completion" is now
+			// true rather than aspirational.
+			onInconclusive?.();
+			recordDegradationOnce({
+				kind: "installer-verification-inconclusive",
+				subject: binPath,
+				reason: `transport-required marker unresolved in truncated output (${verificationArgs.join(" ")})`,
+			});
+		}
 		const kind =
 			result.spawnFailure?.kind ??
 			(result.signal
@@ -2449,6 +2645,7 @@ export async function getAllToolStatuses(): Promise<ToolStatus[]> {
 					undefined,
 					getToolVerificationTimeout(tool),
 					tool.checkArgs,
+					packageEntryVerification(tool),
 				)
 			) {
 				status.installed = true;
@@ -2647,6 +2844,7 @@ async function getToolPathResolved(
 					onTransient,
 					getToolVerificationTimeout(tool),
 					tool.checkArgs,
+					packageEntryVerification(tool),
 				)
 			) {
 				return cmdPath;
@@ -2669,6 +2867,7 @@ async function getToolPathResolved(
 					onTransient,
 					getToolVerificationTimeout(tool),
 					tool.checkArgs,
+					packageEntryVerification(tool),
 				)
 			) {
 				return exePath;
@@ -2690,6 +2889,7 @@ async function getToolPathResolved(
 					onTransient,
 					getToolVerificationTimeout(tool),
 					tool.checkArgs,
+					packageEntryVerification(tool),
 				)
 			) {
 				return localBase;
@@ -3541,6 +3741,13 @@ export interface RefreshableManagedTool {
 	/** Registry-scoped ceiling for managed verification probes. */
 	verificationTimeoutMs?: number;
 	/**
+	 * npm only — see {@link packageEntryVerification}. Carried on the candidate
+	 * because the refresh verifies the SAME binary `installNpmTool` does, and a
+	 * tool whose `--version` probe can never return a verdict must not have one
+	 * demanded of it after an update either (#2722).
+	 */
+	packageEntryOf?: string;
+	/**
 	 * The identity of what the tool's coordinate resolves to TODAY, when that
 	 * identity is knowable without a network call. `archive` and `maven` entries
 	 * carry a version pinned in this registry, so their identity is the resolved
@@ -3595,6 +3802,7 @@ export function getRefreshableManagedTools(): RefreshableManagedTool[] {
 					packageName: tool.packageName,
 					binaryName: tool.binaryName,
 					verificationTimeoutMs: tool.verificationTimeoutMs,
+					packageEntryOf: packageEntryVerification(tool),
 				});
 				break;
 			}
@@ -4594,6 +4802,8 @@ async function installNpmTool(
 	binaryName: string,
 	verificationArgs: string[] = ["--version"],
 	verificationTimeoutMs = 10_000,
+	/** See {@link packageEntryVerification} — spawn-free verification (#2722). */
+	packageEntryOf?: string,
 ): Promise<string | undefined> {
 	try {
 		// Ensure tools directory exists
@@ -4697,8 +4907,10 @@ async function installNpmTool(
 		debugLog(`Verifying ${binaryName}...`);
 		let isValid = false;
 		let lastAttemptTransient = false;
+		let lastAttemptInconclusive = false;
 		for (let attempt = 1; attempt <= 3; attempt++) {
 			lastAttemptTransient = false;
+			lastAttemptInconclusive = false;
 			isValid = await verifyToolBinary(
 				binPath,
 				undefined,
@@ -4707,6 +4919,10 @@ async function installNpmTool(
 				},
 				verificationTimeoutMs,
 				verificationArgs,
+				packageEntryOf,
+				() => {
+					lastAttemptInconclusive = true;
+				},
 			);
 			if (isValid) break;
 			if (attempt < 3) {
@@ -4715,6 +4931,41 @@ async function installNpmTool(
 				);
 				await new Promise((r) => setTimeout(r, 1000 * attempt));
 			}
+		}
+		if (!isValid && lastAttemptInconclusive) {
+			// #2722: the probe ran to completion but could not decide — the #208
+			// transport-required matcher was armed, never matched, and the kept
+			// output is a truncated prefix, so the marker may sit past it (the
+			// class intelephense fell into: ~4 MB of bundle ahead of the marker,
+			// unreachable through any pipe). Same rule as the transient branch
+			// below (#2015): a non-verdict must not delete a freshly installed
+			// package. Deliberately NOT folded into `lastAttemptTransient` —
+			// re-probing reproduces this exactly, so it is durable, and a
+			// transient verdict would keep re-arming the reinstall path
+			// (catalog shape 13).
+			// R2-F2: a non-verdict is a reason to keep ONLY while the tree on disk
+			// still looks like a complete install. With intelephense verified
+			// spawn-free, no registry entry reaches this branch healthy (measured:
+			// no other npm-strategy LSP server emits more than 1,527 bytes), so
+			// its live population is BROKEN servers that spew past the retained
+			// window and die — and for those the delete was the only repair that
+			// existed. Measured on npm 9.2.0 against a real managed prefix: a
+			// package file corrupted IN PLACE is not repaired by re-installing
+			// (`up to date`, the zeroed file stays zeroed), while a package
+			// directory, a `.bin` shim or a nested dependency that is GONE is
+			// reinstalled. So the same on-disk evidence `verification:
+			// "package-entry"` uses decides keep-vs-delete here — strictly as a
+			// gate, never as a verdict: the install is still recorded as failed,
+			// so the tool still reads `✗` and nothing is re-hidden.
+			if (await verifyNpmPackageEntry(binPath, packageName)) {
+				logSessionStart(
+					`auto-install ${packageName}: verification inconclusive (output truncated before the transport-required marker) but the installed tree is intact; keeping installation for re-probe`,
+				);
+				return undefined;
+			}
+			logSessionStart(
+				`auto-install ${packageName}: verification inconclusive AND the installed tree is incomplete; cleaning up so the next install can repair it`,
+			);
 		}
 		if (!isValid && lastAttemptTransient) {
 			// #2015: a killed/spawn-failed prober is NOT a verdict about the
@@ -5074,6 +5325,7 @@ export async function installTool(toolId: string): Promise<boolean> {
 					tool.binaryName,
 					tool.checkArgs,
 					getToolVerificationTimeout(tool),
+					packageEntryVerification(tool),
 				);
 				if (npmPath !== undefined) {
 					// #1746 review F4: an install just resolved this package's range
