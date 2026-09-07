@@ -132,7 +132,7 @@ function runnerFiles(): string[] {
 				!entry.name.endsWith(".test.ts"),
 		)
 		.map((entry) => path.join(RUNNERS_DIR, entry.name))
-		.sort();
+		.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
 describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
@@ -152,7 +152,9 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 				),
 			);
 		}
-		wrappers = wrappers.sort();
+		// Explicit, locale-independent comparator: this list is compared against
+		// EXPECTED_WRAPPERS by identity (SonarCloud S2871).
+		wrappers = wrappers.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 	});
 
 	it("scans the whole runner directory and finds the pinned population", () => {

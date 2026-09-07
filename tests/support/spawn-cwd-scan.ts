@@ -134,6 +134,13 @@ function namedParts(node: SgNode | null | undefined): SgNode[] {
 	return node.namedChildren().filter((child) => child.kind() !== "comment");
 }
 
+/** Code-unit ordering. The sorted output feeds identity comparisons — the
+ * sweep's pinned wrapper list, and `toEqual` over flagged `line:callee`
+ * strings — so it must not vary with a locale (SonarCloud S2871). */
+function byCodeUnit(a: string, b: string): number {
+	return a < b ? -1 : a > b ? 1 : 0;
+}
+
 function unquote(text: string): string {
 	return text.replace(/^["'`]|["'`]$/g, "");
 }
@@ -558,13 +565,13 @@ export async function scanSpawnCwd(
 	sites.sort(
 		(a, b) =>
 			a.line - b.line ||
-			a.callee.localeCompare(b.callee) ||
-			a.kind.localeCompare(b.kind),
+			byCodeUnit(a.callee, b.callee) ||
+			byCodeUnit(a.kind, b.kind),
 	);
 	return {
 		sites,
 		wrappers: [...wrappersByName.values()].sort((a, b) =>
-			a.name.localeCompare(b.name),
+			byCodeUnit(a.name, b.name),
 		),
 	};
 }
