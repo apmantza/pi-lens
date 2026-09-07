@@ -35,6 +35,7 @@
 		"check": "node scripts/check-extensions.mjs",
 		"selftest:install": "node scripts/install-selftest.mjs",
 		"check:lockfile": "node scripts/check-lockfile-sync.mjs",
+		"knip": "node scripts/run-knip.mjs",
 		"check:grammars": "node scripts/check-grammar-provenance.mjs",
 		"check:grammar-load": "node scripts/check-grammar-load.mjs",
 		"audit:tree-sitter": "node scripts/audit-tree-sitter-rules.mjs",
@@ -141,8 +142,9 @@
 		"dependency-cruiser": "^18.2.0",
 		"husky": "^9.1.7",
 		"json5": "^2.2.3",
+		"knip": "6.34.0",
 		"oxfmt": "0.66.0",
-		"oxlint": "1.80.0",
+		"oxlint": "1.81.0",
 		"semver": "^7.8.0",
 		"typebox": "^1.0.0",
 		"typescript": "^7.0.2",
@@ -157,20 +159,8 @@
 			"./skills"
 		]
 	},
-	"knip": {
-		"entry": [
-			"index.ts"
-		],
-		"project": [
-			"**/*.ts",
-			"!**/*.test.ts"
-		],
-		"ignore": [
-			"**/*.test.ts"
-		]
-	},
 	"allowScripts": {
-		"@ast-grep/cli@0.45.2": true,
+		"@ast-grep/cli@0.45.3": true,
 		"@google/genai@1.52.0": true,
 		"protobufjs@7.6.5": true
 	}

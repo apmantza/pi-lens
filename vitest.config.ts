@@ -312,6 +312,8 @@ const wallClockBudgetInclude = [
 	"tests/packaging-pack-manifest.test.ts",
 	// #2528: the bounded batch helper tests race a real wall-clock budget against settle latency (flake-shape admission).
 	"tests/clients/runtime-turn-test-runner-bounds.test.ts",
+	// #2703 review r1: the push-wait settle guard drains one real setImmediate tick so Node can deliver `unhandledRejection` (flake-shape admission).
+	"tests/clients/lsp/push-wait-settle-rejection.test.ts",
 	// #2557 review round 3: a real 30s deadline margin is the subject of an abort-vs-deadline precedence assertion (flake-shape admission).
 	"tests/clients/hook-await-fold-bounds.test.ts",
 	"tests/clients/startup-overhead.test.ts",
@@ -359,6 +361,15 @@ const wallClockBudgetInclude = [
 	// spawns of scripts/classify-ci-failure.mjs, asserting exit code and argv
 	// wiring the library-level suite (in-process) cannot see.
 	"tests/scripts/classify-ci-failure-cli.test.ts",
+	// #2698: real `git init`/`add`/`commit`/`ls-files` calls against a
+	// throwaway fixture repo — gitignore/tracked-vs-untracked resolution is
+	// the exact mechanism under test, which no mock reproduces faithfully.
+	// No wall-clock budget assertion (a handful of `git` calls on a
+	// two-file fixture has none worth pinning); membership here is solely
+	// to satisfy flake-shape-ratchet.test.ts's real-process-spawn admission
+	// gate, which requires it for any newly admitted real spawn regardless
+	// of this list's own "carries a budget assertion" charter above.
+	"tests/scripts/knip-sibling-purge.test.ts",
 ];
 // #2512 round 2: runtime-turn-session.test.ts's "retires a deleted failed
 // target through the real client and records real telemetry" spawns a REAL
