@@ -157,6 +157,106 @@ describe("K1 — a direct safeSpawn* call", () => {
 		]);
 	});
 
+	// ── P8 · what the `cwd` property CARRIES (round-4 R3-F1) ────────────────
+	//
+	// Rounds 1-3 decided the direct path on the KEY alone and never read the
+	// value, so four worthless values all passed. Node's own semantics, as
+	// measured by the round-3 verify: `undefined` and `null` make the child
+	// INHERIT the host cwd, which is #2691 exactly; `""` is ENOENT, so the
+	// lint never runs at all; and `process.cwd()` is the cheapest possible way
+	// to turn a red sweep green (defect shape 38), while shape 40 says prefer
+	// `ctx.cwd`.
+
+	it("f-direct-value-undefined · P8: `cwd: undefined` is flagged (child inherits the host cwd)", async () => {
+		const source = `
+			async function run(ctx) {
+				await safeSpawnAsync("yamllint", [], { cwd: undefined, timeout: 15000 });
+			}
+		`;
+		const { flagged } = await analyze(source);
+		expect(flagged).toEqual([
+			at(source, "await safeSpawnAsync(", "safeSpawnAsync"),
+		]);
+	});
+
+	it("f-direct-value-null · P8: `cwd: null` is flagged (same inheritance)", async () => {
+		const source = `
+			async function run(ctx) {
+				await safeSpawnAsync("yamllint", [], { cwd: null, timeout: 15000 });
+			}
+		`;
+		const { flagged } = await analyze(source);
+		expect(flagged).toEqual([
+			at(source, "await safeSpawnAsync(", "safeSpawnAsync"),
+		]);
+	});
+
+	it('f-direct-value-empty-string · P8: `cwd: ""` is flagged (ENOENT, the lint never runs)', async () => {
+		const source = `
+			async function run(ctx) {
+				await safeSpawnAsync("yamllint", [], { cwd: "", timeout: 15000 });
+			}
+		`;
+		const { flagged } = await analyze(source);
+		expect(flagged).toEqual([
+			at(source, "await safeSpawnAsync(", "safeSpawnAsync"),
+		]);
+	});
+
+	it("f-direct-value-processcwd · P8: `cwd: process.cwd()` is flagged (the cheapest red-to-green edit)", async () => {
+		const source = `
+			async function run(ctx) {
+				await safeSpawnAsync("yamllint", [], { cwd: process.cwd(), timeout: 15000 });
+			}
+		`;
+		const { flagged } = await analyze(source);
+		expect(flagged).toEqual([
+			at(source, "await safeSpawnAsync(", "safeSpawnAsync"),
+		]);
+	});
+
+	it("f-direct-value-laundered-const · P8: `cwd: hostCwd` with `const hostCwd = process.cwd()` is flagged", async () => {
+		const source = `
+			async function run(ctx) {
+				const hostCwd = process.cwd();
+				await safeSpawnAsync("yamllint", [], { cwd: hostCwd, timeout: 15000 });
+			}
+		`;
+		const { flagged } = await analyze(source);
+		expect(flagged).toEqual([
+			at(source, "await safeSpawnAsync(", "safeSpawnAsync"),
+		]);
+	});
+
+	it("f-direct-value-shorthand-laundered · P8: `{ cwd }` with `const cwd = process.cwd()` is flagged", async () => {
+		// The shorthand spelling of the same laundering. The CANONICAL
+		// `const cwd = ctx.cwd || process.cwd()` (f-direct-key above) still
+		// passes: it is a binary expression, not the host cwd.
+		const source = `
+			async function run(ctx) {
+				const cwd = process.cwd();
+				await safeSpawnAsync("yamllint", [], { cwd, timeout: 15000 });
+			}
+		`;
+		const { flagged } = await analyze(source);
+		expect(flagged).toEqual([
+			at(source, "await safeSpawnAsync(", "safeSpawnAsync"),
+		]);
+	});
+
+	it("f-direct-value-other · P8: any other value passes — the KEY already declares the intent", async () => {
+		// Deliberately NOT `isCwdBearingExpression`: on the direct path the key
+		// `cwd:` states what the value is for, so the value's own NAME carries no
+		// extra information and `cwd: resolvedRoot` must not be flagged. The
+		// positional-wrapper path has no key, which is why it does read the name.
+		const { flagged } = await analyze(`
+			async function run(ctx, resolvedRoot) {
+				await safeSpawnAsync("yamllint", [], { cwd: resolvedRoot, timeout: 15000 });
+			}
+		`);
+		expect(flagged).toEqual([]);
+	});
+
 	it("f-direct-absent · P7: no options argument at all is flagged", async () => {
 		const source = `
 			async function run(ctx) {
@@ -268,6 +368,40 @@ describe("K3 — a wrapper whose options parameter is destructured in the body",
 		expect(flagged).toEqual([at(source, "env: { PWD: cwd }", "spawnPs")]);
 	});
 
+	// P8 for the options-mode wrapper path (round-4 R3-F1). `argumentHasCwdKey`
+	// was the sibling key-only acceptance the round-3 verify found; probe A10 is
+	// `spawnPs(…, { cwd: undefined })`.
+	it("f-optsparam-caller-value-undefined · P8: a caller passing `{ cwd: undefined }` is flagged", async () => {
+		const source = `${K3_WRAPPER}\nspawnPs(cmd, args, { timeoutMs: 1000, cwd: undefined });`;
+		const { flagged } = await analyze(source);
+		expect(flagged).toEqual([at(source, "cwd: undefined", "spawnPs")]);
+	});
+
+	it("f-optsparam-caller-value-null · P8: a caller passing `{ cwd: null }` is flagged", async () => {
+		const source = `${K3_WRAPPER}\nspawnPs(cmd, args, { timeoutMs: 1000, cwd: null });`;
+		const { flagged } = await analyze(source);
+		expect(flagged).toEqual([at(source, "cwd: null", "spawnPs")]);
+	});
+
+	it('f-optsparam-caller-value-empty-string · P8: a caller passing `{ cwd: "" }` is flagged', async () => {
+		const source = `${K3_WRAPPER}\nspawnPs(cmd, args, { timeoutMs: 1000, cwd: "" });`;
+		const { flagged } = await analyze(source);
+		expect(flagged).toEqual([at(source, 'cwd: ""', "spawnPs")]);
+	});
+
+	it("f-optsparam-caller-value-processcwd · P8: a caller passing `{ cwd: process.cwd() }` is flagged", async () => {
+		const source = `${K3_WRAPPER}\nspawnPs(cmd, args, { timeoutMs: 1000, cwd: process.cwd() });`;
+		const { flagged } = await analyze(source);
+		expect(flagged).toEqual([at(source, "cwd: process.cwd()", "spawnPs")]);
+	});
+
+	it("f-optsparam-caller-value-other · P8: any other value passes", async () => {
+		const { flagged } = await analyze(
+			`${K3_WRAPPER}\nspawnPs(cmd, args, { timeoutMs: 1000, cwd: resolvedRoot });`,
+		);
+		expect(flagged).toEqual([]);
+	});
+
 	it("f-optsparam-caller-bare · P6/P7: a caller supplying no options is flagged", async () => {
 		const source = `${K3_WRAPPER}\nspawnPs(cmd, args);`;
 		const { flagged } = await analyze(source);
@@ -337,6 +471,34 @@ describe("K4 — a wrapper with a positional cwd parameter", () => {
 		const { flagged } = await analyze(
 			`${K4_WRAPPER}\nlintChart(chartRoot, /* the dispatch cwd */ ctx.cwd);`,
 		);
+		expect(flagged).toEqual([]);
+	});
+
+	it("f-positional-caller-hostcwd-const · R3-F4: a cwd-NAMED local holding process.cwd() is flagged", async () => {
+		// `/cwd/i` on the identifier text alone reads `hostCwd` as conforming.
+		// One hop through the same-scope `const` initializer is what makes the
+		// laundering visible.
+		const source = `${K4_WRAPPER}
+			async function run(ctx) {
+				const hostCwd = process.cwd();
+				return lintChart(chartRoot, hostCwd);
+			}
+		`;
+		const { flagged } = await analyze(source);
+		expect(flagged).toEqual([
+			at(source, "lintChart(chartRoot, hostCwd)", "lintChart"),
+		]);
+	});
+
+	it("f-positional-caller-alias-const · R3-F4: a NON-cwd-named local holding ctx.cwd passes", async () => {
+		// The same hop in the other direction: without it `c` fails the name test
+		// and a conforming call is flagged.
+		const { flagged } = await analyze(`${K4_WRAPPER}
+			async function run(ctx) {
+				const c = ctx.cwd;
+				return lintChart(chartRoot, c);
+			}
+		`);
 		expect(flagged).toEqual([]);
 	});
 

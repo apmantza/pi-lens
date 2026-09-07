@@ -48,6 +48,23 @@
  * file. Widening into `utils/` needs its own exemption design rather than
  * borrowing this one.
  *
+ ## What the scan cannot see, and what closes it here
+ *
+ * The scan recognises a spawn by the callee's simple name — `safeSpawnAsync(`
+ * and `o.safeSpawnAsync(`. Three spellings therefore occupy NO site at all,
+ * and because a site that is never counted also never moves the pinned
+ * population, none of them would red anything on its own (round-4 R3-F2):
+ *
+ *   1. an ALIASED import — `import { safeSpawnAsync as spawn } from …`,
+ *   2. `safeSpawnAsync.call(...)` / `.apply(...)`,
+ *   3. `Reflect.apply(safeSpawnAsync, …)`.
+ *
+ * All three have zero occurrences today, and the last test in this file
+ * ASSERTS that, so the bound is fail-safe rather than merely documented: the
+ * first one written reds here, naming the file, instead of quietly becoming
+ * an uncounted spawn. (A namespace import is already covered — `calleeName`
+ * reads `ns.safeSpawnAsync(...)` through the member expression.)
+ *
  * A call site that genuinely has no cwd to get wrong carries a single-line
  * `// cwd-exempt: <reason>` comment on the line DIRECTLY above the call (other
  * explanatory comments may sit above that; the tag line itself must be the one
@@ -208,6 +225,43 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 					.map((site) => `  ${site.file}:${site.line} (${site.callee})`)
 					.join("\n"),
 		).toHaveLength(0);
+	});
+
+	it("no runner reaches safeSpawn* under an alias or through call/apply", () => {
+		// R3-F2. These spellings are not sites, so they cannot move
+		// EXPECTED_SITES and nothing else in this file would notice them. Zero
+		// occupancy today; asserted so it stays that way.
+		const patterns: ReadonlyArray<{ what: string; re: RegExp }> = [
+			{
+				what: "aliased import (`safeSpawnAsync as x`)",
+				re: /\bsafeSpawn(?:Async|Sync)\s+as\s+\w+/,
+			},
+			{
+				what: "indirect call (`safeSpawnAsync.call/.apply`)",
+				re: /\bsafeSpawn(?:Async|Sync)\s*\.\s*(?:call|apply|bind)\b/,
+			},
+			{
+				what: "Reflect.apply(safeSpawnAsync, …)",
+				re: /\bReflect\s*\.\s*apply\s*\(\s*safeSpawn(?:Async|Sync)\b/,
+			},
+		];
+		const offenders: string[] = [];
+		for (const file of files) {
+			const source = fs.readFileSync(file, "utf8");
+			for (const { what, re } of patterns) {
+				if (re.test(source)) {
+					offenders.push(`  ${path.relative(RUNNERS_DIR, file)}: ${what}`);
+				}
+			}
+		}
+		expect(
+			offenders,
+			"a spawn reached this way is invisible to the scan -- it is not a " +
+				"call site, so it cannot move the pinned population either, and " +
+				"#2691's shape would ride in uncounted. Call safeSpawnAsync / " +
+				"safeSpawnSync by name:\n" +
+				offenders.join("\n"),
+		).toEqual([]);
 	});
 
 	it("every cwd-exempt marker still names a real, still-exempt call site", () => {

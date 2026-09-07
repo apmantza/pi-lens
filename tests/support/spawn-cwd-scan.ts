@@ -228,6 +228,63 @@ function cwdValueOf(prop: SgNode): SgNode {
 }
 
 /**
+ * Whether a `cwd` property's VALUE actually supplies a working directory —
+ * round-4 R3-F1. Rounds 1-3 decided the direct path on the KEY alone and
+ * never read the value, so four worthless values all passed:
+ *
+ * | value | what Node does | verdict |
+ * |---|---|---|
+ * | `undefined` | option absent; the child INHERITS the host cwd | #2691 exactly |
+ * | `null` | same inheritance | #2691 exactly |
+ * | `""` | `spawn` fails ENOENT; the lint never runs | worse than #2691 |
+ * | `process.cwd()` | the host cwd, spelled out | the cheapest red-to-green edit (shape 38); shape 40 says prefer `ctx.cwd` |
+ *
+ * Everything else is accepted. This deliberately does NOT apply
+ * {@link isCwdBearingExpression}: on a keyed property the key `cwd:` already
+ * states what the value is for, so the value's own NAME carries no extra
+ * information and `cwd: resolvedRoot` must not be flagged. The
+ * positional-wrapper path has no key, which is the reason it does read the
+ * name — the asymmetry is the information available, not an oversight.
+ */
+function carriesUsableCwdLiteral(value: SgNode): boolean {
+	if (isProcessCwdCall(value)) return false;
+	const kind = String(value.kind());
+	if (kind === "undefined" || kind === "null") return false;
+	if (kind === "identifier" && value.text() === "undefined") return false;
+	// An empty `""`/`''`/`` `` `` has no `string_fragment` child at all.
+	if (
+		(kind === "string" || kind === "template_string") &&
+		namedParts(value).length === 0
+	) {
+		return false;
+	}
+	return true;
+}
+
+function carriesUsableCwd(value: SgNode): boolean {
+	const kind = String(value.kind());
+	// One hop (R3-F4's helper, applied here too): `{ cwd: hostCwd }` with
+	// `const hostCwd = process.cwd()` is `{ cwd: process.cwd() }` laundered
+	// through a local, and `{ cwd }` with `const cwd = process.cwd()` is the
+	// same laundering through a shorthand. The canonical
+	// `const cwd = ctx.cwd || process.cwd()` is a binary expression and passes.
+	if (kind === "identifier" || kind === "shorthand_property_identifier") {
+		const local = resolveLocalInitializer(value, value.text());
+		if (local) {
+			return local.init !== undefined && carriesUsableCwdLiteral(local.init);
+		}
+	}
+	return carriesUsableCwdLiteral(value);
+}
+
+/** Whether an object literal supplies a usable `cwd`: the property is present
+ * AND its value is not one of the four worthless ones. */
+function suppliesCwd(obj: SgNode): boolean {
+	const prop = cwdPropertyOf(obj);
+	return prop !== undefined && carriesUsableCwd(cwdValueOf(prop));
+}
+
+/**
  * The names this expression reads AS THE WHOLE VALUE — a bare identifier
  * reference, not a property plucked off one and not a computed result:
  *
@@ -237,8 +294,19 @@ function cwdValueOf(prop: SgNode): SgNode {
  *   `ctx.cwd`                 → []      (a property OF ctx, not ctx)
  *   `process.cwd()`           → []
  *
- * Dropping `ctx.cwd` is deliberate and is what keeps the wrapper rule
- * honest. Every runner in this tree has an `async run(ctx: DispatchContext)`
+ * Dropping a property access is deliberate and is what keeps the wrapper rule
+ * honest. **It drops `options.cwd` off the wrapper's OWN parameter for the
+ * same reason it drops `ctx.cwd`** (round-4 R3-F3): a helper written
+ * `function w(opts) { safeSpawnAsync(c, a, { cwd: opts.cwd }) }` is NOT
+ * treated as a spawn-routing wrapper, so its callers are never checked. That
+ * is a real, stated bound, not an oversight — `w(x)` gives the scan an
+ * argument that is a whole options object, and nothing syntactic separates a
+ * caller that fills in `cwd` from one that does not. The reviewer signal for
+ * such a helper is the direct-site count bump its own spawn produces; there is
+ * no live instance in `clients/dispatch/runners/` today. To be followed, a
+ * wrapper must take the cwd itself — positionally, destructured, or
+ * destructured from an options parameter in its body, all three of which the
+ * live wrappers use. Every runner in this tree has an `async run(ctx: DispatchContext)`
  * whose spawn's cwd traces back to `ctx`; if `ctx.cwd` counted, `run` itself
  * would be classified a "spawn-routing wrapper taking a cwd at parameter 0"
  * and every in-file `run(ctx)` call would be flagged for not passing a cwd —
@@ -317,19 +385,59 @@ interface ParamBinding {
 	viaObject: boolean;
 }
 
-/** Every `variable_declarator` inside a function's own body, not descending
- * into nested functions (whose declarations belong to their own scope). */
-function bodyDeclarators(fn: SgNode): SgNode[] {
-	const body = fn.field("body");
-	if (!body) return [];
+/** Every `variable_declarator` inside one scope, not descending into nested
+ * functions (whose declarations belong to their own scope). */
+function declaratorsIn(scope: SgNode): SgNode[] {
 	const found: SgNode[] = [];
 	const visit = (node: SgNode): void => {
-		if (node.id() !== body.id() && isFunctionNode(node)) return;
+		if (node.id() !== scope.id() && isFunctionNode(node)) return;
 		if (node.kind() === "variable_declarator") found.push(node);
 		for (const child of node.children()) visit(child);
 	};
-	visit(body);
+	visit(scope);
 	return found;
+}
+
+/** Every `variable_declarator` inside a function's own body. */
+function bodyDeclarators(fn: SgNode): SgNode[] {
+	const body = fn.field("body");
+	return body ? declaratorsIn(body) : [];
+}
+
+/**
+ * ONE hop of local resolution — round-4 R3-F4. Walks out from `from` to the
+ * innermost enclosing scope that declares `name` with a plain identifier
+ * binding and reports what it was ASSIGNED, so a check can judge the value
+ * instead of the name.
+ *
+ * It exists because the positional-wrapper check has only the argument's own
+ * text to go on: `lintChart(root, hostCwd)` with `const hostCwd =
+ * process.cwd()` reads as conforming under `/cwd/i`, and `lintChart(root, c)`
+ * with `const c = ctx.cwd` reads as a defect. One hop fixes both directions.
+ *
+ * Exactly one hop, deliberately: `const a = b; const b = ctx.cwd` is not
+ * followed, and neither is a re-assignment after the declaration. A name
+ * declared with no initializer (`let cwd;`) resolves to "declared, unknown",
+ * which the callers treat as NOT proven — the fail-safe direction.
+ */
+function resolveLocalInitializer(
+	from: SgNode,
+	name: string,
+): { init?: SgNode } | undefined {
+	for (let node = from.parent(); node; node = node.parent()) {
+		const scope = isFunctionNode(node)
+			? node.field("body")
+			: node.kind() === "program"
+				? node
+				: undefined;
+		if (!scope) continue;
+		for (const decl of declaratorsIn(scope)) {
+			const target = decl.field("name");
+			if (target?.kind() !== "identifier" || target.text() !== name) continue;
+			return { init: decl.field("value") ?? undefined };
+		}
+	}
+	return undefined;
 }
 
 /**
@@ -435,20 +543,32 @@ function argumentsOf(call: SgNode): SgNode[] {
 	return namedParts(call.field("arguments"));
 }
 
-/** Whether argument `index` is an object literal carrying a `cwd` property.
- * An absent argument, an opaque identifier (`opts`) and a spread-only
- * literal (`{ ...rest }`) all read as "no" — the fail-safe direction: the
- * scan cannot prove conformance, so it flags and the author either makes the
- * `cwd` explicit or registers a `// cwd-exempt:` reason. */
-function argumentHasCwdKey(call: SgNode, index: number): boolean {
+/** Whether argument `index` is an object literal that SUPPLIES a `cwd` — the
+ * property present and its value usable ({@link carriesUsableCwd}; round-4
+ * R3-F1 covered this path with the same change as the direct one, since it
+ * was the only other key-only acceptance). An absent argument, an opaque
+ * identifier (`opts`) and a spread-only literal (`{ ...rest }`) all read as
+ * "no" — the fail-safe direction: the scan cannot prove conformance, so it
+ * flags and the author either makes the `cwd` explicit or registers a
+ * `// cwd-exempt:` reason. */
+function argumentSuppliesCwd(call: SgNode, index: number): boolean {
 	const arg = argumentsOf(call)[index];
 	if (!arg || arg.kind() !== "object") return false;
-	return cwdPropertyOf(arg) !== undefined;
+	return suppliesCwd(arg);
 }
 
+/** Whether the argument at `index` is cwd-bearing, judging a bare local by
+ * what it was ASSIGNED rather than what it was NAMED (round-4 R3-F4). */
 function argumentIsCwdBearing(call: SgNode, index: number): boolean {
 	const arg = argumentsOf(call)[index];
-	return arg !== undefined && isCwdBearingExpression(arg);
+	if (!arg) return false;
+	if (arg.kind() === "identifier") {
+		const local = resolveLocalInitializer(arg, arg.text());
+		if (local) {
+			return local.init !== undefined && isCwdBearingExpression(local.init);
+		}
+	}
+	return isCwdBearingExpression(arg);
 }
 
 function allCalls(root: SgNode): SgNode[] {
@@ -517,7 +637,8 @@ export async function scanSpawnCwd(
 			line,
 			callee: name,
 			kind: "direct",
-			hasCwd: cwdProp !== undefined,
+			// R3-F1: the KEY is not the answer; the value has to supply one.
+			hasCwd: cwdProp !== undefined && carriesUsableCwd(cwdValueOf(cwdProp)),
 			exemptReason: exemptAbove(line),
 		});
 		if (cwdProp) registerWrapperFrom(cwdValueOf(cwdProp));
@@ -555,7 +676,7 @@ export async function scanSpawnCwd(
 				kind: "wrapper",
 				hasCwd:
 					wrapper.mode === "options"
-						? argumentHasCwdKey(call, wrapper.paramIndex)
+						? argumentSuppliesCwd(call, wrapper.paramIndex)
 						: argumentIsCwdBearing(call, wrapper.paramIndex),
 				exemptReason: exemptAbove(line),
 			});
