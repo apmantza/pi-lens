@@ -211,6 +211,58 @@ describe("lint:js / lint:js:advisory — the gating rule set stays a subset of t
 		SPAWN_TIMEOUT_MS * 2 + 5_000,
 	);
 
+	// `gating.size > 0` above holds even with none of the 32 individually
+	// promoted rules present (the default `correctness` category alone is
+	// non-empty), so it would not notice one silently dropped from the
+	// `lint:js` argv. Named here instead.
+	const PROMOTED_RULES = [
+		"block-scoped-var",
+		"import/default",
+		"import/namespace",
+		"import/no-absolute-path",
+		"import/no-empty-named-blocks",
+		"import/no-named-as-default",
+		"import/no-self-import",
+		"no-extend-native",
+		"no-extra-bind",
+		"no-implied-eval",
+		"no-new",
+		"no-unexpected-multiline",
+		"no-useless-constructor",
+		"oxc/approx-constant",
+		"oxc/misrefactored-assign-op",
+		"oxc/no-accumulating-spread",
+		"oxc/no-async-endpoint-handlers",
+		"oxc/no-this-in-exported-function",
+		"promise/no-callback-in-promise",
+		"promise/no-multiple-resolved",
+		"promise/no-new-statics",
+		"promise/valid-params",
+		"typescript/no-confusing-non-null-assertion",
+		"typescript/no-extraneous-class",
+		"typescript/no-unnecessary-type-constraint",
+		"typescript/no-unsafe-enum-comparison",
+		"unicorn/no-accessor-recursion",
+		"unicorn/no-array-fill-with-reference-type",
+		"unicorn/no-confusing-array-with",
+		"unicorn/no-instanceof-builtins",
+		"unicorn/prefer-array-flat-map",
+		"unicorn/require-module-specifiers",
+	];
+
+	it(
+		"all 32 individually-promoted rules are actually enabled in `lint:js`",
+		() => {
+			const pkg = JSON.parse(
+				fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
+			);
+			const gating = enabledRules(pkg.scripts["lint:js"]);
+			const missing = PROMOTED_RULES.filter((rule) => !gating.has(rule));
+			expect(missing).toEqual([]);
+		},
+		SPAWN_TIMEOUT_MS + 5_000,
+	);
+
 	// Coordination note from the orchestrator (2026-09-07, #2700): eight
 	// rules are policy-`-A`llowed in `lint:js:advisory` rather than left to
 	// deny-and-triage, each for a named reason -- NOT drive-by suppression:
