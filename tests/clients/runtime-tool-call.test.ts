@@ -85,6 +85,32 @@ function baseDeps(
 }
 
 describe("handleToolCall", () => {
+	it("does not let heredoc body words trigger the real git guard", async () => {
+		const env = setupTestEnvironment("pi-lens-2726-heredoc-guard-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.setTelemetryIdentity({ sessionId: "session-2726" });
+			runtime.updateGitGuardStatus(true, "existing blocker");
+			const result = await handleToolCall(
+				baseDeps({
+					runtime,
+					ctx: { cwd: env.tmpDir },
+					getFlag: (name) => name === "lens-guard",
+					event: {
+						toolName: "bash",
+						input: {
+							command: "cat <<EOF\nbody text: git push\nEOF\n",
+						},
+					},
+				}),
+			);
+			expect(result).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("is a no-op when lensEnabled is false", async () => {
 		const runtime = new RuntimeCoordinator();
 		const recordRead = vi.spyOn(runtime.readGuard, "recordRead");

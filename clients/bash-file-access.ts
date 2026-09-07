@@ -55,8 +55,130 @@ export interface ShellCommandSegment {
 	terminator?: "pipe";
 }
 
+interface PendingHeredoc {
+	delimiter: string;
+	stripTabs: boolean;
+	quoted: boolean;
+}
+
+function parseHeredocDelimiter(
+	command: string,
+	start: number,
+): { heredoc: PendingHeredoc; end: number } | undefined {
+	let i = start;
+	const stripTabs = command[i] === "-";
+	if (stripTabs) i += 1;
+	while (/\s/.test(command[i] ?? "")) i += 1;
+	let delimiter = "";
+	let quoted = false;
+	while (i < command.length && !/\s/.test(command[i] ?? "")) {
+		const ch = command[i];
+		if (ch === "'" || ch === '"') {
+			quoted = true;
+			const quote = ch;
+			i += 1;
+			while (i < command.length && command[i] !== quote) {
+				delimiter += command[i++];
+			}
+			if (command[i] !== quote) return undefined;
+			i += 1;
+			continue;
+		}
+		if (ch === "\\") {
+			quoted = true;
+			i += 1;
+			if (i >= command.length) return undefined;
+			delimiter += command[i++];
+			continue;
+		}
+		delimiter += ch;
+		i += 1;
+	}
+	if (!delimiter) return undefined;
+	return { heredoc: { delimiter, stripTabs, quoted }, end: i - 1 };
+}
+
+function heredocSubstitutionBodies(body: string): string[] {
+	const substitutions: string[] = [];
+	for (let i = 0; i < body.length; i += 1) {
+		if (body.startsWith("$(", i)) {
+			let depth = 1;
+			let quote: "single" | "double" | undefined;
+			for (let end = i + 2; end < body.length; end += 1) {
+				const ch = body[end];
+				if (quote === "single") {
+					if (ch === "'") quote = undefined;
+					continue;
+				}
+				if (quote === "double") {
+					if (ch === '"' && body[end - 1] !== "\\") quote = undefined;
+					continue;
+				}
+				if (ch === "'" || ch === '"') {
+					quote = ch === "'" ? "single" : "double";
+				} else if (body.startsWith("$(", end)) {
+					depth += 1;
+					end += 1;
+				} else if (ch === ")") {
+					depth -= 1;
+					if (depth === 0) {
+						substitutions.push(body.slice(i + 2, end));
+						i = end;
+						break;
+					}
+				}
+			}
+		} else if (body[i] === "`" && body[i - 1] !== "\\") {
+			const end = body.indexOf("`", i + 1);
+			if (end >= 0) {
+				substitutions.push(body.slice(i + 1, end));
+				i = end;
+			}
+		}
+	}
+	return substitutions;
+}
+
+function consumeHeredocBodies(
+	command: string,
+	start: number,
+	heredocs: PendingHeredoc[],
+): { end: number; substitutions: string[] } {
+	let cursor = start;
+	const substitutions: string[] = [];
+	for (const heredoc of heredocs) {
+		const bodyStart = cursor;
+		let found = false;
+		while (cursor < command.length) {
+			const lineEnd = command.indexOf("\n", cursor);
+			const end = lineEnd < 0 ? command.length : lineEnd;
+			let line = command.slice(cursor, end);
+			if (heredoc.stripTabs) line = line.replace(/^\t+/, "");
+			if (line.replace(/\r$/, "") === heredoc.delimiter) {
+				if (!heredoc.quoted)
+					substitutions.push(
+						...heredocSubstitutionBodies(command.slice(bodyStart, cursor)),
+					);
+				cursor = lineEnd < 0 ? end : end + 1;
+				found = true;
+				break;
+			}
+			cursor = lineEnd < 0 ? end : end + 1;
+		}
+		if (!found) {
+			if (!heredoc.quoted)
+				substitutions.push(
+					...heredocSubstitutionBodies(command.slice(bodyStart)),
+				);
+			return { end: command.length - 1, substitutions };
+		}
+	}
+	return { end: cursor - 1, substitutions };
+}
+
 export function tokenizeShellCommand(command: string): ShellCommandSegment[] {
 	const segments: ShellCommandSegment[] = [];
+	const pendingHeredocs: PendingHeredoc[] = [];
 	let tokens: string[] = [];
 	let word = "";
 	let quote: "single" | "double" | undefined;
@@ -130,12 +252,21 @@ export function tokenizeShellCommand(command: string): ShellCommandSegment[] {
 			while (i + 1 < command.length && command[i + 1] !== "\n") i++;
 			continue;
 		}
-		if (/\s/.test(ch)) {
+		if (/\s/.test(ch) && ch !== "\n") {
 			flushWord();
 			continue;
 		}
 		if (ch === ";" || ch === "\n" || ch === "|" || ch === "&") {
 			flushWord();
+			if (ch === "\n" && pendingHeredocs.length > 0) {
+				const heredocs = pendingHeredocs.splice(0);
+				flushSegment();
+				const consumed = consumeHeredocBodies(command, i + 1, heredocs);
+				for (const substitution of consumed.substitutions)
+					segments.push(...tokenizeShellCommand(substitution));
+				i = consumed.end;
+				continue;
+			}
 			let terminator: "pipe" | undefined;
 			if (ch === "|" && next === "|") i++;
 			else if (ch === "&" && next === "&") i++;
@@ -148,6 +279,18 @@ export function tokenizeShellCommand(command: string): ShellCommandSegment[] {
 		}
 		if (ch === "<" || ch === ">") {
 			flushWord();
+			if (
+				ch === "<" &&
+				next === "<" &&
+				command[i - 1] !== "<" &&
+				command[i + 2] !== "<"
+			) {
+				const parsed = parseHeredocDelimiter(command, i + 2);
+				if (parsed) {
+					pendingHeredocs.push(parsed.heredoc);
+					i = parsed.end;
+				}
+			}
 			unsupported = true;
 			continue;
 		}

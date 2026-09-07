@@ -8,6 +8,7 @@ import {
 	extractReadPathsFromCommand,
 	extractWrittenPathsFromCommand,
 	parseGrepContextLines,
+	tokenizeShellCommand,
 	type ReadSpan,
 } from "../../clients/bash-file-access.js";
 import { removeTempDirSync } from "./test-utils.js";
@@ -40,6 +41,42 @@ beforeEach(() => {
 
 afterEach(() => {
 	removeTempDirSync(tmp);
+});
+
+describe("tokenizeShellCommand — heredocs", () => {
+	it("drops heredoc body words while preserving the surrounding command", () => {
+		expect(
+			tokenizeShellCommand("cat <<EOF\nbody git push\nEOF\necho done"),
+		).toEqual([
+			{ tokens: ["cat"], unsupported: true },
+			{ tokens: ["echo", "done"], unsupported: false },
+		]);
+	});
+
+	it("drops quoted bodies and keeps substitutions from unquoted bodies", () => {
+		expect(
+			tokenizeShellCommand(
+				"cat <<'EOF'\n$(git push)\nEOF\ncat <<EOF\n$(git commit)\nEOF",
+			),
+		).toEqual([
+			{ tokens: ["cat"], unsupported: true },
+			{ tokens: ["cat"], unsupported: true },
+			{ tokens: ["git", "commit"], unsupported: false },
+		]);
+	});
+
+	it("matches tab-stripped heredoc delimiters", () => {
+		expect(tokenizeShellCommand("cat <<-EOF\n\tbody git push\n\tEOF")).toEqual([
+			{ tokens: ["cat"], unsupported: true },
+		]);
+	});
+
+	it("does not treat a here-string as a heredoc", () => {
+		expect(tokenizeShellCommand("cat <<< git push\necho done")).toEqual([
+			{ tokens: ["cat", "git", "push"], unsupported: true },
+			{ tokens: ["echo", "done"], unsupported: false },
+		]);
+	});
 });
 
 // ── reads: full-file viewers ────────────────────────────────────────────────
