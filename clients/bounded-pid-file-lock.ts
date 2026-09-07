@@ -280,7 +280,7 @@ export function acquireBoundedPidFileLock(
 					options.logContention();
 					return null;
 				}
-				throw new Error(options.timeoutMessage);
+				throw new Error(options.timeoutMessage, { cause: error });
 			}
 			Atomics.wait(waitArray, 0, 0, options.retryMs);
 		}

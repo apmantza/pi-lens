@@ -225,7 +225,9 @@ export async function loadSg(): Promise<AstGrepNapi | undefined> {
 		}
 	})();
 	sgLoadPromise = task;
-	task.finally(() => {
+	// `task` never rejects (the IIFE catches), so the derived promise is inert;
+	// `void` records that no consumer awaits it (oxlint no-floating-promises).
+	void task.finally(() => {
 		if (sgLoadPromise === task) sgLoadPromise = undefined;
 	});
 	return task;
