@@ -427,7 +427,9 @@ function classifyNode(args, env, rawSegment) {
 	);
 	const hasFileArg = args.some(
 		(a) =>
-			!a.startsWith("-") && /\.(?:mjs|js)$/.test(a) && !a.startsWith("scripts/"),
+			!a.startsWith("-") &&
+			/\.(?:mjs|js)$/.test(a) &&
+			!a.startsWith("scripts/"),
 	);
 	if (!hasFlag && !hasFileArg) return null;
 	if (!rawSegment.includes("clients/") && !rawSegment.includes("dist/"))
@@ -452,7 +454,8 @@ export function classifySegment(rawSegment) {
 	const cmd = rest[0];
 	const args = rest.slice(1);
 	if (cmd === "git") return classifyGit(args);
-	if (cmd === "node" || cmd === "nodejs") return classifyNode(args, env, rawSegment);
+	if (cmd === "node" || cmd === "nodejs")
+		return classifyNode(args, env, rawSegment);
 	return null;
 }
 

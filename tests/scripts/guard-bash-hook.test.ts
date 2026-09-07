@@ -1,3 +1,9 @@
+// flake-shape: real-process-spawn — the subject IS the guard's own
+// stdin/exit-code/stderr contract (what Claude Code's PreToolUse dispatch
+// actually invokes); an in-process call to the exported classify functions
+// cannot see a drift in that contract. Admitted in vitest.config.ts's
+// wallClockBudgetInclude.
+//
 // #2699 (refs umbrella #2697): PreToolUse Bash guard hook.
 //
 // Spawns the real script as a child process with the PreToolUse JSON on
@@ -68,10 +74,10 @@ const DENY_CASES: Array<[command: string, ruleNeedle: string]> = [
 	["git worktree remove -f -f /tmp/tree", "worktree"],
 	["git worktree remove --force --force /tmp/tree", "worktree"],
 	["git worktree remove -ff /tmp/tree", "worktree"],
-	['node -e "require(\'./clients/foo.js\')"', "probe"],
+	["node -e \"require('./clients/foo.js')\"", "probe"],
 	['node --eval "clients/foo.js reference"', "probe"],
-	['node --input-type=module -e "import(\'./clients/foo.js\')"', "probe"],
-	['node -p "require(\'./clients/foo.js\')"', "probe"],
+	["node --input-type=module -e \"import('./clients/foo.js')\"", "probe"],
+	["node -p \"require('./clients/foo.js')\"", "probe"],
 	["node clients/probe.mjs", "probe"],
 	["node dist/probe.js", "probe"],
 	['nodejs -e "clients/foo.js reference"', "probe"],
@@ -136,7 +142,7 @@ describe("scripts/hooks/guard-bash.mjs -- allow list (#2699)", () => {
 
 describe("scripts/hooks/guard-bash.mjs -- ambient PI_LENS_HOME (#2699)", () => {
 	it("allows an unpinned-looking node probe when PI_LENS_HOME is only in process.env, not the command text", () => {
-		const result = runHook('node -e "require(\'./clients/foo.js\')"', {
+		const result = runHook("node -e \"require('./clients/foo.js')\"", {
 			...BASE_ENV,
 			PI_LENS_HOME: "/some/probe/home",
 		});
@@ -220,20 +226,30 @@ describe("scripts/hooks/guard-bash.mjs -- tokenizer unit behavior (#2699)", () =
 	});
 
 	it("strips leading env assignments before finding the command word", () => {
-		const { env, rest } = stripEnvAssignments(["FOO=bar", "BAZ=qux", "git", "stash"]);
+		const { env, rest } = stripEnvAssignments([
+			"FOO=bar",
+			"BAZ=qux",
+			"git",
+			"stash",
+		]);
 		expect(env).toEqual({ FOO: "bar", BAZ: "qux" });
 		expect(rest).toEqual(["git", "stash"]);
 	});
 
 	it("splitTopLevel collects $() and backtick subshell bodies for recursive scanning", () => {
-		const { segments, subshells } = splitTopLevel("echo $(git stash) `git log`");
+		const { segments, subshells } = splitTopLevel(
+			"echo $(git stash) `git log`",
+		);
 		expect(segments).toHaveLength(1);
 		expect(subshells).toEqual(["git stash", "git log"]);
 	});
 
 	it("classifyPayload allows a Read tool call carrying a denied-looking command field", () => {
 		expect(
-			classifyPayload({ tool_name: "Read", tool_input: { command: "git stash" } }),
+			classifyPayload({
+				tool_name: "Read",
+				tool_input: { command: "git stash" },
+			}),
 		).toBeNull();
 	});
 
