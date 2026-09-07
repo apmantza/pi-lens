@@ -243,6 +243,60 @@ function computeTrend(history: MetricSnapshot[]): TrendDirection {
 
 // --- Technical Debt Index (TDI) ---
 
+// Test-reached through a child-process `require` string
+// (tests/clients/metrics-history-stderr.test.ts), which no static graph sees.
+export function captureSnapshots(
+	files: Array<{
+		filePath: string;
+		metrics: {
+			maintainabilityIndex: number;
+			cognitiveComplexity: number;
+			maxNestingDepth: number;
+			linesOfCode: number;
+			maxCyclomatic: number;
+			entropy: number;
+		};
+	}>,
+): MetricsHistory {
+	const history = loadHistory();
+
+	for (const file of files) {
+		const relativePath = path.relative(process.cwd(), file.filePath);
+		const commit = getCurrentCommit(path.dirname(file.filePath));
+
+		const snapshot: MetricSnapshot = {
+			commit,
+			timestamp: new Date().toISOString(),
+			mi: Math.round(file.metrics.maintainabilityIndex * 10) / 10,
+			cognitive: file.metrics.cognitiveComplexity,
+			nesting: file.metrics.maxNestingDepth,
+			lines: file.metrics.linesOfCode,
+			maxCyclomatic: file.metrics.maxCyclomatic,
+			entropy: Math.round(file.metrics.entropy * 100) / 100,
+		};
+
+		const existing = history.files[relativePath];
+
+		if (existing) {
+			existing.history.push(snapshot);
+			if (existing.history.length > MAX_HISTORY_PER_FILE) {
+				existing.history = existing.history.slice(-MAX_HISTORY_PER_FILE);
+			}
+			existing.latest = snapshot;
+			existing.trend = computeTrend(existing.history);
+		} else {
+			history.files[relativePath] = {
+				latest: snapshot,
+				history: [snapshot],
+				trend: "stable",
+			};
+		}
+	}
+
+	saveHistory(history);
+	return history;
+}
+
 export interface ProjectTDI {
 	score: number; // 0-100, higher = more debt
 	grade: string; // A-F
