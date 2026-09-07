@@ -506,6 +506,12 @@ const LEXER_STATE_SPACE: LexerCell[] = [
 		expect: "deny",
 	},
 	{
+		id: "LX-2-1b",
+		cell: "R2/C1 an ESCAPED double quote outside quotes must not open a quote region and swallow the separator",
+		command: `echo a\\" ; ${S}`,
+		expect: "deny",
+	},
+	{
 		id: "LX-2-2",
 		cell: "R2/C2 same, inside $( )",
 		command: `echo $(git "stash")`,
@@ -553,6 +559,18 @@ const LEXER_STATE_SPACE: LexerCell[] = [
 		id: "LX-3-1b",
 		cell: "R3/C1 a single-quoted span still forms the WORD (must not be deleted)",
 		command: `git 'stash'`,
+		expect: "deny",
+	},
+	{
+		id: "LX-3-1c",
+		cell: "R3/C1 an ESCAPED single quote outside quotes must not open a quote region and swallow the separator",
+		command: `echo a\\' ; ${S}`,
+		expect: "deny",
+	},
+	{
+		id: "LX-3-1d",
+		cell: "R3/C1 …nor hide LIVE syntax after it -- the region pass's own quote state, not just the segment splitter's",
+		command: `echo a\\' $(${S})`,
 		expect: "deny",
 	},
 	{
@@ -865,10 +883,10 @@ describe("scripts/hooks/guard-bash.mjs -- lexer state space (review round 3)", (
 	it("covers all 55 (region kind × nesting context) cells with no duplicate ids", () => {
 		const ids = LEXER_STATE_SPACE.map((f) => f.id);
 		expect(new Set(ids).size).toBe(ids.length);
-		// 11 rows × 5 columns, plus 6 same-cell discriminators (LX-2-5b,
-		// LX-2-5c, LX-3-1b, LX-5-1b, LX-9-1b, LX-10-1b) that each pin a
-		// second behaviour of their own cell.
-		expect(ids).toHaveLength(61);
+		// 11 rows × 5 columns, plus 9 same-cell discriminators (LX-2-1b,
+		// LX-2-5b, LX-2-5c, LX-3-1b, LX-3-1c, LX-3-1d, LX-5-1b, LX-9-1b,
+		// LX-10-1b) that each pin a second behaviour of their own cell.
+		expect(ids).toHaveLength(64);
 		for (let row = 1; row <= 11; row++)
 			for (let col = 1; col <= 5; col++)
 				expect(ids).toContain(`LX-${row}-${col}`);
