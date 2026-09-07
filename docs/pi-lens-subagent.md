@@ -30,7 +30,18 @@ real store, sink, coordinator, or registry, use it and assert the durable result
 Git authority is separate from the role. Commit, push, or open a PR only when
 the delegation explicitly grants that authority after worktree verification.
 Otherwise, edit and test with the assigned worktree as the command working
-directory, then return the patch and evidence to the orchestrator. Never merge.
+directory, leave every change uncommitted, and write two handoff files at the
+worktree root: `PR_BODY.md` (the full PR body, transcripts pasted) and
+`COMMIT_MSG.txt` (subject, body, issue ref, trailers). Name any path inside the
+worktree that must not be committed. The orchestrator commits from those files;
+they are never committed themselves. Never merge.
+
+A sandboxed worker may find the shared `.git` and the linked `node_modules`
+read-only and the network absent (the codex `workspace-write` sandbox does
+this; see plegma#311). Run Vitest as
+`node_modules/.bin/vitest run <files> --configLoader runner`, and if the
+tree-sitter grammar prefetch hangs offline, verify through direct probes of the
+built code and say so; the orchestrator re-runs the files outside the sandbox.
 
 When Git authority is granted, use one logical commit with an imperative,
 conventional-prefix subject of at most 50 characters, a blank line, and a
