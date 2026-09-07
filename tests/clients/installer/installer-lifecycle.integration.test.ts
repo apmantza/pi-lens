@@ -83,7 +83,7 @@ function runEnsure(
 		`const value = await m.ensureTool(${id}); await new Promise(r => setTimeout(r, 500));` +
 		'const fs = await import("node:fs"); const path = await import("node:path");' +
 		'let log = ""; try { log = fs.readFileSync(path.join(process.env.PI_LENS_HOME, "sessionstart.log"), "utf8"); } catch {}' +
-		`console.log(JSON.stringify({ value, log, reason: m.getInstallFailureReason(${id}) }));` +
+		`console.log(JSON.stringify({ value, log, attempt: m.getInstallAttempt(${id}), reason: m.getInstallFailureReason(${id}) }));` +
 		"}).catch(e => { console.error(e); process.exitCode = 1; });";
 	return new Promise((resolve) => {
 		const child = spawn(process.execPath, ["-e", program], {
@@ -272,21 +272,22 @@ describe("installer process lifecycle (#945)", () => {
 			expect(result.code, JSON.stringify(result)).toBe(0);
 			const payload = JSON.parse(result.stdout) as {
 				value?: string;
-				log: string;
-				reason?: string;
+				attempt?: { outcome?: string; reason?: string };
 			};
-			// The package survives on disk (acceptance 2) …
+			const detail = JSON.stringify(payload);
+			// The package survives on disk instead of being deleted by the cleanup
+			// branch — the whole defect (#2722 acceptance 2).
 			expect(
 				fs.existsSync(path.join(home, "tools", "node_modules", "intelephense")),
-				payload.log,
+				detail,
 			).toBe(true);
-			// … the cleanup branch never ran …
-			expect(payload.log).not.toContain(
-				"installed but verification failed, cleaning up",
-			);
-			expect(payload.reason).toBeUndefined();
+			// The record `scripts/smoke-tools.mjs` grades the nightly `php` row
+			// from: `classifyInstallOutcome` turns outcome "failed" into the
+			// `✗ php intelephense ... install failed` line the issue opened on
+			// (#2722 acceptance 3).
+			expect(payload.attempt?.outcome, detail).toBe("succeeded");
 			// … and ensureTool hands back the real managed binary.
-			expect(payload.value, payload.log).toBe(
+			expect(payload.value, detail).toBe(
 				path.join(
 					home,
 					"tools",
