@@ -36,6 +36,8 @@ import { getProbeHomeRedirectEvent } from "./probe-home-state.js";
 export { LEDGER_FIELD_MAX, truncateForLedger };
 
 export type DegradationKind =
+	/** A configured analyzer was deliberately skipped for this session. */
+	| "startup-analyzer-disabled"
 	/**
 	 * #2430: a tool mutated a tracked file but matched no built-in name and no
 	 * mutation shape adapter, so pi-lens could only find the change by diffing
