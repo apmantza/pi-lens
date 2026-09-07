@@ -36,6 +36,7 @@
 		"scripts/check-lockfile-sync.test.ts": 2,
 		"scripts/classify-ci-failure-cli.test.ts": 2,
 		"scripts/download-grammars.test.ts": 2,
+		"scripts/knip-sibling-purge.test.ts": 1,
 		"scripts/lint-js.test.ts": 4,
 		"scripts/notify-install-smoke-drift.test.ts": 5,
 		"scripts/npm-retry.test.ts": 3,

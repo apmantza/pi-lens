@@ -26,6 +26,10 @@ const OWN_IMPLEMENTATION_FILES = [
 const NOT_A_FIXTURE = [
 	"scripts/pre-push-targeted-tests.mjs",
 	"scripts/prune-agent-worktrees.mjs",
+	// #2698: reads THIS checkout's own `git ls-files` state (untracked+
+	// ignored .js siblings, tracked .ts sources) before `knip` runs — same
+	// "drives the real repo" shape as the two scripts above, not a fixture.
+	"scripts/lib/knip-sibling-purge.mjs",
 ] as const;
 
 const REPO_ROOT = path.resolve(__dirname, "../..");

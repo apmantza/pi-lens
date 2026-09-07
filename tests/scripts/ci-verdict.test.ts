@@ -984,6 +984,7 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 		"oxfmt format check (advisory)",
 		"Vale prose lint (advisory)",
 		"OSV scan (advisory)",
+		"knip (advisory)",
 		"greeting",
 		...EXTERNAL_ADVISORY_NAMES,
 	]);
