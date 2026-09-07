@@ -157,6 +157,57 @@ describe("lint:js (#2439 — oxlint wired over .mjs/.cjs)", () => {
 	);
 });
 
+/**
+ * #2700 — two tiers: `lint:js` (gating) enumerates individually-promoted
+ * rules with zero findings on master, `lint:js:advisory` (continue-on-error
+ * in lint.yml) runs the full categories+plugins+type-aware set. Nothing
+ * stops the two npm-script strings from drifting apart by hand (a rule
+ * added to `lint:js` without ever reaching `lint:js:advisory`, or a rule
+ * removed from `lint:js:advisory` that `lint:js` still names) — this
+ * resolves each script's REAL enabled-rule set via oxlint's own
+ * `--print-config` (never a hand-copied rule list) and asserts the gating
+ * set is a subset of the advisory set.
+ */
+describe("lint:js / lint:js:advisory — the gating rule set stays a subset of the advisory set (#2700)", () => {
+	function enabledRules(npmScript: string): Set<string> {
+		// oxlint's own argv, not a re-typed copy: strip the leading `oxlint`
+		// token off the REAL package.json script string and run the shipped
+		// binary directly (resolved the same way as OXLINT_ENTRY above) so a
+		// change to either script's flags is picked up automatically.
+		const rest = npmScript.replace(/^oxlint\s+/, "");
+		const result = spawnSync(`${OXLINT_ENTRY} ${rest} --print-config`, {
+			encoding: "utf8",
+			cwd: REPO_ROOT,
+			shell: true,
+			timeout: SPAWN_TIMEOUT_MS,
+		});
+		expect(result.status, result.stdout + result.stderr).toBe(0);
+		const config = JSON.parse(result.stdout) as {
+			rules: Record<string, string | null>;
+		};
+		return new Set(
+			Object.entries(config.rules)
+				.filter(([, severity]) => severity && severity !== "off")
+				.map(([name]) => name),
+		);
+	}
+
+	it(
+		"every rule `lint:js` denies is also enabled in `lint:js:advisory`",
+		() => {
+			const pkg = JSON.parse(
+				fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
+			);
+			const gating = enabledRules(pkg.scripts["lint:js"]);
+			const advisory = enabledRules(pkg.scripts["lint:js:advisory"]);
+			expect(gating.size).toBeGreaterThan(0);
+			const missing = [...gating].filter((rule) => !advisory.has(rule));
+			expect(missing).toEqual([]);
+		},
+		SPAWN_TIMEOUT_MS * 2 + 5_000,
+	);
+});
+
 describe("lint:js — TS lane (#2454 — clients/tools/mcp/index.ts scanned for warning-tier hits)", () => {
 	it("does not ignore .ts/.tsx (the **/*.ts blanket ignore-pattern is gone)", () => {
 		// The #2439 baseline shipped with a blanket `**/*.ts`/`**/*.tsx`
