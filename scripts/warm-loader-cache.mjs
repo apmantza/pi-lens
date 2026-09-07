@@ -44,7 +44,8 @@ function log(message) {
 }
 
 /**
- * Append one JSONL record to ~/.pi-lens/install.log.
+ * Append one JSONL record to PI_LENS_INSTALL_LOG, or install.log under
+ * PI_LENS_HOME (falling back to ~/.pi-lens when neither is set).
  *
  * pi's install output scrolls away, so without this there is no record that the
  * warm ran, was skipped, or failed. One bounded line per install keeps the
@@ -54,10 +55,11 @@ function log(message) {
 function record(entry) {
 	try {
 		const override = process.env.PI_LENS_INSTALL_LOG;
+		const home = process.env.PI_LENS_HOME?.trim();
 		const file =
 			typeof override === "string" && override.length > 0
 				? override
-				: path.join(os.homedir(), ".pi-lens", "install.log");
+				: path.join(home || path.join(os.homedir(), ".pi-lens"), "install.log");
 		fs.mkdirSync(path.dirname(file), { recursive: true });
 		const existing = fs.existsSync(file)
 			? fs.readFileSync(file, "utf8").split("\n")

@@ -281,5 +281,5 @@ export function appendBounded(
 	return lines.slice(Math.max(0, lines.length - max));
 }
 
-/** Cap for `~/.pi-lens/install.log`. */
+/** Cap for the install log under `PI_LENS_HOME` or `~/.pi-lens`. */
 export const INSTALL_LOG_MAX_LINES = 100;

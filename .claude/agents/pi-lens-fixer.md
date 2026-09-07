@@ -339,6 +339,12 @@ fixture garbage into the real telemetry (#2506). Before every such probe:
 `PILENS_DATA_DIR` likewise when the probe touches project-scoped data. A probe
 that forgets is a finding against YOUR report, not the PR's.
 
+Before `npm install` or `npm ci` in an agent worktree, export
+`PI_LENS_HOME=<your worktree>/.probe-home` and
+`PILENS_DATA_DIR=<your worktree>/.probe-home`. The install lifecycle's warm
+loader log honors that home, but an explicit `PI_LENS_INSTALL_LOG` pin remains
+the clearest choice for tests that inspect the record.
+
 ## Before you call it done
 
 Interrogate your own diff from first principles before reporting; re-climb
