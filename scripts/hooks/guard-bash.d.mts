@@ -19,9 +19,16 @@ export function stripEnvAssignments(words: string[]): {
 	rest: string[];
 };
 
-export function classifySegment(rawSegment: string): DenyRule | null;
+export function classifySegment(
+	rawSegment: string,
+	sharedEnv?: Record<string, string>,
+): DenyRule | null;
 
-export function findDeny(commandText: string, depth?: number): DenyRule | null;
+export function findDeny(
+	commandText: string,
+	depth?: number,
+	inheritedEnv?: Record<string, string>,
+): DenyRule | null;
 
 export function classifyPayload(payload: unknown): DenyRule | null;
 

@@ -7,7 +7,7 @@
 				"hooks": [
 					{
 						"type": "command",
-						"command": "node scripts/hooks/guard-bash.mjs",
+						"command": "node \"${CLAUDE_PROJECT_DIR}/scripts/hooks/guard-bash.mjs\"",
 						"timeout": 5
 					}
 				]
