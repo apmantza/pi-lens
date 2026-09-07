@@ -4,10 +4,6 @@ import {
 } from "./source-filter.js";
 
 /**
- * Common parsing logic for ast-grep JSON output (handles both array and NDJSON).
- */
-
-/**
  * Recursively find source files in a directory, respecting common excludes.
  *
  * This function now delegates to `collectSourceFiles()` from the `source-filter`

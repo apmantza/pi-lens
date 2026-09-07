@@ -13,7 +13,7 @@ interface TrackerEntry {
 	agentFixed: boolean;
 }
 
-export interface SessionStats {
+interface SessionStats {
 	totalShown: number;
 	totalAutoFixed: number;
 	totalAgentFixed: number;

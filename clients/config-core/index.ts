@@ -32,7 +32,7 @@
  * brings the `lsp.servers.<id>` shape the schema currently only reserves.
  */
 
-export { TIER_PRECEDENCE } from "./provenance.js";
+export { SOURCE_TIERS } from "./provenance.js";
 
 // `merge()` itself is NOT re-exported. Its input type only PROMISES a
 // post-`validate()` value; nothing in the language enforces that a caller

@@ -36,7 +36,6 @@ import {
 /**
  * Bytes of backing store per posting entry: one `fileId` lane and one `line`
  * lane, both `Int32`. This is the constant #2069's acceptance criterion is
- * written against, and {@link estimatePostingListBytes} is the arithmetic the
  * memory-sample record and the regression test both read.
  */
 export const WORD_POSTING_ENTRY_BYTES = 8;

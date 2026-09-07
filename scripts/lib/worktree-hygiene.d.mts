@@ -16,8 +16,6 @@ export function worktreeActivityFromSignals(
 export function parseReflogLastEntryMs(text: string): number | null;
 export const DEFAULT_LOG_MAX_LINES: number;
 export const MAX_RECORDED_COMMAND_CHARS: number;
-export const AGENT_WORKTREE_SEGMENT: string;
-export const FIXTURE_HELPER_MARKERS: string[];
 
 export interface WorktreeListRow {
 	path: string;
@@ -70,7 +68,7 @@ export interface ProcRow {
 }
 
 export function toComparablePath(p: string): string;
-export function toComparableText(text: string): string;
+
 export function isAgentWorktreePath(p: string): boolean;
 export function enclosingAgentWorktree(p: string): string | null;
 export function parseWorktreeList(porcelain: string): WorktreeListRow[];
@@ -115,8 +113,6 @@ export function selectOrphanFixtureProcesses(
 	},
 ): { row: ProcRow; reason: string }[];
 
-export function commandExecutionPaths(command: string): string[];
-
 export function verifySnapshotIntegrity(
 	rows: ProcRow[],
 	selfPid: number,
@@ -150,8 +146,6 @@ export function planBranchDeletions(options: {
 	}[];
 	removedBranchRefs: (string | null | undefined)[];
 }): string[];
-
-export const AGENT_BRANCH_SHAPES: RegExp[];
 
 // `containedInOrigin` is accepted but deliberately UNUSED: callers hand the
 // same row shape to both this pre-filter and selectStaleBranches, and the

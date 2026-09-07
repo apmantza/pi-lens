@@ -81,7 +81,7 @@ function resolvedEntryKind(fullPath, entry) {
  * @returns {string[]} absolute paths of every `SKILL.md` (or, at the root,
  *   loose `.md`) file pi's own resolver would treat as a skill entry point.
  */
-export function scanEntriesForSkills(dir, entries, isRoot) {
+function scanEntriesForSkills(dir, entries, isRoot) {
 	for (const entry of entries) {
 		if (
 			entry.name === "SKILL.md" &&

@@ -12,7 +12,7 @@
  *
  *   builtin -> global -> project root -> nested-project -> env -> cli -> host
  *
- * It is `config-core`'s own `TIER_PRECEDENCE`, not a second ordering: this
+ * It is `config-core`'s own `SOURCE_TIERS`, not a second ordering: this
  * module places files into tiers and the core sorts them. `docs/configuration.md`
  * documents the same order once, and `tests/clients/config-resolve.test.ts`
  * walks it.

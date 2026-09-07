@@ -46,7 +46,6 @@ const PROJECT_ROOT_MARKERS = [
 
 // #758: hard ceiling on the number of directory entries the startup source
 // count walk will visit before it gives up and declares the tree too big to
-// warm. The source-file early-exit (MAX_STARTUP_SOURCE_FILES) only fires when
 // a project has MANY source files — a repo with FEW source files but a huge
 // pile of non-source files (e.g. a game mod: 300 scripts among 84k data files)
 // never trips it, so the pre-#758 walk traversed the entire tree, dominated by
@@ -136,7 +135,6 @@ export const _resetStartupScanMaxEntriesForTests = _maxEntries._resetForTests;
  *
  * The content-derived reasons `too-many-source-files` and `too-many-entries`
  * (#758) are the ones that are TTL'd. They can go stale on their own: the repo
- * can shrink below `MAX_STARTUP_SOURCE_FILES` (or below the entry ceiling)
  * between sessions, and nothing else would notice
  * — the seq-based freshness check that guards every other
  * `project-snapshot.json` field never fires for them, because pi-lens never

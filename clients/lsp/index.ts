@@ -8836,7 +8836,7 @@ export class LSPService {
 		// ONE bracket for the whole fan-out, not one per file (#2272 review F1).
 		// Per-file bracketing was the first shape and it was inert for exactly
 		// the case above: `phaseFinished` pushes onto a ring capped at
-		// `CLOSED_BRACKET_CAP` (5, clients/latency-logger.ts), while `turn_end`
+		// `RECENT_PHASE_CAP` (5, clients/latency-logger.ts), while `turn_end`
 		// reads `getPhaseForWindow` AFTER the sweep returns. A 225-file sweep
 		// therefore evicted the blocking file's own bracket unless the block
 		// landed in the last five files, and the survivors were then rejected by

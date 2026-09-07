@@ -447,7 +447,6 @@ export interface GeneratedArtifactClassification {
  * function and short-circuit on a hit, so by the time this function runs for
  * those callers evidence (a) has already come back negative. Non-walk
  * callers with no upstream sibling probe (`file-role.ts`'s content-based
- * check, `project-scan-policy.ts`'s single-path `shouldSkipProjectPath`)
  * evaluate evidence (b) only — a documented, narrower guarantee than the
  * walk path's.
  *

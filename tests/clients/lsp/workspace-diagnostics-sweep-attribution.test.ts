@@ -45,7 +45,7 @@ const SWEEP_ATTRIBUTION_TIMEOUT_MS = 30_000;
 
 /**
  * The scale #1723's own reproduction ran at (225 files, 224 cache hits). It
- * matters that this is far above `CLOSED_BRACKET_CAP` (5): the review finding
+ * matters that this is far above `RECENT_PHASE_CAP` (5): the review finding
  * these cases pin is that a per-file bracket cannot survive the ring.
  */
 const SWEEP_FILE_COUNT = 225;
@@ -218,7 +218,7 @@ describe(
 		 * That gap hid a defect that made the whole feature inert for its own
 		 * motivating case. With one bracket PER FILE, a 225-file sweep pushes
 		 * 225 entries through a closed-bracket ring capped at
-		 * CLOSED_BRACKET_CAP = 5 (latency-logger.ts). The bracket belonging to
+		 * RECENT_PHASE_CAP = 5 (latency-logger.ts). The bracket belonging to
 		 * the file that actually blocked is evicted unless the block lands in
 		 * the last five files — roughly 2% of a sweep. The five survivors are
 		 * then rejected by MIN_PLAUSIBLE_ELAPSED_FRACTION, because a fast

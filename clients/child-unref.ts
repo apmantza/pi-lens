@@ -2,7 +2,6 @@
  * Shared plumbing for best-effort, fire-and-forget child-process spawns
  * (shape 4 of the recurring-defect catalog in AGENTS.md: "a timer / promise /
  * worker / child that outlives its one-shot settle"). Extracted from the
- * orphan reaper's `unrefReaperChild`/`spawnCollectStdout` (#1153/#1160) into a
  * shared, dependency-free module so every one-shot
  * `spawn(..., { stdio: ["ignore","pipe",...] })` call site in the codebase —
  * the reaper's enumeration/kill spawns AND the resource sampler's Windows
@@ -54,7 +53,6 @@ export function unrefChildAndPipes(child: ChildProcess): void {
  * in CLAUDE.md: an empty result must distinguish clean from errored. Callers
  * that must emit a distinguishable record use `spawnCollectStdoutResult`;
  * callers that genuinely only want best-effort text keep calling
- * `spawnCollectStdout`, which is now a thin projection of this same code path
  * (one implementation, not two).
  */
 export type SpawnCollectStatus =
@@ -119,7 +117,6 @@ export interface SpawnCollectOptions {
 export type SpawnTimeoutKill = "gone" | "alive" | "invalid" | "unverified";
 
 /**
- * `spawnCollectStdout` plus the reason the output is what it is. Same spawn,
  * unref, collect, settle plumbing; the only additions are an optional hard
  * timeout and a status discriminator. Never rejects.
  */

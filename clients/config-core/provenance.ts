@@ -11,7 +11,7 @@
  *
  * Two orderings live here, and they are NOT the same ordering:
  *
- * - `TIER_PRECEDENCE` decides who wins a plain value. Later beats earlier, so a
+ * - `SOURCE_TIERS` decides who wins a plain value. Later beats earlier, so a
  *   CLI flag beats a project file beats a global file beats a built-in default.
  * - `TIER_CLASS` decides who may LIFT a deny. `deny.ts` builds monotonic deny
  *   precedence on this split, and nothing else re-derives it.
@@ -39,14 +39,6 @@ export const SOURCE_TIERS = [
 ] as const;
 
 export type SourceTier = (typeof SOURCE_TIERS)[number];
-
-/**
- * Value precedence, lowest first. A later tier's value replaces an earlier
- * tier's value for the same leaf. `merge()` sorts its sources by this order
- * rather than trusting caller order, so a caller that assembles sources in a
- * different order cannot silently invert precedence.
- */
-export const TIER_PRECEDENCE: readonly SourceTier[] = SOURCE_TIERS;
 
 export type TierClass = "default" | "operator" | "repo";
 
@@ -122,7 +114,7 @@ export interface Resolved<T> {
 
 /** Numeric precedence of a tier. Higher wins. */
 export function tierPrecedence(tier: SourceTier): number {
-	return TIER_PRECEDENCE.indexOf(tier);
+	return SOURCE_TIERS.indexOf(tier);
 }
 
 /** True for tiers whose content arrives with the checkout. */

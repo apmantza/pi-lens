@@ -1038,7 +1038,6 @@ export async function collectWordIndexDocs(
 	const { collectSourceFilesAsync } = await import("./source-filter.js");
 	// #747 hardening: pass the cap INTO the walk — without it,
 	// `collectSourceFilesAsync` defaults to an unbounded traversal and the
-	// `WORD_INDEX_MAX_FILES` slice below only trims the result AFTER the whole
 	// tree (all of $HOME, on a misrooted cwd) has already been enumerated.
 	// #760: the walk is additionally bounded by source-filter's default
 	// visited-entry budget (DEFAULT_MAX_SCAN_ENTRIES), so a mixed tree with few

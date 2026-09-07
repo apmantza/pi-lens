@@ -17,7 +17,7 @@ import {
 	_closedBracketsStorageLengthForTest,
 	_recentPhasesStorageLengthForTest,
 	_setRecentPhasesForTest,
-	CLOSED_BRACKET_CAP,
+	RECENT_PHASE_CAP,
 	getCurrentPhase,
 	getLastLoggedPhase,
 	getPhaseForWindow,
@@ -26,7 +26,6 @@ import {
 	type PhaseWindowAttribution,
 	phaseFinished,
 	phaseStarted,
-	RECENT_PHASE_CAP,
 	resetCurrentPhaseForSession,
 } from "../../clients/latency-logger.js";
 import { normalizeFilePath } from "../../clients/path-utils.js";
@@ -607,14 +606,14 @@ describe("getCurrentPhase/getPhaseForWindow: overlap and window attribution (#17
 
 	// Mutation-proof: ring unbounded (#1723 review, mirrors the existing
 	// recentPhases write-side guard test). If phaseFinished's
-	// `.slice(0, CLOSED_BRACKET_CAP)` were deleted, storage would grow past
+	// `.slice(0, RECENT_PHASE_CAP)` were deleted, storage would grow past
 	// the cap.
-	it("mutation-proof: the closed-bracket ring never exceeds CLOSED_BRACKET_CAP", () => {
-		for (let i = 0; i < CLOSED_BRACKET_CAP + 7; i++) {
+	it("mutation-proof: the closed-bracket ring never exceeds RECENT_PHASE_CAP", () => {
+		for (let i = 0; i < RECENT_PHASE_CAP + 7; i++) {
 			const token = phaseStarted(`closed_flood_${i}`);
 			phaseFinished(token);
 		}
-		expect(_closedBracketsStorageLengthForTest()).toBe(CLOSED_BRACKET_CAP);
+		expect(_closedBracketsStorageLengthForTest()).toBe(RECENT_PHASE_CAP);
 	});
 
 	// Mutation-proof: a never-deleted live entry (phaseFinished's `Map.delete`
@@ -785,11 +784,11 @@ describe("getPhaseForWindow tie-break and plausibility floor (#1723 review round
 		}
 	});
 
-	// N4: the closed-bracket ring is bounded (`CLOSED_BRACKET_CAP`) — sibling
+	// N4: the closed-bracket ring is bounded (`RECENT_PHASE_CAP`) — sibling
 	// churn can evict the real culprit before `turn_end` ever samples. Without
 	// a plausibility floor, whatever tiny bracket is left with SOME positive
 	// overlap would be reported as a confident (and wrong) answer. This
-	// evicts an 18 270ms culprit with `CLOSED_BRACKET_CAP` later closes and
+	// evicts an 18 270ms culprit with `RECENT_PHASE_CAP` later closes and
 	// leaves a single 2ms bracket with a genuine 2ms overlap against the
 	// culprit's own window — the floor must reject it, returning `undefined`
 	// (absent-but-honest) rather than naming the 2ms blip.
@@ -803,9 +802,9 @@ describe("getPhaseForWindow tie-break and plausibility floor (#1723 review round
 			vi.setSystemTime(culpritEndMs);
 			phaseFinished(culpritToken); // ring: [culprit]
 
-			// CLOSED_BRACKET_CAP - 1 filler siblings, entirely AFTER the window
+			// RECENT_PHASE_CAP - 1 filler siblings, entirely AFTER the window
 			// (zero/negative overlap on their own) — just occupy ring capacity.
-			for (let i = 0; i < CLOSED_BRACKET_CAP - 1; i++) {
+			for (let i = 0; i < RECENT_PHASE_CAP - 1; i++) {
 				const fillerToken = phaseStarted(`filler_${i}`);
 				vi.setSystemTime(culpritEndMs + 100 + i);
 				phaseFinished(fillerToken);
@@ -819,7 +818,7 @@ describe("getPhaseForWindow tie-break and plausibility floor (#1723 review round
 			vi.setSystemTime(culpritEndMs);
 			phaseFinished(tinyToken);
 
-			expect(_closedBracketsStorageLengthForTest()).toBe(CLOSED_BRACKET_CAP);
+			expect(_closedBracketsStorageLengthForTest()).toBe(RECENT_PHASE_CAP);
 
 			const attribution = getPhaseForWindow(t0, culpritEndMs);
 			expect(attribution).toBeUndefined();
