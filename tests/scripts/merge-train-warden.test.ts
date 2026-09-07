@@ -2484,6 +2484,92 @@ describe("merge-lane gate (#2185)", () => {
 		).toMatchObject({ merge: true });
 	});
 
+	// #2679: every discovered non-advisory check must settle before UNSTABLE
+	// can merge. These rows are distinct names so the resolver cannot hide the
+	// pending state behind an unrelated array-order choice.
+	it.each([
+		["IN_PROGRESS", null],
+		["IN_PROGRESS", "SUCCESS"],
+		["QUEUED", null],
+		["COMPLETED", null],
+	])("holds a discovered %s check (conclusion %s) until it concludes", (status, conclusion) => {
+		const checkName = `discovered ${status.toLowerCase()} check`;
+		const gate = gateOf(
+			approved({
+				mergeStateStatus: "UNSTABLE",
+				checkRuns: [...greenChecks(), { name: checkName, status, conclusion }],
+			}),
+		);
+		expect(gate).toMatchObject({
+			merge: false,
+			reason: MERGE_GATE_REASON.CHECK_PENDING,
+		});
+		expect(gate.detail).toContain(checkName);
+	});
+
+	it("reports every pending discovered check in the hold detail", () => {
+		const names = ["queued discovered check", "running discovered check"];
+		const gate = gateOf(
+			approved({
+				mergeStateStatus: "UNSTABLE",
+				checkRuns: [
+					...greenChecks(),
+					{ name: names[0], status: "QUEUED", conclusion: null },
+					{ name: names[1], status: "IN_PROGRESS", conclusion: null },
+				],
+			}),
+		);
+		expect(gate.reason).toBe(MERGE_GATE_REASON.CHECK_PENDING);
+		for (const name of names) expect(gate.detail).toContain(name);
+	});
+
+	it.each([
+		[
+			"pending first",
+			[
+				{
+					name: "discovered failure",
+					status: "COMPLETED",
+					conclusion: "FAILURE",
+				},
+				{
+					name: "discovered in-flight",
+					status: "IN_PROGRESS",
+					conclusion: null,
+				},
+			],
+		],
+		[
+			"pending first reversed",
+			[
+				{
+					name: "discovered in-flight",
+					status: "IN_PROGRESS",
+					conclusion: null,
+				},
+				{
+					name: "discovered failure",
+					status: "COMPLETED",
+					conclusion: "FAILURE",
+				},
+			],
+		],
+	])(
+		"lets a discovered failure beat pending checks (%s)",
+		(_label, extraChecks) => {
+			const gate = gateOf(
+				approved({
+					mergeStateStatus: "UNSTABLE",
+					checkRuns: [...greenChecks(), ...extraChecks],
+				}),
+			);
+			expect(gate).toMatchObject({
+				merge: false,
+				reason: MERGE_GATE_REASON.FAILING_CHECK,
+			});
+		},
+	);
+
 	// #2632 verify round 1, F1: a discovered (non-required) check-run's
 	// CANCELLED conclusion is a concurrency-superseded artifact -- UNCERTAIN
 	// evidence, not proof of anything -- so it must HOLD (deny, re-evaluated
@@ -2498,7 +2584,7 @@ describe("merge-lane gate (#2185)", () => {
 	// admits UNSTABLE, so the `failing` filter is the lane's ONLY gate on a
 	// non-required check, and a superseded row whose replacement later posts
 	// FAILURE would already have merged. F1's remedy is a dedicated HOLD
-	// (`CHECK_SUPERSEDED`) before `failing` runs.
+	// (`CHECK_PENDING`) after the failure filter runs.
 	it("RED PROOF (#2632 F1): a lone cancelled discovered check (no replacement posted yet) holds, does not merge green", () => {
 		const gate = gateOf(
 			approved({
@@ -2517,7 +2603,7 @@ describe("merge-lane gate (#2185)", () => {
 			merge: false,
 			update: false,
 			silent: false,
-			reason: MERGE_GATE_REASON.CHECK_SUPERSEDED,
+			reason: MERGE_GATE_REASON.CHECK_PENDING,
 		});
 		// F3: the hold names the superseded check, so the PR comment and step
 		// summary show WHY, not just "not green".
@@ -2639,7 +2725,7 @@ describe("merge-lane gate (#2185)", () => {
 	// fail-closed fallback (neither concluded-success, no comparable
 	// timestamp) keeps whichever is the INCUMBENT -- i.e. array order decides
 	// which one `byName` resolves to. Both orders must still deny: the
-	// CANCELLED-wins order denies via the F1 hold (CHECK_SUPERSEDED, not a
+	// CANCELLED-wins order denies via the F1 hold (CHECK_PENDING, not a
 	// pass-through to green), and the FAILURE-wins order denies via
 	// `failing` (FAILING_CHECK) as always -- neither order may merge.
 	it("F2: an unorderable cancelled/FAILURE tie denies in BOTH array orders, never merges", () => {
@@ -2659,7 +2745,7 @@ describe("merge-lane gate (#2185)", () => {
 			approved({ checkRuns: [...greenChecks(), cancelled, failure] }),
 		);
 		expect(cancelledFirst.merge).toBe(false);
-		expect(cancelledFirst.reason).toBe(MERGE_GATE_REASON.CHECK_SUPERSEDED);
+		expect(cancelledFirst.reason).toBe(MERGE_GATE_REASON.CHECK_PENDING);
 		const failureFirst = gateOf(
 			approved({ checkRuns: [...greenChecks(), failure, cancelled] }),
 		);
