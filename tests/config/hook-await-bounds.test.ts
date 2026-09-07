@@ -2193,7 +2193,15 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
 	"clients/formatters.ts": 115,
 	"clients/gitleaks-client.ts": 4,
 	"clients/govulncheck-client.ts": 6,
-	"clients/installer/index.ts": 192,
+	// 192 → 193 (#2722): `verifyNpmPackageEntry` reads the installed package's
+	// own `package.json` to verify a managed npm LSP server from the tree on
+	// disk instead of spawning `--version` at it. One `await fs.readFile` of a
+	// few KB on a path the same function then `statSync`s — registered rather
+	// than absorbed, and the rung it replaces on this path was a spawn with a
+	// 10s budget and up to three attempts, so the hook path got shorter, not
+	// longer. Like every other entry here it cannot take a hook's signal until
+	// #2523 AC4 threads it through the deps types.
+	"clients/installer/index.ts": 193,
 	"clients/installer/managed-tool-refresh.ts": 29,
 	"clients/instance-reaper.ts": 26,
 	"clients/instance-registry.ts": 23,
