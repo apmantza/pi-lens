@@ -828,7 +828,7 @@ export function planOrphanSweep({
 	protectedPids = new Set(),
 	restrictToPath = null,
 	listingOk = true,
-	isPidAlive = undefined,
+	isPidAlive,
 }) {
 	if (!listingOk)
 		return { orphans: [], degraded: { reason: "listing-failed" } };

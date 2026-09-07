@@ -926,7 +926,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"budget many times over.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#d6f3308b~433f3f02": {
+	"clients/runtime-session.ts#d6f3308b~7e7b1d10": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
@@ -950,7 +950,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"budget many times over.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#79639cbb~cd388c97": {
+	"clients/runtime-session.ts#79639cbb~7cf260f9": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
@@ -974,7 +974,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"budget many times over.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#4bdb1922~cd166e7d": {
+	"clients/runtime-session.ts#4bdb1922~447b8e6b": {
 		family: "hook-await",
 		site: "session_start",
 		reason:

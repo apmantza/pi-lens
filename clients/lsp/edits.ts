@@ -1052,6 +1052,7 @@ async function createWorkspaceUriConfiner(
 		} catch (err) {
 			throw new Error(
 				`invalid workspace edit URI ${uri}: ${err instanceof Error ? err.message : String(err)}`,
+				{ cause: err },
 			);
 		}
 		if (!path.isAbsolute(filePath))

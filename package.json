@@ -21,7 +21,8 @@
 		"prepack": "node scripts/strip-dev-deps-for-pack.mjs --strip",
 		"postpack": "node scripts/strip-dev-deps-for-pack.mjs --restore",
 		"lint": "tsc --project tsconfig.json && npm run lint:js",
-		"lint:js": "oxlint --deny-warnings --ignore-pattern \"tests/**/*.ts\" --ignore-pattern \"tests/**/*.tsx\" --ignore-pattern \"**/*.d.mts\" --ignore-pattern \"tests/fixtures/autofix-smoke/**\" --ignore-pattern \"tests/fixtures/format-smoke/**\" --ignore-pattern \"tests/fixtures/tool-smoke/**\" --ignore-pattern \"tests/fixtures/call-graph/javascript/**\" --ignore-pattern \"tests/fixtures/function-facts/javascript-parameter.js\" .",
+		"lint:js": "oxlint --deny-warnings --import-plugin --promise-plugin -D block-scoped-var -D import/default -D import/namespace -D import/no-absolute-path -D import/no-empty-named-blocks -D import/no-named-as-default -D import/no-self-import -D no-extend-native -D no-extra-bind -D no-implied-eval -D no-new -D no-unexpected-multiline -D no-useless-constructor -D oxc/approx-constant -D oxc/misrefactored-assign-op -D oxc/no-accumulating-spread -D oxc/no-async-endpoint-handlers -D oxc/no-this-in-exported-function -D promise/no-callback-in-promise -D promise/no-multiple-resolved -D promise/no-new-statics -D promise/valid-params -D typescript/no-confusing-non-null-assertion -D typescript/no-extraneous-class -D typescript/no-unnecessary-type-constraint -D typescript/no-unsafe-enum-comparison -D unicorn/no-accessor-recursion -D unicorn/no-array-fill-with-reference-type -D unicorn/no-confusing-array-with -D unicorn/no-instanceof-builtins -D unicorn/prefer-array-flat-map -D unicorn/require-module-specifiers --ignore-pattern \"tests/**/*.ts\" --ignore-pattern \"tests/**/*.tsx\" --ignore-pattern \"**/*.d.mts\" --ignore-pattern \"tests/fixtures/autofix-smoke/**\" --ignore-pattern \"tests/fixtures/format-smoke/**\" --ignore-pattern \"tests/fixtures/tool-smoke/**\" --ignore-pattern \"tests/fixtures/call-graph/javascript/**\" --ignore-pattern \"tests/fixtures/function-facts/javascript-parameter.js\" .",
+		"lint:js:advisory": "oxlint --deny-warnings --format default -D correctness -D suspicious -D perf --import-plugin --promise-plugin --type-aware -A no-underscore-dangle -A no-await-in-loop -A unicorn/no-array-sort -A unicorn/consistent-function-scoping -A promise/no-promise-in-callback -A no-useless-call -A import/no-unassigned-import -A no-unmodified-loop-condition --ignore-pattern \"**/*.d.mts\" --ignore-pattern \"tests/fixtures/autofix-smoke/**\" --ignore-pattern \"tests/fixtures/format-smoke/**\" --ignore-pattern \"tests/fixtures/tool-smoke/**\" --ignore-pattern \"tests/fixtures/call-graph/javascript/**\" --ignore-pattern \"tests/fixtures/function-facts/javascript-parameter.js\" .",
 		"depcruise:check": "depcruise --validate --config .dependency-cruiser.cjs --ignore-known .dependency-cruiser-known-violations.json --output-type err index.ts \"clients/**/*.ts\"",
 		"fmt": "oxfmt",
 		"fmt:check": "oxfmt --check",
@@ -35,6 +36,7 @@
 		"check": "node scripts/check-extensions.mjs",
 		"selftest:install": "node scripts/install-selftest.mjs",
 		"check:lockfile": "node scripts/check-lockfile-sync.mjs",
+		"knip": "node scripts/run-knip.mjs",
 		"check:grammars": "node scripts/check-grammar-provenance.mjs",
 		"check:grammar-load": "node scripts/check-grammar-load.mjs",
 		"audit:tree-sitter": "node scripts/audit-tree-sitter-rules.mjs",
@@ -141,8 +143,11 @@
 		"dependency-cruiser": "^18.2.0",
 		"husky": "^9.1.7",
 		"json5": "^2.2.3",
+		"knip": "6.34.0",
 		"oxfmt": "0.66.0",
 		"oxlint": "1.81.0",
+		"oxlint-tsgolint": "7.0.2001",
+		"publint": "0.3.24",
 		"semver": "^7.8.0",
 		"typebox": "^1.0.0",
 		"typescript": "^7.0.2",
@@ -155,18 +160,6 @@
 		],
 		"skills": [
 			"./skills"
-		]
-	},
-	"knip": {
-		"entry": [
-			"index.ts"
-		],
-		"project": [
-			"**/*.ts",
-			"!**/*.test.ts"
-		],
-		"ignore": [
-			"**/*.test.ts"
 		]
 	},
 	"allowScripts": {

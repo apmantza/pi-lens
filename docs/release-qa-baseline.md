@@ -61,6 +61,13 @@ arithmetic.
 | `mcp-stdio` | an MCP client speaking JSON-RPC to `dist/mcp/server.js` |
 | `git-install` | `pi install git:...` against a pushed ref |
 
+Static packaging shape under `npm-pack` is NOT a matrix row: CI's
+`ci.yml` `prod-install-build` job already runs `publint` (gating) on every
+PR's packed tarball (#2700, the check #2587 was missing). `attw`
+(arethetypeswrong) is not run there or here — the package ships no
+`.d.ts` at all (`tsconfig.dist.json` sets `"declaration": false`, no
+`types`/`exports` in `package.json`), so there is nothing for it to grade.
+
 ## The matrix
 
 | row id | feature | modality | entry point | pass criterion | witness | reuse | umbrella |
