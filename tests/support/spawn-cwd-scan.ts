@@ -328,7 +328,8 @@ function findParamBinding(fn: SgNode, name: string): ParamBinding | undefined {
 	const patterns = parameterPatterns(fn);
 	for (const [index, pattern] of patterns.entries()) {
 		if (pattern.kind() === "identifier") {
-			if (pattern.text() === name) return { paramIndex: index, viaObject: false };
+			if (pattern.text() === name)
+				return { paramIndex: index, viaObject: false };
 		} else if (patternNames(pattern).includes(name)) {
 			return { paramIndex: index, viaObject: true };
 		}
@@ -336,7 +337,8 @@ function findParamBinding(fn: SgNode, name: string): ParamBinding | undefined {
 
 	const paramIndexByName = new Map<string, number>();
 	for (const [index, pattern] of patterns.entries()) {
-		if (pattern.kind() === "identifier") paramIndexByName.set(pattern.text(), index);
+		if (pattern.kind() === "identifier")
+			paramIndexByName.set(pattern.text(), index);
 	}
 	for (const declarator of bodyDeclarators(fn)) {
 		const target = declarator.field("name");

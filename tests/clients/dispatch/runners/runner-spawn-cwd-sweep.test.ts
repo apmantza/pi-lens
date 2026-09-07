@@ -141,10 +141,7 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 	beforeAll(async () => {
 		for (const file of files) {
 			const relFile = path.relative(RUNNERS_DIR, file);
-			const scan = await scanSpawnCwd(
-				relFile,
-				fs.readFileSync(file, "utf8"),
-			);
+			const scan = await scanSpawnCwd(relFile, fs.readFileSync(file, "utf8"));
 			sites.push(...scan.sites);
 			wrappers.push(
 				...scan.wrappers.map(
@@ -153,7 +150,6 @@ describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 				),
 			);
 		}
-		sites = sites.slice();
 		wrappers = wrappers.sort();
 	});
 

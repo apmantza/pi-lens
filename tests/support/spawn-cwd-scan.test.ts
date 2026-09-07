@@ -330,6 +330,16 @@ describe("K4 — a wrapper with a positional cwd parameter", () => {
 		expect(flagged).toEqual([at(source, "lintChart(chartRoot);", "lintChart")]);
 	});
 
+	it("ignores a comment sitting in front of a good argument", async () => {
+		// The comment filter in `namedParts` earns its place here: a grammar
+		// comment is a NAMED child, so without it the comment would be counted
+		// as argument 1 and this conforming call would be flagged.
+		const { flagged } = await analyze(
+			`${K4_WRAPPER}\nlintChart(chartRoot, /* the dispatch cwd */ ctx.cwd);`,
+		);
+		expect(flagged).toEqual([]);
+	});
+
 	it("keeps `cwd || process.cwd()` bearing — the canonical fallback is not the host cwd", async () => {
 		const { flagged } = await analyze(
 			`${K4_WRAPPER}\nlintChart(chartRoot, ctx.cwd || process.cwd());`,
@@ -546,7 +556,11 @@ describe("the wrapper rule itself", () => {
 			"lintNearestChart:positional@1",
 		]);
 		expect(flagged).toEqual([
-			at(source, "lintNearestChart(chartRoot, process.cwd())", "lintNearestChart"),
+			at(
+				source,
+				"lintNearestChart(chartRoot, process.cwd())",
+				"lintNearestChart",
+			),
 		]);
 	});
 
