@@ -133,6 +133,7 @@ const oxlintRunner: RunnerDefinition = {
 
 		// Run oxlint (or Vite+'s vp lint wrapper) on the file.
 		const result = await safeSpawnAsync(cmd, args, {
+			cwd,
 			timeout: 30000,
 			maxOutputBytes: MAX_OXLINT_OUTPUT_BYTES,
 		});

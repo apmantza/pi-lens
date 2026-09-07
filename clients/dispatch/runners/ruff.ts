@@ -94,7 +94,7 @@ const ruffRunner: RunnerDefinition = {
 		const checkResult = await safeSpawnAsync(
 			cmd,
 			["check", "--output-format", "json", ...configArgs, ctx.filePath],
-			{ timeout: 30000 },
+			{ cwd, timeout: 30000 },
 		);
 
 		const raw = stripAnsi(checkResult.stdout + checkResult.stderr);
