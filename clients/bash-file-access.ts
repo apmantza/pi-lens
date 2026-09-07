@@ -71,7 +71,7 @@ function parseHeredocDelimiter(
 	while (/\s/.test(command[i] ?? "")) i += 1;
 	let delimiter = "";
 	let quoted = false;
-	while (i < command.length && !/\s/.test(command[i] ?? "")) {
+	while (i < command.length && !/[\s;&|<>]/.test(command[i] ?? "")) {
 		const ch = command[i];
 		if (ch === "'" || ch === '"') {
 			quoted = true;

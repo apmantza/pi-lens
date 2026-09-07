@@ -111,6 +111,54 @@ describe("handleToolCall", () => {
 		}
 	});
 
+	it("does not block a command after a heredoc delimiter metacharacter", async () => {
+		const env = setupTestEnvironment("pi-lens-2726-heredoc-operator-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.setTelemetryIdentity({ sessionId: "session-2726-operator" });
+			runtime.updateGitGuardStatus(true, "existing blocker");
+			const result = await handleToolCall(
+				baseDeps({
+					runtime,
+					ctx: { cwd: env.tmpDir },
+					getFlag: (name) => name === "lens-guard",
+					event: {
+						toolName: "bash",
+						input: { command: "cat <<EOF; echo git push\nbody\nEOF" },
+					},
+				}),
+			);
+			expect(result).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("still blocks a git command after a heredoc body", async () => {
+		const env = setupTestEnvironment("pi-lens-2726-heredoc-git-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.setTelemetryIdentity({ sessionId: "session-2726-git" });
+			runtime.updateGitGuardStatus(true, "existing blocker");
+			const result = await handleToolCall(
+				baseDeps({
+					runtime,
+					ctx: { cwd: env.tmpDir },
+					getFlag: (name) => name === "lens-guard",
+					event: {
+						toolName: "bash",
+						input: { command: "cat <<EOF; git push\nbody\nEOF" },
+					},
+				}),
+			);
+			expect(result).toMatchObject({ block: expect.anything() });
+		} finally {
+			env.cleanup();
+		}
+	});
+
 	it("is a no-op when lensEnabled is false", async () => {
 		const runtime = new RuntimeCoordinator();
 		const recordRead = vi.spyOn(runtime.readGuard, "recordRead");

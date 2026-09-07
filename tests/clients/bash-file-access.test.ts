@@ -44,6 +44,55 @@ afterEach(() => {
 });
 
 describe("tokenizeShellCommand — heredocs", () => {
+	it.each([
+		[";", "bare", "EOF"],
+		[";", "single-quoted", "'EOF'"],
+		[";", "double-quoted", '"EOF"'],
+		[";", "escaped", "\\EOF"],
+		["&", "bare", "EOF"],
+		["&", "single-quoted", "'EOF'"],
+		["&", "double-quoted", '"EOF"'],
+		["&", "escaped", "\\EOF"],
+		["|", "bare", "EOF"],
+		["|", "single-quoted", "'EOF'"],
+		["|", "double-quoted", '"EOF"'],
+		["|", "escaped", "\\EOF"],
+		["<", "bare", "EOF"],
+		["<", "single-quoted", "'EOF'"],
+		["<", "double-quoted", '"EOF"'],
+		["<", "escaped", "\\EOF"],
+		[">", "bare", "EOF"],
+		[">", "single-quoted", "'EOF'"],
+		[">", "double-quoted", '"EOF"'],
+		[">", "escaped", "\\EOF"],
+		[" ", "bare", "EOF"],
+		[" ", "single-quoted", "'EOF'"],
+		[" ", "double-quoted", '"EOF"'],
+		[" ", "escaped", "\\EOF"],
+	] as const)(
+		"terminates the delimiter at $0 ($1)",
+		(operator, _form, delimiter) => {
+			const command = `cat <<${delimiter}${operator}echo git push\nbody\nEOF`;
+			const expected =
+				operator === ";" || operator === "&"
+					? [
+							{ tokens: ["cat"], unsupported: true },
+							{ tokens: ["echo", "git", "push"], unsupported: false },
+						]
+					: operator === "|"
+						? [
+								{
+									tokens: ["cat"],
+									unsupported: true,
+									terminator: "pipe" as const,
+								},
+								{ tokens: ["echo", "git", "push"], unsupported: false },
+							]
+						: [{ tokens: ["cat", "echo", "git", "push"], unsupported: true }];
+			expect(tokenizeShellCommand(command)).toEqual(expected);
+		},
+	);
+
 	it("drops heredoc body words while preserving the surrounding command", () => {
 		expect(
 			tokenizeShellCommand("cat <<EOF\nbody git push\nEOF\necho done"),
