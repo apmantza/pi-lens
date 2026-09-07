@@ -359,6 +359,11 @@ const wallClockBudgetInclude = [
 	// spawns of scripts/classify-ci-failure.mjs, asserting exit code and argv
 	// wiring the library-level suite (in-process) cannot see.
 	"tests/scripts/classify-ci-failure-cli.test.ts",
+	// #2699: the subject is the guard's own stdin/exit-code/stderr contract --
+	// what Claude Code actually invokes for a PreToolUse hook. No in-process
+	// call to the exported classify functions can see a drift in that
+	// contract (flake-shape admission).
+	"tests/scripts/guard-bash-hook.test.ts",
 ];
 // #2512 round 2: runtime-turn-session.test.ts's "retires a deleted failed
 // target through the real client and records real telemetry" spawns a REAL

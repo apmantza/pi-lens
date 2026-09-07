@@ -29,6 +29,7 @@
 		"config/sync-child-process-timeout.test.ts": 5,
 		"mcp/analyze-cli.test.ts": 1,
 		"mcp/build-graph-cli.test.ts": 1,
+		"packaging-pack-manifest.test.ts": 3,
 		"scripts/analyze-config-resolution-smell.test.ts": 2,
 		"scripts/analyze-pi-lens-logs.test.ts": 2,
 		"scripts/astgrep-self-scan.test.ts": 2,
@@ -36,6 +37,7 @@
 		"scripts/check-lockfile-sync.test.ts": 2,
 		"scripts/classify-ci-failure-cli.test.ts": 2,
 		"scripts/download-grammars.test.ts": 2,
+		"scripts/guard-bash-hook.test.ts": 8,
 		"scripts/lint-js.test.ts": 4,
 		"scripts/notify-install-smoke-drift.test.ts": 5,
 		"scripts/npm-retry.test.ts": 3,
@@ -49,8 +51,7 @@
 		"scripts/smoke-tools-lsp-fixture-registration.test.ts": 2,
 		"scripts/supply-host-provided-deps.test.ts": 2,
 		"scripts/warm-loader-cache.test.ts": 2,
-		"scripts/with-memory-watch.test.ts": 1,
-		"packaging-pack-manifest.test.ts": 3
+		"scripts/with-memory-watch.test.ts": 1
 	},
 	"elapsed-time-assertion": {
 		"clients/actionable-warnings-bounds.test.ts": 1,
