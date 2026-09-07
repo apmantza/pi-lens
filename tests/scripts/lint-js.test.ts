@@ -206,6 +206,41 @@ describe("lint:js / lint:js:advisory — the gating rule set stays a subset of t
 		},
 		SPAWN_TIMEOUT_MS * 2 + 5_000,
 	);
+
+	// Coordination note from the orchestrator (2026-09-07, #2700): eight
+	// rules are policy-`-A`llowed in `lint:js:advisory` rather than left to
+	// deny-and-triage, each for a named reason -- NOT drive-by suppression:
+	//   - no-underscore-dangle, no-await-in-loop, unicorn/no-array-sort,
+	//     unicorn/consistent-function-scoping: overwhelmingly test-tree
+	//     noise (755/696/451/369 hits respectively on the full advisory
+	//     sweep) that would swamp the tier's signal rather than surface a
+	//     real defect class.
+	//   - promise/no-promise-in-callback: false positive on a deliberate
+	//     `void x.then(...)` inside a callback.
+	//   - no-useless-call: false positive on an explicit `.call(bus, ...)`
+	//     this-binding.
+	//   - import/no-unassigned-import: false positive on a deliberate
+	//     side-effect import.
+	//   - no-unmodified-loop-condition: false positive on an AbortSignal
+	//     property poll (`while (!signal.aborted)`).
+	it("the eight policy-allowed rules resolve to off in `lint:js:advisory`", () => {
+		const pkg = JSON.parse(
+			fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"),
+		);
+		const advisory = enabledRules(pkg.scripts["lint:js:advisory"]);
+		for (const rule of [
+			"no-underscore-dangle",
+			"no-await-in-loop",
+			"unicorn/no-array-sort",
+			"unicorn/consistent-function-scoping",
+			"promise/no-promise-in-callback",
+			"no-useless-call",
+			"import/no-unassigned-import",
+			"no-unmodified-loop-condition",
+		]) {
+			expect(advisory.has(rule)).toBe(false);
+		}
+	});
 });
 
 describe("lint:js — TS lane (#2454 — clients/tools/mcp/index.ts scanned for warning-tier hits)", () => {
