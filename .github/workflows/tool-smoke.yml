@@ -105,11 +105,27 @@ jobs:
       - name: Build dist
         run: npm run build:dist
 
+      # `id:` + a captured log (#2723): this is one of the three steps whose
+      # outcome can actually turn the job red (no continue-on-error), so the
+      # final notify step below needs both this step's `outcome` and its raw
+      # log text (for the ✗ row detail) to build a useful tracking-issue
+      # body. `tee` still streams to the Actions log unchanged; the default
+      # shell already runs with `-eo pipefail` (GitHub's documented default
+      # for a `run:` step with no explicit `shell:`), so the explicit
+      # `set -o pipefail` here is belt-and-suspenders documentation, not a
+      # behavior change — the pipe's exit code was already the node
+      # process's, not tee's.
       - name: Tool layer (install + run each tool through real dispatch)
-        run: node scripts/smoke-tools.mjs --install --verbose
+        id: tool_layer
+        run: |
+          set -o pipefail
+          node scripts/smoke-tools.mjs --install --verbose 2>&1 | tee "$RUNNER_TEMP/tool-smoke-tool-layer.log"
 
       - name: LSP handshake layer (install + spawn + initialize each server)
-        run: node scripts/smoke-tools.mjs --lsp --install --verbose
+        id: lsp_handshake
+        run: |
+          set -o pipefail
+          node scripts/smoke-tools.mjs --lsp --install --verbose 2>&1 | tee "$RUNNER_TEMP/tool-smoke-lsp-handshake.log"
 
       # Diagnostic-mode matrix (#240): spawn each server and record its
       # advertised mode (pull vs push) — the first cut of the affirmative-clean
@@ -189,4 +205,39 @@ jobs:
           delete-branch: false
 
       - name: Format layer (select + reformat through formatter pipeline)
-        run: node scripts/smoke-tools.mjs --format --install --verbose
+        id: format_layer
+        run: |
+          set -o pipefail
+          node scripts/smoke-tools.mjs --format --install --verbose 2>&1 | tee "$RUNNER_TEMP/tool-smoke-format-layer.log"
+
+      # #2723: the ONLY tracking-issue writer this workflow had before this
+      # step (`Notify on silentOnClean drift` above) sits behind the LSP
+      # handshake layer with `continue-on-error: true` but no `if: always()`,
+      # so GitHub skips it — and everything after it — exactly when an
+      # earlier step fails, i.e. exactly when a human most needs to hear
+      # about it (13 consecutive red nights, 2026-08-26 -> 2026-09-07, with
+      # no automated notice). That notifier is also scoped to something
+      # unrelated (silentOnClean telemetry, never the job verdict) — see
+      # scripts/lib/drift-issue.mjs's module doc. THIS step is a second,
+      # independent notifier scoped to the job's actual pass/fail verdict,
+      # placed last and gated on `if: always()` so it runs on every outcome,
+      # mirroring install-smoke.yml's `Notify install drift` step. Reads the
+      # three gating layers' outcomes + captured logs (the only three steps
+      # above without `continue-on-error`, so the only three whose outcome
+      # can turn the job red) — see scripts/lib/tool-smoke-drift.mjs's module
+      # doc. GITHUB_TOKEN is inherited from this job's own env (`issues:
+      # write` already granted at job level, #529/#594). Best-effort:
+      # continue-on-error PLUS the script's own internal try/catch (always
+      # exits 0) — filing/updating/closing an issue must never change the
+      # nightly's own conclusion (acceptance #5).
+      - name: Notify on tool-smoke red (file/update/close tracking issue)
+        if: always()
+        continue-on-error: true
+        env:
+          TOOL_LAYER_OUTCOME: ${{ steps.tool_layer.outcome }}
+          TOOL_LAYER_LOG: ${{ runner.temp }}/tool-smoke-tool-layer.log
+          LSP_HANDSHAKE_OUTCOME: ${{ steps.lsp_handshake.outcome }}
+          LSP_HANDSHAKE_LOG: ${{ runner.temp }}/tool-smoke-lsp-handshake.log
+          FORMAT_LAYER_OUTCOME: ${{ steps.format_layer.outcome }}
+          FORMAT_LAYER_LOG: ${{ runner.temp }}/tool-smoke-format-layer.log
+        run: node scripts/notify-tool-smoke-red.mjs
