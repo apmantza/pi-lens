@@ -553,6 +553,52 @@ jobs:
           fi
           echo "GitHub-style install (clean clone + --omit=dev) OK"
 
+      # #2700 (refs #2587): #2587's manifest entry escaped four releases
+      # because nothing inspected the published tarball. `npm pack` runs the
+      # repo's own prepack/postpack (scripts/strip-dev-deps-for-pack.mjs --
+      # strips devDependencies from package.json/package-lock.json for the
+      # pack, restores them after), so the packed tarball is exactly what
+      # `npm publish` would ship.
+      - name: Pack the built package
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/pack"
+          npm pack --pack-destination "$RUNNER_TEMP/pack"
+          tarball="$RUNNER_TEMP/pack/$(ls "$RUNNER_TEMP/pack")"
+          echo "PACK_TARBALL=$tarball" >> "$GITHUB_ENV"
+
+      # publint is a devDependency, but this job installed --omit=dev above
+      # (the shape under test), so it is fetched here as a single pinned
+      # binary -- same pattern as lint.yml's oxfmt job: version read from the
+      # devDependency pin (single source of truth), --no-save keeps it off
+      # package.json/package-lock.json, --ignore-scripts blocks lifecycle
+      # script execution (SonarCloud S6505, the #1923 posture).
+      - name: Install publint (version pinned by the devDependency)
+        run: |
+          set -eu
+          version=$(node -p "require('./package.json').devDependencies.publint")
+          npm install --no-save --no-audit --no-fund --ignore-scripts "publint@${version}"
+
+      # Gating: publint's findings are packaging errors (wrong `files`,
+      # unresolvable `main`/`exports`, etc.), not style. Exit code read
+      # directly, no pipe -- a `| tee`/`| cat` would hide a non-zero status
+      # behind the pipeline's last command.
+      #
+      # attw (arethetypeswrong, #2700 acceptance) is deliberately NOT run
+      # here: the package ships no `.d.ts` at all (tsconfig.dist.json sets
+      # `"declaration": false`, package.json has neither `types` nor
+      # `exports`, and a fresh `npm run build:dist` produces zero `*.d.ts`
+      # files under dist/ -- confirmed on this PR's branch and quoted in the
+      # PR body). attw's whole job is grading a typed package's resolution
+      # across node10/node16/bundler; against an untyped package it can only
+      # ever report "no types found", which restates the manifest shape
+      # above rather than checking anything -- the "pull-only observability"
+      # shape (AGENTS.md) a no-op step would add. Re-add it, gating (a first
+      # clean run would already be trivially clean), the day this package
+      # publishes types.
+      - name: publint the packed tarball
+        run: node_modules/.bin/publint "$PACK_TARBALL"
+
   record-post-merge-validation:
     name: Record post-merge validation
     if: always() && github.event_name == 'repository_dispatch' && needs.validate-merge-train-dispatch.result == 'success'
