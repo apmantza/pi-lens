@@ -26,26 +26,18 @@
 // tool-smoke.yml, so the only three whose `outcome` can actually turn the
 // job red) duck-type the exact same `{name, outcome}` shape those functions
 // already consume.
-import {
-	decideAction,
-	firstFailingStep,
-	hasDrift,
-	isCleanRun,
-	isValidReport,
-	VALID_STEP_OUTCOMES,
-} from "./install-smoke-drift.mjs";
+// #2723 review F7: only decideAction (re-exported -- consumed directly by
+// notify-tool-smoke-red.mjs's dry-run/tests) and firstFailingStep (used
+// internally by this file's own body/comment builders, never re-exported)
+// are actually consumed anywhere. hasDrift/isCleanRun/isValidReport/
+// VALID_STEP_OUTCOMES were imported+re-exported "for completeness" but knip
+// names all five as unused on this file -- a re-export nothing imports is
+// dead weight the same as an unused local, so they're gone rather than kept
+// as a hedge against a future need.
+import { decideAction, firstFailingStep } from "./install-smoke-drift.mjs";
 import { DRIFT_ISSUE_LABEL, findDriftTrackingIssue } from "./drift-issue.mjs";
 
-export {
-	decideAction,
-	firstFailingStep,
-	hasDrift,
-	isCleanRun,
-	isValidReport,
-	VALID_STEP_OUTCOMES,
-	findDriftTrackingIssue,
-	DRIFT_ISSUE_LABEL,
-};
+export { decideAction, findDriftTrackingIssue, DRIFT_ISSUE_LABEL };
 
 export const TOOL_SMOKE_DRIFT_TITLE =
 	"tool-smoke: nightly Live tool + LSP smoke job is red";
@@ -71,6 +63,7 @@ export const TOOL_SMOKE_DRIFT_TITLE =
  * @typedef {Object} ToolSmokeReport
  * @property {ToolSmokeLayer[]} layers
  * @property {number} [consecutiveRed]
+ * @property {boolean} [outsideTrackedLayers]
  */
 
 // scripts/smoke-tools.mjs's own `report()` prints this exact line for each
@@ -101,14 +94,25 @@ export function parseLayerSummary(text) {
 	};
 }
 
-// `report()`'s row format is a fixed-width table:
+// `report()`'s row format is a table PADDED to fixed widths, but never
+// TRUNCATED (`pad = String.padEnd`, scripts/smoke-tools.mjs's `report()`):
 //   `${ICON}  ${pad(lang,12)} ${pad(runner,28)} ${pad(diags,5)} ${detail}`
-// ICON is "✗" for both `fail` and `setup-failed` states (`⚠`/`✓` rows are
-// never failures and are skipped here). Matched positionally (not by
-// splitting on whitespace) because `detail` free text legitimately contains
-// spaces and colons (e.g. "ensureTool(intelephense) failed (npm toolchain
-// present): install failed") that a naive split would mangle.
-const FAILING_ROW_RE = /^✗ {2}(.{12}) (.{28}) (?:.{5}) (.*)$/;
+// A lang/runner longer than its column (#2723 review F2: 8 of the 76 rows
+// in run 34116176046 alone -- typescript-clean, typescript7, typescript7-
+// clean, cue, powershell, ast-grep-baseline, deno, and the TS7-alternate
+// row -- exceed 12/28 chars) simply runs the column wider than usual; the
+// PREVIOUS fixed-width regex (`(.{12}) (.{28}) (?:.{5})`) required exact
+// column boundaries and silently failed to match any such row at all, so a
+// genuinely failing tool with a long name would never appear in a filed
+// issue. Matched by STRUCTURE instead: lang is the first whitespace-free
+// token; runner is everything up to the LAST run of 2+ spaces before the
+// diag count and detail (non-greedy, so a runner name that itself contains
+// a single space, e.g. "ast-grep (no-sgconfig baseline)", stays intact --
+// only the padding gaps are 2+ spaces); diags is digits; detail is
+// everything after the final gap. ICON is "✗" for both `fail` and
+// `setup-failed` states (`⚠`/`✓` rows are never failures and are skipped
+// here).
+const FAILING_ROW_RE = /^✗ {2}(\S+) +(.+?) +(\d+) {2,}(\S.*)$/;
 
 /**
  * Parse every ✗ row out of a layer's raw captured log text (order
@@ -126,7 +130,7 @@ export function parseFailingRows(text) {
 		rows.push({
 			lang: m[1].trim(),
 			runner: m[2].trim(),
-			detail: m[3],
+			detail: m[4],
 		});
 	}
 	return rows;
@@ -178,6 +182,68 @@ export function nextConsecutiveRedCount(existingBody) {
 }
 
 /**
+ * #2723 review F3: `decideAction`'s three-layer-outcome view cannot
+ * distinguish "the job failed somewhere BEFORE the three tracked layers
+ * even started" (checkout, seven best-effort setup actions — already
+ * `continue-on-error` and so cannot flip this, `npm install`, or
+ * `build:dist`) from a genuine GitHub Actions cancellation: both leave
+ * Tool/LSP handshake/Format layer all "skipped", which `decideAction` reads
+ * as "no-action" either way (see install-smoke-drift.mjs's own
+ * cancelled-mid-run/before-start attacks — the identical shape). GitHub's
+ * `job.status` context (passed through as JOB_STATUS) disambiguates: it
+ * reads "failure" only when a non-`continue-on-error` step genuinely failed
+ * somewhere in the job; a plain cancellation reports "cancelled", never
+ * "failure". This promotes "no-action" to "file-or-refresh" ONLY when the
+ * job is genuinely red for a reason outside the three tracked layers, and
+ * leaves an actual cancellation exactly as untouched as before.
+ *
+ * #2723 review F4: `set -o pipefail` on each layer step is load-bearing —
+ * without it, `node scripts/smoke-tools.mjs ... | tee logfile` reports the
+ * PIPE's exit code (`tee`'s, almost always 0) as the step's own `outcome`,
+ * so a genuinely red layer could read "success" while its own captured log
+ * still shows a nonzero failed/setup-failed count. This is the cheap
+ * backstop for exactly that discrepancy: even when every tracked layer's
+ * raw `outcome` says "success" (`decideAction`'s "close-if-open"
+ * condition), refuse to close if ANY layer's own PARSED summary disagrees —
+ * see `layersGenuinelyClean` below.
+ *
+ * @param {ToolSmokeReport} report
+ * @param {string} jobStatus
+ * @returns {{action: "file-or-refresh" | "close-if-open" | "no-action" | "unknown", outsideTrackedLayers: boolean}}
+ */
+export function decideToolSmokeAction(report, jobStatus) {
+	const layerAction = decideAction({ steps: report.layers });
+
+	if (layerAction === "no-action" && jobStatus === "failure") {
+		return { action: "file-or-refresh", outsideTrackedLayers: true };
+	}
+
+	if (layerAction === "close-if-open" && !layersGenuinelyClean(report.layers)) {
+		return { action: "no-action", outsideTrackedLayers: false };
+	}
+
+	return { action: layerAction, outsideTrackedLayers: false };
+}
+
+/**
+ * True only when every layer's PARSED summary (where one was captured)
+ * shows zero failed AND zero setup-failed. A layer with no summary at all
+ * (never ran / crashed before `report()`) is not itself evidence of
+ * dirtiness here — `decideAction`'s outcome-based check already covers a
+ * step that didn't run cleanly; this function exists solely to catch the
+ * PIPEFAIL-loss scenario where the outcome lies (see F4 above).
+ *
+ * @param {ToolSmokeLayer[]} layers
+ * @returns {boolean}
+ */
+export function layersGenuinelyClean(layers) {
+	return layers.every(
+		(l) =>
+			!l.summary || (l.summary.failed === 0 && l.summary.setupFailed === 0),
+	);
+}
+
+/**
  * Build the tracking issue's Markdown body for a RED nightly run. Pure
  * string building — no I/O.
  *
@@ -186,15 +252,18 @@ export function nextConsecutiveRedCount(existingBody) {
  * @returns {string}
  */
 export function buildToolSmokeDriftBody(report, opts = {}) {
-	const { layers, consecutiveRed } = report;
+	const { layers, consecutiveRed, outsideTrackedLayers } = report;
 	const failingLayer = firstFailingStep({ steps: layers });
+	const failingLayerLabel =
+		failingLayer ??
+		(outsideTrackedLayers ? "(outside the tracked layers)" : "unknown");
 	const lines = [
 		"The nightly `Tool smoke (nightly)` workflow's `tool-smoke` job — which" +
 			" installs and spawns real tools/LSP servers and drives pi-lens's" +
 			" real dispatch path against per-language fixtures — hit a failure" +
 			" (#2723).",
 		"",
-		`- Failing layer: **${failingLayer ?? "unknown"}**`,
+		`- Failing layer: **${failingLayerLabel}**`,
 	];
 	if (typeof consecutiveRed === "number" && consecutiveRed > 0) {
 		lines.push(`- Consecutive red nights: **${consecutiveRed}**`);
@@ -243,5 +312,8 @@ export function buildToolSmokeDriftBody(report, opts = {}) {
  */
 export function buildToolSmokeDriftComment(report) {
 	const failingLayer = firstFailingStep({ steps: report.layers });
-	return `Still red: failing layer **${failingLayer ?? "unknown"}**.`;
+	const failingLayerLabel =
+		failingLayer ??
+		(report.outsideTrackedLayers ? "(outside the tracked layers)" : "unknown");
+	return `Still red: failing layer **${failingLayerLabel}**.`;
 }

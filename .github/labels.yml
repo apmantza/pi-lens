@@ -67,6 +67,9 @@
   description: Backlog
 
 # Triage / workflow labels
+- name: nightly-drift
+  color: e11d21
+  description: Auto-filed/refreshed/closed by a nightly workflow's drift or job-verdict notifier (#529/#594, #2723) - never add by hand, this manifest is the source of truth
 - name: duplicate
   color: cfd3d7
   description: Duplicate of an existing issue

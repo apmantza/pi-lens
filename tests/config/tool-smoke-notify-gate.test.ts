@@ -88,6 +88,15 @@ describe("tool-smoke.yml's red-notify step runs on failure too (#2723)", () => {
 		expect(findStep(workflow, "Format layer").id).toBe("format_layer");
 	});
 
+	// #2723 review F3: disambiguates "the job failed before the three
+	// tracked layers even started" from a genuine cancellation -- both
+	// leave all three layers "skipped", which decideAction alone cannot
+	// tell apart (see scripts/lib/tool-smoke-drift.mjs's decideToolSmokeAction).
+	it("reads GitHub's job.status context so the notifier can tell a genuine failure outside the tracked layers from a cancellation", () => {
+		const env = notifyStep.env ?? {};
+		expect(env.JOB_STATUS).toBe("${{ job.status }}");
+	});
+
 	it("invokes the notifier script", () => {
 		expect(notifyStep.run).toContain("scripts/notify-tool-smoke-red.mjs");
 	});
@@ -151,5 +160,101 @@ describe("tool-smoke.yml's red-notify step runs on failure too (#2723)", () => {
 		const mutatedWorkflow = loadWorkflow(mutatedSource);
 		const mutatedStep = findStep(mutatedWorkflow, NOTIFY_STEP_NAME);
 		expect(mutatedStep.if).not.toBe("always()");
+	});
+});
+
+// #2723 review F4: `set -o pipefail` is LOAD-BEARING on each of the three
+// gating layer steps, not documentation -- GitHub's default shell for a
+// `run:` step with no `shell:` key is `bash -e {0}` (no pipefail); without
+// this line, `node scripts/smoke-tools.mjs ... | tee logfile`'s exit code
+// is `tee`'s (almost always 0), never the node process's, so a genuinely
+// red layer would report `outcome: success` and the notifier would never
+// hear about it at all -- worse than the original #2723 bug, because
+// nothing would even flag it as suspicious.
+describe("each gating layer step's pipe keeps set -o pipefail (#2723 review F4)", () => {
+	const workflow = loadWorkflow();
+	const LAYER_STEP_NAMES = [
+		"Tool layer",
+		"LSP handshake layer",
+		"Format layer",
+	];
+
+	it.each(LAYER_STEP_NAMES)("%s's run script sets pipefail", (name) => {
+		const step = findStep(workflow, name);
+		expect(typeof step.run).toBe("string");
+		expect(step.run as string).toMatch(/^\s*set -o pipefail\s*$/m);
+	});
+
+	// Mutation-proof: before this test existed, deleting `set -o pipefail`
+	// from any layer step's run script left every other test in this repo
+	// green -- nothing evaluated the run script's actual bash text.
+	it.each(LAYER_STEP_NAMES)(
+		"mutation-proof: deleting %s's set -o pipefail line reds this file's own assertion",
+		(name) => {
+			const step = findStep(workflow, name);
+			const runScript = step.run as string;
+			const mutated = runScript.replace(/^\s*set -o pipefail\s*\n/m, "");
+			expect(mutated).not.toBe(runScript);
+			expect(mutated).not.toMatch(/^\s*set -o pipefail\s*$/m);
+		},
+	);
+});
+
+// #2723 review F6: the `tee` target each layer step writes to and the
+// `*_LOG` env value the notify step reads are two hand-maintained string
+// literals (a bash heredoc path, a YAML `${{ runner.temp }}/...` expression)
+// with no shared source -- renaming either alone keeps every OTHER test in
+// this repo green while silently degrading that layer to "(no report --
+// step did not run)" in every future tracking-issue body, because
+// readLogFile in notify-tool-smoke-red.mjs just returns null on ENOENT.
+describe("each layer's tee log filename matches the notify step's *_LOG env (#2723 review F6)", () => {
+	const workflow = loadWorkflow();
+	const notifyStep = findStep(workflow, NOTIFY_STEP_NAME);
+
+	function teeLogFilename(runScript: string): string {
+		const m = /tee\s+"\$RUNNER_TEMP\/([^"]+)"/.exec(runScript);
+		if (!m) {
+			throw new Error(
+				`no \`tee "$RUNNER_TEMP/<file>"\` target found in run script:\n${runScript}`,
+			);
+		}
+		return m[1];
+	}
+
+	function envLogFilename(envValue: unknown): string {
+		if (typeof envValue !== "string") {
+			throw new Error(`env value is not a string: ${JSON.stringify(envValue)}`);
+		}
+		const m = /\$\{\{\s*runner\.temp\s*\}\}\/([^/]+)$/.exec(envValue);
+		if (!m) {
+			throw new Error(
+				`env value is not a bare "\${{ runner.temp }}/<file>" expression: ${envValue}`,
+			);
+		}
+		return m[1];
+	}
+
+	it.each([
+		["Tool layer", "TOOL_LAYER_LOG"],
+		["LSP handshake layer", "LSP_HANDSHAKE_LOG"],
+		["Format layer", "FORMAT_LAYER_LOG"],
+	])("%s's tee target matches env.%s", (stepName, envVar) => {
+		const step = findStep(workflow, stepName);
+		const fromTee = teeLogFilename(step.run as string);
+		const fromEnv = envLogFilename((notifyStep.env ?? {})[envVar]);
+		expect(fromEnv).toBe(fromTee);
+	});
+
+	// Mutation-proof: before this test existed, renaming either side alone
+	// (a tee target OR the corresponding env value) left every other test
+	// in the repo green.
+	it("mutation-proof: renaming the Tool layer's tee target alone reds this file's own comparison", () => {
+		const step = findStep(workflow, "Tool layer");
+		const original = teeLogFilename(step.run as string);
+		const mutatedRun = (step.run as string).replace(original, "renamed.log");
+		expect(mutatedRun).not.toBe(step.run);
+		const mutatedFilename = teeLogFilename(mutatedRun);
+		const envFilename = envLogFilename((notifyStep.env ?? {}).TOOL_LAYER_LOG);
+		expect(mutatedFilename).not.toBe(envFilename);
 	});
 });

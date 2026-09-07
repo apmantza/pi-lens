@@ -1,9 +1,7 @@
 // Type declarations for tool-smoke-drift.mjs (untyped .mjs imported from
-// .ts tests). #2723.
-
-export type StepOutcome = "success" | "failure" | "cancelled" | "skipped";
-
-export const VALID_STEP_OUTCOMES: readonly StepOutcome[];
+// .ts tests). #2723. Kept in lockstep with the .mjs's own export set (#2723
+// review F7: knip flags any pair drift as unused exports on one side or the
+// other — #2725 lands a ratchet on that).
 
 export interface DriftStep {
 	name: string;
@@ -13,14 +11,6 @@ export interface DriftStep {
 export interface DriftReport {
 	steps: DriftStep[];
 }
-
-export function isValidReport(report: DriftReport): boolean;
-
-export function firstFailingStep(report: DriftReport): string | null;
-
-export function hasDrift(report: DriftReport): boolean;
-
-export function isCleanRun(report: DriftReport): boolean;
 
 export type DriftAction =
 	| "file-or-refresh"
@@ -62,6 +52,7 @@ export interface ToolSmokeLayer {
 export interface ToolSmokeReport {
 	layers: ToolSmokeLayer[];
 	consecutiveRed?: number;
+	outsideTrackedLayers?: boolean;
 }
 
 export function parseLayerSummary(
@@ -83,6 +74,24 @@ export function parseConsecutiveRedCount(
 export function nextConsecutiveRedCount(
 	existingBody: string | null | undefined,
 ): number;
+
+// Looser than ToolSmokeLayer: decideToolSmokeAction/layersGenuinelyClean
+// only ever read `name`/`outcome`/`summary` (never `failingRows`), and
+// tests exercise them directly against bare `{name, outcome}` step
+// fixtures (mirroring install-smoke-drift.mjs's own DriftStep shape) as
+// well as full buildLayer() results — both must type-check.
+export interface ToolSmokeDecisionLayer {
+	name: string;
+	outcome: string;
+	summary?: LayerSummary | null;
+}
+
+export function decideToolSmokeAction(
+	report: { layers: ToolSmokeDecisionLayer[] },
+	jobStatus: string,
+): { action: DriftAction; outsideTrackedLayers: boolean };
+
+export function layersGenuinelyClean(layers: ToolSmokeDecisionLayer[]): boolean;
 
 export function buildToolSmokeDriftBody(
 	report: ToolSmokeReport,

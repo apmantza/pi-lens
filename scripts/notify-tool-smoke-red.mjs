@@ -26,6 +26,11 @@
  *   TOOL_LAYER_OUTCOME / TOOL_LAYER_LOG
  *   LSP_HANDSHAKE_OUTCOME / LSP_HANDSHAKE_LOG
  *   FORMAT_LAYER_OUTCOME / FORMAT_LAYER_LOG
+ *   JOB_STATUS (GitHub's `job.status` context — #2723 review F3: the three
+ *     tracked layers all read "skipped" both when a step BEFORE them failed
+ *     — checkout, a setup action, npm install, build:dist — and when the
+ *     job was genuinely cancelled; JOB_STATUS disambiguates the two so the
+ *     former still files instead of silently taking no action)
  * Optional: GITHUB_TOKEN (gh auth — the job already sets this at job
  *   level for the docs-refresh PR step), GITHUB_SERVER_URL/
  *   GITHUB_REPOSITORY/GITHUB_RUN_ID (workflow-run link in the issue body).
@@ -47,7 +52,7 @@ import {
 	buildLayer,
 	buildToolSmokeDriftBody,
 	buildToolSmokeDriftComment,
-	decideAction,
+	decideToolSmokeAction,
 	DRIFT_ISSUE_LABEL,
 	findDriftTrackingIssue,
 	nextConsecutiveRedCount,
@@ -130,6 +135,50 @@ function readExistingBody(number) {
 	}
 }
 
+/**
+ * #2723 review F1: `gh issue create --label a,b` validates every label
+ * up front and refuses to create the issue at all if ANY of them doesn't
+ * exist on the repo (confirmed against `nightly-drift` itself, which was
+ * missing from `.github/labels.yml` — `gh api repos/.../labels/nightly-drift`
+ * 404'd, and the real create call errored "could not add label"). The label
+ * is now registered there (the manifest is the single place a label may be
+ * added — its own module doc), but a create call is still a live network
+ * request: if the label registry and this script's constant ever drift
+ * again (a rename, a manifest sync race, `.github/labels.yml` edited
+ * without touching `DRIFT_ISSUE_LABEL`), the ORIGINAL failure mode was
+ * total — the tracking issue was silently never filed on the one night it
+ * mattered most. Retrying once WITHOUT labels turns that into "filed, just
+ * missing a label" instead of "never filed".
+ */
+function createTrackingIssue(title, label, bodyFile) {
+	try {
+		gh([
+			"issue",
+			"create",
+			"--title",
+			title,
+			"--label",
+			label,
+			"--body-file",
+			bodyFile,
+		]);
+		return true;
+	} catch (e) {
+		console.error(
+			`[notify-tool-smoke-red] gh issue create with label "${label}" failed, retrying without labels: ${e?.message ?? e}`,
+		);
+	}
+	try {
+		gh(["issue", "create", "--title", title, "--body-file", bodyFile]);
+		return true;
+	} catch (e) {
+		console.error(
+			`[notify-tool-smoke-red] gh issue create failed even without labels: ${e?.message ?? e}`,
+		);
+		return false;
+	}
+}
+
 function writeBodyToTempFile(body) {
 	const dir = fs.mkdtempSync(
 		path.join(os.tmpdir(), "pilens-tool-smoke-drift-"),
@@ -141,7 +190,11 @@ function writeBodyToTempFile(body) {
 
 function main(env) {
 	const report = readReport(env);
-	const action = decideAction({ steps: report.layers });
+	const { action, outsideTrackedLayers } = decideToolSmokeAction(
+		report,
+		env.JOB_STATUS ?? "",
+	);
+	const flaggedReport = { ...report, outsideTrackedLayers };
 
 	if (action === "unknown") {
 		const msg =
@@ -164,7 +217,7 @@ function main(env) {
 	if (dryRun) {
 		const body = buildToolSmokeDriftBody(
 			{
-				...report,
+				...flaggedReport,
 				consecutiveRed: action === "file-or-refresh" ? 1 : undefined,
 			},
 			{ runUrl: workflowRunUrl(env) },
@@ -182,7 +235,7 @@ function main(env) {
 		const existingBody = existing ? readExistingBody(existing.number) : null;
 		const consecutiveRed = nextConsecutiveRedCount(existingBody);
 		const body = buildToolSmokeDriftBody(
-			{ ...report, consecutiveRed },
+			{ ...flaggedReport, consecutiveRed },
 			{ runUrl: workflowRunUrl(env) },
 		);
 		const bodyFile = writeBodyToTempFile(body);
@@ -194,25 +247,22 @@ function main(env) {
 					"comment",
 					String(existing.number),
 					"--body",
-					buildToolSmokeDriftComment(report),
+					buildToolSmokeDriftComment(flaggedReport),
 				]);
 				console.log(
 					`[notify-tool-smoke-red] updated tracking issue #${existing.number} (consecutive red: ${consecutiveRed}).`,
 				);
 			} else {
-				gh([
-					"issue",
-					"create",
-					"--title",
+				const created = createTrackingIssue(
 					TOOL_SMOKE_DRIFT_TITLE,
-					"--label",
 					`${DRIFT_ISSUE_LABEL},area:tests`,
-					"--body-file",
 					bodyFile,
-				]);
-				console.log(
-					`[notify-tool-smoke-red] filed a new tracking issue (consecutive red: ${consecutiveRed}).`,
 				);
+				if (created) {
+					console.log(
+						`[notify-tool-smoke-red] filed a new tracking issue (consecutive red: ${consecutiveRed}).`,
+					);
+				}
 			}
 		} catch (e) {
 			console.error(

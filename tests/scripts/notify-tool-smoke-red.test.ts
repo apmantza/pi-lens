@@ -172,6 +172,15 @@ function stubGh(
 	root: string,
 	existingIssue: { number: number; title: string } | null,
 	existingBody = "",
+	// #2723 review F1: the reviewer's own probe -- `gh issue create --label
+	// a,b` validates every label up front and refuses to create the issue
+	// at all if any of them is unknown to the repo (reproduced for real:
+	// `nightly-drift` 404'd against `gh api repos/.../labels/nightly-drift`
+	// before it was added to .github/labels.yml). "labeled" fails only the
+	// create call that carries `--label`; a retry without one must succeed,
+	// so a mode is needed to fail EVERY create regardless of `--label`,
+	// proving the total-failure path is still handled gracefully.
+	failCreate: false | "labeled" | "always" = false,
 ) {
 	const binDir = path.join(root, "bin");
 	fs.mkdirSync(binDir);
@@ -189,6 +198,12 @@ function stubGh(
 			`  console.log(JSON.stringify(${existingIssue ? `[${JSON.stringify(existingIssue)}]` : "[]"}));`,
 			`} else if (args[0] === "issue" && args[1] === "view") {`,
 			`  console.log(JSON.stringify({ body: ${JSON.stringify(existingBody)} }));`,
+			`} else if (args[0] === "issue" && args[1] === "create" && ${JSON.stringify(failCreate)} === "always") {`,
+			`  process.stderr.write("HTTP 422: Validation Failed\\n");`,
+			`  process.exit(1);`,
+			`} else if (args[0] === "issue" && args[1] === "create" && ${JSON.stringify(failCreate)} === "labeled" && args.includes("--label")) {`,
+			`  process.stderr.write("could not add label: 'nightly-drift' not found\\n");`,
+			`  process.exit(1);`,
 			`} else {`,
 			`  console.log("ok");`,
 			`}`,
@@ -262,6 +277,42 @@ describe("notify-tool-smoke-red.mjs against a real (stubbed) gh (#2723)", () => 
 		expect(creates.length).toBe(1);
 	});
 
+	// #2723 review F1: the reviewer's own reproduction -- `gh issue create
+	// --label nightly-drift,area:tests` 404'd on the (at the time, missing)
+	// label and the ORIGINAL script had no retry, so the issue was never
+	// filed at all on the first red night. This is the red-first proof
+	// (quoted in the PR body) that a single non-retrying create call drops
+	// the issue entirely, and the fixed script's retry-without-labels
+	// recovers it.
+	it("acceptance F1: a create that rejects the label retries without labels and still files the issue", () => {
+		const root = mkTempDir("pi-lens-tool-smoke-gh-label-");
+		const logDir = mkTempDir("pi-lens-tool-smoke-logs-");
+		const { binDir, logFile } = stubGh(root, null, "", "labeled");
+		const out = runReal(binDir, RED_ENV(logDir));
+		expect(out).toContain("filed a new tracking issue");
+		const calls = readGhCalls(logFile);
+		const creates = calls.filter((c) => c[0] === "issue" && c[1] === "create");
+		expect(creates.length).toBe(2);
+		expect(creates[0]).toContain("--label");
+		expect(creates[1]).not.toContain("--label");
+	});
+
+	// The total-failure case: even when BOTH the labeled and label-less
+	// create attempts fail, the script logs the failure and does not crash
+	// (acceptance #5's exit-0 contract, exercised through this specific path
+	// for the first time -- previously nothing in this suite could make a
+	// `create` call fail at all, so this path was untested).
+	it("acceptance F1: a create that fails outright (both attempts) logs the failure and never files anything", () => {
+		const root = mkTempDir("pi-lens-tool-smoke-gh-label-fail-");
+		const logDir = mkTempDir("pi-lens-tool-smoke-logs-");
+		const { binDir, logFile } = stubGh(root, null, "", "always");
+		const out = runReal(binDir, RED_ENV(logDir));
+		expect(out).not.toContain("filed a new tracking issue");
+		const calls = readGhCalls(logFile);
+		const creates = calls.filter((c) => c[0] === "issue" && c[1] === "create");
+		expect(creates.length).toBe(2);
+	});
+
 	// Acceptance #1: "a second consecutive red updates it (assert count, not
 	// presence)" -- proves the fix refreshes (edit + comment) the SAME
 	// tracker rather than filing a second one.
@@ -331,9 +382,19 @@ describe("notify-tool-smoke-red.mjs against a real (stubbed) gh (#2723)", () => 
 	// the outer wrapper can save the exit code.
 	it("acceptance #5: an uncaught internal throw (TMPDIR unwritable) still exits 0 on a red run", () => {
 		const dir = mkTempDir("pi-lens-tool-smoke-tmpdir-");
+		// #2723 review F5: main() calls findTrackingIssue() (a real `gh
+		// issue list`) BEFORE writeBodyToTempFile() ever runs, so without a
+		// stub on PATH this spawned a LIVE, authenticated `gh issue list`
+		// against the real repo from inside a unit test (AGENTS.md: ordinary
+		// tests are network-free) -- and once F1's retry-on-label-rejection
+		// landed, would also have reached a real `gh issue view` on
+		// whatever tracker currently exists. Stub it like every other case.
+		const root = mkTempDir("pi-lens-tool-smoke-tmpdir-gh-");
+		const { binDir } = stubGh(root, null);
 		const result = spawnSync(process.execPath, [CLI], {
 			env: {
 				...process.env,
+				PATH: `${binDir}:${process.env.PATH}`,
 				TMPDIR: "/nonexistent-dir-2723-xyz",
 				...RED_ENV(dir),
 			},

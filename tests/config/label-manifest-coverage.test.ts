@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import yaml from "../../clients/deps/js-yaml.js";
+import { DRIFT_ISSUE_LABEL } from "../../scripts/lib/drift-issue.mjs";
 import { assertNonEmptyScan } from "../support/sweep-kit.js";
 
 /**
@@ -219,6 +220,13 @@ function requiredLabels(): string[] {
 		...areaLabelsFromSection(sectionLines),
 		...reuseDefaultLabelsFromSection(sectionLines),
 		...mergeTrainLabelLiterals(),
+		// #2723 review F1: `notify-tool-smoke-red.mjs`'s `gh issue create
+		// --label nightly-drift,area:tests` 404'd on this exact label because
+		// nothing required its existence here -- the manifest is the ONLY
+		// place a label may be added (this file's own module doc), so a
+		// consumer importing DRIFT_ISSUE_LABEL is a real requirement on it,
+		// derived from the source rather than hand-typed a second time.
+		DRIFT_ISSUE_LABEL,
 	]);
 	return [...required];
 }
