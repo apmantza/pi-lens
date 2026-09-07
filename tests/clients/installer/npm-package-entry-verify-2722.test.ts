@@ -43,7 +43,8 @@ import {
 import { removeTempDirSync } from "../test-utils.js";
 
 /** The literal #208 rescues on — see `isLspTransportRequiredError`. */
-const TRANSPORT_MARKER = "Connection input stream is not set. Please use listen";
+const TRANSPORT_MARKER =
+	"Connection input stream is not set. Please use listen";
 
 let root = "";
 
@@ -168,9 +169,9 @@ describe("inconclusive verification keeps its non-verdict (#2722)", () => {
 			),
 		).resolves.toBe(false);
 		expect(onInconclusive).not.toHaveBeenCalled();
-		expect(
-			getDegradationSummary().map((group) => group.kind),
-		).not.toContain("installer-verification-inconclusive");
+		expect(getDegradationSummary().map((group) => group.kind)).not.toContain(
+			"installer-verification-inconclusive",
+		);
 	});
 });
 
@@ -280,7 +281,10 @@ describe.each(ENTRY_FIXTURES)(
 				"the entry module is missing (the partial install this replaces the spawn to catch)",
 				() => fs.rmSync(entryFile),
 			],
-			["the entry module is a zero-byte stub", () => fs.truncateSync(entryFile, 0)],
+			[
+				"the entry module is a zero-byte stub",
+				() => fs.truncateSync(entryFile, 0),
+			],
 			[
 				"package.json declares no version",
 				() =>
