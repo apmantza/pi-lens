@@ -316,6 +316,31 @@ describe.each(ENTRY_FIXTURES)(
 				"the package directory is gone but the shim survives",
 				() => fs.rmSync(packageDir, { recursive: true, force: true }),
 			],
+			// R2-F1: the function derives the package directory FROM `binPath` and
+			// used to never look at `binPath` itself, so the shim npm is supposed
+			// to have written could be absent, empty or a directory and this still
+			// answered `true`. That answer flows into `installNpmTool`, which then
+			// records the install as SUCCEEDED — and `classifyInstallOutcome`
+			// grades a non-"failed" outcome as `⚠ unavailable (succeeded)`, which
+			// is exactly the re-hiding of the nightly row #2722 forbids.
+			["the .bin shim was never written", () => fs.rmSync(bin)],
+			["the .bin shim is a zero-byte stub", () => fs.truncateSync(bin, 0)],
+			[
+				"the .bin shim is a directory",
+				() => {
+					fs.rmSync(bin);
+					fs.mkdirSync(bin);
+				},
+			],
+			// R2-F5: `!stat.isFile()` was mutation-green without this row — every
+			// other refusal reached `entry-missing` through the catch instead.
+			[
+				"the entry module is a directory, not a file",
+				() => {
+					fs.rmSync(entryFile);
+					fs.mkdirSync(entryFile);
+				},
+			],
 		])("refuses when %s", async (_label, breakIt) => {
 			breakIt();
 			await expect(
@@ -323,6 +348,50 @@ describe.each(ENTRY_FIXTURES)(
 			).resolves.toBe(false);
 			expect(fs.existsSync(spawnMarker)).toBe(false);
 		});
+
+		// lane: ubuntu (the authoritative Unit tests lane) and every other POSIX
+		// dev box — `fs.symlinkSync` needs Developer Mode or an elevated shell on
+		// Windows, so the symlink is the technique, not the subject. The subject
+		// (a shim that resolves to nothing) is covered cross-platform by the
+		// "never written" row above, which reaches the same `statSync` throw.
+		it.skipIf(process.platform === "win32")(
+			"refuses when the .bin shim dangles at a target that no longer exists",
+			async () => {
+				fs.rmSync(bin);
+				fs.symlinkSync(path.join(packageDir, "GONE.js"), bin);
+				expect(fs.existsSync(bin)).toBe(false); // dangling, by construction
+				expect(fs.lstatSync(bin).isSymbolicLink()).toBe(true);
+				await expect(
+					verifyNpmPackageEntry(bin, fixture.packageName),
+				).resolves.toBe(false);
+			},
+		);
+
+		// R2-F5: the `bin`-key lookup folds case on purpose (a case-insensitive
+		// filesystem can hand `path.basename` a different case than the manifest
+		// key npm wrote the shim from). Without this row the fold is mutation-
+		// green: every fixture above already matches exactly.
+		// skipIf, never a bare early return (#2089 / test-authoring screen 2): a
+		// bare `bin` STRING has no key to differ in case, so that fixture has no
+		// subject here rather than a passing empty body.
+		it.skipIf(typeof fixture.manifest.bin !== "object")(
+			"matches a bin key whose case differs from the shim on disk",
+			async () => {
+				fs.writeFileSync(
+					path.join(packageDir, "package.json"),
+					JSON.stringify({
+						...fixture.manifest,
+						bin: {
+							[fixture.shim.toUpperCase()]: `./${fixture.entryPath.split(path.sep).join("/")}`,
+						},
+					}),
+					"utf8",
+				);
+				await expect(
+					verifyNpmPackageEntry(bin, fixture.packageName),
+				).resolves.toBe(true);
+			},
+		);
 	},
 );
 

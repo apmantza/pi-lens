@@ -82,7 +82,17 @@ function writeFakeNpm(dir: string): {
 function writeDumpingPackageLayout(
 	root: string,
 	home: string,
-	pkg: { packageName: string; binaryName: string; entry: string[] },
+	pkg: {
+		packageName: string;
+		binaryName: string;
+		entry: string[];
+		/**
+		 * R2-F1: omit the `.bin` shim npm normally writes, leaving a package tree
+		 * with nothing executable in it — the partial install verification exists
+		 * to catch.
+		 */
+		omitShim?: boolean;
+	},
 ): string {
 	const isWin = process.platform === "win32";
 	const entryRelative = ["node_modules", pkg.packageName, ...pkg.entry];
@@ -107,17 +117,21 @@ function writeDumpingPackageLayout(
 					"process.exit(1);",
 				].join("\n"),
 			},
-			{
-				path: [
-					"node_modules",
-					".bin",
-					isWin ? `${pkg.binaryName}.cmd` : pkg.binaryName,
-				],
-				content: isWin
-					? `@echo off\r\n"${process.execPath}" "${entryAbsolute}" %*\r\n`
-					: `#!/bin/sh\nexec "${process.execPath}" "${entryAbsolute}" "$@"\n`,
-				mode: isWin ? undefined : 0o750,
-			},
+			...(pkg.omitShim
+				? []
+				: [
+						{
+							path: [
+								"node_modules",
+								".bin",
+								isWin ? `${pkg.binaryName}.cmd` : pkg.binaryName,
+							],
+							content: isWin
+								? `@echo off\r\n"${process.execPath}" "${entryAbsolute}" %*\r\n`
+								: `#!/bin/sh\nexec "${process.execPath}" "${entryAbsolute}" "$@"\n`,
+							mode: isWin ? undefined : 0o750,
+						},
+					]),
 		]),
 	);
 	return layout;
@@ -372,6 +386,44 @@ describe("installer process lifecycle (#945)", () => {
 				),
 				result.stdout,
 			).toBe(true);
+		},
+		REAL_PROCESS_TIMEOUT_MS,
+	);
+
+	it(
+		"never records a partial install as succeeded (R2-F1)",
+		async () => {
+			// The package tree lands but npm writes no `.bin` shim — a partial
+			// install. Package-entry verification derives the package directory
+			// FROM the shim path, so before R2-F1 it never looked at the shim and
+			// answered `true`, and `installNpmTool` recorded the install as
+			// SUCCEEDED. `scripts/smoke-tools.mjs`'s `classifyInstallOutcome`
+			// grades any non-"failed" outcome as `⚠ <tool> unavailable
+			// (succeeded)` — a skip row, not a `✗` — which is precisely the
+			// re-hiding of the nightly php row that #2722 says not to do.
+			const root = tempDir();
+			const home = path.join(root, "home");
+			const { counter, script } = writeFakeNpm(root);
+			const layout = writeDumpingPackageLayout(root, home, {
+				packageName: "intelephense",
+				binaryName: "intelephense",
+				entry: ["lib", "x.js"],
+				omitShim: true,
+			});
+			const result = await runEnsure(
+				{ ...testEnv(home, counter, script), FAKE_NPM_LAYOUT: layout },
+				"intelephense",
+			);
+			expect(result.code, JSON.stringify(result)).toBe(0);
+			const payload = JSON.parse(result.stdout) as {
+				value?: string;
+				attempt?: { outcome?: string; reason?: string };
+			};
+			const detail = JSON.stringify(payload);
+			expect(payload.value, detail).toBeUndefined();
+			// The RECORD, not just the return value: this is what the nightly row
+			// is graded from.
+			expect(payload.attempt?.outcome, detail).toBe("failed");
 		},
 		REAL_PROCESS_TIMEOUT_MS,
 	);
