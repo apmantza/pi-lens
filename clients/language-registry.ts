@@ -204,8 +204,9 @@ const LANGUAGE_ID_PIN_IS_EXHAUSTIVE: Exclude<
 	? true
 	: "a LanguageId is missing from PINNED_LANGUAGE_IDS in clients/language-registry.ts" =
 	true;
-// Not exported: its only job is to fail `npm run build`; the `void` keeps
-// noUnusedLocals and knip quiet without giving it a consumer.
+// Not exported: its only job is to fail `npm run build`. The `void` reference
+// is what keeps oxlint's no-unused-vars (CI-gating via lint:js) and knip
+// quiet without giving it a consumer; tsc's noUnusedLocals does not flag it.
 void LANGUAGE_ID_PIN_IS_EXHAUSTIVE;
 
 export interface LanguageEntry {

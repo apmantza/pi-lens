@@ -12,4 +12,4 @@ export function rollupChangelog(
 /** Reads and validates every entry file under `<rootDir>/.changelog` (the `changelog:check` script entry). */
 export function validateChangelogEntries(options?: {
 	rootDir?: string;
-}): unknown[];
+}): Array<{ file: string; section: string; entry: string }>;
