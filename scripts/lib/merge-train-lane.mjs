@@ -23,9 +23,6 @@
  */
 
 import {
-	ADVISORY_CHECKS,
-	ADVISORY_SUFFIX,
-	BLOCKING_CONCLUSIONS,
 	isAdvisoryCheck,
 	isBlockingConclusion,
 	isUncertainConclusion,
@@ -37,12 +34,7 @@ import {
 // the definitions to ci-checks.mjs, the shared module, so ci-verdict.mjs can
 // use the SAME advisory/blocking policy instead of a second hand-rolled
 // copy -- see ci-checks.mjs for the reasoning and the live-probe evidence).
-export {
-	ADVISORY_CHECKS,
-	ADVISORY_SUFFIX,
-	BLOCKING_CONCLUSIONS,
-	isAdvisoryCheck,
-};
+export { isAdvisoryCheck };
 import { commentMarkerExists, paginate } from "./github-paging.mjs";
 import {
 	classifyActionFailure,
@@ -52,14 +44,14 @@ import { fetchHeadRunHealth, RUN_HEALTH } from "./warden-run-health.mjs";
 
 export const TRAIN_APPROVED_LABEL = "train:approved";
 export const TRAIN_SQUASH_LABEL = "train:squash";
-export const POST_MERGE_EVENT = "merge-train-post-merge";
-export const POST_MERGE_DISPATCH_ATTEMPTS = 2;
+const POST_MERGE_EVENT = "merge-train-post-merge";
+const POST_MERGE_DISPATCH_ATTEMPTS = 2;
 export const POST_MERGE_RECONCILE_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const POST_MERGE_RECONCILE_GRACE_MS = 15 * 60 * 1000;
 export const POST_MERGE_RETRY_GENERATION_MS = 6 * 60 * 60 * 1000;
-export const POST_MERGE_RECONCILE_PAGE_SIZE = 100;
-export const POST_MERGE_RECONCILE_MAX_PAGES = 10;
-export const POST_MERGE_RECONCILE_MAX_RECORDS =
+const POST_MERGE_RECONCILE_PAGE_SIZE = 100;
+const POST_MERGE_RECONCILE_MAX_PAGES = 10;
+const POST_MERGE_RECONCILE_MAX_RECORDS =
 	POST_MERGE_RECONCILE_PAGE_SIZE * POST_MERGE_RECONCILE_MAX_PAGES;
 export const POST_MERGE_VALIDATION_WORKFLOWS = Object.freeze([
 	"ci.yml",
@@ -163,8 +155,8 @@ function parseGraphqlDateTime(value, field, page, number) {
 // Only positive evidence of a settled pass. GitHub's CheckRun status is
 // QUEUED / IN_PROGRESS / COMPLETED and conclusion is null until COMPLETED
 // (probed 2026-08-26 against this repository's own open PRs).
-export const CONCLUDED_STATUS = "COMPLETED";
-export const PASSING_CONCLUSION = "SUCCESS";
+const CONCLUDED_STATUS = "COMPLETED";
+const PASSING_CONCLUSION = "SUCCESS";
 
 // States the merge API will actually accept. Review round 1, F1: this
 // repository's master protection was read as `strict: true` when probed
@@ -176,7 +168,7 @@ export const PASSING_CONCLUSION = "SUCCESS";
 // routing a BEHIND head through the update-branch lever first is still
 // correct/safe even when not strictly enforced, and re-gates the PR on its
 // new head's own checks either way.
-export const MERGEABLE_STATES = new Set(["CLEAN", "UNSTABLE"]);
+const MERGEABLE_STATES = new Set(["CLEAN", "UNSTABLE"]);
 
 // A green PR sitting BEHIND gets the branch update instead of a merge. The
 // update writes a new head, which re-gates the PR naturally on the next
@@ -184,7 +176,7 @@ export const MERGEABLE_STATES = new Set(["CLEAN", "UNSTABLE"]);
 // they conclude green again. The warden's own update-branch kick cannot cover
 // this, because it is gated on `autoMergeEnabled` and a train:approved PR has
 // no auto-merge armed.
-export const UPDATEABLE_STATES = new Set(["BEHIND"]);
+const UPDATEABLE_STATES = new Set(["BEHIND"]);
 
 export const MERGE_GATE_REASON = {
 	NOT_APPROVED: "not-approved",
@@ -397,7 +389,7 @@ export function laneCommentMarker(headSha, reason) {
 	return `<!-- train-lane:${headSha}:${reason} -->`;
 }
 
-export function laneCommentBody(pr, gate) {
+function laneCommentBody(pr, gate) {
 	let header = "**Merge train: holding.**";
 	if (gate.merge) header = "**Merge train: merged.**";
 	else if (gate.update) header = "**Merge train: updating the branch.**";
@@ -412,7 +404,7 @@ export function laneCommentBody(pr, gate) {
 	return lines.join("\n");
 }
 
-export function mergeFailureCommentBody(pr, gate, status) {
+function mergeFailureCommentBody(pr, gate, status) {
 	return [
 		"**Merge train: the merge call failed.**",
 		"",
@@ -486,7 +478,7 @@ export async function resolveApprovalActor(
  * round pushed mid-cycle cannot be merged on a stale verdict even in the
  * window between this lane's read and its write.
  */
-export async function mergePullRequest(fetcher, owner, repo, pr, method) {
+async function mergePullRequest(fetcher, owner, repo, pr, method) {
 	return rest(
 		fetcher,
 		"PUT",
@@ -502,7 +494,7 @@ export async function mergePullRequest(fetcher, owner, repo, pr, method) {
  * that recursion rule. The payload carries both identities so consumers
  * cannot accidentally validate the default branch at a different commit.
  */
-export async function dispatchPostMergeValidation(
+async function dispatchPostMergeValidation(
 	fetcher,
 	owner,
 	repo,
@@ -530,7 +522,7 @@ export async function dispatchPostMergeValidation(
  * are intentionally idempotent at the workflow boundary: each consumer has
  * a per-SHA concurrency key and cancels a duplicate in-flight run.
  */
-export async function dispatchPostMergeValidationWithRetry(
+async function dispatchPostMergeValidationWithRetry(
 	fetcher,
 	owner,
 	repo,
@@ -1016,7 +1008,7 @@ export async function reconcilePostMergeValidations({
  * makes it as head-atomic as the merge call: if the branch moved since the
  * gate read, GitHub refuses rather than updating a head nobody evaluated.
  */
-export async function updatePullRequestBranch(fetcher, owner, repo, pr) {
+async function updatePullRequestBranch(fetcher, owner, repo, pr) {
 	return rest(
 		fetcher,
 		"PUT",

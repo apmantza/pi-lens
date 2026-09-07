@@ -138,7 +138,7 @@ export const KIND_EXTENSIONS: Record<FileKind, readonly string[]> = {
 };
 
 /** Return whether a path has an extension registered for the given file kind. */
-export function hasKindExtension(filePath: string, kind: FileKind): boolean {
+function hasKindExtension(filePath: string, kind: FileKind): boolean {
 	const extension = extname(filePath).toLowerCase();
 	return KIND_EXTENSIONS[kind].some((candidate) => candidate === extension);
 }
@@ -362,20 +362,6 @@ export const NON_CODE_KINDS: ReadonlySet<FileKind> = new Set<FileKind>([
 ]);
 
 /**
- * Check if a file kind represents a code file (not config/markdown).
- */
-export function isCodeKind(kind: FileKind): boolean {
-	return CODE_KINDS.has(kind);
-}
-
-/**
- * Check if a file kind represents a text/config/doc/markup file.
- */
-export function isConfigKind(kind: FileKind): boolean {
-	return NON_CODE_KINDS.has(kind);
-}
-
-/**
  * Check if a file path resolves to a {@link CODE_KINDS} kind. Undetectable
  * files (unknown extension, e.g. `.coffee` from SOURCE_PRECEDENCE) are
  * non-code.
@@ -430,36 +416,6 @@ export function getFileKindLabel(kind: FileKind): string {
 		toml: "TOML",
 	};
 	return labels[kind] ?? kind;
-}
-
-/**
- * Get file extensions for a file kind.
- */
-export function getExtensionsForKind(kind: FileKind): string[] {
-	return [...(KIND_EXTENSIONS[kind] ?? [])];
-}
-
-/**
- * Check if a file should be scanned for linting/formatting.
- * Excludes test files, generated files, etc.
- */
-export function isScannableFile(filePath: string): boolean {
-	const kind = detectFileKind(filePath);
-	if (!kind) return false;
-
-	// Exclude test files for most kinds
-	const base = basename(filePath);
-	if (
-		base.includes(".test.") ||
-		base.includes(".spec.") ||
-		base.startsWith("test-") ||
-		base.startsWith("spec-")
-	) {
-		return false;
-	}
-
-	// Only scan code and config files
-	return isCodeKind(kind) || isConfigKind(kind);
 }
 
 /**

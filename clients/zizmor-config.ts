@@ -25,7 +25,7 @@ import {
 // presence of one is the repo's deliberate opt-in: it carries the author's
 // chosen severities/ignores, so we let zizmor findings BLOCK in that workspace
 // (advisory-only otherwise, like Opengrep's local-rules gate).
-export const LOCAL_ZIZMOR_CONFIG_NAMES = [
+const LOCAL_ZIZMOR_CONFIG_NAMES = [
 	path.join(".github", "zizmor.yml"),
 	path.join(".github", "zizmor.yaml"),
 	"zizmor.yml",

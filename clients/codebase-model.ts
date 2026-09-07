@@ -24,7 +24,7 @@ import type { FunctionCallGraph, SymbolKey } from "./call-graph.js";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export interface ModelEntry {
+interface ModelEntry {
 	/** Relative file path. */
 	file: string;
 	/** Symbol name. */

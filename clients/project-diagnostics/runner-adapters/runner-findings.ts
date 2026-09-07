@@ -158,7 +158,7 @@ function parseLocation(location: string | undefined): {
  * caller deserves the same "this may already be superseded" honesty the
  * per-edit path already gives.
  */
-export function testResultToProjectDiagnostics(
+function testResultToProjectDiagnostics(
 	result: TestResult,
 	stale = false,
 ): ProjectDiagnostic[] {

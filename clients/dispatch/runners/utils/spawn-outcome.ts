@@ -27,7 +27,7 @@ export function firstOutputLine(
 }
 
 /** What a spawned analysis tool actually did (#1816). */
-export type RunOutcomeKind =
+type RunOutcomeKind =
 	/** The tool analysed the file. Its output is safe to parse. */
 	| "ran"
 	/** The process never completed an analysis: spawn failure, timeout, signal. */

@@ -122,7 +122,7 @@ function isConcludedSuccess(run) {
  * exactly equal), the run that is NOT a concluded success wins. An
  * unorderable tie can only ever withhold a pass, never grant one.
  */
-export function preferCheckRun(a, b) {
+function preferCheckRun(a, b) {
 	const ta = Date.parse(startedAtOf(a) ?? "");
 	const tb = Date.parse(startedAtOf(b) ?? "");
 	if (!Number.isNaN(ta) && !Number.isNaN(tb) && ta !== tb)

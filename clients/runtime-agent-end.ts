@@ -51,7 +51,7 @@ import {
  * path at all (they match on `ownerSessionId`), so this only trades a little
  * extra staleness for guaranteed eventual formatting. (#791)
  */
-export const DEFERRED_FORMAT_STALE_AFTER_MS = 10 * 60_000;
+const DEFERRED_FORMAT_STALE_AFTER_MS = 10 * 60_000;
 const DEFERRED_FORMAT_CONCURRENCY = 3;
 
 interface AgentEndDeps {

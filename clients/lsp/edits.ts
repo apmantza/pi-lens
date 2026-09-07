@@ -22,12 +22,12 @@ import {
 	restoreLineEndings,
 } from "../host-edit-normalize.js";
 
-export interface LSPPosition {
+interface LSPPosition {
 	line: number;
 	character: number;
 }
 
-export interface LSPRange {
+interface LSPRange {
 	start: LSPPosition;
 	end: LSPPosition;
 }
@@ -68,7 +68,7 @@ interface DeleteFileOp {
 	options?: ResourceOptions;
 }
 
-export interface AppliedWorkspaceFileDetail {
+interface AppliedWorkspaceFileDetail {
 	filePath: string;
 	range?: { start: number; end: number };
 	importsChanged?: boolean;
@@ -263,7 +263,7 @@ function formatRange(range: LSPRange): string {
 	return `${range.start.line + 1}:${range.start.character + 1}-${range.end.line + 1}:${range.end.character + 1}`;
 }
 
-export function rangesOverlap(a: LSPRange, b: LSPRange): boolean {
+function rangesOverlap(a: LSPRange, b: LSPRange): boolean {
 	return (
 		comparePosition(a.start, b.end) < 0 && comparePosition(b.start, a.end) < 0
 	);
@@ -533,7 +533,7 @@ export async function normalizeWorkspaceEditToUtf16(
 	};
 }
 
-export function flattenWorkspaceTextEdits(edit: {
+function flattenWorkspaceTextEdits(edit: {
 	changes?: Record<string, unknown[]>;
 	documentChanges?: unknown[];
 }): Map<string, LSPTextEdit[]> {

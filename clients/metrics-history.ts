@@ -15,7 +15,7 @@ import { writeFileAtomic } from "./atomic-write.js";
 
 // --- Types ---
 
-export interface MetricSnapshot {
+interface MetricSnapshot {
 	commit: string;
 	timestamp: string;
 	mi: number;
@@ -26,7 +26,7 @@ export interface MetricSnapshot {
 	entropy: number; // NEW: code unpredictability in bits
 }
 
-export interface FileHistory {
+interface FileHistory {
 	latest: MetricSnapshot;
 	history: MetricSnapshot[];
 	trend: "improving" | "stable" | "regressing";
@@ -38,7 +38,7 @@ export interface MetricsHistory {
 	capturedAt: string;
 }
 
-export type TrendDirection = "improving" | "stable" | "regressing";
+type TrendDirection = "improving" | "stable" | "regressing";
 
 // --- Constants ---
 
@@ -128,7 +128,7 @@ export function loadHistory(): MetricsHistory {
 /**
  * Save history to disk
  */
-export function saveHistory(history: MetricsHistory): void {
+function saveHistory(history: MetricsHistory): void {
 	const historyDir = getProjectDataDir(process.cwd());
 	if (!fs.existsSync(historyDir)) {
 		fs.mkdirSync(historyDir, { recursive: true });
@@ -213,69 +213,13 @@ export function captureSnapshot(
 	saveTimer.unref?.();
 }
 
-/**
- * Capture snapshots for multiple files (explicit, immediate save)
- * Used by /lens-metrics for batch capture
- */
-export function captureSnapshots(
-	files: Array<{
-		filePath: string;
-		metrics: {
-			maintainabilityIndex: number;
-			cognitiveComplexity: number;
-			maxNestingDepth: number;
-			linesOfCode: number;
-			maxCyclomatic: number;
-			entropy: number;
-		};
-	}>,
-): MetricsHistory {
-	const history = loadHistory();
-
-	for (const file of files) {
-		const relativePath = path.relative(process.cwd(), file.filePath);
-		const commit = getCurrentCommit(path.dirname(file.filePath));
-
-		const snapshot: MetricSnapshot = {
-			commit,
-			timestamp: new Date().toISOString(),
-			mi: Math.round(file.metrics.maintainabilityIndex * 10) / 10,
-			cognitive: file.metrics.cognitiveComplexity,
-			nesting: file.metrics.maxNestingDepth,
-			lines: file.metrics.linesOfCode,
-			maxCyclomatic: file.metrics.maxCyclomatic,
-			entropy: Math.round(file.metrics.entropy * 100) / 100,
-		};
-
-		const existing = history.files[relativePath];
-
-		if (existing) {
-			existing.history.push(snapshot);
-			if (existing.history.length > MAX_HISTORY_PER_FILE) {
-				existing.history = existing.history.slice(-MAX_HISTORY_PER_FILE);
-			}
-			existing.latest = snapshot;
-			existing.trend = computeTrend(existing.history);
-		} else {
-			history.files[relativePath] = {
-				latest: snapshot,
-				history: [snapshot],
-				trend: "stable",
-			};
-		}
-	}
-
-	saveHistory(history);
-	return history;
-}
-
 // --- Trend Analysis ---
 
 /**
  * Compute trend direction from history snapshots
  * Uses last 3 snapshots for stability (or 2 if only 2 available)
  */
-export function computeTrend(history: MetricSnapshot[]): TrendDirection {
+function computeTrend(history: MetricSnapshot[]): TrendDirection {
 	if (history.length < 2) return "stable";
 
 	const recent = history.slice(-3);
@@ -295,107 +239,6 @@ export function computeTrend(history: MetricSnapshot[]): TrendDirection {
 	if (cogDelta > 10) return "regressing";
 
 	return "stable";
-}
-
-/**
- * Get delta between current snapshot and previous
- */
-export function getDelta(history: FileHistory | null): {
-	mi: number;
-	cognitive: number;
-	trend: TrendDirection;
-} | null {
-	if (!history || history.history.length < 2) return null;
-
-	const current = history.history[history.history.length - 1];
-	const previous = history.history[history.history.length - 2];
-
-	return {
-		mi: Math.round((current.mi - previous.mi) * 10) / 10,
-		cognitive: current.cognitive - previous.cognitive,
-		trend: history.trend,
-	};
-}
-
-/**
- * Get trend emoji for display
- */
-export function getTrendEmoji(trend: TrendDirection): string {
-	switch (trend) {
-		case "improving":
-			return "📈";
-		case "regressing":
-			return "📉";
-		default:
-			return "➡️";
-	}
-}
-
-/**
- * Get trend summary across all files
- */
-export function getTrendSummary(history: MetricsHistory): {
-	improving: number;
-	regressing: number;
-	stable: number;
-	worstRegressions: Array<{ file: string; miDelta: number }>;
-} {
-	let improving = 0;
-	let regressing = 0;
-	let stable = 0;
-	const regressions: Array<{ file: string; miDelta: number }> = [];
-
-	for (const [file, fileHistory] of Object.entries(history.files)) {
-		switch (fileHistory.trend) {
-			case "improving":
-				improving++;
-				break;
-			case "regressing": {
-				regressing++;
-				const delta = getDelta(fileHistory);
-				if (delta) {
-					regressions.push({ file, miDelta: delta.mi });
-				}
-				break;
-			}
-			default:
-				stable++;
-		}
-	}
-
-	// Sort regressions by MI delta (worst first)
-	regressions.sort((a, b) => a.miDelta - b.miDelta);
-
-	return {
-		improving,
-		regressing,
-		stable,
-		worstRegressions: regressions.slice(0, 5),
-	};
-}
-
-/**
- * Format trend for metrics table
- */
-export function formatTrendCell(
-	filePath: string,
-	history: MetricsHistory,
-): string {
-	const relativePath = path.relative(process.cwd(), filePath);
-	const fileHistory = history.files[relativePath];
-
-	if (!fileHistory || fileHistory.history.length < 2) {
-		return "—"; // No history
-	}
-
-	const delta = getDelta(fileHistory);
-	if (!delta) return "—";
-
-	const emoji = getTrendEmoji(delta.trend);
-	const miSign = delta.mi > 0 ? "+" : "";
-	const miColor = delta.mi > 0 ? "🟢" : delta.mi < 0 ? "🔴" : "⚪";
-
-	return `${emoji} ${miColor}${miSign}${delta.mi}`;
 }
 
 // --- Technical Debt Index (TDI) ---

@@ -20,11 +20,11 @@ import { peekTestFindings } from "./runtime-context.js";
 import { fitLines } from "./tui-fit.js";
 import type { Component } from "./deps/pi-tui.js";
 
-export const TEST_RUNNER_ENTRY_TYPE = "pilens:test-runner-findings";
+const TEST_RUNNER_ENTRY_TYPE = "pilens:test-runner-findings";
 const MAX_PENDING_DELIVERIES = 32;
 const MAX_ENTRY_CONTENT = 12_000;
 
-export interface TestRunnerDeliveryEntry {
+interface TestRunnerDeliveryEntry {
 	content: string;
 	sessionId: string;
 	generation: number;

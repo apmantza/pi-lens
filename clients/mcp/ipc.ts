@@ -331,14 +331,14 @@ export interface WarmTurnEndResponse {
 	deliveryId?: string;
 }
 
-export interface WarmTurnEndAckRequest {
+interface WarmTurnEndAckRequest {
 	route: "turn-end-ack";
 	version: number;
 	cwd: string;
 	deliveryId: string;
 }
 
-export interface WarmTurnEndAckResponse {
+interface WarmTurnEndAckResponse {
 	route: "turn-end-ack";
 	version: number;
 	acknowledged: boolean;

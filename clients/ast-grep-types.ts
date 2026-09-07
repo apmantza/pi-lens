@@ -33,11 +33,6 @@ export interface SgMatch {
 	replacement?: string;
 }
 
-export interface SgResult {
-	matches: SgMatch[];
-	error?: string;
-}
-
 // =============================================================================
 // DIAGNOSTICS
 // =============================================================================
@@ -89,32 +84,3 @@ export interface AstGrepDiagnostic {
 
 // =============================================================================
 // JSON FORMAT (ast-grep CLI output)
-// =============================================================================
-
-export interface AstGrepJsonDiagnostic {
-	ruleId: string;
-	severity: string;
-	message: string;
-	note?: string;
-	labels: Array<{
-		text: string;
-		range: {
-			start: { line: number; column: number };
-			end: { line: number; column: number };
-		};
-		file?: string;
-		style: string;
-	}>;
-	// Legacy format support
-	Message?: { text: string };
-	Severity?: string;
-	spans?: Array<{
-		context: string;
-		range: {
-			start: { line: number; column: number };
-			end: { line: number; column: number };
-		};
-		file: string;
-	}>;
-	name?: string;
-}

@@ -1,4 +1,4 @@
-export type ReviewGraphNodeKind = "file" | "symbol" | "module" | "external";
+type ReviewGraphNodeKind = "file" | "symbol" | "module" | "external";
 export type ReviewGraphEdgeKind =
 	| "contains"
 	| "defines"
@@ -116,8 +116,6 @@ export interface ReviewGraph {
 // consumers that load the builder dynamically can still share one wording.
 // Re-exported here because `types.ts` is where review-graph types are looked
 // for.
-export type { ReviewGraphRevisionDrift } from "./revision-drift.js";
-
 export interface ReviewGraphPersistCoverage {
 	partial: boolean;
 	cap: number;
@@ -170,7 +168,7 @@ export interface ReviewGraphPersistCoverage {
  * and stays silent (the over-correction guard: a true clean edit must not cry
  * wolf).
  */
-export type CascadeIndeterminateReason =
+type CascadeIndeterminateReason =
 	| "graph_degraded" // review graph skipped (too_many_files / unsafe_root)
 	| "missing_node" // changed file has no node in the (otherwise-built) graph, and the graph SHOULD know it — a real gap
 	| "excluded_by_role" // #1445: changed file has no node because its role (test, #260) is excluded from the graph BY DESIGN — not a gap, never agent-facing
@@ -202,7 +200,7 @@ export interface CascadeMissingNodeDiagnostic {
 	nearestFile?: string;
 }
 
-export interface CascadeBudgetCoverage {
+interface CascadeBudgetCoverage {
 	candidateCount: number;
 	eligibleCount: number;
 	selectedCount: number;

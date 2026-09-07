@@ -190,21 +190,6 @@ export const PINNED_LANGUAGE_IDS = [
 	"zig",
 ] as const satisfies readonly LanguageId[];
 
-/**
- * Compile-time exhaustiveness for the pin above. When every `LanguageId` is
- * pinned this type is `true` and the initializer type-checks; the moment a
- * union member is added without being pinned, the type collapses to the
- * literal message below and `true` stops being assignable to it, so
- * `npm run build` fails at THIS line with the reason spelled out.
- */
-export const LANGUAGE_ID_PIN_IS_EXHAUSTIVE: Exclude<
-	LanguageId,
-	(typeof PINNED_LANGUAGE_IDS)[number]
-> extends never
-	? true
-	: "a LanguageId is missing from PINNED_LANGUAGE_IDS in clients/language-registry.ts" =
-	true;
-
 export interface LanguageEntry {
 	/** Canonical, host-neutral language id. */
 	readonly id: LanguageId;

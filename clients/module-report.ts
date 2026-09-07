@@ -65,7 +65,7 @@ import {
 // the review graph (computed once, persisted) so this path just reads them.
 
 /** Hard payload bound for the per-symbol who-uses-this section. */
-export const MAX_MODULE_REPORT_REFS = 100;
+const MAX_MODULE_REPORT_REFS = 100;
 
 function normalizeMaxRefsPerSymbol(value: number | undefined): number {
 	if (value === undefined || !Number.isFinite(value)) return 10;
@@ -166,7 +166,7 @@ export interface ModuleSymbolEntry {
 	// THIS report's path.
 }
 
-export interface RecommendedRead {
+interface RecommendedRead {
 	reason: string;
 	/** Named symbol or synthetic callback handle. */
 	symbol?: string;
@@ -174,7 +174,7 @@ export interface RecommendedRead {
 	endLine: number;
 }
 
-export interface ModuleCallbackEntry {
+interface ModuleCallbackEntry {
 	/** Stable synthetic handle usable with read_symbol. */
 	name: string;
 	/** Normalized role for an inline callback/closure/lambda. */
@@ -193,7 +193,7 @@ export interface ModuleCallbackEntry {
 
 /** One file in the blast radius (#304): a transitive dependent of this module,
  * aggregated from its (possibly several) dependent symbols. */
-export interface BlastRadiusFile {
+interface BlastRadiusFile {
 	/** cwd-relative display path of the dependent file. */
 	file: string;
 	/** How many dependent symbols/edges in this file reach the module. */
@@ -208,7 +208,7 @@ export interface BlastRadiusFile {
 
 /** Cross-file blast radius (#304): "if you change this module, read/verify these
  * files". Present only when requested AND the cached graph is warm. */
-export interface BlastRadius {
+interface BlastRadius {
 	/** True when the impact walk hit its node cap (the list is a prefix). */
 	truncated: boolean;
 	/** Deepest hop reached (transitivity actually observed). */
@@ -217,7 +217,7 @@ export interface BlastRadius {
 	files: BlastRadiusFile[];
 }
 
-export interface ModuleCallGraphRelation {
+interface ModuleCallGraphRelation {
 	/** Stable FunctionCallGraph symbol key for the related symbol. */
 	symbolId: string;
 	/** Stable symbol key for the module symbol this relation belongs to. */
@@ -237,7 +237,7 @@ export interface ModuleCallGraphRelation {
 	weight?: number;
 }
 
-export interface ModuleCallGraphCoverage {
+interface ModuleCallGraphCoverage {
 	status: "complete" | "partial" | "unavailable";
 	complete: boolean;
 	totalEvidence?: number;
@@ -253,7 +253,7 @@ export interface ModuleCallGraphCoverage {
 	languages?: Record<string, "complete" | "partial" | "unavailable">;
 }
 
-export interface ModuleCallGraph {
+interface ModuleCallGraph {
 	available: boolean;
 	/** Why the cached view is unavailable; never infer zero calls from this state. */
 	reason?:
@@ -369,7 +369,7 @@ export interface ReadSymbolOptions {
 	kind?: string;
 }
 
-export interface ReadEnclosingOutlineItem {
+interface ReadEnclosingOutlineItem {
 	name: string;
 	kind: string;
 	startLine: number;

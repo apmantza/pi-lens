@@ -61,7 +61,7 @@ interface AssistantMessageLike {
 	usage?: unknown;
 }
 
-export type CacheContextInjectionSource =
+type CacheContextInjectionSource =
 	| "session-guidance"
 	| "turn-findings"
 	| "test-findings"
@@ -83,7 +83,7 @@ export type CachePrefixObservation =
  * observable cause, never a provider statement: the provider reports token
  * counts only, so `unknown` is a real and expected answer.
  */
-export type CacheMissCause =
+type CacheMissCause =
 	| "ttl-expired"
 	| "prefix-broke"
 	| "partial-eviction"
@@ -91,7 +91,7 @@ export type CacheMissCause =
 	| "unknown";
 
 /** Why a miss could not be assigned a local cause (#1996). */
-export type CacheMissUnknownReason =
+type CacheMissUnknownReason =
 	| "no-prior-sample"
 	| "cache-read-unavailable"
 	| "malformed-provider-usage"
@@ -104,7 +104,7 @@ export type CacheMissUnknownReason =
 	| "no-local-explanation";
 
 /** Which shape of shortfall triggered the verdict. */
-export type CacheMissKind = "zero-read" | "low-read";
+type CacheMissKind = "zero-read" | "low-read";
 
 type ContextMessageLike = { role?: unknown; content?: unknown };
 
@@ -120,7 +120,7 @@ interface CacheUsageContext {
 	turnIndex?: number;
 }
 
-export interface CacheUsageSessionSummary {
+interface CacheUsageSessionSummary {
 	usageRecords: number;
 	cacheHits: number;
 	missObservations: number;
@@ -173,7 +173,7 @@ const _providerCacheTtl = lazyEnvNumber(
 	"PI_LENS_PROVIDER_CACHE_TTL_MS",
 	DEFAULT_PROVIDER_CACHE_TTL_MS,
 );
-export const getProviderCacheTtlMs = _providerCacheTtl.get;
+const getProviderCacheTtlMs = _providerCacheTtl.get;
 export const _resetProviderCacheTtlForTests = _providerCacheTtl._resetForTests;
 
 /**
@@ -385,10 +385,7 @@ function recordContextAttribution(
  * the response's own generation time. `no-prior-turn` means there is no earlier
  * record to measure from.
  */
-export type CacheGapBasis =
-	| "request-time"
-	| "message-end-fallback"
-	| "no-prior-turn";
+type CacheGapBasis = "request-time" | "message-end-fallback" | "no-prior-turn";
 
 /**
  * Idle milliseconds before this turn's provider request.
@@ -1536,14 +1533,6 @@ export function resetCachePrefixObservation(): void {
 	attributionBySession.clear();
 }
 
-/** #2442 test-only membership reads, bypassing emitCacheUsageSummaryAtSessionEnd's
- *  usageRecords>0 gate and log side effects. */
-export function _attributionKeyForTests(
-	sessionId?: string,
-	sessionRole?: "primary" | "concurrent-secondary",
-): string {
-	return attributionKey(sessionId, sessionRole);
-}
 export function _attributionBySessionHasForTests(key: string): boolean {
 	return attributionBySession.has(key);
 }

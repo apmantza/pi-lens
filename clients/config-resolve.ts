@@ -256,7 +256,7 @@ function collectDocuments(
  * is `nested-project`, which is what makes "nearest wins, per field" fall out
  * of the core's tier precedence instead of being re-implemented here.
  */
-export function collectPiLensConfigDocuments(
+function collectPiLensConfigDocuments(
 	options: ResolvePiLensConfigOptions,
 ): ConfigDocument[] {
 	const documents: ConfigDocument[] = [];
@@ -617,7 +617,7 @@ function assignRaw(
  * half-migrated the file it was written in is the defect this whole change
  * exists to remove.
  */
-export function configSources(
+function configSources(
 	documents: readonly ConfigDocument[],
 ): RawConfigSource[] {
 	const sources: RawConfigSource[] = [];
@@ -823,7 +823,7 @@ function record(input: {
  * (`/lsp/servers`) — because the two producers are different modules and neither
  * exists to serve this classification.
  */
-export type ConfigRecordOwner = "lsp" | "pi-lens";
+type ConfigRecordOwner = "lsp" | "pi-lens";
 
 /**
  * `undefined` for a record no key can attribute — the whole-file/whole-document
@@ -832,7 +832,7 @@ export type ConfigRecordOwner = "lsp" | "pi-lens";
  * duplicate notice about a config that failed to load is noise, while silence
  * about it is the failure mode this module exists to prevent.
  */
-export function configRecordOwner(
+function configRecordOwner(
 	record: MigrationRecord,
 ): ConfigRecordOwner | undefined {
 	const key = record.canonicalKey ?? record.key;

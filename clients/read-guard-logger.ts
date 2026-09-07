@@ -31,9 +31,9 @@ const LOG_SNAPSHOT_VALIDATION = !["0", "false", "off"].includes(
 	SNAPSHOT_LOG_SETTING,
 );
 
-export const MAX_EDIT_BATCH_ITEMS = 100;
+const MAX_EDIT_BATCH_ITEMS = 100;
 
-export type EditBatchRejectionCode =
+type EditBatchRejectionCode =
 	| "oldtext_not_found"
 	| "oldtext_unrepresentable"
 	| "oldtext_duplicate"

@@ -66,7 +66,7 @@ export type SearchCreditReason =
 	| "delivered-context-flags"
 	| "caller-margin";
 
-export interface SearchCredit {
+interface SearchCredit {
 	marginBefore: number;
 	marginAfter: number;
 	reason: SearchCreditReason;
@@ -80,7 +80,7 @@ export interface SearchCredit {
  *  - `enforced-pass`: a hash-checked read matched, so the edit passed the gate.
  *  - `not-decidable`: no candidate read could be hash-checked.
  */
-export type RangeSnapshotOutcome =
+type RangeSnapshotOutcome =
 	| "enforced-block"
 	| "bypassed-content-match"
 	| "enforced-pass"

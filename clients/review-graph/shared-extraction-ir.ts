@@ -13,7 +13,7 @@ export type ReviewGraphExtractionStatus =
 	| "partial"
 	| "unavailable";
 
-export interface ReviewGraphExtractionCoverage {
+interface ReviewGraphExtractionCoverage {
 	definitions: ReviewGraphExtractionStatus;
 	references: ReviewGraphExtractionStatus;
 	imports: ReviewGraphExtractionStatus;
@@ -21,7 +21,7 @@ export interface ReviewGraphExtractionCoverage {
 	calls: ReviewGraphExtractionStatus;
 }
 
-export interface JsTsReviewGraphIr {
+interface JsTsReviewGraphIr {
 	kind: "jsts";
 	imports: ImportEntry[];
 	reexports: ReExportEntry[];
@@ -29,7 +29,7 @@ export interface JsTsReviewGraphIr {
 	coverage: ReviewGraphExtractionCoverage;
 }
 
-export interface TreeSitterReviewGraphIr {
+interface TreeSitterReviewGraphIr {
 	kind: "tree-sitter";
 	languageId: string;
 	extracted: ExtractedSymbols;

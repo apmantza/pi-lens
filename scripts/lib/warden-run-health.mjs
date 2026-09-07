@@ -32,7 +32,7 @@
  * from unavailable).
  */
 
-export const TRACKED_WORKFLOW_PATHS = [
+const TRACKED_WORKFLOW_PATHS = [
 	".github/workflows/ci.yml",
 	".github/workflows/lint.yml",
 ];
@@ -41,12 +41,12 @@ export const TRACKED_WORKFLOW_PATHS = [
 // GitHub queues a `pull_request` run within seconds when the webhook lands;
 // the warden's own cadence is 10 minutes, so 12 minutes means "at least one
 // full warden cycle has already passed with nothing to see".
-export const ABSENT_RUN_GRACE_MINUTES = 12;
+const ABSENT_RUN_GRACE_MINUTES = 12;
 
 // Only a run that is BOTH completed and failed can be starved. `cancelled`
 // is excluded on purpose: a human cancelling a run also produces zero
 // executed steps, and re-running it would fight the person who cancelled it.
-export const STARVED_RUN_CONCLUSIONS = new Set(["failure", "startup_failure"]);
+const STARVED_RUN_CONCLUSIONS = new Set(["failure", "startup_failure"]);
 
 // #2203, AC2: measured, not guessed. Over the 60 most recent COMPLETED
 // `ci.yml` runs (read 2026-08-26 from `actions/workflows/ci.yml/runs`), wall
@@ -97,7 +97,7 @@ export function isStarvedRun(run) {
 }
 
 /** Minutes since GitHub created this run, or null when the date is unreadable. */
-export function runAgeMinutes(run, now) {
+function runAgeMinutes(run, now) {
 	const createdMs = Date.parse(run?.createdAt ?? "");
 	return Number.isNaN(createdMs) ? null : (now - createdMs) / 60000;
 }
@@ -141,7 +141,7 @@ export function isCancelledStalledRun(run) {
  * a later starved failure. Only the newest run per workflow describes the
  * head's current state.
  */
-export function latestRunPerWorkflowPath(runs) {
+function latestRunPerWorkflowPath(runs) {
 	const latest = new Map();
 	for (const run of runs ?? []) {
 		if (!run?.path) continue;
@@ -398,7 +398,7 @@ export function absentRunCommentMarker(headSha) {
 	return `<!-- warden:absent-run:${headSha} -->`;
 }
 
-export function absentRunCommentBody(headSha, workflows, ageMinutes) {
+function absentRunCommentBody(headSha, workflows, ageMinutes) {
 	const age =
 		ageMinutes === null
 			? "an unknown time"
@@ -508,7 +508,7 @@ export function stalledRunCommentMarker(runId) {
 	return `<!-- warden:stalled-run:${runId} -->`;
 }
 
-export function stalledRunCommentBody(run, minutes) {
+function stalledRunCommentBody(run, minutes) {
 	const age = minutes === null ? "an unknown time" : `${Math.round(minutes)}`;
 	return [
 		"**Merge-train warden: this run has been queued for hours and has executed nothing.**",

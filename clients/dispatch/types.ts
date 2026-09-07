@@ -125,7 +125,7 @@ export interface DispatchResult {
 
 // --- Runner Definition ---
 
-export type RunnerMode = "all" | "fallback" | "first-success";
+type RunnerMode = "all" | "fallback" | "first-success";
 
 export interface RunnerDefinition {
 	id: string;

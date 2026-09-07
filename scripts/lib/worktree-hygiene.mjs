@@ -156,7 +156,7 @@ export const MAX_RECORDED_COMMAND_CHARS = 300;
  * Path segment that identifies a Claude Code agent worktree. Matched against
  * a separator-normalized path, so `\` and `/` spellings both hit.
  */
-export const AGENT_WORKTREE_SEGMENT = "/.claude/worktrees/agent-";
+const AGENT_WORKTREE_SEGMENT = "/.claude/worktrees/agent-";
 
 /**
  * Command-line markers for long-running test helpers that may outlive their
@@ -166,7 +166,7 @@ export const AGENT_WORKTREE_SEGMENT = "/.claude/worktrees/agent-";
  * for it lands here. Matching is on the DIRECTORY path, not on "node", so an
  * unrelated node process is never a candidate.
  */
-export const FIXTURE_HELPER_MARKERS = [
+const FIXTURE_HELPER_MARKERS = [
 	"tests/fixtures/",
 	"tests/support/",
 	"fake-lsp-server.mjs",
@@ -212,7 +212,7 @@ export function toComparablePath(p) {
  * @param {string} text
  * @returns {string}
  */
-export function toComparableText(text) {
+function toComparableText(text) {
 	if (typeof text !== "string") return "";
 	return text.split("\\").join("/").toLowerCase();
 }
@@ -565,7 +565,7 @@ function isAbsoluteToken(token) {
  * @param {string} command
  * @returns {string[]} absolute, normalized path tokens
  */
-export function commandExecutionPaths(command) {
+function commandExecutionPaths(command) {
 	const normalized = toComparableText(command);
 	if (!normalized) return [];
 	const tokens = tokenizeCommand(normalized);
@@ -897,7 +897,7 @@ export function capRemovals(removals, max) {
  * will ever delete. A `fix/*` / `feat/*` branch is deliberately NOT here:
  * those are the work itself and outlive their worktree.
  */
-export const AGENT_BRANCH_SHAPES = [
+const AGENT_BRANCH_SHAPES = [
 	/^pr-\d+$/i,
 	/^review\//i,
 	/^fixround-/i,

@@ -59,7 +59,7 @@ const writer = createNdjsonLogger({
 	maxBytes: getMaxLogSizeMB() * 1024 * 1024,
 });
 
-export type BusEventName =
+type BusEventName =
 	| "pilens:files:touched"
 	| "pilens:diagnostics"
 	| "pilens:diagnostic:disposition"
@@ -70,7 +70,7 @@ export type BusEventName =
 	| "pi-lens/findings"
 	| "pi-lens/turn-findings";
 
-export type BusEventOutcome =
+type BusEventOutcome =
 	| "emitted"
 	| "skipped_unwired"
 	| "skipped_disabled"
@@ -176,13 +176,4 @@ export function emitBusEventRollupAtSessionEnd(cwd: string): void {
 		});
 	}
 	resetBusEventRollupCounts();
-}
-
-export function getBusEventsLogPath(): string {
-	return BUS_EVENTS_LOG_FILE;
-}
-
-/** Resolve once all enqueued bus-event writes are on disk (tests/shutdown). */
-export function flushBusEventsLog(): Promise<void> {
-	return writer.flush();
 }

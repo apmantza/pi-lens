@@ -4,7 +4,7 @@
 
 import type { Diagnostic, OutputSemantic } from "../types.js";
 
-export const EMOJI: Record<string, string> = {
+const EMOJI: Record<string, string> = {
 	blocking: "🔴",
 	warning: "🟡",
 	fixed: "✅",
@@ -16,7 +16,7 @@ export const EMOJI: Record<string, string> = {
 /**
  * Format a single diagnostic for display
  */
-export function formatDiagnostic(d: Diagnostic): string {
+function formatDiagnostic(d: Diagnostic): string {
 	const line = d.line ? `L${d.line}: ` : "";
 	const indented = d.message.split("\n").join("\n  ");
 	const fix = d.fixSuggestion ? `\n    💡 Fix: ${d.fixSuggestion}` : "";

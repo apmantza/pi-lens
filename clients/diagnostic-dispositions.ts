@@ -99,7 +99,7 @@ export interface DispositionCandidate {
 }
 
 export type Disposition = "false-positive" | "suppress" | "defer" | "flagged";
-export type PersistedDisposition = Exclude<Disposition, "defer">;
+type PersistedDisposition = Exclude<Disposition, "defer">;
 
 export interface DispositionEntry {
 	disposition: PersistedDisposition;
@@ -205,7 +205,7 @@ export function computeStrictAnchor(args: DispositionAnchorArgs): string {
 }
 
 /** Intent-level anchor — see module doc. Used for defer/flagged/suppress. */
-export function computeWeakAnchor(args: DispositionAnchorArgs): string {
+function computeWeakAnchor(args: DispositionAnchorArgs): string {
 	return stableFindingId("ddw:", {
 		cwd: args.cwd,
 		filePath: args.filePath,

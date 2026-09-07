@@ -55,13 +55,13 @@ export interface PartiallyApplicableEdit {
 	spanEnd: number;
 }
 
-export type PartialApplyRejectionReason =
+type PartialApplyRejectionReason =
 	| "stale_snapshot"
 	| "span_changed"
 	| "span_overlap"
 	| "invalid_batch";
 
-export interface PartialApplyRejection {
+interface PartialApplyRejection {
 	reason: PartialApplyRejectionReason;
 	/** Bounded, agent-actionable detail for the block reason. */
 	detail: string;

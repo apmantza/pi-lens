@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 import { safeSpawn } from "../../clients/safe-spawn.js";
 import { escapeRegExp } from "../../clients/string-utils.js";
 
-export const SELF_SCAN_CATEGORY = "pi-lens-self-scan";
+const SELF_SCAN_CATEGORY = "pi-lens-self-scan";
 
 /** Repo root, derived from this file's own on-disk location -- never a
  * hardcoded machine path (the #1718 defect). */
@@ -33,11 +33,11 @@ export function rulesDir(root = repoRoot()) {
 	return path.join(root, "rules", "ast-grep-rules", "rules");
 }
 
-export function sgConfigPath(root = repoRoot()) {
+function sgConfigPath(root = repoRoot()) {
 	return path.join(root, "rules", "ast-grep-rules", ".sgconfig.yml");
 }
 
-export function baselinePath(root = repoRoot()) {
+function baselinePath(root = repoRoot()) {
 	return path.join(root, "rules", "ast-grep-rules", "self-scan-baseline.json");
 }
 

@@ -135,7 +135,7 @@ function isCleanDryRun(argsAfterVerb: readonly string[]): boolean {
  * replacement for the forbidden `git stash`. Blocking it would push
  * operators back toward stash.
  */
-export const WORKTREE_MUTATING_GIT_MATCHER: GitVerbMatcher = {
+const WORKTREE_MUTATING_GIT_MATCHER: GitVerbMatcher = {
 	id: "worktree-mutating",
 	indirectAlwaysMatches: false,
 	// `git checkout --help` opens documentation and changes nothing. This

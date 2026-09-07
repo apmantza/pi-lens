@@ -234,7 +234,7 @@ function hasGeneratedArtifactContent(content: string): boolean {
  * file is not machine-emitted evidence), and an empty or whitespace-only
  * file yields a zero mean and stays source.
  */
-export const MACHINE_EMITTED_LINE_SHAPE_MIN_CONTENT = 2048;
+const MACHINE_EMITTED_LINE_SHAPE_MIN_CONTENT = 2048;
 export const MACHINE_EMITTED_LINE_SHAPE_MEAN_THRESHOLD = 2500;
 
 export interface MachineEmittedLineShape {
@@ -376,7 +376,7 @@ function analyzeFileHeader(
  *    the heuristic's rescues stay visible.
  *  - `"clean"`: no evidence at all — never matched any heuristic.
  */
-export type GeneratedArtifactVerdict = "generated" | "override" | "clean";
+type GeneratedArtifactVerdict = "generated" | "override" | "clean";
 
 /**
  * WHICH evidence produced a `"generated"` verdict (undefined for `"override"`/
@@ -520,7 +520,7 @@ export function classifyGeneratedOrArtifactDetailed(
 }
 
 /** Verdict-only convenience wrapper over {@link classifyGeneratedOrArtifactDetailed}. */
-export function classifyGeneratedOrArtifact(
+function classifyGeneratedOrArtifact(
 	filePath: string,
 	options: GeneratedArtifactOptions = {},
 ): GeneratedArtifactVerdict {

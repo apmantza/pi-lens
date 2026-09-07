@@ -4,11 +4,9 @@
  */
 export {
 	isUnderDir,
-	normalizeFilePath,
 	normalizeEphemeralMapKey,
 	normalizeMapKey,
 	pathsEqual,
-	pathToUri,
 	uriToDiskPath,
 	uriToPath,
 } from "../path-utils.js";

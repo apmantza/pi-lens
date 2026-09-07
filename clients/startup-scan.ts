@@ -29,7 +29,7 @@ import {
 	registerWorkspaceTopologyReset,
 } from "./workspace-topology.js";
 
-export const PROJECT_ROOT_MARKERS = [
+const PROJECT_ROOT_MARKERS = [
 	".git",
 	"package.json",
 	"pyproject.toml",
@@ -43,8 +43,6 @@ export const PROJECT_ROOT_MARKERS = [
 // `getStartupScanMaxSourceFilesDerived(cwd)` (project-scale.ts's
 // `maxProjectFiles` knob), which reproduces this same 2,000 value at the
 // default base. Kept exported for tests/callers that still reference the
-// literal.
-export const MAX_STARTUP_SOURCE_FILES = 2000;
 
 // #758: hard ceiling on the number of directory entries the startup source
 // count walk will visit before it gives up and declares the tree too big to
@@ -208,7 +206,7 @@ export function findNearestProjectRoot(startDir: string): string | null {
 	}
 }
 
-export interface SourceCountResult {
+interface SourceCountResult {
 	/** Source files found (capped at `limit + 1` once the early-exit fires). */
 	count: number;
 	/**

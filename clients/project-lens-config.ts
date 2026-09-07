@@ -118,7 +118,7 @@ import { findPiLensConfigMarkerInDir } from "./workspace-topology.js";
  */
 export { PROJECT_CONFIG_BASENAMES } from "./config-locations.js";
 
-export interface PiLensProjectRuleConfig {
+interface PiLensProjectRuleConfig {
 	/** Optional override for the rule's primary numeric threshold. */
 	threshold?: number;
 	/**
@@ -145,12 +145,12 @@ export interface PiLensProjectRuleConfig {
 	select?: string[];
 }
 
-export interface PiLensProjectMutationConfig {
+interface PiLensProjectMutationConfig {
 	/** Whether this mutation path is enabled for the project. */
 	enabled?: boolean;
 }
 
-export interface PiLensProjectReviewGraphConfig {
+interface PiLensProjectReviewGraphConfig {
 	/**
 	 * Explicit review-graph file budget, clamped to `[100, 20_000]`.
 	 * `undefined` means "derive from `maxProjectFiles` via the taper".

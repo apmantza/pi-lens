@@ -564,7 +564,7 @@ const OUR_RENDER_FLAGS = ["--output-dir"] as const;
  *
  * Returns the matched flag (for the message) or null.
  */
-export function rejectedOurInvocation(output: string): string | null {
+function rejectedOurInvocation(output: string): string | null {
 	if (!output) return null;
 	const complaint =
 		/unknown flag|unknown shorthand flag|flag provided but not defined|unknown command|unrecognized (?:flag|option)/i.test(

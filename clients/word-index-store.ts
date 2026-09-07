@@ -215,11 +215,6 @@ export class WordPostingList {
 	}
 }
 
-/** Estimated bytes one posting list holds, backing store plus fixed headers. */
-export function estimatePostingListBytes(list: WordPostingList): number {
-	return list.byteLength + WORD_POSTING_LIST_OVERHEAD_BYTES;
-}
-
 /**
  * Re-home every posting list into ONE shared `ArrayBuffer`, exactly sized.
  *
@@ -465,7 +460,7 @@ export class WordForwardEntry {
  * Bytes per forward entry: one pointer-compressed slot for the shared token
  * string and one `Int32` count lane.
  */
-export const WORD_FORWARD_ENTRY_BYTES = 8;
+const WORD_FORWARD_ENTRY_BYTES = 8;
 
 /**
  * The word index's dense file-id space: canonical path key → integer id →

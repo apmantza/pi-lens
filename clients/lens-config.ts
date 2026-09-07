@@ -54,10 +54,10 @@ function globalCanonicalLocation(): ConfigLocation {
 	return location;
 }
 
-export type PiLensFormatMode = "deferred" | "immediate";
+type PiLensFormatMode = "deferred" | "immediate";
 
 /** The `{ enabled?: boolean }` section every registry flag key lives under. */
-export interface PiLensToggleConfig {
+interface PiLensToggleConfig {
 	enabled?: boolean;
 }
 

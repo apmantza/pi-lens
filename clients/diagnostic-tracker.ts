@@ -4,7 +4,7 @@
  * Links diagnostics to resolutions, tracks violation patterns.
  */
 
-export interface TrackerEntry {
+interface TrackerEntry {
 	ruleId: string;
 	filePath: string;
 	line: number;

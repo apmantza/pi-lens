@@ -198,27 +198,6 @@ function computeProjectLanguageProfile(
 	};
 }
 
-export function hasLanguage(
-	profile: ProjectLanguageProfile,
-	kind: FileKind,
-): boolean {
-	return !!profile.present[kind];
-}
-
-export function hasAnyLanguage(
-	profile: ProjectLanguageProfile,
-	kinds: readonly FileKind[],
-): boolean {
-	return kinds.some((kind) => hasLanguage(profile, kind));
-}
-
-export function isLanguageConfigured(
-	profile: ProjectLanguageProfile,
-	kind: FileKind,
-): boolean {
-	return !!profile.configured[kind];
-}
-
 export function getDefaultStartupTools(
 	profile: ProjectLanguageProfile,
 ): string[] {

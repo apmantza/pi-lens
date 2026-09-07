@@ -170,7 +170,7 @@ function isAccessorLine(rawLine: string): boolean {
 	);
 }
 
-export interface MiddleManSignal {
+interface MiddleManSignal {
 	delegationRatio: number;
 	candidateCount: number;
 	forwardingCount: number;
@@ -184,7 +184,7 @@ export interface MiddleManSignal {
  * extracted data — no re-parsing, no file I/O beyond the lines already read
  * by the caller.
  */
-export function analyzeMiddleMan(
+function analyzeMiddleMan(
 	classEntry: ModuleSymbolEntry,
 	lines: string[],
 	languageId: string | undefined,

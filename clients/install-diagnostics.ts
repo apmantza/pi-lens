@@ -29,7 +29,7 @@ const CRITICAL_DEPS = [
 	"@ast-grep/napi",
 ];
 
-export interface DepStatus {
+interface DepStatus {
 	name: string;
 	resolved: boolean;
 	resolvedPath?: string;

@@ -22,7 +22,7 @@ function severityFor(raw: string): {
 	}
 }
 
-export function opengrepFindingToProjectDiagnostic(
+function opengrepFindingToProjectDiagnostic(
 	cwd: string,
 	finding: OpengrepFinding,
 ): ProjectDiagnostic {

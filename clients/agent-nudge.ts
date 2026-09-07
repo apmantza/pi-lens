@@ -72,7 +72,7 @@ const MAX_NAMES_SHOWN = 5;
  * feed has also seen it. In code: "local" is sticky — once set, a later
  * cross-process report for the same file never downgrades it back.
  */
-export type AccumulatedFileOrigin = "local" | "cross-process";
+type AccumulatedFileOrigin = "local" | "cross-process";
 
 interface AccumulatedFile {
 	/** Original (non-normalized) path, for display. First-seen form wins. */

@@ -60,11 +60,6 @@ export function resetUserNotifier(): void {
 	notifierGetter = undefined;
 }
 
-/** True when a host render path is available (for callers that want to branch). */
-export function hasUserNotifier(): boolean {
-	return notifierGetter !== undefined;
-}
-
 /**
  * Best-effort delivery of a user-facing degradation. Never throws — a stale
  * `ctx` after a session replacement must degrade to a no-op, not break the

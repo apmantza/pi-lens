@@ -57,11 +57,3 @@ export function observeRunnerLatency(options: {
 export function resetObservedRunnerLatency(): void {
 	slowRunners.clear();
 }
-
-/** Test-only inspection without exposing mutable state. */
-export function observedRunnerTierForTests(
-	projectRoot: string,
-	runnerId: string,
-): CollectLaterTier {
-	return classifyObservedRunner(projectRoot, runnerId);
-}

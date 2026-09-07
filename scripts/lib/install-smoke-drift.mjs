@@ -27,7 +27,7 @@ export const INSTALL_SMOKE_DRIFT_TITLE =
 /** @typedef {"success" | "failure" | "cancelled" | "skipped"} StepOutcome */
 
 /** The complete, real GitHub Actions `steps.<id>.outcome` enum (#2613 F1). */
-export const VALID_STEP_OUTCOMES = /** @type {const} */ ([
+const VALID_STEP_OUTCOMES = /** @type {const} */ ([
 	"success",
 	"failure",
 	"cancelled",

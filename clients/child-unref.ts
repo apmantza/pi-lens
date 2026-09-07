@@ -49,30 +49,6 @@ export function unrefChildAndPipes(child: ChildProcess): void {
 }
 
 /**
- * Spawn a best-effort, fire-and-forget child, accumulate its full stdout, and
- * resolve with the collected text (empty string on a synchronous spawn
- * failure or an `error` event). Consolidates the spawn → unref →
- * pipe-stdout → `close` plumbing shared by every one-shot OS-process-table
- * query in the codebase — each caller supplies only its command/args/options
- * and does its own output parse. The child + its stdio pipes are `unref`'d
- * here (via `unrefChildAndPipes`) so a settled one-shot `pi --print` process
- * can exit without waiting, and both the unref and the collect plumbing live
- * in exactly ONE place rather than being re-derived at each spawn site.
- * Never rejects — any failure resolves to `""`, which every caller's parse
- * turns into an empty/absent result (the best-effort contract every caller
- * here already has).
- */
-export function spawnCollectStdout(
-	command: string,
-	args: string[],
-	options: SpawnOptions,
-): Promise<string> {
-	return spawnCollectStdoutResult(command, args, options).then(
-		(result) => result.stdout,
-	);
-}
-
-/**
  * Why a spawn's stdout is what it is. `""` alone cannot tell "the query ran
  * and found nothing" from "the query never ran" — the availability invariant
  * in CLAUDE.md: an empty result must distinguish clean from errored. Callers

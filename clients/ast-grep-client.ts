@@ -82,7 +82,7 @@ function reportAstGrepRulesHealth(bundledRuleDir: string): void {
  * Exported for tests: they drive it against a registered bridge instead of
  * spawning ast-grep.
  */
-export function recordAstGrepApply(matches: AstGrepMatch[]): void {
+function recordAstGrepApply(matches: AstGrepMatch[]): void {
 	const bridge = getMutationBridge();
 	if (!bridge || matches.length === 0) return;
 	const rangesByFile = new Map<string, Array<[number, number]>>();

@@ -89,12 +89,3 @@ export function logCascade(entry: CascadeLogEntry): void {
 		filePath: normalizeLoggedPath(entry.filePath),
 	});
 }
-
-export function getCascadeLogPath(): string {
-	return CASCADE_LOG_FILE;
-}
-
-/** Resolve once all enqueued cascade writes are on disk (tests/shutdown). */
-export function flushCascadeLog(): Promise<void> {
-	return writer.flush();
-}
