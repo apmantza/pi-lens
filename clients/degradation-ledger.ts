@@ -67,6 +67,17 @@ export type DegradationKind =
 	| "spawn-failure"
 	/** A managed-tool verification probe exceeded its retained output bound. */
 	| "installer-verification-output-truncated"
+	/**
+	 * #2722: a managed-tool verification probe returned a NON-VERDICT — the
+	 * #208 transport-required matcher was armed, never matched, and the kept
+	 * output is a truncated prefix, so the probe could not decide whether the
+	 * binary is a healthy stdio LSP server or a broken install. Subject is the
+	 * binary path. Deliberately NOT `installer-verification-output-truncated`
+	 * (which also fires on a probe that went on to VERIFY): a reader acting on
+	 * this row is looking for an install kept without proof, not for a noisy
+	 * one. The installer keeps such an installation rather than deleting it.
+	 */
+	| "installer-verification-inconclusive"
 	/** A git ls-files collection was truncated before parsing completed (#2075). */
 	| "git-tracked-ignore-truncated"
 	/**
