@@ -288,6 +288,33 @@ describe("install log stays bounded (#1926)", () => {
 describe("prepare chain keeps load-bearing steps load-bearing (#1926)", () => {
 	const prepare = pkg.scripts?.prepare ?? "";
 
+	it("writes the fallback install log under PI_LENS_HOME, not HOME", () => {
+		const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "warm-home-"));
+		const pinnedHome = path.join(scratch, "pinned-home");
+		const canaryHome = path.join(scratch, "canary-home");
+		const installLog = path.join(pinnedHome, "install.log");
+		const env = { ...process.env };
+		delete env.PI_LENS_INSTALL_LOG;
+		env.PI_LENS_HOME = pinnedHome;
+		env.HOME = canaryHome;
+		env.USERPROFILE = canaryHome;
+		env.PI_LENS_SKIP_WARM_CACHE = "1";
+
+		execFileSync(
+			process.execPath,
+			[path.join(root, "scripts", "warm-loader-cache.mjs")],
+			{ env, stdio: "ignore" },
+		);
+
+		expect(
+			fs.existsSync(path.join(canaryHome, ".pi-lens", "install.log")),
+		).toBe(false);
+		expect(fs.existsSync(installLog)).toBe(true);
+		expect(JSON.parse(fs.readFileSync(installLog, "utf8").trim()).event).toBe(
+			"warm_loader_cache",
+		);
+	});
+
 	it("runs the warm last, after the steps that must fail loudly", () => {
 		// build:dist and download-grammars are what consumers install for. The
 		// warm is an optimisation, so it runs after them and can never preempt
