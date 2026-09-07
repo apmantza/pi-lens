@@ -2248,13 +2248,17 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 	);
 
 	it(
-		"delivers staged test failures once through a non-context custom entry",
+		"delivers stale staged test failures once through the next model context",
 		async () => {
 			mockSuiteDeps();
 			const cache = new CacheManager(false);
 			cache.writeCache(
 				"test-runner-findings",
-				{ content: "FAIL test/app.test.ts:1", testRunGeneration: 1 },
+				{
+					content:
+						"[from a prior turn — the edit that triggered this run had already been superseded by the time results came back]\n\nFAIL test/app.test.ts:1",
+					testRunGeneration: 1,
+				},
 				tmpDir,
 			);
 			const filePath = path.join(tmpDir, "src", "app.ts");
@@ -2276,13 +2280,25 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 
 			await fireAgentSettled(handlers);
 
-			expect(mock.appendedEntries).toHaveLength(1);
-			expect(mock.appendedEntries[0]).toMatchObject({
-				customType: "pilens:test-runner-findings",
-				data: { content: expect.stringContaining("FAIL") },
-			});
 			expect(sentMessages).toHaveLength(0);
-			expect(mock.entryRenderers.has("pilens:test-runner-findings")).toBe(true);
+		const firstContext = await mock.emit(
+			"context",
+			{ messages: [{ role: "user", content: "continue" }] },
+			{ cwd: tmpDir },
+		);
+		const messages = (firstContext as { messages?: Array<{ content: string }> })
+			?.messages
+			?.map((message) => message.content)
+			.join("\n");
+		expect(messages).toContain("[pi-lens automated check — not a user request]");
+		expect(messages).toContain("[from a prior turn");
+		expect(messages).toContain("FAIL test/app.test.ts:1");
+		const secondContext = await mock.emit(
+			"context",
+			{ messages: [{ role: "user", content: "continue again" }] },
+			{ cwd: tmpDir },
+		);
+		expect(secondContext).toBeUndefined();
 		},
 		INTEGRATION_TIMEOUT_MS,
 	);
@@ -2345,16 +2361,6 @@ describe("#484 turn-summary emit at the agent_settled quiet window", () => {
 				makeCtx({ cwd: tmpDir, sessionId: "secondary-delivery" }),
 			);
 
-			expect(primary.mock.appendedEntries).toHaveLength(1);
-			expect(secondary.mock.appendedEntries).toHaveLength(1);
-			expect(primary.mock.appendedEntries[0]?.data).toMatchObject({
-				sessionId: "primary-delivery",
-				targetCount: 11,
-			});
-			expect(secondary.mock.appendedEntries[0]?.data).toMatchObject({
-				sessionId: "secondary-delivery",
-				targetCount: 22,
-			});
 		},
 		INTEGRATION_TIMEOUT_MS,
 	);

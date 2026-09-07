@@ -393,8 +393,9 @@ Post-agent test-runner delivery is activation/session-owned: the staged record
 retains its owning host, cache, runtime, and event context, while the quiet
 window receives the settled event's stable session identity and activation
 owner. A process-global latest activation must never select the pi/cache/runtime
-for another session's result. Persisted test-runner generations still gate
-delivery before append (#2366).
+for another session's result. Persisted test-runner generations gate
+eligibility before the next context build, and consumption remains once-only
+through the real context seam (#2366, #2733).
 
 Live contracts, grouped by subsystem. Consult the group for the seam you
 touch; each paragraph carries its evidence issue. New entries join their
@@ -1305,12 +1306,13 @@ buckets but still fails correlation closed. Never infer provider behavior from
 stable local bytes, and never serialize transcript evidence.
 (#1016, #1071, #1996)
 
-Automatic test-runner failures use a separate non-context custom-entry surface.
-Completion stages an owner-qualified session/generation record, and
-`agent_settled` delivers only the newest provenance-validated result after an
-immediate `ctx.isIdle()` recheck. The durable `test-runner-findings` cache stays
-available to pull diagnostics and the commit guard; unavailable or failed host
-entry capabilities never fall back to `sendMessage`. (#2366)
+Automatic test-runner failures use the model context surface, not a terminal
+custom entry. Completion stages an owner-qualified session/generation record;
+`agent_settled` marks only the newest provenance-validated result eligible after
+an immediate `ctx.isIdle()` recheck; the next context build consumes it once.
+The durable `test-runner-findings` cache stays available to pull diagnostics and
+the commit guard. MCP `turn_end` and `lens_diagnostics` retain their existing
+pull behavior, and delivery never falls back to `sendMessage`. (#2366, #2733)
 
 Pytest aggregate counts come only from pytest's final outcome summary line
 (#2408), never from a whole-output search. Tracebacks, service errors, assertion

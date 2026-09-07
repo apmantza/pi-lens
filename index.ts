@@ -166,8 +166,8 @@ import {
 	consumeTurnEndFindings,
 } from "./clients/runtime-context.js";
 import {
+	consumeStagedTestRunnerFindings,
 	deliverStagedTestRunnerFindings,
-	registerTestRunnerEntryRenderer,
 	stageTestRunnerDelivery,
 } from "./clients/test-runner-delivery.js";
 import {
@@ -1064,11 +1064,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 			dbg(`turn-summary renderer registration failed: ${registerRendererErr}`);
 		}
 	}
-	// #2366: test failures are a persistent, non-context custom entry. The
-	// delivery task still checks appendEntry at fire time; this registration is
-	// capability detection only and never authorizes a sendMessage fallback.
-	registerTestRunnerEntryRenderer(pi);
-
 	// --- Commands ---
 
 	pi.registerCommand("lens-toggle", {
@@ -2956,7 +2951,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 						...delivery,
 						owner: {
 							ownerId: testRunnerDeliveryOwnerId,
-							pi,
 							cacheManager,
 							runtime,
 							getCtx: () => ownEventCtx ?? {},
@@ -3564,6 +3558,13 @@ function activateExtension(hostPi: ExtensionAPI) {
 						cacheManager,
 						cwd,
 					);
+					const testFindings = consumeStagedTestRunnerFindings({
+						cwd,
+						sessionId: runtime.telemetrySessionId,
+						ownerId: testRunnerDeliveryOwnerId,
+						cacheManager,
+						runtime,
+					});
 					const agentNudge = consumeAgentNudge(dbg);
 					const sourceMessages = [
 						{
@@ -3573,6 +3574,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 						{
 							source: "turn-findings" as const,
 							messages: turnEndFindings?.messages ?? [],
+						},
+						{
+							source: "test-findings" as const,
+							messages: testFindings?.messages ?? [],
 						},
 						{
 							source: "agent-nudge" as const,
