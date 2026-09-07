@@ -1,3 +1,6 @@
+// flake-shape: real-process-spawn — the warm's install-log home resolution is
+// the subject: a real child whose env is fully pinned decides where the record
+// lands, and its own `os.homedir()` fallback is unobservable in-process (#2628).
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -288,14 +291,38 @@ describe("install log stays bounded (#1926)", () => {
 describe("prepare chain keeps load-bearing steps load-bearing (#1926)", () => {
 	const prepare = pkg.scripts?.prepare ?? "";
 
-	it("writes the fallback install log under PI_LENS_HOME, not HOME", () => {
+	// One real child per case, one shared spawn site. The child's own
+	// `os.homedir()` — which the empty-string fallback resolves through — is
+	// unobservable in-process, so each case is observed where the child
+	// actually writes the record (see the flake-shape header above).
+	it.each([
+		{
+			name: "writes the fallback install log under PI_LENS_HOME, not HOME",
+			piLensHome: "pinned" as const,
+		},
+		{
+			name: "treats an empty PI_LENS_HOME as unset, falling back to homedir",
+			piLensHome: "empty" as const,
+		},
+	])("$name", ({ piLensHome }) => {
 		const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "warm-home-"));
 		const pinnedHome = path.join(scratch, "pinned-home");
 		const canaryHome = path.join(scratch, "canary-home");
-		const installLog = path.join(pinnedHome, "install.log");
+		// Parity with getGlobalPiLensDir() (clients/file-utils.ts): the value is
+		// trimmed and an empty one is unset, so the empty case resolves through
+		// the child's own homedir — the canary HOME's `.pi-lens` directory —
+		// and never degrades to a bare relative path in the child's cwd.
+		const expectedLog =
+			piLensHome === "pinned"
+				? path.join(pinnedHome, "install.log")
+				: path.join(canaryHome, ".pi-lens", "install.log");
+		const otherLog =
+			piLensHome === "pinned"
+				? path.join(canaryHome, ".pi-lens", "install.log")
+				: path.join(pinnedHome, "install.log");
 		const env = { ...process.env };
 		delete env.PI_LENS_INSTALL_LOG;
-		env.PI_LENS_HOME = pinnedHome;
+		env.PI_LENS_HOME = piLensHome === "pinned" ? pinnedHome : "";
 		env.HOME = canaryHome;
 		env.USERPROFILE = canaryHome;
 		env.PI_LENS_SKIP_WARM_CACHE = "1";
@@ -303,14 +330,13 @@ describe("prepare chain keeps load-bearing steps load-bearing (#1926)", () => {
 		execFileSync(
 			process.execPath,
 			[path.join(root, "scripts", "warm-loader-cache.mjs")],
-			{ env, stdio: "ignore" },
+			{ env, cwd: scratch, stdio: "ignore" },
 		);
 
-		expect(
-			fs.existsSync(path.join(canaryHome, ".pi-lens", "install.log")),
-		).toBe(false);
-		expect(fs.existsSync(installLog)).toBe(true);
-		expect(JSON.parse(fs.readFileSync(installLog, "utf8").trim()).event).toBe(
+		expect(fs.existsSync(expectedLog)).toBe(true);
+		expect(fs.existsSync(otherLog)).toBe(false);
+		expect(fs.existsSync(path.join(scratch, "install.log"))).toBe(false);
+		expect(JSON.parse(fs.readFileSync(expectedLog, "utf8").trim()).event).toBe(
 			"warm_loader_cache",
 		);
 	});

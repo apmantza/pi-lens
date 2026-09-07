@@ -110,9 +110,9 @@ The runner pins `HOME`, `USERPROFILE`, `PI_LENS_HOME`, `PILENS_DATA_DIR`,
 `PI_LENS_INSTALL_LOG` and `npm_config_cache` inside its own scratch root, and
 passes that environment to **every** child — `pi`, the MCP server, `node`, and
 `npm`. All six matter. `PI_LENS_INSTALL_LOG` is the one that is easy to miss:
-`scripts/warm-loader-cache.mjs` (which `prepare` runs on every pack) keys its
-install log on THAT variable and falls back to `PI_LENS_HOME/install.log` (or
-`~/.pi-lens/install.log` when neither is set). The runner's first six runs
+`scripts/warm-loader-cache.mjs` (which `prepare` runs on every pack) prefers
+THAT variable for its install log and falls back to `PI_LENS_HOME/install.log`
+(or `~/.pi-lens/install.log` when neither is set). The runner's first six runs
 pinned the pi-lens home, passed no environment to `npm`, and put 41
 `warm_loader_cache` records into the maintainer's real `~/.pi-lens/install.log`
 (#2619 review F1).
