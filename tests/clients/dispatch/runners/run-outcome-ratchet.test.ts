@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { stripSource } from "../../../support/sweep-kit.js";
+import { firstCommentMatch, stripSource } from "../../../support/sweep-kit.js";
 
 const RUNNERS_DIR = fileURLToPath(
 	new URL("../../../../clients/dispatch/runners", import.meta.url),
@@ -67,18 +67,21 @@ function readRunner(name: string): string {
 	return fs.readFileSync(path.join(RUNNERS_DIR, name), "utf8");
 }
 
-const USES_PRIMITIVE = /utils\/(spawn-outcome|tool-failure)\.js/;
+const USES_PRIMITIVE =
+	/import\s+\{[^}]+\}\s+from\s+["']\.\/utils\/(?:spawn-outcome|tool-failure)\.js["']/;
 const SPAWNS = /safeSpawn/;
 
 export function usesPrimitive(source: string): boolean {
-	return USES_PRIMITIVE.test(stripSource(source, { strings: "keep" }));
+	return (
+		firstCommentMatch(source, USES_PRIMITIVE) !== undefined &&
+		USES_PRIMITIVE.test(stripSource(source, { strings: "keep" }))
+	);
 }
 
 describe("run-outcome primitive ratchet", () => {
 	it("every runner either uses the primitive or carries a reason", () => {
 		const unlisted = runnerFiles().filter(
-			(name) =>
-				!usesPrimitive(readRunner(name)) && !NOT_YET_ON_PRIMITIVE[name],
+			(name) => !usesPrimitive(readRunner(name)) && !NOT_YET_ON_PRIMITIVE[name],
 		);
 		expect(
 			unlisted,
@@ -145,11 +148,25 @@ describe("run-outcome primitive ratchet", () => {
 
 	it("does not count a commented-out primitive import", () => {
 		expect(
-			usesPrimitive('// import { classifyRunOutcome } from "./utils/tool-failure.js"'),
+			usesPrimitive(
+				'// import { classifyRunOutcome } from "./utils/tool-failure.js"',
+			),
 		).toBe(false);
 		expect(
-			usesPrimitive('import { classifyRunOutcome } from "./utils/tool-failure.js"'),
+			usesPrimitive(
+				'import { classifyRunOutcome } from "./utils/tool-failure.js"',
+			),
 		).toBe(true);
+		expect(
+			usesPrimitive(
+				"const prose = \"import { classifyRunOutcome } from './utils/tool-failure.js'\";",
+			),
+		).toBe(false);
+		expect(
+			usesPrimitive(
+				"const prose = `import { classifyRunOutcome } from './utils/tool-failure.js'`;",
+			),
+		).toBe(false);
 	});
 });
 

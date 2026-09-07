@@ -351,6 +351,30 @@ export function stripSource(
 	return out.join("");
 }
 
+/** Return the first raw match that is not only literal text. */
+export function firstCommentMatch(
+	source: string,
+	regex: RegExp,
+): RegExpMatchArray | undefined {
+	const commentsBlanked = stripSource(source, { strings: "keep" });
+	const stringsBlanked = stripSource(source, { strings: "blank" });
+	const globalRegex = new RegExp(
+		regex.source,
+		regex.flags.includes("g") ? regex.flags : `${regex.flags}g`,
+	);
+	for (const match of source.matchAll(globalRegex)) {
+		const start = match.index ?? 0;
+		const end = start + match[0].length;
+		if (
+			!/\S/.test(commentsBlanked.slice(start, end)) ||
+			/[^\s"'`]/.test(stringsBlanked.slice(start, end))
+		) {
+			return match;
+		}
+	}
+	return undefined;
+}
+
 export interface ListSourceFilesOptions {
 	/** File extensions to include, with the dot. Default `[".ts"]`. */
 	extensions?: readonly string[];

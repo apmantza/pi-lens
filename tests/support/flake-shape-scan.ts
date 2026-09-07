@@ -54,7 +54,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { listSourceFiles, relativePosix, stripSource } from "./sweep-kit.js";
+import {
+	firstCommentMatch,
+	listSourceFiles,
+	relativePosix,
+	stripSource,
+} from "./sweep-kit.js";
 
 export const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -371,7 +376,8 @@ export function countsByDetector(
 
 // ── Admission gate ──────────────────────────────────────────────────────────
 
-const ADMISSION_HEADER = /^[ \t]*\/\/[ \t]*flake-shape:[ \t]*([\w-]+)[ \t]*—[ \t]*(.+)$/gm;
+const ADMISSION_HEADER =
+	/^[ \t]*\/\/[ \t]*flake-shape:[ \t]*([\w-]+)[ \t]*—[ \t]*(.+)$/gm;
 
 export interface AdmissionHeader {
 	detector: string;
@@ -388,13 +394,6 @@ export interface AdmissionHeader {
  * `ADMITTED_AFTER_BASELINE` in `tests/clients/flake-shape-ratchet.test.ts`.
  */
 export function admissionHeader(source: string): AdmissionHeader | undefined {
-	const commentsBlanked = stripSource(source, { strings: "keep" });
-	for (const match of source.matchAll(ADMISSION_HEADER)) {
-		const start = match.index ?? 0;
-		if (/\S/.test(commentsBlanked.slice(start, start + match[0].length))) {
-			continue;
-		}
-		return { detector: match[1], reason: match[2].trim() };
-	}
-	return undefined;
+	const match = firstCommentMatch(source, ADMISSION_HEADER);
+	return match ? { detector: match[1], reason: match[2].trim() } : undefined;
 }

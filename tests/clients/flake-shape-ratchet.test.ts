@@ -894,8 +894,11 @@ describe("flake-shape scan — admission header parsing", () => {
 
 	it("does not count a header-shaped string literal", () => {
 		expect(
+			admissionHeader('"// flake-shape: real-process-spawn — quoted";\n'),
+		).toBeUndefined();
+		expect(
 			admissionHeader(
-				'const prose = "// flake-shape: real-process-spawn — quoted";\n',
+				"const prose = `\n// flake-shape: real-process-spawn — quoted`\n",
 			),
 		).toBeUndefined();
 		expect(
