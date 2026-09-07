@@ -411,7 +411,7 @@ function findBinder(
  * shape 40: "Prefer `ctx.cwd` to `projectRoot`: the walk-up must start at
  * the dispatch directory so a nested config overrides the repo-level one."
  */
-export function isCwdBearingExpression(node: SgNode): boolean {
+function isCwdBearingExpression(node: SgNode): boolean {
 	if (isProcessCwdCall(node)) return false;
 	const kind = String(node.kind());
 	if (

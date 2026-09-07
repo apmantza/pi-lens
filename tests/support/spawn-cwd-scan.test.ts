@@ -370,6 +370,21 @@ describe("K5 — a wrapper declared as `const x = async (…) => …`", () => {
 		expect(flagged).toEqual([at(source, "/* cwd */", "runTool")]);
 	});
 
+	it("f-funcexpr-caller-ok: the same rule reads a `const w = async function (…)` form", async () => {
+		// `functionName`'s variable-declarator branch has to name an anonymous
+		// FUNCTION EXPRESSION as well as an arrow, or the wrapper is invisible
+		// under a spelling change alone (AGENTS.md shape 34).
+		const wrapper = `
+			const runTool = async function (cmd: string, args: string[], cwd: string) {
+				return safeSpawnAsync(cmd, args, { cwd, timeout: 1000 });
+			};
+		`;
+		const source = `${wrapper}\nrunTool("tool", [], process.cwd());`;
+		const { flagged, wrappers } = await analyze(source);
+		expect(wrappers).toEqual(["runTool:positional@2"]);
+		expect(flagged).toEqual([at(source, "process.cwd()", "runTool")]);
+	});
+
 	it("f-arrow-caller-bare · P6/P7: a caller too short to reach the slot is flagged", async () => {
 		const source = `${wrapper}\nrunTool("tool", []);`;
 		const { flagged } = await analyze(source);
