@@ -371,7 +371,7 @@ export function countsByDetector(
 
 // ── Admission gate ──────────────────────────────────────────────────────────
 
-const ADMISSION_HEADER = /\/\/\s*flake-shape:\s*([\w-]+)\s*—\s*(.+)$/m;
+const ADMISSION_HEADER = /^[ \t]*\/\/[ \t]*flake-shape:[ \t]*([\w-]+)[ \t]*—[ \t]*(.+)$/gm;
 
 export interface AdmissionHeader {
 	detector: string;
@@ -388,7 +388,13 @@ export interface AdmissionHeader {
  * `ADMITTED_AFTER_BASELINE` in `tests/clients/flake-shape-ratchet.test.ts`.
  */
 export function admissionHeader(source: string): AdmissionHeader | undefined {
-	const m = ADMISSION_HEADER.exec(source);
-	if (!m) return undefined;
-	return { detector: m[1], reason: m[2].trim() };
+	const commentsBlanked = stripSource(source, { strings: "keep" });
+	for (const match of source.matchAll(ADMISSION_HEADER)) {
+		const start = match.index ?? 0;
+		if (/\S/.test(commentsBlanked.slice(start, start + match[0].length))) {
+			continue;
+		}
+		return { detector: match[1], reason: match[2].trim() };
+	}
+	return undefined;
 }

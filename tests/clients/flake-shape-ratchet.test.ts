@@ -891,4 +891,17 @@ describe("flake-shape scan — admission header parsing", () => {
 	it("returns undefined with no header", () => {
 		expect(admissionHeader("execFileSync(cmd);\n")).toBeUndefined();
 	});
+
+	it("does not count a header-shaped string literal", () => {
+		expect(
+			admissionHeader(
+				'const prose = "// flake-shape: real-process-spawn — quoted";\n',
+			),
+		).toBeUndefined();
+		expect(
+			admissionHeader(
+				"// flake-shape: real-process-spawn — a real comment reason\n",
+			)?.detector,
+		).toBe("real-process-spawn");
+	});
 });

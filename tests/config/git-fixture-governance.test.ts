@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { assertNonEmptyScan } from "../support/sweep-kit.js";
+import { assertNonEmptyScan, stripSource } from "../support/sweep-kit.js";
 import {
 	KNOWN_FIXTURE_EMAILS,
 	KNOWN_FIXTURE_NAMES,
@@ -58,12 +58,22 @@ export function findGitSpawnOffenders(
 				)
 			)
 				return false;
+			const helperEvidence = stripSource(source, { strings: "keep" });
+			const helperStringsBlanked = stripSource(source, { strings: "blank" });
+			const spawnEvidence = stripSource(source, { strings: "keep" });
 			const imported = new Set<string>();
-			for (const match of source.matchAll(helperImport)) {
+			for (const match of helperEvidence.matchAll(helperImport)) {
+				const start = match.index ?? 0;
+				if (
+					!/\S/.test(
+						helperStringsBlanked.slice(start, start + match[0].length),
+					)
+				)
+					continue;
 				for (const item of match[1].split(","))
 					imported.add(item.trim().split(/\s+as\s+/)[0] ?? "");
 			}
-			for (const match of source.matchAll(directGitSpawn)) {
+			for (const match of spawnEvidence.matchAll(directGitSpawn)) {
 				if (!imported.has(match[1])) return true;
 			}
 			return false;
@@ -198,6 +208,19 @@ describe("real Git fixture governance", () => {
 				{
 					file: "synthetic.test.ts",
 					source: '// git-fixture-env\nexecFileSync("git", ["status"])',
+				},
+			]),
+		).toEqual(["synthetic.test.ts"]);
+	});
+
+	it("does not let a string literal import excuse a bare Git spawn", () => {
+		expect(
+			findGitSpawnOffenders([
+				{
+					file: "synthetic.test.ts",
+					source:
+						'const prose = "import { execFileSync } from \'./git-fixture-env.js\'";\n' +
+						'execFile' + 'Sync("git", ["status"])',
 				},
 			]),
 		).toEqual(["synthetic.test.ts"]);

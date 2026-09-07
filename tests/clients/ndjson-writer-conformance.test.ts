@@ -29,10 +29,14 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { clientSourceFiles, repoRoot } from "../support/atomic-write-scan.js";
-import { assertNonEmptyScan } from "../support/sweep-kit.js";
+import { assertNonEmptyScan, stripSource } from "../support/sweep-kit.js";
 
 const CREATE_LOGGER_IMPORT =
 	/import\s*\{[^}]*\bcreateNdjsonLogger\b[^}]*\}\s*from\s*["']\.\/ndjson-logger\.js["']/;
+
+export function hasCreateLoggerImport(source: string): boolean {
+	return CREATE_LOGGER_IMPORT.test(stripSource(source, { strings: "keep" }));
+}
 
 /** Known ndjson producers that do not match the `*-logger.ts` naming shape. */
 const KNOWN_NON_SUFFIX_PRODUCERS = [
@@ -66,7 +70,9 @@ function relativeToClients(absolute: string): string {
  * omission this scan exists to catch.
  */
 function loggerCallSites(absolute: string): LoggerCallSite[] {
-	const source = fs.readFileSync(absolute, "utf8");
+	const source = stripSource(fs.readFileSync(absolute, "utf8"), {
+		strings: "blank",
+	});
 	const sites: LoggerCallSite[] = [];
 	const call = /createNdjsonLogger\s*\(/g;
 	let match = call.exec(source);
@@ -107,7 +113,7 @@ function loggerModules(): string[] {
 function createLoggerCallerModules(): string[] {
 	return clientSourceFiles()
 		.filter((file) => path.basename(file) !== "ndjson-logger.ts")
-		.filter((file) => CREATE_LOGGER_IMPORT.test(fs.readFileSync(file, "utf8")));
+		.filter((file) => hasCreateLoggerImport(fs.readFileSync(file, "utf8")));
 }
 
 describe("NDJSON writer conformance (#2505)", () => {
@@ -125,7 +131,7 @@ describe("NDJSON writer conformance (#2505)", () => {
 				file: relativeToClients(file),
 				source: fs.readFileSync(file, "utf8"),
 			}))
-			.filter(({ source }) => !CREATE_LOGGER_IMPORT.test(source))
+			.filter(({ source }) => !hasCreateLoggerImport(source))
 			.map(({ file }) => file);
 
 		expect(violations).toEqual([]);
@@ -136,7 +142,7 @@ describe("NDJSON writer conformance (#2505)", () => {
 		for (const name of KNOWN_NON_SUFFIX_PRODUCERS) {
 			const source = fs.readFileSync(path.join(clientsRoot, name), "utf8");
 			expect(
-				CREATE_LOGGER_IMPORT.test(source),
+				hasCreateLoggerImport(source),
 				`${name} should import createNdjsonLogger`,
 			).toBe(true);
 		}
@@ -189,7 +195,11 @@ describe("NDJSON writer conformance (#2505)", () => {
 		}));
 
 		const wrongResolver = sources
-			.filter(({ source }) => /\bgetGlobalPiLensDir\s*\(/.test(source))
+			.filter(({ source }) =>
+				/\bgetGlobalPiLensDir\s*\(/.test(
+					stripSource(source, { strings: "blank" }),
+				),
+			)
 			.map(({ file }) => file);
 		expect(wrongResolver).toEqual([]);
 
@@ -200,8 +210,25 @@ describe("NDJSON writer conformance (#2505)", () => {
 		// RIGHT one positively, so the only way into this population is through
 		// the seam that carries the redirect.
 		const noResolver = sources
-			.filter(({ source }) => !/\bgetGlobalPiLensLogDir\s*\(/.test(source))
+			.filter(({ source }) =>
+				!/\bgetGlobalPiLensLogDir\s*\(/.test(
+					stripSource(source, { strings: "blank" }),
+				),
+			)
 			.map(({ file }) => file);
 		expect(noResolver).toEqual([]);
+	});
+
+	it("does not count a commented-out logger import", () => {
+		expect(
+			hasCreateLoggerImport(
+				'// import { createNdjsonLogger } from "./ndjson-logger.js"\n',
+			),
+		).toBe(false);
+		expect(
+			hasCreateLoggerImport(
+				'import { createNdjsonLogger } from "./ndjson-logger.js"\n',
+			),
+		).toBe(true);
 	});
 });
