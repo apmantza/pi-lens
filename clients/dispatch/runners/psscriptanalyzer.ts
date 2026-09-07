@@ -55,8 +55,10 @@ function spawnPs(
 	cmd: string,
 	args: string[],
 	timeoutMs = PS_TIMEOUT_MS,
+	cwd?: string,
 ): Promise<SpawnResult> {
 	return safeSpawnAsync(cmd, args, {
+		cwd,
 		timeout: timeoutMs,
 		resourceLabel: "psscriptanalyzer",
 	});
@@ -359,14 +361,19 @@ const psScriptAnalyzerRunner: RunnerDefinition = {
 		try {
 			const sampler = startHostStallSampler();
 			const startedAt = Date.now();
-			const result = await spawnPs(cmd, [
-				"-NoProfile",
-				"-NonInteractive",
-				"-File",
-				tmpScript,
-				"-FilePath",
-				absPath,
-			]);
+			const result = await spawnPs(
+				cmd,
+				[
+					"-NoProfile",
+					"-NonInteractive",
+					"-File",
+					tmpScript,
+					"-FilePath",
+					absPath,
+				],
+				PS_TIMEOUT_MS,
+				cwd,
+			);
 			const hostStallMs = sampler.stop();
 			const elapsedMs = Date.now() - startedAt;
 

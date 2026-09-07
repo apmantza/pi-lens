@@ -167,4 +167,49 @@ describe("yaml/sql runners", () => {
 			env.cleanup();
 		}
 	});
+
+	// #2691: the lint spawn passed no `cwd`, so yamllint discovered
+	// `.yamllint` by walking upward from the extension host's `process.cwd()`
+	// (yamllint/cli.py's `find_project_config_filepath` defaults to `path='.'`
+	// and only ever climbs from there — it never looks at the target file's
+	// own directory) instead of `ctx.cwd`, even though `hasYamllintConfig`
+	// and the availability probe both already used `ctx.cwd`. Same shape as
+	// #1731 (sqlfluff) above.
+	it("yamllint runner spawns the lint with the dispatch context's cwd, not the host's (#2691)", async () => {
+		const env = setupTestEnvironment("pi-lens-yamllint-cwd-");
+		try {
+			const runner = (
+				await import("../../../../clients/dispatch/runners/yamllint.js")
+			).default;
+			const safeSpawnMod = await import("../../../../clients/safe-spawn.js");
+			fs.writeFileSync(
+				path.join(env.tmpDir, ".yamllint"),
+				"extends: default\n",
+			);
+			vi.mocked(safeSpawnMod.safeSpawn).mockReturnValue({
+				error: undefined,
+				status: 0,
+				stdout: "",
+				stderr: "",
+			});
+
+			await runner.run(
+				createCtx(
+					"yaml",
+					path.join(env.tmpDir, "a.yaml"),
+					env.tmpDir,
+				) as never,
+			);
+
+			expect(safeSpawn).toHaveBeenCalled();
+			const [, , options] = safeSpawn.mock.calls[0] as [
+				string,
+				string[],
+				{ cwd?: string } | undefined,
+			];
+			expect(options?.cwd).toBe(env.tmpDir);
+		} finally {
+			env.cleanup();
+		}
+	});
 });
