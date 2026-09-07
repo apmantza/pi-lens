@@ -140,7 +140,14 @@ operator's private notes, so a different orchestrator can run the same train.
   round, state, head SHA, merge-order note, and for bug lanes
   `caught by / should have been caught by`; a header line with the quota
   reading and the merged list. Update it on every dispatch, report and merge.
-  It is what survives a context reset.
+  It is what survives a context reset. `state` is one of exactly:
+  `not started`, `fixing rN`, `waiting on CI`, `waiting on review`,
+  `waiting on verify`, `blocked`, `ready to merge`, `merged`,
+  `needs user decision`, `held` — a fixed vocabulary so a resumed session
+  (or a different orchestrator) can build the status table without reading
+  the transcripts, and so "needs user decision" and "held" are visible as
+  rows rather than buried in prose. (Borrowed 2026-09-07 from the heartbeat
+  classification in aromanarguello/roman-skills `orchestrate-lane`.)
 - **A lane's worktree lives until its PR merges.** Pruning it after a report
   makes the owning worker un-resumable, so every fix round then costs a fresh
   worker. Prune on merge, or when the lane is abandoned.
@@ -210,6 +217,18 @@ operator's private notes, so a different orchestrator can run the same train.
   detector's boundary map). Each entry becomes, before merge, one of: an
   issue, a ledger note with a reason, or a line in the PR body. Silence is not
   a disposition.
+- **Debt pass at the regroup (2026-09-07).** Before prioritising the next
+  cycle, run the repo's own dead-code and duplication tools over the files
+  changed since the last release tag (`git diff --name-only v<last>..origin/master`;
+  `npx knip` uses the config in package.json, Sonar's duplication gate is the
+  CI form): every reviewer's "Named output" that named a re-derived seam
+  (#2694: the call-site scan hand-rolled in three sweeps) is what this pass
+  finds across lanes that no single review can see. Findings become issues
+  with the file list, never release blockers, and test-seam duplication is
+  IN scope — "Test infrastructure — reuse before you write" in AGENTS.md is
+  the standing rule, so the borrowed skill's "test duplication is often
+  intentional" exclusion is not borrowed. (Shape from aromanarguello/roman-skills
+  `techdebt`.)
 - **Session retrospective before the regroup.** One ledger block: what the
   maintainer had to bring in from outside, why the process did not surface it,
   and where the lesson was routed (contract, playbook, skill, issue). The
