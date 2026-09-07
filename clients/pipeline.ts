@@ -418,12 +418,7 @@ function createPhaseTracker(toolName: string, filePath: string): PhaseTracker {
 
 // --- ESLint autofix helpers ---
 
-export {
-	hasEslintConfig,
-	hasRubocopConfig,
-	hasSqlfluffConfig,
-	hasStylelintConfig,
-};
+export { hasEslintConfig, hasSqlfluffConfig, hasStylelintConfig };
 
 /**
  * eslint autofix availability, per cwd + PATH. The verdict is owned by the
@@ -651,7 +646,7 @@ async function tryDetektFix(filePath: string, cwd: string): Promise<number> {
 	);
 }
 
-export async function tryMarkdownlintFix(
+async function tryMarkdownlintFix(
 	filePath: string,
 	cwd: string,
 ): Promise<number> {

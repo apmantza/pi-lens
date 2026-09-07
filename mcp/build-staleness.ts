@@ -38,7 +38,7 @@ export type StatFn = (
 	targetPath: string,
 ) => { mtimeMs: number; size: number } | undefined;
 
-export const realStat: StatFn = (targetPath) => {
+const realStat: StatFn = (targetPath) => {
 	try {
 		return fs.statSync(targetPath);
 	} catch {

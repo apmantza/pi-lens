@@ -26,7 +26,6 @@ import {
 	absentRunCommentMarker,
 	decideRunHealthActions,
 	fetchHeadRunHealth,
-	RUN_HEALTH,
 	stalledRunCommentMarker,
 } from "./warden-run-health.mjs";
 
@@ -470,7 +469,7 @@ export async function applyAction(fetcher, owner, repo, pr, action) {
  * Called ONLY for a head already classified absent, so the extra REST call
  * lands on the anomalous minority of PRs, never on the healthy sweep.
  */
-export async function hasAbsentRunComment(fetcher, owner, repo, pr) {
+async function hasAbsentRunComment(fetcher, owner, repo, pr) {
 	// Paginated (review round 1, F6): a first-page-only read stops finding its
 	// own marker past 100 comments and starts repeating the notice.
 	return commentMarkerExists(
@@ -491,7 +490,7 @@ export async function hasAbsentRunComment(fetcher, owner, repo, pr) {
  * look" as "no marker", which would repost the notice and, worse, re-attribute
  * a person's cancellation to the warden.
  */
-export async function readStalledRunMarkers(fetcher, owner, repo, pr, health) {
+async function readStalledRunMarkers(fetcher, owner, repo, pr, health) {
 	const runs = [
 		...(health.stalledRuns ?? []),
 		...(health.cancelledStalledRuns ?? []),
@@ -643,7 +642,7 @@ export async function runWarden({ fetcher, owner, repo, now = Date.now() }) {
  * The sweep record for one head (#2184 AC3): a classification plus the exact
  * workflows behind it, short enough for one line of the run summary.
  */
-export function summarizeRunHealth(health) {
+function summarizeRunHealth(health) {
 	const detail = [];
 	for (const run of health.starvedRuns)
 		detail.push(
@@ -670,5 +669,3 @@ export function summarizeRunHealth(health) {
 		detail: detail.join("; "),
 	};
 }
-
-export { RUN_HEALTH };

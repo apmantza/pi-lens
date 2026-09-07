@@ -1,6 +1,6 @@
 /** Turn-end handoff for runners moved off the post-write critical path. */
 
-import type { Diagnostic, RunnerResult } from "./types.js";
+import type { RunnerResult } from "./types.js";
 import { incrementDegradationCount } from "../degradation-ledger.js";
 
 export interface PendingRunnerFindings {
@@ -20,7 +20,7 @@ interface PendingRunnerPromise extends Omit<PendingRunnerFindings, "result"> {
 }
 
 const pending: PendingRunnerPromise[] = [];
-export const MAX_PENDING_RUNNER_FINDINGS = 50;
+const MAX_PENDING_RUNNER_FINDINGS = 50;
 
 export function deferRunnerFindings(
 	entry: Omit<PendingRunnerFindings, "result"> & {
@@ -114,5 +114,3 @@ export function resetPendingRunnerFindings(): void {
 export function pendingRunnerFindingsSize(): number {
 	return pending.length;
 }
-
-export type PendingRunnerDiagnostic = Diagnostic;

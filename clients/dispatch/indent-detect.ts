@@ -1,4 +1,4 @@
-export type IndentStyle = "tab" | "space";
+type IndentStyle = "tab" | "space";
 
 export interface Indentation {
 	style: IndentStyle;

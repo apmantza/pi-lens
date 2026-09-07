@@ -239,9 +239,9 @@ export const EXCLUDED_DIRS = [
  * `buildProjectIgnoreMatcher`'s `patternsForDir` (#783) — both are tagged
  * `"pilens"` and share the same tracked-file-rescue exemption.
  */
-export type GitignorePatternLayer = "global" | "gitignore" | "pilens";
+type GitignorePatternLayer = "global" | "gitignore" | "pilens";
 
-export interface GitignorePattern {
+interface GitignorePattern {
 	pattern: string;
 	negated: boolean;
 	directoryOnly: boolean;
@@ -397,7 +397,7 @@ function matchesGitignorePattern(
 	});
 }
 
-export function readGitignorePatterns(
+function readGitignorePatterns(
 	rootDir: string,
 	layer: GitignorePatternLayer = "gitignore",
 ): GitignorePattern[] {

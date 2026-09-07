@@ -302,7 +302,3 @@ export const TOOL_PLANS: Record<string, ToolPlan> = Object.fromEntries(
 export function getToolPlan(kind: FileKind): ToolPlan | undefined {
 	return TOOL_PLANS[kind];
 }
-
-export function getAllToolPlans(): Record<string, ToolPlan> {
-	return TOOL_PLANS;
-}

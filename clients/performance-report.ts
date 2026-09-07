@@ -7,8 +7,8 @@ import {
 } from "./latency-logger.js";
 import { getMaxLogSizeMB } from "./log-cleanup.js";
 
-export const DEFAULT_PERF_TOP_N = 5;
-export const MAX_PERF_TOP_N = 50;
+const DEFAULT_PERF_TOP_N = 5;
+const MAX_PERF_TOP_N = 50;
 export const MAX_PERF_PHASE_SAMPLES = 20_000;
 const PARSE_YIELD_EVERY = 500;
 
@@ -29,7 +29,7 @@ function boundedPositiveInteger(
 		: fallback;
 }
 
-export interface PhaseLatencySummary {
+interface PhaseLatencySummary {
 	phase: string;
 	samples: number;
 	p50Ms: number;

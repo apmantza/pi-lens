@@ -5,7 +5,7 @@ import type { ExtensionRunMode } from "./extension-mode.js";
 import type { ProjectTrustState } from "./project-trust.js";
 import type { UserNotifyLevel } from "./user-notify.js";
 
-export type HostLogSink = (entry: Record<string, unknown>) => void;
+type HostLogSink = (entry: Record<string, unknown>) => void;
 
 export interface HostPorts {
 	readonly notify: {

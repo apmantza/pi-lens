@@ -86,7 +86,7 @@ export function getManagedLogFiles(dir: string = LOG_DIR): string[] {
  */
 export const ROTATED_BACKUP_RE = /(\.\d{4}-\d{2}-\d{2}T.*\.log|\.log\..+)$/;
 
-export interface LogCleanupConfig {
+interface LogCleanupConfig {
 	retentionDays: number;
 	maxSizeMB: number;
 }
@@ -277,45 +277,4 @@ export function runLogCleanup(dbg?: (msg: string) => void): {
 	}
 
 	return results;
-}
-
-/**
- * Get current log storage summary
- */
-export function getLogStorageSummary(): {
-	totalMB: number;
-	files: { name: string; sizeMB: number; ageDays: number }[];
-} {
-	const files: { name: string; sizeMB: number; ageDays: number }[] = [];
-	let totalMB = 0;
-
-	// Main logs
-	for (const name of getManagedLogFiles()) {
-		const filePath = path.join(LOG_DIR, name);
-		if (fs.existsSync(filePath)) {
-			const sizeMB = getFileSizeMB(filePath);
-			const ageDays = getFileAgeDays(filePath);
-			files.push({ name, sizeMB, ageDays });
-			totalMB += sizeMB;
-		}
-	}
-
-	// Daily logs
-	try {
-		if (fs.existsSync(LOGS_SUBDIR)) {
-			const dailyFiles = fs.readdirSync(LOGS_SUBDIR);
-			for (const name of dailyFiles) {
-				if (!name.endsWith(".jsonl")) continue;
-				const filePath = path.join(LOGS_SUBDIR, name);
-				const sizeMB = getFileSizeMB(filePath);
-				const ageDays = getFileAgeDays(filePath);
-				files.push({ name: `logs/${name}`, sizeMB, ageDays });
-				totalMB += sizeMB;
-			}
-		}
-	} catch {
-		// Ignore
-	}
-
-	return { totalMB, files };
 }

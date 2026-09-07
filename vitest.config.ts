@@ -365,6 +365,11 @@ const wallClockBudgetInclude = [
 	// spawns of scripts/classify-ci-failure.mjs, asserting exit code and argv
 	// wiring the library-level suite (in-process) cannot see.
 	"tests/scripts/classify-ci-failure-cli.test.ts",
+	// #2723: mirrors notify-install-smoke-drift.test.ts's own admission --
+	// this second, independent drift-notifier CLI's --dry-run env-reading and
+	// real (stubbed) `gh` wiring are the subject; no in-process double is
+	// faithful to the real subcommands it invokes.
+	"tests/scripts/notify-tool-smoke-red.test.ts",
 	// #2698: real `git init`/`add`/`commit`/`ls-files` calls against a
 	// throwaway fixture repo — gitignore/tracked-vs-untracked resolution is
 	// the exact mechanism under test, which no mock reproduces faithfully.
@@ -374,6 +379,11 @@ const wallClockBudgetInclude = [
 	// gate, which requires it for any newly admitted real spawn regardless
 	// of this list's own "carries a budget assertion" charter above.
 	"tests/scripts/knip-sibling-purge.test.ts",
+	// #2699: the subject is the guard's own stdin/exit-code/stderr contract --
+	// what Claude Code actually invokes for a PreToolUse hook. No in-process
+	// call to the exported classify functions can see a drift in that
+	// contract (flake-shape admission).
+	"tests/scripts/guard-bash-hook.test.ts",
 ];
 // #2512 round 2: runtime-turn-session.test.ts's "retires a deleted failed
 // target through the real client and records real telemetry" spawns a REAL

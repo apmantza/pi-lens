@@ -4,7 +4,7 @@
  * Links diagnostics to resolutions, tracks violation patterns.
  */
 
-export interface TrackerEntry {
+interface TrackerEntry {
 	ruleId: string;
 	filePath: string;
 	line: number;
@@ -13,7 +13,7 @@ export interface TrackerEntry {
 	agentFixed: boolean;
 }
 
-export interface SessionStats {
+interface SessionStats {
 	totalShown: number;
 	totalAutoFixed: number;
 	totalAgentFixed: number;

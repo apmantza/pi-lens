@@ -54,7 +54,7 @@ import * as path from "node:path";
  * @param {import("node:fs").Dirent} entry
  * @returns {"file" | "dir" | "other"}
  */
-export function resolvedEntryKind(fullPath, entry) {
+function resolvedEntryKind(fullPath, entry) {
 	if (entry.isSymbolicLink()) {
 		try {
 			const stats = fs.statSync(fullPath);

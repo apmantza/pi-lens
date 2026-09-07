@@ -44,13 +44,13 @@ import {
 	quietWindowWaitMs,
 } from "./quiet-window-config.js";
 
-export interface QuietWindowTaskResult {
+interface QuietWindowTaskResult {
 	name: string;
 	durationMs: number;
 	ok: boolean;
 }
 
-export interface QuietWindowContext {
+interface QuietWindowContext {
 	runtime: RuntimeCoordinator;
 	cwd?: string;
 	sessionId?: string;

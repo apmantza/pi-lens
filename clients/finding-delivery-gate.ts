@@ -172,9 +172,6 @@ export function formatCacheAgeLabel(
 		: `scanned ${ageHours}h ${remMinutes}m ago`;
 }
 
-/** How a delivery surface satisfies #1634's "gated or labeled" contract. */
-export type DeliveryMode = "gated" | "labeled";
-
 interface DeliverySurfaceBase {
 	/** Human-readable one-line description of what the surface renders. */
 	description: string;
@@ -225,13 +222,13 @@ interface DeliverySurfaceBase {
 	evidenceMin?: number;
 }
 
-export interface GatedDeliverySurface extends DeliverySurfaceBase {
+interface GatedDeliverySurface extends DeliverySurfaceBase {
 	mode: "gated";
 	/** Named gate(s) this surface routes through before rendering. */
 	gates: string[];
 }
 
-export interface LabeledDeliverySurface extends DeliverySurfaceBase {
+interface LabeledDeliverySurface extends DeliverySurfaceBase {
 	mode: "labeled";
 	/** Why this surface cannot take the full gate stack. */
 	reason: string;

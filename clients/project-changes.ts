@@ -96,7 +96,7 @@ export function readProjectChanges(cwd: string): ProjectChangeEntry[] {
  * version — a missing/corrupt log is the normal cold-start case, not a
  * caller-visible error.
  */
-export async function readProjectChangesAsync(
+async function readProjectChangesAsync(
 	cwd: string,
 ): Promise<ProjectChangeEntry[]> {
 	const logPath = getProjectChangeLogPath(cwd);

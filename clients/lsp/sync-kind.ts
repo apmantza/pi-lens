@@ -19,7 +19,6 @@
 
 export type TextDocumentSyncKind = 0 | 1 | 2;
 
-export const TEXT_DOCUMENT_SYNC_KIND_NONE: TextDocumentSyncKind = 0;
 export const TEXT_DOCUMENT_SYNC_KIND_FULL: TextDocumentSyncKind = 1;
 export const TEXT_DOCUMENT_SYNC_KIND_INCREMENTAL: TextDocumentSyncKind = 2;
 

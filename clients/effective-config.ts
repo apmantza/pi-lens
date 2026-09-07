@@ -98,10 +98,10 @@ export interface EffectiveConfigOptions {
  * list is taken at `cwd` itself, exactly as if no `file` had been asked
  * about at all.
  */
-export type EffectiveConfigDocument = ConfigDocumentSummary;
+type EffectiveConfigDocument = ConfigDocumentSummary;
 
 /** A custom server's definition, reduced to what cannot carry a secret. */
-export interface RedactedServerSpec {
+interface RedactedServerSpec {
 	/** `argv[0]` only. */
 	readonly command?: string;
 	/** How many argv entries the definition carries, including `argv[0]`. */
@@ -124,12 +124,12 @@ export interface EffectiveServerDecision {
 }
 
 /** Why a runner did or did not make a file's dispatch plan. */
-export type ToolSelectionReason =
+type ToolSelectionReason =
 	| "selected"
 	| "not-registered-for-kind"
 	| "no-dispatch-plan";
 
-export interface EffectiveToolDecision {
+interface EffectiveToolDecision {
 	readonly id: string;
 	readonly selected: boolean;
 	readonly reason: ToolSelectionReason;

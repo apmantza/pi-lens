@@ -62,12 +62,3 @@ export function logDispositionEvent(entry: DispositionLogEntry): void {
 	}
 	writer.log({ ts: new Date().toISOString(), ...entry });
 }
-
-export function getDispositionLogPath(): string {
-	return DISPOSITION_LOG_FILE;
-}
-
-/** Resolve once all enqueued disposition writes are on disk. */
-export function flushDispositionLog(): Promise<void> {
-	return writer.flush();
-}

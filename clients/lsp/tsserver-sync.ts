@@ -41,7 +41,7 @@ import { normalizeMapKey } from "../path-utils.js";
 // Types
 // ---------------------------------------------------------------------------
 
-export interface TsserverSyncRawDiagnostic {
+interface TsserverSyncRawDiagnostic {
 	message: string;
 	category: string;
 	code?: number;
@@ -76,7 +76,7 @@ export interface TsserverSyncCapableService {
 // Constants
 // ---------------------------------------------------------------------------
 
-export const TSSERVER_REQUEST_COMMAND = "typescript.tsserverRequest";
+const TSSERVER_REQUEST_COMMAND = "typescript.tsserverRequest";
 
 export interface TsserverProjectIdentityCommandChannel {
 	executeCommand?: (
@@ -314,7 +314,7 @@ export async function fetchTsserverProjectIdentity(
 // Helpers
 // ---------------------------------------------------------------------------
 
-export function isTsserverSyncRawDiagnostic(
+function isTsserverSyncRawDiagnostic(
 	value: unknown,
 ): value is TsserverSyncRawDiagnostic {
 	if (!value || typeof value !== "object") return false;
@@ -322,7 +322,7 @@ export function isTsserverSyncRawDiagnostic(
 	return typeof v.message === "string" && typeof v.category === "string";
 }
 
-export function tsserverSeverityFromCategory(category: string): 1 | 2 | 3 | 4 {
+function tsserverSeverityFromCategory(category: string): 1 | 2 | 3 | 4 {
 	switch (category) {
 		case "error":
 			return 1;
@@ -340,7 +340,7 @@ export function tsserverSeverityFromCategory(category: string): 1 | 2 | 3 | 4 {
  * `LSPDiagnostic`. Both `line`/`offset` are 1-based in tsserver's protocol
  * and 0-based in LSP — this conversion handles that.
  */
-export function tsserverSyncDiagnosticToLsp(
+function tsserverSyncDiagnosticToLsp(
 	d: TsserverSyncRawDiagnostic,
 ): LSPDiagnostic {
 	const startLine = Math.max(0, (d.startLocation?.line ?? 1) - 1);
@@ -372,7 +372,7 @@ export function tsserverSyncDiagnosticToLsp(
  * executed, the response envelope isn't `{success:true, body:[...]}`, or
  * any error is thrown.
  */
-export async function runTsserverSyncCommand(
+async function runTsserverSyncCommand(
 	svc: TsserverSyncCapableService,
 	file: string,
 	command: "semanticDiagnosticsSync" | "syntacticDiagnosticsSync",

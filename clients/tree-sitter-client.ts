@@ -139,12 +139,6 @@ export interface StructuralMatch {
 	captures: Record<string, string>;
 }
 
-export interface SearchPattern {
-	pattern: string;
-	language: string;
-	metavars: string[];
-}
-
 export interface TreeSitterParserCounters {
 	parserInvocations: number;
 	parserDurationMs: number;
@@ -210,7 +204,7 @@ function grammarFileStamp(filePath: string): string | undefined {
 	}
 }
 
-export function isTreeSitterWasmAbortError(error: unknown): boolean {
+function isTreeSitterWasmAbortError(error: unknown): boolean {
 	const message = error instanceof Error ? error.message : String(error);
 	return message.includes("Aborted") || message.includes("abort()");
 }
@@ -4612,63 +4606,3 @@ export class TreeSitterClient {
 }
 
 // --- Simplified Pattern Search (regex fallback) ---
-
-/**
- * Fallback structural search using regex when tree-sitter unavailable
- * Less accurate but works without WASM dependencies
- */
-export function regexStructuralSearch(
-	pattern: string,
-	files: string[],
-	options: { maxResults?: number } = {},
-): StructuralMatch[] {
-	const matches: StructuralMatch[] = [];
-	const maxResults = options.maxResults ?? 50;
-
-	// Extract pattern structure for regex
-	// "console.log($MSG)" -> /console\.log\(([^)]+)\)/
-	const regexPattern = pattern
-		.replace(/\\/g, "\\\\")
-		.replace(/\./g, "\\.")
-		.replace(/\$\$\$[A-Z_][A-Z0-9_]*/g, "(.*?)") // variadic - non-greedy
-		.replace(/\$[A-Z_][A-Z0-9_]*/g, "([^,)]+)"); // single - capture group
-
-	try {
-		const regex = new RegExp(regexPattern, "g");
-
-		for (const file of files) {
-			if (matches.length >= maxResults) break;
-
-			try {
-				const content = fs.readFileSync(file, "utf-8");
-				const lines = content.split("\n");
-
-				for (let i = 0; i < lines.length; i++) {
-					regex.lastIndex = 0;
-					const match = regex.exec(lines[i]);
-					if (match) {
-						const captures: Record<string, string> = {};
-						// Extract captures
-						for (let j = 1; j < match.length; j++) {
-							captures[`$${j}`] = match[j];
-						}
-
-						matches.push({
-							file,
-							line: i + 1,
-							column: match.index + 1,
-							matchedText: match[0],
-							captures,
-						});
-
-						if (matches.length >= maxResults) break;
-					}
-				}
-			} catch {}
-		}
-	} catch {
-		// Invalid regex
-	}
-
-	return matches;
-}

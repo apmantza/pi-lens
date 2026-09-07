@@ -50,7 +50,7 @@ export const WORKER_PEAK_RSS_BUDGET_MB = 2048;
 export const NON_WORKER_RESERVE_MB = 3072;
 
 /** Local default, unchanged from the pre-#2042 measured posture. */
-export const LOCAL_MAX_WORKERS = "50%";
+const LOCAL_MAX_WORKERS = "50%";
 
 /** Per-fork V8 heap ceiling on a host with room for it (pre-#2042 value). */
 export const MAX_WORKER_HEAP_MB = 4096;

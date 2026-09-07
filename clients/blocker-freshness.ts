@@ -145,7 +145,7 @@ export type ForwardImportResolver = (
  * so the sweep applies its ONE drift check (`detectDrift`, shared with the
  * inline-blocker branch below) without re-implementing the write.
  */
-export interface WidgetSweepBlockerEntry {
+interface WidgetSweepBlockerEntry {
 	filePath: string;
 	/** Earliest `observedAt` among this file's non-stale, LSP-sourced blocking
 	 * diagnostics — the conservative baseline (using the latest could hide
@@ -267,13 +267,6 @@ async function resolveForwardImportsMemoized(
 		imports,
 	});
 	return imports;
-}
-
-/** Test-only: clear the extractor and import-resolution memos. */
-export function _resetBlockerFreshnessForTests(): void {
-	extractorCache.clear();
-	importResolutionMemo.clear();
-	importResolutionMemoTurnIndex = undefined;
 }
 
 /**

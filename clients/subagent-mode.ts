@@ -42,7 +42,7 @@
  */
 
 /** Which vocabulary matched when classifying the session as a subagent. */
-export type SubagentMarker = "pi-subagents" | "avtc-pi-subagent";
+type SubagentMarker = "pi-subagents" | "avtc-pi-subagent";
 
 interface SubagentClassification {
 	isSubagent: boolean;

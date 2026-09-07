@@ -190,7 +190,7 @@ export function parseTomlStringArray(
  * true`) never matches either — the literal key is immediately followed by
  * `=`, not `.`.
  */
-export function parseTomlScalarString(
+function parseTomlScalarString(
 	content: string | undefined,
 	key: string,
 ): string | undefined {
@@ -319,7 +319,7 @@ export function readCargoDependencyNames(content: string): string[] {
  * (`edition.workspace = true`) or the inline-table form
  * (`edition = { workspace = true }`).
  */
-export function isTomlKeyWorkspaceInherited(
+function isTomlKeyWorkspaceInherited(
 	content: string | undefined,
 	key: string,
 ): boolean {

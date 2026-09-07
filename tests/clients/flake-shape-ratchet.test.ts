@@ -190,6 +190,15 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the CLI's real exit code and distinct infra label on exhaustion are unobservable from an in-process stub",
 	},
+	// 2026-09-07 (#2723): the second, independent tool-smoke red-notifier
+	// CLI's --dry-run env-to-report wiring and real (stubbed) `gh`
+	// create/edit/comment/close subcommands are the subject; same documented
+	// exception as its sibling notify-install-smoke-drift.test.ts above.
+	"real-process-spawn:scripts/notify-tool-smoke-red.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the CLI's env-to-report wiring and real gh subcommand invocations are unobservable from an in-process stub",
+	},
 	// #2698: gitignore/tracked-vs-untracked resolution (git init/add/commit/
 	// ls-files against a throwaway fixture repo) is the exact mechanism
 	// scripts/lib/knip-sibling-purge.mjs depends on and this file tests.
@@ -197,6 +206,15 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"gitignore/tracked-vs-untracked resolution is the mechanism under test; no mock reproduces git's own resolution faithfully",
+	},
+	// 2026-09-07 (#2699): the PreToolUse guard's own stdin/exit-code/stderr
+	// contract is the subject under test; an in-process call to the exported
+	// classify functions cannot see a drift in what Claude Code actually
+	// invokes.
+	"real-process-spawn:scripts/guard-bash-hook.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the hook's real stdin/exit-code/stderr contract is unobservable from an in-process call to the exported classify functions",
 	},
 };
 

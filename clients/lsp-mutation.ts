@@ -44,7 +44,7 @@ export function _lspMutationNoBridgeDbgLoggedForTests(): boolean {
 	return noBridgeDbgLogged;
 }
 
-export interface LspMutationRuntime {
+interface LspMutationRuntime {
 	bumpFileSeq?: (filePath: string) => { projectSeq: number; fileSeq: number };
 	/** One mutation seam (#2000 phase 1) — bump + receipt + change-log. */
 	recordProjectMutation?: (args: {
@@ -69,7 +69,7 @@ export interface LspMutationRuntime {
 	projectRoot?: string;
 }
 
-export interface LspMutationCacheManager {
+interface LspMutationCacheManager {
 	addModifiedRange: (
 		filePath: string,
 		range: { start: number; end: number },

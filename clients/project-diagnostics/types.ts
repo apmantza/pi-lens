@@ -1,7 +1,7 @@
 export type ProjectDiagnosticSeverity = "error" | "warning" | "info" | "hint";
-export type ProjectDiagnosticSemantic = "blocking" | "warning" | "none";
-export type ProjectDiagnosticSource = "lsp" | "dispatch" | "project-scan";
-export type ProjectDiagnosticsTier = "cheap" | "all";
+type ProjectDiagnosticSemantic = "blocking" | "warning" | "none";
+type ProjectDiagnosticSource = "lsp" | "dispatch" | "project-scan";
+type ProjectDiagnosticsTier = "cheap" | "all";
 
 export interface ProjectDiagnostic {
 	filePath: string;

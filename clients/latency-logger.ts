@@ -218,9 +218,6 @@ interface ClosedBracket {
 	closedAt: string;
 }
 
-/** Bound on the closed-bracket ring below — same size discipline as `recentPhases`. */
-export const CLOSED_BRACKET_CAP = RECENT_PHASE_CAP;
-
 /**
  * Phases currently executing, keyed by their own start token (#1723 review
  * round: this replaces an earlier single-slot design that broke two ways.
@@ -245,7 +242,7 @@ export const CLOSED_BRACKET_CAP = RECENT_PHASE_CAP;
 const liveBrackets = new Map<PhaseToken, true>();
 
 /**
- * Recently CLOSED brackets, newest first, bounded to `CLOSED_BRACKET_CAP`
+ * Recently CLOSED brackets, newest first, bounded to `RECENT_PHASE_CAP`
  * (#1723 review round, F3 — the decisive finding). `phaseFinished` runs
  * inside a `finally`, which resumes as a MICROTASK, while the host schedules
  * `turn_end` as a MACROTASK — and microtasks always fully drain before the
@@ -277,7 +274,7 @@ export function phaseStarted(phase: string): PhaseToken {
 
 /**
  * Close a bracket: removes it from `liveBrackets` (one `Map.delete`, O(1))
- * and records it on the closed-bracket ring, bounded to `CLOSED_BRACKET_CAP`
+ * and records it on the closed-bracket ring, bounded to `RECENT_PHASE_CAP`
  * with the oldest entry dropped first — see the `closedBrackets` doc comment
  * above for why a closed history is load-bearing, not just nice-to-have
  * (#1723 review F3). `Map.delete` reports whether it actually removed
@@ -312,7 +309,7 @@ export function phaseFinished(token: PhaseToken): void {
 			closedAt: new Date().toISOString(),
 		},
 		...closedBrackets,
-	].slice(0, CLOSED_BRACKET_CAP);
+	].slice(0, RECENT_PHASE_CAP);
 }
 
 /**
@@ -344,7 +341,7 @@ export interface PhaseWindowAttribution {
  * A candidate bracket is ignored outright if its OWN lifetime (`elapsedMs`)
  * is under this fraction of the window's length (#1723 review round 3, N4).
  * Overlap alone is not enough: the bounded closed-bracket ring can churn a
- * real culprit out (busy siblings filling `CLOSED_BRACKET_CAP`), leaving only
+ * real culprit out (busy siblings filling `RECENT_PHASE_CAP`), leaving only
  * a 1ms bracket that happens to have SOME positive overlap with an 18-second
  * window — reporting it would be a CONFIDENT WRONG ANSWER, worse than no
  * answer. 5%: a genuine cause's own duration should be a meaningful fraction
@@ -589,7 +586,7 @@ export function getPhaseForWindow(
 /**
  * Test-only: the closed-bracket ring's actual storage length, mirroring
  * `_recentPhasesStorageLengthForTest` above — pins that `phaseFinished`'s
- * `.slice(0, CLOSED_BRACKET_CAP)` guard is intact independent of any
+ * `.slice(0, RECENT_PHASE_CAP)` guard is intact independent of any
  * read-side behavior (#1723 review: "ring unbounded" mutation).
  */
 export function _closedBracketsStorageLengthForTest(): number {

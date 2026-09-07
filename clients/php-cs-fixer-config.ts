@@ -99,7 +99,7 @@ import { findLocalToolConfig } from "./path-utils.js";
  * before `.php-cs-fixer.dist.php` — so a same-directory precedence check can
  * just take the first existing name.
  */
-export const PHP_CS_FIXER_CONFIG_NAMES = [
+const PHP_CS_FIXER_CONFIG_NAMES = [
 	".php-cs-fixer.php",
 	".php-cs-fixer.dist.php",
 ] as const;

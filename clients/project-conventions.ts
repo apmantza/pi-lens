@@ -1,15 +1,15 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-export type FrameworkConfidence = "high" | "medium" | "low";
+type FrameworkConfidence = "high" | "medium" | "low";
 
-export interface FrameworkDetection {
+interface FrameworkDetection {
 	id: string;
 	confidence: FrameworkConfidence;
 	signals: string[];
 }
 
-export interface AgentDocSummary {
+interface AgentDocSummary {
 	filePath: string;
 	lineCount: number;
 }

@@ -60,8 +60,7 @@ import {
 } from "./lens-flag-registry.js";
 
 /** The JSON Schema dialect the published artifact declares. */
-export const CONFIG_SCHEMA_DIALECT =
-	"https://json-schema.org/draft/2020-12/schema";
+const CONFIG_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema";
 
 /**
  * A node the schema says nothing else about. `config-core` treats a node with
@@ -131,8 +130,6 @@ export { LSP_KEY_TYPES };
 const LSP_KEY_DENY: Readonly<Record<string, DenyPolicy>> = {
 	disabledServers: "array-union",
 };
-
-export { LSP_KEY_DENY };
 
 /** The `x-deny` annotation for a key, or nothing when it carries no denial. */
 function denyAnnotation(key: string): { [DENY_KEY]?: DenyPolicy } {

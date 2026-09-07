@@ -197,13 +197,17 @@ export const PINNED_LANGUAGE_IDS = [
  * literal message below and `true` stops being assignable to it, so
  * `npm run build` fails at THIS line with the reason spelled out.
  */
-export const LANGUAGE_ID_PIN_IS_EXHAUSTIVE: Exclude<
+const LANGUAGE_ID_PIN_IS_EXHAUSTIVE: Exclude<
 	LanguageId,
 	(typeof PINNED_LANGUAGE_IDS)[number]
 > extends never
 	? true
 	: "a LanguageId is missing from PINNED_LANGUAGE_IDS in clients/language-registry.ts" =
 	true;
+// Not exported: its only job is to fail `npm run build`. The `void` reference
+// is what keeps oxlint's no-unused-vars (CI-gating via lint:js) and knip
+// quiet without giving it a consumer; tsc's noUnusedLocals does not flag it.
+void LANGUAGE_ID_PIN_IS_EXHAUSTIVE;
 
 export interface LanguageEntry {
 	/** Canonical, host-neutral language id. */

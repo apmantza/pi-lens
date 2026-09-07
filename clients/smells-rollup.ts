@@ -60,12 +60,12 @@ import { getGlobalPiLensLogDir } from "./probe-home-state.js";
 
 /** Bounded tail-read budget PER source log file — never a full-file scan. */
 export const SMELLS_TAIL_BYTES_PER_FILE = 64 * 1024;
-export const SMELLS_ROLLING_WINDOW_MS = 24 * 60 * 60_000;
+const SMELLS_ROLLING_WINDOW_MS = 24 * 60 * 60_000;
 
 /** Re-check cadence at `turn_end`, mirroring `memory-sampler.ts`'s pattern —
  *  cheap enough (bounded ~128KB I/O) not to need finer throttling, but a
  *  fixed interval keeps it from running on every single turn. */
-export const SMELLS_TURN_CHECK_INTERVAL = 20;
+const SMELLS_TURN_CHECK_INTERVAL = 20;
 
 export type SmellKey = "staleCtxEmitFailed" | "opengrepRespawn";
 

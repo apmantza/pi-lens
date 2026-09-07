@@ -45,7 +45,7 @@ import { freshnessFromMtime } from "./freshness.js";
 import { safeSpawnAsync } from "./safe-spawn.js";
 import { truncatedByOutputCap } from "./spawn-output-cap.js";
 
-export interface FileStatEntry {
+interface FileStatEntry {
 	mtimeMs: number;
 	size: number;
 	/**
@@ -59,7 +59,7 @@ export interface FileStatEntry {
 }
 
 /** Stop hashing once this many cumulative bytes were read (per capture). */
-export const OPAQUE_HASH_BUDGET_BYTES = 8 * 1024 * 1024;
+const OPAQUE_HASH_BUDGET_BYTES = 8 * 1024 * 1024;
 
 export type FileStatsSnapshot = Map<string, FileStatEntry>;
 
@@ -67,7 +67,7 @@ export type FileStatsSnapshot = Map<string, FileStatEntry>;
 export const OPAQUE_SCAN_MAX_FILES = 2000;
 
 /** How far before recorded start an earlier write may still be attributed. */
-export const OPAQUE_MTIME_TOLERANCE_MS = 150;
+const OPAQUE_MTIME_TOLERANCE_MS = 150;
 
 // `--untracked-files=all` lists untracked files individually instead of
 // collapsing them per directory (it does NOT add ignored paths — that needs
@@ -78,7 +78,7 @@ export const OPAQUE_MTIME_TOLERANCE_MS = 150;
 // reachable at all (#2100).
 const MAX_GIT_STATUS_OUTPUT_BYTES = 16 * 1024 * 1024;
 
-export type OpaqueUnknownReason =
+type OpaqueUnknownReason =
 	| "walk-failed"
 	| "file-cap-exceeded"
 	| "entry-budget-exceeded"
@@ -319,11 +319,6 @@ export async function isGitWorktree(root: string): Promise<boolean> {
 		!result.error && result.status === 0 && result.stdout?.trim() === "true";
 	gitRepoMemo.set(key, isRepo === true);
 	return isRepo === true;
-}
-
-export function _resetGitWorktreeMemoForTests(): void {
-	gitRepoMemo.clear();
-	gitToplevelMemo.clear();
 }
 
 const gitToplevelMemo = new Map<string, string | undefined>();

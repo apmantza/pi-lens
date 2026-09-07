@@ -18,7 +18,7 @@ import {
 	drainPendingAuxiliaryCoverage,
 	isPendingAuxiliaryPastRearmTtl,
 	markPendingAuxiliaryCoverage,
-	pendingAuxiliaryCoverageSizeForTests,
+	pendingAuxiliaryCoverageSize,
 	readLateAuxRearmTtlMs,
 	resetPendingAuxiliaryCoverage,
 } from "../../../clients/lsp/pending-aux-coverage.js";
@@ -36,9 +36,9 @@ describe("pending auxiliary coverage store (#2001/#2002)", () => {
 		markPendingAuxiliaryCoverage("C:/proj/src/a.ts", ["opengrep"], 1000);
 		markPendingAuxiliaryCoverage("C:/proj/src/a.ts", ["typos"], 2000);
 
-		expect(pendingAuxiliaryCoverageSizeForTests()).toBe(2);
+		expect(pendingAuxiliaryCoverageSize()).toBe(2);
 		const drained = drainPendingAuxiliaryCoverage();
-		expect(pendingAuxiliaryCoverageSizeForTests()).toBe(0);
+		expect(pendingAuxiliaryCoverageSize()).toBe(0);
 		expect(drained.map((e) => e.serverId).sort()).toEqual([
 			"opengrep",
 			"typos",
@@ -76,7 +76,7 @@ describe("pending auxiliary coverage store (#2001/#2002)", () => {
 		markPendingAuxiliaryCoverage("C:\\proj\\src\\a.ts", ["opengrep"], 1000);
 		markPendingAuxiliaryCoverage("C:/proj/src/a.ts", ["opengrep"], 2000);
 
-		expect(pendingAuxiliaryCoverageSizeForTests()).toBe(1);
+		expect(pendingAuxiliaryCoverageSize()).toBe(1);
 		const drained = drainPendingAuxiliaryCoverage();
 		expect(drained[0].markedAtMs).toBe(2000); // newer mark bumps baseline
 	});
@@ -86,9 +86,7 @@ describe("pending auxiliary coverage store (#2001/#2002)", () => {
 		for (let i = 0; i < MAX_PENDING_AUX_ENTRIES + 5; i++) {
 			markPendingAuxiliaryCoverage(`/w/file${i}.ts`, ["opengrep"], i);
 		}
-		expect(pendingAuxiliaryCoverageSizeForTests()).toBe(
-			MAX_PENDING_AUX_ENTRIES,
-		);
+		expect(pendingAuxiliaryCoverageSize()).toBe(MAX_PENDING_AUX_ENTRIES);
 		const drained = drainPendingAuxiliaryCoverage();
 		// The first-marked pairs were evicted; the newest survive.
 		expect(drained.some((e) => e.filePath === "/w/file0.ts")).toBe(false);
@@ -106,9 +104,7 @@ describe("pending auxiliary coverage store (#2001/#2002)", () => {
 		for (let i = 0; i < MAX_PENDING_AUX_ENTRIES + 1; i++) {
 			markPendingAuxiliaryCoverage(`/w/file${i}.ts`, ["opengrep"], i);
 		}
-		expect(pendingAuxiliaryCoverageSizeForTests()).toBe(
-			MAX_PENDING_AUX_ENTRIES,
-		);
+		expect(pendingAuxiliaryCoverageSize()).toBe(MAX_PENDING_AUX_ENTRIES);
 		expect(drainPendingAuxCapEvictedCount()).toBe(1);
 		// Draining resets the count so a later drain never double-counts it.
 		expect(drainPendingAuxCapEvictedCount()).toBe(0);
@@ -125,9 +121,7 @@ describe("pending auxiliary coverage store (#2001/#2002)", () => {
 			["opengrep", "typos", "biome"],
 			10_000,
 		);
-		expect(pendingAuxiliaryCoverageSizeForTests()).toBe(
-			MAX_PENDING_AUX_ENTRIES,
-		);
+		expect(pendingAuxiliaryCoverageSize()).toBe(MAX_PENDING_AUX_ENTRIES);
 		expect(drainPendingAuxCapEvictedCount()).toBe(3);
 	});
 
@@ -148,9 +142,7 @@ describe("pending auxiliary coverage store (#2001/#2002)", () => {
 		markPendingAuxiliaryCoverage("/w/file0.ts", ["opengrep"], 0);
 		// One more insert forces one eviction — of file1, not the re-armed file0.
 		markPendingAuxiliaryCoverage("/w/overflow.ts", ["opengrep"], 10_000);
-		expect(pendingAuxiliaryCoverageSizeForTests()).toBe(
-			MAX_PENDING_AUX_ENTRIES,
-		);
+		expect(pendingAuxiliaryCoverageSize()).toBe(MAX_PENDING_AUX_ENTRIES);
 
 		const drained = drainPendingAuxiliaryCoverage();
 		expect(drained.some((e) => e.filePath === "/w/file0.ts")).toBe(true);

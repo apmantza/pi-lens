@@ -102,7 +102,7 @@ function resolveDart(cwd: string, filePath: string, source: string): string[] {
 // JS/TS extension from the specifier before re-appending candidate extensions
 // lets that universal pattern resolve to the real source file. Exported so
 // builder.ts's warm `localImportToFile` shares the exact same regex (#694).
-export const JS_TS_EXT_RE = /\.(mjs|cjs|mts|cts|jsx?|tsx?)$/i;
+const JS_TS_EXT_RE = /\.(mjs|cjs|mts|cts|jsx?|tsx?)$/i;
 
 /**
  * Ordered candidate list for resolving a relative JS/TS import specifier

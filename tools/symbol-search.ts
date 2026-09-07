@@ -12,7 +12,7 @@ import {
 	symbolSearch,
 	type SymbolSearchResult,
 } from "../clients/lens-engine.js";
-import { baseName, compactRenderResult } from "./render-compact.js";
+import { compactRenderResult } from "./render-compact.js";
 
 /**
  * Machine-actionable follow-up hint (#771) — mirrors ast-grep-search.ts's
@@ -194,4 +194,3 @@ export function createSymbolSearchTool(getProjectRoot: () => string) {
 
 // Re-exported so tests importing from this module can reach baseName without
 // a second import path.
-export { baseName };

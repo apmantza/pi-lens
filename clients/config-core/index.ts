@@ -32,73 +32,7 @@
  * brings the `lsp.servers.<id>` shape the schema currently only reserves.
  */
 
-export {
-	type AdditionalPropertyPolicy,
-	additionalPropertyPolicy,
-	type ConfigSchemaNode,
-	type ConfigValue,
-	DEFAULT_MERGE_STRATEGY,
-	DENY_KEY,
-	DENY_POLICIES,
-	type DenyPolicy,
-	denyPolicyOf,
-	isDenyPolicy,
-	isConfigObject,
-	isKnownSchemaType,
-	isMergeStrategy,
-	isPlainObject,
-	isSchemaNode,
-	itemsSchema,
-	keyedField,
-	MERGE_STRATEGY_KEY,
-	type MergeStrategy,
-	mergeStrategyOf,
-	propertySchema,
-	SCHEMA_TYPES,
-	schemaType,
-	STABILITY_TIER_KEY,
-} from "./schema.js";
-
-export {
-	compareKeys,
-	isOperatorTier,
-	isRepoTier,
-	type Provenance,
-	type ProvenanceView,
-	type ProvenanceViewEntry,
-	provenanceFor,
-	provenanceView,
-	type Resolved,
-	SOURCE_TIERS,
-	type SourceTier,
-	TIER_CLASS,
-	TIER_PRECEDENCE,
-	type TierClass,
-	tierPrecedence,
-	type TrustDecision,
-} from "./provenance.js";
-
-export {
-	isUnsafeConfigKey,
-	MAX_CONFIG_DEPTH,
-	safeAssign,
-	UNSAFE_CONFIG_KEYS,
-	UNSAFE_KEY_REASON,
-} from "./safe-object.js";
-
-export {
-	type DenyContribution,
-	type DenyResolution,
-	denyProvenance,
-	resolveArrayDeny,
-	resolveBooleanDeny,
-} from "./deny.js";
-
-export {
-	type NormalizedConfig,
-	type ValidateOptions,
-	validate,
-} from "./normalize.js";
+export { SOURCE_TIERS } from "./provenance.js";
 
 // `merge()` itself is NOT re-exported. Its input type only PROMISES a
 // post-`validate()` value; nothing in the language enforces that a caller
@@ -109,49 +43,10 @@ export {
 // every source before merging. `merge()` stays exported from `merge.ts`
 // itself — marked `@internal` there — for this module's own use and for
 // tests that probe it directly.
-export { type ConfigSource, type MergeOptions } from "./merge.js";
-
-export {
-	boundedKeyLabel,
-	jsonTypeName,
-	MAX_MIGRATION_RECORDS,
-	MAX_RECORD_KEY_LENGTH,
-	type MigrationRecord,
-	MigrationRecordCollector,
-	migrationSubject,
-} from "./records.js";
-
-export {
-	buildProcessSpec,
-	type CwdMode,
-	type InputMode,
-	MAX_ARGV_BYTES,
-	MAX_ARGV_ENTRIES,
-	MAX_ENV_BYTES,
-	MAX_ENV_ENTRIES,
-	MAX_TIMEOUT_MS,
-	type ProcessSpec,
-	type ProcessSpecInput,
-	type ProcessSpecRejection,
-	type ProcessSpecRejectionCode,
-	type ProcessSpecResult,
-	type RedactedProcessSpec,
-	redactProcessSpec,
-	type SpawnArgs,
-	type SpawnArgsResult,
-	toSpawnArgs,
-	type TrustRefusal,
-} from "./process-spec.js";
-
 // `resolveConfig` and its types live in `./resolve.js` (#2426) so a caller can
 // import the front door without also importing this barrel's width — in
 // particular `process-spec.js` -> `project-trust.js`, which closed three
 // import cycles once the config loaders (all downstream of `file-utils.ts`)
 // started resolving through the core. The public surface is unchanged: this is
 // still where the supported entry point is exported from.
-export {
-	type ConfigResolution,
-	type RawConfigSource,
-	type ResolveConfigOptions,
-	resolveConfig,
-} from "./resolve.js";
+export { resolveConfig } from "./resolve.js";

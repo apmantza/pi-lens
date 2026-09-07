@@ -31,7 +31,7 @@ function knipIssueMessage(issue: KnipIssue): string {
 	return `${issue.type}: ${issue.name}`;
 }
 
-export function knipIssueToProjectDiagnostic(
+function knipIssueToProjectDiagnostic(
 	cwd: string,
 	issue: KnipIssue,
 ): ProjectDiagnostic {

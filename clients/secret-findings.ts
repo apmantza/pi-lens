@@ -25,7 +25,7 @@ import type { GitleaksFinding } from "./gitleaks-client.js";
 import { normalizeFilePath } from "./path-utils.js";
 
 /** The scanners that can flag a secret, in display/priority order. */
-export type SecretSource = "gitleaks" | "trivy" | "ast-grep";
+type SecretSource = "gitleaks" | "trivy" | "ast-grep";
 
 /** Minimal normalized secret from trivy's `Results[].Secrets[]` report rows. */
 export interface TrivySecretFinding {
