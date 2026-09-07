@@ -1,100 +1,70 @@
 /**
- * #2691 ratchet: a linter/formatter runner that computes `ctx.cwd` for its
- * availability probe and its config-detection helper, then spawns the
- * ACTUAL lint/analysis process without passing that same `cwd`, so the
- * child resolves project config (or, in psscriptanalyzer's case, a settings
- * file) against the extension host's `process.cwd()` instead of the
- * project being linted.
+ * #2691 ratchet (AGENTS.md defect shape 40): a linter/formatter runner that
+ * computes `ctx.cwd` for its availability probe and its config-detection
+ * helper, then spawns the ACTUAL lint/analysis process without passing that
+ * same `cwd`, so the child resolves project config (or, for psscriptanalyzer,
+ * a settings file) against the extension host's `process.cwd()` instead of the
+ * project being linted — while the runner's own `hasXConfig(ctx.cwd)` gate
+ * says the project config was found.
  *
- * #1731 fixed this shape for sqlfluff BY SYMBOL and missed five more
- * instances that a shape-based sweep found while fixing #2691's reported
- * yamllint case: ruff, spellcheck/typos, psscriptanalyzer, oxlint, and
- * shellcheck (the last two were not named in #2691 itself). A symbol-grep
- * for the next tool name will miss the next instance the same way. This
- * sweep instead walks every `safeSpawnAsync(`/`safeSpawnSync(` call site
- * directly under `clients/dispatch/runners/*.ts` and fails, by file:line,
- * on any whose OPTIONS OBJECT (the last top-level `{...}` in the call's
- * own argument list -- never the whole call text, see round 2 F1 below)
- * does not mention `cwd` at all -- catching the SHAPE (an omitted `cwd`
- * key) regardless of which tool's name appears at the call site.
+ * #1731 fixed this shape for sqlfluff BY SYMBOL and missed five more instances
+ * that a shape-based sweep found while fixing #2691's reported yamllint case:
+ * ruff, spellcheck/typos, psscriptanalyzer, oxlint and shellcheck. A
+ * symbol-grep for the next tool name will miss the next instance the same way,
+ * so this sweeps the SHAPE across every runner at once.
  *
- * Round 2 review F1: the first version tested `\bcwd\b` against the WHOLE
- * call text (command + args array + options), not just the options
- * object. `spellcheck.ts`'s pre-fix call passed `ctx.cwd || process.cwd()`
- * as its FIRST argument (`typos.getCommand(ctx.cwd || process.cwd())`),
- * so the whole-call text already contained the substring "cwd" and the
- * sweep read it as conforming -- it never actually caught 1 of the 6
- * defects this PR fixes. Scoping the check to the LAST top-level `{...}`
- * (found by bracket-depth scanning, so a `{` inside the args array or a
- * string can never be mistaken for the options object) closes that hole:
- * `cwd` appearing anywhere BUT the options literal no longer satisfies
- * the sweep, and a value baked into the args array (e.g.
- * `path.resolve(cwd, ctx.filePath)`) is correctly still a violation.
+ * ## What this file is, and what it is not
  *
- * Round 2 review F2: `psscriptanalyzer.ts` routes every PowerShell spawn
- * through a local wrapper, `spawnPs`, so the only literal `safeSpawnAsync(`
- * call site the naive scan ever finds is INSIDE that wrapper -- and that
- * literal always names `cwd` (it's one of the wrapper's own parameters,
- * forwarded), regardless of whether any given CALLER of `spawnPs` actually
- * supplies one. Deleting the wrapper's `cwd` argument from one caller left
- * the sweep green.
+ * The detection itself lives in `tests/support/spawn-cwd-scan.ts` and is
+ * specified cell by cell in `tests/support/spawn-cwd-scan.test.ts` — one named
+ * fixture per cell of PR #2693's "Detector state space (round 3)" table (call-
+ * site kind × where a `cwd` token can sit). THIS file is the integration
+ * assertion: it runs that scan over the live tree.
  *
- * The fix generalizes, but narrowly: a locally-declared `function NAME(...)`
- * is swept as a wrapper ONLY when its OWN parameter list contains a
- * `{...}`-shaped parameter (a destructure or an inline object-type
- * annotation) that itself mentions `cwd` -- i.e. the function has DECLARED
- * "I take cwd via an options object", the exact representation a direct
- * `safeSpawnAsync(cmd, args, {cwd, ...})` call already uses. `spawnPs` was
- * converted to take that shape (`options: { timeoutMs?: number; cwd?:
- * string }`) specifically so ONE detection rule -- "does the last top-level
- * `{...}` in a call's own argument list name cwd" -- covers both direct
- * calls and wrapper calls without a second, positional-arg mode.
+ * The split is the round-3 lesson. Rounds 1 and 2 had only the live-tree run,
+ * which can assert nothing about the cells today's tree does not occupy — so
+ * round 1 shipped a detector that read argument one as the options object
+ * (missing one of the six defects its own red block claimed to prove), and
+ * round 2 shipped one that read a comment or a string value inside the braces
+ * as a passed cwd, and whose wrapper rule never followed `helm-lint.ts`'s
+ * `lintChart` or `helm-render.ts`'s `renderAndValidate`. Both went green here
+ * the whole time.
  *
- * This is deliberately narrower than "any function whose body contains a
- * safeSpawn* call, if also called elsewhere": an early version tried that
- * and produced false positives on `eslint.ts`'s `makeEslintProbe`,
- * `rust-clippy.ts`'s `makeClippyProbe`, `credo.ts`'s `probeCredo`,
- * `oxlint.ts`'s `resolveVitePlusCommand`, `cpp-check.ts`'s
- * `resolveCompiler`, `biome-check.ts`'s `resolveBiomeFixKinds`, and
- * `helm-lint.ts`/`helm-render.ts`'s chart helpers -- every one of these
- * takes `cwd` as a plain positional `string` parameter (or builds a probe
- * closure invoked with `cwd` later, per call, by shared cache machinery in
- * `utils/`), so their OWN call sites correctly have no trailing `{...}` at
- * all, and "no options object" is what a compliant plain-parameter call
- * looks like -- flagging it as "missing cwd" would be exactly backwards.
- * The options-shaped-parameter test excludes all of them: none of their
- * signatures has a `{...}` naming `cwd`, only `spawnPs` does. For a runner
- * with no such wrapper (every file but psscriptanalyzer.ts today), no
- * function's parameter list matches, so this generalization is a no-op.
+ * ## The two rules, in one line each
  *
- * Scoped to direct children of `runners/` (not `runners/utils/*.ts`, the
- * shared availability-probe/installer helpers): several of those
- * deliberately omit `cwd` for a genuine global-PATH presence probe (e.g.
- * `runner-helpers.ts`'s "3. Global PATH" `safeSpawnAsync(toolName,
- * ["--version"], { timeout: 3000 })`), which is a different, legitimate
- * shape from a runner spawning an actual lint/analysis pass on a project
- * file. Widening this sweep into `utils/` would need its own exemption
- * design for that shape rather than borrowing this one.
+ * A site conforms when the options literal has a PROPERTY NAMED `cwd`; a
+ * same-file function is a spawn-routing wrapper when a spawn's `cwd` value
+ * resolves to one of that function's OWN parameters, and then its CALLERS are
+ * the sites checked. Both are answered off the real AST (`@ast-grep/napi`, the
+ * same dependency `tests/support/availability-gate.ts` uses), never off text.
  *
- * A call site that genuinely has no cwd to get wrong (a bare presence probe
- * with no file/config resolution, like cpp-check.ts's no-arg `cl` probe, or
- * psscriptanalyzer.ts's two interpreter/module presence probes) carries a
- * single-line `// cwd-exempt: <reason>` comment on the line DIRECTLY above
- * the call (other explanatory comments may sit above that, but the tag
- * line itself must be the one immediately preceding the call) -- the sweep
- * still fails if that exemption's call site now passes `cwd` anyway (a
- * redundant exemption).
+ * ## Scope
+ *
+ * Direct children of `clients/dispatch/runners/` only, never `runners/utils/`:
+ * several helpers there deliberately omit `cwd` for a genuine global-PATH
+ * presence probe (`runner-helpers.ts`'s "3. Global PATH"
+ * `safeSpawnAsync(toolName, ["--version"], { timeout: 3000 })`), a different
+ * and legitimate shape from a runner spawning an analysis pass on a project
+ * file. Widening into `utils/` needs its own exemption design rather than
+ * borrowing this one.
+ *
+ * A call site that genuinely has no cwd to get wrong carries a single-line
+ * `// cwd-exempt: <reason>` comment on the line DIRECTLY above the call (other
+ * explanatory comments may sit above that; the tag line itself must be the one
+ * immediately preceding). The sweep fails on an exemption whose call site now
+ * passes `cwd` anyway, so a stale exemption cannot rot in place.
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
-	assertNonEmptyScan,
-	findEnclosingSymbol,
-	stripSource,
-} from "../../../support/sweep-kit.js";
+	type SpawnCwdSite,
+	type SpawnCwdWrapper,
+	scanSpawnCwd,
+} from "../../../support/spawn-cwd-scan.js";
+import { assertNonEmptyScan } from "../../../support/sweep-kit.js";
 
 const REPO_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -102,20 +72,54 @@ const REPO_ROOT = path.resolve(
 );
 const RUNNERS_DIR = path.join(REPO_ROOT, "clients/dispatch/runners");
 
-const SPAWN_CALL_PATTERN = /\bsafeSpawn(?:Async|Sync)\s*\(/g;
-const EXEMPT_TAG = /^\s*\/\/\s*cwd-exempt:\s*(.+)/;
+/**
+ * The exact population, measured 2026-09-07. These are pinned, not floored:
+ * round 2 used `assertNonEmptyScan(…, 25)` against 58 live sites, and a floor
+ * that loose is one-sided — it catches a sweep that goes dead but not one that
+ * quietly stops SEEING sites. Reverting `spawnPs` to positional arguments, or
+ * reintroducing round 1's wrapper blindness, each drops three or more sites
+ * with every remaining site still conforming, so a floor stays green while the
+ * ratchet's reach shrinks (round-2 review F3).
+ *
+ * **These are the numbers to bump when you add or remove a runner spawn.** A
+ * new `safeSpawnAsync`/`safeSpawnSync` call, or a new call site of one of the
+ * wrappers below, moves `EXPECTED_SITES` by one; a new runner file moves
+ * `EXPECTED_FILES`. Bumping them is the whole cost, and it is deliberate: the
+ * bump is where a reviewer sees a spawn was added.
+ */
+const EXPECTED_FILES = 52;
+const EXPECTED_DIRECT_SITES = 54;
+const EXPECTED_WRAPPER_SITES = 8;
+const EXPECTED_SITES = EXPECTED_DIRECT_SITES + EXPECTED_WRAPPER_SITES;
 
-interface CallSite {
-	file: string;
-	line: number;
-	hasCwd: boolean;
-	exemptReason?: string;
-	/** Name of the call target -- `safeSpawnAsync`/`safeSpawnSync` for a
-	 * direct call, or the wrapper's own name for a call routed through one. */
-	callee: string;
-}
+/**
+ * Every same-file spawn-routing wrapper the scan discovers, with the parameter
+ * it routes `cwd` through. Pinned as a LIST, not a count, because the list is
+ * the part round 2 got wrong: it claimed "spawnPs and runIacPass are the two
+ * existing local wrappers" while `lintChart`, `renderAndValidate`,
+ * `resolveVitePlusCommand` and `resolveBiomeFixKinds` all route a positional
+ * cwd into a spawn and had their callers unchecked.
+ *
+ * `resolveVitePlusCommand` and `resolveBiomeFixKinds` were named in round 2's
+ * own header as positional-cwd helpers that must NOT be followed; that
+ * justification was wrong on its face — each puts its own `cwd` parameter into
+ * a spawn's options literal, which is exactly what makes a wrapper — and both
+ * are correctly followed now. The genuine non-wrappers are the probe closures
+ * (`makeEslintProbe`, `probeCredo`, `makeClippyProbe`, `resolveCompiler`),
+ * whose `cwd` is bound by an ANONYMOUS arrow that `createCwdCachedProbe`
+ * invokes per call — no caller in the file supplies it, so there is no caller
+ * to check.
+ */
+const EXPECTED_WRAPPERS = [
+	"biome-check.ts::resolveBiomeFixKinds:positional@1",
+	"helm-lint.ts::lintChart:positional@1",
+	"helm-render.ts::renderAndValidate:positional@1",
+	"helm-render.ts::runIacPass:options@0",
+	"oxlint.ts::resolveVitePlusCommand:positional@0",
+	"psscriptanalyzer.ts::spawnPs:options@2",
+];
 
-/** Direct-child `.ts` runner files only -- never `utils/*.ts` (see header). */
+/** Direct-child `.ts` runner files only — never `utils/*.ts` (see header). */
 function runnerFiles(): string[] {
 	return fs
 		.readdirSync(RUNNERS_DIR, { withFileTypes: true })
@@ -129,255 +133,96 @@ function runnerFiles(): string[] {
 		.sort();
 }
 
-function lineNumberAt(source: string, index: number): number {
-	return source.slice(0, index).split("\n").length;
-}
-
-/** Index of the `)` matching the `(` at `openIdx`, scanned over
- * comment/string-blanked source so a literal paren inside a string, regex,
- * or comment can never desynchronize the count. */
-function findMatchingClose(blanked: string, openIdx: number): number {
-	let depth = 0;
-	for (let i = openIdx; i < blanked.length; i++) {
-		if (blanked[i] === "(") depth++;
-		else if (blanked[i] === ")") {
-			depth--;
-			if (depth === 0) return i;
-		}
-	}
-	return -1;
-}
-
-/**
- * Every TOP-LEVEL (not nested inside another `(`, `[`, or `{` within this
- * span) `{...}` object-literal span in `blanked[start..end]`, in source
- * order. A call's options object is conventionally its last argument, so
- * callers take the LAST span -- but every span is returned so a caller can
- * tell "no object literal at all" (empty array) from "found one, it just
- * doesn't name cwd" (round 2 F1: this is what lets the args-array case,
- * `path.resolve(cwd, ctx.filePath)`, stay correctly flagged -- `cwd` sits
- * in the array, not in any top-level `{}`, so it is invisible here on
- * purpose).
- */
-function findTopLevelBraceSpans(
-	blanked: string,
-	start: number,
-	end: number,
-): Array<[number, number]> {
-	const spans: Array<[number, number]> = [];
-	let depth = 0;
-	let braceStart = -1;
-	for (let i = start; i <= end; i++) {
-		const ch = blanked[i];
-		if (ch === "(" || ch === "[" || ch === "{") {
-			if (depth === 0 && ch === "{") braceStart = i;
-			depth++;
-		} else if (ch === ")" || ch === "]" || ch === "}") {
-			depth--;
-			if (depth === 0 && ch === "}" && braceStart !== -1) {
-				spans.push([braceStart, i]);
-				braceStart = -1;
-			}
-		}
-	}
-	return spans;
-}
-
-/** Whether the LAST top-level `{...}` in a call's own argument span names
- * `cwd` -- the options-object check every call site (direct or routed
- * through a wrapper) is held to. No top-level `{}` at all is a miss, not a
- * pass: a purely positional call has nowhere for `cwd` to live under this
- * repo's chosen convention (round 2 F2 picked the options-literal shape for
- * every spawn-routing wrapper, `spawnPs` included, specifically so this one
- * rule covers both direct and wrapper call sites). */
-function hasCwdInLastOptions(
-	raw: string,
-	blanked: string,
-	argsStart: number,
-	argsEnd: number,
-): boolean {
-	const spans = findTopLevelBraceSpans(blanked, argsStart, argsEnd);
-	if (spans.length === 0) return false;
-	const [s, e] = spans[spans.length - 1];
-	return /\bcwd\b/.test(raw.slice(s, e + 1));
-}
-
-function exemptReasonAbove(
-	rawLines: readonly string[],
-	line: number,
-): string | undefined {
-	return EXEMPT_TAG.exec(rawLines[line - 2] ?? "")?.[1]?.trim();
-}
-
-/**
- * Whether `name` is declared in this file as `function name(...)` with a
- * parameter list containing a top-level `{...}` span (a destructure or an
- * inline object-type annotation) that itself mentions `cwd` -- the
- * function has declared its OWN calling contract as "cwd travels through
- * an options object", the one representation this sweep's options-literal
- * check can verify at a call site. See the file header (round 2 F2) for
- * why this is the line between a genuine spawn-routing wrapper
- * (`spawnPs`) and an ordinary `cwd: string` positional helper.
- */
-function hasOptionsShapedCwdParam(
-	commentsBlanked: string,
-	fullyBlanked: string,
-	name: string,
-): boolean {
-	const declPattern = new RegExp(`\\bfunction\\s*\\*?\\s+${name}\\s*\\(`);
-	const m = declPattern.exec(commentsBlanked);
-	if (!m) return false; // not a plain `function NAME(...)` decl (e.g. const-bound)
-	const parenOpen = m.index + m[0].length - 1;
-	const parenClose = findMatchingClose(fullyBlanked, parenOpen);
-	if (parenClose === -1) return false;
-	const paramSpans = findTopLevelBraceSpans(
-		fullyBlanked,
-		parenOpen + 1,
-		parenClose - 1,
-	);
-	return paramSpans.some(([s, e]) =>
-		/\bcwd\b/.test(commentsBlanked.slice(s, e + 1)),
-	);
-}
-
-/** Every call-shaped, non-declaration occurrence of `\bname(` in
- * `commentsBlanked`, each paired with its own balanced argument span. A
- * `function name(` DECLARATION is excluded (checked on the RAW line, since
- * `function` is a real keyword, never blanked) -- everything else naming
- * `name(` is treated as a call site of it. */
-function findCallSitesOf(
-	name: string,
-	commentsBlanked: string,
-	fullyBlanked: string,
-): Array<{ index: number; openIdx: number; closeIdx: number }> {
-	const pattern = new RegExp(`\\b${name}\\s*\\(`, "g");
-	const results: Array<{ index: number; openIdx: number; closeIdx: number }> =
-		[];
-	let match: RegExpExecArray | null;
-	while ((match = pattern.exec(commentsBlanked))) {
-		const before = commentsBlanked.slice(0, match.index);
-		if (/function\s*\*?\s*$/.test(before)) continue; // its own declaration
-		const openIdx = match.index + match[0].length - 1;
-		const closeIdx = findMatchingClose(fullyBlanked, openIdx);
-		if (closeIdx === -1) continue;
-		results.push({ index: match.index, openIdx, closeIdx });
-	}
-	return results;
-}
-
-function scanFile(absPath: string): CallSite[] {
-	const raw = fs.readFileSync(absPath, "utf8");
-	const rawLines = raw.split("\n");
-	// Comments blanked so a call written inside a comment is never counted;
-	// strings kept so the options object's own text (and a wrapper name
-	// appearing only in a string) reads correctly either way.
-	const commentsBlanked = stripSource(raw, { strings: "keep" });
-	// Comments AND strings blanked, purely to keep paren/brace-depth counting
-	// from being thrown off by a stray bracket inside a string or regex.
-	const fullyBlanked = stripSource(raw, { strings: "blank" });
-	const relFile = path.relative(RUNNERS_DIR, absPath);
-
-	const sites: CallSite[] = [];
-	const wrapperNames = new Set<string>();
-
-	const directPattern = new RegExp(SPAWN_CALL_PATTERN.source, "g");
-	let match: RegExpExecArray | null;
-	while ((match = directPattern.exec(commentsBlanked))) {
-		const callee = match[0].slice(0, -1).trim(); // "safeSpawnAsync(" -> "safeSpawnAsync"
-		const openIdx = match.index + match[0].length - 1;
-		const closeIdx = findMatchingClose(fullyBlanked, openIdx);
-		if (closeIdx === -1) continue; // malformed source; nothing to flag
-		const line = lineNumberAt(raw, match.index);
-		sites.push({
-			file: relFile,
-			line,
-			hasCwd: hasCwdInLastOptions(raw, fullyBlanked, openIdx + 1, closeIdx - 1),
-			exemptReason: exemptReasonAbove(rawLines, line),
-			callee,
-		});
-
-		// Round 2 F2: the enclosing declaration of a direct call site may be a
-		// local wrapper function rather than the runner's own top-level object
-		// -- if its OWN parameter list is options-object-shaped and mentions
-		// cwd, it has declared the same calling contract a direct safeSpawn*
-		// call uses, so every OTHER call site of it in this file gets the
-		// identical check (see header and hasOptionsShapedCwdParam).
-		const enclosing = findEnclosingSymbol(rawLines, line - 1);
-		if (
-			enclosing &&
-			hasOptionsShapedCwdParam(commentsBlanked, fullyBlanked, enclosing)
-		) {
-			wrapperNames.add(enclosing);
-		}
-	}
-
-	for (const name of wrapperNames) {
-		for (const call of findCallSitesOf(name, commentsBlanked, fullyBlanked)) {
-			const line = lineNumberAt(raw, call.index);
-			sites.push({
-				file: relFile,
-				line,
-				hasCwd: hasCwdInLastOptions(
-					raw,
-					fullyBlanked,
-					call.openIdx + 1,
-					call.closeIdx - 1,
-				),
-				exemptReason: exemptReasonAbove(rawLines, line),
-				callee: name,
-			});
-		}
-	}
-
-	return sites;
-}
-
 describe("dispatch runner spawns pass ctx.cwd (#2691 ratchet)", () => {
 	const files = runnerFiles();
-	assertNonEmptyScan(
-		"runner-spawn-cwd-sweep: clients/dispatch/runners/*.ts files scanned",
-		files.length,
-		// 52 direct-child .ts files measured 2026-09-07; half rounded down.
-		25,
-	);
+	let sites: SpawnCwdSite[] = [];
+	let wrappers: string[] = [];
 
-	const allSites = files.flatMap(scanFile);
-	assertNonEmptyScan(
-		"runner-spawn-cwd-sweep: safeSpawnAsync/safeSpawnSync/wrapper call sites found",
-		allSites.length,
-		// 58 sites measured 2026-09-07 (54 direct safeSpawnAsync/safeSpawnSync
-		// calls + 3 psscriptanalyzer.ts spawnPs(...) wrapper call sites + 1
-		// helm-render.ts runIacPass(...) wrapper call site -- the same
-		// options-shaped-cwd-param rule independently picked up a second,
-		// unrelated wrapper and confirmed it correctly passes cwd); half
-		// rounded down.
-		25,
-	);
+	beforeAll(async () => {
+		for (const file of files) {
+			const relFile = path.relative(RUNNERS_DIR, file);
+			const scan = await scanSpawnCwd(
+				relFile,
+				fs.readFileSync(file, "utf8"),
+			);
+			sites.push(...scan.sites);
+			wrappers.push(
+				...scan.wrappers.map(
+					(w: SpawnCwdWrapper) =>
+						`${relFile}::${w.name}:${w.mode}@${w.paramIndex}`,
+				),
+			);
+		}
+		sites = sites.slice();
+		wrappers = wrappers.sort();
+	});
 
-	it("every non-exempt spawn's options literal names cwd", () => {
-		const missing = allSites.filter((s) => !s.hasCwd && !s.exemptReason);
+	it("scans the whole runner directory and finds the pinned population", () => {
+		// The emptiness guard first (defect shape 10, #1718): a sweep that
+		// matched nothing must fail, not read as clean.
+		assertNonEmptyScan(
+			"runner-spawn-cwd-sweep: clients/dispatch/runners/*.ts files scanned",
+			files.length,
+		);
+		assertNonEmptyScan(
+			"runner-spawn-cwd-sweep: spawn and wrapper call sites found",
+			sites.length,
+		);
+		expect(files.length, "runner files under clients/dispatch/runners").toBe(
+			EXPECTED_FILES,
+		);
+		expect(
+			sites.filter((site) => site.kind === "direct").length,
+			"direct safeSpawnAsync/safeSpawnSync call sites",
+		).toBe(EXPECTED_DIRECT_SITES);
+		expect(
+			sites.filter((site) => site.kind === "wrapper").length,
+			"call sites of same-file spawn-routing wrappers",
+		).toBe(EXPECTED_WRAPPER_SITES);
+		expect(sites.length, "total checked call sites").toBe(EXPECTED_SITES);
+	});
+
+	it("discovers exactly the known spawn-routing wrappers", () => {
+		expect(
+			wrappers,
+			"a wrapper that disappears from this list has stopped being followed, " +
+				"and its callers are no longer checked -- that is round 2's F2 " +
+				"regressing. A wrapper that appears is a new spawn-routing helper: " +
+				"confirm its callers are checked at the right parameter, then add it.",
+		).toEqual(EXPECTED_WRAPPERS);
+	});
+
+	it("every non-exempt spawn's options object names cwd", () => {
+		const missing = sites.filter((site) => !site.hasCwd && !site.exemptReason);
 		expect(
 			missing,
-			`${missing.length} spawn(s) under clients/dispatch/runners/*.ts have no ` +
-				"`cwd` in their OPTIONS OBJECT (the last top-level {...} in the " +
-				"call's own argument list), so the child resolves project config " +
-				"against the extension host's process.cwd() instead of ctx.cwd " +
-				"(#2691's yamllint shape). Pass `cwd` in that options object (or add " +
-				"a `// cwd-exempt: <reason>` comment on the line above the call if " +
-				"it genuinely has no file/config to resolve):\n" +
-				missing.map((s) => `  ${s.file}:${s.line} (${s.callee})`).join("\n"),
+			`${missing.length} spawn(s) under clients/dispatch/runners/*.ts do not ` +
+				"pass a `cwd`, so the child resolves project config against the " +
+				"extension host's process.cwd() instead of ctx.cwd (#2691's yamllint " +
+				"shape, AGENTS.md defect shape 40). For a direct call, add `cwd` to " +
+				"the options object; for a call routed through a same-file wrapper, " +
+				"pass a cwd-bearing argument at the wrapper's cwd parameter. If the " +
+				"call genuinely has no file or config to resolve, add a " +
+				"`// cwd-exempt: <reason>` comment on the line directly above it:\n" +
+				missing
+					.map((site) => `  ${site.file}:${site.line} (${site.callee})`)
+					.join("\n"),
 		).toHaveLength(0);
 	});
 
 	it("every cwd-exempt marker still names a real, still-exempt call site", () => {
-		const exemptSites = allSites.filter((s) => s.exemptReason);
-		const staleOrRedundant = exemptSites.filter((s) => s.hasCwd);
+		const exemptSites = sites.filter((site) => site.exemptReason);
+		assertNonEmptyScan(
+			"runner-spawn-cwd-sweep: cwd-exempt markers found",
+			exemptSites.length,
+		);
+		const redundant = exemptSites.filter((site) => site.hasCwd);
 		expect(
-			staleOrRedundant,
-			"the following `// cwd-exempt:` markers sit above a call that " +
-				"already passes cwd -- the exemption is redundant, remove it:\n" +
-				staleOrRedundant
-					.map((s) => `  ${s.file}:${s.line} (${s.exemptReason})`)
+			redundant,
+			"the following `// cwd-exempt:` markers sit above a call that already " +
+				"passes cwd -- the exemption is redundant, remove it:\n" +
+				redundant
+					.map((site) => `  ${site.file}:${site.line} (${site.exemptReason})`)
 					.join("\n"),
 		).toHaveLength(0);
 		for (const site of exemptSites) {
