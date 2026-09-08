@@ -24,7 +24,9 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm run build
-      - run: node scripts/stryker-diff.mjs --base "origin/${{ github.base_ref }}"
+      # The six-file cap bounds the advisory lane at approximately 65 seconds
+      # per changed file, based on the observed per-file Stryker runtime.
+      - run: node scripts/stryker-diff.mjs --base "origin/${{ github.base_ref }}" --max-files 6
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

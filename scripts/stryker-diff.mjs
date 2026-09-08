@@ -1,9 +1,23 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
-import { mapRelatedTests, isScriptMutationFile } from "./lib/stryker-diff.mjs";
+import {
+	capMutationFiles,
+	DEFAULT_MAX_FILES,
+	formatCapNotice,
+	isScriptMutationFile,
+	mapRelatedTests,
+} from "./lib/stryker-diff.mjs";
 
-const baseIndex = process.argv.indexOf("--base");
-const base = baseIndex >= 0 ? process.argv[baseIndex + 1] : "origin/master";
+function argumentValue(name, fallback) {
+	let value = fallback;
+	for (let index = 0; index < process.argv.length - 1; index += 1) {
+		if (process.argv[index] === name) value = process.argv[index + 1];
+	}
+	return value;
+}
+
+const base = argumentValue("--base", "origin/master");
+const maxFiles = Number(argumentValue("--max-files", DEFAULT_MAX_FILES));
 
 function changedScriptFiles() {
 	try {
@@ -43,7 +57,11 @@ function writeRunConfig(testFiles) {
 	return file;
 }
 
-const files = changedScriptFiles();
+const allFiles = changedScriptFiles();
+const { selected: files, skipped } = capMutationFiles(allFiles, maxFiles);
+if (skipped.length > 0) {
+	console.log(formatCapNotice(files.length, allFiles.length, skipped));
+}
 if (files.length === 0) {
 	console.log("mutation diff: no changed scripts/**/*.mjs files");
 	process.exit(0);

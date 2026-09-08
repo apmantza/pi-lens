@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
+	capMutationFiles,
+	formatCapNotice,
 	isScriptMutationFile,
 	mapRelatedTests,
 } from "../../scripts/lib/stryker-diff.mjs";
@@ -12,6 +14,25 @@ const config = readFileSync(
 );
 
 describe("stryker diff selection", () => {
+	it.each([
+		["extensionless", 'import "../../scripts/lib/ci-checks"'],
+		["javascript extension", 'import "../../scripts/lib/ci-checks.js"'],
+		["module extension", 'import "../../scripts/lib/ci-checks.mjs"'],
+		["side-effect", 'import "../../scripts/lib/ci-checks"'],
+		["dynamic", 'await import("../../scripts/lib/ci-checks")'],
+	])("maps %s relative imports to the changed script", (_form, source) => {
+		// Recurrence: extension spelling and import form must not hide a related
+		// test from the incremental mutation lane.
+		const result = mapRelatedTests(["scripts/lib/ci-checks.mjs"], {
+			testFiles: ["tests/scripts/related.test.ts"],
+			readFile: () => source,
+		});
+
+		expect(result.related.get("scripts/lib/ci-checks.mjs")).toEqual(
+			new Set(["tests/scripts/related.test.ts"]),
+		);
+	});
+
 	it("maps changed scripts to imported and conventional sibling tests", () => {
 		// Recurrence: the mutation lane must run tests that import the changed
 		// script, including scripts without a same-path test mirror.
@@ -52,6 +73,21 @@ describe("stryker diff selection", () => {
 		expect(result.uncovered).toEqual(["scripts/uncovered.mjs"]);
 		expect(result.covered).toEqual([]);
 		expect(result.tests).toEqual([]);
+	});
+
+	it("caps the mutation population alphabetically and names skipped files", () => {
+		// Recurrence: an unbounded changed-script population can turn the
+		// advisory lane into an unbounded CI cost.
+		const result = capMutationFiles(
+			["scripts/z.mjs", "scripts/a.mjs", "scripts/m.mjs"],
+			2,
+		);
+
+		expect(result.selected).toEqual(["scripts/a.mjs", "scripts/m.mjs"]);
+		expect(result.skipped).toEqual(["scripts/z.mjs"]);
+		expect(formatCapNotice(2, 3, result.skipped)).toBe(
+			"capped: 2 of 3 changed scripts mutated; skipped: scripts/z.mjs",
+		);
 	});
 
 	it("keeps the mutation population on scripts mjs files", () => {

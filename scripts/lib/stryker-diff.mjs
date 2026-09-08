@@ -4,6 +4,8 @@ import path from "node:path";
 const IMPORT_SPECIFIER_RE =
 	/(?:from\s+|import\s*(?:\(\s*)?|require\(\s*)["']([^"']+)["']/g;
 
+export const DEFAULT_MAX_FILES = 6;
+
 export const isScriptMutationFile = (file) =>
 	/^scripts\/.*\.mjs$/.test(file) && !file.endsWith(".test.mjs");
 
@@ -29,7 +31,25 @@ function extractRelativeSpecifiers(content) {
 }
 
 function normalized(file) {
-	return path.resolve(file).replace(/\\/g, "/");
+	return path
+		.resolve(file)
+		.replace(/\\/g, "/")
+		.replace(/\.(?:mjs|js|cjs)$/, "");
+}
+
+export function capMutationFiles(files, maxFiles = DEFAULT_MAX_FILES) {
+	if (!Number.isInteger(maxFiles) || maxFiles < 0) {
+		throw new RangeError("maxFiles must be a non-negative integer");
+	}
+	const ordered = [...files].sort();
+	return {
+		selected: ordered.slice(0, maxFiles),
+		skipped: ordered.slice(maxFiles),
+	};
+}
+
+export function formatCapNotice(selectedCount, totalCount, skipped) {
+	return `capped: ${selectedCount} of ${totalCount} changed scripts mutated; skipped: ${skipped.join(", ")}`;
 }
 
 /**
