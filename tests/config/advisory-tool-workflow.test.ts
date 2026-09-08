@@ -37,12 +37,17 @@ describe("#2706 advisory tooling workflow contracts", () => {
 		expect(job?.["continue-on-error"]).toBe(true);
 	});
 
-	it("keeps the mutation report upload explicit", () => {
+	it("pins the mutation report upload action by SHA and keeps the report path explicit", () => {
 		const raw = readFileSync(
 			resolve(ROOT, ".github/workflows/mutation.yml"),
 			"utf8",
 		);
-		expect(raw).toContain("actions/upload-artifact@<SHA-TO-PIN> # v4");
+		// Recurrence: PR #2751 round 1 and PR #2758 round 1 both shipped a test
+		// asserting the offline `<SHA-TO-PIN>` placeholder; the pin must be a
+		// full commit SHA with the release comment.
+		expect(raw).toMatch(
+			/actions\/upload-artifact@[0-9a-f]{40} # v\d+\.\d+\.\d+\b/,
+		);
 		expect(raw).toContain("path: reports/mutation/mutation.json");
 	});
 
