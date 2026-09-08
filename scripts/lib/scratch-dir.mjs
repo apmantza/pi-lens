@@ -4,7 +4,7 @@ import * as path from "node:path";
 
 export const SCRATCH_DIR_ROOT = path.join(os.tmpdir(), "pi-lens-scratch");
 export const SCRATCH_OWNER_FILE = "owner.pid";
-export const DEFAULT_SCRATCH_MAX_AGE_MS = 60 * 60 * 1000;
+const DEFAULT_SCRATCH_MAX_AGE_MS = 60 * 60 * 1000;
 
 function ownerAlive(entryDir) {
 	let pidText;
