@@ -94,9 +94,7 @@ async function withPathShim(
 	}
 }
 
-async function withIsolatedPath(
-	fn: () => Promise<void> | void,
-): Promise<void> {
+async function withIsolatedPath(fn: () => Promise<void> | void): Promise<void> {
 	const isolatedPath = path.join(tmpDir, "isolated-path");
 	fs.mkdirSync(isolatedPath, { recursive: true });
 	const origPath = process.env.PATH;

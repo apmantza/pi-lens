@@ -67,3 +67,77 @@ export function buildDriftIssueBody(summary, opts = {}) {
 export function findDriftTrackingIssue(issues, title = DRIFT_ISSUE_TITLE) {
 	return (issues ?? []).find((i) => i.title === title) ?? null;
 }
+
+/**
+ * File or refresh one title-keyed tracking issue, or close it after a clean
+ * run. `gh` is injected so the GitHub API boundary remains the only mock
+ * point in callers and tests.
+ *
+ * @param {{title: string, label: string, body?: string, clean?: boolean, closeWhenClean?: boolean, comment?: string, closeComment?: string, gh: (args: string[]) => string}} options
+ * @returns {{action: "created" | "updated" | "closed" | "no-action", issueNumber?: number}}
+ */
+export function upsertTrackingIssue(options) {
+	const {
+		title,
+		label,
+		body = "",
+		clean = false,
+		closeWhenClean = false,
+		comment,
+		closeComment = "Tracking check is clean again — self-resolved, closing.",
+		gh,
+	} = options;
+	const existing = findDriftTrackingIssue(
+		JSON.parse(
+			gh([
+				"issue",
+				"list",
+				"--state",
+				"open",
+				"--label",
+				label,
+				"--search",
+				`${title} in:title`,
+				"--json",
+				"number,title",
+				"--limit",
+				"100",
+			]),
+		),
+		title,
+	);
+
+	if (clean) {
+		if (!closeWhenClean || !existing) return { action: "no-action" };
+		gh(["issue", "close", String(existing.number), "--comment", closeComment]);
+		return { action: "closed", issueNumber: existing.number };
+	}
+
+	if (!body)
+		throw new Error("tracking issue body is required for a non-clean run");
+	const bodyFile =
+		options.bodyFile ??
+		(() => {
+			throw new Error(
+				"tracking issue bodyFile is required for a non-clean run",
+			);
+		})();
+	if (existing) {
+		gh(["issue", "edit", String(existing.number), "--body-file", bodyFile]);
+		if (comment) {
+			gh(["issue", "comment", String(existing.number), "--body", comment]);
+		}
+		return { action: "updated", issueNumber: existing.number };
+	}
+	gh([
+		"issue",
+		"create",
+		"--title",
+		title,
+		"--label",
+		label,
+		"--body-file",
+		bodyFile,
+	]);
+	return { action: "created" };
+}

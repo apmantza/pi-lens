@@ -308,72 +308,66 @@ const lspSpawnHeavyInclude = [
 // host. Sweep coverage for other members lives in this list; new entries must
 // carry a wall-clock budget assertion, not just slowness.
 const wallClockBudgetInclude = [
-	// published-manifest guard runs the real `npm pack` (flake-shape admission).
-	"tests/packaging-pack-manifest.test.ts",
-	// #2528: the bounded batch helper tests race a real wall-clock budget against settle latency (flake-shape admission).
-	"tests/clients/runtime-turn-test-runner-bounds.test.ts",
-	// #2703 review r1: the push-wait settle guard drains one real setImmediate tick so Node can deliver `unhandledRejection` (flake-shape admission).
-	"tests/clients/lsp/push-wait-settle-rejection.test.ts",
+	"tests/clients/biome-config-decorator-metadata.test.ts",
+	"tests/clients/build-identity.test.ts",
+	"tests/clients/cascade-turn-merge.test.ts",
+	"tests/clients/config-diagnostic-codes.test.ts",
+	"tests/clients/dispatch/runners/ast-grep-playground-verify.test.ts",
+	"tests/clients/dispatch/runners/ast-grep-rule-ignores.test.ts",
+	"tests/clients/git-tracked-ignore.test.ts",
 	// #2557 review round 3: a real 30s deadline margin is the subject of an abort-vs-deadline precedence assertion (flake-shape admission).
 	"tests/clients/hook-await-fold-bounds.test.ts",
-	"tests/clients/startup-overhead.test.ts",
-	"tests/clients/runtime-session-scan-cache.test.ts",
-	"tests/clients/cascade-turn-merge.test.ts",
-	"tests/clients/read-expansion-enrichment.test.ts",
-	"tests/clients/pipeline-lsp-sync.test.ts",
-	// #2603 (was #2591 review round 2, F1): the workspace-member matcher's
-	// budget asserts a real elapsed-time bound through detectPythonEnvironment;
-	// the defect it pins is wall-clock (2^N regex backtracking on an interleaved
-	// `**` chain), so a fake clock measures nothing.
-	"tests/clients/workspace-glob-nonbacktracking-budget.test.ts",
-	// #2622: adjacent read-guard stars previously produced exponential regex
-	// backtracking against a long non-matching path; the test measures the real
-	// synchronous matcher cost and belongs in the quiet serialized phase.
-	"tests/clients/read-guard-glob-nonbacktracking.test.ts",
-	// #2619 review F1: the release-QA hermeticity canary spawns a REAL child
-	// under scratchEnv() and reads back what that child resolved. The defect it
-	// pins is a child inheriting the ambient environment, which an in-process
-	// assertion on the env object cannot see (it passed while npm() ignored the
-	// env entirely).
-	"tests/scripts/release-qa.test.ts",
-	// #2358: the flat-server discriminator asserts the real outstanding wedge
-	// window. Keep child-process CPU sampling and this wall-clock lower bound in
-	// the fully serialized, dead-last phase.
-	"tests/clients/lsp/service-notify-cpu-liveness.test.ts",
-	// #2586 review F1: proves the ACTUAL stdout bytes supply-host-provided-deps.mjs
-	// prints (real child process, flake-shape admission).
-	"tests/scripts/supply-host-provided-deps.test.ts",
-	// #2700: the gating/advisory subset test resolves oxlint's real
-	// --print-config for both npm scripts (real child process, flake-shape
-	// admission).
-	"tests/scripts/lint-js.test.ts",
+	"tests/clients/installer/posix-group-kill.test.ts",
+	"tests/clients/installer/verify-binary-semantics.test.ts",
 	// #2507: a real headless child whose own exit decision is the subject — it
 	// must not drain mid `lsp_diagnostics`, and must still exit by itself
 	// afterwards. Real child spawn (flake-shape admission), and it also spawns a
 	// real LSP child inside itself, so it wants the same quiet, serialized phase
 	// its lsp-spawn-heavy siblings get.
 	"tests/clients/lsp/headless-tool-call-keepalive.test.ts",
-	// #2369: the fixture-ordering defect lives in the CLI's own module-load
-	// order; only a real child process is the script under test.
-	"tests/scripts/smoke-tools-lsp-fixture-registration.test.ts",
-	// #2613: the resolver CLI's real exit code (2 vs. 4) and GITHUB_OUTPUT
-	// write are the subject under test; no in-process double is faithful.
-	"tests/scripts/resolve-newest-in-range-host.test.ts",
-	// #2613 review S2/T3: the drift-notifier CLI's --dry-run env-reading and
-	// report-building wiring is the subject; no in-process double is faithful.
-	"tests/scripts/notify-install-smoke-drift.test.ts",
-	// #2613 review S3a: the retry wrapper's real exit code and distinct
-	// `::error::infra:` label on exhaustion are the subject under test.
-	"tests/scripts/npm-retry.test.ts",
+	// #2703 review r1: the push-wait settle guard drains one real setImmediate tick so Node can deliver `unhandledRejection` (flake-shape admission).
+	"tests/clients/lsp/push-wait-settle-rejection.test.ts",
+	// #2358: the flat-server discriminator asserts the real outstanding wedge
+	// window. Keep child-process CPU sampling and this wall-clock lower bound in
+	// the fully serialized, dead-last phase.
+	"tests/clients/lsp/service-notify-cpu-liveness.test.ts",
+	"tests/clients/metrics-history-stderr.test.ts",
+	"tests/clients/pipeline-lsp-sync.test.ts",
+	"tests/clients/read-expansion-enrichment.test.ts",
+	// #2622: adjacent read-guard stars previously produced exponential regex
+	// backtracking against a long non-matching path; the test measures the real
+	// synchronous matcher cost and belongs in the quiet serialized phase.
+	"tests/clients/read-guard-glob-nonbacktracking.test.ts",
+	"tests/clients/runtime-session-scan-cache.test.ts",
+	// #2528: the bounded batch helper tests race a real wall-clock budget against settle latency (flake-shape admission).
+	"tests/clients/runtime-turn-test-runner-bounds.test.ts",
+	"tests/clients/safe-spawn-ambient-signal.test.ts",
+	"tests/clients/safe-spawn-failure-taxonomy.test.ts",
+	"tests/clients/safe-spawn-input.test.ts",
+	"tests/clients/safe-spawn-resource-usage.test.ts",
+	"tests/clients/safe-spawn-timeout-teardown.test.ts",
+	"tests/clients/safe-spawn-windows-command.test.ts",
+	"tests/clients/shared-checkout-guard.test.ts",
+	"tests/clients/startup-overhead.test.ts",
+	// #2603 (was #2591 review round 2, F1): the workspace-member matcher's
+	// budget asserts a real elapsed-time bound through detectPythonEnvironment;
+	// the defect it pins is wall-clock (2^N regex backtracking on an interleaved
+	// `**` chain), so a fake clock measures nothing.
+	"tests/clients/workspace-glob-nonbacktracking-budget.test.ts",
+	"tests/config/gitignore-tracked-shadow.test.ts",
+	"tests/config/tracked-control-bytes.test.ts",
+	// published-manifest guard runs the real `npm pack` (flake-shape admission).
+	"tests/packaging-pack-manifest.test.ts",
 	// #2668 review F2: two real `node --import <fetch-stub>` child-process
 	// spawns of scripts/classify-ci-failure.mjs, asserting exit code and argv
 	// wiring the library-level suite (in-process) cannot see.
 	"tests/scripts/classify-ci-failure-cli.test.ts",
-	// #2723: mirrors notify-install-smoke-drift.test.ts's own admission --
-	// this second, independent drift-notifier CLI's --dry-run env-reading and
-	// real (stubbed) `gh` wiring are the subject; no in-process double is
-	// faithful to the real subcommands it invokes.
-	"tests/scripts/notify-tool-smoke-red.test.ts",
+	"tests/scripts/git-fixture-env.test.ts",
+	// #2699: the subject is the guard's own stdin/exit-code/stderr contract --
+	// what Claude Code actually invokes for a PreToolUse hook. No in-process
+	// call to the exported classify functions can see a drift in that
+	// contract (flake-shape admission).
+	"tests/scripts/guard-bash-hook.test.ts",
 	// #2698: real `git init`/`add`/`commit`/`ls-files` calls against a
 	// throwaway fixture repo — gitignore/tracked-vs-untracked resolution is
 	// the exact mechanism under test, which no mock reproduces faithfully.
@@ -383,36 +377,42 @@ const wallClockBudgetInclude = [
 	// gate, which requires it for any newly admitted real spawn regardless
 	// of this list's own "carries a budget assertion" charter above.
 	"tests/scripts/knip-sibling-purge.test.ts",
-	// #2699: the subject is the guard's own stdin/exit-code/stderr contract --
-	// what Claude Code actually invokes for a PreToolUse hook. No in-process
-	// call to the exported classify functions can see a drift in that
-	// contract (flake-shape admission).
-	"tests/scripts/guard-bash-hook.test.ts",
+	// #2700: the gating/advisory subset test resolves oxlint's real
+	// --print-config for both npm scripts (real child process, flake-shape
+	// admission).
+	"tests/scripts/lint-js.test.ts",
+	// #2613 review S2/T3: the drift-notifier CLI's --dry-run env-reading and
+	// report-building wiring is the subject; no in-process double is faithful.
+	"tests/scripts/notify-install-smoke-drift.test.ts",
+	// #2723: mirrors notify-install-smoke-drift.test.ts's own admission --
+	// this second, independent drift-notifier CLI's --dry-run env-reading and
+	// real (stubbed) `gh` wiring are the subject; no in-process double is
+	// faithful to the real subcommands it invokes.
+	"tests/scripts/notify-tool-smoke-red.test.ts",
+	// #2613 review S3a: the retry wrapper's real exit code and distinct
+	// `::error::infra:` label on exhaustion are the subject under test.
+	"tests/scripts/npm-retry.test.ts",
+	"tests/scripts/prune-agent-worktrees.test.ts",
+	// #2619 review F1: the release-QA hermeticity canary spawns a REAL child
+	// under scratchEnv() and reads back what that child resolved. The defect it
+	// pins is a child inheriting the ambient environment, which an in-process
+	// assertion on the env object cannot see (it passed while npm() ignored the
+	// env entirely).
+	"tests/scripts/release-qa.test.ts",
+	// #2613: the resolver CLI's real exit code (2 vs. 4) and GITHUB_OUTPUT
+	// write are the subject under test; no in-process double is faithful.
+	"tests/scripts/resolve-newest-in-range-host.test.ts",
+	// #2369: the fixture-ordering defect lives in the CLI's own module-load
+	// order; only a real child process is the script under test.
+	"tests/scripts/smoke-tools-lsp-fixture-registration.test.ts",
+	// #2586 review F1: proves the ACTUAL stdout bytes supply-host-provided-deps.mjs
+	// prints (real child process, flake-shape admission).
+	"tests/scripts/supply-host-provided-deps.test.ts",
 	// #2628: the warm-loader's install-log home resolution spawns a real child
 	// under a fully pinned env; the child's own os.homedir() fallback decides
 	// where the record lands and is unobservable in-process (flake-shape
 	// admission).
 	"tests/scripts/warm-loader-cache.test.ts",
-	"tests/clients/biome-config-decorator-metadata.test.ts",
-	"tests/clients/build-identity.test.ts",
-	"tests/clients/config-diagnostic-codes.test.ts",
-	"tests/clients/dispatch/runners/ast-grep-playground-verify.test.ts",
-	"tests/clients/dispatch/runners/ast-grep-rule-ignores.test.ts",
-	"tests/clients/git-tracked-ignore.test.ts",
-	"tests/clients/installer/posix-group-kill.test.ts",
-	"tests/clients/installer/verify-binary-semantics.test.ts",
-	"tests/clients/metrics-history-stderr.test.ts",
-	"tests/clients/safe-spawn-ambient-signal.test.ts",
-	"tests/clients/safe-spawn-failure-taxonomy.test.ts",
-	"tests/clients/safe-spawn-input.test.ts",
-	"tests/clients/safe-spawn-resource-usage.test.ts",
-	"tests/clients/safe-spawn-timeout-teardown.test.ts",
-	"tests/clients/safe-spawn-windows-command.test.ts",
-	"tests/clients/shared-checkout-guard.test.ts",
-	"tests/config/gitignore-tracked-shadow.test.ts",
-	"tests/config/tracked-control-bytes.test.ts",
-	"tests/scripts/git-fixture-env.test.ts",
-	"tests/scripts/prune-agent-worktrees.test.ts",
 	"tests/support/fault-injection.test.ts",
 	"tests/support/git-config-guard.test.ts",
 	"tests/support/git-fixture-env.test.ts",
