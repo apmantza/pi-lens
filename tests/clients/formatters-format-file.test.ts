@@ -14,6 +14,9 @@ async function loadFormatFile() {
 	const mod = await import("../../clients/formatters.js");
 	return {
 		formatFile: mod.formatFile,
+		biome: mod.biomeFormatter,
+		prettier: mod.prettierFormatter,
+		oxfmt: mod.oxfmtFormatter,
 		formatter: mod.terragruntHclFormatter,
 		rubocop: mod.rubocopFormatter,
 	};
@@ -24,6 +27,47 @@ describe("formatFile", () => {
 		vi.resetModules();
 		safeSpawnAsync.mockReset();
 	});
+
+	it.each(["prettier", "biome", "oxfmt"] as const)(
+		"runs %s from the project root so cwd-relative ignores are honored",
+		async (name) => {
+			const env = setupTestEnvironment(`pi-lens-format-${name}-`);
+			try {
+				const nestedDir = path.join(env.tmpDir, "sub", "deep");
+				const filePath = path.join(nestedDir, "app.ts");
+				fs.mkdirSync(nestedDir, { recursive: true });
+				fs.mkdirSync(path.join(env.tmpDir, "node_modules", ".bin"), {
+					recursive: true,
+				});
+				fs.writeFileSync(
+					path.join(env.tmpDir, "node_modules", ".bin", name),
+					"",
+				);
+				fs.writeFileSync(path.join(env.tmpDir, ".gitignore"), "ignored.md\n");
+				fs.writeFileSync(
+					path.join(env.tmpDir, ".prettierignore"),
+					"ignored-by-prettier.md\n",
+				);
+				fs.writeFileSync(filePath, "function f() {\n  return 1;\n}\n");
+				safeSpawnAsync.mockResolvedValue({
+					status: 0,
+					stdout: "",
+					stderr: "",
+				});
+
+				const mod = await loadFormatFile();
+				await mod.formatFile(filePath, mod[name]);
+
+				expect(safeSpawnAsync).toHaveBeenCalledWith(
+					expect.any(String),
+					expect.any(Array),
+					expect.objectContaining({ cwd: env.tmpDir }),
+				);
+			} finally {
+				env.cleanup();
+			}
+		},
+	);
 
 	// A formatter that never ran leaves the file byte-identical, which is
 	// indistinguishable from "already formatted" unless the exit status is part
@@ -244,6 +288,7 @@ describe("formatFile honors SKIP_FORMATTING (#1144)", () => {
 		try {
 			const filePath = path.join(env.tmpDir, "formatted.js");
 			fs.writeFileSync(filePath, "const value = 1;\n");
+			fs.writeFileSync(path.join(env.tmpDir, ".gitignore"), "ignored.md\n");
 			const mod = await import("../../clients/formatters.js");
 			const formatter = {
 				...mod.prettierFormatter,

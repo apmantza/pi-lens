@@ -28,6 +28,7 @@ import {
 	phpCsFixerFormatter,
 	prettierFormatter,
 	psscriptanalyzerFormatFormatter,
+	resolveFormatterCwd,
 	rubocopFormatter,
 	ruffFormatter,
 	standardrbFormatter,
@@ -94,9 +95,7 @@ async function withPathShim(
 	}
 }
 
-async function withIsolatedPath(
-	fn: () => Promise<void> | void,
-): Promise<void> {
+async function withIsolatedPath(fn: () => Promise<void> | void): Promise<void> {
 	const isolatedPath = path.join(tmpDir, "isolated-path");
 	fs.mkdirSync(isolatedPath, { recursive: true });
 	const origPath = process.env.PATH;
@@ -180,59 +179,49 @@ describe("resolveCommand — node_modules/.bin", () => {
 			SKIP_FORMATTING,
 		);
 	});
+});
 
-	it("prettier: passes --ignore-path when repo-root .prettierignore exists", async () => {
-		const binPath = nodeModulesBin(tmpDir, "prettier");
-		makeFakeExe(binPath);
-		// Root .prettierignore that a nested-file cwd would miss (#2756)
-		fs.writeFileSync(path.join(tmpDir, ".prettierignore"), "*.md\n");
-		// File in a nested subdirectory — prettier invoked with cwd=this dir
-		// would not see the root .prettierignore without --ignore-path.
+describe("formatter child cwd", () => {
+	it("uses the nearest project marker, not the file directory", () => {
 		const nestedDir = path.join(tmpDir, "src", "deep");
 		fs.mkdirSync(nestedDir, { recursive: true });
+		fs.writeFileSync(path.join(tmpDir, ".gitignore"), "ignored.md\n");
+		fs.writeFileSync(path.join(tmpDir, ".prettierignore"), "keep.md\n");
 		const filePath = path.join(nestedDir, "app.tsx");
-		// Indentation must be detectable; otherwise resolveCommand returns
-		// SKIP_FORMATTING before reaching the --ignore-path logic.
 		fs.writeFileSync(filePath, "function f() {\n  return 1;\n}\n");
 
-		const cmd = await prettierFormatter.resolveCommand!(filePath, nestedDir);
-
-		expect(cmd).not.toBeNull();
-		expect(cmd).toContain("--ignore-path");
-		expect(cmd).toContain(path.join(tmpDir, ".prettierignore"));
+		expect(resolveFormatterCwd(filePath, "prettier")).toBe(tmpDir);
 	});
 
-	it("prettier: does not pass --ignore-path when no .prettierignore exists", async () => {
-		const binPath = nodeModulesBin(tmpDir, "prettier");
-		makeFakeExe(binPath);
-		const filePath = fileIn(tmpDir, "app.tsx");
+	it("keeps the file directory when no project marker exists", () => {
+		const nestedDir = path.join(tmpDir, "isolated", "src");
+		fs.mkdirSync(nestedDir, { recursive: true });
+		const filePath = path.join(nestedDir, "app.tsx");
 		fs.writeFileSync(filePath, "function f() {\n  return 1;\n}\n");
 
-		const cmd = await prettierFormatter.resolveCommand!(filePath, tmpDir);
-
-		expect(cmd).not.toBeNull();
-		expect(cmd).not.toContain("--ignore-path");
+		expect(resolveFormatterCwd(filePath, undefined, tmpDir)).toBe(nestedDir);
 	});
 
-	it("prettier: passes --ignore-path from nearest ancestor, not from file's own dir", async () => {
-		const binPath = nodeModulesBin(tmpDir, "prettier");
-		makeFakeExe(binPath);
-		// Root .prettierignore
-		fs.writeFileSync(path.join(tmpDir, ".prettierignore"), "*.md\n");
-		// INTERMEDIATE .prettierignore closer to the file — the nearest should
-		// win, proving the walk-up stops at the first match.
+	it("does not adopt an ignore file at the home ceiling", () => {
+		const homeDir = path.join(tmpDir, "home");
+		const nestedDir = path.join(homeDir, "project", "src");
+		fs.mkdirSync(nestedDir, { recursive: true });
+		fs.writeFileSync(path.join(homeDir, ".gitignore"), "ignored.md\n");
+		const filePath = path.join(nestedDir, "app.tsx");
+		fs.writeFileSync(filePath, "function f() {\n  return 1;\n}\n");
+
+		expect(resolveFormatterCwd(filePath, undefined, homeDir)).toBe(nestedDir);
+	});
+
+	it("lets a nearer ignore marker win", () => {
 		const intermediateDir = path.join(tmpDir, "src");
 		fs.mkdirSync(intermediateDir, { recursive: true });
+		fs.writeFileSync(path.join(tmpDir, ".gitignore"), "*.md\n");
 		fs.writeFileSync(path.join(intermediateDir, ".prettierignore"), "*.tsx\n");
 		const filePath = path.join(intermediateDir, "app.tsx");
 		fs.writeFileSync(filePath, "function f() {\n  return 1;\n}\n");
 
-		const cmd = await prettierFormatter.resolveCommand!(filePath, intermediateDir);
-
-		expect(cmd).not.toBeNull();
-		expect(cmd).toContain("--ignore-path");
-		// The nearest .prettierignore is the one in src/, not the root.
-		expect(cmd).toContain(path.join(intermediateDir, ".prettierignore"));
+		expect(resolveFormatterCwd(filePath, "prettier")).toBe(intermediateDir);
 	});
 });
 
