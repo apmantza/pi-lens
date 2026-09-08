@@ -351,6 +351,51 @@ export function stripSource(
 	return out.join("");
 }
 
+function matchIsCode(
+	stringsBlanked: string,
+	start: number,
+	end: number,
+): boolean {
+	return /[^\s"'`]/.test(stringsBlanked.slice(start, end));
+}
+
+/** Return every raw match whose span contains source code. */
+export function codeMatches(source: string, regex: RegExp): RegExpMatchArray[] {
+	const stringsBlanked = stripSource(source, { strings: "blank" });
+	const globalRegex = new RegExp(
+		regex.source,
+		regex.flags.includes("g") ? regex.flags : `${regex.flags}g`,
+	);
+	return [...source.matchAll(globalRegex)].filter((match) => {
+		const start = match.index ?? 0;
+		return matchIsCode(stringsBlanked, start, start + match[0].length);
+	});
+}
+
+/** Return the first raw match that is not only literal text. */
+export function firstCommentMatch(
+	source: string,
+	regex: RegExp,
+): RegExpMatchArray | undefined {
+	const commentsBlanked = stripSource(source, { strings: "keep" });
+	const stringsBlanked = stripSource(source, { strings: "blank" });
+	const globalRegex = new RegExp(
+		regex.source,
+		regex.flags.includes("g") ? regex.flags : `${regex.flags}g`,
+	);
+	for (const match of source.matchAll(globalRegex)) {
+		const start = match.index ?? 0;
+		const end = start + match[0].length;
+		if (
+			!/\S/.test(commentsBlanked.slice(start, end)) ||
+			matchIsCode(stringsBlanked, start, end)
+		) {
+			return match;
+		}
+	}
+	return undefined;
+}
+
 export interface ListSourceFilesOptions {
 	/** File extensions to include, with the dot. Default `[".ts"]`. */
 	extensions?: readonly string[];

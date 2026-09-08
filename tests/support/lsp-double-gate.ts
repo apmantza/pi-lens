@@ -100,7 +100,7 @@
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadAstGrepNapi } from "../../clients/deps/ast-grep-napi.js";
-import { stripSource } from "./sweep-kit.js";
+import { firstCommentMatch } from "./sweep-kit.js";
 import type { SgNode } from "../../clients/deps/ast-grep-napi.js";
 import { makeLspServiceDouble } from "./lsp-service-double.js";
 
@@ -131,15 +131,7 @@ export const repoRoot = path.resolve(
 const ADMISSION_HEADER = /^[ \t]*\/\/[ \t]*lsp-double:[ \t]*(.+)$/gm;
 
 export function admissionHeader(source: string): string | undefined {
-	const commentsBlanked = stripSource(source, { strings: "keep" });
-	for (const match of source.matchAll(ADMISSION_HEADER)) {
-		const start = match.index ?? 0;
-		if (/\S/.test(commentsBlanked.slice(start, start + match[0].length))) {
-			continue; // survived the comment blanking: it is inside a literal
-		}
-		return match[1].trim();
-	}
-	return undefined;
+	return firstCommentMatch(source, ADMISSION_HEADER)?.[1].trim();
 }
 
 /** The factory's own default surface — the single source of truth (#2582). */

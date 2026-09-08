@@ -1,7 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { assertNonEmptyScan } from "../support/sweep-kit.js";
+import {
+	assertNonEmptyScan,
+	codeMatches,
+	stripSource,
+} from "../support/sweep-kit.js";
 import {
 	KNOWN_FIXTURE_EMAILS,
 	KNOWN_FIXTURE_NAMES,
@@ -58,12 +62,14 @@ export function findGitSpawnOffenders(
 				)
 			)
 				return false;
+			const sourceKeep = stripSource(source, { strings: "keep" });
 			const imported = new Set<string>();
-			for (const match of source.matchAll(helperImport)) {
-				for (const item of match[1].split(","))
+			for (const match of codeMatches(source, helperImport)) {
+				for (const item of match[1].split(",")) {
 					imported.add(item.trim().split(/\s+as\s+/)[0] ?? "");
+				}
 			}
-			for (const match of source.matchAll(directGitSpawn)) {
+			for (const match of sourceKeep.matchAll(directGitSpawn)) {
 				if (!imported.has(match[1])) return true;
 			}
 			return false;
@@ -201,6 +207,49 @@ describe("real Git fixture governance", () => {
 				},
 			]),
 		).toEqual(["synthetic.test.ts"]);
+	});
+
+	it("does not let a string literal import excuse a bare Git spawn", () => {
+		expect(
+			findGitSpawnOffenders([
+				{
+					file: "synthetic.test.ts",
+					source:
+						"const prose = \"import { execFileSync } from './git-fixture-env.js'\";\n" +
+						"execFile" +
+						'Sync("git", ["status"])',
+				},
+			]),
+		).toEqual(["synthetic.test.ts"]);
+	});
+
+	it("does not let a commented-out import excuse a bare Git spawn", () => {
+		expect(
+			findGitSpawnOffenders([
+				{
+					file: "synthetic.test.ts",
+					source:
+						'// import { execFileSync } from "./git-fixture-env.js";\n' +
+						"execFile" +
+						'Sync("git", ["status"])',
+				},
+			]),
+		).toEqual(["synthetic.test.ts"]);
+	});
+
+	it("finds a real import after a commented-out import", () => {
+		expect(
+			findGitSpawnOffenders([
+				{
+					file: "synthetic.test.ts",
+					source:
+						'// import { execFileSync } from "./git-fixture-env.js";\n' +
+						'import { execFileSync } from "./git-fixture-env.js";\n' +
+						"execFile" +
+						'Sync("git", ["status"])',
+				},
+			]),
+		).toEqual([]);
 	});
 
 	it("rejects a direct call when a different helper symbol is imported", () => {

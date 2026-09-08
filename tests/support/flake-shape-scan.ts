@@ -54,7 +54,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { listSourceFiles, relativePosix, stripSource } from "./sweep-kit.js";
+import {
+	firstCommentMatch,
+	listSourceFiles,
+	relativePosix,
+	stripSource,
+} from "./sweep-kit.js";
 
 export const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -88,7 +93,6 @@ export function testsRelative(absolute: string): string {
  */
 export const SCAN_INFRASTRUCTURE: ReadonlySet<string> = new Set([
 	"clients/flake-shape-ratchet.test.ts",
-	"support/flake-shape-scan.test.ts",
 ]);
 
 /** One line the scan flags. */
@@ -371,7 +375,8 @@ export function countsByDetector(
 
 // ── Admission gate ──────────────────────────────────────────────────────────
 
-const ADMISSION_HEADER = /\/\/\s*flake-shape:\s*([\w-]+)\s*—\s*(.+)$/m;
+const ADMISSION_HEADER =
+	/^[ \t]*\/\/[ \t]*flake-shape:[ \t]*([\w-]+)[ \t]*—[ \t]*(.+)$/gm;
 
 export interface AdmissionHeader {
 	detector: string;
@@ -388,7 +393,6 @@ export interface AdmissionHeader {
  * `ADMITTED_AFTER_BASELINE` in `tests/clients/flake-shape-ratchet.test.ts`.
  */
 export function admissionHeader(source: string): AdmissionHeader | undefined {
-	const m = ADMISSION_HEADER.exec(source);
-	if (!m) return undefined;
-	return { detector: m[1], reason: m[2].trim() };
+	const match = firstCommentMatch(source, ADMISSION_HEADER);
+	return match ? { detector: match[1], reason: match[2].trim() } : undefined;
 }
