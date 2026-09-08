@@ -15,7 +15,11 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { BoundedLruCache } from "./bounded-cache.js";
 import { createGenerationSource } from "./generation-guard.js";
-import { normalizeMapKey } from "./path-utils.js";
+import {
+	findNearestContaining,
+	isAtOrAboveHomeDir,
+	normalizeMapKey,
+} from "./path-utils.js";
 import { resolveCargoPackageEdition } from "./cargo-manifest.js";
 import { resolveKtfmtGradleStyle } from "./gradle-ktfmt-style.js";
 import { resolvePhpCsFixerConfig } from "./php-cs-fixer-config.js";
@@ -936,6 +940,17 @@ export const prettierFormatter: FormatterInfo = {
 		const styleArgs = await indentationArgs(filePath, "prettier", cwd);
 		if (styleArgs === null) return SKIP_FORMATTING;
 		const args = ["--write", ...styleArgs];
+		// #2756: prettier resolves `.prettierignore` from the child cwd, which
+		// `formatFile` sets to the FILE's directory — so a repo-root
+		// `.prettierignore` was never seen and ignored files got rewritten.
+		// Carry the ignore file explicitly via `--ignore-path`, resolved by
+		// walking up from the file's directory (same as config discovery),
+		// capped at $HOME so a home-level ignore prettier would never read on
+		// its own is not adopted.
+		const ignoreDir = findNearestContaining(cwd, [".prettierignore"]);
+		if (ignoreDir && !isAtOrAboveHomeDir(ignoreDir)) {
+			args.push("--ignore-path", path.join(ignoreDir, ".prettierignore"));
+		}
 		const local = await findInNodeModules("prettier", cwd);
 		if (local) return [local, ...args, filePath];
 		// Global bin of any manager (npm/pnpm/yarn/bun) before auto-install (#375).
