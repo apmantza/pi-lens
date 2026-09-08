@@ -34,24 +34,8 @@ jobs:
     # The auto-provided token raises this to 5000 req/hr; the installer sends it
     # ONLY to api.github.com, never the asset CDN.
     #
-    # PI_LENS_HOME/PILENS_DATA_DIR (#2670 review F1): job-level, so the SIX
-    # `--install` steps below share one tool tree/bin dir across the job
-    # instead of each `withScratchHome()` pin minting its own empty one per
-    # step — without this, each script re-pulls every managed tool from
-    # scratch (measured against the last full nightly, run 32817692457: the
-    # shared cache made the format step ~9s; per-step scratch homes would add
-    # ~10min across the job and 4-5x the release-asset downloads on this
-    # shared-IP runner). A bare `/tmp` path, not `${{ runner.temp }}`: the
-    # `runner` context is unavailable at job-level `env:` (actionlint: "context
-    # \"runner\" is not allowed here"), and this runner's whole VM — `/tmp`
-    # included — is destroyed after the job either way, so this never becomes
-    # a second `~/.pi-lens` some other step relies on persisting.
-    # `withScratchHome`'s "already pinned" branch is a no-op against an
-    # explicit PI_LENS_HOME, so this is the ONLY change these steps need.
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      PI_LENS_HOME: /tmp/pi-lens-home
-      PILENS_DATA_DIR: /tmp/pi-lens-home
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:

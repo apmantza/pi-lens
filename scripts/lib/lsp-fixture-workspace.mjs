@@ -1,10 +1,13 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { gitExecFileSync } from "./git-fixture-env.mjs";
 import { assertFixtureWorkspaceRegistered } from "./lsp-fixture-session-guard.mjs";
 import { safeRm } from "./safe-rm.mjs";
-
+import {
+	claimScratchDir,
+	SCRATCH_DIR_ROOT,
+	sweepScratchDirs,
+} from "./scratch-dir.mjs";
 /**
  * #2670 (folds #2658). The one "copy fixture → register session root →
  * optional `.pi-lens/lsp.json` disable + reload → optional `git init` →
@@ -55,8 +58,11 @@ export async function bootstrapFixtureWorkspace(fx, opts) {
 		disableServers,
 	} = opts;
 
-	const workspace =
-		preMadeWorkspace ?? fs.mkdtempSync(path.join(os.tmpdir(), tmpPrefix));
+	let workspace = preMadeWorkspace;
+	if (!workspace) {
+		sweepScratchDirs(SCRATCH_DIR_ROOT, tmpPrefix);
+		workspace = claimScratchDir(SCRATCH_DIR_ROOT, tmpPrefix);
+	}
 	fs.cpSync(path.join(repoRoot, fx.dir), workspace, { recursive: true });
 
 	// #2369/#2655/#2658: every fixture registers its OWN workspace
@@ -139,92 +145,6 @@ export async function bootstrapFixtureWorkspace(fx, opts) {
  * runner is itself thrown away every night; see the PR body for the
  * tradeoff this was weighed against.
  */
-const SCRATCH_HOME_OWNER_FILE = "owner.pid";
-// Fallback for a dir with no pid file at all (pre-dates this fix, or its
-// writer crashed between mkdtemp and writing its own pid) — old enough that
-// ANY normal `--install` run (minutes, not hours) is long finished, so this
-// never races a live one.
-const SCRATCH_HOME_ORPHAN_AGE_MS = 60 * 60 * 1000; // 1h
-
-/**
- * Is the process that minted `entryDir` (its recorded `owner.pid`) still
- * alive? `undefined` when there's no pid file to check (caller falls back to
- * an age gate). `process.kill(pid, 0)` sends no signal — it only probes
- * existence/permission: `ESRCH` means no such process (dead); anything else
- * (success, or `EPERM` — a live process this one merely lacks permission to
- * signal) means a real, live process still owns this dir.
- */
-function scratchHomeOwnerAlive(entryDir) {
-	let pidText;
-	try {
-		pidText = fs.readFileSync(
-			path.join(entryDir, SCRATCH_HOME_OWNER_FILE),
-			"utf8",
-		);
-	} catch {
-		return undefined; // no pid file recorded
-	}
-	const pid = Number.parseInt(pidText.trim(), 10);
-	if (!Number.isInteger(pid) || pid <= 0) return undefined;
-	try {
-		process.kill(pid, 0);
-		return true;
-	} catch (err) {
-		return err?.code !== "ESRCH";
-	}
-}
-
-/**
- * Sweep leftover scratch-home dirs from PRIOR runs (#2670 review F2, hardened
- * in review round 2 F1). Nothing else ever removes a scratch home:
- * `withScratchHome`'s `restore()` only unsets the env vars (the dir itself
- * may still hold installed tools a LATER call in the same process wants to
- * keep using), and a SIGKILL'd run skips any exit handler entirely — without
- * this sweep, every `--install` run leaves a full tool tree behind in
- * `os.tmpdir()` forever.
- *
- * NOT a blind "try rmSync, catch = still locked" pass (round 1's shape,
- * reviewer round 2 F1): on POSIX, `rmSync` on a directory another process is
- * actively using SUCCEEDS regardless — only Windows EPERMs on an open
- * handle — so that catch block was describing a protection that did not
- * exist. A live writer whose scratch home got removed out from under it
- * would keep appending to files by then-unlinked inode: silent, permanent
- * data loss, not a caught-and-skipped no-op. Liveness is checked for real
- * instead: each dir's `owner.pid` (written at mint by `withScratchHome`)
- * against `process.kill(pid, 0)` — alive is skipped unconditionally, dead is
- * removed. A dir with no pid file at all only goes by age (see
- * `SCRATCH_HOME_ORPHAN_AGE_MS`), never by whether `rmSync` happens to throw.
- */
-function sweepScratchHomeLeftovers(tmpPrefix) {
-	let entries;
-	const tmp = os.tmpdir();
-	try {
-		entries = fs.readdirSync(tmp);
-	} catch {
-		return; // tmpdir unreadable — ignore
-	}
-	for (const entry of entries) {
-		if (!entry.startsWith(tmpPrefix)) continue;
-		const entryDir = path.join(tmp, entry);
-		const ownerAlive = scratchHomeOwnerAlive(entryDir);
-		if (ownerAlive === true) continue; // its writer is still running — never touch a live home
-		if (ownerAlive === undefined) {
-			let mtimeMs;
-			try {
-				mtimeMs = fs.statSync(entryDir).mtimeMs;
-			} catch {
-				continue; // already gone (raced something else) — nothing to do
-			}
-			if (Date.now() - mtimeMs < SCRATCH_HOME_ORPHAN_AGE_MS) continue; // too young to call orphaned yet
-		}
-		try {
-			fs.rmSync(entryDir, { recursive: true, force: true });
-		} catch {
-			// a genuine removal error (e.g. permissions) — leave it, swept by a later run instead
-		}
-	}
-}
-
 export function withScratchHome(opts = {}) {
 	const { realHome = false, tmpPrefix = "lsp-fixture-home-" } = opts;
 	if (realHome) {
@@ -236,14 +156,8 @@ export function withScratchHome(opts = {}) {
 	}
 	// Startup sweep BEFORE minting this run's own dir, so it never sweeps
 	// itself (#2670 review F2).
-	sweepScratchHomeLeftovers(tmpPrefix);
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), tmpPrefix));
-	// Recorded so a LATER run's sweep can tell this one is still alive
-	// (review round 2 F1) rather than guessing from whether rmSync throws.
-	fs.writeFileSync(
-		path.join(dir, SCRATCH_HOME_OWNER_FILE),
-		String(process.pid),
-	);
+	sweepScratchDirs(SCRATCH_DIR_ROOT, tmpPrefix);
+	const dir = claimScratchDir(SCRATCH_DIR_ROOT, tmpPrefix);
 	process.env.PI_LENS_HOME = dir;
 	const dataDirWasUnset = !process.env.PILENS_DATA_DIR?.trim();
 	if (dataDirWasUnset) process.env.PILENS_DATA_DIR = dir;
@@ -256,12 +170,21 @@ export function withScratchHome(opts = {}) {
 	console.error(
 		`[lsp-fixture-workspace] PI_LENS_HOME pinned to ${dir} (#2506 shape) — this run's tool installs and config_resolved/sessionstart telemetry land there, not the real ~/.pi-lens.`,
 	);
+	let announcedEnd = false;
+	const announceEnd = () => {
+		if (announcedEnd) return;
+		announcedEnd = true;
+		console.error(`[lsp-fixture-workspace] scratch home complete: ${dir}`);
+	};
+	process.once("exit", announceEnd);
 	return {
 		dir,
 		pinned: true,
 		restore() {
 			delete process.env.PI_LENS_HOME;
 			if (dataDirWasUnset) delete process.env.PILENS_DATA_DIR;
+			process.off("exit", announceEnd);
+			announceEnd();
 		},
 	};
 }

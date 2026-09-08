@@ -51,6 +51,11 @@ import {
 	bootstrapFixtureWorkspace,
 	withScratchHome,
 } from "./lib/lsp-fixture-workspace.mjs";
+import {
+	claimScratchDir,
+	SCRATCH_DIR_ROOT,
+	sweepScratchDirs,
+} from "./lib/scratch-dir.mjs";
 import { safeRm } from "./lib/safe-rm.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1259,35 +1264,14 @@ function parseArgs(argv) {
 
 const TMP_PREFIX = "pi-lens-smoke-";
 
-/**
- * Sweep leftovers from PRIOR runs. Those runs' LSP servers have long since
- * exited, so their workspace locks are released and the dirs delete cleanly —
- * this is why cleanup belongs at startup, not in the same process that holds the
- * lock. Keeps %TEMP% from accumulating across nightly runs without a separate
- * unlock step.
- */
-function sweepLeftovers() {
-	const tmp = os.tmpdir();
-	let swept = 0;
-	try {
-		for (const entry of fs.readdirSync(tmp)) {
-			if (!entry.startsWith(TMP_PREFIX)) continue;
-			try {
-				fs.rmSync(path.join(tmp, entry), { recursive: true, force: true });
-				swept++;
-			} catch {
-				// still locked by a live run — leave it
-			}
-		}
-	} catch {
-		// tmpdir unreadable — ignore
-	}
-	return swept;
+/** Sweep prior runs without deleting a workspace owned by a live process. */
+export function sweepLeftovers() {
+	return sweepScratchDirs(SCRATCH_DIR_ROOT, TMP_PREFIX);
 }
 
 function copyDirToTemp(srcRel) {
 	const src = path.join(repoRoot, srcRel);
-	const dest = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-smoke-"));
+	const dest = claimScratchDir(SCRATCH_DIR_ROOT, TMP_PREFIX);
 	fs.cpSync(src, dest, { recursive: true });
 	return dest;
 }

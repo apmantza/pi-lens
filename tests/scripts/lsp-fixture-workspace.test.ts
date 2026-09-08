@@ -32,6 +32,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SCRATCH_DIR_ROOT } from "../../scripts/lib/scratch-dir.mjs";
 
 const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -343,7 +344,8 @@ describe("withScratchHome (#2670/#2506-shape)", () => {
 	const SWEEP_TEST_PREFIX = "lsp-fixture-workspace-test-home-";
 
 	function mintScratchHomeDir(): string {
-		return fs.mkdtempSync(path.join(os.tmpdir(), SWEEP_TEST_PREFIX));
+		fs.mkdirSync(SCRATCH_DIR_ROOT, { recursive: true });
+		return fs.mkdtempSync(path.join(SCRATCH_DIR_ROOT, SWEEP_TEST_PREFIX));
 	}
 
 	function writeOwnerPid(dir: string, pid: number): void {
@@ -495,10 +497,13 @@ describe("withScratchHome (#2670/#2506-shape)", () => {
 			);
 			expect(errors.some((line) => line.includes(dir as string))).toBe(true);
 		} finally {
-			spy.mockRestore();
 			restore();
+			spy.mockRestore();
 			fs.rmSync(dir as string, { recursive: true, force: true });
 		}
+		expect(errors.some((line) => line.includes("scratch home complete"))).toBe(
+			true,
+		);
 	});
 
 	it("does not announce anything when a home is already pinned (a true no-op)", () => {
