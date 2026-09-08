@@ -16,7 +16,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { BoundedLruCache } from "./bounded-cache.js";
 import { createGenerationSource } from "./generation-guard.js";
-import { findNearestMarkerRoot, normalizeMapKey } from "./path-utils.js";
+import {
+	findNearestMarkerRoot,
+	isRealGitMarker,
+	normalizeMapKey,
+} from "./path-utils.js";
 import { resolveCargoPackageEdition } from "./cargo-manifest.js";
 import { resolveKtfmtGradleStyle } from "./gradle-ktfmt-style.js";
 import { resolvePhpCsFixerConfig } from "./php-cs-fixer-config.js";
@@ -956,6 +960,7 @@ export function resolveFormatterCwd(
 	if (root) return root;
 	const gitRoot = findNearestMarkerRoot(fileDir, [".git"], {
 		homeDir: effectiveHome,
+		markerPredicate: isRealGitMarker,
 	});
 	return gitRoot ?? fileDir;
 }

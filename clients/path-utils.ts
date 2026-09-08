@@ -11,7 +11,13 @@
  * - Always convert backslashes to forward slashes for Map key consistency
  */
 
-import { type Dirent, existsSync, realpathSync } from "node:fs";
+import {
+	type Dirent,
+	existsSync,
+	readFileSync,
+	realpathSync,
+	statSync,
+} from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { win32 } from "node:path";
@@ -453,6 +459,25 @@ export interface FindNearestMarkerRootOptions {
 	boundaries?: readonly string[];
 	/** Override for `os.homedir()`, primarily for tests. */
 	homeDir?: string;
+	/** Further validate a marker path before accepting its containing directory. */
+	markerPredicate?: (markerPath: string) => boolean;
+}
+
+/**
+ * Accept only a real Git repository marker: a directory with HEAD, or a
+ * worktree/submodule marker file whose first line starts with `gitdir:`.
+ */
+export function isRealGitMarker(markerPath: string): boolean {
+	try {
+		const marker = statSync(markerPath);
+		if (marker.isDirectory()) return existsSync(path.join(markerPath, "HEAD"));
+		if (!marker.isFile()) return false;
+		return readFileSync(markerPath, "utf8")
+			.split(/\r?\n/, 1)[0]
+			.startsWith("gitdir:");
+	} catch {
+		return false;
+	}
 }
 
 /**
@@ -484,10 +509,18 @@ export function findNearestMarkerRoot(
 ): string | null {
 	const boundaries = options.boundaries ?? [];
 	const homeDir = path.resolve(options.homeDir ?? os.homedir());
+	const markerPredicate = options.markerPredicate ?? (() => true);
 	let current = path.resolve(startDir);
 	for (let depth = 0; depth < 64; depth++) {
 		if (isAtOrAboveHomeDir(current, homeDir)) return null;
-		if (markers.some((m) => existsSync(path.join(current, m)))) return current;
+		if (
+			markers.some(
+				(m) =>
+					existsSync(path.join(current, m)) &&
+					markerPredicate(path.join(current, m)),
+			)
+		)
+			return current;
 		if (boundaries.some((m) => existsSync(path.join(current, m)))) return null;
 		const parent = path.dirname(current);
 		if (parent === current) return null;

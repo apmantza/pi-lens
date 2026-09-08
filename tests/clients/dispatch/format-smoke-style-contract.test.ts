@@ -15,14 +15,38 @@
  */
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { hasDetectableIndentation } from "../../../clients/dispatch/indent-detect.js";
-import { ALL_FORMATTERS } from "../../../clients/formatters.js";
+import {
+	ALL_FORMATTERS,
+	resolveFormatterCwd,
+} from "../../../clients/formatters.js";
 // Typed via scripts/smoke-tools.d.mts (the harness itself is plain ESM JS).
 import { FORMAT_FIXTURES } from "../../../scripts/smoke-tools.mjs";
 
 const repoRoot = path.resolve(__dirname, "../../..");
+
+describe("formatter-name cwd dispatch", () => {
+	it("keeps Prettier at the gitignore root despite nested Biome config", () => {
+		const root = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-format-dispatch-"),
+		);
+		try {
+			const nested = path.join(root, "sub");
+			fs.mkdirSync(nested, { recursive: true });
+			fs.writeFileSync(path.join(root, ".gitignore"), "ignored.md\n");
+			fs.writeFileSync(path.join(nested, "biome.json"), "{}\n");
+			const filePath = path.join(nested, "app.ts");
+			fs.writeFileSync(filePath, "const value = 1;\n");
+
+			expect(resolveFormatterCwd(filePath, "prettier")).toBe(root);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
 
 /** Formatters whose resolveCommand pins style from the file (indentationArgs). */
 const STYLE_PINNING = new Set(["biome", "prettier", "ruff", "shfmt"]);

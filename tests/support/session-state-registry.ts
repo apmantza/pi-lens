@@ -1475,7 +1475,9 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// module-level `new Set`) is counted (8 -> 9). An import-time frozen
 	// vocabulary with no session lifetime — SWEEP_HEURISTIC_LIMITS item 5, and
 	// this file's existing registry entries already cover its real caches.
-	"formatters.ts": 9,
+	// #2756 round 3: the live container scan includes the module-level
+	// formatterSignatureFlights map added with the project-root cwd resolver.
+	"formatters.ts": 10,
 	// #2442 review F2: the container regex now recognises BoundedFifoMap /
 	// BoundedLruCache, so this file's module-level bounded cache is counted.
 	"generated-artifacts.ts": 3,

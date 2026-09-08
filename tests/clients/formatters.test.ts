@@ -223,6 +223,36 @@ describe("formatter child cwd", () => {
 
 		expect(resolveFormatterCwd(filePath, "prettier")).toBe(intermediateDir);
 	});
+
+	it.each([
+		["empty .git directory", "directory"],
+		["real .git directory", "real-directory"],
+		["worktree .git file", "file"],
+	] as const)("recognizes %s only as a real repository marker", (_, kind) => {
+		const repoDir = path.join(tmpDir, `git-marker-${kind}`);
+		const nestedDir = path.join(repoDir, "src");
+		fs.mkdirSync(nestedDir, { recursive: true });
+		if (kind === "directory" || kind === "real-directory") {
+			fs.mkdirSync(path.join(repoDir, ".git"));
+			if (kind === "real-directory") {
+				fs.writeFileSync(
+					path.join(repoDir, ".git", "HEAD"),
+					"ref: refs/heads/main\n",
+				);
+			}
+		} else {
+			fs.writeFileSync(
+				path.join(repoDir, ".git"),
+				"gitdir: /shared/main/.git/worktrees/demo\n",
+			);
+		}
+		const filePath = path.join(nestedDir, "app.tsx");
+		fs.writeFileSync(filePath, "function f() {\n  return 1;\n}\n");
+
+		expect(resolveFormatterCwd(filePath, "prettier")).toBe(
+			kind === "directory" ? nestedDir : repoDir,
+		);
+	});
 });
 
 describe("resolveCommand — shfmt style preservation", () => {
