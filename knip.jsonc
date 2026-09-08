@@ -52,8 +52,7 @@
 		// work: via a scripts/*.mjs entry's own import, or a test's.
 		// Doesn't exist yet (#2697 item 1 adds it); the glob costs nothing
 		// today and needs no follow-up edit once hook scripts land there.
-		"scripts/hooks/**/*.mjs",
-		"scripts/hooks/**/*.ts"
+		"scripts/hooks/**/*.mjs"
 		// tools/*.ts and vitest's setupFiles are NOT listed here: both are
 		// already reached without help — tools/*.ts via index.ts's and
 		// mcp/server.ts's own imports, tests/support/vitest-setup.ts via
@@ -96,6 +95,10 @@
 	// of knip's plugins for these tools activates the way this repo uses
 	// them, so knip cannot see the usage on its own:
 	"ignoreDependencies": [
+		// jscpd (#2706, lint.yml "jscpd (advisory)") is a pinned devDependency
+		// spawned by path (`node_modules/.bin/jscpd`) from the workflow step and
+		// never imported, so knip cannot credit it.
+		"jscpd",
 		// knip's husky plugin (packages/knip/src/plugins/husky/index.ts,
 		// pinned tag) only credits the `husky` package itself from the
 		// legacy v8 `package.json#husky.hooks` field; this repo uses v9
