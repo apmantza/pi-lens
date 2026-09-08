@@ -703,8 +703,7 @@ async function performNpmRefresh(
 			0,
 			200,
 		);
-		const coveredIds =
-			candidate.coveredToolIds?.join(",") ?? candidate.toolId;
+		const coveredIds = candidate.coveredToolIds?.join(",") ?? candidate.toolId;
 		// "Keeping <old version>" would be an unchecked assertion (#1746 review
 		// F2). The spawn budget kills the package manager where it stands, which
 		// can be mid-write: the tree may hold a new version, a half-written one,
@@ -771,8 +770,7 @@ async function performNpmRefresh(
 		candidate.packageEntryOf,
 	);
 	if (!verified) {
-		const coveredIds =
-			candidate.coveredToolIds?.join(",") ?? candidate.toolId;
+		const coveredIds = candidate.coveredToolIds?.join(",") ?? candidate.toolId;
 		recordDegradationOnce({
 			kind: "managed-tool-refresh",
 			subject: candidate.toolId,

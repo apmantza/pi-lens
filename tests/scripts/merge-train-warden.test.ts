@@ -2492,20 +2492,26 @@ describe("merge-lane gate (#2185)", () => {
 		["IN_PROGRESS", "SUCCESS"],
 		["QUEUED", null],
 		["COMPLETED", null],
-	])("holds a discovered %s check (conclusion %s) until it concludes", (status, conclusion) => {
-		const checkName = `discovered ${status.toLowerCase()} check`;
-		const gate = gateOf(
-			approved({
-				mergeStateStatus: "UNSTABLE",
-				checkRuns: [...greenChecks(), { name: checkName, status, conclusion }],
-			}),
-		);
-		expect(gate).toMatchObject({
-			merge: false,
-			reason: MERGE_GATE_REASON.CHECK_PENDING,
-		});
-		expect(gate.detail).toContain(checkName);
-	});
+	])(
+		"holds a discovered %s check (conclusion %s) until it concludes",
+		(status, conclusion) => {
+			const checkName = `discovered ${status.toLowerCase()} check`;
+			const gate = gateOf(
+				approved({
+					mergeStateStatus: "UNSTABLE",
+					checkRuns: [
+						...greenChecks(),
+						{ name: checkName, status, conclusion },
+					],
+				}),
+			);
+			expect(gate).toMatchObject({
+				merge: false,
+				reason: MERGE_GATE_REASON.CHECK_PENDING,
+			});
+			expect(gate.detail).toContain(checkName);
+		},
+	);
 
 	it("reports every pending discovered check in the hold detail", () => {
 		const names = ["queued discovered check", "running discovered check"];

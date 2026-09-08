@@ -472,13 +472,13 @@ describe("cadence", () => {
 		expect(updateCalls()).toHaveLength(2);
 		expect(updateCalls().map((call) => call.args)).toEqual(
 			expect.arrayContaining([
-			expect.arrayContaining(["vscode-langservers-extracted"]),
-			expect.arrayContaining(["knip"]),
-		]),
-	);
+				expect.arrayContaining(["vscode-langservers-extracted"]),
+				expect.arrayContaining(["knip"]),
+			]),
+		);
 		expect(outcome.refreshed.map((refresh) => refresh.packageName)).toEqual(
 			expect.arrayContaining(["vscode-langservers-extracted", "knip"]),
-	);
+		);
 		expect(readState()).toMatchObject({
 			"vscode-css-languageserver": { checkedAt: NOW, version: "5.0.0" },
 			"vscode-html-languageserver-bin": { checkedAt: NOW, version: "5.0.0" },
@@ -489,7 +489,9 @@ describe("cadence", () => {
 			logRows().some(
 				(row) =>
 					row.includes("package vscode-langservers-extracted") &&
-					row.includes("covered ids vscode-json-language-server,vscode-html-languageserver-bin,vscode-css-languageserver"),
+					row.includes(
+						"covered ids vscode-json-language-server,vscode-html-languageserver-bin,vscode-css-languageserver",
+					),
 			),
 		).toBe(true);
 	});
@@ -604,7 +606,9 @@ describe("failed refresh", () => {
 		expect(group?.latestReasons[0].reason).toContain(
 			"package vscode-langservers-extracted",
 		);
-		expect(group?.latestReasons[0].reason).toContain(`covered ids ${coveredIds}`);
+		expect(group?.latestReasons[0].reason).toContain(
+			`covered ids ${coveredIds}`,
+		);
 		expect(readState()).toMatchObject({
 			"vscode-json-language-server": { failed: true },
 			"vscode-html-languageserver-bin": { failed: true },
@@ -649,7 +653,9 @@ describe("failed refresh", () => {
 		expect(group?.latestReasons[0].reason).toContain(
 			"package vscode-langservers-extracted",
 		);
-		expect(group?.latestReasons[0].reason).toContain(`covered ids ${coveredIds}`);
+		expect(group?.latestReasons[0].reason).toContain(
+			`covered ids ${coveredIds}`,
+		);
 		expect(readState()).toMatchObject({
 			"vscode-json-language-server": { failed: true },
 			"vscode-html-languageserver-bin": { failed: true },
