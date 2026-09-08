@@ -892,6 +892,9 @@ jobs:
       # body-building logic (tested in tests/scripts/).
       - name: Notify install drift (file/refresh on failure, close on green)
         if: always()
+        # Tracker maintenance must not mask the advisory smoke lane's own
+        # verdict; the notifier's gh failure is non-gating at this step.
+        continue-on-error: true
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}

@@ -114,6 +114,8 @@ jobs:
           always() && (steps.layer_a.outcome == 'failure' ||
           steps.layer_b.outcome == 'failure' ||
           (steps.layer_a.outcome == 'success' && steps.layer_b.outcome == 'success'))
+        # Tracker maintenance must not mask the smoke job's own verdict.
+        continue-on-error: true
         env:
           LAYER_A_STEP_OUTCOME: ${{ steps.layer_a.outcome }}
           LAYER_A_KIND: ${{ steps.layer_a.outputs.outcome || 'unknown' }}

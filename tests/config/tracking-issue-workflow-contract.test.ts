@@ -11,6 +11,9 @@ describe("tracking issue workflow contract (#2683)", () => {
 			"utf8",
 		);
 		expect(source).toContain("node scripts/upsert-tracking-issue.mjs");
+		expect(source).toMatch(
+			/name: Alert on contract drift[\s\S]*?continue-on-error: true/,
+		);
 		expect(source).not.toMatch(/gh issue (create|edit|comment|close)/);
 	});
 
@@ -20,6 +23,9 @@ describe("tracking issue workflow contract (#2683)", () => {
 			"utf8",
 		);
 		expect(source).toContain("node scripts/notify-install-smoke-drift.mjs");
+		expect(source).toMatch(
+			/name: Notify install drift[\s\S]*?continue-on-error: true/,
+		);
 		expect(source).not.toMatch(/gh issue (create|edit|comment|close)/);
 	});
 });

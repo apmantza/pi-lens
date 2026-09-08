@@ -50,4 +50,18 @@ describe("upsert-tracking-issue.mjs", () => {
 		);
 		expect(noClose.calls.some((a) => a[1] === "close")).toBe(false);
 	});
+
+	it("propagates the gh failure for the CLI to report", () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-lens-upsert-failure-"));
+		const body = join(dir, "body.md");
+		writeFileSync(body, "body");
+		expect(() =>
+			main(
+				["--title", "tracker", "--label", "area:tests", "--body-file", body],
+				() => {
+					throw new Error("gh unavailable");
+				},
+			),
+		).toThrow("gh unavailable");
+	});
 });

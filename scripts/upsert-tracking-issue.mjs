@@ -8,9 +8,7 @@
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import {
-	upsertTrackingIssue,
-} from "./lib/drift-issue.mjs";
+import { upsertTrackingIssue } from "./lib/drift-issue.mjs";
 
 function valueAfter(argv, flag) {
 	const index = argv.indexOf(flag);
@@ -57,10 +55,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 	try {
 		main();
 	} catch (error) {
-		console.error(
-			`[upsert-tracking-issue] failed (non-gating): ${error?.message ?? error}`,
-		);
-		process.exitCode = 0;
+		console.error(`[upsert-tracking-issue] failed: ${error?.message ?? error}`);
+		process.exitCode = 1;
 	}
 }
 
