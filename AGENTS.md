@@ -883,6 +883,14 @@ or merge restoration, and writes under already-ignored directories remain
 outside the tool-result producer and are tracked by the freshness-probe issue.
 (#2071)
 
+Formatter children run from `resolveFormatterCwd`'s nearest project marker,
+then the nearest `.git`, with `isAtOrAboveHomeDir` as the ceiling. The absolute
+file path remains the resolver argument, so file-based tools such as Ruff and
+Black keep their file-relative discovery while cwd-sensitive tools such as
+Prettier, Biome, and oxfmt see the project's ignore files. Keep this policy at
+the shared `formatFile` spawn seam; do not add per-formatter ignore argv
+carriage. Files outside a project retain their own directory as cwd. (#2756)
+
 The `*`-only glob compilers in `clients/read-guard.ts` and
 `clients/file-utils.ts` collapse adjacent wildcard runs before constructing a
 regex. `.*.*` has the same language as `.*`, but the former can partition a

@@ -12,10 +12,15 @@
 import { logExtension } from "./extension-log.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import { BoundedLruCache } from "./bounded-cache.js";
 import { createGenerationSource } from "./generation-guard.js";
-import { normalizeMapKey } from "./path-utils.js";
+import {
+	findNearestMarkerRoot,
+	isRealGitMarker,
+	normalizeMapKey,
+} from "./path-utils.js";
 import { resolveCargoPackageEdition } from "./cargo-manifest.js";
 import { resolveKtfmtGradleStyle } from "./gradle-ktfmt-style.js";
 import { resolvePhpCsFixerConfig } from "./php-cs-fixer-config.js";
@@ -848,6 +853,116 @@ async function indentationArgs(
 		"--indent-width",
 		String(indentation.width),
 	];
+}
+
+const FORMATTER_MARKERS_BY_NAME: ReadonlyMap<string, readonly string[]> =
+	new Map([
+		["biome", ["biome.json", "biome.jsonc", "package.json"]],
+		[
+			"prettier",
+			[
+				".prettierrc",
+				".prettierrc.json",
+				".prettierrc.yaml",
+				".prettierrc.yml",
+				".prettierrc.js",
+				".prettierrc.cjs",
+				".prettierrc.mjs",
+				"prettier.config.js",
+				"prettier.config.cjs",
+				"prettier.config.mjs",
+				".prettierignore",
+				"package.json",
+			],
+		],
+		[
+			"oxfmt",
+			["oxfmt.toml", ".oxfmtrc.json", "vite-plus.json", "package.json"],
+		],
+		["ruff", ["pyproject.toml", "ruff.toml", ".ruff.toml"]],
+		["black", ["pyproject.toml", "black.toml", ".black"]],
+		["sqlfluff", [".sqlfluff", "pyproject.toml", "setup.cfg"]],
+		["rustfmt", ["rustfmt.toml", ".rustfmt.toml", "Cargo.toml"]],
+		["rubocop", [".rubocop.yml", ".rubocop.yaml"]],
+		["standardrb", [".standard.yml", ".standard.yaml"]],
+		["clang-format", [".clang-format", "_clang-format"]],
+		["php-cs-fixer", [".php-cs-fixer.php", ".php-cs-fixer.dist.php"]],
+		["stylua", ["stylua.toml", ".stylua.toml"]],
+		["ocamlformat", [".ocamlformat"]],
+		["google-java-format", [".google-java-format", ".editorconfig"]],
+		["cljfmt", [".cljfmt.edn", "cljfmt.edn", ".cljfmt"]],
+		[
+			"cmake-format",
+			[
+				".cmake-format",
+				".cmake-format.yaml",
+				".cmake-format.yml",
+				".cmake-format.json",
+				".cmake-format.py",
+				"cmake-format.yaml",
+				"cmake-format.yml",
+				".editorconfig",
+			],
+		],
+		[
+			"psscriptanalyzer-format",
+			["PSScriptAnalyzerSettings.psd1", "ScriptAnalyzerSettings.psd1"],
+		],
+		[
+			"csharpier",
+			[
+				".csharpierrc",
+				".csharpierrc.json",
+				".csharpierrc.yaml",
+				".csharpierrc.yml",
+			],
+		],
+		["ormolu", [".ormolu"]],
+		["taplo", ["taplo.toml", ".taplo.toml"]],
+		["terraform", [".terraform.lock.hcl"]],
+		["swiftformat", [".swiftformat"]],
+		["fantomas", [".fantomasignore", ".editorconfig"]],
+		["mix", [".formatter.exs"]],
+		["shfmt", [".editorconfig"]],
+		["ktlint", [".editorconfig"]],
+		[
+			"ktfmt",
+			[
+				".editorconfig",
+				".ktfmt",
+				".ktfmt.kts",
+				"build.gradle",
+				"build.gradle.kts",
+				"settings.gradle",
+				"settings.gradle.kts",
+			],
+		],
+	]);
+
+/**
+ * Resolve the cwd for the formatter child, capped at the user's home
+ * directory. Files outside a project retain the historical file-directory
+ * cwd. The optional homeDir is only for the ceiling regression test.
+ */
+export function resolveFormatterCwd(
+	absolutePath: string,
+	formatterName?: string,
+	homeDir: string = os.homedir(),
+): string {
+	const fileDir = path.dirname(path.resolve(absolutePath));
+	const effectiveHome = homeDir || undefined;
+	const markers = formatterName
+		? [...(FORMATTER_MARKERS_BY_NAME.get(formatterName) ?? []), ".gitignore"]
+		: [".gitignore"];
+	const root = findNearestMarkerRoot(fileDir, markers, {
+		homeDir: effectiveHome,
+	});
+	if (root) return root;
+	const gitRoot = findNearestMarkerRoot(fileDir, [".git"], {
+		homeDir: effectiveHome,
+		markerPredicate: isRealGitMarker,
+	});
+	return gitRoot ?? fileDir;
 }
 
 /**
@@ -1705,10 +1820,10 @@ const detectionCache = new BoundedLruCache<
 // The signature is immutable for a cache generation. This memo is separate
 // from detectionCache because a cwd can have several extension entries, and a
 // warm lookup must not repeat the ancestor walk or stat matched configs.
-const formatterSignatureFlights = new Map<
+const formatterSignatureFlights = new BoundedLruCache<
 	string,
 	{ promise: Promise<string> }
->();
+>(32);
 const formatterCacheGeneration = createGenerationSource("formatter-cache");
 
 // These are the formatter configuration files consulted by the policy helpers
@@ -2124,12 +2239,17 @@ export function _getFormatterResetStateForTests(): {
 		string,
 		{ signature: string; entries: Map<string, string[]> }
 	>;
+	formatterSignatureFlights: BoundedLruCache<
+		string,
+		{ promise: Promise<string> }
+	>;
 } {
 	return {
 		whichLatchByCommand,
 		whichTransientCommands,
 		cooldownRecordedForRetryAtMs,
 		detectionCache,
+		formatterSignatureFlights,
 	};
 }
 
@@ -2220,6 +2340,7 @@ export async function formatFile(
 	try {
 		const absolutePath = path.resolve(filePath);
 		const cwd = path.dirname(absolutePath);
+		const formatterCwd = resolveFormatterCwd(absolutePath, formatter.name);
 		const contentBefore = await fs.readFile(absolutePath, "utf-8");
 
 		// Resolve command: prefer local (venv/vendor/node_modules) over global.
@@ -2246,7 +2367,7 @@ export async function formatFile(
 		// Run formatter without blocking the event loop.
 		const result = await safeSpawnAsync(cmd[0], cmd.slice(1), {
 			timeout: 15000,
-			cwd,
+			cwd: formatterCwd,
 		});
 
 		// A resolver that could NOT prove absence (it never probed PATH — e.g.

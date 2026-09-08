@@ -28,6 +28,7 @@ import {
 	phpCsFixerFormatter,
 	prettierFormatter,
 	psscriptanalyzerFormatFormatter,
+	resolveFormatterCwd,
 	rubocopFormatter,
 	ruffFormatter,
 	standardrbFormatter,
@@ -176,6 +177,80 @@ describe("resolveCommand — node_modules/.bin", () => {
 
 		expect(await prettierFormatter.resolveCommand!(filePath, tmpDir)).toBe(
 			SKIP_FORMATTING,
+		);
+	});
+});
+
+describe("formatter child cwd", () => {
+	it("uses the nearest project marker, not the file directory", () => {
+		const nestedDir = path.join(tmpDir, "src", "deep");
+		fs.mkdirSync(nestedDir, { recursive: true });
+		fs.writeFileSync(path.join(tmpDir, ".gitignore"), "ignored.md\n");
+		fs.writeFileSync(path.join(tmpDir, ".prettierignore"), "keep.md\n");
+		const filePath = path.join(nestedDir, "app.tsx");
+		fs.writeFileSync(filePath, "function f() {\n  return 1;\n}\n");
+
+		expect(resolveFormatterCwd(filePath, "prettier")).toBe(tmpDir);
+	});
+
+	it("keeps the file directory when no project marker exists", () => {
+		const nestedDir = path.join(tmpDir, "isolated", "src");
+		fs.mkdirSync(nestedDir, { recursive: true });
+		const filePath = path.join(nestedDir, "app.tsx");
+		fs.writeFileSync(filePath, "function f() {\n  return 1;\n}\n");
+
+		expect(resolveFormatterCwd(filePath, undefined, tmpDir)).toBe(nestedDir);
+	});
+
+	it("does not adopt an ignore file at the home ceiling", () => {
+		const homeDir = path.join(tmpDir, "home");
+		const nestedDir = path.join(homeDir, "project", "src");
+		fs.mkdirSync(nestedDir, { recursive: true });
+		fs.writeFileSync(path.join(homeDir, ".gitignore"), "ignored.md\n");
+		const filePath = path.join(nestedDir, "app.tsx");
+		fs.writeFileSync(filePath, "function f() {\n  return 1;\n}\n");
+
+		expect(resolveFormatterCwd(filePath, undefined, homeDir)).toBe(nestedDir);
+	});
+
+	it("lets a nearer ignore marker win", () => {
+		const intermediateDir = path.join(tmpDir, "src");
+		fs.mkdirSync(intermediateDir, { recursive: true });
+		fs.writeFileSync(path.join(tmpDir, ".gitignore"), "*.md\n");
+		fs.writeFileSync(path.join(intermediateDir, ".prettierignore"), "*.tsx\n");
+		const filePath = path.join(intermediateDir, "app.tsx");
+		fs.writeFileSync(filePath, "function f() {\n  return 1;\n}\n");
+
+		expect(resolveFormatterCwd(filePath, "prettier")).toBe(intermediateDir);
+	});
+
+	it.each([
+		["empty .git directory", "directory"],
+		["real .git directory", "real-directory"],
+		["worktree .git file", "file"],
+	] as const)("recognizes %s only as a real repository marker", (_, kind) => {
+		const repoDir = path.join(tmpDir, `git-marker-${kind}`);
+		const nestedDir = path.join(repoDir, "src");
+		fs.mkdirSync(nestedDir, { recursive: true });
+		if (kind === "directory" || kind === "real-directory") {
+			fs.mkdirSync(path.join(repoDir, ".git"));
+			if (kind === "real-directory") {
+				fs.writeFileSync(
+					path.join(repoDir, ".git", "HEAD"),
+					"ref: refs/heads/main\n",
+				);
+			}
+		} else {
+			fs.writeFileSync(
+				path.join(repoDir, ".git"),
+				"gitdir: /shared/main/.git/worktrees/demo\n",
+			);
+		}
+		const filePath = path.join(nestedDir, "app.tsx");
+		fs.writeFileSync(filePath, "function f() {\n  return 1;\n}\n");
+
+		expect(resolveFormatterCwd(filePath, "prettier")).toBe(
+			kind === "directory" ? nestedDir : repoDir,
 		);
 	});
 });

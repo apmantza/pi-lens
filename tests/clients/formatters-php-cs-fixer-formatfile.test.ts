@@ -67,10 +67,12 @@ describe("formatFile — php-cs-fixer ancestor config carriage (#2472)", () => {
 			// fix drops "--config" and configPath from `args` and this goes red.
 			expect(cmd).toBe(vendorBin);
 			expect(args).toEqual(["fix", "--config", configPath, filePath]);
-			// The known #2472 mismatch: spawn cwd is the FILE's own directory,
-			// which is NOT the directory the config actually lives in.
-			expect(opts.cwd).toBe(path.dirname(filePath));
-			expect(opts.cwd).not.toBe(path.dirname(configPath));
+			// Formatter children run from the nearest project root. php-cs-fixer's
+			// explicit --config keeps its ancestor config selection independent of
+			// that cwd; its .php-cs-fixer.cache therefore lands at the project root,
+			// matching the CLI invocation.
+			expect(opts.cwd).toBe(env.tmpDir);
+			expect(opts.cwd).not.toBe(path.dirname(filePath));
 		} finally {
 			env.cleanup();
 		}
