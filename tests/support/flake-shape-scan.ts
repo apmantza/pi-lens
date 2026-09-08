@@ -76,7 +76,7 @@ export const repoRoot = path.resolve(
 const TESTS_ROOT = path.join(repoRoot, "tests");
 
 /** Every `*.test.ts` file under `tests/`, as absolute paths, sorted. */
-export function testSourceFiles(dir = TESTS_ROOT): string[] {
+function testSourceFiles(dir = TESTS_ROOT): string[] {
 	return listSourceFiles(dir, {
 		extensions: [".ts"],
 		skipDeclarations: true,
@@ -84,7 +84,7 @@ export function testSourceFiles(dir = TESTS_ROOT): string[] {
 }
 
 /** `tests/`-relative posix path for an absolute source path. */
-export function testsRelative(absolute: string): string {
+function testsRelative(absolute: string): string {
 	return relativePosix(TESTS_ROOT, absolute);
 }
 
@@ -98,7 +98,7 @@ export function testsRelative(absolute: string): string {
  * `delivery-surface-ratchet.test.ts` makes for `finding-delivery-gate.ts`
  * ("the registry itself").
  */
-export const SCAN_INFRASTRUCTURE: ReadonlySet<string> = new Set([
+const SCAN_INFRASTRUCTURE: ReadonlySet<string> = new Set([
 	"clients/flake-shape-ratchet.test.ts",
 ]);
 

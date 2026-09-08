@@ -52,8 +52,7 @@
 		// work: via a scripts/*.mjs entry's own import, or a test's.
 		// Doesn't exist yet (#2697 item 1 adds it); the glob costs nothing
 		// today and needs no follow-up edit once hook scripts land there.
-		"scripts/hooks/**/*.mjs",
-		"scripts/hooks/**/*.ts"
+		"scripts/hooks/**/*.mjs"
 		// tools/*.ts and vitest's setupFiles are NOT listed here: both are
 		// already reached without help — tools/*.ts via index.ts's and
 		// mcp/server.ts's own imports, tests/support/vitest-setup.ts via
