@@ -35,8 +35,11 @@ const result = spawnSync(
 );
 
 if (result.error || result.status !== 0) {
+	const exitMsg = result.error
+		? `: ${result.error.message}`
+		: "";
 	console.error(
-		`mutation diff: Stryker exited with status ${result.status ?? "unknown"}${result.error ? `: ${result.error.message}` : ""}`,
+		`mutation diff: Stryker exited with status ${result.status ?? "unknown"}${exitMsg}`,
 	);
 	process.exit(1);
 }
@@ -56,9 +59,10 @@ try {
 		out[mutant.status] = (out[mutant.status] ?? 0) + 1;
 		return out;
 	}, {});
-	console.log(
-		`mutation diff score: ${report.schemaVersion ? (report.mutationTestResults?.score ?? "n/a") : "n/a"}`,
-	);
+	const score = report.schemaVersion
+		? report.mutationTestResults?.score ?? "n/a"
+		: "n/a";
+	console.log(`mutation diff score: ${score}`);
 	console.log(`mutation diff counts: ${JSON.stringify(counts)}`);
 	for (const mutant of mutants.filter(
 		(entry) => entry.status === "Survived",
