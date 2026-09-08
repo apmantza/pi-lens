@@ -385,6 +385,13 @@ Each routine's output is a PR (or a tracked issue for discovery routines), revie
 
 ## Standing invariants
 
+Harness scratch directories use `scripts/lib/scratch-dir.mjs`: `claimScratchDir`
+records `owner.pid`, and `sweepScratchDirs` removes only dead owners or
+pid-less directories beyond the age fallback. A cleanup catch is not a
+liveness check on POSIX, where removing an open directory can succeed. Fresh
+per-run homes stay isolated, announce their path, and share this seam instead
+of maintaining caller-local sweeps.
+
 Deferred collect-later runners are a three-state delivery contract: edit-time
 pending, turn-end clean, or turn-end failed. The pending state must reach the
 runner latency and widget surfaces, failures must carry their failure kind into

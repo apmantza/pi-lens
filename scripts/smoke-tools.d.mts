@@ -93,6 +93,8 @@ export function passFloorBreach(
 ): string | null;
 /** Fixtures flagged `tier1` — the scheduled parser lane's selection. */
 export function tier1Fixtures(): SmokeFixture[];
+/** Remove dead or old scratch workspaces from previous smoke runs. */
+export function sweepLeftovers(): number;
 /** One TOOLS registry entry, as far as this classification cares. */
 export interface SmokeToolDefinition {
 	installStrategy?: string;
