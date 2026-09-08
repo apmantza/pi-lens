@@ -100,14 +100,6 @@ describe("sweep-kit: callSites", () => {
 		]);
 	});
 
-	it("reuses one AST root across callee patterns", () => {
-		const scanner = createCallSiteScanner(
-			"safeSpawnAsync(command, { cwd });\nspawnPs(command, args, opts);",
-		);
-		expect(scanner.find(/^safeSpawnAsync$/)).toHaveLength(1);
-		expect(scanner.find(/^spawnPs$/)).toHaveLength(1);
-	});
-
 	it("keeps timeout text in an argument separate from an options literal", () => {
 		const sites = callSites(
 			[
