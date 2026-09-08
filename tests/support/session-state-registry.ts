@@ -517,13 +517,13 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 		id: "formatters:whichLatches",
 		module: "formatters.ts",
 		state:
-			"whichLatchByCommand, whichTransientCommands, cooldownRecordedForRetryAtMs (cleared together with detectionCache)",
+			"whichLatchByCommand, whichTransientCommands, cooldownRecordedForRetryAtMs, formatterSignatureFlights (cleared together with detectionCache)",
 		policy: "session_start",
 		resetName: "clearFormatterCache",
 		reason:
 			"#1895: formatter PATH availability is session-scoped, but these module-local latches are not covered by the dispatch availability generation. A formatter installed or removed between sessions must be re-probed. The reset is `clearFormatterCache`, not the latch clear alone: `getFormattersForFile` answers a same-cwd lookup from `detectionCache` before it reaches a `which` probe, so dropping the latches without the selection cache re-arms every directory except the working one (review round on PR #1896).",
 		probe: {
-			// Arms all FOUR pieces of state the reset claims to cover — the three
+			// Arms all FIVE pieces of state the reset claims to cover — the three
 			// latch maps AND the selection cache. A probe that armed only the
 			// latches would stay green if a future cache were added and left out
 			// of `clearFormatterCache`; that omission is precisely the #1895 bug.
@@ -539,6 +539,9 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 					signature: "session-state-registry-probe",
 					entries: new Map(),
 				});
+				ns.formatterSignatureFlights.set("/pi-lens-probe-cwd", {
+					promise: Promise.resolve("session-state-registry-probe"),
+				});
 			},
 			isArmed: () => {
 				const ns = getFormattersInternals();
@@ -546,7 +549,8 @@ export const SESSION_STATE_REGISTRY: SessionStateEntry[] = [
 					ns.whichLatchByCommand.size === 0 &&
 					ns.whichTransientCommands.size === 0 &&
 					ns.cooldownRecordedForRetryAtMs.size === 0 &&
-					ns.detectionCache.size === 0
+					ns.detectionCache.size === 0 &&
+					ns.formatterSignatureFlights.size === 0
 				);
 			},
 			reset: () => clearFormatterCache(),
@@ -1476,7 +1480,7 @@ export const SESSION_STATE_SYMBOL_COUNTS: Readonly<Record<string, number>> = {
 	// vocabulary with no session lifetime — SWEEP_HEURISTIC_LIMITS item 5, and
 	// this file's existing registry entries already cover its real caches.
 	// #2756 round 3: the live container scan includes the module-level
-	// formatterSignatureFlights map added with the project-root cwd resolver.
+	// formatterSignatureFlights cache added with the project-root cwd resolver.
 	"formatters.ts": 10,
 	// #2442 review F2: the container regex now recognises BoundedFifoMap /
 	// BoundedLruCache, so this file's module-level bounded cache is counted.

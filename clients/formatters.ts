@@ -1820,10 +1820,10 @@ const detectionCache = new BoundedLruCache<
 // The signature is immutable for a cache generation. This memo is separate
 // from detectionCache because a cwd can have several extension entries, and a
 // warm lookup must not repeat the ancestor walk or stat matched configs.
-const formatterSignatureFlights = new Map<
+const formatterSignatureFlights = new BoundedLruCache<
 	string,
 	{ promise: Promise<string> }
->();
+>(32);
 const formatterCacheGeneration = createGenerationSource("formatter-cache");
 
 // These are the formatter configuration files consulted by the policy helpers
@@ -2239,12 +2239,17 @@ export function _getFormatterResetStateForTests(): {
 		string,
 		{ signature: string; entries: Map<string, string[]> }
 	>;
+	formatterSignatureFlights: BoundedLruCache<
+		string,
+		{ promise: Promise<string> }
+	>;
 } {
 	return {
 		whichLatchByCommand,
 		whichTransientCommands,
 		cooldownRecordedForRetryAtMs,
 		detectionCache,
+		formatterSignatureFlights,
 	};
 }
 
