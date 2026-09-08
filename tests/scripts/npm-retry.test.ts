@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { classifyFailureLog } from "../../scripts/lib/ci-failure-classifier.mjs";
 
 const REPO_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -27,7 +28,11 @@ afterEach(() => {
 // registry) while exercising the real spawn path end to end. Fails
 // `failTimes` times (tracked via a counter file, since each attempt is a
 // separate process) before succeeding, or forever for the exhaustion case.
-function stubNpm(root: string, failTimes: number) {
+function stubNpm(
+	root: string,
+	failTimes: number,
+	failure = "stub: simulated registry failure",
+) {
 	const binDir = path.join(root, "bin");
 	fs.mkdirSync(binDir);
 	const npmStub = path.join(binDir, "npm");
@@ -41,7 +46,7 @@ function stubNpm(root: string, failTimes: number) {
 			`const counterFile = ${JSON.stringify(counterFile)};`,
 			`const n = Number(fs.readFileSync(counterFile, "utf8")) + 1;`,
 			`fs.writeFileSync(counterFile, String(n));`,
-			`if (n <= ${failTimes}) { console.error("stub: simulated registry failure"); process.exit(1); }`,
+			`if (n <= ${failTimes}) { console.error(${JSON.stringify(failure)}); process.exit(1); }`,
 			`console.log("stub: ok, args=" + process.argv.slice(2).join(" "));`,
 			"",
 		].join("\n"),
@@ -76,7 +81,7 @@ describe("npm-retry.mjs (#2613 review S3a)", () => {
 	it("retries a failing npm call and succeeds once it recovers", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-npm-retry-"));
 		tempDirs.push(root);
-		const binDir = stubNpm(root, 2);
+		const binDir = stubNpm(root, 2, "npm error code ECONNRESET");
 		const stdout = runCli(binDir, ["install", "--no-save"]);
 		expect(stdout).toContain("stub: ok, args=install --no-save");
 	});
@@ -89,7 +94,7 @@ describe("npm-retry.mjs (#2613 review S3a)", () => {
 	it("prints the 'succeeded on attempt' diagnostic to stderr, never stdout", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-npm-retry-"));
 		tempDirs.push(root);
-		const binDir = stubNpm(root, 1);
+		const binDir = stubNpm(root, 1, "npm error code ECONNRESET");
 		const result = spawnSync(process.execPath, [CLI, "install", "--no-save"], {
 			env: {
 				...process.env,
@@ -107,7 +112,7 @@ describe("npm-retry.mjs (#2613 review S3a)", () => {
 	it("exits non-zero with a distinct infra label when every retry fails", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-npm-retry-"));
 		tempDirs.push(root);
-		const binDir = stubNpm(root, 999);
+		const binDir = stubNpm(root, 999, "npm error code ECONNRESET");
 		try {
 			runCli(binDir, ["ci", "--ignore-scripts"]);
 			expect.unreachable("expected the CLI to exit nonzero");
@@ -115,7 +120,31 @@ describe("npm-retry.mjs (#2613 review S3a)", () => {
 			const e = err as { status?: number; stderr?: string };
 			expect(e.status).not.toBe(0);
 			expect(e.stderr).toMatch(/::error::infra: registry unreachable/);
-			expect(e.stderr).toMatch(/npm ci --ignore-scripts failed 3 times/);
+			expect(e.stderr).toMatch(
+				/npm ci --ignore-scripts failed after 3 attempts/,
+			);
+		}
+	});
+
+	it("does not retry or label a deterministic ERESOLVE failure as infra", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-npm-retry-"));
+		tempDirs.push(root);
+		const binDir = stubNpm(root, 999, "npm error code ERESOLVE");
+		try {
+			runCli(binDir, ["ci", "--ignore-scripts"]);
+			expect.unreachable("expected the CLI to exit nonzero");
+		} catch (err) {
+			const e = err as { status?: number; stderr?: string };
+			expect(e.status).toBe(1);
+			expect(e.stderr).not.toContain("infra: registry unreachable");
+			expect(e.stderr).toContain(
+				"npm ci --ignore-scripts failed after 1 attempt",
+			);
+			expect(e.stderr).not.toMatch(/failed after 1 attempt.*infra/);
+			expect(fs.readFileSync(path.join(root, ".npm-stub-calls"), "utf8")).toBe(
+				"1",
+			);
+			expect(classifyFailureLog(e.stderr ?? "").kind).toBe("real");
 		}
 	});
 });

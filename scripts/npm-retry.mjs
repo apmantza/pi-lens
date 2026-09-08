@@ -11,12 +11,11 @@
  * and scripts/resolve-newest-in-range-host.mjs (which needs to CAPTURE
  * `npm view`'s stdout, unlike this passthrough wrapper) both build on.
  *
- * Unlike audit-prod-deps.mjs, exhaustion here is NOT a benign pass — an
- * install that never succeeded cannot let the build continue — so this
- * still exits non-zero on exhaustion, but prints a distinct
- * `::error::infra: registry unreachable` line first so a red log is
- * immediately legible as "retried and still couldn't reach the registry"
- * rather than "a real dependency conflict on attempt 1".
+ * Only timeout, spawn-error, or NET_PATTERN-shaped failures are retryable.
+ * Deterministic npm errors (ERESOLVE, E404, EINTEGRITY, and ETARGET) and
+ * other nonzero exits stop after the first attempt. On retryable exhaustion,
+ * this prints `::error::infra: registry unreachable`; deterministic failures
+ * print a plain `failed after N attempt(s)` line instead.
  *
  * Usage: node scripts/npm-retry.mjs <npm subcommand + args...>
  * Test-only backoff override: NPM_RETRY_BACKOFF_MS="0,0,0" (comma-separated
@@ -24,12 +23,14 @@
  */
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { NET_PATTERN } from "./lib/ci-failure-classifier.mjs";
 import { retryWithBackoff } from "./lib/retry.mjs";
 
 const ATTEMPTS = 3;
 const DEFAULT_BACKOFF_MS = [0, 5_000, 15_000];
 const BACKOFF_OVERRIDE_ENV_VAR = "NPM_RETRY_BACKOFF_MS";
 const ATTEMPT_TIMEOUT_MS = 120_000;
+const DETERMINISTIC_ERROR_PATTERN = /\b(?:ERESOLVE|E404|EINTEGRITY|ETARGET)\b/i;
 
 function backoffMsFrom(env) {
 	const override = env?.[BACKOFF_OVERRIDE_ENV_VAR];
@@ -39,7 +40,13 @@ function backoffMsFrom(env) {
 
 function runOnce(args) {
 	return new Promise((resolvePromise) => {
-		const child = spawn("npm", args, { stdio: "inherit" });
+		const child = spawn("npm", args, { stdio: ["inherit", "inherit", "pipe"] });
+		let stderr = "";
+		child.stderr.on("data", (chunk) => {
+			const text = chunk.toString();
+			stderr += text;
+			process.stderr.write(text);
+		});
 		let timedOut = false;
 		const timer = setTimeout(() => {
 			timedOut = true;
@@ -47,11 +54,11 @@ function runOnce(args) {
 		}, ATTEMPT_TIMEOUT_MS);
 		child.on("close", (code) => {
 			clearTimeout(timer);
-			resolvePromise({ code, timedOut });
+			resolvePromise({ code, timedOut, stderr });
 		});
 		child.on("error", (err) => {
 			clearTimeout(timer);
-			resolvePromise({ code: null, timedOut: false, error: err });
+			resolvePromise({ code: null, timedOut: false, error: err, stderr });
 		});
 	});
 }
@@ -68,13 +75,17 @@ export async function main(args, env) {
 			const run = await runOnce(args);
 			lastCode = run.code ?? 1;
 			if (run.code === 0) return { ok: true, value: run };
+			const retryable =
+				run.timedOut || Boolean(run.error) || NET_PATTERN.test(run.stderr);
 			const reason = run.timedOut
 				? `timed out after ${ATTEMPT_TIMEOUT_MS}ms`
 				: run.error
 					? `spawn error: ${run.error.message}`
-					: `exited ${run.code}`;
+					: NET_PATTERN.test(run.stderr)
+						? `network error: ${run.stderr.match(NET_PATTERN)[0]}`
+						: `exited ${run.code}${run.stderr.match(DETERMINISTIC_ERROR_PATTERN) ? ` (${run.stderr.match(DETERMINISTIC_ERROR_PATTERN)[0]})` : ""}`;
 			console.error(`npm-retry: attempt ${attempt + 1} ${reason}`);
-			return { ok: false, reason };
+			return { ok: false, reason, retryable };
 		},
 		{ attempts: ATTEMPTS, backoffMs: backoffMsFrom(env) },
 	);
@@ -92,9 +103,22 @@ export async function main(args, env) {
 		return 0;
 	}
 
-	console.error(
-		`::error::infra: registry unreachable — npm ${args.join(" ")} failed ${ATTEMPTS} times (${result.reasons.join("; ")})`,
-	);
+	const attemptsUsed = result.reasons.length;
+	const summary = `npm ${args.join(" ")} failed after ${attemptsUsed} attempt${attemptsUsed === 1 ? "" : "s"}`;
+	if (
+		result.reasons.some(
+			(reason) =>
+				reason.startsWith("timed out") ||
+				reason.startsWith("spawn error") ||
+				NET_PATTERN.test(reason),
+		)
+	) {
+		console.error(
+			`::error::infra: registry unreachable — ${summary} (${result.reasons.join("; ")})`,
+		);
+	} else {
+		console.error(`${summary} (${result.reasons.join("; ")})`);
+	}
 	return lastCode || 1;
 }
 

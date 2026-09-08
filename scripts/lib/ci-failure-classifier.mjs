@@ -146,7 +146,7 @@ const KILLED_LINE = /(?:^|[\s:])Killed(?:\s|$)/m;
 // Scoped to lines that also carry an explicit error-shaped prefix (npm's
 // own "npm error" convention, or the runner's own "##[error]" annotation) --
 // a "npm warn" line or arbitrary test output text no longer qualifies.
-const NET_PATTERN =
+export const NET_PATTERN =
 	/getaddrinfo\s+\w+\s+\S+|\bENOTFOUND\b|\bECONNRESET\b|tarball.{0,40}(?:download|fetch).{0,20}fail|net::ERR_NAME_NOT_RESOLVED/i;
 const ERROR_PREFIXED_LINE = /^(?:.*\bnpm error\b.*|##\[error\].*)$/im;
 
