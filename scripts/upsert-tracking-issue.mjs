@@ -9,7 +9,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import {
-	findDriftTrackingIssue,
 	upsertTrackingIssue,
 } from "./lib/drift-issue.mjs";
 
@@ -65,4 +64,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 	}
 }
 
-export { main, findDriftTrackingIssue };
+export { main };
