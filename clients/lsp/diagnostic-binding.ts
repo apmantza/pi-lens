@@ -120,6 +120,8 @@ export interface DiagnosticBinding extends StoredDiagnosticBinding {
  */
 export interface TouchFileResult {
 	diags: import("./client.js").LSPDiagnostic[];
+	/** Primary/custom servers with no pull or observed push diagnostics. */
+	diagnosticsUnsupportedServerIds?: string[];
 	/** The file was declined because its nearest root is outside the session. */
 	skipReason?: "outside-project-root";
 	confirmation?: "confirmed" | "partial";

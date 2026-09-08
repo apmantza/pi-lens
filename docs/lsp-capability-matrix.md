@@ -35,10 +35,18 @@ they share a server id but not a verified clean-signal behavior.
 | **2 — push, publishes-versioned** | `publishDiagnostics([])` **with version** on every scan, incl. clean→clean | YES, currency-proven via version | ast-grep |
 | **2\* — push, publishes-unversioned** | re-publishes on a clean scan but **version-less** — the wait still early-returns (the client accepts a version-less publish as fresh: it can't be proven stale), but currency is only *temporally correlated*, not proven | YES at runtime, with a staleness-risk caveat (not a latency cost) | opengrep |
 | **3 — push, silent on clean** | server publishes nothing when nothing changed | **NO** — budget-wait floor (safe; a timeout is *not* a false clean). **This tier is #458's learned-deadline target set.** | typescript-language-server |
+| **Navigation-only — custom, no evidence** | custom `lsp.servers.*` entry has no pull provider and has not published in this session | **NO** — diagnostics are unsupported; skip the wait and report navigation-only | Dexter |
 
 Detection is **cached** at `initialize` (`detectWorkspaceDiagnosticsSupport` →
 `state.workspaceDiagnosticsSupport.mode`, upgraded on `client/registerCapability`),
 so the tier is free at collection time — no per-edit probe.
+
+Custom servers without a pull provider begin with one bounded first-contact
+probe. The probe uses the smaller of the server's push-wait budget and the live
+hook deadline. If the hook cuts it off first, the result remains unconfirmed and
+the next touch probes again. Only silence through the full push budget latches
+that server id as navigation-only for the service session. A publish upgrades it
+to the ordinary push-wait policy.
 
 ## Matrix (dev box + CI nightly; mode last refreshed 2026-06-17 from run 27713958681, clean-behavior probed on the dev box 2026-07-08 — #460)
 

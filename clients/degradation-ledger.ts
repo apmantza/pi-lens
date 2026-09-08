@@ -111,6 +111,7 @@ export type DegradationKind =
 	| "formatter-skip"
 	| "grammar-blocked"
 	| "lsp-breaker"
+	| "lsp-diagnostics-unsupported"
 	/**
 	 * A per-file touch skipped a language server because that server is in the
 	 * breaker cooldown or is latched permanently broken (#1743). During an

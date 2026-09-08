@@ -115,6 +115,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"unhandledRejection is delivered on a real macrotask; one real setImmediate drain, assertion on the captured list",
 	},
+	// 2026-09-08 (#2765 round 3): the hook remainder is the subject; fake timers
+	// drive the delayed pre-snapshot work and the bounded lookup.
+	"raw-timer-wait:clients/lsp/service-inconclusive-per-server.test.ts": {
+		detector: "raw-timer-wait",
+		reason:
+			"the hook remainder is the defect; fake timers isolate the delayed pre-snapshot work from scheduler contention",
+	},
 	"real-process-spawn:clients/biome-config-decorator-metadata.test.ts": {
 		detector: "real-process-spawn",
 		reason:

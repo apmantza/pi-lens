@@ -157,7 +157,7 @@
 		"clients/lsp/service-aux-grace.test.ts": 18,
 		"clients/lsp/service-document-drift.test.ts": 2,
 		"clients/lsp/service-early-unblock.test.ts": 7,
-		"clients/lsp/service-inconclusive-per-server.test.ts": 2,
+		"clients/lsp/service-inconclusive-per-server.test.ts": 3,
 		"clients/lsp/service-mode-grace.test.ts": 3,
 		"clients/lsp/service-notify-adaptive-budget.test.ts": 1,
 		"clients/lsp/service-notify-cpu-liveness.test.ts": 3,

@@ -1889,7 +1889,11 @@ export async function computeCascadeForFile(
 								neighborPath,
 								snapshots,
 							);
-							if (tier === "tier3-silent" || tier === "collect-later") {
+							if (
+								tier === "tier3-silent" ||
+								tier === "collect-later" ||
+								tier === "diagnostics-unsupported"
+							) {
 								const spawnedForTouch =
 									await lspService.getClientForFile(neighborPath);
 								if (spawnedForTouch) {
@@ -1906,6 +1910,21 @@ export async function computeCascadeForFile(
 										source: "cascade",
 										clientScope: "primary",
 									});
+									if (tier === "diagnostics-unsupported") {
+										logCascade({
+											phase: "cascade_skip",
+											filePath,
+											neighborFile: neighborPath,
+											durationMs: Date.now() - neighborStart,
+											lspServerCount: configuredServerCount,
+											coldSnapshot: isColdSnapshot,
+											metadata: {
+												serverId: spawnedForTouch.client.serverId,
+												waitTier: tier,
+											},
+										});
+										return undefined;
+									}
 									recordOutstandingCascadeTouch({
 										filePath: neighborPath,
 										serverId: spawnedForTouch.client.serverId,

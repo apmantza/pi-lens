@@ -493,6 +493,7 @@ export function createCustomServer(
 	return {
 		id,
 		name: config.name,
+		custom: true,
 		extensions: config.extensions,
 		root: config.rootMarkers
 			? createRootDetector(config.rootMarkers)
