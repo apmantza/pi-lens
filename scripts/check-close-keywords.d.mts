@@ -11,9 +11,20 @@ export declare function lintCloseKeywords(body?: string): {
 	offendingLines: string[];
 	valid: boolean;
 };
+export declare function lintCloseKeywordPlacement(
+	title?: string,
+	body?: string,
+): {
+	valid: boolean;
+	titleIssues: number[];
+	missingBodyIssues: number[];
+};
+export declare function closeKeywordPlacementMessage(missing: number[]): string;
 export declare function lintPullRequest(
 	fetchImpl?: typeof fetch,
-	event?: { pull_request?: { number: number; body?: string | null } },
+	event?: {
+		pull_request?: { number: number; body?: string | null; title?: string };
+	},
 ): Promise<void>;
 export declare function verifyMergedPullRequest(
 	fetchImpl?: typeof fetch,

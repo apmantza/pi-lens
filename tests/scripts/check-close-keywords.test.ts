@@ -245,6 +245,106 @@ describe("close-keyword syntax lint reads the live body (#2086)", () => {
 	});
 });
 
+describe("close-keyword placement reads the live title (#2640)", () => {
+	afterEach(() => {
+		process.exitCode = undefined;
+	});
+
+	it("fails the #2610 incident when the title keyword is absent from the body", async () => {
+		vi.stubEnv("GITHUB_API_URL", "https://api.github.test");
+		vi.stubEnv("GITHUB_REPOSITORY", "apmantza/pi-lens");
+		vi.stubEnv("GITHUB_TOKEN", "test-token");
+		const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const fetchImpl = vi.fn().mockResolvedValue(
+			new Response(
+				JSON.stringify({
+					title:
+						'test: rename legacy "should" test names to behavior statements (closes #2602)',
+					body: "Summary: rename legacy should test names to behavior statements.",
+				}),
+				{ status: 200 },
+			),
+		);
+
+		await lintPullRequest(fetchImpl, { pull_request: { number: 2610 } });
+
+		expect(process.exitCode).toBe(1);
+		expect(errorLog).toHaveBeenCalledWith(
+			expect.stringContaining("Invalid close-keyword placement"),
+		);
+		expect(errorLog).toHaveBeenCalledWith(expect.stringContaining("#2602"));
+		expect(errorLog).toHaveBeenCalledWith(
+			expect.stringContaining("Closes #2602."),
+		);
+		expect(log).not.toHaveBeenCalled();
+		errorLog.mockRestore();
+		log.mockRestore();
+	});
+
+	it("accepts the repaired incident", async () => {
+		vi.stubEnv("GITHUB_API_URL", "https://api.github.test");
+		vi.stubEnv("GITHUB_REPOSITORY", "apmantza/pi-lens");
+		vi.stubEnv("GITHUB_TOKEN", "test-token");
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const fetchImpl = vi.fn().mockResolvedValue(
+			new Response(
+				JSON.stringify({
+					title: "fix: repair placement (closes #2602)",
+					body: "Summary.\n\nCloses #2602.",
+				}),
+				{ status: 200 },
+			),
+		);
+
+		await lintPullRequest(fetchImpl, { pull_request: { number: 2610 } });
+
+		expect(process.exitCode).toBeUndefined();
+		expect(log).toHaveBeenCalledWith(
+			"Close-keyword syntax OK (1 issue referenced).",
+		);
+		log.mockRestore();
+	});
+
+	it("reports syntax before placement", async () => {
+		vi.stubEnv("GITHUB_API_URL", "https://api.github.test");
+		vi.stubEnv("GITHUB_REPOSITORY", "apmantza/pi-lens");
+		vi.stubEnv("GITHUB_TOKEN", "test-token");
+		const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+		const fetchImpl = vi.fn().mockResolvedValue(
+			new Response(
+				JSON.stringify({
+					title: "fixes #1 and closes #3",
+					body: "Closes #1, #2",
+				}),
+				{ status: 200 },
+			),
+		);
+
+		await lintPullRequest(fetchImpl, { pull_request: { number: 2640 } });
+
+		expect(errorLog).toHaveBeenCalledWith(INVALID_CLOSE_KEYWORD_MESSAGE);
+		expect(errorLog).not.toHaveBeenCalledWith(
+			expect.stringContaining("Invalid close-keyword placement"),
+		);
+		errorLog.mockRestore();
+	});
+
+	it("preserves the live title in fetchLivePrBody", async () => {
+		vi.stubEnv("GITHUB_API_URL", "https://api.github.test");
+		vi.stubEnv("GITHUB_REPOSITORY", "apmantza/pi-lens");
+		vi.stubEnv("GITHUB_TOKEN", "test-token");
+		const fetchImpl = vi.fn().mockResolvedValue(
+			new Response(JSON.stringify({ title: "fix: title", body: "Summary" }), {
+				status: 200,
+			}),
+		);
+		expect(await fetchLivePrBody({ number: 2640 }, fetchImpl)).toMatchObject({
+			title: "fix: title",
+		});
+	});
+});
+
 // #2086: verifyMergedPullRequest read pullRequest.body straight off the
 // closed-event payload, so a rerun after the body was edited post-merge
 // always relinted the STALE body. It now reuses check-pr-body.mjs's
@@ -462,5 +562,6 @@ describe("close-keyword-verification.yml carries GITHUB_TOKEN (#2267 F1)", () =>
 		// Mutation-proof: without this workflow wiring the strict live fetch
 		// fails before it can inspect the current PR body.
 		expect(step.env?.GITHUB_TOKEN).toBeTruthy();
+		expect(step.run).toContain("--lint-pr");
 	});
 });

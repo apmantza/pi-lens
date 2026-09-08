@@ -27,14 +27,7 @@ export function stripNonSemanticMarkdown(body = "") {
 		.join("\n");
 }
 
-/**
- * Parse same-repository issues named by GitHub close keywords.
- * Cross-repository references (owner/repo#123) intentionally do not match.
- * The body is scanned AFTER stripNonSemanticMarkdown so quoted examples in
- * code fences/blockquotes are not linted as real syntax.
- */
-export function parseCloseKeywords(body = "") {
-	const scanned = stripNonSemanticMarkdown(body);
+function scanCloseIssues(scanned = "") {
 	const issues = [];
 	const commaLists = [];
 	const offendingLines = [];
@@ -60,6 +53,37 @@ export function parseCloseKeywords(body = "") {
 	}
 
 	return { issues, commaLists, offendingLines };
+}
+
+/**
+ * Parse same-repository issues named by GitHub close keywords.
+ * Cross-repository references (owner/repo#123) intentionally do not match.
+ * The body is scanned AFTER stripNonSemanticMarkdown so quoted examples in
+ * code fences/blockquotes are not linted as real syntax.
+ */
+export function parseCloseKeywords(body = "") {
+	return scanCloseIssues(stripNonSemanticMarkdown(body));
+}
+
+export function lintCloseKeywordPlacement(title = "", body = "") {
+	const titleIssues = scanCloseIssues(String(title)).issues;
+	if (titleIssues.length === 0)
+		return { valid: true, titleIssues, missingBodyIssues: [] };
+	const bodyIssues = parseCloseKeywords(body).issues;
+	const missingBodyIssues = titleIssues.filter(
+		(number) => !bodyIssues.includes(number),
+	);
+	return {
+		valid: missingBodyIssues.length === 0,
+		titleIssues,
+		missingBodyIssues,
+	};
+}
+
+export function closeKeywordPlacementMessage(missing) {
+	const repairs = missing.map((number) => `Closes #${number}.`).join(" ");
+	const alternatives = missing.map((number) => `refs #${number}`).join(", ");
+	return `Invalid close-keyword placement: GitHub only honours closing keywords in the PR body, never in the title. Add the matching body keyword(s): ${repairs} Alternatively, use ${alternatives} in the title.`;
 }
 
 export function lintCloseKeywords(body = "") {
@@ -88,8 +112,9 @@ export async function lintPullRequest(
 	// as a bare thrown message that reads like a broken script (worst for
 	// fork PRs hitting a transient 5xx).
 	let body;
+	let title;
 	try {
-		({ body } = await fetchLivePrBody(pullRequest, fetchImpl));
+		({ body, title } = await fetchLivePrBody(pullRequest, fetchImpl));
 	} catch (error) {
 		const reason = error instanceof Error ? error.message : String(error);
 		console.error(
@@ -104,6 +129,12 @@ export async function lintPullRequest(
 		for (const line of result.offendingLines) {
 			console.error(`  offending line: ${line}`);
 		}
+		process.exitCode = 1;
+		return;
+	}
+	const placement = lintCloseKeywordPlacement(title, body);
+	if (!placement.valid) {
+		console.error(closeKeywordPlacementMessage(placement.missingBodyIssues));
 		process.exitCode = 1;
 		return;
 	}
