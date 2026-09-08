@@ -133,6 +133,7 @@ import {
 import {
 	auditRegistry,
 	auditSymbolCounts,
+	assertSortedKeys,
 	relativePosix,
 	stripSource,
 } from "../support/sweep-kit.js";
@@ -290,7 +291,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"handlers index.ts does and needs the same bounds.",
 		owner: "#2523 slice 2",
 	},
-	"clients/mcp/session.ts#runSessionStart:fceb216b~1228c6e4": {
+	"clients/mcp/session.ts#runSessionStart:1304e7b3~e7e844f0": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
@@ -308,31 +309,13 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"deadline and no signal, exactly like index.ts:2151.",
 		owner: "#2523 slice 2",
 	},
-	"clients/mcp/session.ts#runSessionStart:1304e7b3~e7e844f0": {
+	"clients/mcp/session.ts#runSessionStart:fceb216b~1228c6e4": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
 			"MCP host parity (AC8): the standalone MCP server's " +
 			"session_start entry calls `handleSessionStart` with no " +
 			"deadline and no signal, exactly like index.ts:2151.",
-		owner: "#2523 slice 2",
-	},
-	"clients/mcp/session.ts#runTurnEndNow:fceb216b~047d1dce": {
-		family: "hook-await",
-		site: "turn_end",
-		reason:
-			"MCP host parity (AC8): `runTurnEndNow` calls `handleTurnEnd` " +
-			"unbounded. `TURN_END_QUEUE_WAIT_MS` bounds ADMISSION to the " +
-			"queue, not the work it admits — #2523 says so explicitly.",
-		owner: "#2523 slice 2",
-	},
-	"clients/mcp/session.ts#runTurnEndNow:e40e5ae4~d9c99f9e": {
-		family: "hook-await",
-		site: "turn_end",
-		reason:
-			"MCP host parity (AC8): `runTurnEndNow` calls `handleTurnEnd` " +
-			"unbounded. `TURN_END_QUEUE_WAIT_MS` bounds ADMISSION to the " +
-			"queue, not the work it admits — #2523 says so explicitly.",
 		owner: "#2523 slice 2",
 	},
 	"clients/mcp/session.ts#runTurnEnd:94e0a7e1~4be0ece0": {
@@ -344,15 +327,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"not a work bound.",
 		owner: "#2523 slice 2",
 	},
-	"clients/mcp/session.ts#runTurnEndForIpcNow:fceb216b~09a23787": {
-		family: "hook-await",
-		site: "turn_end",
-		reason:
-			"MCP host parity (AC8): the IPC turn-end entry reached from " +
-			"mcp/server.ts's socket handler; the same unbounded " +
-			"`handleTurnEnd` sits beneath it.",
-		owner: "#2523 slice 2",
-	},
 	"clients/mcp/session.ts#runTurnEndForIpcNow:6bfa417c~ce21a427": {
 		family: "hook-await",
 		site: "turn_end",
@@ -362,45 +336,40 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"`handleTurnEnd` sits beneath it.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-agent-end.ts#handleAgentEnd:70abab7e~0e2c385e": {
+	"clients/mcp/session.ts#runTurnEndForIpcNow:fceb216b~09a23787": {
 		family: "hook-await",
-		site: "agent_settled",
+		site: "turn_end",
 		reason:
-			"`getAutofixClients()` -> `loadBootstrapClients()` — #2523 " +
-			"names this exact site (runtime-agent-end.ts:347) as " +
-			"agent_settled's unbounded analyzer bootstrap.",
+			"MCP host parity (AC8): the IPC turn-end entry reached from " +
+			"mcp/server.ts's socket handler; the same unbounded " +
+			"`handleTurnEnd` sits beneath it.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-agent-end.ts#handleAgentEnd:aeec4a09~51275360": {
+	"clients/mcp/session.ts#runTurnEndNow:e40e5ae4~d9c99f9e": {
 		family: "hook-await",
-		site: "agent_settled",
+		site: "turn_end",
 		reason:
-			"`runAutofix` on the deferred drain: per-runner spawn timeouts " +
-			"exist at the leaf, nothing bounds the phase above them.",
+			"MCP host parity (AC8): `runTurnEndNow` calls `handleTurnEnd` " +
+			"unbounded. `TURN_END_QUEUE_WAIT_MS` bounds ADMISSION to the " +
+			"queue, not the work it admits — #2523 says so explicitly.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-agent-end.ts#d74e6662~4d0fd5e9": {
+	"clients/mcp/session.ts#runTurnEndNow:fceb216b~047d1dce": {
 		family: "hook-await",
-		site: "agent_settled",
+		site: "turn_end",
 		reason:
-			"The format phase (`runFormatPhase` per file, joined by " +
-			"`Promise.all`) — #2523 AC6's aggregate formatter budget lands " +
-			"here. `runFormattersWithConcurrency` is a sequential loop with " +
-			"per-item 30s timers, no aggregate cap and no signal in the " +
-			"race; the 3-wedged-formatter probe measured `still-blocked " +
-			"after 45011ms`.",
+			"MCP host parity (AC8): `runTurnEndNow` calls `handleTurnEnd` " +
+			"unbounded. `TURN_END_QUEUE_WAIT_MS` bounds ADMISSION to the " +
+			"queue, not the work it admits — #2523 says so explicitly.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-agent-end.ts#f0b9e5ad~c7623832": {
+	"clients/runtime-agent-end.ts#1f35703b~52cc4490": {
 		family: "hook-await",
 		site: "agent_settled",
 		reason:
-			"The format phase (`runFormatPhase` per file, joined by " +
-			"`Promise.all`) — #2523 AC6's aggregate formatter budget lands " +
-			"here. `runFormattersWithConcurrency` is a sequential loop with " +
-			"per-item 30s timers, no aggregate cap and no signal in the " +
-			"race; the 3-wedged-formatter probe measured `still-blocked " +
-			"after 45011ms`.",
+			"`applyConservativeActionableWarningFixes` — #2523's " +
+			"agent_settled list (runtime-agent-end.ts:871): count-capped at " +
+			"5 fixes, with no time bound at all.",
 		owner: "#2523 slice 2",
 	},
 	"clients/runtime-agent-end.ts#846909f2~82252dcb": {
@@ -423,6 +392,18 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"own wait bound, the resync above it does not.",
 		owner: "#2523 slice 2",
 	},
+	"clients/runtime-agent-end.ts#d74e6662~4d0fd5e9": {
+		family: "hook-await",
+		site: "agent_settled",
+		reason:
+			"The format phase (`runFormatPhase` per file, joined by " +
+			"`Promise.all`) — #2523 AC6's aggregate formatter budget lands " +
+			"here. `runFormattersWithConcurrency` is a sequential loop with " +
+			"per-item 30s timers, no aggregate cap and no signal in the " +
+			"race; the 3-wedged-formatter probe measured `still-blocked " +
+			"after 45011ms`.",
+		owner: "#2523 slice 2",
+	},
 	"clients/runtime-agent-end.ts#e36d39b8~05b260ce": {
 		family: "hook-await",
 		site: "agent_settled",
@@ -431,13 +412,33 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"own wait bound, the resync above it does not.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-agent-end.ts#1f35703b~52cc4490": {
+	"clients/runtime-agent-end.ts#f0b9e5ad~c7623832": {
 		family: "hook-await",
 		site: "agent_settled",
 		reason:
-			"`applyConservativeActionableWarningFixes` — #2523's " +
-			"agent_settled list (runtime-agent-end.ts:871): count-capped at " +
-			"5 fixes, with no time bound at all.",
+			"The format phase (`runFormatPhase` per file, joined by " +
+			"`Promise.all`) — #2523 AC6's aggregate formatter budget lands " +
+			"here. `runFormattersWithConcurrency` is a sequential loop with " +
+			"per-item 30s timers, no aggregate cap and no signal in the " +
+			"race; the 3-wedged-formatter probe measured `still-blocked " +
+			"after 45011ms`.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-agent-end.ts#handleAgentEnd:70abab7e~0e2c385e": {
+		family: "hook-await",
+		site: "agent_settled",
+		reason:
+			"`getAutofixClients()` -> `loadBootstrapClients()` — #2523 " +
+			"names this exact site (runtime-agent-end.ts:347) as " +
+			"agent_settled's unbounded analyzer bootstrap.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-agent-end.ts#handleAgentEnd:aeec4a09~51275360": {
+		family: "hook-await",
+		site: "agent_settled",
+		reason:
+			"`runAutofix` on the deferred drain: per-runner spawn timeouts " +
+			"exist at the leaf, nothing bounds the phase above them.",
 		owner: "#2523 slice 2",
 	},
 	"clients/runtime-coordinator.ts#f1693e28~c40c7404": {
@@ -449,175 +450,137 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"alone also exceeds turn_end's whole 3000ms budget.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#demandBootstrapDeps:87590bfa~8bddbc42": {
+	"clients/runtime-session.ts#07098027~195e8353": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
-			"`demandBootstrapDeps` — the analyzer-bootstrap request every " +
-			"session_start scan goes through.",
+			"`readSequenceWithBudget` from the snapshot-root path: same " +
+			"real budget, same missing abort arm.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#readSequenceWithBudget:41c0b191~d5c54d05": {
+	"clients/runtime-session.ts#07098027~a42f4a7e": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
-			"`readSequenceWithBudget`'s race: a real budget with NO abort " +
-			"arm. Also flagged by this sweep's hand-rolled-race family, " +
-			"which is the fold slice 2 owns.",
+			"`readSequenceWithBudget` from the sequence fast path (#451): " +
+			"the budget is real (250ms default) but carries no abort arm.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#igniteWarmFiles:65b03ede~d9e1b333": {
+	"clients/runtime-session.ts#156451e5~c3519908": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
-			"LSP warm ignition on session_start (`igniteWarmFiles` / " +
-			"`igniteDominantLanguageWarm`): file collection, dynamic " +
-			"imports and per-file `touchFile` calls, none bounded above " +
-			"their leaves.",
+			"One heavyweight startup analyzer per await (knip, jscpd, " +
+			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
+			"review graph, call graph, codebase model, word index). Each " +
+			"has a spawn-level timeout at the leaf and none has a wall " +
+			"bound above it; together they are session_start's 5000ms " +
+			"budget many times over.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#igniteWarmFiles:4140740f~ebb30080": {
+	"clients/runtime-session.ts#19f6a911~bc03be78": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
-			"LSP warm ignition on session_start (`igniteWarmFiles` / " +
-			"`igniteDominantLanguageWarm`): file collection, dynamic " +
-			"imports and per-file `touchFile` calls, none bounded above " +
-			"their leaves.",
+			"One heavyweight startup analyzer per await (knip, jscpd, " +
+			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
+			"review graph, call graph, codebase model, word index). Each " +
+			"has a spawn-level timeout at the leaf and none has a wall " +
+			"bound above it; together they are session_start's 5000ms " +
+			"budget many times over.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#igniteWarmFiles:f243aec9~ea3bd76b": {
+	"clients/runtime-session.ts#2c3fa403~ec8628b8": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
-			"LSP warm ignition on session_start (`igniteWarmFiles` / " +
-			"`igniteDominantLanguageWarm`): file collection, dynamic " +
-			"imports and per-file `touchFile` calls, none bounded above " +
-			"their leaves.",
+			"Session-start summary: go and rust availability probes, 3000ms " +
+			"each and sequential, re-armed on every full session_start " +
+			"(#2523's `bounded but no abort race` list).",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#igniteDominantLanguageWarm:65b03ede~e98aab9b": {
+	"clients/runtime-session.ts#2c64a178~b262f927": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
-			"LSP warm ignition on session_start (`igniteWarmFiles` / " +
-			"`igniteDominantLanguageWarm`): file collection, dynamic " +
-			"imports and per-file `touchFile` calls, none bounded above " +
-			"their leaves.",
+			"One heavyweight startup analyzer per await (knip, jscpd, " +
+			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
+			"review graph, call graph, codebase model, word index). Each " +
+			"has a spawn-level timeout at the leaf and none has a wall " +
+			"bound above it; together they are session_start's 5000ms " +
+			"budget many times over.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#igniteDominantLanguageWarm:4140740f~7a6aab16": {
+	"clients/runtime-session.ts#3373bfda~b262f927": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
-			"LSP warm ignition on session_start (`igniteWarmFiles` / " +
-			"`igniteDominantLanguageWarm`): file collection, dynamic " +
-			"imports and per-file `touchFile` calls, none bounded above " +
-			"their leaves.",
+			"One heavyweight startup analyzer per await (knip, jscpd, " +
+			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
+			"review graph, call graph, codebase model, word index). Each " +
+			"has a spawn-level timeout at the leaf and none has a wall " +
+			"bound above it; together they are session_start's 5000ms " +
+			"budget many times over.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#igniteDominantLanguageWarm:82953f32~eca16c1c": {
+	"clients/runtime-session.ts#4bdb1922~447b8e6b": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
-			"LSP warm ignition on session_start (`igniteWarmFiles` / " +
-			"`igniteDominantLanguageWarm`): file collection, dynamic " +
-			"imports and per-file `touchFile` calls, none bounded above " +
-			"their leaves.",
+			"One heavyweight startup analyzer per await (knip, jscpd, " +
+			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
+			"review graph, call graph, codebase model, word index). Each " +
+			"has a spawn-level timeout at the leaf and none has a wall " +
+			"bound above it; together they are session_start's 5000ms " +
+			"budget many times over.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#igniteDominantLanguageWarm:bd07d2d4~f4ffd883": {
+	"clients/runtime-session.ts#6059719b~a69fa0e5": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
-			"LSP warm ignition on session_start (`igniteWarmFiles` / " +
-			"`igniteDominantLanguageWarm`): file collection, dynamic " +
-			"imports and per-file `touchFile` calls, none bounded above " +
-			"their leaves.",
+			"One heavyweight startup analyzer per await (knip, jscpd, " +
+			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
+			"review graph, call graph, codebase model, word index). Each " +
+			"has a spawn-level timeout at the leaf and none has a wall " +
+			"bound above it; together they are session_start's 5000ms " +
+			"budget many times over.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#igniteDominantLanguageWarm:45016495~3dad128f": {
+	"clients/runtime-session.ts#79639cbb~7cf260f9": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
-			"LSP warm ignition on session_start (`igniteWarmFiles` / " +
-			"`igniteDominantLanguageWarm`): file collection, dynamic " +
-			"imports and per-file `touchFile` calls, none bounded above " +
-			"their leaves.",
+			"One heavyweight startup analyzer per await (knip, jscpd, " +
+			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
+			"review graph, call graph, codebase model, word index). Each " +
+			"has a spawn-level timeout at the leaf and none has a wall " +
+			"bound above it; together they are session_start's 5000ms " +
+			"budget many times over.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#igniteDominantLanguageWarm:fe862775~29288f8c": {
+	"clients/runtime-session.ts#81d86b10~69884346": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
-			"LSP warm ignition on session_start (`igniteWarmFiles` / " +
-			"`igniteDominantLanguageWarm`): file collection, dynamic " +
-			"imports and per-file `touchFile` calls, none bounded above " +
-			"their leaves.",
+			"One heavyweight startup analyzer per await (knip, jscpd, " +
+			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
+			"review graph, call graph, codebase model, word index). Each " +
+			"has a spawn-level timeout at the leaf and none has a wall " +
+			"bound above it; together they are session_start's 5000ms " +
+			"budget many times over.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#igniteDominantLanguageWarm:8e313ae2~75f282db": {
+	"clients/runtime-session.ts#bbb6aaed~a993503c": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
-			"LSP warm ignition on session_start (`igniteWarmFiles` / " +
-			"`igniteDominantLanguageWarm`): file collection, dynamic " +
-			"imports and per-file `touchFile` calls, none bounded above " +
-			"their leaves.",
+			"Session-start summary: go and rust availability probes, 3000ms " +
+			"each and sequential, re-armed on every full session_start " +
+			"(#2523's `bounded but no abort race` list).",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#scheduleManagedToolRefresh:2c87cafc~0a59f635": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"Managed-tool refresh and the prettier-install probe, scheduled " +
-			"from session_start with no wall bound above the spawn.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#scheduleManagedToolRefresh:214f440d~73719009": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"Managed-tool refresh and the prettier-install probe, scheduled " +
-			"from session_start with no wall bound above the spawn.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#probePrettierInstall:d21c1bff~ff3e8c00": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"Managed-tool refresh and the prettier-install probe, scheduled " +
-			"from session_start with no wall bound above the spawn.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#collectTodoBaselineItems:c41e7059~85944564": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"TODO-baseline collection on session_start. `yieldIfOverBudget` " +
-			"yields the event loop so the host stays responsive; it does " +
-			"not bound how long the scan takes.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#collectTodoBaselineItems:1662b38a~5fce0ef1": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"TODO-baseline collection on session_start. `yieldIfOverBudget` " +
-			"yields the event loop so the host stays responsive; it does " +
-			"not bound how long the scan takes.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#collectTodoBaselineItems:8f714b6e~2567c228": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"TODO-baseline collection on session_start. `yieldIfOverBudget` " +
-			"yields the event loop so the host stays responsive; it does " +
-			"not bound how long the scan takes.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#buildOrRefreshWordIndex:9cf28eab~6a6b0649": {
+	"clients/runtime-session.ts#buildOrRefreshWordIndex:0ae65eec~ea7fbd17": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
@@ -628,6 +591,16 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 		owner: "#2523 slice 2",
 	},
 	"clients/runtime-session.ts#buildOrRefreshWordIndex:2ab50d76~c76a94fd": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"Word-index build/refresh on session_start (#162): a dynamic " +
+			"import plus an O(project-files) build. `buildWordIndexAsync` " +
+			"yields cooperatively (WORD_INDEX_BUILD_YIELD_BUDGET_MS 8ms) " +
+			"but has no total bound.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#buildOrRefreshWordIndex:9cf28eab~6a6b0649": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
@@ -657,14 +630,353 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"but has no total bound.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#buildOrRefreshWordIndex:0ae65eec~ea7fbd17": {
+	"clients/runtime-session.ts#collectTodoBaselineItems:1662b38a~5fce0ef1": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
-			"Word-index build/refresh on session_start (#162): a dynamic " +
-			"import plus an O(project-files) build. `buildWordIndexAsync` " +
-			"yields cooperatively (WORD_INDEX_BUILD_YIELD_BUDGET_MS 8ms) " +
-			"but has no total bound.",
+			"TODO-baseline collection on session_start. `yieldIfOverBudget` " +
+			"yields the event loop so the host stays responsive; it does " +
+			"not bound how long the scan takes.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#collectTodoBaselineItems:8f714b6e~2567c228": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"TODO-baseline collection on session_start. `yieldIfOverBudget` " +
+			"yields the event loop so the host stays responsive; it does " +
+			"not bound how long the scan takes.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#collectTodoBaselineItems:c41e7059~85944564": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"TODO-baseline collection on session_start. `yieldIfOverBudget` " +
+			"yields the event loop so the host stays responsive; it does " +
+			"not bound how long the scan takes.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#d6f3308b~7e7b1d10": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"One heavyweight startup analyzer per await (knip, jscpd, " +
+			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
+			"review graph, call graph, codebase model, word index). Each " +
+			"has a spawn-level timeout at the leaf and none has a wall " +
+			"bound above it; together they are session_start's 5000ms " +
+			"budget many times over.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#d7c597d6~b67d7877": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"One heavyweight startup analyzer per await (knip, jscpd, " +
+			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
+			"review graph, call graph, codebase model, word index). Each " +
+			"has a spawn-level timeout at the leaf and none has a wall " +
+			"bound above it; together they are session_start's 5000ms " +
+			"budget many times over.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#dce32182~306f23d3": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"One heavyweight startup analyzer per await (knip, jscpd, " +
+			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
+			"review graph, call graph, codebase model, word index). Each " +
+			"has a spawn-level timeout at the leaf and none has a wall " +
+			"bound above it; together they are session_start's 5000ms " +
+			"budget many times over.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#demandBootstrapDeps:87590bfa~8bddbc42": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"`demandBootstrapDeps` — the analyzer-bootstrap request every " +
+			"session_start scan goes through.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#e20461cb~6148cbdf": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"Session-start summary: go and rust availability probes, 3000ms " +
+			"each and sequential, re-armed on every full session_start " +
+			"(#2523's `bounded but no abort race` list).",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#e28354af~0280fe82": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"One heavyweight startup analyzer per await (knip, jscpd, " +
+			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
+			"review graph, call graph, codebase model, word index). Each " +
+			"has a spawn-level timeout at the leaf and none has a wall " +
+			"bound above it; together they are session_start's 5000ms " +
+			"budget many times over.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#f72b8c48~6555f454": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"One heavyweight startup analyzer per await (knip, jscpd, " +
+			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
+			"review graph, call graph, codebase model, word index). Each " +
+			"has a spawn-level timeout at the leaf and none has a wall " +
+			"bound above it; together they are session_start's 5000ms " +
+			"budget many times over.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#handleSessionStart:2a60d0e5~dbbbc4f4": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"`handleSessionStart`'s own body: startup-scan context, " +
+			"language profile, word index, LSP config load and the two warm " +
+			"ignitions, awaited in sequence with no aggregate bound. This " +
+			"IS the 5000ms budget's contents.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#handleSessionStart:41aec4d4~502541ac": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"`handleSessionStart`'s own body: startup-scan context, " +
+			"language profile, word index, LSP config load and the two warm " +
+			"ignitions, awaited in sequence with no aggregate bound. This " +
+			"IS the 5000ms budget's contents.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#handleSessionStart:54759b53~eacdc51d": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"`handleSessionStart`'s own body: startup-scan context, " +
+			"language profile, word index, LSP config load and the two warm " +
+			"ignitions, awaited in sequence with no aggregate bound. This " +
+			"IS the 5000ms budget's contents.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#handleSessionStart:55cb0cea~03812217": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"`handleSessionStart`'s own body: startup-scan context, " +
+			"language profile, word index, LSP config load and the two warm " +
+			"ignitions, awaited in sequence with no aggregate bound. This " +
+			"IS the 5000ms budget's contents.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#handleSessionStart:709d55d3~8ab15d67": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"`handleSessionStart`'s own body: startup-scan context, " +
+			"language profile, word index, LSP config load and the two warm " +
+			"ignitions, awaited in sequence with no aggregate bound. This " +
+			"IS the 5000ms budget's contents.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#handleSessionStart:76793e0f~10f7b86c": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"`handleSessionStart`'s own body: startup-scan context, " +
+			"language profile, word index, LSP config load and the two warm " +
+			"ignitions, awaited in sequence with no aggregate bound. This " +
+			"IS the 5000ms budget's contents.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#handleSessionStart:78322ab0~6c959e54": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"`handleSessionStart`'s own body: startup-scan context, " +
+			"language profile, word index, LSP config load and the two warm " +
+			"ignitions, awaited in sequence with no aggregate bound. This " +
+			"IS the 5000ms budget's contents.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#handleSessionStart:957b92e7~45615f2b": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"`handleSessionStart`'s own body: startup-scan context, " +
+			"language profile, word index, LSP config load and the two warm " +
+			"ignitions, awaited in sequence with no aggregate bound. This " +
+			"IS the 5000ms budget's contents.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#igniteDominantLanguageWarm:4140740f~7a6aab16": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"LSP warm ignition on session_start (`igniteWarmFiles` / " +
+			"`igniteDominantLanguageWarm`): file collection, dynamic " +
+			"imports and per-file `touchFile` calls, none bounded above " +
+			"their leaves.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#igniteDominantLanguageWarm:45016495~3dad128f": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"LSP warm ignition on session_start (`igniteWarmFiles` / " +
+			"`igniteDominantLanguageWarm`): file collection, dynamic " +
+			"imports and per-file `touchFile` calls, none bounded above " +
+			"their leaves.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#igniteDominantLanguageWarm:65b03ede~e98aab9b": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"LSP warm ignition on session_start (`igniteWarmFiles` / " +
+			"`igniteDominantLanguageWarm`): file collection, dynamic " +
+			"imports and per-file `touchFile` calls, none bounded above " +
+			"their leaves.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#igniteDominantLanguageWarm:82953f32~eca16c1c": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"LSP warm ignition on session_start (`igniteWarmFiles` / " +
+			"`igniteDominantLanguageWarm`): file collection, dynamic " +
+			"imports and per-file `touchFile` calls, none bounded above " +
+			"their leaves.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#igniteDominantLanguageWarm:8e313ae2~75f282db": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"LSP warm ignition on session_start (`igniteWarmFiles` / " +
+			"`igniteDominantLanguageWarm`): file collection, dynamic " +
+			"imports and per-file `touchFile` calls, none bounded above " +
+			"their leaves.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#igniteDominantLanguageWarm:bd07d2d4~f4ffd883": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"LSP warm ignition on session_start (`igniteWarmFiles` / " +
+			"`igniteDominantLanguageWarm`): file collection, dynamic " +
+			"imports and per-file `touchFile` calls, none bounded above " +
+			"their leaves.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#igniteDominantLanguageWarm:fe862775~29288f8c": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"LSP warm ignition on session_start (`igniteWarmFiles` / " +
+			"`igniteDominantLanguageWarm`): file collection, dynamic " +
+			"imports and per-file `touchFile` calls, none bounded above " +
+			"their leaves.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#igniteWarmFiles:4140740f~ebb30080": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"LSP warm ignition on session_start (`igniteWarmFiles` / " +
+			"`igniteDominantLanguageWarm`): file collection, dynamic " +
+			"imports and per-file `touchFile` calls, none bounded above " +
+			"their leaves.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#igniteWarmFiles:65b03ede~d9e1b333": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"LSP warm ignition on session_start (`igniteWarmFiles` / " +
+			"`igniteDominantLanguageWarm`): file collection, dynamic " +
+			"imports and per-file `touchFile` calls, none bounded above " +
+			"their leaves.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#igniteWarmFiles:f243aec9~ea3bd76b": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"LSP warm ignition on session_start (`igniteWarmFiles` / " +
+			"`igniteDominantLanguageWarm`): file collection, dynamic " +
+			"imports and per-file `touchFile` calls, none bounded above " +
+			"their leaves.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#probePrettierInstall:d21c1bff~ff3e8c00": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"Managed-tool refresh and the prettier-install probe, scheduled " +
+			"from session_start with no wall bound above the spawn.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#readSequenceWithBudget:41c0b191~d5c54d05": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"`readSequenceWithBudget`'s race: a real budget with NO abort " +
+			"arm. Also flagged by this sweep's hand-rolled-race family, " +
+			"which is the fold slice 2 owns.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#scheduleDeferredToolProbes:ca89b6b8~8ef90162": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"Deferred tool probes scheduled from session_start. The go/rust " +
+			"availability probes are 3000ms each, sequential, and re-armed " +
+			"on every full session_start — #2523's `bounded but no abort " +
+			"race` list.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#scheduleDeferredToolProbesWithClients:4666a6c4~0bb843d4":
+		{
+			family: "hook-await",
+			site: "session_start",
+			reason:
+				"Deferred tool probes scheduled from session_start. The go/rust " +
+				"availability probes are 3000ms each, sequential, and re-armed " +
+				"on every full session_start — #2523's `bounded but no abort " +
+				"race` list.",
+			owner: "#2523 slice 2",
+		},
+	"clients/runtime-session.ts#scheduleDeferredToolProbesWithClients:645f350d~bd859216":
+		{
+			family: "hook-await",
+			site: "session_start",
+			reason:
+				"Deferred tool probes scheduled from session_start. The go/rust " +
+				"availability probes are 3000ms each, sequential, and re-armed " +
+				"on every full session_start — #2523's `bounded but no abort " +
+				"race` list.",
+			owner: "#2523 slice 2",
+		},
+	"clients/runtime-session.ts#scheduleManagedToolRefresh:214f440d~73719009": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"Managed-tool refresh and the prettier-install probe, scheduled " +
+			"from session_start with no wall bound above the spawn.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-session.ts#scheduleManagedToolRefresh:2c87cafc~0a59f635": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"Managed-tool refresh and the prettier-install probe, scheduled " +
+			"from session_start with no wall bound above the spawn.",
 		owner: "#2523 slice 2",
 	},
 	"clients/runtime-session.ts#scheduleStartupScans:3ca5dbcc~76bb3e52": {
@@ -676,14 +988,43 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"resolution.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#scheduleStartupScansWithClients:a7ab4c28~6ee68efd":
+	"clients/runtime-session.ts#scheduleStartupScansWithClients:0558e1b7~bc03be78":
 		{
 			family: "hook-await",
 			site: "session_start",
 			reason:
-				"`scheduleStartupScans` / `scheduleStartupScansWithClients`: " +
-				"the session_start scan fan-out and its bootstrap-dependency " +
-				"resolution.",
+				"One heavyweight startup analyzer per await (knip, jscpd, " +
+				"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
+				"review graph, call graph, codebase model, word index). Each " +
+				"has a spawn-level timeout at the leaf and none has a wall " +
+				"bound above it; together they are session_start's 5000ms " +
+				"budget many times over.",
+			owner: "#2523 slice 2",
+		},
+	"clients/runtime-session.ts#scheduleStartupScansWithClients:07db9a50~8a50c30d":
+		{
+			family: "hook-await",
+			site: "session_start",
+			reason:
+				"One heavyweight startup analyzer per await (knip, jscpd, " +
+				"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
+				"review graph, call graph, codebase model, word index). Each " +
+				"has a spawn-level timeout at the leaf and none has a wall " +
+				"bound above it; together they are session_start's 5000ms " +
+				"budget many times over.",
+			owner: "#2523 slice 2",
+		},
+	"clients/runtime-session.ts#scheduleStartupScansWithClients:498f59ca~b262f927":
+		{
+			family: "hook-await",
+			site: "session_start",
+			reason:
+				"One heavyweight startup analyzer per await (knip, jscpd, " +
+				"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
+				"review graph, call graph, codebase model, word index). Each " +
+				"has a spawn-level timeout at the leaf and none has a wall " +
+				"bound above it; together they are session_start's 5000ms " +
+				"budget many times over.",
 			owner: "#2523 slice 2",
 		},
 	"clients/runtime-session.ts#scheduleStartupScansWithClients:5b570c81~8a50c30d":
@@ -699,7 +1040,17 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 				"budget many times over.",
 			owner: "#2523 slice 2",
 		},
-	"clients/runtime-session.ts#scheduleStartupScansWithClients:eb2411d7~0401ab41":
+	"clients/runtime-session.ts#scheduleStartupScansWithClients:a7ab4c28~6ee68efd":
+		{
+			family: "hook-await",
+			site: "session_start",
+			reason:
+				"`scheduleStartupScans` / `scheduleStartupScansWithClients`: " +
+				"the session_start scan fan-out and its bootstrap-dependency " +
+				"resolution.",
+			owner: "#2523 slice 2",
+		},
+	"clients/runtime-session.ts#scheduleStartupScansWithClients:b29e379c~bc03be78":
 		{
 			family: "hook-await",
 			site: "session_start",
@@ -712,7 +1063,20 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 				"budget many times over.",
 			owner: "#2523 slice 2",
 		},
-	"clients/runtime-session.ts#scheduleStartupScansWithClients:07db9a50~8a50c30d":
+	"clients/runtime-session.ts#scheduleStartupScansWithClients:e8384622~b262f927":
+		{
+			family: "hook-await",
+			site: "session_start",
+			reason:
+				"One heavyweight startup analyzer per await (knip, jscpd, " +
+				"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
+				"review graph, call graph, codebase model, word index). Each " +
+				"has a spawn-level timeout at the leaf and none has a wall " +
+				"bound above it; together they are session_start's 5000ms " +
+				"budget many times over.",
+			owner: "#2523 slice 2",
+		},
+	"clients/runtime-session.ts#scheduleStartupScansWithClients:eb2411d7~0401ab41":
 		{
 			family: "hook-await",
 			site: "session_start",
@@ -751,46 +1115,7 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 				"budget many times over.",
 			owner: "#2523 slice 2",
 		},
-	"clients/runtime-session.ts#scheduleStartupScansWithClients:b29e379c~bc03be78":
-		{
-			family: "hook-await",
-			site: "session_start",
-			reason:
-				"One heavyweight startup analyzer per await (knip, jscpd, " +
-				"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
-				"review graph, call graph, codebase model, word index). Each " +
-				"has a spawn-level timeout at the leaf and none has a wall " +
-				"bound above it; together they are session_start's 5000ms " +
-				"budget many times over.",
-			owner: "#2523 slice 2",
-		},
-	"clients/runtime-session.ts#scheduleStartupScansWithClients:e8384622~b262f927":
-		{
-			family: "hook-await",
-			site: "session_start",
-			reason:
-				"One heavyweight startup analyzer per await (knip, jscpd, " +
-				"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
-				"review graph, call graph, codebase model, word index). Each " +
-				"has a spawn-level timeout at the leaf and none has a wall " +
-				"bound above it; together they are session_start's 5000ms " +
-				"budget many times over.",
-			owner: "#2523 slice 2",
-		},
-	"clients/runtime-session.ts#scheduleStartupScansWithClients:0558e1b7~bc03be78":
-		{
-			family: "hook-await",
-			site: "session_start",
-			reason:
-				"One heavyweight startup analyzer per await (knip, jscpd, " +
-				"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
-				"review graph, call graph, codebase model, word index). Each " +
-				"has a spawn-level timeout at the leaf and none has a wall " +
-				"bound above it; together they are session_start's 5000ms " +
-				"budget many times over.",
-			owner: "#2523 slice 2",
-		},
-	"clients/runtime-session.ts#scheduleStartupScansWithClients:498f59ca~b262f927":
+	"clients/runtime-session.ts#scheduleStartupScansWithClients:f3e39dfa~b262f927":
 		{
 			family: "hook-await",
 			site: "session_start",
@@ -816,328 +1141,84 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 				"budget many times over.",
 			owner: "#2523 slice 2",
 		},
-	"clients/runtime-session.ts#scheduleStartupScansWithClients:f3e39dfa~b262f927":
-		{
-			family: "hook-await",
-			site: "session_start",
-			reason:
-				"One heavyweight startup analyzer per await (knip, jscpd, " +
-				"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
-				"review graph, call graph, codebase model, word index). Each " +
-				"has a spawn-level timeout at the leaf and none has a wall " +
-				"bound above it; together they are session_start's 5000ms " +
-				"budget many times over.",
-			owner: "#2523 slice 2",
-		},
-	"clients/runtime-session.ts#d7c597d6~b67d7877": {
+	"clients/runtime-tool-call.ts#0c4f0c61~51275360": {
 		family: "hook-await",
-		site: "session_start",
+		site: "unbudgeted-hook",
 		reason:
-			"One heavyweight startup analyzer per await (knip, jscpd, " +
-			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
-			"review graph, call graph, codebase model, word index). Each " +
-			"has a spawn-level timeout at the leaf and none has a wall " +
-			"bound above it; together they are session_start's 5000ms " +
-			"budget many times over.",
+			"On the `tool_call` path. #2523's contract table declares no " +
+			"wall budget for tool_call, so this await has no number to be " +
+			"measured against yet; recorded as the gap rather than assigned " +
+			"an invented one.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#2c64a178~b262f927": {
+	"clients/runtime-tool-call.ts#171055f5~9e0a2421": {
 		family: "hook-await",
-		site: "session_start",
+		site: "unbudgeted-hook",
 		reason:
-			"One heavyweight startup analyzer per await (knip, jscpd, " +
-			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
-			"review graph, call graph, codebase model, word index). Each " +
-			"has a spawn-level timeout at the leaf and none has a wall " +
-			"bound above it; together they are session_start's 5000ms " +
-			"budget many times over.",
+			"On the `tool_call` path. #2523's contract table declares no " +
+			"wall budget for tool_call, so this await has no number to be " +
+			"measured against yet; recorded as the gap rather than assigned " +
+			"an invented one.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#19f6a911~bc03be78": {
+	"clients/runtime-tool-call.ts#22725cc2~e70f3ef8": {
 		family: "hook-await",
-		site: "session_start",
+		site: "unbudgeted-hook",
 		reason:
-			"One heavyweight startup analyzer per await (knip, jscpd, " +
-			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
-			"review graph, call graph, codebase model, word index). Each " +
-			"has a spawn-level timeout at the leaf and none has a wall " +
-			"bound above it; together they are session_start's 5000ms " +
-			"budget many times over.",
+			"On the `tool_call` path. #2523's contract table declares no " +
+			"wall budget for tool_call, so this await has no number to be " +
+			"measured against yet; recorded as the gap rather than assigned " +
+			"an invented one.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#3373bfda~b262f927": {
+	"clients/runtime-tool-call.ts#3f848c4d~b3c7028c": {
 		family: "hook-await",
-		site: "session_start",
+		site: "unbudgeted-hook",
 		reason:
-			"One heavyweight startup analyzer per await (knip, jscpd, " +
-			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
-			"review graph, call graph, codebase model, word index). Each " +
-			"has a spawn-level timeout at the leaf and none has a wall " +
-			"bound above it; together they are session_start's 5000ms " +
-			"budget many times over.",
+			"`requestBootstrapClients` passing `getAmbientAbortSignal()` — " +
+			"#2523 AC4's dead-signal site: `setAmbientAbortSignal` is only " +
+			"ever called from tool_result, so the signal read here is " +
+			"ALWAYS undefined. Fixing it is AC4's job, not slice 1's.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#f72b8c48~6555f454": {
+	"clients/runtime-tool-call.ts#65d1c872~921c1ea5": {
 		family: "hook-await",
-		site: "session_start",
+		site: "unbudgeted-hook",
 		reason:
-			"One heavyweight startup analyzer per await (knip, jscpd, " +
-			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
-			"review graph, call graph, codebase model, word index). Each " +
-			"has a spawn-level timeout at the leaf and none has a wall " +
-			"bound above it; together they are session_start's 5000ms " +
-			"budget many times over.",
+			"On the `tool_call` path. #2523's contract table declares no " +
+			"wall budget for tool_call, so this await has no number to be " +
+			"measured against yet; recorded as the gap rather than assigned " +
+			"an invented one.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#e28354af~0280fe82": {
+	"clients/runtime-tool-call.ts#ce0d3f2f~51275360": {
 		family: "hook-await",
-		site: "session_start",
+		site: "unbudgeted-hook",
 		reason:
-			"One heavyweight startup analyzer per await (knip, jscpd, " +
-			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
-			"review graph, call graph, codebase model, word index). Each " +
-			"has a spawn-level timeout at the leaf and none has a wall " +
-			"bound above it; together they are session_start's 5000ms " +
-			"budget many times over.",
+			"On the `tool_call` path. #2523's contract table declares no " +
+			"wall budget for tool_call, so this await has no number to be " +
+			"measured against yet; recorded as the gap rather than assigned " +
+			"an invented one.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#156451e5~c3519908": {
+	"clients/runtime-tool-call.ts#d7b23cdc~b1998233": {
 		family: "hook-await",
-		site: "session_start",
+		site: "unbudgeted-hook",
 		reason:
-			"One heavyweight startup analyzer per await (knip, jscpd, " +
-			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
-			"review graph, call graph, codebase model, word index). Each " +
-			"has a spawn-level timeout at the leaf and none has a wall " +
-			"bound above it; together they are session_start's 5000ms " +
-			"budget many times over.",
+			"On the `tool_call` path. #2523's contract table declares no " +
+			"wall budget for tool_call, so this await has no number to be " +
+			"measured against yet; recorded as the gap rather than assigned " +
+			"an invented one.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-session.ts#81d86b10~69884346": {
+	"clients/runtime-tool-call.ts#e7b5efbb~e9eba0d8": {
 		family: "hook-await",
-		site: "session_start",
+		site: "unbudgeted-hook",
 		reason:
-			"One heavyweight startup analyzer per await (knip, jscpd, " +
-			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
-			"review graph, call graph, codebase model, word index). Each " +
-			"has a spawn-level timeout at the leaf and none has a wall " +
-			"bound above it; together they are session_start's 5000ms " +
-			"budget many times over.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#d6f3308b~7e7b1d10": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"One heavyweight startup analyzer per await (knip, jscpd, " +
-			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
-			"review graph, call graph, codebase model, word index). Each " +
-			"has a spawn-level timeout at the leaf and none has a wall " +
-			"bound above it; together they are session_start's 5000ms " +
-			"budget many times over.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#dce32182~306f23d3": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"One heavyweight startup analyzer per await (knip, jscpd, " +
-			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
-			"review graph, call graph, codebase model, word index). Each " +
-			"has a spawn-level timeout at the leaf and none has a wall " +
-			"bound above it; together they are session_start's 5000ms " +
-			"budget many times over.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#79639cbb~7cf260f9": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"One heavyweight startup analyzer per await (knip, jscpd, " +
-			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
-			"review graph, call graph, codebase model, word index). Each " +
-			"has a spawn-level timeout at the leaf and none has a wall " +
-			"bound above it; together they are session_start's 5000ms " +
-			"budget many times over.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#6059719b~a69fa0e5": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"One heavyweight startup analyzer per await (knip, jscpd, " +
-			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
-			"review graph, call graph, codebase model, word index). Each " +
-			"has a spawn-level timeout at the leaf and none has a wall " +
-			"bound above it; together they are session_start's 5000ms " +
-			"budget many times over.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#4bdb1922~447b8e6b": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"One heavyweight startup analyzer per await (knip, jscpd, " +
-			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
-			"review graph, call graph, codebase model, word index). Each " +
-			"has a spawn-level timeout at the leaf and none has a wall " +
-			"bound above it; together they are session_start's 5000ms " +
-			"budget many times over.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#scheduleDeferredToolProbes:ca89b6b8~8ef90162": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"Deferred tool probes scheduled from session_start. The go/rust " +
-			"availability probes are 3000ms each, sequential, and re-armed " +
-			"on every full session_start — #2523's `bounded but no abort " +
-			"race` list.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#scheduleDeferredToolProbesWithClients:645f350d~bd859216":
-		{
-			family: "hook-await",
-			site: "session_start",
-			reason:
-				"Deferred tool probes scheduled from session_start. The go/rust " +
-				"availability probes are 3000ms each, sequential, and re-armed " +
-				"on every full session_start — #2523's `bounded but no abort " +
-				"race` list.",
-			owner: "#2523 slice 2",
-		},
-	"clients/runtime-session.ts#scheduleDeferredToolProbesWithClients:4666a6c4~0bb843d4":
-		{
-			family: "hook-await",
-			site: "session_start",
-			reason:
-				"Deferred tool probes scheduled from session_start. The go/rust " +
-				"availability probes are 3000ms each, sequential, and re-armed " +
-				"on every full session_start — #2523's `bounded but no abort " +
-				"race` list.",
-			owner: "#2523 slice 2",
-		},
-	"clients/runtime-session.ts#handleSessionStart:709d55d3~8ab15d67": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"`handleSessionStart`'s own body: startup-scan context, " +
-			"language profile, word index, LSP config load and the two warm " +
-			"ignitions, awaited in sequence with no aggregate bound. This " +
-			"IS the 5000ms budget's contents.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#handleSessionStart:957b92e7~45615f2b": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"`handleSessionStart`'s own body: startup-scan context, " +
-			"language profile, word index, LSP config load and the two warm " +
-			"ignitions, awaited in sequence with no aggregate bound. This " +
-			"IS the 5000ms budget's contents.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#handleSessionStart:78322ab0~6c959e54": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"`handleSessionStart`'s own body: startup-scan context, " +
-			"language profile, word index, LSP config load and the two warm " +
-			"ignitions, awaited in sequence with no aggregate bound. This " +
-			"IS the 5000ms budget's contents.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#handleSessionStart:2a60d0e5~dbbbc4f4": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"`handleSessionStart`'s own body: startup-scan context, " +
-			"language profile, word index, LSP config load and the two warm " +
-			"ignitions, awaited in sequence with no aggregate bound. This " +
-			"IS the 5000ms budget's contents.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#handleSessionStart:54759b53~eacdc51d": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"`handleSessionStart`'s own body: startup-scan context, " +
-			"language profile, word index, LSP config load and the two warm " +
-			"ignitions, awaited in sequence with no aggregate bound. This " +
-			"IS the 5000ms budget's contents.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#handleSessionStart:55cb0cea~03812217": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"`handleSessionStart`'s own body: startup-scan context, " +
-			"language profile, word index, LSP config load and the two warm " +
-			"ignitions, awaited in sequence with no aggregate bound. This " +
-			"IS the 5000ms budget's contents.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#handleSessionStart:76793e0f~10f7b86c": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"`handleSessionStart`'s own body: startup-scan context, " +
-			"language profile, word index, LSP config load and the two warm " +
-			"ignitions, awaited in sequence with no aggregate bound. This " +
-			"IS the 5000ms budget's contents.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#handleSessionStart:41aec4d4~502541ac": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"`handleSessionStart`'s own body: startup-scan context, " +
-			"language profile, word index, LSP config load and the two warm " +
-			"ignitions, awaited in sequence with no aggregate bound. This " +
-			"IS the 5000ms budget's contents.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#07098027~a42f4a7e": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"`readSequenceWithBudget` from the sequence fast path (#451): " +
-			"the budget is real (250ms default) but carries no abort arm.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#07098027~195e8353": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"`readSequenceWithBudget` from the snapshot-root path: same " +
-			"real budget, same missing abort arm.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#e20461cb~6148cbdf": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"Session-start summary: go and rust availability probes, 3000ms " +
-			"each and sequential, re-armed on every full session_start " +
-			"(#2523's `bounded but no abort race` list).",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#bbb6aaed~a993503c": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"Session-start summary: go and rust availability probes, 3000ms " +
-			"each and sequential, re-armed on every full session_start " +
-			"(#2523's `bounded but no abort race` list).",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-session.ts#2c3fa403~ec8628b8": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"Session-start summary: go and rust availability probes, 3000ms " +
-			"each and sequential, re-armed on every full session_start " +
-			"(#2523's `bounded but no abort race` list).",
+			"On the `tool_call` path. #2523's contract table declares no " +
+			"wall budget for tool_call, so this await has no number to be " +
+			"measured against yet; recorded as the gap rather than assigned " +
+			"an invented one.",
 		owner: "#2523 slice 2",
 	},
 	"clients/runtime-tool-call.ts#handleToolCall:a2e5cf7a~ab927364": {
@@ -1150,7 +1231,27 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"an invented one.",
 		owner: "#2523 slice 2",
 	},
+	"clients/runtime-tool-call.ts#handleToolCallImpl:1a767ae6~924dc100": {
+		family: "hook-await",
+		site: "unbudgeted-hook",
+		reason:
+			"On the `tool_call` path. #2523's contract table declares no " +
+			"wall budget for tool_call, so this await has no number to be " +
+			"measured against yet; recorded as the gap rather than assigned " +
+			"an invented one.",
+		owner: "#2523 slice 2",
+	},
 	"clients/runtime-tool-call.ts#handleToolCallImpl:4d186e4d~6342f07d": {
+		family: "hook-await",
+		site: "unbudgeted-hook",
+		reason:
+			"On the `tool_call` path. #2523's contract table declares no " +
+			"wall budget for tool_call, so this await has no number to be " +
+			"measured against yet; recorded as the gap rather than assigned " +
+			"an invented one.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-tool-call.ts#handleToolCallImpl:750505ab~c899dd87": {
 		family: "hook-await",
 		site: "unbudgeted-hook",
 		reason:
@@ -1180,104 +1281,58 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"an invented one.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-call.ts#handleToolCallImpl:750505ab~c899dd87": {
+	"clients/runtime-tool-result.ts#310cbbae~e4b0261c": {
 		family: "hook-await",
-		site: "unbudgeted-hook",
+		site: "tool_result_edit",
 		reason:
-			"On the `tool_call` path. #2523's contract table declares no " +
-			"wall budget for tool_call, so this await has no number to be " +
-			"measured against yet; recorded as the gap rather than assigned " +
-			"an invented one.",
+			"Classified-mutation join and the second dispatch on the edit " +
+			"path; same leaf-bounded, aggregate-unbounded shape as the " +
+			"observed path above.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-call.ts#handleToolCallImpl:1a767ae6~924dc100": {
+	"clients/runtime-tool-result.ts#39fdd082~e70743cd": {
 		family: "hook-await",
-		site: "unbudgeted-hook",
+		site: "tool_result_edit",
 		reason:
-			"On the `tool_call` path. #2523's contract table declares no " +
-			"wall budget for tool_call, so this await has no number to be " +
-			"measured against yet; recorded as the gap rather than assigned " +
-			"an invented one.",
+			"Classified-mutation join and the second dispatch on the edit " +
+			"path; same leaf-bounded, aggregate-unbounded shape as the " +
+			"observed path above.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-call.ts#0c4f0c61~51275360": {
+	"clients/runtime-tool-result.ts#57d3f8bf~32875b26": {
 		family: "hook-await",
-		site: "unbudgeted-hook",
+		site: "tool_result_edit",
 		reason:
-			"On the `tool_call` path. #2523's contract table declares no " +
-			"wall budget for tool_call, so this await has no number to be " +
-			"measured against yet; recorded as the gap rather than assigned " +
-			"an invented one.",
+			"Observed-mutation settle and dispatch on the edit path. " +
+			"`OBSERVED_TURN_BUDGET_MS` (600ms) bounds the CAPTURE, not this " +
+			"join.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-call.ts#65d1c872~921c1ea5": {
+	"clients/runtime-tool-result.ts#734a21b6~69a83146": {
 		family: "hook-await",
-		site: "unbudgeted-hook",
+		site: "tool_result_edit",
 		reason:
-			"On the `tool_call` path. #2523's contract table declares no " +
-			"wall budget for tool_call, so this await has no number to be " +
-			"measured against yet; recorded as the gap rather than assigned " +
-			"an invented one.",
+			"Observed-mutation settle and dispatch on the edit path. " +
+			"`OBSERVED_TURN_BUDGET_MS` (600ms) bounds the CAPTURE, not this " +
+			"join.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-call.ts#3f848c4d~b3c7028c": {
+	"clients/runtime-tool-result.ts#8c164eee~caedcf66": {
 		family: "hook-await",
-		site: "unbudgeted-hook",
+		site: "tool_result_edit",
 		reason:
-			"`requestBootstrapClients` passing `getAmbientAbortSignal()` — " +
-			"#2523 AC4's dead-signal site: `setAmbientAbortSignal` is only " +
-			"ever called from tool_result, so the signal read here is " +
-			"ALWAYS undefined. Fixing it is AC4's job, not slice 1's.",
+			"Observed-mutation settle and dispatch on the edit path. " +
+			"`OBSERVED_TURN_BUDGET_MS` (600ms) bounds the CAPTURE, not this " +
+			"join.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-call.ts#171055f5~9e0a2421": {
+	"clients/runtime-tool-result.ts#dispatchPipelineAnalysis:52da0ba3~78ccd40a": {
 		family: "hook-await",
-		site: "unbudgeted-hook",
+		site: "tool_result_edit",
 		reason:
-			"On the `tool_call` path. #2523's contract table declares no " +
-			"wall budget for tool_call, so this await has no number to be " +
-			"measured against yet; recorded as the gap rather than assigned " +
-			"an invented one.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-tool-call.ts#d7b23cdc~b1998233": {
-		family: "hook-await",
-		site: "unbudgeted-hook",
-		reason:
-			"On the `tool_call` path. #2523's contract table declares no " +
-			"wall budget for tool_call, so this await has no number to be " +
-			"measured against yet; recorded as the gap rather than assigned " +
-			"an invented one.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-tool-call.ts#ce0d3f2f~51275360": {
-		family: "hook-await",
-		site: "unbudgeted-hook",
-		reason:
-			"On the `tool_call` path. #2523's contract table declares no " +
-			"wall budget for tool_call, so this await has no number to be " +
-			"measured against yet; recorded as the gap rather than assigned " +
-			"an invented one.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-tool-call.ts#e7b5efbb~e9eba0d8": {
-		family: "hook-await",
-		site: "unbudgeted-hook",
-		reason:
-			"On the `tool_call` path. #2523's contract table declares no " +
-			"wall budget for tool_call, so this await has no number to be " +
-			"measured against yet; recorded as the gap rather than assigned " +
-			"an invented one.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-tool-call.ts#22725cc2~e70f3ef8": {
-		family: "hook-await",
-		site: "unbudgeted-hook",
-		reason:
-			"On the `tool_call` path. #2523's contract table declares no " +
-			"wall budget for tool_call, so this await has no number to be " +
-			"measured against yet; recorded as the gap rather than assigned " +
-			"an invented one.",
+			"`dispatchPipelineAnalysis` awaits the pipeline promise. Runner " +
+			"timeouts are per-runner leaves (RUNNER_TIMEOUT_MS 30000), " +
+			"which is 3x the edit budget on its own.",
 		owner: "#2523 slice 2",
 	},
 	"clients/runtime-tool-result.ts#flushDebouncedToolResults:f0b9e5ad~07c5adfc":
@@ -1291,15 +1346,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 				"well, so its cost lands in three budgets.",
 			owner: "#2523 slice 2",
 		},
-	"clients/runtime-tool-result.ts#dispatchPipelineAnalysis:52da0ba3~78ccd40a": {
-		family: "hook-await",
-		site: "tool_result_edit",
-		reason:
-			"`dispatchPipelineAnalysis` awaits the pipeline promise. Runner " +
-			"timeouts are per-runner leaves (RUNNER_TIMEOUT_MS 30000), " +
-			"which is 3x the edit budget on its own.",
-		owner: "#2523 slice 2",
-	},
 	"clients/runtime-tool-result.ts#handleToolResult:3c46b254~2a5bfb5e": {
 		family: "hook-await",
 		site: "tool_result_edit",
@@ -1330,86 +1376,31 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"rather than a change.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-tool-result.ts#734a21b6~69a83146": {
-		family: "hook-await",
-		site: "tool_result_edit",
-		reason:
-			"Observed-mutation settle and dispatch on the edit path. " +
-			"`OBSERVED_TURN_BUDGET_MS` (600ms) bounds the CAPTURE, not this " +
-			"join.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-tool-result.ts#57d3f8bf~32875b26": {
-		family: "hook-await",
-		site: "tool_result_edit",
-		reason:
-			"Observed-mutation settle and dispatch on the edit path. " +
-			"`OBSERVED_TURN_BUDGET_MS` (600ms) bounds the CAPTURE, not this " +
-			"join.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-tool-result.ts#8c164eee~caedcf66": {
-		family: "hook-await",
-		site: "tool_result_edit",
-		reason:
-			"Observed-mutation settle and dispatch on the edit path. " +
-			"`OBSERVED_TURN_BUDGET_MS` (600ms) bounds the CAPTURE, not this " +
-			"join.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-tool-result.ts#39fdd082~e70743cd": {
-		family: "hook-await",
-		site: "tool_result_edit",
-		reason:
-			"Classified-mutation join and the second dispatch on the edit " +
-			"path; same leaf-bounded, aggregate-unbounded shape as the " +
-			"observed path above.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-tool-result.ts#310cbbae~e4b0261c": {
-		family: "hook-await",
-		site: "tool_result_edit",
-		reason:
-			"Classified-mutation join and the second dispatch on the edit " +
-			"path; same leaf-bounded, aggregate-unbounded shape as the " +
-			"observed path above.",
-		owner: "#2523 slice 2",
-	},
-	"clients/runtime-turn.ts#runTestTargetsBounded:a0d413d5~f6c4b650": {
+	"clients/runtime-turn.ts#118c149d~fbb822b8": {
 		family: "hook-await",
 		site: "turn_end",
 		reason:
-			"`await stamp` settles with the run it stamps; the batch's own " +
-			"wall budget and batchAbort bound it; wrapping it in bounded() " +
-			"would add a second timer per target.",
-		owner: "#2523 slice 3",
-	},
-	"clients/runtime-turn.ts#runTestTargetsBounded:7307dda7~99843961": {
-		family: "hook-await",
-		site: "turn_end",
-		reason:
-			"`runTestTargetsBounded`'s per-target loop. Its batch budget " +
-			"(TEST_RUNNER_BATCH_BUDGET_MS, 90000ms) is 30x turn_end's " +
-			"total; test-runner delivery already has an off-hook channel " +
-			"(#2366) and #2522 owns selection.",
+			"A project-diagnostics analyzer run on turn_end with a " +
+			"spawn-level timeout only; the same leaf-bound shape as knip " +
+			"above it.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-turn.ts#handleTurnEnd:fde4167d~b1a2c4cd": {
+	"clients/runtime-turn.ts#156451e5~bf99fb9e": {
 		family: "hook-await",
 		site: "turn_end",
 		reason:
-			"`sweepInlineBlockerFreshness` — #2523's turn_end list " +
-			"(runtime-turn.ts:789): unconditional, no `signal` parameter, " +
-			"uncapped population.",
+			"Dynamic import of the call-graph analyzer on the turn_end " +
+			"path. Module load is unbounded, and #1974's 31.7s warmup was a " +
+			"module-compilation cost of exactly this shape.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-turn.ts#handleTurnEnd:f02aaccc~a59ea951": {
+	"clients/runtime-turn.ts#3bc6dd13~bff396df": {
 		family: "hook-await",
 		site: "turn_end",
 		reason:
-			"`runtime.settleCascadeRuns` — bounded at 5000ms with no abort " +
-			"arm, and 5000ms alone exceeds the 3000ms turn_end budget " +
-			"(#2523's `bounded but no abort race` list).",
+			"`buildActionableWarningsReport` on turn_end. #2509 moved its " +
+			"DELIVERY off-hook (`publishActionableWarningsReport`); the " +
+			"build itself still runs inside the hook.",
 		owner: "#2523 slice 2",
 	},
 	"clients/runtime-turn.ts#5b570c81~b2f3321c": {
@@ -1422,13 +1413,30 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"by it.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-turn.ts#118c149d~fbb822b8": {
+	"clients/runtime-turn.ts#756411f6~249e7096": {
 		family: "hook-await",
 		site: "turn_end",
 		reason:
-			"A project-diagnostics analyzer run on turn_end with a " +
-			"spawn-level timeout only; the same leaf-bound shape as knip " +
-			"above it.",
+			"`readCachedDiagnosticsForServers` — #2523's turn_end list " +
+			"(runtime-turn.ts:2882).",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-turn.ts#82bbe401~723cb9f3": {
+		family: "hook-await",
+		site: "turn_end",
+		reason:
+			"`drainPendingRunnerFindings(0)` — a zero-WAIT drain, which " +
+			"bounds how long it waits for new findings but not how long the " +
+			"drain itself takes.",
+		owner: "#2523 slice 2",
+	},
+	"clients/runtime-turn.ts#9167ea7d~7f6889da": {
+		family: "hook-await",
+		site: "turn_end",
+		reason:
+			"Dynamic import of the call-graph analyzer on the turn_end " +
+			"path. Module load is unbounded, and #1974's 31.7s warmup was a " +
+			"module-compilation cost of exactly this shape.",
 		owner: "#2523 slice 2",
 	},
 	"clients/runtime-turn.ts#dfbc3b71~d09e69a7": {
@@ -1449,120 +1457,58 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"their spawns.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-turn.ts#156451e5~bf99fb9e": {
+	"clients/runtime-turn.ts#handleTurnEnd:f02aaccc~a59ea951": {
 		family: "hook-await",
 		site: "turn_end",
 		reason:
-			"Dynamic import of the call-graph analyzer on the turn_end " +
-			"path. Module load is unbounded, and #1974's 31.7s warmup was a " +
-			"module-compilation cost of exactly this shape.",
+			"`runtime.settleCascadeRuns` — bounded at 5000ms with no abort " +
+			"arm, and 5000ms alone exceeds the 3000ms turn_end budget " +
+			"(#2523's `bounded but no abort race` list).",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-turn.ts#9167ea7d~7f6889da": {
+	"clients/runtime-turn.ts#handleTurnEnd:fde4167d~b1a2c4cd": {
 		family: "hook-await",
 		site: "turn_end",
 		reason:
-			"Dynamic import of the call-graph analyzer on the turn_end " +
-			"path. Module load is unbounded, and #1974's 31.7s warmup was a " +
-			"module-compilation cost of exactly this shape.",
+			"`sweepInlineBlockerFreshness` — #2523's turn_end list " +
+			"(runtime-turn.ts:789): unconditional, no `signal` parameter, " +
+			"uncapped population.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-turn.ts#3bc6dd13~bff396df": {
+	"clients/runtime-turn.ts#runTestTargetsBounded:7307dda7~99843961": {
 		family: "hook-await",
 		site: "turn_end",
 		reason:
-			"`buildActionableWarningsReport` on turn_end. #2509 moved its " +
-			"DELIVERY off-hook (`publishActionableWarningsReport`); the " +
-			"build itself still runs inside the hook.",
+			"`runTestTargetsBounded`'s per-target loop. Its batch budget " +
+			"(TEST_RUNNER_BATCH_BUDGET_MS, 90000ms) is 30x turn_end's " +
+			"total; test-runner delivery already has an off-hook channel " +
+			"(#2366) and #2522 owns selection.",
 		owner: "#2523 slice 2",
 	},
-	"clients/runtime-turn.ts#82bbe401~723cb9f3": {
+	"clients/runtime-turn.ts#runTestTargetsBounded:a0d413d5~f6c4b650": {
 		family: "hook-await",
 		site: "turn_end",
 		reason:
-			"`drainPendingRunnerFindings(0)` — a zero-WAIT drain, which " +
-			"bounds how long it waits for new findings but not how long the " +
-			"drain itself takes.",
-		owner: "#2523 slice 2",
+			"`await stamp` settles with the run it stamps; the batch's own " +
+			"wall budget and batchAbort bound it; wrapping it in bounded() " +
+			"would add a second timer per target.",
+		owner: "#2523 slice 3",
 	},
-	"clients/runtime-turn.ts#756411f6~249e7096": {
+	"index.ts#0aa50b6e~d0186439": {
 		family: "hook-await",
-		site: "turn_end",
+		site: "agent_settled",
 		reason:
-			"`readCachedDiagnosticsForServers` — #2523's turn_end list " +
-			"(runtime-turn.ts:2882).",
+			"`onAgentSettled` awaits its three phases in sequence with no " +
+			"aggregate bound; the 10000ms budget is a TOTAL, not a " +
+			"per-phase allowance.",
 		owner: "#2523 slice 2",
 	},
-	// #2518 re-keyed this occurrence: the neighbourhood suffix hashes the
-	// lines around the await, and the memo check above it became a
-	// `shouldInitializeSessionRoot` call. Same await, same reason, new key.
-	"index.ts#ensureLSPConfigInitialized:a10dd3b9~ad96a95f": {
+	"index.ts#1946ceb9~8beff560": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
-			"`initLSPConfig` inside `ensureLSPConfigInitialized`, reached " +
-			"from session_start (index.ts:2131) and from tool_call. #2523 " +
-			"names it in the session_start list of unbounded awaits.",
-		owner: "#2523 slice 2",
-	},
-	"index.ts#d628f09d~02fe26af": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"Slash-command body (`/lens-*`): the user typed the command and " +
-			"is waiting for its answer, so no hook budget applies. Flagged " +
-			"only because the await scan covers whole files rather than " +
-			"walking reachability.",
-		owner: "#2523 slice 2",
-	},
-	"index.ts#65b51dab~a327124f": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"Slash-command body (`/lens-*`): the user typed the command and " +
-			"is waiting for its answer, so no hook budget applies. Flagged " +
-			"only because the await scan covers whole files rather than " +
-			"walking reachability.",
-		owner: "#2523 slice 2",
-	},
-	"index.ts#a5c3de37~231f1f06": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"Slash-command body (`/lens-*`): the user typed the command and " +
-			"is waiting for its answer, so no hook budget applies. Flagged " +
-			"only because the await scan covers whole files rather than " +
-			"walking reachability.",
-		owner: "#2523 slice 2",
-	},
-	"index.ts#ea09dcdf~609209be": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"Slash-command body (`/lens-*`): the user typed the command and " +
-			"is waiting for its answer, so no hook budget applies. Flagged " +
-			"only because the await scan covers whole files rather than " +
-			"walking reachability.",
-		owner: "#2523 slice 2",
-	},
-	"index.ts#2dc4f4e6~f95b2c48": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"Slash-command body (`/lens-*`): the user typed the command and " +
-			"is waiting for its answer, so no hook budget applies. Flagged " +
-			"only because the await scan covers whole files rather than " +
-			"walking reachability.",
-		owner: "#2523 slice 2",
-	},
-	"index.ts#51210408~9af17d2e": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"Slash-command body (`/lens-*`): the user typed the command and " +
-			"is waiting for its answer, so no hook budget applies. Flagged " +
-			"only because the await scan covers whole files rather than " +
-			"walking reachability.",
+			"`ensureLSPConfigInitialized` — #2523's session_start list " +
+			"(index.ts:2131).",
 		owner: "#2523 slice 2",
 	},
 	"index.ts#1c47f42a~879e01ba": {
@@ -1575,6 +1521,25 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"walking reachability.",
 		owner: "#2523 slice 2",
 	},
+	"index.ts#2b868994~aa492d94": {
+		family: "hook-await",
+		site: "agent_settled",
+		reason:
+			"`runDeferredMutationDrain`, called from `onAgentSettled` " +
+			"(index.ts:3138). Its `getAutofixClients` closure is the " +
+			"`loadBootstrapClients()` #2523 names under agent_settled; " +
+			"runtime-agent-end.ts:347 is the consumer.",
+		owner: "#2523 slice 2",
+	},
+	"index.ts#2c2d49c9~adf2e1af": {
+		family: "hook-await",
+		site: "agent_settled",
+		reason:
+			"`onAgentSettled` awaits its three phases in sequence with no " +
+			"aggregate bound; the 10000ms budget is a TOTAL, not a " +
+			"per-phase allowance.",
+		owner: "#2523 slice 2",
+	},
 	"index.ts#2ccc914e~d8df7429": {
 		family: "hook-await",
 		site: "session_start",
@@ -1583,69 +1548,14 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"session_start awaits #2523 names (index.ts:2060).",
 		owner: "#2523 slice 2",
 	},
-	"index.ts#1946ceb9~8beff560": {
+	"index.ts#2dc4f4e6~f95b2c48": {
 		family: "hook-await",
-		site: "session_start",
+		site: "off-hook",
 		reason:
-			"`ensureLSPConfigInitialized` — #2523's session_start list " +
-			"(index.ts:2131).",
-		owner: "#2523 slice 2",
-	},
-	"index.ts#cdc1de9a~0e4e5946": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"`handleSessionStart` itself: the entire session_start body " +
-			"under one await. Slice 2 bounds it at the registered handler " +
-			"with the 5000ms budget; wrapping it here as well would " +
-			"double-bound the same work.",
-		owner: "#2523 slice 2",
-	},
-	"index.ts#889073a2~ebe0e096": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"Installer `ensureTool` for a managed tool during " +
-			"session_start. The spawn has a leaf timeout; the dynamic " +
-			"module load and resolution above it have none.",
-		owner: "#2523 slice 2",
-	},
-	"index.ts#e3e3db09~8a678173": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"`loadSessionState` — #2523's session_start list " + "(index.ts:2245).",
-		owner: "#2523 slice 2",
-	},
-	"index.ts#dd06eafe~0055eaad": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"`dropStaleFiles` — #2523's session_start list (index.ts:2252): " +
-			"up to 1024 concurrent `fs.stat` with no wall bound. On a " +
-			"9p/slow filesystem (#462 measured 1.3ms per stat) that is " +
-			"seconds of unbounded startup.",
-		owner: "#2523 slice 2",
-	},
-	"index.ts#4846f0dd~4bafc6ce": {
-		family: "hook-await",
-		site: "tool_result_read_only",
-		reason:
-			"THE read-only offender #2523 AC5 names (index.ts:2381 in the " +
-			"issue's tree): `loadBootstrapClients()` is awaited for EVERY " +
-			"tool result — Read/Grep/Glob/Bash — with no timeout and no " +
-			"signal, before the mutation gate in runtime-tool-result.ts. " +
-			"AC5's red-first test is at 500ms.",
-		owner: "#2523 slice 2",
-	},
-	"index.ts#eb6fa337~da853dbd": {
-		family: "hook-await",
-		site: "tool_result_edit",
-		reason:
-			"`handleToolResult` itself: the whole tool_result body under " +
-			"one await. Slice 2 applies the split budget (500ms read-only / " +
-			"10000ms edit) at the registered handler, after the mutation " +
-			"classification decides which applies.",
+			"Slash-command body (`/lens-*`): the user typed the command and " +
+			"is waiting for its answer, so no hook budget applies. Flagged " +
+			"only because the await scan covers whole files rather than " +
+			"walking reachability.",
 		owner: "#2523 slice 2",
 	},
 	"index.ts#38efb539~455b59f1": {
@@ -1670,24 +1580,53 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"enforces it today.",
 		owner: "#2523 slice 2",
 	},
-	"index.ts#c70fadbc~59511e16": {
+	"index.ts#4846f0dd~0f433171": {
 		family: "hook-await",
-		site: "agent_settled",
+		site: "turn_end",
 		reason:
-			"`runDeferredMutationDrain`, called from `onAgentSettled` " +
-			"(index.ts:3138). Its `getAutofixClients` closure is the " +
-			"`loadBootstrapClients()` #2523 names under agent_settled; " +
-			"runtime-agent-end.ts:347 is the consumer.",
+			"`loadBootstrapClients()` on turn_end — the same analyzer " +
+			"bootstrap the read-only tool_result path awaits, with the same " +
+			"absence of a timeout and a signal.",
 		owner: "#2523 slice 2",
 	},
-	"index.ts#2b868994~aa492d94": {
+	"index.ts#4846f0dd~4bafc6ce": {
+		family: "hook-await",
+		site: "tool_result_read_only",
+		reason:
+			"THE read-only offender #2523 AC5 names (index.ts:2381 in the " +
+			"issue's tree): `loadBootstrapClients()` is awaited for EVERY " +
+			"tool result — Read/Grep/Glob/Bash — with no timeout and no " +
+			"signal, before the mutation gate in runtime-tool-result.ts. " +
+			"AC5's red-first test is at 500ms.",
+		owner: "#2523 slice 2",
+	},
+	"index.ts#51210408~9af17d2e": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"Slash-command body (`/lens-*`): the user typed the command and " +
+			"is waiting for its answer, so no hook budget applies. Flagged " +
+			"only because the await scan covers whole files rather than " +
+			"walking reachability.",
+		owner: "#2523 slice 2",
+	},
+	"index.ts#652343ba~0f4cd6ac": {
 		family: "hook-await",
 		site: "agent_settled",
 		reason:
-			"`runDeferredMutationDrain`, called from `onAgentSettled` " +
-			"(index.ts:3138). Its `getAutofixClients` closure is the " +
-			"`loadBootstrapClients()` #2523 names under agent_settled; " +
-			"runtime-agent-end.ts:347 is the consumer.",
+			"`onAgentSettled` awaits its three phases in sequence with no " +
+			"aggregate bound; the 10000ms budget is a TOTAL, not a " +
+			"per-phase allowance.",
+		owner: "#2523 slice 2",
+	},
+	"index.ts#65b51dab~a327124f": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"Slash-command body (`/lens-*`): the user typed the command and " +
+			"is waiting for its answer, so no hook budget applies. Flagged " +
+			"only because the await scan covers whole files rather than " +
+			"walking reachability.",
 		owner: "#2523 slice 2",
 	},
 	"index.ts#69dd02da~0e26f7e0": {
@@ -1708,13 +1647,70 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"3000ms turn_end budget.",
 		owner: "#2523 slice 2",
 	},
-	"index.ts#4846f0dd~0f433171": {
+	"index.ts#889073a2~ebe0e096": {
 		family: "hook-await",
-		site: "turn_end",
+		site: "session_start",
 		reason:
-			"`loadBootstrapClients()` on turn_end — the same analyzer " +
-			"bootstrap the read-only tool_result path awaits, with the same " +
-			"absence of a timeout and a signal.",
+			"Installer `ensureTool` for a managed tool during " +
+			"session_start. The spawn has a leaf timeout; the dynamic " +
+			"module load and resolution above it have none.",
+		owner: "#2523 slice 2",
+	},
+	"index.ts#a5c3de37~231f1f06": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"Slash-command body (`/lens-*`): the user typed the command and " +
+			"is waiting for its answer, so no hook budget applies. Flagged " +
+			"only because the await scan covers whole files rather than " +
+			"walking reachability.",
+		owner: "#2523 slice 2",
+	},
+	"index.ts#c70fadbc~59511e16": {
+		family: "hook-await",
+		site: "agent_settled",
+		reason:
+			"`runDeferredMutationDrain`, called from `onAgentSettled` " +
+			"(index.ts:3138). Its `getAutofixClients` closure is the " +
+			"`loadBootstrapClients()` #2523 names under agent_settled; " +
+			"runtime-agent-end.ts:347 is the consumer.",
+		owner: "#2523 slice 2",
+	},
+	"index.ts#cdc1de9a~0e4e5946": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"`handleSessionStart` itself: the entire session_start body " +
+			"under one await. Slice 2 bounds it at the registered handler " +
+			"with the 5000ms budget; wrapping it here as well would " +
+			"double-bound the same work.",
+		owner: "#2523 slice 2",
+	},
+	"index.ts#d628f09d~02fe26af": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"Slash-command body (`/lens-*`): the user typed the command and " +
+			"is waiting for its answer, so no hook budget applies. Flagged " +
+			"only because the await scan covers whole files rather than " +
+			"walking reachability.",
+		owner: "#2523 slice 2",
+	},
+	"index.ts#dd06eafe~0055eaad": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"`dropStaleFiles` — #2523's session_start list (index.ts:2252): " +
+			"up to 1024 concurrent `fs.stat` with no wall bound. On a " +
+			"9p/slow filesystem (#462 measured 1.3ms per stat) that is " +
+			"seconds of unbounded startup.",
+		owner: "#2523 slice 2",
+	},
+	"index.ts#e3e3db09~8a678173": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"`loadSessionState` — #2523's session_start list " + "(index.ts:2245).",
 		owner: "#2523 slice 2",
 	},
 	"index.ts#e40e5ae4~44b2f503": {
@@ -1726,253 +1722,36 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"budget. Slice 2 bounds it at the registered handler.",
 		owner: "#2523 slice 2",
 	},
-	"index.ts#0aa50b6e~d0186439": {
+	"index.ts#ea09dcdf~609209be": {
 		family: "hook-await",
-		site: "agent_settled",
+		site: "off-hook",
 		reason:
-			"`onAgentSettled` awaits its three phases in sequence with no " +
-			"aggregate bound; the 10000ms budget is a TOTAL, not a " +
-			"per-phase allowance.",
+			"Slash-command body (`/lens-*`): the user typed the command and " +
+			"is waiting for its answer, so no hook budget applies. Flagged " +
+			"only because the await scan covers whole files rather than " +
+			"walking reachability.",
 		owner: "#2523 slice 2",
 	},
-	"index.ts#2c2d49c9~adf2e1af": {
+	"index.ts#eb6fa337~da853dbd": {
 		family: "hook-await",
-		site: "agent_settled",
+		site: "tool_result_edit",
 		reason:
-			"`onAgentSettled` awaits its three phases in sequence with no " +
-			"aggregate bound; the 10000ms budget is a TOTAL, not a " +
-			"per-phase allowance.",
+			"`handleToolResult` itself: the whole tool_result body under " +
+			"one await. Slice 2 applies the split budget (500ms read-only / " +
+			"10000ms edit) at the registered handler, after the mutation " +
+			"classification decides which applies.",
 		owner: "#2523 slice 2",
 	},
-	"index.ts#652343ba~0f4cd6ac": {
-		family: "hook-await",
-		site: "agent_settled",
-		reason:
-			"`onAgentSettled` awaits its three phases in sequence with no " +
-			"aggregate bound; the 10000ms budget is a TOTAL, not a " +
-			"per-phase allowance.",
-		owner: "#2523 slice 2",
-	},
-	"mcp/server.ts#ensureReady:9d37dcc9~2d2d543a": {
+	// #2518 re-keyed this occurrence: the neighbourhood suffix hashes the
+	// lines around the await, and the memo check above it became a
+	// `shouldInitializeSessionRoot` call. Same await, same reason, new key.
+	"index.ts#ensureLSPConfigInitialized:a10dd3b9~ad96a95f": {
 		family: "hook-await",
 		site: "session_start",
 		reason:
-			"`ensureLspConfig` inside `ensureReady`, the MCP server's lazy " +
-			"init. Reached from the session_start and turn_end IPC entries " +
-			"as well as from every tool request (AC8).",
-		owner: "#2523 slice 2",
-	},
-	"mcp/server.ts#startIpcServer:69da6a7d~346d0967": {
-		family: "hook-await",
-		site: "turn_end",
-		reason:
-			"MCP IPC socket handler: `ensureReady` plus `runTurnEndForIpc` " +
-			"per inbound turn-end request. This is the MCP mirror of pi's " +
-			"turn_end hook (AC8) and carries the same 3000ms contract.",
-		owner: "#2523 slice 2",
-	},
-	"mcp/server.ts#startIpcServer:8fc63658~fa9af389": {
-		family: "hook-await",
-		site: "turn_end",
-		reason:
-			"MCP IPC socket handler: `ensureReady` plus `runTurnEndForIpc` " +
-			"per inbound turn-end request. This is the MCP mirror of pi's " +
-			"turn_end hook (AC8) and carries the same 3000ms contract.",
-		owner: "#2523 slice 2",
-	},
-	"mcp/server.ts#startIpcServer:3c5e37d1~30036a6f": {
-		family: "hook-await",
-		site: "turn_end",
-		reason:
-			"MCP IPC socket handler: `ensureReady` plus `runTurnEndForIpc` " +
-			"per inbound turn-end request. This is the MCP mirror of pi's " +
-			"turn_end hook (AC8) and carries the same 3000ms contract.",
-		owner: "#2523 slice 2",
-	},
-	"mcp/server.ts#callTool:355aebb4~f9eb7744": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
-			"pilens_* tool for an answer and is waiting for it. No pi hook " +
-			"is involved, so no hook budget applies; the await scan covers " +
-			"whole files rather than walking reachability.",
-		owner: "#2523 slice 2",
-	},
-	"mcp/server.ts#callTool:d0096ea8~399bce43": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
-			"pilens_* tool for an answer and is waiting for it. No pi hook " +
-			"is involved, so no hook budget applies; the await scan covers " +
-			"whole files rather than walking reachability.",
-		owner: "#2523 slice 2",
-	},
-	"mcp/server.ts#callTool:d6342815~dae8ad93": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
-			"pilens_* tool for an answer and is waiting for it. No pi hook " +
-			"is involved, so no hook budget applies; the await scan covers " +
-			"whole files rather than walking reachability.",
-		owner: "#2523 slice 2",
-	},
-	"mcp/server.ts#callTool:b7d6cff5~6e3e2098": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
-			"pilens_* tool for an answer and is waiting for it. No pi hook " +
-			"is involved, so no hook budget applies; the await scan covers " +
-			"whole files rather than walking reachability.",
-		owner: "#2523 slice 2",
-	},
-	"mcp/server.ts#callTool:d0096ea8~47b872f7": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
-			"pilens_* tool for an answer and is waiting for it. No pi hook " +
-			"is involved, so no hook budget applies; the await scan covers " +
-			"whole files rather than walking reachability.",
-		owner: "#2523 slice 2",
-	},
-	"mcp/server.ts#callTool:b81286d9~e49fada2": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
-			"pilens_* tool for an answer and is waiting for it. No pi hook " +
-			"is involved, so no hook budget applies; the await scan covers " +
-			"whole files rather than walking reachability.",
-		owner: "#2523 slice 2",
-	},
-	"mcp/server.ts#callTool:0be1c5d6~7e47546e": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
-			"pilens_* tool for an answer and is waiting for it. No pi hook " +
-			"is involved, so no hook budget applies; the await scan covers " +
-			"whole files rather than walking reachability.",
-		owner: "#2523 slice 2",
-	},
-	"mcp/server.ts#callTool:6d8e2d74~7661145d": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
-			"pilens_* tool for an answer and is waiting for it. No pi hook " +
-			"is involved, so no hook budget applies; the await scan covers " +
-			"whole files rather than walking reachability.",
-		owner: "#2523 slice 2",
-	},
-	"mcp/server.ts#callTool:635e0ace~d3f9050a": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
-			"pilens_* tool for an answer and is waiting for it. No pi hook " +
-			"is involved, so no hook budget applies; the await scan covers " +
-			"whole files rather than walking reachability.",
-		owner: "#2523 slice 2",
-	},
-	"mcp/server.ts#callTool:5c4ca6a0~9ac0a7dd": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
-			"pilens_* tool for an answer and is waiting for it. No pi hook " +
-			"is involved, so no hook budget applies; the await scan covers " +
-			"whole files rather than walking reachability.",
-		owner: "#2523 slice 2",
-	},
-	"mcp/server.ts#d7e00d53~d131daed": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
-			"pilens_* tool for an answer and is waiting for it. No pi hook " +
-			"is involved, so no hook budget applies; the await scan covers " +
-			"whole files rather than walking reachability.",
-		owner: "#2523 slice 2",
-	},
-	"mcp/server.ts#d5bcaa8e~be1a6327": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
-			"pilens_* tool for an answer and is waiting for it. No pi hook " +
-			"is involved, so no hook budget applies; the await scan covers " +
-			"whole files rather than walking reachability.",
-		owner: "#2523 slice 2",
-	},
-	"mcp/server.ts#97fa6c9a~d4940394": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
-			"pilens_* tool for an answer and is waiting for it. No pi hook " +
-			"is involved, so no hook budget applies; the await scan covers " +
-			"whole files rather than walking reachability.",
-		owner: "#2523 slice 2",
-	},
-	"mcp/server.ts#d42985f0~9545d834": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
-			"pilens_* tool for an answer and is waiting for it. No pi hook " +
-			"is involved, so no hook budget applies; the await scan covers " +
-			"whole files rather than walking reachability.",
-		owner: "#2523 slice 2",
-	},
-	"mcp/server.ts#d0096ea8~ba799d41": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
-			"pilens_* tool for an answer and is waiting for it. No pi hook " +
-			"is involved, so no hook budget applies; the await scan covers " +
-			"whole files rather than walking reachability.",
-		owner: "#2523 slice 2",
-	},
-	"mcp/server.ts#c56f3208~1b9a2dec": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
-			"pilens_* tool for an answer and is waiting for it. No pi hook " +
-			"is involved, so no hook budget applies; the await scan covers " +
-			"whole files rather than walking reachability.",
-		owner: "#2523 slice 2",
-	},
-	"mcp/server.ts#d0096ea8~cf386b8b": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"`pilens_session_start` tool request: the MCP mirror of the " +
-			"session_start hook (AC8), unbounded exactly like its index.ts " +
-			"twin.",
-		owner: "#2523 slice 2",
-	},
-	"mcp/server.ts#8b574bae~7f0e398e": {
-		family: "hook-await",
-		site: "session_start",
-		reason:
-			"`pilens_session_start` tool request: the MCP mirror of the " +
-			"session_start hook (AC8), unbounded exactly like its index.ts " +
-			"twin.",
-		owner: "#2523 slice 2",
-	},
-	"mcp/server.ts#d0096ea8~6d4f5f60": {
-		family: "hook-await",
-		site: "turn_end",
-		reason:
-			"`pilens_turn_end` tool request: the MCP mirror of the turn_end " +
-			"hook (AC8), unbounded exactly like its index.ts twin.",
+			"`initLSPConfig` inside `ensureLSPConfigInitialized`, reached " +
+			"from session_start (index.ts:2131) and from tool_call. #2523 " +
+			"names it in the session_start list of unbounded awaits.",
 		owner: "#2523 slice 2",
 	},
 	"mcp/server.ts#09e7e2f1~960fbcc1": {
@@ -1992,15 +1771,6 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"request; no pi hook budget applies.",
 		owner: "#2523 slice 2",
 	},
-	"mcp/server.ts#d0096ea8~05547e1a": {
-		family: "hook-await",
-		site: "off-hook",
-		reason:
-			"MCP tool-request handler (LSP navigation/diagnostics) and the " +
-			"request dispatcher itself. An agent is waiting on its own " +
-			"request; no pi hook budget applies.",
-		owner: "#2523 slice 2",
-	},
 	"mcp/server.ts#73e6f55a~c0f0423f": {
 		family: "hook-await",
 		site: "off-hook",
@@ -2010,6 +1780,210 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"request; no pi hook budget applies.",
 		owner: "#2523 slice 2",
 	},
+	"mcp/server.ts#8b574bae~7f0e398e": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"`pilens_session_start` tool request: the MCP mirror of the " +
+			"session_start hook (AC8), unbounded exactly like its index.ts " +
+			"twin.",
+		owner: "#2523 slice 2",
+	},
+	"mcp/server.ts#97fa6c9a~d4940394": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
+			"pilens_* tool for an answer and is waiting for it. No pi hook " +
+			"is involved, so no hook budget applies; the await scan covers " +
+			"whole files rather than walking reachability.",
+		owner: "#2523 slice 2",
+	},
+	"mcp/server.ts#c56f3208~1b9a2dec": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
+			"pilens_* tool for an answer and is waiting for it. No pi hook " +
+			"is involved, so no hook budget applies; the await scan covers " +
+			"whole files rather than walking reachability.",
+		owner: "#2523 slice 2",
+	},
+	"mcp/server.ts#callTool:0be1c5d6~7e47546e": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
+			"pilens_* tool for an answer and is waiting for it. No pi hook " +
+			"is involved, so no hook budget applies; the await scan covers " +
+			"whole files rather than walking reachability.",
+		owner: "#2523 slice 2",
+	},
+	"mcp/server.ts#callTool:355aebb4~f9eb7744": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
+			"pilens_* tool for an answer and is waiting for it. No pi hook " +
+			"is involved, so no hook budget applies; the await scan covers " +
+			"whole files rather than walking reachability.",
+		owner: "#2523 slice 2",
+	},
+	"mcp/server.ts#callTool:5c4ca6a0~9ac0a7dd": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
+			"pilens_* tool for an answer and is waiting for it. No pi hook " +
+			"is involved, so no hook budget applies; the await scan covers " +
+			"whole files rather than walking reachability.",
+		owner: "#2523 slice 2",
+	},
+	"mcp/server.ts#callTool:635e0ace~d3f9050a": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
+			"pilens_* tool for an answer and is waiting for it. No pi hook " +
+			"is involved, so no hook budget applies; the await scan covers " +
+			"whole files rather than walking reachability.",
+		owner: "#2523 slice 2",
+	},
+	"mcp/server.ts#callTool:6d8e2d74~7661145d": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
+			"pilens_* tool for an answer and is waiting for it. No pi hook " +
+			"is involved, so no hook budget applies; the await scan covers " +
+			"whole files rather than walking reachability.",
+		owner: "#2523 slice 2",
+	},
+	"mcp/server.ts#callTool:b7d6cff5~6e3e2098": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
+			"pilens_* tool for an answer and is waiting for it. No pi hook " +
+			"is involved, so no hook budget applies; the await scan covers " +
+			"whole files rather than walking reachability.",
+		owner: "#2523 slice 2",
+	},
+	"mcp/server.ts#callTool:b81286d9~e49fada2": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
+			"pilens_* tool for an answer and is waiting for it. No pi hook " +
+			"is involved, so no hook budget applies; the await scan covers " +
+			"whole files rather than walking reachability.",
+		owner: "#2523 slice 2",
+	},
+	"mcp/server.ts#callTool:d0096ea8~399bce43": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
+			"pilens_* tool for an answer and is waiting for it. No pi hook " +
+			"is involved, so no hook budget applies; the await scan covers " +
+			"whole files rather than walking reachability.",
+		owner: "#2523 slice 2",
+	},
+	"mcp/server.ts#callTool:d0096ea8~47b872f7": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
+			"pilens_* tool for an answer and is waiting for it. No pi hook " +
+			"is involved, so no hook budget applies; the await scan covers " +
+			"whole files rather than walking reachability.",
+		owner: "#2523 slice 2",
+	},
+	"mcp/server.ts#callTool:d6342815~dae8ad93": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
+			"pilens_* tool for an answer and is waiting for it. No pi hook " +
+			"is involved, so no hook budget applies; the await scan covers " +
+			"whole files rather than walking reachability.",
+		owner: "#2523 slice 2",
+	},
+	"mcp/server.ts#d0096ea8~05547e1a": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"MCP tool-request handler (LSP navigation/diagnostics) and the " +
+			"request dispatcher itself. An agent is waiting on its own " +
+			"request; no pi hook budget applies.",
+		owner: "#2523 slice 2",
+	},
+	"mcp/server.ts#d0096ea8~6d4f5f60": {
+		family: "hook-await",
+		site: "turn_end",
+		reason:
+			"`pilens_turn_end` tool request: the MCP mirror of the turn_end " +
+			"hook (AC8), unbounded exactly like its index.ts twin.",
+		owner: "#2523 slice 2",
+	},
+	"mcp/server.ts#d0096ea8~ba799d41": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
+			"pilens_* tool for an answer and is waiting for it. No pi hook " +
+			"is involved, so no hook budget applies; the await scan covers " +
+			"whole files rather than walking reachability.",
+		owner: "#2523 slice 2",
+	},
+	"mcp/server.ts#d0096ea8~cf386b8b": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"`pilens_session_start` tool request: the MCP mirror of the " +
+			"session_start hook (AC8), unbounded exactly like its index.ts " +
+			"twin.",
+		owner: "#2523 slice 2",
+	},
+	"mcp/server.ts#d42985f0~9545d834": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
+			"pilens_* tool for an answer and is waiting for it. No pi hook " +
+			"is involved, so no hook budget applies; the await scan covers " +
+			"whole files rather than walking reachability.",
+		owner: "#2523 slice 2",
+	},
+	"mcp/server.ts#d5bcaa8e~be1a6327": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
+			"pilens_* tool for an answer and is waiting for it. No pi hook " +
+			"is involved, so no hook budget applies; the await scan covers " +
+			"whole files rather than walking reachability.",
+		owner: "#2523 slice 2",
+	},
+	"mcp/server.ts#d7e00d53~d131daed": {
+		family: "hook-await",
+		site: "off-hook",
+		reason:
+			"MCP tool-REQUEST handler (`callTool`): an agent asked a " +
+			"pilens_* tool for an answer and is waiting for it. No pi hook " +
+			"is involved, so no hook budget applies; the await scan covers " +
+			"whole files rather than walking reachability.",
+		owner: "#2523 slice 2",
+	},
+	"mcp/server.ts#ensureReady:9d37dcc9~2d2d543a": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"`ensureLspConfig` inside `ensureReady`, the MCP server's lazy " +
+			"init. Reached from the session_start and turn_end IPC entries " +
+			"as well as from every tool request (AC8).",
+		owner: "#2523 slice 2",
+	},
 	"mcp/server.ts#handleRequest:3543a7ce~154cbab1": {
 		family: "hook-await",
 		site: "off-hook",
@@ -2017,6 +1991,33 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 			"MCP tool-request handler (LSP navigation/diagnostics) and the " +
 			"request dispatcher itself. An agent is waiting on its own " +
 			"request; no pi hook budget applies.",
+		owner: "#2523 slice 2",
+	},
+	"mcp/server.ts#startIpcServer:3c5e37d1~30036a6f": {
+		family: "hook-await",
+		site: "turn_end",
+		reason:
+			"MCP IPC socket handler: `ensureReady` plus `runTurnEndForIpc` " +
+			"per inbound turn-end request. This is the MCP mirror of pi's " +
+			"turn_end hook (AC8) and carries the same 3000ms contract.",
+		owner: "#2523 slice 2",
+	},
+	"mcp/server.ts#startIpcServer:69da6a7d~346d0967": {
+		family: "hook-await",
+		site: "turn_end",
+		reason:
+			"MCP IPC socket handler: `ensureReady` plus `runTurnEndForIpc` " +
+			"per inbound turn-end request. This is the MCP mirror of pi's " +
+			"turn_end hook (AC8) and carries the same 3000ms contract.",
+		owner: "#2523 slice 2",
+	},
+	"mcp/server.ts#startIpcServer:8fc63658~fa9af389": {
+		family: "hook-await",
+		site: "turn_end",
+		reason:
+			"MCP IPC socket handler: `ensureReady` plus `runTurnEndForIpc` " +
+			"per inbound turn-end request. This is the MCP mirror of pi's " +
+			"turn_end hook (AC8) and carries the same 3000ms contract.",
 		owner: "#2523 slice 2",
 	},
 	"race:clients/dispatch/dispatcher.ts#runRunner:5dbd3dcf~c580947c": {
@@ -2284,11 +2285,6 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
  * rather than silently inherited.
  */
 const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
-	"call:clients/installer/managed-tool-refresh.ts#executeManagedToolRefresh:8d9498e9~773eca34":
-		"`undefined` is intentional: the unref'd timer runs after session_start " +
-		"returns, so no live turn signal belongs to this background refresh. The " +
-		"session_start wall budget still bounds the best-effort alias stamp, and " +
-		"the required signal field makes this absence an explicit decision.",
 	"call:clients/actionable-warnings.ts#boundedLspCall:2b57f8b9~9137fb1a":
 		"`LspEnrichmentDeps.signal`. ALWAYS live on the deferred loop (built " +
 		"from the turn signal combined with the deferral controller's). Optional " +
@@ -2303,6 +2299,17 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"cancelled every startup scan with no retry). Two live bounds even then, " +
 		"because this call supplies the seam's own `bootstrapShutdownController` " +
 		"as `shutdownSignal`. The tool_call demand passes the ambient signal.",
+	"call:clients/installer/managed-tool-refresh.ts#executeManagedToolRefresh:8d9498e9~773eca34":
+		"`undefined` is intentional: the unref'd timer runs after session_start " +
+		"returns, so no live turn signal belongs to this background refresh. The " +
+		"session_start wall budget still bounds the best-effort alias stamp, and " +
+		"the required signal field makes this absence an explicit decision.",
+	"call:clients/lsp/index.ts#55b587e6~3997fa51":
+		"`signal` parameter, defaulting to `getAmbientAbortSignal()`. Caller-supplied " +
+		"on the pre-dispatch resync path (passing the turn's ambient signal so Escape mid-turn " +
+		"abandons auxiliary warmup without gating the edit hook) and defaulted to the " +
+		"ambient signal on the touchFile with-auxiliary path. LSP_SPAWN_BUDGET_MS wall-clock " +
+		"bound is live per server.",
 	"call:clients/observed-mutation.ts#withBounds:6ec6083f~67028b50":
 		"`withBounds(work, ms, signal, site)`'s third parameter, threaded from " +
 		"`ArmObservationArgs.signal` / `SettledSweepArgs.signal`. Optional in the " +
@@ -2313,12 +2320,6 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"The AMBIENT turn abort signal, set for the whole tool_result path and " +
 		"absent only in a bare unit harness. PI_LENS_LSP_SYNC_BUDGET_MS is the " +
 		"bound that is always live.",
-	"call:clients/lsp/index.ts#55b587e6~3997fa51":
-		"`signal` parameter, defaulting to `getAmbientAbortSignal()`. Caller-supplied " +
-		"on the pre-dispatch resync path (passing the turn's ambient signal so Escape mid-turn " +
-		"abandons auxiliary warmup without gating the edit hook) and defaulted to the " +
-		"ambient signal on the touchFile with-auxiliary path. LSP_SPAWN_BUDGET_MS wall-clock " +
-		"bound is live per server.",
 };
 
 /** `auditRegistry` takes flat strings; the structure is folded in here. */
@@ -2375,6 +2376,14 @@ function measureHelperModules(): Record<string, number> {
 }
 
 describe("#2523 AC1 every hook-path await is bounded, and no new hand-rolled race", () => {
+	it("keeps hook admission registries sorted", () => {
+		// #2671 recurrence: an unsorted admission is a merge-conflict magnet.
+		expect(() => assertSortedKeys("fixture", ["b", "a"])).toThrow(
+			"entries must be sorted",
+		);
+		assertSortedKeys("EXEMPT_SITES", Object.keys(EXEMPT_SITES));
+		assertSortedKeys("BOUNDED_CALL_SITES", Object.keys(BOUNDED_CALL_SITES));
+	});
 	it("scans both file groups and finds both families (a dead scan is not a clean one)", () => {
 		// Two floors, two failure modes (#1755 review F4): a broken walk and a
 		// broken detector must not share a message.

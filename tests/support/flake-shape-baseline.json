@@ -74,7 +74,6 @@
 		"support/git-fixture-env.test.ts": 9
 	},
 	"elapsed-time-assertion": {
-		"scripts/guard-bash-hook.test.ts": 1,
 		"clients/actionable-warnings-bounds.test.ts": 1,
 		"clients/bounded-hook-await.test.ts": 3,
 		"clients/cascade-turn-merge.test.ts": 1,
@@ -93,18 +92,19 @@
 		"clients/pipeline-lsp-sync.test.ts": 5,
 		"clients/project-diagnostics/fresh-fetch.test.ts": 2,
 		"clients/read-expansion-enrichment.test.ts": 1,
+		"clients/read-guard-glob-nonbacktracking.test.ts": 2,
 		"clients/redact/secrets.test.ts": 1,
 		"clients/review-graph.service.test.ts": 1,
 		"clients/runtime-session-retro-hydrate-warmup-race.test.ts": 1,
 		"clients/runtime-session-sequence-read-budget.test.ts": 1,
 		"clients/word-index-async-build.test.ts": 1,
 		"clients/workspace-glob-nonbacktracking-budget.test.ts": 2,
+		"scripts/guard-bash-hook.test.ts": 1,
 		"scripts/playground-verify-rule-bounded-wait.test.ts": 2,
 		"scripts/prune-agent-worktrees.test.ts": 1,
 		"scripts/suite-lock.test.ts": 1,
 		"support/fault-injection.test.ts": 1,
-		"tools/lsp-diagnostics.test.ts": 1,
-		"clients/read-guard-glob-nonbacktracking.test.ts": 2
+		"tools/lsp-diagnostics.test.ts": 1
 	},
 	"raw-timer-wait": {
 		"clients/actionable-warnings-bounds.test.ts": 2,

@@ -69,6 +69,7 @@ import {
 	scanRealProcessSpawn,
 	scanUngovernedWaitFor,
 } from "../support/flake-shape-scan.js";
+import { assertSortedKeys } from "../support/sweep-kit.js";
 
 // ── The baseline ─────────────────────────────────────────────────────────
 
@@ -89,38 +90,12 @@ const FLAKE_SHAPE_BASELINE: Baseline = JSON.parse(
 const ADMITTED_AFTER_BASELINE: Readonly<
 	Record<string, { detector: DetectorName; reason: string }>
 > = {
-	// 2026-09-07 (#2703 review r1): an unhandled derived-promise rejection is
-	// only observable through Node's `unhandledRejection` event, which fires
-	// on a real macrotask; the file drains one real `setImmediate` tick.
-	"raw-timer-wait:clients/lsp/push-wait-settle-rejection.test.ts": {
-		detector: "raw-timer-wait",
+	// 2026-09-08 (#2622): the defect is wall-clock only — 2^N regex
+	// backtracking in both glob compilers; a fake clock measures nothing.
+	"elapsed-time-assertion:clients/read-guard-glob-nonbacktracking.test.ts": {
+		detector: "elapsed-time-assertion",
 		reason:
-			"unhandledRejection is delivered on a real macrotask; one real setImmediate drain, assertion on the captured list",
-	},
-	// 2026-09-03: the published-manifest guard must run the real `npm pack`
-	// (prepack/postpack are npm lifecycle hooks); header on the file states why.
-	"real-process-spawn:packaging-pack-manifest.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"observes the real npm pack lifecycle (prepack/postpack); no in-process double is faithful",
-	},
-	// 2026-09-06 (#2586 review F1): proves the actual delimiter
-	// supply-host-provided-deps.mjs prints in its own stdout bytes; an
-	// in-process double would just re-assert the test author's assumption.
-	"real-process-spawn:scripts/supply-host-provided-deps.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"observes the script's real stdout bytes (newline- vs. space-delimited); no in-process double is faithful",
-	},
-	// 2026-09-07 (#2700): the gating/advisory subset test resolves oxlint's
-	// REAL `--print-config` for both npm scripts (never a hand-copied rule
-	// list) so a change to either script's flags is caught automatically; an
-	// in-process double would just restate the test author's assumption
-	// about which rules each tier enables.
-	"real-process-spawn:scripts/lint-js.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"resolves oxlint's real --print-config for lint:js and lint:js:advisory; no in-process double is faithful",
+			"the defect is wall-clock only (2^N regex backtracking); a fake clock measures nothing",
 	},
 	// 2026-09-06 (#2603, was #2591 review round 2, F1): the defect is 2^N regex
 	// backtracking through detectPythonEnvironment — the ANSWER was always
@@ -132,102 +107,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"the defect is wall-clock only (2^N globstar backtracking); a fake clock measures nothing",
 		},
-	// 2026-09-08 (#2622): the defect is wall-clock only — 2^N regex
-	// backtracking in both glob compilers; a fake clock measures nothing.
-	"elapsed-time-assertion:clients/read-guard-glob-nonbacktracking.test.ts": {
-		detector: "elapsed-time-assertion",
+	// 2026-09-07 (#2703 review r1): an unhandled derived-promise rejection is
+	// only observable through Node's `unhandledRejection` event, which fires
+	// on a real macrotask; the file drains one real `setImmediate` tick.
+	"raw-timer-wait:clients/lsp/push-wait-settle-rejection.test.ts": {
+		detector: "raw-timer-wait",
 		reason:
-			"the defect is wall-clock only (2^N regex backtracking); a fake clock measures nothing",
-	},
-	// 2026-09-06 (#2619 review F1, then N1/N3 in round 3): three real spawns,
-	// each pinning something no in-process double can reach. (1) a `node -e`
-	// child reports what IT resolved for HOME/PI_LENS_INSTALL_LOG — `os.homedir()`
-	// in the test process can only ever report the ambient home. (2) `npm pack`
-	// of a two-line fixture package whose `prepare` writes through
-	// `os.homedir()`: the runner's defect was npm IGNORING the env it was
-	// handed, which an assertion on the env object cannot see. (3) the real
-	// release-qa CLI run out of a throwaway dirty tree, because main()'s call to
-	// the dirty-checkout refusal — as opposed to the pure refusal itself — is
-	// only reachable through the process entry point.
-	// 2026-09-06 (#2507): the defect IS a child process's own exit decision —
-	// libuv finding no referenced handle mid `lsp_diagnostics` and Node exiting
-	// 0. A process cannot watch its own loop decide to drain, so the exit code
-	// and stdout of a real headless child are the only faithful observation.
-	"real-process-spawn:clients/lsp/headless-tool-call-keepalive.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"a real child's exit code is the observation; no in-process double can watch an event loop decide to drain",
-	},
-	"real-process-spawn:scripts/release-qa.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"npm ignoring a handed env, a child's own os.homedir(), and main()'s CLI exit code are each unobservable in-process",
-	},
-	// 2026-09-06 (#2369): the fixture-ordering defect (an earlier LSP_FIXTURES
-	// entry registering a foreign session root, declining a later one) lives
-	// in the CLI's own module-load order; only a real child process is the
-	// script under test.
-	"real-process-spawn:scripts/smoke-tools-lsp-fixture-registration.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"the fixture-ordering defect lives in the CLI's own module-load order; no in-process call is the script under test",
-	},
-	// 2026-09-07 (#2613): the CLI's real exit code (2 vs. 4) and its
-	// GITHUB_OUTPUT write are the subject under test; header on the file
-	// states why.
-	"real-process-spawn:scripts/resolve-newest-in-range-host.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"the CLI's real exit code (2 vs. 4) and GITHUB_OUTPUT side effect are unobservable from an in-process stub",
-	},
-	// 2026-09-07 (#2613 review S2/T3): --dry-run env-reading/report-building
-	// wiring is the subject; the real `gh` calls stay untested, same
-	// documented exception as the sibling scripts/notify-clean-signal-drift.mjs.
-	"real-process-spawn:scripts/notify-install-smoke-drift.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"the CLI's env-to-report wiring in --dry-run mode is unobservable from an in-process stub",
-	},
-	// 2026-09-07 (#2613 review S3a): the retry wrapper's real exit code and
-	// distinct ::error::infra: label on exhaustion are the subject.
-	"real-process-spawn:scripts/npm-retry.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"the CLI's real exit code and distinct infra label on exhaustion are unobservable from an in-process stub",
-	},
-	// 2026-09-07 (#2723): the second, independent tool-smoke red-notifier
-	// CLI's --dry-run env-to-report wiring and real (stubbed) `gh`
-	// create/edit/comment/close subcommands are the subject; same documented
-	// exception as its sibling notify-install-smoke-drift.test.ts above.
-	"real-process-spawn:scripts/notify-tool-smoke-red.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"the CLI's env-to-report wiring and real gh subcommand invocations are unobservable from an in-process stub",
-	},
-	// #2698: gitignore/tracked-vs-untracked resolution (git init/add/commit/
-	// ls-files against a throwaway fixture repo) is the exact mechanism
-	// scripts/lib/knip-sibling-purge.mjs depends on and this file tests.
-	"real-process-spawn:scripts/knip-sibling-purge.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"gitignore/tracked-vs-untracked resolution is the mechanism under test; no mock reproduces git's own resolution faithfully",
-	},
-	// 2026-09-07 (#2699): the PreToolUse guard's own stdin/exit-code/stderr
-	// contract is the subject under test; an in-process call to the exported
-	// classify functions cannot see a drift in what Claude Code actually
-	// invokes.
-	"real-process-spawn:scripts/guard-bash-hook.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"the hook's real stdin/exit-code/stderr contract is unobservable from an in-process call to the exported classify functions",
-	},
-	// 2026-09-08 (#2628): the warm's install-log home resolution is the
-	// subject — a child whose env is fully pinned decides where the record
-	// lands, and its own `os.homedir()` fallback is unobservable in-process.
-	"real-process-spawn:scripts/warm-loader-cache.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"the record's landing spot is decided by a child's own env-pinned os.homedir() fallback; unobservable in-process",
+			"unhandledRejection is delivered on a real macrotask; one real setImmediate drain, assertion on the captured list",
 	},
 	"real-process-spawn:clients/biome-config-decorator-metadata.test.ts": {
 		detector: "real-process-spawn",
@@ -269,6 +155,25 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"real binary children write and survive teardown, behavior an in-process installer stub cannot expose",
+	},
+	// 2026-09-06 (#2619 review F1, then N1/N3 in round 3): three real spawns,
+	// each pinning something no in-process double can reach. (1) a `node -e`
+	// child reports what IT resolved for HOME/PI_LENS_INSTALL_LOG — `os.homedir()`
+	// in the test process can only ever report the ambient home. (2) `npm pack`
+	// of a two-line fixture package whose `prepare` writes through
+	// `os.homedir()`: the runner's defect was npm IGNORING the env it was
+	// handed, which an assertion on the env object cannot see. (3) the real
+	// release-qa CLI run out of a throwaway dirty tree, because main()'s call to
+	// the dirty-checkout refusal — as opposed to the pure refusal itself — is
+	// only reachable through the process entry point.
+	// 2026-09-06 (#2507): the defect IS a child process's own exit decision —
+	// libuv finding no referenced handle mid `lsp_diagnostics` and Node exiting
+	// 0. A process cannot watch its own loop decide to drain, so the exit code
+	// and stdout of a real headless child are the only faithful observation.
+	"real-process-spawn:clients/lsp/headless-tool-call-keepalive.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"a real child's exit code is the observation; no in-process double can watch an event loop decide to drain",
 	},
 	"real-process-spawn:clients/metrics-history-stderr.test.ts": {
 		detector: "real-process-spawn",
@@ -320,15 +225,111 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"real git emits control bytes from its index, which a hand-built output cannot certify",
 	},
+	// 2026-09-03: the published-manifest guard must run the real `npm pack`
+	// (prepack/postpack are npm lifecycle hooks); header on the file states why.
+	"real-process-spawn:packaging-pack-manifest.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"observes the real npm pack lifecycle (prepack/postpack); no in-process double is faithful",
+	},
 	"real-process-spawn:scripts/git-fixture-env.test.ts": {
 		detector: "real-process-spawn",
 		reason:
 			"real git children prove the script-side fixture env resolves repository metadata (HEAD, root) from a sanitized process.env",
 	},
+	// 2026-09-07 (#2699): the PreToolUse guard's own stdin/exit-code/stderr
+	// contract is the subject under test; an in-process call to the exported
+	// classify functions cannot see a drift in what Claude Code actually
+	// invokes.
+	"real-process-spawn:scripts/guard-bash-hook.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the hook's real stdin/exit-code/stderr contract is unobservable from an in-process call to the exported classify functions",
+	},
+	// #2698: gitignore/tracked-vs-untracked resolution (git init/add/commit/
+	// ls-files against a throwaway fixture repo) is the exact mechanism
+	// scripts/lib/knip-sibling-purge.mjs depends on and this file tests.
+	"real-process-spawn:scripts/knip-sibling-purge.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"gitignore/tracked-vs-untracked resolution is the mechanism under test; no mock reproduces git's own resolution faithfully",
+	},
+	// 2026-09-07 (#2700): the gating/advisory subset test resolves oxlint's
+	// REAL `--print-config` for both npm scripts (never a hand-copied rule
+	// list) so a change to either script's flags is caught automatically; an
+	// in-process double would just restate the test author's assumption
+	// about which rules each tier enables.
+	"real-process-spawn:scripts/lint-js.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"resolves oxlint's real --print-config for lint:js and lint:js:advisory; no in-process double is faithful",
+	},
+	// 2026-09-07 (#2613 review S2/T3): --dry-run env-reading/report-building
+	// wiring is the subject; the real `gh` calls stay untested, same
+	// documented exception as the sibling scripts/notify-clean-signal-drift.mjs.
+	"real-process-spawn:scripts/notify-install-smoke-drift.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the CLI's env-to-report wiring in --dry-run mode is unobservable from an in-process stub",
+	},
+	// 2026-09-07 (#2723): the second, independent tool-smoke red-notifier
+	// CLI's --dry-run env-to-report wiring and real (stubbed) `gh`
+	// create/edit/comment/close subcommands are the subject; same documented
+	// exception as its sibling notify-install-smoke-drift.test.ts above.
+	"real-process-spawn:scripts/notify-tool-smoke-red.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the CLI's env-to-report wiring and real gh subcommand invocations are unobservable from an in-process stub",
+	},
+	// 2026-09-07 (#2613 review S3a): the retry wrapper's real exit code and
+	// distinct ::error::infra: label on exhaustion are the subject.
+	"real-process-spawn:scripts/npm-retry.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the CLI's real exit code and distinct infra label on exhaustion are unobservable from an in-process stub",
+	},
 	"real-process-spawn:scripts/prune-agent-worktrees.test.ts": {
 		detector: "real-process-spawn",
 		reason:
 			"real git worktree commands own pruning locks and exit status beyond in-process filesystem state",
+	},
+	"real-process-spawn:scripts/release-qa.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"npm ignoring a handed env, a child's own os.homedir(), and main()'s CLI exit code are each unobservable in-process",
+	},
+	// 2026-09-07 (#2613): the CLI's real exit code (2 vs. 4) and its
+	// GITHUB_OUTPUT write are the subject under test; header on the file
+	// states why.
+	"real-process-spawn:scripts/resolve-newest-in-range-host.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the CLI's real exit code (2 vs. 4) and GITHUB_OUTPUT side effect are unobservable from an in-process stub",
+	},
+	// 2026-09-06 (#2369): the fixture-ordering defect (an earlier LSP_FIXTURES
+	// entry registering a foreign session root, declining a later one) lives
+	// in the CLI's own module-load order; only a real child process is the
+	// script under test.
+	"real-process-spawn:scripts/smoke-tools-lsp-fixture-registration.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the fixture-ordering defect lives in the CLI's own module-load order; no in-process call is the script under test",
+	},
+	// 2026-09-06 (#2586 review F1): proves the actual delimiter
+	// supply-host-provided-deps.mjs prints in its own stdout bytes; an
+	// in-process double would just re-assert the test author's assumption.
+	"real-process-spawn:scripts/supply-host-provided-deps.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"observes the script's real stdout bytes (newline- vs. space-delimited); no in-process double is faithful",
+	},
+	// 2026-09-08 (#2628): the warm's install-log home resolution is the
+	// subject — a child whose env is fully pinned decides where the record
+	// lands, and its own `os.homedir()` fallback is unobservable in-process.
+	"real-process-spawn:scripts/warm-loader-cache.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the record's landing spot is decided by a child's own env-pinned os.homedir() fallback; unobservable in-process",
 	},
 	"real-process-spawn:support/fault-injection.test.ts": {
 		detector: "real-process-spawn",
@@ -445,6 +446,23 @@ function describeProblem(p: RatchetProblem): string {
 }
 
 describe("flake-shape ratchet (#2547)", () => {
+	it("keeps every admission map sorted", () => {
+		// #2671 recurrence: an unsorted admission is a merge-conflict magnet.
+		expect(() => assertSortedKeys("fixture", ["b", "a"])).toThrow(
+			"entries must be sorted",
+		);
+		for (const detector of DETECTOR_NAMES) {
+			assertSortedKeys(
+				`flake-shape-baseline:${detector}`,
+				Object.keys(FLAKE_SHAPE_BASELINE[detector]),
+			);
+		}
+		assertSortedKeys(
+			"ADMITTED_AFTER_BASELINE",
+			Object.keys(ADMITTED_AFTER_BASELINE),
+		);
+		assertSortedKeys("wallClockBudgetInclude", wallClockBudgetInclude());
+	});
 	it.each(DETECTOR_NAMES)(
 		"detector %s: no new files, no risen counts vs. the baseline",
 		(detector) => {

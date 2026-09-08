@@ -33,6 +33,7 @@ import {
 	stripSource,
 	callSites,
 	tagPattern,
+	assertSortedKeys,
 } from "./sweep-kit.js";
 
 describe("sweep-kit: callSites", () => {
@@ -1134,5 +1135,21 @@ describe("sweep-kit: assignNearestExclusive primitives", () => {
 		const lines = ["gateFindings(", "", "", "", 'store: "x"'];
 		expect(hasNearbyCallSite(lines, 4, "gateFindings", 3)).toBe(false);
 		expect(hasNearbyCallSite(lines, 4, "gateFindings", 4)).toBe(true);
+	});
+});
+
+describe("assertSortedKeys (#2671)", () => {
+	// Recurrence: review round 1 of PR #2757 — duplicate keys passed the
+	// order check because Object.keys had already collapsed them upstream;
+	// the predicate itself must refuse a duplicate.
+	it("rejects a duplicate key before checking order", () => {
+		expect(() => assertSortedKeys("fixture", ["a", "a"])).toThrow(
+			"entries must be unique",
+		);
+	});
+	it("names the first out-of-order key", () => {
+		expect(() => assertSortedKeys("fixture", ["a", "c", "b"])).toThrow(
+			"first out-of-order key is c",
+		);
 	});
 });
