@@ -6,6 +6,12 @@ Assume the implementation's claims are incomplete. Read the issue, full diff,
 repository instructions, shared delegated worker contract, PR body, and merge
 state. Keep the review read-only.
 
+Diff the change from its merge base (`git diff origin/master...HEAD`, or
+`git diff $(git merge-base origin/master HEAD)..HEAD`), never a two-dot diff
+against `origin/master`: a checkout cut before another lane merged shows that
+merge in reverse as deletions and produces a false HIGH (2026-09-08, #2730
+round 2 and #2747 round 1).
+
 Reproduce the build and targeted tests. Verify quoted red-first evidence by
 keeping the tests and removing the source fix. Mutate every new guard and demand
 a red test. Probe inversions, concurrency, input channels, trust boundaries,
