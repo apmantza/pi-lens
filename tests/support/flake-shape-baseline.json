@@ -76,6 +76,7 @@
 		"support/git-fixture-env.test.ts": 9
 	},
 	"elapsed-time-assertion": {
+		"scripts/guard-bash-hook.test.ts": 1,
 		"clients/actionable-warnings-bounds.test.ts": 1,
 		"clients/bounded-hook-await.test.ts": 3,
 		"clients/cascade-turn-merge.test.ts": 1,

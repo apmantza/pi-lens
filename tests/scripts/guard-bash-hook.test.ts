@@ -2,7 +2,8 @@
 // stdin/exit-code/stderr contract (what Claude Code's PreToolUse dispatch
 // actually invokes); an in-process call to the exported classify functions
 // cannot see a drift in that contract. Admitted in vitest.config.ts's
-// wallClockBudgetInclude.
+// wallClockBudgetInclude. The transcript harness also pins a bounded
+// end-to-end budget for its 1,122 real hook processes.
 //
 // #2699 (refs umbrella #2697): PreToolUse Bash guard hook.
 //
@@ -14,6 +15,7 @@
 // an in-process call to the exported functions can't notice a drift in the
 // stdin shape, the exit code, or which stream carries the message.
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -213,13 +215,40 @@ const ALLOW_CASES: string[] = [
 ];
 
 // Round-2 survey harness retained as a regression fixture for #2705. The
-// 2026-09-07 corpus is the checked-in deny/allow corpus above; the GitHub
-// discussion that originally described the survey is not part of the repo.
+// synthetic 2026-09-07 corpus is above; the real transcript corpus below is
+// `tests/fixtures/guard-bash/transcript-corpus-2026-09-08.json`, extracted
+// from this project's Claude Code session transcripts on 2026-09-06..08 with
+// secrets and the maintainer's email scrubbed. The fixture is data under
+// tests/fixtures, so test-file sweeps do not walk it as executable code.
 const SURVEY_CORPUS_DATE = "2026-09-07";
 const SURVEY_CORPUS = [
 	...DENY_CASES.map(([command]) => ({ command, expected: "deny" as const })),
 	...ALLOW_CASES.map((command) => ({ command, expected: "allow" as const })),
 ];
+
+const TRANSCRIPT_CORPUS = JSON.parse(
+	readFileSync(
+		join(
+			repoRoot,
+			"tests/fixtures/guard-bash/transcript-corpus-2026-09-08.json",
+		),
+		"utf8",
+	),
+) as Array<{ command: string; firstSeen: string }>;
+
+const TRANSCRIPT_CORPUS_DATE = "2026-09-07..08";
+
+function commandHash(command: string): string {
+	return createHash("sha256").update(command).digest("hex");
+}
+
+// These are the only two commands in the 2026-09-07..08 transcript corpus
+// that exercise a guard rule. Keep this allowlist independent of findDeny so
+// a rule widening cannot silently turn a false positive into an expectation.
+const EXPECTED_TRANSCRIPT_DENIES = new Set([
+	"21def4efd19e12fd4fcb3f0cfcbc7f000814ed54d6ecdb39701e74b08288811f",
+	"30b1b57e56ca162793f411ef91bc8e47607a91f420039b3e00451ecd5278ea02",
+]);
 
 describe("scripts/hooks/guard-bash.mjs -- deny list (#2699)", () => {
 	it.each(DENY_CASES)("denies %j", (command, ruleNeedle) => {
@@ -263,6 +292,40 @@ describe("scripts/hooks/guard-bash.mjs -- round-2 survey corpus (#2705)", () => 
 			}
 		},
 	);
+});
+
+describe(`scripts/hooks/guard-bash.mjs -- transcript corpus ${TRANSCRIPT_CORPUS_DATE} (#2705)`, () => {
+	it("keeps the transcript corpus at zero non-rule denies", () => {
+		const started = performance.now();
+		const offenses: string[] = [];
+		let actualDenies = 0;
+
+		for (const { command } of TRANSCRIPT_CORPUS) {
+			const result = runHook(command);
+			const hash = commandHash(command);
+			const expectedDeny = EXPECTED_TRANSCRIPT_DENIES.has(hash);
+			if (result.status === 2) actualDenies++;
+
+			if (expectedDeny) {
+				if (result.status !== 2)
+					offenses.push(`expected deny was allowed: ${command}`);
+				continue;
+			}
+			if (result.status !== 0)
+				offenses.push(`non-rule deny (${result.status}): ${command}`);
+			else if (result.stderr !== "")
+				offenses.push(`unexpected stderr: ${command}`);
+		}
+
+		const elapsedMs = performance.now() - started;
+		console.log(
+			`guard-bash transcript corpus: ${TRANSCRIPT_CORPUS.length} rows, ` +
+				`${actualDenies} expected denies, ${Math.round(elapsedMs)}ms`,
+		);
+		expect(elapsedMs).toBeLessThan(180_000);
+		expect(actualDenies).toBe(EXPECTED_TRANSCRIPT_DENIES.size);
+		expect(offenses).toEqual([]);
+	}, 180_000);
 });
 
 describe("scripts/hooks/guard-bash.mjs -- never throws (#2699)", () => {
@@ -324,7 +387,7 @@ describe("scripts/hooks/guard-bash.mjs -- never throws (#2699)", () => {
 			env: BASE_ENV,
 		});
 		expect(result.status).toBe(0);
-	});
+	}, 180_000);
 });
 
 describe("scripts/hooks/guard-bash.mjs -- registration (review round 2 F3)", () => {
