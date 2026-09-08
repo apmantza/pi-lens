@@ -2,7 +2,7 @@
 
 export type RetryAttemptResult<T> =
 	| { ok: true; value: T }
-	| { ok: false; reason: string };
+	| { ok: false; reason: string; retryable?: boolean };
 
 export type RetryResult<T> =
 	| { ok: true; value: T; attempt: number }

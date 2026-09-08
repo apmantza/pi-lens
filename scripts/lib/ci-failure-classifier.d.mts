@@ -30,6 +30,8 @@ export interface ClassifierDecision {
 	commentBody: string;
 }
 
+/** Network-shaped failure needles shared with scripts/npm-retry.mjs (#2684). */
+export declare const NET_PATTERN: RegExp;
 export declare function classifyFailureLog(rawLog: string): Classification;
 export declare function readCgroupOomKillCount(log: string): number | null;
 export declare function describeKernelKillEvidence(log: string): string | null;

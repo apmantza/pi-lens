@@ -14,7 +14,7 @@ const defaultSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * @template T
- * @param {(attempt: number) => Promise<{ ok: true, value: T } | { ok: false, reason: string }>} attemptFn
+ * @param {(attempt: number) => Promise<{ ok: true, value: T } | { ok: false, reason: string, retryable?: boolean }>} attemptFn
  * @param {{ attempts?: number, backoffMs?: number[], sleep?: (ms: number) => Promise<void> }} [opts]
  * @returns {Promise<{ ok: true, value: T, attempt: number } | { ok: false, reasons: string[] }>}
  */
@@ -29,6 +29,7 @@ export async function retryWithBackoff(attemptFn, opts = {}) {
 		const result = await attemptFn(attempt);
 		if (result.ok) return { ok: true, value: result.value, attempt };
 		reasons.push(result.reason);
+		if (result.retryable === false) break;
 	}
 	return { ok: false, reasons };
 }

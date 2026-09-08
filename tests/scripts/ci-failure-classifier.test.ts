@@ -282,6 +282,68 @@ describe("classifyFailureLog (#2103)", () => {
 		expect(result.kind).toBe("infra-net");
 	});
 
+	// Round 3 HIGH: the shared CI pattern must not treat a token mentioned by
+	// a real compiler/linter/knip error, URL, or test name as network evidence.
+	it("round 3: token mentions in real error contexts remain real", () => {
+		const logs = [
+			'##[error] src/foo.ts(1,7): error TS2322: Type "ETIMEDOUT" is not assignable',
+			"##[error] /src/foo.js:1:1 error socket hang up no-socket-rule",
+			"##[error] knip: https://example.test/502/status unused export",
+			"##[error] test name: retries after ECONNRESET (expected real failure)",
+		];
+		for (const log of logs) {
+			expect(classifyFailureLog(log).kind, log).toBe("real");
+		}
+	});
+
+	// Round 3 MEDIUM: inspect all bounded eligible error lines, not only the
+	// first one, so npm's deterministic preamble cannot hide later network data.
+	it("round 3: a later eligible npm error line still classifies infra-net", () => {
+		const result = classifyFailureLog(
+			"npm error ERESOLVE unable to resolve dependency tree\nnpm error ECONNRESET\n",
+		);
+		expect(result.kind).toBe("infra-net");
+	});
+
+	// Regression proof for the shared NET_PATTERN consumer: a newly recognized
+	// npm network line must reach the real classifier, not only npm-retry.
+	it("recognizes the shared npm and registry network shapes as infra-net", () => {
+		const shapes = [
+			"ENOTFOUND",
+			"ECONNRESET",
+			"tarball package download failed",
+			"net::ERR_NAME_NOT_RESOLVED",
+		];
+		for (const shape of shapes) {
+			expect(classifyFailureLog(`npm error ${shape}`).kind, shape).toBe(
+				"infra-net",
+			);
+		}
+	});
+
+	it("round 3: npm-only network shapes stay real for the CI classifier", () => {
+		const shapes = [
+			"ETIMEDOUT",
+			"EAI_AGAIN",
+			"503 Service Unavailable",
+			"429 Too Many Requests",
+			"socket hang up",
+			"network error",
+			"ECONNREFUSED",
+			"EPIPE",
+			"ENETUNREACH",
+			"EHOSTUNREACH",
+			"FETCH_ERROR",
+			"ERR_SOCKET_TIMEOUT",
+			"502",
+			"504",
+			"registry unreachable",
+		];
+		for (const shape of shapes) {
+			expect(classifyFailureLog(`npm error ${shape}`).kind, shape).toBe("real");
+		}
+	});
+
 	// F5: empty log is distinguishable from "read something, didn't
 	// recognize it" -- the two are different failure modes (fetch itself
 	// failed / raced the upload, vs. a genuinely new failure shape).
@@ -311,6 +373,16 @@ describe("classifyFailureLog (#2103)", () => {
 		const log = `${oversizedHead}\n##[error]Process completed with exit code 1.\n`;
 		const result = classifyFailureLog(log);
 		expect(result.kind).toBe("real");
+	});
+
+	// Round 4 recurrence: the eligible-line bound must remain active, or a
+	// pathological log can make a late network token change a real verdict.
+	it("round 4: the 1,001st eligible line is outside the scan bound", () => {
+		const log = [
+			...Array.from({ length: 1_000 }, () => "npm error unrelated"),
+			"npm error code ECONNRESET",
+		].join("\n");
+		expect(classifyFailureLog(log).kind).toBe("real");
 	});
 
 	// V4 (BLOCKING, red-proof with the reviewer's fabricated-title shape): a
