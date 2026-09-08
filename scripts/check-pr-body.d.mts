@@ -16,7 +16,7 @@ export declare function lintPrBody(
 export declare function fetchLivePrBody(
 	payloadPr: { number: number; body?: string | null },
 	fetchImpl: typeof fetch,
-): Promise<{ body: string; normalized: boolean }>;
+): Promise<{ body: string; normalized: boolean; title: string | undefined }>;
 export declare function resolveLivePrBody(
 	payloadPr: { number: number; body?: string | null },
 	fetchImpl?: typeof fetch,
