@@ -7,8 +7,9 @@
  * ratchet.test.ts`) runs over `tests/**\/*.test.ts`:
  *
  * 1. {@link scanRealProcessSpawn} — a real child process: a `child_process`
- *    import, a call-shaped `execFileSync`/`spawnSync`/`execSync`, or a spawn
- *    of any flavor whose argv mentions `vitest` (a test file re-launching the
+ *    import, a call-shaped `execFileSync`/`spawnSync`/`execSync`, a support
+ *    spawn-helper call, or a spawn whose argv mentions `vitest` (a test file
+ *    re-launching the
  *    suite inside itself).
  * 2. {@link scanElapsedTimeAssertion} — a DELTA of two clock reads flowing
  *    into a numeric matcher (`toBeLessThan`/`toBeGreaterThan`/…), not just a
@@ -45,9 +46,16 @@
  * - Detector 1's `strings: "keep"` policy (needed to see `"vitest"` inside an
  *   argv string) means a string literal that merely CONTAINS
  *   `execFileSync(...)`-shaped text would false-positive; comments are
- *   blanked so a doc comment cannot. No such string exists in `tests/` today
- *   (the FALSE positive direction, safe for a ratchet that a human reviews at
- *   admission time).
+ *   blanked so a doc comment cannot. Mock declarations use `codeMatches`
+ *   separately, so a string literal that merely CONTAINS `vi.mock(...)`
+ *   cannot suppress a real helper call. No such string exists in `tests/`
+ *   today (the FALSE positive direction, safe for a ratchet that a human
+ *   reviews at admission time).
+ * - Detector 1 recognizes known support-module helper names at their test call
+ *   sites and ignores calls whose helper module is mocked in that file. It
+ *   still cannot resolve arbitrary aliases, so aliases remain conservative
+ *   false positives. Quoted and commented helper names are excluded by
+ *   `codeMatches`.
  */
 
 import * as fs from "node:fs";
@@ -55,6 +63,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+	codeMatches,
 	firstCommentMatch,
 	listSourceFiles,
 	relativePosix,
@@ -122,6 +131,35 @@ const SPAWN_CALL =
 	/\b(spawn|spawnSync|exec|execSync|execFile|execFileSync|fork)\s*\(/g;
 const SYNC_TRIAD = new Set(["execFileSync", "spawnSync", "execSync"]);
 const VITEST_IN_ARGV = /\bvitest\b/i;
+// These helpers are the test-side routes to real child processes. Keep this
+// list beside the support-module census: matching the CALL in a test catches
+// a helper that hides `node:child_process` behind another module boundary.
+const SUPPORT_SPAWN_HELPER_CALL =
+	/\b(gitFixtureSpawnAsync|gitExecFileSync|gitExecSync|execFileSync|execSync|spawnWedgedChild|safeSpawnAsync)\s*\(/g;
+const MOCK_CALL = /\bvi\.(?:mock|doMock|hoisted)\s*\(\s*["']([^"']+)["']/g;
+const HELPER_MODULE_SUFFIXES: Record<string, readonly string[]> = {
+	gitFixtureSpawnAsync: ["/git-fixture-env", "/git-fixture-env.js"],
+	gitExecFileSync: ["/git-fixture-env", "/git-fixture-env.js"],
+	gitExecSync: ["/git-fixture-env", "/git-fixture-env.js"],
+	spawnWedgedChild: ["/fault-injection", "/fault-injection.ts"],
+	safeSpawnAsync: ["/safe-spawn", "/safe-spawn.js"],
+	execFileSync: ["node:child_process", "child_process"],
+	execSync: ["node:child_process", "child_process"],
+};
+
+function mockedModules(source: string): Set<string> {
+	const modules = new Set<string>();
+	for (const match of codeMatches(source, MOCK_CALL)) {
+		modules.add(match[1]);
+	}
+	return modules;
+}
+
+function helperIsMocked(name: string, modules: ReadonlySet<string>): boolean {
+	return (HELPER_MODULE_SUFFIXES[name] ?? []).some((suffix) =>
+		[...modules].some((module) => module === suffix || module.endsWith(suffix)),
+	);
+}
 
 /** The text between a call's `(` (given its index) and its balanced `)`. */
 function balancedCallArgs(source: string, openParenIndex: number): string {
@@ -153,9 +191,13 @@ export function scanRealProcessSpawn(
 	const stripped = stripSource(source, { strings: "keep" });
 	const lines = stripped.split("\n");
 	const hits = new Map<number, FlakeHit>();
+	const mocks = mockedModules(source);
+	const childProcessMocked = [...mocks].some(
+		(module) => module === "node:child_process" || module === "child_process",
+	);
 
 	lines.forEach((lineText, idx) => {
-		if (CHILD_PROCESS_IMPORT.test(lineText)) {
+		if (!childProcessMocked && CHILD_PROCESS_IMPORT.test(lineText)) {
 			hits.set(idx, {
 				line: idx + 1,
 				text: lineText.trim(),
@@ -173,7 +215,7 @@ export function scanRealProcessSpawn(
 		const isVitestInVitest =
 			!SYNC_TRIAD.has(name) &&
 			VITEST_IN_ARGV.test(balancedCallArgs(stripped, openParenIndex));
-		if (SYNC_TRIAD.has(name) || isVitestInVitest) {
+		if ((!childProcessMocked && SYNC_TRIAD.has(name)) || isVitestInVitest) {
 			if (!hits.has(lineIdx)) {
 				hits.set(lineIdx, {
 					line: lineIdx + 1,
@@ -183,6 +225,18 @@ export function scanRealProcessSpawn(
 						: `${name}( vitest-in-vitest (argv mentions "vitest")`,
 				});
 			}
+		}
+	}
+
+	for (const match of codeMatches(source, SUPPORT_SPAWN_HELPER_CALL)) {
+		if (childProcessMocked || helperIsMocked(match[1], mocks)) continue;
+		const lineIdx = source.slice(0, match.index ?? 0).split("\n").length - 1;
+		if (!hits.has(lineIdx)) {
+			hits.set(lineIdx, {
+				line: lineIdx + 1,
+				text: source.split("\n")[lineIdx]?.trim() ?? "",
+				reason: `${match[1]}( support spawn helper`,
+			});
 		}
 	}
 	return [...hits.values()].sort((a, b) => a.line - b.line);

@@ -317,3 +317,4 @@ describe("metrics-history missing target directory (#2099)", () => {
 		30_000,
 	);
 });
+// flake-shape: real-process-spawn — real git children emit stderr bytes whose metrics classification cannot be observed in-process

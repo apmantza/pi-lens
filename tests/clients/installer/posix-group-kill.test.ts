@@ -112,3 +112,4 @@ describe("safeSpawnAsync POSIX process-group kill (#2026/#2027)", () => {
 		20_000,
 	);
 });
+// flake-shape: real-process-spawn — real POSIX shell descendants prove process-group termination across OS process state

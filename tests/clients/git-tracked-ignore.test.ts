@@ -205,3 +205,4 @@ describe("collectUntrackedIgnoredIds (#694)", () => {
 		}
 	});
 });
+// flake-shape: real-process-spawn — real git children decide tracked-versus-ignored files from index state no stub reproduces

@@ -163,3 +163,4 @@ describe("safeSpawnAsync resource-usage bracketing (#620)", () => {
 		expect(result.resourceUsage).toBeUndefined();
 	});
 });
+// flake-shape: real-process-spawn — real child CPU and RSS samples prove usage bracketing around the spawn boundary

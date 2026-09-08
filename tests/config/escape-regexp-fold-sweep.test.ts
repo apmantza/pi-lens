@@ -141,6 +141,9 @@ function listCandidateFiles(): string[] {
 }
 
 describe("escapeRegExp single-source-of-truth (#2558)", () => {
+	// Whole-tree walk: 5.27 s under full-suite load on CI (PR #2742 rounds 2
+	// and 3 timed out at the 5 s default). Same budget as the other tree-walk
+	// sweeps (dependency-boundaries.test.ts).
 	it("has no local escaping-helper definition outside the canonical leaf", () => {
 		const files = listCandidateFiles();
 		// Belt-and-suspenders total floor on top of each directory's own floor
@@ -169,7 +172,7 @@ describe("escapeRegExp single-source-of-truth (#2558)", () => {
 				`(or its tests/support/sweep-kit.js re-export) instead of re-copying ` +
 				`the body: ${offenders.join(", ")}`,
 		).toEqual([]);
-	});
+	}, 30_000);
 
 	it("the canonical leaf still defines escapeRegExp with the expected body", () => {
 		const src = readFileSync(path.join(root, CANONICAL_FILE), "utf8");

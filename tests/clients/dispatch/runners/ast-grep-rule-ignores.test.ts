@@ -218,3 +218,4 @@ describe("Java rule ignores deliver through the real ast-grep CLI (#2280)", () =
 		}, 60_000);
 	});
 });
+// flake-shape: real-process-spawn — a real ast-grep child applies ignore rules through its own file matcher

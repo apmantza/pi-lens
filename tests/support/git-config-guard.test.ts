@@ -251,3 +251,4 @@ describe("runGitConfigGuardSetup one-time warn (#2251 fix round F2)", () => {
 		}
 	});
 });
+// flake-shape: real-process-spawn — real git config reads resolve worktree-local policy through Git's own config precedence

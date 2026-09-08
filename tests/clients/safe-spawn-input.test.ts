@@ -52,3 +52,4 @@ describe("safeSpawnAsync stdin input", () => {
 		);
 	});
 });
+// flake-shape: real-process-spawn — a real child reads stdin bytes through the pipe that safeSpawnAsync must close correctly

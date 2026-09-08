@@ -393,6 +393,29 @@ const wallClockBudgetInclude = [
 	// where the record lands and is unobservable in-process (flake-shape
 	// admission).
 	"tests/scripts/warm-loader-cache.test.ts",
+	"tests/clients/biome-config-decorator-metadata.test.ts",
+	"tests/clients/build-identity.test.ts",
+	"tests/clients/config-diagnostic-codes.test.ts",
+	"tests/clients/dispatch/runners/ast-grep-playground-verify.test.ts",
+	"tests/clients/dispatch/runners/ast-grep-rule-ignores.test.ts",
+	"tests/clients/git-tracked-ignore.test.ts",
+	"tests/clients/installer/posix-group-kill.test.ts",
+	"tests/clients/installer/verify-binary-semantics.test.ts",
+	"tests/clients/metrics-history-stderr.test.ts",
+	"tests/clients/safe-spawn-ambient-signal.test.ts",
+	"tests/clients/safe-spawn-failure-taxonomy.test.ts",
+	"tests/clients/safe-spawn-input.test.ts",
+	"tests/clients/safe-spawn-resource-usage.test.ts",
+	"tests/clients/safe-spawn-timeout-teardown.test.ts",
+	"tests/clients/safe-spawn-windows-command.test.ts",
+	"tests/clients/shared-checkout-guard.test.ts",
+	"tests/config/gitignore-tracked-shadow.test.ts",
+	"tests/config/tracked-control-bytes.test.ts",
+	"tests/scripts/git-fixture-env.test.ts",
+	"tests/scripts/prune-agent-worktrees.test.ts",
+	"tests/support/fault-injection.test.ts",
+	"tests/support/git-config-guard.test.ts",
+	"tests/support/git-fixture-env.test.ts",
 ];
 // #2512 round 2: runtime-turn-session.test.ts's "retires a deleted failed
 // target through the real client and records real telemetry" spawns a REAL

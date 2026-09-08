@@ -211,3 +211,4 @@ describe("getBuildIdentity (#1775)", () => {
 		}
 	});
 });
+// flake-shape: real-process-spawn — real git children establish build identity from repository state unavailable to an in-process stub
