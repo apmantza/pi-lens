@@ -40,7 +40,7 @@ function readPackage(file: string) {
 	];
 }
 
-function writePackage(root: string, name: string, packageJson: object) {
+function writePackage(root: string, name: string, packageJson: Record<string, unknown>) {
 	const directory = join(root, "node_modules", name);
 	mkdirSync(directory, { recursive: true });
 	writeFileSync(join(directory, "package.json"), JSON.stringify(packageJson));
