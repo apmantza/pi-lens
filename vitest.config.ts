@@ -326,6 +326,10 @@ const wallClockBudgetInclude = [
 	// the defect it pins is wall-clock (2^N regex backtracking on an interleaved
 	// `**` chain), so a fake clock measures nothing.
 	"tests/clients/workspace-glob-nonbacktracking-budget.test.ts",
+	// #2622: adjacent read-guard stars previously produced exponential regex
+	// backtracking against a long non-matching path; the test measures the real
+	// synchronous matcher cost and belongs in the quiet serialized phase.
+	"tests/clients/read-guard-glob-nonbacktracking.test.ts",
 	// #2619 review F1: the release-QA hermeticity canary spawns a REAL child
 	// under scratchEnv() and reads back what that child resolved. The defect it
 	// pins is a child inheriting the ambient environment, which an in-process

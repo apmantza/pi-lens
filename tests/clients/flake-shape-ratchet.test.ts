@@ -134,6 +134,13 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 			reason:
 				"the defect is wall-clock only (2^N globstar backtracking); a fake clock measures nothing",
 		},
+	// 2026-09-08 (#2622): the defect is wall-clock only — 2^N regex
+	// backtracking in both glob compilers; a fake clock measures nothing.
+	"elapsed-time-assertion:clients/read-guard-glob-nonbacktracking.test.ts": {
+		detector: "elapsed-time-assertion",
+		reason:
+			"the defect is wall-clock only (2^N regex backtracking); a fake clock measures nothing",
+	},
 	// 2026-09-06 (#2619 review F1, then N1/N3 in round 3): three real spawns,
 	// each pinning something no in-process double can reach. (1) a `node -e`
 	// child reports what IT resolved for HOME/PI_LENS_INSTALL_LOG — `os.homedir()`
