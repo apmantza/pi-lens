@@ -61,6 +61,7 @@ on:
       - "scripts/npm-retry.mjs"
       - "scripts/lib/retry.mjs"
       - "scripts/notify-install-smoke-drift.mjs"
+      - "scripts/upsert-tracking-issue.mjs"
       - "scripts/lib/install-smoke-drift.mjs"
       # findDriftTrackingIssue is a load-bearing import of the above, not
       # just tool-smoke.yml's own dependency, now that this workflow uses it.
