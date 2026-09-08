@@ -727,6 +727,215 @@ describe("#1549 — per-server touch verdict", () => {
 		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(1);
 	});
 
+	it("settles a first-contact wait when shutdown interrupts the shared probe", async () => {
+		// #2765 round 6: a shutdown used to leave a silent first-contact caller
+		// behind the push deadline; this pins the shutdown arm and destroyed guard.
+		const primary = makeClient(5000, [], {
+			serverId: "dexter",
+			customServer: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(0, [], { serverId: "opengrep" }),
+		});
+		vi.spyOn(service, "getCapabilitySnapshots").mockResolvedValue([]);
+
+		const touch = service.touchFile(FILE, "const x = 1;", {
+			...CASCADE_TOUCH,
+			maxClientWaitMs: 5000,
+			hook: "session_start",
+		});
+		await vi.advanceTimersByTimeAsync(1);
+		for (
+			let i = 0;
+			i < 20 && primary.waitForDiagnostics.mock.calls.length === 0;
+			i += 1
+		) {
+			await Promise.resolve();
+		}
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(1);
+
+		await service.shutdown();
+		await expect(touch).resolves.toMatchObject({
+			inconclusive: true,
+			inconclusiveReason: "diagnostics-wait",
+		});
+		expect(
+			(
+				service as unknown as { state: { diagnosticsUnsupported: Set<string> } }
+			).state.diagnosticsUnsupported.has("dexter"),
+		).toBe(false);
+
+		await expect(
+			service.touchFile(FILE, "const y = 2;", CASCADE_TOUCH),
+		).resolves.toBeUndefined();
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(1);
+	});
+
+	it("cuts the caller at the 3-second hook while the shared probe latches at 5 seconds", async () => {
+		// #2765 round 6: the caller deadline must not cancel the creator-owned probe,
+		// or a late navigation-only latch becomes impossible after a hook cutoff.
+		process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS = "5000";
+		const primary = makeClient(5000, [], {
+			serverId: "dexter",
+			customServer: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(0, [], { serverId: "opengrep" }),
+		});
+		const touch = service.touchFile(FILE, "const x = 1;", {
+			...CASCADE_TOUCH,
+			maxClientWaitMs: 5000,
+			hook: "turn_end",
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		await vi.advanceTimersByTimeAsync(3000);
+		const cutOff = await touch;
+		expect(cutOff?.diagnosticsUnsupportedServerIds).toBeUndefined();
+		expect(
+			(
+				service as unknown as { state: { diagnosticsUnsupported: Set<string> } }
+			).state.diagnosticsUnsupported.has("dexter"),
+		).toBe(false);
+
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(
+			(
+				service as unknown as { state: { diagnosticsUnsupported: Set<string> } }
+			).state.diagnosticsUnsupported.has("dexter"),
+		).toBe(true);
+	});
+
+	it("latches navigation-only when the shared push budget ends before the hook", async () => {
+		// #2765 round 6: a shared probe completing before its caller deadline must
+		// classify the silent custom server instead of reporting a cutoff.
+		const primary = makeClient(2000, [], {
+			serverId: "dexter",
+			customServer: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(0, [], { serverId: "opengrep" }),
+		});
+		const touch = service.touchFile(FILE, "const x = 1;", {
+			...CASCADE_TOUCH,
+			maxClientWaitMs: 2000,
+			hook: "turn_end",
+		});
+
+		await vi.advanceTimersByTimeAsync(2000);
+		await expect(touch).resolves.toMatchObject({
+			diagnosticsUnsupportedServerIds: ["dexter"],
+		});
+	});
+
+	it("keeps a publishing custom server push-capable when it answers inside the hook", async () => {
+		// #2765 round 6: publication before the hook cutoff must win the silent
+		// classification race and deliver the server's diagnostics.
+		process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS = "5000";
+		const primary = makeClient(2500, [makeDiagnostic("published")], {
+			serverId: "dexter",
+			customServer: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(0, [], { serverId: "opengrep" }),
+		});
+		const touch = service.touchFile(FILE, "const x = 1;", {
+			...CASCADE_TOUCH,
+			maxClientWaitMs: 5000,
+			hook: "turn_end",
+		});
+		for (
+			let i = 0;
+			i < 20 && primary.waitForDiagnostics.mock.calls.length === 0;
+			i += 1
+		) {
+			await Promise.resolve();
+		}
+
+		await vi.advanceTimersByTimeAsync(2500);
+		await vi.advanceTimersByTimeAsync(0);
+		const result = await touch;
+		expect(result?.diagnosticsUnsupportedServerIds).toBeUndefined();
+		expect(
+			primary.getDiagnostics(FILE).map((diagnostic) => diagnostic.message),
+		).toEqual(["published"]);
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(1);
+	});
+
+	it("gives concurrent callers independent deadlines over one five-second probe", async () => {
+		// #2765 round 6: caller-local cutoffs must not shorten or restart the shared
+		// five-second first-contact budget when concurrent touches share a server.
+		process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS = "5000";
+		const primary = makeClient(5000, [], {
+			serverId: "dexter",
+			customServer: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(0, [], { serverId: "opengrep" }),
+		});
+		vi.spyOn(service, "getCapabilitySnapshots").mockResolvedValue([]);
+		const first = service.touchFile(FILE, "const x = 1;", {
+			...CASCADE_TOUCH,
+			maxClientWaitMs: 5000,
+			hook: "agent_end",
+		});
+		const second = service.touchFile(FILE, "const y = 2;", {
+			...CASCADE_TOUCH,
+			maxClientWaitMs: 5000,
+			hook: "session_start",
+		});
+
+		await vi.advanceTimersByTimeAsync(1000);
+		const firstResult = await first;
+		expect(firstResult?.diagnosticsUnsupportedServerIds).toBeUndefined();
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(
+			await Promise.race([
+				second.then(() => "settled" as const),
+				Promise.resolve("pending" as const),
+			]),
+		).toBe("pending");
+		await vi.advanceTimersByTimeAsync(1000);
+		const secondResult = await second;
+		expect(secondResult?.diagnosticsUnsupportedServerIds).toEqual(["dexter"]);
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(1);
+		expect(
+			(
+				service as unknown as { state: { diagnosticsUnsupported: Set<string> } }
+			).state.diagnosticsUnsupported.has("dexter"),
+		).toBe(true);
+	});
+
+	it("does not wait again after a navigation-only latch when capability snapshots are absent", async () => {
+		// #2765 round 6: the latch read must remain authoritative when the later
+		// capability-snapshot pass is skipped or returns no snapshot.
+		const primary = makeClient(100, [], {
+			serverId: "dexter",
+			customServer: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(0, [], { serverId: "opengrep" }),
+		});
+		const snapshots = vi
+			.spyOn(service, "getCapabilitySnapshots")
+			.mockResolvedValue([]);
+
+		await expect(
+			touchOnce(service, "const x = 1;", { hook: "turn_end" }),
+		).resolves.toMatchObject({ diagnosticsUnsupportedServerIds: ["dexter"] });
+		const waits = primary.waitForDiagnostics.mock.calls.length;
+		snapshots.mockResolvedValue([]);
+		await expect(
+			touchOnce(service, "const y = 2;", { hook: "turn_end" }),
+		).resolves.toMatchObject({ diagnosticsUnsupportedServerIds: ["dexter"] });
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(waits);
+	});
+
 	it("keeps a custom primary on normal waits when first contact publishes", async () => {
 		const primary = makeClient(100, [], {
 			serverId: "dexter",
