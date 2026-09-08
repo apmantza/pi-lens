@@ -11,6 +11,7 @@ describe("stryker diff production-file filter", () => {
 			"tests/scripts/example.test.ts",
 			"tests/fixtures/example.ts",
 			"clients/types.d.mts",
+			"clients/types.d.ts",
 			"clients/file-utils.js",
 		];
 		expect(diff.filter(isProductionMutationFile)).toEqual([

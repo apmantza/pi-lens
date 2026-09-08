@@ -20,6 +20,7 @@ export default {
 		"scripts/**/*.mjs",
 		"!**/tests/**",
 		"!**/fixtures/**",
+		"!**/*.d.ts",
 		"!**/*.d.mts",
 		"!**/*.js",
 	],

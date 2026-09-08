@@ -19,7 +19,7 @@ try {
 	console.error(
 		`mutation diff: could not read ${base}...HEAD: ${error.message}`,
 	);
-	process.exit(0);
+	process.exit(1);
 }
 
 if (files.length === 0) {
@@ -30,42 +30,47 @@ if (files.length === 0) {
 console.log(`mutation diff: ${files.join(", ")}`);
 const result = spawnSync(
 	"node_modules/.bin/stryker",
-	["run", ...files.flatMap((file) => ["--mutate", file])],
+	["run", "--mutate", files.join(",")],
 	{ stdio: "inherit", encoding: "utf8" },
 );
 
-const reportPath = "reports/mutation/mutation.json";
-if (existsSync(reportPath)) {
-	try {
-		const report = JSON.parse(readFileSync(reportPath, "utf8"));
-		const mutants = Object.values(report.files ?? {}).flatMap(
-			(file) => file.mutants ?? [],
-		);
-		const counts = mutants.reduce((out, mutant) => {
-			out[mutant.status] = (out[mutant.status] ?? 0) + 1;
-			return out;
-		}, {});
-		console.log(
-			`mutation diff score: ${report.schemaVersion ? (report.mutationTestResults?.score ?? "n/a") : "n/a"}`,
-		);
-		console.log(`mutation diff counts: ${JSON.stringify(counts)}`);
-		for (const mutant of mutants.filter(
-			(entry) => entry.status === "Survived",
-		)) {
-			console.log(
-				`survived: ${mutant.fileName}:${mutant.location?.start?.line ?? "?"} ${mutant.mutatorName}`,
-			);
-		}
-	} catch (error) {
-		console.error(`mutation diff: report unreadable: ${error.message}`);
-	}
+if (result.error || result.status !== 0) {
+	console.error(
+		`mutation diff: Stryker exited with status ${result.status ?? "unknown"}${result.error ? `: ${result.error.message}` : ""}`,
+	);
+	process.exit(1);
 }
 
-if (result.error)
-	console.error(
-		`mutation diff: Stryker could not start: ${result.error.message}`,
+const reportPath = "reports/mutation/mutation.json";
+if (!existsSync(reportPath)) {
+	console.error("mutation diff: report not found after Stryker run");
+	process.exit(1);
+}
+
+try {
+	const report = JSON.parse(readFileSync(reportPath, "utf8"));
+	const mutants = Object.values(report.files ?? {}).flatMap(
+		(file) => file.mutants ?? [],
 	);
-console.log(
-	`mutation diff: advisory exit (Stryker status ${result.status ?? "unknown"})`,
-);
+	const counts = mutants.reduce((out, mutant) => {
+		out[mutant.status] = (out[mutant.status] ?? 0) + 1;
+		return out;
+	}, {});
+	console.log(
+		`mutation diff score: ${report.schemaVersion ? (report.mutationTestResults?.score ?? "n/a") : "n/a"}`,
+	);
+	console.log(`mutation diff counts: ${JSON.stringify(counts)}`);
+	for (const mutant of mutants.filter(
+		(entry) => entry.status === "Survived",
+	)) {
+		console.log(
+			`survived: ${mutant.fileName}:${mutant.location?.start?.line ?? "?"} ${mutant.mutatorName}`,
+		);
+	}
+} catch (error) {
+	console.error(`mutation diff: report unreadable: ${error.message}`);
+	process.exit(1);
+}
+
+console.log("mutation diff: completed");
 process.exit(0);
