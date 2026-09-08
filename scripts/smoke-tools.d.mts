@@ -57,6 +57,21 @@ export interface FormatFixture {
 	 */
 	expect?: "reformat" | "preserve";
 }
+export interface FormatResult {
+	success: boolean;
+	changed: boolean;
+	error?: string;
+	outcome: "formatted" | "unchanged" | "skipped" | "unavailable" | "failed";
+}
+export interface FormatRowVerdict {
+	status: "pass" | "skip" | "fail";
+	detail: string;
+}
+/** Classify one formatter result without running tools or touching files. */
+export function classifyFormatRow(
+	target: FormatResult,
+	fx: FormatFixture,
+): FormatRowVerdict;
 export interface AutofixFixture {
 	lang: string;
 	dir: string;

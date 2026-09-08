@@ -92,6 +92,50 @@ export function tier1Fixtures() {
 }
 
 /**
+ * Classify one format smoke row from the formatter's typed result (#2767).
+ * `formatFile` intentionally reports an unavailable executable with
+ * `success: true`; the typed outcome must win over the success flag so the
+ * smoke lane reports an honest skip instead of a false formatting failure.
+ */
+export function classifyFormatRow(target, fx) {
+	if (target.outcome === "unavailable") {
+		const err = target.error ?? "unknown error";
+		return { status: "skip", detail: `tool not installed (${err})` };
+	}
+	if (!target.success) {
+		const err = target.error ?? "unknown error";
+		// A missing binary is "unavailable", not a failure (matches the rest
+		// of the harness — the runner is selected via config, but the tool
+		// isn't installed on this machine/runner).
+		if (/ENOENT|not found|not recognized|No such file/i.test(err)) {
+			return { status: "skip", detail: `tool not installed (${err})` };
+		}
+		return { status: "fail", detail: `formatter failed to run: ${err}` };
+	}
+	if (fx.expect === "preserve") {
+		// #1144: unconfigured workspace + no indentation evidence ⇒ the
+		// formatter must refuse rather than impose its stock style.
+		if (target.changed) {
+			return {
+				status: "fail",
+				detail: `${fx.formatter} rewrote an unconfigured file with no detectable style (style-preserving refusal expected)`,
+			};
+		}
+		return {
+			status: "pass",
+			detail: `${fx.formatter} preserved the unconfigured file`,
+		};
+	}
+	if (target.changed) {
+		return { status: "pass", detail: `${fx.formatter} reformatted the file` };
+	}
+	return {
+		status: "fail",
+		detail: "ran clean but left the mis-formatted file unchanged",
+	};
+}
+
+/**
  * One minimal real project per language. `targets` are the runner ids whose
  * tool we are smoke-testing; `expectDiagnostic` is the fixture's known defect
  * (used by --step2).
@@ -2154,32 +2198,8 @@ async function runFormatSmoke({ langs, install, verbose }) {
 				);
 				continue;
 			}
-			if (!target.success) {
-				const err = target.error ?? "unknown error";
-				// A missing binary is "unavailable", not a failure (matches the rest
-				// of the harness — the runner is selected via config, but the tool
-				// isn't installed on this machine/runner).
-				if (/ENOENT|not found|not recognized|No such file/i.test(err)) {
-					push("skip", `tool not installed (${err})`);
-				} else {
-					push("fail", `formatter failed to run: ${err}`);
-				}
-			} else if (fx.expect === "preserve") {
-				// #1144: unconfigured workspace + no indentation evidence ⇒ the
-				// formatter must refuse rather than impose its stock style.
-				if (target.changed) {
-					push(
-						"fail",
-						`${fx.formatter} rewrote an unconfigured file with no detectable style (style-preserving refusal expected)`,
-					);
-				} else {
-					push("pass", `${fx.formatter} preserved the unconfigured file`);
-				}
-			} else if (target.changed) {
-				push("pass", `${fx.formatter} reformatted the file`);
-			} else {
-				push("fail", "ran clean but left the mis-formatted file unchanged");
-			}
+			const verdict = classifyFormatRow(target, fx);
+			push(verdict.status, verdict.detail);
 		} catch (err) {
 			push("fail", `error: ${err?.message ?? err}`);
 		} finally {
