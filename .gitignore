@@ -4,6 +4,8 @@ features.md
 
 # pi-lens internal
 .pi-lens/
+.stryker/
+reports/
 # Probe-home redirect target (#2506): getGlobalPiLensLogDir() sends the logs
 # of a probe run without a PI_LENS_HOME pin here instead of the real
 # ~/.pi-lens. Untracked by design -- if it were not ignored, every agent

@@ -33,6 +33,7 @@
 		"test:integration": "node scripts/with-test-lock.mjs -- vitest run tests/index-integration.test.ts tests/clients/lsp/integration.test.ts",
 		"test:targeted": "node scripts/with-test-lock.mjs --shared -- vitest run",
 		"test:watch": "vitest",
+		"mutation:diff": "node scripts/stryker-diff.mjs --base origin/master --max-files 6",
 		"hygiene": "node scripts/prune-agent-worktrees.mjs",
 		"check": "node scripts/check-extensions.mjs",
 		"selftest:install": "node scripts/install-selftest.mjs",
@@ -137,6 +138,7 @@
 		"@biomejs/biome": "^2.4.10",
 		"@earendil-works/pi-coding-agent": "^0.85.1",
 		"@earendil-works/pi-tui": "^0.85.1",
+		"@stryker-mutator/core": "10.0.0",
 		"@taplo/cli": "0.7.0",
 		"@types/node": "^26.0.0",
 		"@types/pidusage": "^2.0.5",
@@ -169,5 +171,8 @@
 		"@ast-grep/cli@0.45.3": true,
 		"@google/genai@1.52.0": true,
 		"protobufjs@7.6.5": true
+	},
+	"overrides": {
+		"qs": "^6.15.4"
 	}
 }
