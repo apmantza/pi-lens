@@ -337,6 +337,8 @@ export interface LSPServerInfo {
 	id: string;
 	name: string;
 	extensions: readonly string[];
+	/** True for entries supplied through `lsp.servers.*`, not the built-in table. */
+	custom?: boolean;
 	root: RootFunction;
 	/**
 	 * "language" (default) = the file's primary language server (one is chosen per

@@ -187,6 +187,35 @@ describe("classifyCascadeWaitTier", () => {
 		);
 	});
 
+	it("classifies an unobserved custom no-provider server as diagnostics-unsupported", () => {
+		const snapshot = {
+			serverId: "dexter",
+			root: "C:/repo",
+			customServer: true,
+			operationSupport: {} as any,
+			workspaceDiagnosticsSupport: { mode: "push-only" as const },
+			advertisedCommands: [],
+			rawCapabilityKeys: [],
+		};
+		expect(mod.classifyServerWaitTier("dexter", snapshot as any)).toBe(
+			"diagnostics-unsupported",
+		);
+	});
+
+	it("latches a custom server to normal waits after any publish", () => {
+		const snapshot = {
+			serverId: "dexter",
+			root: "C:/repo",
+			customServer: true,
+			diagnosticsPublished: true,
+			operationSupport: {} as any,
+			workspaceDiagnosticsSupport: { mode: "push-only" as const },
+			advertisedCommands: [],
+			rawCapabilityKeys: [],
+		};
+		expect(mod.classifyServerWaitTier("dexter", snapshot as any)).toBe("waits");
+	});
+
 	it("classifies a push-only server WITHOUT silentOnClean (e.g. pyright, tier 2) as waits", () => {
 		getServersForFileWithConfig.mockReturnValue([server("python")]);
 		const snapshots = [

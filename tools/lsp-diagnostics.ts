@@ -154,6 +154,7 @@ type FileDiagnosticResult = {
 	 * type checker/compiler confirmed the file clean.
 	 */
 	primaryServerId?: string;
+	diagnosticsUnsupported?: boolean;
 };
 
 /** The only per-file states an explicit batch exposes to an agent. */
@@ -392,6 +393,7 @@ export function createLspDiagnosticsTool(
 			filesScanned?: number;
 			cleanFiles?: number;
 			unconfirmedFiles?: number;
+			navigationOnlyFiles?: number;
 			timedOutFiles?: number;
 			outcomeCounts?: Record<string, number>;
 			incompleteFiles?: number;
@@ -419,6 +421,10 @@ export function createLspDiagnosticsTool(
 			// compact-render as a bare "N diagnostics" — that erases the fact some
 			// files' clean status was never actually confirmed by the server.
 			const unconfirmedFiles = details?.unconfirmedFiles ?? 0;
+			const navigationOnlyFiles = details?.navigationOnlyFiles ?? 0;
+			if (navigationOnlyFiles > 0) {
+				return `lsp_diagnostics${scope} — ${count} ${noun} · ${details?.cleanFiles ?? 0} clean · ${navigationOnlyFiles} navigation-only`;
+			}
 			if (unconfirmedFiles > 0) {
 				const cleanFiles = details?.cleanFiles ?? 0;
 				const timedOutFiles = details?.timedOutFiles ?? 0;
@@ -684,6 +690,8 @@ type DiagnosticsCollectionResult = {
 	 * honest.
 	 */
 	unconfirmedServerIds: readonly string[];
+	/** Custom navigation-only servers that supplied no diagnostic evidence. */
+	diagnosticsUnsupportedServerIds: readonly string[];
 	/**
 	 * #692: the file content read while collecting (undefined only when the
 	 * read itself failed) — reused by the widget-reconcile caller so it can
@@ -771,6 +779,7 @@ async function collectDiagnosticsForFile(
 					// field across the socket. An older incumbent omits it → empty → the
 					// pre-#1470 handling, unchanged.
 					unconfirmedServerIds: attached.response.unconfirmedServerIds ?? [],
+					diagnosticsUnsupportedServerIds: [],
 					content,
 				};
 			}
@@ -834,6 +843,8 @@ async function collectDiagnosticsForFile(
 		// the getDiagnostics fallback never reports one, which is honest — that
 		// path claims no confirmation at all.
 		unconfirmedServerIds: touchCoverageGap(touched),
+		diagnosticsUnsupportedServerIds:
+			touched?.diagnosticsUnsupportedServerIds ?? [],
 		content,
 		binding,
 	};
@@ -1207,6 +1218,7 @@ async function collectFileDiagnosticResult(
 		timedOut,
 		confirmedByTouch,
 		unconfirmedServerIds,
+		diagnosticsUnsupportedServerIds,
 		content: collectedContent,
 		binding,
 		skipReason,
@@ -1223,7 +1235,11 @@ async function collectFileDiagnosticResult(
 	// be merged in rather than discarded.
 	let effectiveRawDiags = rawDiags;
 	let confirmation: "clean" | "unconfirmed" | undefined;
-	if (skipReason !== undefined) {
+	if (diagnosticsUnsupportedServerIds.length > 0) {
+		// No diagnostic provider and no push evidence is a capability boundary,
+		// not a clean result and not a timeout.
+		confirmation = undefined;
+	} else if (skipReason !== undefined) {
 		confirmation = "unconfirmed";
 	} else if (timedOut) {
 		if (applySeverityFilter(rawDiags, severity).length === 0) {
@@ -1299,6 +1315,7 @@ async function collectFileDiagnosticResult(
 		cacheCtx &&
 		scopeKey !== undefined &&
 		confirmation !== "unconfirmed" &&
+		diagnosticsUnsupportedServerIds.length === 0 &&
 		unconfirmedServerIds.length === 0
 	) {
 		cacheCtx.record(
@@ -1320,6 +1337,7 @@ async function collectFileDiagnosticResult(
 		timedOut: confirmation === "unconfirmed" ? timedOut : undefined,
 		...(skipReason !== undefined && { skipReason }),
 		primaryServerId: primaryServerId(file),
+		diagnosticsUnsupported: diagnosticsUnsupportedServerIds.length > 0,
 	};
 }
 
@@ -1343,6 +1361,7 @@ async function runFileDiagnostics(
 		timedOut,
 		confirmedByTouch,
 		unconfirmedServerIds,
+		diagnosticsUnsupportedServerIds,
 		content: collectedContent,
 		binding,
 		skipReason,
@@ -1362,7 +1381,9 @@ async function runFileDiagnostics(
 	// diagnostics it surfaces are merged in, not discarded.
 	let effectiveRawDiags = rawDiags;
 	let confirmation: "clean" | "unconfirmed" | undefined;
-	if (skipReason !== undefined) {
+	if (diagnosticsUnsupportedServerIds.length > 0) {
+		confirmation = undefined;
+	} else if (skipReason !== undefined) {
 		confirmation = "unconfirmed";
 	} else if (timedOut) {
 		if (applySeverityFilter(rawDiags, severity).length === 0) {
@@ -1446,6 +1467,9 @@ async function runFileDiagnostics(
 	// auxiliary findings exist — a wall of ast-grep/opengrep noise must never
 	// bury whether the actual language server confirmed the file clean.
 	const primaryLine = (() => {
+		if (diagnosticsUnsupportedServerIds.length > 0) {
+			return `Primary LSP${primaryId ? ` (${primaryId})` : ""}: navigation-only — diagnostics unsupported (no pull provider or publish evidence).`;
+		}
 		if (timedOut) {
 			return (
 				"Primary LSP: check timed out — NOT the same as 0 diagnostics; the " +
@@ -1529,6 +1553,8 @@ async function runFileDiagnostics(
 			truncated,
 			unconfirmed,
 			timedOut: unconfirmed ? timedOut : undefined,
+			navigationOnlyFiles:
+				diagnosticsUnsupportedServerIds.length > 0 ? 1 : undefined,
 			...(skipReason !== undefined && { skipReason }),
 			// #1470: which servers this result does NOT speak for. Absent when it
 			// speaks for all of them.
@@ -1553,11 +1579,17 @@ function tallyConfirmation(results: FileDiagnosticResult[]): {
 	clean: number;
 	unconfirmed: number;
 	timedOut: number;
+	navigationOnly: number;
 } {
 	let clean = 0;
 	let unconfirmed = 0;
 	let timedOut = 0;
+	let navigationOnly = 0;
 	for (const result of results) {
+		if (result.diagnosticsUnsupported) {
+			navigationOnly += 1;
+			continue;
+		}
 		if (result.diagnostics.length > 0) continue;
 		if (result.confirmation === "unconfirmed") {
 			unconfirmed += 1;
@@ -1568,13 +1600,14 @@ function tallyConfirmation(results: FileDiagnosticResult[]): {
 			clean += 1;
 		}
 	}
-	return { clean, unconfirmed, timedOut };
+	return { clean, unconfirmed, timedOut, navigationOnly };
 }
 
 function classifyBatchFileOutcome(
 	result: FileDiagnosticResult,
 ): BatchFileOutcome {
 	if (result.error) return "failed";
+	if (result.diagnosticsUnsupported) return "unsupported";
 	// A timed-out/unconfirmed answer may contain partial findings, but it cannot
 	// honestly be called a complete findings result. Keep the raw findings for
 	// investigation while making the aggregate incomplete.
@@ -1822,6 +1855,9 @@ async function runBatchFileDiagnostics(
 		outcomeCounts,
 		incompleteFiles,
 	} = await collectBatchDiagnostics(absPaths, severity, lspService, options);
+	const navigationOnly = results.filter(
+		(result) => result.diagnosticsUnsupported,
+	).length;
 
 	const lines: string[] = [
 		`Files checked: ${results.length}`,
@@ -1907,6 +1943,7 @@ async function runBatchFileDiagnostics(
 			truncated,
 			cleanFiles: clean,
 			unconfirmedFiles: unconfirmed,
+			navigationOnlyFiles: navigationOnly > 0 ? navigationOnly : undefined,
 			timedOutFiles: timedOut > 0 ? timedOut : undefined,
 			outcomes: results.map((result) => ({
 				file: result.file,
@@ -2000,6 +2037,7 @@ async function runDirectoryDiagnostics(
 	const wasCapped = collectedFiles.length > MAX_FILES;
 	const filesToProcess = collectedFiles.slice(0, MAX_FILES);
 	const {
+		results,
 		fileErrors,
 		lspHealthWarnings,
 		total,
@@ -2016,6 +2054,9 @@ async function runDirectoryDiagnostics(
 		lspService,
 		options,
 	);
+	const navigationOnly = results.filter(
+		(result) => result.diagnosticsUnsupported,
+	).length;
 
 	let text: string;
 	if (total === 0) {
@@ -2104,6 +2145,7 @@ async function runDirectoryDiagnostics(
 			truncated,
 			cleanFiles: clean,
 			unconfirmedFiles: unconfirmed,
+			navigationOnlyFiles: navigationOnly > 0 ? navigationOnly : undefined,
 			timedOutFiles: timedOut > 0 ? timedOut : undefined,
 			fileErrors: fileErrors.length > 0 ? fileErrors : undefined,
 			lspHealthWarnings:

@@ -11,6 +11,9 @@ import type {
 export interface LSPCapabilitySnapshot {
 	serverId: string;
 	root: string;
+	customServer?: boolean;
+	/** True after this server published diagnostics for any document this session. */
+	diagnosticsPublished?: boolean;
 	operationSupport: LSPOperationSupport;
 	workspaceDiagnosticsSupport: LSPWorkspaceDiagnosticsSupport;
 	/** Commands the server advertised for workspace/executeCommand (the allowlist) */

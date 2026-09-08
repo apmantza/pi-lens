@@ -272,6 +272,8 @@ export interface LSPState {
 	 * server that recovers later in the same session is never stuck cold.
 	 */
 	demonstratedCold: Set<string>;
+	/** Server ids that have published diagnostics in this LSP session. */
+	diagnosticsPublished: Set<string>;
 }
 
 const BROKEN_BASE_COOLDOWN_MS = 15_000;
@@ -1489,6 +1491,7 @@ export class LSPService {
 			clientSpawnedAt: new Map(),
 			demonstratedReady: new Set(),
 			demonstratedCold: new Set(),
+			diagnosticsPublished: new Set(),
 		};
 	}
 
@@ -4223,6 +4226,9 @@ export class LSPService {
 				initialization: mergedInit,
 				initializeTimeoutMs: server.initializeTimeoutMs,
 				launchVariant: spawned.launchVariant,
+				onDiagnosticsPublished: (serverId) => {
+					this.state.diagnosticsPublished.add(serverId);
+				},
 			});
 
 			// Guard 2: service was shut down while we were completing the initialize
@@ -5045,6 +5051,7 @@ export class LSPService {
 			let tsserverSyncConfirmed:
 				| import("./client.js").LSPDiagnostic[]
 				| undefined;
+			let diagnosticsUnsupportedServerIds: string[] = [];
 			if (diagnosticsMode !== "none") {
 				// Resolution: env wins so users can tune the cap without rebuilding.
 				// Otherwise, on the single-server hot path (primary scope), use that
@@ -5125,6 +5132,10 @@ export class LSPService {
 								operationSupport: entry.client.getOperationSupport(),
 								workspaceDiagnosticsSupport:
 									entry.client.getWorkspaceDiagnosticsSupport(),
+								customServer: entry.info.custom,
+								diagnosticsPublished: this.state.diagnosticsPublished.has(
+									entry.info.id,
+								),
 								advertisedCommands: entry.client.getAdvertisedCommands(),
 								rawCapabilityKeys: entry.client.getRawCapabilityKeys?.() ?? [],
 								launchVariant: entry.client.getLaunchVariant?.(),
@@ -5288,6 +5299,30 @@ export class LSPService {
 					clientScope === "with-auxiliary" &&
 					options.collectDiagnostics === true &&
 					spawned.some((e) => e.info.role === "auxiliary");
+				if (spawned.some((entry) => entry.info.custom === true)) {
+					try {
+						const snapshots = await this.getCapabilitySnapshots(filePath);
+						diagnosticsUnsupportedServerIds = spawned
+							.filter(
+								(entry) =>
+									classifyServerWaitTier(
+										entry.info.id,
+										snapshots.find((s) => s.serverId === entry.info.id),
+									) === "diagnostics-unsupported",
+							)
+							.map((entry) => entry.info.id);
+						for (const serverId of diagnosticsUnsupportedServerIds) {
+							recordDegradationOnce({
+								kind: "lsp-diagnostics-unsupported",
+								subject: serverId,
+								reason:
+									"custom server has no pull provider and no publish evidence in this session",
+							});
+						}
+					} catch {
+						// Capability uncertainty fails closed and retains the wait.
+					}
+				}
 
 				// Per-server wait promises (each already bounded by its own
 				// perServerTimeout — unchanged from before R8).
@@ -5332,6 +5367,9 @@ export class LSPService {
 						: perServerDeclaredTimeouts[entryIndex];
 				});
 				const perServerWaits = spawned.map((entry, entryIndex) => {
+					if (diagnosticsUnsupportedServerIds.includes(entry.info.id)) {
+						return Promise.resolve(undefined);
+					}
 					// #1459: a DEFERRED server never received this content, so its version
 					// can never advance past the baseline — waiting on it burns its whole
 					// budget and would flip the touch to `inconclusive`, discarding a
@@ -5839,7 +5877,9 @@ export class LSPService {
 					// A deferred server was never sent this content and is not waited on, so
 					// it cannot have "timed out" — it is already reported as a coverage gap.
 					const waited = spawned.filter(
-						(entry) => !deferredResyncServerIds.has(entry.info.id),
+						(entry) =>
+							!deferredResyncServerIds.has(entry.info.id) &&
+							!diagnosticsUnsupportedServerIds.includes(entry.info.id),
 					);
 					const unanswered = waited.filter(
 						(entry) => !answeredForThisTouch(entry),
@@ -5855,7 +5895,11 @@ export class LSPService {
 						(entry) => entry.info.role !== "auxiliary",
 					);
 					diagnosticsTimedOut =
-						!hasWaitedPrimary ||
+						(!hasWaitedPrimary &&
+							diagnosticsUnsupportedServerIds.length > 0 &&
+							diagnosticsUnsupportedServerIds.every((id) =>
+								primaryServerIds.has(id),
+							)) ||
 						diagnosticsUnansweredPrimaryServerIds.length > 0;
 					for (const entry of unanswered) {
 						incrementDegradationCount({
@@ -6465,6 +6509,10 @@ export class LSPService {
 			// collect, `binding` only for a collecting touch — a non-collecting touch
 			// keeps resolving `{ diags: [] }`, no flags.
 			const result: TouchFileResult = { diags: collected ?? [] };
+			if (diagnosticsUnsupportedServerIds.length > 0) {
+				result.diagnosticsUnsupportedServerIds =
+					diagnosticsUnsupportedServerIds;
+			}
 
 			if (collected !== undefined && inconclusive) {
 				result.inconclusive = true;
@@ -7435,6 +7483,8 @@ export class LSPService {
 					root,
 					operationSupport: client.getOperationSupport(),
 					workspaceDiagnosticsSupport: client.getWorkspaceDiagnosticsSupport(),
+					customServer: server.custom,
+					diagnosticsPublished: this.state.diagnosticsPublished.has(server.id),
 					advertisedCommands: client.getAdvertisedCommands(),
 					rawCapabilityKeys: client.getRawCapabilityKeys?.() ?? [],
 					launchVariant: client.getLaunchVariant?.(),
@@ -7452,6 +7502,8 @@ export class LSPService {
 				root: client.root,
 				operationSupport: client.getOperationSupport(),
 				workspaceDiagnosticsSupport: client.getWorkspaceDiagnosticsSupport(),
+				customServer: this.state.servers.get(serverId)?.custom,
+				diagnosticsPublished: this.state.diagnosticsPublished.has(serverId),
 				advertisedCommands: client.getAdvertisedCommands(),
 				rawCapabilityKeys: client.getRawCapabilityKeys?.() ?? [],
 				launchVariant: client.getLaunchVariant?.(),
