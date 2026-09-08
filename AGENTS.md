@@ -465,7 +465,10 @@ wait per LSP session. A publication keeps normal waits; silence latches
 `diagnosticsUnsupported` by `serverId` after that wait, resets on server restart
 or a new session, and reports navigation-only at the service seam. Capability
 snapshot lookup uses the live remaining hook deadline, not a fresh full hook
-budget. (#2765)
+budget. The shared first-contact probe uses the full push budget plus the
+service shutdown signal; each caller may detach at its own hook remainder.
+Rejection or shutdown is an errored, fail-closed wait and never arms the latch.
+(#2765)
 
 Pull-diagnostics request deadlines send `$/cancelRequest`, but cancellation is
 advisory. While a cancelled request remains unsettled, admission blocks another

@@ -127,6 +127,7 @@ function makeClient(
 		hangingNotifyAfterWrites?: number;
 		/** Model a write that lands LATE (past the caller's notify budget). */
 		notifyDelayMs?: number;
+		waitForDiagnosticsRejects?: boolean;
 	},
 ) {
 	let version = 0;
@@ -198,28 +199,30 @@ function makeClient(
 			close: vi.fn(async () => {}),
 		},
 		pingLiveness: vi.fn().mockResolvedValue(true),
-		waitForDiagnostics: vi.fn(
-			(filePath: string) =>
-				new Promise<void>((resolve) =>
-					setTimeout(() => {
-						// A server publishes about the content it actually RECEIVED. With
-						// no write landed there is nothing new to say, so a hanging write
-						// leaves the previous publication (and its binding) in place —
-						// exactly the stale-findings hazard the merge has to drop.
-						const delivered = deliveredContent.get(filePath);
-						if (publishes && delivered !== undefined) {
-							version += 1;
-							stampsByPath.set(filePath, version);
-							cache.set(normalizeMapKey(filePath), {
-								diags,
-								ts: Date.now(),
-							});
-							bindings.set(filePath, hashDiagnosticContent(delivered));
-						}
-						resolve();
-					}, delayMs),
-				),
-		),
+		waitForDiagnostics: vi.fn((filePath: string) => {
+			if (options.waitForDiagnosticsRejects) {
+				return Promise.reject(new Error("server transport failed"));
+			}
+			return new Promise<void>((resolve) =>
+				setTimeout(() => {
+					// A server publishes about the content it actually RECEIVED. With
+					// no write landed there is nothing new to say, so a hanging write
+					// leaves the previous publication (and its binding) in place —
+					// exactly the stale-findings hazard the merge has to drop.
+					const delivered = deliveredContent.get(filePath);
+					if (publishes && delivered !== undefined) {
+						version += 1;
+						stampsByPath.set(filePath, version);
+						cache.set(normalizeMapKey(filePath), {
+							diags,
+							ts: Date.now(),
+						});
+						bindings.set(filePath, hashDiagnosticContent(delivered));
+					}
+					resolve();
+				}, delayMs),
+			);
+		}),
 	};
 }
 
@@ -649,6 +652,35 @@ describe("#1549 — per-server touch verdict", () => {
 		expect(results[1]?.diagnosticsUnsupportedServerIds).toEqual(["dexter"]);
 	});
 
+	it("fails closed when a shared first-contact probe rejects", async () => {
+		const primary = makeClient(100, [], {
+			serverId: "dexter",
+			customServer: true,
+			waitForDiagnosticsRejects: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(0, [], { serverId: "opengrep" }),
+		});
+
+		const first = service.touchFile(FILE, "const x = 1;", CASCADE_TOUCH);
+		const second = service.touchFile(FILE, "const y = 2;", CASCADE_TOUCH);
+		await vi.advanceTimersByTimeAsync(100);
+		const results = await Promise.all([first, second]);
+
+		expect(results.every((result) => result?.inconclusive)).toBe(true);
+		expect(results.map((result) => result?.inconclusiveServerIds)).toEqual([
+			["dexter"],
+			["dexter"],
+		]);
+		expect(results[0]?.diagnosticsUnsupportedServerIds).toBeUndefined();
+
+		const retry = service.touchFile(FILE, "const z = 3;", CASCADE_TOUCH);
+		await vi.advanceTimersByTimeAsync(100);
+		await retry;
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(2);
+	});
+
 	it("does not latch first contact when the live hook deadline cuts the push wait", async () => {
 		process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS = "5000";
 		const primary = makeClient(5000, [], {
@@ -689,7 +721,10 @@ describe("#1549 — per-server touch verdict", () => {
 		});
 		await vi.advanceTimersByTimeAsync(5000);
 		await second;
-		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(2);
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(1);
+		const third = await touchOnce(service, "const z = 3;");
+		expect(third?.diagnosticsUnsupportedServerIds).toEqual(["dexter"]);
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(1);
 	});
 
 	it("keeps a custom primary on normal waits when first contact publishes", async () => {

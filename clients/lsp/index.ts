@@ -1266,7 +1266,7 @@ export class LSPService {
 	 */
 	private readonly firstContactWaits = new Map<
 		string,
-		Promise<"answered" | "silent" | "cut_off">
+		Promise<"answered" | "silent" | "errored">
 	>();
 	/**
 	 * #1934 review F1: what the last COMPLETED `spawnClient` call for a
@@ -4605,6 +4605,19 @@ export class LSPService {
 		if (!leaseKeys) {
 			// An idle eviction won between selection and lease admission. Resolve the
 			// now-current client set and replay; no notification targets the retiree.
+			if (this.checkDestroyed()) {
+				const primaryServerIds = spawned
+					.filter((entry) => entry.info.role !== "auxiliary")
+					.map((entry) => entry.info.id);
+				return {
+					diags: [],
+					inconclusive: true,
+					...(primaryServerIds.length > 0 && {
+						inconclusiveServerIds: primaryServerIds,
+					}),
+					inconclusiveReason: "diagnostics-wait",
+				};
+			}
 			return this.touchFile(filePath, content, options);
 		}
 		try {
@@ -5395,6 +5408,7 @@ export class LSPService {
 						: perServerDeclaredTimeouts[entryIndex];
 				});
 				const firstContactCutOffServerIds = new Set<string>();
+				const firstContactErroredServerIds = new Set<string>();
 				const answeredForThisTouch = (
 					entry: (typeof spawned)[number],
 				): boolean => {
@@ -5426,7 +5440,10 @@ export class LSPService {
 						: perServerDeclaredTimeouts[entryIndex];
 				});
 				const perServerWaits = spawned.map((entry, entryIndex) => {
-					if (diagnosticsUnsupportedServerIds.includes(entry.info.id)) {
+					if (
+						this.state.diagnosticsUnsupported.has(entry.info.id) ||
+						diagnosticsUnsupportedServerIds.includes(entry.info.id)
+					) {
 						return Promise.resolve(undefined);
 					}
 					// #1459: a DEFERRED server never received this content, so its version
@@ -5491,26 +5508,42 @@ export class LSPService {
 
 					let shared = this.firstContactWaits.get(entry.info.id);
 					if (!shared) {
-						const remainingHookMs =
-							hookDeadlineAt === undefined
-								? serverTimeout
-								: Math.max(0, hookDeadlineAt - Date.now());
-						const waitBudget = Math.min(serverTimeout, remainingHookMs);
-						const wait = waitForDiagnostics().catch(() => undefined);
-						const completed =
-							waitBudget < serverTimeout
-								? withDeadline(
-										wait.then(() => true),
-										{
-											ms: waitBudget,
-											onTimeout: "undefined",
-											onReject: "undefined",
-										},
-									)
-								: wait.then(() => true);
+						let removeShutdownListener: (() => void) | undefined;
+						const shutdown = new Promise<"shutdown">((resolve) => {
+							const onShutdown = () => resolve("shutdown");
+							if (this.shutdownController.signal.aborted) {
+								onShutdown();
+								return;
+							}
+							this.shutdownController.signal.addEventListener(
+								"abort",
+								onShutdown,
+								{
+									once: true,
+								},
+							);
+							removeShutdownListener = () =>
+								this.shutdownController.signal.removeEventListener(
+									"abort",
+									onShutdown,
+								);
+						});
+						const probe = Promise.race([
+							waitForDiagnostics().then(
+								() => "completed" as const,
+								() => "errored" as const,
+							),
+							shutdown,
+						]);
+						const completed = withDeadline(probe, {
+							ms: serverTimeout,
+							onTimeout: "undefined",
+						});
 						shared = completed
-							.then((finished) => {
-								if (finished !== true) return "cut_off" as const;
+							.then((outcome) => {
+								if (outcome === "errored" || outcome === "shutdown") {
+									return "errored" as const;
+								}
 								if (answeredForThisTouch(entry)) return "answered" as const;
 								this.state.diagnosticsUnsupported.add(entry.info.id);
 								recordDegradationOnce({
@@ -5521,16 +5554,28 @@ export class LSPService {
 								});
 								return "silent" as const;
 							})
+							.catch(() => "errored" as const)
 							.finally(() => {
+								removeShutdownListener?.();
 								if (this.firstContactWaits.get(entry.info.id) === shared) {
 									this.firstContactWaits.delete(entry.info.id);
 								}
 							});
 						this.firstContactWaits.set(entry.info.id, shared);
 					}
-					return shared.then((outcome) => {
-						if (outcome === "cut_off")
+					const callerWait =
+						hookDeadlineAt === undefined
+							? shared
+							: withDeadline(shared, {
+									ms: Math.max(0, hookDeadlineAt - Date.now()),
+									onTimeout: "undefined",
+								});
+					return callerWait.then((outcome) => {
+						if (outcome === undefined) {
 							firstContactCutOffServerIds.add(entry.info.id);
+						} else if (outcome === "errored") {
+							firstContactErroredServerIds.add(entry.info.id);
+						}
 						return undefined;
 					});
 				});
@@ -5820,6 +5865,7 @@ export class LSPService {
 							!this.state.diagnosticsPublished.has(entry.info.id) &&
 							!this.state.diagnosticsUnsupported.has(entry.info.id) &&
 							!firstContactCutOffServerIds.has(entry.info.id) &&
+							!firstContactErroredServerIds.has(entry.info.id) &&
 							entry.client.getWorkspaceDiagnosticsSupport().mode !== "pull",
 					)
 					.map((entry) => entry.info.id);
@@ -5972,7 +6018,10 @@ export class LSPService {
 							savedVsBudgetMs: Math.max(0, timeoutMs - waitedMs),
 						},
 					});
-				} else if (waitedMs + 20 >= timeoutMs) {
+				} else if (
+					waitedMs + 20 >= timeoutMs ||
+					firstContactErroredServerIds.size > 0
+				) {
 					// Within ~20 ms of the configured budget we treat it as a timeout;
 					// the LSP didn't beat the cap. Diagnostics that arrive late still
 					// land in the client's cache and surface on the next edit.
