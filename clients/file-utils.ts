@@ -988,7 +988,8 @@ function globToRegExp(glob: string): RegExp {
 	// Directory names use the same `*`-only dialect as read-guard exemptions.
 	// Collapse adjacent stars before compiling to avoid nullable-group
 	// backtracking on a non-matching name (#2622).
-	const escaped = glob.replace(/\*+/g, "*")
+	const escaped = glob
+		.replace(/\*+/g, "*")
 		.replace(/[.+^${}()|[\]\\]/g, "\\$&")
 		.replace(/\*/g, ".*")
 		.replace(/\?/g, ".");

@@ -33,9 +33,7 @@ function readGuardMatch(filePath: string, pattern: string): boolean {
 	return (
 		createReadGuard("read-guard-glob-differential", {
 			exemptions: [{ pattern, mode: "allow" }],
-		})
-			.checkEdit(filePath)
-			.action === "allow"
+		}).checkEdit(filePath).action === "allow"
 	);
 }
 
@@ -126,6 +124,17 @@ describe("adjacent wildcard glob compilers (#2622)", () => {
 		const matched = readGuardMatch(filePath, pattern);
 		const elapsed = performance.now() - started;
 
+		expect(matched).toBe(false);
+		expect(elapsed).toBeLessThan(BUDGET_MS);
+	});
+
+	it(`answers a ${ADJACENT_STARS}-star directory-name miss within ${BUDGET_MS}ms`, () => {
+		const candidate = "cache" + "x".repeat(245);
+		const started = performance.now();
+		const matched = isExcludedDirName(candidate, ["cache************tmp"]);
+		const elapsed = performance.now() - started;
+
+		// Keep deliberate headroom for scheduler contention in the serialized lane.
 		expect(matched).toBe(false);
 		expect(elapsed).toBeLessThan(BUDGET_MS);
 	});

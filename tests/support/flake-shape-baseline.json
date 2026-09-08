@@ -18,6 +18,7 @@
 		"clients/pipeline-lsp-sync.test.ts": 5,
 		"clients/project-diagnostics/fresh-fetch.test.ts": 2,
 		"clients/read-expansion-enrichment.test.ts": 1,
+		"clients/read-guard-glob-nonbacktracking.test.ts": 2,
 		"clients/redact/secrets.test.ts": 1,
 		"clients/review-graph.service.test.ts": 1,
 		"clients/runtime-session-retro-hydrate-warmup-race.test.ts": 1,
