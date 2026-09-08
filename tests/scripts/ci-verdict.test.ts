@@ -988,6 +988,10 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 		"Vale prose lint (advisory)",
 		"OSV scan (advisory)",
 		"knip (advisory)",
+		"jscpd (advisory)",
+		"yamllint (advisory)",
+		"typos (advisory)",
+		"taplo (advisory)",
 		"greeting",
 		// #2700 review round 3: named "oxlint (advisory)" (the `(advisory)`
 		// suffix, not a hand-maintained ci-checks.mjs entry like `greeting`
@@ -1056,6 +1060,10 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 			"Vale prose lint (advisory)",
 			"OSV scan (advisory)",
 			"oxlint (advisory)",
+			"jscpd (advisory)",
+			"yamllint (advisory)",
+			"typos (advisory)",
+			"taplo (advisory)",
 		]) {
 			expect(isAdvisoryCheck(name)).toBe(true);
 		}
@@ -1073,6 +1081,17 @@ describe("isAdvisoryCheck — every job name from a PR-triggered workflow is cla
 	it("oxlint (advisory) is classified by the name suffix, not a hand-maintained ADVISORY_CHECKS entry", () => {
 		expect(ADVISORY_CHECKS.has("oxlint (advisory)")).toBe(false);
 		expect(isAdvisoryCheck("oxlint (advisory)")).toBe(true);
+	});
+
+	it("registers the four tool jobs in the explicit advisory allowlist (#2706)", () => {
+		expect([...ADVISORY_CHECKS]).toEqual(
+			expect.arrayContaining([
+				"jscpd (advisory)",
+				"yamllint (advisory)",
+				"typos (advisory)",
+				"taplo (advisory)",
+			]),
+		);
 	});
 });
 

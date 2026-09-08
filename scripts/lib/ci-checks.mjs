@@ -40,6 +40,11 @@ export const ADVISORY_CHECKS = new Set([
 	// spawns are a DIFFERENT, unrelated set of check-run names this list does
 	// NOT cover, and they gate like any other non-advisory check).
 	"CodeQL",
+	// #2706 tooling jobs have explicit advisory entries as well as the suffix.
+	"jscpd (advisory)",
+	"yamllint (advisory)",
+	"typos (advisory)",
+	"taplo (advisory)",
 	// .github/workflows/greetings.yml's `greeting` job (the job KEY -- no
 	// `name:` override), posted by `actions/first-interaction` on
 	// `pull_request_target: types: [opened]` only. A cosmetic

@@ -1,8 +1,6 @@
 # yamllint config (dogfood activation, refs #1844). Scopes yamllint to the
-# YAML a human actually maintains here — GitHub Actions workflows and
-# top-level config — and tunes rules so the CURRENT tree passes at error
-# severity. Warnings stay on as advisories (same "downgrade, don't mass-edit
-# source" precedent as .oxlintrc.json and typos.toml in this same PR).
+# YAML tracked by the repository, including rule catalogs and workflows, and
+# tunes only high-volume style rules. Warnings stay visible as advisories.
 extends: default
 
 ignore: |

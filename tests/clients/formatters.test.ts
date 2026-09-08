@@ -17,6 +17,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	type ResolvedFormatterCommand,
 	SKIP_FORMATTING,
 	biomeFormatter,
 	blackFormatter,
@@ -90,6 +91,21 @@ async function withPathShim(
 		await fn();
 	} finally {
 		process.env.PATH = origPath;
+	}
+}
+
+async function withIsolatedPath(
+	fn: () => Promise<void> | void,
+): Promise<void> {
+	const isolatedPath = path.join(tmpDir, "isolated-path");
+	fs.mkdirSync(isolatedPath, { recursive: true });
+	const origPath = process.env.PATH;
+	process.env.PATH = isolatedPath;
+	try {
+		await fn();
+	} finally {
+		if (origPath === undefined) delete process.env.PATH;
+		else process.env.PATH = origPath;
 	}
 }
 
@@ -1323,10 +1339,13 @@ describe("getFormattersForFile — policy selection", () => {
 			.mockResolvedValue(managedPath);
 		try {
 			const formatters = await import("../../clients/formatters.js");
-			const cmd = await formatters.taploFormatter.resolveCommand!(
-				fileIn(tmpDir, "config.toml"),
-				tmpDir,
-			);
+			let cmd: ResolvedFormatterCommand | undefined;
+			await withIsolatedPath(async () => {
+				cmd = await formatters.taploFormatter.resolveCommand!(
+					fileIn(tmpDir, "config.toml"),
+					tmpDir,
+				);
+			});
 			expect(spy).toHaveBeenCalledWith("taplo");
 			expect(cmd).toEqual([managedPath, "fmt", fileIn(tmpDir, "config.toml")]);
 		} finally {
