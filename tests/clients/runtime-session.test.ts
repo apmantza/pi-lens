@@ -373,8 +373,8 @@ it(
 				{ timeoutMs: HEAVY_IO_TIMEOUT_MS },
 			);
 			expect(dbg).toHaveBeenCalledWith(
-			"session_start knip: skipped (disabled by config)",
-		);
+				"session_start knip: skipped (disabled by config)",
+			);
 			expect(knipEnsure).not.toHaveBeenCalled();
 			expect(
 				getDegradationSummary().some(

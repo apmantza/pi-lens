@@ -829,19 +829,18 @@ const EXEMPT_SITES: Readonly<Record<string, SweepExemption>> = {
 				"budget many times over.",
 			owner: "#2523 slice 2",
 		},
-	"clients/runtime-session.ts#d7c597d6~b67d7877":
-		{
-			family: "hook-await",
-			site: "session_start",
-			reason:
-				"One heavyweight startup analyzer per await (knip, jscpd, " +
-				"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
-				"review graph, call graph, codebase model, word index). Each " +
-				"has a spawn-level timeout at the leaf and none has a wall " +
-				"bound above it; together they are session_start's 5000ms " +
-				"budget many times over.",
-			owner: "#2523 slice 2",
-		},
+	"clients/runtime-session.ts#d7c597d6~b67d7877": {
+		family: "hook-await",
+		site: "session_start",
+		reason:
+			"One heavyweight startup analyzer per await (knip, jscpd, " +
+			"govulncheck, gitleaks, opengrep, madge, trivy, ast-grep, " +
+			"review graph, call graph, codebase model, word index). Each " +
+			"has a spawn-level timeout at the leaf and none has a wall " +
+			"bound above it; together they are session_start's 5000ms " +
+			"budget many times over.",
+		owner: "#2523 slice 2",
+	},
 	"clients/runtime-session.ts#2c64a178~b262f927": {
 		family: "hook-await",
 		site: "session_start",
@@ -2285,6 +2284,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
  * rather than silently inherited.
  */
 const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
+	"call:clients/installer/managed-tool-refresh.ts#executeManagedToolRefresh:8d9498e9~773eca34":
+		"`undefined` is intentional: the unref'd timer runs after session_start " +
+		"returns, so no live turn signal belongs to this background refresh. The " +
+		"session_start wall budget still bounds the best-effort alias stamp, and " +
+		"the required signal field makes this absence an explicit decision.",
 	"call:clients/actionable-warnings.ts#boundedLspCall:2b57f8b9~9137fb1a":
 		"`LspEnrichmentDeps.signal`. ALWAYS live on the deferred loop (built " +
 		"from the turn signal combined with the deferral controller's). Optional " +

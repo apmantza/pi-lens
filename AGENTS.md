@@ -840,6 +840,12 @@ records count toward the byte budget but remain exempt from eviction until
 Capacity telemetry keeps the per-store subject and names the triggering
 `count` or `bytes` axis in the existing bounded degradation record. (#2247)
 
+Periodic refresh candidates deduplicate npm entries by `packageName`. The first
+registry entry represents a package, and stale ordering uses the oldest covered
+per-tool stamp with `toolId` as the tie-break. One package update stamps every
+installed registry id that shares it, so aliases do not consume another session
+budget slot. The refresh log names the package and covered ids. (#2666)
+
 Managed verification uses the registry's optional `verificationTimeoutMs` at
 every installer-owned probe seam, including local discovery, npm install, and
 periodic refresh. The refresh candidate projection carries that policy instead
@@ -864,6 +870,14 @@ and avoids a nested-file stat on every `isIgnored` verdict. IDE edits, checkout
 or merge restoration, and writes under already-ignored directories remain
 outside the tool-result producer and are tracked by the freshness-probe issue.
 (#2071)
+
+The `*`-only glob compilers in `clients/read-guard.ts` and
+`clients/file-utils.ts` collapse adjacent wildcard runs before constructing a
+regex. `.*.*` has the same language as `.*`, but the former can partition a
+long non-match exponentially. Keep this dialect local; do not introduce
+`**` semantics or fold it into the workspace-member matcher. The regression
+corpus and wall-clock pin live in
+`tests/clients/read-guard-glob-nonbacktracking.test.ts` (#2622).
 
 Consumed nested `.gitignore` sources carry their build-time `mtimeMs` and size
 in the project matcher cache. `getProjectIgnoreMatcher` sweeps those sources

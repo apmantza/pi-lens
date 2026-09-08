@@ -3716,6 +3716,7 @@ export function getRefreshableManagedNpmTools(): Array<{
 	packageName: string;
 	binaryName: string;
 }> {
+	const seenPackages = new Set<string>();
 	return getRefreshableManagedTools()
 		.filter((candidate) => candidate.strategy === "npm")
 		.map((candidate) => ({
@@ -3724,7 +3725,12 @@ export function getRefreshableManagedNpmTools(): Array<{
 			// have both, so these are total.
 			packageName: candidate.packageName as string,
 			binaryName: candidate.binaryName as string,
-		}));
+		}))
+		.filter((candidate) => {
+			if (seenPackages.has(candidate.packageName)) return false;
+			seenPackages.add(candidate.packageName);
+			return true;
+		});
 }
 
 // --- Periodic refresh seam for the non-npm strategies (#1747) ---
