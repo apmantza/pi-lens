@@ -57,7 +57,8 @@ jobs:
             exit 0
           fi
           git fetch --depth=1 origin "${{ github.event.pull_request.base.sha }}"
-          if git diff --name-only "${{ github.event.pull_request.base.sha }}" HEAD -- package-lock.json | grep -qx package-lock.json; then
+          MERGE_BASE=$(git merge-base "${{ github.event.pull_request.base.sha }}" HEAD)
+          if git diff --name-only "$MERGE_BASE" HEAD -- package-lock.json | grep -qx package-lock.json; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
