@@ -2285,6 +2285,11 @@ const HELPER_UNBOUNDED: Readonly<Record<string, number>> = {
  * rather than silently inherited.
  */
 const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
+	"call:clients/installer/managed-tool-refresh.ts#executeManagedToolRefresh:8d9498e9~773eca34":
+		"`undefined` is intentional: the unref'd timer runs after session_start " +
+		"returns, so no live turn signal belongs to this background refresh. The " +
+		"session_start wall budget still bounds the best-effort alias stamp, and " +
+		"the required signal field makes this absence an explicit decision.",
 	"call:clients/actionable-warnings.ts#boundedLspCall:2b57f8b9~9137fb1a":
 		"`LspEnrichmentDeps.signal`. ALWAYS live on the deferred loop (built " +
 		"from the turn signal combined with the deferral controller's). Optional " +

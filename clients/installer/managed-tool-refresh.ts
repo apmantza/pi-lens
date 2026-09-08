@@ -46,6 +46,8 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { HOOK_WALL_BUDGET_MS } from "../hook-budgets.js";
+import { bounded } from "../deadline-utils.js";
 import { recordDegradationOnce } from "../degradation-ledger.js";
 import { commitDurableStoreAsync } from "../durable-store.js";
 import {
@@ -701,6 +703,8 @@ async function performNpmRefresh(
 			0,
 			200,
 		);
+		const coveredIds =
+			candidate.coveredToolIds?.join(",") ?? candidate.toolId;
 		// "Keeping <old version>" would be an unchecked assertion (#1746 review
 		// F2). The spawn budget kills the package manager where it stands, which
 		// can be mid-write: the tree may hold a new version, a half-written one,
@@ -712,10 +716,10 @@ async function performNpmRefresh(
 		recordDegradationOnce({
 			kind: "managed-tool-refresh",
 			subject: candidate.toolId,
-			reason: `${pm} update failed: ${reason || "non-zero exit"}`,
+			reason: `package ${packageName}, covered ids ${coveredIds}; ${pm} update failed: ${reason || "non-zero exit"}`,
 		});
 		logSessionStart(
-			`managed-tool-refresh ${candidate.toolId}: ${pm} update failed after ${elapsedMs}ms — on disk now ${onDisk ?? "unreadable"} (was ${previousVersion ?? "unknown"}); resolution cache cleared for re-probe (${reason || "non-zero exit"})`,
+			`managed-tool-refresh ${candidate.toolId}: ${pm} update failed after ${elapsedMs}ms — package ${packageName}, covered ids ${coveredIds}; on disk now ${onDisk ?? "unreadable"} (was ${previousVersion ?? "unknown"}); resolution cache cleared for re-probe (${reason || "non-zero exit"})`,
 		);
 		await writeRefreshStamp(candidate.toolId, {
 			checkedAt: now,
@@ -767,10 +771,12 @@ async function performNpmRefresh(
 		candidate.packageEntryOf,
 	);
 	if (!verified) {
+		const coveredIds =
+			candidate.coveredToolIds?.join(",") ?? candidate.toolId;
 		recordDegradationOnce({
 			kind: "managed-tool-refresh",
 			subject: candidate.toolId,
-			reason: `binary failed verification after ${pm} update (${previousVersion ?? "unknown"} → ${currentVersion ?? "unknown"})`,
+			reason: `package ${packageName}, covered ids ${coveredIds}; binary failed verification after ${pm} update (${previousVersion ?? "unknown"} → ${currentVersion ?? "unknown"})`,
 		});
 		// Deliberately NOT removed. `installNpmTool` deletes a freshly installed
 		// package that fails verification because nothing was working before it;
@@ -779,7 +785,7 @@ async function performNpmRefresh(
 		// what lets `ensureTool`'s own probe-and-repair path see the breakage and
 		// reinstall. Stamped as failed so the shorter retry cooldown applies.
 		logSessionStart(
-			`managed-tool-refresh ${candidate.toolId}: ${pm} update ran but ${binPath} failed verification — resolution cache cleared for re-probe (${elapsedMs}ms)`,
+			`managed-tool-refresh ${candidate.toolId}: ${pm} update ran but ${binPath} failed verification — package ${packageName}, covered ids ${coveredIds}; resolution cache cleared for re-probe (${elapsedMs}ms)`,
 		);
 		await writeRefreshStamp(candidate.toolId, {
 			checkedAt: now,
@@ -1002,13 +1008,23 @@ async function executeManagedToolRefresh(
 				if (result.attempted && candidate.coveredToolIds) {
 					for (const toolId of candidate.coveredToolIds) {
 						if (toolId === candidate.toolId) continue;
-						await writeRefreshStamp(toolId, {
-							checkedAt: now,
-							...(result.currentVersion !== undefined && {
-								version: result.currentVersion,
+						await bounded(
+							writeRefreshStamp(toolId, {
+								checkedAt: now,
+								...(result.currentVersion !== undefined && {
+									version: result.currentVersion,
+								}),
+								...(result.ok ? {} : { failed: true }),
 							}),
-							...(result.ok ? {} : { failed: true }),
-						});
+							{
+								ms: HOOK_WALL_BUDGET_MS.session_start,
+								// The unref'd timer runs after session_start returns, so no
+								// live turn signal belongs to this background refresh.
+								signal: undefined,
+								hook: "session_start",
+								label: "writeRefreshStamp:covered-tool",
+							},
+						);
 					}
 				}
 				await tap();
