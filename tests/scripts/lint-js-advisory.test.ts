@@ -34,9 +34,7 @@ function resolver(name: string) {
 
 function readPackage(file: string) {
 	return packageFiles[
-		file
-			.replace(/^\/tmp\//, "")
-			.replace(/\/package\.json$/, "/package.json") as keyof typeof packageFiles
+		file.replace(/^\/tmp\//, "") as keyof typeof packageFiles
 	];
 }
 
