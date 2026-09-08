@@ -32,7 +32,6 @@ import {
 	stableOccurrenceKey,
 	stripSource,
 	callSites,
-	createCallSiteScanner,
 	tagPattern,
 } from "./sweep-kit.js";
 
