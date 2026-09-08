@@ -316,7 +316,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"real-process-spawn:scripts/git-fixture-env.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"real git fixture children resolve sanitized environment variables and repository metadata",
+			"real git children prove the script-side fixture env resolves repository metadata (HEAD, root) from a sanitized process.env",
 	},
 	"real-process-spawn:scripts/prune-agent-worktrees.test.ts": {
 		detector: "real-process-spawn",
@@ -336,7 +336,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"real-process-spawn:support/git-fixture-env.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"real git fixture children validate cwd and environment scrubbing at the support boundary",
+			"real git children prove the support-side fixture scrubs GIT_DIR/GIT_WORK_TREE and pins cwd before a test spawns git",
 	},
 };
 
