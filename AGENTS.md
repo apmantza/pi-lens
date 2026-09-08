@@ -3426,8 +3426,8 @@ spawn or a raw wall-clock wait/assertion** (#2547). Three deflake PRs in two
 days (#2531 alone fixed three shared-slot races) and nothing counted the
 contention surface those PRs kept fixing. `tests/clients/flake-shape-
 ratchet.test.ts` now caps it: a real child process (`child_process` import,
-`execFileSync`/`spawnSync`/`execSync`, or a spawn whose argv mentions
-`vitest`), a DELTA of two clock reads (`Date.now`/`performance.now`/
+`execFileSync`/`spawnSync`/`execSync`, a known support spawn-helper call, or a
+spawn whose argv mentions `vitest`), a DELTA of two clock reads (`Date.now`/`performance.now`/
 `process.hrtime`) feeding a numeric matcher (`toBeLessThan`/`toBeGreaterThan`/
 …), a raw `setTimeout`/`setInterval` wait outside `vi.useFakeTimers()`, and a
 `vi.waitFor(` call outside `vi.useFakeTimers()` (round 2, the #1767 shape),
