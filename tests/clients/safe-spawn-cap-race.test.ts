@@ -156,4 +156,3 @@ describe("safeSpawnAsync sequences the output-cap kill before timeout/abort by c
 		expect(killedForOutputCap(result)).toBe(false);
 	});
 });
-// flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface

@@ -237,11 +237,6 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the test calls a child-process helper; its boundary remains part of the contention surface",
 	},
-	"real-process-spawn:clients/dependency-checker-batch-race.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
-	},
 	"real-process-spawn:clients/dispatch/runners/ast-grep-playground-verify.test.ts":
 		{
 			detector: "real-process-spawn",
@@ -268,37 +263,12 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the test calls a child-process helper; its boundary remains part of the contention surface",
 	},
-	"real-process-spawn:clients/lsp/jvm-runtime.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
-	},
 	"real-process-spawn:clients/metrics-history-stderr.test.ts": {
 		detector: "real-process-spawn",
 		reason:
 			"the test calls a child-process helper; its boundary remains part of the contention surface",
 	},
-	"real-process-spawn:clients/package-manager-availability-latch.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
-	},
 	"real-process-spawn:clients/safe-spawn-ambient-signal.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
-	},
-	"real-process-spawn:clients/safe-spawn-cap-race.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
-	},
-	"real-process-spawn:clients/safe-spawn-close-before-error-race.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
-	},
-	"real-process-spawn:clients/safe-spawn-exit-idle-wait.test.ts": {
 		detector: "real-process-spawn",
 		reason:
 			"the test calls a child-process helper; its boundary remains part of the contention surface",
@@ -318,11 +288,6 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the test calls a child-process helper; its boundary remains part of the contention surface",
 	},
-	"real-process-spawn:clients/safe-spawn-sync-throw.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
-	},
 	"real-process-spawn:clients/safe-spawn-timeout-teardown.test.ts": {
 		detector: "real-process-spawn",
 		reason:
@@ -333,22 +298,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		reason:
 			"the test calls a child-process helper; its boundary remains part of the contention surface",
 	},
-	"real-process-spawn:clients/safe-spawn-windows-env-plumbing.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
-	},
 	"real-process-spawn:clients/shared-checkout-guard.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
-	},
-	"real-process-spawn:clients/zizmor-config.test.ts": {
-		detector: "real-process-spawn",
-		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
-	},
-	"real-process-spawn:clients/zizmor-token-latch.test.ts": {
 		detector: "real-process-spawn",
 		reason:
 			"the test calls a child-process helper; its boundary remains part of the contention surface",
@@ -865,6 +815,32 @@ describe("flake-shape scan — real-process-spawn", () => {
 			"gitFixtureSpawnAsync( support spawn helper",
 			"safeSpawnAsync( support spawn helper",
 		]);
+	});
+
+	it("does not count a helper whose module is mocked", () => {
+		const source = [
+			'import { safeSpawnAsync } from "../../clients/safe-spawn.js";',
+			'vi.mock("../../clients/safe-spawn.js");',
+			"await safeSpawnAsync(command, args);",
+		].join("\n");
+		expect(scanRealProcessSpawn("fixture.test.ts", source)).toEqual([]);
+	});
+
+	it("does not count sync spawns behind a mocked child_process module", () => {
+		const source = [
+			'import { execFileSync } from "node:child_process";',
+			'vi.mock("node:child_process");',
+			'execFileSync("git", ["status"]);',
+		].join("\n");
+		expect(scanRealProcessSpawn("fixture.test.ts", source)).toEqual([]);
+	});
+
+	it("keeps helper calls when an unrelated module is mocked", () => {
+		const source = [
+			'vi.mock("../../clients/unrelated.js");',
+			"await safeSpawnAsync(command, args);",
+		].join("\n");
+		expect(scanRealProcessSpawn("fixture.test.ts", source)).toHaveLength(1);
 	});
 });
 

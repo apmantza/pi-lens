@@ -360,4 +360,4 @@ describe.runIf(process.platform === "win32")(
 		});
 	},
 );
-// flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface
+// flake-shape: real-process-spawn — the real Windows child command boundary is the contention under test

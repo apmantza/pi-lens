@@ -143,4 +143,4 @@ describe("git fixture environment", () => {
 		).toBe("fixture");
 	});
 });
-// flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface
+// flake-shape: real-process-spawn — the real git fixture process is the support contention boundary

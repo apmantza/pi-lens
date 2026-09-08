@@ -178,4 +178,4 @@ describe("playground-verify-rule.mjs setup errors", () => {
 		expect(result.error).toMatch(/rule not found/);
 	}, 15_000);
 });
-// flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface
+// flake-shape: real-process-spawn — the real playground verifier subprocess boundary is part of contention

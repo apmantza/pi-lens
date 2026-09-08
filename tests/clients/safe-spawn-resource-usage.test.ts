@@ -163,4 +163,4 @@ describe("safeSpawnAsync resource-usage bracketing (#620)", () => {
 		expect(result.resourceUsage).toBeUndefined();
 	});
 });
-// flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface
+// flake-shape: real-process-spawn — the real child resource boundary is the usage contention under test

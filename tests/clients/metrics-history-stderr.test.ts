@@ -317,4 +317,4 @@ describe("metrics-history missing target directory (#2099)", () => {
 		30_000,
 	);
 });
-// flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface
+// flake-shape: real-process-spawn — the real child stderr stream is the metrics contention boundary

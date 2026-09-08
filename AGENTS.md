@@ -3442,6 +3442,11 @@ rather than leaving it stale. Reach for `vi.useFakeTimers()` and the
 interleaving kit first; a real spawn or a wall-clock assertion is a boundary
 decision, stated, not a convenience.
 
+The real-process detector recognizes `vi.mock` and `vi.doMock` for
+`node:child_process`/`child_process` and known helper modules. Mocked seams are
+exemptions, not admissions; arbitrary aliases remain conservative false
+positives and require explicit review.
+
 A new always-absent dependency stub (a `vi.mock`/fixture that makes a dependency permanently unavailable) must ship with at least one present-path **behavior** test: the dependency's result must reach the caller, never just a bare no-throw assertion. #1251 is the failure case; #1310 is the pattern to follow.
 
 Every commit that adds or changes logic **must** include relevant tests before pushing. No exceptions:

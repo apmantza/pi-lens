@@ -218,4 +218,4 @@ describe("Java rule ignores deliver through the real ast-grep CLI (#2280)", () =
 		}, 60_000);
 	});
 });
-// flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface
+// flake-shape: real-process-spawn — the real ast-grep subprocess boundary is part of rule-ignore contention

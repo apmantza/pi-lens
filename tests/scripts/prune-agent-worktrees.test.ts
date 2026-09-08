@@ -2058,4 +2058,4 @@ describe("SubagentStop hook, end to end (#2486)", () => {
 		},
 	);
 });
-// flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface
+// flake-shape: real-process-spawn — the real worktree commands are the pruning contention boundary

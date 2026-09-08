@@ -251,4 +251,4 @@ describe("runGitConfigGuardSetup one-time warn (#2251 fix round F2)", () => {
 		}
 	});
 });
-// flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface
+// flake-shape: real-process-spawn — real git config resolution is the guard contention boundary

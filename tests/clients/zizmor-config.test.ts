@@ -209,4 +209,3 @@ describe("resolveZizmorGitHubToken (#272)", () => {
 		expect(await resolveZizmorGitHubToken()).toBeUndefined();
 	});
 });
-// flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface
