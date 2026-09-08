@@ -143,13 +143,15 @@ const KILLED_LINE = /(?:^|[\s:])Killed(?:\s|$)/m;
 // `{"outcome":"emit_failed","error":"ECONNRESET"}` (tests/clients/
 // smells-rollup.test.ts:124), so a recovered warning or a test's own
 // console output can contain "ECONNRESET" with no network failure involved.
-// Scoped to lines that also carry an explicit error-shaped prefix (npm's
-// own "npm error" convention, or the runner's own "##[error]" annotation) --
-// a "npm warn" line or arbitrary test output text no longer qualifies.
+// Scoped to npm error/ERR! lines, registry request lines, and this wrapper's
+// own infra annotation. Arbitrary compiler/linter/test output is not evidence.
+// Keep this shared pattern at origin/master's conservative scope. npm-retry
+// composes it with npm-only shapes below because the two consumers have
+// opposite false-positive costs.
 export const NET_PATTERN =
-	/getaddrinfo\s+\w+\s+\S+|\b(?:ENOTFOUND|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ECONNREFUSED|EPIPE|ENETUNREACH|EHOSTUNREACH|FETCH_ERROR|ERR_SOCKET_TIMEOUT)\b|\b(?:502|503|504)(?:\s+Service Unavailable)?\b|\b429\s+Too Many Requests\b|socket hang up|network error|request to\s+\S+\s+failed, reason:|tarball.{0,40}(?:download|fetch).{0,20}fail|net::ERR_NAME_NOT_RESOLVED|registry unreachable/i;
+	/getaddrinfo\s+\w+\s+\S+|\bENOTFOUND\b|\bECONNRESET\b|tarball.{0,40}(?:download|fetch).{0,20}fail|net::ERR_NAME_NOT_RESOLVED/i;
 const ERROR_PREFIXED_LINE =
-	/^(?:.*\bnpm error\b.*|##\[error\].*|::error::.*)$/im;
+	/^(?:.*\bnpm (?:error\b|ERR!)(?:\s|$).*|.*::error::infra:.*|.*\brequest to https?:\/\/\S+ failed, reason:.*)$/gim;
 
 /**
  * @typedef {{ kind: "real" | "infra-kill" | "infra-net", detail: string }} Classification
@@ -338,13 +340,16 @@ export function classifyFailureLog(rawLog) {
 		return { kind: "infra-kill", detail };
 	}
 
-	const errorLine = ERROR_PREFIXED_LINE.exec(log);
-	const netMatch = errorLine ? NET_PATTERN.exec(errorLine[0]) : null;
-	if (netMatch) {
-		return {
-			kind: "infra-net",
-			detail: `no failing assertion; network error: ${netMatch[0].trim()}`,
-		};
+	let inspectedErrorLines = 0;
+	for (const errorLine of log.matchAll(ERROR_PREFIXED_LINE)) {
+		if (++inspectedErrorLines > 1_000) break;
+		const netMatch = NET_PATTERN.exec(errorLine[0]);
+		if (netMatch) {
+			return {
+				kind: "infra-net",
+				detail: `no failing assertion; network error: ${netMatch[0].trim()}`,
+			};
+		}
 	}
 
 	// Spec default (#2103 proposal step 1): "otherwise real". A failing job

@@ -11,7 +11,7 @@
  * and scripts/resolve-newest-in-range-host.mjs (which needs to CAPTURE
  * `npm view`'s stdout, unlike this passthrough wrapper) both build on.
  *
- * Timeout, spawn-error, or NET_PATTERN-shaped failures are retryable.
+ * Timeout, spawn-error, or npm-evidence-shaped network failures are retryable.
  * Network evidence wins when it appears with a deterministic npm code:
  * losing a legitimate retry is worse than one redundant retry. Deterministic
  * npm errors (ERESOLVE, E404, EINTEGRITY, and ETARGET) stop after one attempt
@@ -37,6 +37,17 @@ const DEFAULT_BACKOFF_MS = [0, 5_000, 15_000];
 const BACKOFF_OVERRIDE_ENV_VAR = "NPM_RETRY_BACKOFF_MS";
 const ATTEMPT_TIMEOUT_MS = 120_000;
 const DETERMINISTIC_ERROR_PATTERN = /\b(?:ERESOLVE|E404|EINTEGRITY|ETARGET)\b/i;
+const NPM_EVIDENCE_LINE =
+	/^(?:\s*npm (?:error\b|ERR!)(?:\s|$).*|\s*request to https?:\/\/\S+ failed, reason:.*)$/gim;
+const NPM_SCOPED_PATTERN =
+	/\b(?:502|503|504)(?:\s+Service Unavailable)?\b|\b429\s+Too Many Requests\b|socket hang up|network error|\b(?:ETIMEDOUT|EAI_AGAIN|ECONNREFUSED|EPIPE|ENETUNREACH|EHOSTUNREACH|FETCH_ERROR|ERR_SOCKET_TIMEOUT)\b|registry unreachable/i;
+// Composed from the CI pattern plus npm-only evidence. The line gate keeps
+// shared tokens out of compiler/linter/test text while npm retains the
+// broader retry-oriented network vocabulary.
+const NPM_NET_PATTERN = new RegExp(
+	`(?:${NET_PATTERN.source}|${NPM_SCOPED_PATTERN.source})`,
+	"i",
+);
 
 /**
  * Classify one npm attempt. Network evidence is checked first so mixed output
@@ -46,7 +57,11 @@ const DETERMINISTIC_ERROR_PATTERN = /\b(?:ERESOLVE|E404|EINTEGRITY|ETARGET)\b/i;
  * @returns {{ retryable: boolean, reason: string }}
  */
 export function classifyNpmFailure(stderr, run = {}) {
-	const networkMatch = NET_PATTERN.exec(stderr);
+	let networkMatch = null;
+	for (const line of String(stderr).matchAll(NPM_EVIDENCE_LINE)) {
+		networkMatch = NPM_NET_PATTERN.exec(line[0]);
+		if (networkMatch) break;
+	}
 	if (run.timedOut) {
 		return {
 			retryable: true,

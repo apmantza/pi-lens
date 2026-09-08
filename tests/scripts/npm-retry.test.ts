@@ -74,25 +74,53 @@ describe("npm-retry.mjs (#2613 review S3a)", () => {
 	// must remain eligible for the backoff path.
 	it("classifies every npm network shape as retryable", () => {
 		const shapes = [
-			"ETIMEDOUT",
-			"EAI_AGAIN",
-			"503 Service Unavailable",
-			"429 Too Many Requests",
-			"socket hang up",
-			"network error",
-			"ECONNREFUSED",
-			"EPIPE",
-			"ENETUNREACH",
-			"EHOSTUNREACH",
-			"FETCH_ERROR",
-			"ERR_SOCKET_TIMEOUT",
-			"npm error request to https://registry.example failed, reason:",
-			"502",
-			"504",
+			"npm error ETIMEDOUT",
+			"npm ERR! EAI_AGAIN",
+			"npm error 503 Service Unavailable",
+			"npm error 429 Too Many Requests",
+			"npm error socket hang up",
+			"npm error network error",
+			"npm error ECONNREFUSED",
+			"npm error EPIPE",
+			"npm error ENETUNREACH",
+			"npm error EHOSTUNREACH",
+			"npm error FETCH_ERROR",
+			"npm error ERR_SOCKET_TIMEOUT",
+			"request to https://registry.example failed, reason: ECONNRESET",
+			"npm error 502",
+			"npm error 504",
+			"npm error tarball package download failed",
+			"npm error registry unreachable",
 		];
 		for (const shape of shapes) {
 			expect(classifyNpmFailure(shape).retryable, shape).toBe(true);
+			expect(classifyNpmFailure(shape).reason, shape).toContain(
+				"network error",
+			);
 		}
+	});
+
+	it("round 3: the npm pattern ignores network tokens in non-npm contexts", () => {
+		const lines = [
+			'error TS2322: Type "ETIMEDOUT" is not assignable',
+			"error socket hang up no-socket-rule",
+			"knip: https://example.test/502/status unused export",
+			"test name retries after ECONNRESET",
+		];
+		for (const line of lines) {
+			// Unknown non-network failures retain npm-retry's compatibility retry
+			// behavior; the guard under test is that they are not called network.
+			expect(classifyNpmFailure(line).reason, line).not.toContain(
+				"network error",
+			);
+		}
+	});
+
+	it("round 3: npm evidence wins over deterministic codes on a later line", () => {
+		const result = classifyNpmFailure(
+			"npm error ERESOLVE unable to resolve dependency tree\nnpm error ECONNRESET",
+		);
+		expect(result.retryable).toBe(true);
 	});
 
 	// Network evidence wins because losing a legitimate retry costs more than
