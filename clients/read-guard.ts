@@ -1890,9 +1890,12 @@ export class ReadGuard {
 			return filePath.endsWith(suffix);
 		}
 		if (pattern.includes("*")) {
-			// Convert glob to regex
+			// Adjacent stars are equivalent to one star in this dialect. Collapse
+			// them before compiling so a non-match cannot backtrack over every
+			// nullable `.*` group (#2622).
+			const collapsedPattern = pattern.replace(/\*+/g, "*");
 			const regex = new RegExp(
-				`^${pattern.replace(/\\/g, "\\\\").replace(/\./g, "\\.").replace(/\*/g, ".*")}$`,
+				`^${collapsedPattern.replace(/\\/g, "\\\\").replace(/\./g, "\\.").replace(/\*/g, ".*")}$`,
 			);
 			return regex.test(filePath);
 		}

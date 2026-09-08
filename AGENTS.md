@@ -865,6 +865,14 @@ or merge restoration, and writes under already-ignored directories remain
 outside the tool-result producer and are tracked by the freshness-probe issue.
 (#2071)
 
+The `*`-only glob compilers in `clients/read-guard.ts` and
+`clients/file-utils.ts` collapse adjacent wildcard runs before constructing a
+regex. `.*.*` has the same language as `.*`, but the former can partition a
+long non-match exponentially. Keep this dialect local; do not introduce
+`**` semantics or fold it into the workspace-member matcher. The regression
+corpus and wall-clock pin live in
+`tests/clients/read-guard-glob-nonbacktracking.test.ts` (#2622).
+
 Consumed nested `.gitignore` sources carry their build-time `mtimeMs` and size
 in the project matcher cache. `getProjectIgnoreMatcher` sweeps those sources
 at most once per root per two-second cadence and routes drift, including
