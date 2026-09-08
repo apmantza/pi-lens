@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	assertNonEmptyScan,
-	firstCommentMatch,
+	codeMatches,
 	stripSource,
 } from "../support/sweep-kit.js";
 import {
@@ -64,11 +64,7 @@ export function findGitSpawnOffenders(
 				return false;
 			const sourceKeep = stripSource(source, { strings: "keep" });
 			const imported = new Set<string>();
-			const match = firstCommentMatch(source, helperImport);
-			if (match) {
-				const start = match.index ?? 0;
-				if (!/\S/.test(sourceKeep.slice(start, start + match[0].length)))
-					return false;
+			for (const match of codeMatches(source, helperImport)) {
 				for (const item of match[1].split(",")) {
 					imported.add(item.trim().split(/\s+as\s+/)[0] ?? "");
 				}
@@ -225,6 +221,35 @@ describe("real Git fixture governance", () => {
 				},
 			]),
 		).toEqual(["synthetic.test.ts"]);
+	});
+
+	it("does not let a commented-out import excuse a bare Git spawn", () => {
+		expect(
+			findGitSpawnOffenders([
+				{
+					file: "synthetic.test.ts",
+					source:
+						'// import { execFileSync } from "./git-fixture-env.js";\n' +
+						"execFile" +
+						'Sync("git", ["status"])',
+				},
+			]),
+		).toEqual(["synthetic.test.ts"]);
+	});
+
+	it("finds a real import after a commented-out import", () => {
+		expect(
+			findGitSpawnOffenders([
+				{
+					file: "synthetic.test.ts",
+					source:
+						'// import { execFileSync } from "./git-fixture-env.js";\n' +
+						'import { execFileSync } from "./git-fixture-env.js";\n' +
+						"execFile" +
+						'Sync("git", ["status"])',
+				},
+			]),
+		).toEqual([]);
 	});
 
 	it("rejects a direct call when a different helper symbol is imported", () => {

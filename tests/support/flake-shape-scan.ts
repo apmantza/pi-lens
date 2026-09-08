@@ -93,7 +93,6 @@ export function testsRelative(absolute: string): string {
  */
 export const SCAN_INFRASTRUCTURE: ReadonlySet<string> = new Set([
 	"clients/flake-shape-ratchet.test.ts",
-	"support/flake-shape-scan.test.ts",
 ]);
 
 /** One line the scan flags. */

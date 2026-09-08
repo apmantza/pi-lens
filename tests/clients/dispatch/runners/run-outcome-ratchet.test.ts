@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { firstCommentMatch, stripSource } from "../../../support/sweep-kit.js";
+import { codeMatches } from "../../../support/sweep-kit.js";
 
 const RUNNERS_DIR = fileURLToPath(
 	new URL("../../../../clients/dispatch/runners", import.meta.url),
@@ -72,10 +72,7 @@ const USES_PRIMITIVE =
 const SPAWNS = /safeSpawn/;
 
 export function usesPrimitive(source: string): boolean {
-	return (
-		firstCommentMatch(source, USES_PRIMITIVE) !== undefined &&
-		USES_PRIMITIVE.test(stripSource(source, { strings: "keep" }))
-	);
+	return codeMatches(source, USES_PRIMITIVE).length > 0;
 }
 
 describe("run-outcome primitive ratchet", () => {
@@ -165,6 +162,12 @@ describe("run-outcome primitive ratchet", () => {
 		expect(
 			usesPrimitive(
 				"const prose = `import { classifyRunOutcome } from './utils/tool-failure.js'`;",
+			),
+		).toBe(false);
+		expect(
+			usesPrimitive(
+				'// import { classifyRunOutcome } from "./utils/tool-failure.js"\n' +
+					"const prose = \"import { classifyRunOutcome } from './utils/tool-failure.js'\";",
 			),
 		).toBe(false);
 	});

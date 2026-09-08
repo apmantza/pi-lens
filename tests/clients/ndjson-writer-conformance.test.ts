@@ -31,7 +31,7 @@ import { describe, expect, it } from "vitest";
 import { clientSourceFiles, repoRoot } from "../support/atomic-write-scan.js";
 import {
 	assertNonEmptyScan,
-	firstCommentMatch,
+	codeMatches,
 	stripSource,
 } from "../support/sweep-kit.js";
 
@@ -39,10 +39,7 @@ const CREATE_LOGGER_IMPORT =
 	/import\s*\{[^}]*\bcreateNdjsonLogger\b[^}]*\}\s*from\s*["']\.\/ndjson-logger\.js["']/;
 
 export function hasCreateLoggerImport(source: string): boolean {
-	return (
-		firstCommentMatch(source, CREATE_LOGGER_IMPORT) !== undefined &&
-		CREATE_LOGGER_IMPORT.test(stripSource(source, { strings: "keep" }))
-	);
+	return codeMatches(source, CREATE_LOGGER_IMPORT).length > 0;
 }
 
 /** Known ndjson producers that do not match the `*-logger.ts` naming shape. */
@@ -246,6 +243,12 @@ describe("NDJSON writer conformance (#2505)", () => {
 		expect(
 			hasCreateLoggerImport(
 				"const prose = `import { createNdjsonLogger } from './ndjson-logger.js'`;\n",
+			),
+		).toBe(false);
+		expect(
+			hasCreateLoggerImport(
+				'// import { createNdjsonLogger } from "./ndjson-logger.js"\n' +
+					"const prose = \"import { createNdjsonLogger } from './ndjson-logger.js'\";\n",
 			),
 		).toBe(false);
 	});
