@@ -73,6 +73,15 @@ extend-ignore-re = [
 
 # Dictionary tuning — reaches BOTH lanes (typos-lsp and typos-cli).
 [default.extend-words]
+# False positives from regex fragments, acronyms, Go diagnostics, and test
+# fixtures. Keep each exception tied to the named local spelling finding.
+rror = "rror"
+ALS = "ALS"
+ALPH = "ALPH"
+unparented = "unparented"
+ignor = "ignor"
+ERRO = "ERRO"
+optin = "optin"
 # "mis-cased" / "mis-parses" / "mis-attribution" / "mis-resolves" /
 # "mis-offers" — a hyphenated "mis-" prefix this codebase's prose uses
 # routinely; typos' tokenizer splits it into a bare "mis" token and flags it.

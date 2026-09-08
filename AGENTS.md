@@ -47,6 +47,11 @@ references rot and are evidence-only):
 
 A pi coding-agent extension that runs automated checks on every file write/edit. Dispatches async parallel runners (LSP, biome, ruff, ast-grep, tree-sitter, jscpd, knip, Madge, and language-specific linters/build checks) and injects findings as context injections at turn-end and session-start.
 
+The advisory CI tooling lane in `.github/workflows/lint.yml` also runs the
+pinned jscpd, yamllint, typos, and taplo checks. Their job names are explicit
+entries in `scripts/lib/ci-checks.mjs`, so a failing advisory remains visible
+without blocking the merge train.
+
 Layout: see "Key source layout". Version and release history live in
 `CHANGELOG.md`; do not duplicate them here.
 

@@ -1,0 +1,14 @@
+{
+  "minLines": 10,
+  "minTokens": 70,
+  "format": ["typescript", "javascript"],
+  "ignorePattern": [
+    "tests/**",
+    "fixtures/**",
+    "dist/**",
+    ".claude/**",
+    "clients/**/*.js"
+  ],
+  "threshold": 1,
+  "reporters": ["console"]
+}

@@ -1,22 +1,10 @@
 # yamllint config (dogfood activation, refs #1844). Scopes yamllint to the
-# YAML a human actually maintains here — GitHub Actions workflows and
-# top-level config — and tunes rules so the CURRENT tree passes at error
-# severity. Warnings stay on as advisories (same "downgrade, don't mass-edit
-# source" precedent as .oxlintrc.json and typos.toml in this same PR).
+# YAML tracked by the repository, including rule catalogs and workflows, and
+# tunes only high-volume style rules. Warnings stay visible as advisories.
 extends: default
 
 ignore: |
   node_modules/
-  # Rule-pack YAML is pi-lens's own bespoke DSL (id/severity/pattern
-  # fields), governed by scripts/validate-rule-catalog.mjs and
-  # scripts/audit-astgrep-rule-pairs.mjs, not generic prose-config style —
-  # plus it includes the vendored CodeRabbit pack (AGENTS.md "Rule
-  # catalogs"), which is not ours to reformat.
-  rules/ast-grep-rules/
-  rules/tree-sitter-queries/
-  # Vendored Vale style packages (.vale.ini's own StylesPath), same
-  # not-ours-to-reformat reasoning.
-  .vale/styles/
   # Runner fixtures intentionally exercise malformed/unusual YAML.
   tests/fixtures/
 
