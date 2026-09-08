@@ -13,6 +13,8 @@ import semver from "semver";
 
 const require = createRequire(import.meta.url);
 const TSGOLINT = "oxlint-tsgolint";
+const PLATFORM_PACKAGE = `@oxlint-tsgolint/${process.platform}-${process.arch}`;
+const PLATFORM_BINARY = `tsgolint${process.platform === "win32" ? ".exe" : ""}`;
 
 function readJson(file) {
 	return JSON.parse(readFileSync(file, "utf8"));
@@ -23,14 +25,21 @@ function resolvePackageJson(packageName, resolve = require.resolve) {
 }
 
 export function validateTypeAwareDependency({
-	resolve = require.resolve,
+	resolve,
+	resolveBase,
+	requireFactory = require,
 	readPackage = readJson,
 	fileExists = existsSync,
 } = {}) {
+	const resolvedRequire =
+		resolveBase && requireFactory === require
+			? createRequire(join(resolveBase, "package.json"))
+			: requireFactory;
+	const resolvePackage = resolve ?? resolvedRequire.resolve;
 	let oxlintPackagePath;
 	let oxlintVersion = "unknown";
 	try {
-		oxlintPackagePath = resolvePackageJson("oxlint", resolve);
+		oxlintPackagePath = resolvePackageJson("oxlint", resolvePackage);
 	} catch {
 		return {
 			ok: false,
@@ -40,13 +49,14 @@ export function validateTypeAwareDependency({
 	}
 	try {
 		oxlintVersion = readPackage(oxlintPackagePath).version ?? "unknown";
-		const tsgolintPackagePath = resolvePackageJson(TSGOLINT, resolve);
+		const tsgolintPackagePath = resolvePackageJson(TSGOLINT, resolvePackage);
 		return validateResolvedDependency({
 			oxlintPackagePath,
 			tsgolintPackagePath,
 			oxlintVersion,
 			readPackage,
 			fileExists,
+			resolve: resolvePackage,
 		});
 	} catch {
 		return {
@@ -62,6 +72,7 @@ function validateResolvedDependency({
 	oxlintVersion,
 	readPackage,
 	fileExists,
+	resolve,
 }) {
 	const oxlint = readPackage(oxlintPackagePath);
 	const tsgolint = readPackage(tsgolintPackagePath);
@@ -88,7 +99,22 @@ function validateResolvedDependency({
 			message: `oxlint advisory: oxlint-tsgolint is not installed (peer of oxlint ${oxlintVersion}); the type-aware tier would silently run untyped`,
 		};
 	}
-
+	let platformBinaryPath;
+	try {
+		const platformPackagePath = resolve(`${PLATFORM_PACKAGE}/package.json`);
+		platformBinaryPath = join(dirname(platformPackagePath), PLATFORM_BINARY);
+	} catch {
+		return {
+			ok: false,
+			message: `oxlint advisory: oxlint-tsgolint ${tsgolint.version} has no binary for ${process.platform}-${process.arch} (${PLATFORM_PACKAGE}); the type-aware tier would silently run untyped`,
+		};
+	}
+	if (!fileExists(platformBinaryPath)) {
+		return {
+			ok: false,
+			message: `oxlint advisory: oxlint-tsgolint ${tsgolint.version} has no binary for ${process.platform}-${process.arch} (${PLATFORM_PACKAGE}); the type-aware tier would silently run untyped`,
+		};
+	}
 	return { ok: true, binaryPath, oxlintVersion: oxlint.version };
 }
 
