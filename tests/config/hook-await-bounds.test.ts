@@ -133,6 +133,7 @@ import {
 import {
 	auditRegistry,
 	auditSymbolCounts,
+	assertSortedKeys,
 	relativePosix,
 	stripSource,
 } from "../support/sweep-kit.js";
@@ -2375,6 +2376,16 @@ function measureHelperModules(): Record<string, number> {
 }
 
 describe("#2523 AC1 every hook-path await is bounded, and no new hand-rolled race", () => {
+	it("keeps hook admission registries sorted", () => {
+		// #2671 recurrence: an unsorted admission is a merge-conflict magnet.
+		expect(() => assertSortedKeys("fixture", ["b", "a"])).toThrow(
+			"entries must be sorted",
+		);
+		assertSortedKeys("EXEMPT_SITES", [...Object.keys(EXEMPT_SITES).sort()]);
+		assertSortedKeys("BOUNDED_CALL_SITES", [
+			...Object.keys(BOUNDED_CALL_SITES).sort(),
+		]);
+	});
 	it("scans both file groups and finds both families (a dead scan is not a clean one)", () => {
 		// Two floors, two failure modes (#1755 review F4): a broken walk and a
 		// broken detector must not share a message.

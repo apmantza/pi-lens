@@ -40,11 +40,30 @@ import {
 	sessionStartResetNames,
 	stripCommentsAndStrings,
 } from "../support/session-state-scan.js";
-import { auditRegistry, auditSymbolCounts } from "../support/sweep-kit.js";
+import {
+	assertSortedKeys,
+	auditRegistry,
+	auditSymbolCounts,
+} from "../support/sweep-kit.js";
 
 afterEach(() => _resetRegistryProbeState());
 
 describe("session-state registry — shape", () => {
+	it("keeps session admission registries sorted", () => {
+		// #2671 recurrence: an unsorted admission is a merge-conflict magnet.
+		expect(() => assertSortedKeys("fixture", ["b", "a"])).toThrow(
+			"entries must be sorted",
+		);
+		assertSortedKeys("SESSION_STATE_REGISTRY", [
+			...SESSION_STATE_REGISTRY.map((entry) => entry.id).sort(),
+		]);
+		assertSortedKeys("EXEMPT_SESSION_STATE_FILES", [
+			...Object.keys(EXEMPT_SESSION_STATE_FILES).sort(),
+		]);
+		assertSortedKeys("SESSION_STATE_SYMBOL_COUNTS", [
+			...Object.keys(SESSION_STATE_SYMBOL_COUNTS).sort(),
+		]);
+	});
 	it("every entry is uniquely identified", () => {
 		const ids = SESSION_STATE_REGISTRY.map((e) => e.id);
 		expect(new Set(ids).size).toBe(ids.length);

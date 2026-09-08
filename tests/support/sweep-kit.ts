@@ -1174,3 +1174,14 @@ export function assertNonEmptyScan(
 		);
 	}
 }
+
+/** Enforce lexical order so parallel admission additions stay local. */
+export function assertSortedKeys(label: string, keys: readonly string[]): void {
+	const sorted = [...keys].sort();
+	const first = keys.findIndex((key, index) => key !== sorted[index]);
+	if (first !== -1) {
+		throw new Error(
+			`${label}: entries must be sorted; first out-of-order key is ${keys[first]}`,
+		);
+	}
+}

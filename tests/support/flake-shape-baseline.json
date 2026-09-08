@@ -76,7 +76,6 @@
 		"support/git-fixture-env.test.ts": 9
 	},
 	"elapsed-time-assertion": {
-		"scripts/guard-bash-hook.test.ts": 1,
 		"clients/actionable-warnings-bounds.test.ts": 1,
 		"clients/bounded-hook-await.test.ts": 3,
 		"clients/cascade-turn-merge.test.ts": 1,
@@ -101,6 +100,7 @@
 		"clients/runtime-session-sequence-read-budget.test.ts": 1,
 		"clients/word-index-async-build.test.ts": 1,
 		"clients/workspace-glob-nonbacktracking-budget.test.ts": 2,
+		"scripts/guard-bash-hook.test.ts": 1,
 		"scripts/playground-verify-rule-bounded-wait.test.ts": 2,
 		"scripts/prune-agent-worktrees.test.ts": 1,
 		"scripts/suite-lock.test.ts": 1,
