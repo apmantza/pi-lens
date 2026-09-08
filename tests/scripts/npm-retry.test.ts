@@ -10,6 +10,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { classifyFailureLog } from "../../scripts/lib/ci-failure-classifier.mjs";
+import { classifyNpmFailure } from "../../scripts/npm-retry.mjs";
 
 const REPO_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -69,6 +70,50 @@ function runCli(binDir: string, args: string[]) {
 }
 
 describe("npm-retry.mjs (#2613 review S3a)", () => {
+	// Regression proof for npm retry drift: each documented registry failure
+	// must remain eligible for the backoff path.
+	it("classifies every npm network shape as retryable", () => {
+		const shapes = [
+			"ETIMEDOUT",
+			"EAI_AGAIN",
+			"503 Service Unavailable",
+			"429 Too Many Requests",
+			"socket hang up",
+			"network error",
+			"ECONNREFUSED",
+			"EPIPE",
+			"ENETUNREACH",
+			"EHOSTUNREACH",
+			"FETCH_ERROR",
+			"ERR_SOCKET_TIMEOUT",
+			"npm error request to https://registry.example failed, reason:",
+			"502",
+			"504",
+		];
+		for (const shape of shapes) {
+			expect(classifyNpmFailure(shape).retryable, shape).toBe(true);
+		}
+	});
+
+	// Network evidence wins because losing a legitimate retry costs more than
+	// one redundant retry when npm prints both diagnostics.
+	it("gives network signals precedence over deterministic npm errors", () => {
+		const result = classifyNpmFailure(
+			"npm error ERESOLVE unable to resolve dependency tree\nnpm error ECONNRESET",
+		);
+		expect(result.retryable).toBe(true);
+	});
+
+	// Pins the one-attempt guard and its deliberate unknown-error compatibility
+	// behavior; deleting the deterministic set must make this test red.
+	it("stops deterministic errors after one attempt and retries unknown errors", () => {
+		expect(classifyNpmFailure("npm error ERESOLVE").retryable).toBe(false);
+		expect(classifyNpmFailure("npm error E404").retryable).toBe(false);
+		expect(classifyNpmFailure("npm error EINTEGRITY").retryable).toBe(false);
+		expect(classifyNpmFailure("npm error ETARGET").retryable).toBe(false);
+		expect(classifyNpmFailure("npm error something new").retryable).toBe(true);
+	});
+
 	it("passes through a successful npm call with no retry", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-npm-retry-"));
 		tempDirs.push(root);
@@ -120,9 +165,23 @@ describe("npm-retry.mjs (#2613 review S3a)", () => {
 			const e = err as { status?: number; stderr?: string };
 			expect(e.status).not.toBe(0);
 			expect(e.stderr).toMatch(/::error::infra: registry unreachable/);
-			expect(e.stderr).toMatch(
-				/npm ci --ignore-scripts failed after 3 attempts/,
-			);
+			expect(e.stderr).toMatch(/npm ci --ignore-scripts failed 3 times/);
+		}
+	});
+
+	it("pins the origin/master exhaustion annotation and its classifier verdict", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-npm-retry-"));
+		tempDirs.push(root);
+		const binDir = stubNpm(root, 999, "npm error ECONNRESET");
+		try {
+			runCli(binDir, ["ci"]);
+			expect.unreachable("expected the CLI to exit nonzero");
+		} catch (err) {
+			const e = err as { stderr?: string };
+			const annotation =
+				"::error::infra: registry unreachable — npm ci failed 3 times (network error: ECONNRESET; network error: ECONNRESET; network error: ECONNRESET)";
+			expect(e.stderr).toContain(annotation);
+			expect(classifyFailureLog(annotation).kind).toBe("infra-net");
 		}
 	});
 

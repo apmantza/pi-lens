@@ -11,11 +11,17 @@
  * and scripts/resolve-newest-in-range-host.mjs (which needs to CAPTURE
  * `npm view`'s stdout, unlike this passthrough wrapper) both build on.
  *
- * Only timeout, spawn-error, or NET_PATTERN-shaped failures are retryable.
- * Deterministic npm errors (ERESOLVE, E404, EINTEGRITY, and ETARGET) and
- * other nonzero exits stop after the first attempt. On retryable exhaustion,
- * this prints `::error::infra: registry unreachable`; deterministic failures
- * print a plain `failed after N attempt(s)` line instead.
+ * Timeout, spawn-error, or NET_PATTERN-shaped failures are retryable.
+ * Network evidence wins when it appears with a deterministic npm code:
+ * losing a legitimate retry is worse than one redundant retry. Deterministic
+ * npm errors (ERESOLVE, E404, EINTEGRITY, and ETARGET) stop after one attempt
+ * when no network evidence appears. Unknown non-network failures retain the
+ * previous retry behavior. On retryable exhaustion, this preserves the
+ * origin/master annotation `::error::infra: registry unreachable — npm ...
+ * failed 3 times`; deterministic failures print a plain `failed after N
+ * attempt(s)` line instead. E404 stays deterministic because npm uses it for
+ * a missing pinned version; transient mirror 404s are rare and the
+ * install-smoke lane would resurface them.
  *
  * Usage: node scripts/npm-retry.mjs <npm subcommand + args...>
  * Test-only backoff override: NPM_RETRY_BACKOFF_MS="0,0,0" (comma-separated
@@ -31,6 +37,34 @@ const DEFAULT_BACKOFF_MS = [0, 5_000, 15_000];
 const BACKOFF_OVERRIDE_ENV_VAR = "NPM_RETRY_BACKOFF_MS";
 const ATTEMPT_TIMEOUT_MS = 120_000;
 const DETERMINISTIC_ERROR_PATTERN = /\b(?:ERESOLVE|E404|EINTEGRITY|ETARGET)\b/i;
+
+/**
+ * Classify one npm attempt. Network evidence is checked first so mixed output
+ * cannot turn a recoverable registry failure into a one-attempt stop.
+ * @param {string} stderr
+ * @param {{ timedOut?: boolean, error?: Error, code?: number | null }} [run]
+ * @returns {{ retryable: boolean, reason: string }}
+ */
+export function classifyNpmFailure(stderr, run = {}) {
+	const networkMatch = NET_PATTERN.exec(stderr);
+	if (run.timedOut) {
+		return {
+			retryable: true,
+			reason: `timed out after ${ATTEMPT_TIMEOUT_MS}ms`,
+		};
+	}
+	if (run.error) {
+		return { retryable: true, reason: `spawn error: ${run.error.message}` };
+	}
+	if (networkMatch) {
+		return { retryable: true, reason: `network error: ${networkMatch[0]}` };
+	}
+	const deterministicMatch = DETERMINISTIC_ERROR_PATTERN.exec(stderr);
+	return {
+		retryable: !deterministicMatch,
+		reason: `exited ${run.code ?? 1}${deterministicMatch ? ` (${deterministicMatch[0]})` : ""}`,
+	};
+}
 
 function backoffMsFrom(env) {
 	const override = env?.[BACKOFF_OVERRIDE_ENV_VAR];
@@ -75,15 +109,7 @@ export async function main(args, env) {
 			const run = await runOnce(args);
 			lastCode = run.code ?? 1;
 			if (run.code === 0) return { ok: true, value: run };
-			const retryable =
-				run.timedOut || Boolean(run.error) || NET_PATTERN.test(run.stderr);
-			const reason = run.timedOut
-				? `timed out after ${ATTEMPT_TIMEOUT_MS}ms`
-				: run.error
-					? `spawn error: ${run.error.message}`
-					: NET_PATTERN.test(run.stderr)
-						? `network error: ${run.stderr.match(NET_PATTERN)[0]}`
-						: `exited ${run.code}${run.stderr.match(DETERMINISTIC_ERROR_PATTERN) ? ` (${run.stderr.match(DETERMINISTIC_ERROR_PATTERN)[0]})` : ""}`;
+			const { retryable, reason } = classifyNpmFailure(run.stderr, run);
 			console.error(`npm-retry: attempt ${attempt + 1} ${reason}`);
 			return { ok: false, reason, retryable };
 		},
@@ -104,15 +130,16 @@ export async function main(args, env) {
 	}
 
 	const attemptsUsed = result.reasons.length;
-	const summary = `npm ${args.join(" ")} failed after ${attemptsUsed} attempt${attemptsUsed === 1 ? "" : "s"}`;
-	if (
-		result.reasons.some(
-			(reason) =>
-				reason.startsWith("timed out") ||
-				reason.startsWith("spawn error") ||
-				NET_PATTERN.test(reason),
-		)
-	) {
+	const networkRetry = result.reasons.some(
+		(reason) =>
+			reason.startsWith("timed out") ||
+			reason.startsWith("spawn error") ||
+			reason.startsWith("network error"),
+	);
+	const summary = networkRetry
+		? `npm ${args.join(" ")} failed ${attemptsUsed} times`
+		: `npm ${args.join(" ")} failed after ${attemptsUsed} attempt${attemptsUsed === 1 ? "" : "s"}`;
+	if (networkRetry) {
 		console.error(
 			`::error::infra: registry unreachable — ${summary} (${result.reasons.join("; ")})`,
 		);

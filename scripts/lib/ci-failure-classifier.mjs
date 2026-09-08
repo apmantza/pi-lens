@@ -147,8 +147,9 @@ const KILLED_LINE = /(?:^|[\s:])Killed(?:\s|$)/m;
 // own "npm error" convention, or the runner's own "##[error]" annotation) --
 // a "npm warn" line or arbitrary test output text no longer qualifies.
 export const NET_PATTERN =
-	/getaddrinfo\s+\w+\s+\S+|\bENOTFOUND\b|\bECONNRESET\b|tarball.{0,40}(?:download|fetch).{0,20}fail|net::ERR_NAME_NOT_RESOLVED/i;
-const ERROR_PREFIXED_LINE = /^(?:.*\bnpm error\b.*|##\[error\].*)$/im;
+	/getaddrinfo\s+\w+\s+\S+|\b(?:ENOTFOUND|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ECONNREFUSED|EPIPE|ENETUNREACH|EHOSTUNREACH|FETCH_ERROR|ERR_SOCKET_TIMEOUT)\b|\b(?:502|503|504)(?:\s+Service Unavailable)?\b|\b429\s+Too Many Requests\b|socket hang up|network error|request to\s+\S+\s+failed, reason:|tarball.{0,40}(?:download|fetch).{0,20}fail|net::ERR_NAME_NOT_RESOLVED|registry unreachable/i;
+const ERROR_PREFIXED_LINE =
+	/^(?:.*\bnpm error\b.*|##\[error\].*|::error::.*)$/im;
 
 /**
  * @typedef {{ kind: "real" | "infra-kill" | "infra-net", detail: string }} Classification

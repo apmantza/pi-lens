@@ -282,6 +282,34 @@ describe("classifyFailureLog (#2103)", () => {
 		expect(result.kind).toBe("infra-net");
 	});
 
+	// Regression proof for the shared NET_PATTERN consumer: a newly recognized
+	// npm network line must reach the real classifier, not only npm-retry.
+	it("recognizes the shared npm and registry network shapes as infra-net", () => {
+		const shapes = [
+			"ETIMEDOUT",
+			"EAI_AGAIN",
+			"503 Service Unavailable",
+			"429 Too Many Requests",
+			"socket hang up",
+			"network error",
+			"ECONNREFUSED",
+			"EPIPE",
+			"ENETUNREACH",
+			"EHOSTUNREACH",
+			"FETCH_ERROR",
+			"ERR_SOCKET_TIMEOUT",
+			"request to https://registry.example failed, reason:",
+			"502",
+			"504",
+			"registry unreachable",
+		];
+		for (const shape of shapes) {
+			expect(classifyFailureLog(`npm error ${shape}`).kind, shape).toBe(
+				"infra-net",
+			);
+		}
+	});
+
 	// F5: empty log is distinguishable from "read something, didn't
 	// recognize it" -- the two are different failure modes (fetch itself
 	// failed / raced the upload, vs. a genuinely new failure shape).
