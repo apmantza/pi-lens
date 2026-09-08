@@ -313,4 +313,4 @@ describe("spawnWedgedChild — onTestFinished backstop (#2436)", () => {
 		},
 	);
 });
-// flake-shape: real-process-spawn — the real wedged child is the fault-injection contention boundary
+// flake-shape: real-process-spawn — a genuinely wedged child proves pipe and kill behavior that a resolved promise cannot model

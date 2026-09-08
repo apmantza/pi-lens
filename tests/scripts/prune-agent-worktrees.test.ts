@@ -2058,4 +2058,4 @@ describe("SubagentStop hook, end to end (#2486)", () => {
 		},
 	);
 });
-// flake-shape: real-process-spawn — the real worktree commands are the pruning contention boundary
+// flake-shape: real-process-spawn — real git worktree commands own pruning locks and exit status beyond in-process filesystem state

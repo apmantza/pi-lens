@@ -409,7 +409,6 @@ const wallClockBudgetInclude = [
 	"tests/config/tracked-control-bytes.test.ts",
 	"tests/scripts/git-fixture-env.test.ts",
 	"tests/scripts/prune-agent-worktrees.test.ts",
-	"tests/scripts/release-qa.test.ts",
 	"tests/support/fault-injection.test.ts",
 	"tests/support/git-config-guard.test.ts",
 	"tests/support/git-fixture-env.test.ts",

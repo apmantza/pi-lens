@@ -46,9 +46,11 @@
  * - Detector 1's `strings: "keep"` policy (needed to see `"vitest"` inside an
  *   argv string) means a string literal that merely CONTAINS
  *   `execFileSync(...)`-shaped text would false-positive; comments are
- *   blanked so a doc comment cannot. No such string exists in `tests/` today
- *   (the FALSE positive direction, safe for a ratchet that a human reviews at
- *   admission time).
+ *   blanked so a doc comment cannot. Mock declarations use `codeMatches`
+ *   separately, so a string literal that merely CONTAINS `vi.mock(...)`
+ *   cannot suppress a real helper call. No such string exists in `tests/`
+ *   today (the FALSE positive direction, safe for a ratchet that a human
+ *   reviews at admission time).
  * - Detector 1 recognizes known support-module helper names at their test call
  *   sites and ignores calls whose helper module is mocked in that file. It
  *   still cannot resolve arbitrary aliases, so aliases remain conservative
@@ -134,7 +136,7 @@ const VITEST_IN_ARGV = /\bvitest\b/i;
 // a helper that hides `node:child_process` behind another module boundary.
 const SUPPORT_SPAWN_HELPER_CALL =
 	/\b(gitFixtureSpawnAsync|gitExecFileSync|gitExecSync|execFileSync|execSync|spawnWedgedChild|safeSpawnAsync)\s*\(/g;
-const MOCK_CALL = /\bvi\.(?:mock|doMock)\s*\(\s*["']([^"']+)["']/g;
+const MOCK_CALL = /\bvi\.(?:mock|doMock|hoisted)\s*\(\s*["']([^"']+)["']/g;
 const HELPER_MODULE_SUFFIXES: Record<string, readonly string[]> = {
 	gitFixtureSpawnAsync: ["/git-fixture-env", "/git-fixture-env.js"],
 	gitExecFileSync: ["/git-fixture-env", "/git-fixture-env.js"],
@@ -147,9 +149,7 @@ const HELPER_MODULE_SUFFIXES: Record<string, readonly string[]> = {
 
 function mockedModules(source: string): Set<string> {
 	const modules = new Set<string>();
-	MOCK_CALL.lastIndex = 0;
-	let match: RegExpExecArray | null;
-	while ((match = MOCK_CALL.exec(stripSource(source, { strings: "keep" })))) {
+	for (const match of codeMatches(source, MOCK_CALL)) {
 		modules.add(match[1]);
 	}
 	return modules;

@@ -225,118 +225,118 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"real-process-spawn:clients/biome-config-decorator-metadata.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
+			"real Biome children resolve decorator metadata that in-process calls cannot observe",
 	},
 	"real-process-spawn:clients/build-identity.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
+			"real git children establish build identity from repository state unavailable to an in-process stub",
 	},
 	"real-process-spawn:clients/config-diagnostic-codes.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
+			"real git children enumerate tracked diagnostic files, which a mocked repository cannot resolve",
 	},
 	"real-process-spawn:clients/dispatch/runners/ast-grep-playground-verify.test.ts":
 		{
 			detector: "real-process-spawn",
 			reason:
-				"the test calls a child-process helper; its boundary remains part of the contention surface",
+				"a real ast-grep playground child parses fixture syntax beyond the runner's in-process state",
 		},
 	"real-process-spawn:clients/dispatch/runners/ast-grep-rule-ignores.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
+			"a real ast-grep child applies ignore rules through its own file matcher",
 	},
 	"real-process-spawn:clients/git-tracked-ignore.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
+			"real git children decide tracked-versus-ignored files from index state no stub reproduces",
 	},
 	"real-process-spawn:clients/installer/posix-group-kill.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
+			"real POSIX shell descendants prove process-group termination across OS process state",
 	},
 	"real-process-spawn:clients/installer/verify-binary-semantics.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
+			"real binary children write and survive teardown, behavior an in-process installer stub cannot expose",
 	},
 	"real-process-spawn:clients/metrics-history-stderr.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
+			"real git children emit stderr bytes whose metrics classification cannot be observed in-process",
 	},
 	"real-process-spawn:clients/safe-spawn-ambient-signal.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
+			"real children receive ambient abort signals through the OS boundary, not an in-process double",
 	},
 	"real-process-spawn:clients/safe-spawn-failure-taxonomy.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
+			"real child exit, timeout, and kill outcomes supply taxonomy facts unavailable from a stub",
 	},
 	"real-process-spawn:clients/safe-spawn-input.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
+			"a real child reads stdin bytes through the pipe that safeSpawnAsync must close correctly",
 	},
 	"real-process-spawn:clients/safe-spawn-resource-usage.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
+			"real child CPU and RSS samples prove usage bracketing around the spawn boundary",
 	},
 	"real-process-spawn:clients/safe-spawn-timeout-teardown.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
+			"a wedged real child proves timeout teardown and descendant cleanup across the process boundary",
 	},
 	"real-process-spawn:clients/safe-spawn-windows-command.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
+			"real Windows command-line parsing decides argument boundaries no in-process parser can validate",
 	},
 	"real-process-spawn:clients/shared-checkout-guard.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
+			"real git children expose shared-checkout branch-switch races that an in-process model cannot reach",
 	},
 	"real-process-spawn:config/gitignore-tracked-shadow.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
+			"real gitignore rules and index entries decide shadow files outside the test process",
 	},
 	"real-process-spawn:config/tracked-control-bytes.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
+			"real git emits control bytes from its index, which a hand-built output cannot certify",
 	},
 	"real-process-spawn:scripts/git-fixture-env.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
+			"real git fixture children resolve sanitized environment variables and repository metadata",
 	},
 	"real-process-spawn:scripts/prune-agent-worktrees.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
+			"real git worktree commands own pruning locks and exit status beyond in-process filesystem state",
 	},
 	"real-process-spawn:support/fault-injection.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
+			"a genuinely wedged child proves pipe and kill behavior that a resolved promise cannot model",
 	},
 	"real-process-spawn:support/git-config-guard.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
+			"real git config reads resolve worktree-local policy through Git's own config precedence",
 	},
 	"real-process-spawn:support/git-fixture-env.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the test calls a child-process helper; its boundary remains part of the contention surface",
+			"real git fixture children validate cwd and environment scrubbing at the support boundary",
 	},
 };
 
@@ -781,7 +781,7 @@ describe("flake-shape scan — real-process-spawn", () => {
 		const source = [
 			'import { spawn } from "node:child_process";',
 			'it("spawns something unrelated", () => {',
-			'\tspawn("git", ["status"]);',
+			'\tspawn(process.execPath, ["git", "status"]);',
 			"});",
 		].join("\n");
 		// The import line still counts (a real child_process import is itself
@@ -826,11 +826,27 @@ describe("flake-shape scan — real-process-spawn", () => {
 		expect(scanRealProcessSpawn("fixture.test.ts", source)).toEqual([]);
 	});
 
+	it("does not let a string-only mock declaration suppress a real helper", () => {
+		const source = [
+			"const prose = 'vi.mock(\"../../clients/safe-spawn.js\")';",
+			"await safeSpawnAsync(command, args);",
+		].join("\n");
+		expect(scanRealProcessSpawn("fixture.test.ts", source)).toHaveLength(1);
+	});
+
+	it("does not let a commented mock declaration suppress a real helper", () => {
+		const source = [
+			'// vi.mock("../../clients/safe-spawn.js");',
+			"await safeSpawnAsync(command, args);",
+		].join("\n");
+		expect(scanRealProcessSpawn("fixture.test.ts", source)).toHaveLength(1);
+	});
+
 	it("does not count sync spawns behind a mocked child_process module", () => {
 		const source = [
 			'import { execFileSync } from "node:child_process";',
 			'vi.mock("node:child_process");',
-			'execFileSync("git", ["status"]);',
+			'execFileSync(process.execPath, ["git", "status"]);',
 		].join("\n");
 		expect(scanRealProcessSpawn("fixture.test.ts", source)).toEqual([]);
 	});

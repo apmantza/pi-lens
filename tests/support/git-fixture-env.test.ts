@@ -143,4 +143,4 @@ describe("git fixture environment", () => {
 		).toBe("fixture");
 	});
 });
-// flake-shape: real-process-spawn — the real git fixture process is the support contention boundary
+// flake-shape: real-process-spawn — real git fixture children validate cwd and environment scrubbing at the support boundary

@@ -261,4 +261,4 @@ describe.skipIf(!BINARIES_PRESENT)(
 		);
 	},
 );
-// flake-shape: real-process-spawn — the real Biome subprocess boundary is part of decorator metadata contention
+// flake-shape: real-process-spawn — real Biome children resolve decorator metadata that in-process calls cannot observe

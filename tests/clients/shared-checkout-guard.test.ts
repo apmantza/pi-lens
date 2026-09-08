@@ -972,4 +972,4 @@ describe("a real ephemeral test fixture is never a shared checkout (#2345)", () 
 		}
 	});
 });
-// flake-shape: real-process-spawn — the real git child boundary is the shared-checkout contention under test
+// flake-shape: real-process-spawn — real git children expose shared-checkout branch-switch races that an in-process model cannot reach

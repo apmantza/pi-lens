@@ -67,4 +67,4 @@ describe("gitignore does not shadow tracked files (#2250)", () => {
 		expect(shadowed).toEqual([]);
 	});
 });
-// flake-shape: real-process-spawn — real gitignore resolution is the shadow-file contention boundary
+// flake-shape: real-process-spawn — real gitignore rules and index entries decide shadow files outside the test process

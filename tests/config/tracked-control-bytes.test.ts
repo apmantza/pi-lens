@@ -234,4 +234,4 @@ describe("tracked source files contain no literal control bytes (#2571)", () => 
 		}
 	});
 });
-// flake-shape: real-process-spawn — real git bytes are the tracked-control contention boundary
+// flake-shape: real-process-spawn — real git emits control bytes from its index, which a hand-built output cannot certify

@@ -65,4 +65,4 @@ describe("JavaScript Git fixture environment", () => {
 		).toThrow();
 	});
 });
-// flake-shape: real-process-spawn — the real git fixture process is the environment contention boundary
+// flake-shape: real-process-spawn — real git fixture children resolve sanitized environment variables and repository metadata

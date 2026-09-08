@@ -205,4 +205,4 @@ describe("collectUntrackedIgnoredIds (#694)", () => {
 		}
 	});
 });
-// flake-shape: real-process-spawn — real git resolution is the tracked-ignore contention boundary
+// flake-shape: real-process-spawn — real git children decide tracked-versus-ignored files from index state no stub reproduces

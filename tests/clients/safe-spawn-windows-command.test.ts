@@ -360,4 +360,4 @@ describe.runIf(process.platform === "win32")(
 		});
 	},
 );
-// flake-shape: real-process-spawn — the real Windows child command boundary is the contention under test
+// flake-shape: real-process-spawn — real Windows command-line parsing decides argument boundaries no in-process parser can validate

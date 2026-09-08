@@ -124,4 +124,4 @@ describe("safe-spawn typed failure taxonomy", () => {
 		expect(killed.spawnFailure?.cause).toBe(killed.error);
 	});
 });
-// flake-shape: real-process-spawn — the real child failure boundary is the taxonomy contention under test
+// flake-shape: real-process-spawn — real child exit, timeout, and kill outcomes supply taxonomy facts unavailable from a stub

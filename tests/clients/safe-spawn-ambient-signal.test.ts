@@ -152,4 +152,4 @@ describe("safeSpawnAsync ambient abort signal (#197)", () => {
 		).toBeLessThanOrEqual(1024);
 	});
 });
-// flake-shape: real-process-spawn — the real child signal boundary is the ambient-abort contention under test
+// flake-shape: real-process-spawn — real children receive ambient abort signals through the OS boundary, not an in-process double

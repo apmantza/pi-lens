@@ -178,4 +178,4 @@ describe("playground-verify-rule.mjs setup errors", () => {
 		expect(result.error).toMatch(/rule not found/);
 	}, 15_000);
 });
-// flake-shape: real-process-spawn — the real playground verifier subprocess boundary is part of contention
+// flake-shape: real-process-spawn — a real ast-grep playground child parses fixture syntax beyond the runner's in-process state

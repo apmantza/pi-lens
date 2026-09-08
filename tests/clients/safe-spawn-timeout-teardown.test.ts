@@ -189,4 +189,4 @@ describe("timeout teardown evidence (#2010)", () => {
 		},
 	);
 });
-// flake-shape: real-process-spawn — the real child timeout teardown is the contention under test
+// flake-shape: real-process-spawn — a wedged real child proves timeout teardown and descendant cleanup across the process boundary

@@ -224,4 +224,4 @@ describe("verifyToolBinary (#2015)", () => {
 		expect(result.streamingMatch).toBe(true);
 	}, 15_000);
 });
-// flake-shape: real-process-spawn — the real binary child boundary is the installer contention under test
+// flake-shape: real-process-spawn — real binary children write and survive teardown, behavior an in-process installer stub cannot expose
