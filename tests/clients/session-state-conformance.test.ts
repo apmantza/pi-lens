@@ -54,15 +54,18 @@ describe("session-state registry — shape", () => {
 		expect(() => assertSortedKeys("fixture", ["b", "a"])).toThrow(
 			"entries must be sorted",
 		);
-		assertSortedKeys("SESSION_STATE_REGISTRY", [
-			...SESSION_STATE_REGISTRY.map((entry) => entry.id).sort(),
-		]);
-		assertSortedKeys("EXEMPT_SESSION_STATE_FILES", [
-			...Object.keys(EXEMPT_SESSION_STATE_FILES).sort(),
-		]);
-		assertSortedKeys("SESSION_STATE_SYMBOL_COUNTS", [
-			...Object.keys(SESSION_STATE_SYMBOL_COUNTS).sort(),
-		]);
+		assertSortedKeys(
+			"SESSION_STATE_REGISTRY",
+			SESSION_STATE_REGISTRY.map((entry) => entry.id),
+		);
+		assertSortedKeys(
+			"EXEMPT_SESSION_STATE_FILES",
+			Object.keys(EXEMPT_SESSION_STATE_FILES),
+		);
+		assertSortedKeys(
+			"SESSION_STATE_SYMBOL_COUNTS",
+			Object.keys(SESSION_STATE_SYMBOL_COUNTS),
+		);
 	});
 	it("every entry is uniquely identified", () => {
 		const ids = SESSION_STATE_REGISTRY.map((e) => e.id);
