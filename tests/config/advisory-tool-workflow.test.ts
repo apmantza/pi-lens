@@ -19,6 +19,9 @@ const workflow = yaml.load(
 		}
 	>;
 };
+const mutationWorkflow = yaml.load(
+	readFileSync(resolve(ROOT, ".github/workflows/mutation.yml"), "utf8"),
+) as { jobs: Record<string, { name?: string; "continue-on-error"?: boolean }> };
 
 const tools = [
 	["jscpd", "jscpd (advisory)"],
@@ -28,6 +31,21 @@ const tools = [
 ] as const;
 
 describe("#2706 advisory tooling workflow contracts", () => {
+	it("keeps the mutation lane advisory and named", () => {
+		const job = mutationWorkflow.jobs.mutation;
+		expect(job?.name).toBe("mutation (advisory)");
+		expect(job?.["continue-on-error"]).toBe(true);
+	});
+
+	it("keeps the mutation report upload explicit", () => {
+		const raw = readFileSync(
+			resolve(ROOT, ".github/workflows/mutation.yml"),
+			"utf8",
+		);
+		expect(raw).toContain("actions/upload-artifact@<SHA-TO-PIN> # v4");
+		expect(raw).toContain("path: reports/mutation/mutation.json");
+	});
+
 	it.each(tools)("keeps the %s job advisory and named", (key, name) => {
 		const job = workflow.jobs[key];
 		expect(job?.name).toBe(name);
