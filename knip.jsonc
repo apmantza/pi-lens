@@ -116,7 +116,10 @@
 		// Spawned as an external LSP server binary (by path/PATH lookup) in
 		// the real-LSP integration and budget tests; no knip plugin models
 		// arbitrary LSP server devDependencies.
-		"typescript-language-server"
+		"typescript-language-server",
+		// The packaging workflow reads this pinned devDependency to install
+		// publint in its production-only job, then invokes its binary directly.
+		"publint"
 	],
 	"ignoreBinaries": [
 		// .github/workflows/lint.yml installs this with `--no-save`

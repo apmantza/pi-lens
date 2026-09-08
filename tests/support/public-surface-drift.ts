@@ -39,7 +39,7 @@ import {
 } from "./schema-stability.js";
 
 /** One registry whose ids are public API. */
-export interface SurfaceCatalog {
+interface SurfaceCatalog {
 	/** Human name, used in failure messages. */
 	readonly name: string;
 	/** Every id the code accepts today. */

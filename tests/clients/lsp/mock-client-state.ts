@@ -16,7 +16,7 @@ import type { LSPClientState } from "../../../clients/lsp/client.js";
 import { TEXT_DOCUMENT_SYNC_KIND_FULL } from "../../../clients/lsp/sync-kind.js";
 import { WatchedFilesQueue } from "../../../clients/lsp/watch-queue.js";
 
-export function createMockConnection(): MessageConnection {
+function createMockConnection(): MessageConnection {
 	return {
 		sendNotification: vi.fn().mockResolvedValue(undefined),
 		sendRequest: vi.fn().mockResolvedValue(undefined),

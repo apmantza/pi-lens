@@ -69,7 +69,7 @@
 /** A yield point the path under test exposes for reset injection. */
 export type Tap = () => void | Promise<void>;
 
-export interface ExploreOutcome<T> {
+interface ExploreOutcome<T> {
 	/** `null` for the baseline pass; the 0-based tap index for a reset pass. */
 	tapIndex: number | null;
 	/** The value `run` resolved to, when it didn't throw. */

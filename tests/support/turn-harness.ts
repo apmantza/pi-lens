@@ -93,7 +93,7 @@ import { setupTestEnvironment } from "../clients/test-utils.js";
  * relative offsets a scenario asks for, which is the only thing any of these
  * assertions depend on.
  */
-export interface ScenarioClock {
+interface ScenarioClock {
 	now(): number;
 	advance(ms: number): void;
 }
@@ -114,7 +114,7 @@ const ACTION_NEEDED_PREFIX = "🔑 ACTION NEEDED";
  * blocker tier" is the exact claim #1622's fix makes, and it is unassertable
  * from a flat string.
  */
-export interface TurnEndView {
+interface TurnEndView {
 	/** The full composed message, exactly as it reaches the agent. */
 	text: string;
 	/**
@@ -163,8 +163,7 @@ function splitTurnEndView(text: string): TurnEndView {
 }
 
 /** A knip run's result, minus the fields no scenario has ever needed to state. */
-export type ScenarioKnipResult = Partial<KnipResult> &
-	Pick<KnipResult, "issues">;
+type ScenarioKnipResult = Partial<KnipResult> & Pick<KnipResult, "issues">;
 
 const EMPTY_KNIP: KnipResult = {
 	success: true,
@@ -176,7 +175,7 @@ const EMPTY_KNIP: KnipResult = {
 	summary: "skipped",
 } as KnipResult;
 
-export interface TurnHarness {
+interface TurnHarness {
 	/** The scenario's project root (a real temp dir). */
 	cwd: string;
 	clock: ScenarioClock;
@@ -259,7 +258,7 @@ export interface TurnHarness {
 	knipClient: unknown;
 }
 
-export interface TurnHarnessOptions {
+interface TurnHarnessOptions {
 	/** Temp-dir prefix, so a failing scenario's leftovers are identifiable. */
 	prefix?: string;
 	/**
@@ -285,7 +284,7 @@ export interface TurnHarnessOptions {
  * Build a harness. Callers must call the returned `cleanup` in a `finally`;
  * {@link runTurnScenario} does that for them.
  */
-export function createTurnHarness(options: TurnHarnessOptions = {}): {
+function createTurnHarness(options: TurnHarnessOptions = {}): {
 	harness: TurnHarness;
 	cleanup: () => void;
 } {

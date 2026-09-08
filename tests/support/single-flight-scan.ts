@@ -75,12 +75,6 @@ export interface InFlightDeclaration {
  * person then writes or dismisses. A false negative is silent and ships the
  * next copy of the bug; a false positive costs one line and a moment's thought.
  */
-export const SCAN_HEURISTIC_LIMITS = [
-	"closure-scoped state inside factory functions is not seen",
-	"in-flight state not named /[iI]nFlight/ is not seen",
-	"a modifier-less, unannotated class field is not seen (it is shaped exactly like a bare assignment)",
-] as const;
-
 /**
  * Three alternatives, in the order the doc comment lists them: a module-level
  * binding, a modified class field, and a modifier-less class field that is
@@ -128,7 +122,7 @@ export function findInFlightDeclarations(
 }
 
 /** The module that owns the primitive, which is exempt by definition. */
-export const PRIMITIVE_MODULE = "single-flight.ts";
+const PRIMITIVE_MODULE = "single-flight.ts";
 
 /** Scan every `clients/` source for hand-rolled in-flight declarations. */
 export function scanInFlightDeclarations(): InFlightDeclaration[] {

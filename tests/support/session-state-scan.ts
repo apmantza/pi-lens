@@ -641,7 +641,7 @@ const PROCESS_SINGLETON_CALL = /getProcessSingleton\s*\(/;
  *    source, so column-zero matching skips it.
  * 5. **Semantics.** The scan cannot tell a session-scoped dedupe set from a
  *    frozen lookup table built once at import. That judgment stays in the
- *    registry and in {@link SessionStateExemption}'s reasons.
+ *    registry and in `SessionStateExemption` (the shape formerly exported here)'s reasons.
  *
  * The #1817 symbol-count pin narrows the FIRST four of these from "invisible"
  * to "a total the pin table tracks", but it inherits one more blind spot of
@@ -720,6 +720,3 @@ export function scanSessionStateCandidates(
 	if (useCache) cachedCandidates = found;
 	return found;
 }
-
-/** A scanned file the registry deliberately does not cover, and why. */
-export type SessionStateExemption = string;
