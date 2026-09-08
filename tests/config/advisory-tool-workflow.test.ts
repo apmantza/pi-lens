@@ -34,21 +34,28 @@ describe("#2706 advisory tooling workflow contracts", () => {
 		expect(job?.["continue-on-error"]).toBe(true);
 	});
 
-	it("pins the typos action to a full commit SHA with the release comment", () => {
+	it("pins every action in the four jobs to a full SHA with a release comment", () => {
 		// Recurrence: the round-1 draft carried the literal offline placeholder
-		// `<SHA-TO-PIN>`; an unpinned or placeholder `uses:` would run whatever the
-		// tag points at. The repo pins every third-party action by SHA.
-		const steps = workflow.jobs.typos?.steps ?? [];
-		const action = steps.find(
-			(step) =>
-				typeof step.uses === "string" &&
-				step.uses.startsWith("crate-ci/typos@"),
-		);
-		expect(action?.uses).toMatch(/^crate-ci\/typos@[0-9a-f]{40}$/);
+		// `<SHA-TO-PIN>`; any unpinned action would run whatever its mutable tag
+		// points at. Keep every action in each new job pinned with its release.
 		const raw = readFileSync(
 			resolve(ROOT, ".github/workflows/lint.yml"),
 			"utf8",
 		);
-		expect(raw).toMatch(/crate-ci\/typos@[0-9a-f]{40} # v1\.50\.1\b/);
+		for (const key of tools.map(([jobKey]) => jobKey)) {
+			const start = raw.indexOf(`  ${key}:`);
+			const next = raw.slice(start + 1).search(/^  [A-Za-z0-9_-]+:/m);
+			const block = raw.slice(
+				start,
+				next === -1 ? undefined : start + 1 + next,
+			);
+			const uses = block.split("\n").filter((line) => /^\s+- uses:/.test(line));
+			expect(uses, `${key} must retain its action steps`).not.toHaveLength(0);
+			for (const line of uses) {
+				expect(line).toMatch(
+					/^\s+- uses:\s+[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+@[0-9a-f]{40}\s+# v\d+(?:\.\d+){0,2}\s*$/,
+				);
+			}
+		}
 	});
 });
