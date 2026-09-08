@@ -14,7 +14,7 @@ export default {
 	// follow a symlinked node_modules (plegma worktrees link the main
 	// checkout's tree), so the runner was "not found" (2026-09-08 spike).
 	plugins: ["@stryker-mutator/vitest-runner"],
-	vitest: { related: true, configFile: "vitest.config.ts" },
+	vitest: { related: true, configFile: "vitest.config.ts", pool: "forks" },
 	mutate: [
 		"clients/**/*.ts",
 		"scripts/**/*.mjs",

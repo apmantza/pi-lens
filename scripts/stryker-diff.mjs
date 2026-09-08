@@ -35,11 +35,9 @@ const result = spawnSync(
 );
 
 if (result.error || result.status !== 0) {
-	const exitMsg = result.error
-		? `: ${result.error.message}`
-		: "";
+	const exitMsg = result.error ? `: ${result.error.message}` : "";
 	console.error(
-		`mutation diff: Stryker exited with status ${result.status ?? "unknown"}${exitMsg}`,
+		`mutation diff: Stryker status ${result.status ?? "unknown"}${exitMsg}`,
 	);
 	process.exit(1);
 }
@@ -67,8 +65,9 @@ try {
 	for (const mutant of mutants.filter(
 		(entry) => entry.status === "Survived",
 	)) {
+		const line = mutant.location?.start?.line ?? "?";
 		console.log(
-			`survived: ${mutant.fileName}:${mutant.location?.start?.line ?? "?"} ${mutant.mutatorName}`,
+			`survived: ${mutant.fileName}:${line} ${mutant.mutatorName}`,
 		);
 	}
 } catch (error) {
