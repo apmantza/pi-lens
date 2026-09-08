@@ -60,9 +60,7 @@
  */
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { findDriftTrackingIssue } from "./lib/drift-issue.mjs";
+import { upsertTrackingIssue } from "./lib/drift-issue.mjs";
 import {
 	buildInstallSmokeDriftBody,
 	buildInstallSmokeDriftComment,
@@ -109,36 +107,6 @@ function workflowRunUrl(env) {
 	return `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}`;
 }
 
-function findTrackingIssue() {
-	try {
-		const out = gh([
-			"issue",
-			"list",
-			"--search",
-			`in:title "${INSTALL_SMOKE_DRIFT_TITLE}"`,
-			"--state",
-			"open",
-			"--json",
-			"number,title",
-			"--limit",
-			"20",
-		]);
-		return findDriftTrackingIssue(JSON.parse(out), INSTALL_SMOKE_DRIFT_TITLE);
-	} catch (e) {
-		console.error(
-			`[notify-install-smoke-drift] gh issue list failed, treating as "no existing issue": ${e?.message ?? e}`,
-		);
-		return null;
-	}
-}
-
-function writeBodyToTempFile(body) {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pilens-install-drift-"));
-	const file = path.join(dir, "body.md");
-	fs.writeFileSync(file, body);
-	return file;
-}
-
 function main(env) {
 	const report = readReport(env);
 	const action = decideAction(report);
@@ -170,39 +138,30 @@ function main(env) {
 		return;
 	}
 
-	const existing = findTrackingIssue();
-
 	if (action === "file-or-refresh") {
 		const body = buildInstallSmokeDriftBody(report, {
 			runUrl: workflowRunUrl(env),
 		});
-		const bodyFile = writeBodyToTempFile(body);
+		const dir = fs.mkdtempSync(
+			`${process.env.TMPDIR ?? "/tmp"}/pilens-install-drift-`,
+		);
+		const bodyFile = `${dir}/body.md`;
+		fs.writeFileSync(bodyFile, body);
 		try {
-			if (existing) {
-				gh(["issue", "edit", String(existing.number), "--body-file", bodyFile]);
-				gh([
-					"issue",
-					"comment",
-					String(existing.number),
-					"--body",
-					buildInstallSmokeDriftComment(report),
-				]);
-				console.log(
-					`[notify-install-smoke-drift] updated tracking issue #${existing.number}.`,
-				);
-			} else {
-				gh([
-					"issue",
-					"create",
-					"--title",
-					INSTALL_SMOKE_DRIFT_TITLE,
-					"--label",
-					"area:installer,area:tests",
-					"--body-file",
-					bodyFile,
-				]);
-				console.log("[notify-install-smoke-drift] filed a new tracking issue.");
-			}
+			const result = upsertTrackingIssue({
+				title: INSTALL_SMOKE_DRIFT_TITLE,
+				label: "area:installer,area:tests",
+				body,
+				bodyFile,
+				comment: buildInstallSmokeDriftComment(report),
+				gh,
+			});
+			const issue = result.issueNumber ? ` #${result.issueNumber}` : "";
+			const message =
+				result.action === "created"
+					? "filed a new tracking issue"
+					: `updated tracking issue${issue}`;
+			console.log(`[notify-install-smoke-drift] ${message}.`);
 		} catch (e) {
 			console.error(
 				`[notify-install-smoke-drift] gh issue create/edit failed: ${e?.message ?? e}`,
@@ -212,29 +171,29 @@ function main(env) {
 	}
 
 	// action === "close-if-open"
-	if (existing) {
-		try {
-			gh([
-				"issue",
-				"close",
-				String(existing.number),
-				"--comment",
-				`Nightly install-smoke ran \`@latest\` (${report.version}) cleanly — self-resolved, closing (#2613).`,
-			]);
+	try {
+		const result = upsertTrackingIssue({
+			title: INSTALL_SMOKE_DRIFT_TITLE,
+			label: "area:installer,area:tests",
+			clean: true,
+			closeWhenClean: true,
+			closeComment: `Nightly install-smoke ran \`@latest\` (${report.version}) cleanly — self-resolved, closing (#2613).`,
+			gh,
+		});
+		if (result.action === "closed") {
 			console.log(
-				`[notify-install-smoke-drift] closed tracking issue #${existing.number} (drift resolved).`,
+				`[notify-install-smoke-drift] closed tracking issue #${result.issueNumber} (drift resolved).`,
 			);
-		} catch (e) {
-			console.error(
-				`[notify-install-smoke-drift] gh issue close failed: ${e?.message ?? e}`,
+		} else {
+			console.log(
+				"[notify-install-smoke-drift] no drift, no open tracking issue — nothing to do.",
 			);
 		}
-		return;
+	} catch (e) {
+		console.error(
+			`[notify-install-smoke-drift] gh issue close failed: ${e?.message ?? e}`,
+		);
 	}
-
-	console.log(
-		"[notify-install-smoke-drift] no drift, no open tracking issue — nothing to do.",
-	);
 }
 
 try {

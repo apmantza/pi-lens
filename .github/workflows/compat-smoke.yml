@@ -111,7 +111,11 @@ jobs:
       # search keeps finding it regardless of which outcome kind is current.
       - name: Alert on contract drift or infra failure (create-or-update tracking issue)
         if: >-
-          steps.layer_a.outcome == 'failure' || steps.layer_b.outcome == 'failure'
+          always() && (steps.layer_a.outcome == 'failure' ||
+          steps.layer_b.outcome == 'failure' ||
+          (steps.layer_a.outcome == 'success' && steps.layer_b.outcome == 'success'))
+        # Tracker maintenance must not mask the smoke job's own verdict.
+        continue-on-error: true
         env:
           LAYER_A_STEP_OUTCOME: ${{ steps.layer_a.outcome }}
           LAYER_A_KIND: ${{ steps.layer_a.outputs.outcome || 'unknown' }}
@@ -173,23 +177,19 @@ jobs:
               "location added to the locator), close it._"
           } > "$BODY_FILE"
 
-          EXISTING_ISSUE="$(
-            gh issue list --repo "$GITHUB_REPOSITORY" --state open \
-              --search "in:title \"$TITLE\"" --json number,title \
-              --jq ".[] | select(.title == \"$TITLE\") | .number" | head -1
-          )"
-          if [ -n "$EXISTING_ISSUE" ]; then
-            echo "updating existing issue #$EXISTING_ISSUE"
-            gh issue edit "$EXISTING_ISSUE" \
-              --repo "$GITHUB_REPOSITORY" --body-file "$BODY_FILE"
-            COMMENT="Still flagged: Layer A=${LAYER_A_KIND},"
-            COMMENT+=" Layer B=${LAYER_B_OUTCOME}"
-            COMMENT+=" (versions: ${LAYER_A_VERSIONS})."
-            gh issue comment "$EXISTING_ISSUE" --repo "$GITHUB_REPOSITORY" \
-              --body "$COMMENT"
-          else
-            echo "creating new alert issue"
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+          COMMENT="Still flagged: Layer A=${LAYER_A_KIND},"
+          COMMENT+=" Layer B=${LAYER_B_OUTCOME}"
+          COMMENT+=" (versions: ${LAYER_A_VERSIONS})."
+          if [ "$LAYER_A_STEP_OUTCOME" = success ] && [ "$LAYER_B_OUTCOME" = success ]; then
+            node scripts/upsert-tracking-issue.mjs \
+              --title "$TITLE" \
+              --label "area:session,area:lsp,area:tests" \
               --body-file "$BODY_FILE" \
-              --label "area:session,area:lsp,area:tests"
+              --clean --close-when-clean
+          else
+            node scripts/upsert-tracking-issue.mjs \
+              --title "$TITLE" \
+              --label "area:session,area:lsp,area:tests" \
+              --body-file "$BODY_FILE" \
+              --comment "$COMMENT"
           fi

@@ -61,6 +61,7 @@ on:
       - "scripts/npm-retry.mjs"
       - "scripts/lib/retry.mjs"
       - "scripts/notify-install-smoke-drift.mjs"
+      - "scripts/upsert-tracking-issue.mjs"
       - "scripts/lib/install-smoke-drift.mjs"
       # findDriftTrackingIssue is a load-bearing import of the above, not
       # just tool-smoke.yml's own dependency, now that this workflow uses it.
@@ -891,6 +892,9 @@ jobs:
       # body-building logic (tested in tests/scripts/).
       - name: Notify install drift (file/refresh on failure, close on green)
         if: always()
+        # Tracker maintenance must not mask the advisory smoke lane's own
+        # verdict; the notifier's gh failure is non-gating at this step.
+        continue-on-error: true
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}

@@ -30,14 +30,12 @@
  */
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import { DRIFT_SUMMARY_PATH } from "./lib/clean-signal.mjs";
 import {
 	buildDriftIssueBody,
 	DRIFT_ISSUE_LABEL,
 	DRIFT_ISSUE_TITLE,
-	findDriftTrackingIssue,
+	upsertTrackingIssue,
 } from "./lib/drift-issue.mjs";
 
 const argv = process.argv.slice(2);
@@ -73,29 +71,6 @@ function workflowRunUrl() {
 	return `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}`;
 }
 
-function findTrackingIssue() {
-	try {
-		const out = gh([
-			"issue",
-			"list",
-			"--label",
-			DRIFT_ISSUE_LABEL,
-			"--state",
-			"open",
-			"--json",
-			"number,title",
-			"--limit",
-			"20",
-		]);
-		return findDriftTrackingIssue(JSON.parse(out));
-	} catch (e) {
-		console.error(
-			`[notify-drift] gh issue list failed, treating as "no existing issue": ${e?.message ?? e}`,
-		);
-		return null;
-	}
-}
-
 // Idempotent: --force updates the existing label (color/description) instead
 // of erroring if it's already there, so this is safe to run every night.
 function ensureLabel() {
@@ -117,13 +92,6 @@ function ensureLabel() {
 	}
 }
 
-function writeBodyToTempFile(body) {
-	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pilens-drift-issue-"));
-	const file = path.join(dir, "body.md");
-	fs.writeFileSync(file, body);
-	return file;
-}
-
 function main() {
 	const summary = readSummary();
 	if (!summary) return;
@@ -143,32 +111,24 @@ function main() {
 		return;
 	}
 
-	const existing = findTrackingIssue();
-
 	if (count > 0) {
 		ensureLabel();
-		const bodyFile = writeBodyToTempFile(body);
 		try {
-			if (existing) {
-				gh(["issue", "edit", String(existing.number), "--body-file", bodyFile]);
-				console.log(
-					`[notify-drift] updated tracking issue #${existing.number} (${count} finding(s)).`,
-				);
-			} else {
-				gh([
-					"issue",
-					"create",
-					"--title",
-					DRIFT_ISSUE_TITLE,
-					"--label",
-					DRIFT_ISSUE_LABEL,
-					"--body-file",
-					bodyFile,
-				]);
-				console.log(
-					`[notify-drift] filed a new tracking issue (${count} finding(s)).`,
-				);
-			}
+			const dir = fs.mkdtempSync(
+				`${process.env.TMPDIR ?? "/tmp"}/pilens-drift-issue-`,
+			);
+			const bodyFile = `${dir}/body.md`;
+			fs.writeFileSync(bodyFile, body);
+			const action = upsertTrackingIssue({
+				title: DRIFT_ISSUE_TITLE,
+				label: DRIFT_ISSUE_LABEL,
+				body,
+				bodyFile,
+				gh,
+			});
+			console.log(
+				`[notify-drift] ${action.action} tracking issue (${count} finding(s)).`,
+			);
 		} catch (e) {
 			console.error(
 				`[notify-drift] gh issue create/edit failed: ${e?.message ?? e}`,
@@ -177,27 +137,20 @@ function main() {
 		return;
 	}
 
-	if (existing) {
-		try {
-			gh([
-				"issue",
-				"close",
-				String(existing.number),
-				"--comment",
+	try {
+		const action = upsertTrackingIssue({
+			title: DRIFT_ISSUE_TITLE,
+			label: DRIFT_ISSUE_LABEL,
+			clean: true,
+			closeWhenClean: true,
+			closeComment:
 				"Nightly drift check found no mismatches — self-resolved, closing (#529/#594).",
-			]);
-			console.log(
-				`[notify-drift] closed tracking issue #${existing.number} (drift resolved).`,
-			);
-		} catch (e) {
-			console.error(`[notify-drift] gh issue close failed: ${e?.message ?? e}`);
-		}
-		return;
+			gh,
+		});
+		console.log(`[notify-drift] ${action.action}: no drift.`);
+	} catch (e) {
+		console.error(`[notify-drift] gh issue close failed: ${e?.message ?? e}`);
 	}
-
-	console.log(
-		"[notify-drift] no drift, no open tracking issue — nothing to do.",
-	);
 }
 
 try {
