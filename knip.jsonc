@@ -95,6 +95,10 @@
 	// of knip's plugins for these tools activates the way this repo uses
 	// them, so knip cannot see the usage on its own:
 	"ignoreDependencies": [
+		// jscpd (#2706, lint.yml "jscpd (advisory)") is a pinned devDependency
+		// spawned by path (`node_modules/.bin/jscpd`) from the workflow step and
+		// never imported, so knip cannot credit it.
+		"jscpd",
 		// knip's husky plugin (packages/knip/src/plugins/husky/index.ts,
 		// pinned tag) only credits the `husky` package itself from the
 		// legacy v8 `package.json#husky.hooks` field; this repo uses v9
