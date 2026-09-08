@@ -337,6 +337,11 @@ describe("refresh candidate selection", () => {
 		const ids = candidates.map((c) => c.toolId);
 		expect(ids).toContain("knip");
 		expect(ids).toContain("pyright");
+		const shared = candidates.filter(
+			(candidate) => candidate.packageName === "vscode-langservers-extracted",
+		);
+		expect(shared).toHaveLength(1);
+		expect(shared[0].toolId).toBe("vscode-json-language-server");
 		// An explicit `pkg@1.2.3` pin is the intended version; #589 already
 		// reinstalls a managed copy that drifts off one, so it must not be
 		// re-resolved here.
@@ -443,6 +448,52 @@ describe("cadence", () => {
 		expect(updateCalls()[0].args).toContain("pyright");
 	});
 
+	it("refreshes a shared npm package once and advances the next package", async () => {
+		vi.stubEnv("PI_LENS_TOOL_REFRESH_MAX_PER_SESSION", "2");
+		installFixture("vscode-langservers-extracted", "4.0.0", {
+			binaryName: "vscode-css-language-server",
+		});
+		installBinShim("vscode-html-language-server");
+		installBinShim("vscode-json-language-server");
+		installFixture("knip", "6.4.1");
+		writeState({
+			"vscode-css-languageserver": { checkedAt: NOW - 8 * DAY_MS },
+			"vscode-html-languageserver-bin": { checkedAt: NOW - 8 * DAY_MS },
+			"vscode-json-language-server": { checkedAt: NOW - 8 * DAY_MS },
+			knip: { checkedAt: NOW - 7 * DAY_MS },
+		});
+		stubSpawn("ok", {
+			"vscode-langservers-extracted": "5.0.0",
+			knip: "6.32.2",
+		});
+
+		const outcome = await runManagedToolRefresh(NOW);
+
+		expect(updateCalls()).toHaveLength(2);
+		expect(updateCalls().map((call) => call.args)).toEqual(
+			expect.arrayContaining([
+			expect.arrayContaining(["vscode-langservers-extracted"]),
+			expect.arrayContaining(["knip"]),
+		]),
+	);
+		expect(outcome.refreshed.map((refresh) => refresh.packageName)).toEqual(
+			expect.arrayContaining(["vscode-langservers-extracted", "knip"]),
+	);
+		expect(readState()).toMatchObject({
+			"vscode-css-languageserver": { checkedAt: NOW, version: "5.0.0" },
+			"vscode-html-languageserver-bin": { checkedAt: NOW, version: "5.0.0" },
+			"vscode-json-language-server": { checkedAt: NOW, version: "5.0.0" },
+			knip: { checkedAt: NOW, version: "6.32.2" },
+		});
+		expect(
+			logRows().some(
+				(row) =>
+					row.includes("package vscode-langservers-extracted") &&
+					row.includes("covered ids vscode-json-language-server,vscode-html-languageserver-bin,vscode-css-languageserver"),
+			),
+		).toBe(true);
+	});
+
 	it("breaks a stamp tie on tool id so the choice is deterministic", async () => {
 		installFixture("knip", "1.0.0");
 		installFixture("pyright", "1.0.0");
@@ -525,6 +576,87 @@ describe("session budget", () => {
 });
 
 describe("failed refresh", () => {
+	it("names every alias when a shared package update fails", async () => {
+		installFixture("vscode-langservers-extracted", "4.0.0", {
+			binaryName: "vscode-json-language-server",
+		});
+		installBinShim("vscode-html-language-server");
+		installBinShim("vscode-css-language-server");
+		writeState({
+			"vscode-css-languageserver": { checkedAt: NOW - 8 * DAY_MS },
+			"vscode-html-languageserver-bin": { checkedAt: NOW - 8 * DAY_MS },
+			"vscode-json-language-server": { checkedAt: NOW - 8 * DAY_MS },
+		});
+		stubSpawn("fail");
+
+		await runManagedToolRefresh(NOW);
+
+		const coveredIds =
+			"vscode-json-language-server,vscode-html-languageserver-bin,vscode-css-languageserver";
+		const failureRow = logRows().find((row) =>
+			row.includes("npm update failed"),
+		);
+		expect(failureRow).toContain("package vscode-langservers-extracted");
+		expect(failureRow).toContain(`covered ids ${coveredIds}`);
+		const group = getDegradationSummary().find(
+			(g) => g.kind === "managed-tool-refresh",
+		);
+		expect(group?.latestReasons[0].reason).toContain(
+			"package vscode-langservers-extracted",
+		);
+		expect(group?.latestReasons[0].reason).toContain(`covered ids ${coveredIds}`);
+		expect(readState()).toMatchObject({
+			"vscode-json-language-server": { failed: true },
+			"vscode-html-languageserver-bin": { failed: true },
+			"vscode-css-languageserver": { failed: true },
+		});
+	});
+
+	it("names every alias when a shared package fails verification", async () => {
+		installFixture("vscode-langservers-extracted", "4.0.0", {
+			binaryName: "vscode-json-language-server",
+		});
+		installBinShim("vscode-html-language-server");
+		installBinShim("vscode-css-language-server");
+		writeState({
+			"vscode-css-languageserver": { checkedAt: NOW - 8 * DAY_MS },
+			"vscode-html-languageserver-bin": { checkedAt: NOW - 8 * DAY_MS },
+			"vscode-json-language-server": { checkedAt: NOW - 8 * DAY_MS },
+		});
+		spawnMock.mockImplementation(async (_command: string, args: string[]) => {
+			if (!args.includes("update")) {
+				return { stdout: "npm", stderr: "", status: 0 };
+			}
+			installFixture("vscode-langservers-extracted", "5.0.0", {
+				binaryName: "vscode-json-language-server",
+				shimExitCode: 1,
+			});
+			return { stdout: "", stderr: "", status: 0 };
+		});
+
+		await runManagedToolRefresh(NOW);
+
+		const coveredIds =
+			"vscode-json-language-server,vscode-html-languageserver-bin,vscode-css-languageserver";
+		const failureRow = logRows().find((row) =>
+			row.includes("failed verification"),
+		);
+		expect(failureRow).toContain("package vscode-langservers-extracted");
+		expect(failureRow).toContain(`covered ids ${coveredIds}`);
+		const group = getDegradationSummary().find(
+			(g) => g.kind === "managed-tool-refresh",
+		);
+		expect(group?.latestReasons[0].reason).toContain(
+			"package vscode-langservers-extracted",
+		);
+		expect(group?.latestReasons[0].reason).toContain(`covered ids ${coveredIds}`);
+		expect(readState()).toMatchObject({
+			"vscode-json-language-server": { failed: true },
+			"vscode-html-languageserver-bin": { failed: true },
+			"vscode-css-languageserver": { failed: true },
+		});
+	});
+
 	it("degrades once, keeps serving, and retries on the shorter cooldown", async () => {
 		installFixture("knip", "6.4.1");
 		writeState({ knip: { checkedAt: NOW - 8 * DAY_MS, version: "6.4.1" } });
@@ -1037,17 +1169,6 @@ describe("post-update verification (review F2)", () => {
 			binaryName: "vscode-json-language-server",
 		});
 		stubSpawn("ok", { "vscode-langservers-extracted": "5.0.0" });
-		// vscode-css-languageserver and vscode-html-languageserver-bin (#2638)
-		// share this same npm package, so the single node_modules install above
-		// makes ALL THREE tool ids "present" and due — mark the other two
-		// already-checked so this run's one-slot-per-session budget
-		// (maxPerSession=1) lands on the json id this test actually verifies,
-		// not on whichever id sorts first alphabetically.
-		writeState({
-			"vscode-css-languageserver": { checkedAt: NOW, version: "4.0.0" },
-			"vscode-html-languageserver-bin": { checkedAt: NOW, version: "4.0.0" },
-		});
-
 		const outcome = await runManagedToolRefresh(NOW);
 
 		expect(outcome.refreshed[0]).toMatchObject({
