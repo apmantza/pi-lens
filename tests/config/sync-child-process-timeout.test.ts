@@ -32,9 +32,9 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
 	auditRegistry,
+	callSites,
 	listSourceFiles,
 	relativePosix,
-	stripSource,
 } from "../support/sweep-kit.js";
 
 const REPO_ROOT = path.resolve(
@@ -43,8 +43,6 @@ const REPO_ROOT = path.resolve(
 );
 
 /** The family: every synchronous child-process launcher Node offers. */
-const SYNC_SPAWN_CALLS = ["spawnSync", "execSync", "execFileSync"];
-
 /**
  * Sites that legitimately carry no literal `timeout:` in their own options,
  * each with the reason `auditRegistry` requires. Keyed `file:snippet`, where
@@ -81,51 +79,6 @@ const EXEMPT_SITES: Readonly<Record<string, string>> = {
 		"safeSpawn's plain-command spawnSync fallback (the non-Windows-resolved branch) spreads the CALLER's options for the identical reason as the Windows-resolved-path sibling above: the timeout comes from the caller. Same three in-repo callers — isCommandAvailable and findCommand in safe-spawn.ts (timeout: 5000 each), and test-runner-client.ts's detectRunner (timeout: 2000).",
 };
 
-/**
- * Slice from `(` to its matching `)`, so a multi-line options object is read
- * whole rather than by a line-bounded regex that a formatted call defeats.
- *
- * The depth scan walks `masked` (comment/string-blanked, offset-preserving —
- * see `stripSource` in `analyzeFile`) and the returned slice is taken from
- * `raw` at the same offsets. #2487 review round 4 F1: an earlier version
- * scanned `raw` directly, so a literal `(` inside a string or comment
- * ARGUMENT (e.g. `spawnSync(shellPath, ["-c", "grep '(' /etc/hosts"], {...})`)
- * unbalanced the depth count. The scan never found depth 0 before EOF, so
- * the "argument list" ran off the end of the call, past the real closing
- * paren, and could swallow an unrelated LATER call's `timeout:` — silently
- * reclassifying a genuinely unbounded call as bounded. Scanning `masked`
- * means a paren inside a string or comment body is blanked out and cannot
- * perturb the depth count, while the slice still comes from `raw` so an
- * in-argument comment (like the plain-command safe-spawn fallback's) stays
- * visible to `exemptionKey`.
- *
- * That guarantee held for strings and comments from round 4 on, but not for
- * a paren inside a NESTED TEMPLATE LITERAL until #2502: `stripSource` had no
- * `${` nesting state, so a backtick opening a template nested inside an
- * interpolation was read as the outer template's own close, leaving the
- * nested template's own stray `(` to fall through into `masked` unblanked —
- * the identical failure mode, one construct later. `stripSource` now tracks
- * that nesting (a stack of open templates, each with its own `${...}` brace
- * depth), so a paren inside a nested template cannot perturb this count
- * either.
- */
-function callArguments(
-	masked: string,
-	raw: string,
-	openParenIndex: number,
-): string {
-	let depth = 0;
-	for (let i = openParenIndex; i < masked.length; i++) {
-		const ch = masked[i];
-		if (ch === "(") depth++;
-		else if (ch === ")") {
-			depth--;
-			if (depth === 0) return raw.slice(openParenIndex + 1, i);
-		}
-	}
-	return raw.slice(openParenIndex + 1);
-}
-
 interface CallSite {
 	/** `file:line fn` — the id the audit reports. */
 	id: string;
@@ -139,13 +92,9 @@ interface CallSite {
 	 * merely a shared spread (`...(options as SpawnOptions)`) collided on one
 	 * exemption key — the preamble was never the discriminator, the arguments
 	 * always were. Scoping the match to the call's own arguments makes THAT
-	 * collision structurally impossible — but only because `callArguments`
-	 * depth-scans the MASKED source (#2487 review round 4 F1): a depth scan
-	 * over raw source is unbalanced by a bare `(` inside a string or comment
-	 * argument, which runs the slice past the real closing paren and can pull
-	 * in unrelated later source (see `callArguments`'s own doc comment).
-	 * "NOTHING outside the parens" holds only because the scan itself is
-	 * paren-blind to string and comment bodies.
+	 * collision structurally impossible — `callSites` takes the argument span
+	 * from the TypeScript AST, so strings, comments, and nested expressions
+	 * cannot pull unrelated later source into this call.
 	 */
 	args: string;
 	bounded: boolean;
@@ -172,32 +121,14 @@ function shippedSourceFiles(): string[] {
  * a hand-built source string rather than re-deriving its logic.
  */
 function analyzeFile(rel: string, raw: string): CallSite[] {
-	// Comment/string masking is necessary, not fussy: this repo documents
-	// its own sync-to-async migrations in prose, so clients/lsp/server.ts
-	// and clients/safe-spawn.ts both contain `spawnSync(` inside doc
-	// comments explaining that the call USED to be synchronous. A raw regex
-	// reports those as unbounded sites, which is a false failure that would
-	// push a maintainer to weaken this guard. `stripSource` blanks comments
-	// and string bodies while preserving every offset.
-	const masked = stripSource(raw);
-	const sites: CallSite[] = [];
-	for (const fn of SYNC_SPAWN_CALLS) {
-		// A CALL, not an import, type, or prose mention: the name must be
-		// followed by `(` and must not be preceded by an identifier
-		// character, so `safeSpawnSync(` never matches `spawnSync`.
-		const pattern = new RegExp(`(?<![\\w$.])${fn}\\s*\\(`, "g");
-		for (const match of masked.matchAll(pattern)) {
-			const openParen = masked.indexOf("(", match.index);
-			const args = callArguments(masked, raw, openParen);
-			sites.push({
-				id: `${rel}:${raw.slice(0, match.index).split("\n").length} ${fn}`,
-				file: rel,
-				args,
-				bounded: /\btimeout\s*:/.test(args),
-			});
-		}
-	}
-	return sites;
+	return callSites(raw, /^(?:spawnSync|execSync|execFileSync)$/).map(
+		(site) => ({
+			id: `${rel}:${site.line} ${site.callee}`,
+			file: rel,
+			args: site.argsText,
+			bounded: /\btimeout\s*:/.test(site.optionsLiteral ?? ""),
+		}),
+	);
 }
 
 function findCallSites(): { sites: CallSite[]; scanned: number } {

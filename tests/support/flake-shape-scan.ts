@@ -43,14 +43,11 @@
  *   `vi.useFakeTimers()` in one `describe` and leaves a raw wait or
  *   `vi.waitFor` ungoverned in a LATER, unrelated `describe` reads as
  *   governed. False negative, same direction.
- * - Detector 1's `strings: "keep"` policy (needed to see `"vitest"` inside an
- *   argv string) means a string literal that merely CONTAINS
- *   `execFileSync(...)`-shaped text would false-positive; comments are
- *   blanked so a doc comment cannot. Mock declarations use `codeMatches`
- *   separately, so a string literal that merely CONTAINS `vi.mock(...)`
- *   cannot suppress a real helper call. No such string exists in `tests/`
- *   today (the FALSE positive direction, safe for a ratchet that a human
- *   reviews at admission time).
+ * - Detector 1 uses `callSites`'s TypeScript AST for the known process-call
+ *   names, so comments, strings, wrappers, and nested argument expressions do
+ *   not create or truncate call sites. It separately uses `codeMatches` for
+ *   helper calls and mock declarations, while `strings: "keep"` remains only
+ *   for the intentional `"vitest"` argv evidence.
  * - Detector 1 recognizes known support-module helper names at their test call
  *   sites and ignores calls whose helper module is mocked in that file. It
  *   still cannot resolve arbitrary aliases, so aliases remain conservative
@@ -63,6 +60,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+	createCallSiteScanner,
 	codeMatches,
 	firstCommentMatch,
 	listSourceFiles,
@@ -127,8 +125,6 @@ export type DetectorName = (typeof DETECTOR_NAMES)[number];
 
 const CHILD_PROCESS_IMPORT =
 	/(?:^\s*import\b.*\bfrom\s*["'](?:node:)?child_process["']|\brequire\(\s*["'](?:node:)?child_process["']\s*\))/;
-const SPAWN_CALL =
-	/\b(spawn|spawnSync|exec|execSync|execFile|execFileSync|fork)\s*\(/g;
 const SYNC_TRIAD = new Set(["execFileSync", "spawnSync", "execSync"]);
 const VITEST_IN_ARGV = /\bvitest\b/i;
 // These helpers are the test-side routes to real child processes. Keep this
@@ -159,20 +155,6 @@ function helperIsMocked(name: string, modules: ReadonlySet<string>): boolean {
 	return (HELPER_MODULE_SUFFIXES[name] ?? []).some((suffix) =>
 		[...modules].some((module) => module === suffix || module.endsWith(suffix)),
 	);
-}
-
-/** The text between a call's `(` (given its index) and its balanced `)`. */
-function balancedCallArgs(source: string, openParenIndex: number): string {
-	let depth = 0;
-	for (let i = openParenIndex; i < source.length; i++) {
-		const ch = source[i];
-		if (ch === "(") depth++;
-		else if (ch === ")") {
-			depth--;
-			if (depth === 0) return source.slice(openParenIndex + 1, i);
-		}
-	}
-	return source.slice(openParenIndex + 1);
 }
 
 /**
@@ -206,15 +188,13 @@ export function scanRealProcessSpawn(
 		}
 	});
 
-	SPAWN_CALL.lastIndex = 0;
-	let m: RegExpExecArray | null;
-	while ((m = SPAWN_CALL.exec(stripped))) {
-		const name = m[1];
-		const openParenIndex = m.index + m[0].length - 1;
-		const lineIdx = stripped.slice(0, m.index).split("\n").length - 1;
+	for (const site of createCallSiteScanner(source).find(
+		/^(?:spawn|spawnSync|exec|execSync|execFile|execFileSync|fork)$/,
+	)) {
+		const name = site.callee;
+		const lineIdx = site.line - 1;
 		const isVitestInVitest =
-			!SYNC_TRIAD.has(name) &&
-			VITEST_IN_ARGV.test(balancedCallArgs(stripped, openParenIndex));
+			!SYNC_TRIAD.has(name) && VITEST_IN_ARGV.test(site.argsText);
 		if ((!childProcessMocked && SYNC_TRIAD.has(name)) || isVitestInVitest) {
 			if (!hits.has(lineIdx)) {
 				hits.set(lineIdx, {
@@ -411,20 +391,27 @@ export const DETECTORS: Record<
 	"ungoverned-wait-for": scanUngovernedWaitFor,
 };
 
+let countsCache: Record<DetectorName, Record<string, number>> | undefined;
+
 /** file → hit count, for every `tests/**\/*.test.ts` file the detector flags. */
 export function countsByDetector(
 	detector: DetectorName,
 ): Record<string, number> {
-	const scan = DETECTORS[detector];
-	const counts: Record<string, number> = {};
-	for (const absolute of testSourceFiles()) {
-		const file = testsRelative(absolute);
-		if (SCAN_INFRASTRUCTURE.has(file)) continue;
-		const source = fs.readFileSync(absolute, "utf8");
-		const hits = scan(file, source);
-		if (hits.length > 0) counts[file] = hits.length;
+	if (countsCache === undefined) {
+		countsCache = Object.fromEntries(
+			DETECTOR_NAMES.map((name) => [name, {}]),
+		) as Record<DetectorName, Record<string, number>>;
+		for (const absolute of testSourceFiles()) {
+			const file = testsRelative(absolute);
+			if (SCAN_INFRASTRUCTURE.has(file)) continue;
+			const source = fs.readFileSync(absolute, "utf8");
+			for (const name of DETECTOR_NAMES) {
+				const hits = DETECTORS[name](file, source);
+				if (hits.length > 0) countsCache[name][file] = hits.length;
+			}
+		}
 	}
-	return counts;
+	return countsCache[detector];
 }
 
 // ── Admission gate ──────────────────────────────────────────────────────────

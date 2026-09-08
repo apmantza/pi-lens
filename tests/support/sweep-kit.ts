@@ -108,8 +108,10 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { Lang, parse } from "@ast-grep/napi";
 import { lineContentHash } from "../../clients/read-guard.js";
 import { toPosix } from "../../clients/path-utils.js";
+import type { SgNode } from "../../clients/deps/ast-grep-napi.js";
 // Re-exported for test doubles/helpers so the test side has ONE import to
 // reach for instead of hand-copying the escaping body (#2558). This is the
 // ONE test-side re-export; the runtime copy lives in clients/string-utils.ts.
@@ -370,6 +372,95 @@ export function codeMatches(source: string, regex: RegExp): RegExpMatchArray[] {
 		const start = match.index ?? 0;
 		return matchIsCode(stringsBlanked, start, start + match[0].length);
 	});
+}
+
+export interface CallSite {
+	line: number;
+	argsText: string;
+	optionsLiteral: string | undefined;
+	/** Matched simple callee, for consumers that scan several names at once. */
+	callee: string;
+}
+
+export interface CallSiteScanner {
+	find(calleePattern: RegExp): CallSite[];
+}
+
+/**
+ * Return AST call sites whose simple callee matches `calleePattern`.
+ *
+ * The arguments are taken from the call node, not from a balanced-text scan:
+ * nested expressions, template literals, and comments cannot change where a
+ * call ends. `optionsLiteral` is the last top-level object-literal argument;
+ * nested objects and object-shaped text in strings are never candidates.
+ */
+export function createCallSiteScanner(source: string): CallSiteScanner {
+	let root: SgNode | undefined;
+	const parseRoot = (): SgNode => {
+		root ??= parse(Lang.TypeScript, source).root();
+		return root;
+	};
+
+	return {
+		find(calleePattern: RegExp): CallSite[] {
+			// Avoid parsing files that cannot contain the requested callee. This is a
+			// lexical admission check only; every admitted match still comes from the
+			// AST below. Anchors are common in callers because the AST supplies the
+			// complete simple name, so remove them for this presence probe.
+			const needle = calleePattern.source.replace(/^\^|\$$/g, "");
+			const candidate = new RegExp(
+				`${needle}\\s*\\(`,
+				calleePattern.flags.replace("g", ""),
+			);
+			if (!candidate.test(stripSource(source))) return [];
+			const syntaxRoot = parseRoot();
+			const sites: CallSite[] = [];
+			const visit = (node: SgNode): void => {
+				if (node.kind() === "call_expression") {
+					const fn = node.field("function");
+					const callee =
+						fn?.kind() === "identifier"
+							? fn.text()
+							: fn?.kind() === "member_expression"
+								? fn.field("property")?.text()
+								: undefined;
+					if (callee !== undefined) {
+						calleePattern.lastIndex = 0;
+						const match = calleePattern.exec(callee);
+						if (match?.[0] === callee) {
+							const args = node.field("arguments");
+							const children = args?.namedChildren() ?? [];
+							const first = children[0];
+							const last = children.at(-1);
+							const options = children
+								.filter((arg) => arg.kind() === "object")
+								.sort((a, b) => a.range().start.index - b.range().start.index)
+								.at(-1);
+							sites.push({
+								line: node.range().start.line + 1,
+								callee,
+								argsText:
+									first && last
+										? source.slice(
+												first.range().start.index,
+												last.range().end.index,
+											)
+										: "",
+								optionsLiteral: options?.text(),
+							});
+						}
+					}
+				}
+				for (const child of node.children()) visit(child);
+			};
+			visit(syntaxRoot);
+			return sites;
+		},
+	};
+}
+
+export function callSites(source: string, calleePattern: RegExp): CallSite[] {
+	return createCallSiteScanner(source).find(calleePattern);
 }
 
 /** Return the first raw match that is not only literal text. */

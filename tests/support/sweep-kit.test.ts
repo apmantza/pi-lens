@@ -31,8 +31,88 @@ import {
 	scanTaggedSeams,
 	stableOccurrenceKey,
 	stripSource,
+	callSites,
 	tagPattern,
 } from "./sweep-kit.js";
+
+describe("sweep-kit: callSites", () => {
+	it("uses AST boundaries and returns only the last top-level object literal", () => {
+		const source = [
+			"// safeSpawnAsync('comment')",
+			'const prose = "safeSpawnAsync(\")\" )";',
+			"safeSpawnAsync(",
+			"  command(1, { nested: true }),",
+			"  `args with )`, // safeSpawnAsync()",
+			"  { first: true },",
+			"  { ...base, cwd },",
+			");",
+		].join("\n");
+		const sites = callSites(source, /^safeSpawnAsync$/);
+		expect(sites).toHaveLength(1);
+		expect(sites[0]).toMatchObject({
+			line: 3,
+			callee: "safeSpawnAsync",
+			argsText: expect.stringContaining("command(1, { nested: true })"),
+			optionsLiteral: "{ ...base, cwd }",
+		});
+	});
+
+	it("does not match callee text in comments or strings, and handles wrappers", () => {
+		const source = [
+			"function spawnPs(command, args, opts) {",
+			"  return safeSpawnAsync(command, args, opts);",
+			"}",
+			"spawnPs(command, args, { nested: true }, { cwd });",
+			"mySafeSpawnAsync(command, args, opts);",
+			"safeSpawnAsyncX(command, args, opts);",
+		].join("\n");
+		expect(callSites(source, /^safeSpawnAsync$/)).toEqual([
+			{
+				line: 2,
+				callee: "safeSpawnAsync",
+				argsText: "command, args, opts",
+				optionsLiteral: undefined,
+			},
+		]);
+		expect(callSites(source, /^spawnPs$/)).toMatchObject([
+			{ line: 4, callee: "spawnPs", optionsLiteral: "{ cwd }" },
+		]);
+		expect(callSites(source, /safeSpawnAsync/)).toEqual([
+			{
+				line: 2,
+				callee: "safeSpawnAsync",
+				argsText: "command, args, opts",
+				optionsLiteral: undefined,
+			},
+		]);
+	});
+
+	it("distinguishes a spread options object from an opaque identifier", () => {
+		const source = [
+			"safeSpawnAsync(command, { first: true }, { ...base });",
+			"safeSpawnAsync(command, args, opts);",
+		].join("\n");
+		const sites = callSites(source, /^safeSpawnAsync$/);
+		expect(sites.map((site) => site.optionsLiteral)).toEqual([
+			"{ ...base }",
+			undefined,
+		]);
+	});
+
+	it("keeps timeout text in an argument separate from an options literal", () => {
+		const sites = callSites(
+			[
+				'spawnSync(command, "timeout: 5000");',
+				"spawnSync(command, { timeout: 5000 });",
+			].join("\n"),
+			/^spawnSync$/,
+		);
+		expect(sites.map((site) => site.optionsLiteral)).toEqual([
+			undefined,
+			"{ timeout: 5000 }",
+		]);
+	});
+});
 
 // ── The attack catalogue, as named fixtures ─────────────────────────────────
 
