@@ -3465,6 +3465,12 @@ review.
 
 A new always-absent dependency stub (a `vi.mock`/fixture that makes a dependency permanently unavailable) must ship with at least one present-path **behavior** test: the dependency's result must reach the caller, never just a bare no-throw assertion. #1251 is the failure case; #1310 is the pattern to follow.
 
+The flake-shape ratchet's whole-tree counts are collected once per test
+process, and `createCallSiteScanner` parses each source file at most once while
+reusing its AST for each callee pattern. Whole-tree ratchet tests use an
+explicit 30-second test budget because AST parsing is materially slower than
+the retired text scanner under CI contention.
+
 Every commit that adds or changes logic **must** include relevant tests before pushing. No exceptions:
 
 Registered-or-fail sweep floors are calibrated from the live population at the

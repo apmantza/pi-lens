@@ -32,6 +32,7 @@ import {
 	stableOccurrenceKey,
 	stripSource,
 	callSites,
+	createCallSiteScanner,
 	tagPattern,
 } from "./sweep-kit.js";
 
@@ -43,6 +44,7 @@ describe("sweep-kit: callSites", () => {
 			"safeSpawnAsync(",
 			"  command(1, { nested: true }),",
 			"  `args with )`, // safeSpawnAsync()",
+			"  { first: true },",
 			"  { ...base, cwd },",
 			");",
 		].join("\n");
@@ -61,7 +63,9 @@ describe("sweep-kit: callSites", () => {
 			"function spawnPs(command, args, opts) {",
 			"  return safeSpawnAsync(command, args, opts);",
 			"}",
-			"spawnPs(command, args, { cwd });",
+			"spawnPs(command, args, { nested: true }, { cwd });",
+			"mySafeSpawnAsync(command, args, opts);",
+			"safeSpawnAsyncX(command, args, opts);",
 		].join("\n");
 		expect(callSites(source, /^safeSpawnAsync$/)).toEqual([
 			{
@@ -74,17 +78,47 @@ describe("sweep-kit: callSites", () => {
 		expect(callSites(source, /^spawnPs$/)).toMatchObject([
 			{ line: 4, callee: "spawnPs", optionsLiteral: "{ cwd }" },
 		]);
+		expect(callSites(source, /safeSpawnAsync/)).toEqual([
+			{
+				line: 2,
+				callee: "safeSpawnAsync",
+				argsText: "command, args, opts",
+				optionsLiteral: undefined,
+			},
+		]);
 	});
 
 	it("distinguishes a spread options object from an opaque identifier", () => {
 		const source = [
-			"safeSpawnAsync(command, args, { ...base });",
+			"safeSpawnAsync(command, { first: true }, { ...base });",
 			"safeSpawnAsync(command, args, opts);",
 		].join("\n");
 		const sites = callSites(source, /^safeSpawnAsync$/);
 		expect(sites.map((site) => site.optionsLiteral)).toEqual([
 			"{ ...base }",
 			undefined,
+		]);
+	});
+
+	it("reuses one AST root across callee patterns", () => {
+		const scanner = createCallSiteScanner(
+			"safeSpawnAsync(command, { cwd });\nspawnPs(command, args, opts);",
+		);
+		expect(scanner.find(/^safeSpawnAsync$/)).toHaveLength(1);
+		expect(scanner.find(/^spawnPs$/)).toHaveLength(1);
+	});
+
+	it("keeps timeout text in an argument separate from an options literal", () => {
+		const sites = callSites(
+			[
+				'spawnSync(command, "timeout: 5000");',
+				"spawnSync(command, { timeout: 5000 });",
+			].join("\n"),
+			/^spawnSync$/,
+		);
+		expect(sites.map((site) => site.optionsLiteral)).toEqual([
+			undefined,
+			"{ timeout: 5000 }",
 		]);
 	});
 });

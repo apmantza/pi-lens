@@ -454,8 +454,11 @@ describe("flake-shape ratchet (#2547)", () => {
 			);
 			expect(problems.map(describeProblem)).toEqual([]);
 		},
+		30_000,
 	);
 
+	// Whole-tree scan performs AST parsing and can exceed Vitest's default under
+	// CI contention (run 34195211598, head 5c0aa5a4).
 	it("the baseline names no file that has vanished from the live scan", () => {
 		// Stated asymmetrically on purpose (see module doc): a count FALLING is
 		// not a failure above, but a baseline entry for a file the scan no
@@ -469,7 +472,7 @@ describe("flake-shape ratchet (#2547)", () => {
 			}
 		}
 		expect(stale).toEqual([]);
-	});
+	}, 30_000);
 
 	it("carries the three counts in this header (informational, kept in sync)", () => {
 		// Not asserted against a hardcoded number — this test's job is only to

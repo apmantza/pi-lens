@@ -62,7 +62,7 @@
 
 import { loadAstGrepNapi } from "../../clients/deps/ast-grep-napi.js";
 import type { SgNode } from "../../clients/deps/ast-grep-napi.js";
-import { callSites } from "./sweep-kit.js";
+import { createCallSiteScanner } from "./sweep-kit.js";
 
 /** One checked call site. */
 export interface SpawnCwdSite {
@@ -606,11 +606,12 @@ export async function scanSpawnCwd(
 	// `callSites` owns the generic call-site boundary. Keep the AST nodes here
 	// for the runner-specific cwd dataflow, but use the shared census to ensure
 	// direct spawn sites are identified by the same seam as sibling sweeps.
+	const callSiteScanner = createCallSiteScanner(source);
 	const directSiteKeys = new Set(
 		["safeSpawnAsync", "safeSpawnSync"].flatMap((name) =>
-			callSites(source, new RegExp(`^${name}$`)).map(
-				(site) => `${site.line}:${name}`,
-			),
+			callSiteScanner
+				.find(new RegExp(`^${name}$`))
+				.map((site) => `${site.line}:${name}`),
 		),
 	);
 	const sites: SpawnCwdSite[] = [];
