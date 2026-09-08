@@ -23,7 +23,7 @@ export declare function closeKeywordPlacementMessage(missing: number[]): string;
 export declare function lintPullRequest(
 	fetchImpl?: typeof fetch,
 	event?: {
-		pull_request?: { number: number; body?: string | null; title?: string };
+		pull_request?: { number: number; body?: string | null };
 	},
 ): Promise<void>;
 export declare function verifyMergedPullRequest(

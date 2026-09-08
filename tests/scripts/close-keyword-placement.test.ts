@@ -52,6 +52,16 @@ describe("close-keyword placement (#2640)", () => {
 		).toMatchObject({ valid: false, missingBodyIssues: [2] });
 	});
 
+	it("collects every issue in a title comma list", () => {
+		expect(
+			lintCloseKeywordPlacement("closes #1, #2", "Closes #1."),
+		).toMatchObject({
+			valid: false,
+			titleIssues: [1, 2],
+			missingBodyIssues: [2],
+		});
+	});
+
 	it("handles supported syntax and word boundaries", () => {
 		expect(lintCloseKeywordPlacement("FIXES: #7", "").valid).toBe(false);
 		expect(lintCloseKeywordPlacement("resolved #7", "").valid).toBe(false);

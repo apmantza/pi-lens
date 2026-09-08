@@ -1684,8 +1684,10 @@ replay an edited event snapshot. The merged-PR workflow uses the same live-body
 contract and fails closed when the fetch fails.
 GitHub applies closing keywords from the body only. If a title carries
 `closes`/`fixes`/`resolves #N`, the body must carry a keyword for the same issue;
-otherwise the lint fails with a placement message. Title `refs #N` and bare
-`(#N)` references never trigger this placement check.
+otherwise the lint fails with a placement message. This placement parser covers
+same-repository `#N` forms only: cross-repository `owner/repo#N` and URL forms
+remain outside its boundary. Title `refs #N` and bare `(#N)` references never
+trigger this placement check.
 The merged-PR workflow rechecks each same-repository close target and comments on
 the PR when a referenced issue is missing or remains open. Keep the parser pure
 and unit-tested; workflow YAML supplies the token required by the live fetch.

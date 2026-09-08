@@ -547,21 +547,58 @@ describe("close-keyword-verification.yml carries GITHUB_TOKEN (#2267 F1)", () =>
 	});
 
 	it("sets GITHUB_TOKEN on the syntax-lint step", () => {
-		const workflowPath = path.join(REPO_ROOT, ".github/workflows/ci.yml");
+		const workflowPath = path.join(
+			REPO_ROOT,
+			".github/workflows/close-keywords.yml",
+		);
 		type WorkflowStep = { run?: string; env?: Record<string, string> };
 		type Workflow = {
-			jobs: { "close-keyword-lint": { steps: WorkflowStep[] } };
+			jobs: { lint: { steps: WorkflowStep[] } };
 		};
 		const workflow = yaml.load(
 			fs.readFileSync(workflowPath, "utf8"),
 		) as Workflow;
-		const step = workflow.jobs["close-keyword-lint"].steps.find((s) =>
+		const step = workflow.jobs.lint.steps.find((s) =>
 			(s.run ?? "").includes("check-close-keywords.mjs"),
 		);
-		if (!step) throw new Error("syntax-lint step not found in ci.yml");
+		if (!step)
+			throw new Error("syntax-lint step not found in close-keywords.yml");
 		// Mutation-proof: without this workflow wiring the strict live fetch
 		// fails before it can inspect the current PR body.
 		expect(step.env?.GITHUB_TOKEN).toBeTruthy();
 		expect(step.run).toContain("--lint-pr");
+	});
+});
+
+describe("verifyMergedPullRequest checks title close keywords (#2640)", () => {
+	it("fails when a title-only close target remains open", async () => {
+		vi.stubEnv("GITHUB_API_URL", "https://api.github.test");
+		vi.stubEnv("GITHUB_REPOSITORY", "apmantza/pi-lens");
+		vi.stubEnv("GITHUB_TOKEN", "test-token");
+		const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+		const fetchImpl = vi.fn().mockResolvedValue(
+			new Response(
+				JSON.stringify({
+					title: "fix: title-only close (closes #2640)",
+					body: "Summary.",
+				}),
+				{ status: 200 },
+			),
+		);
+		const getIssueState = vi.fn().mockReturnValue("open");
+
+		await verifyMergedPullRequest(
+			fetchImpl,
+			{ pull_request: { number: 2744, body: "Summary." } },
+			getIssueState,
+		);
+
+		expect(process.exitCode).toBe(1);
+		expect(getIssueState).toHaveBeenCalledWith("apmantza/pi-lens", 2640);
+		expect(errorLog).toHaveBeenCalledWith(
+			"Post-merge close verification found title issue(s) that were not closed: #2640 (open).",
+		);
+		errorLog.mockRestore();
+		process.exitCode = undefined;
 	});
 });
