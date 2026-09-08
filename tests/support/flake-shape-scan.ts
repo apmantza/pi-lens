@@ -63,6 +63,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+	callSites,
 	codeMatches,
 	firstCommentMatch,
 	listSourceFiles,
@@ -127,8 +128,6 @@ export type DetectorName = (typeof DETECTOR_NAMES)[number];
 
 const CHILD_PROCESS_IMPORT =
 	/(?:^\s*import\b.*\bfrom\s*["'](?:node:)?child_process["']|\brequire\(\s*["'](?:node:)?child_process["']\s*\))/;
-const SPAWN_CALL =
-	/\b(spawn|spawnSync|exec|execSync|execFile|execFileSync|fork)\s*\(/g;
 const SYNC_TRIAD = new Set(["execFileSync", "spawnSync", "execSync"]);
 const VITEST_IN_ARGV = /\bvitest\b/i;
 // These helpers are the test-side routes to real child processes. Keep this
@@ -159,20 +158,6 @@ function helperIsMocked(name: string, modules: ReadonlySet<string>): boolean {
 	return (HELPER_MODULE_SUFFIXES[name] ?? []).some((suffix) =>
 		[...modules].some((module) => module === suffix || module.endsWith(suffix)),
 	);
-}
-
-/** The text between a call's `(` (given its index) and its balanced `)`. */
-function balancedCallArgs(source: string, openParenIndex: number): string {
-	let depth = 0;
-	for (let i = openParenIndex; i < source.length; i++) {
-		const ch = source[i];
-		if (ch === "(") depth++;
-		else if (ch === ")") {
-			depth--;
-			if (depth === 0) return source.slice(openParenIndex + 1, i);
-		}
-	}
-	return source.slice(openParenIndex + 1);
 }
 
 /**
@@ -206,15 +191,14 @@ export function scanRealProcessSpawn(
 		}
 	});
 
-	SPAWN_CALL.lastIndex = 0;
-	let m: RegExpExecArray | null;
-	while ((m = SPAWN_CALL.exec(stripped))) {
-		const name = m[1];
-		const openParenIndex = m.index + m[0].length - 1;
-		const lineIdx = stripped.slice(0, m.index).split("\n").length - 1;
+	for (const site of callSites(
+		source,
+		/^(?:spawn|spawnSync|exec|execSync|execFile|execFileSync|fork)$/,
+	)) {
+		const name = site.callee;
+		const lineIdx = site.line - 1;
 		const isVitestInVitest =
-			!SYNC_TRIAD.has(name) &&
-			VITEST_IN_ARGV.test(balancedCallArgs(stripped, openParenIndex));
+			!SYNC_TRIAD.has(name) && VITEST_IN_ARGV.test(site.argsText);
 		if ((!childProcessMocked && SYNC_TRIAD.has(name)) || isVitestInVitest) {
 			if (!hits.has(lineIdx)) {
 				hits.set(lineIdx, {
