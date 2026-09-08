@@ -246,7 +246,7 @@ function commandHash(command: string): string {
 // that exercise a guard rule. Keep this allowlist independent of findDeny so
 // a rule widening cannot silently turn a false positive into an expectation.
 const EXPECTED_TRANSCRIPT_DENIES = new Set([
-	"cf4426ba1297b7504a5200310d95a22a96469bce8e468b6c892524585b1d8cd8",
+	"21def4efd19e12fd4fcb3f0cfcbc7f000814ed54d6ecdb39701e74b08288811f",
 	"30b1b57e56ca162793f411ef91bc8e47607a91f420039b3e00451ecd5278ea02",
 ]);
 
