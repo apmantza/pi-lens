@@ -360,6 +360,8 @@ export interface RefreshCandidate {
 	 * verifies the binary exactly the way the install did (#2722).
 	 */
 	packageEntryOf?: string;
+	/** npm only — every installed registry id covered by this package update. */
+	coveredToolIds?: string[];
 }
 
 /**
@@ -388,7 +390,23 @@ async function installedRefreshCandidates(): Promise<RefreshCandidate[]> {
 			}),
 		});
 	}
-	return candidates;
+	const byPackage = new Map<string, RefreshCandidate>();
+	const distinct: RefreshCandidate[] = [];
+	for (const candidate of candidates) {
+		if (candidate.strategy !== "npm" || !candidate.packageName) {
+			distinct.push(candidate);
+			continue;
+		}
+		const existing = byPackage.get(candidate.packageName);
+		if (existing) {
+			existing.coveredToolIds?.push(candidate.toolId);
+			continue;
+		}
+		const representative = { ...candidate, coveredToolIds: [candidate.toolId] };
+		byPackage.set(candidate.packageName, representative);
+		distinct.push(representative);
+	}
+	return distinct;
 }
 
 /**
@@ -404,14 +422,24 @@ export function selectStaleTools(
 	const interval = refreshIntervalMs();
 	const retry = retryIntervalMs();
 	const due = candidates.filter((candidate) => {
-		const entry = state.tools[candidate.toolId];
-		if (!entry) return true;
-		const cooldown = entry.failed ? retry : interval;
-		return now - entry.checkedAt >= cooldown;
+		return (candidate.coveredToolIds ?? [candidate.toolId]).some((toolId) => {
+			const entry = state.tools[toolId];
+			if (!entry) return true;
+			const cooldown = entry.failed ? retry : interval;
+			return now - entry.checkedAt >= cooldown;
+		});
 	});
 	return due.sort((a, b) => {
-		const aAt = state.tools[a.toolId]?.checkedAt ?? 0;
-		const bAt = state.tools[b.toolId]?.checkedAt ?? 0;
+		const aAt = Math.min(
+			...(a.coveredToolIds ?? [a.toolId]).map(
+				(toolId) => state.tools[toolId]?.checkedAt ?? 0,
+			),
+		);
+		const bAt = Math.min(
+			...(b.coveredToolIds ?? [b.toolId]).map(
+				(toolId) => state.tools[toolId]?.checkedAt ?? 0,
+			),
+		);
 		return aAt !== bAt ? aAt - bAt : a.toolId.localeCompare(b.toolId);
 	});
 }
@@ -457,6 +485,8 @@ export interface ManagedToolRefreshResult {
 	/** The updated binary answered `--version`. False also covers a failed spawn. */
 	verified: boolean;
 	ok: boolean;
+	/** True when the package-manager or strategy refresh actually ran. */
+	attempted?: boolean;
 }
 
 export interface ManagedToolRefreshOutcome {
@@ -521,6 +551,7 @@ async function refreshNonNpmOne(
 				changed: false,
 				verified: false,
 				ok: false,
+				attempted: false,
 			};
 		}
 		// A real failure may have left a stale cached path or probe entry behind
@@ -560,6 +591,7 @@ async function refreshNonNpmOne(
 			// touched the installed copy, so there is nothing new to check.
 			verified: false,
 			ok: false,
+			attempted: true,
 		};
 	}
 
@@ -592,6 +624,7 @@ async function refreshNonNpmOne(
 		// probe for pip/gem) — `ok: true` here already means "and it runs".
 		verified: true,
 		ok: true,
+		attempted: true,
 	};
 }
 
@@ -624,6 +657,7 @@ async function refreshNpmOne(
 			changed: false,
 			verified: false,
 			ok: false,
+			attempted: false,
 		};
 	}
 	try {
@@ -697,6 +731,7 @@ async function performNpmRefresh(
 			changed: onDisk !== undefined && onDisk !== previousVersion,
 			verified: false,
 			ok: false,
+			attempted: true,
 		};
 	}
 
@@ -760,6 +795,7 @@ async function performNpmRefresh(
 			changed,
 			verified: false,
 			ok: false,
+			attempted: true,
 		};
 	}
 
@@ -771,8 +807,8 @@ async function performNpmRefresh(
 	// can be traced to the version that produced it, and to the moment it moved.
 	logSessionStart(
 		changed
-			? `managed-tool-refresh ${candidate.toolId}: ${previousVersion ?? "unknown"} → ${currentVersion} via ${pm} update, verified (${elapsedMs}ms)`
-			: `managed-tool-refresh ${candidate.toolId}: unchanged at ${currentVersion ?? previousVersion ?? "unknown"} (${elapsedMs}ms)`,
+			? `managed-tool-refresh ${candidate.toolId}: ${previousVersion ?? "unknown"} → ${currentVersion} via ${pm} update, verified; package ${packageName}, covered ids ${candidate.coveredToolIds?.join(",") ?? candidate.toolId} (${elapsedMs}ms)`
+			: `managed-tool-refresh ${candidate.toolId}: unchanged at ${currentVersion ?? previousVersion ?? "unknown"}; package ${packageName}, covered ids ${candidate.coveredToolIds?.join(",") ?? candidate.toolId} (${elapsedMs}ms)`,
 	);
 	return {
 		toolId: candidate.toolId,
@@ -783,6 +819,7 @@ async function performNpmRefresh(
 		changed,
 		verified: true,
 		ok: true,
+		attempted: true,
 	};
 }
 
@@ -934,14 +971,21 @@ async function executeManagedToolRefresh(
 		// `/new` calls walked the entire 22-tool stale list. A local allowance
 		// cannot be re-armed by anyone: a mid-run reset restores the SESSION's
 		// right to start a new run, which is correct, without extending this one.
-		const want = Math.min(maxPerSession(), stale.length);
+		const stalePackages = new Set<string>();
+		const distinctStale = stale.filter((candidate) => {
+			if (candidate.strategy !== "npm" || !candidate.packageName) return true;
+			if (stalePackages.has(candidate.packageName)) return false;
+			stalePackages.add(candidate.packageName);
+			return true;
+		});
+		const want = Math.min(maxPerSession(), distinctStale.length);
 		while (held < want && reserveManagedToolRefreshSlot(maxPerSession())) {
 			held += 1;
 		}
 		let allowance = held;
 
 		const refreshed: ManagedToolRefreshResult[] = [];
-		for (const candidate of stale) {
+		for (const candidate of distinctStale) {
 			// Once a spawn happens the slot is spent for good — a failing tool must
 			// not hand its slot to the next candidate and turn a budget of one into
 			// 22 spawns.
@@ -949,9 +993,24 @@ async function executeManagedToolRefresh(
 			allowance -= 1;
 			held -= 1;
 			try {
-				refreshed.push(
-					await refreshOne(candidate, read.state.tools[candidate.toolId], now),
+				const result = await refreshOne(
+					candidate,
+					read.state.tools[candidate.toolId],
+					now,
 				);
+				refreshed.push(result);
+				if (result.attempted && candidate.coveredToolIds) {
+					for (const toolId of candidate.coveredToolIds) {
+						if (toolId === candidate.toolId) continue;
+						await writeRefreshStamp(toolId, {
+							checkedAt: now,
+							...(result.currentVersion !== undefined && {
+								version: result.currentVersion,
+							}),
+							...(result.ok ? {} : { failed: true }),
+						});
+					}
+				}
 				await tap();
 			} catch (err) {
 				recordDegradationOnce({
