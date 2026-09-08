@@ -70,6 +70,38 @@ function runCli(binDir: string, args: string[]) {
 }
 
 describe("npm-retry.mjs (#2613 review S3a)", () => {
+	const stateSpace = [
+		["ECONNRESET", "npm error code ECONNRESET", true, true, "infra-net"],
+		["ETIMEDOUT", "npm error code ETIMEDOUT", true, true, "real"],
+		["ECONNREFUSED", "npm error code ECONNREFUSED", true, true, "real"],
+		["EAI_AGAIN", "npm error code EAI_AGAIN", true, true, "real"],
+		["ENOTFOUND", "npm error code ENOTFOUND", true, true, "infra-net"],
+		["E429", "npm error code E429", true, true, "real"],
+		["E5xx", "npm error code E503", true, true, "real"],
+		["socket hang up", "npm error socket hang up", true, true, "real"],
+		["E404", "npm error code E404", false, false, "real"],
+		["ERESOLVE", "npm error code ERESOLVE", false, false, "real"],
+		["EINTEGRITY", "npm error code EINTEGRITY", false, false, "real"],
+		["ENOTEMPTY/EEXIST", "npm error code ENOTEMPTY", false, false, "real"],
+		["exit-code-only", "npm error package failed", true, false, "real"],
+	] as const;
+
+	// Round 4 recurrence: npm retry and CI classification must agree on the
+	// evidence model without widening the shared CI pattern with npm-only text.
+	it.each(stateSpace)(
+		"keeps the round-4 state-space row %s aligned across consumers",
+		(_name, stderr, npmRetryable, npmNetwork, ciKind) => {
+			const npmResult = classifyNpmFailure(stderr);
+			expect(npmResult.retryable, stderr).toBe(npmRetryable);
+			expect(classifyFailureLog(stderr).kind, stderr).toBe(ciKind);
+			if (npmNetwork) {
+				expect(npmResult.reason, stderr).toContain("network error");
+			} else {
+				expect(npmResult.reason, stderr).not.toContain("network error");
+			}
+		},
+	);
+
 	// Regression proof for npm retry drift: each documented registry failure
 	// must remain eligible for the backoff path.
 	it("classifies every npm network shape as retryable", () => {

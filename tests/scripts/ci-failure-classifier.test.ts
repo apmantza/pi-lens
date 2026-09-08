@@ -340,9 +340,7 @@ describe("classifyFailureLog (#2103)", () => {
 			"registry unreachable",
 		];
 		for (const shape of shapes) {
-			expect(classifyFailureLog(`npm error ${shape}`).kind, shape).toBe(
-				"real",
-			);
+			expect(classifyFailureLog(`npm error ${shape}`).kind, shape).toBe("real");
 		}
 	});
 
@@ -375,6 +373,16 @@ describe("classifyFailureLog (#2103)", () => {
 		const log = `${oversizedHead}\n##[error]Process completed with exit code 1.\n`;
 		const result = classifyFailureLog(log);
 		expect(result.kind).toBe("real");
+	});
+
+	// Round 4 recurrence: the eligible-line bound must remain active, or a
+	// pathological log can make a late network token change a real verdict.
+	it("round 4: the 1,001st eligible line is outside the scan bound", () => {
+		const log = [
+			...Array.from({ length: 1_000 }, () => "npm error unrelated"),
+			"npm error code ECONNRESET",
+		].join("\n");
+		expect(classifyFailureLog(log).kind).toBe("real");
 	});
 
 	// V4 (BLOCKING, red-proof with the reviewer's fabricated-title shape): a

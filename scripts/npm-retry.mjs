@@ -36,11 +36,12 @@ const ATTEMPTS = 3;
 const DEFAULT_BACKOFF_MS = [0, 5_000, 15_000];
 const BACKOFF_OVERRIDE_ENV_VAR = "NPM_RETRY_BACKOFF_MS";
 const ATTEMPT_TIMEOUT_MS = 120_000;
-const DETERMINISTIC_ERROR_PATTERN = /\b(?:ERESOLVE|E404|EINTEGRITY|ETARGET)\b/i;
+const DETERMINISTIC_ERROR_PATTERN =
+	/\b(?:ERESOLVE|E404|EINTEGRITY|ETARGET|ENOTEMPTY|EEXIST)\b/i;
 const NPM_EVIDENCE_LINE =
 	/^(?:\s*npm (?:error\b|ERR!)(?:\s|$).*|\s*request to https?:\/\/\S+ failed, reason:.*)$/gim;
 const NPM_SCOPED_PATTERN =
-	/\b(?:502|503|504)(?:\s+Service Unavailable)?\b|\b429\s+Too Many Requests\b|socket hang up|network error|\b(?:ETIMEDOUT|EAI_AGAIN|ECONNREFUSED|EPIPE|ENETUNREACH|EHOSTUNREACH|FETCH_ERROR|ERR_SOCKET_TIMEOUT)\b|registry unreachable/i;
+	/^\s*npm (?:error|ERR!) code (?:E429|E5\d\d)\b|\b(?:502|503|504)(?:\s+Service Unavailable)?\b|\b429\s+Too Many Requests\b|socket hang up|network error|\b(?:ETIMEDOUT|EAI_AGAIN|ECONNREFUSED|EPIPE|ENETUNREACH|EHOSTUNREACH|FETCH_ERROR|ERR_SOCKET_TIMEOUT)\b|registry unreachable/i;
 // Composed from the CI pattern plus npm-only evidence. The line gate keeps
 // shared tokens out of compiler/linter/test text while npm retains the
 // broader retry-oriented network vocabulary.
