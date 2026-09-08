@@ -38,7 +38,11 @@ import {
 	checkCrossProcessLspBudget,
 	_resetLspBudgetDecisionForTests,
 } from "../../clients/lsp-budget.js";
-import { RUNNERS, TestRunnerClient } from "../../clients/test-runner-client.js";
+import {
+	isRunnerErrorResult,
+	RUNNERS,
+	TestRunnerClient,
+} from "../../clients/test-runner-client.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 /**
@@ -2221,7 +2225,7 @@ describe("turn_end test runner — stale results are cached, not discarded", () 
 // test-failure blocker.
 
 describe("turn_end test runner — a runner-error result does not clear a real git-guard blocker (#1524)", () => {
-	it("keeps a pre-existing test-failure blocker after a runner-start failure", async () => {
+	it("keeps a pre-existing test-failure blocker after a runner error with partial passes", async () => {
 		const env = setupTestEnvironment("pi-lens-test-guard-error-");
 		try {
 			const runtime = new RuntimeCoordinator();
@@ -2242,9 +2246,10 @@ describe("turn_end test runner — a runner-error result does not clear a real g
 
 			// Seed a REAL prior test-failure blocker on this exact go test file
 			// — a previous turn genuinely ran it and it failed. The scenario
-			// under test is this same file now failing to even START (a
-			// spawn/config error), which must not read as "it passed" and
-			// clear the blocker it earned last turn.
+			// under test is this same file now reporting a runner error after
+			// partial progress, which must not read as "it passed" and clear
+			// the blocker it earned last turn. This catches divergent doubles
+			// that require passed === 0 in addition to failed === 0 && error.
 			const goTestFile = path.join(env.tmpDir, "src/main_test.go");
 			fs.writeFileSync(goTestFile, "package main\n");
 			mergeGitGuardTestFailure(
@@ -2262,7 +2267,7 @@ describe("turn_end test runner — a runner-error result does not clear a real g
 				file: goTestFile,
 				sourceFile: srcFile,
 				runner: "go",
-				passed: 0,
+				passed: 3,
 				failed: 0,
 				skipped: 0,
 				failures: [],
@@ -2281,18 +2286,22 @@ describe("turn_end test runner — a runner-error result does not clear a real g
 							strategy: "related" as const,
 						}),
 						runTestFileAsync: async () => runnerErrorResult,
-						formatResult: (r: {
-							error?: string;
-							passed: number;
-							failed: number;
-						}) =>
-							r.error && r.passed === 0 && r.failed === 0
+						formatResult: (r: Parameters<typeof isRunnerErrorResult>[0]) =>
+							isRunnerErrorResult(r)
 								? `[Tests] ⚠ Could not run tests: ${r.error}`
 								: "",
 					},
 				}),
 			);
 			await new Promise((resolve) => setImmediate(resolve));
+
+			const persisted = cacheManager.readCache<{ content?: string }>(
+				"test-runner-findings",
+				env.tmpDir,
+			)?.data;
+			expect(persisted?.content).toContain(
+				"[Tests] ⚠ Could not run tests: Runner go exited with 1",
+			);
 
 			// The prior real test-failure blocker must still be in force — a
 			// suite that never started must not read as a pass that clears it.
@@ -2368,12 +2377,8 @@ describe("turn_end test runner — a runner-error-only batch does not itself blo
 							strategy: "related" as const,
 						}),
 						runTestFileAsync: async () => runnerErrorResult,
-						formatResult: (r: {
-							error?: string;
-							passed: number;
-							failed: number;
-						}) =>
-							r.error && r.passed === 0 && r.failed === 0
+						formatResult: (r: Parameters<typeof isRunnerErrorResult>[0]) =>
+							isRunnerErrorResult(r)
 								? `[Tests] ⚠ Could not run tests: ${r.error}`
 								: "",
 					},
@@ -2503,12 +2508,8 @@ describe("turn_end test runner — a runner-error-only batch does not itself blo
 							if (!result) throw new Error(`unexpected test file ${testFile}`);
 							return result;
 						},
-						formatResult: (r: {
-							error?: string;
-							passed: number;
-							failed: number;
-						}) =>
-							r.error && r.passed === 0 && r.failed === 0
+						formatResult: (r: Parameters<typeof isRunnerErrorResult>[0]) =>
+							isRunnerErrorResult(r)
 								? `[Tests] ⚠ Could not run tests: ${r.error}`
 								: `[Tests] ✗ ${r.failed} failed`,
 					},
@@ -2594,12 +2595,8 @@ describe("turn_end test runner — a runner-error-only batch does not itself blo
 							duration: 1,
 							error: "Runner go exited with 1",
 						}),
-						formatResult: (r: {
-							error?: string;
-							passed: number;
-							failed: number;
-						}) =>
-							r.error && r.passed === 0 && r.failed === 0
+						formatResult: (r: Parameters<typeof isRunnerErrorResult>[0]) =>
+							isRunnerErrorResult(r)
 								? `[Tests] ⚠ Could not run tests: ${r.error}`
 								: "",
 					},
