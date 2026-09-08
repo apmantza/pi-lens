@@ -335,6 +335,7 @@ describe("#1549 — per-server touch verdict", () => {
 		vi.useRealTimers();
 		vi.restoreAllMocks();
 		delete process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS;
+		delete process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS;
 	});
 
 	it("tonight's shape: an answered primary beside a slow auxiliary is USABLE, not inconclusive", async () => {
@@ -625,6 +626,70 @@ describe("#1549 — per-server touch verdict", () => {
 		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(1);
 		expect(second?.diagnosticsUnsupportedServerIds).toEqual(["dexter"]);
 		expect(second?.confirmation).toBeUndefined();
+	});
+
+	it("shares one first-contact wait across concurrent touches", async () => {
+		const primary = makeClient(5000, [], {
+			serverId: "dexter",
+			customServer: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(0, [], { serverId: "opengrep" }),
+		});
+
+		const first = service.touchFile(FILE, "const x = 1;", CASCADE_TOUCH);
+		const second = service.touchFile(FILE, "const y = 2;", CASCADE_TOUCH);
+		await vi.advanceTimersByTimeAsync(8000);
+		const results = await Promise.all([first, second]);
+
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(1);
+		expect(results).toHaveLength(2);
+		expect(results[0]?.diagnosticsUnsupportedServerIds).toEqual(["dexter"]);
+		expect(results[1]?.diagnosticsUnsupportedServerIds).toEqual(["dexter"]);
+	});
+
+	it("does not latch first contact when the live hook deadline cuts the push wait", async () => {
+		process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS = "5000";
+		const primary = makeClient(5000, [], {
+			serverId: "dexter",
+			customServer: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(0, [], { serverId: "opengrep" }),
+		});
+		vi.spyOn(service, "getCapabilitySnapshots").mockResolvedValue([]);
+
+		let settled = false;
+		const first = service.touchFile(FILE, "const x = 1;", {
+			...CASCADE_TOUCH,
+			maxClientWaitMs: 5000,
+			hook: "turn_end",
+		});
+		void first.then(() => {
+			settled = true;
+		});
+
+		for (let i = 0; i < 100; i += 1) {
+			await Promise.resolve();
+			if (primary.waitForDiagnostics.mock.calls.length > 0) break;
+		}
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(3100);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(settled).toBe(true);
+		const firstResult = await first;
+		expect(firstResult?.diagnosticsUnsupportedServerIds).toBeUndefined();
+
+		const second = service.touchFile(FILE, "const y = 2;", {
+			...CASCADE_TOUCH,
+			maxClientWaitMs: 5000,
+			hook: "turn_end",
+		});
+		await vi.advanceTimersByTimeAsync(5000);
+		await second;
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(2);
 	});
 
 	it("keeps a custom primary on normal waits when first contact publishes", async () => {

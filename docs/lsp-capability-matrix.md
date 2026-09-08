@@ -41,11 +41,12 @@ Detection is **cached** at `initialize` (`detectWorkspaceDiagnosticsSupport` →
 `state.workspaceDiagnosticsSupport.mode`, upgraded on `client/registerCapability`),
 so the tier is free at collection time — no per-edit probe.
 
-Custom servers without a pull provider start in the navigation-only state until
-the real `publishDiagnostics` handler observes a publish for any document. That
-server-id latch lasts for the LSP session and prevents a silent custom server
-from being counted as clean or timed out. A publish upgrades it to the ordinary
-push wait policy.
+Custom servers without a pull provider begin with one bounded first-contact
+probe. The probe uses the smaller of the server's push-wait budget and the live
+hook deadline. If the hook cuts it off first, the result remains unconfirmed and
+the next touch probes again. Only silence through the full push budget latches
+that server id as navigation-only for the service session. A publish upgrades it
+to the ordinary push-wait policy.
 
 ## Matrix (dev box + CI nightly; mode last refreshed 2026-06-17 from run 27713958681, clean-behavior probed on the dev box 2026-07-08 — #460)
 

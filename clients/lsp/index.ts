@@ -1260,6 +1260,15 @@ export class LSPService {
 	private readonly unavailableLogged = new Set<string>();
 	private readonly optionalDisabled = new Set<string>();
 	/**
+	 * One first-contact diagnostic wait per custom server in this service
+	 * generation. Concurrent touches share the probe; a hook cutoff never arms
+	 * the navigation-only latch, so the next touch can try again.
+	 */
+	private readonly firstContactWaits = new Map<
+		string,
+		Promise<"answered" | "silent" | "cut_off">
+	>();
+	/**
 	 * #1934 review F1: what the last COMPLETED `spawnClient` call for a
 	 * (server, root) key decided, written by that call at every point it
 	 * returns without a client. This is a direct signal, deliberately NOT an
@@ -4228,6 +4237,7 @@ export class LSPService {
 			// the replacement can publish a snapshot.
 			this.state.diagnosticsPublished.delete(server.id);
 			this.state.diagnosticsUnsupported.delete(server.id);
+			this.firstContactWaits.delete(server.id);
 
 			const client = await createLSPClient({
 				serverId: server.id,
@@ -5384,6 +5394,27 @@ export class LSPService {
 							)
 						: perServerDeclaredTimeouts[entryIndex];
 				});
+				const firstContactCutOffServerIds = new Set<string>();
+				const answeredForThisTouch = (
+					entry: (typeof spawned)[number],
+				): boolean => {
+					const baseline = diagnosticBaselines.get(entry.client);
+					const currentPathVersion = readPathVersion(entry.client);
+					if (
+						Number.isFinite(baseline) &&
+						currentPathVersion !== undefined &&
+						currentPathVersion > (baseline as number)
+					) {
+						return true;
+					}
+					try {
+						return (
+							entry.client.getAllDiagnostics?.().has(normalizedPath) === true
+						);
+					} catch {
+						return false;
+					}
+				};
 				const perServerRaceBudgets = spawned.map((entry, entryIndex) => {
 					return hasTouchAuxiliaries && entry.info.role === "auxiliary"
 						? auxWaitBudgetMs(
@@ -5433,7 +5464,7 @@ export class LSPService {
 					const isWarmupTouch = source === "lsp_sweep_warmup";
 					// #743: per-server — a server we DID push to still gets the
 					// version-baseline wait even when a sibling was debounced away.
-					const wait =
+					const waitForDiagnostics = (): Promise<void> =>
 						!notifySkippedServerIds.has(entry.info.id) &&
 						Number.isFinite(baseline)
 							? entry.client.waitForDiagnostics(filePath, serverTimeout, {
@@ -5451,7 +5482,57 @@ export class LSPService {
 											pullSettleSource: "pull-warmup",
 										})
 									: entry.client.waitForDiagnostics(filePath, serverTimeout);
-					return wait.catch(() => undefined);
+					const firstContact =
+						entry.info.custom === true &&
+						!this.state.diagnosticsPublished.has(entry.info.id) &&
+						!this.state.diagnosticsUnsupported.has(entry.info.id) &&
+						entry.client.getWorkspaceDiagnosticsSupport().mode !== "pull";
+					if (!firstContact) return waitForDiagnostics().catch(() => undefined);
+
+					let shared = this.firstContactWaits.get(entry.info.id);
+					if (!shared) {
+						const remainingHookMs =
+							hookDeadlineAt === undefined
+								? serverTimeout
+								: Math.max(0, hookDeadlineAt - Date.now());
+						const waitBudget = Math.min(serverTimeout, remainingHookMs);
+						const wait = waitForDiagnostics().catch(() => undefined);
+						const completed =
+							waitBudget < serverTimeout
+								? withDeadline(
+										wait.then(() => true),
+										{
+											ms: waitBudget,
+											onTimeout: "undefined",
+											onReject: "undefined",
+										},
+									)
+								: wait.then(() => true);
+						shared = completed
+							.then((finished) => {
+								if (finished !== true) return "cut_off" as const;
+								if (answeredForThisTouch(entry)) return "answered" as const;
+								this.state.diagnosticsUnsupported.add(entry.info.id);
+								recordDegradationOnce({
+									kind: "lsp-diagnostics-unsupported",
+									subject: entry.info.id,
+									reason:
+										"custom server has no pull provider and no publish evidence after first contact wait",
+								});
+								return "silent" as const;
+							})
+							.finally(() => {
+								if (this.firstContactWaits.get(entry.info.id) === shared) {
+									this.firstContactWaits.delete(entry.info.id);
+								}
+							});
+						this.firstContactWaits.set(entry.info.id, shared);
+					}
+					return shared.then((outcome) => {
+						if (outcome === "cut_off")
+							firstContactCutOffServerIds.add(entry.info.id);
+						return undefined;
+					});
 				});
 
 				// The push wait — same per-server budget composition as before #707;
@@ -5732,32 +5813,13 @@ export class LSPService {
 					await pushWait;
 				}
 				const waitedMs = Date.now() - waitStartedAt;
-				const answeredForThisTouch = (
-					entry: (typeof spawned)[number],
-				): boolean => {
-					const baseline = diagnosticBaselines.get(entry.client);
-					const currentPathVersion = readPathVersion(entry.client);
-					if (
-						Number.isFinite(baseline) &&
-						currentPathVersion !== undefined &&
-						currentPathVersion > (baseline as number)
-					) {
-						return true;
-					}
-					try {
-						return (
-							entry.client.getAllDiagnostics?.().has(normalizedPath) === true
-						);
-					} catch {
-						return false;
-					}
-				};
 				const firstContactCustomServerIds = spawned
 					.filter(
 						(entry) =>
 							entry.info.custom === true &&
 							!this.state.diagnosticsPublished.has(entry.info.id) &&
 							!this.state.diagnosticsUnsupported.has(entry.info.id) &&
+							!firstContactCutOffServerIds.has(entry.info.id) &&
 							entry.client.getWorkspaceDiagnosticsSupport().mode !== "pull",
 					)
 					.map((entry) => entry.info.id);
@@ -5774,6 +5836,14 @@ export class LSPService {
 						reason:
 							"custom server has no pull provider and no publish evidence after first contact wait",
 					});
+				}
+				for (const entry of spawned) {
+					if (
+						entry.info.custom === true &&
+						this.state.diagnosticsUnsupported.has(entry.info.id)
+					) {
+						diagnosticsUnsupportedServerIds.push(entry.info.id);
+					}
 				}
 				diagnosticsUnsupportedServerIds = [
 					...new Set(diagnosticsUnsupportedServerIds),
@@ -9568,6 +9638,7 @@ export class LSPService {
 		});
 		this.state.clients.clear();
 		this.state.broken.clear();
+		this.firstContactWaits.clear();
 		// #1934 review F1: map hygiene alongside the breaker it sits next to.
 		// Not load-bearing — every read follows its own attempt's write — but a
 		// verdict for a client generation that no longer exists is dead weight.
