@@ -74,7 +74,7 @@ classification standing.
 | toml | taplo | push-only | publishes-unversioned | 2* | dev+ci |
 | terraform | terraform-ls | push-only | TBD | 2/3? | dev+ci |
 | prisma | @prisma/language-server | push-only | publishes-unversioned | 2* | dev+ci |
-| php | intelephense | push-only | TBD | 2/3? | dev |
+| php | intelephense | push-only | TBD | 2/3? | dev+ci |
 | zig | zls | push-only | publishes-unversioned | 2* | dev+ci |
 | vue | @vue/language-server | push-only | TBD | 2/3? | dev+ci |
 | dart | dart language-server | push-only | publishes-unversioned | 2* | ci |
