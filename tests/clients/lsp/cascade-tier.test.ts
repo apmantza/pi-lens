@@ -187,11 +187,25 @@ describe("classifyCascadeWaitTier", () => {
 		);
 	});
 
-	it("classifies an unobserved custom no-provider server as diagnostics-unsupported", () => {
+	it("keeps an unobserved custom no-provider server on its first-contact wait", () => {
 		const snapshot = {
 			serverId: "dexter",
 			root: "C:/repo",
 			customServer: true,
+			operationSupport: {} as any,
+			workspaceDiagnosticsSupport: { mode: "push-only" as const },
+			advertisedCommands: [],
+			rawCapabilityKeys: [],
+		};
+		expect(mod.classifyServerWaitTier("dexter", snapshot as any)).toBe("waits");
+	});
+
+	it("classifies a custom server as navigation-only only after its silent wait latches", () => {
+		const snapshot = {
+			serverId: "dexter",
+			root: "C:/repo",
+			customServer: true,
+			diagnosticsUnsupported: true,
 			operationSupport: {} as any,
 			workspaceDiagnosticsSupport: { mode: "push-only" as const },
 			advertisedCommands: [],

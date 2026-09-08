@@ -1,3 +1,5 @@
+// flake-shape: raw-timer-wait — fake timers exercise the live hook remainder after delayed pre-snapshot work
+
 /**
  * #1549 — the touch verdict is PER SERVER, aggregated honestly.
  *
@@ -297,6 +299,7 @@ async function touchOnce(
 					inconclusiveServerIds?: string[];
 					inconclusiveReason?: string;
 					unconfirmedServerIds?: string[];
+					diagnosticsUnsupportedServerIds?: string[];
 			  }
 			| undefined
 		>;
@@ -581,7 +584,7 @@ describe("#1549 — per-server touch verdict", () => {
 		expect(result?.inconclusiveReason).toBe("diagnostics-wait");
 	});
 
-	it("keeps a primary navigation-only server inconclusive beside an answered auxiliary", async () => {
+	it("keeps a primary navigation-only server unconfirmed beside an answered auxiliary", async () => {
 		// A navigation-only primary is excluded from the diagnostics wait. The
 		// auxiliary can answer, but its evidence cannot become a primary verdict.
 		const service = await mountService({
@@ -595,10 +598,120 @@ describe("#1549 — per-server touch verdict", () => {
 		});
 		const result = await touchOnce(service);
 
-		expect(result?.inconclusive).toBe(true);
+		expect(result?.inconclusive).toBeUndefined();
 		expect(result?.confirmation).toBeUndefined();
 		expect(result?.inconclusiveServerIds).toBeUndefined();
-		expect(result?.inconclusiveReason).toBe("diagnostics-wait");
+		expect(result?.inconclusiveReason).toBeUndefined();
+	});
+
+	it("waits once before latching a silent custom primary as navigation-only", async () => {
+		const primary = makeClient(100, [], {
+			serverId: "dexter",
+			customServer: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(100, [], { serverId: "opengrep" }),
+		});
+
+		const result = await touchOnce(service);
+
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(1);
+		expect(result?.diagnosticsUnsupportedServerIds).toEqual(["dexter"]);
+		expect(result?.confirmation).toBeUndefined();
+		expect(result?.inconclusive).toBeUndefined();
+
+		const second = await touchOnce(service, "const y = 2;");
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(1);
+		expect(second?.diagnosticsUnsupportedServerIds).toEqual(["dexter"]);
+		expect(second?.confirmation).toBeUndefined();
+	});
+
+	it("keeps a custom primary on normal waits when first contact publishes", async () => {
+		const primary = makeClient(100, [], {
+			serverId: "dexter",
+			customServer: true,
+			publishesWhenClean: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(100, [], {
+				serverId: "opengrep",
+				publishesWhenClean: true,
+			}),
+		});
+
+		const first = await touchOnce(service);
+		const second = await touchOnce(service, "const y = 2;");
+
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(2);
+		expect(first?.diagnosticsUnsupportedServerIds).toBeUndefined();
+		expect(first?.confirmation).toBe("confirmed");
+		expect(second?.diagnosticsUnsupportedServerIds).toBeUndefined();
+		expect(second?.confirmation).toBe("confirmed");
+	});
+
+	it("records one navigation-only degradation per custom server per session", async () => {
+		const primary = makeClient(100, [], {
+			serverId: "dexter",
+			customServer: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(100, [], { serverId: "opengrep" }),
+		});
+
+		await touchOnce(service);
+		await touchOnce(service, "const y = 2;");
+
+		expect(
+			latencyRows("degradation_ledger").filter(
+				(row) =>
+					row?.metadata?.kind === "lsp-diagnostics-unsupported" &&
+					row?.metadata?.subject === "dexter",
+			),
+		).toHaveLength(1);
+	});
+
+	it("bounds capability lookup by the live hook remainder", async () => {
+		const service = await mountService({
+			primary: makeClient(0, [], {
+				serverId: "dexter",
+				customServer: true,
+				publishesWhenClean: true,
+			}),
+			aux: makeClient(0, [], {
+				serverId: "opengrep",
+				publishesWhenClean: true,
+			}),
+		});
+		vi.spyOn(
+			service as unknown as {
+				findOutsideProjectRoot: (
+					filePath: string,
+				) => Promise<string | undefined>;
+			},
+			"findOutsideProjectRoot",
+		).mockImplementation(async () => {
+			await new Promise<void>((resolve) => setTimeout(resolve, 2900));
+			return undefined;
+		});
+		vi.spyOn(service, "getCapabilitySnapshots").mockImplementation(
+			() => new Promise(() => {}),
+		);
+
+		let settled = false;
+		const touch = service.touchFile(FILE, "const x = 1;", {
+			...CASCADE_TOUCH,
+			hook: "turn_end",
+		});
+		void touch.then(() => {
+			settled = true;
+		});
+
+		await vi.advanceTimersByTimeAsync(3100);
+		expect(settled).toBe(true);
+		await touch;
 	});
 
 	it("a scanner that went unheard is not marked warm, even on a NON-COLLECTING touch", async () => {

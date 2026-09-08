@@ -14,6 +14,8 @@ export interface LSPCapabilitySnapshot {
 	customServer?: boolean;
 	/** True after this server published diagnostics for any document this session. */
 	diagnosticsPublished?: boolean;
+	/** True after the session's bounded first-contact wait proved no diagnostics path. */
+	diagnosticsUnsupported?: boolean;
 	operationSupport: LSPOperationSupport;
 	workspaceDiagnosticsSupport: LSPWorkspaceDiagnosticsSupport;
 	/** Commands the server advertised for workspace/executeCommand (the allowlist) */

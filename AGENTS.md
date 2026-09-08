@@ -460,6 +460,13 @@ explicit `PI_LENS_AUX_GRACE_MS` value caps the budget on both paths;
 it never raises it. On a cold auxiliary it also caps the request's own
 wait, so a low value cancels the request earlier than the pre-#2152 behavior. (#2152)
 
+Custom push-only servers without a pull provider get one bounded first-contact
+wait per LSP session. A publication keeps normal waits; silence latches
+`diagnosticsUnsupported` by `serverId` after that wait, resets on server restart
+or a new session, and reports navigation-only at the service seam. Capability
+snapshot lookup uses the live remaining hook deadline, not a fresh full hook
+budget. (#2765)
+
 Pull-diagnostics request deadlines send `$/cancelRequest`, but cancellation is
 advisory. While a cancelled request remains unsettled, admission blocks another
 pull for the same path/source. The slot frees only on settlement. Apply this to

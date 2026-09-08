@@ -327,6 +327,9 @@ const wallClockBudgetInclude = [
 	"tests/clients/lsp/headless-tool-call-keepalive.test.ts",
 	// #2703 review r1: the push-wait settle guard drains one real setImmediate tick so Node can deliver `unhandledRejection` (flake-shape admission).
 	"tests/clients/lsp/push-wait-settle-rejection.test.ts",
+	// #2765 round 3: fake timers exercise the live hook remainder after delayed
+	// pre-snapshot work; keep the admission beside the timer-based regression.
+	"tests/clients/lsp/service-inconclusive-per-server.test.ts",
 	// #2358: the flat-server discriminator asserts the real outstanding wedge
 	// window. Keep child-process CPU sampling and this wall-clock lower bound in
 	// the fully serialized, dead-last phase.

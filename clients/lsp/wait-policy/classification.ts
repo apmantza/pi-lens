@@ -39,6 +39,7 @@ export function classifyServerWaitTier(
 	if (
 		snapshot.customServer === true &&
 		mode === "push-only" &&
+		snapshot.diagnosticsUnsupported === true &&
 		snapshot.diagnosticsPublished !== true
 	) {
 		return "diagnostics-unsupported";

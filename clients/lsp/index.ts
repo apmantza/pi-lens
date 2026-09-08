@@ -275,6 +275,8 @@ export interface LSPState {
 	demonstratedCold: Set<string>;
 	/** Server ids that have published diagnostics in this LSP session. */
 	diagnosticsPublished: Set<string>;
+	/** Custom servers proved navigation-only after their first bounded contact. */
+	diagnosticsUnsupported: Set<string>;
 }
 
 const BROKEN_BASE_COOLDOWN_MS = 15_000;
@@ -1495,6 +1497,7 @@ export class LSPService {
 			demonstratedReady: new Set(),
 			demonstratedCold: new Set(),
 			diagnosticsPublished: new Set(),
+			diagnosticsUnsupported: new Set(),
 		};
 	}
 
@@ -4220,6 +4223,11 @@ export class LSPService {
 				spawned.initialization,
 				override?.initializationOptions,
 			);
+			// A replacement process is a new first-contact identity even when the
+			// configured server id is unchanged. Re-arm both capability latches before
+			// the replacement can publish a snapshot.
+			this.state.diagnosticsPublished.delete(server.id);
+			this.state.diagnosticsUnsupported.delete(server.id);
 
 			const client = await createLSPClient({
 				serverId: server.id,
@@ -4448,6 +4456,12 @@ export class LSPService {
 			return;
 		}
 		const startedAt = Date.now();
+		const hookDeadlineAt =
+			options.hook !== undefined &&
+			Object.hasOwn(HOOK_WALL_BUDGET_MS, options.hook)
+				? startedAt +
+					HOOK_WALL_BUDGET_MS[options.hook as keyof typeof HOOK_WALL_BUDGET_MS]
+				: undefined;
 		const normalizedPath = normalizeMapKey(filePath);
 		const outsideRoot = await this.findOutsideProjectRoot(filePath);
 		if (outsideRoot) {
@@ -5139,6 +5153,9 @@ export class LSPService {
 								diagnosticsPublished: this.state.diagnosticsPublished.has(
 									entry.info.id,
 								),
+								diagnosticsUnsupported: this.state.diagnosticsUnsupported.has(
+									entry.info.id,
+								),
 								advertisedCommands: entry.client.getAdvertisedCommands(),
 								rawCapabilityKeys: entry.client.getRawCapabilityKeys?.() ?? [],
 								launchVariant: entry.client.getLaunchVariant?.(),
@@ -5305,14 +5322,10 @@ export class LSPService {
 				if (spawned.some((entry) => entry.info.custom === true)) {
 					try {
 						const snapshotHook = options.hook ?? "tool_result_edit";
-						const snapshotBudget = Object.hasOwn(
-							HOOK_WALL_BUDGET_MS,
-							snapshotHook,
-						)
-							? HOOK_WALL_BUDGET_MS[
-									snapshotHook as keyof typeof HOOK_WALL_BUDGET_MS
-								]
-							: HOOK_WALL_BUDGET_MS.tool_result_edit;
+						const snapshotBudget =
+							hookDeadlineAt === undefined
+								? HOOK_WALL_BUDGET_MS.tool_result_edit
+								: Math.max(0, hookDeadlineAt - Date.now());
 						const snapshots = await bounded(
 							this.getCapabilitySnapshots(filePath),
 							{
@@ -5333,14 +5346,6 @@ export class LSPService {
 										) === "diagnostics-unsupported",
 								)
 								.map((entry) => entry.info.id);
-							for (const serverId of diagnosticsUnsupportedServerIds) {
-								recordDegradationOnce({
-									kind: "lsp-diagnostics-unsupported",
-									subject: serverId,
-									reason:
-										"custom server has no pull provider and no publish evidence in this session",
-								});
-							}
 						}
 					} catch {
 						// Capability uncertainty fails closed and retains the wait.
@@ -5727,6 +5732,52 @@ export class LSPService {
 					await pushWait;
 				}
 				const waitedMs = Date.now() - waitStartedAt;
+				const answeredForThisTouch = (
+					entry: (typeof spawned)[number],
+				): boolean => {
+					const baseline = diagnosticBaselines.get(entry.client);
+					const currentPathVersion = readPathVersion(entry.client);
+					if (
+						Number.isFinite(baseline) &&
+						currentPathVersion !== undefined &&
+						currentPathVersion > (baseline as number)
+					) {
+						return true;
+					}
+					try {
+						return (
+							entry.client.getAllDiagnostics?.().has(normalizedPath) === true
+						);
+					} catch {
+						return false;
+					}
+				};
+				const firstContactCustomServerIds = spawned
+					.filter(
+						(entry) =>
+							entry.info.custom === true &&
+							!this.state.diagnosticsPublished.has(entry.info.id) &&
+							!this.state.diagnosticsUnsupported.has(entry.info.id) &&
+							entry.client.getWorkspaceDiagnosticsSupport().mode !== "pull",
+					)
+					.map((entry) => entry.info.id);
+				for (const serverId of firstContactCustomServerIds) {
+					const entry = spawned.find(
+						(candidate) => candidate.info.id === serverId,
+					);
+					if (!entry || answeredForThisTouch(entry)) continue;
+					this.state.diagnosticsUnsupported.add(serverId);
+					diagnosticsUnsupportedServerIds.push(serverId);
+					recordDegradationOnce({
+						kind: "lsp-diagnostics-unsupported",
+						subject: serverId,
+						reason:
+							"custom server has no pull provider and no publish evidence after first contact wait",
+					});
+				}
+				diagnosticsUnsupportedServerIds = [
+					...new Set(diagnosticsUnsupportedServerIds),
+				];
 				// #1533: the same auxiliary coverage evidence for a collecting touch that
 				// did NOT enter the aux-grace wait — in practice `clientScope: "all"`, the
 				// batch/directory scan surface. Auxiliaries ARE spawned on that scope
@@ -5876,27 +5927,6 @@ export class LSPService {
 					// reads as unanswered, which for a primary is exactly the pre-#1549
 					// verdict. This block can therefore only ever NARROW an inconclusive
 					// touch, never create one.
-					const answeredForThisTouch = (
-						entry: (typeof spawned)[number],
-					): boolean => {
-						const baseline = diagnosticBaselines.get(entry.client);
-						const currentPathVersion = readPathVersion(entry.client);
-						if (
-							Number.isFinite(baseline) &&
-							currentPathVersion !== undefined &&
-							currentPathVersion > (baseline as number)
-						) {
-							return true;
-						}
-						try {
-							return (
-								entry.client.getAllDiagnostics?.().has(normalizedPath) === true
-							);
-						} catch {
-							// Fail closed: an unreadable cache is not evidence of an answer.
-							return false;
-						}
-					};
 					// A deferred server was never sent this content and is not waited on, so
 					// it cannot have "timed out" — it is already reported as a coverage gap.
 					const waited = spawned.filter(
@@ -5917,8 +5947,15 @@ export class LSPService {
 					const hasWaitedPrimary = waited.some(
 						(entry) => entry.info.role !== "auxiliary",
 					);
+					const hasUnsupportedPrimary = diagnosticsUnsupportedServerIds.some(
+						(serverId) =>
+							spawned.some(
+								(entry) =>
+									entry.info.id === serverId && entry.info.role !== "auxiliary",
+							),
+					);
 					diagnosticsTimedOut =
-						!hasWaitedPrimary ||
+						(!hasWaitedPrimary && !hasUnsupportedPrimary) ||
 						diagnosticsUnansweredPrimaryServerIds.length > 0;
 					for (const entry of unanswered) {
 						incrementDegradationCount({
@@ -6528,6 +6565,13 @@ export class LSPService {
 			// collect, `binding` only for a collecting touch — a non-collecting touch
 			// keeps resolving `{ diags: [] }`, no flags.
 			const result: TouchFileResult = { diags: collected ?? [] };
+			const primaryDiagnosticsUnsupported =
+				diagnosticsUnsupportedServerIds.some((serverId) =>
+					spawned.some(
+						(entry) =>
+							entry.info.id === serverId && entry.info.role !== "auxiliary",
+					),
+				);
 			if (diagnosticsUnsupportedServerIds.length > 0) {
 				result.diagnosticsUnsupportedServerIds =
 					diagnosticsUnsupportedServerIds;
@@ -6544,6 +6588,10 @@ export class LSPService {
 					result.inconclusiveServerIds = verdict.inconclusiveServerIds;
 				}
 				result.inconclusiveReason = verdict.inconclusiveReason;
+			} else if (collected !== undefined && primaryDiagnosticsUnsupported) {
+				// A navigation-only primary has no diagnostic confirmation to report.
+				// Auxiliary coverage cannot turn that capability boundary into a clean
+				// or partial diagnostic verdict.
 			} else if (collected !== undefined && coverageGap) {
 				// #1470/#1493: narrowed, not collapsed. Reached for EITHER no-answer
 				// shape — a cut-off auxiliary or a silent one with nothing published for
@@ -6553,7 +6601,7 @@ export class LSPService {
 				// health.
 				result.confirmation = "partial";
 				result.unconfirmedServerIds = [...unconfirmedServerIds];
-			} else if (collected !== undefined) {
+			} else if (collected !== undefined && !primaryDiagnosticsUnsupported) {
 				// Preserve the lower-level affirmative result across consumers. In
 				// particular, the silent-clean gates above clear diagnosticsTimedOut only
 				// after a successful notify and capability-confirmed wait; reclassifying
@@ -7504,6 +7552,9 @@ export class LSPService {
 					workspaceDiagnosticsSupport: client.getWorkspaceDiagnosticsSupport(),
 					customServer: server.custom,
 					diagnosticsPublished: this.state.diagnosticsPublished.has(server.id),
+					diagnosticsUnsupported: this.state.diagnosticsUnsupported.has(
+						server.id,
+					),
 					advertisedCommands: client.getAdvertisedCommands(),
 					rawCapabilityKeys: client.getRawCapabilityKeys?.() ?? [],
 					launchVariant: client.getLaunchVariant?.(),
@@ -7523,6 +7574,7 @@ export class LSPService {
 				workspaceDiagnosticsSupport: client.getWorkspaceDiagnosticsSupport(),
 				customServer: this.state.servers.get(serverId)?.custom,
 				diagnosticsPublished: this.state.diagnosticsPublished.has(serverId),
+				diagnosticsUnsupported: this.state.diagnosticsUnsupported.has(serverId),
 				advertisedCommands: client.getAdvertisedCommands(),
 				rawCapabilityKeys: client.getRawCapabilityKeys?.() ?? [],
 				launchVariant: client.getLaunchVariant?.(),
