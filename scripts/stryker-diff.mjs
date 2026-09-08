@@ -111,7 +111,13 @@ try {
 		out[mutant.status] = (out[mutant.status] ?? 0) + 1;
 		return out;
 	}, {});
-	const score = report.mutationTestResults?.score ?? "n/a";
+	// The mutation-report schema stores no score; Stryker's definition is
+	// (killed + timeout) / (total - ignored - no coverage).
+	const killed = (counts.Killed ?? 0) + (counts.Timeout ?? 0);
+	const denominator =
+		mutants.length - (counts.Ignored ?? 0) - (counts.NoCoverage ?? 0);
+	const score =
+		denominator > 0 ? ((killed / denominator) * 100).toFixed(2) : "n/a";
 	console.log(`mutation diff score: ${score}`);
 	console.log(`mutation diff counts: ${JSON.stringify(counts)}`);
 	for (const mutant of mutants.filter((entry) => entry.status === "Survived")) {

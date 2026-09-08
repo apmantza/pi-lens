@@ -95,6 +95,10 @@
 	// of knip's plugins for these tools activates the way this repo uses
 	// them, so knip cannot see the usage on its own:
 	"ignoreDependencies": [
+		// Stryker's "command" test runner (#2758) lives inside @stryker-mutator/core;
+		// knip's stryker plugin infers a separate @stryker-mutator/command-runner
+		// package from `testRunner: "command"` that does not exist.
+		"@stryker-mutator/command-runner",
 		// jscpd (#2706, lint.yml "jscpd (advisory)") is a pinned devDependency
 		// spawned by path (`node_modules/.bin/jscpd`) from the workflow step and
 		// never imported, so knip cannot credit it.
