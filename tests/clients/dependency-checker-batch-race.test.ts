@@ -182,3 +182,4 @@ describe("DependencyChecker.checkFilesBatch — concurrency race guard (#766)", 
 		expect(order).toEqual(["c", "a"]);
 	});
 });
+// flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface

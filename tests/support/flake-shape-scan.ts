@@ -7,8 +7,9 @@
  * ratchet.test.ts`) runs over `tests/**\/*.test.ts`:
  *
  * 1. {@link scanRealProcessSpawn} — a real child process: a `child_process`
- *    import, a call-shaped `execFileSync`/`spawnSync`/`execSync`, or a spawn
- *    of any flavor whose argv mentions `vitest` (a test file re-launching the
+ *    import, a call-shaped `execFileSync`/`spawnSync`/`execSync`, a support
+ *    spawn-helper call, or a spawn whose argv mentions `vitest` (a test file
+ *    re-launching the
  *    suite inside itself).
  * 2. {@link scanElapsedTimeAssertion} — a DELTA of two clock reads flowing
  *    into a numeric matcher (`toBeLessThan`/`toBeGreaterThan`/…), not just a
@@ -48,6 +49,10 @@
  *   blanked so a doc comment cannot. No such string exists in `tests/` today
  *   (the FALSE positive direction, safe for a ratchet that a human reviews at
  *   admission time).
+ * - Detector 1 recognizes known support-module helper names at their test call
+ *   sites, but does not resolve arbitrary aliases or determine whether a
+ *   helper is mocked. Conservative false positives are admitted explicitly;
+ *   quoted and commented helper names are excluded by `codeMatches`.
  */
 
 import * as fs from "node:fs";
@@ -55,6 +60,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+	codeMatches,
 	firstCommentMatch,
 	listSourceFiles,
 	relativePosix,
@@ -122,6 +128,11 @@ const SPAWN_CALL =
 	/\b(spawn|spawnSync|exec|execSync|execFile|execFileSync|fork)\s*\(/g;
 const SYNC_TRIAD = new Set(["execFileSync", "spawnSync", "execSync"]);
 const VITEST_IN_ARGV = /\bvitest\b/i;
+// These helpers are the test-side routes to real child processes. Keep this
+// list beside the support-module census: matching the CALL in a test catches
+// a helper that hides `node:child_process` behind another module boundary.
+const SUPPORT_SPAWN_HELPER_CALL =
+	/\b(gitFixtureSpawnAsync|gitExecFileSync|gitExecSync|execFileSync|execSync|spawnWedgedChild|safeSpawnAsync)\s*\(/g;
 
 /** The text between a call's `(` (given its index) and its balanced `)`. */
 function balancedCallArgs(source: string, openParenIndex: number): string {
@@ -183,6 +194,17 @@ export function scanRealProcessSpawn(
 						: `${name}( vitest-in-vitest (argv mentions "vitest")`,
 				});
 			}
+		}
+	}
+
+	for (const match of codeMatches(source, SUPPORT_SPAWN_HELPER_CALL)) {
+		const lineIdx = source.slice(0, match.index ?? 0).split("\n").length - 1;
+		if (!hits.has(lineIdx)) {
+			hits.set(lineIdx, {
+				line: lineIdx + 1,
+				text: source.split("\n")[lineIdx]?.trim() ?? "",
+				reason: `${match[1]}( support spawn helper`,
+			});
 		}
 	}
 	return [...hits.values()].sort((a, b) => a.line - b.line);

@@ -189,3 +189,4 @@ describe("timeout teardown evidence (#2010)", () => {
 		},
 	);
 });
+// flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface

@@ -284,3 +284,4 @@ describe("package-manager availability (#1496)", () => {
 		expect(pnpmCalls).toBe(2);
 	});
 });
+// flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface

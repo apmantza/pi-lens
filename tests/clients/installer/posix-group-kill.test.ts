@@ -112,3 +112,4 @@ describe("safeSpawnAsync POSIX process-group kill (#2026/#2027)", () => {
 		20_000,
 	);
 });
+// flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface

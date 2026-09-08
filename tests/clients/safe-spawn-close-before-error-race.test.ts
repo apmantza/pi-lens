@@ -211,3 +211,4 @@ describe("safeSpawnAsync decides from the close-event SHAPE, not event timing (#
 		expect(result.spawnFailure).toBeUndefined();
 	});
 });
+// flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface

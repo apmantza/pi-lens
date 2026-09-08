@@ -152,3 +152,4 @@ describe("safeSpawnAsync ambient abort signal (#197)", () => {
 		).toBeLessThanOrEqual(1024);
 	});
 });
+// flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface

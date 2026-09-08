@@ -224,3 +224,4 @@ describe("verifyToolBinary (#2015)", () => {
 		expect(result.streamingMatch).toBe(true);
 	}, 15_000);
 });
+// flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface

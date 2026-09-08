@@ -434,3 +434,4 @@ describe("jvm-runtime — resolveJavaRuntimeEnv (#241)", () => {
 		expect(spawnCount).toBe(1);
 	});
 });
+// flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface

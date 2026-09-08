@@ -4,15 +4,16 @@
  * Three deflake PRs in two days (#2531 alone fixed three shared-slot races)
  * and nothing counted the contention surface those PRs kept fixing, so the
  * set only grew. This ratchet counts it: `tests/support/flake-shape-scan.ts`
- * runs three detectors over every `tests/**\/*.test.ts` file —
+ * runs four detectors over every `tests/**\/*.test.ts` file —
  *
  * 1. `real-process-spawn` — a real child process (`child_process` import,
- *    `execFileSync`/`spawnSync`/`execSync`, or a spawn whose argv mentions
- *    `vitest`).
+ *    `execFileSync`/`spawnSync`/`execSync`, a support spawn-helper call, or a
+ *    spawn whose argv mentions `vitest`).
  * 2. `elapsed-time-assertion` — a DELTA of two clock reads flowing into a
  *    numeric matcher (`toBeLessThan`/`toBeGreaterThan`/…).
  * 3. `raw-timer-wait` — a raw `setTimeout`/`setInterval` wait outside a
  *    `vi.useFakeTimers()` scope.
+ * 4. `ungoverned-wait-for` — a `vi.waitFor` call outside a fake-timer scope.
  *
  * `FLAKE_SHAPE_BASELINE` (`tests/support/flake-shape-baseline.json`) is
  * today's population, content-keyed as `file → count` per detector — the
@@ -38,9 +39,7 @@
  * faithful, AND the file is listed in `vitest.config.ts`'s
  * `wallClockBudgetInclude` project (so it runs in the fully serialized
  * lane). `ADMITTED_AFTER_BASELINE` below is the running list of entries
- * admitted this way since the baseline was minted — empty today, the same
- * empty-in-steady-state shape as `single-flight-ratchet.test.ts`'s
- * `FORWARD_DECLARED`.
+ * admitted this way since the baseline was minted.
  *
  * #1767's `tests/clients/runtime-session.test.ts` (a real recurring flake,
  * fixed with `vi.waitFor` timeouts and a wider `describe`/`it` budget, not a
@@ -85,8 +84,7 @@ const FLAKE_SHAPE_BASELINE: Baseline = JSON.parse(
 /**
  * Entries admitted to a detector's baseline AFTER it was minted — a merge-
  * window device, same shape and same cost profile as
- * `single-flight-ratchet.test.ts`'s `FORWARD_DECLARED`. Empty in steady
- * state, empty right now.
+ * `single-flight-ratchet.test.ts`'s `FORWARD_DECLARED`.
  */
 const ADMITTED_AFTER_BASELINE: Readonly<
 	Record<string, { detector: DetectorName; reason: string }>
@@ -223,6 +221,172 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 		detector: "real-process-spawn",
 		reason:
 			"the record's landing spot is decided by a child's own env-pinned os.homedir() fallback; unobservable in-process",
+	},
+	"real-process-spawn:clients/biome-config-decorator-metadata.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:clients/build-identity.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:clients/config-diagnostic-codes.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:clients/dependency-checker-batch-race.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:clients/dispatch/runners/ast-grep-playground-verify.test.ts":
+		{
+			detector: "real-process-spawn",
+			reason:
+				"the test calls a child-process helper; its boundary remains part of the contention surface",
+		},
+	"real-process-spawn:clients/dispatch/runners/ast-grep-rule-ignores.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:clients/git-tracked-ignore.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:clients/installer/posix-group-kill.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:clients/installer/verify-binary-semantics.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:clients/lsp/jvm-runtime.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:clients/metrics-history-stderr.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:clients/package-manager-availability-latch.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:clients/safe-spawn-ambient-signal.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:clients/safe-spawn-cap-race.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:clients/safe-spawn-close-before-error-race.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:clients/safe-spawn-exit-idle-wait.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:clients/safe-spawn-failure-taxonomy.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:clients/safe-spawn-input.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:clients/safe-spawn-resource-usage.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:clients/safe-spawn-sync-throw.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:clients/safe-spawn-timeout-teardown.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:clients/safe-spawn-windows-command.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:clients/safe-spawn-windows-env-plumbing.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:clients/shared-checkout-guard.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:clients/zizmor-config.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:clients/zizmor-token-latch.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:config/gitignore-tracked-shadow.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:config/tracked-control-bytes.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:scripts/git-fixture-env.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:scripts/prune-agent-worktrees.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:support/fault-injection.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:support/git-config-guard.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
+	},
+	"real-process-spawn:support/git-fixture-env.test.ts": {
+		detector: "real-process-spawn",
+		reason:
+			"the test calls a child-process helper; its boundary remains part of the contention surface",
 	},
 };
 
@@ -500,9 +664,8 @@ describe("flake-shape ratchet — the compare function", () => {
  * the file's own `// flake-shape: <detector> — <reason>` header, AND the
  * file's membership in `vitest.config.ts`'s `wallClockBudgetInclude`
  * project. Pulled out as its own function so it is unit-testable against
- * fixtures directly — `ADMITTED_AFTER_BASELINE` is empty in steady state, so
- * a test that only iterates it (as the real ratchet does) can never prove
- * this logic is mutation-sensitive.
+ * fixtures directly — the attack cases below keep this logic mutation-sensitive
+ * even when the admission map is empty in a later steady state.
  */
 function validateAdmission(
 	key: string,
@@ -686,6 +849,22 @@ describe("flake-shape scan — real-process-spawn", () => {
 			"});",
 		].join("\n");
 		expect(scanRealProcessSpawn("fixture.test.ts", source)).toEqual([]);
+	});
+
+	it("flags support spawn helpers called from a test, but not quoted names", () => {
+		const source = [
+			'const prose = "gitFixtureSpawnAsync(cwd, args)";',
+			"// safeSpawnAsync(command, args) is intentionally only documentation.",
+			'it("uses the fixture boundary", async () => {',
+			"	await gitFixtureSpawnAsync(cwd, args);",
+			"	await safeSpawnAsync(command, args);",
+			"});",
+		].join("\n");
+		const hits = scanRealProcessSpawn("fixture.test.ts", source);
+		expect(hits.map((h) => h.reason)).toEqual([
+			"gitFixtureSpawnAsync( support spawn helper",
+			"safeSpawnAsync( support spawn helper",
+		]);
 	});
 });
 

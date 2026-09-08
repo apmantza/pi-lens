@@ -207,3 +207,4 @@ describe("safeSpawnAsync post-exit pipe-idle wait (#1656)", () => {
 		expect(settled).toBe(true);
 	});
 });
+// flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface

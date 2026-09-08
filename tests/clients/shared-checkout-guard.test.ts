@@ -972,3 +972,4 @@ describe("a real ephemeral test fixture is never a shared checkout (#2345)", () 
 		}
 	});
 });
+// flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface

@@ -226,3 +226,4 @@ describe("Windows resolution honors the CALLER's env, not just ambient process.e
 		expect(spawnOptions.cwd).toBe("D:work");
 	});
 });
+// flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface

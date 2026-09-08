@@ -73,3 +73,4 @@ describe("safeSpawnAsync contains a synchronous spawn throw (#533)", () => {
 		expect(rejections).toEqual([]);
 	});
 });
+// flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface

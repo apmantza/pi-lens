@@ -400,3 +400,4 @@ describe("cooldown ladder stays under zizmor's own respawn cadence (#1535 P2)", 
 		expect(Math.max(...seen)).toBeGreaterThan(TRANSIENT_BASE_COOLDOWN_MS);
 	});
 });
+// flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface

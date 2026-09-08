@@ -205,3 +205,4 @@ describe("collectUntrackedIgnoredIds (#694)", () => {
 		}
 	});
 });
+// flake-shape: real-process-spawn — this test calls a child-process helper; its boundary remains part of the contention surface
