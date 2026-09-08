@@ -34,6 +34,7 @@ import {
 import { shouldPreferPullOnlyDiagnostics } from "../lsp-budget.js";
 import { sampleProcessTreeCpuPercent } from "../resource-sampler.js";
 import { bounded, withDeadline, withTimeout } from "../deadline-utils.js";
+import { HOOK_WALL_BUDGET_MS } from "../hook-budgets.js";
 import type { LedgerHookKey } from "../hook-budgets.js";
 import { getAmbientAbortSignal } from "../safe-spawn.js";
 import { abortDeferredLspWork } from "../deferred-lsp-work.js";
@@ -1471,6 +1472,8 @@ export class LSPService {
 	private clientSpawnGate: Promise<void> = Promise.resolve();
 	/** True after shutdown() has been called; blocks new operations */
 	private isDestroyed = false;
+	/** Aborts bounded in-flight service work when this generation is retired. */
+	private readonly shutdownController = new AbortController();
 	/**
 	 * #850: teardown completion for every singleton generation retired before
 	 * this service was published. Only replacement services receive one; direct
@@ -5301,23 +5304,43 @@ export class LSPService {
 					spawned.some((e) => e.info.role === "auxiliary");
 				if (spawned.some((entry) => entry.info.custom === true)) {
 					try {
-						const snapshots = await this.getCapabilitySnapshots(filePath);
-						diagnosticsUnsupportedServerIds = spawned
-							.filter(
-								(entry) =>
-									classifyServerWaitTier(
-										entry.info.id,
-										snapshots.find((s) => s.serverId === entry.info.id),
-									) === "diagnostics-unsupported",
-							)
-							.map((entry) => entry.info.id);
-						for (const serverId of diagnosticsUnsupportedServerIds) {
-							recordDegradationOnce({
-								kind: "lsp-diagnostics-unsupported",
-								subject: serverId,
-								reason:
-									"custom server has no pull provider and no publish evidence in this session",
-							});
+						const snapshotHook = options.hook ?? "tool_result_edit";
+						const snapshotBudget = Object.hasOwn(
+							HOOK_WALL_BUDGET_MS,
+							snapshotHook,
+						)
+							? HOOK_WALL_BUDGET_MS[
+									snapshotHook as keyof typeof HOOK_WALL_BUDGET_MS
+								]
+							: HOOK_WALL_BUDGET_MS.tool_result_edit;
+						const snapshots = await bounded(
+							this.getCapabilitySnapshots(filePath),
+							{
+								ms: snapshotBudget,
+								signal: getAmbientAbortSignal(),
+								shutdownSignal: this.shutdownController.signal,
+								hook: snapshotHook,
+								label: `getCapabilitySnapshots:${filePath}`,
+							},
+						);
+						if (snapshots !== undefined) {
+							diagnosticsUnsupportedServerIds = spawned
+								.filter(
+									(entry) =>
+										classifyServerWaitTier(
+											entry.info.id,
+											snapshots.find((s) => s.serverId === entry.info.id),
+										) === "diagnostics-unsupported",
+								)
+								.map((entry) => entry.info.id);
+							for (const serverId of diagnosticsUnsupportedServerIds) {
+								recordDegradationOnce({
+									kind: "lsp-diagnostics-unsupported",
+									subject: serverId,
+									reason:
+										"custom server has no pull provider and no publish evidence in this session",
+								});
+							}
 						}
 					} catch {
 						// Capability uncertainty fails closed and retains the wait.
@@ -5895,11 +5918,7 @@ export class LSPService {
 						(entry) => entry.info.role !== "auxiliary",
 					);
 					diagnosticsTimedOut =
-						(!hasWaitedPrimary &&
-							diagnosticsUnsupportedServerIds.length > 0 &&
-							diagnosticsUnsupportedServerIds.every((id) =>
-								primaryServerIds.has(id),
-							)) ||
+						!hasWaitedPrimary ||
 						diagnosticsUnansweredPrimaryServerIds.length > 0;
 					for (const entry of unanswered) {
 						incrementDegradationCount({
@@ -9443,6 +9462,7 @@ export class LSPService {
 		const resetStartedAt = Date.now();
 		if (this.checkDestroyed()) return;
 		this.isDestroyed = true;
+		this.shutdownController.abort();
 		for (const [key, token] of this.outstandingAuxNotifyWrites) {
 			this.releaseOutstandingAuxNotifyWrite(key, token);
 		}

@@ -66,12 +66,13 @@ function makeFakeProcess() {
 	};
 }
 
-function makeServer(id: string, role?: "auxiliary") {
+function makeServer(id: string, role?: "auxiliary", custom = false) {
 	return {
 		id,
 		name: id,
 		extensions: [".ts"],
 		...(role && { role }),
+		...(custom && { custom }),
 		root: async () => "C:/repo",
 		spawn: vi.fn(async () => ({ process: makeFakeProcess(), source: "test" })),
 	};
@@ -113,6 +114,7 @@ function makeClient(
 	diags: ReturnType<typeof makeDiagnostic>[] = [],
 	options: {
 		serverId: string;
+		customServer?: boolean;
 		publishesWhenClean?: boolean;
 		/**
 		 * Model a write that never lands (stalled stdin / backpressure), from the
@@ -151,6 +153,7 @@ function makeClient(
 		getRawCapabilityKeys: () => [],
 		getLaunchVariant: () => undefined,
 		serverId: options.serverId,
+		customServer: options.customServer === true,
 		root: "C:/repo",
 		get diagnosticsVersion() {
 			return version;
@@ -259,8 +262,18 @@ async function mountService(clients: {
 	const service = new LSPService();
 	const auxClients = Array.isArray(clients.aux) ? clients.aux : [clients.aux];
 	getServersForFileWithConfig.mockReturnValue([
-		...(clients.primary ? [makeServer("ts-primary")] : []),
-		...auxClients.map((client) => makeServer(client.serverId, "auxiliary")),
+		...(clients.primary
+			? [
+					makeServer(
+						clients.primary.serverId,
+						undefined,
+						clients.primary.customServer,
+					),
+				]
+			: []),
+		...auxClients.map((client) =>
+			makeServer(client.serverId, "auxiliary", client.customServer),
+		),
 	]);
 	createLSPClient.mockImplementation(
 		async (options: { serverId?: string }) =>
@@ -564,6 +577,26 @@ describe("#1549 — per-server touch verdict", () => {
 		expect(result?.confirmation).toBeUndefined();
 		// Nobody to attribute it to: the verdict stands on the flag, honestly
 		// unattributed, rather than blaming an auxiliary it never blames elsewhere.
+		expect(result?.inconclusiveServerIds).toBeUndefined();
+		expect(result?.inconclusiveReason).toBe("diagnostics-wait");
+	});
+
+	it("keeps a primary navigation-only server inconclusive beside an answered auxiliary", async () => {
+		// A navigation-only primary is excluded from the diagnostics wait. The
+		// auxiliary can answer, but its evidence cannot become a primary verdict.
+		const service = await mountService({
+			primary: makeClient(100, [], {
+				serverId: "nav-primary",
+				customServer: true,
+			}),
+			aux: makeClient(5000, [makeDiagnostic("scanner finding")], {
+				serverId: "opengrep",
+			}),
+		});
+		const result = await touchOnce(service);
+
+		expect(result?.inconclusive).toBe(true);
+		expect(result?.confirmation).toBeUndefined();
 		expect(result?.inconclusiveServerIds).toBeUndefined();
 		expect(result?.inconclusiveReason).toBe("diagnostics-wait");
 	});

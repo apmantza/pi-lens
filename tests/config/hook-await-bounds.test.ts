@@ -2304,6 +2304,11 @@ const BOUNDED_CALL_SITES: Readonly<Record<string, string>> = {
 		"returns, so no live turn signal belongs to this background refresh. The " +
 		"session_start wall budget still bounds the best-effort alias stamp, and " +
 		"the required signal field makes this absence an explicit decision.",
+	"call:clients/lsp/index.ts#4da1e4ca~3228bbca":
+		"`getAmbientAbortSignal()` carries the active turn abort when touchFile runs " +
+		"inside a hook and is absent only in a bare unit harness. The LSP service's " +
+		"shutdown signal supplies the second live bound for retired generations; the " +
+		"hook budget remains live in either case.",
 	"call:clients/lsp/index.ts#55b587e6~3997fa51":
 		"`signal` parameter, defaulting to `getAmbientAbortSignal()`. Caller-supplied " +
 		"on the pre-dispatch resync path (passing the turn's ambient signal so Escape mid-turn " +
