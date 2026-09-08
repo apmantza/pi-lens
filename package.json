@@ -33,6 +33,7 @@
 		"test:integration": "node scripts/with-test-lock.mjs -- vitest run tests/index-integration.test.ts tests/clients/lsp/integration.test.ts",
 		"test:targeted": "node scripts/with-test-lock.mjs --shared -- vitest run",
 		"test:watch": "vitest",
+		"mutation:diff": "node scripts/stryker-diff.mjs --base origin/master",
 		"hygiene": "node scripts/prune-agent-worktrees.mjs",
 		"check": "node scripts/check-extensions.mjs",
 		"selftest:install": "node scripts/install-selftest.mjs",

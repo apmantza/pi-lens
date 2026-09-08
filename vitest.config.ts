@@ -17,6 +17,9 @@ const sharedExclude = [
 	"**/node_modules/**",
 	"**/dist/**",
 	"**/.{git,cache,output,temp}/**",
+	// Stryker keeps in-place backups and sandboxes under the project (#2758).
+	"**/.stryker-tmp/**",
+	"**/.stryker/**",
 	"**/.claude/**",
 	// Fixture projects carry *.test.ts files that belong to the FIXTURE's own
 	// toolchain (e.g. the native-TS7/Vitest fixture the live integration suite

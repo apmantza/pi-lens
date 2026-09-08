@@ -1,37 +1,36 @@
 /**
- * Incremental mutation spike for changed production files (#1844 item 1).
- * TypeScript is mutated because this repository's build emits the runtime JS.
+ * Incremental mutation spike for changed script files (#1844 item 1).
+ *
+ * The command runner receives the related-test list from scripts/stryker-diff.mjs
+ * through a generated config override. Command runner has no per-test coverage
+ * analysis, so every related test file runs for every mutant.
  */
 export default {
-	buildCommand: "npm run build",
-	testRunner: "vitest",
-	// inPlace: the sandbox copy runs Stryker's tsconfig preprocessor, which
-	// calls ts.parseConfigFileTextToJson — absent from the TypeScript 7
-	// native API this repo pins (2026-09-08 spike). In-place mutation with
-	// the buildCommand keeps the compiled runtime in sync per mutant.
+	// inPlace: Stryker's sandbox copy runs a tsconfig preprocessor that calls
+	// ts.parseConfigFileTextToJson, which the TypeScript 7 native API this
+	// repo pins does not export (spike 2026-09-08/09); mutating in place
+	// skips that preprocessor. The command runner restores files after each
+	// mutant.
 	inPlace: true,
-	// Explicit plugin list: the default `@stryker-mutator/*` glob does not
-	// follow a symlinked node_modules (plegma worktrees link the main
-	// checkout's tree), so the runner was "not found" (2026-09-08 spike).
-	plugins: ["@stryker-mutator/vitest-runner"],
-	vitest: { related: true, configFile: "vitest.config.ts", pool: "forks" },
-	mutate: [
-		"clients/**/*.ts",
-		"scripts/**/*.mjs",
-		"!**/tests/**",
-		"!**/fixtures/**",
-		"!**/*.d.ts",
-		"!**/*.d.mts",
-		"!**/*.js",
-	],
-	coverageAnalysis: "perTest",
+	// buildCommand runs once after instrumentation, before the dry run: the
+	// in-place sandbox reset drops the compiled .js siblings the
+	// tests execute, and vitest then reports "No test files found" (spike
+	// 2026-09-09). The mutated .mjs scripts run directly, so no per-mutant
+	// rebuild is needed.
+	buildCommand: "npm run build",
+	testRunner: "command",
+	commandRunner: {
+		command: "node_modules/.bin/vitest run --configLoader runner",
+	},
+	mutate: ["scripts/**/*.mjs", "!scripts/**/*.test.mjs"],
 	incremental: true,
 	incrementalFile: ".stryker/incremental.json",
+	coverageAnalysis: "off",
 	concurrency: 2,
-	timeoutMS: 10000,
-	timeoutFactor: 2,
-	ignoreStatic: true,
-	disableTypeChecks: "{clients,scripts}/**/*.{ts,mjs}",
+	// A cold Vitest process is allowed one minute. Stryker gives mutants 1.5x
+	// the measured baseline before treating the command as hung.
+	timeoutMS: 60000,
+	timeoutFactor: 1.5,
 	reporters: ["clear-text", "json", "html"],
 	jsonReporter: { fileName: "reports/mutation/mutation.json" },
 	htmlReporter: { fileName: "reports/mutation/mutation.html" },

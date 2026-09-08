@@ -1,36 +1,69 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { isProductionMutationFile } from "./lib/stryker-diff.mjs";
+import { mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { mapRelatedTests, isScriptMutationFile } from "./lib/stryker-diff.mjs";
 
 const baseIndex = process.argv.indexOf("--base");
 const base = baseIndex >= 0 ? process.argv[baseIndex + 1] : "origin/master";
-let files;
-try {
-	files = execFileSync(
-		"git",
-		["diff", "--name-only", "--diff-filter=AM", `${base}...HEAD`],
-		{ encoding: "utf8" },
-	)
-		.split("\n")
-		.map((file) => file.trim())
-		.filter(Boolean)
-		.filter(isProductionMutationFile);
-} catch (error) {
-	console.error(
-		`mutation diff: could not read ${base}...HEAD: ${error.message}`,
-	);
-	process.exit(1);
+
+function changedScriptFiles() {
+	try {
+		return execFileSync(
+			"git",
+			["diff", "--name-only", "--diff-filter=AM", `${base}...HEAD`],
+			{ encoding: "utf8" },
+		)
+			.split("\n")
+			.map((file) => file.trim())
+			.filter(Boolean)
+			.filter(isScriptMutationFile);
+	} catch (error) {
+		console.error(
+			`mutation diff: could not read ${base}...HEAD: ${error.message}`,
+		);
+		process.exit(1);
+	}
 }
 
+function shellQuote(value) {
+	return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function writeRunConfig(testFiles) {
+	mkdirSync(".stryker", { recursive: true });
+	const command = [
+		"node_modules/.bin/vitest",
+		"run",
+		"--configLoader",
+		"runner",
+		...testFiles.map(shellQuote),
+	].join(" ");
+	const config = `import base from "../stryker.config.mjs";\nexport default { ...base, commandRunner: { ...base.commandRunner, command: ${JSON.stringify(command)} } };\n`;
+	const file = ".stryker/diff.config.mjs";
+	writeFileSync(file, config);
+	return file;
+}
+
+const files = changedScriptFiles();
 if (files.length === 0) {
-	console.log("mutation diff: no changed production files");
+	console.log("mutation diff: no changed scripts/**/*.mjs files");
 	process.exit(0);
 }
 
-console.log(`mutation diff: ${files.join(", ")}`);
+const { covered, uncovered, tests } = mapRelatedTests(files);
+for (const file of uncovered) {
+	console.log(`mutation diff: no covering test for ${file}`);
+}
+if (covered.length === 0) {
+	console.log("mutation diff: no covered changed scripts; no mutants run");
+	process.exit(0);
+}
+
+const configFile = writeRunConfig(tests);
+console.log(`mutation diff: mutating ${covered.join(", ")}`);
+console.log(`mutation diff: running related tests ${tests.join(", ")}`);
 const result = spawnSync(
 	"node_modules/.bin/stryker",
-	["run", "--mutate", files.join(",")],
+	["run", "--mutate", covered.join(","), configFile],
 	{ stdio: "inherit", encoding: "utf8" },
 );
 
@@ -50,25 +83,22 @@ if (!existsSync(reportPath)) {
 
 try {
 	const report = JSON.parse(readFileSync(reportPath, "utf8"));
-	const mutants = Object.values(report.files ?? {}).flatMap(
-		(file) => file.mutants ?? [],
+	// The mutation-report schema keys mutants by file; the entries themselves
+	// carry no file name (spike 2026-09-09 printed `survived: undefined:59`).
+	const mutants = Object.entries(report.files ?? {}).flatMap(
+		([fileName, file]) =>
+			(file.mutants ?? []).map((mutant) => ({ ...mutant, fileName })),
 	);
 	const counts = mutants.reduce((out, mutant) => {
 		out[mutant.status] = (out[mutant.status] ?? 0) + 1;
 		return out;
 	}, {});
-	const score = report.schemaVersion
-		? report.mutationTestResults?.score ?? "n/a"
-		: "n/a";
+	const score = report.mutationTestResults?.score ?? "n/a";
 	console.log(`mutation diff score: ${score}`);
 	console.log(`mutation diff counts: ${JSON.stringify(counts)}`);
-	for (const mutant of mutants.filter(
-		(entry) => entry.status === "Survived",
-	)) {
+	for (const mutant of mutants.filter((entry) => entry.status === "Survived")) {
 		const line = mutant.location?.start?.line ?? "?";
-		console.log(
-			`survived: ${mutant.fileName}:${line} ${mutant.mutatorName}`,
-		);
+		console.log(`survived: ${mutant.fileName}:${line} ${mutant.mutatorName}`);
 	}
 } catch (error) {
 	console.error(`mutation diff: report unreadable: ${error.message}`);
@@ -76,4 +106,3 @@ try {
 }
 
 console.log("mutation diff: completed");
-process.exit(0);
