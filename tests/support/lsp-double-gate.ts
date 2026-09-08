@@ -140,7 +140,7 @@ export function lspServiceMethodNames(): ReadonlySet<string> {
 }
 
 /** Indirection hops the resolver will follow before giving up. */
-export const MAX_RESOLUTION_DEPTH = 8;
+const MAX_RESOLUTION_DEPTH = 8;
 
 const FACTORY = "makeLspServiceDouble";
 const FACTORY_CALL = /\bmakeLspServiceDouble\s*\(/;

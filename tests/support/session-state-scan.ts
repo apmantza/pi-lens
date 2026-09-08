@@ -720,6 +720,3 @@ export function scanSessionStateCandidates(
 	if (useCache) cachedCandidates = found;
 	return found;
 }
-
-/** A scanned file the registry deliberately does not cover, and why. */
-export type SessionStateExemption = string;

@@ -118,7 +118,7 @@ export { escapeRegExp } from "../../clients/string-utils.js";
 // ── 1. Source scanning ──────────────────────────────────────────────────────
 
 /** What {@link stripSource} does with string and template literal CONTENTS. */
-export type StringPolicy =
+type StringPolicy =
 	/**
 	 * Blank string/template contents along with comments (delimiters kept).
 	 * Use when a bare identifier inside a string must not read as code — the
@@ -532,7 +532,7 @@ export function stableOccurrenceKey(
  * ({@link RegistryAuditInput.requireUniqueFlagged}) can name each colliding
  * occurrence by its own detail rather than repeating the shared key.
  */
-export type FlaggedEntry = string | { key: string; detail: string };
+type FlaggedEntry = string | { key: string; detail: string };
 
 export interface RegistryAuditInput {
 	/** Sweep name, used in every composed message. */
@@ -998,7 +998,7 @@ export function hasNearbyCallSite(
 }
 
 /** Window defaults lifted from #1692's shipped form. */
-export const DEFAULT_EVIDENCE_WINDOW = {
+const DEFAULT_EVIDENCE_WINDOW = {
 	back: 150,
 	forward: 10,
 	calleeProximity: 3,

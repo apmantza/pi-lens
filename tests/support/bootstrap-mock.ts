@@ -34,7 +34,7 @@
  */
 
 /** The options `requestBootstrapClients` is called with in production. */
-export interface BootstrapDemandOptions {
+interface BootstrapDemandOptions {
 	reason: string;
 	signal?: AbortSignal;
 	timeoutMs?: number;

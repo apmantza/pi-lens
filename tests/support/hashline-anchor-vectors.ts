@@ -19,7 +19,7 @@ import * as path from "node:path";
  *    a module-resolution error when the module is absent, which is a much
  *    weaker red-first proof than an assertion failure.
  */
-export interface HashlineAnchorVectors {
+interface HashlineAnchorVectors {
 	upstream: {
 		repo: string;
 		branch: string;
@@ -50,7 +50,7 @@ export interface HashlineStoreCarried {
 
 let cached: HashlineAnchorVectors | undefined;
 
-export function loadHashlineAnchorVectors(): HashlineAnchorVectors {
+function loadHashlineAnchorVectors(): HashlineAnchorVectors {
 	if (cached) return cached;
 	cached = JSON.parse(
 		fs.readFileSync(

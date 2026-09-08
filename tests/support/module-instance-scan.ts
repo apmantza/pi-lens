@@ -48,7 +48,7 @@ export interface DualInstanceImport {
  * rather than restated here: its `exclude` list is the single source of truth
  * for what has no compiled `.js` twin (and therefore no hazard).
  */
-export function uncompiledRoots(): string[] {
+function uncompiledRoots(): string[] {
 	const config = JSON.parse(
 		fs.readFileSync(path.join(repoRoot, "tsconfig.build.json"), "utf8"),
 	) as { exclude?: unknown };
@@ -60,7 +60,7 @@ export function uncompiledRoots(): string[] {
 }
 
 /** True when the build emits a sibling `.js` for this repo-relative path. */
-export function isBuildCompiled(target: string, excluded: string[]): boolean {
+function isBuildCompiled(target: string, excluded: string[]): boolean {
 	if (target.startsWith("../") || path.isAbsolute(target)) return false;
 	if (!/\.(?:ts|mts|cts|tsx)$/.test(target)) return false;
 	if (/\.d\.(?:ts|mts|cts)$/.test(target)) return false;

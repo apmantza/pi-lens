@@ -161,13 +161,10 @@ import {
  * reset" are indistinguishable from the outside, and that ambiguity is the
  * whole defect class.
  */
-export type SessionResetPolicy =
-	| "session_start"
-	| "turn_end"
-	| "process_lifetime";
+type SessionResetPolicy = "session_start" | "turn_end" | "process_lifetime";
 
 /** Arm the state, then check whether it is back in its post-reset shape. */
-export interface SessionStateProbe {
+interface SessionStateProbe {
 	/** Put the state into a dirty, definitely-not-reset condition. */
 	arm(): void;
 	/** True when the state is in its initial, re-armed condition. */

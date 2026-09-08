@@ -17,13 +17,13 @@ import type {
 	ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 
-export interface RecordedFlag {
+interface RecordedFlag {
 	description?: string;
 	type: "boolean" | "string";
 	default?: boolean | string;
 }
 
-export interface RecordedCommand {
+interface RecordedCommand {
 	description?: string;
 	handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> | void;
 	getArgumentCompletions?: unknown;
@@ -33,19 +33,19 @@ export interface RecordedCommand {
 type Hook = (event: unknown, ctx: unknown) => unknown;
 
 /** A `ui.notify(...)` call captured for assertions. */
-export interface CapturedNotification {
+interface CapturedNotification {
 	message: string;
 	type: "info" | "warning" | "error";
 }
 
 /** A `ui.setStatus(...)` call captured for assertions. */
-export interface CapturedStatus {
+interface CapturedStatus {
 	key: string;
 	text: string | undefined;
 }
 
 /** A `ui.setWidget(...)` call captured for assertions. */
-export interface CapturedWidget {
+interface CapturedWidget {
 	key: string;
 	content: unknown;
 	options: unknown;
@@ -61,7 +61,7 @@ export interface MockCtx extends ExtensionCommandContext {
 }
 
 /** A `pi.sendMessage(...)` call captured for assertions (#484). */
-export interface CapturedMessage {
+interface CapturedMessage {
 	customType: string;
 	content: unknown;
 	display: boolean;

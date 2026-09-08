@@ -81,9 +81,7 @@ export const TOPOLOGY_OWNER = "workspace-topology.ts";
  * latter's export set, so a consumer importing it from workspace-topology
  * (a mistake) would not be falsely governed by the wrong module.
  */
-export const GOVERNED_PROBES_BY_MODULE: Readonly<
-	Record<string, readonly string[]>
-> = {
+const GOVERNED_PROBES_BY_MODULE: Readonly<Record<string, readonly string[]>> = {
 	"workspace-topology.js": [
 		"getDirectoryMarkers",
 		"findNearestDirWithMarker",
@@ -105,7 +103,7 @@ export const TOPOLOGY_PROBE_SEAMS: readonly string[] = Object.values(
 const REGISTER_CALL = /\bregisterWorkspaceTopologyReset\(/;
 
 /** Every `.ts` file under `dir` (default `clients/`), minus declarations. */
-export function topologyScanSourceFiles(dir = CLIENTS_ROOT): string[] {
+function topologyScanSourceFiles(dir = CLIENTS_ROOT): string[] {
 	return listSourceFiles(dir, { extensions: [".ts"], skipTests: true });
 }
 
@@ -155,7 +153,7 @@ function canonicalModuleForSpec(
 	return undefined;
 }
 
-export interface TopologyImport {
+interface TopologyImport {
 	/** The governed probe(s) that entered scope through this import. */
 	probes: string[];
 	/** 1-based line of the import statement. */
@@ -164,7 +162,7 @@ export interface TopologyImport {
 	namespace: boolean;
 }
 
-export interface ScanGovernedImportsOptions {
+interface ScanGovernedImportsOptions {
 	/** Absolute path of the source file containing the import declarations. */
 	sourceFilePath: string;
 	/** Directory containing the canonical governed source modules. */
@@ -180,7 +178,7 @@ export interface ScanGovernedImportsOptions {
  * canonical module contribute that module's full probe set, and type-only
  * imports contribute nothing because they cannot feed runtime state.
  */
-export function scanGovernedImports(
+function scanGovernedImports(
 	source: string,
 	options: ScanGovernedImportsOptions,
 ): TopologyImport[] {
