@@ -1,5 +1,0 @@
----
-section: Fixed
----
-
-- **yamllint, ruff, spellcheck, psscriptanalyzer, oxlint, and shellcheck now lint from the project's cwd, not the extension host's (closes #2691)** — six dispatch runners already computed `ctx.cwd` for their availability probe and config-detection helper, then spawned the actual lint/analysis process without passing that same `cwd`. yamllint's config discovery walks upward from the process's cwd, so it could silently pick up the wrong `.yamllint` (or none) when the extension host's own working directory differed from the project being linted; the other five get the same `cwd` for consistency with their probes, and typos additionally resolves any `extend-exclude` patterns against it. A new sweep over every `safeSpawnAsync`/`safeSpawnSync` call site under `clients/dispatch/runners/*.ts` — including spawns routed through a same-file helper, which is checked at the helper's own call sites — fails by file:line on any that omit `cwd`, so the next tool with this shape can't slip through a symbol-only check the way this one did for five runners after #1731 fixed sqlfluff.

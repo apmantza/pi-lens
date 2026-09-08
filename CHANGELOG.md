@@ -16,6 +16,90 @@ All notable changes to pi-lens will be documented in this file.
 
 ### Security
 
+## [4.1.5] - 2026-09-08
+
+### Added
+
+- **Dogfood knip on pi-lens's own source (closes #2698)** — `knip.jsonc` now resolves the compiled-sibling layout (`clients/*.js` sitting gitignored beside `clients/*.ts` after `npm run build`) that previously made knip report 491 source files "unused"; `npm run knip` (advisory in `lint.yml`, `continue-on-error`) purges those build artifacts before every run, declares the real `mcp/`/`scripts/` entry points, and documents each dependency/binary/file exemption it needed (husky, `@biomejs/biome`, `typescript-language-server`, `markdownlint-cli2`, two parked/dynamically-loaded files) with the reason knip can't see the usage on its own.
+
+- **`PreToolUse` Bash guard hook for the fixer/reviewer non-negotiables (closes #2699)** — `scripts/hooks/guard-bash.mjs`, registered in `.claude/settings.json` on the Bash tool via `${CLAUDE_PROJECT_DIR}`, mechanically denies `git stash` in any form, `git reset --soft origin/<branch>` / `--hard`, a hand-typed `git worktree remove` with two force flags, and an unpinned `node` probe that loads runtime code from `clients/`/`dist/` with no `PI_LENS_HOME` — the same rules a fixer ran afoul of by hand on 2026-09-07 and 2026-09-02. Command text is read by a single region pass that subtracts what bash cannot execute (comments, and heredoc bodies — a PR description, an issue comment, a written file) before anything is tokenized, so a forbidden command *mentioned* in a document is never mistaken for one being run; a heredoc body with an unquoted delimiter still has its `$( )`/backtick substitutions scanned, because bash does expand those. Never blocks the tool on its own failure: malformed or missing stdin degrades to allow.
+
+- **Add per-analyzer `knip.enabled`, `jscpd.enabled`, `madge.enabled`, `gitleaks.enabled`, `govulncheck.enabled`, `deadCode.enabled`, and `complexity.enabled` keys plus `startup.mode` and `startup.scans.enabled` controls (refs #2721)** — project and global configuration can disable startup analyzers or heavyweight startup scans while preserving diagnostics and LSP.
+
+### Changed
+
+- **Nightly tracking-issue updates share one reusable CLI (closes #2683)** — compat-smoke, install-smoke, and clean-signal drift use one exact-title issue seam that fails loudly on a GitHub error and searches beyond the first page; both smoke workflows now auto-close their tracker on a clean run.
+
+- **oxlint advisory tier (categories, plugins, type-aware) and publint on the packed tarball (refs #2700, refs #2697)** — `npm run lint:js` (gating) additionally denies 32 individually-named rules from the `suspicious`/`perf` categories and the `import`/`promise`/`typescript`/`unicorn`/`oxc` plugins that produce zero findings on master today. A new `npm run lint:js:advisory` runs the full intended set — categories `correctness`+`suspicious`+`perf`, plugins `typescript`+`unicorn`+`promise`+`import`+`oxc`, and `--type-aware` (paired `oxlint-tsgolint@7.0.2001` devDependency, per oxlint 1.80.0's own `peerDependencies` pin) — over the whole repo including tests, with eight rules policy-allowed for named reasons (four are overwhelming test-tree noise, four are documented false positives on deliberate patterns: a `void`-ignored promise in a callback, an explicit `.call(bus, …)` this-binding, a side-effect import, and an AbortSignal property poll). It runs as a new `oxlint (advisory)` job in `lint.yml`, classified advisory by the repo's `(advisory)` name-suffix convention (no `continue-on-error`) — the job's own conclusion is green whenever the type-aware sweep actually ran (a rule-count floor guards against a silently-degraded `oxlint-tsgolint` peer) regardless of how many un-triaged findings it reports, and red only on that degradation. A governance test resolves both scripts' real enabled-rule sets via oxlint's own `--print-config` and asserts the gating set stays a subset of the advisory set.
+
+  `ci.yml`'s `prod-install-build` job now packs the built package (`npm pack`) and runs `publint` on the tarball (gating) — the check #2587's manifest regression was missing. `attw` (arethetypeswrong) is not added: the package ships no `.d.ts` at all, so there is nothing for it to grade; `docs/release-qa-baseline.md` records both facts under the `npm-pack` modality.
+
+- **Internal: 295 unused exports, 235 unused exported types and 4 duplicate exports removed, with the 85 declarations that became dead (refs #2708)** — no user-facing behaviour changes; the public entry points, the MCP server and every script keep their exports. Found by knip with tests counted as entry points, so nothing a test imports was touched.
+
+- **knip advisory job green: the last three unused test-support exports are private, the dead `scripts/hooks/**/*.ts` entry pattern is gone, and the path-spawned `jscpd` devDependency is credited (closes #2708)** — `testSourceFiles`, `testsRelative` and `SCAN_INFRASTRUCTURE` in `tests/support/flake-shape-scan.ts` had no importer after #2749; the hooks are `.mjs`, so the `.ts` entry pattern matched nothing.
+
+- **Cleared 51 of the 54 knip rows (23 of the 26 unused test exports; the 3 flake-shape rows stay for #2742) and 28 unused exported test types (refs #2708)** — test-support APIs are now private where their consumers are local, while the packaging workflow's pinned `publint` dependency remains declared and documented to Knip.
+
+- **Advisory CI adds jscpd, yamllint, typos, and taplo (refs #2706)** — pinned tooling jobs make duplication, YAML style, spelling, and TOML checks visible without blocking the merge train.
+
+- **Delegated-worker contract: handoff files for workers without Git authority (refs #2733, #2721)** — `docs/pi-lens-subagent.md` and the AGENTS.md role-contract section now name the `PR_BODY.md` / `COMMIT_MSG.txt` worktree-root handoff the orchestrator commits from, and the sandbox test incantation (`--configLoader runner`, offline grammar prefetch) that plegma codex workers need.
+
+- **Reviewer contract diffs from the merge base** — two reviews this week reported another lane's merge in reverse as a HIGH regression because they diffed two-dot against a newer `origin/master`; the contract now names the three-dot form.
+
+### Fixed
+
+- Keep admission registry ordering checks mutation-sensitive.
+
+- **Turn-end session test doubles use the shared runner-error predicate (closes #2673)** — partial runner errors with `failed === 0` now exercise the same classification as production instead of requiring `passed === 0` in four local `formatResult` doubles.
+
+- **yamllint, ruff, spellcheck, psscriptanalyzer, oxlint, and shellcheck now lint from the project's cwd, not the extension host's (closes #2691)** — six dispatch runners already computed `ctx.cwd` for their availability probe and config-detection helper, then spawned the actual lint/analysis process without passing that same `cwd`. yamllint's config discovery walks upward from the process's cwd, so it could silently pick up the wrong `.yamllint` (or none) when the extension host's own working directory differed from the project being linted; the other five get the same `cwd` for consistency with their probes, and typos additionally resolves any `extend-exclude` patterns against it. A new sweep over every `safeSpawnAsync`/`safeSpawnSync` call site under `clients/dispatch/runners/*.ts` — including spawns routed through a same-file helper, which is checked at the helper's own call sites — fails by file:line on any that omit `cwd`, so the next tool with this shape can't slip through a symbol-only check the way this one did for five runners after #1731 fixed sqlfluff.
+
+- **Call-site sweeps now share the AST-backed `sweep-kit.callSites` seam (refs #2694)** — runner cwd and real-process detectors no longer hand-roll balanced-parenthesis scans, so nested syntax, comments, and strings cannot change a call's boundaries.
+
+- **The sweep-floor meta-sweep now matches floor calls over comment- and string-blanked source (closes #2710)** — the meta-sweep registered a test file as floor-covered whenever `/assertNonEmptyScan\s*\(/` or the `auditRegistry({…minScanned…})` pattern matched its raw source, so a docblock merely quoting the helper name excused a sweep that made no real floor call (AGENTS.md shape 38; the same raw-vs-blanked mismatch #2693 round 2 F1 fixed in the runner-spawn-cwd sweep). Registration now runs through `stripSource`, and fixture tests pin that a prose-only mention is reported uncovered while a real call still registers.
+
+- **PHP LSP (intelephense) now installs (closes #2722)** — the managed installer verified every npm tool by spawning `--version`, and intelephense has no CLI: it prints ~4 MB of bundled source before the "connection input stream is not set" line that proves it is a healthy stdio server, and Node drops everything past 1 MiB of a piped stderr, so that proof never reached pi-lens and the installer deleted the package it had just installed — every time, since 2026-04-17. A managed npm server can now declare that it is verified from the installed tree instead (package manifest + entry module on disk, no spawn at all), which intelephense does; and for every tool still verified by spawning, a probe that ran out of readable output before it could decide now keeps the installation when the installed tree is intact (an incomplete tree is still cleaned up so the next install can repair it) instead of treating "cannot tell" as "broken".
+
+- **Custom LSP servers that never publish diagnostics are navigation-only, not timed out (closes #2765)** — a custom server with no pull-diagnostics provider gets one bounded first-contact push wait per session; silence for the full push budget latches it navigation-only (no wait on later files, a distinct summary bucket, never counted clean), a publish latches it push-capable, concurrent first touches share the one probe, and a hook-deadline cutoff stays unconfirmed instead of latching; a rejected or shutdown-aborted shared probe fails closed for every waiting touch, clears its single-flight entry and is retried without latching.
+
+- **Read-guard exemption globs and the file-utils directory glob no longer backtrack on adjacent wildcards (closes #2622)** — runs of adjacent `*` are collapsed to one before compiling, which is semantically identical for the `*`-only dialect and removes the measured backtracking (a 12-star pattern against a 40-component path took >15 s before the fix and ~2 ms after it); a differential corpus pins both matchers' answers unchanged.
+
+- **The install-time warm-loader log now honors `PI_LENS_HOME` (closes #2628)** — agent-worktree installs no longer write `warm_loader_cache` records to the maintainer's real `~/.pi-lens/install.log` when the worktree home is pinned.
+
+- Require title close keywords to be repeated in the PR body, preventing the four 2026-09-06 incidents including #2610's merge commit from appearing to close issues that GitHub left open.
+
+- **The flake-shape ratchet now sees child processes routed through test support helpers (refs #2653)** — code-channel calls to `gitFixtureSpawnAsync`, `safeSpawnAsync`, and the other support helpers that reach `node:child_process` now join the real-process census.
+
+- **Managed npm refreshes deduplicate shared packages (closes #2666)** — one package update now covers every registered tool id that shares its package, preserving refresh budget slots for other packages.
+
+- **Hold the merge train for unconcluded gating checks (closes #2679)** — Keep approved PRs pending until every non-advisory check reaches a terminal conclusion.
+
+- **`scripts/npm-retry.mjs` annotates `infra: registry unreachable` only for network-shaped failures (closes #2684)** — a deterministic npm failure (`ERESOLVE`, `E404`, `EINTEGRITY`, `ETARGET`) now stops after one attempt with a plain "failed after N attempt(s)" line and the exit code preserved, while timeouts, spawn errors, and the restored shared `NET_PATTERN` plus npm-local transient patterns keep the retry backoff and origin/master's `failed 3 times` infra annotation; network evidence wins over a mixed deterministic code, and unknown non-network failures retain retry behavior.
+
+- **LSP and smoke harness scratch directories use liveness-gated cleanup (closes #2688, closes #2687)** — shared per-run scratch directories record their owner process, preserve live workspaces, remove dead or aged orphaned entries, and announce each scratch home for reliable telemetry discovery.
+
+- **Guard-bash preserves here-string boundaries and classifies heredoc substitutions the way bash expands them (closes #2705, refs #2726)** — `<<<` is consumed as a here-string operator instead of being re-read as a phantom heredoc delimiter; an unclosed `$(` or backtick in an unquoted heredoc body is treated as non-executable while later live commands remain classified; and a valid `$()` or backtick substitution discovered before a later unclosed one stays classified, with substitutions nested inside the malformed span kept inert like bash.
+
+- **Fail the oxlint advisory tier when type-aware support is unavailable (refs #2709)** — `lint:js:advisory` now checks that `oxlint-tsgolint` resolves, exposes its binary, and satisfies oxlint's declared peer range before running.
+
+- **A red `Tool smoke (nightly)` run now notifies through a persistent tracking issue, on the failure path too (closes #2723)** — the workflow's only tracking-issue writer (`Notify on silentOnClean drift`, #529/#594) sat behind the LSP handshake layer step with `continue-on-error: true` but no `if: always()`, so GitHub skipped it — and everything after it — exactly when an earlier step failed: 13 consecutive red nights (2026-08-26 → 2026-09-07) with no automated notice, and that notifier is scoped to unrelated `silentOnClean` telemetry regardless. The three gating steps (Tool layer, LSP handshake layer, Format layer — the only three without `continue-on-error`) now each carry an `id:` and a captured `tee` log, feeding a new, final `if: always()` step that reads all three outcomes into `scripts/notify-tool-smoke-red.mjs`: it upserts a single persistent tracking issue naming the failing layer, the `✗` rows with reason text, and a consecutive-red count, closing it automatically on the first fully green run. Mirrors `install-smoke.yml`'s existing `Notify install drift` step and reuses its four-outcome (`success`/`failure`/`cancelled`/`skipped`) classification and drift-issue title lookup rather than re-deriving them; cross-references #2683's not-yet-landed consolidation of these notifiers.
+
+- **Heredoc bodies no longer leak into Bash command analysis (refs #2726)** — `tokenizeShellCommand` now consumes `<<` and `<<-` bodies, stops delimiter parsing at shell metacharacters, drops quoted body text, and retains substitutions from unquoted bodies so git-guard does not classify prose as an executable command.
+
+- **Turn-end test failures now reach the next model context without a terminal entry (closes #2733)** — settled failures keep their provenance and advisory framing, survive session reset until delivery, then deliver once through the next context build. Rehydration matches the stable session id only, so `--session` quit-and-resume works across activation owners while in-process activation isolation stays in the pending map. Pull diagnostics and MCP turn-end handling remain unchanged.
+
+- **Test ratchets now ignore comment and string laundering when matching source requirements (closes #2736)** — the Git-fixture, NDJSON writer, runner outcome, flake-shape, and LSP double-admission header detectors now use `stripSource`-based evidence, preserving string literals only where they carry the command or import path being checked.
+
+- **Formatters now run from the project root (closes #2756)** — `formatFile` uses the nearest formatter config or `.gitignore`, with a real `.git` fallback capped at `$HOME`, so `.prettierignore`, `.gitignore`, and cwd-discovered configs resolve as at the CLI. Prettier, Biome, and oxfmt are covered.
+
+- **Remove the unused scratch export and declaration, and fix oxfmt violations in two tests (refs #2759).**
+
+- **Nightly tool smoke: the six `--install` steps share one tool tree again (refs #2762, refs #2687)** — #2755 dropped the job-level `PI_LENS_HOME`/`PILENS_DATA_DIR` pin from `tool-smoke.yml` and `parser-smoke.yml`, so the Format layer started from an empty scratch home and seven managed formatters ran against nothing; the pin and its workflow test are restored, per-run scratch isolation stays the local default.
+
+- **Format smoke rows classify typed unavailable outcomes as skips (refs #2767)** — The format smoke harness no longer reports missing formatter executables as formatting failures.
+
+- **Ledger fields no longer read `[object Object]`, and a rejected LSP push-wait no longer surfaces as an unhandled rejection (refs #2700)** — `normalizeForLedger` serialises plain objects and arrays instead of `String()`-ing them (a value with its own throwing `toString` still raises into the ledger's corrupted-input failsafe); the LSP push-wait settle marker attaches on both the resolve and the reject path. Found by the oxlint type-aware pass (`no-base-to-string`, `no-floating-promises`); the same pass's `preserve-caught-error` sites now carry `{ cause }`.
+
 ## [4.1.4] - 2026-09-07
 
 Patch release carrying everything merged since 4.1.3 (152 entries, including 12 under Added and 2 under Deprecated — the additions are extension-internal and CI/test-harness surfaces, no new user-facing commands). Release-QA (`scripts/release-qa.mjs`, #2606) reports SHIP on pi 0.80.10 and pi 0.85.1: 11 of 11 rows witnessed, 0 failed, 0 skipped, git-install row included.
