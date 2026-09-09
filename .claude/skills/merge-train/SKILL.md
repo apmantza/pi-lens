@@ -330,7 +330,15 @@ operator's private notes, so a different orchestrator can run the same train.
   one) carries a coverage contract: one ledger row per subsystem (id, files,
   status) and the pass is not closed until every row is filled or skipped with
   a reason. A debt-pass subsystem worker reports at most TWO materially useful
-  simplifications, each with the deletion test answered; this cap is for
+  simplifications, each with the deletion test answered, drawn from six
+  candidate shapes: scattered booleans or nullable fields that permit invalid
+  combinations (a state machine or discriminated union); repeated assumptions
+  about an object shape (one typed model); duplicated branching a small map,
+  registry or reducer would remove; unclear state or behaviour ownership (a
+  module boundary); repeated scans or lookups a better collection or index
+  would remove; lifecycle, concurrency or async state whose representation
+  permits stale or contradictory state. Never force an abstraction; boring
+  local code that is already clear stays. This cap is for
   debt-pass dispatch only and never applies to PR review, where every finding
   from CRITICAL to NITPICK is reported.
 - **Session retrospective before the regroup.** One ledger block: what the

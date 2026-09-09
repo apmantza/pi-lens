@@ -223,6 +223,15 @@ is the procedure and defers here on conflict; 2026-09-09).**
   resolution (throttled once per key per session), one bounded degradation
   record for the fallback. #2691 → #2756 were shape 40 twice in a week, each
   fixed at its own seam with no log line, until the maintainer asked (#2777).
+- *The human-decision class is named, not inferred.* Review tier follows
+  the surface a diff touches; on top of that, a fixed class of changes is
+  never merged on an agent's verdict alone and goes to the ledger as `needs
+  user decision`: workflow `permissions:` grants, release and version bumps,
+  dependency majors and lockfile regeneration, anything that deletes user
+  data or a durable record, an external contributor's PR, and a change to
+  these rules. Autonomy is a property of the change and its evidence, never
+  of a model's track record: the 2026-09-06 record is that p3 follow-ups
+  produced the day's two most dangerous regressions (#2595, #2604).
 - *An external bug's first round is the production-path probe.* The first
   delegation reproduces the reporter's symptom through the tool handler (the
   MCP tool / `lens_*` entry), red on master, before any seam is named; a

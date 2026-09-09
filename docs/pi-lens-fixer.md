@@ -40,5 +40,8 @@ skipped, and why. Use active, plain prose.
   `PR_BODY.md` — a handoff without it is incomplete.
 - No Git authority unless granted: leave changes uncommitted; hand off
   `PR_BODY.md` (template headings, every red and mutation quoted in ≤5 lines)
+  plus two optional one-liners the reviewer reads first: `Operating rule:`
+  (the one sentence the change enforces) and `Kept:` (what was deliberately
+  not changed, so a reviewer does not re-litigate it);
   and `COMMIT_MSG.txt` at the worktree root. Final message: verdict line, files
   changed, test totals, what could not be verified.
