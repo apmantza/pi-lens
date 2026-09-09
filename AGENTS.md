@@ -52,6 +52,12 @@ pinned jscpd, yamllint, typos, and taplo checks. Their job names are explicit
 entries in `scripts/lib/ci-checks.mjs`, so a failing advisory remains visible
 without blocking the merge train.
 
+The `unit-tests-windows (advisory)` job in `.github/workflows/ci.yml` runs the
+dynamically enumerated Windows path/platform test population and all
+`tests/config/` tests on `windows-latest`. It remains advisory until the
+`Run Windows Vitest subset` step outcome is `success` on master or pull
+requests for seven consecutive runs.
+
 Layout: see "Key source layout". Version and release history live in
 `CHANGELOG.md`; do not duplicate them here.
 
@@ -235,8 +241,8 @@ is the procedure and defers here on conflict; 2026-09-09).**
   (#2775 r4); a raw poll → the flake-shape ratchet, fixed by the governed
   wait (#2781 r1); any path, cwd, root or containment logic → a
   `path.win32` shape probe in the brief (drive-letter case, mixed
-  separators from the host, `USERPROFILE`, UNC) because no CI lane runs
-  vitest on Windows (#2536) and "green on Linux" is not "green on the
+  separators from the host, `USERPROFILE`, UNC) because the Windows lane
+  is advisory (#2536) and "green on Linux" is not "green on the
   maintainer's box" — #2782 went five rounds before that axis was attacked.
 - *Sandbox by test shape.* A lane whose tests spawn children (LSP fake server,
   tool smoke, installer, formatter wire) runs without the write sandbox from
