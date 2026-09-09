@@ -69,7 +69,12 @@ describe("formatFile classifies an unavailable tool distinctly from a failure (#
 
 	it("real oxfmt with no executable resolves to unavailable, never spawning oxfmt", async () => {
 		const env = setupTestEnvironment("pi-lens-unavail-oxfmt-");
+		const originalPath = process.env.PATH;
 		try {
+			// getToolPath also checks PATH without using the mocked which seam.
+			// Pin that independent input so npm's script-local node_modules/.bin
+			// prefix cannot turn this absence case into a formatter spawn on CI.
+			process.env.PATH = path.join(env.tmpDir, "empty-bin");
 			const filePath = path.join(env.tmpDir, "a.ts");
 			fs.writeFileSync(filePath, "const x=1\n");
 
@@ -84,6 +89,8 @@ describe("formatFile classifies an unavailable tool distinctly from a failure (#
 			// A which-probe is allowed; a FORMAT spawn of oxfmt is not.
 			expect(formatSpawns()).toEqual([]);
 		} finally {
+			if (originalPath === undefined) delete process.env.PATH;
+			else process.env.PATH = originalPath;
 			env.cleanup();
 		}
 	});
@@ -114,8 +121,12 @@ describe("formatFile classifies an unavailable tool distinctly from a failure (#
 
 		const originalHome = process.env.HOME;
 		const originalUserProfile = process.env.USERPROFILE;
+		const originalPath = process.env.PATH;
 		process.env.HOME = fakeHome;
 		process.env.USERPROFILE = fakeHome;
+		// Pin the installer's independent PATH leg as well as HOME. The test
+		// mocks which(), but npm test prepends the repository bin to PATH.
+		process.env.PATH = path.join(fakeHome, "empty-bin");
 		try {
 			const { formatFile, oxfmtFormatter } = await loadFormatters();
 			const result = await formatFile(filePath, oxfmtFormatter);
@@ -129,6 +140,8 @@ describe("formatFile classifies an unavailable tool distinctly from a failure (#
 			else process.env.HOME = originalHome;
 			if (originalUserProfile === undefined) delete process.env.USERPROFILE;
 			else process.env.USERPROFILE = originalUserProfile;
+			if (originalPath === undefined) delete process.env.PATH;
+			else process.env.PATH = originalPath;
 			env.cleanup();
 		}
 	});

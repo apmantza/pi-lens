@@ -154,7 +154,7 @@ export interface ClassifySessionStartInput {
  * `concurrent-secondary`: skip the destructive resets and the expensive
  * battery, leave the registered primary's ctx/session id/root untouched. The
  * root still gets served — `initLSPConfig` registers session roots lazily,
- * per file (`clients/lsp/session-roots.ts:48`), not from this handler.
+ * per file (`clients/lsp/session-roots.ts`), not from this handler.
  *
  * Ordering note: the root check sits BELOW the `priorCtxActive === true`
  * branch so a live sibling still reports the more specific

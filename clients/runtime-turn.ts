@@ -93,6 +93,7 @@ import type { TurnStateOwner } from "./cache-manager.js";
 import { formatRunDurationMs } from "./run-duration.js";
 import {
 	isExcludedTestTarget,
+	isRunnerErrorResult,
 	RUNNERS,
 	type TestResult,
 	type TestRunnerClient,
@@ -247,7 +248,7 @@ export const TEST_RUNNER_MAX_PERSISTED_TARGETS = 64;
  * (AGENTS.md cross-form-path screen).
  */
 function deferralEntryKey(entry: DeferredTestTarget): string {
-	return `${entry.sessionId ?? ""} ${normalizeMapKey(path.resolve(entry.testFile))}`;
+	return `${entry.sessionId ?? ""}\u0000${normalizeMapKey(path.resolve(entry.testFile))}`;
 }
 
 function mergeDeferredTargets(
@@ -2793,22 +2794,35 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 						// `elapsed` is: the pair read as a nested ternary, which
 						// this line only got flagged for because #1479 touched it.
 						const verdict = failed > 0 ? "FAIL" : "PASS";
-						const summary =
-							error && passed === 0 && failed === 0
-								? `error: ${error}`
-								: `${verdict} ${passed}p/${failed}f (${elapsed})`;
+						// #2532 review S1: folded onto `isRunnerErrorResult` instead of
+						// re-deriving `error && passed === 0 && failed === 0` here — that
+						// local spelling missed a runner error reported alongside partial
+						// passes (pytest `Interrupted` after some tests already passed),
+						// which read as a clean "PASS Np/0f" line with the error silently
+						// dropped. A partial run says so explicitly rather than reading
+						// as a clean pass.
+						const summary = isRunnerErrorResult(r.value)
+							? passed > 0
+								? `error: ${error} (${passed} passed before)`
+								: `error: ${error}`
+							: `${verdict} ${passed}p/${failed}f (${elapsed})`;
 						dbg(
 							`turn_end: ${stale ? "[stale] " : ""}test ${runner} ${shortFile} → ${summary}`,
 						);
 						// #1524: also fires on `error` alone, not just `failed > 0`.
-						// A runner-error result (the suite never started — spawn/
-						// config failure) has `failed === 0` by construction, so
-						// gating on `failed > 0` alone dropped it silently: the
-						// agent got no context at all, and the empty `failures`
-						// array below sent this result down the "all tests
-						// passed" branch, clearing any prior real test-failure
-						// git-guard blocker. `formatResult` already renders the
-						// error-only case as "Could not run tests: ...".
+						// A runner error (the suite never started, or was
+						// interrupted before finishing — spawn/config/timeout
+						// failure) can arrive with `failed === 0` even when tests
+						// DID pass before it (#2532 review S2 — not "by
+						// construction": `parsePytestOutput` sets `error` from the
+						// exit code independently of the parsed counts, so
+						// `isRunnerErrorResult` is `failed === 0 && !!error`, not an
+						// invariant elsewhere). Gating on `failed > 0` alone dropped
+						// it silently: the agent got no context at all, and the
+						// empty `failures` array below sent this result down the
+						// "all tests passed" branch, clearing any prior real
+						// test-failure git-guard blocker. `formatResult` already
+						// renders the error-only case as "Could not run tests: ...".
 						if (failed > 0 || error) {
 							// #2028: "Test file not found" is an expected skip
 							// (conventional test path without an actual file),
@@ -2902,15 +2916,57 @@ export async function handleTurnEnd(deps: TurnEndDeps): Promise<void> {
 									cleanFiles,
 								);
 							}
-							mergeGitGuardTestFailure(
-								cacheManager,
-								cwd,
-								runtime,
-								content,
-								resultValues
-									.filter((value) => value.failed > 0)
-									.map((value) => value.file),
-							);
+							// #2532: `runnerErrorOnly` (computed above for the turn-end
+							// delivery framing) is true exactly when nothing in this
+							// batch is a genuine failing test — every entry is a
+							// runner error the agent did not introduce. Without this
+							// gate, an all-runner-error batch still called
+							// `mergeGitGuardTestFailure` with an EMPTY failed-files
+							// list, which unconditionally sets `hasBlockers: true`:
+							// the identical event the turn-end message reports as
+							// advisory read as "COMMIT BLOCKED" under --lens-guard.
+							if (!runnerErrorOnly) {
+								mergeGitGuardTestFailure(
+									cacheManager,
+									cwd,
+									runtime,
+									content,
+									resultValues
+										.filter((value) => value.failed > 0)
+										.map((value) => value.file),
+								);
+							} else {
+								// #2532 review T2: the skip above is otherwise pull-only —
+								// nothing records that a batch with real content
+								// (`failures.length > 0`) was deliberately kept OFF the
+								// `--lens-guard` blocker because every entry was a runner
+								// error. Same phase/ledger as the rejected-promise event
+								// above, so both `--lens-guard` demotions land in one
+								// queryable place. Reached only inside the enclosing
+								// `getFlag("lens-guard") && firedSessionId === …` check —
+								// no point recording a demotion the flag can't act on.
+								emitBounded(
+									"test_runner_delivery",
+									`${cwd}:generation:${testRunGeneration}:runner-error-only`,
+									{
+										filePath: cwd,
+										durationMs: 0,
+										metadata: {
+											outcome: "runner-error-only-not-blocking",
+											sessionId: firedSessionId,
+											generation: testRunGeneration,
+											targetCount: targets.length,
+											droppedDetailCount: 0,
+										},
+									},
+									{
+										ledgerKind: "test-runner-delivery",
+										reason:
+											"runner-error-only batch kept off the --lens-guard blocker",
+										capPerTurn: { limit: 8, turnIndex: firedAtTurn },
+									},
+								);
+							}
 						}
 						dbg(
 							`turn_end: ${failures.length} test failure(s) cached for pull diagnostics and post-agent delivery${stale ? " (stale — turn advanced while tests ran)" : ""}`,

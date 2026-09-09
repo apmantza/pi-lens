@@ -32,7 +32,7 @@ export const BUS_FILES_TOUCHED_EVENT = "pilens:files:touched";
 export const BUS_FILES_TOUCHED_VERSION = 1;
 const BUS_LOG_PATH_CAP = 64;
 
-export type FilesTouchedReason = "autofix" | "format";
+type FilesTouchedReason = "autofix" | "format";
 
 /**
  * Fix-provenance entry (#502, additive field). Lets a consumer distinguish a
@@ -41,7 +41,7 @@ export type FilesTouchedReason = "autofix" | "format";
  * consumers that don't know this field ignore it (frozen-additive discipline,
  * same as every other field on this payload).
  */
-export interface FixProvenanceEntry {
+interface FixProvenanceEntry {
 	/** Absolute, normalized path (same normalization as `paths`). */
 	path: string;
 	/** Tool that made the fix (e.g. "prettier", "ruff", "lsp-quickfix"). */

@@ -114,6 +114,8 @@ export interface LSPDiagnostic {
 	};
 	code?: string | number;
 	source?: string;
+	/** Registered server that delivered this diagnostic. Not LSP protocol data. */
+	serverId?: string;
 }
 
 export interface LSPPullFailure {
@@ -2246,6 +2248,7 @@ export function resolveConfigurationSection(
 export function setupIncomingHandlers(
 	state: LSPClientState,
 	initialization: Record<string, unknown> | undefined,
+	onDiagnosticsPublished?: (serverId: string) => void,
 ): void {
 	state.connection.onNotification(
 		"textDocument/publishDiagnostics",
@@ -2266,6 +2269,7 @@ export function setupIncomingHandlers(
 			// Do not resurrect diagnostics or their content binding for a document
 			// that is no longer open on this client.
 			if (state.closedDocuments?.has(normalizedPath)) return;
+			onDiagnosticsPublished?.(state.serverId);
 			const newDiags = normalizeLspDiagnostics(params.diagnostics || []);
 			const docVersion = params.version;
 			if (PUB_DEBUG) {
@@ -5123,6 +5127,7 @@ export async function createLSPClient(options: {
 	 *  single-variant server or not yet reported; consumers must treat that as
 	 *  the classic/default behavior (fail-safe). */
 	launchVariant?: "classic" | "native-ts7";
+	onDiagnosticsPublished?: (serverId: string) => void;
 }): Promise<LSPClientInfo> {
 	installCrashGuard();
 
@@ -5134,6 +5139,7 @@ export async function createLSPClient(options: {
 		initialization,
 		initializeTimeoutMs = INITIALIZE_TIMEOUT_MS,
 		launchVariant,
+		onDiagnosticsPublished,
 	} = options;
 
 	// #449/#472: register this LSP child in the cross-process instance registry
@@ -5353,7 +5359,7 @@ export async function createLSPClient(options: {
 		);
 	});
 
-	setupIncomingHandlers(state, initialization);
+	setupIncomingHandlers(state, initialization, onDiagnosticsPublished);
 	connection.listen();
 	setupConnectionLifecycle(state, recentStderr);
 

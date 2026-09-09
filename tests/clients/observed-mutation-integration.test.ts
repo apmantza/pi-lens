@@ -39,6 +39,7 @@ import {
 	handleToolResult,
 } from "../../clients/runtime-tool-result.js";
 import { setupTestEnvironment } from "./test-utils.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 vi.mock("../../clients/pipeline.js", () => ({
 	runPipeline: vi.fn(async () => ({
@@ -50,11 +51,7 @@ vi.mock("../../clients/pipeline.js", () => ({
 }));
 
 vi.mock("../../clients/lsp/index.js", () => ({
-	getLSPService: () => ({
-		touchFile: vi.fn(async () => undefined),
-		getWarmClientForFile: vi.fn(async () => undefined),
-		getOpenDocumentPaths: () => [],
-	}),
+	getLSPService: () => makeLspServiceDouble(),
 	resetLSPService: () => {},
 	notifyExternalFileChange: vi.fn(async () => undefined),
 }));

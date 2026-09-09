@@ -18,13 +18,19 @@ vi.mock("../../../../clients/installer/index.js", () => ({
 	ensureTool,
 }));
 
-vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
-	createAvailabilityChecker: vi.fn(() => ({
-		isAvailableAsync: vi.fn(async () => false),
-		getCommand: vi.fn(() => null),
-	})),
-	resolveAvailableOrInstall,
-}));
+vi.mock(
+	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
+		>()),
+		createAvailabilityChecker: vi.fn(() => ({
+			isAvailableAsync: vi.fn(async () => false),
+			getCommand: vi.fn(() => null),
+		})),
+		resolveAvailableOrInstall,
+	}),
+);
 
 function createCtx(filePath: string, cwd: string) {
 	return makeRunnerCtx(filePath, cwd, { kind: "python" });
@@ -81,6 +87,44 @@ describe("ruff runner", () => {
 				),
 			).toBe(true);
 			expect(ruffCalls.some((args) => args.includes("--fix"))).toBe(false);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #2691: the check spawn passed no `cwd`, so a nested `pyproject.toml`
+	// config was resolved against the extension host's `process.cwd()`
+	// instead of `ctx.cwd` -- same shape as #1731 (sqlfluff), even though
+	// ruff itself walks upward from the linted FILE's own directory for
+	// `pyproject.toml`/`ruff.toml` discovery (ruff_workspace's
+	// `find_settings_toml` iterates `path.ancestors()` of the target path,
+	// not the process cwd), so this is a consistency fix that keeps the lint
+	// spawn's cwd aligned with the availability probe and `ruffConfigArgs`,
+	// not a config-resolution behavior change.
+	it("ruff runner spawns the check with the dispatch context's cwd, not the host's (#2691)", async () => {
+		const env = setupTestEnvironment("pi-lens-ruff-cwd-");
+		try {
+			const filePath = path.join(env.tmpDir, "sample.py");
+			fs.writeFileSync(filePath, "import os\n");
+
+			safeSpawnAsync.mockResolvedValue({
+				error: null,
+				status: 0,
+				stdout: "[]",
+				stderr: "",
+			});
+
+			const runner = (
+				await import("../../../../clients/dispatch/runners/ruff.js")
+			).default;
+
+			await runner.run(createCtx(filePath, env.tmpDir) as never);
+
+			const checkCall = safeSpawnAsync.mock.calls.find((call) =>
+				(call[1] as string[]).includes("check"),
+			) as [string, string[], { cwd?: string } | undefined];
+			expect(checkCall).toBeDefined();
+			expect(checkCall[2]?.cwd).toBe(env.tmpDir);
 		} finally {
 			env.cleanup();
 		}

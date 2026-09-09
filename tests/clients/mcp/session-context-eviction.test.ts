@@ -8,6 +8,7 @@
  * the only fix that lets a later call recover.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeLspServiceDouble } from "../../support/lsp-service-double.js";
 
 const loadBootstrapClients = vi.hoisted(() => vi.fn());
 
@@ -16,7 +17,9 @@ vi.mock("../../../clients/ast-grep-client.js", () => ({
 	AstGrepClient: class {},
 }));
 vi.mock("../../../clients/lsp/index.js", () => ({
-	getLSPService: () => ({ getAliveClientCount: () => 0 }),
+	// `getMcpSessionContext` reads only `getAliveClientCount`; the rest of the
+	// surface comes from the factory (#2592).
+	getLSPService: () => makeLspServiceDouble({ getAliveClientCount: () => 0 }),
 	resetLSPService: vi.fn(),
 }));
 

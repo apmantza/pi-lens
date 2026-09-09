@@ -547,6 +547,102 @@ describe("sampleProcesses (Windows / guarded CIM path)", () => {
 	});
 });
 
+/**
+ * #2358: a liveness verdict answers "is this process working RIGHT NOW", so it
+ * may only be read from the window this function itself brackets.
+ *
+ * Both platform samplers report a RATE between two observations, and the FIRST
+ * observation of a pair is whatever the previous caller left behind — the
+ * heartbeat sampler (clients/quiet-window.ts) reads every recorded LSP child
+ * once per tick, and pidusage keeps 60 s of per-pid history. So the first read
+ * can carry a burn the process has already stopped doing. Measured against the
+ * real thing before this suite was written: a child that burned one core for
+ * 1.5 s and then idled was reported `{busy:true, cpuPercent:46.5}` 1.6 s after
+ * it had gone completely idle, because the verdict folded that first read in.
+ */
+describe("#2358 sampleProcessTreeCpuPercent — the verdict is the sample window", () => {
+	beforeEach(() => {
+		pidusageMock.mockReset();
+		__resetWindowsCpuHistoryForTests();
+		resetDegradationLedger();
+	});
+
+	it("POSIX: a process idle across the window is flat, whatever its history carries", async () => {
+		setPlatform("linux");
+		// What real pidusage returns for the "burned, then wedged" child: the
+		// baseline read averages in the burn since the heartbeat's observation,
+		// the window read sees an idle process.
+		pidusageMock
+			.mockResolvedValueOnce({ "111": { cpu: 46.5, memory: 4096 } })
+			.mockResolvedValueOnce({ "111": { cpu: 0, memory: 4096 } });
+		vi.useFakeTimers();
+		try {
+			const verdict = sampleProcessTreeCpuPercent(111, 1_000, 10);
+			await vi.runAllTimersAsync();
+			await expect(verdict).resolves.toEqual({
+				busy: false,
+				measured: true,
+				cpuPercent: 0,
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("POSIX: a process burning across the window is busy on the window read alone", async () => {
+		setPlatform("linux");
+		// The mirror case, and the one that keeps the fix honest: the baseline
+		// read is the 0% a freshly-seeded pid reports, so a BUSY verdict can only
+		// come from the window read.
+		pidusageMock
+			.mockResolvedValueOnce({ "111": { cpu: 0, memory: 4096 } })
+			.mockResolvedValueOnce({ "111": { cpu: 95, memory: 4096 } });
+		vi.useFakeTimers();
+		try {
+			const verdict = sampleProcessTreeCpuPercent(111, 1_000, 10);
+			await vi.runAllTimersAsync();
+			await expect(verdict).resolves.toEqual({
+				busy: true,
+				measured: true,
+				cpuPercent: 95,
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("Windows: the same verdict against a heartbeat-seeded CPU baseline", async () => {
+		setPlatform("win32");
+		vi.useFakeTimers();
+		try {
+			vi.setSystemTime(0);
+			// The heartbeat's own read seeds this pid's baseline at 0 ms of CPU.
+			let outputs = ["111\t4096\t0\t0\t2026-08-30T00:00:00Z\r\n"];
+			fakeSpawn = () => makeFakeChild({ stdout: outputs.shift() ?? "" });
+			await sampleProcesses([111]);
+			// A second later the server has burned 800 ms of CPU and stopped: the
+			// discriminator's baseline read differences 800 ms over 1000 ms of wall
+			// clock (80%), and its window read sees the counter stand still.
+			vi.setSystemTime(1_000);
+			outputs = [
+				"", // descendant query: no children
+				"111\t4096\t0\t8000000\t2026-08-30T00:00:00Z\r\n",
+				"",
+				"111\t4096\t0\t8000000\t2026-08-30T00:00:00Z\r\n",
+			];
+			const verdict = sampleProcessTreeCpuPercent(111, 1_000, 10);
+			await vi.runAllTimersAsync();
+			await expect(verdict).resolves.toEqual({
+				busy: false,
+				measured: true,
+				cpuPercent: 0,
+			});
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+});
+
 describe("resource-sampler: fire-and-forget CIM spawns are unref'd (#1155)", () => {
 	// Mirrors tests/clients/instance-reaper-unref.test.ts's shape (#1153/#1160):
 	// a piped, `data`-listener-attached child re-references the libuv loop even

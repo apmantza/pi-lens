@@ -8,6 +8,7 @@ import { relative, resolve, sep, posix } from "node:path";
 
 import { goClient } from "../../go-client.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { stripAnsi } from "../../sanitize.js";
 import { skipUnlessToolRan } from "./utils/tool-failure.js";
 import { parseGoVetOutput } from "./utils/diagnostic-parsers.js";
@@ -39,7 +40,7 @@ const goVetRunner: RunnerDefinition = {
 		// `go.mod file not found` (#263). ctx.cwd is the go.mod module root
 		// (resolveLanguageRootForFile, markers ["go.mod"]), so vet the file's
 		// package from there.
-		const cwd = ctx.cwd || process.cwd();
+		const cwd = resolveRunnerCwd(ctx, "go-vet");
 		const fileRel = relative(cwd, ctx.filePath).split(sep).join(posix.sep);
 		const pkgPath = fileRel.startsWith("../")
 			? // File isn't under ctx.cwd (unexpected — ctx.cwd is the go.mod root).

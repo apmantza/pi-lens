@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { removeTempDirSync } from "../clients/test-utils.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 import { CacheManager } from "../../clients/cache-manager.js";
 import { normalizeMapKey } from "../../clients/path-utils.js";
 import { readChangesSince } from "../../clients/project-changes.js";
@@ -38,10 +39,13 @@ const parseToolJson = (result: {
 
 describe("lsp_navigation tool", () => {
 	beforeEach(() => {
-		mocked.service = {
+		// #2598: `openFileBestEffort` no longer branches on `touchFile` being
+		// present — the real `LSPService` always has it — so the double keeps the
+		// factory's `touchFile`, and the scoped-open case below asserts the touch
+		// (with its options), which is the call production actually makes.
+		mocked.service = makeLspServiceDouble({
 			supportsLSP: vi.fn().mockReturnValue(true),
 			hasLSP: vi.fn().mockResolvedValue(true),
-			openFile: vi.fn().mockResolvedValue(undefined),
 			getDiagnostics: vi.fn().mockResolvedValue([]),
 			getOperationSupport: vi.fn().mockResolvedValue(null),
 			getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
@@ -93,7 +97,7 @@ describe("lsp_navigation tool", () => {
 			getWorkspaceDiagnosticsSupport: vi
 				.fn()
 				.mockResolvedValue({ mode: "push-only" }),
-		};
+		});
 	});
 
 	it("reports cached LSP capabilities without requiring path", async () => {
@@ -799,7 +803,7 @@ describe("lsp_navigation tool", () => {
 		},
 	);
 
-	it("opens scoped file before workspaceSymbol query", async () => {
+	it("touches the scoped file, diagnostics off, before a workspaceSymbol query", async () => {
 		const tool = createLspNavigationTool((flag) => flag === "lens-lsp");
 		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-lens-lsp-nav-"));
 		const filePath = path.join(tmpDir, "sample.ts");
@@ -822,11 +826,19 @@ describe("lsp_navigation tool", () => {
 			);
 
 			expect(result.isError).toBeUndefined();
+			// #2598: the scoped pre-open is a `touchFile`, and the OPTIONS are the
+			// point — a `workspaceSymbol` pre-open must not pay for a diagnostics
+			// wait, and must stay on the primary server.
 			expect(
-				(mocked.service as { openFile: ReturnType<typeof vi.fn> }).openFile,
+				(mocked.service as { touchFile: ReturnType<typeof vi.fn> }).touchFile,
 			).toHaveBeenCalledWith(
 				filePath,
 				expect.stringContaining("normalizeMapKey"),
+				{
+					diagnostics: "none",
+					source: "lsp_navigation",
+					clientScope: "primary",
+				},
 			);
 			expect(
 				(mocked.service as { workspaceSymbol: ReturnType<typeof vi.fn> })

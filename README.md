@@ -152,6 +152,17 @@ Or from git:
 pi install git:github.com/apmantza/pi-lens
 ```
 
+Requires Node.js >=22.19.0 (matches the pi host's own floor — see `engines`
+in `package.json`).
+
+Letting a coding agent do it: paste this into its prompt.
+
+```text
+Install pi-lens (npm:pi-lens) into pi, then read AGENTS.md in
+https://github.com/apmantza/pi-lens for how the extension works and how it
+expects to be operated.
+```
+
 > **npm v12 users:** dependency lifecycle scripts (e.g. `@ast-grep/cli`'s
 > `postinstall`) now require explicit approval — if `npm install` warns about
 > unreviewed install scripts, review and allow them with
@@ -333,6 +344,11 @@ Thanks goes to these wonderful people:
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/mjfaga"><img src="https://avatars.githubusercontent.com/u/7584015?v=4" width="100px;" alt=""/><br /><sub><b>Mark</b></sub></a><br /><a href="#code-mjfaga" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://aeturnal.io/"><img src="https://avatars.githubusercontent.com/u/219271200?v=4" width="100px;" alt=""/><br /><sub><b>aeturnal</b></sub></a><br /><a href="#code-aeturnal" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/floatGray"><img src="https://avatars.githubusercontent.com/u/44295302?v=4" width="100px;" alt=""/><br /><sub><b>floatGray</b></sub></a><br /><a href="#code-floatGray" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/thomasfsteeples"><img src="https://avatars.githubusercontent.com/u/32720359?v=4" width="100px;" alt=""/><br /><sub><b>Thomas F Steeples</b></sub></a><br /><a href="#code-thomasfsteeples" title="Code">💻</a></td>
+    </tr>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/amasen02"><img src="https://avatars.githubusercontent.com/u/97525823?v=4" width="100px;" alt=""/><br /><sub><b>Ama Senevirathne</b></sub></a><br /><a href="#code-amasen02" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/AcademyKUB8"><img src="https://avatars.githubusercontent.com/u/217174854?v=4" width="100px;" alt=""/><br /><sub><b>AcademyKUB8</b></sub></a><br /><a href="#code-AcademyKUB8" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>
@@ -341,11 +357,3 @@ Thanks goes to these wonderful people:
 <!-- prettier-ignore-end -->
 
 <!-- ALL-CONTRIBUTORS-LIST:END -->
-
-The following commit identities also appear in `git shortlog -sne HEAD` but are
-not represented in the generated table above: Anas Alsbei, Claude,
-Christopher Patti,
-dependabot[bot], Fabio-D, github-actions[bot], JSup, Kenny McCormick,
-Max Lupus, Moritz Hofmann, ricardo, and root.
-
-If you land a pull request or report an issue that gets fixed, we'll add you here.

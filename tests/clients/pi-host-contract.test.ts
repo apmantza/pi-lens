@@ -28,13 +28,15 @@ import {
 } from "../../clients/runtime-coordinator.js";
 import { handleToolCall } from "../../clients/runtime-tool-call.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 const touchFileMock = vi.fn().mockResolvedValue(undefined);
 vi.mock("../../clients/lsp/index.js", () => ({
-	getLSPService: () => ({
-		touchFile: touchFileMock,
-		getWarmClientForFile: vi.fn().mockResolvedValue(undefined),
-	}),
+	getLSPService: () =>
+		makeLspServiceDouble({
+			touchFile: touchFileMock,
+			getWarmClientForFile: vi.fn().mockResolvedValue(undefined),
+		}),
 	resetLSPService: () => {},
 }));
 

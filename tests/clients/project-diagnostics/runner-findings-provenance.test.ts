@@ -77,6 +77,98 @@ describe("test finding provenance adapter (#1413)", () => {
 		).toMatchObject({ severity: "info", semantic: "none" });
 	});
 
+	/**
+	 * #2532: `lens_diagnostics mode=full` rendered a runner error (timeout,
+	 * missing provider/binary — the suite itself never produced a verdict) as
+	 * `semantic: "blocking"`, the identical event the turn-end message
+	 * (#2522) already delivers as advisory. `isRunnerErrorResult` classifies
+	 * `failed === 0 && !!error` as advisory regardless of `error`'s cause —
+	 * NOT "failed is 0 whenever error is set" (review round 1 S2: that is
+	 * false — see the mixed-batch case below and `isRunnerErrorResult`'s doc).
+	 */
+	it("makes a runner-error result advisory instead of blocking", () => {
+		const { cwd, provenance, file } = fixture();
+		const runnerErrorResult = {
+			file,
+			sourceFile: file,
+			runner: "pytest",
+			passed: 0,
+			failed: 0,
+			skipped: 0,
+			failures: [],
+			duration: 1,
+			error: "pytest: error: unrecognized arguments (exit code 4)",
+		};
+		expect(
+			testRunnerFindingsToProjectDiagnostics(
+				{ content: "fail", results: [runnerErrorResult], provenance },
+				cwd,
+			)[0],
+		).toMatchObject({ severity: "info", semantic: "none" });
+	});
+
+	/**
+	 * #2532 inversion guard: a genuine failing test reported only as a bare
+	 * count (no per-test `failures[]` detail — some parsers summarize this
+	 * way) must NOT be swept into the same advisory treatment as a runner
+	 * error just because it also falls through to the "no individual
+	 * failures listed" branch. `failed > 0` with no `error` is a real test
+	 * failure, always blocking.
+	 */
+	it("keeps a genuine failing test blocking even with no per-test failure detail", () => {
+		const { cwd, provenance, file } = fixture();
+		const countOnlyFailure = {
+			file,
+			sourceFile: file,
+			runner: "vitest",
+			passed: 0,
+			failed: 3,
+			skipped: 0,
+			failures: [],
+			duration: 1,
+		};
+		expect(
+			testRunnerFindingsToProjectDiagnostics(
+				{ content: "fail", results: [countOnlyFailure], provenance },
+				cwd,
+			)[0],
+		).toMatchObject({ severity: "error", semantic: "blocking" });
+	});
+
+	/**
+	 * #2532 review round 1, S3: the bottom branch used to keep a
+	 * `result.error ? "Test run error: …" : "N test(s) failed"` ternary so a
+	 * counted failure that ALSO carried a runner error (pytest exit 2
+	 * "Interrupted" after `2 failed, 1 passed`) still said so. The PR's first
+	 * version dropped the ternary — this is a mixed result the S2 inversion
+	 * guard above keeps blocking, but the message must not silently lose the
+	 * interruption while doing so.
+	 */
+	it("keeps the runner error visible in the message for a counted failure that also errored", () => {
+		const { cwd, provenance, file } = fixture();
+		const interruptedWithFailure = {
+			file,
+			sourceFile: file,
+			runner: "pytest",
+			passed: 1,
+			failed: 2,
+			skipped: 0,
+			failures: [],
+			duration: 1,
+			error: "Pytest interrupted",
+		};
+		const diagnostic = testRunnerFindingsToProjectDiagnostics(
+			{ content: "fail", results: [interruptedWithFailure], provenance },
+			cwd,
+		)[0];
+		expect(diagnostic).toMatchObject({
+			severity: "error",
+			semantic: "blocking",
+		});
+		expect(diagnostic.message).toContain("2 test(s) failed");
+		expect(diagnostic.message).toContain("Pytest interrupted");
+	});
+
 	it("drops deleted targets and returns none after consumption", () => {
 		const { cwd, file, provenance, result } = fixture();
 		fs.unlinkSync(file);

@@ -30,7 +30,7 @@ export interface CompactResultLike<D = unknown> {
 	details?: D;
 }
 
-export interface CompactSummaryInput<D = unknown> {
+interface CompactSummaryInput<D = unknown> {
 	details: D | undefined;
 	args: Record<string, unknown>;
 	isError: boolean;
@@ -104,11 +104,7 @@ export function selectCompactText<D = unknown>(
 
 /** Apply a CompactStyle to text. `brand` uses raw blue ANSI; the rest defer to
  * the theme so error-red and normal output stay consistent with the host. */
-export function paintCompact(
-	style: CompactStyle,
-	text: string,
-	theme: Theme,
-): string {
+function paintCompact(style: CompactStyle, text: string, theme: Theme): string {
 	if (style === "brand") {
 		return `${PI_LENS_BLUE_FG}${text}${RESET_FG}`;
 	}

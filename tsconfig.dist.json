@@ -15,7 +15,8 @@
 		"commands/**/*.ts",
 		"tools/**/*.ts",
 		"mcp/**/*.ts",
-		"scripts/lib/process-scan.mjs"
+		"scripts/lib/process-scan.mjs",
+		"scripts/lib/skills-predicate.mjs"
 	],
 	"exclude": ["node_modules", "tests", "**/*.test.ts"]
 }

@@ -27,7 +27,7 @@ export interface CodeQualityWarningRecord {
 	origin: "dispatch";
 }
 
-export interface CodeQualityWarningsHistoryEntry {
+interface CodeQualityWarningsHistoryEntry {
 	timestamp: string;
 	sessionId: string;
 	turnIndex: number;

@@ -71,6 +71,7 @@ import {
 	noPhasesLogged,
 	parseNdjsonEntries,
 	phaseWasLogged,
+	countEntriesSince,
 } from "./lib/latency-log-phases.mjs";
 import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
 
@@ -141,7 +142,14 @@ function resolvePiBin() {
  * pi-lens's session_shutdown LSP teardown, which would make assertion 3
  * meaningless). Resolves with `{ commandCount, timedOut }`.
  */
-function runPiRpc({ piBin, extensionPath, cwd, env, timeoutMs = 45000 }) {
+function runPiRpc({
+	piBin,
+	extensionPath,
+	cwd,
+	env,
+	logHome,
+	timeoutMs = 45000,
+}) {
 	return new Promise((resolve, reject) => {
 		const child = spawn(
 			piBin,
@@ -159,6 +167,7 @@ function runPiRpc({ piBin, extensionPath, cwd, env, timeoutMs = 45000 }) {
 				stdio: ["pipe", "pipe", "inherit"],
 				env: {
 					...process.env,
+					PI_LENS_HOME: logHome,
 					...env,
 					ANTHROPIC_API_KEY:
 						process.env.ANTHROPIC_API_KEY || "sk-ant-dummy-compat-smoke",
@@ -243,8 +252,14 @@ function snapshotLspCandidates() {
 	return snapshotProcesses(["pid", "command"]);
 }
 
-function readLatencyLogEntries() {
-	const logPath = path.join(os.homedir(), ".pi-lens", "latency.log");
+// The log is read from the PI_LENS_HOME pin every `pi` invocation below
+// runs under — never from the real `~/.pi-lens`. Since #2534 (#2506) the
+// global dir of any process whose cwd is under `os.tmpdir()` is redirected to
+// a per-project probe home, and this smoke's fixture project lives exactly
+// there; reading the real home returned an empty log and the two
+// absence-of-phase assertions passed vacuously (#2570).
+function readLatencyLogEntries(logHome) {
+	const logPath = path.join(logHome, "latency.log");
 	try {
 		return parseNdjsonEntries(fs.readFileSync(logPath, "utf8"));
 	} catch {
@@ -282,6 +297,10 @@ async function main() {
 
 	const projectDir = path.join(scratchRoot, "proj");
 	setUpFixtureProject(projectDir);
+	// Pin the global dir for every child `pi` so the latency log lands where
+	// `readLatencyLogEntries` reads it (same pattern as the other smokes).
+	const logHome = path.join(scratchRoot, "pi-lens-home");
+	fs.mkdirSync(logHome, { recursive: true });
 
 	let extensionPath;
 	try {
@@ -318,9 +337,10 @@ async function main() {
 				piBin,
 				extensionPath,
 				cwd: projectDir,
+				logHome,
 				env: { PI_SUBAGENT_CHILD: "1", PI_LENS_STARTUP_MODE: "full" },
 			});
-			const entries = readLatencyLogEntries();
+			const entries = readLatencyLogEntries(logHome);
 			const lightModeLogged = phaseWasLogged(
 				entries,
 				"subagent_light_mode",
@@ -331,10 +351,11 @@ async function main() {
 				HEAVYWEIGHT_SCAN_PHASES,
 				sinceIso,
 			);
+			const logged = countEntriesSince(entries, sinceIso);
 			results.push({
 				id: "subagent-light-mode-engages",
-				pass: lightModeLogged && heavyweightSkipped,
-				detail: `subagent_light_mode logged=${lightModeLogged}, heavyweight scans absent=${heavyweightSkipped}`,
+				pass: logged > 0 && lightModeLogged && heavyweightSkipped,
+				detail: `entries since run=${logged}, subagent_light_mode logged=${lightModeLogged}, heavyweight scans absent=${heavyweightSkipped}`,
 			});
 		} catch (err) {
 			results.push({
@@ -353,13 +374,14 @@ async function main() {
 				piBin,
 				extensionPath,
 				cwd: projectDir,
+				logHome,
 				env: {
 					PI_SUBAGENT_CHILD: "1",
 					PI_LENS_SUBAGENT_FULL: "1",
 					PI_LENS_STARTUP_MODE: "full",
 				},
 			});
-			const entries = readLatencyLogEntries();
+			const entries = readLatencyLogEntries(logHome);
 			const lightModeAbsent = !phaseWasLogged(
 				entries,
 				"subagent_light_mode",
@@ -387,6 +409,7 @@ async function main() {
 				piBin,
 				extensionPath,
 				cwd: projectDir,
+				logHome,
 				env: { PI_LENS_STARTUP_MODE: "full" },
 			});
 			// Grace period: pi's own teardown (session_shutdown -> LSP fast
@@ -413,13 +436,14 @@ async function main() {
 				piBin,
 				extensionPath,
 				cwd: projectDir,
+				logHome,
 				env: {
 					PI_SUBAGENT_CHILD_AGENT: "compat-smoke-worker",
 					PI_SUBAGENT_PARENT_PID: "4242",
 					PI_LENS_STARTUP_MODE: "full",
 				},
 			});
-			const entries = readLatencyLogEntries();
+			const entries = readLatencyLogEntries(logHome);
 			const lightModeLogged = phaseWasLogged(
 				entries,
 				"subagent_light_mode",
@@ -430,10 +454,11 @@ async function main() {
 				HEAVYWEIGHT_SCAN_PHASES,
 				sinceIso,
 			);
+			const logged = countEntriesSince(entries, sinceIso);
 			results.push({
 				id: "avtc-pair-engages-light-mode",
-				pass: lightModeLogged && heavyweightSkipped,
-				detail: `subagent_light_mode logged=${lightModeLogged}, heavyweight scans absent=${heavyweightSkipped}`,
+				pass: logged > 0 && lightModeLogged && heavyweightSkipped,
+				detail: `entries since run=${logged}, subagent_light_mode logged=${lightModeLogged}, heavyweight scans absent=${heavyweightSkipped}`,
 			});
 		} catch (err) {
 			results.push({
@@ -453,12 +478,13 @@ async function main() {
 				piBin,
 				extensionPath,
 				cwd: projectDir,
+				logHome,
 				env: {
 					PI_SUBAGENT_CHILD_AGENT: "compat-smoke-worker",
 					PI_LENS_STARTUP_MODE: "full",
 				},
 			});
-			const entries = readLatencyLogEntries();
+			const entries = readLatencyLogEntries(logHome);
 			const lightModeAbsent = !phaseWasLogged(
 				entries,
 				"subagent_light_mode",

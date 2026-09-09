@@ -55,6 +55,7 @@
  */
 
 import { EXCLUDED_DIRS, getExcludedDirGlobs } from "./file-utils.js";
+import { escapeRegExp } from "./string-utils.js";
 
 /** Directory-name entries only — drops glob entries (e.g. `*.dSYM`) that a
  * bare directory-name/regex exclude can't express. */
@@ -72,10 +73,6 @@ function literalExcludedDirNames(): string[] {
  */
 export function getScratchTreeGlobPatterns(): string[] {
 	return getExcludedDirGlobs();
-}
-
-function escapeRegExp(literal: string): string {
-	return literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** Bare directory names, for tools (opengrep/semgrep `--exclude`) that treat a

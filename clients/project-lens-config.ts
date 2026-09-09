@@ -118,7 +118,7 @@ import { findPiLensConfigMarkerInDir } from "./workspace-topology.js";
  */
 export { PROJECT_CONFIG_BASENAMES } from "./config-locations.js";
 
-export interface PiLensProjectRuleConfig {
+interface PiLensProjectRuleConfig {
 	/** Optional override for the rule's primary numeric threshold. */
 	threshold?: number;
 	/**
@@ -145,12 +145,12 @@ export interface PiLensProjectRuleConfig {
 	select?: string[];
 }
 
-export interface PiLensProjectMutationConfig {
+interface PiLensProjectMutationConfig {
 	/** Whether this mutation path is enabled for the project. */
 	enabled?: boolean;
 }
 
-export interface PiLensProjectReviewGraphConfig {
+interface PiLensProjectReviewGraphConfig {
 	/**
 	 * Explicit review-graph file budget, clamped to `[100, 20_000]`.
 	 * `undefined` means "derive from `maxProjectFiles` via the taper".
@@ -163,6 +163,10 @@ const REVIEW_GRAPH_MAX_FILES_MIN = 100;
 const REVIEW_GRAPH_MAX_FILES_MAX = 20_000;
 
 export interface PiLensProjectConfig {
+	startup?: {
+		mode?: "quick" | "full" | "minimal";
+		scans?: { enabled?: boolean };
+	};
 	/** gitignore-style glob patterns added to every diagnostic scan. */
 	ignore: string[];
 	/** Per-rule threshold overrides; missing keys mean "use hardcoded default". */
@@ -350,8 +354,17 @@ export function loadPiLensProjectConfig(
 	// a pi-lens-owned file were then produced by nobody at all. The pi-lens
 	// loader now enumerates those documents itself, for records only: nothing
 	// here is merged, and which file supplies a VALUE is unchanged.
-	reportPiLensConfigRecords(entry.legacyRecords);
 	const configInfo = preloadedInfo ?? freshInfoFor(entry);
+	// The selected legacy document is resolved below and its bounded migration
+	// records are cached with that projection. Reporting the discovery copy as
+	// well would produce two suppression records with different totals, because
+	// the discovery walk and the single-document resolution see different
+	// record populations. Keep discovery-only documents here; the selected file
+	// is reported by `loadCachedConfigFile`.
+	const selectedLegacyPath = configInfo?.path;
+	reportPiLensConfigRecords(
+		entry.legacyRecords.filter((record) => record.file !== selectedLegacyPath),
+	);
 	if (!configInfo) return EMPTY_PROJECT_CONFIG;
 	return loadCachedConfigFile(configInfo);
 }
@@ -897,6 +910,48 @@ function parseConfigFile(configPath: string): ParsedConfigFile {
 		}
 	}
 
+	let startup: PiLensProjectConfig["startup"];
+	if (obj.startup !== undefined) {
+		if (
+			!obj.startup ||
+			typeof obj.startup !== "object" ||
+			Array.isArray(obj.startup)
+		) {
+			note("startup must be an object");
+		} else {
+			const section = obj.startup as Record<string, unknown>;
+			if (
+				section.mode === "quick" ||
+				section.mode === "full" ||
+				section.mode === "minimal"
+			) {
+				startup = { mode: section.mode };
+			} else if ("mode" in section) {
+				note('startup.mode must be "quick", "full", or "minimal"');
+			}
+			if (section.scans !== undefined) {
+				if (
+					!section.scans ||
+					typeof section.scans !== "object" ||
+					Array.isArray(section.scans)
+				) {
+					note("startup.scans must be an object");
+				} else if (
+					typeof (section.scans as Record<string, unknown>).enabled ===
+					"boolean"
+				) {
+					startup ??= {};
+					startup.scans = {
+						enabled: (section.scans as Record<string, unknown>)
+							.enabled as boolean,
+					};
+				} else if ("enabled" in (section.scans as Record<string, unknown>)) {
+					note("startup.scans.enabled must be a boolean");
+				}
+			}
+		}
+	}
+
 	// #533 hygiene: mirror the global loader's unknown-key warn so a typo in a
 	// shared `.pi-lens.json` (e.g. `maxProjectFile`, `lps`) produces a signal
 	// instead of silently doing nothing. The recognized set is single-sourced
@@ -974,6 +1029,7 @@ function parseConfigFile(configPath: string): ParsedConfigFile {
 
 	return {
 		config: {
+			...(startup === undefined ? {} : { startup }),
 			ignore,
 			rules,
 			...(mutations as Pick<

@@ -40,9 +40,9 @@ Auto-install behavior depends on gate type:
 | `intelephense`                      | PHP LSP                          | Yes            | Flow-gated                         |
 | `bash-language-server`              | Bash LSP                         | Yes            | Language-default                   |
 | `yaml-language-server`              | YAML LSP                         | Yes            | Language-default                   |
-| `vscode-langservers-extracted`      | JSON/ESLint/CSS/HTML LSP         | Yes            | Language-default                   |
-| `vscode-css-languageserver`         | CSS LSP                          | Yes            | Language-default                   |
-| `vscode-html-languageserver-bin`    | HTML LSP                         | Yes            | Language-default                   |
+| `vscode-json-language-server`       | JSON LSP (`vscode-langservers-extracted`) | Yes  | Language-default                   |
+| `vscode-css-languageserver`         | CSS LSP (`vscode-langservers-extracted`)  | Yes  | Language-default                   |
+| `vscode-html-languageserver-bin`    | HTML LSP (`vscode-langservers-extracted`) | Yes  | Language-default                   |
 | `svelte-language-server`            | Svelte LSP                       | Yes            | Flow-gated                         |
 | `@vue/language-server`              | Vue LSP                          | Yes            | Flow-gated                         |
 | `opengrep`                          | Experimental security dispatch   | Auto-install   | Local config / explicit opt-in     |

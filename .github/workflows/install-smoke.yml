@@ -8,7 +8,10 @@ name: install-smoke
 #            resolver is the strictest (it's where #285/#335's `ResolveMessage`
 #            comes from), so the selftest force-imports the documented
 #            failure-point modules (file-utils -> minimatch, complexity-client ->
-#            typescript, bootstrap) and resolves the bare deps directly. No model.
+#            typescript, bootstrap) and resolves the bare deps directly, and
+#            resolves the `pi.skills` manifest entries the way pi does from the
+#            INSTALLED package root — the layout where #2587's `../../skills`
+#            escaped the package and loaded no skills. No model.
 #
 # - pi-load: installs pi ITSELF the way users do (npm/pnpm/bun global + the curl
 #            installer), `pi install npm:pi-lens` through pi's own installer +
@@ -43,12 +46,36 @@ on:
     types: [merge-train-post-merge]
   push:
     branches: [master]
-    paths:
+    paths: &install-smoke-paths
       - "package.json"
       - "package-lock.json"
       - "scripts/install-selftest.mjs"
       - "scripts/rpc-load-check.mjs"
+      - "scripts/resolve-newest-in-range-host.mjs"
+      - "scripts/lib/resolve-newest-in-range-host.mjs"
+      # Review F3: these four are on host-range-smoke/host-latest-smoke's
+      # critical path (the retry wrapper both installs go through, the
+      # drift-notifier and its pure report/body builder) but were missing
+      # from this filter — a PR touching only one of them would have gotten
+      # NO install-smoke coverage at all, PR-gating or otherwise.
+      - "scripts/npm-retry.mjs"
+      - "scripts/lib/retry.mjs"
+      - "scripts/notify-install-smoke-drift.mjs"
+      - "scripts/upsert-tracking-issue.mjs"
+      - "scripts/lib/install-smoke-drift.mjs"
+      # findDriftTrackingIssue is a load-bearing import of the above, not
+      # just tool-smoke.yml's own dependency, now that this workflow uses it.
+      - "scripts/lib/drift-issue.mjs"
+      # Review F3: invoked directly as its own step now (T2 restructure),
+      # not just transitively through the `prepare` lifecycle script.
+      - "scripts/download-grammars.js"
       - ".github/workflows/install-smoke.yml"
+  # PR-gating (#2613): only the host-range-smoke job below runs on
+  # pull_request (guarded by `if: github.event_name != 'pull_request'` on
+  # every pre-existing job) -- the full os x pm x pi-install matrices stay
+  # push/nightly/dispatch-only, unchanged from before this lane existed.
+  pull_request:
+    paths: *install-smoke-paths
 
 # A merge made with GITHUB_TOKEN suppresses its push event. Replayed
 # repository_dispatch runs validate the exact merge commit, and duplicate
@@ -58,6 +85,23 @@ concurrency:
   cancel-in-progress: true
 
 permissions: {}
+
+env:
+  # Single source of truth for "the oldest host we promise" (#731) -- both
+  # the existing pi-load/mise-repro pins below AND host-range-smoke's floor
+  # matrix cell read this ONE value, so the pin can never drift apart between
+  # sites the way three independent hardcoded literals eventually would.
+  PI_HOST_FLOOR_VERSION: "0.80.10"
+  # Review S1: `peerDependencies["@earendil-works/pi-coding-agent"]` is `"*"`
+  # today -- unbounded on its own, which would make the "newest-in-range"
+  # PR-gating lane silently equal `@latest` (the "always latest" shape the
+  # maintainer explicitly routed to the ADVISORY nightly lane instead).
+  # scripts/resolve-newest-in-range-host.mjs intersects this repo-owned
+  # ceiling with the declared peer range, so the wildcard case stays bounded
+  # regardless of what that range says. BUMP BY HAND when the peer range
+  # narrows to something tighter, or when a new minor (currently untested
+  # past 0.85.x) is verified and should be admitted.
+  PI_HOST_SUPPORTED_RANGE: ">=0.80.10 <0.86.0"
 
 jobs:
   validate-merge-train-dispatch:
@@ -85,7 +129,8 @@ jobs:
   record-post-merge-validation:
     name: Record post-merge validation
     if: always() && github.event_name == 'repository_dispatch' && needs.validate-merge-train-dispatch.result == 'success'
-    needs: [validate-merge-train-dispatch, smoke, pi-load, mise-repro]
+    needs:
+      [validate-merge-train-dispatch, smoke, pi-load, mise-repro, host-range-smoke]
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -98,11 +143,12 @@ jobs:
           SMOKE_RESULT: ${{ needs.smoke.result }}
           PI_LOAD_RESULT: ${{ needs.pi-load.result }}
           MISE_RESULT: ${{ needs.mise-repro.result }}
+          HOST_RANGE_RESULT: ${{ needs.host-range-smoke.result }}
         run: |
           set -euo pipefail
           state=succeeded
           unknown=0
-          for result in "$SMOKE_RESULT" "$PI_LOAD_RESULT" "$MISE_RESULT"; do
+          for result in "$SMOKE_RESULT" "$PI_LOAD_RESULT" "$MISE_RESULT" "$HOST_RANGE_RESULT"; do
             case "$result" in
               success) ;;
               failure) state=failed ;;
@@ -121,6 +167,9 @@ jobs:
 
   smoke:
     name: ${{ matrix.os }} · ${{ matrix.pm }}
+    # Unchanged from before #2613: this os x pm x pm-flavor matrix stays off
+    # pull_request entirely -- host-range-smoke is the new PR-gating lane.
+    if: github.event_name != 'pull_request'
     needs: validate-merge-train-dispatch
     runs-on: ${{ matrix.os }}
     permissions:
@@ -165,7 +214,7 @@ jobs:
 
       - name: Setup pnpm
         if: matrix.pm == 'pnpm'
-        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 11.21.0
 
@@ -238,6 +287,7 @@ jobs:
   # users get) — guards the shipped artifact; the `smoke` job guards current code.
   pi-load:
     name: pi-load · ${{ matrix.os }} · ${{ matrix.pi_install }}
+    if: github.event_name != 'pull_request'
     needs: validate-merge-train-dispatch
     runs-on: ${{ matrix.os }}
     permissions:
@@ -282,7 +332,7 @@ jobs:
 
       - name: Setup pnpm
         if: matrix.pi_install == 'pnpm-global'
-        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 11.21.0
 
@@ -296,10 +346,13 @@ jobs:
         shell: bash
         run: |
           set -uxo pipefail
-          # Pinned deliberately (bump by hand when a newer pi release is
-          # verified — see #731): keeps a token-bearing CI job from pulling an
-          # arbitrary newest-on-registry version of a third-party package.
-          PKG="@earendil-works/pi-coding-agent@0.80.10"
+          # Pinned deliberately (bump PI_HOST_FLOOR_VERSION by hand when a
+          # newer pi release is verified — see #731): keeps a token-bearing CI
+          # job from pulling an arbitrary newest-on-registry version of a
+          # third-party package. Read from env.PI_HOST_FLOOR_VERSION (#2613)
+          # so this floor and host-range-smoke's "floor" matrix cell can never
+          # drift apart.
+          PKG="@earendil-works/pi-coding-agent@${{ env.PI_HOST_FLOOR_VERSION }}"
           case "${{ matrix.pi_install }}" in
             npm-global)
               # pi-lens-ignore: zizmor:adhoc-packages
@@ -380,6 +433,7 @@ jobs:
   # of #285 coverage.
   mise-repro:
     name: mise repro (#285) · ${{ matrix.os }} · ${{ matrix.pi_via }}
+    if: github.event_name != 'pull_request'
     needs: validate-merge-train-dispatch
     runs-on: ${{ matrix.os }}
     permissions:
@@ -475,9 +529,9 @@ jobs:
         shell: bash
         run: |
           set -uxo pipefail
-          # Pinned deliberately (bump by hand when a newer pi release is
-          # verified — see #731).
-          PKG="@earendil-works/pi-coding-agent@0.80.10"
+          # Pinned deliberately (bump PI_HOST_FLOOR_VERSION by hand when a
+          # newer pi release is verified — see #731 and #2613).
+          PKG="@earendil-works/pi-coding-agent@${{ env.PI_HOST_FLOOR_VERSION }}"
           case "${{ matrix.pi_via }}" in
             mise-node)
               # node from mise; pi as a plain npm-global under that node.
@@ -522,3 +576,335 @@ jobs:
           printf '{ "name": "d", "version": "1.0.0", "type": "module" }\n' > package.json
           git add -A && git commit -qm init
           node "$GITHUB_WORKSPACE/scripts/rpc-load-check.mjs" "$(command -v pi)"
+
+  # PR-gating host-tree lanes (#2613, the #2590 recurrence). #2590's bug (a
+  # newer @earendil-works/pi-coding-agent devDependency nesting a
+  # same-version esbuild broke bundle:dist's `npm exec` resolution) was
+  # invisible to every job above -- `smoke` builds/packs the CURRENT repo
+  # too, but only ever against whatever host version happens to be pinned in
+  # package.json's devDependencies right now; `pi-load`/`mise-repro` install
+  # a PUBLISHED pi-lens, never building dist at all. It surfaced only by
+  # accident, when #2588 happened to bump that devDependency pin.
+  #
+  # This job makes the exercise deliberate: it overrides the
+  # pi-coding-agent devDependency to two specific hosts before building --
+  # the pinned floor (PI_HOST_FLOOR_VERSION, the oldest host we promise,
+  # #731) and the newest host the declared `peerDependencies` range admits
+  # (resolved at run time by scripts/resolve-newest-in-range-host.mjs, so a
+  # range bump like #2588 is exercised on the exact host it newly admits,
+  # by construction) -- then runs the SAME tarball-install + install-selftest
+  # + build:dist sequence `smoke` runs. Both cells are BLOCKING (no
+  # continue-on-error): a real regression in either is the PR's to fix,
+  # unless the "Classify" step below finds the same failure already on
+  # master, in which case it is upstream drift instead.
+  host-range-smoke:
+    name: host range · ${{ matrix.pi_host }}
+    needs: validate-merge-train-dispatch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # read master's last install-smoke run to classify drift
+    strategy:
+      fail-fast: false
+      matrix:
+        pi_host: [floor, newest-in-range]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event_name == 'repository_dispatch' && github.event.client_payload.sha || github.ref }}
+          persist-credentials: false
+
+      - name: Validate merge-train dispatch payload
+        if: github.event_name == 'repository_dispatch'
+        env:
+          PAYLOAD_REPOSITORY: ${{ github.event.client_payload.repository }}
+          PAYLOAD_SHA: ${{ github.event.client_payload.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$PAYLOAD_REPOSITORY" != "$GITHUB_REPOSITORY" ]]; then
+            echo "::error::repository_dispatch repository does not match this repository"
+            exit 1
+          fi
+          if [[ ! "$PAYLOAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "::error::repository_dispatch SHA must be a 40-hex commit"
+            exit 1
+          fi
+          checked_sha="$(git rev-parse --verify HEAD)"
+          if [[ "${PAYLOAD_SHA,,}" != "$checked_sha" ]]; then
+            echo "::error::checkout does not match the repository_dispatch SHA"
+            exit 1
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      # --ignore-scripts: this bootstrap install exists only so the resolver
+      # script below can `import "semver"` — the committed lockfile's tree,
+      # not yet pointed at any target host. Skipped entirely for the floor
+      # cell (T5): it never calls the resolver (the floor version comes
+      # straight from env.PI_HOST_FLOOR_VERSION), so it has nothing to
+      # bootstrap and goes directly to the real, scripted install below.
+      - name: Bootstrap deps (for the resolver script)
+        if: matrix.pi_host != 'floor'
+        run: node scripts/npm-retry.mjs ci --ignore-scripts --no-audit --no-fund
+
+      - name: Resolve target host (${{ matrix.pi_host }})
+        id: resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.pi_host }}" = "floor" ]; then
+            VERSION="${{ env.PI_HOST_FLOOR_VERSION }}"
+          else
+            VERSION="$(node scripts/resolve-newest-in-range-host.mjs "@earendil-works/pi-coding-agent")"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "::notice::host range lane '${{ matrix.pi_host }}' resolved to @earendil-works/pi-coding-agent@$VERSION"
+
+      # T2 restructure (SonarCloud S6505/S8543 review): `npm ci --ignore-scripts`
+      # (deterministic, from the committed lock) THEN `npm install --no-save
+      # --ignore-scripts` of ONLY the target host (never runs `prepare`,
+      # never touches the lockfile) is what the sibling lifecycle-smoke.yml
+      # (lines ~45-49) already does for the identical "swap one devDependency,
+      # then build" shape. `prepare`'s REAL relevance here isn't `build:dist`
+      # (self-contained: tsc + esbuild, needs nothing `prepare` provides) —
+      # it's `download-grammars.js`, because `grammars/` ships in package.json
+      # `files[]`; the explicit step right after this one replaces that one
+      # real reason to ever run `prepare`, so scripts stay off for both installs.
+      # Retried (review S3a): a registry 429/5xx on this BLOCKING install
+      # must not die on the first hiccup. scripts/npm-retry.mjs is the
+      # generic wrapper (scripts/lib/retry.mjs) both this and the pin-host
+      # install below share — see scripts/audit-prod-deps.mjs (#2579) for
+      # the precedent this generalizes.
+      - name: Install deps (ci, scripts off)
+        run: node scripts/npm-retry.mjs ci --ignore-scripts --no-audit --no-fund
+
+      - name: Pin devDependency to the resolved host (no-save, scripts off)
+        run: |
+          set -euxo pipefail
+          node scripts/npm-retry.mjs install --no-save --ignore-scripts --no-audit --no-fund \
+            "@earendil-works/pi-coding-agent@${{ steps.resolve.outputs.version }}"
+
+      # The one real reason `prepare` mattered for this lane: `grammars/` is
+      # in package.json's `files[]`, so a packed tarball built with scripts
+      # off would silently ship without it. `build:dist` below is NOT one of
+      # prepare's reasons — it's fully self-contained (tsc + esbuild) and
+      # runs as its own explicit step regardless.
+      - name: Download grammars (files[] contract, not build:dist's concern)
+        run: node scripts/download-grammars.js --core --dest grammars
+
+      # THE step #2590 broke: bundle:dist's `npm exec --package esbuild`
+      # spawn used to resolve against the WHOLE dependency tree (including
+      # this devDependency's own nested node_modules), so a host version that
+      # nests a same-version esbuild made npm skip its own npx-cache install
+      # and leave nothing on PATH. #2594 fixed this with `--prefix` isolation
+      # (scripts/lib/exec-isolation.mjs); this step is what would have caught
+      # it, for whichever host version is newest at build time.
+      - name: Build dist (host=${{ matrix.pi_host }})
+        run: npm run build:dist
+
+      - name: Pack the current repo
+        shell: bash
+        run: |
+          set -euxo pipefail
+          TARBALL="$(npm pack --silent | tail -1)"
+          echo "TARBALL=$PWD/$TARBALL" >> "$GITHUB_ENV"
+
+      - name: Install tarball into a clean project
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/proj" && cd "$RUNNER_TEMP/proj"
+          npm init -y >/dev/null
+          # pi-lens-ignore: zizmor:adhoc-packages
+          node "$GITHUB_WORKSPACE/scripts/npm-retry.mjs" install "$TARBALL"
+
+      - name: Selftest under bun (strictest resolver)
+        shell: bash
+        run: |
+          set -uxo pipefail
+          cd "$RUNNER_TEMP/proj"
+          SELFTEST="$(node -e 'console.log(require.resolve("pi-lens/scripts/install-selftest.mjs"))')"
+          bun "$SELFTEST" --allow-soft
+
+      # Acceptance (#2613): a newest-in-range failure that ALSO fails on
+      # master is upstream drift, not this PR's regression. Compares against
+      # the same named job's conclusion on the last completed master run of
+      # this workflow. Review S3b: ONLY a "success" master conclusion means
+      # "passes on master" -> PR regression; "cancelled"/"skipped"/
+      # "timed_out"/missing all mean "no usable baseline" (a cancelled or
+      # skipped master run proves nothing about whether the LANE itself
+      # passes there), never a false "PR regression".
+      - name: Classify newest-in-range failure (PR regression vs upstream drift)
+        if: failure() && matrix.pi_host == 'newest-in-range'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          JOB_NAME="host range · ${{ matrix.pi_host }}"
+          RUN_ID="$(gh run list --repo "$GITHUB_REPOSITORY" --branch master \
+            --workflow install-smoke.yml --status completed --limit 1 \
+            --json databaseId --jq '.[0].databaseId' 2>/dev/null)"
+          if [ -z "$RUN_ID" ]; then
+            echo "::warning::no completed master run of install-smoke.yml found yet — cannot classify this failure as a PR regression or upstream drift"
+            exit 0
+          fi
+          CONCLUSION="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs" \
+            --paginate --jq ".jobs[] | select(.name == \"$JOB_NAME\") | .conclusion" 2>/dev/null | head -1)"
+          if [ "$CONCLUSION" = "failure" ]; then
+            echo "::error::upstream drift — the newest-in-range host also fails on master (run $RUN_ID); not a PR regression"
+          elif [ "$CONCLUSION" = "success" ]; then
+            echo "::error::PR regression — the newest-in-range host lane passes on master (run $RUN_ID) but fails on this PR"
+          else
+            echo "::warning::no usable baseline — master run $RUN_ID's '$JOB_NAME' conclusion is '${CONCLUSION:-missing}' (not success, not failure) — cannot classify this failure as a PR regression or upstream drift"
+          fi
+
+  # Nightly advisory lane (#2613): @latest unconditionally. Failing here is
+  # EXPECTED sometimes -- a pi release the peer range does not yet admit is
+  # not a PR's fault -- so this never runs on pull_request/push and never
+  # fails the workflow (every risky step is continue-on-error, chained by
+  # `if: steps.<previous>.outcome == 'success'` so one failure short-circuits
+  # the rest instead of e.g. trying to pack a dist/ that was never built). On
+  # failure it files/refreshes ONE persistent issue by fixed title, naming
+  # the installed version and the failing step -- the compat-smoke / #2581
+  # pattern, via scripts/notify-install-smoke-drift.mjs (review S2/T3:
+  # reuses scripts/lib/drift-issue.mjs's title-matching finder as its SECOND
+  # consumer instead of embedding a third gh-issue-upsert copy directly in
+  # this YAML). The notify step runs UNCONDITIONALLY (always()) because it
+  # also CLOSES the tracker once a run installs cleanly again -- the
+  # acceptance criterion this lane's first round missed.
+  host-latest-smoke:
+    name: host latest nightly (advisory)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write # file/refresh/close the drift tracking issue
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: "22"
+
+      - name: Setup bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      # Retried (review S3a): a registry 429/5xx here must not silently mark
+      # the nightly lane "clean" or blow up before it can even alert.
+      - name: Resolve @latest
+        id: resolve
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(node scripts/npm-retry.mjs view @earendil-works/pi-coding-agent@latest version)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "::notice::nightly host lane resolved @earendil-works/pi-coding-agent@latest to $VERSION"
+
+      # T2 restructure (SonarCloud S6505/S8543 review, same shape as
+      # host-range-smoke above and the sibling lifecycle-smoke.yml:45-51):
+      # `npm ci --ignore-scripts` (deterministic, from the committed lock)
+      # THEN `npm install --no-save --ignore-scripts` of ONLY the target
+      # host, both retried (S3a). `prepare`'s real relevance is
+      # `download-grammars.js` (grammars/ ships in package.json `files[]`),
+      # handled by its own explicit step below -- never `build:dist`, which
+      # is self-contained and runs as its own step regardless.
+      - name: Install deps (ci, scripts off)
+        id: install_ci
+        continue-on-error: true
+        if: steps.resolve.outcome == 'success'
+        run: node scripts/npm-retry.mjs ci --ignore-scripts --no-audit --no-fund
+
+      - name: Pin devDependency to @latest (no-save, scripts off)
+        id: install_deps
+        continue-on-error: true
+        if: steps.install_ci.outcome == 'success'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          node scripts/npm-retry.mjs install --no-save --ignore-scripts --no-audit --no-fund \
+            "@earendil-works/pi-coding-agent@${{ steps.resolve.outputs.version }}"
+
+      - name: Download grammars (files[] contract, not build:dist's concern)
+        id: grammars
+        continue-on-error: true
+        if: steps.install_deps.outcome == 'success'
+        run: node scripts/download-grammars.js --core --dest grammars
+
+      - name: Build dist
+        id: build_dist
+        continue-on-error: true
+        if: steps.grammars.outcome == 'success'
+        run: npm run build:dist
+
+      - name: Pack the current repo
+        id: pack
+        continue-on-error: true
+        if: steps.build_dist.outcome == 'success'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          TARBALL="$(npm pack --silent | tail -1)"
+          echo "TARBALL=$PWD/$TARBALL" >> "$GITHUB_ENV"
+
+      - name: Install tarball into a clean project
+        id: install_tarball
+        continue-on-error: true
+        if: steps.pack.outcome == 'success'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/proj" && cd "$RUNNER_TEMP/proj"
+          npm init -y >/dev/null
+          # pi-lens-ignore: zizmor:adhoc-packages
+          node "$GITHUB_WORKSPACE/scripts/npm-retry.mjs" install "$TARBALL"
+
+      - name: Selftest under bun (strictest resolver)
+        id: selftest
+        continue-on-error: true
+        if: steps.install_tarball.outcome == 'success'
+        shell: bash
+        run: |
+          set -uxo pipefail
+          cd "$RUNNER_TEMP/proj"
+          SELFTEST="$(node -e 'console.log(require.resolve("pi-lens/scripts/install-selftest.mjs"))')"
+          bun "$SELFTEST" --allow-soft
+
+      # Runs every time (always()), success or failure: on drift it files or
+      # refreshes the tracker; on a clean run it CLOSES an existing tracker
+      # (#2613 acceptance: "closed when green again"). See
+      # scripts/notify-install-smoke-drift.mjs for the outcome-table ->
+      # report mapping and scripts/lib/install-smoke-drift.mjs for the pure
+      # body-building logic (tested in tests/scripts/).
+      - name: Notify install drift (file/refresh on failure, close on green)
+        if: always()
+        # Tracker maintenance must not mask the advisory smoke lane's own
+        # verdict; the notifier's gh failure is non-gating at this step.
+        continue-on-error: true
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RESOLVED_VERSION: ${{ steps.resolve.outputs.version }}
+          RESOLVE_OUTCOME: ${{ steps.resolve.outcome }}
+          INSTALL_CI_OUTCOME: ${{ steps.install_ci.outcome }}
+          INSTALL_DEPS_OUTCOME: ${{ steps.install_deps.outcome }}
+          GRAMMARS_OUTCOME: ${{ steps.grammars.outcome }}
+          BUILD_DIST_OUTCOME: ${{ steps.build_dist.outcome }}
+          PACK_OUTCOME: ${{ steps.pack.outcome }}
+          INSTALL_TARBALL_OUTCOME: ${{ steps.install_tarball.outcome }}
+          SELFTEST_OUTCOME: ${{ steps.selftest.outcome }}
+        run: node scripts/notify-install-smoke-drift.mjs

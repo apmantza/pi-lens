@@ -43,10 +43,12 @@ vi.mock("../../clients/lsp/config.js", () => ({
 }));
 
 vi.mock("../../clients/lsp/index.js", () => ({
-	getLSPService: vi.fn(() => ({
-		touchFile: touchFileSpy,
-		supportsLSP: (file: string) => file.endsWith(".ts"),
-	})),
+	getLSPService: vi.fn(() =>
+		makeLspServiceDouble({
+			touchFile: touchFileSpy,
+			supportsLSP: (file: string) => file.endsWith(".ts"),
+		}),
+	),
 }));
 
 vi.mock("../../clients/latency-logger.js", async (importOriginal) => {
@@ -56,6 +58,7 @@ vi.mock("../../clients/latency-logger.js", async (importOriginal) => {
 });
 
 import { handleSessionStart } from "../../clients/runtime-session.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 function makeDeps(ctxCwd: string, overrides: Record<string, unknown> = {}) {
 	return withResidentBootstrap({

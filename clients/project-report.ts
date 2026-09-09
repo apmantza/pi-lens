@@ -58,7 +58,7 @@ export interface ProjectReportOptions {
 	view?: "compact";
 }
 
-export interface ProjectReportTrust {
+interface ProjectReportTrust {
 	graphBuiltAt: string;
 	/** Files with a node in the cached graph. */
 	filesCovered: number;
@@ -101,11 +101,11 @@ export interface ProjectReportTrust {
 	notes: string[];
 }
 
-export interface ProjectReportFileRef {
+interface ProjectReportFileRef {
 	suggestedNext: { tool: "module_report"; path: string };
 }
 
-export interface ProjectReportHub extends ProjectReportFileRef {
+interface ProjectReportHub extends ProjectReportFileRef {
 	file: string;
 	fanIn: number;
 	blastRadius: number;
@@ -113,24 +113,24 @@ export interface ProjectReportHub extends ProjectReportFileRef {
 	role?: string;
 }
 
-export interface ProjectReportEntryPoint extends ProjectReportFileRef {
+interface ProjectReportEntryPoint extends ProjectReportFileRef {
 	file: string;
 	fanIn: number;
 	fanOut: number;
 }
 
-export interface DirectoryEdge {
+interface DirectoryEdge {
 	from: string;
 	to: string;
 	count: number;
 }
 
-export interface DirectoryCycle {
+interface DirectoryCycle {
 	dirs: string[];
 	edgeCount: number;
 }
 
-export interface LayeringViolation {
+interface LayeringViolation {
 	/** The minority (against-the-grain) direction. */
 	from: string;
 	to: string;
@@ -139,7 +139,7 @@ export interface LayeringViolation {
 	dominantCount: number;
 }
 
-export interface SubsystemMap {
+interface SubsystemMap {
 	directories: string[];
 	edges: DirectoryEdge[];
 	/** Directory-level import cycles, worst-first (most edges among the
@@ -150,7 +150,7 @@ export interface SubsystemMap {
 	violations: LayeringViolation[];
 }
 
-export interface RiskHotspot extends ProjectReportFileRef {
+interface RiskHotspot extends ProjectReportFileRef {
 	file: string;
 	fanIn: number;
 	maxComplexity: number;
@@ -158,7 +158,7 @@ export interface RiskHotspot extends ProjectReportFileRef {
 	score: number;
 }
 
-export interface DeadWeightFile extends ProjectReportFileRef {
+interface DeadWeightFile extends ProjectReportFileRef {
 	file: string;
 }
 

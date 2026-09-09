@@ -16,7 +16,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { listSourceFiles, relativePosix, stripSource } from "./sweep-kit.js";
+import {
+	escapeRegExp,
+	listSourceFiles,
+	relativePosix,
+	stripSource,
+} from "./sweep-kit.js";
 
 export const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -552,11 +557,6 @@ export function auditContainerClassExclusions(
 	return problems;
 }
 
-/** Escape a literal identifier for safe use inside a `RegExp` alternation. */
-function escapeRegExpLiteral(value: string): string {
-	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 const containerDeclarationCache = new Map<string, RegExp>();
 
 /**
@@ -581,7 +581,7 @@ function containerDeclarationRegex(dir: string): RegExp {
 	const cached = containerDeclarationCache.get(dir);
 	if (cached) return cached;
 	const names = [...BUILTIN_CONTAINER_CTORS, ...containerClassNames(dir)].map(
-		escapeRegExpLiteral,
+		escapeRegExp,
 	);
 	const regex = new RegExp(
 		`^(?:export\\s+)?(?:const|let)\\s+([A-Za-z_$][\\w$]*)[^=\\n]*=\\s*new\\s+(?:${names.join("|")})\\b`,
@@ -641,7 +641,7 @@ const PROCESS_SINGLETON_CALL = /getProcessSingleton\s*\(/;
  *    source, so column-zero matching skips it.
  * 5. **Semantics.** The scan cannot tell a session-scoped dedupe set from a
  *    frozen lookup table built once at import. That judgment stays in the
- *    registry and in {@link SessionStateExemption}'s reasons.
+ *    registry and in `SessionStateExemption` (the shape formerly exported here)'s reasons.
  *
  * The #1817 symbol-count pin narrows the FIRST four of these from "invisible"
  * to "a total the pin table tracks", but it inherits one more blind spot of
@@ -720,6 +720,3 @@ export function scanSessionStateCandidates(
 	if (useCache) cachedCandidates = found;
 	return found;
 }
-
-/** A scanned file the registry deliberately does not cover, and why. */
-export type SessionStateExemption = string;

@@ -50,6 +50,13 @@ async function _weakenedWithBoundsWorkDoesNotTypeCheck(): Promise<void> {
 		label: "fold-probe",
 	});
 }
+// `noUnusedLocals` anchor for the probe above, which is never called. This was
+// an `it()` asserting `typeof _weakenedWithBoundsWorkDoesNotTypeCheck ===
+// "function"`; weakening the constraint to plain `T` leaves every runtime case
+// in this file green and reds only `tsc` (TS2578), so the case guarded nothing
+// the probe function did not already guard — deleted in #2574 round 2 under
+// AGENTS.md "Vacuous and trivial tests are deleted in the PR that touches them".
+void _weakenedWithBoundsWorkDoesNotTypeCheck;
 
 /**
  * The subject of the most recent `hook-await-exceeded` row, or `undefined`
@@ -82,6 +89,24 @@ describe("#2523 slice 2 — clients/bootstrap.ts#awaitWithinBounds folded onto b
 	 * the same seam a genuinely slow filesystem stalls it through, and the
 	 * wedge `tests/clients/bootstrap-on-demand.test.ts` already drives this
 	 * module with.
+	 *
+	 * EVERY case that opens this gate must pair `gate.release()` with
+	 * `await bootstrap.loadBootstrapClients()` — the same two lines
+	 * `bootstrap-on-demand.test.ts:266-267` pairs them with, and for the same
+	 * reason read from the other side. `bounded()` abandons the WAIT, not the
+	 * WORK: when these cases return, `buildBootstrapClients`'s seventeen-module
+	 * `Promise.all` is still resolving inside vite-node's module runner, and
+	 * the traced timestamps put the release, the case returning, and the
+	 * `afterEach` above in the SAME millisecond. `doUnmock` + `resetModules`
+	 * then land on a live import graph, and the NEXT case's
+	 * `await import("../../clients/observed-mutation.js")` either deadlocks
+	 * against it (8/20 runs of this file timed out at 5 s) or proceeds with its
+	 * own `doMock` never applied — the `armed: true, scannedCount: 0` in 70 ms
+	 * CI reported as #2574/#2596. Neither is a timer race, which is why a fake
+	 * clock could not fix it. The awaited call joins the flight already
+	 * registered under `BOOTSTRAP_FLIGHT_KEY` (`clients/single-flight.ts`
+	 * shares by key), so it settles the very promise the bound walked away
+	 * from without starting a second load and without touching production.
 	 */
 	function gateOneClientImport(): { release: () => void } {
 		const gate = gatedPromise<void>();
@@ -137,7 +162,9 @@ describe("#2523 slice 2 — clients/bootstrap.ts#awaitWithinBounds folded onto b
 					?.latestReasons.at(-1)?.reason,
 			).toContain("timeout");
 		} finally {
+			// Pair release with settle — see `gateOneClientImport` (#2574).
 			gate.release();
+			await bootstrap.loadBootstrapClients();
 		}
 	});
 
@@ -164,7 +191,9 @@ describe("#2523 slice 2 — clients/bootstrap.ts#awaitWithinBounds folded onto b
 			expect(lastExceededSubject(ledger)).toBeUndefined();
 			expect(ledger.getDegradationSummary()).toEqual([]);
 		} finally {
+			// Pair release with settle — see `gateOneClientImport` (#2574).
 			gate.release();
+			await bootstrap.loadBootstrapClients();
 		}
 	});
 });
@@ -197,6 +226,17 @@ describe("#2523 slice 2 — clients/observed-mutation.ts#withBounds folded onto 
 	}
 
 	it("records hook-await-exceeded naming the arm when the capture outlives its budget", async () => {
+		// #2574/#2596 (both the `armed: true, scannedCount: 0` in 70 ms) were
+		// NOT a race between this assertion and the real 200 ms
+		// `OBSERVED_CAPTURE_BUDGET_MS` deadline: the gate below never releases
+		// before the assertion, so with the mock applied `armObservedMutation`
+		// has no path to `armed: true` at all, and the run finished in a third
+		// of the budget. It was the preceding describe's abandoned bootstrap
+		// load colliding with `afterEach`'s `resetModules()` and costing this
+		// case its `doMock` — see `gateOneClientImport` above. The real
+		// deadline is kept deliberately: it is bounded (200 ms) and this case
+		// AWAITS it rather than asserting against a clock, so no scheduling
+		// outcome is left to luck.
 		const gate = gateStatsCapture();
 		const ledger = await import("../../clients/degradation-ledger.js");
 		ledger.resetDegradationLedger();
@@ -218,12 +258,6 @@ describe("#2523 slice 2 — clients/observed-mutation.ts#withBounds folded onto 
 		} finally {
 			gate.release();
 		}
-	});
-
-	it("keeps withBounds's T extends object constraint referenced (see _weakenedWithBoundsWorkDoesNotTypeCheck above)", () => {
-		// The compile-time half is the load-bearing assertion; this reference
-		// only keeps `noUnusedLocals` from flagging the probe function above.
-		expect(typeof _weakenedWithBoundsWorkDoesNotTypeCheck).toBe("function");
 	});
 
 	it("reports `aborted`, not `timeout`, when the signal fires mid-capture", async () => {

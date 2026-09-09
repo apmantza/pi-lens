@@ -1,4 +1,11 @@
+import { readFileSync, readdirSync } from "node:fs";
+import { join, resolve } from "node:path";
+import * as yaml from "js-yaml";
 import { describe, expect, it } from "vitest";
+import {
+	ADVISORY_CHECKS,
+	isAdvisoryCheck,
+} from "../../scripts/lib/ci-checks.mjs";
 import {
 	computeVerdict,
 	DEFAULT_GH_TIMEOUT_MS,
@@ -19,6 +26,7 @@ import {
 	resolveGhTimeoutMs,
 	resolveHeadSha,
 	resolveRepository,
+	resolveRequiredCheckNames,
 	resolveWaitCapSeconds,
 	run,
 } from "../../scripts/ci-verdict.mjs";
@@ -49,6 +57,41 @@ const BOTH_SUCCESS = {
 };
 
 describe("computeVerdict — the four exit codes (#2539 acceptance criterion)", () => {
+	it("reports an armed infrastructure rerun only while its later attempt runs", () => {
+		const verdict = computeVerdict(
+			{
+				check_runs: [
+					checkRun({ name: "Unit tests", conclusion: "failure", id: 1 }),
+				],
+			},
+			["Unit tests"],
+			"MERGEABLE",
+			"infra-kill",
+			{
+				originalFailed: true,
+				latestAttempt: { status: "queued", conclusion: null, run_attempt: 2 },
+			},
+		);
+		expect(verdict.exitCode).toBe(EXIT_PENDING);
+		expect(verdict.reason).toContain("infra (rerun armed)");
+	});
+	it("reports a concluded rerun failure even when ci:infra remains", () => {
+		const verdict = computeVerdict(
+			{ check_runs: [checkRun({ name: "Unit tests", conclusion: "failure" })] },
+			["Unit tests"],
+			"MERGEABLE",
+			"infra-net",
+			{
+				originalFailed: true,
+				latestAttempt: {
+					status: "completed",
+					conclusion: "failure",
+					run_attempt: 2,
+				},
+			},
+		);
+		expect(verdict.exitCode).toBe(EXIT_FAILURE);
+	});
 	it("exits 0 when both required checks concluded success", () => {
 		const verdict = computeVerdict(BOTH_SUCCESS);
 		expect(verdict.exitCode).toBe(EXIT_SUCCESS);
@@ -122,6 +165,22 @@ describe("computeVerdict — absent-check verdict is mergeable-aware (#2539 roun
 			"UNKNOWN",
 		);
 		expect(verdict.exitCode).toBe(EXIT_PENDING);
+	});
+
+	// #2664: the reported live scenario -- BOTH required rows absent (a base
+	// retargeted after open; ci.yml has no `edited` trigger, so neither check
+	// ever registers) with a MERGEABLE head. The issue claimed this exited 0;
+	// it already exits 3 (see the doc comment above computeVerdict), so this
+	// pins that exit code AND the issue's optional hint text, which is the
+	// one piece #2664 actually adds.
+	it("A5 (#2664): both required rows absent + MERGEABLE exits 3 with the retarget hint", () => {
+		const verdict = computeVerdict({ check_runs: [] }, undefined, "MERGEABLE");
+		expect(verdict.exitCode).toBe(EXIT_PENDING);
+		expect(verdict.rows.every((row) => !row.present)).toBe(true);
+		expect(verdict.reason).toContain("mergeable=MERGEABLE");
+		expect(verdict.reason).toContain(
+			"if the base was retargeted after this PR opened, push a commit or close/reopen to re-arm ci.yml",
+		);
 	});
 
 	it("DIRTY still takes priority over an independently failed sibling check, when CONFLICTING", () => {
@@ -380,6 +439,783 @@ describe("computeVerdict — rerun de-duplication (latest-started wins)", () => 
 		expect(verdict.exitCode).toBe(EXIT_PENDING);
 		const unitTests = verdict.rows.find((row) => row.name === "Unit tests");
 		expect(unitTests?.status).toBe("in_progress");
+	});
+});
+
+// #2609: `ci-verdict.mjs` used to build `rows` ONLY from the fixed
+// `["Unit tests", "Lint & type-check"]` pair, so a red "Production install
+// build" or "Install test" job on PR #2588's head e32d814e never entered the
+// computation -- `run() 2588` printed "both required checks concluded
+// success" while the Production install build job was genuinely red (a
+// widened peer range with a space, word-split by `read -ra`). Pre-fix, this
+// whole describe block's first test reproduces that: RED on
+// `git show <pre-#2609 sha>:scripts/ci-verdict.mjs`'s `computeVerdict`,
+// because that version never looked at any check-run name outside
+// `requiredChecks`.
+describe("computeVerdict — every check-run gates unless advisory (#2609)", () => {
+	const REAL_PROD_INSTALL_BUILD_NAME =
+		"Production install build (--omit=dev, from source)";
+
+	it("exits 1 when a discovered, non-advisory check-run fails even though both required checks pass (PR #2588 shape)", () => {
+		const payload = {
+			check_runs: [
+				checkRun({ name: "Unit tests", id: 1 }),
+				checkRun({ name: "Lint & type-check", id: 2 }),
+				checkRun({
+					name: REAL_PROD_INSTALL_BUILD_NAME,
+					conclusion: "failure",
+					id: 3,
+				}),
+			],
+		};
+		const verdict = computeVerdict(payload, undefined, "MERGEABLE");
+		expect(verdict.exitCode).toBe(EXIT_FAILURE);
+		expect(verdict.reason).toContain(REAL_PROD_INSTALL_BUILD_NAME);
+		const row = verdict.rows.find(
+			(r) => r.name === REAL_PROD_INSTALL_BUILD_NAME,
+		);
+		expect(row?.gating).toBe(true);
+	});
+
+	it("exits 0 when only a name-suffix advisory lane fails (OSV scan (advisory))", () => {
+		const payload = {
+			check_runs: [
+				checkRun({ name: "Unit tests", id: 1 }),
+				checkRun({ name: "Lint & type-check", id: 2 }),
+				checkRun({
+					name: "OSV scan (advisory)",
+					conclusion: "failure",
+					id: 3,
+				}),
+			],
+		};
+		const verdict = computeVerdict(payload, undefined, "MERGEABLE");
+		expect(verdict.exitCode).toBe(EXIT_SUCCESS);
+		const row = verdict.rows.find((r) => r.name === "OSV scan (advisory)");
+		expect(row?.gating).toBe(false);
+	});
+
+	it("exits 0 when only a static-allowlist advisory vendor check fails (SonarCloud/CodeQL, no suffix)", () => {
+		const payload = {
+			check_runs: [
+				checkRun({ name: "Unit tests", id: 1 }),
+				checkRun({ name: "Lint & type-check", id: 2 }),
+				checkRun({
+					name: "SonarCloud Code Analysis",
+					conclusion: "failure",
+					id: 3,
+				}),
+			],
+		};
+		expect(computeVerdict(payload, undefined, "MERGEABLE").exitCode).toBe(
+			EXIT_SUCCESS,
+		);
+	});
+
+	it("exits 3 (pending) while a discovered gating check is still queued or in progress", () => {
+		const payload = {
+			check_runs: [
+				checkRun({ name: "Unit tests", id: 1 }),
+				checkRun({ name: "Lint & type-check", id: 2 }),
+				checkRun({
+					name: REAL_PROD_INSTALL_BUILD_NAME,
+					status: "in_progress",
+					conclusion: null,
+					id: 3,
+				}),
+			],
+		};
+		const verdict = computeVerdict(payload, undefined, "MERGEABLE");
+		expect(verdict.exitCode).toBe(EXIT_PENDING);
+		expect(verdict.reason).toContain(REAL_PROD_INSTALL_BUILD_NAME);
+	});
+
+	// Not hypothetical: this repository's `record-post-merge-validation` job
+	// (ci.yml AND lint.yml) has a job-level `if: ... event_name ==
+	// 'repository_dispatch'` and reports "skipped" on every ordinary
+	// pull_request run (confirmed live on PR #2588, 2026-09-06 -- two "Record
+	// post-merge validation" rows, both "skipping" in `gh pr checks`). A bare
+	// `conclusion !== "success"` check (the pre-#2609 comparison, applied to a
+	// newly-discovered row) would red every PR forever.
+	it("a discovered gating check that concluded 'skipped' does not fail the verdict", () => {
+		const payload = {
+			check_runs: [
+				checkRun({ name: "Unit tests", id: 1 }),
+				checkRun({ name: "Lint & type-check", id: 2 }),
+				checkRun({
+					name: "Record post-merge validation",
+					conclusion: "skipped",
+					id: 3,
+				}),
+			],
+		};
+		expect(computeVerdict(payload, undefined, "MERGEABLE").exitCode).toBe(
+			EXIT_SUCCESS,
+		);
+	});
+
+	it("a discovered gating check that concluded 'neutral' does not fail the verdict", () => {
+		const payload = {
+			check_runs: [
+				checkRun({ name: "Unit tests", id: 1 }),
+				checkRun({ name: "Lint & type-check", id: 2 }),
+				checkRun({ name: "Some neutral tool", conclusion: "neutral", id: 3 }),
+			],
+		};
+		expect(computeVerdict(payload, undefined, "MERGEABLE").exitCode).toBe(
+			EXIT_SUCCESS,
+		);
+	});
+
+	// AGENTS.md shape 38: "the cheapest evasion is adding a real gate to the
+	// advisory list." A name GitHub's OWN branch-protection read confirms as
+	// required must gate even if it also happens to match the static
+	// advisory allowlist -- this is the override `computeVerdict`'s `gating =
+	// requiredNameSet.has(name) || !isAdvisoryCheck(name)` provides. Deleting
+	// the `requiredNameSet.has(name) ||` half (keeping only
+	// `!isAdvisoryCheck(name)`) is the exact mutation this test catches.
+	it("a name confirmed required by branch protection always gates, even if it matches the advisory allowlist", () => {
+		const payload = {
+			check_runs: [
+				checkRun({
+					name: "SonarCloud Code Analysis",
+					conclusion: "failure",
+					id: 1,
+				}),
+			],
+		};
+		const verdict = computeVerdict(
+			payload,
+			["SonarCloud Code Analysis"],
+			"MERGEABLE",
+		);
+		expect(verdict.exitCode).toBe(EXIT_FAILURE);
+	});
+
+	it("discovered rows are sorted by name after the required rows, each carrying present:true", () => {
+		const payload = {
+			check_runs: [
+				checkRun({ name: "Unit tests", id: 1 }),
+				checkRun({ name: "Lint & type-check", id: 2 }),
+				checkRun({ name: "Install test (windows-latest)", id: 3 }),
+				checkRun({ name: "Install test (macos-latest)", id: 4 }),
+			],
+		};
+		const verdict = computeVerdict(payload, undefined, "MERGEABLE");
+		expect(verdict.rows.map((r) => r.name)).toEqual([
+			"Unit tests",
+			"Lint & type-check",
+			"Install test (macos-latest)",
+			"Install test (windows-latest)",
+		]);
+		expect(verdict.rows.slice(2).every((r) => r.present)).toBe(true);
+	});
+});
+
+// #2618 fix-round-2 state-space table (required/discovered x conclusion x
+// merge state; the "run current / superseded" axis only produces a distinct
+// cell for "cancelled", so it is folded into that row rather than repeated
+// for every conclusion). CONFLICTING is tested densely once elsewhere
+// (#2539 round 3, F1's "DIRTY fires... regardless of check presence" block)
+// and here only for the two NEW cells this round adds (required/cancelled,
+// discovered/cancelled-current) -- DIRTY's precedence over every other
+// signal is unchanged production code, not re-verified per conclusion.
+//
+//  row kind    | conclusion | supersession        | exit (MERGEABLE) | exit (CONFLICTING)
+//  ------------|------------|----------------------|-------------------|--------------------
+//  required    | success    | --                   | 0 (existing)      | 2 (existing)
+//  required    | failure    | --                   | 1 (existing)      | 2 (existing)
+//  required    | cancelled  | --                   | 1  F1             | 2  NEW
+//  required    | skipped    | --                   | 1  F1             | 2  (covered by table-driven test)
+//  required    | neutral    | --                   | 1  F1             | 2  (covered by table-driven test)
+//  required    | timed_out  | --                   | 1  (sanity)       | 2  (covered by table-driven test)
+//  required    | absent     | --                   | 3 (existing A1)   | 2 (existing A2)
+//  discovered  | success    | --                   | 0 (existing)      | 2 (existing)
+//  discovered  | failure    | --                   | 1 (existing)      | 2 (existing)
+//  discovered  | cancelled  | current (no replacement yet) | 3  F2      | 2  NEW
+//  discovered  | cancelled  | superseded (newer row exists)| 0 (dedup drops it; live PR #2607 shape) | 2 (existing precedence)
+//  discovered  | skipped    | --                   | 0 (round-1)       | 2 (existing)
+//  discovered  | neutral    | --                   | 0 (round-1)       | 2 (existing)
+//  discovered  | timed_out  | --                   | 1  (sanity)       | 2 (existing)
+//  discovered  | absent     | --                   | impossible by construction -- a discovered row's name, by definition, appeared in the payload
+//  advisory    | any incl. failure | --            | 0 (existing)      | 2 (existing)
+describe("computeVerdict — required rows demand literal success, no skip/neutral/cancelled grace (#2618 fix-round-2, F1)", () => {
+	// The exact reported shape: ci.yml:253's `test` job (`Unit tests`) has
+	// `needs: validate-merge-train-dispatch` with no `if:` -- a failed/skipped
+	// dependency skips it outright, and the pre-fix-round-2 code (which
+	// exempted EVERY gating row's skipped/neutral conclusion, not just
+	// discovered ones) read that as a clean pass.
+	it("RED PROOF: a required 'Unit tests' that concluded skipped no longer passes", () => {
+		const payload = {
+			check_runs: [
+				checkRun({ name: "Unit tests", conclusion: "skipped", id: 1 }),
+				checkRun({ name: "Lint & type-check", id: 2 }),
+			],
+		};
+		const verdict = computeVerdict(payload, undefined, "MERGEABLE");
+		expect(verdict.exitCode).toBe(EXIT_FAILURE);
+		expect(verdict.reason).toContain("Unit tests (skipped)");
+	});
+
+	it.each([
+		["failure", EXIT_FAILURE],
+		["cancelled", EXIT_FAILURE],
+		["skipped", EXIT_FAILURE],
+		["neutral", EXIT_FAILURE],
+		["timed_out", EXIT_FAILURE],
+		["success", EXIT_SUCCESS],
+	])(
+		"a required row concluding %s exits %i regardless of the skip/neutral/cancelled discovered-row grace",
+		(conclusion, expectedExit) => {
+			const payload = {
+				check_runs: [
+					checkRun({ name: "Unit tests", conclusion, id: 1 }),
+					checkRun({ name: "Lint & type-check", id: 2 }),
+				],
+			};
+			expect(computeVerdict(payload, undefined, "MERGEABLE").exitCode).toBe(
+				expectedExit,
+			);
+		},
+	);
+
+	it("a required row's cancelled conclusion stays non-zero even under CONFLICTING precedence (table cell: required/cancelled x CONFLICTING)", () => {
+		const payload = {
+			check_runs: [
+				checkRun({ name: "Unit tests", conclusion: "cancelled", id: 1 }),
+				checkRun({ name: "Lint & type-check", id: 2 }),
+			],
+		};
+		expect(computeVerdict(payload, undefined, "CONFLICTING").exitCode).toBe(
+			EXIT_DIRTY,
+		);
+	});
+});
+
+describe("computeVerdict — a discovered row's cancelled conclusion is uncertain, not failing (#2618 fix-round-2, F2)", () => {
+	// RED PROOF against the pre-fix-round-2 code, reproduced with the REAL
+	// check_suite id and started_at GitHub returned for PR #2607's
+	// "Record post-merge validation" oldest (cancelled) run, live-probed
+	// 2026-09-06: `gh api repos/apmantza/pi-lens/commits/<sha>/check-runs`
+	// returned THREE check-suites for that name on ONE commit -- 17:21:06
+	// cancelled, 17:25:29 skipped, 17:32:15 skipped. This fixture carries
+	// ONLY the cancelled one, reproducing the transient window before either
+	// replacement had posted (`cancel-in-progress: true`, ci.yml:15-16).
+	it("RED PROOF: a lone cancelled discovered row (no replacement posted yet) no longer fails the verdict", () => {
+		const payload = {
+			check_runs: [
+				checkRun({ name: "Unit tests", id: 1 }),
+				checkRun({ name: "Lint & type-check", id: 2 }),
+				checkRun({
+					name: "Record post-merge validation",
+					conclusion: "cancelled",
+					started_at: "2026-09-06T17:21:06Z",
+					id: 101527303167,
+				}),
+			],
+		};
+		const verdict = computeVerdict(payload, undefined, "MERGEABLE");
+		expect(verdict.exitCode).toBe(EXIT_PENDING);
+		// #2618 fix round 3: the reason must NOT say "still queued or in
+		// progress" for a row the table itself reports as `completed
+		// cancelled` -- that reads as a contradiction. It gets its own clause.
+		expect(verdict.reason).not.toMatch(/still queued or in progress/);
+		expect(verdict.reason).toContain(
+			"cancelled and not yet re-reported (a superseded run; pends until the replacement posts -- this does not time out on its own): Record post-merge validation",
+		);
+	});
+
+	it("a still-running row and an uncertain cancelled row get separate clauses in the same reason", () => {
+		const payload = {
+			check_runs: [
+				checkRun({ name: "Unit tests", id: 1 }),
+				checkRun({ name: "Lint & type-check", id: 2 }),
+				checkRun({
+					name: "Record post-merge validation",
+					conclusion: "cancelled",
+					id: 3,
+				}),
+				checkRun({
+					name: "Production install build (--omit=dev, from source)",
+					status: "in_progress",
+					conclusion: null,
+					id: 4,
+				}),
+			],
+		};
+		const verdict = computeVerdict(payload, undefined, "MERGEABLE");
+		expect(verdict.exitCode).toBe(EXIT_PENDING);
+		expect(verdict.reason).toContain(
+			"still queued or in progress: Production install build (--omit=dev, from source)",
+		);
+		expect(verdict.reason).toContain(
+			"cancelled and not yet re-reported (a superseded run; pends until the replacement posts -- this does not time out on its own): Record post-merge validation",
+		);
+	});
+
+	// The SAME live shape once a replacement HAS posted: `resolveLatestByName`
+	// already drops the older cancelled check-suite via `started_at`, so the
+	// verdict reads whatever the newest row says (here: skipped, exempt) --
+	// this is the "superseded" table cell, and it was ALREADY correct before
+	// this round (the dedup logic is untouched); pinned here as a live-data
+	// regression guard now that a lone cancelled row means something
+	// different (pending) than a superseded one (invisible).
+	it("a cancelled discovered row already superseded by a newer replacement is invisible, not pending (PR #2607 live shape)", () => {
+		const payload = {
+			check_runs: [
+				checkRun({ name: "Unit tests", id: 1 }),
+				checkRun({ name: "Lint & type-check", id: 2 }),
+				checkRun({
+					name: "Record post-merge validation",
+					conclusion: "cancelled",
+					started_at: "2026-09-06T17:21:06Z",
+					id: 101527303167,
+				}),
+				checkRun({
+					name: "Record post-merge validation",
+					conclusion: "skipped",
+					started_at: "2026-09-06T17:25:29Z",
+					id: 101527918964,
+				}),
+				checkRun({
+					name: "Record post-merge validation",
+					conclusion: "skipped",
+					started_at: "2026-09-06T17:32:15Z",
+					id: 101528845721,
+				}),
+			],
+		};
+		const verdict = computeVerdict(payload, undefined, "MERGEABLE");
+		expect(verdict.exitCode).toBe(EXIT_SUCCESS);
+		const row = verdict.rows.find(
+			(r) => r.name === "Record post-merge validation",
+		);
+		expect(row?.conclusion).toBe("skipped");
+	});
+
+	it("a discovered row's cancelled conclusion stays uncertain (pending) even under CONFLICTING precedence (table cell: discovered/cancelled-current x CONFLICTING)", () => {
+		const payload = {
+			check_runs: [
+				checkRun({ name: "Unit tests", id: 1 }),
+				checkRun({ name: "Lint & type-check", id: 2 }),
+				checkRun({
+					name: "Record post-merge validation",
+					conclusion: "cancelled",
+					id: 3,
+				}),
+			],
+		};
+		expect(computeVerdict(payload, undefined, "CONFLICTING").exitCode).toBe(
+			EXIT_DIRTY,
+		);
+	});
+
+	it("a discovered row's timed_out conclusion still fails (sanity: only cancelled gets the uncertain grace)", () => {
+		const payload = {
+			check_runs: [
+				checkRun({ name: "Unit tests", id: 1 }),
+				checkRun({ name: "Lint & type-check", id: 2 }),
+				checkRun({
+					name: "Production install build (--omit=dev, from source)",
+					conclusion: "timed_out",
+					id: 3,
+				}),
+			],
+		};
+		expect(computeVerdict(payload, undefined, "MERGEABLE").exitCode).toBe(
+			EXIT_FAILURE,
+		);
+	});
+
+	// A required row's cancelled conclusion failing outright (never pending)
+	// in the MERGEABLE case is already pinned by the "required row concluding
+	// %s exits %i" table-driven test above (its "cancelled" row) -- deleted a
+	// near-duplicate here after probing that `pendingGatingRows`' own
+	// `requiredNameSet` guard is structurally dead code (removing it changes
+	// no test outcome: `failingGatingRows` always wins precedence first for a
+	// required row), so there is no separate line left to guard against.
+});
+
+describe("resolveRequiredCheckNames — live branch-protection read (#2609)", () => {
+	it("returns the contexts array when gh api resolves branch protection", () => {
+		const ghExec = (args: string[]) => {
+			expect(args).toEqual([
+				"api",
+				"repos/acme/repo/branches/master/protection",
+			]);
+			return JSON.stringify({
+				required_status_checks: {
+					contexts: ["Unit tests", "Lint & type-check"],
+				},
+			});
+		};
+		expect(resolveRequiredCheckNames("acme/repo", ghExec)).toEqual([
+			"Unit tests",
+			"Lint & type-check",
+		]);
+	});
+
+	it("returns null when gh api throws (403/404/timeout/not readable)", () => {
+		const ghExec = () => {
+			throw new Error("HTTP 403: Resource not accessible");
+		};
+		expect(resolveRequiredCheckNames("acme/repo", ghExec)).toBeNull();
+	});
+
+	it("returns null when the response has no required_status_checks.contexts array", () => {
+		const ghExec = () => JSON.stringify({ some: "other shape" });
+		expect(resolveRequiredCheckNames("acme/repo", ghExec)).toBeNull();
+	});
+
+	// #2618 fix-round-2 reviewer note: `.checks[].context` (the modern,
+	// per-app shape) is read in PREFERENCE to the deprecated `.contexts`
+	// string array, matching this repo's own live response (probed
+	// 2026-09-06: both present and in agreement).
+	it("prefers required_status_checks.checks[].context over the legacy .contexts array", () => {
+		const ghExec = () =>
+			JSON.stringify({
+				required_status_checks: {
+					// Legacy array deliberately stale/wrong here so the test can
+					// only pass if `.checks` won.
+					contexts: ["Stale Legacy Name"],
+					checks: [
+						{ context: "Lint & type-check", app_id: 15368 },
+						{ context: "Unit tests", app_id: 15368 },
+					],
+				},
+			});
+		expect(resolveRequiredCheckNames("acme/repo", ghExec)).toEqual([
+			"Lint & type-check",
+			"Unit tests",
+		]);
+	});
+
+	it("falls back to .contexts when .checks is absent (older API response shape)", () => {
+		const ghExec = () =>
+			JSON.stringify({
+				required_status_checks: {
+					contexts: ["Unit tests", "Lint & type-check"],
+				},
+			});
+		expect(resolveRequiredCheckNames("acme/repo", ghExec)).toEqual([
+			"Unit tests",
+			"Lint & type-check",
+		]);
+	});
+
+	it("falls back to .contexts when .checks is present but empty", () => {
+		const ghExec = () =>
+			JSON.stringify({
+				required_status_checks: {
+					checks: [],
+					contexts: ["Unit tests", "Lint & type-check"],
+				},
+			});
+		expect(resolveRequiredCheckNames("acme/repo", ghExec)).toEqual([
+			"Unit tests",
+			"Lint & type-check",
+		]);
+	});
+
+	it("passes the timeoutMs through to ghExec's own options", () => {
+		const calls: unknown[] = [];
+		const ghExec = (_args: string[], options: unknown) => {
+			calls.push(options);
+			return JSON.stringify({ required_status_checks: { contexts: [] } });
+		};
+		resolveRequiredCheckNames("acme/repo", ghExec, 12_345);
+		expect(calls[0]).toEqual({ timeoutMs: 12_345 });
+	});
+});
+
+// #2618 fix-round-2, F3: `greeting` (greetings.yml, actions/first-interaction)
+// was not on the advisory allowlist, so a token or action-version failure in
+// a cosmetic welcome bot could block the train. Rather than hand-add that
+// one name and hope nothing else was missed, this enumerates every job name
+// from every workflow that can actually attach a check-run to an OPEN PR's
+// head (has `opened`/`synchronize` in its `pull_request(_target)` types, or
+// no `types:` filter at all -- ci.yml, lint.yml, osv-scan.yml, greetings.yml;
+// EXCLUDED: close-keyword-verification.yml, `types: [closed]` only, never
+// fires on an open PR) and classifies EVERY one of them, so a future new job
+// with no `(advisory)` suffix and no allowlist entry fails this test instead
+// of silently blocking (or silently NOT blocking) the train.
+describe("isAdvisoryCheck — every job name from a PR-triggered workflow is classified explicitly (#2618 fix-round-2, F3)", () => {
+	const WORKFLOWS_DIR = resolve(import.meta.dirname, "../../.github/workflows");
+
+	function recordValue(value: unknown): Record<string, unknown> {
+		return value && typeof value === "object" && !Array.isArray(value)
+			? (value as Record<string, unknown>)
+			: {};
+	}
+
+	// True when the workflow's `pull_request` or `pull_request_target`
+	// trigger can fire on an open/updated PR -- i.e. `types:` is absent
+	// (GitHub's default is [opened, synchronize, reopened]) or explicitly
+	// includes `opened` or `synchronize`.
+	function firesOnOpenOrSyncPr(doc: Record<string, unknown>): boolean {
+		const on = recordValue(doc.on);
+		for (const key of ["pull_request", "pull_request_target"]) {
+			if (on[key] === undefined) continue;
+			const types = recordValue(on[key]).types;
+			if (
+				!Array.isArray(types) ||
+				types.includes("opened") ||
+				types.includes("synchronize")
+			) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	function expandMatrixNames(name: string, matrix: unknown): string[] {
+		const matrixRecord = recordValue(matrix);
+		let names = [name];
+		for (const [key, values] of Object.entries(matrixRecord)) {
+			if (!Array.isArray(values)) continue;
+			const placeholder = `\${{ matrix.${key} }}`;
+			names = names.flatMap((current) =>
+				current.includes(placeholder)
+					? values.map((value) =>
+							current.replaceAll(placeholder, String(value)),
+						)
+					: [current],
+			);
+		}
+		return names;
+	}
+
+	function jobNamesFromPrTriggeredWorkflows(): Set<string> {
+		const names = new Set<string>();
+		for (const entry of readdirSync(WORKFLOWS_DIR)) {
+			if (!/\.ya?ml$/i.test(entry)) continue;
+			const doc = recordValue(
+				yaml.load(readFileSync(join(WORKFLOWS_DIR, entry), "utf8")),
+			);
+			if (!firesOnOpenOrSyncPr(doc)) continue;
+			for (const [key, job] of Object.entries(recordValue(doc.jobs))) {
+				const jobRecord = recordValue(job);
+				const rawName = (jobRecord.name as string | undefined) ?? key;
+				const matrix = recordValue(jobRecord.strategy).matrix;
+				for (const name of expandMatrixNames(rawName, matrix)) names.add(name);
+			}
+		}
+		return names;
+	}
+
+	// Names GitHub posts that come from NO committed workflow file, so the
+	// YAML-driven enumeration above cannot discover them: the default CodeQL
+	// code-scanning setup (no codeql.yml in this repo) and the third-party
+	// SonarCloud GitHub App integration. Live-probed on PR #2588, 2026-09-06.
+	const EXTERNAL_GATING_NAMES = [
+		"Analyze (actions)",
+		"Analyze (go)",
+		"Analyze (javascript-typescript)",
+		"Analyze (python)",
+		"Analyze (ruby)",
+		"Analyze (rust)",
+	];
+	const EXTERNAL_ADVISORY_NAMES = ["CodeQL", "SonarCloud Code Analysis"];
+
+	const EXPECTED_ADVISORY = new Set([
+		"Unit tests Windows (advisory)",
+		"PR body (advisory)",
+		"oxfmt format check (advisory)",
+		"Vale prose lint (advisory)",
+		"OSV scan (advisory)",
+		"knip (advisory)",
+		"jscpd (advisory)",
+		"yamllint (advisory)",
+		"typos (advisory)",
+		"taplo (advisory)",
+		"mutation (advisory)",
+		"complexity (advisory)",
+		// #2697 item 9: the strictness census lane (two scratch tsconfigs) is advisory.
+		"strictness (advisory)",
+		"host latest nightly (advisory)",
+		"greeting",
+		// #2700 review round 3: named "oxlint (advisory)" (the `(advisory)`
+		// suffix, not a hand-maintained ci-checks.mjs entry like `greeting`
+		// above) -- the full categories+plugins+type-aware oxlint sweep
+		// (lint.yml), most of whose findings are un-triaged on master today
+		// (see the PR body's per-rule table), so this must never gate like
+		// `lint:js` does. See the dedicated "classified by the suffix, not
+		// an explicit allowlist entry" case below for the proof that this
+		// name carries NO entry in `ADVISORY_CHECKS`.
+		"oxlint (advisory)",
+		...EXTERNAL_ADVISORY_NAMES,
+	]);
+
+	it("finds a non-empty, real job-name set to classify (the enumeration itself works)", () => {
+		const names = jobNamesFromPrTriggeredWorkflows();
+		expect(names.size).toBeGreaterThan(5);
+		expect(names.has("Unit tests")).toBe(true);
+		expect(names.has("Install test (ubuntu-latest)")).toBe(true);
+	});
+
+	it("classifies every job name mechanically discovered from ci.yml/lint.yml/osv-scan.yml/greetings.yml, with none left unclassified", () => {
+		const names = jobNamesFromPrTriggeredWorkflows();
+		const mismatches: string[] = [];
+		for (const name of names) {
+			const expectedAdvisory = EXPECTED_ADVISORY.has(name);
+			if (isAdvisoryCheck(name) !== expectedAdvisory) {
+				mismatches.push(
+					`${name}: isAdvisoryCheck=${isAdvisoryCheck(name)}, expected=${expectedAdvisory}`,
+				);
+			}
+		}
+		expect(mismatches).toEqual([]);
+	});
+
+	// The reviewer's explicit gating list, plus the externally-sourced
+	// Analyze(<lang>) jobs -- a mutation guard against a future accidental
+	// addition of any of these to the advisory allowlist. `Install test (*)`
+	// is pinned here exactly like `Production install build` already was in
+	// the #2609 (round 1) describe block above.
+	it("the reviewer's named gating list is NOT advisory", () => {
+		for (const name of [
+			...EXTERNAL_GATING_NAMES,
+			"Detect lockfile change",
+			"PR title",
+			"actionlint",
+			"markdownlint",
+			"Dependency boundaries",
+			"Close-keyword syntax",
+			"Changelog fragment (fast-fail)",
+			"Validate merge-train dispatch",
+			"Install test (ubuntu-latest)",
+			"Install test (windows-latest)",
+			"Install test (macos-latest)",
+			"Production install build (--omit=dev, from source)",
+		]) {
+			expect(isAdvisoryCheck(name)).toBe(false);
+		}
+	});
+
+	it("the reviewer's named advisory list IS advisory, including the newly-added greeting", () => {
+		for (const name of [
+			...EXTERNAL_ADVISORY_NAMES,
+			"greeting",
+			"PR body (advisory)",
+			"oxfmt format check (advisory)",
+			"Vale prose lint (advisory)",
+			"OSV scan (advisory)",
+			"oxlint (advisory)",
+			"jscpd (advisory)",
+			"yamllint (advisory)",
+			"typos (advisory)",
+			"taplo (advisory)",
+			"mutation (advisory)",
+		]) {
+			expect(isAdvisoryCheck(name)).toBe(true);
+		}
+	});
+
+	// #2700 review round 3: the repo's settled convention for a NEW advisory
+	// job is the `(advisory)` name suffix with no continue-on-error (what
+	// `oxfmt format check (advisory)`/`Vale prose lint (advisory)` above and
+	// osv-scan.yml already do) -- not a hand-maintained ADVISORY_CHECKS
+	// entry like `greeting`'s (that shape exists only because `greeting`'s
+	// real GitHub Actions job name, from greetings.yml's job KEY, carries no
+	// suffix at all and cannot be renamed without losing the upstream
+	// action's own posting identity). Proves the classification comes from
+	// the suffix, not a copy this file forgot to keep updated.
+	it("oxlint (advisory) is classified by the name suffix, not a hand-maintained ADVISORY_CHECKS entry", () => {
+		expect(ADVISORY_CHECKS.has("oxlint (advisory)")).toBe(false);
+		expect(isAdvisoryCheck("oxlint (advisory)")).toBe(true);
+	});
+
+	it("registers the four tool jobs in the explicit advisory allowlist (#2706)", () => {
+		expect([...ADVISORY_CHECKS]).toEqual(
+			expect.arrayContaining([
+				"jscpd (advisory)",
+				"yamllint (advisory)",
+				"typos (advisory)",
+				"taplo (advisory)",
+				"mutation (advisory)",
+				"complexity (advisory)",
+			]),
+		);
+	});
+});
+
+describe("isAdvisoryCheck — workflow advisory names stay in policy", () => {
+	it("classifies every advisory-named job across all workflows", () => {
+		const mismatches: string[] = [];
+		const discovered: string[] = [];
+		for (const entry of readdirSync(
+			resolve(import.meta.dirname, "../../.github/workflows"),
+		)) {
+			if (!/\.ya?ml$/i.test(entry)) continue;
+			const document = yaml.load(
+				readFileSync(
+					resolve(import.meta.dirname, "../../.github/workflows", entry),
+					"utf8",
+				),
+			) as { jobs?: Record<string, { name?: unknown }> };
+			for (const [key, job] of Object.entries(document.jobs ?? {})) {
+				const name = typeof job?.name === "string" ? job.name : key;
+				if (!name.toLowerCase().includes("advisory")) continue;
+				discovered.push(`${entry}:${key}=${name}`);
+				if (!isAdvisoryCheck(name)) mismatches.push(`${entry}:${key}=${name}`);
+			}
+		}
+		expect(discovered).not.toEqual([]);
+		expect(mismatches).toEqual([]);
+	});
+});
+
+describe("run — prints the gating source and uses a live branch-protection read (#2609)", () => {
+	it("documents the branch-protection source and threads it into the verdict", async () => {
+		const ghExec = (args: string[]) => {
+			if (args[0] === "repo") return "acme/repo";
+			if (args[0] === "pr")
+				return JSON.stringify({ headRefOid: "c0ffee", mergeable: "MERGEABLE" });
+			if (args[1] === "repos/acme/repo/branches/master/protection") {
+				return JSON.stringify({
+					required_status_checks: {
+						contexts: ["Unit tests", "Lint & type-check"],
+					},
+				});
+			}
+			return JSON.stringify(BOTH_SUCCESS);
+		};
+		const stdoutLines: string[] = [];
+		const exitCode = await run({
+			argv: ["2539"],
+			ghExec,
+			stdout: (line: string) => stdoutLines.push(line),
+			stderr: () => {},
+		});
+		expect(exitCode).toBe(EXIT_SUCCESS);
+		expect(
+			stdoutLines.some((l) => l.startsWith("Gating source: branch protection")),
+		).toBe(true);
+	});
+
+	it("falls back to the advisory-allowlist wording when branch protection is unreadable", async () => {
+		const ghExec = (args: string[]) => {
+			if (args[0] === "repo") return "acme/repo";
+			if (args[0] === "pr")
+				return JSON.stringify({ headRefOid: "c0ffee", mergeable: "MERGEABLE" });
+			if (args[1] === "repos/acme/repo/branches/master/protection") {
+				throw new Error("HTTP 403");
+			}
+			return JSON.stringify(BOTH_SUCCESS);
+		};
+		const stdoutLines: string[] = [];
+		const exitCode = await run({
+			argv: ["2539"],
+			ghExec,
+			stdout: (line: string) => stdoutLines.push(line),
+			stderr: () => {},
+		});
+		expect(exitCode).toBe(EXIT_SUCCESS);
+		expect(
+			stdoutLines.some((l) =>
+				l.startsWith("Gating source: advisory allowlist only"),
+			),
+		).toBe(true);
 	});
 });
 

@@ -38,7 +38,11 @@ import {
 	checkCrossProcessLspBudget,
 	_resetLspBudgetDecisionForTests,
 } from "../../clients/lsp-budget.js";
-import { RUNNERS, TestRunnerClient } from "../../clients/test-runner-client.js";
+import {
+	isRunnerErrorResult,
+	RUNNERS,
+	TestRunnerClient,
+} from "../../clients/test-runner-client.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 /**
@@ -1309,6 +1313,11 @@ describe("context injection framing", () => {
 
 	it("SESSION_START_GUIDANCE advertises the read-substitute tools and only registered pi tools", () => {
 		const text = SESSION_START_GUIDANCE.join("\n");
+		// An empty cache is not evidence that changed files were checked.
+		expect(text).toMatch(/mode=all[^.\n]*cache-only/);
+		expect(text).toMatch(/mode=full[^.\n]*paths/);
+		// #2795 review: the orientation also says an empty cache is not clean.
+		expect(text).toMatch(/empty cache ≠ clean/);
 
 		// The #245 gap this guards: module_report + read_symbol were registered as
 		// pi tools but never surfaced in the session-start orientation, so the agent
@@ -2308,7 +2317,7 @@ describe("turn_end test runner — stale results are cached, not discarded", () 
 // test-failure blocker.
 
 describe("turn_end test runner — a runner-error result does not clear a real git-guard blocker (#1524)", () => {
-	it("keeps a pre-existing test-failure blocker after a runner-start failure", async () => {
+	it("keeps a pre-existing test-failure blocker after a runner error with partial passes", async () => {
 		const env = setupTestEnvironment("pi-lens-test-guard-error-");
 		try {
 			const runtime = new RuntimeCoordinator();
@@ -2329,9 +2338,10 @@ describe("turn_end test runner — a runner-error result does not clear a real g
 
 			// Seed a REAL prior test-failure blocker on this exact go test file
 			// — a previous turn genuinely ran it and it failed. The scenario
-			// under test is this same file now failing to even START (a
-			// spawn/config error), which must not read as "it passed" and
-			// clear the blocker it earned last turn.
+			// under test is this same file now reporting a runner error after
+			// partial progress, which must not read as "it passed" and clear
+			// the blocker it earned last turn. This catches divergent doubles
+			// that require passed === 0 in addition to failed === 0 && error.
 			const goTestFile = path.join(env.tmpDir, "src/main_test.go");
 			fs.writeFileSync(goTestFile, "package main\n");
 			mergeGitGuardTestFailure(
@@ -2345,6 +2355,97 @@ describe("turn_end test runner — a runner-error result does not clear a real g
 				true,
 			);
 
+			const runnerErrorResult = {
+				file: goTestFile,
+				sourceFile: srcFile,
+				runner: "go",
+				passed: 3,
+				failed: 0,
+				skipped: 0,
+				failures: [],
+				duration: 1,
+				error: "Runner go exited with 1",
+			};
+			await handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, {
+					ctxCwd: env.tmpDir,
+					getFlag: (flag: string) => flag === "lens-guard",
+					testRunnerClient: {
+						getTestRunTarget: () => ({
+							testFile: goTestFile,
+							runner: "go",
+							config: {} as any,
+							strategy: "related" as const,
+						}),
+						runTestFileAsync: async () => runnerErrorResult,
+						formatResult: (r: Parameters<typeof isRunnerErrorResult>[0]) =>
+							isRunnerErrorResult(r)
+								? `[Tests] ⚠ Could not run tests: ${r.error}`
+								: "",
+					},
+				}),
+			);
+			await new Promise((resolve) => setImmediate(resolve));
+
+			const persisted = cacheManager.readCache<{ content?: string }>(
+				"test-runner-findings",
+				env.tmpDir,
+			)?.data;
+			expect(persisted?.content).toContain(
+				"[Tests] ⚠ Could not run tests: Runner go exited with 1",
+			);
+
+			// The prior real test-failure blocker must still be in force — a
+			// suite that never started must not read as a pass that clears it.
+			expect(evaluateGitGuard(runtime, cacheManager, env.tmpDir).block).toBe(
+				true,
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+});
+
+// ── #2532: an all-runner-error batch must not itself BECOME a git-guard ──────
+// blocker under --lens-guard.
+//
+// #2528/#2522 gave the turn-end DELIVERY message advisory framing for a
+// batch made entirely of runner errors (timeout, missing provider/binary —
+// the suite never started). `mergeGitGuardTestFailure`'s call site in
+// `handleTurnEnd` never got the same memo: it ran unconditionally whenever
+// `failures.length > 0`, regardless of `runnerErrorOnly`, so a runner-error
+// batch with NO prior blocker still flipped `hasBlockers: true` on the
+// git-guard record — the identical event reading "advisory" in the turn-end
+// message and "COMMIT BLOCKED" under `--lens-guard`.
+describe("turn_end test runner — a runner-error-only batch does not itself block git-guard (#2532)", () => {
+	it("does not set hasBlockers for an all-runner-error batch with no prior blocker", async () => {
+		const env = setupTestEnvironment("pi-lens-test-guard-runner-error-only-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.setTelemetryIdentity({ sessionId: "guard-runner-error-session" });
+			const cacheManager = new CacheManager(false);
+
+			const srcFile = path.join(env.tmpDir, "src/main.go");
+			fs.mkdirSync(path.dirname(srcFile), { recursive: true });
+			fs.writeFileSync(srcFile, "package main\n");
+			cacheManager.addModifiedRange(
+				srcFile,
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+				"guard-runner-error-session",
+			);
+
+			// No pre-existing blocker — a clean slate, exactly like the
+			// production scenario a runner-error-only batch is delivered
+			// advisory for (#2522).
+			expect(evaluateGitGuard(runtime, cacheManager, env.tmpDir).block).toBe(
+				false,
+			);
+
+			const goTestFile = path.join(env.tmpDir, "src/main_test.go");
+			fs.writeFileSync(goTestFile, "package main\n");
 			const runnerErrorResult = {
 				file: goTestFile,
 				sourceFile: srcFile,
@@ -2368,12 +2469,8 @@ describe("turn_end test runner — a runner-error result does not clear a real g
 							strategy: "related" as const,
 						}),
 						runTestFileAsync: async () => runnerErrorResult,
-						formatResult: (r: {
-							error?: string;
-							passed: number;
-							failed: number;
-						}) =>
-							r.error && r.passed === 0 && r.failed === 0
+						formatResult: (r: Parameters<typeof isRunnerErrorResult>[0]) =>
+							isRunnerErrorResult(r)
 								? `[Tests] ⚠ Could not run tests: ${r.error}`
 								: "",
 					},
@@ -2381,12 +2478,234 @@ describe("turn_end test runner — a runner-error result does not clear a real g
 			);
 			await new Promise((resolve) => setImmediate(resolve));
 
-			// The prior real test-failure blocker must still be in force — a
-			// suite that never started must not read as a pass that clears it.
+			// A runner error the batch never turned into a real failure must
+			// not become a NEW git-guard blocker — the same event the
+			// turn-end message reports as advisory.
+			expect(evaluateGitGuard(runtime, cacheManager, env.tmpDir).block).toBe(
+				false,
+			);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	/**
+	 * #2532 review round 1, T1: `if (!runnerErrorOnly)` neutered to
+	 * `if (false)` — the merge call NEVER fires, so a --lens-guard blocker
+	 * for a REAL failure can never be created — left the whole `tests/clients`
+	 * suite green. `runnerErrorOnly` is a BATCH-level flag (false the moment
+	 * any one result has `failed > 0`), so the missing case was a MIXED batch:
+	 * one runner-error file plus one genuinely failing file in the same
+	 * turn_end fire, both settled and cached, with the real failure still
+	 * reaching git-guard.
+	 */
+	it("blocks git-guard for a mixed batch (one runner error, one real failure)", async () => {
+		const env = setupTestEnvironment("pi-lens-test-guard-mixed-batch-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.setTelemetryIdentity({ sessionId: "guard-mixed-session" });
+			const cacheManager = new CacheManager(false);
+
+			const errorSrcFile = path.join(env.tmpDir, "src/flaky.go");
+			const failSrcFile = path.join(env.tmpDir, "src/broken.go");
+			fs.mkdirSync(path.dirname(errorSrcFile), { recursive: true });
+			fs.writeFileSync(errorSrcFile, "package main\n");
+			fs.writeFileSync(failSrcFile, "package main\n");
+			cacheManager.addModifiedRange(
+				errorSrcFile,
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+				"guard-mixed-session",
+			);
+			cacheManager.addModifiedRange(
+				failSrcFile,
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+				"guard-mixed-session",
+			);
+
+			expect(evaluateGitGuard(runtime, cacheManager, env.tmpDir).block).toBe(
+				false,
+			);
+
+			const errorTestFile = path.join(env.tmpDir, "src/flaky_test.go");
+			const failTestFile = path.join(env.tmpDir, "src/broken_test.go");
+			fs.writeFileSync(errorTestFile, "package main\n");
+			fs.writeFileSync(failTestFile, "package main\n");
+			const resultByTestFile = new Map<
+				string,
+				{
+					file: string;
+					sourceFile: string;
+					runner: string;
+					passed: number;
+					failed: number;
+					skipped: number;
+					failures: unknown[];
+					duration: number;
+					error?: string;
+				}
+			>([
+				[
+					errorTestFile,
+					{
+						file: errorTestFile,
+						sourceFile: errorSrcFile,
+						runner: "go",
+						passed: 0,
+						failed: 0,
+						skipped: 0,
+						failures: [],
+						duration: 1,
+						error: "Runner go exited with 1",
+					},
+				],
+				[
+					failTestFile,
+					{
+						file: failTestFile,
+						sourceFile: failSrcFile,
+						runner: "go",
+						passed: 0,
+						failed: 1,
+						skipped: 0,
+						failures: [{ name: "TestBroken", message: "expected 1 to be 2" }],
+						duration: 1,
+					},
+				],
+			]);
+
+			await handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, {
+					ctxCwd: env.tmpDir,
+					getFlag: (flag: string) => flag === "lens-guard",
+					testRunnerClient: {
+						getTestRunTarget: (abs: string) => {
+							const testFile =
+								path.basename(abs) === path.basename(errorSrcFile)
+									? errorTestFile
+									: failTestFile;
+							return {
+								testFile,
+								runner: "go",
+								config: {} as any,
+								strategy: "related" as const,
+							};
+						},
+						runTestFileAsync: async (testFile: string) => {
+							const result = resultByTestFile.get(testFile);
+							if (!result) throw new Error(`unexpected test file ${testFile}`);
+							return result;
+						},
+						formatResult: (r: Parameters<typeof isRunnerErrorResult>[0]) =>
+							isRunnerErrorResult(r)
+								? `[Tests] ⚠ Could not run tests: ${r.error}`
+								: `[Tests] ✗ ${r.failed} failed`,
+					},
+				}),
+			);
+			await new Promise((resolve) => setImmediate(resolve));
+
+			// Both entries actually settled and were cached — this is a real
+			// mixed batch, not a single-target run that happens to pass.
+			const persisted = cacheManager.readCache<{
+				results?: Array<{ file: string }>;
+				runnerErrorOnly?: boolean;
+			}>("test-runner-findings", env.tmpDir)?.data;
+			expect(persisted?.results?.map((r) => r.file).sort()).toEqual(
+				[errorTestFile, failTestFile].sort(),
+			);
+			expect(persisted?.runnerErrorOnly).toBe(false);
+
+			// The real failure must still reach git-guard even though the SAME
+			// batch also contains a runner error the merge call must ignore.
 			expect(evaluateGitGuard(runtime, cacheManager, env.tmpDir).block).toBe(
 				true,
 			);
 		} finally {
+			env.cleanup();
+		}
+	});
+
+	/**
+	 * #2532 review round 1, T2: the skip was pull-only — nothing PUSHED
+	 * records that a runner-error-only batch was deliberately kept off the
+	 * --lens-guard blocker. Same `test-runner-delivery` ledger/phase the
+	 * rejected-promise path already uses.
+	 */
+	it("records a bounded telemetry event when a runner-error-only batch is kept off the --lens-guard blocker", async () => {
+		const env = setupTestEnvironment("pi-lens-test-guard-runner-error-obs-");
+		const previousTestMode = process.env.PI_LENS_TEST_MODE;
+		process.env.PI_LENS_TEST_MODE = "0";
+		try {
+			resetDegradationLedger();
+			resetBoundedTelemetry();
+			clearLatencyLog();
+			await flushLatencyLog();
+
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.setTelemetryIdentity({ sessionId: "guard-obs-session" });
+			const cacheManager = new CacheManager(false);
+
+			const srcFile = path.join(env.tmpDir, "src/main.go");
+			fs.mkdirSync(path.dirname(srcFile), { recursive: true });
+			fs.writeFileSync(srcFile, "package main\n");
+			cacheManager.addModifiedRange(
+				srcFile,
+				{ start: 1, end: 1 },
+				false,
+				env.tmpDir,
+				"guard-obs-session",
+			);
+
+			const goTestFile = path.join(env.tmpDir, "src/main_test.go");
+			fs.writeFileSync(goTestFile, "package main\n");
+
+			await handleTurnEnd(
+				makeTurnEndDeps(runtime, cacheManager, {
+					ctxCwd: env.tmpDir,
+					getFlag: (flag: string) => flag === "lens-guard",
+					testRunnerClient: {
+						getTestRunTarget: () => ({
+							testFile: goTestFile,
+							runner: "go",
+							config: {} as any,
+							strategy: "related" as const,
+						}),
+						runTestFileAsync: async () => ({
+							file: goTestFile,
+							sourceFile: srcFile,
+							runner: "go",
+							passed: 0,
+							failed: 0,
+							skipped: 0,
+							failures: [],
+							duration: 1,
+							error: "Runner go exited with 1",
+						}),
+						formatResult: (r: Parameters<typeof isRunnerErrorResult>[0]) =>
+							isRunnerErrorResult(r)
+								? `[Tests] ⚠ Could not run tests: ${r.error}`
+								: "",
+					},
+				}),
+			);
+			await new Promise((resolve) => setImmediate(resolve));
+			await flushLatencyLog();
+
+			const log = fs.readFileSync(getLatencyLogPath(), "utf8");
+			expect(log).toContain('"phase":"test_runner_delivery"');
+			expect(log).toContain('"outcome":"runner-error-only-not-blocking"');
+		} finally {
+			if (previousTestMode === undefined) {
+				delete process.env.PI_LENS_TEST_MODE;
+			} else {
+				process.env.PI_LENS_TEST_MODE = previousTestMode;
+			}
 			env.cleanup();
 		}
 	});
@@ -2400,70 +2719,73 @@ describe("turn_end test runner — a runner-error result does not clear a real g
 // unmeasured case and silently relabel a real zero, which is the mistake this
 // issue is about, one layer up.
 
-describe("turn_end test runner — unmeasured duration is not printed as 0ms", () => {
-	async function logLineFor(
-		durationField: Record<string, unknown>,
-		tmpPrefix: string,
-	): Promise<string> {
-		const env = setupTestEnvironment(tmpPrefix);
-		try {
-			const runtime = new RuntimeCoordinator();
-			runtime.setTelemetryIdentity({ sessionId: "duration-session" });
-			const cacheManager = new CacheManager(false);
+// Shared by the #1479 duration-formatting cases below AND the #2532 review
+// S1 dbg-summary cases (`resultOverrides` replaces/extends the base clean
+// 2-passed result, exactly like the duration-only callers already do).
+async function logLineFor(
+	resultOverrides: Record<string, unknown>,
+	tmpPrefix: string,
+): Promise<string> {
+	const env = setupTestEnvironment(tmpPrefix);
+	try {
+		const runtime = new RuntimeCoordinator();
+		runtime.setTelemetryIdentity({ sessionId: "duration-session" });
+		const cacheManager = new CacheManager(false);
 
-			const srcFile = path.join(env.tmpDir, "src/foo.ts");
-			const testFile = materializeTestFile(
-				path.join(env.tmpDir, "src/foo.test.ts"),
-			);
-			fs.mkdirSync(path.dirname(srcFile), { recursive: true });
-			fs.writeFileSync(srcFile, "export const x = 1;\n");
-			fs.writeFileSync(testFile, "test('x', () => {});\n");
-			cacheManager.addModifiedRange(
-				srcFile,
-				{ start: 1, end: 1 },
-				false,
-				env.tmpDir,
-				"duration-session",
-			);
+		const srcFile = path.join(env.tmpDir, "src/foo.ts");
+		const testFile = materializeTestFile(
+			path.join(env.tmpDir, "src/foo.test.ts"),
+		);
+		fs.mkdirSync(path.dirname(srcFile), { recursive: true });
+		fs.writeFileSync(srcFile, "export const x = 1;\n");
+		fs.writeFileSync(testFile, "test('x', () => {});\n");
+		cacheManager.addModifiedRange(
+			srcFile,
+			{ start: 1, end: 1 },
+			false,
+			env.tmpDir,
+			"duration-session",
+		);
 
-			const lines: string[] = [];
-			await handleTurnEnd(
-				makeTurnEndDeps(runtime, cacheManager, {
-					ctxCwd: env.tmpDir,
-					dbg: (msg: string) => {
-						lines.push(msg);
-					},
-					testRunnerClient: {
-						getTestRunTarget: () => ({
-							testFile,
-							runner: "vitest",
-							config: {} as any,
-							strategy: "related" as const,
-						}),
-						runTestFileAsync: async () => ({
-							file: testFile,
-							sourceFile: srcFile,
-							runner: "vitest",
-							passed: 2,
-							failed: 0,
-							skipped: 0,
-							failures: [],
-							...durationField,
-						}),
-						formatResult: () => "",
-					},
-				}),
-			);
-			await new Promise((resolve) => setImmediate(resolve));
+		const lines: string[] = [];
+		await handleTurnEnd(
+			makeTurnEndDeps(runtime, cacheManager, {
+				ctxCwd: env.tmpDir,
+				dbg: (msg: string) => {
+					lines.push(msg);
+				},
+				testRunnerClient: {
+					getTestRunTarget: () => ({
+						testFile,
+						runner: "vitest",
+						config: {} as any,
+						strategy: "related" as const,
+					}),
+					runTestFileAsync: async () => ({
+						file: testFile,
+						sourceFile: srcFile,
+						runner: "vitest",
+						passed: 2,
+						failed: 0,
+						skipped: 0,
+						failures: [],
+						...resultOverrides,
+					}),
+					formatResult: () => "",
+				},
+			}),
+		);
+		await new Promise((resolve) => setImmediate(resolve));
 
-			const line = lines.find((l) => l.includes("turn_end: test vitest"));
-			expect(line).toBeDefined();
-			return line as string;
-		} finally {
-			env.cleanup();
-		}
+		const line = lines.find((l) => l.includes("turn_end: test vitest"));
+		expect(line).toBeDefined();
+		return line as string;
+	} finally {
+		env.cleanup();
 	}
+}
 
+describe("turn_end test runner — unmeasured duration is not printed as 0ms", () => {
 	it("prints (unmeasured) when the runner reported no duration", async () => {
 		// No `duration` key at all — an emptyResult, a runner error, or a JSON
 		// payload with no readable suite timestamps all arrive in this shape.
@@ -2488,6 +2810,32 @@ describe("turn_end test runner — unmeasured duration is not printed as 0ms", (
 
 		expect(line).toContain("PASS 2p/0f (137ms)");
 		expect(line).not.toContain("unmeasured");
+	});
+});
+
+// #2532 review round 1, S1: the turn_end dbg summary used the same local
+// `error && passed === 0 && failed === 0` spelling `formatResult` did,
+// missing a runner error reported alongside partial passes and printing a
+// clean "PASS Np/0f" line that silently dropped the interruption.
+describe("turn_end test runner — dbg summary folds onto isRunnerErrorResult (#2532 review S1)", () => {
+	it("prints the error and the partial pass count instead of a clean PASS line", async () => {
+		const line = await logLineFor(
+			{ passed: 3, failed: 0, error: "Pytest interrupted" },
+			"pi-lens-turn-partial-error-",
+		);
+
+		expect(line).toContain("error: Pytest interrupted (3 passed before)");
+		expect(line).not.toContain("PASS 3p/0f");
+	});
+
+	it("still prints the plain error line when nothing passed first", async () => {
+		const line = await logLineFor(
+			{ passed: 0, failed: 0, error: "Pytest interrupted" },
+			"pi-lens-turn-plain-error-",
+		);
+
+		expect(line).toContain("error: Pytest interrupted");
+		expect(line).not.toContain("passed before");
 	});
 });
 

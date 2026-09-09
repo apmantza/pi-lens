@@ -1,5 +1,0 @@
----
-section: Fixed
----
-
-- **Turn-end advisories name the resolved cache path, not a hardcoded `.pi-lens/` one (closes #2521)** — thanks to [@Stark-X](https://github.com/Stark-X) for the report. The actionable-warnings and code-quality advisories told the agent the report was at `.pi-lens/cache/<name>.json`, a spelling that is only correct when a project already has a legacy `.pi-lens/` directory; everywhere else the report is written under `~/.pi-lens/projects/<slug>/cache/` (or `PILENS_DATA_DIR`), so following the advisory produced `cat: … No such file or directory` while the report sat unread. Both advisories now lead with `lens_diagnostics mode=delta` — so an agent never needs the cache layout at all — and name the raw file second, rendered by a new shared `displayProjectDataPath(cwd, …)` helper that reuses whatever `getProjectDataDir(cwd)` resolved: relative to the project when the store is inside it, otherwise absolute and `~`-folded so the account name stays out of agent context. A new sweep fails any future string literal that hardcodes a `.pi-lens/` project-data path.

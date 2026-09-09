@@ -29,6 +29,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { toPosix } from "../../clients/path-utils.js";
+import { escapeRegExp } from "./sweep-kit.js";
 
 export const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -89,10 +90,6 @@ function importedFsBindings(source: string): string[] {
 		}
 	}
 	return [...bindings];
-}
-
-function escapeRegExp(value: string): string {
-	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**

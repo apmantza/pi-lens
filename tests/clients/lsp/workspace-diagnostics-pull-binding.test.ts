@@ -89,7 +89,11 @@ describe("runWorkspaceDiagnostics pull-sweep content binding (#1104)", () => {
 			getOperationSupport: () => ({}),
 			notify: { open: vi.fn(async () => {}) },
 			requestWorkspaceDiagnostics: vi.fn(async () => [
-				{ filePath: file, diagnostics: [{ message: "boom" }], contentHash },
+				{
+					filePath: file,
+					diagnostics: [{ message: "boom", serverId: "python" }],
+					contentHash,
+				},
 			]),
 			waitForDiagnostics: vi.fn().mockResolvedValue(undefined),
 			getDiagnostics: vi.fn(() => []),
@@ -118,7 +122,7 @@ describe("runWorkspaceDiagnostics pull-sweep content binding (#1104)", () => {
 		const requestWorkspaceDiagnostics = vi.fn(async () => [
 			{
 				filePath: file,
-				diagnostics: [{ message: "boom" }],
+				diagnostics: [{ message: "boom", serverId: "python" }],
 				contentHash: hashDiagnosticContent(originalContent),
 			},
 		]);

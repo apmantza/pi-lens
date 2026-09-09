@@ -13,6 +13,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
+// `npm pack` below runs pi-lens's OWN `prepare` -> `scripts/warm-loader-cache.mjs`,
+// whose install-log sink is `PI_LENS_INSTALL_LOG` or, failing that,
+// `os.homedir()/.pi-lens/install.log` — the exact hazard `scratchEnv` exists to
+// pin closed (#2619 review F1; reused here rather than re-typing the same env
+// map, #2634).
+import { scratchEnv } from "../scripts/release-qa.mjs";
 import { stripForPack } from "../scripts/strip-dev-deps-for-pack.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -68,6 +74,19 @@ describe("published manifest carries no devDependencies", () => {
 				path.join(root, "package-lock.json"),
 				"utf8",
 			);
+			// #2634: this `npm pack` runs OUR `prepare`, whose last step
+			// (`scripts/warm-loader-cache.mjs`) appends to `PI_LENS_INSTALL_LOG` or,
+			// failing that, `os.homedir()/.pi-lens/install.log` — with no `env:`
+			// pin the child inherited the ambient environment and every run of this
+			// suite wrote one record into the DEVELOPER'S REAL install log. Read the
+			// real sink (not a stand-in) BEFORE the pack so the assertion below is
+			// checking the exact file the bug wrote into, the same way
+			// `tests/scripts/release-qa.test.ts`'s hermeticity canary does for
+			// `scratchEnv`'s own child probe.
+			const realInstallLog = path.join(os.homedir(), ".pi-lens", "install.log");
+			const realInstallLogBefore = fs.existsSync(realInstallLog)
+				? fs.readFileSync(realInstallLog)
+				: null;
 			const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 			// Not `--json`: `prepare` also runs on pack and its scripts write to stdout
 			// (setup-git-hooks on a fresh CI checkout), which corrupts the JSON payload.
@@ -77,7 +96,29 @@ describe("published manifest carries no devDependencies", () => {
 				shell: process.platform === "win32",
 				timeout: 180_000,
 				stdio: ["ignore", "ignore", "inherit"],
+				// scratchEnv pins PI_LENS_INSTALL_LOG (and HOME, PILENS_DATA_DIR,
+				// npm_config_cache) inside `tmp` — every writer this child's
+				// `prepare` lifecycle can reach lands in the scratch root, never in
+				// the real developer home (#2619 review F1, reused for #2634).
+				env: scratchEnv(tmp),
 			});
+			expect(
+				fs.existsSync(realInstallLog) ? fs.readFileSync(realInstallLog) : null,
+				"npm pack must not write into the real ~/.pi-lens/install.log (#2634), " +
+					"or an unrelated concurrent writer touched it during this run",
+			).toEqual(realInstallLogBefore);
+			// The real-home assertion above is liveness-free on its own: drop
+			// `warm-loader-cache` from `prepare` entirely and it stays green just as
+			// happily as a correctly-redirected write does. Assert the SUCCESS path
+			// too — the record must land in the SCRATCH sink `scratchEnv(tmp)`
+			// pins, proving the seam actually ran and was actually redirected, not
+			// merely that nothing reached the real home (review round 1, F1).
+			expect(
+				fs.readFileSync(
+					path.join(tmp, "home", ".pi-lens", "install.log"),
+					"utf8",
+				),
+			).toContain("warm_loader_cache");
 			const filename = fs.readdirSync(tmp).find((f) => f.endsWith(".tgz"));
 			if (!filename) throw new Error("npm pack produced no tarball");
 			// tar with cwd + a relative path: GNU/bsd tar misread `C:...` as a remote host spec.

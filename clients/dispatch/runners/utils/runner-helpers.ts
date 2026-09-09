@@ -24,6 +24,7 @@ import {
 } from "../../../path-utils.js";
 import {
 	ensureTool,
+	findManagedToolBinary,
 	getInstallAttempt,
 	getLastEnsureResolutionSource,
 	getToolInstallStrategy,
@@ -52,6 +53,7 @@ import {
 } from "../../../tool-policy.js";
 import type { DispatchContext } from "../../types.js";
 import { isInSpawnTimeoutCooldown } from "../../../spawn-timeout-cooldown.js";
+import { resolveToolCwd } from "../../../tool-cwd.js";
 import { createAvailabilityProbeFlight } from "../../../availability-probe-flight.js";
 import {
 	type AvailabilityCause,
@@ -165,9 +167,10 @@ type ManagedVerdictMemo =
  * Verification verdicts for managed shims, keyed by path + mtime + size, so a
  * reinstall re-verifies and a session start re-arms.
  *
- * A plain `Map`, not a `PathKeyedMap`: `managedNodeToolCandidates` is the ONLY
- * producer of these paths, so the write and read forms are the same string by
- * construction and cannot diverge on case or separator.
+ * A plain `Map`, not a `PathKeyedMap`: every path keyed here is produced by
+ * `path.join` from one of two producers — `managedNodeToolCandidates` and the
+ * installer's `findManagedToolBinary` (#2140) — so the write and read forms are
+ * the same string by construction and cannot diverge on case or separator.
  */
 const managedBinaryVerdicts = new Map<string, ManagedVerdictMemo>();
 /**
@@ -334,6 +337,35 @@ export async function findManagedNodeToolBinary(
 	return null;
 }
 
+/**
+ * The release-managed binary for a tool (`~/.pi-lens/bin/<tool>`), or null when
+ * the registry does not put this tool there / nothing on disk actually runs.
+ *
+ * `findManagedToolBinary` is the INSTALLER's own lookup — the one `getToolPath`
+ * runs before PATH for every github/maven/archive-strategy tool, and the one
+ * `getToolEnvironment` puts at the front of a spawn's PATH. Calling it here is
+ * what makes probe and spawn resolve through a single definition instead of two
+ * (#2140): before this, the probe fell straight to the bare command name, missed
+ * PATH, and latched `missing` — while the install fallback a few hundred ms
+ * later handed the caller the very binary sitting in that directory. Every
+ * session, for every tool the user already had (7 unavailable/available pairs in
+ * one 3h dogfood window).
+ *
+ * Verification is the same `verifyManagedCandidate` the npm-shim rung above
+ * uses, for the same reason (#1657): `findManagedToolBinary` answers from a bare
+ * `fs.access`, and an on-disk binary that cannot run must not shadow a working
+ * PATH binary — it falls through instead.
+ */
+async function findManagedReleaseBinary(
+	tool: string,
+	verificationArgs: string[] = ["--version"],
+): Promise<string | null> {
+	const candidate = await findManagedToolBinary(tool);
+	if (!candidate) return null;
+	const verdict = await verifyManagedCandidate(candidate, verificationArgs);
+	return verdict === "ok" || verdict === "unverified" ? candidate : null;
+}
+
 // =============================================================================
 // VENV-AWARE COMMAND FINDER
 // =============================================================================
@@ -385,6 +417,12 @@ export function createVenvFinder(
 		// shadowing a working binary (#1657).
 		const managed = await findManagedNodeToolBinary(command, verificationArgs);
 		if (managed) return managed;
+
+		// Release-managed install (`~/.pi-lens/bin/<command>`) — where `ensureTool`
+		// puts every github/maven/archive-strategy tool. Same rung, same reason as
+		// the npm shim above, for the other half of the managed families (#2140).
+		const release = await findManagedReleaseBinary(command, verificationArgs);
+		if (release) return release;
 
 		// Fall back to global
 		return command;
@@ -701,6 +739,45 @@ function sourceTagForToolId(toolId: string): ProbeEvidence["source"] {
 			// a guessed one.
 			return undefined;
 	}
+}
+
+/**
+ * `binary`/`source` for a probe that resolved through one of pi-lens's OWN
+ * managed installs rather than through PATH or a project venv (#2140). A reader
+ * of latency.log could otherwise not tell the two apart, and the whole point of
+ * the fix is that the managed directories now answer where PATH used to miss.
+ *
+ * BOTH managed rungs are asked, in the order `createVenvFinder` walks them
+ * (#2140 review F1). The first version asked only about the release directory,
+ * so every npm-shim hit — knip, jscpd, madge, pyright, biome, htmlhint,
+ * stylelint — logged an evidence-free row indistinguishable from a PATH hit,
+ * while the doc claimed the opposite. Each rung is asked of THE function that
+ * produced its own paths (`managedNodeToolCandidates`, `findManagedToolBinary`)
+ * and settled by string identity, never by a path-prefix predicate over a
+ * directory: a second opinion about which paths are managed is exactly the
+ * parallel-list drift `sourceTagForToolId` exists to avoid, and it would answer
+ * differently for case or separator variants.
+ *
+ * `binary` present IS the managed hit; `source` names the family whenever the
+ * command is a registry id (`sourceTagForToolId` reads the registry's own
+ * `installStrategy`). A managed shim whose COMMAND is not itself a registry id
+ * — `markdownlint-cli2`, installed under registry id `markdownlint` — carries
+ * `binary` alone rather than a guessed family. `binary` is a BASENAME, never
+ * the absolute path — same rule as every other evidence field (#1568 review).
+ */
+async function describeManagedResolution(
+	tool: string,
+	resolved: string,
+): Promise<ProbeEvidence> {
+	const managed =
+		managedNodeToolCandidates(tool).includes(resolved) ||
+		(await findManagedToolBinary(tool)) === resolved;
+	if (!managed) return {};
+	const source = sourceTagForToolId(tool);
+	return {
+		binary: path.basename(resolved),
+		...(source !== undefined && { source }),
+	};
 }
 
 /**
@@ -1055,7 +1132,16 @@ export function createAvailabilityChecker(
 				return false;
 			}
 
+			// Resolution is measured separately from the spawn (#2140 review F2).
+			// It is no longer free — the managed rungs stat two directories and,
+			// on a first touch, pay their own verification spawn — and it runs
+			// BEFORE `startedAt`, so neither `durationMs` nor
+			// `recordAvailabilityProbeOverrun` can see it. Folding it into
+			// `durationMs` would instead charge the probe budget for work that
+			// budget does not govern, so the two spans are reported side by side.
+			const resolveStartedAt = Date.now();
 			const cmd = await findCommand(resolvedCwd);
+			const resolveMs = Date.now() - resolveStartedAt;
 			// #1995: a command cooling down after a RUNTIME timeout (lint or
 			// autofix lane blew its real budget) must not re-probe on every
 			// edit - the positive verdict is effectively cooled. Consult-only:
@@ -1120,7 +1206,11 @@ export function createAvailabilityChecker(
 					elapsedMs,
 					hostStallMs,
 					classifiedBy: probeJoined ? "joined" : "probe",
-					evidence: describeProbeEvidence(result),
+					evidence: {
+						...describeProbeEvidence(result),
+						...(await describeManagedResolution(command, cmd)),
+						resolveMs,
+					},
 				});
 				return true;
 			}
@@ -2095,3 +2185,8 @@ export const sg = {
 	isAvailableAsync: isSgAvailableAsync,
 	getCommand: getSgCommand,
 };
+
+/** Shared cwd seam for runner probes and analysis children (#2777). */
+export function resolveRunnerCwd(ctx: DispatchContext, tool: string): string {
+	return resolveToolCwd("runner", tool, ctx.filePath, ctx);
+}

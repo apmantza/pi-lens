@@ -54,6 +54,8 @@ const EXPECTED_PERMISSIONS: Record<
 			smoke: { contents: "read" },
 			"pi-load": { contents: "read" },
 			"mise-repro": { contents: "read" },
+			"host-range-smoke": { contents: "read", actions: "read" },
+			"host-latest-smoke": { contents: "read", issues: "write" },
 		},
 	},
 	".github/workflows/labels.yml": {

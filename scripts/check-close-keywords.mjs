@@ -14,9 +14,8 @@ export const INVALID_CLOSE_KEYWORD_MESSAGE =
  * Remove markdown regions where a close keyword is quotation, not intent
  * (#1355 review): fenced code blocks, inline code spans, and blockquote
  * lines. A PR body QUOTING the bad form as documentation must not fail its
- * own check -- GitHub itself still parses keywords in these regions, so this
- * is deliberately stricter than the platform: quoted forms are exempt from
- * OUR lint while remaining the author's responsibility platform-side.
+ * own check. GitHub does not apply close keywords inside these regions, so the
+ * lint follows the platform's observed model.
  */
 export function stripNonSemanticMarkdown(body = "") {
 	return body
@@ -27,14 +26,7 @@ export function stripNonSemanticMarkdown(body = "") {
 		.join("\n");
 }
 
-/**
- * Parse same-repository issues named by GitHub close keywords.
- * Cross-repository references (owner/repo#123) intentionally do not match.
- * The body is scanned AFTER stripNonSemanticMarkdown so quoted examples in
- * code fences/blockquotes are not linted as real syntax.
- */
-export function parseCloseKeywords(body = "") {
-	const scanned = stripNonSemanticMarkdown(body);
+function scanCloseIssues(scanned = "") {
 	const issues = [];
 	const commaLists = [];
 	const offendingLines = [];
@@ -60,6 +52,52 @@ export function parseCloseKeywords(body = "") {
 	}
 
 	return { issues, commaLists, offendingLines };
+}
+
+/**
+ * Parse same-repository issues named by GitHub close keywords.
+ * Cross-repository references (owner/repo#123) and URL forms intentionally do
+ * not match. The body keeps GitHub's first-issue-only comma-list semantics;
+ * title placement expands every number so no title-only target escapes the
+ * post-merge backstop.
+ * The body is scanned AFTER stripNonSemanticMarkdown so quoted examples in
+ * code fences/blockquotes are not linted as real syntax.
+ */
+export function parseCloseKeywords(body = "") {
+	return scanCloseIssues(stripNonSemanticMarkdown(body));
+}
+
+export function lintCloseKeywordPlacement(title = "", body = "") {
+	const scannedTitle = String(title);
+	const titleIssues = [...scanCloseIssues(scannedTitle).issues];
+	for (const match of scannedTitle.matchAll(CLOSE_KEYWORD)) {
+		const rest = scannedTitle.slice(match.index + match[0].length);
+		CLOSE_ISSUE.lastIndex = 0;
+		const issue = CLOSE_ISSUE.exec(rest);
+		if (!issue) continue;
+		const commaTail = rest.slice(issue[0].length).match(/^(?:\s*,\s*#\d+)+/);
+		for (const number of commaTail?.[0].matchAll(/#(\d+)/g) ?? []) {
+			const value = Number(number[1]);
+			if (!titleIssues.includes(value)) titleIssues.push(value);
+		}
+	}
+	if (titleIssues.length === 0)
+		return { valid: true, titleIssues, missingBodyIssues: [] };
+	const bodyIssues = parseCloseKeywords(body).issues;
+	const missingBodyIssues = titleIssues.filter(
+		(number) => !bodyIssues.includes(number),
+	);
+	return {
+		valid: missingBodyIssues.length === 0,
+		titleIssues,
+		missingBodyIssues,
+	};
+}
+
+export function closeKeywordPlacementMessage(missing) {
+	const repairs = missing.map((number) => `Closes #${number}.`).join(" ");
+	const alternatives = missing.map((number) => `refs #${number}`).join(", ");
+	return `Invalid close-keyword placement: GitHub only honours closing keywords in the PR body, never in the title. Add the matching body keyword(s): ${repairs} Alternatively, use ${alternatives} in the title.`;
 }
 
 export function lintCloseKeywords(body = "") {
@@ -88,8 +126,9 @@ export async function lintPullRequest(
 	// as a bare thrown message that reads like a broken script (worst for
 	// fork PRs hitting a transient 5xx).
 	let body;
+	let title;
 	try {
-		({ body } = await fetchLivePrBody(pullRequest, fetchImpl));
+		({ body, title } = await fetchLivePrBody(pullRequest, fetchImpl));
 	} catch (error) {
 		const reason = error instanceof Error ? error.message : String(error);
 		console.error(
@@ -104,6 +143,12 @@ export async function lintPullRequest(
 		for (const line of result.offendingLines) {
 			console.error(`  offending line: ${line}`);
 		}
+		process.exitCode = 1;
+		return;
+	}
+	const placement = lintCloseKeywordPlacement(title, body);
+	if (!placement.valid) {
+		console.error(closeKeywordPlacementMessage(placement.missingBodyIssues));
 		process.exitCode = 1;
 		return;
 	}
@@ -162,12 +207,30 @@ export async function verifyMergedPullRequest(
 	// shape #2086 was filed to close, just moved one level up. A fetch
 	// failure here fails the check LOUD instead.
 	let liveBody;
+	let liveTitle;
 	try {
-		({ body: liveBody } = await fetchLivePrBody(pullRequest, fetchImpl));
+		({ body: liveBody, title: liveTitle } = await fetchLivePrBody(
+			pullRequest,
+			fetchImpl,
+		));
 	} catch (error) {
 		const reason = error instanceof Error ? error.message : String(error);
 		console.error(
 			`::error::Post-merge close verification could not fetch the live PR body, so it did not run: ${reason}`,
+		);
+		process.exitCode = 1;
+		return;
+	}
+	const titleIssues = lintCloseKeywordPlacement(liveTitle, "").titleIssues;
+	const unresolvedTitle = titleIssues
+		.map((number) => ({ number, state: getIssueState(repository, number) }))
+		.filter(({ state }) => state !== "closed");
+	if (unresolvedTitle.length > 0) {
+		const details = unresolvedTitle
+			.map(({ number, state }) => `#${number} (${state})`)
+			.join(", ");
+		console.error(
+			`Post-merge close verification found title issue(s) that were not closed: ${details}.`,
 		);
 		process.exitCode = 1;
 		return;
@@ -234,7 +297,22 @@ Post-merge close verification found issue(s) that were not closed: ${details}. G
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
 	(async () => {
-		if (process.argv[2] === "--lint-pr") await lintPullRequest();
+		if (process.argv[2] === "--lint-local") {
+			const title = readFileSync(process.argv[3], "utf8").split(/\r?\n/, 1)[0];
+			const body = readFileSync(process.argv[4], "utf8");
+			const result = lintCloseKeywords(body);
+			const placement = lintCloseKeywordPlacement(title, body);
+			if (!result.valid) console.error(INVALID_CLOSE_KEYWORD_MESSAGE);
+			if (!placement.valid)
+				console.error(
+					closeKeywordPlacementMessage(placement.missingBodyIssues),
+				);
+			if (!result.valid || !placement.valid) process.exitCode = 1;
+			else
+				console.log(
+					`Close-keyword syntax OK (${result.issues.length} issues referenced).`,
+				);
+		} else if (process.argv[2] === "--lint-pr") await lintPullRequest();
 		else if (process.argv[2] === "--verify-merged")
 			await verifyMergedPullRequest();
 		else

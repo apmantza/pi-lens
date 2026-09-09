@@ -120,6 +120,8 @@ export interface DiagnosticBinding extends StoredDiagnosticBinding {
  */
 export interface TouchFileResult {
 	diags: import("./client.js").LSPDiagnostic[];
+	/** Primary/custom servers with no pull or observed push diagnostics. */
+	diagnosticsUnsupportedServerIds?: string[];
 	/** The file was declined because its nearest root is outside the session. */
 	skipReason?: "outside-project-root";
 	confirmation?: "confirmed" | "partial";
@@ -173,10 +175,7 @@ export interface TouchFileResult {
  * #1549: which deadline made a touch inconclusive. `"mixed"` means both a
  * primary's notify write and the diagnostics wait lapsed on this touch.
  */
-export type TouchInconclusiveReason =
-	| "notify-write"
-	| "diagnostics-wait"
-	| "mixed";
+type TouchInconclusiveReason = "notify-write" | "diagnostics-wait" | "mixed";
 
 /** The inputs {@link resolveTouchVerdict} decides a touch's honesty verdict from. */
 export interface TouchVerdictInput {
@@ -309,11 +308,7 @@ export function touchCompletedConfirmationPolicy(
  *     scanner that HAD the content and published nothing, which is the whole
  *     subject of #1493 — recording a deferral there would corrupt it.
  */
-export type AuxiliaryWaitOutcome =
-	| "answered"
-	| "silent"
-	| "cut_off"
-	| "deferred";
+type AuxiliaryWaitOutcome = "answered" | "silent" | "cut_off" | "deferred";
 
 /** One auxiliary's contribution to a touch, as {@link auxiliaryCoverageGap} reads it. */
 export interface AuxiliaryWaitEvidence {

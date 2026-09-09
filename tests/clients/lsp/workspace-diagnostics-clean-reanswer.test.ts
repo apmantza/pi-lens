@@ -57,6 +57,7 @@ function ghostDiagnostic() {
 		severity: 1 as const,
 		code: 2339,
 		source: "typescript",
+		serverId: "typescript",
 		message: "Property 'foo' does not exist on type 'Bar'.",
 	};
 }

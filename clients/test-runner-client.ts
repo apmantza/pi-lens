@@ -68,6 +68,42 @@ export interface TestResult {
 	error?: string; // if runner itself failed
 }
 
+/**
+ * #2532: the ONE classification seam for "this `TestResult` carries NO
+ * counted failure the agent needs to fix, even though the runner also
+ * reported an `error`" — i.e. `failed === 0 && !!error`. This is NOT "the
+ * suite never started": a runner can report BOTH counted failures and an
+ * error (pytest exit 2 "Interrupted" after `2 failed, 1 passed` already
+ * printed — `parsePytestOutput` sets `error` from the exit code
+ * independently of the parsed counts, review round 1 S2). The rule is
+ * exactly `failed === 0`, nothing about `error`'s presence or cause: a
+ * result with counted failures stays blocking even when `error` is also
+ * set (`testResultToProjectDiagnostics`/`formatResult` still mention the
+ * error in that case, they just don't let it downgrade the verdict).
+ *
+ * `hasRealFailure`/`runnerErrorOnly` (`runtime-turn.ts`, #2522) key off the
+ * exact same fact for the turn-end delivery framing — a batch made
+ * entirely of `isRunnerErrorResult` results is advisory, one containing
+ * even one counted failure keeps "fix before continuing". Three more
+ * surfaces route through this SAME predicate instead of re-deriving it
+ * (review round 1 S1's class sweep), so the identical `TestResult` cannot
+ * classify differently across them: `testResultToProjectDiagnostics`
+ * (`lens_diagnostics mode=full`), the `--lens-guard` merge call in
+ * `handleTurnEnd`, and `TestRunnerClient.formatResult`/the turn-end dbg
+ * summary (both in this file / `runtime-turn.ts`).
+ *
+ * Two call sites intentionally test the COMPLEMENT (a truly clean result,
+ * no counted failure AND no error) rather than this predicate, and are not
+ * a missed fourth spelling: `runtime-turn.ts`'s `cleanFiles` filter
+ * (`--lens-guard`'s clear-blocker list) and `testResultToProjectDiagnostics`'s
+ * own early "nothing to report" return. Both need "genuinely clean", which
+ * `!isRunnerErrorResult(result)` cannot express (it is also true for a
+ * counted failure).
+ */
+export function isRunnerErrorResult(result: TestResult): boolean {
+	return result.failed === 0 && !!result.error;
+}
+
 export interface TestFailure {
 	name: string; // test name
 	message: string; // failure message
@@ -1869,7 +1905,12 @@ export class TestRunnerClient {
 			skipped,
 			failures,
 			duration,
-			error: exitCode === 2 ? "Pytest configuration error" : undefined,
+			error:
+				exitCode === 4
+					? "Pytest configuration error"
+					: exitCode === 2
+						? "Pytest interrupted"
+						: undefined,
 		};
 	}
 
@@ -2595,9 +2636,15 @@ export class TestRunnerClient {
 	 * Format test result for LLM consumption
 	 */
 	formatResult(result: TestResult): string {
-		if (result.error && result.passed === 0 && result.failed === 0) {
-			// Runner error, not test failure
-			return `[Tests] ⚠ Could not run tests: ${result.error}`;
+		// #2532 review S1: folded onto `isRunnerErrorResult` instead of the old
+		// local `error && passed === 0 && failed === 0` spelling — that missed a
+		// runner error reported alongside partial passes (pytest `Interrupted`
+		// after some tests already ran clean), which fell through to the normal
+		// "N/N passed" branch below and silently dropped the interruption.
+		if (isRunnerErrorResult(result)) {
+			return result.passed > 0
+				? `[Tests] ⚠ Could not complete tests: ${result.error} (${result.passed} passed before)`
+				: `[Tests] ⚠ Could not run tests: ${result.error}`;
 		}
 
 		const total = result.passed + result.failed + result.skipped;

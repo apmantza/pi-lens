@@ -1,6 +1,6 @@
 import { logLatency } from "./latency-logger.js";
 
-export type ToolSetMutationReason =
+type ToolSetMutationReason =
 	| "fresh_session_lazy_deactivation"
 	| "session_rebuild_restore"
 	| "lazy_activation";

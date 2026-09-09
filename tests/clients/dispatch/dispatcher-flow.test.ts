@@ -56,7 +56,7 @@ describe("Dispatch Flow", () => {
 	});
 
 	describe("Runner Registration", () => {
-		it("should register and retrieve runner", () => {
+		it("registers and retrieves a runner by id", () => {
 			const runner = createCleanRunner("test-runner");
 			registerRunner(runner);
 
@@ -65,12 +65,12 @@ describe("Dispatch Flow", () => {
 			expect(retrieved?.id).toBe("test-runner");
 		});
 
-		it("should return undefined for unknown runner", () => {
+		it("returns undefined for an unregistered runner id", () => {
 			const runner = getRunner("non-existent");
 			expect(runner).toBeUndefined();
 		});
 
-		it("should get runners for specific file kind", () => {
+		it("returns only runners registered for the requested file kind", () => {
 			registerRunner(
 				createMockRunner({
 					id: "ts-runner",
@@ -118,7 +118,7 @@ describe("Dispatch Flow", () => {
 			]);
 		});
 
-		it("should sort runners by priority", () => {
+		it("sorts runners by ascending priority", () => {
 			registerRunner(
 				createMockRunner({
 					id: "low",
@@ -162,7 +162,7 @@ describe("Dispatch Flow", () => {
 	});
 
 	describe("Dispatch Execution", () => {
-		it("should execute single runner and return diagnostics", async () => {
+		it("executes a single runner and returns its diagnostics", async () => {
 			registerRunner(createWarningRunner("mock-linter"));
 
 			const ctx = createMockContext("test.ts");
@@ -305,7 +305,7 @@ describe("Dispatch Flow", () => {
 			expect(result.output).toContain("Pi-lens go analysis unavailable");
 		});
 
-		it("should execute multiple runners in group", async () => {
+		it("executes every runner in a group and aggregates diagnostics", async () => {
 			registerRunner(createWarningRunner("runner-1"));
 			registerRunner(createFailingRunner("runner-2"));
 			registerRunner(createCleanRunner("runner-3"));
@@ -465,7 +465,7 @@ describe("Dispatch Flow", () => {
 			expect(result.diagnostics[0].tool).toBe("lsp");
 		});
 
-		it("should skip unregistered runners gracefully", async () => {
+		it("skips an unregistered runner id without throwing", async () => {
 			registerRunner(createCleanRunner("registered"));
 
 			const ctx = createMockContext("test.ts");
@@ -510,7 +510,7 @@ describe("Dispatch Flow", () => {
 			expect(result.diagnostics[0].filePath).toContain("src/main.ts");
 		});
 
-		it("fallback mode should continue after failed runner and use next success", async () => {
+		it("fallback mode continues after a failed runner and uses the next success", async () => {
 			const calls: string[] = [];
 			registerRunner({
 				id: "first-fail",
@@ -587,7 +587,7 @@ describe("Dispatch Flow", () => {
 	});
 
 	describe("Delta Mode (Baseline Filtering)", () => {
-		it("should filter pre-existing issues in delta mode", async () => {
+		it("filters out baseline issues in delta mode", async () => {
 			const facts = new FactStore();
 			setBaselineFacts(facts, "/project/test.ts", [
 				{
@@ -640,7 +640,7 @@ describe("Dispatch Flow", () => {
 			expect(result.diagnostics[0].id).toBe("new-issue");
 		});
 
-		it("should report all issues when delta mode disabled", async () => {
+		it("reports baseline issues when delta mode is disabled", async () => {
 			const facts = new FactStore();
 			setBaselineFacts(facts, "/project/test.ts", [
 				{
@@ -808,34 +808,7 @@ describe("Dispatch Flow", () => {
 	});
 
 	describe("Conditional Runners (when)", () => {
-		it("should run conditional runner when condition true", async () => {
-			registerRunner(
-				createConditionalRunner("conditional", (ctx) => ctx.autofix),
-			);
-
-			// autofix is now always false (per-tool autofix flags removed)
-			const mockPi = {
-				getFlag: () => false,
-			};
-			const ctx = createDispatchContext(
-				"test.ts",
-				"/project",
-				mockPi,
-				new FactStore(),
-			);
-			const groups: RunnerGroup[] = [
-				{ mode: "all", runnerIds: ["conditional"] },
-			];
-
-			const result = await dispatchForFile(ctx, groups);
-
-			// autofix is always false now (feature removed)
-			expect(ctx.autofix).toBe(false);
-			// Conditional runner skips when autofix is false
-			expect(result.diagnostics).toHaveLength(0);
-		});
-
-		it("should skip conditional runner when condition false", async () => {
+		it("skips the conditional runner when its condition evaluates to false", async () => {
 			registerRunner(
 				createConditionalRunner("conditional", (ctx) => ctx.autofix),
 			);
@@ -857,7 +830,7 @@ describe("Dispatch Flow", () => {
 			expect(result.diagnostics).toHaveLength(0);
 		});
 
-		it("should skip runner when when() throws and continue others", async () => {
+		it("skips a runner whose when() throws and continues with the others", async () => {
 			registerRunner(
 				createMockRunner({
 					id: "throws-when",

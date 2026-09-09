@@ -5,6 +5,7 @@ import {
 	qualifiedLspSymbolName,
 } from "../../clients/lsp-document-symbols.js";
 import { getLSPService } from "../../clients/lsp/index.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 vi.mock("../../clients/lsp/index.js", () => ({
 	getLSPService: vi.fn(),
@@ -59,9 +60,11 @@ describe("LSP document symbols", () => {
 			},
 		],
 	])("does not request symbols when %s", async (_name, warm) => {
-		vi.mocked(getLSPService).mockReturnValue({
-			getWarmClientForFile: vi.fn().mockResolvedValue(warm),
-		} as never);
+		vi.mocked(getLSPService).mockReturnValue(
+			makeLspServiceDouble({
+				getWarmClientForFile: vi.fn().mockResolvedValue(warm),
+			}) as never,
+		);
 		expect(await getOpenDocumentSymbols("/a.ts")).toBeUndefined();
 	});
 
@@ -70,15 +73,17 @@ describe("LSP document symbols", () => {
 			.fn()
 			.mockRejectedValueOnce(new Error("nope"))
 			.mockReturnValueOnce(new Promise(() => {}));
-		vi.mocked(getLSPService).mockReturnValue({
-			getWarmClientForFile: vi.fn().mockResolvedValue({
-				client: {
-					isDocumentOpen: () => true,
-					getOperationSupport: () => ({ documentSymbol: true }),
-					documentSymbol,
-				},
-			}),
-		} as never);
+		vi.mocked(getLSPService).mockReturnValue(
+			makeLspServiceDouble({
+				getWarmClientForFile: vi.fn().mockResolvedValue({
+					client: {
+						isDocumentOpen: () => true,
+						getOperationSupport: () => ({ documentSymbol: true }),
+						documentSymbol,
+					},
+				}),
+			}) as never,
+		);
 		expect(await getOpenDocumentSymbols("/a.ts", 5)).toBeUndefined();
 		expect(await getOpenDocumentSymbols("/a.ts", 5)).toBeUndefined();
 	});

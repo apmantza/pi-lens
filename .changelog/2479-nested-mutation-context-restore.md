@@ -1,5 +1,0 @@
----
-section: Fixed
----
-
-- **A nested `executeCommand` no longer strips the outer LSP call mutation receipt (closes #2479)** — `runServerCommand` restored `activeMutationContext` only once its depth counter returned to 0, so a nested `workspace/executeCommand` unwinding back to depth 1 left the outer call without its own context for the rest of its window: every server-initiated `workspace/applyEdit` the outer call solicited after that point fell to the mutation-bridge fallback and was recorded as a generic `agent-tool:lsp-workspace-applyEdit` write rather than the operation that actually asked for it (`lsp-rename` / `lsp-execute-command`). The slot is now DERIVED from the frame set rather than saved and restored per frame: the call that opens the outermost window owns the context for its whole lifetime, and the slot exposes that owner only while it is the sole call in flight. Overlapping calls settling in any order therefore can never bookkeep an edit through a call that has already returned, nor through one whose window the edit is not in, and "no command in flight" still means "no context". The executeCommand hardening invariants are unchanged.

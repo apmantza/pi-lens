@@ -19,8 +19,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { safeSpawn } from "../../clients/safe-spawn.js";
+import { escapeRegExp } from "../../clients/string-utils.js";
 
-export const SELF_SCAN_CATEGORY = "pi-lens-self-scan";
+const SELF_SCAN_CATEGORY = "pi-lens-self-scan";
 
 /** Repo root, derived from this file's own on-disk location -- never a
  * hardcoded machine path (the #1718 defect). */
@@ -32,11 +33,11 @@ export function rulesDir(root = repoRoot()) {
 	return path.join(root, "rules", "ast-grep-rules", "rules");
 }
 
-export function sgConfigPath(root = repoRoot()) {
+function sgConfigPath(root = repoRoot()) {
 	return path.join(root, "rules", "ast-grep-rules", ".sgconfig.yml");
 }
 
-export function baselinePath(root = repoRoot()) {
+function baselinePath(root = repoRoot()) {
 	return path.join(root, "rules", "ast-grep-rules", "self-scan-baseline.json");
 }
 
@@ -53,10 +54,6 @@ function readMetadataCategory(text) {
 	if (!m) return undefined;
 	const inner = m[1].match(/^[ \t]*category:\s*(.+)$/m);
 	return inner ? inner[1].trim().replace(/^['"]|['"]$/g, "") : undefined;
-}
-
-function escapeRegex(s) {
-	return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** Every rule ID whose YAML declares `metadata: { category: pi-lens-self-scan }`.
@@ -102,7 +99,7 @@ export function runSelfScan({
 			`[astgrep-self-scan] no rules tagged category: ${SELF_SCAN_CATEGORY} under ${rulesDir(root)} -- nothing to run. If every self-scan rule was intentionally removed, delete this script and its CI wiring instead of letting it report a silent "clean" scan.`,
 		);
 	}
-	const filterRegex = `^(${ids.map(escapeRegex).join("|")})$`;
+	const filterRegex = `^(${ids.map(escapeRegExp).join("|")})$`;
 	const result = safeSpawn(
 		"ast-grep",
 		[
@@ -144,6 +141,7 @@ export function runSelfScan({
 	} catch (e) {
 		throw new Error(
 			`[astgrep-self-scan] failed to parse ast-grep JSON output: ${e?.message ?? e}\nstdout:\n${stdout}`,
+			{ cause: e },
 		);
 	}
 

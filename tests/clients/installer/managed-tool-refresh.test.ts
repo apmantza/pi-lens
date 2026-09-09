@@ -105,6 +105,7 @@ import type { ToolDefinition } from "../../../clients/installer/index.js";
 import {
 	checkProbeCache,
 	getRefreshableManagedNpmTools,
+	getInstallAttempt,
 	getToolPath,
 	installTool,
 	resetProbeCacheStateForTesting,
@@ -168,15 +169,44 @@ function installBinShim(binaryName: string, exitCode = 0): void {
 function installFixture(
 	packageName: string,
 	version: string,
-	options: { binaryName?: string; shimExitCode?: number } = {},
+	options: {
+		binaryName?: string;
+		shimExitCode?: number;
+		/**
+		 * #2722: a `bin` map plus the entry module it names, which is the whole
+		 * evidence a `verification: "package-entry"` tool is verified from.
+		 */
+		bin?: Record<string, string>;
+	} = {},
 ): void {
 	const dir = path.join(NODE_MODULES, packageName);
+	const manifestPath = path.join(dir, "package.json");
+	// An `npm update` bumps the version; it does not rewrite what the package
+	// declares or change what its binary does. Re-installing over an existing
+	// fixture therefore CARRIES the previous `bin` map and shim exit code
+	// forward unless the caller overrides them (#2722).
+	let previousBin: Record<string, string> | undefined;
+	try {
+		previousBin = JSON.parse(fs.readFileSync(manifestPath, "utf-8")).bin;
+	} catch {
+		previousBin = undefined;
+	}
+	const bin = options.bin ?? previousBin;
+	const binaryName = options.binaryName ?? packageName;
 	fs.mkdirSync(dir, { recursive: true });
 	fs.writeFileSync(
-		path.join(dir, "package.json"),
-		JSON.stringify({ name: packageName, version }),
+		manifestPath,
+		JSON.stringify({ name: packageName, version, ...(bin && { bin }) }),
 	);
-	installBinShim(options.binaryName ?? packageName, options.shimExitCode ?? 0);
+	for (const entry of Object.values(bin ?? {})) {
+		const entryPath = path.join(dir, entry);
+		fs.mkdirSync(path.dirname(entryPath), { recursive: true });
+		fs.writeFileSync(entryPath, "module.exports = {};\n");
+	}
+	installBinShim(
+		binaryName,
+		options.shimExitCode ?? shimExitCodes.get(binaryName) ?? 0,
+	);
 }
 
 function installedVersion(packageName: string): string | undefined {
@@ -308,6 +338,11 @@ describe("refresh candidate selection", () => {
 		const ids = candidates.map((c) => c.toolId);
 		expect(ids).toContain("knip");
 		expect(ids).toContain("pyright");
+		const shared = candidates.filter(
+			(candidate) => candidate.packageName === "vscode-langservers-extracted",
+		);
+		expect(shared).toHaveLength(1);
+		expect(shared[0].toolId).toBe("vscode-json-language-server");
 		// An explicit `pkg@1.2.3` pin is the intended version; #589 already
 		// reinstalls a managed copy that drifts off one, so it must not be
 		// re-resolved here.
@@ -414,6 +449,54 @@ describe("cadence", () => {
 		expect(updateCalls()[0].args).toContain("pyright");
 	});
 
+	it("refreshes a shared npm package once and advances the next package", async () => {
+		vi.stubEnv("PI_LENS_TOOL_REFRESH_MAX_PER_SESSION", "2");
+		installFixture("vscode-langservers-extracted", "4.0.0", {
+			binaryName: "vscode-css-language-server",
+		});
+		installBinShim("vscode-html-language-server");
+		installBinShim("vscode-json-language-server");
+		installFixture("knip", "6.4.1");
+		writeState({
+			"vscode-css-languageserver": { checkedAt: NOW - 8 * DAY_MS },
+			"vscode-html-languageserver-bin": { checkedAt: NOW - 8 * DAY_MS },
+			"vscode-json-language-server": { checkedAt: NOW - 8 * DAY_MS },
+			knip: { checkedAt: NOW - 7 * DAY_MS },
+		});
+		stubSpawn("ok", {
+			"vscode-langservers-extracted": "5.0.0",
+			knip: "6.32.2",
+		});
+
+		const outcome = await runManagedToolRefresh(NOW);
+
+		expect(updateCalls()).toHaveLength(2);
+		expect(updateCalls().map((call) => call.args)).toEqual(
+			expect.arrayContaining([
+				expect.arrayContaining(["vscode-langservers-extracted"]),
+				expect.arrayContaining(["knip"]),
+			]),
+		);
+		expect(outcome.refreshed.map((refresh) => refresh.packageName)).toEqual(
+			expect.arrayContaining(["vscode-langservers-extracted", "knip"]),
+		);
+		expect(readState()).toMatchObject({
+			"vscode-css-languageserver": { checkedAt: NOW, version: "5.0.0" },
+			"vscode-html-languageserver-bin": { checkedAt: NOW, version: "5.0.0" },
+			"vscode-json-language-server": { checkedAt: NOW, version: "5.0.0" },
+			knip: { checkedAt: NOW, version: "6.32.2" },
+		});
+		expect(
+			logRows().some(
+				(row) =>
+					row.includes("package vscode-langservers-extracted") &&
+					row.includes(
+						"covered ids vscode-json-language-server,vscode-html-languageserver-bin,vscode-css-languageserver",
+					),
+			),
+		).toBe(true);
+	});
+
 	it("breaks a stamp tie on tool id so the choice is deterministic", async () => {
 		installFixture("knip", "1.0.0");
 		installFixture("pyright", "1.0.0");
@@ -496,6 +579,91 @@ describe("session budget", () => {
 });
 
 describe("failed refresh", () => {
+	it("names every alias when a shared package update fails", async () => {
+		installFixture("vscode-langservers-extracted", "4.0.0", {
+			binaryName: "vscode-json-language-server",
+		});
+		installBinShim("vscode-html-language-server");
+		installBinShim("vscode-css-language-server");
+		writeState({
+			"vscode-css-languageserver": { checkedAt: NOW - 8 * DAY_MS },
+			"vscode-html-languageserver-bin": { checkedAt: NOW - 8 * DAY_MS },
+			"vscode-json-language-server": { checkedAt: NOW - 8 * DAY_MS },
+		});
+		stubSpawn("fail");
+
+		await runManagedToolRefresh(NOW);
+
+		const coveredIds =
+			"vscode-json-language-server,vscode-html-languageserver-bin,vscode-css-languageserver";
+		const failureRow = logRows().find((row) =>
+			row.includes("npm update failed"),
+		);
+		expect(failureRow).toContain("package vscode-langservers-extracted");
+		expect(failureRow).toContain(`covered ids ${coveredIds}`);
+		const group = getDegradationSummary().find(
+			(g) => g.kind === "managed-tool-refresh",
+		);
+		expect(group?.latestReasons[0].reason).toContain(
+			"package vscode-langservers-extracted",
+		);
+		expect(group?.latestReasons[0].reason).toContain(
+			`covered ids ${coveredIds}`,
+		);
+		expect(readState()).toMatchObject({
+			"vscode-json-language-server": { failed: true },
+			"vscode-html-languageserver-bin": { failed: true },
+			"vscode-css-languageserver": { failed: true },
+		});
+	});
+
+	it("names every alias when a shared package fails verification", async () => {
+		installFixture("vscode-langservers-extracted", "4.0.0", {
+			binaryName: "vscode-json-language-server",
+		});
+		installBinShim("vscode-html-language-server");
+		installBinShim("vscode-css-language-server");
+		writeState({
+			"vscode-css-languageserver": { checkedAt: NOW - 8 * DAY_MS },
+			"vscode-html-languageserver-bin": { checkedAt: NOW - 8 * DAY_MS },
+			"vscode-json-language-server": { checkedAt: NOW - 8 * DAY_MS },
+		});
+		spawnMock.mockImplementation(async (_command: string, args: string[]) => {
+			if (!args.includes("update")) {
+				return { stdout: "npm", stderr: "", status: 0 };
+			}
+			installFixture("vscode-langservers-extracted", "5.0.0", {
+				binaryName: "vscode-json-language-server",
+				shimExitCode: 1,
+			});
+			return { stdout: "", stderr: "", status: 0 };
+		});
+
+		await runManagedToolRefresh(NOW);
+
+		const coveredIds =
+			"vscode-json-language-server,vscode-html-languageserver-bin,vscode-css-languageserver";
+		const failureRow = logRows().find((row) =>
+			row.includes("failed verification"),
+		);
+		expect(failureRow).toContain("package vscode-langservers-extracted");
+		expect(failureRow).toContain(`covered ids ${coveredIds}`);
+		const group = getDegradationSummary().find(
+			(g) => g.kind === "managed-tool-refresh",
+		);
+		expect(group?.latestReasons[0].reason).toContain(
+			"package vscode-langservers-extracted",
+		);
+		expect(group?.latestReasons[0].reason).toContain(
+			`covered ids ${coveredIds}`,
+		);
+		expect(readState()).toMatchObject({
+			"vscode-json-language-server": { failed: true },
+			"vscode-html-languageserver-bin": { failed: true },
+			"vscode-css-languageserver": { failed: true },
+		});
+	});
+
 	it("degrades once, keeps serving, and retries on the shorter cooldown", async () => {
 		installFixture("knip", "6.4.1");
 		writeState({ knip: { checkedAt: NOW - 8 * DAY_MS, version: "6.4.1" } });
@@ -783,6 +951,45 @@ describe("the session counter records attempts (review F3)", () => {
 	});
 });
 
+describe("unsupported platform install outcomes", () => {
+	function withUnsupportedPlatform<T>(fn: () => Promise<T>): Promise<T> {
+		const originalPlatform = process.platform;
+		const originalArch = process.arch;
+		Object.defineProperty(process, "platform", { value: "freebsd" });
+		Object.defineProperty(process, "arch", { value: "x64" });
+		return fn().finally(() => {
+			Object.defineProperty(process, "platform", { value: originalPlatform });
+			Object.defineProperty(process, "arch", { value: originalArch });
+		});
+	}
+
+	it("records GitHub tools without a matching asset as unavailable", async () => {
+		// Regression: an unsupported GitHub platform must not become a retryable
+		// failed download after installGitHubTool returns undefined.
+		await withUnsupportedPlatform(async () => {
+			await expect(installTool("stylua")).resolves.toBe(false);
+		});
+
+		expect(getInstallAttempt("stylua")).toMatchObject({
+			outcome: "unavailable",
+			reason: "unsupported platform=freebsd arch=x64",
+		});
+	});
+
+	it("records archive tools without a matching URL as unavailable", async () => {
+		// Mutation proof: this catches a disabled unsupported-reason branch even
+		// though installArchiveTool itself also returns undefined.
+		await withUnsupportedPlatform(async () => {
+			await expect(installTool("clangd")).resolves.toBe(false);
+		});
+
+		expect(getInstallAttempt("clangd")).toMatchObject({
+			outcome: "unavailable",
+			reason: "unsupported platform=freebsd arch=x64",
+		});
+	});
+});
+
 describe("unreadable state is not fresh and not stale", () => {
 	it("refreshes nothing and records the gap", async () => {
 		installFixture("knip", "6.4.1");
@@ -943,6 +1150,50 @@ describe("post-update verification (review F2)", () => {
 		}
 	});
 
+	it("verifies a package-entry tool from the tree, never spawning it (#2722)", async () => {
+		// The daily refresh verifies the SAME binary `installNpmTool` does, so a
+		// tool whose `--version` probe can never return a verdict must not have
+		// one demanded of it after an `npm update` either. The fixture's shim
+		// EXITS 1 — if anything on this path still spawns `--version` at it, the
+		// refresh stamps the tool failed and takes it out of service.
+		const fixtureTool: ToolDefinition = {
+			id: "refresh-package-entry-fixture",
+			name: "Refresh package-entry fixture",
+			checkCommand: "refresh-package-entry-fixture",
+			checkArgs: ["--version"],
+			verification: "package-entry",
+			installStrategy: "npm",
+			packageName: "refresh-package-entry-fixture",
+			binaryName: "refresh-package-entry-fixture",
+		};
+		TOOLS.push(fixtureTool);
+		try {
+			installFixture("refresh-package-entry-fixture", "1.0.0", {
+				shimExitCode: 1,
+				bin: { "refresh-package-entry-fixture": "./lib/server.js" },
+			});
+			stubSpawn("ok", { "refresh-package-entry-fixture": "2.0.0" });
+			verifyCalls.mockClear();
+
+			const outcome = await runManagedToolRefresh(NOW);
+
+			expect(outcome.refreshed[0]).toMatchObject({
+				toolId: "refresh-package-entry-fixture",
+				ok: true,
+				verified: true,
+			});
+			expect(
+				verifyCalls.mock.calls.filter(
+					(call: unknown[]) =>
+						String(call[0]).includes("refresh-package-entry-fixture") &&
+						((call[1] as string[] | undefined) ?? []).includes("--version"),
+				),
+			).toEqual([]);
+		} finally {
+			TOOLS.splice(TOOLS.indexOf(fixtureTool), 1);
+		}
+	});
+
 	it("delivers bash-language-server's 20s budget through npm refresh (#2194)", async () => {
 		installFixture("bash-language-server", "4.0.0");
 		stubSpawn("ok", { "bash-language-server": "5.0.0" });
@@ -964,7 +1215,6 @@ describe("post-update verification (review F2)", () => {
 			binaryName: "vscode-json-language-server",
 		});
 		stubSpawn("ok", { "vscode-langservers-extracted": "5.0.0" });
-
 		const outcome = await runManagedToolRefresh(NOW);
 
 		expect(outcome.refreshed[0]).toMatchObject({

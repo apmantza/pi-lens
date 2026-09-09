@@ -17,7 +17,7 @@ function cycleMembers(dep: CircularDep): string[] {
  * single-point knip finding. Emit a diagnostic on EACH file in the cycle so it
  * surfaces wherever the agent is looking, each one rendering the whole cycle.
  */
-export function circularDepToProjectDiagnostics(
+function circularDepToProjectDiagnostics(
 	cwd: string,
 	dep: CircularDep,
 ): ProjectDiagnostic[] {

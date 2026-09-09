@@ -4,8 +4,16 @@
  * Two known subagent-spawning ecosystems set different env vocabularies in
  * every spawned child's environment:
  *
- * - nicobailon/pi-subagents sets `PI_SUBAGENT_CHILD=1` unconditionally (plus
- *   `PI_SUBAGENT_RUN_ID` / `PI_SUBAGENT_CHILD_AGENT` for best-effort identity).
+ * - nicobailon/pi-subagents sets `PI_SUBAGENT_CHILD=1` unconditionally on
+ *   every process that hosts a child session — the only var light mode keys
+ *   on for this vocabulary. It ALSO used to set `PI_SUBAGENT_RUN_ID` /
+ *   `PI_SUBAGENT_CHILD_AGENT` alongside it for best-effort identity, but
+ *   removed both entirely in `pi-subagents@0.65.0`'s native-AgentSession
+ *   rewrite (grep-verified absent from the whole 0.66.0 source tree, #2581/
+ *   #2680) — child identity now travels through an in-process object, not
+ *   env vars. `getSubagentIdentity()` below already treats identity as
+ *   optional best-effort metadata, so this permanent absence for the
+ *   nicobailon vocabulary needed no behavior change, only the doc update.
  * - avtc-pi-subagent (the spawn engine under avtc-pi-feature-flow) is the same
  *   execution model — real child-process `pi --mode rpc` / `--mode json -p`
  *   spawns, full env inheritance — but never sets `PI_SUBAGENT_CHILD`. It sets
@@ -34,7 +42,7 @@
  */
 
 /** Which vocabulary matched when classifying the session as a subagent. */
-export type SubagentMarker = "pi-subagents" | "avtc-pi-subagent";
+type SubagentMarker = "pi-subagents" | "avtc-pi-subagent";
 
 interface SubagentClassification {
 	isSubagent: boolean;
@@ -83,8 +91,13 @@ export interface SubagentIdentity {
 /**
  * Best-effort identity of the current subagent, read from the env vars the
  * detected extension sets alongside its subagent marker. Returns `undefined`
- * when neither identity var is present (e.g. not a subagent session, or a
- * future extension that doesn't set them).
+ * when neither identity var is present — not a subagent session, an
+ * extension that never set them, OR nicobailon/pi-subagents@0.65.0+, which
+ * removed both identity vars upstream while still setting `PI_SUBAGENT_CHILD`
+ * (#2581/#2680): light mode still engages via `isSubagentSession()` alone,
+ * `marker` is still populated, only `runId`/`agentName` degrade to
+ * `undefined`. Identity is metadata for observability, never a light-mode
+ * gate — callers must not treat its absence as "not a subagent".
  */
 export function getSubagentIdentity(): SubagentIdentity | undefined {
 	const runId = process.env.PI_SUBAGENT_RUN_ID || undefined;

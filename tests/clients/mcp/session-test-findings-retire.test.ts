@@ -22,6 +22,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CacheManager } from "../../../clients/cache-manager.js";
+import { makeLspServiceDouble } from "../../support/lsp-service-double.js";
 import type { TestRunnerFindingsCache } from "../../../clients/project-diagnostics/runner-adapters/runner-findings.js";
 import { removeTempDirSync } from "../test-utils.js";
 
@@ -63,7 +64,9 @@ vi.mock("../../../clients/ast-grep-client.js", () => ({
 	AstGrepClient: class {},
 }));
 vi.mock("../../../clients/lsp/index.js", () => ({
-	getLSPService: () => ({ getAliveClientCount: () => 0 }),
+	// `getMcpSessionContext` reads only `getAliveClientCount`; the rest of the
+	// surface comes from the factory (#2592).
+	getLSPService: () => makeLspServiceDouble({ getAliveClientCount: () => 0 }),
 	resetLSPService: vi.fn(),
 }));
 

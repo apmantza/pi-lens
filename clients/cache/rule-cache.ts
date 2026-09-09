@@ -8,9 +8,13 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { reportBundledResourceDirHealth } from "../bundled-resource-health.js";
 import { getProjectDataDir } from "../file-utils.js";
 import { readJsonCache } from "../json-cache-read.js";
-import { resolvePackagePath } from "../package-root.js";
+import {
+	BUNDLED_QUERIES_ROOT,
+	getBundledQueriesRootHealth,
+} from "../tree-sitter-query-loader.js";
 import { writeFileAtomic } from "../atomic-write.js";
 import { compareOrdinal } from "../string-utils.js";
 
@@ -51,17 +55,44 @@ export const CACHE_VERSION = "v7";
  * on this prefix mirrors the split `yaml-rule-parser.ts`/`ast-grep-napi.ts`
  * already use for the ast-grep side of the same class (#1105): project-origin
  * trees get a content-hash CONFIRM, bundled trees stay mtime-cheap.
+ *
+ * #2636 review F4: re-exported from `tree-sitter-query-loader.ts`'s
+ * `BUNDLED_QUERIES_ROOT` rather than computed a second time here — the two
+ * modules read the IDENTICAL physical directory, and the "one ledger row"
+ * claim below rests on that being reference equality, not two independently
+ * `resolvePackagePath`-resolved strings that happen to match.
  */
-const BUNDLED_RULES_ROOT = resolvePackagePath(
-	import.meta.url,
-	"rules",
-	"tree-sitter-queries",
-);
+export { BUNDLED_QUERIES_ROOT as BUNDLED_RULES_ROOT } from "../tree-sitter-query-loader.js";
 
 function isBundledRuleFile(resolvedFile: string): boolean {
 	return (
-		resolvedFile === BUNDLED_RULES_ROOT ||
-		resolvedFile.startsWith(BUNDLED_RULES_ROOT + path.sep)
+		resolvedFile === BUNDLED_QUERIES_ROOT ||
+		resolvedFile.startsWith(BUNDLED_QUERIES_ROOT + path.sep)
+	);
+}
+
+/**
+ * #2636 (the #2626 class sweep's tree-sitter leg): the bundled
+ * tree-sitter-queries root above was used unconditionally with no existence
+ * check — same managed-cache-relocation gap #2626 fixed for `skills/`.
+ * Purely observational (never gates `isBundledRuleFile`'s classification):
+ * records a bounded `tree-sitter-queries-dir-missing` degradation only when
+ * the bundled root is absent, unreadable, or (uncommonly) present but empty.
+ * Shares the exact kind + subject `clients/tree-sitter-query-loader.ts`'s
+ * `ruleFilesForLanguage` reports under — both read the SAME physical
+ * directory (`getBundledQueriesRootHealth`'s process-lifetime memo, #2636
+ * review F6 — this constructor runs per dispatched file, so an unmemoized
+ * `readdirSync` here would be the same unconditional hot-path cost the
+ * class doc comment above forbids for rule-file hashing), so the ledger's
+ * own (kind, subject) dedup collapses whichever call site observes it first
+ * into ONE row rather than two duplicates.
+ */
+function reportBundledRulesRootHealth(): void {
+	reportBundledResourceDirHealth(
+		"tree-sitter-queries-dir-missing",
+		BUNDLED_QUERIES_ROOT,
+		getBundledQueriesRootHealth(),
+		"bundled tree-sitter query rules",
 	);
 }
 
@@ -95,6 +126,7 @@ export class RuleCache {
 
 	constructor(language: string, rootDir = process.cwd()) {
 		this.language = language;
+		reportBundledRulesRootHealth();
 		this.cacheDir = path.join(getProjectDataDir(rootDir), "cache");
 		this.cacheFile = path.join(
 			this.cacheDir,

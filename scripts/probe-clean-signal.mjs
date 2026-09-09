@@ -40,7 +40,6 @@
  * Requires `npm run build:dist` (imports from dist/). Measures only
  * already-installed servers unless --install is passed.
  */
-import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -50,6 +49,10 @@ import {
 	classifyCleanBehavior,
 	DRIFT_SUMMARY_PATH,
 } from "./lib/clean-signal.mjs";
+import {
+	bootstrapFixtureWorkspace,
+	withScratchHome,
+} from "./lib/lsp-fixture-workspace.mjs";
 import {
 	mergeRows,
 	mergeSrc,
@@ -65,6 +68,12 @@ const argv = process.argv.slice(2);
 const install = argv.includes("--install");
 const langs = argv.filter((a) => !a.startsWith("--"));
 const ECHO_TRACE = Boolean(process.env.PILENS_PUB_DEBUG);
+
+// #2670/#2506-shape: pin PI_LENS_HOME/PILENS_DATA_DIR to a scratch temp dir
+// BEFORE the first dist/ import below — dist/clients/latency-logger.js reads
+// its log dir into a top-level const at module load, not lazily per write.
+withScratchHome();
+
 const imp = (rel) => import(pathToFileURL(path.join(repoRoot, rel)).href);
 
 // Force the client's publish trace on so we can tally publishes in-process. It
@@ -227,21 +236,14 @@ for (const fx of fixtures) {
 }
 
 async function probeFixture(fx, dst, row) {
-	fs.cpSync(path.join(repoRoot, fx.dir), dst, { recursive: true });
-	const absFile = path.join(dst, fx.file);
-	if (fx.gitInit) {
-		try {
-			gitExecFileSync(["init", "-q"], { cwd: dst, stdio: "ignore" });
-		} catch {}
-	}
-	if (fx.disableServers) {
-		fs.mkdirSync(path.join(dst, ".pi-lens"), { recursive: true });
-		fs.writeFileSync(
-			path.join(dst, ".pi-lens", "lsp.json"),
-			JSON.stringify({ disabledServers: fx.disableServers }, null, 2),
-		);
-		await initLSPConfig(dst);
-	}
+	// `dst` is pre-created by the caller (mkdtemp'd BEFORE `withTimeout` starts
+	// the race, so its `finally` can always clean it up, even if bootstrapping
+	// itself times out) — pass it straight through as `workspace`.
+	const { absFile } = await bootstrapFixtureWorkspace(fx, {
+		initLSPConfig,
+		repoRoot,
+		workspace: dst,
+	});
 	if (install && ensureTool) {
 		for (const t of fx.tools ?? []) await ensureTool(t).catch(() => undefined);
 	}

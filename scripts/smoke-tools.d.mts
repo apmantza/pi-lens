@@ -4,9 +4,12 @@ export interface SmokeFixture {
 	lang: string;
 	dir: string;
 	file: string;
+	cwd?: string;
 	targets?: string[];
 	tools?: string[];
 	expectDiagnostic?: boolean;
+	expectDiagnosticCount?: number;
+	expectRule?: string;
 	/**
 	 * In the tier-1 parser lane (#1937): the tool installs as a pip/npm package
 	 * or a single GitHub-release binary, with no language toolchain step.
@@ -24,6 +27,10 @@ export interface LspFixture {
 	auxiliarySourceMatch?: string;
 	gitInit?: boolean;
 	clean?: boolean;
+	/** Require a primary finding from the real lsp_diagnostics handler. */
+	lspGate?: boolean;
+	/** The source text the gated fixture must contain (its seeded error). */
+	lspGateMarker?: string;
 	lombokJar?: boolean;
 	expectNoMessageMatch?: string;
 	/** A diagnostic message that MUST arrive. The lane's default verdict passes
@@ -33,6 +40,16 @@ export interface LspFixture {
 	disableServers?: string[];
 	expectServerId?: string;
 	expectSourceMatch?: string;
+	/** Optional custom-server config written into the copied fixture workspace. */
+	customServer?: {
+		id: string;
+		name: string;
+		extensions: string[];
+		command: string;
+		args?: string[];
+		env?: Record<string, string>;
+		rootMarkers?: string[];
+	};
 	/** Optional pre-touch setup step, run in the COPIED temp workspace (#530) — a
 	 * string command (split on whitespace) or an argv array. Bounded by
 	 * FIXTURE_SETUP_TIMEOUT_MS; failure reports a distinct `setup-failed`
@@ -57,6 +74,28 @@ export interface FormatFixture {
 	 */
 	expect?: "reformat" | "preserve";
 }
+export interface FormatResult {
+	success: boolean;
+	changed: boolean;
+	error?: string;
+	outcome: "formatted" | "unchanged" | "skipped" | "unavailable" | "failed";
+}
+/** Run the production Format smoke layer, optionally with injected seams. */
+export function runFormatSmoke(options: {
+	langs: string[];
+	install: boolean;
+	verbose: boolean;
+	deps?: unknown;
+}): Promise<number>;
+export interface FormatRowVerdict {
+	status: "pass" | "skip" | "fail";
+	detail: string;
+}
+/** Classify one formatter result without running tools or touching files. */
+export function classifyFormatRow(
+	target: FormatResult,
+	fx: FormatFixture,
+): FormatRowVerdict;
 export interface AutofixFixture {
 	lang: string;
 	dir: string;
@@ -79,6 +118,12 @@ export function matchDiagnosticMessages(
 	pattern: string,
 	diags: readonly SmokeDiagnostic[] | undefined,
 ): SmokeDiagnostic[];
+/** Classify one real lsp_diagnostics primary-finding gate result. */
+export function classifyLspGateResult(
+	result: unknown,
+	fixture: Pick<LspFixture, "serverHint">,
+	unavailable?: boolean,
+): { state: "pass" | "skip" | "fail"; detail: string; diags: number };
 /** One reported row from a smoke lane, as far as the pass floor is concerned. */
 export interface SmokeRow {
 	state: "pass" | "fail" | "skip" | "setup-failed";
@@ -93,6 +138,104 @@ export function passFloorBreach(
 ): string | null;
 /** Fixtures flagged `tier1` — the scheduled parser lane's selection. */
 export function tier1Fixtures(): SmokeFixture[];
+/** Resolve a smoke row's dispatch cwd inside its copied workspace. */
+export function fixtureDispatchCwd(
+	fixture: SmokeFixture,
+	workspace: string,
+): string;
+/** Classify one real runner outcome for the tool-layer report. */
+export function classify(outcome: unknown): {
+	state: "pass" | "fail" | "skip";
+	detail: string;
+	diags: number;
+};
+/** Remove dead or old scratch workspaces from previous smoke runs. */
+export function sweepLeftovers(): number;
+/** One TOOLS registry entry, as far as this classification cares. */
+export interface SmokeToolDefinition {
+	installStrategy?: string;
+}
+/** The installer's own record of what its last install attempt for a tool did. */
+export interface SmokeInstallAttempt {
+	outcome: "succeeded" | "failed" | "declined" | "skipped";
+	reason?: string;
+}
+export interface ClassifyInstallOutcomeDeps {
+	getInstallAttempt: (toolId: string) => SmokeInstallAttempt | undefined;
+	toolsById: ReadonlyMap<string, SmokeToolDefinition>;
+	toolchainPresence: Record<string, boolean>;
+	/** The pip command ladder to probe, in priority order (installer's own). */
+	pipCandidates: readonly string[];
+}
+/**
+ * Everything `classifyInstallOutcome` needs EXCEPT `getInstallAttempt`
+ * (#2670): `resolveUnavailabilityRow` takes the attempt-snapshot `Map` as its
+ * own positional parameter and derives `getInstallAttempt` from it
+ * internally, so a caller has no `getInstallAttempt` key to (mis)assemble.
+ */
+export type ClassifyOutcomeRestDeps = Omit<
+	ClassifyInstallOutcomeDeps,
+	"getInstallAttempt"
+>;
+export interface InstallOutcomeRow {
+	row: "fail" | "skip";
+	detail: string;
+}
+/**
+ * Classify why `toolId` never resolved via `ensureTool`, using the
+ * installer's own attempt record (`getInstallAttempt`) — never the
+ * `getInstallFailureReason` refusal map alone, which cannot answer whether an
+ * install even ran (#2638/#2661). `{row: "fail"}` only for a genuine
+ * installer defect: an attempt that actually ran and failed
+ * (`outcome === "failed"`), not a transient network condition, on a strategy
+ * whose toolchain this runner has (npm always; pip/gem when confirmed
+ * present). Every other case is `{row: "skip"}`.
+ */
+export function classifyInstallOutcome(
+	toolId: string,
+	deps: ClassifyInstallOutcomeDeps,
+): InstallOutcomeRow;
+/**
+ * Is this pip candidate command actually usable — `pip`/`pip3` via `--version`,
+ * a python-family command via `-m pip --version` (#2661 round 2 R2-F2: a bare
+ * `python3 --version` succeeds even with no `pip` module installed).
+ */
+export function pipCandidateUsable(command: string): boolean;
+/**
+ * The row a fixture's `ensureTool` step should report: the first GENUINE
+ * install failure among `toolIds` (`classifyInstallOutcome`), or a "skip"
+ * carrying `fallbackSkipDetail` when every unavailable tool in the list is
+ * legitimately declined/skipped/toolchain-absent/transient.
+ *
+ * `attemptSnapshots` is the actual snapshot `Map` `ensureFixtureTools`
+ * returned — not folded into `restDeps`, so a caller has no
+ * `getInstallAttempt` key of its own to accidentally point at the live
+ * module-global instead (#2670, the #2661 r3 verify's residual).
+ */
+export function resolveUnavailabilityRow(
+	toolIds: readonly string[],
+	unavailableTools: ReadonlySet<string>,
+	attemptSnapshots: ReadonlyMap<string, SmokeInstallAttempt | undefined>,
+	restDeps: ClassifyOutcomeRestDeps,
+	fallbackSkipDetail: string,
+): InstallOutcomeRow;
+/**
+ * Ensures every tool in `toolIds`, returning which never resolved and a
+ * SNAPSHOT of each one's `getInstallAttempt` record taken the instant it was
+ * found unavailable — never a live reference read later (#2661 round 2
+ * R2-F3). `onEnsured`, when given, fires after each `ensureTool` call.
+ */
+export function ensureFixtureTools(
+	toolIds: readonly string[],
+	ensureTool: ((toolId: string) => Promise<string | undefined>) | undefined,
+	getInstallAttempt:
+		| ((toolId: string) => SmokeInstallAttempt | undefined)
+		| undefined,
+	onEnsured?: (toolId: string, resolved: string | undefined) => void,
+): Promise<{
+	unavailableTools: Set<string>;
+	attemptSnapshots: Map<string, SmokeInstallAttempt | undefined>;
+}>;
 export const FIXTURES: SmokeFixture[];
 export const LSP_FIXTURES: LspFixture[];
 export const FORMAT_FIXTURES: FormatFixture[];

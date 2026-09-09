@@ -17,11 +17,13 @@
  * provisioned env (the nightly) to capture those rows.
  */
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { mergeServerCapabilitiesDoc } from "./lib/md-matrix.mjs";
-import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
+import {
+	bootstrapFixtureWorkspace,
+	withScratchHome,
+} from "./lib/lsp-fixture-workspace.mjs";
 
 const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -30,6 +32,12 @@ const repoRoot = path.resolve(
 const argv = process.argv.slice(2);
 const install = argv.includes("--install");
 const langs = argv.filter((a) => !a.startsWith("--"));
+
+// #2670/#2506-shape: pin PI_LENS_HOME/PILENS_DATA_DIR to a scratch temp dir
+// BEFORE the first dist/ import below — dist/clients/latency-logger.js reads
+// its log dir into a top-level const at module load, not lazily per write.
+withScratchHome();
+
 const imp = (rel) => import(pathToFileURL(path.join(repoRoot, rel)).href);
 const { LSP_FIXTURES } = await imp("scripts/smoke-tools.mjs");
 const { getLSPService, resetLSPService } = await imp(
@@ -64,31 +72,20 @@ const OPS = [
 ];
 
 for (const fx of fixtures) {
-	const dst = fs.mkdtempSync(path.join(os.tmpdir(), "caps-lsp-"));
-	fs.cpSync(path.join(repoRoot, fx.dir), dst, { recursive: true });
-	const absFile = path.join(dst, fx.file);
-	if (fx.gitInit) {
-		try {
-			gitExecFileSync(["init", "-q"], { cwd: dst, stdio: "ignore" });
-		} catch {}
-	}
-	if (fx.disableServers) {
-		fs.mkdirSync(path.join(dst, ".pi-lens"), { recursive: true });
-		fs.writeFileSync(
-			path.join(dst, ".pi-lens", "lsp.json"),
-			JSON.stringify({ disabledServers: fx.disableServers }, null, 2),
-		);
-		await initLSPConfig(dst);
-	}
-	if (install && ensureTool) {
-		for (const t of fx.tools ?? []) await ensureTool(t).catch(() => undefined);
-	}
-	if (!lsp.supportsLSP(absFile)) {
-		fs.rmSync(dst, { recursive: true, force: true });
-		continue;
-	}
-	const auxIds = fx.auxiliaryServerIds ?? [];
+	const { absFile, cleanup } = await bootstrapFixtureWorkspace(fx, {
+		initLSPConfig,
+		repoRoot,
+		tmpPrefix: "caps-lsp-",
+	});
 	try {
+		if (install && ensureTool) {
+			for (const t of fx.tools ?? [])
+				await ensureTool(t).catch(() => undefined);
+		}
+		if (!lsp.supportsLSP(absFile)) {
+			continue;
+		}
+		const auxIds = fx.auxiliaryServerIds ?? [];
 		const content = fs.readFileSync(absFile, "utf8");
 		await lsp.touchFile(absFile, content, {
 			diagnostics: "document",
@@ -118,9 +115,7 @@ for (const fx of fixtures) {
 		unavailable.add(fx.serverHint ?? fx.lang);
 		console.error(`[${fx.lang}] error: ${e?.message ?? e}`);
 	} finally {
-		try {
-			fs.rmSync(dst, { recursive: true, force: true });
-		} catch {}
+		cleanup();
 	}
 }
 

@@ -20,14 +20,20 @@ vi.mock("../../../../clients/safe-spawn.js", () => ({
 }));
 
 const lspPrimaryCoversFile = vi.fn((..._args: unknown[]) => false);
-vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
-	createAvailabilityChecker: () => ({
-		isAvailable: () => true,
-		isAvailableAsync: async () => true,
-		getCommand: () => "shellcheck",
+vi.mock(
+	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
+		>()),
+		createAvailabilityChecker: () => ({
+			isAvailable: () => true,
+			isAvailableAsync: async () => true,
+			getCommand: () => "shellcheck",
+		}),
+		lspPrimaryCoversFile: (...args: unknown[]) => lspPrimaryCoversFile(...args),
 	}),
-	lspPrimaryCoversFile: (...args: unknown[]) => lspPrimaryCoversFile(...args),
-}));
+);
 
 function createShellCtx(filePath: string, cwd: string) {
 	return {
@@ -78,6 +84,38 @@ describe("shellcheck runner", () => {
 			// stays opt-in via .shellcheckrc.
 			expect(args).toContain("info");
 			expect(args).not.toContain("warning");
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #2691: the lint spawn passed no `cwd`, so it ran under the extension
+	// host's `process.cwd()` instead of `ctx.cwd` -- same shape as #1731
+	// (sqlfluff) and #2691's own yamllint.
+	it("spawns shellcheck with the dispatch context's cwd, not the host's (#2691)", async () => {
+		const env = setupTestEnvironment("pi-lens-shellcheck-cwd-");
+		try {
+			const filePath = path.join(env.tmpDir, "script.sh");
+			fs.writeFileSync(filePath, "echo $x\n");
+			safeSpawn.mockReturnValue({
+				error: null,
+				status: 0,
+				stdout: "",
+				stderr: "",
+			});
+
+			const runner = (
+				await import("../../../../clients/dispatch/runners/shellcheck.js")
+			).default;
+			await runner.run(createShellCtx(filePath, env.tmpDir) as never);
+
+			expect(safeSpawn).toHaveBeenCalled();
+			const [, , options] = safeSpawn.mock.calls[0] as [
+				string,
+				string[],
+				{ cwd?: string } | undefined,
+			];
+			expect(options?.cwd).toBe(env.tmpDir);
 		} finally {
 			env.cleanup();
 		}

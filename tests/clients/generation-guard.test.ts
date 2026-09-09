@@ -346,6 +346,38 @@ describe("GenerationMap — keyed independence", () => {
 	});
 });
 
+describe("GenerationMap — whole-store clear", () => {
+	it("clear drops every key and stales every outstanding handle", () => {
+		const map = createGenerationMap("cleared-store");
+		const a = map.capture("/repo/a");
+		const b = map.capture("/repo/b");
+		map.bump("/repo/c");
+		expect(map.size()).toBe(3);
+
+		map.clear();
+
+		// #2777 round 5: `clear()` shipped with no direct test, and a
+		// compile-valid no-op mutation (`void stamps` instead of
+		// `stamps.clear()`) left this suite and tests/clients/tool-cwd.test.ts
+		// green. These assertions pin the whole-store reset: every stamp
+		// gone, every outstanding handle stale, the map reusable after.
+		expect(map.size()).toBe(0);
+		expect(map.current("/repo/a")).toBe(0);
+		expect(map.current("/repo/b")).toBe(0);
+		expect(map.current("/repo/c")).toBe(0);
+		expect(a.isCurrent()).toBe(false);
+		expect(b.isCurrent()).toBe(false);
+		expect(a.guardedWrite("entry", () => "wrote")).toBeUndefined();
+		expect(b.guardedWrite("entry", () => "wrote")).toBeUndefined();
+
+		// A capture after clear is fresh and its writes land: the reset seam
+		// empties the map, it does not break it.
+		const fresh = map.capture("/repo/a");
+		expect(fresh.isCurrent()).toBe(true);
+		expect(fresh.guardedWrite("entry", () => "wrote")).toBe("wrote");
+	});
+});
+
 describe("GenerationMap — a normalizer whose answer moves", () => {
 	// #1754 review F3. `normalizeMapKey` runs `realpathSync.native`, so a key
 	// that does not exist yet normalizes differently once it does. Normalizing

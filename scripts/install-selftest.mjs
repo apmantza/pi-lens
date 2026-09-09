@@ -17,7 +17,9 @@
  * Force-imports the modules whose TOP-LEVEL bare imports are the documented
  * failure points, plus the bare specifiers directly, and checks the two
  * build-script-provided assets (ast-grep CLI binary + tree-sitter grammars)
- * that pnpm/bun skip by default. It runs no model and needs no credentials.
+ * that pnpm/bun skip by default. It also resolves the `pi.skills` manifest
+ * entries the way pi does, from the installed package root (#2587). It runs no
+ * model and needs no credentials.
  *
  * WHAT IT NO LONGER COVERS (#1926)
  * pi supplies `typebox` and `@earendil-works/pi-tui` from its own runtime, so
@@ -47,6 +49,7 @@ import { createRequire } from "node:module";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { HOST_PROVIDED_PACKAGES } from "./lib/host-provided-deps.mjs";
+import { collectSkillEntryPaths } from "./lib/skills-predicate.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const pkgRoot = path.resolve(here, "..");
@@ -241,6 +244,56 @@ try {
 	grammarDetail = `web-tree-sitter unresolved: ${err?.message || err}`;
 }
 record("tree-sitter grammars", "asset", hasCoreGrammar, grammarDetail);
+
+// --- 4. pi.skills manifest resolution, AS INSTALLED (#2587) ----------------
+// Guards the recurrence of #2587: a `pi.skills` entry that resolves outside the
+// installed package, so pi registers none of the shipped skills. This probe runs
+// from the INSTALLED package (`require.resolve("pi-lens/scripts/…")`), so it sees
+// the real layout — hoisted node_modules, pnpm's symlink store, bun, yarn — which
+// is exactly where `../../skills` escaped and where a static check on the source
+// tree cannot look. Replicates pi's own resolver, `PackageManager#collectFiles\
+// FromManifestEntries` in `@earendil-works/pi-coding-agent`
+// `dist/core/package-manager.js`: a non-glob entry is `resolve(packageRoot, entry)`
+// (verified identical in 0.78.1 / 0.84.1 / 0.85.1).
+//
+// #2626 review round 2 (F2): the "does this dir have a skill" walk used to be
+// a hand-rolled `countSkillFiles` here AND a second, differently-wrong one in
+// `clients/skills-resolver.ts`. Both now derive from the ONE structural
+// predicate in `./lib/skills-predicate.mjs`, which replicates pi's actual
+// `loadSkillsFromDirInternal` walk (see that module's header for the exact
+// discovery rules and the two documented scope gaps).
+{
+	const pkgJson = JSON.parse(
+		fs.readFileSync(path.join(pkgRoot, "package.json"), "utf8"),
+	);
+	const entries = pkgJson.pi?.skills ?? [];
+	if (entries.length === 0) {
+		record("pi.skills declared", "manifest", false, "pi.skills is empty");
+	}
+	for (const entry of entries) {
+		const label = `pi.skills "${entry}"`;
+		// pi globs entries containing * or ? through a different branch; this
+		// probe only replicates the non-glob one.
+		if (/[*?]/.test(entry)) {
+			record(label, "manifest", true, "glob entry — not probed");
+			continue;
+		}
+		const resolved = path.resolve(pkgRoot, entry);
+		if (resolved !== pkgRoot && !resolved.startsWith(pkgRoot + path.sep)) {
+			record(label, "manifest", false, `escapes the package: ${resolved}`);
+			continue;
+		}
+		const found = collectSkillEntryPaths(resolved).length;
+		record(
+			label,
+			"manifest",
+			found > 0,
+			found > 0
+				? `${found} SKILL.md under ${resolved}`
+				: `no SKILL.md under ${resolved}`,
+		);
+	}
+}
 
 // --- Report ----------------------------------------------------------------
 const pad = Math.max(...results.map((r) => r.name.length));

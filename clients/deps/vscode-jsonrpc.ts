@@ -3,7 +3,7 @@
  * rationale. The runtime values live on the `./node` subpath (v9 `exports` map);
  * the connection type comes from the package root.
  */
-export type { CancellationToken, MessageConnection } from "vscode-jsonrpc";
+export type { MessageConnection } from "vscode-jsonrpc";
 export {
 	CancellationTokenSource,
 	createMessageConnection,

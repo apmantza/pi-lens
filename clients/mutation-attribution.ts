@@ -47,7 +47,7 @@ import { getProjectDataDir } from "./file-utils.js";
 import { getProcessSingleton } from "./process-singletons.js";
 
 /** Persisted-file schema version. A file of any other version is ignored. */
-export const MUTATION_ATTRIBUTION_FILE_VERSION = 1;
+const MUTATION_ATTRIBUTION_FILE_VERSION = 1;
 
 /** File under `getProjectDataDir(cwd)` holding the learned attributions. */
 export const MUTATION_ATTRIBUTION_FILE = "observed-mutating-tools.json";
@@ -59,7 +59,7 @@ export const MUTATION_ATTRIBUTION_FILE = "observed-mutating-tools.json";
  * co-occurrence — an unrelated tool call that happened to overlap a background
  * write — cannot durably mislabel a tool for every future session.
  */
-export const PERSIST_AFTER_OBSERVATIONS = 2;
+const PERSIST_AFTER_OBSERVATIONS = 2;
 
 /**
  * Consecutive clean observations after which an UNATTRIBUTED tool stops being
@@ -95,7 +95,7 @@ export const CLEAN_OBSERVATION_ARM_LIMIT = 2;
 export const DEATTRIBUTE_AFTER_CLEAN_OBSERVATIONS = 3;
 
 /** Bound on distinct tool names remembered, in-memory and on disk. */
-export const MUTATION_ATTRIBUTION_MAX_TOOLS = 64;
+const MUTATION_ATTRIBUTION_MAX_TOOLS = 64;
 
 /** How the attribution for a tool was reached. */
 export type LearnedMutationSource = "session" | "persisted";

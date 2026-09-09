@@ -108,13 +108,19 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { Lang, parse } from "@ast-grep/napi";
 import { lineContentHash } from "../../clients/read-guard.js";
 import { toPosix } from "../../clients/path-utils.js";
+import type { SgNode } from "../../clients/deps/ast-grep-napi.js";
+// Re-exported for test doubles/helpers so the test side has ONE import to
+// reach for instead of hand-copying the escaping body (#2558). This is the
+// ONE test-side re-export; the runtime copy lives in clients/string-utils.ts.
+export { escapeRegExp } from "../../clients/string-utils.js";
 
 // ── 1. Source scanning ──────────────────────────────────────────────────────
 
 /** What {@link stripSource} does with string and template literal CONTENTS. */
-export type StringPolicy =
+type StringPolicy =
 	/**
 	 * Blank string/template contents along with comments (delimiters kept).
 	 * Use when a bare identifier inside a string must not read as code — the
@@ -347,6 +353,143 @@ export function stripSource(
 	return out.join("");
 }
 
+function matchIsCode(
+	stringsBlanked: string,
+	start: number,
+	end: number,
+): boolean {
+	return /[^\s"'`]/.test(stringsBlanked.slice(start, end));
+}
+
+/** Return every raw match whose span contains source code. */
+export function codeMatches(source: string, regex: RegExp): RegExpMatchArray[] {
+	const stringsBlanked = stripSource(source, { strings: "blank" });
+	const globalRegex = new RegExp(
+		regex.source,
+		regex.flags.includes("g") ? regex.flags : `${regex.flags}g`,
+	);
+	return [...source.matchAll(globalRegex)].filter((match) => {
+		const start = match.index ?? 0;
+		return matchIsCode(stringsBlanked, start, start + match[0].length);
+	});
+}
+
+export interface CallSite {
+	line: number;
+	argsText: string;
+	optionsLiteral: string | undefined;
+	/** Matched simple callee, for consumers that scan several names at once. */
+	callee: string;
+}
+
+export interface CallSiteScanner {
+	find(calleePattern: RegExp): CallSite[];
+}
+
+/**
+ * Return AST call sites whose simple callee matches `calleePattern`.
+ *
+ * The arguments are taken from the call node, not from a balanced-text scan:
+ * nested expressions, template literals, and comments cannot change where a
+ * call ends. `optionsLiteral` is the last top-level object-literal argument;
+ * nested objects and object-shaped text in strings are never candidates.
+ */
+export function createCallSiteScanner(
+	source: string,
+	parsedRoot?: SgNode,
+): CallSiteScanner {
+	let root: SgNode | undefined;
+	const parseRoot = (): SgNode => {
+		root ??= parsedRoot ?? parse(Lang.TypeScript, source).root();
+		return root;
+	};
+
+	return {
+		find(calleePattern: RegExp): CallSite[] {
+			// Avoid parsing files that cannot contain the requested callee. This is a
+			// lexical admission check only; every admitted match still comes from the
+			// AST below. Anchors are common in callers because the AST supplies the
+			// complete simple name, so remove them for this presence probe.
+			const needle = calleePattern.source.replace(/^\^|\$$/g, "");
+			const candidate = new RegExp(
+				`${needle}\\s*\\(`,
+				calleePattern.flags.replace("g", ""),
+			);
+			if (!candidate.test(stripSource(source))) return [];
+			const syntaxRoot = parseRoot();
+			const sites: CallSite[] = [];
+			const visit = (node: SgNode): void => {
+				if (node.kind() === "call_expression") {
+					const fn = node.field("function");
+					const callee =
+						fn?.kind() === "identifier"
+							? fn.text()
+							: fn?.kind() === "member_expression"
+								? fn.field("property")?.text()
+								: undefined;
+					if (callee !== undefined) {
+						calleePattern.lastIndex = 0;
+						const match = calleePattern.exec(callee);
+						if (match?.[0] === callee) {
+							const args = node.field("arguments");
+							const children = args?.namedChildren() ?? [];
+							const first = children[0];
+							const last = children.at(-1);
+							const options = children
+								.filter((arg) => arg.kind() === "object")
+								.sort((a, b) => a.range().start.index - b.range().start.index)
+								.at(-1);
+							sites.push({
+								line: node.range().start.line + 1,
+								callee,
+								argsText:
+									first && last
+										? source.slice(
+												first.range().start.index,
+												last.range().end.index,
+											)
+										: "",
+								optionsLiteral: options?.text(),
+							});
+						}
+					}
+				}
+				for (const child of node.children()) visit(child);
+			};
+			visit(syntaxRoot);
+			return sites;
+		},
+	};
+}
+
+export function callSites(source: string, calleePattern: RegExp): CallSite[] {
+	return createCallSiteScanner(source).find(calleePattern);
+}
+
+/** Return the first raw match that is not only literal text. */
+export function firstCommentMatch(
+	source: string,
+	regex: RegExp,
+): RegExpMatchArray | undefined {
+	const commentsBlanked = stripSource(source, { strings: "keep" });
+	const stringsBlanked = stripSource(source, { strings: "blank" });
+	const globalRegex = new RegExp(
+		regex.source,
+		regex.flags.includes("g") ? regex.flags : `${regex.flags}g`,
+	);
+	for (const match of source.matchAll(globalRegex)) {
+		const start = match.index ?? 0;
+		const end = start + match[0].length;
+		if (
+			!/\S/.test(commentsBlanked.slice(start, end)) ||
+			matchIsCode(stringsBlanked, start, end)
+		) {
+			return match;
+		}
+	}
+	return undefined;
+}
+
 export interface ListSourceFilesOptions {
 	/** File extensions to include, with the dot. Default `[".ts"]`. */
 	extensions?: readonly string[];
@@ -483,7 +626,7 @@ export function stableOccurrenceKey(
  * ({@link RegistryAuditInput.requireUniqueFlagged}) can name each colliding
  * occurrence by its own detail rather than repeating the shared key.
  */
-export type FlaggedEntry = string | { key: string; detail: string };
+type FlaggedEntry = string | { key: string; detail: string };
 
 export interface RegistryAuditInput {
 	/** Sweep name, used in every composed message. */
@@ -949,7 +1092,7 @@ export function hasNearbyCallSite(
 }
 
 /** Window defaults lifted from #1692's shipped form. */
-export const DEFAULT_EVIDENCE_WINDOW = {
+const DEFAULT_EVIDENCE_WINDOW = {
 	back: 150,
 	forward: 10,
 	calleeProximity: 3,
@@ -1122,6 +1265,23 @@ export function assertNonEmptyScan(
 			`${label}: scanned/matched ${count}, below the declared floor of ${minimum}. ` +
 				"An empty sweep must fail, not read as clean — if the target genuinely " +
 				"went away, delete the sweep instead of letting it pass on nothing.",
+		);
+	}
+}
+
+/** Enforce lexical order so parallel admission additions stay local. */
+export function assertSortedKeys(label: string, keys: readonly string[]): void {
+	const duplicate = keys.find((key, index) => keys.indexOf(key) !== index);
+	if (duplicate !== undefined) {
+		throw new Error(
+			`${label}: entries must be unique; duplicate key is ${duplicate}`,
+		);
+	}
+	const sorted = [...keys].sort();
+	const first = keys.findIndex((key, index) => key !== sorted[index]);
+	if (first !== -1) {
+		throw new Error(
+			`${label}: entries must be sorted; first out-of-order key is ${keys[first]}`,
 		);
 	}
 }

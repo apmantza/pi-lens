@@ -180,7 +180,7 @@ const BOUND_ABORTED: unique symbol = Symbol("pi-lens/bounded/aborted");
  * - `"shutdown"` — the session is tearing down. Abandoning in-flight work is
  *   what teardown is for. Recorded as `hook-await-abandoned`, informational.
  */
-export type BoundCause = "deadline" | "caller-abort" | "shutdown";
+type BoundCause = "deadline" | "caller-abort" | "shutdown";
 
 /** Everything {@link bounded} needs. Both bounds are REQUIRED — see below. */
 export interface BoundedOptions {

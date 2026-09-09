@@ -1,4 +1,8 @@
-import type { TestFailure, TestResult } from "../../test-runner-client.js";
+import {
+	isRunnerErrorResult,
+	type TestFailure,
+	type TestResult,
+} from "../../test-runner-client.js";
 import type { ProjectDiagnostic } from "../types.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -107,6 +111,11 @@ export interface TestRunnerFindingsCache {
 	 * another session's load.
 	 */
 	retiredTargets?: DeferredTestTarget[];
+	deliveryEligible?: {
+		sessionId: string;
+		generation: number;
+		eligibleAt: number;
+	};
 }
 
 function failureMessage(failure: TestFailure): string {
@@ -154,7 +163,7 @@ function parseLocation(location: string | undefined): {
  * caller deserves the same "this may already be superseded" honesty the
  * per-edit path already gives.
  */
-export function testResultToProjectDiagnostics(
+function testResultToProjectDiagnostics(
 	result: TestResult,
 	stale = false,
 ): ProjectDiagnostic[] {
@@ -175,6 +184,32 @@ export function testResultToProjectDiagnostics(
 		}));
 	}
 
+	// #2532: a RUNNER error (timeout, missing provider/binary, a config
+	// failure — the suite itself never produced a verdict) is not a finding
+	// the agent introduced, exactly like the turn-end delivery framing
+	// (#2522) already treats it. `isRunnerErrorResult` is the single seam
+	// both surfaces read so the identical `TestResult` cannot classify
+	// differently here than it does in the turn-end message.
+	if (isRunnerErrorResult(result)) {
+		return [
+			{
+				filePath: result.file,
+				severity: "info",
+				semantic: "none",
+				tool: "test-runner",
+				runner: result.runner,
+				rule: `test:${result.runner}`,
+				message: `${stalePrefix}Test run error: ${result.error}`,
+				source: "project-scan",
+			},
+		];
+	}
+
+	// #2532 review S3: a counted failure stays blocking even when `error` is
+	// ALSO set (pytest exit 2 "Interrupted" after `2 failed, 1 passed` — see
+	// `isRunnerErrorResult`'s doc). The pre-fix message mentioned `error`
+	// here via a ternary this PR's first version dropped; restored so the
+	// interruption is not silently lost from a still-blocking finding.
 	return [
 		{
 			filePath: result.file,
@@ -183,10 +218,8 @@ export function testResultToProjectDiagnostics(
 			tool: "test-runner",
 			runner: result.runner,
 			rule: `test:${result.runner}`,
-			message: `${stalePrefix}${
-				result.error
-					? `Test run error: ${result.error}`
-					: `${result.failed} test(s) failed`
+			message: `${stalePrefix}${result.failed} test(s) failed${
+				result.error ? ` (runner also reported: ${result.error})` : ""
 			}`,
 			source: "project-scan",
 		},

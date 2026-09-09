@@ -36,6 +36,8 @@ import { getProbeHomeRedirectEvent } from "./probe-home-state.js";
 export { LEDGER_FIELD_MAX, truncateForLedger };
 
 export type DegradationKind =
+	/** A configured analyzer was deliberately skipped for this session. */
+	| "startup-analyzer-disabled"
 	/**
 	 * #2430: a tool mutated a tracked file but matched no built-in name and no
 	 * mutation shape adapter, so pi-lens could only find the change by diffing
@@ -65,8 +67,21 @@ export type DegradationKind =
 	| "mode-suppression"
 	| "ts-idle-eviction"
 	| "spawn-failure"
+	/** A runner, formatter, or LSP cwd/root used a bounded fallback (#2777). */
+	| "tool-cwd-resolution"
 	/** A managed-tool verification probe exceeded its retained output bound. */
 	| "installer-verification-output-truncated"
+	/**
+	 * #2722: a managed-tool verification probe returned a NON-VERDICT — the
+	 * #208 transport-required matcher was armed, never matched, and the kept
+	 * output is a truncated prefix, so the probe could not decide whether the
+	 * binary is a healthy stdio LSP server or a broken install. Subject is the
+	 * binary path. Deliberately NOT `installer-verification-output-truncated`
+	 * (which also fires on a probe that went on to VERIFY): a reader acting on
+	 * this row is looking for an install kept without proof, not for a noisy
+	 * one. The installer keeps such an installation rather than deleting it.
+	 */
+	| "installer-verification-inconclusive"
 	/** A git ls-files collection was truncated before parsing completed (#2075). */
 	| "git-tracked-ignore-truncated"
 	/**
@@ -98,6 +113,7 @@ export type DegradationKind =
 	| "formatter-skip"
 	| "grammar-blocked"
 	| "lsp-breaker"
+	| "lsp-diagnostics-unsupported"
 	/**
 	 * A per-file touch skipped a language server because that server is in the
 	 * breaker cooldown or is latched permanently broken (#1743). During an
@@ -113,6 +129,20 @@ export type DegradationKind =
 	 * that is what the availability latch is about.
 	 */
 	| "lsp-client-skipped-unavailable-command"
+	/**
+	 * #2518: the session-root registry hit its cap and dropped a root this
+	 * process was serving, together with that root's loaded LSP config — so the
+	 * operator's `lsp.disabledServers` denial for it stops applying until the
+	 * next session start or tool call NAMING that root loads it again
+	 * (`shouldInitializeSessionRoot` guarantees those two entry points do,
+	 * which is why this is a degradation and not a fault; the readers of the
+	 * denial trigger no load). Subject is the cap itself, so a process cycling
+	 * through hundreds of roots keys ONE tally rather than one per dropped root
+	 * — and it is a TALLY (`incrementDegradationCount`), because the number of
+	 * roots this process has had to drop is exactly what an operator tunes the
+	 * cap against. The reason names the first root dropped.
+	 */
+	| "lsp-session-root-evicted"
 	/**
 	 * A warm-only client lookup (`getWarmClientForFile`) found no live client
 	 * for a file that HAS a language server with a resolvable root (#1934).
@@ -275,6 +305,8 @@ export type DegradationKind =
 	 * (older host, unexpected shape) never reaches this kind.
 	 */
 	| "cache-usage-attribution-stale"
+	/** A workspace diagnostics cache was rejected during the v3 provenance migration (#2776). */
+	| "lsp-workspace-cache-migration"
 	/**
 	 * A tool-event path did not resolve to an existing file, and pi's own
 	 * unicode/spacing variant ladder did not find it either (#1655 item 5).
@@ -818,7 +850,42 @@ export type DegradationKind =
 	 * Same informational treatment: the next deferral or in-band analysis
 	 * re-observes the file.
 	 */
-	| "actionable-warnings-deferred-superseded";
+	| "actionable-warnings-deferred-superseded"
+	/**
+	 * #2626: `resources_discover` (#205) resolved `<packageRoot>/skills` to a
+	 * directory that is absent, unreadable, or holds no `SKILL.md` — pi then
+	 * registers zero skills with no extension error and no stderr. Fires on
+	 * an installed copy missing `skills/`, or on the entry file having been
+	 * copied out of the package tree by a managed extension cache (so the
+	 * nearest `package.json` is the cache's own). Subject is the resolved
+	 * `skills/` path; see `clients/skills-resolver.ts`.
+	 */
+	| "skills-dir-missing"
+	/**
+	 * #2636 (the #2626 class sweep's ast-grep leg): `AstGrepClient`'s
+	 * `ruleDir` fell back to `resolvePackagePath(import.meta.url, "rules")`
+	 * with no existence check when the project has no `rules/` of its own —
+	 * same managed-cache-relocation gap as `skills-dir-missing`. Fires only
+	 * when NEITHER the project `rules/` nor the resolved bundled `rules/`
+	 * yields a loadable `.yml` rule description. Subject is the resolved
+	 * bundled `rules/` path; see `clients/bundled-resource-health.ts` and
+	 * `clients/ast-grep-rule-manager.ts`'s `checkAstGrepRulesHealth`.
+	 */
+	| "ast-grep-rules-dir-missing"
+	/**
+	 * #2636: the bundled `rules/tree-sitter-queries` root — read identically
+	 * by `clients/cache/rule-cache.ts` (`BUNDLED_RULES_ROOT`, to classify a
+	 * rule file as bundled-vs-project for cache fingerprinting) and
+	 * `clients/tree-sitter-query-loader.ts` (`ruleFilesForLanguage`, to
+	 * enumerate the effective rule set) — is absent, unreadable, or
+	 * (uncommonly) present but empty. Fires ONCE regardless of how many
+	 * languages/call sites hit it, because the subject is the shared ROOT
+	 * path, not a per-language one: a language with no bundled queries
+	 * AUTHORED for it (cobol, plsql — disabled by design, see
+	 * `tree-sitter-shared.ts`) resolves zero files from a HEALTHY root and
+	 * must never be confused with the root itself being gone.
+	 */
+	| "tree-sitter-queries-dir-missing";
 
 export interface DegradationRecord {
 	kind: unknown;

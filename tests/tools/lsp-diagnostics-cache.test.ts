@@ -18,6 +18,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { removeTempDirSync } from "../clients/test-utils.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 const mocked = vi.hoisted(() => ({ service: null as unknown }));
 const { getServersForFileWithConfig } = vi.hoisted(() => ({
@@ -68,13 +69,13 @@ describe("lsp_diagnostics batch — workspace-diagnostics cache (#671)", () => {
 		});
 
 		touchFile = vi.fn().mockResolvedValue({ diags: [] });
-		mocked.service = {
+		mocked.service = makeLspServiceDouble({
 			touchFile,
 			getDiagnostics: vi.fn().mockResolvedValue([]),
 			getDiagnosticsHealth: vi.fn().mockReturnValue(undefined),
 			getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
 			ensureWarmForSweep: vi.fn().mockResolvedValue({ performedWarmup: false }),
-		};
+		});
 	});
 
 	afterEach(() => {
@@ -212,6 +213,7 @@ describe("lsp_diagnostics batch — workspace-diagnostics cache (#671)", () => {
 				end: { line: 0, character: 1 },
 			},
 			source: "typescript",
+			serverId: "typescript",
 		};
 		touchFile.mockResolvedValueOnce({ diags: [diag] });
 
@@ -244,6 +246,7 @@ describe("lsp_diagnostics batch — workspace-diagnostics cache (#671)", () => {
 				end: { line: 0, character: 1 },
 			},
 			source: "typescript",
+			serverId: "typescript",
 		};
 		touchFile.mockResolvedValueOnce({
 			diags: [diag],
@@ -284,6 +287,7 @@ describe("lsp_diagnostics batch — workspace-diagnostics cache (#671)", () => {
 						end: { line: 0, character: 1 },
 					},
 					source: "typescript",
+					serverId: "typescript",
 				},
 			],
 			confirmation: "partial",
@@ -329,6 +333,7 @@ describe("lsp_diagnostics batch — workspace-diagnostics cache (#671)", () => {
 						end: { line: 0, character: 1 },
 					},
 					source: "typescript",
+					serverId: "typescript",
 				},
 			],
 			confirmation: "partial",
@@ -361,6 +366,7 @@ describe("lsp_diagnostics batch — workspace-diagnostics cache (#671)", () => {
 				end: { line: 0, character: 1 },
 			},
 			source: "typescript",
+			serverId: "typescript",
 		};
 		touchFile.mockResolvedValueOnce({ diags: [diag] });
 

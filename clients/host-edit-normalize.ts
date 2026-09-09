@@ -5,7 +5,10 @@
  *
  * SOURCE OF TRUTH: `@earendil-works/pi-coding-agent`
  *   `dist/core/tools/edit-diff.js` -- `normalizeForFuzzyMatch`, `normalizeToLF`,
- *   `detectLineEnding`, `restoreLineEndings`, `stripBom`.
+ *   `detectLineEnding`, `restoreLineEndings`. As of 0.85.1 the BOM
+ *   split/strip primitive (`stripBom`'s underlying `splitBom`) moved to
+ *   `dist/utils/text.js`, imported by edit-diff.js rather than inlined there
+ *   -- see the sync test's two-source read.
  *
  * The host SDK is a *type-only* dependency at runtime (pi installs extensions
  * with `npm install --omit=dev`, so the SDK is not in `node_modules`). These
@@ -26,7 +29,7 @@
  * floor in package.json and re-confirm the sync test when the host changes its
  * normalization ladder.
  */
-export const HOST_EDIT_DIFF_SDK_FLOOR = "0.79.9";
+export const HOST_EDIT_DIFF_SDK_FLOOR = "0.85.1";
 
 // Host normalizeForFuzzyMatch code-point sets (edit-diff.js). Exported so the
 // sync test can assert the host source still encodes exactly these.

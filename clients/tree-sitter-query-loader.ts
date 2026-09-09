@@ -8,7 +8,65 @@
 import { logTreeSitterDiagnostic } from "./tree-sitter-logger.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import {
+	type BundledResourceHealth,
+	classifyBundledResourceDir,
+	reportBundledResourceDirHealth,
+} from "./bundled-resource-health.js";
+import { getDegradationLedgerGeneration } from "./degradation-ledger.js";
 import { resolvePackagePath } from "./package-root.js";
+
+/**
+ * The bundled `rules/tree-sitter-queries` root — the ONE spelling of this
+ * path, imported by `clients/cache/rule-cache.ts` (re-exported there as
+ * `BUNDLED_RULES_ROOT`, #2636 review F4) rather than computed a second time,
+ * so the "one ledger row, not two" claim for `tree-sitter-queries-dir-missing`
+ * rests on reference equality, not merely two independently-resolved strings
+ * that happen to match.
+ */
+export const BUNDLED_QUERIES_ROOT = resolvePackagePath(
+	import.meta.url,
+	"rules",
+	"tree-sitter-queries",
+);
+
+let cachedBundledQueriesRootHealth: BundledResourceHealth | undefined;
+let cachedBundledQueriesRootHealthGeneration: number | undefined;
+
+/**
+ * #2636 review F6/round-2 F3: memoized, but keyed on the degradation
+ * ledger's OWN generation counter (bumped by `resetDegradationLedger`, wired
+ * into `handleSessionStart`) rather than "compute once, forever" — round 1's
+ * version overclaimed that the underlying fact "cannot change mid-process
+ * any more than the package's own install location can", but a managed
+ * extension cache RELOCATING a live install mid-process is exactly the
+ * failure #2587/#2626 investigated: a permanently-cached "absent" verdict
+ * from the FIRST probe would never notice the directory coming back (or
+ * disappearing later), the same silent-zero shape this issue exists to end.
+ * Re-probing once per SESSION (not once per call) is the right middle
+ * ground: a real, measured `readdirSync` cost (4.2 µs) is paid once per
+ * session rather than on every dispatched file — same generation-keyed
+ * pattern `clients/ast-grep-client.ts`'s `ensureRulesHealthReported` uses
+ * for its own per-instance re-check.
+ */
+export function getBundledQueriesRootHealth(): BundledResourceHealth {
+	const generation = getDegradationLedgerGeneration();
+	if (
+		cachedBundledQueriesRootHealth === undefined ||
+		cachedBundledQueriesRootHealthGeneration !== generation
+	) {
+		cachedBundledQueriesRootHealthGeneration = generation;
+		cachedBundledQueriesRootHealth =
+			classifyBundledResourceDir(BUNDLED_QUERIES_ROOT);
+	}
+	return cachedBundledQueriesRootHealth;
+}
+
+/** Test-only: clear the memo so a scenario can simulate a different install layout. */
+export function _resetBundledQueriesRootHealthForTests(): void {
+	cachedBundledQueriesRootHealth = undefined;
+	cachedBundledQueriesRootHealthGeneration = undefined;
+}
 
 export function isDisabledQueryDirectoryName(name: string): boolean {
 	return name.endsWith("-disabled");
@@ -69,12 +127,53 @@ export function ruleFilesForLanguage(
 	for (const lang of ruleSourceLanguages(languageId)) {
 		for (const dir of [
 			path.join(resolvedRoot, "rules", "tree-sitter-queries", lang),
-			resolvePackagePath(import.meta.url, "rules", "tree-sitter-queries", lang),
+			path.join(BUNDLED_QUERIES_ROOT, lang),
 		]) {
 			if (!fs.existsSync(dir)) continue;
 			for (const f of fs.readdirSync(dir)) {
 				if (f.endsWith(".yml")) files.add(path.join(dir, f));
 			}
+		}
+	}
+	// #2636 (review F2): a language resolving zero files here is NORMAL when
+	// nobody has authored bundled/project queries for it — seven REACHABLE
+	// grammars have none by design: bash, dart, elixir, lua, ocaml, swift, zig
+	// (`.sh`/`.bash`, `.dart`, `.ex`/`.exs`, `.lua`, `.ml`/`.mli`, `.swift`,
+	// `.zig` — see `language-registry.ts`'s `EXTENSION_TO_GRAMMAR`). cobol and
+	// plsql are NOT in that registry at all — only their `-disabled` query
+	// directories exist — so `ruleFilesForLanguage` never actually resolves
+	// those two languageIds in production; they are not examples of this
+	// case. A BUG looks identical from an empty `files` set alone: the
+	// bundled root itself relocated out from under the package (same
+	// managed-cache-relocation shape #2626 fixed for skills/). Only pay for
+	// the extra classification in this COLD branch (never on the common,
+	// non-empty path), key it on the shared ROOT rather than this call's
+	// `languageId` (every language hitting an actually-missing root collapses
+	// into the SAME ledger row instead of one per language), and only RECORD
+	// when the root is actually unhealthy — one of the seven by-design-empty
+	// languages is touched routinely (any `.sh`/`.lua` edit).
+	//
+	// #2636 review round 2, F2: NO separate phase/latency row here (unlike
+	// the ast-grep/skills sibling sites, which log one PER CONSTRUCTION or
+	// PER REQUEST — a bounded cardinality). This branch runs on EVERY
+	// dispatched file while the root stays broken (AGENTS.md's "no raw
+	// per-occurrence log for repeats"): 200 touches of a by-design-empty
+	// language against a broken root would otherwise write 200 raw
+	// `latency.log` rows. `reportBundledResourceDirHealth`'s
+	// `incrementDegradationCount` already answers "did this run" AND "how
+	// many times" in a BOUNDED way — one row per session at count 1, then
+	// only at power-of-two milestones (1, 2, 4, 8, … so 200 occurrences write
+	// exactly 8 durable rows) — so a second, unbounded record here would add
+	// nothing the ledger row lacks.
+	if (files.size === 0) {
+		const health = getBundledQueriesRootHealth();
+		if (health.status !== "healthy") {
+			reportBundledResourceDirHealth(
+				"tree-sitter-queries-dir-missing",
+				BUNDLED_QUERIES_ROOT,
+				health,
+				"bundled tree-sitter query rules",
+			);
 		}
 	}
 	return [...files];

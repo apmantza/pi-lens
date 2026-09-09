@@ -509,7 +509,7 @@ describe("pi-lens-analyze turn-end mode", { retry: 2 }, () => {
 		stub = await startTurnEndStub(turnDir, {
 			route: "turn-end",
 			version: WARM_TURN_END_SCHEMA_VERSION,
-			tests: `${esc}[31mFAIL${esc}[0m suite/thing.test.ts${esc}[2K  done`,
+			tests: `${esc}[31mFAIL${esc}[0m suite/thing.test.ts${esc}[2K\u0007\u0000 done`,
 		});
 		const { stdout, code } = await runBin(["--turn-end", `--cwd=${turnDir}`]);
 

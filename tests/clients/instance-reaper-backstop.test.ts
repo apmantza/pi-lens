@@ -132,7 +132,7 @@ import {
 	type OsProcessInfo,
 	partitionBackstopCandidates,
 	scheduleUntrackedOrphanSweep,
-	sweepUntrackedOrphans,
+	sweepUntrackedOrphans as sweepUntrackedOrphansImpl,
 } from "../../clients/instance-reaper.js";
 import {
 	getDegradationSummary,
@@ -174,9 +174,29 @@ function reasonsFor(kind: string): Array<{ subject: string; reason: string }> {
 	);
 }
 
+// #2669: a sweep that spares a candidate on the grace arms a follow-up sweep
+// on a real timer (as little as a few ms — tests pin `graceRetryDelayMs`).
+// That retry appends its OWN `orphan_backstop_reaped` row asynchronously,
+// with no `graceRetryInMs` (it always runs with `allowGraceRetry: false`).
+// Reading "the LAST such row" is therefore reading the wrong sweep's
+// metadata whenever the assertion runs late enough for that timer to have
+// already fired — a real race on loaded CI runners, not a test order
+// dependency. `sweepIndex` is the watermark taken right before the most
+// recently INVOKED sweep, so the lookup always resolves to the row THAT
+// sweep logged (the first `orphan_backstop_reaped` row at or after the
+// watermark), never a later retry's.
+let sweepIndex = 0;
+
+function sweepUntrackedOrphans(
+	...args: Parameters<typeof sweepUntrackedOrphansImpl>
+): ReturnType<typeof sweepUntrackedOrphansImpl> {
+	sweepIndex = h.latency.length;
+	return sweepUntrackedOrphansImpl(...args);
+}
+
 function lastBackstopRecord(): Record<string, unknown> | undefined {
-	return [...h.latency]
-		.reverse()
+	return h.latency
+		.slice(sweepIndex)
 		.find((entry) => entry.phase === "orphan_backstop_reaped");
 }
 
@@ -195,6 +215,7 @@ const FAST = { force: true, verifyAttempts: 1, verifyIntervalMs: 0 } as const;
 beforeEach(() => {
 	h.spawns.length = 0;
 	h.latency.length = 0;
+	sweepIndex = 0;
 	h.state.registry = [];
 	h.state.enabled = true;
 	h.state.stdout = "";
@@ -415,13 +436,19 @@ describe("#1864 review F2: a grace-spared candidate is re-examined", () => {
 		});
 
 		expect(outcome).toBe("clean");
-		expect(backstopMetadata().tooFresh).toBe(1);
-		expect(backstopMetadata().graceRetryInMs).toBe(5);
 
 		// The retry actually runs, and it is NOT blocked by the stamp the first
-		// sweep just wrote.
+		// sweep just wrote. Waiting for it here is also the #2669 regression:
+		// by the time this resolves, the retry's own `orphan_backstop_reaped`
+		// row (it never carries `graceRetryInMs`) is the newest row in the
+		// log, so a metadata lookup keyed on "the last row" instead of "the
+		// row THIS sweep call logged" deterministically reads the retry's
+		// metadata instead of the direct call's.
 		await new Promise((resolve) => setTimeout(resolve, 80));
 		expect(h.state.scannerPids.length).toBeGreaterThanOrEqual(2);
+
+		expect(backstopMetadata().tooFresh).toBe(1);
+		expect(backstopMetadata().graceRetryInMs).toBe(5);
 	});
 
 	it("does not arm a follow-up when nothing was spared", async () => {

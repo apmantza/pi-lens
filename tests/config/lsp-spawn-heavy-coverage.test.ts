@@ -144,6 +144,8 @@ const SPAWN_EXEMPTIONS: Readonly<Record<string, string>> = {
 		"real clients across two module instances to prove process-scope retention; handshake only against the instant fixture, no contention budget",
 	"tests/clients/lsp/service-notify-cpu-liveness.test.ts":
 		"real wedged child and CPU sampling run in the serialized wall-clock-budget phase; the lower-bound wedge assertion needs that quiet phase",
+	"tests/clients/lsp/headless-tool-call-keepalive.test.ts":
+		"#2507: the real LSP child is spawned by a headless NODE child this test runs, not by this process; it is phased in the serialized wall-clock-budget lane (the flake-shape admission gate requires that lane), and its assertions are the child's exit code and stdout, not a handshake budget",
 	"tests/clients/lsp/initialize-timeout-backstop.test.ts":
 		"POSIX-only real-child initialize-timeout backstop; waits on a 50ms timeout firing then sleeps past kill escalation — deterministic and short",
 	"tests/clients/lsp/launch.test.ts":
@@ -209,7 +211,7 @@ describe("lsp-spawn-heavy Vitest project coverage", () => {
 			// excluded); half rounded up is 429, documented floor 430.
 			scannedCount: files.length,
 			minScanned: 430,
-			// Calibration: 19 spawning-test candidates on 2026-08-30 (4 phased,
+			// Calibration: 20 spawning-test candidates on 2026-09-09 (5 phased,
 			// 15 exempted); half rounded up is 10.
 			minFlagged: 10,
 			remediation:

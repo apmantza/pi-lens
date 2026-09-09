@@ -517,7 +517,7 @@ describe("effectiveConfig — asking must not report (#2427 rule 2)", () => {
  * A QUESTION MUST CHANGE NO SESSION STATE (#2427 review round 3, N2).
  *
  * The per-file half used to answer by calling `initLSPConfig(cwd)`, which is
- * the session-root registry's single writer and the `workspaceConfigs` LRU's
+ * the session-root registry's single writer and the per-root config store's
  * only producer. Both are session DECLARATIONS — "this process serves this
  * root, and here is its resolved server config" — so routing a read-only query
  * through them inverted the surface's own contract in two ways:
@@ -525,11 +525,13 @@ describe("effectiveConfig — asking must not report (#2427 rule 2)", () => {
  *  1. It enrolled a caller-supplied foreign directory as a served LSP root,
  *     permanently widening the #2052 access gate for a tree the session never
  *     opened.
- *  2. It wrote the 32-entry LRU. Enough queries against other directories
- *     EVICT a live root's config, after which `getConfigForFile` falls back to
- *     EMPTY and the operator's `disabledServers` denial silently lifts — and
- *     because `sessionRoots` is capped at 128, `shouldInitializeSessionRoot`
- *     never re-initializes the evicted root.
+ *  2. It wrote the per-root config store. Enough queries against other
+ *     directories EVICT a live root's config, after which `getConfigForFile`
+ *     falls back to EMPTY and the operator's `disabledServers` denial silently
+ *     lifts. Before #2518 the store was a separate 32-entry LRU beside a
+ *     128-entry registry, so `shouldInitializeSessionRoot` never re-initialized
+ *     the evicted root either; now the eviction takes the registration with it,
+ *     but a query that writes the store still enrolls a foreign root.
  *
  * The fix is that the query derives its own registered config from
  * `loadLSPConfig(..., { report: false })` and hands it to

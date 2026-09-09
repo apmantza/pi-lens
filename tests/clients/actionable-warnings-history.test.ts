@@ -7,10 +7,13 @@ import {
 	getActionableWarningsHistoryPath,
 	type ActionableWarningsReport,
 } from "../../clients/actionable-warnings.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 import { removeTempDirSync } from "./test-utils.js";
 
 vi.mock("../../clients/lsp/index.js", () => ({
-	getLSPService: () => ({ supportsLSP: () => false }),
+	// `supportsLSP: false` is the only method this suite's path reads; the rest
+	// of the surface comes from the factory (#2592).
+	getLSPService: () => makeLspServiceDouble({ supportsLSP: () => false }),
 }));
 
 let env: { tmpDir: string; cleanup: () => void } | undefined;

@@ -660,6 +660,81 @@ describe("test-runner-client", () => {
 		});
 	});
 
+	// #2532 review round 1, S1: `formatResult`'s OWN runner-error branch used
+	// to require `passed === 0` on top of `failed === 0 && error`, a third
+	// spelling of the #2532 classification that missed a run interrupted
+	// AFTER some tests had already passed cleanly — the exact shape a real
+	// pytest `Interrupted` run produces (exit code 2, a normal summary line).
+	// Before the fix that batch read as "[Tests] ✓ 3/3 passed", silently
+	// dropping the interruption; `lens_diagnostics mode=full` and the
+	// turn-end delivery message already reported the SAME `TestResult` as an
+	// error via `isRunnerErrorResult`, so this was the third disagreeing
+	// surface the round 1 class sweep missed.
+	describe("formatResult folds onto isRunnerErrorResult, not a local spelling (#2532 review S1)", () => {
+		it("reports a partial run when pytest is interrupted after some tests already passed", () => {
+			const client = new TestRunnerClient(false);
+			const result = (client as any).parsePytestOutput(
+				"===== 3 passed in 1.23s =====",
+				"",
+				2,
+				"/tmp/test_foo.py",
+				"/tmp",
+				"pytest",
+			);
+
+			// Pin the real parser's shape first: `error` alongside a non-zero
+			// `passed`, which the old `passed === 0` check could never see.
+			expect(result).toMatchObject({
+				passed: 3,
+				failed: 0,
+				error: "Pytest interrupted",
+			});
+			expect(client.formatResult(result)).toBe(
+				"[Tests] ⚠ Could not complete tests: Pytest interrupted (3 passed before)",
+			);
+		});
+
+		it("still reports the plain runner-error message when nothing passed first", () => {
+			const client = new TestRunnerClient(false);
+			const result = (client as any).parsePytestOutput(
+				"",
+				"",
+				2,
+				"/tmp/test_foo.py",
+				"/tmp",
+				"pytest",
+			);
+
+			expect(result).toMatchObject({ passed: 0, failed: 0 });
+			expect(client.formatResult(result)).toBe(
+				"[Tests] ⚠ Could not run tests: Pytest interrupted",
+			);
+		});
+
+		it("keeps a counted failure blocking even when the runner also reports an error", () => {
+			// pytest exit 2 after `2 failed, 1 passed` already printed: a
+			// counted failure must stay a failure, never re-read as a runner
+			// error just because `error` is also set (round 1 S2's inversion
+			// risk, pinned here on the surface it actually renders through).
+			const client = new TestRunnerClient(false);
+			const result = (client as any).parsePytestOutput(
+				"===== 2 failed, 1 passed in 1.23s =====",
+				"",
+				2,
+				"/tmp/test_foo.py",
+				"/tmp",
+				"pytest",
+			);
+
+			expect(result).toMatchObject({
+				passed: 1,
+				failed: 2,
+				error: "Pytest interrupted",
+			});
+			expect(client.formatResult(result)).toContain("✗ 2/3 failed");
+		});
+	});
+
 	// #1524: a REAL failing run must never be downgraded to "could not run
 	// tests" just because its runner has no count parser in
 	// `parseGenericRunnerDuration`/the count-matching block above. go (the

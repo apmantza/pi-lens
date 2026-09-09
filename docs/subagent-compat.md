@@ -17,7 +17,7 @@ every run.
 
 | # | Contract | Depended on by | Third-party file (as of the versions below) | Verified against |
 |---|----------|-----------------|-------------------------------------------------|-------------------|
-| 1 | `PI_SUBAGENT_CHILD` is set to the literal string `"1"` in every spawned child's env; `PI_SUBAGENT_RUN_ID` / `PI_SUBAGENT_CHILD_AGENT` are set alongside it for best-effort identity. | `clients/subagent-mode.ts` (`isSubagentSession()`, `getSubagentIdentity()`) | `pi-subagents@0.34.0` — `src/runs/shared/pi-args.ts` (`SUBAGENT_CHILD_ENV`/`SUBAGENT_RUN_ID_ENV`/`SUBAGENT_CHILD_AGENT_ENV` consts + the `env[SUBAGENT_CHILD_ENV] = "1"` assignment) | `checkNicobailonChildEnv` |
+| 1 | `PI_SUBAGENT_CHILD` is set to the literal string `"1"` on every process that hosts a child session. | `clients/subagent-mode.ts` (`isSubagentSession()`, `getSubagentIdentity()`) | `pi-subagents@0.34.0` — co-located in `src/runs/shared/pi-args.ts` (`SUBAGENT_CHILD_ENV` const + the `env[SUBAGENT_CHILD_ENV] = "1"` assignment); as of `pi-subagents@0.66.0` the const moved to `src/runs/shared/child-runtime-config.ts` and the assignment to `src/runs/background/subagent-runner.ts` (#2581) — `compat-contract-locator.mjs`'s `locateContractSources` tries both layouts and concatenates whichever resolves. | `checkNicobailonChildEnv` |
 | 1b | avtc-pi-subagent sets `PI_SUBAGENT_CHILD_AGENT` + `PI_SUBAGENT_PARENT_PID` (never `PI_SUBAGENT_CHILD`) on the per-spawn subagent env; `isSubagentSession()` treats the PAIR (both non-empty) as an additional subagent signal (#507). | `clients/subagent-mode.ts` (`isSubagentSession()`, `getSubagentIdentity()`) | `avtc-pi-subagent@1.0.3` — `src/process-runner.ts` (`subagentEnv.PI_SUBAGENT_CHILD_AGENT = agent.name` + `subagentEnv.PI_SUBAGENT_PARENT_PID = String(process.pid)`) | `checkAvtcChildEnv` |
 | 2a | The pi SDK's extension loader keeps a **process-global** cache (`extensionCache = new Map()`). This is what makes an in-process `bindExtensions()` reuse pi-lens's own module-scope singletons instead of a fresh isolated instance. | `clients/session-lifecycle.ts` (the whole premise of the concurrent-session guard) | `@earendil-works/pi-coding-agent@0.80.6` — `dist/core/extensions/loader.js` | `checkSdkExtensionCache` |
 | 2b | `AgentSession.bindExtensions()` **unconditionally** emits a `session_start`-typed event (`this._extensionRunner.emit(this._sessionStartEvent)`). | Same as 2a — this is why an in-process subagent bind re-triggers pi-lens's `session_start` handler at all. | `@earendil-works/pi-coding-agent@0.80.6` — `dist/core/agent-session.js` (`bindExtensions()`, ~line 1717) | `checkSdkBindExtensionsEmitsSessionStart` |
@@ -30,7 +30,24 @@ unit-tested regex matchers against RESILIENT semantic shapes (never a line
 number — those drift on every third-party release). `scripts/compat-contracts.mjs`
 is the orchestration script: it `npm install`s the four packages (SDK,
 `pi-subagents`, `avtc-pi-subagent`, `@tintinweb/pi-subagents`) into a scratch
-directory, reads the specific files above, and runs every check.
+directory, resolves each contract's source file(s) independently (see
+"Layer A" below) and runs every check.
+
+**Contract 1's identity vars were removed upstream, not relocated (#2581).**
+The doc used to also pin `PI_SUBAGENT_RUN_ID` / `PI_SUBAGENT_CHILD_AGENT` as
+part of contract 1 — nicobailon/pi-subagents set them alongside
+`PI_SUBAGENT_CHILD=1` for best-effort child identity. `pi-subagents@0.65.0`'s
+rewrite to run subagents as native, in-process `AgentSession`s (instead of
+spawning a separate `pi` CLI process per child) deleted both vars from the
+package entirely — grep-verified absent from the whole 0.66.0 source tree;
+child identity now travels through an in-process `ChildRuntimeConfig` object
+that never touches `process.env`. This is real, permanent upstream drift, but
+it needed no pi-lens code change: `getSubagentIdentity()` was already
+documented and tested as best-effort, returning `runId`/`agentName: undefined`
+when the vars are absent (`tests/clients/subagent-mode.test.ts`) — exactly the
+degraded state this vocabulary is now always in. `checkNicobailonChildEnv`
+no longer requires them; only the `PI_SUBAGENT_CHILD='1'` flag pi-lens's
+light-mode detection actually depends on behaviorally still gates the check.
 
 ## The three env levers
 
@@ -45,10 +62,46 @@ directory, reads the specific files above, and runs every check.
 ### Layer A — pinned-contract verification (`scripts/compat-contracts.mjs`)
 
 No `pi` process, no LLM turn. Installs the real packages (table above) and
-mechanically re-checks all six contracts against the installed source. Exit
-0 = all pass; exit 1 = at least one contract check failed (real drift); exit
-2 = infrastructure failure (npm install of the third-party packages itself
-failed — usually a registry/network issue, not a contract regression).
+mechanically re-checks all seven contracts against the installed source.
+
+Each contract resolves independently to one of **three outcomes**, printed
+per-contract and rolled up into a run-level `outcome` (also exposed as a
+GITHUB_OUTPUT for the workflow's alert step, distinct from the GH step's own
+success/failure) and exit code:
+
+- **verified** (exit 0 when every contract is this) — the contract's source
+  file(s) were found and their content matches the pinned shape.
+- **drift** (exit 1) — the source file(s) were found, but the content no
+  longer matches. This is an actual upstream behavioral change worth
+  investigating (see "What to do when the nightly alerts" below).
+- **infra** (exit 2, when nothing drifted but at least one contract hit
+  this) — the contract's source file could not be located at ANY of its
+  known candidate paths (each `CONTRACTS` entry's `parts` field in
+  `scripts/lib/compat-contracts.mjs`, resolved via
+  `compat-contract-locator.mjs` and `compat-contract-resolution.mjs`), or
+  the `npm install` of the four packages itself failed. This means Layer A
+  has NOT actually re-checked that contract's content at all — it is
+  distinct from drift and must never be reported as one. #2581: before this
+  three-way split, a single relocated file (`pi-subagents@0.65.0` moving
+  `src/runs/shared/pi-args.ts`) threw inside one shared try/catch, aborted
+  the whole run, and got reported — both in the run log and the tracking
+  issue's body — as generic "failure" alongside the other six contracts that
+  were never actually re-checked that run either. A contract's own outcome
+  only becomes "infra" when ITS candidate paths are all missing; every other
+  contract is still resolved and checked independently in the same run.
+
+Candidate paths are walked NEWEST-observed-layout first, not oldest (#2680
+F1) — a stale leftover file at an old path (left behind by a partial
+publish, or an npm install that added files without pruning ones the
+package's current `files` list no longer references) must never outrank the
+package's actual current layout. When a candidate path list needs a NEW
+entry (the package relocated the file again), APPEND it to that contract's
+`parts` in the `CONTRACTS` list (`scripts/lib/compat-contracts.mjs`) —
+oldest-observed-layout first in how the list reads, rather than replacing
+the old entry — the locator resolves the newest EXISTING one regardless of
+authored order, so older installs stay covered too. `parts` and `package`
+live directly on each `CONTRACTS` entry, not a second table keyed by a
+string id (#2680 F2) — there is nowhere else to update.
 
 ### Layer B — real-pi behavioral smoke (`scripts/compat-smoke-behavioral.mjs`)
 
@@ -71,7 +124,7 @@ first session.
 Assertions:
 
 1. **Subagent light mode engages** — with `PI_SUBAGENT_CHILD=1` set,
-   `subagent_light_mode` is logged to `~/.pi-lens/latency.log` (a `type:
+   `subagent_light_mode` is logged to `$PI_LENS_HOME/latency.log` (a `type:
    "phase"` entry) and none of the seven heavyweight-scan phases
    (`knip`/`jscpd`/`madge`/`dead-code`/`govulncheck`/`gitleaks`/`trivy`) are
    logged for that run.
@@ -135,18 +188,35 @@ third-party contract drift detected"** — search for it by title before
 assuming a NEW investigation is needed; the workflow already
 create-or-updates it, never duplicates.
 
-1. Read the linked run log — both layers print a `[PASS]`/`[FAIL]` line per
-   check with a one-line detail on exactly what didn't match.
-2. Find the failed check's row in the pinned-contracts table above and go
-   read the current third-party source at the referenced file — a Layer A
-   failure means the semantic shape genuinely changed upstream (a renamed
-   env var, a moved `emit()` call, a reworded error message, ...).
-3. Update the corresponding matcher in `scripts/lib/compat-contracts.mjs`
+1. Read the linked run log — the alert issue body now says which of Layer
+   A's three outcomes fired (**verified** / **drift** / **infra**, #2581 —
+   never just a generic "failure"); Layer A/B each print a `[PASS]`/`[FAIL]`
+   or `[INFRA]` line per check with a one-line detail on exactly what didn't
+   match or couldn't be found.
+2. **If Layer A says infra**: the run log's `INFRA` line names every
+   candidate path tried for that contract. Read the installed package at the
+   printed version and find where the file actually lives now, then append
+   it to that contract's `parts` in the `CONTRACTS` list
+   (`scripts/lib/compat-contracts.mjs`) — don't replace the old candidate,
+   the locator resolves whichever existing one is newest regardless of
+   authored order (#2680 F1), so older installs stay covered too. This is a
+   relocation, not a confirmed content change; only move to step 3 once the
+   check actually runs against the relocated file.
+3. **If Layer A says drift**: find the failed check's row in the
+   pinned-contracts table above and read the current third-party source at
+   the referenced file — the semantic shape genuinely changed upstream (a
+   renamed env var, a moved `emit()` call, a reworded error message, ...).
+   Update the corresponding matcher in `scripts/lib/compat-contracts.mjs`
    (and its test in `tests/scripts/compat-contracts.test.ts`) to match the
-   new shape, update the pinned-contracts table's version/line reference
-   above, and fix whichever pi-lens module (`subagent-mode.ts` /
+   new shape, update the pinned-contracts table's version/reference above,
+   and fix whichever pi-lens module (`subagent-mode.ts` /
    `session-lifecycle.ts` / `instance-reaper.ts`) actually depended on the
-   old shape if the drift broke real behavior — not just the check.
+   old shape if the drift broke real behavior — not just the check. If
+   pi-lens's own dependent code already tolerates the drift gracefully (as
+   with contract 1's now-removed identity vars, #2581), relaxing the check
+   to stop requiring what upstream removed IS the fix — don't keep a check
+   that can only ever report drift forever for something pi-lens never
+   needed to work.
 4. A Layer B failure (an assertion, not an infra error) means real pi-lens
    behavior regressed under a real `pi` — treat it like any other bug: write
    a fixture-level test if the gap wasn't otherwise covered, then fix.

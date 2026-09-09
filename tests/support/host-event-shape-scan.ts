@@ -44,7 +44,7 @@ import { fileURLToPath } from "node:url";
 import { toPosix } from "../../clients/path-utils.js";
 import { stripCommentsAndStrings } from "./session-state-scan.ts";
 
-export const repoRoot = path.resolve(
+const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
 	"../..",
 );

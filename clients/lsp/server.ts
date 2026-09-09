@@ -31,10 +31,12 @@ import {
 	KIND_EXTENSIONS,
 } from "../file-kinds.js";
 import {
+	CARGO_WORKSPACE_MEMBER_DIALECT,
 	direntsHaveMarkerGlobMatch,
 	isAtOrAboveHomeDir,
 	isFullyQualified,
 	isWindowsPath,
+	matchesWorkspaceMemberPattern,
 	pathsEqual,
 } from "../path-utils.js";
 import {
@@ -335,6 +337,8 @@ export interface LSPServerInfo {
 	id: string;
 	name: string;
 	extensions: readonly string[];
+	/** True for entries supplied through `lsp.servers.*`, not the built-in table. */
+	custom?: boolean;
 	root: RootFunction;
 	/**
 	 * "language" (default) = the file's primary language server (one is chosen per
@@ -2469,48 +2473,6 @@ export const GoServer: LSPServerInfo = {
 	},
 };
 
-/** Turn one `/`-delimited glob SEGMENT into a regex source: `*` matches any
- * run of characters within the segment, `?` matches exactly one character,
- * everything else is escaped and literal. */
-function segmentGlobToRegExpSource(segment: string): string {
-	let out = "";
-	for (const ch of segment) {
-		if (ch === "*") out += "[^/]*";
-		else if (ch === "?") out += "[^/]";
-		else out += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-	}
-	return out;
-}
-
-/**
- * A `members`/`exclude` entry names a path exactly, or globs it segment by
- * segment: `*` and `?` inside a segment work at any depth — one wildcard
- * segment (`crates/*`), a bare `*`, or several chained together for a
- * deeper fixed-depth layout — matching cargo's own `glob`-crate semantics
- * for a fixed number of path components.
- *
- * KNOWN LIMITATION (#1671 F6, documented rather than implemented): a
- * recursive `**` segment (matching a variable number of path components) is
- * NOT supported and never matches — cargo workspaces that rely on `**` to
- * pull in an arbitrarily-nested crate tree will under-hoist (the crate stays
- * independently rooted instead of joining the workspace). This is
- * deliberately out of #1671's scope: the common, and the issue's fixture,
- * shape is an explicit fixed-depth `members` list.
- */
-function matchesCargoWorkspacePattern(
-	pattern: string,
-	relativePath: string,
-): boolean {
-	const normalized = pattern.replace(/\/+$/, "");
-	if (normalized.includes("**")) return false;
-	const patternSegments = normalized.split("/");
-	const pathSegments = relativePath.split("/");
-	if (patternSegments.length !== pathSegments.length) return false;
-	return patternSegments.every((segment, i) =>
-		new RegExp(`^${segmentGlobToRegExpSource(segment)}$`).test(pathSegments[i]),
-	);
-}
-
 /**
  * Given an ancestor Cargo.toml's raw contents that already contains a
  * `[workspace]` table, decide whether it actually claims `childDir` as a
@@ -2545,19 +2507,20 @@ function cargoWorkspaceDeclaresMember(
 	// `parseTomlStringArray` here — that hand-composition duplicated exactly
 	// what `readCargoWorkspaceMembers`/`readCargoWorkspaceExclude` do, the
 	// single-source-of-truth violation #2473 was filed to close for the OTHER
-	// two Cargo.toml readers.
+	// two Cargo.toml readers. Pattern matching goes through the ONE
+	// workspace-member matcher for the same reason (#2591); cargo's dialect —
+	// `**` never matches (#1671 F6), wildcards confined to one component, so
+	// pattern and path must have the same component count — is
+	// `CARGO_WORKSPACE_MEMBER_DIALECT`, not a private compiler here.
+	const matches = (pattern: string): boolean =>
+		matchesWorkspaceMemberPattern(
+			pattern,
+			relativePath,
+			CARGO_WORKSPACE_MEMBER_DIALECT,
+		);
 	const excluded = readCargoWorkspaceExclude(workspaceContent);
-	if (
-		excluded.some((pattern) =>
-			matchesCargoWorkspacePattern(pattern, relativePath),
-		)
-	) {
-		return false;
-	}
-	const members = readCargoWorkspaceMembers(workspaceContent);
-	return members.some((pattern) =>
-		matchesCargoWorkspacePattern(pattern, relativePath),
-	);
+	if (excluded.some(matches)) return false;
+	return readCargoWorkspaceMembers(workspaceContent).some(matches);
 }
 
 /**

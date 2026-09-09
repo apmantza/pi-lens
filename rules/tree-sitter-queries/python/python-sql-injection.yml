@@ -18,8 +18,18 @@ description: |
   
   Suppressed:
   - cursor.execute(query, params) — parameterized query (safe)
-  - session.execute(select(...)) — SQLAlchemy ORM (safe by construction)
-  - cursor.execute(f"...") — f-string with literal-only interpolation (rare false positive)
+  - session.execute(...) — receiver conventionally named for a SQLAlchemy session
+  - x.execute(select(...)) — statement builder in argument position (safe by
+    construction)
+  - db.query(...) / db.execute(stmt) where `db: Session` and `Session` is proven
+    from a same-file `sqlalchemy.orm` / `sqlalchemy.ext.asyncio` import, and
+    `stmt` is bound exactly once to a builder call
+  - cursor.execute(sql.SQL("...").format(sql.Identifier(...))) where `sql` is
+    an unshadowed same-file psycopg or psycopg2 import and every format argument
+    is an Identifier
+
+  Other raw, dynamic, or ambiguous SQL remains diagnostic so this rule fails
+  closed when it cannot prove the safe API provenance.
   
   ✅ FIX: use placeholders and parameter binding instead of string composition.
 

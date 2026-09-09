@@ -12,7 +12,7 @@ export interface ResolvedOpengrepConfig {
 // Opengrep is a fork of Semgrep and natively consumes the same rule format, so
 // we discover both `.opengrep.*` (preferred) and the de-facto `.semgrep.*` rule
 // files an existing repo may already carry.
-export const LOCAL_OPENGREP_CONFIG_NAMES = [
+const LOCAL_OPENGREP_CONFIG_NAMES = [
 	".opengrep.yml",
 	".opengrep.yaml",
 	"opengrep.yml",

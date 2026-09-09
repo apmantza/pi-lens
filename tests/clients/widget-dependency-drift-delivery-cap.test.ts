@@ -70,7 +70,7 @@ const theme = {
  * A hard ceiling on every multi-turn loop below, INDEPENDENT of
  * `DEPENDENCY_DRIFT_MAX_DELIVERIES`. Mutation testing that raises the cap
  * constant (to `Infinity`, say) must make these tests FAIL, not hang — a
- * loop bounded by the constant under test spins forever instead of reding.
+ * loop bounded by the constant under test spins forever instead of reading.
  */
 const MAX_TURNS = 12;
 

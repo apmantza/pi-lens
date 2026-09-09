@@ -19,7 +19,7 @@ import { handleAgentEnd } from "../../clients/runtime-agent-end.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleToolResult } from "../../clients/runtime-tool-result.js";
 import { hashlineFixture } from "../support/hashline-anchor-vectors.js";
-import { assertNonEmptyScan } from "../support/sweep-kit.js";
+import { assertNonEmptyScan, escapeRegExp } from "../support/sweep-kit.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 vi.mock("../../clients/pipeline.js", async (importOriginal) => {
@@ -757,17 +757,6 @@ function collectToolNameAliases(source: string): string[] {
 		if (name) names.add(name);
 	}
 	return [...names];
-}
-
-/**
- * Escape every regex metacharacter, not just the ones an identifier can hold.
- * `$` is legal in a JS identifier and is an anchor in a regex, which is the
- * case that actually matters here — but a partial escape is the
- * `js/incomplete-sanitization` shape CodeQL flags (and is one backslash away
- * from being wrong if this helper is ever reused), so escape the whole class.
- */
-function escapeRegExp(value: string): string {
-	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function aliasComparisonPatterns(aliases: string[]): RegExp[] {

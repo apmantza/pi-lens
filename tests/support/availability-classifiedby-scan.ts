@@ -30,7 +30,7 @@ export interface AvailabilityDecisionSite {
 }
 
 /** Directories scanned. Compiled output and tests are not sources of truth. */
-export const SCAN_ROOTS = ["clients"];
+const SCAN_ROOTS = ["clients"];
 
 const CALLEE = "logAvailabilityDecision";
 

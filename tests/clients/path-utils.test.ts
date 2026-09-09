@@ -18,11 +18,16 @@ vi.mock("node:os", async (importOriginal) => {
 	return { ...actual, default: { ...actual, homedir }, homedir };
 });
 
+import { minimatch } from "../../clients/deps/minimatch.js";
 import {
+	CARGO_WORKSPACE_MEMBER_DIALECT,
 	findLocalToolConfig,
 	findNearestContaining,
 	findNearestMarkerRoot,
 	homeRelativePath,
+	matchesWorkspaceMemberPattern,
+	UV_WORKSPACE_EXCLUDE_DIALECT,
+	UV_WORKSPACE_MEMBERS_DIALECT,
 	isFullyQualified,
 	isFullyQualifiedPosix,
 	isFullyQualifiedWin32,
@@ -1022,6 +1027,576 @@ describe("homeRelativePath (#2440 F5)", () => {
 		);
 		expect(homeRelativePath("/home/janet/a.json", "/home/jane")).toBe(
 			"/home/janet/a.json",
+		);
+	});
+});
+
+/**
+ * The workspace-member glob dialect table (#2591). Three tools, one matcher:
+ * every row names the axis it exercises and pins all three dialects' answers
+ * side by side, so a change to the shared compiler that "fixes" one dialect by
+ * moving another shows up as a table diff rather than as a silent change to
+ * Rust-LSP root selection or uv `.venv` inheritance.
+ *
+ * Upstream pins: cargo's dialect is the behavior #1671 shipped and #2591
+ * preserved byte-for-byte; uv's two are
+ * astral-sh/uv@3c979abda4530fe9bf3d92e9bcf5c5575e3b3126,
+ * `crates/uv-workspace/src/workspace.rs` (`is_included_in_workspace` for
+ * `members`, `WorkspaceExclusions::matches` for `exclude`).
+ */
+const WORKSPACE_GLOB_VECTORS: ReadonlyArray<{
+	axis: string;
+	pattern: string;
+	relativePath: string;
+	cargo: boolean;
+	uvMembers: boolean;
+	uvExclude: boolean;
+}> = [
+	{
+		axis: "literal path",
+		pattern: "crates/foo",
+		relativePath: "crates/foo",
+		cargo: true,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	{
+		axis: "`*` inside one component",
+		pattern: "crates/*",
+		relativePath: "crates/foo",
+		cargo: true,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	{
+		axis: "segment-count mismatch — `*` may not cross `/` except in uv exclude",
+		pattern: "crates/*",
+		relativePath: "crates/foo/bar",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: true,
+	},
+	{
+		axis: "bare `*` claims one component only",
+		pattern: "*",
+		relativePath: "a/b",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: true,
+	},
+	{
+		axis: "`**` crosses components (cargo: pattern never matches)",
+		pattern: "crates/**",
+		relativePath: "crates/a/b",
+		cargo: false,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	{
+		axis: "a TRAILING `**` still requires at least one component",
+		pattern: "crates/**",
+		relativePath: "crates",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: false,
+	},
+	{
+		// The separator alone is not the component: `crates/**` compiled to
+		// `^crates/.+$`, so the `.+` (one character, then any number) has to
+		// survive the step split that put the `/` in its own step (#2603).
+		axis: "a TRAILING `**` is not satisfied by the separator alone",
+		pattern: "crates/**",
+		relativePath: "crates/",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: false,
+	},
+	{
+		axis: "an INTERIOR `**` may consume zero components",
+		pattern: "a/**/b",
+		relativePath: "a/b",
+		cargo: false,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	{
+		axis: "a LEADING `**` may consume zero components",
+		pattern: "**/tests",
+		relativePath: "tests",
+		cargo: false,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	{
+		axis: "`**` anywhere kills a cargo pattern, even mid-component",
+		pattern: "crates/a**b",
+		relativePath: "crates/aXb",
+		cargo: false,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	{
+		axis: "case-sensitive on every platform (pattern cased up)",
+		pattern: "Crates/*",
+		relativePath: "crates/foo",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: false,
+	},
+	{
+		axis: "case-sensitive on every platform (path cased up)",
+		pattern: "crates/*",
+		relativePath: "Crates/foo",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: false,
+	},
+	{
+		axis: "a leading dot is an ordinary character to `*`",
+		pattern: "crates/*",
+		relativePath: "crates/.hidden",
+		cargo: true,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	{
+		axis: "`?` matches exactly one character",
+		pattern: "crates/a?c",
+		relativePath: "crates/abc",
+		cargo: true,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	{
+		axis: "`?` may not cross `/` except in uv exclude",
+		pattern: "crates/a?c",
+		relativePath: "crates/a/c",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: true,
+	},
+	{
+		axis: "trailing slash — cargo strips it, uv normalize_path keeps it",
+		pattern: "crates/foo/",
+		relativePath: "crates/foo",
+		cargo: true,
+		uvMembers: false,
+		uvExclude: false,
+	},
+	{
+		axis: "trailing slash after a wildcard component",
+		pattern: "crates/*/",
+		relativePath: "crates/foo",
+		cargo: true,
+		uvMembers: false,
+		uvExclude: false,
+	},
+	{
+		axis: "leading ./ — uv normalize_path drops it, cargo counts a component",
+		pattern: "./packages/a",
+		relativePath: "packages/a",
+		cargo: false,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	{
+		axis: "character class — a class in uv, a literal bracket run in cargo",
+		pattern: "crates/[ab]",
+		relativePath: "crates/a",
+		cargo: false,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	{
+		axis: "character class — the same pattern names a literal directory to cargo",
+		pattern: "crates/[ab]",
+		relativePath: "crates/[ab]",
+		cargo: true,
+		uvMembers: false,
+		uvExclude: false,
+	},
+	{
+		axis: "negated character class",
+		pattern: "crates/[!ab]",
+		relativePath: "crates/c",
+		cargo: false,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	{
+		axis: "the acceptance vector: a separator-crossing exclusion `*`",
+		pattern: "packages/a*c",
+		relativePath: "packages/a/b/c",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: true,
+	},
+	{
+		axis: "a regex metacharacter is a literal, not a wildcard",
+		pattern: "crates/a.c",
+		relativePath: "crates/abc",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: false,
+	},
+	{
+		axis: "a regex metacharacter matches itself",
+		pattern: "crates/a+b",
+		relativePath: "crates/a+b",
+		cargo: true,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	// Adjacent `**` components denote exactly what a single one does, so these
+	// three rows must read exactly like the single-`**` rows above. #2591 review
+	// round 2 leaned on that to COLLAPSE them before compiling, the way upstream
+	// does (`rust-lang/glob@cfa2a58f2e44373573f657ec25b3621e44714dee`,
+	// `src/lib.rs:672-684`); #2603 DELETED the collapse — it was a speed
+	// normalization, and the step table the matcher now fills is linear with or
+	// without it — so these rows are what keeps that deletion honest.
+	{
+		axis: "chained `**`: interior, consuming zero components",
+		pattern: "a/**/**/**/b",
+		relativePath: "a/b",
+		cargo: false,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	{
+		axis: "chained `**`: interior, consuming several components",
+		pattern: "a/**/**/**/b",
+		relativePath: "a/x/y/b",
+		cargo: false,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	{
+		axis: "chained `**`: a trailing chain still requires one component",
+		pattern: "a/**/**/**",
+		relativePath: "a",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: false,
+	},
+	// #2603: INTERLEAVED `**` chains — a `**` per link, separated by a `*`
+	// component, which is the shape no consecutive-`**` collapse can reach. The
+	// answers are the ordinary globstar answers; the cost half is the budget in
+	// `workspace-glob-nonbacktracking-budget.test.ts`.
+	{
+		axis: "interleaved `**/*` chain, every `**` consuming zero components",
+		pattern: "**/*/**/*/zzz",
+		relativePath: "a/b/zzz",
+		cargo: false,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	{
+		axis: "interleaved `**/*` chain, the `**`s consuming components",
+		pattern: "**/*/**/*/zzz",
+		relativePath: "a/b/c/d/e/zzz",
+		cargo: false,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	{
+		axis: "interleaved `**/*` chain against a path with no matching tail",
+		pattern: "**/*/**/*/zzz",
+		relativePath: "a/b/c/d/e",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: false,
+	},
+	{
+		axis: "a `*` interleaved with `**` still crosses `/` only in uv exclude",
+		pattern: "**/a*c/zzz",
+		relativePath: "x/a/b/c/zzz",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: true,
+	},
+	// A separator-CROSSING wildcard is `.`, not "any character": the regex the
+	// step table replaced spelled `**` as `.+`, and minimatch's globstar is
+	// `.`-based too, so neither has ever matched across a line terminator inside
+	// a directory name. The pair below is the positive control and the pin —
+	// widening the crossing predicate to "any character" reds the second row.
+	{
+		axis: "`**` crosses an ordinary directory name",
+		pattern: "**/c",
+		relativePath: "ab/c",
+		cargo: false,
+		uvMembers: true,
+		uvExclude: true,
+	},
+	{
+		axis: "`**` does NOT cross a newline inside a directory name (`.`, not any char)",
+		pattern: "**/c",
+		relativePath: "a\nb/c",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: false,
+	},
+	// #2591 review round 2, F2: a glob character class is not a JS character
+	// class. `[z-a]` is a legal glob whose range is empty (it matches nothing)
+	// and an illegal RegExp ("Range out of order"). Pre-fix these THREW a
+	// SyntaxError out of the matcher; the deleted minimatch call answered
+	// `false`, and so does the fold now — fail closed, declaring no member and
+	// excluding nothing. `toBe(false)` is the assertion precisely because a
+	// throw fails it too.
+	{
+		axis: "uncompilable class range fails closed, never throws",
+		pattern: "crates/[z-a]",
+		relativePath: "crates/a",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: false,
+	},
+	{
+		axis: "uncompilable NEGATED class range fails closed, never throws",
+		pattern: "crates/[!z-a]",
+		relativePath: "crates/a",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: false,
+	},
+	{
+		axis: "uncompilable class with a literal tail fails closed, never throws",
+		pattern: "crates/[b-a]x",
+		relativePath: "crates/ax",
+		cargo: false,
+		uvMembers: false,
+		uvExclude: false,
+	},
+	{
+		axis: "a WELL-FORMED class range still matches — fail-closed is not fail-always",
+		pattern: "crates/[a-z]",
+		relativePath: "crates/m",
+		cargo: false,
+		uvMembers: true,
+		uvExclude: true,
+	},
+];
+
+describe("matchesWorkspaceMemberPattern dialect table (#2591)", () => {
+	it.each(WORKSPACE_GLOB_VECTORS)(
+		"$axis: $pattern vs $relativePath",
+		({ pattern, relativePath, cargo, uvMembers, uvExclude }) => {
+			expect(
+				matchesWorkspaceMemberPattern(
+					pattern,
+					relativePath,
+					CARGO_WORKSPACE_MEMBER_DIALECT,
+				),
+			).toBe(cargo);
+			expect(
+				matchesWorkspaceMemberPattern(
+					pattern,
+					relativePath,
+					UV_WORKSPACE_MEMBERS_DIALECT,
+				),
+			).toBe(uvMembers);
+			expect(
+				matchesWorkspaceMemberPattern(
+					pattern,
+					relativePath,
+					UV_WORKSPACE_EXCLUDE_DIALECT,
+				),
+			).toBe(uvExclude);
+		},
+	);
+
+	it("most rows separate at least two dialects", () => {
+		// Shape 38 screen: a table whose every row read the same for every
+		// dialect would pass with the dialect argument ignored entirely, so the
+		// table is required to carry rows that actually discriminate.
+		const separating = WORKSPACE_GLOB_VECTORS.filter(
+			(vector) =>
+				new Set([vector.cargo, vector.uvMembers, vector.uvExclude]).size > 1,
+		);
+		expect(separating.length).toBeGreaterThanOrEqual(12);
+	});
+});
+
+/**
+ * Byte-for-byte pin for the uv side of the fold: `UV_WORKSPACE_MEMBERS_DIALECT`
+ * must answer exactly what the pre-fold
+ * `minimatch(relative, path.posix.normalize(toPosix(pattern)), { dot: true })`
+ * call answered, over a corpus deliberately NOT restricted to the shapes the
+ * fold handles well (shape 38: the cheapest evasion of a differential test is a
+ * corpus that omits the disagreements). Every cell that DOES differ is
+ * enumerated below with its reason; a new divergence and a silently repaired
+ * one both fail this test.
+ */
+const UV_DIFFERENTIAL_PATTERNS = [
+	"packages/*",
+	"packages/**",
+	"packages",
+	"packages/",
+	"packages//a",
+	"*",
+	"**",
+	"packages/**/tests",
+	"**/x",
+	"a/**",
+	"a/**/b",
+	"a**b",
+	"packages/a?c",
+	"packages/[ab]",
+	"packages/[!ab]",
+	"packages/[]ab]",
+	"packages/[ab",
+	"packages/a*c",
+	"./packages/*",
+	"packages/./a",
+	"crates/*/*",
+	"packages/*/",
+	".hidden/*",
+	"*/.hidden",
+	"Packages/*",
+	"a/*/c",
+	"crates/foo/",
+	"a/b/c",
+	"a-b/c.d",
+	"a+b",
+	"a(b)",
+	"a{b,c}",
+	"a|b",
+	"a^b",
+	"a$b",
+	"x\\y",
+	"**/**",
+	"packages/*/*/*",
+	"a/**/**/b",
+	"a/**/**/**/b",
+	"a/**/**/**",
+	"**/**/**",
+	"?",
+	"??",
+	"*-*",
+	// #2603: interleaved `**` chains — a `**` per link separated by a `*`
+	// component, the shape the consecutive-`**` collapse could never reach and
+	// the one the step table had to be built for.
+	"**/*/**/*/zzz",
+	"**/*/**",
+	"*/**/*/**",
+	"a/**/*/**/b",
+] as const;
+
+const UV_DIFFERENTIAL_PATHS = [
+	"packages/a",
+	"packages/a/b",
+	"packages",
+	"a",
+	"a/b",
+	"a/b/c",
+	"x",
+	"packages/abc",
+	"packages/.hidden",
+	".hidden/x",
+	"x/.hidden",
+	"packages/a/b/c",
+	"crates/x/y",
+	"packages/tests",
+	"packages/a/tests",
+	"a/ab",
+	"a/aXc",
+	"a/b/c/d",
+	"aXb",
+	"ab",
+	"packages/[ab]",
+	"packages/]",
+	"packages/b",
+	"packages/c",
+	"crates/foo",
+	"a-b/c.d",
+	"a+b",
+	"a(b)",
+	"a{b,c}",
+	"ab,c",
+	"a|b",
+	"a^b",
+	"a$b",
+	"x\\y",
+	"xy",
+	"packages//a",
+	"a/x/y/b",
+	"a/x/b",
+	"packages/x/y/z",
+	"a-c",
+	"a/x/c",
+	// #2603: tails the interleaved patterns above can and cannot reach, and a
+	// directory name carrying a line terminator — the character a
+	// separator-crossing wildcard has never been able to cross.
+	"a/b/zzz",
+	"a/b/c/d/zzz",
+	"a\nb/c",
+] as const;
+
+/**
+ * The complete set of cells where the folded uv-members dialect and the
+ * pre-fold minimatch call disagree, each with the reason it is deliberate.
+ * Keyed `pattern` + space + `path`.
+ */
+const UV_MINIMATCH_DIVERGENCES = new Map<string, string>([
+	// minimatch collapses repeated separators in the PATH
+	// (`preserveMultipleSlashes: false`); the folded compiler treats `//`
+	// literally. Unreachable in production: the only path this matcher ever sees
+	// is `toPosix(path.relative(...))`, which cannot produce `//`. The PATTERN
+	// side is unaffected — `path.posix.normalize` collapses it first.
+	["packages/* packages//a", "path-side //, unreachable via path.relative"],
+	["packages//a packages//a", "path-side //, unreachable via path.relative"],
+	["packages/[ab] packages//a", "path-side //, unreachable via path.relative"],
+	["packages/[]ab] packages//a", "path-side //, unreachable via path.relative"],
+	["./packages/* packages//a", "path-side //, unreachable via path.relative"],
+	["packages/./a packages//a", "path-side //, unreachable via path.relative"],
+	["*/**/*/** packages//a", "path-side //, unreachable via path.relative"],
+	// Brace expansion is a minimatch extension the pre-fold uv path inherited by
+	// accident. uv compiles members with rust `glob::Pattern` at the pinned SHA,
+	// which has no brace syntax at all, so `a{b,c}` names a directory literally
+	// called `a{b,c}` upstream. The fold moves uv TOWARD upstream here.
+	["a{b,c} ab", "minimatch-only brace expansion; rust glob has none"],
+	["a{b,c} a{b,c}", "minimatch-only brace expansion; rust glob has none"],
+	// minimatch short-circuits a pattern that is NOTHING BUT `**` to
+	// match-everything; every other spelling of it goes through a `.`-based
+	// group, as did the regex this matcher replaced, and `.` excludes the four
+	// line terminators. So a bare `**` matches a directory name containing a
+	// `\n` in minimatch and not here. INHERITED, not introduced: the pre-fold
+	// minimatch call and the #2591 regex disagreed the same way, and #2591's
+	// corpus simply carried no such path. Upstream rust `glob` is char-based and
+	// would match, so this is a recorded limitation rather than a choice; it
+	// needs a real directory whose name contains a newline to observe.
+	["** a\nb/c", "minimatch's bare-`**` match-everything short-circuit"],
+	["**/** a\nb/c", "minimatch's bare-`**` match-everything short-circuit"],
+	["**/**/** a\nb/c", "minimatch's bare-`**` match-everything short-circuit"],
+]);
+
+describe("the uv-members dialect reproduces the pre-fold minimatch answers (#2591)", () => {
+	it("differs from minimatch(dot:true) on exactly the enumerated cells", () => {
+		const unexpected: string[] = [];
+		const repaired: string[] = [];
+		let cells = 0;
+		for (const pattern of UV_DIFFERENTIAL_PATTERNS) {
+			const normalized = path.posix.normalize(toPosix(pattern));
+			for (const relativePath of UV_DIFFERENTIAL_PATHS) {
+				cells += 1;
+				const key = `${pattern} ${relativePath}`;
+				const folded = matchesWorkspaceMemberPattern(
+					pattern,
+					relativePath,
+					UV_WORKSPACE_MEMBERS_DIALECT,
+				);
+				const preFold = minimatch(relativePath, normalized, { dot: true });
+				if (folded !== preFold && !UV_MINIMATCH_DIVERGENCES.has(key)) {
+					unexpected.push(`${key} folded=${folded} minimatch=${preFold}`);
+				}
+				if (folded === preFold && UV_MINIMATCH_DIVERGENCES.has(key)) {
+					repaired.push(key);
+				}
+			}
+		}
+		expect(unexpected).toEqual([]);
+		expect(repaired).toEqual([]);
+		expect(cells).toBe(
+			UV_DIFFERENTIAL_PATTERNS.length * UV_DIFFERENTIAL_PATHS.length,
 		);
 	});
 });

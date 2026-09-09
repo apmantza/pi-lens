@@ -30,8 +30,8 @@ export interface ClassifierDecision {
 	commentBody: string;
 }
 
-export declare function stripAnsi(text: string): string;
-export declare function stripLineTimestamps(text: string): string;
+/** Network-shaped failure needles shared with scripts/npm-retry.mjs (#2684). */
+export declare const NET_PATTERN: RegExp;
 export declare function classifyFailureLog(rawLog: string): Classification;
 export declare function readCgroupOomKillCount(log: string): number | null;
 export declare function describeKernelKillEvidence(log: string): string | null;
@@ -62,47 +62,6 @@ export interface FetchedJob {
 	jobId: number;
 	jobName: string;
 }
-export declare function fetchRunAndFailedJob(args: {
-	fetcher: FetchFn;
-	owner: string;
-	repo: string;
-	runId: number | string;
-	jobName?: string;
-}): Promise<FetchedJob>;
-export declare function fetchJobLog(args: {
-	fetcher: FetchFn;
-	owner: string;
-	repo: string;
-	jobId: number;
-}): Promise<string>;
-export declare function findExistingClassifierComment(args: {
-	fetcher: FetchFn;
-	owner: string;
-	repo: string;
-	prNumber: number;
-}): Promise<{ id: number; body: string } | null>;
-export declare function upsertComment(args: {
-	fetcher: FetchFn;
-	owner: string;
-	repo: string;
-	prNumber: number;
-	existingComment: { id: number; body: string } | null;
-	body: string;
-}): Promise<{ id: number; body: string } | null>;
-export declare function reconcileDuplicateClassifierComments(args: {
-	fetcher: FetchFn;
-	owner: string;
-	repo: string;
-	prNumber: number;
-	sha: string;
-	postedCommentId: number | undefined;
-}): Promise<{ isWinner: boolean; winningCommentId: number | undefined }>;
-export declare function attemptRerun(args: {
-	fetcher: FetchFn;
-	owner: string;
-	repo: string;
-	runId: number | string;
-}): Promise<{ ok: boolean; status: number }>;
 export interface RunClassifierArgs {
 	fetcher: FetchFn;
 	owner: string;
@@ -113,10 +72,14 @@ export interface RunClassifierArgs {
 	sha?: string;
 	rerunKinds?: ClassificationKind[];
 	skipMissingJob?: boolean;
+	// #2668: a master-push run has no associated PR at all (not merely an
+	// unresolved lookup) -- allow classification and the rerun to proceed
+	// without one, skipping every PR-comment step.
+	allowMissingPr?: boolean;
 }
 export type SuccessfulClassifierRun = ClassifierDecision & {
 	sha: string;
-	prNumber: number;
+	prNumber: number | null;
 	jobId: number;
 	jobName: string;
 	supersededByCommentId?: number;
@@ -131,11 +94,3 @@ export declare function runClassifier(
 export declare function runClassifier(
 	args: RunClassifierArgs,
 ): Promise<SuccessfulClassifierRun | SkippedClassifierRun>;
-export declare function commentClassificationFailure(args: {
-	fetcher: FetchFn;
-	owner: string;
-	repo: string;
-	prNumber?: number;
-	sha?: string;
-	error: unknown;
-}): Promise<boolean>;

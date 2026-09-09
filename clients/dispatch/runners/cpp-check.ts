@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { safeSpawnAsync } from "../../safe-spawn.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -125,6 +126,10 @@ async function resolveCompiler(
 			flavor: "msvc",
 		};
 	}
+	// Mirrors the deliberate global-PATH probes in utils/runner-helpers.ts:
+	// this never resolves a config file or a target path, so there is no cwd
+	// for it to get wrong.
+	// cwd-exempt: presence probe only -- `cl` with no args and no target file, used solely to detect whether MSVC is on PATH
 	const clProbe = await safeSpawnAsync("cl", [], { timeout: 5000 });
 	if (!clProbe.error && clProbe.status !== null) {
 		return {
@@ -213,7 +218,7 @@ const cppCheckRunner: RunnerDefinition = {
 	skipTestFiles: false,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		const cwd = ctx.cwd || process.cwd();
+		const cwd = resolveRunnerCwd(ctx, "cpp-check");
 		const absPath = path.resolve(cwd, ctx.filePath);
 		const compiler = await resolveCompiler(absPath, cwd);
 		if (!compiler) {

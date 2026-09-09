@@ -11,7 +11,7 @@ import {
 import type { ProjectConventions } from "./project-conventions.js";
 import { loadProjectSnapshotWithoutWordIndex } from "./project-snapshot.js";
 
-export type ToolGate = "config-first" | "smart-default" | "mixed";
+type ToolGate = "config-first" | "smart-default" | "mixed";
 
 export interface FormatterPolicy {
 	formatterNames: string[];
@@ -788,7 +788,7 @@ export {
 	FORMATTER_POLICY_BY_FILENAME,
 };
 
-export function getFormatterPolicyForExtension(
+function getFormatterPolicyForExtension(
 	ext: string,
 ): FormatterPolicy | undefined {
 	return FORMATTER_POLICY_BY_EXTENSION.get(ext.toLowerCase());
@@ -871,7 +871,7 @@ export type AutofixToolName =
 	| "markdownlint"
 	| "oxlint";
 
-export type LintRunnerName =
+type LintRunnerName =
 	| JstsLintRunnerName
 	| "ruff-lint"
 	| "stylelint"
@@ -2639,7 +2639,7 @@ export function stripGradleCommentsAndStrings(source: string): string {
 }
 
 /** Half-open `[start, end)` offsets of a named block's body in `source`. */
-export interface GradleBlockRange {
+interface GradleBlockRange {
 	start: number;
 	end: number;
 }

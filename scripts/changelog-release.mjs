@@ -38,6 +38,7 @@ function readJson(file) {
 	} catch (error) {
 		throw new Error(
 			`Cannot read ${file}: ${error instanceof Error ? error.message : String(error)}`,
+			{ cause: error },
 		);
 	}
 }

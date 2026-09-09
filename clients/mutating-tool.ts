@@ -93,7 +93,7 @@ import {
 export type MutationKind = "write" | "edit";
 
 /** How the classification was reached. */
-export type MutationProvenance =
+type MutationProvenance =
 	/** `event.toolName` is in the built-in table. */
 	| "builtin"
 	/** A synthetic write pi-lens derived from a bash command (#168, #2000). */
@@ -128,7 +128,7 @@ export type MutationProvenance =
  * imported so this module has no dependency, not even a type one, on the
  * consumer that imports it.
  */
-export interface MutationLineResult {
+interface MutationLineResult {
 	touchedLines: [number, number] | undefined;
 	/** Individual ranges for a multi-range edit; the guard checks each one. */
 	editRanges?: [number, number][];
@@ -167,7 +167,7 @@ export interface MutatingToolContext {
  * Recognizes one tool-input SHAPE. Returns `undefined` when the input is not
  * its shape, so the registry falls through to the next adapter.
  */
-export type ShapeAdapter = (
+type ShapeAdapter = (
 	input: Record<string, unknown>,
 	ctx: MutatingToolContext,
 ) => MutationLineResult | undefined;
@@ -251,7 +251,7 @@ function asRecord(value: unknown): Record<string, unknown> {
  * field list the seam classifies with — a second spelling list would arm on
  * inputs the seam cannot resolve, and miss ones it can.
  */
-export function resolveMutationPath(
+function resolveMutationPath(
 	input: Record<string, unknown>,
 ): string | undefined {
 	for (const key of ["path", "filePath", "file_path"]) {
@@ -282,7 +282,7 @@ export function readMutationPathField(event: unknown): string | undefined {
  * base62 anchor — handled by `clients/hashline-anchor.ts`. Do not reach for
  * this function there.
  */
-export function parseHashlineAnchor(anchor: unknown): number | undefined {
+function parseHashlineAnchor(anchor: unknown): number | undefined {
 	if (typeof anchor !== "string") return undefined;
 	const trimmed = anchor.trim();
 	const separator = trimmed.indexOf(":");
@@ -293,7 +293,7 @@ export function parseHashlineAnchor(anchor: unknown): number | undefined {
 }
 
 /** Bounding box plus per-range detail for a multi-range edit. */
-export function combineRanges(ranges: [number, number][]): MutationLineResult {
+function combineRanges(ranges: [number, number][]): MutationLineResult {
 	const starts = ranges.map(([start]) => start);
 	const ends = ranges.map(([, end]) => end);
 	return {

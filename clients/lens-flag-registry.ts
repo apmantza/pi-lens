@@ -20,7 +20,7 @@
 
 import { DEPRECATED_CONFIG_SURFACES } from "./config-diagnostic-codes.js";
 
-export type LensFlagScope = "global" | "project";
+type LensFlagScope = "global" | "project";
 
 export interface LensFlagSpec {
 	/** CLI flag name (`--<name>`) and the key callers pass to `getFlag`. */
@@ -242,6 +242,24 @@ export const LENS_FLAGS: readonly LensFlagSpec[] = [
 		default: false,
 		scope: "global",
 	},
+	...(
+		[
+			"knip",
+			"jscpd",
+			"madge",
+			"gitleaks",
+			"govulncheck",
+			"deadCode",
+			"complexity",
+		] as const
+	).map((analyzer) => ({
+		name: `no-${analyzer.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`)}`,
+		description: `Disable the ${analyzer} session-start analyzer. Also via ${analyzer}.enabled=false in config.`,
+		configKey: `${analyzer}.enabled`,
+		negated: true,
+		default: false,
+		scope: "project" as const,
+	})),
 ];
 
 const byName = new Map(LENS_FLAGS.map((spec) => [spec.name, spec]));
@@ -274,6 +292,7 @@ export const GLOBAL_NON_FLAG_CONFIG_SECTIONS: readonly string[] = [
 	"ignore",
 	"dispatch",
 	"widget",
+	"startup",
 	"$schema",
 ];
 
@@ -297,6 +316,7 @@ export const PROJECT_NON_FLAG_CONFIG_SECTIONS: readonly string[] = [
 	"reviewGraph",
 	"trivy",
 	"helm",
+	"startup",
 ];
 
 /**

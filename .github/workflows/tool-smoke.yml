@@ -5,11 +5,16 @@ name: Tool smoke (nightly)
 # path against per-language fixtures — so it's slow and network-dependent, hence
 # nightly + manual only, never a per-PR gate.
 #
-# The harness exits nonzero only on genuine infra failures (timeout / exception
-# / server_error). A tool that's merely unavailable (couldn't install on the
-# runner) reports ⚠ and does NOT fail the run, so transient install/network
-# flakiness doesn't produce false alarms — the printed report still shows the
-# ⚠ counts for review.
+# The harness exits nonzero on genuine infra failures (timeout / exception /
+# server_error) AND on a genuine installer defect: an ensureTool failure for a
+# strategy whose toolchain this runner has (npm always, since the harness
+# itself runs under Node; pip/gem when confirmed present) reports ✗ and DOES
+# fail the run (#2638/#2661 — a dead/renamed npm package used to report the
+# same ⚠ a missing toolchain does, and sat unnoticed for months). A tool that
+# is declined/skipped by policy, genuinely lacks its toolchain on this runner,
+# or hit a transient/offline registry condition (no network, a registry 5xx)
+# reports ⚠ and does NOT fail the run — the printed report still shows the ⚠
+# counts for review.
 
 on:
   schedule:
@@ -28,8 +33,25 @@ jobs:
     # Unauthenticated = 60 req/hr per IP, exhausted on shared-IP runners.
     # The auto-provided token raises this to 5000 req/hr; the installer sends it
     # ONLY to api.github.com, never the asset CDN.
+    #
+    # PI_LENS_HOME/PILENS_DATA_DIR (#2670 review F1): job-level, so the SEVEN
+    # `--install` steps below share one tool tree/bin dir across the job
+    # instead of each `withScratchHome()` pin minting its own empty one per
+    # step — without this, each script re-pulls every managed tool from
+    # scratch (measured against the last full nightly, run 32817692457: the
+    # shared cache made the format step ~9s; per-step scratch homes would add
+    # ~10min across the job and 4-5x the release-asset downloads on this
+    # shared-IP runner). A bare `/tmp` path, not `${{ runner.temp }}`: the
+    # `runner` context is unavailable at job-level `env:` (actionlint: "context
+    # \"runner\" is not allowed here"), and this runner's whole VM — `/tmp`
+    # included — is destroyed after the job either way, so this never becomes
+    # a second `~/.pi-lens` some other step relies on persisting.
+    # `withScratchHome`'s "already pinned" branch is a no-op against an
+    # explicit PI_LENS_HOME, so this is the ONLY change these steps need.
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PI_LENS_HOME: /tmp/pi-lens-home
+      PILENS_DATA_DIR: /tmp/pi-lens-home
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -83,11 +105,49 @@ jobs:
       - name: Build dist
         run: npm run build:dist
 
+      # `id:` + a captured log (#2723): this is one of the three steps whose
+      # outcome can actually turn the job red (no continue-on-error), so the
+      # final notify step below needs both this step's `outcome` and its raw
+      # log text (for the ✗ row detail) to build a useful tracking-issue
+      # body. `tee` still streams to the Actions log unchanged.
+      #
+      # `set -o pipefail` is LOAD-BEARING, not documentation (#2723 review
+      # F4 — corrects a wrong claim this comment used to make): GitHub's
+      # default shell for a `run:` step that declares no `shell:` key is
+      # `bash -e {0}` — WITHOUT pipefail (`-eo pipefail` is only what an
+      # EXPLICIT `shell: bash` gets). Without this line, `node
+      # scripts/smoke-tools.mjs ... | tee logfile`'s exit code is `tee`'s
+      # (almost always 0), never the node process's — a genuinely red layer
+      # would report `outcome: success` to the notify step below, and
+      # `layersGenuinelyClean` (scripts/lib/tool-smoke-drift.mjs) is the
+      # notify step's own cheap backstop against exactly that: it refuses to
+      # close the tracker when a layer's raw outcome says "success" but its
+      # own parsed summary still shows a failure. Pinned by
+      # tests/config/tool-smoke-notify-gate.test.ts, mutation-proofed by
+      # deleting this exact line.
       - name: Tool layer (install + run each tool through real dispatch)
-        run: node scripts/smoke-tools.mjs --install --verbose
+        id: tool_layer
+        run: |
+          set -o pipefail
+          node scripts/smoke-tools.mjs --install --verbose 2>&1 | tee "$RUNNER_TEMP/tool-smoke-tool-layer.log"
 
       - name: LSP handshake layer (install + spawn + initialize each server)
-        run: node scripts/smoke-tools.mjs --lsp --install --verbose
+        id: lsp_handshake
+        run: |
+          set -o pipefail
+          node scripts/smoke-tools.mjs --lsp --install --verbose 2>&1 | tee "$RUNNER_TEMP/tool-smoke-lsp-handshake.log"
+
+      # Gating diagnostic layer (#2780, recurrence #2776): the handshake above
+      # proves initialize only. This row family drives the real lsp_diagnostics
+      # handler against every installed primary fixture and requires a finding
+      # in its PRIMARY bucket. A server-authored source cannot make an
+      # auxiliary finding look like primary coverage.
+      - name: LSP diagnostics clean-gate (primary finding per installed server)
+        id: lsp_gate
+        timeout-minutes: 30
+        run: |
+          set -o pipefail
+          node scripts/smoke-tools.mjs --lsp-gate --install --verbose 2>&1 | tee "$RUNNER_TEMP/tool-smoke-lsp-gate.log"
 
       # Diagnostic-mode matrix (#240): spawn each server and record its
       # advertised mode (pull vs push) — the first cut of the affirmative-clean
@@ -167,4 +227,48 @@ jobs:
           delete-branch: false
 
       - name: Format layer (select + reformat through formatter pipeline)
-        run: node scripts/smoke-tools.mjs --format --install --verbose
+        id: format_layer
+        run: |
+          set -o pipefail
+          node scripts/smoke-tools.mjs --format --install --verbose 2>&1 | tee "$RUNNER_TEMP/tool-smoke-format-layer.log"
+
+      # #2723: the ONLY tracking-issue writer this workflow had before this
+      # step (`Notify on silentOnClean drift` above) sits behind the LSP
+      # handshake layer with `continue-on-error: true` but no `if: always()`,
+      # so GitHub skips it — and everything after it — exactly when an
+      # earlier step fails, i.e. exactly when a human most needs to hear
+      # about it (13 consecutive red nights, 2026-08-26 -> 2026-09-07, with
+      # no automated notice). That notifier is also scoped to something
+      # unrelated (silentOnClean telemetry, never the job verdict) — see
+      # scripts/lib/drift-issue.mjs's module doc. THIS step is a second,
+      # independent notifier scoped to the job's actual pass/fail verdict,
+      # placed last and gated on `if: always()` so it runs on every outcome,
+      # mirroring install-smoke.yml's `Notify install drift` step. Reads the
+      # four gating layers' outcomes + captured logs (the only four steps
+      # above without `continue-on-error`, so the only four whose outcome
+      # can turn the job red) — see scripts/lib/tool-smoke-drift.mjs's module
+      # doc. GITHUB_TOKEN is inherited from this job's own env (`issues:
+      # write` already granted at job level, #529/#594). Best-effort:
+      # continue-on-error PLUS the script's own internal try/catch (always
+      # exits 0) — filing/updating/closing an issue must never change the
+      # nightly's own conclusion (acceptance #5).
+      - name: Notify on tool-smoke red (file/update/close tracking issue)
+        if: always()
+        continue-on-error: true
+        env:
+          TOOL_LAYER_OUTCOME: ${{ steps.tool_layer.outcome }}
+          TOOL_LAYER_LOG: ${{ runner.temp }}/tool-smoke-tool-layer.log
+          LSP_HANDSHAKE_OUTCOME: ${{ steps.lsp_handshake.outcome }}
+          LSP_HANDSHAKE_LOG: ${{ runner.temp }}/tool-smoke-lsp-handshake.log
+          LSP_GATE_OUTCOME: ${{ steps.lsp_gate.outcome }}
+          LSP_GATE_LOG: ${{ runner.temp }}/tool-smoke-lsp-gate.log
+          FORMAT_LAYER_OUTCOME: ${{ steps.format_layer.outcome }}
+          FORMAT_LAYER_LOG: ${{ runner.temp }}/tool-smoke-format-layer.log
+          # #2723 review F3: a job failure BEFORE the three tracked layers
+          # even start (checkout, a best-effort setup action, npm install,
+          # build:dist — twelve steps, none of which set an *_OUTCOME above)
+          # leaves all three "skipped", identically to a genuine
+          # cancellation. `job.status` disambiguates: "failure" only when a
+          # non-continue-on-error step actually failed somewhere in the job.
+          JOB_STATUS: ${{ job.status }}
+        run: node scripts/notify-tool-smoke-red.mjs

@@ -21,12 +21,17 @@ import {
 	commentMarkerExists,
 	presentCommentMarkers,
 } from "./github-paging.mjs";
-import { REQUIRED_CHECKS, resolveLatestByName } from "./ci-checks.mjs";
+import {
+	isAdvisoryCheck,
+	isBlockingConclusion,
+	isUncertainConclusion,
+	REQUIRED_CHECKS,
+	resolveLatestByName,
+} from "./ci-checks.mjs";
 import {
 	absentRunCommentMarker,
 	decideRunHealthActions,
 	fetchHeadRunHealth,
-	RUN_HEALTH,
 	stalledRunCommentMarker,
 } from "./warden-run-health.mjs";
 
@@ -120,9 +125,9 @@ function normalizePr(node) {
 	const checkRuns = [];
 	for (const c of contexts) {
 		if (c.__typename !== "CheckRun") continue;
-		// The full list (name + status + conclusion) is what the merge lane's
-		// "zero non-advisory failing checks" gate reads (#2185). The warden
-		// itself still looks only at REQUIRED_CHECKS below.
+		// The full list (name + status + conclusion) is what the warden's
+		// "zero non-advisory failing checks" signal reads, matching the merge
+		// lane and ci-verdict policy.
 		// startedAt orders duplicate names on one head: GitHub's rollup really
 		// carries them (review round 1, F4), and array order is not time order.
 		checkRuns.push({
@@ -136,25 +141,34 @@ function normalizePr(node) {
 	const failingRequiredChecks = [];
 	// A required check that hasn't reported yet (absent from the rollup) or is
 	// mid-run (conclusion null: queued/in-progress/re-queued) is UNRESOLVED,
-	// not "not failing" (review round 1, F3). Only a settled non-FAILURE
-	// conclusion counts as positive evidence of passing.
-	//
-	// The REQUIRED_CHECKS loop below is the ONLY filter that keeps a failing
-	// non-required check (e.g. SonarCloud) from tripping red-ci (review round
-	// 1, F5) -- it looks up exactly the required names, ignoring every other
-	// key checkRunsByName may hold.
-	// Resolved newest-per-name (review round 1, F4): a superseded duplicate
-	// must not decide whether a required check is failing or unresolved.
+	// not "not failing". The same required-name override and advisory allowlist
+	// as ci-verdict make every discovered non-advisory check a gating signal.
+	// Resolved newest-per-name: a superseded duplicate must not decide whether
+	// a gating check is failing or unresolved.
 	const checkRunsByName = resolveLatestByName(checkRuns);
 	const unresolvedRequiredChecks = [];
-	for (const name of REQUIRED_CHECKS) {
+	const gatingNames = new Set([...REQUIRED_CHECKS, ...checkRunsByName.keys()]);
+	for (const name of gatingNames) {
+		if (!REQUIRED_CHECKS.includes(name) && isAdvisoryCheck(name)) continue;
 		const run = checkRunsByName.get(name);
-		if (!run) unresolvedRequiredChecks.push(name);
-		else if (run.conclusion === "FAILURE")
+		if (!run) {
+			unresolvedRequiredChecks.push(name);
+			continue;
+		}
+		const conclusion = String(run.conclusion ?? "").toUpperCase();
+		if (
+			!conclusion ||
+			(!REQUIRED_CHECKS.includes(name) && isUncertainConclusion(conclusion))
+		) {
+			unresolvedRequiredChecks.push(name);
+		} else if (
+			(REQUIRED_CHECKS.includes(name) && conclusion !== "SUCCESS") ||
+			(!REQUIRED_CHECKS.includes(name) && isBlockingConclusion(conclusion))
+		) {
 			// `url`, not `detailsUrl`: the resolver returns the NORMALIZED record
 			// built above, not the raw GraphQL node.
 			failingRequiredChecks.push({ name, url: run.url });
-		else if (!run.conclusion) unresolvedRequiredChecks.push(name);
+		}
 	}
 	return {
 		number: node.number,
@@ -470,7 +484,7 @@ export async function applyAction(fetcher, owner, repo, pr, action) {
  * Called ONLY for a head already classified absent, so the extra REST call
  * lands on the anomalous minority of PRs, never on the healthy sweep.
  */
-export async function hasAbsentRunComment(fetcher, owner, repo, pr) {
+async function hasAbsentRunComment(fetcher, owner, repo, pr) {
 	// Paginated (review round 1, F6): a first-page-only read stops finding its
 	// own marker past 100 comments and starts repeating the notice.
 	return commentMarkerExists(
@@ -491,7 +505,7 @@ export async function hasAbsentRunComment(fetcher, owner, repo, pr) {
  * look" as "no marker", which would repost the notice and, worse, re-attribute
  * a person's cancellation to the warden.
  */
-export async function readStalledRunMarkers(fetcher, owner, repo, pr, health) {
+async function readStalledRunMarkers(fetcher, owner, repo, pr, health) {
 	const runs = [
 		...(health.stalledRuns ?? []),
 		...(health.cancelledStalledRuns ?? []),
@@ -643,7 +657,7 @@ export async function runWarden({ fetcher, owner, repo, now = Date.now() }) {
  * The sweep record for one head (#2184 AC3): a classification plus the exact
  * workflows behind it, short enough for one line of the run summary.
  */
-export function summarizeRunHealth(health) {
+function summarizeRunHealth(health) {
 	const detail = [];
 	for (const run of health.starvedRuns)
 		detail.push(
@@ -670,5 +684,3 @@ export function summarizeRunHealth(health) {
 		detail: detail.join("; "),
 	};
 }
-
-export { RUN_HEALTH };

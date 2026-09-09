@@ -16,9 +16,9 @@
 
 include = ["**/*.toml"]
 exclude = [
-    "node_modules/**",
-    # Runner fixtures deliberately exercise malformed/unusual TOML.
-    "tests/fixtures/**",
+  "node_modules/**",
+  # Runner fixtures deliberately exercise malformed/unusual TOML.
+  "tests/fixtures/**",
 ]
 
 [formatting]

@@ -2,10 +2,15 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CacheManager } from "../../clients/cache-manager.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleToolCall } from "../../clients/runtime-tool-call.js";
 import type { TreeSitterClient } from "../../clients/tree-sitter-client.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 // handleToolCall calls getLSPService() directly (not via DI, matching the
 // pattern already used by runtime-session.ts). Stub it so tests never spin up
@@ -14,10 +19,11 @@ import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 const touchFileMock = vi.fn().mockResolvedValue(undefined);
 const getWarmClientForFileMock = vi.fn().mockResolvedValue(undefined);
 vi.mock("../../clients/lsp/index.js", () => ({
-	getLSPService: () => ({
-		touchFile: touchFileMock,
-		getWarmClientForFile: getWarmClientForFileMock,
-	}),
+	getLSPService: () =>
+		makeLspServiceDouble({
+			touchFile: touchFileMock,
+			getWarmClientForFile: getWarmClientForFileMock,
+		}),
 	resetLSPService: () => {},
 }));
 
@@ -83,6 +89,108 @@ function baseDeps(
 }
 
 describe("handleToolCall", () => {
+	it("does not collect a complexity baseline when disabled", async () => {
+		resetDegradationLedger();
+		const env = setupTestEnvironment("pi-lens-runtime-tool-call-complexity-");
+		try {
+			const filePath = createTempFile(
+				env.tmpDir,
+				"src/disabled.ts",
+				"const x = 1;\n",
+			);
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			await handleToolCall(
+				baseDeps({
+					runtime,
+					getFlag: (name) => name === "no-complexity",
+					event: { toolName: "read", input: { filePath } },
+				}),
+			);
+			expect(runtime.complexityBaselines.has(filePath)).toBe(false);
+			expect(
+				getDegradationSummary().some(
+					(entry) => entry.kind === "startup-analyzer-disabled",
+				),
+			).toBe(true);
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("does not let heredoc body words trigger the real git guard", async () => {
+		const env = setupTestEnvironment("pi-lens-2726-heredoc-guard-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.setTelemetryIdentity({ sessionId: "session-2726" });
+			runtime.updateGitGuardStatus(true, "existing blocker");
+			const result = await handleToolCall(
+				baseDeps({
+					runtime,
+					ctx: { cwd: env.tmpDir },
+					getFlag: (name) => name === "lens-guard",
+					event: {
+						toolName: "bash",
+						input: {
+							command: "cat <<EOF\nbody text: git push\nEOF\n",
+						},
+					},
+				}),
+			);
+			expect(result).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("does not block a command after a heredoc delimiter metacharacter", async () => {
+		const env = setupTestEnvironment("pi-lens-2726-heredoc-operator-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.setTelemetryIdentity({ sessionId: "session-2726-operator" });
+			runtime.updateGitGuardStatus(true, "existing blocker");
+			const result = await handleToolCall(
+				baseDeps({
+					runtime,
+					ctx: { cwd: env.tmpDir },
+					getFlag: (name) => name === "lens-guard",
+					event: {
+						toolName: "bash",
+						input: { command: "cat <<EOF; echo git push\nbody\nEOF" },
+					},
+				}),
+			);
+			expect(result).toBeUndefined();
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("still blocks a git command after a heredoc body", async () => {
+		const env = setupTestEnvironment("pi-lens-2726-heredoc-git-");
+		try {
+			const runtime = new RuntimeCoordinator();
+			runtime.projectRoot = env.tmpDir;
+			runtime.setTelemetryIdentity({ sessionId: "session-2726-git" });
+			runtime.updateGitGuardStatus(true, "existing blocker");
+			const result = await handleToolCall(
+				baseDeps({
+					runtime,
+					ctx: { cwd: env.tmpDir },
+					getFlag: (name) => name === "lens-guard",
+					event: {
+						toolName: "bash",
+						input: { command: "cat <<EOF; git push\nbody\nEOF" },
+					},
+				}),
+			);
+			expect(result).toMatchObject({ block: expect.anything() });
+		} finally {
+			env.cleanup();
+		}
+	});
 	it("is a no-op when lensEnabled is false", async () => {
 		const runtime = new RuntimeCoordinator();
 		const recordRead = vi.spyOn(runtime.readGuard, "recordRead");

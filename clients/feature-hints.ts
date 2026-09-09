@@ -1,3 +1,5 @@
+import { escapeRegExp } from "./string-utils.js";
+
 export type FeatureHintKind = "service" | "cli-command" | "library";
 
 export type TrustBoundary =
@@ -15,9 +17,7 @@ function normalizeHintInput(value: string): string {
 }
 
 function hasHintToken(value: string, tokens: readonly string[]): boolean {
-	const escaped = tokens.map((token) =>
-		token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-	);
+	const escaped = tokens.map((token) => escapeRegExp(token));
 	const alternatives = escaped.join("|");
 	// Path/word boundaries are deliberately explicit: a token must occupy a
 	// segment (or a dot/dash/underscore-separated word), never an arbitrary

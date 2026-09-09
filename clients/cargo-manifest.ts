@@ -190,7 +190,7 @@ export function parseTomlStringArray(
  * true`) never matches either — the literal key is immediately followed by
  * `=`, not `.`.
  */
-export function parseTomlScalarString(
+function parseTomlScalarString(
 	content: string | undefined,
 	key: string,
 ): string | undefined {
@@ -219,7 +219,25 @@ export function parseTomlScalarString(
  * consolidated the rest of this file's callers onto (#2498).
  */
 export function hasCargoWorkspaceTable(content: string): boolean {
-	return extractTomlTableSection(content, "workspace") !== undefined;
+	return hasTomlTable(content, "workspace");
+}
+
+/**
+ * True when `content` declares the table `tableName` — the yes/no half of
+ * {@link extractTomlTableSection}, for readers that only need presence.
+ * `tableName` is a regex SOURCE (it is interpolated into the heading pattern),
+ * so a dotted table escapes its dots: `"tool\\.uv\\.workspace"`.
+ *
+ * Exists so a second file does not re-derive the `!== undefined` comparison
+ * that {@link hasCargoWorkspaceTable} exists to hold: `clients/
+ * python-environment.ts`'s uv-workspace discovery carried a private
+ * `hasUvWorkspaceTable` that was this function's body with a different table
+ * name (review round 2, F5). The `!== undefined` (not a truthy test) is the
+ * load-bearing part both callers share: an empty table — a heading with no
+ * keys — extracts as `""`, which is falsy but IS "table present".
+ */
+export function hasTomlTable(content: string, tableName: string): boolean {
+	return extractTomlTableSection(content, tableName) !== undefined;
 }
 
 /**
@@ -301,7 +319,7 @@ export function readCargoDependencyNames(content: string): string[] {
  * (`edition.workspace = true`) or the inline-table form
  * (`edition = { workspace = true }`).
  */
-export function isTomlKeyWorkspaceInherited(
+function isTomlKeyWorkspaceInherited(
 	content: string | undefined,
 	key: string,
 ): boolean {

@@ -9,7 +9,7 @@ defect_class: hallucination
 inline_tier: blocking
 language: python
 
-message: "Hallucinated import — '{NAME}' does not exist in '{MODULE}'"
+message: "Hallucinated import — '{{NAME}}' does not exist in '{{MODULE}}'"
 
 description: |
   This import is from the wrong package. A name from one framework is being
@@ -32,7 +32,7 @@ metavars:
 
 post_filter: match_captures
 post_filter_params:
-  MODULE: "^(requests|flask|django|typing|collections|asyncio|json|unittest|pytest|urllib|sqlalchemy)$"
+  MODULE: "^(requests|flask|django|typing|collections|asyncio|json|unittest|pytest|urllib)$"
   NAME: "^(JSONResponse|HTMLResponse|RedirectResponse|StreamingResponse|Depends|Query|Path|Body|Header|Cookie|Form|File|UploadFile|FastAPI|APIRouter|HTTPException|BackgroundTasks|dataclass|fields|BaseModel|Field|validator|aiohttp|parse|stringify|fixture|TestCase|get|post|put|delete|Model|Session|Column|Integer|String)$"
 
 has_fix: false

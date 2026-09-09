@@ -388,7 +388,7 @@ async function analyzeLatency(files, state) {
 					const md = entry.metadata ?? {};
 					// #2526 R2 F2 / #2552 R4: the join key is (session, root), not
 					// session alone — see `configJoinKey`'s doc comment. `entry.filePath`
-					// is this row's root (the same `normalizeFilePath(cwd)` value the
+					// is this row's root (the same `configResolutionKey(cwd)` value the
 					// pending mark's `root=` carries); a row from a build that predates
 					// the session id carries none, and simply joins to nothing.
 					if (
@@ -1006,9 +1006,11 @@ function iso(date) {
  * here) — joining on session id alone let one root's row silently clear every
  * OTHER root's deficit under the same session id. `root` is whatever string
  * the producer already wrote (the pending mark's `root=`, or the row's own
- * `filePath` — both come from the SAME `normalizeFilePath(cwd)` call in
- * `clients/lsp/config.ts`, so they compare equal without this script
- * re-deriving any path normalization of its own).
+ * `filePath` — both come from the SAME `configResolutionKey(cwd)` call in
+ * `clients/lsp/config.ts`, which folds separators, canonicalizes, then folds
+ * again — `normalizeFilePath(path.resolve(normalizeFilePath(cwd)))`, in that
+ * order (#2518 review F6; resolving first breaks POSIX backslash names), so they compare equal without this script re-deriving any
+ * path normalization of its own).
  */
 function configJoinKey(sessionId, root) {
 	return `${sessionId} ${root}`;

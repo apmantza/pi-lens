@@ -17,6 +17,7 @@ import {
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
 import { normalizeMapKey } from "../../clients/path-utils.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 import { removeTempDirSync } from "./test-utils.js";
 
 const openFile = vi.fn(
@@ -66,13 +67,18 @@ function warningDiagnostics(count: number): LSPDiagnostic[] {
 }
 
 vi.mock("../../clients/lsp/index.js", () => ({
-	getLSPService: () => ({
-		supportsLSP: (filePath: string) => filePath.endsWith(".ts"),
-		openFile,
-		getDiagnostics,
-		codeAction,
-		getLastKnownDiagnostics,
-	}),
+	// The five methods `buildActionableWarningsReport` actually reads, overridden
+	// on a factory-seeded surface (#2592): a sixth one added to the production
+	// path would otherwise TypeError into the report's swallow-all catch and
+	// silently blank this suite's bounds assertions.
+	getLSPService: () =>
+		makeLspServiceDouble({
+			supportsLSP: (filePath: string) => filePath.endsWith(".ts"),
+			openFile,
+			getDiagnostics,
+			codeAction,
+			getLastKnownDiagnostics,
+		}),
 }));
 
 let tmpDir: string;

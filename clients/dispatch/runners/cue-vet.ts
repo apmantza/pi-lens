@@ -105,6 +105,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { safeSpawnAsync } from "../../safe-spawn.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import {
 	createAvailabilityChecker,
 	resolveAvailableOrInstall,
@@ -339,7 +340,7 @@ const cueVetRunner: RunnerDefinition = {
 	timeoutMs: 30_000,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		const cwd = ctx.cwd || process.cwd();
+		const cwd = resolveRunnerCwd(ctx, "cue-vet");
 
 		let cmd: string | null = null;
 		if (await cue.isAvailableAsync(cwd)) {

@@ -22,6 +22,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 const mocked = vi.hoisted(() => ({ service: null as unknown }));
 const { getServersForFileWithConfig } = vi.hoisted(() => ({
@@ -95,12 +96,12 @@ describe("lsp_diagnostics batch — per-server serialization (#631)", () => {
 			return [];
 		});
 
-		mocked.service = {
+		mocked.service = makeLspServiceDouble({
 			touchFile,
 			getDiagnostics: vi.fn().mockResolvedValue([]),
 			getDiagnosticsHealth: vi.fn().mockReturnValue(undefined),
 			getCapabilitySnapshots: vi.fn().mockResolvedValue([]),
-		};
+		});
 	});
 
 	function writeFiles(names: string[]): string[] {

@@ -40,6 +40,7 @@ vi.mock("../../clients/recent-touches.js", () => ({
 
 import { dispatchLintWithResult } from "../../clients/dispatch/integration.js";
 import { getLSPService } from "../../clients/lsp/index.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 const ATTACHMENT_PREFIX = "pi-lens applied autofix to ";
 const ATTACHED_CLAIM = "is authoritative after autofix";
@@ -99,13 +100,15 @@ function toolDeps(runtime: RuntimeCoordinator, biomeClient: BiomeClient) {
 describe("#1590 post-autofix instruction has one author", () => {
 	beforeEach(() => {
 		logLatency.mockClear();
-		vi.mocked(getLSPService).mockReturnValue({
-			supportsLSP: () => false,
-			hasLSP: async () => false,
-			openFile: async () => {},
-			touchFile: async () => {},
-			getAllDiagnostics: async () => new Map(),
-		} as never);
+		vi.mocked(getLSPService).mockReturnValue(
+			makeLspServiceDouble({
+				supportsLSP: () => false,
+				hasLSP: async () => false,
+				openFile: async () => {},
+				touchFile: async () => {},
+				getAllDiagnostics: async () => new Map(),
+			}) as never,
+		);
 		vi.mocked(dispatchLintWithResult).mockReset();
 		vi.mocked(dispatchLintWithResult).mockResolvedValue({
 			diagnostics: [],

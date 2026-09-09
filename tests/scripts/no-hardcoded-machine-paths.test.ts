@@ -21,20 +21,10 @@
 import { describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { USER_PROFILE_PATH_RE } from "../support/user-profile-path-pattern.js";
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 const SCRIPTS_DIR = path.join(REPO_ROOT, "scripts");
-
-// A user-profile absolute path literal, any of:
-//   - a Windows drive letter (any letter, not just C:) followed by \Users\
-//     or /Users/ -- e.g. C:\Users\name, C:/Users/name, D:\Users\name
-//   - a POSIX home directory -- /home/name (Linux) or /Users/name (macOS)
-// Case-insensitive throughout (NTFS/APFS are case-insensitive by default,
-// and a literal could be typed "c:/users/..." or "C:\USERS\...").
-// Deliberately NOT anchored to any one username or OS -- the defect shape
-// is "baked-in machine path", not "baked-in R3LiC on Windows".
-const USER_PROFILE_PATH_RE =
-	/(?:[A-Za-z]:[\\/]+Users[\\/]+[A-Za-z0-9_.-]+|\/(?:home|Users)\/[A-Za-z0-9_.-]+)/gi;
 
 // Legitimate exceptions, reviewed per entry -- never a blanket file skip.
 // Each entry names the file, the issue/PR that reviewed it, and why the hit

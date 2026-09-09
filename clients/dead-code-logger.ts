@@ -49,8 +49,3 @@ export function logDeadCodeScan(event: DeadCodeScanEvent): void {
 	if (isTestMode()) return;
 	writer.log({ ts: new Date().toISOString(), ...event });
 }
-
-/** Resolve once all enqueued dead-code writes are on disk (tests/shutdown). */
-export function flushDeadCodeLog(): Promise<void> {
-	return writer.flush();
-}

@@ -44,17 +44,8 @@ export function createAstGrepReplaceTool(astGrepClient: AstGrepClient) {
 		name: "ast_grep_replace" as const,
 		label: "AST Replace",
 		description:
-			"Replace code using AST-aware pattern matching. IMPORTANT: Use specific AST patterns, not text. Dry-run by default (use apply=true to apply).\n\n" +
-			"✅ GOOD patterns (single AST node):\n" +
-			"  - pattern='console.log($MSG)' rewrite='logger.info($MSG)'\n" +
-			"  - pattern='var $X' rewrite='let $X'\n" +
-			"  - pattern='function $NAME() { }' rewrite='' (delete)\n\n" +
-			"❌ BAD patterns (will error):\n" +
-			"  - Raw text without code structure\n" +
-			'  - Missing parentheses: use it($TEST) not it"text"\n' +
-			"  - Incomplete code fragments\n\n" +
-			"Always use 'paths' to scope to specific files/folders. Dry-run first to preview changes.",
-		promptSnippet: "AST-aware structural find-and-replace",
+			'Find and rewrite code by AST structure; preview by default. Example: `{pattern: "var $X", rewrite: "let $X", apply: false}`.',
+		promptSnippet: "Preview an AST-aware code rewrite",
 		renderResult: compactRenderResult<{
 			matchCount?: number;
 			applied?: boolean;

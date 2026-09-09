@@ -25,6 +25,7 @@ import { parseRuffOutput } from "./utils/diagnostic-parsers.js";
 import {
 	createAvailabilityChecker,
 	resolveAvailableOrInstall,
+	resolveRunnerCwd,
 } from "./utils/runner-helpers.js";
 
 const ruff = createAvailabilityChecker("ruff", ".exe");
@@ -76,7 +77,7 @@ const ruffRunner: RunnerDefinition = {
 	priority: PRIORITY.FORMAT_AND_LINT_PRIMARY,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		const cwd = ctx.cwd || process.cwd();
+		const cwd = resolveRunnerCwd(ctx, "ruff");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("ruff-lint")) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
@@ -94,7 +95,7 @@ const ruffRunner: RunnerDefinition = {
 		const checkResult = await safeSpawnAsync(
 			cmd,
 			["check", "--output-format", "json", ...configArgs, ctx.filePath],
-			{ timeout: 30000 },
+			{ cwd, timeout: 30000 },
 		);
 
 		const raw = stripAnsi(checkResult.stdout + checkResult.stderr);

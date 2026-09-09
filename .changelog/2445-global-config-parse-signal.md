@@ -1,5 +1,0 @@
----
-section: Fixed
----
-
-- **A malformed `~/.pi-lens/config.json` now says so, as a global-config problem (closes #2445)** — the global config loader wrapped its read and parse in a bare `catch` that returned "no config", so a syntax error in your machine-global settings produced no log line, no degradation-ledger row, and no notification from the loader that owns the file; every setting in it silently stopped applying. The only signal was the LSP loader's report of the same path, labelled `ignoring invalid LSP config`, which points at the wrong subsystem. The failure is now reported by the global loader itself under `[PILENS_CFG_0001]` with the `ignoring invalid global config` prose, a file that parses but is a list or a scalar warns instead of being dropped without a word, and the subsystem a config-read failure is reported under is derived from the FILE rather than from whichever loader opened it — so `pi-lsp.json` is still an LSP-config problem, `~/.pi-lens/config.json` is a global-config problem, and `.pi-lens.json` is a project-config problem, each reported exactly once no matter how many loaders read it.

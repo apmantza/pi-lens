@@ -600,7 +600,8 @@ describe("widget-state renderWidget", () => {
 		// The filename appears in the packed file row, but NOT as a standalone
 		// dim header line above the diagnostics.
 		const standaloneFilenameHeaders = lines.filter(
-			(l) => l.trim() === l.trim() && /^\s*\[[^m]*m?cors\.ts\[/.test(l),
+			(l) =>
+				l.trim() === l.trim() && /^\s*\u001b\[[^m]*m?cors\.ts\u001b\[/.test(l),
 		);
 		expect(standaloneFilenameHeaders.length).toBe(0);
 	});
@@ -677,7 +678,7 @@ describe("widget-state renderWidget", () => {
 		// a broken precedence branch).
 		const row = renderWidget(120, theme).find((l) => l.includes("both-failed"));
 		expect(row).toBeDefined();
-		const plain = row!.replace(/\[[0-9;]*m/g, "").trimStart();
+		const plain = row!.replace(/\u001b\[[0-9;]*m/g, "").trimStart();
 		expect(plain.startsWith("●")).toBe(true);
 		expect(plain.startsWith("x")).toBe(false);
 	});
@@ -697,7 +698,7 @@ describe("widget-state renderWidget", () => {
 			l.includes("both-failed-v"),
 		);
 		expect(row).toBeDefined();
-		const plain = row!.replace(/\[[0-9;]*m/g, "").trimStart();
+		const plain = row!.replace(/\u001b\[[0-9;]*m/g, "").trimStart();
 		expect(plain.startsWith("●")).toBe(true);
 		expect(plain.startsWith("x")).toBe(false);
 	});

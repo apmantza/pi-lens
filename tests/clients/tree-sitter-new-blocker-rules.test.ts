@@ -78,7 +78,7 @@ describe("S2970 — incomplete assertion (TS)", () => {
 		const query = await getQuery("ts-incomplete-assertion");
 		const filePath = writeTempFile(
 			"ts",
-			`it("should work", () => {
+			`it("checks foo", () => {
 				expect(foo);
 			});
 			`,
@@ -92,7 +92,7 @@ describe("S2970 — incomplete assertion (TS)", () => {
 		const query = await getQuery("ts-incomplete-assertion");
 		const filePath = writeTempFile(
 			"ts",
-			`it("should work", () => {
+			`it("checks foo", () => {
 				expect(foo).toBe;
 			});
 			`,
@@ -106,7 +106,7 @@ describe("S2970 — incomplete assertion (TS)", () => {
 		const query = await getQuery("ts-incomplete-assertion");
 		const filePath = writeTempFile(
 			"ts",
-			`it("should work", () => {
+			`it("checks foo", () => {
 				expect(foo).not.toBe;
 			});
 			`,
@@ -120,7 +120,7 @@ describe("S2970 — incomplete assertion (TS)", () => {
 		const query = await getQuery("ts-incomplete-assertion");
 		const filePath = writeTempFile(
 			"ts",
-			`it("should work", () => {
+			`it("checks foo", () => {
 				expect(foo).toBe(true);
 			});
 			`,
@@ -134,7 +134,7 @@ describe("S2970 — incomplete assertion (TS)", () => {
 		const query = await getQuery("ts-incomplete-assertion");
 		const filePath = writeTempFile(
 			"ts",
-			`it("should work", () => {
+			`it("checks foo", () => {
 				expect(foo).not.toBe(1);
 			});
 			`,
@@ -148,7 +148,7 @@ describe("S2970 — incomplete assertion (TS)", () => {
 		const query = await getQuery("ts-incomplete-assertion");
 		const filePath = writeTempFile(
 			"ts",
-			`it("should work", () => {
+			`it("checks foo", () => {
 				const matcher = expect(foo).toBe;
 			});
 			`,
@@ -162,7 +162,7 @@ describe("S2970 — incomplete assertion (TS)", () => {
 		const query = await getQuery("ts-incomplete-assertion");
 		const filePath = writeTempFile(
 			"ts",
-			`it("should work", () => {
+			`it("checks foo", () => {
 				expect(foo).to.be.true;
 			});
 			`,

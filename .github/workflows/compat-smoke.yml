@@ -93,17 +93,32 @@ jobs:
           ANTHROPIC_API_KEY: sk-ant-dummy-ci-no-credits-needed
         run: node scripts/compat-smoke-behavioral.mjs
 
-      # Low-noise alert: only fires when a layer failed for a REAL reason
-      # (exit 1 = contract/assertion drift), not an infra error (exit 2) —
-      # an infra failure means this run couldn't test anything meaningful,
-      # so alerting on it would be noise, not signal. Searches for the
-      # existing open alert issue by title before creating a new one so
-      # repeated nightly failures refresh one issue instead of piling up.
-      - name: Alert on contract drift (create-or-update tracking issue)
+      # Alert whenever either layer's step outcome is non-success — this
+      # covers BOTH real content drift and an infra failure (a dependency's
+      # file layout moved, npm install failed, ...): an infra failure means
+      # Layer A couldn't actually re-check anything, which is itself worth a
+      # maintainer's attention, just a DIFFERENT one than drift. #2581: the
+      # body used to print the raw GH step outcome ("failure") for both
+      # cases under a title that always says "drift detected" — a
+      # relocated file (ENOENT) got reported and re-confirmed as drift for
+      # two nightly runs before anyone opened the log and found it was
+      # never a contract regression. Layer A's own `outcome` output
+      # (verified/drift/infra from compat-contracts.mjs, distinct from the
+      # GH step outcome above) drives the wording below so the two are never
+      # conflated again. Searches for the existing open alert issue by title
+      # before creating a new one so repeated nightly failures refresh one
+      # issue instead of piling up; the title itself stays constant so that
+      # search keeps finding it regardless of which outcome kind is current.
+      - name: Alert on contract drift or infra failure (create-or-update tracking issue)
         if: >-
-          steps.layer_a.outcome == 'failure' || steps.layer_b.outcome == 'failure'
+          always() && (steps.layer_a.outcome == 'failure' ||
+          steps.layer_b.outcome == 'failure' ||
+          (steps.layer_a.outcome == 'success' && steps.layer_b.outcome == 'success'))
+        # Tracker maintenance must not mask the smoke job's own verdict.
+        continue-on-error: true
         env:
-          LAYER_A_OUTCOME: ${{ steps.layer_a.outcome }}
+          LAYER_A_STEP_OUTCOME: ${{ steps.layer_a.outcome }}
+          LAYER_A_KIND: ${{ steps.layer_a.outputs.outcome || 'unknown' }}
           LAYER_B_OUTCOME: ${{ steps.layer_b.outcome }}
           LAYER_A_VERSIONS: >-
             ${{ steps.layer_a.outputs.versions ||
@@ -112,43 +127,69 @@ jobs:
           set -uo pipefail
           TITLE="compat-smoke: third-party contract drift detected"
           BODY_FILE="$RUNNER_TEMP/compat-smoke-alert-body.md"
+
+          case "$LAYER_A_KIND" in
+            drift)
+              LAYER_A_LINE="**DRIFT** — a pinned contract's installed source"
+              LAYER_A_LINE+=" no longer matches the shape pi-lens depends on."
+              LAYER_A_LINE+=" This is a real regression to investigate."
+              ;;
+            infra)
+              LAYER_A_LINE="**INFRA FAILURE** — Layer A could not locate one"
+              LAYER_A_LINE+=" or more contracts' source files at any known"
+              LAYER_A_LINE+=" candidate path (a dependency's layout likely"
+              LAYER_A_LINE+=" moved/renamed the file, or the install itself"
+              LAYER_A_LINE+=" failed). NOT a confirmed contract regression —"
+              LAYER_A_LINE+=" see the run log for which candidates were"
+              LAYER_A_LINE+=" tried, then append the new location to that"
+              LAYER_A_LINE+=" contract's \`parts\` in"
+              LAYER_A_LINE+=" \`scripts/lib/compat-contracts.mjs\`'s"
+              LAYER_A_LINE+=" \`CONTRACTS\` list."
+              ;;
+            verified)
+              LAYER_A_LINE="verified — passed (this alert fired because of"
+              LAYER_A_LINE+=" Layer B, see below)."
+              ;;
+            *)
+              LAYER_A_LINE="unknown (step outcome: ${LAYER_A_STEP_OUTCOME};"
+              LAYER_A_LINE+=" the script did not report an outcome — check"
+              LAYER_A_LINE+=" the run log directly)."
+              ;;
+          esac
+
           {
             echo "The nightly [subagent-extension compat smoke](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})" \
-              "detected drift in a pinned third-party contract used by" \
-              "pi-lens's subagent-compatibility features (#473/#474/#475)."
+              "flagged pi-lens's subagent-compatibility contracts" \
+              "(#473/#474/#475)."
             echo ""
-            echo "- Layer A (pinned-contract verification):" \
-              "**${LAYER_A_OUTCOME}**"
+            echo "- Layer A (pinned-contract verification): ${LAYER_A_LINE}"
             echo "- Layer B (real-pi behavioral smoke): **${LAYER_B_OUTCOME}**"
             echo "- Installed versions this run: ${LAYER_A_VERSIONS}"
             echo ""
             echo "See the [run log](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID})" \
               "for failed checks, and \`docs/subagent-compat.md\` for the" \
-              "contracts and files each check verifies."
+              "contracts and files each check verifies, including the" \
+              "verified / drift / infra outcome definitions."
             echo ""
             echo "_This issue is auto-refreshed by the nightly compat-smoke" \
               "workflow — do not close it while the check is failing. Once" \
-              "drift is resolved (upstream revert or pi-lens update)," \
-              "close it._"
+              "resolved (upstream revert, pi-lens update, or the file" \
+              "location added to the locator), close it._"
           } > "$BODY_FILE"
 
-          EXISTING_ISSUE="$(
-            gh issue list --repo "$GITHUB_REPOSITORY" --state open \
-              --search "in:title \"$TITLE\"" --json number,title \
-              --jq ".[] | select(.title == \"$TITLE\") | .number" | head -1
-          )"
-          if [ -n "$EXISTING_ISSUE" ]; then
-            echo "updating existing issue #$EXISTING_ISSUE"
-            gh issue edit "$EXISTING_ISSUE" \
-              --repo "$GITHUB_REPOSITORY" --body-file "$BODY_FILE"
-            COMMENT="Still failing: Layer A=${LAYER_A_OUTCOME},"
-            COMMENT+=" Layer B=${LAYER_B_OUTCOME}"
-            COMMENT+=" (versions: ${LAYER_A_VERSIONS})."
-            gh issue comment "$EXISTING_ISSUE" --repo "$GITHUB_REPOSITORY" \
-              --body "$COMMENT"
-          else
-            echo "creating new alert issue"
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" \
+          COMMENT="Still flagged: Layer A=${LAYER_A_KIND},"
+          COMMENT+=" Layer B=${LAYER_B_OUTCOME}"
+          COMMENT+=" (versions: ${LAYER_A_VERSIONS})."
+          if [ "$LAYER_A_STEP_OUTCOME" = success ] && [ "$LAYER_B_OUTCOME" = success ]; then
+            node scripts/upsert-tracking-issue.mjs \
+              --title "$TITLE" \
+              --label "area:session,area:lsp,area:tests" \
               --body-file "$BODY_FILE" \
-              --label "area:session,area:lsp,area:tests"
+              --clean --close-when-clean
+          else
+            node scripts/upsert-tracking-issue.mjs \
+              --title "$TITLE" \
+              --label "area:session,area:lsp,area:tests" \
+              --body-file "$BODY_FILE" \
+              --comment "$COMMENT"
           fi

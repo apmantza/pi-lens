@@ -59,7 +59,6 @@
 import { resetIgnoredConfigWarnCache } from "../config-warn.js";
 import * as os from "node:os";
 import path from "node:path";
-import { BoundedLruCache } from "../bounded-cache.js";
 import {
 	lspSectionOf,
 	type PiLensConfigResolution,
@@ -74,17 +73,20 @@ import {
 	currentSessionRecordId,
 	logLatency,
 	releaseOncePerSessionPhase,
+	releasePhaseClaim,
 } from "../latency-logger.js";
 import { getPiLensGlobalConfigPath } from "../lens-config.js";
 import { normalizeFilePath } from "../path-utils.js";
+import { resolveToolCwd } from "../tool-cwd.js";
 import { logSessionStart } from "../sessionstart-logger.js";
 import { launchLSP } from "./launch.js";
 import {
 	registerSessionRoot,
 	resetSessionRootsForTests,
+	sessionRootConfigEntries,
+	setSessionRootConfig,
 } from "./session-roots.js";
 import {
-	createRootDetector,
 	LSP_SERVERS,
 	resetLSPCaseSensitivityState,
 	type LSPServerInfo,
@@ -239,9 +241,46 @@ const CONFIG_RESOLVED_PHASE = "config_resolved";
  * claim recorded the FIRST root's documents and nothing else — project B's
  * legacy config document never reached a row, so the
  * "legacy-document-with-no-records" smell structurally could not fire for it.
- * `normalizeFilePath` keys it, the repo-wide rule for every path-keyed map
- * (#210): a `/`-vs-`\` spelling of one root must not buy a second row.
+ * `configResolutionKey` keys it (fold, canonicalize, fold — see below), the
+ * repo-wide rule for every path-keyed map (#210): a `/`-vs-`\` spelling of
+ * one root must not buy a second row.
  */
+/**
+ * THE (session, root) key of every config-resolution record: the
+ * `config_resolution_pending` mark, the `config_resolved` row and claim, and
+ * the release of that claim when the root is evicted.
+ *
+ * Fold separators, THEN canonicalize, then fold again — in that order, and
+ * neither step alone is enough (#2518 review F6). `normalizeFilePath` folds
+ * separators and Windows casing but is the IDENTITY on a POSIX path that
+ * merely needs canonicalizing, so `"/proj/"` and `"/proj"` produced two
+ * different claim keys. `path.resolve` fixes that and nothing else — and it
+ * cannot run first: on POSIX a backslash is an ordinary filename character,
+ * so resolving `"/proj\\sub"` before folding yields
+ * `<process.cwd()>/proj\sub`, a different root entirely. That is the #2526 R2
+ * spelling case (`tests/clients/config-resolved-phase.test.ts`, "a /-vs-\
+ * spelling of one root does not buy a second row"), which caught exactly this
+ * ordering while it was wrong. Resolving here rather than at
+ * each caller is what makes the keys identical BY CONSTRUCTION: the callers
+ * do not agree today (`initLSPConfig` passes its registry-resolved cwd,
+ * `clients/runtime-session.ts`'s two warm-path `loadLSPConfig` calls pass the
+ * session cwd verbatim, and `analysisRoot` from `.pi-lens.json` can carry a
+ * trailing slash), and a per-caller normalization is exactly the shape 1
+ * defect this key keeps being bitten by — the write form and the read form
+ * diverging because two sites each folded the path their own way.
+ *
+ * It is also the key `clients/lsp/session-roots.ts` stores its roots under,
+ * once composed: the registry key is `path.resolve(cwd)`, and this function
+ * applied to it is idempotent, so `forgetConfigResolvedClaims` releases
+ * exactly the claim `recordConfigResolved` took.
+ */
+function configResolutionKey(cwd: string): string {
+	// Fold first (separators, Windows casing), canonicalize second (trailing
+	// separators, relative segments), fold again so the result keeps the
+	// forward-slash shape every producer and the analyzer already compare on.
+	return normalizeFilePath(path.resolve(normalizeFilePath(cwd)));
+}
+
 /**
  * Announce, at the instant a resolution is actually about to be attempted,
  * that THIS session expects a `config_resolved` row (#2526 review round 3,
@@ -281,13 +320,13 @@ const CONFIG_RESOLVED_PHASE = "config_resolved";
  * row, which the analyzer's join reads as "expected and never happened"
  * rather than silently matching "never expected at all".
  *
- * Carries `root=<normalizeFilePath(cwd)>` (#2552 review round 4, MEDIUM): the
+ * Carries `root=<configResolutionKey(cwd)>` (#2552 review round 4, MEDIUM): the
  * warm MCP server keeps ONE session id for the life of the process but calls
  * this once per SERVED ROOT (`ensureReady` per root, `mcp/server.ts`) — a
  * session-id-only mark let one root's `config_resolved` row silently clear
  * every OTHER root's deficit under the same id, reintroducing review round
  * 2's F3 defect one layer up, at the analyzer's join instead of the claim.
- * The value is the SAME `normalizeFilePath(cwd)` string
+ * The value is the SAME {@link configResolutionKey} string
  * {@link recordConfigResolved} uses for its claim scope and its row's
  * `filePath`, so the mark and the row compare equal without the analyzer
  * re-deriving any path normalization of its own.
@@ -295,7 +334,7 @@ const CONFIG_RESOLVED_PHASE = "config_resolved";
 function publishConfigResolutionPending(cwd: string): void {
 	logSessionStart(
 		`session_start config_resolution_pending session=${currentSessionRecordId()} ` +
-			`root=${normalizeFilePath(cwd)}`,
+			`root=${configResolutionKey(cwd)}`,
 	);
 }
 
@@ -309,8 +348,10 @@ function recordConfigResolved(
 	// #2552 review round 4: computed ONCE and reused for the claim scope, the
 	// row's `filePath`, and the sessionstart line's `root=` — one normalization
 	// of `cwd`, so the pending mark, the row, and the claim can never disagree
-	// about which root they name.
-	const root = normalizeFilePath(cwd);
+	// about which root they name. #2518 review F6 moved that one normalization
+	// into `configResolutionKey`, so callers passing the same root spelled
+	// differently cannot disagree either.
+	const root = configResolutionKey(cwd);
 	if (!claimPhaseOncePerSession(CONFIG_RESOLVED_PHASE, root)) {
 		return;
 	}
@@ -452,10 +493,15 @@ export function createCustomServer(
 	return {
 		id,
 		name: config.name,
+		custom: true,
 		extensions: config.extensions,
 		root: config.rootMarkers
-			? createRootDetector(config.rootMarkers)
-			: async () => process.cwd(),
+			? async (file) =>
+					resolveToolCwd("lsp", id, file, {
+						cwd: process.cwd(),
+						rootMarkers: config.rootMarkers,
+					})
+			: async (file) => resolveToolCwd("lsp", id, file, { cwd: process.cwd() }),
 		async spawn(root) {
 			const proc = await launchLSP(config.command, config.args ?? ["--stdio"], {
 				cwd: root,
@@ -474,7 +520,6 @@ const EMPTY_CONFIG: RegisteredLSPConfig = {
 	serverOverrides: new Map(),
 };
 
-const workspaceConfigs = new BoundedLruCache<string, RegisteredLSPConfig>(32);
 /** In-flight config initialization promises to prevent duplicate concurrent loads */
 const configInFlight = new Map<string, Promise<void>>();
 
@@ -491,7 +536,12 @@ function getConfigForFile(filePath: string): RegisteredLSPConfig {
 	const resolvedFilePath = path.resolve(filePath);
 	let bestMatch: { root: string; config: RegisteredLSPConfig } | undefined;
 
-	for (const [root, config] of workspaceConfigs) {
+	// #2518: the per-root configs ARE the session-root registry's values, so
+	// this walk sees a config for exactly the roots that registry still serves.
+	// `undefined` is a root whose first load is still in flight — the same
+	// "no entry yet" state this walk skipped before the two stores merged.
+	for (const [root, config] of sessionRootConfigEntries()) {
+		if (config === undefined) continue;
 		if (!isSameOrChildPath(resolvedFilePath, root)) continue;
 		if (!bestMatch || root.length > bestMatch.root.length) {
 			bestMatch = { root, config };
@@ -511,11 +561,14 @@ function getConfigForFile(filePath: string): RegisteredLSPConfig {
  * `initLSPConfig`. That call was the finding: a read-only query ran a full
  * session initialization, which (a) registered the caller's cwd as a served
  * session root, widening the #2052 access gate for a tree the session never
- * opened, and (b) wrote the 32-entry `workspaceConfigs` LRU, so ~40 queries
- * against other directories evicted a live root's config and silently lifted
- * the operator's `disabledServers` denial — the exact inversion the surface
- * promises cannot happen. With the conversion spelled here, both writes stop
- * being something the query has to opt out of: it never reaches them.
+ * opened, and (b) wrote the per-root config store, which was then a separate
+ * 32-entry LRU, so ~40 queries against other directories evicted a live root's
+ * config and silently lifted the operator's `disabledServers` denial — the
+ * exact inversion the surface promises cannot happen. With the conversion
+ * spelled here, both writes stop being something the query has to opt out of:
+ * it never reaches them. (#2518 later removed the second cap by making the
+ * config the registry's own value; a query that skips the registry still skips
+ * both.)
  *
  * Still ONE definition, so the derived config and the session-registered one
  * cannot disagree about what a document means.
@@ -559,6 +612,37 @@ export function registerLSPConfig(config: LSPConfig): RegisteredLSPConfig {
 }
 
 /**
+ * Drop the `config_resolved` claim of every root the registry just evicted
+ * (#2518 review F1).
+ *
+ * `recordConfigResolved` claims that row once per (session, root), which is
+ * right while the resolved config is still in the store: a second
+ * `loadLSPConfig` for a root already resolved this session re-derives the same
+ * answer and needs no second row. An EVICTED root is the other case — its
+ * resolved config is gone, the reload is a genuine second resolution, and its
+ * row is the only record of what the reloaded config was. Without this release
+ * the reload publishes a `config_resolution_pending` mark that no row ever
+ * answers, which reads in the analyzer exactly like a resolution that never
+ * finished.
+ *
+ * Rows stay bounded because evictions do, and evictions are counted:
+ * `lsp-session-root-evicted` in the degradation ledger.
+ *
+ * The release derives its key with {@link configResolutionKey}, the ONE
+ * expression the claim itself is taken with — not a second normalization that
+ * happens to match. Round 2 shipped `normalizeFilePath(root)` here against a
+ * claim keyed on the caller's own `normalizeFilePath(cwd)`, which is the same
+ * string only when `path.resolve` is the identity on that cwd: a trailing
+ * slash (what `analysisRoot` from `.pi-lens.json` and the warm paths can pass)
+ * made the release miss and the reload silent again (review F6).
+ */
+function forgetConfigResolvedClaims(evictedRoots: readonly string[]): void {
+	for (const root of evictedRoots) {
+		releasePhaseClaim(CONFIG_RESOLVED_PHASE, configResolutionKey(root));
+	}
+}
+
+/**
  * Initialize LSP configuration (call at session start).
  * Deduplicates concurrent calls for the same workspace.
  *
@@ -574,16 +658,14 @@ export async function initLSPConfig(cwd: string): Promise<void> {
 	// #2052: this cwd is now a served session root. Registered BEFORE the
 	// in-flight dedup return below, so a concurrent duplicate init still
 	// registers it rather than returning early with the root unrecorded.
-	registerSessionRoot(normalizedCwd);
+	forgetConfigResolvedClaims(registerSessionRoot(normalizedCwd));
 
 	const existing = configInFlight.get(normalizedCwd);
 	if (existing) return existing;
 
 	const promise = (async () => {
-		workspaceConfigs.set(
-			normalizedCwd,
-			registerLSPConfig(await loadLSPConfig(cwd, os.homedir())),
-		);
+		const config = registerLSPConfig(await loadLSPConfig(cwd, os.homedir()));
+		forgetConfigResolvedClaims(setSessionRootConfig(normalizedCwd, config));
 	})();
 
 	configInFlight.set(normalizedCwd, promise);
@@ -768,10 +850,10 @@ export function getServerInitOverride(
 }
 
 export function resetLSPConfigStateForTests(): void {
-	workspaceConfigs.clear();
 	resetLSPCaseSensitivityState();
-	// Reset both together: a cleared config store beside a live session-root
-	// registry would decline files for roots nothing can serve any more.
+	// One call clears both the served roots and their configs: since #2518 they
+	// are one store, so a reset cannot leave a cleared config store beside a
+	// live session-root registry declining files for roots nothing can serve.
 	resetSessionRootsForTests();
 	// The warn latch is loader state too: a test that re-reads the same broken
 	// path after this reset must see the warning again, not a latched silence.

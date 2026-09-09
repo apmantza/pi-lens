@@ -1,5 +1,0 @@
----
-section: Fixed
----
-
-- **The #2117 arena-recompaction regression test no longer flakes on a scheduling accident (closes #2293)** — `compactPostingsIntoArenaCooperatively` (`clients/word-index-store.ts`) now takes an optional test-only `{ deadline, beforeYield }` seam; production still defaults to the real 8 ms wall-clock `createDeadline(8)`. The old test asserted `grewDuringYield === true`, but that flag was only true when the real cooperative copy happened to cross the 8 ms budget before finishing — a scheduling accident that a busy CI box (or a smaller corpus) could miss, tripping `expected false to be true` on an otherwise-correct fix (3 unrelated PRs paid for this: #2279, #2452, #2456). The rewritten test injects a deadline that expires deterministically on its first check and a `beforeYield` hook that grows the victim list in-line with the real cooperative pause, so the invariant — a list that grows mid-copy is never corrupted — is now proven under a forced yield instead of a hoped-for one.

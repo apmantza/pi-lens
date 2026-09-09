@@ -21,14 +21,17 @@ vi.mock("../../clients/lsp/config.js", () => ({
 }));
 
 vi.mock("../../clients/lsp/index.js", () => ({
-	getLSPService: vi.fn(() => ({
-		touchFile: mockTouchFile,
-		supportsLSP: (f: string) => /\.(ts|tsx|js|jsx|py|cpp)$/.test(f),
-	})),
+	getLSPService: vi.fn(() =>
+		makeLspServiceDouble({
+			touchFile: mockTouchFile,
+			supportsLSP: (f: string) => /\.(ts|tsx|js|jsx|py|cpp)$/.test(f),
+		}),
+	),
 }));
 
 import { initLSPConfig, loadLSPConfig } from "../../clients/lsp/config.js";
 import { getLSPService } from "../../clients/lsp/index.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 function setStartupMode(mode: "full" | "quick"): () => void {
 	const prev = process.env.PI_LENS_STARTUP_MODE;
@@ -117,10 +120,12 @@ describe("warmFiles session start", () => {
 		vi.clearAllMocks();
 
 		vi.mocked(loadLSPConfig).mockResolvedValue({});
-		vi.mocked(getLSPService).mockReturnValue({
-			touchFile: mockTouchFile,
-			supportsLSP: (f: string) => /\.(ts|tsx|js|jsx|py|cpp)$/.test(f),
-		} as any);
+		vi.mocked(getLSPService).mockReturnValue(
+			makeLspServiceDouble({
+				touchFile: mockTouchFile,
+				supportsLSP: (f: string) => /\.(ts|tsx|js|jsx|py|cpp)$/.test(f),
+			}) as any,
+		);
 	});
 
 	afterEach(() => {
@@ -251,10 +256,12 @@ describe("warmFiles session start", () => {
 		createTempFile(env.tmpDir, "src/b.ts", "export const b = 2;");
 
 		vi.mocked(loadLSPConfig).mockResolvedValue({});
-		vi.mocked(getLSPService).mockReturnValue({
-			touchFile: mockTouchFile,
-			supportsLSP: (f: string) => /\.(ts|json|ya?ml)$/.test(f),
-		} as any);
+		vi.mocked(getLSPService).mockReturnValue(
+			makeLspServiceDouble({
+				touchFile: mockTouchFile,
+				supportsLSP: (f: string) => /\.(ts|json|ya?ml)$/.test(f),
+			}) as any,
+		);
 
 		try {
 			await handleSessionStart(makeDeps({ ctxCwd: env.tmpDir }));
@@ -283,10 +290,12 @@ describe("warmFiles session start", () => {
 		createTempFile(env.tmpDir, "b.yaml", "b: 2\n");
 
 		vi.mocked(loadLSPConfig).mockResolvedValue({});
-		vi.mocked(getLSPService).mockReturnValue({
-			touchFile: mockTouchFile,
-			supportsLSP: (f: string) => /\.ya?ml$/.test(f),
-		} as any);
+		vi.mocked(getLSPService).mockReturnValue(
+			makeLspServiceDouble({
+				touchFile: mockTouchFile,
+				supportsLSP: (f: string) => /\.ya?ml$/.test(f),
+			}) as any,
+		);
 
 		try {
 			await handleSessionStart(makeDeps({ ctxCwd: env.tmpDir }));

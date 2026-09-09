@@ -13,10 +13,19 @@ export declare function lintPrBody(
 	valid: boolean;
 	errors: string[];
 };
+export declare function localTouchesTests(
+	cwd?: string,
+	git?: (args: string[], options?: Record<string, unknown>) => string,
+): boolean;
+export declare function lintLocalPrBody(
+	body: string,
+	cwd?: string,
+	git?: (args: string[], options?: Record<string, unknown>) => string,
+): { valid: boolean; errors: string[] };
 export declare function fetchLivePrBody(
 	payloadPr: { number: number; body?: string | null },
 	fetchImpl: typeof fetch,
-): Promise<{ body: string; normalized: boolean }>;
+): Promise<{ body: string; normalized: boolean; title: string | undefined }>;
 export declare function resolveLivePrBody(
 	payloadPr: { number: number; body?: string | null },
 	fetchImpl?: typeof fetch,

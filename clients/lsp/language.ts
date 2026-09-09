@@ -78,12 +78,3 @@ export function getLanguageId(filePath: string): string | undefined {
 		getBasenameLanguageId(base)
 	);
 }
-
-/**
- * Get all extensions for a language ID
- */
-export function getExtensionsForLanguage(languageId: string): string[] {
-	return Object.entries(LANGUAGE_EXTENSIONS)
-		.filter(([, id]) => id === languageId)
-		.map(([ext]) => ext);
-}

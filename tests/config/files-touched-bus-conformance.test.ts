@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { repoRoot } from "../support/module-instance-scan.js";
 import {
+	escapeRegExp,
 	listSourceFiles,
 	relativePosix,
 	stripSource,
@@ -109,9 +110,7 @@ function busSubscriberFiles(
 			}
 		}
 		const eventArgument = `(?:["']${EVENT}["']|${
-			[...bindings]
-				.map((binding) => binding.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-				.join("|") || "(?!)"
+			[...bindings].map(escapeRegExp).join("|") || "(?!)"
 		})`;
 		return new RegExp(`\\.on\\s*\\(\\s*${eventArgument}(?=\\s*[,)])`).test(
 			source,

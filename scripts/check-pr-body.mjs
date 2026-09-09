@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
 
 const TEMPLATE_PATH = ".github/PULL_REQUEST_TEMPLATE.md";
 const TEMPLATE_FILE = resolve(
@@ -369,7 +370,7 @@ export function lintPrBody(body = "", options = {}) {
  *
  * @param {{ number: number, body?: string | null }} payloadPr
  * @param {typeof fetch} fetchImpl
- * @returns {Promise<{body: string, normalized: boolean}>}
+ * @returns {Promise<{body: string, normalized: boolean, title: string | undefined}>}
  */
 export async function fetchLivePrBody(payloadPr, fetchImpl) {
 	const token = process.env.GITHUB_TOKEN;
@@ -393,7 +394,10 @@ export async function fetchLivePrBody(payloadPr, fetchImpl) {
 	const data = await response.json();
 	if (data.body !== null && typeof data.body !== "string")
 		throw new Error("GitHub API returned no body");
-	return normalizePrBodyForChecking(data.body ?? "", payloadPr.number);
+	return {
+		...normalizePrBodyForChecking(data.body ?? "", payloadPr.number),
+		title: data.title,
+	};
 }
 
 export async function resolveLivePrBody(
@@ -494,13 +498,44 @@ export async function lintPullRequestEvent(
 	return { valid: false, repaired: false };
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-	lintPullRequestEvent()
-		.then((result) => {
-			if (!result.valid) process.exitCode = 1;
-		})
-		.catch((error) => {
-			console.error(error instanceof Error ? error.message : error);
-			process.exitCode = 1;
+export function localTouchesTests(cwd = process.cwd(), git = gitExecFileSync) {
+	let names;
+	try {
+		names = git(["diff", "--name-only", "origin/master...HEAD"], {
+			cwd,
+			encoding: "utf8",
 		});
+	} catch {
+		names = git(["diff", "--name-only", "HEAD~1"], {
+			cwd,
+			encoding: "utf8",
+		});
+	}
+	return names.split(/\r?\n/).some((name) => name.startsWith("tests/"));
+}
+
+export function lintLocalPrBody(
+	body,
+	cwd = process.cwd(),
+	git = gitExecFileSync,
+) {
+	return lintPrBody(body, {
+		requireTestAssessment: localTouchesTests(cwd, git),
+	});
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+	if (process.argv[2] === "--lint-local") {
+		const result = lintLocalPrBody(readFileSync(process.argv[3], "utf8"));
+		for (const error of result.errors) console.error(error);
+		process.exitCode = result.valid ? 0 : 1;
+	} else
+		lintPullRequestEvent()
+			.then((result) => {
+				if (!result.valid) process.exitCode = 1;
+			})
+			.catch((error) => {
+				console.error(error instanceof Error ? error.message : error);
+				process.exitCode = 1;
+			});
 }

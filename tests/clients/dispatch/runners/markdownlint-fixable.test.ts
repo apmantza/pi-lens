@@ -17,10 +17,18 @@ vi.mock("../../../../clients/safe-spawn.js", () => ({
 	safeSpawnAsync,
 }));
 
-vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
-	createAvailabilityChecker: createAvailabilityCheckerMock,
-	resolveToolCommandWithInstallFallback: vi.fn(async () => "markdownlint-cli2"),
-}));
+vi.mock(
+	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
+		>()),
+		createAvailabilityChecker: createAvailabilityCheckerMock,
+		resolveToolCommandWithInstallFallback: vi.fn(
+			async () => "markdownlint-cli2",
+		),
+	}),
+);
 
 vi.mock("../../../../clients/tool-policy.js", async (importOriginal) => {
 	const actual =

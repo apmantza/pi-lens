@@ -14,6 +14,7 @@
 import { createSubsystemLogger } from "./extension-log.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { calcCyclomaticComplexity } from "./dispatch/facts/function-facts.js";
 import {
 	firstChildOfType,
 	withTreeSitterRoot,
@@ -45,6 +46,8 @@ export interface FileComplexity {
 	aiCommentPatterns: number;
 	singleUseFunctions: number;
 	tryCatchCount: number;
+	/** Per-function metrics used by advisory reports and model diagnostics. */
+	functions: FunctionMetrics[];
 }
 
 export interface FunctionMetrics {
@@ -262,6 +265,8 @@ function isLogicalOp(node: TsNode, nodes: LangNodes): boolean {
 
 /** Cyclomatic contribution of a subtree: decision points + logical operators. */
 function subtreeCyclomatic(root: TsNode, nodes: LangNodes): number {
+	// Dispatch uses 1-based McCabe; this client exposes 0-based contributions (#2697).
+	if (nodes === JSTS) return calcCyclomaticComplexity(root) - 1;
 	let cc = 0;
 	walk(root, (n) => {
 		if (nodes.decision.has(n.type)) cc++;
@@ -568,6 +573,7 @@ export class ComplexityClient {
 			aiCommentPatterns: countAICommentPatterns(content),
 			singleUseFunctions: countSingleUseFunctions(functions),
 			tryCatchCount: countTryCatch(root, nodes),
+			functions,
 		};
 	}
 

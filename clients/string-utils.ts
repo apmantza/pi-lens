@@ -18,3 +18,17 @@
 export function compareOrdinal(a: string, b: string): number {
 	return a < b ? -1 : a > b ? 1 : 0;
 }
+
+/**
+ * Escape a string for safe interpolation into a `RegExp` source, so every
+ * regex metacharacter it contains is matched literally instead of taking on
+ * its regex meaning. This is the ONE runtime copy (#2558) — string-utils.ts
+ * is a leaf (no imports of its own), so importing it never creates a cycle.
+ * Before #2558 this same body was hand-copied under this name (and as
+ * `escapeRegExpChar`/`escapeRegExpLiteral`) into ~8 production modules and 3
+ * test helpers; fold new call sites onto this export instead of re-copying
+ * it.
+ */
+export function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}

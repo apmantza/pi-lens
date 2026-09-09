@@ -1002,17 +1002,6 @@ async function updateWordIndexDocumentAsyncUnsafe(
 	return true;
 }
 
-/** Bounds shared by every word-index build path — keep the walk off the
- * critical path on large repos: cap the file count, and skip files too large
- * to be hand-written source (generated/bundled output the source filter
- * didn't already exclude).
- *
- * Deprecated (#776): `collectWordIndexDocs` below no longer reads this
- * constant directly — it derives its cap from `getWordIndexMaxFilesDerived`
- * (project-scale.ts's `maxProjectFiles` knob), which reproduces this same
- * 6,000 default at the default base. Kept exported for tests/callers that
- * still reference the literal. */
-export const WORD_INDEX_MAX_FILES = 6000;
 export const WORD_INDEX_MAX_BYTES = 512 * 1024;
 
 export type WordIndexPreflightFiles = Array<{
@@ -1048,9 +1037,9 @@ export async function collectWordIndexDocs(
 > {
 	const { collectSourceFilesAsync } = await import("./source-filter.js");
 	// #747 hardening: pass the cap INTO the walk — without it,
-	// `collectSourceFilesAsync` defaults to an unbounded traversal and the
-	// `WORD_INDEX_MAX_FILES` slice below only trims the result AFTER the whole
-	// tree (all of $HOME, on a misrooted cwd) has already been enumerated.
+	// `collectSourceFilesAsync` defaults to an unbounded traversal and any
+	// slice below would only trim the result AFTER the whole tree (all of
+	// $HOME, on a misrooted cwd) has already been enumerated.
 	// #760: the walk is additionally bounded by source-filter's default
 	// visited-entry budget (DEFAULT_MAX_SCAN_ENTRIES), so a mixed tree with few
 	// source files among a huge pile of non-source files can't force a
@@ -1122,13 +1111,13 @@ export interface WordIndexRefreshResult {
 	timings: WordIndexRefreshTimings;
 }
 
-export interface WordIndexRefreshTimings {
+interface WordIndexRefreshTimings {
 	sourceWalkMs: number;
 	statWalkMs: number;
 	refreshReadsMs: number;
 }
 
-export interface WordIndexRebuildRequired {
+interface WordIndexRebuildRequired {
 	mode: "full-required";
 	reason:
 		| "missing-incremental-metadata"
@@ -1151,7 +1140,7 @@ export interface WordIndexRefreshOptions {
 // Node's fs.promises.stat runs on libuv's threadpool (default 4 slots), so
 // real parallelism tops out there; the surplus workers are queue depth that
 // keeps the pool saturated without starving other threadpool consumers.
-export const WORD_INDEX_STAT_CONCURRENCY = 8;
+const WORD_INDEX_STAT_CONCURRENCY = 8;
 
 const WORD_INDEX_INCREMENTAL_CHURN_THRESHOLD = 0.3;
 // A ratio alone misclassifies one stale file in a three-file project as dense.
@@ -1477,10 +1466,13 @@ export async function refreshWordIndexIncrementally(
 // with no filter-specific plumbing of their own.
 
 /** The three supported inline query-filter prefixes (#1450). */
-export type WordIndexQueryFilterKey = "lang" | "file" | "ext";
+type WordIndexQueryFilterKey = "lang" | "file" | "ext";
 
-export const WORD_INDEX_QUERY_FILTER_KEYS: readonly WordIndexQueryFilterKey[] =
-	["lang", "file", "ext"];
+const WORD_INDEX_QUERY_FILTER_KEYS: readonly WordIndexQueryFilterKey[] = [
+	"lang",
+	"file",
+	"ext",
+];
 
 export interface WordIndexQueryFilter {
 	key: WordIndexQueryFilterKey;

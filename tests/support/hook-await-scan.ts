@@ -105,7 +105,7 @@ function callArguments(
  * it costs nothing today and closes a hole slice 2 would otherwise walk
  * into.
  */
-export function isBoundedAwait(stripped: string, at: number): boolean {
+function isBoundedAwait(stripped: string, at: number): boolean {
 	const head = stripped.slice(at, at + 80);
 	return BOUNDED_CALL.test(head);
 }

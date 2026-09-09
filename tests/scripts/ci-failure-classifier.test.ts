@@ -70,6 +70,26 @@ describe("classifyFailureLog (#2103)", () => {
 		);
 	});
 
+	it("requires a compiler diagnostic line shape for TypeScript evidence", () => {
+		expect(
+			classifyFailureLog('echo "error TS2322: Type string is not assignable"'),
+		).not.toEqual(
+			expect.objectContaining({
+				detail: expect.stringContaining("error TS2322:"),
+			}),
+		);
+		expect(
+			classifyFailureLog(
+				"src/x.ts:12:3 - error TS2322: Type string is not assignable",
+			),
+		).toEqual(
+			expect.objectContaining({
+				kind: "real",
+				detail: expect.stringContaining("error TS2322:"),
+			}),
+		);
+	});
+
 	it("classifies the wrapper-as-victim OOM shape (no mem-watch verdict at all)", () => {
 		const result = classifyFailureLog(
 			fixture("infra-kill-wrapper-killed.real.log"),
@@ -282,6 +302,104 @@ describe("classifyFailureLog (#2103)", () => {
 		expect(result.kind).toBe("infra-net");
 	});
 
+	// Round 3 HIGH: the shared CI pattern must not treat a token mentioned by
+	// a real compiler/linter/knip error, URL, or test name as network evidence.
+	it("round 3: token mentions in real error contexts remain real", () => {
+		const logs = [
+			'##[error] src/foo.ts(1,7): error TS2322: Type "ETIMEDOUT" is not assignable',
+			"##[error] /src/foo.js:1:1 error socket hang up no-socket-rule",
+			"##[error] knip: https://example.test/502/status unused export",
+			"##[error] test name: retries after ECONNRESET (expected real failure)",
+		];
+		for (const log of logs) {
+			expect(classifyFailureLog(log).kind, log).toBe("real");
+		}
+	});
+
+	// Round 3 MEDIUM: inspect all bounded eligible error lines, not only the
+	// first one, so npm's deterministic preamble cannot hide later network data.
+	it("round 3: a later eligible npm error line still classifies infra-net", () => {
+		const result = classifyFailureLog(
+			"npm error ERESOLVE unable to resolve dependency tree\nnpm error ECONNRESET\n",
+		);
+		expect(result.kind).toBe("infra-net");
+	});
+
+	// Regression proof for the shared NET_PATTERN consumer: a newly recognized
+	// npm network line must reach the real classifier, not only npm-retry.
+	it("recognizes the shared npm and registry network shapes as infra-net", () => {
+		const shapes = [
+			"ENOTFOUND",
+			"ECONNRESET",
+			"tarball package download failed",
+			"net::ERR_NAME_NOT_RESOLVED",
+		];
+		for (const shape of shapes) {
+			expect(classifyFailureLog(`npm error ${shape}`).kind, shape).toBe(
+				"infra-net",
+			);
+		}
+	});
+
+	it("recognizes today's quoted CI infrastructure needles", () => {
+		const excerpts = [
+			["SARIF upload", "Error: Unable to upload SARIF file: HTTP 503"],
+			[
+				"CodeQL initialization",
+				"Initialize CodeQL: The request failed with HTTP 503",
+			],
+			[
+				"codeload 429",
+				"npm error request to https://codeload.github.com/acme/repo/tar.gz failed: 429 Too Many Requests",
+			],
+			[
+				"codeload 503",
+				"npm error request to https://codeload.github.com/acme/repo/tar.gz failed: 503 Service Unavailable",
+			],
+			[
+				"npm ci timeout",
+				"npm ci --no-audit\nnpm error code ETIMEDOUT\nnpm error network request timed out",
+			],
+		];
+		for (const [name, excerpt] of excerpts) {
+			expect(classifyFailureLog(excerpt).kind, name).toBe("infra-net");
+		}
+	});
+
+	it("keeps quoted Vitest and TypeScript failures real", () => {
+		const excerpts = [
+			"Test Files 1 failed | 42 passed",
+			"AssertionError: expected 1 to be 2",
+			"error TS2322: Type 'string' is not assignable to type 'number'",
+		];
+		for (const excerpt of excerpts) {
+			expect(classifyFailureLog(excerpt).kind, excerpt).toBe("real");
+		}
+	});
+
+	it("round 3: npm-only network shapes stay real for the CI classifier", () => {
+		const shapes = [
+			"ETIMEDOUT",
+			"EAI_AGAIN",
+			"503 Service Unavailable",
+			"429 Too Many Requests",
+			"socket hang up",
+			"network error",
+			"ECONNREFUSED",
+			"EPIPE",
+			"ENETUNREACH",
+			"EHOSTUNREACH",
+			"FETCH_ERROR",
+			"ERR_SOCKET_TIMEOUT",
+			"502",
+			"504",
+			"registry unreachable",
+		];
+		for (const shape of shapes) {
+			expect(classifyFailureLog(`npm error ${shape}`).kind, shape).toBe("real");
+		}
+	});
+
 	// F5: empty log is distinguishable from "read something, didn't
 	// recognize it" -- the two are different failure modes (fetch itself
 	// failed / raced the upload, vs. a genuinely new failure shape).
@@ -311,6 +429,16 @@ describe("classifyFailureLog (#2103)", () => {
 		const log = `${oversizedHead}\n##[error]Process completed with exit code 1.\n`;
 		const result = classifyFailureLog(log);
 		expect(result.kind).toBe("real");
+	});
+
+	// Round 4 recurrence: the eligible-line bound must remain active, or a
+	// pathological log can make a late network token change a real verdict.
+	it("round 4: the 1,001st eligible line is outside the scan bound", () => {
+		const log = [
+			...Array.from({ length: 1_000 }, () => "npm error unrelated"),
+			"npm error code ECONNRESET",
+		].join("\n");
+		expect(classifyFailureLog(log).kind).toBe("real");
 	});
 
 	// V4 (BLOCKING, red-proof with the reviewer's fabricated-title shape): a
@@ -897,6 +1025,103 @@ describe("runClassifier orchestration against a mocked, STATEFUL GitHub API (#21
 		expect(rejected).toEqual([]);
 
 		expect(comments).toHaveLength(1);
+	});
+
+	// #2668: a master-push run's workflow_run event carries an empty
+	// pull_requests array -- there is no PR at all, not merely an unresolved
+	// lookup. allowMissingPr lets classification and the rerun proceed
+	// without one while skipping every PR-comment step (there is no issue
+	// thread to post to).
+	describe("allowMissingPr: master-push runs with no PR to comment on (#2668)", () => {
+		function makePushApi({
+			rerunHandler,
+		}: {
+			rerunHandler?: () => { ok: boolean; status: number };
+		} = {}) {
+			const calls: Array<{ method: string; url: string }> = [];
+			const rawLog = fixture("infra-kill-wrapper-killed.real.log");
+			let rerunCallCount = 0;
+			const fetcher = async (url: string, init?: RequestInit) => {
+				const method = init?.method ?? "GET";
+				calls.push({ method, url });
+				if (url.endsWith("/actions/runs/999")) {
+					// Production-faithful: a push run's `pull_requests` array is
+					// always empty, never merely unpopulated.
+					return jsonResponse({ head_sha: "deadbeef", pull_requests: [] });
+				}
+				if (url.endsWith("/actions/runs/999/jobs")) {
+					return jsonResponse({
+						jobs: [{ id: 111, name: "Unit tests", conclusion: "failure" }],
+					});
+				}
+				if (url.endsWith("/actions/jobs/111/logs")) {
+					return textResponse(rawLog);
+				}
+				if (url.endsWith("/actions/runs/999/rerun-failed-jobs")) {
+					rerunCallCount++;
+					if (rerunHandler) {
+						const result = rerunHandler();
+						return jsonResponse({}, result.status);
+					}
+					return jsonResponse({}, 201);
+				}
+				throw new Error(`unmocked URL in test: ${method} ${url}`);
+			};
+			return {
+				fetcher,
+				calls,
+				get rerunCallCount() {
+					return rerunCallCount;
+				},
+			};
+		}
+
+		it("without allowMissingPr, a PR-less run still throws (guard unchanged)", async () => {
+			const { fetcher } = makePushApi();
+			await expect(
+				runClassifier({ fetcher, owner: "acme", repo: "repo", runId: 999 }),
+			).rejects.toThrow("has no associated pull request");
+		});
+
+		it("with allowMissingPr, classifies and reruns without ever touching the comments API", async () => {
+			const api = makePushApi();
+			const result = await runClassifier({
+				fetcher: api.fetcher,
+				owner: "acme",
+				repo: "repo",
+				runId: 999,
+				allowMissingPr: true,
+			});
+
+			expect(result.classification.kind).toBe("infra-kill");
+			expect(result.rerunTriggeredThisPass).toBe(true);
+			expect(result.prNumber).toBeNull();
+			expect(result.commentBody).toContain("ci-classifier: infra-kill");
+			expect(api.rerunCallCount).toBe(1);
+
+			// The whole point of the flag: a push run has no comment thread, so
+			// nothing in this call may hit the issues/comments endpoints.
+			const commentCalls = api.calls.filter((c) => c.url.includes("/comments"));
+			expect(commentCalls).toEqual([]);
+		});
+
+		it("with allowMissingPr, a failing rerun is still recorded honestly in the returned commentBody", async () => {
+			const api = makePushApi({
+				rerunHandler: () => ({ ok: false, status: 403 }),
+			});
+			const result = await runClassifier({
+				fetcher: api.fetcher,
+				owner: "acme",
+				repo: "repo",
+				runId: 999,
+				allowMissingPr: true,
+			});
+
+			expect(result.rerunTriggeredThisPass).toBe(false);
+			expect(result.commentBody).toContain("failed:403");
+			const commentCalls = api.calls.filter((c) => c.url.includes("/comments"));
+			expect(commentCalls).toEqual([]);
+		});
 	});
 });
 

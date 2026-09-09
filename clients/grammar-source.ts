@@ -21,7 +21,7 @@ import { getPackageRoot } from "./package-root.js";
 export const TREE_SITTER_WASMS_VERSION = "0.1.13";
 
 /** unpkg mirror of the tree-sitter-wasms artifacts. */
-export const GRAMMAR_CDN_BASE = `https://unpkg.com/tree-sitter-wasms@${TREE_SITTER_WASMS_VERSION}/out`;
+const GRAMMAR_CDN_BASE = `https://unpkg.com/tree-sitter-wasms@${TREE_SITTER_WASMS_VERSION}/out`;
 
 /**
  * Per-grammar source overrides — grammars we pull from a DIFFERENT package than the
@@ -225,7 +225,7 @@ export const BLOCKED_GRAMMARS: Record<string, GrammarBlock> = {
 };
 
 /** Runtime signals for the currently-running process. */
-export function currentGrammarRuntime(): GrammarRuntime {
+function currentGrammarRuntime(): GrammarRuntime {
 	const m = /^v?(\d+)/.exec(process.versions?.node ?? "");
 	return {
 		nodeMajor: m ? Number(m[1]) : 0,
@@ -277,7 +277,7 @@ export interface GrammarDownloadResult {
  * both the download path (validate before writing) and the on-disk path
  * (`fileHasWasmMagic`, for a file poisoned before this shipped) key off it.
  */
-export const WASM_MAGIC: readonly number[] = [0x00, 0x61, 0x73, 0x6d];
+const WASM_MAGIC: readonly number[] = [0x00, 0x61, 0x73, 0x6d];
 
 /** Do `bytes` start with the wasm magic number? */
 export function hasWasmMagic(bytes: Uint8Array): boolean {

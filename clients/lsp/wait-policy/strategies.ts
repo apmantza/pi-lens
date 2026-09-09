@@ -172,6 +172,7 @@ export interface DiagnosticStrategy {
 	workspaceIndexingWarmWaitMs?: number;
 }
 
+/** @public — loaded by scripts/probe-clean-signal.mjs through a dynamic import wrapper knip cannot see. */
 export const SERVER_DIAGNOSTIC_STRATEGIES: Record<string, DiagnosticStrategy> =
 	{
 		typescript: {
@@ -389,7 +390,7 @@ const NATIVE_TS7_DIAGNOSTIC_STRATEGY: DiagnosticStrategy = {
 };
 
 /** Fallback for unknown servers. Conservative defaults. */
-export const DEFAULT_STRATEGY: DiagnosticStrategy = {
+const DEFAULT_STRATEGY: DiagnosticStrategy = {
 	seedFirstPush: false,
 	pullRetryBudgetMs: 250,
 	debounceMs: 150,

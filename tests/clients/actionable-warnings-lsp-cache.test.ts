@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getProjectDataDir } from "../../clients/file-utils.js";
 import type { LSPCodeAction } from "../../clients/lsp/client.js";
 import { normalizeMapKey } from "../../clients/path-utils.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 import { removeTempDirSync } from "./test-utils.js";
 
 // LSP service mock — collects which methods were called so we can assert that
@@ -31,13 +32,17 @@ const getLastKnownDiagnostics = vi.fn(
 );
 
 vi.mock("../../clients/lsp/index.js", () => ({
-	getLSPService: () => ({
-		supportsLSP: (filePath: string) => filePath.endsWith(".ts"),
-		openFile,
-		getDiagnostics,
-		codeAction,
-		getLastKnownDiagnostics,
-	}),
+	// Factory-seeded, with the five methods this suite asserts call counts on
+	// overridden (#2592). The cache-hit assertions below count `openFile` /
+	// `getDiagnostics` calls, so the defaults must not shadow them.
+	getLSPService: () =>
+		makeLspServiceDouble({
+			supportsLSP: (filePath: string) => filePath.endsWith(".ts"),
+			openFile,
+			getDiagnostics,
+			codeAction,
+			getLastKnownDiagnostics,
+		}),
 }));
 
 let tmpDir: string;

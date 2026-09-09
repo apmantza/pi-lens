@@ -165,6 +165,24 @@ describe("getSubagentIdentity", () => {
 			parentPid: 12345,
 		});
 	});
+
+	// #2581: pi-subagents@0.65.0's native-AgentSession rewrite removed
+	// PI_SUBAGENT_RUN_ID/PI_SUBAGENT_CHILD_AGENT from the whole package
+	// (grep-verified absent from the 0.66.0 source tree) — this is now the
+	// PERMANENT env shape for the nicobailon vocabulary, not a transient gap.
+	// Light mode itself must keep engaging on the child flag alone, and
+	// identity must degrade to "known subagent, unknown identity" rather than
+	// treating the missing vars as "not a subagent at all".
+	it("still classifies as a subagent with marker set when PI_SUBAGENT_CHILD=1 is the ONLY var present (pi-subagents@0.65.0+ reality)", () => {
+		process.env.PI_SUBAGENT_CHILD = "1";
+		expect(isSubagentSession()).toBe(true);
+		expect(getSubagentIdentity()).toEqual({
+			runId: undefined,
+			agentName: undefined,
+			marker: "pi-subagents",
+			parentPid: undefined,
+		});
+	});
 });
 
 describe("subagentLightModeNotice", () => {

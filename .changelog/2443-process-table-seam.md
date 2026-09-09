@@ -1,5 +1,0 @@
----
-section: Changed
----
-
-- **One process-table seam replaces five hand-rolled snapshotters (closes #2443)** — the Windows `Get-CimInstance Win32_Process` and POSIX `ps` listings used by the orphan reaper, the resource sampler, the worktree-hygiene hook and the compat smoke are now composed and parsed in a single place, `scripts/lib/process-scan.mjs`, with a `fields` projection covering pid, parent pid, age, RSS, kernel/user CPU time, start time and command line, plus platform-side filtering that reports whether it was actually applied. `clients/process-snapshot.ts` is the one crossing point into the extension runtime and keeps its own spawn rails (unref'd child and stdout, an injected tree-kill-and-verify timeout handler, and a status that keeps an empty table distinguishable from a query that never ran). A conformance sweep fails the build if a second file ever spells one of these queries again, so hardening like PR #2438's non-zero-exit check can no longer reach one copy and miss the rest.

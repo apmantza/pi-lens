@@ -36,8 +36,8 @@ import {
 /**
  * Bytes of backing store per posting entry: one `fileId` lane and one `line`
  * lane, both `Int32`. This is the constant #2069's acceptance criterion is
- * written against, and {@link estimatePostingListBytes} is the arithmetic the
- * memory-sample record and the regression test both read.
+ * written against, and the arithmetic the memory-sample record and the
+ * regression test both read.
  */
 export const WORD_POSTING_ENTRY_BYTES = 8;
 
@@ -213,11 +213,6 @@ export class WordPostingList {
 		}
 		return list;
 	}
-}
-
-/** Estimated bytes one posting list holds, backing store plus fixed headers. */
-export function estimatePostingListBytes(list: WordPostingList): number {
-	return list.byteLength + WORD_POSTING_LIST_OVERHEAD_BYTES;
 }
 
 /**
@@ -465,7 +460,7 @@ export class WordForwardEntry {
  * Bytes per forward entry: one pointer-compressed slot for the shared token
  * string and one `Int32` count lane.
  */
-export const WORD_FORWARD_ENTRY_BYTES = 8;
+const WORD_FORWARD_ENTRY_BYTES = 8;
 
 /**
  * The word index's dense file-id space: canonical path key → integer id →

@@ -1,5 +1,0 @@
----
-section: Fixed
----
-
-- **An unavailable formatter no longer reads as a code failure (closes #2413)** — a selected formatter whose executable is proven absent (the oxfmt `spawn oxfmt ENOENT` trap, and its siblings `ktfmt`/`ruff` whose config-only detection can select a tool that is nowhere installed) now returns a typed `unavailable` outcome. It is never spawned via the static fallback after the resolver proves absence, never counted as a failed file, never requeued as durable `tool-not-found` on every `agent_end`, and never leaves a red `fmt-failed` footer marker. A universal belt catches the remaining formatters: when a resolver that could not prove absence falls back to a bare static command, a typed `tool-not-found` spawn failure is classified as unavailable rather than a formatting failure — no tool-specific string matching. Real failures (timeout, invalid configuration, parser failure, nonzero exit) are preserved. Observability gains a bounded `formatter-unavailable` degradation kind and an `unavailable` count on the deferred-drain records, distinct from `failed`.

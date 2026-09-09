@@ -102,13 +102,19 @@ vi.mock("../../../../clients/latency-logger.js", async (importActual) => ({
 	logLatency,
 }));
 
-vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
-	resolveToolCommand: vi.fn(() => null),
-	resolveToolCommandWithInstallFallback: vi.fn(async (_cwd: string) => {
-		const installed = await ensureTool("oxlint");
-		return installed ?? null;
+vi.mock(
+	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
+		>()),
+		resolveToolCommand: vi.fn(() => null),
+		resolveToolCommandWithInstallFallback: vi.fn(async (_cwd: string) => {
+			const installed = await ensureTool("oxlint");
+			return installed ?? null;
+		}),
 	}),
-}));
+);
 
 function createCtx(filePath: string, cwd: string) {
 	return makeRunnerCtx(filePath, cwd);
@@ -637,6 +643,41 @@ describe("oxlint runner", () => {
 				line: 1,
 				fixSuggestion: "Replace console.log with a logger",
 			});
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	// #2691: the lint spawn passed no `cwd`, so a nested oxlint config was
+	// resolved against the extension host's `process.cwd()` instead of
+	// `ctx.cwd` -- same shape as #1731 (sqlfluff) and #2691's own yamllint.
+	it("spawns the lint with the dispatch context's cwd, not the host's (#2691)", async () => {
+		const env = setupTestEnvironment("pi-lens-oxlint-cwd-");
+		try {
+			const filePath = path.join(env.tmpDir, "sample.ts");
+			fs.writeFileSync(filePath, "console.log('hi')\n");
+
+			safeSpawnAsync.mockResolvedValueOnce({
+				error: null,
+				status: 0,
+				stdout: JSON.stringify({ diagnostics: [] }),
+				stderr: "",
+			});
+
+			const runner = (
+				await import("../../../../clients/dispatch/runners/oxlint.js")
+			).default;
+
+			await runner.run({
+				...createCtx(filePath, env.tmpDir),
+				hasTool: async () => false,
+			} as never);
+
+			expect(safeSpawnAsync).toHaveBeenCalledWith(
+				"oxlint",
+				expect.arrayContaining(["--format", "json", filePath]),
+				expect.objectContaining({ cwd: env.tmpDir }),
+			);
 		} finally {
 			env.cleanup();
 		}

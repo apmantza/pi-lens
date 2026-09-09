@@ -19,11 +19,15 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeLspServiceDouble } from "../../support/lsp-service-double.js";
 
 const readCachedDiagnosticsForServers = vi.hoisted(() => vi.fn());
 vi.mock("../../../clients/lsp/index.js", () => ({
-	// Only `getLSPService` crosses this seam in handleTurnEnd's import graph.
-	getLSPService: () => ({ readCachedDiagnosticsForServers }),
+	// Only `getLSPService` crosses this seam in handleTurnEnd's import graph;
+	// the double still carries the full surface so a method this path grows
+	// later cannot throw into a swallow-all catch (#2582).
+	getLSPService: () =>
+		makeLspServiceDouble({ readCachedDiagnosticsForServers }),
 }));
 
 const logLatency = vi.hoisted(() => vi.fn());
@@ -51,7 +55,7 @@ import {
 	drainPendingAuxiliaryCoverage,
 	markPendingAuxiliaryCoverage,
 	MAX_LATE_AUX_REARMS,
-	pendingAuxiliaryCoverageSizeForTests,
+	pendingAuxiliaryCoverageSize,
 	readLateAuxRearmTtlMs,
 	resetPendingAuxiliaryCoverage,
 } from "../../../clients/lsp/pending-aux-coverage.js";
@@ -429,7 +433,7 @@ describe("turn-end late-auxiliary findings (#2001/#2002)", () => {
 
 			// One transient throw counts the failure AND keeps the pair
 			// pending — the coverage must not vanish uncounted.
-			expect(pendingAuxiliaryCoverageSizeForTests()).toBe(1);
+			expect(pendingAuxiliaryCoverageSize()).toBe(1);
 			expect(lateAuxRecord()?.metadata).toMatchObject({
 				probeFailed: 1,
 				rearmed: 1,
@@ -448,7 +452,7 @@ describe("turn-end late-auxiliary findings (#2001/#2002)", () => {
 				);
 				await handleTurnEnd(makeDeps(runtime, cacheManager, env.tmpDir));
 			}
-			expect(pendingAuxiliaryCoverageSizeForTests()).toBe(0);
+			expect(pendingAuxiliaryCoverageSize()).toBe(0);
 			const records = logLatency.mock.calls
 				.map((call) => call[0])
 				.filter((entry: any) => entry?.phase === "late_auxiliary_findings");

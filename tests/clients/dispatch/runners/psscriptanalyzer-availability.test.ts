@@ -35,11 +35,17 @@ vi.mock("../../../../clients/latency-logger.js", () => ({
 	logLatency: logLatencySpy,
 	getLastLoggedPhase: () => undefined,
 }));
-vi.mock("../../../../clients/degradation-ledger.js", () => ({
-	recordDegradation: recordDegradationSpy,
-	recordDegradationOnce: vi.fn(),
-	incrementDegradationCount: incrementDegradationCountSpy,
-}));
+vi.mock(
+	"../../../../clients/degradation-ledger.js",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../../../../clients/degradation-ledger.js")
+		>()),
+		recordDegradation: recordDegradationSpy,
+		recordDegradationOnce: vi.fn(),
+		incrementDegradationCount: incrementDegradationCountSpy,
+	}),
+);
 
 /**
  * Fresh module state per test. The memoized verdicts live at module scope, and
@@ -406,6 +412,28 @@ describe("psscriptanalyzer execution-policy-blocked -File run (#1540)", () => {
 		const result = await runner.run(ctx());
 		expect(result.status).toBe("succeeded");
 		expect(result.diagnostics).toHaveLength(0);
+	});
+
+	// #2691: the `-File` analysis spawn passed no `cwd`, so it ran under the
+	// extension host's `process.cwd()` instead of `ctx.cwd` -- same shape as
+	// #1731 (sqlfluff). `Invoke-ScriptAnalyzer -Path $FilePath` with no
+	// `-Settings` only auto-discovers `PSScriptAnalyzerSettings.psd1` in the
+	// directory of the `-Path` argument itself (PSScriptAnalyzer's
+	// `FindSettingsMode` derives `directory` from `Path.GetDirectoryName`
+	// of the `-Path` value, with no upward walk and no cwd fallback), and
+	// `$FilePath` here is already the absolute `path.resolve(cwd,
+	// ctx.filePath)`, so this is a consistency fix (matching the two
+	// `-Command` probes' cwd) rather than a config-resolution behavior
+	// change.
+	it("spawns the -File analysis run with ctx.cwd, not the host's (#2691)", async () => {
+		const runner = await loadRunner();
+		const testCtx = ctx();
+		healthyHost();
+		await runner.run(testCtx);
+		const fileCalls = callsMatching("-File");
+		expect(fileCalls).toHaveLength(1);
+		const [, , options] = fileCalls[0];
+		expect(options?.cwd).toBe((testCtx as unknown as { cwd: string }).cwd);
 	});
 
 	/**

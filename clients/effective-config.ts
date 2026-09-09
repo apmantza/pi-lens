@@ -68,6 +68,7 @@ import {
 // apart on a Windows-shaped path (AGENTS.md defect shape 2).
 import { isSameOrWithin } from "./lsp/server.js";
 import { homeRelativePath } from "./path-utils.js";
+import { resolveToolCwd } from "./tool-cwd.js";
 import { compareOrdinal } from "./string-utils.js";
 
 export interface EffectiveConfigOptions {
@@ -98,10 +99,10 @@ export interface EffectiveConfigOptions {
  * list is taken at `cwd` itself, exactly as if no `file` had been asked
  * about at all.
  */
-export type EffectiveConfigDocument = ConfigDocumentSummary;
+type EffectiveConfigDocument = ConfigDocumentSummary;
 
 /** A custom server's definition, reduced to what cannot carry a secret. */
-export interface RedactedServerSpec {
+interface RedactedServerSpec {
 	/** `argv[0]` only. */
 	readonly command?: string;
 	/** How many argv entries the definition carries, including `argv[0]`. */
@@ -124,15 +125,16 @@ export interface EffectiveServerDecision {
 }
 
 /** Why a runner did or did not make a file's dispatch plan. */
-export type ToolSelectionReason =
+type ToolSelectionReason =
 	| "selected"
 	| "not-registered-for-kind"
 	| "no-dispatch-plan";
 
-export interface EffectiveToolDecision {
+interface EffectiveToolDecision {
 	readonly id: string;
 	readonly selected: boolean;
 	readonly reason: ToolSelectionReason;
+	readonly resolvedCwd: string;
 }
 
 /** The per-file half: language, servers, tools. */
@@ -297,13 +299,16 @@ function decidedByOrNothing(entry: ProvenanceViewEntry | undefined): {
  * tree nothing initialized, which would report every server as selected — and
  * round 2 got it by calling `initLSPConfig(cwd, { report: false })`. That
  * inverted this surface's own guarantee: `initLSPConfig` is the session-root
- * registry's single writer and the `workspaceConfigs` LRU's only producer, so
+ * registry's single writer and the per-root config store's only producer, so
  * a question about a foreign directory enrolled it as a served LSP root
  * (widening the #2052 access gate) and, after ~40 such questions, evicted a
- * live root's config from the 32-entry LRU — silently lifting the operator's
- * `disabledServers` denial, which is precisely what this surface promises
- * cannot happen. `sessionRoots` is capped at 128, so `shouldInitializeSessionRoot`
- * never repaired it either.
+ * live root's config from what was then a separate 32-entry LRU — silently
+ * lifting the operator's `disabledServers` denial, which is precisely what
+ * this surface promises cannot happen, and `shouldInitializeSessionRoot` never
+ * repaired it because the 128-entry registry still reported the root served.
+ * #2518 collapsed those two containers into one entry per root, so the second
+ * half of that failure is gone; the first half — a read-only query enrolling a
+ * foreign root at all — is still this surface's own to avoid
  *
  * So the query DERIVES the config instead: `lspConfigOf` (the projection
  * `loadLSPConfig` returns, minus the notices — rule 2) through the same
@@ -455,9 +460,10 @@ export async function effectiveConfig(
 							absolute,
 							resolved,
 							homeDir,
+							cwd,
 							// The gates read the LSP slice of that SAME resolution, through
 							// the same `registerLSPConfig` conversion `initLSPConfig` uses —
-							// no session-root registration, no `workspaceConfigs` LRU write
+							// no session-root registration, no per-root config-store write
 							// (P11/P12). Computed here rather than hoisted into a
 							// `{ absolute, lspConfig }` struct (#2520): `absolute` is already
 							// this branch's narrowed local, so the struct's own field was
@@ -489,6 +495,7 @@ async function fileView(
 	absolute: string,
 	resolved: Resolved<Record<string, unknown>>,
 	homeDir: string,
+	workspaceCwd: string,
 	lspConfig: RegisteredLSPConfig,
 ): Promise<EffectiveFileView> {
 	const language: LanguageEntry | undefined = resolveLanguage(absolute);
@@ -579,6 +586,13 @@ async function fileView(
 		id,
 		selected: available.has(id),
 		reason: toolReason(available.has(id), kind),
+		resolvedCwd: homeRelativePath(
+			resolveToolCwd("runner", id, absolute, {
+				cwd: workspaceCwd,
+				suppressTelemetry: true,
+			}),
+			homeDir,
+		),
 	}));
 
 	return {

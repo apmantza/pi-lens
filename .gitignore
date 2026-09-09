@@ -1,9 +1,11 @@
 # Dependencies
-node_modules/
+node_modules
 features.md
 
 # pi-lens internal
 .pi-lens/
+.stryker/
+reports/
 # Probe-home redirect target (#2506): getGlobalPiLensLogDir() sends the logs
 # of a probe run without a PI_LENS_HOME pin here instead of the real
 # ~/.pi-lens. Untracked by design -- if it were not ignored, every agent
@@ -80,6 +82,7 @@ migrate-*.js
 !docs/pi-lens-reviewer.md
 !docs/pi-lens-investigator.md
 !docs/pi-lens-warden.md
+!docs/pi-lens-monitor.md
 !docs/audit1.md
 !docs/agent-guide.md
 !docs/agent-tools.md
@@ -110,6 +113,11 @@ migrate-*.js
 !docs/astplayground.md
 !docs/public-api-stability.md
 !docs/configuration.md
+!docs/release-qa-baseline.md
+
+# release-qa run artifacts (scripts/release-qa.mjs writes these into cwd)
+/release-qa-report.md
+/release-qa-evidence/
 !skills/**/*.md
 !.github/PULL_REQUEST_TEMPLATE.md
 

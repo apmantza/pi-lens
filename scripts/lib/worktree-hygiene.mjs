@@ -156,7 +156,7 @@ export const MAX_RECORDED_COMMAND_CHARS = 300;
  * Path segment that identifies a Claude Code agent worktree. Matched against
  * a separator-normalized path, so `\` and `/` spellings both hit.
  */
-export const AGENT_WORKTREE_SEGMENT = "/.claude/worktrees/agent-";
+const AGENT_WORKTREE_SEGMENT = "/.claude/worktrees/agent-";
 
 /**
  * Command-line markers for long-running test helpers that may outlive their
@@ -166,7 +166,7 @@ export const AGENT_WORKTREE_SEGMENT = "/.claude/worktrees/agent-";
  * for it lands here. Matching is on the DIRECTORY path, not on "node", so an
  * unrelated node process is never a candidate.
  */
-export const FIXTURE_HELPER_MARKERS = [
+const FIXTURE_HELPER_MARKERS = [
 	"tests/fixtures/",
 	"tests/support/",
 	"fake-lsp-server.mjs",
@@ -212,7 +212,7 @@ export function toComparablePath(p) {
  * @param {string} text
  * @returns {string}
  */
-export function toComparableText(text) {
+function toComparableText(text) {
 	if (typeof text !== "string") return "";
 	return text.split("\\").join("/").toLowerCase();
 }
@@ -481,6 +481,171 @@ export function planWorktreePrune({
 }
 
 /**
+ * @typedef {object} MergedWorktreeCandidate
+ * @property {string} path                Absolute worktree path.
+ * @property {string|null} [branch]       Full ref (`refs/heads/...`), null for
+ *   a detached worktree.
+ * @property {boolean} [bare]
+ * @property {boolean} [clean]            `git status --porcelain` answered and
+ *   was EMPTY: no tracked changes AND no untracked files. Porcelain reports
+ *   untracked files, so this one flag already covers both halves of "clean".
+ * @property {boolean} [statusUnreadable] The `git status` call itself failed
+ *   or timed out — an unanswered safety question, so the tree is kept.
+ * @property {boolean} [mergedIntoMaster] HEAD is an ancestor of
+ *   `origin/master` (strict: merged only into a side branch does not count).
+ * @property {string|null} [statusDetail] First porcelain entry, bounded —
+ *   names the change (typically the untracked file) a keep protects.
+ * @property {number} mtimeMs             Newest observed activity timestamp.
+ * @property {boolean} [locked]
+ * @property {number|null} [lockPid]
+ * @property {boolean} [unevaluated]      The caller ran out of time budget
+ *   before it could read this tree's status. Never removable.
+ */
+
+/**
+ * Decide which non-primary worktrees the MERGED-BRANCH sweep (#2631) may
+ * remove: any path whose branch tip is an ancestor of `origin/master` and
+ * whose checkout is clean. The 2026-09-06 recurrence stood at 21 merged,
+ * clean, pushed trees because the sweep only ever considered
+ * `.claude/worktrees/agent-*`.
+ *
+ * Deliberately NO age rail: a clean tree at a merged HEAD is byte-identical
+ * to a commit that is already on `origin/master`, so there is nothing in it
+ * to lose at any age. The protection a live session gets is the rails below —
+ * uncommitted or untracked files (a working tree is rarely clean), and the
+ * git lock naming a live pid.
+ *
+ * THE UNTRACKED-FILE RAIL IS THE WHOLE POINT. An untracked file is a
+ * deliverable, never disposable: on 2026-09-09 a 22 KB report left untracked
+ * in a worktree was destroyed by a sweep that treated its checkout content as
+ * removable. `git status --porcelain` reports untracked files, so an empty
+ * porcelain output is the ONLY clean that may be removed, and the keep record
+ * names the first porcelain entry so the operator sees what was protected.
+ *
+ * Rails are evaluated in a fixed order and the FIRST one that fires wins,
+ * mirroring `planWorktreePrune`: hard rails (work destruction) before soft
+ * ones (liveness, selection).
+ *
+ * @param {object} options
+ * @param {MergedWorktreeCandidate[]} options.candidates  Non-primary trees
+ *   only — excluding the main checkout is the CALLER's job.
+ * @param {number} options.nowMs
+ * @param {string|string[]|null} [options.selfPath] Worktree(s) this process
+ *   lives in; never removed.
+ * @param {(pid: number) => boolean} [options.isPidAlive]
+ * @param {Set<string>|null} [options.selectedKeys] `--only` narrowing; the
+ *   merged sweep runs over the same set the age sweep was narrowed to.
+ * @returns {PrunePlan}
+ */
+export function planMergedWorktreeRemovals({
+	candidates,
+	nowMs,
+	selfPath = null,
+	isPidAlive = () => false,
+	selectedKeys = null,
+}) {
+	const selfKeys = new Set(
+		(Array.isArray(selfPath) ? selfPath : selfPath ? [selfPath] : [])
+			.map((entry) => enclosingAgentWorktree(entry) ?? toComparablePath(entry))
+			.filter(Boolean),
+	);
+	const remove = [];
+	const keep = [];
+
+	for (const row of candidates ?? []) {
+		const key = toComparablePath(row.path);
+		const selected = selectedKeys ? selectedKeys.has(key) : false;
+		const ageMs = Math.max(0, nowMs - (Number(row.mtimeMs) || 0));
+		const push = (reason, detail = null) =>
+			keep.push({ path: row.path, reason, detail });
+
+		if (selfKeys.has(key)) {
+			push("self", "this sweep is running inside it");
+			continue;
+		}
+		if (selectedKeys && !selected) {
+			push("not-selected", "--only named other trees");
+			continue;
+		}
+		if (row.unevaluated) {
+			push("not-evaluated", "time budget exhausted before this tree was read");
+			continue;
+		}
+		if (!row.branch) {
+			push("detached", "no branch to verify as merged");
+			continue;
+		}
+		if (row.statusUnreadable) {
+			push(
+				"status-unreadable",
+				"git status could not be read before the removal decision",
+			);
+			continue;
+		}
+		if (!row.clean) {
+			push(
+				"dirty",
+				row.statusDetail ??
+					"uncommitted or untracked changes would be destroyed",
+			);
+			continue;
+		}
+		const lockPid = row.lockPid ?? null;
+		if (!selected && row.locked && lockPid !== null && isPidAlive(lockPid)) {
+			push("locked-live", `git lock names live pid ${lockPid}`);
+			continue;
+		}
+		if (!row.mergedIntoMaster) {
+			push("unmerged", "HEAD is not an ancestor of origin/master");
+			continue;
+		}
+		remove.push({
+			path: row.path,
+			branch: row.branch ?? null,
+			ageMs,
+			locked: Boolean(row.locked),
+			selected,
+		});
+	}
+
+	return { remove, keep };
+}
+
+/**
+ * Top-level entries of a worktree checkout that are git's own bookkeeping
+ * rather than content. Only the top-level `.git` gitlink matches: a deeper
+ * `.git` belongs to a vendored nested repository, which is content.
+ */
+const GIT_METADATA_ENTRY_NAMES = new Set([".git"]);
+
+/**
+ * Verdict for an UNREGISTERED `.claude/worktrees/agent-*` directory (#2538):
+ * present on disk, absent from `git worktree list`.
+ *
+ * An unregistered directory has no index and no known branch, so "is this
+ * file tracked (recoverable from git)?" is UNANSWERABLE — and an unanswered
+ * safety question is a NO. Every surviving entry is therefore treated as an
+ * untracked deliverable and the directory is kept, named: on 2026-09-09 a
+ * 22 KB report left untracked in a worktree was destroyed by a sweep that
+ * treated its checkout content as removable. A directory is removable only
+ * when it holds nothing but git's own `.git` gitlink.
+ *
+ * @param {string[]|null|undefined} entryNames Top-level readdir names, or
+ *   null when the directory could not be read.
+ * @returns {{ removable: boolean, reason: string }}
+ */
+export function unregisteredAgentDirVerdict(entryNames) {
+	if (!Array.isArray(entryNames)) {
+		return { removable: false, reason: "unreadable" };
+	}
+	const content = entryNames.filter(
+		(name) => !GIT_METADATA_ENTRY_NAMES.has(name),
+	);
+	if (content.length === 0) return { removable: true, reason: "empty" };
+	return { removable: false, reason: `untracked content: ${content[0]}` };
+}
+
+/**
  * Order candidates so anything `only` names is inspected FIRST. The caller
  * enriches trees under a wall-clock budget (a hook has ~2s), and a
  * SubagentStop sweep has exactly one tree it cares about — it must never
@@ -565,7 +730,7 @@ function isAbsoluteToken(token) {
  * @param {string} command
  * @returns {string[]} absolute, normalized path tokens
  */
-export function commandExecutionPaths(command) {
+function commandExecutionPaths(command) {
 	const normalized = toComparableText(command);
 	if (!normalized) return [];
 	const tokens = tokenizeCommand(normalized);
@@ -828,7 +993,7 @@ export function planOrphanSweep({
 	protectedPids = new Set(),
 	restrictToPath = null,
 	listingOk = true,
-	isPidAlive = undefined,
+	isPidAlive,
 }) {
 	if (!listingOk)
 		return { orphans: [], degraded: { reason: "listing-failed" } };
@@ -897,7 +1062,7 @@ export function capRemovals(removals, max) {
  * will ever delete. A `fix/*` / `feat/*` branch is deliberately NOT here:
  * those are the work itself and outlive their worktree.
  */
-export const AGENT_BRANCH_SHAPES = [
+const AGENT_BRANCH_SHAPES = [
 	/^pr-\d+$/i,
 	/^review\//i,
 	/^fixround-/i,
@@ -1010,7 +1175,7 @@ export function formatKillRecord(input) {
  * `--quiet` hook run leaves behind, so it has to carry the verdict, not just
  * the path.
  *
- * @param {{ path: string, branch?: string|null, ageMs: number, dryRun?: boolean, removed?: boolean, error?: string|null, nowIso?: string }} input
+ * @param {{ path: string, branch?: string|null, ageMs: number, dryRun?: boolean, removed?: boolean, merged?: boolean, error?: string|null, nowIso?: string }} input
  * @returns {string}
  */
 export function formatWorktreeRecord(input) {
@@ -1020,6 +1185,30 @@ export function formatWorktreeRecord(input) {
 		worktree: String(input.path ?? "").slice(0, MAX_RECORDED_COMMAND_CHARS),
 		branch: input.branch ?? null,
 		ageMs: Math.round(Number(input.ageMs) || 0),
+		dryRun: Boolean(input.dryRun),
+		removed: Boolean(input.removed),
+		// #2631: true when the merged-branch sweep selected the tree, so a
+		// reader can tell the two removal passes apart in one log file.
+		merged: Boolean(input.merged),
+	};
+	if (input.error) record.error = String(input.error).slice(0, 200);
+	return JSON.stringify(record);
+}
+
+/**
+ * Bounded ledger record for one UNREGISTERED agent-worktree directory
+ * removal (#2538). Same bounded-field discipline as formatWorktreeRecord;
+ * a distinct event name because the path was NOT a registered worktree —
+ * a reader must be able to tell the two removal kinds apart.
+ *
+ * @param {{ path: string, dryRun?: boolean, removed?: boolean, error?: string|null, nowIso?: string }} input
+ * @returns {string}
+ */
+export function formatUnregisteredDirRecord(input) {
+	const record = {
+		ts: input.nowIso ?? new Date().toISOString(),
+		event: "hygiene.unregistered-dir",
+		path: String(input.path ?? "").slice(0, MAX_RECORDED_COMMAND_CHARS),
 		dryRun: Boolean(input.dryRun),
 		removed: Boolean(input.removed),
 	};
@@ -1106,7 +1295,7 @@ export const RUN_SKIP_REASONS = Object.freeze({
  * scoped to, and is null for a run that removed that tree or was scoped to no
  * single tree at all.
  *
- * @param {{ hook?: string|null, outcome: "fired"|"skipped", reason?: string|null, worktree?: string|null, keptReason?: string|null, removed?: number, orphans?: number, rows?: number, dryRun?: boolean, budgetMs?: number, durationMs?: number, nowIso?: string }} input
+ * @param {{ hook?: string|null, outcome: "fired"|"skipped", reason?: string|null, worktree?: string|null, keptReason?: string|null, removed?: number, unregisteredDirs?: number, orphans?: number, rows?: number, dryRun?: boolean, budgetMs?: number, durationMs?: number, nowIso?: string }} input
  * @returns {string}
  */
 export function formatRunRecord(input) {
@@ -1122,6 +1311,7 @@ export function formatRunRecord(input) {
 			: null,
 		keptReason: input.keptReason ?? null,
 		removed: count(input.removed),
+		unregisteredDirs: count(input.unregisteredDirs),
 		orphans: count(input.orphans),
 		rows: count(input.rows),
 		dryRun: Boolean(input.dryRun),

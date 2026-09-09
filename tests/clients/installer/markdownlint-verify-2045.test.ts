@@ -175,12 +175,19 @@ describe("managed markdownlint verification (#2045)", () => {
 
 	it("bounds retained output for noisy language-server probes", async () => {
 		resetDegradationLedger();
+		const onInconclusive = vi.fn();
 		safeSpawnAsync.mockResolvedValueOnce(
 			result({ status: 1, outputTruncated: true }),
 		);
-		await verifyToolBinary("intelephense", undefined, undefined, 10, [
-			"--version",
-		]);
+		await verifyToolBinary(
+			"intelephense",
+			undefined,
+			undefined,
+			10,
+			["--version"],
+			undefined,
+			onInconclusive,
+		);
 		expect(safeSpawnAsync).toHaveBeenLastCalledWith(
 			process.platform === "win32" ? "intelephense.cmd" : "intelephense",
 			["--version"],
@@ -189,11 +196,65 @@ describe("managed markdownlint verification (#2045)", () => {
 				matchWhileStreaming: expect.any(RegExp),
 			}),
 		);
+		// #2722: this SAME probe shape — armed matcher, unmatched, truncated
+		// prefix — is the one the installer must not delete an install on, and it
+		// now records a second, differently-named row. Asserted here because this
+		// is the seam's cross-platform coverage: the real-fixture proof in
+		// npm-package-entry-verify-2722.test.ts depends on Node dropping a piped
+		// stderr tail at exit, which is POSIX-only.
+		expect(onInconclusive).toHaveBeenCalledTimes(1);
 		expect(getDegradationSummary()).toEqual([
 			expect.objectContaining({
 				kind: "installer-verification-output-truncated",
 				count: 1,
 			}),
+			expect.objectContaining({
+				kind: "installer-verification-inconclusive",
+				count: 1,
+				latestReasons: [
+					{
+						subject: "intelephense",
+						reason:
+							"transport-required marker unresolved in truncated output (--version)",
+					},
+				],
+			}),
+		]);
+	});
+
+	it("a SIGTERM-killed verbose probe is transient, not inconclusive (#2722 R2-F4)", async () => {
+		// The two classes overlapped: a child that is still talking when the
+		// timeout kills it arrives here BOTH truncated and signalled, so the
+		// #2722 row fired on a #1569 stall — and `installNpmTool` tests
+		// inconclusive first, so its message replaced the #2015 transient one.
+		// A killed prober never ran to completion, which is exactly what the
+		// inconclusive kind's doc comment claims it did.
+		resetDegradationLedger();
+		const onTransient = vi.fn();
+		const onInconclusive = vi.fn();
+		safeSpawnAsync.mockResolvedValueOnce(
+			result({
+				status: null,
+				signal: "SIGTERM",
+				error: new Error("killed"),
+				outputTruncated: true,
+			}),
+		);
+		await expect(
+			verifyToolBinary(
+				"verbose-hanging-lsp",
+				undefined,
+				onTransient,
+				10,
+				["--version"],
+				undefined,
+				onInconclusive,
+			),
+		).resolves.toBe(false);
+		expect(onTransient).toHaveBeenCalledTimes(1);
+		expect(onInconclusive).not.toHaveBeenCalled();
+		expect(getDegradationSummary().map((group) => group.kind)).toEqual([
+			"installer-verification-output-truncated",
 		]);
 	});
 

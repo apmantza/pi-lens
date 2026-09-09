@@ -14,6 +14,7 @@
  */
 
 import { withResidentBootstrap } from "../support/bootstrap-access.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	resetProjectTrust,
@@ -50,10 +51,7 @@ vi.mock("../../clients/lsp/config.js", () => ({
 	getServerInitOverride: vi.fn().mockReturnValue(undefined),
 }));
 vi.mock("../../clients/lsp/index.js", () => ({
-	getLSPService: vi.fn(() => ({
-		touchFile: vi.fn().mockResolvedValue(undefined),
-		supportsLSP: () => false,
-	})),
+	getLSPService: vi.fn(() => makeLspServiceDouble()),
 }));
 
 const okResult = { stdout: "", stderr: "", status: 0 };

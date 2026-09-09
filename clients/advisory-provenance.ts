@@ -9,7 +9,7 @@ import { freshnessFromMtime } from "./freshness.js";
 
 export type AdvisoryFileRole = "source" | "test" | "affected";
 
-export interface AdvisoryFileProvenance {
+interface AdvisoryFileProvenance {
 	path: string;
 	role: AdvisoryFileRole;
 	mtimeMs: number;
@@ -284,7 +284,7 @@ export function validateAdvisoryProvenance(
 //     it.
 
 /** Stat budget: one per unique cited path, sharing the envelope's own cap. */
-export const MAX_FINDING_PATH_STATS = MAX_ADVISORY_AFFECTED_FILES;
+const MAX_FINDING_PATH_STATS = MAX_ADVISORY_AFFECTED_FILES;
 
 /** How many dead paths a single drop record names before it stops. */
 const MAX_LOGGED_DEAD_PATHS = 3;

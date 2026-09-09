@@ -34,6 +34,10 @@ vi.mock("../../clients/package-manager.js", async (importOriginal) => ({
 	findNodeToolBinary,
 }));
 vi.mock("../../clients/installer/index.js", () => ({
+	// #2140: the probe resolver asks the installer for a release-managed
+	// binary (`~/.pi-lens/bin`) before falling back to PATH. Undefined is
+	// "no managed install", which is what these tests already assumed.
+	findManagedToolBinary: vi.fn(async () => undefined),
 	ensureTool,
 	getManagedToolsDir: () => path.join(os.tmpdir(), "pilens-fake-home", "tools"),
 	// #1276: stubbed for the same reason as the sibling madge test files — see

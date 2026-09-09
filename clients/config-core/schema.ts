@@ -22,10 +22,6 @@
  * Pure accessors only. Nothing here reads a file, and nothing holds state.
  */
 
-import { STABILITY_TIER_KEY } from "../config-diagnostic-codes.js";
-
-export { STABILITY_TIER_KEY };
-
 /** A JSON-Schema-shaped node. Open bag on purpose: unknown keywords pass through. */
 export type ConfigSchemaNode = Readonly<Record<string, unknown>>;
 
@@ -73,7 +69,7 @@ export const MERGE_STRATEGY_KEY = "x-merge-strategy";
  */
 export type MergeStrategy = "replace" | "append" | `keyed:${string}`;
 
-export const DEFAULT_MERGE_STRATEGY: MergeStrategy = "replace";
+const DEFAULT_MERGE_STRATEGY: MergeStrategy = "replace";
 
 const KEYED_PREFIX = "keyed:";
 
@@ -121,7 +117,7 @@ export const DENY_KEY = "x-deny";
  * the field someone spelled differently, and silently claims one that merely
  * looks the part. A schema says what it means.
  */
-export const DENY_POLICIES = ["boolean-false", "array-union"] as const;
+const DENY_POLICIES = ["boolean-false", "array-union"] as const;
 
 export type DenyPolicy = (typeof DENY_POLICIES)[number];
 
@@ -171,7 +167,7 @@ export function schemaType(
  * field while the merger replaced it whole, so the same schema typo produced
  * two different merge semantics.
  */
-export const SCHEMA_TYPES: readonly string[] = [
+const SCHEMA_TYPES: readonly string[] = [
 	"object",
 	"array",
 	"string",

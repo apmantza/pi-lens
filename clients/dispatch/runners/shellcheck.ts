@@ -23,6 +23,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { safeSpawnAsync } from "../../safe-spawn.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { PRIORITY } from "../priorities.js";
 import type {
 	Diagnostic,
@@ -141,7 +142,7 @@ const shellcheckRunner: RunnerDefinition = {
 	skipTestFiles: false, // Shell scripts in test directories should still be checked
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		const cwd = ctx.cwd || process.cwd();
+		const cwd = resolveRunnerCwd(ctx, "shellcheck");
 
 		// #233: bash-language-server runs shellcheck internally. When the `bash` LSP
 		// covers this file AND shellcheck is on PATH (so the LSP actually emits its
@@ -190,7 +191,7 @@ const shellcheckRunner: RunnerDefinition = {
 
 		args.push(ctx.filePath);
 
-		const result = await safeSpawnAsync(cmd, args, { timeout: 15000 });
+		const result = await safeSpawnAsync(cmd, args, { cwd, timeout: 15000 });
 
 		// shellcheck exits with code 1 if issues found, 0 if clean
 		if (result.status === 0 && !result.stdout?.trim()) {

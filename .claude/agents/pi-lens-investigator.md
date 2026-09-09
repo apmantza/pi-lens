@@ -2,6 +2,7 @@
 name: pi-lens-investigator
 description: Log-forensics and root-causing for pi-lens runtime behavior — inconclusive rates, stale findings, silent degradations, crash attribution, dogfood-session anomalies. Use when the question is "what actually happened and why", not "apply this fix". Spawn with the symptom (quotes, timestamps, session context) and the question to answer; the diagnosis is the deliverable.
 model: opus
+disallowedTools: Agent
 effort: high
 ---
 

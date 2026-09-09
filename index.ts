@@ -47,7 +47,7 @@ import { CacheManager } from "./clients/cache-manager.js";
 // the same way the per-dispatch path does, so a retired blocker stops gating
 // the commit.
 import { retireInlineBlockerAndResyncGuard } from "./clients/git-guard.js";
-import { resolvePackagePath } from "./clients/package-root.js";
+import { resolveSkillPaths } from "./clients/skills-resolver.js";
 import {
 	clearWidgetState,
 	exportWidgetState,
@@ -126,6 +126,7 @@ import { registerCascadeTierReconcileTask } from "./clients/lsp/cascade-tier.js"
 import { buildResolvedFoundCascadeRun } from "./clients/cascade-format.js";
 import { initLSPConfig } from "./clients/lsp/config.js";
 import { getLSPService, resetLSPService } from "./clients/lsp/index.js";
+import { shouldInitializeSessionRoot } from "./clients/lsp/session-roots.js";
 import { warmLspService } from "./clients/lsp-lazy.js";
 import {
 	sweepOrphans,
@@ -165,8 +166,8 @@ import {
 	consumeTurnEndFindings,
 } from "./clients/runtime-context.js";
 import {
+	consumeStagedTestRunnerFindings,
 	deliverStagedTestRunnerFindings,
-	registerTestRunnerEntryRenderer,
 	stageTestRunnerDelivery,
 } from "./clients/test-runner-delivery.js";
 import {
@@ -569,12 +570,25 @@ let _turnSummaryEmitCtx:
 	| undefined;
 let _testRunnerDeliveryRegistered = false;
 let _nextTestRunnerDeliveryOwnerId = 0;
+/**
+ * A memo cap, not a mirror of the session-root registry's own bound (#2518).
+ * It used to be described as matching that registry so an uninitializable root
+ * could not stay served; the check below asks the registry directly instead, so
+ * the two numbers no longer have to agree for the answer to be right.
+ */
 const LSP_CONFIG_CWD_CAP = 128;
 const _lspConfigInitializedCwds = new BoundedSet<string>(LSP_CONFIG_CWD_CAP);
 
 async function ensureLSPConfigInitialized(cwd: string): Promise<void> {
 	const normalizedCwd = path.resolve(cwd);
-	if (_lspConfigInitializedCwds.has(normalizedCwd)) return;
+	// #2518: the memo alone is not enough, exactly as in `mcp/server.ts`'s
+	// `ensureReady`. `initLSPConfig` also runs from `clients/runtime-session.ts`
+	// and `clients/lens-engine.ts`, which this memo never sees, so the registry
+	// can evict this cwd while the memo still calls it initialized — and the
+	// evicted entry carries the operator's `disabledServers` denial with it.
+	if (!shouldInitializeSessionRoot(normalizedCwd, _lspConfigInitializedCwds)) {
+		return;
+	}
 	await initLSPConfig(normalizedCwd);
 	_lspConfigInitializedCwds.add(normalizedCwd);
 }
@@ -1050,11 +1064,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 			dbg(`turn-summary renderer registration failed: ${registerRendererErr}`);
 		}
 	}
-	// #2366: test failures are a persistent, non-context custom entry. The
-	// delivery task still checks appendEntry at fire time; this registration is
-	// capability detection only and never authorizes a sendMessage fallback.
-	registerTestRunnerEntryRenderer(pi);
-
 	// --- Commands ---
 
 	pi.registerCommand("lens-toggle", {
@@ -1798,12 +1807,15 @@ function activateExtension(hostPi: ExtensionAPI) {
 		// module's own directory — under the compiled dist/ layout (#182) the module
 		// lives in dist/ but skills/ stays at the package root, so a module-relative
 		// join lands on the non-existent dist/skills/ and skills silently fail to load
-		// (#205). resolvePackagePath walks up to package.json, correct for both the
-		// source (index.ts at root) and dist (dist/index.js) layouts.
-		const skillsDir = resolvePackagePath(import.meta.url, "skills");
-
+		// (#205). resolveSkillPaths walks up to package.json (same as
+		// resolvePackagePath) and ALWAYS returns that path — pi handles an absent
+		// directory gracefully and the manifest may register the same dir — while
+		// separately recording a bounded skills-dir-missing degradation when pi's
+		// own discovery rule (root SKILL.md, nested SKILL.md, loose root .md) would
+		// load nothing there (#2626). Never turn the health check into a [] return:
+		// that inversion dropped real skills on four pi layouts in #2637 round 1.
 		return {
-			skillPaths: [skillsDir],
+			skillPaths: resolveSkillPaths(import.meta.url),
 		};
 	});
 
@@ -2189,6 +2201,8 @@ function activateExtension(hostPi: ExtensionAPI) {
 						emitHostReadyDelay,
 						sessionReason,
 						handlerEnteredAt,
+						globalConfig,
+						projectConfig: loadPiLensProjectConfig(runtime.projectRoot),
 						// #2129: this call site is only reached for "primary"/
 						// "sequential-replacement" — a declined start returned above.
 						sessionStartClassification: sessionStartDecision.classification,
@@ -2939,7 +2953,6 @@ function activateExtension(hostPi: ExtensionAPI) {
 						...delivery,
 						owner: {
 							ownerId: testRunnerDeliveryOwnerId,
-							pi,
 							cacheManager,
 							runtime,
 							getCtx: () => ownEventCtx ?? {},
@@ -3547,6 +3560,13 @@ function activateExtension(hostPi: ExtensionAPI) {
 						cacheManager,
 						cwd,
 					);
+					const testFindings = consumeStagedTestRunnerFindings({
+						cwd,
+						sessionId: runtime.telemetrySessionId,
+						ownerId: testRunnerDeliveryOwnerId,
+						cacheManager,
+						runtime,
+					});
 					const agentNudge = consumeAgentNudge(dbg);
 					const sourceMessages = [
 						{
@@ -3556,6 +3576,10 @@ function activateExtension(hostPi: ExtensionAPI) {
 						{
 							source: "turn-findings" as const,
 							messages: turnEndFindings?.messages ?? [],
+						},
+						{
+							source: "test-findings" as const,
+							messages: testFindings?.messages ?? [],
 						},
 						{
 							source: "agent-nudge" as const,

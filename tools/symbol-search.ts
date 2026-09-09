@@ -12,7 +12,7 @@ import {
 	symbolSearch,
 	type SymbolSearchResult,
 } from "../clients/lens-engine.js";
-import { baseName, compactRenderResult } from "./render-compact.js";
+import { compactRenderResult } from "./render-compact.js";
 
 /**
  * Machine-actionable follow-up hint (#771) — mirrors ast-grep-search.ts's
@@ -33,9 +33,8 @@ export function createSymbolSearchTool(getProjectRoot: () => string) {
 		name: "symbol_search" as const,
 		label: "Symbol Search",
 		description:
-			"Ranked identifier search over the persisted word index (BM25 + priors demoting tests/vendor/docs) — answers 'which files are most relevant to <query>' by identifier. First step of the discovery funnel: symbol_search finds candidates, module_report explains the file, read_symbol reads the body. Complements grep (raw substrings) and lsp_navigation (exact references). Each hit's startLine/endLine mark its best-matching line (offset=startLine, limit=endLine-startLine+1 for a one-line peek); use module_report on `file` for the real outline. Returns available:false with a retry hint if the index isn't built yet — it self-builds in the background (never blocks this call).",
-		promptSnippet:
-			"Ranked identifier search — find relevant files by name/usage",
+			"Find relevant files by ranked identifier search. On a cold cache, project_report and symbol_search return available: false with a retry hint and start a non-blocking background build; module_report degrades to outline-only with cache freshness explicit. Example: search `authenticate user` before module_report.",
+		promptSnippet: "Find files by identifier",
 		renderResult: compactRenderResult<{
 			available?: boolean;
 			query?: string;
@@ -194,4 +193,3 @@ export function createSymbolSearchTool(getProjectRoot: () => string) {
 
 // Re-exported so tests importing from this module can reach baseName without
 // a second import path.
-export { baseName };

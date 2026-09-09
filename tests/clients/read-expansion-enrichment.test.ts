@@ -3,6 +3,7 @@ import { CacheManager } from "../../clients/cache-manager.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
 import { handleToolCall } from "../../clients/runtime-tool-call.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 // #951 review finding 2: the read-path enrichment had no positive-path or
 // timeout coverage — every runtime-tool-call test mocked the warm client
@@ -41,10 +42,8 @@ const warmClient = {
 };
 const getWarmClientForFileMock = vi.fn();
 vi.mock("../../clients/lsp/index.js", () => ({
-	getLSPService: () => ({
-		touchFile: vi.fn().mockResolvedValue(undefined),
-		getWarmClientForFile: getWarmClientForFileMock,
-	}),
+	getLSPService: () =>
+		makeLspServiceDouble({ getWarmClientForFile: getWarmClientForFileMock }),
 	resetLSPService: () => {},
 }));
 

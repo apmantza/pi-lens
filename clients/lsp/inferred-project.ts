@@ -67,7 +67,7 @@ export function isTsProjectFile(filePath: string): boolean {
 	return TS_PROJECT_EXTENSIONS.has(path.extname(filePath).toLowerCase());
 }
 
-export function isTypeScriptSourcedDiagnostic(d: LSPDiagnostic): boolean {
+function isTypeScriptSourcedDiagnostic(d: LSPDiagnostic): boolean {
 	return TYPESCRIPT_DIAGNOSTIC_SOURCES.has((d.source ?? "").toLowerCase());
 }
 

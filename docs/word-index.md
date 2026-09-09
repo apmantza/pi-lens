@@ -156,7 +156,7 @@ the cwd, falling back to the stateless snapshot read otherwise.
 
 ## Caps and boundaries
 
-- **≤6000 files, ≤512KB per file** (`WORD_INDEX_MAX_FILES`,
+- **≤6000 files, ≤512KB per file** (the file cap is passed into the walk;
   `WORD_INDEX_MAX_BYTES` in `clients/word-index.ts`) — shared by every
   build path and the per-edit update path alike.
 - **Deletions aren't plumbed at the per-edit seam** — the cascade only ever

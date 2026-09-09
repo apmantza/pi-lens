@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import semver from "semver";
 import { describe, expect, it } from "vitest";
 import {
 	HOST_PROVIDED_PACKAGES,
@@ -8,6 +9,7 @@ import {
 	HOST_PROVIDED_TYPE_ONLY_PACKAGES,
 	LAZY_NATIVE_PACKAGES,
 } from "../scripts/lib/host-provided-deps.mjs";
+import { USER_PROFILE_PATH_RE } from "./support/user-profile-path-pattern.js";
 
 // These tests pin the published-package contract: pi-lens ships a precompiled
 // dist/ and points its entry at compiled JS, so pi does NOT jiti-transpile ~200
@@ -36,6 +38,9 @@ const lock = JSON.parse(
 		"node_modules/@ast-grep/cli"?: {
 			version?: string;
 			hasInstallScript?: boolean;
+		};
+		"node_modules/@earendil-works/pi-tui"?: {
+			version?: string;
 		};
 	};
 };
@@ -80,32 +85,71 @@ describe("published package entry points (dist mode, #182)", () => {
 		expect(pkg.scripts?.["build:dist"] ?? "").toContain("tsconfig.dist.json");
 	});
 
-	it("pi.skills resolves (from the dist entry FILE) back to the real root skills/", () => {
-		// pi resolves each `pi.skills` entry relative to the extension entry's
-		// **file path** (`dist/index.js`), via `path.resolve(entryFile, skill)` —
-		// NOT relative to the entry's directory. So a leading `../` only cancels
-		// `index.js` and stays inside `dist/`; reaching the real root `skills/`
-		// from `dist/index.js` needs to climb TWO levels: `../../skills`. Getting
-		// this wrong (`../skills` → `dist/skills`, missing) silently stops skills
-		// from loading and emits pi's "skill path does not exist" warning — and the
-		// tarball `skills/` check below does NOT catch it (the dir ships fine; pi
-		// just resolves to the wrong place). Verified against pi's resolver. #199.
-		expect(pkg.pi?.skills ?? []).toContain("../../skills");
-		expect(pkg.scripts?.["build:dist"] ?? "").not.toContain("dist/skills");
-		expect(pkg.files ?? []).toContain("skills/");
+	it("pi.skills resolves PACKAGE-ROOT-relative and never escapes the package (#2587)", () => {
+		// Guards the recurrence of #2587: a `pi.skills` entry that leaves the
+		// package, so none of the shipped skills register on any install.
+		//
+		// pi's real resolver — `PackageManager#collectFilesFromManifestEntries` in
+		// `@earendil-works/pi-coding-agent` `dist/core/package-manager.js`
+		// (this non-glob branch is identical in 0.78.1, 0.84.1 and 0.85.1; the
+		// glob branch was refactored into `expandPackageGlob` in 0.85.1):
+		//
+		//     if (!hasGlobPattern(entry)) return [resolve(root, entry)];
+		//
+		// where `root` is the PACKAGE ROOT (the dir holding package.json), passed
+		// down from `addManifestEntries(entries, packageRoot, …)`. It is NOT the
+		// extension entry file and NOT `dist/`. #199 assumed entry-file-relative
+		// resolution and set `["../../skills"]`; from any real install root
+		// (`…/node_modules/pi-lens`) that lands two levels OUTSIDE the package, so
+		// pi loaded zero skills everywhere — and the #199 test replicated the
+		// guessed resolver instead of pi's, so CI stayed green for four releases.
+		const resolveLikePi = (packageRoot: string, entry: string) =>
+			path.resolve(packageRoot, entry);
+		const inside = (packageRoot: string, resolved: string) =>
+			resolved === packageRoot || resolved.startsWith(packageRoot + path.sep);
 
-		// Static guard replicating pi's resolution: joining each pi.skills entry to
-		// the extension entry FILE must land on the package's own root skills/ dir.
-		const entry = pkg.pi?.extensions?.[0];
-		expect(entry, "pi.extensions[0] must exist").toBeTruthy();
-		const entryFile = path.resolve(root, entry as string);
+		const skills = pkg.pi?.skills ?? [];
+		expect(
+			skills.length,
+			"pi.skills must declare the shipped dir",
+		).toBeGreaterThan(0);
+		expect(pkg.files ?? [], "skills/ must ship in the tarball").toContain(
+			"skills/",
+		);
+		// One skills tree only: a second copy under dist/ would ship dead weight.
+		expect(pkg.scripts?.["build:dist"] ?? "").not.toContain("dist/skills");
+
+		// The published package root is wherever the installer puts it, so assert
+		// containment against a SYNTHETIC root too — the property belongs to the
+		// entry string, not to this checkout's location on disk.
+		const installRoot = path.resolve(
+			path.sep,
+			"pi",
+			"agent",
+			"npm",
+			"node_modules",
+			"pi-lens",
+		);
 		const rootSkills = path.resolve(root, "skills");
-		for (const skill of pkg.pi?.skills ?? []) {
+		for (const entry of skills) {
+			// The replication above only covers pi's non-glob branch.
 			expect(
-				path.resolve(entryFile, skill),
-				`pi.skills "${skill}" must resolve (entry-file-relative) to the root skills/ dir`,
+				/[*?]/.test(entry),
+				`pi.skills "${entry}" must not be a glob (pi takes a different branch)`,
+			).toBe(false);
+			expect(
+				resolveLikePi(root, entry),
+				`pi.skills "${entry}" must resolve (package-root-relative) to the root skills/ dir`,
 			).toBe(rootSkills);
+			expect(
+				inside(installRoot, resolveLikePi(installRoot, entry)),
+				`pi.skills "${entry}" escapes the installed package: ${resolveLikePi(installRoot, entry)}`,
+			).toBe(true);
 		}
+		expect(
+			fs.existsSync(path.join(rootSkills, "pi-lens-ast-grep", "SKILL.md")),
+			"the resolved skills dir must actually hold SKILL.md files",
+		).toBe(true);
 	});
 
 	it("bundles core grammars via prepare and ships them in the tarball", () => {
@@ -122,11 +166,16 @@ describe("published package entry points (dist mode, #182)", () => {
 		).toBeUndefined();
 	});
 
-	it("wires the bundle step into build:dist after tsc (#335)", () => {
+	it("wires the bundle step into build:dist after tsc (#335, #2593)", () => {
 		const bd = pkg.scripts?.["build:dist"] ?? "";
-		// tsc must run before the bundle (bundle collapses the tsc emit).
+		// tsc (isolated via scripts/build-dist-tsc.mjs, #2593) must run before
+		// the bundle (bundle collapses the tsc emit).
 		expect(bd).toContain("bundle:dist");
+		expect(bd).toContain("build-dist-tsc.mjs");
 		expect(bd.indexOf("tsconfig.dist.json")).toBeLessThan(
+			bd.indexOf("bundle:dist"),
+		);
+		expect(bd.indexOf("build-dist-tsc.mjs")).toBeLessThan(
 			bd.indexOf("bundle:dist"),
 		);
 		expect(pkg.scripts?.["bundle:dist"] ?? "").toContain("bundle-dist.mjs");
@@ -165,6 +214,22 @@ describe("host-provided packages are not vendored (#1926)", () => {
 			"utf8",
 		);
 		expect(selftest).toContain("lib/host-provided-deps.mjs");
+	});
+
+	it("ships scripts/lib/skills-predicate.mjs, because install-selftest.mjs imports it too (#2626)", () => {
+		// Same shape as host-provided-deps.mjs above, one module later: the
+		// shared skill-discovery predicate (#2626 review round 2, F2) folds
+		// `install-selftest.mjs`'s manifest-resolution probe AND
+		// `clients/skills-resolver.ts`'s health check onto ONE walk. If this
+		// file is missing from files[], the installed selftest's import throws
+		// in the tarball, same failure mode #1926 guards for the sibling list.
+		const files = pkg.files ?? [];
+		expect(files).toContain("scripts/lib/skills-predicate.mjs");
+		const selftest = fs.readFileSync(
+			path.join(root, "scripts", "install-selftest.mjs"),
+			"utf8",
+		);
+		expect(selftest).toContain("lib/skills-predicate.mjs");
 	});
 
 	it("splits host-provided packages into runtime and type-only, with no overlap", () => {
@@ -308,6 +373,65 @@ describe("host-provided packages are not vendored (#1926)", () => {
 	});
 });
 
+// #2586: `^0.84.1` on a 0.x host version pins the minor (npm's caret on a
+// pre-1.0 version only floats the patch), so a real pi-coding-agent/pi-tui
+// 0.85.x host was excluded by declaration even though the nightly real-pi
+// compat smoke already runs green against it and pi-tui 0.85.1 still exports
+// every symbol `clients/deps/pi-tui.ts` consumes. The declared peer range
+// must accept every host version this repo has actually verified — no more,
+// no less: broadening past what is tested (e.g. asserting 0.86.0 is accepted)
+// would silently re-open the same gap the next incompatible minor creates.
+describe("pi-tui peer range covers every tested host version (#2586)", () => {
+	const peerRange = pkg.peerDependencies?.["@earendil-works/pi-tui"];
+
+	// Derived from the lockfile so this list cannot silently drift from what
+	// the unit suite actually installs and runs against; "0.85.1" is also
+	// named literally per the issue's acceptance criterion, even though it
+	// coincides with the lockfile-derived entry after the devDependency bump.
+	// "0.84.1" pins the LOW end of the range explicitly (#2586 review F3):
+	// the lockfile-derived entry alone dedupes to a single 0.85.1 value once
+	// the devDependency is bumped, so a mutation that silently drops 0.84.x
+	// support (e.g. narrowing the range to "^0.85.0") would stay green
+	// without it. #257's install-selftest.mjs cites 0.84.1 as a version this
+	// repo already verified pi's package-manager resolver against, so it's
+	// not an arbitrary floor.
+	const lockVersion =
+		lock.packages?.["node_modules/@earendil-works/pi-tui"]?.version;
+	const testedVersions = [
+		...new Set([lockVersion, "0.85.1", "0.84.1"].filter(Boolean)),
+	] as string[];
+
+	it("lists at least one tested version to guard", () => {
+		// Guards the guard: an emptied testedVersions would make the loop below
+		// vacuously pass.
+		expect(testedVersions.length).toBeGreaterThan(0);
+	});
+
+	it("declares a peer range", () => {
+		expect(
+			peerRange,
+			"peerDependencies must declare @earendil-works/pi-tui",
+		).toBeTruthy();
+	});
+
+	for (const version of testedVersions) {
+		it(`accepts tested host version ${version}`, () => {
+			expect(
+				semver.satisfies(version, peerRange ?? ""),
+				`peerDependencies["@earendil-works/pi-tui"] (${peerRange}) must accept ${version}`,
+			).toBe(true);
+		});
+	}
+
+	it("does not broaden acceptance past a tested minor (0.86.0 stays out)", () => {
+		// #2586's fix widens the range to cover exactly the 0.84.x/0.85.x hosts
+		// this repo has compat evidence for. Asserting a not-yet-released,
+		// not-yet-tested 0.86.0 is accepted would mask the exact declaration
+		// gap this suite exists to catch the next time pi ships a new minor.
+		expect(semver.satisfies("0.86.0", peerRange ?? "")).toBe(false);
+	});
+});
+
 // Guards the #335 bundle CONTRACT against the built entry: pi's Bun-compiled
 // host cannot resolve a bare specifier from the extension's node_modules, so the
 // bundle must inline the pure-JS deps and keep only host-provided + native/wasm
@@ -373,6 +497,37 @@ describe("bundled dist entry shape (#335)", () => {
 			expect(src).toContain("pathToFileURL");
 		},
 	);
+
+	// #2594 review F1/F2: scripts/bundle-dist.mjs's `npm exec --package
+	// esbuild@…` spawn originally ran with `cwd: root`, but esbuild bakes its
+	// bundled-module-path banner COMMENTS relative to esbuild's own cwd. A
+	// since-reverted fix moved that cwd to a temp directory to dodge a
+	// project-tree dependency collision (#2590) and, as a side effect, baked
+	// the temp path (and this machine's home directory, via the temp dir's
+	// full path) into every one of those comments in the shipped
+	// dist/index.js — the exact #1718/#1728 hardcoded-machine-path shape,
+	// just introduced by the bundler instead of a hand-typed literal. The fix
+	// keeps `cwd: root` (so esbuild's own relative paths stay correct) and
+	// isolates npm's tree lookup via `--prefix` instead. Reuses the same
+	// regex `tests/scripts/no-hardcoded-machine-paths.test.ts` scans source
+	// with, so the two guards cannot drift onto different patterns.
+	it.runIf(built)("bakes no user-profile absolute path into the bundle", () => {
+		// Reviewed, named exception — never a blanket skip (same policy as
+		// no-hardcoded-machine-paths.test.ts's own ALLOWLIST). This is a real,
+		// pre-existing, unrelated match: clients/knip-client.ts's own doc
+		// comment discusses a historical incident with the literal example path
+		// "/home/v" (a one-letter example username), which the regex's
+		// `[A-Za-z0-9_.-]+` (1-or-more) legitimately matches. It has nothing to
+		// do with this bundle's build tooling and is present in every build,
+		// buggy or not — excluding it by exact value leaves the check exactly as
+		// strict against the actual defect shape (hundreds of distinct
+		// `/home/<real-user>` occurrences from esbuild's own banner comments).
+		const KNOWN_BENIGN_MATCHES = new Set(["/home/v"]);
+		const matches = (src.match(USER_PROFILE_PATH_RE) ?? []).filter(
+			(m) => !KNOWN_BENIGN_MATCHES.has(m),
+		);
+		expect(matches).toEqual([]);
+	});
 });
 
 describe("tsconfig.dist.json", () => {
@@ -412,6 +567,13 @@ describe("tsconfig.dist.json", () => {
 		// relative specifier lands.
 		expect(dist.compilerOptions?.allowJs).toBe(true);
 		expect(dist.include ?? []).toContain("scripts/lib/process-scan.mjs");
+	});
+
+	it("compiles the shared skills predicate into dist so esbuild can inline it (#2626)", () => {
+		// Same failure mode as process-scan.mjs above: `clients/skills-resolver.ts`
+		// imports `../scripts/lib/skills-predicate.mjs`, and without this entry
+		// `bundle:dist` dies trying to resolve it from `dist/clients/`.
+		expect(dist.include ?? []).toContain("scripts/lib/skills-predicate.mjs");
 	});
 
 	it("keeps tsconfig.dist.json parseable as strict JSON", () => {

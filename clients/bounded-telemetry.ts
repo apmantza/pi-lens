@@ -177,17 +177,8 @@ export const BOUNDED_TELEMETRY_PHASES = [
 
 export type BoundedPhase = (typeof BOUNDED_TELEMETRY_PHASES)[number];
 
-const REGISTERED_PHASES: ReadonlySet<string> = new Set(
-	BOUNDED_TELEMETRY_PHASES,
-);
-
-/** Report whether a phase name is in the registry (used by the sweep). */
-export function isBoundedTelemetryPhase(phase: string): phase is BoundedPhase {
-	return REGISTERED_PHASES.has(phase);
-}
-
 /** Hard ceiling on detailed records for one phase within one turn. */
-export interface TurnCap {
+interface TurnCap {
 	limit: number;
 	/**
 	 * The caller's current turn. It travels with the limit on purpose: it

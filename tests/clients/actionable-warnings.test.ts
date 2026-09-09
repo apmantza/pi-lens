@@ -15,6 +15,7 @@ import {
 import type { Diagnostic } from "../../clients/dispatch/types.js";
 import { getProjectDataDir } from "../../clients/file-utils.js";
 import { normalizeMapKey } from "../../clients/path-utils.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 import { removeTempDirSync } from "./test-utils.js";
 
 // PRE-#1816 id formula, reproduced here (not imported — it no longer exists
@@ -47,9 +48,11 @@ function legacyActionableWarningIdForTest(args: {
 }
 
 vi.mock("../../clients/lsp/index.js", () => ({
-	getLSPService: () => ({
-		supportsLSP: () => false,
-	}),
+	// `supportsLSP: false` short-circuits `buildActionableWarningsReport` before
+	// it reaches any other service method; the rest of the surface comes from the
+	// factory so a method added to the production path cannot TypeError into this
+	// suite's swallow-all catch (#2592).
+	getLSPService: () => makeLspServiceDouble({ supportsLSP: () => false }),
 }));
 
 function makeWarning(filePath: string): Diagnostic {

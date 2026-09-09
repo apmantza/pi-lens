@@ -15,7 +15,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-export interface ProjectRule {
+interface ProjectRule {
 	source: string; // ".claude/rules", ".agents/rules", "root"
 	name: string; // filename or display name
 	filePath: string; // absolute path

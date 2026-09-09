@@ -21,7 +21,7 @@
  */
 import { normalizeRuleId } from "./rule-id-normalize.js";
 
-export interface RulePolicyEntry {
+interface RulePolicyEntry {
 	disable?: string[];
 	select?: string[];
 }

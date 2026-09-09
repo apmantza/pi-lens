@@ -239,9 +239,9 @@ export const EXCLUDED_DIRS = [
  * `buildProjectIgnoreMatcher`'s `patternsForDir` (#783) — both are tagged
  * `"pilens"` and share the same tracked-file-rescue exemption.
  */
-export type GitignorePatternLayer = "global" | "gitignore" | "pilens";
+type GitignorePatternLayer = "global" | "gitignore" | "pilens";
 
-export interface GitignorePattern {
+interface GitignorePattern {
 	pattern: string;
 	negated: boolean;
 	directoryOnly: boolean;
@@ -397,7 +397,7 @@ function matchesGitignorePattern(
 	});
 }
 
-export function readGitignorePatterns(
+function readGitignorePatterns(
 	rootDir: string,
 	layer: GitignorePatternLayer = "gitignore",
 ): GitignorePattern[] {
@@ -985,7 +985,11 @@ export function readGitignoreDirs(rootDir: string): string[] {
 }
 
 function globToRegExp(glob: string): RegExp {
+	// Directory names use the same `*`-only dialect as read-guard exemptions.
+	// Collapse adjacent stars before compiling to avoid nullable-group
+	// backtracking on a non-matching name (#2622).
 	const escaped = glob
+		.replace(/\*+/g, "*")
 		.replace(/[.+^${}()|[\]\\]/g, "\\$&")
 		.replace(/\*/g, ".*")
 		.replace(/\?/g, ".");

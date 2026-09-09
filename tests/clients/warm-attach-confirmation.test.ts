@@ -28,10 +28,13 @@ import {
 	WARM_DIAGNOSTICS_SCHEMA_VERSION,
 } from "../../clients/mcp/ipc.js";
 import type { WarmDiagnosticsResponse } from "../../clients/mcp/ipc.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 const touchFile = vi.fn();
 vi.mock("../../clients/lsp/index.js", () => ({
-	getLSPService: () => ({ touchFile }),
+	// `_serveWarmRequestForTests` reads only `touchFile` on the diagnostics
+	// route; the rest of the surface comes from the factory (#2592).
+	getLSPService: () => makeLspServiceDouble({ touchFile }),
 }));
 
 const FILE = "C:/repo/notes.md";

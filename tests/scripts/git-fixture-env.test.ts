@@ -65,3 +65,4 @@ describe("JavaScript Git fixture environment", () => {
 		).toThrow();
 	});
 });
+// flake-shape: real-process-spawn — real git fixture children resolve sanitized environment variables and repository metadata

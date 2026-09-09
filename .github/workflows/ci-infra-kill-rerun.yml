@@ -12,17 +12,62 @@ permissions: {}
 jobs:
   classify:
     name: Classify failed Unit tests
-    # pull_request runs only: a master-push run has an empty pull_requests
-    # array, so the classifier can only throw there and paint a useless red
-    # check beside an already-red master. Master-lane rerun coverage needs a
-    # comment-free path and is tracked separately.
-    # Same-repo runs only: a fork PR's workflow_run carries an empty
-    # pull_requests array, so the classifier can only throw the same
-    # no-associated-PR error the push gate excludes. Fork-lane rerun
-    # coverage needs the comment-free path tracked on #2042's remainder.
+    # pull_request runs, PLUS master runs (#2668): CI (ci.yml) reaches
+    # master through TWO non-PR events, not one -- `push` for an ordinary
+    # merge, and `repository_dispatch` (type merge-train-post-merge) for a
+    # bot merge, because the merge lane's own GITHUB_TOKEN merge suppresses
+    # the ordinary `push` event (AGENTS.md, "the lane uses this event
+    # because its GITHUB_TOKEN merge suppresses the ordinary push event").
+    # Excluding repository_dispatch left most real bot-merged master kills
+    # unrerun -- of the 11 master CI failures reviewed when this gap was
+    # found, 3 were repository_dispatch, not push, and a failing Unit tests
+    # on that lane also flips `record-post-merge-validation` to
+    # state=failed, which the merge warden reads as fatal (ci.yml's
+    # `record-post-merge-validation` job).
+    #
+    # Both non-PR events carry an empty `pull_requests` array (there is no
+    # PR to look one up from), so the classifier is given --allow-missing-pr
+    # and skips every PR-comment step on both -- classification and the
+    # one-shot rerun still run in full. See "Reading a master infra-kill"
+    # below for how to tell that apart from a real red on master.
+    #
+    # A repository_dispatch run's own `head_sha` is master's tip AT DISPATCH
+    # TIME, not necessarily the exact merge commit named in the dispatch
+    # payload (`client_payload.sha`) -- a second merge landing between
+    # dispatch and this job's own read can make them differ. That sha is
+    # only ever used for the classify log line and an (absent, on this
+    # path) comment marker; the rerun itself targets RUN_ID, which always
+    # names the correct CI run regardless of which sha is reported
+    # alongside it.
+    #
+    # Same-repo runs only: a fork PR's workflow_run also carries an empty
+    # pull_requests array, so the classifier would otherwise throw the same
+    # no-associated-PR error the push/dispatch paths now handle
+    # deliberately. Fork-lane rerun coverage stays tracked on #2042's
+    # remainder.
+    #
+    # Reading a master infra-kill vs a real red:
+    #   - This job only ever fires for a first attempt (run_attempt == 1) of
+    #     a FAILED "CI" run, so it runs on every master red, infra or not.
+    #   - Open this job's own log (Actions -> "CI infra-kill rerun" ->
+    #     the run for that push/dispatch). Its one console line names the
+    #     classification: "no PR (push/dispatch) sha=<sha> job=Unit tests ->
+    #     infra-kill (rerun triggered)" means it judged the kill infra and
+    #     already reran the CI workflow once -- check the CI run's Actions
+    #     history for a second attempt (run_attempt == 2) landing green.
+    #   - A line ending in "-> real" (or classification "infra-kill" with no
+    #     "(rerun triggered)", e.g. a same-SHA repeat) means this job did NOT
+    #     paper over it: master is genuinely red and needs a human fix, the
+    #     same as any PR-side "ci-classifier: real" comment would.
+    #   - A PR run's outcome is a sticky issue comment instead of this job's
+    #     log, because a PR has a thread to post it to.
     if: >-
       github.event.workflow_run.head_repository.full_name == github.repository &&
-      github.event.workflow_run.event == 'pull_request' &&
+      (
+        github.event.workflow_run.event == 'pull_request' ||
+        (github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'master') ||
+        (github.event.workflow_run.event == 'repository_dispatch' && github.event.workflow_run.head_branch == 'master')
+      ) &&
       github.event.workflow_run.conclusion == 'failure' &&
       github.event.workflow_run.run_attempt == 1
     runs-on: ubuntu-latest
@@ -32,10 +77,12 @@ jobs:
       pull-requests: write
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GITHUB_REPOSITORY: ${{ github.repository }}
       RUN_ID: ${{ github.event.workflow_run.id }}
       HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
       PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+      RUN_EVENT: ${{ github.event.workflow_run.event }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -44,6 +91,55 @@ jobs:
       - name: Classify Unit-tests failure and rerun infra-kill once
         shell: bash
         run: |
-          args=(--run "$RUN_ID" --sha "$HEAD_SHA" --infra-kill-only --skip-missing-job)
-          if [[ -n "$PR_NUMBER" ]]; then args+=(--pr "$PR_NUMBER"); fi
-          node scripts/classify-ci-failure.mjs "${args[@]}"
+          set -o pipefail
+          args=(--run "$RUN_ID" --sha "$HEAD_SHA" --skip-missing-job)
+          if [[ -n "$PR_NUMBER" ]]; then
+            args+=(--pr "$PR_NUMBER")
+          elif [[ "$RUN_EVENT" == "push" || "$RUN_EVENT" == "repository_dispatch" ]]; then
+            args+=(--allow-missing-pr)
+          fi
+          output="$(node scripts/classify-ci-failure.mjs "${args[@]}")"
+          printf '%s\n' "$output"
+          if [[ -n "$PR_NUMBER" ]]; then
+            if grep -q -- '-> infra-' <<<"$output"; then
+              gh pr edit "$PR_NUMBER" --add-label 'ci:infra' --remove-label 'ci:real'
+            else
+              gh pr edit "$PR_NUMBER" --add-label 'ci:real' --remove-label 'ci:infra'
+            fi
+          fi
+
+  finalize-rerun:
+    name: Finalize CI rerun classification
+    if: >-
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      (
+        github.event.workflow_run.event == 'pull_request' ||
+        (github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'master') ||
+        (github.event.workflow_run.event == 'repository_dispatch' && github.event.workflow_run.head_branch == 'master')
+      ) &&
+      github.event.workflow_run.run_attempt == 2 &&
+      (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+      RUN_EVENT: ${{ github.event.workflow_run.event }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - name: Swap terminal rerun labels
+        shell: bash
+        run: |
+          if [[ -z "$PR_NUMBER" ]]; then
+            {
+              echo "## Terminal rerun classification"
+              echo "No associated PR for event=$RUN_EVENT sha=$HEAD_SHA; terminal conclusion=${{ github.event.workflow_run.conclusion }}."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [[ "${{ github.event.workflow_run.conclusion }}" == "success" ]]; then
+            gh pr edit "$PR_NUMBER" --remove-label 'ci:infra'
+          else
+            gh pr edit "$PR_NUMBER" --add-label 'ci:real' --remove-label 'ci:infra'
+          fi

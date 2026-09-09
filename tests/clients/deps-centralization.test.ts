@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { escapeRegExp } from "../support/sweep-kit.js";
 
 const root = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -34,7 +35,7 @@ function* walkTs(dir: string): Generator<string> {
 }
 
 function importRegex(dep: string): RegExp {
-	const esc = dep.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const esc = escapeRegExp(dep);
 	// `from "<dep>"` / `from "<dep>/sub"` (static) or `import("<dep>")` (dynamic)
 	return new RegExp(`(?:from|import\\()\\s*["']${esc}(?:/[^"']*)?["']`);
 }

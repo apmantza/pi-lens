@@ -8,12 +8,18 @@ vi.mock("../../../../clients/safe-spawn.js", () => ({ safeSpawnAsync }));
 vi.mock("../../../../clients/installer/index.js", () => ({
 	ensureTool: vi.fn(async () => "shfmt"),
 }));
-vi.mock("../../../../clients/dispatch/runners/utils/runner-helpers.js", () => ({
-	createAvailabilityChecker: () => ({
-		isAvailableAsync: async () => true,
-		getCommand: () => "shfmt",
+vi.mock(
+	"../../../../clients/dispatch/runners/utils/runner-helpers.js",
+	async (importOriginal) => ({
+		...(await importOriginal<
+			typeof import("../../../../clients/dispatch/runners/utils/runner-helpers.js")
+		>()),
+		createAvailabilityChecker: () => ({
+			isAvailableAsync: async () => true,
+			getCommand: () => "shfmt",
+		}),
 	}),
-}));
+);
 
 function ctx(filePath: string, cwd: string) {
 	return {

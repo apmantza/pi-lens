@@ -38,8 +38,6 @@ const EXEMPT: Record<string, string> = {
 		"the registry itself - contains marker references in descriptions",
 	"widget-state.ts":
 		"registered as widget-state:footer; emoji in render output",
-	"metrics-history.ts":
-		"status icons for health display (🟢/⚪), not agent-directed",
 	"todo-scanner.ts": "classification icon return value, not delivered text",
 	"actionable-warnings.ts":
 		"advisory text built here but delivered by runtime-turn.ts (registered)",

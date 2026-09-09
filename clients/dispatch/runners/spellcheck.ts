@@ -27,7 +27,10 @@ import type {
 	RunnerDefinition,
 	RunnerResult,
 } from "../types.js";
-import { createAvailabilityChecker } from "./utils/runner-helpers.js";
+import {
+	createAvailabilityChecker,
+	resolveRunnerCwd,
+} from "./utils/runner-helpers.js";
 import type { ToolExitCodes } from "./utils/spawn-outcome.js";
 import { parseToolRun } from "./utils/tool-failure.js";
 
@@ -106,8 +109,9 @@ const spellcheckRunner: RunnerDefinition = {
 	skipTestFiles: false, // Check docs in test files too
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
+		const cwd = resolveRunnerCwd(ctx, "spellcheck/typos");
 		// Skip if typos-cli is not installed
-		if (!(await typos.isAvailableAsync(ctx.cwd || process.cwd()))) {
+		if (!(await typos.isAvailableAsync(cwd))) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
 		}
 
@@ -116,13 +120,10 @@ const spellcheckRunner: RunnerDefinition = {
 		// --exclude <pattern>: Could be used to exclude code blocks if needed
 		const args = ["--format", "json", ctx.filePath];
 
-		const result = await safeSpawnAsync(
-			typos.getCommand(ctx.cwd || process.cwd())!,
-			args,
-			{
-				timeout: 15000,
-			},
-		);
+		const result = await safeSpawnAsync(typos.getCommand(cwd)!, args, {
+			cwd,
+			timeout: 15000,
+		});
 
 		// #1816: typos-cli exits 0 clean, 2 with typos found, and 1 on an ERROR
 		// (unreadable config, bad argument). The `status === 2 || stdout` test

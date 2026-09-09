@@ -11,7 +11,13 @@
  * - Always convert backslashes to forward slashes for Map key consistency
  */
 
-import { type Dirent, existsSync, realpathSync } from "node:fs";
+import {
+	type Dirent,
+	existsSync,
+	readFileSync,
+	realpathSync,
+	statSync,
+} from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { win32 } from "node:path";
@@ -453,6 +459,25 @@ export interface FindNearestMarkerRootOptions {
 	boundaries?: readonly string[];
 	/** Override for `os.homedir()`, primarily for tests. */
 	homeDir?: string;
+	/** Further validate a marker path before accepting its containing directory. */
+	markerPredicate?: (markerPath: string) => boolean;
+}
+
+/**
+ * Accept only a real Git repository marker: a directory with HEAD, or a
+ * worktree/submodule marker file whose first line starts with `gitdir:`.
+ */
+export function isRealGitMarker(markerPath: string): boolean {
+	try {
+		const marker = statSync(markerPath);
+		if (marker.isDirectory()) return existsSync(path.join(markerPath, "HEAD"));
+		if (!marker.isFile()) return false;
+		return readFileSync(markerPath, "utf8")
+			.split(/\r?\n/, 1)[0]
+			.startsWith("gitdir:");
+	} catch {
+		return false;
+	}
 }
 
 /**
@@ -484,10 +509,18 @@ export function findNearestMarkerRoot(
 ): string | null {
 	const boundaries = options.boundaries ?? [];
 	const homeDir = path.resolve(options.homeDir ?? os.homedir());
+	const markerPredicate = options.markerPredicate ?? (() => true);
 	let current = path.resolve(startDir);
 	for (let depth = 0; depth < 64; depth++) {
 		if (isAtOrAboveHomeDir(current, homeDir)) return null;
-		if (markers.some((m) => existsSync(path.join(current, m)))) return current;
+		if (
+			markers.some(
+				(m) =>
+					existsSync(path.join(current, m)) &&
+					markerPredicate(path.join(current, m)),
+			)
+		)
+			return current;
 		if (boundaries.some((m) => existsSync(path.join(current, m)))) return null;
 		const parent = path.dirname(current);
 		if (parent === current) return null;
@@ -650,6 +683,414 @@ export function direntsHaveMarkerGlobMatch(
 		(entry) =>
 			(entry.isFile() || entry.isSymbolicLink()) &&
 			nameMatchesMarkerGlob(entry.name, pattern),
+	);
+}
+
+/**
+ * The axes on which build tools' workspace-MEMBER glob dialects genuinely
+ * diverge (#2591). Every "does this workspace declare this directory as a
+ * member" matcher in `clients/` routes through
+ * {@link matchesWorkspaceMemberPattern} with one of the dialect constants
+ * below rather than hand-rolling its own segment regex or minimatch options
+ * block — the same single-source-of-truth rule `nameMatchesMarkerGlob` holds
+ * for marker globs.
+ *
+ * Two axes deliberately do NOT appear here because every dialect agrees on
+ * them, and a field with one value across every constant is configuration
+ * that can never be wrong:
+ *
+ * - **Case sensitivity.** Cargo's pre-fold segment regex carried no `i` flag;
+ *   uv matches with `MatchOptions { case_sensitive: true, .. }` on every
+ *   platform (`MatchOptions::new()`'s default, kept by `is_included_in_workspace`).
+ *   Matching is unconditionally case-SENSITIVE here, on Windows too.
+ * - **Leading dots.** Cargo's pre-fold `*` compiled to `[^/]*`, which matches a
+ *   leading `.` like any other character; uv passes `require_literal_leading_dot:
+ *   false` (again the `MatchOptions::new()` default), which pi-lens expressed as
+ *   minimatch's `dot: true`. A `*` matches `.hidden` in every dialect.
+ *
+ * If a fourth dialect ever disagrees on either, it becomes a field then — not
+ * before.
+ */
+export interface WorkspaceMemberGlobDialect {
+	/** Dialect name, for the dialect table in `tests/clients/path-utils.test.ts`. */
+	readonly name: string;
+	/**
+	 * `crosses-components`: a path component that is exactly `**` matches zero
+	 * or more path components (a TRAILING `/**` requires at least one, matching
+	 * minimatch and rust `glob`). `pattern-never-matches`: a pattern containing
+	 * `**` anywhere matches nothing at all.
+	 */
+	readonly globstar: "crosses-components" | "pattern-never-matches";
+	/**
+	 * Whether `*`/`?` may span a `/` — rust `glob`'s `require_literal_separator:
+	 * false`. When false (the common case) a wildcard is confined to one path
+	 * component, which is also what makes a pattern's component COUNT have to
+	 * equal the path's: `crates/*` cannot reach `crates/a/b` because `[^/]*`
+	 * cannot cross the separator. Component-count equality is therefore an
+	 * entailment of this axis, not a separate one — see the dialect table's
+	 * `segment-count mismatch` vectors, which red if `[^/]*` is widened.
+	 */
+	readonly wildcardCrossesSeparator: boolean;
+	/** Whether `[abc]`/`[!abc]` is a character class or a literal bracket run. */
+	readonly characterClasses: boolean;
+	/** Tool-specific pattern normalization, applied before compilation. */
+	readonly normalizePattern: (pattern: string) => string;
+}
+
+/**
+ * Cargo `[workspace] members`/`exclude` entries.
+ *
+ * KNOWN LIMITATION (#1671 F6, documented rather than implemented, preserved
+ * byte-for-byte by #2591's fold): a recursive `**` component is NOT supported
+ * and a pattern containing one never matches — cargo workspaces that rely on
+ * `**` to pull in an arbitrarily-nested crate tree under-hoist (the crate stays
+ * independently rooted instead of joining the workspace). Folding cargo onto
+ * uv's `crosses-components` globstar would silently change Rust-LSP root
+ * selection, so the divergence is kept as a dialect value, not resolved.
+ *
+ * `characterClasses: false` is likewise a preserved divergence, not a
+ * considered choice: cargo's pre-fold segment compiler escaped `[` and `]`
+ * into literals, so `crates/[ab]` names a directory literally called `[ab]`.
+ * Real cargo (the `glob` crate) would read it as a class; changing that here
+ * would be the same unreviewed Rust-hoisting change.
+ */
+export const CARGO_WORKSPACE_MEMBER_DIALECT: WorkspaceMemberGlobDialect = {
+	name: "cargo",
+	globstar: "pattern-never-matches",
+	wildcardCrossesSeparator: false,
+	characterClasses: false,
+	normalizePattern: (pattern) => pattern.replace(/\/+$/, ""),
+};
+
+/**
+ * uv `[tool.uv.workspace] members`, pinned to
+ * `astral-sh/uv@3c979abda4530fe9bf3d92e9bcf5c5575e3b3126`,
+ * `crates/uv-workspace/src/workspace.rs` `is_included_in_workspace`: the glob is
+ * `normalize_path`d first (so a leading `./` and any interior `.` component are
+ * not part of the pattern) and matched with
+ * `MatchOptions { require_literal_separator: true, ..MatchOptions::new() }`.
+ */
+export const UV_WORKSPACE_MEMBERS_DIALECT: WorkspaceMemberGlobDialect = {
+	name: "uv-members",
+	globstar: "crosses-components",
+	wildcardCrossesSeparator: false,
+	characterClasses: true,
+	normalizePattern: (pattern) => path.posix.normalize(toPosix(pattern)),
+};
+
+/**
+ * uv `[tool.uv.workspace] exclude`, same upstream file and SHA
+ * (`WorkspaceExclusions::matches`): an exclusion is matched with
+ * `Pattern::matches_path`, i.e. `MatchOptions::new()` defaults, where
+ * `require_literal_separator` is FALSE — so a `*` in an exclusion DOES cross
+ * `/` (`exclude = ['packages/a*c']` excludes `packages/a/b/c`). Two different
+ * option sets inside one tool, which is why the dialect is an object and the
+ * two uv constants are not one.
+ *
+ * Before #2591 this was a documented limitation: minimatch cannot express a
+ * separator-crossing `*`, so pi-lens under-excluded. The dialect object can, so
+ * it is now implemented rather than documented.
+ */
+export const UV_WORKSPACE_EXCLUDE_DIALECT: WorkspaceMemberGlobDialect = {
+	name: "uv-exclude",
+	globstar: "crosses-components",
+	wildcardCrossesSeparator: true,
+	characterClasses: true,
+	normalizePattern: (pattern) => path.posix.normalize(toPosix(pattern)),
+};
+
+/**
+ * Index of the `]` closing the character class opened at `open`, or `-1` when
+ * the run is unterminated (in which case the `[` is a literal). A leading `!`
+ * or `^` negates, and a `]` in first position is a literal class member — the
+ * shape both minimatch and rust `glob` accept.
+ */
+function findCharacterClassEnd(segment: string, open: number): number {
+	let i = open + 1;
+	if (segment[i] === "!" || segment[i] === "^") i += 1;
+	if (segment[i] === "]") i += 1;
+	for (; i < segment.length; i += 1) if (segment[i] === "]") return i;
+	return -1;
+}
+
+/**
+ * One step of a compiled workspace-member pattern. Every step consumes a
+ * BOUNDED amount of the path (one character, or one character at a time under
+ * its own repeat), which is what makes the evaluator below non-backtracking:
+ * there is no nested quantifier for a backtracking engine to explore.
+ *
+ * - `literal` — this exact code unit, `/` included.
+ * - `one` / `star` — a `?` / `*`, consuming one / any number of characters
+ *   that {@link stepAcceptsChar} admits.
+ * - `class` — a `[abc]`/`[!abc]` run, compiled to a one-character regex. This
+ *   is the only compiled regex left in the matcher, and it is bounded by
+ *   construction: one class, no quantifier, tested against a one-character
+ *   string.
+ * - `split` — an epsilon fork: match from `alternative`, or from the next
+ *   step. Only a `**` emits one, to express "zero or more whole components".
+ */
+type WorkspaceGlobStep =
+	| { readonly kind: "literal"; readonly char: string }
+	| { readonly kind: "one"; readonly crossesSeparator: boolean }
+	| { readonly kind: "star"; readonly crossesSeparator: boolean }
+	| { readonly kind: "class"; readonly match: RegExp }
+	| WorkspaceGlobSplit;
+
+/** The one mutable step: `alternative` is back-patched once the group it skips is emitted. */
+interface WorkspaceGlobSplit {
+	readonly kind: "split";
+	alternative: number;
+}
+
+/**
+ * May a wildcard with this separator policy consume `ch`?
+ *
+ * A separator-confined wildcard (`[^/]` in the regex this replaced) takes
+ * anything but `/`. A separator-CROSSING one — uv `exclude`'s `*`/`?`, and
+ * every `**` in either uv dialect — spelled `.` in that regex, which is every
+ * code unit EXCEPT the four line terminators. That exclusion is preserved
+ * deliberately rather than "fixed": minimatch's globstar is `.`-based too, so
+ * a `\n` inside a directory name has never matched across a `**` in either
+ * implementation, and the differential oracle would flag a change here as a
+ * divergence rather than an improvement (#2603).
+ */
+function stepAcceptsChar(crossesSeparator: boolean, ch: string): boolean {
+	return crossesSeparator
+		? ch !== "\n" && ch !== "\r" && ch !== "\u2028" && ch !== "\u2029"
+		: ch !== "/";
+}
+
+/**
+ * Compile a normalized workspace-member pattern into a step list, or
+ * `undefined` when it cannot be compiled at all.
+ *
+ * A `**` component consumes zero or more path components — except as the LAST
+ * component, where it requires at least one (`a/**` matches `a/b`, not `a`),
+ * reproducing both minimatch's and rust `glob`'s answer. It is emitted as
+ * `split → one → star → literal "/"`, i.e. "nothing, or one-or-more characters
+ * followed by the `/` that ends them", after the separator that precedes it.
+ * That is the same language as the `(?:/.+)?/` group the previous compiler
+ * emitted — `X(?:/.+)?/Y` and `X/(?:.+/)?Y` both denote `X/Y` ∪ `X/.+/Y` — in a
+ * form with no nested quantifier.
+ */
+function compileWorkspaceMemberPattern(
+	pattern: string,
+	dialect: WorkspaceMemberGlobDialect,
+): WorkspaceGlobStep[] | undefined {
+	const isGlobstar = (component: string): boolean =>
+		component === "**" && dialect.globstar === "crosses-components";
+	const components = pattern.split("/");
+	const steps: WorkspaceGlobStep[] = [];
+	let needSeparator = false;
+	for (let c = 0; c < components.length; c += 1) {
+		if (needSeparator) steps.push({ kind: "literal", char: "/" });
+		needSeparator = false;
+		const component = components[c];
+		if (isGlobstar(component)) {
+			if (c === components.length - 1) {
+				// `.+` — a trailing `**` requires at least one character.
+				steps.push({ kind: "one", crossesSeparator: true });
+				steps.push({ kind: "star", crossesSeparator: true });
+				continue;
+			}
+			// `(?:.+/)?` — zero or more whole components. The group already ends
+			// at a `/`, so the next component must NOT emit one.
+			const split: WorkspaceGlobSplit = { kind: "split", alternative: -1 };
+			steps.push(split);
+			steps.push({ kind: "one", crossesSeparator: true });
+			steps.push({ kind: "star", crossesSeparator: true });
+			steps.push({ kind: "literal", char: "/" });
+			split.alternative = steps.length;
+			continue;
+		}
+		for (let i = 0; i < component.length; i += 1) {
+			const ch = component[i];
+			if (ch === "*") {
+				steps.push({
+					kind: "star",
+					crossesSeparator: dialect.wildcardCrossesSeparator,
+				});
+				continue;
+			}
+			if (ch === "?") {
+				steps.push({
+					kind: "one",
+					crossesSeparator: dialect.wildcardCrossesSeparator,
+				});
+				continue;
+			}
+			if (ch === "[" && dialect.characterClasses) {
+				const close = findCharacterClassEnd(component, i);
+				if (close !== -1) {
+					// `\` and a first-position `]` are literal class MEMBERS in glob;
+					// left alone they would be a regex escape and an empty-class
+					// terminator (`[]ab]` is `[]` + `ab]` in JS), so both are escaped.
+					const body = component.slice(i + 1, close).replace(/[\\\]]/g, "\\$&");
+					const source = body.startsWith("!")
+						? `[^${body.slice(1)}]`
+						: `[${body}]`;
+					let match: RegExp;
+					try {
+						match = new RegExp(`^${source}$`);
+					} catch {
+						// A glob character class is not a JS character class: `[z-a]`
+						// is a legal glob (matching nothing, since the range is empty)
+						// and an illegal RegExp ("Range out of order"). Fail CLOSED —
+						// an uncompilable pattern declares no member and excludes
+						// nothing — which is also the answer the deleted minimatch call
+						// gave (#2591 review round 2, F2).
+						return undefined;
+					}
+					steps.push({ kind: "class", match });
+					i = close;
+					continue;
+				}
+			}
+			steps.push({ kind: "literal", char: ch });
+		}
+		needSeparator = true;
+	}
+	return steps;
+}
+
+/**
+ * Does the whole of `subject` match the whole of `steps`?
+ *
+ * A memoized (step index, path index) table, filled once, bottom-up:
+ * `table[s][p]` is "steps `s…` match `subject[p…]`". Every cell reads only
+ * cells with a larger step index or a larger path index, so one backward
+ * double loop fills the table with no recursion and no re-entry — the match is
+ * O(steps x characters) in time and space, with no path through it that can
+ * take exponential time (#2603).
+ *
+ * The compiled whole-path regex this replaced was correct but backtracking:
+ * every `**` emitted its own nullable `.+`, and N of them explored 2^N splits
+ * of a non-matching subject. #2591 collapsed CONSECUTIVE `**`s, which is a
+ * normalization that cannot fire across a separating component, so
+ * `("**\/*" x12)/zzz` against a 40-component path still took 124900 ms (#2603);
+ * the same shapes are microseconds here. There is nothing left to collapse for
+ * speed, so no collapse is done: `a/**\/**\/b` compiles to two adjacent
+ * `(?:.+/)?` groups, which denote the same language as one and cost the same
+ * table.
+ */
+function matchesWorkspaceMemberSteps(
+	steps: readonly WorkspaceGlobStep[],
+	subject: string,
+): boolean {
+	const stepCount = steps.length;
+	const width = subject.length + 1;
+	// One byte per (step, position) cell; `1` means "the rest matches from here".
+	const table = new Uint8Array((stepCount + 1) * width);
+	for (let p = subject.length; p >= 0; p -= 1) {
+		const atEnd = p === subject.length;
+		// The empty step list matches only the empty remainder.
+		table[stepCount * width + p] = atEnd ? 1 : 0;
+		for (let s = stepCount - 1; s >= 0; s -= 1) {
+			const step = steps[s];
+			const next = (s + 1) * width;
+			let matched = 0;
+			switch (step.kind) {
+				case "literal":
+					matched =
+						!atEnd && subject[p] === step.char ? table[next + p + 1] : 0;
+					break;
+				case "one":
+					matched =
+						!atEnd && stepAcceptsChar(step.crossesSeparator, subject[p])
+							? table[next + p + 1]
+							: 0;
+					break;
+				case "class":
+					matched =
+						!atEnd && step.match.test(subject[p]) ? table[next + p + 1] : 0;
+					break;
+				case "star":
+					// Consume nothing, or one more character and stay on this step.
+					matched =
+						table[next + p] === 1 ||
+						(!atEnd &&
+							stepAcceptsChar(step.crossesSeparator, subject[p]) &&
+							table[s * width + p + 1] === 1)
+							? 1
+							: 0;
+					break;
+				case "split":
+					matched =
+						table[step.alternative * width + p] === 1 || table[next + p] === 1
+							? 1
+							: 0;
+					break;
+			}
+			table[s * width + p] = matched;
+		}
+	}
+	return table[0] === 1;
+}
+
+/**
+ * Does `relativePath` — a `/`-separated path relative to the workspace root —
+ * match one declared workspace-member (or workspace-exclude) `pattern` under
+ * `dialect`?
+ *
+ * This is the ONE workspace-member matcher (#2591). `clients/lsp/server.ts`'s
+ * `cargoWorkspaceDeclaresMember` and `clients/python-environment.ts`'s
+ * `isUvWorkspaceMember` are thin callers of it; neither keeps a private segment
+ * compiler or minimatch options block any more.
+ *
+ * `clients/review-graph/workspace-modules.ts`'s `expandWorkspacePattern` is
+ * deliberately NOT a caller: npm/pnpm `workspaces` entries are EXPANDED against
+ * the filesystem (one `readdir` of the directory preceding the first `*`,
+ * yielding the directories that exist and hold a manifest) rather than tested
+ * against a candidate path. It answers "which directories does this pattern
+ * name", not "does this pattern name this directory"; folding it in would mean
+ * giving this pure function a filesystem.
+ *
+ * The supported syntax is the intersection of the two upstream dialects: `*`,
+ * `?`, `**`, `[abc]`/`[!abc]` (dialect-gated), and literals. minimatch-only
+ * extensions the pre-fold uv path inherited by accident — brace expansion,
+ * extglobs, leading-`!` negation, leading-`#` comments — are NOT honored, and
+ * uv's own `glob` crate does not honor them either (same pinned SHA), so
+ * dropping them moves uv toward upstream rather than away from it.
+ *
+ * Matching is NON-BACKTRACKING (#2603): the pattern compiles to a list of
+ * bounded steps and {@link matchesWorkspaceMemberSteps} decides it with one
+ * memoized (step, position) table, O(steps x characters), no matter how many
+ * `**`s the pattern carries. The anchored whole-path regex this replaced was
+ * correct but explored 2^N splits of a non-matching path for N `**`
+ * components — 124900 ms for `("**\/*" x12)/zzz` against a 40-component path,
+ * on a call `detectPythonEnvironment` awaits with no timeout, i.e. a wedged
+ * turn rather than a slow answer. The wall-clock half of that fix lives in
+ * `tests/clients/workspace-glob-nonbacktracking-budget.test.ts`; the answers
+ * are unchanged, pinned by the dialect table and the minimatch differential in
+ * `tests/clients/path-utils.test.ts`.
+ *
+ * A pattern that cannot be compiled at all answers `false` for every path —
+ * it declares no member and excludes nothing (#2591 review round 2, F2). The
+ * only such patterns today carry an empty character-class range (`[z-a]`:
+ * legal glob, illegal JS RegExp). Reachability note, recorded rather than
+ * assumed away: no such pattern can reach here through a manifest right now,
+ * because `parseTomlStringArray` (`clients/cargo-manifest.ts`) captures an
+ * array body non-greedily up to the FIRST `]`, so any entry containing a `]`
+ * loses its closing quote and is dropped before it becomes a pattern. That is
+ * a property of the TOML reader, not of this matcher, and it is not this
+ * function's to rely on — the character-class axis stays because upstream
+ * cargo and uv both support classes, and the reader's gap may be closed later.
+ */
+export function matchesWorkspaceMemberPattern(
+	pattern: string,
+	relativePath: string,
+	dialect: WorkspaceMemberGlobDialect,
+): boolean {
+	const normalized = dialect.normalizePattern(pattern);
+	if (
+		dialect.globstar === "pattern-never-matches" &&
+		normalized.includes("**")
+	) {
+		return false;
+	}
+	const steps = compileWorkspaceMemberPattern(normalized, dialect);
+	return (
+		steps !== undefined && matchesWorkspaceMemberSteps(steps, relativePath)
 	);
 }
 

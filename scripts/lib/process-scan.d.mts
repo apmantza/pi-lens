@@ -66,7 +66,6 @@ export interface ProcessQuery {
 	serverSideFiltered: boolean;
 }
 
-export const DEFAULT_SNAPSHOT_TIMEOUT_MS: number;
 export const ALL_PROCESS_FIELDS: readonly ProcessField[];
 
 export function windowsExe(name: string): string;

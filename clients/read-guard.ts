@@ -66,7 +66,7 @@ export type SearchCreditReason =
 	| "delivered-context-flags"
 	| "caller-margin";
 
-export interface SearchCredit {
+interface SearchCredit {
 	marginBefore: number;
 	marginAfter: number;
 	reason: SearchCreditReason;
@@ -80,7 +80,7 @@ export interface SearchCredit {
  *  - `enforced-pass`: a hash-checked read matched, so the edit passed the gate.
  *  - `not-decidable`: no candidate read could be hash-checked.
  */
-export type RangeSnapshotOutcome =
+type RangeSnapshotOutcome =
 	| "enforced-block"
 	| "bypassed-content-match"
 	| "enforced-pass"
@@ -1890,9 +1890,12 @@ export class ReadGuard {
 			return filePath.endsWith(suffix);
 		}
 		if (pattern.includes("*")) {
-			// Convert glob to regex
+			// Adjacent stars are equivalent to one star in this dialect. Collapse
+			// them before compiling so a non-match cannot backtrack over every
+			// nullable `.*` group (#2622).
+			const collapsedPattern = pattern.replace(/\*+/g, "*");
 			const regex = new RegExp(
-				`^${pattern.replace(/\\/g, "\\\\").replace(/\./g, "\\.").replace(/\*/g, ".*")}$`,
+				`^${collapsedPattern.replace(/\\/g, "\\\\").replace(/\./g, "\\.").replace(/\*/g, ".*")}$`,
 			);
 			return regex.test(filePath);
 		}

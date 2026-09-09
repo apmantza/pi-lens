@@ -1,5 +1,0 @@
----
-section: Deprecated
----
-
-- **Deprecation windows for the legacy LSP config surfaces (refs #2418)** — the stability policy in `docs/public-api-stability.md` now records, as test-checked data, which config surfaces are deprecated and when they may be removed. Deprecated since 4.2.0, removable no earlier than 5.0.0, and read unchanged until then: the legacy top-level LSP config keys `servers`, `serverOverrides`, `disabledServers`, and `warmFiles`; and the config file locations `.pi-lens/lsp.json`, `pi-lsp.json`, `pi-lens.json`, and `~/.pi-lens/lsp.json`. The canonical locations are unaffected — `.pi-lens.json` and `~/.pi-lens/config.json` stay canonical and are not deprecated; what is deprecated is the legacy keys read from them. Config warnings now end in a stable code — `[PILENS_CFG_0001]` for a config file that could not be read or parsed and was therefore ignored — so they can be matched or suppressed without depending on the message prose, and the same ignore is now counted in the degradation ledger under `config-ignored` instead of vanishing after one notification. No config is read or resolved differently in this release.

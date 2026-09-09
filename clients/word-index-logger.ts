@@ -36,7 +36,7 @@ const writer = createNdjsonLogger({
 	maxBytes: getMaxLogSizeMB() * 1024 * 1024,
 });
 
-export type WordIndexLogPhase =
+type WordIndexLogPhase =
 	/** Full rebuild from a fresh file-walk-and-read (absent/stale/churned index). */
 	| "full_rebuild"
 	/** Only stale/new docs re-tokenized against a reused snapshot (#958). */
@@ -134,13 +134,4 @@ export function logWordIndex(entry: WordIndexLogEntry): void {
 		...entry,
 		cwd: normalizeFilePath(entry.cwd),
 	});
-}
-
-export function getWordIndexLogPath(): string {
-	return WORD_INDEX_LOG_FILE;
-}
-
-/** Resolve once all enqueued word-index writes are on disk (tests/shutdown). */
-export function flushWordIndexLog(): Promise<void> {
-	return writer.flush();
 }

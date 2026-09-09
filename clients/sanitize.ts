@@ -51,18 +51,6 @@ export function stripAnsi(text: string): string {
 }
 
 /**
- * Normalize whitespace in a string.
- * Collapses multiple spaces/tabs to single space, trims lines.
- */
-export function normalizeWhitespace(text: string): string {
-	return text
-		.split(/\r?\n/)
-		.map((line) => line.replace(/\s+/g, " ").trim())
-		.filter((line) => line.length > 0)
-		.join("\n");
-}
-
-/**
  * Check if a line contains error indicators.
  */
 function isErrorLine(line: string): boolean {

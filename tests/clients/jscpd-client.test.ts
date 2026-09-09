@@ -8,6 +8,10 @@ const ensureTool = vi.fn();
 const findNodeToolBinary = vi.fn();
 
 vi.mock("../../clients/installer/index.js", () => ({
+	// #2140: the probe resolver asks the installer for a release-managed
+	// binary (`~/.pi-lens/bin`) before falling back to PATH. Undefined is
+	// "no managed install", which is what these tests already assumed.
+	findManagedToolBinary: vi.fn(async () => undefined),
 	ensureTool,
 	// #1612: resolveAvailableOrInstallUnshared reads these on the install-
 	// success path to derive honest evidence rather than asserting "succeeded".

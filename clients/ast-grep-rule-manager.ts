@@ -1,6 +1,68 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { RuleDescription } from "./ast-grep-types.js";
+import type { BundledResourceHealth } from "./bundled-resource-health.js";
+
+/**
+ * The candidate sub-paths under `ruleDir` that hold ast-grep rule
+ * descriptions — SINGLE source of truth shared by `loadRuleDescriptions`
+ * (the real read) and `checkAstGrepRulesHealth` (the #2636 observational
+ * probe), so the two can never drift apart on "where do rules live".
+ */
+export function candidateAstGrepRulesPaths(ruleDir: string): string[] {
+	return [
+		path.join(ruleDir, "ast-grep-rules", "rules"),
+		path.join(ruleDir, "rules"),
+		ruleDir,
+	];
+}
+
+/**
+ * Classify whether `ruleDir` (the resolved ast-grep rules root, `rules/`
+ * inside the bundled package or the project override) yields any loadable
+ * `.yml` rule description — mirroring `loadRuleDescriptions`'s OWN
+ * resolution EXACTLY (first existing candidate wins, then its `.yml`
+ * files), so this never reports a status `loadRuleDescriptions` itself
+ * would disagree with. Purely observational: never throws, and does not
+ * gate what `ruleDir` `AstGrepClient` uses (#2636, following #2626 review
+ * F1 — the acceptance criteria ask for a RECORD, never a changed resolution).
+ */
+export function checkAstGrepRulesHealth(
+	ruleDir: string,
+): BundledResourceHealth {
+	const possiblePaths = candidateAstGrepRulesPaths(ruleDir);
+	let rulesPath: string | undefined;
+	for (const candidate of possiblePaths) {
+		if (fs.existsSync(candidate)) {
+			rulesPath = candidate;
+			break;
+		}
+	}
+	if (!rulesPath) {
+		// None of the three candidates exist — distinguish `ruleDir` itself
+		// being unreadable (EACCES and friends) from it simply being absent
+		// (ENOENT), matching #2626 review F4's ENOENT/EACCES split.
+		try {
+			fs.readdirSync(ruleDir);
+		} catch (error) {
+			const fsErrorCode = (error as NodeJS.ErrnoException)?.code;
+			if (fsErrorCode && fsErrorCode !== "ENOENT") {
+				return { status: "unreadable", fsErrorCode };
+			}
+		}
+		return { status: "absent" };
+	}
+	let entries: string[];
+	try {
+		entries = fs.readdirSync(rulesPath).filter((f) => f.endsWith(".yml"));
+	} catch (error) {
+		const fsErrorCode = (error as NodeJS.ErrnoException)?.code ?? "UNKNOWN";
+		return { status: "unreadable", fsErrorCode };
+	}
+	return entries.length > 0
+		? { status: "healthy", entryCount: entries.length }
+		: { status: "empty" };
+}
 
 export class AstGrepRuleManager {
 	private ruleDescriptions: Map<string, RuleDescription> | null = null;
@@ -14,11 +76,7 @@ export class AstGrepRuleManager {
 		if (this.ruleDescriptions !== null) return this.ruleDescriptions;
 
 		const descriptions = new Map<string, RuleDescription>();
-		const possiblePaths = [
-			path.join(this.ruleDir, "ast-grep-rules", "rules"),
-			path.join(this.ruleDir, "rules"),
-			this.ruleDir,
-		];
+		const possiblePaths = candidateAstGrepRulesPaths(this.ruleDir);
 
 		const rulesPath = possiblePaths.find((p) => fs.existsSync(p));
 

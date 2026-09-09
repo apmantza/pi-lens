@@ -6,7 +6,7 @@
  */
 
 /** Streaming update callback the SDK hands tool `execute` (shape mirrors result). */
-export type ToolUpdate = (update: {
+type ToolUpdate = (update: {
 	content: Array<{ type: "text"; text: string }>;
 	details?: unknown;
 }) => void;

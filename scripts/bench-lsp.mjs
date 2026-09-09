@@ -19,12 +19,14 @@
  * Requires `npm run build:dist`. Without --install, only already-installed
  * servers are measured (others report "unavailable").
  */
-import { gitExecFileSync } from "./lib/git-fixture-env.mjs";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+	bootstrapFixtureWorkspace,
+	withScratchHome,
+} from "./lib/lsp-fixture-workspace.mjs";
 
 const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -33,6 +35,11 @@ const repoRoot = path.resolve(
 const argv = process.argv.slice(2);
 const install = argv.includes("--install");
 const langs = argv.filter((a) => !a.startsWith("--"));
+
+// #2670/#2506-shape: pin PI_LENS_HOME/PILENS_DATA_DIR to a scratch temp dir
+// BEFORE the first dist/ import below — dist/clients/latency-logger.js reads
+// its log dir into a top-level const at module load, not lazily per write.
+withScratchHome();
 
 const imp = (rel) => import(pathToFileURL(path.join(repoRoot, rel)).href);
 const { LSP_FIXTURES } = await imp("scripts/smoke-tools.mjs");
@@ -52,13 +59,6 @@ const {
 let ensureTool;
 if (install) {
 	({ ensureTool } = await imp("dist/clients/installer/index.js"));
-}
-
-function copyDirToTemp(srcRel) {
-	const src = path.join(repoRoot, srcRel);
-	const dst = fs.mkdtempSync(path.join(os.tmpdir(), "bench-lsp-"));
-	fs.cpSync(src, dst, { recursive: true });
-	return dst;
 }
 
 const fixtures = langs.length
@@ -85,45 +85,41 @@ for (const fx of fixtures) {
 	if (install && ensureTool) {
 		for (const t of fx.tools ?? []) await ensureTool(t).catch(() => undefined);
 	}
-	const ws = copyDirToTemp(fx.dir);
-	const absFile = path.join(ws, fx.file);
-	if (fx.gitInit) {
-		try {
-			gitExecFileSync(["init", "-q"], { cwd: ws, stdio: "ignore" });
-		} catch {}
-	}
 
 	const auxIds = fx.auxiliaryServerIds ?? [];
-	// Measure ONE server in isolation: disable every other server matching this
-	// file so neither an auxiliary (opengrep/ast-grep) nor an alternate primary
-	// can spawn alongside the server under test.
-	//   - auxiliary fixture → target = the auxiliary(ies); all primaries disabled
-	//   - alternate fixture → target = first primary NOT in fx.disableServers
-	//   - primary fixture   → target = the default (first matching) primary
-	// getServersForFileWithConfig is in registry order — the same order
-	// getClientForFile tries — so primaries[0] is the default it would select.
-	const matching = getServersForFileWithConfig(absFile);
-	let targetIds;
-	if (auxIds.length) {
-		targetIds = new Set(auxIds);
-	} else {
-		const explicitlyDisabled = new Set(fx.disableServers ?? []);
-		const primaries = matching.filter(
-			(s) => s.role !== "auxiliary" && !explicitlyDisabled.has(s.id),
-		);
-		targetIds = new Set(primaries.length ? [primaries[0].id] : []);
-	}
-	const disabledServers = matching
-		.map((s) => s.id)
-		.filter((id) => !targetIds.has(id));
-	if (disabledServers.length) {
-		fs.mkdirSync(path.join(ws, ".pi-lens"), { recursive: true });
-		fs.writeFileSync(
-			path.join(ws, ".pi-lens", "lsp.json"),
-			JSON.stringify({ disabledServers }, null, 2),
-		);
-		await initLSPConfig(ws);
-	}
+	// #2658: every fixture registers its OWN workspace unconditionally (via
+	// bootstrapFixtureWorkspace's early initLSPConfig call), not only when
+	// `disabledServers` below turns out non-empty — the exact #2369/#2655
+	// ordering bug this script shared with its four siblings.
+	const { absFile, cleanup } = await bootstrapFixtureWorkspace(fx, {
+		initLSPConfig,
+		repoRoot,
+		tmpPrefix: "bench-lsp-",
+		// Measure ONE server in isolation: disable every other server matching
+		// this file so neither an auxiliary (opengrep/ast-grep) nor an alternate
+		// primary can spawn alongside the server under test.
+		//   - auxiliary fixture → target = the auxiliary(ies); all primaries disabled
+		//   - alternate fixture → target = first primary NOT in fx.disableServers
+		//   - primary fixture   → target = the default (first matching) primary
+		// getServersForFileWithConfig is in registry order — the same order
+		// getClientForFile tries — so primaries[0] is the default it would select.
+		// Computed here (a function, not a static list) because it needs a real
+		// file path inside the already-copied, already-registered workspace.
+		disableServers: ({ absFile: file }) => {
+			const matching = getServersForFileWithConfig(file);
+			let targetIds;
+			if (auxIds.length) {
+				targetIds = new Set(auxIds);
+			} else {
+				const explicitlyDisabled = new Set(fx.disableServers ?? []);
+				const primaries = matching.filter(
+					(s) => s.role !== "auxiliary" && !explicitlyDisabled.has(s.id),
+				);
+				targetIds = new Set(primaries.length ? [primaries[0].id] : []);
+			}
+			return matching.map((s) => s.id).filter((id) => !targetIds.has(id));
+		},
+	});
 
 	if (!lsp.supportsLSP(absFile)) {
 		results.push({
@@ -132,6 +128,7 @@ for (const fx of fixtures) {
 			role,
 			status: "no-lsp",
 		});
+		cleanup();
 		continue;
 	}
 	let content = fs.readFileSync(absFile, "utf8");
@@ -195,9 +192,7 @@ for (const fx of fixtures) {
 	} finally {
 		// Best-effort: on Windows the warm server still holds handles, so the dir
 		// may not delete until the process exits. Leaking temp dirs is fine.
-		try {
-			fs.rmSync(ws, { recursive: true, force: true });
-		} catch {}
+		cleanup();
 	}
 }
 

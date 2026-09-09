@@ -15,10 +15,40 @@
  * credentials, so this is the layer that runs even when Layer B
  * (compat-smoke-behavioral.mjs) can't.
  *
- * Exit code: non-zero iff any contract check FAILs OR the installs
- * themselves fail (network/registry issues) — the workflow step wraps this
- * in `continue-on-error: true` so a failure ALERTS rather than reds the
- * nightly; see docs/subagent-compat.md.
+ * Each contract is resolved and checked INDEPENDENTLY (#2581) by
+ * `scripts/lib/compat-contract-resolution.mjs`'s `resolveAndCheckContracts`,
+ * which locates every contract's source file(s) via an ordered
+ * candidate-path list (scripts/lib/compat-contract-locator.mjs, walked
+ * NEWEST-observed-layout first, #2680 F1 — a stale leftover file at an old
+ * path must never outrank the package's current layout) and runs its check
+ * function once resolved. A contract whose file can't be found at ANY known
+ * candidate gets its own "infra" outcome (we haven't actually re-checked its
+ * content) — this no longer blinds verification of every OTHER contract the
+ * way a single top-level ENOENT used to (pi-subagents@0.65.0 relocated
+ * `pi-args.ts`; the previous version of this script threw on that one
+ * `readSource()` call and exited 2 without ever reading the other four
+ * files, all of which were fine).
+ *
+ * The CONTRACTS registry (scripts/lib/compat-contracts.mjs) is the single
+ * source of truth for both "which files back this contract" (`parts`) and
+ * "which npm package" (`package` — the exact install spec, not a lookup
+ * key): this script's install list is DERIVED from that registry rather
+ * than a hand-maintained parallel table, so the two can never desync
+ * (#2680 F2 — a prior version kept a second `CONTRACT_SOURCE_LOCATIONS`
+ * table joined to CONTRACTS by a bare string id with no parity guard).
+ *
+ * Overall exit code / GITHUB_OUTPUT `outcome`:
+ *   0 / "verified" — every contract located AND its content matched.
+ *   1 / "drift"    — every contract was located, but at least one's content
+ *                    did not match (real upstream behavioral drift).
+ *   2 / "infra"    — our own package install failed, OR at least one
+ *                    contract's source file could not be located at any
+ *                    known candidate path (nothing to conclude about drift
+ *                    for that contract — distinct from a located file with
+ *                    unexpected content, see docs/subagent-compat.md).
+ * "drift" takes priority over "infra" in the summary/exit code when both are
+ * present in the same run — an actionable regression should never be masked
+ * by an unrelated relocation elsewhere.
  *
  * Usage: node scripts/compat-contracts.mjs [--keep] [--dir <path>]
  *   --keep       don't delete the scratch install directory on exit
@@ -31,14 +61,8 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { runAllContractChecks } from "./lib/compat-contracts.mjs";
-
-const PACKAGES = {
-	sdk: "@earendil-works/pi-coding-agent",
-	nicobailon: "pi-subagents",
-	avtc: "avtc-pi-subagent",
-	tintinweb: "@tintinweb/pi-subagents",
-};
+import { CONTRACTS } from "./lib/compat-contracts.mjs";
+import { resolveAndCheckContracts } from "./lib/compat-contract-resolution.mjs";
 
 function parseArgs(argv) {
 	const opts = { keep: false, dir: undefined };
@@ -62,7 +86,9 @@ function installPackages(dir) {
 			),
 		);
 	}
-	const specs = Object.values(PACKAGES);
+	// Derived from CONTRACTS, not a hand-maintained parallel list (#2680 F2) —
+	// three of the seven contracts share the SDK package, so dedupe.
+	const specs = [...new Set(CONTRACTS.map((c) => c.package))];
 	console.log(`installing ${specs.join(", ")} into ${dir} ...`);
 	// Windows `npm` is a `.cmd` shim that only runs under shell mode (same
 	// reasoning as safeSpawnAsync — see AGENTS.md "Runner process model").
@@ -87,10 +113,6 @@ function installedVersion(dir, pkgName) {
 	}
 }
 
-function readSource(dir, ...segments) {
-	return fs.readFileSync(path.join(dir, "node_modules", ...segments), "utf8");
-}
-
 async function main() {
 	const opts = parseArgs(process.argv.slice(2));
 	const dir =
@@ -106,15 +128,10 @@ async function main() {
 		infraFailure = err instanceof Error ? err.message : String(err);
 	}
 
-	const versions = {
-		"@earendil-works/pi-coding-agent": installedVersion(
-			dir,
-			"@earendil-works/pi-coding-agent",
-		),
-		"pi-subagents": installedVersion(dir, "pi-subagents"),
-		"avtc-pi-subagent": installedVersion(dir, "avtc-pi-subagent"),
-		"@tintinweb/pi-subagents": installedVersion(dir, "@tintinweb/pi-subagents"),
-	};
+	const packageNames = [...new Set(CONTRACTS.map((c) => c.package))];
+	const versions = Object.fromEntries(
+		packageNames.map((name) => [name, installedVersion(dir, name)]),
+	);
 	console.log("\nversions installed:");
 	for (const [name, version] of Object.entries(versions)) {
 		console.log(`  ${name}@${version}`);
@@ -133,69 +150,47 @@ async function main() {
 		}
 	}
 
+	function writeOutcomeOutput(outcome) {
+		if (!process.env.GITHUB_OUTPUT) return;
+		try {
+			fs.appendFileSync(process.env.GITHUB_OUTPUT, `outcome=${outcome}\n`);
+		} catch {
+			// best-effort; stdout still has the outcome
+		}
+	}
+
 	if (infraFailure) {
 		console.error(
 			`\nINFRA FAILURE — could not install packages: ${infraFailure}`,
 		);
+		writeOutcomeOutput("infra");
 		if (!opts.keep) fs.rmSync(dir, { recursive: true, force: true });
 		process.exit(2);
 	}
 
-	let inputs;
-	try {
-		inputs = {
-			nicobailonPiArgsSource: readSource(
-				dir,
-				"pi-subagents",
-				"src/runs/shared/pi-args.ts",
-			),
-			avtcProcessRunnerSource: readSource(
-				dir,
-				"avtc-pi-subagent",
-				"src/process-runner.ts",
-			),
-			sdkLoaderSource: readSource(
-				dir,
-				"@earendil-works/pi-coding-agent",
-				"dist/core/extensions/loader.js",
-			),
-			sdkAgentSessionSource: readSource(
-				dir,
-				"@earendil-works/pi-coding-agent",
-				"dist/core/agent-session.js",
-			),
-			tintinwebAgentRunnerSource: readSource(
-				dir,
-				"@tintinweb/pi-subagents",
-				"src/agent-runner.ts",
-			),
-		};
-	} catch (err) {
-		// A source file moved/renamed entirely — itself a drift signal worth
-		// surfacing distinctly from an individual contract regex not matching.
-		console.error(
-			`\nINFRA FAILURE — expected source file not found (package layout changed?): ${err instanceof Error ? err.message : err}`,
-		);
-		if (!opts.keep) fs.rmSync(dir, { recursive: true, force: true });
-		process.exit(2);
-	}
-
-	const { results, allPass } = runAllContractChecks(inputs);
+	const results = resolveAndCheckContracts(dir);
 
 	console.log("\ncontract checks:");
 	for (const r of results) {
-		console.log(
-			`  [${r.pass ? "PASS" : "FAIL"}] ${r.id} (${r.package}) — ${r.description}`,
-		);
+		const label = r.outcome === "infra" ? "INFRA" : r.pass ? "PASS" : "FAIL";
+		console.log(`  [${label}] ${r.id} (${r.package}) — ${r.description}`);
 		console.log(`         ${r.detail}`);
 	}
 
 	if (!opts.keep) fs.rmSync(dir, { recursive: true, force: true });
 
-	console.log(
-		`\n${allPass ? "ALL CONTRACT CHECKS PASSED" : "ONE OR MORE CONTRACT CHECKS FAILED"}`,
-	);
-	process.exit(allPass ? 0 : 1);
+	const anyDrift = results.some((r) => r.outcome === "drift");
+	const allVerified = results.every((r) => r.outcome === "verified");
+	const outcome = allVerified ? "verified" : anyDrift ? "drift" : "infra";
+	writeOutcomeOutput(outcome);
+
+	const summary = allVerified
+		? "ALL CONTRACT CHECKS VERIFIED"
+		: anyDrift
+			? "ONE OR MORE CONTRACT CHECKS FAILED (drift)"
+			: "ONE OR MORE CONTRACTS COULD NOT BE LOCATED (infra)";
+	console.log(`\n${summary}`);
+	process.exit(allVerified ? 0 : anyDrift ? 1 : 2);
 }
 
 main().catch((err) => {

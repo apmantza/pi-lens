@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FactStore } from "../../../../clients/dispatch/fact-store.js";
 import { setupTestEnvironment } from "../../test-utils.js";
+import { makeLspServiceDouble } from "../../../support/lsp-service-double.js";
 
 const safeSpawnAsync = vi.fn();
 const safeSpawn = vi.fn();
@@ -43,15 +44,16 @@ vi.mock("../../../../clients/dispatch/runners/utils/lazy-installer.js", () => ({
 }));
 
 vi.mock("../../../../clients/lsp/index.js", () => ({
-	getLSPService: () => ({
-		supportsLSP,
-		hasLSP,
-		openFile,
-		touchFile,
-		getDiagnostics,
-		codeAction,
-		getClientForFile: vi.fn(),
-	}),
+	getLSPService: () =>
+		makeLspServiceDouble({
+			supportsLSP,
+			hasLSP,
+			openFile,
+			touchFile,
+			getDiagnostics,
+			codeAction,
+			getClientForFile: vi.fn(),
+		}),
 }));
 
 vi.mock("../../../../clients/dispatch/runners/utils.js", () => ({

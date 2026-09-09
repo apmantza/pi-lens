@@ -21,7 +21,7 @@ export interface ScriptCoverageLike {
 	}[];
 }
 
-export interface FileCoverage {
+interface FileCoverage {
 	file: string;
 	functionCount: number;
 	functionsHit: number;

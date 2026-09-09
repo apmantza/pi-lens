@@ -9,6 +9,7 @@
 
 import { findLocalBinUpwards } from "../../package-manager.js";
 import { safeSpawnAsync } from "../../safe-spawn.js";
+import { resolveRunnerCwd } from "../../tool-cwd.js";
 import { truncatedByOutputCap } from "../../spawn-output-cap.js";
 import {
 	getJstsLintPolicyForCwd,
@@ -104,7 +105,7 @@ const oxlintRunner: RunnerDefinition = {
 	skipTestFiles: false,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		const cwd = ctx.cwd || process.cwd();
+		const cwd = resolveRunnerCwd(ctx, "oxlint");
 		const policy = getJstsLintPolicyForCwd(cwd);
 		if (!policy.preferredRunners.includes("oxlint")) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
@@ -133,6 +134,7 @@ const oxlintRunner: RunnerDefinition = {
 
 		// Run oxlint (or Vite+'s vp lint wrapper) on the file.
 		const result = await safeSpawnAsync(cmd, args, {
+			cwd,
 			timeout: 30000,
 			maxOutputBytes: MAX_OXLINT_OUTPUT_BYTES,
 		});

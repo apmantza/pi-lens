@@ -302,4 +302,34 @@ describe("tree-sitter runner — batched per-edit queries (#888)", () => {
 		// Small edit: no entity walks either.
 		expect(runQueryOnFile).not.toHaveBeenCalled();
 	});
+
+	it("interpolates double-brace capture placeholders in diagnostic messages", async () => {
+		const query = {
+			...fakeQuery,
+			message: "Hallucinated import '{{NAME}}' from '{{MODULE}}'",
+		};
+		const { runner, runQueriesOnFile } = await loadRunnerWithQueries([query]);
+		runQueriesOnFile.mockResolvedValueOnce([
+			{
+				queryDef: query,
+				match: {
+					line: 1,
+					column: 1,
+					captures: { NAME: "JSONResponse", MODULE: "django" },
+					matchedText: "from django import JSONResponse",
+					nodeType: "import_from_statement",
+				},
+			},
+		]);
+
+		const result = await runner.run({
+			...createCtx("/fake/file.ts"),
+			modifiedRanges: [{ start: 1, end: 1 }],
+		} as any);
+
+		expect(result.diagnostics).toHaveLength(1);
+		expect(result.diagnostics[0]?.message).toBe(
+			"Hallucinated import 'JSONResponse' from 'django'",
+		);
+	});
 });

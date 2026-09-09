@@ -33,6 +33,7 @@ import {
 	resetDegradationLedger,
 } from "../../clients/degradation-ledger.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 import { setupTestEnvironment } from "./test-utils.js";
 
 /** Basenames whose `getDiagnostics` never settles — a wedged server. */
@@ -91,13 +92,16 @@ const getLastKnownDiagnostics = vi.fn((filePath: string) =>
 	primedByFile.get(path.basename(filePath)),
 );
 
-const fakeService = {
+// Factory-seeded (#2592): the deferred loop below runs inside
+// `buildActionableWarningsReport`'s swallow-all catch, so a missing method is
+// invisible here — it just blanks the report the bounds assertions read.
+const fakeService = makeLspServiceDouble({
 	supportsLSP: (filePath: string) => filePath.endsWith(".ts"),
 	openFile,
 	getDiagnostics,
 	codeAction,
 	getLastKnownDiagnostics,
-};
+});
 
 vi.mock("../../clients/lsp/index.js", async (importOriginal) => {
 	const actual =

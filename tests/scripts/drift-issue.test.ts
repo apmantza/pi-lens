@@ -15,6 +15,7 @@ import {
 	DRIFT_ISSUE_LABEL,
 	DRIFT_ISSUE_TITLE,
 	findDriftTrackingIssue,
+	upsertTrackingIssue,
 } from "../../scripts/lib/drift-issue.mjs";
 
 describe("buildDriftIssueBody (#594)", () => {
@@ -81,6 +82,40 @@ describe("buildDriftIssueBody (#594)", () => {
 });
 
 describe("findDriftTrackingIssue (#594)", () => {
+	it("finds a tracker beyond the first 20 label-matched issues", () => {
+		const issues = Array.from({ length: 20 }, (_, number) => ({
+			number,
+			title: `unrelated-${number}`,
+		}));
+		issues.push({ number: 21, title: DRIFT_ISSUE_TITLE });
+		let listArgs: string[] = [];
+		const result = upsertTrackingIssue({
+			title: DRIFT_ISSUE_TITLE,
+			label: DRIFT_ISSUE_LABEL,
+			body: "body",
+			bodyFile: "/tmp/body.md",
+			gh: (args) => {
+				if (args[1] === "list") listArgs = args;
+				return JSON.stringify(issues);
+			},
+		});
+		expect(result).toEqual({ action: "updated", issueNumber: 21 });
+		expect(listArgs).toEqual([
+			"issue",
+			"list",
+			"--state",
+			"open",
+			"--label",
+			DRIFT_ISSUE_LABEL,
+			"--search",
+			`${DRIFT_ISSUE_TITLE} in:title`,
+			"--json",
+			"number,title",
+			"--limit",
+			"100",
+		]);
+	});
+
 	it("finds the tracking issue by exact title match among label-filtered issues", () => {
 		const issues = [
 			{ number: 10, title: "some unrelated open issue" },
@@ -100,6 +135,29 @@ describe("findDriftTrackingIssue (#594)", () => {
 		expect(findDriftTrackingIssue(null)).toBeNull();
 		expect(findDriftTrackingIssue(undefined)).toBeNull();
 		expect(findDriftTrackingIssue([])).toBeNull();
+	});
+
+	// #2613 review S2/T3: generalized to take an explicit title so a second
+	// consumer (scripts/lib/install-smoke-drift.mjs) reuses this ONE finder
+	// instead of a second title-matching copy. The single-arg form above
+	// (this module's OWN DRIFT_ISSUE_TITLE) must keep working unchanged.
+	it("matches an EXPLICIT title, ignoring this module's own DRIFT_ISSUE_TITLE", () => {
+		const issues = [
+			{ number: 1, title: DRIFT_ISSUE_TITLE },
+			{
+				number: 2,
+				title: "install-smoke: pi-coding-agent@latest install drift detected",
+			},
+		];
+		expect(
+			findDriftTrackingIssue(
+				issues,
+				"install-smoke: pi-coding-agent@latest install drift detected",
+			),
+		).toEqual({
+			number: 2,
+			title: "install-smoke: pi-coding-agent@latest install drift detected",
+		});
 	});
 
 	it("exposes stable, fixed identifiers so the tracker is always found the same way", () => {

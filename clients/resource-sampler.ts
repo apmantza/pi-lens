@@ -513,9 +513,9 @@ export async function sampleProcessTreeCpuPercent(
 			return null;
 		}
 	};
-	// The FIRST read populates the per-pid CPU history on Windows (a fresh pid
-	// reports 0%; the rate lands on the next read), so the second read is the
-	// one that carries the liveness verdict. Both reads must retain the target;
+	// The FIRST read is a BASELINE, not evidence: it re-anchors this pid's CPU
+	// history (Windows' own map, pidusage's on POSIX) so the second read is a
+	// rate over `windowMs` and nothing else. Both reads must retain the target;
 	// disappearance or query failure is explicitly unmeasured, never flat.
 	const first = await readOnce();
 	const second = await new Promise<{
@@ -538,7 +538,16 @@ export async function sampleProcessTreeCpuPercent(
 	) {
 		return { busy: false, measured: false, cpuPercent: null };
 	}
-	const observed = Math.max(first.cpuPercent, second.cpuPercent);
+	// #2358 (post-#2382): the verdict is the WINDOW read alone. Whatever the
+	// baseline read reports is a rate since the LAST caller's observation —
+	// clients/quiet-window.ts's heartbeat samples every recorded LSP child once
+	// per tick, and pidusage keeps 60 s of per-pid history — so folding it in
+	// (`Math.max(first, second)`) let CPU the process had already stopped
+	// burning vote "busy". A scanner that drained its burst and then wedged (the
+	// issue's own opengrep evidence) was therefore deferred as progressing and
+	// died at the hard cap, misrecorded as `cap-exceeded`, instead of being torn
+	// down on its budget as `budget-exceeded-cpu-flat`.
+	const observed = second.cpuPercent;
 	return {
 		busy: observed > floorPercent,
 		measured: true,

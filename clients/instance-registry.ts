@@ -291,9 +291,12 @@ export function getInstanceRoots(entry: InstanceEntry): string[] {
  * pi-lens process reads on every heartbeat. Eviction drops the OLDEST
  * NON-PRIMARY root: `projectRoot` is the host's own working directory and the
  * one the shared-checkout guard most needs, so it is never evicted.
- * Deliberately smaller than `SESSION_ROOT_CAP` (128,
- * `clients/lsp/session-roots.ts:45`) because that set lives in memory for one
- * process while this one is serialized to disk for all of them.
+ * Deliberately smaller than `SESSION_ROOT_CAP` (128, `clients/lsp/
+ * session-roots.ts`) because that registry lives in memory for one process
+ * while this one is serialized to disk for all of them. The two are not
+ * mirrors: they answer different questions about different populations, so
+ * #2518's one-store rule (a root's LSP config cannot be evicted while the
+ * root is served) does not extend to this cap.
  */
 const INSTANCE_ROOT_CAP = 32;
 

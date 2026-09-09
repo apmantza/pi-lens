@@ -20,7 +20,7 @@ const BOUNDARY_PREFIXES = [
 ];
 
 /** A `obj.method(...)` call site (refs #655 phase 2 — "receiver-type" resolution). */
-export interface MemberCallSite {
+interface MemberCallSite {
 	/** The receiver expression's text, when it's a simple identifier (e.g. `userService`). */
 	receiver: string;
 	/** The called method/property name. */
@@ -221,7 +221,7 @@ function isCallPassThrough(
 	return { pass: true, target: (expr.children ?? [])[0]?.text };
 }
 
-function calcCyclomaticComplexity(body: TsNode): number {
+export function calcCyclomaticComplexity(body: TsNode): number {
 	let cc = 1;
 	walk(body, (node) => {
 		if (COMPLEXITY_TYPES.has(node.type)) {

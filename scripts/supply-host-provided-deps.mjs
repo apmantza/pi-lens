@@ -26,8 +26,23 @@
  *                    once.
  *
  * USAGE
- *   npm install --no-save $(node scripts/supply-host-provided-deps.mjs --install-args)
+ *   HOST_PKGS=()
+ *   while IFS= read -r pkg; do
+ *     [ -n "$pkg" ] && HOST_PKGS+=("$pkg")
+ *   done < <(node scripts/supply-host-provided-deps.mjs --install-args)
+ *   npm install --no-save "${HOST_PKGS[@]}"
  *   PATTERN=$(node scripts/supply-host-provided-deps.mjs --allow-pattern)
+ *
+ * `--install-args` prints one `name@range` per LINE (never space-joined): a
+ * peer range can itself contain a space (an OR-form semver range like
+ * "^0.84.1 || ^0.85.0"), so a caller must split on newlines only. Use the
+ * portable `while IFS= read -r` loop above, never `read -ra ... <<< "$(...)"`
+ * or a bare unquoted `$(...)` expansion (both word-split on the range's
+ * internal space too and hand npm a broken extra argv token, #2586 review
+ * F1) — and never bash 4+'s `mapfile -t` either: it does not exist on
+ * macOS's shipped bash 3.2 (Apple has not updated bash past the GPLv2
+ * license cutoff), so `mapfile` on a macOS runner fails with
+ * `mapfile: command not found` (#2586 review round 3).
  */
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
@@ -67,8 +82,15 @@ if (missing.length > 0) {
 	process.exit(1);
 }
 
+// Newline-delimited, not space-joined: a peer range itself can contain a
+// space (e.g. an OR-form semver range like "^0.84.1 || ^0.85.0", #2586
+// review F1), and every caller splits this output back into argv entries.
+// Space-joining would let such a range's internal space explode into extra
+// tokens under a naive word-split; a newline can never appear inside a
+// single `name@range` entry, so splitting on it only ever recovers exactly
+// one token per package.
 console.log(
 	HOST_PROVIDED_RUNTIME_PACKAGES.map((name) => `${name}@${ranges[name]}`).join(
-		" ",
+		"\n",
 	),
 );

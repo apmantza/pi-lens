@@ -31,7 +31,7 @@
 
 import { normalizeMapKey } from "./path-utils.js";
 
-export type TurnSummaryEventKind = "diagnostic" | "autofix" | "format";
+type TurnSummaryEventKind = "diagnostic" | "autofix" | "format";
 
 export interface TurnSummaryEvent {
 	kind: TurnSummaryEventKind;
@@ -52,7 +52,7 @@ export interface TurnSummaryFileEntry {
 	events: TurnSummaryEvent[];
 }
 
-export interface TurnSummaryCounts {
+interface TurnSummaryCounts {
 	diagnostics: number;
 	autofixes: number;
 	formats: number;

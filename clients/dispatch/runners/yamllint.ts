@@ -9,6 +9,7 @@ import type {
 } from "../types.js";
 import {
 	createAvailabilityChecker,
+	resolveRunnerCwd,
 	resolveToolCommandWithInstallFallback,
 } from "./utils/runner-helpers.js";
 import { parseToolRun } from "./utils/tool-failure.js";
@@ -50,7 +51,7 @@ const yamllintRunner: RunnerDefinition = {
 	skipTestFiles: false,
 
 	async run(ctx: DispatchContext): Promise<RunnerResult> {
-		const cwd = ctx.cwd || process.cwd();
+		const cwd = resolveRunnerCwd(ctx, "yamllint");
 		const policy = getLinterPolicyForCwd(ctx.filePath, cwd);
 		if (policy && !policy.preferredRunners.includes("yamllint")) {
 			return { status: "skipped", diagnostics: [], semantic: "none" };
@@ -70,6 +71,7 @@ const yamllintRunner: RunnerDefinition = {
 		if (!cmd) return { status: "skipped", diagnostics: [], semantic: "none" };
 
 		const result = await safeSpawnAsync(cmd, ["-f", "parsable", ctx.filePath], {
+			cwd,
 			timeout: 15000,
 		});
 

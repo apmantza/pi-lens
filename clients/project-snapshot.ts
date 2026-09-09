@@ -45,7 +45,7 @@ export interface ProjectSnapshotFile {
 	lastSeq: number;
 }
 
-export interface ProjectSnapshotSymbol {
+interface ProjectSnapshotSymbol {
 	name: string;
 	kind: string;
 	filePath: string;
@@ -63,7 +63,7 @@ export interface ProjectSnapshotSymbol {
  * `normalizeMapKey(path.resolve())` keys as the change-log replay, so no
  * re-normalization (and no per-key `realpath` syscall) is needed on hydrate.
  */
-export interface SnapshotSequenceIndex {
+interface SnapshotSequenceIndex {
 	projectSeq: number;
 	fileSeqByPath: Array<[filePath: string, fileSeq: number]>;
 }

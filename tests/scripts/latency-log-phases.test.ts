@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+	countEntriesSince,
 	findPhaseEntries,
 	noPhasesLogged,
 	parseNdjsonEntries,
@@ -186,5 +187,24 @@ describe("noPhasesLogged", () => {
 				"2099-01-01T00:00:00.000Z",
 			),
 		).toBe(true);
+	});
+});
+
+describe("countEntriesSince (#2570 positive control)", () => {
+	const entries = [
+		{ type: "phase", phase: "slow_fs_probe", ts: "2026-07-10T10:00:00.000Z" },
+		{ type: "runner", phase: "x", ts: "2026-07-10T10:00:05.000Z" },
+		{ type: "phase", phase: "y" }, // no ts — never counted
+		{ type: "phase", phase: "z", ts: "not-a-date" },
+	];
+
+	it("counts entries of any type at or after sinceIso", () => {
+		expect(countEntriesSince(entries, "2026-07-10T10:00:00.000Z")).toBe(2);
+		expect(countEntriesSince(entries, "2026-07-10T10:00:01.000Z")).toBe(1);
+	});
+
+	it("is zero for an empty or mis-located log, so absence assertions cannot pass vacuously", () => {
+		expect(countEntriesSince([], "2026-07-10T10:00:00.000Z")).toBe(0);
+		expect(countEntriesSince(entries, "2099-01-01T00:00:00.000Z")).toBe(0);
 	});
 });

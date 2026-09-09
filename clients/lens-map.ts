@@ -80,7 +80,7 @@ export interface AggregateOptions {
 	excludeIds?: ReadonlySet<string>;
 }
 
-export const DEFAULT_MAX_MAP_NODES = 500;
+const DEFAULT_MAX_MAP_NODES = 500;
 
 interface MutableFileEntry {
 	id: string;
@@ -627,7 +627,7 @@ export function computeLayout(
 
 // ── Rendering: self-contained HTML (embedded JSON + vanilla JS/SVG) ─────────
 
-export interface LensMapPayloadNode extends FileMapNode {
+interface LensMapPayloadNode extends FileMapNode {
 	x: number;
 	y: number;
 }

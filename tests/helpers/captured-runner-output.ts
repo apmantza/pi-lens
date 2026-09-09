@@ -25,10 +25,10 @@ export const CAPTURED_OUTPUT_DIR = path.resolve(
 );
 
 /** Placeholder the capture script substitutes for its workspace path. */
-export const WORKSPACE_TOKEN = "__WORKSPACE__";
+const WORKSPACE_TOKEN = "__WORKSPACE__";
 
 /** Fields every provenance header must carry, all non-empty strings. */
-export const REQUIRED_PROVENANCE_FIELDS = [
+const REQUIRED_PROVENANCE_FIELDS = [
 	"runner",
 	"tool",
 	"version",
@@ -38,7 +38,7 @@ export const REQUIRED_PROVENANCE_FIELDS = [
 	"capturedAt",
 ] as const;
 
-export interface CapturedProvenance {
+interface CapturedProvenance {
 	runner: string;
 	tool: string;
 	version: string;
@@ -151,7 +151,7 @@ export function provenanceProblems(fixture: CapturedOutput): string[] {
 }
 
 /** Runner ids that have at least one captured fixture. */
-export function capturedRunnerIds(): string[] {
+function capturedRunnerIds(): string[] {
 	if (!fs.existsSync(CAPTURED_OUTPUT_DIR)) return [];
 	return fs
 		.readdirSync(CAPTURED_OUTPUT_DIR, { withFileTypes: true })
@@ -187,11 +187,6 @@ export function listCapturedOutputs(): CapturedOutput[] {
 		}
 	}
 	return out;
-}
-
-/** Captured fixtures for one runner id. */
-export function capturedOutputsFor(runnerId: string): CapturedOutput[] {
-	return listCapturedOutputs().filter((f) => f.provenance?.runner === runnerId);
 }
 
 /**

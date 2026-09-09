@@ -253,6 +253,23 @@ describe("post-filter repairs (#879)", () => {
 		).toBe(1);
 	});
 
+	it("keeps hallucinated-import pairs exact", async () => {
+		// `sqlalchemy` left the MODULE regex in #2576: its pairs (Session, Column,
+		// Integer, String, select …) are real SQLAlchemy APIs, so the cross-product
+		// with the NAME regex was pure false positive.
+		const cases: Array<[string, number]> = [
+			["from requests import JSONResponse", 1],
+			["from requests import Session", 1],
+			["from sqlalchemy import JSONResponse", 0],
+			["from sqlalchemy import Session", 0],
+		];
+		for (const [source, expected] of cases) {
+			expect(
+				await count("python-hallucinated-import", "py", "python", source),
+			).toBe(expected);
+		}
+	});
+
 	it("flags only true bare except, not dotted/qualified exception types", async () => {
 		// Qualified/dotted exception types (e.g. `asyncio.TimeoutError`) parse as
 		// an `attribute` node in tree-sitter-python, not `identifier`. The

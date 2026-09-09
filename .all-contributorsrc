@@ -16,27 +16,27 @@
   "rowTemplate": "<tr>\n<%= bodyContent %>\n</tr>",
   "types": {
     "bug": {
-      "symbol": "🐛",
+      "symbol": "\ud83d\udc1b",
       "description": "Bug reports"
     },
     "code": {
-      "symbol": "💻",
+      "symbol": "\ud83d\udcbb",
       "description": "Code"
     },
     "doc": {
-      "symbol": "📖",
+      "symbol": "\ud83d\udcd6",
       "description": "Documentation"
     },
     "ideas": {
-      "symbol": "🤔",
+      "symbol": "\ud83e\udd14",
       "description": "Ideas & Planning"
     },
     "maintenance": {
-      "symbol": "🚧",
+      "symbol": "\ud83d\udea7",
       "description": "Maintenance"
     },
     "review": {
-      "symbol": "👀",
+      "symbol": "\ud83d\udc40",
       "description": "Reviewed Pull Requests"
     }
   },
@@ -112,7 +112,7 @@
     },
     {
       "login": "fractiunate",
-      "name": "Fractiunate // David Rahäuser",
+      "name": "Fractiunate // David Rah\u00e4user",
       "avatar_url": "https://avatars.githubusercontent.com/u/78024279?v=4",
       "profile": "https://github.com/fractiunate",
       "contributions": [
@@ -363,7 +363,7 @@
     },
     {
       "login": "PeraSite",
-      "name": "정제훈",
+      "name": "\uc815\uc81c\ud6c8",
       "avatar_url": "https://avatars.githubusercontent.com/u/19837403?v=4",
       "profile": "https://github.com/PeraSite",
       "contributions": [
@@ -664,7 +664,7 @@
     },
     {
       "login": "fmatray",
-      "name": "Frédéric",
+      "name": "Fr\u00e9d\u00e9ric",
       "avatar_url": "https://avatars.githubusercontent.com/u/8267716?v=4",
       "profile": "https://github.com/fmatray",
       "contributions": [
@@ -871,7 +871,7 @@
     },
     {
       "login": "LovelyLoong",
-      "name": "可爱的龙",
+      "name": "\u53ef\u7231\u7684\u9f99",
       "avatar_url": "https://avatars.githubusercontent.com/u/54889641?v=4",
       "profile": "https://github.com/LovelyLoong",
       "contributions": [
@@ -991,6 +991,33 @@
       "name": "floatGray",
       "avatar_url": "https://avatars.githubusercontent.com/u/44295302?v=4",
       "profile": "https://github.com/floatGray",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "thomasfsteeples",
+      "name": "Thomas F Steeples",
+      "avatar_url": "https://avatars.githubusercontent.com/thomasfsteeples?v=4",
+      "profile": "https://github.com/thomasfsteeples",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "amasen02",
+      "name": "Ama Senevirathne",
+      "avatar_url": "https://avatars.githubusercontent.com/amasen02?v=4",
+      "profile": "https://github.com/amasen02",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "AcademyKUB8",
+      "name": "AcademyKUB8",
+      "avatar_url": "https://avatars.githubusercontent.com/AcademyKUB8?v=4",
+      "profile": "https://github.com/AcademyKUB8",
       "contributions": [
         "code"
       ]

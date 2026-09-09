@@ -39,9 +39,9 @@ import { normalizeFilePath } from "./path-utils.js";
 
 export const RECENT_TOUCHES_MAX_ENTRIES = 50;
 /** Freshness window for the CHILD session_start consumer (15 minutes). */
-export const RECENT_TOUCHES_FRESHNESS_MS = 15 * 60 * 1000;
+const RECENT_TOUCHES_FRESHNESS_MS = 15 * 60 * 1000;
 
-export type RecentTouchReason = "autofix" | "format";
+type RecentTouchReason = "autofix" | "format";
 
 export interface RecentTouchEntry {
 	/** Normalized (forward-slash) path — see `normalizeFilePath`. */
@@ -68,7 +68,7 @@ function recentTouchesPath(cwd: string): string {
 // (producer, both consumers) as specified in the issue.
 let _enabledCache: boolean | undefined;
 
-export function isRecentTouchesEnabled(): boolean {
+function isRecentTouchesEnabled(): boolean {
 	if (_enabledCache === undefined) {
 		_enabledCache = process.env.PI_LENS_AGENT_NUDGE !== "0";
 	}

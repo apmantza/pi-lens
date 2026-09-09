@@ -11,7 +11,7 @@ import {
 	DECLARED_LEGACY_FILE_SURFACES,
 	REGISTERED_LEGACY_FILE_SURFACES,
 } from "../../clients/config-locations.js";
-import { assertNonEmptyScan } from "../support/sweep-kit.js";
+import { assertNonEmptyScan, escapeRegExp } from "../support/sweep-kit.js";
 
 const REPO_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -113,7 +113,7 @@ function deprecatedChangelogText(): { released: string; unreleased: string } {
  * one, and a row could ship with nobody ever told about it.
  */
 function isAnnounced(text: string, surface: string): boolean {
-	const escaped = surface.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const escaped = escapeRegExp(surface);
 	return new RegExp("`\\s*" + escaped + "\\s*`").test(text);
 }
 

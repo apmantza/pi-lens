@@ -28,6 +28,20 @@ describe("ComplexityClient.isSupportedFile", () => {
 });
 
 describe("ComplexityClient.analyzeFile — JS/TS", () => {
+	it("keeps JS/TS cyclomatic contributions zero-based", async () => {
+		const noDecision = await analyze(
+			"no-decision.ts",
+			"function f() { return 1; }\n",
+		);
+		const oneDecision = await analyze(
+			"one-decision.ts",
+			"function f(n: number) { if (n) return 1; return 0; }\n",
+		);
+
+		expect(noDecision!.functions[0]?.cyclomatic).toBe(0);
+		expect(oneDecision!.functions[0]?.cyclomatic).toBe(1);
+	});
+
 	it("computes cyclomatic / cognitive / nesting / MI for a TS function", async () => {
 		const m = await analyze(
 			"a.ts",

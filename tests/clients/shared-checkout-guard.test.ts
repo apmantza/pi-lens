@@ -152,6 +152,32 @@ describe("worktree-mutating git classification (#2007)", () => {
 		}
 	});
 
+	it("never classifies `git init` as worktree-mutating (#2345)", () => {
+		// `init` was never a member of ALWAYS_MUTATING_VERBS and has no special
+		// case below it, unlike `reset`/`stash`/`clean` — matchesVerb's final
+		// `return false` is what actually answers this, so the gap was real: no
+		// test named `init` by itself, positive or negative. #2345 reported the
+		// guard rejecting `git init -q` for a temp Git fixture; it does not,
+		// because `init` never reaches the verb's mutating branches — it creates
+		// or refreshes `.git` metadata and never rewrites a tracked file, so it
+		// does not belong to the class this guard exists to stop (see the
+		// module docstring's THE HAZARD). This is the invariant that makes every
+		// `git init`-based fixture safe everywhere, with no directory carve-out
+		// needed. MUTATION PROOF: add `"init"` to `ALWAYS_MUTATING_VERBS` and
+		// every case here reds.
+		for (const command of [
+			"git init",
+			"git init -q",
+			"git init --bare",
+			"git init -b main",
+			"git init /tmp/some/fixture",
+		]) {
+			expect(isWorktreeMutatingGitAttempt("bash", bash(command)), command).toBe(
+				false,
+			);
+		}
+	});
+
 	it("inherits the #1063 wrapper and substitution analysis instead of re-parsing", () => {
 		// MUTATION PROOF for the reuse decision: a hand-rolled `startsWith("git ")`
 		// classifier passes the plain cases above and reds on every line here.
@@ -878,3 +904,72 @@ describe("probeWorkingTreeState against the real git binary (#2007)", () => {
 		}
 	}, 20000);
 });
+
+/**
+ * #2345's reported incident: a real-Git test fixture under `os.tmpdir()`
+ * (e.g. `pi-lens-opaque-git-*`) had a worktree-mutating command rejected as
+ * though it were a shared checkout. This is the PRODUCTION call path, no
+ * stubbed `deps` — `evaluateSharedCheckoutGuard` reads the REAL instance
+ * registry (isolated to this worker's `PI_LENS_HOME`, itself a fresh
+ * `os.tmpdir()` fixture per `tests/support/vitest-setup.ts`).
+ *
+ * The premise in #2345 — that the guard treats a temp fixture directory as
+ * "shared" — does not hold structurally: `evaluateOneTarget` only declines
+ * when a LIVE PEER is registered whose resolved toplevel matches the
+ * target's exactly (clients/shared-checkout-guard.ts). Nothing in a test
+ * process ever calls `registerInstance()` against an ephemeral
+ * `fs.mkdtempSync` directory, so `selectLivePeerInstances` always returns
+ * zero candidates for one and the guard allows unconditionally at
+ * `no_peer_session` — regardless of the fixture's location, dirtiness, or
+ * how recently it was `git init`-ed. No directory-based allowlist is needed
+ * for this to be true; it already is.
+ */
+describe("a real ephemeral test fixture is never a shared checkout (#2345)", () => {
+	it("allows a worktree-mutating command in a fresh, dirty, unregistered fixture repo", async () => {
+		const fixture = fs.mkdtempSync(
+			path.join(os.tmpdir(), "pi-lens-2345-fixture-"),
+		);
+		try {
+			const init = await gitFixtureSpawnAsync(fixture, ["init", "-q"], {
+				cwd: fixture,
+				timeout: 20000,
+			});
+			if (init.error || init.status !== 0) {
+				throw new Error(`git init unavailable: ${init.error ?? init.status}`);
+			}
+			// Untracked content — dirty, exactly like the incident's fixtures
+			// mid-setup, and the state `probeWorkingTreeState` would report as
+			// "dirty" if a peer were ever found.
+			fs.writeFileSync(path.join(fixture, "wip.txt"), "fixture content\n");
+
+			// Real deps throughout: the default `readInstanceRegistry`, the
+			// default `resolveGitToplevel`, the default `probeWorkingTreeState`.
+			const decision = await evaluateSharedCheckoutGuard(
+				"bash",
+				bash("git checkout -b feature"),
+				fixture,
+			);
+			expect(decision).toEqual({ block: false });
+			// `block: false` alone doesn't say WHY: `resolveGitToplevel` failing
+			// (fixture judged not-a-worktree) allows too, via `not_a_git_worktree`
+			// — a different, unrelated escape hatch that would mask a REAL
+			// regression in the peer-detection path this test exists to pin.
+			// Assert the specific reason category the incident's fix depends on:
+			// zero registered peers, not a broken toplevel probe. MUTATION PROOF:
+			// stub `resolveToplevel` to always return `undefined` and this reds
+			// with `not_a_git_worktree` in place of `no_peer_session`, even though
+			// `decision.block` above stays `false`.
+			const allow = phaseCalls("shared_checkout_guard_allow").filter(
+				(entry) => entry.filePath === normalizeFilePath(fixture),
+			);
+			expect(
+				allow.map(
+					(e) => (e.metadata as { reasonCategory: string }).reasonCategory,
+				),
+			).toEqual(["no_peer_session"]);
+		} finally {
+			fs.rmSync(fixture, { recursive: true, force: true });
+		}
+	});
+});
+// flake-shape: real-process-spawn — real git children expose shared-checkout branch-switch races that an in-process model cannot reach

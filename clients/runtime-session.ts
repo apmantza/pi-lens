@@ -10,6 +10,7 @@ import { deadCodeIssueCount } from "./dead-code-client.js";
 import { logDeadCodeScan } from "./dead-code-logger.js";
 import {
 	incrementDegradationCount,
+	recordDegradationOnce,
 	resetDegradationLedger,
 } from "./degradation-ledger.js";
 import { getDiagnosticTracker } from "./diagnostic-tracker.js";
@@ -127,6 +128,8 @@ import { resetSpawnTimeoutCooldowns } from "./spawn-timeout-cooldown.js";
 import { resetTestRunnerDelivery } from "./test-runner-delivery.js";
 import { resetLspMutationNoBridgeDbgLatch } from "./lsp-mutation.js";
 import type { SessionStartClassification } from "./session-lifecycle.js";
+import type { PiLensGlobalConfig } from "./lens-config.js";
+import type { PiLensProjectConfig } from "./project-lens-config.js";
 
 /** Durable root-identity value on `session_start_total` records. */
 export type SessionStartRootTelemetry = boolean | "unknown";
@@ -144,6 +147,8 @@ interface SessionStartDeps {
 	sessionReason?: string;
 	handlerEnteredAt?: number;
 	getFlag: (name: string) => boolean | string | undefined;
+	globalConfig?: PiLensGlobalConfig;
+	projectConfig?: PiLensProjectConfig;
 	notify: (msg: string, level: "info" | "warning" | "error") => void;
 	dbg: (msg: string) => void;
 	log: (msg: string) => void;
@@ -449,11 +454,17 @@ function logProjectSnapshotProbe(args: {
 	}
 }
 
-function resolveStartupMode(): StartupMode {
+function resolveStartupMode(
+	projectConfig?: PiLensProjectConfig,
+	globalConfig?: PiLensGlobalConfig,
+): StartupMode {
 	const envMode = (process.env.PI_LENS_STARTUP_MODE ?? "").trim().toLowerCase();
 	if (envMode === "full" || envMode === "minimal" || envMode === "quick") {
 		return envMode;
 	}
+	const configMode =
+		projectConfig?.startup?.mode ?? globalConfig?.startup?.mode;
+	if (configMode) return configMode;
 
 	if (isPrintMode()) {
 		return "quick";
@@ -1201,6 +1212,15 @@ function scheduleStartupScansWithClients(
 		astGrepClient,
 		depChecker,
 	} = deps;
+	const analyzerEnabled = (flag: string): boolean => !deps.getFlag(flag);
+	if (!analyzerEnabled("no-complexity")) {
+		dbg("session_start complexity: skipped (disabled by config)");
+		recordDegradationOnce({
+			kind: "startup-analyzer-disabled",
+			subject: "complexity",
+			reason: "skipped (disabled by config)",
+		});
+	}
 
 	// Some background scans are CPU-heavy and arrive on the event loop
 	// just as the user is most likely typing (right after /new). Defer
@@ -1265,7 +1285,7 @@ function scheduleStartupScansWithClients(
 	}
 	dbg(`session_start: launching background scans (${scanNames.join(", ")})`);
 
-	runTask("todo", async () => {
+	void runTask("todo", async () => {
 		if (!runtime.isCurrentSession(sessionGeneration)) return;
 		// The original implementation called todoScanner.scanDirectory(), which
 		// walks the project synchronously and freezes the TUI for ~3s on a 2k-file
@@ -1311,8 +1331,18 @@ function scheduleStartupScansWithClients(
 		name: string,
 		task: () => Promise<void>,
 	): void => {
+		const flag = `no-${name}`;
+		if (name !== "opengrep" && name !== "trivy" && !analyzerEnabled(flag)) {
+			dbg(`session_start ${name}: skipped (disabled by config)`);
+			recordDegradationOnce({
+				kind: "startup-analyzer-disabled",
+				subject: name,
+				reason: "skipped (disabled by config)",
+			});
+			return;
+		}
 		if (skipHeavyweightScans) return;
-		runTask(name, task);
+		void runTask(name, task);
 	};
 	if (skipHeavyweightScans) {
 		dbg(
@@ -1702,7 +1732,7 @@ function scheduleStartupScansWithClients(
 	// racing its independently deferred timer. Otherwise a slow graph build leaves
 	// `runtime.callGraph` unset at this task's start and loses the model for the
 	// entire session (#1070).
-	runTask("codebase-model", async () => {
+	void runTask("codebase-model", async () => {
 		await callGraphTask;
 		if (!runtime.isCurrentSession(sessionGeneration)) return;
 		if (!runtime.callGraph) return;
@@ -1730,7 +1760,7 @@ function scheduleStartupScansWithClients(
 	});
 
 	// ast-grep — export scan for duplicate detection
-	runTask("ast-grep-exports", async () => {
+	void runTask("ast-grep-exports", async () => {
 		if (await astGrepClient.ensureAvailable()) {
 			if (!runtime.isCurrentSession(sessionGeneration)) return;
 			const exports = await astGrepClient.scanExports(
@@ -1749,7 +1779,7 @@ function scheduleStartupScansWithClients(
 	// word-index — identifier inverted index + BM25 for ranked symbol search
 	// (#162). Load -> rebuild-if-stale -> persist lifecycle (#348), shared with
 	// the quick-mode cold-start warmup pass below.
-	runTask("word-index", async () => {
+	void runTask("word-index", async () => {
 		await buildOrRefreshWordIndex({
 			runtime,
 			sessionGeneration,
@@ -1843,14 +1873,14 @@ function scheduleDeferredToolProbesWithClients(
 /**
  * Session-start orientation prepended as a context message (gated by the
  * context-injection toggle). Deliberately lean: it names the high-value tools
- * and the one non-obvious behaviour (mode=all resurfaces stale blocking errors)
+ * and the distinction between cached reporting and active verification
  * — per-tool argument detail lives in each tool's own registered description, so
  * re-documenting it here would just pay the tokens twice every session.
  */
 export const SESSION_START_GUIDANCE: string[] = [
 	"📌 pi-lens active — automated checks run on every edit/write; blocking errors (including pre-existing) show inline and must be fixed.\n" +
 		"Key tools (see each tool's own description for args):\n" +
-		"• lens_diagnostics — session-wide diagnostic state; mode=all resurfaces stale blocking errors that dropped from turn context.\n" +
+		"• lens_diagnostics — mode=all is cache-only (empty cache ≠ clean); verify changed files with mode=full and paths.\n" +
 		"• symbol_search → module_report → read_symbol/read_enclosing — ranked identifier search, then navigable outline/callback handles + exact body reads; cheaper than reading a whole file before editing.\n" +
 		"• lsp_diagnostics — probe LSP for errors in a file/folder/workspace.\n" +
 		"• Situational (activate via pi_lens_activate_tools): lsp_navigation, ast_grep_search, ast_grep_replace, ast_grep_dump.",
@@ -1931,7 +1961,7 @@ export async function handleSessionStart(
 	//   entirely — but only when PI_LENS_STARTUP_MODE is unset in the env
 	//   (an explicit env var still takes highest precedence).
 	// Tunable: PI_LENS_WARMUP_DELAY_MS adjusts the warmup delay.
-	let startupMode = resolveStartupMode();
+	let startupMode = resolveStartupMode(deps.projectConfig, deps.globalConfig);
 	// SAFETY: these two flags are process-lifetime state pi-lens stashes on
 	// `globalThis` so a second extension instance in the same process sees the
 	// first one's warmup. There is no ambient declaration for them, and adding
@@ -1945,7 +1975,9 @@ export async function handleSessionStart(
 	if (
 		isFirstSessionOfProcess &&
 		process.env.PI_LENS_COLD_START_QUICK !== "0" &&
-		!process.env.PI_LENS_STARTUP_MODE
+		!process.env.PI_LENS_STARTUP_MODE &&
+		!deps.projectConfig?.startup?.mode &&
+		!deps.globalConfig?.startup?.mode
 	) {
 		// Apply host-provided override (e.g. MCP server forces "full") before
 		// falling back to the TUI quick-mode heuristic.
@@ -2869,7 +2901,12 @@ export async function handleSessionStart(
 		dbg("session_start: no language defaults selected for pre-install");
 	}
 
-	const startupScansWillRun = allowBootstrapTasks && startupScan.canWarmCaches;
+	const startupScansEnabled =
+		deps.projectConfig?.startup?.scans?.enabled ??
+		deps.globalConfig?.startup?.scans?.enabled ??
+		true;
+	const startupScansWillRun =
+		allowBootstrapTasks && startupScan.canWarmCaches && startupScansEnabled;
 	const jstsHeavyScansWillRun =
 		startupScansWillRun && canRunStartupHeavyScans(languageProfile, "jsts");
 	if (allowBootstrapTasks) {
@@ -2940,6 +2977,15 @@ export async function handleSessionStart(
 	// needs it before this point) and is stable across this whole call.
 	if (!allowBootstrapTasks) {
 		dbg("session_start: skipping startup background scans (startup mode)");
+	} else if (!startupScansEnabled) {
+		dbg(
+			"session_start: skipping startup background scans (disabled by config)",
+		);
+		recordDegradationOnce({
+			kind: "startup-analyzer-disabled",
+			subject: "startup-scans",
+			reason: "skipped (disabled by config)",
+		});
 	} else if (!startupScan.canWarmCaches) {
 		dbg(
 			`session_start: skipping heavy scans (${startupScan.reason ?? "unknown"})`,

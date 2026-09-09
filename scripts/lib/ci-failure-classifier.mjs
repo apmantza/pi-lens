@@ -21,7 +21,7 @@
  * brittle across reporter versions. */
 // oxlint-disable-next-line no-control-regex -- ESC (\x1b) is the literal ANSI escape-sequence lead byte this pattern strips, not accidental input.
 const ANSI_PATTERN = /\x1b\[[0-9;]*m/g;
-export function stripAnsi(text) {
+function stripAnsi(text) {
 	return text.replace(ANSI_PATTERN, "");
 }
 
@@ -38,7 +38,7 @@ export function stripAnsi(text) {
  * line".
  */
 const LINE_TIMESTAMP_PREFIX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z ?/gm;
-export function stripLineTimestamps(text) {
+function stripLineTimestamps(text) {
 	return text.replace(LINE_TIMESTAMP_PREFIX, "");
 }
 
@@ -103,6 +103,13 @@ const INLINE_SUITE_FAIL =
 // 127ms" -- a fallback when the suite-level line above got lost to log
 // truncation but an individual test's "×" line survived.
 const INLINE_TEST_FAIL_MARKER = /^\s*×\s+(.+?)\s*\d*m?s?\s*$/m;
+// Vitest's compact summary and TypeScript's compiler diagnostic are real
+// failure evidence even when an infrastructure-looking line appears later.
+// Keep these explicit: the classifier must not let a new infra needle outrank
+// a genuine assertion or compile failure.
+const TEST_FILES_FAILED = /\bTest Files\s+\d+\s+failed\b/i;
+const TYPESCRIPT_ERROR =
+	/^\s*\S+\.tsx?\(\d+,\d+\): error TS\d+:|^\s*\S+\.tsx?:\d+:\d+ - error TS\d+:/m;
 // The run's own final tally line (real log, same run): " Tests  1 failed |
 // 9837 passed | 48 skipped (9886)". No file/test detail, but a nonzero
 // failed count here is unambiguous.
@@ -143,12 +150,17 @@ const KILLED_LINE = /(?:^|[\s:])Killed(?:\s|$)/m;
 // `{"outcome":"emit_failed","error":"ECONNRESET"}` (tests/clients/
 // smells-rollup.test.ts:124), so a recovered warning or a test's own
 // console output can contain "ECONNRESET" with no network failure involved.
-// Scoped to lines that also carry an explicit error-shaped prefix (npm's
-// own "npm error" convention, or the runner's own "##[error]" annotation) --
-// a "npm warn" line or arbitrary test output text no longer qualifies.
-const NET_PATTERN =
-	/getaddrinfo\s+\w+\s+\S+|\bENOTFOUND\b|\bECONNRESET\b|tarball.{0,40}(?:download|fetch).{0,20}fail|net::ERR_NAME_NOT_RESOLVED/i;
-const ERROR_PREFIXED_LINE = /^(?:.*\bnpm error\b.*|##\[error\].*)$/im;
+// Scoped to npm error/ERR! lines, registry request lines, and this wrapper's
+// own infra annotation. Arbitrary compiler/linter/test output is not evidence.
+// Keep this shared pattern at origin/master's conservative scope. npm-retry
+// composes it with npm-only shapes below because the two consumers have
+// opposite false-positive costs.
+export const NET_PATTERN =
+	/getaddrinfo\s+\w+\s+\S+|\bENOTFOUND\b|\bECONNRESET\b|tarball.{0,40}(?:download|fetch).{0,20}fail|net::ERR_NAME_NOT_RESOLVED|\bcodeload\.github\.com\b.{0,120}\b(?:429|503)\b/i;
+const ERROR_PREFIXED_LINE =
+	/^(?:.*\bnpm (?:error\b|ERR!)(?:\s|$).*|.*::error::infra:.*|.*\brequest to https?:\/\/\S+ failed, reason:.*)$/gim;
+const CI_INFRA_LINE =
+	/^(?:.*(?:Unable to upload SARIF file|SARIF upload).*(?:\b(?:429|5\d\d)\b|failed).*$|.*Initialize CodeQL.*(?:\b(?:429|5\d\d)\b|failed).*$|.*codeload\.github\.com.*\b(?:429|503)\b.*|.*npm ci[\s\S]{0,200}\bETIMEDOUT\b.*)$/gim;
 
 /**
  * @typedef {{ kind: "real" | "infra-kill" | "infra-net", detail: string }} Classification
@@ -252,6 +264,13 @@ function findRealFailureSignal(log) {
 	if (assertionMatch) {
 		return { detail: `unknown file > ${assertionMatch[1].trim()}` };
 	}
+	if (TEST_FILES_FAILED.test(log)) {
+		return { detail: log.match(TEST_FILES_FAILED)?.[0] ?? "Test Files failed" };
+	}
+	const typescriptMatch = TYPESCRIPT_ERROR.exec(log);
+	if (typescriptMatch) {
+		return { detail: typescriptMatch[0] };
+	}
 	const inlineSuite = INLINE_SUITE_FAIL.exec(log);
 	if (inlineSuite) {
 		return {
@@ -321,7 +340,12 @@ export function classifyFailureLog(rawLog) {
 		return { kind: "infra-kill", detail };
 	}
 
-	if (KILLED_LINE.test(log) && EXIT_137_SHAPED.test(log)) {
+	if (
+		EXIT_137_SHAPED.test(log) &&
+		(KILLED_LINE.test(log) ||
+			/exit code 137|exitCode=137/i.test(log) ||
+			/signal=SIGKILL/i.test(log))
+	) {
 		const samples = log.match(MEM_WATCH_SAMPLE);
 		const lastSample = samples?.[samples.length - 1]?.trim();
 		// #2230's re-home comment on #2103, point 2: when nothing survived to
@@ -337,12 +361,21 @@ export function classifyFailureLog(rawLog) {
 		return { kind: "infra-kill", detail };
 	}
 
-	const errorLine = ERROR_PREFIXED_LINE.exec(log);
-	const netMatch = errorLine ? NET_PATTERN.exec(errorLine[0]) : null;
-	if (netMatch) {
+	let inspectedErrorLines = 0;
+	for (const errorLine of log.matchAll(ERROR_PREFIXED_LINE)) {
+		if (++inspectedErrorLines > 1_000) break;
+		const netMatch = NET_PATTERN.exec(errorLine[0]);
+		if (netMatch) {
+			return {
+				kind: "infra-net",
+				detail: `no failing assertion; network error: ${netMatch[0].trim()}`,
+			};
+		}
+	}
+	for (const infraLine of log.matchAll(CI_INFRA_LINE)) {
 		return {
 			kind: "infra-net",
-			detail: `no failing assertion; network error: ${netMatch[0].trim()}`,
+			detail: `infrastructure error: ${infraLine[0].trim()}`,
 		};
 	}
 
@@ -592,13 +625,7 @@ async function fetchText(fetcher, url) {
  *
  * @param {{ fetcher: typeof fetch, owner: string, repo: string, runId: number | string, jobName?: string }} args
  */
-export async function fetchRunAndFailedJob({
-	fetcher,
-	owner,
-	repo,
-	runId,
-	jobName,
-}) {
+async function fetchRunAndFailedJob({ fetcher, owner, repo, runId, jobName }) {
 	const base = `https://api.github.com/repos/${owner}/${repo}`;
 	const run = await restJson(fetcher, "GET", `${base}/actions/runs/${runId}`);
 	const jobsResponse = await restJson(
@@ -624,7 +651,7 @@ export async function fetchRunAndFailedJob({
 	};
 }
 
-export async function fetchJobLog({ fetcher, owner, repo, jobId }) {
+async function fetchJobLog({ fetcher, owner, repo, jobId }) {
 	const base = `https://api.github.com/repos/${owner}/${repo}`;
 	return fetchText(fetcher, `${base}/actions/jobs/${jobId}/logs`);
 }
@@ -633,7 +660,7 @@ export async function fetchJobLog({ fetcher, owner, repo, jobId }) {
  * Find this PR's existing classifier comment, if any -- there is at most one
  * at a time (upsert, never append), so the first match wins.
  */
-export async function findExistingClassifierComment({
+async function findExistingClassifierComment({
 	fetcher,
 	owner,
 	repo,
@@ -651,7 +678,7 @@ export async function findExistingClassifierComment({
 	);
 }
 
-export async function upsertComment({
+async function upsertComment({
 	fetcher,
 	owner,
 	repo,
@@ -684,7 +711,7 @@ export async function upsertComment({
  *
  * @returns {Promise<{ isWinner: boolean, winningCommentId: number | undefined }>}
  */
-export async function reconcileDuplicateClassifierComments({
+async function reconcileDuplicateClassifierComments({
 	fetcher,
 	owner,
 	repo,
@@ -729,7 +756,7 @@ export async function reconcileDuplicateClassifierComments({
  *
  * @returns {Promise<{ ok: boolean, status: number }>}
  */
-export async function attemptRerun({ fetcher, owner, repo, runId }) {
+async function attemptRerun({ fetcher, owner, repo, runId }) {
 	const base = `https://api.github.com/repos/${owner}/${repo}`;
 	try {
 		const response = await fetcher(
@@ -759,7 +786,19 @@ export async function attemptRerun({ fetcher, owner, repo, runId }) {
  * round 2, V1). See shouldTriggerRerun's REAL SCOPE note (V2/V3) for what
  * "once per SHA" does and doesn't cover under concurrency.
  *
- * @param {{ fetcher: typeof fetch, owner: string, repo: string, runId: number | string, jobName?: string, prNumber?: number }} args
+ * `allowMissingPr` (#2668): a master-push run has no associated pull
+ * request at all -- `run.pull_requests` is always empty for a push event,
+ * not merely unpopulated. Without this flag that is indistinguishable from
+ * the original defect this function guards against (a PR run whose PR
+ * lookup failed) and throws. With it, classification and the rerun attempt
+ * still run in full, but every PR-comment step (find/upsert/reconcile) is
+ * skipped -- there is no issue thread to post to. That also means the
+ * cross-invocation "already reran this SHA" marker guard (shouldTriggerRerun
+ * reading `existingMarker`) has no comment to read for a push run; the
+ * workflow's own `run_attempt == 1` gate is what bounds a push rerun to
+ * once per completed run, the same way it bounds the PR path.
+ *
+ * @param {{ fetcher: typeof fetch, owner: string, repo: string, runId: number | string, jobName?: string, prNumber?: number, allowMissingPr?: boolean }} args
  */
 export async function runClassifier({
 	fetcher,
@@ -771,6 +810,7 @@ export async function runClassifier({
 	sha: shaOverride,
 	rerunKinds,
 	skipMissingJob = false,
+	allowMissingPr = false,
 }) {
 	let runAndJob;
 	try {
@@ -806,7 +846,7 @@ export async function runClassifier({
 		jobName: resolvedJobName,
 	} = runAndJob;
 	const prNumber = prNumberOverride ?? resolvedPrNumber;
-	if (!prNumber) {
+	if (!prNumber && !allowMissingPr) {
 		throw new Error(
 			`run ${runId} has no associated pull request; pass an explicit PR number`,
 		);
@@ -826,12 +866,17 @@ export async function runClassifier({
 		});
 		throw error;
 	}
-	const existingComment = await findExistingClassifierComment({
-		fetcher,
-		owner,
-		repo,
-		prNumber,
-	});
+	// No PR to read a sticky comment on for a commentless (push) run --
+	// there is never a prior marker to recover, so this pass is always the
+	// first look at this SHA.
+	const existingComment = prNumber
+		? await findExistingClassifierComment({
+				fetcher,
+				owner,
+				repo,
+				prNumber,
+			})
+		: null;
 	let classification;
 	try {
 		classification = classifyFailureLog(rawLog);
@@ -881,14 +926,19 @@ export async function runClassifier({
 	}
 
 	const commentBody = buildCommentBody({ classification, sha, rerunState });
-	const postedComment = await upsertComment({
-		fetcher,
-		owner,
-		repo,
-		prNumber,
-		existingComment,
-		body: commentBody,
-	});
+	// A push run has no issue thread to post the sticky comment to -- the
+	// classify job's own log (this function's caller prints commentBody) is
+	// the only trace for that run, by design (#2668).
+	const postedComment = prNumber
+		? await upsertComment({
+				fetcher,
+				owner,
+				repo,
+				prNumber,
+				existingComment,
+				body: commentBody,
+			})
+		: null;
 
 	let result = {
 		classification,
@@ -902,8 +952,8 @@ export async function runClassifier({
 
 	// F3: only a brand-new comment can race a concurrent invocation's brand
 	// -new comment into a duplicate -- a PATCH to an existing single comment
-	// cannot itself create one.
-	if (!existingComment) {
+	// cannot itself create one. No PR means no comment thread to reconcile.
+	if (prNumber && !existingComment) {
 		const reconciled = await reconcileDuplicateClassifierComments({
 			fetcher,
 			owner,
@@ -934,7 +984,7 @@ export async function runClassifier({
  * into a silent no-op. When those identifiers are unavailable, the original
  * error remains authoritative and no broader permission is assumed.
  */
-export async function commentClassificationFailure({
+async function commentClassificationFailure({
 	fetcher,
 	owner,
 	repo,

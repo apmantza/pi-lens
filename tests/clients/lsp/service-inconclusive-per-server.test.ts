@@ -1,3 +1,5 @@
+// flake-shape: raw-timer-wait — fake timers exercise the live hook remainder after delayed pre-snapshot work
+
 /**
  * #1549 — the touch verdict is PER SERVER, aggregated honestly.
  *
@@ -66,12 +68,13 @@ function makeFakeProcess() {
 	};
 }
 
-function makeServer(id: string, role?: "auxiliary") {
+function makeServer(id: string, role?: "auxiliary", custom = false) {
 	return {
 		id,
 		name: id,
 		extensions: [".ts"],
 		...(role && { role }),
+		...(custom && { custom }),
 		root: async () => "C:/repo",
 		spawn: vi.fn(async () => ({ process: makeFakeProcess(), source: "test" })),
 	};
@@ -113,6 +116,7 @@ function makeClient(
 	diags: ReturnType<typeof makeDiagnostic>[] = [],
 	options: {
 		serverId: string;
+		customServer?: boolean;
 		publishesWhenClean?: boolean;
 		/**
 		 * Model a write that never lands (stalled stdin / backpressure), from the
@@ -123,6 +127,7 @@ function makeClient(
 		hangingNotifyAfterWrites?: number;
 		/** Model a write that lands LATE (past the caller's notify budget). */
 		notifyDelayMs?: number;
+		waitForDiagnosticsRejects?: boolean;
 	},
 ) {
 	let version = 0;
@@ -151,6 +156,7 @@ function makeClient(
 		getRawCapabilityKeys: () => [],
 		getLaunchVariant: () => undefined,
 		serverId: options.serverId,
+		customServer: options.customServer === true,
 		root: "C:/repo",
 		get diagnosticsVersion() {
 			return version;
@@ -193,32 +199,46 @@ function makeClient(
 			close: vi.fn(async () => {}),
 		},
 		pingLiveness: vi.fn().mockResolvedValue(true),
-		waitForDiagnostics: vi.fn(
-			(filePath: string) =>
-				new Promise<void>((resolve) =>
-					setTimeout(() => {
-						// A server publishes about the content it actually RECEIVED. With
-						// no write landed there is nothing new to say, so a hanging write
-						// leaves the previous publication (and its binding) in place —
-						// exactly the stale-findings hazard the merge has to drop.
-						const delivered = deliveredContent.get(filePath);
-						if (publishes && delivered !== undefined) {
-							version += 1;
-							stampsByPath.set(filePath, version);
-							cache.set(normalizeMapKey(filePath), {
-								diags,
-								ts: Date.now(),
-							});
-							bindings.set(filePath, hashDiagnosticContent(delivered));
-						}
-						resolve();
-					}, delayMs),
-				),
-		),
+		waitForDiagnostics: vi.fn((filePath: string) => {
+			if (options.waitForDiagnosticsRejects) {
+				return Promise.reject(new Error("server transport failed"));
+			}
+			return new Promise<void>((resolve) =>
+				setTimeout(() => {
+					// A server publishes about the content it actually RECEIVED. With
+					// no write landed there is nothing new to say, so a hanging write
+					// leaves the previous publication (and its binding) in place —
+					// exactly the stale-findings hazard the merge has to drop.
+					const delivered = deliveredContent.get(filePath);
+					if (publishes && delivered !== undefined) {
+						version += 1;
+						stampsByPath.set(filePath, version);
+						cache.set(normalizeMapKey(filePath), {
+							diags,
+							ts: Date.now(),
+						});
+						bindings.set(filePath, hashDiagnosticContent(delivered));
+					}
+					resolve();
+				}, delayMs),
+			);
+		}),
 	};
 }
 
-/** The cascade neighbour fan-out's own touch shape (integration.ts). */
+/**
+ * The multi-server sweep touch shape: `clientScope: "all"`, which is where a
+ * primary and its auxiliaries are waited on together (`lens_diagnostics`
+ * mode=full, `lsp_diagnostics` `serverScope: "all"`).
+ *
+ * This was the cascade neighbour fan-out's own shape when #1549 landed. #1720
+ * has since narrowed that fan-out to `clientScope: "primary"` (integration.ts),
+ * so the cascade lane no longer attaches auxiliaries at all — the touch-wide
+ * collapse this file guards is unreachable from THAT caller today. The probes
+ * stay on the "all" scope because that is the surface where the merge rule is
+ * still live; naming the wrong caller would make them look like cascade
+ * regression tests they are not.
+ */
 const CASCADE_TOUCH = {
 	clientScope: "all" as const,
 	collectDiagnostics: true as const,
@@ -241,16 +261,29 @@ function latencyRows(phase: string) {
  */
 async function mountService(clients: {
 	primary?: ReturnType<typeof makeClient>;
-	aux: ReturnType<typeof makeClient>;
+	aux: ReturnType<typeof makeClient> | ReturnType<typeof makeClient>[];
 }) {
 	const { LSPService } = await import("../../../clients/lsp/index.js");
 	const service = new LSPService();
+	const auxClients = Array.isArray(clients.aux) ? clients.aux : [clients.aux];
 	getServersForFileWithConfig.mockReturnValue([
-		...(clients.primary ? [makeServer("ts-primary")] : []),
-		makeServer("opengrep", "auxiliary"),
+		...(clients.primary
+			? [
+					makeServer(
+						clients.primary.serverId,
+						undefined,
+						clients.primary.customServer,
+					),
+				]
+			: []),
+		...auxClients.map((client) =>
+			makeServer(client.serverId, "auxiliary", client.customServer),
+		),
 	]);
-	createLSPClient.mockImplementation(async (options: { serverId?: string }) =>
-		options?.serverId === "opengrep" ? clients.aux : clients.primary,
+	createLSPClient.mockImplementation(
+		async (options: { serverId?: string }) =>
+			auxClients.find((client) => client.serverId === options?.serverId) ??
+			clients.primary,
 	);
 	return service;
 }
@@ -269,6 +302,7 @@ async function touchOnce(
 					inconclusiveServerIds?: string[];
 					inconclusiveReason?: string;
 					unconfirmedServerIds?: string[];
+					diagnosticsUnsupportedServerIds?: string[];
 			  }
 			| undefined
 		>;
@@ -304,6 +338,7 @@ describe("#1549 — per-server touch verdict", () => {
 		vi.useRealTimers();
 		vi.restoreAllMocks();
 		delete process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS;
+		delete process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS;
 	});
 
 	it("tonight's shape: an answered primary beside a slow auxiliary is USABLE, not inconclusive", async () => {
@@ -328,6 +363,52 @@ describe("#1549 — per-server touch verdict", () => {
 		// `isConfirmedTouch` still fails closed and no cache is seeded from this.
 		expect(result?.confirmation).toBe("partial");
 		expect(result?.unconfirmedServerIds).toEqual(["opengrep"]);
+	});
+
+	it("the sweep shape with TWO auxiliaries: the healthy scanner's findings survive the slow one's lapse", async () => {
+		// The issue's actual population — a sweep touch attaches ~5 servers, and the
+		// aggregate deadline is the MAX over them, so ONE slow scanner lapses the wait
+		// for everyone. The single-auxiliary probes above pin the primary's answer;
+		// this one pins the SIBLING auxiliary's, which is the other half of "discards
+		// every good answer from the other servers in the same sweep". A merge that
+		// drops on any timeout (rather than per contributor) still passes every
+		// single-aux probe in this file and loses `typos finding` here.
+		const result = await touchOnce(
+			await mountService({
+				primary: makeClient(100, [makeDiagnostic("primary error")], {
+					serverId: "ts-primary",
+				}),
+				aux: [
+					makeClient(150, [makeDiagnostic("typos finding")], {
+						serverId: "typos",
+					}),
+					makeClient(5000, [], { serverId: "opengrep" }),
+				],
+			}),
+		);
+
+		expect((result?.diags ?? []).map((d) => d.message)).toEqual([
+			"primary error",
+			"typos finding",
+		]);
+		expect(result?.inconclusive).toBeUndefined();
+		// Per-SERVER, not per-touch: only the scanner that said nothing is named.
+		expect(result?.confirmation).toBe("partial");
+		expect(result?.unconfirmedServerIds).toEqual(["opengrep"]);
+		// And the record carries the same per-server attribution, so a forensic
+		// sweep can tell a lapsed auxiliary from a lapsed touch.
+		expect(latencyRows("lsp_diagnostics_timeout")[0]?.metadata).toMatchObject({
+			unansweredServerIds: ["opengrep"],
+			attributedToPrimary: false,
+		});
+		expect(latencyRows("degradation_ledger")).toContainEqual(
+			expect.objectContaining({
+				metadata: expect.objectContaining({
+					kind: "lsp-diagnostics-timeout",
+					subject: "opengrep",
+				}),
+			}),
+		);
 	});
 
 	it("the same shape on a CLEAN primary: confirmed-empty findings survive as partial", async () => {
@@ -507,6 +588,441 @@ describe("#1549 — per-server touch verdict", () => {
 		expect(result?.inconclusiveReason).toBe("diagnostics-wait");
 	});
 
+	it("keeps a primary navigation-only server unconfirmed beside an answered auxiliary", async () => {
+		// A navigation-only primary is excluded from the diagnostics wait. The
+		// auxiliary can answer, but its evidence cannot become a primary verdict.
+		const service = await mountService({
+			primary: makeClient(100, [], {
+				serverId: "nav-primary",
+				customServer: true,
+			}),
+			aux: makeClient(5000, [makeDiagnostic("scanner finding")], {
+				serverId: "opengrep",
+			}),
+		});
+		const result = await touchOnce(service);
+
+		expect(result?.inconclusive).toBeUndefined();
+		expect(result?.confirmation).toBeUndefined();
+		expect(result?.inconclusiveServerIds).toBeUndefined();
+		expect(result?.inconclusiveReason).toBeUndefined();
+	});
+
+	it("waits once before latching a silent custom primary as navigation-only", async () => {
+		const primary = makeClient(100, [], {
+			serverId: "dexter",
+			customServer: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(100, [], { serverId: "opengrep" }),
+		});
+
+		const result = await touchOnce(service);
+
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(1);
+		expect(result?.diagnosticsUnsupportedServerIds).toEqual(["dexter"]);
+		expect(result?.confirmation).toBeUndefined();
+		expect(result?.inconclusive).toBeUndefined();
+
+		const second = await touchOnce(service, "const y = 2;");
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(1);
+		expect(second?.diagnosticsUnsupportedServerIds).toEqual(["dexter"]);
+		expect(second?.confirmation).toBeUndefined();
+	});
+
+	it("shares one first-contact wait across concurrent touches", async () => {
+		const primary = makeClient(5000, [], {
+			serverId: "dexter",
+			customServer: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(0, [], { serverId: "opengrep" }),
+		});
+
+		const first = service.touchFile(FILE, "const x = 1;", CASCADE_TOUCH);
+		const second = service.touchFile(FILE, "const y = 2;", CASCADE_TOUCH);
+		await vi.advanceTimersByTimeAsync(8000);
+		const results = await Promise.all([first, second]);
+
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(1);
+		expect(results).toHaveLength(2);
+		expect(results[0]?.diagnosticsUnsupportedServerIds).toEqual(["dexter"]);
+		expect(results[1]?.diagnosticsUnsupportedServerIds).toEqual(["dexter"]);
+	});
+
+	it("fails closed when a shared first-contact probe rejects", async () => {
+		const primary = makeClient(100, [], {
+			serverId: "dexter",
+			customServer: true,
+			waitForDiagnosticsRejects: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(0, [], { serverId: "opengrep" }),
+		});
+
+		const first = service.touchFile(FILE, "const x = 1;", CASCADE_TOUCH);
+		const second = service.touchFile(FILE, "const y = 2;", CASCADE_TOUCH);
+		await vi.advanceTimersByTimeAsync(100);
+		const results = await Promise.all([first, second]);
+
+		expect(results.every((result) => result?.inconclusive)).toBe(true);
+		expect(results.map((result) => result?.inconclusiveServerIds)).toEqual([
+			["dexter"],
+			["dexter"],
+		]);
+		expect(results[0]?.diagnosticsUnsupportedServerIds).toBeUndefined();
+
+		const retry = service.touchFile(FILE, "const z = 3;", CASCADE_TOUCH);
+		await vi.advanceTimersByTimeAsync(100);
+		await retry;
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(2);
+	});
+
+	it("does not latch first contact when the live hook deadline cuts the push wait", async () => {
+		process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS = "5000";
+		const primary = makeClient(5000, [], {
+			serverId: "dexter",
+			customServer: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(0, [], { serverId: "opengrep" }),
+		});
+		vi.spyOn(service, "getCapabilitySnapshots").mockResolvedValue([]);
+
+		let settled = false;
+		const first = service.touchFile(FILE, "const x = 1;", {
+			...CASCADE_TOUCH,
+			maxClientWaitMs: 5000,
+			hook: "turn_end",
+		});
+		void first.then(() => {
+			settled = true;
+		});
+
+		for (let i = 0; i < 100; i += 1) {
+			await Promise.resolve();
+			if (primary.waitForDiagnostics.mock.calls.length > 0) break;
+		}
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(3100);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(settled).toBe(true);
+		const firstResult = await first;
+		expect(firstResult?.diagnosticsUnsupportedServerIds).toBeUndefined();
+
+		const second = service.touchFile(FILE, "const y = 2;", {
+			...CASCADE_TOUCH,
+			maxClientWaitMs: 5000,
+			hook: "turn_end",
+		});
+		await vi.advanceTimersByTimeAsync(5000);
+		await second;
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(1);
+		const third = await touchOnce(service, "const z = 3;");
+		expect(third?.diagnosticsUnsupportedServerIds).toEqual(["dexter"]);
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(1);
+	});
+
+	it("settles a first-contact wait when shutdown interrupts the shared probe", async () => {
+		// #2765 round 6: a shutdown used to leave a silent first-contact caller
+		// behind the push deadline; this pins the shutdown arm and destroyed guard.
+		const primary = makeClient(5000, [], {
+			serverId: "dexter",
+			customServer: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(0, [], { serverId: "opengrep" }),
+		});
+		vi.spyOn(service, "getCapabilitySnapshots").mockResolvedValue([]);
+
+		const touch = service.touchFile(FILE, "const x = 1;", {
+			...CASCADE_TOUCH,
+			maxClientWaitMs: 5000,
+			hook: "session_start",
+		});
+		await vi.advanceTimersByTimeAsync(1);
+		for (
+			let i = 0;
+			i < 20 && primary.waitForDiagnostics.mock.calls.length === 0;
+			i += 1
+		) {
+			await Promise.resolve();
+		}
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(1);
+
+		await service.shutdown();
+		await expect(touch).resolves.toMatchObject({
+			inconclusive: true,
+			inconclusiveReason: "diagnostics-wait",
+		});
+		expect(
+			(
+				service as unknown as { state: { diagnosticsUnsupported: Set<string> } }
+			).state.diagnosticsUnsupported.has("dexter"),
+		).toBe(false);
+
+		await expect(
+			service.touchFile(FILE, "const y = 2;", CASCADE_TOUCH),
+		).resolves.toBeUndefined();
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(1);
+	});
+
+	it("cuts the caller at the 3-second hook while the shared probe latches at 5 seconds", async () => {
+		// #2765 round 6: the caller deadline must not cancel the creator-owned probe,
+		// or a late navigation-only latch becomes impossible after a hook cutoff.
+		process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS = "5000";
+		const primary = makeClient(5000, [], {
+			serverId: "dexter",
+			customServer: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(0, [], { serverId: "opengrep" }),
+		});
+		const touch = service.touchFile(FILE, "const x = 1;", {
+			...CASCADE_TOUCH,
+			maxClientWaitMs: 5000,
+			hook: "turn_end",
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		await vi.advanceTimersByTimeAsync(3000);
+		const cutOff = await touch;
+		expect(cutOff?.diagnosticsUnsupportedServerIds).toBeUndefined();
+		expect(
+			(
+				service as unknown as { state: { diagnosticsUnsupported: Set<string> } }
+			).state.diagnosticsUnsupported.has("dexter"),
+		).toBe(false);
+
+		await vi.advanceTimersByTimeAsync(2000);
+		expect(
+			(
+				service as unknown as { state: { diagnosticsUnsupported: Set<string> } }
+			).state.diagnosticsUnsupported.has("dexter"),
+		).toBe(true);
+	});
+
+	it("latches navigation-only when the shared push budget ends before the hook", async () => {
+		// #2765 round 6: a shared probe completing before its caller deadline must
+		// classify the silent custom server instead of reporting a cutoff.
+		const primary = makeClient(2000, [], {
+			serverId: "dexter",
+			customServer: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(0, [], { serverId: "opengrep" }),
+		});
+		const touch = service.touchFile(FILE, "const x = 1;", {
+			...CASCADE_TOUCH,
+			maxClientWaitMs: 2000,
+			hook: "turn_end",
+		});
+
+		await vi.advanceTimersByTimeAsync(2000);
+		await expect(touch).resolves.toMatchObject({
+			diagnosticsUnsupportedServerIds: ["dexter"],
+		});
+	});
+
+	it("keeps a publishing custom server push-capable when it answers inside the hook", async () => {
+		// #2765 round 6: publication before the hook cutoff must win the silent
+		// classification race and deliver the server's diagnostics.
+		process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS = "5000";
+		const primary = makeClient(2500, [makeDiagnostic("published")], {
+			serverId: "dexter",
+			customServer: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(0, [], { serverId: "opengrep" }),
+		});
+		const touch = service.touchFile(FILE, "const x = 1;", {
+			...CASCADE_TOUCH,
+			maxClientWaitMs: 5000,
+			hook: "turn_end",
+		});
+		for (
+			let i = 0;
+			i < 20 && primary.waitForDiagnostics.mock.calls.length === 0;
+			i += 1
+		) {
+			await Promise.resolve();
+		}
+
+		await vi.advanceTimersByTimeAsync(2500);
+		await vi.advanceTimersByTimeAsync(0);
+		const result = await touch;
+		expect(result?.diagnosticsUnsupportedServerIds).toBeUndefined();
+		expect(
+			primary.getDiagnostics(FILE).map((diagnostic) => diagnostic.message),
+		).toEqual(["published"]);
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(1);
+	});
+
+	it("gives concurrent callers independent deadlines over one five-second probe", async () => {
+		// #2765 round 6: caller-local cutoffs must not shorten or restart the shared
+		// five-second first-contact budget when concurrent touches share a server.
+		process.env.PI_LENS_LSP_DIAGNOSTICS_MAX_WAIT_MS = "5000";
+		const primary = makeClient(5000, [], {
+			serverId: "dexter",
+			customServer: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(0, [], { serverId: "opengrep" }),
+		});
+		vi.spyOn(service, "getCapabilitySnapshots").mockResolvedValue([]);
+		const first = service.touchFile(FILE, "const x = 1;", {
+			...CASCADE_TOUCH,
+			maxClientWaitMs: 5000,
+			hook: "agent_end",
+		});
+		const second = service.touchFile(FILE, "const y = 2;", {
+			...CASCADE_TOUCH,
+			maxClientWaitMs: 5000,
+			hook: "session_start",
+		});
+
+		await vi.advanceTimersByTimeAsync(1000);
+		const firstResult = await first;
+		expect(firstResult?.diagnosticsUnsupportedServerIds).toBeUndefined();
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(
+			await Promise.race([
+				second.then(() => "settled" as const),
+				Promise.resolve("pending" as const),
+			]),
+		).toBe("pending");
+		await vi.advanceTimersByTimeAsync(1000);
+		const secondResult = await second;
+		expect(secondResult?.diagnosticsUnsupportedServerIds).toEqual(["dexter"]);
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(1);
+		expect(
+			(
+				service as unknown as { state: { diagnosticsUnsupported: Set<string> } }
+			).state.diagnosticsUnsupported.has("dexter"),
+		).toBe(true);
+	});
+
+	it("does not wait again after a navigation-only latch when capability snapshots are absent", async () => {
+		// #2765 round 6: the latch read must remain authoritative when the later
+		// capability-snapshot pass is skipped or returns no snapshot.
+		const primary = makeClient(100, [], {
+			serverId: "dexter",
+			customServer: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(0, [], { serverId: "opengrep" }),
+		});
+		const snapshots = vi
+			.spyOn(service, "getCapabilitySnapshots")
+			.mockResolvedValue([]);
+
+		await expect(
+			touchOnce(service, "const x = 1;", { hook: "turn_end" }),
+		).resolves.toMatchObject({ diagnosticsUnsupportedServerIds: ["dexter"] });
+		const waits = primary.waitForDiagnostics.mock.calls.length;
+		snapshots.mockResolvedValue([]);
+		await expect(
+			touchOnce(service, "const y = 2;", { hook: "turn_end" }),
+		).resolves.toMatchObject({ diagnosticsUnsupportedServerIds: ["dexter"] });
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(waits);
+	});
+
+	it("keeps a custom primary on normal waits when first contact publishes", async () => {
+		const primary = makeClient(100, [], {
+			serverId: "dexter",
+			customServer: true,
+			publishesWhenClean: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(100, [], {
+				serverId: "opengrep",
+				publishesWhenClean: true,
+			}),
+		});
+
+		const first = await touchOnce(service);
+		const second = await touchOnce(service, "const y = 2;");
+
+		expect(primary.waitForDiagnostics).toHaveBeenCalledTimes(2);
+		expect(first?.diagnosticsUnsupportedServerIds).toBeUndefined();
+		expect(first?.confirmation).toBe("confirmed");
+		expect(second?.diagnosticsUnsupportedServerIds).toBeUndefined();
+		expect(second?.confirmation).toBe("confirmed");
+	});
+
+	it("records one navigation-only degradation per custom server per session", async () => {
+		const primary = makeClient(100, [], {
+			serverId: "dexter",
+			customServer: true,
+		});
+		const service = await mountService({
+			primary,
+			aux: makeClient(100, [], { serverId: "opengrep" }),
+		});
+
+		await touchOnce(service);
+		await touchOnce(service, "const y = 2;");
+
+		expect(
+			latencyRows("degradation_ledger").filter(
+				(row) =>
+					row?.metadata?.kind === "lsp-diagnostics-unsupported" &&
+					row?.metadata?.subject === "dexter",
+			),
+		).toHaveLength(1);
+	});
+
+	it("bounds capability lookup by the live hook remainder", async () => {
+		const service = await mountService({
+			primary: makeClient(0, [], {
+				serverId: "dexter",
+				customServer: true,
+				publishesWhenClean: true,
+			}),
+			aux: makeClient(0, [], {
+				serverId: "opengrep",
+				publishesWhenClean: true,
+			}),
+		});
+		vi.spyOn(
+			service as unknown as {
+				findOutsideProjectRoot: (
+					filePath: string,
+				) => Promise<string | undefined>;
+			},
+			"findOutsideProjectRoot",
+		).mockImplementation(async () => {
+			await new Promise<void>((resolve) => setTimeout(resolve, 2900));
+			return undefined;
+		});
+		vi.spyOn(service, "getCapabilitySnapshots").mockImplementation(
+			() => new Promise(() => {}),
+		);
+
+		let settled = false;
+		const touch = service.touchFile(FILE, "const x = 1;", {
+			...CASCADE_TOUCH,
+			hook: "turn_end",
+		});
+		void touch.then(() => {
+			settled = true;
+		});
+
+		await vi.advanceTimersByTimeAsync(3100);
+		expect(settled).toBe(true);
+		await touch;
+	});
+
 	it("a scanner that went unheard is not marked warm, even on a NON-COLLECTING touch", async () => {
 		// `demonstratedReady` means "this server answered for this file". A
 		// non-collecting touch derives no auxiliary wait-outcome rows, so the coverage
@@ -531,7 +1047,7 @@ describe("#1549 — per-server touch verdict", () => {
 	it("a PRIMARY's notify write timing out is a verdict, attributed to notify-write", async () => {
 		process.env.PI_LENS_LSP_NOTIFY_BUDGET_MS = "50";
 		// The primary never received this content; a publication it makes anyway is
-		// about a different revision. Both auxiliaries healthy — a good scanner must
+		// about a different revision. The auxiliary is healthy — a good scanner must
 		// not launder the primary's failure into a confirmation.
 		const result = await runTouch(
 			makeClient(100, [makeDiagnostic("stale finding")], {

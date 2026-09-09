@@ -1,5 +1,0 @@
----
-section: Changed
----
-
-- **Cross-file staleness now works for the languages the registry reconnected (refs #2424)** — the turn-boundary freshness sweep for cached inline blockers (`clients/blocker-freshness.ts`) resolves a blocker file's forward imports through the same extension-to-grammar column, so it had always returned an empty import list for `.java`, `.kt`/`.kts`, `.swift`, `.dart`, `.lua`, `.zig`, `.ml`/`.mli`, `.ex`/`.exs` and `.sh`/`.bash` even though their grammars, import queries and path resolvers all shipped. Only the blocker file's own drift could demote such a verdict; now a blocker on `Main.java` is also demoted when the `Helper.java` it imports changes. The project scan gained the same reach, but a grammar is not a consumer: a file whose language has no `rules/tree-sitter-queries/<lang>/` dir, no fact-rule eligibility and no ast-grep binding is skipped BEFORE it is read, so a Lua or Swift file no longer costs a read and no longer inflates the scan's `fileCount` telemetry.

@@ -33,7 +33,7 @@ export interface MonorepoPackageSpec {
 	piLensConfig?: Record<string, unknown>;
 }
 
-export interface MonorepoPadFilesSpec {
+interface MonorepoPadFilesSpec {
 	/** Directory (relative to root) to pad with tiny throwaway files. */
 	dir: string;
 	/** How many files to create. */

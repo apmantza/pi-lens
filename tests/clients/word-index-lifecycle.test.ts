@@ -26,6 +26,7 @@ import {
 	serializeWordIndex,
 } from "../../clients/word-index.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 // Same LSP stub as runtime-session.test.ts / runtime-session-warm.test.ts: the
 // dominant-language auto-warm (#203) must not spawn a real language server
@@ -33,10 +34,12 @@ import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 const mockTouchFile = vi.fn(async () => undefined);
 vi.mock("../../clients/lsp/index.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../clients/lsp/index.js")>()),
-	getLSPService: vi.fn(() => ({
-		supportsLSP: () => false,
-		touchFile: mockTouchFile,
-	})),
+	getLSPService: vi.fn(() =>
+		makeLspServiceDouble({
+			supportsLSP: () => false,
+			touchFile: mockTouchFile,
+		}),
+	),
 }));
 
 const deferredRuntimeSnapshotSave = vi.hoisted(() => ({

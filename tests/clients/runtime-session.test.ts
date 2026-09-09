@@ -8,10 +8,25 @@ import {
 	saveProjectSnapshot,
 } from "../../clients/project-snapshot.js";
 import { RuntimeCoordinator } from "../../clients/runtime-coordinator.js";
+import {
+	getDegradationSummary,
+	resetDegradationLedger,
+} from "../../clients/degradation-ledger.js";
+import {
+	loadPiLensGlobalConfig,
+	resolvePiLensFlag,
+	type PiLensGlobalConfig,
+} from "../../clients/lens-config.js";
+import {
+	loadPiLensProjectConfig,
+	type PiLensProjectConfig,
+} from "../../clients/project-lens-config.js";
 import { handleSessionStart } from "../../clients/runtime-session.js";
 import { _resetSlowFsForTests } from "../../clients/slow-fs.js";
 import { _resetSubagentModeForTests } from "../../clients/subagent-mode.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
+import { waitFor as waitForCondition } from "./interleaving-kit.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 /** A pid guaranteed dead on this machine, for orphan-staging-file tests
  *  (mirrors tests/clients/atomic-write-stage-gc.test.ts's helper). */
@@ -33,10 +48,12 @@ function findDeadPid(): number {
 const mockTouchFile = vi.fn(async () => undefined);
 vi.mock("../../clients/lsp/index.js", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../../clients/lsp/index.js")>()),
-	getLSPService: vi.fn(() => ({
-		supportsLSP: () => false,
-		touchFile: mockTouchFile,
-	})),
+	getLSPService: vi.fn(() =>
+		makeLspServiceDouble({
+			supportsLSP: () => false,
+			touchFile: mockTouchFile,
+		}),
+	),
 }));
 
 // #1767: every test in this file drives `handleSessionStart`, which does
@@ -86,7 +103,7 @@ const EMPTY_KNIP_RESULT = {
 	summary: "skipped",
 };
 
-function setStartupMode(mode: "full" | "quick"): () => void {
+function setStartupMode(mode: "full" | "quick" | "minimal"): () => void {
 	const prev = process.env.PI_LENS_STARTUP_MODE;
 	process.env.PI_LENS_STARTUP_MODE = mode;
 	return () => {
@@ -95,12 +112,22 @@ function setStartupMode(mode: "full" | "quick"): () => void {
 	};
 }
 
+function writeConfig(filePath: string, config: Record<string, unknown>): void {
+	fs.mkdirSync(path.dirname(filePath), { recursive: true });
+	fs.writeFileSync(filePath, JSON.stringify(config));
+}
+
 async function runSessionStart(
-	mode: "full" | "quick",
+	mode: "full" | "quick" | "minimal",
 	setup?: (tmpDir: string) => void,
 	overrides: {
 		astGrepEnsure?: () => Promise<boolean>;
 		scanExports?: () => Promise<Map<string, string>>;
+		getFlag?: (name: string) => boolean | string | undefined;
+		projectConfig?: PiLensProjectConfig;
+		globalConfig?: PiLensGlobalConfig;
+		startupModeOverride?: "full" | "quick" | "minimal";
+		startupModeEnv?: "full" | "quick" | "minimal" | null;
 	} = {},
 ) {
 	const env = setupTestEnvironment("pi-lens-runtime-session-");
@@ -142,88 +169,102 @@ async function runSessionStart(
 	const depEnsure = vi.fn(async () => false);
 	const resetLSPService = vi.fn();
 	const dbg = vi.fn();
-	const restoreStartupMode = setStartupMode(mode);
+	const restoreStartupMode =
+		overrides.startupModeEnv === null
+			? (() => {
+					const previous = process.env.PI_LENS_STARTUP_MODE;
+					delete process.env.PI_LENS_STARTUP_MODE;
+					return () => {
+						if (previous === undefined) delete process.env.PI_LENS_STARTUP_MODE;
+						else process.env.PI_LENS_STARTUP_MODE = previous;
+					};
+				})()
+			: setStartupMode(overrides.startupModeEnv ?? mode);
 	mockTouchFile.mockClear();
 
 	try {
-		await handleSessionStart(
-			withResidentBootstrap({
-				ctxCwd: env.tmpDir,
-				getFlag: (name: string) => {
-					if (name === "lens-lsp") return true;
-					if (name === "no-lsp") return false;
-					return false;
+		const sessionDeps = withResidentBootstrap({
+			ctxCwd: env.tmpDir,
+			getFlag: (name: string) => {
+				const override = overrides.getFlag?.(name);
+				if (override !== undefined) return override;
+				if (name === "lens-lsp") return true;
+				if (name === "no-lsp") return false;
+				return false;
+			},
+			projectConfig: overrides.projectConfig,
+			globalConfig: overrides.globalConfig,
+			startupModeOverride: overrides.startupModeOverride,
+			notify,
+			dbg,
+			log: () => {},
+			runtime: {
+				sessionGeneration: 1,
+				isCurrentSession: () => true,
+				markStartupScanInFlight: (name: string) => {
+					inFlightScans.add(name);
 				},
-				notify,
-				dbg,
-				log: () => {},
-				runtime: {
-					sessionGeneration: 1,
-					isCurrentSession: () => true,
-					markStartupScanInFlight: (name: string) => {
-						inFlightScans.add(name);
-					},
-					clearStartupScanInFlight: (name: string) => {
-						inFlightScans.delete(name);
-					},
-					complexityBaselines: new Map(),
-					resetForSession: () => {},
-					projectRoot: "",
-					projectRulesScan: { hasCustomRules: false, rules: [] },
-					cachedExports: new Map(),
-					errorDebtBaseline: { testsPassed: true, buildPassed: true },
+				clearStartupScanInFlight: (name: string) => {
+					inFlightScans.delete(name);
 				},
-				metricsClient: { reset: () => {} },
-				cacheManager: {
-					writeCache: () => {},
-					readCache: (key: string) => {
-						if (key === "errorDebt") {
-							return {
-								data: { pendingCheck: true, baselineTestsPassed: true },
-							};
-						}
-						return null;
-					},
+				complexityBaselines: new Map(),
+				resetForSession: () => {},
+				projectRoot: "",
+				projectRulesScan: { hasCustomRules: false, rules: [] },
+				cachedExports: new Map(),
+				errorDebtBaseline: { testsPassed: true, buildPassed: true },
+			},
+			metricsClient: { reset: () => {} },
+			cacheManager: {
+				writeCache: () => {},
+				readCache: (key: string) => {
+					if (key === "errorDebt") {
+						return {
+							data: { pendingCheck: true, baselineTestsPassed: true },
+						};
+					}
+					return null;
 				},
-				todoScanner: { scanDirectory, scanFile },
-				astGrepClient: {
-					isAvailable: () => false,
-					ensureAvailable: astGrepEnsure,
-					scanExports,
-				},
-				biomeClient: {
-					isAvailable: () => false,
-					ensureAvailable: biomeEnsure,
-				},
-				ruffClient: {
-					isAvailable: () => false,
-					ensureAvailable: ruffEnsure,
-				},
-				knipClient: {
-					isAvailable: () => false,
-					ensureAvailable: knipEnsure,
-					analyze: knipAnalyze,
-				},
-				jscpdClient: {
-					isAvailable: () => false,
-					ensureAvailable: jscpdEnsure,
-				},
-				depChecker: {
-					isAvailable: () => false,
-					ensureAvailable: depEnsure,
-				},
-				testRunnerClient: {
-					detectRunner: () => ({ runner: "vitest", config: null }),
-					runTestFile: () => ({ failed: 1, error: false }),
-				},
-				goClient: { isGoAvailableAsync: async () => false },
-				rustClient: { isAvailableAsync: async () => false },
-				ensureTool,
-				cleanStaleTsBuildInfo: () => ["tsconfig.tsbuildinfo"],
-				resetDispatchBaselines: () => {},
-				resetLSPService,
-			}) as any,
-		);
+			},
+			todoScanner: { scanDirectory, scanFile },
+			astGrepClient: {
+				isAvailable: () => false,
+				ensureAvailable: astGrepEnsure,
+				scanExports,
+			},
+			biomeClient: {
+				isAvailable: () => false,
+				ensureAvailable: biomeEnsure,
+			},
+			ruffClient: {
+				isAvailable: () => false,
+				ensureAvailable: ruffEnsure,
+			},
+			knipClient: {
+				isAvailable: () => false,
+				ensureAvailable: knipEnsure,
+				analyze: knipAnalyze,
+			},
+			jscpdClient: {
+				isAvailable: () => false,
+				ensureAvailable: jscpdEnsure,
+			},
+			depChecker: {
+				isAvailable: () => false,
+				ensureAvailable: depEnsure,
+			},
+			testRunnerClient: {
+				detectRunner: () => ({ runner: "vitest", config: null }),
+				runTestFile: () => ({ failed: 1, error: false }),
+			},
+			goClient: { isGoAvailableAsync: async () => false },
+			rustClient: { isAvailableAsync: async () => false },
+			ensureTool,
+			cleanStaleTsBuildInfo: () => ["tsconfig.tsbuildinfo"],
+			resetDispatchBaselines: () => {},
+			resetLSPService,
+		}) as any;
+		await handleSessionStart(sessionDeps);
 
 		// The returned `cleanup` waits for the tmpDir-touching background scans
 		// to settle (see the #810 comment above `inFlightScans`) before deleting
@@ -244,6 +285,7 @@ async function runSessionStart(
 
 		return {
 			env: { ...env, cleanup },
+			repeatSessionStart: () => handleSessionStart(sessionDeps),
 			notify,
 			scanDirectory,
 			scanFile,
@@ -308,6 +350,308 @@ it(
 	},
 	TEST_BUDGET_MS,
 );
+
+it(
+	"skips a disabled startup analyzer through session_start and records it",
+	async () => {
+		const { env, knipEnsure, dbg } = await runSessionStart(
+			"full",
+			(tmpDir) => {
+				createTempFile(tmpDir, "package.json", JSON.stringify({}));
+				createTempFile(tmpDir, "src/index.ts", "export const value = 1;\n");
+			},
+			{ getFlag: (name) => name === "no-knip", startupModeOverride: "full" },
+		);
+		try {
+			await waitForCondition(
+				() => dbg.mock.calls,
+				(calls) =>
+					calls.some(
+						([message]) =>
+							message === "session_start knip: skipped (disabled by config)",
+					),
+				{ timeoutMs: HEAVY_IO_TIMEOUT_MS },
+			);
+			expect(dbg).toHaveBeenCalledWith(
+				"session_start knip: skipped (disabled by config)",
+			);
+			expect(knipEnsure).not.toHaveBeenCalled();
+			expect(
+				getDegradationSummary().some(
+					(entry) => entry.kind === "startup-analyzer-disabled",
+				),
+			).toBe(true);
+		} finally {
+			await env.cleanup();
+		}
+	},
+	TEST_BUDGET_MS,
+);
+
+describe("fixture-loaded startup precedence", () => {
+	it("gives PI_LENS_STARTUP_MODE precedence through the scan consumer", async () => {
+		const env = setupTestEnvironment("pi-lens-startup-env-precedence-");
+		const globalPath = path.join(env.tmpDir, "global", "config.json");
+		writeConfig(globalPath, { startup: { mode: "full" } });
+		const globalConfig = loadPiLensGlobalConfig(globalPath);
+		const projectConfig = loadPiLensProjectConfig(env.tmpDir);
+		try {
+			const result = await runSessionStart(
+				"full",
+				(tmpDir) => {
+					createTempFile(tmpDir, "package.json", "{}");
+					createTempFile(tmpDir, "src/index.ts", "export const value = 1;\n");
+				},
+				{
+					globalConfig,
+					projectConfig,
+					startupModeEnv: "quick",
+					getFlag: (name) =>
+						resolvePiLensFlag(name, undefined, globalConfig, projectConfig),
+				},
+			);
+			try {
+				expect(result.knipAnalyze).not.toHaveBeenCalled();
+				expect(result.dbg).toHaveBeenCalledWith(
+					"session_start startup mode: quick",
+				);
+			} finally {
+				await result.env.cleanup();
+			}
+		} finally {
+			env.cleanup();
+		}
+
+		const inverse = setupTestEnvironment("pi-lens-startup-config-precedence-");
+		const inversePath = path.join(inverse.tmpDir, "global", "config.json");
+		writeConfig(inversePath, { startup: { mode: "quick" } });
+		const inverseGlobal = loadPiLensGlobalConfig(inversePath);
+		const inverseProject = loadPiLensProjectConfig(inverse.tmpDir);
+		try {
+			const result = await runSessionStart(
+				"full",
+				(tmpDir) => {
+					createTempFile(tmpDir, "package.json", "{}");
+					createTempFile(tmpDir, "src/index.ts", "export const value = 1;\n");
+				},
+				{
+					globalConfig: inverseGlobal,
+					projectConfig: inverseProject,
+					startupModeEnv: "full",
+					getFlag: (name) =>
+						resolvePiLensFlag(name, undefined, inverseGlobal, inverseProject),
+				},
+			);
+			try {
+				await waitForCondition(
+					() => result.knipAnalyze.mock.calls.length,
+					(count) => count > 0,
+					{ timeoutMs: HEAVY_IO_TIMEOUT_MS },
+				);
+				expect(result.dbg).toHaveBeenCalledWith(
+					"session_start startup mode: full",
+				);
+			} finally {
+				await result.env.cleanup();
+			}
+		} finally {
+			inverse.cleanup();
+		}
+	});
+
+	it("uses startup.mode config at the scan consumer", async () => {
+		const env = setupTestEnvironment("pi-lens-startup-config-mode-");
+		const globalConfig = loadPiLensGlobalConfig(
+			path.join(env.tmpDir, "missing", "config.json"),
+		);
+		writeConfig(path.join(env.tmpDir, ".pi-lens.json"), {
+			startup: { mode: "quick" },
+		});
+		const projectConfig = loadPiLensProjectConfig(env.tmpDir);
+		try {
+			const result = await runSessionStart(
+				"full",
+				(tmpDir) => {
+					createTempFile(tmpDir, "package.json", "{}");
+					createTempFile(tmpDir, "src/index.ts", "export const value = 1;\n");
+				},
+				{
+					globalConfig,
+					projectConfig,
+					startupModeEnv: null,
+					getFlag: (name) =>
+						resolvePiLensFlag(name, undefined, globalConfig, projectConfig),
+				},
+			);
+			try {
+				expect(result.knipAnalyze).not.toHaveBeenCalled();
+				expect(result.dbg).toHaveBeenCalledWith(
+					"session_start startup mode: quick",
+				);
+			} finally {
+				await result.env.cleanup();
+			}
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("gives project fixtures precedence over global config for a flag and mode", async () => {
+		const env = setupTestEnvironment("pi-lens-startup-project-precedence-");
+		const globalPath = path.join(env.tmpDir, "global", "config.json");
+		writeConfig(globalPath, {
+			knip: { enabled: true },
+			startup: { mode: "quick" },
+		});
+		writeConfig(path.join(env.tmpDir, ".pi-lens.json"), {
+			knip: { enabled: false },
+			startup: { mode: "full" },
+		});
+		const globalConfig = loadPiLensGlobalConfig(globalPath);
+		const projectConfig = loadPiLensProjectConfig(env.tmpDir);
+		try {
+			const result = await runSessionStart(
+				"full",
+				(tmpDir) => createTempFile(tmpDir, "package.json", "{}"),
+				{
+					globalConfig,
+					projectConfig,
+					startupModeEnv: null,
+					getFlag: (name) =>
+						resolvePiLensFlag(name, undefined, globalConfig, projectConfig),
+				},
+			);
+			try {
+				expect(result.dbg).toHaveBeenCalledWith(
+					"session_start startup mode: full",
+				);
+				await waitForCondition(
+					() => result.dbg.mock.calls,
+					(calls) =>
+						calls.some(
+							([message]) =>
+								message === "session_start knip: skipped (disabled by config)",
+						),
+					{ timeoutMs: HEAVY_IO_TIMEOUT_MS },
+				);
+				expect(result.dbg).toHaveBeenCalledWith(
+					"session_start knip: skipped (disabled by config)",
+				);
+				expect(result.knipEnsure).not.toHaveBeenCalled();
+			} finally {
+				await result.env.cleanup();
+			}
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("defaults absent keys to enabled analyzers and full startup", async () => {
+		const env = setupTestEnvironment("pi-lens-startup-defaults-");
+		const globalConfig = loadPiLensGlobalConfig(
+			path.join(env.tmpDir, "missing", "config.json"),
+		);
+		const projectConfig = loadPiLensProjectConfig(env.tmpDir);
+		try {
+			const result = await runSessionStart(
+				"full",
+				(tmpDir) => createTempFile(tmpDir, "package.json", "{}"),
+				{
+					globalConfig,
+					projectConfig,
+					getFlag: (name) =>
+						resolvePiLensFlag(name, undefined, globalConfig, projectConfig),
+				},
+			);
+			try {
+				expect(result.dbg).toHaveBeenCalledWith(
+					"session_start startup mode: full",
+				);
+				expect(result.dbg).not.toHaveBeenCalledWith(
+					"session_start knip: skipped (disabled by config)",
+				);
+			} finally {
+				await result.env.cleanup();
+			}
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("keeps lens diagnostics and LSP alive when startup scans are disabled", async () => {
+		const env = setupTestEnvironment("pi-lens-startup-scans-disabled-");
+		writeConfig(path.join(env.tmpDir, ".pi-lens.json"), {
+			startup: { mode: "full", scans: { enabled: false } },
+		});
+		const globalConfig = loadPiLensGlobalConfig(
+			path.join(env.tmpDir, "missing", "config.json"),
+		);
+		const projectConfig = loadPiLensProjectConfig(env.tmpDir);
+		try {
+			const result = await runSessionStart(
+				"full",
+				(tmpDir) => createTempFile(tmpDir, "package.json", "{}"),
+				{
+					globalConfig,
+					projectConfig,
+					getFlag: (name) =>
+						resolvePiLensFlag(name, undefined, globalConfig, projectConfig),
+				},
+			);
+			try {
+				expect(result.resetLSPService).toHaveBeenCalled();
+				expect(result.dbg).toHaveBeenCalledWith(
+					"session_start: skipping startup background scans (disabled by config)",
+				);
+				expect(result.dbg).not.toHaveBeenCalledWith(
+					"session_start: skipping LSP initialization (disabled by config)",
+				);
+				expect(result.knipAnalyze).not.toHaveBeenCalled();
+				expect(result.depEnsure).not.toHaveBeenCalled();
+				expect(result.astGrepEnsure).not.toHaveBeenCalled();
+			} finally {
+				await result.env.cleanup();
+			}
+		} finally {
+			env.cleanup();
+		}
+	});
+
+	it("records startup analyzer skips once per session and re-arms after reset", async () => {
+		const baseProjectConfig = loadPiLensProjectConfig(process.cwd());
+		const result = await runSessionStart(
+			"full",
+			(tmpDir) => {
+				createTempFile(tmpDir, "package.json", "{}");
+				createTempFile(tmpDir, "src/index.ts", "export const value = 1;\n");
+			},
+			{
+				projectConfig: {
+					...baseProjectConfig,
+					startup: { mode: "full", scans: { enabled: false } },
+				},
+				startupModeEnv: null,
+			},
+		);
+		try {
+			const first = getDegradationSummary().filter(
+				(entry) => entry.kind === "startup-analyzer-disabled",
+			);
+			expect(first).toHaveLength(1);
+			expect(first[0]?.latestReasons[0]?.subject).toBe("startup-scans");
+
+			resetDegradationLedger();
+			await result.repeatSessionStart();
+			const second = getDegradationSummary().filter(
+				(entry) => entry.kind === "startup-analyzer-disabled",
+			);
+			expect(second).toHaveLength(1);
+			expect(second[0]?.latestReasons[0]?.subject).toBe("startup-scans");
+		} finally {
+			await result.env.cleanup();
+		}
+	});
+});
 
 describe(
 	"runtime-session notifications",

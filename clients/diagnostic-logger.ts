@@ -10,7 +10,7 @@ import { getGlobalPiLensLogDir } from "./probe-home-state.js";
 import { getMaxLogSizeMB } from "./log-cleanup.js";
 import { createNdjsonLogger } from "./ndjson-logger.js";
 
-export interface DiagnosticEntry {
+interface DiagnosticEntry {
 	// When
 	timestamp: string;
 
@@ -47,7 +47,7 @@ export interface DiagnosticLogger {
 	flush(): Promise<void>;
 }
 
-export interface Diagnostic {
+interface Diagnostic {
 	tool?: string;
 	rule?: string;
 	id?: string;
@@ -85,7 +85,7 @@ export function getDiagnosticLogger(): DiagnosticLogger {
 	return _logger;
 }
 
-export function createDiagnosticLogger(): DiagnosticLogger {
+function createDiagnosticLogger(): DiagnosticLogger {
 	// Lazy filePath: the log file is keyed on the current date, resolved per
 	// drain so a long-lived logger rolls over at midnight. A daily rollover
 	// is NOT a size bound (#2505): one very busy day, or a long-lived

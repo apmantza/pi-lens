@@ -11,6 +11,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 const evaluate = vi.fn();
 vi.mock("../../clients/shared-checkout-guard.js", () => ({
@@ -18,10 +19,7 @@ vi.mock("../../clients/shared-checkout-guard.js", () => ({
 }));
 
 vi.mock("../../clients/lsp/index.js", () => ({
-	getLSPService: () => ({
-		touchFile: vi.fn().mockResolvedValue(undefined),
-		getWarmClientForFile: vi.fn().mockResolvedValue(undefined),
-	}),
+	getLSPService: () => makeLspServiceDouble(),
 	resetLSPService: () => {},
 }));
 

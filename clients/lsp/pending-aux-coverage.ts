@@ -260,10 +260,6 @@ export function pendingAuxiliaryCoverageSize(): number {
 	return pending.size;
 }
 
-/** Test-only alias for the store-size assertion seam. */
-export const pendingAuxiliaryCoverageSizeForTests =
-	pendingAuxiliaryCoverageSize;
-
 /**
  * Drain (read and reset) the cap-eviction count accumulated since the last
  * drain. Mirrors {@link drainPendingAuxiliaryCoverage}'s consume-once shape

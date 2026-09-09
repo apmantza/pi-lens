@@ -274,6 +274,24 @@ describe("lens_diagnostics schema", () => {
 			.properties;
 		expect(props.mode.enum).toContain("full");
 	});
+
+	it("distinguishes cached reporting from targeted active verification in agent guidance", () => {
+		// The completion hint used to claim cache-only mode=all verified files.
+		const tool = makeTool();
+		for (const text of [
+			tool.description,
+			tool.promptSnippet,
+			(tool.parameters.properties.mode as unknown as { description: string })
+				.description,
+		]) {
+			expect(text).toMatch(/(?:mode=)?all[^.\n;]*cache-only/);
+			expect(text).toMatch(/(?:mode=)?full[^.\n;]*paths/);
+			// #2795 review: every surface says an empty cache is not proof of clean.
+			expect(text).toMatch(/empty cache[^.\n;]*(not proof|≠ clean)/i);
+		}
+		expect(tool.description).toContain("no cached diagnostics");
+		expect(tool.description).not.toContain("Use before declaring work done");
+	});
 });
 
 // ── delta mode ────────────────────────────────────────────────────────────────
@@ -1236,12 +1254,14 @@ describe("lens_diagnostics mode=full", () => {
 								start: { line: 1, character: 0 },
 								end: { line: 1, character: 5 },
 							},
-							source: "typescript",
+							serverId: "typescript",
+							source: "eslint",
 							code: 2322,
 						},
 						{
 							severity: 2,
 							message: "ast-grep rule hit",
+							serverId: "ast-grep",
 							range: {
 								start: { line: 2, character: 0 },
 								end: { line: 2, character: 5 },

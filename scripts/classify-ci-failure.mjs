@@ -15,7 +15,22 @@
 
 import { runClassifier } from "./lib/ci-failure-classifier.mjs";
 
-function parseArgs(argv) {
+// #2668 review F2: an unrecognized flag (a typo, or a workflow/CLI rename
+// drifting out of sync -- exactly what happened when this file's own flag
+// was almost shipped as `--allow-missing-prs`) must not be silently
+// swallowed. Before this table existed, an unknown token was simply never
+// matched by the if/else chain below and args kept its default, so the
+// workflow's real argv failing to parse looked identical to a legitimate
+// run with that option unset. `UnknownArgError` lets main() tell "bad argv"
+// (exit 4) apart from every other failure mode.
+export class UnknownArgError extends Error {
+	constructor(arg) {
+		super(`unknown argument: ${arg}`);
+		this.name = "UnknownArgError";
+	}
+}
+
+export function parseArgs(argv) {
 	const args = {
 		runId: null,
 		jobName: "Unit tests",
@@ -23,6 +38,7 @@ function parseArgs(argv) {
 		sha: null,
 		infraKillOnly: false,
 		skipMissingJob: false,
+		allowMissingPr: false,
 	};
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
@@ -32,16 +48,36 @@ function parseArgs(argv) {
 		else if (arg === "--sha") args.sha = argv[++i];
 		else if (arg === "--infra-kill-only") args.infraKillOnly = true;
 		else if (arg === "--skip-missing-job") args.skipMissingJob = true;
+		else if (arg === "--allow-missing-pr") args.allowMissingPr = true;
+		else throw new UnknownArgError(arg);
 	}
 	return args;
 }
 
 async function main() {
-	const { runId, jobName, prNumber, sha, infraKillOnly, skipMissingJob } =
-		parseArgs(process.argv.slice(2));
+	let parsed;
+	try {
+		parsed = parseArgs(process.argv.slice(2));
+	} catch (error) {
+		if (error instanceof UnknownArgError) {
+			console.error(error.message);
+			process.exitCode = 4;
+			return;
+		}
+		throw error;
+	}
+	const {
+		runId,
+		jobName,
+		prNumber,
+		sha,
+		infraKillOnly,
+		skipMissingJob,
+		allowMissingPr,
+	} = parsed;
 	if (!runId) {
 		console.error(
-			"usage: node scripts/classify-ci-failure.mjs --run <runId> [--job-name <name>] [--pr <number>] [--sha <headSha>] [--infra-kill-only] [--skip-missing-job]",
+			"usage: node scripts/classify-ci-failure.mjs --run <runId> [--job-name <name>] [--pr <number>] [--sha <headSha>] [--infra-kill-only] [--skip-missing-job] [--allow-missing-pr]",
 		);
 		process.exitCode = 2;
 		return;
@@ -70,14 +106,18 @@ async function main() {
 		sha: sha || undefined,
 		rerunKinds: infraKillOnly ? ["infra-kill"] : undefined,
 		skipMissingJob,
+		allowMissingPr,
 	});
 	if ("skipped" in result) {
 		console.log(`CI failure classifier skipped: ${result.reason}`);
 		return;
 	}
 
+	const prLabel = result.prNumber
+		? `PR #${result.prNumber}`
+		: "no PR (push/dispatch)";
 	console.log(
-		`PR #${result.prNumber} sha=${result.sha} job=${result.jobName} -> ` +
+		`${prLabel} sha=${result.sha} job=${result.jobName} -> ` +
 			`${result.classification.kind}${result.rerunTriggeredThisPass ? " (rerun triggered)" : ""}`,
 	);
 	console.log(result.commentBody);

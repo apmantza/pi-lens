@@ -13,5 +13,7 @@
 # dictionary here; every entry must have a provenance comment.
 
 [default.extend-identifiers]
-dito = "dito"               # #967 — real model/vendor namespace (provider-failover normalization prefix), not a misspelling of "ditto"
-unparseable = "unparseable" # #967 — valid English spelling ("un-parseable"), not a typo of "unparsable"
+# #967 — real model/vendor namespace (provider-failover normalization prefix), not a misspelling of "ditto"
+dito = "dito"
+# #967 — valid English spelling ("un-parseable"), not a typo of "unparsable"
+unparseable = "unparseable"

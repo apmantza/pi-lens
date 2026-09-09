@@ -8,6 +8,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { removeTempDirSync } from "../clients/test-utils.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 const mocked = vi.hoisted(() => ({
 	service: null as unknown,
@@ -41,8 +42,7 @@ import { createLspDiagnosticsTool } from "../../tools/lsp-diagnostics.js";
 const INFERRED_BODY = { configFileName: "/dev/null/inferredProject1*" };
 
 function makeService() {
-	return {
-		openFile: vi.fn().mockResolvedValue(undefined),
+	return makeLspServiceDouble({
 		getDiagnostics: vi.fn(async () => [
 			{
 				severity: 1,
@@ -62,7 +62,13 @@ function makeService() {
 			executed: true,
 			result: { success: true, body: INFERRED_BODY },
 		})),
-	};
+		// #2598: the tool touches unconditionally now. `undefined` is the real
+		// `touchFile`'s answer when it resolves no client for the file
+		// (clients/lsp/index.ts, `no_clients`), which is what routes this case
+		// through `getDiagnostics` — the source of the demotable TS error the
+		// demotion under test has to rewrite.
+		touchFile: vi.fn(async () => undefined),
+	});
 }
 
 describe("lsp_diagnostics — inferred-project demotion (#1645 F3)", () => {

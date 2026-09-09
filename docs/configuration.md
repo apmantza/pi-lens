@@ -132,7 +132,7 @@ rather than on the prose.
 | `disabledServers` at the file root | `lsp.disabledServers` | `PILENS_CFG_0002` |
 | `warmFiles` at the file root | `lsp.warmFiles` | `PILENS_CFG_0002` |
 
-**Deprecated since 4.2.0. Read for the last time before 5.0.0.** The window is
+**Deprecated since 4.1.4. Read for the last time before 5.0.0.** The window is
 declared as data in `clients/config-diagnostic-codes.ts`
 (`DEPRECATED_CONFIG_SURFACES`) and enforced by test, so the schedule above and
 the code cannot drift apart. `docs/public-api-stability.md` describes the policy

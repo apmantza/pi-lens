@@ -152,3 +152,4 @@ describe("safeSpawnAsync ambient abort signal (#197)", () => {
 		).toBeLessThanOrEqual(1024);
 	});
 });
+// flake-shape: real-process-spawn — real children receive ambient abort signals through the OS boundary, not an in-process double

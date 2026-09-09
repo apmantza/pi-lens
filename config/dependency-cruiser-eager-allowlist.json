@@ -42,6 +42,7 @@
   "./clients/lsp/cascade-tier.js",
   "./clients/lsp/config.js",
   "./clients/lsp/index.js",
+  "./clients/lsp/session-roots.js",
   "./clients/memory-sampler.js",
   "./clients/message-end-attribution.js",
   "./clients/mutating-tool.js",
@@ -51,7 +52,6 @@
   // deferred drain they bracket.
   "./clients/observed-mutation-sources.js",
   "./clients/observed-mutation.js",
-  "./clients/package-root.js",
   "./clients/path-attribution-telemetry.js",
   "./clients/path-utils.js",
   "./clients/project-lens-config.js",
@@ -75,6 +75,7 @@
   "./clients/session-start-observability.js",
   "./clients/session-state-store.js",
   "./clients/sessionstart-logger.js",
+  "./clients/skills-resolver.js",
   "./clients/smells-rollup.js",
   "./clients/startup-timing.js",
   "./clients/test-runner-delivery.js",

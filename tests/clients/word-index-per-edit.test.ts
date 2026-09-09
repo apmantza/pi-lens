@@ -17,6 +17,7 @@ import {
 } from "../../clients/word-index.js";
 import { countClockReads } from "../support/perf-harness.js";
 import { setupTestEnvironment } from "./test-utils.js";
+import { makeLspServiceDouble } from "../support/lsp-service-double.js";
 
 const mocks = vi.hoisted(() => ({
 	buildOrUpdateGraph: vi.fn(),
@@ -79,11 +80,7 @@ describe("computeCascadeForFile — word-index per-edit seam (#348 phase 2)", ()
 			maxDepthReached: 0,
 		});
 		mocks.formatImpactCascade.mockReset().mockReturnValue(undefined);
-		mocks.getLSPService.mockReset().mockReturnValue({
-			getAllDiagnostics: vi.fn().mockResolvedValue(new Map()),
-			touchFile: vi.fn(),
-			getDiagnostics: vi.fn(),
-		});
+		mocks.getLSPService.mockReset().mockReturnValue(makeLspServiceDouble());
 		const { resetDispatchBaselines } =
 			await import("../../clients/dispatch/integration.js");
 		resetDispatchBaselines();

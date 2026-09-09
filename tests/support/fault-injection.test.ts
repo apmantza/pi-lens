@@ -313,3 +313,4 @@ describe("spawnWedgedChild — onTestFinished backstop (#2436)", () => {
 		},
 	);
 });
+// flake-shape: real-process-spawn — a genuinely wedged child proves pipe and kill behavior that a resolved promise cannot model

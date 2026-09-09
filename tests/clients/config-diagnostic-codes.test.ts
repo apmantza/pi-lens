@@ -547,3 +547,4 @@ describe("the notify-call code auditor itself (#2418)", () => {
 		);
 	});
 });
+// flake-shape: real-process-spawn — real git children enumerate tracked diagnostic files, which a mocked repository cannot resolve

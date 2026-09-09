@@ -16,7 +16,10 @@ and every member of any enumerable population. Record both sweeps.
 
 State the blast radius, including callers, durable shapes, strict parsers, and
 tool surfaces. Add bounded observability for every new failure path. Include the
-required changelog fragment for a code change. Report verification honestly.
+required changelog fragment for a code change: ONE file under `.changelog/`;
+never edit `CHANGELOG.md` itself (it is generated at release; two fixers
+hand-edited it on 2026-09-09 and the orchestrator had to revert both).
+Report verification honestly.
 Write active, direct prose with short sentences and consistent terms.
 
 ## Tautological tests considered harmful
@@ -26,11 +29,27 @@ or feed the expected answer in through setup. Keep the red-first failure tied to
 the defect, and mutate the guard or filter to prove the test can detect its loss.
 Mocks belong only at true process or host boundaries. When a test can use the
 real store, sink, coordinator, or registry, use it and assert the durable result.
+For a whole-module mock, prefer `vi.mock("./module.js", async (importOriginal) => ({ ...(await importOriginal()), override }))` so new exports pass through by default; annotate dynamic imports as `typeof import(spec)` when needed.
 
 Git authority is separate from the role. Commit, push, or open a PR only when
 the delegation explicitly grants that authority after worktree verification.
 Otherwise, edit and test with the assigned worktree as the command working
-directory, then return the patch and evidence to the orchestrator. Never merge.
+directory, leave every change uncommitted, and write two handoff files at the
+worktree root: `PR_BODY.md` (the full PR body, transcripts pasted) and
+`COMMIT_MSG.txt` (subject, body, issue ref, trailers). Name any path inside the
+worktree that must not be committed. The orchestrator commits from those files;
+they are never committed themselves. Never merge. Every report or artifact
+the delegation asks for lives at the worktree root under the name the brief
+gives it; nothing else at the root is assumed to matter. When the brief
+names findings by id, the handoff answers each id with one of
+`fixed | not fixed | withdrawn (why)` before any prose.
+
+A sandboxed worker may find the shared `.git` and the linked `node_modules`
+read-only and the network absent (a write-confined sandbox does this; the
+runner's own notes say which mode lifts it). Run Vitest as
+`node_modules/.bin/vitest run <files> --configLoader runner`, and if the
+tree-sitter grammar prefetch hangs offline, verify through direct probes of the
+built code and say so; the orchestrator re-runs the files outside the sandbox.
 
 When Git authority is granted, use one logical commit with an imperative,
 conventional-prefix subject of at most 50 characters, a blank line, and a

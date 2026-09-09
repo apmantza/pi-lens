@@ -97,7 +97,7 @@ export interface ProbeEvidence {
 	 * same empty result as one that tried and failed, and writing `failed` for
 	 * both fabricates an attempt that never happened.
 	 */
-	install?: "succeeded" | "failed" | "not-attempted";
+	install?: "succeeded" | "failed" | "unavailable" | "not-attempted";
 	/**
 	 * Bounded (200 char) reason the installer gave, verbatim.
 	 *
@@ -109,12 +109,21 @@ export interface ProbeEvidence {
 	 */
 	installReason?: string;
 	/**
-	 * Basename of the binary the installer resolved, when `install:
-	 * "succeeded"` or a cache resolved it without a fresh attempt. The
-	 * compensating `available` row after a probe-then-install recovery
-	 * (#1606) is the only durable record that the tool came back — without a
-	 * name here, a reader can see the verdict flipped but not what resolved
-	 * it.
+	 * Basename of the binary a pi-lens-MANAGED directory answered with. Two
+	 * kinds of row carry it:
+	 *
+	 *   * the compensating `available` row after a probe-then-install recovery
+	 *     (#1606), where `install: "succeeded"` or a cache resolved it without
+	 *     a fresh attempt — the only durable record that the tool came back;
+	 *   * a plain probe `available` row (NO `install` key at all) whose
+	 *     resolution came from `~/.pi-lens/tools/node_modules/.bin` or
+	 *     `~/.pi-lens/bin` rather than from PATH or a project venv (#2140).
+	 *
+	 * `binary` present therefore means "pi-lens's own install answered this",
+	 * and its absence means PATH/venv/vendor. `source` names WHICH managed
+	 * family when the command is a registry id; a managed shim whose command
+	 * is not itself a registry id (`markdownlint-cli2`) carries `binary` with
+	 * no `source` rather than a guessed one.
 	 *
 	 * Deliberately a BASENAME, never the resolved absolute path — same rule as
 	 * `unreachablePreferred` below (#1568 review): an absolute path under the
@@ -144,6 +153,25 @@ export interface ProbeEvidence {
 		| "github-release"
 		| "archive-dist"
 		| "maven-jar";
+	/**
+	 * Milliseconds the probe spent RESOLVING which command to run, before the
+	 * `--version` spawn that `durationMs` measures (#2140 review F2).
+	 *
+	 * The two are separate on purpose. `durationMs` is compared against
+	 * `budgetMs` by `recordAvailabilityProbeOverrun`, so folding resolution
+	 * into it would charge the probe budget for work the budget does not
+	 * govern. But resolution is no longer free: the managed rungs stat the
+	 * managed directories and, on a first touch, run their own verification
+	 * spawn — measured at 313ms of a 621ms managed hit whose row claimed
+	 * 308ms. Without this field that half is invisible in latency.log, which
+	 * is exactly how the cost of a resolution rung escapes review.
+	 *
+	 * Worst case for a release-managed tool is `MANAGED_VERIFY_TIMEOUT_MS`
+	 * (5s, the verification spawn) plus the checker's own `probeTimeout`
+	 * (5s by default) — 10s, both bounded, and the verification verdict is
+	 * memoized per binary per session.
+	 */
+	resolveMs?: number;
 	/**
 	 * Set instead of a fresh `install` outcome when `installed` came from an
 	 * already-known-good answer rather than an install this call actually ran
@@ -197,7 +225,7 @@ export function describeProbeEvidence(
 
 /** The installer's own record of what its last attempt did. */
 export interface InstallAttemptFact {
-	outcome: "succeeded" | "failed" | "declined" | "skipped";
+	outcome: "succeeded" | "failed" | "unavailable" | "declined" | "skipped";
 	reason?: string;
 }
 
@@ -237,6 +265,11 @@ export function describeInstallAttempt(
 			return { install: "succeeded", ...(reason && { installReason: reason }) };
 		case "failed":
 			return { install: "failed", ...(reason && { installReason: reason }) };
+		case "unavailable":
+			return {
+				install: "unavailable",
+				...(reason && { installReason: reason }),
+			};
 		default:
 			return {
 				install: "not-attempted",

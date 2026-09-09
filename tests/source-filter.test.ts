@@ -61,7 +61,7 @@ function createTempDir(files: Record<string, string>): {
 }
 
 describe("findSourceSibling", () => {
-	it("should find .ts sibling for .js file", () => {
+	it("finds the .ts sibling for a .js file", () => {
 		const { dir, cleanup } = createTempDir({
 			"src/plan.ts": "// source",
 			"src/plan.js": "// compiled",
@@ -75,7 +75,7 @@ describe("findSourceSibling", () => {
 		cleanup();
 	});
 
-	it("should find .tsx sibling for .jsx file", () => {
+	it("finds the .tsx sibling for a .jsx file", () => {
 		const { dir, cleanup } = createTempDir({
 			"component.tsx": "// tsx source",
 			"component.jsx": "// compiled jsx",
@@ -89,7 +89,7 @@ describe("findSourceSibling", () => {
 		cleanup();
 	});
 
-	it("should find .tsx sibling for .js file (fallback chain)", () => {
+	it("finds the .tsx sibling for a .js file via the fallback chain", () => {
 		const { dir, cleanup } = createTempDir({
 			"app.tsx": "// source",
 			"app.js": "// compiled",
@@ -103,7 +103,7 @@ describe("findSourceSibling", () => {
 		cleanup();
 	});
 
-	it("should return null for .js file without sibling", () => {
+	it("returns null for a .js file with no source sibling", () => {
 		const { dir, cleanup } = createTempDir({
 			"legacy.js": "// hand-written",
 		});
@@ -115,7 +115,7 @@ describe("findSourceSibling", () => {
 		cleanup();
 	});
 
-	it("should return null for .ts file (source, not artifact)", () => {
+	it("returns null for a .ts file since it is source, not an artifact", () => {
 		const { dir, cleanup } = createTempDir({
 			"source.ts": "// source",
 		});
@@ -127,7 +127,7 @@ describe("findSourceSibling", () => {
 		cleanup();
 	});
 
-	it("should handle .vue files shadowing .js", () => {
+	it("finds the .vue sibling shadowing a .js file", () => {
 		const { dir, cleanup } = createTempDir({
 			"App.vue": "<!-- vue template -->",
 			"App.js": "// compiled vue",
@@ -141,7 +141,7 @@ describe("findSourceSibling", () => {
 		cleanup();
 	});
 
-	it("should handle .svelte files shadowing .js", () => {
+	it("finds the .svelte sibling shadowing a .js file", () => {
 		const { dir, cleanup } = createTempDir({
 			"Button.svelte": "<!-- svelte component -->",
 			"Button.js": "// compiled svelte",
@@ -155,7 +155,7 @@ describe("findSourceSibling", () => {
 		cleanup();
 	});
 
-	it("should handle .mjs and .cjs variants", () => {
+	it("finds the source sibling for .mjs and .cjs variants", () => {
 		const { dir, cleanup } = createTempDir({
 			"module.ts": "// source",
 			"module.mjs": "// compiled mjs",
@@ -176,7 +176,7 @@ describe("findSourceSibling", () => {
 });
 
 describe("isBuildArtifact", () => {
-	it("should return true for .js with .ts sibling", () => {
+	it("returns true for a .js file with a .ts sibling", () => {
 		const { dir, cleanup } = createTempDir({
 			"plan.ts": "// source",
 			"plan.js": "// compiled",
@@ -187,7 +187,7 @@ describe("isBuildArtifact", () => {
 		cleanup();
 	});
 
-	it("should return false for standalone .js", () => {
+	it("returns false for a standalone .js file", () => {
 		const { dir, cleanup } = createTempDir({
 			"legacy.js": "// hand-written",
 		});
@@ -197,7 +197,7 @@ describe("isBuildArtifact", () => {
 		cleanup();
 	});
 
-	it("should return false for .ts source", () => {
+	it("returns false for a .ts source file", () => {
 		const { dir, cleanup } = createTempDir({
 			"source.ts": "// source",
 		});
@@ -227,7 +227,7 @@ describe("isGeneratedOrArtifact", () => {
 });
 
 describe("filterSourceFiles", () => {
-	it("should filter out .js files that have .ts siblings", () => {
+	it("filters out .js files that have .ts siblings", () => {
 		const { dir, cleanup } = createTempDir({
 			"src/utils.ts": "// source",
 			"src/utils.js": "// compiled",
@@ -254,7 +254,7 @@ describe("filterSourceFiles", () => {
 		cleanup();
 	});
 
-	it("should keep .js files without .ts siblings", () => {
+	it("keeps .js files that have no .ts sibling", () => {
 		const { dir, cleanup } = createTempDir({
 			"lib/legacy.js": "// hand-written",
 			"lib/modern.ts": "// source",
@@ -277,7 +277,7 @@ describe("filterSourceFiles", () => {
 		cleanup();
 	});
 
-	it("should handle mixed file types", () => {
+	it("keeps files across mixed languages that have no artifact equivalent", () => {
 		const { dir, cleanup } = createTempDir({
 			"main.ts": "// ts source",
 			"main.js": "// compiled",
@@ -308,11 +308,11 @@ describe("filterSourceFiles", () => {
 		cleanup();
 	});
 
-	it("should handle empty input", () => {
+	it("returns an empty array for empty input", () => {
 		expect(filterSourceFiles([])).toEqual([]);
 	});
 
-	it("should filter generated artifact paths", () => {
+	it("filters out generated artifact paths", () => {
 		const { dir, cleanup } = createTempDir({
 			"src/main.ts": "// source",
 			"src/generated/client.ts": "// generated",
@@ -337,7 +337,7 @@ describe("filterSourceFiles", () => {
 		cleanup();
 	});
 
-	it("should handle paths with spaces and special characters", () => {
+	it("filters siblings for paths with spaces and special characters", () => {
 		const { dir, cleanup } = createTempDir({
 			"path with spaces/file.ts": "// source",
 			"path with spaces/file.js": "// compiled",
@@ -363,7 +363,7 @@ describe("filterSourceFiles", () => {
 });
 
 describe("collectSourceFiles", () => {
-	it("should collect files excluding build artifacts", () => {
+	it("collects source files while excluding build artifacts", () => {
 		const { dir, cleanup } = createTempDir({
 			"src/plan.ts": "// source",
 			"src/plan.js": "// compiled",
@@ -384,7 +384,7 @@ describe("collectSourceFiles", () => {
 		cleanup();
 	});
 
-	it("should exclude node_modules and other standard dirs", () => {
+	it("excludes node_modules and other standard directories", () => {
 		const { dir, cleanup } = createTempDir({
 			"src/main.ts": "// source",
 			"node_modules/lodash/index.js": "// library",
@@ -404,7 +404,7 @@ describe("collectSourceFiles", () => {
 		cleanup();
 	});
 
-	it("should handle nested directories", () => {
+	it("collects source files from nested directories", () => {
 		const { dir, cleanup } = createTempDir({
 			"deep/nested/dir/file.ts": "// deep",
 			"deep/nested/dir/file.js": "// compiled",
@@ -426,7 +426,7 @@ describe("collectSourceFiles", () => {
 		cleanup();
 	});
 
-	it("should exclude generated paths, declaration stubs, and generated headers", () => {
+	it("excludes generated paths, declaration stubs, and generated headers", () => {
 		const { dir, cleanup } = createTempDir({
 			"src/main.ts": "// source",
 			"src/generated/client.ts": "// codegen",
@@ -481,7 +481,7 @@ describe("collectSourceFiles", () => {
 		cleanup();
 	});
 
-	it("should handle custom extensions", () => {
+	it("collects files matching custom extensions", () => {
 		const { dir, cleanup } = createTempDir({
 			"custom.xyz": "// xyz file",
 			"normal.ts": "// ts file",
@@ -495,7 +495,7 @@ describe("collectSourceFiles", () => {
 		cleanup();
 	});
 
-	it("should handle custom exclude directories", () => {
+	it("excludes custom exclude directories", () => {
 		const { dir, cleanup } = createTempDir({
 			"src/main.ts": "// source",
 			"custom-out/output.ts": "// output",
@@ -511,7 +511,7 @@ describe("collectSourceFiles", () => {
 		cleanup();
 	});
 
-	it("should exclude glob-style directory patterns like *.dSYM", () => {
+	it("excludes glob-style directory patterns like *.dSYM", () => {
 		const { dir, cleanup } = createTempDir({
 			"src/main.ts": "// source",
 			"MyApp.dSYM/Contents/Resources/symbol.ts": "// debug symbol payload",
@@ -527,7 +527,7 @@ describe("collectSourceFiles", () => {
 		cleanup();
 	});
 
-	it("should exclude directories case-insensitively", () => {
+	it("excludes directories case-insensitively", () => {
 		const { dir, cleanup } = createTempDir({
 			"src/main.ts": "// source",
 			"NODE_MODULES/pkg/index.ts": "// should be excluded",
@@ -545,12 +545,12 @@ describe("collectSourceFiles", () => {
 		cleanup();
 	});
 
-	it("should return empty array for non-existent directory", () => {
+	it("returns an empty array for a non-existent directory", () => {
 		const result = collectSourceFiles("/non/existent/path");
 		expect(result).toEqual([]);
 	});
 
-	it("should handle directories with no matching files", () => {
+	it("returns an empty array for a directory with no matching files", () => {
 		const { dir, cleanup } = createTempDir({
 			"image.png": "not really an image",
 			"notes.txt": "plain text",
@@ -565,7 +565,7 @@ describe("collectSourceFiles", () => {
 });
 
 describe("getFilterStats", () => {
-	it("should calculate correct statistics", () => {
+	it("calculates kept/skipped statistics by file type", () => {
 		const allFiles = [
 			"a.ts",
 			"a.js", // artifact
@@ -584,7 +584,7 @@ describe("getFilterStats", () => {
 		expect(stats.byType[".js"]).toBe(2);
 	});
 
-	it("should handle no filtering", () => {
+	it("reports zero skipped when no files are filtered", () => {
 		const files = ["a.ts", "b.ts", "c.py"];
 
 		const stats = getFilterStats(files, files);
@@ -595,7 +595,7 @@ describe("getFilterStats", () => {
 		expect(Object.keys(stats.byType)).toHaveLength(0);
 	});
 
-	it("should handle all files filtered", () => {
+	it("reports zero kept when all files are filtered", () => {
 		const allFiles = ["a.js", "b.js", "c.jsx"];
 		const filtered: string[] = [];
 
@@ -608,7 +608,7 @@ describe("getFilterStats", () => {
 });
 
 describe("SOURCE_PRECEDENCE completeness", () => {
-	it("should have valid precedence chains", () => {
+	it("keeps every SOURCE_PRECEDENCE entry's extensions dot-prefixed and non-self-shadowing", () => {
 		for (const [sourceExt, shadowedExts] of Object.entries(SOURCE_PRECEDENCE)) {
 			// Source extension should start with dot
 			expect(sourceExt).toMatch(/^\./);

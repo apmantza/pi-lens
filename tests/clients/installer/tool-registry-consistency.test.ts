@@ -372,4 +372,13 @@ describe("TOOLS registry consistency", () => {
 			).toEqual([]);
 		});
 	});
+
+	// #2661 review round 2 (R2-F4): a literal-equality assertion on
+	// `pipCommandCandidates()`'s return value is a source-text mirror — it
+	// reds only if someone edits the array, proving nothing about whether the
+	// ladder actually WORKS on a runner missing a candidate. Deleted in favor
+	// of the behavioral coverage in `tests/scripts/smoke-tools-genuine-
+	// install-failure.test.ts` (the R2-F2 python-without-pip case), which
+	// exercises what this list is FOR — telling a real absent-toolchain
+	// runner from a present one — rather than restating its contents.
 });

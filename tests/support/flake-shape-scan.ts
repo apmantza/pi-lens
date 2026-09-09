@@ -4,11 +4,15 @@
  * Three deflake PRs in two days (#2531 alone fixed three shared-slot races)
  * and nothing counted the contention surface, so the set only grew. This
  * module owns the four detectors the ratchet (`tests/clients/flake-shape-
- * ratchet.test.ts`) runs over `tests/**\/*.test.ts`:
+ * ratchet.test.ts`) runs over `tests/**\/*.test.ts` and — since #2563 — over
+ * every non-test helper under `tests/support/**\/*.ts` (the time detectors
+ * only; the spawn detector stays test-file-only, see
+ * {@link SUPPORT_POPULATION_DETECTORS}):
  *
  * 1. {@link scanRealProcessSpawn} — a real child process: a `child_process`
- *    import, a call-shaped `execFileSync`/`spawnSync`/`execSync`, or a spawn
- *    of any flavor whose argv mentions `vitest` (a test file re-launching the
+ *    import, a call-shaped `execFileSync`/`spawnSync`/`execSync`, a support
+ *    spawn-helper call, or a spawn whose argv mentions `vitest` (a test file
+ *    re-launching the
  *    suite inside itself).
  * 2. {@link scanElapsedTimeAssertion} — a DELTA of two clock reads flowing
  *    into a numeric matcher (`toBeLessThan`/`toBeGreaterThan`/…), not just a
@@ -17,7 +21,9 @@
  * 3. {@link scanRawTimerWait} — a raw `setTimeout`/`setInterval` wait outside
  *    a `vi.useFakeTimers()` scope, and outside `interleaving-kit.ts` itself
  *    (the sanctioned primitive these three detectors exist to route callers
- *    toward instead).
+ *    toward instead); in a `tests/support/` helper it also flags any
+ *    `delay`/`sleep` helper DEFINITION (#2563 — the shared-primitive reuse
+ *    vector that hides a raw wait from every `.test.ts` call site).
  * 4. {@link scanUngovernedWaitFor} — a `vi.waitFor(` call outside a
  *    `vi.useFakeTimers()` scope — the #1767 shape
  *    (`tests/clients/runtime-session.test.ts`'s own recorded flake, real
@@ -42,19 +48,32 @@
  *   `vi.useFakeTimers()` in one `describe` and leaves a raw wait or
  *   `vi.waitFor` ungoverned in a LATER, unrelated `describe` reads as
  *   governed. False negative, same direction.
- * - Detector 1's `strings: "keep"` policy (needed to see `"vitest"` inside an
- *   argv string) means a string literal that merely CONTAINS
- *   `execFileSync(...)`-shaped text would false-positive; comments are
- *   blanked so a doc comment cannot. No such string exists in `tests/` today
- *   (the FALSE positive direction, safe for a ratchet that a human reviews at
- *   admission time).
+ * - Detector 1 uses `callSites`'s TypeScript AST for the known process-call
+ *   names, so comments, strings, wrappers, and nested argument expressions do
+ *   not create or truncate call sites. It separately uses `codeMatches` for
+ *   helper calls and mock declarations, while `strings: "keep"` remains only
+ *   for the intentional `"vitest"` argv evidence.
+ * - Detector 1 recognizes known support-module helper names at their test call
+ *   sites and ignores calls whose helper module is mocked in that file. It
+ *   still cannot resolve arbitrary aliases, so aliases remain conservative
+ *   false positives. Quoted and commented helper names are excluded by
+ *   `codeMatches`.
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { Lang, parse } from "@ast-grep/napi";
 
-import { listSourceFiles, relativePosix, stripSource } from "./sweep-kit.js";
+import {
+	createCallSiteScanner,
+	codeMatches,
+	firstCommentMatch,
+	listSourceFiles,
+	relativePosix,
+	stripSource,
+} from "./sweep-kit.js";
+import type { SgNode } from "../../clients/deps/ast-grep-napi.js";
 
 export const repoRoot = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -64,15 +83,40 @@ export const repoRoot = path.resolve(
 const TESTS_ROOT = path.join(repoRoot, "tests");
 
 /** Every `*.test.ts` file under `tests/`, as absolute paths, sorted. */
-export function testSourceFiles(dir = TESTS_ROOT): string[] {
+function testSourceFiles(dir = TESTS_ROOT): string[] {
 	return listSourceFiles(dir, {
 		extensions: [".ts"],
 		skipDeclarations: true,
 	}).filter((absolute) => absolute.endsWith(".test.ts"));
 }
 
+/**
+ * Every non-test `*.ts` helper under `tests/support/` (#2563) — the shared
+ * primitives every `.test.ts` file imports. A raw-timer wait hidden inside
+ * one of these reaches every importing test file while sitting outside the
+ * `.test.ts` glob the ratchet originally walked, so the support population
+ * joins the scan.
+ */
+function supportHelperFiles(): string[] {
+	return listSourceFiles(path.join(TESTS_ROOT, "support"), {
+		extensions: [".ts", ".mts"],
+		skipDeclarations: true,
+	}).filter((absolute) => !absolute.endsWith(".test.ts"));
+}
+
+/**
+ * #2563: the support-population gate for {@link scanRawTimerWait}'s
+ * delay/sleep-definition shape — a non-test helper under `tests/support/`.
+ * `file` is the `tests/`-relative posix key {@link countsByDetector} scans
+ * under. In a `.test.ts` file the shape is redundant: the timer call itself
+ * (hidden or not) already lands under the test-file detectors.
+ */
+function isSupportHelperFile(file: string): boolean {
+	return file.startsWith("support/") && !file.endsWith(".test.ts");
+}
+
 /** `tests/`-relative posix path for an absolute source path. */
-export function testsRelative(absolute: string): string {
+function testsRelative(absolute: string): string {
 	return relativePosix(TESTS_ROOT, absolute);
 }
 
@@ -86,9 +130,8 @@ export function testsRelative(absolute: string): string {
  * `delivery-surface-ratchet.test.ts` makes for `finding-delivery-gate.ts`
  * ("the registry itself").
  */
-export const SCAN_INFRASTRUCTURE: ReadonlySet<string> = new Set([
+const SCAN_INFRASTRUCTURE: ReadonlySet<string> = new Set([
 	"clients/flake-shape-ratchet.test.ts",
-	"support/flake-shape-scan.test.ts",
 ]);
 
 /** One line the scan flags. */
@@ -110,27 +153,72 @@ export const DETECTOR_NAMES = [
 
 export type DetectorName = (typeof DETECTOR_NAMES)[number];
 
+export interface ScanContext {
+	source: string;
+	stripped: string;
+	root: SgNode | undefined;
+	rootReady: boolean;
+}
+
+function scanContext(source: string): ScanContext {
+	return {
+		source,
+		stripped: stripSource(source),
+		root: undefined,
+		rootReady: false,
+	};
+}
+
+function syntaxRoot(context: ScanContext): SgNode {
+	if (!context.rootReady) {
+		context.root = parse(Lang.TypeScript, context.source).root();
+		context.rootReady = true;
+	}
+	return context.root as SgNode;
+}
+
+// Keep this lexical admission check cheap. It runs after comments and strings
+// are blanked, so fixture prose cannot force an AST parse.
+const TIMER_AST_TRIGGER =
+	/\b(?:setTimeout|setInterval|timers\/promises|globalThis|delay|sleep)\b/;
+function needsTimerAst(context: ScanContext): boolean {
+	return TIMER_AST_TRIGGER.test(context.stripped);
+}
+
 // ── 1. Real-process spawn ───────────────────────────────────────────────────
 
 const CHILD_PROCESS_IMPORT =
 	/(?:^\s*import\b.*\bfrom\s*["'](?:node:)?child_process["']|\brequire\(\s*["'](?:node:)?child_process["']\s*\))/;
-const SPAWN_CALL =
-	/\b(spawn|spawnSync|exec|execSync|execFile|execFileSync|fork)\s*\(/g;
 const SYNC_TRIAD = new Set(["execFileSync", "spawnSync", "execSync"]);
 const VITEST_IN_ARGV = /\bvitest\b/i;
+// These helpers are the test-side routes to real child processes. Keep this
+// list beside the support-module census: matching the CALL in a test catches
+// a helper that hides `node:child_process` behind another module boundary.
+const SUPPORT_SPAWN_HELPER_CALL =
+	/\b(gitFixtureSpawnAsync|gitExecFileSync|gitExecSync|execFileSync|execSync|spawnWedgedChild|safeSpawnAsync)\s*\(/g;
+const MOCK_CALL = /\bvi\.(?:mock|doMock|hoisted)\s*\(\s*["']([^"']+)["']/g;
+const HELPER_MODULE_SUFFIXES: Record<string, readonly string[]> = {
+	gitFixtureSpawnAsync: ["/git-fixture-env", "/git-fixture-env.js"],
+	gitExecFileSync: ["/git-fixture-env", "/git-fixture-env.js"],
+	gitExecSync: ["/git-fixture-env", "/git-fixture-env.js"],
+	spawnWedgedChild: ["/fault-injection", "/fault-injection.ts"],
+	safeSpawnAsync: ["/safe-spawn", "/safe-spawn.js"],
+	execFileSync: ["node:child_process", "child_process"],
+	execSync: ["node:child_process", "child_process"],
+};
 
-/** The text between a call's `(` (given its index) and its balanced `)`. */
-function balancedCallArgs(source: string, openParenIndex: number): string {
-	let depth = 0;
-	for (let i = openParenIndex; i < source.length; i++) {
-		const ch = source[i];
-		if (ch === "(") depth++;
-		else if (ch === ")") {
-			depth--;
-			if (depth === 0) return source.slice(openParenIndex + 1, i);
-		}
+function mockedModules(source: string): Set<string> {
+	const modules = new Set<string>();
+	for (const match of codeMatches(source, MOCK_CALL)) {
+		modules.add(match[1]);
 	}
-	return source.slice(openParenIndex + 1);
+	return modules;
+}
+
+function helperIsMocked(name: string, modules: ReadonlySet<string>): boolean {
+	return (HELPER_MODULE_SUFFIXES[name] ?? []).some((suffix) =>
+		[...modules].some((module) => module === suffix || module.endsWith(suffix)),
+	);
 }
 
 /**
@@ -145,13 +233,23 @@ function balancedCallArgs(source: string, openParenIndex: number): string {
 export function scanRealProcessSpawn(
 	_file: string,
 	source: string,
+	context?: ScanContext,
 ): FlakeHit[] {
 	const stripped = stripSource(source, { strings: "keep" });
+	const spawnCandidate = /\b(?:spawn|exec|fork)\s*\(|child_process/i.test(
+		stripped,
+	);
+	const sharedRoot =
+		context && spawnCandidate ? syntaxRoot(context) : context?.root;
 	const lines = stripped.split("\n");
 	const hits = new Map<number, FlakeHit>();
+	const mocks = mockedModules(source);
+	const childProcessMocked = [...mocks].some(
+		(module) => module === "node:child_process" || module === "child_process",
+	);
 
 	lines.forEach((lineText, idx) => {
-		if (CHILD_PROCESS_IMPORT.test(lineText)) {
+		if (!childProcessMocked && CHILD_PROCESS_IMPORT.test(lineText)) {
 			hits.set(idx, {
 				line: idx + 1,
 				text: lineText.trim(),
@@ -160,16 +258,14 @@ export function scanRealProcessSpawn(
 		}
 	});
 
-	SPAWN_CALL.lastIndex = 0;
-	let m: RegExpExecArray | null;
-	while ((m = SPAWN_CALL.exec(stripped))) {
-		const name = m[1];
-		const openParenIndex = m.index + m[0].length - 1;
-		const lineIdx = stripped.slice(0, m.index).split("\n").length - 1;
+	for (const site of createCallSiteScanner(source, sharedRoot).find(
+		/^(?:spawn|spawnSync|exec|execSync|execFile|execFileSync|fork)$/,
+	)) {
+		const name = site.callee;
+		const lineIdx = site.line - 1;
 		const isVitestInVitest =
-			!SYNC_TRIAD.has(name) &&
-			VITEST_IN_ARGV.test(balancedCallArgs(stripped, openParenIndex));
-		if (SYNC_TRIAD.has(name) || isVitestInVitest) {
+			!SYNC_TRIAD.has(name) && VITEST_IN_ARGV.test(site.argsText);
+		if ((!childProcessMocked && SYNC_TRIAD.has(name)) || isVitestInVitest) {
 			if (!hits.has(lineIdx)) {
 				hits.set(lineIdx, {
 					line: lineIdx + 1,
@@ -179,6 +275,18 @@ export function scanRealProcessSpawn(
 						: `${name}( vitest-in-vitest (argv mentions "vitest")`,
 				});
 			}
+		}
+	}
+
+	for (const match of codeMatches(source, SUPPORT_SPAWN_HELPER_CALL)) {
+		if (childProcessMocked || helperIsMocked(match[1], mocks)) continue;
+		const lineIdx = source.slice(0, match.index ?? 0).split("\n").length - 1;
+		if (!hits.has(lineIdx)) {
+			hits.set(lineIdx, {
+				line: lineIdx + 1,
+				text: source.split("\n")[lineIdx]?.trim() ?? "",
+				reason: `${match[1]}( support spawn helper`,
+			});
 		}
 	}
 	return [...hits.values()].sort((a, b) => a.line - b.line);
@@ -210,6 +318,7 @@ const EXPECT_ARG = /\bexpect\(\s*([^)]*)\)/;
 export function scanElapsedTimeAssertion(
 	_file: string,
 	source: string,
+	_context?: ScanContext,
 ): FlakeHit[] {
 	const stripped = stripSource(source, { strings: "blank" });
 	const lines = stripped.split("\n");
@@ -264,6 +373,107 @@ const RAW_TIMER_CALL = /\b(setTimeout|setInterval)\s*\(/;
 const USE_FAKE_TIMERS = /\bvi\.useFakeTimers\s*\(/;
 const USE_REAL_TIMERS = /\bvi\.useRealTimers\s*\(/;
 
+const TIMER_IMPORT_MODULES = new Set([
+	"node:timers/promises",
+	"timers/promises",
+]);
+const TIMER_GLOBALS = new Set(["globalThis", "window", "self"]);
+
+/** Resolve timer aliases from the parsed binding declarations. */
+function timerBindings(
+	source: string,
+	root?: SgNode,
+): {
+	local: Set<string>;
+	namespaces: Set<string>;
+} {
+	const local = new Set(["setTimeout", "setInterval"]);
+	const namespaces = new Set<string>();
+	const syntax = root ?? parse(Lang.TypeScript, source).root();
+	const visit = (node: SgNode): void => {
+		if (node.kind() === "import_statement") {
+			const module = node
+				.field("source")
+				?.text()
+				.replace(/^['"]|['"]$/g, "");
+			if (module && TIMER_IMPORT_MODULES.has(module)) {
+				for (const child of node.children()) {
+					if (child.kind() !== "import_clause") continue;
+					for (const specifier of child.children()) {
+						if (specifier.kind() === "identifier")
+							namespaces.add(specifier.text());
+						if (specifier.kind() !== "named_imports") continue;
+						for (const item of specifier.children()) {
+							if (item.kind() !== "import_specifier") continue;
+							const imported =
+								item.field("name")?.text() ?? item.children()[0]?.text();
+							const identifiers = item
+								.children()
+								.filter((child) => child.kind() === "identifier");
+							const alias = identifiers[identifiers.length - 1]?.text();
+							if (
+								(imported === "setTimeout" || imported === "setInterval") &&
+								alias
+							)
+								local.add(alias);
+						}
+					}
+				}
+			}
+		}
+		if (node.kind() === "variable_declarator") {
+			const name = node.field("name");
+			const value = node.field("value");
+			if (
+				name?.kind() === "object_pattern" &&
+				value?.kind() === "identifier" &&
+				TIMER_GLOBALS.has(value.text())
+			) {
+				for (const property of name.children()) {
+					if (property.kind() === "pair_pattern") {
+						const imported = property.children()[0]?.text();
+						const alias = property.field("value")?.text();
+						if (
+							(imported === "setTimeout" || imported === "setInterval") &&
+							alias
+						)
+							local.add(alias);
+					}
+					if (
+						property.kind() === "shorthand_property_identifier_pattern" &&
+						(property.text() === "setTimeout" ||
+							property.text() === "setInterval")
+					)
+						local.add(property.text());
+				}
+			}
+			if (
+				name?.kind() === "identifier" &&
+				value?.kind() === "identifier" &&
+				local.has(value.text())
+			)
+				local.add(name.text());
+		}
+		for (const child of node.children()) visit(child);
+	};
+	visit(syntax);
+	return { local, namespaces };
+}
+
+/**
+ * A declared `delay`/`sleep`-named binding — `export function delayInside(...)`,
+ * `const delay = ...` (prefix-anchored, so `delayInside`/`delayMs` count: the
+ * name is the vector, not the exact spelling). This is the shape #2563 exists
+ * for: a shared wait primitive defined in `tests/support/` is the reuse path
+ * that lets a raw-timer wait reach every importing test file, and its
+ * definition stays visible even when the timer behind it is hidden — an
+ * aliased `import { setTimeout as sleep }`, a re-export — where
+ * {@link RAW_TIMER_CALL} sees nothing. Applied only to the support
+ * population (see {@link isSupportHelperFile}).
+ */
+const DELAY_SLEEP_HELPER_DEFINITION =
+	/^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function\s*\*?\s*|const\s+|let\s+|var\s+)((?:delay|sleep)\w*)\b/;
+
 /**
  * Per-line "are fake timers active here" state, tracked in FILE-ORDER (see
  * the module doc's known-limits note): `vi.useFakeTimers()` turns tracking
@@ -282,29 +492,80 @@ function fakeTimersStateAtLine(lines: readonly string[]): boolean[] {
 }
 
 /**
- * A raw `setTimeout`/`setInterval` wait outside a `vi.useFakeTimers()` scope.
+ * A raw `setTimeout`/`setInterval` wait outside a `vi.useFakeTimers()` scope,
+ * plus — in a non-test helper under `tests/support/` (#2563) — any
+ * `delay`/`sleep` helper definition ({@link DELAY_SLEEP_HELPER_DEFINITION}).
  *
  * `interleaving-kit.ts` itself is exempt by name (#2547's sanctioned
- * primitive; it is not a `.test.ts` file so the ratchet's own glob never
- * reaches it, but the exemption is stated here too so a caller that scans it
- * directly — this module's own self-test — gets the same answer).
+ * primitive; it lives in `tests/clients/`, outside both populations, but the
+ * exemption is stated here too so a caller that scans it directly — this
+ * module's own self-test — gets the same answer).
  */
-export function scanRawTimerWait(file: string, source: string): FlakeHit[] {
+export function scanRawTimerWait(
+	file: string,
+	source: string,
+	context?: ScanContext,
+): FlakeHit[] {
 	if (path.posix.basename(file) === "interleaving-kit.ts") return [];
-	const stripped = stripSource(source, { strings: "blank" });
+	const scan = context ?? scanContext(source);
+	const stripped = scan.stripped;
 	const lines = stripped.split("\n");
 	const stateAtLine = fakeTimersStateAtLine(lines);
+	const supportHelper = isSupportHelperFile(file);
+	const bindings = needsTimerAst(scan)
+		? timerBindings(source, syntaxRoot(scan))
+		: { local: new Set<string>(), namespaces: new Set<string>() };
 
 	const hits: FlakeHit[] = [];
 	lines.forEach((lineText, idx) => {
 		const m = RAW_TIMER_CALL.exec(lineText);
-		if (!m || stateAtLine[idx]) return;
-		hits.push({
-			line: idx + 1,
-			text: lineText.trim(),
-			reason: `raw ${m[1]}( outside vi.useFakeTimers()`,
-		});
+		if (m && !stateAtLine[idx]) {
+			hits.push({
+				line: idx + 1,
+				text: lineText.trim(),
+				reason: `raw ${m[1]}( outside vi.useFakeTimers()`,
+			});
+		}
+		// A delay/sleep definition is the vector regardless of this file's own
+		// fake-timer state: the helper is CALLED from other files whose timer
+		// scope is not this file's.
+		if (supportHelper && DELAY_SLEEP_HELPER_DEFINITION.test(lineText)) {
+			hits.push({
+				line: idx + 1,
+				text: lineText.trim(),
+				reason: "delay/sleep helper definition in tests/support (#2563)",
+			});
+		}
 	});
+	if (!needsTimerAst(scan)) return hits;
+	const root = syntaxRoot(scan);
+	const visit = (node: SgNode): void => {
+		if (node.kind() === "call_expression") {
+			const fn = node.field("function");
+			const isLocal =
+				fn?.kind() === "identifier" &&
+				bindings.local.has(fn.text()) &&
+				!new Set(["setTimeout", "setInterval"]).has(fn.text());
+			const isNamespace =
+				fn?.kind() === "member_expression" &&
+				bindings.namespaces.has(fn.field("object")?.text() ?? "") &&
+				["setTimeout", "setInterval"].includes(
+					fn.field("property")?.text() ?? "",
+				);
+			const line = node.range().start.line;
+			if ((isLocal || isNamespace) && !stateAtLine[line]) {
+				if (!hits.some((hit) => hit.line === line))
+					hits.push({
+						line: line + 1,
+						text: lines[line]?.trim() ?? "",
+						reason: "aliased raw timer call outside vi.useFakeTimers()",
+					});
+			}
+		}
+		for (const child of node.children()) visit(child);
+	};
+	visit(root);
+	hits.sort((a, b) => a.line - b.line);
 	return hits;
 }
 
@@ -326,6 +587,7 @@ const WAIT_FOR_CALL = /\bvi\.waitFor\s*\(/;
 export function scanUngovernedWaitFor(
 	_file: string,
 	source: string,
+	_context?: ScanContext,
 ): FlakeHit[] {
 	const stripped = stripSource(source, { strings: "blank" });
 	const lines = stripped.split("\n");
@@ -345,7 +607,7 @@ export function scanUngovernedWaitFor(
 
 export const DETECTORS: Record<
 	DetectorName,
-	(file: string, source: string) => FlakeHit[]
+	(file: string, source: string, context?: ScanContext) => FlakeHit[]
 > = {
 	"real-process-spawn": scanRealProcessSpawn,
 	"elapsed-time-assertion": scanElapsedTimeAssertion,
@@ -353,25 +615,63 @@ export const DETECTORS: Record<
 	"ungoverned-wait-for": scanUngovernedWaitFor,
 };
 
-/** file → hit count, for every `tests/**\/*.test.ts` file the detector flags. */
+/**
+ * Detectors run over the #2563 support population (non-test
+ * `tests/support/**\/*.ts` helpers): the time shapes only. The spawn detector
+ * (1) stays test-file-only on purpose — `tests/support/` helpers ARE the
+ * sanctioned route to real child processes (`git-fixture-env.ts`,
+ * `fake-child.ts`, `spawn-shapes.ts` all import `node:child_process` by
+ * design), so scanning them would demand admission headers for the fixture
+ * boundary itself; what #2563 governs is TIME primitives defined for reuse.
+ */
+const SUPPORT_POPULATION_DETECTORS: readonly DetectorName[] = [
+	"elapsed-time-assertion",
+	"raw-timer-wait",
+	"ungoverned-wait-for",
+];
+
+let countsCache: Record<DetectorName, Record<string, number>> | undefined;
+
+/**
+ * file → hit count, for every `tests/**\/*.test.ts` file and every non-test
+ * `tests/support/**\/*.ts` helper (#2563) the detector flags.
+ */
 export function countsByDetector(
 	detector: DetectorName,
 ): Record<string, number> {
-	const scan = DETECTORS[detector];
-	const counts: Record<string, number> = {};
-	for (const absolute of testSourceFiles()) {
-		const file = testsRelative(absolute);
-		if (SCAN_INFRASTRUCTURE.has(file)) continue;
-		const source = fs.readFileSync(absolute, "utf8");
-		const hits = scan(file, source);
-		if (hits.length > 0) counts[file] = hits.length;
+	if (countsCache === undefined) {
+		const counts = Object.fromEntries(
+			DETECTOR_NAMES.map((name) => [name, {}]),
+		) as Record<DetectorName, Record<string, number>>;
+		const scanFile = (
+			absolute: string,
+			detectors: readonly DetectorName[],
+		): void => {
+			const file = testsRelative(absolute);
+			if (SCAN_INFRASTRUCTURE.has(file)) return;
+			const source = fs.readFileSync(absolute, "utf8");
+			const context = scanContext(source);
+			for (const name of detectors) {
+				const hits = DETECTORS[name](file, source, context);
+				if (hits.length > 0) counts[name][file] = hits.length;
+			}
+		};
+		for (const absolute of testSourceFiles()) {
+			scanFile(absolute, DETECTOR_NAMES);
+		}
+		// #2563: the support population — non-test helpers under tests/support/.
+		for (const absolute of supportHelperFiles()) {
+			scanFile(absolute, SUPPORT_POPULATION_DETECTORS);
+		}
+		countsCache = counts;
 	}
-	return counts;
+	return countsCache[detector];
 }
 
 // ── Admission gate ──────────────────────────────────────────────────────────
 
-const ADMISSION_HEADER = /\/\/\s*flake-shape:\s*([\w-]+)\s*—\s*(.+)$/m;
+const ADMISSION_HEADER =
+	/^[ \t]*\/\/[ \t]*flake-shape:[ \t]*([\w-]+)[ \t]*—[ \t]*(.+)$/gm;
 
 export interface AdmissionHeader {
 	detector: string;
@@ -388,7 +688,6 @@ export interface AdmissionHeader {
  * `ADMITTED_AFTER_BASELINE` in `tests/clients/flake-shape-ratchet.test.ts`.
  */
 export function admissionHeader(source: string): AdmissionHeader | undefined {
-	const m = ADMISSION_HEADER.exec(source);
-	if (!m) return undefined;
-	return { detector: m[1], reason: m[2].trim() };
+	const match = firstCommentMatch(source, ADMISSION_HEADER);
+	return match ? { detector: match[1], reason: match[2].trim() } : undefined;
 }

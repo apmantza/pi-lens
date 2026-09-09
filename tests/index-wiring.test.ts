@@ -841,6 +841,7 @@ describe("index.ts extension wiring", () => {
 		// The previous module-relative join landed on dist/skills/ (nonexistent) so
 		// skills silently failed to load.
 		it("resolves skillPaths to an existing skills/ directory at the package root", async () => {
+			resetDegradationLedger();
 			const pi = createPiMock();
 			extension(pi.asExtensionAPI());
 
@@ -882,6 +883,16 @@ describe("index.ts extension wiring", () => {
 					`generic skill dir must not exist (regression guard against rename-back): ${name}`,
 				).toBe(false);
 			}
+			// #2626: the standard layout (this repo's own skills/ beside
+			// package.json) must produce NO "skills-dir-missing" degradation —
+			// the negative case for the silent-zero-skills fix, driven through
+			// the real resources_discover handler rather than the resolver in
+			// isolation.
+			expect(
+				getDegradationSummary().find(
+					(group) => group.kind === "skills-dir-missing",
+				),
+			).toBeUndefined();
 		});
 	});
 

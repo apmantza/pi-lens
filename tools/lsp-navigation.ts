@@ -16,6 +16,7 @@ import {
 } from "../clients/lsp-mutation.js";
 import type { LSPCallHierarchyItem } from "../clients/lsp/client.js";
 import { uriToPath } from "../clients/path-utils.js";
+import { escapeRegExp } from "../clients/string-utils.js";
 import { isRecordableProjectPath } from "../clients/file-utils.js";
 import { compactRenderResult } from "./render-compact.js";
 import {
@@ -114,10 +115,6 @@ function emptyReasonForOperation(operation: LspNavigationOperation): string {
 	if (operation === "incomingCalls" || operation === "outgoingCalls")
 		return "no-call-hierarchy-results";
 	return "no-results";
-}
-
-function escapeRegExp(value: string): string {
-	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 type SymbolColumnResolution = {
@@ -706,15 +703,16 @@ async function openFileBestEffort(
 	}
 	if (!fileContent) return;
 	try {
-		if (typeof lspService.touchFile === "function") {
-			await lspService.touchFile(filePath, fileContent, {
-				diagnostics: waitForDiagnostics ? "document" : "none",
-				source: "lsp_navigation",
-				clientScope: waitForDiagnostics ? "all" : "primary",
-			});
-		} else {
-			await lspService.openFile(filePath, fileContent);
-		}
+		// #2598: `touchFile` is defined unconditionally on the real `LSPService`
+		// (clients/lsp/index.ts), so the former `typeof … === "function"` hedge
+		// and its `openFile` arm were reachable only from a partial test double
+		// (AGENTS.md shape 7). Nothing here reads the result — a touch that
+		// resolves no clients is already the no-op this helper wants.
+		await lspService.touchFile(filePath, fileContent, {
+			diagnostics: waitForDiagnostics ? "document" : "none",
+			source: "lsp_navigation",
+			clientScope: waitForDiagnostics ? "all" : "primary",
+		});
 	} catch {
 		/* LSP server may not be ready yet — proceed anyway */
 	}
@@ -739,29 +737,8 @@ export function createLspNavigationTool(
 		name: "lsp_navigation" as const,
 		label: "LSP Navigate",
 		description:
-			"Navigate code using LSP (Language Server Protocol). LSP is enabled by default; disable with --no-lsp.\n" +
-			"Operations:\n" +
-			"- definition: Jump to where a symbol is defined\n" +
-			"- typeDefinition: Jump to the definition of a symbol's TYPE (e.g. the class/interface of a variable)\n" +
-			"- declaration: Jump to a symbol's declaration (e.g. an extern/forward decl, distinct from its definition)\n" +
-			"- references: Find all usages of a symbol\n" +
-			"- hover: Get type/doc info at a position\n" +
-			"- signatureHelp: Show callable signatures at cursor\n" +
-			"- documentSymbol: List all symbols (functions/classes/vars) in a file\n" +
-			"- findSymbol: Search document symbols in a file by name/detail with optional kind/top-level/exact filters\n" +
-			"- workspaceSymbol: Search symbols across the whole project (best with path context)\n" +
-			"- codeAction: Find available quick fixes/refactors at a range\n" +
-			"- rename: Compute or apply workspace edits for renaming a symbol\n" +
-			"- rename_file: Preview/apply LSP-aware source file rename notifications\n" +
-			"- implementation: Jump to interface implementations\n" +
-			"- prepareCallHierarchy: Get callable item at position (for incoming/outgoing)\n" +
-			"- incomingCalls: Find all functions/methods that CALL this function\n" +
-			"- outgoingCalls: Find all functions/methods CALLED by this function\n" +
-			"- executeCommand: Run a server-advertised command via workspace/executeCommand. HARDENED: allowlisted to commands the server advertised; dry-run by default (reports whether advertised) — set apply:true to actually run. Pass command (+ optional commandArguments).\n" +
-			"- workspaceDiagnostics: List all diagnostics tracked by active LSP clients\n" +
-			"- capabilities: Show cached operation support for active LSP servers\n\n" +
-			"Line and character are 1-based (as shown in editors). For position-based operations, prefer passing symbol when you know the line but not the exact character; character can be omitted or -1 and pi-lens will resolve the symbol column. Use symbol#N for repeated symbols on the same line (1-based occurrence).",
-		promptSnippet: "Find definitions, references, and hover info via LSP",
+			'Navigate source with language-server operations such as definition, references, hover, and rename. Example: use `{operation: "references", path: "src/app.ts", line: 12}`.',
+		promptSnippet: "Navigate definitions and references with LSP",
 		renderResult: compactRenderResult<{
 			operation?: string;
 			resultCount?: number;

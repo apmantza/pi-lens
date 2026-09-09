@@ -22,7 +22,19 @@
  * state to drift.
  */
 
-import { REQUIRED_CHECKS, resolveLatestByName } from "./ci-checks.mjs";
+import {
+	isAdvisoryCheck,
+	isBlockingConclusion,
+	isUncertainConclusion,
+	REQUIRED_CHECKS,
+	resolveLatestByName,
+} from "./ci-checks.mjs";
+
+// Re-exported unchanged for this module's existing importers (#2609 moved
+// the definitions to ci-checks.mjs, the shared module, so ci-verdict.mjs can
+// use the SAME advisory/blocking policy instead of a second hand-rolled
+// copy -- see ci-checks.mjs for the reasoning and the live-probe evidence).
+export { isAdvisoryCheck };
 import { commentMarkerExists, paginate } from "./github-paging.mjs";
 import {
 	classifyActionFailure,
@@ -32,14 +44,14 @@ import { fetchHeadRunHealth, RUN_HEALTH } from "./warden-run-health.mjs";
 
 export const TRAIN_APPROVED_LABEL = "train:approved";
 export const TRAIN_SQUASH_LABEL = "train:squash";
-export const POST_MERGE_EVENT = "merge-train-post-merge";
-export const POST_MERGE_DISPATCH_ATTEMPTS = 2;
+const POST_MERGE_EVENT = "merge-train-post-merge";
+const POST_MERGE_DISPATCH_ATTEMPTS = 2;
 export const POST_MERGE_RECONCILE_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const POST_MERGE_RECONCILE_GRACE_MS = 15 * 60 * 1000;
 export const POST_MERGE_RETRY_GENERATION_MS = 6 * 60 * 60 * 1000;
-export const POST_MERGE_RECONCILE_PAGE_SIZE = 100;
-export const POST_MERGE_RECONCILE_MAX_PAGES = 10;
-export const POST_MERGE_RECONCILE_MAX_RECORDS =
+const POST_MERGE_RECONCILE_PAGE_SIZE = 100;
+const POST_MERGE_RECONCILE_MAX_PAGES = 10;
+const POST_MERGE_RECONCILE_MAX_RECORDS =
 	POST_MERGE_RECONCILE_PAGE_SIZE * POST_MERGE_RECONCILE_MAX_PAGES;
 export const POST_MERGE_VALIDATION_WORKFLOWS = Object.freeze([
 	"ci.yml",
@@ -140,45 +152,23 @@ function parseGraphqlDateTime(value, field, page, number) {
 	return timestamp;
 }
 
-// How this repository ACTUALLY marks a check advisory: the workflow job name
-// ends in "(advisory)". Probed 2026-08-26 against the live rollups of every
-// open PR -- `oxfmt format check (advisory)`, `PR body (advisory)`,
-// `Vale prose lint (advisory)`, `OSV scan (advisory)`. Review round 1, F3: a
-// hand-written allowlist of two vendor names read `oxfmt format check
-// (advisory): FAILURE` as blocking and refused to merge this PR's own head.
-// The suffix is the single source of truth the repository already maintains;
-// the two vendor names below carry no suffix and stay explicit.
-export const ADVISORY_SUFFIX = "(advisory)";
-export const ADVISORY_CHECKS = new Set(["SonarCloud Code Analysis", "CodeQL"]);
-
-export function isAdvisoryCheck(name) {
-	return (
-		ADVISORY_CHECKS.has(name) || String(name ?? "").endsWith(ADVISORY_SUFFIX)
-	);
-}
-
 // Only positive evidence of a settled pass. GitHub's CheckRun status is
 // QUEUED / IN_PROGRESS / COMPLETED and conclusion is null until COMPLETED
 // (probed 2026-08-26 against this repository's own open PRs).
-export const CONCLUDED_STATUS = "COMPLETED";
-export const PASSING_CONCLUSION = "SUCCESS";
-
-// A non-advisory check in any of these states blocks the merge.
-export const BLOCKING_CONCLUSIONS = new Set([
-	"FAILURE",
-	"TIMED_OUT",
-	"CANCELLED",
-	"ACTION_REQUIRED",
-	"STARTUP_FAILURE",
-	"STALE",
-]);
+const CONCLUDED_STATUS = "COMPLETED";
+const PASSING_CONCLUSION = "SUCCESS";
 
 // States the merge API will actually accept. Review round 1, F1: this
-// repository's master protection has `strict: true` (probed 2026-08-26 via
-// `GET /branches/master/protection`), so GitHub REFUSES to merge a BEHIND
-// head -- and every open PR was BEHIND at the time. BEHIND therefore is not a
-// merge state; it is an UPDATE state, handled below.
-export const MERGEABLE_STATES = new Set(["CLEAN", "UNSTABLE"]);
+// repository's master protection was read as `strict: true` when probed
+// 2026-08-26 via `GET /branches/master/protection` -- and every open PR was
+// BEHIND at the time, so GitHub's merge API was assumed to refuse a BEHIND
+// head. Re-probed 2026-09-06 (#2618 fix round 3): master protection is
+// actually `strict: false` today (no branch-is-up-to-date requirement). The
+// BEHIND-as-update-not-merge handling below is unchanged regardless --
+// routing a BEHIND head through the update-branch lever first is still
+// correct/safe even when not strictly enforced, and re-gates the PR on its
+// new head's own checks either way.
+const MERGEABLE_STATES = new Set(["CLEAN", "UNSTABLE"]);
 
 // A green PR sitting BEHIND gets the branch update instead of a merge. The
 // update writes a new head, which re-gates the PR naturally on the next
@@ -186,7 +176,7 @@ export const MERGEABLE_STATES = new Set(["CLEAN", "UNSTABLE"]);
 // they conclude green again. The warden's own update-branch kick cannot cover
 // this, because it is gated on `autoMergeEnabled` and a train:approved PR has
 // no auto-merge armed.
-export const UPDATEABLE_STATES = new Set(["BEHIND"]);
+const UPDATEABLE_STATES = new Set(["BEHIND"]);
 
 export const MERGE_GATE_REASON = {
 	NOT_APPROVED: "not-approved",
@@ -196,6 +186,7 @@ export const MERGE_GATE_REASON = {
 	REQUIRED_CHECK_NOT_SUCCESS: "required-check-not-success",
 	RUN_HEALTH: "run-health",
 	FAILING_CHECK: "failing-check",
+	CHECK_PENDING: "check-pending",
 	MERGE_STATE: "merge-state",
 	BEHIND_BASE: "behind-base",
 	NOT_APPROVED_BY_OWNER: "not-approved-by-owner",
@@ -283,19 +274,38 @@ export function evaluateMergeGate(pr, health, { approvedBy } = {}) {
 			`workflow run health is \`${health.classification}\` on \`${pr.headSha}\``,
 		);
 
-	// Judge the RESOLVED run per name, so a superseded duplicate cannot block
-	// a head whose current run passed, and a newer failing duplicate cannot be
-	// hidden by an older passing one.
+	// Judge the resolved run per name, so a superseded duplicate cannot block a
+	// head whose current run passed, and a newer failing duplicate cannot be
+	// hidden by an older passing one. Failures win over pending evidence so a
+	// mixed rollup reports the actionable reason first (#2679).
 	const failing = [...byName.values()].filter(
 		(c) =>
 			!isAdvisoryCheck(c.name) &&
-			c.conclusion != null &&
-			BLOCKING_CONCLUSIONS.has(c.conclusion),
+			isBlockingConclusion(c.conclusion) &&
+			!isUncertainConclusion(c.conclusion),
 	);
 	if (failing.length > 0)
 		return deny(
 			MERGE_GATE_REASON.FAILING_CHECK,
 			`non-advisory checks are failing: ${failing.map((c) => `\`${c.name}\` (${c.conclusion})`).join(", ")}`,
+		);
+
+	// A discovered non-advisory check must reach a terminal conclusion before
+	// the PR can merge, whatever the merge state (CLEAN holds too, not only
+	// UNSTABLE). A discovered CANCELLED row is held because
+	// cancel-in-progress can leave it as the latest evidence until a newer
+	// sibling posts; resolveLatestByName already removes it once that happens.
+	const pending = [...byName.values()].filter(
+		(c) =>
+			!isAdvisoryCheck(c.name) &&
+			(c.status !== CONCLUDED_STATUS ||
+				c.conclusion == null ||
+				isUncertainConclusion(c.conclusion)),
+	);
+	if (pending.length > 0)
+		return deny(
+			MERGE_GATE_REASON.CHECK_PENDING,
+			`non-advisory check(s) are pending and have not concluded: ${pending.map((c) => `\`${c.name}\``).join(", ")}`,
 		);
 
 	// BEHIND is not a refusal: it is the update lever. Everything above has
@@ -336,7 +346,7 @@ export function laneCommentMarker(headSha, reason) {
 	return `<!-- train-lane:${headSha}:${reason} -->`;
 }
 
-export function laneCommentBody(pr, gate) {
+function laneCommentBody(pr, gate) {
 	let header = "**Merge train: holding.**";
 	if (gate.merge) header = "**Merge train: merged.**";
 	else if (gate.update) header = "**Merge train: updating the branch.**";
@@ -351,7 +361,7 @@ export function laneCommentBody(pr, gate) {
 	return lines.join("\n");
 }
 
-export function mergeFailureCommentBody(pr, gate, status) {
+function mergeFailureCommentBody(pr, gate, status) {
 	return [
 		"**Merge train: the merge call failed.**",
 		"",
@@ -425,7 +435,7 @@ export async function resolveApprovalActor(
  * round pushed mid-cycle cannot be merged on a stale verdict even in the
  * window between this lane's read and its write.
  */
-export async function mergePullRequest(fetcher, owner, repo, pr, method) {
+async function mergePullRequest(fetcher, owner, repo, pr, method) {
 	return rest(
 		fetcher,
 		"PUT",
@@ -441,7 +451,7 @@ export async function mergePullRequest(fetcher, owner, repo, pr, method) {
  * that recursion rule. The payload carries both identities so consumers
  * cannot accidentally validate the default branch at a different commit.
  */
-export async function dispatchPostMergeValidation(
+async function dispatchPostMergeValidation(
 	fetcher,
 	owner,
 	repo,
@@ -469,7 +479,7 @@ export async function dispatchPostMergeValidation(
  * are intentionally idempotent at the workflow boundary: each consumer has
  * a per-SHA concurrency key and cancels a duplicate in-flight run.
  */
-export async function dispatchPostMergeValidationWithRetry(
+async function dispatchPostMergeValidationWithRetry(
 	fetcher,
 	owner,
 	repo,
@@ -955,7 +965,7 @@ export async function reconcilePostMergeValidations({
  * makes it as head-atomic as the merge call: if the branch moved since the
  * gate read, GitHub refuses rather than updating a head nobody evaluated.
  */
-export async function updatePullRequestBranch(fetcher, owner, repo, pr) {
+async function updatePullRequestBranch(fetcher, owner, repo, pr) {
 	return rest(
 		fetcher,
 		"PUT",

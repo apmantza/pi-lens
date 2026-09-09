@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -24,6 +25,9 @@ const SELF = "tests/config/sweep-floor-coverage.test.ts";
  * intent. Exported as a pure function (source in, boolean out) so the
  * emptiness alternation can be unit-tested against literal snippets, not
  * only inferred from a whole-tree census.
+ * Floor-call registration matches over comment/string-blanked source so
+ * a call named only in prose cannot self-register (#2710; AGENTS.md
+ * shape 38, #2693 r2 F1).
  */
 export function looksSweepShaped(source: string): boolean {
 	const enumerates =
@@ -45,6 +49,21 @@ export function looksSweepShaped(source: string): boolean {
 	return enumerates && empties;
 }
 
+/**
+ * Does this sweep-shaped file make a real sweep-kit floor call? #2710:
+ * matched over stripSource-blanked source (AGENTS.md shape 38; the
+ * raw-vs-blanked mismatch #2693 r2 F1 fixed in the runner-spawn-cwd sweep)
+ * so a helper name quoted in a comment or string cannot register a file
+ * that never called it.
+ */
+function isRegisteredFloorSource(source: string): boolean {
+	const stripped = stripSource(source);
+	return (
+		/assertNonEmptyScan\s*\(/.test(stripped) ||
+		/auditRegistry\s*\(\s*\{[\s\S]*?\bminScanned\s*:/.test(stripped)
+	);
+}
+
 function sweepShapeFiles(): string[] {
 	return listSourceFiles(TESTS_ROOT, { extensions: [".ts"] })
 		.filter((file) => file.endsWith(".test.ts"))
@@ -55,10 +74,16 @@ function sweepShapeFiles(): string[] {
 }
 
 const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
+	// #2725: two-direction set equality over every .d.mts/.mjs sibling pair; the
+	// failure list is the whole registry and there are no exemptions by design.
+	"tests/config/dmts-export-drift.test.ts":
+		"set equality over sibling pairs, no exemption table to audit",
 	"tests/clients/dispatch/format-smoke-style-contract.test.ts":
 		"contract fixture assertions, not a registered-or-fail source population sweep",
 	"tests/clients/formatter-probe-commands.test.ts":
 		"direct formatter probe behavior tests; the formatter registry sweep is formatter-policy-consistency",
+	"tests/clients/formatters.test.ts":
+		"formatter marker parity assertion; formatter registry coverage is tested by formatter-policy-consistency",
 	"tests/clients/runtime-tool-result.test.ts":
 		"runtime seam behavior cases; filesystem counters verify re-detection, not a population sweep",
 	"tests/clients/language-policy.test.ts":
@@ -73,6 +98,8 @@ const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
 		"rule precedence fixtures, not a production population sweep",
 	"tests/clients/atomic-write.test.ts":
 		"atomic-write behavior cases, not a production population sweep",
+	"tests/clients/bundled-resource-health.test.ts":
+		"mocks node:fs's readdirSync for one EACCES fault-injection case and asserts notify/degradation counts with toHaveLength(0); not a registered-or-fail production population sweep (#2636, same shape as skills-resolver.test.ts below)",
 	"tests/clients/bus-producer-coverage.test.ts":
 		"bus contract cases, not a registered-or-fail population sweep",
 	"tests/clients/coderabbit-ast-grep-rules.test.ts":
@@ -128,14 +155,25 @@ const DECLARED_EXCEPTIONS: Readonly<Record<string, string>> = {
 		"persistence behavior cases, not a production population sweep",
 	"tests/clients/session-state-store.test.ts":
 		"store behavior cases, not a production population sweep",
+	"tests/clients/skills-resolver.test.ts":
+		"mocks node:fs's readdirSync for one EACCES fault-injection case and asserts notify/degradation counts with toHaveLength(0); not a registered-or-fail production population sweep",
 	"tests/clients/tree-sitter-879-post-filters.test.ts":
 		"tree-sitter behavior cases, not a production population sweep",
+	"tests/clients/tree-sitter-query-loader.test.ts":
+		"mocks node:fs's readdirSync to fault-inject the bundled tree-sitter-queries root and asserts notify/degradation counts with toHaveLength(0); not a registered-or-fail production population sweep (#2636, same shape as skills-resolver.test.ts)",
 	"tests/clients/tree-sitter-cache-stats-astgrep-coverage.test.ts":
 		"tree-sitter behavior cases, not a production population sweep",
 	"tests/host-sdk-type-only.test.ts":
 		"host type cases, not a production population sweep",
 	"tests/packaging.test.ts":
 		"packaging behavior cases, not a production population sweep",
+	"tests/scripts/exec-isolation.test.ts":
+		"checks a freshly created temp directory is empty, not a production " +
+		"population sweep",
+	"tests/scripts/ci-verdict.test.ts":
+		"enumerates .github/workflows/*.yml job names for gating/advisory " +
+		"classification (#2618 F3) -- an external CI-contract governance " +
+		"walk, not a clients/ production module registry sweep",
 	"tests/scripts/no-hardcoded-machine-paths.test.ts":
 		"carries its own declared floor at the 'scans a nonzero number of " +
 		"script files' check (files.length > 10)",
@@ -156,13 +194,11 @@ describe("registered-or-fail sweep floors", () => {
 		const files = sweepShapeFiles().map((file) =>
 			relativePosix(REPO_ROOT, file),
 		);
-		const registered = files.filter((file) => {
-			const source = fs.readFileSync(path.join(REPO_ROOT, file), "utf8");
-			return (
-				/assertNonEmptyScan\s*\(/.test(source) ||
-				/auditRegistry\s*\(\s*\{[\s\S]*?\bminScanned\s*:/.test(source)
-			);
-		});
+		const registered = files.filter((file) =>
+			isRegisteredFloorSource(
+				fs.readFileSync(path.join(REPO_ROOT, file), "utf8"),
+			),
+		);
 		const scannedCount = listSourceFiles(TESTS_ROOT, {
 			extensions: [".ts"],
 		}).filter((file) => file.endsWith(".test.ts")).length;
@@ -225,5 +261,92 @@ describe("looksSweepShaped emptiness detection (#2088 fix round 3, R1)", () => {
 
 	it("does not flag an emptiness assertion with no enumeration", () => {
 		expect(looksSweepShaped("expect(x.length).toBe(0);")).toBe(false);
+	});
+});
+
+describe("floor-call registration over blanked source (#2710)", () => {
+	// Red-first proof for the #2710 recurrence: a sweep file whose only
+	// floor-call mention lives in a comment or a string must stay
+	// unregistered, and the same file with a real call must register. The
+	// file-level fixture drives the same walk/detect/register/audit
+	// pipeline as the meta-sweep above over real fixture files on disk.
+	const commentOnlyFixture = [
+		`import * as fs from "node:fs";`,
+		`import { assertNonEmptyScan } from "../support/sweep-kit.js";`,
+		`describe("fixture", () => {`,
+		`\tit("scans", () => {`,
+		`\t\t// Registered via assertNonEmptyScan("fixture", files.length);`,
+		`\t\tconst files = fs.readdirSync(dir);`,
+		`\t\texpect(violations).toEqual([]);`,
+		`\t});`,
+		`});`,
+		`const note = "quoted: assertNonEmptyScan(x)";`,
+	].join("\n");
+	const realCallFixture = [
+		`import * as fs from "node:fs";`,
+		`import { assertNonEmptyScan } from "../support/sweep-kit.js";`,
+		`describe("fixture", () => {`,
+		`\tit("scans", () => {`,
+		`\t\tconst files = fs.readdirSync(dir);`,
+		`\t\texpect(violations).toEqual([]);`,
+		`\t\tassertNonEmptyScan("fixture", files.length);`,
+		`\t});`,
+		`});`,
+	].join("\n");
+
+	it("does not register a floor call named only in a comment", () => {
+		expect(
+			isRegisteredFloorSource(`// registered via assertNonEmptyScan("x", 1);`),
+		).toBe(false);
+	});
+
+	it("does not register a floor call quoted inside a string", () => {
+		expect(
+			isRegisteredFloorSource(
+				`const note = "call assertNonEmptyScan(x) here";`,
+			),
+		).toBe(false);
+	});
+
+	it("registers a real assertNonEmptyScan floor call", () => {
+		expect(isRegisteredFloorSource(`assertNonEmptyScan("x", 1);`)).toBe(true);
+	});
+
+	it("registers a real auditRegistry minScanned floor call", () => {
+		expect(
+			isRegisteredFloorSource(
+				`const audit = auditRegistry({ flagged, minScanned: 420 });`,
+			),
+		).toBe(true);
+	});
+
+	it("reports a prose-only fixture sweep file uncovered and passes a real call", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "sweep-floor-2710-"));
+		try {
+			fs.writeFileSync(
+				path.join(root, "comment-only.test.ts"),
+				commentOnlyFixture,
+			);
+			fs.writeFileSync(path.join(root, "real-call.test.ts"), realCallFixture);
+			const flagged = listSourceFiles(root, { extensions: [".ts"] }).filter(
+				(file) => looksSweepShaped(stripSource(fs.readFileSync(file, "utf8"))),
+			);
+			expect(flagged.map((file) => relativePosix(root, file))).toEqual([
+				"comment-only.test.ts",
+				"real-call.test.ts",
+			]);
+			const registered = flagged.filter((file) =>
+				isRegisteredFloorSource(fs.readFileSync(file, "utf8")),
+			);
+			const audit = auditRegistry({
+				sweepName: "#2710 fixture sweep",
+				flagged: flagged.map((file) => relativePosix(root, file)),
+				registered: registered.map((file) => relativePosix(root, file)),
+				exemptions: {},
+			});
+			expect(audit.unaccounted).toEqual(["comment-only.test.ts"]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
 	});
 });

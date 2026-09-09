@@ -36,7 +36,7 @@ import {
 } from "../path-utils.js";
 import { collectProjectSourceFilesWithBudgetAsync } from "../project-scan-policy.js";
 import { getReviewGraphMaxFilesDerived } from "../project-scale.js";
-import { compareOrdinal } from "../string-utils.js";
+import { compareOrdinal, escapeRegExp } from "../string-utils.js";
 import { BoundedLruCache } from "../bounded-cache.js";
 import {
 	jsTsCandidatePaths,
@@ -154,9 +154,7 @@ const MAIN_KINDS = new Set([
 const MAIN_KIND_EXTENSIONS: string[] = Array.from(MAIN_KINDS).flatMap(
 	(kind) => KIND_EXTENSIONS[kind as keyof typeof KIND_EXTENSIONS] ?? [],
 );
-/** The bounded, source-filtered extension set shared by graph cache readers. */
-export const REVIEW_GRAPH_SOURCE_EXTENSIONS: readonly string[] =
-	MAIN_KIND_EXTENSIONS;
+
 const CHANGED_SYMBOLS_PREFIX = "session.reviewGraph.changedSymbols:";
 const extractorCache = new Map<string, TreeSitterSymbolExtractor | null>();
 const REVIEW_GRAPH_MAX_WARM_WORKSPACES = 8;
@@ -628,7 +626,7 @@ export function estimateReviewGraphStoreBytes(
 // cleared). Bounding only the cache left the full graph resident on the fact, so
 // both sites go through `retainedGraph` below, memoized per graph instance so the
 // two sites share ONE bounded object instead of trimming twice (#2255 review F2).
-export const GRAPH_MAX_IN_MEMORY_BYTES_DEFAULT = 512 * 1024 * 1024;
+const GRAPH_MAX_IN_MEMORY_BYTES_DEFAULT = 512 * 1024 * 1024;
 
 function graphMaxInMemoryBytes(): number {
 	const raw = Number(process.env.PI_LENS_GRAPH_MAX_IN_MEMORY_BYTES);
@@ -1114,10 +1112,6 @@ function makeCtx(
 	};
 }
 
-function escapeRegExp(string: string): string {
-	return string.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function createEmptyGraph(): ReviewGraph {
 	return {
 		version: REVIEW_GRAPH_VERSION,
@@ -1283,7 +1277,7 @@ function diffSignatureMaps(
 // `RUNTIME_CONFIG.reviewGraph.maxFiles` constant as the fallback — the ratio
 // table reproduces that same 1,000-file default at the default base, so this
 // is behavior-neutral when nothing is configured.
-export function getReviewGraphMaxFiles(cwd?: string): number {
+function getReviewGraphMaxFiles(cwd?: string): number {
 	const override = Number.parseInt(
 		process.env.PI_LENS_REVIEW_GRAPH_MAX_FILES ?? "",
 		10,
@@ -4317,7 +4311,7 @@ function addTreeSitterFile(
  * SymbolInformation results (including native TypeScript 7) recover the same
  * containment through `containerName` when the owner is present in the result.
  */
-export function addLspFallbackSymbols(
+function addLspFallbackSymbols(
 	graph: ReviewGraph,
 	filePath: string,
 	languageId: string,

@@ -12,7 +12,7 @@ function resolveClonePath(cwd: string, file: string): string {
  * BOTH ends so the duplication surfaces on whichever file the agent is looking
  * at, each one naming the other end.
  */
-export function jscpdCloneToProjectDiagnostics(
+function jscpdCloneToProjectDiagnostics(
 	cwd: string,
 	clone: DuplicateClone,
 ): ProjectDiagnostic[] {

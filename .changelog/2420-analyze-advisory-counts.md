@@ -1,5 +1,0 @@
----
-section: Fixed
----
-
-- **Model-facing analyze counts no longer fold hint/info findings into warnings (closes #2420)** — `pilens_analyze` (and the `pi-lens-analyze` CLI/PostToolUse hook and the MCP server's analyze summary) reported a file whose only findings were `hint`/`info`-tier style opinions (`no-runtime-typeof`, complexity hints) as "N warning(s)". The counts read the dispatch `semantic` axis, which the runner's severity→semantic map folds every non-error tier into (`semantic:"warning"`); the severity-tier projection #2414/#2417 established (`classifyDiagnosticTier` in `widget-state.ts`) never governed this surface. The count-assembly seam now splits an `advisories` count out of the warnings bucket through that same one policy — `hint`/`info` are reported as advisories, real warnings keep their exact count, and advisories stay visible in the diagnostics list and under their own `advisory(ies)` label. The `semantic` axis (which drives blocking) is untouched: this is a display-count split, so nothing that blocked stops blocking.

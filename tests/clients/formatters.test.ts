@@ -17,21 +17,29 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	type ResolvedFormatterCommand,
 	SKIP_FORMATTING,
 	biomeFormatter,
 	blackFormatter,
+	cmakeFormatFormatter,
+	cljfmtFormatter,
 	clearFormatterRuntimeState,
 	getFormattersForFile,
+	googleJavaFormatFormatter,
 	invalidateFormatterCacheForPath,
 	oxfmtFormatter,
 	phpCsFixerFormatter,
 	prettierFormatter,
 	psscriptanalyzerFormatFormatter,
+	resolveFormatterCwd,
 	rubocopFormatter,
 	ruffFormatter,
 	standardrbFormatter,
 	shfmtFormatter,
+	ALL_FORMATTERS,
+	styluaFormatter,
 } from "../../clients/formatters.js";
+import { FORMATTER_MARKERS } from "../../clients/tool-cwd.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 import { _getSpotlessGradleReadCountForTests } from "../../clients/tool-policy.js";
 
@@ -90,6 +98,19 @@ async function withPathShim(
 		await fn();
 	} finally {
 		process.env.PATH = origPath;
+	}
+}
+
+async function withIsolatedPath(fn: () => Promise<void> | void): Promise<void> {
+	const isolatedPath = path.join(tmpDir, "isolated-path");
+	fs.mkdirSync(isolatedPath, { recursive: true });
+	const origPath = process.env.PATH;
+	process.env.PATH = isolatedPath;
+	try {
+		await fn();
+	} finally {
+		if (origPath === undefined) delete process.env.PATH;
+		else process.env.PATH = origPath;
 	}
 }
 
@@ -162,6 +183,188 @@ describe("resolveCommand — node_modules/.bin", () => {
 
 		expect(await prettierFormatter.resolveCommand!(filePath, tmpDir)).toBe(
 			SKIP_FORMATTING,
+		);
+	});
+});
+
+describe("resolveCommand — PATH precedes managed formatter (#2767)", () => {
+	it.each([
+		["black", blackFormatter, "main.py"],
+		["cmake-format", cmakeFormatFormatter, "CMakeLists.cmake"],
+		["stylua", styluaFormatter, "main.lua"],
+		["google-java-format", googleJavaFormatFormatter, "Main.java"],
+		["cljfmt", cljfmtFormatter, "main.clj"],
+		["oxfmt", oxfmtFormatter, "main.ts"],
+		["php-cs-fixer", phpCsFixerFormatter, "main.php"],
+	] as const)(
+		"uses PATH %s before a managed copy",
+		async (toolId, formatter, fileName) => {
+			const pathDir = path.join(tmpDir, "path-bin");
+			const pathBinary = path.join(pathDir, isWin ? `${toolId}.cmd` : toolId);
+			const managedBinary = path.join(
+				tmpDir,
+				"managed-bin",
+				isWin ? `${toolId}.exe` : toolId,
+			);
+			makeFakeExe(pathBinary);
+			makeFakeExe(managedBinary);
+			const originalPath = process.env.PATH;
+			process.env.PATH = `${pathDir}${path.delimiter}${originalPath ?? ""}`;
+			const installer = await import("../../clients/installer/index.js");
+			const managedSpy = vi
+				.spyOn(installer, "getToolPath")
+				.mockResolvedValue(managedBinary);
+			try {
+				const command = await formatter.resolveCommand!(
+					fileIn(tmpDir, fileName),
+					tmpDir,
+				);
+				expect(command?.[0]).toBe(pathBinary);
+				expect(managedSpy).not.toHaveBeenCalledWith(toolId);
+			} finally {
+				managedSpy.mockRestore();
+				process.env.PATH = originalPath;
+			}
+		},
+	);
+});
+
+describe("managed formatter absence is typed (#2767)", () => {
+	it.each([
+		["black", blackFormatter, "main.py"],
+		["cmake-format", cmakeFormatFormatter, "CMakeLists.cmake"],
+		["stylua", styluaFormatter, "main.lua"],
+		["cljfmt", cljfmtFormatter, "main.clj"],
+		["php-cs-fixer", phpCsFixerFormatter, "main.php"],
+		["google-java-format", googleJavaFormatFormatter, "Main.java"],
+		["oxfmt", oxfmtFormatter, "main.ts"],
+	] as const)(
+		"returns formatter-unavailable for %s when every candidate is absent",
+		async (_toolId, formatter, fileName) => {
+			// #2767: a resolver that proved every candidate absent must not return
+			// null, because the generic fallback would spawn the missing bare command.
+			await withIsolatedPath(async () => {
+				const command = await formatter.resolveCommand!(
+					fileIn(tmpDir, fileName),
+					tmpDir,
+				);
+				expect(command).toBe("formatter-unavailable");
+			});
+		},
+	);
+});
+
+describe("formatter child cwd", () => {
+	it("keeps a marker row for every registered formatter marker", () => {
+		const registered = new Set(
+			ALL_FORMATTERS.map((formatter) => formatter.name),
+		);
+		const expected = [
+			"biome",
+			"prettier",
+			"oxfmt",
+			"ruff",
+			"black",
+			"sqlfluff",
+			"rustfmt",
+			"rubocop",
+			"standardrb",
+			"clang-format",
+			"php-cs-fixer",
+			"stylua",
+			"ocamlformat",
+			"google-java-format",
+			"cljfmt",
+			"cmake-format",
+			"psscriptanalyzer-format",
+			"csharpier",
+			"ormolu",
+			"taplo",
+			"terraform",
+			"swiftformat",
+			"fantomas",
+			"mix",
+			"shfmt",
+			"ktlint",
+			"ktfmt",
+		];
+		const missing = expected.filter((name) => !(name in FORMATTER_MARKERS));
+		const unknown = Object.keys(FORMATTER_MARKERS).filter(
+			(name) => !registered.has(name),
+		);
+		// A missing row silently changes that formatter to the generic fallback.
+		expect(missing).toEqual([]);
+		expect(unknown).toEqual([]);
+	});
+	it("uses the nearest project marker, not the file directory", () => {
+		const nestedDir = path.join(tmpDir, "src", "deep");
+		fs.mkdirSync(nestedDir, { recursive: true });
+		fs.writeFileSync(path.join(tmpDir, ".gitignore"), "ignored.md\n");
+		fs.writeFileSync(path.join(tmpDir, ".prettierignore"), "keep.md\n");
+		const filePath = path.join(nestedDir, "app.tsx");
+		fs.writeFileSync(filePath, "function f() {\n  return 1;\n}\n");
+
+		expect(resolveFormatterCwd(filePath, "prettier")).toBe(tmpDir);
+	});
+
+	it("keeps the file directory when no project marker exists", () => {
+		const nestedDir = path.join(tmpDir, "isolated", "src");
+		fs.mkdirSync(nestedDir, { recursive: true });
+		const filePath = path.join(nestedDir, "app.tsx");
+		fs.writeFileSync(filePath, "function f() {\n  return 1;\n}\n");
+
+		expect(resolveFormatterCwd(filePath, undefined, tmpDir)).toBe(nestedDir);
+	});
+
+	it("does not adopt an ignore file at the home ceiling", () => {
+		const homeDir = path.join(tmpDir, "home");
+		const nestedDir = path.join(homeDir, "project", "src");
+		fs.mkdirSync(nestedDir, { recursive: true });
+		fs.writeFileSync(path.join(homeDir, ".gitignore"), "ignored.md\n");
+		const filePath = path.join(nestedDir, "app.tsx");
+		fs.writeFileSync(filePath, "function f() {\n  return 1;\n}\n");
+
+		expect(resolveFormatterCwd(filePath, undefined, homeDir)).toBe(nestedDir);
+	});
+
+	it("lets a nearer ignore marker win", () => {
+		const intermediateDir = path.join(tmpDir, "src");
+		fs.mkdirSync(intermediateDir, { recursive: true });
+		fs.writeFileSync(path.join(tmpDir, ".gitignore"), "*.md\n");
+		fs.writeFileSync(path.join(intermediateDir, ".prettierignore"), "*.tsx\n");
+		const filePath = path.join(intermediateDir, "app.tsx");
+		fs.writeFileSync(filePath, "function f() {\n  return 1;\n}\n");
+
+		expect(resolveFormatterCwd(filePath, "prettier")).toBe(intermediateDir);
+	});
+
+	it.each([
+		["empty .git directory", "directory"],
+		["real .git directory", "real-directory"],
+		["worktree .git file", "file"],
+	] as const)("recognizes %s only as a real repository marker", (_, kind) => {
+		const repoDir = path.join(tmpDir, `git-marker-${kind}`);
+		const nestedDir = path.join(repoDir, "src");
+		fs.mkdirSync(nestedDir, { recursive: true });
+		if (kind === "directory" || kind === "real-directory") {
+			fs.mkdirSync(path.join(repoDir, ".git"));
+			if (kind === "real-directory") {
+				fs.writeFileSync(
+					path.join(repoDir, ".git", "HEAD"),
+					"ref: refs/heads/main\n",
+				);
+			}
+		} else {
+			fs.writeFileSync(
+				path.join(repoDir, ".git"),
+				"gitdir: /shared/main/.git/worktrees/demo\n",
+			);
+		}
+		const filePath = path.join(nestedDir, "app.tsx");
+		fs.writeFileSync(filePath, "function f() {\n  return 1;\n}\n");
+
+		expect(resolveFormatterCwd(filePath, "prettier")).toBe(
+			kind === "directory" ? nestedDir : repoDir,
 		);
 	});
 });
@@ -280,12 +483,12 @@ describe("resolveCommand — .venv", () => {
 		expect(cmd![1]).toBe(filePath);
 	});
 
-	it("black: returns null when no venv", async () => {
+	it("black: returns formatter-unavailable when no candidate resolves", async () => {
 		const cmd = await blackFormatter.resolveCommand!(
 			fileIn(tmpDir, "main.py"),
 			tmpDir,
 		);
-		expect(cmd).toBeNull();
+		expect(cmd).toBe("formatter-unavailable");
 	});
 });
 
@@ -1323,10 +1526,13 @@ describe("getFormattersForFile — policy selection", () => {
 			.mockResolvedValue(managedPath);
 		try {
 			const formatters = await import("../../clients/formatters.js");
-			const cmd = await formatters.taploFormatter.resolveCommand!(
-				fileIn(tmpDir, "config.toml"),
-				tmpDir,
-			);
+			let cmd: ResolvedFormatterCommand | undefined;
+			await withIsolatedPath(async () => {
+				cmd = await formatters.taploFormatter.resolveCommand!(
+					fileIn(tmpDir, "config.toml"),
+					tmpDir,
+				);
+			});
 			expect(spy).toHaveBeenCalledWith("taplo");
 			expect(cmd).toEqual([managedPath, "fmt", fileIn(tmpDir, "config.toml")]);
 		} finally {
