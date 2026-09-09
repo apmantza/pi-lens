@@ -190,3 +190,6 @@ tests/native-ts7-live-*/
 
 # prepack backup of package.json (scripts/strip-dev-deps-for-pack.mjs)
 .pack-backup/
+
+# Probe hygiene home for tests and scripts (AGENTS.md "Probe hygiene"); never tracked.
+.probe-home/
