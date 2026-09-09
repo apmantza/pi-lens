@@ -195,6 +195,20 @@ const FIXTURES = [
 		expectRule: "key-ordering",
 	},
 	{
+		// #2777 recurrence: a nested package's yamllint config must win over
+		// the dispatch root, and the smoke must retain the resolution witness.
+		lang: "yaml-nested-config",
+		dir: "tests/fixtures/tool-smoke/yaml-nested-config",
+		file: "packages/app/bad.yaml",
+		targets: ["yamllint"],
+		tools: ["yamllint"],
+		tier1: true,
+		expectDiagnostic: true,
+		expectRule: "key-ordering",
+		expectedCwd: "packages/app",
+		expectedReason: "marker:.yamllint",
+	},
+	{
 		lang: "typescript",
 		dir: "tests/fixtures/tool-smoke/typescript",
 		file: "bad.ts",
@@ -445,8 +459,18 @@ const LSP_FIXTURES = [
 		dir: "tests/fixtures/tool-smoke/typescript-nested-root-markers",
 		file: "packages/app/bad.ts",
 		serverHint: "typescript-language-server (nested rootMarkers)",
-		rootMarkers: ["package.json"],
 		tools: ["typescript-language-server"],
+		expectedCwd: "packages/app",
+		expectedReason: "marker:package.json",
+		expectedTool: "typescript-nested-root",
+		customServer: {
+			id: "typescript-nested-root",
+			name: "typescript-language-server (nested rootMarkers)",
+			extensions: [".ts"],
+			command: "typescript-language-server",
+			args: ["--stdio"],
+			rootMarkers: ["package.json"],
+		},
 	},
 	{
 		lang: "python",
@@ -992,6 +1016,8 @@ const FORMAT_FIXTURES = [
 		formatter: "prettier",
 		expect: "preserve",
 		tools: ["prettier"],
+		expectedCwd: "packages/app",
+		expectedReason: "marker:.prettierignore",
 	},
 	{
 		lang: "yaml",
@@ -1418,6 +1444,32 @@ function parseArgs(argv) {
 }
 
 const TMP_PREFIX = "pi-lens-smoke-";
+
+async function assertCwdResolutionLog(fixture, workspace, kind, tool) {
+	const extensionLog = await import(
+		pathToFileURL(path.join(repoRoot, "dist", "clients", "extension-log.js"))
+			.href
+	);
+	await extensionLog.flushExtensionLog();
+	const logPath = extensionLog.getExtensionLogPath();
+	const lines = fs.existsSync(logPath)
+		? fs.readFileSync(logPath, "utf8").trim().split("\n").filter(Boolean)
+		: [];
+	const expected =
+		`cwd ${kind} ${tool} cwd=${path.resolve(workspace, fixture.expectedCwd)} ` +
+		`reason=${fixture.expectedReason}`;
+	if (
+		!lines.some((line) => {
+			try {
+				return JSON.parse(line)?.message === expected;
+			} catch {
+				return false;
+			}
+		})
+	) {
+		throw new Error(`missing cwd resolution log: ${expected}`);
+	}
+}
 
 /** Sweep prior runs without deleting a workspace owned by a live process. */
 export function sweepLeftovers() {
@@ -2277,6 +2329,14 @@ async function runLspHandshake({ langs, install, verbose }) {
 				// survives either build; `undefined` still means "no client became
 				// ready" (skip semantics unchanged).
 				touchedDiags = Array.isArray(touched) ? touched : touched?.diags;
+				if (fx.expectedCwd && touchedDiags) {
+					await assertCwdResolutionLog(
+						fx,
+						workspace,
+						"lsp",
+						fx.expectedTool ?? fx.serverHint,
+					);
+				}
 				if (!auxRe) break;
 				const hit = (touchedDiags ?? []).some((d) =>
 					auxRe.test(d.source || ""),
@@ -2595,7 +2655,19 @@ export async function runFormatSmoke({ langs, install, verbose, deps }) {
 				);
 				continue;
 			}
-			const verdict = classifyFormatRow(target, fx);
+			let verdict = classifyFormatRow(target, fx);
+			if (fx.expectedCwd && target.outcome !== "unavailable") {
+				try {
+					await assertCwdResolutionLog(
+						fx,
+						workspace,
+						"formatter",
+						fx.formatter,
+					);
+				} catch (err) {
+					verdict = { status: "fail", detail: err?.message ?? String(err) };
+				}
+			}
 			push(verdict.status, verdict.detail);
 		} catch (err) {
 			push("fail", `error: ${err?.message ?? err}`);
@@ -2868,6 +2940,14 @@ async function main() {
 			for (const target of fixture.targets) {
 				const outcome = runners.find((r) => r.runnerId === target);
 				const verdict = classify(outcome);
+				if (fixture.expectedCwd && verdict.state !== "skip") {
+					try {
+						await assertCwdResolutionLog(fixture, workspace, "runner", target);
+					} catch (err) {
+						verdict.state = "fail";
+						verdict.detail = err?.message ?? String(err);
+					}
+				}
 				// Step 2: a tool that ran clean but found nothing on a known defect fails.
 				if (
 					step2 &&

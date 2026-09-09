@@ -87,4 +87,4 @@ jobs:
         # count so it cannot silently rot.
         run: >-
           node scripts/smoke-tools.mjs --step2 --tier1 --install --verbose
-          --min-pass=10
+          --min-pass=11
