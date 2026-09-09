@@ -125,7 +125,7 @@ async function main() {
 	process.stdout.write(report);
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
 	main().catch((error) => {
 		console.error(`complexity advisory unavailable: ${error.message}`);
 		const output = resolve(

@@ -22,8 +22,14 @@ const ROOT = resolve(import.meta.dirname, "../..");
  * scripts carried the same gate. `pathToFileURL(process.argv[1]).href` is
  * the portable comparison.
  */
-const HAND_BUILT_ENTRY_GATE =
-	/import\.meta\.url\s*[!=]==?\s*`file:\/\/\$\{\s*process\.argv\[1\]/;
+const META_URL = String.raw`import\s*\.\s*meta\s*\.\s*url`;
+const HAND_BUILT = String.raw`\x60file:\/\/\$\{\s*process\s*\.\s*argv\s*\[\s*1\s*\]`;
+const OPERATOR = String.raw`\s*[!=]==?\s*`;
+// Both operand orders and a member access split across whitespace or a line
+// break (review F1 on #2842): the sweep must miss neither.
+const HAND_BUILT_ENTRY_GATE = new RegExp(
+	`${META_URL}${OPERATOR}${HAND_BUILT}|${HAND_BUILT}[^\x60]*\x60${OPERATOR}${META_URL}`,
+);
 
 export function findHandBuiltEntryGates(root: string): string[] {
 	const files = listSourceFiles(resolve(root, "scripts"), {
@@ -48,21 +54,25 @@ describe("script entry-module detection is Windows-portable", () => {
 		expect(findHandBuiltEntryGates(ROOT)).toEqual([]);
 	});
 
-	it("the scan matches the shape and ignores a comment quoting it", () => {
-		const offender =
-			"if (import.meta.url === `file://${process.argv[1]}`) main();\n";
-		const fixed =
-			"if (import.meta.url === pathToFileURL(process.argv[1]).href) main();\n";
-		const prose =
-			"// never write import.meta.url === `file://${process.argv[1]}`\nmain();\n";
-		expect(
-			HAND_BUILT_ENTRY_GATE.test(stripSource(offender, { strings: "keep" })),
-		).toBe(true);
-		expect(
-			HAND_BUILT_ENTRY_GATE.test(stripSource(fixed, { strings: "keep" })),
-		).toBe(false);
-		expect(
-			HAND_BUILT_ENTRY_GATE.test(stripSource(prose, { strings: "keep" })),
-		).toBe(false);
+	it("the scan matches every spelling of the shape and ignores a comment quoting it", () => {
+		const scan = (source: string) =>
+			HAND_BUILT_ENTRY_GATE.test(stripSource(source, { strings: "keep" }));
+		// Recurrence: review F1 on #2842 — reversed operands and a split member
+		// access evaded the first regex while reintroducing the Windows defect.
+		const offenders = [
+			"if (import.meta.url === `file://${process.argv[1]}`) main();\n",
+			"if (import.meta.url !== `file://${process.argv[1]}`) return;\n",
+			"if (`file://${process.argv[1]}` === import.meta.url) main();\n",
+			"if (import.meta.\n\turl === `file://${process.argv[1]}`) main();\n",
+			"if (\n\timport.meta.url ===\n\t\t`file://${ process.argv[ 1 ] }`\n) main();\n",
+		];
+		for (const offender of offenders)
+			expect(scan(offender), offender).toBe(true);
+		const clean = [
+			"if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();\n",
+			"// never write import.meta.url === `file://${process.argv[1]}`\nmain();\n",
+			"const uri = `file://${filePath}`;\n",
+		];
+		for (const source of clean) expect(scan(source), source).toBe(false);
 	});
 });

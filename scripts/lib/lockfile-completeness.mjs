@@ -134,7 +134,7 @@ export function runLockfileCompleteness({
 	}
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
 	try {
 		const result = runLockfileCompleteness();
 		if (!result.ok && !result.inconclusive) {

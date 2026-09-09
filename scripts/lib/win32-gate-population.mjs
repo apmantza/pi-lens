@@ -135,4 +135,4 @@ function main() {
 	} else if (args.includes("--files")) console.log(files.join("\n"));
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1]).href) main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
