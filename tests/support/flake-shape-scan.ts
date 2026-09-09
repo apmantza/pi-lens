@@ -153,6 +153,38 @@ export const DETECTOR_NAMES = [
 
 export type DetectorName = (typeof DETECTOR_NAMES)[number];
 
+export interface ScanContext {
+	source: string;
+	stripped: string;
+	root: SgNode | undefined;
+	rootReady: boolean;
+}
+
+function scanContext(source: string): ScanContext {
+	return {
+		source,
+		stripped: stripSource(source),
+		root: undefined,
+		rootReady: false,
+	};
+}
+
+function syntaxRoot(context: ScanContext): SgNode {
+	if (!context.rootReady) {
+		context.root = parse(Lang.TypeScript, context.source).root();
+		context.rootReady = true;
+	}
+	return context.root as SgNode;
+}
+
+// Keep this lexical admission check cheap. It runs after comments and strings
+// are blanked, so fixture prose cannot force an AST parse.
+const TIMER_AST_TRIGGER =
+	/\b(?:setTimeout|setInterval|timers\/promises|globalThis|delay|sleep)\b/;
+function needsTimerAst(context: ScanContext): boolean {
+	return TIMER_AST_TRIGGER.test(context.stripped);
+}
+
 // ── 1. Real-process spawn ───────────────────────────────────────────────────
 
 const CHILD_PROCESS_IMPORT =
@@ -201,8 +233,14 @@ function helperIsMocked(name: string, modules: ReadonlySet<string>): boolean {
 export function scanRealProcessSpawn(
 	_file: string,
 	source: string,
+	context?: ScanContext,
 ): FlakeHit[] {
 	const stripped = stripSource(source, { strings: "keep" });
+	const spawnCandidate = /\b(?:spawn|exec|fork)\s*\(|child_process/i.test(
+		stripped,
+	);
+	const sharedRoot =
+		context && spawnCandidate ? syntaxRoot(context) : context?.root;
 	const lines = stripped.split("\n");
 	const hits = new Map<number, FlakeHit>();
 	const mocks = mockedModules(source);
@@ -220,7 +258,7 @@ export function scanRealProcessSpawn(
 		}
 	});
 
-	for (const site of createCallSiteScanner(source).find(
+	for (const site of createCallSiteScanner(source, sharedRoot).find(
 		/^(?:spawn|spawnSync|exec|execSync|execFile|execFileSync|fork)$/,
 	)) {
 		const name = site.callee;
@@ -280,6 +318,7 @@ const EXPECT_ARG = /\bexpect\(\s*([^)]*)\)/;
 export function scanElapsedTimeAssertion(
 	_file: string,
 	source: string,
+	_context?: ScanContext,
 ): FlakeHit[] {
 	const stripped = stripSource(source, { strings: "blank" });
 	const lines = stripped.split("\n");
@@ -341,13 +380,16 @@ const TIMER_IMPORT_MODULES = new Set([
 const TIMER_GLOBALS = new Set(["globalThis", "window", "self"]);
 
 /** Resolve timer aliases from the parsed binding declarations. */
-function timerBindings(source: string): {
+function timerBindings(
+	source: string,
+	root?: SgNode,
+): {
 	local: Set<string>;
 	namespaces: Set<string>;
 } {
 	const local = new Set(["setTimeout", "setInterval"]);
 	const namespaces = new Set<string>();
-	const root = parse(Lang.TypeScript, source).root();
+	const syntax = root ?? parse(Lang.TypeScript, source).root();
 	const visit = (node: SgNode): void => {
 		if (node.kind() === "import_statement") {
 			const module = node
@@ -414,7 +456,7 @@ function timerBindings(source: string): {
 		}
 		for (const child of node.children()) visit(child);
 	};
-	visit(root);
+	visit(syntax);
 	return { local, namespaces };
 }
 
@@ -459,13 +501,20 @@ function fakeTimersStateAtLine(lines: readonly string[]): boolean[] {
  * exemption is stated here too so a caller that scans it directly — this
  * module's own self-test — gets the same answer).
  */
-export function scanRawTimerWait(file: string, source: string): FlakeHit[] {
+export function scanRawTimerWait(
+	file: string,
+	source: string,
+	context?: ScanContext,
+): FlakeHit[] {
 	if (path.posix.basename(file) === "interleaving-kit.ts") return [];
-	const stripped = stripSource(source, { strings: "blank" });
+	const scan = context ?? scanContext(source);
+	const stripped = scan.stripped;
 	const lines = stripped.split("\n");
 	const stateAtLine = fakeTimersStateAtLine(lines);
 	const supportHelper = isSupportHelperFile(file);
-	const bindings = timerBindings(source);
+	const bindings = needsTimerAst(scan)
+		? timerBindings(source, syntaxRoot(scan))
+		: { local: new Set<string>(), namespaces: new Set<string>() };
 
 	const hits: FlakeHit[] = [];
 	lines.forEach((lineText, idx) => {
@@ -488,7 +537,8 @@ export function scanRawTimerWait(file: string, source: string): FlakeHit[] {
 			});
 		}
 	});
-	const root = parse(Lang.TypeScript, source).root();
+	if (!needsTimerAst(scan)) return hits;
+	const root = syntaxRoot(scan);
 	const visit = (node: SgNode): void => {
 		if (node.kind() === "call_expression") {
 			const fn = node.field("function");
@@ -537,6 +587,7 @@ const WAIT_FOR_CALL = /\bvi\.waitFor\s*\(/;
 export function scanUngovernedWaitFor(
 	_file: string,
 	source: string,
+	_context?: ScanContext,
 ): FlakeHit[] {
 	const stripped = stripSource(source, { strings: "blank" });
 	const lines = stripped.split("\n");
@@ -556,7 +607,7 @@ export function scanUngovernedWaitFor(
 
 export const DETECTORS: Record<
 	DetectorName,
-	(file: string, source: string) => FlakeHit[]
+	(file: string, source: string, context?: ScanContext) => FlakeHit[]
 > = {
 	"real-process-spawn": scanRealProcessSpawn,
 	"elapsed-time-assertion": scanElapsedTimeAssertion,
@@ -599,8 +650,9 @@ export function countsByDetector(
 			const file = testsRelative(absolute);
 			if (SCAN_INFRASTRUCTURE.has(file)) return;
 			const source = fs.readFileSync(absolute, "utf8");
+			const context = scanContext(source);
 			for (const name of detectors) {
-				const hits = DETECTORS[name](file, source);
+				const hits = DETECTORS[name](file, source, context);
 				if (hits.length > 0) counts[name][file] = hits.length;
 			}
 		};
