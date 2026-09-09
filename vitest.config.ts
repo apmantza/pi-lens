@@ -274,6 +274,7 @@ const timingSensitiveInclude = [
 // outside this list without a documented exemption — or a member here
 // silently goes stale.
 const lspSpawnHeavyInclude = [
+	"tests/clients/lsp/workspace-diagnostics-language-neutral.test.ts",
 	"tests/clients/ast-grep-rule-precedence-followups.test.ts",
 	// #2776: the real fake-server wire is the only way to reproduce the
 	// custom-primary handler verdict after pull diagnostics are ignored and a

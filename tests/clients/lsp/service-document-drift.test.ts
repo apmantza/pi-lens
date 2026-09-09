@@ -18,13 +18,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const getServersForFileWithConfig = vi.fn();
 const createLSPClient = vi.fn();
+const loadReverseDependencyIndexFromSnapshot = vi.fn(() => null);
+const getReverseDepsFromIndex = vi.fn(() => [] as string[]);
 
-vi.mock("../../../clients/lsp/config.js", () => ({
+vi.mock("../../../clients/lsp/config.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../clients/lsp/config.js")>()),
 	getServersForFileWithConfig,
 	getServerInitOverride: vi.fn().mockReturnValue(undefined),
 }));
 
-vi.mock("../../../clients/lsp/client.js", () => ({ createLSPClient }));
+vi.mock("../../../clients/lsp/client.js", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../../clients/lsp/client.js")>()),
+	createLSPClient,
+}));
+vi.mock("../../../clients/reverse-deps.js", () => ({
+	loadReverseDependencyIndexFromSnapshot,
+	getReverseDepsFromIndex,
+}));
 
 function makeFakeProcess() {
 	return {
@@ -45,12 +55,13 @@ function makeServer(
 	root: string,
 	id = "typescript",
 	role: "primary" | "auxiliary" = "primary",
+	extensions = [".ts"],
 ) {
 	return {
 		id,
 		name: id,
 		role,
-		extensions: [".ts"],
+		extensions,
 		root: async () => root,
 		spawn: vi.fn(async () => ({ process: makeFakeProcess(), source: "test" })),
 	};
@@ -65,11 +76,12 @@ function makeClient(
 	behaviour: {
 		onOpen?: (filePath: string, content: string) => Promise<void> | void;
 	} = {},
+	serverId = "typescript",
 ) {
 	const received: string[] = [];
 	return {
 		received,
-		serverId: "typescript",
+		serverId,
 		isAlive: () => true,
 		shutdown: vi.fn(async () => {}),
 		isDocumentOpen: (filePath: string) =>
@@ -111,6 +123,8 @@ describe("LSPService disk-drift backstop (#1783)", () => {
 		vi.resetModules();
 		getServersForFileWithConfig.mockReset();
 		createLSPClient.mockReset();
+		loadReverseDependencyIndexFromSnapshot.mockReset().mockReturnValue(null);
+		getReverseDepsFromIndex.mockReset().mockReturnValue([]);
 		dir = await fs.mkdtemp(path.join(os.tmpdir(), "pi-lens-drift-"));
 		file = path.join(dir, "stdio.ts");
 		await fs.writeFile(file, ORIGINAL, "utf-8");
@@ -127,6 +141,8 @@ describe("LSPService disk-drift backstop (#1783)", () => {
 		const openDocuments = new Set<string>();
 		const client = makeClient(openDocuments);
 		getServersForFileWithConfig.mockReturnValue([makeServer(dir)]);
+		loadReverseDependencyIndexFromSnapshot.mockReturnValue(null);
+		getReverseDepsFromIndex.mockReturnValue([]);
 		createLSPClient.mockResolvedValue(client);
 		// The normal sync path: content read from disk, pushed to the server.
 		await service.touchFile(file, ORIGINAL, {
@@ -158,6 +174,69 @@ describe("LSPService disk-drift backstop (#1783)", () => {
 		expect(result?.candidates).toBe(1);
 		expect(result?.resynced).toBe(1);
 		expect(client.received).toEqual([ORIGINAL, BULK_EDITED]);
+	});
+
+	it("resynchronizes an open document from the recovered Git-change seam", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		const openDocuments = new Set<string>();
+		const client = makeClient(openDocuments);
+		getServersForFileWithConfig.mockReturnValue([makeServer(dir)]);
+		createLSPClient.mockResolvedValue(client);
+		await service.touchFile(file, await fs.readFile(file, "utf-8"), {
+			diagnostics: "none",
+			clientScope: "primary",
+			source: "lsp_sync",
+		});
+		const originalStat = await fs.stat(file);
+		await fs.writeFile(file, SAME_LENGTH_EDIT, "utf-8");
+		await fs.utimes(file, originalStat.atime, originalStat.mtime);
+
+		await service.resyncGitChangedFiles([file]);
+
+		// This is the recurrence of #2817: the stat-key drift backstop cannot see
+		// a same-size, same-mtime Git checkout, but the Git seam has the path set.
+		expect(client.received).toEqual([ORIGINAL, SAME_LENGTH_EDIT]);
+	});
+
+	it("resyncs a non-TypeScript importer from language-neutral import facts", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		const openDocuments = new Set<string>();
+		const changed = path.join(dir, "dependency.go");
+		const importer = path.join(dir, "consumer.py");
+		await fs.writeFile(changed, "package sample\n", "utf-8");
+		await fs.writeFile(importer, "from dependency import value\n", "utf-8");
+		const client = makeClient(openDocuments, {}, "python");
+		const server = makeServer(dir, "python", "primary", [".go", ".py"]);
+		getServersForFileWithConfig.mockReturnValue([server]);
+		loadReverseDependencyIndexFromSnapshot.mockReturnValue({} as any);
+		getReverseDepsFromIndex.mockReturnValue([importer]);
+		createLSPClient.mockResolvedValue(client);
+		await service.touchFile(changed, await fs.readFile(changed, "utf-8"), {
+			diagnostics: "none",
+			clientScope: "primary",
+			source: "lsp_sync",
+		});
+		await service.touchFile(importer, await fs.readFile(importer, "utf-8"), {
+			diagnostics: "none",
+			clientScope: "primary",
+			source: "lsp_sync",
+		});
+		await fs.writeFile(changed, "package sample\n\n", "utf-8");
+		await fs.writeFile(
+			importer,
+			"from dependency import value\n# changed\n",
+			"utf-8",
+		);
+
+		await service.resyncGitChangedFiles([changed]);
+
+		expect(client.received).toHaveLength(4);
+		expect(client.received).toContain("package sample\n\n");
+		expect(client.received).toContain(
+			"from dependency import value\n# changed\n",
+		);
 	});
 
 	it("emits a bounded record naming the file and the drift age", async () => {
@@ -570,5 +649,40 @@ describe("LSPService disk-drift backstop (#1783)", () => {
 				group?.latestReasons.some((e) => /resync FAILED/.test(e.reason)),
 			).toBe(true);
 		});
+	});
+
+	it("paces a large recovered Git change through the existing four-file scheduler (#2817 round 2 F1)", async () => {
+		const { LSPService } = await import("../../../clients/lsp/index.js");
+		const service = new LSPService();
+		const openDocuments = new Set<string>();
+		const client = makeClient(openDocuments);
+		const files: string[] = [];
+		for (let i = 0; i < 5; i++) {
+			const target = path.join(dir, `git-bulk-${i}.ts`);
+			await fs.writeFile(target, `export const v${i} = 0;\n`, "utf-8");
+			files.push(target);
+		}
+		getServersForFileWithConfig.mockReturnValue([makeServer(dir)]);
+		createLSPClient.mockResolvedValue(client);
+		for (const target of files) {
+			await service.touchFile(target, await fs.readFile(target, "utf-8"), {
+				diagnostics: "none",
+				clientScope: "primary",
+				source: "lsp_sync",
+			});
+		}
+
+		for (let i = 0; i < files.length; i++) {
+			await fs.writeFile(files[i]!, `export const v${i} = 1;\n`, "utf-8");
+		}
+		const before = client.received.length;
+		await service.resyncGitChangedFiles(files);
+		const afterFirstPass = client.received.length - before;
+		// #2817 round 2 F1: a 500-file recovery used to Promise.all every target.
+		// The existing drift scheduler's four-file budget must remain the bound.
+		expect(afterFirstPass).toBe(4);
+		const next = await service.sweepDocumentDrift({ force: true });
+		expect(next?.resynced).toBe(1);
+		expect(client.received).toHaveLength(before + 5);
 	});
 });

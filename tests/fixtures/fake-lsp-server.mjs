@@ -1,6 +1,8 @@
 // Minimal JSON-RPC 2.0 LSP fake server over stdio
 // Used for integration tests — speaks real LSP protocol without actual language smarts
 
+import fs from "node:fs";
+
 // #2436: parent-death watchdog. A test that spawns this fixture and then
 // dies without running its own cleanup (a SIGKILLed vitest worker fork, a
 // `--force` worktree removal) must not leave this process running forever —
@@ -240,16 +242,13 @@ function handle(raw) {
 	}
 	if (process.env.FAKE_LSP_TRACE_FILE) {
 		const trace = (what) => {
-			import("node:fs")
-				.then((fs) =>
-					fs.appendFileSync(
-						process.env.FAKE_LSP_TRACE_FILE,
-						`${what}\n`,
-					),
-				)
-				.catch(() => {});
+			try {
+				fs.appendFileSync(process.env.FAKE_LSP_TRACE_FILE, `${what}\n`);
+			} catch {}
 		};
-		trace(`recv ${data.method ?? "<response>"}`);
+		trace(
+			`recv ${data.method ?? "<response>"} ${data.params?.textDocument?.uri ?? ""}`.trim(),
+		);
 		if (
 			process.env.FAKE_LSP_ECHO_NOTIFY_METHODS === "1" &&
 			data.id === undefined
