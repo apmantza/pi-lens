@@ -114,6 +114,12 @@ const TYPESCRIPT_ERROR =
 // 9837 passed | 48 skipped (9886)". No file/test detail, but a nonzero
 // failed count here is unambiguous.
 const OVERALL_TESTS_FAILED = /\bTests\s+(\d+)\s+failed\b/;
+// #2839: vitest's timeout failure text (real log, run 34389495533 attempt 1,
+// job 102594125043, PR #2834): "Error: Test timed out in 5000ms." A timeout
+// is real failure evidence ONLY when the job shows no network-unreachable
+// evidence and no AssertionError/compiler diagnostic -- see
+// classifyFailureLog's timeout demotion below.
+const TEST_TIMEOUT_LINE = /\bTest timed out in \d+ms\b/;
 
 // The wrapper's own verdict when it survives long enough to observe the
 // kill (clients/scripts/lib/memory-watch.mjs:formatVerdict, quoted
@@ -161,6 +167,13 @@ const ERROR_PREFIXED_LINE =
 	/^(?:.*\bnpm (?:error\b|ERR!)(?:\s|$).*|.*::error::infra:.*|.*\brequest to https?:\/\/\S+ failed, reason:.*)$/gim;
 const CI_INFRA_LINE =
 	/^(?:.*(?:Unable to upload SARIF file|SARIF upload).*(?:\b(?:429|5\d\d)\b|failed).*$|.*Initialize CodeQL.*(?:\b(?:429|5\d\d)\b|failed).*$|.*codeload\.github\.com.*\b(?:429|503)\b.*|.*npm ci[\s\S]{0,200}\bETIMEDOUT\b.*)$/gim;
+// #2839: the npm-retry wrapper's own retry witness. scripts/npm-retry.mjs
+// prints `npm-retry: attempt ${attempt + 1} ${reason}` for EVERY failed
+// attempt, so the needle is scoped to the network reason -- the same log
+// legitimately carries `npm-retry: attempt 1 exited 1 (ERESOLVE)` lines for
+// deterministic dependency conflicts, and those are not registry evidence.
+// Line-start anchored like the other log-shaped patterns above.
+const NPM_RETRY_ATTEMPT_LINE = /^\s*npm-retry: attempt \d+ network error\b/m;
 
 /**
  * @typedef {{ kind: "real" | "infra-kill" | "infra-net", detail: string }} Classification
@@ -299,11 +312,66 @@ function findRealFailureSignal(log) {
 }
 
 /**
+ * Find network-unreachable evidence in the (already ANSI-stripped,
+ * timestamp-stripped) log: a scoped npm/registry error line carrying a shared
+ * NET_PATTERN token, a CI-infrastructure outage line (SARIF/CodeQL/codeload
+ * 429/503, `npm ci` ETIMEDOUT), or the npm-retry wrapper's own
+ * `npm-retry: attempt N network error` witness. One bounded scan drives BOTH
+ * the #2839 timeout demotion and the plain infra-net fallback, so the two
+ * paths can never disagree about what counts as network evidence.
+ *
+ * @param {string} log
+ * @returns {{ family: "npm-net" | "ci-infra", text: string } | null}
+ */
+function findNetworkUnreachableEvidence(log) {
+	let inspectedErrorLines = 0;
+	for (const errorLine of log.matchAll(ERROR_PREFIXED_LINE)) {
+		if (++inspectedErrorLines > 1_000) break;
+		const netMatch = NET_PATTERN.exec(errorLine[0]);
+		if (netMatch) {
+			return { family: "npm-net", text: netMatch[0].trim() };
+		}
+	}
+	for (const infraLine of log.matchAll(CI_INFRA_LINE)) {
+		return { family: "ci-infra", text: infraLine[0].trim() };
+	}
+	const retryMatch = NPM_RETRY_ATTEMPT_LINE.exec(log);
+	if (retryMatch) {
+		return { family: "npm-net", text: retryMatch[0].trim() };
+	}
+	return null;
+}
+
+/**
+ * #2839: is this log's real-failure evidence ONLY a vitest test timeout?
+ * A timeout is the one real-failure shape a registry-starved runner
+ * fabricates on otherwise-healthy code, so it is demotion-eligible only
+ * when NO AssertionError and NO TypeScript compiler diagnostic appear
+ * anywhere in the log -- those two shapes are unambiguously real regardless
+ * of network noise.
+ *
+ * @param {string} log
+ * @returns {boolean}
+ */
+function isTimeoutOnlyFailure(log) {
+	return (
+		TEST_TIMEOUT_LINE.test(log) &&
+		!ASSERTION_LINE.test(log) &&
+		!TYPESCRIPT_ERROR.test(log)
+	);
+}
+
+/**
  * Classify one failed job's log. A real failure -- ANY of the shapes
- * findRealFailureSignal recognizes -- always wins over infra-shaped noise
- * elsewhere in the same log (acceptance criterion: "real failures are never
- * labeled infra"), so that check runs FIRST, unconditionally, before any
- * OOM/network pattern is even considered.
+ * findRealFailureSignal recognizes -- wins over infra-shaped noise elsewhere
+ * in the same log (acceptance criterion: "real failures are never labeled
+ * infra"), so that check runs before any OOM/network pattern is considered.
+ * #2839's one exception runs BEFORE it: a failure whose ONLY evidence is a
+ * test timeout (`Test timed out in Nms`, no AssertionError, no compiler
+ * diagnostic) demotes to infra-net when the log also carries
+ * network-unreachable evidence, because a registry-starved runner times tests
+ * out on otherwise-healthy code; an AssertionError or an `error TS` line
+ * beside the same network noise still wins as real.
  *
  * @param {string} rawLog
  * @returns {Classification}
@@ -327,6 +395,24 @@ export function classifyFailureLog(rawLog) {
 	const bounded =
 		original.length > MAX_LOG_BYTES ? original.slice(-MAX_LOG_BYTES) : original;
 	const log = stripLineTimestamps(stripAnsi(bounded));
+
+	// #2839's one demotion, checked BEFORE the real-signal branch: a vitest
+	// timeout (no AssertionError, no compiler diagnostic anywhere) beside
+	// network-unreachable evidence is infra, not real -- a registry-starved
+	// runner times tests out on otherwise-healthy code, and the timeout's own
+	// FAIL block would otherwise outrank the network evidence. An
+	// AssertionError or an `error TS` line beside the same network noise
+	// makes isTimeoutOnlyFailure false, so this block is skipped and the
+	// real-signal branch below still wins as real.
+	if (isTimeoutOnlyFailure(log)) {
+		const netEvidence = findNetworkUnreachableEvidence(log);
+		if (netEvidence) {
+			return {
+				kind: "infra-net",
+				detail: `no failing assertion; test timeout beside network-unreachable evidence: ${TEST_TIMEOUT_LINE.exec(log)[0]}; network: ${netEvidence.text}`,
+			};
+		}
+	}
 
 	const realSignal = findRealFailureSignal(log);
 	if (realSignal) {
@@ -361,21 +447,17 @@ export function classifyFailureLog(rawLog) {
 		return { kind: "infra-kill", detail };
 	}
 
-	let inspectedErrorLines = 0;
-	for (const errorLine of log.matchAll(ERROR_PREFIXED_LINE)) {
-		if (++inspectedErrorLines > 1_000) break;
-		const netMatch = NET_PATTERN.exec(errorLine[0]);
-		if (netMatch) {
+	const networkEvidence = findNetworkUnreachableEvidence(log);
+	if (networkEvidence) {
+		if (networkEvidence.family === "ci-infra") {
 			return {
 				kind: "infra-net",
-				detail: `no failing assertion; network error: ${netMatch[0].trim()}`,
+				detail: `infrastructure error: ${networkEvidence.text}`,
 			};
 		}
-	}
-	for (const infraLine of log.matchAll(CI_INFRA_LINE)) {
 		return {
 			kind: "infra-net",
-			detail: `infrastructure error: ${infraLine[0].trim()}`,
+			detail: `no failing assertion; network error: ${networkEvidence.text}`,
 		};
 	}
 

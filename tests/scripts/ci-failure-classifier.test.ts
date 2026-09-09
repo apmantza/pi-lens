@@ -33,6 +33,17 @@
 //     `{"outcome":"emit_failed","error":"ECONNRESET"}`) inside a synthetic
 //     surrounding log, to prove that string alone must not flip an
 //     unrecognized real failure to infra-net.
+//   - infra-net-registry-reset-beside-test-timeout.real.log (#2839): run
+//     34389495533 attempt 1, job 102594125043 (PR #2834, fetched via
+//     `gh api repos/apmantza/pi-lens/actions/jobs/102594125043/logs`), raw
+//     lines 2241-2259 (the npm-retry unit tests' own registry failures:
+//     three `npm error code ECONNRESET`, `npm-retry: attempt 1..3 network
+//     error`, the `##[error]infra: registry unreachable` annotations) joined
+//     with raw lines 3928-3947 (the run's only test failure, a vitest
+//     timeout: `FAIL ... tests/clients/flake-shape-ratchet.test.ts > ...` +
+//     `Error: Test timed out in 5000ms.` + the summary block). One real
+//     capture, two regions of it, nothing else omitted. Pre-#2839 this
+//     classified real and no rerun was armed.
 
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -456,6 +467,91 @@ describe("classifyFailureLog (#2103)", () => {
 			fixture("fabricated-fail-in-passing-title.composite.log"),
 		);
 		expect(result.kind).toBe("infra-kill");
+	});
+
+	// --- #2839: a test timeout beside network-unreachable evidence is infra --
+	//
+	// Recurrence (#2839): PR #2834 and, within the hour, PR #2835 both logged
+	// registry ECONNRESET through every npm-retry attempt plus ONE test-level
+	// failure shaped as a vitest timeout, and the classifier labelled both
+	// `ci:real` because the timeout prints as a FAIL block (FAIL_LINE outranks
+	// network evidence) -- no rerun was armed, and the maintainer re-ran both
+	// by hand. The demotion below is deliberately narrow: the network
+	// evidence AND the absence of any AssertionError/compiler diagnostic are
+	// both required, so a genuine assertion failure beside network noise
+	// still wins as real.
+
+	// (a) The real #2834 excerpt (see the file header for provenance). Red
+	// first: on pre-#2839 code this classified real.
+	it("#2839 (a): the #2834 log's timeout beside registry ECONNRESET classifies infra-net", () => {
+		const result = classifyFailureLog(
+			fixture("infra-net-registry-reset-beside-test-timeout.real.log"),
+		);
+		expect(result.kind).toBe("infra-net");
+		expect(result.detail).toContain("Test timed out in 5000ms");
+		expect(result.detail).toContain("ECONNRESET");
+	});
+
+	// (b) The same record with a different timeout line: the rule keys on the
+	// timeout shape, not the 5000ms value or the specific test name.
+	it("#2839 (b): a different timeout line beside the same network evidence still classifies infra-net", () => {
+		const log = fixture(
+			"infra-net-registry-reset-beside-test-timeout.real.log",
+		).replace("Test timed out in 5000ms.", "Test timed out in 10000ms.");
+		expect(log).toContain("Test timed out in 10000ms.");
+		expect(classifyFailureLog(log).kind).toBe("infra-net");
+	});
+
+	// (c) An AssertionError beside the same network evidence still wins as
+	// real -- the demotion must never eat a genuine assertion failure.
+	it("#2839 (c): an AssertionError beside registry ECONNRESET stays real", () => {
+		const log = [
+			"npm error code ECONNRESET",
+			"npm error code ECONNRESET",
+			"npm-retry: attempt 1 network error: ECONNRESET",
+			"AssertionError: expected 2 to be 1",
+			"",
+		].join("\n");
+		expect(classifyFailureLog(log).kind).toBe("real");
+	});
+
+	// (d) A lone timeout with NO network evidence is unchanged from
+	// pre-#2839: real. This is the mutation-proof anchor for the network
+	// precondition -- deleting that precondition flips this log to infra-net.
+	it("#2839 (d): a lone test timeout with no network evidence stays real", () => {
+		expect(classifyFailureLog("Error: Test timed out in 5000ms.\n").kind).toBe(
+			"real",
+		);
+	});
+
+	// (e) The npm-retry wrapper's own attempt line is network evidence on its
+	// own. The line shape is quoted from scripts/npm-retry.mjs's literal
+	// `npm-retry: attempt ${attempt + 1} ${reason}` print (verified against
+	// that shipped source, like the mem-watch KILLED fixture above); no real
+	// capture has this shape alone because the wrapper echoes npm's stderr
+	// through. Mutation proof for the NPM_RETRY_ATTEMPT_LINE needle: without
+	// it this log has no error-prefixed network line and falls back to real.
+	it("#2839 (e): an npm-retry attempt line as the only network witness demotes a timeout to infra-net", () => {
+		const log = [
+			"npm-retry: attempt 1 network error: ECONNRESET",
+			"npm-retry: attempt 2 network error: ECONNRESET",
+			"Error: Test timed out in 5000ms.",
+			"",
+		].join("\n");
+		expect(classifyFailureLog(log).kind).toBe("infra-net");
+	});
+
+	// The needle must stay scoped to the NETWORK reason: the wrapper prints
+	// `npm-retry: attempt N exited 1 (ERESOLVE)` for deterministic failures
+	// too (that exact line is in the real #2834 log), and a deterministic
+	// dependency conflict is not registry unreachability.
+	it("#2839: an npm-retry deterministic-failure line is not network evidence", () => {
+		const log = [
+			"npm-retry: attempt 1 exited 1 (ERESOLVE)",
+			"Error: Test timed out in 5000ms.",
+			"",
+		].join("\n");
+		expect(classifyFailureLog(log).kind).toBe("real");
 	});
 });
 
