@@ -1144,6 +1144,12 @@ which clears the signature and selection state together. External editor
 changes remain outside that seam and are rechecked at session reset. (#1895,
 #1940, #1603)
 
+Runner advisories that describe a constant no-config or cooldown condition use
+`logRunnerAdvisoryOnce` in `clients/tool-cwd.ts`, keyed by tool and resolved
+root, and pass debug level through `DispatchContext.log`. The shared
+generation map resets with the degradation ledger, so one session emits one
+record per tool/root and the next session re-arms it. (#2811)
+
 Helm chart linting uses the shared workspace-topology `Chart.yaml` marker. YAML
 and `.tpl` edits inside a chart dispatch one canonical-root-deduplicated,
 bounded `helm lint` pass through the ordinary typed availability/install seam.
