@@ -79,6 +79,12 @@ import { createAstGrepSearchTool } from "../tools/ast-grep-search.js";
 import { createLensDiagnosticsTool } from "../tools/lens-diagnostics.js";
 import { peekMcpSessionRuntime } from "../clients/mcp/session.js";
 import { createLspDiagnosticsTool } from "../tools/lsp-diagnostics.js";
+import { loadPiLensGlobalConfig } from "../clients/lens-config.js";
+import { loadPiLensProjectConfig } from "../clients/project-lens-config.js";
+import {
+	resolveLensToolEnabled,
+	toolRegistryEntryForMcp,
+} from "../clients/tool-config.js";
 import { createLspNavigationTool } from "../tools/lsp-navigation.js";
 import { shouldInitializeSessionRoot } from "../clients/lsp/session-roots.js";
 import {
@@ -950,6 +956,18 @@ const ALL_TOOLS = [
 const TOOLS = canRebuildPiLens(REPO_ROOT)
 	? ALL_TOOLS
 	: ALL_TOOLS.filter((tool) => tool.name !== "pilens_rebuild");
+
+function enabledToolsForCwd(cwd: string) {
+	const global = loadPiLensGlobalConfig();
+	const project = loadPiLensProjectConfig(cwd);
+	return TOOLS.filter((tool) => {
+		const entry = toolRegistryEntryForMcp(tool.name);
+		return (
+			entry !== undefined &&
+			resolveLensToolEnabled(entry.name, global, project.raw)
+		);
+	});
+}
 
 function formatAnalyze(
 	result: McpAnalyzeResult,
@@ -1844,7 +1862,7 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
 			if (!isNotification) sendResult(id ?? null, {});
 			return;
 		case "tools/list":
-			sendResult(id ?? null, { tools: TOOLS });
+			sendResult(id ?? null, { tools: enabledToolsForCwd(DEFAULT_CWD) });
 			return;
 		case "tools/call": {
 			const name = params?.name;
@@ -1854,6 +1872,15 @@ async function handleRequest(request: JsonRpcRequest): Promise<void> {
 					: {};
 			if (typeof name !== "string") {
 				sendError(id ?? null, -32602, "tools/call requires a string 'name'");
+				return;
+			}
+			if (
+				name !== "pilens_rebuild" &&
+				!enabledToolsForCwd(
+					typeof args.cwd === "string" ? args.cwd : DEFAULT_CWD,
+				).some((tool) => tool.name === name)
+			) {
+				sendResult(id ?? null, toolText(`Unknown or disabled tool: ${name}`));
 				return;
 			}
 			// #544 self-heal: if auto-session was supposed to fire on `initialize`

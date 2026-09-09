@@ -1,0 +1,39 @@
+2026-09-09T18:42:01.8334003Z npm error code ECONNRESET
+2026-09-09T18:42:01.8334522Z npm-retry: attempt 1 network error: ECONNRESET
+2026-09-09T18:42:01.8334954Z npm error code ECONNRESET
+2026-09-09T18:42:01.8335391Z npm-retry: attempt 2 network error: ECONNRESET
+2026-09-09T18:42:01.8336109Z npm-retry: succeeded on attempt 3
+2026-09-09T18:42:02.0669740Z npm error code ECONNRESET
+2026-09-09T18:42:02.0670428Z npm-retry: attempt 1 network error: ECONNRESET
+2026-09-09T18:42:02.0672565Z npm error code ECONNRESET
+2026-09-09T18:42:02.0675068Z npm-retry: attempt 2 network error: ECONNRESET
+2026-09-09T18:42:02.0675554Z npm error code ECONNRESET
+2026-09-09T18:42:02.0676776Z npm-retry: attempt 3 network error: ECONNRESET
+2026-09-09T18:42:02.0698427Z ##[error]infra: registry unreachable — npm ci --ignore-scripts failed 3 times (network error: ECONNRESET; network error: ECONNRESET; network error: ECONNRESET)
+2026-09-09T18:42:02.1939987Z npm error ECONNRESET
+2026-09-09T18:42:02.1940538Z npm-retry: attempt 1 network error: ECONNRESET
+2026-09-09T18:42:02.1940942Z npm error ECONNRESET
+2026-09-09T18:42:02.1941324Z npm-retry: attempt 2 network error: ECONNRESET
+2026-09-09T18:42:02.1941704Z npm error ECONNRESET
+2026-09-09T18:42:02.1942064Z npm-retry: attempt 3 network error: ECONNRESET
+2026-09-09T18:42:02.1944543Z ##[error]infra: registry unreachable — npm ci failed 3 times (network error: ECONNRESET; network error: ECONNRESET; network error: ECONNRESET)
+2026-09-09T18:43:38.7917014Z [31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+2026-09-09T18:43:38.7917472Z 
+2026-09-09T18:43:38.7920345Z [41m[1m FAIL [22m[49m [30m[42m default [49m[39m tests/clients/flake-shape-ratchet.test.ts[2m > [22mflake-shape ratchet — admission gate[2m > [22mADMITTED_AFTER_BASELINE entries carry the header and wallClockBudgetInclude membership
+2026-09-09T18:43:38.7926461Z [31m[1mError[22m: Test timed out in 5000ms.
+2026-09-09T18:43:38.7927898Z If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".[39m
+2026-09-09T18:43:38.7929284Z [36m [2m❯[22m tests/clients/flake-shape-ratchet.test.ts:[2m770:2[22m[39m
+2026-09-09T18:43:38.8075029Z     [90m768|[39m
+2026-09-09T18:43:38.8076597Z     [90m769|[39m describe("flake-shape ratchet — admission gate", () => {
+2026-09-09T18:43:38.8078078Z     [90m770|[39m  it("ADMITTED_AFTER_BASELINE entries carry the header and wallClockBud…
+2026-09-09T18:43:38.8079128Z     [90m   |[39m  [31m^[39m
+2026-09-09T18:43:38.8079959Z     [90m771|[39m   const included = new Set([
+2026-09-09T18:43:38.8080859Z     [90m772|[39m    ...wallClockBudgetInclude(),
+2026-09-09T18:43:38.8081493Z 
+2026-09-09T18:43:38.8082130Z [31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+2026-09-09T18:43:38.8082771Z 
+2026-09-09T18:43:38.8085123Z 
+2026-09-09T18:43:38.8169085Z [2m Test Files [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m1055 passed[39m[22m[2m | [22m[33m12 skipped[39m[90m (1068)[39m
+2026-09-09T18:43:38.8324136Z [2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m14196 passed[39m[22m[2m | [22m[33m118 skipped[39m[90m (14315)[39m
+2026-09-09T18:43:38.8325191Z [2m   Start at [22m 18:33:12
+2026-09-09T18:43:38.8348406Z [2m   Duration [22m 626.44s[2m (tests 74%, import 21%, transform 3%, setup 1%)[22m

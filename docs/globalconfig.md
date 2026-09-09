@@ -123,6 +123,14 @@ Turn subsystems off globally instead of retyping flags every session:
 
 `lens.enabled: false` starts every session with pi-lens off (the `--no-lens` equivalent); `/lens-toggle` still re-enables it for one session. `lsp.enabled: false` falls back to language-specific checkers such as pyright. `tests.enabled: false` skips the on-write test runner. `delta.enabled: false` reports every diagnostic rather than only ones introduced this turn. `opengrep.enabled: false` detaches the Opengrep security scanner. `readGuard.enabled: false` turns off the read-before-edit monitor. `guard.enabled: true` opts into the experimental commit/push blocker.
 
+The `tools.<name>.enabled` setting controls each model-facing tool. Valid names
+include `ast_grep_search`, `ast_grep_replace`, `ast_grep_outline`,
+`ast_grep_dump`, `lsp_navigation`, `lsp_diagnostics`, `lens_diagnostics`,
+`lens_diagnostic_mark`, `symbol_search`, `module_report`, `project_report`,
+`read_symbol`, `read_enclosing`, `effective_config`, `analyze`, `health`,
+`latency`, `project_scan`, and `rebuild`. The activation loader and MCP
+lifecycle tools `session_start` and `turn_end` cannot be disabled.
+
 ## Project Config
 
 In addition to the user-level `~/.pi-lens/config.json` above, pi-lens reads a per-project `.pi-lens.json` (or `pi-lens.json`) at the project root. Walked upward from the cwd, so a monorepo can keep the config at the repo root and have every subdir pick it up. The schema is intentionally small — only fields pi-lens actually honors:
