@@ -413,6 +413,7 @@ Each row cost a lane at least once; the prose above carries the record.
 | Reviewing a branch head that no longer carries master | Reviewer merges origin/master into the scratch checkout first; CONFLICTING is not reviewable (#2808 vs #2795) |
 | Pushing docs, config or data straight to master without preflight | `npm run preflight` on the exact tree first; three master reds on 2026-09-09 |
 | Nudging a capped small-model lane more than once | One continuation, then reassign to the strongest model (GLM lanes, 2026-09-09) |
+| Waiting on CI for a bot-authored PR (github-actions nightly refresh) | A GITHUB_TOKEN push fires no `pull_request` run: required checks stay ABSENT forever; close/reopen the PR to fire them (#2801, 2026-09-09) |
 | Judging master from the local checkout | `git fetch origin` and read `origin/master`; #2693 r1 reported a catalog row missing that had merged an hour earlier, and the orchestrator's own branch that morning was cut from a master six commits behind |
 | Swapping reviewers between rounds | Same reviewer verifies; the probes and the mutation set are the continuity |
 | Trusting the fixer's "CI green" | Read ci-verdict on the exact head SHA yourself; absent required checks are not green |
