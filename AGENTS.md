@@ -440,6 +440,8 @@ This is the payoff of the two disciplines above: a bounded checklist of defect *
 
 41. **A fixed bound on a hot path that is reached at p50.** Every timeout, debounce, batch size or grace budget is a hypothesis about the seam it bounds, and a bound reached at p50 means the wait has become the work: a design defect, not a tuning knob. The pi-free session of 2026-09-09 (#2810) paid the full 1500 ms auxiliary grace on every one of 342 edits because one auxiliary server publishes exactly at its budget; per-edit dispatch was 85% that wait, on the model's own turn. *Screen:* every bound on a hot path carries a record of how often it is reached (the `lsp_aux_wait_outcome`-style outcome row, bounded, one per dispatch), and the design prefers an adaptive trigger over the constant: act immediately when the seam is quiet, coalesce under pressure, and demote a party that exhausts its budget N times in a row (with the once-only record of the demotion). Withdrawn on the same day: a "trailing debounce" hypothesis (#2809 H1) that the code did not contain (`TOUCH_DEBOUNCE_MS` is a suppression window) — read the seam before naming the bound. *Detect:* a `*_MS`/`*_BATCH`/`*_BUDGET` constant consumed by an awaited path with no latency record of its hit rate; a latency row whose p50 equals its budget. *e.g.* #2810 (aux grace), #2809 (drift resync batch, deferred-format span) (2026-09-09).
 
+42. **A rule keyed on one language.** A seam, cache admission, test matrix or tool contract written for `.ts`/tsserver when the behaviour belongs to every LSP-backed language in `clients/language-registry.ts`. #2823 r1 keyed the #2817 dependency re-sync on TypeScript; rust-analyzer, pyright and gopls hold a stale module graph after a git checkout exactly the same way. *Screen:* write the rule against the registry ("has import facts", "every live server holding the document"), name which entries have the facts and which fall to the honest fallback, and add one non-TypeScript row to the matrix; a language-specific branch is allowed only with the registry field that justifies it named in the code. *Detect:* grep new code for `\.tsx?\b`, `"typescript"`, `tsserver` outside `clients/lsp/config.ts`'s server entries and the TypeScript runner; a test file whose only fixtures are `.ts` for a rule that names "LSP" or "server". *e.g.* #2823 r1 (2026-09-09).
+
 For process singletons that own live child processes, an incompatible cell must
 call the owner's teardown seam before replacement and carry its pending handoff
 into the replacement. The LSP service uses this rule in `lsp/index.ts` so a
@@ -485,6 +487,18 @@ These are named, well-scoped sweeps a maintainer can ask for by name; each is di
 Each routine's output is a PR (or a tracked issue for discovery routines), reviewed under the same two-tier adversarial-review + red-first discipline as any change. Deletions are irreversible-adjacent — treat them with the confirm-before-destructive-action rule.
 
 ## Standing invariants
+
+pi-lens caters for every language it supports, never for one. The set is
+`LANGUAGES` in `clients/language-registry.ts` (the registry is the source of
+truth; every LSP server, runner, formatter and fact extractor hangs off it).
+Any fix, seam, cache rule, test matrix or tool contract that keys on a single
+language (`.ts`, `typescript`, a tsserver quirk) is wrong by default: state the
+rule in language-neutral terms ("a file that has import facts", "every live
+server holding the document"), name which registry entries have the facts the
+rule needs and which fall to the honest fallback, and put at least one
+non-TypeScript row in the test matrix. Record: #2823 r1 (2026-09-09) shipped the
+#2817 dependency re-sync keyed on TypeScript while every server's module graph
+goes stale the same way.
 
 Harness scratch directories use `scripts/lib/scratch-dir.mjs`: `claimScratchDir`
 records `owner.pid`, and `sweepScratchDirs` removes only dead owners or
