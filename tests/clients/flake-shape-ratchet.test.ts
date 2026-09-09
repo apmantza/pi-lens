@@ -4,9 +4,7 @@
  * Three deflake PRs in two days (#2531 alone fixed three shared-slot races)
  * and nothing counted the contention surface those PRs kept fixing, so the
  * set only grew. This ratchet counts it: `tests/support/flake-shape-scan.ts`
- * runs four detectors over every `tests/**\/*.test.ts` file and — since #2563
- * — over every non-test helper under `tests/support/**\/*.ts` (the time
- * detectors only; support helpers are the sanctioned spawn boundary) —
+ * runs four detectors over every `tests/**\/*.test.ts` file —
  *
  * 1. `real-process-spawn` — a real child process (`child_process` import,
  *    `execFileSync`/`spawnSync`/`execSync`, a support spawn-helper call, or a
@@ -14,9 +12,7 @@
  * 2. `elapsed-time-assertion` — a DELTA of two clock reads flowing into a
  *    numeric matcher (`toBeLessThan`/`toBeGreaterThan`/…).
  * 3. `raw-timer-wait` — a raw `setTimeout`/`setInterval` wait outside a
- *    `vi.useFakeTimers()` scope; in a `tests/support/` helper, also any
- *    `delay`/`sleep` helper definition (#2563 — the shared-primitive reuse
- *    vector that hides a raw wait from every `.test.ts` call site).
+ *    `vi.useFakeTimers()` scope.
  * 4. `ungoverned-wait-for` — a `vi.waitFor` call outside a fake-timer scope.
  *
  * `FLAKE_SHAPE_BASELINE` (`tests/support/flake-shape-baseline.json`) is
@@ -75,7 +71,7 @@ import {
 } from "../support/flake-shape-scan.js";
 import { testSourceFiles as allTestSourceFiles } from "../support/module-instance-scan.js";
 import { localImportTargets } from "../support/hook-await-scan.js";
-import { assertSortedKeys } from "../support/sweep-kit.js";
+import { assertSortedRegistry } from "../support/sweep-kit.js";
 
 // ── The baseline ─────────────────────────────────────────────────────────
 
@@ -280,7 +276,7 @@ const ADMITTED_AFTER_BASELINE: Readonly<
 	"real-process-spawn:scripts/check-pr-body.test.ts": {
 		detector: "real-process-spawn",
 		reason:
-			"the exact local CLI and shallow checkout are the subjects; an in-process call cannot prove either command boundary",
+			"the exact local CLI and shallow checkout are the subjects; an in-process double cannot prove either command boundary",
 	},
 	"real-process-spawn:scripts/git-fixture-env.test.ts": {
 		detector: "real-process-spawn",
@@ -531,20 +527,20 @@ function describeProblem(p: RatchetProblem): string {
 describe("flake-shape ratchet (#2547)", () => {
 	it("keeps every admission map sorted", () => {
 		// #2671 recurrence: an unsorted admission is a merge-conflict magnet.
-		expect(() => assertSortedKeys("fixture", ["b", "a"])).toThrow(
+		expect(() => assertSortedRegistry("fixture", ["b", "a"])).toThrow(
 			"entries must be sorted",
 		);
 		for (const detector of DETECTOR_NAMES) {
-			assertSortedKeys(
+			assertSortedRegistry(
 				`flake-shape-baseline:${detector}`,
 				Object.keys(FLAKE_SHAPE_BASELINE[detector]),
 			);
 		}
-		assertSortedKeys(
+		assertSortedRegistry(
 			"ADMITTED_AFTER_BASELINE",
 			Object.keys(ADMITTED_AFTER_BASELINE),
 		);
-		assertSortedKeys("wallClockBudgetInclude", wallClockBudgetInclude());
+		assertSortedRegistry("wallClockBudgetInclude", wallClockBudgetInclude());
 	});
 	it.each(DETECTOR_NAMES)(
 		"detector %s: no new files, no risen counts vs. the baseline",
