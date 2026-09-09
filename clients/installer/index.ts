@@ -273,6 +273,8 @@ interface GitHubAssetSpec {
 	 * so the `ktlint` jar must land next to it (#218).
 	 */
 	extraAssets?: (platform: string, arch: string) => string[];
+	/** Runtime wrapper for a platform asset that is a PHAR or runnable JAR. */
+	launcher?: "php" | "java";
 }
 
 /**
@@ -402,6 +404,142 @@ const OS_ARCH_ZIP_ASSETS = {
 	win32: { x64: "windows_amd64.zip", arm64: "windows_arm64.zip" },
 };
 
+type ManagedPackageFormatterSpec = {
+	id: string;
+	name: string;
+	installStrategy: "npm" | "pip";
+	packageName: string;
+};
+
+function managedPackageFormatterTool(
+	spec: ManagedPackageFormatterSpec,
+): ToolDefinition {
+	return {
+		id: spec.id,
+		name: spec.name,
+		checkCommand: spec.id,
+		checkArgs: ["--version"],
+		installStrategy: spec.installStrategy,
+		packageName: spec.packageName,
+		binaryName: spec.id,
+	};
+}
+
+const MANAGED_PACKAGE_FORMATTERS = [
+	{ id: "black", name: "Black", installStrategy: "pip", packageName: "black" },
+	{
+		id: "cmake-format",
+		name: "cmake-format",
+		installStrategy: "pip",
+		packageName: "cmakelang",
+	},
+	{ id: "oxfmt", name: "oxfmt", installStrategy: "npm", packageName: "oxfmt" },
+] satisfies ManagedPackageFormatterSpec[];
+
+type ManagedGitHubFormatterSpec = {
+	id: string;
+	name: string;
+	owner: string;
+	repo: string;
+	assetPattern: GitHubAssetSpec["assetMatch"];
+	kind: "binary" | "phar" | "jar";
+	binaryInArchive?: string;
+};
+
+function managedGitHubFormatterTool(
+	spec: ManagedGitHubFormatterSpec,
+): ToolDefinition {
+	return {
+		id: spec.id,
+		name: spec.name,
+		checkCommand: spec.id,
+		checkArgs: ["--version"],
+		installStrategy: "github",
+		binaryName: spec.id,
+		github: {
+			repo: `${spec.owner}/${spec.repo}`,
+			assetMatch: spec.assetPattern,
+			...(spec.binaryInArchive && { binaryInArchive: spec.binaryInArchive }),
+			...(spec.kind === "phar" && { launcher: "php" as const }),
+			...(spec.kind === "jar" && { launcher: "java" as const }),
+		},
+	};
+}
+
+const MANAGED_GITHUB_FORMATTERS = [
+	{
+		id: "stylua",
+		name: "StyLua",
+		owner: "JohnnyMorganz",
+		repo: "StyLua",
+		assetPattern: archAssetMatch({
+			linux: { x64: "linux-x86_64.zip", arm64: "linux-aarch64.zip" },
+			darwin: { x64: "macos-x86_64.zip", arm64: "macos-aarch64.zip" },
+			win32: { x64: "windows-x86_64.zip" },
+		}),
+		kind: "binary",
+		binaryInArchive: "stylua",
+	},
+	{
+		id: "php-cs-fixer",
+		name: "PHP CS Fixer",
+		owner: "PHP-CS-Fixer",
+		repo: "PHP-CS-Fixer",
+		assetPattern: (platform) =>
+			platform === "linux" || platform === "darwin" || platform === "win32"
+				? "php-cs-fixer.phar"
+				: undefined,
+		kind: "phar",
+	},
+	{
+		id: "cljfmt",
+		name: "cljfmt",
+		owner: "weavejester",
+		repo: "cljfmt",
+		assetPattern: (platform, arch) => {
+			if (platform === "linux")
+				return arch === "arm64"
+					? "standalone.jar"
+					: "linux-amd64-static.tar.gz";
+			if (platform === "darwin") return "standalone.jar";
+			if (platform === "win32") return "win-amd64.zip";
+			return undefined;
+		},
+		kind: "jar",
+		binaryInArchive: "cljfmt",
+	},
+] satisfies ManagedGitHubFormatterSpec[];
+
+const MANAGED_MAVEN_FORMATTERS = [
+	{
+		id: "google-java-format",
+		name: "google-java-format",
+		groupId: "com.google.googlejavaformat",
+		artifactId: "google-java-format",
+		version: "1.27.0",
+		classifier: "all-deps",
+	},
+];
+
+function managedMavenFormatterTool(
+	spec: (typeof MANAGED_MAVEN_FORMATTERS)[number],
+): ToolDefinition {
+	return {
+		id: spec.id,
+		name: spec.name,
+		checkCommand: spec.id,
+		checkArgs: ["--version"],
+		installStrategy: "maven",
+		binaryName: spec.id,
+		maven: {
+			groupId: spec.groupId,
+			artifactId: spec.artifactId,
+			version: spec.version,
+			classifier: spec.classifier,
+		},
+	};
+}
+
 export const TOOLS: ToolDefinition[] = [
 	// Core LSP servers
 	{
@@ -450,33 +588,7 @@ export const TOOLS: ToolDefinition[] = [
 		packageName: "prettier",
 		binaryName: "prettier",
 	},
-	{
-		id: "black",
-		name: "Black",
-		checkCommand: "black",
-		checkArgs: ["--version"],
-		installStrategy: "pip",
-		packageName: "black",
-		binaryName: "black",
-	},
-	{
-		id: "cmake-format",
-		name: "cmake-format",
-		checkCommand: "cmake-format",
-		checkArgs: ["--version"],
-		installStrategy: "pip",
-		packageName: "cmakelang",
-		binaryName: "cmake-format",
-	},
-	{
-		id: "oxfmt",
-		name: "oxfmt",
-		checkCommand: "oxfmt",
-		checkArgs: ["--version"],
-		installStrategy: "npm",
-		packageName: "oxfmt",
-		binaryName: "oxfmt",
-	},
+	...MANAGED_PACKAGE_FORMATTERS.map(managedPackageFormatterTool),
 	{
 		id: "ruff",
 		name: "Ruff",
@@ -903,70 +1015,8 @@ export const TOOLS: ToolDefinition[] = [
 			// bare binary, no archive
 		},
 	},
-	{
-		id: "stylua",
-		name: "StyLua",
-		checkCommand: "stylua",
-		checkArgs: ["--version"],
-		installStrategy: "github",
-		binaryName: "stylua",
-		github: {
-			repo: "JohnnyMorganz/StyLua",
-			assetMatch: archAssetMatch({
-				linux: { x64: "linux-x86_64.zip", arm64: "linux-aarch64.zip" },
-				darwin: { x64: "macos-x86_64.zip", arm64: "macos-aarch64.zip" },
-				win32: { x64: "windows-x86_64.zip" },
-			}),
-			binaryInArchive: "stylua",
-		},
-	},
-	{
-		id: "php-cs-fixer",
-		name: "PHP CS Fixer",
-		checkCommand: "php-cs-fixer",
-		checkArgs: ["--version"],
-		installStrategy: "github",
-		binaryName: "php-cs-fixer",
-		github: {
-			repo: "PHP-CS-Fixer/PHP-CS-Fixer",
-			assetMatch: () => "php-cs-fixer.phar",
-		},
-	},
-	{
-		id: "google-java-format",
-		name: "google-java-format",
-		checkCommand: "google-java-format",
-		checkArgs: ["--version"],
-		installStrategy: "maven",
-		binaryName: "google-java-format",
-		maven: {
-			groupId: "com.google.googlejavaformat",
-			artifactId: "google-java-format",
-			version: "1.27.0",
-			classifier: "all-deps",
-		},
-	},
-	{
-		id: "cljfmt",
-		name: "cljfmt",
-		checkCommand: "cljfmt",
-		checkArgs: ["--version"],
-		installStrategy: "github",
-		binaryName: "cljfmt",
-		github: {
-			repo: "weavejester/cljfmt",
-			assetMatch: (platform, arch) => {
-				if (platform === "linux")
-					return arch === "arm64"
-						? "standalone.jar"
-						: "linux-amd64-static.tar.gz";
-				if (platform === "darwin") return "standalone.jar";
-				if (platform === "win32") return "win-amd64.zip";
-				return undefined;
-			},
-			binaryInArchive: "cljfmt",
-		},
-	},
+	...MANAGED_GITHUB_FORMATTERS.map(managedGitHubFormatterTool),
+	...MANAGED_MAVEN_FORMATTERS.map(managedMavenFormatterTool),
 	{
 		id: "rust-analyzer",
 		name: "rust-analyzer",
@@ -3121,6 +3171,15 @@ function getGitHubInstalledBinaryName(
 	return `${binaryName}.exe`;
 }
 
+function launcherForGitHubAsset(
+	spec: GitHubAssetSpec,
+	assetName: string,
+): "php" | "java" | undefined {
+	if (spec.launcher === "php" && assetName.endsWith(".phar")) return "php";
+	if (spec.launcher === "java" && assetName.endsWith(".jar")) return "java";
+	return undefined;
+}
+
 function getArchiveBinaryCandidates(
 	binaryName: string,
 	platform: string,
@@ -3580,12 +3639,43 @@ async function installGitHubTool(
 		platform,
 		asset.name,
 	);
-	const destPath = path.join(GITHUB_BIN_DIR, finalBinaryName);
+	let destPath = path.join(GITHUB_BIN_DIR, finalBinaryName);
 
 	const assetName = asset.name;
+	const launcherRuntime = launcherForGitHubAsset(spec, assetName);
+	if (
+		launcherRuntime &&
+		!(await isCommandAvailable(launcherRuntime, ["--version"]))
+	) {
+		logSessionStart(
+			`github-install ${tool.id}: ${launcherRuntime} not found — asset requires a runtime launcher`,
+		);
+		return undefined;
+	}
 
 	try {
-		if (assetName.endsWith(".gz") && !assetName.endsWith(".tar.gz")) {
+		if (launcherRuntime) {
+			const assetPath = path.join(
+				GITHUB_BIN_DIR,
+				`${tool.id}${assetName.endsWith(".phar") ? ".phar" : ".jar"}`,
+			);
+			await writeFileAtomicAsync(assetPath, assetBuffer, {
+				bestEffort: false,
+				mode: 0o750,
+			});
+			const launcherName = isWindows ? `${binaryName}.bat` : binaryName;
+			destPath = path.join(GITHUB_BIN_DIR, launcherName);
+			const runtimeTarget = assetName.endsWith(".phar")
+				? `${tool.id}.phar`
+				: `${tool.id}.jar`;
+			const command = isWindows
+				? `@echo off\r\n${launcherRuntime} "%~dp0${runtimeTarget}" %*\r\n`
+				: `#!/bin/sh\nexec ${launcherRuntime} "$(dirname "$0")/${runtimeTarget}" "$@"\n`;
+			await writeFileAtomicAsync(destPath, command, {
+				bestEffort: false,
+				mode: isWindows ? undefined : 0o750,
+			});
+		} else if (assetName.endsWith(".gz") && !assetName.endsWith(".tar.gz")) {
 			// Bare gzip (e.g. rust-analyzer-x86_64-unknown-linux-gnu.gz) — decompress directly
 			const decompressed = await new Promise<Buffer>((resolve, reject) => {
 				const gunzip = createGunzip();
@@ -5900,6 +5990,8 @@ export function getToolInstallStrategy(
  * "at least one platform" guard instead.
  */
 export const GITHUB_TOOLS = [
+	"cljfmt",
+	"php-cs-fixer",
 	"shellcheck",
 	"shfmt",
 	"rust-analyzer",
@@ -5939,6 +6031,17 @@ export function resolveGitHubAsset(
 ): string | undefined {
 	const tool = TOOLS.find((t) => t.id === toolId);
 	return tool?.github?.assetMatch(platform, arch);
+}
+
+export function resolveGitHubAssetLauncher(
+	toolId: string,
+	_platform: string,
+	assetName: string,
+): "php" | "java" | undefined {
+	const tool = TOOLS.find((t) => t.id === toolId);
+	return tool?.github
+		? launcherForGitHubAsset(tool.github, assetName)
+		: undefined;
 }
 
 export function resolveGitHubInstalledBinaryName(

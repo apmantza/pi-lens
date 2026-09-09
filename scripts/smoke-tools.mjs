@@ -264,7 +264,7 @@ const FIXTURES = [
 		dir: "tests/fixtures/tool-smoke/go",
 		file: "bad.go",
 		targets: ["go-vet"],
-		tools: ["black"],
+		tools: [],
 		expectDiagnostic: true,
 	},
 	{
@@ -272,7 +272,7 @@ const FIXTURES = [
 		dir: "tests/fixtures/tool-smoke/powershell",
 		file: "bad.ps1",
 		targets: ["psscriptanalyzer"],
-		tools: ["cmake-format"],
+		tools: [],
 		expectDiagnostic: true,
 	},
 	{
@@ -280,7 +280,7 @@ const FIXTURES = [
 		dir: "tests/fixtures/tool-smoke/rust",
 		file: "src/main.rs",
 		targets: ["rust-clippy"],
-		tools: ["oxfmt"],
+		tools: [],
 		expectDiagnostic: true,
 	},
 	{
@@ -288,7 +288,7 @@ const FIXTURES = [
 		dir: "tests/fixtures/tool-smoke/csharp",
 		file: "Program.cs",
 		targets: ["dotnet-build"],
-		tools: ["stylua"],
+		tools: [],
 		expectDiagnostic: true,
 	},
 	{
@@ -296,7 +296,7 @@ const FIXTURES = [
 		dir: "tests/fixtures/tool-smoke/zig",
 		file: "bad.zig",
 		targets: ["zig-check"],
-		tools: ["cljfmt"],
+		tools: [],
 		expectDiagnostic: true,
 	},
 	{
@@ -304,7 +304,7 @@ const FIXTURES = [
 		dir: "tests/fixtures/tool-smoke/java",
 		file: "Bad.java",
 		targets: ["javac"],
-		tools: ["php-cs-fixer"],
+		tools: [],
 		expectDiagnostic: true,
 	},
 	{
@@ -312,7 +312,7 @@ const FIXTURES = [
 		dir: "tests/fixtures/tool-smoke/dart",
 		file: "bad.dart",
 		targets: ["dart-analyze"],
-		tools: ["google-java-format"],
+		tools: [],
 		expectDiagnostic: true,
 	},
 	{
@@ -2124,16 +2124,17 @@ async function runLspHandshake({ langs, install, verbose }) {
  * sqlfluff fix, biome, dart …), so this also covers the safe-autofix path.
  * Returns the failure count.
  */
-async function runFormatSmoke({ langs, install, verbose }) {
+export async function runFormatSmoke({ langs, install, verbose, deps }) {
 	const fmtEntry = path.join(repoRoot, "dist", "clients", "format-service.js");
-	if (!fs.existsSync(fmtEntry)) {
+	if (!deps && !fs.existsSync(fmtEntry)) {
 		console.error(
 			`dist build missing: ${fmtEntry}\nRun \`npm run build:dist\` first.`,
 		);
 		process.exit(2);
 	}
-	const { getFormatService } = await import(pathToFileURL(fmtEntry).href);
-	const formatService = getFormatService();
+	const formatService = deps?.getFormatService
+		? deps.getFormatService()
+		: (await import(pathToFileURL(fmtEntry).href)).getFormatService();
 
 	let ensureTool;
 	let getInstallAttempt;
@@ -2145,9 +2146,13 @@ async function runFormatSmoke({ langs, install, verbose }) {
 			"installer",
 			"index.js",
 		);
-		({ ensureTool, getInstallAttempt } = await import(
-			pathToFileURL(installerEntry).href
-		));
+		if (deps) {
+			({ ensureTool, getInstallAttempt } = deps);
+		} else {
+			({ ensureTool, getInstallAttempt } = await import(
+				pathToFileURL(installerEntry).href
+			));
+		}
 	}
 
 	const selected = langs.length
@@ -2165,6 +2170,7 @@ async function runFormatSmoke({ langs, install, verbose }) {
 			ensureTool,
 			getInstallAttempt,
 			(toolId, resolved) => {
+				deps?.onEnsure?.(toolId, resolved);
 				if (verbose) {
 					console.error(
 						`[${fx.lang}] ensureTool(${toolId}) → ${resolved ?? "UNAVAILABLE"}`,

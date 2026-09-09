@@ -21,8 +21,11 @@ import {
 	SKIP_FORMATTING,
 	biomeFormatter,
 	blackFormatter,
+	cmakeFormatFormatter,
+	cljfmtFormatter,
 	clearFormatterRuntimeState,
 	getFormattersForFile,
+	googleJavaFormatFormatter,
 	invalidateFormatterCacheForPath,
 	oxfmtFormatter,
 	phpCsFixerFormatter,
@@ -33,6 +36,7 @@ import {
 	ruffFormatter,
 	standardrbFormatter,
 	shfmtFormatter,
+	styluaFormatter,
 } from "../../clients/formatters.js";
 import { createTempFile, setupTestEnvironment } from "./test-utils.js";
 import { _getSpotlessGradleReadCountForTests } from "../../clients/tool-policy.js";
@@ -179,6 +183,48 @@ describe("resolveCommand — node_modules/.bin", () => {
 			SKIP_FORMATTING,
 		);
 	});
+});
+
+describe("resolveCommand — PATH precedes managed formatter (#2767)", () => {
+	it.each([
+		["black", blackFormatter, "main.py"],
+		["cmake-format", cmakeFormatFormatter, "CMakeLists.cmake"],
+		["stylua", styluaFormatter, "main.lua"],
+		["google-java-format", googleJavaFormatFormatter, "Main.java"],
+		["cljfmt", cljfmtFormatter, "main.clj"],
+		["oxfmt", oxfmtFormatter, "main.ts"],
+		["php-cs-fixer", phpCsFixerFormatter, "main.php"],
+	] as const)(
+		"uses PATH %s before a managed copy",
+		async (toolId, formatter, fileName) => {
+			const pathDir = path.join(tmpDir, "path-bin");
+			const pathBinary = path.join(pathDir, isWin ? `${toolId}.cmd` : toolId);
+			const managedBinary = path.join(
+				tmpDir,
+				"managed-bin",
+				isWin ? `${toolId}.exe` : toolId,
+			);
+			makeFakeExe(pathBinary);
+			makeFakeExe(managedBinary);
+			const originalPath = process.env.PATH;
+			process.env.PATH = `${pathDir}${path.delimiter}${originalPath ?? ""}`;
+			const installer = await import("../../clients/installer/index.js");
+			const managedSpy = vi
+				.spyOn(installer, "getToolPath")
+				.mockResolvedValue(managedBinary);
+			try {
+				const command = await formatter.resolveCommand!(
+					fileIn(tmpDir, fileName),
+					tmpDir,
+				);
+				expect(command?.[0]).toBe(pathBinary);
+				expect(managedSpy).not.toHaveBeenCalledWith(toolId);
+			} finally {
+				managedSpy.mockRestore();
+				process.env.PATH = originalPath;
+			}
+		},
+	);
 });
 
 describe("formatter child cwd", () => {
