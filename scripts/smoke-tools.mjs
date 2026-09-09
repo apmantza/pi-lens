@@ -142,6 +142,17 @@ export function classifyFormatRow(target, fx) {
  */
 const FIXTURES = [
 	{
+		lang: "yaml-cwd",
+		dir: "tests/fixtures/tool-smoke/yaml-cwd",
+		file: "repo/sub/bad.yaml",
+		cwd: "repo/sub",
+		targets: ["yamllint"],
+		tools: ["yamllint"],
+		tier1: true,
+		expectDiagnostic: true,
+		expectRule: "key-ordering",
+	},
+	{
 		lang: "typescript",
 		dir: "tests/fixtures/tool-smoke/typescript",
 		file: "bad.ts",
@@ -1651,7 +1662,7 @@ export async function ensureFixtureTools(
 }
 
 /** Classify one target runner's outcome against the Step-1 bar. */
-function classify(outcome) {
+export function classify(outcome) {
 	if (!outcome) {
 		return {
 			state: "skip",
@@ -1681,6 +1692,11 @@ function classify(outcome) {
 		detail: `${status}${failureKind ? ` (${failureKind})` : ""}`,
 		diags,
 	};
+}
+
+/** Resolve the dispatch directory declared by a smoke row. */
+export function fixtureDispatchCwd(fixture, workspace) {
+	return path.resolve(workspace, fixture.cwd ?? ".");
 }
 
 // `setup-failed` (#530) is a distinct terminal state from `fail`: it means the
@@ -2425,7 +2441,8 @@ async function main() {
 		const workspace = copyDirToTemp(fixture.dir);
 		const absFile = path.join(workspace, fixture.file);
 		try {
-			const { runners } = await dispatchLintDetailed(absFile, workspace, pi, {
+			const dispatchCwd = fixtureDispatchCwd(fixture, workspace);
+			const { runners } = await dispatchLintDetailed(absFile, dispatchCwd, pi, {
 				blockingOnly: false,
 			});
 			if (verbose) {
@@ -2456,6 +2473,17 @@ async function main() {
 					verdict.state = "fail";
 					verdict.detail =
 						"ran clean but produced no diagnostic on known defect";
+				}
+				if (
+					step2 &&
+					verdict.state === "pass" &&
+					fixture.expectRule &&
+					!outcome?.result.diagnostics.some(
+						(diagnostic) => diagnostic.rule === fixture.expectRule,
+					)
+				) {
+					verdict.state = "fail";
+					verdict.detail = `did not produce expected ${fixture.expectRule} diagnostic`;
 				}
 				rows.push({ lang: fixture.lang, runner: target, ...verdict });
 			}

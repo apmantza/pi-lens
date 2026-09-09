@@ -4,9 +4,11 @@ export interface SmokeFixture {
 	lang: string;
 	dir: string;
 	file: string;
+	cwd?: string;
 	targets?: string[];
 	tools?: string[];
 	expectDiagnostic?: boolean;
+	expectRule?: string;
 	/**
 	 * In the tier-1 parser lane (#1937): the tool installs as a pip/npm package
 	 * or a single GitHub-release binary, with no language toolchain step.
@@ -108,6 +110,17 @@ export function passFloorBreach(
 ): string | null;
 /** Fixtures flagged `tier1` — the scheduled parser lane's selection. */
 export function tier1Fixtures(): SmokeFixture[];
+/** Resolve a smoke row's dispatch cwd inside its copied workspace. */
+export function fixtureDispatchCwd(
+	fixture: SmokeFixture,
+	workspace: string,
+): string;
+/** Classify one real runner outcome for the tool-layer report. */
+export function classify(outcome: unknown): {
+	state: "pass" | "fail" | "skip";
+	detail: string;
+	diags: number;
+};
 /** Remove dead or old scratch workspaces from previous smoke runs. */
 export function sweepLeftovers(): number;
 /** One TOOLS registry entry, as far as this classification cares. */
