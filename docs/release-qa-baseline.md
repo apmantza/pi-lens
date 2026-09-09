@@ -84,6 +84,7 @@ PR's packed tarball (#2700, the check #2587 was missing). `attw`
 | config-provenance | a project config is LOADED and its provenance is reportable | mcp-stdio | `tools/call` `pilens_effective_config` with the fixture file | result names the fixture's `.pi-lens.json` as a contributing document | tool result text | new — `tests/config/pi-lens-config-schema.test.ts` covers the schema, not the packaged load | — |
 | degradation-visible | a silently-ignored input is RECORDED as a degradation instead of vanishing | mcp-stdio | `tools/call` `pilens_health` with the fixture's project-tier `lsp.enabled` (a global-only setting) loaded | health text carries a `config-ignored` degradation line naming the fixture's `.pi-lens.json` | health tool result text | `clients/degradation-ledger.ts` is the reused machinery; no smoke asserts it end to end | #1605 lane 2 (availability-lifecycle): the degradation-recorded half; #1605 additionally asserts RECOVERY, which this row does not |
 | git-install-loads | a `git:` install of a pushed ref builds and loads in a real pi | git-install | `pi install git:github.com/apmantza/pi-lens@<ref>` then `get_commands` | at least 1 `lens-*` command and at least 4 skills | get_commands response JSON | `scripts/rpc-load-check.mjs` assertion, re-run against the git layout | — |
+| tool-smoke-install | every npm/pip entry in the installer registry resolves on a real install | npm-install | `node <installed>/scripts/smoke-tools.mjs --install --install-registry` (about 1m 29s cold on this box for 33 entries) | the report shows every npm/pip entry resolved or a named legitimate skip (toolchain absent, declined), and no genuine install failure; a registry-unreachable classification leaves the lane UNMEASURED; requires network access to the npm and pip registries | install-registry JSON report | `classifyInstallOutcome` from the #2661 fixture lanes — this lane sweeps the whole npm/pip registry, where fixture lanes exercise only the entries their fixtures name | — |
 
 ## Why `skills-registered` pins the registrar
 
@@ -150,6 +151,7 @@ Ship line, from the outcomes:
 | pi did not boot with NO candidate installed | BLOCKED — no verdict | 3 | 0 |
 | pi booted, the candidate would not install or activate | do not ship, cause named on the verdict | 1 | 0 |
 | any row FAILED | do not ship | 1 | N |
+| any row classified registry-unreachable (its lane UNMEASURED) | INCONCLUSIVE — no verdict, the skips are not green | 3 | N |
 | pi booted but zero rows PASSED | INCONCLUSIVE — no verdict | 3 | N |
 | any UNTESTED or SKIPPED, at least one PASS | ship with caveats, each named | 2 | N |
 | all PASS | ship | 0 | N |
